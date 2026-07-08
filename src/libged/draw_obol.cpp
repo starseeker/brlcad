@@ -39,6 +39,7 @@
 #include "bu/units.h"
 #include "bu/vls.h"
 #include "dm.h"
+#include "dm/obol.h"
 #include "ged.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
@@ -4684,6 +4685,111 @@ ged_obol_feature_owner(void *view_ctx, int local)
     return owner;
 }
 
+static int
+ged_obol_feature_kind_to_ged(BRLObolFeatureKind kind)
+{
+    switch (kind) {
+	case BRLObolFeatureKind::Lines:
+	    return GED_DRAW_VIEW_FEATURE_KIND_LINES;
+	case BRLObolFeatureKind::IndexedLines:
+	    return GED_DRAW_VIEW_FEATURE_KIND_INDEXED_LINES;
+	case BRLObolFeatureKind::Points:
+	    return GED_DRAW_VIEW_FEATURE_KIND_POINTS;
+	case BRLObolFeatureKind::Labels:
+	    return GED_DRAW_VIEW_FEATURE_KIND_LABELS;
+	case BRLObolFeatureKind::Arrow:
+	    return GED_DRAW_VIEW_FEATURE_KIND_ARROW;
+	case BRLObolFeatureKind::Axes:
+	    return GED_DRAW_VIEW_FEATURE_KIND_AXES;
+	case BRLObolFeatureKind::LineLayer:
+	    return GED_DRAW_VIEW_FEATURE_KIND_LINE_LAYER;
+	case BRLObolFeatureKind::EditPreview:
+	    return GED_DRAW_VIEW_FEATURE_KIND_EDIT_PREVIEW;
+	case BRLObolFeatureKind::IndexedFaceSet:
+	    return GED_DRAW_VIEW_FEATURE_KIND_INDEXED_FACE_SET;
+	case BRLObolFeatureKind::PolygonOverlay:
+	    return GED_DRAW_VIEW_FEATURE_KIND_POLYGON_OVERLAY;
+	case BRLObolFeatureKind::HudLabel:
+	    return GED_DRAW_VIEW_FEATURE_KIND_HUD_LABEL;
+	case BRLObolFeatureKind::CustomNode:
+	    return GED_DRAW_VIEW_FEATURE_KIND_CUSTOM_NODE;
+	case BRLObolFeatureKind::Unknown:
+	default:
+	    return GED_DRAW_VIEW_FEATURE_KIND_UNKNOWN;
+    }
+}
+
+static int
+ged_obol_feature_scope_to_ged(BRLObolFeatureScope scope)
+{
+    switch (scope) {
+	case BRLObolFeatureScope::Shared:
+	    return GED_DRAW_VIEW_FEATURE_SCOPE_SHARED;
+	case BRLObolFeatureScope::Local:
+	    return GED_DRAW_VIEW_FEATURE_SCOPE_LOCAL;
+	default:
+	    return GED_DRAW_VIEW_FEATURE_SCOPE_UNKNOWN;
+    }
+}
+
+static int
+ged_obol_overlay_class_to_ged(BRLObolOverlayClass overlay_class)
+{
+    switch (overlay_class) {
+	case BRLObolOverlayClass::None:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_NONE;
+	case BRLObolOverlayClass::Faceplate:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_FACEPLATE;
+	case BRLObolOverlayClass::EditHandle:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE;
+	case BRLObolOverlayClass::Measure:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_MEASURE;
+	case BRLObolOverlayClass::SelectionRubberBand:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SELECTION_RUBBER_BAND;
+	case BRLObolOverlayClass::SnapGuide:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SNAP_GUIDE;
+	case BRLObolOverlayClass::CommandResult:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT;
+	case BRLObolOverlayClass::Diagnostic:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_DIAGNOSTIC;
+	case BRLObolOverlayClass::TclOverlay:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY;
+	case BRLObolOverlayClass::PolygonEdit:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_POLYGON_EDIT;
+	case BRLObolOverlayClass::SketchEdit:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SKETCH_EDIT;
+	case BRLObolOverlayClass::UserAnnotation:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION;
+	default:
+	    return GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN;
+    }
+}
+
+static int
+ged_obol_overlay_lifecycle_to_ged(BRLObolOverlayLifecycle lifecycle)
+{
+    switch (lifecycle) {
+	case BRLObolOverlayLifecycle::None:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_NONE;
+	case BRLObolOverlayLifecycle::Persistent:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_PERSISTENT;
+	case BRLObolOverlayLifecycle::PerFrame:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_FRAME;
+	case BRLObolOverlayLifecycle::PerCommand:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_COMMAND;
+	case BRLObolOverlayLifecycle::PerTool:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_TOOL;
+	case BRLObolOverlayLifecycle::PerView:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_VIEW;
+	case BRLObolOverlayLifecycle::SharedViewSet:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_SHARED_VIEW_SET;
+	case BRLObolOverlayLifecycle::AutoRemoveOnSource:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_AUTO_REMOVE_ON_SOURCE;
+	default:
+	    return GED_DRAW_VIEW_FEATURE_LIFECYCLE_UNKNOWN;
+    }
+}
+
 static BRLObolOverlayInfo
 ged_obol_model_overlay_info(void *view_ctx,
 			    BRLObolOverlayClass overlay_class,
@@ -6046,7 +6152,6 @@ ged_draw_obol_view_context_feature_summary(
 	return 0;
 
     BRLObolFeatureSummary obol_summary;
-    BRLObolViewController *summary_controller = NULL;
 
     BRLObolViewController *local_controller =
 	ged_obol_view_controller_for_context(view_ctx);
@@ -6055,8 +6160,6 @@ ged_draw_obol_view_context_feature_summary(
 	if (!local_controller->features().summaryOwned(name, obol_summary,
 		BRLOBOL_FEATURE_SCOPE_LOCAL, &owner))
 	    return 0;
-	if (obol_summary.exists)
-	    summary_controller = local_controller;
     }
 
     if (!obol_summary.exists) {
@@ -6066,8 +6169,6 @@ ged_draw_obol_view_context_feature_summary(
 	    !shared_controller->features().summary(name, obol_summary,
 		    BRLOBOL_FEATURE_SCOPE_SHARED))
 	    return 0;
-	if (obol_summary.exists)
-	    summary_controller = shared_controller;
     }
 
     if (!obol_summary.exists)
@@ -6075,6 +6176,12 @@ ged_draw_obol_view_context_feature_summary(
 
     summary->exists = 1;
     summary->visible = obol_summary.visible ? 1 : 0;
+    summary->kind = ged_obol_feature_kind_to_ged(obol_summary.kind);
+    summary->scope = ged_obol_feature_scope_to_ged(obol_summary.scope);
+    summary->overlay_class =
+	ged_obol_overlay_class_to_ged(obol_summary.overlay.overlayClass);
+    summary->lifecycle =
+	ged_obol_overlay_lifecycle_to_ged(obol_summary.overlay.lifecycle);
     summary->child_count = obol_summary.childCount;
     summary->geometry_command_count = obol_summary.commandCount;
     summary->metadata_count = obol_summary.metadataCount;
@@ -6094,13 +6201,19 @@ ged_draw_obol_view_context_feature_summary(
     summary->is_overlay = (obol_summary.overlay.isOverlay ||
 			   (!summary->is_label &&
 			    !summary->is_transient_preview)) ? 1 : 0;
+    summary->owner_generation = obol_summary.owner.generation;
+    if (obol_summary.owner.ownerId.getLength() > 0)
+	snprintf(summary->owner_id, sizeof(summary->owner_id), "%s",
+		obol_summary.owner.ownerId.getString());
+    if (obol_summary.owner.ownerRole.getLength() > 0)
+	snprintf(summary->owner_role, sizeof(summary->owner_role), "%s",
+		obol_summary.owner.ownerRole.getString());
 
-    BRLObolFeatureHandle handle = summary_controller ?
-				  ged_obol_feature_handle(summary_controller, view_ctx, name) :
-				  BRLObolFeatureHandle();
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     BRLObolFeatureStyle style;
-    if (summary_controller && handle.isValid() &&
-	summary_controller->features().style(handle, style) &&
+    if (lookup.controller && lookup.handle.isValid() &&
+	lookup.controller->features().style(lookup.handle, style) &&
 	style.hasColor)
 	ged_obol_rgb_from_color(style.color, summary->color);
 
@@ -7094,10 +7207,43 @@ extern "C" int
 ged_draw_obol_view_context_edit_preview_publish_event(
     void *UNUSED(view_ctx),
     ged_draw_view_feature_ref feature,
-    enum ged_draw_view_edit_preview_event UNUSED(event),
-    const char *UNUSED(source_path))
+    enum ged_draw_view_edit_preview_event event,
+    const char *source_path)
 {
-    return ged_obol_feature_token_from_ged_ref(feature) ? 1 : 0;
+    ged_obol_feature_ref_token *token =
+	ged_obol_feature_token_from_ged_ref(feature);
+    if (!token || !token->controller)
+	return 0;
+
+    BRLObolFeatureHandle handle = ged_obol_feature_handle_from_ged_ref(feature);
+    BRLObolFeatureRecord record;
+    if (!token->controller->features().record(handle, record) ||
+	record.kind != BRLObolFeatureKind::EditPreview)
+	return 0;
+
+    if (source_path && source_path[0] && record.overlay.isOverlay) {
+	BRLObolOverlayInfo overlay = record.overlay;
+	if (overlay.sourcePath != source_path)
+	    overlay.sourcePath = source_path;
+	(void)token->controller->features().setOverlayInfo(handle, overlay);
+    }
+
+    switch (event) {
+	case GED_DRAW_VIEW_EDIT_PREVIEW_COMMIT:
+	case GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL:
+	case GED_DRAW_VIEW_EDIT_PREVIEW_DISCARD:
+	    return token->controller->features().remove(handle) ? 1 : 0;
+	case GED_DRAW_VIEW_EDIT_PREVIEW_BEGIN:
+	case GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE:
+	case GED_DRAW_VIEW_EDIT_PREVIEW_REPLACE_SOURCE:
+	default:
+	    break;
+    }
+
+    {
+	const int ret = token->controller->features().updateEditPreview(handle);
+	return ret >= 0 ? ret : 1;
+    }
 }
 
 extern "C" ged_draw_view_feature_ref
@@ -7321,6 +7467,69 @@ ged_draw_obol_view_feature_points_replace(
 	    record.scope, obol_points, obol_commands, &record.style,
 	    record.scope == BRLObolFeatureScope::Local ? &owner : NULL);
     return line_handle.isValid() ? 1 : 0;
+}
+
+extern "C" int
+ged_draw_obol_view_feature_edit_preview_replace(
+    ged_draw_view_feature_ref ref,
+    const char *source_path,
+    const char *edit_intent_id,
+    const char *edit_intent_role,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    uint32_t source_revision,
+    uint32_t inputs_revision)
+{
+    if (point_count && !points)
+	return 0;
+
+    ged_obol_feature_ref_token *token =
+	ged_obol_feature_token_from_ged_ref(ref);
+    if (!token || !token->controller)
+	return 0;
+
+    BRLObolFeatureRecord record;
+    BRLObolFeatureHandle handle = ged_obol_feature_handle_from_ged_ref(ref);
+    if (!token->controller->features().record(handle, record))
+	return 0;
+
+    std::vector<SbVec3f> obol_points =
+	ged_obol_points_from_ged(points, point_count);
+    std::vector<int32_t> obol_commands =
+	ged_obol_commands_from_ged(cmds, point_count);
+
+    BRLObolFeatureOwner owner = record.owner;
+    const SbString preview_name = record.name;
+    const SbString preview_path =
+	(source_path && source_path[0]) ? SbString(source_path) :
+	record.identity.getLength() > 0 ? record.identity : record.name;
+    const SbString intent_id =
+	(edit_intent_id && edit_intent_id[0]) ? SbString(edit_intent_id) :
+	record.editIntentId.getLength() > 0 ? record.editIntentId : record.name;
+    const SbString intent_role =
+	(edit_intent_role && edit_intent_role[0]) ? SbString(edit_intent_role) :
+	record.editIntentRole.getLength() > 0 ? record.editIntentRole :
+	SbString("preview");
+    const uint32_t next_source_revision =
+	source_revision ? source_revision :
+	record.sourceRevision ? record.sourceRevision + 1 : 0;
+    const uint32_t next_inputs_revision =
+	inputs_revision ? inputs_revision :
+	record.inputsRevision ? record.inputsRevision + 1 : 0;
+
+    BRLObolFeatureHandle preview_handle =
+	token->controller->features().publishEditPreview(preview_name,
+	    preview_path,
+	    intent_id,
+	    intent_role,
+	    obol_points,
+	    obol_commands,
+	    next_source_revision,
+	    next_inputs_revision,
+	    NULL,
+	    record.scope == BRLObolFeatureScope::Local ? &owner : NULL);
+    return preview_handle.isValid() ? 1 : 0;
 }
 
 extern "C" int
@@ -19681,6 +19890,23 @@ ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
 	    sync_current_scene);
 }
 
+extern "C" int
+ged_draw_obol_display_manager_attach_for_view(struct ged *gedp,
+	void *view_ctx,
+	void *dmp,
+	int sync_current_scene,
+	int require_obol_controller)
+{
+    void *controller = dmp ?
+	dm_obol_controller(static_cast<struct dm *>(dmp)) : NULL;
+
+    if (!controller)
+	return require_obol_controller ? 0 : 1;
+
+    return ged_draw_obol_controller_attach_opaque_for_view(gedp, view_ctx,
+	    controller, sync_current_scene);
+}
+
 extern "C" void *
 ged_draw_obol_controller_opaque_for_view(void *view_ctx)
 {
@@ -19781,6 +20007,45 @@ ged_draw_obol_controller_detach_opaque(struct ged *gedp,
 	ged_obol_attached_controller &entry = (*entries)[i];
 	if (entry.view_controller != view_controller)
 	    continue;
+	ged_obol_delete_owned_attached_controller(entry);
+	entries->erase(entries->begin() +
+		       static_cast<std::vector<ged_obol_attached_controller>::difference_type>(i));
+	break;
+    }
+
+    if (entries->empty()) {
+	delete entries;
+	gdp->gd_obol_attached_controllers = NULL;
+	ged_obol_primary_clear(gdp);
+	if (gdp->gd_obol_observer_token) {
+	    (void)ged_draw_observer_remove(gedp,
+					   gdp->gd_obol_observer_token);
+	    gdp->gd_obol_observer_token = 0;
+	}
+	return;
+    }
+
+    ged_obol_primary_refresh_from_registry(gdp);
+}
+
+extern "C" void
+ged_draw_obol_controller_detach_for_view(struct ged *gedp,
+					 void *view_ctx)
+{
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    if (!gdp || !view_ctx)
+	return;
+
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries)
+	return;
+
+    for (size_t i = 0; i < entries->size(); i++) {
+	ged_obol_attached_controller &entry = (*entries)[i];
+	if (entry.view_ctx != view_ctx)
+	    continue;
+
 	ged_obol_delete_owned_attached_controller(entry);
 	entries->erase(entries->begin() +
 		       static_cast<std::vector<ged_obol_attached_controller>::difference_type>(i));

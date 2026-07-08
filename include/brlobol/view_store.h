@@ -333,6 +333,11 @@ struct BRLOBOL_EXPORT BRLObolFeatureRecord {
     std::vector<BRLObolFeaturePrimitiveMetadata> primitiveMetadata;
     std::vector<int32_t> selectedPrimitives;
     std::vector<int32_t> highlightedPrimitives;
+    SbString identity;
+    SbString editIntentId;
+    SbString editIntentRole;
+    uint32_t sourceRevision;
+    uint32_t inputsRevision;
 
     BRLObolFeatureRecord(void);
 };

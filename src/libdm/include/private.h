@@ -109,6 +109,105 @@ DM_EXPORT extern struct fb remote_interface; /* not in list[] */
 extern struct fb debug_interface, disk_interface, stk_interface;
 extern struct fb memory_interface, fb_null_interface;
 
+struct imgstream_fb;
+struct fb_imgstream_compat {
+    struct imgstream_fb *fb;
+    const char *spec;
+};
+
+DM_EXPORT extern int fb_imgstream_compat_supported(const char *spec);
+DM_EXPORT extern int fb_imgstream_compat_active(const struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_open(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	const char *spec,
+	int width,
+	int height);
+DM_EXPORT extern int fb_imgstream_compat_close(struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_configure(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	int width,
+	int height);
+DM_EXPORT extern int fb_imgstream_compat_flush(struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_poll(struct fb *ifp,
+	struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_clear(struct fb_imgstream_compat *compat,
+	unsigned char *rgb);
+DM_EXPORT extern ssize_t fb_imgstream_compat_read(
+	const struct fb_imgstream_compat *compat,
+	int x,
+	int y,
+	unsigned char *rgb,
+	size_t count);
+DM_EXPORT extern ssize_t fb_imgstream_compat_write(
+	struct fb_imgstream_compat *compat,
+	int x,
+	int y,
+	const unsigned char *rgb,
+	size_t count);
+DM_EXPORT extern int fb_imgstream_compat_readrect(
+	const struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	unsigned char *rgb);
+DM_EXPORT extern int fb_imgstream_compat_writerect(
+	struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	const unsigned char *rgb);
+DM_EXPORT extern int fb_imgstream_compat_bwreadrect(
+	const struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	unsigned char *bw);
+DM_EXPORT extern int fb_imgstream_compat_bwwriterect(
+	struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	const unsigned char *bw);
+DM_EXPORT extern int fb_imgstream_compat_view(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	int xcenter,
+	int ycenter,
+	int xzoom,
+	int yzoom);
+DM_EXPORT extern int fb_imgstream_compat_getview(
+	const struct fb_imgstream_compat *compat,
+	int *xcenter,
+	int *ycenter,
+	int *xzoom,
+	int *yzoom);
+DM_EXPORT extern int fb_imgstream_compat_cursor(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	int mode,
+	int x,
+	int y);
+DM_EXPORT extern int fb_imgstream_compat_getcursor(
+	const struct fb_imgstream_compat *compat,
+	int *mode,
+	int *x,
+	int *y);
+DM_EXPORT extern int fb_imgstream_compat_setcursor(
+	struct fb_imgstream_compat *compat,
+	const unsigned char *bits,
+	int xbits,
+	int ybits,
+	int xorig,
+	int yorig);
+DM_EXPORT extern int fb_imgstream_compat_rmap(
+	const struct fb_imgstream_compat *compat,
+	ColorMap *cmap);
+DM_EXPORT extern int fb_imgstream_compat_wmap(
+	struct fb_imgstream_compat *compat,
+	const ColorMap *cmap);
+
 /* Private direct-device drawing for in-tree utilities and backend adapters.
  * Normal application drawing must use retained render records instead. */
 DM_EXPORT extern int dm_draw_device_vlist(struct dm *dmp, bg_vlist *vp);

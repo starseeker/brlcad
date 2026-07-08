@@ -12,10 +12,18 @@
 #include "brlobol/measure_action.h"
 #include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_store.h"
 #include "brlobol/vlist_shape.h"
+#include "bu/file.h"
+#include "ged.h"
+#include "ged/draw.h"
+#include "ged/draw_obol.h"
+#include "QgLegacyViewContext.h"
 #include "QgObolEditPreviewPrivate.h"
+#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgView.h"
+#include "wdb.h"
 
 #include <Inventor/nodes/SoGroup.h>
 
@@ -87,6 +95,20 @@ check_shape_metadata(SoBRLVListShape *shape,
 	    shape->getSegmentCount() != segmentCount)
 	return 0;
     return 1;
+}
+
+static int
+make_edit_preview_db(const char *dbpath)
+{
+    struct rt_wdb *wdbp = wdb_fopen(dbpath);
+    if (!wdbp)
+	return 0;
+
+    point_t bmin = {-1.0, -1.0, -1.0};
+    point_t bmax = { 1.0,  1.0,  1.0};
+    int ret = mk_rpp(wdbp, "box.s", bmin, bmax) == 0;
+    wdb_close(wdbp);
+    return ret;
 }
 
 int
@@ -275,6 +297,75 @@ main(int argc, char **argv)
     if (!controller->isRenderRequested() ||
 	    strcmp(controller->getRenderReason().getString(), "edit-preview") != 0)
 	FAIL("edit preview clears should request an Obol render");
+
+    const char *dbpath = "qtcad_obol_edit_preview_tmp.g";
+    if (!make_edit_preview_db(dbpath))
+	FAIL("failed to create qtcad Obol edit-preview test database");
+
+    struct ged *gedp = ged_open("db", dbpath, 1);
+    if (!gedp)
+	FAIL("failed to open qtcad Obol edit-preview test database");
+
+    void *view_ctx = qg_legacy_view_to_context(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
+    if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
+	    controller, 0))
+	FAIL("qtcad test should attach the QgView Obol controller to GED");
+
+    const char *gedPreviewId = "_test_ged_edit_preview";
+    const char *gedIdentity = "/box.s::ged-edit-preview";
+    const char *gedIntentId = "edit::box.s/ged-preview";
+    const char *gedIntentRole = "scale-handle";
+    controller->clearRenderRequest();
+    (void)bv_context_refresh_complete(qg_legacy_view_context(view.view()));
+    if (qg_obol_edit_preview_update_with_intent(&view, gedPreviewId,
+	    gedIdentity, gedIntentId, gedIntentRole, points, commands, 4,
+	    41, 42) != 1)
+	FAIL("qtcad helper should publish GED-owned edit preview geometry");
+    if (!bv_refresh_dirty_get(qg_legacy_view_bv_const(view.view())))
+	FAIL("GED-routed edit preview updates should request a qtcad view refresh");
+
+    struct ged_draw_view_feature_summary gedSummary =
+	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_draw_view_context_feature_summary(view_ctx, gedPreviewId,
+	    &gedSummary) ||
+	    !gedSummary.exists ||
+	    gedSummary.kind != GED_DRAW_VIEW_FEATURE_KIND_EDIT_PREVIEW ||
+	    gedSummary.scope != GED_DRAW_VIEW_FEATURE_SCOPE_LOCAL ||
+	    gedSummary.overlay_class !=
+	    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE ||
+	    gedSummary.lifecycle != GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_TOOL ||
+	    !gedSummary.is_transient_preview ||
+	    !gedSummary.owner_id[0])
+	FAIL("GED-routed qtcad edit preview should be a local transient feature with owner metadata");
+
+    BRLObolFeatureHandle gedHandle =
+	controller->features().find(gedPreviewId);
+    BRLObolFeatureRecord gedRecord;
+    if (!gedHandle.isValid() ||
+	    !controller->features().record(gedHandle, gedRecord) ||
+	    gedRecord.kind != BRLObolFeatureKind::EditPreview ||
+	    gedRecord.identity != gedIdentity ||
+	    gedRecord.editIntentId != gedIntentId ||
+	    gedRecord.editIntentRole != gedIntentRole ||
+	    gedRecord.sourceRevision != 41 ||
+	    gedRecord.inputsRevision != 42 ||
+	    gedRecord.scope != BRLObolFeatureScope::Local)
+	FAIL("GED-routed qtcad edit preview should preserve identity, intent, revisions, and local scope");
+
+    controller->clearRenderRequest();
+    (void)bv_context_refresh_complete(qg_legacy_view_context(view.view()));
+    if (qg_obol_edit_preview_clear(&view, gedPreviewId) != 1)
+	FAIL("qtcad helper should clear GED-routed edit preview geometry");
+    if (ged_draw_view_context_feature_summary(view_ctx, gedPreviewId,
+	    &gedSummary) && gedSummary.exists)
+	FAIL("GED-routed edit preview clear should remove the transient feature");
+    if (!bv_refresh_dirty_get(qg_legacy_view_bv_const(view.view())))
+	FAIL("GED-routed edit preview clears should request a qtcad view refresh");
+
+    ged_draw_obol_controller_detach_for_view(gedp, view_ctx);
+    ged_close(gedp);
+    bu_file_delete(dbpath);
 
     return 0;
 }

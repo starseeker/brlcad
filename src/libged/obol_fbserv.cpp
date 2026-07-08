@@ -38,6 +38,7 @@
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "imgstream/fb_compat.h"
+#include "imgstream/fbserv.h"
 
 #include "./ged_private.h"
 
@@ -112,7 +113,7 @@ class GedObolFbservBridge {
 public:
     explicit GedObolFbservBridge(struct fbserv_obj *fbs_obj) :
 	fbs(fbs_obj),
-	framebuffer(&host)
+	framebuffer(&default_host)
     {
     }
 
@@ -123,7 +124,11 @@ public:
     }
 
     int configure(struct ged *new_gedp, void *new_view_ctx,
-	    BRLObolViewController *controller)
+	    BRLObolViewController *controller,
+	    BRLObolWindowHost *window_host,
+	    int requested_width,
+	    int requested_height,
+	    int requested_present_on_flush)
     {
 	std::lock_guard<std::mutex> guard(lock);
 	if (!new_gedp || !new_view_ctx || !controller)
@@ -131,11 +136,22 @@ public:
 
 	gedp = new_gedp;
 	view_ctx = new_view_ctx;
-	host.attachController(controller, FALSE);
+	present_on_flush = requested_present_on_flush ? 1 : 0;
+	BRLObolWindowHost *active_host = window_host ? window_host :
+	    &default_host;
+	if (active_host == &default_host || !active_host->getController())
+	    active_host->attachController(controller, FALSE);
+	framebuffer.setHost(active_host);
 
 	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
-	int width = bv_width_get(view);
-	int height = bv_height_get(view);
+	int width = requested_width;
+	int height = requested_height;
+	if (view) {
+	    if (width <= 0)
+		width = bv_width_get(view);
+	    if (height <= 0)
+		height = bv_height_get(view);
+	}
 	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
 	if (dmp) {
 	    if (width <= 0)
@@ -329,8 +345,10 @@ public:
     int flush()
     {
 	std::lock_guard<std::mutex> guard(lock);
-	int ret = framebuffer.ensure() == 0 ?
-	    imgstream_fb_flush(framebuffer.framebuffer()) : -1;
+	int ret = present_on_flush ?
+	    framebuffer.flush() :
+	    (framebuffer.ensure() == 0 ?
+		imgstream_fb_flush(framebuffer.framebuffer()) : -1);
 	if (ret == 0)
 	    notifyUpdatedLocked();
 	return ret;
@@ -358,7 +376,7 @@ public:
 #ifdef _WIN32
 	(void)slot;
 #else
-	if (!fbs || slot < 0 || slot >= MAX_CLIENTS)
+	if (fbs_client_fd(fbs, slot) <= 0)
 	    return;
 
 	std::shared_ptr<GedObolFbservWatcher> watcher =
@@ -437,10 +455,7 @@ private:
     void runWatcher(std::shared_ptr<GedObolFbservWatcher> watcher)
     {
 	while (!watcher->stop) {
-	    if (!fbs || watcher->slot < 0 || watcher->slot >= MAX_CLIENTS)
-		break;
-
-	    int fd = fbs->fbs_clients[watcher->slot].fbsc_fd;
+	    int fd = fbs_client_fd(fbs, watcher->slot);
 	    if (fd <= 0)
 		break;
 
@@ -461,8 +476,11 @@ private:
 	    if (ret == 0)
 		continue;
 	    if (FD_ISSET(fd, &read_set)) {
-		fbs_existing_client_handler(
-			(void *)&fbs->fbs_clients[watcher->slot], 0);
+		void *client_data =
+		    fbs_client_handler_data(fbs, watcher->slot);
+		if (!client_data)
+		    break;
+		fbs_existing_client_handler(client_data, 0);
 		notifyUpdated();
 	    }
 	}
@@ -478,7 +496,8 @@ private:
     struct ged *gedp = NULL;
     void *view_ctx = NULL;
     struct fbserv_obj *fbs = NULL;
-    BRLObolWindowHost host;
+    int present_on_flush = 0;
+    BRLObolWindowHost default_host;
     BRLObolFramebufferStream framebuffer;
     std::mutex lock;
     std::mutex watcher_lock;
@@ -502,7 +521,7 @@ bridge_from_fbs(struct fbserv_obj *fbsp)
 static int
 ged_obol_is_listening(struct fbserv_obj *fbsp)
 {
-    return fbsp && fbsp->fbs_listener.fbsl_fd >= 0;
+    return fbs_listener_fd(fbsp) >= 0;
 }
 
 static int
@@ -532,6 +551,17 @@ ged_obol_close_client(struct fbserv_obj *fbsp, int slot)
 	bridge->closeClient(slot);
 }
 
+static const struct fbserv_transport_ops ged_obol_transport_ops = {
+    ged_obol_is_listening,
+    ged_obol_listen_on_port,
+    ged_obol_server_noop,
+    ged_obol_server_noop,
+    ged_obol_open_client,
+    ged_obol_close_client,
+    ged_obol_open_client,
+    ged_obol_close_client
+};
+
 static int ged_obol_fb_info(void *ctx, struct fbserv_fb_info *info) { return bridge_from_ctx(ctx)->info(info); }
 static int ged_obol_fb_clear(void *ctx, const unsigned char rgb[3]) { return bridge_from_ctx(ctx)->clear(rgb); }
 static ssize_t ged_obol_fb_read(void *ctx, int x, int y, unsigned char *rgb, size_t count) { return bridge_from_ctx(ctx)->read(x, y, rgb, count); }
@@ -556,8 +586,14 @@ static int ged_obol_fb_help(void *ctx) { return bridge_from_ctx(ctx)->help(); }
 
 } // namespace
 
-extern "C" int
-ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx)
+static int
+ged_obol_fbserv_configure_for_view(struct ged *gedp,
+	void *view_ctx,
+	BRLObolWindowHost *window_host,
+	int width,
+	int height,
+	int present_on_flush,
+	int install_default_handlers)
 {
     if (!gedp || !gedp->ged_fbs || !view_ctx)
 	return BRLCAD_ERROR;
@@ -578,18 +614,33 @@ ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx)
 	    delete bridge;
 	    return BRLCAD_ERROR;
 	}
-	fbs->fbs_is_listening = ged_obol_is_listening;
-	fbs->fbs_listen_on_port = ged_obol_listen_on_port;
-	fbs->fbs_open_server_handler = ged_obol_server_noop;
-	fbs->fbs_close_server_handler = ged_obol_server_noop;
-	fbs->fbs_open_client_handler = ged_obol_open_client;
-	fbs->fbs_close_client_handler = ged_obol_close_client;
-	fbs->fbs_open_ipc_client_handler = ged_obol_open_client;
-	fbs->fbs_close_ipc_client_handler = ged_obol_close_client;
     }
 
+    if (install_default_handlers)
+	fbs_set_transport(fbs, &ged_obol_transport_ops);
+
     return bridge->configure(gedp, view_ctx,
-	    static_cast<BRLObolViewController *>(controller));
+	    static_cast<BRLObolViewController *>(controller),
+	    window_host, width, height, present_on_flush);
+}
+
+extern "C" int
+ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx)
+{
+    return ged_obol_fbserv_configure_for_view(gedp, view_ctx, NULL, 0, 0, 0, 1);
+}
+
+extern "C" GED_EXPORT int
+ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
+	void *view_ctx,
+	void *window_host,
+	int width,
+	int height,
+	int present_on_flush)
+{
+    return ged_obol_fbserv_configure_for_view(gedp, view_ctx,
+	    static_cast<BRLObolWindowHost *>(window_host), width, height,
+	    present_on_flush, 0);
 }
 
 extern "C" void
@@ -607,22 +658,15 @@ ged_obol_fbserv_release(struct ged *gedp)
     fbs_clear_backend(fbs);
     delete bridge;
 
-    fbs->fbs_is_listening = NULL;
-    fbs->fbs_listen_on_port = NULL;
-    fbs->fbs_open_server_handler = NULL;
-    fbs->fbs_close_server_handler = NULL;
-    fbs->fbs_open_client_handler = NULL;
-    fbs->fbs_close_client_handler = NULL;
-    fbs->fbs_open_ipc_client_handler = NULL;
-    fbs->fbs_close_ipc_client_handler = NULL;
+    fbs_clear_transport(fbs);
 }
 
 extern "C" GED_EXPORT int
-ged_obol_view_display_image(struct ged *gedp,
-			    void *view_ctx,
-			    unsigned char **image,
-			    int flip,
-			    int alpha)
+ged_draw_obol_view_display_image(struct ged *gedp,
+				 void *view_ctx,
+				 unsigned char **image,
+				 int flip,
+				 int alpha)
 {
     if (!image)
 	return -1;

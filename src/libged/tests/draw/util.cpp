@@ -52,7 +52,6 @@
 #include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
-#include <dm/obol.h>
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/draw_obol.h>
@@ -433,10 +432,9 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
     if (!v)
 	return -1;
 
-    BRLObolViewController *controller = NULL;
+    BRLObolViewController *controller =
+	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    if (dmp)
-	controller = (BRLObolViewController *)dm_obol_controller(dmp);
     if (!controller) {
 	(void)ged_draw_obol_scene_controller_ensure(gedp, 1);
 	controller = ged_draw_obol_controller(gedp);

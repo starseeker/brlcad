@@ -44,6 +44,9 @@ Completed Migration State
 * Production libged no longer calls `rt_view_context_*` for passive state.
 * libbrlobol reads view mechanics from `bv_context` / `struct bv` and syncs
   Obol cameras through `syncCameraFromViewContext`.
+* Common passive `bv_context` convenience operations such as name, dimensions,
+  refresh, and user-data access now live in libbv instead of being duplicated
+  as local wrapper boilerplate in caller libraries.
 * qsketch publishes line sets through libbrlobol/Obol feature-store APIs; it
   no longer uses `rt_view_context_line_set_create`.
 * librt primitive plotting and LoD callbacks use `bv_view_info` directly.
@@ -87,14 +90,90 @@ Completed Migration State
   which resolve to libbrlobol/Obol edit-preview features.  The earlier
   duplicate production path that also mutated the qtcad widget's Obol preview
   directly has been removed.
+* Classic MGED edit preview now follows the same model: modified-shape display
+  is published as transient Obol GED view features while the canonical
+  database-source record remains source-local and unchanged.
+* qtcad's low-level `QgObolEditPreview` helper now prefers the same
+  GED/libbrlobol feature publication path when a GED-owned view context is
+  present.  It falls back to direct controller mutation only for standalone
+  qtcad/no-GED helper scenarios, keeping the unit-tested low-level helper
+  behavior without reintroducing a production qged fallback path.
+* The pivot guard now rejects qged production use of the low-level qtcad
+  direct-widget edit-preview helper, keeping qged edit visualization routed
+  through GED view features.
 * Obol viewport readback is available through
   `BRLObolViewController::renderToImage`.  `dm-obol` delegates display-image
   capture to that controller API, and GED screengrab uses a GED-private Obol
   bridge for Obol-backed views before falling back to raw DM readback for
   non-Obol display managers.
-* GED exposes a narrow opaque Obol-controller lookup/ensure API for a view
-  context.  App-host helpers such as fbserv/readback use that GED/libbrlobol
-  controller association instead of probing `dm_obol_controller`.
+* The GED/Obol view-image bridge is now a public `ged/draw_obol.h` helper for
+  app-host readback.  TclCAD's legacy `to_pix` and `to_png` exporters use it
+  for Obol-backed views before falling back to the old GL display-manager
+  readback path.
+* GED exposes narrow opaque Obol-controller lookup/ensure and DM-attachment
+  APIs for a view context.  App-host helpers such as fbserv/readback and
+  MGED/GSH refresh use that GED/libbrlobol controller association instead of
+  probing `dm_obol_controller`; draw-test helpers now use the same
+  association, and the direct libdm backend probe is quarantined inside libdm
+  and the GED Obol bridge.
+* The shared libged Obol fbserv backend operation table now owns
+  `BRLObolFramebufferStream` pixel/view/cursor/colormap/flush/poll dispatch.
+  qged keeps only Qt transport, active-view sizing, and update-notification
+  glue through a borrowed `QgObolWindowHost`, matching the GSH/MGED bridge
+  instead of carrying a second framebuffer adapter.
+* The GED `rt` standalone framebuffer-device cache is cleared for Obol and
+  other non-legacy display managers, so Obol-backed views cannot inherit stale
+  `/dev/swrast`, `/dev/qtgl`, `/dev/ogl`, or `/dev/wgl` window-open behavior
+  from an earlier legacy DM attachment.
+* The legacy `struct fb` `/dev/qtgl` and `/dev/swrast` standalone opens now
+  prefer a registered libimgstream display host.  Obol hosts can therefore
+  service legacy framebuffer callers through `BRLObolWindowHost` image-stream
+  presentation without creating nested qtcad/libdm display-manager windows;
+  the old standalone window paths remain as fallback when no host is
+  registered.
+* The fbserv framebuffer backend operation contract and transitional server
+  object/transport type contract now live in `include/imgstream/fbserv.h`.
+  The transitional `dm/fbserv.h` server wrapper still owns the libpkg/TCP/IPC
+  packet handling and legacy `struct fb` fallback implementation, but
+  Obol/libged/qged framebuffer backends depend on an image-stream-owned type
+  surface.  The fbserv wire-protocol message IDs also live in the same
+  image-stream contract, with legacy `MSG_*` aliases kept for existing callers.
+  Session-token authentication helpers have also moved from the standalone
+  fbserv source-local header into libimgstream's fbserv protocol contract, so
+  embedded and standalone fbserv callers share one compiled implementation.
+  Non-I/O fbserv state helpers for object initialization, backend/transport
+  registration, listener/client accessors, and legacy framebuffer pointer
+  storage are compiled in libimgstream; libdm's `fbs_*` entry points are now
+  compatibility wrappers around that image-stream-owned state layer.  The
+  fbserv libpkg PKG message switch is also built in libimgstream and shared by
+  libdm and standalone `fbserv`, reducing duplicate packet-map ownership while
+  the actual TCP/IPC loops and handler bodies remain transitional host code.
+  Backend-operation dispatch through `fbserv_fb_ops` is now compiled in
+  libimgstream; libdm's dispatcher wrappers only provide the remaining legacy
+  `struct fb` fallback when no installed backend handles an operation.
+* qged, libged, and TclCAD no longer mutate `fbserv_obj::fbs_fbp` directly.
+  Legacy framebuffer attachment and refresh lookup are routed through
+  `fbs_set_legacy_framebuffer` / `fbs_legacy_framebuffer`, and the pivot guard
+  rejects direct field access in those migrated hosts.  TclCAD's older
+  framebuffer-object commands still operate on a legacy `struct fb`
+  compatibility object, but they reach it through the fbserv accessor boundary
+  until that command surface is retired or wrapped separately.
+* libged and GSH no longer read or write fbserv transport internals such as
+  listener/client slots or handler callbacks directly.  Their setup,
+  IPC-capability checks, listener-port lookup, client cleanup, and shutdown
+  checks go through narrow `fbs_*` transport/accessor helpers, and the pivot
+  guard rejects direct transport field access in those migrated callers.
+* qged and TclCAD no longer assign fbserv transport callback fields directly
+  from their host setup paths.  qged installs a Qt transport table through
+  `fbs_set_transport`; TclCAD centralizes its platform-specific TCP/IPC
+  callback table in `tclcad_fbserv_set_transport`.  Their toolkit-specific
+  listener/client channel integration remains transitional until the packet
+  layer moves, but direct listener/client field access is accessor-mediated
+  and guarded out of the migrated transport files.
+* qged no longer reaches through `fbserv_obj::fbs_fb_ops` / `fbs_fb_ctx` to
+  validate Obol framebuffer behavior.  Tests and migrated callers use
+  `fbs_framebuffer_*` operation wrappers, keeping the backend table layout an
+  implementation detail of the transitional fbserv host.
 
 Boundary Rules
 --------------
@@ -121,14 +200,34 @@ Remaining Targets
 1. Finish retargeting edit visualization to the modern editing stack:
    librt edit operations, libged/MGED/qtcad command policy, and
    libbrlobol/Obol preview/manipulator realization.  The old edit-matrix
-   display-path API surface and qged direct-widget preview fallback are gone;
-   remaining work is native MGED edit-preview behavior and richer manipulator
-   integration.
-2. Retire remaining app-host/display legacy dependencies: fbserv protocol
-   ownership and libdm window-open assumptions that should become
-   Obol/libbrlobol/libbv or image-stream responsibilities.  Obol-backed
+   display-path API surface, qged direct-widget preview fallback, and native
+   MGED source-mutation preview path are gone; remaining work is richer
+   manipulator integration and final edit-policy cleanup.
+2. Retire remaining app-host/display legacy dependencies: remaining fbserv
+   packet-transport ownership and libdm window-open assumptions that should
+   become Obol/libbrlobol/libbv or image-stream responsibilities.  Obol-backed
    screengrab/readback and fbserv setup now use the GED/libbrlobol controller
-   association; raw DM readback remains only for non-Obol display managers.
+   association, the fbserv backend contract is image-stream owned, and
+   qged/libged legacy framebuffer attachment is accessor-mediated.  The
+   fbserv wire message IDs are also image-stream owned; raw DM readback
+   remains only for non-Obol display managers.  TclCAD image export now uses
+   the GED/Obol view-image bridge before raw DM fallback, and high-level
+   TclCAD view framebuffer configure/refresh/open/close paths and legacy
+   framebuffer-object commands use the fbserv legacy-framebuffer accessors.
+   libged/GSH fbserv transport-field access is also
+   accessor-mediated, qged/TclCAD callback setup is table-based, and
+   qged/TclCAD listener/client channel integration uses narrow `fbs_*` helpers
+   instead of direct fbserv field access.  qged and TclCAD still own their
+   toolkit-specific event-loop integration until the packet layer moves.  qged
+   validates framebuffer behavior through `fbs_framebuffer_*` helpers rather
+   than direct backend-table access.  fbserv session-token authentication is
+   now compiled in libimgstream instead of being duplicated through a
+   source-local standalone fbserv header, the PKG message switch and backend
+   operation dispatch are shared from libimgstream, and the transitional
+   fbserv object and transport callback types are image-stream owned rather
+   than redefined by `dm/fbserv.h`.  Non-I/O fbserv object state/accessor
+   helpers are also implemented in libimgstream with libdm compatibility
+   wrappers.
 3. Keep libbv tests focused on pure view mechanics.  Test scene realization,
    picking, selection, realized LoD, progressive cache behavior, and
    framebuffer behavior in libbrlobol/libged/qtcad/MGED/GSH tests.
@@ -141,8 +240,8 @@ goal-level release/performance validation.
 
 Focused debug checks:
 
-* `ninja -C build libbv librt libged libqtcad bv_test rt_view_info ged_test_view_command ged_test_obol_draw_sync ged_test_snap_semantics ged_test_mged_view_state ged_test_rtwizard_view qsketch test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_snap`
-* `ctest --test-dir build -R '^(bv_basic|rt_view_info|libbrlobol_lod_update_action|libbrlobol_mesh_lod_cache|ged_test_view_command|ged_test_obol_draw_sync|ged_test_snap_semantics|ged_test_mged_view_state|ged_test_rtwizard_view|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_snap)$' --output-on-failure`
+* `ninja -C build libbv librt libged libqtcad qged bv_test rt_view_info ged_test_view_command ged_test_obol_draw_sync ged_test_snap_semantics ged_test_mged_view_state ged_test_rtwizard_view qsketch test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_snap test_qged_obol_fbserv`
+* `ctest --test-dir build -R '^(bv_basic|rt_view_info|libbrlobol_lod_update_action|libbrlobol_mesh_lod_cache|ged_test_view_command|ged_test_obol_draw_sync|ged_test_snap_semantics|ged_test_mged_view_state|ged_test_rtwizard_view|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_snap|test_qged_obol_fbserv|gsh_obol_ert_smoke|mged_obol_ert_smoke|gsh_obol_progressive_lod|mged_obol_progressive_lod)$' --output-on-failure`
 * `ctest --test-dir build -R ged_draw --output-on-failure`
 * `git diff --check`
 

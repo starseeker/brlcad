@@ -34,7 +34,6 @@
 #include "bv.h"
 #include "bu/malloc.h"
 #include "bu/ptbl.h"
-#include "dm/obol.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "./ged_draw_private.h"
@@ -286,9 +285,9 @@ ged_view_context_host_attach(struct ged *gedp, void *view_ctx)
 	return 0;
 
     (void)ged_view_host_record_create(gedp, view_ctx);
-    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    if (view && !bv_user_data_get(view))
-	bv_user_data_set(view, gedp);
+    struct bv_context *ctx = (struct bv_context *)view_ctx;
+    if (bv_context_view(ctx) && !bv_context_user_data_get(ctx))
+	bv_context_user_data_set(ctx, gedp);
     return 1;
 }
 
@@ -572,20 +571,20 @@ extern "C" GED_EXPORT size_t
 ged_view_context_clear(void *view_ctx, int flags)
 {
     size_t cleared = ged_draw_obol_view_context_clear(view_ctx, flags);
-    (void)bv_refresh_complete(bv_context_view((struct bv_context *)view_ctx));
+    (void)bv_context_refresh_complete((struct bv_context *)view_ctx);
     return cleared;
 }
 
 extern "C" GED_EXPORT void *
 ged_view_context_user_data_get(const void *view_ctx)
 {
-    return bv_user_data_get(bv_context_view_const((const struct bv_context *)view_ctx));
+    return bv_context_user_data_get((const struct bv_context *)view_ctx);
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_user_data_set(void *view_ctx, void *user_data)
 {
-    return bv_user_data_set(bv_context_view((struct bv_context *)view_ctx),
+    return bv_context_user_data_set((struct bv_context *)view_ctx,
 	    user_data);
 }
 
@@ -729,10 +728,9 @@ ged_view_context_display_manager_set(void *view_ctx, void *dmp)
 
     if (record) {
 	void *old_dmp = record->display_manager;
-	void *old_controller = dm_obol_controller((struct dm *)old_dmp);
-	if (old_controller && old_dmp != dmp)
-	    ged_draw_obol_controller_detach_opaque(record->gedp,
-		    old_controller);
+	if (old_dmp && old_dmp != dmp)
+	    ged_draw_obol_controller_detach_for_view(record->gedp,
+		    view_ctx);
 	record->display_manager = dmp;
 	return 1;
     }

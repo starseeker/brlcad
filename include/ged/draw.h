@@ -503,7 +503,8 @@ struct ged_draw_view_annotation_summary {
 
 enum ged_draw_view_line_command {
     GED_DRAW_VIEW_LINE_MOVE = 0,
-    GED_DRAW_VIEW_LINE_DRAW = 1
+    GED_DRAW_VIEW_LINE_DRAW = 1,
+    GED_DRAW_VIEW_LINE_POINT_DRAW = 12
 };
 
 struct ged_draw_view_line_summary {
@@ -602,6 +603,59 @@ struct ged_draw_view_rendered_object_summary {
     int selection_highlighted;
 };
 
+enum ged_draw_view_feature_kind {
+    GED_DRAW_VIEW_FEATURE_KIND_UNKNOWN = 0,
+    GED_DRAW_VIEW_FEATURE_KIND_LINES,
+    GED_DRAW_VIEW_FEATURE_KIND_INDEXED_LINES,
+    GED_DRAW_VIEW_FEATURE_KIND_POINTS,
+    GED_DRAW_VIEW_FEATURE_KIND_LABELS,
+    GED_DRAW_VIEW_FEATURE_KIND_ARROW,
+    GED_DRAW_VIEW_FEATURE_KIND_AXES,
+    GED_DRAW_VIEW_FEATURE_KIND_LINE_LAYER,
+    GED_DRAW_VIEW_FEATURE_KIND_EDIT_PREVIEW,
+    GED_DRAW_VIEW_FEATURE_KIND_INDEXED_FACE_SET,
+    GED_DRAW_VIEW_FEATURE_KIND_POLYGON_OVERLAY,
+    GED_DRAW_VIEW_FEATURE_KIND_HUD_LABEL,
+    GED_DRAW_VIEW_FEATURE_KIND_CUSTOM_NODE
+};
+
+enum ged_draw_view_feature_scope {
+    GED_DRAW_VIEW_FEATURE_SCOPE_UNKNOWN = 0,
+    GED_DRAW_VIEW_FEATURE_SCOPE_SHARED,
+    GED_DRAW_VIEW_FEATURE_SCOPE_LOCAL
+};
+
+enum ged_draw_view_feature_overlay_class {
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN = 0,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_NONE,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_FACEPLATE,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_MEASURE,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SELECTION_RUBBER_BAND,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SNAP_GUIDE,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_DIAGNOSTIC,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_POLYGON_EDIT,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SKETCH_EDIT,
+    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION
+};
+
+enum ged_draw_view_feature_lifecycle {
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_UNKNOWN = 0,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_NONE,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_PERSISTENT,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_FRAME,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_COMMAND,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_TOOL,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_VIEW,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_SHARED_VIEW_SET,
+    GED_DRAW_VIEW_FEATURE_LIFECYCLE_AUTO_REMOVE_ON_SOURCE
+};
+
+#define GED_DRAW_VIEW_FEATURE_OWNER_ID_MAX 64
+#define GED_DRAW_VIEW_FEATURE_OWNER_ROLE_MAX 64
+
 struct ged_draw_view_feature_summary {
     int exists;
     int is_overlay;
@@ -609,6 +663,10 @@ struct ged_draw_view_feature_summary {
     int is_transient_preview;
     int is_command_result;
     int visible;
+    int kind;
+    int scope;
+    int overlay_class;
+    int lifecycle;
     unsigned char color[3];
     size_t child_count;
     size_t geometry_command_count;
@@ -616,9 +674,12 @@ struct ged_draw_view_feature_summary {
     size_t primitive_metadata_count;
     size_t selected_primitive_count;
     size_t highlighted_primitive_count;
+    uint64_t owner_generation;
+    char owner_id[GED_DRAW_VIEW_FEATURE_OWNER_ID_MAX];
+    char owner_role[GED_DRAW_VIEW_FEATURE_OWNER_ROLE_MAX];
 };
 
-#define GED_DRAW_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0, 0 }
+#define GED_DRAW_VIEW_FEATURE_SUMMARY_INIT { 0, 0, 0, 0, 0, 0, GED_DRAW_VIEW_FEATURE_KIND_UNKNOWN, GED_DRAW_VIEW_FEATURE_SCOPE_UNKNOWN, GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN, GED_DRAW_VIEW_FEATURE_LIFECYCLE_UNKNOWN, {0, 0, 0}, 0, 0, 0, 0, 0, 0, 0, {'\0'}, {'\0'} }
 
 typedef int (*ged_draw_view_db_object_record_cb)(
     const struct ged_draw_view_db_object_record *rec,
@@ -1326,6 +1387,9 @@ ged_draw_view_context_feature_highlighted_primitive_at(void *view_ctx,
 GED_EXPORT extern int
 ged_draw_view_feature_ref_is_null(ged_draw_view_feature_ref ref);
 
+/* Live-edit events refresh preview callbacks/metadata.  Terminal events
+ * (`COMMIT`, `CANCEL`, `DISCARD`) retire the transient preview feature so the
+ * canonical scene can take over. */
 GED_EXPORT extern int
 ged_draw_view_context_edit_preview_publish_event(
     void *view_ctx,
@@ -1377,6 +1441,18 @@ ged_draw_view_feature_points_replace(
     const point_t *points,
     const int *cmds,
     size_t point_count);
+
+GED_EXPORT extern int
+ged_draw_view_feature_edit_preview_replace(
+    ged_draw_view_feature_ref ref,
+    const char *source_path,
+    const char *edit_intent_id,
+    const char *edit_intent_role,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count,
+    uint32_t source_revision,
+    uint32_t inputs_revision);
 
 GED_EXPORT extern int
 ged_draw_view_feature_clear_geometry(ged_draw_view_feature_ref ref);

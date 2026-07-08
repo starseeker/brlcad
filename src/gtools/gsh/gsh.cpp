@@ -45,7 +45,6 @@
 #  define DM_WITH_RT
 #  include "dm.h"
 #  include "dm/fbserv.h"
-#  include "dm/obol.h"
 #endif
 
 #include "ged.h"
@@ -429,7 +428,7 @@ GshState::~GshState()
     if (gedp)
 	ged_draw_obol_framebuffer_release(gedp);
 
-    if (gedp && gedp->ged_fbs && gedp->ged_fbs->fbs_close_server_handler)
+    if (gedp && gedp->ged_fbs && fbs_can_close(gedp->ged_fbs))
 	(void)fbs_close(gedp->ged_fbs);
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
@@ -622,7 +621,7 @@ GshState::view_update()
 	    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
 	    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
 	    dm_set_native_repaint_pending(dmp, 0);
-	    if (!dm_obol_controller(dmp)) {
+	    if (!ged_draw_obol_controller_opaque_for_view(view_ctx)) {
 		struct ged_draw_transaction txn =
 		    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
 		txn.view = view_ctx;
@@ -630,7 +629,7 @@ GshState::view_update()
 	    }
 	    (void)ged_draw_obol_framebuffer_present(gedp);
 	    dm_draw_end(dmp);
-	    bv_refresh_complete(bv_context_view((struct bv_context *)view_ctx));
+	    bv_context_refresh_complete((struct bv_context *)view_ctx);
 	}
     }
 #endif

@@ -180,7 +180,7 @@ ged_init(struct ged *gedp)
 
     /* Create a non-opened fbserv */
     BU_GET(gedp->ged_fbs, struct fbserv_obj);
-    gedp->ged_fbs->fbs_listener.fbsl_fd = -1;
+    fbs_init(gedp->ged_fbs);
 
     BU_GET(gedp->i->ged_gdp, struct ged_drawable);
     ged_scene_root_ref_clear(gedp);
@@ -736,6 +736,8 @@ ged_rt_fb_refresh(struct ged *gedp)
     if (BU_STR_EQUAL(dm_name, "qtgl")) { ged_rt_fb_set(gedp, "/dev/qtgl"); return; }
     if (BU_STR_EQUAL(dm_name, "ogl")) { ged_rt_fb_set(gedp, "/dev/ogl"); return; }
     if (BU_STR_EQUAL(dm_name, "wgl")) { ged_rt_fb_set(gedp, "/dev/wgl"); return; }
+
+    ged_rt_fb_set(gedp, NULL);
 }
 
 // Local Variables:

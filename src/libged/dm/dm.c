@@ -34,7 +34,6 @@
 #include "bu/vls.h"
 #include "bv.h"
 #include "dm.h"
-#include "dm/obol.h"
 #include "ged/draw_obol.h"
 #include "rt/view.h"
 
@@ -726,10 +725,8 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	ged_draw_ensure_root_attached(gedp);
 
     if (BU_STR_EQUAL(argv[0], "obol")) {
-	void *controller = dm_obol_controller(dmp);
-	if (!controller ||
-		!ged_draw_obol_controller_attach_opaque_for_view(gedp,
-		    target_view, controller, 1)) {
+	if (!ged_draw_obol_display_manager_attach_for_view(gedp,
+		target_view, dmp, 1, 1)) {
 	    bu_vls_printf(gedp->ged_result_str,
 		    "failed to attach GED draw state to Obol DM %s",
 		    bu_vls_cstr(&dm_name));
@@ -744,10 +741,17 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     /* Record the framebuffer device corresponding to this active DM type so
      * libged rt can launch a matching standalone fb window without querying
      * libdm directly at rt execution time. */
-    if (BU_STR_EQUAL(argv[0], "swrast")) ged_rt_fb_set(gedp, "/dev/swrast");
-    if (BU_STR_EQUAL(argv[0], "qtgl")) ged_rt_fb_set(gedp, "/dev/qtgl");
-    if (BU_STR_EQUAL(argv[0], "ogl")) ged_rt_fb_set(gedp, "/dev/ogl");
-    if (BU_STR_EQUAL(argv[0], "wgl")) ged_rt_fb_set(gedp, "/dev/wgl");
+    if (BU_STR_EQUAL(argv[0], "swrast")) {
+	ged_rt_fb_set(gedp, "/dev/swrast");
+    } else if (BU_STR_EQUAL(argv[0], "qtgl")) {
+	ged_rt_fb_set(gedp, "/dev/qtgl");
+    } else if (BU_STR_EQUAL(argv[0], "ogl")) {
+	ged_rt_fb_set(gedp, "/dev/ogl");
+    } else if (BU_STR_EQUAL(argv[0], "wgl")) {
+	ged_rt_fb_set(gedp, "/dev/wgl");
+    } else {
+	ged_rt_fb_set(gedp, NULL);
+    }
 
     const char *cbav[4] = {"dm", "attach", argv[0], bu_vls_cstr(&dm_name)};
     _dm_cmd_during_clbk(gd, 4, cbav);

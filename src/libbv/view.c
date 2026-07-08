@@ -2200,6 +2200,60 @@ bv_context_view_const(const struct bv_context *ctx)
 }
 
 int
+bv_context_name_set(struct bv_context *ctx, const char *name)
+{
+    return bv_name_set(bv_context_view(ctx), name);
+}
+
+const char *
+bv_context_name_get(const struct bv_context *ctx)
+{
+    return bv_name_get(bv_context_view_const(ctx));
+}
+
+int
+bv_context_user_data_set(struct bv_context *ctx, void *user_data)
+{
+    return bv_user_data_set(bv_context_view(ctx), user_data);
+}
+
+void *
+bv_context_user_data_get(const struct bv_context *ctx)
+{
+    return bv_user_data_get(bv_context_view_const(ctx));
+}
+
+int
+bv_context_dimensions_set(struct bv_context *ctx, int width, int height)
+{
+    return bv_dimensions_set(bv_context_view(ctx), width, height);
+}
+
+int
+bv_context_width_get(const struct bv_context *ctx)
+{
+    return bv_width_get(bv_context_view_const(ctx));
+}
+
+int
+bv_context_height_get(const struct bv_context *ctx)
+{
+    return bv_height_get(bv_context_view_const(ctx));
+}
+
+int
+bv_context_refresh_request(struct bv_context *ctx, uint32_t flags)
+{
+    return bv_refresh_request(bv_context_view(ctx), flags);
+}
+
+int
+bv_context_refresh_complete(struct bv_context *ctx)
+{
+    return bv_refresh_complete(bv_context_view(ctx));
+}
+
+int
 bv_context_callback_add(struct bv_context *ctx, bv_context_callback_t callback,
 	void *client_data)
 {

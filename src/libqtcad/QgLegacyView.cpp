@@ -57,7 +57,7 @@ qg_legacy_view_local_create(const char *name)
 {
     void *view_ctx = ged_view_context_create();
     if (name)
-	bv_name_set(bv_context_view(reinterpret_cast<struct bv_context *>(view_ctx)),
+	bv_context_name_set(reinterpret_cast<struct bv_context *>(view_ctx),
 		name);
     return qg_legacy_view_from_context(view_ctx);
 }
@@ -81,8 +81,8 @@ qg_legacy_view_local_destroy(qg_legacy_view *view)
 int
 qg_legacy_view_dimensions_set(qg_legacy_view *view, int width, int height)
 {
-    return bv_dimensions_set(bv_context_view(
-	reinterpret_cast<struct bv_context *>(qg_legacy_view_to_context(view))),
+    return bv_context_dimensions_set(
+	reinterpret_cast<struct bv_context *>(qg_legacy_view_to_context(view)),
 	width, height);
 }
 
@@ -99,8 +99,8 @@ qg_legacy_view_unit_conversion_set(qg_legacy_view *view,
 int
 qg_legacy_view_name_set(qg_legacy_view *view, const char *name)
 {
-    return bv_name_set(bv_context_view(
-	reinterpret_cast<struct bv_context *>(qg_legacy_view_to_context(view))),
+    return bv_context_name_set(
+	reinterpret_cast<struct bv_context *>(qg_legacy_view_to_context(view)),
 	name);
 }
 

@@ -2482,6 +2482,38 @@ main(int argc, char **argv)
     }
     if (!preview_xform_seen)
 	FAIL("GED feature primitive wireframe helper should apply the supplied transform");
+    if (!ged_draw_view_feature_edit_preview_replace(ged_preview_ref,
+		"cap2::ged-preview-explicit.s",
+		"edit::cap2::ged-preview",
+		"move-handle",
+		ged_preview_points,
+		ged_preview_cmds,
+		3,
+		31,
+		32) ||
+	    !owned_controller->features().record(ged_preview_handle,
+		ged_preview_record) ||
+	    ged_preview_record.kind != BRLObolFeatureKind::EditPreview ||
+	    ged_preview_record.identity != "cap2::ged-preview-explicit.s" ||
+	    ged_preview_record.editIntentId != "edit::cap2::ged-preview" ||
+	    ged_preview_record.editIntentRole != "move-handle" ||
+	    ged_preview_record.sourceRevision != 31 ||
+	    ged_preview_record.inputsRevision != 32)
+	FAIL("GED feature edit preview replace should preserve explicit identity, intent, and revision metadata");
+    if (!ged_draw_view_feature_edit_preview_replace(ged_preview_ref,
+		NULL,
+		NULL,
+		NULL,
+		ged_preview_points,
+		ged_preview_cmds,
+		3,
+		0,
+		0) ||
+	    !owned_controller->features().record(ged_preview_handle,
+		ged_preview_record) ||
+	    ged_preview_record.sourceRevision != 32 ||
+	    ged_preview_record.inputsRevision != 33)
+	FAIL("GED feature edit preview replace should advance preview revisions when explicit values are omitted");
     ged_draw_view_feature_set_visible(ged_preview_ref, 0);
     ged_draw_view_feature_set_color(ged_preview_ref, 12, 34, 56);
     BRLObolFeatureStyle ged_preview_style;
@@ -2496,8 +2528,25 @@ main(int argc, char **argv)
 	FAIL("GED feature touch should dispatch through Obol edit-preview callbacks");
     if (!ged_draw_view_context_edit_preview_publish_event(feature_view_ctx,
 		ged_preview_ref, GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE,
-		"cap2::ged-source.s"))
+		"cap2::ged-source.s") ||
+	    !owned_controller->features().exists("cap2::ged-preview"))
 	FAIL("GED feature preview events should route through the Obol feature API");
+    if (!ged_draw_view_context_edit_preview_publish_event(feature_view_ctx,
+		ged_preview_ref, GED_DRAW_VIEW_EDIT_PREVIEW_COMMIT,
+		"cap2::ged-source.s") ||
+	    owned_controller->features().exists("cap2::ged-preview"))
+	FAIL("GED feature commit preview events should retire transient Obol edit previews");
+    ged_preview_ref =
+	ged_draw_view_context_feature_overlay_ensure(feature_view_ctx,
+		"cap2::ged-preview", &ged_preview_owner, &ged_preview_state,
+		&ged_preview_callbacks, "cap2::ged-source.s");
+    ged_preview_handle = owned_controller->features().find("cap2::ged-preview");
+    if (ged_draw_view_feature_ref_is_null(ged_preview_ref) ||
+	    !ged_preview_handle.isValid() ||
+	    !ged_draw_view_feature_points_replace(ged_preview_ref,
+		GED_DRAW_VIEW_FEATURE_TRANSIENT_PREVIEW, ged_preview_points,
+		ged_preview_cmds, 3))
+	FAIL("GED feature overlay ensure should recreate edit preview state after commit teardown");
     if (!ged_draw_view_feature_clear_geometry(ged_preview_ref) ||
 	    !owned_controller->features().record(ged_preview_handle,
 		ged_preview_record) ||

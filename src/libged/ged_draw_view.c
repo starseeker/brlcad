@@ -526,6 +526,23 @@ ged_draw_view_feature_points_replace(
 	    cmds, point_count);
 }
 
+int
+ged_draw_view_feature_edit_preview_replace(
+	ged_draw_view_feature_ref ref,
+	const char *source_path,
+	const char *edit_intent_id,
+	const char *edit_intent_role,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	uint32_t source_revision,
+	uint32_t inputs_revision)
+{
+    return ged_draw_obol_view_feature_edit_preview_replace(ref, source_path,
+	    edit_intent_id, edit_intent_role, points, cmds, point_count,
+	    source_revision, inputs_revision);
+}
+
 
 int
 ged_draw_view_feature_clear_geometry(ged_draw_view_feature_ref ref)

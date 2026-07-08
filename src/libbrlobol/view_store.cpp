@@ -630,7 +630,12 @@ BRLObolFeatureRecord::BRLObolFeatureRecord(void) :
     metadata(),
     primitiveMetadata(),
     selectedPrimitives(),
-    highlightedPrimitives()
+    highlightedPrimitives(),
+    identity(""),
+    editIntentId(""),
+    editIntentRole(""),
+    sourceRevision(0),
+    inputsRevision(0)
 {
 }
 
@@ -2501,6 +2506,11 @@ BRLObolFeatureStore::record(BRLObolFeatureHandle handle,
     recordOut.primitiveMetadata = rec->primitiveMetadata;
     recordOut.selectedPrimitives = rec->selectedPrimitives;
     recordOut.highlightedPrimitives = rec->highlightedPrimitives;
+    recordOut.identity = rec->identity;
+    recordOut.editIntentId = rec->editIntentId;
+    recordOut.editIntentRole = rec->editIntentRole;
+    recordOut.sourceRevision = rec->sourceRevision;
+    recordOut.inputsRevision = rec->inputsRevision;
     return TRUE;
 }
 

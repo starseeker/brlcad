@@ -128,6 +128,9 @@ Current user-facing shape:
 
 * `view feature list [--all|--annotations|--database] [-L] [glob]`
 * `view feature info <id> [field]`
+  Field set today: `mode`, `color`, `visible`, `lcnt`, `type`, `kind`,
+  `scope`, `overlay_class`, `lifecycle`, `owner`, `owner_role`,
+  `owner_generation`, `transient_preview`, and `command_result`.
 * `view feature show|hide|delete|realize <id>`
 * `view feature style get <id> <field>`
 * `view feature style set <id> <field> <value> ...`
@@ -153,11 +156,16 @@ callers to reason about it without parsing human strings:
 * stable id/name and optional display label
 * class: annotation, database-instance, command-result, edit-proxy, tool, or
   custom-node
+  Current CLI fields map this into `type` and lower-level `kind`.
 * scope: shared scene by default, view-local only when explicitly requested
+  CLI reports this as `scope`.
 * owner id, owner role, and optional generation for command/plugin results
+  CLI reports these as `owner`, `owner_role`, and `owner_generation`.
 * database path and draw mode for database-backed objects
 * lifecycle policy: persistent user object, command-result replacement group,
   edit-preview proxy, or view-local tool state
+  CLI reports this as `lifecycle`, and also exposes the shortcut booleans
+  `transient_preview` and `command_result`.
 * capabilities: visible, selectable, pickable, style, arrow, label, axes,
   polygon, database-instance, command-result, manipulator, editable,
   exportable
@@ -206,7 +214,10 @@ Image readback follows the same ownership boundary.  For Obol-backed views,
 screenshots and visible-canvas captures should ask the active
 `BRLObolViewController` to render the view to a caller-owned image buffer.
 Display-manager readback is only a fallback for non-Obol backends, not the
-source of truth for Obol scene capture.
+source of truth for Obol scene capture.  C app-host callers should use the
+`ged_draw_obol_view_display_image` bridge in `ged/draw_obol.h`; TclCAD's
+legacy `to_pix` and `to_png` exporters use that path before falling back to
+raw GL display-manager readback.
 
 Polygon Fill
 ------------

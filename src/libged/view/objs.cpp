@@ -576,6 +576,74 @@ _view_object_info(struct _ged_view_info *gd,
 	bu_vls_printf(gedp->ged_result_str, "%s %s\n", name, rec.type_name.c_str());
 	return BRLCAD_OK;
     }
+
+    struct ged_draw_view_feature_summary summary =
+	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
+    int have_summary = ged_draw_view_context_feature_summary(gd->cv, name,
+	    &summary);
+
+    auto kind_name = [](int kind) -> const char * {
+	switch (kind) {
+	    case GED_DRAW_VIEW_FEATURE_KIND_LINES: return "lines";
+	    case GED_DRAW_VIEW_FEATURE_KIND_INDEXED_LINES: return "indexed-lines";
+	    case GED_DRAW_VIEW_FEATURE_KIND_POINTS: return "points";
+	    case GED_DRAW_VIEW_FEATURE_KIND_LABELS: return "labels";
+	    case GED_DRAW_VIEW_FEATURE_KIND_ARROW: return "arrow";
+	    case GED_DRAW_VIEW_FEATURE_KIND_AXES: return "axes";
+	    case GED_DRAW_VIEW_FEATURE_KIND_LINE_LAYER: return "line-layer";
+	    case GED_DRAW_VIEW_FEATURE_KIND_EDIT_PREVIEW: return "edit-preview";
+	    case GED_DRAW_VIEW_FEATURE_KIND_INDEXED_FACE_SET: return "indexed-face-set";
+	    case GED_DRAW_VIEW_FEATURE_KIND_POLYGON_OVERLAY: return "polygon-overlay";
+	    case GED_DRAW_VIEW_FEATURE_KIND_HUD_LABEL: return "hud-label";
+	    case GED_DRAW_VIEW_FEATURE_KIND_CUSTOM_NODE: return "custom-node";
+	    case GED_DRAW_VIEW_FEATURE_KIND_UNKNOWN:
+	    default: return "unknown";
+	}
+    };
+
+    auto scope_name = [](int scope) -> const char * {
+	switch (scope) {
+	    case GED_DRAW_VIEW_FEATURE_SCOPE_SHARED: return "shared";
+	    case GED_DRAW_VIEW_FEATURE_SCOPE_LOCAL: return "local";
+	    case GED_DRAW_VIEW_FEATURE_SCOPE_UNKNOWN:
+	    default: return "unknown";
+	}
+    };
+
+    auto overlay_class_name = [](int overlay_class) -> const char * {
+	switch (overlay_class) {
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_NONE: return "none";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_FACEPLATE: return "faceplate";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE: return "edit-handle";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_MEASURE: return "measure";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SELECTION_RUBBER_BAND: return "selection-rubber-band";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SNAP_GUIDE: return "snap-guide";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT: return "command-result";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_DIAGNOSTIC: return "diagnostic";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY: return "tcl-overlay";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_POLYGON_EDIT: return "polygon-edit";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SKETCH_EDIT: return "sketch-edit";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION: return "user-annotation";
+	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN:
+	    default: return "unknown";
+	}
+    };
+
+    auto lifecycle_name = [](int lifecycle) -> const char * {
+	switch (lifecycle) {
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_NONE: return "none";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PERSISTENT: return "persistent";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_FRAME: return "per-frame";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_COMMAND: return "per-command";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_TOOL: return "per-tool";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_VIEW: return "per-view";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_SHARED_VIEW_SET: return "shared-view-set";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_AUTO_REMOVE_ON_SOURCE: return "auto-remove-on-source";
+	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_UNKNOWN:
+	    default: return "unknown";
+	}
+    };
+
     if (BU_STR_EQUAL(field, "mode")) {
 	_view_obj_mode_value_string(gedp->ged_result_str, rec.draw_mode);
 	return BRLCAD_OK;
@@ -595,6 +663,79 @@ _view_object_info(struct _ged_view_info *gd,
     }
     if (BU_STR_EQUAL(field, "type") || BU_STR_EQUAL(field, "class")) {
 	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.type_name.c_str());
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "kind")) {
+	if (!have_summary || !summary.exists) {
+	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
+	    return BRLCAD_OK;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%s\n",
+		kind_name(summary.kind));
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "scope")) {
+	if (!have_summary || !summary.exists) {
+	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
+	    return BRLCAD_OK;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%s\n",
+		scope_name(summary.scope));
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "overlay_class")) {
+	if (!have_summary || !summary.exists) {
+	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
+	    return BRLCAD_OK;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%s\n",
+		overlay_class_name(summary.overlay_class));
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "lifecycle")) {
+	if (!have_summary || !summary.exists) {
+	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
+	    return BRLCAD_OK;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%s\n",
+		lifecycle_name(summary.lifecycle));
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "owner")) {
+	if (!have_summary || !summary.exists || !summary.owner_id[0]) {
+	    bu_vls_printf(gedp->ged_result_str, "\n");
+	    return BRLCAD_OK;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%s\n", summary.owner_id);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "owner_role")) {
+	if (!have_summary || !summary.exists || !summary.owner_role[0]) {
+	    bu_vls_printf(gedp->ged_result_str, "\n");
+	    return BRLCAD_OK;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%s\n", summary.owner_role);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "owner_generation")) {
+	if (!have_summary || !summary.exists) {
+	    bu_vls_printf(gedp->ged_result_str, "0\n");
+	    return BRLCAD_OK;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%llu\n",
+		(unsigned long long)summary.owner_generation);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "transient_preview")) {
+	bu_vls_printf(gedp->ged_result_str, "%d\n",
+		(have_summary && summary.exists) ?
+		summary.is_transient_preview : 0);
+	return BRLCAD_OK;
+    }
+    if (BU_STR_EQUAL(field, "command_result")) {
+	bu_vls_printf(gedp->ged_result_str, "%d\n",
+		(have_summary && summary.exists) ?
+		summary.is_command_result : 0);
 	return BRLCAD_OK;
     }
 
@@ -749,7 +890,10 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
 
     if (BU_STR_EQUAL(cmd, "info")) {
 	if (sub_argc < 2 || sub_argc > 3) {
-	    bu_vls_printf(gedp->ged_result_str, "Usage: view feature info <name> [field]");
+	    bu_vls_printf(gedp->ged_result_str,
+		    "Usage: view feature info <name> "
+		    "[mode|color|visible|lcnt|type|kind|scope|overlay_class|lifecycle|"
+		    "owner|owner_role|owner_generation|transient_preview|command_result]");
 	    return BRLCAD_ERROR;
 	}
 	return _view_object_info(gd, sub_argv[1], (sub_argc == 3) ? sub_argv[2] : NULL,

@@ -75,6 +75,7 @@ struct swrastinfo {
     short mi_cmap_flag;		/* enabled when there is a non-linear map in memory */
 
     int mi_memwidth;            /* width of scanline in if_mem */
+    struct fb_imgstream_compat imgstream;
 
     int alive;
 };
@@ -162,10 +163,14 @@ swrast_xmit_scanlines(struct fb *ifp, int ybase, int nlines, int xbase, int npix
 static void
 qt_destroy(struct swrastinfo *qi)
 {
+    if (!qi)
+	return;
     delete qi->mw;
     delete qi->qapp;
-    free(qi->av[0]);
-    free(qi->av);
+    if (qi->av) {
+	free(qi->av[0]);
+	free(qi->av);
+    }
 }
 #endif
 
@@ -276,6 +281,10 @@ fb_clipper(struct fb *ifp)
 int
 swrast_configureWindow(struct fb *ifp, int width, int height)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_configure(ifp, &SWRAST(ifp)->imgstream,
+		width, height);
+
     int getmem = 0;
 
     if (!SWRAST(ifp)->mi_memwidth)
@@ -402,6 +411,22 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 {
     FB_CK_FB(ifp->i);
 
+    if (fb_imgstream_compat_supported("/dev/swrast")) {
+	if ((ifp->i->pp = (char *)calloc(1, sizeof(struct swrastinfo))) == NULL) {
+	    fb_log("fb_swrast:  swrastinfo malloc failed\n");
+	    return -1;
+	}
+	ifp->i->stand_alone = 1;
+	int stream_ret = fb_imgstream_compat_open(ifp, &SWRAST(ifp)->imgstream,
+		"/dev/swrast", width, height);
+	if (stream_ret == 0)
+	    return 0;
+	free(ifp->i->pp);
+	ifp->i->pp = NULL;
+	if (stream_ret < 0)
+	    return -1;
+    }
+
     if ((ifp->i->pp = (char *)calloc(1, sizeof(struct swrastinfo))) == NULL) {
 	fb_log("fb_swrast:  swrastinfo malloc failed\n");
 	return -1;
@@ -491,23 +516,28 @@ swrast_put_fbps(struct fb_platform_specific *fbps)
 
 
 static int
-swrast_flush(struct fb *UNUSED(ifp))
+swrast_flush(struct fb *ifp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_flush(&SWRAST(ifp)->imgstream);
+
     glFlush();
     return 0;
 }
 
 
 static int
-#ifdef SWRAST_QT
 fb_swrast_close(struct fb *ifp)
-#else
-fb_swrast_close(struct fb *UNUSED(ifp))
-#endif
 {
+    struct swrastinfo *qi = SWRAST(ifp);
+    if (fb_imgstream_compat_active(&qi->imgstream)) {
+	(void)fb_imgstream_compat_close(&qi->imgstream);
+	free((char *)SWRASTL(ifp));
+	SWRASTL(ifp) = NULL;
+	return 0;
+    }
 
 #ifdef SWRAST_QT
-    struct swrastinfo *qi = SWRAST(ifp);
     /* if a window was created wait for user input and process events */
     if (qi->qapp) {
 	return qi->qapp->exec();
@@ -532,6 +562,9 @@ swrast_close_existing(struct fb *ifp)
 static int
 swrast_poll(struct fb *ifp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_poll(ifp, &SWRAST(ifp)->imgstream);
+
 #ifdef SWRAST_QT
     if (SWRAST(ifp)->qapp)
 	SWRAST(ifp)->qapp->processEvents();
@@ -557,6 +590,13 @@ swrast_free(struct fb *ifp)
     if (FB_DEBUG)
 	printf("swrast_free: All done...goodbye!\n");
 
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream)) {
+	(void)fb_imgstream_compat_close(&SWRAST(ifp)->imgstream);
+	free((char *)SWRASTL(ifp));
+	SWRASTL(ifp) = NULL;
+	return 0;
+    }
+
     if (ifp->i->if_mem != NULL) {
 	/* free up memory associated with image */
 	(void)free(ifp->i->if_mem);
@@ -574,6 +614,9 @@ swrast_free(struct fb *ifp)
 static int
 swrast_clear(struct fb *ifp, unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_clear(&SWRAST(ifp)->imgstream, pp);
+
     struct fb_pixel bg;
     struct fb_pixel *swrastp;
     int cnt;
@@ -621,6 +664,10 @@ swrast_clear(struct fb *ifp, unsigned char *pp)
 static int
 swrast_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_view(ifp, &SWRAST(ifp)->imgstream,
+		xcenter, ycenter, xzoom, yzoom);
+
     if (FB_DEBUG)
 	printf("entering swrast_view\n");
 
@@ -662,6 +709,10 @@ swrast_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 static int
 swrast_getview(struct fb *ifp, int *xcenter, int *ycenter, int *xzoom, int *yzoom)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_getview(&SWRAST(ifp)->imgstream,
+		xcenter, ycenter, xzoom, yzoom);
+
     if (FB_DEBUG)
 	printf("entering swrast_getview\n");
 
@@ -678,6 +729,10 @@ swrast_getview(struct fb *ifp, int *xcenter, int *ycenter, int *xzoom, int *yzoo
 static ssize_t
 swrast_read(struct fb *ifp, int x, int y, unsigned char *pixelp, size_t count)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_read(&SWRAST(ifp)->imgstream, x, y,
+		pixelp, count);
+
     size_t n;
     size_t scan_count;	/* # pix on this scanline */
     unsigned char *cp;
@@ -729,6 +784,10 @@ swrast_read(struct fb *ifp, int x, int y, unsigned char *pixelp, size_t count)
 static ssize_t
 swrast_write(struct fb *ifp, int xstart, int ystart, const unsigned char *pixelp, size_t count)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_write(&SWRAST(ifp)->imgstream, xstart,
+		ystart, pixelp, count);
+
     int x;
     int y;
     size_t scan_count;  /* # pix on this scanline */
@@ -825,6 +884,10 @@ swrast_write(struct fb *ifp, int xstart, int ystart, const unsigned char *pixelp
 static int
 swrast_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, const unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_writerect(&SWRAST(ifp)->imgstream,
+		xmin, ymin, width, height, pp);
+
     int x;
     int y;
     unsigned char *cp;
@@ -869,6 +932,10 @@ swrast_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, cons
 static int
 swrast_bwwriterect(struct fb *ifp, int xmin, int ymin, int width, int height, const unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_bwwriterect(&SWRAST(ifp)->imgstream,
+		xmin, ymin, width, height, pp);
+
     int x;
     int y;
     unsigned char *cp;
@@ -906,8 +973,11 @@ swrast_bwwriterect(struct fb *ifp, int xmin, int ymin, int width, int height, co
 
 
 static int
-swrast_rmap(struct fb *UNUSED(ifp), ColorMap *UNUSED(cmp))
+swrast_rmap(struct fb *ifp, ColorMap *cmp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_rmap(&SWRAST(ifp)->imgstream, cmp);
+
     if (FB_DEBUG)
 	printf("entering swrast_rmap\n");
 #if 0
@@ -923,8 +993,11 @@ swrast_rmap(struct fb *UNUSED(ifp), ColorMap *UNUSED(cmp))
 
 
 static int
-swrast_wmap(struct fb *UNUSED(ifp), const ColorMap *UNUSED(cmp))
+swrast_wmap(struct fb *ifp, const ColorMap *cmp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_wmap(&SWRAST(ifp)->imgstream, cmp);
+
     if (FB_DEBUG)
 	printf("entering swrast_wmap\n");
 
@@ -950,9 +1023,13 @@ swrast_help(struct fb *ifp)
 
 
 static int
-swrast_setcursor(struct fb *ifp, const unsigned char *UNUSED(bits), int UNUSED(xbits), int UNUSED(ybits), int UNUSED(xorig), int UNUSED(yorig))
+swrast_setcursor(struct fb *ifp, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig)
 {
     FB_CK_FB(ifp->i);
+
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_setcursor(&SWRAST(ifp)->imgstream,
+		bits, xbits, ybits, xorig, yorig);
 
     // If it should ever prove desirable to alter the cursor or disable it, here's how it is done:
     // dynamic_cast<osgViewer::GraphicsWindow*>(camera->getGraphicsContext()))->setCursor(osgViewer::GraphicsWindow::NoCursor);
@@ -962,8 +1039,11 @@ swrast_setcursor(struct fb *ifp, const unsigned char *UNUSED(bits), int UNUSED(x
 
 
 static int
-swrast_cursor(struct fb *UNUSED(ifp), int UNUSED(mode), int UNUSED(x), int UNUSED(y))
+swrast_cursor(struct fb *ifp, int mode, int x, int y)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_cursor(ifp, &SWRAST(ifp)->imgstream,
+		mode, x, y);
 
     fb_log("swrast_cursor\n");
     return 0;
@@ -973,6 +1053,8 @@ swrast_cursor(struct fb *UNUSED(ifp), int UNUSED(mode), int UNUSED(x), int UNUSE
 int
 swrast_refresh(struct fb *ifp, int x, int y, int w, int h)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_flush(&SWRAST(ifp)->imgstream);
 
     if (w < 0) {
 	w = -w;

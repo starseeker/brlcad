@@ -9,7 +9,22 @@ fi
 GSH="$1"
 DB="$2"
 WORKDIR="$3"
-PYTHON="${PYTHON:-python3.11}"
+PYTHON="${PYTHON:-}"
+
+if [ -z "$PYTHON" ]; then
+    for cand in python3.11 python3.14 python3 python; do
+	if command -v "$cand" >/dev/null 2>&1; then
+	    PYTHON="$cand"
+	    break
+	fi
+    done
+fi
+
+if [ -z "$PYTHON" ]; then
+    echo "No usable Python interpreter found for PNG validation" 1>&2
+    exit 1
+fi
+
 TMPDB="${WORKDIR}/gsh_obol_progressive_lod.g"
 CACHE="${WORKDIR}/gsh_obol_progressive_lod_cache"
 LOG="${WORKDIR}/gsh_obol_progressive_lod.log"

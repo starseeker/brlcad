@@ -95,7 +95,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 	    bu_vls_printf(gedp->ged_result_str, "attached display manager has no embedded framebuffer\n");
 	    return BRLCAD_ERROR;
 	}
-	fbs->fbs_fbp = fbp;
+	fbs_set_legacy_framebuffer(fbs, fbp);
 	if (fbs_framebuffer_info(fbs, &fbinfo) != 0) {
 	    bu_vls_printf(gedp->ged_result_str, "could not query embedded framebuffer dimensions\n");
 	    return BRLCAD_ERROR;
@@ -128,10 +128,10 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
      * This avoids TCP port binding, firewall traversal, and port collisions.
      * Fall back to the traditional TCP listen path when IPC is unavailable.  */
     bool using_ipc = false;
-    if (fbs->fbs_open_ipc_client_handler && fbs_open_ipc(fbs) == BRLCAD_OK) {
+    if (fbs_can_open_ipc(fbs) && fbs_open_ipc(fbs) == BRLCAD_OK) {
 	using_ipc = true;
     } else {
-	if (!fbs->fbs_is_listening || fbs_open(fbs, 0) != BRLCAD_OK) {
+	if (!fbs_can_open_network(fbs) || fbs_open(fbs, 0) != BRLCAD_OK) {
 	    bu_vls_printf(gedp->ged_result_str, "could not open fb server\n");
 	    return BRLCAD_ERROR;
 	}
@@ -150,7 +150,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 	 * detect PKG_ADDR and use the IPC channel instead of TCP.         */
 	args.push_back(std::string("0"));
     } else {
-	args.push_back(std::to_string(fbs->fbs_listener.fbsl_port));
+	args.push_back(std::to_string(fbs_listener_port(fbs)));
     }
     args.push_back(std::string("-M"));
 

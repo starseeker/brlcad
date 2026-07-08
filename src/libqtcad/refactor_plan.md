@@ -43,6 +43,7 @@ Current tree notes:
 - qtcad Obol readback uses a private Qt ContextManager that starts from Qt's default QSurfaceFormat, requests desktop OpenGL when Qt has not selected a renderable type, shares with Qt's current/global context when available, and falls back to OSMesa when the platform cannot create a Qt OpenGL context.
 - QgView now holds a single QgCanvasBase *canvas pointer; the #ifdef BRLCAD_OPENGL duplication that previously appeared in every method body has been replaced with a single make_canvas() factory function plus virtual dispatch; the class header no longer includes QgGL.h or QgSW.h.
 - qged embedded framebuffer traffic no longer branches on QgGL versus QgSW legacy framebuffer canvases.  qged installs a backend-neutral fbserv operation table and delegates image-stream presentation to libbrlobol's `BRLObolFramebufferStream` attached to the active QgView Obol window host, so qtcad canvas type is presentation-only.
+- Standalone legacy `fb_open("/dev/qtgl")` traffic now prefers a registered `QgObolWindowHost`/libimgstream display host.  qtcad can service those legacy framebuffer writes as Obol image-stream presentation without opening a nested dm-qtgl display-manager window; the old Qt/libdm window remains fallback behavior when no display host is registered.
 - Phase 3 is complete.
 
 Phase 4 — Filter hierarchy unification
@@ -130,7 +131,7 @@ Phase 8 — Test and CI coverage
 Current tree notes:
 - Headless QApplication coverage now focuses on Obol paths: src/libqtcad/tests contains qgmodel/qgview tests, Obol controller/window-host/draw/faceplate/pick/snap/measure/export tests, and progressive LoD tests wired into CTest with QT_QPA_PLATFORM=offscreen.  The old ged_test_qged_swrast and dm backend benchmark sources/tests have been retired.
 - qged no longer has a `dm_plugins` build prerequisite for its Obol/qtcad view path.  The remaining framebuffer validation gap is an application-level streaming test that drives `ert`/fbserv traffic into an Obol-hosted image stream and verifies intermediate rendered frames.
-- qged edit plugins publish preview geometry through GED/libbrlobol feature refs.  `QgObolEditPreview` remains a low-level qtcad helper with direct unit coverage, not a production fallback path for qged plugin previews.
+- qged edit plugins publish preview geometry through GED/libbrlobol feature refs.  `QgObolEditPreview` remains a low-level qtcad helper with direct unit coverage; when a GED-owned view context is available it now uses the same GED feature publication path, and only falls back to direct controller mutation for standalone/no-GED helper scenarios.  It is not a production fallback path for qged plugin previews.
 - QAbstractItemModelTester coverage now includes a dedicated offscreen CTest entry (test_qgmodel_model_tester) over QgModel, with QSignalSpy checks for fetch/open and layout-change signals; the old Model_Test TODO in QgModel.h is removed.
 
 - Add headless QApplication-based unit tests (using QSignalSpy and QTest) for the most logic-heavy classes: QgModel (tree fetch/hierarchy), QgKeyValModel, QgAttributesModel, each filter family (synthetic mouse events), QgFlowLayout, QgToolPalette selection logic, QgConsole command echo / completion, QgSignalFlags flag round-tripping.

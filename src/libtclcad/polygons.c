@@ -48,15 +48,15 @@ tclcad_polygons_sync_dm_dimensions(void *view_ctx)
 {
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (dmp)
-	bv_dimensions_set(bv_context_view((struct bv_context *)view_ctx),
+	bv_context_dimensions_set((struct bv_context *)view_ctx,
 		dm_get_width(dmp), dm_get_height(dmp));
 }
 
 static const char *
 tclcad_polygons_view_name(const void *view_ctx)
 {
-    const char *name = bv_name_get(bv_context_view_const(
-		(const struct bv_context *)view_ctx));
+    const char *name = bv_context_name_get(
+	    (const struct bv_context *)view_ctx);
     return name ? name : "";
 }
 

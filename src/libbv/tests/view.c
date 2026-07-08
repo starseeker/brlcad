@@ -23,6 +23,7 @@
 #include <stdio.h>
 
 #include "bv.h"
+#include "bu/str.h"
 
 static int
 near_fastf(fastf_t a, fastf_t b)
@@ -176,6 +177,16 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!bv_context_is_valid(owned_ctx) || !bv_context_view(owned_ctx) ||
 	    bv_context_view(owned_ctx) == v)
 	return fail("owned view context create failed");
+    if (!bv_context_name_set(owned_ctx, "owned") ||
+	    !BU_STR_EQUAL(bv_context_name_get(owned_ctx), "owned"))
+	return fail("view context name helpers failed");
+    if (!bv_context_user_data_set(owned_ctx, sentinel) ||
+	    bv_context_user_data_get(owned_ctx) != sentinel)
+	return fail("view context user-data helpers failed");
+    if (!bv_context_dimensions_set(owned_ctx, 320, 240) ||
+	    bv_context_width_get(owned_ctx) != 320 ||
+	    bv_context_height_get(owned_ctx) != 240)
+	return fail("view context dimension helpers failed");
     if (!bv_context_callback_add(&ctx, context_callback, &cb_state) ||
 	    !bv_context_notify(&ctx, BV_CONTEXT_CHANGED_REFRESH) ||
 	    cb_state.count != 1 || cb_state.flags != BV_CONTEXT_CHANGED_REFRESH ||
@@ -188,6 +199,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !bv_context_notify(&ctx, BV_CONTEXT_CHANGED_ALL) ||
 	    cb_state.count != 2)
 	return fail("view context callback remove failed");
+    if (!bv_context_refresh_request(owned_ctx, 0x5) ||
+	    !bv_refresh_dirty_get(bv_context_view(owned_ctx)) ||
+	    !bv_context_refresh_complete(owned_ctx))
+	return fail("view context refresh helpers failed");
     if (!bv_screen_to_view(&sx, &sy, v, 400.0, 200.0))
 	return fail("failed to convert screen center to view");
     if (!near_fastf(sx, 0.0) || !near_fastf(sy, 0.0))

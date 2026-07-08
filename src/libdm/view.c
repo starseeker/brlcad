@@ -27,28 +27,26 @@
 int
 dm_view_context_width_get(const void *view_ctx)
 {
-    return bv_width_get(bv_context_view_const(
-		(const struct bv_context *)view_ctx));
+    return bv_context_width_get((const struct bv_context *)view_ctx);
 }
 
 int
 dm_view_context_height_get(const void *view_ctx)
 {
-    return bv_height_get(bv_context_view_const(
-		(const struct bv_context *)view_ctx));
+    return bv_context_height_get((const struct bv_context *)view_ctx);
 }
 
 int
 dm_view_context_dimensions_set(void *view_ctx, int width, int height)
 {
-    return bv_dimensions_set(bv_context_view((struct bv_context *)view_ctx),
+    return bv_context_dimensions_set((struct bv_context *)view_ctx,
 	    width, height);
 }
 
 int
 dm_view_context_refresh_request(void *view_ctx, uint32_t flags)
 {
-    return bv_refresh_request(bv_context_view((struct bv_context *)view_ctx),
+    return bv_context_refresh_request((struct bv_context *)view_ctx,
 	    flags);
 }
 

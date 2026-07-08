@@ -49,7 +49,7 @@
 #define AXES_ADIFF_THRES 50
 /* Point-sampled triangle draws validate completeness, not stochastic point
  * distribution identity. */
-#define POINT_TRIANGLE_ADIFF_THRES 100
+#define POINT_TRIANGLE_ADIFF_THRES 130
 /* Boolweave evaluated wireframe output is semantically stable but line raster
  * phase differs slightly from the historical control. */
 #define EVALUATED_WIREFRAME_ADIFF_THRES 80

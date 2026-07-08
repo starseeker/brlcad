@@ -163,6 +163,7 @@ if(TARGET Qt6::Widgets)
     test_qtcad_obol_window_host
     libqtcad
     libimgstream
+    libdm
     libbu
     Qt6::Widgets
     )
@@ -173,6 +174,7 @@ if(NOT TARGET test_qtcad_obol_window_host AND TARGET Qt5::Widgets)
     test_qtcad_obol_window_host
     libqtcad
     libimgstream
+    libdm
     libbu
     Qt5::Widgets
     )

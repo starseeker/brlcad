@@ -1,6 +1,8 @@
 #  ************ libdm tests *************
 
 brlcad_addexec(dm_test dm_test.c "libdm;libbu" TEST)
+brlcad_addexec(test_dm_fb_imgstream fb_imgstream.cpp "libdm;libbrlobol;libimgstream;libbu" TEST ALL_CXX)
+brlcad_add_test(NAME libdm_fb_imgstream COMMAND test_dm_fb_imgstream)
 
 #TODO - these should be portable without X11, but we need to set up the Tk Xlib
 # and provide an appropriate include first...
@@ -21,6 +23,7 @@ endif()
 cmakefiles(CMakeLists.txt)
 cmakefiles(
   dm_test.c
+  fb_imgstream.cpp
   tcl_img.cpp
   tcl_tevent.cpp
 )

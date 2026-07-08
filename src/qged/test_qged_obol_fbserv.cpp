@@ -104,11 +104,11 @@ test_qged_obol_fbserv_backend(void)
     qdm_configure_ged_fbserv_handlers(gedp, &view);
     struct fbserv_obj *fbs = gedp->ged_fbs;
     GED_CHECK(fbs != NULL, "GED must own an fbserv object");
-    GED_CHECK(fbs->fbs_fbp == NULL,
+    GED_CHECK(fbs_legacy_framebuffer(fbs) == NULL,
 	      "qged Obol backend must not install a legacy struct fb");
-    GED_CHECK(fbs->fbs_fb_ops != NULL && fbs->fbs_fb_ctx != NULL,
+    GED_CHECK(fbs_framebuffer_backend_installed(fbs),
 	      "qged must install an Obol fbserv backend");
-    GED_CHECK(fbs->fbs_open_ipc_client_handler != NULL,
+    GED_CHECK(fbs_can_open_ipc(fbs),
 	      "qged must install an IPC fbserv client handler for ert");
 
     struct fbserv_fb_info info;
@@ -133,19 +133,18 @@ test_qged_obol_fbserv_backend(void)
 	pixels[i + 1] = 64;
 	pixels[i + 2] = 32;
     }
-    GED_CHECK(fbs->fbs_fb_ops->writerect(fbs->fbs_fb_ctx, 0, 0, 2, 2,
-		pixels) == 4,
+    GED_CHECK(fbs_framebuffer_writerect(fbs, 0, 0, 2, 2, pixels) == 4,
 	      "qged Obol fbserv backend must accept rectangle pixel writes");
     GED_CHECK(source->hasPendingStreamUpdate() == TRUE,
 	      "qged framebuffer writes must mark source data pending only");
     GED_CHECK(source->dirtyRevision.getValue() == 0,
 	      "qged framebuffer writes must not mutate Coin dirty fields");
 
-    GED_CHECK(fbs->fbs_fb_ops->view(fbs->fbs_fb_ctx, 3, 4, 2, 2) == 0,
+    GED_CHECK(fbs_framebuffer_view(fbs, 3, 4, 2, 2) == 0,
 	      "qged Obol fbserv backend must record framebuffer view state");
-    GED_CHECK(fbs->fbs_fb_ops->cursor(fbs->fbs_fb_ctx, 1, 7, 8) == 0,
+    GED_CHECK(fbs_framebuffer_cursor(fbs, 1, 7, 8) == 0,
 	      "qged Obol fbserv backend must record cursor state");
-    GED_CHECK(fbs->fbs_fb_ops->flush(fbs->fbs_fb_ctx) == 0,
+    GED_CHECK(fbs_framebuffer_flush(fbs) == 0,
 	      "qged Obol fbserv backend must present pending stream state");
 
     GED_CHECK(source->hasPendingStreamUpdate() == FALSE,
@@ -165,7 +164,7 @@ test_qged_obol_fbserv_backend(void)
 	      "qged framebuffer flush must publish cursor state to viewport image");
     GED_CHECK(controller->isRenderRequested(),
 	      "qged framebuffer flush must request an Obol render");
-    GED_CHECK(fbs->fbs_fb_ops->poll(fbs->fbs_fb_ctx) == 1,
+    GED_CHECK(fbs_framebuffer_poll(fbs) == 1,
 	      "qged framebuffer poll must drain the requested Obol render");
     GED_CHECK(!controller->isRenderRequested(),
 	      "qged framebuffer poll must consume the render request");

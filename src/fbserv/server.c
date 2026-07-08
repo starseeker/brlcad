@@ -39,15 +39,9 @@
 #include "bu/log.h"
 #include "bu/str.h"
 #include "dm.h"
+#include "imgstream/fbserv.h"
 #include "vmath.h"
 #include "pkg.h"
-
-/* Enable token verification for the standalone fbserv */
-#define FBSERV_AUTH_IMPL
-#include "./auth.h"
-
-
-#define NET_LONG_LEN 4 /* # bytes to network long */
 
 /*
  * These are the only symbols intended for export to LIBFB users.
@@ -944,40 +938,48 @@ fb_server_fb_help(struct pkg_conn *pcp, char *buf)
 	(void)free(buf);
 }
 
-struct pkg_switch pkg_switch[] = {
-    { MSG_FBAUTH,                       fb_server_fb_auth,        "Session Authentication", NULL },
-    { MSG_FBOPEN,                       fb_server_fb_open,        "Open Framebuffer", NULL },
-    { MSG_FBCLOSE,                      fb_server_fb_close,       "Close Framebuffer", NULL },
-    { MSG_FBCLEAR,                      fb_server_fb_clear,       "Clear Framebuffer", NULL },
-    { MSG_FBREAD,                       fb_server_fb_read,        "Read Pixels", NULL },
-    { MSG_FBWRITE,                      fb_server_fb_write,       "Write Pixels", NULL },
-    { MSG_FBWRITE + MSG_NORETURN,       fb_server_fb_write,       "Asynch write", NULL },
-    { MSG_FBCURSOR,                     fb_server_fb_cursor,      "Cursor", NULL },
-    { MSG_FBGETCURSOR,                  fb_server_fb_getcursor,   "Get Cursor", NULL },      /*NEW*/
-    { MSG_FBSCURSOR,                    fb_server_fb_scursor,     "Screen Cursor", NULL }, /*OLD*/
-    { MSG_FBWINDOW,                     fb_server_fb_window,      "Window", NULL },          /*OLD*/
-    { MSG_FBZOOM,                       fb_server_fb_zoom,        "Zoom", NULL },    /*OLD*/
-    { MSG_FBVIEW,                       fb_server_fb_view,        "View", NULL },    /*NEW*/
-    { MSG_FBGETVIEW,                    fb_server_fb_getview,     "Get View", NULL },        /*NEW*/
-    { MSG_FBRMAP,                       fb_server_fb_rmap,        "R Map", NULL },
-    { MSG_FBWMAP,                       fb_server_fb_wmap,        "W Map", NULL },
-    { MSG_FBHELP,                       fb_server_fb_help,        "Help Request", NULL },
-    { MSG_ERROR,                        fb_server_fb_unknown,     "Error Message", NULL },
-    { MSG_CLOSE,                        fb_server_fb_unknown,     "Close Connection", NULL },
-    { MSG_FBREADRECT,                   fb_server_fb_readrect,    "Read Rectangle", NULL },
-    { MSG_FBWRITERECT,                  fb_server_fb_writerect,   "Write Rectangle", NULL },
-    { MSG_FBWRITERECT + MSG_NORETURN,   fb_server_fb_writerect,   "Write Rectangle", NULL },
-    { MSG_FBBWREADRECT,                 fb_server_fb_bwreadrect,  "Read BW Rectangle", NULL },
-    { MSG_FBBWWRITERECT,                fb_server_fb_bwwriterect, "Write BW Rectangle", NULL },
-    { MSG_FBBWWRITERECT + MSG_NORETURN, fb_server_fb_bwwriterect, "Write BW Rectangle", NULL },
-    { MSG_FBFLUSH,                      fb_server_fb_flush,       "Flush Output", NULL },
-    { MSG_FBFLUSH + MSG_NORETURN,       fb_server_fb_flush,       "Flush Output", NULL },
-    { MSG_FBFREE,                       fb_server_fb_free,        "Free Resources", NULL },
-    { MSG_FBPOLL,                       fb_server_fb_poll,        "Handle Events", NULL },
-    { MSG_FBSETCURSOR,                  fb_server_fb_setcursor,   "Set Cursor Shape", NULL },
-    { MSG_FBSETCURSOR + MSG_NORETURN,   fb_server_fb_setcursor,   "Set Cursor Shape", NULL },
-    { 0,                                NULL,           NULL, NULL }
-};
+struct pkg_switch *
+fbserv_server_pkg_switch(void)
+{
+    static struct pkg_switch pswitch[FBSERV_PKG_SWITCH_COUNT];
+    static const struct fbserv_pkg_handlers handlers = {
+	fb_server_fb_unknown,
+	fb_server_fb_auth,
+	fb_server_fb_open,
+	fb_server_fb_close,
+	fb_server_fb_free,
+	fb_server_fb_clear,
+	fb_server_fb_read,
+	fb_server_fb_write,
+	fb_server_fb_readrect,
+	fb_server_fb_writerect,
+	fb_server_fb_bwreadrect,
+	fb_server_fb_bwwriterect,
+	fb_server_fb_cursor,
+	fb_server_fb_getcursor,
+	fb_server_fb_setcursor,
+	fb_server_fb_scursor,
+	fb_server_fb_window,
+	fb_server_fb_zoom,
+	fb_server_fb_view,
+	fb_server_fb_getview,
+	fb_server_fb_rmap,
+	fb_server_fb_wmap,
+	fb_server_fb_flush,
+	fb_server_fb_poll,
+	fb_server_fb_help
+    };
+    static int initialized = 0;
+
+    if (!initialized) {
+	if (fbserv_pkg_switch_init(pswitch, FBSERV_PKG_SWITCH_COUNT,
+		&handlers) != 0)
+	    return NULL;
+	initialized = 1;
+    }
+
+    return pswitch;
+}
 
 
 /*

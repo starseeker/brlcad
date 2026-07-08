@@ -26,6 +26,8 @@
  *
  *   1. Highlight state updates drawn shape records.
  *   2. Edit matrix state is accepted by the neutral view context.
+ *   3. Obol DM attachments use per-view controller attachments.
+ *   4. Obol DMs do not inherit stale standalone rt framebuffer devices.
  *
  * Uses the headless Obol/Coin off-screen renderer; no display hardware
  * required.
@@ -48,7 +50,6 @@
 #include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
-#include "dm/obol.h"
 #include <ged.h>
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
@@ -99,8 +100,8 @@ capture_screengrab_nonempty(struct ged *gedp, const char *filename,
 static BRLObolViewController *
 obol_controller_for_view(void *view_ctx)
 {
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    return dmp ? (BRLObolViewController *)dm_obol_controller(dmp) : NULL;
+    return (BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(
+	    view_ctx);
 }
 
 static int
@@ -141,6 +142,11 @@ open_gedp(const char *gfile, int width, int height)
     void *v = ged_view_active_ctx(gedp);
     struct dm *dmp  = (struct dm *)ged_view_context_display_manager_get(v);
     if (!dmp) {
+	ged_close(gedp);
+	return NULL;
+    }
+    if (!ged_draw_obol_controller_opaque_for_view(v)) {
+	bu_log("FAIL: Obol DM attach did not associate a GED view controller\n");
 	ged_close(gedp);
 	return NULL;
     }
@@ -433,7 +439,7 @@ test_multi_obol_dm_attachment(const char *datadir)
     }
 
     unsigned char *bridge_image = NULL;
-    int bridge_ret = ged_obol_view_display_image(gedp, v0,
+    int bridge_ret = ged_draw_obol_view_display_image(gedp, v0,
 	    &bridge_image, 1, 0);
     if (bridge_ret != 1 || !bridge_image) {
 	bu_log("FAIL: GED Obol display-image bridge should render an "
@@ -467,6 +473,68 @@ test_multi_obol_dm_attachment(const char *datadir)
     return fail;
 }
 
+/* Test 4: Obol DM attach clears stale standalone rt framebuffer cache        */
+/* ========================================================================== */
+static int
+test_obol_rt_framebuffer_cache(const char *datadir)
+{
+    bu_log("\n--- Test 4: Obol DM attach clears stale rt framebuffer cache ---\n");
+
+    struct bu_vls fname = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&fname, "%s/moss.g", datadir);
+    std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
+    std::ofstream tmp("mged_view_state_t4.g", std::ios::binary);
+    tmp << orig.rdbuf();
+    orig.close(); tmp.close();
+    bu_vls_free(&fname);
+
+    struct ged *gedp = ged_open("db", "mged_view_state_t4.g", 1);
+    if (!gedp) {
+	bu_file_delete("mged_view_state_t4.g");
+	return 1;
+    }
+
+    int fail = 0;
+    ged_rt_fb_set(gedp, "/dev/swrast");
+    const char *stale_fb = ged_rt_fb_get(gedp);
+    if (!stale_fb || !BU_STR_EQUAL(stale_fb, "/dev/swrast")) {
+	bu_log("FAIL: test setup could not seed stale rt framebuffer device\n");
+	fail = 1;
+    }
+
+    const char *dm_av[5] = {"dm", "attach", "obol", "OBOLRTFB", NULL};
+    if (!fail && ged_exec_dm(gedp, 4, dm_av) != BRLCAD_OK) {
+	bu_log("FAIL: could not attach Obol DM for rt framebuffer cache test: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *fb_after_attach = ged_rt_fb_get(gedp);
+    if (!fail && fb_after_attach && fb_after_attach[0]) {
+	bu_log("FAIL: Obol DM attach should clear stale rt framebuffer "
+		"device, got %s\n", fb_after_attach);
+	fail = 1;
+    } else if (!fail) {
+	bu_log("PASS: Obol DM attach cleared stale rt framebuffer device\n");
+    }
+
+    ged_rt_fb_set(gedp, "/dev/qtgl");
+    ged_rt_fb_refresh(gedp);
+    const char *fb_after_refresh = ged_rt_fb_get(gedp);
+    if (!fail && fb_after_refresh && fb_after_refresh[0]) {
+	bu_log("FAIL: rt framebuffer refresh on Obol DM should clear "
+		"standalone device, got %s\n", fb_after_refresh);
+	fail = 1;
+    } else if (!fail) {
+	bu_log("PASS: rt framebuffer refresh on Obol DM keeps standalone "
+		"device clear\n");
+    }
+
+    ged_close(gedp);
+    bu_file_delete("mged_view_state_t4.g");
+    return fail;
+}
+
 /* main                                                                        */
 /* ========================================================================== */
 
@@ -491,9 +559,10 @@ main(int argc, char *argv[])
     failures += test_highlight_state(datadir);
     failures += test_edit_context_snapshot(datadir);
     failures += test_multi_obol_dm_attachment(datadir);
+    failures += test_obol_rt_framebuffer_cache(datadir);
 
     if (failures == 0) {
-	bu_log("\nAll MGED view-state tests PASSED (%d/3)\n", 3);
+	bu_log("\nAll MGED view-state tests PASSED (%d/4)\n", 4);
     } else {
 	bu_log("\n%d MGED view-state test(s) FAILED\n", failures);
     }

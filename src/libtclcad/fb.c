@@ -68,6 +68,13 @@ static struct fb_obj_list {
 } fb_objs;
 
 
+static struct fb *
+fbo_legacy_framebuffer(struct fb_obj *fbop)
+{
+    return fbop ? fbs_legacy_framebuffer(&fbop->fbo_fbs) : FB_NULL;
+}
+
+
 static int
 fbo_coords_ok(struct fb *fbp, int x, int y)
 {
@@ -114,9 +121,11 @@ static void
 fbo_deleteProc(void *clientData)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
 
     /* close framebuffer */
-    fb_close(fbop->fbo_fbs.fbs_fbp);
+    fb_close(fbp);
+    fbs_set_legacy_framebuffer(&fbop->fbo_fbs, FB_NULL);
 
     bu_vls_free(&fbop->fbo_name);
     memmove(fbop,
@@ -179,6 +188,7 @@ static int
 fbo_clear_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     int status;
     RGBpixel pixel;
     unsigned char *ms;
@@ -203,7 +213,7 @@ fbo_clear_tcl(void *clientData, int argc, const char **argv)
     } else
 	ms = RGBPIXEL_NULL;
 
-    status = fb_clear(fbop->fbo_fbs.fbs_fbp, ms);
+    status = fb_clear(fbp, ms);
 
     if (status < 0)
 	return BRLCAD_ERROR;
@@ -221,6 +231,7 @@ static int
 fbo_cursor_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     int mode;
     int x, y;
     int status;
@@ -245,7 +256,7 @@ fbo_cursor_tcl(void *clientData, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    status = fb_cursor(fbop->fbo_fbs.fbs_fbp, mode, x, y);
+    status = fb_cursor(fbp, mode, x, y);
     if (status == 0)
 	return BRLCAD_OK;
 
@@ -262,6 +273,7 @@ static int
 fbo_getcursor_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     int status;
     int mode;
     int x, y;
@@ -274,7 +286,7 @@ fbo_getcursor_tcl(void *clientData, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    status = fb_getcursor(fbop->fbo_fbs.fbs_fbp, &mode, &x, &y);
+    status = fb_getcursor(fbp, &mode, &x, &y);
     if (status == 0) {
 	bu_vls_printf(&vls, "%d %d %d", mode, x, y);
 	Tcl_AppendResult(fbop->fbo_interp, bu_vls_addr(&vls), (char *)NULL);
@@ -297,6 +309,7 @@ static int
 fbo_refresh_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     int x, y, w, h;		       /* rectangle to be refreshed */
 
     if (argc < 2 || 3 < argc) {
@@ -307,15 +320,15 @@ fbo_refresh_tcl(void *clientData, int argc, const char **argv)
     if (argc == 2) {
 	/* refresh the whole display */
 	x = y = 0;
-	w = fbop->fbo_fbs.fbs_fbp->i->if_width;
-	h = fbop->fbo_fbs.fbs_fbp->i->if_height;
+	w = fbp->i->if_width;
+	h = fbp->i->if_height;
     } else if (sscanf(argv[2], "%d %d %d %d", &x, &y, &w, &h) != 4) {
 	/* refresh rectangular area */
 	bu_log("fb_refresh: bad rectangle - %s", argv[2]);
 	return BRLCAD_ERROR;
     }
 
-    return fb_refresh(fbop->fbo_fbs.fbs_fbp, x, y, w, h);
+    return fb_refresh(fbp, x, y, w, h);
 }
 
 
@@ -335,7 +348,7 @@ fbo_listen_tcl(void *clientData, int argc, const char **argv)
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     const char *ipc_env = NULL;
 
-    if (fbop->fbo_fbs.fbs_fbp == FB_NULL) {
+    if (fbs_legacy_framebuffer(&fbop->fbo_fbs) == FB_NULL) {
 	bu_log("%s listen: framebuffer not open!\n", argv[0]);
 	return BRLCAD_ERROR;
     }
@@ -347,7 +360,7 @@ fbo_listen_tcl(void *clientData, int argc, const char **argv)
 
     if (argc == 3) {
 	if (BU_STR_EQUAL(argv[2], "ipc")) {
-	    if (fbop->fbo_fbs.fbs_listener.fbsl_port >= 0)
+	    if (fbs_listener_port(&fbop->fbo_fbs) >= 0)
 		fbs_close(&fbop->fbo_fbs);
 	    if (tclcad_listen_ipc(&fbop->fbo_fbs, fbop->fbo_interp) != BRLCAD_OK) {
 		bu_log("listen: failed to start IPC listener\n");
@@ -373,17 +386,7 @@ fbo_listen_tcl(void *clientData, int argc, const char **argv)
 
 	if (port >= 0) {
 	    //Set up fbo_fbs callbacks, then call fbs_open
-	    fbop->fbo_fbs.fbs_is_listening = &tclcad_is_listening;
-	    fbop->fbo_fbs.fbs_listen_on_port = &tclcad_listen_on_port;
-	    fbop->fbo_fbs.fbs_open_server_handler = &tclcad_open_server_handler;
-	    fbop->fbo_fbs.fbs_close_server_handler = &tclcad_close_server_handler;
-	    fbop->fbo_fbs.fbs_open_client_handler = &tclcad_open_client_handler;
-	    fbop->fbo_fbs.fbs_close_client_handler = &tclcad_close_client_handler;
-#ifndef USE_TCL_CHAN
-	    /* IPC client handlers reuse the same fd-based callbacks on POSIX */
-	    fbop->fbo_fbs.fbs_open_ipc_client_handler  = &tclcad_open_client_handler;
-	    fbop->fbo_fbs.fbs_close_ipc_client_handler = &tclcad_close_client_handler;
-#endif
+	    tclcad_fbserv_set_transport(&fbop->fbo_fbs);
 	    fbs_open(&fbop->fbo_fbs, port);
 	} else {
 	    fbs_close(&fbop->fbo_fbs);
@@ -394,7 +397,7 @@ fbo_listen_tcl(void *clientData, int argc, const char **argv)
 	    const char *addr = eq ? eq + 1 : ipc_env;
 	    bu_vls_printf(&vls, "%s", addr);
 	} else {
-	    bu_vls_printf(&vls, "%d", fbop->fbo_fbs.fbs_listener.fbsl_port);
+	    bu_vls_printf(&vls, "%d", fbs_listener_port(&fbop->fbo_fbs));
 	}
 	Tcl_AppendResult(fbop->fbo_interp, bu_vls_addr(&vls), (char *)NULL);
 	bu_vls_free(&vls);
@@ -410,7 +413,7 @@ fbo_listen_tcl(void *clientData, int argc, const char **argv)
 	const char *addr = eq ? eq + 1 : ipc_env;
 	bu_vls_printf(&vls, "%s", addr);
     } else {
-	bu_vls_printf(&vls, "%d", fbop->fbo_fbs.fbs_listener.fbsl_port);
+	bu_vls_printf(&vls, "%d", fbs_listener_port(&fbop->fbo_fbs));
     }
     Tcl_AppendResult(fbop->fbo_interp, bu_vls_addr(&vls), (char *)NULL);
     bu_vls_free(&vls);
@@ -429,6 +432,7 @@ static int
 fbo_pixel_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     int x, y; 	/* pixel position */
     RGBpixel pixel;
@@ -450,14 +454,14 @@ fbo_pixel_tcl(void *clientData, int argc, const char **argv)
     }
 
     /* check pixel position */
-    if (!fbo_coords_ok(fbop->fbo_fbs.fbs_fbp, x, y)) {
+    if (!fbo_coords_ok(fbp, x, y)) {
 	bu_log("fb_pixel: coordinates (%s, %s) are invalid.", argv[2], argv[3]);
 	return BRLCAD_ERROR;
     }
 
     /* get pixel value */
     if (argc == 4) {
-	fb_rpixel(fbop->fbo_fbs.fbs_fbp, pixel);
+	fb_rpixel(fbp, pixel);
 	bu_vls_printf(&vls, "%d %d %d", pixel[RED], pixel[GRN], pixel[BLU]);
 	Tcl_AppendResult(fbop->fbo_interp, bu_vls_addr(&vls), (char *)NULL);
 	bu_vls_free(&vls);
@@ -476,7 +480,7 @@ fbo_pixel_tcl(void *clientData, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    fb_write(fbop->fbo_fbs.fbs_fbp, x, y, pixel, 1);
+    fb_write(fbp, x, y, pixel, 1);
 
     return BRLCAD_OK;
 }
@@ -491,6 +495,7 @@ static int
 fbo_cell_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     int xmin, ymin;
     long width;
     long height;
@@ -515,7 +520,7 @@ fbo_cell_tcl(void *clientData, int argc, const char **argv)
     }
 
     /* check coordinates */
-    if (!fbo_coords_ok(fbop->fbo_fbs.fbs_fbp, xmin, ymin)) {
+    if (!fbo_coords_ok(fbp, xmin, ymin)) {
 	bu_log("fb_cell: coordinates (%s, %s) are invalid.", argv[2], argv[3]);
 	return BRLCAD_ERROR;
     }
@@ -552,7 +557,7 @@ fbo_cell_tcl(void *clientData, int argc, const char **argv)
 	pp[i+1] = pixel[1];
 	pp[i+2] = pixel[2];
     }
-    fb_writerect(fbop->fbo_fbs.fbs_fbp, xmin, ymin, width, height, pp);
+    fb_writerect(fbp, xmin, ymin, width, height, pp);
     bu_free((void *)pp, "free pixel array");
 
     return BRLCAD_OK;
@@ -568,6 +573,7 @@ static int
 fbo_flush_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
 
     if (argc != 2
 	|| !BU_STR_EQUIV(argv[1], "flush"))
@@ -576,7 +582,7 @@ fbo_flush_tcl(void *clientData, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    fb_flush(fbop->fbo_fbs.fbs_fbp);
+    fb_flush(fbp);
 
     return BRLCAD_OK;
 }
@@ -591,6 +597,7 @@ static int
 fbo_getheight_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (argc != 2
@@ -600,7 +607,7 @@ fbo_getheight_tcl(void *clientData, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    bu_vls_printf(&vls, "%d", fb_getheight(fbop->fbo_fbs.fbs_fbp));
+    bu_vls_printf(&vls, "%d", fb_getheight(fbp));
     Tcl_AppendResult(fbop->fbo_interp, bu_vls_addr(&vls), (char *)NULL);
     bu_vls_free(&vls);
 
@@ -617,6 +624,7 @@ static int
 fbo_getwidth_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (argc != 2
@@ -626,7 +634,7 @@ fbo_getwidth_tcl(void *clientData, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    bu_vls_printf(&vls, "%d", fb_getwidth(fbop->fbo_fbs.fbs_fbp));
+    bu_vls_printf(&vls, "%d", fb_getwidth(fbp));
     Tcl_AppendResult(fbop->fbo_interp, bu_vls_addr(&vls), (char *)NULL);
     bu_vls_free(&vls);
 
@@ -643,6 +651,7 @@ static int
 fbo_getsize_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (argc != 2
@@ -653,8 +662,8 @@ fbo_getsize_tcl(void *clientData, int argc, const char **argv)
     }
 
     bu_vls_printf(&vls, "%d %d",
-		  fb_getwidth(fbop->fbo_fbs.fbs_fbp),
-		  fb_getheight(fbop->fbo_fbs.fbs_fbp));
+		  fb_getwidth(fbp),
+		  fb_getheight(fbp));
     Tcl_AppendResult(fbop->fbo_interp, bu_vls_addr(&vls), (char *)NULL);
     bu_vls_free(&vls);
 
@@ -671,6 +680,7 @@ static int
 fbo_rect_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     int xmin, ymin;
     int xmax, ymax;
     int width;
@@ -694,7 +704,7 @@ fbo_rect_tcl(void *clientData, int argc, const char **argv)
     }
 
     /* check coordinates */
-    if (!fbo_coords_ok(fbop->fbo_fbs.fbs_fbp, xmin, ymin)) {
+    if (!fbo_coords_ok(fbp, xmin, ymin)) {
 	bu_log("fb_rect: coordinates (%s, %s) are invalid.", argv[2], argv[3]);
 	return BRLCAD_ERROR;
     }
@@ -731,19 +741,19 @@ fbo_rect_tcl(void *clientData, int argc, const char **argv)
     /* draw horizontal lines */
     for (i = xmin; i <= xmax; ++i) {
 	/* working on bottom line */
-	fb_write(fbop->fbo_fbs.fbs_fbp, i, ymin, pixel, 1);
+	fb_write(fbp, i, ymin, pixel, 1);
 
 	/* working on top line */
-	fb_write(fbop->fbo_fbs.fbs_fbp, i, ymax, pixel, 1);
+	fb_write(fbp, i, ymax, pixel, 1);
     }
 
     /* draw vertical lines */
     for (i = ymin; i <= ymax; ++i) {
 	/* working on left line */
-	fb_write(fbop->fbo_fbs.fbs_fbp, xmin, i, pixel, 1);
+	fb_write(fbp, xmin, i, pixel, 1);
 
 	/* working on right line */
-	fb_write(fbop->fbo_fbs.fbs_fbp, xmax, i, pixel, 1);
+	fb_write(fbp, xmax, i, pixel, 1);
     }
 
     return BRLCAD_OK;
@@ -758,6 +768,7 @@ static int
 fbo_configure_tcl(void *clientData, int argc, const char **argv)
 {
     struct fb_obj *fbop = (struct fb_obj *)clientData;
+    struct fb *fbp = fbo_legacy_framebuffer(fbop);
     int width, height;
 
     if (argc != 4) {
@@ -776,8 +787,8 @@ fbo_configure_tcl(void *clientData, int argc, const char **argv)
     }
 
     /* configure the framebuffer window */
-    if (fbop->fbo_fbs.fbs_fbp != FB_NULL)
-	(void)fb_configure_window(fbop->fbo_fbs.fbs_fbp, width, height);
+    if (fbp != FB_NULL)
+	(void)fb_configure_window(fbp, width, height);
 
     return BRLCAD_OK;
 }
@@ -910,10 +921,8 @@ fbo_open_tcl(void *UNUSED(clientData), Tcl_Interp *interp, int argc, const char 
     fbop = &fb_objs.objs[fb_objs.size];
     bu_vls_init(&fbop->fbo_name);
     bu_vls_strcpy(&fbop->fbo_name, argv[1]);
-    fbop->fbo_fbs.fbs_fbp = ifp;
-    fbop->fbo_fbs.fbs_listener.fbsl_fbsp = &fbop->fbo_fbs;
-    fbop->fbo_fbs.fbs_listener.fbsl_fd = -1;
-    fbop->fbo_fbs.fbs_listener.fbsl_port = -1;
+    fbs_init(&fbop->fbo_fbs);
+    fbs_set_legacy_framebuffer(&fbop->fbo_fbs, ifp);
     fbop->fbo_interp = interp;
 
     fb_objs.size++;
@@ -961,12 +970,13 @@ to_close_fbs(void *view_ctx)
     if (!tvd)
 	return TCL_ERROR;
 
-    if (tvd->gdv_fbs.fbs_fbp == FB_NULL)
+    struct fb *fbp = fbs_legacy_framebuffer(&tvd->gdv_fbs);
+    if (fbp == FB_NULL)
 	return TCL_OK;
 
-    fb_flush(tvd->gdv_fbs.fbs_fbp);
-    fb_close_existing(tvd->gdv_fbs.fbs_fbp);
-    tvd->gdv_fbs.fbs_fbp = FB_NULL;
+    fb_flush(fbp);
+    fb_close_existing(fbp);
+    fbs_set_legacy_framebuffer(&tvd->gdv_fbs, FB_NULL);
 
     return TCL_OK;
 }
@@ -983,13 +993,13 @@ to_open_fbs(void *view_ctx, Tcl_Interp *interp)
     if (!tvd)
 	return TCL_ERROR;
 
-    if (tvd->gdv_fbs.fbs_fbp != FB_NULL)
+    if (fbs_legacy_framebuffer(&tvd->gdv_fbs) != FB_NULL)
 	return TCL_OK;
 
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    tvd->gdv_fbs.fbs_fbp = dmp ? dm_get_fb(dmp) : FB_NULL;
+    fbs_set_legacy_framebuffer(&tvd->gdv_fbs, dmp ? dm_get_fb(dmp) : FB_NULL);
 
-    if (tvd->gdv_fbs.fbs_fbp == FB_NULL) {
+    if (fbs_legacy_framebuffer(&tvd->gdv_fbs) == FB_NULL) {
 	Tcl_Obj *obj;
 
 	obj = Tcl_GetObjResult(interp);
@@ -1097,7 +1107,7 @@ to_listen(struct ged *gedp,
     if (!tvd)
 	return BRLCAD_ERROR;
 
-    if (tvd->gdv_fbs.fbs_fbp == FB_NULL) {
+    if (fbs_legacy_framebuffer(&tvd->gdv_fbs) == FB_NULL) {
 	bu_vls_printf(gedp->ged_result_str, "%s listen: framebuffer not open!\n", argv[0]);
 	return BRLCAD_ERROR;
     }
@@ -1110,14 +1120,14 @@ to_listen(struct ged *gedp,
 	    const char *addr = eq ? eq + 1 : ipc_env;
 	    bu_vls_printf(gedp->ged_result_str, "%s", addr);
 	} else {
-	    bu_vls_printf(gedp->ged_result_str, "%d", tvd->gdv_fbs.fbs_listener.fbsl_port);
+	    bu_vls_printf(gedp->ged_result_str, "%d", fbs_listener_port(&tvd->gdv_fbs));
 	}
 	return BRLCAD_OK;
     }
 
     if (argc == 3) {
 	if (BU_STR_EQUAL(argv[2], "ipc")) {
-	    if (tvd->gdv_fbs.fbs_listener.fbsl_port >= 0)
+	    if (fbs_listener_port(&tvd->gdv_fbs) >= 0)
 		fbs_close(&tvd->gdv_fbs);
 	    if (tclcad_listen_ipc(&tvd->gdv_fbs, (Tcl_Interp *)gedp->ged_interp) != BRLCAD_OK) {
 		bu_vls_printf(gedp->ged_result_str, "listen: failed to start IPC listener\n");
@@ -1143,17 +1153,7 @@ to_listen(struct ged *gedp,
 
 	if (port >= 0) {
 	    // Set up fbo_fbs callbacks, then call fbs_open
-	    tvd->gdv_fbs.fbs_is_listening = &tclcad_is_listening;
-	    tvd->gdv_fbs.fbs_listen_on_port = &tclcad_listen_on_port;
-	    tvd->gdv_fbs.fbs_open_server_handler = &tclcad_open_server_handler;
-	    tvd->gdv_fbs.fbs_close_server_handler = &tclcad_close_server_handler;
-	    tvd->gdv_fbs.fbs_open_client_handler = &tclcad_open_client_handler;
-	    tvd->gdv_fbs.fbs_close_client_handler = &tclcad_close_client_handler;
-#ifndef USE_TCL_CHAN
-	    /* IPC client handlers reuse the same fd-based callbacks on POSIX */
-	    tvd->gdv_fbs.fbs_open_ipc_client_handler  = &tclcad_open_client_handler;
-	    tvd->gdv_fbs.fbs_close_ipc_client_handler = &tclcad_close_client_handler;
-#endif
+	    tclcad_fbserv_set_transport(&tvd->gdv_fbs);
 	    fbs_open(&tvd->gdv_fbs, port);
 	} else {
 	    fbs_close(&tvd->gdv_fbs);
@@ -1165,7 +1165,7 @@ to_listen(struct ged *gedp,
 		const char *addr = eq ? eq + 1 : ipc_env;
 		bu_vls_printf(gedp->ged_result_str, "%s", addr);
 	    } else {
-		bu_vls_printf(gedp->ged_result_str, "%d", tvd->gdv_fbs.fbs_listener.fbsl_port);
+		bu_vls_printf(gedp->ged_result_str, "%d", fbs_listener_port(&tvd->gdv_fbs));
 	    }
 	}
 	return BRLCAD_OK;

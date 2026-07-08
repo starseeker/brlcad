@@ -1,6 +1,10 @@
 set(
   LIBIMGSTREAM_SOURCES
   fb_compat.c
+  fbserv_auth.c
+  fbserv_framebuffer.c
+  fbserv_pkg.c
+  fbserv_state.c
   stream.c
 )
 

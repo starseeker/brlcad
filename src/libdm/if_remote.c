@@ -61,8 +61,6 @@
 #include "../fbserv/tls_wrap.h"
 
 
-#define NET_LONG_LEN 4	/* # bytes to network long */
-
 #define MAX_HOSTNAME 128
 #define PCP(ptr)	((struct pkg_conn *)((ptr)->i->u1.p))
 #define PCPL(ptr)	((ptr)->i->u1.p)	/* left hand side version */

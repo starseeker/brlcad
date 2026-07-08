@@ -30,6 +30,7 @@
 #include <string.h>
 #include "icv.h"
 #include "dm.h"
+#include "ged/draw_obol.h"
 
 #include "../ged_private.h"
 
@@ -149,7 +150,7 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 	bytes_per_line = dm_get_width(dmp) * bytes_per_pixel;
 
 	(void)ged_obol_fbserv_present(gedp);
-	int obol_image = ged_obol_view_display_image(gedp, view_ctx, &idata, 1, 0);
+	int obol_image = ged_draw_obol_view_display_image(gedp, view_ctx, &idata, 1, 0);
 	if (obol_image < 0) {
 	    bu_vls_printf(gedp->ged_result_str, "%s: Obol view did not return image data.", argv[0]);
 	    return BRLCAD_ERROR;

@@ -32,9 +32,9 @@
 #include <math.h>
 #include "vmath.h"
 #include "bn.h"
-#include "dm/obol.h"
 #include "dm/view.h"
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 
 #include "./mged.h"
@@ -82,7 +82,8 @@ _mged_count_visible_cb(const struct ged_draw_shape_record *rec, void *userdata)
 static int
 _mged_high_level_refresh(struct mged_state *s, void *view_ctx)
 {
-    if (!s || !s->gedp || !view_ctx || !DMP || !dm_obol_controller(DMP))
+    if (!s || !s->gedp || !view_ctx || !DMP ||
+	    !ged_draw_obol_controller_opaque_for_view(view_ctx))
 	return 0;
 
     struct ged_draw_transaction txn =

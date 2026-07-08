@@ -44,7 +44,6 @@
 #include "vmath.h"
 #include "bu/env.h"
 #include "bu/ptbl.h"
-#include "dm/obol.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
@@ -130,10 +129,8 @@ mged_dm_init(
     if ((DMP = dm_open(ctx, (void *)s->interp, dm_type, argc-1, argv)) == DM_NULL)
 	return TCL_ERROR;
     ged_view_context_display_manager_set(view_state->vs_gvp, (void *)DMP);
-    void *obol_controller = dm_obol_controller(DMP);
-    if (obol_controller &&
-	    !ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
-		view_state->vs_gvp, obol_controller, 1)) {
+    if (!ged_draw_obol_display_manager_attach_for_view(s->gedp,
+	    view_state->vs_gvp, (void *)DMP, 1, 0)) {
 	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
 	dm_close(DMP);
 	DMP = DM_NULL;

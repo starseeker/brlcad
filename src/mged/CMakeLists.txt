@@ -65,6 +65,7 @@ set(
   libged
   libwdb
   libdm
+  libimgstream
   libnmg
   Threads::Threads
   ${WS2_32_LIBRARY}

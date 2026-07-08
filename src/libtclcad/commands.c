@@ -57,6 +57,7 @@
 #include "wdb.h"
 #include "raytrace.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "ged/event_txn.h"
 #include "tclcad.h"
@@ -69,6 +70,7 @@
 #endif
 
 #include "dm.h"
+#include "dm/fbserv.h"
 #include "bg/lseg.h"
 
 #include "icv/io.h"
@@ -99,8 +101,8 @@ tclcad_commands_display_manager(const void *view_ctx)
 static const char *
 tclcad_commands_view_name(const void *view_ctx)
 {
-    const char *name = bv_name_get(bv_context_view_const(
-		(const struct bv_context *)view_ctx));
+    const char *name = bv_context_name_get(
+	    (const struct bv_context *)view_ctx);
     return name ? name : "";
 }
 
@@ -109,7 +111,7 @@ tclcad_commands_sync_dm_dimensions(void *target_ctx, const void *source_ctx)
 {
     struct dm *dmp = tclcad_commands_display_manager(source_ctx);
     if (dmp)
-	bv_dimensions_set(bv_context_view((struct bv_context *)target_ctx),
+	bv_context_dimensions_set((struct bv_context *)target_ctx,
 		dm_get_width(dmp), dm_get_height(dmp));
 }
 
@@ -1550,8 +1552,9 @@ to_configure(struct ged *gedp,
 
     /* configure the framebuffer window */
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
-    if (tvd->gdv_fbs.fbs_fbp != FB_NULL)
-	(void)fb_configure_window(tvd->gdv_fbs.fbs_fbp, dm_get_width(tclcad_commands_display_manager(gdvp)), dm_get_height(tclcad_commands_display_manager(gdvp)));
+    struct fb *fbp = tvd ? fbs_legacy_framebuffer(&tvd->gdv_fbs) : FB_NULL;
+    if (fbp != FB_NULL)
+	(void)fb_configure_window(fbp, dm_get_width(tclcad_commands_display_manager(gdvp)), dm_get_height(tclcad_commands_display_manager(gdvp)));
 
     {
 	char cdimX[32];
@@ -4631,10 +4634,7 @@ to_new_view(struct ged *gedp,
 	ged_draw_view_context_lod_policy_apply(new_view_ctx, &lod_policy);
     }
 
-    tvd->gdv_fbs.fbs_listener.fbsl_fbsp = &tvd->gdv_fbs;
-    tvd->gdv_fbs.fbs_listener.fbsl_fd = -1;
-    tvd->gdv_fbs.fbs_listener.fbsl_port = -1;
-    tvd->gdv_fbs.fbs_fbp = FB_NULL;
+    fbs_init(&tvd->gdv_fbs);
     tvd->gdv_fbs.fbs_callback = (void (*)(void *clientData))to_fbs_callback;
     tvd->gdv_fbs.fbs_clientData = new_view_ctx;
     tvd->gdv_fbs.fbs_interp = current_top->to_interp;
@@ -4880,10 +4880,12 @@ to_paint_rect_area(struct ged *gedp,
     (void)dm_set_depth_mask(tclcad_commands_display_manager(gdvp), 0);
 
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
+    struct fb *fbp = tvd ? fbs_legacy_framebuffer(&tvd->gdv_fbs) : FB_NULL;
     struct bv_interactive_rect_state rect = BV_INTERACTIVE_RECT_STATE_INIT;
     (void)bv_interactive_rect_state_get(&rect, tclcad_commands_bv_const(gdvp));
-    (void)fb_refresh(tvd->gdv_fbs.fbs_fbp, rect.pos[X], rect.pos[Y],
-	    rect.dim[X], rect.dim[Y]);
+    if (fbp)
+	(void)fb_refresh(fbp, rect.pos[X], rect.pos[Y],
+		rect.dim[X], rect.dim[Y]);
 
     (void)dm_set_depth_mask(tclcad_commands_display_manager(gdvp), 1);
 
@@ -4902,10 +4904,11 @@ to_pix(struct ged *gedp,
 {
     FILE *fp = NULL;
     unsigned char *scanline;
-    unsigned char *pixels;
+    unsigned char *pixels = NULL;
     static int bytes_per_pixel = 3;
     int i = 0;
     int height = 0;
+    int has_obol = 0;
     int make_ret = 0;
     int bytes_per_line;
 
@@ -4928,7 +4931,10 @@ to_pix(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    if (!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") && !BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
+    has_obol = ged_draw_obol_controller_opaque_for_view(gdvp) != NULL;
+    if (!has_obol &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
 	bu_vls_printf(gedp->ged_result_str, "%s: not yet supported for this display manager (i.e. must be OpenGL based)", argv[0]);
 	return BRLCAD_OK;
     }
@@ -4944,17 +4950,26 @@ to_pix(struct ged *gedp,
 
     height = dm_get_height(tclcad_commands_display_manager(gdvp));
 
-    make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
-    if (!make_ret) {
-	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
-    }
+    if (has_obol) {
+	(void)ged_draw_obol_framebuffer_present(gedp);
+	if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get Obol display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
+    } else {
+	make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
+	if (!make_ret) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
 
-    if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
-    	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
+	if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
     }
 
     for (i = 0; i < height; ++i) {
@@ -4985,12 +5000,13 @@ to_png(struct ged *gedp,
     png_infop info_p;
     FILE *fp = NULL;
     unsigned char **rows = NULL;
-    unsigned char *pixels;
+    unsigned char *pixels = NULL;
     static int bytes_per_pixel = 3;
     static int bits_per_channel = 8;  /* bits per color channel */
     int i = 0;
     int width = 0;
     int height = 0;
+    int has_obol = 0;
     int make_ret = 0;
     int bytes_per_line;
 
@@ -5013,7 +5029,10 @@ to_png(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    if (!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") && !BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
+    has_obol = ged_draw_obol_controller_opaque_for_view(gdvp) != NULL;
+    if (!has_obol &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
 	bu_vls_printf(gedp->ged_result_str, "%s: not yet supported for this display manager (i.e. must be OpenGL based)", argv[0]);
 	return BRLCAD_OK;
     }
@@ -5043,17 +5062,26 @@ to_png(struct ged *gedp,
 
     width = dm_get_width(tclcad_commands_display_manager(gdvp));
     height = dm_get_height(tclcad_commands_display_manager(gdvp));
-    make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
-    if (make_ret) {
-	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
-    }
+    if (has_obol) {
+	(void)ged_draw_obol_framebuffer_present(gedp);
+	if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get Obol display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
+    } else {
+	make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
+	if (make_ret) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
 
-    if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
-    	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
+	if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
     }
 
     rows = (unsigned char **)bu_calloc(height, sizeof(unsigned char *), "rows");

@@ -40,13 +40,6 @@
 #include "dm.h"
 #include "./include/private.h"
 
-/* Enable token generation AND verification for the embedded fbserv.
- * Hosting apps call fbs_generate_token() to create a session token;
- * the MSG_FBAUTH handler verifies incoming client tokens. */
-#define FBSERV_AUTH_IMPL
-#define FBSERV_AUTH_SERVER
-#include "../fbserv/auth.h"
-
 /* Enable TLS server-side functions */
 #define FBSERV_TLS_IMPL
 #include "../fbserv/tls_wrap.h"
@@ -64,7 +57,7 @@ _fbs_conn_obj(struct pkg_conn *pcp)
 static int
 fbs_has_backend(const struct fbserv_obj *fbsp)
 {
-    return fbsp && fbsp->fbs_fb_ops && fbsp->fbs_fb_ctx;
+    return fbserv_framebuffer_backend_installed(fbsp);
 }
 
 static int
@@ -104,8 +97,8 @@ fbs_fb_info(struct fbserv_obj *fbsp, struct fbserv_fb_info *info)
 {
     if (!fbsp || !info)
 	return -1;
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->info)
-	return fbsp->fbs_fb_ops->info(fbsp->fbs_fb_ctx, info);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_INFO))
+	return fbserv_backend_info(fbsp, info);
     if (!fbsp->fbs_fbp || !fbsp->fbs_fbp->i)
 	return -1;
     info->max_width = fbsp->fbs_fbp->i->if_max_width;
@@ -118,131 +111,132 @@ fbs_fb_info(struct fbserv_obj *fbsp, struct fbserv_fb_info *info)
 static int
 fbs_fb_clear(struct fbserv_obj *fbsp, const unsigned char rgb[3])
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->clear)
-	return fbsp->fbs_fb_ops->clear(fbsp->fbs_fb_ctx, rgb);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_CLEAR))
+	return fbserv_backend_clear(fbsp, rgb);
     return fbsp && fbsp->fbs_fbp ? fb_clear(fbsp->fbs_fbp, (unsigned char *)rgb) : -1;
 }
 
 static ssize_t
 fbs_fb_read(struct fbserv_obj *fbsp, int x, int y, unsigned char *rgb, size_t count)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->read)
-	return fbsp->fbs_fb_ops->read(fbsp->fbs_fb_ctx, x, y, rgb, count);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_READ))
+	return fbserv_backend_read(fbsp, x, y, rgb, count);
     return fbsp && fbsp->fbs_fbp ? fb_read(fbsp->fbs_fbp, x, y, rgb, count) : -1;
 }
 
 static ssize_t
 fbs_fb_write(struct fbserv_obj *fbsp, int x, int y, const unsigned char *rgb, size_t count)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->write)
-	return fbsp->fbs_fb_ops->write(fbsp->fbs_fb_ctx, x, y, rgb, count);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_WRITE))
+	return fbserv_backend_write(fbsp, x, y, rgb, count);
     return fbsp && fbsp->fbs_fbp ? fb_write(fbsp->fbs_fbp, x, y, rgb, count) : -1;
 }
 
 static int
 fbs_fb_readrect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, unsigned char *rgb)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->readrect)
-	return fbsp->fbs_fb_ops->readrect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, rgb);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_READRECT))
+	return fbserv_backend_readrect(fbsp, xmin, ymin, width, height, rgb);
     return fbsp && fbsp->fbs_fbp ? fb_readrect(fbsp->fbs_fbp, xmin, ymin, width, height, rgb) : -1;
 }
 
 static int
 fbs_fb_writerect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, const unsigned char *rgb)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->writerect)
-	return fbsp->fbs_fb_ops->writerect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, rgb);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_WRITERECT))
+	return fbserv_backend_writerect(fbsp, xmin, ymin, width, height, rgb);
     return fbsp && fbsp->fbs_fbp ? fb_writerect(fbsp->fbs_fbp, xmin, ymin, width, height, rgb) : -1;
 }
 
 static int
 fbs_fb_bwreadrect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, unsigned char *bw)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->bwreadrect)
-	return fbsp->fbs_fb_ops->bwreadrect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, bw);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_BWREADRECT))
+	return fbserv_backend_bwreadrect(fbsp, xmin, ymin, width, height, bw);
     return fbsp && fbsp->fbs_fbp ? fb_bwreadrect(fbsp->fbs_fbp, xmin, ymin, width, height, bw) : -1;
 }
 
 static int
 fbs_fb_bwwriterect(struct fbserv_obj *fbsp, int xmin, int ymin, int width, int height, const unsigned char *bw)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->bwwriterect)
-	return fbsp->fbs_fb_ops->bwwriterect(fbsp->fbs_fb_ctx, xmin, ymin, width, height, bw);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_BWWRITERECT))
+	return fbserv_backend_bwwriterect(fbsp, xmin, ymin, width, height, bw);
     return fbsp && fbsp->fbs_fbp ? fb_bwwriterect(fbsp->fbs_fbp, xmin, ymin, width, height, bw) : -1;
 }
 
 static int
 fbs_fb_cursor(struct fbserv_obj *fbsp, int mode, int x, int y)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->cursor)
-	return fbsp->fbs_fb_ops->cursor(fbsp->fbs_fb_ctx, mode, x, y);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_CURSOR))
+	return fbserv_backend_cursor(fbsp, mode, x, y);
     return fbsp && fbsp->fbs_fbp ? fb_cursor(fbsp->fbs_fbp, mode, x, y) : -1;
 }
 
 static int
 fbs_fb_getcursor(struct fbserv_obj *fbsp, int *mode, int *x, int *y)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->getcursor)
-	return fbsp->fbs_fb_ops->getcursor(fbsp->fbs_fb_ctx, mode, x, y);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_GETCURSOR))
+	return fbserv_backend_getcursor(fbsp, mode, x, y);
     return fbsp && fbsp->fbs_fbp ? fb_getcursor(fbsp->fbs_fbp, mode, x, y) : -1;
 }
 
 static int
 fbs_fb_setcursor(struct fbserv_obj *fbsp, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->setcursor)
-	return fbsp->fbs_fb_ops->setcursor(fbsp->fbs_fb_ctx, bits, xbits, ybits, xorig, yorig);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_SETCURSOR))
+	return fbserv_backend_setcursor(fbsp, bits, xbits, ybits, xorig, yorig);
     return fbsp && fbsp->fbs_fbp ? fb_setcursor(fbsp->fbs_fbp, bits, xbits, ybits, xorig, yorig) : -1;
 }
 
 static int
 fbs_fb_scursor(struct fbserv_obj *fbsp, int mode, int x, int y)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->scursor)
-	return fbsp->fbs_fb_ops->scursor(fbsp->fbs_fb_ctx, mode, x, y);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_SCURSOR))
+	return fbserv_backend_scursor(fbsp, mode, x, y);
     return fbsp && fbsp->fbs_fbp ? fb_scursor(fbsp->fbs_fbp, mode, x, y) : -1;
 }
 
 static int
 fbs_fb_window(struct fbserv_obj *fbsp, int xcenter, int ycenter)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->window)
-	return fbsp->fbs_fb_ops->window(fbsp->fbs_fb_ctx, xcenter, ycenter);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_WINDOW))
+	return fbserv_backend_window(fbsp, xcenter, ycenter);
     return fbsp && fbsp->fbs_fbp ? fb_window(fbsp->fbs_fbp, xcenter, ycenter) : -1;
 }
 
 static int
 fbs_fb_zoom(struct fbserv_obj *fbsp, int xzoom, int yzoom)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->zoom)
-	return fbsp->fbs_fb_ops->zoom(fbsp->fbs_fb_ctx, xzoom, yzoom);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_ZOOM))
+	return fbserv_backend_zoom(fbsp, xzoom, yzoom);
     return fbsp && fbsp->fbs_fbp ? fb_zoom(fbsp->fbs_fbp, xzoom, yzoom) : -1;
 }
 
 static int
 fbs_fb_view(struct fbserv_obj *fbsp, int xcenter, int ycenter, int xzoom, int yzoom)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->view)
-	return fbsp->fbs_fb_ops->view(fbsp->fbs_fb_ctx, xcenter, ycenter, xzoom, yzoom);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_VIEW))
+	return fbserv_backend_view(fbsp, xcenter, ycenter, xzoom, yzoom);
     return fbsp && fbsp->fbs_fbp ? fb_view(fbsp->fbs_fbp, xcenter, ycenter, xzoom, yzoom) : -1;
 }
 
 static int
 fbs_fb_getview(struct fbserv_obj *fbsp, int *xcenter, int *ycenter, int *xzoom, int *yzoom)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->getview)
-	return fbsp->fbs_fb_ops->getview(fbsp->fbs_fb_ctx, xcenter, ycenter, xzoom, yzoom);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_GETVIEW))
+	return fbserv_backend_getview(fbsp, xcenter, ycenter, xzoom, yzoom);
     return fbsp && fbsp->fbs_fbp ? fb_getview(fbsp->fbs_fbp, xcenter, ycenter, xzoom, yzoom) : -1;
 }
 
 static int
 fbs_fb_rmap(struct fbserv_obj *fbsp, struct fbserv_colormap *cmap)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->rmap)
-	return fbsp->fbs_fb_ops->rmap(fbsp->fbs_fb_ctx, cmap);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_RMAP))
+	return fbserv_backend_rmap(fbsp, cmap);
     if (fbsp && fbsp->fbs_fbp) {
+	int ret;
 	ColorMap dm_map;
-	int ret = fb_rmap(fbsp->fbs_fbp, &dm_map);
+	ret = fb_rmap(fbsp->fbs_fbp, &dm_map);
 	fbs_colormap_from_dm(cmap, &dm_map);
 	return ret;
     }
@@ -252,8 +246,8 @@ fbs_fb_rmap(struct fbserv_obj *fbsp, struct fbserv_colormap *cmap)
 static int
 fbs_fb_wmap(struct fbserv_obj *fbsp, const struct fbserv_colormap *cmap)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->wmap)
-	return fbsp->fbs_fb_ops->wmap(fbsp->fbs_fb_ctx, cmap);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_WMAP))
+	return fbserv_backend_wmap(fbsp, cmap);
     if (fbsp && fbsp->fbs_fbp) {
 	if (!cmap)
 	    return fb_wmap(fbsp->fbs_fbp, COLORMAP_NULL);
@@ -267,24 +261,24 @@ fbs_fb_wmap(struct fbserv_obj *fbsp, const struct fbserv_colormap *cmap)
 static int
 fbs_fb_flush(struct fbserv_obj *fbsp)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->flush)
-	return fbsp->fbs_fb_ops->flush(fbsp->fbs_fb_ctx);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_FLUSH))
+	return fbserv_backend_flush(fbsp);
     return fbsp && fbsp->fbs_fbp ? fb_flush(fbsp->fbs_fbp) : -1;
 }
 
 static int
 fbs_fb_poll(struct fbserv_obj *fbsp)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->poll)
-	return fbsp->fbs_fb_ops->poll(fbsp->fbs_fb_ctx);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_POLL))
+	return fbserv_backend_poll(fbsp);
     return fbsp && fbsp->fbs_fbp ? fb_poll(fbsp->fbs_fbp) : -1;
 }
 
 static int
 fbs_fb_help(struct fbserv_obj *fbsp)
 {
-    if (fbs_has_backend(fbsp) && fbsp->fbs_fb_ops->help)
-	return fbsp->fbs_fb_ops->help(fbsp->fbs_fb_ctx);
+    if (fbserv_backend_op_installed(fbsp, FBSERV_BACKEND_OP_HELP))
+	return fbserv_backend_help(fbsp);
     return fbsp && fbsp->fbs_fbp ? fb_help(fbsp->fbs_fbp) : 0;
 }
 
@@ -1164,14 +1158,14 @@ fbs_rfbhelp(struct pkg_conn *pcp, char *buf)
 const char *
 fbs_generate_token(struct fbserv_obj *fbsp)
 {
-    const char *env_token = getenv("FBSERV_TOKEN");
-    if (env_token && strlen(env_token) == FBSERV_AUTH_TOKEN_LEN) {
-	bu_strlcpy(fbsp->fbs_auth_token, env_token,
-		   sizeof(fbsp->fbs_auth_token));
-    } else {
-	fbserv_generate_token(fbsp->fbs_auth_token);
-    }
-    return fbsp->fbs_auth_token;
+    return fbserv_obj_generate_token(fbsp);
+}
+
+
+int
+fbs_init(struct fbserv_obj *fbsp)
+{
+    return fbserv_obj_init(fbsp);
 }
 
 
@@ -1180,23 +1174,220 @@ fbs_set_backend(struct fbserv_obj *fbsp,
 	const struct fbserv_fb_ops *ops,
 	void *ctx)
 {
-    if (!fbsp || !ops || !ctx || !ops->info)
-	return BRLCAD_ERROR;
-
-    fbsp->fbs_fb_ops = ops;
-    fbsp->fbs_fb_ctx = ctx;
-    return BRLCAD_OK;
+    return fbserv_set_backend(fbsp, ops, ctx);
 }
 
 
 void
 fbs_clear_backend(struct fbserv_obj *fbsp)
 {
-    if (!fbsp)
-	return;
+    fbserv_clear_backend(fbsp);
+}
 
-    fbsp->fbs_fb_ops = NULL;
-    fbsp->fbs_fb_ctx = NULL;
+
+void
+fbs_set_transport(struct fbserv_obj *fbsp, const struct fbserv_transport_ops *ops)
+{
+    fbserv_set_transport(fbsp, ops);
+}
+
+
+void
+fbs_clear_transport(struct fbserv_obj *fbsp)
+{
+    fbserv_clear_transport(fbsp);
+}
+
+
+int
+fbs_can_open_ipc(const struct fbserv_obj *fbsp)
+{
+    return fbserv_can_open_ipc(fbsp);
+}
+
+
+int
+fbs_can_open_network(const struct fbserv_obj *fbsp)
+{
+    return fbserv_can_open_network(fbsp);
+}
+
+
+int
+fbs_can_close(const struct fbserv_obj *fbsp)
+{
+    return fbserv_can_close(fbsp);
+}
+
+
+int
+fbs_listener_port(const struct fbserv_obj *fbsp)
+{
+    return fbserv_listener_port(fbsp);
+}
+
+
+int
+fbs_listener_fd(const struct fbserv_obj *fbsp)
+{
+    return fbserv_listener_fd(fbsp);
+}
+
+
+void
+fbs_set_listener_fd(struct fbserv_obj *fbsp, int fd)
+{
+    fbserv_set_listener_fd(fbsp, fd);
+}
+
+
+void *
+fbs_listener_channel(const struct fbserv_obj *fbsp)
+{
+    return fbserv_listener_channel(fbsp);
+}
+
+
+void
+fbs_set_listener_channel(struct fbserv_obj *fbsp, void *chan)
+{
+    fbserv_set_listener_channel(fbsp, chan);
+}
+
+
+void *
+fbs_listener_handler_data(struct fbserv_obj *fbsp)
+{
+    return fbserv_listener_handler_data(fbsp);
+}
+
+
+struct fbserv_obj *
+fbs_listener_owner(void *listener_data)
+{
+    return fbserv_listener_owner(listener_data);
+}
+
+
+int
+fbs_listener_data_fd(const void *listener_data)
+{
+    return fbserv_listener_data_fd(listener_data);
+}
+
+
+struct pkg_listener *
+fbs_listener_data_pkg_listener(void *listener_data)
+{
+    return fbserv_listener_data_pkg_listener(listener_data);
+}
+
+
+void
+fbs_set_listener_pkg_listener(struct fbserv_obj *fbsp,
+	struct pkg_listener *listener)
+{
+    fbserv_set_listener_pkg_listener(fbsp, listener);
+}
+
+
+int
+fbs_client_active(const struct fbserv_obj *fbsp, int sub)
+{
+    return fbserv_client_active(fbsp, sub);
+}
+
+
+int
+fbs_client_fd(const struct fbserv_obj *fbsp, int sub)
+{
+    return fbserv_client_fd(fbsp, sub);
+}
+
+
+struct pkg_conn *
+fbs_client_pkg(const struct fbserv_obj *fbsp, int sub)
+{
+    struct pkg_conn *pcp = fbserv_client_pkg(fbsp, sub);
+    return pcp ? pcp : PKC_NULL;
+}
+
+
+struct pkg_conn *
+fbs_client_data_pkg(void *client_data)
+{
+    struct pkg_conn *pcp = fbserv_client_data_pkg(client_data);
+    return pcp ? pcp : PKC_NULL;
+}
+
+
+int
+fbs_client_data_fd(const void *client_data)
+{
+    return fbserv_client_data_fd(client_data);
+}
+
+
+void *
+fbs_client_channel(const struct fbserv_obj *fbsp, int sub)
+{
+    return fbserv_client_channel(fbsp, sub);
+}
+
+
+void
+fbs_set_client_channel(struct fbserv_obj *fbsp, int sub, void *chan)
+{
+    fbserv_set_client_channel(fbsp, sub, chan);
+}
+
+
+void *
+fbs_client_handler(const struct fbserv_obj *fbsp, int sub)
+{
+    return fbserv_client_handler(fbsp, sub);
+}
+
+
+void
+fbs_set_client_handler(struct fbserv_obj *fbsp, int sub, void *handler)
+{
+    fbserv_set_client_handler(fbsp, sub, handler);
+}
+
+
+void *
+fbs_client_handler_data(struct fbserv_obj *fbsp, int sub)
+{
+    return fbserv_client_handler_data(fbsp, sub);
+}
+
+
+void
+fbs_set_client_data_channel(void *client_data, void *chan)
+{
+    fbserv_set_client_data_channel(client_data, chan);
+}
+
+
+void
+fbs_set_legacy_framebuffer(struct fbserv_obj *fbsp, struct fb *fbp)
+{
+    fbserv_set_legacy_framebuffer(fbsp, fbp);
+}
+
+
+struct fb *
+fbs_legacy_framebuffer(struct fbserv_obj *fbsp)
+{
+    return fbserv_legacy_framebuffer(fbsp);
+}
+
+
+int
+fbs_framebuffer_backend_installed(const struct fbserv_obj *fbsp)
+{
+    return fbserv_framebuffer_backend_installed(fbsp);
 }
 
 
@@ -1204,6 +1395,50 @@ int
 fbs_framebuffer_info(struct fbserv_obj *fbsp, struct fbserv_fb_info *info)
 {
     return fbs_fb_info(fbsp, info);
+}
+
+
+int
+fbs_framebuffer_writerect(struct fbserv_obj *fbsp,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	const unsigned char *rgb)
+{
+    return fbs_fb_writerect(fbsp, xmin, ymin, width, height, rgb);
+}
+
+
+int
+fbs_framebuffer_view(struct fbserv_obj *fbsp,
+	int xcenter,
+	int ycenter,
+	int xzoom,
+	int yzoom)
+{
+    return fbs_fb_view(fbsp, xcenter, ycenter, xzoom, yzoom);
+}
+
+
+int
+fbs_framebuffer_cursor(struct fbserv_obj *fbsp, int mode, int x, int y)
+{
+    return fbs_fb_cursor(fbsp, mode, x, y);
+}
+
+
+int
+fbs_framebuffer_flush(struct fbserv_obj *fbsp)
+{
+    return fbs_fb_flush(fbsp);
+}
+
+
+int
+fbs_framebuffer_poll(struct fbserv_obj *fbsp)
+{
+    return fbs_fb_poll(fbsp);
 }
 
 
@@ -1286,42 +1521,44 @@ fbs_close(struct fbserv_obj *fbsp)
 struct pkg_switch *
 fbs_pkg_switch(void)
 {
-    static struct pkg_switch pswitch[] = {
-	{ MSG_FBAUTH,                        fbs_rfbauth,          "Session Authentication", NULL },
-	{ MSG_FBOPEN, fbs_rfbopen, "Open Framebuffer", NULL },
-	{ MSG_FBCLOSE, fbs_rfbclose, "Close Framebuffer", NULL },
-	{ MSG_FBCLEAR, fbs_rfbclear, "Clear Framebuffer", NULL },
-	{ MSG_FBREAD, fbs_rfbread, "Read Pixels", NULL },
-	{ MSG_FBWRITE, fbs_rfbwrite, "Write Pixels", NULL },
-	{ MSG_FBWRITE + MSG_NORETURN, fbs_rfbwrite, "Asynch write", NULL },
-	{ MSG_FBCURSOR, fbs_rfbcursor, "Cursor", NULL },
-	{ MSG_FBGETCURSOR, fbs_rfbgetcursor, "Get Cursor", NULL },  /*NEW*/
-	{ MSG_FBSCURSOR, fbs_rfbscursor, "Screen Cursor", NULL }, /*OLD*/
-	{ MSG_FBWINDOW, fbs_rfbwindow, "Window", NULL },  /*OLD*/
-	{ MSG_FBZOOM, fbs_rfbzoom, "Zoom", NULL },  /*OLD*/
-	{ MSG_FBVIEW, fbs_rfbview, "View", NULL },  /*NEW*/
-	{ MSG_FBGETVIEW, fbs_rfbgetview, "Get View", NULL },  /*NEW*/
-	{ MSG_FBRMAP, fbs_rfbrmap, "R Map", NULL },
-	{ MSG_FBWMAP, fbs_rfbwmap, "W Map", NULL },
-	{ MSG_FBHELP, fbs_rfbhelp, "Help Request", NULL },
-	{ MSG_ERROR, fbs_rfbunknown, "Error Message", NULL },
-	{ MSG_CLOSE, fbs_rfbunknown, "Close Connection", NULL },
-	{ MSG_FBREADRECT, fbs_rfbreadrect, "Read Rectangle", NULL },
-	{ MSG_FBWRITERECT, fbs_rfbwriterect, "Write Rectangle", NULL },
-	{ MSG_FBWRITERECT + MSG_NORETURN, fbs_rfbwriterect, "Write Rectangle", NULL },
-	{ MSG_FBBWREADRECT, fbs_rfbbwreadrect, "Read BW Rectangle", NULL },
-	{ MSG_FBBWWRITERECT, fbs_rfbbwwriterect, "Write BW Rectangle", NULL },
-	{ MSG_FBBWWRITERECT+MSG_NORETURN, fbs_rfbbwwriterect, "Write BW Rectangle", NULL },
-	{ MSG_FBFLUSH, fbs_rfbflush, "Flush Output", NULL },
-	{ MSG_FBFLUSH + MSG_NORETURN, fbs_rfbflush, "Flush Output", NULL },
-	{ MSG_FBFREE, fbs_rfbfree, "Free Resources", NULL },
-	{ MSG_FBPOLL, fbs_rfbpoll, "Handle Events", NULL },
-	{ MSG_FBSETCURSOR, fbs_rfbsetcursor, "Set Cursor Shape", NULL },
-	{ MSG_FBSETCURSOR + MSG_NORETURN, fbs_rfbsetcursor, "Set Cursor Shape", NULL },
-	{ 0, NULL, NULL, NULL }
+    static struct pkg_switch pswitch[FBSERV_PKG_SWITCH_COUNT];
+    static const struct fbserv_pkg_handlers handlers = {
+	fbs_rfbunknown,
+	fbs_rfbauth,
+	fbs_rfbopen,
+	fbs_rfbclose,
+	fbs_rfbfree,
+	fbs_rfbclear,
+	fbs_rfbread,
+	fbs_rfbwrite,
+	fbs_rfbreadrect,
+	fbs_rfbwriterect,
+	fbs_rfbbwreadrect,
+	fbs_rfbbwwriterect,
+	fbs_rfbcursor,
+	fbs_rfbgetcursor,
+	fbs_rfbsetcursor,
+	fbs_rfbscursor,
+	fbs_rfbwindow,
+	fbs_rfbzoom,
+	fbs_rfbview,
+	fbs_rfbgetview,
+	fbs_rfbrmap,
+	fbs_rfbwmap,
+	fbs_rfbflush,
+	fbs_rfbpoll,
+	fbs_rfbhelp
     };
+    static int initialized = 0;
 
-    return (struct pkg_switch *)pswitch;
+    if (!initialized) {
+	if (fbserv_pkg_switch_init(pswitch, FBSERV_PKG_SWITCH_COUNT,
+		&handlers) != 0)
+	    return NULL;
+	initialized = 1;
+    }
+
+    return pswitch;
 }
 
 void
@@ -1592,6 +1829,28 @@ fbs_drop_client(struct fbserv_obj *fbsp, int sub)
     if (!fbsp || sub < 0 || sub >= MAX_CLIENTS)
 	return;
     drop_client(fbsp, sub);
+}
+
+
+int
+fbs_drop_ipc_clients(struct fbserv_obj *fbsp)
+{
+    int dropped = 0;
+
+    if (!fbsp)
+	return 0;
+
+    for (int i = 0; i < MAX_CLIENTS; ++i) {
+	if (fbsp->fbs_clients[i].fbsc_fd == 0 ||
+	    !fbsp->fbs_clients[i].fbsc_is_ipc)
+	    continue;
+	bu_log("fbs_drop_ipc_clients: dropping IPC client slot %d fd=%d\n",
+	       i, fbsp->fbs_clients[i].fbsc_fd);
+	drop_client(fbsp, i);
+	++dropped;
+    }
+
+    return dropped;
 }
 
 

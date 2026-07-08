@@ -2807,19 +2807,11 @@ _ged_rt_finalize(struct ged_subprocess *rrtp)
      * potentially racing with the next ert's fbs_open_ipc.  In qged,
      * IPC fbserv clients are created exclusively by libged/dm/ert.cpp
      * via fbs_open_ipc(), so it is safe to drop every IPC slot here.
-     * fbs_drop_client invokes the registered close handler, which uses
-     * deleteLater() in qged for safe async tear-down on the GUI
-     * thread (see comment above _ged_rt_finalize). */
-    if (gedp->ged_fbs) {
-	for (int ci = 0; ci < MAX_CLIENTS; ++ci) {
-	    if (gedp->ged_fbs->fbs_clients[ci].fbsc_fd != 0 &&
-		gedp->ged_fbs->fbs_clients[ci].fbsc_is_ipc) {
-		bu_log("_ged_rt_finalize: dropping IPC client slot %d fd=%d\n",
-		       ci, gedp->ged_fbs->fbs_clients[ci].fbsc_fd);
-		fbs_drop_client(gedp->ged_fbs, ci);
-	    }
-	}
-    }
+     * fbs_drop_ipc_clients invokes the registered close handler for each
+     * slot, which uses deleteLater() in qged for safe async tear-down on the
+     * GUI thread (see comment above _ged_rt_finalize). */
+    if (gedp->ged_fbs)
+	(void)fbs_drop_ipc_clients(gedp->ged_fbs);
 
     if (gedp->i->ged_gdp->gd_rtCmdNotify != (void (*)(int))0)
 	gedp->i->ged_gdp->gd_rtCmdNotify(aborted);

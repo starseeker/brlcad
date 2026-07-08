@@ -40,8 +40,8 @@ tclcad_mouse_display_manager(const void *view_ctx)
 static const char *
 tclcad_mouse_view_name(const void *view_ctx)
 {
-    const char *name = bv_name_get(bv_context_view_const(
-		(const struct bv_context *)view_ctx));
+    const char *name = bv_context_name_get(
+	    (const struct bv_context *)view_ctx);
     return name ? name : "";
 }
 
@@ -62,7 +62,7 @@ tclcad_mouse_display_width(const void *view_ctx)
 {
     struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
     return dmp ? dm_get_width(dmp) :
-	bv_width_get(tclcad_mouse_bv_const(view_ctx));
+	bv_context_width_get((const struct bv_context *)view_ctx);
 }
 
 static int
@@ -70,7 +70,7 @@ tclcad_mouse_display_height(const void *view_ctx)
 {
     struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
     return dmp ? dm_get_height(dmp) :
-	bv_height_get(tclcad_mouse_bv_const(view_ctx));
+	bv_context_height_get((const struct bv_context *)view_ctx);
 }
 
 static struct bu_vls *
@@ -85,7 +85,7 @@ tclcad_mouse_sync_dm_dimensions(void *view_ctx)
 {
     struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
     if (dmp)
-	bv_dimensions_set(tclcad_mouse_bv(view_ctx),
+	bv_context_dimensions_set((struct bv_context *)view_ctx,
 		dm_get_width(dmp), dm_get_height(dmp));
 }
 

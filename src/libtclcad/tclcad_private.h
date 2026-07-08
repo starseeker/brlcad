@@ -585,6 +585,8 @@ extern void
 tclcad_open_client_handler(struct fbserv_obj *fbsp, int i, void *data);
 extern void
 tclcad_close_client_handler(struct fbserv_obj *fbsp, int sub);
+TCLCAD_EXPORT extern void
+tclcad_fbserv_set_transport(struct fbserv_obj *fbsp);
 TCLCAD_EXPORT extern int
 tclcad_listen_ipc(struct fbserv_obj *fbsp, Tcl_Interp *interp);
 

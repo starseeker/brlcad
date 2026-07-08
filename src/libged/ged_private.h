@@ -188,8 +188,6 @@ void ged_scene_root_ref_clear(struct ged *gedp);
 void ged_view_state_init(struct ged *gedp);
 void ged_view_state_free(struct ged *gedp);
 int ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx);
-GED_EXPORT extern int ged_obol_view_display_image(struct ged *gedp, void *view_ctx,
-	unsigned char **image, int flip, int alpha);
 int ged_obol_fbserv_present(struct ged *gedp);
 void ged_obol_fbserv_release(struct ged *gedp);
 __END_DECLS

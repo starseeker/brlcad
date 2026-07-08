@@ -229,6 +229,21 @@ main(int argc, const char **argv)
 
     const char *c1[] = {"view", "feature", "info", "u_line", "type", NULL};
     ASSERT(run_view(gedp, 5, c1) == BRLCAD_OK);
+    const char *c1a[] = {"view", "feature", "info", "u_line", "kind", NULL};
+    ASSERT(run_view(gedp, 5, c1a) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("lines") != std::string::npos);
+    const char *c1b[] = {"view", "feature", "info", "u_line", "scope", NULL};
+    ASSERT(run_view(gedp, 5, c1b) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("shared") != std::string::npos);
+    const char *c1c[] = {"view", "feature", "info", "u_line", "overlay_class", NULL};
+    ASSERT(run_view(gedp, 5, c1c) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("user-annotation") != std::string::npos);
+    const char *c1d[] = {"view", "feature", "info", "u_line", "lifecycle", NULL};
+    ASSERT(run_view(gedp, 5, c1d) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("persistent") != std::string::npos);
+    const char *c1e[] = {"view", "feature", "info", "u_line", "command_result", NULL};
+    ASSERT(run_view(gedp, 5, c1e) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("0") != std::string::npos);
 
     const char *c2[] = {"view", "feature", "hide", "u_line", NULL};
     ASSERT(run_view(gedp, 4, c2) == BRLCAD_OK);
@@ -342,6 +357,9 @@ main(int argc, const char **argv)
     const char *c7[] = {"view", "-V", "V0", "feature", "list", NULL};
     ASSERT(run_view(gedp, 5, c7) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("l_line") != std::string::npos);
+    const char *c7a[] = {"view", "-V", "V0", "feature", "info", "l_line", "scope", NULL};
+    ASSERT(run_view(gedp, 7, c7a) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("local") != std::string::npos);
     const char *c8[] = {"view", "-V", "V1", "feature", "list", NULL};
     ASSERT(run_view(gedp, 5, c8) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("l_line") == std::string::npos);

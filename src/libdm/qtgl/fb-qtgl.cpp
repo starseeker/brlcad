@@ -94,6 +94,7 @@ struct qtglinfo {
     int fb_tex_width;           /* texture storage width */
     int fb_tex_height;          /* texture storage height */
     int fb_use_texture;         /* runtime toggle for texture blit path */
+    struct fb_imgstream_compat imgstream;
 
     int alive;
 };
@@ -279,10 +280,14 @@ qtgl_xmit_scanlines(struct fb *ifp, int ybase, int nlines, int xbase, int npix)
 static void
 qt_destroy(struct qtglinfo *qi)
 {
+    if (!qi)
+	return;
     delete qi->mw;
     delete qi->qapp;
-    free(qi->av[0]);
-    free(qi->av);
+    if (qi->av) {
+	free(qi->av[0]);
+	free(qi->av);
+    }
 }
 
 
@@ -391,6 +396,10 @@ fb_clipper(struct fb *ifp)
 int
 qtgl_configureWindow(struct fb *ifp, int width, int height)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_configure(ifp, &QTGL(ifp)->imgstream,
+		width, height);
+
     int getmem = 0;
 
     if (!QTGL(ifp)->mi_memwidth)
@@ -498,6 +507,22 @@ fb_qtgl_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 {
     FB_CK_FB(ifp->i);
 
+    if (fb_imgstream_compat_supported("/dev/qtgl")) {
+	if ((ifp->i->pp = (char *)calloc(1, sizeof(struct qtglinfo))) == NULL) {
+	    fb_log("fb_qtgl:  qtglinfo malloc failed\n");
+	    return -1;
+	}
+	ifp->i->stand_alone = 1;
+	int stream_ret = fb_imgstream_compat_open(ifp, &QTGL(ifp)->imgstream,
+		"/dev/qtgl", width, height);
+	if (stream_ret == 0)
+	    return 0;
+	free(ifp->i->pp);
+	ifp->i->pp = NULL;
+	if (stream_ret < 0)
+	    return -1;
+    }
+
     if ((ifp->i->pp = (char *)calloc(1, sizeof(struct qtglinfo))) == NULL) {
 	fb_log("fb_qtgl:  qtglinfo malloc failed\n");
 	return -1;
@@ -585,8 +610,11 @@ qtgl_put_fbps(struct fb_platform_specific *fbps)
 
 
 static int
-qtgl_flush(struct fb *UNUSED(ifp))
+qtgl_flush(struct fb *ifp)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_flush(&QTGL(ifp)->imgstream);
+
     glFlush();
     return 0;
 }
@@ -596,6 +624,13 @@ static int
 fb_qtgl_close(struct fb *ifp)
 {
     struct qtglinfo *qi = QTGL(ifp);
+
+    if (fb_imgstream_compat_active(&qi->imgstream)) {
+	(void)fb_imgstream_compat_close(&qi->imgstream);
+	free((char *)QTGLL(ifp));
+	QTGLL(ifp) = NULL;
+	return 0;
+    }
 
     /* if a window was created wait for user input and process events */
     if (qi->qapp) {
@@ -619,6 +654,9 @@ qtgl_close_existing(struct fb *ifp)
 static int
 qtgl_poll(struct fb *ifp)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_poll(ifp, &QTGL(ifp)->imgstream);
+
     if (QTGL(ifp)->qapp)
 	QTGL(ifp)->qapp->processEvents();
     qtgl_do_event(ifp);
@@ -641,6 +679,13 @@ qtgl_free(struct fb *ifp)
     /* Close the framebuffer */
     if (FB_DEBUG)
 	printf("qtgl_free: All done...goodbye!\n");
+
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream)) {
+	(void)fb_imgstream_compat_close(&QTGL(ifp)->imgstream);
+	free((char *)QTGLL(ifp));
+	QTGLL(ifp) = NULL;
+	return 0;
+    }
 
     if (ifp->i->if_mem != NULL) {
 	/* free up memory associated with image */
@@ -669,6 +714,9 @@ qtgl_free(struct fb *ifp)
 static int
 qtgl_clear(struct fb *ifp, unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_clear(&QTGL(ifp)->imgstream, pp);
+
     struct fb_pixel bg;
     struct fb_pixel *qtglp;
     int cnt;
@@ -716,6 +764,10 @@ qtgl_clear(struct fb *ifp, unsigned char *pp)
 static int
 qtgl_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_view(ifp, &QTGL(ifp)->imgstream,
+		xcenter, ycenter, xzoom, yzoom);
+
     if (FB_DEBUG)
 	printf("entering qtgl_view\n");
 
@@ -757,6 +809,10 @@ qtgl_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 static int
 qtgl_getview(struct fb *ifp, int *xcenter, int *ycenter, int *xzoom, int *yzoom)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_getview(&QTGL(ifp)->imgstream,
+		xcenter, ycenter, xzoom, yzoom);
+
     if (FB_DEBUG)
 	printf("entering qtgl_getview\n");
 
@@ -773,6 +829,10 @@ qtgl_getview(struct fb *ifp, int *xcenter, int *ycenter, int *xzoom, int *yzoom)
 static ssize_t
 qtgl_read(struct fb *ifp, int x, int y, unsigned char *pixelp, size_t count)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_read(&QTGL(ifp)->imgstream, x, y,
+		pixelp, count);
+
     size_t n;
     size_t scan_count;	/* # pix on this scanline */
     unsigned char *cp;
@@ -824,6 +884,10 @@ qtgl_read(struct fb *ifp, int x, int y, unsigned char *pixelp, size_t count)
 static ssize_t
 qtgl_write(struct fb *ifp, int xstart, int ystart, const unsigned char *pixelp, size_t count)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_write(&QTGL(ifp)->imgstream, xstart,
+		ystart, pixelp, count);
+
     int x;
     int y;
     size_t scan_count;  /* # pix on this scanline */
@@ -920,6 +984,10 @@ qtgl_write(struct fb *ifp, int xstart, int ystart, const unsigned char *pixelp, 
 static int
 qtgl_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, const unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_writerect(&QTGL(ifp)->imgstream,
+		xmin, ymin, width, height, pp);
+
     int x;
     int y;
     unsigned char *cp;
@@ -963,6 +1031,10 @@ qtgl_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, const 
 static int
 qtgl_bwwriterect(struct fb *ifp, int xmin, int ymin, int width, int height, const unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_bwwriterect(&QTGL(ifp)->imgstream,
+		xmin, ymin, width, height, pp);
+
     int x;
     int y;
     unsigned char *cp;
@@ -999,8 +1071,11 @@ qtgl_bwwriterect(struct fb *ifp, int xmin, int ymin, int width, int height, cons
 
 
 static int
-qtgl_rmap(struct fb *UNUSED(ifp), ColorMap *UNUSED(cmp))
+qtgl_rmap(struct fb *ifp, ColorMap *cmp)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_rmap(&QTGL(ifp)->imgstream, cmp);
+
     if (FB_DEBUG)
 	printf("entering qtgl_rmap\n");
 #if 0
@@ -1016,8 +1091,11 @@ qtgl_rmap(struct fb *UNUSED(ifp), ColorMap *UNUSED(cmp))
 
 
 static int
-qtgl_wmap(struct fb *UNUSED(ifp), const ColorMap *UNUSED(cmp))
+qtgl_wmap(struct fb *ifp, const ColorMap *cmp)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_wmap(&QTGL(ifp)->imgstream, cmp);
+
     if (FB_DEBUG)
 	printf("entering qtgl_wmap\n");
 
@@ -1043,9 +1121,13 @@ qtgl_help(struct fb *ifp)
 
 
 static int
-qtgl_setcursor(struct fb *ifp, const unsigned char *UNUSED(bits), int UNUSED(xbits), int UNUSED(ybits), int UNUSED(xorig), int UNUSED(yorig))
+qtgl_setcursor(struct fb *ifp, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig)
 {
     FB_CK_FB(ifp->i);
+
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_setcursor(&QTGL(ifp)->imgstream, bits,
+		xbits, ybits, xorig, yorig);
 
     // If it should ever prove desirable to alter the cursor or disable it, here's how it is done:
     // dynamic_cast<osgViewer::GraphicsWindow*>(camera->getGraphicsContext()))->setCursor(osgViewer::GraphicsWindow::NoCursor);
@@ -1055,8 +1137,11 @@ qtgl_setcursor(struct fb *ifp, const unsigned char *UNUSED(bits), int UNUSED(xbi
 
 
 static int
-qtgl_cursor(struct fb *UNUSED(ifp), int UNUSED(mode), int UNUSED(x), int UNUSED(y))
+qtgl_cursor(struct fb *ifp, int mode, int x, int y)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_cursor(ifp, &QTGL(ifp)->imgstream,
+		mode, x, y);
 
     fb_log("qtgl_cursor\n");
     return 0;
@@ -1066,6 +1151,9 @@ qtgl_cursor(struct fb *UNUSED(ifp), int UNUSED(mode), int UNUSED(x), int UNUSED(
 int
 qtgl_refresh(struct fb *ifp, int x, int y, int w, int h)
 {
+    if (fb_imgstream_compat_active(&QTGL(ifp)->imgstream))
+	return fb_imgstream_compat_flush(&QTGL(ifp)->imgstream);
+
     if (w < 0) {
 	w = -w;
 	x -= w;

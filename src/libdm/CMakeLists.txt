@@ -11,6 +11,7 @@ set(
   dm-generic.c
   dm_init.cpp
   dm_plugins.cpp
+  fb_imgstream.c
   dm_util.c
   fb_generic.c
   fb_log.c
@@ -56,7 +57,7 @@ endif()
 # Note - libdm_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
 brlcad_addlib(libdm "${LIBDM_SRCS}" "${DM_INCLUDE_DIRS}" "${DM_LOCAL_INCLUDE_DIRS}"
   PUBLIC_LIBS ${LIBDM_PUBLIC_LIBS}
-  PRIVATE_LIBS PNG::PNG ${WINSOCK_LIB}
+  PRIVATE_LIBS libimgstream PNG::PNG ${WINSOCK_LIB}
   UNITY_BUILD_SKIP dm_init.cpp
   )
 set_target_properties(libdm PROPERTIES VERSION 20.0.1 SOVERSION 20)

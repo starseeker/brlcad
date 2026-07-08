@@ -118,6 +118,19 @@ ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
 	int sync_current_scene);
 
 /**
+ * Attach a display-manager-owned Obol view controller for one GED view.
+ *
+ * @p dmp is an opaque struct dm pointer.  Non-Obol display managers are a
+ * successful no-op unless @p require_obol_controller is nonzero.
+ */
+GED_EXPORT int
+ged_draw_obol_display_manager_attach_for_view(struct ged *gedp,
+	void *view_ctx,
+	void *dmp,
+	int sync_current_scene,
+	int require_obol_controller);
+
+/**
  * Return the Obol view controller currently associated with @p view_ctx.
  *
  * The returned pointer is a borrowed BRLObolViewController pointer exposed as
@@ -146,6 +159,16 @@ ged_draw_obol_controller_detach_opaque(struct ged *gedp,
 				       void *controller);
 
 /**
+ * Detach the borrowed Obol view controller associated with @p view_ctx, if any.
+ *
+ * Shared GED-owned controllers are left intact; this only removes per-view
+ * display-manager attachments.
+ */
+GED_EXPORT void
+ged_draw_obol_controller_detach_for_view(struct ged *gedp,
+					 void *view_ctx);
+
+/**
  * Present pending Obol framebuffer stream state into the attached view scene.
  *
  * Applications should call this from their view/update thread before render
@@ -154,6 +177,44 @@ ged_draw_obol_controller_detach_opaque(struct ged *gedp,
  */
 GED_EXPORT int
 ged_draw_obol_framebuffer_present(struct ged *gedp);
+
+/**
+ * Install libged's Obol/imgstream fbserv backend for @p view_ctx.
+ *
+ * This only installs the backend operation table used by fbserv packet
+ * handlers.  Application hosts that own toolkit-specific socket/notifier
+ * integration keep installing their own fbserv transport callbacks.
+ *
+ * @p window_host is a borrowed BRLObolWindowHost pointer passed as opaque
+ * storage so C callers do not depend on C++ types.  Passing NULL uses
+ * libged's generic window host.  Non-positive dimensions are derived from the
+ * view context or attached display manager.  @p present_on_flush should only
+ * be set by app-host integrations whose fbserv packet handlers run on the
+ * host's scene/update thread.
+ */
+GED_EXPORT int
+ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
+	void *view_ctx,
+	void *window_host,
+	int width,
+	int height,
+	int present_on_flush);
+
+/**
+ * Render an Obol-backed GED view into a caller-owned RGB/RGBA image buffer.
+ *
+ * Returns 1 when @p view_ctx has an attached Obol controller and image data was
+ * written to @p image, 0 when the view is not Obol-backed, and -1 on error.
+ * The returned buffer is owned by the caller and should be released with
+ * bu_free().  Non-Obol callers should fall back to their existing display
+ * manager readback path.
+ */
+GED_EXPORT int
+ged_draw_obol_view_display_image(struct ged *gedp,
+	void *view_ctx,
+	unsigned char **image,
+	int flip,
+	int alpha);
 
 /**
  * Release the libged-owned Obol framebuffer bridge, if one is active.
