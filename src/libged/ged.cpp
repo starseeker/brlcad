@@ -184,7 +184,6 @@ ged_init(struct ged *gedp)
 
     BU_GET(gedp->i->ged_gdp, struct ged_drawable);
     ged_scene_root_ref_clear(gedp);
-    gedp->i->ged_gdp->gd_draw_bookkeeping_ctx = NULL;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_draw_registry);
     gedp->i->ged_gdp->gd_draw_registry_init = 1;
     gedp->i->ged_gdp->gd_draw_next_token = 1;
@@ -357,7 +356,6 @@ ged_free(struct ged *gedp)
 	if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
 
 	ged_scene_root_ref_clear(gedp);  /* freed by zap */
-	ged_draw_scene_context_free_draw_bookkeeping(gedp);
 	if (gedp->i->ged_gdp->gd_headVDraw) {
 	    struct vd_curve *curve = NULL;
 	    while (BU_LIST_WHILE(curve, vd_curve, gedp->i->ged_gdp->gd_headVDraw)) {

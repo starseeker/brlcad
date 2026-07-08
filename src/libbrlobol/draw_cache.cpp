@@ -878,6 +878,61 @@ brlobol_draw_metadata_disk_valid(const void *data, size_t dsize)
 }
 
 static int
+brlobol_draw_metadata_component_found(db_i *dbip, const char *component)
+{
+    if (!dbip || !component || !component[0])
+	return 0;
+
+    if (db_lookup(dbip, component, LOOKUP_QUIET) != RT_DIR_NULL)
+	return 1;
+
+    const char *at = strrchr(component, '@');
+    if (!at || at == component || !at[1])
+	return 0;
+    for (const char *cp = at + 1; *cp; cp++) {
+	if (*cp < '0' || *cp > '9')
+	    return 0;
+    }
+
+    std::string base(component, static_cast<size_t>(at - component));
+    return db_lookup(dbip, base.c_str(), LOOKUP_QUIET) != RT_DIR_NULL;
+}
+
+static int
+brlobol_draw_metadata_path_found(db_i *dbip, const char *name)
+{
+    if (!dbip || !name || !name[0])
+	return 0;
+
+    const char *start = name;
+    while (*start == '/')
+	start++;
+    if (!start[0])
+	return 1;
+
+    char *copy = bu_strdup(start);
+    size_t len = strlen(copy);
+    while (len > 0 && copy[len - 1] == '/') {
+	copy[len - 1] = '\0';
+	len--;
+    }
+
+    int found = len > 0 ? 1 : 0;
+    char *component = copy;
+    while (found && component && component[0]) {
+	char *slash = strchr(component, '/');
+	if (slash)
+	    *slash = '\0';
+	if (!brlobol_draw_metadata_component_found(dbip, component))
+	    found = 0;
+	component = slash ? slash + 1 : NULL;
+    }
+
+    bu_free(copy, "brlobol draw metadata path probe");
+    return found;
+}
+
+static int
 brlobol_draw_metadata_target_found(db_i *dbip, const char *name, int pathAware)
 {
     if (!dbip || !name || !name[0])
@@ -886,12 +941,7 @@ brlobol_draw_metadata_target_found(db_i *dbip, const char *name, int pathAware)
     if (!pathAware)
 	return db_lookup(dbip, name, LOOKUP_QUIET) != RT_DIR_NULL;
 
-    struct db_full_path path;
-    db_full_path_init(&path);
-    int found = (db_string_to_path(&path, dbip, name) == 0 &&
-		 DB_FULL_PATH_CUR_DIR(&path)) ? 1 : 0;
-    db_free_full_path(&path);
-    return found;
+    return brlobol_draw_metadata_path_found(dbip, name);
 }
 
 static void

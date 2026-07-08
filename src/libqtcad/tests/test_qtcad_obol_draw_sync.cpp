@@ -213,6 +213,22 @@ source_for_path(BRLObolViewController *controller, const char *path)
     return NULL;
 }
 
+static SoBRLDatabaseSource *
+source_for_path_mode(BRLObolViewController *controller,
+	const char *path,
+	int draw_mode)
+{
+    if (!controller || !path)
+	return NULL;
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (source && test_path_equal(source->path.getValue().getString(),
+		path) && source->drawMode.getValue() == draw_mode)
+	    return source;
+    }
+    return NULL;
+}
+
 static std::string
 source_instance_key_for_view(const char *view_name, const char *path)
 {
@@ -221,18 +237,6 @@ source_instance_key_for_view(const char *view_name, const char *path)
 	key += view_name;
     key += ":";
     key += test_skip_leading_slash(path);
-    return key;
-}
-
-static std::string
-source_mode_instance_key(const char *path, int mode)
-{
-    std::string key(test_skip_leading_slash(path));
-    if (mode != GED_DRAW_MODE_WIRE) {
-	char mode_buf[64] = {0};
-	snprintf(mode_buf, sizeof(mode_buf), ":ged-draw-mode:%d", mode);
-	key += mode_buf;
-    }
     return key;
 }
 
@@ -373,7 +377,7 @@ main(int argc, char **argv)
     view.need_update(QG_VIEW_REFRESH);
     SbVec3f offTargetCamera = camera->position.getValue();
     if (offTargetCamera[0] < 50.0f)
-	FAIL("qtcad refresh should sync Obol camera from BSG view state");
+	FAIL("qtcad refresh should sync Obol camera from GED view state");
 
     const char *autoview_cmd[1] = {"autoview"};
     if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
@@ -467,15 +471,8 @@ main(int argc, char **argv)
 	    source->materialRevision.getValue() !=
 	    test_fold_revision(box_material.material_revision))
 	FAIL("Obol draw sync should copy GED material revision");
-    BRLObolSceneDisplaySummary box_group_display;
-    if (!scene_display_summary_by_path(controller, "box.s",
-	    BRLObolSceneTreeSummary::NODE_GROUP, &box_group_display) ||
-	    !box_group_display.hasDrawIntent ||
-	    box_group_display.intentDrawMode != BRLOBOL_LOD_DRAW_WIRE ||
-	    !box_group_display.visible ||
-	    box_group_display.lineWidth != box_record.line_width ||
-	    controller->getSceneController()->getGroupChildCount("box.s") != 1)
-	FAIL("Obol draw sync should retain the GED draw group around the source");
+    if (source_for_path(controller, "box.s") != source)
+	FAIL("Obol draw sync should publish box.s as the authoritative source owner");
 
     controller->getViewport()->viewAll();
     controller->requestRender("draw-sync-visible");
@@ -558,18 +555,19 @@ main(int argc, char **argv)
     int drew_both = apply_and_sync(gedp, &view, &draw_both, 1);
     if (!drew_both)
 	FAIL("multi-path GED draw should sync multiple Obol database sources");
-    const std::string shaded_ball_instance =
-	source_mode_instance_key("ball.s", GED_DRAW_MODE_SHADED);
     if (controller->getDatabaseSourceCount() != 3 ||
-	    !source_for_instance(controller, "box.s") ||
-	    !source_for_instance(controller, "ball.s") ||
-	    !source_for_instance(controller, shaded_ball_instance.c_str()))
+	    !source_for_path_mode(controller, "box.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED))
 	FAIL("multi-path Obol draw sync should retain shared and representation-specific database sources");
 
     const char *direct_path = "box.s";
     if (!qg_obol_sync_database_sources(gedp->dbip, &direct_path, 1,
 	    QG_OBOL_DATABASE_SHADED, 123, &view))
-	FAIL("direct Obol database sync should replace a source without BSG transaction input");
+	FAIL("direct Obol database sync should replace a source without GED transaction input");
     source = source_for_path(controller, "box.s");
     if (!source ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
@@ -578,13 +576,15 @@ main(int argc, char **argv)
 	    source->getRealizedMeshCount() <= 0)
 	FAIL("direct Obol database sync should preserve draw mode, revision, and mesh geometry");
     if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
-	FAIL("direct Obol database remove should remove one source without BSG transaction input");
+	FAIL("direct Obol database remove should remove one source without GED transaction input");
     if (controller->getDatabaseSourceCount() != 2 ||
 	    source_for_path(controller, "box.s"))
 	FAIL("direct Obol database remove should leave only unrelated ball sources");
 
-    if (!source_for_instance(controller, "ball.s") ||
-	    !source_for_instance(controller, shaded_ball_instance.c_str()))
+    if (!source_for_path_mode(controller, "ball.s",
+	    SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED))
 	FAIL("direct Obol database remove should retain shared and representation-specific ball source owners");
     if (!rt_view_context_name_set(view_ctx, "QV0") ||
 	    rt_view_context_independent_scope_is_null(view_ctx, 1) ||
@@ -602,15 +602,19 @@ main(int argc, char **argv)
     if (!scopedBoxSource ||
 	    !BU_STR_EQUAL(scopedBoxSource->path.getValue().getString(),
 		"box.s") ||
-	    !source_for_instance(controller, "ball.s") ||
-	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED) ||
 	    controller->getDatabaseSourceCount() != 3)
 	FAIL("scoped direct Obol sync should coexist with shared source owners and mode-specific representations");
     if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
 	FAIL("direct Obol database remove should target scoped independent-view owners");
     if (source_for_instance(controller, scoped_box.c_str()) ||
-	    !source_for_instance(controller, "ball.s") ||
-	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED) ||
 	    controller->getDatabaseSourceCount() != 2)
 	FAIL("scoped direct Obol remove should leave shared source owners and mode-specific representations intact");
     if (!qg_obol_sync_database_sources(gedp->dbip, paths, 2,
@@ -618,16 +622,20 @@ main(int argc, char **argv)
 	FAIL("direct Obol database sync should create multiple scoped owners");
     if (!source_for_instance(controller, scoped_box.c_str()) ||
 	    !source_for_instance(controller, scoped_ball.c_str()) ||
-	    !source_for_instance(controller, "ball.s") ||
-	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED) ||
 	    controller->getDatabaseSourceCount() != 4)
 	FAIL("scoped direct Obol sync should retain shared, scoped, and mode-specific owners separately");
     if (!qg_obol_clear_database_sources(&view))
 	FAIL("direct Obol database clear should target the active source owner scope");
     if (source_for_instance(controller, scoped_box.c_str()) ||
 	    source_for_instance(controller, scoped_ball.c_str()) ||
-	    !source_for_instance(controller, "ball.s") ||
-	    !source_for_instance(controller, shaded_ball_instance.c_str()) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED) ||
 	    controller->getDatabaseSourceCount() != 2)
 	FAIL("scoped direct Obol clear should leave shared source owners and mode-specific representations intact");
     rt_view_context_independent_scope_destroy(view_ctx);
@@ -641,9 +649,15 @@ main(int argc, char **argv)
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     redraw_all.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &redraw_all, 1))
-	FAIL("GED redraw should rebuild Obol sources from retained draw state");
-    if (controller->getDatabaseSourceCount() != 2)
-	FAIL("Obol full redraw sync should rebuild retained GED draw paths");
+	FAIL("GED redraw should rebuild Obol sources from the draw inventory");
+    if (controller->getDatabaseSourceCount() != 3 ||
+	    !source_for_path_mode(controller, "box.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::WIREFRAME) ||
+	    !source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED))
+	FAIL("Obol full redraw sync should rebuild current GED draw sources");
 
     struct ged_draw_transaction clear_all =
 	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
@@ -661,14 +675,10 @@ main(int argc, char **argv)
     if (controller->getDatabaseSourceCount() != 1 ||
 	    !source_for_path(controller, "pair.c/box.s"))
 	FAIL("nested Obol draw sync should retain one full-path database source");
-    BRLObolSceneDisplaySummary nested_group_display;
-    if (!scene_display_summary_by_path(controller, "pair.c/box.s",
-	    BRLObolSceneTreeSummary::NODE_GROUP, &nested_group_display) ||
-	    !nested_group_display.hasDrawIntent ||
-	    nested_group_display.intentDrawMode != BRLOBOL_LOD_DRAW_WIRE ||
-	    controller->getSceneController()->getGroupChildCount(
-		"pair.c/box.s") != 1)
-	FAIL("full-path Obol draw sync should retain the GED draw group around the source");
+    source = source_for_path(controller, "pair.c/box.s");
+    if (!source ||
+	    source->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME)
+	FAIL("full-path Obol draw sync should publish the nested source owner");
 
     struct ged_draw_transaction erase_nested =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "pair.c/box.s");

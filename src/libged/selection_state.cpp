@@ -54,6 +54,13 @@ struct ged_selection_state {
     std::map<std::string, ged_native_selection_set> native_sets;
 };
 
+struct ged_selection_source_record_info {
+    std::string database_path;
+    std::string instance_key;
+    std::string owner_group_path;
+    int selected = 0;
+};
+
 
 static void
 ged_selection_revision_bump(struct ged *gedp)
@@ -191,6 +198,40 @@ ged_selection_path_split(std::vector<std::string> &objs, const char *str)
     }
     if (nstr.length())
 	objs.push_back(nstr);
+}
+
+
+static std::string
+ged_selection_strip_comb_instance_suffix(const std::string &name)
+{
+    size_t at_pos = name.rfind('@');
+    if (at_pos == std::string::npos || at_pos == 0 ||
+	    at_pos + 1 >= name.size())
+	return name;
+
+    for (size_t i = at_pos + 1; i < name.size(); i++) {
+	if (name[i] < '0' || name[i] > '9')
+	    return name;
+    }
+    return name.substr(0, at_pos);
+}
+
+
+static std::string
+ged_selection_semantic_path(const char *path)
+{
+    std::vector<std::string> elements;
+    ged_selection_path_split(elements, path);
+    if (elements.empty())
+	return std::string();
+
+    std::string out;
+    for (const std::string &element : elements) {
+	if (!out.empty())
+	    out += "/";
+	out += ged_selection_strip_comb_instance_suffix(element);
+    }
+    return out;
 }
 
 
@@ -736,67 +777,111 @@ ged_selection_native_path_op(struct ged *gedp,
 
 
 static int
-ged_selection_record_matches_path(const struct ged_draw_shape_record *rec,
-				  const std::string &path)
+ged_selection_source_path_matches(const std::string &selected,
+				  const char *record_path)
 {
-    if (!rec || path.empty())
+    if (selected.empty() || !record_path)
 	return 0;
 
-    auto path_matches_record_path = [](const std::string &selected,
-				       const char *record_path) -> int {
-	if (!record_path)
-	    return 0;
-	std::string rpath = ged_selection_canonical_path(record_path);
-	if (rpath.empty())
-	    return 0;
-	if (rpath == selected)
-	    return 1;
-	if (rpath.size() > selected.size() &&
-		rpath.compare(0, selected.size(), selected) == 0 &&
-		rpath[selected.size()] == '/')
-	    return 1;
+    std::string rpath = ged_selection_canonical_path(record_path);
+    if (rpath.empty())
 	return 0;
-    };
-
-    if (path_matches_record_path(path, rec->display_name))
+    if (rpath == selected)
+	return 1;
+    if (rpath.size() > selected.size() &&
+	    rpath.compare(0, selected.size(), selected) == 0 &&
+	    rpath[selected.size()] == '/')
 	return 1;
 
-    if (rec->fullpath) {
-	char *fp_path = db_path_to_string(rec->fullpath);
-	if (fp_path) {
-	    int matched = path_matches_record_path(path, fp_path);
-	    bu_free(fp_path, "selection record fullpath string");
-	    if (matched)
-		return 1;
-	}
+    std::string selected_semantic =
+	ged_selection_semantic_path(selected.c_str());
+    std::string record_semantic =
+	ged_selection_semantic_path(record_path);
+    if (selected_semantic.empty() || record_semantic.empty())
+	return 0;
+    if (record_semantic == selected_semantic)
+	return 1;
+    if (record_semantic.size() > selected_semantic.size() &&
+	    record_semantic.compare(0, selected_semantic.size(),
+		selected_semantic) == 0 &&
+	    record_semantic[selected_semantic.size()] == '/')
+	return 1;
+    return 0;
+}
+
+static int
+ged_selection_source_record_matches_path(
+	const struct ged_selection_source_record_info &rec,
+	const std::string &path)
+{
+    if (path.empty())
+	return 0;
+
+    if (ged_selection_source_path_matches(path, rec.database_path.c_str()))
+	return 1;
+
+    if (ged_selection_source_path_matches(path, rec.owner_group_path.c_str()))
+	return 1;
+
+    if (!rec.instance_key.empty() &&
+	    ged_selection_canonical_path(rec.instance_key.c_str()) == path)
+	return 1;
+
+    if (!rec.database_path.empty() && path.find('/') == std::string::npos) {
+	std::vector<std::string> elements;
+	ged_selection_path_split(elements, rec.database_path.c_str());
+	if (!elements.empty() &&
+		ged_selection_strip_comb_instance_suffix(elements.back()) == path)
+	    return 1;
     }
-
-    if (rec->leaf_name && path.find('/') == std::string::npos &&
-	    BU_STR_EQUAL(rec->leaf_name, path.c_str()))
-	return 1;
-
     return 0;
 }
 
 
-struct ged_selection_path_drawn_ctx {
-    std::string path;
-    int found;
+struct ged_selection_source_collect_ctx {
+    std::vector<ged_selection_source_record_info> *records;
 };
 
 
 static int
-ged_selection_path_drawn_cb(const struct ged_draw_shape_record *rec, void *ud)
+ged_selection_source_collect_cb(
+	struct ged *UNUSED(gedp),
+	const struct ged_draw_obol_database_source_record *record,
+	void *ud)
 {
-    struct ged_selection_path_drawn_ctx *ctx =
-	(struct ged_selection_path_drawn_ctx *)ud;
-    if (!ctx || !rec)
+    struct ged_selection_source_collect_ctx *ctx =
+	(struct ged_selection_source_collect_ctx *)ud;
+    if (!ctx || !ctx->records || !record || !record->valid)
 	return 1;
-    if (ged_selection_record_matches_path(rec, ctx->path)) {
-	ctx->found = 1;
-	return 0;
-    }
+
+    struct ged_selection_source_record_info info;
+    if (record->database_path)
+	info.database_path =
+	    ged_selection_canonical_path(record->database_path);
+    if (record->instance_key)
+	info.instance_key =
+	    ged_selection_canonical_path(record->instance_key);
+    if (record->owner_group_path)
+	info.owner_group_path =
+	    ged_selection_canonical_path(record->owner_group_path);
+    info.selected = record->selected ? 1 : 0;
+    if (!info.database_path.empty() || !info.instance_key.empty())
+	ctx->records->push_back(info);
     return 1;
+}
+
+
+static int
+ged_selection_source_records_collect(
+	struct ged *gedp,
+	std::vector<ged_selection_source_record_info> &records)
+{
+    records.clear();
+    struct ged_selection_source_collect_ctx ctx;
+    ctx.records = &records;
+    int ret = ged_draw_obol_database_source_records_foreach(gedp, 0,
+	    ged_selection_source_collect_cb, &ctx);
+    return ret >= 0 ? 1 : 0;
 }
 
 
@@ -814,11 +899,15 @@ ged_selection_path_is_valid_or_drawn(struct ged *gedp,
     if (valid)
 	return 1;
 
-    struct ged_selection_path_drawn_ctx ctx;
-    ctx.path = path;
-    ctx.found = 0;
-    ged_draw_foreach_shape_record(gedp, ged_selection_path_drawn_cb, &ctx);
-    return ctx.found;
+    std::vector<ged_selection_source_record_info> records;
+    if (!ged_selection_source_records_collect(gedp, records))
+	return 0;
+
+    for (const struct ged_selection_source_record_info &rec : records) {
+	if (ged_selection_source_record_matches_path(rec, path))
+	    return 1;
+    }
+    return 0;
 }
 
 
@@ -887,153 +976,27 @@ struct ged_selection_native_draw_sync_ctx {
     struct ged *gedp;
     const ged_native_selection_set *set;
     std::map<void *, std::set<std::string>> *new_selection;
-    const std::string *selected_path;
     int display_changed;
 };
 
 
-static int
-ged_selection_native_draw_clear_selected_cb(
-	const struct ged_draw_shape_record *rec,
-	void *ud)
-{
-    struct ged_selection_native_draw_sync_ctx *ctx =
-	(struct ged_selection_native_draw_sync_ctx *)ud;
-    if (!ctx || !ctx->gedp || !rec || ged_draw_shape_ref_is_null(rec->ref))
-	return 1;
-
-    if (ged_draw_shape_ref_set_selected(ctx->gedp, rec->ref, 0))
-	ctx->display_changed = 1;
-    return 1;
-}
-
-
-static int
-ged_selection_native_draw_sync_shape_ref(
-	struct ged_selection_native_draw_sync_ctx *ctx,
-	ged_draw_shape_ref ref)
-{
-    if (!ctx || !ctx->gedp || !ctx->set || ged_draw_shape_ref_is_null(ref))
-	return 1;
-
-    if (ged_draw_shape_ref_set_selected(ctx->gedp, ref, 1))
-	ctx->display_changed = 1;
-
-    void *view_ctx = ged_draw_shape_ref_view_context(ctx->gedp, ref);
-    void *selection_view_ctx = NULL;
-    struct bu_vls path = BU_VLS_INIT_ZERO;
-    if (!ged_draw_view_selection_add_shape_ref_context(ctx->gedp, view_ctx, ref,
-	    &selection_view_ctx, &path)) {
-	bu_vls_free(&path);
-	return 1;
-    }
-
-    const char *path_str = bu_vls_cstr(&path);
-    if (selection_view_ctx && path_str && path_str[0])
-	(*ctx->new_selection)[selection_view_ctx].insert(
-		ged_selection_canonical_path(path_str));
-    bu_vls_free(&path);
-    return 1;
-}
-
-
-static int
-ged_selection_native_draw_sync_cb(const struct ged_draw_shape_record *rec,
-				  void *ud)
-{
-    struct ged_selection_native_draw_sync_ctx *ctx =
-	(struct ged_selection_native_draw_sync_ctx *)ud;
-    if (!ctx || !ctx->gedp || !ctx->set || !rec)
-	return 1;
-
-    int selected = 0;
-    for (const std::string &path : ctx->set->selected_paths) {
-	if (ged_selection_record_matches_path(rec, path)) {
-	    selected = 1;
-	    break;
-	}
-    }
-    if (!selected)
-	return 1;
-
-    return ged_selection_native_draw_sync_shape_ref(ctx, rec->ref);
-}
-
-
-static int
-ged_selection_native_draw_sync_index_cb(ged_draw_shape_ref ref, void *ud)
-{
-    struct ged_selection_native_draw_sync_ctx *ctx =
-	(struct ged_selection_native_draw_sync_ctx *)ud;
-    if (!ctx || !ctx->gedp || ged_draw_shape_ref_is_null(ref))
-	return 1;
-
-    if (ctx->selected_path) {
-	struct ged_draw_shape_record rec;
-	memset(&rec, 0, sizeof(rec));
-	if (!ged_draw_shape_record_get(ctx->gedp, ref, &rec) ||
-		!ged_selection_record_matches_path(&rec, *ctx->selected_path))
-	    return 1;
-    }
-
-    return ged_selection_native_draw_sync_shape_ref(ctx, ref);
-}
-
-
-struct ged_selection_draw_sync_query {
-    std::string selected_path;
-    int component;
-    unsigned long long path_hash;
-};
-
-
-static int
-ged_selection_native_draw_sync_queries(
-	struct ged *gedp,
-	const ged_native_selection_set *set,
-	std::vector<ged_selection_draw_sync_query> &queries)
-{
-    if (!gedp || !set)
-	return 0;
-
-    queries.clear();
-    for (const std::string &selected_path : set->selected_paths) {
-	if (selected_path.find('/') == std::string::npos) {
-	    ged_selection_draw_sync_query query;
-	    query.selected_path = selected_path;
-	    query.component = 1;
-	    query.path_hash = 0;
-	    queries.push_back(query);
-	    continue;
-	}
-
-	std::set<std::string> active_paths;
-	if (!ged_selection_expand_path(gedp, selected_path, active_paths))
-	    return 0;
-
-	for (const std::string &active_path : active_paths) {
-	    unsigned long long path_hash =
-		ged_selection_path_hash(gedp, active_path);
-	    if (!path_hash)
-		return 0;
-
-	    ged_selection_draw_sync_query query;
-	    query.selected_path = selected_path;
-	    query.component = 0;
-	    query.path_hash = path_hash;
-	    queries.push_back(query);
-	}
-    }
-
-    return 1;
-}
-
-
 static void
-ged_selection_draw_sync_note_shape_scan(struct ged *gedp)
+ged_selection_native_add_path_to_views(
+	struct ged_selection_native_draw_sync_ctx *ctx,
+	const std::string &path)
 {
-    if (gedp && gedp->i && gedp->i->ged_gdp)
-	gedp->i->ged_gdp->gd_draw_index_fallback_shape_scans++;
+    if (!ctx || !ctx->gedp || !ctx->new_selection || path.empty())
+	return;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(ctx->gedp);
+    for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
+	void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	if (!view_ctx)
+	    continue;
+	if (ged_draw_view_context_selection_add_path(view_ctx,
+		GED_DRAW_VIEW_SELECTION_SELECTED_PATH, path.c_str()) > 0)
+	    (*ctx->new_selection)[view_ctx].insert(path);
+    }
 }
 
 
@@ -1058,40 +1021,37 @@ ged_selection_native_draw_sync(struct ged *gedp,
     ctx.gedp = gedp;
     ctx.set = set;
     ctx.new_selection = &new_selection;
-    ctx.selected_path = nullptr;
     ctx.display_changed = 0;
 
-    ged_draw_foreach_shape_record(gedp,
-	ged_selection_native_draw_clear_selected_cb, &ctx);
+    std::vector<ged_selection_source_record_info> records;
+    if (!ged_selection_source_records_collect(gedp, records))
+	return old_selection != new_selection;
 
-    std::vector<ged_selection_draw_sync_query> queries;
-    int indexed = ged_selection_native_draw_sync_queries(gedp, set, queries);
-    if (indexed) {
-	for (const ged_selection_draw_sync_query &query : queries) {
-	    ctx.selected_path = &query.selected_path;
-	    int count = query.component ?
-		ged_draw_shape_ref_index_for_component(gedp,
-			query.selected_path.c_str(),
-			ged_selection_native_draw_sync_index_cb, &ctx) :
-		ged_draw_shape_ref_index_for_path_hash(gedp, query.path_hash,
-			ged_selection_native_draw_sync_index_cb, &ctx);
-	    if (count < 0) {
-		indexed = 0;
+    for (const struct ged_selection_source_record_info &rec : records) {
+	if (rec.selected && !rec.instance_key.empty() &&
+		ged_draw_obol_database_source_set_selected_for_instance_key(
+		    gedp, rec.instance_key.c_str(), 0))
+	    ctx.display_changed = 1;
+    }
+
+    std::set<std::string> selected_instances;
+    for (const struct ged_selection_source_record_info &rec : records) {
+	const std::string *selected_path = NULL;
+	for (const std::string &path : set->selected_paths) {
+	    if (ged_selection_source_record_matches_path(rec, path)) {
+		selected_path = &path;
 		break;
 	    }
 	}
-	ctx.selected_path = nullptr;
-    }
+	if (!selected_path)
+	    continue;
 
-    if (!indexed) {
-	new_selection.clear();
-	for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
-	    void *view_ctx = (void *)BU_PTBL_GET(views, i);
-	    ged_draw_view_context_selection_clear(view_ctx);
-	}
-	ged_selection_draw_sync_note_shape_scan(gedp);
-	ged_draw_foreach_shape_record(gedp, ged_selection_native_draw_sync_cb,
-		&ctx);
+	if (!rec.instance_key.empty() &&
+		selected_instances.insert(rec.instance_key).second &&
+		ged_draw_obol_database_source_set_selected_for_instance_key(
+		    gedp, rec.instance_key.c_str(), 1))
+	    ctx.display_changed = 1;
+	ged_selection_native_add_path_to_views(&ctx, *selected_path);
     }
 
     return old_selection != new_selection || ctx.display_changed;

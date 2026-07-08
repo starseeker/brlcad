@@ -35,6 +35,7 @@
 #include "bu/opt.h"
 #include "bu/vls.h"
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "rt/view.h"
 
 #include "../../ged_private.h"
@@ -470,7 +471,7 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
     int ret;
     if (bu_cmd(_fp_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
 	if (ret == BRLCAD_OK)
-	    (void)ged_draw_view_context_hud_sync(view_ctx);
+	    (void)ged_draw_obol_view_context_faceplate_sync(gedp, view_ctx);
 	return ret;
     } else {
 	bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);

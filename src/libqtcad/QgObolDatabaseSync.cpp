@@ -120,19 +120,66 @@ qg_obol_database_source_instance_prefix(QgView *display)
 }
 
 static int
+qg_obol_database_source_instance_key_is_view_scoped(const char *key)
+{
+    return key && strncmp(key, "ged-view:", 9) == 0;
+}
+
+static int
 qg_obol_database_source_instance_in_display_scope(
 	const BRLObolDatabaseSourceSummary &summary,
 	QgView *display)
 {
+    const char *key = summary.instanceKey.getString();
     if (!qg_obol_database_view_is_independent(display))
-	return summary.instanceKey.getLength() == 0 ||
-	    qg_obol_path_equal(summary.instanceKey.getString(),
-		summary.path.getString());
+	return !qg_obol_database_source_instance_key_is_view_scoped(key);
 
     const std::string prefix =
 	qg_obol_database_source_instance_prefix(display);
-    const char *key = summary.instanceKey.getString();
     return key && strncmp(key, prefix.c_str(), prefix.size()) == 0;
+}
+
+static void
+qg_obol_collect_database_source_instance_keys_for_path(
+	BRLObolViewController *obol,
+	QgView *display,
+	const char *path,
+	std::vector<std::string> &instance_keys)
+{
+    if (!obol || !path || !path[0])
+	return;
+
+    for (int i = 0; i < obol->getDatabaseSourceCount(); i++) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!obol->getDatabaseSourceSummary(i, summary) || !summary.valid ||
+		!qg_obol_database_source_instance_in_display_scope(summary,
+		    display) ||
+		!qg_obol_path_equal(summary.path.getString(), path))
+	    continue;
+
+	const char *instance_key = summary.instanceKey.getString();
+	if (instance_key && instance_key[0])
+	    instance_keys.push_back(std::string(instance_key));
+	else if (summary.path.getLength() > 0)
+	    instance_keys.push_back(std::string(summary.path.getString()));
+    }
+}
+
+static int
+qg_obol_remove_database_source_instance_keys(
+	BRLObolViewController *obol,
+	const std::vector<std::string> &instance_keys)
+{
+    if (!obol)
+	return 0;
+
+    int removed = 0;
+    for (std::vector<std::string>::const_iterator it = instance_keys.begin();
+	    it != instance_keys.end(); ++it) {
+	if (obol->removeDatabaseSourceInstance(it->c_str()) > 0)
+	    removed = 1;
+    }
+    return removed;
 }
 
 int
@@ -160,6 +207,12 @@ qg_obol_sync_database_sources(struct db_i *dbip,
 	    qg_obol_database_source_instance_key(display, path);
 	if (instance_key.empty())
 	    continue;
+	std::vector<std::string> existing_instance_keys;
+	qg_obol_collect_database_source_instance_keys_for_path(obol, display,
+		path, existing_instance_keys);
+	if (qg_obol_remove_database_source_instance_keys(obol,
+		existing_instance_keys))
+	    changed = 1;
 	if (obol->replaceDatabaseSourceInstance(instance_key.c_str(), path,
 		dbip, obol_draw_mode, source_revision) > 0)
 	    changed = 1;
@@ -189,11 +242,10 @@ qg_obol_remove_database_sources(const char * const *paths,
 	const char *path = paths[i];
 	if (!path || !path[0])
 	    continue;
-	const std::string instance_key =
-	    qg_obol_database_source_instance_key(display, path);
-	if (instance_key.empty())
-	    continue;
-	if (obol->removeDatabaseSourceInstance(instance_key.c_str()) > 0)
+	std::vector<std::string> instance_keys;
+	qg_obol_collect_database_source_instance_keys_for_path(obol, display,
+		path, instance_keys);
+	if (qg_obol_remove_database_source_instance_keys(obol, instance_keys))
 	    changed = 1;
     }
 
@@ -224,12 +276,8 @@ qg_obol_clear_database_sources(QgView *display)
 	    instance_keys.push_back(std::string(summary.path.getString()));
     }
 
-    int removed = 0;
-    for (std::vector<std::string>::const_iterator it = instance_keys.begin();
-	    it != instance_keys.end(); ++it) {
-	if (obol->removeDatabaseSourceInstance(it->c_str()) > 0)
-	    removed = 1;
-    }
+    int removed = qg_obol_remove_database_source_instance_keys(obol,
+	    instance_keys);
 
     if (removed > 0) {
 	display->need_update(QG_VIEW_REFRESH);

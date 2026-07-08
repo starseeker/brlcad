@@ -55,6 +55,10 @@ _color_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
 static void
 _sg_color_soltab(struct ged *gedp)
 {
+    if (ged_draw_obol_database_sources_refresh_material_colors(gedp,
+	    gedp->dbip, gedp->i->ged_gdp->gd_mater_rev))
+	return;
+
     struct _color_ctx ctx;
     ctx.gedp      = gedp;
     ctx.dbip      = gedp->dbip;

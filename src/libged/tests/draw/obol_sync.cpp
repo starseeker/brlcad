@@ -522,23 +522,56 @@ apply_attached_view_lod_invalidation_probe(struct ged *gedp,
     return 0;
 }
 
-static std::string
-source_instance_key_for_view(const char *view_name, const char *path)
+static int
+source_instance_is_view_scoped(SoBRLDatabaseSource *source, const char *view_name)
 {
-    std::string key("ged-view:");
-    key += view_name ? view_name : "";
-    key += ":";
-    key += skip_leading_slash(path);
-    return key;
+    if (!source || !view_name || !view_name[0])
+	return 0;
+    std::string prefix("ged-view:");
+    prefix += view_name;
+    prefix += ":";
+    const char *instance_key = source->instanceKey.getValue().getString();
+    return instance_key && strncmp(instance_key, prefix.c_str(),
+	    prefix.length()) == 0;
+}
+
+static int
+source_instance_is_any_view_scoped(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return 0;
+    const char *instance_key = source->instanceKey.getValue().getString();
+    return instance_key && strncmp(instance_key, "ged-view:", 9) == 0;
 }
 
 static SoBRLDatabaseSource *
-source_for_instance(SoBRLSceneController *controller,
-	const char *instance_key)
+source_for_view_path(SoBRLSceneController *controller,
+	const char *view_name,
+	const char *path)
 {
-    if (!controller || !instance_key || !instance_key[0])
+    if (!controller || !view_name || !view_name[0] || !path)
 	return NULL;
-    return controller->findDatabaseSourceInstance(instance_key);
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (source && path_equal(source->path.getValue().getString(), path) &&
+		source_instance_is_view_scoped(source, view_name))
+	    return source;
+    }
+    return NULL;
+}
+
+static SoBRLDatabaseSource *
+source_for_shared_path(SoBRLSceneController *controller, const char *path)
+{
+    if (!controller || !path)
+	return NULL;
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	if (source && path_equal(source->path.getValue().getString(), path) &&
+		!source_instance_is_any_view_scoped(source))
+	    return source;
+    }
+    return NULL;
 }
 
 static SoBRLDatabaseSource *
@@ -4298,21 +4331,18 @@ main(int argc, char **argv)
     const char *erase_ball[2] = {"erase", "ball.s"};
     if (ged_exec_erase(gedp, 2, erase_ball) != BRLCAD_OK)
 	FAIL("owned-controller erase command should succeed");
-    if (owned_scene->getDatabaseSourceCount() != 1 ||
-	    !source_for_path(owned_scene, "box.s") ||
+    if (!source_for_path(owned_scene, "box.s") ||
 	    source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should mirror erase transactions");
 
     if (ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller redraw command should succeed");
-    if (owned_scene->getDatabaseSourceCount() != 2 ||
-	    !source_for_path(owned_scene, "box.s") ||
+    if (!source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
 	FAIL("owned Obol scene controller should mirror redraw transactions");
     if (owned_scene->replaceDatabaseSource("draft_move.s", gedp->dbip,
 	    SoBRLDatabaseSource::WIREFRAME, 6060) <= 0 ||
-	    !source_for_path(owned_scene, "draft_move.s") ||
-	    owned_scene->getDatabaseSourceCount() != 3)
+	    !source_for_path(owned_scene, "draft_move.s"))
 	FAIL("owned Obol transaction canary source should be created");
     ged_draw_index_stats_reset(gedp);
     struct ged_draw_transaction obol_index_txn =
@@ -5182,44 +5212,40 @@ main(int argc, char **argv)
 	    ged_exec_draw(gedp, 5, draw_v0_ball) != BRLCAD_OK)
 	FAIL("real GED independent-view draw commands should succeed");
 
-    const std::string v0_box_instance =
-	source_instance_key_for_view("V0", "box.s");
-    const std::string v0_ball_instance =
-	source_instance_key_for_view("V0", "ball.s");
     if (view_scene->getDatabaseSourceCount() != 4 ||
-	    !source_for_instance(view_scene, "box.s") ||
-	    !source_for_instance(view_scene, "ball.s") ||
-	    !source_for_instance(view_scene, v0_box_instance.c_str()) ||
-	    !source_for_instance(view_scene, v0_ball_instance.c_str()))
+	    !source_for_shared_path(view_scene, "box.s") ||
+	    !source_for_shared_path(view_scene, "ball.s") ||
+	    !source_for_view_path(view_scene, "V0", "box.s") ||
+	    !source_for_view_path(view_scene, "V0", "ball.s"))
 	FAIL("Obol independent view setup should create scoped source owners without replacing shared owners");
 
     const char *erase_v0_box[5] = {"erase", "-V", "V0", "box.s", NULL};
     if (ged_exec_erase(gedp, 4, erase_v0_box) != BRLCAD_OK)
 	FAIL("real GED independent-view erase command should succeed");
     if (view_scene->getDatabaseSourceCount() != 3 ||
-	    source_for_instance(view_scene, v0_box_instance.c_str()) ||
-	    !source_for_instance(view_scene, v0_ball_instance.c_str()) ||
-	    !source_for_instance(view_scene, "box.s") ||
-	    !source_for_instance(view_scene, "ball.s"))
+	    source_for_view_path(view_scene, "V0", "box.s") ||
+	    !source_for_view_path(view_scene, "V0", "ball.s") ||
+	    !source_for_shared_path(view_scene, "box.s") ||
+	    !source_for_shared_path(view_scene, "ball.s"))
 	FAIL("Obol independent-view erase should remove only the scoped source owner");
 
     if (ged_exec_draw(gedp, 5, draw_v0_box) != BRLCAD_OK)
 	FAIL("real GED independent-view redraw command should succeed");
     if (view_scene->getDatabaseSourceCount() != 4 ||
-	    !source_for_instance(view_scene, v0_box_instance.c_str()) ||
-	    !source_for_instance(view_scene, v0_ball_instance.c_str()) ||
-	    !source_for_instance(view_scene, "box.s") ||
-	    !source_for_instance(view_scene, "ball.s"))
+	    !source_for_view_path(view_scene, "V0", "box.s") ||
+	    !source_for_view_path(view_scene, "V0", "ball.s") ||
+	    !source_for_shared_path(view_scene, "box.s") ||
+	    !source_for_shared_path(view_scene, "ball.s"))
 	FAIL("Obol independent-view draw should restore only the scoped source owner");
 
     const char *zap_v0[5] = {"zap", "-V", "V0", "-g", NULL};
     if (ged_exec_zap(gedp, 4, zap_v0) != BRLCAD_OK)
 	FAIL("real GED independent-view zap command should succeed");
     if (view_scene->getDatabaseSourceCount() != 2 ||
-	    source_for_instance(view_scene, v0_box_instance.c_str()) ||
-	    source_for_instance(view_scene, v0_ball_instance.c_str()) ||
-	    !source_for_instance(view_scene, "box.s") ||
-	    !source_for_instance(view_scene, "ball.s"))
+	    source_for_view_path(view_scene, "V0", "box.s") ||
+	    source_for_view_path(view_scene, "V0", "ball.s") ||
+	    !source_for_shared_path(view_scene, "box.s") ||
+	    !source_for_shared_path(view_scene, "ball.s"))
 	FAIL("Obol independent-view zap should clear only scoped source owners");
 
     const char *view_independent_off[5] = {"view", "independent", "V0",

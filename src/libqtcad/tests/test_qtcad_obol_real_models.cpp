@@ -162,18 +162,50 @@ path_has_component_suffix(const char *path, const char *suffix)
     if (!path || !suffix || !suffix[0])
 	return 0;
 
-    while (*path == '/')
-	path++;
-    while (*suffix == '/')
-	suffix++;
+    auto split_components = [](const char *str) {
+	std::vector<std::string> components;
+	std::string cur;
+	while (str && *str) {
+	    if (*str == '/') {
+		if (!cur.empty()) {
+		    components.push_back(cur);
+		    cur.clear();
+		}
+	    } else {
+		cur.push_back(*str);
+	    }
+	    str++;
+	}
+	if (!cur.empty())
+	    components.push_back(cur);
+	return components;
+    };
 
-    size_t pathLen = strlen(path);
-    size_t suffixLen = strlen(suffix);
-    if (pathLen < suffixLen)
+    auto strip_instance = [](const std::string &component) {
+	size_t atPos = component.rfind('@');
+	if (atPos == std::string::npos || atPos == 0 ||
+		atPos + 1 >= component.size())
+	    return component;
+	for (size_t i = atPos + 1; i < component.size(); i++) {
+	    if (component[i] < '0' || component[i] > '9')
+		return component;
+	}
+	return component.substr(0, atPos);
+    };
+
+    std::vector<std::string> pathComponents = split_components(path);
+    std::vector<std::string> suffixComponents = split_components(suffix);
+    if (suffixComponents.empty() ||
+	    pathComponents.size() < suffixComponents.size())
 	return 0;
-    if (!BU_STR_EQUAL(path + pathLen - suffixLen, suffix))
-	return 0;
-    return pathLen == suffixLen || path[pathLen - suffixLen - 1] == '/';
+
+    size_t offset = pathComponents.size() - suffixComponents.size();
+    for (size_t i = 0; i < suffixComponents.size(); i++) {
+	if (strip_instance(pathComponents[offset + i]) !=
+		strip_instance(suffixComponents[i]))
+	    return 0;
+    }
+    return 1;
 }
 
 static int

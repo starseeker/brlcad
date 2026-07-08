@@ -161,6 +161,7 @@ struct ged_draw_obol_draw_state_summary {
 
 struct ged_draw_obol_scene_context_info {
     char *path;
+    char *instance_key;
     char *name;
     int node_kind;
     int is_group;
@@ -939,7 +940,6 @@ GED_EXPORT extern ged_draw_shape_ref ged_draw_registry_shape_ref_from_source_ref
 GED_EXPORT extern ged_draw_group_ref ged_draw_registry_group_ref_from_source_ref(
 	struct ged *gedp,
 	rt_view_scene_ref scene_ref);
-GED_EXPORT extern void ged_draw_scene_context_free_draw_bookkeeping(struct ged *gedp);
 GED_EXPORT extern rt_view_scene_ref ged_draw_registry_shape_ref_rt_ref(
 	struct ged *gedp,
 	ged_draw_shape_ref ref);
@@ -1013,6 +1013,13 @@ GED_EXPORT extern void ged_draw_obol_database_source_publication_group_set(
 	const char *group_path);
 GED_EXPORT extern void ged_draw_obol_database_source_publication_end(
 	struct ged *gedp);
+GED_EXPORT extern int ged_draw_obol_apply_draw_paths(
+	struct ged *gedp,
+	void *view_ctx,
+	const char **paths,
+	int path_count,
+	const struct ged_draw_appearance_settings *settings,
+	struct ged_draw_transaction_result *result);
 GED_EXPORT extern int ged_draw_obol_database_source_paths_foreach(
 	struct ged *gedp,
 	int skip_overlay_groups,
@@ -1251,6 +1258,12 @@ GED_EXPORT extern int ged_draw_obol_database_source_geometry_summary_for_path(
 	struct ged *gedp,
 	const char *path,
 	struct ged_draw_shape_geometry_summary *out);
+GED_EXPORT extern int ged_draw_obol_database_source_geometry_summary_for_path_mode(
+	struct ged *gedp,
+	const char *path,
+	int draw_mode_valid,
+	int ged_draw_mode,
+	struct ged_draw_shape_geometry_summary *out);
 GED_EXPORT extern int ged_draw_obol_database_source_material_summary_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -1258,6 +1271,10 @@ GED_EXPORT extern int ged_draw_obol_database_source_material_summary_for_path(
 GED_EXPORT extern int ged_draw_obol_database_source_refresh_material_color_for_path(
 	struct ged *gedp,
 	const char *path,
+	struct db_i *dbip,
+	uint64_t material_revision);
+GED_EXPORT extern int ged_draw_obol_database_sources_refresh_material_colors(
+	struct ged *gedp,
 	struct db_i *dbip,
 	uint64_t material_revision);
 GED_EXPORT extern int ged_draw_obol_database_source_evaluated_region_for_path(
@@ -1302,6 +1319,10 @@ GED_EXPORT extern int ged_draw_obol_database_source_update_display_for_path(
 	const unsigned char material_color[3],
 	int material_revision_valid,
 	uint64_t material_revision);
+GED_EXPORT extern int ged_draw_obol_database_source_set_selected_for_instance_key(
+	struct ged *gedp,
+	const char *instance_key,
+	int selected);
 GED_EXPORT extern int ged_draw_obol_shape_update_display_for_path(
 	struct ged *gedp,
 	const char *path,

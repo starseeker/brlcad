@@ -42,6 +42,19 @@ skip_leading_slash(const char *path)
     return path;
 }
 
+static std::string
+normalized_index_key(const char *key)
+{
+    const char *normalized = skip_leading_slash(key);
+    const size_t len = strlen(normalized);
+    std::vector<char> stable;
+    stable.resize(len + 1);
+    if (len)
+	memcpy(stable.data(), normalized, len);
+    stable[len] = '\0';
+    return std::string(stable.data(), len);
+}
+
 static int
 scene_path_equal(const char *stored, const char *path)
 {
@@ -1428,9 +1441,8 @@ SoBRLSceneController::findIndexedDatabaseSourceInstance(
     if (!this->databaseSourceIndexValid)
 	this->rebuildDatabaseSourceIndex();
 
-    const char *normalized = skip_leading_slash(sourceInstanceKey);
-    auto it = this->databaseSourceInstanceIndex.find(
-		  std::string(normalized ? normalized : sourceInstanceKey));
+    std::string normalizedKey = normalized_index_key(sourceInstanceKey);
+    auto it = this->databaseSourceInstanceIndex.find(normalizedKey);
     if (it != this->databaseSourceInstanceIndex.end())
 	return it->second;
     return NULL;
@@ -1445,9 +1457,8 @@ SoBRLSceneController::findIndexedDatabaseSourceInstanceParent(
     if (!this->databaseSourceIndexValid)
 	this->rebuildDatabaseSourceIndex();
 
-    const char *normalized = skip_leading_slash(sourceInstanceKey);
-    auto it = this->databaseSourceInstanceParentIndex.find(
-		  std::string(normalized ? normalized : sourceInstanceKey));
+    std::string normalizedKey = normalized_index_key(sourceInstanceKey);
+    auto it = this->databaseSourceInstanceParentIndex.find(normalizedKey);
     if (it != this->databaseSourceInstanceParentIndex.end())
 	return it->second;
     return NULL;
