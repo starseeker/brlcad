@@ -1,0 +1,244 @@
+Orthographic Voxel Wire Display LoD Plan
+========================================
+
+Summary
+-------
+
+Add an opt-in, conservative second-stage wire simplification pass after
+full-detail or Pop3D line generation.  For orthographic views, quantize line
+endpoints into an axis-aligned model-space voxel grid sized with the sqrt(3)
+worst-case projection bound.  Non-collapsed segments become deduplicated
+voxel-to-voxel lines.  Collapsed same-voxel segments become one voxel point
+with averaged RGB color from contributing simple opaque lines.
+
+This is a display optimization only.  It must not replace exact geometry for
+picking, measuring, snapping, export, editing, or source identity.
+
+
+Design Goals
+------------
+
+* Provide a view-direction-independent display cache usable while orbiting in
+  orthographic views at the same scale bucket.
+* Compose cleanly with Pop3D: source/full-detail or Pop3D output feeds the
+  voxel display filter as a second stage.
+* Keep source LoD and display/raster LoD independently controllable.
+* Make the feature easy to disable for diagnostics or regressions.
+* Avoid risky semantic changes in selection, highlighting, editing, export, and
+  exact query paths.
+
+
+Policy
+------
+
+Source LoD remains responsible for choosing the source display payload:
+
+* off
+* auto
+* forced level/proxy
+
+Voxel wire display LoD is a separate policy:
+
+* off: render the selected source/full-detail/Pop3D wire payload normally.
+* on: apply the orthographic voxel display filter to eligible simple wire
+  payloads before render.
+
+In this model, source LoD off does not necessarily mean "submit every original
+line to GL."  It means "do not simplify source geometry selection."  A full
+detail source can still use voxel display filtering when the separate display
+LoD policy is enabled.
+
+
+Initial Scope
+-------------
+
+Enable the first version only for orthographic simple opaque wire rendering.
+
+Bypass the voxel filter for:
+
+* selected geometry;
+* highlighted geometry;
+* edited or edit-emphasis geometry;
+* transparent or ghosted geometry;
+* non-default line styles;
+* per-primitive styled geometry;
+* cases where exact per-segment visual identity is required.
+
+These bypasses can be relaxed later only after measurements and visual tests
+show the behavior is safe.
+
+
+Voxel Sizing
+------------
+
+For a cubic model-space voxel with side length s, the conservative maximum
+projected span under arbitrary orthographic rotation is:
+
+    s * sqrt(3)
+
+To keep the voxel footprint at or below one screen pixel in the worst case:
+
+    voxel_size = orthographic_pixel_model_size / sqrt(3)
+
+The implementation should bucket voxel sizes rather than rebuild on every tiny
+scale change.  The cache can be reused while camera direction and pan change as
+long as the orthographic model-to-pixel scale remains within the same bucket.
+
+
+Cache Key
+---------
+
+The voxel wire display cache key should include at least:
+
+* source/display payload identity;
+* source revision or payload revision;
+* draw-state class;
+* voxel size bucket;
+* enough material/color state to detect changes that affect output color.
+
+The cache should rebuild on:
+
+* source or Pop3D payload revision change;
+* draw-state/color class change;
+* voxel size bucket transition;
+* explicit display LoD invalidation.
+
+
+Filtering Algorithm
+-------------------
+
+For each eligible input line segment:
+
+1. Quantize both endpoints to integer voxel ids.
+2. If the endpoint voxel ids differ:
+   * canonicalize endpoint order so the pair is direction independent;
+   * emit at most one display line for the unique key:
+
+         {color/state class, voxel endpoint A, voxel endpoint B}
+
+3. If the endpoint voxel ids are the same:
+   * treat the collapsed segment as a visible point contribution;
+   * accumulate its RGB color into that voxel's collapsed-point bucket;
+   * emit one display point for that voxel after all accumulation is complete.
+
+Collapsed point color is the arithmetic average of all contributing simple
+opaque line colors in that voxel.  This averaging is intentionally
+view-direction independent.  Non-collapsed lines with different colors should
+remain distinct; do not average colors across non-collapsed line pairs in the
+first version.
+
+
+Output
+------
+
+The filtered display payload contains:
+
+* deduplicated voxel-to-voxel line primitives;
+* deduplicated collapsed voxel point primitives with averaged RGB color.
+
+Use representative point positions that are stable for the voxel bucket.  The
+simplest initial choice is the voxel center.  If preserving object-local
+placement proves visually important, a later version may use an averaged
+contributor position per voxel point, but that should be measured because it is
+less stable across input ordering and source composition.
+
+
+Validation and Control Images
+-----------------------------
+
+Some LoD-enabled control images are expected to change.  Update control images
+only after confirming changed pixels are intentional voxel display LoD effects:
+
+* redundant tiny wire detail is reduced;
+* same-voxel small segments appear as one point instead of many short lines;
+* collapsed voxel points use expected averaged colors;
+* non-collapsed duplicate line pairs are reduced;
+* exact rendering remains unchanged when voxel display LoD is disabled.
+
+Reject image changes that affect bypassed states or exact paths:
+
+* selected or highlighted geometry;
+* edit emphasis;
+* transparency or ghosting;
+* non-default line style;
+* pick/measure/snap/export behavior.
+
+Every control image update should be paired with either counters or a written
+validation note showing the change is a legitimate LoD/display-filter change,
+not unrelated breakage.
+
+
+Instrumentation
+---------------
+
+Record enough counters to decide if the feature is worthwhile:
+
+* input segment count;
+* unique non-collapsed voxel line count;
+* duplicate voxel line drops;
+* collapsed segment count;
+* emitted collapsed point count;
+* duplicate collapsed point contributions;
+* cache build time;
+* cache reuse count;
+* render time before and after filtering.
+
+Keep the feature only if representative dense assemblies show meaningful
+primitive reduction without measurable interaction regressions.
+
+
+Tests
+-----
+
+Unit tests:
+
+* same-voxel segment endpoints produce one display point;
+* repeated same-voxel small lines produce one point, not many points;
+* collapsed same-voxel segments with multiple simple opaque colors produce the
+  expected averaged RGB point color;
+* reversed endpoint order deduplicates non-collapsed line segments;
+* different colors do not deduplicate non-collapsed line pairs;
+* voxel size uses orthographic_pixel_model_size / sqrt(3);
+* invalid or bypassed draw states skip the filter.
+
+Integration tests:
+
+* full-detail source plus voxel display LoD produces fewer or equal display
+  primitives;
+* Pop3D source plus voxel display LoD composes correctly;
+* orthographic orbit at the same scale bucket reuses the cache;
+* scale bucket changes rebuild the cache;
+* source revision and draw-state changes rebuild the cache;
+* exact pick/measure/snap/export still use original geometry.
+
+Visual tests:
+
+* compare voxel-display-LoD-on and off renders for representative dense
+  assemblies;
+* validate changed LoD images before updating baselines;
+* verify bypassed visual states remain unchanged.
+
+
+Future Work
+-----------
+
+Potential later extensions, after the first version is measured:
+
+* support more draw-state classes;
+* allow selected/highlighted subsets to use separate safe filtered payloads;
+* experiment with averaged contributor positions for collapsed points;
+* add an optional view-space final pass for residual overdraw;
+* investigate software coverage-mask culling only if simple voxel dedup leaves
+  substantial measured overdraw.
+
+
+Assumptions
+-----------
+
+* Orthographic views are the initial and primary target.
+* The conservative voxel size is always based on sqrt(3).
+* Collapsed small segments are retained as visible points.
+* Collapsed point colors are averaged across contributing simple opaque line
+  colors.
+* The feature is opt-in and independently disableable.
+* Coverage-mask culling is out of scope for the first implementation.
