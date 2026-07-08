@@ -26,6 +26,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "bv.h"
 #include "vmath.h"
 #include "bu/units.h"
 #include "bn.h"
@@ -238,21 +239,22 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     int ss_line_not_drawn=1; /* true if the second status line has not been drawn */
     vect_t temp = VINIT_ZERO;
     fastf_t tmp_val = 0.0;
-    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     mat_t view_center;
     vect_t view_aet = VINIT_ZERO;
     fastf_t view_perspective = 0.0;
     fastf_t view_scale = 1.0;
+    fastf_t view_size = 1.0;
 
     if (s->dbip == DBI_NULL)
 	return;
 
     void *view_ctx = view_state->vs_gvp;
-    rt_view_context_info_get(&view_info, view_ctx);
-    rt_view_context_center_get(view_center, view_ctx);
-    rt_view_context_aet_get(view_aet, view_ctx);
-    view_perspective = rt_view_context_perspective_get(view_ctx);
-    view_scale = rt_view_context_scale_get(view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_center_mat_get(view_center, view);
+    bv_aet_get(view_aet, view);
+    view_perspective = bv_perspective_get(view);
+    view_scale = bv_scale_get(view);
+    view_size = bv_size_get(view);
 
     /* Set the Tcl variables to the appropriate values. */
 
@@ -322,7 +324,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_center_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
-    tmp_val = view_info.size*s->dbip->dbi_base2local;
+    tmp_val = view_size*s->dbip->dbi_base2local;
     if (fabs(tmp_val) < 10e70) {
 	sprintf(size, "sz=%.3f", tmp_val);
     } else {
@@ -341,9 +343,9 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_aet_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
-    sprintf(ang_x, "%.2f", view_state->k.rot_v[X]);
-    sprintf(ang_y, "%.2f", view_state->k.rot_v[Y]);
-    sprintf(ang_z, "%.2f", view_state->k.rot_v[Z]);
+    sprintf(ang_x, "%.2f", view_state->k.rot_view[X]);
+    sprintf(ang_y, "%.2f", view_state->k.rot_view[Y]);
+    sprintf(ang_z, "%.2f", view_state->k.rot_view[Z]);
 
     bu_vls_trunc(&vls, 0);
     bu_vls_printf(&vls, "ang=(%s %s %s)", ang_x, ang_y, ang_z);
@@ -541,7 +543,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
      * This way the adc info will be displayed during editing
      */
 
-    struct rt_view_adc_state adc = {0};
+    struct bv_adc_state adc = {0};
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
     if (adc.draw) {
 	fastf_t f;

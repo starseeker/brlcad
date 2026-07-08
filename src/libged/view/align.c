@@ -30,6 +30,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -50,6 +52,7 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -103,18 +106,13 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
     VSCALE(align, align, scale);
 
     // get center as point
-    point_t tmp = {0.0, 0.0, 0.0};
-    mat_t view_center;
-    rt_view_context_center_get(view_center, view_ctx);
-    MAT4X3PNT(center, view_center, tmp);
-    VSCALE(center, center, -1.0);
+    bv_center_get(center, view);
 
     // calculate eye / center / align_pt distances
     vect_t xlate = {0.0, 0.0, 1.0};
     mat_t view2model;
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_view2model_get(view2model, view);
     MAT4X3PNT(eye, view2model, xlate);
-    VSCALE(eye, eye, scale);
     double dist_eye_center = DIST_PNT_PNT(center, eye);
     double dist_alignpt_center = DIST_PNT_PNT(align, center);
     double dist = dist_eye_center - dist_alignpt_center;
@@ -130,19 +128,24 @@ ged_align_core(struct ged *gedp, int argc, const char *argv[])
 
     // update view ae using direction
     vect_t view_aet;
-    rt_view_context_aet_get(view_aet, view_ctx);
+    bv_aet_get(view_aet, view);
     VSET(view_aet, new_az, new_el, view_aet[Z]);
-    rt_view_context_aet_set(view_ctx, view_aet);
+    bv_aet_set(view, view_aet);
 
-    // update eye
+    // update center so the requested eye point is realized by derived matrices
     point_t new_eye;
     VJOIN1(new_eye, align, -dist, dir);	// new_eye = align_pt - dist * dir
-    rt_view_context_view2model_get(view2model, view_ctx);
-    MAT_DELTAS_VEC_NEG(view2model, new_eye);
-    rt_view_context_view2model_set(view_ctx, view2model);
-
-    // done. update the view
-    rt_view_context_update(view_ctx);
+    mat_t invrot;
+    mat_t rotation;
+    vect_t view_eye;
+    vect_t eye_offset;
+    point_t new_center;
+    bv_rotation_get(rotation, view);
+    bn_mat_inv(invrot, rotation);
+    VSET(view_eye, 0.0, 0.0, bv_scale_get(view));
+    MAT4X3VEC(eye_offset, invrot, view_eye);
+    VSUB2(new_center, new_eye, eye_offset);
+    bv_center_set(view, new_center);
 
     return BRLCAD_OK;
 }

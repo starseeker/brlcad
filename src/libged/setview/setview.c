@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -88,8 +90,9 @@ ged_setview_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     bn_mat_angles(rotation, rvec[X], rvec[Y], rvec[Z]);
-    rt_view_context_rotation_set(view_ctx, rotation);
-    rt_view_context_update(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, rotation);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

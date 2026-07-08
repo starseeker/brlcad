@@ -869,7 +869,7 @@ ehy_ellipse_points(
 
 
 static int
-rt_ehy_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct rt_view_info *v, fastf_t s_size)
+rt_ehy_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct bv_view_info *v, fastf_t s_size)
 {
     vect_t ehy_H, Hu, Au, Bu;
     fastf_t mag_H, z, z_step, c, r1, r2;
@@ -877,7 +877,7 @@ rt_ehy_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     struct rt_ehy_internal *ehy;
     struct rt_pnt_node *pts_r1, *pts_r2, *node, *node1, *node2;
 
-    fastf_t point_spacing = rt_view_solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
     if (!realization)
 	return -1;
@@ -917,7 +917,7 @@ rt_ehy_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     }
 
     fastf_t curve_spacing = s_size / 2.0;
-    curve_spacing /= rt_view_lod_curve_scale(v);
+    curve_spacing /= bv_view_lod_curve_scale(v);
     num_curves = mag_H / curve_spacing;
     if (num_curves < 2) {
 	num_curves = 2;
@@ -952,7 +952,7 @@ rt_ehy_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 
 
 int
-rt_ehy_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_ehy_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -1297,7 +1297,7 @@ rt_ehy_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 C_DECL int
 rt_ehy_plot(struct bu_list *vhead, struct rt_db_internal *ip,
 	    const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol),
-	    const struct rt_view_info *UNUSED(info))
+	    const struct bv_view_info *UNUSED(info))
 {
     struct ehy_line_sink sink;
 

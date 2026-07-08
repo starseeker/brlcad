@@ -21,6 +21,8 @@
  *
  */
 
+#include <climits>
+
 #include <QLabel>
 #include <QString>
 #include <QMessageBox>
@@ -28,10 +30,10 @@
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "bu/color.h"
+#include "ged/draw.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgView.h"
-#include "rt/view.h"
 #include "QgLegacyViewContext.h"
 #include "QPolySettings.h"
 
@@ -39,6 +41,42 @@ static qg_legacy_view *
 qpolysettings_view(const QgPluginContext *ctx)
 {
     return ctx ? ctx->activeView() : nullptr;
+}
+
+static int
+qpolysettings_unique_polygon_name(struct bu_vls *oname,
+	const char *seed,
+	qg_legacy_view *view)
+{
+    if (!oname || !view)
+	return 0;
+
+    struct bu_vls vseed = BU_VLS_INIT_ZERO;
+    if (seed && seed[0]) {
+	bu_vls_sprintf(&vseed, "%s", seed);
+    } else {
+	const char *view_name = bv_name_get(qg_legacy_view_bv_const(view));
+	bu_vls_sprintf(&vseed, "%s:obj_0", view_name ? view_name : "view");
+    }
+
+    const char *npattern = "([-_:]*[0-9]+[-_:]*)[^0-9]*$";
+    long int loop_guard = 0;
+    while (!ged_draw_view_polygon_ref_is_null(
+	    ged_draw_view_context_polygon_find(qg_legacy_view_to_context(view),
+		    bu_vls_cstr(&vseed))) &&
+	    loop_guard < LONG_MAX) {
+	(void)bu_vls_incr(&vseed, npattern, NULL, NULL, NULL);
+	loop_guard++;
+    }
+
+    if (loop_guard >= LONG_MAX) {
+	bu_vls_free(&vseed);
+	return 0;
+    }
+
+    bu_vls_sprintf(oname, "%s", bu_vls_cstr(&vseed));
+    bu_vls_free(&vseed);
+    return 1;
 }
 
 QPolySettings::QPolySettings()
@@ -177,8 +215,7 @@ QPolySettings::uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx)
     // See if the supplied name will collide.  If it will, then reject.  If we want
     // an output name, fail with a message box
     struct bu_vls ovname = BU_VLS_INIT_ZERO;
-    if (!rt_view_context_unique_object_name(&ovname, vname,
-	    qg_legacy_view_to_context(v))) {
+    if (!qpolysettings_unique_polygon_name(&ovname, vname, v)) {
 	if (vname)
 	    bu_free(vname, "vname");
 	return false;
@@ -242,7 +279,7 @@ QPolySettings::do_grid_snapping_changed()
 
 
 void
-QPolySettings::settings_sync(const struct rt_view_polygon_record *p)
+QPolySettings::settings_sync(const struct ged_draw_view_polygon_record *p)
 {
     if (!p)
 	return;

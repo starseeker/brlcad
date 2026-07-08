@@ -19,15 +19,15 @@
  */
 /** @file selection_semantics.cpp
  *
- * Verify that view selection is consistent with opaque RT pick results
+ * Verify that view selection is consistent with opaque GED pick results
  * after a GED draw+pick cycle.
  *
  * Strategy:
  *   1. Open moss.g, draw the scene.
- *   2. Run a screen-center point pick; collect an opaque RT pick result.
- *   3. Apply the pick result through the RT selection adapter.
+ *   2. Run a screen-center point pick; collect an opaque GED pick result.
+ *   3. Apply the pick result through the GED selection API.
  *   4. Verify selected path callback data and selection count.
- *   5. Clear selection through the opaque RT context adapter; verify count
+ *   5. Clear selection through the GED view-context API; verify count
  *      drops to 0.
  *
  * No display hardware required (headless GED).
@@ -43,7 +43,9 @@
 
 #include <bu.h>
 #include <ged.h>
+#include <ged/draw.h>
 #include "rt/view.h"
+#include "view_test_util.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -136,35 +138,29 @@ main(int ac, char *av[])
     /* ------------------------------------------------------------------
      * Test 1: selection lifecycle round-trip
      * ------------------------------------------------------------------ */
-    ASSERT(rt_view_context_selection_available(v));
-    if (!rt_view_context_selection_available(v)) {
-	bu_log("SKIP: view has no gv_selected - selection not wired\n");
-	ged_close(gedp);
-	return 0;
-    }
-
-    ASSERT(rt_view_context_selection_count(v) == 0);
+    ASSERT(ged_draw_view_context_selection_count(v) == 0);
 
     /* ------------------------------------------------------------------
      * Test 2: pick then add to selection
      * ------------------------------------------------------------------ */
-    int cx = rt_view_context_width_get(v) / 2;
-    int cy = rt_view_context_height_get(v) / 2;
-    void *pr = rt_view_context_pick_point(v, cx, cy, 0);
-    if (pr && rt_view_pick_result_context_count(pr) > 0) {
+    int cx = bv_width_get(DRAW_TEST_BV_CONST(v)) / 2;
+    int cy = bv_height_get(DRAW_TEST_BV_CONST(v)) / 2;
+    struct ged_draw_pick_result *pr =
+	ged_draw_view_context_pick_point(v, cx, cy, 0);
+    if (pr && ged_draw_pick_result_count(pr) > 0) {
 	struct selected_path_state path_state = {0, std::string()};
-	ASSERT(rt_view_context_selection_set_pick_result_context(v, pr,
+	ASSERT(ged_draw_view_context_selection_set_pick_result(v, pr,
 		    selection_path_callback, &path_state));
 	ASSERT(path_state.count > 0);
 	ASSERT(!path_state.last_path.empty());
-	ASSERT(rt_view_context_selection_count(v) == 1);
+	ASSERT(ged_draw_view_context_selection_count(v) == 1);
     }
 
     /* Clear and verify */
-    ASSERT(rt_view_context_selection_clear(v));
-    ASSERT(rt_view_context_selection_count(v) == 0);
+    ASSERT(ged_draw_view_context_selection_clear(v));
+    ASSERT(ged_draw_view_context_selection_count(v) == 0);
 
-    rt_view_pick_result_context_free(pr);
+    ged_draw_pick_result_free(pr);
 
     ged_close(gedp);
 

@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -52,6 +54,7 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -95,22 +98,22 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     VSCALE(look, look, lbval);
 
     VSET(tmp, 0.0, 0.0, 1.0);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_view2model_get(view2model, view);
     MAT4X3PNT(eye, view2model, tmp);
 
     VSUB2(dir, eye, look);
     VUNITIZE(dir);
     bn_ae_vec(&new_az, &new_el, dir);
 
-    rt_view_context_aet_get(view_aet, view_ctx);
+    bv_aet_get(view_aet, view);
     VSET(view_aet, new_az, new_el, view_aet[Z]);
-    rt_view_context_aet_set(view_ctx, view_aet);
+    bv_aet_set(view, view_aet);
 
-    view_scale = rt_view_context_scale_get(view_ctx);
+    view_scale = bv_scale_get(view);
     VJOIN1(new_center, eye, -view_scale, dir);
-    rt_view_context_center_set(view_ctx, new_center);
+    bv_center_set(view, new_center);
 
-    rt_view_context_update(view_ctx);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

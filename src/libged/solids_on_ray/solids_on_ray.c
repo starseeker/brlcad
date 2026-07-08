@@ -31,7 +31,7 @@
 
 #include "bn.h"
 #include "bu/cmd.h"
-#include "rt/view.h"
+#include "bv.h"
 
 
 #include "../ged_private.h"
@@ -223,16 +223,17 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    if ((int)RT_VIEW_MIN > h || h > (int)RT_VIEW_MAX || (int)RT_VIEW_MIN > v || v > (int)RT_VIEW_MAX) {
+    if ((int)BV_VIEW_MIN > h || h > (int)BV_VIEW_MAX || (int)BV_VIEW_MIN > v || v > (int)BV_VIEW_MAX) {
 	bu_vls_printf(gedp->ged_result_str, "Screen coordinates out of range\nMust be between +/-2048");
 	return BRLCAD_ERROR;
     }
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    rt_view_context_center_get(view_center, view_ctx);
-    rt_view_context_rotation_get(view_rotation, view_ctx);
-    rt_view_context_model2view_get(model2view, view_ctx);
-    view_scale = rt_view_context_scale_get(view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_center_mat_get(view_center, view);
+    bv_rotation_get(view_rotation, view);
+    bv_model2view_get(model2view, view);
+    view_scale = bv_scale_get(view);
 
     MAT_DELTAS_GET_NEG(ray_orig, view_center);
     /*

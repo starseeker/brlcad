@@ -42,7 +42,7 @@ TCLCAD_LAYOUT_SIZE(struct tclcad_data_arrow_state, struct bsg_data_arrow_state, 
 TCLCAD_LAYOUT_SIZE(tclcad_label_state, struct bsg_data_label_state, label_size);
 TCLCAD_LAYOUT_SIZE(struct tclcad_data_line_state, struct bsg_data_line_state, line_size);
 TCLCAD_LAYOUT_SIZE(tclcad_polygon_state, bsg_data_polygon_state, polygon_size);
-TCLCAD_LAYOUT_SIZE(struct rt_view_other_state, struct bsg_other_state, other_size);
+TCLCAD_LAYOUT_SIZE(struct bv_other_state, struct bsg_other_state, other_size);
 TCLCAD_LAYOUT_SIZE(tclcad_view_state, struct bsg_data_tclcad, view_state_size);
 
 TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_polygon_mode, view_polygon_mode);
@@ -199,7 +199,7 @@ tclcad_view_label_state_from_view_ctx(void *view_ctx, int staged)
 }
 
 int
-tclcad_view_prim_labels_state_from_view_ctx(struct rt_view_other_state *state, void *view_ctx)
+tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, void *view_ctx)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!state || !tcl_data)
@@ -215,7 +215,7 @@ tclcad_view_prim_labels_state_from_view_ctx(struct rt_view_other_state *state, v
 }
 
 int
-tclcad_view_prim_labels_state_set(void *view_ctx, const struct rt_view_other_state *state)
+tclcad_view_prim_labels_state_set(void *view_ctx, const struct bv_other_state *state)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!state || !tcl_data)

@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -49,7 +51,8 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get aet */
     if (argc == 1) {
-	rt_view_context_aet_get(aet, view_ctx);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	bv_aet_get(aet, view);
 	bn_encode_vect(gedp->ged_result_str, aet, 1);
 	return BRLCAD_OK;
     }
@@ -74,11 +77,13 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
 	if (iflag) {
 	    vect_t view_aet;
-	    rt_view_context_aet_get(view_aet, view_ctx);
+	    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	    bv_aet_get(view_aet, view);
 	    VADD2(aet, view_aet, aet);
 	}
-	rt_view_context_aet_set(view_ctx, aet);
-	rt_view_context_update(view_ctx);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_aet_set(view, aet);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }
@@ -109,11 +114,13 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 
 	if (iflag) {
 	    vect_t view_aet;
-	    rt_view_context_aet_get(view_aet, view_ctx);
+	    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	    bv_aet_get(view_aet, view);
 	    VADD2(aet, view_aet, aet);
 	}
-	rt_view_context_aet_set(view_ctx, aet);
-	rt_view_context_update(view_ctx);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_aet_set(view, aet);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

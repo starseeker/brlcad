@@ -38,7 +38,7 @@ void
 BRLObolMeshLodProvider::clear(void)
 {
     dbip = NULL;
-    rt_view_info_init(&view);
+    bv_view_info_init(&view);
     useView = FALSE;
     refreshMissing = TRUE;
     useForcedLevel = FALSE;

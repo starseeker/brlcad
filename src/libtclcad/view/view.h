@@ -24,6 +24,7 @@
  */
 
 #include "common.h"
+#include "bv.h"
 #include "vmath.h"
 #include "ged.h"
 #include "tclcad.h"
@@ -61,7 +62,7 @@ extern int to_autoview_func(struct ged *gedp,
 /* Axes */
 extern int to_axes(struct ged *gedp,
 		   void *view_ctx,
-		   struct rt_view_axes_state *gasp,
+		   struct bv_axes_state *gasp,
 		   int argc,
 		   const char *argv[],
 		   const char *usage);

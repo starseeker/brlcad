@@ -33,6 +33,8 @@
 #include "bu/file.h"
 #include "bu/getopt.h"
 
+#include "bv.h"
+
 #include "../ged_private.h"
 #include "ged/draw.h"
 
@@ -176,7 +178,7 @@ ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
 	snprintf(outlog, 255, "%s.log", base);
     }
     view_ctx = ged_view_active_ctx(gedp);
-    perspective = rt_view_context_perspective_get(view_ctx);
+    perspective = bv_perspective_get(bv_context_view_const((const struct bv_context *)view_ctx));
 
     /* Do not specify -v option to rt; batch jobs must print everything. -Mike */
     fprintf(fp, "#!/bin/sh\n%s -M ", rtcmd);

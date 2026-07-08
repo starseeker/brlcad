@@ -40,7 +40,6 @@ extern "C" {
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
-#include "rt/view.h"
 #include "QgLegacyViewContext.h"
 
 static qg_legacy_view *
@@ -84,8 +83,8 @@ QgSketchFilter::screen_to_view(int sx, int sy, vect_t mvec) const
 		return;
 	}
 	fastf_t vx = 0.0, vy = 0.0;
-	if (!rt_view_context_screen_to_view(&vx, &vy,
-		qg_legacy_view_to_context(v), (fastf_t)sx, (fastf_t)sy)) {
+	if (!bv_screen_to_view(&vx, &vy, qg_legacy_view_bv_const(v),
+		(fastf_t)sx, (fastf_t)sy)) {
 		VSETALL(mvec, 0.0);
 		return;
 	}
@@ -108,7 +107,7 @@ QgSketchFilter::screen_to_uv(int sx, int sy,
 
 	/* Unproject screen pixel → model-space 3-D point */
 	point_t p3d;
-	if (!rt_view_context_screen_point_get(p3d, qg_legacy_view_to_context(v),
+	if (!bv_screen_to_model(p3d, qg_legacy_view_bv_const(v),
 		(fastf_t)sx, (fastf_t)sy))
 		return false;
 
@@ -146,8 +145,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 	/* Model→view transform (including any edit transform) */
 	mat_t m2v;
 	mat_t model2view;
-	(void)rt_view_context_model2view_get(model2view,
-		qg_legacy_view_to_context(v));
+	(void)bv_model2view_get(model2view, qg_legacy_view_bv_const(v));
 	bn_mat_mul(m2v, model2view, es->model_changes);
 
 	/* Cursor in view space */
@@ -156,7 +154,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 
 	/* Convert snap_px to view-space units.
 	 * One pixel = 2 / gv_width view units in X. */
-	int view_width = rt_view_context_width_get(qg_legacy_view_to_context(v));
+	int view_width = bv_width_get(qg_legacy_view_bv_const(v));
 	fastf_t px_to_view = (view_width > 0)
 	                     ? (2.0 / (fastf_t)view_width)
 	                     : 0.005;
@@ -461,8 +459,7 @@ QgSketchPickSegmentFilter::eventFilter(QObject *, QEvent *e)
 		mat_t m2v;
 		qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 		mat_t model2view;
-		(void)rt_view_context_model2view_get(model2view,
-			qg_legacy_view_to_context(v));
+		(void)bv_model2view_get(model2view, qg_legacy_view_bv_const(v));
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */
@@ -807,8 +804,7 @@ QgSketchSetTangencyFilter::eventFilter(QObject *, QEvent *e)
 		mat_t m2v;
 		qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
 		mat_t model2view;
-		(void)rt_view_context_model2view_get(model2view,
-			qg_legacy_view_to_context(v));
+		(void)bv_model2view_get(model2view, qg_legacy_view_bv_const(v));
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */

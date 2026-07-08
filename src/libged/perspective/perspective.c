@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -43,6 +45,7 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -50,7 +53,7 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
     /* get the perspective angle */
     if (argc == 1) {
 	bu_vls_printf(gedp->ged_result_str, "%g",
-		rt_view_context_perspective_get(view_ctx));
+		bv_perspective_get(view));
 	return BRLCAD_OK;
     }
 
@@ -61,7 +64,7 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	rt_view_context_perspective_set(view_ctx, perspective);
+	bv_perspective_set(view, perspective);
 
 	mat_t pmat;
 	if (SMALL_FASTF < perspective) {
@@ -70,9 +73,9 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 	} else {
 	    MAT_COPY(pmat, bn_mat_identity);
 	}
-	rt_view_context_pmat_set(view_ctx, pmat);
+	bv_pmat_set(view, pmat);
 
-	rt_view_context_update(view_ctx);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

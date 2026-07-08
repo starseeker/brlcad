@@ -39,6 +39,7 @@
 #  include "tk.h"
 #endif
 
+#include "bv.h"
 #include "vmath.h"
 #include "raytrace.h"
 #include "ged.h"
@@ -54,10 +55,10 @@ int
 common_dm(struct mged_state *s, int argc, const char *argv[])
 {
     int status;
-    struct rt_view_adc_state adc_record = {0};
-    struct rt_view_adc_state *adc = &adc_record;
-    struct rt_view_grid_state grid_record = RT_VIEW_GRID_STATE_INIT;
-    struct rt_view_grid_state *grid = &grid_record;
+    struct bv_adc_state adc_record = {0};
+    struct bv_adc_state *adc = &adc_record;
+    struct bv_grid_state grid_record = BV_GRID_STATE_INIT;
+    struct bv_grid_state *grid = &grid_record;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (s->dbip == DBI_NULL)
@@ -69,10 +70,10 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
     if (BU_STR_EQUAL(argv[0], "idle")) {
 
 	/* redraw after scaling */
-	struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
+	ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
 	void *active_view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
 	if (active_view_ctx &&
-	    rt_view_context_lod_policy_get(&lod_policy, active_view_ctx) &&
+	    ged_draw_view_context_lod_policy_get(&lod_policy, active_view_ctx) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    (am_mode == AMM_SCALE ||
@@ -117,6 +118,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	mat_t model2view;
 	mat_t view2model;
 	void *view_ctx = view_state->vs_gvp;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
 	if (argc < 3) {
 	    Tcl_AppendResult(s->interp, "dm m: need more parameters\n",
@@ -130,9 +132,9 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	fy = dm_Xy2Normal(DMP, atoi(argv[2]), 0);
 	x = fx * RT_VIEW_MAX;
 	y = fy * RT_VIEW_MAX;
-	rt_view_context_center_get(view_center, view_ctx);
-	rt_view_context_model2view_get(model2view, view_ctx);
-	rt_view_context_view2model_get(view2model, view_ctx);
+	bv_center_mat_get(view_center, view);
+	bv_model2view_get(model2view, view);
+	bv_view2model_get(view2model, view);
 
 	if (mged_variables->mv_faceplate &&
 	    mged_variables->mv_orig_gui) {
@@ -342,6 +344,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	fastf_t view_local_scale;
 	mat_t view2model;
 	void *view_ctx = view_state->vs_gvp;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
 	if (argc < 4) {
 	    Tcl_AppendResult(s->interp, "dm adc: need more parameters\n",
@@ -351,8 +354,8 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	dm_omx = atoi(argv[2]);
 	dm_omy = atoi(argv[3]);
-	view_local_scale = rt_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
-	rt_view_context_view2model_get(view2model, view_ctx);
+	view_local_scale = bv_scale_get(view) * s->dbip->dbi_base2local;
+	bv_view2model_get(view2model, view);
 
 	switch (*argv[1]) {
 	    case '1':
@@ -630,8 +633,10 @@ view_state_flag_hook(const struct bu_structparse *UNUSED(sdp),
                 void *data)
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    if (hs->vs)
-	rt_view_context_refresh_request(hs->vs->vs_gvp, GED_VIEW_REFRESH_VIEW);
+    if (hs->vs) {
+	struct bv *view = bv_context_view((struct bv_context *)hs->vs->vs_gvp);
+	bv_refresh_request(view, GED_VIEW_REFRESH_VIEW);
+    }
 }
 
 void
@@ -653,7 +658,10 @@ zclip_hook(const struct bu_structparse *sdp,
 	void *data)
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    rt_view_context_zclip_set(hs->vs->vs_gvp, dm_get_zclip(hs->hs_dmp));
+    if (hs->vs) {
+	struct bv *view = bv_context_view((struct bv_context *)hs->vs->vs_gvp);
+	bv_zclip_set(view, dm_get_zclip(hs->hs_dmp));
+    }
     dirty_hook(sdp, name, base, value, data);
 }
 

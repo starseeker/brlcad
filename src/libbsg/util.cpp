@@ -489,9 +489,6 @@ bsg_init(struct bsg_view *gvp, struct bsg_view_set *s)
     gvp->gv_scene = NULL;
     gvp->gv_hud_root = NULL;
 
-    // No edit-mode matrix override until explicitly set by the renderer
-    gvp->gv_edit_mat = NULL;
-
     (void)bsg_view_scene_separator_ref(gvp, 1);
 
     bsg_update(gvp);

@@ -34,6 +34,7 @@
 #include "vmath.h"
 #include "bn.h"
 #include "bg/clip.h"
+#include "bv.h"
 
 #include "ged/draw.h"
 #include "../ged_private.h"
@@ -299,6 +300,7 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
     point_t eye_pos;
     fastf_t perspective;
     void *view_ctx = NULL;
+    const struct bv *view = NULL;
 
     float border_red = 0.0;
     float border_green = 0.0;
@@ -424,9 +426,10 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     view_ctx = ged_view_active_ctx(gedp);
-    rt_view_context_model2view_get(model2view, view_ctx);
-    perspective = rt_view_context_perspective_get(view_ctx);
-    rt_view_context_eye_pos_get(eye_pos, view_ctx);
+    view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    perspective = bv_perspective_get(view);
+    bv_eye_pos_get(eye_pos, view);
     dl_ps(view_ctx, fp, border, bu_vls_addr(&font), bu_vls_addr(&title), bu_vls_addr(&creator), linewidth, scale, xoffset, yoffset, model2view, perspective, eye_pos, border_red, border_green, border_blue);
 
     fclose(fp);

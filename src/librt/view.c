@@ -34,330 +34,49 @@
 void
 rt_view_info_init(struct rt_view_info *info)
 {
-    struct rt_view_info defaults = RT_VIEW_INFO_INIT;
-    if (info)
-	*info = defaults;
+    bv_view_info_init(info);
 }
 
 void
 rt_view_info_sanitize(struct rt_view_info *info)
 {
-    if (!info)
-	return;
-
-    if (info->width <= 0)
-	info->width = 1;
-    if (info->height <= 0)
-	info->height = 1;
-    if (info->size <= SMALL_FASTF)
-	info->size = 1.0;
-    if (info->lod.scale <= SMALL_FASTF)
-	info->lod.scale = 1.0;
-    if (info->lod.curve_scale <= SMALL_FASTF)
-	info->lod.curve_scale = 1.0;
-    if (info->lod.point_scale <= SMALL_FASTF)
-	info->lod.point_scale = 1.0;
-}
-
-int
-rt_view_knobs_state_reset(struct rt_view_knobs *knobs, int category)
-{
-    if (!knobs)
-	return 0;
-
-    if (!category || category == RT_VIEW_KNOBS_RATE) {
-	knobs->rot_m_flag = 0;
-	VSETALL(knobs->rot_m, 0.0);
-	knobs->rot_o_flag = 0;
-	VSETALL(knobs->rot_o, 0.0);
-	knobs->rot_v_flag = 0;
-	VSETALL(knobs->rot_v, 0.0);
-	knobs->tra_m_flag = 0;
-	VSETALL(knobs->tra_m, 0.0);
-	knobs->tra_v_flag = 0;
-	VSETALL(knobs->tra_v, 0.0);
-	knobs->sca_flag = 0;
-	knobs->sca = 0.0;
-    }
-
-    if (!category || category == RT_VIEW_KNOBS_ABS) {
-	VSETALL(knobs->rot_m_abs, 0.0);
-	VSETALL(knobs->rot_m_abs_last, 0.0);
-	VSETALL(knobs->rot_o_abs, 0.0);
-	VSETALL(knobs->rot_o_abs_last, 0.0);
-	VSETALL(knobs->rot_v_abs, 0.0);
-	VSETALL(knobs->rot_v_abs_last, 0.0);
-	VSETALL(knobs->tra_m_abs, 0.0);
-	VSETALL(knobs->tra_m_abs_last, 0.0);
-	VSETALL(knobs->tra_v_abs, 0.0);
-	VSETALL(knobs->tra_v_abs_last, 0.0);
-	knobs->sca_abs = 0.0;
-    }
-
-    return 1;
-}
-
-unsigned long long
-rt_view_knobs_state_hash(const struct rt_view_knobs *knobs,
-			 struct bu_data_hash_state *state)
-{
-    if (!knobs)
-	return 0ULL;
-
-    int own_state = 0;
-    if (!state) {
-	state = bu_data_hash_create();
-	if (!state)
-	    return 0ULL;
-	own_state = 1;
-    }
-
-    bu_data_hash_update(state, &knobs->rot_m, sizeof(knobs->rot_m));
-    bu_data_hash_update(state, &knobs->rot_m_flag, sizeof(knobs->rot_m_flag));
-    bu_data_hash_update(state, &knobs->origin_m, sizeof(knobs->origin_m));
-    bu_data_hash_update(state, &knobs->rot_o, sizeof(knobs->rot_o));
-    bu_data_hash_update(state, &knobs->rot_o_flag, sizeof(knobs->rot_o_flag));
-    bu_data_hash_update(state, &knobs->origin_o, sizeof(knobs->origin_o));
-    bu_data_hash_update(state, &knobs->rot_v, sizeof(knobs->rot_v));
-    bu_data_hash_update(state, &knobs->rot_v_flag, sizeof(knobs->rot_v_flag));
-    bu_data_hash_update(state, &knobs->origin_v, sizeof(knobs->origin_v));
-    bu_data_hash_update(state, &knobs->sca, sizeof(knobs->sca));
-    bu_data_hash_update(state, &knobs->sca_flag, sizeof(knobs->sca_flag));
-    bu_data_hash_update(state, &knobs->tra_m, sizeof(knobs->tra_m));
-    bu_data_hash_update(state, &knobs->tra_m_flag, sizeof(knobs->tra_m_flag));
-    bu_data_hash_update(state, &knobs->tra_v, sizeof(knobs->tra_v));
-    bu_data_hash_update(state, &knobs->tra_v_flag, sizeof(knobs->tra_v_flag));
-    bu_data_hash_update(state, &knobs->rot_m_abs, sizeof(knobs->rot_m_abs));
-    bu_data_hash_update(state, &knobs->rot_m_abs_last, sizeof(knobs->rot_m_abs_last));
-    bu_data_hash_update(state, &knobs->rot_o_abs, sizeof(knobs->rot_o_abs));
-    bu_data_hash_update(state, &knobs->rot_o_abs_last, sizeof(knobs->rot_o_abs_last));
-    bu_data_hash_update(state, &knobs->rot_v_abs, sizeof(knobs->rot_v_abs));
-    bu_data_hash_update(state, &knobs->rot_v_abs_last, sizeof(knobs->rot_v_abs_last));
-    bu_data_hash_update(state, &knobs->sca_abs, sizeof(knobs->sca_abs));
-    bu_data_hash_update(state, &knobs->tra_m_abs, sizeof(knobs->tra_m_abs));
-    bu_data_hash_update(state, &knobs->tra_m_abs_last, sizeof(knobs->tra_m_abs_last));
-    bu_data_hash_update(state, &knobs->tra_v_abs, sizeof(knobs->tra_v_abs));
-    bu_data_hash_update(state, &knobs->tra_v_abs_last, sizeof(knobs->tra_v_abs_last));
-
-    if (!own_state)
-	return 0ULL;
-
-    unsigned long long hv = bu_data_hash_val(state);
-    bu_data_hash_destroy(state);
-    return hv;
+    bv_view_info_sanitize(info);
 }
 
 void
 rt_view_lod_policy_init(struct rt_view_lod_policy *policy)
 {
-    struct rt_view_lod_policy defaults = RT_VIEW_LOD_POLICY_INIT;
-    if (policy)
-	*policy = defaults;
+    bv_lod_policy_init(policy);
 }
 
 void
 rt_view_lod_policy_sanitize(struct rt_view_lod_policy *policy)
 {
-    if (!policy)
-	return;
-
-    if (policy->scale <= SMALL_FASTF)
-	policy->scale = 1.0;
-    if (policy->curve_scale <= SMALL_FASTF)
-	policy->curve_scale = 1.0;
-    if (policy->point_scale <= SMALL_FASTF)
-	policy->point_scale = 1.0;
-}
-
-static struct rt_view_lod_settings
-view_lod_policy(const struct rt_view_info *info)
-{
-    struct rt_view_lod_settings policy = RT_VIEW_LOD_SETTINGS_INIT;
-    if (info)
-	policy = info->lod;
-    if (policy.curve_scale <= SMALL_FASTF)
-	policy.curve_scale = 1.0;
-    if (policy.point_scale <= SMALL_FASTF)
-	policy.point_scale = 1.0;
-    if (policy.scale <= SMALL_FASTF)
-	policy.scale = 1.0;
-    return policy;
+    bv_lod_policy_sanitize(policy);
 }
 
 fastf_t
 rt_view_lod_curve_scale(const struct rt_view_info *v)
 {
-    return view_lod_policy(v).curve_scale;
+    return bv_view_lod_curve_scale(v);
 }
 
 size_t
 rt_view_lod_bot_threshold(const struct rt_view_info *v)
 {
-    return view_lod_policy(v).bot_threshold;
-}
-
-static fastf_t
-view_avg_size(const struct rt_view_info *info)
-{
-    fastf_t view_aspect, x_size, y_size;
-
-    if (!info || info->width <= 0 || info->height <= 0 || info->size <= SMALL_FASTF)
-	return 1.0;
-
-    view_aspect = (fastf_t)info->width / info->height;
-    x_size = info->size;
-    y_size = x_size / view_aspect;
-
-    return (x_size + y_size) / 2.0;
+    return bv_view_lod_bot_threshold(v);
 }
 
 fastf_t
 rt_view_avg_sample_spacing(const struct rt_view_info *info)
 {
-    fastf_t avg_view_size, avg_view_samples;
-
-    if (!info || info->width <= 0 || info->height <= 0)
-	return 1.0;
-
-    avg_view_size = view_avg_size(info);
-    avg_view_samples = (info->width + info->height) / 2.0;
-
-    return avg_view_size / avg_view_samples;
+    return bv_view_avg_sample_spacing(info);
 }
 
 fastf_t
 rt_view_solid_point_spacing(const struct rt_view_info *info, fastf_t solid_width)
 {
-    fastf_t radius, avg_view_size, avg_sample_spacing;
-    point2d_t p1, p2;
-
-    if (solid_width < SQRT_SMALL_FASTF)
-	solid_width = SQRT_SMALL_FASTF;
-
-    avg_view_size = view_avg_size(info);
-
-    /* Now, for the sake of simplicity we're going to make
-     * several assumptions:
-     *  - our samples represent a grid of square pixels
-     *  - a circle with a diameter half the width of the solid is a
-     *    good proxy for the kind of curve that will be plotted
-     */
-    radius = solid_width / 4.0;
-    if (avg_view_size < solid_width) {
-	/* If the solid is larger than the view, it is
-	 * probably only partly visible and likely isn't the
-	 * primary focus of the user. We'll cap the point
-	 * spacing and avoid wasting effort.
-	 */
-	radius = avg_view_size / 4.0;
-    }
-
-    /* We imagine our representative circular curve lying in
-     * the XY plane centered at the origin.
-     *
-     * Suppose we're viewing the circle head on, and that the
-     * apex of the curve (0, radius) lies just inside the
-     * top edge of a pixel. Here we place a plotted point p1.
-     *
-     * As we continue clockwise around the circle we pass
-     * through neighboring pixels in the same row, until we
-     * vertically drop a distance equal to the pixel spacing,
-     * in which case we just barely enter a pixel in the next
-     * row. Here we place a plotted point p2 (y = radius -
-     * avg_sample_spacing).
-     *
-     * In theory, the line segment between p1 and p2 passes
-     * through all the same pixels that the actual curve does,
-     * and thus produces the exact same rasterization as if
-     * the curve between p1 and p2 was approximated with an
-     * infinite number of line segments.
-     *
-     * We assume that the distance between p1 and p2 is the
-     * maximum point sampling distance we can use for the
-     * curve which will give a perfect rasterization, i.e.
-     * the same rasterization as if we chose a point distance
-     * of 0.
-     */
-    p1[Y] = radius;
-    p1[X] = 0.0;
-
-    avg_sample_spacing = rt_view_avg_sample_spacing(info);
-    if (avg_sample_spacing < radius) {
-	p2[Y] = radius - (avg_sample_spacing);
-    } else {
-	/* no particular reason other than symmetry, just need
-	 * to prevent sqrt(negative).
-	 */
-	p2[Y] = radius;
-    }
-    p2[X] = sqrt((radius * radius) - (p2[Y] * p2[Y]));
-
-    return DIST_PNT2_PNT2(p1, p2) / view_lod_policy(info).point_scale;
-}
-
-void
-rt_view_adc_model_to_view(struct rt_view_adc_state *adcs, mat_t model2view, fastf_t amax)
-{
-    if (!adcs || !model2view)
-	return;
-
-    MAT4X3PNT(adcs->pos_view, model2view, adcs->pos_model);
-    adcs->dv_x = adcs->pos_view[X] * amax;
-    adcs->dv_y = adcs->pos_view[Y] * amax;
-}
-
-void
-rt_view_adc_grid_to_view(struct rt_view_adc_state *adcs, mat_t model2view, fastf_t amax)
-{
-    point_t model_pt = VINIT_ZERO;
-    point_t view_pt;
-
-    if (!adcs || !model2view)
-	return;
-
-    MAT4X3PNT(view_pt, model2view, model_pt);
-    VADD2(adcs->pos_view, view_pt, adcs->pos_grid);
-    adcs->dv_x = adcs->pos_view[X] * amax;
-    adcs->dv_y = adcs->pos_view[Y] * amax;
-}
-
-void
-rt_view_adc_view_to_grid(struct rt_view_adc_state *adcs, mat_t model2view)
-{
-    point_t model_pt = VINIT_ZERO;
-    point_t view_pt;
-
-    if (!adcs || !model2view)
-	return;
-
-    MAT4X3PNT(view_pt, model2view, model_pt);
-    VSUB2(adcs->pos_grid, adcs->pos_view, view_pt);
-}
-
-void
-rt_view_adc_reset(struct rt_view_adc_state *adcs, mat_t view2model, mat_t model2view)
-{
-    if (!adcs || !view2model || !model2view)
-	return;
-
-    adcs->dv_x = adcs->dv_y = 0;
-    adcs->dv_a1 = adcs->dv_a2 = 0;
-    adcs->dv_dist = 0;
-
-    VSETALL(adcs->pos_view, 0.0);
-    MAT4X3PNT(adcs->pos_model, view2model, adcs->pos_view);
-    adcs->dst = (adcs->dv_dist * RT_INV_VIEW + 1.0) * M_SQRT1_2;
-    adcs->a1 = adcs->a2 = 45.0;
-    rt_view_adc_view_to_grid(adcs, model2view);
-
-    VSETALL(adcs->anchor_pt_a1, 0.0);
-    VSETALL(adcs->anchor_pt_a2, 0.0);
-    VSETALL(adcs->anchor_pt_dst, 0.0);
-
-    adcs->anchor_pos = 0;
-    adcs->anchor_a1 = 0;
-    adcs->anchor_a2 = 0;
-    adcs->anchor_dst = 0;
+    return bv_view_solid_point_spacing(info, solid_width);
 }
 
 

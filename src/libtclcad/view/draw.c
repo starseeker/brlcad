@@ -25,6 +25,7 @@
 /** @} */
 
 #include "common.h"
+#include "bv.h"
 #include "dm/view.h"
 #include "ged.h"
 #include "ged/draw.h"
@@ -47,10 +48,14 @@ go_draw(void *view_ctx)
 
     mat_t model2view;
     mat_t pmat;
-    fastf_t perspective = rt_view_context_perspective_get(view_ctx);
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (!view)
+	return;
+    fastf_t perspective = bv_perspective_get(view);
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_pmat_get(pmat, view_ctx);
+    bv_model2view_get(model2view, view);
+    bv_pmat_get(pmat, view);
     (void)dm_loadmatrix(dmp, model2view, 0);
 
     if (SMALL_FASTF < perspective)

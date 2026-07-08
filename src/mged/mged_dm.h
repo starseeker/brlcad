@@ -28,6 +28,9 @@
 
 #include "common.h"
 
+#include <string.h>
+
+#include "bv.h"
 #include "dm.h"	/* struct dm */
 
 #include "pkg.h" /* struct pkg_conn */
@@ -37,8 +40,6 @@
 
 #include "menu.h"
 #include "mged.h"
-
-struct bsg_view;
 
 struct scroll_item {
     char *scroll_string;
@@ -54,7 +55,7 @@ struct scroll_item {
 #define MGED_DISPLAY_VAR "mged_display"
 
 /* +-2048 to +-1 */
-#define GED2PM1(x) (((fastf_t)(x))*RT_INV_VIEW)
+#define GED2PM1(x) (((fastf_t)(x))*BV_INV_VIEW)
 
 #define LAST_SOLID(_sp)       DB_FULL_PATH_CUR_DIR( &(_sp)->s_fullpath )
 
@@ -184,7 +185,7 @@ struct _rubber_band {
 struct _view_state {
     int		vs_rc;
 
-    struct bsg_view *vs_gvp;
+    struct bv_context *vs_gvp;
     mat_t	vs_model2objview;
     mat_t	vs_objview2model;
     mat_t	vs_ModelDelta;		/* changes to Viewrot this frame */
@@ -194,7 +195,7 @@ struct _view_state {
     struct view_ring	*vs_last_view;
 
     /* Rate stuff */
-    struct rt_view_knobs k;
+    struct bv_knobs k;
 
     /* Virtual trackball stuff */
     point_t	vs_orig_pos;
@@ -403,31 +404,70 @@ mged_dm_repaint_consume(struct mged_dm *mdmp)
  * libged also gets the word. */
 __BEGIN_DECLS
 extern void set_curr_dm(struct mged_state *s, struct mged_dm *nl);
-extern void mged_dm_adc_state_set(struct mged_dm *dm, const struct rt_view_adc_state *adc);
+extern void mged_dm_adc_state_set(struct mged_dm *dm, const struct bv_adc_state *adc);
 __END_DECLS
 
-static inline int
-mged_dm_adc_state_get(struct mged_dm *dm, struct rt_view_adc_state *adc)
+static inline struct bv *
+mged_view_state_view(struct _view_state *view_state)
 {
-    if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
-	return 0;
-    return rt_view_context_adc_state_get(adc, dm->dm_view_state->vs_gvp);
+    return view_state ? bv_context_view(view_state->vs_gvp) : NULL;
+}
+
+static inline const struct bv *
+mged_view_state_view_const(const struct _view_state *view_state)
+{
+    return view_state ? bv_context_view_const(view_state->vs_gvp) : NULL;
+}
+
+static inline struct bv *
+mged_view_context_view(void *view_ctx)
+{
+    return bv_context_view((struct bv_context *)view_ctx);
+}
+
+static inline const struct bv *
+mged_view_context_view_const(const void *view_ctx)
+{
+    return bv_context_view_const((const struct bv_context *)view_ctx);
 }
 
 static inline int
-mged_dm_grid_state_get(struct mged_dm *dm, struct rt_view_grid_state *grid)
+mged_dm_adc_state_get(struct mged_dm *dm, struct bv_adc_state *adc)
 {
+    struct bv_adc_state bv_adc;
+
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return 0;
-    return rt_view_context_grid_state_get(grid, dm->dm_view_state->vs_gvp);
+    if (!bv_adc_state_get(&bv_adc,
+	    mged_view_state_view_const(dm->dm_view_state)))
+	return 0;
+    memcpy(adc, &bv_adc, sizeof(*adc));
+    return 1;
+}
+
+static inline int
+mged_dm_grid_state_get(struct mged_dm *dm, struct bv_grid_state *grid)
+{
+    struct bv_grid_state bv_grid;
+
+    if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
+	return 0;
+    if (!bv_grid_state_get(&bv_grid,
+	    mged_view_state_view_const(dm->dm_view_state)))
+	return 0;
+    memcpy(grid, &bv_grid, sizeof(*grid));
+    return 1;
 }
 
 static inline void
-mged_dm_grid_state_set(struct mged_dm *dm, const struct rt_view_grid_state *grid)
+mged_dm_grid_state_set(struct mged_dm *dm, const struct bv_grid_state *grid)
 {
+    struct bv_grid_state bv_grid;
+
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    rt_view_context_grid_state_set(dm->dm_view_state->vs_gvp, grid);
+    memcpy(&bv_grid, grid, sizeof(bv_grid));
+    bv_grid_state_set(mged_view_state_view(dm->dm_view_state), &bv_grid);
 }
 
 static inline int
@@ -436,7 +476,8 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
     if (!a || !a->dm_view_state || !a->dm_view_state->vs_gvp ||
 	    !b || !b->dm_view_state || !b->dm_view_state->vs_gvp)
 	return 0;
-    return rt_view_context_settings_shared(a->dm_view_state->vs_gvp, b->dm_view_state->vs_gvp);
+    return bv_context_settings_shared(a->dm_view_state->vs_gvp,
+	    b->dm_view_state->vs_gvp);
 }
 
 #define MGED_DM_NULL ((struct mged_dm *)NULL)
@@ -476,8 +517,8 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
 #define scroll_y s->mged_curr_dm->dm_scroll_y
 #define scroll_array s->mged_curr_dm->dm_scroll_array
 
-#define VIEWSIZE	(rt_view_context_size_get(view_state->vs_gvp))	/* Width of viewing cube */
-#define VIEWFACTOR	(1/rt_view_context_scale_get(view_state->vs_gvp))
+#define VIEWSIZE	(bv_size_get(mged_view_state_view_const(view_state)))	/* Width of viewing cube */
+#define VIEWFACTOR	(1/bv_scale_get(mged_view_state_view_const(view_state)))
 
 #define RATE_ROT_FACTOR 6.0
 #define ABS_ROT_FACTOR 180.0

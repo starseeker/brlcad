@@ -94,7 +94,7 @@ struct nurb_hit {
     extern void rt_brep_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp);
     extern void rt_brep_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct uvcoord *uvp);
     extern void rt_brep_free(struct soltab *stp);
-    extern int rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *UNUSED(info));
+    extern int rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *UNUSED(info));
 
 #endif /* CONVERT_TO_BREP */
 
@@ -598,7 +598,7 @@ rt_nurb_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 
 
 int
-rt_nurb_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *UNUSED(info))
+rt_nurb_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
 {
     struct rt_nurb_internal *sip;
 

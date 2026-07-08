@@ -35,6 +35,7 @@
 
 #include "bu/app.h"
 #include "bu/process.h"
+#include "bv.h"
 
 #include "../ged_private.h"
 
@@ -89,7 +90,8 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 
     void *view_ctx = ged_view_active_ctx(gedp);
     const char *fbdev = ged_rt_framebuffer_device(gedp);
-    perspective = rt_view_context_perspective_get(view_ctx);
+    perspective = bv_perspective_get(
+		      bv_context_view_const((const struct bv_context *)view_ctx));
     if (fbdev) {
 	args = argc + 9 + 2 + (int)ged_who_argc(gedp);
     } else {

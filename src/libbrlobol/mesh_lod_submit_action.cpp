@@ -50,7 +50,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     diagnostics("")
 {
     SO_ACTION_CONSTRUCTOR(SoBRLMeshLodSubmitAction);
-    rt_view_info_init(&this->view);
+    bv_view_info_init(&this->view);
 }
 
 SoBRLMeshLodSubmitAction::~SoBRLMeshLodSubmitAction(void)
@@ -91,16 +91,16 @@ SoBRLMeshLodSubmitAction::setDatabase(struct db_i *newDbip,
 }
 
 void
-SoBRLMeshLodSubmitAction::setViewInfo(const struct rt_view_info *info)
+SoBRLMeshLodSubmitAction::setViewInfo(const struct bv_view_info *info)
 {
     if (info)
 	this->view = *info;
     else
-	rt_view_info_init(&this->view);
-    rt_view_info_sanitize(&this->view);
+	bv_view_info_init(&this->view);
+    bv_view_info_sanitize(&this->view);
 }
 
-const struct rt_view_info &
+const struct bv_view_info &
 SoBRLMeshLodSubmitAction::getViewInfo(void) const {
     return this->view;
 }

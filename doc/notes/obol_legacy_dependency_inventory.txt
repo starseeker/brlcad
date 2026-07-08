@@ -40,13 +40,6 @@ Additional guard-visible dependency expectations:
 Current Direct Legacy Owners
 ----------------------------
 
-Direct non-test `rt/view_legacy_bsg.h` inclusion is limited to boundary files:
-
-* `src/libged/ged_view_state.cpp`: GED view-state bridge and adapter
-  installation.
-* `src/librt/view_legacy_bsg.c`: RT legacy BSG adapter implementation and
-  remaining public neutral wrapper dispatch pending the next split.
-
 The direct `libged` to `libbrlobol` dependency is intentional.  libged owns the
 neutral GED draw transaction to Obol scene-controller bridge in
 `src/libged/draw_obol.cpp` and exposes the attach/sync surface in
@@ -54,9 +47,12 @@ neutral GED draw transaction to Obol scene-controller bridge in
 
 Remaining direct legacy target rows are transitional:
 
-* `libged` still links `libdm` and `libbsg` for retained draw/view,
-  faceplate, plot/select/snap/measure, framebuffer, and no-owned-scene
-  compatibility paths.
+* `libged` still links `libdm` for application display-manager attachment,
+  non-Obol screenshot fallback, and the fbserv protocol while that protocol
+  still lives in libdm.  It still links `libbsg` only because broader target
+  rows have not been fully collapsed; production drawing, feature, polygon,
+  selection, LoD, view-object, and edit-preview paths should not add new BSG
+  dependencies.
 * `libqtcad`, `libtclcad`, and mged still carry display-manager or
   application hosting dependencies while visible rendering/input/readback
   migration continues.  qged no longer has a `dm_plugins` build prerequisite,
@@ -70,22 +66,17 @@ Remaining direct legacy target rows are transitional:
 Current Migration Boundaries
 ----------------------------
 
-Obol-owned GED draw and view-feature behavior should use neutral GED/RT facades
-and libbrlobol scene-controller or feature-store APIs.  New code should not
-reach directly into BSG scene/view state except inside explicit retained
-adapter files.
+Obol-owned GED draw and view-feature behavior should use GED/libbrlobol
+facades and libbrlobol scene-controller or feature-store APIs.  New code
+should not reach directly into BSG scene/view state.
 
-Common non-scene view mechanics are moving to a new clean libbv, not into
-librt and not back to the historical bview-era compatibility API.  The clean
-API uses short `bv_*` names, while the old mainline libbv in
-`/home/starseeker/brlcad_vanilla` remains reference material for math and
-concepts only.  The new libbv is BSG-free and owns only view/camera state,
-matrix updates, autoview-bounds math, screen/model transforms, input/knob
-state, and view-set bookkeeping.  librt now has a native/libbv-backed neutral
-`rt_view_context` implementation for generic view mechanics.  Scene objects,
-display lists, Tcl/display-manager state, polygon stores, snap/selection
-resolution, LoD caches, and retained scene-graph behavior remain outside this
-libbv boundary.
+Common non-scene view mechanics live in the clean BSG-free libbv API.  libbv
+owns only view/camera state, matrix updates, autoview-bounds math,
+screen/model transforms, input/knob state, passive faceplate/snap records,
+view-quality preferences, and view-set bookkeeping.  Scene objects, display
+lists, Tcl/display-manager state, polygon stores, snap/selection resolution,
+LoD caches, and retained scene-graph behavior remain outside this libbv
+boundary.
 
 Persistent draw cache ownership now belongs to libbrlobol.  AABB/OBB proxy,
 object-local metadata, and full-path aggregate metadata cache data live under
@@ -149,28 +140,37 @@ Current migrated boundaries include:
   bridge implementation files.  Obol sync/GQA tests, autoview, `draw_obol.cpp`,
   and GED view facade code use public `ged/draw.h`, `ged/draw_obol.h`, and
   `ged/view.h` boundaries.
-* Neutral RT adapters for scene, polygon, selection, feature/edit-preview, and
-  retained view-context operations.  Scene/feature/polygon/selection adapter
-  registries now live in `src/librt/view_context_adapters.c` rather than the
-  explicit BSG adapter source.  Neutral RT view constructors now return
-  native/libbv-backed contexts; explicit `_bsg` constructors remain retained
-  fallback only.
-* Focused GED and qtcad Obol workflows now use native neutral RT view contexts
-  with installed Obol scene/feature/polygon/selection adapters instead of
-  relying on retained BSG side effects.
-* Native RT context support now covers Obol scene-root attachment,
-  independent-view scope state, and basic model-space measurement for native
-  views.
-* `rt_view_context_is_valid` is the neutral "is this an RT view context?"
-  predicate for native or explicit BSG storage.  `rt_view_context_is_retained`
-  is BSG-only and should not be used as a display-host capability proxy.
-* libdm no longer exposes `dm_view_context_is_retained_legacy`; QtGL rejects
-  non-widget RT view-context pointers through `rt_view_context_is_valid`.
+* Neutral RT view-context adapters for scene, polygon, selection, and
+  feature/edit-preview behavior have been retired from production draw paths.
+  Focused GED and qtcad Obol workflows now use libbv view mechanics plus
+  GED/libbrlobol facades instead of relying on retained BSG side effects.
+* qged edit plugins publish preview geometry through GED feature refs backed
+  by libbrlobol/Obol edit-preview records.  The old production fallback that
+  directly mutated the qtcad widget's Obol preview in parallel with GED feature
+  publication has been removed.
+* Obol scene-root tokens, independent-view scope state, and view-local realized
+  LoD payloads now live in libbrlobol `BRLObolViewAttachment` state.  GED host
+  records bind to the attached controller's ref-counted attachment during
+  attach/replacement and unbind on detach/teardown; libbv retains only generic
+  view math and passive preferences.
+* libdm no longer exposes `dm_view_context_is_retained_legacy`; Obol-capable
+  hosts should test for concrete Obol/libbrlobol capabilities rather than
+  retained BSG identity.
 * `dm-obol` is the first libbrlobol-backed libdm plugin.  It owns a
   `BRLObolViewController`, renders retained Obol/Coin scenes for normal
-  `screengrab`, and exposes only the opaque `dm_obol_controller` accessor.
-  It does not implement legacy immediate draw streams; callers must refresh
-  through high-level GED/Obol operations.
+  `screengrab`, and exposes `dm_obol_controller` only for backend attachment
+  plumbing.  App-host code should use GED's Obol-controller association for a
+  view context.  `dm-obol` does not implement legacy immediate draw streams;
+  callers must refresh through high-level GED/Obol operations.
+* Obol display-image readback is now a libbrlobol controller capability:
+  `BRLObolViewController::renderToImage`.  `dm-obol` delegates to it instead
+  of maintaining a separate framebuffer cache, and GED screengrab uses the
+  GED-private Obol image bridge for Obol-backed views before falling back to
+  raw DM readback for non-Obol display managers.
+* GED provides an opaque Obol-controller lookup/ensure API for view contexts.
+  App-host helpers such as fbserv and readback use that GED/libbrlobol
+  association instead of discovering controllers through libdm implementation
+  details like `dm_obol_controller`.
 * qged, GSH, and classic MGED embedded framebuffer traffic now use
   Obol/imgstream-backed fbserv bridges instead of selecting legacy qtcad
   GL/swrast framebuffer canvases or requiring a `struct fb` display path.
@@ -198,9 +198,9 @@ Current migrated boundaries include:
 * Retained fallback tests that need BSG storage use explicit `_bsg`
   constructors rather than GED's neutral default active view, and are removed
   when Obol/native tests cover the migrated behavior.  The standalone Tcl
-  overlay BSG regression and transitional `rt_view_legacy_bsg` test are
-  retired.  Generic harnesses such as GED fuzzing use GED's default active
-  native view context instead of initializing BSG view storage directly.
+  overlay BSG regression and transitional legacy-view tests are retired.
+  Generic harnesses such as GED fuzzing use GED's default active native view
+  context instead of initializing BSG view storage directly.
 * Borrowed Obol view controllers can publish database sources/groups and
   activate feature/polygon stores without first converting to owned
   controllers.
@@ -238,10 +238,6 @@ Current migrated boundaries include:
 Active Blockers To Retiring Legacy Paths
 ----------------------------------------
 
-* An initial clean BSG-free libbv replacement exists for generic view state and
-  manipulation, and neutral librt view contexts now use it.  Focused
-  GED/qtcad Obol workflows use native contexts and Obol adapters, but broader
-  caller-facing paths still need inventory and conversion.
 * No-owned-scene and old application workflows should either attach/create an
   Obol scene/controller or accept explicit no-op behavior.  Retained adapters
   should not be extended to keep migrated draw features alive.
@@ -249,11 +245,6 @@ Active Blockers To Retiring Legacy Paths
   Obol DMs.  Remaining hardening is to apply this model to old no-owned-scene
   and application paths, then remove compatibility code that exists only to
   mirror retained BSG/DM state.
-* Neutral RT adapter registry dispatch has moved to
-  `src/librt/view_context_adapters.c`, but many public neutral RT view
-  wrappers still live in `src/librt/view_legacy_bsg.c` beside explicit BSG
-  adapter dispatch.  Split those wrappers into a non-legacy file after the
-  remaining fallback-only calls are isolated.
 * Lower display-stream, framebuffer, and display-manager behavior still needs
   completion through libimgstream/libicv and Obol display-host paths.  qged,
   GSH, and classic MGED now have Obol/imgstream-backed fbserv bridges, but the

@@ -52,7 +52,7 @@ struct pnts_specific {
 
 
 __BEGIN_DECLS
-extern int rt_ell_plot(struct bu_list *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct rt_view_info *);
+extern int rt_ell_plot(struct bu_list *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct bv_view_info *);
 __END_DECLS
 
 
@@ -1133,7 +1133,7 @@ rt_pnts_print(register const struct soltab *stp)
  * Plot pnts collection as axes or spheres.
  */
 C_DECL int
-rt_pnts_plot(struct bu_list *vhead, struct rt_db_internal *internal, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *UNUSED(info))
+rt_pnts_plot(struct bu_list *vhead, struct rt_db_internal *internal, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
 {
     struct rt_pnts_internal *pnts;
     struct bu_list *head;

@@ -1,7 +1,7 @@
 BRL-CAD Obol Active Work
 ========================
 
-Last refreshed: 2026-07-07
+Last refreshed: 2026-07-08
 Branch: oboltest2
 
 Purpose
@@ -36,11 +36,14 @@ missing Obol behavior or define new semantics.
 
 libbv owns common non-scene view mechanics: camera state, matrices, autoview
 bounds math, screen/model transforms, input/knob state, and view-set
-bookkeeping.  `rt_view_context_native` is a transitional librt adapter over
-libbv, not the long-term owner of native view state or a legacy surface.
-ABI compatibility is not a goal for this branch; clean direct ownership is.
-libbv must not own scene objects, display lists, polygon stores, snap/selection
-state, LoD caches, or retained scene graph behavior.
+bookkeeping.  It also owns passive view snapshots and sampling preferences
+through `bv_view_info` and `bv_lod_policy`.  The old `rt_view_info` /
+`rt_view_lod_policy` names are LoD compatibility aliases/wrappers over libbv
+only; the RT view-context and scene-ref facade has been deleted.
+Primitive draw/LoD callbacks use `bv_view_info` directly.  ABI compatibility is
+not a goal for this branch; clean direct ownership is.  libbv must not own
+scene objects, display lists, polygon stores, snap/selection state, realized
+LoD payloads, LoD caches, or retained scene graph behavior.
 
 libbrlobol owns the retained Obol scene graph: database sources, source-local
 geometry, per-instance placement and identity, view-aware LoD payloads,
@@ -115,20 +118,60 @@ Current Baseline
 * Current focused image gates pass for GED draw, faceplate/grid, LoD,
   selection, snap semantics, Obol draw sync, and libbrlobol prototype/LoD
   update tests.
+* qtcad/qged/MGED production passive view state now uses libbv directly.  MGED
+  view knobs use `struct bv_knobs`, qsketch publishes Obol feature-store line
+  sets directly, and GED draw tests use libbv or final GED/libbrlobol APIs
+  rather than RT context adapters.
+* GED draw LoD policy storage uses `struct bv_lod_policy`; realized LoD
+  payloads remain libbrlobol/Obol-owned and view-specific.
+* librt primitive plotting and LoD callbacks use `bv_view_info` directly.
+  The `rt_view_info` name remains only as a transitional compatibility alias
+  and wrapper test target.
+* Passive overlay, faceplate, snap, ADC, axes, parameter-display, and input
+  records use libbv names in production code.  The old passive `rt_view_*`
+  record names/init macros and ADC/knob helpers are no longer exposed by
+  `rt/view.h`.
+* The old librt `rt_view_context_*`, `rt_view_scene_ref`, feature/polygon
+  adapter, and `view_legacy_bsg` implementation/declaration paths have been
+  removed.
+* GED draw plumbing uses `ged_draw_scene_handle` for opaque scene identity
+  instead of RT-owned scene refs.  libbrlobol no longer exposes RT scene-ref
+  bridge helpers on `SoBRLSceneController` or mesh-LoD cache APIs.
+* libbrlobol has `BRLObolViewAttachment` for per-view Obol attachment state.
+  GED view host records forward LoD policy, independent-scope state, and
+  Obol scene-root tokens through it.  `BRLObolViewController` also owns its
+  view-local realized LoD payloads through the attachment instead of raw
+  controller members.
+* GED view contexts and attached Obol controllers share one
+  `BRLObolViewAttachment` while attached.  Attach, replacement, detach, and
+  teardown explicitly bind/unbind the attachment, and `ged_test_mged_view_state`
+  verifies multi-view controller attachment sharing plus GED-to-controller LoD
+  policy propagation.
+* MGED edit setup converts `bv_context` to `rt_edit_view` snapshots directly
+  in librt; the stale BSG edit adapter header has been removed.
+* The no-op GED edit-matrix view API and unused BSG `gv_edit_mat` display
+  field have been removed.  MGED Obol refresh no longer stages edit state
+  through per-frame display-path matrices.
+* qged edit plugins now update edit previews only through GED/libbrlobol
+  feature refs.  The direct qtcad widget-preview fallback has been removed
+  from production qged edit code.
+* Obol viewport readback is centralized in
+  `BRLObolViewController::renderToImage`.  `dm-obol` no longer owns a separate
+  display-image cache/copy path, and GED screengrab uses the Obol bridge for
+  Obol-backed views.
+* App-host helpers can now resolve the Obol controller for a view through GED's
+  opaque controller lookup/ensure API.  fbserv/readback helpers use that
+  association instead of probing the libdm Obol backend.
 
 Known Risks
 -----------
 
-* libbv now owns native view bookkeeping for refresh dirty state,
-  enable/suppression, drawn count, frame time, zclip, framebuffer mode, and
-  cleared state.  Remaining `rt_view_context_*` scene/interaction wrappers
-  should move to direct libbrlobol/Obol ownership or be deleted; they should
-  not be preserved for legacy callers.
 * Display stream and fbserv wire-protocol ownership is still transitional in
   libdm.  The long-term home should be a small image/framebuffer protocol
   layer beside libimgstream/libicv.
-* MGED/TclCAD and older application hosts still need more Obol-native view,
-  input, faceplate, readback, and refresh cleanup.
+* Older application hosts still need more Obol-native readback/fbserv/display
+  cleanup, but their passive view-state mechanics should not grow new
+  `rt_view_context_*` dependencies.
 * Compact CAD records still need tighter promote/demote and off-scene handle
   APIs before they are a fully stable extension point.
 * Progressive large-root behavior still needs stronger handling for
@@ -149,20 +192,18 @@ Known Risks
 Next Steps
 ----------
 
-1. Continue shrinking `rt_view_context`: move display-independent view state
-   into libbv, move scene/interaction behavior into libbrlobol/Obol adapters,
-   and delete retained BSG shims/wrappers instead of building a larger wrapper
-   layer.
-2. Retire remaining application-host legacy dependencies: MGED/TclCAD/GSH raw
-   dm refresh, faceplate/input/readback, fbserv hookup, and `dm_plugins`
-   assumptions.  Obol/libbrlobol/libbv should own the modern behavior.
-3. Move fbserv protocol ownership out of libdm after qged/GSH/MGED ERT paths
+1. Retire remaining application-host legacy dependencies: raw dm readback,
+   fbserv hookup, and `dm_plugins` assumptions.  Obol/libbrlobol/libbv should
+   own the modern behavior.
+2. Move fbserv protocol ownership out of libdm after qged/GSH/MGED ERT paths
    are stable.  Preserve Auth/TLS and make the destination an image/framebuffer
    stream protocol layer, not libbrlobol scene code.
-4. Finish residual command/import/readback/no-owned-scene/no-feature-store
+3. Finish residual command/import/readback/no-owned-scene/no-feature-store
    edge cases and tests.  Command-scene and overlay routing are mostly
    migrated; the remaining work is coverage and cleanup, not a second drawing
    path.
+4. Finish edit visualization modernization on top of librt edit operations,
+   libged command policy, and libbrlobol/Obol preview/manipulator realization.
 5. Complete progressive large-root policy gaps: duplicate-occurrence
    proxy/frontier identity, CSG-aware non-union children, automatic
    pending-autoview settlement/cancellation, and no whole-root synchronous

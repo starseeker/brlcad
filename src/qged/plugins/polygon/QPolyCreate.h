@@ -31,9 +31,9 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include "bg/polygon_types.h"
+#include "ged/draw.h"
 #include "qtcad/QgColorRGB.h"
 #include "qtcad/QgTypes.h"
-#include "rt/view.h"
 #include "QPolySettings.h"
 
 class QgPluginContext;
@@ -104,7 +104,7 @@ class QPolyCreate : public QWidget
     private:
 	bg_clip_t op = bg_Union;
 	int poly_cnt = 0;
-	rt_view_polygon_ref p = RT_VIEW_POLYGON_REF_NULL_INIT;
+	ged_draw_view_polygon_ref p = GED_DRAW_VIEW_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;

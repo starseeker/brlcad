@@ -255,7 +255,7 @@ endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_selection_semantics_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_selection_semantics_cache)
 
-brlcad_addexec(ged_test_snap_semantics "snap_semantics.cpp" "librt;libbu" TEST)
+brlcad_addexec(ged_test_snap_semantics "snap_semantics.cpp" "libbv;libbu" TEST)
 if(TARGET ged_test_snap_semantics)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -266,20 +266,6 @@ endif(TARGET ged_test_snap_semantics)
 brlcad_add_test(NAME ged_test_snap_semantics COMMAND ged_test_snap_semantics)
 if(TARGET ged_test_snap_semantics)
   set_property(TEST ged_test_snap_semantics
-    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-endif()
-
-brlcad_addexec(ged_test_measure_semantics "measure_semantics.cpp" "librt;libbu" TEST)
-if(TARGET ged_test_measure_semantics)
-  foreach(tdp ${test_deps})
-    if (TARGET ${tdp})
-      add_dependencies(ged_test_measure_semantics ${tdp})
-    endif ()
-  endforeach()
-endif(TARGET ged_test_measure_semantics)
-brlcad_add_test(NAME ged_test_measure_semantics COMMAND ged_test_measure_semantics)
-if(TARGET ged_test_measure_semantics)
-  set_property(TEST ged_test_measure_semantics
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
 
@@ -410,7 +396,6 @@ foreach(_ged_drawing_stage0_test
     ged_test_drawing_quad
     ged_test_selection_semantics
     ged_test_snap_semantics
-    ged_test_measure_semantics
     ged_test_lod_crossrun
     ged_test_mged_view_state
     ged_test_rtwizard_view
@@ -430,7 +415,6 @@ cmakefiles(
   rook.g
   selection_semantics.cpp
   snap_semantics.cpp
-  measure_semantics.cpp
   view_independent.cpp
   view_command.cpp
   lod_crossrun.cpp

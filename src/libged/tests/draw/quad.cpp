@@ -33,6 +33,7 @@
 #include <brlobol/mesh_lod_cache.h>
 #include <icv.h>
 #include <rt/view.h>
+#include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -156,7 +157,7 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    int cnum = rt_view_context_is_independent(v) ? vnum : -1;
+    int cnum = ged_view_context_is_independent(v) ? vnum : -1;
 
     const char *s_av[4] = {NULL};
     s_av[0] = "screengrab";
@@ -474,7 +475,7 @@ main(int ac, char *av[]) {
 
     // We don't want the default GED views for this test
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    rt_view_set_context_remove(view_set_ctx, NULL);
+    ged_view_set_context_remove(view_set_ctx, NULL);
 
     // Set callback so database changes notify public GED services.
     db_add_changed_clbk(gedp->dbip, &quad_changed_callback, (void *)gedp);
@@ -487,11 +488,11 @@ main(int ac, char *av[]) {
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);
-	void *v = rt_view_context_create_with_set(view_set_ctx);
+	void *v = ged_view_context_create_with_set(view_set_ctx);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, v);
-	rt_view_context_name_set(v, view_name);
-	rt_view_set_context_add(view_set_ctx, v);
+	bv_name_set(DRAW_TEST_BV(v), view_name);
+	ged_view_set_context_add(view_set_ctx, v);
 	ged_view_context_owned_add(gedp, v);
 
 	/* To generate images that allow us to check multi-view behavior, use
@@ -519,11 +520,10 @@ main(int ac, char *av[]) {
 	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
 	dm_set_win_bounds(dmp, windowbounds);
 
-	dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+	dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
 	ged_view_context_display_manager_set(v, dmp);
-	rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
-	rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
-	    gedp->dbip->dbi_base2local);
+	bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+	bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
 	// Done with dm name
 	bu_vls_free(&dm_name);

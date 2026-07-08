@@ -27,7 +27,7 @@
 #include "bu/log.h"
 #include "bu/getopt.h"
 
-#include "rt/view.h"
+#include "bv.h"
 
 #include "../ged_private.h"
 #include "./check_private.h"
@@ -644,18 +644,17 @@ int ged_check_core(struct ged *gedp, int argc, const char *argv[])
 	}
     } else if (bu_strncmp(sub, "overlaps", len) == 0) {
 	if (options.getfromview) {
-	    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
 	    point_t eye_model;
 	    quat_t quat;
 	    void *view_ctx = ged_view_active_ctx(gedp);
+	    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 	    if (!view_ctx) {
 		error = 1;
 		goto freemem;
 	    }
-	    rt_view_context_info_get(&view_info, view_ctx);
-	    rt_view_context_orientation_quat_get(quat, view_ctx);
+	    bv_orientation_quat_get(quat, view);
 	    _ged_rt_set_eye_model(gedp, eye_model);
-	    analyze_set_view_information(state, view_info.size, &eye_model, &quat);
+	    analyze_set_view_information(state, bv_size_get(view), &eye_model, &quat);
 	}
 	if (check_overlaps(gedp, state, gedp->dbip, tobjtab, tnobjs, &options)) {
 	    error = 1;

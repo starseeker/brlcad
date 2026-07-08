@@ -35,6 +35,7 @@
 #include <ged.h>
 #include <ged/draw.h>
 #include <rt/view.h>
+#include "view_test_util.h"
 
 void
 dm_refresh(struct ged *gedp, int vnum)
@@ -202,7 +203,7 @@ main(int ac, char *av[]) {
 
     // We don't want the default GED views for this test
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    rt_view_set_context_remove(view_set_ctx, NULL);
+    ged_view_set_context_remove(view_set_ctx, NULL);
 
     // Set up the views.  Unlike the other drawing tests, we are explicitly
     // out to test the behavior of multiple views and dms, so we need to
@@ -213,11 +214,11 @@ main(int ac, char *av[]) {
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);
-	views[i] = rt_view_context_create_with_set(view_set_ctx);
+	views[i] = ged_view_context_create_with_set(view_set_ctx);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, views[i]);
-	rt_view_context_name_set(views[i], view_name);
-	rt_view_set_context_add(view_set_ctx, views[i]);
+	bv_name_set(DRAW_TEST_BV(views[i]), view_name);
+	ged_view_set_context_add(view_set_ctx, views[i]);
 	ged_view_context_owned_add(gedp, views[i]);
 
 	/* To generate images that will allow us to check if the drawing
@@ -245,11 +246,10 @@ main(int ac, char *av[]) {
 	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
 	dm_set_win_bounds(dmp, windowbounds);
 
-	dm_set_vp(dmp, rt_view_context_scale_storage_get(views[i]));
+	dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(views[i])));
 	ged_view_context_display_manager_set(views[i], dmp);
-	rt_view_context_dimensions_set(views[i], dm_get_width(dmp), dm_get_height(dmp));
-	rt_view_context_unit_conversion_set(views[i], gedp->dbip->dbi_local2base,
-	    gedp->dbip->dbi_base2local);
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), dm_get_width(dmp), dm_get_height(dmp));
+	bv_unit_conversion_set(DRAW_TEST_BV(views[i]), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
     }
 
     /* Set distinct view az/el for each of the four quad views.  For
@@ -258,20 +258,20 @@ main(int ac, char *av[]) {
      * multiples of 90 degrees and using non-zero twist components. */
     vect_t aet = VINIT_ZERO;
     VSET(aet, 0, 0, 90);
-    rt_view_context_aet_set(views[0], aet);
-    rt_view_context_update(views[0]);
+    bv_aet_set(DRAW_TEST_BV(views[0]), aet);
+    ged_view_context_update(views[0]);
 
     VSET(aet, 90, 90, 180);
-    rt_view_context_aet_set(views[1], aet);
-    rt_view_context_update(views[1]);
+    bv_aet_set(DRAW_TEST_BV(views[1]), aet);
+    ged_view_context_update(views[1]);
 
     VSET(aet, -90, 270, -90);
-    rt_view_context_aet_set(views[2], aet);
-    rt_view_context_update(views[2]);
+    bv_aet_set(DRAW_TEST_BV(views[2]), aet);
+    ged_view_context_update(views[2]);
 
     VSET(aet, 270, -180, 90);
-    rt_view_context_aet_set(views[3], aet);
-    rt_view_context_update(views[3]);
+    bv_aet_set(DRAW_TEST_BV(views[3]), aet);
+    ged_view_context_update(views[3]);
 
 
     /************************************************************************/
@@ -298,11 +298,11 @@ main(int ac, char *av[]) {
 	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	rt_view_context_dimensions_set(views[i], len, len);
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	rt_view_context_update(views[i]);
+	ged_view_context_update(views[i]);
     }
     ret += img_cmp(0, 2, gedp, av[1], soft_fail);
     ret += img_cmp(1, 2, gedp, av[1], soft_fail);
@@ -316,11 +316,11 @@ main(int ac, char *av[]) {
 	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	rt_view_context_dimensions_set(views[i], len, len);
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	rt_view_context_update(views[i]);
+	ged_view_context_update(views[i]);
     }
     ret += img_cmp(0, 1, gedp, av[1], soft_fail);
     ret += img_cmp(1, 1, gedp, av[1], soft_fail);
@@ -334,11 +334,11 @@ main(int ac, char *av[]) {
 	    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[j]);
 	    dm_set_width(dmp, i);
 	    dm_set_height(dmp, i);
-	    rt_view_context_dimensions_set(views[j], i, i);
+	    bv_dimensions_set(DRAW_TEST_BV(views[j]), i, i);
 	    dm_configure_win(dmp, 0);
 	    // NOTE:  deliberately not resetting aet here - we want to see if it is
 	    // stable without adjustment.
-	    rt_view_context_update(views[j]);
+	    ged_view_context_update(views[j]);
 	}
     }
     len = 512;
@@ -346,11 +346,11 @@ main(int ac, char *av[]) {
 	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	rt_view_context_dimensions_set(views[i], len, len);
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	rt_view_context_update(views[i]);
+	ged_view_context_update(views[i]);
     }
     ret += img_cmp(0, 1, gedp, av[1], soft_fail);
     ret += img_cmp(1, 1, gedp, av[1], soft_fail);

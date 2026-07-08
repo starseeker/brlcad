@@ -13,9 +13,10 @@
 
 #include "brlobol/database_source.h"
 #include "brlobol/view_controller.h"
+#include "bv.h"
+#include "ged/view.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
-#include "rt/view.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -71,7 +72,7 @@ qg_obol_database_view_context(QgView *display)
 static int
 qg_obol_database_view_is_independent(QgView *display)
 {
-    return rt_view_context_is_independent(
+    return ged_view_context_is_independent(
 	    qg_obol_database_view_context(display));
 }
 
@@ -82,7 +83,9 @@ qg_obol_database_view_scope_name(QgView *display)
     if (!view_ctx)
 	return std::string("shared");
 
-    const char *name = rt_view_context_name_get(view_ctx);
+    const struct bv *view = bv_context_view_const(
+	reinterpret_cast<const struct bv_context *>(view_ctx));
+    const char *name = bv_name_get(view);
     if (name && name[0])
 	return std::string(name);
 

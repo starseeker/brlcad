@@ -48,11 +48,11 @@
 #include "brlobol/hud_label_overlay.h"
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/view_controller.h"
+#include "bv.h"
 #include "QgObolContextManager.h"
 #include "QgLegacyViewDm.h"
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgLegacyView.h"
-#include "rt/view.h"
 
 #include <Inventor/SoOffscreenRenderer.h>
 #include <Inventor/SoViewport.h>
@@ -107,7 +107,7 @@ struct QgCanvasState {
     /* ---- input-binding flags ---- */
     bool use_default_keybindings   = true;
     bool use_default_mousebindings = true;
-    int  lmouse_mode = -1;  /* set to RT_VIEW_ADJUST_SCALE in canvas constructor */
+    int  lmouse_mode = -1;  /* set to BV_ADJUST_SCALE in canvas constructor */
 
     /* ---- widget-level tracking ---- */
     int    current = 1;     /* 1 = this view is active */
@@ -190,7 +190,7 @@ qgcanvas_sync_obol_camera(QgCanvasState &s)
 	return;
 
     const void *view_ctx = qg_legacy_view_to_context(s.v);
-    (void)s.obol->syncCameraFromRtViewContext(view_ctx);
+    (void)s.obol->syncCameraFromViewContext(view_ctx);
 }
 
 /** Render the Obol scene through SoOffscreenRenderer into a QImage. */
@@ -344,7 +344,7 @@ static inline void
 qgcanvas_sync_obol_axes(QgCanvasState &s,
 			SoGroup *group,
 			const char *overlayId,
-			const struct rt_view_axes_state &state)
+			const struct bv_axes_state &state)
 {
     const int childIndex = qgcanvas_find_obol_axes_child(group, overlayId);
     if (!state.draw) {
@@ -374,7 +374,7 @@ qgcanvas_sync_obol_axes(QgCanvasState &s,
 static inline void
 qgcanvas_sync_obol_grid(QgCanvasState &s,
 			SoGroup *group,
-			const struct rt_view_grid_state &state,
+			const struct bv_grid_state &state,
 			void *view_ctx)
 {
     const char *overlayId = "faceplate::grid";
@@ -400,7 +400,7 @@ qgcanvas_sync_obol_grid(QgCanvasState &s,
 static inline void
 qgcanvas_sync_obol_adc(QgCanvasState &s,
 		       SoGroup *group,
-		       const struct rt_view_adc_state &state)
+		       const struct bv_adc_state &state)
 {
     const char *overlayId = "faceplate::adc";
     const int childIndex = qgcanvas_find_obol_adc_child(group, overlayId);
@@ -440,15 +440,16 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
 	return;
     SoGroup *group = static_cast<SoGroup *>(root);
 
-    struct rt_view_grid_state grid = {};
-    struct rt_view_axes_state modelAxes = {};
-    struct rt_view_axes_state viewAxes = {};
-    struct rt_view_adc_state adc = {};
+    struct bv_grid_state grid = {};
+    struct bv_axes_state modelAxes = {};
+    struct bv_axes_state viewAxes = {};
+    struct bv_adc_state adc = {};
     void *view_ctx = qg_legacy_view_to_context(s.v);
-    (void)rt_view_context_grid_state_get(&grid, view_ctx);
-    (void)rt_view_context_model_axes_state_get(&modelAxes, view_ctx);
-    (void)rt_view_context_view_axes_state_get(&viewAxes, view_ctx);
-    (void)rt_view_context_adc_state_get(&adc, view_ctx);
+    const struct bv *view = qg_legacy_context_bv_const(view_ctx);
+    (void)bv_grid_state_get(&grid, view);
+    (void)bv_model_axes_state_get(&modelAxes, view);
+    (void)bv_view_axes_state_get(&viewAxes, view);
+    (void)bv_adc_state_get(&adc, view);
 
     qgcanvas_sync_obol_grid(s, group, grid, view_ctx);
     qgcanvas_sync_obol_axes(s, group, "faceplate::model_axes", modelAxes);
@@ -472,20 +473,19 @@ static inline void
 qgcanvas_stash_hashes(QgCanvasState &s)
 {
     s.prev_dhash = 0;
-    s.prev_vhash = rt_view_context_hash(qg_legacy_view_to_context(s.v));
+    s.prev_vhash = bv_hash(qg_legacy_view_bv_const(s.v));
 }
 
 /** Request a semantic view refresh and wake the canvas backend. */
 static inline void
 qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
 {
-    uint32_t requested = flags ? flags : RT_VIEW_REFRESH_ALL;
-    if (requested & RT_VIEW_REFRESH_VIEW)
+    uint32_t requested = flags ? flags : BV_REFRESH_ALL;
+    if (requested & BV_REFRESH_VIEW)
 	qgcanvas_sync_obol_camera(s);
     qgcanvas_sync_obol_faceplate(s);
     if (s.v)
-	rt_view_context_refresh_request(qg_legacy_view_to_context(s.v),
-					requested);
+	bv_refresh_request(qg_legacy_view_bv(s.v), requested);
 }
 
 /**
@@ -501,10 +501,10 @@ qgcanvas_diff_hashes_check(QgCanvasState &s)
 {
     bool ret = false;
     unsigned long long c_vhash =
-	rt_view_context_hash(qg_legacy_view_to_context(s.v));
+	bv_hash(qg_legacy_view_bv_const(s.v));
 
     if (s.prev_vhash != c_vhash) {
-	qgcanvas_request_update(s, RT_VIEW_REFRESH_VIEW | RT_VIEW_REFRESH_DRAW);
+	qgcanvas_request_update(s, BV_REFRESH_VIEW | BV_REFRESH_DRAW);
 	ret = true;
     }
     return ret;
@@ -519,9 +519,8 @@ qgcanvas_aet(QgCanvasState &s, double a, double e, double t)
     fastf_t aet_v[3];
     double  aetd[3] = {a, e, t};
     VMOVE(aet_v, aetd);
-    void *view_ctx = qg_legacy_view_to_context(s.v);
-    rt_view_context_aet_set(view_ctx, aet_v);
-    rt_view_context_update(view_ctx);
+    bv_aet_set(qg_legacy_view_bv(s.v), aet_v);
+    bv_context_update(qg_legacy_view_context(s.v), BV_CONTEXT_CHANGED_VIEW);
     qgcanvas_sync_obol_camera(s);
 }
 

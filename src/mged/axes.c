@@ -98,16 +98,16 @@ draw_e_axes(struct mged_state *s)
 {
     point_t v_ap1;                 /* axes position in view coordinates */
     point_t v_ap2;                 /* axes position in view coordinates */
-    struct rt_view_info view_info;
+    fastf_t view_size;
     mat_t model2view;
     mat_t rot_mat;
     mat_t view_rotation;
-    struct rt_view_axes_state gas;
+    struct bv_axes_state gas;
     void *view_ctx = view_state->vs_gvp;
 
-    rt_view_context_info_get(&view_info, view_ctx);
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_rotation_get(view_rotation, view_ctx);
+    view_size = bv_size_get(mged_view_context_view_const(view_ctx));
+    bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
+    bv_rotation_get(view_rotation, mged_view_context_view_const(view_ctx));
 
     if (s->global_editing_state == ST_S_EDIT) {
 	MAT4X3PNT(v_ap1, model2view, MEDIT(s)->e_axes_pos);
@@ -129,7 +129,7 @@ draw_e_axes(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_edit_axes_label1);
     gas.line_width = axes_state->ax_edit_linewidth1;
 
-    dm_draw_hud_axes(DMP, view_info.size, view_rotation, &gas);
+    dm_draw_hud_axes(DMP, view_size, view_rotation, &gas);
 
     memset(&gas, 0, sizeof(gas));
     gas.label_flag = 1;
@@ -140,7 +140,7 @@ draw_e_axes(struct mged_state *s)
     gas.line_width = axes_state->ax_edit_linewidth2;
 
     bn_mat_mul(rot_mat, view_rotation, MEDIT(s)->acc_rot_sol);
-    dm_draw_hud_axes(DMP, view_info.size, rot_mat, &gas);
+    dm_draw_hud_axes(DMP, view_size, rot_mat, &gas);
 }
 
 
@@ -149,15 +149,15 @@ draw_m_axes(struct mged_state *s)
 {
     point_t m_ap;			/* axes position in model coordinates, mm */
     point_t v_ap;			/* axes position in view coordinates */
-    struct rt_view_info view_info;
+    fastf_t view_size;
     mat_t model2view;
     mat_t view_rotation;
-    struct rt_view_axes_state gas;
+    struct bv_axes_state gas;
     void *view_ctx = view_state->vs_gvp;
 
-    rt_view_context_info_get(&view_info, view_ctx);
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_rotation_get(view_rotation, view_ctx);
+    view_size = bv_size_get(mged_view_context_view_const(view_ctx));
+    bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
+    bv_rotation_get(view_rotation, mged_view_context_view_const(view_ctx));
 
     VSCALE(m_ap, axes_state->ax_model_pos, s->dbip->dbi_local2base);
     MAT4X3PNT(v_ap, model2view, m_ap);
@@ -170,7 +170,7 @@ draw_m_axes(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_model_axes_label);
     gas.line_width = axes_state->ax_model_linewidth;
 
-    dm_draw_hud_axes(DMP, view_info.size, view_rotation, &gas);
+    dm_draw_hud_axes(DMP, view_size, view_rotation, &gas);
 }
 
 
@@ -178,14 +178,14 @@ void
 draw_v_axes(struct mged_state *s)
 {
     point_t v_ap;			/* axes position in view coordinates */
-    struct rt_view_info view_info;
+    fastf_t view_size;
     mat_t view_rotation;
-    struct rt_view_axes_state gas;
+    struct bv_axes_state gas;
     void *view_ctx = view_state->vs_gvp;
 
     (void)s;
-    rt_view_context_info_get(&view_info, view_ctx);
-    rt_view_context_rotation_get(view_rotation, view_ctx);
+    view_size = bv_size_get(mged_view_context_view_const(view_ctx));
+    bv_rotation_get(view_rotation, mged_view_context_view_const(view_ctx));
 
     VSET(v_ap,
 	 axes_state->ax_view_pos[X] * RT_INV_VIEW,
@@ -200,7 +200,7 @@ draw_v_axes(struct mged_state *s)
     VMOVE(gas.label_color, color_scheme->cs_view_axes_label);
     gas.line_width = axes_state->ax_view_linewidth;
 
-    dm_draw_hud_axes(DMP, view_info.size, view_rotation, &gas);
+    dm_draw_hud_axes(DMP, view_size, view_rotation, &gas);
 }
 
 

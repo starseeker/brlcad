@@ -43,15 +43,20 @@
 
 #include <bu.h>
 #include "bu/opt.h"
+#include "rt/edit.h"
 #include "rt/view.h"
+#include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include "dm/obol.h"
 #include <ged.h>
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
+#include "brlobol/view_attachment.h"
 #include "brlobol/scene_controller.h"
 #include "brlobol/view_controller.h"
+#include "../../ged_private.h"
+#include "../../ged_draw_view_private.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" long draw_test_count_nonblack_pixels(const char *filename);
@@ -111,13 +116,10 @@ configure_obol_view(struct ged *gedp, void *view_ctx, int width, int height)
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_context_scale_storage_get(view_ctx));
+    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(view_ctx)));
     ged_view_context_display_manager_set(view_ctx, dmp);
-    rt_view_context_dimensions_set(view_ctx, dm_get_width(dmp),
-	    dm_get_height(dmp));
-    rt_view_context_unit_conversion_set(view_ctx,
-	    gedp->dbip->dbi_local2base,
-	    gedp->dbip->dbi_base2local);
+    bv_dimensions_set(DRAW_TEST_BV(view_ctx), dm_get_width(dmp), dm_get_height(dmp));
+    bv_unit_conversion_set(DRAW_TEST_BV(view_ctx), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
     return 1;
 }
 
@@ -148,12 +150,10 @@ open_gedp(const char *gfile, int width, int height)
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
     ged_view_context_display_manager_set(v, dmp);
-    rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_context_unit_conversion_set(v,
-	gedp->dbip->dbi_local2base,
-	gedp->dbip->dbi_base2local);
+    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
     ged_exec_ae(gedp, 3, s_av);
@@ -253,12 +253,12 @@ test_highlight_state(const char *datadir)
 }
 
 /* ========================================================================== */
-/* Test 2: Edit matrix state is accepted by the neutral view context           */
+/* Test 2: librt edit view snapshots consume libbv view contexts              */
 /* ========================================================================== */
 static int
-test_edit_matrix(const char *datadir)
+test_edit_context_snapshot(const char *datadir)
 {
-    bu_log("\n--- Test 2: edit matrix state set/clear ---\n");
+    bu_log("\n--- Test 2: edit context view snapshot ---\n");
 
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
@@ -278,32 +278,34 @@ test_edit_matrix(const char *datadir)
     ged_exec_autoview(gedp, 1, s_av);
 
     void *v = ged_view_active_ctx(gedp);
-    ged_draw_set_highlight_state(gedp, 1);
+    bv_scale_set(DRAW_TEST_BV(v), 321.0);
+    bv_context_update((struct bv_context *)v, BV_CONTEXT_CHANGED_VIEW);
 
-    ged_view_context_edit_matrix_clear(v);
-
-    /* Apply a clear translation through the neutral edit-matrix state. */
-    mat_t edit_mat;
-    MAT_IDN(edit_mat);
-    edit_mat[3] = 10.0;
-
-    int edit_matrix_ready = ged_view_context_edit_matrix_set(v, edit_mat);
     int fail = 0;
-    if (!edit_matrix_ready) {
-	bu_log("FAIL: edit-matrix set failed on the active view context\n");
+    struct rt_edit_view ev;
+    rt_edit_view_from_context(&ev, v);
+    if (!NEAR_ZERO(ev.gv_scale - 321.0, VUNITIZE_TOL)) {
+	bu_log("FAIL: rt_edit_view_from_context did not snapshot bv scale "
+		"(got %g)\n", ev.gv_scale);
 	fail = 1;
     } else {
-	bu_log("PASS: edit-matrix set accepted by the active view context\n");
+	bu_log("PASS: rt_edit_view_from_context snapshots bv scale\n");
     }
 
-    if (!ged_view_context_edit_matrix_clear(v)) {
-	bu_log("FAIL: edit-matrix clear failed on the active view context\n");
+    struct bn_tol tol;
+    BN_TOL_INIT(&tol);
+    struct rt_edit *edit = rt_edit_create_context(NULL, NULL, &tol, v);
+    if (!edit || !edit->vp ||
+	    !NEAR_ZERO(edit->vp->gv_scale - 321.0, VUNITIZE_TOL)) {
+	bu_log("FAIL: rt_edit_create_context did not initialize edit view "
+		"state from bv context\n");
 	fail = 1;
     } else {
-	bu_log("PASS: edit-matrix clear accepted by the active view context\n");
+	bu_log("PASS: rt_edit_create_context initializes edit view state "
+		"from bv context\n");
     }
+    rt_edit_destroy(edit);
 
-    ged_draw_set_highlight_state(gedp, 0);
     bu_file_delete("mged_view_state_t2.g");
     ged_close(gedp);
     return fail;
@@ -333,19 +335,17 @@ test_multi_obol_dm_attachment(const char *datadir)
 
     int fail = 0;
     void *v0 = ged_view_active_ctx(gedp);
-    rt_view_context_name_set(v0, "V0");
+    bv_name_set(DRAW_TEST_BV(v0), "V0");
 
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    void *v1 = rt_view_context_create_with_set(view_set_ctx);
+    void *v1 = ged_view_context_create_with_set(view_set_ctx);
     if (!v1) {
 	bu_log("FAIL: secondary view creation failed\n");
 	fail = 1;
     } else {
-	rt_view_context_name_set(v1, "V1");
-	rt_view_context_unit_conversion_set(v1,
-		gedp->dbip->dbi_local2base,
-		gedp->dbip->dbi_base2local);
-	rt_view_set_context_add(view_set_ctx, v1);
+	bv_name_set(DRAW_TEST_BV(v1), "V1");
+	bv_unit_conversion_set(DRAW_TEST_BV(v1), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
+	ged_view_set_context_add(view_set_ctx, v1);
 	ged_view_context_owned_add(gedp, v1);
 
 	const char *dm_av[7] = {"dm", "attach", "-V", "V1", "obol",
@@ -364,6 +364,46 @@ test_multi_obol_dm_attachment(const char *datadir)
 	    v0_controller == v1_controller) {
 	bu_log("FAIL: views should have distinct Obol controllers\n");
 	fail = 1;
+    }
+    if (!fail) {
+	BRLObolViewAttachment *v0_attachment =
+	    ged_view_context_obol_attachment(v0);
+	BRLObolViewAttachment *v1_attachment =
+	    ged_view_context_obol_attachment(v1);
+	if (!v0_attachment || !v1_attachment ||
+		v0_attachment != v0_controller->getViewAttachment() ||
+		v1_attachment != v1_controller->getViewAttachment() ||
+		v0_attachment == v1_attachment) {
+	    bu_log("FAIL: GED view contexts should share attachment state "
+		    "with their attached Obol controllers\n");
+	    fail = 1;
+	} else {
+	    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	    lod_policy.csg_enabled = 1;
+	    lod_policy.bot_threshold = 42;
+	    lod_policy.scale = 2.5;
+	    if (!ged_draw_view_context_lod_policy_apply(v1, &lod_policy)) {
+		bu_log("FAIL: applying per-view LoD policy should succeed\n");
+		fail = 1;
+	    } else {
+		struct bv_lod_policy controller_policy = BV_LOD_POLICY_INIT;
+		v1_controller->getViewAttachment()->getLodPolicy(
+		    &controller_policy);
+		if (!controller_policy.csg_enabled ||
+			controller_policy.bot_threshold != 42 ||
+			!NEAR_ZERO(controller_policy.scale - 2.5,
+			    VUNITIZE_TOL)) {
+		    bu_log("FAIL: GED LoD policy updates should be visible "
+			    "through the attached controller attachment "
+			    "(csg=%d mesh=%d threshold=%zu scale=%g)\n",
+			    controller_policy.csg_enabled,
+			    controller_policy.mesh_enabled,
+			    controller_policy.bot_threshold,
+			    controller_policy.scale);
+		    fail = 1;
+		}
+	    }
+	}
     }
 
     const char *draw_av[3] = {"draw", "all.g", NULL};
@@ -392,6 +432,36 @@ test_multi_obol_dm_attachment(const char *datadir)
 		shared_sources);
     }
 
+    unsigned char *bridge_image = NULL;
+    int bridge_ret = ged_obol_view_display_image(gedp, v0,
+	    &bridge_image, 1, 0);
+    if (bridge_ret != 1 || !bridge_image) {
+	bu_log("FAIL: GED Obol display-image bridge should render an "
+		"attached Obol view (ret=%d)\n", bridge_ret);
+	fail = 1;
+    } else {
+	struct dm *v0_dmp =
+	    (struct dm *)ged_view_context_display_manager_get(v0);
+	size_t pixel_count = (size_t)dm_get_width(v0_dmp) *
+	    (size_t)dm_get_height(v0_dmp);
+	size_t lit_pixels = 0;
+	for (size_t i = 0; i < pixel_count; i++) {
+	    const unsigned char *p = bridge_image + i * 3;
+	    if (p[0] || p[1] || p[2])
+		lit_pixels++;
+	}
+	if (!lit_pixels) {
+	    bu_log("FAIL: GED Obol display-image bridge returned an "
+		    "empty image\n");
+	    fail = 1;
+	} else {
+	    bu_log("PASS: GED Obol display-image bridge rendered %zu "
+		    "non-black pixels\n", lit_pixels);
+	}
+    }
+    if (bridge_image)
+	bu_free(bridge_image, "GED Obol display-image bridge test image");
+
     ged_close(gedp);
     bu_file_delete("mged_view_state_t3.g");
     return fail;
@@ -419,7 +489,7 @@ main(int argc, char *argv[])
 
     int failures = 0;
     failures += test_highlight_state(datadir);
-    failures += test_edit_matrix(datadir);
+    failures += test_edit_context_snapshot(datadir);
     failures += test_multi_obol_dm_attachment(datadir);
 
     if (failures == 0) {

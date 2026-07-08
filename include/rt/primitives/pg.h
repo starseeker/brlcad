@@ -38,7 +38,7 @@ RT_EXPORT extern int rt_pg_plot(struct bu_list          *vhead,
 				struct rt_db_internal   *ip,
 				const struct bg_tess_tol *ttol,
 				const struct bn_tol     *tol,
-				const struct rt_view_info *info);
+				const struct bv_view_info *info);
 
 /** @} */
 

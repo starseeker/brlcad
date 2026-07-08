@@ -38,10 +38,10 @@
 
 extern "C" {
 #include "vmath.h"
+#include "bv.h"
 #include "bu.h"
 #include "bn.h"
 #include "dm.h"
-#include "rt/view.h"
 #include "../null/dm-Null.h"
 #include "../dm-gl.h"
 }
@@ -202,8 +202,9 @@ qtgl_open(void *ctx, void *UNUSED(interp), int argc, const char **argv)
     struct qtgl_vars *privars = NULL;
 
     /* Make sure we have a Qt widget context.  Default app plumbing can still
-     * pass an opaque RT view context when no application widget is available. */
-    if (!ctx || rt_view_context_is_valid(ctx))
+     * pass an opaque passive view context when no application widget is
+     * available. */
+    if (!ctx || bv_context_is_valid((const struct bv_context *)ctx))
 	return NULL;
 
     BU_GET(dmp, struct dm);

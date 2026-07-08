@@ -38,6 +38,7 @@ extern "C" {
 #include "bu/opt.h"
 #include "bu/path.h"
 #include "bu/vls.h"
+#include "bv.h"
 #include "raytrace.h"
 #include "ged/draw.h"
 }
@@ -484,7 +485,7 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	have_xy = 1;
-	rt_view_context_mouse_state_set(gd->cv, x, y);
+	bv_mouse_state_set(bv_context_view((struct bv_context *)gd->cv), x, y);
     }
 
     ged_draw_view_polygon_ref poly_ref =

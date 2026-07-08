@@ -1061,7 +1061,7 @@ tor_ellipse_points(
 }
 
 static int
-rt_tor_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_tor_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     vect_t a, b, tor_a, tor_b, tor_h, center;
     fastf_t mag_a, mag_b, mag_h;
@@ -1075,7 +1075,7 @@ rt_tor_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     tor = (struct rt_tor_internal *)ip->idb_ptr;
     RT_TOR_CK_MAGIC(tor);
 
-    fastf_t point_spacing = rt_view_solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
     VMOVE(tor_a, tor->a);
     mag_a = tor->r_a;
@@ -1135,7 +1135,7 @@ rt_tor_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     /* draw circular radial cross sections */
     VMOVE(b, tor_h);
 
-    num_ellipses = primitive_curve_count(ip, tol, rt_view_lod_curve_scale(v), s_size);
+    num_ellipses = primitive_curve_count(ip, tol, bv_view_lod_curve_scale(v), s_size);
     if (num_ellipses < 3) {
 	num_ellipses = 3;
     }
@@ -1160,7 +1160,7 @@ rt_tor_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 }
 
 int
-rt_tor_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_tor_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -1340,7 +1340,7 @@ rt_tor_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 
 
 C_DECL int
-rt_tor_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_tor_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_tor_internal *tip;
 

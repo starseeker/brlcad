@@ -35,6 +35,7 @@
 #include "vmath.h"
 #include "bn.h"
 #include "bg/clip.h"
+#include "bv.h"
 
 #include "ged/draw.h"
 #include "../ged_private.h"
@@ -372,9 +373,10 @@ draw_png(struct ged *gedp, FILE *fp)
 	image[i] = (unsigned char *)(bytes + ((img_size-i) * num_bytes_per_row));
     }
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    perspective = rt_view_context_perspective_get(view_ctx);
-    rt_view_context_eye_pos_get(eye_pos, view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    perspective = bv_perspective_get(view);
+    bv_eye_pos_get(eye_pos, view);
     dl_png(view_ctx, model2view, perspective, eye_pos, (size_t)img_size, (size_t)img_half_size, image);
 
     /* Write out pixels */

@@ -990,10 +990,10 @@ source_mesh_lod_active(const SoBRLDatabaseSource *source)
 }
 
 static void
-source_view_info(struct rt_view_info *info,
+source_view_info(struct bv_view_info *info,
 		 const SoBRLDatabaseSource *source)
 {
-    rt_view_info_init(info);
+    bv_view_info_init(info);
     if (!info || !source)
 	return;
 
@@ -1004,7 +1004,7 @@ source_view_info(struct rt_view_info *info,
     info->lod.curve_scale = source->realizationCurveScale.getValue();
     info->lod.point_scale = source->realizationPointScale.getValue();
     info->lod.bot_threshold = source->realizationBotThreshold.getValue();
-    rt_view_info_sanitize(info);
+    bv_view_info_sanitize(info);
 }
 
 static fastf_t
@@ -2112,7 +2112,7 @@ vlist_from_lod_realization_internal(struct rt_db_internal *intern,
     struct rt_primitive_lod_realization realization;
     memset(&realization, 0, sizeof(realization));
 
-    struct rt_view_info viewInfo;
+    struct bv_view_info viewInfo;
     source_view_info(&viewInfo, source);
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
@@ -3109,7 +3109,7 @@ mesh_from_primitive_face_set(struct rt_db_internal *intern,
 	return NULL;
 
     struct rt_primitive_indexed_face_set faceSet;
-    struct rt_view_info viewInfo = RT_VIEW_INFO_INIT;
+    struct bv_view_info viewInfo = BV_VIEW_INFO_INIT;
     struct bg_tess_tol ttol = source_tess_tol(source);
     struct bn_tol tol = BN_TOL_INIT_TOL;
     memset(&faceSet, 0, sizeof(faceSet));
@@ -3165,7 +3165,7 @@ publish_lod_mesh_if_available(SoBRLMeshShape *shape,
     if (!lod)
 	return;
 
-    struct rt_view_info viewInfo;
+    struct bv_view_info viewInfo;
     source_view_info(&viewInfo, source);
 
     struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;

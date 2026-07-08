@@ -33,6 +33,18 @@
 
 #include "ged/draw.h"
 
+#ifdef __cplusplus
+class BRLObolViewAttachment;
+GED_EXPORT extern BRLObolViewAttachment *ged_view_context_obol_attachment(
+	const void *view_ctx);
+GED_EXPORT extern int ged_view_context_obol_attachment_bind(
+	void *view_ctx,
+	BRLObolViewAttachment *attachment);
+GED_EXPORT extern int ged_view_context_obol_attachment_unbind(
+	void *view_ctx,
+	BRLObolViewAttachment *attachment);
+#endif
+
 __BEGIN_DECLS
 
 enum ged_draw_view_selection_kind {
@@ -55,6 +67,7 @@ GED_EXPORT extern int ged_draw_view_context_selection_set_path(
 	enum ged_draw_view_selection_kind kind,
 	const char *path);
 GED_EXPORT extern void ged_draw_view_context_lod_bounds_callback_set(void *view_ctx);
+GED_EXPORT extern int ged_draw_view_context_lod_bounds_callback_is(const void *view_ctx);
 
 __END_DECLS
 

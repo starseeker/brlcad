@@ -52,10 +52,10 @@ extern struct fb swrast_interface;
 // with any other dm backend to achieve the same results.
 #include <QApplication>
 #include <QtGlobal>
+#include "bv.h"
 #include "QgLegacyViewContext.h"
 #include "QgLegacyViewDm.h"
 #include "qtcad/QgSW.h"
-#include "rt/view.h"
 #include "swrastwin.h"
 #endif
 
@@ -437,7 +437,9 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 	ifp->i->pp = NULL;
 	return -1;
     }
-    rt_view_context_framebuffer_mode_set(qg_legacy_view_to_context(canvas_view), 1);
+    bv_framebuffer_mode_set(bv_context_view(
+	    reinterpret_cast<struct bv_context *>(
+		qg_legacy_view_to_context(canvas_view))), 1);
     qg_legacy_view_dimensions_set(canvas_view, width, height);
 
 

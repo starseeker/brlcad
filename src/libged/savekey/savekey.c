@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view.h"
+#include "bv.h"
 
 #include "../ged_private.h"
 
@@ -64,7 +64,6 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
 {
     FILE *fp;
     fastf_t timearg;
-    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     mat_t rotation;
     mat_t view2model;
     vect_t eye_model;
@@ -103,12 +102,12 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
      * Eye is in conventional place.
      */
     view_ctx = ged_view_active_ctx(gedp);
-    rt_view_context_info_get(&view_info, view_ctx);
-    rt_view_context_rotation_get(rotation, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_rotation_get(rotation, view);
+    bv_view2model_get(view2model, view);
     VSET(temp, 0.0, 0.0, 1.0);
     MAT4X3PNT(eye_model, view2model, temp);
-    savekey_rt_oldwrite(fp, view_info.size, rotation, eye_model);
+    savekey_rt_oldwrite(fp, bv_size_get(view), rotation, eye_model);
     (void)fclose(fp);
 
     return BRLCAD_OK;

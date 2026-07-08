@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 extern "C" {
 #include "./ged_draw.h"
@@ -49,7 +51,7 @@ _ged_cm_vsize(struct ged *gedp, vect_t *UNUSED(v), mat_t *UNUSED(m), const int a
     if (!view_ctx)
 	return -1;
     /* for some reason, scale is supposed to be half of size... */
-    rt_view_context_size_set(view_ctx, atof(argv[1]));
+    bv_size_set(bv_context_view((struct bv_context *)view_ctx), atof(argv[1]));
     return 0;
 }
 
@@ -171,9 +173,10 @@ _ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int argc, const char **
     /* now we have to finish view calculations that are deferred until
      * the end command runs.
      */
-    rt_view_context_rotation_set(view_ctx, (*m));
-    rt_view_context_center_set(view_ctx, (*v));
-    rt_view_context_update(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, (*m));
+    bv_center_set(view, (*v));
+    ged_view_context_update(view_ctx);
 
     struct bu_vls eye = BU_VLS_INIT_ZERO;
     bu_vls_printf(&eye, "%lf %lf %lf", V3ARGS((*v)));
@@ -342,7 +345,7 @@ ged_loadview_core(struct ged *gedp, int argc, const char *argv[])
     /* turn perspective mode off, by default.  A "-p" option in the
      * view script will turn it back on.
      */
-    rt_view_context_perspective_set(view_ctx, 0.0);
+    bv_perspective_set(bv_context_view((struct bv_context *)view_ctx), 0.0);
 
     /* iterate over the contents of the raytrace script */
     /* TODO: change to bu_fgets or bu_vls_fgets */

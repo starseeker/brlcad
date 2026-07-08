@@ -34,7 +34,7 @@
 #include "./include/private.h"
 
 static void
-dm_draw_ticks(struct dm *dmp, struct rt_view_adc_state *adcp, fastf_t angle)
+dm_draw_ticks(struct dm *dmp, struct bv_adc_state *adcp, fastf_t angle)
 {
     fastf_t c_tdist;
     fastf_t d1, d2;
@@ -104,7 +104,7 @@ dm_draw_ticks(struct dm *dmp, struct rt_view_adc_state *adcp, fastf_t angle)
  * Compute and display the angle/distance cursor.
  */
 void
-dm_draw_adc(struct dm *dmp, struct rt_view_adc_state *adcp, mat_t view2model, mat_t model2view)
+dm_draw_adc(struct dm *dmp, struct bv_adc_state *adcp, mat_t view2model, mat_t model2view)
 {
     fastf_t x1, Y1;	/* not "y1", due to conflict with math lib */
     fastf_t x2, y2;
@@ -114,13 +114,13 @@ dm_draw_adc(struct dm *dmp, struct rt_view_adc_state *adcp, mat_t view2model, ma
     fastf_t angle1, angle2;
 
     if (adcp->anchor_pos == 1) {
-	rt_view_adc_model_to_view(adcp, model2view, RT_VIEW_MAX);
-	rt_view_adc_view_to_grid(adcp, model2view);
+	bv_adc_model_to_view(adcp, model2view, RT_VIEW_MAX);
+	bv_adc_view_to_grid(adcp, model2view);
     } else if (adcp->anchor_pos == 2) {
-	rt_view_adc_grid_to_view(adcp, view2model, RT_VIEW_MAX);
+	bv_adc_grid_to_view(adcp, view2model, RT_VIEW_MAX);
 	MAT4X3PNT(adcp->pos_model, view2model, adcp->pos_view);
     } else {
-	rt_view_adc_view_to_grid(adcp, model2view);
+	bv_adc_view_to_grid(adcp, model2view);
 	MAT4X3PNT(adcp->pos_model, view2model, adcp->pos_view);
     }
 

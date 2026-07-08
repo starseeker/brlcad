@@ -11,6 +11,7 @@
 
 #include "brlobol/lod_realization.h"
 #include "brlobol/source_mesh_request.h"
+#include "bv/view.h"
 
 #include <Inventor/SbBasic.h>
 
@@ -31,7 +32,7 @@ typedef void (*BRLObolLodResultReadyCB)(
 
 struct BRLOBOL_EXPORT BRLObolMeshLodProvider {
     struct db_i *dbip;
-    struct rt_view_info view;
+    struct bv_view_info view;
     SbBool useView;
     SbBool refreshMissing;
     SbBool useForcedLevel;

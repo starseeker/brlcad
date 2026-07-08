@@ -49,6 +49,7 @@
 #include <Inventor/nodes/SoMatrixTransform.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <rt/view.h>
+#include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <dm/obol.h>
@@ -120,28 +121,6 @@ draw_test_active_view_ctx(struct ged *gedp)
     return ged_view_active_ctx(gedp);
 }
 
-static void *
-draw_test_active_retained_view_ctx(struct ged *gedp)
-{
-    if (!gedp)
-	return NULL;
-
-    void *active = ged_view_active_ctx(gedp);
-    if (rt_view_context_is_retained(active))
-	return active;
-
-    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    if (views) {
-	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    void *view_ctx = BU_PTBL_GET(views, i);
-	    if (rt_view_context_is_retained(view_ctx))
-		return view_ctx;
-	}
-    }
-
-    return NULL;
-}
-
 static SoDB::ContextManager *
 draw_test_obol_context_manager(void)
 {
@@ -155,7 +134,7 @@ draw_test_sync_obol_camera(BRLObolViewController *controller, void *view_ctx)
     if (!controller || !view_ctx)
 	return 0;
 
-    return controller->syncCameraFromRtViewContext(view_ctx) ? 1 : 0;
+    return controller->syncCameraFromViewContext(view_ctx) ? 1 : 0;
 }
 
 static void
@@ -236,27 +215,27 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 
     point_t center = VINIT_ZERO;
     mat_t center_mat;
-    if (rt_view_context_center_get(center_mat, view_ctx))
+    if (bv_center_mat_get(center_mat, DRAW_TEST_BV_CONST(view_ctx)))
 	MAT_DELTAS_GET_NEG(center, center_mat);
 
     point_t eye = VINIT_ZERO;
-    (void)rt_view_context_eye_pos_get(eye, view_ctx);
+    (void)bv_eye_pos_get(eye, DRAW_TEST_BV_CONST(view_ctx));
 
     vect_t aet = VINIT_ZERO;
-    (void)rt_view_context_aet_get(aet, view_ctx);
+    (void)bv_aet_get(aet, DRAW_TEST_BV_CONST(view_ctx));
 
     bu_log("draw-obol-debug[%03d]: view=%s size=%g scale=%g dims=%dx%d center=(%.17g %.17g %.17g) eye=(%.17g %.17g %.17g) aet=(%.17g %.17g %.17g) perspective=%g\n",
 	   id,
-	   rt_view_context_name_get(view_ctx) ?
-	   rt_view_context_name_get(view_ctx) : "(null)",
-	   rt_view_context_size_get(view_ctx),
-	   rt_view_context_scale_get(view_ctx),
-	   rt_view_context_width_get(view_ctx),
-	   rt_view_context_height_get(view_ctx),
+	   bv_name_get(DRAW_TEST_BV_CONST(view_ctx)) ?
+	   bv_name_get(DRAW_TEST_BV_CONST(view_ctx)) : "(null)",
+	   bv_size_get(DRAW_TEST_BV_CONST(view_ctx)),
+	   bv_scale_get(DRAW_TEST_BV_CONST(view_ctx)),
+	   bv_width_get(DRAW_TEST_BV_CONST(view_ctx)),
+	   bv_height_get(DRAW_TEST_BV_CONST(view_ctx)),
 	   center[X], center[Y], center[Z],
 	   eye[X], eye[Y], eye[Z],
 	   aet[X], aet[Y], aet[Z],
-	   rt_view_context_perspective_get(view_ctx));
+	   bv_perspective_get(DRAW_TEST_BV_CONST(view_ctx)));
 
     SoCamera *camera = controller->getCamera();
     if (camera) {
@@ -465,8 +444,8 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
     if (!controller)
 	return -1;
 
-    int width = rt_view_context_width_get(v);
-    int height = rt_view_context_height_get(v);
+    int width = bv_width_get(DRAW_TEST_BV_CONST(v));
+    int height = bv_height_get(DRAW_TEST_BV_CONST(v));
     if ((width <= 0 || height <= 0) && dmp) {
 	width = dm_get_width(dmp);
 	height = dm_get_height(dmp);
@@ -575,7 +554,7 @@ draw_test_images_differ(const char *a, const char *b, int offmany_threshold)
 extern "C" void
 dm_refresh(struct ged *gedp)
 {
-    void *v = draw_test_active_retained_view_ctx(gedp);
+    void *v = draw_test_active_view_ctx(gedp);
     if (!v)
 	return;
     struct ged_draw_transaction txn =

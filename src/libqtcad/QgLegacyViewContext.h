@@ -27,6 +27,7 @@
 #ifndef QGLEGACYVIEWCONTEXT_H
 #define QGLEGACYVIEWCONTEXT_H
 
+#include "bv.h"
 #include "qtcad/QgLegacyView.h"
 
 static inline qg_legacy_view *
@@ -51,6 +52,54 @@ static inline const void *
 qg_legacy_view_to_context(const qg_legacy_view *view)
 {
     return reinterpret_cast<const void *>(view);
+}
+
+static inline struct bv_context *
+qg_legacy_view_context(qg_legacy_view *view)
+{
+    return reinterpret_cast<struct bv_context *>(view);
+}
+
+static inline const struct bv_context *
+qg_legacy_view_context_const(const qg_legacy_view *view)
+{
+    return reinterpret_cast<const struct bv_context *>(view);
+}
+
+static inline struct bv *
+qg_legacy_view_bv(qg_legacy_view *view)
+{
+    return bv_context_view(qg_legacy_view_context(view));
+}
+
+static inline const struct bv *
+qg_legacy_view_bv_const(const qg_legacy_view *view)
+{
+    return bv_context_view_const(qg_legacy_view_context_const(view));
+}
+
+static inline struct bv_context *
+qg_legacy_context_bv_context(void *view_ctx)
+{
+    return reinterpret_cast<struct bv_context *>(view_ctx);
+}
+
+static inline const struct bv_context *
+qg_legacy_context_bv_context_const(const void *view_ctx)
+{
+    return reinterpret_cast<const struct bv_context *>(view_ctx);
+}
+
+static inline struct bv *
+qg_legacy_context_bv(void *view_ctx)
+{
+    return bv_context_view(qg_legacy_context_bv_context(view_ctx));
+}
+
+static inline const struct bv *
+qg_legacy_context_bv_const(const void *view_ctx)
+{
+    return bv_context_view_const(qg_legacy_context_bv_context_const(view_ctx));
 }
 
 #endif /* QGLEGACYVIEWCONTEXT_H */

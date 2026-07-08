@@ -36,6 +36,7 @@
 #include "opennurbs_sphere.h"
 #include "rt/db_internal.h"
 #include "rt/view.h"
+#include "view_test_util.h"
 #include "wdb.h"
 
 #include "../../ged_private.h"
@@ -1202,9 +1203,9 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	FAIL("GED multi-instance autoview should succeed");
     mat_t view_center_mat;
     point_t view_center;
-    rt_view_context_center_get(view_center_mat, ged_draw_active_view_ctx(gedp));
+    bv_center_mat_get(view_center_mat, DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp)));
     MAT_DELTAS_GET_NEG(view_center, view_center_mat);
-    if (rt_view_context_size_get(ged_draw_active_view_ctx(gedp)) < 31.9 ||
+    if (bv_size_get(DRAW_TEST_BV_CONST(ged_draw_active_view_ctx(gedp))) < 31.9 ||
 	    fabs(view_center[X] - 3.0) > 0.1)
 	FAIL("GED multi-instance autoview should use transformed scene bounds");
 
@@ -2397,114 +2398,145 @@ main(int argc, char **argv)
 	FAIL("line-layer builder helper generation result should clean up by owner-scoped prefix");
     command_scene_desc.generation = 0;
 
-    struct rt_preview_callback_state rt_preview_state = {77, 0, 0};
-    struct rt_view_edit_preview_callbacks rt_preview_callbacks =
-	RT_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
-    rt_preview_callbacks.revision_cb = rt_preview_revision_cb;
-    rt_preview_callbacks.update_cb = rt_preview_update_cb;
-    rt_preview_callbacks.pick_cb = rt_preview_pick_cb;
-    int rt_preview_owner = 0;
-    rt_view_feature_ref rt_preview_ref =
-	rt_view_context_feature_overlay_ensure(feature_view_ctx,
-		"cap2::rt-preview", &rt_preview_owner, &rt_preview_state,
-		&rt_preview_callbacks, "cap2::rt-source.s");
-    if (rt_view_feature_ref_is_null(rt_preview_ref))
-	FAIL("RT feature overlay ensure should return an Obol feature ref");
-    BRLObolFeatureHandle rt_preview_handle =
-	owned_controller->features().find("cap2::rt-preview");
-    BRLObolFeatureSummary rt_preview_summary;
-    if (!rt_preview_handle.isValid() ||
-	    !owned_controller->features().summary("cap2::rt-preview",
-		rt_preview_summary) ||
-	    !rt_preview_summary.exists ||
-	    rt_preview_summary.kind != BRLObolFeatureKind::EditPreview ||
-	    !rt_preview_summary.overlay.isOverlay ||
-	    rt_preview_summary.overlay.overlayClass !=
+    struct rt_preview_callback_state ged_preview_state = {77, 0, 0};
+    struct ged_draw_view_edit_preview_callbacks ged_preview_callbacks =
+	GED_DRAW_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
+    ged_preview_callbacks.revision_cb = rt_preview_revision_cb;
+    ged_preview_callbacks.update_cb = rt_preview_update_cb;
+    ged_preview_callbacks.pick_cb = rt_preview_pick_cb;
+    int ged_preview_owner = 0;
+    ged_draw_view_feature_ref ged_preview_ref =
+	ged_draw_view_context_feature_overlay_ensure(feature_view_ctx,
+		"cap2::ged-preview", &ged_preview_owner, &ged_preview_state,
+		&ged_preview_callbacks, "cap2::ged-source.s");
+    if (ged_draw_view_feature_ref_is_null(ged_preview_ref))
+	FAIL("GED feature overlay ensure should return an Obol feature ref");
+    BRLObolFeatureHandle ged_preview_handle =
+	owned_controller->features().find("cap2::ged-preview");
+    BRLObolFeatureSummary ged_preview_summary;
+    if (!ged_preview_handle.isValid() ||
+	    !owned_controller->features().summary("cap2::ged-preview",
+		ged_preview_summary) ||
+	    !ged_preview_summary.exists ||
+	    ged_preview_summary.kind != BRLObolFeatureKind::EditPreview ||
+	    !ged_preview_summary.overlay.isOverlay ||
+	    ged_preview_summary.overlay.overlayClass !=
 		BRLObolOverlayClass::EditHandle ||
-	    rt_preview_summary.overlay.lifecycle !=
+	    ged_preview_summary.overlay.lifecycle !=
 		BRLObolOverlayLifecycle::PerTool ||
-	    rt_preview_summary.overlay.order !=
+	    ged_preview_summary.overlay.order !=
 		BRLObolOverlayOrder::PostTransparent ||
-	    rt_preview_summary.overlay.ownerToken != &rt_preview_owner ||
-	    !BU_STR_EQUAL(rt_preview_summary.overlay.sourcePath.getString(),
-		"cap2::rt-source.s"))
-	FAIL("RT feature overlay adapter should publish typed Obol edit-preview metadata");
-    point_t rt_preview_points[3] = {
+	    ged_preview_summary.overlay.ownerToken != &ged_preview_owner ||
+	    !BU_STR_EQUAL(ged_preview_summary.overlay.sourcePath.getString(),
+		"cap2::ged-source.s"))
+	FAIL("GED feature overlay API should publish typed Obol edit-preview metadata");
+    point_t ged_preview_points[3] = {
 	{0.0, 0.0, 0.0},
 	{1.0, 0.0, 0.0},
 	{1.0, 1.0, 0.0}
     };
-    int rt_preview_cmds[3] = {
+    int ged_preview_cmds[3] = {
 	GED_DRAW_VIEW_LINE_MOVE,
 	GED_DRAW_VIEW_LINE_DRAW,
 	GED_DRAW_VIEW_LINE_DRAW
     };
-    if (!rt_view_feature_points_replace(rt_preview_ref,
-		RT_VIEW_FEATURE_TRANSIENT_PREVIEW, rt_preview_points,
-		rt_preview_cmds, 3))
-	FAIL("RT feature points replacement should update Obol edit-preview geometry");
-    BRLObolFeatureRecord rt_preview_record;
-    if (!owned_controller->features().record(rt_preview_handle,
-		rt_preview_record) ||
-	    rt_preview_record.kind != BRLObolFeatureKind::EditPreview ||
-	    rt_preview_record.points.size() != 3 ||
-	    rt_preview_record.commands.size() != 3)
-	FAIL("RT feature points replacement should preserve Obol edit-preview records");
-    rt_view_feature_set_visible(rt_preview_ref, 0);
-    rt_view_feature_set_color(rt_preview_ref, 12, 34, 56);
-    BRLObolFeatureStyle rt_preview_style;
-    if (!owned_controller->features().style(rt_preview_handle,
-		rt_preview_style) ||
-	    !rt_preview_style.hasVisible ||
-	    rt_preview_style.visible ||
-	    !rt_preview_style.hasColor)
-	FAIL("RT feature style mutations should update Obol feature style");
-    if (!rt_view_feature_touch(rt_preview_ref) ||
-	    rt_preview_state.update_count != 1)
-	FAIL("RT feature touch should dispatch through Obol edit-preview callbacks");
-    if (!rt_view_context_edit_preview_publish_event(feature_view_ctx,
-		rt_preview_ref, RT_VIEW_EDIT_PREVIEW_UPDATE,
-		"cap2::rt-source.s"))
-	FAIL("RT feature preview events should route through the Obol feature adapter");
-    if (!rt_view_feature_clear_geometry(rt_preview_ref) ||
-	    !owned_controller->features().record(rt_preview_handle,
-		rt_preview_record) ||
-	    !rt_preview_record.points.empty())
-	FAIL("RT feature clear geometry should clear the Obol feature record");
+    if (!ged_draw_view_feature_points_replace(ged_preview_ref,
+		GED_DRAW_VIEW_FEATURE_TRANSIENT_PREVIEW, ged_preview_points,
+		ged_preview_cmds, 3))
+	FAIL("GED feature points replacement should update Obol edit-preview geometry");
+    BRLObolFeatureRecord ged_preview_record;
+    if (!owned_controller->features().record(ged_preview_handle,
+		ged_preview_record) ||
+	    ged_preview_record.kind != BRLObolFeatureKind::EditPreview ||
+	    ged_preview_record.points.size() != 3 ||
+	    ged_preview_record.commands.size() != 3)
+	FAIL("GED feature points replacement should preserve Obol edit-preview records");
+    struct directory *preview_box_dp = db_lookup(gedp->dbip, "box.s", LOOKUP_QUIET);
+    struct rt_db_internal preview_box_intern;
+    RT_DB_INTERNAL_INIT(&preview_box_intern);
+    if (!preview_box_dp ||
+	    rt_db_get_internal(&preview_box_intern, preview_box_dp, gedp->dbip,
+		NULL) < 0)
+	FAIL("GED feature primitive wireframe helper should load test primitive");
+    mat_t preview_xform;
+    MAT_IDN(preview_xform);
+    MAT_DELTAS(preview_xform, 3.0, 0.0, 0.0);
+    if (!ged_draw_view_feature_primitive_wireframe_replace(ged_preview_ref,
+		gedp->dbip, &preview_box_intern, preview_xform, NULL, NULL)) {
+	rt_db_free_internal(&preview_box_intern);
+	FAIL("GED feature primitive wireframe helper should publish transformed primitive geometry");
+    }
+    rt_db_free_internal(&preview_box_intern);
+    if (!owned_controller->features().record(ged_preview_handle,
+		ged_preview_record) ||
+	    ged_preview_record.kind != BRLObolFeatureKind::EditPreview ||
+	    ged_preview_record.points.size() <= 3 ||
+	    ged_preview_record.commands.size() != ged_preview_record.points.size())
+	FAIL("GED feature primitive wireframe helper should replace edit-preview geometry");
+    int preview_xform_seen = 0;
+    for (size_t i = 0; i < ged_preview_record.points.size(); i++) {
+	if (ged_preview_record.points[i][0] > 1.5f) {
+	    preview_xform_seen = 1;
+	    break;
+	}
+    }
+    if (!preview_xform_seen)
+	FAIL("GED feature primitive wireframe helper should apply the supplied transform");
+    ged_draw_view_feature_set_visible(ged_preview_ref, 0);
+    ged_draw_view_feature_set_color(ged_preview_ref, 12, 34, 56);
+    BRLObolFeatureStyle ged_preview_style;
+    if (!owned_controller->features().style(ged_preview_handle,
+		ged_preview_style) ||
+	    !ged_preview_style.hasVisible ||
+	    ged_preview_style.visible ||
+	    !ged_preview_style.hasColor)
+	FAIL("GED feature style mutations should update Obol feature style");
+    if (!ged_draw_view_feature_touch(ged_preview_ref) ||
+	    ged_preview_state.update_count != 1)
+	FAIL("GED feature touch should dispatch through Obol edit-preview callbacks");
+    if (!ged_draw_view_context_edit_preview_publish_event(feature_view_ctx,
+		ged_preview_ref, GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE,
+		"cap2::ged-source.s"))
+	FAIL("GED feature preview events should route through the Obol feature API");
+    if (!ged_draw_view_feature_clear_geometry(ged_preview_ref) ||
+	    !owned_controller->features().record(ged_preview_handle,
+		ged_preview_record) ||
+	    !ged_preview_record.points.empty())
+	FAIL("GED feature clear geometry should clear the Obol feature record");
 
-    int rt_label_owner = 0;
-    rt_view_feature_ref rt_label_ref =
-	rt_view_context_feature_label_ensure(feature_view_ctx,
-		"cap2::rt-label", &rt_label_owner);
-    struct rt_view_feature_label rt_label;
-    memset(&rt_label, 0, sizeof(rt_label));
-    rt_label.text = "rt label";
-    VSET(rt_label.point, 3.0, 4.0, 5.0);
-    rt_label.color_valid = 1;
-    rt_label.color[0] = 210;
-    rt_label.color[1] = 211;
-    rt_label.color[2] = 212;
-    rt_label.font_size = 16.0;
-    if (rt_view_feature_ref_is_null(rt_label_ref) ||
-	    !rt_view_feature_labels_replace(rt_label_ref, &rt_label, 1))
-	FAIL("RT feature label replacement should route into Obol labels");
-    BRLObolFeatureHandle rt_label_handle =
-	owned_controller->features().find("cap2::rt-label");
-    BRLObolFeatureRecord rt_label_record;
-    if (!rt_label_handle.isValid() ||
-	    !owned_controller->features().record(rt_label_handle,
-		rt_label_record) ||
-	    rt_label_record.kind != BRLObolFeatureKind::Labels ||
-	    rt_label_record.labels.size() != 1 ||
-	    !BU_STR_EQUAL(rt_label_record.labels[0].text.getString(),
-		"rt label") ||
-	    fabs(rt_label_record.labels[0].fontSize - 16.0f) > 0.001f ||
-	    !rt_label_record.overlay.isOverlay ||
-	    rt_label_record.overlay.ownerToken != &rt_label_owner)
-	FAIL("RT feature label adapter should publish typed Obol label records");
-    if (!rt_view_context_feature_remove(feature_view_ctx, "cap2::rt-label") ||
-	    owned_controller->features().exists("cap2::rt-label"))
-	FAIL("RT feature remove should delete Obol-backed feature records");
+    int ged_label_owner = 0;
+    ged_draw_view_feature_ref ged_label_ref =
+	ged_draw_view_context_feature_label_ensure(feature_view_ctx,
+		"cap2::ged-label", &ged_label_owner);
+    struct ged_draw_view_feature_label ged_label;
+    memset(&ged_label, 0, sizeof(ged_label));
+    ged_label.text = "ged label";
+    VSET(ged_label.point, 3.0, 4.0, 5.0);
+    ged_label.color_valid = 1;
+    ged_label.color[0] = 210;
+    ged_label.color[1] = 211;
+    ged_label.color[2] = 212;
+    ged_label.font_size = 16.0;
+    if (ged_draw_view_feature_ref_is_null(ged_label_ref) ||
+	    !ged_draw_view_feature_labels_replace(ged_label_ref, &ged_label, 1))
+	FAIL("GED feature label replacement should route into Obol labels");
+    BRLObolFeatureHandle ged_label_handle =
+	owned_controller->features().find("cap2::ged-label");
+    BRLObolFeatureRecord ged_label_record;
+    if (!ged_label_handle.isValid() ||
+	    !owned_controller->features().record(ged_label_handle,
+		ged_label_record) ||
+	    ged_label_record.kind != BRLObolFeatureKind::Labels ||
+	    ged_label_record.labels.size() != 1 ||
+	    !BU_STR_EQUAL(ged_label_record.labels[0].text.getString(),
+		"ged label") ||
+	    fabs(ged_label_record.labels[0].fontSize - 16.0f) > 0.001f ||
+	    !ged_label_record.overlay.isOverlay ||
+	    ged_label_record.overlay.ownerToken != &ged_label_owner)
+	FAIL("GED feature label API should publish typed Obol label records");
+    if (!ged_draw_view_context_feature_remove(feature_view_ctx, "cap2::ged-label") ||
+	    owned_controller->features().exists("cap2::ged-label"))
+	FAIL("GED feature remove should delete Obol-backed feature records");
 
     if (ged_draw_view_context_features_remove_prefix(feature_view_ctx,
 	    "cap2::") < 11 ||
@@ -2963,10 +2995,10 @@ main(int argc, char **argv)
     db_free_full_path(&group_only_path);
     if (ged_draw_group_ref_is_null(group_only_ref))
 	FAIL("GED group lookup/create should return the sentinel group");
-    rt_view_scene_ref group_only_rt_ref =
-	ged_draw_registry_group_ref_rt_ref(gedp, group_only_ref);
-    if (rt_view_scene_ref_backend(group_only_rt_ref) !=
-	    RT_VIEW_SCENE_BACKEND_OBOL)
+    ged_draw_scene_handle group_only_scene_handle =
+	ged_draw_registry_group_ref_scene_handle(gedp, group_only_ref);
+    if (ged_draw_scene_handle_backend(group_only_scene_handle) !=
+	    GED_DRAW_SCENE_BACKEND_OBOL)
 	FAIL("GED group lookup/create should return an owned Obol group ref");
     if (!owned_scene->findGroup("group_only.s") ||
 	    owned_scene->getGroupDatabaseSourceCount("group_only.s") != 0)
@@ -3124,8 +3156,8 @@ main(int argc, char **argv)
 	    !box_context_tree.is_group ||
 	    box_context_tree.child_count <= 0)
 	FAIL("GED shape-ref context should resolve to an owned Obol database-source context");
-    void *box_registry_ctx = rt_view_scene_ref_context(
-	    ged_draw_registry_shape_ref_rt_ref(gedp, box_record.ref));
+    void *box_registry_ctx = ged_draw_scene_handle_context(
+	    ged_draw_registry_shape_ref_scene_handle(gedp, box_record.ref));
     struct ged_draw_scene_tree_summary box_registry_context_tree;
     memset(&box_registry_context_tree, 0, sizeof(box_registry_context_tree));
     if (!box_registry_ctx ||
@@ -3806,16 +3838,16 @@ main(int argc, char **argv)
 		    box_record.ref);
 	    if (!lod_view_ctx)
 		FAIL("GED LoD view context should be available");
-	    if (!rt_view_context_scale_set(lod_view_ctx, 7.0))
+	    if (!bv_scale_set(DRAW_TEST_BV(lod_view_ctx), 7.0))
 		FAIL("GED LoD view context scale should be settable");
-	    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
+	    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
 	    lod_policy.csg_enabled = 1;
 	    lod_policy.mesh_enabled = 0;
 	    lod_policy.scale = 1.75;
 	    lod_policy.bot_threshold = 77;
 	    lod_policy.curve_scale = 2.25;
 	    lod_policy.point_scale = 3.25;
-	    if (!rt_view_context_lod_policy_apply(lod_view_ctx, &lod_policy))
+	    if (!ged_draw_view_context_lod_policy_apply(lod_view_ctx, &lod_policy))
 		FAIL("GED LoD view policy should be settable");
 	    void *lod_view_ctxs[1] = {lod_view_ctx};
 	    ged_draw_index_stats_reset(gedp);
@@ -3980,16 +4012,16 @@ main(int argc, char **argv)
 	    stale_box_ref);
     if (!stale_lod_view_ctx)
 	FAIL("GED stale shape-ref view context should recover cached source state");
-    if (!rt_view_context_scale_set(stale_lod_view_ctx, 9.0))
+    if (!bv_scale_set(DRAW_TEST_BV(stale_lod_view_ctx), 9.0))
 	FAIL("GED stale shape-ref LoD context scale should be settable");
-    struct rt_view_lod_policy stale_lod_policy = RT_VIEW_LOD_POLICY_INIT;
+    ged_draw_view_lod_policy stale_lod_policy = BV_LOD_POLICY_INIT;
     stale_lod_policy.csg_enabled = 1;
     stale_lod_policy.mesh_enabled = 0;
     stale_lod_policy.scale = 2.75;
     stale_lod_policy.bot_threshold = 91;
     stale_lod_policy.curve_scale = 6.25;
     stale_lod_policy.point_scale = 7.25;
-    if (!rt_view_context_lod_policy_apply(stale_lod_view_ctx,
+    if (!ged_draw_view_context_lod_policy_apply(stale_lod_view_ctx,
 	    &stale_lod_policy))
 	FAIL("GED stale shape-ref LoD policy should be settable");
     void *stale_lod_view_ctxs[1] = {stale_lod_view_ctx};
@@ -5097,12 +5129,12 @@ main(int argc, char **argv)
 	    !source_for_path(view_scene, "ball.s"))
 	FAIL("attached Obol teardown transaction redraw should restore baseline sources");
 
-    void *independent_view = rt_view_context_create();
+    void *independent_view = ged_view_context_create();
     if (!independent_view)
 	FAIL("Obol independent view source-owner test view should be created");
-    if (!rt_view_context_name_set(independent_view, "V0"))
+    if (!bv_name_set(DRAW_TEST_BV(independent_view), "V0"))
 	FAIL("Obol independent view source-owner test view should be named");
-    if (!rt_view_set_context_add(ged_view_set_ctx(gedp), independent_view))
+    if (!ged_view_set_context_add(ged_view_set_ctx(gedp), independent_view))
 	FAIL("Obol independent view source-owner test view should be registered");
     ged_view_context_owned_add(gedp, independent_view);
 
@@ -5158,7 +5190,7 @@ main(int argc, char **argv)
     const char *view_independent_off[5] = {"view", "independent", "V0",
 	"0", NULL};
     if (ged_exec_view(gedp, 4, view_independent_off) != BRLCAD_OK ||
-	    rt_view_context_is_independent(independent_view))
+	    ged_view_context_is_independent(independent_view))
 	FAIL("real GED view independent-off command should restore shared view semantics");
 
     const char *erase_box[2] = {"erase", "box.s"};

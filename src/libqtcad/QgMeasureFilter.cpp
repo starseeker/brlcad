@@ -31,7 +31,6 @@
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
-#include "rt/view.h"
 #include "QgLegacyViewContext.h"
 
 static qg_legacy_view *
@@ -277,14 +276,14 @@ QMeasure2DFilter::get_point()
 	int sx = 0, sy = 0;
 	if (!current_mouse_xy(&sx, &sy))
 		return false;
-	void *view_ctx = qg_legacy_view_to_context(v);
+	const struct bv *view = qg_legacy_view_bv_const(v);
 	fastf_t vx, vy;
-	if (!rt_view_context_screen_to_view(&vx, &vy, view_ctx, sx, sy))
+	if (!bv_screen_to_view(&vx, &vy, view, sx, sy))
 		return false;
 	point_t vpnt;
 	mat_t view2model;
 	VSET(vpnt, vx, vy, 0);
-	if (!rt_view_context_view2model_get(view2model, view_ctx))
+	if (!bv_view2model_get(view2model, view))
 		return false;
 	MAT4X3PNT(mpnt, view2model, vpnt);
 	return true;

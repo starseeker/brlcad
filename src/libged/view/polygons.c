@@ -34,6 +34,7 @@
 #include "bu/opt.h"
 #include "bu/vls.h"
 #include "bg/polygon_types.h"
+#include "bv.h"
 #include "rt/geom.h"
 
 #include "../ged_private.h"
@@ -109,7 +110,8 @@ _poly_cmd_create(void *bs, int argc, const char **argv)
     }
 
     point_t sp;
-    if (!rt_view_context_screen_point_get(sp, gd->cv, (fastf_t)x, (fastf_t)y)) {
+    if (!bv_screen_to_model(sp, bv_context_view_const((const struct bv_context *)gd->cv),
+	    (fastf_t)x, (fastf_t)y)) {
 	bu_vls_printf(gedp->ged_result_str, "Failed to calculate screen point\n");
 	return BRLCAD_ERROR;
     }

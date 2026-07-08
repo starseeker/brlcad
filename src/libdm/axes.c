@@ -36,7 +36,7 @@
 #include "./include/private.h"
 
 void
-dm_draw_scene_axes_payload(struct dm *dmp, const struct rt_view_axes_state *bndasp)
+dm_draw_scene_axes_payload(struct dm *dmp, const struct bv_axes_state *bndasp)
 {
     if (!dmp || !bndasp)
 	return;
@@ -78,7 +78,7 @@ void
 dm_draw_hud_axes(struct dm		        *dmp,
 	     fastf_t			viewSize, /* in mm */
 	     const mat_t		rmat,       /* view rotation matrix */
-	     const struct rt_view_axes_state *bnasp)
+	     const struct bv_axes_state *bnasp)
 {
     fastf_t halfAxesSize;		/* half the length of an axis */
     fastf_t xlx, xly;			/* X axis label position */

@@ -28,6 +28,7 @@
 
 #include <bu.h>
 #include "rt/view.h"
+#include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -303,12 +304,10 @@ main(int ac, char *av[]) {
 
     // TODO - these syncing operations need to happen whenever the dm size
     // changes - can they be done in dm_set_width/dm_set_height?
-    rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
-    dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
 
-    rt_view_context_unit_conversion_set(v,
-	gedp->dbip->dbi_local2base,
-	gedp->dbip->dbi_base2local);
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     // The default (fast) wireframe has some differences from
     // the slower full OpenGL draw path - disable it for the

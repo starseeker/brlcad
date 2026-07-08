@@ -22,6 +22,7 @@
 #include <Inventor/SbVec2f.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SbViewportRegion.h>
+#include <Inventor/SoDB.h>
 #include <atomic>
 #include <stddef.h>
 #include <stdint.h>
@@ -30,6 +31,7 @@
 #include "vmath.h"
 
 class BRLObolLodService;
+class BRLObolViewAttachment;
 class BRLObolViewLodState;
 class BRLObolFeatureStore;
 class BRLObolPolygonStore;
@@ -45,7 +47,7 @@ class SoRenderManager;
 class SoViewport;
 struct bg_line_layer_builder;
 struct db_i;
-struct rt_view_info;
+struct bv_view_info;
 
 class BRLObolViewController;
 
@@ -125,6 +127,8 @@ public:
     void setRenderSceneRoot(SoNode *root);
     SoNode *getRenderSceneRoot(void) const;
     SoNode *getRenderRoot(void) const;
+    void setViewAttachment(BRLObolViewAttachment *attachment);
+    BRLObolViewAttachment *getViewAttachment(void) const;
     BRLObolViewLodState *getViewLodState(void) const;
     void clearViewLodState(void);
 
@@ -134,9 +138,9 @@ public:
     void setViewportRegion(const SbViewportRegion &region);
     const SbViewportRegion &getViewportRegion(void) const;
     void setViewportSize(unsigned int width, unsigned int height);
-    SbBool syncCameraFromRtViewContext(const void *viewCtx,
-				       SbBool createCamera = TRUE);
-    SbBool getRtViewInfo(struct rt_view_info *info) const;
+    SbBool syncCameraFromViewContext(const void *viewCtx,
+				     SbBool createCamera = TRUE);
+    SbBool getViewInfo(struct bv_view_info *info) const;
 
     SbBool realizePending(void);
 
@@ -151,6 +155,12 @@ public:
     SbBool renderPending(SbBool clearWindow = TRUE,
 			 SbBool clearZBuffer = TRUE,
 			 SbString *reason = NULL);
+    int renderToImage(unsigned char **image,
+		      int flip = 0,
+		      int alpha = 0,
+		      const SbColor *background = NULL,
+		      SoDB::ContextManager *contextManager = NULL,
+		      BRLObolProgressiveStatus *progressiveStatus = NULL);
     SbBool isRenderRequested(void) const;
     const SbString &getRenderReason(void) const;
     uint64_t registerProgressiveProvider(
@@ -450,7 +460,7 @@ private:
     SoBRLSceneController sceneController;
     SoViewport *viewport;
     SoBRLViewLodGroup *renderLodRoot;
-    BRLObolViewLodState *viewLodState;
+    BRLObolViewAttachment *viewAttachment;
     SoRenderManager *renderManager;
     SoCamera *activeCamera;
     SbViewportRegion viewportRegion;

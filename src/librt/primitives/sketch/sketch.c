@@ -1010,7 +1010,7 @@ rt_sketch_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 
 
 C_DECL int
-rt_sketch_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_sketch_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_sketch_internal *sketch_ip;
     int ret;

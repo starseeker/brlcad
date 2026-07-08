@@ -159,15 +159,15 @@ struct rt_functab {
 		   struct rt_db_internal * /*ip*/,
 		   const struct bg_tess_tol * /*ttol*/,
 		   const struct bn_tol * /*tol*/,
-		   const struct rt_view_info * /*view info*/);
-#define RTFUNCTAB_FUNC_PLOT_CAST(_func) ((int (*)(struct bu_list *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct rt_view_info *))((void (*)(void))_func))
+		   const struct bv_view_info * /*view info*/);
+#define RTFUNCTAB_FUNC_PLOT_CAST(_func) ((int (*)(struct bu_list *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct bv_view_info *))((void (*)(void))_func))
 
     int (*ft_lod_realize)(struct rt_primitive_lod_realization * /*realization*/,
 			  struct rt_db_internal * /*ip*/,
 			  const struct bn_tol * /*tol*/,
-			  const struct rt_view_info * /* view info */,
+			  const struct bv_view_info * /* view info */,
 			  fastf_t /* s_size */);
-#define RTFUNCTAB_FUNC_LOD_REALIZE_CAST(_func) ((int (*)(struct rt_primitive_lod_realization *, struct rt_db_internal *, const struct bn_tol *, const struct rt_view_info *, fastf_t))((void (*)(void))_func))
+#define RTFUNCTAB_FUNC_LOD_REALIZE_CAST(_func) ((int (*)(struct rt_primitive_lod_realization *, struct rt_db_internal *, const struct bn_tol *, const struct bv_view_info *, fastf_t))((void (*)(void))_func))
 
     void (*ft_vshot)(struct soltab * /*stp*/[],
 		     struct xray *[] /*rp*/,
@@ -329,8 +329,8 @@ struct rt_functab {
 			       struct rt_db_internal * /*ip*/,
 			       const struct bg_tess_tol * /*ttol*/,
 			       const struct bn_tol * /*tol*/,
-			       const struct rt_view_info * /*view info*/);
-#define RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(_func) ((int (*)(struct rt_primitive_indexed_face_set *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct rt_view_info *))((void (*)(void))_func))
+			       const struct bv_view_info * /*view info*/);
+#define RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(_func) ((int (*)(struct rt_primitive_indexed_face_set *, struct rt_db_internal *, const struct bg_tess_tol *, const struct bn_tol *, const struct bv_view_info *))((void (*)(void))_func))
 
 };
 

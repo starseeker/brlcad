@@ -20,7 +20,9 @@
 
 #include "common.h"
 
+#include "bv.h"
 #include "ged.h"
+#include "ged/draw.h"
 #include "ged/view.h"
 #include "rt/view.h"
 #include "tclcad.h"
@@ -33,8 +35,9 @@ static void
 tclcad_wrapper_sync_dm_dimensions(void *target_ctx, const void *source_ctx)
 {
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(source_ctx);
-    if (dmp)
-	rt_view_context_dimensions_set(target_ctx, dm_get_width(dmp), dm_get_height(dmp));
+    struct bv *target_view = bv_context_view((struct bv_context *)target_ctx);
+    if (dmp && target_view)
+	bv_dimensions_set(target_view, dm_get_width(dmp), dm_get_height(dmp));
 }
 
 /* Wraps calls to commands like "draw" that need to reset the view */
@@ -294,11 +297,13 @@ to_view_func_common(struct ged *gedp,
 
     /* Keep the view's perspective in sync with its corresponding display manager */
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (dmp)
-	dm_set_perspective(dmp, rt_view_context_perspective_get(view_ctx));
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (dmp && view)
+	dm_set_perspective(dmp, bv_perspective_get(view));
 
-    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    if (rt_view_context_lod_policy_get(&lod_policy, view_ctx) &&
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh)
     {
 	const char *gr_av[] = {"redraw", NULL};
@@ -416,8 +421,10 @@ to_dm_func(struct ged *gedp,
 
     /* Keep the view's perspective in sync with its corresponding display manager */
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (dmp)
-	dm_set_perspective(dmp, rt_view_context_perspective_get(view_ctx));
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (dmp && view)
+	dm_set_perspective(dmp, bv_perspective_get(view));
 
     return ret;
 }

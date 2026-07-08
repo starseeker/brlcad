@@ -18,7 +18,7 @@
 
 #include "brlobol/defines.h"
 
-#include "rt/view.h"
+#include "bv/view.h"
 #include "vmath.h"
 
 #include <stddef.h>
@@ -147,17 +147,8 @@ brlobol_mesh_lod_load_level(struct BRLObolMeshLod *lod,
 
 BRLOBOL_EXPORT int
 brlobol_mesh_lod_load_view(struct BRLObolMeshLod *lod,
-			   const struct rt_view_info *info,
+			   const struct bv_view_info *info,
 			   int reset);
-
-BRLOBOL_EXPORT int
-brlobol_mesh_lod_load_view_scene_ref(struct BRLObolMeshLod *lod,
-				     rt_view_scene_ref visibility_ref,
-				     void *view_ctx,
-				     int reset);
-
-BRLOBOL_EXPORT void
-brlobol_mesh_lod_free_scene_ref(rt_view_scene_ref ref);
 
 BRLOBOL_EXPORT int
 brlobol_mesh_lod_current_level(const struct BRLObolMeshLod *lod);

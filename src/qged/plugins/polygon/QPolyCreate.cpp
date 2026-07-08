@@ -33,7 +33,7 @@
 #include "qtcad/QgPolyFilter.h"
 #include "qtcad/QgView.h"
 #include "ged.h"
-#include "rt/view.h"
+#include "ged/draw.h"
 #include "rt/directory.h"
 #include "rt/db_io.h"
 #include "QgLegacyViewContext.h"
@@ -210,7 +210,7 @@ QPolyCreate::finalize(bool)
 
     // If we're not keeping the polygon due to its being
     // used for previous boolean ops, we're done
-    if (rt_view_polygon_ref_is_null(p))
+    if (ged_draw_view_polygon_ref_is_null(p))
 	return;
 
     // If we're keeping the object, there are some housekeeping
@@ -236,9 +236,9 @@ QPolyCreate::finalize(bool)
 	    struct directory *sk_dp = RT_DIR_NULL;
 	    {
 		QgGedEventBatch event_batch(gedp);
-		sk_dp = rt_view_polygon_export_sketch(gedp->dbip, sk_name, p);
+		sk_dp = ged_draw_view_polygon_export_sketch(gedp->dbip, sk_name, p);
 	    }
-	    rt_view_polygon_user_data_set(p, (void *)sk_dp);
+	    ged_draw_view_polygon_user_data_set(p, (void *)sk_dp);
 	    emit view_updated(QG_VIEW_DB);
 	}
 	bu_free(sk_name, "name cpy");
@@ -277,13 +277,12 @@ QPolyCreate::do_vpoly_copy()
 	return;
     }
     char *sname = bu_strdup(vpoly_name->text().toLocal8Bit().data());
-    p = rt_view_context_polygon_dup(qg_legacy_view_to_context(v), sname,
+    p = ged_draw_view_context_polygon_dup(qg_legacy_view_to_context(v), sname,
 	    bu_vls_cstr(&vname));
     bu_free(sname, "name cpy");
     bu_vls_free(&vname);
-    if (rt_view_polygon_ref_is_null(p))
+    if (ged_draw_view_polygon_ref_is_null(p))
 	return;
-    rt_view_polygon_set_context(p, qg_legacy_view_to_context(v));
 
     // Done processing view feature - increment name
     poly_cnt++;
@@ -330,12 +329,11 @@ QPolyCreate::do_import_sketch()
     }
 
     // Names are valid, dp is ready - try the sketch import
-    p = rt_view_polygon_import_sketch_context(bu_vls_cstr(&vname),
-	    gedp->dbip, dp, qg_legacy_view_to_context(v));
+    p = ged_draw_view_context_polygon_import_sketch(bu_vls_cstr(&vname),
+	    gedp->dbip, dp, qg_legacy_view_to_context(v), 0);
     bu_vls_free(&vname);
-    if (rt_view_polygon_ref_is_null(p))
+    if (ged_draw_view_polygon_ref_is_null(p))
 	return;
-    rt_view_polygon_set_context(p, qg_legacy_view_to_context(v));
 
     // Done processing view feature - increment name
     poly_cnt++;
@@ -417,18 +415,17 @@ QPolyCreate::toggle_line_snapping(bool s)
 {
     qg_legacy_view *v = qpolycreate_view(m_ctx);
     qg_polygon_ref co = (cf) ? cf->polygon : qg_polygon_ref{0, 0};
-    if (!v || rt_view_polygon_ref_is_null(co))
+    if (!v || ged_draw_view_polygon_ref_is_null(co))
 	return;
 
-    rt_view_context_snap_source_flags_set(qg_legacy_view_to_context(v),
-	    RT_VIEW_SNAP_VIEW);
+    struct bv *view = qg_legacy_view_bv(v);
+    bv_snap_source_flags_set(view, BV_SNAP_VIEW);
     if (!s) {
-	rt_view_context_snap_lines_set(qg_legacy_view_to_context(v), 0);
-	rt_view_context_snap_exclude_feature_clear(qg_legacy_view_to_context(v));
+	bv_snap_lines_set(view, 0);
     } else {
-	rt_view_context_polygon_snap_exclude_set(qg_legacy_view_to_context(v), co);
-	rt_view_context_snap_lines_set(qg_legacy_view_to_context(v),
-		rt_view_context_polygon_snap_count(qg_legacy_view_to_context(v), co) ? 1 : 0);
+	ged_draw_view_context_polygon_snap_exclude_set(qg_legacy_view_to_context(v), co);
+	bv_snap_lines_set(view,
+		ged_draw_view_context_polygon_snap_count(qg_legacy_view_to_context(v), co) ? 1 : 0);
     }
 
     emit settings_changed(QG_VIEW_DRAWN);
@@ -441,13 +438,13 @@ QPolyCreate::toggle_grid_snapping(bool s)
     if (!v)
 	return;
 
-    void *view_ctx = qg_legacy_view_to_context(v);
-    rt_view_context_snap_source_flags_set(view_ctx, RT_VIEW_SNAP_VIEW);
-    struct rt_view_grid_state grid;
-    if (!rt_view_context_grid_state_get(&grid, view_ctx))
+    struct bv *view = qg_legacy_view_bv(v);
+    bv_snap_source_flags_set(view, BV_SNAP_VIEW);
+    struct bv_grid_state grid;
+    if (!bv_grid_state_get(&grid, view))
 	return;
     grid.snap = s ? 1 : 0;
-    rt_view_context_grid_state_set(view_ctx, &grid);
+    bv_grid_state_set(view, &grid);
 
     emit settings_changed(QG_VIEW_DRAWN);
 }
@@ -459,10 +456,10 @@ QPolyCreate::checkbox_refresh(unsigned long long)
     if (!v)
 	return;
 
-    void *view_ctx = qg_legacy_view_to_context(v);
     ps->grid_snapping->blockSignals(true);
-    struct rt_view_grid_state grid = {};
-    (void)rt_view_context_grid_state_get(&grid, view_ctx);
+    const struct bv *view = qg_legacy_view_bv_const(v);
+    struct bv_grid_state grid = {};
+    (void)bv_grid_state_get(&grid, view);
     if (grid.snap) {
 	ps->grid_snapping->setCheckState(Qt::Checked);
     } else {
@@ -471,7 +468,7 @@ QPolyCreate::checkbox_refresh(unsigned long long)
     ps->grid_snapping->blockSignals(false);
 
     ps->line_snapping->blockSignals(true);
-    if (rt_view_context_snap_lines_get(view_ctx)) {
+    if (bv_snap_lines_get(view)) {
 	ps->line_snapping->setCheckState(Qt::Checked);
     } else {
 	ps->line_snapping->setCheckState(Qt::Unchecked);
@@ -512,7 +509,7 @@ QPolyCreate::toplevel_config(bool)
     if (!gedp || !v)
 	return;
 
-    if (!rt_view_polygon_ref_is_null(p)) {
+    if (!ged_draw_view_polygon_ref_is_null(p)) {
 	finalize(true);
     }
 
@@ -521,7 +518,7 @@ QPolyCreate::toplevel_config(bool)
     // This function is called when a top level mode change was initiated
     // by a selection button.  Clear any selected points being displayed.
     if (gedp)
-	draw_change = rt_view_context_polygon_clear_point_selection(
+	draw_change = ged_draw_view_context_polygon_clear_point_selection(
 		qg_legacy_view_to_context(v)) ? true : false;
 
     if (draw_change && gedp)
@@ -566,9 +563,9 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
     //  If we're continuing to edit the existing polygon, the options are
     //  whatever is already established - otherwise, grab from the widget
     //  settings
-    if (!rt_view_polygon_ref_is_null(p)) {
+    if (!ged_draw_view_polygon_ref_is_null(p)) {
 	qg_polygon_record rec;
-	if (rt_view_polygon_record_get(p, &rec))
+	if (ged_draw_view_polygon_record_get(p, &rec))
 	    cf->ptype = rec.type;
     } else {
 	if (ellipse_mode->isChecked()) {
@@ -621,7 +618,7 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
 	struct _qpolycreate_poly_collect pc;
 	pc.polys = &polyvec;
 	pc.exclude = p;
-	rt_view_context_polygon_visit_records(qg_legacy_view_to_context(v),
+	ged_draw_view_context_polygon_visit_records(qg_legacy_view_to_context(v),
 		_qpolycreate_poly_collect_cb, &pc);
 	for (auto s : polyvec)
 	    pcf->bool_objs.push_back(s);

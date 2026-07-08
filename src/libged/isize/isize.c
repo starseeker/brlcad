@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -45,7 +47,7 @@ ged_isize_core(struct ged *gedp, int argc, const char *argv[])
     if (argc == 1) {
 	void *view_ctx = ged_view_active_ctx(gedp);
 	bu_vls_printf(gedp->ged_result_str, "%g",
-		      rt_view_context_inverse_size_get(view_ctx) *
+		      bv_inverse_size_get(bv_context_view_const((const struct bv_context *)view_ctx)) *
 		      gedp->dbip->dbi_base2local);
 	return BRLCAD_OK;
     }

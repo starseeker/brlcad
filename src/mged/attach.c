@@ -48,7 +48,6 @@
 #include "ged.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
-#include "rt/view.h"
 #include "tclcad.h"
 
 #include "./mged.h"
@@ -65,7 +64,7 @@ extern struct _color_scheme default_color_scheme;
 extern void share_backend_cache(struct mged_dm *dlp2);	/* defined in share.c */
 int mged_default_backend_cache = 0;   /* This variable is available via Tcl for controlling use of backend caches */
 
-static fastf_t windowbounds[6] = { RT_VIEW_MIN, RT_VIEW_MAX, RT_VIEW_MIN, RT_VIEW_MAX, RT_VIEW_MIN, RT_VIEW_MAX };
+static fastf_t windowbounds[6] = { BV_VIEW_MIN, BV_VIEW_MAX, BV_VIEW_MIN, BV_VIEW_MAX, BV_VIEW_MIN, BV_VIEW_MAX };
 
 /* If we changed the active dm, need to update GEDP as well.. */
 void set_curr_dm(struct mged_state *s, struct mged_dm *nc)
@@ -98,11 +97,14 @@ void set_curr_dm(struct mged_state *s, struct mged_dm *nc)
 }
 
 void
-mged_dm_adc_state_set(struct mged_dm *dm, const struct rt_view_adc_state *adc)
+mged_dm_adc_state_set(struct mged_dm *dm, const struct bv_adc_state *adc)
 {
+    struct bv_adc_state bv_adc;
+
     if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
 	return;
-    rt_view_context_adc_state_set(dm->dm_view_state->vs_gvp, adc);
+    memcpy(&bv_adc, adc, sizeof(bv_adc));
+    bv_adc_state_set(mged_view_state_view(dm->dm_view_state), &bv_adc);
 }
 
 int
@@ -139,7 +141,7 @@ mged_dm_init(
     }
 
     /*XXXX this eventually needs to move into Ogl's private structure */
-    dm_set_vp(DMP, rt_view_context_scale_storage_get(view_state->vs_gvp));
+    dm_set_vp(DMP, bv_scale_storage_get(mged_view_state_view(view_state)));
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
 #ifdef HAVE_TK
@@ -722,20 +724,20 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
     *view_state = *target_dm->dm_view_state;			/* struct copy */
     void *target_view_ctx = target_dm->dm_view_state->vs_gvp;
     void *view_set_ctx = ged_view_set_ctx(s->gedp);
-    void *view_ctx = rt_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
+    void *view_ctx = ged_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
     view_state->vs_gvp = view_ctx;
 
-    /* Independent view state is managed through BSG view-scope records. */
-
+    ged_view_set_context_add(view_set_ctx, view_ctx);
+    ged_view_context_owned_add(s->gedp, view_ctx);
     ged_view_context_update_callback_set(view_ctx,
 	    mged_view_callback, (void *)view_state);
-    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    if (rt_view_context_lod_policy_get(&lod_policy, view_ctx)) {
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx)) {
 	lod_policy.csg_enabled = 0;
 	lod_policy.zoom_refresh = 0;
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	rt_view_context_lod_policy_apply(view_ctx, &lod_policy);
+	ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
     }
     view_state->vs_rc = 1;
     view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);

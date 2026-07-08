@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "bu/cmd.h"
+#include "bv.h"
 #include "ged/event_txn.h"
 #include "rt/geom.h"
 #include "rt/primitives/arb8.h"
@@ -305,7 +306,8 @@ ged_find_arb_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
 
     mat_t model2view;
     void *view_ctx = ged_view_active_ctx(gedp);
-    rt_view_context_model2view_get(model2view, view_ctx);
+    bv_model2view_get(model2view,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
     (void)rt_arb_find_e_nearest_pt2(&edge, &vi1, &vi2, &intern, view, model2view, ptol);
     bu_vls_printf(gedp->ged_result_str, "%d %d %d", edge, vi1, vi2);
 

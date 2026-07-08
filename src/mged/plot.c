@@ -241,8 +241,8 @@ f_area(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     {
 	struct _area_write_data wd;
 	mat_t view_rotation;
-	void *view_ctx = view_state->vs_gvp;
-	rt_view_context_rotation_get(view_rotation, view_ctx);
+	struct bv *view = mged_view_context_view(view_state->vs_gvp);
+	bv_rotation_get(view_rotation, view);
 	wd.fp_w = fp_w;
 	wd.rotation = (const mat_t *)&view_rotation;
 	wd.dbip = s->dbip;

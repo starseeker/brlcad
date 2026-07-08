@@ -149,9 +149,15 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 	bytes_per_line = dm_get_width(dmp) * bytes_per_pixel;
 
 	(void)ged_obol_fbserv_present(gedp);
-	dm_get_display_image(dmp, &idata, 1, 0);
+	int obol_image = ged_obol_view_display_image(gedp, view_ctx, &idata, 1, 0);
+	if (obol_image < 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Obol view did not return image data.", argv[0]);
+	    return BRLCAD_ERROR;
+	}
+	if (!obol_image)
+	    dm_get_display_image(dmp, &idata, 1, 0);
 	if (!idata) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: display manager did not return image data.", argv[1]);
+	    bu_vls_printf(gedp->ged_result_str, "%s: display manager did not return image data.", argv[0]);
 	    return BRLCAD_ERROR;
 	}
 	bif = icv_create(dm_get_width(dmp), dm_get_height(dmp), ICV_COLOR_SPACE_RGB);

@@ -40,6 +40,7 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/process.h"
+#include "bv.h"
 #include "raytrace.h"
 #include "dm/fbserv.h"
 #include "dm.h"
@@ -65,6 +66,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 	bu_vls_printf(gedp->ged_result_str, "no current view set\n");
 	return BRLCAD_ERROR;
     }
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     struct fbserv_obj *fbs = gedp->ged_fbs;
     if (!fbs) {
@@ -118,9 +120,9 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     //     gv_fb_mode = 0) — see src/libged/fbclear/fbclear.c.
     //   * Programmatic callers that need to restore the prior fb_mode
     //     should snapshot it before invoking ert and write it back after.
-    int prior_fb_mode = rt_view_context_framebuffer_mode_get(view_ctx);
+    int prior_fb_mode = bv_framebuffer_mode_get(view);
     if (!prior_fb_mode)
-	rt_view_context_framebuffer_mode_set(view_ctx, 2);
+	bv_framebuffer_mode_set(view, 2);
 
     /* Phase 3: Try the IPC fast path first (anonymous pipe / socketpair).
      * This avoids TCP port binding, firewall traversal, and port collisions.
@@ -173,7 +175,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     double aspect = (double)width/(double)height;
     bu_vls_sprintf(&wstr, "%.14e", aspect);
     args.push_back(std::string(bu_vls_cstr(&wstr)));
-    fastf_t perspective = rt_view_context_perspective_get(view_ctx);
+    fastf_t perspective = bv_perspective_get(view);
     if (perspective > 0) {
 	args.push_back(std::string("-p"));
 	bu_vls_sprintf(&wstr, "%.14e", perspective);

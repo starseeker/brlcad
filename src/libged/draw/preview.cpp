@@ -35,6 +35,7 @@
 #include "bu/getopt.h"
 
 #include "bg/line_layer.h"
+#include "bv.h"
 #include "ged/draw.h"
 
 #include "../ged_private.h"
@@ -191,11 +192,12 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     }
 
     /* First step:  put eye at view center (view 0, 0, 0) */
-    rt_view_context_rotation_set(view_ctx, (*m));
-    rt_view_context_center_set(view_ctx, (*v));
-    rt_view_context_update(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, (*m));
+    bv_center_set(view, (*v));
+    ged_view_context_update(view_ctx);
     mat_t view2model;
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_view2model_get(view2model, view);
 
     /*
      * Compute camera orientation notch to right (+X) and up (+Y)
@@ -217,8 +219,8 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     */
     VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
     MAT4X3PNT(new_cent, view2model, xlate);
-    rt_view_context_center_set(view_ctx, new_cent);
-    rt_view_context_update(view_ctx);
+    bv_center_set(view, new_cent);
+    ged_view_context_update(view_ctx);
 
     /* If new treewalk is needed, get new objects into view. */
     if (preview_tree_walk_needed) {
@@ -489,10 +491,12 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
      * Initialize the view to the current one provided by the ged
      * structure in case a view specification is never given.
      */
-    rt_view_context_rotation_get(*ged_viewrot, view_ctx);
+    bv_rotation_get(*ged_viewrot,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
     VSET(temp, 0.0, 0.0, 1.0);
     mat_t view2model;
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_view2model_get(view2model,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
     MAT4X3PNT(*ged_eye_model, view2model, temp);
 
     if (image_name) {

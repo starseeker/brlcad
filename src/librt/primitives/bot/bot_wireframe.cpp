@@ -121,7 +121,7 @@ face_area(struct rt_bot_internal *bot, size_t face_num)
  *   and creating wireframe edges
  **********************************************************/
 static int
-rt_bot_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(v), fastf_t UNUSED(s_size))
+rt_bot_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(v), fastf_t UNUSED(s_size))
 {
     struct rt_bot_internal *bot;
     if (!realization)
@@ -319,7 +319,7 @@ rt_bot_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 }
 
 extern "C" int
-rt_bot_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_bot_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;

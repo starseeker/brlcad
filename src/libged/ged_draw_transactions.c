@@ -35,6 +35,7 @@
 #include "bu/malloc.h"
 #include "bg/clip.h"
 #include "brlobol/draw_cache.h"
+#include "bv.h"
 
 #include "ged.h"
 #include "ged/draw.h"
@@ -171,14 +172,14 @@ _ged_draw_shared_fallback_view_ctx(struct ged *gedp)
 	return NULL;
 
     void *active = ged_draw_active_view_ctx(gedp);
-    if (active && !rt_view_context_is_independent(active))
+    if (active && !ged_view_context_is_independent(active))
 	return active;
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     if (views) {
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    void *view_ctx = BU_PTBL_GET(views, i);
-	    if (view_ctx && !rt_view_context_is_independent(view_ctx))
+	    if (view_ctx && !ged_view_context_is_independent(view_ctx))
 		return view_ctx;
 	}
     }
@@ -1112,13 +1113,13 @@ ged_draw_txn_view_array(struct ged *gedp,
 	return 0;
 
     size_t count = 0;
-    if (rt_view_context_is_independent(view_ctx)) {
+    if (ged_view_context_is_independent(view_ctx)) {
 	count = 1;
     } else {
 	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    void *local_view_ctx = BU_PTBL_GET(views, i);
-	    if (local_view_ctx && !rt_view_context_is_independent(local_view_ctx))
+	    if (local_view_ctx && !ged_view_context_is_independent(local_view_ctx))
 		count++;
 	}
 	if (!count)
@@ -1127,14 +1128,14 @@ ged_draw_txn_view_array(struct ged *gedp,
 
     void **out = (void **)bu_calloc(count, sizeof(void *),
 				    "draw transaction view context array");
-    if (rt_view_context_is_independent(view_ctx)) {
+    if (ged_view_context_is_independent(view_ctx)) {
 	out[0] = view_ctx;
     } else {
 	size_t idx = 0;
 	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    void *local_view_ctx = BU_PTBL_GET(views, i);
-	    if (local_view_ctx && !rt_view_context_is_independent(local_view_ctx))
+	    if (local_view_ctx && !ged_view_context_is_independent(local_view_ctx))
 		out[idx++] = local_view_ctx;
 	}
 	if (!idx)
@@ -1192,15 +1193,14 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 	if (!view_ctxs[i])
 	    continue;
 	if (have_obol_bounds &&
-	    rt_view_context_autoview_bounds(view_ctxs[i],
-					    RT_VIEW_AUTOVIEW_SCALE_DEFAULT, obol_min, obol_max)) {
+	    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctxs[i]),
+			       BV_AUTOVIEW_SCALE_DEFAULT, obol_min, obol_max)) {
 	    adjusted++;
-	    continue;
+	} else if (allow_database_fallback) {
+	    /* The historical RT autoview fallback was BSG-only.  Obol/libbv
+	     * callers require explicit bounds; leave the view unchanged when
+	     * none are available. */
 	}
-	if (allow_database_fallback &&
-	    rt_view_context_autoview(view_ctxs[i],
-				     RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0))
-	    adjusted++;
     }
 
     bu_free(view_ctxs, "draw transaction view context array");

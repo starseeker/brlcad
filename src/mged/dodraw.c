@@ -28,12 +28,13 @@
 #include "rt/geom.h"		/* for ID_POLY special support */
 #include "raytrace.h"
 #include "rt/db4.h"
-#include "ged/draw_obol.h"
 #include "ged/view.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
 #include "./cmd.h"
+
+#define MGED_EDIT_PREVIEW_PREFIX "_mged_edit_preview::"
 
 static int
 mged_check_shape_ref(struct mged_state *s, ged_draw_shape_ref ref, const char *caller)
@@ -54,6 +55,169 @@ mged_check_shape_ref(struct mged_state *s, ged_draw_shape_ref ref, const char *c
 }
 
 
+static void
+mged_edit_preview_name(struct bu_vls *name, const char *source_path)
+{
+    if (!name)
+	return;
+    bu_vls_sprintf(name, "%s%s", MGED_EDIT_PREVIEW_PREFIX,
+	    source_path ? source_path : "");
+}
+
+
+static int
+mged_edit_preview_view_exists(void *view_ctx, const char *name)
+{
+    return (view_ctx && name && name[0] &&
+	    ged_draw_view_context_feature_exists(view_ctx, name)) ? 1 : 0;
+}
+
+
+static int
+mged_edit_preview_exists_any(struct mged_state *s, const char *name)
+{
+    int checked = 0;
+
+    if (!s || !name || !name[0])
+	return 0;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
+	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+	void *view_ctx = (m_dmp && m_dmp->dm_view_state) ?
+	    m_dmp->dm_view_state->vs_gvp : NULL;
+	if (!view_ctx)
+	    continue;
+	checked = 1;
+	if (mged_edit_preview_view_exists(view_ctx, name))
+	    return 1;
+    }
+
+    if (!checked && view_state && view_state->vs_gvp)
+	return mged_edit_preview_view_exists(view_state->vs_gvp, name);
+
+    return 0;
+}
+
+
+static int
+mged_edit_preview_publish_view(
+    struct mged_state *s,
+    struct _view_state *vsp,
+    const char *name,
+    const char *source_path,
+    struct rt_db_internal *ip,
+    const mat_t mat)
+{
+    void *view_ctx = vsp ? vsp->vs_gvp : NULL;
+    if (!s || !view_ctx || !name || !name[0] || !ip)
+	return 0;
+
+    ged_draw_view_feature_ref ref =
+	ged_draw_view_context_feature_overlay_ensure(view_ctx, name,
+	    (const void *)s, NULL, NULL, source_path);
+    if (ged_draw_view_feature_ref_is_null(ref))
+	return 0;
+
+    if (color_scheme) {
+	ged_draw_view_feature_set_color(ref,
+		color_scheme->cs_edit_info[0],
+		color_scheme->cs_edit_info[1],
+		color_scheme->cs_edit_info[2]);
+    }
+
+    if (!ged_draw_view_feature_primitive_wireframe_replace(ref, s->dbip,
+	    ip, mat, &s->tol.ttol, &s->tol.tol))
+	return -1;
+
+    mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
+    return 1;
+}
+
+
+static int
+mged_edit_preview_publish_all(
+    struct mged_state *s,
+    const char *name,
+    const char *source_path,
+    struct rt_db_internal *ip,
+    const mat_t mat)
+{
+    int published = 0;
+    int attempted = 0;
+    int failed = 0;
+
+    if (!s || !name || !name[0] || !ip)
+	return 0;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
+	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+	if (!m_dmp || !m_dmp->dm_view_state || !m_dmp->dm_view_state->vs_gvp)
+	    continue;
+	attempted = 1;
+	int ret = mged_edit_preview_publish_view(s, m_dmp->dm_view_state,
+	    name, source_path, ip, mat);
+	if (ret > 0)
+	    published = 1;
+	else if (ret < 0)
+	    failed = 1;
+    }
+
+    if (!attempted && view_state && view_state->vs_gvp) {
+	int ret = mged_edit_preview_publish_view(s, view_state, name,
+	    source_path, ip, mat);
+	if (ret > 0)
+	    published = 1;
+	else if (ret < 0)
+	    failed = 1;
+    }
+
+    return failed ? -1 : published;
+}
+
+
+static int
+mged_edit_preview_clear_view(struct mged_state *s,
+			     struct _view_state *vsp,
+			     const char *name)
+{
+    void *view_ctx = vsp ? vsp->vs_gvp : NULL;
+    int removed = 0;
+
+    if (!view_ctx || !name || !name[0])
+	return 0;
+
+    removed = ged_draw_view_context_feature_remove(view_ctx, name);
+    if (removed)
+	mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
+    return removed;
+}
+
+
+static int
+mged_edit_preview_clear_all(struct mged_state *s, const char *name)
+{
+    int removed = 0;
+    int attempted = 0;
+
+    if (!s || !name || !name[0])
+	return 0;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
+	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+	if (!m_dmp || !m_dmp->dm_view_state || !m_dmp->dm_view_state->vs_gvp)
+	    continue;
+	attempted = 1;
+	if (mged_edit_preview_clear_view(s, m_dmp->dm_view_state, name))
+	    removed = 1;
+    }
+
+    if (!attempted && view_state && view_state->vs_gvp)
+	removed = mged_edit_preview_clear_view(s, view_state, name);
+
+    return removed;
+}
+
+
 /*
  * Given an existing solid structure that may have been subjected to
  * solid editing, recompute the vector list, etc., to make the solid
@@ -66,10 +230,6 @@ mged_check_shape_ref(struct mged_state *s, ged_draw_shape_ref ref, const char *c
 int
 replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref)
 {
-    struct rt_db_internal intern;
-    struct directory *dp;
-    mat_t mat;
-
     if (s->dbip == DBI_NULL)
 	return 0;
 
@@ -78,29 +238,17 @@ replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref)
 	return 0;
     if (!rec.fullpath || rec.fullpath->fp_len <= 0)
 	return 0;
-    dp = DB_FULL_PATH_CUR_DIR(rec.fullpath);
-    if (rec.evaluated_region) {
-	Tcl_AppendResult(s->interp, "replot_original_solid(", dp->d_namep,
-			 "): Unable to plot evaluated regions, skipping\n", (char *)NULL);
+    char *source_path = db_path_to_string(rec.fullpath);
+    if (!source_path)
 	return -1;
-    }
-    struct db_full_path path;
-    db_full_path_init(&path);
-    db_dup_full_path(&path, rec.fullpath);
-    (void)db_path_to_mat(s->dbip, &path, mat, path.fp_len-1);
-    db_free_full_path(&path);
 
-    if (rt_db_get_internal(&intern, dp, s->dbip, mat) < 0) {
-	Tcl_AppendResult(s->interp, dp->d_namep, ":  solid import failure\n", (char *)NULL);
-	return -1;		/* ERROR */
-    }
-    RT_CK_DB_INTERNAL(&intern);
+    struct bu_vls feature_name = BU_VLS_INIT_ZERO;
+    mged_edit_preview_name(&feature_name, source_path);
+    if (mged_edit_preview_clear_all(s, bu_vls_cstr(&feature_name)))
+	(void)ged_draw_shape_ref_set_visible(s->gedp, ref, 1);
 
-    if (replot_modified_solid(s, ref, &intern, bn_mat_identity) < 0) {
-	rt_db_free_internal(&intern);
-	return -1;
-    }
-    rt_db_free_internal(&intern);
+    bu_vls_free(&feature_name);
+    bu_free(source_path, "MGED edit-preview source path");
     return 0;
 }
 
@@ -122,10 +270,6 @@ replot_modified_solid(
 	struct rt_db_internal *ip,
 	const mat_t mat)
 {
-    struct rt_db_internal intern;
-
-    RT_DB_INTERNAL_INIT(&intern);
-
     if (!mged_check_shape_ref(s, ref, "replot_modified_solid")) {
 	Tcl_AppendResult(s->interp, "replot_modified_solid() sp==NULL?\n", (char *)NULL);
 	return -1;
@@ -143,10 +287,16 @@ replot_modified_solid(
 	return -1;
     }
 
-    /* Release existing vlist of this solid */
-    ged_draw_shape_ref_geometry_clear(s->gedp, ref);
+    struct bu_vls feature_name = BU_VLS_INIT_ZERO;
+    mged_edit_preview_name(&feature_name, source_path);
+    const int existing_preview =
+	mged_edit_preview_exists_any(s, bu_vls_cstr(&feature_name));
+    if (!rec.visible && !existing_preview) {
+	bu_vls_free(&feature_name);
+	bu_free(source_path, "MGED edit-preview source path");
+	return 0;
+    }
 
-    /* Draw (plot) a normal solid */
     RT_CK_DB_INTERNAL(ip);
 
     s->tol.ttol.magic = BG_TESS_TOL_MAGIC;
@@ -154,32 +304,24 @@ replot_modified_solid(
     s->tol.ttol.rel = s->tol.rel_tol;
     s->tol.ttol.norm = s->tol.nrm_tol;
 
-    transform_editing_solid(s, &intern, mat, ip, 0);
-
-    if (ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
-	    s->gedp, source_path, &intern, &s->tol.ttol, &s->tol.tol) <= 0) {
+    int preview_status = mged_edit_preview_publish_all(s,
+	bu_vls_cstr(&feature_name), source_path, ip, mat);
+    if (preview_status < 0) {
 	if (rec.leaf_name)
-	    Tcl_AppendResult(s->interp, rec.leaf_name, ": re-plot failure\n",
+	    Tcl_AppendResult(s->interp, rec.leaf_name, ": edit-preview plot failure\n",
 		    (char *)NULL);
-	rt_db_free_internal(&intern);
-	bu_free(source_path, "MGED replot source path");
+	bu_vls_free(&feature_name);
+	bu_free(source_path, "MGED edit-preview source path");
 	return -1;
     }
-    rt_db_free_internal(&intern);
-    bu_free(source_path, "MGED replot source path");
 
-    {
-	int bad_cmd = 0;
-	if (!ged_draw_shape_ref_update_bounds_from_geometry(s->gedp, ref, &bad_cmd) && bad_cmd) {
-	    struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
-	    bu_vls_printf(&tmp_vls, "unknown vlist op %d\n", bad_cmd);
-	    Tcl_AppendResult(s->interp, bu_vls_addr(&tmp_vls), (char *)NULL);
-	    bu_vls_free(&tmp_vls);
-	}
-    }
-    ged_draw_shape_set_highlighted(s->gedp, ref, 1);
+    if (preview_status > 0 && rec.visible)
+	(void)ged_draw_shape_ref_set_visible(s->gedp, ref, 0);
+    if (preview_status > 0)
+	ged_draw_shape_set_highlighted(s->gedp, ref, 1);
 
-    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
+    bu_vls_free(&feature_name);
+    bu_free(source_path, "MGED edit-preview source path");
     return 0;
 }
 

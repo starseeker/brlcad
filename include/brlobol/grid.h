@@ -11,6 +11,7 @@
 
 #include "brlobol/defines.h"
 
+#include "bv.h"
 #include "vmath.h"
 
 #include <Inventor/fields/SoSFColor.h>
@@ -22,7 +23,6 @@
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoSeparator.h>
 
-struct rt_view_grid_state;
 class SoBRLVListShape;
 
 class BRLOBOL_EXPORT SoBRLGrid : public SoSeparator
@@ -81,7 +81,7 @@ protected:
 
 BRLOBOL_EXPORT extern int brlobol_grid_configure_from_view(
     SoBRLGrid *grid,
-    const struct rt_view_grid_state *state,
+    const struct bv_grid_state *state,
     const mat_t model2view,
     fastf_t view_scale,
     fastf_t base2local,
@@ -90,7 +90,7 @@ BRLOBOL_EXPORT extern int brlobol_grid_configure_from_view(
 
 BRLOBOL_EXPORT extern int brlobol_grid_configure_from_view_context(
     SoBRLGrid *grid,
-    const struct rt_view_grid_state *state,
+    const struct bv_grid_state *state,
     const void *view_ctx);
 
 #endif /* BRLOBOL_GRID_H */

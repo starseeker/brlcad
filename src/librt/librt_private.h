@@ -336,7 +336,7 @@ extern void primitive_clamp_tess_tol(
 
 extern fastf_t primitive_diagonal_samples(
     struct rt_db_internal *ip,
-    const struct rt_view_info *v,
+    const struct bv_view_info *v,
     const struct bn_tol *tol,
     fastf_t s_size);
 

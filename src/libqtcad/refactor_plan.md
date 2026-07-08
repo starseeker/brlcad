@@ -130,6 +130,7 @@ Phase 8 — Test and CI coverage
 Current tree notes:
 - Headless QApplication coverage now focuses on Obol paths: src/libqtcad/tests contains qgmodel/qgview tests, Obol controller/window-host/draw/faceplate/pick/snap/measure/export tests, and progressive LoD tests wired into CTest with QT_QPA_PLATFORM=offscreen.  The old ged_test_qged_swrast and dm backend benchmark sources/tests have been retired.
 - qged no longer has a `dm_plugins` build prerequisite for its Obol/qtcad view path.  The remaining framebuffer validation gap is an application-level streaming test that drives `ert`/fbserv traffic into an Obol-hosted image stream and verifies intermediate rendered frames.
+- qged edit plugins publish preview geometry through GED/libbrlobol feature refs.  `QgObolEditPreview` remains a low-level qtcad helper with direct unit coverage, not a production fallback path for qged plugin previews.
 - QAbstractItemModelTester coverage now includes a dedicated offscreen CTest entry (test_qgmodel_model_tester) over QgModel, with QSignalSpy checks for fetch/open and layout-change signals; the old Model_Test TODO in QgModel.h is removed.
 
 - Add headless QApplication-based unit tests (using QSignalSpy and QTest) for the most logic-heavy classes: QgModel (tree fetch/hierarchy), QgKeyValModel, QgAttributesModel, each filter family (synthetic mouse events), QgFlowLayout, QgToolPalette selection logic, QgConsole command echo / completion, QgSignalFlags flag round-tripping.

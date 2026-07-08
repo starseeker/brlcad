@@ -7,11 +7,10 @@
 
 #include "common.h"
 
+#include "bv.h"
 #include "brlobol/grid.h"
 #include "brlobol/lod_realization.h"
 #include "brlobol/vlist_shape.h"
-
-#include "rt/view.h"
 
 #include <Inventor/annex/HUD/nodekits/SoHUDKit.h>
 #include <Inventor/actions/SoSearchAction.h>
@@ -431,7 +430,7 @@ SoBRLGrid::getTotalSegmentCount(void) const
 
 int
 brlobol_grid_configure_from_view(SoBRLGrid *grid,
-				 const struct rt_view_grid_state *state,
+				 const struct bv_grid_state *state,
 				 const mat_t model2view,
 				 fastf_t view_scale,
 				 fastf_t base2local,
@@ -473,18 +472,20 @@ brlobol_grid_configure_from_view(SoBRLGrid *grid,
 
 int
 brlobol_grid_configure_from_view_context(SoBRLGrid *grid,
-	const struct rt_view_grid_state *state,
+	const struct bv_grid_state *state,
 	const void *view_ctx)
 {
-    if (!grid || !state || !view_ctx)
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (!grid || !state || !view)
 	return 0;
 
     mat_t model2view;
     MAT_IDN(model2view);
-    (void)rt_view_context_model2view_get(model2view, view_ctx);
+    (void)bv_model2view_get(model2view, view);
     return brlobol_grid_configure_from_view(grid, state, model2view,
-					    rt_view_context_scale_get(view_ctx),
-					    rt_view_context_base2local_get(view_ctx),
-					    rt_view_context_width_get(view_ctx),
-					    rt_view_context_height_get(view_ctx));
+					    bv_scale_get(view),
+					    bv_base2local_get(view),
+					    bv_width_get(view),
+					    bv_height_get(view));
 }

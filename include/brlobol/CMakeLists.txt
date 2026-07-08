@@ -34,6 +34,7 @@ set(
   scene_group.h
   snap_action.h
   source_mesh_request.h
+  view_attachment.h
   view_controller.h
   view_lod.h
   view_store.h

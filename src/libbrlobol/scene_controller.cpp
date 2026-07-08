@@ -1212,42 +1212,6 @@ SoBRLSceneController::getSceneRoot(void) const
     return this->root;
 }
 
-rt_view_scene_ref
-SoBRLSceneController::getSceneRef(void)
-{
-    return rt_view_scene_ref_make(this, RT_VIEW_SCENE_BACKEND_OBOL);
-}
-
-rt_view_scene_ref
-SoBRLSceneController::getSceneRef(void) const
-{
-    return rt_view_scene_ref_make(const_cast<SoBRLSceneController *>(this),
-				  RT_VIEW_SCENE_BACKEND_OBOL);
-}
-
-SbBool
-SoBRLSceneController::sceneRefIsObol(rt_view_scene_ref ref)
-{
-    return (!rt_view_scene_ref_is_null(ref) &&
-	    rt_view_scene_ref_backend(ref) == RT_VIEW_SCENE_BACKEND_OBOL) ?
-	   TRUE : FALSE;
-}
-
-SoBRLSceneController *
-SoBRLSceneController::fromSceneRef(rt_view_scene_ref ref)
-{
-    if (!SoBRLSceneController::sceneRefIsObol(ref))
-	return NULL;
-    return static_cast<SoBRLSceneController *>(
-	       rt_view_scene_ref_context(ref));
-}
-
-const SoBRLSceneController *
-SoBRLSceneController::fromConstSceneRef(rt_view_scene_ref ref)
-{
-    return SoBRLSceneController::fromSceneRef(ref);
-}
-
 uint64_t
 SoBRLSceneController::getStructuralRevision(void) const
 {

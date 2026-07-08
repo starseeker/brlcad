@@ -57,6 +57,7 @@
 #include "bu/vls.h"
 #include "bg/line_layer.h"
 #include "bg/plot3.h"
+#include "bv.h"
 #include "dm/fbserv.h"
 #include "ged.h"
 #include "ged/draw.h"
@@ -815,7 +816,7 @@ ged_rot_args(struct ged *gedp, int argc, const char *argv[], char *coord, mat_t 
 	void *view_ctx = ged_view_active_ctx(gedp);
 	if (!view_ctx)
 	    return BRLCAD_ERROR;
-	*coord = rt_view_context_coord_get(view_ctx);
+	*coord = bv_coord_get(bv_context_view_const((const struct bv_context *)view_ctx));
     }
 
     if (argc != 2 && argc != 4) {
@@ -937,7 +938,7 @@ ged_tra_args(struct ged *gedp, int argc, const char *argv[], char *coord, vect_t
 	void *view_ctx = ged_view_active_ctx(gedp);
 	if (!view_ctx)
 	    return BRLCAD_ERROR;
-	*coord = rt_view_context_coord_get(view_ctx);
+	*coord = bv_coord_get(bv_context_view_const((const struct bv_context *)view_ctx));
     }
 
     if (argc != 2 && argc != 4) {
@@ -2724,12 +2725,13 @@ _ged_rt_set_eye_model(struct ged *gedp,
     void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
     if (!view_ctx)
 	return;
-    if (rt_view_context_zclip_get(view_ctx) ||
-	    rt_view_context_perspective_get(view_ctx) > 0) {
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    if (bv_zclip_get(view) ||
+	    bv_perspective_get(view) > 0) {
 	mat_t view2model;
 	vect_t temp;
 
-	rt_view_context_view2model_get(view2model, view_ctx);
+	bv_view2model_get(view2model, view);
 	VSET(temp, 0.0, 0.0, 1.0);
 	MAT4X3PNT(eye_model, view2model, temp);
     } else {
@@ -2744,8 +2746,8 @@ _ged_rt_set_eye_model(struct ged *gedp,
 	vect_t diag2;
 	point_t ecenter;
 
-	rt_view_context_center_get(view_center, view_ctx);
-	rt_view_context_rotation_get(view_rotation, view_ctx);
+	bv_center_mat_get(view_center, view);
+	bv_rotation_get(view_rotation, view);
 	MAT_DELTAS_GET_NEG(eye_model, view_center);
 
 	for (i = 0; i < 3; ++i) {
@@ -3007,11 +3009,12 @@ _ged_rt_write(struct ged *gedp,
 	      int argc,
 	      const char **argv)
 {
-    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
     quat_t quat;
     void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
     if (!view_ctx)
 	return;
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
 
     /* Double-precision IEEE floating point only guarantees 15-17
      * digits of precision; single-precision only 6-9 significant
@@ -3022,9 +3025,8 @@ _ged_rt_write(struct ged *gedp,
      * from 9->14 "should" be safe as it's above our calculation
      * tolerance and above single-precision capability.
      */
-    rt_view_context_info_get(&view_info, view_ctx);
-    rt_view_context_orientation_quat_get(quat, view_ctx);
-    fprintf(fp, "viewsize %.14e;\n", view_info.size);
+    bv_orientation_quat_get(quat, view);
+    fprintf(fp, "viewsize %.14e;\n", bv_size_get(view));
     fprintf(fp, "orientation %.14e %.14e %.14e %.14e;\n", V4ARGS(quat));
     fprintf(fp, "eye_pt %.14e %.14e %.14e;\n",
 		  eye_model[X], eye_model[Y], eye_model[Z]);

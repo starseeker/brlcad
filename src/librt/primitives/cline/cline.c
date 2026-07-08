@@ -461,7 +461,7 @@ rt_cline_free(register struct soltab *stp)
 
 
 C_DECL int
-rt_cline_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_cline_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_cline_internal *cline_ip;
     fastf_t top[16*3];

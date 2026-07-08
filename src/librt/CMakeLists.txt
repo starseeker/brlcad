@@ -316,10 +316,6 @@ set(
   vds/vds.c
   vers.c
   view.c
-  view_context.c
-  view_context_adapters.c
-  view_context_native.c
-  view_legacy_bsg.c
   vlist.c
   vshoot.c
   wdb.c
@@ -330,7 +326,6 @@ set(
   cache.h
   cut_private.h
   librt_private.h
-  view_context_private.h
   material/materialX.cpp
   material/materialX.h
   cut_hlbvh.h

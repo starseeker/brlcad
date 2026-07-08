@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -68,7 +70,8 @@ ged_viewdir_core(struct ged *gedp, int argc, const char *argv[])
 	VSET(view, 0.0, 0.0, 1.0);
     }
 
-    rt_view_context_rotation_get(rotation, view_ctx);
+    const struct bv *view_record = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_rotation_get(rotation, view_record);
     bn_mat_inv(invRot, rotation);
     MAT4X3PNT(dir, invRot, view);
     bn_encode_vect(gedp->ged_result_str, dir, 1);

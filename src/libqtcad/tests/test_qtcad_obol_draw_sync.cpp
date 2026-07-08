@@ -17,6 +17,7 @@
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/draw.h"
+#include "ged/view.h"
 #include "QgLegacyViewContext.h"
 #include "QgObolDatabaseSyncPrivate.h"
 #include "QgObolDrawSyncPrivate.h"
@@ -24,7 +25,6 @@
 #include "qtcad/QgView.h"
 #include "raytrace.h"
 #include "rt/db_fullpath.h"
-#include "rt/view.h"
 #include "wdb.h"
 
 #include <Inventor/SoViewport.h>
@@ -372,8 +372,8 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol controller should expose a camera for view sync");
     point_t offcenter = {100.0, 0.0, 0.0};
     void *view_ctx = qg_legacy_view_to_context(view.view());
-    rt_view_context_center_set(view_ctx, offcenter);
-    rt_view_context_scale_set(view_ctx, 250.0);
+    bv_center_set(qg_legacy_view_bv(view.view()), offcenter);
+    bv_scale_set(qg_legacy_view_bv(view.view()), 250.0);
     view.need_update(QG_VIEW_REFRESH);
     SbVec3f offTargetCamera = camera->position.getValue();
     if (offTargetCamera[0] < 50.0f)
@@ -546,6 +546,7 @@ main(int argc, char **argv)
     struct ged_draw_appearance_settings wire_appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     wire_appearance.draw_mode = GED_DRAW_MODE_WIRE;
+    wire_appearance.mixed_modes = 1;
     struct ged_draw_transaction draw_both =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
     draw_both.view = qg_legacy_view_to_context(view.view());
@@ -586,9 +587,9 @@ main(int argc, char **argv)
 	    !source_for_path_mode(controller, "ball.s",
 		SoBRLDatabaseSource::SHADED))
 	FAIL("direct Obol database remove should retain shared and representation-specific ball source owners");
-    if (!rt_view_context_name_set(view_ctx, "QV0") ||
-	    rt_view_context_independent_scope_is_null(view_ctx, 1) ||
-	    !rt_view_context_is_independent(view_ctx))
+    if (!bv_name_set(qg_legacy_view_bv(view.view()), "QV0") ||
+	    ged_view_context_independent_scope_is_null(view_ctx, 1) ||
+	    !ged_view_context_is_independent(view_ctx))
 	FAIL("qtcad direct source-owner parity test should create an independent view scope");
     const std::string scoped_box =
 	source_instance_key_for_view("QV0", "box.s");
@@ -638,8 +639,8 @@ main(int argc, char **argv)
 		SoBRLDatabaseSource::SHADED) ||
 	    controller->getDatabaseSourceCount() != 2)
 	FAIL("scoped direct Obol clear should leave shared source owners and mode-specific representations intact");
-    rt_view_context_independent_scope_destroy(view_ctx);
-    if (rt_view_context_is_independent(view_ctx))
+    ged_view_context_independent_scope_destroy(view_ctx);
+    if (ged_view_context_is_independent(view_ctx))
 	FAIL("qtcad direct source-owner parity test should restore shared view scope");
 
     controller->clearDatabaseSources();

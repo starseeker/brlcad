@@ -33,6 +33,7 @@
 #include "bu/color.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
+#include "bv.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -73,7 +74,8 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     } else {
 	fastf_t fx, fy;
-	if (!rt_view_context_screen_to_view(&fx, &fy, gd->cv,
+	const struct bv *view = bv_context_view_const((const struct bv_context *)gd->cv);
+	if (!bv_screen_to_view(&fx, &fy, view,
 		(int)p[0], (int)p[1])) {
 	    return BRLCAD_ERROR;
 	}
@@ -83,7 +85,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	point_t tp;
 	VMOVE(tp, p);
 	mat_t view2model;
-	rt_view_context_view2model_get(view2model, gd->cv);
+	bv_view2model_get(view2model, view);
 	MAT4X3PNT(p, view2model, tp);
     }
     point_t target;

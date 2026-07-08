@@ -29,6 +29,7 @@
 
 #include "../../libbg/RTree.h"
 #include "bu/cmd.h"
+#include "bv.h"
 #include "brep/defines.h"
 #include "./ged_brep.h"
 
@@ -66,8 +67,9 @@ _brep_pick_ray_from_view(struct _ged_brep_ipick *gib, point_t origin, vect_t dir
 
     mat_t view_center;
     mat_t view_rotation;
-    rt_view_context_center_get(view_center, view_ctx);
-    rt_view_context_rotation_get(view_rotation, view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_center_mat_get(view_center, view);
+    bv_rotation_get(view_rotation, view);
     MAT_DELTAS_GET_NEG(origin, view_center);
     VSCALE(origin, origin, gedp->dbip->dbi_base2local);
     VMOVEN(dir, view_rotation + 8, 3);

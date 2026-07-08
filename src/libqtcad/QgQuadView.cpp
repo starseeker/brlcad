@@ -53,7 +53,7 @@
 #include "ged.h"
 #include "ged/defines.h"
 #include "ged/commands.h"
-#include "rt/view.h"
+#include "ged/draw.h"
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgQuadView.h"
@@ -261,8 +261,8 @@ QgQuadView::changeToQuadFrame()
 			const void *source_view_ctx =
 				qg_legacy_view_to_context(views[0]->view());
 			qg_legacy_view_unit_conversion_set(views[i]->view(),
-				rt_view_context_local2base_get(source_view_ctx),
-				rt_view_context_base2local_get(source_view_ctx));
+				bv_local2base_get(qg_legacy_context_bv_const(source_view_ctx)),
+				bv_base2local_get(qg_legacy_context_bv_const(source_view_ctx)));
 
 			// For initial layout calculations, we need to set a screen width
 			// and height.  This won't be right in the end, but it gives
@@ -270,14 +270,18 @@ QgQuadView::changeToQuadFrame()
 			const void *layout_view_ctx =
 				qg_legacy_view_to_context(views[UPPER_RIGHT_QUADRANT]->view());
 			qg_legacy_view_dimensions_set(views[i]->view(),
-				rt_view_context_width_get(layout_view_ctx),
-				rt_view_context_height_get(layout_view_ctx));
+				bv_width_get(qg_legacy_context_bv_const(layout_view_ctx)),
+				bv_height_get(qg_legacy_context_bv_const(layout_view_ctx)));
 		}
 		// Copy the LoD source policy so all quadrants use the same
 		// source-selection behavior.
-		rt_view_context_lod_policy_copy(
-			qg_legacy_view_to_context(views[i]->view()),
-			qg_legacy_view_to_context(views[UPPER_RIGHT_QUADRANT]->view()));
+		ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+		if (ged_draw_view_context_lod_policy_get(&lod_policy,
+				qg_legacy_view_to_context(views[UPPER_RIGHT_QUADRANT]->view()))) {
+			ged_draw_view_context_lod_policy_apply(
+				qg_legacy_view_to_context(views[i]->view()),
+				&lod_policy);
+		}
 		if (gedp)
 			qg_legacy_view_ged_view_set_add(gedp, views[i]->view());
 	}
@@ -333,8 +337,7 @@ QgQuadView::changeToQuadFrame()
 	// the draw logic it needs to do updates.
 	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
 		void *view_ctx = qg_legacy_view_to_context(views[i]->view());
-		rt_view_context_autoview(view_ctx, RT_VIEW_AUTOVIEW_SCALE_DEFAULT, 0);
-		rt_view_context_lod_bounds_update(view_ctx);
+		ged_draw_view_context_lod_bounds_update(view_ctx);
 	}
 	{
 		std::set<std::string> paths =
@@ -356,8 +359,8 @@ QgQuadView::changeToQuadFrame()
 		qg_legacy_view_to_context(views[UPPER_RIGHT_QUADRANT]->view());
 	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
 		qg_legacy_view_dimensions_set(views[i]->view(),
-			rt_view_context_width_get(layout_view_ctx),
-			rt_view_context_height_get(layout_view_ctx));
+			bv_width_get(qg_legacy_context_bv_const(layout_view_ctx)),
+			bv_height_get(qg_legacy_context_bv_const(layout_view_ctx)));
 	}
 
 	// Current view selection pieces

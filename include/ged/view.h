@@ -35,6 +35,7 @@
 #include "rt/db_instance.h"
 #include "rt/view.h"
 #include "ged/defines.h"
+#include "ged/draw_scene.h"
 
 __BEGIN_DECLS
 
@@ -123,19 +124,24 @@ GED_EXPORT extern int ged_scale_args(struct ged *gedp, int argc, const char *arg
 GED_EXPORT extern int ged_view_context_is_independent(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_independent_scope_is_null(void *view_ctx, int create);
 GED_EXPORT extern void ged_view_context_independent_scope_destroy(void *view_ctx);
+GED_EXPORT extern ged_draw_scene_handle ged_view_context_scene_root_ref(const void *view_ctx);
+GED_EXPORT extern int ged_view_context_scene_root_ref_attach(void *view_ctx, ged_draw_scene_handle root_ref);
+GED_EXPORT extern int ged_view_context_scene_attached(const void *view_ctx);
 GED_EXPORT extern size_t ged_view_context_clear(void *view_ctx, int flags);
 GED_EXPORT extern void *ged_view_context_user_data_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_user_data_set(void *view_ctx, void *user_data);
 GED_EXPORT extern int ged_view_context_tclcad_data_set(void *view_ctx, void *tcl_data);
 GED_EXPORT extern int ged_view_context_callbacks_set(void *view_ctx, struct bu_ptbl *callbacks);
-GED_EXPORT extern int ged_view_context_edit_matrix_set(void *view_ctx, matp_t edit_mat);
-GED_EXPORT extern int ged_view_context_edit_matrix_clear(void *view_ctx);
 GED_EXPORT extern void *ged_view_context_create(void);
 GED_EXPORT extern void *ged_view_context_create_with_set(void *view_set_ctx);
 GED_EXPORT extern void *ged_view_context_create_copy_with_set(const void *src_view_ctx, void *view_set_ctx);
 GED_EXPORT extern void ged_view_context_free(void *view_ctx);
+GED_EXPORT extern int ged_view_context_host_attach(struct ged *gedp, void *view_ctx);
 GED_EXPORT extern int ged_view_set_context_add(void *view_set_ctx, void *view_ctx);
+GED_EXPORT extern int ged_view_set_context_remove(void *view_set_ctx, void *view_ctx);
+GED_EXPORT extern int ged_view_context_view_set_attach(void *view_ctx, void *view_set_ctx);
 GED_EXPORT extern int ged_view_context_update_callback_set(void *view_ctx, ged_view_context_update_callback_t callback, void *data);
+GED_EXPORT extern int ged_view_context_update(void *view_ctx);
 GED_EXPORT extern void *ged_view_context_display_manager_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_display_manager_set(void *view_ctx, void *dmp);
 

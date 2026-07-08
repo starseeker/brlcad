@@ -110,45 +110,46 @@ static fastf_t
 adc_view_local_scale(struct mged_state *s)
 {
     void *view_ctx = view_state->vs_gvp;
-    return rt_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
+    return bv_scale_get(mged_view_context_view_const(view_ctx)) *
+	s->dbip->dbi_base2local;
 }
 
 
 static void
-adc_model_To_adc_view(struct mged_state *s, struct rt_view_adc_state *adc)
+adc_model_To_adc_view(struct mged_state *s, struct bv_adc_state *adc)
 {
     mat_t model2view;
     void *view_ctx = view_state->vs_gvp;
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_adc_model_to_view(adc, model2view, RT_VIEW_MAX);
+    bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
+    bv_adc_model_to_view(adc, model2view, RT_VIEW_MAX);
 }
 
 
 static void
-adc_grid_To_adc_view(struct mged_state *s, struct rt_view_adc_state *adc)
+adc_grid_To_adc_view(struct mged_state *s, struct bv_adc_state *adc)
 {
     mat_t model2view;
     void *view_ctx = view_state->vs_gvp;
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_adc_grid_to_view(adc, model2view, RT_VIEW_MAX);
+    bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
+    bv_adc_grid_to_view(adc, model2view, RT_VIEW_MAX);
 }
 
 
 static void
-adc_view_To_adc_grid(struct mged_state *s, struct rt_view_adc_state *adc)
+adc_view_To_adc_grid(struct mged_state *s, struct bv_adc_state *adc)
 {
     mat_t model2view;
     void *view_ctx = view_state->vs_gvp;
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_adc_view_to_grid(adc, model2view);
+    bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
+    bv_adc_view_to_grid(adc, model2view);
 }
 
 
 static void
-calc_adc_pos(struct mged_state *s, struct rt_view_adc_state *adc)
+calc_adc_pos(struct mged_state *s, struct bv_adc_state *adc)
 {
     mat_t view2model;
     void *view_ctx = view_state->vs_gvp;
@@ -158,18 +159,18 @@ calc_adc_pos(struct mged_state *s, struct rt_view_adc_state *adc)
 	adc_view_To_adc_grid(s, adc);
     } else if (adc->anchor_pos == 2) {
 	adc_grid_To_adc_view(s, adc);
-	rt_view_context_view2model_get(view2model, view_ctx);
+	bv_view2model_get(view2model, mged_view_context_view_const(view_ctx));
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     } else {
 	adc_view_To_adc_grid(s, adc);
-	rt_view_context_view2model_get(view2model, view_ctx);
+	bv_view2model_get(view2model, mged_view_context_view_const(view_ctx));
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     }
 }
 
 
 static void
-calc_adc_a1(struct mged_state *s, struct rt_view_adc_state *adc)
+calc_adc_a1(struct mged_state *s, struct bv_adc_state *adc)
 {
     if (adc->anchor_a1) {
 	fastf_t dx, dy;
@@ -177,7 +178,7 @@ calc_adc_a1(struct mged_state *s, struct rt_view_adc_state *adc)
 	mat_t model2view;
 	void *view_ctx = view_state->vs_gvp;
 
-	rt_view_context_model2view_get(model2view, view_ctx);
+	bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_a1);
 	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
 	dy = view_pt[Y] * RT_VIEW_MAX - adc->dv_y;
@@ -191,7 +192,7 @@ calc_adc_a1(struct mged_state *s, struct rt_view_adc_state *adc)
 
 
 static void
-calc_adc_a2(struct mged_state *s, struct rt_view_adc_state *adc)
+calc_adc_a2(struct mged_state *s, struct bv_adc_state *adc)
 {
     if (adc->anchor_a2) {
 	fastf_t dx, dy;
@@ -199,7 +200,7 @@ calc_adc_a2(struct mged_state *s, struct rt_view_adc_state *adc)
 	mat_t model2view;
 	void *view_ctx = view_state->vs_gvp;
 
-	rt_view_context_model2view_get(model2view, view_ctx);
+	bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_a2);
 	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
 	dy = view_pt[Y] * RT_VIEW_MAX - adc->dv_y;
@@ -213,7 +214,7 @@ calc_adc_a2(struct mged_state *s, struct rt_view_adc_state *adc)
 
 
 static void
-calc_adc_dst(struct mged_state *s, struct rt_view_adc_state *adc)
+calc_adc_dst(struct mged_state *s, struct bv_adc_state *adc)
 {
     if (adc->anchor_dst) {
 	fastf_t dist;
@@ -222,7 +223,7 @@ calc_adc_dst(struct mged_state *s, struct rt_view_adc_state *adc)
 	mat_t model2view;
 	void *view_ctx = view_state->vs_gvp;
 
-	rt_view_context_model2view_get(model2view, view_ctx);
+	bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_dst);
 
 	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
@@ -236,7 +237,7 @@ calc_adc_dst(struct mged_state *s, struct rt_view_adc_state *adc)
 
 
 static void
-draw_ticks(struct mged_state *s, struct rt_view_adc_state *adc, fastf_t angle)
+draw_ticks(struct mged_state *s, struct bv_adc_state *adc, fastf_t angle)
 {
     fastf_t c_tdist;
     fastf_t d1, d2;
@@ -308,8 +309,8 @@ draw_ticks(struct mged_state *s, struct rt_view_adc_state *adc, fastf_t angle)
 void
 adcursor(struct mged_state *s)
 {
-    struct rt_view_adc_state adc_record;
-    struct rt_view_adc_state *adc = &adc_record;
+    struct bv_adc_state adc_record;
+    struct bv_adc_state *adc = &adc_record;
     fastf_t x1, Y1;	/* not "y1", due to conflict with math lib */
     fastf_t x2, y2;
     fastf_t x3, y3;
@@ -397,20 +398,20 @@ adcursor(struct mged_state *s)
 
 
 static void
-mged_adc_reset(struct mged_state *s, struct rt_view_adc_state *adc)
+mged_adc_reset(struct mged_state *s, struct bv_adc_state *adc)
 {
     mat_t model2view;
     mat_t view2model;
     void *view_ctx = view_state->vs_gvp;
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
-    rt_view_adc_reset(adc, view2model, model2view);
+    bv_model2view_get(model2view, mged_view_context_view_const(view_ctx));
+    bv_view2model_get(view2model, mged_view_context_view_const(view_ctx));
+    bv_adc_reset(adc, view2model, model2view);
 }
 
 
 static void
-adc_print_vars(struct mged_state *s, struct rt_view_adc_state *adc)
+adc_print_vars(struct mged_state *s, struct bv_adc_state *adc)
 {
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     fastf_t view_local_scale = adc_view_local_scale(s);
@@ -464,8 +465,8 @@ f_adc (
     struct bu_vls vls = BU_VLS_INIT_ZERO;
     const char *parameter;
     const char **argp = argv;
-    struct rt_view_adc_state adc_record;
-    struct rt_view_adc_state *adc = &adc_record;
+    struct bv_adc_state adc_record;
+    struct bv_adc_state *adc = &adc_record;
     point_t user_pt;		/* Value(s) provided by user */
     point_t scaled_pos;
     fastf_t view_local_scale;
@@ -487,7 +488,7 @@ f_adc (
 	return TCL_ERROR;
 
     view_local_scale = adc_view_local_scale(s);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_view2model_get(view2model, mged_view_context_view_const(view_ctx));
 
     if (6 < argc) {
 	bu_vls_printf(&vls, "help adc");

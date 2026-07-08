@@ -3907,7 +3907,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     SoBRLGrid *grid = new SoBRLGrid;
     grid->overlayId = "overlay::work-grid";
-    struct rt_view_grid_state gridState = RT_VIEW_GRID_STATE_INIT;
+    struct bv_grid_state gridState = BV_GRID_STATE_INIT;
     gridState.draw = 1;
     gridState.snap = 1;
     gridState.res_h = 1.0;
@@ -3923,7 +3923,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     MAT_SCALE(gridSnapModel2View, 1.0 / 20.0, 1.0 / 20.0, 1.0 / 20.0);
     if (!brlobol_grid_configure_from_view(grid, &gridState, gridModel2View,
 					  20.0, 1.0, 400, 200))
-	FAIL("grid overlay should accept RT view grid state");
+	FAIL("grid overlay should accept BV view grid state");
     if (grid->getMinorSegmentCount() <= 0 ||
 	grid->getMajorSegmentCount() <= 0 ||
 	grid->getAxisSegmentCount() != 2 ||
@@ -3939,7 +3939,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     squareGrid->overlayId = "overlay::square-grid";
     if (!brlobol_grid_configure_from_view(squareGrid, &gridState,
 					  gridModel2View, 20.0, 1.0, 400, 400))
-	FAIL("square grid should accept RT view grid state");
+	FAIL("square grid should accept BV view grid state");
     if (squareGrid->getTotalSegmentCount() <= wideGridSegments)
 	FAIL("grid overlay should account for viewport aspect in line counts");
     squareGrid->unref();
@@ -3947,7 +3947,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     gridState.adaptive = 1;
     if (!brlobol_grid_configure_from_view(grid, &gridState, gridModel2View,
 					  2000.0, 1.0, 400, 200))
-	FAIL("adaptive grid overlay should rebuild from RT view grid state");
+	FAIL("adaptive grid overlay should rebuild from BV view grid state");
     if (grid->effectiveSpacingH.getValue() <= gridState.res_h ||
 	grid->pixelSpacingH.getValue() <= widePixelSpacing)
 	FAIL("adaptive grid overlay should coarsen visually dense grid spacing");

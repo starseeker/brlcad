@@ -6,6 +6,7 @@ set(
   debug.h
   defines.h
   draw.h
+  draw_scene.h
   draw_obol.h
   event_txn.h
   objects.h

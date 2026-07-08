@@ -975,7 +975,7 @@ eto_ellipse_points(
 }
 
 static int
-rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     struct rt_eto_internal *eto;
     fastf_t radian, radian_step;
@@ -993,7 +993,7 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 	return -1;
     }
 
-    fastf_t point_spacing = rt_view_solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
     VMOVE(eto_V, eto->eto_V);
 
@@ -1083,7 +1083,7 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 	return -1;
 
     /* draw elliptical radial cross sections */
-    num_cross_sections = primitive_curve_count(ip, tol, rt_view_lod_curve_scale(v), s_size);
+    num_cross_sections = primitive_curve_count(ip, tol, bv_view_lod_curve_scale(v), s_size);
 
     if (num_cross_sections < 3) {
 	num_cross_sections = 3;
@@ -1118,7 +1118,7 @@ rt_eto_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 }
 
 int
-rt_eto_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_eto_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -1335,7 +1335,7 @@ rt_eto_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 C_DECL int
 rt_eto_plot(struct bu_list *vhead, struct rt_db_internal *ip,
 	    const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol),
-	    const struct rt_view_info *UNUSED(info))
+	    const struct bv_view_info *UNUSED(info))
 {
     struct eto_line_sink sink;
 

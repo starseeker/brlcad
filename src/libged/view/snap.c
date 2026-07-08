@@ -32,6 +32,7 @@
 
 #include "bu/opt.h"
 #include "bu/vls.h"
+#include "bv.h"
 #include "dm.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -113,20 +114,21 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* Handle tolerance */
     if (stol < DBL_MAX || stol < -DBL_MAX + 1) {
 	if (stol > -DBL_MAX) {
-	    rt_view_context_snap_tolerance_factor_set(view_ctx, stol);
+	    bv_snap_tolerance_factor_set(view, stol);
 	    if (!opt_ret) {
 		bu_vls_printf(gedp->ged_result_str, "%g",
-			rt_view_context_snap_tolerance_factor_get(view_ctx));
+			bv_snap_tolerance_factor_get(view));
 		return BRLCAD_OK;
 	    }
 	} else {
 	    // Report current tolerance
 	    bu_vls_printf(gedp->ged_result_str, "%g",
-		    rt_view_context_snap_tolerance_factor_get(view_ctx));
+		    bv_snap_tolerance_factor_get(view));
 	    return BRLCAD_OK;
 	}
     }
@@ -140,8 +142,8 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 
     mat_t model2view;
     mat_t view2model;
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
     /* We may get a 2D screen point or a 3D model space point.  Either
      * should work - whatever we get, set up both points so we have

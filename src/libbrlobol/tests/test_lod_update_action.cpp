@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "brlobol.h"
+#include "bv.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -357,7 +358,7 @@ submit_source_full_detail_task(BRLObolLodService &service,
 static int
 expected_view_lod_level(struct db_i *dbip,
 			const char *name,
-			const struct rt_view_info *view,
+			const struct bv_view_info *view,
 			int *level)
 {
     if (!dbip || !name || !view || !level)
@@ -3028,8 +3029,8 @@ test_mesh_lod_request_and_view_info(void)
     BRLObolViewController controller(root, camera);
     controller.setViewportSize(320, 240);
 
-    struct rt_view_info info = RT_VIEW_INFO_INIT;
-    if (!controller.getRtViewInfo(&info) ||
+    struct bv_view_info info = BV_VIEW_INFO_INIT;
+    if (!controller.getViewInfo(&info) ||
 	info.width != 320 ||
 	info.height != 240 ||
 	fabs(info.size - 20.0) > 1.0e-6) {
@@ -3039,25 +3040,26 @@ test_mesh_lod_request_and_view_info(void)
 	return 1;
     }
 
-    void *viewCtx = rt_view_context_create();
-    if (!viewCtx ||
-	!rt_view_context_dimensions_set(viewCtx, 400, 200) ||
-	!rt_view_context_size_set(viewCtx, 80.0)) {
-	printf("FAIL: could not prepare RT view context for Obol camera sync\n");
+    struct bv_context *viewCtx = bv_context_create();
+    struct bv *view = bv_context_view(viewCtx);
+    if (!viewCtx || !view ||
+	!bv_dimensions_set(view, 400, 200) ||
+	!bv_size_set(view, 80.0)) {
+	printf("FAIL: could not prepare libbv view context for Obol camera sync\n");
 	if (viewCtx)
-	    rt_view_context_free(viewCtx);
+	    bv_context_destroy(viewCtx);
 	root->unref();
 	mesh->unref();
 	return 1;
     }
-    rt_view_context_update(viewCtx);
+    bv_context_update(viewCtx, BV_CONTEXT_CHANGED_VIEW);
     controller.setViewportSize(400, 200);
-    if (!controller.syncCameraFromRtViewContext(viewCtx) ||
+    if (!controller.syncCameraFromViewContext(viewCtx) ||
 	!controller.getCamera() ||
 	!controller.getCamera()->isOfType(
 	    SoOrthographicCamera::getClassTypeId())) {
-	printf("FAIL: view controller did not sync RT view camera\n");
-	rt_view_context_free(viewCtx);
+	printf("FAIL: view controller did not sync libbv view camera\n");
+	bv_context_destroy(viewCtx);
 	root->unref();
 	mesh->unref();
 	return 1;
@@ -3066,12 +3068,12 @@ test_mesh_lod_request_and_view_info(void)
 	static_cast<SoOrthographicCamera *>(controller.getCamera());
     if (fabs(syncedCamera->height.getValue() - 40.0) > 1.0e-6 ||
 	fabs(syncedCamera->aspectRatio.getValue() - 2.0) > 1.0e-6 ||
-	!controller.getRtViewInfo(&info) ||
+	!controller.getViewInfo(&info) ||
 	info.width != 400 ||
 	info.height != 200 ||
 	fabs(info.size - 80.0) > 1.0e-6) {
-	printf("FAIL: direct Obol camera did not preserve horizontal RT view size\n");
-	rt_view_context_free(viewCtx);
+	printf("FAIL: direct Obol camera did not preserve horizontal libbv view size\n");
+	bv_context_destroy(viewCtx);
 	root->unref();
 	mesh->unref();
 	return 1;
@@ -3079,12 +3081,12 @@ test_mesh_lod_request_and_view_info(void)
 
     point_t center = {10.0, -5.0, 2.0};
     vect_t aet = {35.0, 25.0, 0.0};
-    if (!rt_view_context_center_set(viewCtx, center) ||
-	!rt_view_context_aet_set(viewCtx, aet) ||
-	!rt_view_context_update(viewCtx) ||
-	!controller.syncCameraFromRtViewContext(viewCtx)) {
-	printf("FAIL: could not prepare oriented RT view context for Obol camera sync\n");
-	rt_view_context_free(viewCtx);
+    if (!bv_center_set(view, center) ||
+	!bv_aet_set(view, aet) ||
+	!bv_context_update(viewCtx, BV_CONTEXT_CHANGED_VIEW) ||
+	!controller.syncCameraFromViewContext(viewCtx)) {
+	printf("FAIL: could not prepare oriented libbv view context for Obol camera sync\n");
+	bv_context_destroy(viewCtx);
 	root->unref();
 	mesh->unref();
 	return 1;
@@ -3092,9 +3094,9 @@ test_mesh_lod_request_and_view_info(void)
 
     mat_t model2view;
     MAT_IDN(model2view);
-    if (!rt_view_context_model2view_get(model2view, viewCtx)) {
-	printf("FAIL: could not query RT model2view matrix\n");
-	rt_view_context_free(viewCtx);
+    if (!bv_model2view_get(model2view, view)) {
+	printf("FAIL: could not query libbv model2view matrix\n");
+	bv_context_destroy(viewCtx);
 	root->unref();
 	mesh->unref();
 	return 1;
@@ -3125,16 +3127,16 @@ test_mesh_lod_request_and_view_info(void)
 		   i, expectedX, expectedY,
 		   static_cast<double>(obolScreen[0]),
 		   static_cast<double>(obolScreen[1]));
-	    rt_view_context_free(viewCtx);
+	    bv_context_destroy(viewCtx);
 	    root->unref();
 	    mesh->unref();
 	    return 1;
 	}
     }
-    rt_view_context_free(viewCtx);
+    bv_context_destroy(viewCtx);
 
     controller.setCamera(NULL);
-    if (controller.getRtViewInfo(&info) ||
+    if (controller.getViewInfo(&info) ||
 	info.width != 400 ||
 	info.height != 200 ||
 	info.size <= 0.0) {
@@ -3775,7 +3777,7 @@ test_mesh_lod_submit_action(void)
 	return 1;
     }
 
-    struct rt_view_info view = RT_VIEW_INFO_INIT;
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
     view.width = 640;
     view.height = 480;
     view.size = 100.0;

@@ -24,7 +24,6 @@
 #include "qtcad/QgObolSnap.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
-#include "rt/view.h"
 #include "raytrace.h"
 #include "wdb.h"
 
@@ -222,12 +221,11 @@ static void
 set_center_query(qg_legacy_view *view, fastf_t x, fastf_t y, fastf_t z)
 {
     mat_t view2model;
-    void *view_ctx = qg_legacy_view_to_context(view);
     qg_legacy_view_dimensions_set(view, 200, 200);
-    rt_view_context_size_set(view_ctx, 2.0);
+    bv_size_set(qg_legacy_view_bv(view), 2.0);
     MAT_IDN(view2model);
     MAT_DELTAS(view2model, x, y, z);
-    rt_view_context_view2model_set(view_ctx, view2model);
+    bv_view2model_set(qg_legacy_view_bv(view), view2model);
 }
 
 int
@@ -282,9 +280,8 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol snap setup should not initialize the legacy display manager");
 
     set_center_query(view.view(), 11.02, 11.02, 11.02);
-    rt_view_context_snap_source_flags_set(qg_legacy_view_to_context(view.view()),
-	    RT_VIEW_SNAP_DB);
-    rt_view_context_snap_lines_set(qg_legacy_view_to_context(view.view()), 1);
+    bv_snap_source_flags_set(qg_legacy_view_bv(view.view()), BV_SNAP_DB);
+    bv_snap_lines_set(qg_legacy_view_bv(view.view()), 1);
 
     SnapProbeFilter filter;
     filter.set_view_widget(&view);
@@ -292,8 +289,7 @@ main(int argc, char **argv)
     if (!filter.sync(&move))
 	FAIL("qtcad view filter should accept a snap probe mouse event");
     point_t snapped_point = VINIT_ZERO;
-    rt_view_context_current_point_get(snapped_point,
-	    qg_legacy_view_to_context(view.view()));
+    bv_current_point_get(snapped_point, qg_legacy_view_bv_const(view.view()));
     if (!nearly_equal((float)snapped_point[X], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Y], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Z], 11.0f))
@@ -302,13 +298,11 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol snap refinement should not initialize the legacy display manager");
 
     set_center_query(view.view(), 11.02, 11.02, 11.02);
-    rt_view_context_snap_source_flags_set(qg_legacy_view_to_context(view.view()),
-	    RT_VIEW_SNAP_VIEW);
+    bv_snap_source_flags_set(qg_legacy_view_bv(view.view()), BV_SNAP_VIEW);
     QMouseEvent viewScopedMove = left_move_at(100, 100);
     if (!filter.sync(&viewScopedMove))
 	FAIL("qtcad view filter should accept a view-scoped snap probe event");
-    rt_view_context_current_point_get(snapped_point,
-	    qg_legacy_view_to_context(view.view()));
+    bv_current_point_get(snapped_point, qg_legacy_view_bv_const(view.view()));
     if (nearly_equal((float)snapped_point[X], 11.0f) &&
 	    nearly_equal((float)snapped_point[Y], 11.0f) &&
 	    nearly_equal((float)snapped_point[Z], 11.0f))

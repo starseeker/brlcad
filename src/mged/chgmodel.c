@@ -76,10 +76,10 @@ f_make(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	char scale[128];
 	mat_t view_center;
 	fastf_t view_scale;
-	void *view_ctx = view_state->vs_gvp;
+	struct bv *view = mged_view_context_view(view_state->vs_gvp);
 
-	rt_view_context_center_get(view_center, view_ctx);
-	view_scale = rt_view_context_scale_get(view_ctx);
+	bv_center_mat_get(view_center, view);
+	view_scale = bv_scale_get(view);
 
 	sprintf(center, "%.17f %.17f %.17f",
 		(ZERO(view_center[MDX])) ? 0.0 : -view_center[MDX],

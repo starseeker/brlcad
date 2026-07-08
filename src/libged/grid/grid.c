@@ -30,35 +30,32 @@
 
 
 #include "vmath.h"
-#include "rt/view.h"
+#include "bv.h"
 
 #include "../ged_private.h"
 
 
 static void
-grid_vsnap(void *view_ctx)
+grid_vsnap(struct bv *view)
 {
     point_t view_pt;
     point_t model_pt;
-    mat_t view_center;
     mat_t model2view;
     mat_t view2model;
 
-    rt_view_context_center_get(view_center, view_ctx);
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_center_get(model_pt, view);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
-    MAT_DELTAS_GET_NEG(model_pt, view_center);
     MAT4X3PNT(view_pt, model2view, model_pt);
-    rt_view_context_snap_grid_2d(view_ctx, &view_pt[X], &view_pt[Y]);
+    bv_snap_grid_2d(view, &view_pt[X], &view_pt[Y]);
     MAT4X3PNT(model_pt, view2model, view_pt);
-    rt_view_context_center_set(view_ctx, model_pt);
-    rt_view_context_update(view_ctx);
+    bv_center_set(view, model_pt);
 }
 
 
 static void
-grid_vls_print(struct ged *gedp, const struct rt_view_grid_state *grid)
+grid_vls_print(struct ged *gedp, const struct bv_grid_state *grid)
 {
     double blval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
     bu_vls_printf(gedp->ged_result_str, "anchor = %g %g %g\n",
@@ -114,6 +111,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -139,8 +137,8 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
     }
 
-    struct rt_view_grid_state grid;
-    if (!rt_view_context_grid_state_get(&grid, view_ctx))
+    struct bv_grid_state grid;
+    if (!bv_grid_state_get(&grid, view))
 	return BRLCAD_ERROR;
 
     // TODO - need more sophisticated grid drawing - when zoomed out too far
@@ -162,7 +160,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 		grid.draw = 1;
 	    else
 		grid.draw = 0;
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -173,7 +171,8 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 
     if (BU_STR_EQUAL(parameter, "vsnap")) {
 	if (argc == 0) {
-	    grid_vsnap(view_ctx);
+	    grid_vsnap(view);
+	    ged_view_context_update(view_ctx);
 	    return BRLCAD_OK;
 	}
 
@@ -192,7 +191,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 		grid.snap = 1;
 	    else
 		grid.snap = 0;
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -208,7 +207,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    grid.res_h = user_pt[X] * lbval;
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -224,7 +223,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    grid.res_v = user_pt[X] * lbval;
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -239,7 +238,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    grid.res_major_h = (int)user_pt[X];
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -254,7 +253,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    grid.res_major_v = (int)user_pt[X];
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -274,7 +273,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    grid.anchor[0] = user_pt[X] * lbval;
 	    grid.anchor[1] = user_pt[Y] * lbval;
 	    grid.anchor[2] = user_pt[Z] * lbval;
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -294,7 +293,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	    grid.color[0] = (int)user_pt[X];
 	    grid.color[1] = (int)user_pt[Y];
 	    grid.color[2] = (int)user_pt[Z];
-	    rt_view_context_grid_state_set(view_ctx, &grid);
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}

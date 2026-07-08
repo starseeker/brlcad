@@ -31,9 +31,6 @@ brlcad_add_test(NAME libbrlobol_evaluated_points COMMAND test_brlobol_evaluated_
 brlcad_addexec(test_brlobol_mesh_lod_cache test_mesh_lod_cache.cpp "libbrlobol;libwdb;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_mesh_lod_cache COMMAND test_brlobol_mesh_lod_cache)
 
-brlcad_addexec(test_brlobol_scene_ref test_scene_ref.cpp "libbrlobol;librt;libbu;Obol::Obol" TEST ALL_CXX)
-brlcad_add_test(NAME libbrlobol_scene_ref COMMAND test_brlobol_scene_ref)
-
 brlcad_addexec(test_brlobol_view_store test_view_store.cpp "libbrlobol;libwdb;librt;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_view_store COMMAND test_brlobol_view_store)
 
@@ -72,7 +69,6 @@ cmakefiles(
   test_nanort_render.cpp
   test_prototype.cpp
   test_render.cpp
-  test_scene_ref.cpp
   test_view_store.cpp
   test_window_host.cpp
 )

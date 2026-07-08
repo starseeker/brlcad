@@ -21,13 +21,16 @@
 #include "brlobol/mesh_shape.h"
 #include "brlobol/scene_controller.h"
 #include "brlobol/scene_group.h"
+#include "brlobol/snap_action.h"
 #include "brlobol/viewport_image.h"
 #include "brlobol/vlist_shape.h"
+#include "brlobol/view_attachment.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/view_store.h"
 #include "bg/line_layer.h"
 #include "bg/plane.h"
 #include "bg/polygon.h"
+#include "bv.h"
 #include "bu/hash.h"
 #include "bu/malloc.h"
 #include "bu/parallel.h"
@@ -48,10 +51,21 @@
 #include "vmath.h"
 
 #include "../librt/librt_private.h"
+#include "./ged_draw_view_private.h"
 #include "./ged_private.h"
 
 #include <algorithm>
+#include <Inventor/SbLine.h>
+#include <Inventor/SbViewVolume.h>
+#include <Inventor/SoPath.h>
+#include <Inventor/SoPickedPoint.h>
+#include <Inventor/SoViewport.h>
+#include <Inventor/actions/SoRayPickAction.h>
+#include <Inventor/details/SoDetail.h>
+#include <Inventor/lists/SoPickedPointList.h>
+#include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <float.h>
 #include <inttypes.h>
@@ -98,6 +112,18 @@ static int ged_obol_progressive_advance_provider(
     void *user_data,
     const BRLObolProgressiveOptions *options,
     BRLObolProgressiveStatus *status);
+
+static struct bv *
+ged_obol_bv(void *view_ctx)
+{
+    return bv_context_view((struct bv_context *)view_ctx);
+}
+
+static const struct bv *
+ged_obol_bv_const(const void *view_ctx)
+{
+    return bv_context_view_const((const struct bv_context *)view_ctx);
+}
 
 struct ged_obol_progressive_provider_data {
     struct ged *gedp;
@@ -317,6 +343,10 @@ static void
 ged_obol_delete_owned_attached_controller(
     const ged_obol_attached_controller &entry)
 {
+    if (entry.view_ctx && entry.view_controller)
+	(void)ged_view_context_obol_attachment_unbind(
+	    entry.view_ctx, entry.view_controller->getViewAttachment());
+
     ged_obol_unregister_progressive_provider(entry);
     ged_obol_stop_attached_controller_lod(entry);
 
@@ -709,7 +739,7 @@ ged_obol_path_equal(const char *a, const char *b)
 static int
 ged_obol_view_scope_is_independent(void *view_ctx)
 {
-    return view_ctx && rt_view_context_is_independent(view_ctx);
+    return view_ctx && ged_view_context_is_independent(view_ctx);
 }
 
 static std::string
@@ -718,7 +748,7 @@ ged_obol_view_scope_name(void *view_ctx)
     if (!view_ctx)
 	return "shared";
 
-    const char *name = rt_view_context_name_get(view_ctx);
+    const char *name = bv_name_get(ged_obol_bv_const(view_ctx));
     if (name && name[0])
 	return std::string(name);
 
@@ -1655,7 +1685,7 @@ ged_obol_group_summary_in_view(
 	return 0;
     if (!view_ctx)
 	return !group_summary->in_view_scope;
-    if (rt_view_context_is_independent(view_ctx))
+    if (ged_view_context_is_independent(view_ctx))
 	return group_summary->in_view_scope &&
 	       group_summary->view_ctx == view_ctx;
     if (!group_summary->in_view_scope)
@@ -2110,10 +2140,10 @@ ged_obol_view_lod_policy_state_for_source(struct ged *gedp, void *view_ctx)
     state.viewDependent =
 	(policy.csg_enabled || policy.mesh_enabled) ? true : false;
     state.viewScale =
-	static_cast<float>(rt_view_context_scale_get(policy_view));
+	static_cast<float>(bv_scale_get(ged_obol_bv_const(policy_view)));
     state.lodScale = static_cast<float>(policy.scale);
-    state.viewWidth = rt_view_context_width_get(policy_view);
-    state.viewHeight = rt_view_context_height_get(policy_view);
+    state.viewWidth = bv_width_get(ged_obol_bv_const(policy_view));
+    state.viewHeight = bv_height_get(ged_obol_bv_const(policy_view));
     state.curveScale = static_cast<float>(policy.curve_scale);
     state.pointScale = static_cast<float>(policy.point_scale);
     return state;
@@ -3908,6 +3938,509 @@ ged_obol_view_controller_for_scope(void *view_ctx,
 		   sync_current_scene);
 }
 
+struct ged_obol_pick_candidate {
+    std::string path;
+    float distance;
+    uint32_t source_id;
+    int primitive_kind;
+    int primitive_index;
+    int material_id;
+};
+
+static std::string
+ged_obol_normalized_pick_path(const std::string &path)
+{
+    size_t start = 0;
+    while (start < path.size() && path[start] == '/')
+	start++;
+    return path.substr(start);
+}
+
+static std::string
+ged_obol_pick_candidate_key(const ged_obol_pick_candidate &candidate)
+{
+    char buffer[128] = {0};
+    snprintf(buffer, sizeof(buffer), ":%u:%d:%d:%d",
+	    candidate.source_id, candidate.primitive_kind,
+	    candidate.primitive_index, candidate.material_id);
+    return ged_obol_normalized_pick_path(candidate.path) + buffer;
+}
+
+static const SoBRLPickDetail *
+ged_obol_brl_pick_detail(const SoPickedPoint *picked_point)
+{
+    if (!picked_point)
+	return NULL;
+
+    const SoDetail *detail = picked_point->getDetail();
+    if (detail && detail->isOfType(SoBRLPickDetail::getClassTypeId()))
+	return static_cast<const SoBRLPickDetail *>(detail);
+
+    SoPath *path = picked_point->getPath();
+    if (!path)
+	return NULL;
+
+    for (int i = path->getLength() - 1; i >= 0; i--) {
+	SoNode *node = path->getNode(i);
+	if (!node)
+	    continue;
+	detail = picked_point->getDetail(node);
+	if (detail && detail->isOfType(SoBRLPickDetail::getClassTypeId()))
+	    return static_cast<const SoBRLPickDetail *>(detail);
+    }
+
+    return NULL;
+}
+
+static BRLObolFeatureOwner
+ged_obol_pick_view_owner(void *view_ctx)
+{
+    BRLObolFeatureOwner owner;
+    owner.ownerToken = view_ctx;
+    owner.ownerRole = "view";
+
+    const struct bv *view = ged_obol_bv_const(view_ctx);
+    const char *name = bv_name_get(view);
+    if (name && name[0]) {
+	owner.ownerId = name;
+	return owner;
+    }
+
+    char fallback[64] = {0};
+    snprintf(fallback, sizeof(fallback), "%p", view_ctx);
+    owner.ownerId = fallback;
+    return owner;
+}
+
+static std::string
+ged_obol_pick_resolved_path(BRLObolViewController *controller,
+			    const BRLObolFeatureOwner *owner,
+			    const SoBRLPickDetail *detail)
+{
+    if (!detail)
+	return std::string();
+
+    const char *path = detail->getPath().getString();
+    const char *source_name = detail->getSourceName().getString();
+    const std::string picked_name =
+	(path && path[0]) ? std::string(path) :
+	(source_name ? std::string(source_name) : std::string());
+    if (!controller || picked_name.empty() || detail->getPrimitiveIndex() < 0)
+	return picked_name;
+
+    BRLObolFeaturePrimitivePick pick;
+    if ((owner && controller->features().resolvePrimitivePick(
+	    picked_name.c_str(), detail->getPrimitiveIndex(), pick,
+	    BRLOBOL_FEATURE_SCOPE_LOCAL, owner)) ||
+	    controller->features().resolvePrimitivePick(picked_name.c_str(),
+		detail->getPrimitiveIndex(), pick,
+		BRLOBOL_FEATURE_SCOPE_SHARED, NULL))
+	return std::string(pick.featureName.getString());
+
+    return picked_name;
+}
+
+static ged_obol_pick_candidate
+ged_obol_pick_candidate_from_detail(BRLObolViewController *controller,
+				    const BRLObolFeatureOwner *owner,
+				    const SoBRLPickDetail *detail,
+				    const SbVec3f &point,
+				    float distance)
+{
+    ged_obol_pick_candidate candidate;
+    candidate.path = ged_obol_pick_resolved_path(controller, owner, detail);
+    candidate.distance = distance;
+    candidate.source_id = detail ? detail->getSourceId() : 0;
+    candidate.primitive_kind = detail ?
+	static_cast<int>(detail->getPrimitiveKind()) : 0;
+    candidate.primitive_index = detail ? detail->getPrimitiveIndex() : -1;
+    candidate.material_id = detail ? detail->getMaterialId() : 0;
+    (void)point;
+    return candidate;
+}
+
+static ged_obol_pick_candidate
+ged_obol_pick_candidate_from_point(BRLObolViewController *controller,
+				   const BRLObolFeatureOwner *owner,
+				   const SoPickedPoint *picked_point,
+				   const SoBRLPickDetail *detail,
+				   const SbVec3f *ray_origin)
+{
+    SbVec3f point(0.0f, 0.0f, 0.0f);
+    float distance = FLT_MAX;
+    if (picked_point) {
+	point = picked_point->getPoint();
+	if (ray_origin)
+	    distance = (point - *ray_origin).length();
+    }
+
+    return ged_obol_pick_candidate_from_detail(controller, owner, detail,
+	    point, distance);
+}
+
+static void
+ged_obol_pick_insert(std::vector<ged_obol_pick_candidate> &candidates,
+		     const ged_obol_pick_candidate &candidate,
+		     bool pick_all)
+{
+    if (candidate.path.empty())
+	return;
+
+    if (pick_all) {
+	candidates.push_back(candidate);
+	return;
+    }
+
+    if (candidates.empty() || candidate.distance < candidates[0].distance)
+	candidates.assign(1, candidate);
+}
+
+static bool
+ged_obol_pick_path_already_recorded(
+	const std::vector<ged_obol_pick_candidate> &candidates,
+	const ged_obol_pick_candidate &candidate)
+{
+    const std::string candidate_path =
+	ged_obol_normalized_pick_path(candidate.path);
+    if (candidate_path.empty())
+	return false;
+
+    for (const ged_obol_pick_candidate &existing : candidates) {
+	if (ged_obol_normalized_pick_path(existing.path) == candidate_path)
+	    return true;
+    }
+
+    return false;
+}
+
+static bool
+ged_obol_pick_candidate_nearer(const ged_obol_pick_candidate &a,
+			       const ged_obol_pick_candidate &b)
+{
+    return a.distance < b.distance;
+}
+
+static void
+ged_obol_pick_sort(std::vector<ged_obol_pick_candidate> &candidates)
+{
+    if (candidates.size() > 1)
+	std::stable_sort(candidates.begin(), candidates.end(),
+		ged_obol_pick_candidate_nearer);
+}
+
+static SbBool
+ged_obol_pick_camera_line(BRLObolViewController *controller,
+			  int vx,
+			  int vy,
+			  SbLine &line)
+{
+    if (!controller || !controller->getCamera())
+	return FALSE;
+
+    const SbViewportRegion &region = controller->getViewportRegion();
+    SbVec2s size = region.getViewportSizePixels();
+    if (size[0] <= 0 || size[1] <= 0)
+	return FALSE;
+
+    const float nx = std::max(0.0f, std::min(1.0f,
+	    static_cast<float>(vx) / static_cast<float>(size[0])));
+    const float ny = std::max(0.0f, std::min(1.0f,
+	    static_cast<float>(vy + 1) / static_cast<float>(size[1])));
+    const float aspect = static_cast<float>(size[0]) /
+	static_cast<float>(size[1]);
+
+    SbViewVolume view_volume = controller->getCamera()->getViewVolume(aspect);
+    view_volume.projectPointToLine(SbVec2f(nx, ny), line);
+    return TRUE;
+}
+
+static int
+ged_obol_pick_source_full_detail(
+	BRLObolViewController *controller,
+	const BRLObolFeatureOwner *owner,
+	const SbLine &line,
+	bool pick_all,
+	std::vector<ged_obol_pick_candidate> &candidates)
+{
+    if (!controller)
+	return 0;
+
+    BRLObolSourceMeshPickResult source_pick;
+    int added = (controller->pickSourceMeshExactRay(source_pick,
+	    line.getPosition(), line.getDirection(), 0, NULL) > 0 &&
+	    source_pick.hit) ? 1 : 0;
+    if (!added)
+	return 0;
+
+    ged_obol_pick_candidate candidate =
+	ged_obol_pick_candidate_from_detail(controller, owner,
+		&source_pick.detail, source_pick.point, source_pick.distance);
+    ged_obol_pick_insert(candidates, candidate, pick_all);
+    return 1;
+}
+
+static int
+ged_obol_pick_rt_exact(BRLObolViewController *controller,
+		       const BRLObolFeatureOwner *owner,
+		       const SbLine &line,
+		       bool pick_all,
+		       std::vector<ged_obol_pick_candidate> &candidates)
+{
+    if (!controller)
+	return 0;
+
+    int added = 0;
+    std::vector<BRLObolRtPickResult> rt_picks;
+    controller->pickRtExactRay(rt_picks, line.getPosition(),
+	    line.getDirection(), pick_all ? TRUE : FALSE);
+    for (size_t i = 0; i < rt_picks.size(); i++) {
+	const BRLObolRtPickResult &rt_pick = rt_picks[i];
+	ged_obol_pick_candidate candidate =
+	    ged_obol_pick_candidate_from_detail(controller, owner,
+		    &rt_pick.detail, rt_pick.point, rt_pick.distance);
+	if (ged_obol_pick_path_already_recorded(candidates, candidate))
+	    continue;
+
+	ged_obol_pick_insert(candidates, candidate, pick_all);
+	added++;
+    }
+
+    return added;
+}
+
+static struct ged_draw_pick_result *
+ged_obol_pick_result_from_candidates(
+	const std::vector<ged_obol_pick_candidate> &candidates)
+{
+    struct ged_draw_pick_result *result = ged_draw_pick_result_create();
+    if (!result)
+	return NULL;
+
+    for (size_t i = 0; i < candidates.size(); i++)
+	(void)ged_draw_pick_result_append_path(result,
+		candidates[i].path.c_str(), candidates[i].distance);
+
+    return result;
+}
+
+static int
+ged_obol_pick_sync_view_controller(BRLObolViewController *controller,
+				   void *view_ctx)
+{
+    if (!controller || !view_ctx)
+	return 0;
+
+    const struct bv *view = ged_obol_bv_const(view_ctx);
+    const int width = bv_width_get(view);
+    const int height = bv_height_get(view);
+    if (width > 0 && height > 0)
+	controller->setViewportSize(static_cast<unsigned int>(width),
+		static_cast<unsigned int>(height));
+
+    controller->syncCameraFromViewContext(view_ctx, TRUE);
+    return 1;
+}
+
+static int
+ged_obol_pick_point_candidates(
+	void *view_ctx,
+	int x,
+	int y,
+	float radius_pixels,
+	bool pick_all,
+	std::vector<ged_obol_pick_candidate> &candidates)
+{
+    candidates.clear();
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller || !controller->getViewport() ||
+	    !controller->getViewport()->getRoot())
+	return 0;
+    ged_obol_pick_sync_view_controller(controller, view_ctx);
+
+    const SbViewportRegion &region = controller->getViewportRegion();
+    SbVec2s size = region.getViewportSizePixels();
+    if (size[0] <= 0 || size[1] <= 0)
+	return 0;
+
+    int vx = std::max(0, std::min(x, static_cast<int>(size[0]) - 1));
+    int vy = static_cast<int>(size[1]) - 1 - y;
+    vy = std::max(0, std::min(vy, static_cast<int>(size[1]) - 1));
+
+    SoRayPickAction pick_action(region);
+    pick_action.setPoint(SbVec2s(static_cast<short>(vx),
+	    static_cast<short>(vy)));
+    pick_action.setRadius(radius_pixels > 0.0f ? radius_pixels : 1.0f);
+    pick_action.setPickAll(pick_all ? TRUE : FALSE);
+    pick_action.apply(controller->getViewport()->getRoot());
+
+    const SbLine &line = pick_action.getLine();
+    const SbVec3f &ray_origin = line.getPosition();
+    BRLObolFeatureOwner owner = ged_obol_pick_view_owner(view_ctx);
+
+    if (pick_all) {
+	const SoPickedPointList &picked_points =
+	    pick_action.getPickedPointList();
+	candidates.reserve(static_cast<size_t>(picked_points.getLength()));
+	for (int i = 0; i < picked_points.getLength(); i++) {
+	    const SoPickedPoint *picked_point = picked_points[i];
+	    const SoBRLPickDetail *detail =
+		ged_obol_brl_pick_detail(picked_point);
+	    if (!detail)
+		continue;
+	    ged_obol_pick_insert(candidates,
+		    ged_obol_pick_candidate_from_point(controller, &owner,
+			picked_point, detail, &ray_origin),
+		    pick_all);
+	}
+    } else {
+	const SoPickedPoint *picked_point = pick_action.getPickedPoint();
+	const SoBRLPickDetail *detail = ged_obol_brl_pick_detail(picked_point);
+	if (detail) {
+	    ged_obol_pick_insert(candidates,
+		    ged_obol_pick_candidate_from_point(controller, &owner,
+			picked_point, detail, &ray_origin),
+		    pick_all);
+	}
+    }
+
+    ged_obol_pick_source_full_detail(controller, &owner, line, pick_all,
+	    candidates);
+
+    SbLine rt_line = line;
+    if (candidates.empty())
+	(void)ged_obol_pick_camera_line(controller, vx, vy, rt_line);
+    ged_obol_pick_rt_exact(controller, &owner, rt_line, pick_all,
+	    candidates);
+
+    if (pick_all)
+	ged_obol_pick_sort(candidates);
+
+    return static_cast<int>(candidates.size());
+}
+
+extern "C" GED_EXPORT struct ged_draw_pick_result *
+ged_draw_obol_view_context_pick_point(void *view_ctx,
+				      int x,
+				      int y,
+				      int first_only)
+{
+    std::vector<ged_obol_pick_candidate> candidates;
+    (void)ged_obol_pick_point_candidates(view_ctx, x, y, 1.0f,
+	    first_only ? false : true, candidates);
+    return ged_obol_pick_result_from_candidates(candidates);
+}
+
+extern "C" GED_EXPORT struct ged_draw_pick_result *
+ged_draw_obol_view_context_pick_nearest(void *view_ctx, int x, int y)
+{
+    return ged_draw_obol_view_context_pick_point(view_ctx, x, y, 1);
+}
+
+extern "C" GED_EXPORT struct ged_draw_pick_result *
+ged_draw_obol_view_context_pick_rect(void *view_ctx,
+				     int x0,
+				     int y0,
+				     int x1,
+				     int y1)
+{
+    std::vector<ged_obol_pick_candidate> candidates;
+    std::unordered_set<std::string> seen;
+    int min_x = std::min(x0, x1);
+    int max_x = std::max(x0, x1);
+    int min_y = std::min(y0, y1);
+    int max_y = std::max(y0, y1);
+
+    const struct bv *view = ged_obol_bv_const(view_ctx);
+    const int width_px = bv_width_get(view);
+    const int height_px = bv_height_get(view);
+    if (width_px > 0) {
+	min_x = std::max(0, std::min(min_x, width_px - 1));
+	max_x = std::max(0, std::min(max_x, width_px - 1));
+    }
+    if (height_px > 0) {
+	min_y = std::max(0, std::min(min_y, height_px - 1));
+	max_y = std::max(0, std::min(max_y, height_px - 1));
+    }
+
+    int width = std::max(1, max_x - min_x);
+    int height = std::max(1, max_y - min_y);
+    int x_steps = std::max(1, std::min(6, width / 16));
+    int y_steps = std::max(1, std::min(6, height / 16));
+
+    for (int yi = 0; yi <= y_steps; yi++) {
+	int y = min_y + (height * yi) / y_steps;
+	for (int xi = 0; xi <= x_steps; xi++) {
+	    int x = min_x + (width * xi) / x_steps;
+	    std::vector<ged_obol_pick_candidate> sampled;
+	    ged_obol_pick_point_candidates(view_ctx, x, y, 1.0f, true,
+		    sampled);
+	    for (size_t i = 0; i < sampled.size(); i++) {
+		const std::string key = ged_obol_pick_candidate_key(sampled[i]);
+		if (!seen.insert(key).second)
+		    continue;
+		candidates.push_back(sampled[i]);
+	    }
+	}
+    }
+
+    ged_obol_pick_sort(candidates);
+    return ged_obol_pick_result_from_candidates(candidates);
+}
+
+static uint32_t
+ged_obol_snap_kind(enum ged_draw_view_snap_kind kind)
+{
+    switch (kind) {
+	case GED_DRAW_VIEW_SNAP_GRID:
+	    return static_cast<uint32_t>(SoBRLSnapAction::GRID);
+	case GED_DRAW_VIEW_SNAP_ENDPOINT:
+	    return static_cast<uint32_t>(SoBRLSnapAction::ENDPOINT);
+	default:
+	    return 0;
+    }
+}
+
+extern "C" GED_EXPORT int
+ged_draw_obol_view_context_snap_first_candidate(
+	void *view_ctx,
+	const point_t sample,
+	enum ged_draw_view_snap_kind kind,
+	point_t candidate)
+{
+    if (candidate)
+	VSETALL(candidate, 0.0);
+    if (!view_ctx || !sample || !candidate)
+	return 0;
+
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller || !controller->getViewport() ||
+	    !controller->getViewport()->getRoot())
+	return 0;
+    if (!ged_obol_pick_sync_view_controller(controller, view_ctx))
+	return 0;
+
+    const uint32_t enabled_kinds = ged_obol_snap_kind(kind);
+    if (!enabled_kinds)
+	return 0;
+
+    SoBRLSnapAction snap_action;
+    snap_action.setEnabledKinds(enabled_kinds);
+    snap_action.setQueryPoint(SbVec3f(static_cast<float>(sample[X]),
+	    static_cast<float>(sample[Y]),
+	    static_cast<float>(sample[Z])));
+    snap_action.setTolerance(FLT_MAX);
+    snap_action.apply(controller->getViewport()->getRoot());
+
+    if (!snap_action.hasCandidate())
+	return 0;
+
+    const SbVec3f &point = snap_action.getPoint();
+    VSET(candidate, point[0], point[1], point[2]);
+    return 1;
+}
+
 static BRLObolFeatureStyle
 ged_obol_feature_style_from_ged(
     const struct ged_draw_view_feature_style *style)
@@ -4562,7 +5095,7 @@ ged_obol_view_to_model_point(SbVec3f &out,
 			     fastf_t z = 0.0)
 {
     mat_t view2model;
-    if (!rt_view_context_view2model_get(view2model, view_ctx))
+    if (!bv_view2model_get(view2model, ged_obol_bv_const(view_ctx)))
 	return 0;
 
     point_t vpt;
@@ -4654,8 +5187,8 @@ ged_obol_faceplate_label(void *view_ctx,
 			 int anchor = 0)
 {
     BRLObolLabel label;
-    const int width = rt_view_context_width_get(view_ctx);
-    const int height = rt_view_context_height_get(view_ctx);
+    const int width = bv_width_get(ged_obol_bv_const(view_ctx));
+    const int height = bv_height_get(ged_obol_bv_const(view_ctx));
     fastf_t px = x;
     fastf_t py = y;
     if (width > 0 && height > 0) {
@@ -4679,8 +5212,8 @@ ged_obol_faceplate_sync_center_dot(BRLObolViewController *controller,
 				   void *view_ctx)
 {
     static const char name[] = "_faceplate/center_dot";
-    struct rt_view_other_state state = RT_VIEW_OTHER_STATE_INIT;
-    if (!rt_view_context_center_dot_state_get(&state, view_ctx) ||
+    struct bv_other_state state = BV_OTHER_STATE_INIT;
+    if (!bv_center_dot_state_get(&state, ged_obol_bv_const(view_ctx)) ||
 	!state.gos_draw) {
 	ged_obol_faceplate_remove(controller, view_ctx, name);
 	return;
@@ -4705,8 +5238,8 @@ ged_obol_faceplate_sync_grid(BRLObolViewController *controller,
 			     void *view_ctx)
 {
     static const char name[] = "_faceplate/grid";
-    struct rt_view_grid_state grid = RT_VIEW_GRID_STATE_INIT;
-    if (!rt_view_context_grid_state_get(&grid, view_ctx) || !grid.draw) {
+    struct bv_grid_state grid = BV_GRID_STATE_INIT;
+    if (!bv_grid_state_get(&grid, ged_obol_bv_const(view_ctx)) || !grid.draw) {
 	ged_obol_faceplate_remove(controller, view_ctx, name);
 	return;
     }
@@ -4737,7 +5270,7 @@ ged_obol_faceplate_sync_grid(BRLObolViewController *controller,
 
 static void
 ged_obol_faceplate_params_string(void *view_ctx,
-				 const struct rt_view_params_state *params,
+				 const struct bv_params_state *params,
 				 struct bu_vls *vls)
 {
     if (!view_ctx || !params || !vls)
@@ -4745,23 +5278,23 @@ ged_obol_faceplate_params_string(void *view_ctx,
 
     point_t center = VINIT_ZERO;
     mat_t center_mat;
-    if (rt_view_context_center_get(center_mat, view_ctx))
+    if (bv_center_mat_get(center_mat, ged_obol_bv_const(view_ctx)))
 	MAT_DELTAS_GET_NEG(center, center_mat);
-    VSCALE(center, center, rt_view_context_base2local_get(view_ctx));
+    VSCALE(center, center, bv_base2local_get(ged_obol_bv_const(view_ctx)));
 
-    const char *ustr = bu_units_string(rt_view_context_local2base_get(view_ctx));
+    const char *ustr = bu_units_string(bv_local2base_get(ged_obol_bv_const(view_ctx)));
     if (!ustr)
 	ustr = "";
 
     vect_t aet = VINIT_ZERO;
-    (void)rt_view_context_aet_get(aet, view_ctx);
+    (void)bv_aet_get(aet, ged_obol_bv_const(view_ctx));
 
     if (params->draw_size) {
 	if (bu_vls_strlen(vls) > 0)
 	    bu_vls_putc(vls, ' ');
 	bu_vls_printf(vls, "size[%s]: %.2f", ustr,
-		      rt_view_context_size_get(view_ctx) *
-		      rt_view_context_base2local_get(view_ctx));
+		      bv_size_get(ged_obol_bv_const(view_ctx)) *
+		      bv_base2local_get(ged_obol_bv_const(view_ctx)));
     }
     if (params->draw_center) {
 	if (bu_vls_strlen(vls) > 0)
@@ -4785,7 +5318,7 @@ ged_obol_faceplate_params_string(void *view_ctx,
 	bu_vls_printf(vls, "tw:%.2f", aet[2]);
     }
 
-    const uint64_t frametime = rt_view_context_frametime_get(view_ctx);
+    const uint64_t frametime = bv_frametime_get(ged_obol_bv_const(view_ctx));
     if (params->draw_fps && frametime > 0) {
 	if (bu_vls_strlen(vls) > 0)
 	    bu_vls_putc(vls, ' ');
@@ -4798,8 +5331,8 @@ ged_obol_faceplate_sync_params(BRLObolViewController *controller,
 			       void *view_ctx)
 {
     static const char name[] = "_faceplate/params";
-    struct rt_view_params_state params = RT_VIEW_PARAMS_STATE_INIT;
-    if (!rt_view_context_params_state_get(&params, view_ctx) ||
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    if (!bv_params_state_get(&params, ged_obol_bv_const(view_ctx)) ||
 	!params.draw) {
 	ged_obol_faceplate_remove(controller, view_ctx, name);
 	return;
@@ -4834,8 +5367,8 @@ ged_obol_faceplate_sync_scale(BRLObolViewController *controller,
 {
     static const char line_name[] = "_faceplate/scale";
     static const char label_name[] = "_faceplate/scale_labels";
-    struct rt_view_other_state state = RT_VIEW_OTHER_STATE_INIT;
-    if (!rt_view_context_scale_overlay_state_get(&state, view_ctx) ||
+    struct bv_other_state state = BV_OTHER_STATE_INIT;
+    if (!bv_scale_overlay_state_get(&state, ged_obol_bv_const(view_ctx)) ||
 	!state.gos_draw) {
 	ged_obol_faceplate_remove(controller, view_ctx, line_name);
 	ged_obol_faceplate_remove(controller, view_ctx, label_name);
@@ -4859,13 +5392,13 @@ ged_obol_faceplate_sync_scale(BRLObolViewController *controller,
 					   points, commands, line_style);
 
     struct bu_vls scale = BU_VLS_INIT_ZERO;
-    const fastf_t base2local = rt_view_context_base2local_get(view_ctx);
+    const fastf_t base2local = bv_base2local_get(ged_obol_bv_const(view_ctx));
     const char *unit = !ZERO(base2local) ? bu_units_string(1.0 / base2local) :
 		       NULL;
     if (!unit)
 	unit = "";
     bu_vls_printf(&scale, "%g%s",
-		  rt_view_context_size_get(view_ctx) * 0.5 *
+		  bv_size_get(ged_obol_bv_const(view_ctx)) * 0.5 *
 		  base2local,
 		  unit);
     const int soffset = (int)(strlen(bu_vls_cstr(&scale)) * 0.5);
@@ -4891,7 +5424,7 @@ ged_obol_faceplate_append_axis(std::vector<SbVec3f> &points,
 			       std::vector<BRLObolLabel> &labels,
 			       void *view_ctx,
 			       const mat_t rmat,
-			       const struct rt_view_axes_state *axes,
+			       const struct bv_axes_state *axes,
 			       int axis,
 			       fastf_t aspect,
 			       const char *label_text)
@@ -4997,15 +5530,15 @@ ged_obol_faceplate_append_axis_ticks(std::vector<SbVec3f> &tick_points,
 				     std::vector<int32_t> &major_commands,
 				     void *view_ctx,
 				     const mat_t rmat,
-				     const struct rt_view_axes_state *axes,
+				     const struct bv_axes_state *axes,
 				     fastf_t aspect)
 {
     if (!view_ctx || !axes || !axes->tick_enabled ||
 	axes->tick_interval <= SMALL_FASTF)
 	return;
 
-    const fastf_t view_size = rt_view_context_size_get(view_ctx);
-    const int width = rt_view_context_width_get(view_ctx);
+    const fastf_t view_size = bv_size_get(ged_obol_bv_const(view_ctx));
+    const int width = bv_width_get(ged_obol_bv_const(view_ctx));
     const fastf_t half_axes_size =
 	axes->axes_size > 0.0 ? axes->axes_size * 0.5 : 0.1;
     if (view_size <= SMALL_FASTF || width <= 0 ||
@@ -5149,7 +5682,7 @@ static void
 ged_obol_faceplate_sync_axes_one(BRLObolViewController *controller,
 				 void *view_ctx,
 				 const char *prefix,
-				 struct rt_view_axes_state axes,
+				 struct bv_axes_state axes,
 				 int model_axes)
 {
     std::string line_name = std::string(prefix) + "/lines";
@@ -5181,7 +5714,7 @@ ged_obol_faceplate_sync_axes_one(BRLObolViewController *controller,
 	axes.label_flag = 1;
 
     mat_t rmat;
-    if (!rt_view_context_rotation_get(rmat, view_ctx)) {
+    if (!bv_rotation_get(rmat, ged_obol_bv_const(view_ctx))) {
 	ged_obol_faceplate_remove_axis_variants(controller, view_ctx, line_name);
 	ged_obol_faceplate_remove(controller, view_ctx, label_name.c_str());
 	ged_obol_faceplate_remove(controller, view_ctx, tick_name.c_str());
@@ -5192,15 +5725,15 @@ ged_obol_faceplate_sync_axes_one(BRLObolViewController *controller,
     if (model_axes) {
 	point_t map;
 	mat_t model2view;
-	if (rt_view_context_model2view_get(model2view, view_ctx)) {
+	if (bv_model2view_get(model2view, ged_obol_bv_const(view_ctx))) {
 	    VSCALE(map, axes.axes_pos,
-		   rt_view_context_local2base_get(view_ctx));
+		   bv_local2base_get(ged_obol_bv_const(view_ctx)));
 	    MAT4X3PNT(axes.axes_pos, model2view, map);
 	}
     }
 
-    const int width = rt_view_context_width_get(view_ctx);
-    const int height = rt_view_context_height_get(view_ctx);
+    const int width = bv_width_get(ged_obol_bv_const(view_ctx));
+    const int height = bv_height_get(ged_obol_bv_const(view_ctx));
     const fastf_t aspect = (width > 0 && height > 0) ?
 			   (fastf_t)width / (fastf_t)height : 1.0;
     if (!model_axes)
@@ -5216,7 +5749,7 @@ ged_obol_faceplate_sync_axes_one(BRLObolViewController *controller,
     if (axes.triple_color) {
 	ged_obol_faceplate_remove(controller, view_ctx, line_name.c_str());
 	for (int axis = X; axis <= Z; axis++) {
-	    struct rt_view_axes_state axis_axes = axes;
+	    struct bv_axes_state axis_axes = axes;
 	    int axis_color[3] = {0, 0, 0};
 	    ged_obol_faceplate_axis_triple_color(axis, axis_color);
 	    VMOVE(axis_axes.axes_color, axis_color);
@@ -5302,11 +5835,11 @@ static void
 ged_obol_faceplate_sync_axes(BRLObolViewController *controller,
 			     void *view_ctx)
 {
-    struct rt_view_axes_state axes = RT_VIEW_AXES_STATE_INIT;
-    if (rt_view_context_view_axes_state_get(&axes, view_ctx))
+    struct bv_axes_state axes = BV_AXES_STATE_INIT;
+    if (bv_view_axes_state_get(&axes, ged_obol_bv_const(view_ctx)))
 	ged_obol_faceplate_sync_axes_one(controller, view_ctx,
 					 "_faceplate/view_axes", axes, 0);
-    if (rt_view_context_model_axes_state_get(&axes, view_ctx))
+    if (bv_model_axes_state_get(&axes, ged_obol_bv_const(view_ctx)))
 	ged_obol_faceplate_sync_axes_one(controller, view_ctx,
 					 "_faceplate/model_axes", axes, 1);
 }
@@ -5316,7 +5849,7 @@ ged_obol_faceplate_sync_framebuffer(BRLObolViewController *controller,
 				    void *view_ctx)
 {
     static const char name[] = "_faceplate/framebuffer";
-    if (rt_view_context_framebuffer_mode_get(view_ctx) == 0) {
+    if (bv_framebuffer_mode_get(ged_obol_bv_const(view_ctx)) == 0) {
 	ged_obol_faceplate_remove(controller, view_ctx, name);
 	return;
     }
@@ -5364,10 +5897,10 @@ ged_obol_faceplate_sync_framebuffer(BRLObolViewController *controller,
     viewport->units = SoBRLViewportImage::PIXELS;
     viewport->position = SbVec2f(0.0f, 0.0f);
     viewport->size = SbVec2f(
-			 static_cast<float>(rt_view_context_width_get(view_ctx) > 0 ?
-					    rt_view_context_width_get(view_ctx) : width),
-			 static_cast<float>(rt_view_context_height_get(view_ctx) > 0 ?
-					    rt_view_context_height_get(view_ctx) : height));
+			 static_cast<float>(bv_width_get(ged_obol_bv_const(view_ctx)) > 0 ?
+					    bv_width_get(ged_obol_bv_const(view_ctx)) : width),
+			 static_cast<float>(bv_height_get(ged_obol_bv_const(view_ctx)) > 0 ?
+					    bv_height_get(ged_obol_bv_const(view_ctx)) : height));
     viewport->fit = SoBRLViewportImage::STRETCH;
     viewport->preserveAspect = FALSE;
     viewport->opacity = 1.0f;
@@ -5410,7 +5943,7 @@ ged_draw_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx)
     ged_obol_faceplate_sync_axes(controller, view_ctx);
     ged_obol_faceplate_sync_framebuffer(controller, view_ctx);
 
-    if (rt_view_context_framebuffer_mode_get(view_ctx) != 0)
+    if (bv_framebuffer_mode_get(ged_obol_bv_const(view_ctx)) != 0)
 	(void)ged_draw_obol_framebuffer_present(gedp);
 
     return BRLCAD_OK;
@@ -5975,7 +6508,7 @@ ged_obol_depth_consider(void *view_ctx,
 			fastf_t &depth)
 {
     mat_t model2view;
-    rt_view_context_model2view_get(model2view, view_ctx);
+    bv_model2view_get(model2view, ged_obol_bv_const(view_ctx));
 
     point_t model_pt;
     point_t view_pt;
@@ -6452,7 +6985,7 @@ ged_obol_feature_token_get(BRLObolViewController *controller,
 }
 
 static ged_obol_feature_ref_token *
-ged_obol_feature_token_from_rt_ref(rt_view_feature_ref ref)
+ged_obol_feature_token_from_ged_ref(ged_draw_view_feature_ref ref)
 {
     if (!ref.token)
 	return NULL;
@@ -6467,22 +7000,22 @@ ged_obol_feature_token_from_rt_ref(rt_view_feature_ref ref)
 }
 
 static BRLObolFeatureHandle
-ged_obol_feature_handle_from_rt_ref(rt_view_feature_ref ref)
+ged_obol_feature_handle_from_ged_ref(ged_draw_view_feature_ref ref)
 {
     ged_obol_feature_ref_token *token =
-	ged_obol_feature_token_from_rt_ref(ref);
+	ged_obol_feature_token_from_ged_ref(ref);
     return token ? BRLObolFeatureHandle(token->id, ref.revision) :
 	   BRLObolFeatureHandle();
 }
 
-static rt_view_feature_ref
-ged_obol_rt_feature_ref(BRLObolViewController *controller,
-			BRLObolFeatureHandle handle,
-			const char *name = NULL)
+static ged_draw_view_feature_ref
+ged_obol_ged_feature_ref(BRLObolViewController *controller,
+			 BRLObolFeatureHandle handle,
+			 const char *name = NULL)
 {
     ged_obol_feature_ref_token *token =
 	ged_obol_feature_token_get(controller, handle, name);
-    rt_view_feature_ref ref = RT_VIEW_FEATURE_REF_NULL_INIT;
+    ged_draw_view_feature_ref ref = GED_DRAW_VIEW_FEATURE_REF_NULL_INIT;
     if (!token)
 	return ref;
     ref.token = reinterpret_cast<uintptr_t>(token);
@@ -6491,7 +7024,7 @@ ged_obol_rt_feature_ref(BRLObolViewController *controller,
 }
 
 static BRLObolOverlayInfo
-ged_obol_rt_edit_overlay_info(void *view_ctx,
+ged_obol_edit_overlay_info(void *view_ctx,
 			      const void *owner,
 			      const char *source_path,
 			      int sort_order)
@@ -6507,8 +7040,9 @@ ged_obol_rt_edit_overlay_info(void *view_ctx,
 }
 
 static std::vector<BRLObolLabel>
-ged_obol_labels_from_rt(const struct rt_view_feature_label *labels,
-			size_t label_count)
+ged_obol_labels_from_ged_feature(
+    const struct ged_draw_view_feature_label *labels,
+    size_t label_count)
 {
     std::vector<BRLObolLabel> out;
     if (!labels || !label_count)
@@ -6534,8 +7068,8 @@ ged_obol_labels_from_rt(const struct rt_view_feature_label *labels,
 }
 
 static BRLObolEditPreviewCallbacks
-ged_obol_edit_preview_callbacks_from_rt(
-    const struct rt_view_edit_preview_callbacks *callbacks,
+ged_obol_edit_preview_callbacks_from_ged(
+    const struct ged_draw_view_edit_preview_callbacks *callbacks,
     void *preview_ctx)
 {
     BRLObolEditPreviewCallbacks out;
@@ -6548,38 +7082,37 @@ ged_obol_edit_preview_callbacks_from_rt(
     return out;
 }
 
-static int
-ged_draw_rt_obol_feature_owns_ref(rt_view_feature_ref ref,
-				  void *UNUSED(data))
+static unsigned char ged_obol_rgb_byte_from_int(int value);
+
+extern "C" int
+ged_draw_obol_view_feature_ref_is_null(ged_draw_view_feature_ref ref)
 {
-    return ged_obol_feature_token_from_rt_ref(ref) ? 1 : 0;
+    return ref.token == 0 ? 1 : 0;
 }
 
-static int
-ged_draw_rt_obol_edit_preview_publish_event(
+extern "C" int
+ged_draw_obol_view_context_edit_preview_publish_event(
     void *UNUSED(view_ctx),
-    rt_view_feature_ref feature,
-    enum rt_view_edit_preview_event UNUSED(event),
-    const char *UNUSED(source_path),
-    void *UNUSED(data))
+    ged_draw_view_feature_ref feature,
+    enum ged_draw_view_edit_preview_event UNUSED(event),
+    const char *UNUSED(source_path))
 {
-    return ged_obol_feature_token_from_rt_ref(feature) ? 1 : 0;
+    return ged_obol_feature_token_from_ged_ref(feature) ? 1 : 0;
 }
 
-static rt_view_feature_ref
-ged_draw_rt_obol_feature_overlay_ensure(
+extern "C" ged_draw_view_feature_ref
+ged_draw_obol_view_context_feature_overlay_ensure(
     void *view_ctx,
     const char *name,
     const void *owner,
     void *preview_ctx,
-    const struct rt_view_edit_preview_callbacks *callbacks,
-    const char *source_path,
-    void *UNUSED(data))
+    const struct ged_draw_view_edit_preview_callbacks *callbacks,
+    const char *source_path)
 {
     BRLObolViewController *controller =
 	ged_obol_view_controller_ensure_for_context(view_ctx, 1);
     if (!controller || !name || !name[0])
-	return RT_VIEW_FEATURE_REF_NULL;
+	return GED_DRAW_VIEW_FEATURE_REF_NULL;
 
     BRLObolFeatureOwner feature_owner = ged_obol_feature_owner(view_ctx, 1);
     BRLObolFeatureHandle handle = controller->features().findOwned(name,
@@ -6593,7 +7126,7 @@ ged_draw_rt_obol_feature_overlay_ensure(
 	std::vector<SbVec3f> points;
 	std::vector<int32_t> commands;
 	BRLObolEditPreviewCallbacks obol_callbacks =
-	    ged_obol_edit_preview_callbacks_from_rt(callbacks, preview_ctx);
+	    ged_obol_edit_preview_callbacks_from_ged(callbacks, preview_ctx);
 	handle = controller->features().publishEditPreview(name,
 		 source_path && source_path[0] ? source_path : name,
 		 name,
@@ -6607,24 +7140,23 @@ ged_draw_rt_obol_feature_overlay_ensure(
     }
 
     if (!handle.isValid())
-	return RT_VIEW_FEATURE_REF_NULL;
+	return GED_DRAW_VIEW_FEATURE_REF_NULL;
 
     (void)controller->features().setOverlayInfo(handle,
-	    ged_obol_rt_edit_overlay_info(view_ctx, owner, source_path, 0));
-    return ged_obol_rt_feature_ref(controller, handle, name);
+	    ged_obol_edit_overlay_info(view_ctx, owner, source_path, 0));
+    return ged_obol_ged_feature_ref(controller, handle, name);
 }
 
-static rt_view_feature_ref
-ged_draw_rt_obol_feature_label_ensure(
+extern "C" ged_draw_view_feature_ref
+ged_draw_obol_view_context_feature_label_ensure(
     void *view_ctx,
     const char *name,
-    const void *owner,
-    void *UNUSED(data))
+    const void *owner)
 {
     BRLObolViewController *controller =
 	ged_obol_view_controller_ensure_for_context(view_ctx, 1);
     if (!controller || !name || !name[0])
-	return RT_VIEW_FEATURE_REF_NULL;
+	return GED_DRAW_VIEW_FEATURE_REF_NULL;
 
     BRLObolFeatureOwner feature_owner = ged_obol_feature_owner(view_ctx, 1);
     BRLObolFeatureHandle handle = controller->features().findOwned(name,
@@ -6640,63 +7172,40 @@ ged_draw_rt_obol_feature_label_ensure(
     }
 
     if (!handle.isValid())
-	return RT_VIEW_FEATURE_REF_NULL;
+	return GED_DRAW_VIEW_FEATURE_REF_NULL;
 
     (void)controller->features().setOverlayInfo(handle,
-	    ged_obol_rt_edit_overlay_info(view_ctx, owner, name, 1));
-    return ged_obol_rt_feature_ref(controller, handle, name);
+	    ged_obol_edit_overlay_info(view_ctx, owner, name, 1));
+    return ged_obol_ged_feature_ref(controller, handle, name);
 }
 
-static int
-ged_draw_rt_obol_feature_remove(void *view_ctx,
-				const char *name,
-				void *UNUSED(data))
+extern "C" int
+ged_draw_obol_view_feature_set_context(ged_draw_view_feature_ref ref,
+				       void *UNUSED(view_ctx))
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    return ged_obol_remove_feature(controller, view_ctx, name, -1);
+    return ged_obol_feature_token_from_ged_ref(ref) ? 1 : 0;
 }
 
-static int
-ged_draw_rt_obol_feature_set_context(rt_view_feature_ref ref,
-				     void *UNUSED(ctx),
-				     void *UNUSED(data))
-{
-    return ged_obol_feature_token_from_rt_ref(ref) ? 1 : 0;
-}
-
-static int
-ged_draw_rt_obol_feature_set_visible(rt_view_feature_ref ref,
-				     int visible,
-				     void *UNUSED(data))
+extern "C" int
+ged_draw_obol_view_feature_set_visible(ged_draw_view_feature_ref ref,
+				       int visible)
 {
     ged_obol_feature_ref_token *token =
-	ged_obol_feature_token_from_rt_ref(ref);
+	ged_obol_feature_token_from_ged_ref(ref);
     return (token && token->controller) ?
 	   (token->controller->features().setVisible(
-		ged_obol_feature_handle_from_rt_ref(ref),
+		ged_obol_feature_handle_from_ged_ref(ref),
 		visible ? TRUE : FALSE) ? 1 : 0) : 0;
 }
 
-static unsigned char
-ged_obol_rgb_byte_from_int(int value)
-{
-    if (value < 0)
-	return 0;
-    if (value > 255)
-	return 255;
-    return static_cast<unsigned char>(value);
-}
-
-static int
-ged_draw_rt_obol_feature_set_color(rt_view_feature_ref ref,
-				   int r,
-				   int g,
-				   int b,
-				   void *UNUSED(data))
+extern "C" int
+ged_draw_obol_view_feature_set_color(ged_draw_view_feature_ref ref,
+				     int r,
+				     int g,
+				     int b)
 {
     ged_obol_feature_ref_token *token =
-	ged_obol_feature_token_from_rt_ref(ref);
+	ged_obol_feature_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
 
@@ -6706,46 +7215,44 @@ ged_draw_rt_obol_feature_set_color(rt_view_feature_ref ref,
 	ged_obol_rgb_byte_from_int(b)
     };
     return token->controller->features().setColor(
-	       ged_obol_feature_handle_from_rt_ref(ref),
+	       ged_obol_feature_handle_from_ged_ref(ref),
 	       ged_obol_color_from_rgb(rgb)) ? 1 : 0;
 }
 
-static int
-ged_draw_rt_obol_feature_touch(rt_view_feature_ref ref,
-			       void *UNUSED(data))
+extern "C" int
+ged_draw_obol_view_feature_touch(ged_draw_view_feature_ref ref)
 {
     ged_obol_feature_ref_token *token =
-	ged_obol_feature_token_from_rt_ref(ref);
+	ged_obol_feature_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
 
     const int ret = token->controller->features().updateEditPreview(
-			ged_obol_feature_handle_from_rt_ref(ref));
+			ged_obol_feature_handle_from_ged_ref(ref));
     return ret >= 0 ? ret : 1;
 }
 
-static int
-ged_draw_rt_obol_feature_labels_replace(
-    rt_view_feature_ref ref,
-    const struct rt_view_feature_label *labels,
-    size_t label_count,
-    void *UNUSED(data))
+extern "C" int
+ged_draw_obol_view_feature_labels_replace(
+    ged_draw_view_feature_ref ref,
+    const struct ged_draw_view_feature_label *labels,
+    size_t label_count)
 {
     if (label_count && !labels)
 	return 0;
 
     ged_obol_feature_ref_token *token =
-	ged_obol_feature_token_from_rt_ref(ref);
+	ged_obol_feature_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
 
     BRLObolFeatureRecord record;
-    BRLObolFeatureHandle handle = ged_obol_feature_handle_from_rt_ref(ref);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle_from_ged_ref(ref);
     if (!token->controller->features().record(handle, record))
 	return 0;
 
     std::vector<BRLObolLabel> obol_labels =
-	ged_obol_labels_from_rt(labels, label_count);
+	ged_obol_labels_from_ged_feature(labels, label_count);
     if (record.kind == BRLObolFeatureKind::Labels ||
 	record.kind == BRLObolFeatureKind::HudLabel)
 	return token->controller->features().replaceLabels(handle,
@@ -6759,25 +7266,24 @@ ged_draw_rt_obol_feature_labels_replace(
     return labels_handle.isValid() ? 1 : 0;
 }
 
-static int
-ged_draw_rt_obol_feature_points_replace(
-    rt_view_feature_ref ref,
-    enum rt_view_feature_family family,
+extern "C" int
+ged_draw_obol_view_feature_points_replace(
+    ged_draw_view_feature_ref ref,
+    enum ged_draw_view_feature_family family,
     const point_t *points,
     const int *cmds,
-    size_t point_count,
-    void *UNUSED(data))
+    size_t point_count)
 {
     if (point_count && !points)
 	return 0;
 
     ged_obol_feature_ref_token *token =
-	ged_obol_feature_token_from_rt_ref(ref);
+	ged_obol_feature_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
 
     BRLObolFeatureRecord record;
-    BRLObolFeatureHandle handle = ged_obol_feature_handle_from_rt_ref(ref);
+    BRLObolFeatureHandle handle = ged_obol_feature_handle_from_ged_ref(ref);
     if (!token->controller->features().record(handle, record))
 	return 0;
 
@@ -6785,7 +7291,7 @@ ged_draw_rt_obol_feature_points_replace(
 	ged_obol_points_from_ged(points, point_count);
     std::vector<int32_t> obol_commands =
 	ged_obol_commands_from_ged(cmds, point_count);
-    if (family == RT_VIEW_FEATURE_TRANSIENT_PREVIEW ||
+    if (family == GED_DRAW_VIEW_FEATURE_TRANSIENT_PREVIEW ||
 	record.kind == BRLObolFeatureKind::EditPreview) {
 	if (record.kind == BRLObolFeatureKind::EditPreview)
 	    return token->controller->features().replaceEditPreviewGeometry(
@@ -6817,42 +7323,24 @@ ged_draw_rt_obol_feature_points_replace(
     return line_handle.isValid() ? 1 : 0;
 }
 
-static int
-ged_draw_rt_obol_feature_clear_geometry(rt_view_feature_ref ref,
-					void *UNUSED(data))
+extern "C" int
+ged_draw_obol_view_feature_clear_geometry(ged_draw_view_feature_ref ref)
 {
     ged_obol_feature_ref_token *token =
-	ged_obol_feature_token_from_rt_ref(ref);
+	ged_obol_feature_token_from_ged_ref(ref);
     return (token && token->controller) ?
 	   (token->controller->features().clearGeometry(
-		ged_obol_feature_handle_from_rt_ref(ref)) ? 1 : 0) : 0;
+		ged_obol_feature_handle_from_ged_ref(ref)) ? 1 : 0) : 0;
 }
 
-extern "C" int
-ged_draw_view_context_obol_feature_adapter_attach(
-    struct ged *gedp,
-    void *view_ctx)
+static unsigned char
+ged_obol_rgb_byte_from_int(int value)
 {
-    if (!gedp || !view_ctx)
+    if (value < 0)
 	return 0;
-
-    struct rt_view_context_feature_adapter adapter;
-    memset(&adapter, 0, sizeof(adapter));
-    adapter.owns_ref = ged_draw_rt_obol_feature_owns_ref;
-    adapter.edit_preview_publish_event =
-	ged_draw_rt_obol_edit_preview_publish_event;
-    adapter.overlay_ensure = ged_draw_rt_obol_feature_overlay_ensure;
-    adapter.label_ensure = ged_draw_rt_obol_feature_label_ensure;
-    adapter.remove = ged_draw_rt_obol_feature_remove;
-    adapter.set_context = ged_draw_rt_obol_feature_set_context;
-    adapter.set_visible = ged_draw_rt_obol_feature_set_visible;
-    adapter.set_color = ged_draw_rt_obol_feature_set_color;
-    adapter.touch = ged_draw_rt_obol_feature_touch;
-    adapter.labels_replace = ged_draw_rt_obol_feature_labels_replace;
-    adapter.points_replace = ged_draw_rt_obol_feature_points_replace;
-    adapter.clear_geometry = ged_draw_rt_obol_feature_clear_geometry;
-    adapter.data = gedp;
-    return rt_view_context_feature_adapter_set(view_ctx, &adapter);
+    if (value > 255)
+	return 255;
+    return static_cast<unsigned char>(value);
 }
 
 static const uint32_t GED_OBOL_POLYGON_TOKEN_MAGIC = 0x474f504cU;
@@ -6865,7 +7353,6 @@ struct ged_obol_polygon_ref_token {
 };
 
 static std::vector<ged_obol_polygon_ref_token *> ged_obol_polygon_ref_tokens;
-static uint64_t ged_obol_polygon_auto_id = 1;
 
 static BRLObolPolygonType
 ged_obol_polygon_type_from_ged(int type)
@@ -6944,7 +7431,7 @@ ged_obol_polygon_token_get(BRLObolViewController *controller,
 }
 
 static ged_obol_polygon_ref_token *
-ged_obol_polygon_token_from_rt_ref(rt_view_polygon_ref ref)
+ged_obol_polygon_token_from_ged_ref(ged_draw_view_polygon_ref ref)
 {
     if (!ref.token)
 	return NULL;
@@ -6960,46 +7447,26 @@ ged_obol_polygon_token_from_rt_ref(rt_view_polygon_ref ref)
 }
 
 static BRLObolPolygonHandle
-ged_obol_polygon_handle_from_rt_ref(rt_view_polygon_ref ref)
+ged_obol_polygon_handle_from_ged_ref(ged_draw_view_polygon_ref ref)
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     return token ? BRLObolPolygonHandle(token->id, ref.revision) :
 	   BRLObolPolygonHandle();
-}
-
-static rt_view_polygon_ref
-ged_obol_rt_polygon_ref(BRLObolViewController *controller,
-			BRLObolPolygonHandle handle)
-{
-    ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_get(controller, handle);
-    rt_view_polygon_ref ref = RT_VIEW_POLYGON_REF_NULL_INIT;
-    if (!token)
-	return ref;
-    ref.token = reinterpret_cast<uintptr_t>(token);
-    ref.revision = handle.revision;
-    return ref;
 }
 
 static ged_draw_view_polygon_ref
 ged_obol_ged_polygon_ref(BRLObolViewController *controller,
 			 BRLObolPolygonHandle handle)
 {
-    rt_view_polygon_ref rt_ref = ged_obol_rt_polygon_ref(controller, handle);
     ged_draw_view_polygon_ref ged_ref = GED_DRAW_VIEW_POLYGON_REF_NULL_INIT;
-    ged_ref.token = rt_ref.token;
-    ged_ref.revision = rt_ref.revision;
+    ged_obol_polygon_ref_token *token =
+	ged_obol_polygon_token_get(controller, handle);
+    if (!token)
+	return ged_ref;
+    ged_ref.token = reinterpret_cast<uintptr_t>(token);
+    ged_ref.revision = handle.revision;
     return ged_ref;
-}
-
-static rt_view_polygon_ref
-ged_obol_rt_polygon_ref_from_ged(ged_draw_view_polygon_ref ref)
-{
-    rt_view_polygon_ref rt_ref = RT_VIEW_POLYGON_REF_NULL_INIT;
-    rt_ref.token = ref.token;
-    rt_ref.revision = ref.revision;
-    return rt_ref;
 }
 
 static void
@@ -7019,7 +7486,7 @@ ged_obol_polygon_project_point(point_t dst, void *view_ctx, const point_t src,
 	return;
     HSET(*view_plane, 0.0, 0.0, 1.0, src[Z]);
 
-    if (rt_view_context_plane_get(view_plane, view_ctx) != 0)
+    if (bv_plane_get(view_plane, ged_obol_bv_const(view_ctx)) != 0)
 	return;
 
     fastf_t fx = 0.0;
@@ -7056,11 +7523,11 @@ ged_obol_polygon_color_to_bu(struct bu_color *dst, const SbColor &src)
 }
 
 static int
-ged_obol_polygon_record_to_rt(
+ged_obol_polygon_record_to_ged(
     BRLObolViewController *controller,
-    rt_view_polygon_ref ref,
+    ged_draw_view_polygon_ref ref,
     const BRLObolPolygonRecord &src,
-    struct rt_view_polygon_record *dst)
+    struct ged_draw_view_polygon_record *dst)
 {
     if (!controller || !dst)
 	return 0;
@@ -7119,21 +7586,6 @@ ged_obol_polygon_create_named(
 					 obol_origin,
 					 view_plane,
 					 0.0f);
-}
-
-static std::string
-ged_obol_polygon_auto_name(BRLObolViewController *controller)
-{
-    if (!controller)
-	return std::string();
-
-    for (;;) {
-	char buf[64];
-	snprintf(buf, sizeof(buf), "__rt_polygon_%llu",
-		 (unsigned long long)ged_obol_polygon_auto_id++);
-	if (!controller->polygons().find(buf).isValid())
-	    return std::string(buf);
-    }
 }
 
 extern "C" ged_draw_view_polygon_ref
@@ -7220,13 +7672,13 @@ ged_draw_obol_view_context_polygon_set_current(
     long contour_i,
     long point_i)
 {
-    rt_view_polygon_ref rt_ref = ged_obol_rt_polygon_ref_from_ged(ref);
+    ged_draw_view_polygon_ref ged_ref = ref;
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(rt_ref);
+	ged_obol_polygon_token_from_ged_ref(ged_ref);
     if (!token || !token->controller)
 	return 0;
     return token->controller->polygons().setCurrent(
-	       ged_obol_polygon_handle_from_rt_ref(rt_ref),
+	       ged_obol_polygon_handle_from_ged_ref(ged_ref),
 	       contour_i, point_i) ? 1 : 0;
 }
 
@@ -7236,13 +7688,13 @@ ged_draw_obol_view_context_polygon_set_contour_open(
     long contour_i,
     int open)
 {
-    rt_view_polygon_ref rt_ref = ged_obol_rt_polygon_ref_from_ged(ref);
+    ged_draw_view_polygon_ref ged_ref = ref;
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(rt_ref);
+	ged_obol_polygon_token_from_ged_ref(ged_ref);
     if (!token || !token->controller)
 	return 0;
     return token->controller->polygons().setContourOpen(
-	       ged_obol_polygon_handle_from_rt_ref(rt_ref),
+	       ged_obol_polygon_handle_from_ged_ref(ged_ref),
 	       contour_i, open ? TRUE : FALSE) ? 1 : 0;
 }
 
@@ -7257,15 +7709,15 @@ ged_draw_obol_view_context_polygon_area(
     if (!area || !view_ctx)
 	return 0;
 
-    rt_view_polygon_ref rt_ref = ged_obol_rt_polygon_ref_from_ged(ref);
+    ged_draw_view_polygon_ref ged_ref = ref;
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(rt_ref);
+	ged_obol_polygon_token_from_ged_ref(ged_ref);
     if (!token || !token->controller)
 	return 0;
 
     *area = token->controller->polygons().area(
-		ged_obol_polygon_handle_from_rt_ref(rt_ref),
-		rt_view_context_scale_get(view_ctx));
+	ged_obol_polygon_handle_from_ged_ref(ged_ref),
+		bv_scale_get(ged_obol_bv_const(view_ctx)));
     return 1;
 }
 
@@ -7282,9 +7734,9 @@ ged_draw_obol_view_context_polygon_overlap(
     if (!view_ctx || !other_name || !tol || !overlap)
 	return 0;
 
-    rt_view_polygon_ref rt_ref = ged_obol_rt_polygon_ref_from_ged(ref);
+    ged_draw_view_polygon_ref ged_ref = ref;
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(rt_ref);
+	ged_obol_polygon_token_from_ged_ref(ged_ref);
     if (!token || !token->controller)
 	return 0;
 
@@ -7294,150 +7746,17 @@ ged_draw_obol_view_context_polygon_overlap(
 	return 0;
 
     *overlap = token->controller->polygons().overlaps(
-		   ged_obol_polygon_handle_from_rt_ref(rt_ref),
+		   ged_obol_polygon_handle_from_ged_ref(ged_ref),
 		   other,
 		   *tol,
-		   rt_view_context_scale_get(view_ctx)) ? 1 : 0;
+		   bv_scale_get(ged_obol_bv_const(view_ctx))) ? 1 : 0;
     return 1;
 }
 
-static int
-ged_draw_rt_obol_polygon_owns_ref(rt_view_polygon_ref ref, void *UNUSED(data))
-{
-    return ged_obol_polygon_token_from_rt_ref(ref) ? 1 : 0;
-}
-
-static int
-ged_draw_rt_obol_polygon_record_get(
-    rt_view_polygon_ref ref,
-    struct rt_view_polygon_record *record,
-    void *UNUSED(data))
-{
-    ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
-    if (!token || !token->controller || !record)
-	return 0;
-
-    BRLObolPolygonRecord obol_record;
-    if (!token->controller->polygons().record(
-	    ged_obol_polygon_handle_from_rt_ref(ref), obol_record))
-	return 0;
-    return ged_obol_polygon_record_to_rt(token->controller, ref,
-					 obol_record, record);
-}
-
-static rt_view_polygon_ref
-ged_draw_rt_obol_polygon_create(
-    void *view_ctx,
-    int type,
-    point_t *fp,
-    void *UNUSED(data))
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!fp)
-	return RT_VIEW_POLYGON_REF_NULL;
-    std::string name = ged_obol_polygon_auto_name(controller);
-    return ged_obol_rt_polygon_ref(controller,
-				   ged_obol_polygon_create_named(controller, view_ctx, name.c_str(),
-					   0, type, *fp));
-}
-
-static rt_view_polygon_ref
-ged_draw_rt_obol_polygon_select(
-    void *view_ctx,
-    point_t *cp,
-    void *UNUSED(data))
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !cp)
-	return RT_VIEW_POLYGON_REF_NULL;
-    return ged_obol_rt_polygon_ref(controller,
-				   controller->polygons().selectAtModelPoint(SbVec3f(
-					   static_cast<float>((*cp)[X]),
-					   static_cast<float>((*cp)[Y]),
-					   static_cast<float>((*cp)[Z]))));
-}
-
-static rt_view_polygon_ref
-ged_draw_rt_obol_polygon_find(
-    void *view_ctx,
-    const char *name,
-    void *UNUSED(data))
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name)
-	return RT_VIEW_POLYGON_REF_NULL;
-    return ged_obol_rt_polygon_ref(controller,
-				   controller->polygons().find(name));
-}
-
-static rt_view_polygon_ref
-ged_draw_rt_obol_polygon_dup(
-    void *view_ctx,
-    const char *name,
-    const char *new_name,
-    void *UNUSED(data))
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name || !new_name)
-	return RT_VIEW_POLYGON_REF_NULL;
-    BRLObolPolygonHandle src = controller->polygons().find(name);
-    return ged_obol_rt_polygon_ref(controller,
-				   controller->polygons().duplicate(src, new_name));
-}
-
-struct ged_obol_polygon_visit_context {
-    BRLObolViewController *controller;
-    rt_view_polygon_record_callback_t callback;
-    void *data;
-};
-
-static int
-ged_draw_rt_obol_polygon_visit_cb(const BRLObolPolygonRecord &obol_record,
-				  void *data)
-{
-    ged_obol_polygon_visit_context *ctx =
-	static_cast<ged_obol_polygon_visit_context *>(data);
-    if (!ctx || !ctx->controller || !ctx->callback)
-	return 0;
-
-    rt_view_polygon_ref ref =
-	ged_obol_rt_polygon_ref(ctx->controller, obol_record.handle);
-    struct rt_view_polygon_record record;
-    if (!ged_obol_polygon_record_to_rt(ctx->controller, ref, obol_record,
-				       &record))
-	return 1;
-    return ctx->callback(ref, &record, ctx->data);
-}
-
-static void
-ged_draw_rt_obol_polygon_visit_records(
-    void *view_ctx,
-    rt_view_polygon_record_callback_t callback,
-    void *callback_data,
-    void *UNUSED(data))
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !callback)
-	return;
-
-    ged_obol_polygon_visit_context ctx;
-    ctx.controller = controller;
-    ctx.callback = callback;
-    ctx.data = callback_data;
-    controller->polygons().visitRecords(
-	ged_draw_rt_obol_polygon_visit_cb, &ctx);
-}
-
 static size_t
-ged_draw_rt_obol_polygon_snap_count(
+ged_draw_obol_polygon_snap_count(
     void *view_ctx,
-    rt_view_polygon_ref exclude,
+    ged_draw_view_polygon_ref exclude,
     void *UNUSED(data))
 {
     BRLObolViewController *controller =
@@ -7445,13 +7764,13 @@ ged_draw_rt_obol_polygon_snap_count(
     if (!controller)
 	return 0;
     BRLObolPolygonHandle exclude_handle;
-    if (ged_obol_polygon_token_from_rt_ref(exclude))
-	exclude_handle = ged_obol_polygon_handle_from_rt_ref(exclude);
+    if (ged_obol_polygon_token_from_ged_ref(exclude))
+	exclude_handle = ged_obol_polygon_handle_from_ged_ref(exclude);
     return controller->polygons().snapCount(exclude_handle);
 }
 
 static int
-ged_draw_rt_obol_polygon_clear_point_selection(
+ged_draw_obol_polygon_clear_point_selection(
     void *view_ctx,
     void *UNUSED(data))
 {
@@ -7462,24 +7781,24 @@ ged_draw_rt_obol_polygon_clear_point_selection(
 }
 
 static int
-ged_draw_rt_obol_polygon_update(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_update(
+    ged_draw_view_polygon_ref ref,
     void *UNUSED(view_ctx),
     int utype,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
     return token->controller->polygons().update(
-	       ged_obol_polygon_handle_from_rt_ref(ref),
+	       ged_obol_polygon_handle_from_ged_ref(ref),
 	       ged_obol_polygon_update_from_ged(utype)) ? 1 : 0;
 }
 
 static int
-ged_draw_rt_obol_polygon_update_screen_pt(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_update_screen_pt(
+    ged_draw_view_polygon_ref ref,
     void *view_ctx,
     int x,
     int y,
@@ -7487,17 +7806,17 @@ ged_draw_rt_obol_polygon_update_screen_pt(
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller || !view_ctx)
 	return 0;
 
     point_t model_point = VINIT_ZERO;
-    if (!rt_view_context_screen_point_get(model_point, view_ctx,
+    if (!bv_screen_to_model(model_point, ged_obol_bv_const(view_ctx),
 				       (fastf_t)x, (fastf_t)y))
 	return 0;
 
     return token->controller->polygons().updateModelPoint(
-	       ged_obol_polygon_handle_from_rt_ref(ref),
+	       ged_obol_polygon_handle_from_ged_ref(ref),
 	       SbVec3f(static_cast<float>(model_point[X]),
 		       static_cast<float>(model_point[Y]),
 		       static_cast<float>(model_point[Z])),
@@ -7505,18 +7824,18 @@ ged_draw_rt_obol_polygon_update_screen_pt(
 }
 
 static int
-ged_draw_rt_obol_polygon_move(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_move(
+    ged_draw_view_polygon_ref ref,
     point_t *current_point,
     point_t *previous_point,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller || !current_point || !previous_point)
 	return 0;
     return token->controller->polygons().move(
-	       ged_obol_polygon_handle_from_rt_ref(ref),
+	       ged_obol_polygon_handle_from_ged_ref(ref),
 	       SbVec3f(static_cast<float>((*current_point)[X]),
 		       static_cast<float>((*current_point)[Y]),
 		       static_cast<float>((*current_point)[Z])),
@@ -7526,31 +7845,22 @@ ged_draw_rt_obol_polygon_move(
 }
 
 static int
-ged_draw_rt_obol_polygon_set_name(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_set_name(
+    ged_draw_view_polygon_ref ref,
     const char *name,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller || !name)
 	return 0;
     return token->controller->polygons().rename(
-	       ged_obol_polygon_handle_from_rt_ref(ref), name) ? 1 : 0;
+	       ged_obol_polygon_handle_from_ged_ref(ref), name) ? 1 : 0;
 }
 
 static int
-ged_draw_rt_obol_polygon_set_context(
-    rt_view_polygon_ref ref,
-    void *UNUSED(ctx),
-    void *UNUSED(data))
-{
-    return ged_obol_polygon_token_from_rt_ref(ref) ? 1 : 0;
-}
-
-static int
-ged_draw_rt_obol_polygon_set_visual(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_set_visual(
+    ged_draw_view_polygon_ref ref,
     const struct bu_color *edge_color,
     const struct bu_color *fill_color,
     fastf_t fill_slope_x,
@@ -7561,13 +7871,13 @@ ged_draw_rt_obol_polygon_set_visual(
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
 
     BRLObolPolygonVisual visual;
     (void)token->controller->polygons().visual(
-	ged_obol_polygon_handle_from_rt_ref(ref), visual);
+	ged_obol_polygon_handle_from_ged_ref(ref), visual);
     if (edge_color)
 	visual.edgeColor = ged_obol_polygon_color_from_bu(edge_color);
     if (fill_color)
@@ -7583,197 +7893,376 @@ ged_draw_rt_obol_polygon_set_visual(
     visual.fill = (visual.fillFlags & BRLOBOL_POLYGON_FILL_HATCH) ?
 		  TRUE : FALSE;
     return token->controller->polygons().setVisual(
-	       ged_obol_polygon_handle_from_rt_ref(ref), visual) ? 1 : 0;
+	       ged_obol_polygon_handle_from_ged_ref(ref), visual) ? 1 : 0;
 }
 
 static int
-ged_draw_rt_obol_polygon_set_open(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_set_open(
+    ged_draw_view_polygon_ref ref,
     int open,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
     return token->controller->polygons().setAllContoursOpen(
-	       ged_obol_polygon_handle_from_rt_ref(ref),
+	       ged_obol_polygon_handle_from_ged_ref(ref),
 	       open ? TRUE : FALSE) ? 1 : 0;
 }
 
 static int
-ged_draw_rt_obol_polygon_close(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_close(
+    ged_draw_view_polygon_ref ref,
     void *data)
 {
-    return ged_draw_rt_obol_polygon_set_open(ref, 0, data);
+    return ged_draw_obol_polygon_set_open(ref, 0, data);
 }
 
 static int
-ged_draw_rt_obol_polygon_clear_selected_point(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_clear_selected_point(
+    ged_draw_view_polygon_ref ref,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
     return token->controller->polygons().clearSelectedPoint(
-	       ged_obol_polygon_handle_from_rt_ref(ref)) ? 1 : 0;
+	       ged_obol_polygon_handle_from_ged_ref(ref)) ? 1 : 0;
 }
 
 static int
-ged_draw_rt_obol_polygon_remove(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_remove(
+    ged_draw_view_polygon_ref ref,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
     return token->controller->polygons().remove(
-	       ged_obol_polygon_handle_from_rt_ref(ref)) ? 1 : 0;
+	       ged_obol_polygon_handle_from_ged_ref(ref)) ? 1 : 0;
 }
 
 static void *
-ged_draw_rt_obol_polygon_user_data(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_user_data(
+    ged_draw_view_polygon_ref ref,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     return (token && token->controller) ?
 	   token->controller->polygons().userData(
-	       ged_obol_polygon_handle_from_rt_ref(ref)) : NULL;
+	       ged_obol_polygon_handle_from_ged_ref(ref)) : NULL;
 }
 
 static int
-ged_draw_rt_obol_polygon_user_data_set(
-    rt_view_polygon_ref ref,
+ged_draw_obol_polygon_user_data_set(
+    ged_draw_view_polygon_ref ref,
     void *user_data,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller)
 	return 0;
     return token->controller->polygons().setUserData(
-	       ged_obol_polygon_handle_from_rt_ref(ref), user_data) ? 1 : 0;
+	       ged_obol_polygon_handle_from_ged_ref(ref), user_data) ? 1 : 0;
 }
 
 static int
-ged_draw_rt_obol_polygon_csg(
-    rt_view_polygon_ref target,
-    rt_view_polygon_ref stencil,
+ged_draw_obol_polygon_csg(
+    ged_draw_view_polygon_ref target,
+    ged_draw_view_polygon_ref stencil,
     bg_clip_t op,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *target_token =
-	ged_obol_polygon_token_from_rt_ref(target);
+	ged_obol_polygon_token_from_ged_ref(target);
     ged_obol_polygon_ref_token *stencil_token =
-	ged_obol_polygon_token_from_rt_ref(stencil);
+	ged_obol_polygon_token_from_ged_ref(stencil);
     if (!target_token || !stencil_token || !target_token->controller ||
 	target_token->controller != stencil_token->controller)
 	return 0;
     return target_token->controller->polygons().csg(
-	       ged_obol_polygon_handle_from_rt_ref(target),
-	       ged_obol_polygon_handle_from_rt_ref(stencil),
+	       ged_obol_polygon_handle_from_ged_ref(target),
+	       ged_obol_polygon_handle_from_ged_ref(stencil),
 	       op) ? 1 : 0;
 }
 
-static rt_view_polygon_ref
-ged_draw_rt_obol_polygon_import_sketch_context(
-    const char *name,
-    struct db_i *dbip,
-    struct directory *dp,
-    void *view_ctx,
-    void *UNUSED(data))
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !name)
-	return RT_VIEW_POLYGON_REF_NULL;
-    return ged_obol_rt_polygon_ref(controller,
-				   controller->polygons().importSketch(name,
-					   BRLObolFeatureScope::Shared, dbip, dp));
-}
-
 static struct directory *
-ged_draw_rt_obol_polygon_export_sketch(
+ged_draw_obol_polygon_export_sketch(
     struct db_i *dbip,
     const char *name,
-    rt_view_polygon_ref ref,
+    ged_draw_view_polygon_ref ref,
     void *UNUSED(data))
 {
     ged_obol_polygon_ref_token *token =
-	ged_obol_polygon_token_from_rt_ref(ref);
+	ged_obol_polygon_token_from_ged_ref(ref);
     if (!token || !token->controller || !dbip || !name)
 	return NULL;
     return token->controller->polygons().exportSketch(
-	       ged_obol_polygon_handle_from_rt_ref(ref), dbip, name) ?
+	       ged_obol_polygon_handle_from_ged_ref(ref), dbip, name) ?
 	   db_lookup(dbip, name, LOOKUP_QUIET) : NULL;
 }
 
 static int
-ged_draw_rt_obol_polygon_snap_exclude_set(
+ged_draw_obol_polygon_snap_exclude_set(
     void *view_ctx,
-    rt_view_polygon_ref ref,
+    ged_draw_view_polygon_ref ref,
     void *UNUSED(data))
 {
     BRLObolViewController *controller =
 	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !ged_obol_polygon_token_from_rt_ref(ref))
+    if (!controller || !ged_obol_polygon_token_from_ged_ref(ref))
 	return 0;
     return controller->polygons().setSnapExclude(
-	       ged_obol_polygon_handle_from_rt_ref(ref)) ? 1 : 0;
+	       ged_obol_polygon_handle_from_ged_ref(ref)) ? 1 : 0;
+}
+
+extern "C" ged_draw_view_polygon_ref
+ged_draw_obol_view_context_polygon_select(
+    void *view_ctx,
+    const point_t model_point)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller || !model_point)
+	return GED_DRAW_VIEW_POLYGON_REF_NULL;
+    return ged_obol_ged_polygon_ref(controller,
+	    controller->polygons().selectAtModelPoint(SbVec3f(
+		    static_cast<float>(model_point[X]),
+		    static_cast<float>(model_point[Y]),
+		    static_cast<float>(model_point[Z]))));
+}
+
+extern "C" ged_draw_view_polygon_ref
+ged_draw_obol_view_context_polygon_dup(
+    void *view_ctx,
+    const char *name,
+    const char *new_name)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller || !name || !new_name)
+	return GED_DRAW_VIEW_POLYGON_REF_NULL;
+    BRLObolPolygonHandle src = controller->polygons().find(name);
+    return ged_obol_ged_polygon_ref(controller,
+	    controller->polygons().duplicate(src, new_name));
 }
 
 extern "C" int
-ged_draw_view_context_obol_polygon_adapter_attach(
-    struct ged *gedp,
-    void *view_ctx)
+ged_draw_obol_view_polygon_record_get(
+    ged_draw_view_polygon_ref ref,
+    struct ged_draw_view_polygon_record *record)
 {
-    if (!gedp || !view_ctx)
+    ged_draw_view_polygon_ref ged_ref = ref;
+    ged_obol_polygon_ref_token *token =
+	ged_obol_polygon_token_from_ged_ref(ged_ref);
+    if (!token || !token->controller || !record)
 	return 0;
 
-    struct rt_view_context_polygon_adapter adapter;
-    memset(&adapter, 0, sizeof(adapter));
-    adapter.owns_ref = ged_draw_rt_obol_polygon_owns_ref;
-    adapter.record_get = ged_draw_rt_obol_polygon_record_get;
-    adapter.create = ged_draw_rt_obol_polygon_create;
-    adapter.select = ged_draw_rt_obol_polygon_select;
-    adapter.find = ged_draw_rt_obol_polygon_find;
-    adapter.dup = ged_draw_rt_obol_polygon_dup;
-    adapter.visit_records = ged_draw_rt_obol_polygon_visit_records;
-    adapter.snap_count = ged_draw_rt_obol_polygon_snap_count;
-    adapter.clear_point_selection =
-	ged_draw_rt_obol_polygon_clear_point_selection;
-    adapter.update = ged_draw_rt_obol_polygon_update;
-    adapter.update_screen_pt = ged_draw_rt_obol_polygon_update_screen_pt;
-    adapter.move = ged_draw_rt_obol_polygon_move;
-    adapter.set_name = ged_draw_rt_obol_polygon_set_name;
-    adapter.set_context = ged_draw_rt_obol_polygon_set_context;
-    adapter.set_visual = ged_draw_rt_obol_polygon_set_visual;
-    adapter.set_open = ged_draw_rt_obol_polygon_set_open;
-    adapter.close = ged_draw_rt_obol_polygon_close;
-    adapter.clear_selected_point =
-	ged_draw_rt_obol_polygon_clear_selected_point;
-    adapter.remove = ged_draw_rt_obol_polygon_remove;
-    adapter.user_data = ged_draw_rt_obol_polygon_user_data;
-    adapter.user_data_set = ged_draw_rt_obol_polygon_user_data_set;
-    adapter.csg = ged_draw_rt_obol_polygon_csg;
-    adapter.import_sketch_context =
-	ged_draw_rt_obol_polygon_import_sketch_context;
-    adapter.export_sketch = ged_draw_rt_obol_polygon_export_sketch;
-    adapter.snap_exclude_set = ged_draw_rt_obol_polygon_snap_exclude_set;
-    adapter.data = gedp;
-    return rt_view_context_polygon_adapter_set(view_ctx, &adapter);
+    BRLObolPolygonRecord obol_record;
+    if (!token->controller->polygons().record(
+	    ged_obol_polygon_handle_from_ged_ref(ged_ref), obol_record))
+	return 0;
+    return ged_obol_polygon_record_to_ged(token->controller, ref,
+	    obol_record, record);
 }
 
-struct ged_obol_selection_path_callback_context {
-    rt_view_selection_path_callback_t callback;
+struct ged_obol_polygon_ged_visit_context {
+    BRLObolViewController *controller;
+    ged_draw_view_polygon_record_cb callback;
     void *data;
 };
+
+static int
+ged_draw_obol_polygon_visit_ged_cb(const BRLObolPolygonRecord &obol_record,
+				   void *data)
+{
+    ged_obol_polygon_ged_visit_context *ctx =
+	static_cast<ged_obol_polygon_ged_visit_context *>(data);
+    if (!ctx || !ctx->controller || !ctx->callback)
+	return 0;
+
+    ged_draw_view_polygon_ref ref =
+	ged_obol_ged_polygon_ref(ctx->controller, obol_record.handle);
+    struct ged_draw_view_polygon_record record;
+    if (!ged_obol_polygon_record_to_ged(ctx->controller, ref, obol_record,
+	    &record))
+	return 1;
+    return ctx->callback(ref, &record, ctx->data);
+}
+
+extern "C" void
+ged_draw_obol_view_context_polygon_visit_records(
+    void *view_ctx,
+    ged_draw_view_polygon_record_cb callback,
+    void *data)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller || !callback)
+	return;
+
+    ged_obol_polygon_ged_visit_context ctx;
+    ctx.controller = controller;
+    ctx.callback = callback;
+    ctx.data = data;
+    controller->polygons().visitRecords(
+	    ged_draw_obol_polygon_visit_ged_cb, &ctx);
+}
+
+extern "C" size_t
+ged_draw_obol_view_context_polygon_snap_count(
+    void *view_ctx,
+    ged_draw_view_polygon_ref exclude)
+{
+    return ged_draw_obol_polygon_snap_count(view_ctx,
+	    exclude, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_context_polygon_clear_point_selection(void *view_ctx)
+{
+    return ged_draw_obol_polygon_clear_point_selection(view_ctx, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_context_polygon_snap_exclude_set(
+    void *view_ctx,
+    ged_draw_view_polygon_ref ref)
+{
+    return ged_draw_obol_polygon_snap_exclude_set(view_ctx,
+	    ref, NULL);
+}
+
+extern "C" struct directory *
+ged_draw_obol_view_polygon_export_sketch(
+    struct db_i *dbip,
+    const char *name,
+    ged_draw_view_polygon_ref ref)
+{
+    return ged_draw_obol_polygon_export_sketch(dbip, name,
+	    ref, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_context_polygon_update(
+    ged_draw_view_polygon_ref ref,
+    void *view_ctx,
+    int op)
+{
+    return ged_draw_obol_polygon_update(
+	    ref, view_ctx, op, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_context_polygon_update_screen_pt(
+    ged_draw_view_polygon_ref ref,
+    void *view_ctx,
+    int x,
+    int y,
+    int op)
+{
+    return ged_draw_obol_polygon_update_screen_pt(
+	    ref, view_ctx, x, y, op, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_move(
+    ged_draw_view_polygon_ref ref,
+    point_t *current_point,
+    point_t *previous_point)
+{
+    return ged_draw_obol_polygon_move(
+	    ref, current_point,
+	    previous_point, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_set_name(
+    ged_draw_view_polygon_ref ref,
+    const char *name)
+{
+    return ged_draw_obol_polygon_set_name(
+	    ref, name, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_set_visual(
+    ged_draw_view_polygon_ref ref,
+    const struct bu_color *edge_color,
+    const struct bu_color *fill_color,
+    fastf_t fill_slope_x,
+    fastf_t fill_slope_y,
+    fastf_t fill_density,
+    fastf_t vZ,
+    int fill_flag)
+{
+    return ged_draw_obol_polygon_set_visual(
+	    ref, edge_color, fill_color,
+	    fill_slope_x, fill_slope_y, fill_density, vZ, fill_flag, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_set_all_contours_open(
+    ged_draw_view_polygon_ref ref,
+    int open)
+{
+    return ged_draw_obol_polygon_set_open(
+	    ref, open, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_close(ged_draw_view_polygon_ref ref)
+{
+    return ged_draw_obol_polygon_close(
+	    ref, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_clear_selected_point(
+    ged_draw_view_polygon_ref ref)
+{
+    return ged_draw_obol_polygon_clear_selected_point(
+	    ref, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_remove(ged_draw_view_polygon_ref ref)
+{
+    return ged_draw_obol_polygon_remove(
+	    ref, NULL);
+}
+
+extern "C" void *
+ged_draw_obol_view_polygon_user_data(ged_draw_view_polygon_ref ref)
+{
+    return ged_draw_obol_polygon_user_data(
+	    ref, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_user_data_set(
+    ged_draw_view_polygon_ref ref,
+    void *user_data)
+{
+    return ged_draw_obol_polygon_user_data_set(
+	    ref, user_data, NULL);
+}
+
+extern "C" int
+ged_draw_obol_view_polygon_csg(
+    ged_draw_view_polygon_ref target,
+    ged_draw_view_polygon_ref stencil,
+    bg_clip_t op)
+{
+    return ged_draw_obol_polygon_csg(
+	    target,
+	    stencil, op, NULL);
+}
 
 static int
 ged_obol_selection_kind_from_ged(int kind)
@@ -7790,24 +8279,14 @@ ged_obol_selection_kind_from_ged(int kind)
     }
 }
 
-static void
-ged_obol_selection_path_callback(const SbString &path, void *data)
-{
-    struct ged_obol_selection_path_callback_context *ctx =
-	    static_cast<struct ged_obol_selection_path_callback_context *>(data);
-    const char *path_str = path.getString();
-    if (ctx && ctx->callback && path_str && path_str[0])
-	ctx->callback(path_str, ctx->data);
-}
-
 static int
-ged_draw_rt_obol_selection_available(void *view_ctx, void *UNUSED(data))
+ged_draw_obol_selection_available_impl(void *view_ctx)
 {
     return ged_obol_view_controller_ensure_for_context(view_ctx, 1) ? 1 : 0;
 }
 
 static size_t
-ged_draw_rt_obol_selection_count(void *view_ctx, void *UNUSED(data))
+ged_draw_obol_selection_count_impl(void *view_ctx)
 {
     BRLObolViewController *controller =
 	ged_obol_view_controller_ensure_for_context(view_ctx, 1);
@@ -7818,53 +8297,7 @@ ged_draw_rt_obol_selection_count(void *view_ctx, void *UNUSED(data))
 }
 
 static int
-ged_draw_rt_obol_selection_set_pick_result_context(
-    void *view_ctx,
-    const void *result_ctx,
-    rt_view_selection_path_callback_t callback,
-    void *callback_data,
-    void *UNUSED(data))
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_ensure_for_context(view_ctx, 1);
-    if (!controller)
-	return 0;
-
-    BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
-    std::vector<BRLObolSelectionRecord> records;
-
-    size_t result_count = result_ctx ?
-			  rt_view_pick_result_context_count(result_ctx) : 0;
-    for (size_t i = 0; i < result_count; i++) {
-	struct bu_vls path = BU_VLS_INIT_ZERO;
-	if (!rt_view_pick_result_context_path(result_ctx, i, &path)) {
-	    bu_vls_free(&path);
-	    continue;
-	}
-	const char *normalized =
-	    ged_obol_skip_leading_slash(bu_vls_cstr(&path));
-	if (normalized && normalized[0]) {
-	    BRLObolSelectionRecord record;
-	    record.path = normalized;
-	    record.kind = BRLOBOL_SELECTION_SELECTED_PATH;
-	    record.hitDistance =
-		rt_view_pick_result_context_hit_dist(result_ctx, i);
-	    record.owner = owner;
-	    records.push_back(record);
-	}
-	bu_vls_free(&path);
-    }
-
-    struct ged_obol_selection_path_callback_context cb_ctx;
-    cb_ctx.callback = callback;
-    cb_ctx.data = callback_data;
-    return controller->selection().applyPickResults(records,
-	    callback ? ged_obol_selection_path_callback : NULL,
-	    &cb_ctx, &owner) ? 1 : 0;
-}
-
-static int
-ged_draw_rt_obol_selection_clear(void *view_ctx, void *UNUSED(data))
+ged_draw_obol_selection_clear_impl(void *view_ctx)
 {
     BRLObolViewController *controller =
 	ged_obol_view_controller_ensure_for_context(view_ctx, 1);
@@ -7876,34 +8309,15 @@ ged_draw_rt_obol_selection_clear(void *view_ctx, void *UNUSED(data))
 }
 
 extern "C" int
-ged_draw_view_context_obol_selection_adapter_attach(
-    struct ged *gedp,
-    void *view_ctx)
-{
-    if (!gedp || !view_ctx)
-	return 0;
-
-    struct rt_view_context_selection_adapter adapter;
-    memset(&adapter, 0, sizeof(adapter));
-    adapter.available = ged_draw_rt_obol_selection_available;
-    adapter.count = ged_draw_rt_obol_selection_count;
-    adapter.set_pick_result_context =
-	ged_draw_rt_obol_selection_set_pick_result_context;
-    adapter.clear = ged_draw_rt_obol_selection_clear;
-    adapter.data = gedp;
-    return rt_view_context_selection_adapter_set(view_ctx, &adapter);
-}
-
-extern "C" int
 ged_draw_obol_view_context_selection_available(void *view_ctx)
 {
-    return ged_draw_rt_obol_selection_available(view_ctx, NULL);
+    return ged_draw_obol_selection_available_impl(view_ctx);
 }
 
 extern "C" size_t
 ged_draw_obol_view_context_selection_count(void *view_ctx)
 {
-    return ged_draw_rt_obol_selection_count(view_ctx, NULL);
+    return ged_draw_obol_selection_count_impl(view_ctx);
 }
 
 struct ged_obol_selection_foreach_context {
@@ -7957,7 +8371,7 @@ ged_draw_obol_view_context_selection_path_foreach(
 extern "C" int
 ged_draw_obol_view_context_selection_clear(void *view_ctx)
 {
-    return ged_draw_rt_obol_selection_clear(view_ctx, NULL);
+    return ged_draw_obol_selection_clear_impl(view_ctx);
 }
 
 extern "C" int
@@ -16867,7 +17281,7 @@ ged_obol_progressive_advance_provider(
     }
 
     if (local_status.hasMore && view_ctx)
-	rt_view_context_refresh_request(view_ctx, GED_VIEW_REFRESH_DRAW);
+	bv_refresh_request(ged_obol_bv(view_ctx), GED_VIEW_REFRESH_DRAW);
     if (local_status.changed || local_status.hasMore)
 	controller->requestRender(local_status.changed ?
 				  "ged-progressive-update" : "ged-progressive-pending");
@@ -19156,9 +19570,7 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
 
     SoBRLSceneController *shared_scene =
 	ged_draw_obol_scene_controller_ensure(gedp, sync_current_scene);
-    if (!shared_scene ||
-	!ged_obol_bind_view_render_root(view_ctx, shared_scene,
-					view_controller))
+    if (!shared_scene)
 	return 0;
 
     std::vector<ged_obol_attached_controller> *entries =
@@ -19176,6 +19588,21 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
 			   static_cast<std::vector<ged_obol_attached_controller>::difference_type>(i));
 	    break;
 	}
+    }
+
+    if (view_ctx) {
+	(void)ged_view_context_host_attach(gedp, view_ctx);
+	if (!ged_view_context_obol_attachment_bind(view_ctx,
+		view_controller->getViewAttachment()))
+	    return 0;
+    }
+
+    if (!ged_obol_bind_view_render_root(view_ctx, shared_scene,
+	    view_controller)) {
+	if (view_ctx)
+	    (void)ged_view_context_obol_attachment_unbind(view_ctx,
+		    view_controller->getViewAttachment());
+	return 0;
     }
 
     ged_obol_attached_controller entry;
@@ -19251,6 +19678,20 @@ ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
 {
     return ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
 	    static_cast<BRLObolViewController *>(controller),
+	    sync_current_scene);
+}
+
+extern "C" void *
+ged_draw_obol_controller_opaque_for_view(void *view_ctx)
+{
+    return ged_obol_view_controller_for_context(view_ctx);
+}
+
+extern "C" void *
+ged_draw_obol_controller_ensure_opaque_for_view(void *view_ctx,
+	int sync_current_scene)
+{
+    return ged_obol_view_controller_ensure_for_context(view_ctx,
 	    sync_current_scene);
 }
 

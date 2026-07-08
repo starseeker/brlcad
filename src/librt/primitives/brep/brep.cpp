@@ -73,9 +73,9 @@ extern "C" {
     void rt_brep_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp);
     void rt_brep_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct uvcoord *uvp);
     void rt_brep_free(struct soltab *stp);
-    int rt_brep_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size);
-    int rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *info);
-    int rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *UNUSED(info));
+    int rt_brep_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size);
+    int rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
+    int rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *UNUSED(info));
     int rt_brep_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol);
     int rt_brep_get(struct bu_vls *logstr, const struct rt_db_internal *intern, const char *attr);
     int rt_brep_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, const char **argv);
@@ -1930,7 +1930,7 @@ brep_est_avg_curve_len(struct rt_brep_internal *bi)
 }
 
 static int
-rt_brep_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct rt_view_info *v, fastf_t UNUSED(s_size))
+rt_brep_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct bv_view_info *v, fastf_t UNUSED(s_size))
 {
     TRACE1("rt_brep_lod_line_set");
     struct rt_brep_internal* bi;
@@ -1949,7 +1949,7 @@ rt_brep_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt
     sink.realization = realization;
     sink.ok = 1;
 
-    fastf_t point_spacing = rt_view_solid_point_spacing(v, brep_est_avg_curve_len(bi) * M_2_PI * 2.0);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, brep_est_avg_curve_len(bi) * M_2_PI * 2.0);
 
     ON_Brep* brep = bi->brep;
     int gridres = 10;
@@ -2038,7 +2038,7 @@ rt_brep_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt
 }
 
 int
-rt_brep_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_brep_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -2161,7 +2161,7 @@ rt_brep_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 
 
 int
-rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *tol, const struct rt_view_info *UNUSED(info))
+rt_brep_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
 {
     TRACE1("rt_brep_plot");
 
@@ -3191,7 +3191,7 @@ rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
 			 struct rt_db_internal *ip,
 			 const struct bg_tess_tol *ttol,
 			 const struct bn_tol *tol,
-			 const struct rt_view_info *UNUSED(info))
+			 const struct bv_view_info *UNUSED(info))
 {
     int *faces = NULL;
     int face_count = 0;

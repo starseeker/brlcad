@@ -2357,7 +2357,7 @@ draw_pipe_end_adaptive(
 
 
 static int
-rt_pipe_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct rt_view_info *v, fastf_t s_size)
+rt_pipe_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct bv_view_info *v, fastf_t s_size)
 {
     struct rt_pipe_internal *pipeobj;
     struct pipe_segment *cur_seg;
@@ -2373,10 +2373,10 @@ rt_pipe_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt
 	return 0;
     }
 
-    fastf_t point_spacing = rt_view_solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
     cur_seg->connecting_arcs = pipe_connecting_arcs(pipeobj,
-	    rt_view_lod_curve_scale(v), s_size);
+	    bv_view_lod_curve_scale(v), s_size);
 
     struct pipe_line_sink sink;
     sink.vlfree = NULL;
@@ -2407,7 +2407,7 @@ rt_pipe_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt
 
 
 int
-rt_pipe_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_pipe_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -2487,7 +2487,7 @@ rt_pipe_plot(
     struct rt_db_internal *ip,
     const struct bg_tess_tol *UNUSED(ttol),
     const struct bn_tol *UNUSED(tol),
-    const struct rt_view_info *UNUSED(info))
+    const struct bv_view_info *UNUSED(info))
 {
     struct rt_pipe_internal *pip;
 

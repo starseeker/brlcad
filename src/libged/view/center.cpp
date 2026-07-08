@@ -34,6 +34,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -53,9 +55,8 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get view center */
     if (argc == 1) {
-	mat_t view_center;
-	rt_view_context_center_get(view_center, view_ctx);
-	MAT_DELTAS_GET_NEG(center, view_center);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	bv_center_get(center, view);
 	if (gedp->dbip)
 	    VSCALE(center, center, gedp->dbip->dbi_base2local);
 	bn_encode_vect(gedp->ged_result_str, center, 1);
@@ -65,9 +66,8 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 
     if (argc == 2 && BU_STR_EQUAL(argv[1], "-v")) {
 	std::ostringstream ss;
-	mat_t view_center;
-	rt_view_context_center_get(view_center, view_ctx);
-	MAT_DELTAS_GET_NEG(center, view_center);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	bv_center_get(center, view);
 	if (gedp->dbip)
 	    VSCALE(center, center, gedp->dbip->dbi_base2local);
 	ss << std::fixed << std::setprecision(std::numeric_limits<fastf_t>::max_digits10) << center[X];
@@ -152,8 +152,9 @@ ged_center_core(struct ged *gedp, int argc, const char *argv[])
 
     if (gedp->dbip)
 	VSCALE(center, center, gedp->dbip->dbi_local2base);
-    rt_view_context_center_set(view_ctx, center);
-    rt_view_context_update(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_center_set(view, center);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

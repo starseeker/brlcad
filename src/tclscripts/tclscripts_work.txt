@@ -29,8 +29,6 @@ Relevant C/C++ already present:
 * include/rt/primitives/sketch.h
 * src/librt/edit.cpp
 * src/librt/primitives/sketch/edsketch.c
-* include/rt/edit_legacy_bsg.h
-* src/librt/view_legacy_bsg.c
 * include/qtcad/QgSketchFilter.h
 * src/libqtcad/QgSketchFilter.cpp
 * src/libqtcad/tests/qsketch.cpp
@@ -50,7 +48,8 @@ The likely end state is a toolkit-agnostic sketch edit controller:
 * rt_edit/edsketch owns primitive mutation, validation, snapping-sensitive
   model/sketch/view coordinate transforms, and command execution;
 * libged exposes command-friendly edit operations and descriptors;
-* Obol/BSG/libqtcad expose the interactive selection/handle/overlay layer.
+* Obol/libbrlobol/libqtcad expose the interactive selection/handle/overlay
+  layer.
 
 One design question is whether the reusable interactive layer should be framed
 as a BRL-CAD Obol widget: a sketch editing object that can be hosted by qged,

@@ -315,30 +315,30 @@ work:
     else
 	return TCL_OK;
 
-    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = mged_view_context_view(view_state->vs_gvp);
     while (!feof(fp) &&
 	   rt_read(fp, &scale, eye_model, rot) >= 0) {
 	switch (mode) {
 	    case -1:
 		/* First step:  put eye in center */
-		rt_view_context_scale_set(view_ctx, scale);
-		rt_view_context_rotation_set(view_ctx, rot);
-		rt_view_context_center_set(view_ctx, eye_model);
+		bv_scale_set(view, scale);
+		bv_rotation_set(view, rot);
+		bv_center_set(view, eye_model);
 		new_mats(s);
 		/* Second step:  put eye in front */
 		VSET(xlate, 0.0, 0.0, -1.0);	/* correction factor */
 		mat_t view2model;
-		rt_view_context_view2model_get(view2model, view_ctx);
+		bv_view2model_get(view2model, view);
 		MAT4X3PNT(eye_model, view2model, xlate);
-		rt_view_context_center_set(view_ctx, eye_model);
+		bv_center_set(view, eye_model);
 		new_mats(s);
 		break;
 	    case 0: {
 		mat_t top_view;
 		MAT_IDN(top_view);
-		rt_view_context_scale_set(view_ctx, scale);
-		rt_view_context_rotation_set(view_ctx, top_view);	/* top view */
-		rt_view_context_center_set(view_ctx, eye_model);
+		bv_scale_set(view, scale);
+		bv_rotation_set(view, top_view);	/* top view */
+		bv_center_set(view, eye_model);
 		new_mats(s);
 		break;
 	    }

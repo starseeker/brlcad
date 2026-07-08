@@ -30,9 +30,15 @@
 #include "vmath.h"
 #include "bg/plane.h"
 #include "bn/mat.h"
+#include "bn/qmath.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bv/view.h"
+
+struct bv_context_callback_record {
+    bv_context_callback_t callback;
+    void *client_data;
+};
 
 static void
 bv_mat_aet(struct bv *v)
@@ -105,6 +111,8 @@ bv_init(struct bv *v)
     MAT_IDN(v->pmat);
     v->radius = 1.0;
     bv_knobs_reset(&v->knobs, BV_KNOBS_ALL);
+    bv_faceplate_defaults(v);
+    bv_snap_defaults(v);
     bv_mat_aet(v);
     bv_update(v);
 }
@@ -123,6 +131,140 @@ int
 bv_is_valid(const struct bv *v)
 {
     return (v && v->magic == BV_STATE_MAGIC);
+}
+
+void
+bv_view_info_init(struct bv_view_info *info)
+{
+    struct bv_view_info defaults = BV_VIEW_INFO_INIT;
+    if (info)
+	*info = defaults;
+}
+
+void
+bv_view_info_sanitize(struct bv_view_info *info)
+{
+    if (!info)
+	return;
+
+    if (info->width <= 0)
+	info->width = 1;
+    if (info->height <= 0)
+	info->height = 1;
+    if (info->size <= SMALL_FASTF)
+	info->size = 1.0;
+    if (info->lod.scale <= SMALL_FASTF)
+	info->lod.scale = 1.0;
+    if (info->lod.curve_scale <= SMALL_FASTF)
+	info->lod.curve_scale = 1.0;
+    if (info->lod.point_scale <= SMALL_FASTF)
+	info->lod.point_scale = 1.0;
+}
+
+void
+bv_lod_policy_init(struct bv_lod_policy *policy)
+{
+    struct bv_lod_policy defaults = BV_LOD_POLICY_INIT;
+    if (policy)
+	*policy = defaults;
+}
+
+void
+bv_lod_policy_sanitize(struct bv_lod_policy *policy)
+{
+    if (!policy)
+	return;
+
+    if (policy->scale <= SMALL_FASTF)
+	policy->scale = 1.0;
+    if (policy->curve_scale <= SMALL_FASTF)
+	policy->curve_scale = 1.0;
+    if (policy->point_scale <= SMALL_FASTF)
+	policy->point_scale = 1.0;
+}
+
+static struct bv_lod_settings
+bv_view_lod_policy(const struct bv_view_info *info)
+{
+    struct bv_lod_settings policy = BV_LOD_SETTINGS_INIT;
+    if (info)
+	policy = info->lod;
+    if (policy.curve_scale <= SMALL_FASTF)
+	policy.curve_scale = 1.0;
+    if (policy.point_scale <= SMALL_FASTF)
+	policy.point_scale = 1.0;
+    if (policy.scale <= SMALL_FASTF)
+	policy.scale = 1.0;
+    return policy;
+}
+
+fastf_t
+bv_view_lod_curve_scale(const struct bv_view_info *info)
+{
+    return bv_view_lod_policy(info).curve_scale;
+}
+
+size_t
+bv_view_lod_bot_threshold(const struct bv_view_info *info)
+{
+    return bv_view_lod_policy(info).bot_threshold;
+}
+
+static fastf_t
+bv_view_avg_size(const struct bv_view_info *info)
+{
+    fastf_t view_aspect, x_size, y_size;
+
+    if (!info || info->width <= 0 || info->height <= 0 || info->size <= SMALL_FASTF)
+	return 1.0;
+
+    view_aspect = (fastf_t)info->width / info->height;
+    x_size = info->size;
+    y_size = x_size / view_aspect;
+
+    return (x_size + y_size) / 2.0;
+}
+
+fastf_t
+bv_view_avg_sample_spacing(const struct bv_view_info *info)
+{
+    fastf_t avg_view_size, avg_view_samples;
+
+    if (!info || info->width <= 0 || info->height <= 0)
+	return 1.0;
+
+    avg_view_size = bv_view_avg_size(info);
+    avg_view_samples = (info->width + info->height) / 2.0;
+
+    return avg_view_size / avg_view_samples;
+}
+
+fastf_t
+bv_view_solid_point_spacing(const struct bv_view_info *info, fastf_t solid_width)
+{
+    fastf_t radius, avg_view_size, avg_sample_spacing;
+    point2d_t p1, p2;
+
+    if (solid_width < SQRT_SMALL_FASTF)
+	solid_width = SQRT_SMALL_FASTF;
+
+    avg_view_size = bv_view_avg_size(info);
+
+    radius = solid_width / 4.0;
+    if (avg_view_size < solid_width)
+	radius = avg_view_size / 4.0;
+
+    p1[Y] = radius;
+    p1[X] = 0.0;
+
+    avg_sample_spacing = bv_view_avg_sample_spacing(info);
+    if (avg_sample_spacing < radius)
+	p2[Y] = radius - avg_sample_spacing;
+    else
+	p2[Y] = radius;
+    p2[X] = sqrt((radius * radius) - (p2[Y] * p2[Y]));
+
+    return DIST_PNT2_PNT2(p1, p2) / bv_view_lod_policy(info).point_scale;
 }
 
 int
@@ -185,6 +327,15 @@ bv_copy(struct bv *dst, const struct bv *src)
     VMOVE(dst->obb_extent3, src->obb_extent3);
     dst->radius = src->radius;
     dst->knobs = src->knobs;
+    dst->interactive_rect = src->interactive_rect;
+    dst->adc = src->adc;
+    dst->grid = src->grid;
+    dst->model_axes = src->model_axes;
+    dst->view_axes = src->view_axes;
+    dst->center_dot = src->center_dot;
+    dst->scale_overlay = src->scale_overlay;
+    dst->params = src->params;
+    dst->snap = src->snap;
     return 1;
 }
 
@@ -229,6 +380,157 @@ bv_dimensions_set(struct bv *v, int width, int height)
 
     v->width = width;
     v->height = height;
+    return 1;
+}
+
+int
+bv_width_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->width : 0;
+}
+
+int
+bv_height_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->height : 0;
+}
+
+fastf_t
+bv_scale_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->scale : 1.0;
+}
+
+fastf_t *
+bv_scale_storage_get(struct bv *v)
+{
+    return bv_is_valid(v) ? &v->scale : NULL;
+}
+
+fastf_t
+bv_initial_scale_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->initial_scale : 1.0;
+}
+
+int
+bv_initial_scale_set(struct bv *v, fastf_t scale)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->initial_scale = scale;
+    v->frame_revision++;
+    return 1;
+}
+
+fastf_t
+bv_absolute_scale_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->absolute_scale : 0.0;
+}
+
+int
+bv_absolute_scale_set(struct bv *v, fastf_t scale)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->absolute_scale = scale;
+    v->frame_revision++;
+    return 1;
+}
+
+fastf_t
+bv_size_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->size : 0.0;
+}
+
+fastf_t
+bv_inverse_size_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->inverse_size : 1.0;
+}
+
+fastf_t
+bv_radius_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->radius : 1.0;
+}
+
+fastf_t
+bv_perspective_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->perspective : 0.0;
+}
+
+int
+bv_perspective_set(struct bv *v, fastf_t perspective)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->perspective = perspective;
+    v->frame_revision++;
+    return 1;
+}
+
+fastf_t
+bv_local2base_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->local2base : 1.0;
+}
+
+fastf_t
+bv_base2local_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->base2local : 1.0;
+}
+
+int
+bv_unit_conversion_set(struct bv *v, fastf_t local2base, fastf_t base2local)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->local2base = local2base;
+    v->base2local = base2local;
+    v->frame_revision++;
+    return 1;
+}
+
+char
+bv_coord_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->coord_mode : 'v';
+}
+
+int
+bv_coord_set(struct bv *v, char coord)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->coord_mode = coord;
+    v->frame_revision++;
+    return 1;
+}
+
+char
+bv_rotate_about_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->rotate_about : 'v';
+}
+
+int
+bv_rotate_about_set(struct bv *v, char rotate_about)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->rotate_about = rotate_about;
+    v->frame_revision++;
     return 1;
 }
 
@@ -331,6 +633,49 @@ bv_refresh_drawn_count_set(struct bv *v, int count)
     return 1;
 }
 
+uint64_t
+bv_frame_revision_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->frame_revision : 0;
+}
+
+uint64_t
+bv_frame_revision_bump(struct bv *v)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->frame_revision++;
+    return v->frame_revision;
+}
+
+unsigned long long
+bv_hash(const struct bv *v)
+{
+    struct bu_data_hash_state *state;
+    unsigned long long hv;
+
+    if (!bv_is_valid(v))
+	return 0ULL;
+
+    state = bu_data_hash_create();
+    if (!state)
+	return 0ULL;
+
+    bu_data_hash_update(state, &v->width, sizeof(v->width));
+    bu_data_hash_update(state, &v->height, sizeof(v->height));
+    bu_data_hash_update(state, &v->scale, sizeof(v->scale));
+    bu_data_hash_update(state, &v->size, sizeof(v->size));
+    bu_data_hash_update(state, &v->perspective, sizeof(v->perspective));
+    bu_data_hash_update(state, &v->aet, sizeof(v->aet));
+    bu_data_hash_update(state, &v->rotation, sizeof(v->rotation));
+    bu_data_hash_update(state, &v->center, sizeof(v->center));
+    bu_data_hash_update(state, &v->model2view, sizeof(v->model2view));
+    hv = bu_data_hash_val(state);
+    bu_data_hash_destroy(state);
+    return hv;
+}
+
 int
 bv_frametime_set(struct bv *v, uint64_t frametime)
 {
@@ -395,6 +740,391 @@ bv_cleared_set(struct bv *v, int cleared)
     return 1;
 }
 
+void
+bv_faceplate_defaults(struct bv *v)
+{
+    struct bv_interactive_rect_state rect = BV_INTERACTIVE_RECT_STATE_INIT;
+    struct bv_adc_state adc = BV_ADC_STATE_INIT;
+    struct bv_grid_state grid = BV_GRID_STATE_INIT;
+    struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
+    struct bv_axes_state view_axes = BV_AXES_STATE_INIT;
+    struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
+    struct bv_other_state scale_overlay = BV_OTHER_STATE_INIT;
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+
+    if (!bv_is_valid(v))
+	return;
+
+    grid.res_h = 1.0;
+    grid.res_v = 1.0;
+    grid.res_major_h = 5;
+    grid.res_major_v = 5;
+    VSET(grid.color, 255, 255, 255);
+
+    VSET(view_axes.axes_pos, 0.80, -0.80, 0.0);
+    view_axes.axes_size = 0.2;
+    view_axes.pos_only = 1;
+    view_axes.label_flag = 1;
+    view_axes.triple_color = 1;
+    VSET(view_axes.axes_color, 255, 255, 255);
+    VSET(view_axes.label_color, 255, 255, 0);
+
+    model_axes.axes_size = 2.0;
+    model_axes.label_flag = 1;
+    model_axes.tick_enabled = 1;
+    model_axes.tick_length = 4;
+    model_axes.tick_major_length = 8;
+    model_axes.tick_interval = 100.0;
+    model_axes.ticks_per_major = 10;
+    model_axes.tick_threshold = 8;
+    VSET(model_axes.axes_color, 255, 255, 255);
+    VSET(model_axes.label_color, 255, 255, 0);
+    VSET(model_axes.tick_color, 255, 255, 0);
+    VSET(model_axes.tick_major_color, 255, 0, 0);
+
+    center_dot.gos_font_size = 20;
+    VSET(center_dot.gos_line_color, 255, 255, 0);
+
+    scale_overlay.gos_font_size = 20;
+    VSET(scale_overlay.gos_line_color, 255, 255, 0);
+    VSET(scale_overlay.gos_text_color, 255, 255, 0);
+
+    params.draw_size = 1;
+    params.draw_center = 1;
+    params.draw_az = 1;
+    params.draw_el = 1;
+    params.draw_tw = 1;
+    VSET(params.color, 255, 255, 0);
+    params.font_size = 20;
+
+    v->interactive_rect = rect;
+    v->adc = adc;
+    v->grid = grid;
+    v->model_axes = model_axes;
+    v->view_axes = view_axes;
+    v->center_dot = center_dot;
+    v->scale_overlay = scale_overlay;
+    v->params = params;
+}
+
+void
+bv_snap_defaults(struct bv *v)
+{
+    struct bv_snap_state snap = BV_SNAP_STATE_INIT;
+
+    if (!bv_is_valid(v))
+	return;
+
+    v->snap = snap;
+}
+
+#define BV_STATE_GET(_type, _init, _member) \
+int \
+bv_ ## _member ## _state_get(struct _type *record, const struct bv *v) \
+{ \
+    if (!record) \
+	return 0; \
+    if (!bv_is_valid(v)) { \
+	struct _type zero = _init; \
+	*record = zero; \
+	return 0; \
+    } \
+    *record = v->_member; \
+    return 1; \
+}
+
+#define BV_STATE_SET(_type, _member) \
+int \
+bv_ ## _member ## _state_set(struct bv *v, const struct _type *record) \
+{ \
+    if (!bv_is_valid(v) || !record) \
+	return 0; \
+    v->_member = *record; \
+    return 1; \
+}
+
+BV_STATE_GET(bv_adc_state, BV_ADC_STATE_INIT, adc)
+BV_STATE_SET(bv_adc_state, adc)
+
+void
+bv_adc_model_to_view(struct bv_adc_state *adcs, mat_t model2view, fastf_t amax)
+{
+    if (!adcs || !model2view)
+	return;
+
+    MAT4X3PNT(adcs->pos_view, model2view, adcs->pos_model);
+    adcs->dv_x = adcs->pos_view[X] * amax;
+    adcs->dv_y = adcs->pos_view[Y] * amax;
+}
+
+void
+bv_adc_grid_to_view(struct bv_adc_state *adcs, mat_t model2view, fastf_t amax)
+{
+    point_t model_pt = VINIT_ZERO;
+    point_t view_pt;
+
+    if (!adcs || !model2view)
+	return;
+
+    MAT4X3PNT(view_pt, model2view, model_pt);
+    VADD2(adcs->pos_view, view_pt, adcs->pos_grid);
+    adcs->dv_x = adcs->pos_view[X] * amax;
+    adcs->dv_y = adcs->pos_view[Y] * amax;
+}
+
+void
+bv_adc_view_to_grid(struct bv_adc_state *adcs, mat_t model2view)
+{
+    point_t model_pt = VINIT_ZERO;
+    point_t view_pt;
+
+    if (!adcs || !model2view)
+	return;
+
+    MAT4X3PNT(view_pt, model2view, model_pt);
+    VSUB2(adcs->pos_grid, adcs->pos_view, view_pt);
+}
+
+void
+bv_adc_reset(struct bv_adc_state *adcs, mat_t view2model, mat_t model2view)
+{
+    if (!adcs || !view2model || !model2view)
+	return;
+
+    adcs->dv_x = adcs->dv_y = 0;
+    adcs->dv_a1 = adcs->dv_a2 = 0;
+    adcs->dv_dist = 0;
+
+    VSETALL(adcs->pos_view, 0.0);
+    MAT4X3PNT(adcs->pos_model, view2model, adcs->pos_view);
+    adcs->dst = (adcs->dv_dist * BV_INV_VIEW + 1.0) * M_SQRT1_2;
+    adcs->a1 = adcs->a2 = 45.0;
+    bv_adc_view_to_grid(adcs, model2view);
+
+    VSETALL(adcs->anchor_pt_a1, 0.0);
+    VSETALL(adcs->anchor_pt_a2, 0.0);
+    VSETALL(adcs->anchor_pt_dst, 0.0);
+
+    adcs->anchor_pos = 0;
+    adcs->anchor_a1 = 0;
+    adcs->anchor_a2 = 0;
+    adcs->anchor_dst = 0;
+}
+
+BV_STATE_GET(bv_grid_state, BV_GRID_STATE_INIT, grid)
+BV_STATE_SET(bv_grid_state, grid)
+BV_STATE_GET(bv_params_state, BV_PARAMS_STATE_INIT, params)
+BV_STATE_SET(bv_params_state, params)
+
+#undef BV_STATE_GET
+#undef BV_STATE_SET
+
+int
+bv_interactive_rect_state_get(struct bv_interactive_rect_state *record, const struct bv *v)
+{
+    if (!record)
+	return 0;
+    if (!bv_is_valid(v)) {
+	struct bv_interactive_rect_state zero = BV_INTERACTIVE_RECT_STATE_INIT;
+	*record = zero;
+	return 0;
+    }
+    *record = v->interactive_rect;
+    return 1;
+}
+
+int
+bv_interactive_rect_state_set(struct bv *v, const struct bv_interactive_rect_state *record)
+{
+    if (!bv_is_valid(v) || !record)
+	return 0;
+    v->interactive_rect = *record;
+    return 1;
+}
+
+int
+bv_model_axes_state_get(struct bv_axes_state *record, const struct bv *v)
+{
+    if (!record)
+	return 0;
+    if (!bv_is_valid(v)) {
+	struct bv_axes_state zero = BV_AXES_STATE_INIT;
+	*record = zero;
+	return 0;
+    }
+    *record = v->model_axes;
+    return 1;
+}
+
+int
+bv_model_axes_state_set(struct bv *v, const struct bv_axes_state *record)
+{
+    if (!bv_is_valid(v) || !record)
+	return 0;
+    v->model_axes = *record;
+    return 1;
+}
+
+int
+bv_view_axes_state_get(struct bv_axes_state *record, const struct bv *v)
+{
+    if (!record)
+	return 0;
+    if (!bv_is_valid(v)) {
+	struct bv_axes_state zero = BV_AXES_STATE_INIT;
+	*record = zero;
+	return 0;
+    }
+    *record = v->view_axes;
+    return 1;
+}
+
+int
+bv_view_axes_state_set(struct bv *v, const struct bv_axes_state *record)
+{
+    if (!bv_is_valid(v) || !record)
+	return 0;
+    v->view_axes = *record;
+    return 1;
+}
+
+int
+bv_center_dot_state_get(struct bv_other_state *record, const struct bv *v)
+{
+    if (!record)
+	return 0;
+    if (!bv_is_valid(v)) {
+	struct bv_other_state zero = BV_OTHER_STATE_INIT;
+	*record = zero;
+	return 0;
+    }
+    *record = v->center_dot;
+    return 1;
+}
+
+int
+bv_center_dot_state_set(struct bv *v, const struct bv_other_state *record)
+{
+    if (!bv_is_valid(v) || !record)
+	return 0;
+    v->center_dot = *record;
+    return 1;
+}
+
+int
+bv_scale_overlay_state_get(struct bv_other_state *record, const struct bv *v)
+{
+    if (!record)
+	return 0;
+    if (!bv_is_valid(v)) {
+	struct bv_other_state zero = BV_OTHER_STATE_INIT;
+	*record = zero;
+	return 0;
+    }
+    *record = v->scale_overlay;
+    return 1;
+}
+
+int
+bv_scale_overlay_state_set(struct bv *v, const struct bv_other_state *record)
+{
+    if (!bv_is_valid(v) || !record)
+	return 0;
+    v->scale_overlay = *record;
+    return 1;
+}
+
+int
+bv_snap_state_get(struct bv_snap_state *record, const struct bv *v)
+{
+    if (!record)
+	return 0;
+    if (!bv_is_valid(v)) {
+	struct bv_snap_state zero = BV_SNAP_STATE_INIT;
+	*record = zero;
+	return 0;
+    }
+    *record = v->snap;
+    return 1;
+}
+
+int
+bv_snap_state_set(struct bv *v, const struct bv_snap_state *record)
+{
+    if (!bv_is_valid(v) || !record)
+	return 0;
+
+    v->snap = *record;
+    v->snap.lines = v->snap.lines ? 1 : 0;
+    if (v->snap.tolerance_factor <= 0.0)
+	v->snap.tolerance_factor = 1.0;
+    return 1;
+}
+
+int
+bv_snap_lines_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->snap.lines : 0;
+}
+
+int
+bv_snap_lines_set(struct bv *v, int enabled)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->snap.lines = enabled ? 1 : 0;
+    return 1;
+}
+
+int
+bv_snap_source_flags_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->snap.source_flags : 0;
+}
+
+int
+bv_snap_source_flags_set(struct bv *v, int flags)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->snap.source_flags = flags;
+    return 1;
+}
+
+unsigned long long
+bv_snap_kind_mask_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->snap.kind_mask : 0ULL;
+}
+
+int
+bv_snap_kind_mask_set(struct bv *v, unsigned long long mask)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->snap.kind_mask = mask;
+    return 1;
+}
+
+double
+bv_snap_tolerance_factor_get(const struct bv *v)
+{
+    return bv_is_valid(v) ? v->snap.tolerance_factor : 1.0;
+}
+
+int
+bv_snap_tolerance_factor_set(struct bv *v, double factor)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->snap.tolerance_factor = (factor > 0.0) ? factor : 1.0;
+    return 1;
+}
+
 int
 bv_update(struct bv *v)
 {
@@ -443,6 +1173,17 @@ bv_model2view_get(mat_t model2view, const struct bv *v)
 }
 
 int
+bv_model2view_set(struct bv *v, const mat_t model2view)
+{
+    if (!bv_is_valid(v) || !model2view)
+	return 0;
+
+    MAT_COPY(v->model2view, model2view);
+    v->frame_revision++;
+    return 1;
+}
+
+int
 bv_view2model_get(mat_t view2model, const struct bv *v)
 {
     if (!view2model)
@@ -456,6 +1197,17 @@ bv_view2model_get(mat_t view2model, const struct bv *v)
 }
 
 int
+bv_view2model_set(struct bv *v, const mat_t view2model)
+{
+    if (!bv_is_valid(v) || !view2model)
+	return 0;
+
+    MAT_COPY(v->view2model, view2model);
+    v->frame_revision++;
+    return 1;
+}
+
+int
 bv_pmodel2view_get(mat_t pmodel2view, const struct bv *v)
 {
     if (!pmodel2view)
@@ -465,6 +1217,17 @@ bv_pmodel2view_get(mat_t pmodel2view, const struct bv *v)
 	return 0;
     }
     MAT_COPY(pmodel2view, v->pmodel2view);
+    return 1;
+}
+
+int
+bv_pmodel2view_set(struct bv *v, const mat_t pmodel2view)
+{
+    if (!bv_is_valid(v) || !pmodel2view)
+	return 0;
+
+    MAT_COPY(v->pmodel2view, pmodel2view);
+    v->frame_revision++;
     return 1;
 }
 
@@ -517,6 +1280,46 @@ bv_rotation_set(struct bv *v, const mat_t rotation)
 }
 
 int
+bv_orientation_quat_get(quat_t orientation, const struct bv *v)
+{
+    if (!orientation)
+	return 0;
+    if (!bv_is_valid(v)) {
+	mat_t identity;
+	MAT_IDN(identity);
+	quat_mat2quat(orientation, identity);
+	return 0;
+    }
+
+    quat_mat2quat(orientation, v->rotation);
+    return 1;
+}
+
+int
+bv_center_mat_get(mat_t center, const struct bv *v)
+{
+    if (!center)
+	return 0;
+    if (!bv_is_valid(v)) {
+	MAT_IDN(center);
+	return 0;
+    }
+    MAT_COPY(center, v->center);
+    return 1;
+}
+
+int
+bv_center_mat_set(struct bv *v, const mat_t center)
+{
+    if (!bv_is_valid(v) || !center)
+	return 0;
+
+    MAT_COPY(v->center, center);
+    v->frame_revision++;
+    return 1;
+}
+
+int
 bv_center_get(point_t center, const struct bv *v)
 {
     if (!center)
@@ -549,6 +1352,26 @@ bv_scale_set(struct bv *v, fastf_t scale)
     v->size = 2.0 * v->scale;
     v->inverse_size = (v->size > 0.0) ? 1.0 / v->size : 0.0;
     return bv_update(v);
+}
+
+int
+bv_scale_state_set(struct bv *v,
+		   fastf_t scale,
+		   fastf_t initial_scale,
+		   fastf_t absolute_scale,
+		   fastf_t size,
+		   fastf_t inverse_size)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->scale = scale;
+    v->initial_scale = initial_scale;
+    v->absolute_scale = absolute_scale;
+    v->size = size;
+    v->inverse_size = inverse_size;
+    v->frame_revision++;
+    return 1;
 }
 
 int
@@ -649,6 +1472,31 @@ bv_keypoint_set(struct bv *v, const point_t keypoint)
 }
 
 int
+bv_current_point_get(point_t current_point, const struct bv *v)
+{
+    if (!current_point)
+	return 0;
+    if (!bv_is_valid(v)) {
+	VSETALL(current_point, 0.0);
+	return 0;
+    }
+
+    VMOVE(current_point, v->current_point);
+    return 1;
+}
+
+int
+bv_current_point_set(struct bv *v, const point_t current_point)
+{
+    if (!bv_is_valid(v) || !current_point)
+	return 0;
+
+    VMOVE(v->current_point, current_point);
+    v->frame_revision++;
+    return 1;
+}
+
+int
 bv_autoview_bounds(struct bv *v, fastf_t scale, const point_t min, const point_t max)
 {
     vect_t center = VINIT_ZERO;
@@ -697,6 +1545,44 @@ bv_screen_to_view(fastf_t *vx, fastf_t *vy, const struct bv *v, fastf_t sx, fast
 }
 
 int
+bv_snap_grid_2d(const struct bv *v, fastf_t *vx, fastf_t *vy)
+{
+    point_t anchor_view = VINIT_ZERO;
+    fastf_t sf = 0.0;
+    fastf_t step_h = 0.0;
+    fastf_t step_v = 0.0;
+    fastf_t qx = 0.0;
+    fastf_t qy = 0.0;
+    fastf_t ax = 0.0;
+    fastf_t ay = 0.0;
+
+    if (!bv_is_valid(v) || !vx || !vy)
+	return 0;
+    if (ZERO(v->grid.res_h) || ZERO(v->grid.res_v))
+	return 0;
+
+    sf = v->scale * v->base2local;
+    if (ZERO(sf))
+	return 0;
+
+    step_h = v->grid.res_h * v->base2local;
+    step_v = v->grid.res_v * v->base2local;
+    if (ZERO(step_h) || ZERO(step_v))
+	return 0;
+
+    MAT4X3PNT(anchor_view, v->model2view, v->grid.anchor);
+
+    qx = (*vx) * sf;
+    qy = (*vy) * sf;
+    ax = anchor_view[X] * sf;
+    ay = anchor_view[Y] * sf;
+
+    *vx = (ax + round((qx - ax) / step_h) * step_h) / sf;
+    *vy = (ay + round((qy - ay) / step_v) * step_v) / sf;
+    return 1;
+}
+
+int
 bv_screen_to_model(point_t model_point, const struct bv *v, fastf_t sx, fastf_t sy)
 {
     fastf_t vx = 0.0;
@@ -727,6 +1613,52 @@ bv_plane_get(plane_t *plane, const struct bv *v)
     VUNITIZE(normal);
     VSCALE(normal, normal, -1.0);
     return bg_plane_pt_nrml(plane, center, normal);
+}
+
+int
+bv_previous_mouse_get(fastf_t *x, fastf_t *y, const struct bv *v)
+{
+    if (x)
+	*x = 0.0;
+    if (y)
+	*y = 0.0;
+    if (!x || !y || !bv_is_valid(v))
+	return 0;
+
+    *x = v->previous_mouse_x;
+    *y = v->previous_mouse_y;
+    return 1;
+}
+
+int
+bv_previous_mouse_set(struct bv *v, fastf_t x, fastf_t y)
+{
+    if (!bv_is_valid(v))
+	return 0;
+
+    v->previous_mouse_x = x;
+    v->previous_mouse_y = y;
+    return 1;
+}
+
+int
+bv_mouse_delta_settings_get(struct bv_mouse_delta_settings *settings,
+	const struct bv *v)
+{
+    struct bv_mouse_delta_settings zero = BV_MOUSE_DELTA_SETTINGS_INIT;
+
+    if (!settings)
+	return 0;
+
+    *settings = zero;
+    if (!bv_is_valid(v))
+	return 0;
+
+    settings->min_delta = v->min_mouse_delta;
+    settings->max_delta = v->max_mouse_delta;
+    settings->rotate_scale = v->rotate_scale;
+    settings->scale_scale = v->scale_scale;
+    return 1;
 }
 
 int
@@ -1188,6 +2120,337 @@ bv_knobs_calibrate(struct bv *v)
     VSETALL(v->knobs.abs_trans_view_last, 0.0);
     VSETALL(v->knobs.abs_trans_model, 0.0);
     VSETALL(v->knobs.abs_trans_model_last, 0.0);
+    return 1;
+}
+
+struct bv_context *
+bv_context_create(void)
+{
+    struct bv_context *ctx = NULL;
+
+    BU_ALLOC(ctx, struct bv_context);
+    bv_context_init(ctx, NULL);
+    return ctx;
+}
+
+void
+bv_context_destroy(struct bv_context *ctx)
+{
+    if (!ctx)
+	return;
+
+    bv_context_free(ctx);
+    bu_free(ctx, "bv_context");
+}
+
+void
+bv_context_init(struct bv_context *ctx, struct bv *view)
+{
+    if (!ctx)
+	return;
+
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->magic = BV_CONTEXT_MAGIC;
+    if (view) {
+	ctx->view_ptr = view;
+	ctx->owns_view = 0;
+    } else {
+	bv_init(&ctx->view);
+	ctx->view_ptr = &ctx->view;
+	ctx->owns_view = 1;
+    }
+    BU_PTBL_INIT(&ctx->callbacks);
+}
+
+void
+bv_context_free(struct bv_context *ctx)
+{
+    if (!ctx || ctx->magic != BV_CONTEXT_MAGIC)
+	return;
+
+    if (ctx->view_set)
+	bv_context_set_remove(ctx->view_set, ctx);
+    bv_context_callbacks_clear(ctx);
+    bu_ptbl_free(&ctx->callbacks);
+    if (ctx->owns_view && ctx->view_ptr == &ctx->view)
+	bv_free(&ctx->view);
+    ctx->view_ptr = NULL;
+    ctx->owns_view = 0;
+    ctx->view_set = NULL;
+    ctx->magic = 0;
+}
+
+int
+bv_context_is_valid(const struct bv_context *ctx)
+{
+    return (ctx && ctx->magic == BV_CONTEXT_MAGIC &&
+	    bv_is_valid(ctx->view_ptr));
+}
+
+struct bv *
+bv_context_view(struct bv_context *ctx)
+{
+    return bv_context_is_valid(ctx) ? ctx->view_ptr : NULL;
+}
+
+const struct bv *
+bv_context_view_const(const struct bv_context *ctx)
+{
+    return bv_context_is_valid(ctx) ? ctx->view_ptr : NULL;
+}
+
+int
+bv_context_callback_add(struct bv_context *ctx, bv_context_callback_t callback,
+	void *client_data)
+{
+    struct bv_context_callback_record *record = NULL;
+
+    if (!bv_context_is_valid(ctx) || !callback)
+	return 0;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&ctx->callbacks); i++) {
+	record = (struct bv_context_callback_record *)BU_PTBL_GET(&ctx->callbacks, i);
+	if (record && record->callback == callback &&
+		record->client_data == client_data)
+	    return 1;
+    }
+
+    BU_ALLOC(record, struct bv_context_callback_record);
+    record->callback = callback;
+    record->client_data = client_data;
+    bu_ptbl_ins(&ctx->callbacks, (long *)record);
+    return 1;
+}
+
+int
+bv_context_callback_remove(struct bv_context *ctx,
+	bv_context_callback_t callback,
+	void *client_data)
+{
+    int removed = 0;
+
+    if (!ctx || ctx->magic != BV_CONTEXT_MAGIC || !callback)
+	return 0;
+
+    for (size_t i = BU_PTBL_LEN(&ctx->callbacks); i > 0; i--) {
+	struct bv_context_callback_record *record =
+	    (struct bv_context_callback_record *)BU_PTBL_GET(&ctx->callbacks,
+		    i - 1);
+	if (!record || record->callback != callback ||
+		record->client_data != client_data)
+	    continue;
+
+	bu_ptbl_rm(&ctx->callbacks, (long *)record);
+	BU_PUT(record, struct bv_context_callback_record);
+	removed = 1;
+    }
+
+    return removed;
+}
+
+void
+bv_context_callbacks_clear(struct bv_context *ctx)
+{
+    if (!ctx || ctx->magic != BV_CONTEXT_MAGIC)
+	return;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&ctx->callbacks); i++) {
+	struct bv_context_callback_record *record =
+	    (struct bv_context_callback_record *)BU_PTBL_GET(&ctx->callbacks, i);
+	if (record)
+	    BU_PUT(record, struct bv_context_callback_record);
+    }
+    bu_ptbl_reset(&ctx->callbacks);
+}
+
+int
+bv_context_notify(struct bv_context *ctx, uint64_t changed_flags)
+{
+    struct bv_context_callback_record *snapshot = NULL;
+    size_t count;
+
+    if (!bv_context_is_valid(ctx))
+	return 0;
+
+    count = BU_PTBL_LEN(&ctx->callbacks);
+    if (!count)
+	return 1;
+
+    snapshot = (struct bv_context_callback_record *)bu_calloc(count,
+	    sizeof(struct bv_context_callback_record),
+	    "bv_context callback snapshot");
+    for (size_t i = 0; i < count; i++) {
+	struct bv_context_callback_record *record =
+	    (struct bv_context_callback_record *)BU_PTBL_GET(&ctx->callbacks, i);
+	if (record)
+	    snapshot[i] = *record;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+	if (snapshot[i].callback)
+	    snapshot[i].callback(ctx, changed_flags, snapshot[i].client_data);
+    }
+
+    bu_free(snapshot, "bv_context callback snapshot");
+    return 1;
+}
+
+int
+bv_context_update(struct bv_context *ctx, uint64_t changed_flags)
+{
+    if (!bv_context_is_valid(ctx))
+	return 0;
+
+    if (!bv_update(ctx->view_ptr))
+	return 0;
+
+    return bv_context_notify(ctx, changed_flags ? changed_flags :
+	    BV_CONTEXT_CHANGED_VIEW);
+}
+
+int
+bv_context_settings_shared(const struct bv_context *a,
+	const struct bv_context *b)
+{
+    return (bv_context_is_valid(a) && bv_context_is_valid(b) &&
+	    a->view_set && a->view_set == b->view_set) ? 1 : 0;
+}
+
+struct bv_context_set *
+bv_context_set_create(void)
+{
+    struct bv_context_set *s = NULL;
+    BU_ALLOC(s, struct bv_context_set);
+    bv_context_set_init(s);
+    return s;
+}
+
+void
+bv_context_set_destroy(struct bv_context_set *s)
+{
+    if (!s)
+	return;
+
+    bv_context_set_free(s);
+    bu_free(s, "bv_context_set");
+}
+
+void
+bv_context_set_init(struct bv_context_set *s)
+{
+    if (!s)
+	return;
+
+    memset(s, 0, sizeof(*s));
+    s->magic = BV_CONTEXT_SET_MAGIC;
+    bv_set_init(&s->bvset);
+    BU_PTBL_INIT(&s->views);
+    BU_PTBL_INIT(&s->recycle_pool);
+}
+
+void
+bv_context_set_free(struct bv_context_set *s)
+{
+    if (!s || s->magic != BV_CONTEXT_SET_MAGIC)
+	return;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&s->views); i++) {
+	struct bv_context *ctx =
+	    (struct bv_context *)BU_PTBL_GET(&s->views, i);
+	if (bv_context_is_valid(ctx) && ctx->view_set == s)
+	    ctx->view_set = NULL;
+    }
+    bv_set_free(&s->bvset);
+    bu_ptbl_free(&s->views);
+    bu_ptbl_free(&s->recycle_pool);
+    s->magic = 0;
+}
+
+struct bu_ptbl *
+bv_context_set_views(struct bv_context_set *s)
+{
+    return (s && s->magic == BV_CONTEXT_SET_MAGIC) ? &s->views : NULL;
+}
+
+void *
+bv_context_set_recycle_pool(struct bv_context_set *s)
+{
+    return (s && s->magic == BV_CONTEXT_SET_MAGIC) ? &s->recycle_pool : NULL;
+}
+
+struct bv_context *
+bv_context_set_find(struct bv_context_set *s, const char *name)
+{
+    if (!s || s->magic != BV_CONTEXT_SET_MAGIC || !name)
+	return NULL;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&s->views); i++) {
+	struct bv_context *ctx =
+	    (struct bv_context *)BU_PTBL_GET(&s->views, i);
+	const char *vname = bv_name_get(bv_context_view_const(ctx));
+	if (vname && BU_STR_EQUAL(vname, name))
+	    return ctx;
+    }
+
+    return NULL;
+}
+
+int
+bv_context_set_attach(struct bv_context_set *s, struct bv_context *ctx)
+{
+    if (!bv_context_is_valid(ctx))
+	return 0;
+    if (s && s->magic != BV_CONTEXT_SET_MAGIC)
+	return 0;
+
+    if (ctx->view_set && ctx->view_set != s)
+	bv_context_set_remove(ctx->view_set, ctx);
+    ctx->view_set = s;
+    return 1;
+}
+
+int
+bv_context_set_add(struct bv_context_set *s, struct bv_context *ctx)
+{
+    struct bv *view = bv_context_view(ctx);
+    if (!s || s->magic != BV_CONTEXT_SET_MAGIC || !view)
+	return 0;
+
+    if (ctx->view_set && ctx->view_set != s)
+	bv_context_set_remove(ctx->view_set, ctx);
+
+    bu_ptbl_ins_unique(&s->views, (long *)ctx);
+    (void)bv_set_add(&s->bvset, view);
+    ctx->view_set = s;
+    return 1;
+}
+
+int
+bv_context_set_remove(struct bv_context_set *s, struct bv_context *ctx)
+{
+    if (!s || s->magic != BV_CONTEXT_SET_MAGIC)
+	return 0;
+
+    if (!ctx) {
+	for (size_t i = 0; i < BU_PTBL_LEN(&s->views); i++) {
+	    struct bv_context *sctx =
+		(struct bv_context *)BU_PTBL_GET(&s->views, i);
+	    if (bv_context_is_valid(sctx) && sctx->view_set == s)
+		sctx->view_set = NULL;
+	}
+	bv_set_free(&s->bvset);
+	bv_set_init(&s->bvset);
+	bu_ptbl_reset(&s->views);
+	return 1;
+    }
+
+    if (!bv_context_is_valid(ctx))
+	return 0;
+
+    if (ctx->view_set == s)
+	ctx->view_set = NULL;
+    (void)bv_set_remove(&s->bvset, bv_context_view(ctx));
+    (void)bu_ptbl_rm(&s->views, (long *)ctx);
     return 1;
 }
 

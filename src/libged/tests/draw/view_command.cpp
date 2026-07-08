@@ -15,10 +15,14 @@
 #include <cstdio>
 #include <string>
 
+#include <Inventor/SoViewport.h>
+#include "brlobol/measure_action.h"
+#include "brlobol/view_controller.h"
 #include <bu.h>
 #include <ged.h>
 #include <ged/draw.h>
-#include <rt/view.h>
+#include <ged/draw_obol.h>
+#include "view_test_util.h"
 
 #define ASSERT(cond) do { \
     nchecks++; \
@@ -123,9 +127,9 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
     ASSERT(solids.find("all.g") != std::string::npos);
     ASSERT(solids.find("cent=") != std::string::npos);
 
-    struct rt_view_render_export_consistency consistency =
-	RT_VIEW_RENDER_EXPORT_CONSISTENCY_INIT;
-    ASSERT(rt_view_context_render_export_consistency(v, "all.g",
+    struct ged_draw_render_export_consistency consistency =
+	GED_DRAW_RENDER_EXPORT_CONSISTENCY_INIT;
+    ASSERT(ged_draw_view_context_render_export_consistency(gedp, v, "all.g",
 	    &consistency));
     ASSERT(consistency.export_record_found);
     ASSERT(consistency.render_item_found);
@@ -133,38 +137,42 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
     ASSERT(consistency.backend_node_found);
     ASSERT(consistency.export_backend_consistent);
 
-    void *pick = rt_view_context_pick_semantic_path(v, "all.g");
+    struct ged_draw_pick_result *pick =
+	ged_draw_view_context_pick_semantic_path(gedp, v, "all.g");
     struct bu_vls pick_path = BU_VLS_INIT_ZERO;
     ASSERT(pick != NULL);
-    ASSERT(rt_view_pick_result_context_count(pick) > 0);
-    if (pick && rt_view_pick_result_context_count(pick) > 0) {
-	ASSERT(rt_view_pick_result_context_path(pick, 0, &pick_path));
+    ASSERT(ged_draw_pick_result_count(pick) > 0);
+    if (pick && ged_draw_pick_result_count(pick) > 0) {
+	ASSERT(ged_draw_pick_result_path(pick, 0, &pick_path));
 	ASSERT(BU_STR_EQUAL(bu_vls_cstr(&pick_path), "all.g"));
     }
 
     point_t sample = VINIT_ZERO;
-    void *snap = rt_view_snap_result_context_create();
-    ASSERT(snap != NULL);
-    int snap_count = snap ? rt_view_context_snap_candidates_result(v,
-	    sample, 1.0, RT_VIEW_SNAP_KIND_ENDPOINT, snap) : 0;
+    point_t snap_candidate = VINIT_ZERO;
+    int snap_count = ged_draw_view_context_snap_first_candidate(v, sample,
+	    GED_DRAW_VIEW_SNAP_ENDPOINT, snap_candidate);
     ASSERT(snap_count >= 0);
-    if (snap_count > 0 && rt_view_snap_result_context_count(snap) > 0) {
-	struct bu_vls snap_path = BU_VLS_INIT_ZERO;
-	ASSERT(rt_view_snap_result_context_source_path(snap, 0, &snap_path));
-	ASSERT(bu_vls_strlen(&snap_path) > 0);
-	bu_vls_free(&snap_path);
+    if (snap_count > 0) {
+	ASSERT(std::isfinite((double)snap_candidate[X]));
+	ASSERT(std::isfinite((double)snap_candidate[Y]));
+	ASSERT(std::isfinite((double)snap_candidate[Z]));
     }
 
-    point_t a = VINIT_ZERO;
-    point_t b = {1.0, 0.0, 0.0};
-    struct rt_view_measure_result measure = RT_VIEW_MEASURE_RESULT_INIT;
-    ASSERT(rt_view_context_measure_candidates(v, a, b, &measure) == 1);
-    ASSERT(measure.valid);
-    ASSERT(fabs(measure.distance - 1.0) < 1.0e-9);
+    BRLObolViewController *controller = ged_draw_obol_controller(gedp);
+    ASSERT(controller != NULL);
+    if (controller && controller->getViewport() &&
+	    controller->getViewport()->getRoot()) {
+	SoBRLMeasureAction measure;
+	measure.setGeometryPolicy(SoBRLMeasureAction::DISPLAY_LEVEL);
+	measure.apply(controller->getViewport()->getRoot());
+	ASSERT(measure.hasSegments());
+	ASSERT(measure.getSegmentCount() > 0);
+	ASSERT(measure.getTotalLength() > 0.0f);
+	ASSERT(!measure.getBounds().isEmpty());
+    }
 
-    rt_view_snap_result_context_free(snap);
     bu_vls_free(&pick_path);
-    rt_view_pick_result_context_free(pick);
+    ged_draw_pick_result_free(pick);
 }
 
 int
@@ -183,16 +191,16 @@ main(int argc, const char **argv)
 	return EXIT_FAILURE;
 
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    ASSERT(rt_view_set_context_remove(view_set_ctx, NULL));
+    ASSERT(ged_view_set_context_remove(view_set_ctx, NULL));
     void *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%d", i);
-	views[i] = rt_view_context_create();
+	views[i] = ged_view_context_create();
 	ASSERT(views[i] != NULL);
-	ASSERT(rt_view_context_name_set(views[i], view_name));
-	ASSERT(rt_view_context_dimensions_set(views[i], 640, 480));
-	ASSERT(rt_view_set_context_add(view_set_ctx, views[i]));
+	ASSERT(bv_name_set(DRAW_TEST_BV(views[i]), view_name));
+	ASSERT(bv_dimensions_set(DRAW_TEST_BV(views[i]), 640, 480));
+	ASSERT(ged_view_set_context_add(view_set_ctx, views[i]));
 	ged_view_context_owned_add(gedp, views[i]);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, views[i]);
@@ -318,12 +326,12 @@ main(int argc, const char **argv)
     const char *p7[] = {"view", "polygon", "area", "u_poly", NULL};
     ASSERT_VIEW_OK(gedp, 4, p7);
     ASSERT(!result_str(gedp).empty());
-    rt_view_polygon_ref poly_ref =
-	rt_view_context_polygon_find(views[0], "u_poly");
-    ASSERT(!rt_view_polygon_ref_is_null(poly_ref));
-    struct rt_view_polygon_record poly_rec = {};
-    ASSERT(rt_view_polygon_record_get(poly_ref, &poly_rec));
-    ASSERT(poly_rec.type == RT_VIEW_POLYGON_GENERAL);
+    ged_draw_view_polygon_ref poly_ref =
+	ged_draw_view_context_polygon_find(views[0], "u_poly");
+    ASSERT(!ged_draw_view_polygon_ref_is_null(poly_ref));
+    struct ged_draw_view_polygon_record poly_rec = {};
+    ASSERT(ged_draw_view_polygon_record_get(poly_ref, &poly_rec));
+    ASSERT(poly_rec.type == GED_DRAW_VIEW_POLYGON_GENERAL);
     ASSERT(poly_rec.contour_count == 1);
     ASSERT(poly_rec.point_count == 4);
     ASSERT(poly_rec.first_contour_open == 0);

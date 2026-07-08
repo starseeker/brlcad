@@ -28,6 +28,7 @@
 
 #include "bu/path.h"
 #include "bu/mime.h"
+#include "bv.h"
 #include "icv.h"
 #include "dm.h"
 
@@ -133,7 +134,7 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
-	size = rt_view_context_scale_get(view_ctx) * 0.01;
+	size = bv_scale_get(bv_context_view_const((const struct bv_context *)view_ctx)) * 0.01;
     }
 
     argc = opt_ret;

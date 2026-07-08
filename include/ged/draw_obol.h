@@ -118,6 +118,27 @@ ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
 	int sync_current_scene);
 
 /**
+ * Return the Obol view controller currently associated with @p view_ctx.
+ *
+ * The returned pointer is a borrowed BRLObolViewController pointer exposed as
+ * opaque storage for C callers.  It may be a per-view controller or the shared
+ * GED Obol controller.
+ */
+GED_EXPORT void *
+ged_draw_obol_controller_opaque_for_view(void *view_ctx);
+
+/**
+ * Return or create the Obol view controller associated with @p view_ctx.
+ *
+ * This is the C-compatible form of libged's internal view-controller ensure
+ * path.  It lets app-host support code use the GED/libbrlobol controller
+ * association rather than probing display-manager implementation details.
+ */
+GED_EXPORT void *
+ged_draw_obol_controller_ensure_opaque_for_view(void *view_ctx,
+	int sync_current_scene);
+
+/**
  * Detach a previously borrowed opaque Obol view controller.
  */
 GED_EXPORT void
@@ -235,22 +256,6 @@ ged_draw_obol_database_source_remove_for_path(struct ged *gedp,
 GED_EXPORT int
 ged_draw_obol_scene_controller_ensure_owned(struct ged *gedp,
 					    int sync_current_scene);
-
-GED_EXPORT int
-ged_draw_view_context_obol_scene_adapter_attach(struct ged *gedp,
-						void *view_ctx);
-
-GED_EXPORT int
-ged_draw_view_context_obol_feature_adapter_attach(struct ged *gedp,
-						  void *view_ctx);
-
-GED_EXPORT int
-ged_draw_view_context_obol_polygon_adapter_attach(struct ged *gedp,
-						  void *view_ctx);
-
-GED_EXPORT int
-ged_draw_view_context_obol_selection_adapter_attach(struct ged *gedp,
-						    void *view_ctx);
 
 GED_EXPORT size_t
 ged_draw_obol_view_context_clear(void *view_ctx,

@@ -3571,7 +3571,7 @@ tgc_connecting_lines(
 
 
 static int
-rt_tgc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_tgc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     int points_per_ellipse, connecting_lines;
     struct rt_tgc_internal *tip;
@@ -3592,7 +3592,7 @@ rt_tgc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     tgc_mag_d = MAGNITUDE(tip->d);
     avg_diameter = tgc_mag_a + tgc_mag_b + tgc_mag_c + tgc_mag_d;
     avg_diameter /= 2.0;
-    point_spacing = rt_view_solid_point_spacing(v, avg_diameter);
+    point_spacing = bv_view_solid_point_spacing(v, avg_diameter);
 
     points_per_ellipse = tgc_points_per_ellipse(ip, point_spacing);
 
@@ -3609,7 +3609,7 @@ rt_tgc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 	return 0;
     }
 
-    connecting_lines = tgc_connecting_lines(tip, rt_view_lod_curve_scale(v), s_size);
+    connecting_lines = tgc_connecting_lines(tip, bv_view_lod_curve_scale(v), s_size);
 
     if (connecting_lines < 4) {
 	connecting_lines = 4;
@@ -3697,7 +3697,7 @@ rt_tgc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 
 
 int
-rt_tgc_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_tgc_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -3709,7 +3709,7 @@ rt_tgc_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_d
 }
 
 C_DECL int
-rt_tgc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_tgc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_tgc_internal *tip;
     register int i;

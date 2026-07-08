@@ -30,7 +30,6 @@
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
-#include "rt/view.h"
 #include "CADViewModel.h"
 #include "QgLegacyViewContext.h"
 
@@ -69,7 +68,6 @@ CADViewModel::refresh(unsigned long long)
     struct bu_vls val = BU_VLS_INIT_ZERO;
     QMap<QString, QgKeyValNode*> standard_nodes;
     int i = 0;
-    struct rt_view_info view_info;
     vect_t aet;
     mat_t view_center;
     if (m_root)
@@ -77,18 +75,17 @@ CADViewModel::refresh(unsigned long long)
     m_root = new QgKeyValNode();
     beginResetModel();
 
-    const void *view_ctx = qg_legacy_view_to_context(v);
-    rt_view_context_info_get(&view_info, view_ctx);
-    rt_view_context_aet_get(aet, view_ctx);
-    rt_view_context_center_get(view_center, view_ctx);
+    const struct bv *view = qg_legacy_view_bv_const(v);
+    bv_aet_get(aet, view);
+    bv_center_mat_get(view_center, view);
 
-    const char *view_name = rt_view_context_name_get(view_ctx);
+    const char *view_name = bv_name_get(view);
     standard_nodes.insert("Name", add_pair("Name", view_name ? view_name : "", m_root, i));
-    bu_vls_sprintf(&val, "%g", view_info.size);
+    bu_vls_sprintf(&val, "%g", bv_size_get(view));
     standard_nodes.insert("Size", add_pair("Size", bu_vls_cstr(&val), m_root, i));
-    bu_vls_sprintf(&val, "%d", view_info.width);
+    bu_vls_sprintf(&val, "%d", bv_width_get(view));
     standard_nodes.insert("Width", add_pair("Width", bu_vls_cstr(&val), m_root, i));
-    bu_vls_sprintf(&val, "%d", view_info.height);
+    bu_vls_sprintf(&val, "%d", bv_height_get(view));
     standard_nodes.insert("Height", add_pair("Height", bu_vls_cstr(&val), m_root, i));
     bu_vls_sprintf(&val, "%g", aet[0]);
     standard_nodes.insert("Az", add_pair("Az", bu_vls_cstr(&val), m_root, i));

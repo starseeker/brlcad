@@ -11,7 +11,7 @@
 
 #include "brlobol/defines.h"
 #include "brlobol/lod_realization.h"
-#include "rt/view.h"
+#include "bv/view.h"
 
 #include <Inventor/SbString.h>
 #include <Inventor/actions/SoAction.h>
@@ -37,8 +37,8 @@ public:
     BRLObolLodService *getService(void) const;
     void setDatabase(struct db_i *dbip, const char *databaseId = NULL,
 	    uint64_t databaseRevision = 0);
-    void setViewInfo(const struct rt_view_info *info);
-    const struct rt_view_info &getViewInfo(void) const;
+    void setViewInfo(const struct bv_view_info *info);
+    const struct bv_view_info &getViewInfo(void) const;
     void setGeneration(uint64_t generation);
     uint64_t getGeneration(void) const;
     void setRevisions(uint64_t viewRevision, uint64_t policyRevision);
@@ -76,7 +76,7 @@ private:
     struct db_i *dbip;
     SbString databaseId;
     uint64_t databaseRevision;
-    struct rt_view_info view;
+    struct bv_view_info view;
     uint64_t generation;
     uint64_t viewRevision;
     uint64_t policyRevision;

@@ -1788,7 +1788,7 @@ rt_arb_free(register struct soltab *stp)
  * TODO: does not currently optimize for arb7/6/5/4, but should.
  */
 C_DECL int
-rt_arb_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_arb_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     point_t *pts;
     struct rt_arb_internal *aip;

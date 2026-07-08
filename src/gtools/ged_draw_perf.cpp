@@ -39,6 +39,7 @@
 #define DM_WITH_RT
 #include "dm.h"
 
+#include "bv.h"
 #include <ged.h>
 #include "brlobol/performance.h"
 #include "brlobol/scene_controller.h"
@@ -388,11 +389,12 @@ attach_display(struct ged *gedp, const struct options &opts)
 
     fastf_t windowbounds[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, windowbounds);
-    dm_set_vp(dmp, rt_view_context_scale_storage_get(view_ctx));
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    dm_set_vp(dmp, bv_scale_storage_get(view));
     ged_view_context_display_manager_set(view_ctx, dmp);
-    rt_view_context_dimensions_set(view_ctx, dm_get_width(dmp),
+    bv_dimensions_set(view, dm_get_width(dmp),
 	dm_get_height(dmp));
-    rt_view_context_unit_conversion_set(view_ctx,
+    bv_unit_conversion_set(view,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
 

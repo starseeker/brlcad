@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -48,7 +50,8 @@ ged_pmat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get the perspective matrix */
     if (argc == 1) {
-	rt_view_context_pmat_get(pmat, view_ctx);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	bv_pmat_get(pmat, view);
 	bn_encode_mat(gedp->ged_result_str, pmat, 1);
 	return BRLCAD_OK;
     } else if (argc == 2) {
@@ -56,8 +59,9 @@ ged_pmat_core(struct ged *gedp, int argc, const char *argv[])
 	if (bn_decode_mat(pmat, argv[1]) != 16)
 	    return BRLCAD_ERROR;
 
-	rt_view_context_pmat_set(view_ctx, pmat);
-	rt_view_context_update(view_ctx);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_pmat_set(view, pmat);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

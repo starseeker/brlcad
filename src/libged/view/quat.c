@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -50,7 +52,15 @@ ged_quat_core(struct ged *gedp, int argc, const char *argv[])
 
     /* return Viewrot as a quaternion */
     if (argc == 1) {
-	rt_view_context_orientation_quat_get(quat, view_ctx);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	mat_t rotation;
+	if (bv_rotation_get(rotation, view)) {
+	    quat_mat2quat(quat, rotation);
+	} else {
+	    mat_t identity;
+	    MAT_IDN(identity);
+	    quat_mat2quat(quat, identity);
+	}
 	bu_vls_printf(gedp->ged_result_str, "%.12g %.12g %.12g %.12g", V4ARGS(quat));
 	return BRLCAD_OK;
     }
@@ -74,8 +84,9 @@ ged_quat_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     quat_quat2mat(rotation, quat);
-    rt_view_context_rotation_set(view_ctx, rotation);
-    rt_view_context_update(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, rotation);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

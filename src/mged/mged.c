@@ -113,7 +113,7 @@ extern struct _mged_variables default_mged_variables;
 extern struct _color_scheme default_color_scheme;
 
 /* defined in grid.c */
-extern struct rt_view_grid_state default_grid_state;
+extern struct bv_grid_state default_grid_state;
 
 /* defined in axes.c */
 extern struct _axes_state default_axes_state;
@@ -413,8 +413,8 @@ new_edit_mats(struct mged_state *s)
 
 	set_curr_dm(s, p);
 	mat_t model2view;
-	void *view_ctx = view_state->vs_gvp;
-	rt_view_context_model2view_get(model2view, view_ctx);
+	struct bv *view = mged_view_context_view(view_state->vs_gvp);
+	bv_model2view_get(model2view, view);
 	bn_mat_mul(view_state->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(view_state->vs_objview2model, view_state->vs_model2objview);
 
@@ -440,7 +440,7 @@ mged_view_callback(void *view_ctx,
 
     if (s->global_editing_state != ST_VIEW) {
 	mat_t model2view;
-	rt_view_context_model2view_get(model2view, view_ctx);
+	bv_model2view_get(model2view, mged_view_context_view(view_ctx));
 	bn_mat_mul(vsp->vs_model2objview, model2view, MEDIT(s)->model_changes);
 	bn_mat_inv(vsp->vs_objview2model, vsp->vs_model2objview);
     }
@@ -456,7 +456,7 @@ mged_view_callback(void *view_ctx,
 void
 new_mats(struct mged_state *s)
 {
-    rt_view_context_update(view_state->vs_gvp);
+    ged_view_context_update(view_state->vs_gvp);
 }
 
 static int
@@ -476,7 +476,7 @@ mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
 
     if (BU_STR_EQUAL(av[1], "set")) {
         if (ac > 2 && BU_STR_EQUAL(av[2], "zclip") && DMP && view_state && view_state->vs_gvp) {
-            rt_view_context_zclip_set(view_state->vs_gvp, dm_get_zclip(DMP));
+            bv_zclip_set(mged_view_context_view(view_state->vs_gvp), dm_get_zclip(DMP));
         }
         if (view_state)
             mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
@@ -1493,7 +1493,7 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
-	fastf_t view_local_scale = rt_view_context_scale_get(view_state->vs_gvp) * s->dbip->dbi_base2local;
+	fastf_t view_local_scale = bv_scale_get(mged_view_state_view(view_state)) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
 		      MEDIT(s)->k.tra_m[X] * 0.05 * view_local_scale,
 		      MEDIT(s)->k.tra_m[Y] * 0.05 * view_local_scale,
@@ -1527,7 +1527,7 @@ event_check(struct mged_state *s, int non_blocking)
 	}
 
 	non_blocking++;
-	fastf_t view_local_scale = rt_view_context_scale_get(view_state->vs_gvp) * s->dbip->dbi_base2local;
+	fastf_t view_local_scale = bv_scale_get(mged_view_state_view(view_state)) * s->dbip->dbi_base2local;
 	bu_vls_printf(&vls, "knob -i -e aX %f aY %f aZ %f\n",
 		      MEDIT(s)->k.tra_v[X] * 0.05 * view_local_scale,
 		      MEDIT(s)->k.tra_v[Y] * 0.05 * view_local_scale,
@@ -1574,64 +1574,64 @@ event_check(struct mged_state *s, int non_blocking)
 	    continue;
 
 	set_curr_dm(s, p);
-	fastf_t view_local_scale = rt_view_context_scale_get(view_state->vs_gvp) * s->dbip->dbi_base2local;
+	fastf_t view_local_scale = bv_scale_get(mged_view_state_view(view_state)) * s->dbip->dbi_base2local;
 
-	if (view_state->k.rot_m_flag) {
+	if (view_state->k.rot_model_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -o %c -i -m ax %f ay %f az %f\n",
-			  view_state->k.origin_m,
-			  view_state->k.rot_m[X],
-			  view_state->k.rot_m[Y],
-			  view_state->k.rot_m[Z]);
+			  view_state->k.rot_model_origin,
+			  view_state->k.rot_model[X],
+			  view_state->k.rot_model[Y],
+			  view_state->k.rot_model[Z]);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.tra_m_flag) {
+	if (view_state->k.trans_model_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -i -m aX %f aY %f aZ %f\n",
-			  view_state->k.tra_m[X] * 0.05 * view_local_scale,
-			  view_state->k.tra_m[Y] * 0.05 * view_local_scale,
-			  view_state->k.tra_m[Z] * 0.05 * view_local_scale);
+			  view_state->k.trans_model[X] * 0.05 * view_local_scale,
+			  view_state->k.trans_model[Y] * 0.05 * view_local_scale,
+			  view_state->k.trans_model[Z] * 0.05 * view_local_scale);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.rot_v_flag) {
+	if (view_state->k.rot_view_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -o %c -i -v ax %f ay %f az %f\n",
-			  view_state->k.origin_v,
-			  view_state->k.rot_v[X],
-			  view_state->k.rot_v[Y],
-			  view_state->k.rot_v[Z]);
+			  view_state->k.rot_view_origin,
+			  view_state->k.rot_view[X],
+			  view_state->k.rot_view[Y],
+			  view_state->k.rot_view[Z]);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.tra_v_flag) {
+	if (view_state->k.trans_view_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "knob -i -v aX %f aY %f aZ %f",
-			  view_state->k.tra_v[X] * 0.05 * view_local_scale,
-			  view_state->k.tra_v[Y] * 0.05 * view_local_scale,
-			  view_state->k.tra_v[Z] * 0.05 * view_local_scale);
+			  view_state->k.trans_view[X] * 0.05 * view_local_scale,
+			  view_state->k.trans_view[Y] * 0.05 * view_local_scale,
+			  view_state->k.trans_view[Z] * 0.05 * view_local_scale);
 
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
-	if (view_state->k.sca_flag) {
+	if (view_state->k.scale_rate_active) {
 	    struct bu_vls vls = BU_VLS_INIT_ZERO;
 
 	    non_blocking++;
 	    bu_vls_printf(&vls, "zoom %f",
-			  1.0 / (1.0 - (view_state->k.sca / 10.0)));
+			  1.0 / (1.0 - (view_state->k.scale_rate / 10.0)));
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	    bu_vls_free(&vls);
 	}
@@ -1885,7 +1885,7 @@ mged_refresh_request_view(struct mged_state *UNUSED(s), struct _view_state *vsp,
     if (!vsp || !vsp->vs_gvp)
 	return;
 
-    rt_view_context_refresh_request(vsp->vs_gvp, flags ? flags : GED_VIEW_REFRESH_ALL);
+    bv_refresh_request(mged_view_state_view(vsp), flags ? flags : GED_VIEW_REFRESH_ALL);
 }
 
 void
@@ -1927,12 +1927,12 @@ mged_refresh_pending(struct mged_state *s)
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (!p || !p->dm_view_state || !p->dm_view_state->vs_gvp)
 	    continue;
-	if (rt_view_context_refresh_dirty_get(p->dm_view_state->vs_gvp))
+	if (bv_refresh_dirty_get(mged_view_state_view(p->dm_view_state)))
 	    return 1;
     }
 
     return (view_state && view_state->vs_gvp) ?
-	rt_view_context_refresh_dirty_get(view_state->vs_gvp) : 0;
+	bv_refresh_dirty_get(mged_view_state_view(view_state)) : 0;
 }
 
 
@@ -1971,7 +1971,7 @@ refresh(struct mged_state *s)
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (!p->dm_view_state || !p->dm_view_state->vs_gvp)
 	    continue;
-	if (rt_view_context_refresh_dirty_get(p->dm_view_state->vs_gvp))
+	if (bv_refresh_dirty_get(mged_view_state_view(p->dm_view_state)))
 	    mged_dm_repaint_request(p, MGED_REPAINT_VIEW_RECORD);
     }
 
@@ -1987,7 +1987,7 @@ refresh(struct mged_state *s)
 	if (mapped && mged_dm_repaint_pending(p)) {
 	    int restore_zbuffer = 0;
 	    if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		(void)rt_view_context_refresh_consume(p->dm_view_state->vs_gvp);
+		(void)bv_refresh_consume(mged_view_state_view(p->dm_view_state));
 
 	    if (mged_variables->mv_fb &&
 		dm_get_zbuffer(DMP)) {
@@ -2075,13 +2075,13 @@ refresh(struct mged_state *s)
 			if (rubber_band->rb_active || rubber_band->rb_draw)
 			    draw_rect(s);
 
-			struct rt_view_grid_state grid = {0};
+			struct bv_grid_state grid = {0};
 			(void)mged_dm_grid_state_get(s->mged_curr_dm, &grid);
 			if (grid.draw)
 			    draw_grid(s);
 
 			/* Compute and display angle/distance cursor */
-			struct rt_view_adc_state adc = {0};
+			struct bv_adc_state adc = {0};
 			(void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
 			if (adc.draw)
 			    adcursor(s);
@@ -2117,7 +2117,7 @@ refresh(struct mged_state *s)
 		dm_draw_end(DMP);
 		dm_set_native_repaint_pending(DMP, 0);
 		if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		    rt_view_context_refresh_complete(p->dm_view_state->vs_gvp);
+		    bv_refresh_complete(mged_view_state_view(p->dm_view_state));
 
 	    }
 	}
@@ -2914,12 +2914,15 @@ main(int argc, char *argv[])
     view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);
     MAT_IDN(view_state->vs_ModelDelta);
     if (view_state->vs_gvp) {
-	struct rt_view_adc_state adc;
-	rt_view_context_grid_state_set(view_state->vs_gvp, &default_grid_state);
-	if (rt_view_context_adc_state_get(&adc, view_state->vs_gvp)) {
+	struct bv *view = mged_view_state_view(view_state);
+	struct bv_grid_state grid;
+	struct bv_adc_state adc;
+	memcpy(&grid, &default_grid_state, sizeof(grid));
+	bv_grid_state_set(view, &grid);
+	if (bv_adc_state_get(&adc, view)) {
 	    adc.a1 = 45.0;
 	    adc.a2 = 45.0;
-	    rt_view_context_adc_state_set(view_state->vs_gvp, &adc);
+	    bv_adc_state_set(view, &adc);
 	}
     }
 

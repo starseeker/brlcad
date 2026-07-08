@@ -53,7 +53,6 @@ extern "C" {
 #include <Inventor/SbColor.h>
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SoDB.h>
-#include <Inventor/SoOffscreenRenderer.h>
 #include <Inventor/SoViewport.h>
 #include <Inventor/nodes/SoSeparator.h>
 
@@ -64,8 +63,6 @@ struct obol_vars {
     void *view_ctx;
     SoDB::ContextManager *manager;
     BRLObolViewController *controller;
-    unsigned char *last_image;
-    size_t last_image_size;
     int lighting;
     int zbuffer;
     int zclip;
@@ -239,89 +236,46 @@ obol_sync_view(struct dm *dmp)
     pv->controller->setViewportSize((unsigned int)width,
 	(unsigned int)height);
     if (pv->view_ctx &&
-	    !pv->controller->syncCameraFromRtViewContext(pv->view_ctx))
+	    !pv->controller->syncCameraFromViewContext(pv->view_ctx))
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
+}
+
+static int
+obol_render_to_image(struct dm *dmp, unsigned char **image, int flip,
+	int alpha)
+{
+    struct obol_vars *pv = obol_pvars(dmp);
+    if (!pv || !pv->manager || !pv->controller ||
+	    !pv->controller->getViewport() || !image)
+	return BRLCAD_ERROR;
+    *image = NULL;
+
+    if (obol_sync_view(dmp) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    SbColor background(
+	(float)dmp->i->dm_bg1[0] / 255.0f,
+	(float)dmp->i->dm_bg1[1] / 255.0f,
+	(float)dmp->i->dm_bg1[2] / 255.0f);
+    BRLObolProgressiveStatus progressive_status;
+    int ret = pv->controller->renderToImage(image, flip, alpha, &background,
+	    pv->manager, &progressive_status);
+    if (progressive_status.hasMore)
+	dm_set_native_repaint_pending(dmp, 1);
+
+    return ret;
 }
 
 static int
 obol_render(struct dm *dmp)
 {
-    struct obol_vars *pv = obol_pvars(dmp);
-    if (!pv || !pv->manager || !pv->controller ||
-	    !pv->controller->getViewport())
-	return BRLCAD_ERROR;
-
-    if (obol_sync_view(dmp) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-    (void)pv->controller->realizePending();
-    BRLObolProgressiveStatus progressive_status;
-    (void)pv->controller->advanceProgressiveWork(NULL,
-	    &progressive_status);
-    if (progressive_status.hasMore)
-	dm_set_native_repaint_pending(dmp, 1);
-
-    const SbViewportRegion &region = pv->controller->getViewportRegion();
-    SbVec2s size = region.getViewportSizePixels();
-    if (size[0] <= 0 || size[1] <= 0)
-	return BRLCAD_ERROR;
-
-    SoOffscreenRenderer renderer(pv->manager, region);
-    renderer.setComponents(SoOffscreenRenderer::RGB);
-    renderer.setBackgroundColor(SbColor(
-	(float)dmp->i->dm_bg1[0] / 255.0f,
-	(float)dmp->i->dm_bg1[1] / 255.0f,
-	(float)dmp->i->dm_bg1[2] / 255.0f));
-    if (!pv->controller->getViewport()->render(&renderer))
-	return BRLCAD_ERROR;
-
-    unsigned char *buffer = renderer.getBuffer();
-    if (!buffer)
-	return BRLCAD_ERROR;
-
-    size_t image_size = (size_t)size[0] * (size_t)size[1] * 3;
-    if (image_size == 0)
-	return BRLCAD_ERROR;
-
-    pv->last_image = (unsigned char *)bu_realloc(pv->last_image,
-	image_size, "dm-obol image buffer");
-    std::memcpy(pv->last_image, buffer, image_size);
-    pv->last_image_size = image_size;
-    return BRLCAD_OK;
-}
-
-static int
-obol_copy_image(struct dm *dmp, unsigned char **image, int flip, int alpha)
-{
-    struct obol_vars *pv = obol_pvars(dmp);
-    if (!pv || !pv->last_image || !image)
-	return BRLCAD_ERROR;
-
-    int width = dmp->i->dm_width;
-    int height = dmp->i->dm_height;
-    int bytes_per_pixel = alpha ? 4 : 3;
-    size_t out_size = (size_t)width * (size_t)height *
-	(size_t)bytes_per_pixel;
-    unsigned char *idata = (unsigned char *)bu_calloc(out_size,
-	sizeof(unsigned char), "dm-obol display image");
-
-    if (alpha) {
-	for (int i = 0; i < width * height; i++) {
-	    idata[i * 4 + 0] = pv->last_image[i * 3 + 0];
-	    idata[i * 4 + 1] = pv->last_image[i * 3 + 1];
-	    idata[i * 4 + 2] = pv->last_image[i * 3 + 2];
-	    idata[i * 4 + 3] = 255;
-	}
-    } else {
-	std::memcpy(idata, pv->last_image, out_size);
-    }
-
-    if (flip)
-	flip_display_image_vertically(idata, width, height, alpha);
-
-    *image = idata;
-    return BRLCAD_OK;
+    unsigned char *image = NULL;
+    int ret = obol_render_to_image(dmp, &image, 0, 0);
+    if (image)
+	bu_free(image, "dm-obol display image");
+    return ret;
 }
 
 static int
@@ -358,8 +312,6 @@ obol_open(void *ctx, void *interp, int argc, const char **argv)
     privars->view_ctx = ctx;
     privars->manager = manager;
     privars->controller = new BRLObolViewController(new SoBRLSceneGroup);
-    privars->last_image = NULL;
-    privars->last_image_size = 0;
     privars->lighting = 1;
     privars->zbuffer = 1;
     privars->zclip = 0;
@@ -415,8 +367,6 @@ obol_close(struct dm *dmp)
     struct obol_vars *pv = obol_pvars(dmp);
     if (pv) {
 	delete pv->controller;
-	if (pv->last_image)
-	    bu_free(pv->last_image, "dm-obol image buffer");
 	bu_free(pv, "dm-obol private vars");
     }
 
@@ -452,10 +402,7 @@ obol_getDisplayImage(struct dm *dmp, unsigned char **image, int flip, int alpha)
 {
     if (!image)
 	return BRLCAD_ERROR;
-    *image = NULL;
-    if (obol_render(dmp) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-    return obol_copy_image(dmp, image, flip, alpha);
+    return obol_render_to_image(dmp, image, flip, alpha);
 }
 
 static int

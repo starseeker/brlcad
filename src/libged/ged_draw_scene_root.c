@@ -33,6 +33,7 @@
 #include "bu/hash.h"
 #include "bg/plot3.h"
 #include "bg/clip.h"
+#include "bv.h"
 
 #include "ged.h"
 #include "ged/draw.h"
@@ -74,28 +75,29 @@ _sg_root(struct ged *gedp)
 void *
 ged_draw_view_context_scene_root(void *view_ctx)
 {
-    return rt_view_scene_ref_context(rt_view_context_scene_root_ref(view_ctx));
+    return ged_draw_scene_handle_context(ged_view_context_scene_root_ref(view_ctx));
 }
 
 
 int
 ged_draw_view_context_scene_attached(void *view_ctx)
 {
-    return rt_view_context_scene_attached(view_ctx);
+    return ged_view_context_scene_attached(view_ctx);
 }
 
 
 uint64_t
 ged_draw_view_context_frame_revision(void *view_ctx)
 {
-    return rt_view_context_frame_revision_get(view_ctx);
+    return bv_frame_revision_get(
+	       bv_context_view_const((const struct bv_context *)view_ctx));
 }
 
 
 uint64_t
 ged_draw_view_context_bump_frame_revision(void *view_ctx)
 {
-    return rt_view_context_frame_revision_bump(view_ctx);
+    return bv_frame_revision_bump(bv_context_view((struct bv_context *)view_ctx));
 }
 
 

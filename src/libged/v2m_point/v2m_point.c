@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -87,7 +89,8 @@ ged_v2m_point_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Convert the incoming view point to a model point */
     mat_t view2model;
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_view2model_get(view2model,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
     MAT4X3PNT(model, view2model, view);
     bn_encode_vect(gedp->ged_result_str, model, 1);
 

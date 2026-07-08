@@ -37,6 +37,7 @@
 #include "linenoise.hpp"
 
 #include "brlcad_ident.h"
+#include "bv.h"
 #include "bu.h"
 
 #define USE_DM 1
@@ -182,16 +183,17 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
     if (!dmp)
 	return false;
 
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     d = dm_hash(dmp);
-    v = rt_view_context_hash(view_ctx);
+    v = bv_hash(view);
 
     if (qged_display_mode) {
 	if (db_index_check) {
 	    unsigned long long updated = ged_db_index_refresh_flags(gedp);
 	    l = (updated) ? l + 1 : 0;
-	    if (rt_view_context_cleared_get(view_ctx)) {
+	    if (bv_cleared_get(view)) {
 		l = 1;
-		rt_view_context_cleared_set(view_ctx, 0);
+		bv_cleared_set(view, 0);
 	    }
 	} else {
 	    l = 0;
@@ -201,7 +203,7 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
     }
 
     g = ged_draw_scene_hash(gedp);
-    if (db_index_check && rt_view_context_refresh_dirty_get(view_ctx))
+    if (db_index_check && bv_refresh_dirty_get(view))
 	r = 1;
 
     return true;
@@ -628,7 +630,7 @@ GshState::view_update()
 	    }
 	    (void)ged_draw_obol_framebuffer_present(gedp);
 	    dm_draw_end(dmp);
-	    rt_view_context_refresh_complete(view_ctx);
+	    bv_refresh_complete(bv_context_view((struct bv_context *)view_ctx));
 	}
     }
 #endif

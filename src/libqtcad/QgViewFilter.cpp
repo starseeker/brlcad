@@ -24,49 +24,65 @@
 
 #include "common.h"
 
+#include "bv.h"
 #include "qtcad/QgObolSnap.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
-#include "rt/view.h"
 #include "QgLegacyViewContext.h"
 
 static uint32_t
-qg_obol_snap_kinds_from_rt_mask(unsigned kinds, int source_flags)
+qg_obol_snap_kinds_from_bv_mask(unsigned long long kinds, int source_flags)
 {
     uint32_t obol_kinds = 0;
     const int all_sources = !source_flags;
-    const int allow_db = all_sources || (source_flags & RT_VIEW_SNAP_DB);
+    const int allow_db = all_sources || (source_flags & BV_SNAP_DB);
     const int allow_view = all_sources ||
-			   (source_flags & (RT_VIEW_SNAP_VIEW | RT_VIEW_SNAP_LOCAL));
+			   (source_flags & (BV_SNAP_VIEW | BV_SNAP_LOCAL));
 
-    if (allow_view && (kinds & RT_VIEW_SNAP_KIND_GRID))
+    if (allow_view && (kinds & BV_SNAP_KIND_GRID))
 	obol_kinds |= QgObolSnapRecord::GRID;
-    if (allow_db && (kinds & RT_VIEW_SNAP_KIND_ENDPOINT))
+    if (allow_db && (kinds & BV_SNAP_KIND_ENDPOINT))
 	obol_kinds |= QgObolSnapRecord::ENDPOINT |
 		      QgObolSnapRecord::MIDPOINT |
 		      QgObolSnapRecord::LINE_NEAREST;
-    if (allow_db && (kinds & RT_VIEW_SNAP_KIND_MIDPOINT))
+    if (allow_db && (kinds & BV_SNAP_KIND_MIDPOINT))
 	obol_kinds |= QgObolSnapRecord::MIDPOINT;
-    if (allow_view && (kinds & RT_VIEW_SNAP_KIND_OVERLAY_HANDLE))
+    if (allow_view && (kinds & BV_SNAP_KIND_OVERLAY_HANDLE))
 	obol_kinds |= QgObolSnapRecord::CENTER;
 
     return obol_kinds;
 }
 
+static const struct bv *
+qg_obol_snap_bv_const(const qg_legacy_view *v)
+{
+    const void *view_ctx = qg_legacy_view_to_context(v);
+    return view_ctx ? bv_context_view_const(
+	reinterpret_cast<const struct bv_context *>(view_ctx)) : nullptr;
+}
+
+static struct bv *
+qg_obol_snap_bv(qg_legacy_view *v)
+{
+    void *view_ctx = qg_legacy_view_to_context(v);
+    return view_ctx ? bv_context_view(
+	reinterpret_cast<struct bv_context *>(view_ctx)) : nullptr;
+}
+
 static int
 qg_obol_snap_enabled(const qg_legacy_view *v)
 {
-    const void *view_ctx = qg_legacy_view_to_context(v);
-    if (!view_ctx || !rt_view_context_snap_lines_get(view_ctx))
+    const struct bv *view = qg_obol_snap_bv_const(v);
+    if (!view || !bv_snap_lines_get(view))
 	return 0;
 
-    int flags = rt_view_context_snap_source_flags_get(view_ctx);
-    if (flags == RT_VIEW_SNAP_TCL)
+    int flags = bv_snap_source_flags_get(view);
+    if (flags == BV_SNAP_TCL)
 	return 0;
 
-    return !flags || (flags & (RT_VIEW_SNAP_DB | RT_VIEW_SNAP_VIEW |
-			       RT_VIEW_SNAP_LOCAL));
+    return !flags || (flags & (BV_SNAP_DB | BV_SNAP_VIEW |
+			       BV_SNAP_LOCAL));
 }
 
 static float
@@ -75,16 +91,16 @@ qg_obol_snap_tolerance(const qg_legacy_view *v)
     if (!v)
 	return 0.0f;
 
-    const void *view_ctx = qg_legacy_view_to_context(v);
-    int width = rt_view_context_width_get(view_ctx);
-    int height = rt_view_context_height_get(view_ctx);
+    const struct bv *view = qg_obol_snap_bv_const(v);
+    int width = bv_width_get(view);
+    int height = bv_height_get(view);
     if (width <= 0 || height <= 0)
 	return 0.0f;
 
     double lavg = ((double)width + (double)height) * 0.5;
     double lratio = 1.0 / lavg;
-    double tol = rt_view_context_size_get(view_ctx) * lratio *
-		 rt_view_context_snap_tolerance_factor_get(view_ctx);
+    double tol = bv_size_get(view) * lratio *
+		 bv_snap_tolerance_factor_get(view);
 
     return tol > 0.0 ? (float)tol : 0.0f;
 }
@@ -95,18 +111,17 @@ qg_obol_refine_db_snap(QgView *display, qg_legacy_view *v)
     if (!display || !qg_obol_snap_enabled(v))
 	return;
 
-    void *view_ctx = qg_legacy_view_to_context(v);
-    const int source_flags = rt_view_context_snap_source_flags_get(view_ctx);
-    uint32_t obol_kinds = qg_obol_snap_kinds_from_rt_mask(
-			      (unsigned)rt_view_context_snap_kind_mask_get(
-				  view_ctx), source_flags);
+    struct bv *view = qg_obol_snap_bv(v);
+    const int source_flags = bv_snap_source_flags_get(view);
+    uint32_t obol_kinds = qg_obol_snap_kinds_from_bv_mask(
+			      bv_snap_kind_mask_get(view), source_flags);
     float tolerance = qg_obol_snap_tolerance(v);
     if (!obol_kinds || tolerance <= 0.0f)
 	return;
 
     QgObolSnapRecord record;
     point_t query_point = VINIT_ZERO;
-    if (!rt_view_context_current_point_get(query_point, view_ctx))
+    if (!bv_current_point_get(query_point, view))
 	return;
 
     SbVec3f query((float)query_point[X],
@@ -118,7 +133,7 @@ qg_obol_refine_db_snap(QgView *display, qg_legacy_view *v)
     point_t snapped_point = VINIT_ZERO;
     VSET(snapped_point, (fastf_t)record.point[0],
 	 (fastf_t)record.point[1], (fastf_t)record.point[2]);
-    (void)rt_view_context_current_point_set(view_ctx, snapped_point);
+    (void)bv_current_point_set(view, snapped_point);
 }
 
 class QgViewFilter::QgViewFilterPrivate
@@ -174,7 +189,7 @@ QgViewFilter::view_sync(QEvent *e)
 #endif
 
     /* Keep neutral view state synchronized with the event stream. */
-    rt_view_context_mouse_state_set(qg_legacy_view_to_context(lv), e_x, e_y);
+    bv_mouse_state_set(qg_obol_snap_bv(lv), e_x, e_y);
     qg_obol_refine_db_snap(m->display, lv);
 
     /* Modifier keys are typically view-nav gestures, not edit operations. */

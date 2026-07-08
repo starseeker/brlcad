@@ -52,8 +52,8 @@ extern "C" {
     extern void rt_##name##_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp); \
     extern int rt_##name##_class(const struct soltab *, const vect_t, const vect_t, const struct bn_tol *); \
     extern void rt_##name##_free(struct soltab *stp); \
-    extern int rt_##name##_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *info); \
-    extern int rt_##name##_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size); \
+    extern int rt_##name##_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info); \
+    extern int rt_##name##_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size); \
     extern void rt_##name##_vshot(struct soltab *stp[], struct xray *rp[], struct seg *segp, int n, struct application *ap); \
     extern int rt_##name##_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol); \
     extern int rt_##name##_tnurb(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bn_tol *tol); \
@@ -148,10 +148,10 @@ extern void rt_crofton_volume_implicit(fastf_t *vol, const struct rt_db_internal
 /* from primitives/poly/poly.c - analytic polysolid measure functions */
 extern void rt_pg_volume(fastf_t *volume, const struct rt_db_internal *ip);
 extern void rt_pg_surf_area(fastf_t *area, const struct rt_db_internal *ip);
-extern int rt_pg_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *info);
+extern int rt_pg_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
 
-extern int rt_bot_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *info);
-extern int rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct rt_view_info *info);
+extern int rt_bot_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
+extern int rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
 
 /* from db5_bin.c */
 extern int rt_binunif_import5(struct rt_db_internal * ip, const struct bu_external *ep, const mat_t mat, const struct db_i *dbip);

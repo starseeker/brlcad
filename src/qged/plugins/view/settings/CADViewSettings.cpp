@@ -30,6 +30,7 @@
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
+#include "ged/draw.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "rt/view.h"
@@ -192,25 +193,26 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     if (!v)
 	return;
     void *view_ctx = qg_legacy_view_to_context(v);
+    struct bv *view = qg_legacy_view_bv(v);
 
-    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    (void)rt_view_context_lod_policy_get(&lod_policy, view_ctx);
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
 
     /* Top-level faceplate elements */
-    struct rt_view_adc_state adc = {};
-    struct rt_view_other_state center_dot = {};
-    struct rt_view_grid_state grid = {};
-    struct rt_view_axes_state model_axes = {};
-    struct rt_view_other_state scale_state = {};
-    struct rt_view_axes_state view_axes = {};
-    struct rt_view_params_state params = {};
-    (void)rt_view_context_adc_state_get(&adc, view_ctx);
-    (void)rt_view_context_center_dot_state_get(&center_dot, view_ctx);
-    (void)rt_view_context_grid_state_get(&grid, view_ctx);
-    (void)rt_view_context_model_axes_state_get(&model_axes, view_ctx);
-    (void)rt_view_context_scale_overlay_state_get(&scale_state, view_ctx);
-    (void)rt_view_context_view_axes_state_get(&view_axes, view_ctx);
-    (void)rt_view_context_params_state_get(&params, view_ctx);
+    struct bv_adc_state adc = {};
+    struct bv_other_state center_dot = {};
+    struct bv_grid_state grid = {};
+    struct bv_axes_state model_axes = {};
+    struct bv_other_state scale_state = {};
+    struct bv_axes_state view_axes = {};
+    struct bv_params_state params = {};
+    (void)bv_adc_state_get(&adc, view);
+    (void)bv_center_dot_state_get(&center_dot, view);
+    (void)bv_grid_state_get(&grid, view);
+    (void)bv_model_axes_state_get(&model_axes, view);
+    (void)bv_scale_overlay_state_get(&scale_state, view);
+    (void)bv_view_axes_state_get(&view_axes, view);
+    (void)bv_params_state_get(&params, view);
 
     set_ckbx(acsg_ckbx,     lod_policy.csg_enabled);
     set_ckbx(amesh_ckbx,    lod_policy.mesh_enabled);
@@ -223,7 +225,7 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 
     /* Framebuffer mode (0=off, 1=overlay, 2=underlay) maps directly to
      * combo index. Clamp to a valid range in case of unexpected values. */
-    int fb_mode = rt_view_context_framebuffer_mode_get(view_ctx);
+    int fb_mode = bv_framebuffer_mode_get(view);
     if (fb_mode < 0 || fb_mode > 2)
 	fb_mode = 0;
     fb_mode_combo->blockSignals(true);
@@ -249,33 +251,33 @@ CADViewSettings::view_refresh(unsigned long long)
     if (!v)
 	return;
     void *view_ctx = qg_legacy_view_to_context(v);
+    struct bv *view = qg_legacy_view_bv(v);
 
     /* Preserve non-widget LoD policy fields and update only the settings
      * owned by this widget. */
-    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
-    (void)rt_view_context_lod_policy_get(&lod_policy, view_ctx);
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
     lod_policy.csg_enabled = ckbx_val(acsg_ckbx);
     lod_policy.mesh_enabled = ckbx_val(amesh_ckbx);
     lod_policy.zoom_refresh =
 	lod_policy.csg_enabled || lod_policy.mesh_enabled;
-    (void)rt_view_context_lod_policy_apply(view_ctx, &lod_policy);
-    (void)rt_view_context_framebuffer_mode_set(view_ctx,
-	    fb_mode_combo->currentIndex());
+    (void)ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
+    (void)bv_framebuffer_mode_set(view, fb_mode_combo->currentIndex());
 
-    struct rt_view_adc_state adc = {};
-    struct rt_view_other_state center_dot = {};
-    struct rt_view_grid_state grid = {};
-    struct rt_view_axes_state model_axes = {};
-    struct rt_view_other_state scale_state = {};
-    struct rt_view_axes_state view_axes = {};
-    struct rt_view_params_state params = {};
-    (void)rt_view_context_adc_state_get(&adc, view_ctx);
-    (void)rt_view_context_center_dot_state_get(&center_dot, view_ctx);
-    (void)rt_view_context_grid_state_get(&grid, view_ctx);
-    (void)rt_view_context_model_axes_state_get(&model_axes, view_ctx);
-    (void)rt_view_context_scale_overlay_state_get(&scale_state, view_ctx);
-    (void)rt_view_context_view_axes_state_get(&view_axes, view_ctx);
-    (void)rt_view_context_params_state_get(&params, view_ctx);
+    struct bv_adc_state adc = {};
+    struct bv_other_state center_dot = {};
+    struct bv_grid_state grid = {};
+    struct bv_axes_state model_axes = {};
+    struct bv_other_state scale_state = {};
+    struct bv_axes_state view_axes = {};
+    struct bv_params_state params = {};
+    (void)bv_adc_state_get(&adc, view);
+    (void)bv_center_dot_state_get(&center_dot, view);
+    (void)bv_grid_state_get(&grid, view);
+    (void)bv_model_axes_state_get(&model_axes, view);
+    (void)bv_scale_overlay_state_get(&scale_state, view);
+    (void)bv_view_axes_state_get(&view_axes, view);
+    (void)bv_params_state_get(&params, view);
 
     adc.draw = ckbx_val(adc_ckbx);
     center_dot.gos_draw = ckbx_val(cdot_ckbx);
@@ -292,13 +294,13 @@ CADViewSettings::view_refresh(unsigned long long)
     params.draw_tw     = ckbx_val(params_tw_ckbx);
     params.draw_fps    = ckbx_val(params_fps_ckbx);
 
-    rt_view_context_adc_state_set(view_ctx, &adc);
-    rt_view_context_center_dot_state_set(view_ctx, &center_dot);
-    rt_view_context_grid_state_set(view_ctx, &grid);
-    rt_view_context_model_axes_state_set(view_ctx, &model_axes);
-    rt_view_context_scale_overlay_state_set(view_ctx, &scale_state);
-    rt_view_context_view_axes_state_set(view_ctx, &view_axes);
-    rt_view_context_params_state_set(view_ctx, &params);
+    bv_adc_state_set(view, &adc);
+    bv_center_dot_state_set(view, &center_dot);
+    bv_grid_state_set(view, &grid);
+    bv_model_axes_state_set(view, &model_axes);
+    bv_scale_overlay_state_set(view, &scale_state);
+    bv_view_axes_state_set(view, &view_axes);
+    bv_params_state_set(view, &params);
 
     emit settings_changed(QG_VIEW_DRAWN);
 }

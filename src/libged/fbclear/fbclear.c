@@ -39,6 +39,7 @@
 
 #include "dm.h"
 #include "ged.h"
+#include "bv.h"
 #include "bu/str.h"
 
 
@@ -109,7 +110,7 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
 
     if (reset_mode)
-	rt_view_context_framebuffer_mode_set(view_ctx, 0);
+	bv_framebuffer_mode_set(bv_context_view((struct bv_context *)view_ctx), 0);
 
     (void)dm_draw_begin(dmp);
     fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));

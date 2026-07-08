@@ -303,16 +303,16 @@ zoom_rect_area(struct mged_state *s)
     mat_t view_center;
     mat_t model2view;
     mat_t view2model;
-    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = mged_view_context_view(view_state->vs_gvp);
 
     if (ZERO(rubber_band->rb_width) &&
 	ZERO(rubber_band->rb_height))
 	return;
 
     adjust_rect_for_zoom(s);
-    rt_view_context_center_get(view_center, view_ctx);
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_center_mat_get(view_center, view);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
     /* find old view center */
     MAT_DELTAS_GET_NEG(old_model_center, view_center);

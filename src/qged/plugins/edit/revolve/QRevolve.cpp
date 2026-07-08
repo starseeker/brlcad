@@ -105,8 +105,7 @@ QRevolve::QRevolve()
 
 QRevolve::~QRevolve()
 {
-    qged_edit_feature_clear_geometry_view(
-	    m_ctx ? m_ctx->getViewWidget() : nullptr, "_revolve_edit", p);
+    qged_edit_feature_clear_geometry(p);
     if (!qged_edit_feature_ref_is_null(p) && m_ctx) {
 	qged_edit_feature_remove(m_ctx, "_revolve_edit");
 	p = QGED_EDIT_FEATURE_REF_NULL;
@@ -181,38 +180,37 @@ QRevolve::update_obj_wireframe()
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    QgView *display = m_ctx ? m_ctx->getViewWidget() : nullptr;
 
     struct qged_edit_preview_callbacks callbacks = QGED_EDIT_PREVIEW_CALLBACKS_INIT;
     callbacks.revision_cb = _revolve_preview_revision;
     callbacks.update_cb = _revolve_preview_update;
     p = qged_edit_feature_overlay_ensure(m_ctx, "_revolve_edit", this, this,
 	    &callbacks, bu_vls_cstr(&oname));
-    if (qged_edit_feature_ref_is_null(p) && !display)
+    if (qged_edit_feature_ref_is_null(p))
 	return;
 
     if (!gedp->dbip || !bu_vls_strlen(&oname)) {
-	qged_edit_feature_clear_geometry_view(display, "_revolve_edit", p);
+	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
 	return;
     }
 
     dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_REVOLVE) {
-	qged_edit_feature_clear_geometry_view(display, "_revolve_edit", p);
+	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
 	return;
     }
 
-    qged_edit_feature_clear_geometry_view(display, "_revolve_edit", p);
+    qged_edit_feature_clear_geometry(p);
     qged_edit_feature_set_view(p, m_ctx);
     qged_edit_feature_set_visible(p, 1);
 
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     if (!wdbp)
 	return;
-    if (qged_edit_feature_replace_revolve_wireframe_view(display,
-	    "_revolve_edit", p, QGED_EDIT_FEATURE_TRANSIENT_PREVIEW, &rev,
+    if (qged_edit_feature_replace_revolve_wireframe(p,
+	    QGED_EDIT_FEATURE_TRANSIENT_PREVIEW, &rev,
 	    &wdbp->wdb_ttol) && !qged_edit_feature_ref_is_null(p))
 	qged_edit_preview_publish_event(m_ctx, p, QGED_EDIT_PREVIEW_UPDATE,
 		bu_vls_cstr(&oname));

@@ -30,6 +30,7 @@
 
 #include "bu/sort.h"
 #include "bg/polygon.h"
+#include "bv.h"
 #include "ged.h"
 #include "ged/event_txn.h"
 
@@ -320,9 +321,10 @@ ged_polygons_overlap(struct ged *gedp, struct bg_polygon *polyA, struct bg_polyg
     void *view_ctx = ged_view_active_ctx(gedp);
 
     plane_t pl;
-    rt_view_context_plane_get(&pl, view_ctx);
+    bv_plane_get(&pl, bv_context_view_const((const struct bv_context *)view_ctx));
 
-    fastf_t view_scale = rt_view_context_scale_get(view_ctx);
+    fastf_t view_scale = bv_scale_get(
+			     bv_context_view_const((const struct bv_context *)view_ctx));
     return bg_polygons_overlap(polyA, polyB, &pl, &wdbp->wdb_tol, view_scale);
 }
 
@@ -368,8 +370,9 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
     mat_t view2model;
     void *view_ctx = ged_view_active_ctx(gedp);
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);

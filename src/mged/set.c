@@ -24,6 +24,7 @@
 #include "common.h"
 
 
+#include "bv.h"
 #include "vmath.h"
 #include "ged/view.h"
 
@@ -385,13 +386,14 @@ set_absolute_view_tran(struct mged_state *s)
 {
     mat_t model2view;
     void *view_ctx = view_state->vs_gvp;
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
-    rt_view_context_model2view_get(model2view, view_ctx);
+    bv_model2view_get(model2view, view);
 
     /* calculate absolute_tran */
-    MAT4X3PNT(view_state->k.tra_v_abs, model2view, view_state->vs_orig_pos);
+    MAT4X3PNT(view_state->k.abs_trans_view, model2view, view_state->vs_orig_pos);
     /* This is used in f_knob()  ---- needed in case absolute_tran is set from Tcl */
-    VMOVE(view_state->k.tra_v_abs_last, view_state->k.tra_v_abs);
+    VMOVE(view_state->k.abs_trans_view_last, view_state->k.abs_trans_view);
 }
 
 
@@ -403,16 +405,17 @@ set_absolute_model_tran(struct mged_state *s)
     mat_t view_center;
     fastf_t view_scale;
     void *view_ctx = view_state->vs_gvp;
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
-    rt_view_context_center_get(view_center, view_ctx);
-    view_scale = rt_view_context_scale_get(view_ctx);
+    bv_center_mat_get(view_center, view);
+    view_scale = bv_scale_get(view);
 
     /* calculate absolute_model_tran */
     MAT_DELTAS_GET_NEG(new_pos, view_center);
     VSUB2(diff, view_state->vs_orig_pos, new_pos);
-    VSCALE(view_state->k.tra_m_abs, diff, 1/view_scale);
+    VSCALE(view_state->k.abs_trans_model, diff, 1/view_scale);
     /* This is used in f_knob()  ---- needed in case absolute_model_tran is set from Tcl */
-    VMOVE(view_state->k.tra_m_abs_last, view_state->k.tra_m_abs);
+    VMOVE(view_state->k.abs_trans_model_last, view_state->k.abs_trans_model);
 }
 
 
@@ -463,7 +466,8 @@ set_perspective(const struct bu_structparse *sdp,
 
     /* keep view feature in sync */
     void *view_ctx = view_state->vs_gvp;
-    rt_view_context_perspective_set(view_ctx, mged_variables->mv_perspective);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_perspective_set(view, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -486,7 +490,8 @@ establish_perspective(const struct bu_structparse *sdp,
 
     /* keep view feature in sync */
     void *view_ctx = view_state->vs_gvp;
-    rt_view_context_perspective_set(view_ctx, mged_variables->mv_perspective);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_perspective_set(view, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -529,7 +534,8 @@ toggle_perspective(const struct bu_structparse *sdp,
 
     /* keep view feature in sync */
     void *view_ctx = view_state->vs_gvp;
-    rt_view_context_perspective_set(view_ctx, mged_variables->mv_perspective);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_perspective_set(view, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -548,7 +554,8 @@ set_coords(const struct bu_structparse *UNUSED(sdp),
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
     void *view_ctx = view_state->vs_gvp;
-    rt_view_context_coord_set(view_ctx, mged_variables->mv_coords);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_coord_set(view, mged_variables->mv_coords);
 }
 
 
@@ -562,7 +569,8 @@ set_rotate_about(const struct bu_structparse *UNUSED(sdp),
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
     void *view_ctx = view_state->vs_gvp;
-    rt_view_context_rotate_about_set(view_ctx, mged_variables->mv_rotate_about);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotate_about_set(view, mged_variables->mv_rotate_about);
 }
 
 

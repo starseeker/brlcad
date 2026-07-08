@@ -173,10 +173,10 @@ static void
 motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 {
     struct bu_vls cmd = BU_VLS_INIT_ZERO;
-    struct rt_view_adc_state adc_record = {0};
-    struct rt_view_adc_state *adc = &adc_record;
-    struct rt_view_grid_state grid_record = RT_VIEW_GRID_STATE_INIT;
-    struct rt_view_grid_state *grid = &grid_record;
+    struct bv_adc_state adc_record = {0};
+    struct bv_adc_state *adc = &adc_record;
+    struct bv_grid_state grid_record = BV_GRID_STATE_INIT;
+    struct bv_grid_state *grid = &grid_record;
     int save_edflag = -1;
     fastf_t f;
     fastf_t fx, fy;
@@ -184,7 +184,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     fastf_t view_local_scale;
     mat_t view_center;
     mat_t view2model;
-    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = mged_view_context_view(view_state->vs_gvp);
     int em = ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) && mged_variables->mv_transform == 'e') ? 1 : 0;
 
     if (s->dbip == DBI_NULL)
@@ -199,9 +199,9 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     int my = xmotion->y;
     int dx = mx - dm_omx;
     int dy = my - dm_omy;
-    view_local_scale = rt_view_context_scale_get(view_ctx) * s->dbip->dbi_base2local;
-    rt_view_context_center_get(view_center, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    view_local_scale = bv_scale_get(view) * s->dbip->dbi_base2local;
+    bv_center_mat_get(view_center, view);
+    bv_view2model_get(view2model, view);
 
     switch (am_mode) {
 	case AMM_IDLE:

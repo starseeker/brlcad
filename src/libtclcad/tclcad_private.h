@@ -111,7 +111,7 @@ typedef struct tclcad_view_state {
     tclcad_label_state			  gv_sdata_labels;
     struct tclcad_data_line_state	  gv_sdata_lines;
     tclcad_polygon_state		  gv_sdata_polygons;
-    struct rt_view_other_state		  gv_prim_labels;
+    struct bv_other_state		  gv_prim_labels;
 } tclcad_view_state;
 
 
@@ -181,8 +181,8 @@ extern int tclcad_view_hide_from_view_ctx(void *view_ctx);
 extern int tclcad_view_polygon_cflag_from_view_ctx(void *view_ctx, int staged);
 extern int tclcad_view_polygon_cflag_clear(void *view_ctx, int staged);
 extern tclcad_label_state *tclcad_view_label_state_from_view_ctx(void *view_ctx, int staged);
-extern int tclcad_view_prim_labels_state_from_view_ctx(struct rt_view_other_state *state, void *view_ctx);
-extern int tclcad_view_prim_labels_state_set(void *view_ctx, const struct rt_view_other_state *state);
+extern int tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, void *view_ctx);
+extern int tclcad_view_prim_labels_state_set(void *view_ctx, const struct bv_other_state *state);
 extern int tclcad_view_data_bind_view_ctx(void *view_ctx, struct tclcad_view_data *tvd);
 extern void tclcad_view_data_unbind_view_ctx(void *view_ctx);
 

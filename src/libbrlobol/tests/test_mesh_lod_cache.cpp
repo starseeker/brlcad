@@ -427,7 +427,7 @@ main(int argc, char *argv[])
     }
 
     {
-	struct rt_view_info info = RT_VIEW_INFO_INIT;
+	struct bv_view_info info = BV_VIEW_INFO_INIT;
 	info.size = 0.01;
 	if (brlobol_mesh_lod_load_view(lod, &info, 0) < 0 ||
 	    check_mesh_lod_payload("mesh lod view", lod,

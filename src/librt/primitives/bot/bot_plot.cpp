@@ -177,7 +177,7 @@ plot_node(const vdsNode *node, void *udata)
 }
 
 static fastf_t
-avg_sample_spacing(const struct rt_view_info *info)
+avg_sample_spacing(const struct bv_view_info *info)
 {
     if (!info || info->width <= 0 || info->height <= 0 || info->size <= SMALL_FASTF)
 	return 1.0;
@@ -191,7 +191,7 @@ avg_sample_spacing(const struct rt_view_info *info)
 }
 
 static int
-rt_bot_lod_line_set_vds(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct rt_view_info *v, fastf_t UNUSED(s_size))
+rt_bot_lod_line_set_vds(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol), const struct bv_view_info *v, fastf_t UNUSED(s_size))
 {
     double d1, d2, d3;
     point_t min;
@@ -235,7 +235,7 @@ rt_bot_lod_line_set_vds(struct rt_primitive_lod_realization *realization, struct
 }
 
 extern "C" int
-rt_bot_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_bot_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -276,7 +276,7 @@ rt_bot_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_d
 // making the vlist copies... this duplication results in massive additional
 // memory usage for large BoTs.
 extern "C" int
-rt_bot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct rt_view_info *info)
+rt_bot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *info)
 {
     struct rt_bot_internal *bot_ip;
     size_t i;
@@ -290,7 +290,7 @@ rt_bot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_te
     if (bot_ip->num_vertices <= 0 || !bot_ip->vertices || bot_ip->num_faces <= 0 || !bot_ip->faces)
 	return 0;
 
-    if (!info || !rt_view_lod_bot_threshold(info) || ((size_t)rt_view_lod_bot_threshold(info) > bot_ip->num_faces)) {
+    if (!info || !bv_view_lod_bot_threshold(info) || ((size_t)bv_view_lod_bot_threshold(info) > bot_ip->num_faces)) {
 	for (i = 0; i < bot_ip->num_faces; i++) {
 	    if (bot_ip->faces[i*3+2] < 0 || (size_t)bot_ip->faces[i*3+2] > bot_ip->num_vertices)
 		continue; /* sanity */
@@ -403,7 +403,7 @@ rt_bot_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
 			struct rt_db_internal *ip,
 			const struct bg_tess_tol *UNUSED(ttol),
 			const struct bn_tol *UNUSED(tol),
-			const struct rt_view_info *UNUSED(info))
+			const struct bv_view_info *UNUSED(info))
 {
     struct rt_bot_internal *bot;
     point_t *points = NULL;

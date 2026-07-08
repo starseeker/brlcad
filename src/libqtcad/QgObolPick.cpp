@@ -13,8 +13,8 @@
 #include "brlobol/pick_detail.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/view_store.h"
+#include "bv.h"
 #include "qtcad/QgView.h"
-#include "rt/view.h"
 #include "QgLegacyViewContext.h"
 
 #include <Inventor/SbLine.h>
@@ -82,7 +82,9 @@ qg_obol_pick_view_scope_name(QgView *display)
     if (!view_ctx)
 	return std::string("shared");
 
-    const char *name = rt_view_context_name_get(view_ctx);
+    const struct bv *view = bv_context_view_const(
+	reinterpret_cast<const struct bv_context *>(view_ctx));
+    const char *name = bv_name_get(view);
     if (name && name[0])
 	return std::string(name);
 

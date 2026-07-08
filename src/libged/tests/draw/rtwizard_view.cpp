@@ -73,6 +73,7 @@
 #include <icv.h>
 #include "ged/draw.h"
 #include "rt/view.h"
+#include "view_test_util.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
@@ -101,8 +102,7 @@ open_gedp_null(const char *gfile)
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
     void *v = ged_view_active_ctx(gedp);
-    rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
-	gedp->dbip->dbi_base2local);
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     return gedp;
 }
@@ -119,12 +119,11 @@ static void *
 make_null_view(struct ged *gedp, const char *vname)
 {
     void *view_set_ctx = ged_view_set_ctx(gedp);
-    void *v = rt_view_context_create_with_set(view_set_ctx);
-    rt_view_context_name_set(v, vname);
-    rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
-	gedp->dbip->dbi_base2local);
+    void *v = ged_view_context_create_with_set(view_set_ctx);
+    bv_name_set(DRAW_TEST_BV(v), vname);
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
-    rt_view_set_context_add(view_set_ctx, v);
+    ged_view_set_context_add(view_set_ctx, v);
     ged_view_context_owned_add(gedp, v);
 
     return v;
@@ -157,7 +156,7 @@ test_null_view_context(const char *datadir)
     void *v1 = make_null_view(gedp, "v1");
 
     int fail = 0;
-    if (!v1 || !rt_view_context_is_valid(v1)) {
+    if (!v1 || !bv_context_is_valid((struct bv_context *)(v1))) {
 	bu_log("FAIL: secondary null-DM view is not a valid RT view context\n");
 	fail = 1;
     } else {
@@ -171,7 +170,7 @@ test_null_view_context(const char *datadir)
 	bu_log("PASS: secondary null-DM view has no display manager\n");
     }
 
-    const char *vname = rt_view_context_name_get(v1);
+    const char *vname = bv_name_get(DRAW_TEST_BV_CONST(v1));
     if (!vname || BU_STR_EQUAL(vname, "v1") == 0) {
 	bu_log("FAIL: secondary null-DM view name is not v1\n");
 	fail = 1;
@@ -179,11 +178,11 @@ test_null_view_context(const char *datadir)
 	bu_log("PASS: secondary null-DM view name is v1\n");
     }
 
-    if (!rt_view_context_is_valid(ged_view_active_ctx(gedp))) {
-	bu_log("FAIL: default GED active view is not a valid RT view context\n");
+    if (!bv_context_is_valid((struct bv_context *)ged_view_active_ctx(gedp))) {
+	bu_log("FAIL: default GED active view is not a valid libbv context\n");
 	fail = 1;
     } else {
-	bu_log("PASS: default GED active view is a valid RT view context\n");
+	bu_log("PASS: default GED active view is a valid libbv context\n");
     }
 
     close_gedp(gedp);
@@ -325,7 +324,7 @@ test_multiple_null_views(const char *datadir)
 	snprintf(vname[i], sizeof(vname[i]), "v%d", i + 1);
 	views[i] = make_null_view(gedp, vname[i]);
 
-	if (!views[i] || !rt_view_context_is_valid(views[i])) {
+	if (!views[i] || !bv_context_is_valid((struct bv_context *)(views[i]))) {
 	    bu_log("FAIL: view '%s' is not a valid RT view context\n", vname[i]);
 	    fail = 1;
 	}
@@ -371,11 +370,10 @@ open_gedp_obol(const char *gfile, int width, int height)
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
     ged_view_context_display_manager_set(v, dmp);
-    rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_context_unit_conversion_set(v, gedp->dbip->dbi_local2base,
-	gedp->dbip->dbi_base2local);
+    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     return gedp;
 }
@@ -453,11 +451,11 @@ test_gui_obol_render(const char *datadir)
 
     int fail = 0;
 
-    if (!rt_view_context_is_valid(ged_view_active_ctx(gedp))) {
-	bu_log("FAIL: Obol-DM active view is not a valid RT view context\n");
+    if (!bv_context_is_valid((struct bv_context *)ged_view_active_ctx(gedp))) {
+	bu_log("FAIL: Obol-DM active view is not a valid libbv context\n");
 	fail = 1;
     } else {
-	bu_log("PASS: Obol-DM active view is a valid RT view context\n");
+	bu_log("PASS: Obol-DM active view is a valid libbv context\n");
     }
 
     /* Draw + autoview + ae — mirrors MGEDpage::draw() + refreshDisplay() */
@@ -548,7 +546,7 @@ test_gui_eyemodel_consistency(const char *datadir)
     /* Save the view matrix for comparison */
     void *v = ged_view_active_ctx(gedp);
     mat_t saved_m2v;
-    rt_view_context_model2view_get(saved_m2v, v);
+    bv_model2view_get(saved_m2v, DRAW_TEST_BV_CONST(v));
 
     /* Render A */
     do_obol_refresh(gedp);
@@ -591,7 +589,7 @@ test_gui_eyemodel_consistency(const char *datadir)
 
     /* Also confirm view matrices match within floating-point noise */
     mat_t new_m2v;
-    rt_view_context_model2view_get(new_m2v, v);
+    bv_model2view_get(new_m2v, DRAW_TEST_BV_CONST(v));
     fastf_t max_delta = 0.0;
     for (int i = 0; i < 16; i++) {
 	fastf_t d = fabs(saved_m2v[i] - new_m2v[i]);

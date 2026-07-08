@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -53,8 +55,9 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
     if (argc == 1) {
 	point_t pt = VINIT_ZERO;
 	mat_t view_rotation;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
-	rt_view_context_rotation_get(view_rotation, view_ctx);
+	bv_rotation_get(view_rotation, view);
 	bn_mat_trn(mat, view_rotation);
 	anim_v_unpermute(mat);
 
@@ -91,8 +94,9 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
     anim_v_permute(mat);
     mat_t rotation;
     bn_mat_trn(rotation, mat);
-    rt_view_context_rotation_set(view_ctx, rotation);
-    rt_view_context_update(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, rotation);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

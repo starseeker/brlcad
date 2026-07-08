@@ -68,9 +68,6 @@ public:
 private:
 	struct Impl;
 
-	void suspendDragBoundsUpdate(qg_legacy_view *v);
-	void restoreDragBoundsUpdate(qg_legacy_view *v, int refresh_bounds);
-
 	Impl *m = nullptr;
 	static const long long s_drag_update_interval_ms = 16;
 };

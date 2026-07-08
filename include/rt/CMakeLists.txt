@@ -24,7 +24,6 @@ set(
   directory.h
   dspline.h
   edit.h
-  edit_legacy_bsg.h
   eval_wireframe.h
   func.h
   functab.h
@@ -59,7 +58,6 @@ set(
   uv.h
   version.h
   view.h
-  view_legacy_bsg.h
   vlist.h
   wdb.h
   xray.h

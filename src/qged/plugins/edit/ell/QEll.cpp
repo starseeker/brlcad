@@ -96,8 +96,7 @@ QEll::QEll()
 
 QEll::~QEll()
 {
-    qged_edit_feature_clear_geometry_view(
-	    m_ctx ? m_ctx->getViewWidget() : nullptr, "_ell_edit", p);
+    qged_edit_feature_clear_geometry(p);
     if (m_ctx) {
 	qged_edit_feature_remove(m_ctx, "_ell_edit");
 	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
@@ -189,18 +188,17 @@ QEll::update_obj_wireframe()
     struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    QgView *display = m_ctx ? m_ctx->getViewWidget() : nullptr;
 
     // Resolve the edit object fresh in case it was removed externally
     // (e.g. by a clear/zap command).
     p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
-    if (qged_edit_feature_ref_is_null(p) && !display)
+    if (qged_edit_feature_ref_is_null(p))
 	return;
 
     // No active db or object name means there is nothing to edit - make sure
     // the edit wireframe is hidden.
     if (!gedp->dbip || !bu_vls_strlen(&oname)) {
-	qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
+	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
 	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
 	return;
@@ -210,13 +208,13 @@ QEll::update_obj_wireframe()
     // stale pointers if scene/database content changed.
     dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_ELL) {
-	qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
+	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
 	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
 	return;
     }
 
-    qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
+    qged_edit_feature_clear_geometry(p);
     qged_edit_feature_set_view(p, m_ctx);
 
     // Set up the rt_db_internal and trigger the plotting routine with the
@@ -230,8 +228,8 @@ QEll::update_obj_wireframe()
     if (!wdbp)
 	return;
     struct bn_tol *tol = &wdbp->wdb_tol;
-    qged_edit_feature_replace_ell_wireframe_view(display, "_ell_edit",
-	    p, QGED_EDIT_FEATURE_TRANSIENT_PREVIEW,
+    qged_edit_feature_replace_ell_wireframe(p,
+	    QGED_EDIT_FEATURE_TRANSIENT_PREVIEW,
 	    (const struct rt_ell_internal *)intern.idb_ptr);
 
     // At least for now, mimic the MGED behavior and make editing wireframes white
@@ -272,12 +270,11 @@ QEll::update_viewobj_name(const QString &)
     struct ged *gedp = getGed();
     if (!gedp || !gedp->dbip)
 	return;
-    QgView *display = m_ctx ? m_ctx->getViewWidget() : nullptr;
 
     // Resolve/create the edit view feature.  Don't trust cached pointers here
     // since clear/zap may have removed it.
     p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
-    if (qged_edit_feature_ref_is_null(p) && !display)
+    if (qged_edit_feature_ref_is_null(p))
 	return;
 
     // Make sure the view feature names match whatever the dialog says
@@ -301,7 +298,7 @@ QEll::update_viewobj_name(const QString &)
 	    read_from_db();
 	} else {
 	    ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
-	    qged_edit_feature_clear_geometry_view(display, "_ell_edit", p);
+	    qged_edit_feature_clear_geometry(p);
 	    qged_edit_feature_set_visible(p, 0);
 	    qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
 	    emit view_updated(QG_VIEW_REFRESH);

@@ -6,181 +6,149 @@ Last refreshed: 2026-07-08
 Purpose
 -------
 
-libbv is BRL-CAD's scene-graph-free view mechanics library.  It keeps the
-useful idea of a shared view layer without preserving the old libbv API, the
-historical bview data model, or the temporary BSG scene ownership model.
+libbv is BRL-CAD's scene-graph-free view mechanics library.  It owns passive
+view state, view math, view sets, lightweight lifecycle callbacks, and generic
+view-quality preferences.  It must not own databases, display managers,
+Obol/Coin scene objects, command policy, realized LoD payloads, framebuffer
+protocols, Tcl state, or BSG compatibility behavior.
 
-The intended split is:
+Current Ownership
+-----------------
 
-* libbv owns passive, display-independent view state and view math.
-* libbrlobol/Obol owns scene objects, visualization realization, interaction
-  objects, picking, selection, command visuals, framebuffer presentation, and
-  view-aware LoD realization.
-* librt owns geometry/evaluation algorithms.  It should not retain
-  application scene state.
-* libged, qtcad, MGED, and GSH own application policy and host integration.
+libbv currently owns:
 
-Current Boundary Decision
+* `struct bv`, `struct bv_set`, `struct bv_context`, and
+  `struct bv_context_set`.
+* Camera/view scalars, matrices, AET/orientation, keypoint, current point,
+  model/view/screen transforms, autoview bounds math, and view hashes.
+* Passive mouse/input bookkeeping, knobs, refresh flags, frame time, zclip,
+  framebuffer mode, cleared state, and user data.
+* Passive faceplate/overlay records: grid, ADC, model axes, view axes, center
+  dot, scale overlay, parameter display, and interactive rectangle state.
+* Passive snap preferences and grid snap math.
+* Generic view snapshot and sampling preference data:
+  `bv_view_info`, `bv_lod_settings`, and `bv_lod_policy`.
+
+The old `rt_view_info` and `rt_view_lod_policy` names are now compatibility
+aliases/wrappers over libbv data and helpers.  Primitive plotting/LoD
+signatures now use `bv_view_info` directly; the old RT names remain only in
+the LoD compatibility header/helper layer and its tests.
+
+Completed Migration State
 -------------------------
 
-libbv should contain data and algorithms that remain valid without a database,
-display manager, framebuffer server, Obol scene, Coin node, Tcl interpreter, or
-application command context.  If a feature needs a scene object, a database path,
-a display window, or a command policy decision, it is not a libbv feature.
+* GED view-state storage allocates and owns `bv_context` /
+  `bv_context_set` directly.
+* qtcad, MGED, TclCAD, GSH, `ged_draw_perf`, GED DM setup, and GED-linked draw
+  tests use libbv or GED owner APIs for passive view state.
+* Production libged no longer calls `rt_view_context_*` for passive state.
+* libbrlobol reads view mechanics from `bv_context` / `struct bv` and syncs
+  Obol cameras through `syncCameraFromViewContext`.
+* qsketch publishes line sets through libbrlobol/Obol feature-store APIs; it
+  no longer uses `rt_view_context_line_set_create`.
+* librt primitive plotting and LoD callbacks use `bv_view_info` directly.
+  `rt_view_info` is now a wrapper/alias name only.
+* The old RT view-context facade, scene-ref API, feature/polygon adapters, and
+  `view_legacy_bsg` implementation have been removed from librt.
+* GED draw scene identity is represented by `ged_draw_scene_handle`, a
+  GED-owned opaque handle whose backend can be Obol, legacy, or empty.  GED
+  draw plumbing no longer carries `rt_view_scene_ref`.
+* libbrlobol no longer exposes RT scene-ref bridge helpers on
+  `SoBRLSceneController` or mesh-LoD cache APIs.
+* Draw-test passive setup/inspection uses libbv helpers.  Scene snap/measure
+  coverage uses final GED/libbrlobol/Obol APIs, not RT context adapters.
+* `ged_test_measure_semantics` was removed.  `ged_test_snap_semantics` is a
+  pure libbv grid-snap test.
+* The old libdm backend draw-item test was removed; dm-obol immediate-mode
+  callbacks are no-ops and high-level GED/libbrlobol draw publication is the
+  expected path.
+* GED draw LoD policy APIs still expose `ged_draw_view_lod_policy` as a
+  `struct bv_lod_policy` typedef, but the per-view policy, independent-scope
+  flag, and Obol scene-root token now live in a libbrlobol
+  `BRLObolViewAttachment`.
+* `BRLObolViewController` owns its view-local realized LoD payloads through
+  `BRLObolViewAttachment`, not as raw controller members.  Shared source
+  geometry remains scene-controller/database-source state; active LoD payloads
+  remain view-local.
+* GED-created view contexts and externally attached Obol controllers share
+  `BRLObolViewAttachment` instances while attached.  Attach/replacement binds
+  the GED host record to the controller attachment; detach/unbind restores a
+  GED-owned attachment copy carrying passive host state forward.
+* Passive overlay, input, snap, and faceplate records are libbv types in
+  production code.  The old passive `rt_view_*` record names and init macros
+  are no longer exposed by `rt/view.h`.
+* MGED edit setup converts `bv_context` to an `rt_edit_view` snapshot through
+  `rt_edit_view_from_context`; the stale `edit_legacy_bsg.h` adapter header
+  has been removed.
+* The no-op GED edit-matrix view API and the unused BSG `gv_edit_mat` display
+  field have been removed.  MGED high-level Obol refresh no longer stages a
+  per-frame edit matrix through view state.
+* qged edit plugins publish preview geometry through GED view feature refs,
+  which resolve to libbrlobol/Obol edit-preview features.  The earlier
+  duplicate production path that also mutated the qtcad widget's Obol preview
+  directly has been removed.
+* Obol viewport readback is available through
+  `BRLObolViewController::renderToImage`.  `dm-obol` delegates display-image
+  capture to that controller API, and GED screengrab uses a GED-private Obol
+  bridge for Obol-backed views before falling back to raw DM readback for
+  non-Obol display managers.
+* GED exposes a narrow opaque Obol-controller lookup/ensure API for a view
+  context.  App-host helpers such as fbserv/readback use that GED/libbrlobol
+  controller association instead of probing `dm_obol_controller`.
 
-libbv Owns Now
+Boundary Rules
 --------------
 
-The current `struct bv` already has the right core shape:
-
-* view/camera state and view sets.
-* view dimensions, scale, size, perspective, unit conversion, z clipping, and
-  frame bookkeeping.
-* model2view, view2model, pmodel2view, pmat, rotation, and center matrices.
-* eye, aet, keypoint, current point, mouse state, and generic view-adjust state.
-* screen/view/model coordinate conversion and plane helpers.
-* autoview from explicit bounds.
-* generic knob state and knob command interpretation.
-* display-independent refresh/dirty counters, frame time, framebuffer mode,
-  cleared state, and opaque host user data.
-
-Good Next libbv Candidates
---------------------------
-
-The remaining useful libbv candidates are passive per-view data records:
-
-* Faceplate and overlay state records: grid, ADC, model axes, view axes, center
-  dot, scale overlay, parameter display, and interactive rectangle state.
-  These belong in libbv only as data plus display-independent defaults and
-  validation.  Rendering those records as Obol/Coin nodes remains
-  libbrlobol/Obol work.
-* Snap preferences: line snapping enabled/disabled, snap source flags, snap kind
-  masks, and snap tolerance factors can live in libbv as per-view user
-  preferences.  Snap candidate generation from database geometry, polygons,
-  features, or scene objects remains libbrlobol/libged/qtcad work.
-* View-set lifecycle and bookkeeping refinements that make multi-view sharing
-  simpler without adding scene ownership.
-
-Target Context Shape
---------------------
-
-`rt_view_context_native` should not survive as a renamed RT wrapper.  The target
-is a real libbv context, either `struct bv` if the current object remains
-sufficient or a small `struct bv_context` if grouping view mechanics, passive
-overlay records, snap preferences, and view-set membership behind one type makes
-call sites clearer.
-
-That libbv context should be usable directly by librt algorithms, libged, qtcad,
-MGED, GSH, and libbrlobol without carrying retained scene state.  Code that
-needs scene state should hold a libbv context plus an owner-specific companion
-object, not extend libbv to become a scene facade.
-
-Destination Map for Non-libbv State
------------------------------------
-
-The non-libbv fields currently mixed into `rt_view_context_native` should move
-to their natural owners:
-
-* Display-manager pointers, framebuffer/window handles, and headless backend
-  attachment state move to the application/view host layer: MGED, GSH, qtcad,
-  and libged-facing host objects.
-* TclCAD data moves to libtclcad/MGED command integration state.
-* Callback tables, update hooks, redraw scheduling, and application event
-  integration move to the application/view host layer.  libbrlobol may expose
-  scene/cache change notifications, but the host decides how to schedule redraws.
-* Edit matrices and edit-preview behavior move to the modern editing stack:
-  librt edit operations and math, libged/MGED/qtcad command policy, and
-  libbrlobol/Obol preview/manipulator visualization.
-* Scene root refs, independent scene scopes, shared scene handles, and per-view
-  overlay roots move to libbrlobol/Obol view attachment state.
-* LoD policy, cache advancement callbacks, and per-view LoD realization move to
-  libbrlobol/Obol view state.  If a future generic "quality preference" is
-  useful, it can be a passive libbv preference, but not the realization logic.
-* Selection, picking, feature, and polygon adapters move to libbrlobol/Obol plus
-  libged/qtcad command policy.
-* Snap solving and snap candidate construction move to libbrlobol/libged/qtcad.
-  Only passive snap preferences are libbv candidates.
-
-Keep Out of libbv
------------------
+Keep in libbv only data and math that are meaningful without a database, a
+display backend, Tcl, a framebuffer server, or an Obol scene.
 
 Do not move these into libbv:
 
-* Obol/Coin nodes, scene refs, independent scene scopes, CAD packets, or source
-  publication.
-* Database sources, display lists, drawable geometry, or command visualization
-  objects.
-* Selection state, picking results, feature stores, polygon stores, or polygon
-  editing behavior.
-* Actual snap candidate construction or snap hit testing against scene/database
+* Obol/Coin nodes, scene refs, CAD packets, source publication, or view-local
+  scene roots.
+* Drawable geometry, display lists, command visualization objects, realized
+  LoD payloads, LoD caches, or cache-population workers.
+* Selection state, picking results, feature stores, polygon stores, editing
+  behavior, manipulators, or object snap hit testing against scene/database
   content.
-* LoD payloads, LoD caches, cache-population workers, and per-view LoD scene
-  realization.  A future generic view-quality preference could be libbv data,
-  but current LoD policy drives libbrlobol/Obol rendering and should stay out
-  of libbv.
-* Edit preview/manipulator state.  Editing should use librt edit operations,
-  libged/MGED/qtcad policy, and libbrlobol/Obol manipulators.  libbv supplies
-  view math snapshots only.
-* Display-manager pointers, TclCAD data, callbacks, update hooks, display
-  windows, framebuffer protocol handling, Auth/TLS, or fbserv wire logic.
-* Compatibility surfaces whose only purpose is preserving retained BSG behavior.
+* Display-manager pointers, TclCAD data, application update hooks,
+  framebuffer protocol handling, Auth/TLS, or fbserv wire logic.
+* Compatibility wrappers whose only purpose is preserving BSG behavior.
 
-Current Code State
-------------------
+Remaining Targets
+-----------------
 
-Implemented libbv core:
-
-* `include/bv.h`
-* `include/bv/view.h`
-* `src/libbv/view.c`
-* `src/libbv/tests/view.c`
-
-Current transitional state:
-
-* `src/librt/view_context_native.c` embeds `struct bv` and delegates core view
-  mechanics to `bv_*`.
-* `rt_view_context_native` still stores several fields that should not stay
-  there long term: display manager/TclCAD/callback host fields, edit matrix,
-  scene root and independent scope refs, LoD policy state, faceplate/overlay
-  records, and snap preferences.
-* Neutral `rt_view_scene_ref` helpers are separate from the BSG adapter path.
-  They are still migration scaffolding, not a reason for librt to own a scene.
-* The sketch polygon BSG adapter path has been retired.  Remaining polygon
-  handling should stay on native/Obol adapter paths and then move out of the
-  generic RT view facade as callers are cleaned up.
-* `include/rt/view_legacy_bsg.h` and `src/librt/view_legacy_bsg.c` are legacy
-  removal targets, not design references.
-
-Migration Plan
---------------
-
-1. Add libbv-owned passive faceplate/overlay records and accessors, with
-   display-independent defaults matching current native RT defaults.
-2. Add libbv-owned snap preference records if qtcad/MGED/GSH need shared
-   behavior.  Keep snap solving outside libbv.
-3. Decide whether `struct bv` remains the public context or whether to introduce
-   `struct bv_context` as a thin libbv grouping type.  Do not base this on the
-   existing RT wrapper layout.
-4. Retarget native `rt_view_context_*` faceplate/snap accessors to delegate to
-   libbv, then migrate production callers to direct `bv_*` or libbrlobol APIs.
-5. Move display manager, TclCAD pointers, callbacks, and update hooks into
-   their actual application/view host owners.
-6. Move scene root, independent scope, feature, polygon, selection, picking,
-   and LoD realization APIs to libbrlobol/Obol-facing ownership, or delete
-   them where they only support BSG compatibility.
-7. Delete `rt_view_context_native` once its remaining state has a libbv,
-   libbrlobol, application-host, or deleted destination.
-8. Delete BSG-specific constructors, wrappers, tests, and headers once no
-   production caller needs them.
-9. Keep libbv tests focused on pure view mechanics and passive per-view data.
-   Test scene realization, picking, selection, LoD, and framebuffer behavior in
-   libbrlobol/libged/qtcad/MGED/GSH tests.
+1. Finish retargeting edit visualization to the modern editing stack:
+   librt edit operations, libged/MGED/qtcad command policy, and
+   libbrlobol/Obol preview/manipulator realization.  The old edit-matrix
+   display-path API surface and qged direct-widget preview fallback are gone;
+   remaining work is native MGED edit-preview behavior and richer manipulator
+   integration.
+2. Retire remaining app-host/display legacy dependencies: fbserv protocol
+   ownership and libdm window-open assumptions that should become
+   Obol/libbrlobol/libbv or image-stream responsibilities.  Obol-backed
+   screengrab/readback and fbserv setup now use the GED/libbrlobol controller
+   association; raw DM readback remains only for non-Obol display managers.
+3. Keep libbv tests focused on pure view mechanics.  Test scene realization,
+   picking, selection, realized LoD, progressive cache behavior, and
+   framebuffer behavior in libbrlobol/libged/qtcad/MGED/GSH tests.
 
 Verification
 ------------
 
-After code changes following this plan:
+Use `build/` for implementation checks.  Reserve `build_perf/` for final
+goal-level release/performance validation.
 
-* `ninja -C build libbv librt libged libqtcad`
-* `ctest --test-dir build -R '^(bv_basic|rt_view_info|ged_test_view_command|ged_test_obol_draw_sync|test_qtcad_obol)' --output-on-failure`
+Focused debug checks:
+
+* `ninja -C build libbv librt libged libqtcad bv_test rt_view_info ged_test_view_command ged_test_obol_draw_sync ged_test_snap_semantics ged_test_mged_view_state ged_test_rtwizard_view qsketch test_qtcad_obol_draw_sync test_qtcad_obol_faceplate_sync test_qtcad_obol_snap`
+* `ctest --test-dir build -R '^(bv_basic|rt_view_info|libbrlobol_lod_update_action|libbrlobol_mesh_lod_cache|ged_test_view_command|ged_test_obol_draw_sync|ged_test_snap_semantics|ged_test_mged_view_state|ged_test_rtwizard_view|test_qtcad_obol_draw_sync|test_qtcad_obol_faceplate_sync|test_qtcad_obol_snap)$' --output-on-failure`
+* `ctest --test-dir build -R ged_draw --output-on-failure`
 * `git diff --check`
+
+Final goal-level checks:
+
+* Build and test the same targets in `build_perf/`.
+* Run draw-performance/image gates that cover normal wire, LoD-enabled wire,
+  shaded/hidden-line, selection highlighting, faceplate/grid, and progressive
+  cache behavior.

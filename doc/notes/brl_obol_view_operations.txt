@@ -60,19 +60,21 @@ the replacement defines a smaller explicit contract:
 * input/knob state and command processing
 * view-set bookkeeping for shared view state
 
-The current librt neutral `rt_view_context` constructors are native/libbv
-backed for generic view mechanics.  Explicit `_bsg` constructors remain for
-retained fallback behavior only.  Native scene/interaction operations should
-route through installed Obol/libbrlobol adapters; without an adapter they
-return neutral empty/no-op results rather than implicitly creating BSG storage.
-Native RT contexts may hold transitional integration state such as Obol
-scene-root attachment, independent-view scope flags, and basic measurement
-results, but those are RT/GED/Obol bridge services rather than libbv-owned
-state.
-Use `rt_view_context_is_valid` when code needs to reject any opaque RT
-view-context pointer, native or retained.  Use `rt_view_context_is_retained`
-only for explicit BSG fallback identity; it is not a display-host capability
-test.
+Current production view mechanics are libbv-backed.  GED owns application
+view registration and command policy, while libbrlobol owns Obol attachment
+state such as scene-root tokens, independent-view scope flags, and realized
+view-local LoD payloads through `BRLObolViewAttachment`.  GED view contexts
+and attached Obol controllers share one ref-counted attachment while attached;
+controller replacement and detach explicitly unbind it and leave the GED view
+context with an attachment copy carrying passive host state.  Missing scene or
+feature-store cases should return explicit empty/no-op results rather than
+implicitly creating retained BSG storage.
+
+Edit visualization should use librt edit state plus libbrlobol/Obol preview or
+manipulator objects.  The old display-path edit-matrix handoff has been
+removed: GED view contexts no longer expose edit-matrix setters, MGED does not
+stage `vs_model2objview` through view state during `dozoom`, and libbsg no
+longer carries a `gv_edit_mat` view field.
 
 The new libbv must not own Obol scene graph objects, command-result objects,
 database draw state, display lists, Tcl/display-manager state, polygon stores,
@@ -105,7 +107,7 @@ fallback until that display path is retired.
 
 The supported refresh shape is:
 
-* update neutral view state through libbv/librt-backed view contexts
+* update view state through libbv-backed view contexts
 * mutate scene/annotation/command-result state through GED draw facades or
   libbrlobol/Obol APIs
 * apply a draw transaction such as `GED_DRAW_TXN_REDRAW` when scene refresh is
@@ -192,6 +194,19 @@ visualizations.  Custom Coin providers are for complex command/plugin-authored
 scene objects and must remain inside an owner-scoped Obol scene-object boundary
 with explicit teardown and invalidation rules.  They are not a back door for
 anonymous scene mutation.
+
+Edit-preview geometry follows the same rule.  qged and other applications
+publish preview line/label data through GED feature refs; GED resolves those
+refs to libbrlobol/Obol feature records owned by the active view context.
+Application widgets should not maintain a second direct Obol preview mutation
+path, because that bypasses shared lifecycle, owner, selection, and teardown
+semantics.
+
+Image readback follows the same ownership boundary.  For Obol-backed views,
+screenshots and visible-canvas captures should ask the active
+`BRLObolViewController` to render the view to a caller-owned image buffer.
+Display-manager readback is only a fallback for non-Obol backends, not the
+source of truth for Obol scene capture.
 
 Polygon Fill
 ------------

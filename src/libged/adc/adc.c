@@ -29,18 +29,18 @@
 
 
 #include "vmath.h"
+#include "bv.h"
 #include "ged.h"
-#include "rt/view.h"
 
-void ged_calc_adc_pos(const void *view_ctx, struct rt_view_adc_state *adc);
-void ged_calc_adc_a1(const void *view_ctx, struct rt_view_adc_state *adc);
-void ged_calc_adc_a2(const void *view_ctx, struct rt_view_adc_state *adc);
-void ged_calc_adc_dst(const void *view_ctx, struct rt_view_adc_state *adc);
+void ged_calc_adc_pos(const void *view_ctx, struct bv_adc_state *adc);
+void ged_calc_adc_a1(const void *view_ctx, struct bv_adc_state *adc);
+void ged_calc_adc_a2(const void *view_ctx, struct bv_adc_state *adc);
+void ged_calc_adc_dst(const void *view_ctx, struct bv_adc_state *adc);
 
 static void
-adc_vls_print(const void *view_ctx, const struct rt_view_adc_state *adc, fastf_t base2local, struct bu_vls *out_vp)
+adc_vls_print(const void *view_ctx, const struct bv_adc_state *adc, fastf_t base2local, struct bu_vls *out_vp)
 {
-    fastf_t view_scale = rt_view_context_scale_get(view_ctx);
+    fastf_t view_scale = bv_scale_get(bv_context_view_const((const struct bv_context *)view_ctx));
 
     bu_vls_printf(out_vp, "draw = %d\n", adc->draw);
     bu_vls_printf(out_vp, "a1 = %.15e\n", adc->a1);
@@ -129,13 +129,14 @@ ged_adc_core(struct ged *gedp,
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    fastf_t view_scale = rt_view_context_scale_get(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    fastf_t view_scale = bv_scale_get(view);
     fastf_t adc_scale = (gedp->dbip) ? view_scale * gedp->dbip->dbi_base2local : view_scale;
     double sval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;
     mat_t model2view;
     mat_t view2model;
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -172,12 +173,12 @@ ged_adc_core(struct ged *gedp,
 	user_pt[i] = scanval;
     }
 
-    struct rt_view_adc_state adc;
-    if (!rt_view_context_adc_state_get(&adc, view_ctx))
+    struct bv_adc_state adc;
+    if (!bv_adc_state_get(&adc, view))
 	return BRLCAD_ERROR;
 #define ADC_COMMIT_RETURN(_ret) \
     do { \
-	rt_view_context_adc_state_set(view_ctx, &adc); \
+	bv_adc_state_set(view, &adc); \
 	return (_ret); \
     } while (0)
 
@@ -211,7 +212,7 @@ ged_adc_core(struct ged *gedp,
 		else
 		    adc.a1 = user_pt[0];
 
-		adc.dv_a1 = (1.0 - (adc.a1 / 45.0)) * RT_VIEW_MAX;
+		adc.dv_a1 = (1.0 - (adc.a1 / 45.0)) * BV_VIEW_MAX;
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -232,7 +233,7 @@ ged_adc_core(struct ged *gedp,
 		else
 		    adc.a2 = user_pt[0];
 
-		adc.dv_a2 = (1.0 - (adc.a2 / 45.0)) * RT_VIEW_MAX;
+		adc.dv_a2 = (1.0 - (adc.a2 / 45.0)) * BV_VIEW_MAX;
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -253,7 +254,7 @@ ged_adc_core(struct ged *gedp,
 		else
 		    adc.dst = user_pt[0] / adc_scale;
 
-		adc.dv_dist = (adc.dst / M_SQRT1_2 - 1.0) * RT_VIEW_MAX;
+		adc.dv_dist = (adc.dst / M_SQRT1_2 - 1.0) * BV_VIEW_MAX;
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -274,7 +275,7 @@ ged_adc_core(struct ged *gedp,
 		else
 		    adc.dv_dist = user_pt[0];
 
-		adc.dst = (adc.dv_dist * RT_INV_VIEW + 1.0) * M_SQRT1_2;
+		adc.dst = (adc.dv_dist * BV_INV_VIEW + 1.0) * M_SQRT1_2;
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -288,7 +289,7 @@ ged_adc_core(struct ged *gedp,
 	if (argc == 1) {
 	    if (!adc.anchor_pos) {
 		adc.pos_grid[X] += user_pt[0] / adc_scale;
-		rt_view_adc_grid_to_view(&adc, view2model, RT_VIEW_MAX);
+		bv_adc_grid_to_view(&adc, view2model, BV_VIEW_MAX);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -303,7 +304,7 @@ ged_adc_core(struct ged *gedp,
 	if (argc == 1) {
 	    if (!adc.anchor_pos) {
 		adc.pos_grid[Y] += user_pt[0] / adc_scale;
-		rt_view_adc_grid_to_view(&adc, view2model, RT_VIEW_MAX);
+		bv_adc_grid_to_view(&adc, view2model, BV_VIEW_MAX);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -331,7 +332,7 @@ ged_adc_core(struct ged *gedp,
 		}
 
 		adc.pos_grid[Z] = 0.0;
-		rt_view_adc_grid_to_view(&adc, view2model, RT_VIEW_MAX);
+		bv_adc_grid_to_view(&adc, view2model, BV_VIEW_MAX);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_model);
 	    }
 
@@ -347,8 +348,8 @@ ged_adc_core(struct ged *gedp,
 	    if (!adc.anchor_pos) {
 		double pval = (gedp->dbip) ? (user_pt[0] * gedp->dbip->dbi_local2base) : user_pt[0];
 		adc.pos_model[X] += pval;
-		rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
-		rt_view_adc_view_to_grid(&adc, model2view);
+		bv_adc_model_to_view(&adc, model2view, BV_VIEW_MAX);
+		bv_adc_view_to_grid(&adc, model2view);
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -363,8 +364,8 @@ ged_adc_core(struct ged *gedp,
 	    if (!adc.anchor_pos) {
 		double pval = (gedp->dbip) ? (user_pt[0] * gedp->dbip->dbi_local2base) : user_pt[0];
 		adc.pos_model[Y] += pval;
-		rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
-		rt_view_adc_view_to_grid(&adc, model2view);
+		bv_adc_model_to_view(&adc, model2view, BV_VIEW_MAX);
+		bv_adc_view_to_grid(&adc, model2view);
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -379,8 +380,8 @@ ged_adc_core(struct ged *gedp,
 	    if (!adc.anchor_pos) {
 		double pval = (gedp->dbip) ? (user_pt[0] * gedp->dbip->dbi_local2base) : user_pt[0];
 		adc.pos_model[Z] += pval;
-		rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
-		rt_view_adc_view_to_grid(&adc, model2view);
+		bv_adc_model_to_view(&adc, model2view, BV_VIEW_MAX);
+		bv_adc_view_to_grid(&adc, model2view);
 	    }
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
@@ -404,8 +405,8 @@ ged_adc_core(struct ged *gedp,
 		VMOVE(adc.pos_model, user_pt);
 	    }
 
-	    rt_view_adc_model_to_view(&adc, model2view, RT_VIEW_MAX);
-	    rt_view_adc_view_to_grid(&adc, model2view);
+	    bv_adc_model_to_view(&adc, model2view, BV_VIEW_MAX);
+	    bv_adc_view_to_grid(&adc, model2view);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -426,9 +427,9 @@ ged_adc_core(struct ged *gedp,
 		    adc.dv_x = user_pt[0];
 		}
 
-		adc.pos_view[X] = adc.dv_x * RT_INV_VIEW;
-		adc.pos_view[Y] = adc.dv_y * RT_INV_VIEW;
-		rt_view_adc_view_to_grid(&adc, model2view);
+		adc.pos_view[X] = adc.dv_x * BV_INV_VIEW;
+		adc.pos_view[Y] = adc.dv_y * BV_INV_VIEW;
+		bv_adc_view_to_grid(&adc, model2view);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -451,9 +452,9 @@ ged_adc_core(struct ged *gedp,
 		    adc.dv_y = user_pt[0];
 		}
 
-		adc.pos_view[X] = adc.dv_x * RT_INV_VIEW;
-		adc.pos_view[Y] = adc.dv_y * RT_INV_VIEW;
-		rt_view_adc_view_to_grid(&adc, model2view);
+		adc.pos_view[X] = adc.dv_x * BV_INV_VIEW;
+		adc.pos_view[Y] = adc.dv_y * BV_INV_VIEW;
+		bv_adc_view_to_grid(&adc, model2view);
 		MAT4X3PNT(adc.pos_model, view2model, adc.pos_view);
 	    }
 
@@ -626,7 +627,7 @@ ged_adc_core(struct ged *gedp,
 
     if (BU_STR_EQUAL(parameter, "reset")) {
 	if (argc == 0) {
-	    rt_view_adc_reset(&adc, view2model, model2view);
+	    bv_adc_reset(&adc, view2model, model2view);
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}
@@ -653,70 +654,73 @@ ged_adc_core(struct ged *gedp,
 
 
 void
-ged_calc_adc_pos(const void *view_ctx, struct rt_view_adc_state *adc)
+ged_calc_adc_pos(const void *view_ctx, struct bv_adc_state *adc)
 {
     mat_t model2view;
     mat_t view2model;
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_view2model_get(view2model, view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
     if (adc->anchor_pos == 1) {
-	rt_view_adc_model_to_view(adc, model2view, RT_VIEW_MAX);
-	rt_view_adc_view_to_grid(adc, model2view);
+	bv_adc_model_to_view(adc, model2view, BV_VIEW_MAX);
+	bv_adc_view_to_grid(adc, model2view);
     } else if (adc->anchor_pos == 2) {
-	rt_view_adc_grid_to_view(adc, view2model, RT_VIEW_MAX);
+	bv_adc_grid_to_view(adc, view2model, BV_VIEW_MAX);
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     } else {
-	rt_view_adc_view_to_grid(adc, model2view);
+	bv_adc_view_to_grid(adc, model2view);
 	MAT4X3PNT(adc->pos_model, view2model, adc->pos_view);
     }
 }
 
 
 void
-ged_calc_adc_a1(const void *view_ctx, struct rt_view_adc_state *adc)
+ged_calc_adc_a1(const void *view_ctx, struct bv_adc_state *adc)
 {
     if (adc->anchor_a1) {
 	fastf_t dx, dy;
 	mat_t model2view;
 	point_t view_pt;
 
-	rt_view_context_model2view_get(model2view, view_ctx);
+	bv_model2view_get(model2view,
+		bv_context_view_const((const struct bv_context *)view_ctx));
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_a1);
-	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
-	dy = view_pt[Y] * RT_VIEW_MAX - adc->dv_y;
+	dx = view_pt[X] * BV_VIEW_MAX - adc->dv_x;
+	dy = view_pt[Y] * BV_VIEW_MAX - adc->dv_y;
 
 	if (!ZERO(dx) || !ZERO(dy)) {
 	    adc->a1 = RAD2DEG*atan2(dy, dx);
-	    adc->dv_a1 = (1.0 - (adc->a1 / 45.0)) * RT_VIEW_MAX;
+	    adc->dv_a1 = (1.0 - (adc->a1 / 45.0)) * BV_VIEW_MAX;
 	}
     }
 }
 
 
 void
-ged_calc_adc_a2(const void *view_ctx, struct rt_view_adc_state *adc)
+ged_calc_adc_a2(const void *view_ctx, struct bv_adc_state *adc)
 {
     if (adc->anchor_a2) {
 	fastf_t dx, dy;
 	mat_t model2view;
 	point_t view_pt;
 
-	rt_view_context_model2view_get(model2view, view_ctx);
+	bv_model2view_get(model2view,
+		bv_context_view_const((const struct bv_context *)view_ctx));
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_a2);
-	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
-	dy = view_pt[Y] * RT_VIEW_MAX - adc->dv_y;
+	dx = view_pt[X] * BV_VIEW_MAX - adc->dv_x;
+	dy = view_pt[Y] * BV_VIEW_MAX - adc->dv_y;
 
 	if (!ZERO(dx) || !ZERO(dy)) {
 	    adc->a2 = RAD2DEG*atan2(dy, dx);
-	    adc->dv_a2 = (1.0 - (adc->a2 / 45.0)) * RT_VIEW_MAX;
+	    adc->dv_a2 = (1.0 - (adc->a2 / 45.0)) * BV_VIEW_MAX;
 	}
     }
 }
 
 
 void
-ged_calc_adc_dst(const void *view_ctx, struct rt_view_adc_state *adc)
+ged_calc_adc_dst(const void *view_ctx, struct bv_adc_state *adc)
 {
     if (adc->anchor_dst) {
 	fastf_t dist;
@@ -724,16 +728,17 @@ ged_calc_adc_dst(const void *view_ctx, struct rt_view_adc_state *adc)
 	mat_t model2view;
 	point_t view_pt;
 
-	rt_view_context_model2view_get(model2view, view_ctx);
+	bv_model2view_get(model2view,
+		bv_context_view_const((const struct bv_context *)view_ctx));
 	MAT4X3PNT(view_pt, model2view, adc->anchor_pt_dst);
 
-	dx = view_pt[X] * RT_VIEW_MAX - adc->dv_x;
-	dy = view_pt[Y] * RT_VIEW_MAX - adc->dv_y;
+	dx = view_pt[X] * BV_VIEW_MAX - adc->dv_x;
+	dy = view_pt[Y] * BV_VIEW_MAX - adc->dv_y;
 	dist = sqrt(dx * dx + dy * dy);
-	adc->dst = dist * RT_INV_VIEW;
-	adc->dv_dist = (dist / M_SQRT1_2) - RT_VIEW_MAX;
+	adc->dst = dist * BV_INV_VIEW;
+	adc->dv_dist = (dist / M_SQRT1_2) - BV_VIEW_MAX;
     } else
-	adc->dst = (adc->dv_dist * RT_INV_VIEW + 1.0) * M_SQRT1_2;
+	adc->dst = (adc->dv_dist * BV_INV_VIEW + 1.0) * M_SQRT1_2;
 }
 
 

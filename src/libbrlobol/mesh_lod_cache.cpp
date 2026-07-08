@@ -11,6 +11,7 @@
 
 #include "common.h"
 
+#include "bv.h"
 #include "brlobol/draw_cache.h"
 #include "brlobol/mesh_lod_cache.h"
 
@@ -2045,16 +2046,16 @@ brlobol_mesh_lod_load_level(struct BRLObolMeshLod *lod, int level, int reset)
 
 int
 brlobol_mesh_lod_load_view(struct BRLObolMeshLod *lod,
-			   const struct rt_view_info *info,
+			   const struct bv_view_info *info,
 			   int reset)
 {
     if (!lod || !lod->state)
 	return -1;
 
-    struct rt_view_info sanitized = RT_VIEW_INFO_INIT;
+    struct bv_view_info sanitized = BV_VIEW_INFO_INIT;
     if (info)
 	sanitized = *info;
-    rt_view_info_sanitize(&sanitized);
+    bv_view_info_sanitize(&sanitized);
 
     fastf_t policyScale = sanitized.lod.scale;
     if (sanitized.size <= SMALL_FASTF)
@@ -2069,25 +2070,6 @@ brlobol_mesh_lod_load_view(struct BRLObolMeshLod *lod,
     viewLevel = (viewLevel >= POP_MAXLEVEL) ? POP_MAXLEVEL - 1 : viewLevel;
 
     return mesh_lod_level(lod, viewLevel, reset);
-}
-
-int
-brlobol_mesh_lod_load_view_scene_ref(struct BRLObolMeshLod *lod,
-				     rt_view_scene_ref visibility_ref,
-				     void *view_ctx,
-				     int reset)
-{
-    (void)visibility_ref;
-    struct rt_view_info info = RT_VIEW_INFO_INIT;
-    if (view_ctx)
-	rt_view_context_info_get(&info, view_ctx);
-    return brlobol_mesh_lod_load_view(lod, &info, reset);
-}
-
-void
-brlobol_mesh_lod_free_scene_ref(rt_view_scene_ref ref)
-{
-    (void)ref;
 }
 
 int

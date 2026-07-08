@@ -36,6 +36,7 @@
 #include "bu/sort.h"
 #include "bu/str.h"
 #include "bu/vls.h"
+#include "bv.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
 #include "rt/view.h"
@@ -258,7 +259,7 @@ _draw_group_record_summary_in_view(
 
     if (!view_ctx)
 	return !group_summary->in_view_scope;
-    if (rt_view_context_is_independent(view_ctx))
+    if (ged_view_context_is_independent(view_ctx))
 	return group_summary->in_view_scope &&
 	    group_summary->view_ctx == view_ctx;
     if (!group_summary->in_view_scope)
@@ -275,7 +276,7 @@ ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
 	return 0;
     if (!view_ctx)
 	return !rec->in_view_scope;
-    if (rt_view_context_is_independent(view_ctx))
+    if (ged_view_context_is_independent(view_ctx))
 	return rec->in_view_scope && rec->view == view_ctx;
     if (!rec->in_view_scope)
 	return 1;
@@ -306,7 +307,7 @@ _draw_obol_record_instance_in_view(
 	return 0;
 
     const char *instance_key = record->instance_key;
-    if (!view_ctx || !rt_view_context_is_independent(view_ctx)) {
+    if (!view_ctx || !ged_view_context_is_independent(view_ctx)) {
 	if (!instance_key || !instance_key[0])
 	    return 1;
 
@@ -337,7 +338,8 @@ _draw_obol_record_instance_in_view(
 	return ret;
     }
 
-    const char *view_name = rt_view_context_name_get(view_ctx);
+    const char *view_name = bv_name_get(
+			       bv_context_view_const((const struct bv_context *)view_ctx));
     char fallback[64] = {0};
     if (!view_name || !view_name[0]) {
 	snprintf(fallback, sizeof(fallback), "%p", view_ctx);

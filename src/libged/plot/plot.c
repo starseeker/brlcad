@@ -33,6 +33,7 @@
 #include "bn.h"
 #include "bg/plot3.h"
 #include "bg/clip.h"
+#include "bv.h"
 #include "rt/view.h"
 
 #include "ged/draw.h"
@@ -315,9 +316,10 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     view_ctx = ged_view_active_ctx(gedp);
-    rt_view_context_model2view_get(model2view, view_ctx);
-    rt_view_context_center_get(center, view_ctx);
-    scale = rt_view_context_scale_get(view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    bv_center_mat_get(center, view);
+    scale = bv_scale_get(view);
     dl_plot(view_ctx, fp, model2view, floating, center, scale, Three_D, Z_clip);
 
     if (is_pipe)

@@ -34,6 +34,7 @@ set(
   scene_controller.cpp
   scene_group.cpp
   snap_action.cpp
+  view_attachment.cpp
   view_controller.cpp
   view_lod.cpp
   view_store.cpp
@@ -62,7 +63,7 @@ endif()
 set(BRLOBOL_LOCAL_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
 
 brlcad_addlib(libbrlobol "${LIBBRLOBOL_SRCS}" "" "${BRLOBOL_LOCAL_INCLUDE_DIRS}"
-  PUBLIC_LIBS "librt;libimgstream;libbg;libbu;Obol::Obol;Threads::Threads"
+  PUBLIC_LIBS "librt;libimgstream;libbv;libbg;libbu;Obol::Obol;Threads::Threads"
   ALL_CXX
 )
 if(BRLOBOL_OPENGL_INCLUDE_DIRS)
@@ -121,6 +122,7 @@ cmakefiles(
   scene_controller.cpp
   scene_group.cpp
   snap_action.cpp
+  view_attachment.cpp
   view_controller.cpp
   view_lod.cpp
   view_store.cpp

@@ -349,7 +349,7 @@ C_DECL int
 rt_datum_plot(struct bu_list *vhead, struct rt_db_internal *ip,
 	      const struct bg_tess_tol *UNUSED(ttol),
 	      const struct bn_tol *UNUSED(tol),
-	      const struct rt_view_info *UNUSED(info))
+	      const struct bv_view_info *UNUSED(info))
 {
     struct datum_line_sink sink;
 

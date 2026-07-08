@@ -25,11 +25,9 @@
 
 #include <math.h>
 #include <stdint.h>
-#include <vector>
 
 #include "bg/defines.h"
 #include "bu/malloc.h"
-#include "QgObolEditPreviewPrivate.h"
 #include "vmath.h"
 #include "rt/db_internal.h"
 #include "rt/geom.h"
@@ -222,103 +220,13 @@ qged_edit_preview_lines_replace(struct qged_edit_feature_ref ref,
 				const struct qged_edit_preview_lines *lines);
 
 
-static inline int32_t
-qged_edit_preview_obol_command(int cmd)
-{
-    switch (cmd) {
-	case QGED_EDIT_PREVIEW_LINE_MOVE:
-	    return QG_OBOL_EDIT_PREVIEW_MOVE;
-	case QGED_EDIT_PREVIEW_LINE_DRAW:
-	    return QG_OBOL_EDIT_PREVIEW_DRAW;
-	case QGED_EDIT_PREVIEW_POINT_DRAW:
-	    return QG_OBOL_EDIT_PREVIEW_POINT;
-	default:
-	    return QG_OBOL_EDIT_PREVIEW_MOVE;
-    }
-}
-
-
-static inline int
-qged_edit_preview_lines_replace_obol(QgView *display,
-				     const char *preview_id,
-				     const struct qged_edit_preview_lines *lines)
-{
-    size_t count = lines ? lines->count : 0;
-    if (!display || !preview_id || !preview_id[0])
-	return 0;
-    if (!count)
-	return qg_obol_edit_preview_clear(display, preview_id);
-
-    std::vector<SbVec3f> points;
-    std::vector<int32_t> commands;
-    points.reserve(count);
-    commands.reserve(count);
-    for (size_t i = 0; i < count; i++) {
-	points.push_back(SbVec3f((float)lines->points[i][X],
-		(float)lines->points[i][Y],
-		(float)lines->points[i][Z]));
-	commands.push_back(qged_edit_preview_obol_command(lines->cmds[i]));
-    }
-
-    return qg_obol_edit_preview_update(display, preview_id, preview_id,
-	    points.data(), commands.data(), static_cast<int>(count), 0, 0);
-}
-
-
-static inline int
-qged_edit_preview_lines_replace_view(QgView *display,
-				     const char *preview_id,
-				     struct qged_edit_feature_ref ref,
-				     enum qged_edit_feature_family family,
-				     const struct qged_edit_preview_lines *lines)
-{
-    int legacy_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
-	qged_edit_preview_lines_replace(ref, family, lines);
-    int obol_ret = qged_edit_preview_lines_replace_obol(display, preview_id,
-	    lines);
-    return legacy_ret || obol_ret;
-}
-
-
 int
 qged_edit_feature_clear_geometry(struct qged_edit_feature_ref ref);
 
 
 static inline int
-qged_edit_feature_clear_geometry_view(QgView *display,
-				      const char *preview_id,
-				      struct qged_edit_feature_ref ref)
-{
-    int legacy_ret = qged_edit_feature_ref_is_null(ref) ? 0 :
-	qged_edit_feature_clear_geometry(ref);
-    int obol_ret = qg_obol_edit_preview_clear(display, preview_id);
-    return legacy_ret || obol_ret;
-}
-
-
-static inline int
-qged_edit_feature_replace_bot_face_lines_view(QgView *display,
-					     const char *preview_id,
-					     struct qged_edit_feature_ref ref,
-					     enum qged_edit_feature_family family,
-					     const struct rt_bot_internal *bot);
-
-
-static inline int
 qged_edit_feature_replace_bot_face_lines(struct qged_edit_feature_ref ref,
 					 enum qged_edit_feature_family family,
-					 const struct rt_bot_internal *bot)
-{
-    return qged_edit_feature_replace_bot_face_lines_view(NULL, NULL, ref,
-	    family, bot);
-}
-
-
-static inline int
-qged_edit_feature_replace_bot_face_lines_view(QgView *display,
-					     const char *preview_id,
-					     struct qged_edit_feature_ref ref,
-					     enum qged_edit_feature_family family,
 					     const struct rt_bot_internal *bot)
 {
     if (!bot)
@@ -326,8 +234,7 @@ qged_edit_feature_replace_bot_face_lines_view(QgView *display,
     RT_BOT_CK_MAGIC(bot);
 
     if (!bot->num_faces || !bot->faces || !bot->num_vertices || !bot->vertices)
-	return qged_edit_preview_lines_replace_view(display, preview_id, ref,
-		family, NULL);
+	return qged_edit_preview_lines_replace(ref, family, NULL);
 
     struct qged_edit_preview_lines lines;
     qged_edit_preview_lines_init(&lines);
@@ -365,8 +272,7 @@ qged_edit_feature_replace_bot_face_lines_view(QgView *display,
 	    goto fail;
     }
 
-    ret = qged_edit_preview_lines_replace_view(display, preview_id, ref,
-	    family, &lines);
+    ret = qged_edit_preview_lines_replace(ref, family, &lines);
     qged_edit_preview_lines_free(&lines);
     return ret;
 
@@ -399,29 +305,9 @@ qged_edit_ell_append_loop(point_t *points,
 
 
 static inline int
-qged_edit_feature_replace_ell_wireframe_view(QgView *display,
-					    const char *preview_id,
-					    struct qged_edit_feature_ref ref,
-					    enum qged_edit_feature_family family,
-					    const struct rt_ell_internal *ell);
-
-
-static inline int
 qged_edit_feature_replace_ell_wireframe(struct qged_edit_feature_ref ref,
 					enum qged_edit_feature_family family,
 					const struct rt_ell_internal *ell)
-{
-    return qged_edit_feature_replace_ell_wireframe_view(NULL, NULL, ref,
-	    family, ell);
-}
-
-
-static inline int
-qged_edit_feature_replace_ell_wireframe_view(QgView *display,
-					    const char *preview_id,
-					    struct qged_edit_feature_ref ref,
-					    enum qged_edit_feature_family family,
-					    const struct rt_ell_internal *ell)
 {
     if (!ell)
 	return 0;
@@ -443,8 +329,7 @@ qged_edit_feature_replace_ell_wireframe_view(QgView *display,
     lines.cmds = cmds;
     lines.count = point_idx;
     lines.capacity = point_count;
-    int ret = qged_edit_preview_lines_replace_view(display, preview_id, ref,
-	    family, &lines);
+    int ret = qged_edit_preview_lines_replace(ref, family, &lines);
     bu_free(points, "qged ELL edit preview points");
     bu_free(cmds, "qged ELL edit preview commands");
     return ret;
@@ -945,9 +830,7 @@ qged_edit_sketch_append_curve(struct qged_edit_preview_lines *lines,
 
 
 static inline int
-qged_edit_feature_replace_extrude_wireframe_view(QgView *display,
-					    const char *preview_id,
-					    struct qged_edit_feature_ref ref,
+qged_edit_feature_replace_extrude_wireframe(struct qged_edit_feature_ref ref,
 					    enum qged_edit_feature_family family,
 					    const struct rt_extrude_internal *extrude,
 					    const struct bg_tess_tol *ttol)
@@ -968,8 +851,7 @@ qged_edit_feature_replace_extrude_wireframe_view(QgView *display,
 	if (!qged_edit_preview_lines_append_line(&lines, extrude->V,
 		extrude->V))
 	    goto cleanup;
-	ret = qged_edit_preview_lines_replace_view(display, preview_id, ref,
-		family, &lines);
+	ret = qged_edit_preview_lines_replace(ref, family, &lines);
 	goto cleanup;
     }
     RT_SKETCH_CK_MAGIC(sketch);
@@ -996,23 +878,11 @@ qged_edit_feature_replace_extrude_wireframe_view(QgView *display,
 	    goto cleanup;
     }
 
-    ret = qged_edit_preview_lines_replace_view(display, preview_id, ref,
-	    family, &lines);
+    ret = qged_edit_preview_lines_replace(ref, family, &lines);
 
 cleanup:
     qged_edit_preview_lines_free(&lines);
     return ret;
-}
-
-
-static inline int
-qged_edit_feature_replace_extrude_wireframe(struct qged_edit_feature_ref ref,
-					    enum qged_edit_feature_family family,
-					    const struct rt_extrude_internal *extrude,
-					    const struct bg_tess_tol *ttol)
-{
-    return qged_edit_feature_replace_extrude_wireframe_view(NULL, NULL, ref,
-	    family, extrude, ttol);
 }
 
 
@@ -1120,9 +990,7 @@ qged_edit_revolve_append_end_lines(struct qged_edit_preview_lines *lines,
 
 
 static inline int
-qged_edit_feature_replace_revolve_wireframe_view(QgView *display,
-					    const char *preview_id,
-					    struct qged_edit_feature_ref ref,
+qged_edit_feature_replace_revolve_wireframe(struct qged_edit_feature_ref ref,
 					    enum qged_edit_feature_family family,
 					    const struct rt_revolve_internal *revolve,
 					    const struct bg_tess_tol *ttol)
@@ -1145,8 +1013,7 @@ qged_edit_feature_replace_revolve_wireframe_view(QgView *display,
     RT_REVOLVE_CK_MAGIC(revolve);
     sketch = revolve->skt;
     if (!sketch)
-	return qged_edit_preview_lines_replace_view(display, preview_id, ref,
-		family, NULL);
+	return qged_edit_preview_lines_replace(ref, family, NULL);
     RT_SKETCH_CK_MAGIC(sketch);
 
     qged_edit_preview_lines_init(&lines);
@@ -1295,25 +1162,13 @@ qged_edit_feature_replace_revolve_wireframe_view(QgView *display,
 	}
     }
 
-    ret = qged_edit_preview_lines_replace_view(display, preview_id, ref,
-	    family, &lines);
+    ret = qged_edit_preview_lines_replace(ref, family, &lines);
 
 cleanup:
     if (endcount)
 	bu_free(endcount, "qged revolve preview endpoint counts");
     qged_edit_preview_lines_free(&lines);
     return ret;
-}
-
-
-static inline int
-qged_edit_feature_replace_revolve_wireframe(struct qged_edit_feature_ref ref,
-					    enum qged_edit_feature_family family,
-					    const struct rt_revolve_internal *revolve,
-					    const struct bg_tess_tol *ttol)
-{
-    return qged_edit_feature_replace_revolve_wireframe_view(NULL, NULL, ref,
-	    family, revolve, ttol);
 }
 
 

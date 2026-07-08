@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -39,7 +41,7 @@
  * Angles are in radians.
  */
 static void
-usejoy(void *view_ctx, double xangle, double yangle, double zangle)
+usejoy(struct bv *view, double xangle, double yangle, double zangle)
 {
     mat_t newrot;		/* NEW rot matrix, from joystick */
     mat_t view_rotation;
@@ -50,9 +52,9 @@ usejoy(void *view_ctx, double xangle, double yangle, double zangle)
      */
     MAT_IDN(newrot);
     bn_mat_angles_rad(newrot, xangle, yangle, zangle);
-    rt_view_context_rotation_get(view_rotation, view_ctx);
+    bv_rotation_get(view_rotation, view);
     bn_mat_mul2(newrot, view_rotation);
-    rt_view_context_rotation_set(view_ctx, view_rotation);
+    bv_rotation_set(view, view_rotation);
 }
 
 
@@ -131,9 +133,10 @@ ged_qvrot_core(struct ged *gedp, int argc, const char *argv[])
 
     mat_t rotation;
     bn_mat_angles(rotation, 270.0 + el * RAD2DEG, 0.0, 270.0 - az * RAD2DEG);
-    rt_view_context_rotation_set(view_ctx, rotation);
-    usejoy(view_ctx, 0.0, 0.0, theta*DEG2RAD);
-    rt_view_context_update(view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, rotation);
+    usejoy(view, 0.0, 0.0, theta*DEG2RAD);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

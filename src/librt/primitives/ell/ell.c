@@ -799,7 +799,7 @@ ell_ellipse_points(
 }
 
 static int
-rt_ell_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_ell_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     struct ell_draw_configuration config;
     struct rt_ell_internal *eip;
@@ -810,7 +810,7 @@ rt_ell_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     eip = (struct rt_ell_internal *)ip->idb_ptr;
     RT_ELL_CK_MAGIC(eip);
 
-    fastf_t point_spacing = rt_view_solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
     config.realization = realization;
     VMOVE(config.ell_center, eip->v);
@@ -822,7 +822,7 @@ rt_ell_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 		RT_PRIMITIVE_POINT_DRAW) ? 0 : -1;
     }
 
-    config.num_cross_sections = primitive_curve_count(ip, tol, rt_view_lod_curve_scale(v), s_size);
+    config.num_cross_sections = primitive_curve_count(ip, tol, bv_view_lod_curve_scale(v), s_size);
 
     VMOVE(config.ell_travel_vector, eip->a);
     VMOVE(config.ell_axis_vector_a, eip->b);
@@ -845,7 +845,7 @@ rt_ell_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 }
 
 int
-rt_ell_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_ell_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -857,7 +857,7 @@ rt_ell_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_d
 }
 
 C_DECL int
-rt_ell_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_ell_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     register int i;
     struct rt_ell_internal *eip;

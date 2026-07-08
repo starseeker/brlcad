@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "bv.h"
 #include "brlobol/edit_preview.h"
 #include "brlobol/export_action.h"
 #include "brlobol/hud_label_overlay.h"
@@ -19,6 +20,7 @@
 #include "brlobol/mesh_shape.h"
 #include "brlobol/pick_detail.h"
 #include "brlobol/snap_action.h"
+#include "brlobol/view_attachment.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/view_lod.h"
 #include "brlobol/view_store.h"
@@ -29,6 +31,7 @@
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string.h>
 #include <vector>
@@ -36,6 +39,7 @@
 #include <Inventor/SbName.h>
 #include <Inventor/SoRenderManager.h>
 #include <Inventor/SoViewport.h>
+#include <Inventor/SoOffscreenRenderer.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoDirectionalLight.h>
 #include <Inventor/nodes/SoEnvironment.h>
@@ -700,7 +704,7 @@ BRLObolViewController::BRLObolViewController(void) :
     sceneController(),
     viewport(new SoViewport),
     renderLodRoot(NULL),
-    viewLodState(new BRLObolViewLodState),
+    viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
     activeCamera(NULL),
     viewportRegion(1, 1),
@@ -748,6 +752,7 @@ BRLObolViewController::BRLObolViewController(void) :
     polygonStore(new BRLObolPolygonStore(this)),
     selectionStore(new BRLObolSelectionStore)
 {
+    this->viewAttachment->ref();
     controller_configure_render_environment(this->viewport);
 }
 
@@ -755,7 +760,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     sceneController(),
     viewport(new SoViewport),
     renderLodRoot(NULL),
-    viewLodState(new BRLObolViewLodState),
+    viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
     activeCamera(NULL),
     viewportRegion(1, 1),
@@ -803,6 +808,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     polygonStore(new BRLObolPolygonStore(this)),
     selectionStore(new BRLObolSelectionStore)
 {
+    this->viewAttachment->ref();
     controller_configure_render_environment(this->viewport);
     this->setSceneRoot(root);
     this->setCamera(camera);
@@ -821,8 +827,8 @@ BRLObolViewController::~BRLObolViewController(void)
     this->selectionStore = NULL;
     this->setCamera(NULL);
     this->setSceneRoot(NULL);
-    delete this->viewLodState;
-    this->viewLodState = NULL;
+    this->viewAttachment->unref();
+    this->viewAttachment = NULL;
     this->renderManager->setSceneGraph(NULL);
     delete this->renderManager;
     this->renderManager = NULL;
@@ -846,7 +852,7 @@ BRLObolViewController::setViewportSceneGraphWithLod(SoNode *root)
 
     SoBRLViewLodGroup *wrapper = new SoBRLViewLodGroup;
     wrapper->ref();
-    wrapper->setViewLodState(this->viewLodState);
+    wrapper->setViewLodState(this->viewAttachment->getViewLodState());
     wrapper->addChild(root);
     this->renderLodRoot = wrapper;
     this->viewport->setSceneGraph(wrapper);
@@ -856,8 +862,7 @@ void
 BRLObolViewController::setSceneRoot(SoNode *root)
 {
     this->clearRtPickCaches();
-    if (this->viewLodState)
-	this->viewLodState->clear();
+    this->viewAttachment->setSceneRoot(root);
     this->sceneController.setSceneRoot(root);
     this->setViewportSceneGraphWithLod(root);
     this->syncRenderManager();
@@ -867,15 +872,14 @@ BRLObolViewController::setSceneRoot(SoNode *root)
 SoNode *
 BRLObolViewController::getSceneRoot(void) const
 {
-    return this->sceneController.getSceneRoot();
+    return this->viewAttachment->getSceneRoot();
 }
 
 void
 BRLObolViewController::setRenderSceneRoot(SoNode *root)
 {
     this->clearRtPickCaches();
-    if (this->viewLodState)
-	this->viewLodState->clear();
+    this->viewAttachment->clearViewLodState();
     this->setViewportSceneGraphWithLod(root);
     this->syncRenderManager();
     this->requestRender("render-scene-root");
@@ -893,17 +897,57 @@ BRLObolViewController::getRenderRoot(void) const
     return this->viewport->getRoot();
 }
 
+void
+BRLObolViewController::setViewAttachment(BRLObolViewAttachment *attachment)
+{
+    if (!attachment || attachment == this->viewAttachment)
+	return;
+
+    SoNode *root = this->getSceneRoot();
+    if (root)
+	root->ref();
+
+    SoNode *renderScene = NULL;
+    if (this->renderLodRoot && this->renderLodRoot->getNumChildren() > 0)
+	renderScene = this->renderLodRoot->getChild(0);
+    else
+	renderScene = this->viewport->getSceneGraph();
+    if (renderScene)
+	renderScene->ref();
+
+    attachment->ref();
+    this->viewAttachment->unref();
+    this->viewAttachment = attachment;
+
+    if (root && !this->viewAttachment->hasSceneRoot())
+	this->viewAttachment->setSceneRoot(root);
+    if (root)
+	root->unref();
+
+    this->setViewportSceneGraphWithLod(renderScene);
+    if (renderScene)
+	renderScene->unref();
+    this->clearRtPickCaches();
+    this->syncRenderManager();
+    this->requestRender("view-attachment");
+}
+
+BRLObolViewAttachment *
+BRLObolViewController::getViewAttachment(void) const
+{
+    return this->viewAttachment;
+}
+
 BRLObolViewLodState *
 BRLObolViewController::getViewLodState(void) const
 {
-    return this->viewLodState;
+    return this->viewAttachment->getViewLodState();
 }
 
 void
 BRLObolViewController::clearViewLodState(void)
 {
-    if (this->viewLodState)
-	this->viewLodState->clear();
+    this->viewAttachment->clearViewLodState();
 }
 
 void
@@ -962,14 +1006,16 @@ BRLObolViewController::setViewportSize(unsigned int width, unsigned int height)
 }
 
 SbBool
-BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
+BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
 	SbBool createCamera)
 {
-    if (!viewCtx)
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)viewCtx);
+    if (!view)
 	return FALSE;
 
     const double perspectiveDegrees =
-	rt_view_context_perspective_get(viewCtx);
+	bv_perspective_get(view);
     const SbBool wantPerspective = perspectiveDegrees > SMALL_FASTF ?
 				   TRUE : FALSE;
 
@@ -988,8 +1034,8 @@ BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
 	this->setCamera(camera);
     }
 
-    int viewWidth = rt_view_context_width_get(viewCtx);
-    int viewHeight = rt_view_context_height_get(viewCtx);
+    int viewWidth = bv_width_get(view);
+    int viewHeight = bv_height_get(view);
     SbVec2s window = this->viewportRegion.getWindowSize();
     if (window[0] <= 1 && window[1] <= 1 &&
 	viewWidth > 0 && viewHeight > 0) {
@@ -1007,19 +1053,16 @@ BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
 
     mat_t viewRotation;
     MAT_IDN(viewRotation);
-    (void)rt_view_context_rotation_get(viewRotation, viewCtx);
-
-    mat_t viewCenter;
-    MAT_IDN(viewCenter);
-    (void)rt_view_context_center_get(viewCenter, viewCtx);
+    (void)bv_rotation_get(viewRotation, view);
 
     vect_t center;
-    MAT_DELTAS_GET_NEG(center, viewCenter);
+    VSETALL(center, 0.0);
+    (void)bv_center_get(center, view);
 
-    const double horizontalSizeRaw = rt_view_context_size_get(viewCtx);
+    const double horizontalSizeRaw = bv_size_get(view);
     double horizontalSize = horizontalSizeRaw;
     if (horizontalSize <= SMALL_FASTF) {
-	const double scale = rt_view_context_scale_get(viewCtx);
+	const double scale = bv_scale_get(view);
 	horizontalSize = scale > SMALL_FASTF ? scale * 2.0 : 2.0;
     }
     const double verticalSize = horizontalSize / aspect;
@@ -1078,19 +1121,19 @@ BRLObolViewController::syncCameraFromRtViewContext(const void *viewCtx,
 }
 
 SbBool
-BRLObolViewController::getRtViewInfo(struct rt_view_info *info) const
+BRLObolViewController::getViewInfo(struct bv_view_info *info) const
 {
     if (!info)
 	return FALSE;
 
-    rt_view_info_init(info);
+    bv_view_info_init(info);
 
     SbVec2s window = this->viewportRegion.getWindowSize();
     info->width = window[0] > 0 ? window[0] : 1;
     info->height = window[1] > 0 ? window[1] : 1;
 
     if (!this->activeCamera) {
-	rt_view_info_sanitize(info);
+	bv_view_info_sanitize(info);
 	return FALSE;
     }
 
@@ -1122,7 +1165,7 @@ BRLObolViewController::getRtViewInfo(struct rt_view_info *info) const
 	info->size = this->activeCamera->focalDistance.getValue();
     }
 
-    rt_view_info_sanitize(info);
+    bv_view_info_sanitize(info);
     return TRUE;
 }
 
@@ -1202,6 +1245,85 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 
     this->renderManager->render(clearWindow, clearZBuffer);
     return TRUE;
+}
+
+int
+BRLObolViewController::renderToImage(unsigned char **image,
+				     int flip,
+				     int alpha,
+				     const SbColor *background,
+				     SoDB::ContextManager *contextManager,
+				     BRLObolProgressiveStatus *progressiveStatus)
+{
+    if (!image) {
+	return BRLCAD_ERROR;
+    }
+    *image = NULL;
+
+    if (!this->activeCamera || !this->getViewport() ||
+	    !this->getRenderRoot()) {
+	return BRLCAD_ERROR;
+    }
+
+    (void)this->realizePending();
+    BRLObolProgressiveStatus localProgressiveStatus;
+    (void)this->advanceProgressiveWork(NULL, &localProgressiveStatus);
+    if (progressiveStatus) {
+	*progressiveStatus = localProgressiveStatus;
+    }
+
+    const SbViewportRegion &region = this->getViewportRegion();
+    SbVec2s size = region.getViewportSizePixels();
+    if (size[0] <= 0 || size[1] <= 0) {
+	return BRLCAD_ERROR;
+    }
+
+    std::unique_ptr<SoOffscreenRenderer> renderer(contextManager ?
+	new SoOffscreenRenderer(contextManager, region) :
+	new SoOffscreenRenderer(region));
+    renderer->setComponents(SoOffscreenRenderer::RGB);
+    renderer->setBackgroundColor(background ? *background :
+	SbColor(0.0f, 0.0f, 0.0f));
+
+    if (!this->getViewport()->render(renderer.get())) {
+	return BRLCAD_ERROR;
+    }
+
+    const unsigned char *buffer = renderer->getBuffer();
+    if (!buffer) {
+	return BRLCAD_ERROR;
+    }
+
+    const size_t width = static_cast<size_t>(size[0]);
+    const size_t height = static_cast<size_t>(size[1]);
+    const size_t srcStride = width * 3;
+    const size_t dstBpp = alpha ? 4 : 3;
+    const size_t dstStride = width * dstBpp;
+    unsigned char *out = static_cast<unsigned char *>(bu_calloc(
+	    height * dstStride, sizeof(unsigned char),
+	    "brlobol viewport image"));
+
+    for (size_t y = 0; y < height; y++) {
+	const size_t srcY = flip ? (height - y - 1) : y;
+	const unsigned char *src = buffer + srcY * srcStride;
+	unsigned char *dst = out + y * dstStride;
+	if (alpha) {
+	    for (size_t x = 0; x < width; x++) {
+		dst[x * 4 + 0] = src[x * 3 + 0];
+		dst[x * 4 + 1] = src[x * 3 + 1];
+		dst[x * 4 + 2] = src[x * 3 + 2];
+		dst[x * 4 + 3] = 255;
+	    }
+	} else {
+	    std::memcpy(dst, src, srcStride);
+	}
+    }
+
+    if (!localProgressiveStatus.hasMore) {
+	this->clearRenderRequest();
+    }
+    *image = out;
+    return BRLCAD_OK;
 }
 
 SbBool
@@ -1430,7 +1552,7 @@ append_signature_string(std::ostringstream &out, const char *value)
 }
 
 static SbString
-controller_lod_view_signature(const struct rt_view_info &view,
+controller_lod_view_signature(const struct bv_view_info &view,
 			      SbBool haveCamera)
 {
     std::ostringstream out;
@@ -1964,8 +2086,8 @@ BRLObolViewController::evictMeshPayloadsToBudget(
     action.setEvictDisplayPayloads(evictDisplayPayloads);
     action.apply(root);
 
-    const size_t viewLodBytes = this->viewLodState ?
-				this->viewLodState->estimateDisplayMeshBytes() : 0;
+    const size_t viewLodBytes = this->viewAttachment->getViewLodState() ?
+				this->viewAttachment->getViewLodState()->estimateDisplayMeshBytes() : 0;
     this->lastMeshBudgetInitialResidentBytes =
 	action.getInitialResidentMeshBytes() + viewLodBytes;
     this->lastMeshBudgetFinalResidentBytes =
@@ -1981,13 +2103,13 @@ BRLObolViewController::evictMeshPayloadsToBudget(
 	action.getEvictedDisplayMeshCount();
 
     if (this->lastMeshBudgetFinalResidentBytes > maxBytes &&
-	this->viewLodState) {
+	this->viewAttachment->getViewLodState()) {
 	std::vector<SoBRLMeshShape *> shapes =
 	    controller_render_mesh_shapes(this);
 	for (size_t i = 0; i < shapes.size(); i++) {
 	    if (this->lastMeshBudgetFinalResidentBytes <= maxBytes)
 		break;
-	    if (!this->viewLodState->findMesh(shapes[i]))
+	    if (!this->viewAttachment->getViewLodState()->findMesh(shapes[i]))
 		continue;
 	    size_t freed = shapes[i]->evictDisplayMeshPreservingSourceMetrics();
 	    if (freed == 0)
@@ -2002,9 +2124,9 @@ BRLObolViewController::evictMeshPayloadsToBudget(
 
     if (evictDisplayPayloads &&
 	this->lastMeshBudgetFinalResidentBytes > maxBytes &&
-	this->viewLodState) {
+	this->viewAttachment->getViewLodState()) {
 	unsigned int evicted = 0;
-	size_t freed = this->viewLodState->evictDisplayMeshes(&evicted);
+	size_t freed = this->viewAttachment->getViewLodState()->evictDisplayMeshes(&evicted);
 	if (freed > 0) {
 	    this->lastMeshBudgetFreedDisplayBytes += freed;
 	    this->lastMeshBudgetEvictedDisplayMeshCount += evicted;
@@ -2163,8 +2285,8 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	return -1;
     }
 
-    struct rt_view_info view = RT_VIEW_INFO_INIT;
-    if (!this->getRtViewInfo(&view)) {
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    if (!this->getViewInfo(&view)) {
 	this->lastLodDiagnostics = "LoD submission requires an active camera";
 	return -1;
     }
@@ -2198,7 +2320,7 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	action.setRevisions(this->lodViewRevision, this->lodPolicyRevision);
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
-	action.setViewLodState(this->viewLodState);
+	action.setViewLodState(this->viewAttachment->getViewLodState());
 	action.setProxyStages(TRUE, TRUE);
 	if (this->lodUseForcedLevel)
 	    action.setForcedLevel(this->lodForcedLevel);
@@ -2255,7 +2377,7 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
 	return 0;
 
     SoBRLLodUpdateAction update;
-    update.setViewLodState(this->viewLodState);
+    update.setViewLodState(this->viewAttachment->getViewLodState());
     for (size_t i = 0; i < drained.size(); i++) {
 	if (drained[i].request.viewRevision != this->lodViewRevision ||
 	    drained[i].request.policyRevision != this->lodPolicyRevision) {
@@ -2369,20 +2491,20 @@ BRLObolViewController::getLastLodDiagnostics(void) const
 size_t
 BRLObolViewController::getActiveLodMeshPayloadCount(void) const
 {
-    return this->viewLodState ? this->viewLodState->meshPayloadCount() : 0;
+    return this->viewAttachment->getViewLodState() ? this->viewAttachment->getViewLodState()->meshPayloadCount() : 0;
 }
 
 size_t
 BRLObolViewController::getActiveLodProxyPayloadCount(int proxyKind) const
 {
-    return this->viewLodState ?
-	   this->viewLodState->proxyPayloadCount(proxyKind) : 0;
+    return this->viewAttachment->getViewLodState() ?
+	   this->viewAttachment->getViewLodState()->proxyPayloadCount(proxyKind) : 0;
 }
 
 size_t
 BRLObolViewController::getActiveLodCadPayloadCount(void) const
 {
-    return this->viewLodState ? this->viewLodState->cadPayloadCount() : 0;
+    return this->viewAttachment->getViewLodState() ? this->viewAttachment->getViewLodState()->cadPayloadCount() : 0;
 }
 
 SoBRLSceneController *
@@ -3286,8 +3408,8 @@ BRLObolViewController::advanceLodPolicyRevision(void)
 void
 BRLObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 {
-    struct rt_view_info view = RT_VIEW_INFO_INIT;
-    SbBool haveCamera = this->getRtViewInfo(&view);
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    SbBool haveCamera = this->getViewInfo(&view);
     SbString signature = controller_lod_view_signature(view, haveCamera);
 
     if (strcmp(this->lodViewSignature.getString(), signature.getString()) == 0)

@@ -23,8 +23,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "rt/view.h"
-
 class SoNode;
 class SoGroup;
 class SoBRLDatabaseSource;
@@ -123,12 +121,6 @@ public:
      */
     void setSceneRoot(SoNode *root);
     SoNode *getSceneRoot(void) const;
-    rt_view_scene_ref getSceneRef(void);
-    rt_view_scene_ref getSceneRef(void) const;
-    static SoBRLSceneController *fromSceneRef(rt_view_scene_ref ref);
-    static const SoBRLSceneController *fromConstSceneRef(
-	rt_view_scene_ref ref);
-    static SbBool sceneRefIsObol(rt_view_scene_ref ref);
     uint64_t getStructuralRevision(void) const;
     uint64_t getFrameRevision(void) const;
     SbBool getSceneSummary(BRLObolSceneSummary &summary) const;

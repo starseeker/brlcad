@@ -115,6 +115,7 @@ void
 dozoom(struct mged_state *s, int which_eye)
 {
     void *view_ctx = view_state->vs_gvp;
+    struct bv *view = mged_view_context_view(view_ctx);
     fastf_t view_perspective;
     mat_t model2view;
     point_t view_eye_pos;
@@ -125,7 +126,7 @@ dozoom(struct mged_state *s, int which_eye)
      */
     struct mged_dm *save_dm_list = s->mged_curr_dm;
 
-    rt_view_context_refresh_drawn_count_set(view_ctx, 0);
+    bv_refresh_drawn_count_set(view, 0);
 
     /* Keep the retained view's display manager in sync so that
      * refresh code can find the DM.  This must be done every frame
@@ -136,11 +137,11 @@ dozoom(struct mged_state *s, int which_eye)
     /* gv_pmat may be replaced for the stereo path; remember the original
      * so we can restore it before returning. */
     mat_t saved_pmat;
-    rt_view_context_pmat_get(saved_pmat, view_ctx);
+    bv_pmat_get(saved_pmat, view);
 
-    view_perspective = rt_view_context_perspective_get(view_ctx);
-    rt_view_context_eye_pos_get(view_eye_pos, view_ctx);
-    rt_view_context_model2view_get(model2view, view_ctx);
+    view_perspective = bv_perspective_get(view);
+    bv_eye_pos_get(view_eye_pos, view);
+    bv_model2view_get(model2view, view);
 
     if (which_eye == 0) {
 	/* ----- Non-stereo: keep gv_pmat in sync with the perspective state.
@@ -153,12 +154,12 @@ dozoom(struct mged_state *s, int which_eye)
 		VSET(l, -1.0, -1.0, -1.0);
 		VSET(h,  1.0,  1.0, 200.0);
 		deering_persp_mat(perspective_mat, l, h, view_eye_pos);
-		rt_view_context_pmat_set(view_ctx, perspective_mat);
+		bv_pmat_set(view, perspective_mat);
 	    } else {
 		persp_mat(perspective_mat, view_perspective,
 			  (fastf_t)1.0f, (fastf_t)0.01f,
 			  (fastf_t)1.0e10f, (fastf_t)1.0f);
-		rt_view_context_pmat_set(view_ctx, perspective_mat);
+		bv_pmat_set(view, perspective_mat);
 	    }
 	}
     } else {
@@ -188,13 +189,13 @@ dozoom(struct mged_state *s, int which_eye)
 	    eye[X] = -eye_delta_scr;
 	}
 	deering_persp_mat(perspective_mat, l, h, eye);
-	rt_view_context_pmat_set(view_ctx, perspective_mat);
+	bv_pmat_set(view, perspective_mat);
 
 	/* Force the display host to apply the perspective matrix even when the
 	 * retained view perspective was 0; legacy drawing gates the projection
 	 * load on a non-zero perspective angle. */
 	if (view_perspective < SMALL_FASTF)
-	    rt_view_context_perspective_set(view_ctx, persp);
+	    bv_perspective_set(view, persp);
 
 	/* Stereo viewport / scissor selection.  gl_loadMatrix() inspects
 	 * which_eye (1 = right, 2 = left) and adjusts glViewport+glScissor
@@ -202,24 +203,14 @@ dozoom(struct mged_state *s, int which_eye)
 	dm_loadmatrix(DMP, model2view, which_eye);
     }
 
-    /* Expose the edit-mode matrix on the view so render-item drawing can use
-     * it for highlighted edit objects without a second pass. */
-    if (s->global_editing_state != ST_VIEW)
-	ged_view_context_edit_matrix_set(view_ctx, view_state->vs_model2objview);
-    else
-	ged_view_context_edit_matrix_clear(view_ctx);
-
     int high_level_refresh = _mged_high_level_refresh(s, view_ctx);
     if (!high_level_refresh) {
 	/* Legacy fallback for non-Obol display managers. */
 	dm_draw_objs(view_ctx);
     }
 
-    /* Clear edit-mat pointer now that the frame is done. */
-    ged_view_context_edit_matrix_clear(view_ctx);
-
     /* Restore gv_pmat (no-op for which_eye == 0). */
-    rt_view_context_pmat_set(view_ctx, saved_pmat);
+    bv_pmat_set(view, saved_pmat);
 
     /* Count drawn objects for usepen.c zone-based picking. */
     if (s->gedp && ged_draw_scene_available(s->gedp)) {
@@ -230,10 +221,10 @@ dozoom(struct mged_state *s, int which_eye)
 	} else {
 	    struct _mged_count_drawn_ctx ctx;
 	    ctx.np = &ndrawn;
-	    ctx.frame_rev = rt_view_context_frame_revision_get(view_ctx);
+	    ctx.frame_rev = bv_frame_revision_get(view);
 	    ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
 	}
-	rt_view_context_refresh_drawn_count_set(view_ctx, ndrawn);
+	bv_refresh_drawn_count_set(view, ndrawn);
     }
 
     if (s->mged_curr_dm != save_dm_list) set_curr_dm(s, save_dm_list);

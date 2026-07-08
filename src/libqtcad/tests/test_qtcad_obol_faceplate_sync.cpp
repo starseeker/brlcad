@@ -94,15 +94,15 @@ main(int argc, char **argv)
     if (!root)
 	FAIL("QgView should expose an Obol scene root");
 
-    struct rt_view_grid_state grid = {};
-    struct rt_view_axes_state modelAxes = {};
-    struct rt_view_axes_state viewAxes = {};
-    struct rt_view_adc_state adc = {};
-    void *view_ctx = qg_legacy_view_to_context(view.view());
-    (void)rt_view_context_grid_state_get(&grid, view_ctx);
-    (void)rt_view_context_model_axes_state_get(&modelAxes, view_ctx);
-    (void)rt_view_context_view_axes_state_get(&viewAxes, view_ctx);
-    (void)rt_view_context_adc_state_get(&adc, view_ctx);
+    struct bv_grid_state grid = {};
+    struct bv_axes_state modelAxes = {};
+    struct bv_axes_state viewAxes = {};
+    struct bv_adc_state adc = {};
+    struct bv *bv = qg_legacy_view_bv(view.view());
+    (void)bv_grid_state_get(&grid, bv);
+    (void)bv_model_axes_state_get(&modelAxes, bv);
+    (void)bv_view_axes_state_get(&viewAxes, bv);
+    (void)bv_adc_state_get(&adc, bv);
 
     grid.draw = 1;
     VSET(grid.anchor, 1.0, 2.0, 3.0);
@@ -110,23 +110,23 @@ main(int argc, char **argv)
     grid.res_v = 4.0;
     grid.res_major_h = 3;
     grid.res_major_v = 2;
-    rt_view_context_grid_state_set(view_ctx, &grid);
+    bv_grid_state_set(bv, &grid);
 
     modelAxes.draw = 1;
     VSET(modelAxes.axes_pos, 4.0, 5.0, 6.0);
     modelAxes.axes_size = 7.0;
-    rt_view_context_model_axes_state_set(view_ctx, &modelAxes);
+    bv_model_axes_state_set(bv, &modelAxes);
 
     viewAxes.draw = 1;
     VSET(viewAxes.axes_pos, -0.8, -0.7, 0.0);
     viewAxes.axes_size = 0.5;
-    rt_view_context_view_axes_state_set(view_ctx, &viewAxes);
+    bv_view_axes_state_set(bv, &viewAxes);
 
     adc.draw = 1;
     VSET(adc.pos_model, 8.0, 9.0, 0.0);
     adc.a1 = 30.0;
     adc.dst = 12.0;
-    rt_view_context_adc_state_set(view_ctx, &adc);
+    bv_adc_state_set(bv, &adc);
 
     controller->clearRenderRequest();
     view.need_update(QG_VIEW_DRAWN);
@@ -187,10 +187,10 @@ main(int argc, char **argv)
     modelAxes.draw = 0;
     viewAxes.draw = 0;
     adc.draw = 0;
-    rt_view_context_grid_state_set(view_ctx, &grid);
-    rt_view_context_model_axes_state_set(view_ctx, &modelAxes);
-    rt_view_context_view_axes_state_set(view_ctx, &viewAxes);
-    rt_view_context_adc_state_set(view_ctx, &adc);
+    bv_grid_state_set(bv, &grid);
+    bv_model_axes_state_set(bv, &modelAxes);
+    bv_view_axes_state_set(bv, &viewAxes);
+    bv_adc_state_set(bv, &adc);
     view.need_update(QG_VIEW_DRAWN);
 
     if (find_overlay(root, "faceplate::grid") ||

@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -42,7 +44,9 @@ ged_arot_core(struct ged *gedp, int argc, const char *argv[])
 	return ret;
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    return _ged_do_rot(gedp, rt_view_context_coord_get(view_ctx), rmat, NULL);
+    return _ged_do_rot(gedp,
+	    bv_coord_get(bv_context_view_const((const struct bv_context *)view_ctx)),
+	    rmat, NULL);
 }
 
 

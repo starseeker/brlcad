@@ -53,6 +53,7 @@
 #include "bu/time.h"
 #include "bu/process.h"
 #include "vmath.h"
+#include "bv.h"
 #include "rt/view.h"
 
 #include "ged/draw.h"
@@ -344,7 +345,8 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
      * explicitly supplied by one of the above. */
     if (VNEAR_ZERO(nv.center_model, VUNITIZE_TOL)) {
 	mat_t view_center;
-	rt_view_context_center_get(view_center, view_ctx);
+	bv_center_mat_get(view_center,
+		bv_context_view_const((const struct bv_context *)view_ctx));
 	MAT_DELTAS_GET_NEG(nv.center_model, view_center);
 	/* Because we are preparing an input for the nirt command line, we need
 	 * to convert to local units - lower level logic will be expecting
@@ -505,7 +507,8 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     // calculate the ray direction from the view.
     vect_t dir = VINIT_ZERO;
     mat_t view_rotation;
-    rt_view_context_rotation_get(view_rotation, view_ctx);
+    bv_rotation_get(view_rotation,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
     VMOVEN(dir, view_rotation + 8, 3);
     VSCALE(dir, dir, -1.0);
     bu_vls_sprintf(&nirt_cmd, "dir %0.17f %0.17f %0.17f", V3ARGS(dir));
@@ -590,7 +593,8 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     if (DG_QRAY_GRAPHICS(gedp->i->ged_gdp) && bu_vls_strlen(&nv.plotfile)) {
 	FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
 	if (fp) {
-	    fastf_t csize = view_ctx ? rt_view_context_scale_get(view_ctx) * 0.01 : 1.0;
+	    fastf_t csize = view_ctx ?
+		bv_scale_get(bv_context_view_const((const struct bv_context *)view_ctx)) * 0.01 : 1.0;
 	    int pret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
 		    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename),
 		    csize, gedp->i->ged_gdp->gd_uplotOutputMode,
@@ -668,7 +672,8 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
     /* Calculate point from which to fire ray. */
     VSCALE(view_ray_orig, scan, sf);
     mat_t view2model;
-    rt_view_context_view2model_get(view2model, view_ctx);
+    bv_view2model_get(view2model,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
     MAT4X3PNT(center_model, view2model, view_ray_orig);
     /* Initial center_model value will be in base units, and main nirt
      * evaluation path assumes inputs are in local units, so convert. */

@@ -54,7 +54,9 @@
 #include "bu/list.h"
 #include "bu/ptbl.h"
 #include "bu/vls.h"
+#include "bv/view.h"
 #include "ged/defines.h"
+#include "ged/draw_scene.h"
 
 /* Forward declaration to keep the include surface narrow.  Callers that
  * actually use the db_full_path variants will already be including
@@ -65,8 +67,10 @@ struct bn_tol;
 struct bg_tess_tol;
 struct bg_line_layer_builder;
 struct directory;
-struct rt_view_info;
-struct rt_view_lod_policy;
+struct ged;
+struct ged_draw_pick_result;
+struct bv_view_info;
+struct rt_db_internal;
 
 typedef enum ged_draw_stale_reason {
     GED_DRAW_STALE_NONE = 0,
@@ -192,6 +196,48 @@ struct ged_draw_view_feature_style {
 
 #define GED_DRAW_VIEW_FEATURE_STYLE_INIT { -1, -1, 0, {0, 0, 0}, -1, -1, -1, -1.0, -1.0 }
 
+typedef struct ged_draw_view_feature_ref {
+    uintptr_t token;
+    uint64_t revision;
+} ged_draw_view_feature_ref;
+
+#define GED_DRAW_VIEW_FEATURE_REF_NULL_INIT {0, 0}
+#ifdef __cplusplus
+#  define GED_DRAW_VIEW_FEATURE_REF_NULL ged_draw_view_feature_ref{0, 0}
+#else
+#  define GED_DRAW_VIEW_FEATURE_REF_NULL ((ged_draw_view_feature_ref){0, 0})
+#endif
+
+enum ged_draw_view_feature_family {
+    GED_DRAW_VIEW_FEATURE_UNKNOWN = 0,
+    GED_DRAW_VIEW_FEATURE_TRANSIENT_PREVIEW = 1
+};
+
+enum ged_draw_view_edit_preview_event {
+    GED_DRAW_VIEW_EDIT_PREVIEW_BEGIN = 0,
+    GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE,
+    GED_DRAW_VIEW_EDIT_PREVIEW_COMMIT,
+    GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL,
+    GED_DRAW_VIEW_EDIT_PREVIEW_REPLACE_SOURCE,
+    GED_DRAW_VIEW_EDIT_PREVIEW_DISCARD
+};
+
+struct ged_draw_view_edit_preview_callbacks {
+    uint64_t (*revision_cb)(void *);
+    int (*update_cb)(void *);
+    int (*pick_cb)(void *, int, int, void *);
+};
+
+#define GED_DRAW_VIEW_EDIT_PREVIEW_CALLBACKS_INIT { NULL, NULL, NULL }
+
+struct ged_draw_view_feature_label {
+    const char *text;
+    point_t point;
+    int color_valid;
+    unsigned char color[3];
+    fastf_t font_size;
+};
+
 struct ged_draw_view_label_data {
     const char *text;
     point_t point;
@@ -286,12 +332,13 @@ enum ged_draw_view_snap_kind {
     GED_DRAW_VIEW_SNAP_ENDPOINT = 2
 };
 
-typedef struct rt_view_lod_policy ged_draw_view_lod_policy;
+typedef struct bv_lod_policy ged_draw_view_lod_policy;
 
 typedef int (*ged_draw_view_feature_depth_cb)(fastf_t depth, void *data);
 typedef int (*ged_draw_view_context_selection_path_cb)(void *view_ctx,
 	const char *path,
 	void *data);
+typedef void (*ged_draw_view_selection_path_cb)(const char *path, void *data);
 
 enum ged_draw_view_polygon_type {
     GED_DRAW_VIEW_POLYGON_GENERAL = 0,
@@ -342,6 +389,11 @@ struct ged_draw_view_polygon_record {
     fastf_t vZ;
     void *user_data;
 };
+
+typedef int (*ged_draw_view_polygon_record_cb)(
+	ged_draw_view_polygon_ref ref,
+	const struct ged_draw_view_polygon_record *record,
+	void *data);
 
 #define GED_DRAW_SHAPE_REF_NULL_INIT {0, 0}
 #define GED_DRAW_GROUP_REF_NULL_INIT {0, 0}
@@ -1071,12 +1123,91 @@ GED_EXPORT extern int
 ged_draw_view_context_selection_clear(void *view_ctx);
 
 GED_EXPORT extern int
+ged_draw_view_context_selection_set_pick_result(
+    void *view_ctx,
+    const struct ged_draw_pick_result *result,
+    ged_draw_view_selection_path_cb cb,
+    void *data);
+
+GED_EXPORT extern int
 ged_draw_view_selection_add_shape_ref_context(
     struct ged *gedp,
     void *view_ctx,
     ged_draw_shape_ref ref,
     void **selection_view_ctx,
     struct bu_vls *path);
+
+GED_EXPORT extern struct ged_draw_pick_result *
+ged_draw_pick_result_create(void);
+
+GED_EXPORT extern void
+ged_draw_pick_result_free(struct ged_draw_pick_result *result);
+
+GED_EXPORT extern size_t
+ged_draw_pick_result_count(const struct ged_draw_pick_result *result);
+
+GED_EXPORT extern int
+ged_draw_pick_result_path(const struct ged_draw_pick_result *result,
+			  size_t index,
+			  struct bu_vls *path_out);
+
+GED_EXPORT extern fastf_t
+ged_draw_pick_result_hit_dist(const struct ged_draw_pick_result *result,
+			      size_t index);
+
+GED_EXPORT extern int
+ged_draw_pick_result_append_path(struct ged_draw_pick_result *result,
+				 const char *path,
+				 fastf_t hit_dist);
+
+GED_EXPORT extern int
+ged_draw_pick_result_append_copy(struct ged_draw_pick_result *dest,
+				 const struct ged_draw_pick_result *src,
+				 size_t index,
+				 fastf_t hit_dist);
+
+GED_EXPORT extern struct ged_draw_pick_result *
+ged_draw_pick_result_filter_first(const struct ged_draw_pick_result *src);
+
+GED_EXPORT extern struct ged_draw_pick_result *
+ged_draw_view_context_pick_point(void *view_ctx,
+				 int x,
+				 int y,
+				 int first_only);
+
+GED_EXPORT extern struct ged_draw_pick_result *
+ged_draw_view_context_pick_nearest(void *view_ctx,
+				   int x,
+				   int y);
+
+GED_EXPORT extern struct ged_draw_pick_result *
+ged_draw_view_context_pick_rect(void *view_ctx,
+				int x0,
+				int y0,
+				int x1,
+				int y1);
+
+GED_EXPORT extern struct ged_draw_pick_result *
+ged_draw_view_context_pick_semantic_path(struct ged *gedp,
+					 void *view_ctx,
+					 const char *path_pattern);
+
+struct ged_draw_render_export_consistency {
+    int export_record_found;
+    int render_item_found;
+    int backend_node_found;
+    int export_render_consistent;
+    int export_backend_consistent;
+};
+
+#define GED_DRAW_RENDER_EXPORT_CONSISTENCY_INIT { 0, 0, 0, 0, 0 }
+
+GED_EXPORT extern int
+ged_draw_view_context_render_export_consistency(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *drawn_prefix,
+	struct ged_draw_render_export_consistency *summary);
 
 GED_EXPORT extern uint64_t
 ged_draw_view_context_frame_revision(void *view_ctx);
@@ -1193,6 +1324,73 @@ ged_draw_view_context_feature_highlighted_primitive_at(void *view_ctx,
 	int *primitive);
 
 GED_EXPORT extern int
+ged_draw_view_feature_ref_is_null(ged_draw_view_feature_ref ref);
+
+GED_EXPORT extern int
+ged_draw_view_context_edit_preview_publish_event(
+    void *view_ctx,
+    ged_draw_view_feature_ref feature,
+    enum ged_draw_view_edit_preview_event event,
+    const char *source_path);
+
+GED_EXPORT extern ged_draw_view_feature_ref
+ged_draw_view_context_feature_overlay_ensure(
+    void *view_ctx,
+    const char *name,
+    const void *owner,
+    void *preview_ctx,
+    const struct ged_draw_view_edit_preview_callbacks *callbacks,
+    const char *source_path);
+
+GED_EXPORT extern ged_draw_view_feature_ref
+ged_draw_view_context_feature_label_ensure(void *view_ctx,
+					   const char *name,
+					   const void *owner);
+
+GED_EXPORT extern void
+ged_draw_view_feature_set_context(ged_draw_view_feature_ref ref,
+				  void *view_ctx);
+
+GED_EXPORT extern void
+ged_draw_view_feature_set_visible(ged_draw_view_feature_ref ref,
+				  int visible);
+
+GED_EXPORT extern void
+ged_draw_view_feature_set_color(ged_draw_view_feature_ref ref,
+				int r,
+				int g,
+				int b);
+
+GED_EXPORT extern int
+ged_draw_view_feature_touch(ged_draw_view_feature_ref ref);
+
+GED_EXPORT extern int
+ged_draw_view_feature_labels_replace(
+    ged_draw_view_feature_ref ref,
+    const struct ged_draw_view_feature_label *labels,
+    size_t label_count);
+
+GED_EXPORT extern int
+ged_draw_view_feature_points_replace(
+    ged_draw_view_feature_ref ref,
+    enum ged_draw_view_feature_family family,
+    const point_t *points,
+    const int *cmds,
+    size_t point_count);
+
+GED_EXPORT extern int
+ged_draw_view_feature_clear_geometry(ged_draw_view_feature_ref ref);
+
+GED_EXPORT extern int
+ged_draw_view_feature_primitive_wireframe_replace(
+    ged_draw_view_feature_ref ref,
+    struct db_i *dbip,
+    struct rt_db_internal *ip,
+    const mat_t mat,
+    const struct bg_tess_tol *ttol,
+    const struct bn_tol *tol);
+
+GED_EXPORT extern int
 ged_draw_view_context_gobject_create(
     struct ged *gedp,
     void *view_ctx,
@@ -1273,7 +1471,7 @@ ged_draw_view_context_snap_first_candidate(void *view_ctx,
 	point_t candidate);
 
 GED_EXPORT extern void
-ged_draw_view_context_info_get(struct rt_view_info *view_info,
+ged_draw_view_context_info_get(struct bv_view_info *view_info,
 			       const void *view_ctx);
 
 GED_EXPORT extern int
@@ -1291,6 +1489,9 @@ ged_draw_view_context_lod_policy_apply_bot_threshold(
     void *view_ctx,
     const ged_draw_view_lod_policy *policy,
     size_t bot_threshold);
+
+GED_EXPORT extern int
+ged_draw_view_context_lod_bounds_update(void *view_ctx);
 
 GED_EXPORT extern int
 ged_draw_view_context_indexed_face_set_replace(
@@ -1885,11 +2086,20 @@ ged_draw_view_context_polygon_find_scoped(void *view_ctx,
 	int local_only);
 
 GED_EXPORT extern ged_draw_view_polygon_ref
+ged_draw_view_context_polygon_select(void *view_ctx,
+				     const point_t model_point);
+
+GED_EXPORT extern ged_draw_view_polygon_ref
 ged_draw_view_context_polygon_create(void *view_ctx,
 				     const char *name,
 				     int local,
 				     int type,
 				     const point_t screen_point);
+
+GED_EXPORT extern ged_draw_view_polygon_ref
+ged_draw_view_context_polygon_dup(void *view_ctx,
+				  const char *name,
+				  const char *new_name);
 
 GED_EXPORT extern ged_draw_view_polygon_ref
 ged_draw_view_context_polygon_import_sketch(const char *name,
@@ -1898,7 +2108,25 @@ ged_draw_view_context_polygon_import_sketch(const char *name,
 	void *view_ctx,
 	int local);
 
+GED_EXPORT extern void
+ged_draw_view_context_polygon_visit_records(
+	void *view_ctx,
+	ged_draw_view_polygon_record_cb callback,
+	void *data);
+
+GED_EXPORT extern size_t
+ged_draw_view_context_polygon_snap_count(void *view_ctx,
+	ged_draw_view_polygon_ref exclude);
+
 GED_EXPORT extern int
+ged_draw_view_context_polygon_clear_point_selection(void *view_ctx);
+
+GED_EXPORT extern int
+ged_draw_view_context_polygon_snap_exclude_set(
+	void *view_ctx,
+	ged_draw_view_polygon_ref ref);
+
+GED_EXPORT extern struct directory *
 ged_draw_view_polygon_export_sketch(struct db_i *dbip,
 				    const char *name,
 				    ged_draw_view_polygon_ref ref);
@@ -1923,6 +2151,25 @@ ged_draw_view_context_polygon_update_screen_pt(ged_draw_view_polygon_ref ref,
 	int op);
 
 GED_EXPORT extern int
+ged_draw_view_polygon_move(ged_draw_view_polygon_ref ref,
+			   point_t *current_point,
+			   point_t *previous_point);
+
+GED_EXPORT extern int
+ged_draw_view_polygon_set_name(ged_draw_view_polygon_ref ref,
+			       const char *name);
+
+GED_EXPORT extern int
+ged_draw_view_polygon_set_visual(ged_draw_view_polygon_ref ref,
+				 const struct bu_color *edge_color,
+				 const struct bu_color *fill_color,
+				 fastf_t fill_slope_x,
+				 fastf_t fill_slope_y,
+				 fastf_t fill_density,
+				 fastf_t vZ,
+				 int fill_flag);
+
+GED_EXPORT extern int
 ged_draw_view_polygon_set_current(ged_draw_view_polygon_ref ref,
 				  long contour_i,
 				  long point_i);
@@ -1935,6 +2182,22 @@ ged_draw_view_polygon_set_contour_open(ged_draw_view_polygon_ref ref,
 GED_EXPORT extern int
 ged_draw_view_polygon_set_all_contours_open(ged_draw_view_polygon_ref ref,
 	int open);
+
+GED_EXPORT extern int
+ged_draw_view_polygon_close(ged_draw_view_polygon_ref ref);
+
+GED_EXPORT extern int
+ged_draw_view_polygon_clear_selected_point(ged_draw_view_polygon_ref ref);
+
+GED_EXPORT extern int
+ged_draw_view_polygon_remove(ged_draw_view_polygon_ref ref);
+
+GED_EXPORT extern void *
+ged_draw_view_polygon_user_data(ged_draw_view_polygon_ref ref);
+
+GED_EXPORT extern int
+ged_draw_view_polygon_user_data_set(ged_draw_view_polygon_ref ref,
+				    void *user_data);
 
 GED_EXPORT extern int
 ged_draw_view_context_polygon_area(ged_draw_view_polygon_ref ref,
@@ -1968,6 +2231,11 @@ ged_draw_view_context_polygon_csg(ged_draw_view_polygon_ref target,
 				  void *view_ctx,
 				  const char *other_name,
 				  bg_clip_t op);
+
+GED_EXPORT extern int
+ged_draw_view_polygon_csg(ged_draw_view_polygon_ref target,
+			  ged_draw_view_polygon_ref stencil,
+			  bg_clip_t op);
 
 GED_EXPORT extern int
 ged_draw_view_context_feature_summary(

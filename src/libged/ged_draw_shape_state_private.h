@@ -55,7 +55,7 @@ typedef struct ged_draw_shape_state {
     struct ged *gedp;
     void *u_data;
     void (*u_data_free)(void *);
-    rt_view_scene_ref source_ref;
+    ged_draw_scene_handle source_ref;
     void *source_data;
     void (*source_data_free)(void *);
     struct bn_tol obol_snapshot_tol;
@@ -65,7 +65,7 @@ typedef struct ged_draw_shape_state {
     uint64_t geometry_revision;
 } ged_draw_shape_state;
 
-ged_draw_shape_state *ged_draw_shape_state_get_scene_rt_ref(
-	rt_view_scene_ref scene_ref);
+ged_draw_shape_state *ged_draw_shape_state_get_scene_handle(
+	ged_draw_scene_handle scene_ref);
 
 #endif /* LIBGED_GED_DRAW_SHAPE_STATE_PRIVATE_H */

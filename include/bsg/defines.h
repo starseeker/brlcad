@@ -407,14 +407,6 @@ struct bsg_view {
      * implementation node identity. */
     void           *gv_scene;
 
-    /* per-frame edit-mode matrix
-     * override.  When non-NULL, draw_scene_obj() renders edit-highlighted
-     * objects with this matrix instead of gv_model2view.  MGED sets this to
-     * view_state->vs_model2objview while the frame is being painted and
-     * clears it to NULL immediately afterward.  Never heap-allocated; always
-     * points into caller-owned storage. */
-    matp_t          gv_edit_mat;
-
     /* Per-frame generation counter.  Bumped at the top of dm_draw_objs() so that
      * shapes painted in the current frame can be identified by
      * bsg_appearance_drawn_rev(shape) == gv_frame_rev without any per-frame full-tree

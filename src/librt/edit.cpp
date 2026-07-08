@@ -42,6 +42,7 @@
 
 extern "C" {
 #include "vmath.h"
+#include "bv/view.h"
 #include "bu/hash.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
@@ -203,6 +204,29 @@ rt_edit_view_init(struct rt_edit_view *v)
 }
 
 void
+rt_edit_view_from_context(struct rt_edit_view *ev, const void *view_ctx)
+{
+    if (!ev)
+	return;
+
+    rt_edit_view_init(ev);
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (!view)
+	return;
+
+    ev->gv_scale = bv_scale_get(view);
+    ev->gv_base2local = bv_base2local_get(view);
+    ev->gv_local2base = bv_local2base_get(view);
+    ev->gv_coord = bv_coord_get(view);
+    ev->gv_rotate_about = bv_rotate_about_get(view);
+    bv_rotation_get(ev->gv_rotation, view);
+    bv_center_mat_get(ev->gv_center, view);
+    bv_model2view_get(ev->gv_model2view, view);
+    bv_view2model_get(ev->gv_view2model, view);
+}
+
+void
 rt_edit_set_view(struct rt_edit *s, const struct rt_edit_view *v)
 {
     if (!s)
@@ -332,6 +356,15 @@ rt_edit_create(struct db_full_path *dfp, struct db_i *dbip, struct bn_tol *tol, 
     rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
 
     return s;
+}
+
+struct rt_edit *
+rt_edit_create_context(struct db_full_path *dfp, struct db_i *dbip,
+		       struct bn_tol *tol, const void *view_ctx)
+{
+    struct rt_edit_view ev;
+    rt_edit_view_from_context(&ev, view_ctx);
+    return rt_edit_create(dfp, dbip, tol, &ev);
 }
 
 void
@@ -480,6 +513,16 @@ rt_edit_reinit(struct rt_edit *s, struct db_full_path *dfp, struct db_i *dbip,
     rt_get_solid_keypoint(s, &s->e_keypoint, &s->e_keytag, s->e_mat);
 
     return BRLCAD_OK;
+}
+
+int
+rt_edit_reinit_context(struct rt_edit *s, struct db_full_path *dfp,
+		       struct db_i *dbip, struct bn_tol *tol,
+		       const void *view_ctx)
+{
+    struct rt_edit_view ev;
+    rt_edit_view_from_context(&ev, view_ctx);
+    return rt_edit_reinit(s, dfp, dbip, tol, &ev);
 }
 
 void
@@ -953,6 +996,22 @@ rt_edit_knob_cmd_process(
     } /* switch (cmd[1]) */
 
     return BRLCAD_ERROR;
+}
+
+int
+rt_edit_knob_cmd_process_context(
+	struct rt_edit *s,
+	vect_t *rvec, int *do_rot, vect_t *tvec, int *do_tran, int *do_sca,
+	const void *view_ctx, const char *cmd, fastf_t f,
+	char origin, int incr_flag, void *u_data)
+{
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+
+    struct rt_edit_view ev;
+    rt_edit_view_from_context(&ev, view_ctx);
+    return rt_edit_knob_cmd_process(s, rvec, do_rot, tvec, do_tran, do_sca,
+	    &ev, cmd, f, origin, incr_flag, u_data);
 }
 
 void

@@ -951,7 +951,7 @@ rhc_curve_points(
 
 
 static int
-rt_rhc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_rhc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     point_t p;
     vect_t rhc_R;
@@ -968,7 +968,7 @@ rt_rhc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 	return -2;
     }
 
-    fastf_t point_spacing = rt_view_solid_point_spacing(v, s_size);
+    fastf_t point_spacing = bv_view_solid_point_spacing(v, s_size);
 
     num_curve_points = rhc_curve_points(rhc, point_spacing);
 
@@ -992,7 +992,7 @@ rt_rhc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
     }
 
     /* connect both halves of the hyperbolic contours of the opposing faces */
-    num_connections = primitive_curve_count(ip, tol, rt_view_lod_curve_scale(v), s_size);
+    num_connections = primitive_curve_count(ip, tol, bv_view_lod_curve_scale(v), s_size);
     if (num_connections < 2) {
 	num_connections = 2;
     }
@@ -1030,7 +1030,7 @@ rt_rhc_lod_line_set(struct rt_primitive_lod_realization *realization, struct rt_
 
 
 int
-rt_rhc_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct rt_view_info *v, fastf_t s_size)
+rt_rhc_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_db_internal *ip, const struct bn_tol *tol, const struct bv_view_info *v, fastf_t s_size)
 {
     if (!primitive_lod_line_set_begin(realization))
 	return -1;
@@ -1227,7 +1227,7 @@ rt_rhc_wireframe_line_set(struct rt_primitive_lod_realization *realization,
 
 
 C_DECL int
-rt_rhc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_rhc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     BU_CK_LIST_HEAD(vhead);
 

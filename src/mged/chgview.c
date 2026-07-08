@@ -122,9 +122,10 @@ mged_view_ring_save_current(struct mged_state *s, struct view_ring *vrp)
     if (!vrp)
 	return;
 
-    rt_view_context_rotation_get(vrp->vr_rot_mat, view_state->vs_gvp);
-    rt_view_context_center_get(vrp->vr_tvc_mat, view_state->vs_gvp);
-    vrp->vr_scale = rt_view_context_scale_get(view_state->vs_gvp);
+    struct bv *view = mged_view_state_view(view_state);
+    bv_rotation_get(vrp->vr_rot_mat, view);
+    bv_center_mat_get(vrp->vr_tvc_mat, view);
+    vrp->vr_scale = bv_scale_get(view);
 }
 
 static void
@@ -135,10 +136,11 @@ mged_view_ring_restore_current(struct mged_state *s, struct view_ring *vrp)
     if (!vrp)
 	return;
 
-    rt_view_context_rotation_set(view_state->vs_gvp, vrp->vr_rot_mat);
+    struct bv *view = mged_view_state_view(view_state);
+    bv_rotation_set(view, vrp->vr_rot_mat);
     MAT_DELTAS_GET_NEG(view_center, vrp->vr_tvc_mat);
-    rt_view_context_center_set(view_state->vs_gvp, view_center);
-    rt_view_context_scale_set(view_state->vs_gvp, vrp->vr_scale);
+    bv_center_set(view, view_center);
+    bv_scale_set(view, vrp->vr_scale);
 }
 
 /* Helper predicates replacing prior ad-hoc string lists */
@@ -369,18 +371,19 @@ cmd_size(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
     Tcl_DStringResult(interp, &ds);
 
     if (ret == BRLCAD_OK) {
-	fastf_t view_scale = rt_view_context_scale_get(view_state->vs_gvp);
-	fastf_t view_initial_scale = rt_view_context_initial_scale_get(view_state->vs_gvp);
+	struct bv *view = mged_view_state_view(view_state);
+	fastf_t view_scale = bv_scale_get(view);
+	fastf_t view_initial_scale = bv_initial_scale_get(view);
 	fastf_t view_absolute_scale = 1.0 - view_scale / view_initial_scale;
 
 	if (view_absolute_scale < 0.0) {
 	    view_absolute_scale /= 9.0;
 	}
-	rt_view_context_absolute_scale_set(view_state->vs_gvp, view_absolute_scale);
+	bv_absolute_scale_set(view, view_absolute_scale);
 
-	if (!ZERO(view_state->k.tra_v_abs[X])
-	    || !ZERO(view_state->k.tra_v_abs[Y])
-	    || !ZERO(view_state->k.tra_v_abs[Z])) {
+	if (!ZERO(view_state->k.abs_trans_view[X])
+	    || !ZERO(view_state->k.abs_trans_view[Y])
+	    || !ZERO(view_state->k.abs_trans_view[Z])) {
 	    set_absolute_tran(s);
 	}
 
@@ -408,8 +411,8 @@ size_reset(struct mged_state *s)
 
     const char *av[1] = {"autoview"};
     ged_exec_autoview(s->gedp, 1, (const char **)av);
-    rt_view_context_initial_scale_set(view_state->vs_gvp,
-	    rt_view_context_scale_get(view_state->vs_gvp));
+    bv_initial_scale_set(mged_view_state_view(view_state),
+	    bv_scale_get(mged_view_state_view(view_state)));
     mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 }
 
@@ -624,7 +627,7 @@ edit_com(struct mged_state *s,
 
 	    (void)mged_svbase(s);
 
-	    fastf_t view_scale = rt_view_context_scale_get(view_state->vs_gvp);
+	    fastf_t view_scale = bv_scale_get(mged_view_state_view(view_state));
 	    for (BU_LIST_FOR(vrp, view_ring, &view_state->vs_headView.l)) {
 		vrp->vr_scale = view_scale;
 	    }
@@ -696,7 +699,7 @@ cmd_autoview(ClientData clientData, Tcl_Interp *interp, int argc, const char *ar
 	}
 	(void)mged_svbase(s);
 
-	fastf_t view_scale = rt_view_context_scale_get(view_state->vs_gvp);
+	fastf_t view_scale = bv_scale_get(mged_view_state_view(view_state));
 	for (BU_LIST_FOR(vrp, view_ring, &view_state->vs_headView.l)) {
 	    vrp->vr_scale = view_scale;
 	}
@@ -826,16 +829,17 @@ f_status(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
     }
 
     if (argc == 1) {
-	fastf_t view_scale = rt_view_context_scale_get(view_state->vs_gvp);
+	struct bv *view = mged_view_state_view(view_state);
+	fastf_t view_scale = bv_scale_get(view);
 	mat_t view_center;
 	mat_t view_rotation;
 	mat_t model2view;
 	mat_t view2model;
 
-	rt_view_context_center_get(view_center, view_state->vs_gvp);
-	rt_view_context_rotation_get(view_rotation, view_state->vs_gvp);
-	rt_view_context_model2view_get(model2view, view_state->vs_gvp);
-	rt_view_context_view2model_get(view2model, view_state->vs_gvp);
+	bv_center_mat_get(view_center, view);
+	bv_rotation_get(view_rotation, view);
+	bv_model2view_get(model2view, view);
+	bv_view2model_get(view2model, view);
 
 	bu_vls_printf(&vls, "s->global_editing_state=%s, ", state_str[s->global_editing_state]);
 	bu_vls_printf(&vls, "Viewscale=%f (%f mm)\n",
@@ -863,7 +867,7 @@ f_status(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
     }
 
     if (BU_STR_EQUAL(argv[1], "Viewscale")) {
-	fastf_t view_scale = rt_view_context_scale_get(view_state->vs_gvp);
+	fastf_t view_scale = bv_scale_get(mged_view_state_view(view_state));
 	bu_vls_printf(&vls, "%f", view_scale * s->dbip->dbi_base2local);
 	Tcl_AppendResult(interp, bu_vls_addr(&vls), (char *)NULL);
 	bu_vls_free(&vls);
@@ -886,28 +890,28 @@ f_status(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 
     if (BU_STR_EQUAL(argv[1], "toViewcenter")) {
 	mat_t view_center;
-	rt_view_context_center_get(view_center, view_state->vs_gvp);
+	bv_center_mat_get(view_center, mged_view_state_view(view_state));
 	mged_bn_mat_print(interp, "toViewcenter", view_center);
 	return TCL_OK;
     }
 
     if (BU_STR_EQUAL(argv[1], "Viewrot")) {
 	mat_t view_rotation;
-	rt_view_context_rotation_get(view_rotation, view_state->vs_gvp);
+	bv_rotation_get(view_rotation, mged_view_state_view(view_state));
 	mged_bn_mat_print(interp, "Viewrot", view_rotation);
 	return TCL_OK;
     }
 
     if (BU_STR_EQUAL(argv[1], "model2view")) {
 	mat_t model2view;
-	rt_view_context_model2view_get(model2view, view_state->vs_gvp);
+	bv_model2view_get(model2view, mged_view_state_view(view_state));
 	mged_bn_mat_print(interp, "model2view", model2view);
 	return TCL_OK;
     }
 
     if (BU_STR_EQUAL(argv[1], "view2model")) {
 	mat_t view2model;
-	rt_view_context_view2model_get(view2model, view_state->vs_gvp);
+	bv_view2model_get(view2model, mged_view_state_view(view_state));
 	mged_bn_mat_print(interp, "view2model", view2model);
 	return TCL_OK;
     }
@@ -1280,15 +1284,15 @@ f_sed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 }
 
 static void
-update_view_knob_rate_flags(struct rt_view_knobs *k)
+update_view_knob_rate_flags(struct bv_knobs *k)
 {
     if (!k) return;
-    k->rot_m_flag = (!ZERO(k->rot_m[X]) || !ZERO(k->rot_m[Y]) || !ZERO(k->rot_m[Z]));
-    k->rot_o_flag = (!ZERO(k->rot_o[X]) || !ZERO(k->rot_o[Y]) || !ZERO(k->rot_o[Z]));
-    k->rot_v_flag = (!ZERO(k->rot_v[X]) || !ZERO(k->rot_v[Y]) || !ZERO(k->rot_v[Z]));
-    k->tra_m_flag = (!ZERO(k->tra_m[X]) || !ZERO(k->tra_m[Y]) || !ZERO(k->tra_m[Z]));
-    k->tra_v_flag = (!ZERO(k->tra_v[X]) || !ZERO(k->tra_v[Y]) || !ZERO(k->tra_v[Z]));
-    k->sca_flag = (!ZERO(k->sca));
+    k->rot_model_active = (!ZERO(k->rot_model[X]) || !ZERO(k->rot_model[Y]) || !ZERO(k->rot_model[Z]));
+    k->rot_object_active = (!ZERO(k->rot_object[X]) || !ZERO(k->rot_object[Y]) || !ZERO(k->rot_object[Z]));
+    k->rot_view_active = (!ZERO(k->rot_view[X]) || !ZERO(k->rot_view[Y]) || !ZERO(k->rot_view[Z]));
+    k->trans_model_active = (!ZERO(k->trans_model[X]) || !ZERO(k->trans_model[Y]) || !ZERO(k->trans_model[Z]));
+    k->trans_view_active = (!ZERO(k->trans_view[X]) || !ZERO(k->trans_view[Y]) || !ZERO(k->trans_view[Z]));
+    k->scale_rate_active = (!ZERO(k->scale_rate));
 }
 
 static void
@@ -1308,7 +1312,7 @@ update_all_rate_flags(struct mged_state *s)
 {
     if (view_state) {
 	update_view_knob_rate_flags(&view_state->k);
-	rt_view_context_knobs_state_set(view_state->vs_gvp, &view_state->k);
+	mged_view_state_view(view_state)->knobs = view_state->k;
     }
     if (s && s->s_edit && MEDIT(s))
 	update_edit_knob_rate_flags(&MEDIT(s)->k);
@@ -1328,15 +1332,15 @@ mged_print_knobvals(struct mged_state *s, Tcl_Interp *interp)
 	    bu_vls_printf(&vls, "y = %f\n", MEDIT(s)->k.rot_m[Y]);
 	    bu_vls_printf(&vls, "z = %f\n", MEDIT(s)->k.rot_m[Z]);
 	} else {
-	    bu_vls_printf(&vls, "x = %f\n", view_state->k.rot_v[X]);
-	    bu_vls_printf(&vls, "y = %f\n", view_state->k.rot_v[Y]);
-	    bu_vls_printf(&vls, "z = %f\n", view_state->k.rot_v[Z]);
+	    bu_vls_printf(&vls, "x = %f\n", view_state->k.rot_view[X]);
+	    bu_vls_printf(&vls, "y = %f\n", view_state->k.rot_view[Y]);
+	    bu_vls_printf(&vls, "z = %f\n", view_state->k.rot_view[Z]);
 	}
 
 	if (s->s_edit->es_edclass == EDIT_CLASS_SCALE && mged_variables->mv_transform == 'e') {
 	    bu_vls_printf(&vls, "S = %f\n", MEDIT(s)->k.sca);
 	} else {
-	    bu_vls_printf(&vls, "S = %f\n", view_state->k.sca);
+	    bu_vls_printf(&vls, "S = %f\n", view_state->k.scale_rate);
 	}
 
 	if (s->s_edit->es_edclass == EDIT_CLASS_TRAN && mged_variables->mv_transform == 'e') {
@@ -1344,9 +1348,9 @@ mged_print_knobvals(struct mged_state *s, Tcl_Interp *interp)
 	    bu_vls_printf(&vls, "Y = %f\n", MEDIT(s)->k.tra_m[Y]);
 	    bu_vls_printf(&vls, "Z = %f\n", MEDIT(s)->k.tra_m[Z]);
 	} else {
-	    bu_vls_printf(&vls, "X = %f\n", view_state->k.tra_v[X]);
-	    bu_vls_printf(&vls, "Y = %f\n", view_state->k.tra_v[Y]);
-	    bu_vls_printf(&vls, "Z = %f\n", view_state->k.tra_v[Z]);
+	    bu_vls_printf(&vls, "X = %f\n", view_state->k.trans_view[X]);
+	    bu_vls_printf(&vls, "Y = %f\n", view_state->k.trans_view[Y]);
+	    bu_vls_printf(&vls, "Z = %f\n", view_state->k.trans_view[Z]);
 	}
     } else {
 	if (s->s_edit->es_edclass == EDIT_CLASS_ROTATE && mged_variables->mv_transform == 'e') {
@@ -1354,15 +1358,15 @@ mged_print_knobvals(struct mged_state *s, Tcl_Interp *interp)
 	    bu_vls_printf(&vls, "ay = %f\n", MEDIT(s)->k.rot_m_abs[Y]);
 	    bu_vls_printf(&vls, "az = %f\n", MEDIT(s)->k.rot_m_abs[Z]);
 	} else {
-	    bu_vls_printf(&vls, "ax = %f\n", view_state->k.rot_v_abs[X]);
-	    bu_vls_printf(&vls, "ay = %f\n", view_state->k.rot_v_abs[Y]);
-	    bu_vls_printf(&vls, "az = %f\n", view_state->k.rot_v_abs[Z]);
+	    bu_vls_printf(&vls, "ax = %f\n", view_state->k.abs_rot_view[X]);
+	    bu_vls_printf(&vls, "ay = %f\n", view_state->k.abs_rot_view[Y]);
+	    bu_vls_printf(&vls, "az = %f\n", view_state->k.abs_rot_view[Z]);
 	}
 
 	if (s->s_edit->es_edclass == EDIT_CLASS_SCALE && mged_variables->mv_transform == 'e') {
 	    bu_vls_printf(&vls, "aS = %f\n", MEDIT(s)->k.sca_abs);
 	} else {
-	    bu_vls_printf(&vls, "aS = %f\n", rt_view_context_absolute_scale_get(view_state->vs_gvp));
+	    bu_vls_printf(&vls, "aS = %f\n", bv_absolute_scale_get(mged_view_state_view(view_state)));
 	}
 
 	if (s->s_edit->es_edclass == EDIT_CLASS_TRAN && mged_variables->mv_transform == 'e') {
@@ -1370,13 +1374,13 @@ mged_print_knobvals(struct mged_state *s, Tcl_Interp *interp)
 	    bu_vls_printf(&vls, "aY = %f\n", MEDIT(s)->k.tra_m_abs[Y]);
 	    bu_vls_printf(&vls, "aZ = %f\n", MEDIT(s)->k.tra_m_abs[Z]);
 	} else {
-	    bu_vls_printf(&vls, "aX = %f\n", view_state->k.tra_v_abs[X]);
-	    bu_vls_printf(&vls, "aY = %f\n", view_state->k.tra_v_abs[Y]);
-	    bu_vls_printf(&vls, "aZ = %f\n", view_state->k.tra_v_abs[Z]);
+	    bu_vls_printf(&vls, "aX = %f\n", view_state->k.abs_trans_view[X]);
+	    bu_vls_printf(&vls, "aY = %f\n", view_state->k.abs_trans_view[Y]);
+	    bu_vls_printf(&vls, "aZ = %f\n", view_state->k.abs_trans_view[Z]);
 	}
     }
 
-    struct rt_view_adc_state adc = {0};
+    struct bv_adc_state adc = {0};
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
     if (adc.draw) {
 	bu_vls_printf(&vls, "xadc = %d\n", adc.dv_x);
@@ -1427,11 +1431,11 @@ knob_apply_misc(struct mged_state *s,
 		const char *token)
 {
     if (BU_STR_EQUAL(token, "zap") || BU_STR_EQUAL(token, "zero")) {
-	rt_view_context_knobs_reset(view_state->vs_gvp, RT_VIEW_KNOBS_ALL);
+	bv_knobs_reset(&mged_view_state_view(view_state)->knobs, BV_KNOBS_ALL);
 	if (MEDIT(s)) {
 	    rt_edit_knobs_reset(&MEDIT(s)->k, RT_EDIT_KNOBS_RATE);
 	}
-	rt_view_context_knobs_state_get(&view_state->k, view_state->vs_gvp);
+	view_state->k = mged_view_state_view(view_state)->knobs;
 	update_all_rate_flags(s);
 	Tcl_Eval(interp, "adc reset");
 	(void)mged_svbase(s);
@@ -1440,9 +1444,9 @@ knob_apply_misc(struct mged_state *s,
     if (BU_STR_EQUAL(token, "calibrate")) {
 	/* older calibrate behavior reset ONLY vs_absolute_tran,
 	 * so that's what we'll do here as well. */
-	rt_view_context_knobs_state_get(&view_state->k, view_state->vs_gvp);
-	VSETALL(view_state->k.tra_v_abs, 0.0);
-	rt_view_context_knobs_state_set(view_state->vs_gvp, &view_state->k);
+	view_state->k = mged_view_state_view(view_state)->knobs;
+	VSETALL(view_state->k.abs_trans_view, 0.0);
+	mged_view_state_view(view_state)->knobs = view_state->k;
 
 	update_all_rate_flags(s);
 	return 1;
@@ -1575,28 +1579,28 @@ f_knob(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 		struct rt_edit *re = MEDIT(s);
 		if (!re)
 		    goto usage;
-		char save_coord = rt_view_context_coord_get(view_state->vs_gvp);
-		rt_view_context_coord_set(view_state->vs_gvp, mged_variables->mv_coords);
+		char save_coord = bv_coord_get(mged_view_state_view(view_state));
+		bv_coord_set(mged_view_state_view(view_state), mged_variables->mv_coords);
 		if (rt_edit_knob_cmd_process_context(re,
 				&edit_rvec, &edit_do_rot,
 				&edit_tvec, &edit_do_tran,
 				&edit_do_sca,
 				view_state->vs_gvp, token, fval,
 				origin, incr_flag, NULL) != BRLCAD_OK) {
-		    rt_view_context_coord_set(view_state->vs_gvp, save_coord);
+		    bv_coord_set(mged_view_state_view(view_state), save_coord);
 		    goto usage;
 		}
-		rt_view_context_coord_set(view_state->vs_gvp, save_coord);
+		bv_coord_set(mged_view_state_view(view_state), save_coord);
 	    } else {
 		/* View path via libbv.  Make sure our units are synced. */
 		if (s->dbip) {
-		    rt_view_context_unit_conversion_set(view_state->vs_gvp,
+		    bv_unit_conversion_set(mged_view_state_view(view_state),
 			    s->dbip->dbi_local2base,
 			    s->dbip->dbi_base2local);
 		}
 		int model_mode = model_flag || (mged_variables->mv_coords == 'm' && !view_flag);
-		if (rt_view_context_knobs_cmd_process(&view_rvec, &view_do_rot, &view_tvec, &view_do_tran,
-			    view_state->vs_gvp,
+		if (bv_knobs_cmd_process(&view_rvec, &view_do_rot, &view_tvec, &view_do_tran,
+			    mged_view_state_view(view_state),
 			    token, fval,
 			    origin, model_mode, incr_flag) != BRLCAD_OK) {
 		    goto usage;
@@ -1625,11 +1629,11 @@ f_knob(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	}
 
 	if (view_do_tran) {
-	    rt_view_context_knobs_translate(view_state->vs_gvp, view_tvec, model_mode_final);
+		bv_knobs_translate(mged_view_state_view(view_state), view_tvec, model_mode_final);
 	}
 
 	if (view_do_rot) {
-	    rt_view_context_knobs_rotate(view_state->vs_gvp, view_rvec, origin, vcoords,
+	    bv_knobs_rotate(mged_view_state_view(view_state), view_rvec, origin, vcoords,
 		    (vcoords == 'o') ? MEDIT(s)->acc_rot_sol : NULL,
 		    NULL);
 	}
@@ -1663,7 +1667,7 @@ f_knob(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     /* Sync view_state->k with current retained view knobs before rate flag calc */
     if (view_state && view_state->vs_gvp)
-	rt_view_context_knobs_state_get(&view_state->k, view_state->vs_gvp);
+	view_state->k = mged_view_state_view(view_state)->knobs;
 
     /* Update rate flags */
     update_all_rate_flags(s);
@@ -1674,7 +1678,7 @@ f_knob(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
      * would drop the earlier MGED changes because the retained view knob
      * record lags behind view_state->k. */
     if (view_state && view_state->vs_gvp)
-	rt_view_context_knobs_state_set(view_state->vs_gvp, &view_state->k);
+	mged_view_state_view(view_state)->knobs = view_state->k;
 
     return TCL_OK;
 
@@ -1720,26 +1724,27 @@ mged_zoom(struct mged_state *s, double val)
 	return TCL_ERROR;
     }
 
-    fastf_t view_scale = rt_view_context_scale_get(view_state->vs_gvp);
-    fastf_t view_initial_scale = rt_view_context_initial_scale_get(view_state->vs_gvp);
+    struct bv *view = mged_view_state_view(view_state);
+    fastf_t view_scale = bv_scale_get(view);
+    fastf_t view_initial_scale = bv_initial_scale_get(view);
     fastf_t view_absolute_scale = 1.0 - view_scale / view_initial_scale;
 
     if (view_absolute_scale < 0.0) {
 	view_absolute_scale /= 9.0;
     }
-    rt_view_context_absolute_scale_set(view_state->vs_gvp, view_absolute_scale);
+    bv_absolute_scale_set(view, view_absolute_scale);
 
-    if (!ZERO(view_state->k.tra_v_abs[X])
-	|| !ZERO(view_state->k.tra_v_abs[Y])
-	|| !ZERO(view_state->k.tra_v_abs[Z])) {
+    if (!ZERO(view_state->k.abs_trans_view[X])
+	|| !ZERO(view_state->k.abs_trans_view[Y])
+	|| !ZERO(view_state->k.abs_trans_view[Z])) {
 	set_absolute_tran(s);
     }
 
     ret = TCL_OK;
-    struct rt_view_lod_policy lod_policy = RT_VIEW_LOD_POLICY_INIT;
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
     void *active_view = ged_view_active_ctx(s->gedp);
     if (active_view &&
-	rt_view_context_lod_policy_get(&lod_policy, active_view) &&
+	ged_draw_view_context_lod_policy_get(&lod_policy, active_view) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh) {
 	ret = redraw_visible_objects(s);
     }
@@ -1857,9 +1862,9 @@ cmd_setview(ClientData clientData, Tcl_Interp *interp, int argc, const char *arg
 	return TCL_ERROR;
     }
 
-    if (!ZERO(view_state->k.tra_v_abs[X])
-	|| !ZERO(view_state->k.tra_v_abs[Y])
-	|| !ZERO(view_state->k.tra_v_abs[Z])) {
+    if (!ZERO(view_state->k.abs_trans_view[X])
+	|| !ZERO(view_state->k.abs_trans_view[Y])
+	|| !ZERO(view_state->k.abs_trans_view[Z])) {
 	set_absolute_tran(s);
     }
 
@@ -1888,7 +1893,7 @@ f_slewview(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
     }
 
     /* this is for the ModelDelta calculation below */
-    rt_view_context_center_get(view_center, view_state->vs_gvp);
+    bv_center_mat_get(view_center, mged_view_state_view(view_state));
     MAT_DELTAS_GET_NEG(old_model_center, view_center);
 
     Tcl_DStringInit(&ds);
@@ -1904,7 +1909,7 @@ f_slewview(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
     mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 
     /* all this for ModelDelta */
-    rt_view_context_center_get(view_center, view_state->vs_gvp);
+    bv_center_mat_get(view_center, mged_view_state_view(view_state));
     MAT_DELTAS_GET_NEG(new_model_center, view_center);
     VSUB2(diff, new_model_center, old_model_center);
     MAT_IDN(delta);
@@ -1923,41 +1928,41 @@ mged_svbase(struct mged_state *s)
     mat_t view_center;
     fastf_t view_scale;
 
-    rt_view_context_center_get(view_center, view_state->vs_gvp);
-    view_scale = rt_view_context_scale_get(view_state->vs_gvp);
+    bv_center_mat_get(view_center, mged_view_state_view(view_state));
+    view_scale = bv_scale_get(mged_view_state_view(view_state));
     MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_center);
-    rt_view_context_initial_scale_set(view_state->vs_gvp, view_scale);
+    bv_initial_scale_set(mged_view_state_view(view_state), view_scale);
 
     /* Snapshot object absolute rotations (not previously reset by svbase)
      * TODO - for now we're preserving existing behavior, but should these
      * be reset? */
     vect_t saved_rot_o_abs      = VINIT_ZERO;
     vect_t saved_rot_o_abs_last = VINIT_ZERO;
-    VMOVE(saved_rot_o_abs,      view_state->k.rot_o_abs);
-    VMOVE(saved_rot_o_abs_last, view_state->k.rot_o_abs_last);
+    VMOVE(saved_rot_o_abs,      view_state->k.abs_rot_object);
+    VMOVE(saved_rot_o_abs_last, view_state->k.abs_rot_object_last);
 
     /* Reset all absolute knob baselines */
     if (view_state->vs_gvp) {
-	rt_view_context_knobs_state_set(view_state->vs_gvp, &view_state->k);
-	rt_view_context_knobs_reset(view_state->vs_gvp, RT_VIEW_KNOBS_ABS);
-	rt_view_context_knobs_state_get(&view_state->k, view_state->vs_gvp);
+	mged_view_state_view(view_state)->knobs = view_state->k;
+	bv_knobs_reset(&mged_view_state_view(view_state)->knobs, BV_KNOBS_ABS);
+	view_state->k = mged_view_state_view(view_state)->knobs;
     }
 
     /* Restore object absolute rotations to preserve legacy behavior
      * TODO - for now we're preserving existing behavior, but should these
      * be reset? */
-    VMOVE(view_state->k.rot_o_abs,      saved_rot_o_abs);
-    VMOVE(view_state->k.rot_o_abs_last, saved_rot_o_abs_last);
+    VMOVE(view_state->k.abs_rot_object,      saved_rot_o_abs);
+    VMOVE(view_state->k.abs_rot_object_last, saved_rot_o_abs_last);
 
     // TODO - should we be modding vs_gvp here when everything else is in view_state?
     // Alternately, should we just use vs_gvp rather than values in view_state?  The
     // latter has compilations if we're using ged_gvp in vs_gvp, since multipane
     // mode is involved with viewstate - need to study in more detail. */
-    rt_view_context_absolute_scale_set(view_state->vs_gvp, 0.0);
+    bv_absolute_scale_set(mged_view_state_view(view_state), 0.0);
 
     /* Sync active retained view knob state */
     if (view_state->vs_gvp) {
-	rt_view_context_knobs_state_set(view_state->vs_gvp, &view_state->k);
+	mged_view_state_view(view_state)->knobs = view_state->k;
     }
 
     if (mged_variables->mv_faceplate && mged_variables->mv_orig_gui) {
@@ -2039,9 +2044,9 @@ setview(struct mged_state *s,
     av[4] = (char *)0;
     ged_exec_setview(s->gedp, 4, (const char **)av);
 
-    if (!ZERO(view_state->k.tra_v_abs[X])
-	|| !ZERO(view_state->k.tra_v_abs[Y])
-	|| !ZERO(view_state->k.tra_v_abs[Z])) {
+    if (!ZERO(view_state->k.abs_trans_view[X])
+	|| !ZERO(view_state->k.abs_trans_view[Y])
+	|| !ZERO(view_state->k.abs_trans_view[Z])) {
 	set_absolute_tran(s);
     }
 
@@ -2071,7 +2076,7 @@ slewview(struct mged_state *s, vect_t view_pos)
     }
 
     /* this is for the ModelDelta calculation below */
-    rt_view_context_center_get(view_center, view_state->vs_gvp);
+    bv_center_mat_get(view_center, mged_view_state_view(view_state));
     MAT_DELTAS_GET_NEG(old_model_center, view_center);
 
     snprintf(xbuf, 32, "%f", view_pos[X]);
@@ -2086,7 +2091,7 @@ slewview(struct mged_state *s, vect_t view_pos)
     ged_exec_slew(s->gedp, 4, (const char **)av);
 
     /* all this for ModelDelta */
-    rt_view_context_center_get(view_center, view_state->vs_gvp);
+    bv_center_mat_get(view_center, mged_view_state_view(view_state));
     MAT_DELTAS_GET_NEG(new_model_center, view_center);
     VSUB2(diff, new_model_center, old_model_center);
     MAT_IDN(delta);
@@ -2458,8 +2463,8 @@ cmd_mrot(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 	    return TCL_ERROR;
 	}
 
-	return mged_librt_rotate_apply(s, rt_view_context_coord_get(view_state->vs_gvp),
-		rt_view_context_rotate_about_get(view_state->vs_gvp), rmat);
+	return mged_librt_rotate_apply(s, bv_coord_get(mged_view_state_view(view_state)),
+		bv_rotate_about_get(mged_view_state_view(view_state)), rmat);
     } else {
 	int ret;
 
@@ -2535,7 +2540,7 @@ cmd_rot(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
 
-	return mged_librt_rotate_apply(s, coord, rt_view_context_rotate_about_get(view_state->vs_gvp),
+	return mged_librt_rotate_apply(s, coord, bv_rotate_about_get(mged_view_state_view(view_state)),
 		rmat);
     } else {
 	int ret;
@@ -2582,8 +2587,8 @@ cmd_arot(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 	    return TCL_ERROR;
 	}
 
-	return mged_librt_rotate_apply(s, rt_view_context_coord_get(view_state->vs_gvp),
-		rt_view_context_rotate_about_get(view_state->vs_gvp), rmat);
+	return mged_librt_rotate_apply(s, bv_coord_get(mged_view_state_view(view_state)),
+		bv_rotate_about_get(mged_view_state_view(view_state)), rmat);
     } else {
 	int ret;
 	Tcl_DStringInit(&ds);
@@ -2782,19 +2787,20 @@ mged_vscale(struct mged_state *s, fastf_t sfactor)
 	return TCL_OK;
     }
 
-    view_scale = rt_view_context_scale_get(view_state->vs_gvp) * sfactor;
+    struct bv *view = mged_view_state_view(view_state);
+    view_scale = bv_scale_get(view) * sfactor;
 
-    if (view_scale < RT_VIEW_MIN_SIZE) {
-	view_scale = RT_VIEW_MIN_SIZE;
+    if (view_scale < BV_MIN_SIZE) {
+	view_scale = BV_MIN_SIZE;
     }
 
-    rt_view_context_scale_set(view_state->vs_gvp, view_scale);
-    f = view_scale / rt_view_context_initial_scale_get(view_state->vs_gvp);
+    bv_scale_set(view, view_scale);
+    f = view_scale / bv_initial_scale_get(view);
 
     if (f >= 1.0) {
-	rt_view_context_absolute_scale_set(view_state->vs_gvp, (f - 1.0) / -9.0);
+	bv_absolute_scale_set(view, (f - 1.0) / -9.0);
     } else {
-	rt_view_context_absolute_scale_set(view_state->vs_gvp, 1.0 - f);
+	bv_absolute_scale_set(view, 1.0 - f);
     }
 
     new_mats(s);
@@ -2881,13 +2887,13 @@ cmd_sca(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
 
-	f = rt_view_context_scale_get(view_state->vs_gvp) /
-	    rt_view_context_initial_scale_get(view_state->vs_gvp);
+	struct bv *view = mged_view_state_view(view_state);
+	f = bv_scale_get(view) / bv_initial_scale_get(view);
 
 	if (f >= 1.0) {
-	    rt_view_context_absolute_scale_set(view_state->vs_gvp, (f - 1.0) / -9.0);
+	    bv_absolute_scale_set(view, (f - 1.0) / -9.0);
 	} else {
-	    rt_view_context_absolute_scale_set(view_state->vs_gvp, 1.0 - f);
+	    bv_absolute_scale_set(view, 1.0 - f);
 	}
 
 	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);

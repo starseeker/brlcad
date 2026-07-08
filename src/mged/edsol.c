@@ -1340,7 +1340,7 @@ mged_param(struct mged_state *s, Tcl_Interp *interp, int argc, fastf_t *argvect)
 
     if (SEDIT_TRAN) {
 	vect_t diff;
-	fastf_t inv_Viewscale = 1/rt_view_context_scale_get(view_state->vs_gvp);
+	fastf_t inv_Viewscale = 1/bv_scale_get(mged_view_state_view(view_state));
 
 	VSUB2(diff, MEDIT(s)->e_para, MEDIT(s)->e_axes_pos);
 	VSCALE(MEDIT(s)->k.tra_m_abs, diff, inv_Viewscale);

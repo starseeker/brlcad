@@ -48,6 +48,7 @@
 #include "bu/opt.h"
 #include "bu/str.h"
 #include "bu/vls.h"
+#include "bv.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -94,8 +95,9 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
     struct view_dlines_state *vs = (struct view_dlines_state *)bs;
     struct ged *gedp = vs->gedp;
     void *view_ctx = vs->view_ctx;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%d", rt_view_context_snap_lines_get(view_ctx));
+	bu_vls_printf(gedp->ged_result_str, "%d", bv_snap_lines_get(view));
 	return BRLCAD_OK;
     }
 
@@ -104,7 +106,7 @@ _view_dlines_cmd_snap(void *bs, int argc, const char **argv)
 
 	if (bu_sscanf(argv[1], "%d", &i) != 1) return BRLCAD_ERROR;
 
-	rt_view_context_snap_lines_set(view_ctx, i);
+	bv_snap_lines_set(view, i);
 
 	return BRLCAD_OK;
     }

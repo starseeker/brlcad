@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -44,6 +46,7 @@ ged_view2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
     point_t model_pt = VINIT_ZERO;
     point_t mo_view_pt;           /* model origin in view space */
     point_t diff;
+    const struct bv *view = NULL;
     static const char *usage = "x y z";
     double b2lval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
 
@@ -64,8 +67,9 @@ ged_view2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
 	sscanf(argv[3], "%lf", &view_pt[Z]) != 1)
 	goto bad;
 
-    rt_view_context_model2view_get(model2view, view_ctx);
-    view_scale = rt_view_context_scale_get(view_ctx);
+    view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    view_scale = bv_scale_get(view);
     MAT4X3PNT(mo_view_pt, model2view, model_pt);
     f = view_scale * b2lval;
     VSCALE(mo_view_pt, mo_view_pt, f);

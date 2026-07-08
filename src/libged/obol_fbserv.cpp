@@ -29,11 +29,13 @@
 #endif
 
 #include "brlobol/framebuffer.h"
+#include "brlobol/view_controller.h"
 #include "brlobol/window_host.h"
 #include "bu/log.h"
+#include "bv.h"
 #include "dm.h"
 #include "dm/fbserv.h"
-#include "dm/obol.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "imgstream/fb_compat.h"
 
@@ -131,8 +133,9 @@ public:
 	view_ctx = new_view_ctx;
 	host.attachController(controller, FALSE);
 
-	int width = rt_view_context_width_get(view_ctx);
-	int height = rt_view_context_height_get(view_ctx);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	int width = bv_width_get(view);
+	int height = bv_height_get(view);
 	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
 	if (dmp) {
 	    if (width <= 0)
@@ -422,7 +425,7 @@ private:
     void notifyUpdatedLocked()
     {
 	if (view_ctx)
-	    (void)rt_view_context_refresh_request(view_ctx,
+	    (void)bv_refresh_request(bv_context_view((struct bv_context *)view_ctx),
 		    GED_VIEW_REFRESH_FRAMEBUFFER);
 	struct dm *dmp = view_ctx ?
 	    (struct dm *)ged_view_context_display_manager_get(view_ctx) : NULL;
@@ -559,9 +562,8 @@ ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx)
     if (!gedp || !gedp->ged_fbs || !view_ctx)
 	return BRLCAD_ERROR;
 
-    struct dm *dmp =
-	(struct dm *)ged_view_context_display_manager_get(view_ctx);
-    void *controller = dm_obol_controller(dmp);
+    void *controller =
+	ged_draw_obol_controller_ensure_opaque_for_view(view_ctx, 1);
     if (!controller)
 	return BRLCAD_ERROR;
 
@@ -613,6 +615,70 @@ ged_obol_fbserv_release(struct ged *gedp)
     fbs->fbs_close_client_handler = NULL;
     fbs->fbs_open_ipc_client_handler = NULL;
     fbs->fbs_close_ipc_client_handler = NULL;
+}
+
+extern "C" GED_EXPORT int
+ged_obol_view_display_image(struct ged *gedp,
+			    void *view_ctx,
+			    unsigned char **image,
+			    int flip,
+			    int alpha)
+{
+    if (!image)
+	return -1;
+    *image = NULL;
+
+    if (!gedp)
+	return -1;
+    if (!view_ctx)
+	view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return -1;
+
+    struct dm *dmp =
+	(struct dm *)ged_view_context_display_manager_get(view_ctx);
+    BRLObolViewController *controller =
+	static_cast<BRLObolViewController *>(
+	    ged_draw_obol_controller_opaque_for_view(view_ctx));
+    if (!controller)
+	return 0;
+
+    int width = dmp ? dm_get_width(dmp) : 0;
+    int height = dmp ? dm_get_height(dmp) : 0;
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (view) {
+	int vw = bv_width_get(view);
+	int vh = bv_height_get(view);
+	if (width <= 0 && vw > 0)
+	    width = vw;
+	if (height <= 0 && vh > 0)
+	    height = vh;
+    }
+    if (width <= 0)
+	width = 512;
+    if (height <= 0)
+	height = 512;
+
+    controller->setViewportSize((unsigned int)width,
+	(unsigned int)height);
+    if (!controller->syncCameraFromViewContext(view_ctx))
+	return -1;
+
+    unsigned char *bg1 = NULL;
+    unsigned char *bg2 = NULL;
+    if (dmp)
+	(void)dm_get_bg(&bg1, &bg2, dmp);
+    SbColor background(bg1 ? (float)bg1[0] / 255.0f : 0.0f,
+	bg1 ? (float)bg1[1] / 255.0f : 0.0f,
+	bg1 ? (float)bg1[2] / 255.0f : 0.0f);
+
+    BRLObolProgressiveStatus progressiveStatus;
+    int ret = controller->renderToImage(image, flip, alpha, &background,
+	NULL, &progressiveStatus);
+    if (dmp && progressiveStatus.hasMore)
+	dm_set_native_repaint_pending(dmp, 1);
+    return ret == BRLCAD_OK ? 1 : -1;
 }
 
 extern "C" int

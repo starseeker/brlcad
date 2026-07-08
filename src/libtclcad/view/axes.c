@@ -25,6 +25,7 @@
 /** @} */
 
 #include "common.h"
+#include "bv.h"
 #include "bu/units.h"
 #include "dm.h"
 #include "ged.h"
@@ -54,15 +55,15 @@ _tclcad_data_axes_display_scale(void *view_ctx)
 	    dm_width = (fastf_t)width;
     }
 
-    struct rt_view_info view_info = RT_VIEW_INFO_INIT;
-    rt_view_context_info_get(&view_info, view_ctx);
-    return view_info.size / dm_width;
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    return bv_size_get(view) / dm_width;
 }
 
 int
 to_axes(struct ged *gedp,
 	void *view_ctx,
-	struct rt_view_axes_state *gasp,
+	struct bv_axes_state *gasp,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -776,12 +777,16 @@ to_model_axes(struct ged *gedp,
         return BRLCAD_ERROR;
     }
 
-    struct rt_view_axes_state axes;
-    if (!rt_view_context_model_axes_state_get(&axes, view_ctx))
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (!view)
+	return BRLCAD_ERROR;
+
+    struct bv_axes_state axes;
+    if (!bv_model_axes_state_get(&axes, view))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, view_ctx, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	rt_view_context_model_axes_state_set(view_ctx, &axes);
+	bv_model_axes_state_set(view, &axes);
     return ret;
 }
 
@@ -806,12 +811,16 @@ go_view_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct rt_view_axes_state axes;
-    if (!rt_view_context_view_axes_state_get(&axes, draw_view_ctx))
+    struct bv *view = bv_context_view((struct bv_context *)draw_view_ctx);
+    if (!view)
+	return BRLCAD_ERROR;
+
+    struct bv_axes_state axes;
+    if (!bv_view_axes_state_get(&axes, view))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, draw_view_ctx, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	rt_view_context_view_axes_state_set(draw_view_ctx, &axes);
+	bv_view_axes_state_set(view, &axes);
     return ret;
 }
 
@@ -846,12 +855,16 @@ to_view_axes(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct rt_view_axes_state axes;
-    if (!rt_view_context_view_axes_state_get(&axes, view_ctx))
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (!view)
+	return BRLCAD_ERROR;
+
+    struct bv_axes_state axes;
+    if (!bv_view_axes_state_get(&axes, view))
 	return BRLCAD_ERROR;
     int ret = to_axes(gedp, view_ctx, &axes, argc, argv, usage);
     if (ret == BRLCAD_OK)
-	rt_view_context_view_axes_state_set(view_ctx, &axes);
+	bv_view_axes_state_set(view, &axes);
     return ret;
 }
 

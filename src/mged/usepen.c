@@ -27,6 +27,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "bv.h"
 #include "vmath.h"
 #include "bn.h"
 #include "ged/view.h"
@@ -107,7 +108,8 @@ static void
 highlight_from_y(struct mged_state *s, int y) {
     int count;
     void *view_ctx = view_state->vs_gvp;
-    int drawn_count = rt_view_context_refresh_drawn_count_get(view_ctx);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    int drawn_count = bv_refresh_drawn_count_get(view);
 
     /*
      * Divide the mouse into one vertical zone per shape painted in the last
@@ -155,7 +157,8 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    if (!rt_view_context_refresh_drawn_count_get(view_ctx)) {
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    if (!bv_refresh_drawn_count_get(view)) {
 	return TCL_OK;
     } else if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
 	return TCL_OK;
@@ -217,8 +220,9 @@ wrt_view(struct mged_state *s, mat_t out, const mat_t change, const mat_t in)
     static mat_t t1, t2;
     mat_t view_center;
     void *view_ctx = view_state->vs_gvp;
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
-    rt_view_context_center_get(view_center, view_ctx);
+    bv_center_mat_get(view_center, view);
     bn_mat_mul(t1, view_center, in);
     bn_mat_mul(t2, change, t1);
 

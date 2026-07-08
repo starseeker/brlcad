@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -60,7 +62,8 @@ ged_view2model_vec_core(struct ged *gedp, int argc, const char *argv[])
     /* convert from double to fastf_t */
     VMOVE(view_vec, scan);
 
-    rt_view_context_rotation_get(view_rotation, view_ctx);
+    bv_rotation_get(view_rotation,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
     bn_mat_inv(inv_Viewrot, view_rotation);
     MAT4X3PNT(model_vec, inv_Viewrot, view_vec);
 

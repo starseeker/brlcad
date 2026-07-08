@@ -30,20 +30,47 @@
 
 #include "common.h"
 
+#include "brlobol/view_attachment.h"
+#include "bv.h"
 #include "bu/malloc.h"
 #include "bu/ptbl.h"
 #include "dm/obol.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
-#include "rt/view.h"
+#include "./ged_draw_private.h"
 #include "./ged_draw_view_private.h"
 #include "./ged_private.h"
 
 struct ged_view_state_storage {
     void *active_view_ctx;
-    void *view_set_ctx;
+    struct bv_context_set *view_set_ctx;
     struct bu_ptbl free_views;
+    struct bu_ptbl host_records;
 };
+
+struct ged_view_host_record {
+    void *view_ctx;
+    struct ged *gedp;
+    void *display_manager;
+    void *tclcad_data;
+    struct bu_ptbl *callbacks;
+    ged_view_context_update_callback_t update_callback;
+    void *update_callback_data;
+    BRLObolViewAttachment *obol_attachment;
+};
+
+static struct bu_ptbl ged_view_host_registry;
+static int ged_view_host_registry_initialized = 0;
+
+static void
+ged_view_host_registry_init(void)
+{
+    if (ged_view_host_registry_initialized)
+	return;
+
+    BU_PTBL_INIT(&ged_view_host_registry);
+    ged_view_host_registry_initialized = 1;
+}
 
 static struct ged_impl *
 ged_view_impl(struct ged *gedp)
@@ -83,10 +110,104 @@ ged_view_state_create(struct ged *gedp)
     struct ged_view_state_storage *state =
 	(struct ged_view_state_storage *)bu_calloc(1, sizeof(*state),
 		"GED view state");
-    state->view_set_ctx = rt_view_set_context_create();
+    state->view_set_ctx = bv_context_set_create();
     BU_PTBL_INIT(&state->free_views);
+    BU_PTBL_INIT(&state->host_records);
     impl->ged_view_state_ctx = (void *)state;
     return state;
+}
+
+static void
+ged_view_host_callbacks_free(struct bu_ptbl *callbacks)
+{
+    if (!callbacks)
+	return;
+
+    bu_ptbl_free(callbacks);
+    BU_PUT(callbacks, struct bu_ptbl);
+}
+
+static struct ged_view_host_record *
+ged_view_host_record_find_global(const void *view_ctx)
+{
+    if (!view_ctx || !ged_view_host_registry_initialized)
+	return NULL;
+
+    for (size_t i = 0; i < BU_PTBL_LEN(&ged_view_host_registry); i++) {
+	struct ged_view_host_record *record =
+	    (struct ged_view_host_record *)BU_PTBL_GET(&ged_view_host_registry, i);
+	if (record && record->view_ctx == view_ctx)
+	    return record;
+    }
+
+    return NULL;
+}
+
+static struct ged_view_host_record *
+ged_view_host_record_create(struct ged *gedp, void *view_ctx)
+{
+    struct ged_view_state_storage *state = ged_view_state(gedp);
+    struct ged_view_host_record *record = NULL;
+
+    if (!state || !view_ctx)
+	return NULL;
+
+    record = ged_view_host_record_find_global(view_ctx);
+    if (record) {
+	if (record->gedp && record->gedp != gedp) {
+	    struct ged_view_state_storage *old_state =
+		ged_view_state(record->gedp);
+	    if (old_state)
+		bu_ptbl_rm(&old_state->host_records, (long *)record);
+	}
+	record->gedp = gedp;
+	bu_ptbl_ins_unique(&state->host_records, (long *)record);
+	return record;
+    }
+
+    record = (struct ged_view_host_record *)bu_calloc(1, sizeof(*record),
+	    "GED view host record");
+    record->view_ctx = view_ctx;
+    record->gedp = gedp;
+    record->obol_attachment = new BRLObolViewAttachment;
+    record->obol_attachment->ref();
+
+    ged_view_host_registry_init();
+    bu_ptbl_ins(&ged_view_host_registry, (long *)record);
+    bu_ptbl_ins_unique(&state->host_records, (long *)record);
+    return record;
+}
+
+static void
+ged_view_host_record_destroy(struct ged_view_host_record *record)
+{
+    if (!record)
+	return;
+
+    if (record->gedp) {
+	struct ged_view_state_storage *state = ged_view_state(record->gedp);
+	if (state)
+	    bu_ptbl_rm(&state->host_records, (long *)record);
+    }
+
+    if (ged_view_host_registry_initialized) {
+	bu_ptbl_rm(&ged_view_host_registry, (long *)record);
+	if (!BU_PTBL_LEN(&ged_view_host_registry)) {
+	    bu_ptbl_free(&ged_view_host_registry);
+	    ged_view_host_registry_initialized = 0;
+	}
+    }
+
+    ged_view_host_callbacks_free(record->callbacks);
+    record->obol_attachment->unref();
+    record->obol_attachment = NULL;
+    bu_free(record, "GED view host record");
+}
+
+static void
+ged_view_host_record_destroy_for_view(void *view_ctx)
+{
+    ged_view_host_record_destroy(ged_view_host_record_find_global(view_ctx));
 }
 
 extern "C" void
@@ -96,10 +217,10 @@ ged_view_state_init(struct ged *gedp)
     if (!state || !state->view_set_ctx)
 	return;
 
-    void *default_view = rt_view_context_create_with_set(state->view_set_ctx);
+    void *default_view = ged_view_context_create_with_set(state->view_set_ctx);
     state->active_view_ctx = default_view;
-    rt_view_context_name_set(default_view, "default");
-    rt_view_set_context_add(state->view_set_ctx, default_view);
+    bv_name_set(bv_context_view((struct bv_context *)default_view), "default");
+    ged_view_set_context_add(state->view_set_ctx, default_view);
     ged_view_context_owned_add(gedp, default_view);
 }
 
@@ -111,15 +232,23 @@ ged_view_state_free(struct ged *gedp)
     if (!impl || !state)
 	return;
 
-    impl->ged_view_state_ctx = NULL;
     state->active_view_ctx = NULL;
 
-    for (size_t i = 0; i < BU_PTBL_LEN(&state->free_views); i++) {
-	void *view_ctx = (void *)BU_PTBL_GET(&state->free_views, i);
-	rt_view_context_free(view_ctx);
+    while (BU_PTBL_LEN(&state->free_views)) {
+	void *view_ctx = (void *)BU_PTBL_GET(&state->free_views, 0);
+	bu_ptbl_rm(&state->free_views, (long *)view_ctx);
+	ged_view_host_record_destroy_for_view(view_ctx);
+	bv_context_destroy((struct bv_context *)view_ctx);
     }
     bu_ptbl_free(&state->free_views);
-    rt_view_set_context_destroy(state->view_set_ctx);
+    while (BU_PTBL_LEN(&state->host_records)) {
+	struct ged_view_host_record *record =
+	    (struct ged_view_host_record *)BU_PTBL_GET(&state->host_records, 0);
+	ged_view_host_record_destroy(record);
+    }
+    bu_ptbl_free(&state->host_records);
+    bv_context_set_destroy(state->view_set_ctx);
+    impl->ged_view_state_ctx = NULL;
     bu_free(state, "GED view state");
 }
 
@@ -145,13 +274,21 @@ ged_view_context_owned_add(struct ged *gedp, void *view_ctx)
     if (!state || !view_ctx)
 	return 0;
 
-    bu_ptbl_ins(&state->free_views, (long *)view_ctx);
-    if (!rt_view_context_user_data_get(view_ctx))
-	rt_view_context_user_data_set(view_ctx, gedp);
-    (void)ged_draw_view_context_obol_scene_adapter_attach(gedp, view_ctx);
-    (void)ged_draw_view_context_obol_feature_adapter_attach(gedp, view_ctx);
-    (void)ged_draw_view_context_obol_polygon_adapter_attach(gedp, view_ctx);
-    (void)ged_draw_view_context_obol_selection_adapter_attach(gedp, view_ctx);
+    bu_ptbl_ins_unique(&state->free_views, (long *)view_ctx);
+    return ged_view_context_host_attach(gedp, view_ctx);
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_host_attach(struct ged *gedp, void *view_ctx)
+{
+    struct ged_view_state_storage *state = ged_view_state(gedp);
+    if (!state || !view_ctx)
+	return 0;
+
+    (void)ged_view_host_record_create(gedp, view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (view && !bv_user_data_get(view))
+	bv_user_data_set(view, gedp);
     return 1;
 }
 
@@ -166,7 +303,7 @@ extern "C" GED_EXPORT struct bu_ptbl *
 ged_view_set_views_ctx(struct ged *gedp)
 {
     struct ged_view_state_storage *state = ged_view_state(gedp);
-    return state ? rt_view_set_context_views(state->view_set_ctx) : NULL;
+    return state ? bv_context_set_views(state->view_set_ctx) : NULL;
 }
 
 extern "C" GED_EXPORT void *
@@ -176,28 +313,112 @@ ged_view_find_ctx(struct ged *gedp, const char *name)
     if (!state || !name)
 	return NULL;
 
-    return rt_view_set_context_find_view(state->view_set_ctx, name);
+    return bv_context_set_find(state->view_set_ctx, name);
+}
+
+BRLObolViewAttachment *
+ged_view_context_obol_attachment(const void *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    return record ? record->obol_attachment : NULL;
+}
+
+int
+ged_view_context_obol_attachment_bind(void *view_ctx,
+				      BRLObolViewAttachment *attachment)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (!record || !attachment)
+	return 0;
+
+    if (record->obol_attachment == attachment)
+	return 1;
+
+    attachment->copyHostStateFrom(record->obol_attachment);
+    attachment->ref();
+    record->obol_attachment->unref();
+    record->obol_attachment = attachment;
+    return 1;
+}
+
+int
+ged_view_context_obol_attachment_unbind(void *view_ctx,
+					BRLObolViewAttachment *attachment)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (!record || !attachment)
+	return 0;
+    if (record->obol_attachment != attachment)
+	return 1;
+
+    BRLObolViewAttachment *replacement = new BRLObolViewAttachment;
+    replacement->ref();
+    replacement->copyHostStateFrom(record->obol_attachment);
+    record->obol_attachment->unref();
+    record->obol_attachment = replacement;
+    return 1;
 }
 
 extern "C" GED_EXPORT void
-ged_draw_view_context_info_get(struct rt_view_info *view_info,
+ged_draw_view_context_info_get(struct bv_view_info *view_info,
 			       const void *view_ctx)
 {
-    rt_view_context_info_get(view_info, view_ctx);
+    if (!view_info)
+	return;
+
+    bv_view_info_init(view_info);
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (!view)
+	return;
+
+    view_info->width = bv_width_get(view);
+    view_info->height = bv_height_get(view);
+    view_info->size = bv_size_get(view);
+    bv_view_info_sanitize(view_info);
 }
 
 extern "C" GED_EXPORT int
 ged_draw_view_context_lod_policy_get(ged_draw_view_lod_policy *policy,
 				     const void *view_ctx)
 {
-    return rt_view_context_lod_policy_get(policy, view_ctx);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	if (!policy)
+	    return 0;
+	record->obol_attachment->getLodPolicy(policy);
+	return 1;
+    }
+
+    if (!policy || !view_ctx)
+	return 0;
+    bv_lod_policy_init(policy);
+    return 1;
 }
 
 extern "C" GED_EXPORT int
 ged_draw_view_context_lod_policy_apply(void *view_ctx,
 				       const ged_draw_view_lod_policy *policy)
 {
-    return rt_view_context_lod_policy_apply(view_ctx, policy);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	if (!policy)
+	    return 0;
+	record->obol_attachment->setLodPolicy(policy);
+	return 1;
+    }
+
+    return (view_ctx && policy) ? 1 : 0;
 }
 
 extern "C" GED_EXPORT int
@@ -214,17 +435,10 @@ ged_draw_view_context_lod_policy_apply_bot_threshold(
     return ged_draw_view_context_lod_policy_apply(view_ctx, &override_policy);
 }
 
-static int
-ged_draw_view_snap_kind_mask(enum ged_draw_view_snap_kind kind)
+extern "C" GED_EXPORT int
+ged_draw_view_context_lod_bounds_update(void *view_ctx)
 {
-    switch (kind) {
-	case GED_DRAW_VIEW_SNAP_GRID:
-	    return RT_VIEW_SNAP_KIND_GRID;
-	case GED_DRAW_VIEW_SNAP_ENDPOINT:
-	    return RT_VIEW_SNAP_KIND_ENDPOINT;
-	default:
-	    return 0;
-    }
+    return view_ctx ? 1 : 0;
 }
 
 extern "C" GED_EXPORT int
@@ -238,151 +452,304 @@ ged_draw_view_context_snap_first_candidate(void *view_ctx,
 
     VSET(candidate, 0.0, 0.0, 0.0);
 
-    int snap_kind = ged_draw_view_snap_kind_mask(kind);
-    if (!view_ctx || !sample || !snap_kind)
+    if (!view_ctx || !sample)
 	return 0;
 
-    return rt_view_context_snap_first_candidate(view_ctx, sample, snap_kind,
-	    candidate);
+    return ged_draw_obol_view_context_snap_first_candidate(view_ctx, sample,
+	    kind, candidate);
 }
 
 extern "C" GED_EXPORT void
 ged_draw_view_context_lod_bounds_callback_set(void *view_ctx)
 {
-    rt_view_context_lod_bounds_callback_set(view_ctx);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	record->obol_attachment->setLodBoundsCallbackSet(TRUE);
+	return;
+    }
+
+    (void)view_ctx;
+}
+
+extern "C" GED_EXPORT int
+ged_draw_view_context_lod_bounds_callback_is(const void *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    return record ? (record->obol_attachment->isLodBoundsCallbackSet() ? 1 : 0) : 0;
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_is_independent(const void *view_ctx)
 {
-    return rt_view_context_is_independent(view_ctx);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    return record ? (record->obol_attachment->isIndependentScopeCreated() ? 1 : 0) : 0;
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_independent_scope_is_null(void *view_ctx, int create)
 {
-    return rt_view_context_independent_scope_is_null(view_ctx, create);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	if (create)
+	    record->obol_attachment->setIndependentScopeCreated(TRUE);
+	return record->obol_attachment->isIndependentScopeCreated() ? 0 : 1;
+    }
+
+    (void)view_ctx;
+    (void)create;
+    return 1;
 }
 
 extern "C" GED_EXPORT void
 ged_view_context_independent_scope_destroy(void *view_ctx)
 {
-    rt_view_context_independent_scope_destroy(view_ctx);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	record->obol_attachment->setIndependentScopeCreated(FALSE);
+	return;
+    }
+
+    (void)view_ctx;
 }
 
-static int
-ged_view_clear_flags_to_rt(int flags)
+extern "C" GED_EXPORT ged_draw_scene_handle
+ged_view_context_scene_root_ref(const void *view_ctx)
 {
-    int rt_flags = 0;
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
 
-    if (flags & GED_VIEW_CLEAR_DB)
-	rt_flags |= RT_VIEW_CLEAR_DB;
-    if (flags & GED_VIEW_CLEAR_VIEW)
-	rt_flags |= RT_VIEW_CLEAR_VIEW;
-    if (flags & GED_VIEW_CLEAR_LOCAL)
-	rt_flags |= RT_VIEW_CLEAR_LOCAL;
+    (void)view_ctx;
+    if (!record || !record->obol_attachment->hasSceneRootToken())
+	return ged_draw_scene_handle_null();
 
-    return rt_flags;
+    return ged_draw_scene_handle_make(
+	    record->obol_attachment->getSceneRootToken(),
+	    GED_DRAW_SCENE_BACKEND_OBOL);
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_scene_root_ref_attach(void *view_ctx,
+				       ged_draw_scene_handle root_ref)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	if (!ged_draw_scene_handle_is_null(root_ref) &&
+		ged_draw_scene_handle_backend(root_ref) != GED_DRAW_SCENE_BACKEND_OBOL)
+	    return 0;
+	record->obol_attachment->setSceneRootToken(
+		ged_draw_scene_handle_context(root_ref));
+	return !ged_draw_scene_handle_is_null(root_ref) ? 1 : 0;
+    }
+
+    (void)view_ctx;
+    (void)root_ref;
+    return 0;
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_scene_attached(const void *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    (void)view_ctx;
+    return record ? (record->obol_attachment->hasSceneRootToken() ? 1 : 0) : 0;
 }
 
 extern "C" GED_EXPORT size_t
 ged_view_context_clear(void *view_ctx, int flags)
 {
     size_t cleared = ged_draw_obol_view_context_clear(view_ctx, flags);
-    cleared += rt_view_context_clear(view_ctx, ged_view_clear_flags_to_rt(flags));
+    (void)bv_refresh_complete(bv_context_view((struct bv_context *)view_ctx));
     return cleared;
 }
 
 extern "C" GED_EXPORT void *
 ged_view_context_user_data_get(const void *view_ctx)
 {
-    return rt_view_context_user_data_get(view_ctx);
+    return bv_user_data_get(bv_context_view_const((const struct bv_context *)view_ctx));
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_user_data_set(void *view_ctx, void *user_data)
 {
-    return rt_view_context_user_data_set(view_ctx, user_data);
+    return bv_user_data_set(bv_context_view((struct bv_context *)view_ctx),
+	    user_data);
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_tclcad_data_set(void *view_ctx, void *tcl_data)
 {
-    return rt_view_context_tclcad_data_set(view_ctx, tcl_data);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	record->tclcad_data = tcl_data;
+	return 1;
+    }
+
+    return 0;
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_callbacks_set(void *view_ctx, struct bu_ptbl *callbacks)
 {
-    return rt_view_context_callbacks_set(view_ctx, callbacks);
-}
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
 
-extern "C" GED_EXPORT int
-ged_view_context_edit_matrix_set(void *view_ctx, matp_t edit_mat)
-{
-    return rt_view_context_edit_matrix_set(view_ctx, edit_mat);
-}
+    if (record) {
+	if (record->callbacks && record->callbacks != callbacks)
+	    ged_view_host_callbacks_free(record->callbacks);
+	record->callbacks = callbacks;
+	return 1;
+    }
 
-extern "C" GED_EXPORT int
-ged_view_context_edit_matrix_clear(void *view_ctx)
-{
-    return rt_view_context_edit_matrix_clear(view_ctx);
+    return 0;
 }
 
 extern "C" GED_EXPORT void *
 ged_view_context_create(void)
 {
-    return rt_view_context_create();
+    return bv_context_create();
 }
 
 extern "C" GED_EXPORT void *
 ged_view_context_create_with_set(void *view_set_ctx)
 {
-    return rt_view_context_create_with_set(view_set_ctx);
+    struct bv_context *ctx = bv_context_create();
+    if (!ctx)
+	return NULL;
+    if (view_set_ctx &&
+	    !bv_context_set_attach((struct bv_context_set *)view_set_ctx, ctx)) {
+	bv_context_destroy(ctx);
+	return NULL;
+    }
+    return ctx;
 }
 
 extern "C" GED_EXPORT void *
 ged_view_context_create_copy_with_set(const void *src_view_ctx, void *view_set_ctx)
 {
-    return rt_view_context_create_copy_with_set(src_view_ctx, view_set_ctx);
+    struct bv_context *ctx = bv_context_create();
+    if (!ctx)
+	return NULL;
+
+    const struct bv *src_view =
+	bv_context_view_const((const struct bv_context *)src_view_ctx);
+    if (src_view)
+	bv_copy(bv_context_view(ctx), src_view);
+    if (view_set_ctx &&
+	    !bv_context_set_attach((struct bv_context_set *)view_set_ctx, ctx)) {
+	bv_context_destroy(ctx);
+	return NULL;
+    }
+    return ctx;
 }
 
 extern "C" GED_EXPORT void
 ged_view_context_free(void *view_ctx)
 {
-    rt_view_context_free(view_ctx);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record && record->gedp) {
+	struct ged_view_state_storage *state = ged_view_state(record->gedp);
+	if (state)
+	    bu_ptbl_rm(&state->free_views, (long *)view_ctx);
+    }
+
+    ged_view_host_record_destroy(record);
+    bv_context_destroy((struct bv_context *)view_ctx);
 }
 
 extern "C" GED_EXPORT int
 ged_view_set_context_add(void *view_set_ctx, void *view_ctx)
 {
-    return rt_view_set_context_add(view_set_ctx, view_ctx);
+    return bv_context_set_add((struct bv_context_set *)view_set_ctx,
+	    (struct bv_context *)view_ctx);
+}
+
+extern "C" GED_EXPORT int
+ged_view_set_context_remove(void *view_set_ctx, void *view_ctx)
+{
+    return bv_context_set_remove((struct bv_context_set *)view_set_ctx,
+	    (struct bv_context *)view_ctx);
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_view_set_attach(void *view_ctx, void *view_set_ctx)
+{
+    return bv_context_set_attach((struct bv_context_set *)view_set_ctx,
+	    (struct bv_context *)view_ctx);
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_update_callback_set(void *view_ctx,
-	ged_view_context_update_callback_t callback,
-	void *data)
+				     ged_view_context_update_callback_t callback,
+				     void *data)
 {
-    return rt_view_context_update_callback_set(view_ctx, callback, data);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	record->update_callback = callback;
+	record->update_callback_data = data;
+	return 1;
+    }
+
+    return 0;
 }
 
 extern "C" GED_EXPORT void *
 ged_view_context_display_manager_get(const void *view_ctx)
 {
-    return rt_view_context_display_manager_get(view_ctx);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    return record ? record->display_manager : NULL;
 }
 
 extern "C" GED_EXPORT int
 ged_view_context_display_manager_set(void *view_ctx, void *dmp)
 {
-    if (view_ctx && !dmp) {
-	void *old_dmp = rt_view_context_display_manager_get(view_ctx);
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    if (record) {
+	void *old_dmp = record->display_manager;
 	void *old_controller = dm_obol_controller((struct dm *)old_dmp);
-	if (old_controller) {
-	    struct ged *gedp = (struct ged *)rt_view_context_user_data_get(view_ctx);
-	    ged_draw_obol_controller_detach_opaque(gedp, old_controller);
-	}
+	if (old_controller && old_dmp != dmp)
+	    ged_draw_obol_controller_detach_opaque(record->gedp,
+		    old_controller);
+	record->display_manager = dmp;
+	return 1;
     }
-    return rt_view_context_display_manager_set(view_ctx, dmp);
+
+    return 0;
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_update(void *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+    int ret = bv_context_update((struct bv_context *)view_ctx,
+	    BV_CONTEXT_CHANGED_VIEW);
+
+    if (ret && record && record->update_callback)
+	record->update_callback(view_ctx, record->update_callback_data);
+
+    return ret;
 }

@@ -20,19 +20,20 @@
 
 #include "common.h"
 
+#include "bv.h"
 #include "ged.h"
-#include "rt/view.h"
 
 static int
 do_zoom(struct ged *gedp, double sf)
 {
     void *view_ctx = ged_view_active_ctx(gedp);
-    fastf_t view_scale = rt_view_context_scale_get(view_ctx) / sf;
-    if (view_scale < RT_VIEW_MIN_SCALE)
-	view_scale = RT_VIEW_MIN_SCALE;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    fastf_t view_scale = bv_scale_get(view) / sf;
+    if (view_scale < BV_MIN_SCALE)
+	view_scale = BV_MIN_SCALE;
 
-    rt_view_context_scale_set(view_ctx, view_scale);
-    rt_view_context_update(view_ctx);
+    bv_scale_set(view, view_scale);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

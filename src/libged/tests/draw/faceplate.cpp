@@ -30,6 +30,7 @@
 
 #include <bu.h>
 #include "rt/view.h"
+#include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -125,12 +126,10 @@ main(int ac, char *av[]) {
     fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
     dm_set_win_bounds(dmp, windowbounds);
 
-    dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
     ged_view_context_display_manager_set(v, dmp);
-    rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_context_unit_conversion_set(v,
-	gedp->dbip->dbi_local2base,
-	gedp->dbip->dbi_base2local);
+    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     // The default (fast) wireframe has some differences from
     // the slower full OpenGL draw path - disable it for the
@@ -225,7 +224,7 @@ main(int ac, char *av[]) {
 	bu_exit(EXIT_FAILURE, "no active display manager available for fps faceplate test\n");
     }
     dmp->start_time = 0;
-    rt_view_context_frametime_set(v, 1000000000);
+    bv_frametime_set(DRAW_TEST_BV(v), 1000000000);
 
     s_av[0] = "view";
     s_av[1] = "faceplate";

@@ -36,10 +36,9 @@ extern "C" {
 #include "qtcad/defines.h"
 #include "QgCanvasInput.h"
 #include "QgLegacyViewContext.h"
-#include "rt/view.h"
+#include "bv.h"
 
 struct QgCanvasInput::Impl {
-	std::unordered_map<qg_legacy_view *, void *> drag_bounds_updates;
 	std::unordered_map<qg_legacy_view *, long long> drag_update_ts;
 };
 
@@ -50,9 +49,6 @@ QgCanvasInput::QgCanvasInput() :
 
 QgCanvasInput::~QgCanvasInput()
 {
-	for (auto &entry : m->drag_bounds_updates)
-		rt_view_context_bounds_update_restore(
-			qg_legacy_view_to_context(entry.first), entry.second, 0);
 	delete m;
 }
 
@@ -61,35 +57,9 @@ qgcanvasinput_set_aet(qg_legacy_view *v, const char *aet_string)
 {
 	vect_t aet_vec;
 	bn_decode_vect(aet_vec, aet_string);
-	void *view_ctx = qg_legacy_view_to_context(v);
-	(void)rt_view_context_aet_set(view_ctx, aet_vec);
-	(void)rt_view_context_update(view_ctx);
+	(void)bv_aet_set(qg_legacy_view_bv(v), aet_vec);
+	(void)bv_context_update(qg_legacy_view_context(v), BV_CONTEXT_CHANGED_VIEW);
 	return 1;
-}
-
-void
-QgCanvasInput::suspendDragBoundsUpdate(qg_legacy_view *v)
-{
-	if (m->drag_bounds_updates.find(v) == m->drag_bounds_updates.end()) {
-		void *state =
-			rt_view_context_bounds_update_suspend(qg_legacy_view_to_context(v));
-		if (state)
-			m->drag_bounds_updates[v] = state;
-	}
-}
-
-void
-QgCanvasInput::restoreDragBoundsUpdate(qg_legacy_view *v, int refresh_bounds)
-{
-	if (!v)
-		return;
-	auto it = m->drag_bounds_updates.find(v);
-	if (it == m->drag_bounds_updates.end())
-		return;
-	rt_view_context_bounds_update_restore(qg_legacy_view_to_context(v),
-		it->second, refresh_bounds);
-	m->drag_bounds_updates.erase(it);
-	m->drag_update_ts.erase(v);
 }
 
 // TODO - look into QShortcut, see if it might be a better way
@@ -107,30 +77,27 @@ QgCanvasInput::keyPressEvent(qg_legacy_view *v, int UNUSED(x_prev),
 #endif
 	switch (k->key()) {
 		case 'A': {
-			void *view_ctx = qg_legacy_view_to_context(v);
-			struct rt_view_adc_state adc;
-			if (!rt_view_context_adc_state_get(&adc, view_ctx))
+			struct bv_adc_state adc;
+			if (!bv_adc_state_get(&adc, qg_legacy_view_bv_const(v)))
 				return 0;
 			adc.draw = !adc.draw;
-			rt_view_context_adc_state_set(view_ctx, &adc);
+			bv_adc_state_set(qg_legacy_view_bv(v), &adc);
 			return 1;
 		}
 		case 'M': {
-			void *view_ctx = qg_legacy_view_to_context(v);
-			struct rt_view_axes_state axes;
-			if (!rt_view_context_model_axes_state_get(&axes, view_ctx))
+			struct bv_axes_state axes;
+			if (!bv_model_axes_state_get(&axes, qg_legacy_view_bv_const(v)))
 				return 0;
 			axes.draw = !axes.draw;
-			rt_view_context_model_axes_state_set(view_ctx, &axes);
+			bv_model_axes_state_set(qg_legacy_view_bv(v), &axes);
 			return 1;
 		}
 		case 'V': {
-			void *view_ctx = qg_legacy_view_to_context(v);
-			struct rt_view_axes_state axes;
-			if (!rt_view_context_view_axes_state_get(&axes, view_ctx))
+			struct bv_axes_state axes;
+			if (!bv_view_axes_state_get(&axes, qg_legacy_view_bv_const(v)))
 				return 0;
 			axes.draw = !axes.draw;
-			rt_view_context_view_axes_state_set(view_ctx, &axes);
+			bv_view_axes_state_set(qg_legacy_view_bv(v), &axes);
 			return 1;
 		}
 		case '2': {
@@ -218,7 +185,7 @@ QgCanvasInput::mouseReleaseEvent(qg_legacy_view *v, double x_press,
 	if (!v)
 		return 0;
 
-	restoreDragBoundsUpdate(v, 1);
+	m->drag_update_ts.erase(v);
 
 	// If we're intending the mouse motion to do the work,
 	// then the release has to be a no-op.  If we're going
@@ -247,40 +214,39 @@ QgCanvasInput::mouseReleaseEvent(qg_legacy_view *v, double x_press,
 
 	int dx = 1;
 	int dy = 1;
-	unsigned long long view_flags = RT_VIEW_ADJUST_IDLE;
+	unsigned long long view_flags = BV_ADJUST_IDLE;
 
 	if (e->button() == Qt::LeftButton) {
 		//bu_log("Release Left\n");
-		if (mode != RT_VIEW_ADJUST_CENTER) {
-			view_flags = RT_VIEW_ADJUST_SCALE;
+		if (mode != BV_ADJUST_CENTER) {
+			view_flags = BV_ADJUST_SCALE;
 			dx = 10;
 			dy = 5;
 		}
 		else {
-			view_flags = RT_VIEW_ADJUST_CENTER;
+			view_flags = BV_ADJUST_CENTER;
 			dx = (int)cx;
 			dy = (int)cy;
 		}
 	}
 	if (e->button() == Qt::RightButton) {
 		//bu_log("Release Right\n");
-		if (mode == RT_VIEW_ADJUST_CENTER)
+		if (mode == BV_ADJUST_CENTER)
 			return 0;
-		view_flags = RT_VIEW_ADJUST_SCALE;
+		view_flags = BV_ADJUST_SCALE;
 		dx = 1;
 		dy = 2;
 	}
 
 	if (e->button() == Qt::MiddleButton) {
 		//bu_log("Release Center\n");
-		view_flags = RT_VIEW_ADJUST_CENTER;
+		view_flags = BV_ADJUST_CENTER;
 		dx = (int)cx;
 		dy = (int)cy;
 	}
 
 	point_t keypt = VINIT_ZERO;
-	return rt_view_context_adjust(qg_legacy_view_to_context(v), dx, dy,
-		keypt, 0, view_flags);
+	return bv_adjust(qg_legacy_view_bv(v), dx, dy, keypt, 0, view_flags);
 }
 
 int
@@ -292,7 +258,7 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	if (!v)
 		return 0;
 
-	unsigned long long view_flags = RT_VIEW_ADJUST_IDLE;
+	unsigned long long view_flags = BV_ADJUST_IDLE;
 
 	if (x_prev == -INT_MAX) {
 		//x_prev = e->x();
@@ -301,25 +267,25 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	}
 
 	view_flags = mode;
-	if (mode == RT_VIEW_ADJUST_CENTER)
-		view_flags = RT_VIEW_ADJUST_SCALE;
+	if (mode == BV_ADJUST_CENTER)
+		view_flags = BV_ADJUST_SCALE;
 
 	if (e->buttons().testFlag(Qt::LeftButton)) {
 		//bu_log("Left\n");
 
 		if (e->modifiers().testFlag(Qt::ControlModifier)) {
 			//bu_log("Ctrl+Left\n");
-			view_flags = RT_VIEW_ADJUST_ROT;
+			view_flags = BV_ADJUST_ROT;
 		}
 
 		if (e->modifiers().testFlag(Qt::ShiftModifier)) {
 			//bu_log("Shift+Left\n");
-			view_flags = RT_VIEW_ADJUST_TRANS;
+			view_flags = BV_ADJUST_TRANS;
 		}
 
 		if (e->modifiers().testFlag(Qt::ShiftModifier) && e->modifiers().testFlag(Qt::ControlModifier)) {
 			//bu_log("Ctrl+Shift+Left\n");
-			view_flags = RT_VIEW_ADJUST_SCALE;
+			view_flags = BV_ADJUST_SCALE;
 		}
 	}
 
@@ -349,12 +315,12 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	int dy = e->position().y() - y_prev;
 #endif
 
-	if (view_flags == RT_VIEW_ADJUST_SCALE) {
+	if (view_flags == BV_ADJUST_SCALE) {
 		// Build in some sensitivity to how much the mouse moved when doing
 		// a motion based scale
 		int mdelta = (abs(dx) > abs(dy)) ? dx : -dy;
 		int f = (int)(2*100*(double)abs(mdelta) /
-			(double)rt_view_context_height_get(qg_legacy_view_to_context(v)));
+			(double)bv_height_get(qg_legacy_view_bv_const(v)));
 
 		if (mdelta > 0) {
 			dy = 101 + f;
@@ -370,18 +336,14 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	// TODO - the key point and the mode/flags are all hardcoded
 	// right now, but eventually for shift grips they will need to
 	// respond to the various mod keys.  The intent is to set flags
-	// based on which mod keys are set to allow rt_view_context_adjust to
+	// based on which mod keys are set to allow bv_adjust to
 	// do the correct math.
 	point_t center;
 	mat_t view_center;
-	rt_view_context_center_get(view_center, qg_legacy_view_to_context(v));
+	bv_center_mat_get(view_center, qg_legacy_view_bv_const(v));
 	MAT_DELTAS_GET_NEG(center, view_center);
 
-	if (view_flags & (RT_VIEW_ADJUST_ROT | RT_VIEW_ADJUST_TRANS | RT_VIEW_ADJUST_SCALE))
-		suspendDragBoundsUpdate(v);
-
-	return rt_view_context_adjust(qg_legacy_view_to_context(v), dx, dy,
-		center, 0, view_flags);
+	return bv_adjust(qg_legacy_view_bv(v), dx, dy, center, 0, view_flags);
 }
 
 int
@@ -399,8 +361,7 @@ QgCanvasInput::wheelEvent(qg_legacy_view *v, QWheelEvent *e)
 	int dy = 100;
 
 	point_t origin = VINIT_ZERO;
-	return rt_view_context_adjust(qg_legacy_view_to_context(v), dx, dy,
-		origin, 0, RT_VIEW_ADJUST_SCALE);
+	return bv_adjust(qg_legacy_view_bv(v), dx, dy, origin, 0, BV_ADJUST_SCALE);
 }
 
 // Local Variables:

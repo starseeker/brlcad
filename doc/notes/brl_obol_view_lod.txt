@@ -215,7 +215,8 @@ full-detail wire behavior.
 Controller memory budgeting accounts for both:
 
 * mesh-node resident data, including optional source/full-detail arrays; and
-* view-local LoD payloads in `BRLObolViewLodState`.
+* view-local LoD payloads in `BRLObolViewAttachment`'s
+  `BRLObolViewLodState`.
 
 When a budget requires eviction, the controller releases memory in this order:
 
@@ -228,6 +229,14 @@ When a budget requires eviction, the controller releases memory in this order:
 View-local payload eviction includes mesh payloads, proxy payloads, and compact
 CAD payloads.  Clearing a view or turning LoD off therefore releases staged
 per-view CAD geometry without modifying the shared scene.
+
+`BRLObolViewAttachment` is the per-view owner for realized LoD state.  A GED
+view context and an attached Obol view controller share the same attachment
+while the controller is attached, so LoD policy changes, independent-view
+scope, scene-root tokens, and staged payload invalidation address one
+well-defined per-view object.  Detach/replacement explicitly unbinds the
+controller attachment and restores a GED-owned attachment carrying passive
+host state forward.
 
 This means LoD can be loaded from cache and displayed without populating
 full-detail shared geometry.  It also means turning LoD off or clearing a view
@@ -462,8 +471,8 @@ progressive view LoD:
   external representations;
 * attached-controller draw, erase, stale-source, erase-prefix, source-update,
   source-reference removal, source-rename, clear, clear-scope, and teardown
-  transactions clearing view-local LoD payloads while keeping shared scene
-  source sync correct;
+  transactions clearing view-local attachment LoD payloads while keeping
+  shared scene source sync correct;
 * mesh-LoD publication creating LoD-backed mesh nodes;
 * database-source LoD policy propagation into realized source identity;
 * database-source cached mesh-LoD metadata publication only when the source has

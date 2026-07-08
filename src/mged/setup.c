@@ -565,17 +565,17 @@ mged_setup(struct mged_state *s)
     mged_global_db_ctx.post_open_cnt = 0;
 
     void *view_set_ctx = ged_view_set_ctx(s->gedp);
-    void *view_ctx = rt_view_context_create_with_set(view_set_ctx);
+    void *view_ctx = ged_view_context_create_with_set(view_set_ctx);
     view_state->vs_gvp = view_ctx;
 
-    ged_view_context_update_callback_set(view_ctx,
-	    mged_view_callback, (void *)view_state);
     mat_t view_center;
-    rt_view_context_center_get(view_center, view_ctx);
+    bv_center_mat_get(view_center, mged_view_context_view(view_ctx));
     MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_center);
 
     ged_view_set_context_add(view_set_ctx, view_ctx);
     ged_view_context_owned_add(s->gedp, view_state->vs_gvp);
+    ged_view_context_update_callback_set(view_ctx,
+	    mged_view_callback, (void *)view_state);
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     /* register commands */

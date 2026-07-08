@@ -62,6 +62,7 @@
 #include <bu.h>
 #include "bu/opt.h"
 #include "rt/view.h"
+#include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
@@ -130,12 +131,10 @@ open_gedp(const char *gfile, int width, int height)
     dm_set_zbuffer(dmp, 1);
     fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
     dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, rt_view_context_scale_storage_get(v));
+    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
     ged_view_context_display_manager_set(v, dmp);
-    rt_view_context_dimensions_set(v, dm_get_width(dmp), dm_get_height(dmp));
-    rt_view_context_unit_conversion_set(v,
-	gedp->dbip->dbi_local2base,
-	gedp->dbip->dbi_base2local);
+    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
     ged_exec_ae(gedp, 3, s_av);

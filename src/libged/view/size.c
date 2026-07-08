@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "rt/view.h"
+#include "bv.h"
 
 #include "../ged_private.h"
 #include "./ged_view.h"
@@ -52,7 +52,8 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 
     /* get view size */
     if (argc == 1) {
-	fastf_t view_size = rt_view_context_size_get(view_ctx);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	fastf_t view_size = bv_size_get(view);
 	if (gedp->dbip) {
 	    bu_vls_printf(gedp->ged_result_str, "%g",
 		    view_size * gedp->dbip->dbi_base2local);
@@ -73,10 +74,11 @@ ged_size_core(struct ged *gedp, int argc, const char *argv[])
 	}
 
 	fastf_t view_size = (gedp->dbip) ? gedp->dbip->dbi_local2base * size : size;
-	if (view_size < RT_VIEW_MIN_SIZE)
-	    view_size = RT_VIEW_MIN_SIZE;
-	rt_view_context_size_set(view_ctx, view_size);
-	rt_view_context_update(view_ctx);
+	if (view_size < BV_MIN_SIZE)
+	    view_size = BV_MIN_SIZE;
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_size_set(view, view_size);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

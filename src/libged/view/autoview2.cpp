@@ -28,9 +28,9 @@
 #include <cstdlib>
 
 #include "bu/opt.h"
+#include "bv.h"
 #include "dm.h"
 #include "ged/draw.h"
-#include "rt/view.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -68,7 +68,8 @@ _autoview_obol_database_scene(
 	    &empty) || empty)
 	return 0;
 
-    rt_view_context_autoview_bounds(view_ctx, factor, min, max);
+    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+	    factor, min, max);
     return 1;
 }
 
@@ -92,7 +93,7 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
 
     /* default, 0.5 model scale == 2.0 view factor */
-    fastf_t factor = RT_VIEW_AUTOVIEW_SCALE_DEFAULT;
+    fastf_t factor = BV_AUTOVIEW_SCALE_DEFAULT;
 
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
@@ -159,14 +160,14 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	point_t min, max;
 	if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0, min, max) != BRLCAD_OK)
 	    return BRLCAD_ERROR;
-	rt_view_context_autoview_bounds(view_ctx, factor, min, max);
+	bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+		factor, min, max);
     } else {
 	vect_t min, max;
 	if (!_autoview_obol_database_scene(gedp, view_ctx, factor, all_view_objs)) {
 	    if (!ged_draw_bounds(gedp, &min, &max, all_view_objs))
-		rt_view_context_autoview_bounds(view_ctx, factor, min, max);
-	    else
-		rt_view_context_autoview(view_ctx, factor, all_view_objs);
+		bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+			factor, min, max);
 	}
     }
 

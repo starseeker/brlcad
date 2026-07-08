@@ -1456,7 +1456,7 @@ rt_nmg_free(struct soltab *stp)
 
 
 C_DECL int
-rt_nmg_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct rt_view_info *UNUSED(info))
+rt_nmg_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct bu_list *vlfree = &rt_vlfree;
     struct model *m;

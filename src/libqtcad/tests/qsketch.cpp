@@ -85,6 +85,9 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bn/tol.h"
+#include "brlobol/view_controller.h"
+#include "brlobol/view_store.h"
+#include "brlobol/vlist_shape.h"
 #include "raytrace.h"
 #include "rt/edit.h"
 #include "rt/functab.h"
@@ -134,7 +137,6 @@
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
-#include "rt/view.h"
 
 /* ------------------------------------------------------------------ */
 /* Helpers: create a minimal in-plane sketch                          */
@@ -174,29 +176,36 @@ sketch_create_empty(struct db_i *dbip, const char *name)
 /* ------------------------------------------------------------------ */
 
 struct qsketch_line_set {
-    void *ctx = NULL;
+    QgView *view = NULL;
+    std::string name;
+    BRLObolFeatureHandle handle;
+    SbColor color;
 };
 
 static qsketch_line_set *
-qsketch_line_set_create(qg_legacy_view *view,
+qsketch_line_set_create(QgView *view,
 			const char *name,
 			unsigned char r,
 			unsigned char g,
 			unsigned char b)
 {
-    void *view_ctx = qg_legacy_view_to_context(view);
-    if (!view_ctx || !name)
+    if (!view || !name || !name[0])
 	return NULL;
 
     qsketch_line_set *lines = new qsketch_line_set;
-    lines->ctx = rt_view_context_line_set_create(view_ctx, name, r, g, b);
+    lines->view = view;
+    lines->name = name;
+    lines->color = SbColor(static_cast<float>(r) / 255.0f,
+			   static_cast<float>(g) / 255.0f,
+			   static_cast<float>(b) / 255.0f);
     return lines;
 }
 
 static int
 qsketch_line_set_is_null(const qsketch_line_set *lines)
 {
-    return (!lines || rt_view_line_set_context_is_null(lines->ctx));
+    return (!lines || !lines->view || lines->name.empty() ||
+	    !lines->view->obolViewController());
 }
 
 static int
@@ -207,8 +216,51 @@ qsketch_line_set_points_set(qsketch_line_set *lines,
 {
     if (qsketch_line_set_is_null(lines))
 	return 0;
-    return rt_view_line_set_context_set_points(lines->ctx, points, commands,
-	    point_count);
+
+    BRLObolViewController *controller = lines->view->obolViewController();
+    if (!points || !point_count) {
+	if (lines->handle.isValid()) {
+	    (void)controller->features().remove(lines->handle);
+	    lines->handle = BRLObolFeatureHandle();
+	} else {
+	    (void)controller->features().remove(lines->name.c_str());
+	}
+	lines->view->need_update(QG_VIEW_DRAWN);
+	return 1;
+    }
+
+    std::vector<SbVec3f> obol_points;
+    std::vector<int32_t> obol_commands;
+    obol_points.reserve(point_count);
+    obol_commands.reserve(point_count);
+    for (size_t i = 0; i < point_count; i++) {
+	obol_points.push_back(SbVec3f(
+				  static_cast<float>(points[i][X]),
+				  static_cast<float>(points[i][Y]),
+				  static_cast<float>(points[i][Z])));
+	int cmd = commands ? commands[i] : (i ? SoBRLVListShape::DRAW :
+					    SoBRLVListShape::MOVE);
+	if (cmd != SoBRLVListShape::MOVE &&
+		cmd != SoBRLVListShape::DRAW &&
+		cmd != SoBRLVListShape::POINT)
+	    cmd = i ? SoBRLVListShape::DRAW : SoBRLVListShape::MOVE;
+	obol_commands.push_back(static_cast<int32_t>(cmd));
+    }
+
+    BRLObolFeatureStyle style;
+    style.hasColor = TRUE;
+    style.color = lines->color;
+    style.hasSelectable = TRUE;
+    style.selectable = TRUE;
+
+    lines->handle = controller->features().publishLineSet(lines->name.c_str(),
+	    BRLObolFeatureScope::Local, obol_points, obol_commands, &style);
+    if (!lines->handle.isValid())
+	return 0;
+
+    controller->requestRender("qsketch-line-set");
+    lines->view->need_update(QG_VIEW_DRAWN);
+    return 1;
 }
 
 static void
@@ -216,7 +268,14 @@ qsketch_line_set_destroy(qsketch_line_set *lines)
 {
     if (!lines)
 	return;
-    rt_view_line_set_context_destroy(lines->ctx);
+    if (!qsketch_line_set_is_null(lines)) {
+	BRLObolViewController *controller = lines->view->obolViewController();
+	if (lines->handle.isValid())
+	    (void)controller->features().remove(lines->handle);
+	else
+	    (void)controller->features().remove(lines->name.c_str());
+	lines->view->need_update(QG_VIEW_DRAWN);
+    }
     delete lines;
 }
 
@@ -498,10 +557,10 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
      * u_vec (1,0,0) and v_vec (0,1,0) defaults. */
     vect_t aet;
     VSET(aet, 0.0, 90.0, 0.0);
-    void *view_ctx = qg_legacy_view_to_context(m_legacy_view);
-    rt_view_context_aet_set(view_ctx, aet);
-    rt_view_context_scale_set(view_ctx, 250.0);
-    rt_view_context_update(view_ctx);
+    bv_aet_set(qg_legacy_view_bv(m_legacy_view), aet);
+    bv_scale_set(qg_legacy_view_bv(m_legacy_view), 250.0);
+    bv_context_update(qg_legacy_view_context(m_legacy_view),
+	    BV_CONTEXT_CHANGED_VIEW);
     qg_legacy_view_dimensions_set(m_legacy_view, 700, 700);
 
     /* ---- rt_edit ---- */
@@ -530,7 +589,7 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
     /* Create a field-backed line-set node for the sketch wireframe under the
      * view's initialized scene anchor.  qsketch refreshes the line-set fields
      * explicitly after each edit command. */
-    m_sketch_lines = qsketch_line_set_create(m_legacy_view,
+    m_sketch_lines = qsketch_line_set_create(m_view,
 	    "sketch_wireframe", 255, 255, 0);
 
     /* ---- vertex table — allow multi-row selection ---- */
@@ -1206,10 +1265,10 @@ void QSketchEditWindow::on_fit_view()
     world_center[0] = skt2->V[0] + cx * skt2->u_vec[0] + cy * skt2->v_vec[0];
     world_center[1] = skt2->V[1] + cx * skt2->u_vec[1] + cy * skt2->v_vec[1];
     world_center[2] = skt2->V[2] + cx * skt2->u_vec[2] + cy * skt2->v_vec[2];
-    void *view_ctx = qg_legacy_view_to_context(m_legacy_view);
-    rt_view_context_center_set(view_ctx, world_center);
-    rt_view_context_size_set(view_ctx, span);
-    rt_view_context_update(view_ctx);
+    bv_center_set(qg_legacy_view_bv(m_legacy_view), world_center);
+    bv_size_set(qg_legacy_view_bv(m_legacy_view), span);
+    bv_context_update(qg_legacy_view_context(m_legacy_view),
+	    BV_CONTEXT_CHANGED_VIEW);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status("View fitted to sketch bounds.");
@@ -1360,11 +1419,10 @@ void QSketchEditWindow::on_mode_set_tangency()
 void QSketchEditWindow::on_toggle_grid(bool checked)
 {
     if (!m_legacy_view) return;
-    void *view_ctx = qg_legacy_view_to_context(m_legacy_view);
-    struct rt_view_grid_state grid;
-    if (!rt_view_context_grid_state_get(&grid, view_ctx)) return;
+    struct bv_grid_state grid;
+    if (!bv_grid_state_get(&grid, qg_legacy_view_bv_const(m_legacy_view))) return;
     grid.draw = checked ? 1 : 0;
-    rt_view_context_grid_state_set(view_ctx, &grid);
+    bv_grid_state_set(qg_legacy_view_bv(m_legacy_view), &grid);
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(checked ? "Grid enabled." : "Grid disabled.");
 }
@@ -1375,9 +1433,8 @@ void QSketchEditWindow::on_grid_settings()
 {
     if (!m_legacy_view) return;
 
-    void *view_ctx = qg_legacy_view_to_context(m_legacy_view);
-    struct rt_view_grid_state grid;
-    if (!rt_view_context_grid_state_get(&grid, view_ctx)) return;
+    struct bv_grid_state grid;
+    if (!bv_grid_state_get(&grid, qg_legacy_view_bv_const(m_legacy_view))) return;
 
     QDialog dlg(this);
     dlg.setWindowTitle("Grid Settings");
@@ -1459,7 +1516,7 @@ void QSketchEditWindow::on_grid_settings()
     grid.anchor[1]   = (fastf_t)sb_anchor_v->value();
     grid.snap        = cb_snap->isChecked() ? 1 : 0;
     grid.adaptive    = cb_adaptive->isChecked() ? 1 : 0;
-    rt_view_context_grid_state_set(view_ctx, &grid);
+    bv_grid_state_set(qg_legacy_view_bv(m_legacy_view), &grid);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(QString("Grid: H=%1 V=%2 mm  anchor=(%3,%4)  snap=%5.")

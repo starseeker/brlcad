@@ -100,7 +100,7 @@ struct scroll_item sl_adc_menu[] = {
 void
 set_scroll(struct mged_state *s)
 {
-    struct rt_view_adc_state adc = {0};
+    struct bv_adc_state adc = {0};
 
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
 
@@ -202,8 +202,8 @@ sl_atol(struct scroll_item *mptr, double val)
 	val = 0.0;
     }
 
-    void *view_ctx = view_state->vs_gvp;
-    view_scale = rt_view_context_scale_get(view_ctx);
+    struct bv *view = mged_view_context_view(view_state->vs_gvp);
+    view_scale = bv_scale_get(view);
     bu_vls_printf(&vls, "knob %s %f", mptr->scroll_cmd, val * view_scale * s->dbip->dbi_base2local);
     Tcl_Eval(s->interp, bu_vls_addr(&vls));
     bu_vls_free(&vls);
@@ -300,7 +300,7 @@ sl_itol(struct scroll_item *mptr, double val)
 static void
 second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 {
-    struct rt_view_adc_state adc = {0};
+    struct bv_adc_state adc = {0};
 
     (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
 
@@ -422,22 +422,22 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	case 2: /* Z translation */
 	    if (mged_variables->mv_rateknobs) {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.tra_m[mptr->scroll_val];
+		    *f = view_state->k.trans_model[mptr->scroll_val];
 		else
-		    *f = view_state->k.tra_v[mptr->scroll_val];
+		    *f = view_state->k.trans_view[mptr->scroll_val];
 	    } else {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.tra_m_abs[mptr->scroll_val];
+		    *f = view_state->k.abs_trans_model[mptr->scroll_val];
 		else
-		    *f = view_state->k.tra_v_abs[mptr->scroll_val];
+		    *f = view_state->k.abs_trans_view[mptr->scroll_val];
 	    }
 	    break;
 
 	case 3: /* scale */
 	    if (mged_variables->mv_rateknobs)
-		*f = view_state->k.sca;
+		*f = view_state->k.scale_rate;
 	    else
-		*f = view_state->k.sca_abs;
+		*f = view_state->k.abs_scale;
 	    break;
 
 	case 4: /* X rotation */
@@ -445,14 +445,14 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	case 6: /* Z rotation */
 	    if (mged_variables->mv_rateknobs) {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.rot_m[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
+		    *f = view_state->k.rot_model[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
 		else
-		    *f = view_state->k.rot_v[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
+		    *f = view_state->k.rot_view[mptr->scroll_val - 4] / RATE_ROT_FACTOR;
 	    } else {
 		if (mged_variables->mv_coords == 'm')
-		    *f = view_state->k.rot_m_abs[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
+		    *f = view_state->k.abs_rot_model[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
 		else
-		    *f = view_state->k.rot_v_abs[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
+		    *f = view_state->k.abs_rot_view[mptr->scroll_val - 4] / ABS_ROT_FACTOR;
 	    }
 	    break;
 
