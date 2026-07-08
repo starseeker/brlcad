@@ -279,7 +279,6 @@ set(
   primitives/sample_pnts.cpp
   primitives/script/script.c
   primitives/sketch/polygons.c
-  primitives/sketch/polygons_legacy_bsg.c
   primitives/sketch/sketch.c
   primitives/sketch/sketch_brep.cpp
   primitives/sketch/sketch_tess.cpp
@@ -317,6 +316,7 @@ set(
   vds/vds.c
   vers.c
   view.c
+  view_context.c
   view_context_adapters.c
   view_context_native.c
   view_legacy_bsg.c

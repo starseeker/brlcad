@@ -669,7 +669,7 @@ ged_draw_mark_database_change(struct ged *gedp,
     if (indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
-	    gdp->gd_draw_index_fallback_shape_scans++;
+	    gdp->gd_draw_index_slow_path_shape_scans++;
 	ged_draw_foreach_shape_record(gedp, _ged_draw_mark_db_change_cb,
 				      &ctx);
     }
@@ -1071,7 +1071,7 @@ _ged_draw_redraw_source(struct ged *gedp, const char *path,
     if (indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
-	    gdp->gd_draw_index_fallback_shape_scans++;
+	    gdp->gd_draw_index_slow_path_shape_scans++;
 	ged_draw_foreach_shape_record(gedp, _ged_draw_redraw_source_shape_cb,
 				      &ctx);
     }
@@ -1492,14 +1492,14 @@ _ged_draw_reexpand_source_groups(struct ged *gedp, const char *path,
     if (groups_indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
-	    gdp->gd_draw_index_fallback_group_scans++;
+	    gdp->gd_draw_index_slow_path_group_scans++;
 	ged_draw_foreach_group_record(gedp,
 				      _ged_draw_reexpand_source_group_cb, &ctx);
     }
     if (shapes_indexed < 0) {
 	struct ged_drawable *gdp = _ged_draw_gdp(gedp);
 	if (gdp)
-	    gdp->gd_draw_index_fallback_shape_scans++;
+	    gdp->gd_draw_index_slow_path_shape_scans++;
 	ged_draw_foreach_shape_record(gedp,
 				      _ged_draw_reexpand_source_shape_cb, &ctx);
     }

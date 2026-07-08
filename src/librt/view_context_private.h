@@ -270,6 +270,8 @@ void *_rt_view_context_native_bounds_update_suspend(void *ctx);
 int _rt_view_context_native_bounds_update_restore(void *ctx,
 	void *state_ctx, int refresh_bounds);
 
+int rt_view_context_is_bsg(const void *ctx);
+
 __END_DECLS
 
 #endif /* LIBRT_VIEW_CONTEXT_PRIVATE_H */

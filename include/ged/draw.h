@@ -27,11 +27,11 @@
  *     current draw-scene revision.
  *   - ged_draw_shape_record / ged_draw_group_record expose path identity,
  *     draw source/style, visibility, and highlight state without requiring
- *     callers to inspect BSG node layout.
+ *     callers to inspect the underlying scene-graph implementation.
  *
- * The BSG tree remains the private implementation used by the GED/BSG bridge.
- * Installed GED callers should not need BSG node pointers to query or update
- * the draw scene.
+ * libged owns the semantic draw records and mirrors them into Obol/libbrlobol
+ * scene controllers.  Installed GED callers should use this API rather than
+ * direct scene-graph node pointers to query or update the draw scene.
  *
  * Drawn database objects are keyed by struct db_full_path.  String path
  * formatting is available for logging/UI, but graph mutation APIs use the
@@ -382,7 +382,7 @@ struct ged_draw_shape_source_snapshot {
     struct db_i *dbip;
     const struct db_full_path *fullpath; /**< borrowed; valid while draw scene is unchanged */
     struct directory *leaf_dp;           /**< borrowed leaf directory, if known */
-    const char *name;                    /**< borrowed fallback display name */
+    const char *name;                    /**< borrowed display name */
     const struct bn_tol *tol;            /**< borrowed draw source tolerance */
     const struct bg_tess_tol *ttol;      /**< borrowed draw source tessellation tolerance */
 };
@@ -2050,17 +2050,18 @@ GED_EXPORT extern int
 ged_draw_has_shapes(struct ged *gedp);
 
 /**
- * Report whether @p path is represented in the retained draw scene.
+ * Report whether @p path is represented in the semantic draw scene.
  *
  * Return values match qged/MGED drawn-state conventions:
  *   - 0: path is not drawn
  *   - 1: path is fully drawn
  *   - 2: path is partially drawn
  *
- * The query is answered from retained draw records.  When hierarchy coverage
- * must be distinguished from a partial draw, the no-index fallback walks only
- * @p path's database subtree and compares its leaf paths to active retained
- * shapes.  Pass @p mode < 0 to query all draw modes.
+ * The query is answered from draw records and indexes when available.  When
+ * hierarchy coverage must be distinguished from a partial draw and no direct
+ * index answer exists, the slow path walks only @p path's database subtree and
+ * compares its leaf paths to active drawn shapes.  Pass @p mode < 0 to query
+ * all draw modes.
  */
 GED_EXPORT extern int
 ged_draw_path_state(struct ged *gedp,
@@ -2083,7 +2084,8 @@ ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
 			      void *view_ctx);
 
 /**
- * Append retained draw paths to @p result and return the number appended.
+ * Append command-visible draw paths to @p result and return the number
+ * appended.
  *
  * When @p expanded is zero, paths are draw-intent/group paths suitable for
  * command-level listings such as "who" and render-script replay.  When
@@ -2116,8 +2118,8 @@ GED_EXPORT extern int
 ged_draw_shape_count(struct ged *gedp);
 
 /**
- * Erase all scene groups from @p gedp's drawn-object set, destroying vlists
- * and freeing all associated scene objects.
+ * Erase all scene groups from @p gedp's drawn-object set and free associated
+ * draw records and scene objects.
  * This is the "zap" operation.
  */
 GED_EXPORT extern void
@@ -2128,7 +2130,7 @@ ged_draw_clear(struct ged *gedp);
  * shared database draw groups.  Passing an independent view clears that view's
  * independent database draw scope.
  *
- * Returns the number of top-level retained draw groups removed.
+ * Returns the number of top-level draw groups removed.
  */
 GED_EXPORT extern int
 ged_draw_clear_view(struct ged *gedp, void *view_ctx);

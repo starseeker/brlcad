@@ -83,8 +83,8 @@ brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects_hierarchy_1  C
 brlcad_addexec(rt_view_info view_info.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_view_info COMMAND rt_view_info)
 
-# bv_polygon <-> sketch testing
-brlcad_addexec(rt_bv_poly_sketch bsg_poly_sketch.c "librt;libbg;libbu;${M_LIBRARY}" TEST)
+# view polygon <-> sketch testing
+brlcad_addexec(rt_poly_sketch poly_sketch.c "librt;libbg;libbu;${M_LIBRARY}" TEST)
 
 # arb8 testing
 brlcad_addexec(rt_arb8 arb8_tests.c "librt;libwdb;libbg;libbu;${M_LIBRARY}" TEST)

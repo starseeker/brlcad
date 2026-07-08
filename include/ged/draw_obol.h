@@ -143,8 +143,8 @@ GED_EXPORT void
 ged_draw_obol_framebuffer_release(struct ged *gedp);
 
 /**
- * Synchronize retained faceplate/HUD state from a GED view context into that
- * view's Obol feature store.
+ * Synchronize faceplate/HUD state from a GED view context into that view's
+ * Obol feature store.
  *
  * This is intentionally per-view: faceplate records describe one camera/view,
  * not shared model geometry.  Missing Obol controllers are a no-op so callers
@@ -315,7 +315,7 @@ struct ged_draw_transaction_result;
  *
  * The controller remains owned by the caller.  While attached, successful GED
  * draw transactions are mirrored into the controller's database-source scene.
- * When @p sync_current_scene is non-zero, the current retained GED draw set is
+ * When @p sync_current_scene is non-zero, the current GED draw set is
  * also synchronized immediately.
  *
  * This is the preferred Capability 1 boundary: libged mutates the
@@ -391,8 +391,9 @@ ged_draw_obol_scene_sync_full_scene(struct ged *gedp,
 /**
  * Attach a borrowed Obol view controller to @p gedp's draw state.
  *
- * This compatibility wrapper attaches the view controller's scene controller.
- * New libged integrations should prefer ged_draw_obol_scene_controller_attach.
+ * This attaches the view controller's scene controller.  Integrations that
+ * already own a scene controller may call ged_draw_obol_scene_controller_attach
+ * directly.
  */
 GED_EXPORT int
 ged_draw_obol_controller_attach(struct ged *gedp,
@@ -420,7 +421,6 @@ ged_draw_obol_controller(struct ged *gedp);
 /**
  * Mirror one completed GED draw transaction into @p controller.
  *
- * This compatibility wrapper delegates to ged_draw_obol_scene_sync_transaction.
  * If @p controller is NULL, the currently attached scene controller is used.
  * Returns 1 if the Obol scene changed, 0 otherwise.
  */
@@ -434,7 +434,6 @@ ged_draw_obol_sync_transaction(
 /**
  * Rebuild @p controller's database-source scene from the current GED draw set.
  *
- * This compatibility wrapper delegates to ged_draw_obol_scene_sync_full_scene.
  * If @p controller is NULL, the currently attached scene controller is used.  A
  * zero @p source_revision requests a folded value derived from GED's current
  * draw scene revision.  Returns 1 if the Obol scene changed, 0 otherwise.

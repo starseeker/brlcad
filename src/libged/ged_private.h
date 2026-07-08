@@ -135,15 +135,8 @@ struct ged_drawable {
     uint64_t                     gd_draw_index_group_component_candidates;
     uint64_t                     gd_draw_index_path_queries;
     uint64_t                     gd_draw_index_path_candidates;
-    uint64_t                     gd_draw_index_fallback_shape_scans;
-    uint64_t                     gd_draw_index_fallback_group_scans;
-    uint64_t                     gd_draw_retained_child_source_creations;
-    uint64_t                     gd_draw_retained_primitive_wireframe_publications;
-    uint64_t                     gd_draw_retained_mesh_lod_runtime_updates;
-    uint64_t                     gd_draw_retained_source_owner_appends;
-    uint64_t                     gd_draw_retained_group_mutations;
-    uint64_t                     gd_draw_retained_shape_mutations;
-    uint64_t                     gd_draw_retained_drawtree_invocations;
+    uint64_t                     gd_draw_index_slow_path_shape_scans;
+    uint64_t                     gd_draw_index_slow_path_group_scans;
     struct bu_ptbl               gd_draw_observers;     /**< @brief GED-owned post-transaction draw observer records */
     uintptr_t                    gd_draw_next_observer_token;
     int                          gd_draw_observers_init;
@@ -153,7 +146,7 @@ struct ged_drawable {
     ged_draw_observer_token       gd_obol_observer_token;
     int                          gd_obol_scene_controller_owned; /**< @brief non-zero when libged owns gd_obol_scene_controller */
     int                          gd_obol_controller_owned; /**< @brief non-zero when libged owns gd_obol_controller */
-    int                          gd_obol_scene_controller_full_sync; /**< @brief non-zero when gd_obol_scene_controller has a full retained-scene mirror */
+    int                          gd_obol_scene_controller_full_sync; /**< @brief non-zero when gd_obol_scene_controller has a full draw-scene mirror */
     void                        *gd_obol_attached_controllers; /**< @brief C++ registry of attached Obol controllers, optionally scoped to GED views */
     void                        *gd_obol_preserved_sources; /**< @brief libged-owned detached Obol source inventory pending controller handoff */
     struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through opaque scene_ctx APIs */

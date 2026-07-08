@@ -777,6 +777,7 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
 {
     if (!gedp || !controller || !path)
 	FAIL("mode-specific lifecycle test needs GED and Obol scene state");
+    (void)expect_direct_provider;
 
     (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
 	    ged_draw_active_view_ctx(gedp), mode);
@@ -786,18 +787,8 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
     char mode_arg[16] = {0};
     snprintf(mode_arg, sizeof(mode_arg), "-m%d", mode);
     const char *draw_mode_cmd[4] = {"draw", mode_arg, path, NULL};
-    ged_draw_index_stats_reset(gedp);
     if (ged_exec_draw(gedp, 3, draw_mode_cmd) != BRLCAD_OK)
 	FAIL("mode-specific draw command should succeed");
-    if (expect_direct_provider) {
-	struct ged_draw_index_stats direct_provider_stats;
-	memset(&direct_provider_stats, 0, sizeof(direct_provider_stats));
-	ged_draw_index_stats_get(gedp, &direct_provider_stats);
-	if (direct_provider_stats.retained_drawtree_invocations)
-	    FAIL("mode-specific Obol provider draw should avoid retained draw-tree fallback");
-	if (direct_provider_stats.retained_shape_mutations)
-	    FAIL("mode-specific Obol provider draw should avoid retained shape mutation");
-    }
     if (source_representation_count(controller, path, representation_mode) != 1)
 	FAIL("mode-specific draw should create exactly one target representation source");
     if (verify_mode_source(controller, path, representation_mode,
@@ -1141,11 +1132,9 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     struct ged_draw_index_stats redraw_stats;
     memset(&redraw_stats, 0, sizeof(redraw_stats));
     ged_draw_index_stats_get(gedp, &redraw_stats);
-    if (redraw_stats.retained_drawtree_invocations ||
-	    redraw_stats.retained_shape_mutations ||
-	    redraw_stats.fallback_shape_scans ||
-	    redraw_stats.fallback_group_scans)
-	FAIL("GED multi-instance logical redraw should avoid retained fallback state");
+    if (redraw_stats.slow_path_shape_scans ||
+	    redraw_stats.slow_path_group_scans)
+	FAIL("GED multi-instance logical redraw should avoid registry/index slow-path scans");
     source_a = source_for_representation(controller, path_a,
 	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
     source_b = source_for_representation(controller, path_b,
@@ -2569,16 +2558,9 @@ main(int argc, char **argv)
 	    root_group_index.count != 1 ||
 	    ged_draw_group_ref_is_null(root_group_index.ref))
 	FAIL("GED Obol group component index should enumerate owned Obol groups");
-    ged_draw_index_stats_reset(gedp);
     if (!ged_draw_group_ref_set_mode(gedp, root_group_state.ref,
 	    GED_DRAW_MODE_SHADED))
 	FAIL("GED source-root group traversal should return a mutable Obol group ref");
-    struct ged_draw_index_stats root_group_mutation_stats;
-    memset(&root_group_mutation_stats, 0,
-	    sizeof(root_group_mutation_stats));
-    ged_draw_index_stats_get(gedp, &root_group_mutation_stats);
-    if (root_group_mutation_stats.retained_group_mutations)
-	FAIL("GED source-root group mode should not mutate retained group state");
     SoGroup *root_presence_group =
 	owned_scene->findGroup("__obol_root_group_presence.s");
     if (!root_presence_group ||
@@ -2632,7 +2614,7 @@ main(int argc, char **argv)
     ged_draw_index_stats_get(gedp, &root_shape_path_hash_stats);
     if (root_shape_path_hash_stats.path_queries ||
 	    root_shape_path_hash_stats.path_candidates)
-	FAIL("GED Obol shape path-hash index should avoid retained path tables");
+	FAIL("GED Obol shape path-hash index should avoid registry path-index queries");
     if (ged_draw_group_ref_is_null(root_shape_record.group) ||
 	    !ged_draw_group_ref_set_mode(gedp, root_shape_record.group,
 		GED_DRAW_MODE_SHADED))
@@ -2727,16 +2709,8 @@ main(int argc, char **argv)
 	    source_for_path(owned_scene, "annot_line.s"))
 	FAIL("GED annotation erase should restore the owned Obol source baseline");
     const char *draw_submodel_owner[2] = {"draw", "submodel_owner.s"};
-    ged_draw_index_stats_reset(gedp);
     if (ged_exec_draw(gedp, 2, draw_submodel_owner) != BRLCAD_OK)
 	FAIL("GED submodel draw should succeed for owned Obol direct publication");
-    struct ged_draw_index_stats submodel_owner_stats;
-    memset(&submodel_owner_stats, 0, sizeof(submodel_owner_stats));
-    ged_draw_index_stats_get(gedp, &submodel_owner_stats);
-    if (submodel_owner_stats.retained_child_source_creations)
-	FAIL("GED Obol submodel draw should avoid retained child-source staging");
-    if (submodel_owner_stats.retained_drawtree_invocations)
-	FAIL("GED Obol submodel draw should avoid retained draw-tree fallback");
     SoBRLDatabaseSource *submodel_source =
 	source_for_path(owned_scene, "submodel_owner.s");
     if (!submodel_source || owned_scene->getDatabaseSourceCount() != 3)
@@ -2764,17 +2738,8 @@ main(int argc, char **argv)
     const char *draw_submodel_temp_owner[2] = {
 	"draw", "submodel_temp_owner.s"
     };
-    ged_draw_index_stats_reset(gedp);
     if (ged_exec_draw(gedp, 2, draw_submodel_temp_owner) != BRLCAD_OK)
 	FAIL("GED submodel temp-source draw should succeed for owned Obol direct publication");
-    struct ged_draw_index_stats submodel_temp_owner_stats;
-    memset(&submodel_temp_owner_stats, 0,
-	    sizeof(submodel_temp_owner_stats));
-    ged_draw_index_stats_get(gedp, &submodel_temp_owner_stats);
-    if (submodel_temp_owner_stats.retained_child_source_creations)
-	FAIL("GED Obol submodel temp-source draw should avoid retained child-source staging");
-    if (submodel_temp_owner_stats.retained_drawtree_invocations)
-	FAIL("GED Obol submodel temp-source draw should avoid retained draw-tree fallback");
     SoBRLDatabaseSource *submodel_temp_source =
 	source_for_path(owned_scene, "submodel_temp_owner.s");
     if (!submodel_temp_source || owned_scene->getDatabaseSourceCount() != 3 ||
@@ -2824,15 +2789,9 @@ main(int argc, char **argv)
     if (!mesh_lod_view_ctx)
 	FAIL("GED BoT mesh LoD view context should be available");
     void *mesh_lod_view_ctxs[1] = {mesh_lod_view_ctx};
-    ged_draw_index_stats_reset(gedp);
     if (!ged_draw_shape_ref_lod_ensure(gedp, mesh_record.ref,
 	    mesh_lod_view_ctx, mesh_lod_view_ctxs, 1))
 	FAIL("GED BoT mesh LoD ensure should succeed for owned Obol mesh update");
-    struct ged_draw_index_stats mesh_lod_stats;
-    memset(&mesh_lod_stats, 0, sizeof(mesh_lod_stats));
-    ged_draw_index_stats_get(gedp, &mesh_lod_stats);
-    if (mesh_lod_stats.retained_mesh_lod_runtime_updates)
-	FAIL("GED Obol mesh LoD draw should avoid retained mesh LoD runtime state");
     SoBRLDatabaseSource *mesh_source =
 	source_for_path(owned_scene, "mesh_owner.bot");
     SoBRLMeshShape *mesh_shape = mesh_source ?
@@ -2878,7 +2837,6 @@ main(int argc, char **argv)
 	FAIL("brep_owner.brep internal lookup should succeed");
     struct bn_tol brep_wire_tol;
     BN_TOL_INIT_SET_TOL(&brep_wire_tol);
-    ged_draw_index_stats_reset(gedp);
     int brep_wire_publish =
 	ged_draw_obol_database_source_publish_primitive_wireframe_for_path(
 		gedp, "brep_owner.brep", &brep_wire_intern, NULL,
@@ -2886,11 +2844,6 @@ main(int argc, char **argv)
     rt_db_free_internal(&brep_wire_intern);
     if (brep_wire_publish < 0)
 	FAIL("GED BREP wireframe publication should succeed for owned Obol line-set update");
-    struct ged_draw_index_stats brep_wire_stats;
-    memset(&brep_wire_stats, 0, sizeof(brep_wire_stats));
-    ged_draw_index_stats_get(gedp, &brep_wire_stats);
-    if (brep_wire_stats.retained_primitive_wireframe_publications)
-	FAIL("GED Obol BREP wireframe draw should avoid retained primitive publication");
     SoBRLDatabaseSource *brep_wire_source =
 	source_for_path(owned_scene, "brep_owner.brep");
     SoBRLVListShape *brep_wire_shape = brep_wire_source ?
@@ -2921,15 +2874,9 @@ main(int argc, char **argv)
     if (!brep_lod_view_ctx)
 	FAIL("GED BREP mesh LoD view context should be available");
     void *brep_lod_view_ctxs[1] = {brep_lod_view_ctx};
-    ged_draw_index_stats_reset(gedp);
     if (!ged_draw_shape_ref_lod_ensure(gedp, brep_record.ref,
 	    brep_lod_view_ctx, brep_lod_view_ctxs, 1))
 	FAIL("GED BREP mesh LoD ensure should succeed for owned Obol mesh update");
-    struct ged_draw_index_stats brep_lod_stats;
-    memset(&brep_lod_stats, 0, sizeof(brep_lod_stats));
-    ged_draw_index_stats_get(gedp, &brep_lod_stats);
-    if (brep_lod_stats.retained_mesh_lod_runtime_updates)
-	FAIL("GED Obol BREP mesh LoD draw should avoid retained mesh LoD runtime state");
     SoBRLDatabaseSource *brep_source =
 	source_for_path(owned_scene, "brep_owner.brep");
     SoBRLMeshShape *brep_shape = brep_source ?
@@ -3177,41 +3124,41 @@ main(int argc, char **argv)
 	    !box_context_tree.is_group ||
 	    box_context_tree.child_count <= 0)
 	FAIL("GED shape-ref context should resolve to an owned Obol database-source context");
-    void *box_retained_ctx = rt_view_scene_ref_context(
+    void *box_registry_ctx = rt_view_scene_ref_context(
 	    ged_draw_registry_shape_ref_rt_ref(gedp, box_record.ref));
-    struct ged_draw_scene_tree_summary box_retained_context_tree;
-    memset(&box_retained_context_tree, 0, sizeof(box_retained_context_tree));
-    if (!box_retained_ctx ||
-	    !ged_draw_scene_context_tree_summary(box_retained_ctx,
-		&box_retained_context_tree) ||
-	    !box_retained_context_tree.valid ||
-	    !box_retained_context_tree.is_group ||
-	    box_retained_context_tree.is_shape ||
-	    !box_retained_context_tree.has_parent ||
-	    !path_equal(box_retained_context_tree.name, "box.s") ||
-	    !box_retained_context_tree.fullpath ||
+    struct ged_draw_scene_tree_summary box_registry_context_tree;
+    memset(&box_registry_context_tree, 0, sizeof(box_registry_context_tree));
+    if (!box_registry_ctx ||
+	    !ged_draw_scene_context_tree_summary(box_registry_ctx,
+		&box_registry_context_tree) ||
+	    !box_registry_context_tree.valid ||
+	    !box_registry_context_tree.is_group ||
+	    box_registry_context_tree.is_shape ||
+	    !box_registry_context_tree.has_parent ||
+	    !path_equal(box_registry_context_tree.name, "box.s") ||
+	    !box_registry_context_tree.fullpath ||
 	    !path_equal(DB_FULL_PATH_CUR_DIR(
-		    box_retained_context_tree.fullpath)->d_namep, "box.s") ||
-	    box_retained_context_tree.draw_tree_depth !=
+		    box_registry_context_tree.fullpath)->d_namep, "box.s") ||
+	    box_registry_context_tree.draw_tree_depth !=
 		box_context_tree.draw_tree_depth ||
-	    box_retained_context_tree.child_count !=
+	    box_registry_context_tree.child_count !=
 		box_context_tree.child_count)
-	FAIL("GED retained semantic scene-context tree summaries should prefer owned Obol source metadata");
-    void *box_retained_parent_ctx =
-	ged_draw_scene_context_parent(box_retained_ctx);
-    struct ged_draw_scene_tree_summary box_retained_parent_tree;
-    memset(&box_retained_parent_tree, 0,
-	    sizeof(box_retained_parent_tree));
-    if (!box_retained_parent_ctx ||
-	    !ged_draw_scene_context_tree_summary(box_retained_parent_ctx,
-		&box_retained_parent_tree) ||
-	    !box_retained_parent_tree.valid ||
-	    !box_retained_parent_tree.is_group ||
-	    box_retained_parent_tree.is_shape ||
-	    box_retained_parent_tree.has_parent ||
+	FAIL("GED registry scene-context tree summaries should prefer owned Obol source metadata");
+    void *box_registry_parent_ctx =
+	ged_draw_scene_context_parent(box_registry_ctx);
+    struct ged_draw_scene_tree_summary box_registry_parent_tree;
+    memset(&box_registry_parent_tree, 0,
+	    sizeof(box_registry_parent_tree));
+    if (!box_registry_parent_ctx ||
+	    !ged_draw_scene_context_tree_summary(box_registry_parent_ctx,
+		&box_registry_parent_tree) ||
+	    !box_registry_parent_tree.valid ||
+	    !box_registry_parent_tree.is_group ||
+	    box_registry_parent_tree.is_shape ||
+	    box_registry_parent_tree.has_parent ||
 	    !path_equal(ged_draw_scene_context_name(
-		    box_retained_parent_ctx), "/"))
-	FAIL("GED retained semantic source parents should resolve to owned Obol parent contexts");
+		    box_registry_parent_ctx), "/"))
+	FAIL("GED registry semantic source parents should resolve to owned Obol parent contexts");
     if (ged_draw_shape_context_source(box_ctx) != box_ctx)
 	FAIL("GED Obol shape-ref context source should be the owned Obol database-source context");
     struct ged_draw_database_source_summary box_context_source;
@@ -3283,12 +3230,6 @@ main(int argc, char **argv)
 	    if (!ged_draw_shape_ref_set_evaluated_region(gedp, box_record.ref, 0) ||
 		    box_shape->regionId.getValue() != 0)
 		FAIL("GED evaluated-region setter should clear owned Obol shape metadata");
-	    struct ged_draw_index_stats evaluated_shape_mutation_stats;
-	    memset(&evaluated_shape_mutation_stats, 0,
-		    sizeof(evaluated_shape_mutation_stats));
-	    ged_draw_index_stats_get(gedp, &evaluated_shape_mutation_stats);
-	    if (evaluated_shape_mutation_stats.retained_shape_mutations)
-		FAIL("GED evaluated-region setter should not mutate retained shape state");
 	    SbVec3f sentinel_points[2] = {
 		SbVec3f(11.0f, 0.0f, 0.0f),
 	SbVec3f(12.0f, 0.0f, 0.0f)
@@ -3475,12 +3416,6 @@ main(int argc, char **argv)
 		    fabs(box_placement_summary.drawCenter[2] - 32.0f) >
 			0.001f)
 		FAIL("GED shape center setter should update owned Obol source placement");
-	    struct ged_draw_index_stats center_shape_mutation_stats;
-	    memset(&center_shape_mutation_stats, 0,
-		    sizeof(center_shape_mutation_stats));
-	    ged_draw_index_stats_get(gedp, &center_shape_mutation_stats);
-	    if (center_shape_mutation_stats.retained_shape_mutations)
-		FAIL("GED shape center setter should not mutate retained shape state");
 	    int bounds_bad_cmd = -1;
 	    if (!ged_draw_shape_ref_update_bounds_from_geometry(gedp,
 		    box_record.ref, &bounds_bad_cmd) ||
@@ -3677,7 +3612,7 @@ main(int argc, char **argv)
 	    ged_draw_index_stats_get(gedp, &primitive_wire_stats);
 	    if (primitive_wire_stats.path_queries ||
 		    primitive_wire_stats.path_candidates)
-		FAIL("GED Obol primitive wireframe publication should avoid retained path tables");
+		FAIL("GED Obol primitive wireframe publication should avoid registry path-index queries");
 	    box_record.found = 0;
 	    ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 		    &box_record);
@@ -3826,7 +3761,7 @@ main(int argc, char **argv)
 	    ged_draw_index_stats_get(gedp, &obol_wire_redraw_stats);
 	    if (obol_wire_redraw_stats.path_queries ||
 		    obol_wire_redraw_stats.path_candidates)
-		FAIL("GED Obol wire redraw should avoid retained path tables");
+		FAIL("GED Obol wire redraw should avoid registry path-index queries");
 	    box_record.found = 0;
 	    ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 		    &box_record);
@@ -3857,13 +3792,6 @@ main(int argc, char **argv)
 	    ged_draw_index_stats_reset(gedp);
 	    if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK)
 		FAIL("GED wire redraw should succeed for LoD policy test");
-	    struct ged_draw_index_stats current_wire_stats;
-	    memset(&current_wire_stats, 0, sizeof(current_wire_stats));
-	    ged_draw_index_stats_get(gedp, &current_wire_stats);
-	    if (current_wire_stats.retained_primitive_wireframe_publications)
-		FAIL("GED Obol current wireframe draw should avoid retained primitive publication");
-	    if (current_wire_stats.retained_drawtree_invocations)
-		FAIL("GED Obol current wireframe draw should avoid retained draw-tree fallback");
 	    box_record.found = 0;
 	    ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 		    &box_record);
@@ -3894,10 +3822,6 @@ main(int argc, char **argv)
 	    if (!ged_draw_shape_ref_lod_ensure(gedp, box_record.ref,
 		    lod_view_ctx, lod_view_ctxs, 1))
 		FAIL("GED LoD ensure should succeed for Obol source policy test");
-	    memset(&current_wire_stats, 0, sizeof(current_wire_stats));
-	    ged_draw_index_stats_get(gedp, &current_wire_stats);
-	    if (current_wire_stats.retained_primitive_wireframe_publications)
-		FAIL("GED Obol adaptive CSG LoD draw should avoid retained primitive publication");
 	    if (!box_source->getSummary(box_realized_summary) ||
 		    !(box_realized_summary.realizationRoleFlags &
 			SoBRLDatabaseSource::REALIZATION_ROLE_CSG) ||
@@ -4021,12 +3945,6 @@ main(int argc, char **argv)
 		    refreshed_material.material_revision !=
 			refresh_material_revision)
 		FAIL("GED material color refresh should stamp the owned Obol source revision");
-	    struct ged_draw_index_stats public_shape_mutation_stats;
-	    memset(&public_shape_mutation_stats, 0,
-		    sizeof(public_shape_mutation_stats));
-	    ged_draw_index_stats_get(gedp, &public_shape_mutation_stats);
-	    if (public_shape_mutation_stats.retained_shape_mutations)
-		FAIL("GED public shape display mutation family should not mutate retained shape state");
 	    box_source->tessellationAbsTol = 0.125f;
     box_source->tessellationRelTol = 0.25f;
     box_source->tessellationNormTol = 0.5f;
@@ -4195,11 +4113,6 @@ main(int argc, char **argv)
 	    fabs(group_color[1] - (100.0f / 255.0f)) > 1.0e-6f ||
 	    fabs(group_color[2] - (110.0f / 255.0f)) > 1.0e-6f)
 	FAIL("GED group appearance setter should mutate the owned Obol group");
-    struct ged_draw_index_stats group_mutation_stats;
-    memset(&group_mutation_stats, 0, sizeof(group_mutation_stats));
-    ged_draw_index_stats_get(gedp, &group_mutation_stats);
-    if (group_mutation_stats.retained_group_mutations)
-	FAIL("GED group mutation family should not mutate retained group state");
     if (owned_scene->setGroupDisplayState(group_path.c_str(),
 	    scene_group->visible.getValue(),
 	    scene_group->selected.getValue(),
@@ -4358,9 +4271,9 @@ main(int argc, char **argv)
     struct ged_draw_index_stats obol_index_stats;
     memset(&obol_index_stats, 0, sizeof(obol_index_stats));
     ged_draw_index_stats_get(gedp, &obol_index_stats);
-    if (obol_index_stats.fallback_shape_scans ||
-	    obol_index_stats.fallback_group_scans)
-	FAIL("GED Obol component indexes should avoid retained fallback scans");
+    if (obol_index_stats.slow_path_shape_scans ||
+	    obol_index_stats.slow_path_group_scans)
+	FAIL("GED Obol component indexes should avoid registry/index slow-path scans");
     SoBRLDatabaseSource *draft_move_source =
 	source_for_path(owned_scene, "draft_move.s");
     BRLObolDatabaseSourceSummary draft_move_summary;
@@ -4460,7 +4373,7 @@ main(int argc, char **argv)
     if (!source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s") ||
 	    !source_for_path(owned_scene, "draft_move.s"))
-	FAIL("GED redraw transaction should refresh retained sources without clearing Obol-only sources");
+	FAIL("GED redraw transaction should refresh draw sources without clearing Obol-only sources");
     display_txn = ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX,
 	    "box.s");
     ged_draw_transaction_result_init(&display_result);
@@ -4498,7 +4411,7 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &ball_record);
     if (ball_record.found)
-	FAIL("GED public erase should not expose stale retained shape records");
+	FAIL("GED public erase should not expose stale shape draw records");
     if (ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller public-erase redraw command should succeed");
     if (owned_scene->getDatabaseSourceCount() != 2 ||
@@ -4517,7 +4430,7 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &ball_record);
     if (ball_record.found)
-	FAIL("GED active-scope erase should not expose stale retained shape records");
+	FAIL("GED active-scope erase should not expose stale shape draw records");
     if (ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller active-scope erase redraw command should succeed");
     if (owned_scene->getDatabaseSourceCount() != 2 ||
@@ -4536,7 +4449,7 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &ball_record);
     if (ball_record.found)
-	FAIL("GED public root erase should not expose stale retained shape records");
+	FAIL("GED public root erase should not expose stale shape draw records");
     if (ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller public-root-erase redraw command should succeed");
     if (owned_scene->getDatabaseSourceCount() != 2 ||
@@ -4553,7 +4466,7 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &ball_record);
     if (ball_record.found)
-	FAIL("GED public name erase should not expose stale retained shape records");
+	FAIL("GED public name erase should not expose stale shape draw records");
     if (ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller public-name-erase redraw command should succeed");
     if (owned_scene->getDatabaseSourceCount() != 2 ||
@@ -4617,7 +4530,7 @@ main(int argc, char **argv)
     ged_draw_foreach_group_record(gedp, group_source_state_cb,
 	    &prefix_group_state);
     if (prefix_group_state.found)
-	FAIL("GED root path-prefix group-only erase should not expose stale retained group records");
+	FAIL("GED root path-prefix group-only erase should not expose stale group draw records");
     if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE_PREFIX,
 	    "nested_parent.c/nested_child.c", ged_draw_active_view_ctx(gedp),
 	    -1, "public active-scope path-prefix erase"))
@@ -4637,13 +4550,13 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &nested_leaf_record);
     if (nested_leaf_record.found)
-	FAIL("GED active-scope path-prefix erase should not expose stale retained shape records");
+	FAIL("GED active-scope path-prefix erase should not expose stale shape draw records");
     group_source_state nested_child_group_state = {0,
 	GED_DRAW_GROUP_REF_NULL, NULL, "nested_parent.c/nested_child.c"};
     ged_draw_foreach_group_record(gedp, group_source_state_cb,
 	    &nested_child_group_state);
     if (nested_child_group_state.found)
-	FAIL("GED active-scope path-prefix erase should not expose stale retained group records");
+	FAIL("GED active-scope path-prefix erase should not expose stale group draw records");
     if (ged_exec_draw(gedp, 2, draw_nested_leaf) != BRLCAD_OK)
 	FAIL("GED active-scope path-prefix erase redraw restore should succeed");
     nested_leaf_source = source_for_path(owned_scene,
@@ -4670,13 +4583,13 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &nested_leaf_record);
     if (nested_leaf_record.found)
-	FAIL("GED root path-prefix erase should not expose stale retained shape records");
+	FAIL("GED root path-prefix erase should not expose stale shape draw records");
     memset(&nested_child_group_state, 0, sizeof(nested_child_group_state));
     nested_child_group_state.matchPath = "nested_parent.c/nested_child.c";
     ged_draw_foreach_group_record(gedp, group_source_state_cb,
 	    &nested_child_group_state);
     if (nested_child_group_state.found)
-	FAIL("GED root path-prefix erase should not expose stale retained group records");
+	FAIL("GED root path-prefix erase should not expose stale group draw records");
     if (ged_exec_draw(gedp, 2, draw_nested_leaf) != BRLCAD_OK)
 	FAIL("GED root path-prefix erase redraw restore should succeed");
     nested_leaf_source = source_for_path(owned_scene,
@@ -4701,9 +4614,9 @@ main(int argc, char **argv)
     struct ged_draw_index_stats nested_reexpand_stats;
     memset(&nested_reexpand_stats, 0, sizeof(nested_reexpand_stats));
     ged_draw_index_stats_get(gedp, &nested_reexpand_stats);
-    if (nested_reexpand_stats.fallback_shape_scans ||
-	    nested_reexpand_stats.fallback_group_scans)
-	FAIL("GED nested child reexpand should avoid retained fallback scans");
+    if (nested_reexpand_stats.slow_path_shape_scans ||
+	    nested_reexpand_stats.slow_path_group_scans)
+	FAIL("GED nested child reexpand should avoid registry/index slow-path scans");
     struct ged_draw_transaction stale_nested_leaf =
 	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
 		"nested_leaf.s");
@@ -4746,9 +4659,9 @@ main(int argc, char **argv)
     struct ged_draw_index_stats nested_redraw_stats;
     memset(&nested_redraw_stats, 0, sizeof(nested_redraw_stats));
     ged_draw_index_stats_get(gedp, &nested_redraw_stats);
-    if (nested_redraw_stats.fallback_shape_scans ||
-	    nested_redraw_stats.fallback_group_scans)
-	FAIL("GED nested leaf redraw should avoid retained fallback scans");
+    if (nested_redraw_stats.slow_path_shape_scans ||
+	    nested_redraw_stats.slow_path_group_scans)
+	FAIL("GED nested leaf redraw should avoid registry/index slow-path scans");
     nested_leaf_source = source_for_path(owned_scene,
 	    nested_leaf_source_path);
     nested_sibling_source = source_for_path(owned_scene,
@@ -4777,13 +4690,13 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &component_leaf_record);
     if (component_leaf_record.found)
-	FAIL("GED scoped component erase should not expose stale retained shape records");
+	FAIL("GED scoped component erase should not expose stale shape draw records");
     group_source_state component_child_group_state = {0,
 	GED_DRAW_GROUP_REF_NULL, NULL, "nested_parent.c/nested_child.c"};
     ged_draw_foreach_group_record(gedp, group_source_state_cb,
 	    &component_child_group_state);
     if (component_child_group_state.found)
-	FAIL("GED scoped component erase should not expose stale retained group records");
+	FAIL("GED scoped component erase should not expose stale group draw records");
     if (ged_exec_draw(gedp, 2, draw_nested_leaf) != BRLCAD_OK)
 	FAIL("GED scoped component erase redraw restore should succeed");
     nested_leaf_source = source_for_path(owned_scene,
@@ -4828,7 +4741,7 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &component_leaf_record);
     if (component_leaf_record.found)
-	FAIL("GED scoped component mode-filter erase should not expose stale retained shape records");
+	FAIL("GED scoped component mode-filter erase should not expose stale shape draw records");
     if (owned_scene->setDatabaseSourceDrawMode(nested_leaf_source_path,
 	    SoBRLDatabaseSource::WIREFRAME) < 0)
 	FAIL("GED scoped component mode-filter sentinel should restore wire owner mode");
@@ -4898,12 +4811,6 @@ main(int argc, char **argv)
     if (!ged_draw_group_ref_set_dbpath(gedp, nested_child_group,
 	    &nested_child_renamed_path))
 	FAIL("GED nested group set-dbpath should rename through owned Obol");
-    struct ged_draw_index_stats nested_group_mutation_stats;
-    memset(&nested_group_mutation_stats, 0,
-	    sizeof(nested_group_mutation_stats));
-    ged_draw_index_stats_get(gedp, &nested_group_mutation_stats);
-    if (nested_group_mutation_stats.retained_group_mutations)
-	FAIL("GED nested group set-dbpath should not mutate retained group state");
     ged_draw_group_ref nested_child_renamed_group =
 	ged_draw_group_ref_lookup_or_create(gedp, &nested_child_renamed_path);
     db_free_full_path(&nested_child_renamed_path);
@@ -4951,13 +4858,13 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &clear_box_record);
     if (clear_box_record.found)
-	FAIL("GED direct draw clear should not expose stale retained shape records");
+	FAIL("GED direct draw clear should not expose stale shape draw records");
     group_source_state clear_box_group_state = {0,
 	GED_DRAW_GROUP_REF_NULL, NULL, group_path.c_str()};
     ged_draw_foreach_group_record(gedp, group_source_state_cb,
 	    &clear_box_group_state);
     if (clear_box_group_state.found)
-	FAIL("GED direct draw clear should not expose stale retained group records");
+	FAIL("GED direct draw clear should not expose stale group draw records");
     if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK ||
 	    ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller direct-clear redraw commands should succeed");
@@ -4981,13 +4888,13 @@ main(int argc, char **argv)
     ged_draw_foreach_shape_record(gedp, record_source_state_cb,
 	    &clear_box_record);
     if (clear_box_record.found)
-	FAIL("GED scoped database-group clear should not expose stale retained shape records");
+	FAIL("GED scoped database-group clear should not expose stale shape draw records");
     memset(&clear_box_group_state, 0, sizeof(clear_box_group_state));
     clear_box_group_state.matchPath = group_path.c_str();
     ged_draw_foreach_group_record(gedp, group_source_state_cb,
 	    &clear_box_group_state);
     if (clear_box_group_state.found)
-	FAIL("GED scoped database-group clear should not expose stale retained group records");
+	FAIL("GED scoped database-group clear should not expose stale group draw records");
     if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK ||
 	    ged_exec_draw(gedp, 2, draw_ball) != BRLCAD_OK)
 	FAIL("owned-controller scoped-clear redraw commands should succeed");

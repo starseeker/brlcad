@@ -25,7 +25,6 @@ set(
   revolve.h
   script.h
   sketch.h
-  sketch_legacy_bsg.h
   superell.h
   tgc.h
   tor.h

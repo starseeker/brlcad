@@ -197,15 +197,8 @@ ged_init(struct ged *gedp)
     gedp->i->ged_gdp->gd_draw_index_group_component_candidates = 0;
     gedp->i->ged_gdp->gd_draw_index_path_queries = 0;
     gedp->i->ged_gdp->gd_draw_index_path_candidates = 0;
-    gedp->i->ged_gdp->gd_draw_index_fallback_shape_scans = 0;
-    gedp->i->ged_gdp->gd_draw_index_fallback_group_scans = 0;
-    gedp->i->ged_gdp->gd_draw_retained_child_source_creations = 0;
-    gedp->i->ged_gdp->gd_draw_retained_primitive_wireframe_publications = 0;
-    gedp->i->ged_gdp->gd_draw_retained_mesh_lod_runtime_updates = 0;
-    gedp->i->ged_gdp->gd_draw_retained_source_owner_appends = 0;
-    gedp->i->ged_gdp->gd_draw_retained_group_mutations = 0;
-    gedp->i->ged_gdp->gd_draw_retained_shape_mutations = 0;
-    gedp->i->ged_gdp->gd_draw_retained_drawtree_invocations = 0;
+    gedp->i->ged_gdp->gd_draw_index_slow_path_shape_scans = 0;
+    gedp->i->ged_gdp->gd_draw_index_slow_path_group_scans = 0;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_draw_observers);
     gedp->i->ged_gdp->gd_draw_observers_init = 1;
     gedp->i->ged_gdp->gd_draw_next_observer_token = 1;

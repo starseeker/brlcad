@@ -1612,20 +1612,6 @@ rt_view_polygon_user_data_set_bsg(rt_view_polygon_ref ref, void *user_data);
 RT_EXPORT extern int
 rt_view_polygon_csg_bsg(rt_view_polygon_ref target, rt_view_polygon_ref stencil, bg_clip_t op);
 
-RT_EXPORT extern rt_view_polygon_ref
-rt_view_polygon_import_sketch_bsg(const char *name, struct db_i *dbip,
-				  struct directory *dp, struct bsg_view *v);
-
-RT_EXPORT extern rt_view_polygon_ref
-rt_view_polygon_import_sketch_context_bsg(const char *name,
-					  struct db_i *dbip,
-					  struct directory *dp,
-					  void *ctx);
-
-RT_EXPORT extern struct directory *
-rt_view_polygon_export_sketch_bsg(struct db_i *dbip, const char *name,
-				  rt_view_polygon_ref ref);
-
 RT_EXPORT extern int
 rt_view_polygon_snap_exclude_set_bsg(struct bsg_view *v, rt_view_polygon_ref ref);
 

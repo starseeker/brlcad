@@ -54,7 +54,6 @@
 #include "bsg/view_set.h"
 #include "bsg/view_state.h"
 #include "rt/edit_legacy_bsg.h"
-#include "rt/primitives/sketch_legacy_bsg.h"
 #include "rt/view_legacy_bsg.h"
 #include "view_context_private.h"
 
@@ -134,19 +133,6 @@ rt_view_context_is_bsg(const void *ctx)
 {
     const struct bsg_view *v = (const struct bsg_view *)ctx;
     return (v && v->magic == BSG_VIEW_MAGIC) ? 1 : 0;
-}
-
-int
-rt_view_context_is_valid(const void *ctx)
-{
-    return (_rt_view_context_native_is(ctx) || rt_view_context_is_bsg(ctx)) ?
-	   1 : 0;
-}
-
-int
-rt_view_context_is_retained(const void *ctx)
-{
-    return rt_view_context_is_bsg(ctx);
 }
 
 void *
@@ -4646,52 +4632,6 @@ rt_view_is_independent_bsg(const struct bsg_view *v)
     return bsg_view_is_independent(v);
 }
 
-rt_view_scene_ref
-rt_view_scene_ref_null(void)
-{
-    rt_view_scene_ref ref = RT_VIEW_SCENE_REF_NULL_INIT;
-    return ref;
-}
-
-rt_view_scene_ref
-rt_view_scene_ref_make(void *opaque, unsigned int backend)
-{
-    rt_view_scene_ref ref = RT_VIEW_SCENE_REF_NULL_INIT;
-    ref.opaque = opaque;
-    ref.backend = opaque ? backend : RT_VIEW_SCENE_BACKEND_NONE;
-    return ref;
-}
-
-int
-rt_view_scene_ref_is_null(rt_view_scene_ref ref)
-{
-    return ref.opaque ? 0 : 1;
-}
-
-int
-rt_view_scene_ref_equal(rt_view_scene_ref a, rt_view_scene_ref b)
-{
-    if (rt_view_scene_ref_is_null(a) || rt_view_scene_ref_is_null(b))
-	return rt_view_scene_ref_is_null(a) && rt_view_scene_ref_is_null(b);
-    if (a.backend != RT_VIEW_SCENE_BACKEND_NONE &&
-	b.backend != RT_VIEW_SCENE_BACKEND_NONE &&
-	a.backend != b.backend)
-	return 0;
-    return a.opaque == b.opaque;
-}
-
-void *
-rt_view_scene_ref_context(rt_view_scene_ref ref)
-{
-    return ref.opaque;
-}
-
-unsigned int
-rt_view_scene_ref_backend(rt_view_scene_ref ref)
-{
-    return ref.opaque ? ref.backend : RT_VIEW_SCENE_BACKEND_NONE;
-}
-
 rt_view_scene_ref_bsg
 rt_view_scene_ref_null_bsg(void)
 {
@@ -7230,36 +7170,6 @@ rt_view_polygon_csg_bsg(rt_view_polygon_ref target, rt_view_polygon_ref stencil,
 			       rt_view_polygon_ref_to_bsg(stencil), op);
 }
 
-rt_view_polygon_ref
-rt_view_polygon_import_sketch_bsg(const char *name, struct db_i *dbip,
-				  struct directory *dp, struct bsg_view *v)
-{
-    if (!name || !dbip || !dp || !v)
-	return RT_VIEW_POLYGON_REF_NULL;
-
-    return db_sketch_to_view_polygon_ref(name, dbip, dp, v);
-}
-
-rt_view_polygon_ref
-rt_view_polygon_import_sketch_context_bsg(const char *name,
-	struct db_i *dbip,
-	struct directory *dp,
-	void *ctx)
-{
-    return rt_view_polygon_import_sketch_bsg(name, dbip, dp,
-	    (struct bsg_view *)ctx);
-}
-
-struct directory *
-rt_view_polygon_export_sketch_bsg(struct db_i *dbip, const char *name,
-				  rt_view_polygon_ref ref)
-{
-    if (!dbip || !name)
-	return NULL;
-
-    return db_view_polygon_ref_to_sketch(dbip, name, ref);
-}
-
 int
 rt_view_polygon_snap_exclude_set_bsg(struct bsg_view *v, rt_view_polygon_ref ref)
 {
@@ -7595,10 +7505,7 @@ rt_view_polygon_import_sketch_context(const char *name,
 	    return ref;
     }
 
-    if (_rt_view_context_native_is(ctx))
-	return RT_VIEW_POLYGON_REF_NULL;
-
-    return rt_view_polygon_import_sketch_context_bsg(name, dbip, dp, ctx);
+    return RT_VIEW_POLYGON_REF_NULL;
 }
 
 struct directory *
@@ -7611,7 +7518,7 @@ rt_view_polygon_export_sketch(struct db_i *dbip,
 	return adapter.export_sketch ?
 	       adapter.export_sketch(dbip, name, ref, adapter.data) : NULL;
 
-    return rt_view_polygon_export_sketch_bsg(dbip, name, ref);
+    return NULL;
 }
 
 int

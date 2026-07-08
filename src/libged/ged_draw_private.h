@@ -1600,15 +1600,8 @@ struct ged_draw_index_stats {
     uint64_t group_component_candidates;
     uint64_t path_queries;
     uint64_t path_candidates;
-    uint64_t fallback_shape_scans;
-    uint64_t fallback_group_scans;
-    uint64_t retained_child_source_creations;
-    uint64_t retained_primitive_wireframe_publications;
-    uint64_t retained_mesh_lod_runtime_updates;
-    uint64_t retained_source_owner_appends;
-    uint64_t retained_group_mutations;
-    uint64_t retained_shape_mutations;
-    uint64_t retained_drawtree_invocations;
+    uint64_t slow_path_shape_scans;
+    uint64_t slow_path_group_scans;
 };
 
 GED_EXPORT extern void ged_draw_index_stats_get(struct ged *gedp,

@@ -1003,24 +1003,10 @@ ged_draw_index_stats_get(struct ged *gedp, struct ged_draw_index_stats *stats)
 	gdp->gd_draw_index_group_component_candidates;
     stats->path_queries = gdp->gd_draw_index_path_queries;
     stats->path_candidates = gdp->gd_draw_index_path_candidates;
-    stats->fallback_shape_scans =
-	gdp->gd_draw_index_fallback_shape_scans;
-    stats->fallback_group_scans =
-	gdp->gd_draw_index_fallback_group_scans;
-    stats->retained_child_source_creations =
-	gdp->gd_draw_retained_child_source_creations;
-    stats->retained_primitive_wireframe_publications =
-	gdp->gd_draw_retained_primitive_wireframe_publications;
-    stats->retained_mesh_lod_runtime_updates =
-	gdp->gd_draw_retained_mesh_lod_runtime_updates;
-    stats->retained_source_owner_appends =
-	gdp->gd_draw_retained_source_owner_appends;
-    stats->retained_group_mutations =
-	gdp->gd_draw_retained_group_mutations;
-    stats->retained_shape_mutations =
-	gdp->gd_draw_retained_shape_mutations;
-    stats->retained_drawtree_invocations =
-	gdp->gd_draw_retained_drawtree_invocations;
+    stats->slow_path_shape_scans =
+	gdp->gd_draw_index_slow_path_shape_scans;
+    stats->slow_path_group_scans =
+	gdp->gd_draw_index_slow_path_group_scans;
 }
 
 
@@ -1037,15 +1023,8 @@ ged_draw_index_stats_reset(struct ged *gedp)
     gdp->gd_draw_index_group_component_candidates = 0;
     gdp->gd_draw_index_path_queries = 0;
     gdp->gd_draw_index_path_candidates = 0;
-    gdp->gd_draw_index_fallback_shape_scans = 0;
-    gdp->gd_draw_index_fallback_group_scans = 0;
-    gdp->gd_draw_retained_child_source_creations = 0;
-    gdp->gd_draw_retained_primitive_wireframe_publications = 0;
-    gdp->gd_draw_retained_mesh_lod_runtime_updates = 0;
-    gdp->gd_draw_retained_source_owner_appends = 0;
-    gdp->gd_draw_retained_group_mutations = 0;
-    gdp->gd_draw_retained_shape_mutations = 0;
-    gdp->gd_draw_retained_drawtree_invocations = 0;
+    gdp->gd_draw_index_slow_path_shape_scans = 0;
+    gdp->gd_draw_index_slow_path_group_scans = 0;
 }
 
 

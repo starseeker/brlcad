@@ -1,4 +1,4 @@
-/*                  B V _ P O L Y _ S K E T C H . C
+/*                    P O L Y _ S K E T C H . C
  * BRL-CAD
  *
  * Copyright (c) 2013-2026 United States Government as represented by
@@ -140,27 +140,75 @@ test_non_origin_plane_roundtrip(void)
     bu_file_delete(ofile);
 }
 
+
+static void
+write_test_poly_database(const char *ofile)
+{
+    struct rt_wdb *wfp = wdb_fopen_v(ofile, 5);
+    if (!wfp)
+	bu_exit(EXIT_FAILURE, "Failed to create input database %s\n", ofile);
+
+    struct rt_sketch_polygon p;
+    memset(&p, 0, sizeof(p));
+    p.type = RT_SKETCH_POLYGON_GENERAL;
+    p.curr_contour_i = -1;
+    p.curr_point_i = -1;
+    p.polygon.num_contours = 1;
+    p.polygon.hole = (int *)bu_calloc(1, sizeof(int), "gp_hole");
+    p.polygon.contour = (struct bg_poly_contour *)bu_calloc(1, sizeof(struct bg_poly_contour), "gp_contour");
+    p.polygon.contour[0].num_points = 4;
+    p.polygon.contour[0].point = (point_t *)bu_calloc(4, sizeof(point_t), "gpc_point");
+
+    VSET(p.polygon.contour[0].point[0], 0.0, 0.0, 0.0);
+    VSET(p.polygon.contour[0].point[1], 2.0, 0.0, 0.0);
+    VSET(p.polygon.contour[0].point[2], 2.0, 2.0, 0.0);
+    VSET(p.polygon.contour[0].point[3], 0.0, 2.0, 0.0);
+
+    point_t plane_pt = {0.0, 0.0, 0.0};
+    vect_t plane_n = {0.0, 0.0, 1.0};
+    bg_plane_pt_nrml(&p.vp, plane_pt, plane_n);
+
+    struct directory *odp = db_sketch_polygon_to_sketch(wfp->dbip, "poly.s", &p, NULL);
+    if (odp == RT_DIR_NULL)
+	bu_exit(EXIT_FAILURE, "Failed to write polygon to input database %s\n", ofile);
+
+    bg_polygon_free(&p.polygon);
+    db_close(wfp->dbip);
+}
+
+
 int
 main(int argc, char *argv[])
 {
     struct db_i *dbip;
     struct directory *dp;
+    const char *input_file = NULL;
+    char generated_file[MAXPATHLEN] = {0};
+    int generated_input = 0;
 
     bu_setprogname(argv[0]);
 
-    if (argc != 2) {
-	bu_exit(EXIT_FAILURE, "Usage: %s file.g", argv[0]);
+    if (argc == 1) {
+	bu_dir(generated_file, MAXPATHLEN, BU_DIR_CURR,
+		"poly_sketch_input.g", NULL);
+	write_test_poly_database(generated_file);
+	input_file = generated_file;
+	generated_input = 1;
+    } else if (argc == 2) {
+	input_file = argv[1];
+    } else {
+	bu_exit(EXIT_FAILURE, "Usage: %s [file.g]", argv[0]);
     }
 
     // First, open the database and make sure we have poly.s
 
-    dbip = db_open(argv[1], DB_OPEN_READONLY);
+    dbip = db_open(input_file, DB_OPEN_READONLY);
     if (dbip == DBI_NULL) {
-	bu_exit(EXIT_FAILURE, "ERROR: Unable to read from %s\n", argv[1]);
+	bu_exit(EXIT_FAILURE, "ERROR: Unable to read from %s\n", input_file);
     }
 
     if (db_dirbuild(dbip) < 0) {
-	bu_exit(EXIT_FAILURE, "ERROR: Unable to read from %s\n", argv[1]);
+	bu_exit(EXIT_FAILURE, "ERROR: Unable to read from %s\n", input_file);
     }
 
     db_update_nref(dbip);
@@ -194,6 +242,8 @@ main(int argc, char *argv[])
     db_close(dbip);
     db_close(wfp->dbip);
     bu_file_delete(ofile);
+    if (generated_input)
+	bu_file_delete(generated_file);
 
     test_non_origin_plane_roundtrip();
 
