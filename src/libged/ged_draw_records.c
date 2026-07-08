@@ -323,8 +323,16 @@ _draw_obol_record_instance_in_view(
 		    (size_t)(marker - instance_key));
 	else
 	    bu_vls_strcpy(&base_key, instance_key);
-	int ret = _draw_path_equal(bu_vls_cstr(&base_key),
-		record->database_path);
+	const char *base = bu_vls_cstr(&base_key);
+	int ret = 0;
+	if (!base || !base[0])
+	    ret = 1;
+	else if (bu_strncmp(base, "ged-view:", 9) == 0)
+	    ret = 0;
+	else if (bu_strncmp(base, "brlcad-direct:", 14) == 0)
+	    ret = 1;
+	else
+	    ret = _draw_path_equal(base, record->database_path);
 	bu_vls_free(&base_key);
 	return ret;
     }
@@ -336,10 +344,26 @@ _draw_obol_record_instance_in_view(
 	view_name = fallback;
     }
 
+    const char mode_marker[] = ":ged-draw-mode:";
+    struct bu_vls base_key = BU_VLS_INIT_ZERO;
+    const char *marker = NULL;
+    const char *candidate = instance_key;
+    while (candidate && (candidate = strstr(candidate, mode_marker)) != NULL) {
+	marker = candidate;
+	candidate++;
+    }
+    if (marker)
+	bu_vls_strncpy(&base_key, instance_key,
+		(size_t)(marker - instance_key));
+    else if (instance_key)
+	bu_vls_strcpy(&base_key, instance_key);
+
     struct bu_vls prefix = BU_VLS_INIT_ZERO;
     bu_vls_printf(&prefix, "ged-view:%s:", view_name);
-    int ret = (instance_key && bu_strncmp(instance_key, bu_vls_cstr(&prefix),
-	    bu_vls_strlen(&prefix)) == 0) ? 1 : 0;
+    int ret = (bu_vls_strlen(&base_key) > 0 &&
+	    bu_strncmp(bu_vls_cstr(&base_key), bu_vls_cstr(&prefix),
+		bu_vls_strlen(&prefix)) == 0) ? 1 : 0;
+    bu_vls_free(&base_key);
     bu_vls_free(&prefix);
     return ret;
 }

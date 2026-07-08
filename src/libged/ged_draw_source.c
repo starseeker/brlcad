@@ -1364,6 +1364,252 @@ struct ged_draw_obol_view_export_ctx {
 
 
 static void
+_ged_draw_view_export_base_instance_key(struct bu_vls *out,
+					const char *instance_key)
+{
+    if (!out)
+	return;
+    bu_vls_trunc(out, 0);
+    if (!instance_key || !instance_key[0])
+	return;
+
+    const char mode_marker[] = ":ged-draw-mode:";
+    const char *marker = NULL;
+    const char *candidate = instance_key;
+    while ((candidate = strstr(candidate, mode_marker)) != NULL) {
+	marker = candidate;
+	candidate++;
+    }
+    if (marker)
+	bu_vls_strncpy(out, instance_key, (size_t)(marker - instance_key));
+    else
+	bu_vls_strcpy(out, instance_key);
+}
+
+
+static int
+_ged_draw_view_export_path_equal(const char *a, const char *b)
+{
+    if (!a || !b)
+	return 0;
+    while (*a == '/')
+	a++;
+    while (*b == '/')
+	b++;
+    return BU_STR_EQUAL(a, b);
+}
+
+
+static int
+_ged_draw_view_export_obol_source_record_in_view(
+	const struct ged_draw_obol_database_source_record *record,
+	void *view_ctx)
+{
+    if (!record || !record->database_path || !record->database_path[0])
+	return 0;
+
+    const char *instance_key = record->instance_key;
+    if (!view_ctx || !rt_view_context_is_independent(view_ctx)) {
+	if (!instance_key || !instance_key[0])
+	    return 1;
+
+	struct bu_vls base_key = BU_VLS_INIT_ZERO;
+	_ged_draw_view_export_base_instance_key(&base_key, instance_key);
+	const char *base = bu_vls_cstr(&base_key);
+	int ret = 0;
+	if (!base || !base[0])
+	    ret = 1;
+	else if (bu_strncmp(base, "ged-view:", 9) == 0)
+	    ret = 0;
+	else if (bu_strncmp(base, "brlcad-direct:", 14) == 0)
+	    ret = 1;
+	else
+	    ret = _ged_draw_view_export_path_equal(base,
+		    record->database_path);
+	bu_vls_free(&base_key);
+	return ret;
+    }
+
+    const char *view_name = rt_view_context_name_get(view_ctx);
+    char fallback[64] = {0};
+    if (!view_name || !view_name[0]) {
+	snprintf(fallback, sizeof(fallback), "%p", view_ctx);
+	view_name = fallback;
+    }
+
+    struct bu_vls base_key = BU_VLS_INIT_ZERO;
+    struct bu_vls prefix = BU_VLS_INIT_ZERO;
+    _ged_draw_view_export_base_instance_key(&base_key, instance_key);
+    bu_vls_printf(&prefix, "ged-view:%s:", view_name);
+    int ret = (bu_vls_strlen(&base_key) > 0 &&
+	    bu_strncmp(bu_vls_cstr(&base_key), bu_vls_cstr(&prefix),
+		bu_vls_strlen(&prefix)) == 0) ? 1 : 0;
+    bu_vls_free(&prefix);
+    bu_vls_free(&base_key);
+    return ret;
+}
+
+
+static int
+_ged_draw_view_export_obol_source_record_matches(
+	const struct ged_draw_obol_view_export_ctx *ctx,
+	const struct ged_draw_obol_database_source_record *record)
+{
+    if (!ctx || !record || !record->valid || !record->database_path ||
+	    !record->database_path[0])
+	return 0;
+
+    if (!_ged_draw_view_export_obol_source_record_in_view(record,
+	    ctx->view_ctx))
+	return 0;
+
+    if (((ctx->query_flags & GED_DRAW_VIEW_EXPORT_QUERY_VISIBLE_ONLY) ||
+		(ctx->render_flags & GED_DRAW_VIEW_EXPORT_RENDER_VISIBLE_ONLY)) &&
+	    !record->visible)
+	return 0;
+
+    if (ctx->draw_mode != GED_DRAW_VIEW_EXPORT_DRAW_MODE_ANY &&
+	    record->draw_mode != ctx->draw_mode)
+	return 0;
+
+    const int wants_database =
+	(ctx->query_flags & GED_DRAW_VIEW_EXPORT_QUERY_DB_OBJECTS) ? 1 : 0;
+    const int wants_view =
+	(ctx->query_flags & GED_DRAW_VIEW_EXPORT_QUERY_VIEW_OBJECTS) ? 1 : 0;
+    if ((ctx->query_flags & GED_DRAW_VIEW_EXPORT_QUERY_LOCAL_ONLY) ||
+	    ((wants_database || wants_view) && !wants_database))
+	return 0;
+
+    return _ged_draw_view_export_glob_match(ctx->glob,
+	    record->database_path, NULL);
+}
+
+
+static int
+_ged_draw_view_export_detail_from_obol_source_record(
+	struct ged_draw_view_export_detail *detail,
+	const struct ged_draw_obol_view_export_ctx *ctx,
+	const struct ged_draw_obol_database_source_record *source_record)
+{
+    if (!detail || !ctx || !ctx->gedp || !source_record ||
+	    !source_record->database_path || !source_record->database_path[0])
+	return 0;
+
+    _ged_draw_view_export_detail_init(detail);
+
+    struct ged_draw_shape_geometry_summary geometry;
+    memset(&geometry, 0, sizeof(geometry));
+    int geometry_valid =
+	ged_draw_obol_database_source_geometry_summary_for_path_mode(
+	    ctx->gedp, source_record->database_path, 1,
+	    source_record->draw_mode, &geometry);
+    if (!geometry_valid || !geometry.valid || !geometry.geometry_name) {
+	memset(&geometry, 0, sizeof(geometry));
+	geometry_valid =
+	    ged_draw_obol_database_source_geometry_summary_for_path(
+		ctx->gedp, source_record->database_path, &geometry);
+    }
+    if (!geometry_valid || !geometry.valid || !geometry.geometry_name) {
+	_ged_draw_view_export_detail_free(detail);
+	return 0;
+    }
+
+    bu_vls_strcpy(&detail->path, source_record->database_path);
+
+    struct ged_draw_view_db_object_record *rec = &detail->record;
+    rec->path = bu_vls_cstr(&detail->path);
+    rec->type_name =
+	_ged_draw_view_export_type_name_from_obol_geometry(
+		geometry.geometry_name);
+    rec->geometry_name = geometry.geometry_name;
+    rec->draw_mode = source_record->draw_mode;
+    rec->transparency = source_record->transparency;
+    rec->is_database_source = 1;
+    rec->non_database_source = 0;
+    rec->is_database_intent = 1;
+    rec->is_local_source = 0;
+    rec->is_view_source = 0;
+    rec->highlighted = source_record->highlighted;
+    rec->selected = source_record->selected;
+    if (ctx->view_ctx && !rec->selected)
+	rec->selected = ged_draw_view_context_selection_contains_path(
+		ctx->view_ctx, GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
+		source_record->database_path) ? 1 : 0;
+    rec->visible = source_record->visible;
+    rec->line_style = 0;
+
+    struct ged_draw_scene_display_summary display;
+    memset(&display, 0, sizeof(display));
+    if (ged_draw_obol_database_source_display_summary_for_path(ctx->gedp,
+	    source_record->database_path, &display) && display.valid &&
+	    display.material_valid) {
+	rec->color[0] = display.material_color[0];
+	rec->color[1] = display.material_color[1];
+	rec->color[2] = display.material_color[2];
+    }
+
+    MAT_IDN(rec->model_mat);
+    rec->cache_identity =
+	_ged_draw_view_export_hash_cstr(source_record->instance_key);
+    if (!rec->cache_identity)
+	rec->cache_identity =
+	    _ged_draw_view_export_hash_cstr(source_record->database_path);
+    rec->source_identity =
+	_ged_draw_view_export_hash_cstr(source_record->database_path);
+    if (!rec->source_identity)
+	rec->source_identity = rec->cache_identity;
+    rec->detail_token = (uintptr_t)detail;
+
+    if (!_ged_draw_view_export_detail_geometry_from_obol(detail, ctx->gedp,
+	    source_record->database_path, geometry.geometry_name, 1)) {
+	_ged_draw_view_export_detail_free(detail);
+	return 0;
+    }
+
+    return 1;
+}
+
+
+static int
+_ged_draw_view_export_obol_source_record_cb(
+	struct ged *UNUSED(gedp),
+	const struct ged_draw_obol_database_source_record *record,
+	void *userdata)
+{
+    struct ged_draw_obol_view_export_ctx *ctx =
+	(struct ged_draw_obol_view_export_ctx *)userdata;
+    if (!ctx || !ctx->keep_going)
+	return 0;
+    if (!_ged_draw_view_export_obol_source_record_matches(ctx, record))
+	return 1;
+
+    struct ged_draw_view_export_detail detail;
+    if (_ged_draw_view_export_detail_from_obol_source_record(&detail, ctx,
+	    record)) {
+	ctx->keep_going = ctx->cb(&detail.record, ctx->userdata);
+	_ged_draw_view_export_detail_free(&detail);
+    }
+
+    return ctx->keep_going;
+}
+
+
+static void
+_ged_draw_view_export_source_records_from_obol(
+	struct ged_draw_obol_view_export_ctx *ctx,
+	int *keep_going)
+{
+    if (!ctx || !keep_going || !*keep_going)
+	return;
+
+    ctx->keep_going = *keep_going;
+    if (ged_draw_obol_database_source_records_foreach(ctx->gedp, 1,
+	    _ged_draw_view_export_obol_source_record_cb, ctx) >= 0)
+	*keep_going = ctx->keep_going;
+}
+
+
+static void
 _ged_draw_view_export_visit_obol_info(
 	struct ged_draw_obol_view_export_ctx *ctx,
 	const struct ged_draw_obol_scene_context_info *info,
@@ -1880,6 +2126,13 @@ _ged_draw_view_export_records_from_obol(
     ctx.draw_mode = draw_mode;
     ctx.cb = cb;
     ctx.userdata = userdata;
+    ctx.keep_going = 1;
+
+    _ged_draw_view_export_source_records_from_obol(&ctx, keep_going);
+    if (!*keep_going) {
+	ged_draw_obol_scene_context_info_free(&root_info);
+	return;
+    }
     ctx.keep_going = 1;
 
     _ged_draw_view_export_visit_obol_info(&ctx, &root_info, NULL);
