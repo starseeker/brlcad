@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W _ M A T E R I A L . C
+/*                    G E D _ D R A W _ M A T E R I A L . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,7 +17,7 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file libged/b_s_g___g_e_d___d_r_a_w___m_a_t_e_r_i_a_l_._c.c
+/** @file libged/ged_draw_material.c
  *
  * GED material/color revision bookkeeping for Obol database sources.
  */
@@ -27,7 +27,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
+#include "./ged_draw_private.h"
 
 struct _color_ctx {
     struct ged  *gedp;

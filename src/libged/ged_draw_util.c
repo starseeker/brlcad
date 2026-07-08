@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W _ U T I L . C
+/*                    G E D _ D R A W _ U T I L . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,9 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file libged/b_s_g___g_e_d___d_r_a_w___u_t_i_l_._c.c
+/** @file libged/ged_draw_util.c
  *
- * Small draw-scene utility entry points shared by the split bridge files.
+ * Small draw-scene utility entry points shared by the split draw files.
  */
 
 #include "common.h"

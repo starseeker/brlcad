@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W _ H I G H L I G H T . C
+/*                    G E D _ D R A W _ H I G H L I G H T . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,9 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file libged/b_s_g___g_e_d___d_r_a_w___h_i_g_h_l_i_g_h_t_._c.c
+/** @file libged/ged_draw_highlight.c
  *
- * Highlighted-shape tracking and highlight-state mutation bridge.
+ * Highlighted-shape tracking and highlight-state mutation.
  */
 
 #include "common.h"
@@ -29,7 +29,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
+#include "./ged_draw_private.h"
 
 struct ged_draw_highlight_path_prefix_ctx {
     struct ged *gedp;

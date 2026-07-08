@@ -226,7 +226,7 @@ endfunction()
 
 function(_brlobol_guard_check_legacy_include_allowlist)
   set(_allowed
-    src/libged/ged_view_legacy.cpp
+    src/libged/ged_view_state.cpp
     src/librt/view_legacy_bsg.c)
 
   _brlobol_guard_collect(_files
@@ -254,8 +254,8 @@ endfunction()
 
 function(_brlobol_guard_check_retired_ged_draw_symbols)
   foreach(_rel
-      src/libged/bsg_ged_draw_source.c
-      src/libged/bsg_ged_draw_transactions.c
+      src/libged/ged_draw_source.c
+      src/libged/ged_draw_transactions.c
       src/libged/draw_obol.cpp
       include/ged/draw.h)
     if(EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")

@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W _ T R E E . C
+/*                    G E D _ D R A W _ T R E E . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,9 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file libged/b_s_g___g_e_d___d_r_a_w___t_r_e_e_._c.c
+/** @file libged/ged_draw_tree.c
  *
- * Scene-ref retained draw-tree mutation and group path management.
+ * Draw-tree mutation and group path management.
  */
 
 #include "common.h"
@@ -35,7 +35,7 @@
 
 #include "ged.h"
 #include "ged/draw.h"
-#include "./bsg_ged_draw_private.h"
+#include "./ged_draw_private.h"
 #include "./ged_private.h"
 
 

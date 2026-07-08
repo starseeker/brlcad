@@ -1,4 +1,4 @@
-/*            B S G _ G E D _ D R A W _ R E C O R D S . C
+/*                G E D _ D R A W _ R E C O R D S . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,7 +17,7 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_records.c
+/** @file ged_draw_records.c
  *
  * Semantic GED draw-record construction and iteration.
  *
@@ -40,8 +40,8 @@
 #include "ged/draw.h"
 #include "rt/view.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
-#include "./bsg_ged_draw_view_private.h"
+#include "./ged_draw_private.h"
+#include "./ged_draw_view_private.h"
 
 
 static const struct ged_draw_view_export_detail *

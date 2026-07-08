@@ -32,7 +32,7 @@
 #include "ged/draw.h"
 #include "ged.h"
 
-#include "../bsg_ged_draw_private.h"
+#include "../ged_draw_private.h"
 #include "./ged_draw.h"
 
 

@@ -38,7 +38,7 @@
 #include "rt/view.h"
 
 #include "../ged_private.h"
-#include "../bsg_ged_draw_private.h"
+#include "../ged_draw_private.h"
 
 #define DM_MAX_TRIES 100
 

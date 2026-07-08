@@ -41,7 +41,7 @@
 #include "rt/geom.h"
 #include "ged.h"
 #include "include/plugin.h"
-#include "./bsg_ged_draw_private.h"
+#include "./ged_draw_private.h"
 
 #ifdef __cplusplus
 
@@ -156,7 +156,7 @@ struct ged_drawable {
     int                          gd_obol_scene_controller_full_sync; /**< @brief non-zero when gd_obol_scene_controller has a full retained-scene mirror */
     void                        *gd_obol_attached_controllers; /**< @brief C++ registry of attached Obol controllers, optionally scoped to GED views */
     void                        *gd_obol_preserved_sources; /**< @brief libged-owned detached Obol source inventory pending controller handoff */
-    struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through legacy scene_ctx APIs */
+    struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through opaque scene_ctx APIs */
     int                          gd_obol_context_tokens_init;
     uint64_t                     gd_obol_next_context_token;
     uintptr_t                    gd_highlight_token;     /**< @brief active highlighted draw-shape ref token, or 0 */
@@ -192,8 +192,8 @@ GED_EXPORT extern void ged_draw_obol_preserved_sources_free(struct ged *gedp);
 ged_draw_group_ref ged_scene_root_group_ref(struct ged *gedp);
 void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);
-void ged_view_legacy_state_init(struct ged *gedp);
-void ged_view_legacy_state_free(struct ged *gedp);
+void ged_view_state_init(struct ged *gedp);
+void ged_view_state_free(struct ged *gedp);
 int ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx);
 int ged_obol_fbserv_present(struct ged *gedp);
 void ged_obol_fbserv_release(struct ged *gedp);
@@ -246,8 +246,7 @@ struct ged_impl {
     uint32_t magic;
     Ged_Internal *i;
 
-    /* Transitional retained-view storage, hidden behind ged_view_legacy.cpp
-     * while the backing implementation migrates from BSG to Obol/libbrlobol. */
+    /* GED-owned view state storage, hidden behind ged_view_state.cpp. */
     void *ged_view_state_ctx;
 
     struct ged_db_index *ged_db_indexp;
@@ -385,7 +384,7 @@ GED_EXPORT extern int _ged_combadd2(struct ged *gedp,
 			 matp_t m,
 			 int validate);
 
-/* defined in bsg_ged_draw_material.c */
+/* defined in ged_draw_material.c */
 
 GED_EXPORT extern int _ged_draw_uplot_to_command_scene_feature(struct ged *gedp,
 				       FILE *fp,

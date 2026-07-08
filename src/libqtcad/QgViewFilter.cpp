@@ -173,7 +173,7 @@ QgViewFilter::view_sync(QEvent *e)
     e_y = (int)m_e->position().y();
 #endif
 
-    /* Keep retained legacy view state synchronized with the event stream. */
+    /* Keep neutral view state synchronized with the event stream. */
     rt_view_context_mouse_state_set(qg_legacy_view_to_context(lv), e_x, e_y);
     qg_obol_refine_db_snap(m->display, lv);
 

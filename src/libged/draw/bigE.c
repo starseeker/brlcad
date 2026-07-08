@@ -41,7 +41,7 @@
 #include "rt/func.h"
 
 #include "bg/line_layer.h"
-#include "../bsg_ged_draw_private.h"
+#include "../ged_draw_private.h"
 #include "../ged_private.h"
 #include "./ged_draw.h"
 

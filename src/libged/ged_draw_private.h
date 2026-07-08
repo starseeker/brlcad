@@ -1,4 +1,4 @@
-/*              B S G _ G E D _ D R A W _ P R I V A T E . H
+/*                  G E D _ D R A W _ P R I V A T E . H
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,7 +17,7 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_private.h
+/** @file ged_draw_private.h
  *
  * Private node-facing draw-scene bridge for libged implementation files.
  *
@@ -26,8 +26,8 @@
  * implementation while public callers migrate to semantic records and refs.
  */
 
-#ifndef LIBGED_BSG_GED_DRAW_PRIVATE_H
-#define LIBGED_BSG_GED_DRAW_PRIVATE_H
+#ifndef LIBGED_GED_DRAW_PRIVATE_H
+#define LIBGED_GED_DRAW_PRIVATE_H
 
 #include "common.h"
 
@@ -1670,4 +1670,4 @@ GED_EXPORT extern void ged_draw_registry_source_ref_highlight_free(
 
 __END_DECLS
 
-#endif /* LIBGED_BSG_GED_DRAW_PRIVATE_H */
+#endif /* LIBGED_GED_DRAW_PRIVATE_H */

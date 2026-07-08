@@ -180,7 +180,7 @@ bsg_scene_free_group(bsg_scene_ref ref);
  * The structural revision counter is bumped for each erasure.
  *
  * Extracted from the file-private @c _sg_erase_nested_subpath() helper in
- * src/libged/bsg_ged_draw.c.
+ * src/libged/ged_draw_source.c.
  */
 BSG_EXPORT extern void
 bsg_scene_erase_nested_subpath(bsg_scene_ref parent,

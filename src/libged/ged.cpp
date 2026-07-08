@@ -176,7 +176,7 @@ ged_init(struct ged *gedp)
     bu_vls_init(&gedp->go_name);
 
     // View related containers
-    ged_view_legacy_state_init(gedp);
+    ged_view_state_init(gedp);
 
     /* Create a non-opened fbserv */
     BU_GET(gedp->ged_fbs, struct fbserv_obj);
@@ -351,7 +351,7 @@ ged_free(struct ged *gedp)
 
     bu_vls_free(&gedp->go_name);
 
-    ged_view_legacy_state_free(gedp);
+    ged_view_state_free(gedp);
 
 	if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
 

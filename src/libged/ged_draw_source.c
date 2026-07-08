@@ -1,4 +1,4 @@
-/*              B S G _ G E D _ D R A W _ S O U R C E . C
+/*                  G E D _ D R A W _ S O U R C E . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -16,7 +16,7 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this file; see the file named COPYING for more information.
  */
-/** @file bsg_ged_draw_source.c
+/** @file ged_draw_source.c
  *
  * GED draw-source metadata helpers backed by public BSG database-source fields.
  */
@@ -85,9 +85,9 @@
 #include "rt/primitives/vol.h"
 #include "rt/tree.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
-#include "./bsg_ged_draw_shape_state_private.h"
-#include "./bsg_ged_draw_view_private.h"
+#include "./ged_draw_private.h"
+#include "./ged_draw_shape_state_private.h"
+#include "./ged_draw_view_private.h"
 
 
 struct ged_draw_source_state;
@@ -96,7 +96,6 @@ struct ged_draw_source_runtime_summary;
 struct ged_draw_database_source_record;
 struct ged_draw_scene_draw_state_summary;
 
-static void _ged_draw_scene_ref_geometry_set_command_count(bsg_scene_ref ref, size_t vlen);
 static int ged_draw_scene_ref_foreach_child(
 	bsg_scene_ref ref,
 	int (*cb)(bsg_scene_ref child_ref, void *userdata),
@@ -179,10 +178,7 @@ static int ged_draw_scene_ref_is_view_scope(bsg_scene_ref ref);
 static int ged_draw_scene_ref_draw_tree_depth(bsg_scene_ref ref);
 static int ged_draw_scene_ref_draw_mode(bsg_scene_ref ref);
 static int ged_draw_scene_ref_visible(bsg_scene_ref ref);
-static void ged_draw_scene_ref_set_draw_center(bsg_scene_ref ref,
-					       const point_t center);
 static int ged_draw_scene_ref_set_visible(bsg_scene_ref ref, int visible);
-static int ged_draw_scene_ref_set_draw_size(bsg_scene_ref ref, fastf_t size);
 static bsg_scene_ref ged_draw_scene_ref_parent(bsg_scene_ref ref);
 static bsg_scene_ref ged_draw_scene_ref_source_owner(bsg_scene_ref ref);
 static void ged_draw_obol_owner_structural_revision_bump(struct ged *gedp);
@@ -313,24 +309,15 @@ static int ged_draw_scene_ref_publish_obol_primitive_wireframe(
 	struct rt_db_internal *ip,
 	const struct bg_tess_tol *ttol,
 	const struct bn_tol *tol);
-static int ged_draw_scene_ref_update_bounds_from_geometry(
-	bsg_scene_ref ref,
-	int *bad_cmd);
 static int ged_draw_rt_internal_payload_valid(const struct rt_db_internal *ip);
 static int ged_draw_scene_ref_geometry_publish_nmg_model(bsg_scene_ref ref,
 							 const struct model *m,
 							 int style);
-static bsg_scene_ref ged_draw_scene_ref_geometry_query_target(
-	bsg_scene_ref ref);
-static int _ged_draw_geometry_line_command_from_bsg(int command);
 static int ged_draw_scene_ref_bounds(bsg_scene_ref ref, point_t min, point_t max);
 static int ged_draw_scene_ref_subtree_bounds(bsg_scene_ref ref,
 					     vect_t *min,
 					     vect_t *max,
 					     int include_overlays);
-static int ged_draw_scene_ref_set_non_database_source(
-	bsg_scene_ref ref,
-	int non_database_source);
 static int ged_draw_obol_database_source_bot_mesh_lod_realize(
 	struct ged *gedp,
 	const char *path,
@@ -4190,59 +4177,6 @@ ged_draw_scene_ref_obol_update_display(
 }
 
 
-struct _ged_draw_obol_placement_patch_ctx {
-    int draw_mat_valid;
-    const fastf_t *draw_mat;
-    int draw_center_valid;
-    const fastf_t *draw_center;
-    int draw_size_valid;
-    fastf_t draw_size;
-};
-
-
-static int
-_ged_draw_obol_set_placement_cb(struct ged *gedp,
-				const char *path,
-				void *userdata)
-{
-    struct _ged_draw_obol_placement_patch_ctx *ctx =
-	(struct _ged_draw_obol_placement_patch_ctx *)userdata;
-    return ctx ? ged_draw_obol_database_source_set_placement_for_path(gedp,
-	    path, ctx->draw_mat_valid, ctx->draw_mat,
-	    ctx->draw_center_valid, ctx->draw_center,
-	    ctx->draw_size_valid, ctx->draw_size) : 0;
-}
-
-
-static int
-ged_draw_scene_ref_obol_set_placement(bsg_scene_ref ref,
-				      int draw_mat_valid,
-				      const mat_t draw_mat,
-				      int draw_center_valid,
-				      const point_t draw_center,
-				      int draw_size_valid,
-				      fastf_t draw_size)
-{
-    if (ged_draw_scene_ref_is_null(ref))
-	return 0;
-
-    if (ged_draw_scene_ref_is_group(ref) &&
-	    !ged_draw_scene_ref_is_database_source(ref))
-	return 0;
-
-    struct _ged_draw_obol_placement_patch_ctx ctx = {
-	draw_mat_valid,
-	draw_mat,
-	draw_center_valid,
-	draw_center,
-	draw_size_valid,
-	draw_size
-    };
-    return ged_draw_scene_ref_obol_source_path_apply_ensure(ref,
-	    _ged_draw_obol_set_placement_cb, &ctx);
-}
-
-
 struct _ged_draw_obol_stale_ctx {
     ged_draw_stale_reason reason;
 };
@@ -4781,8 +4715,8 @@ ged_draw_scene_ref_database_source_record_apply(
     bsg_record.realization_point_scale =
 	(double)record->realization_point_scale;
 
-    /* Obol owns database-source record mutation; retained BSG record apply is
-     * no-owned-scene legacy adapter compatibility only. */
+    /* Obol owns database-source record mutation; this direct retained-record
+     * update is only for no-owned-scene adapter state. */
     return bsg_database_source_record_apply(source, &bsg_record);
 }
 
@@ -7673,9 +7607,7 @@ ged_draw_shape_ref_update_bounds_from_geometry(struct ged *gedp,
     bsg_scene_ref shape_ref = _ged_draw_shape_ref_scene_ref(gedp, ref);
     if (bad_cmd)
 	*bad_cmd = 0;
-    if (ged_draw_shape_ref_obol_update_vlist_bounds(gedp, ref, shape_ref))
-	return 1;
-    return ged_draw_scene_ref_update_bounds_from_geometry(shape_ref, bad_cmd);
+    return ged_draw_shape_ref_obol_update_vlist_bounds(gedp, ref, shape_ref);
 }
 
 
@@ -9358,375 +9290,6 @@ ged_draw_scene_ref_geometry_clear(bsg_scene_ref ref)
 }
 
 
-static void
-_ged_draw_bounds_include_point(point_t bmin, point_t bmax, const point_t pt)
-{
-    VMINMAX(bmin, bmax, pt);
-}
-
-
-static void
-_ged_draw_bounds_include_point_marker(point_t bmin, point_t bmax, const point_t pt)
-{
-    point_t marker_min;
-    point_t marker_max;
-
-    VSET(marker_min, pt[X] - 1.0, pt[Y] - 1.0, pt[Z] - 1.0);
-    VSET(marker_max, pt[X] + 1.0, pt[Y] + 1.0, pt[Z] + 1.0);
-    VMIN(bmin, marker_min);
-    VMAX(bmax, marker_max);
-}
-
-
-static int
-_ged_draw_line_geometry_bounds(bsg_geometry_ref geometry,
-			       point_t bmin,
-			       point_t bmax,
-			       size_t *length,
-			       int *bad_cmd)
-{
-    bsg_field_ref coords = bsg_geometry_ref_coordinates_field(geometry);
-    bsg_field_ref commands = bsg_geometry_ref_primitive_sets_field(geometry);
-    size_t count = bsg_field_multi_count(coords);
-
-    for (size_t i = 0; i < count; i++) {
-	point_t pt;
-	int cmd = (i % 2) ? BSG_GEOMETRY_LINE_DRAW : BSG_GEOMETRY_LINE_MOVE;
-
-	if (!bsg_field_multi_point_at(coords, i, pt))
-	    return 0;
-	(void)bsg_field_multi_int_at(commands, i, &cmd);
-
-	switch (cmd) {
-	    case BSG_GEOMETRY_LINE_MOVE:
-	    case BSG_GEOMETRY_LINE_DRAW:
-		_ged_draw_bounds_include_point(bmin, bmax, pt);
-		break;
-	    case BSG_GEOMETRY_POINT_DRAW:
-		_ged_draw_bounds_include_point_marker(bmin, bmax, pt);
-		break;
-	    default:
-		if (bad_cmd)
-		    *bad_cmd = cmd;
-		return 0;
-	}
-    }
-
-    if (length)
-	*length = count;
-    return count ? 1 : 0;
-}
-
-
-static int
-_ged_draw_point_geometry_bounds(bsg_geometry_ref geometry,
-				point_t bmin,
-				point_t bmax,
-				size_t *length)
-{
-    bsg_field_ref coords = bsg_geometry_ref_coordinates_field(geometry);
-    size_t count = bsg_field_multi_count(coords);
-
-    for (size_t i = 0; i < count; i++) {
-	point_t pt;
-	if (!bsg_field_multi_point_at(coords, i, pt))
-	    return 0;
-	_ged_draw_bounds_include_point_marker(bmin, bmax, pt);
-    }
-
-    if (length)
-	*length = count;
-    return count ? 1 : 0;
-}
-
-
-static int
-_ged_draw_indexed_geometry_bounds(bsg_geometry_ref geometry,
-				  point_t bmin,
-				  point_t bmax,
-				  size_t *length)
-{
-    bsg_field_ref coords = bsg_geometry_ref_coordinates_field(geometry);
-    bsg_field_ref indices = bsg_geometry_ref_indices_field(geometry);
-    size_t coord_count = bsg_field_multi_count(coords);
-    size_t index_count = bsg_field_multi_count(indices);
-    size_t used = 0;
-
-    for (size_t i = 0; i < index_count; i++) {
-	int idx = -1;
-	point_t pt;
-
-	if (!bsg_field_multi_int_at(indices, i, &idx))
-	    return 0;
-	if (idx < 0)
-	    continue;
-	if ((size_t)idx >= coord_count)
-	    return 0;
-	if (!bsg_field_multi_point_at(coords, (size_t)idx, pt))
-	    return 0;
-	_ged_draw_bounds_include_point(bmin, bmax, pt);
-	used++;
-    }
-
-    if (length)
-	*length = index_count;
-    return used ? 1 : 0;
-}
-
-
-static int
-_ged_draw_geometry_line_command_from_bsg(int command)
-{
-    switch (command) {
-	case BSG_GEOMETRY_LINE_MOVE:
-	    return GED_DRAW_VIEW_LINE_MOVE;
-	case BSG_GEOMETRY_LINE_DRAW:
-	    return GED_DRAW_VIEW_LINE_DRAW;
-	default:
-	    return command;
-    }
-}
-
-
-static const char *
-_ged_draw_geometry_kind_name(bsg_geometry_node_kind kind)
-{
-    switch (kind) {
-	case BSG_GEOMETRY_NODE_LINE_SET:
-	    return "line-set";
-	case BSG_GEOMETRY_NODE_INDEXED_LINE_SET:
-	    return "indexed-line-set";
-	case BSG_GEOMETRY_NODE_POINT_SET:
-	    return "point-set";
-	case BSG_GEOMETRY_NODE_INDEXED_FACE_SET:
-	    return "indexed-face-set";
-	case BSG_GEOMETRY_NODE_MESH:
-	    return "mesh";
-	case BSG_GEOMETRY_NODE_TEXT:
-	    return "text";
-	case BSG_GEOMETRY_NODE_IMAGE:
-	    return "image";
-	case BSG_GEOMETRY_NODE_FRAMEBUFFER:
-	    return "framebuffer";
-	case BSG_GEOMETRY_NODE_OVERLAY:
-	    return "overlay";
-	case BSG_GEOMETRY_NODE_HUD:
-	    return "hud";
-	case BSG_GEOMETRY_NODE_ANNOTATION:
-	    return "annotation";
-	case BSG_GEOMETRY_NODE_CSG_PROXY:
-	    return "csg-proxy";
-	case BSG_GEOMETRY_NODE_BREP_PROXY:
-	    return "brep-proxy";
-	case BSG_GEOMETRY_NODE_EDIT_PREVIEW:
-	    return "edit-preview";
-	case BSG_GEOMETRY_NODE_NONE:
-	default:
-	    return "none";
-    }
-}
-
-
-static int
-_ged_draw_geometry_last_face_point(bsg_geometry_ref geometry, point_t out)
-{
-    bsg_field_ref coords = bsg_geometry_ref_coordinates_field(geometry);
-    bsg_field_ref indices = bsg_geometry_ref_indices_field(geometry);
-    size_t index_count = bsg_field_multi_count(indices);
-    int first = -1;
-    int vert = 0;
-    int have = 0;
-
-    for (size_t i = 0; i < index_count; i++) {
-	int idx = -1;
-	if (!bsg_field_multi_int_at(indices, i, &idx))
-	    continue;
-	if (idx < 0) {
-	    if (first >= 0 && vert >= 3 &&
-		    bsg_field_multi_point_at(coords, (size_t)first, out))
-		have = 1;
-	    first = -1;
-	    vert = 0;
-	    continue;
-	}
-	if (first < 0)
-	    first = idx;
-	vert++;
-    }
-
-    if (first >= 0 && vert >= 3 &&
-	    bsg_field_multi_point_at(coords, (size_t)first, out))
-	have = 1;
-
-    return have;
-}
-
-
-static int
-_ged_draw_scene_ref_line_geometry(bsg_scene_ref ref, bsg_geometry_ref *out)
-{
-    if (out)
-	memset(out, 0, sizeof(*out));
-    if (bsg_scene_ref_is_null(ref) || !out)
-	return 0;
-
-    bsg_scene_ref geometry_ref = ged_draw_scene_ref_geometry_query_target(ref);
-    if (bsg_scene_ref_is_null(geometry_ref))
-	return 0;
-
-    bsg_geometry_ref geometry = bsg_scene_ref_as_geometry(geometry_ref);
-    if (bsg_geometry_ref_kind(geometry) != BSG_GEOMETRY_NODE_LINE_SET)
-	return 0;
-
-    *out = geometry;
-    return 1;
-}
-
-
-static int
-_ged_draw_scene_ref_geometry_bounds(bsg_scene_ref ref,
-				    point_t bmin,
-				    point_t bmax,
-				    size_t *length,
-				    int *bad_cmd)
-{
-    if (length)
-	*length = 0;
-    if (bad_cmd)
-	*bad_cmd = 0;
-
-    bsg_scene_ref geometry_ref = ged_draw_scene_ref_geometry_query_target(ref);
-    if (bsg_scene_ref_is_null(geometry_ref))
-	return 0;
-
-    bsg_geometry_ref geometry = bsg_scene_ref_as_geometry(geometry_ref);
-    switch (bsg_geometry_ref_kind(geometry)) {
-	case BSG_GEOMETRY_NODE_LINE_SET:
-	    return _ged_draw_line_geometry_bounds(geometry, bmin, bmax,
-		    length, bad_cmd);
-	case BSG_GEOMETRY_NODE_POINT_SET:
-	    return _ged_draw_point_geometry_bounds(geometry, bmin, bmax, length);
-	case BSG_GEOMETRY_NODE_INDEXED_LINE_SET:
-	case BSG_GEOMETRY_NODE_INDEXED_FACE_SET:
-	    return _ged_draw_indexed_geometry_bounds(geometry, bmin, bmax, length);
-	default:
-	    return 0;
-    }
-}
-
-
-static int
-ged_draw_scene_ref_geometry_summary(bsg_scene_ref ref,
-				    struct ged_draw_shape_geometry_summary *out)
-{
-    if (!out)
-	return 0;
-
-    memset(out, 0, sizeof(*out));
-    if (bsg_scene_ref_is_null(ref))
-	return 0;
-
-    bsg_scene_ref geometry_ref = ged_draw_scene_ref_geometry_query_target(ref);
-    if (bsg_scene_ref_is_null(geometry_ref))
-	return 0;
-
-    bsg_geometry_ref geometry = bsg_scene_ref_as_geometry(geometry_ref);
-    bsg_geometry_node_kind kind = bsg_geometry_ref_kind(geometry);
-    if (kind == BSG_GEOMETRY_NODE_NONE)
-	return 0;
-
-    out->valid = 1;
-    out->geometry_name = _ged_draw_geometry_kind_name(kind);
-    out->point_count =
-	bsg_field_multi_count(bsg_geometry_ref_coordinates_field(geometry));
-    out->index_count =
-	bsg_field_multi_count(bsg_geometry_ref_indices_field(geometry));
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_last_point(bsg_scene_ref ref, point_t out)
-{
-    if (bsg_scene_ref_is_null(ref) || !out)
-	return 0;
-
-    bsg_scene_ref geometry_ref = ged_draw_scene_ref_geometry_query_target(ref);
-    if (bsg_scene_ref_is_null(geometry_ref))
-	return 0;
-
-    bsg_geometry_ref geometry = bsg_scene_ref_as_geometry(geometry_ref);
-    bsg_geometry_node_kind kind = bsg_geometry_ref_kind(geometry);
-    if (kind == BSG_GEOMETRY_NODE_NONE)
-	return 0;
-    if (kind == BSG_GEOMETRY_NODE_INDEXED_FACE_SET)
-	return _ged_draw_geometry_last_face_point(geometry, out);
-
-    bsg_field_ref coords = bsg_geometry_ref_coordinates_field(geometry);
-    size_t count = bsg_field_multi_count(coords);
-    if (!count)
-	return 0;
-    return bsg_field_multi_point_at(coords, count - 1, out);
-}
-
-
-static int
-ged_draw_scene_ref_line_summary(bsg_scene_ref ref,
-				struct ged_draw_view_line_summary *out)
-{
-    if (!out)
-	return 0;
-
-    memset(out, 0, sizeof(*out));
-    bsg_geometry_ref geometry;
-    if (!_ged_draw_scene_ref_line_geometry(ref, &geometry))
-	return 0;
-
-    out->valid = 1;
-    out->point_count =
-	bsg_field_multi_count(bsg_geometry_ref_coordinates_field(geometry));
-    return 1;
-}
-
-
-static int
-ged_draw_scene_ref_line_point_at(bsg_scene_ref ref,
-				 size_t index,
-				 point_t out)
-{
-    if (!out)
-	return 0;
-
-    bsg_geometry_ref geometry;
-    if (!_ged_draw_scene_ref_line_geometry(ref, &geometry))
-	return 0;
-
-    return bsg_field_multi_point_at(
-	    bsg_geometry_ref_coordinates_field(geometry), index, out);
-}
-
-
-static int
-ged_draw_scene_ref_line_command_at(bsg_scene_ref ref,
-				   size_t index,
-				   int *out)
-{
-    if (!out)
-	return 0;
-
-    bsg_geometry_ref geometry;
-    if (!_ged_draw_scene_ref_line_geometry(ref, &geometry))
-	return 0;
-
-    int command = -1;
-    if (!bsg_field_multi_int_at(
-	    bsg_geometry_ref_primitive_sets_field(geometry), index, &command))
-	return 0;
-    *out = _ged_draw_geometry_line_command_from_bsg(command);
-    return 1;
-}
-
-
 int
 ged_draw_shape_ref_last_point(struct ged *gedp, ged_draw_shape_ref ref, point_t out)
 {
@@ -9736,7 +9299,7 @@ ged_draw_shape_ref_last_point(struct ged *gedp, ged_draw_shape_ref ref, point_t 
 	    "GED Obol line last-point path"))
 	return 1;
 
-    return ged_draw_scene_ref_last_point(shape_ref, out);
+    return 0;
 }
 
 
@@ -9752,7 +9315,7 @@ ged_draw_shape_ref_line_summary(struct ged *gedp,
 	    "GED Obol line summary path"))
 	return 1;
 
-    return ged_draw_scene_ref_line_summary(shape_ref, out);
+    return 0;
 }
 
 
@@ -9771,7 +9334,7 @@ ged_draw_shape_ref_line_point_at(struct ged *gedp,
 	    "GED Obol line point path"))
 	return 1;
 
-    return ged_draw_scene_ref_line_point_at(shape_ref, index, out);
+    return 0;
 }
 
 
@@ -9788,7 +9351,7 @@ ged_draw_shape_ref_line_command_at(struct ged *gedp,
 	    "GED Obol line command path"))
 	return 1;
 
-    return ged_draw_scene_ref_line_command_at(shape_ref, index, out);
+    return 0;
 }
 
 
@@ -9812,7 +9375,7 @@ ged_draw_shape_ref_geometry_summary(struct ged *gedp,
 	    "GED Obol geometry summary path"))
 	return 1;
 
-    return ged_draw_scene_ref_geometry_summary(shape_ref, out);
+    return 0;
 }
 
 
@@ -9826,8 +9389,7 @@ ged_draw_shape_context_line_summary(void *shape_ctx,
 	    "GED Obol context line summary path"))
 	return 1;
 
-    return ged_draw_scene_ref_line_summary(
-	    ged_draw_scene_ref_from_context(shape_ctx), out);
+    return 0;
 }
 
 
@@ -9844,8 +9406,7 @@ ged_draw_shape_context_line_point_at(void *shape_ctx,
 	    "GED Obol context line point path"))
 	return 1;
 
-    return ged_draw_scene_ref_line_point_at(
-	    ged_draw_scene_ref_from_context(shape_ctx), index, out);
+    return 0;
 }
 
 
@@ -9860,8 +9421,7 @@ ged_draw_shape_context_line_command_at(void *shape_ctx,
 	    "GED Obol context line command path"))
 	return 1;
 
-    return ged_draw_scene_ref_line_command_at(
-	    ged_draw_scene_ref_from_context(shape_ctx), index, out);
+    return 0;
 }
 
 
@@ -9882,8 +9442,7 @@ ged_draw_shape_context_geometry_summary(void *shape_ctx,
 	    "GED Obol context geometry summary path"))
 	return 1;
 
-    return ged_draw_scene_ref_geometry_summary(
-	    ged_draw_scene_ref_from_context(shape_ctx), out);
+    return 0;
 }
 
 
@@ -9900,49 +9459,6 @@ ged_draw_shape_ref_translate_geometry(struct ged *gedp, ged_draw_shape_ref ref,
 	return 1;
 
     return 0;
-}
-
-
-static int
-ged_draw_scene_ref_update_bounds_from_geometry(bsg_scene_ref ref, int *bad_cmd)
-{
-    if (bad_cmd)
-	*bad_cmd = 0;
-    if (bsg_scene_ref_is_null(ref))
-	return 0;
-
-    point_t bmin, bmax;
-    size_t length = 0;
-    VSET(bmin, INFINITY, INFINITY, INFINITY);
-    VSET(bmax, -INFINITY, -INFINITY, -INFINITY);
-
-    if (!_ged_draw_scene_ref_geometry_bounds(ref, bmin, bmax, &length, bad_cmd))
-	return 0;
-
-    _ged_draw_scene_ref_geometry_set_command_count(ref, length);
-
-    vect_t center;
-    center[X] = (bmin[X] + bmax[X]) * 0.5;
-    center[Y] = (bmin[Y] + bmax[Y]) * 0.5;
-    center[Z] = (bmin[Z] + bmax[Z]) * 0.5;
-    ged_draw_scene_ref_set_draw_center(ref, center);
-
-    fastf_t size = bmax[X] - bmin[X];
-    V_MAX(size, bmax[Y] - bmin[Y]);
-    V_MAX(size, bmax[Z] - bmin[Z]);
-    (void)ged_draw_scene_ref_set_draw_size(ref, size);
-    ged_draw_scene_ref_set_non_database_source(ref, 0);
-    return 1;
-}
-
-
-static void
-ged_draw_scene_ref_set_draw_center(bsg_scene_ref ref, const point_t center)
-{
-    (void)ged_draw_scene_ref_obol_set_placement(ref,
-	    0, NULL,
-	    1, center,
-	    0, 0.0);
 }
 
 
@@ -9984,51 +9500,6 @@ ged_draw_scene_ref_view_context(bsg_scene_ref ref)
 }
 
 
-struct ged_draw_geometry_child_find_ctx {
-    bsg_scene_ref geometry_ref;
-    int require_geometry;
-};
-
-
-static int
-_ged_draw_scene_ref_find_geometry_child_cb(bsg_scene_ref child_ref,
-					   void *userdata)
-{
-    struct ged_draw_geometry_child_find_ctx *ctx =
-	(struct ged_draw_geometry_child_find_ctx *)userdata;
-
-    if (!ctx)
-	return 0;
-    if (ged_draw_scene_ref_is_shape(child_ref) &&
-	    (!ctx->require_geometry ||
-	     bsg_geometry_ref_kind(bsg_scene_ref_as_geometry(child_ref)) !=
-	     BSG_GEOMETRY_NODE_NONE)) {
-	ctx->geometry_ref = child_ref;
-	return 0;
-    }
-    return 1;
-}
-
-
-static bsg_scene_ref
-ged_draw_scene_ref_geometry_query_target(bsg_scene_ref ref)
-{
-    if (ged_draw_scene_ref_is_null(ref))
-	return ged_draw_scene_ref_null();
-
-    if (bsg_geometry_ref_kind(bsg_scene_ref_as_geometry(ref)) !=
-	    BSG_GEOMETRY_NODE_NONE)
-	return ref;
-
-    struct ged_draw_geometry_child_find_ctx ctx;
-    ctx.geometry_ref = ged_draw_scene_ref_null();
-    ctx.require_geometry = 1;
-    (void)ged_draw_scene_ref_foreach_child(ref,
-	    _ged_draw_scene_ref_find_geometry_child_cb, &ctx);
-    return ctx.geometry_ref;
-}
-
-
 static int
 ged_draw_scene_ref_set_visible(bsg_scene_ref ref, int visible)
 {
@@ -10046,19 +9517,6 @@ ged_draw_scene_ref_set_visible(bsg_scene_ref ref, int visible)
 	    0, NULL,
 	    0, NULL,
 	    0, 0) ? 1 : 0;
-}
-
-
-static int
-ged_draw_scene_ref_set_draw_size(bsg_scene_ref ref, fastf_t size)
-{
-    if (bsg_scene_ref_is_null(ref))
-	return 0;
-
-    return ged_draw_scene_ref_obol_set_placement(ref,
-	    0, NULL,
-	    0, NULL,
-	    1, size) ? 1 : 0;
 }
 
 
@@ -10122,16 +9580,6 @@ static int
 ged_draw_scene_ref_line_style(bsg_scene_ref ref)
 {
     return bsg_scene_line_style(ref);
-}
-
-
-static int
-ged_draw_scene_ref_set_non_database_source(bsg_scene_ref ref,
-					   int non_database_source)
-{
-    (void)ref;
-    (void)non_database_source;
-    return 0;
 }
 
 
@@ -13643,19 +13091,6 @@ cleanup:
 	bu_free(commands, "GED draw NMG model line-set commands");
     return ok;
 }
-
-
-static void
-_ged_draw_scene_ref_geometry_set_command_count(bsg_scene_ref ref, size_t vlen)
-{
-    ged_draw_shape_state *shape_data =
-	_ged_draw_shape_state_get_scene_ref(ref);
-    if (!shape_data)
-	return;
-    shape_data->geometry_command_count = vlen;
-    shape_data->geometry_revision++;
-}
-
 
 
 /*

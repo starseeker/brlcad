@@ -322,7 +322,7 @@ set(
   draw_obol.cpp
   draw.cpp
   ged.cpp
-  ged_view_legacy.cpp
+  ged_view_state.cpp
   ged_inside.c
   ged_track.c
   ged_util.cpp
@@ -338,19 +338,19 @@ set(
   trace.c
   vers.c
   vutil.c
-  bsg_ged_draw_brep.cpp
-  bsg_ged_draw_highlight.c
-  bsg_ged_draw_material.c
-  bsg_ged_draw_navigation.c
-  bsg_ged_draw_scene_root.c
-  bsg_ged_draw_transactions.c
-  bsg_ged_draw_tree.c
-  bsg_ged_draw_util.c
-  bsg_ged_draw_view.c
-  bsg_ged_draw_overlay.c
-  bsg_ged_draw_registry.c
-  bsg_ged_draw_records.c
-  bsg_ged_draw_source.c
+  ged_draw_brep.cpp
+  ged_draw_highlight.c
+  ged_draw_material.c
+  ged_draw_navigation.c
+  ged_draw_scene_root.c
+  ged_draw_transactions.c
+  ged_draw_tree.c
+  ged_draw_util.c
+  ged_draw_view.c
+  ged_draw_overlay.c
+  ged_draw_registry.c
+  ged_draw_records.c
+  ged_draw_source.c
   view/data_lines.c
   wdb_importFg4Section.c
 )
@@ -743,8 +743,8 @@ set(
   bot/ged_bot.h
   brep/ged_brep.h
   check/check_private.h
-  bsg_ged_draw_private.h
-  bsg_ged_draw_view_private.h
+  ged_draw_private.h
+  ged_draw_view_private.h
   ged_cmd_scanner.cpp
   ged_private.h
   include/plugin.h

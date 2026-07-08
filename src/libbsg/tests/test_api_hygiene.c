@@ -2057,27 +2057,27 @@ main(int argc, char **argv)
 	},
 	{
 	    "src",
-	    "bsg_ged_draw_private.h",
-	    "private GED draw bridge includes are confined to libged",
+	    "ged_draw_private.h",
+	    "private GED draw internals are confined to libged",
 	    "src/libbsg/tests/test_api_hygiene.c",
 	    NULL,
 	    "src/libged/"
 	},
 	{
 	    "include",
-	    "bsg_ged_draw_private.h",
-	    "installed headers must use ged/draw.h, not the private GED draw bridge",
+	    "ged_draw_private.h",
+	    "installed headers must use ged/draw.h, not private GED draw internals",
 	    NULL,
 	    NULL,
 	    NULL
 	},
 	{
 	    "src/libged",
-	    "bsg_ged_draw_private.h",
-	    "direct private GED draw bridge includes are limited to libged draw internals",
+	    "ged_draw_private.h",
+	    "direct private GED draw includes are limited to libged draw internals",
 	    "src/libged/CMakeLists.txt;src/libged/ged_private.h;src/libged/draw/bigE.c;src/libged/draw/draw.c;src/libged/dm/dm.c",
 	    NULL,
-	    "src/libged/bsg_ged_draw"
+	    "src/libged/ged_draw"
 	},
 	{
 	    "src",
@@ -2560,7 +2560,7 @@ main(int argc, char **argv)
 	"src/libbsg/vlist.c"
     };
     const char *vlist_producer_files[] = {
-	"src/libged/bsg_ged_draw.c",
+	"src/libged/ged_draw_source.c",
 	"src/libged/draw.cpp",
 	"src/libged/draw/draw.c",
 	"src/librt/primitives/generic.c",
@@ -2604,8 +2604,8 @@ main(int argc, char **argv)
 	"draw_scene("
     };
     const char *stage14c_tree_bridge_files[] = {
-	"src/libged/bsg_ged_draw_tree.c",
-	"src/libged/bsg_ged_draw_private.h"
+	"src/libged/ged_draw_tree.c",
+	"src/libged/ged_draw_private.h"
     };
     const char *stage14c_tree_bridge_patterns[] = {
 	"struct bsg_node *",
@@ -2626,7 +2626,7 @@ main(int argc, char **argv)
 	"ged_draw_group_ref_append_shape"
     };
     const char *stage14c_independent_scope_files[] = {
-	"src/libged/bsg_ged_draw_tree.c",
+	"src/libged/ged_draw_tree.c",
 	"src/libged/view/view.c"
     };
     const char *stage14c_independent_scope_patterns[] = {
@@ -2880,7 +2880,7 @@ main(int argc, char **argv)
 	"vdc_vhd"
     };
     const char *ged_typed_overlay_insert_files[] = {
-	"src/libged/bsg_ged_draw_overlay.c"
+	"src/libged/ged_draw_overlay.c"
     };
     const char *ged_typed_overlay_insert_patterns[] = {
 	"ged_draw_overlay_vlist_insert",
@@ -2890,8 +2890,8 @@ main(int argc, char **argv)
 	"rt_vlfree"
     };
     const char *ged_draw_geometry_publish_files[] = {
-	"src/libged/bsg_ged_draw_source.c",
-	"src/libged/bsg_ged_draw_private.h",
+	"src/libged/ged_draw_source.c",
+	"src/libged/ged_draw_private.h",
 	"src/libged/draw.cpp",
 	"src/libged/draw/draw.c",
 	"src/mged/dodraw.c"
@@ -3091,7 +3091,7 @@ main(int argc, char **argv)
 	"include/bsg/backend_scene.h"
     };
     const char *qtcad_quad_bridge_patterns[] = {
-	"bsg_ged_draw_private.h",
+	"ged_draw_private.h",
 	"bsg_scene_visit_db",
 	"draw_scene("
     };
@@ -3338,7 +3338,6 @@ main(int argc, char **argv)
 	"bsg_node *pl_owner",
 	"struct bsg_node *node",
 	"BSG_PL_GED_DRAW_SOURCE",
-	"bsg_ged_draw_source",
 	"bsg_payload_ged_draw_source"
     };
     const char *stage16_public_final_boundary_patterns[] = {
@@ -3936,7 +3935,7 @@ main(int argc, char **argv)
 		"GED bot plot/check visualization must use typed line features, not legacy vlblock fallback state");
     }
 
-    _scan_exact_file_for_patterns(srcroot, "src/libged/bsg_ged_draw_source.c",
+    _scan_exact_file_for_patterns(srcroot, "src/libged/ged_draw_source.c",
 	    ged_draw_source_modern_plot_patterns,
 	    sizeof(ged_draw_source_modern_plot_patterns) / sizeof(ged_draw_source_modern_plot_patterns[0]),
 	    "GED draw-source primitive publication must use typed publishers, not primitive ft_plot bridges");
@@ -3953,7 +3952,7 @@ main(int argc, char **argv)
 		"primitive scene-object hooks have been retired");
     }
 
-    _scan_exact_file_for_patterns(srcroot, "src/libged/bsg_ged_draw.c",
+    _scan_exact_file_for_patterns(srcroot, "src/libged/ged_draw_source.c",
 	    draw_source_lifecycle_patterns,
 	    sizeof(draw_source_lifecycle_patterns) / sizeof(draw_source_lifecycle_patterns[0]),
 	    "draw-source code must not use generic lifecycle data slots");

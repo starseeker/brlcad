@@ -1,4 +1,4 @@
-/*          B S G _ G E D _ D R A W _ N A V I G A T I O N . C
+/*              G E D _ D R A W _ N A V I G A T I O N . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,7 +17,7 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_navigation.c
+/** @file ged_draw_navigation.c
  *
  * Draw-tree shape and group navigation helpers.
  */
@@ -27,7 +27,7 @@
 #include "bu/malloc.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
+#include "./ged_draw_private.h"
 
 
 static int

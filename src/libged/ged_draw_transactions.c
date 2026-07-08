@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W _ T R A N S A C T I O N S . C
+/*                    G E D _ D R A W _ T R A N S A C T I O N S . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,9 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file libged/b_s_g___g_e_d___d_r_a_w___t_r_a_n_s_a_c_t_i_o_n_s_._c.c
+/** @file libged/ged_draw_transactions.c
  *
- * Draw transactions, database invalidation, and redraw compatibility bridge.
+ * Draw transactions, database invalidation, and redraw synchronization.
  */
 
 #include "common.h"
@@ -44,8 +44,8 @@
 #include "ged/selection_state.h"
 #include "../librt/librt_private.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
-#include "./bsg_ged_draw_view_private.h"
+#include "./ged_draw_private.h"
+#include "./ged_draw_view_private.h"
 
 struct ged_draw_db_update_ctx {
     struct ged *gedp;
@@ -1863,7 +1863,8 @@ ged_draw_apply_transaction(struct ged *gedp,
 
     struct ged_draw_transaction_result local_result;
     int use_local_result = 0;
-    if (!result && _ged_draw_observers_have_active(gedp)) {
+    if (!result && (_ged_draw_observers_have_active(gedp) ||
+	    _ged_draw_txn_kind_changes_scene(txn->kind))) {
 	ged_draw_transaction_result_init(&local_result);
 	result = &local_result;
 	use_local_result = 1;

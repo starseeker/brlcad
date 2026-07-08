@@ -1,4 +1,4 @@
-/*             B S G _ G E D _ D R A W _ R E G I S T R Y . C
+/*                 G E D _ D R A W _ R E G I S T R Y . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,13 +17,12 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_registry.c
+/** @file ged_draw_registry.c
  *
- * GED draw registry and draw-shape state compatibility bridge.
+ * GED draw registry and draw-shape state indexing.
  *
- * This file owns the temporary libged registry used to map legacy GED draw
- * refs to retained BSG nodes.  The target architecture is semantic draw
- * records and typed refs, not node-backed registry lookup.
+ * This file owns typed draw refs, fast lookup indexes, and source-local state
+ * used by the Obol/libbrlobol draw pipeline.
  */
 
 #include "common.h"
@@ -35,8 +34,8 @@
 #include "bu/ptbl.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
-#include "./bsg_ged_draw_shape_state_private.h"
+#include "./ged_draw_private.h"
+#include "./ged_draw_shape_state_private.h"
 
 
 struct ged_draw_registry_entry {

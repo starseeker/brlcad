@@ -1,4 +1,4 @@
-/*          B S G _ G E D _ D R A W _ V I E W _ P R I V A T E . H
+/*              G E D _ D R A W _ V I E W _ P R I V A T E . H
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,17 +17,17 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_view_private.h
+/** @file ged_draw_view_private.h
  *
- * Narrow BSG-backed view adapter surface for libged internals.
+ * Private view adapter surface for libged internals.
  *
  * Public view feature and polygon declarations live in ged/draw.h.  This header
- * only carries private selection routing and transaction hooks still needed by
- * the transitional view adapter.
+ * only carries private selection routing and transaction hooks needed by GED's
+ * view adapter.
  */
 
-#ifndef LIBGED_BSG_GED_DRAW_VIEW_PRIVATE_H
-#define LIBGED_BSG_GED_DRAW_VIEW_PRIVATE_H
+#ifndef LIBGED_GED_DRAW_VIEW_PRIVATE_H
+#define LIBGED_GED_DRAW_VIEW_PRIVATE_H
 
 #include "common.h"
 
@@ -58,7 +58,7 @@ GED_EXPORT extern void ged_draw_view_context_lod_bounds_callback_set(void *view_
 
 __END_DECLS
 
-#endif /* LIBGED_BSG_GED_DRAW_VIEW_PRIVATE_H */
+#endif /* LIBGED_GED_DRAW_VIEW_PRIVATE_H */
 
 /*
  * Local Variables:

@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W _ R O O T . C
+/*                    G E D _ D R A W _ R O O T . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,9 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file libged/b_s_g___g_e_d___d_r_a_w___r_o_o_t_._c.c
+/** @file libged/ged_draw_scene_root.c
  *
- * Retained scene-root and view-root compatibility bridge.
+ * Scene-root and view-root management for GED draw state.
  */
 
 #include "common.h"
@@ -37,7 +37,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "rt/view.h"
-#include "./bsg_ged_draw_private.h"
+#include "./ged_draw_private.h"
 #include "./ged_private.h"
 
 void *

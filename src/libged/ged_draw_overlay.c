@@ -1,4 +1,4 @@
-/*              B S G _ G E D _ D R A W _ O V E R L A Y . C
+/*                  G E D _ D R A W _ O V E R L A Y . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,7 +17,7 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_overlay.c
+/** @file ged_draw_overlay.c
  *
  * Typed GED overlay insertion helpers.
  */
@@ -29,7 +29,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "./ged_private.h"
-#include "./bsg_ged_draw_private.h"
+#include "./ged_draw_private.h"
 
 
 void

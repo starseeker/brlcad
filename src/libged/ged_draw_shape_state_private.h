@@ -1,4 +1,4 @@
-/*     B S G _ G E D _ D R A W _ S H A P E _ S T A T E _ P R I V A T E . H
+/*         G E D _ D R A W _ S H A P E _ S T A T E _ P R I V A T E . H
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,13 +17,13 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_shape_state_private.h
+/** @file ged_draw_shape_state_private.h
  *
  * Registry/source-local draw-shape state layout.
  */
 
-#ifndef LIBGED_BSG_GED_DRAW_SHAPE_STATE_PRIVATE_H
-#define LIBGED_BSG_GED_DRAW_SHAPE_STATE_PRIVATE_H
+#ifndef LIBGED_GED_DRAW_SHAPE_STATE_PRIVATE_H
+#define LIBGED_GED_DRAW_SHAPE_STATE_PRIVATE_H
 
 #include "common.h"
 
@@ -68,4 +68,4 @@ typedef struct ged_draw_shape_state {
 ged_draw_shape_state *ged_draw_shape_state_get_scene_rt_ref(
 	rt_view_scene_ref scene_ref);
 
-#endif /* LIBGED_BSG_GED_DRAW_SHAPE_STATE_PRIVATE_H */
+#endif /* LIBGED_GED_DRAW_SHAPE_STATE_PRIVATE_H */

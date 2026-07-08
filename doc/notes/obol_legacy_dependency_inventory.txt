@@ -42,7 +42,7 @@ Current Direct Legacy Owners
 
 Direct non-test `rt/view_legacy_bsg.h` inclusion is limited to boundary files:
 
-* `src/libged/ged_view_legacy.cpp`: GED retained-view bridge and adapter
+* `src/libged/ged_view_state.cpp`: GED view-state bridge and adapter
   installation.
 * `src/librt/view_legacy_bsg.c`: RT legacy BSG adapter implementation and
   remaining public neutral wrapper dispatch pending the next split.

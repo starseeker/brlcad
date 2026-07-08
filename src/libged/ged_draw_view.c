@@ -1,4 +1,4 @@
-/*                B S G _ G E D _ D R A W _ V I E W . C
+/*                    G E D _ D R A W _ V I E W . C
  * BRL-CAD
  *
  * Copyright (c) 2026 United States Government as represented by
@@ -17,14 +17,12 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file bsg_ged_draw_view.c
+/** @file ged_draw_view.c
  *
  * GED view-feature wrappers backed exclusively by Obol/libbrlobol.
  *
- * The historical implementation in this file maintained a second BSG feature
- * store as a fallback.  The draw stack is now Obol-native: absent Obol view
- * state is treated as a no-op/failure condition, not as permission to mutate
- * retained legacy records.
+ * Absent Obol view state is treated as a no-op/failure condition, not as
+ * permission to synthesize alternate retained records.
  */
 
 #include "common.h"
@@ -35,8 +33,8 @@
 #include "bu/malloc.h"
 #include "bu/vls.h"
 #include "rt/view.h"
-#include "./bsg_ged_draw_private.h"
-#include "./bsg_ged_draw_view_private.h"
+#include "./ged_draw_private.h"
+#include "./ged_draw_view_private.h"
 
 
 int
