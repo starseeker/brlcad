@@ -39,7 +39,7 @@ static int open_help = 0;
 static int open_only = 0;
 
 static int draw_help = 0;
-static int draw_mode = 0;
+static int draw_mode_opt = 0;
 static int draw_wireframe = 0;
 static int draw_shaded = 0;
 static int draw_shaded_all = 0;
@@ -140,7 +140,7 @@ static const struct bu_opt_desc draw_opts[] = {
     {"V", "view", "name", &bu_opt_vls, (void *)&draw_view_name, "Specify view to draw on"},
     {"", "help", "", NULL, (void *)&draw_help, "Print help and exit"},
     {"?", "", "", NULL, (void *)&draw_help, ""},
-    {"m", "mode", "#", &bu_opt_int, (void *)&draw_mode, "0=wireframe;1=shaded bots;2=shaded;3=evaluated wire;4=hidden line;5=evaluated points"},
+    {"m", "mode", "#", &bu_opt_int, (void *)&draw_mode_opt, "0=wireframe;1=shaded bots;2=shaded;3=evaluated wire;4=hidden line;5=evaluated points"},
     {"", "wireframe", "", NULL, (void *)&draw_wireframe, "Draw using only wireframes (mode = 0)"},
     {"", "shaded", "", NULL, (void *)&draw_shaded, "Shade bots, breps and polysolids (mode = 1)"},
     {"", "shaded-all", "", NULL, (void *)&draw_shaded_all, "Shade all solids, not evaluated (mode = 2)"},
