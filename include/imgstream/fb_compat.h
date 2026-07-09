@@ -65,7 +65,7 @@ enum imgstream_fb_diagnostic_kind {
     IMGSTREAM_FB_DIAGNOSTIC_TXT
 };
 
-struct imgstream_fb_spec_info {
+struct imgstream_fb_spec_info_s {
     enum imgstream_fb_spec_kind kind;
     enum imgstream_fb_remote_kind remote;
     enum imgstream_fb_display_kind display;
@@ -79,28 +79,31 @@ struct imgstream_fb_spec_info {
     const char *device;
     size_t device_len;
 };
+typedef struct imgstream_fb_spec_info_s imgstream_fb_spec_info_t;
 
-struct imgstream_fb_view {
+struct imgstream_fb_view_s {
     int xcenter;
     int ycenter;
     int xzoom;
     int yzoom;
 };
+typedef struct imgstream_fb_view_s imgstream_fb_view_t;
 
-struct imgstream_fb_cursor {
+struct imgstream_fb_cursor_s {
     int mode;
     int x;
     int y;
 };
+typedef struct imgstream_fb_cursor_s imgstream_fb_cursor_t;
 
 struct imgstream_fb_display_host {
-    int (*open)(imgstream_fb_t *fb, const struct imgstream_fb_spec_info *info, void *data);
+    int (*open)(imgstream_fb_t *fb, const imgstream_fb_spec_info_t *info, void *data);
     void (*close)(imgstream_fb_t *fb, void *data);
     int (*flush)(imgstream_fb_t *fb, void *data);
     int (*reset)(imgstream_fb_t *fb, void *data);
     int (*viewport)(imgstream_fb_t *fb, int left, int top, int right, int bottom, void *data);
-    int (*view)(imgstream_fb_t *fb, const struct imgstream_fb_view *view, void *data);
-    int (*cursor)(imgstream_fb_t *fb, const struct imgstream_fb_cursor *cursor, void *data);
+    int (*view)(imgstream_fb_t *fb, const imgstream_fb_view_t *view, void *data);
+    int (*cursor)(imgstream_fb_t *fb, const imgstream_fb_cursor_t *cursor, void *data);
     int (*scursor)(imgstream_fb_t *fb, int mode, int x, int y, void *data);
     int (*setcursor)(imgstream_fb_t *fb, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig, void *data);
     int (*poll)(imgstream_fb_t *fb, void *data);
@@ -114,7 +117,7 @@ struct imgstream_fb_colormap {
 };
 
 IMGSTREAM_EXPORT enum imgstream_fb_spec_kind imgstream_fb_spec_kind(const char *spec);
-IMGSTREAM_EXPORT int imgstream_fb_spec_info(const char *spec, struct imgstream_fb_spec_info *info);
+IMGSTREAM_EXPORT int imgstream_fb_spec_info(const char *spec, imgstream_fb_spec_info_t *info);
 IMGSTREAM_EXPORT const char *imgstream_fb_spec_kind_name(enum imgstream_fb_spec_kind kind);
 IMGSTREAM_EXPORT int imgstream_fb_spec_supported(const char *spec);
 IMGSTREAM_EXPORT int imgstream_fb_display_host_set(const struct imgstream_fb_display_host *host, void *data);

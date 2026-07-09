@@ -52,8 +52,8 @@ struct imgstream_fb {
     struct imgstream_fb_colormap colormap;
     struct imgstream_fb **children;
     size_t child_count;
-    struct imgstream_fb_view view;
-    struct imgstream_fb_cursor cursor;
+    imgstream_fb_view_t view;
+    imgstream_fb_cursor_t cursor;
 };
 
 
@@ -205,7 +205,7 @@ fb_file_path_from_spec(const char *spec)
 
 
 static int
-fb_remote_info_from_legacy_spec(const char *spec, struct imgstream_fb_spec_info *info)
+fb_remote_info_from_legacy_spec(const char *spec, imgstream_fb_spec_info_t *info)
 {
     const char *file = spec;
     const char *colon = NULL;
@@ -265,7 +265,7 @@ fb_remote_info_from_legacy_spec(const char *spec, struct imgstream_fb_spec_info 
 
 
 static int
-fb_remote_info_from_spec(const char *spec, struct imgstream_fb_spec_info *info)
+fb_remote_info_from_spec(const char *spec, imgstream_fb_spec_info_t *info)
 {
     if (!spec || !info)
 	return -1;
@@ -496,7 +496,7 @@ imgstream_fb_spec_kind(const char *spec)
 
 
 int
-imgstream_fb_spec_info(const char *spec, struct imgstream_fb_spec_info *info)
+imgstream_fb_spec_info(const char *spec, imgstream_fb_spec_info_t *info)
 {
     if (!info)
 	return -1;
@@ -903,7 +903,7 @@ imgstream_fb_open(const char *spec, size_t width, size_t height)
 	fb->diagnostic_kind = diagnostic_kind;
 	fb->diagnostic_flags = fb_diagnostic_flags_from_spec(spec);
 	if (kind == IMGSTREAM_FB_SPEC_DISPLAY) {
-	    struct imgstream_fb_spec_info info;
+	    imgstream_fb_spec_info_t info;
 	    struct imgstream_fb_display_host host = fb_display_host;
 	    void *host_data = fb_display_host_data;
 	    if (!fb_display_host_registered() ||

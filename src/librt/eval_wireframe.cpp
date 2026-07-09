@@ -2408,8 +2408,8 @@ bigE_build_leaf_face_index(union E_tree *leaf,
 
     index->rtree.reset(new bigE_face_rtree);
     for (size_t i = 0; i < index->faces.size(); i++) {
-	double min_pt[3];
-	double max_pt[3];
+	double min_pt[3] = {0.0, 0.0, 0.0};
+	double max_pt[3] = {0.0, 0.0, 0.0};
 	bigE_face_bounds(index->faces[i], min_pt, max_pt, 0.0);
 	index->rtree->Insert(min_pt, max_pt, (int)i);
     }
@@ -2435,8 +2435,8 @@ bigE_collect_face_pairs(const bigE_leaf_face_index *a,
 	tree_ordered = true;
     } else if (b->rtree) {
 	for (size_t i = 0; i < a->faces.size(); i++) {
-	    double min_pt[3];
-	    double max_pt[3];
+	    double min_pt[3] = {0.0, 0.0, 0.0};
+	    double max_pt[3] = {0.0, 0.0, 0.0};
 	    bigE_face_bounds(a->faces[i], min_pt, max_pt, tol->dist);
 	    bigE_face_pair_search_context ctx;
 	    ctx.pairs = pairs;
@@ -2447,8 +2447,8 @@ bigE_collect_face_pairs(const bigE_leaf_face_index *a,
 	tree_ordered = true;
     } else if (a->rtree) {
 	for (size_t i = 0; i < b->faces.size(); i++) {
-	    double min_pt[3];
-	    double max_pt[3];
+	    double min_pt[3] = {0.0, 0.0, 0.0};
+	    double max_pt[3] = {0.0, 0.0, 0.0};
 	    bigE_face_bounds(b->faces[i], min_pt, max_pt, tol->dist);
 	    bigE_face_pair_search_context ctx;
 	    ctx.pairs = pairs;

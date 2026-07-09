@@ -781,17 +781,17 @@ static std::string
 ged_obol_database_source_instance_key_for_mode(
     void *view_ctx,
     const char *path,
-    int ged_draw_mode)
+    int draw_mode)
 {
     std::string key = ged_obol_database_source_instance_key(view_ctx, path);
-    if (key.empty() || ged_draw_mode < 0 ||
-	ged_draw_mode == GED_DRAW_MODE_WIRE ||
+    if (key.empty() || draw_mode < 0 ||
+	draw_mode == GED_DRAW_MODE_WIRE ||
 	ged_obol_view_scope_is_independent(view_ctx))
 	return key;
 
     char mode_buf[64] = {0};
     snprintf(mode_buf, sizeof(mode_buf), "%s%d",
-	     ged_obol_database_source_mode_key_marker, ged_draw_mode);
+	     ged_obol_database_source_mode_key_marker, draw_mode);
     key += mode_buf;
     return key;
 }
@@ -856,10 +856,10 @@ ged_obol_database_source_summary_ged_mode(
 static int
 ged_obol_database_source_summary_matches_mode(
     const BRLObolDatabaseSourceSummary &summary,
-    int ged_draw_mode)
+    int draw_mode)
 {
-    return ged_draw_mode < 0 ||
-	   ged_obol_database_source_summary_ged_mode(summary) == ged_draw_mode;
+    return draw_mode < 0 ||
+	   ged_obol_database_source_summary_ged_mode(summary) == draw_mode;
 }
 
 static std::string
@@ -1031,7 +1031,7 @@ static int
 ged_obol_source_state_from_database_source(ged_obol_source_state &state,
 	struct ged *gedp,
 	const char *path,
-	int ged_draw_mode)
+	int draw_mode)
 {
     if (!gedp || !path || !path[0])
 	return 0;
@@ -1051,7 +1051,7 @@ ged_obol_source_state_from_database_source(ged_obol_source_state &state,
 
     state.valid = true;
     state.viewMatched = true;
-    state.drawMode = ged_obol_database_draw_mode_from_ged(ged_draw_mode);
+    state.drawMode = ged_obol_database_draw_mode_from_ged(draw_mode);
     if (have_source) {
 	state.sourceRevision =
 	    ged_obol_fold_revision(source_summary.source_revision);
@@ -1106,7 +1106,7 @@ ged_obol_source_state_from_database_source(ged_obol_source_state &state,
 	const char *group_path = bu_vls_cstr(&owner_group_path);
 	state.groupValid = true;
 	state.groupPath = group_path;
-	state.groupDrawMode = ged_obol_lod_draw_mode_from_ged(ged_draw_mode);
+	state.groupDrawMode = ged_obol_lod_draw_mode_from_ged(draw_mode);
 	state.groupVisible = true;
 	state.groupOverlay = false;
 	state.groupTransparency = state.transparency;
@@ -1180,25 +1180,25 @@ static ged_obol_source_state
 ged_obol_find_source_state(struct ged *gedp,
 			   void *view_ctx,
 			   const char *path,
-			   int ged_draw_mode)
+			   int draw_mode)
 {
     if (!gedp || !path || !path[0])
 	return ged_obol_source_state();
 
     ged_obol_source_state direct_state;
     if (ged_obol_source_state_from_database_source(direct_state, gedp, path,
-	    ged_draw_mode))
+	    draw_mode))
 	return direct_state;
 
-    if (ged_draw_mode >= 0 &&
-	ged_draw_path_state(gedp, view_ctx, path, ged_draw_mode) <= 0)
+    if (draw_mode >= 0 &&
+	ged_draw_path_state(gedp, view_ctx, path, draw_mode) <= 0)
 	return ged_obol_source_state();
 
     ged_obol_find_source_state_context ctx;
     ctx.gedp = gedp;
     ctx.viewCtx = view_ctx;
     ctx.path = path;
-    ctx.mode = ged_draw_mode;
+    ctx.mode = draw_mode;
     ged_draw_foreach_shape_record(gedp, ged_obol_find_source_state_cb, &ctx);
     return ctx.state;
 }
@@ -2010,7 +2010,7 @@ ged_obol_preserve_source_display_states(
     SoBRLSceneController *scene,
     void *view_ctx,
     const std::vector<std::string> &targets,
-    int ged_draw_mode)
+    int draw_mode)
 {
     std::vector<ged_obol_preserved_source_display_state> states;
     if (!scene || targets.empty())
@@ -2024,7 +2024,7 @@ ged_obol_preserve_source_display_states(
 	    !summary.valid ||
 	    !ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
 	    !ged_obol_database_source_summary_matches_mode(summary,
-		    ged_draw_mode) ||
+		    draw_mode) ||
 	    !ged_obol_source_path_matches_any_target(
 		summary.path.getString(), targets))
 	    continue;
@@ -2183,7 +2183,7 @@ ged_obol_replace_path(struct ged *gedp,
 		      void *view_ctx,
 		      struct db_i *dbip,
 		      const char *path,
-		      int ged_draw_mode,
+		      int draw_mode,
 		      uint32_t source_revision,
 		      SoBRLSceneController *scene,
 		      int use_retained_state = 1,
@@ -2199,7 +2199,7 @@ ged_obol_replace_path(struct ged *gedp,
 	return 0;
 
     ged_obol_source_state source_state = use_retained_state ?
-					 ged_obol_find_source_state(gedp, view_ctx, path, ged_draw_mode) :
+					 ged_obol_find_source_state(gedp, view_ctx, path, draw_mode) :
 					 ged_obol_source_state();
     const bool retained_state_valid = source_state.valid;
     const uint32_t retained_source_revision = source_state.sourceRevision;
@@ -2213,11 +2213,11 @@ ged_obol_replace_path(struct ged *gedp,
 	(source_instance_key_override && source_instance_key_override[0]) ?
 	std::string(source_instance_key_override) :
 	ged_obol_database_source_instance_key_for_mode(view_ctx, path,
-	    ged_draw_mode);
+	    draw_mode);
     const std::string representation_key = instance_key;
     const int next_draw_mode = ged_obol_database_draw_mode_from_ged(
-				   ged_draw_mode);
-    if (ged_draw_mode >= 0 &&
+				   draw_mode);
+    if (draw_mode >= 0 &&
 	(!source_instance_key_override || !source_instance_key_override[0])) {
 	const std::string base_instance_key =
 	    ged_obol_database_source_instance_key(view_ctx, path);
@@ -2239,7 +2239,7 @@ ged_obol_replace_path(struct ged *gedp,
 			    path, promoted_revision) >= 0)
 			(void)scene->setDatabaseSourceInstanceRepresentation(
 			    instance_key.c_str(), representation_key.c_str(),
-			    ged_draw_mode);
+			    draw_mode);
 		} else {
 		    (void)scene->removeDatabaseSourceInstance(
 			base_instance_key.c_str());
@@ -2262,7 +2262,7 @@ ged_obol_replace_path(struct ged *gedp,
 			 instance_key.c_str()) &&
 	    BU_STR_EQUAL(existing_summary.representationKey.getString(),
 			 representation_key.c_str()) &&
-	    existing_summary.representationMode == ged_draw_mode &&
+	    existing_summary.representationMode == draw_mode &&
 	    existing_summary.drawMode == next_draw_mode;
 	if (same_database_source)
 	    source_revision = existing_summary.sourceRevision;
@@ -2310,7 +2310,7 @@ ged_obol_replace_path(struct ged *gedp,
 	}
     }
     const bool had_group_state = source_state.groupValid;
-    if (ged_draw_mode >= 0) {
+    if (draw_mode >= 0) {
 	source_state.valid = true;
 	if (!ged_obol_database_source_publication_appearance) {
 	    source_state.groupValid = true;
@@ -2318,7 +2318,7 @@ ged_obol_replace_path(struct ged *gedp,
 	if (source_state.groupValid && source_state.groupPath.empty())
 	    source_state.groupPath = ged_obol_skip_leading_slash(path);
 	source_state.groupDrawMode =
-	    ged_obol_lod_draw_mode_from_ged(ged_draw_mode);
+	    ged_obol_lod_draw_mode_from_ged(draw_mode);
 	if (source_state.groupValid && !had_group_state) {
 	    source_state.groupVisible = true;
 	    source_state.groupTransparency = source_state.transparency;
@@ -2348,7 +2348,7 @@ ged_obol_replace_path(struct ged *gedp,
 	source_state.groupValid = true;
 	source_state.groupPath = ged_obol_database_source_publication_group_path;
 	source_state.groupDrawMode =
-	    ged_obol_lod_draw_mode_from_ged(ged_draw_mode);
+	    ged_obol_lod_draw_mode_from_ged(draw_mode);
 	source_state.groupVisible = true;
 	source_state.groupOverlay = false;
 	source_state.groupTransparency = source_state.transparency;
@@ -2360,7 +2360,7 @@ ged_obol_replace_path(struct ged *gedp,
 	    source_state.groupValid = true;
 	    source_state.groupPath = explicit_group_path;
 	    source_state.groupDrawMode =
-		ged_obol_lod_draw_mode_from_ged(ged_draw_mode);
+		ged_obol_lod_draw_mode_from_ged(draw_mode);
 	    source_state.groupVisible = true;
 	    source_state.groupOverlay = false;
 	    source_state.groupTransparency = source_state.transparency;
@@ -2381,7 +2381,7 @@ ged_obol_replace_path(struct ged *gedp,
 	source_state.groupPath.c_str() : NULL;
     publish_state.database = dbip;
     publish_state.drawMode = next_draw_mode;
-    publish_state.representationMode = ged_draw_mode;
+    publish_state.representationMode = draw_mode;
     publish_state.sourceRevisionValid = source_revision != 0 ? TRUE : FALSE;
     publish_state.sourceRevision = source_revision;
     if (source_state.sourceRevision != 0) {
@@ -2404,7 +2404,7 @@ ged_obol_replace_path(struct ged *gedp,
     if (!preserve_external_current) {
 	publish_state.roleFlagsValid = TRUE;
 	publish_state.roleFlags = SoBRLDatabaseSource::REALIZATION_ROLE_NONE;
-	if (ged_draw_mode == GED_DRAW_MODE_EVAL_POINTS)
+	if (draw_mode == GED_DRAW_MODE_EVAL_POINTS)
 	    publish_state.roleFlags |=
 		SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
     }
@@ -2464,7 +2464,7 @@ ged_obol_replace_path_and_realize(struct ged *gedp,
 				  void *view_ctx,
 				  struct db_i *dbip,
 				  const char *path,
-				  int ged_draw_mode,
+				  int draw_mode,
 				  uint32_t source_revision,
 				  SoBRLSceneController *scene,
 				  int use_retained_state = 1,
@@ -2472,14 +2472,14 @@ ged_obol_replace_path_and_realize(struct ged *gedp,
 				  const struct ged_draw_appearance_settings *appearance_settings = NULL)
 {
     const int changed = ged_obol_replace_path(gedp, view_ctx, dbip, path,
-			ged_draw_mode, source_revision, scene,
+			draw_mode, source_revision, scene,
 			use_retained_state, preserve_existing_revision,
 			appearance_settings);
     if (changed < 0)
 	return changed;
 
-    if ((ged_draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
-	 ged_draw_mode == GED_DRAW_MODE_EVAL_POINTS) &&
+    if ((draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
+	 draw_mode == GED_DRAW_MODE_EVAL_POINTS) &&
 	ged_draw_obol_database_source_realize_for_path(gedp, path))
 	return 1;
 
@@ -2489,7 +2489,7 @@ ged_obol_replace_path_and_realize(struct ged *gedp,
 static int
 ged_obol_replace_paths(struct db_i *dbip,
 		       const std::vector<std::string> &paths,
-		       int ged_draw_mode,
+		       int draw_mode,
 		       uint32_t source_revision,
 		       struct ged *gedp,
 		       void *view_ctx,
@@ -2507,7 +2507,7 @@ ged_obol_replace_paths(struct db_i *dbip,
     for (const std::string &path : paths) {
 	if (ged_obol_replace_path_and_realize(gedp, view_ctx, dbip,
 					      path.c_str(),
-					      ged_draw_mode, source_revision, scene,
+					      draw_mode, source_revision, scene,
 					      use_retained_state,
 					      preserve_existing_revision,
 					      appearance_settings) > 0)
@@ -2561,7 +2561,7 @@ ged_obol_collect_database_sources_matching(
     const char *target_path,
     size_t component_first_idx,
     int allow_path_prefix,
-    int ged_draw_mode)
+    int draw_mode)
 {
     if (!scene || !target_path || !target_path[0])
 	return;
@@ -2576,7 +2576,7 @@ ged_obol_collect_database_sources_matching(
 	if (!source->getSummary(summary) || !summary.valid ||
 	    !ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
 	    !ged_obol_database_source_summary_matches_mode(summary,
-		    ged_draw_mode))
+		    draw_mode))
 	    continue;
 
 	const char *source_path = source->path.getValue().getString();
@@ -2602,7 +2602,7 @@ ged_obol_collect_database_source_instance_keys_matching(
     const char *target_path,
     size_t component_first_idx,
     int allow_path_prefix,
-    int ged_draw_mode)
+    int draw_mode)
 {
     if (!scene || !target_path || !target_path[0])
 	return;
@@ -2614,7 +2614,7 @@ ged_obol_collect_database_source_instance_keys_matching(
 	    !summary.valid ||
 	    !ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
 	    !ged_obol_database_source_summary_matches_mode(summary,
-		    ged_draw_mode))
+		    draw_mode))
 	    continue;
 
 	const char *source_path = summary.path.getString();
@@ -2640,7 +2640,7 @@ ged_obol_matching_database_source_paths(
     const std::vector<std::string> &targets,
     size_t component_first_idx,
     int allow_path_prefix,
-    int ged_draw_mode)
+    int draw_mode)
 {
     std::vector<std::string> paths;
     if (!scene)
@@ -2649,7 +2649,7 @@ ged_obol_matching_database_source_paths(
     for (const std::string &target : targets)
 	ged_obol_collect_database_sources_matching(paths, scene, view_ctx,
 		target.c_str(), component_first_idx, allow_path_prefix,
-		ged_draw_mode);
+		draw_mode);
     return paths;
 }
 
@@ -2658,7 +2658,7 @@ ged_obol_primary_matching_database_source_paths(
     struct ged *gedp,
     void *view_ctx,
     const std::vector<std::string> &targets,
-    int ged_draw_mode)
+    int draw_mode)
 {
     std::vector<std::string> source_paths;
     if (!gedp || targets.empty())
@@ -2671,7 +2671,7 @@ ged_obol_primary_matching_database_source_paths(
 
     for (const std::string &target : targets) {
 	ged_obol_collect_database_sources_matching(source_paths,
-		primary_scene, view_ctx, target.c_str(), 0, 1, ged_draw_mode);
+		primary_scene, view_ctx, target.c_str(), 0, 1, draw_mode);
     }
     ged_obol_remove_shadowed_source_paths(source_paths);
     return source_paths;
@@ -2684,7 +2684,7 @@ ged_obol_matching_database_source_instance_keys(
     const std::vector<std::string> &targets,
     size_t component_first_idx,
     int allow_path_prefix,
-    int ged_draw_mode)
+    int draw_mode)
 {
     std::vector<std::string> instance_keys;
     if (!scene)
@@ -2693,7 +2693,7 @@ ged_obol_matching_database_source_instance_keys(
     for (const std::string &target : targets)
 	ged_obol_collect_database_source_instance_keys_matching(
 	    instance_keys, scene, view_ctx, target.c_str(),
-	    component_first_idx, allow_path_prefix, ged_draw_mode);
+	    component_first_idx, allow_path_prefix, draw_mode);
     return instance_keys;
 }
 
@@ -2706,24 +2706,24 @@ ged_obol_replace_matching_database_sources(
     int allow_path_prefix,
     uint32_t source_revision,
     SoBRLSceneController *scene,
-    int ged_draw_mode)
+    int draw_mode)
 {
     if (!gedp || !gedp->dbip || !scene || targets.empty())
 	return 0;
 
     std::vector<std::string> source_paths =
 	ged_obol_matching_database_source_paths(scene, view_ctx, targets,
-	    component_first_idx, allow_path_prefix, ged_draw_mode);
+	    component_first_idx, allow_path_prefix, draw_mode);
     ged_obol_remove_shadowed_source_paths(source_paths);
     if (source_paths.empty())
 	return 0;
 
     std::vector<ged_obol_drawn_source_path_mode> source_path_modes =
-	ged_obol_drawn_source_path_modes(gedp, view_ctx, ged_draw_mode,
+	ged_obol_drawn_source_path_modes(gedp, view_ctx, draw_mode,
 					 &source_paths);
     if (source_path_modes.empty()) {
 	for (const std::string &source_path : source_paths) {
-	    const int selected_mode = ged_draw_mode >= 0 ? ged_draw_mode :
+	    const int selected_mode = draw_mode >= 0 ? draw_mode :
 				      ged_obol_drawn_path_mode(gedp, view_ctx,
 					  source_path.c_str());
 	    ged_obol_append_unique_path_mode(source_path_modes,
@@ -2745,7 +2745,7 @@ ged_obol_mark_matching_database_sources_stale(
     int allow_path_prefix,
     uint32_t stale_reason,
     SoBRLSceneController *scene,
-    int ged_draw_mode)
+    int draw_mode)
 {
     if (!scene || targets.empty())
 	return 0;
@@ -2753,7 +2753,7 @@ ged_obol_mark_matching_database_sources_stale(
     std::vector<std::string> instance_keys =
 	ged_obol_matching_database_source_instance_keys(scene, view_ctx,
 	    targets, component_first_idx, allow_path_prefix,
-	    ged_draw_mode);
+	    draw_mode);
     if (instance_keys.empty())
 	return 0;
 
@@ -3042,7 +3042,7 @@ static int
 ged_obol_remove_paths(const std::vector<std::string> &paths,
 		      void *view_ctx,
 		      SoBRLSceneController *scene,
-		      int ged_draw_mode = -1)
+		      int draw_mode = -1)
 {
     if (paths.empty() || !scene)
 	return 0;
@@ -3055,7 +3055,7 @@ ged_obol_remove_paths(const std::vector<std::string> &paths,
 	    !summary.valid ||
 	    !ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
 	    !ged_obol_database_source_summary_matches_mode(summary,
-		    ged_draw_mode))
+		    draw_mode))
 	    continue;
 
 	if (ged_obol_source_path_matches_any_target(summary.path.getString(),
@@ -3069,7 +3069,7 @@ ged_obol_remove_paths(const std::vector<std::string> &paths,
 	for (const std::string &path : paths) {
 	    const std::string instance_key =
 		ged_obol_database_source_instance_key_for_mode(view_ctx,
-		    path.c_str(), ged_draw_mode);
+		    path.c_str(), draw_mode);
 	    if (!instance_key.empty())
 		ged_obol_append_unique_path(instance_keys,
 					    instance_key.c_str());
@@ -3113,7 +3113,7 @@ ged_obol_append_existing_database_source_instance_key(
     std::vector<std::string> &instance_keys,
     SoBRLSceneController *scene,
     const char *source_instance_key,
-    int ged_draw_mode)
+    int draw_mode)
 {
     if (!scene || !source_instance_key || !source_instance_key[0])
 	return 0;
@@ -3126,13 +3126,13 @@ ged_obol_append_existing_database_source_instance_key(
     BRLObolDatabaseSourceSummary summary;
     if (source->getSummary(summary) && summary.valid) {
 	if (!ged_obol_database_source_summary_matches_mode(summary,
-		ged_draw_mode))
+		draw_mode))
 	    return 0;
 	ged_obol_append_database_source_instance_key(instance_keys, summary);
 	return 1;
     }
 
-    if (ged_draw_mode >= 0)
+    if (draw_mode >= 0)
 	return 0;
     ged_obol_append_unique_path(instance_keys, source_instance_key);
     return 1;
@@ -3164,7 +3164,7 @@ static std::vector<std::string>
 ged_obol_database_source_instance_keys_for_path(
     struct ged *gedp,
     const char *path,
-    int ged_draw_mode,
+    int draw_mode,
     int allow_path_prefix)
 {
     std::vector<std::string> instance_keys;
@@ -3178,12 +3178,12 @@ ged_obol_database_source_instance_keys_for_path(
 	return instance_keys;
 
     (void)ged_obol_append_existing_database_source_instance_key(
-	instance_keys, scene, path, ged_draw_mode);
+	instance_keys, scene, path, draw_mode);
 
     if (ged_obol_database_source_publication_depth > 0) {
 	const int publication_mode =
 	    ged_obol_database_source_publication_mode >= 0 ?
-	    ged_obol_database_source_publication_mode : ged_draw_mode;
+	    ged_obol_database_source_publication_mode : draw_mode;
 	if (publication_mode >= 0) {
 	    const std::string mode_key =
 		ged_obol_database_source_instance_key_for_mode(
@@ -3207,7 +3207,7 @@ ged_obol_database_source_instance_keys_for_path(
 
 	ged_obol_collect_database_source_instance_keys_matching(
 	    instance_keys, scene, NULL, path, 0, allow_path_prefix,
-	    ged_draw_mode);
+	    draw_mode);
 
     SoBRLDatabaseSource *path_indexed_source =
 	scene->findDatabaseSource(path);
@@ -3221,7 +3221,7 @@ ged_obol_database_source_instance_keys_for_record_or_path(
     struct ged *gedp,
     const char *path,
     const struct ged_draw_obol_database_source_record *record,
-    int ged_draw_mode,
+    int draw_mode,
     int allow_path_prefix)
 {
     std::vector<std::string> instance_keys;
@@ -3235,7 +3235,7 @@ ged_obol_database_source_instance_keys_for_record_or_path(
 
     if (record && record->instance_key && record->instance_key[0]) {
 	(void)ged_obol_append_existing_database_source_instance_key(
-	    instance_keys, scene, record->instance_key, ged_draw_mode);
+	    instance_keys, scene, record->instance_key, draw_mode);
 	if (!instance_keys.empty())
 	    return instance_keys;
     }
@@ -3248,7 +3248,7 @@ ged_obol_database_source_instance_keys_for_record_or_path(
 	return instance_keys;
 
     return ged_obol_database_source_instance_keys_for_path(gedp,
-	    target_path, ged_draw_mode, allow_path_prefix);
+	    target_path, draw_mode, allow_path_prefix);
 }
 
 static SoBRLDatabaseSource *
@@ -3465,7 +3465,7 @@ ged_obol_lod_default_worker_count(size_t worker_count)
 
 static void
 ged_obol_lod_status_fill(const ged_obol_attached_controller *entry,
-			 struct ged_draw_obol_lod_service_status *status)
+			 ged_draw_obol_lod_service_status_t *status)
 {
     if (!status)
 	return;
@@ -3575,7 +3575,7 @@ extern "C" int
 ged_draw_obol_lod_service_poll(struct ged *gedp,
 			       void *view_ctx,
 			       size_t max_results,
-			       struct ged_draw_obol_lod_service_status *status)
+			       ged_draw_obol_lod_service_status_t *status)
 {
     ged_obol_attached_controller *entry =
 	ged_obol_attached_controller_for_view(gedp, view_ctx);
@@ -3593,7 +3593,7 @@ ged_draw_obol_lod_service_poll(struct ged *gedp,
 extern "C" int
 ged_draw_obol_lod_service_status(struct ged *gedp,
 				 void *view_ctx,
-				 struct ged_draw_obol_lod_service_status *status)
+				 ged_draw_obol_lod_service_status_t *status)
 {
     ged_obol_attached_controller *entry =
 	ged_obol_attached_controller_for_view(gedp, view_ctx);
@@ -3665,7 +3665,7 @@ ged_draw_obol_lod_service_prewarm(struct ged *gedp,
 				  void *view_ctx,
 				  int argc,
 				  const char * const *argv,
-				  struct ged_draw_obol_lod_service_status *status)
+				  ged_draw_obol_lod_service_status_t *status)
 {
     ged_obol_attached_controller *entry =
 	ged_obol_attached_controller_for_view(gedp, view_ctx);
@@ -9963,7 +9963,7 @@ extern "C" int
 ged_draw_obol_view_context_tcl_arrows_replace(
     void *view_ctx,
     const char *name,
-    const point_t *points,
+    point_t *points,
     size_t point_count,
     const struct ged_draw_view_feature_style *style)
 {
@@ -9980,7 +9980,7 @@ ged_draw_obol_view_context_tcl_arrows_replace(
 	ged_obol_feature_style_from_ged(style);
     BRLObolFeatureHandle handle =
 	ged_obol_publish_arrow(controller, view_ctx, name, 1,
-			       ged_obol_points_from_ged(points, point_count),
+			       ged_obol_points_from_ged((const point_t *)points, point_count),
 			       style ? &obol_style : NULL);
     if (!handle.isValid())
 	return 0;
@@ -10029,7 +10029,7 @@ extern "C" int
 ged_draw_obol_view_context_tcl_axes_replace(
     void *view_ctx,
     const char *name,
-    const point_t *centers,
+    point_t *centers,
     size_t center_count,
     fastf_t half_axes_size,
     const struct ged_draw_view_feature_style *style)
@@ -10043,7 +10043,7 @@ ged_draw_obol_view_context_tcl_axes_replace(
 	ged_obol_feature_style_from_ged(style);
     BRLObolFeatureHandle handle =
 	ged_obol_publish_axes(controller, view_ctx, name, 1,
-			      ged_obol_points_from_ged(centers, center_count),
+			       ged_obol_points_from_ged((const point_t *)centers, center_count),
 			      static_cast<float>(half_axes_size),
 			      style ? &obol_style : NULL);
     if (!handle.isValid())
@@ -10189,15 +10189,15 @@ ged_obol_overlay_group_state_set(SoBRLSceneController *scene,
 				 const char *path,
 				 const unsigned char *rgb,
 				 fastf_t transparency,
-				 int ged_draw_mode)
+				 int draw_mode)
 {
     if (!scene || !path || !path[0])
 	return;
 
     const SbColor color = rgb ? ged_obol_color_from_rgb(rgb) :
 			  SbColor(1.0f, 1.0f, 1.0f);
-    const int obol_draw_mode = ged_draw_mode ?
-			       ged_obol_lod_draw_mode_from_ged(ged_draw_mode) :
+    const int obol_draw_mode = draw_mode ?
+			       ged_obol_lod_draw_mode_from_ged(draw_mode) :
 			       BRLOBOL_LOD_DRAW_DIAGNOSTIC;
     (void)scene->setGroupDrawIntent(path, path, obol_draw_mode,
 				    BRLOBOL_LOD_DRAW_WIRE, TRUE, 0);
@@ -10213,7 +10213,7 @@ ged_obol_overlay_shape_common_set(ShapeT *shape,
 				  const std::string &shape_path,
 				  const unsigned char basecolor[3],
 				  fastf_t transparency,
-				  int ged_draw_mode,
+				  int draw_mode,
 				  const char *source_type,
 				  const char *geometry_kind)
 {
@@ -10235,8 +10235,8 @@ ged_obol_overlay_shape_common_set(ShapeT *shape,
     shape->localSource = TRUE;
     shape->sharedSource = FALSE;
     shape->nonDatabaseSource = TRUE;
-    shape->drawMode = ged_draw_mode ?
-		      ged_obol_lod_draw_mode_from_ged(ged_draw_mode) :
+    shape->drawMode = draw_mode ?
+		      ged_obol_lod_draw_mode_from_ged(draw_mode) :
 		      BRLOBOL_LOD_DRAW_DIAGNOSTIC;
     shape->recordRole = "overlay";
     shape->geometryKind = geometry_kind;
@@ -10271,7 +10271,7 @@ ged_obol_overlay_vlist_shape_create(const char *name,
 				    const struct ged_draw_overlay_geometry *geometry,
 				    const unsigned char basecolor[3],
 				    fastf_t transparency,
-				    int ged_draw_mode)
+				    int draw_mode)
 {
     if (!geometry)
 	return NULL;
@@ -10301,7 +10301,7 @@ ged_obol_overlay_vlist_shape_create(const char *name,
 
     SoBRLVListShape *shape = new SoBRLVListShape;
     ged_obol_overlay_shape_common_set(shape, name, shape_path, basecolor,
-				      transparency, ged_draw_mode, source_type, geometry_kind);
+				      transparency, draw_mode, source_type, geometry_kind);
     shape->setLineSet(points.data(), commands.data(),
 		      static_cast<int>(points.size()));
     return shape;
@@ -10364,7 +10364,7 @@ ged_obol_overlay_mesh_shape_create(const char *name,
 				   const struct ged_draw_overlay_geometry *geometry,
 				   const unsigned char basecolor[3],
 				   fastf_t transparency,
-				   int ged_draw_mode)
+				   int draw_mode)
 {
     if (!geometry || geometry->kind != GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET)
 	return NULL;
@@ -10376,7 +10376,7 @@ ged_obol_overlay_mesh_shape_create(const char *name,
 
     SoBRLMeshShape *shape = new SoBRLMeshShape;
     ged_obol_overlay_shape_common_set(shape, name, shape_path, basecolor,
-				      transparency, ged_draw_mode, "indexed-face-set", "surface");
+				      transparency, draw_mode, "indexed-face-set", "surface");
     shape->setIndexedTriangles(points.data(), static_cast<int>(points.size()),
 			       triangles.data(), static_cast<int>(triangles.size()));
     return shape;
@@ -11028,7 +11028,7 @@ ged_draw_obol_overlay_geometry_insert_context(
     const struct ged_draw_overlay_geometry *geometry,
     const unsigned char basecolor[3],
     fastf_t transparency,
-    int ged_draw_mode,
+    int draw_mode,
     char **shape_path_out)
 {
     if (shape_path_out)
@@ -11051,15 +11051,15 @@ ged_draw_obol_overlay_geometry_insert_context(
 
     ged_obol_overlay_group_state_set(scene, "_overlays", NULL, 0.0, 0);
     ged_obol_overlay_group_state_set(scene, overlay_path.c_str(), basecolor,
-				     transparency, ged_draw_mode);
+				     transparency, draw_mode);
 
     SoNode *shape = NULL;
     if (geometry->kind == GED_DRAW_OVERLAY_GEOMETRY_INDEXED_FACE_SET)
 	shape = ged_obol_overlay_mesh_shape_create(name, shape_path, geometry,
-		basecolor, transparency, ged_draw_mode);
+		basecolor, transparency, draw_mode);
     else
 	shape = ged_obol_overlay_vlist_shape_create(name, shape_path, geometry,
-		basecolor, transparency, ged_draw_mode);
+		basecolor, transparency, draw_mode);
     if (!shape) {
 	(void)scene->removeGroup(overlay_path.c_str());
 	if (scene->getGroupChildCount("_overlays") == 0)
@@ -12232,7 +12232,7 @@ ged_draw_obol_database_source_ensure_for_path(
     struct ged *gedp,
     const char *path,
     struct db_i *dbip,
-    int ged_draw_mode,
+    int draw_mode,
     uint64_t source_revision)
 {
     if (!gedp || !path || !path[0] || !dbip ||
@@ -12267,10 +12267,10 @@ ged_draw_obol_database_source_ensure_for_path(
 	std::string(path);
     const int changed = (instance_key == path) ?
 			scene->replaceDatabaseSource(path, dbip,
-			    ged_obol_database_draw_mode_from_ged(ged_draw_mode),
+			    ged_obol_database_draw_mode_from_ged(draw_mode),
 			    folded_revision) :
 			scene->replaceDatabaseSourceInstance(instance_key.c_str(), path,
-			    dbip, ged_obol_database_draw_mode_from_ged(ged_draw_mode),
+			    dbip, ged_obol_database_draw_mode_from_ged(draw_mode),
 			    folded_revision);
     (void)ged_obol_apply_view_lod_policy(gedp, NULL, scene,
 					 instance_key.c_str());
@@ -12294,7 +12294,7 @@ ged_draw_obol_database_source_ensure_for_path(
 			ged_obol_group_intent_path(owner_group_path.c_str());
 		    (void)scene->setGroupDrawIntent(owner_group_path.c_str(),
 						    intent_path.c_str(),
-						    ged_obol_lod_draw_mode_from_ged(ged_draw_mode),
+						    ged_obol_lod_draw_mode_from_ged(draw_mode),
 						    BRLOBOL_LOD_DRAW_WIRE,
 						    FALSE,
 						    folded_revision);
@@ -12314,7 +12314,7 @@ ged_draw_obol_database_source_ensure_for_path_with_placement(
     struct ged *gedp,
     const char *path,
     struct db_i *dbip,
-    int ged_draw_mode,
+    int draw_mode,
     uint64_t source_revision,
     int draw_mat_valid,
     const mat_t draw_mat,
@@ -12349,7 +12349,7 @@ ged_draw_obol_database_source_ensure_for_path_with_placement(
 
     if (!placement.valid)
 	return ged_draw_obol_database_source_ensure_for_path(gedp, path, dbip,
-		ged_draw_mode, source_revision);
+		draw_mode, source_revision);
 
     if (!gedp || !path || !path[0] || !dbip ||
 	!ged_draw_obol_scene_controller_attached(gedp))
@@ -12371,7 +12371,7 @@ ged_draw_obol_database_source_ensure_for_path_with_placement(
     }
 
     if (!ged_draw_obol_database_source_ensure_for_path(gedp, path, dbip,
-	    ged_draw_mode, source_revision))
+	    draw_mode, source_revision))
 	return 0;
 
     return ged_draw_obol_database_source_set_placement_for_path(
@@ -13528,7 +13528,7 @@ ged_draw_obol_database_source_update_display_for_path(
     int highlighted_valid,
     int highlighted,
     int draw_mode_valid,
-    int ged_draw_mode,
+    int draw_mode,
     int line_style_valid,
     int line_style,
     int line_width_valid,
@@ -13575,7 +13575,7 @@ ged_draw_obol_database_source_update_display_for_path(
 				 (highlighted ? TRUE : FALSE) :
 				 summary.highlighted;
 	int nextDrawMode = draw_mode_valid ?
-			   ged_obol_database_draw_mode_from_ged(ged_draw_mode) :
+			   ged_obol_database_draw_mode_from_ged(draw_mode) :
 			   summary.drawMode;
 	int nextLineStyle = line_style_valid ?
 			    line_style : summary.lineStyle;
@@ -13623,7 +13623,7 @@ ged_draw_obol_database_source_update_display_for_path(
 		    source_instance_key.c_str(),
 		    representation_key,
 		    ged_obol_database_representation_mode_from_ged(
-			ged_draw_mode));
+			draw_mode));
 	    if (representation_changed < 0)
 		return 0;
 	}
@@ -13702,7 +13702,7 @@ ged_obol_shape_update_display_typed(
     int highlighted_valid,
     int highlighted,
     int draw_mode_valid,
-    int ged_draw_mode,
+    int draw_mode,
     int line_style_valid,
     int line_style,
     int line_width_valid,
@@ -13721,7 +13721,7 @@ ged_obol_shape_update_display_typed(
 
     if (draw_mode_valid) {
 	const int draw_changed = scene->setShapeDrawState(path,
-				 ged_obol_lod_draw_mode_from_ged(ged_draw_mode),
+				 ged_obol_lod_draw_mode_from_ged(draw_mode),
 				 shape->databaseIntent.getValue(),
 				 shape->overlayIntent.getValue(),
 				 shape->hudIntent.getValue());
@@ -13791,7 +13791,7 @@ ged_draw_obol_shape_update_display_for_path(
     int highlighted_valid,
     int highlighted,
     int draw_mode_valid,
-    int ged_draw_mode,
+    int draw_mode,
     int line_style_valid,
     int line_style,
     int line_width_valid,
@@ -13823,7 +13823,7 @@ ged_draw_obol_shape_update_display_for_path(
 		visible_valid, visible,
 		selected_valid, selected,
 		highlighted_valid, highlighted,
-		draw_mode_valid, ged_draw_mode,
+		draw_mode_valid, draw_mode,
 		line_style_valid, line_style,
 		line_width_valid, line_width,
 		transparency_valid, transparency,
@@ -13838,7 +13838,7 @@ ged_draw_obol_shape_update_display_for_path(
 		visible_valid, visible,
 		selected_valid, selected,
 		highlighted_valid, highlighted,
-		draw_mode_valid, ged_draw_mode,
+		draw_mode_valid, draw_mode,
 		line_style_valid, line_style,
 		line_width_valid, line_width,
 		transparency_valid, transparency,
@@ -16713,7 +16713,7 @@ ged_obol_current_source_frontier_paths(
     struct ged *gedp,
     void *view_ctx,
     const char *root_path,
-    int ged_draw_mode)
+    int draw_mode)
 {
     std::vector<std::string> targets;
     if (!root_path || !root_path[0])
@@ -16725,7 +16725,7 @@ ged_obol_current_source_frontier_paths(
 
     targets.push_back(std::string(root_path));
     return ged_obol_matching_database_source_paths(scene, view_ctx, targets,
-	    0, 1, ged_draw_mode);
+	    0, 1, draw_mode);
 }
 
 static void
@@ -16762,7 +16762,7 @@ static int
 ged_obol_apply_path_placement(struct ged *gedp,
 			      void *view_ctx,
 			      const char *path,
-			      int ged_draw_mode)
+			      int draw_mode)
 {
     if (!gedp || !gedp->dbip || !path || !path[0])
 	return 0;
@@ -16777,7 +16777,7 @@ ged_obol_apply_path_placement(struct ged *gedp,
     int applied = 0;
     if (ret == 0) {
 	int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-		     view_ctx, ged_draw_mode);
+		     view_ctx, draw_mode);
 	applied = ged_draw_obol_database_source_set_placement_for_path(gedp,
 		  path, 1, state.ts_mat, 0, NULL, 0, 0);
 	if (scoped)
@@ -16856,7 +16856,7 @@ ged_obol_publish_aabb_proxy_for_path(
     void *view_ctx,
     const char *path,
     const char *cache_name,
-    int ged_draw_mode,
+    int draw_mode,
     int refresh_missing,
     struct ged_draw_obol_source_expansion_status *status)
 {
@@ -16886,7 +16886,7 @@ ged_obol_publish_aabb_proxy_for_path(
 				 points, commands);
 
     int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-		 view_ctx, ged_draw_mode);
+		 view_ctx, draw_mode);
     int published = ged_draw_obol_database_source_publish_line_set_for_path(
 			gedp, path, (const point_t *)points, commands, 24);
     if (published && status)
@@ -16919,7 +16919,7 @@ ged_obol_submit_child_aabb_prewarm(
     uint64_t generation,
     const char *child_path,
     const char *child_name,
-    int ged_draw_mode,
+    int draw_mode,
     uint32_t source_revision)
 {
     if (!service || !service->isRunning() || !dbip || !child_path ||
@@ -16941,7 +16941,7 @@ ged_obol_submit_child_aabb_prewarm(
     task.request.sourceRevision = source_revision;
     task.request.objectPath = child_path;
     task.request.objectName = child_name;
-    task.request.drawMode = ged_obol_lod_draw_mode_from_ged(ged_draw_mode);
+    task.request.drawMode = ged_obol_lod_draw_mode_from_ged(draw_mode);
     task.request.providerId = "brlobol_draw_aabb_cache";
     task.request.providerVersion = "brlobol-cache-v1";
     task.request.qualityTier = BRLOBOL_LOD_QUALITY_PROXY;
@@ -16964,7 +16964,7 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
     struct ged *gedp,
     void *view_ctx,
     const char *path,
-    int ged_draw_mode,
+    int draw_mode,
     size_t max_children,
     struct ged_draw_obol_source_prewarm_status *status)
 {
@@ -17072,7 +17072,7 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 					  entry->lod_service, gedp->dbip,
 					  database_id, generation,
 					  child_path.c_str(), child_name,
-					  ged_draw_mode, source_revision);
+					  draw_mode, source_revision);
 	if (!task_submitted) {
 	    if (status)
 		status->skipped_invalid++;
@@ -17097,7 +17097,7 @@ ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
     struct ged *gedp,
     void *view_ctx,
     const char *root_path,
-    int ged_draw_mode,
+    int draw_mode,
     size_t max_sources,
     size_t max_children_per_source,
     struct ged_draw_obol_source_prewarm_status *status)
@@ -17108,7 +17108,7 @@ ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
 
     std::vector<std::string> frontier =
 	ged_obol_current_source_frontier_paths(gedp, view_ctx, root_path,
-	    ged_draw_mode);
+	    draw_mode);
     if (frontier.empty())
 	return 0;
 
@@ -17122,7 +17122,7 @@ ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
 	struct ged_draw_obol_source_prewarm_status path_status;
 	ged_obol_source_prewarm_status_clear(&path_status);
 	submitted += ged_draw_obol_database_source_prewarm_child_aabb_proxies(
-			 gedp, view_ctx, path.c_str(), ged_draw_mode,
+			 gedp, view_ctx, path.c_str(), draw_mode,
 			 max_children_per_source, &path_status);
 	ged_obol_source_prewarm_status_accumulate(status, &path_status);
     }
@@ -17135,7 +17135,7 @@ ged_obol_database_source_expand_children_impl(
     struct ged *gedp,
     void *view_ctx,
     const char *path,
-    int ged_draw_mode,
+    int draw_mode,
     size_t max_children,
     int refresh_missing_proxy,
     int require_cached_leaf_proxy,
@@ -17232,7 +17232,7 @@ ged_obol_database_source_expand_children_impl(
 
 	    const std::string child_instance_key =
 		ged_obol_database_source_instance_key_for_mode(
-		    view_ctx, child_path.c_str(), ged_draw_mode);
+		    view_ctx, child_path.c_str(), draw_mode);
 	    if (scene->findDatabaseSourceInstance(child_instance_key.c_str())) {
 		if (status)
 		    status->existing++;
@@ -17240,7 +17240,7 @@ ged_obol_database_source_expand_children_impl(
 	    }
 
 	    const int replace_changed = ged_obol_replace_path(gedp, view_ctx,
-					gedp->dbip, child_path.c_str(), ged_draw_mode, source_revision,
+					gedp->dbip, child_path.c_str(), draw_mode, source_revision,
 					scene, 0);
 	    if (replace_changed < 0) {
 		if (status)
@@ -17251,13 +17251,13 @@ ged_obol_database_source_expand_children_impl(
 		changed = 1;
 
 	    (void)ged_obol_apply_path_placement(gedp, view_ctx,
-						child_path.c_str(), ged_draw_mode);
+						child_path.c_str(), draw_mode);
 	    (void)ged_obol_apply_index_record_metadata(gedp, child_path.c_str(),
 		    &child.record, status);
 
 	    if (!child.record.is_comb) {
 		(void)ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx,
-			child_path.c_str(), child_name, ged_draw_mode,
+			child_path.c_str(), child_name, draw_mode,
 			refresh_missing_proxy, status);
 	    }
 
@@ -17289,12 +17289,12 @@ ged_draw_obol_database_source_expand_children(
     struct ged *gedp,
     void *view_ctx,
     const char *path,
-    int ged_draw_mode,
+    int draw_mode,
     size_t max_children,
     struct ged_draw_obol_source_expansion_status *status)
 {
     return ged_obol_database_source_expand_children_impl(gedp, view_ctx,
-	    path, ged_draw_mode, max_children, 1, 0, status);
+	    path, draw_mode, max_children, 1, 0, status);
 }
 
 static int
@@ -17302,7 +17302,7 @@ ged_obol_database_source_expand_visible_children_impl(
     struct ged *gedp,
     void *view_ctx,
     const char *root_path,
-    int ged_draw_mode,
+    int draw_mode,
     size_t max_sources,
     size_t max_children_per_source,
     int refresh_missing_proxy,
@@ -17315,7 +17315,7 @@ ged_obol_database_source_expand_visible_children_impl(
 
     std::vector<std::string> frontier =
 	ged_obol_current_source_frontier_paths(gedp, view_ctx, root_path,
-	    ged_draw_mode);
+	    draw_mode);
     if (frontier.empty())
 	return 0;
 
@@ -17330,7 +17330,7 @@ ged_obol_database_source_expand_visible_children_impl(
 	ged_obol_source_expansion_status_clear(&path_status);
 	const int path_changed =
 	    ged_obol_database_source_expand_children_impl(gedp, view_ctx,
-		path.c_str(), ged_draw_mode, max_children_per_source,
+		path.c_str(), draw_mode, max_children_per_source,
 		refresh_missing_proxy, require_cached_leaf_proxy, &path_status);
 	if (path_changed)
 	    changed = 1;
@@ -17345,13 +17345,13 @@ ged_draw_obol_database_source_expand_visible_children(
     struct ged *gedp,
     void *view_ctx,
     const char *root_path,
-    int ged_draw_mode,
+    int draw_mode,
     size_t max_sources,
     size_t max_children_per_source,
     struct ged_draw_obol_source_expansion_status *status)
 {
     return ged_obol_database_source_expand_visible_children_impl(gedp,
-	    view_ctx, root_path, ged_draw_mode, max_sources,
+	    view_ctx, root_path, draw_mode, max_sources,
 	    max_children_per_source, 1, 0, status);
 }
 
@@ -17476,7 +17476,7 @@ ged_obol_progressive_advance_provider(
 	    local_status.hasMore = 1;
     }
 
-    struct ged_draw_obol_lod_service_status service_status;
+    ged_draw_obol_lod_service_status_t service_status;
     memset(&service_status, 0, sizeof(service_status));
     if (ged_draw_obol_lod_service_status(gedp, view_ctx, &service_status)) {
 	local_status.pendingTasks = service_status.pending_tasks;
@@ -17654,7 +17654,7 @@ ged_draw_obol_database_source_geometry_summary_for_path_mode(
     struct ged *gedp,
     const char *path,
     int draw_mode_valid,
-    int ged_draw_mode,
+    int draw_mode,
     struct ged_draw_shape_geometry_summary *out)
 {
     if (!out)
@@ -17665,7 +17665,7 @@ ged_draw_obol_database_source_geometry_summary_for_path_mode(
     if (!scene)
 	return 0;
 
-    const int mode = draw_mode_valid ? ged_draw_mode : -1;
+    const int mode = draw_mode_valid ? draw_mode : -1;
     std::vector<std::string> instance_keys =
 	ged_obol_database_source_instance_keys_for_path(gedp, path, mode, 0);
     if (instance_keys.empty())
@@ -18890,7 +18890,7 @@ ged_obol_apply_cached_path_metadata_to_scene(
     SoBRLSceneController *scene,
     void *view_ctx,
     const char *path,
-    int ged_draw_mode)
+    int draw_mode)
 {
     if (!gedp || !gedp->dbip || !scene || !path || !path[0])
 	return 0;
@@ -18913,7 +18913,7 @@ ged_obol_apply_cached_path_metadata_to_scene(
 
     const std::string mode_key =
 	ged_obol_database_source_instance_key_for_mode(view_ctx, path,
-	    ged_draw_mode);
+	    draw_mode);
     SoBRLDatabaseSource *source =
 	scene->findDatabaseSourceInstance(mode_key.c_str());
     if (!source) {
@@ -18931,7 +18931,7 @@ ged_obol_replace_deferred_paths(
     void *view_ctx,
     struct db_i *dbip,
     const std::vector<std::string> &paths,
-    int ged_draw_mode,
+    int draw_mode,
     uint32_t source_revision,
     SoBRLSceneController *scene,
     int preserve_existing_revision = 0,
@@ -18945,12 +18945,12 @@ ged_obol_replace_deferred_paths(
     int changed = 0;
     for (const std::string &path : paths) {
 	if (ged_obol_replace_path(gedp, view_ctx, dbip, path.c_str(),
-				  ged_draw_mode, source_revision, scene, 0,
+				  draw_mode, source_revision, scene, 0,
 				  preserve_existing_revision,
 				  appearance_settings) > 0)
 	    changed = 1;
 	if (ged_obol_apply_cached_path_metadata_to_scene(gedp, scene,
-		view_ctx, path.c_str(), ged_draw_mode))
+		view_ctx, path.c_str(), draw_mode))
 	    changed = 1;
     }
 
@@ -18962,11 +18962,11 @@ ged_obol_summary_matches_transaction_targets(
     const BRLObolDatabaseSourceSummary &summary,
     void *view_ctx,
     const std::vector<std::string> &targets,
-    int ged_draw_mode)
+    int draw_mode)
 {
     if (!summary.valid ||
 	!ged_obol_database_source_instance_in_scope(summary, view_ctx) ||
-	!ged_obol_database_source_summary_matches_mode(summary, ged_draw_mode))
+	!ged_obol_database_source_summary_matches_mode(summary, draw_mode))
 	return 0;
 
     const char *source_path = summary.path.getString();
@@ -19067,7 +19067,7 @@ ged_obol_copy_matching_primary_sources_to_scene(
     struct ged *gedp,
     void *view_ctx,
     const std::vector<std::string> &targets,
-    int ged_draw_mode,
+    int draw_mode,
     int remove_draw_mode,
     SoBRLSceneController *scene)
 {
@@ -19085,7 +19085,7 @@ ged_obol_copy_matching_primary_sources_to_scene(
 	BRLObolDatabaseSourceSummary summary;
 	if (!primary_scene->getDatabaseSourceSummary(i, summary) ||
 	    !ged_obol_summary_matches_transaction_targets(summary, view_ctx,
-		targets, ged_draw_mode))
+		targets, draw_mode))
 	    continue;
 	const char *instance_key = summary.instanceKey.getString();
 	if (!instance_key || !instance_key[0])
@@ -19136,13 +19136,13 @@ ged_draw_obol_scene_sync_transaction(
 	    if (result && result->affected_shapes <= 0 &&
 		result->affected_groups <= 0 && paths.empty())
 		break;
-	    const int ged_draw_mode =
+	    const int draw_mode =
 		ged_obol_transaction_ged_draw_mode(gedp, txn);
 	    const struct ged_draw_appearance_settings *appearance =
 		    static_cast<const struct ged_draw_appearance_settings *>(
 			txn->appearance);
 	    const int remove_draw_mode =
-		(appearance && !appearance->mixed_modes) ? -1 : ged_draw_mode;
+		(appearance && !appearance->mixed_modes) ? -1 : draw_mode;
 	    if (ged_obol_transaction_defer_leaf_expansion(txn)) {
 		if (!paths.empty() &&
 		    ged_obol_remove_paths(paths, view_ctx, scene,
@@ -19150,14 +19150,14 @@ ged_draw_obol_scene_sync_transaction(
 		    changed = 1;
 		if (!paths.empty())
 		    changed |= ged_obol_replace_deferred_paths(gedp, view_ctx,
-			      gedp->dbip, paths, ged_draw_mode, source_revision,
+			      gedp->dbip, paths, draw_mode, source_revision,
 			      scene, 1, appearance);
 		break;
 	    }
 	    if (scene != ged_draw_obol_scene_controller(gedp) &&
 		    !paths.empty()) {
 		changed = ged_obol_copy_matching_primary_sources_to_scene(
-			      gedp, view_ctx, paths, ged_draw_mode,
+			      gedp, view_ctx, paths, draw_mode,
 			      remove_draw_mode, scene);
 		if (changed)
 		    break;
@@ -19168,7 +19168,7 @@ ged_draw_obol_scene_sync_transaction(
 	    } else {
 		std::vector<std::string> source_paths =
 		    ged_obol_primary_matching_database_source_paths(gedp,
-			view_ctx, paths, ged_draw_mode);
+			view_ctx, paths, draw_mode);
 		if (source_paths.empty())
 		    source_paths =
 			ged_obol_drawn_source_paths(gedp, view_ctx, -1, &paths);
@@ -19183,7 +19183,7 @@ ged_draw_obol_scene_sync_transaction(
 			    remove_draw_mode))
 			changed = 1;
 		    if (ged_obol_replace_paths(gedp->dbip, source_paths,
-					       ged_draw_mode, source_revision,
+					       draw_mode, source_revision,
 					       gedp, view_ctx, scene, 1, 1,
 					       appearance))
 			changed = 1;
@@ -19192,7 +19192,7 @@ ged_draw_obol_scene_sync_transaction(
 			    remove_draw_mode))
 			changed = 1;
 		    changed |= ged_obol_replace_paths(gedp->dbip, paths,
-						     ged_draw_mode, source_revision,
+						     draw_mode, source_revision,
 						     gedp, view_ctx, scene, 1, 1,
 						     appearance);
 		}

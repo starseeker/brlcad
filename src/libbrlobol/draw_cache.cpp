@@ -318,7 +318,8 @@ brlobol_draw_cache_ensure_root(void)
     long diskFormatVersion = -1;
     FILE *fp = fopen(formatPath, "r");
     if (fp) {
-	(void)fscanf(fp, "%ld", &diskFormatVersion);
+	if (fscanf(fp, "%ld", &diskFormatVersion) != 1)
+	    diskFormatVersion = -1;
 	fclose(fp);
     }
     if (diskFormatVersion > 0 &&

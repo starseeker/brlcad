@@ -294,7 +294,7 @@ BRLObolWindowHost::pollRate(void) const
 
 int
 BRLObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
-				   const struct imgstream_fb_spec_info *info)
+				   const imgstream_fb_spec_info_t *info)
 {
     if (!fb)
 	return -1;
@@ -454,7 +454,7 @@ BRLObolWindowHost::setFramebufferViewport(imgstream_fb_t *fb,
 
 int
 BRLObolWindowHost::setFramebufferView(imgstream_fb_t *fb,
-				      const struct imgstream_fb_view *view)
+				      const imgstream_fb_view_t *view)
 {
     BRLObolFramebufferAttachment *attachment =
 	find_attachment(this->p->framebuffers, fb);
@@ -480,7 +480,7 @@ BRLObolWindowHost::setFramebufferView(imgstream_fb_t *fb,
 
 int
 BRLObolWindowHost::setFramebufferCursor(imgstream_fb_t *fb,
-					const struct imgstream_fb_cursor *cursor)
+					const imgstream_fb_cursor_t *cursor)
 {
     BRLObolFramebufferAttachment *attachment =
 	find_attachment(this->p->framebuffers, fb);
@@ -561,7 +561,7 @@ BRLObolWindowHost::getFramebufferViewportImage(imgstream_fb_t *fb) const
 
 static int
 brlobol_fb_host_open(imgstream_fb_t *fb,
-		     const struct imgstream_fb_spec_info *info,
+		     const imgstream_fb_spec_info_t *info,
 		     void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
@@ -601,7 +601,7 @@ brlobol_fb_host_viewport(imgstream_fb_t *fb,
 
 static int
 brlobol_fb_host_view(imgstream_fb_t *fb,
-		     const struct imgstream_fb_view *view,
+		     const imgstream_fb_view_t *view,
 		     void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
@@ -610,7 +610,7 @@ brlobol_fb_host_view(imgstream_fb_t *fb,
 
 static int
 brlobol_fb_host_cursor(imgstream_fb_t *fb,
-		       const struct imgstream_fb_cursor *cursor,
+		       const imgstream_fb_cursor_t *cursor,
 		       void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);

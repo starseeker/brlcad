@@ -154,13 +154,13 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(viewport->realizedDirtyRevision.getValue() ==
 	      source->dirtyRevision.getValue(),
 	      "qged framebuffer viewport must sync to source dirty generation");
-    GED_CHECK(viewport->sourceCenter.getValue()[0] == 3.0f &&
-	      viewport->sourceCenter.getValue()[1] == 4.0f &&
-	      viewport->sourceZoom.getValue() == 2.0f,
+    GED_CHECK(NEAR_EQUAL(viewport->sourceCenter.getValue()[0], 3.0f, SMALL_FASTF) &&
+	      NEAR_EQUAL(viewport->sourceCenter.getValue()[1], 4.0f, SMALL_FASTF) &&
+	      NEAR_EQUAL(viewport->sourceZoom.getValue(), 2.0f, SMALL_FASTF),
 	      "qged framebuffer flush must publish view state to viewport image");
     GED_CHECK(viewport->cursorVisible.getValue() == TRUE &&
-	      viewport->cursorImagePosition.getValue()[0] == 7.0f &&
-	      viewport->cursorImagePosition.getValue()[1] == 8.0f,
+	      NEAR_EQUAL(viewport->cursorImagePosition.getValue()[0], 7.0f, SMALL_FASTF) &&
+	      NEAR_EQUAL(viewport->cursorImagePosition.getValue()[1], 8.0f, SMALL_FASTF),
 	      "qged framebuffer flush must publish cursor state to viewport image");
     GED_CHECK(controller->isRenderRequested(),
 	      "qged framebuffer flush must request an Obol render");

@@ -42,7 +42,7 @@ ged_draw_scene_handle_make(void *opaque, unsigned int backend)
 {
     ged_draw_scene_handle ref = GED_DRAW_SCENE_HANDLE_NULL_INIT;
     ref.opaque = opaque;
-    ref.backend = opaque ? backend : GED_DRAW_SCENE_BACKEND_NONE;
+    ref.backend = opaque ? backend : (unsigned int)GED_DRAW_SCENE_BACKEND_NONE;
     return ref;
 }
 
@@ -76,7 +76,7 @@ ged_draw_scene_handle_context(ged_draw_scene_handle ref)
 static inline __attribute__((unused)) unsigned int
 ged_draw_scene_handle_backend(ged_draw_scene_handle ref)
 {
-    return ref.opaque ? ref.backend : GED_DRAW_SCENE_BACKEND_NONE;
+    return ref.opaque ? ref.backend : (unsigned int)GED_DRAW_SCENE_BACKEND_NONE;
 }
 
 #endif /* GED_DRAW_SCENE_H */

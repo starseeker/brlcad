@@ -1674,7 +1674,7 @@ main(int argc, char **argv)
     if (!ged_draw_view_context_feature_points_copy(feature_view_ctx,
 	    "cap2::line", &copied_points, &copied_point_count) ||
 	    copied_point_count != 2 ||
-	    copied_points[1][X] != 2.0)
+	    !NEAR_EQUAL(copied_points[1][X], 2.0, SMALL_FASTF))
 	FAIL("GED feature point readback should copy owned Obol line geometry");
     bu_free(copied_points, "GED Obol feature test copied points");
     int copied_cmd = 0;
@@ -1786,7 +1786,7 @@ main(int argc, char **argv)
     if (!ged_draw_view_context_label_copy(feature_view_ctx, "cap2::label",
 	    0, &label_text, label_point, label_rgb) ||
 	    !BU_STR_EQUAL(bu_vls_cstr(&label_text), "cap2 label") ||
-	    label_point[X] != 1.0 ||
+	    !NEAR_EQUAL(label_point[X], 1.0, SMALL_FASTF) ||
 	    label_rgb[0] != 7 ||
 	    label_rgb[1] != 8 ||
 	    label_rgb[2] != 9) {
@@ -1799,9 +1799,9 @@ main(int argc, char **argv)
 	    "cap2::label", 0, moved_label_point) ||
 	    !ged_draw_view_context_label_copy(feature_view_ctx, "cap2::label",
 		0, NULL, label_point, NULL) ||
-	    label_point[X] != 4.0 ||
-	    label_point[Y] != 5.0 ||
-	    label_point[Z] != 6.0)
+	    !NEAR_EQUAL(label_point[X], 4.0, SMALL_FASTF) ||
+	    !NEAR_EQUAL(label_point[Y], 5.0, SMALL_FASTF) ||
+	    !NEAR_EQUAL(label_point[Z], 6.0, SMALL_FASTF))
 	FAIL("GED label point mutation should update owned Obol label data");
 
     point_t created_label_point = {1.0, 1.0, 1.0};
@@ -1851,8 +1851,8 @@ main(int argc, char **argv)
     memset(&axes_readback, 0, sizeof(axes_readback));
     if (!ged_draw_view_context_axes_state_get(feature_view_ctx,
 	    "cap2::axes", &axes_readback) ||
-	    axes_readback.position[X] != 1.0 ||
-	    axes_readback.size != 4.0 ||
+	    !NEAR_EQUAL(axes_readback.position[X], 1.0, SMALL_FASTF) ||
+	    !NEAR_EQUAL(axes_readback.size, 4.0, SMALL_FASTF) ||
 	    axes_readback.line_width != 2 ||
 	    axes_readback.color[0] != 11 ||
 	    axes_readback.color[1] != 22 ||
@@ -1863,7 +1863,7 @@ main(int argc, char **argv)
     if (!ged_draw_view_context_feature_axes_centers_copy(feature_view_ctx,
 	    "cap2::axes", &axis_centers, &axis_center_count) ||
 	    axis_center_count != 1 ||
-	    axis_centers[0][X] != 1.0)
+	    !NEAR_EQUAL(axis_centers[0][X], 1.0, SMALL_FASTF))
 	FAIL("GED axes center readback should copy owned Obol axes centers");
     bu_free(axis_centers, "GED Obol feature test axes centers");
 
@@ -2127,7 +2127,7 @@ main(int argc, char **argv)
 		command_record) ||
 	    command_record.owner.generation != 11 ||
 	    command_record.points.size() != 2 ||
-	    command_record.points[1][1] != 2.0f)
+	    !NEAR_EQUAL(command_record.points[1][1], 2.0f, SMALL_FASTF))
 	FAIL("GED command-scene stale generation should not replace latest result");
     command_scene = ged_draw_command_scene_begin(feature_view_ctx,
 	    &command_scene_desc);
@@ -2378,7 +2378,7 @@ main(int argc, char **argv)
 		builder_record) ||
 	    builder_record.owner.generation != 22 ||
 	    builder_record.points.size() != 2 ||
-	    builder_record.points[1][1] != 2.0f ||
+	    !NEAR_EQUAL(builder_record.points[1][1], 2.0f, SMALL_FASTF) ||
 	    builder_record.metadata.size() < 7 ||
 	    !BU_STR_EQUAL(builder_record.metadata[5].value.getString(),
 		"nmg-generation") ||

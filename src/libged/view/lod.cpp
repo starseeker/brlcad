@@ -46,7 +46,7 @@
 
 static int
 lod_service_status_has_work(
-    const struct ged_draw_obol_lod_service_status *status)
+    const ged_draw_obol_lod_service_status_t *status)
 {
     if (!status)
 	return 0;
@@ -364,7 +364,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 
     if (BU_STR_EQUAL(argv[0], "service")) {
 	if (argc == 1 || BU_STR_EQUAL(argv[1], "status")) {
-	    struct ged_draw_obol_lod_service_status status = {};
+	    ged_draw_obol_lod_service_status_t status = {};
 	    if (!ged_draw_obol_lod_service_status(gedp, view_ctx, &status)) {
 		bu_vls_printf(gedp->ged_result_str,
 			      "no Obol LoD service is attached to the current view\n");
@@ -446,7 +446,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
 		return BRLCAD_ERROR;
 	    }
-	    struct ged_draw_obol_lod_service_status status = {};
+	    ged_draw_obol_lod_service_status_t status = {};
 	    if (!ged_draw_obol_lod_service_poll(gedp, view_ctx,
 						(size_t)max_results, &status)) {
 		bu_vls_printf(gedp->ged_result_str,
@@ -489,7 +489,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 
-	    struct ged_draw_obol_lod_service_status status = {};
+	    ged_draw_obol_lod_service_status_t status = {};
 	    int timed_out = 0;
 	    const int64_t start = bu_gettime();
 	    const int64_t timeout_us = (int64_t)timeout_ms * 1000;
@@ -528,7 +528,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	}
 
 	if (BU_STR_EQUAL(argv[1], "prewarm")) {
-	    struct ged_draw_obol_lod_service_status status = {};
+	    ged_draw_obol_lod_service_status_t status = {};
 	    size_t submitted = ged_draw_obol_lod_service_prewarm(gedp,
 			       view_ctx, argc - 2, argc > 2 ? argv + 2 : NULL, &status);
 	    if (submitted == 0 && !status.running) {

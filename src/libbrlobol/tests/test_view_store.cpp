@@ -143,7 +143,7 @@ test_feature_nodes(BRLObolViewController &view)
 	FAIL("label feature should realize a SoText2 node");
     SoFont *font = static_cast<SoFont *>(first_node_of_type(
 	    view.features().node(labelHandle), SoFont::getClassTypeId()));
-    if (!font || font->size.getValue() != 17.0f)
+    if (!font || !NEAR_EQUAL(font->size.getValue(), 17.0f, SMALL_FASTF))
 	FAIL("label feature should preserve explicit font size");
 
     std::vector<BRLObolLabel> hudLabels;
@@ -170,9 +170,9 @@ test_feature_nodes(BRLObolViewController &view)
 					SoBRLHUDLabelOverlay::getClassTypeId()));
     if (!hud || !hud->getHUDLabel() || hud->sourceId.getValue() != 42)
 	FAIL("HUD label feature should preserve source and build HUD geometry");
-    if (hud->position.getValue()[0] != 8.0f ||
-	hud->position.getValue()[1] != 58.0f ||
-	hud->fontSize.getValue() != 12.0f)
+    if (!NEAR_EQUAL(hud->position.getValue()[0], 8.0f, SMALL_FASTF) ||
+	!NEAR_EQUAL(hud->position.getValue()[1], 58.0f, SMALL_FASTF) ||
+	!NEAR_EQUAL(hud->fontSize.getValue(), 12.0f, SMALL_FASTF))
 	FAIL("HUD label feature should preserve screen position and font size");
 
     std::vector<SbVec3f> points;
@@ -752,7 +752,7 @@ test_polygon_nodes_and_sketch(BRLObolViewController &view)
     }
     if (!record.fill ||
 	record.fillFlags != BRLOBOL_POLYGON_FILL_HATCH ||
-	record.fillSpacing != 2.0f ||
+	!NEAR_EQUAL(record.fillSpacing, 2.0f, SMALL_FASTF) ||
 	record.type != BRLObolPolygonType::Square) {
 	wdb_close(wdbp);
 	bu_file_delete(dbpath);

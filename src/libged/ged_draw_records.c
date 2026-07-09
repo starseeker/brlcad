@@ -1812,7 +1812,7 @@ ged_draw_view_db_object_record_surface_index_at(
 
 struct _ged_draw_rendered_object_summary_ctx {
     uint64_t cache_identity;
-    struct ged_draw_view_rendered_object_summary *out;
+    ged_draw_view_rendered_object_summary_t *out;
     int visited;
 };
 
@@ -1831,7 +1831,7 @@ _ged_draw_rendered_object_summary_record_cb(
     if (rec->cache_identity != ctx->cache_identity)
 	return 1;
 
-    struct ged_draw_view_rendered_object_summary *out = ctx->out;
+    ged_draw_view_rendered_object_summary_t *out = ctx->out;
     out->found = 1;
     out->source_identity = rec->source_identity;
     out->material_draw_mode = rec->draw_mode;
@@ -1867,7 +1867,7 @@ int
 ged_draw_view_rendered_object_summary(
 	void *view_ctx,
 	uint64_t cache_identity,
-	struct ged_draw_view_rendered_object_summary *out)
+	ged_draw_view_rendered_object_summary_t *out)
 {
     if (!out)
 	return 0;

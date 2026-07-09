@@ -96,8 +96,8 @@ BRLObolFramebufferStream::ensure(void)
     if (!fb)
 	return -1;
 
-    struct imgstream_fb_spec_info info;
-    struct imgstream_fb_spec_info *ip = NULL;
+    imgstream_fb_spec_info_t info;
+    imgstream_fb_spec_info_t *ip = NULL;
     if (imgstream_fb_spec_info(this->p->spec.c_str(), &info) == 0)
 	ip = &info;
 
@@ -287,7 +287,7 @@ BRLObolFramebufferStream::present(void)
     if (this->p->host->flushFramebuffer(this->p->fb) != 0)
 	ret = -1;
 
-    struct imgstream_fb_view view_state;
+    imgstream_fb_view_t view_state;
     if (imgstream_fb_getview(this->p->fb, &view_state.xcenter,
 	    &view_state.ycenter, &view_state.xzoom,
 	    &view_state.yzoom) == 0) {
@@ -295,7 +295,7 @@ BRLObolFramebufferStream::present(void)
 	    ret = -1;
     }
 
-    struct imgstream_fb_cursor cursor_state;
+    imgstream_fb_cursor_t cursor_state;
     if (imgstream_fb_getcursor(this->p->fb, &cursor_state.mode,
 	    &cursor_state.x, &cursor_state.y) == 0) {
 	if (this->p->host->setFramebufferCursor(this->p->fb,

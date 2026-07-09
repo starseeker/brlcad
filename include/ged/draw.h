@@ -585,7 +585,7 @@ struct ged_draw_view_surface_summary {
     uint64_t source_identity;
 };
 
-struct ged_draw_view_rendered_object_summary {
+struct ged_draw_view_rendered_object_summary_s {
     int found;
     int is_indexed_face_set;
     int is_annotation;
@@ -602,6 +602,7 @@ struct ged_draw_view_rendered_object_summary {
     int selection_visible;
     int selection_highlighted;
 };
+typedef struct ged_draw_view_rendered_object_summary_s ged_draw_view_rendered_object_summary_t;
 
 enum ged_draw_view_feature_kind {
     GED_DRAW_VIEW_FEATURE_KIND_UNKNOWN = 0,
@@ -1027,7 +1028,7 @@ GED_EXPORT extern int
 ged_draw_view_rendered_object_summary(
     void *view_ctx,
     uint64_t cache_identity,
-    struct ged_draw_view_rendered_object_summary *out);
+    ged_draw_view_rendered_object_summary_t *out);
 
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_first_shape_ref(struct ged *gedp);
@@ -1994,7 +1995,7 @@ GED_EXPORT extern int
 ged_draw_view_context_data_arrows_points_replace(
     void *view_ctx,
     const char *name,
-    const point_t *points,
+    point_t *points,
     size_t point_count,
     const struct ged_draw_view_feature_style *style);
 
@@ -2028,7 +2029,7 @@ GED_EXPORT extern int
 ged_draw_view_context_tcl_arrows_replace(
     void *view_ctx,
     const char *name,
-    const point_t *points,
+    point_t *points,
     size_t point_count,
     const struct ged_draw_view_feature_style *style);
 
@@ -2043,7 +2044,7 @@ GED_EXPORT extern int
 ged_draw_view_context_tcl_axes_replace(
     void *view_ctx,
     const char *name,
-    const point_t *centers,
+    point_t *centers,
     size_t center_count,
     fastf_t half_axes_size,
     const struct ged_draw_view_feature_style *style);
@@ -2103,7 +2104,7 @@ GED_EXPORT extern int
 ged_draw_view_context_data_axes_centers_replace(
     void *view_ctx,
     const char *name,
-    const point_t *centers,
+    point_t *centers,
     size_t center_count,
     fastf_t half_axes_size,
     const struct ged_draw_view_feature_style *style);

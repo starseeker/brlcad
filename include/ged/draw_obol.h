@@ -40,7 +40,7 @@ struct rt_db_internal;
 struct bg_tess_tol;
 struct bn_tol;
 
-struct ged_draw_obol_lod_service_status {
+struct ged_draw_obol_lod_service_status_s {
     int attached;
     int running;
     int auto_submit;
@@ -63,6 +63,7 @@ struct ged_draw_obol_lod_service_status {
     size_t active_obb_proxy_payloads;
     char last_diagnostics[2048];
 };
+typedef struct ged_draw_obol_lod_service_status_s ged_draw_obol_lod_service_status_t;
 
 struct ged_draw_obol_source_expansion_status {
     size_t child_count;
@@ -249,12 +250,12 @@ GED_EXPORT int
 ged_draw_obol_lod_service_poll(struct ged *gedp,
 			       void *view_ctx,
 			       size_t max_results,
-			       struct ged_draw_obol_lod_service_status *status);
+			       ged_draw_obol_lod_service_status_t *status);
 
 GED_EXPORT int
 ged_draw_obol_lod_service_status(struct ged *gedp,
 				 void *view_ctx,
-				 struct ged_draw_obol_lod_service_status *status);
+				 ged_draw_obol_lod_service_status_t *status);
 
 GED_EXPORT int
 ged_draw_obol_view_lod_policy_changed(struct ged *gedp,
@@ -265,7 +266,7 @@ ged_draw_obol_lod_service_prewarm(struct ged *gedp,
 				  void *view_ctx,
 				  int argc,
 				  const char * const *argv,
-				  struct ged_draw_obol_lod_service_status *status);
+				  ged_draw_obol_lod_service_status_t *status);
 
 GED_EXPORT int
 ged_draw_obol_database_source_expand_children(

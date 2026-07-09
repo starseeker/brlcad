@@ -22,9 +22,12 @@ class SoBRLViewportImage;
 
 struct imgstream_fb;
 typedef struct imgstream_fb imgstream_fb_t;
-struct imgstream_fb_cursor;
-struct imgstream_fb_spec_info;
-struct imgstream_fb_view;
+struct imgstream_fb_spec_info_s;
+typedef struct imgstream_fb_spec_info_s imgstream_fb_spec_info_t;
+struct imgstream_fb_view_s;
+typedef struct imgstream_fb_view_s imgstream_fb_view_t;
+struct imgstream_fb_cursor_s;
+typedef struct imgstream_fb_cursor_s imgstream_fb_cursor_t;
 
 enum BRLObolWindowMode {
     BRLOBOL_WINDOW_TOPLEVEL = 0,
@@ -127,16 +130,16 @@ public:
     virtual long pollRate(void) const;
 
     virtual int openFramebuffer(imgstream_fb_t *fb,
-	const struct imgstream_fb_spec_info *info);
+	const imgstream_fb_spec_info_t *info);
     virtual void closeFramebuffer(imgstream_fb_t *fb);
     virtual int flushFramebuffer(imgstream_fb_t *fb);
     virtual int resetFramebuffer(imgstream_fb_t *fb);
     virtual int setFramebufferViewport(imgstream_fb_t *fb,
 	int left, int top, int right, int bottom);
     virtual int setFramebufferView(imgstream_fb_t *fb,
-	const struct imgstream_fb_view *view);
+	const imgstream_fb_view_t *view);
     virtual int setFramebufferCursor(imgstream_fb_t *fb,
-	const struct imgstream_fb_cursor *cursor);
+	const imgstream_fb_cursor_t *cursor);
     virtual int setFramebufferScreenCursor(imgstream_fb_t *fb,
 	int mode, int x, int y);
     virtual int setFramebufferCursorShape(imgstream_fb_t *fb,

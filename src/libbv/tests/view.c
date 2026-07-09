@@ -281,23 +281,28 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!bv_set_remove(set, v) || bv_set_find(set, "primary") != NULL)
 	return fail("failed to remove view from set");
 
+    struct bu_ptbl *views = NULL;
+
     if (!bv_context_set_add(ctx_set, &ctx) ||
 	    bv_context_set_find(ctx_set, "primary") != &ctx ||
-	    !bv_context_set_views(ctx_set) ||
-	    BU_PTBL_LEN(bv_context_set_views(ctx_set)) != 1)
+	    !(views = bv_context_set_views(ctx_set)) ||
+	    BU_PTBL_LEN(views) != 1)
 	return fail("failed to add named context to context set");
     if (!bv_name_set(bv_context_view(owned_ctx), "owned") ||
 	    !bv_context_set_add(ctx_set, owned_ctx) ||
 	    bv_context_set_find(ctx_set, "owned") != owned_ctx ||
-	    BU_PTBL_LEN(bv_context_set_views(ctx_set)) != 2)
+	    !(views = bv_context_set_views(ctx_set)) ||
+	    BU_PTBL_LEN(views) != 2)
 	return fail("failed to add owned context to context set");
     if (!bv_context_set_remove(ctx_set, &ctx) ||
 	    bv_context_set_find(ctx_set, "primary") != NULL ||
-	    BU_PTBL_LEN(bv_context_set_views(ctx_set)) != 1)
+	    !(views = bv_context_set_views(ctx_set)) ||
+	    BU_PTBL_LEN(views) != 1)
 	return fail("failed to remove context from context set");
     if (!bv_context_set_attach(ctx_set, &ctx) ||
 	    ctx.view_set != ctx_set ||
-	    BU_PTBL_LEN(bv_context_set_views(ctx_set)) != 1 ||
+	    !(views = bv_context_set_views(ctx_set)) ||
+	    BU_PTBL_LEN(views) != 1 ||
 	    !bv_context_set_attach(NULL, &ctx) ||
 	    ctx.view_set != NULL)
 	return fail("failed to attach context to context set without insertion");

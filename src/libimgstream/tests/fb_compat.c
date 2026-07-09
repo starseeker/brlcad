@@ -56,8 +56,8 @@ struct display_host_test_state {
     enum imgstream_fb_display_kind open_display;
     size_t open_width;
     size_t open_height;
-    struct imgstream_fb_view last_view;
-    struct imgstream_fb_cursor last_cursor;
+    imgstream_fb_view_t last_view;
+    imgstream_fb_cursor_t last_cursor;
     int viewport[4];
     int scursor[3];
     int setcursor_args[4];
@@ -65,7 +65,7 @@ struct display_host_test_state {
 
 
 static int
-display_host_open(imgstream_fb_t *fb, const struct imgstream_fb_spec_info *info, void *data)
+display_host_open(imgstream_fb_t *fb, const imgstream_fb_spec_info_t *info, void *data)
 {
     struct display_host_test_state *state = (struct display_host_test_state *)data;
     if (!state || !fb || !info)
@@ -126,7 +126,7 @@ display_host_viewport(imgstream_fb_t *UNUSED(fb), int left, int top, int right, 
 
 
 static int
-display_host_view(imgstream_fb_t *UNUSED(fb), const struct imgstream_fb_view *view, void *data)
+display_host_view(imgstream_fb_t *UNUSED(fb), const imgstream_fb_view_t *view, void *data)
 {
     struct display_host_test_state *state = (struct display_host_test_state *)data;
     if (!state || !view)
@@ -138,7 +138,7 @@ display_host_view(imgstream_fb_t *UNUSED(fb), const struct imgstream_fb_view *vi
 
 
 static int
-display_host_cursor(imgstream_fb_t *UNUSED(fb), const struct imgstream_fb_cursor *cursor, void *data)
+display_host_cursor(imgstream_fb_t *UNUSED(fb), const imgstream_fb_cursor_t *cursor, void *data)
 {
     struct display_host_test_state *state = (struct display_host_test_state *)data;
     if (!state || !cursor)
@@ -203,7 +203,7 @@ display_host_poll_rate(const imgstream_fb_t *UNUSED(fb), void *data)
 static int
 test_spec_classification(void)
 {
-    struct imgstream_fb_spec_info info;
+    imgstream_fb_spec_info_t info;
 
     imgstream_fb_display_host_clear();
     CHECK(imgstream_fb_spec_kind(NULL) == IMGSTREAM_FB_SPEC_MEMORY, "null spec maps to memory");

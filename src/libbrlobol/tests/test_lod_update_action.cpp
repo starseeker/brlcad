@@ -3383,7 +3383,7 @@ test_export_record_metadata(void)
 	lineSummary.segmentCount != 1 ||
 	!exportAction.getObjectRecordLinePoint(vlistObject, 0,
 		detailPoint) ||
-	detailPoint[0] != 0.0f ||
+	!NEAR_ZERO(detailPoint[0], SMALL_FASTF) ||
 	!exportAction.getObjectRecordLineCommand(vlistObject, 0,
 		lineCommand) ||
 	lineCommand != SoBRLExportAction::LINE_MOVE ||
@@ -3399,7 +3399,7 @@ test_export_record_metadata(void)
 	pointSummary.sourceIdentityValue != curveSourceIdentity ||
 	!exportAction.getObjectRecordPoint(vlistObject, 0,
 					   detailPoint) ||
-	detailPoint[0] != 2.0f) {
+	!NEAR_EQUAL(detailPoint[0], 2.0f, SMALL_FASTF)) {
 	printf("FAIL: vlist object export record did not provide line/point detail readback\n");
 	root->unref();
 	return 1;

@@ -814,9 +814,9 @@ qtcad_obol_wait_for_lod_service_idle(
     struct ged *gedp,
     void *view_ctx,
     int timeout_ms,
-    struct ged_draw_obol_lod_service_status *status)
+    ged_draw_obol_lod_service_status_t *status)
 {
-    struct ged_draw_obol_lod_service_status local_status;
+    ged_draw_obol_lod_service_status_t local_status;
     if (!status)
 	status = &local_status;
 
@@ -1412,7 +1412,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    int lit_auto = 0;
 	    int diff_auto = 0;
 	    QImage frame_auto;
-	    struct ged_draw_obol_lod_service_status service_status;
+	    ged_draw_obol_lod_service_status_t service_status;
 	    memset(&service_status, 0, sizeof(service_status));
 	    for (int frame = 0; frame < 120; frame++) {
 		QCoreApplication::processEvents();
@@ -1479,7 +1479,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	if (testCase.startupExpand || testCase.startupWireLod) {
 	    struct ged_draw_obol_source_expansion_status expansion_status;
 	    struct ged_draw_obol_source_prewarm_status prewarm_status;
-	    struct ged_draw_obol_lod_service_status service_status;
+	    ged_draw_obol_lod_service_status_t service_status;
 	    memset(&expansion_status, 0, sizeof(expansion_status));
 	    memset(&prewarm_status, 0, sizeof(prewarm_status));
 	    memset(&service_status, 0, sizeof(service_status));

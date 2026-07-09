@@ -243,8 +243,8 @@ _tclcad_draw_view_data_arrows_replace(void *view_ctx,
     style.arrow_tip_length = (fastf_t)tip_length;
     style.arrow_tip_width = (fastf_t)tip_width;
 
-    (void)ged_draw_view_context_data_arrows_points_replace(view_ctx, feature_name,
-	    (const point_t *)pts, (size_t)npts, &style);
+	    (void)ged_draw_view_context_data_arrows_points_replace(view_ctx, feature_name,
+		    pts, (size_t)npts, &style);
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC void
@@ -295,9 +295,9 @@ _tclcad_draw_view_data_axes_replace(void *view_ctx,
     }
     style.line_width = line_width;
 
-    (void)ged_draw_view_context_data_axes_centers_replace(view_ctx, feature_name,
-	    (const point_t *)centers, (size_t)center_count,
-	    half_axes_size, &style);
+	    (void)ged_draw_view_context_data_axes_centers_replace(view_ctx, feature_name,
+		    centers, (size_t)center_count,
+		    half_axes_size, &style);
 }
 
 TCLCAD_DRAW_VIEW_HELPER_STATIC size_t

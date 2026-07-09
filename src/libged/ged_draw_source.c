@@ -969,7 +969,7 @@ _ged_draw_view_export_type_name_from_obol_geometry(const char *geometry_name)
 static void
 _ged_draw_view_export_record_bounds_from_points(
 	struct ged_draw_view_db_object_record *rec,
-	const point_t *points,
+	point_t *points,
 	size_t point_count)
 {
     if (!rec || !points || !point_count)
@@ -6279,7 +6279,7 @@ ged_draw_scene_ref_display_summary(
     out->is_database_source = ged_draw_scene_ref_is_database_source(ref);
     out->has_draw_intent = intent ? 1 : 0;
     out->intent_path = intent ? bsg_draw_intent_path(intent) : NULL;
-    out->intent_draw_mode = intent ? bsg_draw_intent_mode(intent) : -1;
+    out->intent_draw_mode = intent ? bsg_draw_intent_mode(intent) : (bsg_draw_mode)-1;
     out->visible = ged_draw_scene_ref_visible(ref);
     out->selected = 0;
     out->highlighted = ged_draw_scene_ref_highlighted(ref);
@@ -9244,8 +9244,9 @@ ged_draw_mesh_lod_publish_current(
 	indices[out++] = -1;
     }
 
-    int ret = (*cb)(cb_data, points, point_count, normals, normal_count,
-	    indices, index_count);
+    int ret = (*cb)(cb_data, (const point_t *)points, point_count,
+	    (const vect_t *)normals, normal_count, (const int *)indices,
+	    index_count);
     bu_free(normals, "mesh lod indexed-face normals");
     bu_free(indices, "mesh lod indexed-face indices");
     return ret;

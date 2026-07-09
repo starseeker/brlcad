@@ -869,7 +869,7 @@ GED_EXPORT extern int ged_draw_obol_view_context_arrow_tip_set(
 GED_EXPORT extern int ged_draw_obol_view_context_tcl_arrows_replace(
 	void *view_ctx,
 	const char *name,
-	const point_t *points,
+	point_t *points,
 	size_t point_count,
 	const struct ged_draw_view_feature_style *style);
 GED_EXPORT extern int ged_draw_obol_view_context_feature_axes_centers_copy(
@@ -880,7 +880,7 @@ GED_EXPORT extern int ged_draw_obol_view_context_feature_axes_centers_copy(
 GED_EXPORT extern int ged_draw_obol_view_context_tcl_axes_replace(
 	void *view_ctx,
 	const char *name,
-	const point_t *centers,
+	point_t *centers,
 	size_t center_count,
 	fastf_t half_axes_size,
 	const struct ged_draw_view_feature_style *style);
