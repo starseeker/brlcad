@@ -45,6 +45,41 @@ set(
   wrapper.c
 )
 
+set(TCLCAD_TKOBOL_HOST OFF)
+set(TCLCAD_TKOBOL_DEFINITIONS)
+if(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
+  find_package(OpenGL)
+  if("${TK_WINDOWING_SYSTEM}" STREQUAL "x11")
+    find_package(X11)
+    if(OPENGL_FOUND AND X11_FOUND)
+      set(TCLCAD_TKOBOL_HOST ON)
+      set(TCLCAD_TKOBOL_DEFINITIONS TOGL_X11 TOGL_USE_OVERLAY=0)
+    endif()
+  elseif(WIN32)
+    if(OPENGL_FOUND)
+      set(TCLCAD_TKOBOL_HOST ON)
+      set(TCLCAD_TKOBOL_DEFINITIONS TOGL_WGL TOGL_USE_OVERLAY=0)
+    endif()
+  endif()
+  if(TCLCAD_TKOBOL_HOST)
+    set(TCLCAD_TKOBOL_HOST ON)
+    list(APPEND LIBTCLCAD_SRCS tkobol/vendor/togl/togl.c)
+    if(WIN32)
+      list(APPEND LIBTCLCAD_SRCS tkobol/vendor/togl/toglFont.c)
+      set_property(
+        SOURCE tkobol/vendor/togl/toglFont.c
+        APPEND
+        PROPERTY COMPILE_DEFINITIONS TOGL_WGL
+      )
+    endif()
+    set_property(
+      SOURCE tkobol/vendor/togl/togl.c
+      APPEND
+      PROPERTY COMPILE_DEFINITIONS ${TCLCAD_TKOBOL_DEFINITIONS}
+    )
+  endif(TCLCAD_TKOBOL_HOST)
+endif(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
+
 if(BRLCAD_ENABLE_TCL)
   # Include directories needed by libtclcad users
   set(TCLCAD_INCLUDE_DIRS ${TCL_INCLUDE_PATH})
@@ -61,6 +96,9 @@ if(BRLCAD_ENABLE_TCL)
   # Note - libtclcad_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
   set(TCLCAD_PUBLIC_LIBS ${libtclcad_deps} ${TCL_LIBRARY})
   set(TCLCAD_PRIVATE_LIBS ${TCLCAD_XLIBS} PNG::PNG)
+  if(TCLCAD_TKOBOL_HOST)
+    list(APPEND TCLCAD_PRIVATE_LIBS ${OPENGL_LIBRARIES})
+  endif()
   if(TK_LIBRARY)
     set(TCLCAD_PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS} ${TK_LIBRARY})
   endif(TK_LIBRARY)
@@ -88,6 +126,9 @@ if(BRLCAD_ENABLE_TCL)
     if(TK_LIBRARY)
       target_compile_definitions(${pt} PRIVATE HAVE_TK)
     endif(TK_LIBRARY)
+    if(TCLCAD_TKOBOL_HOST)
+      target_compile_definitions(${pt} PRIVATE HAVE_TKOBOL_HOST)
+    endif()
   endforeach(pt ${ptargets})
 
   set_target_properties(libtclcad PROPERTIES VERSION 20.0.1 SOVERSION 20)
@@ -102,6 +143,8 @@ if(BRLCAD_ENABLE_TCL)
   add_dependencies(libtclcad ged_plugins)
 endif(BRLCAD_ENABLE_TCL)
 
+add_subdirectory(tkobol)
+
 add_subdirectory(tests)
 
 cmakefiles(
@@ -109,6 +152,14 @@ cmakefiles(
   draw_view_move_helpers.h
   tclcad_private.h
   view/view.h
+  tkobol/dm-tkobol.cpp
+  tkobol/vendor/togl/LICENSE
+  tkobol/vendor/togl/README.brlcad
+  tkobol/vendor/togl/Tcl3D_License.txt
+  tkobol/vendor/togl/togl.c
+  tkobol/vendor/togl/togl.h
+  tkobol/vendor/togl/toglFont.c
+  tkobol/vendor/togl/toglFont.h
   CMakeLists.txt
 )
 

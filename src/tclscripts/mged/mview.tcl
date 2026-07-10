@@ -43,10 +43,8 @@ proc openmv { id w wc dpy dtype } {
 	dm set zclip 1
 	dm set zbuffer 1
     }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
+    catch {dm set zbuffer $mged_default(zbuffer)}
+    catch {dm set lighting $mged_default(lighting)}
     set faceplate $mged_default(faceplate)
     set orig_gui $mged_default(orig_gui)
     set perspective_mode $mged_default(perspective_mode)
@@ -57,10 +55,8 @@ proc openmv { id w wc dpy dtype } {
 	dm set zclip 1
 	dm set zbuffer 1
     }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
+    catch {dm set zbuffer $mged_default(zbuffer)}
+    catch {dm set lighting $mged_default(lighting)}
     set faceplate $mged_default(faceplate)
     set orig_gui $mged_default(orig_gui)
     set perspective_mode $mged_default(perspective_mode)
@@ -71,10 +67,8 @@ proc openmv { id w wc dpy dtype } {
 	dm set zclip 1
 	dm set zbuffer 1
     }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
+    catch {dm set zbuffer $mged_default(zbuffer)}
+    catch {dm set lighting $mged_default(lighting)}
     set faceplate $mged_default(faceplate)
     set orig_gui $mged_default(orig_gui)
     set perspective_mode $mged_default(perspective_mode)
@@ -85,10 +79,8 @@ proc openmv { id w wc dpy dtype } {
 	dm set zclip 1
 	dm set zbuffer 1
     }
-    if { $dtype == "ogl" } {
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
-    }
+    catch {dm set zbuffer $mged_default(zbuffer)}
+    catch {dm set lighting $mged_default(lighting)}
     set faceplate $mged_default(faceplate)
     set orig_gui $mged_default(orig_gui)
     set perspective_mode $mged_default(perspective_mode)

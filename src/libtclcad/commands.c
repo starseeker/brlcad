@@ -4513,23 +4513,8 @@ to_new_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    if (BU_STR_EQUAL(argv[2], "nu"))
-	type = argv[2];
-
-    /* find display manager type */
-    if (argv[2][0] == 'X' || argv[2][0] == 'x')
-	type = argv[2];
-
-    if (BU_STR_EQUAL(argv[2], "tk"))
-	type = argv[2];
-
-    if (BU_STR_EQUAL(argv[2], "ogl"))
-	type = argv[2];
-
-    if (BU_STR_EQUAL(argv[2], "wgl"))
-	type = argv[2];
-
-    if (BU_STR_EQUAL(argv[2], "qt"))
+    /* Accept any display manager registered and viable on this platform. */
+    if (dm_valid_type(argv[2], NULL) == 1)
 	type = argv[2];
 
     if (!type) {

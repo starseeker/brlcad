@@ -130,6 +130,7 @@ GED_EXPORT extern int ged_view_context_scene_attached(const void *view_ctx);
 GED_EXPORT extern size_t ged_view_context_clear(void *view_ctx, int flags);
 GED_EXPORT extern void *ged_view_context_user_data_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_user_data_set(void *view_ctx, void *user_data);
+GED_EXPORT extern void *ged_view_context_tclcad_data_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_tclcad_data_set(void *view_ctx, void *tcl_data);
 GED_EXPORT extern int ged_view_context_callbacks_set(void *view_ctx, struct bu_ptbl *callbacks);
 GED_EXPORT extern void *ged_view_context_create(void);

@@ -46,6 +46,10 @@
 #include "brlcad_version.h"
 #include "./tclcad_private.h"
 
+#ifdef HAVE_TKOBOL_HOST
+extern int BrlcadTkObolHost_Init(Tcl_Interp *interp);
+#endif
+
 static int
 dm_validXType_tcl(void *clientData, int argc, const char **argv)
 {
@@ -170,6 +174,11 @@ Dm_Init(Tcl_Interp *interp)
 
     /* register commands */
     register_cmds(interp, cmdtab);
+
+#ifdef HAVE_TKOBOL_HOST
+    if (BrlcadTkObolHost_Init(interp) != TCL_OK)
+	return TCL_ERROR;
+#endif
 
 
     /* initialize framebuffer object code */

@@ -114,8 +114,9 @@ dm_graphics_system(const char *dmtype)
  * The priority_list drives dm_bestXType / dm_default_type for legacy
  * applications such as mged that open a DM via dm_open() outside of a Qt
  * widget context.  The ordering reflects historical platform priorities:
- *   wgl - Windows OpenGL (MSVC / MinGW builds)
- *   ogl - X11 OpenGL (Linux / macOS native GL)
+ *   tkobol - Tk-hosted retained Obol renderer
+ *   wgl - legacy Windows OpenGL fallback (MSVC / MinGW builds)
+ *   ogl - legacy X11 OpenGL fallback (Linux / macOS native GL)
  *   tkswrast - Tk-hosted OSMesa fallback for MGED/Tcl clients
  *   X - X11 non-GL fallback
  *
@@ -129,7 +130,7 @@ dm_graphics_system(const char *dmtype)
  * line; dm_open() accepts swrast without a widget context by using the bsg_view
  * pointer (view_state->vs_gvp) as the ctx argument.
  */
-static const char *priority_list[] = {"wgl", "ogl", "tkswrast", "X", NULL};
+static const char *priority_list[] = {"tkobol", "wgl", "ogl", "tkswrast", "X", NULL};
 
 
 extern "C" void

@@ -2669,7 +2669,7 @@ main(int argc, char *argv[])
     BU_OPT(opt_defs[36], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
     BU_OPT(opt_defs[37], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
     /* ---- window/display (Tcl mged_default array) ---- */
-    BU_OPT(opt_defs[38], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display manager type (e.g. ogl, swrast)");
+    BU_OPT(opt_defs[38], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display manager type (e.g. tkobol, swrast)");
     BU_OPT(opt_defs[39], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
     BU_OPT(opt_defs[40], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
     /* ---- grid (rset g …) ---- */

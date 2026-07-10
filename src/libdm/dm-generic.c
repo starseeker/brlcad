@@ -1082,7 +1082,8 @@ dm_obol_controller(struct dm *dmp)
     if (UNLIKELY(!dmp)) return NULL;
     BU_CKMAG(dmp, DM_MAGIC, "dm internal");
     if (!dmp->i || !dmp->i->dm_name ||
-	    !BU_STR_EQUAL(dmp->i->dm_name, "obol"))
+	    (!BU_STR_EQUAL(dmp->i->dm_name, "obol") &&
+	     !BU_STR_EQUAL(dmp->i->dm_name, "tkobol")))
 	return NULL;
     return dmp->i->p_vars;
 }

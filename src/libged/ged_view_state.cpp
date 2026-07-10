@@ -588,6 +588,15 @@ ged_view_context_user_data_set(void *view_ctx, void *user_data)
 	    user_data);
 }
 
+extern "C" GED_EXPORT void *
+ged_view_context_tclcad_data_get(const void *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    return record ? record->tclcad_data : NULL;
+}
+
 extern "C" GED_EXPORT int
 ged_view_context_tclcad_data_set(void *view_ctx, void *tcl_data)
 {

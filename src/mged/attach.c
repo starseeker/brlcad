@@ -374,7 +374,7 @@ f_attach(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	Tcl_AppendResult(interpreter, "attach(", argv[argc - 1], "): BAD\n", (char *)NULL);
 	print_valid_dm(interpreter);
 	Tcl_AppendResult(interpreter,
-			 "Hint: run `dm initmsg` to see why other plugins (e.g. ogl) may have failed to register.\n",
+			 "Hint: run `dm initmsg` to see why display-manager plugins may have failed to register.\n",
 			 (char *)NULL);
 	return TCL_ERROR;
     }

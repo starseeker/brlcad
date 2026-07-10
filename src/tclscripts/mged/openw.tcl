@@ -1810,7 +1810,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	modify the state of the drawing window) will apply only to the
 	drawing window wherein the user typed. This feature is provided
 	to lessen the need to use the mouse." } }
-    if {$mged_gui($id,dtype) == "ogl" || $mged_gui($id,dtype) == "wgl"} {
+    if {![catch {dm set depthcue}]} {
 	.$id.menubar.misc add checkbutton -offvalue 0 -onvalue 1\
 	    -variable mged_gui($id,depthcue) -label "Depth Cueing" -underline 0\
 	    -command "mged_apply $id \"dm set depthcue \$mged_gui($id,depthcue)\""
@@ -1818,12 +1818,16 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	    { { summary "Toggle depth cueing. When depth cueing is active,
 		lines that are farther away appear more faint." }
 		{ see_also "dm" } }
+    }
+    if {![catch {dm set zbuffer}]} {
 	.$id.menubar.misc add checkbutton -offvalue 0 -onvalue 1\
 	    -variable mged_gui($id,zbuffer) -label "Z Buffer" -underline 2\
 	    -command "mged_apply $id \"dm set zbuffer \$mged_gui($id,zbuffer)\""
 	hoc_register_menu_data "Misc" "Z Buffer" "Z Buffer"\
 	    { { summary "Toggle Z buffer." }
 		{ see_also "dm" } }
+    }
+    if {![catch {dm set lighting}]} {
 	.$id.menubar.misc add checkbutton -offvalue 0 -onvalue 1\
 	    -variable mged_gui($id,lighting) -label "Lighting" -underline 0\
 	    -command "mged_apply $id \"dm set lighting \$mged_gui($id,lighting)\""
@@ -2245,9 +2249,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     update_mged_vars $id
     set mged_gui($id,qray_effects) [qray effects]
 
-    if {$mged_gui($id,dtype) == "ogl" || $mged_gui($id,dtype) == "wgl"} {
-	mged_apply_local $id "dm set zbuffer $mged_default(zbuffer)"
-    }
+    catch {mged_apply_local $id "dm set zbuffer $mged_default(zbuffer)"}
 
     # reset current_cmd_list so that its cur_hist gets updated
     cmd_win set $save_id
@@ -2417,11 +2419,9 @@ proc update_mged_vars { id } {
     set mged_gui($id,orig_gui) $orig_gui
     set mged_gui($id,forward_keys) $forwarding_key($mged_gui($id,active_dm))
 
-    if {$mged_gui($id,dtype) == "ogl" || $mged_gui($id,dtype) == "ogl"} {
-	set mged_gui($id,depthcue) [dm set depthcue]
-	set mged_gui($id,zbuffer) [dm set zbuffer]
-	set mged_gui($id,lighting) [dm set lighting]
-    }
+    catch {set mged_gui($id,depthcue) [dm set depthcue]}
+    catch {set mged_gui($id,zbuffer) [dm set zbuffer]}
+    catch {set mged_gui($id,lighting) [dm set lighting]}
 
     set_mged_v_axes_pos $id
 

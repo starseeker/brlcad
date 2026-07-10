@@ -105,7 +105,9 @@ tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp)
 struct tclcad_view_data *
 tclcad_view_data_from_view_ctx(void *view_ctx)
 {
-    return (struct tclcad_view_data *)ged_view_context_user_data_get(view_ctx);
+    void *tcl_data = ged_view_context_tclcad_data_get(view_ctx);
+    return tcl_data ? (struct tclcad_view_data *)((char *)tcl_data -
+	offsetof(struct tclcad_view_data, tcl_data)) : NULL;
 }
 
 tclcad_view_state *
@@ -233,22 +235,14 @@ tclcad_view_prim_labels_state_set(void *view_ctx, const struct bv_other_state *s
 int
 tclcad_view_data_bind_view_ctx(void *view_ctx, struct tclcad_view_data *tvd)
 {
-    if (!ged_view_context_user_data_set(view_ctx, (void *)tvd))
-	return 0;
-
-    if (!ged_view_context_tclcad_data_set(view_ctx, tvd ? &tvd->tcl_data : NULL)) {
-	(void)ged_view_context_user_data_set(view_ctx, NULL);
-	return 0;
-    }
-
-    return 1;
+    return ged_view_context_tclcad_data_set(view_ctx,
+	tvd ? (void *)&tvd->tcl_data : NULL);
 }
 
 void
 tclcad_view_data_unbind_view_ctx(void *view_ctx)
 {
     (void)ged_view_context_tclcad_data_set(view_ctx, NULL);
-    (void)ged_view_context_user_data_set(view_ctx, NULL);
 }
 
 /*
