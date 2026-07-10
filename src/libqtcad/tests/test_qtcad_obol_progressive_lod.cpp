@@ -1021,8 +1021,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     int64_t total_start = bu_gettime();
     int64_t phase_start = 0;
     char case_name[MAXPATHLEN] = {0};
-    char tmp_db[MAXPATHLEN] = {0};
-    char cache_leaf[MAXPATHLEN] = {0};
+    std::string tmp_db;
+    std::string cache_leaf;
     char cache_dir[MAXPATHLEN] = {0};
     char active_draw_target[MAXPATHLEN] = {0};
     struct ged *gedp = NULL;
@@ -1055,18 +1055,23 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    ged_draw_obol_controller_detach_opaque(gedp, controller);
 	if (gedp)
 	    ged_close(gedp);
-	bu_file_delete(tmp_db);
+	bu_file_delete(tmp_db.c_str());
 	bu_dirclear(cache_dir);
     };
 
     sanitize_case_name(case_name, sizeof(case_name), testCase.name);
-    snprintf(tmp_db, sizeof(tmp_db),
-	     "qtcad_obol_progressive_lod_%s_%d.g",
-	     case_name, bu_pid());
-    snprintf(cache_leaf, sizeof(cache_leaf),
-	     "qtcad_obol_progressive_lod_%s_%d_cache",
-	     case_name, bu_pid());
-    bu_dir(cache_dir, MAXPATHLEN, BU_DIR_CURR, cache_leaf, NULL);
+    tmp_db = "qtcad_obol_progressive_lod_";
+    tmp_db += case_name;
+    tmp_db += "_";
+    tmp_db += std::to_string(bu_pid());
+    tmp_db += ".g";
+
+    cache_leaf = "qtcad_obol_progressive_lod_";
+    cache_leaf += case_name;
+    cache_leaf += "_";
+    cache_leaf += std::to_string(bu_pid());
+    cache_leaf += "_cache";
+    bu_dir(cache_dir, MAXPATHLEN, BU_DIR_CURR, cache_leaf.c_str(), NULL);
     bu_dirclear(cache_dir);
     bu_mkdir(cache_dir);
     bu_setenv("BU_DIR_CACHE", cache_dir, 1);
@@ -1076,9 +1081,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		    testCase.slowLodDelays ? "700" : "0");
 
     phase_start = bu_gettime();
-    bu_file_delete(tmp_db);
-    if (!copy_file(testCase.sourceDb, tmp_db)) {
-	fprintf(stderr, "unable to copy %s to %s\n", testCase.sourceDb, tmp_db);
+    bu_file_delete(tmp_db.c_str());
+    if (!copy_file(testCase.sourceDb, tmp_db.c_str())) {
+	fprintf(stderr, "unable to copy %s to %s\n", testCase.sourceDb, tmp_db.c_str());
 	cleanup();
 	return 0;
     }
@@ -1086,9 +1091,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 				 total_start, testCase, "copy");
 
     phase_start = bu_gettime();
-    gedp = ged_open("db", tmp_db, 1);
+    gedp = ged_open("db", tmp_db.c_str(), 1);
     if (!gedp) {
-	fprintf(stderr, "failed to open %s\n", tmp_db);
+	fprintf(stderr, "failed to open %s\n", tmp_db.c_str());
 	cleanup();
 	return 0;
     }
