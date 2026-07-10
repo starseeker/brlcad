@@ -1023,35 +1023,14 @@ ged_selection_native_draw_sync(struct ged *gedp,
     ctx.new_selection = &new_selection;
     ctx.display_changed = 0;
 
-    std::vector<ged_selection_source_record_info> records;
-    if (!ged_selection_source_records_collect(gedp, records))
-	return old_selection != new_selection;
+    if (ged_draw_obol_database_sources_set_selected_for_path(gedp, NULL, 0))
+	ctx.display_changed = 1;
 
-    for (const struct ged_selection_source_record_info &rec : records) {
-	if (rec.selected && !rec.instance_key.empty() &&
-		ged_draw_obol_database_source_set_selected_for_instance_key(
-		    gedp, rec.instance_key.c_str(), 0))
+    for (const std::string &path : set->selected_paths) {
+	if (ged_draw_obol_database_sources_set_selected_for_path(gedp,
+		path.c_str(), 1))
 	    ctx.display_changed = 1;
-    }
-
-    std::set<std::string> selected_instances;
-    for (const struct ged_selection_source_record_info &rec : records) {
-	const std::string *selected_path = NULL;
-	for (const std::string &path : set->selected_paths) {
-	    if (ged_selection_source_record_matches_path(rec, path)) {
-		selected_path = &path;
-		break;
-	    }
-	}
-	if (!selected_path)
-	    continue;
-
-	if (!rec.instance_key.empty() &&
-		selected_instances.insert(rec.instance_key).second &&
-		ged_draw_obol_database_source_set_selected_for_instance_key(
-		    gedp, rec.instance_key.c_str(), 1))
-	    ctx.display_changed = 1;
-	ged_selection_native_add_path_to_views(&ctx, *selected_path);
+	ged_selection_native_add_path_to_views(&ctx, path);
     }
 
     return old_selection != new_selection || ctx.display_changed;

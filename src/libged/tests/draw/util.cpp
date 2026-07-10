@@ -457,6 +457,7 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 	return -1;
     (void)ged_draw_obol_view_context_faceplate_sync(gedp, v);
     (void)controller->realizePending();
+    (void)ged_selection_draw_sync(gedp, NULL);
     draw_test_obol_debug_dump(gedp, id, controller, v);
 
     const SbViewportRegion &region = controller->getViewportRegion();

@@ -1896,6 +1896,8 @@ ged_draw_apply_transaction(struct ged *gedp,
 		result->scene_revision_after = ged_draw_scene_revision(gedp);
 	    }
 	}
+	if (ret >= 0 && _ged_draw_txn_kind_changes_scene(txn->kind))
+	    (void)ged_selection_draw_sync(gedp, NULL);
 	_ged_draw_observers_dispatch(gedp, txn, result);
     }
 

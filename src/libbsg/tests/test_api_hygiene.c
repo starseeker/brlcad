@@ -2075,7 +2075,7 @@ main(int argc, char **argv)
 	    "src/libged",
 	    "ged_draw_private.h",
 	    "direct private GED draw includes are limited to libged draw internals",
-	    "src/libged/CMakeLists.txt;src/libged/ged_private.h;src/libged/draw/bigE.c;src/libged/draw/draw.c;src/libged/dm/dm.c",
+	    "src/libged/CMakeLists.txt;src/libged/ged_private.h;src/libged/ged_view_state.cpp;src/libged/draw/bigE.c;src/libged/draw/draw.c;src/libged/dm/dm.c",
 	    NULL,
 	    "src/libged/ged_draw"
 	},
@@ -3105,7 +3105,6 @@ main(int argc, char **argv)
 	"struct bsg_node"
     };
     const char *stage2_typed_node_authoring_files[] = {
-	"src/libdm/tests/test_backend_draw_item.c",
 	"src/libged/ged.cpp",
 	"src/libqtcad/QgGL.cpp",
 	"src/libqtcad/QgSW.cpp",
@@ -3114,7 +3113,6 @@ main(int argc, char **argv)
 	"src/mged/setup.c"
     };
     const char *stage2_raw_node_authoring_files[] = {
-	"src/libdm/tests/test_backend_draw_item.c",
 	"src/libqtcad/tests/qsketch.cpp"
     };
     const char *stage2_scene_ref_authoring_patterns[] = {

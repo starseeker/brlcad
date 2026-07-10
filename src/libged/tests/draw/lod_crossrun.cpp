@@ -48,7 +48,10 @@
 
 #include "common.h"
 
+#include <chrono>
+#include <cstring>
 #include <fstream>
+#include <thread>
 
 #include <bu.h>
 #include "rt/view.h"
@@ -57,11 +60,35 @@
 #include <dm.h>
 #include <ged.h>
 #include <ged/draw.h>
+#include <ged/draw_obol.h>
 #include <ged/db_index.h>
 #include <ged/event_txn.h>
 #include <icv.h>
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
+
+static int
+wait_for_lod_service(struct ged *gedp, int timeout_ms)
+{
+    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    ged_draw_obol_lod_service_status_t status;
+    if (!view_ctx ||
+	    !ged_draw_obol_lod_service_status(gedp, view_ctx, &status))
+	return 1;
+
+    for (int elapsed = 0; elapsed <= timeout_ms; elapsed += 25) {
+	memset(&status, 0, sizeof(status));
+	if (!ged_draw_obol_lod_service_poll(gedp, view_ctx, 64, &status))
+	    return 0;
+	if (status.in_flight == 0 && status.pending_tasks == 0 &&
+		status.queued_cache_writes == 0 && status.delayed_tasks == 0)
+	    return 1;
+	std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+
+    bu_log("LoD service did not become idle within %d ms\n", timeout_ms);
+    return 0;
+}
 
 /* ------------------------------------------------------------------ */
 /* Minimal GED setup (Obol DM, 512x512, az/el 35/25)                  */
@@ -222,6 +249,10 @@ main(int ac, char *av[])
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
+    int r1_wait = wait_for_lod_service(gedp, 5000);
+    if (!r1_wait)
+	bu_log("Run 1: LoD service wait timed out\n");
+
     int r1_ret = render_to_file(gedp, "lod_cr_run1.png");
     bu_log("Run 1 image captured (%s)\n", r1_ret ? "WARN: screengrab failed" : "ok");
 
@@ -252,6 +283,10 @@ main(int ac, char *av[])
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
+    int r2_wait = wait_for_lod_service(gedp, 5000);
+    if (!r2_wait)
+	bu_log("Run 2: LoD service wait timed out\n");
+
     int r2_ret = render_to_file(gedp, "lod_cr_run2.png");
     bu_log("Run 2 image captured (%s)\n", r2_ret ? "WARN: screengrab failed" : "ok");
 
@@ -263,7 +298,10 @@ main(int ac, char *av[])
      * LoD loading without relying on exact pixel identity.
      * -------------------------------------------------------------- */
     int ret = 0;
-    if (r1_ret || r2_ret) {
+    if (!r1_wait || !r2_wait) {
+	bu_log("FAIL: LoD service did not settle before capture\n");
+	ret = 1;
+    } else if (r1_ret || r2_ret) {
 	bu_log("FAIL: one or both captures failed\n");
 	ret = 1;
     } else if (!png_not_empty("lod_cr_run1.png") || !png_not_empty("lod_cr_run2.png")) {

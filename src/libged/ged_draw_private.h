@@ -1458,6 +1458,10 @@ GED_EXPORT extern int ged_draw_obol_database_source_set_selected_for_instance_ke
 	struct ged *gedp,
 	const char *instance_key,
 	int selected);
+GED_EXPORT extern int ged_draw_obol_database_sources_set_selected_for_path(
+	struct ged *gedp,
+	const char *path,
+	int selected);
 GED_EXPORT extern int ged_draw_obol_shape_update_display_for_path(
 	struct ged *gedp,
 	const char *path,

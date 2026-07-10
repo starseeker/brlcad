@@ -146,7 +146,7 @@ main(int ac, char *av[])
     int cx = bv_width_get(DRAW_TEST_BV_CONST(v)) / 2;
     int cy = bv_height_get(DRAW_TEST_BV_CONST(v)) / 2;
     struct ged_draw_pick_result *pr =
-	ged_draw_view_context_pick_point(v, cx, cy, 0);
+	ged_draw_view_context_pick_point(v, cx, cy, 1);
     if (pr && ged_draw_pick_result_count(pr) > 0) {
 	struct selected_path_state path_state = {0, std::string()};
 	ASSERT(ged_draw_view_context_selection_set_pick_result(v, pr,

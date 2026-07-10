@@ -75,6 +75,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -13687,6 +13688,88 @@ ged_draw_obol_database_source_set_selected_for_instance_key(
 			    summary.materialColor,
 			    summary.materialRevision);
     return changed > 0 ? 1 : 0;
+}
+
+static void
+ged_obol_collect_database_sources(SoNode *node,
+	std::set<SoBRLDatabaseSource *> &sources)
+{
+    if (!node)
+	return;
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	sources.insert(static_cast<SoBRLDatabaseSource *>(node));
+	return;
+    }
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++)
+	ged_obol_collect_database_sources(group->getChild(i), sources);
+}
+
+static int
+ged_obol_sources_set_selected_for_path(
+    const std::set<SoBRLDatabaseSource *> &sources,
+    const char *path,
+    int selected)
+{
+
+    int applied = 0;
+    for (SoBRLDatabaseSource *source : sources) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!source || !source->getSummary(summary) || !summary.valid)
+	    continue;
+	const char *source_path = summary.path.getString();
+	if (path && path[0] &&
+		!ged_obol_path_has_semantic_prefix(source_path, path))
+	    continue;
+	const int changed = source->setDisplayState(
+		FALSE, summary.sourceRevision,
+		summary.inputsRevision, summary.visible,
+		selected ? TRUE : FALSE, summary.highlighted,
+		summary.lineStyle, summary.lineWidth, summary.transparency,
+		summary.colorOverride, summary.color,
+		summary.materialColorValid, summary.materialColor,
+		summary.materialRevision);
+	if (changed > 0)
+	    applied++;
+    }
+    return applied;
+}
+
+extern "C" int
+ged_draw_obol_database_sources_set_selected_for_path(
+    struct ged *gedp,
+    const char *path,
+    int selected)
+{
+    if (!gedp || !gedp->i || !gedp->i->ged_gdp)
+	return 0;
+
+    std::set<SoBRLDatabaseSource *> sources;
+    SoBRLSceneController *owned = ged_draw_obol_scene_controller(gedp);
+    if (owned) {
+	for (int i = 0; i < owned->getDatabaseSourceCount(); i++)
+	    sources.insert(owned->getDatabaseSource(i));
+    }
+
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gedp->i->ged_gdp, 0);
+    if (entries) {
+	for (ged_obol_attached_controller &entry : *entries) {
+	    if (entry.scene_controller) {
+		for (int i = 0;
+			i < entry.scene_controller->getDatabaseSourceCount(); i++)
+		    sources.insert(entry.scene_controller->getDatabaseSource(i));
+	    }
+	    if (entry.view_controller)
+		ged_obol_collect_database_sources(
+		    entry.view_controller->getRenderSceneRoot(), sources);
+	}
+    }
+
+    return ged_obol_sources_set_selected_for_path(sources, path, selected);
 }
 
 template <typename ShapeT>

@@ -53,6 +53,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <vector>
 
 #define FAIL(_msg) \
     do { \
@@ -89,16 +90,35 @@ make_obol_sync_db(const char *dbpath)
     point_t reuse_max = { 1.0,  1.0,  1.0};
     point_t duplicate_min = {70.0, -1.0, -1.0};
     point_t duplicate_max = {72.0,  1.0,  1.0};
-    fastf_t mesh_owner_vertices[12] = {
-	0.0, 0.0, 0.0,
-	2.0, 0.0, 0.0,
-	0.0, 2.0, 0.0,
-	2.0, 2.0, 0.0
-    };
-    int mesh_owner_faces[6] = {
-	0, 1, 2,
-	1, 3, 2
-    };
+    const int mesh_grid = 12;
+    const int mesh_vertex_count = (mesh_grid + 1) * (mesh_grid + 1);
+    const int mesh_face_count = mesh_grid * mesh_grid * 2;
+    std::vector<fastf_t> mesh_owner_vertices(mesh_vertex_count * 3, 0.0);
+    std::vector<int> mesh_owner_faces(mesh_face_count * 3, 0);
+    for (int y = 0; y <= mesh_grid; y++) {
+	for (int x = 0; x <= mesh_grid; x++) {
+	    const int vertex = y * (mesh_grid + 1) + x;
+	    mesh_owner_vertices[3 * vertex + X] = (fastf_t)x;
+	    mesh_owner_vertices[3 * vertex + Y] = (fastf_t)y;
+	    mesh_owner_vertices[3 * vertex + Z] =
+		(fastf_t)((x + y) % 3) * 0.05;
+	}
+    }
+    for (int y = 0; y < mesh_grid; y++) {
+	for (int x = 0; x < mesh_grid; x++) {
+	    const int cell = y * mesh_grid + x;
+	    const int v0 = y * (mesh_grid + 1) + x;
+	    const int v1 = v0 + 1;
+	    const int v2 = v0 + mesh_grid + 1;
+	    const int v3 = v2 + 1;
+	    mesh_owner_faces[6 * cell + 0] = v0;
+	    mesh_owner_faces[6 * cell + 1] = v1;
+	    mesh_owner_faces[6 * cell + 2] = v3;
+	    mesh_owner_faces[6 * cell + 3] = v0;
+	    mesh_owner_faces[6 * cell + 4] = v3;
+	    mesh_owner_faces[6 * cell + 5] = v2;
+	}
+    }
     char binunif_payload[4] = {1, 2, 3, 4};
 
     int ret = mk_rpp(wdbp, "box.s", bmin, bmax) == 0 &&
@@ -111,7 +131,8 @@ make_obol_sync_db(const char *dbpath)
 	mk_rpp(wdbp, "reuse_leaf.s", reuse_min, reuse_max) == 0 &&
 	mk_rpp(wdbp, "dup_leaf.s", duplicate_min, duplicate_max) == 0 &&
 	mk_bot(wdbp, "mesh_owner.bot", RT_BOT_SURFACE, RT_BOT_CCW, 0,
-		4, 2, mesh_owner_vertices, mesh_owner_faces, NULL, NULL) == 0 &&
+		mesh_vertex_count, mesh_face_count, mesh_owner_vertices.data(),
+		mesh_owner_faces.data(), NULL, NULL) == 0 &&
 	make_obol_sync_brep_sphere(wdbp, "brep_owner.brep") &&
 	mk_binunif(wdbp, "payload.binunif", binunif_payload,
 		WDB_BINUNIF_INT8, 4) == 0 &&
@@ -1569,6 +1590,12 @@ main(int argc, char **argv)
     (void)argc;
     bu_setprogname(argv[0]);
     bu_setenv("LIBRT_USE_COMB_INSTANCE_SPECIFIERS", "1", 1);
+    char lcache[MAXPATHLEN] = {0};
+    bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_obol_draw_sync_cache",
+	    NULL);
+    bu_dirclear(lcache);
+    bu_mkdir(lcache);
+    bu_setenv("BU_DIR_CACHE", lcache, 1);
     brlobol_init(NULL);
 
     const char *dbpath = "ged_obol_draw_sync_tmp.g";
@@ -3474,6 +3501,9 @@ main(int argc, char **argv)
 	    if (ged_draw_bounds(gedp, &draw_bounds_min, &draw_bounds_max, 0) ||
 		    draw_bounds_max[0] < 22.9)
 		FAIL("GED draw bounds should reflect published owned Obol VLIST points");
+	    box_shape = box_source->getRealizedShape();
+	    if (!box_shape)
+		FAIL("GED source line-set publish should retain realized VLIST geometry");
 	    point_t explicit_center;
 	    VSET(explicit_center, 30.0, 31.0, 32.0);
 	    ged_draw_index_stats_reset(gedp);
@@ -3604,6 +3634,7 @@ main(int argc, char **argv)
 	    if (!ged_draw_obol_database_source_publish_point_set_for_path(
 		    gedp, "box.s", (const point_t *)point_set_points, 2))
 		FAIL("GED Obol source point-set publish should succeed");
+	    box_shape = box_source->getRealizedShape();
 	    if (!box_shape ||
 		    box_shape->point.getNum() != 2 ||
 		    box_shape->command.getNum() != 2 ||
@@ -5276,6 +5307,7 @@ main(int argc, char **argv)
     ged_close(gedp);
     root->unref();
     bu_file_delete(dbpath);
+    bu_dirclear(lcache);
     return 0;
 }
 
