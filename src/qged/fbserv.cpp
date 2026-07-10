@@ -82,6 +82,10 @@ public:
 	if (!new_gedp || !v || !v->canvasBase() || !v->obolViewController())
 	    return -1;
 
+	/* Detach image nodes before moving the persistent host to another view. */
+	if (gedp && (gedp != new_gedp || display != v))
+	    ged_draw_obol_framebuffer_release(gedp);
+
 	gedp = new_gedp;
 	setDisplay(v);
 	view_ctx = ged_view_active_ctx(gedp);

@@ -23,6 +23,7 @@ BDIR="$(cd "$(dirname "$0")/../.." && pwd)"
 QGED_BIN="${QGED_BIN:-${BDIR}/bin/qged}"
 RT_BIN="${RT_BIN:-${BDIR}/bin/rt}"
 TEST_DB="${TEST_DB:-${BDIR}/share/db/boolean-ops.g}"
+DRAW_OBJECT="${DRAW_OBJECT:-all}"
 
 PASS=0
 FAIL=0
@@ -115,6 +116,9 @@ QGED_LOG="$TMPDIR_TEST/qged.log"
 QGED_ERRLOG="$TMPDIR_TEST/qged_err.log"
 
 export LD_LIBRARY_PATH="${BDIR}/lib:${LD_LIBRARY_PATH:-}"
+# Keep saved user dock/window settings from invalidating the console coordinates.
+export XDG_CONFIG_HOME="$TMPDIR_TEST/config"
+mkdir -p "$XDG_CONFIG_HOME"
 
 "$QGED_BIN" -s "$TEST_DB" >"$QGED_LOG" 2>"$QGED_ERRLOG" &
 QGED_PID=$!
@@ -161,15 +165,17 @@ if [ "$HAVE_XDOTOOL" -eq 1 ]; then
     # area (QPlainTextEdit dark background) is at approximately y=600-777.
     # Click at the bottom-centre of the text area to give it keyboard focus.
     WIN_H=$(xdotool getwindowgeometry "$WIN" 2>/dev/null | awk '/Geometry/{split($2,g,"x"); print g[2]}')
+    WIN_W=$(xdotool getwindowgeometry "$WIN" 2>/dev/null | awk '/Geometry/{split($2,g,"x"); print g[1]}')
     WIN_H="${WIN_H:-800}"
+    WIN_W="${WIN_W:-1100}"
     CONSOLE_Y=$(( WIN_H * 79 / 100 ))   # ~79% from top = upper part of bottom dock
-    CONSOLE_X=550
+    CONSOLE_X=$(( WIN_W / 2 ))
     xdotool mousemove --window "$WIN" "$CONSOLE_X" "$CONSOLE_Y" 2>/dev/null || true
     xdotool click --window "$WIN" 1 2>/dev/null || true
     sleep 0.5
 
-    # Draw geometry (use "all" which is the top-level group in boolean-ops.g)
-    xdotool type --clearmodifiers "draw all" 2>/dev/null || true
+    # Draw the requested top-level object ("all" in boolean-ops.g by default).
+    xdotool type --clearmodifiers "draw $DRAW_OBJECT" 2>/dev/null || true
     sleep 0.2
     xdotool key Return 2>/dev/null || true
     sleep 2
@@ -192,10 +198,15 @@ if [ "$HAVE_XDOTOOL" -eq 1 ]; then
     # Check that BU_IPC_ADDR_ENVVAR was passed to rt (IPC path taken)
     ipc_used=0
     for pid in $(pgrep -x rt 2>/dev/null); do
-        if cat /proc/"$pid"/environ 2>/dev/null | tr '\0' '\n' | grep -q "BU_IPC_ADDR="; then
-            ipc_used=1; break
-        fi
+	if cat /proc/"$pid"/environ 2>/dev/null | tr '\0' '\n' | grep -q "BU_IPC_ADDR="; then
+	    ipc_used=1; break
+	fi
     done
+    # Small scenes may finish before /proc can be sampled.  qged logs the
+    # exact child IPC address immediately before spawning rt.
+    if [ "$ipc_used" -ne 1 ] && grep -q "ert: setting PKG_ADDR=" "$QGED_ERRLOG" 2>/dev/null; then
+	ipc_used=1
+    fi
     check "rt received BU_IPC_ADDR_ENVVAR (IPC path taken)" "$ipc_used -eq 1"
 
     # Wait for rt to finish (up to 60 s); treat zombie as completed
@@ -214,6 +225,14 @@ if [ "$HAVE_XDOTOOL" -eq 1 ]; then
         sleep 0.1
     done
     check "rt process completed" "$rt_done -eq 1"
+
+    # Reject the historical pre-layout framebuffer (typically only tens of
+    # pixels wide/high) even if IPC and rendering otherwise complete.
+    set -- $(sed -n 's/.*fb_size=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$QGED_ERRLOG" | tail -1)
+    FB_WIDTH="${1:-0}"
+    FB_HEIGHT="${2:-0}"
+    check "ert used laid-out canvas dimensions (${FB_WIDTH}x${FB_HEIGHT})" \
+	"$FB_WIDTH -gt 200 -a $FB_HEIGHT -gt 200"
 
     # qged should still be alive
     check "qged process survived ert" "-d /proc/$QGED_PID"
@@ -235,4 +254,10 @@ fi
 # -------------------------------------------------------------------
 echo ""
 echo "Tests: $PASS/$((PASS+FAIL)) passed"
+if [ "$FAIL" -ne 0 ]; then
+    echo "--- qged stdout ---"
+    tail -40 "$QGED_LOG" 2>/dev/null || true
+    echo "--- qged stderr ---"
+    tail -80 "$QGED_ERRLOG" 2>/dev/null || true
+fi
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

@@ -21,14 +21,18 @@
 #include "bu/log.h"
 #include "dm/fbserv.h"
 #include "ged.h"
+#include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgView.h"
 
 #include <Inventor/nodes/SoGroup.h>
 
 #include <QApplication>
 #include <QImage>
+#include <QWidget>
 
+#include <cmath>
 #include <string.h>
+#include <vector>
 
 #define FAIL(_msg) \
     do { \
@@ -117,6 +121,23 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(info.width > 0 && info.height > 0,
 	      "qged Obol framebuffer dimensions must be positive");
 
+    view.resize(300, 220);
+    QApplication::processEvents();
+    qdm_configure_ged_fbserv_handlers(gedp, &view);
+    GED_CHECK(fbs_framebuffer_info(fbs, &info) == 0,
+	      "qged must report resized framebuffer dimensions");
+    QWidget *canvasWidget = view.canvasBase()->canvasWidget();
+    int expectedWidth = (int)std::ceil(canvasWidget->width() *
+	canvasWidget->devicePixelRatioF());
+    int expectedHeight = (int)std::ceil(canvasWidget->height() *
+	canvasWidget->devicePixelRatioF());
+    GED_CHECK(info.width == expectedWidth && info.height == expectedHeight,
+	      "qged framebuffer must track the current physical canvas size");
+    SbVec2s viewportSize = controller->getViewportRegion().getViewportSizePixels();
+    GED_CHECK(viewportSize[0] == expectedWidth &&
+	      viewportSize[1] == expectedHeight,
+	      "qged Obol controller must track the physical canvas size");
+
     SoBRLImageSource *source = NULL;
     SoBRLViewportImage *viewport = NULL;
     find_framebuffer_nodes(controller->getSceneRoot(), &source, &viewport);
@@ -124,17 +145,24 @@ test_qged_obol_fbserv_backend(void)
 	      "qged Obol fbserv backend must create framebuffer scene nodes");
     GED_CHECK(viewport->getImageSource() == source,
 	      "qged framebuffer viewport must reference its image source");
+    GED_CHECK(NEAR_EQUAL(viewport->size.getValue()[0],
+		(float)expectedWidth, SMALL_FASTF) &&
+	      NEAR_EQUAL(viewport->size.getValue()[1],
+		(float)expectedHeight, SMALL_FASTF),
+	      "qged framebuffer viewport must fill the resized canvas");
     GED_CHECK(source->hasPendingStreamUpdate() == FALSE,
 	      "fresh qged framebuffer source must start without pending pixels");
 
-    unsigned char pixels[2 * 2 * 3];
-    for (size_t i = 0; i < sizeof(pixels); i += 3) {
+    std::vector<unsigned char> pixels((size_t)info.width *
+	(size_t)info.height * 3);
+    for (size_t i = 0; i < pixels.size(); i += 3) {
 	pixels[i] = 255;
 	pixels[i + 1] = 64;
 	pixels[i + 2] = 32;
     }
-    GED_CHECK(fbs_framebuffer_writerect(fbs, 0, 0, 2, 2, pixels) == 4,
-	      "qged Obol fbserv backend must accept rectangle pixel writes");
+    GED_CHECK(fbs_framebuffer_writerect(fbs, 0, 0, info.width, info.height,
+		pixels.data()) == info.width * info.height,
+	      "qged Obol fbserv backend must accept a full-frame pixel write");
     GED_CHECK(source->hasPendingStreamUpdate() == TRUE,
 	      "qged framebuffer writes must mark source data pending only");
     GED_CHECK(source->dirtyRevision.getValue() == 0,
@@ -171,8 +199,9 @@ test_qged_obol_fbserv_backend(void)
 
     QImage image;
     view.get_obol_viewport_image(image);
-    GED_CHECK(!image.isNull() && lit_pixel_count(image) > 0,
-	      "qged Obol framebuffer content must render into the view");
+    GED_CHECK(!image.isNull() && lit_pixel_count(image) >
+	      image.width() * image.height() * 8 / 10,
+	      "qged Obol framebuffer content must fill the view");
 
     ged_close(gedp);
 #undef GED_CHECK
