@@ -8,7 +8,7 @@ This note is the transitional allowlist for direct BSG, DM, and dm_plugins
 dependencies while qged/qtcad, GED/TclCAD/mged, and lower-level utilities move
 to Obol.  It is intentionally short: exact dependency rows are guard-visible,
 and long historical migration detail belongs in git history or
-`obol_activework.txt`.
+`brlobol_todo.txt`.
 
 Guarded Direct Dependency Rows
 ------------------------------

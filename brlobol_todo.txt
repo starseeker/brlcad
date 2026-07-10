@@ -1,0 +1,309 @@
+BRL-CAD Obol Drawing TODO
+=========================
+
+Last verified: 2026-07-10
+Branch: brlobol
+
+Purpose
+-------
+
+This is the top-level work list for completing the Obol/libbrlobol drawing
+migration.  Durable design contracts and detailed investigations belong in
+`doc/notes/`; this file records current architecture, remaining work, exit
+conditions, and verification gates.
+
+The status below was checked against the current sources, dependency rows,
+and registered tests.  Do not infer completion from a neutral public API:
+several neutral GED handles still have active BSG implementations behind
+them.
+
+Target Architecture
+-------------------
+
+* libbv owns scene-independent view mechanics only: passive camera/view
+  state, matrices, transforms, autoview math, input/knob bookkeeping,
+  passive faceplate/snap records, view sets, and generic view-quality policy.
+* libbrlobol owns the retained interactive scene: database sources,
+  source-local geometry, instances, materials, per-view realized LoD,
+  command/view features, selection/pick/snap/measure realization, edit
+  previews, and framebuffer image presentation.
+* librt supplies geometry evaluation and queries.  It must not own
+  interactive scene state, draw-cache policy, or application display state.
+* libimgstream owns image streams and the framebuffer protocol contract.
+  Toolkit-specific event-loop adapters may live in their application hosts,
+  but packet semantics and backend dispatch must not remain owned by libdm.
+* GED owns command policy, database revision bookkeeping, neutral scene/view
+  handles, and transactions.  Supported migrated drawing must use Obol or
+  fail explicitly; missing ownership must not silently recreate a BSG scene.
+* libdm and libbsg are transitional compatibility layers.  New drawing
+  semantics must not be added to them.
+
+Non-Negotiable Invariants
+-------------------------
+
+* Geometry is source-local; instance transforms provide placement.
+* Reused source geometry retains per-instance path identity, material,
+  visibility, selection, highlight, edit intent, and export metadata.
+* Realized LoD is view-local.  Shared sources must not be mutated to change
+  one view's LoD.
+* Leaf proxies represent leaf solids.  Combination bounds are bottom-up
+  aggregates of transformed leaf facts.
+* The active persistent cache is `BU_DIR_CACHE/.DbDrawCache`, owned by
+  libbrlobol.  `.BsgMeshLodCache` is legacy quarantine, not a second active
+  cache contract.
+* Command visuals and faceplate/grid content are Obol scene objects.  Grid
+  snap remains semantic model-space state even when grid lines are hidden.
+* Effective material/color-table resolution and draw-facing
+  `rt_db_internal` interpretation belong in libbrlobol database sources.
+* No-owned-scene and missing-feature-store behavior is explicit error,
+  empty, or no-op behavior as appropriate, never an implicit BSG fallback.
+
+Verified Current State
+----------------------
+
+Working Obol paths:
+
+* Database draw/erase/redraw, view features, annotations, polygons,
+  materials, source publication, selection, pick, snap, measure, faceplate,
+  grid, and command visuals have Obol/libbrlobol implementations.
+* qtcad painting and qged's visible canvas use Obol.  qged does not depend on
+  the `dm_plugins` build target.
+* `dm-obol` provides headless attachment.  libtclcad also contains the
+  vendored Togl-based `dm-tkobol` Tk widget.
+* MGED and GSH have Obol attach, screengrab, ERT, and progressive-LoD smoke
+  tests.  qged has an embedded framebuffer/ERT regression test.
+* Obol viewport readback is centralized through the view controller and GED
+  bridge.  TclCAD exporters prefer it for Obol-backed views.
+* The active mesh POP LoD and draw cache are libbrlobol-owned.  Evaluated
+  wireframe defaults to the boolweave-backed librt implementation.
+* Edit previews from qged and classic MGED publish transient Obol features.
+* Drawing baselines capture Obol output and use SSIM-based approximate image
+  comparison.  Basic, faceplate, LoD, selection, and quad coverage is active.
+* libbv is free of direct scene, libbsg, libdm, and database ownership.
+
+Important retained dependencies:
+
+* `src/libged/ged_draw_source.c` is still a large active BSG compatibility
+  implementation.  It uses Obol when GED owns an Obol controller, but retains
+  BSG export, scene-ref, source, geometry, material, and root-attachment
+  fallbacks for other contexts.
+* Current direct dependency rows still include:
+  - librt -> libbsg
+  - libdm -> libbsg
+  - libged -> libdm and libbsg
+  - libqtcad -> libdm
+  - libtclcad -> libdm
+* libdm still builds the retained GL/BSG renderer, mesh-LoD drawing,
+  framebuffer compatibility, plugin loader, and `fbserv.c` packet/server
+  implementation.  OGL/WGL/QtGL/swrast remain compiled compatibility paths.
+* qged and TclCAD have toolkit-specific fbserv listeners and call
+  `pkg_process`; libdm still owns `fbs_open`, shutdown, client processing, and
+  legacy framebuffer fallback.  libimgstream already owns auth, state,
+  message switch, backend-operation dispatch, and the public protocol types.
+* `rt_view_info` and `rt_view_lod_policy` remain compatibility names and
+  wrappers over libbv data.  The old RT view-context/scene-ref facade itself
+  is gone.
+* The pivot guard is transitional.  Its dependency rows intentionally encode
+  current legacy dependencies, and its legacy-include allowlist still names
+  deleted `view_legacy_bsg` files.  It must shrink with the implementation.
+
+Priority 0: Remove Parallel Scene Ownership
+-------------------------------------------
+
+1. Finish replacing BSG-backed GED draw-source state.
+
+   * Split neutral GED bookkeeping from BSG adapter code in
+     `ged_draw_source.c` so the Obol implementation is readable and testable
+     without retained-scene types.
+   * Replace remaining BSG scene refs, export queries, database-source
+     records, geometry publication, material state, and root attachment with
+     neutral GED records plus path-based Obol operations.
+   * Delete the BSG export fallback used when no owned Obol controller is
+     present.  Define explicit empty/error behavior for every public caller.
+   * Do not route supported draw transactions through `_ged_drawtrees` or a
+     newly disguised retained scene.
+
+   Exit condition: `src/libged` has no BSG includes or symbols,
+   `set_deps(libged ...)` no longer lists libbsg, and Obol/no-owner tests cover
+   all replaced behavior.
+
+2. Retire retained BSG rendering and LoD.
+
+   * Identify the remaining users of libdm's BSG render collector and
+     `dm-gl_lod.cpp`.
+   * Move or delete any still-required neutral geometry helpers.
+   * Remove `.BsgMeshLodCache`, retained mesh payload/LoD code, and tests that
+     only validate the retired renderer once equivalent Obol coverage exists.
+   * Remove libdm and librt direct libbsg dependencies, then remove the libbsg
+     target and installed API when no external compatibility requirement
+     remains.
+
+   Exit condition: no production target links libbsg and the Obol pivot/API
+   guards reject its reintroduction.
+
+Priority 0: Complete Application Display Hosts
+----------------------------------------------
+
+3. Make Obol the complete Tk/MGED/rtwizard/Archer display widget path.
+
+   * Exercise `dm-tkobol` on X11 and Windows; add a supported macOS build/path
+     and modernize the vendored Togl platform/context code as required.
+   * Verify view creation/destruction, resize, input translation, current-view
+     switching, faceplate/grid/ADC, refresh scheduling, screengrab, fbserv,
+     ERT, and teardown in interactive MGED.
+   * Archer's `cadwidgets::Ged` already defaults to `tkobol`; verify its
+     embedded rtwizard/render workflows and remove residual OGL/WGL-specific
+     policy.  Keep standalone rtwizard's headless camera path neutral while
+     routing any visible framebuffer presentation through Obol/imgstream.
+   * Remove OGL/WGL/tkswrast widget paths only after equivalent platform
+     coverage exists.  Keep headless `dm-obol` separate from the Tk widget.
+
+   Exit condition: normal Tk applications do not need OGL/WGL/QtGL/swrast to
+   obtain an interactive BRL-CAD view, and libtclcad/MGED no longer link libdm
+   for drawing or widget ownership.
+
+4. Remove residual qged/qtcad display-manager assumptions.
+
+   * Replace remaining libdm-dependent input, legacy view, plugin, readback,
+     and framebuffer compatibility code with libbv/libbrlobol/libimgstream
+     interfaces.
+   * Keep qged's Obol controller/window host as the single visible render
+     endpoint and preserve multi-view behavior.
+
+   Exit condition: libqtcad no longer directly links libdm and qged's build
+   and runtime do not require display-manager plugins.
+
+Priority 0: Finish Framebuffer Protocol Extraction
+--------------------------------------------------
+
+5. Move the remaining fbserv core out of libdm.
+
+   * Move packet handlers, `fbs_open`/close, client lifecycle, TCP/IPC-neutral
+     processing, and legacy framebuffer adaptation from `src/libdm/fbserv.c`
+     into libimgstream or a small adjacent framebuffer-protocol library.
+   * Preserve session authentication, TLS capability, wire compatibility,
+     Qt and Tcl event-loop adapters, and legacy `struct fb` interoperability
+     during extraction.
+   * Keep Qt/Tcl socket/channel ownership in their hosts, but remove duplicated
+     protocol decisions and direct `pkg_process` orchestration where a common
+     neutral dispatcher can own it.
+
+   Exit condition: libimgstream/the protocol layer owns all non-toolkit
+   fbserv behavior; libdm is no longer required by qged, GSH, or Obol-backed
+   MGED ERT.
+
+6. Add deterministic streaming-image coverage.
+
+   * Add a bounded slow ERT fixture that proves at least one meaningful
+     intermediate framebuffer update before the final image.
+   * Validate resize/aspect changes, flush/present ordering, cancellation,
+     disconnect, and final-frame correctness in qged and one non-Qt host.
+
+   Exit condition: intermediate and final ERT presentation regressions fail
+   deterministically without timing-only sleeps.
+
+Priority 1: Complete Progressive Large-Model Behavior
+-----------------------------------------------------
+
+7. Close progressive LoD policy gaps.
+
+   * Preserve distinct identity for duplicate occurrences during proxy and
+     frontier expansion.
+   * Handle non-union CSG children without treating the tree as a flat union.
+   * Settle or cancel pending autoview work automatically after refinement,
+     database edits, view replacement, and teardown.
+   * Avoid synchronous whole-root full-detail promotion during startup
+     refinement and automatic expansion.
+   * Add bounded memory/work budgets and cancellation for stale requests.
+
+   Exit condition: focused tests cover duplicate instances, subtraction and
+   intersection trees, cancellation, multi-view independent LoD, and startup
+   without whole-root synchronous promotion.
+
+8. Harden compact CAD source records.
+
+   * Define stable promote/demote and off-scene handle APIs.
+   * Batch publication and reduce repeated tree-walk/path-state work.
+   * Preserve instance/material/selection identity through promotion,
+     demotion, edits, erase, and cache reload.
+   * Do not restore root/group aggregation without new benchmark evidence.
+
+   Exit condition: compact and full records can replace each other without
+   identity changes, stale handles, full-scene rebuilds, or leaked nodes.
+
+Priority 1: Finish Editing and Interaction
+------------------------------------------
+
+9. Complete Obol-native edit realization.
+
+   * Build manipulators/handles on top of librt edit operations, GED command
+     policy, and Obol transient features rather than widget-private previews.
+   * Cover object and primitive edit modes, accept/reject, selection/pick,
+     transform feedback, database revision changes, and multi-view updates.
+   * Finish incomplete plugin interactions such as BoT face/vertex picking.
+   * Remove remaining preview compatibility glue after MGED and qged share the
+     same GED/libbrlobol edit contract.
+
+   Exit condition: interactive qged and MGED edits use the same neutral edit
+   transaction and Obol realization path with no direct widget preview path.
+
+Priority 2: Performance, Cleanup, and Deletion
+----------------------------------------------
+
+10. Improve evaluated wireframe and large-model performance.
+
+    * Redesign thin-shell candidate generation for models such as `havoc.g`.
+    * Add deterministic parallel ray/classification work with per-thread
+      resources; retain boolweave as the default evaluator.
+    * Profile source publication and render traversal before adding new CAD
+      aggregation structures.
+    * Separate shaded/hidden-line tessellation diagnostics and optimization
+      from normal wire-draw performance.
+
+11. Remove compatibility aliases and stale guards when dependencies permit.
+
+    * Decide whether the `rt_view_info`/`rt_view_lod_policy` source aliases are
+      still required; remove them after callers use libbv directly.
+    * Delete stale `view_legacy_bsg` allowlist entries and tighten the pivot
+      guard after each dependency removal.
+    * Convert drawing tests away from unnecessary DM/swrast construction
+      while retaining Obol image and semantic coverage.
+    * Keep `doc/notes/obol_legacy_dependency_inventory.txt` and dependency
+      rows synchronized as each legacy edge is removed.
+
+Verification Gates
+------------------
+
+Fast boundary and protocol checks:
+
+* `ninja -C .build`
+* `ctest --test-dir .build -R '^(brlobol_pivot_guard|libbsg_api_hygiene|imgstream_test|imgstream_fb_compat_test|imgstream_fbserv_auth_test)$' --output-on-failure`
+* `git diff --check`
+
+Core Obol/GED checks:
+
+* `ctest --test-dir .build -R '^(libbrlobol_|ged_test_obol_draw_sync|ged_test_view_command|ged_test_view_independent|ged_test_selection_semantics|ged_test_snap_semantics)' --output-on-failure`
+* `ctest --test-dir .build -R '^ged_test_drawing_(basic|faceplate|lod|select|quad)$' --output-on-failure`
+
+Host and streaming checks:
+
+* `ctest --test-dir .build -R '^(test_qged_obol_fbserv|regress-qged-ert|gsh_obol_(smoke|ert_smoke|progressive_lod)|mged_obol_(smoke|ert_smoke|progressive_lod))$' --output-on-failure`
+* `ctest --test-dir .build -R '^test_qtcad_obol_' --output-on-failure`
+
+Long-running LoD checks:
+
+* `ctest --test-dir .build -R '^(test_qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod_.*|slow-test_qtcad_obol_progressive_lod_repeated_moss)$' --output-on-failure`
+
+Before removing a legacy dependency, also build and test on every affected
+window-system platform.  Use `.build_perf/` for final release/performance
+measurements, not for routine development.
+
+Definition of Fully Stood Up
+-----------------------------
+
+The migration is complete when supported GED, qged, MGED, rtwizard, Archer,
+and GSH workflows have one Obol scene and one host render endpoint; drawing,
+interaction, LoD, editing, readback, and framebuffer streaming do not require
+libbsg or libdm; no fallback silently creates legacy scene state; and the
+remaining libdm/libbsg targets can be disabled or deleted without reducing
+covered functionality.
