@@ -74,30 +74,6 @@ struct selection_visit_state {
     const char *last;
 };
 
-struct edit_preview_callback_state {
-    uint64_t revision;
-    int updateCount;
-};
-
-static uint64_t
-edit_preview_revision_cb(void *data)
-{
-    struct edit_preview_callback_state *ctx =
-	(struct edit_preview_callback_state *)data;
-    return ctx ? ctx->revision : 0;
-}
-
-static int
-edit_preview_update_cb(void *data)
-{
-    struct edit_preview_callback_state *ctx =
-	(struct edit_preview_callback_state *)data;
-    if (!ctx)
-	return 0;
-    ctx->updateCount++;
-    return 1;
-}
-
 static int
 count_feature_visit_cb(const BRLObolFeatureRecord &record, void *userData)
 {
@@ -517,14 +493,6 @@ test_feature_nodes(BRLObolViewController &view)
 	view.features().exists("custom-node"))
 	FAIL("custom feature removal should use normal feature-store teardown");
 
-    struct edit_preview_callback_state previewState;
-    previewState.revision = 42;
-    previewState.updateCount = 0;
-    BRLObolEditPreviewCallbacks previewCallbacks;
-    previewCallbacks.previewContext = &previewState;
-    previewCallbacks.revisionCallback = edit_preview_revision_cb;
-    previewCallbacks.updateCallback = edit_preview_update_cb;
-
     std::vector<SbVec3f> previewPoints;
     previewPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
     previewPoints.push_back(SbVec3f(2.0f, 0.0f, 0.0f));
@@ -537,14 +505,11 @@ test_feature_nodes(BRLObolViewController &view)
 	    lineCommands,
 	    0,
 	    0,
-	    &previewCallbacks,
 	    &ownerA);
     SoNode *previewNode = view.features().node(previewHandle);
     if (!previewHandle.isValid() || !previewNode ||
 	!previewNode->isOfType(SoBRLEditPreview::getClassTypeId()))
 	FAIL("publishEditPreview should realize a SoBRLEditPreview node");
-    if (view.features().editPreviewRevision(previewHandle) != 42)
-	FAIL("edit preview revision callback should be preserved");
 
     previewPoints.push_back(SbVec3f(2.0f, 2.0f, 0.0f));
     lineCommands.push_back(static_cast<int32_t>(BRLObolLineCommand::Draw));
@@ -561,10 +526,6 @@ test_feature_nodes(BRLObolViewController &view)
     if (!previewNode ||
 	!previewNode->isOfType(SoBRLEditPreview::getClassTypeId()))
 	FAIL("replaceEditPreviewGeometry should preserve the edit preview node");
-    if (view.features().updateEditPreview(previewHandle) != 1 ||
-	previewState.updateCount != 1)
-	FAIL("replaceEditPreviewGeometry should preserve edit preview callbacks");
-
     return 0;
 }
 

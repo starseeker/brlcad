@@ -19,23 +19,18 @@
  */
 /** @file QBot.h
  *
- * stub bag-of-triangles (BOT) editor that demonstrates typed edit-preview
- * callbacks for mesh-editing plugins.
+ * Bag-of-triangles (BOT) editor using the neutral GED edit transaction and
+ * Obol primitive-pick details.
  *
  * Workflow
  * --------
- * 1. An overlay feature (_bot_edit) is created and typed edit-preview
- *    callbacks are attached when BOT editing begins.
- * 2. The update_cb bumps the revision whenever vertex/face data changes so
- *    downstream renderers can detect edits without polling s_changed.
- * 3. The pick_cb stub is the first extension point for face/vertex selection.
- * 4. Preview teardown is owned by the feature.
- *
- * Future work
- * -----------
- * - Wire pick_cb to face-selection logic (ray/BV intersection).
- * - Wire snap_cb to vertex snapping during drag.
- * - Add an edit-handle child node per selected vertex.
+ * 1. `_bot_edit` carries the wire preview and `_bot_edit_surface` carries
+ *    pickable face geometry.
+ * 2. GED edit transactions own preview lifecycle and revision updates.
+ * 3. Obol pick details identify faces and nearest vertices for edit handles.
+ * 4. Vertex, edge, and face drags update an owned BoT copy; Apply commits a
+ *    duplicate through the database event batch and Reset restores the DB.
+ * 5. Preview teardown is owned by neutral view features.
  */
 
 #ifndef QBOT_H
@@ -46,6 +41,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QGroupBox>
+#include <vector>
 #include "raytrace.h"
 #include "qtcad/QgTypes.h"
 #include "../qged_edit_preview_util.h"
@@ -83,13 +79,21 @@ class QBot : public QWidget
 
     private:
 	struct directory *dp = NULL;
-	struct rt_bot_internal *bot = NULL;  /* shallow pointer into rt_db_internal */
+	struct rt_bot_internal *bot = NULL;
+	std::vector<int> selected_vertices;
+	std::vector<fastf_t> drag_vertex_positions;
+	point_t drag_start = VINIT_ZERO;
+	bool dragging = false;
+	bool dirty = false;
 	/* Edit-preview overlay feature. */
 	qged_edit_feature_ref p = QGED_EDIT_FEATURE_REF_NULL;
 	struct bu_vls oname = BU_VLS_INIT_ZERO;
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;
+	void clear_edit_state();
+	bool load_bot();
+	void publish_selection_handle();
 };
 
 #endif /* QBOT_H */

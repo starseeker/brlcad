@@ -250,12 +250,18 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
     if (wdbp) {
 	struct wmember wm;
 	point_t center = {210.0, 0.0, 0.0};
+	mat_t first_matrix;
+	mat_t duplicate_matrix;
+	MAT_IDN(first_matrix);
+	MAT_IDN(duplicate_matrix);
+	MAT_DELTAS(first_matrix, 10.0, 20.0, 30.0);
+	MAT_DELTAS(duplicate_matrix, 40.0, 50.0, 60.0);
 	BU_LIST_INIT(&wm.l);
 	CHECK(mk_sph(wdbp, idx_child, center, 1.0) == 0,
 	      "index fixture child sphere must be created");
-	CHECK(mk_addmember(idx_child, &wm.l, NULL, WMOP_UNION) != NULL,
+	CHECK(mk_addmember(idx_child, &wm.l, first_matrix, WMOP_UNION) != NULL,
 	      "index fixture must add first child instance");
-	CHECK(mk_addmember(idx_child, &wm.l, NULL, WMOP_UNION) != NULL,
+	CHECK(mk_addmember(idx_child, &wm.l, duplicate_matrix, WMOP_UNION) != NULL,
 	      "index fixture must add duplicate child instance");
 	CHECK(mk_addmember(idx_missing, &wm.l, NULL, WMOP_UNION) != NULL,
 	      "index fixture must add invalid reference child");
@@ -304,6 +310,11 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 		  "first duplicate object use must retain canonical child id");
 	    CHECK(child.record.object_id == idx_child_id,
 		  "canonical child object_id must equal child id");
+	    CHECK(child.matrix_valid &&
+		  NEAR_EQUAL(child.matrix[MDX], 10.0, SMALL_FASTF) &&
+		  NEAR_EQUAL(child.matrix[MDY], 20.0, SMALL_FASTF) &&
+		  NEAR_EQUAL(child.matrix[MDZ], 30.0, SMALL_FASTF),
+		  "canonical child row must preserve its direct transform");
 	} else if (child.record.is_instance &&
 		   child.record.object_id == idx_child_id) {
 	    saw_duplicate_child = 1;
@@ -313,6 +324,11 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 	    CHECK(child.record.name &&
 		  BU_STR_EQUAL(child.record.name, "_ged_index_child.s@1"),
 		  "duplicate child instance must expose printable discriminator");
+	    CHECK(child.matrix_valid &&
+		  NEAR_EQUAL(child.matrix[MDX], 40.0, SMALL_FASTF) &&
+		  NEAR_EQUAL(child.matrix[MDY], 50.0, SMALL_FASTF) &&
+		  NEAR_EQUAL(child.matrix[MDZ], 60.0, SMALL_FASTF),
+		  "duplicate child row must preserve its occurrence transform");
 	} else if (child.record.id == idx_missing_id) {
 	    saw_invalid_child = 1;
 	    CHECK(child.record.valid == 1,

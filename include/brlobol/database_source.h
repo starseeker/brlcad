@@ -48,6 +48,7 @@ struct bg_tess_tol;
 struct bn_tol;
 struct BRLObolDatabaseSourceRealizationCache;
 struct BRLObolCompactInstanceIndex;
+struct BRLObolCompactInstanceEntry;
 namespace obol { struct PartGeometry; }
 
 BRLOBOL_EXPORT SbBool brlobol_database_source_fullpath_material_color(
@@ -65,6 +66,9 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     SbBool valid;
     SbString path;
     SbString instanceKey;
+    SbString parentInstanceKey;
+    uint32_t occurrenceIndex;
+    int booleanOperation;
     SbString displayName;
     SbBool hasParent;
     int drawTreeDepth;
@@ -129,6 +133,34 @@ struct BRLOBOL_EXPORT BRLObolDatabaseSourceSummary {
     int realizedShapeCount;
     int realizedMeshCount;
     int realizedMaterialObjectCount;
+};
+
+struct BRLOBOL_EXPORT BRLObolCompactInstanceHandle {
+    BRLObolCompactInstanceHandle(void);
+
+    uint64_t sourceNodeId;
+    uint64_t instanceWord0;
+    uint64_t instanceWord1;
+
+    SbBool isValid(void) const;
+};
+
+struct BRLOBOL_EXPORT BRLObolCompactInstanceSummary {
+    BRLObolCompactInstanceSummary(void);
+
+    SbBool valid;
+    BRLObolCompactInstanceHandle handle;
+    SbString path;
+    SbString sourceInstanceKey;
+    SbMatrix localToSource;
+    uint32_t occurrenceIndex;
+    int booleanOperation;
+    SbBool wireGeometry;
+    SbBool meshGeometry;
+    SbBool visible;
+    SbBool selectable;
+    SbBool selected;
+    SbBool highlighted;
 };
 
 struct BRLOBOL_EXPORT BRLObolAuxiliaryLineSetDisplayState {
@@ -487,8 +519,17 @@ public:
 	MATERIAL_DATABASE = 1
     };
 
+    enum BooleanOperation {
+	BOOLEAN_UNION = 0,
+	BOOLEAN_SUBTRACT = 1,
+	BOOLEAN_INTERSECT = 2
+    };
+
     SoSFString instanceKey;
     SoSFString path;
+    SoSFString parentInstanceKey;
+    SoSFUInt32 occurrenceIndex;
+    SoSFInt32 booleanOperation;
     SoSFString displayName;
     SoSFString representationKey;
     SoSFInt32 representationMode;
@@ -600,6 +641,9 @@ public:
 	uint32_t revision);
     int setRepresentationState(const char *sourceRepresentationKey,
 	int sourceRepresentationMode);
+    int setHierarchyState(const char *sourceParentInstanceKey,
+	uint32_t sourceOccurrenceIndex,
+	int sourceBooleanOperation);
 
     void markStale(void);
     void markStale(uint32_t reason);
@@ -713,6 +757,14 @@ public:
     int setCompactMeshInstance(SoBRLMeshShape *shape);
     SbBool hasCompactInstanceIndex(void) const;
     int getCompactInstanceCount(void) const;
+    SbBool getCompactInstanceHandle(int index,
+	BRLObolCompactInstanceHandle &handle) const;
+    SbBool getCompactInstanceSummary(
+	const BRLObolCompactInstanceHandle &handle,
+	BRLObolCompactInstanceSummary &summary) const;
+    SbBool isCompactInstanceHandleValid(
+	const BRLObolCompactInstanceHandle &handle) const;
+    int demoteCompactGeometry(void);
     int prepareCompiledAssembly(void);
     SbBool hasCompiledAssembly(void) const;
     int getCompiledAssemblyPartCount(void) const;
@@ -767,10 +819,13 @@ private:
     void detachFieldSensors(void);
     void syncRealizedShapeOwnerState(void);
     void syncCompactInstanceDisplayState(void);
+    void syncCompactInstancePlacementState(void);
     void clearCompiledAssembly(void);
     void markCompiledAssemblyDirty(void);
     void clearCompactInstanceIndex(void);
     int syncCompiledAssembly(void);
+    const struct BRLObolCompactInstanceEntry *findCompactInstanceEntry(
+	const BRLObolCompactInstanceHandle &handle) const;
     int exportCompactInstances(SoBRLExportAction *action,
 	const SbMatrix &parentToWorld);
     int measureCompactInstances(SoBRLMeasureAction *action,
@@ -782,6 +837,7 @@ private:
     struct BRLObolMeshLod *meshLod;
     SoBRLCadAssembly *compiledAssembly;
     struct BRLObolCompactInstanceIndex *compactIndex;
+    uint64_t compactHandleSourceId;
     SbBool compiledAssemblyDirty;
     SbBool compiledAssemblyActive;
     SbUniqueId compiledAssemblyNodeId;

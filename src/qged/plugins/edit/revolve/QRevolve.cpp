@@ -41,24 +41,6 @@
 #include "QRevolve.h"
 
 
-/* ---- edit-preview callbacks -------------------------------------------- */
-
-static uint64_t
-_revolve_preview_revision(void *UNUSED(preview_ctx))
-{
-    return 0;
-}
-
-static int
-_revolve_preview_update(void *preview_ctx)
-{
-    QRevolve *self = (QRevolve *)preview_ctx;
-    if (!self)
-	return 0;
-    QMetaObject::invokeMethod(self, "update_obj_wireframe", Qt::DirectConnection);
-    return 1;
-}
-
 /* ---- QRevolve constructor ----------------------------------------------- */
 
 QRevolve::QRevolve()
@@ -167,9 +149,12 @@ QRevolve::write_to_db()
 	QgGedEventBatch event_batch(gedp);
 	if (rt_db_put_internal(ldp, gedp->dbip, &intern) < 0)
 	    return;
+	(void)ged_event_notify_object_modified(gedp, bu_vls_cstr(&oname),
+	    1, NULL);
     }
 
-    qged_edit_preview_publish_event(m_ctx, p, QGED_EDIT_PREVIEW_COMMIT,
+    qged_edit_preview_publish_event(m_ctx, p, "_revolve_edit",
+	    QGED_EDIT_PREVIEW_COMMIT,
 	    bu_vls_cstr(&oname));
     emit view_updated(QG_VIEW_DB);
 }
@@ -181,11 +166,8 @@ QRevolve::update_obj_wireframe()
     if (!gedp)
 	return;
 
-    struct qged_edit_preview_callbacks callbacks = QGED_EDIT_PREVIEW_CALLBACKS_INIT;
-    callbacks.revision_cb = _revolve_preview_revision;
-    callbacks.update_cb = _revolve_preview_update;
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_revolve_edit", this, this,
-	    &callbacks, bu_vls_cstr(&oname));
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_revolve_edit", this,
+	    bu_vls_cstr(&oname));
     if (qged_edit_feature_ref_is_null(p))
 	return;
 
@@ -212,7 +194,8 @@ QRevolve::update_obj_wireframe()
     if (qged_edit_feature_replace_revolve_wireframe(p,
 	    QGED_EDIT_FEATURE_TRANSIENT_PREVIEW, &rev,
 	    &wdbp->wdb_ttol) && !qged_edit_feature_ref_is_null(p))
-	qged_edit_preview_publish_event(m_ctx, p, QGED_EDIT_PREVIEW_UPDATE,
+	qged_edit_preview_publish_event(m_ctx, p, "_revolve_edit",
+		QGED_EDIT_PREVIEW_UPDATE,
 		bu_vls_cstr(&oname));
 
     const char *wcolor = "255/255/255";

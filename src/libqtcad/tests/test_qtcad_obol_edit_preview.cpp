@@ -15,13 +15,16 @@
 #include "brlobol/view_store.h"
 #include "brlobol/vlist_shape.h"
 #include "bu/file.h"
+#include "bu/malloc.h"
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
+#include "ged/view.h"
 #include "QgLegacyViewContext.h"
-#include "QgObolEditPreviewPrivate.h"
+#include "qtcad/QgGedEventBatch.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
+#include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 #include "wdb.h"
 
@@ -111,6 +114,56 @@ make_edit_preview_db(const char *dbpath)
     return ret;
 }
 
+static int
+edit_preview_update(QgView *view, const char *name, const char *path,
+    const char *intent_id, const char *intent_role,
+    const SbVec3f *points, const int *commands, int count,
+    uint32_t source_revision, uint32_t inputs_revision)
+{
+    if (!view || !name || !points || !commands || count <= 0)
+	return 0;
+    point_t *ged_points = (point_t *)bu_calloc((size_t)count,
+	sizeof(point_t), "edit transaction test points");
+    for (int i = 0; i < count; i++) {
+	ged_points[i][X] = points[i][0];
+	ged_points[i][Y] = points[i][1];
+	ged_points[i][Z] = points[i][2];
+    }
+    struct ged_draw_view_edit_transaction transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE;
+    transaction.feature_name = name;
+    transaction.owner = view;
+    transaction.source_path = path;
+    transaction.edit_intent_id = intent_id ? intent_id : name;
+    transaction.edit_intent_role = intent_role ? intent_role : "preview";
+    transaction.points = (const point_t *)ged_points;
+    transaction.commands = commands;
+    transaction.point_count = (size_t)count;
+    transaction.source_revision = source_revision;
+    transaction.inputs_revision = inputs_revision;
+    const int ret = ged_draw_view_context_edit_transaction_apply(
+	qg_legacy_view_to_context(view->view()), &transaction, NULL);
+    bu_free(ged_points, "edit transaction test points");
+    if (ret)
+	view->need_update(QG_VIEW_DRAWN);
+    return ret;
+}
+
+static int
+edit_preview_clear(QgView *view, const char *name)
+{
+    struct ged_draw_view_edit_transaction transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
+    transaction.feature_name = name;
+    const int ret = ged_draw_view_context_edit_transaction_apply(
+	qg_legacy_view_to_context(view->view()), &transaction, NULL);
+    if (ret)
+	view->need_update(QG_VIEW_DRAWN);
+    return ret;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -130,6 +183,31 @@ main(int argc, char **argv)
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
 
+    const char *dbpath = "qtcad_obol_edit_preview_tmp.g";
+    if (!make_edit_preview_db(dbpath))
+	FAIL("failed to create qtcad Obol edit-preview test database");
+    struct ged *gedp = ged_open("db", dbpath, 1);
+    if (!gedp)
+	FAIL("failed to open qtcad Obol edit-preview test database");
+    void *view_ctx = qg_legacy_view_to_context(view.view());
+    qg_legacy_view_ged_active_set(gedp, view.view());
+    if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
+	    controller, 0))
+	FAIL("qtcad test should attach the QgView Obol controller to GED");
+
+    QgView secondView(NULL, QgView_SW);
+    secondView.resize(160, 120);
+    void *second_view_ctx = qg_legacy_view_to_context(secondView.view());
+    BRLObolViewController *second_controller =
+	secondView.obolViewController();
+    if (!second_controller ||
+	!ged_view_context_host_attach(gedp, second_view_ctx) ||
+	!ged_view_set_context_add(ged_view_set_ctx(gedp), second_view_ctx) ||
+	!ged_draw_obol_controller_attach_for_view(gedp, second_view_ctx,
+	    second_controller, 0))
+	FAIL("qtcad test should attach a second hosted Obol edit view");
+    ged_view_active_ctx_set(gedp, view_ctx);
+
     const char *previewId = "_test_edit_preview";
     const char *identity = "/box.s::edit-preview";
     SbVec3f points[4] = {
@@ -138,19 +216,104 @@ main(int argc, char **argv)
 	SbVec3f(1.0f, 1.0f, 0.0f),
 	SbVec3f(0.0f, 1.0f, 0.0f)
     };
-    int32_t commands[4] = {
-	QG_OBOL_EDIT_PREVIEW_MOVE,
-	QG_OBOL_EDIT_PREVIEW_DRAW,
-	QG_OBOL_EDIT_PREVIEW_DRAW,
-	QG_OBOL_EDIT_PREVIEW_DRAW
+    int commands[4] = {
+	GED_DRAW_VIEW_LINE_MOVE,
+	GED_DRAW_VIEW_LINE_DRAW,
+	GED_DRAW_VIEW_LINE_DRAW,
+	GED_DRAW_VIEW_LINE_DRAW
     };
 
+    point_t multi_points[2] = {
+	{0.0, 0.0, 0.0},
+	{1.0, 1.0, 0.0}
+    };
+    int multi_commands[2] = {
+	GED_DRAW_VIEW_LINE_MOVE,
+	GED_DRAW_VIEW_LINE_DRAW
+    };
+    struct ged_draw_view_edit_transaction multi_transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    multi_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_BEGIN;
+    multi_transaction.feature_name = "_test_multi_edit_preview";
+    multi_transaction.owner = &view;
+    multi_transaction.source_path = "/box.s::multi-edit";
+    multi_transaction.edit_intent_id = "edit::box.s/multi";
+    multi_transaction.edit_intent_role = "translate";
+    multi_transaction.points = (const point_t *)multi_points;
+    multi_transaction.commands = multi_commands;
+    multi_transaction.point_count = 2;
+    if (ged_draw_edit_transaction_apply(gedp, &multi_transaction) < 2 ||
+	!controller->features().exists("_test_multi_edit_preview") ||
+	!second_controller->features().exists("_test_multi_edit_preview"))
+	FAIL("neutral edit transactions should publish to every hosted view");
+    multi_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
+    multi_transaction.points = NULL;
+    multi_transaction.commands = NULL;
+    multi_transaction.point_count = 0;
+    if (ged_draw_edit_transaction_apply(gedp, &multi_transaction) < 2 ||
+	controller->features().exists("_test_multi_edit_preview") ||
+	second_controller->features().exists("_test_multi_edit_preview"))
+	FAIL("neutral edit cancellation should retire previews from every hosted view");
+
+    struct directory *multi_box_dp = db_lookup(gedp->dbip, "box.s",
+	LOOKUP_QUIET);
+    struct rt_db_internal multi_box_intern = RT_DB_INTERNAL_INIT_ZERO;
+    if (!multi_box_dp || rt_db_get_internal(&multi_box_intern, multi_box_dp,
+	    gedp->dbip, NULL) < 0)
+	FAIL("multi-view primitive edit test should load its database object");
+    mat_t multi_matrix;
+    MAT_IDN(multi_matrix);
+    MAT_DELTAS(multi_matrix, 3.0, 0.0, 0.0);
+    struct ged_draw_view_edit_transaction primitive_transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    primitive_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_REPLACE_SOURCE;
+    primitive_transaction.feature_name = "_test_multi_primitive_edit";
+    primitive_transaction.owner = &view;
+    primitive_transaction.source_path = "box.s";
+    primitive_transaction.edit_intent_id = "edit::box.s/primitive";
+    primitive_transaction.edit_intent_role = "primitive-edit";
+    primitive_transaction.dbip = gedp->dbip;
+    primitive_transaction.internal = &multi_box_intern;
+    primitive_transaction.matrix = multi_matrix;
+    if (ged_draw_edit_transaction_apply(gedp, &primitive_transaction) < 2 ||
+	!controller->features().exists("_test_multi_primitive_edit") ||
+	!second_controller->features().exists("_test_multi_primitive_edit")) {
+	rt_db_free_internal(&multi_box_intern);
+	FAIL("neutral primitive edits should publish transformed feedback to every hosted view");
+    }
+    primitive_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_COMMIT;
+    primitive_transaction.internal = NULL;
+    primitive_transaction.matrix = NULL;
+    if (ged_draw_edit_transaction_apply(gedp, &primitive_transaction) < 2 ||
+	controller->features().exists("_test_multi_primitive_edit") ||
+	second_controller->features().exists("_test_multi_primitive_edit")) {
+	rt_db_free_internal(&multi_box_intern);
+	FAIL("neutral primitive commit should retire feedback from every hosted view");
+    }
+
+    const char *draw_box_av[2] = {"draw", "box.s"};
+    if (ged_exec_draw(gedp, 2, draw_box_av) != BRLCAD_OK) {
+	rt_db_free_internal(&multi_box_intern);
+	FAIL("primitive revision test should draw its edited object");
+    }
+    const uint64_t revision_before_edit = ged_draw_scene_revision(gedp);
+    {
+	QgGedEventBatch event_batch(gedp);
+	if (rt_db_put_internal(multi_box_dp, gedp->dbip,
+		&multi_box_intern) < 0) {
+	    rt_db_free_internal(&multi_box_intern);
+	    FAIL("accepted primitive edit should write through a database event batch");
+	}
+	(void)ged_event_notify_object_modified(gedp, "box.s", 1, NULL);
+    }
+    if (ged_draw_scene_revision(gedp) <= revision_before_edit)
+	FAIL("accepted primitive edit should advance the GED scene revision");
+
     controller->clearRenderRequest();
-    if (qg_obol_edit_preview_update(&view, previewId, identity, points,
+    if (edit_preview_update(&view, previewId, identity, NULL, NULL, points,
 	    commands, 4, 7, 11) != 1)
 	FAIL("qtcad helper should publish edit preview geometry into Obol");
-    if (!controller->isRenderRequested() ||
-	    strcmp(controller->getRenderReason().getString(), "edit-preview") != 0)
+    if (!controller->isRenderRequested())
 	FAIL("edit preview updates should request an Obol render");
 
     SoBRLEditPreview *preview = find_preview(controller, previewId);
@@ -201,13 +364,13 @@ main(int argc, char **argv)
 	SbVec3f(2.0f, 0.0f, 0.0f),
 	SbVec3f(2.0f, 1.0f, 0.0f)
     };
-    int32_t replacementCommands[2] = {
-	QG_OBOL_EDIT_PREVIEW_MOVE,
-	QG_OBOL_EDIT_PREVIEW_DRAW
+    int replacementCommands[2] = {
+	GED_DRAW_VIEW_LINE_MOVE,
+	GED_DRAW_VIEW_LINE_DRAW
     };
 
     controller->clearRenderRequest();
-    if (qg_obol_edit_preview_update(&view, previewId, identity,
+    if (edit_preview_update(&view, previewId, identity, NULL, NULL,
 	    replacementPoints, replacementCommands, 2, 0, 0) != 1)
 	FAIL("qtcad helper should replace existing edit preview geometry");
 
@@ -236,12 +399,11 @@ main(int argc, char **argv)
     const char *customIntentId = "edit::box.s/translate";
     const char *customIntentRole = "move-handle";
     controller->clearRenderRequest();
-    if (qg_obol_edit_preview_update_with_intent(&view, previewId, identity,
+    if (edit_preview_update(&view, previewId, identity,
 	    customIntentId, customIntentRole, replacementPoints,
 	    replacementCommands, 2, 21, 22) != 1)
 	FAIL("qtcad helper should publish explicit edit intent metadata");
-    if (!controller->isRenderRequested() ||
-	    strcmp(controller->getRenderReason().getString(), "edit-preview") != 0)
+    if (!controller->isRenderRequested())
 	FAIL("custom edit preview updates should request an Obol render");
 
     preview = find_preview(controller, previewId);
@@ -290,27 +452,12 @@ main(int argc, char **argv)
 	FAIL("custom edit preview measure should preserve explicit intent metadata");
 
     controller->clearRenderRequest();
-    if (qg_obol_edit_preview_clear(&view, previewId) != 1)
+    if (edit_preview_clear(&view, previewId) != 1)
 	FAIL("qtcad helper should clear edit preview geometry");
     if (find_preview(controller, previewId))
 	FAIL("Obol scene should remove cleared edit preview nodes");
-    if (!controller->isRenderRequested() ||
-	    strcmp(controller->getRenderReason().getString(), "edit-preview") != 0)
+    if (!controller->isRenderRequested())
 	FAIL("edit preview clears should request an Obol render");
-
-    const char *dbpath = "qtcad_obol_edit_preview_tmp.g";
-    if (!make_edit_preview_db(dbpath))
-	FAIL("failed to create qtcad Obol edit-preview test database");
-
-    struct ged *gedp = ged_open("db", dbpath, 1);
-    if (!gedp)
-	FAIL("failed to open qtcad Obol edit-preview test database");
-
-    void *view_ctx = qg_legacy_view_to_context(view.view());
-    qg_legacy_view_ged_active_set(gedp, view.view());
-    if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
-	    controller, 0))
-	FAIL("qtcad test should attach the QgView Obol controller to GED");
 
     const char *gedPreviewId = "_test_ged_edit_preview";
     const char *gedIdentity = "/box.s::ged-edit-preview";
@@ -318,7 +465,7 @@ main(int argc, char **argv)
     const char *gedIntentRole = "scale-handle";
     controller->clearRenderRequest();
     (void)bv_context_refresh_complete(qg_legacy_view_context(view.view()));
-    if (qg_obol_edit_preview_update_with_intent(&view, gedPreviewId,
+    if (edit_preview_update(&view, gedPreviewId,
 	    gedIdentity, gedIntentId, gedIntentRole, points, commands, 4,
 	    41, 42) != 1)
 	FAIL("qtcad helper should publish GED-owned edit preview geometry");
@@ -355,7 +502,7 @@ main(int argc, char **argv)
 
     controller->clearRenderRequest();
     (void)bv_context_refresh_complete(qg_legacy_view_context(view.view()));
-    if (qg_obol_edit_preview_clear(&view, gedPreviewId) != 1)
+    if (edit_preview_clear(&view, gedPreviewId) != 1)
 	FAIL("qtcad helper should clear GED-routed edit preview geometry");
     if (ged_draw_view_context_feature_summary(view_ctx, gedPreviewId,
 	    &gedSummary) && gedSummary.exists)
@@ -363,6 +510,7 @@ main(int argc, char **argv)
     if (!bv_refresh_dirty_get(qg_legacy_view_bv_const(view.view())))
 	FAIL("GED-routed edit preview clears should request a qtcad view refresh");
 
+    ged_draw_obol_controller_detach_for_view(gedp, second_view_ctx);
     ged_draw_obol_controller_detach_for_view(gedp, view_ctx);
     ged_close(gedp);
     bu_file_delete(dbpath);

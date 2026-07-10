@@ -213,6 +213,7 @@ BRLObolLodResult::BRLObolLodResult(void)
 void
 BRLObolLodResult::clear(void)
 {
+    generation = 0;
     request.clear();
     cacheKey.clear();
     geometry.clear();

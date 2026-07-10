@@ -54,7 +54,6 @@ set(
   QgModel.cpp
   QgObolDatabaseSync.cpp
   QgObolDrawSync.cpp
-  QgObolEditPreview.cpp
   QgObolExport.cpp
   QgObolMeasure.cpp
   QgObolOverlaySync.cpp
@@ -145,7 +144,6 @@ set(
   QgLegacyViewContext.h
   QgObolDatabaseSyncPrivate.h
   QgObolDrawSyncPrivate.h
-  QgObolEditPreviewPrivate.h
   QgObolOverlaySyncPrivate.h
   QgObolSelectionSyncPrivate.h
   QgObolViewSyncPrivate.h

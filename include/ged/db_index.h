@@ -54,6 +54,7 @@
 
 #include "bu/vls.h"
 #include "ged/defines.h"
+#include "vmath.h"
 
 struct directory;
 
@@ -81,6 +82,8 @@ struct ged_db_index_child {
     struct ged_db_index_record record;
     int bool_op;               /**< DB_OP_* value from raytrace.h/db_op_t */
     size_t row;                /**< row in index-presented child order */
+    int matrix_valid;          /**< non-zero when matrix is an explicit leaf transform */
+    mat_t matrix;              /**< direct child-to-parent transform */
 };
 
 struct ged_db_index_use {

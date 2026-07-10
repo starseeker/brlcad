@@ -1,9 +1,8 @@
 # Primitives have their own individual editing requirements
 add_subdirectory(ell)
 
-# stub editors demonstrating the edit-preview overlay contract.  Each carries
-# a preview source payload so downstream renderers detect geometry changes via
-# pl_revision.
+# Primitive editors publish transient feedback through the neutral GED edit
+# transaction and Obol view-feature contract.
 add_subdirectory(extrude)
 add_subdirectory(revolve)
 add_subdirectory(bot)

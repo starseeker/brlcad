@@ -31,6 +31,7 @@
 
 #include "bu/color.h"
 #include "bu/malloc.h"
+#include "bu/ptbl.h"
 #include "bu/vls.h"
 #include "./ged_draw_private.h"
 #include "./ged_draw_view_private.h"
@@ -38,6 +39,7 @@
 struct ged_draw_pick_record {
     struct bu_vls path;
     fastf_t hit_dist;
+    struct ged_draw_pick_detail detail;
 };
 
 struct ged_draw_pick_result {
@@ -65,6 +67,8 @@ ged_draw_pick_result_reserve(struct ged_draw_pick_result *result,
     for (size_t i = result->capacity; i < new_capacity; i++) {
 	BU_VLS_INIT(&result->records[i].path);
 	result->records[i].hit_dist = 0.0;
+	result->records[i].detail =
+	    (struct ged_draw_pick_detail)GED_DRAW_PICK_DETAIL_INIT;
     }
     result->capacity = new_capacity;
     return 1;
@@ -119,9 +123,19 @@ ged_draw_pick_result_hit_dist(const struct ged_draw_pick_result *result,
 }
 
 int
-ged_draw_pick_result_append_path(struct ged_draw_pick_result *result,
-				 const char *path,
-				 fastf_t hit_dist)
+ged_draw_pick_result_detail(const struct ged_draw_pick_result *result,
+	size_t index, struct ged_draw_pick_detail *detail)
+{
+    if (!result || !detail || index >= result->count)
+	return 0;
+    *detail = result->records[index].detail;
+    return 1;
+}
+
+int
+ged_draw_pick_result_append_detail(struct ged_draw_pick_result *result,
+	const char *path, fastf_t hit_dist,
+	const struct ged_draw_pick_detail *detail)
 {
     if (!result || !path || !path[0])
 	return 0;
@@ -131,7 +145,17 @@ ged_draw_pick_result_append_path(struct ged_draw_pick_result *result,
     struct ged_draw_pick_record *record = &result->records[result->count++];
     bu_vls_strcpy(&record->path, path);
     record->hit_dist = hit_dist;
+    record->detail = detail ? *detail :
+	(struct ged_draw_pick_detail)GED_DRAW_PICK_DETAIL_INIT;
     return 1;
+}
+
+int
+ged_draw_pick_result_append_path(struct ged_draw_pick_result *result,
+				 const char *path,
+				 fastf_t hit_dist)
+{
+    return ged_draw_pick_result_append_detail(result, path, hit_dist, NULL);
 }
 
 int
@@ -142,8 +166,9 @@ ged_draw_pick_result_append_copy(struct ged_draw_pick_result *dest,
 {
     if (!dest || !src || index >= src->count)
 	return 0;
-    return ged_draw_pick_result_append_path(dest,
-	    bu_vls_cstr(&src->records[index].path), hit_dist);
+    return ged_draw_pick_result_append_detail(dest,
+	    bu_vls_cstr(&src->records[index].path), hit_dist,
+	    &src->records[index].detail);
 }
 
 struct ged_draw_pick_result *
@@ -447,18 +472,109 @@ ged_draw_view_context_edit_preview_publish_event(
 	    feature, event, source_path);
 }
 
+int
+ged_draw_view_context_edit_transaction_apply(
+	void *view_ctx,
+	const struct ged_draw_view_edit_transaction *transaction,
+	ged_draw_view_feature_ref *feature_out)
+{
+    if (feature_out)
+	*feature_out = GED_DRAW_VIEW_FEATURE_REF_NULL;
+    if (!view_ctx || !transaction || !transaction->feature_name ||
+	!transaction->feature_name[0])
+	return 0;
+
+    ged_draw_view_feature_ref feature = transaction->feature;
+    const int terminal =
+	transaction->event == GED_DRAW_VIEW_EDIT_PREVIEW_COMMIT ||
+	transaction->event == GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL ||
+	transaction->event == GED_DRAW_VIEW_EDIT_PREVIEW_DISCARD;
+    if (terminal) {
+	int ret = ged_draw_view_feature_ref_is_null(feature) ?
+	    ged_draw_view_context_feature_remove(view_ctx,
+		transaction->feature_name) :
+	    ged_draw_view_context_edit_preview_publish_event(view_ctx, feature,
+		transaction->event, transaction->source_path);
+	return ret;
+    }
+
+    if (ged_draw_view_feature_ref_is_null(feature))
+	feature = ged_draw_view_context_feature_overlay_ensure(view_ctx,
+	    transaction->feature_name, transaction->owner,
+	    transaction->source_path);
+    if (ged_draw_view_feature_ref_is_null(feature))
+	return 0;
+
+    if (transaction->color_valid)
+	ged_draw_view_feature_set_color(feature, transaction->color[0],
+	    transaction->color[1], transaction->color[2]);
+
+    int updated = 1;
+    if (transaction->internal) {
+	updated = ged_draw_view_feature_primitive_wireframe_replace(feature,
+	    transaction->dbip, transaction->internal, transaction->matrix,
+	    transaction->ttol, transaction->tol);
+    } else if (transaction->point_count > 0) {
+	updated = ged_draw_view_feature_edit_preview_replace(feature,
+	    transaction->source_path, transaction->edit_intent_id,
+	    transaction->edit_intent_role, transaction->points,
+	    transaction->commands, transaction->point_count,
+	    transaction->source_revision, transaction->inputs_revision);
+    }
+    if (!updated)
+	return 0;
+
+    (void)ged_draw_view_context_edit_preview_publish_event(view_ctx,
+	feature, transaction->event, transaction->source_path);
+    if (feature_out)
+	*feature_out = feature;
+    return 1;
+}
+
+int
+ged_draw_edit_transaction_apply(
+	struct ged *gedp,
+	const struct ged_draw_view_edit_transaction *transaction)
+{
+    if (!gedp || !transaction)
+	return 0;
+
+    struct ged_draw_view_edit_transaction local = *transaction;
+    local.feature = GED_DRAW_VIEW_FEATURE_REF_NULL;
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *active_view = ged_view_active_ctx(gedp);
+    int active_seen = 0;
+    int applied = 0;
+
+    if (views) {
+	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	    void *view_ctx = BU_PTBL_GET(views, i);
+	    if (!view_ctx)
+		continue;
+	    if (view_ctx == active_view)
+		active_seen = 1;
+	    if (ged_draw_view_context_edit_transaction_apply(view_ctx,
+		    &local, NULL))
+		applied++;
+	}
+    }
+
+    if (active_view && !active_seen &&
+	ged_draw_view_context_edit_transaction_apply(active_view, &local, NULL))
+	applied++;
+    return applied;
+}
+
 
 ged_draw_view_feature_ref
 ged_draw_view_context_feature_overlay_ensure(
 	void *view_ctx,
 	const char *name,
 	const void *owner,
-	void *preview_ctx,
-	const struct ged_draw_view_edit_preview_callbacks *callbacks,
 	const char *source_path)
 {
     return ged_draw_obol_view_context_feature_overlay_ensure(view_ctx, name,
-	    owner, preview_ctx, callbacks, source_path);
+	    owner, source_path);
 }
 
 

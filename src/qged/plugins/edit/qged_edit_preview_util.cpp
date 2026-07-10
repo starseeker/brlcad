@@ -84,7 +84,7 @@ qged_edit_view(const QgPluginContext *ctx)
 }
 
 
-static void *
+void *
 qged_edit_view_context(const QgPluginContext *ctx)
 {
     return qg_legacy_view_to_context(qged_edit_view(ctx));
@@ -99,30 +99,21 @@ qged_edit_feature_ref_is_null(struct qged_edit_feature_ref ref)
 }
 
 
-static void
-qged_edit_preview_callbacks_to_ged(
-	struct ged_draw_view_edit_preview_callbacks *dst,
-	const struct qged_edit_preview_callbacks *callbacks)
-{
-    if (!dst || !callbacks)
-	return;
-
-    dst->revision_cb = callbacks->revision_cb;
-    dst->update_cb = callbacks->update_cb;
-    dst->pick_cb = callbacks->pick_cb;
-}
-
-
 int
 qged_edit_preview_publish_event(const QgPluginContext *ctx,
 				struct qged_edit_feature_ref feature,
+				const char *feature_name,
 				enum qged_edit_preview_event event,
 				const char *source_path)
 {
-    return ged_draw_view_context_edit_preview_publish_event(
-	    qged_edit_view_context(ctx),
-	    qged_edit_feature_ref_to_ged(feature),
-	    qged_edit_preview_event_to_ged(event), source_path);
+    struct ged_draw_view_edit_transaction transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = qged_edit_preview_event_to_ged(event);
+    transaction.feature = qged_edit_feature_ref_to_ged(feature);
+    transaction.feature_name = feature_name;
+    transaction.source_path = source_path;
+    return ged_draw_view_context_edit_transaction_apply(
+	qged_edit_view_context(ctx), &transaction, NULL);
 }
 
 
@@ -130,23 +121,12 @@ struct qged_edit_feature_ref
 qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,
 				 const char *name,
 				 const void *owner,
-				 void *preview_ctx,
-				 const struct qged_edit_preview_callbacks *callbacks,
 				 const char *source_path)
 {
-    struct ged_draw_view_edit_preview_callbacks ged_callbacks =
-	GED_DRAW_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
-    const struct ged_draw_view_edit_preview_callbacks *ged_callbacks_ptr = NULL;
-
-    if (callbacks) {
-	qged_edit_preview_callbacks_to_ged(&ged_callbacks, callbacks);
-	ged_callbacks_ptr = &ged_callbacks;
-    }
-
     return qged_edit_feature_ref_from_ged(
 	    ged_draw_view_context_feature_overlay_ensure(
 		qged_edit_view_context(ctx),
-		name, owner, preview_ctx, ged_callbacks_ptr, source_path));
+		name, owner, source_path));
 }
 
 

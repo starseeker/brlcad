@@ -204,47 +204,70 @@ Priority 0: Finish Framebuffer Protocol Extraction
 Priority 1: Complete Progressive Large-Model Behavior
 -----------------------------------------------------
 
-7. Close progressive LoD policy gaps.
+7. Completed: close progressive LoD policy gaps.
 
-   * Preserve distinct identity for duplicate occurrences during proxy and
-     frontier expansion.
-   * Handle non-union CSG children without treating the tree as a flat union.
-   * Settle or cancel pending autoview work automatically after refinement,
-     database edits, view replacement, and teardown.
-   * Avoid synchronous whole-root full-detail promotion during startup
-     refinement and automatic expansion.
-   * Add bounded memory/work budgets and cancellation for stale requests.
+   * Occurrence-aware source keys, parent/child records, occurrence ordinals,
+     Boolean operations, and leaf transforms preserve duplicate and non-union
+     CSG identity through exact proxy publication and frontier expansion.
+   * Deferred startup publishes root/cache metadata without synchronously
+     realizing the whole tree.  A prioritized, bounded frontier expands in
+     stages while independent asynchronous proxy refinement proceeds.
+   * Deferred autoview is revision-owned: refinement can settle it, while
+     camera changes, database invalidation, view replacement, and teardown
+     cancel stale work.
+   * LoD requests and results have generation cancellation, queue and result
+     limits, cache-write limits, and reservation-based backpressure.
 
    Exit condition: focused tests cover duplicate instances, subtraction and
    intersection trees, cancellation, multi-view independent LoD, and startup
    without whole-root synchronous promotion.
 
-8. Harden compact CAD source records.
+   Linux verification: `libbrlobol_lod_realization`,
+   `libbrlobol_lod_service`, `libbrlobol_lod_update_action`,
+   `ged_test_obol_draw_sync`, and the qtcad progressive-LoD matrix, including
+   Generic Twin startup, auto-expansion, wire, and shaded/backpressure cases.
 
-   * Define stable promote/demote and off-scene handle APIs.
-   * Batch publication and reduce repeated tree-walk/path-state work.
-   * Preserve instance/material/selection identity through promotion,
-     demotion, edits, erase, and cache reload.
-   * Do not restore root/group aggregation without new benchmark evidence.
+8. Completed: harden compact CAD source records.
+
+   * Compact records expose stable handles derived from source lifetime and
+     Obol instance identity, with query, summary, validation, promotion, and
+     demotion APIs that remain valid while records are off-scene.
+   * Bulk source publication and placement-only synchronization avoid full
+     display rebuilds and repeated path-state walks for instance edits.
+   * Retained explicit shapes, semantic paths, materials, selection, and
+     placement survive promotion, demotion, re-promotion, and cache-backed
+     realization.  Erase and clear explicitly invalidate stale handles.
+   * Root/group aggregation remains absent pending benchmark evidence.
 
    Exit condition: compact and full records can replace each other without
    identity changes, stale handles, full-scene rebuilds, or leaked nodes.
 
+   Linux verification: `libbrlobol_prototype`, `libbrlobol_view_store`, and
+   the controlled Obol CAD instance-record tests.
+
 Priority 1: Finish Editing and Interaction
 ------------------------------------------
 
-9. Complete Obol-native edit realization.
+9. Completed: complete Obol-native edit realization.
 
-   * Build manipulators/handles on top of librt edit operations, GED command
-     policy, and Obol transient features rather than widget-private previews.
-   * Cover object and primitive edit modes, accept/reject, selection/pick,
-     transform feedback, database revision changes, and multi-view updates.
-   * Finish incomplete plugin interactions such as BoT face/vertex picking.
-   * Remove remaining preview compatibility glue after MGED and qged share the
-     same GED/libbrlobol edit contract.
+   * A toolkit-neutral GED edit transaction owns begin/update/replace,
+     commit/cancel/discard, intent, revision, color, point, and transformed
+     `rt_db_internal` feedback.  It realizes per-view Obol transient features
+     across every hosted view.
+   * MGED primitive editing and qged plugins share that transaction.  The
+     qtcad widget-private preview and callback ownership paths are deleted.
+   * Typed Obol pick details preserve primitive, face, material, nearest
+     vertex, and model-point data.  The qged BoT editor implements face,
+     edge, and vertex selection, view-plane drag feedback, apply, and reset.
+   * Database writes emit semantic added/modified events inside event batches,
+     advancing GED scene revisions and updating all hosted views.
 
    Exit condition: interactive qged and MGED edits use the same neutral edit
    transaction and Obol realization path with no direct widget preview path.
+
+   Linux verification: `test_qtcad_obol_edit_preview`,
+   `ged_test_state_services`, `ged_test_obol_draw_sync`, the qged edit-plugin
+   builds, and the complete MGED/qged application build.
 
 Priority 2: Performance, Cleanup, and Deletion
 ----------------------------------------------

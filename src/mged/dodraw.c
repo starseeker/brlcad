@@ -112,21 +112,28 @@ mged_edit_preview_publish_view(
     if (!s || !view_ctx || !name || !name[0] || !ip)
 	return 0;
 
-    ged_draw_view_feature_ref ref =
-	ged_draw_view_context_feature_overlay_ensure(view_ctx, name,
-	    (const void *)s, NULL, NULL, source_path);
-    if (ged_draw_view_feature_ref_is_null(ref))
-	return 0;
-
+    struct ged_draw_view_edit_transaction transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE;
+    transaction.feature_name = name;
+    transaction.owner = (const void *)s;
+    transaction.source_path = source_path;
+    transaction.edit_intent_id = source_path;
+    transaction.edit_intent_role = "primitive-edit";
+    transaction.dbip = s->dbip;
+    transaction.internal = ip;
+    transaction.matrix = mat;
+    transaction.ttol = &s->tol.ttol;
+    transaction.tol = &s->tol.tol;
     if (color_scheme) {
-	ged_draw_view_feature_set_color(ref,
-		color_scheme->cs_edit_info[0],
-		color_scheme->cs_edit_info[1],
-		color_scheme->cs_edit_info[2]);
+	transaction.color_valid = 1;
+	transaction.color[0] = color_scheme->cs_edit_info[0];
+	transaction.color[1] = color_scheme->cs_edit_info[1];
+	transaction.color[2] = color_scheme->cs_edit_info[2];
     }
 
-    if (!ged_draw_view_feature_primitive_wireframe_replace(ref, s->dbip,
-	    ip, mat, &s->tol.ttol, &s->tol.tol))
+    if (!ged_draw_view_context_edit_transaction_apply(view_ctx,
+	    &transaction, NULL))
 	return -1;
 
     mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
@@ -186,7 +193,12 @@ mged_edit_preview_clear_view(struct mged_state *s,
     if (!view_ctx || !name || !name[0])
 	return 0;
 
-    removed = ged_draw_view_context_feature_remove(view_ctx, name);
+    struct ged_draw_view_edit_transaction transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
+    transaction.feature_name = name;
+    removed = ged_draw_view_context_edit_transaction_apply(view_ctx,
+	    &transaction, NULL);
     if (removed)
 	mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
     return removed;

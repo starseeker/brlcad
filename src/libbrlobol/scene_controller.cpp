@@ -3049,6 +3049,25 @@ SoBRLSceneController::setDatabaseSourceInstancePlacementState(
 }
 
 int
+SoBRLSceneController::setDatabaseSourceInstanceHierarchyState(
+    const char *sourceInstanceKey,
+    const char *parentInstanceKey,
+    uint32_t occurrenceIndex,
+    int booleanOperation)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	return -1;
+
+    const int changed = source->setHierarchyState(parentInstanceKey,
+	occurrenceIndex, booleanOperation);
+    if (changed > 0)
+	this->advanceFrameRevision();
+    return changed;
+}
+
+int
 SoBRLSceneController::setDatabaseSourceBoundsState(const char *sourcePath,
 	SbBool boundsValid,
 	const SbVec3f &boundsMin,

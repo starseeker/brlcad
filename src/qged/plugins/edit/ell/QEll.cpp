@@ -159,6 +159,7 @@ QEll::write_to_db()
     intern.idb_meth = &OBJ[intern.idb_type];
 
     dp = db_lookup(dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
+    const int adding = (dp == RT_DIR_NULL) ? 1 : 0;
 
     {
 	QgGedEventBatch event_batch(gedp);
@@ -175,6 +176,12 @@ QEll::write_to_db()
 	    rt_db_free_internal(&intern);
 	    return;
 	}
+	if (adding)
+	    (void)ged_event_notify_object_added(gedp, bu_vls_cstr(&oname),
+		NULL);
+	else
+	    (void)ged_event_notify_object_modified(gedp,
+		bu_vls_cstr(&oname), 1, NULL);
     }
 
     rt_db_free_internal(&intern);
@@ -191,7 +198,7 @@ QEll::update_obj_wireframe()
 
     // Resolve the edit object fresh in case it was removed externally
     // (e.g. by a clear/zap command).
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL);
     if (qged_edit_feature_ref_is_null(p))
 	return;
 
@@ -273,7 +280,7 @@ QEll::update_viewobj_name(const QString &)
 
     // Resolve/create the edit view feature.  Don't trust cached pointers here
     // since clear/zap may have removed it.
-    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL);
     if (qged_edit_feature_ref_is_null(p))
 	return;
 

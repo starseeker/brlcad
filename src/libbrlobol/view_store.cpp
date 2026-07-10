@@ -542,14 +542,6 @@ BRLObolOverlayInfo::BRLObolOverlayInfo(void) :
 {
 }
 
-BRLObolEditPreviewCallbacks::BRLObolEditPreviewCallbacks(void) :
-    previewContext(NULL),
-    revisionCallback(NULL),
-    updateCallback(NULL),
-    pickCallback(NULL)
-{
-}
-
 BRLObolLabel::BRLObolLabel(void) :
     text(""),
     point(0.0f, 0.0f, 0.0f),
@@ -692,7 +684,6 @@ struct BRLObolFeatureStoreRecord {
     BRLObolFeatureStyle style;
     BRLObolFeatureOwner owner;
     BRLObolOverlayInfo overlay;
-    BRLObolEditPreviewCallbacks previewCallbacks;
     std::vector<SbVec3f> points;
     std::vector<int32_t> commands;
     std::vector<int32_t> indices;
@@ -721,7 +712,6 @@ struct BRLObolFeatureStoreRecord {
 	style(),
 	owner(),
 	overlay(),
-	previewCallbacks(),
 	points(),
 	commands(),
 	indices(),
@@ -1824,7 +1814,6 @@ BRLObolFeatureStore::publishEditPreview(const SbString &name,
 					const std::vector<int32_t> &commands,
 					uint32_t sourceRevision,
 					uint32_t inputsRevision,
-					const BRLObolEditPreviewCallbacks *callbacks,
 					const BRLObolFeatureOwner *owner)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->upsert(name,
@@ -1843,9 +1832,6 @@ BRLObolFeatureStore::publishEditPreview(const SbString &name,
 			  static_cast<uint32_t>(rec->revision);
     rec->inputsRevision = inputsRevision ? inputsRevision :
 			  static_cast<uint32_t>(rec->revision);
-    if (callbacks)
-	rec->previewCallbacks = *callbacks;
-
     SoNode *node = store_rebuild_node_for_feature(*rec);
     this->impl->setNode(rec, node);
     this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
@@ -1883,41 +1869,18 @@ BRLObolFeatureStore::replaceEditPreviewGeometry(
     return TRUE;
 }
 
-uint64_t
-BRLObolFeatureStore::editPreviewRevision(BRLObolFeatureHandle handle) const
+SbBool
+BRLObolFeatureStore::touch(BRLObolFeatureHandle handle)
 {
     BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
-    if (!rec || rec->kind != BRLObolFeatureKind::EditPreview)
-	return 0;
-    if (rec->previewCallbacks.revisionCallback)
-	return rec->previewCallbacks.revisionCallback(
-		   rec->previewCallbacks.previewContext);
-    return rec->sourceRevision;
-}
-
-int
-BRLObolFeatureStore::updateEditPreview(BRLObolFeatureHandle handle)
-{
-    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
-    if (!rec || rec->kind != BRLObolFeatureKind::EditPreview ||
-	!rec->previewCallbacks.updateCallback)
-	return -1;
-    return rec->previewCallbacks.updateCallback(
-	       rec->previewCallbacks.previewContext);
-}
-
-int
-BRLObolFeatureStore::pickEditPreview(BRLObolFeatureHandle handle,
-				     int x,
-				     int y,
-				     void *pickOut) const
-{
-    BRLObolFeatureStoreRecord *rec = this->impl->record(handle);
-    if (!rec || rec->kind != BRLObolFeatureKind::EditPreview ||
-	!rec->previewCallbacks.pickCallback)
-	return -1;
-    return rec->previewCallbacks.pickCallback(
-	       rec->previewCallbacks.previewContext, x, y, pickOut);
+    if (!rec)
+	return FALSE;
+    rec->revision++;
+    if (rec->node)
+	rec->node->touch();
+    this->impl->notify(rec, BRLObolCommandResultStatus::Updated,
+	"touchFeature");
+    return TRUE;
 }
 
 SbBool

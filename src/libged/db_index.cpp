@@ -60,6 +60,8 @@ struct ged_db_index_child_native {
     ged_db_index_id id = 0;
     int bool_op = OP_UNION;
     size_t row = 0;
+    bool matrix_valid = false;
+    mat_t matrix = MAT_INIT_IDN;
 };
 
 
@@ -74,6 +76,8 @@ struct ged_db_index_use_native {
 struct ged_db_index_tree_leaf {
     std::string name;
     int bool_op = OP_UNION;
+    bool matrix_valid = false;
+    mat_t matrix = MAT_INIT_IDN;
 };
 
 
@@ -158,6 +162,8 @@ ged_db_index_child_clear(struct ged_db_index_child *child)
     ged_db_index_record_clear(&child->record);
     child->bool_op = DB_OP_UNION;
     child->row = 0;
+    child->matrix_valid = 0;
+    MAT_IDN(child->matrix);
 }
 
 
@@ -283,8 +289,16 @@ ged_db_index_collect_leaves(union tree *tp,
 
     switch (tp->tr_op) {
 	case OP_DB_LEAF:
-	    if (tp->tr_l.tl_name)
-		leaves.push_back({std::string(tp->tr_l.tl_name), bool_op});
+	    if (tp->tr_l.tl_name) {
+		ged_db_index_tree_leaf leaf;
+		leaf.name = tp->tr_l.tl_name;
+		leaf.bool_op = bool_op;
+		if (tp->tr_l.tl_mat) {
+		    leaf.matrix_valid = true;
+		    MAT_COPY(leaf.matrix, tp->tr_l.tl_mat);
+		}
+		leaves.push_back(leaf);
+	    }
 	    return;
 	case OP_UNION:
 	    ged_db_index_collect_leaves(tp->tr_b.tb_left, OP_UNION, leaves);
@@ -332,7 +346,9 @@ ged_db_index_add_child(struct ged_db_index *index,
 		       ged_db_index_id parent_id,
 		       const std::string &child_name,
 		       int bool_op,
-		       unsigned long long instance_count)
+		       unsigned long long instance_count,
+		       bool matrix_valid,
+		       const mat_t matrix)
 {
     if (!index || !index->gedp || !index->gedp->dbip || !parent_id ||
 	child_name.empty())
@@ -370,6 +386,9 @@ ged_db_index_add_child(struct ged_db_index *index,
     child.id = child_id;
     child.bool_op = bool_op;
     child.row = children.size();
+    child.matrix_valid = matrix_valid;
+    if (matrix_valid && matrix)
+	MAT_COPY(child.matrix, matrix);
     children.push_back(child);
 
     ged_db_index_use_native use;
@@ -409,7 +428,8 @@ ged_db_index_add_comb_children(struct ged_db_index *index, struct directory *dp)
 	ged_db_index_id child_object_id = ged_db_index_string_hash(leaf.name);
 	instance_counts[child_object_id]++;
 	ged_db_index_add_child(index, parent_id, leaf.name, leaf.bool_op,
-			       instance_counts[child_object_id]);
+			       instance_counts[child_object_id],
+			       leaf.matrix_valid, leaf.matrix);
     }
 
     rt_db_free_internal(&intern);
@@ -1100,6 +1120,8 @@ ged_db_index_child_at(struct ged *gedp,
     const ged_db_index_child_native &native_child = child_it->second[row];
     child->row = row;
     child->bool_op = ged_db_index_public_bool_op(native_child.bool_op);
+    child->matrix_valid = native_child.matrix_valid ? 1 : 0;
+    MAT_COPY(child->matrix, native_child.matrix);
     return ged_db_index_record_find(index, native_child.id, &child->record);
 }
 

@@ -861,6 +861,7 @@ BRLObolViewController::setViewportSceneGraphWithLod(SoNode *root)
 void
 BRLObolViewController::setSceneRoot(SoNode *root)
 {
+    this->cancelActiveLodGeneration();
     this->clearRtPickCaches();
     this->viewAttachment->setSceneRoot(root);
     this->sceneController.setSceneRoot(root);
@@ -878,6 +879,7 @@ BRLObolViewController::getSceneRoot(void) const
 void
 BRLObolViewController::setRenderSceneRoot(SoNode *root)
 {
+    this->cancelActiveLodGeneration();
     this->clearRtPickCaches();
     this->viewAttachment->clearViewLodState();
     this->setViewportSceneGraphWithLod(root);
@@ -902,6 +904,8 @@ BRLObolViewController::setViewAttachment(BRLObolViewAttachment *attachment)
 {
     if (!attachment || attachment == this->viewAttachment)
 	return;
+
+    this->cancelActiveLodGeneration();
 
     SoNode *root = this->getSceneRoot();
     if (root)
@@ -947,6 +951,7 @@ BRLObolViewController::getViewLodState(void) const
 void
 BRLObolViewController::clearViewLodState(void)
 {
+    this->cancelActiveLodGeneration();
     this->viewAttachment->clearViewLodState();
 }
 
@@ -1604,19 +1609,6 @@ controller_lod_source_signature(const BRLObolViewController *controller)
     return SbString(out.str().c_str());
 }
 
-static SbBool
-controller_lod_service_has_outstanding_work(const BRLObolLodService *service)
-{
-    if (!service)
-	return FALSE;
-
-    return service->inFlightCount() > 0 ||
-	   service->pendingTaskCountForDiagnostics() > 0 ||
-	   service->queuedResultCountForDiagnostics() > 0 ||
-	   service->queuedCacheWriteCountForDiagnostics() > 0 ||
-	   service->delayedTaskCountForDiagnostics() > 0 ? TRUE : FALSE;
-}
-
 void
 BRLObolViewController::lodResultReadyCB(
     BRLObolLodService *UNUSED(service), void *userData)
@@ -1633,6 +1625,7 @@ BRLObolViewController::setLodService(BRLObolLodService *service)
     if (this->lodService == service)
 	return;
 
+    this->cancelActiveLodGeneration();
     if (this->lodService && this->lodResultSubscriberId != 0)
 	this->lodService->unsubscribeResultReady(this->lodResultSubscriberId);
 
@@ -1648,6 +1641,18 @@ BRLObolViewController::setLodService(BRLObolLodService *service)
 	this->lodResultSubscriberId =
 	    this->lodService->subscribeResultReady(
 		BRLObolViewController::lodResultReadyCB, this);
+}
+
+void
+BRLObolViewController::cancelActiveLodGeneration(void)
+{
+    if (this->lodService && this->lodActiveGeneration != 0)
+	this->lodService->cancelGeneration(this->lodActiveGeneration);
+    this->lodActiveGeneration = 0;
+    this->lodResultsPending.store(0);
+    this->lodLastSubmittedViewRevision = 0;
+    this->lodLastSubmittedPolicyRevision = 0;
+    this->lodLastSubmittedSourceSignature = "";
 }
 
 BRLObolLodService *
@@ -2246,12 +2251,8 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	       signature.getString()) == 0)
 	return 0;
 
-    if (this->lodActiveGeneration != 0 &&
-	controller_lod_service_has_outstanding_work(this->lodService))
-	return 0;
-
     if (this->lodActiveGeneration != 0)
-	this->lodService->cancelGeneration(this->lodActiveGeneration);
+	this->cancelActiveLodGeneration();
 
     uint64_t generation = this->lodService->beginGeneration();
     int submitted = this->submitLodRequests(this->lodService, generation,
@@ -3416,6 +3417,8 @@ BRLObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	return;
 
     this->lodViewSignature = signature;
-    if (advanceOnChange)
+    if (advanceOnChange) {
+	this->cancelActiveLodGeneration();
 	this->advanceLodViewRevision();
+    }
 }

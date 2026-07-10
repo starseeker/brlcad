@@ -781,6 +781,68 @@ test_task_realize_data_cleanup(void)
     return 0;
 }
 
+static int
+test_queue_limits_and_pending_cancellation(void)
+{
+    BRLObolLodService service;
+    service.setQueueLimits(2, 1, 1);
+    size_t maxActive = 0;
+    size_t maxResults = 0;
+    size_t maxCacheWrites = 0;
+    service.getQueueLimits(maxActive, maxResults, maxCacheWrites);
+    if (maxActive != 2 || maxResults != 1 || maxCacheWrites != 1) {
+	printf("FAIL: LoD service queue limits did not round trip\n");
+	return 1;
+    }
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD service did not start for queue-limit test\n");
+	return 1;
+    }
+
+    std::atomic<int> calls(0);
+    std::atomic<int> cleanups(0);
+    const uint64_t generation = service.beginGeneration();
+    BRLObolLodTask first;
+    first.generation = generation;
+    first.request = make_request("/bounded-first.bot");
+    first.realize = cleanup_task;
+    first.realizeData = new CleanupMarker{&calls, &cleanups};
+    first.realizeDataFree = cleanup_marker_free;
+    first.publishResult = TRUE;
+    first.addDependency(999998);
+    if (service.submit(first) == 0) {
+	cleanup_marker_free(first.realizeData);
+	service.stop();
+	printf("FAIL: LoD service rejected first bounded task\n");
+	return 1;
+    }
+
+    BRLObolLodTask rejected = first;
+    rejected.request = make_request("/bounded-rejected.bot");
+    rejected.realizeData = new CleanupMarker{&calls, &cleanups};
+    if (service.submit(rejected) != 0 ||
+	service.rejectedTaskCountForDiagnostics() != 1) {
+	cleanup_marker_free(rejected.realizeData);
+	service.stop();
+	printf("FAIL: LoD service did not enforce reserved result capacity\n");
+	return 1;
+    }
+    cleanup_marker_free(rejected.realizeData);
+
+    service.cancelGeneration(generation);
+    if (!service.isGenerationCancelled(generation) ||
+	service.currentGeneration() != 0 ||
+	service.pendingTaskCountForDiagnostics() != 0 ||
+	service.inFlightCount() != 0 || calls.load() != 0 ||
+	cleanups.load() != 2) {
+	service.stop();
+	printf("FAIL: LoD generation cancellation did not immediately free pending work\n");
+	return 1;
+    }
+    service.stop();
+    return 0;
+}
+
 struct DebugDelayTaskData {
     std::mutex mutex;
     int calls;
@@ -2002,6 +2064,8 @@ main(int argc, char **argv)
     if (test_result_ready_subscription())
 	return 1;
     if (test_task_realize_data_cleanup())
+	return 1;
+    if (test_queue_limits_and_pending_cancellation())
 	return 1;
     if (test_debug_delay_cancellation())
 	return 1;

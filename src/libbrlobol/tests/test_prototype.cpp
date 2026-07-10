@@ -5668,6 +5668,68 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	source->getCompactInstanceCount() != 2 ||
 	source->getRealizedShapeCount() != 0)
 	FAIL("compact assembly should replace explicit wire instance nodes with a compact instance index");
+
+    BRLObolCompactInstanceHandle compactHandle0;
+    BRLObolCompactInstanceHandle compactHandle1;
+    BRLObolCompactInstanceSummary compactSummary0;
+    BRLObolCompactInstanceSummary compactSummary1;
+    if (!source->getCompactInstanceHandle(0, compactHandle0) ||
+	!source->getCompactInstanceHandle(1, compactHandle1) ||
+	(compactHandle0.instanceWord0 == compactHandle1.instanceWord0 &&
+	 compactHandle0.instanceWord1 == compactHandle1.instanceWord1) ||
+	!source->getCompactInstanceSummary(compactHandle0, compactSummary0) ||
+	!source->getCompactInstanceSummary(compactHandle1, compactSummary1) ||
+	compactSummary0.path == compactSummary1.path)
+	FAIL("compact assembly should expose distinct stable off-scene handles");
+
+    if (source->demoteCompactGeometry() != 2 ||
+	source->hasCompactInstanceIndex() ||
+	source->getRealizedShapeCount() != 2)
+	FAIL("compact demotion should restore explicit nodes");
+    if (!source->isCompactInstanceHandleValid(compactHandle0) ||
+	!source->isCompactInstanceHandleValid(compactHandle1) ||
+	!source->getCompactInstanceSummary(compactHandle0, compactSummary0) ||
+	!source->getCompactInstanceSummary(compactHandle1, compactSummary1))
+	FAIL("compact demotion should retain off-scene handles");
+    if (!shape_with_path(source, "/assembly.c/left.c/box.s") ||
+	!shape_with_path(source, "/assembly.c/right.c/box.s"))
+	FAIL("compact demotion should preserve explicit path identity");
+    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
+    right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
+    if (!left_shape || !right_shape || !left_shape->selected.getValue() ||
+	right_shape->selected.getValue())
+	FAIL("compact demotion should preserve per-instance selection state");
+
+    if (source->compactRealizedGeometry() != 2 ||
+	!source->hasCompactInstanceIndex() ||
+	source->getRealizedShapeCount() != 0 ||
+	!source->isCompactInstanceHandleValid(compactHandle0) ||
+	!source->isCompactInstanceHandleValid(compactHandle1) ||
+	!source->getCompactInstanceSummary(compactHandle0, compactSummary0) ||
+	!source->getCompactInstanceSummary(compactHandle1, compactSummary1))
+	FAIL("compact re-promotion should preserve stable handles and semantic state");
+
+    SbMatrix compactPlacement = SbMatrix::identity();
+    compactPlacement.setTranslate(SbVec3f(100.0f, 0.0f, 0.0f));
+    if (!source->setPlacementState(TRUE, compactPlacement,
+	    FALSE, SbVec3f(0.0f, 0.0f, 0.0f), FALSE, 0.0f) ||
+	!source->isCompactInstanceHandleValid(compactHandle0) ||
+	!source->isCompactInstanceHandleValid(compactHandle1) ||
+	source->prepareCompiledAssembly() != 1)
+	FAIL("compact placement edits should preserve handles and rebuild the compiled assembly");
+    SoGetBoundingBoxAction compactMovedBBoxAction(viewport);
+    compactMovedBBoxAction.apply(root);
+    bbox = compactMovedBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() ||
+	!nearly_equal(bbox.getMin()[0], 108.0f) ||
+	!nearly_equal(bbox.getMax()[0], 133.0f))
+	FAIL("compact placement edits should update spatial queries");
+
+    if (!source->setPlacementState(FALSE, SbMatrix::identity(),
+	    FALSE, SbVec3f(0.0f, 0.0f, 0.0f), FALSE, 0.0f) ||
+	!source->isCompactInstanceHandleValid(compactHandle0) ||
+	!source->isCompactInstanceHandleValid(compactHandle1))
+	FAIL("compact placement reset should preserve stable handles");
     if (source->prepareCompiledAssembly() != 1 ||
 	!source->hasCompiledAssembly() ||
 	source->getCompiledAssemblyPartCount() != 1 ||
@@ -5754,6 +5816,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!compactLeftLine || !compactRightLine ||
 	!compactLeftLine->selected || compactRightLine->selected)
 	FAIL("compact assembly export should preserve selected/unselected instance grouping");
+
+    source->clearRealizedGeometry(FALSE);
+    if (source->isCompactInstanceHandleValid(compactHandle0) ||
+	source->isCompactInstanceHandleValid(compactHandle1))
+	FAIL("compact instance handles should invalidate when their source geometry is cleared");
 
     root->unref();
 

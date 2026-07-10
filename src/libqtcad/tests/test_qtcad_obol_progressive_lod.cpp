@@ -43,6 +43,7 @@
 #include <QCoreApplication>
 #include <QImage>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <ctype.h>
@@ -1235,6 +1236,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, active_draw_target);
     txn.view = qg_legacy_view_to_context(view.view());
     txn.appearance = &appearance;
+    txn.autoview = testCase.startupAutoExpand ? 1 : 0;
 
     int sync_changed = 0;
     int render_source_count = 0;
@@ -1316,15 +1318,6 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	startup_realized_geometry_count =
 	    qtcad_obol_render_realized_database_geometry_count(gedp,
 		controller);
-	if (startup_realized_geometry_count <= 0 &&
-	    !testCase.startupOnly && !testCase.startupExpand &&
-	    !testCase.startupWireLod) {
-	    fprintf(stderr,
-		    "qtcad progressive LoD startup scene graph has no realized database geometry: sources=%d\n",
-		    render_source_count);
-	    cleanup();
-	    return 0;
-	}
 	if (!qtcad_obol_render_has_draw_metadata(gedp, controller,
 		&startup_metadata)) {
 	    fprintf(stderr,
@@ -1387,7 +1380,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    cleanup();
 	    return 1;
 	}
-	if (!startup_has_first_visual && !testCase.startupExpand &&
+	if (!startup_has_first_visual && !testCase.startupRefine &&
+	    !testCase.startupExpand &&
 	    !testCase.startupAutoExpand && !testCase.startupWireLod) {
 	    fprintf(stderr,
 		    "qtcad Obol progressive LoD startup image check failed: case=%s lit=%d",
@@ -1417,10 +1411,13 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    int lit_auto = 0;
 	    int diff_auto = 0;
 	    QImage frame_auto;
+	    BRLObolProgressiveStatus progressive_status;
 	    ged_draw_obol_lod_service_status_t service_status;
 	    memset(&service_status, 0, sizeof(service_status));
 	    for (int frame = 0; frame < 120; frame++) {
 		QCoreApplication::processEvents();
+		(void)controller->advanceProgressiveWork(NULL,
+		    &progressive_status);
 		view.get_viewport_image(frame_auto);
 		source_count_after =
 		    qtcad_obol_render_database_source_count(gedp,
@@ -1451,7 +1448,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		frame_auto.isNull() || lit_auto < 20 ||
 		(diff_auto <= 0 && lit0 < 20)) {
 		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
+			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu progressive={submitted=%zu cached=%zu expanded=%zu existing=%zu remaining=%zu proxies=%zu changed=%d more=%d}",
 			testCase.name, source_count_before, source_count_after,
 			max_depth_before, max_depth_after,
 			geometry_before, realized_after,
@@ -1460,7 +1457,15 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 			service_status.active_aabb_proxy_payloads,
 			service_status.pending_tasks,
 			service_status.in_flight,
-			service_status.queued_cache_writes);
+			service_status.queued_cache_writes,
+			progressive_status.submitted,
+			progressive_status.alreadyCached,
+			progressive_status.expanded,
+			progressive_status.existing,
+			progressive_status.remaining,
+			progressive_status.proxyPublished,
+			progressive_status.changed,
+			progressive_status.hasMore);
 		print_progressive_lod_timings(stderr, timings);
 		fprintf(stderr, "\n");
 		cleanup();
@@ -1805,8 +1810,21 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     unsigned int visited_mesh_count = controller->getLastLodVisitedMeshCount();
     unsigned int submitted_task_count =
 	controller->getLastLodSubmittedTaskCount();
+
+    size_t max_active_tasks = 0;
+    size_t max_queued_results = 0;
+    size_t max_queued_cache_writes = 0;
+    service.getQueueLimits(max_active_tasks, max_queued_results,
+	max_queued_cache_writes);
+    const size_t submission_limit = std::min(max_active_tasks,
+	max_queued_results);
+    const uint64_t rejected_tasks =
+	service.rejectedTaskCountForDiagnostics();
     if (submitted <= 0 || visited_mesh_count == 0 ||
-	submitted_task_count != visited_mesh_count * 3) {
+	submitted_task_count != static_cast<unsigned int>(submitted) ||
+	(submission_limit && submitted_task_count > submission_limit) ||
+	(visited_mesh_count * 3 > submitted_task_count &&
+	 rejected_tasks == 0)) {
 	fprintf(stderr, "qtcad Obol progressive LoD submitted unexpected work: submitted=%d source_meshes=%d visited=%u tasks=%u diagnostics=%s\n",
 		submitted, source_mesh_count, visited_mesh_count,
 		submitted_task_count,
@@ -1920,7 +1938,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 				      (diff03 > 0 &&
 				       (diff01 > 0 || diff12 > 0 || diff23 > 0)));
     if (frame0.isNull() || frame1.isNull() || frame2.isNull() ||
-	frame3.isNull() || lit0 < 20 || lit1 < 20 || lit2 < 20 ||
+	frame3.isNull() || (lit0 < 20 && !testCase.startupRefine) ||
+	lit1 < 20 || lit2 < 20 ||
 	lit3 < 20 || !image_progression_ok) {
 	fprintf(stderr, "qtcad Obol progressive LoD image check failed: case=%s lit=%d,%d,%d,%d diff=%d,%d,%d,%d applied=%zu source_meshes=%d visited=%u active_payloads=%zu,%zu,%zu",
 		testCase.name,

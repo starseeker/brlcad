@@ -41,6 +41,8 @@
 
 class QgPluginContext;
 
+void *qged_edit_view_context(const QgPluginContext *ctx);
+
 struct qged_edit_feature_ref {
     uintptr_t token;
     uint64_t revision;
@@ -58,14 +60,6 @@ enum qged_edit_feature_family {
     QGED_EDIT_FEATURE_UNKNOWN = 0,
     QGED_EDIT_FEATURE_TRANSIENT_PREVIEW = 1
 };
-
-struct qged_edit_preview_callbacks {
-    uint64_t (*revision_cb)(void *);
-    int (*update_cb)(void *);
-    int (*pick_cb)(void *, int, int, void *);
-};
-
-#define QGED_EDIT_PREVIEW_CALLBACKS_INIT { NULL, NULL, NULL }
 
 struct qged_edit_preview_lines {
     point_t *points;
@@ -96,6 +90,7 @@ qged_edit_feature_ref_is_null(struct qged_edit_feature_ref ref);
 int
 qged_edit_preview_publish_event(const QgPluginContext *ctx,
 				struct qged_edit_feature_ref feature,
+				const char *feature_name,
 				enum qged_edit_preview_event event,
 				const char *source_path);
 
@@ -103,8 +98,6 @@ struct qged_edit_feature_ref
 qged_edit_feature_overlay_ensure(const QgPluginContext *ctx,
 				 const char *name,
 				 const void *owner,
-				 void *preview_ctx,
-				 const struct qged_edit_preview_callbacks *callbacks,
 				 const char *source_path);
 
 

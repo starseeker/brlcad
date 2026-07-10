@@ -53,6 +53,7 @@
 #include <Inventor/sensors/SoFieldSensor.h>
 
 #include <algorithm>
+#include <atomic>
 #include <limits.h>
 #include <map>
 #include <math.h>
@@ -70,6 +71,7 @@ struct BRLObolCompactInstanceEntry {
 	vlist(NULL),
 	mesh(NULL),
 	localToSource(SbMatrix::identity()),
+	localTransform(SbMatrix::identity()),
 	visible(TRUE),
 	selectable(TRUE),
 	selected(FALSE),
@@ -82,6 +84,7 @@ struct BRLObolCompactInstanceEntry {
     SoBRLVListShape *vlist;
     SoBRLMeshShape *mesh;
     SbMatrix localToSource;
+    SbMatrix localTransform;
     SoBRLCadAssembly::InstanceSemantic semantic;
     SbBool visible;
     SbBool selectable;
@@ -118,6 +121,17 @@ struct BRLObolCompactInstanceIndex {
 };
 
 SO_NODE_SOURCE(SoBRLDatabaseSource);
+
+static std::atomic<uint64_t> database_source_next_handle_id(1);
+
+static uint64_t
+database_source_handle_id(void)
+{
+    uint64_t id = database_source_next_handle_id.fetch_add(1);
+    if (id == 0)
+	id = database_source_next_handle_id.fetch_add(1);
+    return id;
+}
 
 static int
 database_source_float_different(float a, float b)
@@ -286,6 +300,9 @@ BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
     valid(FALSE),
     path(""),
     instanceKey(""),
+    parentInstanceKey(""),
+    occurrenceIndex(0),
+    booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION),
     displayName(""),
     hasParent(FALSE),
     drawTreeDepth(0),
@@ -365,6 +382,34 @@ BRLObolAuxiliaryLineSetDisplayState::BRLObolAuxiliaryLineSetDisplayState(void) :
     materialColorValid(FALSE),
     materialColor(1.0f, 1.0f, 1.0f),
     materialRevision(0)
+{
+}
+
+BRLObolCompactInstanceHandle::BRLObolCompactInstanceHandle(void) :
+    sourceNodeId(0),
+    instanceWord0(0),
+    instanceWord1(0)
+{
+}
+
+SbBool
+BRLObolCompactInstanceHandle::isValid(void) const
+{
+    return sourceNodeId != 0 && (instanceWord0 != 0 || instanceWord1 != 0) ?
+	TRUE : FALSE;
+}
+
+BRLObolCompactInstanceSummary::BRLObolCompactInstanceSummary(void) :
+    valid(FALSE),
+    localToSource(SbMatrix::identity()),
+    occurrenceIndex(0),
+    booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION),
+    wireGeometry(FALSE),
+    meshGeometry(FALSE),
+    visible(TRUE),
+    selectable(TRUE),
+    selected(FALSE),
+    highlighted(FALSE)
 {
 }
 
@@ -1954,6 +1999,31 @@ sync_realized_shape_owner_state_in_node(SoNode *node,
 	SoGroup *group = static_cast<SoGroup *>(node);
 	for (int i = 0; i < group->getNumChildren(); i++)
 	    sync_realized_shape_owner_state_in_node(group->getChild(i), source);
+    }
+}
+
+static void
+sync_realized_shape_placement_state_in_node(SoNode *node,
+				    const SoBRLDatabaseSource *source)
+{
+    if (!node || !source)
+	return;
+
+    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	sync_shape_placement_state(static_cast<SoBRLVListShape *>(node),
+		source);
+	return;
+    }
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	sync_shape_placement_state(static_cast<SoBRLMeshShape *>(node),
+		source);
+	return;
+    }
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++)
+	    sync_realized_shape_placement_state_in_node(group->getChild(i),
+		    source);
     }
 }
 
@@ -4372,15 +4442,17 @@ cad_mesh_part_geometry(const SoBRLMeshShape *shape,
 }
 
 static std::string
-cad_instance_key(const char *path, const SbMatrix &matrix, int ordinal)
+cad_instance_key(const SoBRLDatabaseSource *source,
+	const char *path, int ordinal)
 {
-    std::string key = path ? path : "";
+    std::string key = source ?
+	source_effective_instance_key(source).getString() : "";
+    key.append("|");
+    key.append(path ? path : "");
     key.append("#");
     char buf[64] = {0};
     snprintf(buf, sizeof(buf), "%d", ordinal);
     key.append(buf);
-    const float *m = matrix[0];
-    key.append(reinterpret_cast<const char *>(m), sizeof(float) * 16);
     return key;
 }
 
@@ -4518,6 +4590,30 @@ cad_source_leaf_name(const SoBRLDatabaseSource *source)
 	return "";
     const char *slash = strrchr(path, '/');
     return (slash && slash[1]) ? slash + 1 : path;
+}
+
+static obol::InstanceId
+cad_source_parent_instance(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return obol::CadIdBuilder::Root();
+    const char *key = source->parentInstanceKey.getValue().getString();
+    if (!key || !key[0])
+	return obol::CadIdBuilder::Root();
+    return obol::CadIdBuilder::hash128(key);
+}
+
+static uint8_t
+cad_source_boolean_operation(const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return 0;
+    const int operation = source->booleanOperation.getValue();
+    if (operation == SoBRLDatabaseSource::BOOLEAN_SUBTRACT)
+	return 1;
+    if (operation == SoBRLDatabaseSource::BOOLEAN_INTERSECT)
+	return 2;
+    return 0;
 }
 
 static SoBRLCadAssembly::InstanceSemantic
@@ -4815,17 +4911,17 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
     assembly->upsertParts(std::vector<obol::PartUpdate>(1, part));
 
     std::string instanceKey =
-	cad_instance_key(source->path.getValue().getString(), matrix, 0);
+	cad_instance_key(source, source->path.getValue().getString(), 0);
     instanceKey += ":view-lod:";
     instanceKey += payload->cacheKey.getString();
     obol::InstanceId instanceId = obol::CadIdBuilder::hash128(instanceKey);
     obol::InstanceRecord record;
     record.part = partId;
     record.localToRoot = matrix;
-    record.parent = obol::CadIdBuilder::Root();
-    record.childName = source->path.getValue().getString();
-    record.occurrenceIndex = 0;
-    record.boolOp = 0;
+    record.parent = cad_source_parent_instance(source);
+    record.childName = cad_source_leaf_name(source);
+    record.occurrenceIndex = source->occurrenceIndex.getValue();
+    record.boolOp = cad_source_boolean_operation(source);
     record.style = cad_source_style(source);
     obol::InstanceUpdate update;
     update.instance = instanceId;
@@ -4883,16 +4979,16 @@ cad_add_vlist_instance(cad_build_data &data,
 
     const SbMatrix matrix = cad_instance_matrix(data.source, localMatrix);
     const std::string instanceKey =
-	cad_instance_key(shape->sourcePath.getValue().getString(), matrix,
+	cad_instance_key(data.source, shape->sourcePath.getValue().getString(),
 			 data.ordinal++);
     obol::InstanceId instanceId = obol::CadIdBuilder::hash128(instanceKey);
     obol::InstanceRecord record;
     record.part = partId;
     record.localToRoot = matrix;
-    record.parent = obol::CadIdBuilder::Root();
+    record.parent = cad_source_parent_instance(data.source);
     record.childName = shape->sourcePath.getValue().getString();
-    record.occurrenceIndex = static_cast<uint32_t>(data.ordinal);
-    record.boolOp = 0;
+    record.occurrenceIndex = data.source->occurrenceIndex.getValue();
+    record.boolOp = cad_source_boolean_operation(data.source);
     record.style = cad_vlist_style(shape);
 
     obol::InstanceUpdate update;
@@ -4933,16 +5029,16 @@ cad_add_mesh_instance(cad_build_data &data,
 
     const SbMatrix matrix = cad_instance_matrix(data.source, localMatrix);
     const std::string instanceKey =
-	cad_instance_key(shape->sourcePath.getValue().getString(), matrix,
+	cad_instance_key(data.source, shape->sourcePath.getValue().getString(),
 			 data.ordinal++);
     obol::InstanceId instanceId = obol::CadIdBuilder::hash128(instanceKey);
     obol::InstanceRecord record;
     record.part = partId;
     record.localToRoot = matrix;
-    record.parent = obol::CadIdBuilder::Root();
+    record.parent = cad_source_parent_instance(data.source);
     record.childName = shape->sourcePath.getValue().getString();
-    record.occurrenceIndex = static_cast<uint32_t>(data.ordinal);
-    record.boolOp = 0;
+    record.occurrenceIndex = data.source->occurrenceIndex.getValue();
+    record.boolOp = cad_source_boolean_operation(data.source);
     record.style = cad_mesh_style(shape);
 
     obol::InstanceUpdate update;
@@ -5061,17 +5157,17 @@ compact_add_vlist_instance(SoBRLDatabaseSource *source,
 
     const SbMatrix matrix = cad_instance_matrix(source, localMatrix);
     const std::string instanceKey =
-	cad_instance_key(shape->sourcePath.getValue().getString(), matrix,
+	cad_instance_key(source, shape->sourcePath.getValue().getString(),
 			 ordinal++);
     obol::InstanceId instanceId = obol::CadIdBuilder::hash128(instanceKey);
 
     obol::InstanceRecord record;
     record.part = partId;
     record.localToRoot = matrix;
-    record.parent = obol::CadIdBuilder::Root();
+    record.parent = cad_source_parent_instance(source);
     record.childName = shape->sourcePath.getValue().getString();
-    record.occurrenceIndex = static_cast<uint32_t>(ordinal);
-    record.boolOp = 0;
+    record.occurrenceIndex = source->occurrenceIndex.getValue();
+    record.boolOp = cad_source_boolean_operation(source);
     record.style = cad_vlist_style(shape);
 
     obol::InstanceUpdate update;
@@ -5090,6 +5186,7 @@ compact_add_vlist_instance(SoBRLDatabaseSource *source,
     entry.part = partId;
     entry.vlist = shape;
     entry.localToSource = matrix;
+    entry.localTransform = localMatrix;
     entry.semantic = cad_vlist_semantic(shape);
     entry.visible = shape->visible.getValue();
     entry.selectable = shape->selectable.getValue();
@@ -5129,17 +5226,17 @@ compact_add_mesh_instance(SoBRLDatabaseSource *source,
 
     const SbMatrix matrix = cad_instance_matrix(source, localMatrix);
     const std::string instanceKey =
-	cad_instance_key(shape->sourcePath.getValue().getString(), matrix,
+	cad_instance_key(source, shape->sourcePath.getValue().getString(),
 			 ordinal++);
     obol::InstanceId instanceId = obol::CadIdBuilder::hash128(instanceKey);
 
     obol::InstanceRecord record;
     record.part = partId;
     record.localToRoot = matrix;
-    record.parent = obol::CadIdBuilder::Root();
+    record.parent = cad_source_parent_instance(source);
     record.childName = shape->sourcePath.getValue().getString();
-    record.occurrenceIndex = static_cast<uint32_t>(ordinal);
-    record.boolOp = 0;
+    record.occurrenceIndex = source->occurrenceIndex.getValue();
+    record.boolOp = cad_source_boolean_operation(source);
     record.style = cad_mesh_style(shape);
 
     obol::InstanceUpdate update;
@@ -5158,6 +5255,7 @@ compact_add_mesh_instance(SoBRLDatabaseSource *source,
     entry.part = partId;
     entry.mesh = shape;
     entry.localToSource = matrix;
+    entry.localTransform = localMatrix;
     entry.semantic = cad_mesh_semantic(shape);
     entry.visible = shape->visible.getValue();
     entry.selectable = shape->selectable.getValue();
@@ -5448,6 +5546,7 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     meshLod(NULL),
     compiledAssembly(NULL),
     compactIndex(NULL),
+    compactHandleSourceId(database_source_handle_id()),
     compiledAssemblyDirty(TRUE),
     compiledAssemblyActive(FALSE),
     compiledAssemblyNodeId(0),
@@ -5480,6 +5579,9 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
 
     SO_NODE_ADD_FIELD(instanceKey, (""));
     SO_NODE_ADD_FIELD(path, (""));
+    SO_NODE_ADD_FIELD(parentInstanceKey, (""));
+    SO_NODE_ADD_FIELD(occurrenceIndex, (0));
+    SO_NODE_ADD_FIELD(booleanOperation, (BOOLEAN_UNION));
     SO_NODE_ADD_FIELD(displayName, (""));
     SO_NODE_ADD_FIELD(representationKey, (""));
     SO_NODE_ADD_FIELD(representationMode, (-1));
@@ -5813,6 +5915,32 @@ SoBRLDatabaseSource::setRepresentationState(
 				      sourcePath, sourcePath,
 				      this->sourceRevision.getValue());
     this->realizationIdentity = source_realization_identity(this);
+    return 1;
+}
+
+int
+SoBRLDatabaseSource::setHierarchyState(
+    const char *sourceParentInstanceKey,
+    uint32_t sourceOccurrenceIndex,
+    int sourceBooleanOperation)
+{
+    const char *nextParent = sourceParentInstanceKey ?
+	sourceParentInstanceKey : "";
+    int nextOperation = sourceBooleanOperation;
+    if (nextOperation != BOOLEAN_SUBTRACT &&
+	nextOperation != BOOLEAN_INTERSECT)
+	nextOperation = BOOLEAN_UNION;
+
+    if (database_source_string_equal(this->parentInstanceKey.getValue(),
+	    nextParent) &&
+	this->occurrenceIndex.getValue() == sourceOccurrenceIndex &&
+	this->booleanOperation.getValue() == nextOperation)
+	return 0;
+
+    this->parentInstanceKey = nextParent;
+    this->occurrenceIndex = sourceOccurrenceIndex;
+    this->booleanOperation = nextOperation;
+    this->markCompiledAssemblyDirty();
     return 1;
 }
 
@@ -6281,8 +6409,11 @@ SoBRLDatabaseSource::setPlacementState(SbBool nextDrawMatrixValid,
     }
     if (sync_source_placement_transform(this))
 	changed = 1;
-    if (changed)
-	this->syncRealizedShapeOwnerState();
+    if (changed) {
+	this->syncCompactInstancePlacementState();
+	sync_realized_shape_placement_state_in_node(this, this);
+	this->markCompiledAssemblyDirty();
+    }
     return changed;
 }
 
@@ -8100,6 +8231,28 @@ SoBRLDatabaseSource::syncCompactInstanceDisplayState(void)
 }
 
 void
+SoBRLDatabaseSource::syncCompactInstancePlacementState(void)
+{
+    if (!this->compactIndex)
+	return;
+
+    for (BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries) {
+	entry.localToSource = cad_instance_matrix(this, entry.localTransform);
+	if (entry.vlist)
+	    sync_shape_placement_state(entry.vlist, this);
+	else if (entry.mesh)
+	    sync_shape_placement_state(entry.mesh, this);
+	for (obol::InstanceUpdate &update : this->compactIndex->instances) {
+	    if (update.instance == entry.instance) {
+		update.record.localToRoot = entry.localToSource;
+		break;
+	    }
+	}
+    }
+}
+
+void
 SoBRLDatabaseSource::syncRealizedShapeOwnerState(void)
 {
     this->syncCompactInstanceDisplayState();
@@ -8608,6 +8761,107 @@ SoBRLDatabaseSource::getCompactInstanceCount(void) const
     if (!this->hasCompactInstanceIndex())
 	return 0;
     return static_cast<int>(this->compactIndex->entries.size());
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactInstanceHandle(
+    int index, BRLObolCompactInstanceHandle &handle) const
+{
+    handle = BRLObolCompactInstanceHandle();
+    if (!this->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->compactIndex->entries.size())
+	return FALSE;
+
+    const BRLObolCompactInstanceEntry &entry =
+	this->compactIndex->entries[static_cast<size_t>(index)];
+    handle.sourceNodeId = this->compactHandleSourceId;
+    handle.instanceWord0 = entry.instance.w0;
+    handle.instanceWord1 = entry.instance.w1;
+    return handle.isValid();
+}
+
+const BRLObolCompactInstanceEntry *
+SoBRLDatabaseSource::findCompactInstanceEntry(
+	const BRLObolCompactInstanceHandle &handle)
+    const
+{
+    if (!this->compactIndex || !handle.isValid() ||
+	handle.sourceNodeId != this->compactHandleSourceId)
+	return NULL;
+    for (const BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries) {
+	if (entry.instance.w0 == handle.instanceWord0 &&
+	    entry.instance.w1 == handle.instanceWord1)
+	    return &entry;
+    }
+    return NULL;
+}
+
+SbBool
+SoBRLDatabaseSource::isCompactInstanceHandleValid(
+    const BRLObolCompactInstanceHandle &handle) const
+{
+    return this->findCompactInstanceEntry(handle) ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactInstanceSummary(
+    const BRLObolCompactInstanceHandle &handle,
+    BRLObolCompactInstanceSummary &summary) const
+{
+    summary = BRLObolCompactInstanceSummary();
+    const BRLObolCompactInstanceEntry *entry =
+	this->findCompactInstanceEntry(handle);
+    if (!entry)
+	return FALSE;
+
+    summary.valid = TRUE;
+    summary.handle = handle;
+    summary.path = entry->semantic.path;
+    summary.sourceInstanceKey = entry->semantic.sourceInstanceKey;
+    summary.localToSource = entry->localTransform;
+    summary.occurrenceIndex = this->occurrenceIndex.getValue();
+    summary.booleanOperation = this->booleanOperation.getValue();
+    summary.wireGeometry = entry->vlist ? TRUE : FALSE;
+    summary.meshGeometry = entry->mesh ? TRUE : FALSE;
+    summary.visible = entry->vlist ? entry->vlist->visible.getValue() :
+	(entry->mesh ? entry->mesh->visible.getValue() : entry->visible);
+    summary.selectable = entry->vlist ? entry->vlist->selectable.getValue() :
+	(entry->mesh ? entry->mesh->selectable.getValue() : entry->selectable);
+    summary.selected = entry->vlist ? entry->vlist->selected.getValue() :
+	(entry->mesh ? entry->mesh->selected.getValue() : entry->selected);
+    summary.highlighted = entry->vlist ?
+	entry->vlist->highlighted.getValue() :
+	(entry->mesh ? entry->mesh->highlighted.getValue() : entry->highlighted);
+    return TRUE;
+}
+
+int
+SoBRLDatabaseSource::demoteCompactGeometry(void)
+{
+    if (!this->compactIndexActive || !this->compactIndex ||
+	this->compactIndex->entries.empty())
+	return 0;
+
+    const int count = static_cast<int>(this->compactIndex->entries.size());
+    this->compactIndexActive = FALSE;
+    this->clearCompiledAssembly();
+    for (const BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries) {
+	SoNode *shape = entry.vlist ? static_cast<SoNode *>(entry.vlist) :
+	    static_cast<SoNode *>(entry.mesh);
+	if (!shape)
+	    continue;
+	SoSeparator *holder = new SoSeparator;
+	if (!entry.localTransform.equals(SbMatrix::identity(), 0.000001f)) {
+	    SoMatrixTransform *transform = new SoMatrixTransform;
+	    transform->matrix = entry.localTransform;
+	    holder->addChild(transform);
+	}
+	holder->addChild(shape);
+	this->addChild(holder);
+    }
+    return count;
 }
 
 static SbMatrix
@@ -10182,6 +10436,9 @@ SoBRLDatabaseSource::getSummary(BRLObolDatabaseSourceSummary &summary) const
     summary.valid = TRUE;
     summary.path = this->path.getValue();
     summary.instanceKey = source_effective_instance_key(this);
+    summary.parentInstanceKey = this->parentInstanceKey.getValue();
+    summary.occurrenceIndex = this->occurrenceIndex.getValue();
+    summary.booleanOperation = this->booleanOperation.getValue();
     summary.displayName = this->displayName.getValue();
     summary.representationKey =
 	source_effective_representation_key(this);

@@ -1184,6 +1184,12 @@ struct BRLObolLodServicePrivate {
 	nextSubscriberId(1),
 	nextGeneration(0),
 	activeGeneration(0),
+	maxActiveTasks(1024),
+	maxQueuedResults(256),
+	maxQueuedCacheWrites(256),
+	resultReservations(0),
+	cacheWriteReservations(0),
+	rejectedTasks(0),
 	inFlight(0),
 	cacheWriteInFlight(0),
 	delayedTasks(0)
@@ -1205,6 +1211,12 @@ struct BRLObolLodServicePrivate {
     BRLObolLodSubscriberId nextSubscriberId;
     uint64_t nextGeneration;
     uint64_t activeGeneration;
+    size_t maxActiveTasks;
+    size_t maxQueuedResults;
+    size_t maxQueuedCacheWrites;
+    size_t resultReservations;
+    size_t cacheWriteReservations;
+    uint64_t rejectedTasks;
     std::deque<BRLObolLodWorkItem> pending;
     std::deque<BRLObolLodResult> results;
     std::deque<BRLObolLodCacheWriteItem> cacheWrites;
@@ -1295,6 +1307,7 @@ lod_service_status_result(const BRLObolLodTask &task, int status,
 {
     BRLObolLodResult result;
 
+    result.generation = task.generation;
     result.request = task.request;
     result.cacheKey = brlobol_lod_cache_key(task.request);
     result.qualityTier = task.request.qualityTier;
@@ -1498,6 +1511,8 @@ lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
 		const BRLObolLodResult &result)
 {
     SbBool notifyResultReady = FALSE;
+    BRLObolLodResult completedResult = result;
+    completedResult.generation = item.task.generation;
 
     {
 	std::lock_guard<std::mutex> lock(p->mutex);
@@ -1509,14 +1524,18 @@ lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
 					       lod_request_active_key(item.task.request));
 
 	if (item.task.publishResult) {
+	    if (p->resultReservations > 0)
+		p->resultReservations--;
 	    notifyResultReady = p->results.empty() ? TRUE : FALSE;
-	    p->results.push_back(result);
+	    p->results.push_back(completedResult);
 	}
 
 	if (p->cacheWriterEnabled && item.task.writeCache &&
 	    item.task.cacheWrite) {
+	    if (p->cacheWriteReservations > 0)
+		p->cacheWriteReservations--;
 	    BRLObolLodCacheWriteItem writeItem;
-	    writeItem.result = result;
+	    writeItem.result = completedResult;
 	    writeItem.write = item.task.cacheWrite;
 	    writeItem.writeData = item.task.cacheWriteData;
 	    p->cacheWrites.push_back(writeItem);
@@ -1663,6 +1682,8 @@ BRLObolLodService::stop(void)
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	pending.swap(this->p->pending);
 	this->p->inFlight = 0;
+	this->p->resultReservations = 0;
+	this->p->cacheWriteReservations = 0;
 	this->p->activeRequestKeys.clear();
 	this->p->cacheWriterStopping = TRUE;
     }
@@ -1719,11 +1740,52 @@ BRLObolLodService::cancelGeneration(uint64_t generation)
     if (generation == 0)
 	return;
 
+    std::deque<BRLObolLodWorkItem> cancelled;
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	this->p->cancelledGenerations.insert(generation);
+	if (this->p->activeGeneration == generation)
+	    this->p->activeGeneration = 0;
+
+	for (std::deque<BRLObolLodWorkItem>::iterator it =
+		 this->p->pending.begin(); it != this->p->pending.end();) {
+	    if (it->task.generation != generation) {
+		++it;
+		continue;
+	    }
+	    this->p->completed.insert(it->id);
+	    if (this->p->inFlight > 0)
+		this->p->inFlight--;
+	    if (it->task.publishResult && this->p->resultReservations > 0)
+		this->p->resultReservations--;
+	    if (this->p->cacheWriterEnabled && it->task.writeCache &&
+		it->task.cacheWrite && this->p->cacheWriteReservations > 0)
+		this->p->cacheWriteReservations--;
+	    lod_active_request_key_remove_unlocked(this->p,
+		lod_request_active_key(it->task.request));
+	    cancelled.push_back(*it);
+	    it = this->p->pending.erase(it);
+	}
+
+	for (std::deque<BRLObolLodResult>::iterator it =
+		 this->p->results.begin(); it != this->p->results.end();) {
+	    if (it->generation == generation)
+		it = this->p->results.erase(it);
+	    else
+		++it;
+	}
+	for (std::deque<BRLObolLodCacheWriteItem>::iterator it =
+		 this->p->cacheWrites.begin(); it != this->p->cacheWrites.end();) {
+	    if (it->result.generation == generation)
+		it = this->p->cacheWrites.erase(it);
+	    else
+		++it;
+	}
     }
+    for (size_t i = 0; i < cancelled.size(); i++)
+	lod_task_free_realize_data(cancelled[i].task);
     this->p->workerCv.notify_all();
+    this->p->cacheWriterCv.notify_all();
 }
 
 SbBool
@@ -1731,6 +1793,27 @@ BRLObolLodService::isGenerationCancelled(uint64_t generation) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return lod_generation_cancelled_unlocked(this->p, generation);
+}
+
+void
+BRLObolLodService::setQueueLimits(size_t maxActiveTasks,
+	size_t maxQueuedResults, size_t maxQueuedCacheWrites)
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    this->p->maxActiveTasks = maxActiveTasks > 0 ? maxActiveTasks : 1;
+    this->p->maxQueuedResults = maxQueuedResults > 0 ? maxQueuedResults : 1;
+    this->p->maxQueuedCacheWrites =
+	maxQueuedCacheWrites > 0 ? maxQueuedCacheWrites : 1;
+}
+
+void
+BRLObolLodService::getQueueLimits(size_t &maxActiveTasks,
+	size_t &maxQueuedResults, size_t &maxQueuedCacheWrites) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    maxActiveTasks = this->p->maxActiveTasks;
+    maxQueuedResults = this->p->maxQueuedResults;
+    maxQueuedCacheWrites = this->p->maxQueuedCacheWrites;
 }
 
 static uint64_t
@@ -1744,6 +1827,18 @@ lod_service_submit_task(BRLObolLodServicePrivate *p,
 	std::lock_guard<std::mutex> lock(p->mutex);
 	if (!p->running || p->stopping)
 	    return 0;
+	if ((task.generation != 0 &&
+	    lod_generation_cancelled_unlocked(p, task.generation)) ||
+	    p->inFlight >= p->maxActiveTasks ||
+	    (task.publishResult &&
+	     p->results.size() + p->resultReservations >=
+		p->maxQueuedResults) ||
+	    (p->cacheWriterEnabled && task.writeCache && task.cacheWrite &&
+	     p->cacheWrites.size() + p->cacheWriteInFlight +
+		p->cacheWriteReservations >= p->maxQueuedCacheWrites)) {
+	    p->rejectedTasks++;
+	    return 0;
+	}
 
 	BRLObolLodWorkItem item;
 	item.id = p->nextTaskId++;
@@ -1767,6 +1862,11 @@ lod_service_submit_task(BRLObolLodServicePrivate *p,
 	id = item.id;
 	p->pending.push_back(item);
 	p->activeRequestKeys.push_back(activeKey);
+	if (item.task.publishResult)
+	    p->resultReservations++;
+	if (p->cacheWriterEnabled && item.task.writeCache &&
+	    item.task.cacheWrite)
+	    p->cacheWriteReservations++;
 	p->inFlight++;
     }
 
@@ -1935,6 +2035,13 @@ BRLObolLodService::delayedTaskCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->delayedTasks;
+}
+
+uint64_t
+BRLObolLodService::rejectedTaskCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->rejectedTasks;
 }
 
 /*

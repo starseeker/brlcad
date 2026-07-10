@@ -72,6 +72,8 @@ struct ged_draw_obol_source_expansion_status {
     size_t existing;
     size_t skipped_non_union;
     size_t skipped_duplicate_instance;
+    size_t expanded_non_union;
+    size_t expanded_duplicate_instance;
     size_t skipped_invalid;
     size_t remaining;
     size_t proxy_published;
@@ -87,6 +89,9 @@ struct ged_draw_obol_source_prewarm_status {
     size_t already_cached;
     size_t skipped_non_union;
     size_t skipped_duplicate_instance;
+    size_t shared_request;
+    size_t non_union_children;
+    size_t duplicate_instances;
     size_t skipped_invalid;
     size_t remaining;
     size_t comb_sources;

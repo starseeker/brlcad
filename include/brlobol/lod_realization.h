@@ -186,6 +186,7 @@ struct BRLOBOL_EXPORT BRLObolLodRequest {
 };
 
 struct BRLOBOL_EXPORT BRLObolLodResult {
+    uint64_t generation;
     BRLObolLodRequest request;
     BRLObolLodCacheKey cacheKey;
     BRLObolLodGeometryHandle geometry;

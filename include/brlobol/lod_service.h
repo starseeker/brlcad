@@ -138,6 +138,11 @@ public:
     void cancelGeneration(uint64_t generation);
     SbBool isGenerationCancelled(uint64_t generation) const;
 
+    void setQueueLimits(size_t maxActiveTasks,
+	size_t maxQueuedResults, size_t maxQueuedCacheWrites);
+    void getQueueLimits(size_t &maxActiveTasks,
+	size_t &maxQueuedResults, size_t &maxQueuedCacheWrites) const;
+
     uint64_t submit(const BRLObolLodTask &task);
     uint64_t submitIfNotActive(const BRLObolLodTask &task);
     SbBool hasActiveRequest(const BRLObolLodRequest &request) const;
@@ -155,6 +160,7 @@ public:
     size_t queuedResultCountForDiagnostics(void) const;
     size_t queuedCacheWriteCountForDiagnostics(void) const;
     size_t delayedTaskCountForDiagnostics(void) const;
+    uint64_t rejectedTaskCountForDiagnostics(void) const;
 
 private:
     BRLObolLodService(const BRLObolLodService &);

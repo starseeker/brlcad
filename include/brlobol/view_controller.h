@@ -450,6 +450,7 @@ public:
 
 private:
     void setViewportSceneGraphWithLod(SoNode *root);
+    void cancelActiveLodGeneration(void);
     void syncRenderManager(void);
     void advanceLodViewRevision(void);
     void advanceLodPolicyRevision(void);

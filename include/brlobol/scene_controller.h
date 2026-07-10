@@ -381,6 +381,10 @@ public:
 	const SbVec3f &drawCenter,
 	SbBool drawSizeValid,
 	float drawSize);
+    int setDatabaseSourceInstanceHierarchyState(const char *sourceInstanceKey,
+	const char *parentInstanceKey,
+	uint32_t occurrenceIndex,
+	int booleanOperation);
     int setDatabaseSourceBoundsState(const char *sourcePath,
 	SbBool boundsValid,
 	const SbVec3f &boundsMin,

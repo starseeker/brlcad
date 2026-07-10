@@ -211,6 +211,26 @@ make_obol_sync_db(const char *dbpath)
 		NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
     }
     if (ret) {
+	struct wmember progressive_wm;
+	mat_t first_mat;
+	mat_t duplicate_mat;
+	MAT_IDN(first_mat);
+	MAT_IDN(duplicate_mat);
+	MAT_DELTAS(first_mat, 11.0, 12.0, 13.0);
+	MAT_DELTAS(duplicate_mat, 21.0, 22.0, 23.0);
+	BU_LIST_INIT(&progressive_wm.l);
+	ret = mk_addmember("dup_leaf.s", &progressive_wm.l, first_mat,
+		WMOP_UNION) != NULL &&
+	    mk_addmember("dup_leaf.s", &progressive_wm.l, duplicate_mat,
+		WMOP_UNION) != NULL &&
+	    mk_addmember("box.s", &progressive_wm.l, NULL,
+		WMOP_SUBTRACT) != NULL &&
+	    mk_addmember("ball.s", &progressive_wm.l, NULL,
+		WMOP_INTERSECT) != NULL &&
+	    mk_comb(wdbp, "progressive_root.c", &progressive_wm.l, 0,
+		NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
+    }
+    if (ret) {
 	struct rt_annot_internal ann;
 	memset(&ann, 0, sizeof(ann));
 	ann.magic = RT_ANNOT_INTERNAL_MAGIC;
@@ -259,43 +279,6 @@ path_equal(const char *a, const char *b)
     if (BU_STR_EQUAL(a, b))
 	return 1;
     return BU_STR_EQUAL(skip_leading_slash(a), skip_leading_slash(b));
-}
-
-struct rt_preview_callback_state {
-    uint64_t revision;
-    int update_count;
-    int pick_count;
-};
-
-static uint64_t
-rt_preview_revision_cb(void *data)
-{
-    struct rt_preview_callback_state *ctx =
-	(struct rt_preview_callback_state *)data;
-    return ctx ? ctx->revision : 0;
-}
-
-static int
-rt_preview_update_cb(void *data)
-{
-    struct rt_preview_callback_state *ctx =
-	(struct rt_preview_callback_state *)data;
-    if (!ctx)
-	return 0;
-    ctx->update_count++;
-    return 1;
-}
-
-static int
-rt_preview_pick_cb(void *data, int UNUSED(x), int UNUSED(y),
-	void *UNUSED(pick_out))
-{
-    struct rt_preview_callback_state *ctx =
-	(struct rt_preview_callback_state *)data;
-    if (!ctx)
-	return 0;
-    ctx->pick_count++;
-    return 1;
 }
 
 struct command_result_callback_state {
@@ -1362,6 +1345,156 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
     return 0;
 }
 
+static int
+exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
+	SoBRLSceneController *controller)
+{
+    if (!gedp || !controller)
+	FAIL("progressive identity test needs GED and Obol scene state");
+
+    const int initial_source_count = controller->getDatabaseSourceCount();
+    struct ged_draw_appearance_settings appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    appearance.defer_leaf_expansion = 1;
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "progressive_root.c");
+    txn.mode = GED_DRAW_MODE_WIRE;
+    txn.appearance = &appearance;
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    const int draw_ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    ged_draw_transaction_result_free(&result);
+    if (draw_ret <= 0)
+	FAIL("deferred progressive root draw should succeed");
+
+    SoBRLDatabaseSource *root_source =
+	source_for_path(controller, "progressive_root.c");
+    BRLObolDatabaseSourceSummary root_summary;
+    if (!root_source || !root_source->getSummary(root_summary) ||
+	!root_summary.valid ||
+	controller->getDatabaseSourceCount() != initial_source_count + 1)
+	FAIL("deferred progressive draw should initially publish only its root");
+
+    struct ged_draw_obol_source_expansion_status status;
+    memset(&status, 0, sizeof(status));
+    if (!ged_draw_obol_database_source_expand_children(gedp, NULL,
+	    "progressive_root.c", GED_DRAW_MODE_WIRE, 0, &status))
+	FAIL("progressive child expansion should publish child occurrences");
+    if (status.expanded != 4 || status.expanded_duplicate_instance != 1 ||
+	status.expanded_non_union != 2 || status.skipped_non_union != 0 ||
+	status.skipped_duplicate_instance != 0 ||
+	controller->getDatabaseSourceCount() != initial_source_count + 5)
+	FAIL("progressive child expansion should retain duplicates and CSG operands");
+
+    int duplicate_count = 0;
+    int saw_first = 0;
+    int saw_duplicate = 0;
+    int saw_subtract = 0;
+    int saw_intersect = 0;
+    SbString first_key;
+    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
+	BRLObolDatabaseSourceSummary summary;
+	if (!controller->getDatabaseSourceSummary(i, summary) ||
+	    !summary.valid)
+	    continue;
+	if (summary.parentInstanceKey != root_summary.instanceKey)
+	    continue;
+	if (BU_STR_EQUAL(summary.path.getString(),
+		"progressive_root.c/dup_leaf.s")) {
+	    duplicate_count++;
+	    if (summary.occurrenceIndex == 0 && summary.drawMatrixValid &&
+		fabs(summary.drawMatrix[3][0] - 11.0f) < 0.001f &&
+		fabs(summary.drawMatrix[3][1] - 12.0f) < 0.001f &&
+		fabs(summary.drawMatrix[3][2] - 13.0f) < 0.001f) {
+		first_key = summary.instanceKey;
+		saw_first = 1;
+	    }
+	    if (summary.occurrenceIndex == 1 && summary.drawMatrixValid &&
+		fabs(summary.drawMatrix[3][0] - 21.0f) < 0.001f &&
+		fabs(summary.drawMatrix[3][1] - 22.0f) < 0.001f &&
+		fabs(summary.drawMatrix[3][2] - 23.0f) < 0.001f &&
+		summary.instanceKey != first_key)
+		saw_duplicate = 1;
+	} else if (BU_STR_EQUAL(summary.path.getString(),
+		"progressive_root.c/box.s") &&
+	    summary.occurrenceIndex == 2 &&
+	    summary.booleanOperation == SoBRLDatabaseSource::BOOLEAN_SUBTRACT) {
+	    saw_subtract = 1;
+	} else if (BU_STR_EQUAL(summary.path.getString(),
+		"progressive_root.c/ball.s") &&
+	    summary.occurrenceIndex == 3 &&
+	    summary.booleanOperation == SoBRLDatabaseSource::BOOLEAN_INTERSECT) {
+	    saw_intersect = 1;
+	}
+    }
+    if (duplicate_count != 2 || !saw_first || !saw_duplicate ||
+	!saw_subtract || !saw_intersect)
+	FAIL("progressive sources should preserve occurrence transforms and boolean identity");
+
+    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
+	    "progressive_root.c", NULL, -1, "progressive identity cleanup"))
+	return 1;
+    if (controller->getDatabaseSourceCount() != initial_source_count)
+	FAIL("progressive identity cleanup should restore source count");
+    return 0;
+}
+
+static int
+exercise_progressive_autoview_lifecycle(struct ged *gedp,
+	BRLObolViewController *controller, void *view_ctx)
+{
+    if (!gedp || !controller || !view_ctx)
+	FAIL("progressive autoview test needs an attached view");
+
+    struct ged_draw_appearance_settings appearance =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    appearance.defer_leaf_expansion = 1;
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "progressive_root.c");
+    txn.view = view_ctx;
+    txn.mode = GED_DRAW_MODE_WIRE;
+    txn.appearance = &appearance;
+    txn.autoview = 1;
+    struct ged_draw_transaction_result result;
+    ged_draw_transaction_result_init(&result);
+    const int draw_ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    ged_draw_transaction_result_free(&result);
+    if (draw_ret <= 0)
+	FAIL("progressive autoview deferred draw should succeed");
+
+    struct bv *view = DRAW_TEST_BV(view_ctx);
+    const uint64_t initial_revision = bv_frame_revision_get(view);
+    BRLObolProgressiveOptions options;
+    options.flags = BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
+	BRLOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES;
+    BRLObolProgressiveStatus status;
+    if (controller->advanceProgressiveWork(&options, &status) <= 0 ||
+	!status.changed || bv_frame_revision_get(view) <= initial_revision)
+	FAIL("progressive refinement should settle its owned initial autoview");
+
+    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
+	    "progressive_root.c", view_ctx, -1,
+	    "progressive autoview settle cleanup"))
+	return 1;
+
+    ged_draw_transaction_result_init(&result);
+    const int redraw_ret = ged_draw_apply_transaction(gedp, &txn, &result);
+    ged_draw_transaction_result_free(&result);
+    if (redraw_ret <= 0)
+	FAIL("progressive autoview cancellation draw should succeed");
+    bv_size_set(view, 1234.0);
+    const fastf_t user_size = bv_size_get(view);
+    if (controller->advanceProgressiveWork(&options, &status) <= 0 ||
+	!NEAR_EQUAL(bv_size_get(view), user_size, SMALL_FASTF))
+	FAIL("user view change should cancel pending progressive autoview");
+
+    if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
+	    "progressive_root.c", view_ctx, -1,
+	    "progressive autoview cancellation cleanup"))
+	return 1;
+    return 0;
+}
+
 static SoBRLVListShape *
 auxiliary_for_path_variant(SoBRLDatabaseSource *source, const char *path)
 {
@@ -1395,6 +1528,56 @@ auxiliary_for_path_variant(SoBRLDatabaseSource *source, const char *path)
     }
 
     return NULL;
+}
+
+static int
+exercise_typed_pick_result(void)
+{
+    struct ged_draw_pick_result *result = ged_draw_pick_result_create();
+    if (!result)
+	FAIL("typed pick result should allocate");
+
+    struct ged_draw_pick_detail input = GED_DRAW_PICK_DETAIL_INIT;
+    input.source_id = 17;
+    input.primitive_kind = 3;
+    input.primitive_index = 9;
+    input.material_id = 23;
+    input.face_vertex_index[0] = 4;
+    input.face_vertex_index[1] = 5;
+    input.face_vertex_index[2] = 6;
+    input.nearest_face_vertex_index = 5;
+    VSET(input.model_point, 1.0, 2.0, 3.0);
+    input.model_point_valid = 1;
+    if (!ged_draw_pick_result_append_detail(result, "bot.s", 4.5,
+	    &input)) {
+	ged_draw_pick_result_free(result);
+	FAIL("typed pick result should append a detailed hit");
+    }
+
+    struct ged_draw_pick_result *first =
+	ged_draw_pick_result_filter_first(result);
+    struct ged_draw_pick_detail output = GED_DRAW_PICK_DETAIL_INIT;
+    if (!first || ged_draw_pick_result_count(first) != 1 ||
+	!ged_draw_pick_result_detail(first, 0, &output) ||
+	output.source_id != input.source_id ||
+	output.primitive_kind != input.primitive_kind ||
+	output.primitive_index != input.primitive_index ||
+	output.material_id != input.material_id ||
+	output.face_vertex_index[0] != input.face_vertex_index[0] ||
+	output.face_vertex_index[1] != input.face_vertex_index[1] ||
+	output.face_vertex_index[2] != input.face_vertex_index[2] ||
+	output.nearest_face_vertex_index !=
+	    input.nearest_face_vertex_index ||
+	!output.model_point_valid ||
+	!VNEAR_EQUAL(output.model_point, input.model_point, SMALL_FASTF)) {
+	ged_draw_pick_result_free(first);
+	ged_draw_pick_result_free(result);
+	FAIL("typed pick filtering should preserve primitive edit detail");
+    }
+
+    ged_draw_pick_result_free(first);
+    ged_draw_pick_result_free(result);
+    return 0;
 }
 
 struct record_source_state {
@@ -1587,6 +1770,9 @@ group_index_state_cb(ged_draw_group_ref ref, void *userdata)
 int
 main(int argc, char **argv)
 {
+    if (exercise_typed_pick_result())
+	return 1;
+
     (void)argc;
     bu_setprogname(argv[0]);
     bu_setenv("LIBRT_USE_COMB_INSTANCE_SPECIFIERS", "1", 1);
@@ -1670,6 +1856,9 @@ main(int argc, char **argv)
 	    source_for_path(owned_scene, "payload.binunif"))
 	FAIL("Obol draw bridge should not publish non-drawable binunif sources");
     if (exercise_duplicate_occurrence_pick_identity(gedp, owned_scene))
+	return 1;
+    if (exercise_progressive_occurrence_and_boolean_identity(gedp,
+	    owned_scene))
 	return 1;
 
     void *feature_view_ctx = ged_view_active_ctx(gedp);
@@ -2432,17 +2621,11 @@ main(int argc, char **argv)
 	FAIL("line-layer builder helper generation result should clean up by owner-scoped prefix");
     command_scene_desc.generation = 0;
 
-    struct rt_preview_callback_state ged_preview_state = {77, 0, 0};
-    struct ged_draw_view_edit_preview_callbacks ged_preview_callbacks =
-	GED_DRAW_VIEW_EDIT_PREVIEW_CALLBACKS_INIT;
-    ged_preview_callbacks.revision_cb = rt_preview_revision_cb;
-    ged_preview_callbacks.update_cb = rt_preview_update_cb;
-    ged_preview_callbacks.pick_cb = rt_preview_pick_cb;
     int ged_preview_owner = 0;
     ged_draw_view_feature_ref ged_preview_ref =
 	ged_draw_view_context_feature_overlay_ensure(feature_view_ctx,
-		"cap2::ged-preview", &ged_preview_owner, &ged_preview_state,
-		&ged_preview_callbacks, "cap2::ged-source.s");
+		"cap2::ged-preview", &ged_preview_owner,
+		"cap2::ged-source.s");
     if (ged_draw_view_feature_ref_is_null(ged_preview_ref))
 	FAIL("GED feature overlay ensure should return an Obol feature ref");
     BRLObolFeatureHandle ged_preview_handle =
@@ -2557,9 +2740,8 @@ main(int argc, char **argv)
 	    ged_preview_style.visible ||
 	    !ged_preview_style.hasColor)
 	FAIL("GED feature style mutations should update Obol feature style");
-    if (!ged_draw_view_feature_touch(ged_preview_ref) ||
-	    ged_preview_state.update_count != 1)
-	FAIL("GED feature touch should dispatch through Obol edit-preview callbacks");
+    if (!ged_draw_view_feature_touch(ged_preview_ref))
+	FAIL("GED feature touch should advance retained edit-preview state");
     if (!ged_draw_view_context_edit_preview_publish_event(feature_view_ctx,
 		ged_preview_ref, GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE,
 		"cap2::ged-source.s") ||
@@ -2572,8 +2754,8 @@ main(int argc, char **argv)
 	FAIL("GED feature commit preview events should retire transient Obol edit previews");
     ged_preview_ref =
 	ged_draw_view_context_feature_overlay_ensure(feature_view_ctx,
-		"cap2::ged-preview", &ged_preview_owner, &ged_preview_state,
-		&ged_preview_callbacks, "cap2::ged-source.s");
+		"cap2::ged-preview", &ged_preview_owner,
+		"cap2::ged-source.s");
     ged_preview_handle = owned_controller->features().find("cap2::ged-preview");
     if (ged_draw_view_feature_ref_is_null(ged_preview_ref) ||
 	    !ged_preview_handle.isValid() ||
@@ -5045,6 +5227,18 @@ main(int argc, char **argv)
 	    !source_for_path(view_scene, "box.s") ||
 	    !source_for_path(view_scene, "ball.s"))
 	FAIL("view-wrapper reattach full sync should rebuild current GED draw state");
+
+    void *attached_view_ctx = ged_draw_active_view_ctx(gedp);
+    BRLObolViewController progressive_controller(new SoBRLSceneGroup);
+    if (!attached_view_ctx ||
+	!ged_draw_obol_controller_attach_for_view(gedp, attached_view_ctx,
+	    &progressive_controller, 1))
+	FAIL("attached Obol controller should register per-view progressive services");
+    if (exercise_progressive_autoview_lifecycle(gedp,
+	    &progressive_controller,
+	    attached_view_ctx))
+	return 1;
+    ged_draw_obol_controller_detach_for_view(gedp, attached_view_ctx);
 
     if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
 	FAIL("attached Obol view-controller LoD invalidation probe should seed draw payload");

@@ -246,8 +246,6 @@ ged_draw_obol_view_context_feature_overlay_ensure(
 	void *view_ctx,
 	const char *name,
 	const void *owner,
-	void *preview_ctx,
-	const struct ged_draw_view_edit_preview_callbacks *callbacks,
 	const char *source_path);
 GED_EXPORT extern ged_draw_view_feature_ref
 ged_draw_obol_view_context_feature_label_ensure(

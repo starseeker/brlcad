@@ -126,8 +126,20 @@ ged_obol_bv_const(const void *view_ctx)
 }
 
 struct ged_obol_progressive_provider_data {
+    ged_obol_progressive_provider_data(void) :
+	gedp(NULL),
+	view_ctx(NULL),
+	pending_autoview(0),
+	expected_view_revision(0),
+	draw_scene_revision(0)
+    {
+    }
+
     struct ged *gedp;
     void *view_ctx;
+    int pending_autoview;
+    uint64_t expected_view_revision;
+    uint64_t draw_scene_revision;
 };
 
 class ged_obol_source_summary_adapter_scope
@@ -886,10 +898,10 @@ ged_obol_database_source_instance_in_scope(
 		summary.instanceKey.getString());
 	if (base_instance_key.compare(0, 9, "ged-view:") == 0)
 	    return 0;
-	if (base_instance_key.compare(0, 14, "brlcad-direct:") == 0)
-	    return 1;
-	return ged_obol_path_equal(base_instance_key.c_str(),
-				   summary.path.getString());
+	/* Shared occurrence keys carry hierarchy and Boolean identity and are
+	 * intentionally not path strings.  Only an explicit view prefix makes
+	 * a source view-local. */
+	return 1;
     }
 
     const std::string prefix =
@@ -3684,6 +3696,10 @@ ged_draw_obol_lod_service_prewarm(struct ged *gedp,
 	return 0;
 
     const char *database_id = dbip->dbi_filename ? dbip->dbi_filename : "";
+    const uint64_t previous_generation =
+	entry->lod_service->currentGeneration();
+    if (previous_generation != 0)
+	entry->lod_service->cancelGeneration(previous_generation);
     uint64_t generation = entry->lod_service->beginGeneration();
     size_t submitted = 0;
     int submit_all = argc <= 0 || !argv;
@@ -3939,12 +3955,29 @@ ged_obol_view_controller_for_scope(void *view_ctx,
 }
 
 struct ged_obol_pick_candidate {
+    ged_obol_pick_candidate(void) :
+	distance(FLT_MAX),
+	source_id(0),
+	primitive_kind(0),
+	primitive_index(-1),
+	material_id(0),
+	nearest_face_vertex_index(-1),
+	model_point(0.0f, 0.0f, 0.0f)
+    {
+	face_vertex_index[0] = -1;
+	face_vertex_index[1] = -1;
+	face_vertex_index[2] = -1;
+    }
+
     std::string path;
     float distance;
     uint32_t source_id;
     int primitive_kind;
     int primitive_index;
     int material_id;
+    int face_vertex_index[3];
+    int nearest_face_vertex_index;
+    SbVec3f model_point;
 };
 
 static std::string
@@ -4055,7 +4088,16 @@ ged_obol_pick_candidate_from_detail(BRLObolViewController *controller,
 	static_cast<int>(detail->getPrimitiveKind()) : 0;
     candidate.primitive_index = detail ? detail->getPrimitiveIndex() : -1;
     candidate.material_id = detail ? detail->getMaterialId() : 0;
-    (void)point;
+    if (detail) {
+	candidate.face_vertex_index[0] = detail->getFaceVertexIndexA();
+	candidate.face_vertex_index[1] = detail->getFaceVertexIndexB();
+	candidate.face_vertex_index[2] = detail->getFaceVertexIndexC();
+	candidate.nearest_face_vertex_index =
+	    detail->getNearestFaceVertexIndex();
+	candidate.model_point = detail->getModelPoint();
+    } else {
+	candidate.model_point = point;
+    }
     return candidate;
 }
 
@@ -4216,9 +4258,24 @@ ged_obol_pick_result_from_candidates(
     if (!result)
 	return NULL;
 
-    for (size_t i = 0; i < candidates.size(); i++)
-	(void)ged_draw_pick_result_append_path(result,
-		candidates[i].path.c_str(), candidates[i].distance);
+    for (size_t i = 0; i < candidates.size(); i++) {
+	struct ged_draw_pick_detail detail = GED_DRAW_PICK_DETAIL_INIT;
+	detail.source_id = candidates[i].source_id;
+	detail.primitive_kind = candidates[i].primitive_kind;
+	detail.primitive_index = candidates[i].primitive_index;
+	detail.material_id = candidates[i].material_id;
+	detail.face_vertex_index[0] = candidates[i].face_vertex_index[0];
+	detail.face_vertex_index[1] = candidates[i].face_vertex_index[1];
+	detail.face_vertex_index[2] = candidates[i].face_vertex_index[2];
+	detail.nearest_face_vertex_index =
+	    candidates[i].nearest_face_vertex_index;
+	detail.model_point[X] = candidates[i].model_point[0];
+	detail.model_point[Y] = candidates[i].model_point[1];
+	detail.model_point[Z] = candidates[i].model_point[2];
+	detail.model_point_valid = 1;
+	(void)ged_draw_pick_result_append_detail(result,
+		candidates[i].path.c_str(), candidates[i].distance, &detail);
+    }
 
     return result;
 }
@@ -7108,21 +7165,6 @@ ged_obol_labels_from_ged_feature(
     return out;
 }
 
-static BRLObolEditPreviewCallbacks
-ged_obol_edit_preview_callbacks_from_ged(
-    const struct ged_draw_view_edit_preview_callbacks *callbacks,
-    void *preview_ctx)
-{
-    BRLObolEditPreviewCallbacks out;
-    out.previewContext = preview_ctx;
-    if (callbacks) {
-	out.revisionCallback = callbacks->revision_cb;
-	out.updateCallback = callbacks->update_cb;
-	out.pickCallback = callbacks->pick_cb;
-    }
-    return out;
-}
-
 static unsigned char ged_obol_rgb_byte_from_int(int value);
 
 extern "C" int
@@ -7169,8 +7211,7 @@ ged_draw_obol_view_context_edit_preview_publish_event(
     }
 
     {
-	const int ret = token->controller->features().updateEditPreview(handle);
-	return ret >= 0 ? ret : 1;
+	return token->controller->features().touch(handle) ? 1 : 0;
     }
 }
 
@@ -7179,8 +7220,6 @@ ged_draw_obol_view_context_feature_overlay_ensure(
     void *view_ctx,
     const char *name,
     const void *owner,
-    void *preview_ctx,
-    const struct ged_draw_view_edit_preview_callbacks *callbacks,
     const char *source_path)
 {
     BRLObolViewController *controller =
@@ -7199,8 +7238,6 @@ ged_draw_obol_view_context_feature_overlay_ensure(
     if (needs_publish) {
 	std::vector<SbVec3f> points;
 	std::vector<int32_t> commands;
-	BRLObolEditPreviewCallbacks obol_callbacks =
-	    ged_obol_edit_preview_callbacks_from_ged(callbacks, preview_ctx);
 	handle = controller->features().publishEditPreview(name,
 		 source_path && source_path[0] ? source_path : name,
 		 name,
@@ -7209,7 +7246,6 @@ ged_draw_obol_view_context_feature_overlay_ensure(
 		 commands,
 		 0,
 		 0,
-		 callbacks ? &obol_callbacks : NULL,
 		 &feature_owner);
     }
 
@@ -7301,9 +7337,8 @@ ged_draw_obol_view_feature_touch(ged_draw_view_feature_ref ref)
     if (!token || !token->controller)
 	return 0;
 
-    const int ret = token->controller->features().updateEditPreview(
-			ged_obol_feature_handle_from_ged_ref(ref));
-    return ret >= 0 ? ret : 1;
+    return token->controller->features().touch(
+	ged_obol_feature_handle_from_ged_ref(ref)) ? 1 : 0;
 }
 
 extern "C" int
@@ -7384,7 +7419,6 @@ ged_draw_obol_view_feature_points_replace(
 		obol_commands,
 		0,
 		0,
-		NULL,
 		record.scope == BRLObolFeatureScope::Local ? &owner : NULL);
 	return preview_handle.isValid() ? 1 : 0;
     }
@@ -7455,7 +7489,6 @@ ged_draw_obol_view_feature_edit_preview_replace(
 	    obol_commands,
 	    next_source_revision,
 	    next_inputs_revision,
-	    NULL,
 	    record.scope == BRLObolFeatureScope::Local ? &owner : NULL);
     return preview_handle.isValid() ? 1 : 0;
 }
@@ -16691,6 +16724,9 @@ ged_obol_source_expansion_status_accumulate(
     dst->existing += src->existing;
     dst->skipped_non_union += src->skipped_non_union;
     dst->skipped_duplicate_instance += src->skipped_duplicate_instance;
+    dst->expanded_non_union += src->expanded_non_union;
+    dst->expanded_duplicate_instance +=
+	src->expanded_duplicate_instance;
     dst->skipped_invalid += src->skipped_invalid;
     dst->remaining += src->remaining;
     dst->proxy_published += src->proxy_published;
@@ -16712,30 +16748,158 @@ ged_obol_source_prewarm_status_accumulate(
     dst->already_cached += src->already_cached;
     dst->skipped_non_union += src->skipped_non_union;
     dst->skipped_duplicate_instance += src->skipped_duplicate_instance;
+    dst->shared_request += src->shared_request;
+    dst->non_union_children += src->non_union_children;
+    dst->duplicate_instances += src->duplicate_instances;
     dst->skipped_invalid += src->skipped_invalid;
     dst->remaining += src->remaining;
     dst->comb_sources += src->comb_sources;
     dst->leaf_sources += src->leaf_sources;
 }
 
-static std::vector<std::string>
-ged_obol_current_source_frontier_paths(
+static const char *ged_obol_child_object_name(
+    const struct ged_db_index_child *child);
+
+struct ged_obol_source_frontier_entry {
+    std::string path;
+    std::string instance_key;
+    size_t depth;
+    size_t order;
+    int priority;
+};
+
+static std::string ged_obol_child_instance_key(
+    void *view_ctx,
+    const char *parent_instance_key,
+    const struct ged_db_index_child *child,
+    int draw_mode);
+
+static std::vector<ged_obol_source_frontier_entry>
+ged_obol_current_source_frontier(
     struct ged *gedp,
     void *view_ctx,
     const char *root_path,
     int draw_mode)
 {
-    std::vector<std::string> targets;
+    std::vector<ged_obol_source_frontier_entry> frontier;
     if (!root_path || !root_path[0])
-	return targets;
+	return frontier;
 
     SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
     if (!scene)
-	return targets;
+	return frontier;
 
-    targets.push_back(std::string(root_path));
-    return ged_obol_matching_database_source_paths(scene, view_ctx, targets,
-	    0, 1, draw_mode);
+    std::vector<std::string> instance_keys;
+    ged_obol_collect_database_source_instance_keys_matching(instance_keys,
+	scene, view_ctx, root_path, 0, 1, draw_mode);
+    for (const std::string &instance_key : instance_keys) {
+	SoBRLDatabaseSource *source =
+	    scene->findDatabaseSourceInstance(instance_key.c_str());
+	BRLObolDatabaseSourceSummary summary;
+	if (!source || !source->getSummary(summary) || !summary.valid ||
+	    summary.path.getLength() == 0)
+	    continue;
+
+	size_t path_len = ged_db_index_path_resolve(gedp,
+	    summary.path.getString(), NULL, 0);
+	if (!path_len)
+	    continue;
+	std::vector<ged_db_index_id> path_ids(path_len);
+	if (ged_db_index_path_resolve(gedp, summary.path.getString(),
+		path_ids.data(), path_ids.size()) != path_len)
+	    continue;
+	const ged_db_index_id parent_id = path_ids.back();
+	const size_t child_count = ged_db_index_child_count(gedp, parent_id);
+	if (!child_count)
+	    continue;
+
+	int missing_priority = 0;
+	for (size_t row = 0; row < child_count; row++) {
+	    struct ged_db_index_child child;
+	    memset(&child, 0, sizeof(child));
+	    if (!ged_db_index_child_at(gedp, parent_id, row, &child))
+		continue;
+	    const std::string child_key = ged_obol_child_instance_key(view_ctx,
+		instance_key.c_str(), &child, draw_mode);
+	    SoBRLDatabaseSource *child_source = child_key.empty() ? NULL :
+		scene->findDatabaseSourceInstance(child_key.c_str());
+	    if (!child_key.empty() && !child_source)
+		missing_priority = std::max(missing_priority,
+		    child.record.is_comb ? 1 : 2);
+	    if (child_source && !child.record.is_comb) {
+		BRLObolDatabaseSourceSummary child_summary;
+		if (!child_source->getSummary(child_summary) ||
+		    !child_summary.valid ||
+		    (child_summary.realizedShapeCount == 0 &&
+		     child_summary.realizedMeshCount == 0)) {
+		    missing_priority = std::max(missing_priority, 3);
+		}
+	    }
+	}
+	if (!missing_priority)
+	    continue;
+
+	ged_obol_source_frontier_entry entry;
+	entry.path = summary.path.getString();
+	entry.instance_key = instance_key;
+	entry.depth = 0;
+	entry.order = frontier.size();
+	entry.priority = missing_priority;
+	int in_component = 0;
+	for (const char c : entry.path) {
+	    if (c == '/') {
+		in_component = 0;
+	    } else if (!in_component) {
+		entry.depth++;
+		in_component = 1;
+	    }
+	}
+	frontier.push_back(entry);
+    }
+
+    std::stable_sort(frontier.begin(), frontier.end(),
+	[](const ged_obol_source_frontier_entry &a,
+	   const ged_obol_source_frontier_entry &b) {
+	    if (a.priority != b.priority)
+		return a.priority > b.priority;
+	    if (a.depth != b.depth)
+		return a.depth > b.depth;
+	    return a.order > b.order;
+	});
+    return frontier;
+}
+
+static std::string
+ged_obol_child_instance_key(void *view_ctx,
+	const char *parent_instance_key,
+	const struct ged_db_index_child *child,
+	int draw_mode)
+{
+    if (!child || !child->record.valid)
+	return std::string();
+
+    std::string key = parent_instance_key && parent_instance_key[0] ?
+	ged_obol_database_source_base_instance_key(parent_instance_key) :
+	std::string();
+    if (key.empty())
+	return std::string();
+
+    const char *occurrence_name = child->record.name;
+    if (!occurrence_name || !occurrence_name[0])
+	occurrence_name = ged_obol_child_object_name(child);
+    if (!occurrence_name || !occurrence_name[0])
+	return std::string();
+
+    key += "/";
+    key += occurrence_name;
+    key += "#bool=";
+    key += std::to_string(child->bool_op);
+    if (draw_mode >= 0 && draw_mode != GED_DRAW_MODE_WIRE &&
+	!ged_obol_view_scope_is_independent(view_ctx)) {
+	key += ged_obol_database_source_mode_key_marker;
+	key += std::to_string(draw_mode);
+    }
+    return key;
 }
 
 static void
@@ -16766,37 +16930,6 @@ ged_obol_aabb_proxy_line_set(const point_t bmin,
 	commands[i * 2] = GED_DRAW_VIEW_LINE_MOVE;
 	commands[i * 2 + 1] = GED_DRAW_VIEW_LINE_DRAW;
     }
-}
-
-static int
-ged_obol_apply_path_placement(struct ged *gedp,
-			      void *view_ctx,
-			      const char *path,
-			      int draw_mode)
-{
-    if (!gedp || !gedp->dbip || !path || !path[0])
-	return 0;
-
-    struct db_tree_state state;
-    db_init_db_tree_state(&state, gedp->dbip);
-    struct db_full_path full_path;
-    db_full_path_init(&full_path);
-
-    int ret = db_follow_path_for_state(&state, &full_path, path,
-				       LOOKUP_QUIET);
-    int applied = 0;
-    if (ret == 0) {
-	int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-		     view_ctx, draw_mode);
-	applied = ged_draw_obol_database_source_set_placement_for_path(gedp,
-		  path, 1, state.ts_mat, 0, NULL, 0, 0);
-	if (scoped)
-	    ged_draw_obol_database_source_publication_end(gedp);
-    }
-
-    db_free_full_path(&full_path);
-    db_free_db_tree_state(&state);
-    return applied;
 }
 
 static int
@@ -16865,6 +16998,7 @@ ged_obol_publish_aabb_proxy_for_path(
     struct ged *gedp,
     void *view_ctx,
     const char *path,
+    const char *source_instance_key,
     const char *cache_name,
     int draw_mode,
     int refresh_missing,
@@ -16873,6 +17007,8 @@ ged_obol_publish_aabb_proxy_for_path(
     if (!gedp || !gedp->dbip || !path || !path[0] ||
 	!cache_name || !cache_name[0])
 	return 0;
+    (void)view_ctx;
+    (void)draw_mode;
 
     struct BRLObolDrawProxyRecord record;
     brlobol_draw_proxy_record_init(&record);
@@ -16895,15 +17031,36 @@ ged_obol_publish_aabb_proxy_for_path(
     ged_obol_aabb_proxy_line_set(record.points[0], record.points[1],
 				 points, commands);
 
-    int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-		 view_ctx, draw_mode);
-    int published = ged_draw_obol_database_source_publish_line_set_for_path(
-			gedp, path, (const point_t *)points, commands, 24);
+    std::vector<SbVec3f> obol_points;
+    std::vector<int32_t> obol_commands;
+    std::vector<double> precise_points;
+    obol_points.reserve(24);
+    obol_commands.reserve(24);
+    precise_points.reserve(72);
+    for (size_t i = 0; i < 24; i++) {
+	obol_points.push_back(SbVec3f(
+	    static_cast<float>(points[i][X]),
+	    static_cast<float>(points[i][Y]),
+	    static_cast<float>(points[i][Z])));
+	obol_commands.push_back(ged_obol_vlist_command_from_ged(commands[i], i));
+	precise_points.push_back(points[i][X]);
+	precise_points.push_back(points[i][Y]);
+	precise_points.push_back(points[i][Z]);
+    }
+
+    BRLObolExternalLineSet line_set;
+    line_set.points = obol_points.data();
+    line_set.commands = obol_commands.data();
+    line_set.precisePoints = precise_points.data();
+    line_set.count = 24;
+    line_set.sourceType = "proxy";
+    line_set.geometryKind = "aabb";
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    int published = scene && source_instance_key && source_instance_key[0] ?
+	scene->publishDatabaseSourceInstanceExternalLineSet(
+	    source_instance_key, line_set) : 0;
     if (published && status)
 	status->proxy_published++;
-
-    if (scoped)
-	ged_draw_obol_database_source_publication_end(gedp);
     return published;
 }
 
@@ -16969,6 +17126,17 @@ ged_obol_submit_child_aabb_prewarm(
     return 1;
 }
 
+static uint64_t
+ged_obol_lod_service_incremental_generation(BRLObolLodService *service)
+{
+    if (!service)
+	return 0;
+    const uint64_t generation = service->currentGeneration();
+    if (generation != 0 && !service->isGenerationCancelled(generation))
+	return generation;
+    return service->beginGeneration();
+}
+
 extern "C" size_t
 ged_draw_obol_database_source_prewarm_child_aabb_proxies(
     struct ged *gedp,
@@ -17016,11 +17184,13 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 
     const char *database_id = gedp->dbip->dbi_filename ?
 			      gedp->dbip->dbi_filename : "";
-    const uint64_t generation = entry->lod_service->beginGeneration();
+    const uint64_t generation =
+	ged_obol_lod_service_incremental_generation(entry->lod_service);
     const uint32_t source_revision =
 	ged_obol_fold_revision(ged_draw_scene_revision(gedp));
     std::string parent_path = ged_obol_skip_leading_slash(path);
     size_t submitted = 0;
+    std::unordered_set<std::string> requested_objects;
 
     for (size_t row = 0; row < child_count; row++) {
 	struct ged_db_index_child child;
@@ -17033,16 +17203,10 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 	if (status)
 	    status->considered++;
 
-	if (child.bool_op != DB_OP_UNION) {
-	    if (status)
-		status->skipped_non_union++;
-	    continue;
-	}
-	if (child.record.is_instance) {
-	    if (status)
-		status->skipped_duplicate_instance++;
-	    continue;
-	}
+	if (status && child.bool_op != DB_OP_UNION)
+	    status->non_union_children++;
+	if (status && child.record.is_instance)
+	    status->duplicate_instances++;
 
 	const char *child_name = ged_obol_child_object_name(&child);
 	if (!child_name || !child_name[0]) {
@@ -17060,6 +17224,11 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 	if (child.record.is_comb) {
 	    if (status)
 		status->comb_sources++;
+	    continue;
+	}
+	if (!requested_objects.insert(child_name).second) {
+	    if (status)
+		status->shared_request++;
 	    continue;
 	}
 
@@ -17116,15 +17285,14 @@ ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
     if (!gedp || !root_path || !root_path[0])
 	return 0;
 
-    std::vector<std::string> frontier =
-	ged_obol_current_source_frontier_paths(gedp, view_ctx, root_path,
-	    draw_mode);
+    std::vector<ged_obol_source_frontier_entry> frontier =
+	ged_obol_current_source_frontier(gedp, view_ctx, root_path, draw_mode);
     if (frontier.empty())
 	return 0;
 
     size_t submitted = 0;
     size_t source_count = 0;
-    for (const std::string &path : frontier) {
+    for (const ged_obol_source_frontier_entry &entry : frontier) {
 	if (max_sources && source_count >= max_sources)
 	    break;
 	source_count++;
@@ -17132,7 +17300,7 @@ ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
 	struct ged_draw_obol_source_prewarm_status path_status;
 	ged_obol_source_prewarm_status_clear(&path_status);
 	submitted += ged_draw_obol_database_source_prewarm_child_aabb_proxies(
-			 gedp, view_ctx, path.c_str(), draw_mode,
+			 gedp, view_ctx, entry.path.c_str(), draw_mode,
 			 max_children_per_source, &path_status);
 	ged_obol_source_prewarm_status_accumulate(status, &path_status);
     }
@@ -17149,6 +17317,7 @@ ged_obol_database_source_expand_children_impl(
     size_t max_children,
     int refresh_missing_proxy,
     int require_cached_leaf_proxy,
+    const char *parent_instance_key,
     struct ged_draw_obol_source_expansion_status *status)
 {
     ged_obol_source_expansion_status_clear(status);
@@ -17182,6 +17351,10 @@ ged_obol_database_source_expand_children_impl(
     const uint32_t source_revision =
 	ged_obol_fold_revision(ged_draw_scene_revision(gedp));
     std::string parent_path = ged_obol_skip_leading_slash(path);
+    const std::string effective_parent_instance_key =
+	(parent_instance_key && parent_instance_key[0]) ?
+	std::string(parent_instance_key) :
+	ged_obol_database_source_instance_key_for_mode(view_ctx, path, draw_mode);
     int changed = 0;
     size_t expanded = 0;
 
@@ -17198,17 +17371,6 @@ ged_obol_database_source_expand_children_impl(
 	    }
 	    if (status)
 		status->considered++;
-
-	    if (child.bool_op != DB_OP_UNION) {
-		if (status)
-		    status->skipped_non_union++;
-		continue;
-	    }
-	    if (child.record.is_instance) {
-		if (status)
-		    status->skipped_duplicate_instance++;
-		continue;
-	    }
 
 	    const char *child_name = ged_obol_child_object_name(&child);
 	    if (!child_name || !child_name[0]) {
@@ -17241,17 +17403,44 @@ ged_obol_database_source_expand_children_impl(
 	    child_path += child_name;
 
 	    const std::string child_instance_key =
-		ged_obol_database_source_instance_key_for_mode(
-		    view_ctx, child_path.c_str(), draw_mode);
-	    if (scene->findDatabaseSourceInstance(child_instance_key.c_str())) {
+		ged_obol_child_instance_key(view_ctx,
+		    effective_parent_instance_key.c_str(), &child, draw_mode);
+	    if (child_instance_key.empty()) {
+		if (status)
+		    status->skipped_invalid++;
+		continue;
+	    }
+	    SoBRLDatabaseSource *existing_child =
+		scene->findDatabaseSourceInstance(child_instance_key.c_str());
+	    if (existing_child) {
 		if (status)
 		    status->existing++;
+		if (!child.record.is_comb) {
+		    BRLObolDatabaseSourceSummary existing_summary;
+		    const int has_geometry =
+			existing_child->getSummary(existing_summary) &&
+			existing_summary.valid &&
+			(existing_summary.realizedShapeCount > 0 ||
+			 existing_summary.realizedMeshCount > 0);
+		    if (!has_geometry) {
+			const int published =
+			    ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx,
+				child_path.c_str(), child_instance_key.c_str(),
+				child_name, draw_mode, refresh_missing_proxy,
+				status);
+			if (published)
+			    changed = 1;
+			else if (status)
+			    status->remaining++;
+		    }
+		}
 		continue;
 	    }
 
 	    const int replace_changed = ged_obol_replace_path(gedp, view_ctx,
 					gedp->dbip, child_path.c_str(), draw_mode, source_revision,
-					scene, 0);
+					scene, 0, 0, NULL, NULL, NULL,
+					child_instance_key.c_str());
 	    if (replace_changed < 0) {
 		if (status)
 		    status->skipped_invalid++;
@@ -17260,19 +17449,71 @@ ged_obol_database_source_expand_children_impl(
 	    if (replace_changed > 0)
 		changed = 1;
 
-	    (void)ged_obol_apply_path_placement(gedp, view_ctx,
-						child_path.c_str(), draw_mode);
+	    SoBRLDatabaseSource *parent_source = scene->findDatabaseSourceInstance(
+		effective_parent_instance_key.c_str());
+	    BRLObolDatabaseSourceSummary parent_summary;
+	    SbMatrix parent_matrix = SbMatrix::identity();
+	    if (parent_source && parent_source->getSummary(parent_summary) &&
+		parent_summary.valid && parent_summary.drawMatrixValid)
+		parent_matrix = parent_summary.drawMatrix;
+	    SbMatrix child_matrix = child.matrix_valid ?
+		ged_obol_sbmatrix_from_mat(child.matrix) : SbMatrix::identity();
+	    child_matrix.multRight(parent_matrix);
+	    (void)scene->setDatabaseSourceInstancePlacementState(
+		child_instance_key.c_str(), TRUE, child_matrix,
+		FALSE, SbVec3f(0.0f, 0.0f, 0.0f), FALSE, 0.0f);
+	    const int obol_bool_op = child.bool_op == DB_OP_SUBTRACT ?
+		SoBRLDatabaseSource::BOOLEAN_SUBTRACT :
+		(child.bool_op == DB_OP_INTERSECT ?
+		 SoBRLDatabaseSource::BOOLEAN_INTERSECT :
+		 SoBRLDatabaseSource::BOOLEAN_UNION);
+	    (void)scene->setDatabaseSourceInstanceHierarchyState(
+		child_instance_key.c_str(),
+		effective_parent_instance_key.c_str(),
+		static_cast<uint32_t>(child.row), obol_bool_op);
 	    (void)ged_obol_apply_index_record_metadata(gedp, child_path.c_str(),
 		    &child.record, status);
 
+	    if (child.bool_op != DB_OP_UNION || child.record.is_instance) {
+		SoBRLDatabaseSource *child_source =
+		    scene->findDatabaseSourceInstance(child_instance_key.c_str());
+		BRLObolDatabaseSourceSummary child_summary;
+		if (child_source && child_source->getSummary(child_summary) &&
+		    child_summary.valid) {
+		    const int line_style = child.bool_op == DB_OP_SUBTRACT ? 1 :
+			(child.bool_op == DB_OP_INTERSECT ? 2 :
+			 child_summary.lineStyle);
+		    (void)scene->setDatabaseSourceInstanceState(
+			child_instance_key.c_str(), FALSE,
+			child_summary.sourceRevision,
+			child_summary.inputsRevision, child_summary.visible,
+			child_summary.selected, child_summary.highlighted,
+			line_style, child_summary.lineWidth,
+			child_summary.transparency,
+			child_summary.colorOverride, child_summary.color,
+			child_summary.materialColorValid,
+			child_summary.materialColor,
+			child_summary.materialRevision);
+		}
+	    }
+
 	    if (!child.record.is_comb) {
-		(void)ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx,
-			child_path.c_str(), child_name, draw_mode,
-			refresh_missing_proxy, status);
+		const int published = ged_obol_publish_aabb_proxy_for_path(
+		    gedp, view_ctx, child_path.c_str(),
+		    child_instance_key.c_str(), child_name, draw_mode,
+		    refresh_missing_proxy, status);
+		if (published)
+		    changed = 1;
+		else if (status)
+		    status->remaining++;
 	    }
 
 	    if (status) {
 		status->expanded++;
+		if (child.bool_op != DB_OP_UNION)
+		    status->expanded_non_union++;
+		if (child.record.is_instance)
+		    status->expanded_duplicate_instance++;
 		if (child.record.is_comb)
 		    status->comb_sources++;
 		else
@@ -17304,7 +17545,7 @@ ged_draw_obol_database_source_expand_children(
     struct ged_draw_obol_source_expansion_status *status)
 {
     return ged_obol_database_source_expand_children_impl(gedp, view_ctx,
-	    path, draw_mode, max_children, 1, 0, status);
+	    path, draw_mode, max_children, 1, 0, NULL, status);
 }
 
 static int
@@ -17323,28 +17564,38 @@ ged_obol_database_source_expand_visible_children_impl(
     if (!gedp || !root_path || !root_path[0])
 	return 0;
 
-    std::vector<std::string> frontier =
-	ged_obol_current_source_frontier_paths(gedp, view_ctx, root_path,
-	    draw_mode);
-    if (frontier.empty())
-	return 0;
-
     int changed = 0;
     size_t source_count = 0;
-    for (const std::string &path : frontier) {
-	if (max_sources && source_count >= max_sources)
+    while (!max_sources || source_count < max_sources) {
+	std::vector<ged_obol_source_frontier_entry> frontier =
+	    ged_obol_current_source_frontier(gedp, view_ctx, root_path,
+		draw_mode);
+	if (frontier.empty())
 	    break;
-	source_count++;
 
-	struct ged_draw_obol_source_expansion_status path_status;
-	ged_obol_source_expansion_status_clear(&path_status);
-	const int path_changed =
-	    ged_obol_database_source_expand_children_impl(gedp, view_ctx,
-		path.c_str(), draw_mode, max_children_per_source,
-		refresh_missing_proxy, require_cached_leaf_proxy, &path_status);
-	if (path_changed)
-	    changed = 1;
-	ged_obol_source_expansion_status_accumulate(status, &path_status);
+	int pass_changed = 0;
+	for (const ged_obol_source_frontier_entry &entry : frontier) {
+	    if (max_sources && source_count >= max_sources)
+		break;
+	    source_count++;
+
+	    struct ged_draw_obol_source_expansion_status path_status;
+	    ged_obol_source_expansion_status_clear(&path_status);
+	    const int path_changed =
+		ged_obol_database_source_expand_children_impl(gedp, view_ctx,
+		    entry.path.c_str(), draw_mode, max_children_per_source,
+		    refresh_missing_proxy, require_cached_leaf_proxy,
+		    entry.instance_key.c_str(), &path_status);
+	    if (path_changed) {
+		changed = 1;
+		pass_changed = 1;
+	    }
+	    ged_obol_source_expansion_status_accumulate(status,
+		&path_status);
+	}
+
+	if (!max_sources || !pass_changed)
+	    break;
     }
 
     return changed;
@@ -17374,6 +17625,46 @@ ged_obol_remaining_budget(size_t budget, size_t used)
 }
 
 static int
+ged_obol_progressive_autoview_apply(
+    ged_obol_progressive_provider_data *data)
+{
+    if (!data || !data->gedp || !data->view_ctx ||
+	!data->pending_autoview)
+	return 0;
+
+    if (ged_draw_scene_revision(data->gedp) != data->draw_scene_revision) {
+	data->pending_autoview = 0;
+	return 0;
+    }
+
+    struct bv *view = ged_obol_bv(data->view_ctx);
+    if (!view) {
+	data->pending_autoview = 0;
+	return 0;
+    }
+    if (bv_frame_revision_get(view) != data->expected_view_revision) {
+	data->pending_autoview = 0;
+	return 0;
+    }
+
+    SoBRLSceneController *scene =
+	ged_draw_obol_scene_controller(data->gedp);
+    SbBox3f bounds;
+    if (!scene || !scene->getDatabaseSourceBounds(bounds, TRUE) ||
+	bounds.isEmpty())
+	return 0;
+
+    vect_t bmin;
+    vect_t bmax;
+    ged_obol_bounds_to_vmath(bounds, &bmin, &bmax);
+    if (!bv_autoview_bounds(view, BV_AUTOVIEW_SCALE_DEFAULT, bmin, bmax))
+	return 0;
+    data->expected_view_revision = bv_frame_revision_get(view);
+    bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
+    return 1;
+}
+
+static int
 ged_obol_progressive_advance_provider(
     BRLObolViewController *controller,
     void *user_data,
@@ -17393,6 +17684,14 @@ ged_obol_progressive_advance_provider(
     void *view_ctx = data->view_ctx;
     if (!options)
 	options = &controller->getDefaultProgressiveOptions();
+
+    if (data->pending_autoview) {
+	const struct bv *view = ged_obol_bv_const(view_ctx);
+	if (!view ||
+	    ged_draw_scene_revision(gedp) != data->draw_scene_revision ||
+	    bv_frame_revision_get(view) != data->expected_view_revision)
+	    data->pending_autoview = 0;
+    }
 
     const uint32_t flags = options->flags;
     const int refresh_missing_proxy =
@@ -17452,6 +17751,27 @@ ged_obol_progressive_advance_provider(
 	if (submitted > 0)
 	    local_status.hasMore = 1;
 
+	ged_draw_obol_lod_service_status_t prewarm_service_status;
+	memset(&prewarm_service_status, 0, sizeof(prewarm_service_status));
+	const int prewarm_busy =
+	    ged_draw_obol_lod_service_status(gedp, view_ctx,
+		&prewarm_service_status) &&
+	    (prewarm_service_status.pending_tasks ||
+	     prewarm_service_status.in_flight ||
+	     prewarm_service_status.queued_results ||
+	     prewarm_service_status.queued_cache_writes);
+	if (submitted > 0 || prewarm_busy) {
+	    local_status.pendingTasks = prewarm_service_status.pending_tasks;
+	    local_status.inFlight = prewarm_service_status.in_flight;
+	    local_status.queuedResults =
+		prewarm_service_status.queued_results;
+	    local_status.queuedCacheWrites =
+		prewarm_service_status.queued_cache_writes;
+	    local_status.hasMore = 1;
+	    used_sources += max_sources ? max_sources : 1;
+	    continue;
+	}
+
 	struct ged_draw_obol_source_expansion_status expansion_status;
 	ged_obol_source_expansion_status_clear(&expansion_status);
 	int root_changed = 0;
@@ -17466,7 +17786,7 @@ ged_obol_progressive_advance_provider(
 		ged_obol_database_source_expand_children_impl(gedp, view_ctx,
 		    root.path.c_str(), root.mode, max_children,
 		    refresh_missing_proxy, require_cached_leaf_proxy,
-		    &expansion_status);
+		    NULL, &expansion_status);
 	}
 	if (root_changed) {
 	    changed = 1;
@@ -17501,6 +17821,11 @@ ged_obol_progressive_advance_provider(
 
     if (local_status.hasMore && view_ctx)
 	bv_refresh_request(ged_obol_bv(view_ctx), GED_VIEW_REFRESH_DRAW);
+    if (local_status.changed && data->pending_autoview &&
+	ged_obol_progressive_autoview_apply(data))
+	controller->syncCameraFromViewContext(view_ctx, TRUE);
+    if (!local_status.hasMore)
+	data->pending_autoview = 0;
     if (local_status.changed || local_status.hasMore)
 	controller->requestRender(local_status.changed ?
 				  "ged-progressive-update" : "ged-progressive-pending");
@@ -18376,6 +18701,13 @@ ged_obol_direct_draw_root_source(struct ged *gedp,
     return changed >= 0 ? 1 : 0;
 }
 
+static int ged_obol_apply_cached_path_metadata_to_scene(
+    struct ged *gedp,
+    SoBRLSceneController *scene,
+    void *view_ctx,
+    const char *path,
+    int draw_mode);
+
 static int
 ged_obol_apply_draw_paths_to_scene(
     struct ged *gedp,
@@ -18419,8 +18751,29 @@ ged_obol_apply_draw_paths_to_scene(
     const int remove_mode = settings->mixed_modes ? settings->draw_mode : -1;
     (void)ged_obol_remove_paths(draw_paths, view_ctx, scene, remove_mode);
 
-    if (ged_obol_draw_mode_uses_root_source(settings->draw_mode) ||
-	settings->defer_leaf_expansion) {
+    if (settings->defer_leaf_expansion) {
+	for (const std::string &path : draw_paths) {
+	    if (ged_obol_direct_draw_root_source(gedp, view_ctx, scene,
+		    path.c_str(), settings, source_revision)) {
+		changed = 1;
+		realized_roots++;
+		realized_sources++;
+	    }
+	    if (ged_obol_apply_cached_path_metadata_to_scene(gedp, scene,
+		    view_ctx, path.c_str(), settings->draw_mode))
+		changed = 1;
+	}
+	if (changed)
+	    changed |= ged_obol_restore_source_display_states(scene,
+		preserved_display_states);
+	if (result) {
+	    result->affected_groups = realized_roots;
+	    result->affected_shapes = realized_sources;
+	}
+	return 1;
+    }
+
+    if (ged_obol_draw_mode_uses_root_source(settings->draw_mode)) {
 	for (const std::string &path : draw_paths) {
 	    if (ged_obol_direct_draw_root_source(gedp, view_ctx, scene,
 		    path.c_str(), settings, source_revision)) {
@@ -19494,6 +19847,55 @@ ged_draw_obol_sync_transaction(
 }
 
 static void
+ged_obol_progressive_autoview_transaction(
+    struct ged *gedp,
+    const struct ged_draw_transaction *txn,
+    const struct ged_draw_transaction_result *result)
+{
+    if (!gedp || !txn)
+	return;
+
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries)
+	return;
+
+    const int successful = !result || result->status >= 0;
+    const int arm = successful && txn->kind == GED_DRAW_TXN_DRAW &&
+	txn->autoview && ged_obol_transaction_defer_leaf_expansion(txn);
+    const int invalidate =
+	ged_obol_transaction_invalidates_view_lod(txn, 0);
+
+    for (ged_obol_attached_controller &entry : *entries) {
+	ged_obol_progressive_provider_data *data =
+	    static_cast<ged_obol_progressive_provider_data *>(
+		entry.progressive_provider_data);
+	if (!data || !entry.view_controller || !entry.view_ctx)
+	    continue;
+	if (txn->view && txn->view != entry.view_ctx)
+	    continue;
+
+	if (invalidate)
+	    entry.view_controller->clearViewLodState();
+	if (!arm) {
+	    if (invalidate)
+		data->pending_autoview = 0;
+	    continue;
+	}
+
+	const struct bv *view = ged_obol_bv_const(entry.view_ctx);
+	if (!view)
+	    continue;
+	data->pending_autoview = 1;
+	data->expected_view_revision = bv_frame_revision_get(view);
+	data->draw_scene_revision = result ?
+	    result->scene_revision_after : ged_draw_scene_revision(gedp);
+	entry.view_controller->markProgressiveWorkPending();
+    }
+}
+
+static void
 ged_obol_transaction_observer(
     struct ged *gedp,
     const struct ged_draw_transaction *txn,
@@ -19502,6 +19904,7 @@ ged_obol_transaction_observer(
 {
     (void)client_data;
     (void)ged_draw_obol_scene_sync_attached_transaction(gedp, txn, result);
+    ged_obol_progressive_autoview_transaction(gedp, txn, result);
 }
 
 static void

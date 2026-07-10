@@ -237,15 +237,6 @@ struct BRLOBOL_EXPORT BRLObolOverlayInfo {
     BRLObolOverlayInfo(void);
 };
 
-struct BRLOBOL_EXPORT BRLObolEditPreviewCallbacks {
-    void *previewContext;
-    uint64_t (*revisionCallback)(void *previewContext);
-    int (*updateCallback)(void *previewContext);
-    int (*pickCallback)(void *previewContext, int x, int y, void *pickOut);
-
-    BRLObolEditPreviewCallbacks(void);
-};
-
 struct BRLOBOL_EXPORT BRLObolLabel {
     SbString text;
     SbVec3f point;
@@ -500,7 +491,6 @@ public:
 	const std::vector<int32_t> &commands,
 	uint32_t sourceRevision = 0,
 	uint32_t inputsRevision = 0,
-	const BRLObolEditPreviewCallbacks *callbacks = NULL,
 	const BRLObolFeatureOwner *owner = NULL);
     SbBool replaceEditPreviewGeometry(BRLObolFeatureHandle handle,
 	const SbString &identity,
@@ -508,12 +498,7 @@ public:
 	const std::vector<int32_t> &commands,
 	uint32_t sourceRevision = 0,
 	uint32_t inputsRevision = 0);
-    uint64_t editPreviewRevision(BRLObolFeatureHandle handle) const;
-    int updateEditPreview(BRLObolFeatureHandle handle);
-    int pickEditPreview(BRLObolFeatureHandle handle,
-	int x,
-	int y,
-	void *pickOut) const;
+    SbBool touch(BRLObolFeatureHandle handle);
 
     SbBool appendLinePoint(BRLObolFeatureHandle handle, const SbVec3f &point);
     SbBool replaceLabels(BRLObolFeatureHandle handle,

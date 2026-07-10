@@ -71,6 +71,8 @@ struct ged;
 struct ged_draw_pick_result;
 struct bv_view_info;
 struct rt_db_internal;
+struct bg_tess_tol;
+struct bn_tol;
 
 typedef enum ged_draw_stale_reason {
     GED_DRAW_STALE_NONE = 0,
@@ -222,13 +224,32 @@ enum ged_draw_view_edit_preview_event {
     GED_DRAW_VIEW_EDIT_PREVIEW_DISCARD
 };
 
-struct ged_draw_view_edit_preview_callbacks {
-    uint64_t (*revision_cb)(void *);
-    int (*update_cb)(void *);
-    int (*pick_cb)(void *, int, int, void *);
+struct ged_draw_view_edit_transaction {
+    enum ged_draw_view_edit_preview_event event;
+    ged_draw_view_feature_ref feature;
+    const char *feature_name;
+    const void *owner;
+    const char *source_path;
+    const char *edit_intent_id;
+    const char *edit_intent_role;
+    const point_t *points;
+    const int *commands;
+    size_t point_count;
+    struct db_i *dbip;
+    struct rt_db_internal *internal;
+    const fastf_t *matrix;
+    const struct bg_tess_tol *ttol;
+    const struct bn_tol *tol;
+    uint32_t source_revision;
+    uint32_t inputs_revision;
+    int color_valid;
+    unsigned char color[3];
 };
 
-#define GED_DRAW_VIEW_EDIT_PREVIEW_CALLBACKS_INIT { NULL, NULL, NULL }
+#define GED_DRAW_VIEW_EDIT_TRANSACTION_INIT { \
+    GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE, GED_DRAW_VIEW_FEATURE_REF_NULL, \
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, \
+    NULL, 0, 0, 0, {255, 255, 255} }
 
 struct ged_draw_view_feature_label {
     const char *text;
@@ -1217,6 +1238,29 @@ GED_EXPORT extern fastf_t
 ged_draw_pick_result_hit_dist(const struct ged_draw_pick_result *result,
 			      size_t index);
 
+struct ged_draw_pick_detail {
+    uint32_t source_id;
+    int primitive_kind;
+    int primitive_index;
+    int material_id;
+    int face_vertex_index[3];
+    int nearest_face_vertex_index;
+    point_t model_point;
+    int model_point_valid;
+};
+
+#define GED_DRAW_PICK_DETAIL_INIT { 0, 0, -1, 0, {-1, -1, -1}, -1, \
+    VINIT_ZERO, 0 }
+
+GED_EXPORT extern int
+ged_draw_pick_result_detail(const struct ged_draw_pick_result *result,
+	size_t index, struct ged_draw_pick_detail *detail);
+
+GED_EXPORT extern int
+ged_draw_pick_result_append_detail(struct ged_draw_pick_result *result,
+	const char *path, fastf_t hit_dist,
+	const struct ged_draw_pick_detail *detail);
+
 GED_EXPORT extern int
 ged_draw_pick_result_append_path(struct ged_draw_pick_result *result,
 				 const char *path,
@@ -1398,13 +1442,22 @@ ged_draw_view_context_edit_preview_publish_event(
     enum ged_draw_view_edit_preview_event event,
     const char *source_path);
 
+GED_EXPORT extern int
+ged_draw_view_context_edit_transaction_apply(
+    void *view_ctx,
+    const struct ged_draw_view_edit_transaction *transaction,
+    ged_draw_view_feature_ref *feature_out);
+
+GED_EXPORT extern int
+ged_draw_edit_transaction_apply(
+    struct ged *gedp,
+    const struct ged_draw_view_edit_transaction *transaction);
+
 GED_EXPORT extern ged_draw_view_feature_ref
 ged_draw_view_context_feature_overlay_ensure(
     void *view_ctx,
     const char *name,
     const void *owner,
-    void *preview_ctx,
-    const struct ged_draw_view_edit_preview_callbacks *callbacks,
     const char *source_path);
 
 GED_EXPORT extern ged_draw_view_feature_ref
