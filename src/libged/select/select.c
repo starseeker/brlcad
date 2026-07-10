@@ -29,10 +29,12 @@
 
 
 #include "bu/getopt.h"
+#include "bv.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 
 static int
-_ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, double vy, double vwidth, double vheight, double vminz, int rflag)
+_ged_select_botpts(struct ged *gedp, void *view_ctx, struct rt_bot_internal *botip, double vx, double vy, double vwidth, double vheight, double vminz, int rflag)
 {
     size_t i;
     fastf_t vr = 0.0;
@@ -43,6 +45,10 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
+
+    mat_t model2view;
+    bv_model2view_get(model2view,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
 
     if (rflag) {
 	vr = vwidth;
@@ -72,7 +78,7 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
 	    vect_t diff;
 	    fastf_t mag;
 
-	    MAT4X3PNT(vpt, gedp->ged_gvp->gv_model2view, &botip->vertices[i*3]);
+	    MAT4X3PNT(vpt, model2view, &botip->vertices[i*3]);
 
 	    if (vpt[Z] < vminz)
 		continue;
@@ -90,7 +96,7 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
 	for (i = 0; i < botip->num_vertices; i++) {
 	    point_t vpt;
 
-	    MAT4X3PNT(vpt, gedp->ged_gvp->gv_model2view, &botip->vertices[i*3]);
+	    MAT4X3PNT(vpt, model2view, &botip->vertices[i*3]);
 
 	    if (vpt[Z] < vminz)
 		continue;
@@ -105,239 +111,292 @@ _ged_select_botpts(struct ged *gedp, struct rt_bot_internal *botip, double vx, d
     return BRLCAD_OK;
 }
 
+/* Callback data for dl_select */
+struct select_data {
+    mat_t model2view;
+    struct bu_vls *vls;
+    double vx;
+    double vy;
+    double vwidth;
+    double vheight;
+    int rflag;
+    fastf_t vr;
+    fastf_t vmin_x;
+    fastf_t vmin_y;
+    fastf_t vmax_x;
+    fastf_t vmax_y;
+};
+
+struct select_bounds_data {
+    struct select_data *select;
+    point_t vmin;
+    point_t vmax;
+    int seen;
+};
+
+struct select_partial_data {
+    const struct ged_draw_view_db_object_record *rec;
+    struct select_data *select;
+    int seen;
+};
+
+static void
+select_bounds_update(struct select_bounds_data *bd, const point_t pt)
+{
+    point_t vpt;
+
+    if (!bd || !bd->select)
+	return;
+
+    MAT4X3PNT(vpt, bd->select->model2view, pt);
+    V_MIN(bd->vmin[X], vpt[X]);
+    V_MAX(bd->vmax[X], vpt[X]);
+    V_MIN(bd->vmin[Y], vpt[Y]);
+    V_MAX(bd->vmax[Y], vpt[Y]);
+    V_MIN(bd->vmin[Z], vpt[Z]);
+    V_MAX(bd->vmax[Z], vpt[Z]);
+    bd->seen = 1;
+}
+
+static int
+select_bounds_segment_cb(const point_t a, const point_t b, void *data)
+{
+    struct select_bounds_data *bd = (struct select_bounds_data *)data;
+    select_bounds_update(bd, a);
+    select_bounds_update(bd, b);
+    return 1;
+}
+
+static int
+select_bounds_point_cb(const point_t pt, void *data)
+{
+    struct select_bounds_data *bd = (struct select_bounds_data *)data;
+    select_bounds_update(bd, pt);
+    return 1;
+}
+
+static int
+select_partial_point_matches(struct select_data *data, const point_t pt)
+{
+    point_t vpt;
+
+    if (!data)
+	return 0;
+
+    MAT4X3PNT(vpt, data->model2view, pt);
+    if (data->rflag) {
+	point_t vloc;
+	vect_t diff;
+	fastf_t mag;
+
+	VSET(vloc, data->vx, data->vy, vpt[Z]);
+	VSUB2(diff, vpt, vloc);
+	mag = MAGNITUDE(diff);
+
+	return (mag <= data->vr);
+    }
+
+    return (data->vmin_x <= vpt[X] && vpt[X] <= data->vmax_x &&
+	    data->vmin_y <= vpt[Y] && vpt[Y] <= data->vmax_y);
+}
+
+static int
+select_partial_segment_cb(const point_t a, const point_t b, void *data)
+{
+    struct select_partial_data *pd = (struct select_partial_data *)data;
+    if (!pd || !pd->select)
+	return 0;
+    pd->seen = 1;
+
+    if (select_partial_point_matches(pd->select, a) ||
+	    select_partial_point_matches(pd->select, b)) {
+	bu_vls_printf(pd->select->vls, "%s", pd->rec->path);
+	bu_vls_printf(pd->select->vls, "\n");
+	return 0;
+    }
+
+    return 1;
+}
+
+static int
+select_partial_point_cb(const point_t pt, void *data)
+{
+    struct select_partial_data *pd = (struct select_partial_data *)data;
+    if (!pd || !pd->select)
+	return 0;
+    if (!select_partial_point_matches(pd->select, pt))
+	return 1;
+    bu_vls_printf(pd->select->vls, "%s", pd->rec->path);
+    bu_vls_printf(pd->select->vls, "\n");
+    return 0;
+}
+
+static int
+dl_select_record(const struct ged_draw_view_db_object_record *rec, void *udata)
+{
+    struct select_data *data = (struct select_data *)udata;
+    if (!rec || !data)
+	return 1;
+
+    point_t vmin, vmax;
+    struct select_bounds_data bd;
+
+    vmax[X] = vmax[Y] = vmax[Z] = -INFINITY;
+    vmin[X] = vmin[Y] = vmin[Z] =  INFINITY;
+
+    bd.select = data;
+    VMOVE(bd.vmin, vmin);
+    VMOVE(bd.vmax, vmax);
+    bd.seen = 0;
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    select_bounds_segment_cb, &bd);
+    if (!bd.seen)
+	(void)ged_draw_view_db_object_record_foreach_point(rec,
+		select_bounds_point_cb, &bd);
+    if (!bd.seen)
+	return 1;
+    VMOVE(vmin, bd.vmin);
+    VMOVE(vmax, bd.vmax);
+
+    if (data->rflag) {
+	point_t vloc;
+	vect_t diff;
+	fastf_t mag;
+
+	VSET(vloc, data->vx, data->vy, vmin[Z]);
+	VSUB2(diff, vmin, vloc);
+	mag = MAGNITUDE(diff);
+
+	if (mag > data->vr)
+	    return 1;
+
+	VSET(vloc, data->vx, data->vy, vmax[Z]);
+	VSUB2(diff, vmax, vloc);
+	mag = MAGNITUDE(diff);
+
+	if (mag > data->vr)
+	    return 1;
+
+	bu_vls_printf(data->vls, "%s", rec->path);
+	bu_vls_printf(data->vls, "\n");
+    } else {
+	if (data->vmin_x <= vmin[X] && vmax[X] <= data->vmax_x &&
+	    data->vmin_y <= vmin[Y] && vmax[Y] <= data->vmax_y) {
+	    bu_vls_printf(data->vls, "%s", rec->path);
+	    bu_vls_printf(data->vls, "\n");
+	}
+    }
+    return 1;
+}
 
 int
-dl_select(struct bu_list *hdlp, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
+dl_select(void *view_ctx, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
 {
-    struct display_list *gdlp = NULL;
-    struct display_list *next_gdlp = NULL;
-    struct bv_scene_obj *sp = NULL;
-    fastf_t vr = 0.0;
-    fastf_t vmin_x = 0.0;
-    fastf_t vmin_y = 0.0;
-    fastf_t vmax_x = 0.0;
-    fastf_t vmax_y = 0.0;
+    struct select_data data;
+
+    MAT_COPY(data.model2view, model2view);
+    data.vls = vls;
+    data.vx = vx;
+    data.vy = vy;
+    data.vwidth = vwidth;
+    data.vheight = vheight;
+    data.rflag = rflag;
+    data.vr = 0.0;
+    data.vmin_x = 0.0;
+    data.vmin_y = 0.0;
+    data.vmax_x = 0.0;
+    data.vmax_y = 0.0;
 
     if (rflag) {
-        vr = vwidth;
+        data.vr = vwidth;
     } else {
-        vmin_x = vx;
-        vmin_y = vy;
+        data.vmin_x = vx;
+        data.vmin_y = vy;
 
         if (vwidth > 0)
-            vmax_x = vx + vwidth;
+            data.vmax_x = vx + vwidth;
         else {
-            vmin_x = vx + vwidth;
-            vmax_x = vx;
+            data.vmin_x = vx + vwidth;
+            data.vmax_x = vx;
         }
 
         if (vheight > 0)
-            vmax_y = vy + vheight;
+            data.vmax_y = vy + vheight;
         else {
-            vmin_y = vy + vheight;
-            vmax_y = vy;
+            data.vmin_y = vy + vheight;
+            data.vmax_y = vy;
         }
     }
 
-    gdlp = BU_LIST_NEXT(display_list, hdlp);
-    while (BU_LIST_NOT_HEAD(gdlp, hdlp)) {
-        next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    point_t vmin, vmax;
-	    struct bv_vlist *vp;
-
-	    vmax[X] = vmax[Y] = vmax[Z] = -INFINITY;
-	    vmin[X] = vmin[Y] = vmin[Z] =  INFINITY;
-
-	    for (BU_LIST_FOR(vp, bv_vlist, &(sp->s_vlist))) {
-		size_t j;
-		size_t nused = vp->nused;
-		int *cmd = vp->cmd;
-		point_t *pt = vp->pt;
-		point_t vpt;
-		for (j = 0; j < nused; j++, cmd++, pt++) {
-		    switch (*cmd) {
-			case BV_VLIST_POLY_START:
-			case BV_VLIST_POLY_VERTNORM:
-			case BV_VLIST_TRI_START:
-			case BV_VLIST_TRI_VERTNORM:
-			case BV_VLIST_POINT_SIZE:
-			case BV_VLIST_LINE_WIDTH:
-			    /* attribute, not location */
-			    break;
-			case BV_VLIST_LINE_MOVE:
-			case BV_VLIST_LINE_DRAW:
-			case BV_VLIST_POLY_MOVE:
-			case BV_VLIST_POLY_DRAW:
-			case BV_VLIST_POLY_END:
-			case BV_VLIST_TRI_MOVE:
-			case BV_VLIST_TRI_DRAW:
-			case BV_VLIST_TRI_END:
-			    MAT4X3PNT(vpt, model2view, *pt);
-			    V_MIN(vmin[X], vpt[X]);
-			    V_MAX(vmax[X], vpt[X]);
-			    V_MIN(vmin[Y], vpt[Y]);
-			    V_MAX(vmax[Y], vpt[Y]);
-			    V_MIN(vmin[Z], vpt[Z]);
-			    V_MAX(vmax[Z], vpt[Z]);
-			    break;
-			default: {
-			    bu_vls_printf(vls, "unknown vlist op %d\n", *cmd);
-			}
-		    }
-		}
-	    }
-
-	    if (rflag) {
-		point_t vloc;
-		vect_t diff;
-		fastf_t mag;
-
-		VSET(vloc, vx, vy, vmin[Z]);
-		VSUB2(diff, vmin, vloc);
-		mag = MAGNITUDE(diff);
-
-		if (mag > vr)
-		    continue;
-
-		VSET(vloc, vx, vy, vmax[Z]);
-		VSUB2(diff, vmax, vloc);
-		mag = MAGNITUDE(diff);
-
-		if (mag > vr)
-		    continue;
-
-		db_path_to_vls(vls, &bdata->s_fullpath);
-		bu_vls_printf(vls, "\n");
-	    } else {
-		if (vmin_x <= vmin[X] && vmax[X] <= vmax_x &&
-		    vmin_y <= vmin[Y] && vmax[Y] <= vmax_y) {
-		    db_path_to_vls(vls, &bdata->s_fullpath);
-		    bu_vls_printf(vls, "\n");
-		}
-	    }
-	}
-
-        gdlp = next_gdlp;
-    }
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
+	    dl_select_record, &data);
 
     return BRLCAD_OK;
 }
 
+/* Callback for partial select - checks each vertex */
+static int
+dl_select_partial_record(const struct ged_draw_view_db_object_record *rec,
+			 void *udata)
+{
+    struct select_data *data = (struct select_data *)udata;
+    if (!rec || !data)
+	return 1;
+
+    struct select_partial_data pd;
+    pd.rec = rec;
+    pd.select = data;
+    pd.seen = 0;
+    (void)ged_draw_view_db_object_record_foreach_segment(rec,
+	    select_partial_segment_cb, &pd);
+    if (pd.seen)
+	return 1;
+    (void)ged_draw_view_db_object_record_foreach_point(rec,
+	    select_partial_point_cb, &pd);
+    return 1;
+}
 
 int
-dl_select_partial(struct bu_list *hdlp, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
+dl_select_partial(void *view_ctx, mat_t model2view, struct bu_vls *vls, double vx, double vy, double vwidth, double vheight, int rflag)
 {
-    struct display_list *gdlp = NULL;
-    struct display_list *next_gdlp = NULL;
-    struct bv_scene_obj *sp = NULL;
-    fastf_t vr = 0.0;
-    fastf_t vmin_x = 0.0;
-    fastf_t vmin_y = 0.0;
-    fastf_t vmax_x = 0.0;
-    fastf_t vmax_y = 0.0;
+    struct select_data data;
+
+    MAT_COPY(data.model2view, model2view);
+    data.vls = vls;
+    data.vx = vx;
+    data.vy = vy;
+    data.vwidth = vwidth;
+    data.vheight = vheight;
+    data.rflag = rflag;
+    data.vr = 0.0;
+    data.vmin_x = 0.0;
+    data.vmin_y = 0.0;
+    data.vmax_x = 0.0;
+    data.vmax_y = 0.0;
 
     if (rflag) {
-        vr = vwidth;
+        data.vr = vwidth;
     } else {
-        vmin_x = vx;
-        vmin_y = vy;
+        data.vmin_x = vx;
+        data.vmin_y = vy;
 
         if (vwidth > 0)
-            vmax_x = vx + vwidth;
+            data.vmax_x = vx + vwidth;
         else {
-            vmin_x = vx + vwidth;
-            vmax_x = vx;
+            data.vmin_x = vx + vwidth;
+            data.vmax_x = vx;
         }
 
         if (vheight > 0)
-            vmax_y = vy + vheight;
+            data.vmax_y = vy + vheight;
         else {
-            vmin_y = vy + vheight;
-            vmax_y = vy;
+            data.vmin_y = vy + vheight;
+            data.vmax_y = vy;
         }
     }
 
-    gdlp = BU_LIST_NEXT(display_list, hdlp);
-    while (BU_LIST_NOT_HEAD(gdlp, hdlp)) {
-        next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    struct bv_vlist *vp;
-
-	    for (BU_LIST_FOR(vp, bv_vlist, &(sp->s_vlist))) {
-		size_t j;
-		size_t nused = vp->nused;
-		int *cmd = vp->cmd;
-		point_t *pt = vp->pt;
-		point_t vpt;
-		for (j = 0; j < nused; j++, cmd++, pt++) {
-		    switch (*cmd) {
-			case BV_VLIST_POLY_START:
-			case BV_VLIST_POLY_VERTNORM:
-			case BV_VLIST_TRI_START:
-			case BV_VLIST_TRI_VERTNORM:
-			    /* Has normal vector, not location */
-			    break;
-			case BV_VLIST_LINE_MOVE:
-			case BV_VLIST_LINE_DRAW:
-			case BV_VLIST_POLY_MOVE:
-			case BV_VLIST_POLY_DRAW:
-			case BV_VLIST_POLY_END:
-			case BV_VLIST_TRI_MOVE:
-			case BV_VLIST_TRI_DRAW:
-			case BV_VLIST_TRI_END:
-			    MAT4X3PNT(vpt, model2view, *pt);
-
-			    if (rflag) {
-				point_t vloc;
-				vect_t diff;
-				fastf_t mag;
-
-				VSET(vloc, vx, vy, vpt[Z]);
-				VSUB2(diff, vpt, vloc);
-				mag = MAGNITUDE(diff);
-
-				if (mag > vr)
-				    continue;
-
-				db_path_to_vls(vls, &bdata->s_fullpath);
-				bu_vls_printf(vls, "\n");
-
-				goto solid_done;
-			    } else {
-				if (vmin_x <= vpt[X] && vpt[X] <= vmax_x &&
-				    vmin_y <= vpt[Y] && vpt[Y] <= vmax_y) {
-				    db_path_to_vls(vls, &bdata->s_fullpath);
-				    bu_vls_printf(vls, "\n");
-
-				    goto solid_done;
-				}
-			    }
-
-			    break;
-			default: {
-			    bu_vls_printf(vls, "unknown vlist op %d\n", *cmd);
-			}
-		    }
-		}
-	    }
-
-	solid_done:
-	    ;
-	}
-
-        gdlp = next_gdlp;
-    }
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
+	    dl_select_partial_record, &data);
 
     return BRLCAD_OK;
 }
@@ -352,10 +411,37 @@ dl_select_partial(struct bu_list *hdlp, mat_t model2view, struct bu_vls *vls, do
  *
  */
 extern int ged_select2_core(struct ged *gedp, int argc, const char *argv[]);
+
+static int
+ged_select_semantic_subcommand(const char *arg)
+{
+    return (arg && (BU_STR_EQUAL(arg, "add") ||
+	    BU_STR_EQUAL(arg, "clear") ||
+	    BU_STR_EQUAL(arg, "collapse") ||
+	    BU_STR_EQUAL(arg, "expand") ||
+	    BU_STR_EQUAL(arg, "list") ||
+	    BU_STR_EQUAL(arg, "rm")));
+}
+
+static int
+ged_select_semantic_syntax(int argc, const char *argv[])
+{
+    for (int i = 1; i < argc; i++) {
+	if (BU_STR_EQUAL(argv[i], "-S") || BU_STR_EQUAL(argv[i], "--set")) {
+	    i++;
+	    continue;
+	}
+	if (argv[i][0] == '-')
+	    continue;
+	return ged_select_semantic_subcommand(argv[i]);
+    }
+    return 0;
+}
+
 int
 ged_select_core(struct ged *gedp, int argc, const char *argv[])
 {
-    if (gedp->new_cmd_forms)
+    if (ged_select_semantic_syntax(argc, argv))
 	return ged_select2_core(gedp, argc, argv);
 
     int c;
@@ -371,6 +457,7 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -443,15 +530,18 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 	if (botip != (struct rt_bot_internal *)NULL) {
 	    int ret;
 
-	    ret = _ged_select_botpts(gedp, botip, vx, vy, vr, vr, vminz, 1);
+	    ret = _ged_select_botpts(gedp, view_ctx, botip, vx, vy, vr, vr, vminz, 1);
 	    rt_db_free_internal(&intern);
 
 	    return ret;
 	} else {
+	    mat_t model2view;
+	    bv_model2view_get(model2view,
+		    bv_context_view_const((const struct bv_context *)view_ctx));
 	    if (pflag)
-		return dl_select_partial(gedp->i->ged_gdp->gd_headDisplay, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
+		return dl_select_partial(view_ctx, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
 	    else
-		return dl_select(gedp->i->ged_gdp->gd_headDisplay, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
+		return dl_select(view_ctx, model2view, gedp->ged_result_str, vx, vy, vr, vr, 1);
 	}
     } else {
 	if (sscanf(argv[1], "%lf", &vx) != 1 ||
@@ -465,15 +555,18 @@ ged_select_core(struct ged *gedp, int argc, const char *argv[])
 	if (botip != (struct rt_bot_internal *)NULL) {
 	    int ret;
 
-	    ret = _ged_select_botpts(gedp, botip, vx, vy, vw, vh, vminz, 0);
+	    ret = _ged_select_botpts(gedp, view_ctx, botip, vx, vy, vw, vh, vminz, 0);
 	    rt_db_free_internal(&intern);
 
 	    return ret;
 	} else {
+	    mat_t model2view;
+	    bv_model2view_get(model2view,
+		    bv_context_view_const((const struct bv_context *)view_ctx));
 	    if (pflag)
-		return dl_select_partial(gedp->i->ged_gdp->gd_headDisplay, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
+		return dl_select_partial(view_ctx, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
 	    else
-		return dl_select(gedp->i->ged_gdp->gd_headDisplay, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
+		return dl_select(view_ctx, model2view, gedp->ged_result_str, vx, vy, vw, vh, 0);
 	}
     }
 }
@@ -562,31 +655,42 @@ ged_rselect_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv_interactive_rect_state rect;
+    if (!bv_interactive_rect_state_get(&rect,
+	    bv_context_view_const((const struct bv_context *)view_ctx)))
+	return BRLCAD_ERROR;
+
     if (botip != (struct rt_bot_internal *)NULL) {
 	int ret;
 
-	ret = _ged_select_botpts(gedp, botip,
-				  gedp->ged_gvp->gv_s->gv_rect.x,
-				  gedp->ged_gvp->gv_s->gv_rect.y,
-				  gedp->ged_gvp->gv_s->gv_rect.width,
-				  gedp->ged_gvp->gv_s->gv_rect.height,
+	ret = _ged_select_botpts(gedp, view_ctx, botip,
+				  rect.x,
+				  rect.y,
+				  rect.width,
+				  rect.height,
 				  vminz,
 				  0);
 
 	rt_db_free_internal(&intern);
 	return ret;
     } else {
+	mat_t model2view;
+	bv_model2view_get(model2view,
+		bv_context_view_const((const struct bv_context *)view_ctx));
 	if (pflag)
-	    return dl_select_partial(gedp->i->ged_gdp->gd_headDisplay, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, 				       gedp->ged_gvp->gv_s->gv_rect.x,
-				     gedp->ged_gvp->gv_s->gv_rect.y,
-				     gedp->ged_gvp->gv_s->gv_rect.width,
-				     gedp->ged_gvp->gv_s->gv_rect.height,
+	    return dl_select_partial(view_ctx, model2view, gedp->ged_result_str,
+				     rect.x,
+				     rect.y,
+				     rect.width,
+				     rect.height,
 				     0);
 	else
-	    return dl_select(gedp->i->ged_gdp->gd_headDisplay, gedp->ged_gvp->gv_model2view, gedp->ged_result_str, 				       gedp->ged_gvp->gv_s->gv_rect.x,
-			     gedp->ged_gvp->gv_s->gv_rect.y,
-			     gedp->ged_gvp->gv_s->gv_rect.width,
-			     gedp->ged_gvp->gv_s->gv_rect.height,
+	    return dl_select(view_ctx, model2view, gedp->ged_result_str,
+			     rect.x,
+			     rect.y,
+			     rect.width,
+			     rect.height,
 			     0);
     }
 }

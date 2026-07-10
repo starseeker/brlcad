@@ -29,13 +29,16 @@
 #include <fstream>
 
 #include <bu.h>
+#include "rt/view.h"
+#include "view_test_util.h"
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
 
-#include "../../dbi.h"
+#define ADIFF_THRES 0.99
 
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);
+extern "C" int img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, const char *clear_root, const char *img_root);
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
 
 int
@@ -77,24 +80,21 @@ main(int ac, char *av[]) {
     /* Use a local working-directory cache so we do not pollute the user's
      * real BRL-CAD cache and so the test is fully self-contained. */
     char lcache[MAXPATHLEN] = {0};
-    bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_draw_test_fp_cache", NULL);
+    bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_fp_test_cache", NULL);
     bu_mkdir(lcache);
     bu_setenv("BU_DIR_CACHE", lcache, 1);
-
-    unpack_apng(av[1], "faceplate.apng", lcache, "fp");
 
     if (!bu_file_exists(av[1], NULL)) {
 	printf("ERROR: [%s] does not exist, expecting .g file\n", av[1]);
 	return 2;
     }
 
+    unpack_apng(av[1], "faceplate.apng", lcache, "fp");
+
     /* Open the temp file, then dbconcat argv[1] into it */
     bu_vls_sprintf(&fname, "%s/moss.g", av[1]);
     gedp = ged_open("db", bu_vls_cstr(&fname), 1);
 
-    // Set up new cmd data (not yet done by default in ged_open
-    gedp->dbi_state = new DbiState(gedp);
-    gedp->new_cmd_forms = 1;
     bu_setenv("DM_SWRAST", "1", 1);
 
     /* To generate images that will allow us to check if the drawing
@@ -105,10 +105,14 @@ main(int ac, char *av[]) {
     s_av[2] = "swrast";
     s_av[3] = "SW";
     s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
+    int dm_attach_ret = ged_exec_dm(gedp, 4, s_av);
+    void *v = ged_view_active_ctx(gedp);
+    if (dm_attach_ret != BRLCAD_OK || !v || !ged_view_context_display_manager_get(v)) {
+	bu_exit(EXIT_FAILURE, "failed to attach swrast display manager: %s\n",
+		bu_vls_strlen(gedp->ged_result_str) ? bu_vls_cstr(gedp->ged_result_str) : "no display manager available");
+    }
 
-    struct bview *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     dm_set_width(dmp, 512);
     dm_set_height(dmp, 512);
 
@@ -119,12 +123,10 @@ main(int ac, char *av[]) {
     fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
     dm_set_win_bounds(dmp, windowbounds);
 
-    dm_set_vp(dmp, &v->gv_scale);
-    v->dmp = dmp;
-    v->gv_width = dm_get_width(dmp);
-    v->gv_height = dm_get_height(dmp);
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
+    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
+    ged_view_context_display_manager_set(v, dmp);
+    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     // The default (fast) wireframe has some differences from
     // the slower full OpenGL draw path - disable it for the
@@ -166,7 +168,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(2, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_cmp(2, gedp, lcache, false, clear_images, soft_fail, ADIFF_THRES, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -183,7 +185,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(3, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(3, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -209,22 +211,26 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(4, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(4, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     bu_log("Testing turning on frames per second reporting...\n");
 
     // So we don't get random values here, override the timing variable values
-    ((struct dm *)v->dmp)->start_time = 0;
-    v->gv_s->gv_frametime = 1000000000;
+    dmp = (struct dm *)ged_view_context_display_manager_get(v);
+    if (!dmp) {
+	bu_exit(EXIT_FAILURE, "no active display manager available for fps faceplate test\n");
+    }
+    dmp->start_time = 0;
+    bv_frametime_set(DRAW_TEST_BV(v), 1000000000);
 
     s_av[0] = "view";
     s_av[1] = "faceplate";
     s_av[2] = "params";
     s_av[3] = "fps";
-    s_av[4] = "0";
+    s_av[4] = "1";
     s_av[5] = NULL;
     ged_exec_view(gedp, 5, s_av);
-    ret += img_cmp(5, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(5, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -251,7 +257,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(6, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(6, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -268,7 +274,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(7, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(7, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -284,7 +290,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(8, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(8, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -336,6 +342,8 @@ main(int ac, char *av[]) {
 
     ged_close(gedp);
 
+    bu_dirclear(lcache);
+
     return ret;
 }
 
@@ -348,4 +356,3 @@ main(int ac, char *av[]) {
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

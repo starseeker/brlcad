@@ -1,0 +1,139 @@
+/*                    G E D _ D R A W _ U T I L . C
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * version 2.1 as published by the Free Software Foundation.
+ *
+ * This library is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this file; see the file named COPYING for more
+ * information.
+ */
+/** @file libged/ged_draw_util.c
+ *
+ * Small draw-scene utility entry points shared by the split draw files.
+ */
+
+#include "common.h"
+
+#include <stdarg.h>
+#include <stdlib.h>
+
+#include "bu/vls.h"
+#include "bu/log.h"
+
+#include "ged.h"
+#include "ged/draw.h"
+#include "./ged_private.h"
+
+const char *
+ged_draw_dbpath_skip_lead_slash(const char *s)
+{
+    if (s && *s == '/')
+        return s + 1;
+    return s;
+}
+
+const char *
+ged_draw_stale_reason_name(ged_draw_stale_reason reason)
+{
+    switch (reason) {
+	case GED_DRAW_STALE_NONE:
+	    return "current";
+	case GED_DRAW_STALE_SOURCE_CHANGED:
+	    return "source-changed";
+	case GED_DRAW_STALE_VIEW_INPUT_CHANGED:
+	    return "view-input-changed";
+	case GED_DRAW_STALE_SETTINGS_CHANGED:
+	    return "settings-changed";
+	case GED_DRAW_STALE_FORCED:
+	    return "forced";
+	case GED_DRAW_STALE_UPDATE_FAILED:
+	    return "update-failed";
+	default:
+	    return "unknown";
+    }
+}
+
+void
+#ifdef USE_BSG_LOG
+ged_draw_log(int level, const char *fmt, ...)
+#else
+ged_draw_log(int UNUSED(level), const char *UNUSED(fmt), ...)
+#endif
+{
+#ifdef USE_BSG_LOG
+    if (level < 0 || !fmt)
+	return;
+
+    const char *brsig = getenv("BSG_LOG");
+    if (!brsig)
+	return;
+
+    if (atoi(brsig) < level)
+	return;
+
+    va_list ap;
+    struct bu_vls msg = BU_VLS_INIT_ZERO;
+    va_start(ap, fmt);
+    bu_vls_vprintf(&msg, fmt, ap);
+    va_end(ap);
+
+    bu_log("%s\n", bu_vls_cstr(&msg));
+    bu_vls_free(&msg);
+#endif
+}
+
+int
+ged_draw_default_mode(const struct ged *gedp)
+{
+    if (!gedp || !gedp->i || !gedp->i->ged_gdp)
+	return GED_DRAW_MODE_WIRE;
+    return gedp->i->ged_gdp->gd_shaded_mode;
+}
+
+unsigned long long
+ged_draw_scene_hash(struct ged *gedp)
+{
+    if (!gedp)
+        return 0;
+    return (unsigned long long)gedp->i->ged_gdp->gd_draw_rev;
+}
+
+uint64_t
+ged_draw_scene_revision(struct ged *gedp)
+{
+    if (!gedp)
+        return 0;
+    return gedp->i->ged_gdp->gd_draw_rev;
+}
+
+int
+ged_draw_shape_ref_is_null(ged_draw_shape_ref ref)
+{
+    return ref.token == 0;
+}
+
+int
+ged_draw_group_ref_is_null(ged_draw_group_ref ref)
+{
+    return ref.token == 0;
+}
+
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

@@ -32,9 +32,13 @@
 #include "bu/log.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
+#include "bv.h"
 #include "dm.h"
+#include "ged/draw_obol.h"
+#include "rt/view.h"
 
 #include "../ged_private.h"
+#include "../ged_draw_private.h"
 
 #define DM_MAX_TRIES 100
 
@@ -51,6 +55,14 @@ struct _ged_dm_info {
     const struct bu_cmdtab *cmds;
     struct bu_opt_desc *gopts;
 };
+
+static const char *
+_dm_view_name(const void *view_ctx)
+{
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    const char *name = bv_name_get(view);
+    return name ? name : "";
+}
 
 static void
 _dm_cmd_during_clbk(struct _ged_dm_info *gd, int argc, const char **argv)
@@ -102,11 +114,17 @@ _dm_cmd_msgs(void *bs, int argc, const char **argv, const char *us, const char *
     return 0;
 }
 
+static struct dm *
+_dm_from_view(const void *view_ctx)
+{
+    return (struct dm *)ged_view_context_display_manager_get(view_ctx);
+}
+
 struct dm *
 _dm_name_lookup(struct _ged_dm_info *gd, const char *dm_name)
 {
     struct dm *cdmp = NULL;
-    struct bview *gdvp = NULL;
+    void *view_ctx = NULL;
     struct dm *ndmp = NULL;
 
     if (!gd) {
@@ -118,15 +136,16 @@ _dm_name_lookup(struct _ged_dm_info *gd, const char *dm_name)
     }
 
     struct ged *gedp = gd->gedp;
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-    if (!BU_PTBL_LEN(views)) {
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    size_t view_count = views ? BU_PTBL_LEN(views) : 0;
+    if (!view_count) {
 	bu_vls_printf(gedp->ged_result_str, ": no views defined in GED\n");
 	return NULL;
     }
     int dm_cnt = 0;
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	if (!gdvp->dmp)
+    for (size_t i = 0; i < view_count; i++) {
+	view_ctx = (void *)BU_PTBL_GET(views, i);
+	if (!_dm_from_view(view_ctx))
 	    continue;
 	dm_cnt++;
     }
@@ -135,9 +154,9 @@ _dm_name_lookup(struct _ged_dm_info *gd, const char *dm_name)
 	return NULL;
     }
 
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	ndmp = (struct dm *)gdvp->dmp;
+    for (size_t i = 0; i < view_count; i++) {
+	view_ctx = (void *)BU_PTBL_GET(views, i);
+	ndmp = _dm_from_view(view_ctx);
 	if (ndmp && BU_STR_EQUAL(dm_name, bu_vls_cstr(dm_get_pathname(ndmp)))) {
 	    cdmp = ndmp;
 	    break;
@@ -157,20 +176,22 @@ _dm_find(struct _ged_dm_info *gd, struct bu_vls *name)
 	return NULL;
 
     struct ged *gedp = gd->gedp;
+    void *active_view = ged_view_active_ctx(gedp);
     if (!name || !bu_vls_strlen(name)) {
-	if (!gedp->ged_gvp) {
+	if (!active_view) {
 	    bu_vls_printf(gedp->ged_result_str, ": no current view is set in GED\n");
 	    return NULL;
 	}
-	if (!gedp->ged_gvp->dmp) {
+	struct dm *cdmp = _dm_from_view(active_view);
+	if (!cdmp) {
 	    bu_vls_printf(gedp->ged_result_str, ": no current DM is set in GED's current view\n");
 	    return NULL;
 	}
-	return (struct dm *)gedp->ged_gvp->dmp;
+	return cdmp;
     }
-    if (name && gedp->ged_gvp && gedp->ged_gvp->dmp) {
-	struct dm *cdmp = (struct dm *)gedp->ged_gvp->dmp;
-	if (BU_STR_EQUAL(bu_vls_cstr(name), bu_vls_cstr(dm_get_pathname(cdmp))))
+    if (name && active_view) {
+	struct dm *cdmp = _dm_from_view(active_view);
+	if (cdmp && BU_STR_EQUAL(bu_vls_cstr(name), bu_vls_cstr(dm_get_pathname(cdmp))))
 	    return cdmp;
     }
 
@@ -339,8 +360,8 @@ _dm_cmd_list(void *ds, int argc, const char **argv)
     struct _ged_dm_info *gd = (struct _ged_dm_info *)ds;
     struct ged *gedp = gd->gedp;
 
-    struct bview *cv = gedp->ged_gvp;
-    struct dm *cdmp = (struct dm *)cv->dmp;
+    void *cv = ged_view_active_ctx(gedp);
+    struct dm *cdmp = cv ? _dm_from_view(cv) : NULL;
     if (cdmp) {
 	// Current dmp first, if we have a current instance
 	if (gd->verbosity) {
@@ -350,15 +371,16 @@ _dm_cmd_list(void *ds, int argc, const char **argv)
 	}
     }
 
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-    if (!BU_PTBL_LEN(views) && !cdmp) {
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    size_t view_count = views ? BU_PTBL_LEN(views) : 0;
+    if (!view_count && !cdmp) {
 	bu_vls_printf(gedp->ged_result_str, ": no views defined in GED\n");
 	return BRLCAD_ERROR;
     }
     int dm_cnt = 0;
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	struct bview *gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	if (!gdvp->dmp)
+    for (size_t i = 0; i < view_count; i++) {
+	void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	if (!_dm_from_view(view_ctx))
 	    continue;
 	dm_cnt++;
     }
@@ -367,9 +389,9 @@ _dm_cmd_list(void *ds, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	struct bview *gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	struct dm *ndmp = (struct dm *)gdvp->dmp;
+    for (size_t i = 0; i < view_count; i++) {
+	void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	struct dm *ndmp = _dm_from_view(view_ctx);
 	if (!ndmp || ndmp == cdmp)
 	    continue;
 	if (gd->verbosity) {
@@ -553,6 +575,10 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     struct ged *gedp = gd->gedp;
     struct bu_vls dm_name = BU_VLS_INIT_ZERO;
     struct bu_vls view_name = BU_VLS_INIT_ZERO;
+    void *active_view = ged_view_active_ctx(gedp);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *view_set = ged_view_set_ctx(gedp);
+    size_t view_count = views ? BU_PTBL_LEN(views) : 0;
 
     struct bu_opt_desc d[3];
     BU_OPT(d[0], "d", "dm", "dm_name", &bu_opt_vls, &dm_name, "name of display manager to be created");
@@ -572,10 +598,9 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	// No name - generate one
 	bu_vls_sprintf(&dm_name, "%s-0", argv[0]);
 	int exists = 0;
-	struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    struct bview *gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	    struct dm *ndmp = (struct dm *)gdvp->dmp;
+	for (size_t i = 0; i < view_count; i++) {
+	    void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	    struct dm *ndmp = _dm_from_view(view_ctx);
 	    if (!ndmp)
 		continue;
 	    if (BU_STR_EQUAL(bu_vls_cstr(dm_get_pathname(ndmp)), bu_vls_cstr(&dm_name))) {
@@ -587,9 +612,9 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	while (exists && tries < DM_MAX_TRIES) {
 	    bu_vls_incr(&dm_name, NULL, "0:0:0:0:-", NULL, NULL);
 	    exists = 0;
-	    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-		struct bview *gdvp = (struct bview *)BU_PTBL_GET(views, i);
-		struct dm *ndmp = (struct dm *)gdvp->dmp;
+	    for (size_t i = 0; i < view_count; i++) {
+		void *view_ctx = (void *)BU_PTBL_GET(views, i);
+		struct dm *ndmp = _dm_from_view(view_ctx);
 		if (!ndmp)
 		    continue;
 		if (BU_STR_EQUAL(bu_vls_cstr(dm_get_pathname(ndmp)), bu_vls_cstr(&dm_name))) {
@@ -617,10 +642,9 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	}
 	// Have name - see if it already exists
 	int exists = 0;
-	struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    struct bview *gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	    struct dm *ndmp = (struct dm *)gdvp->dmp;
+	for (size_t i = 0; i < view_count; i++) {
+	    void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	    struct dm *ndmp = _dm_from_view(view_ctx);
 	    if (!ndmp)
 		continue;
 	    if (BU_STR_EQUAL(bu_vls_cstr(dm_get_pathname(ndmp)), bu_vls_cstr(&dm_name))) {
@@ -636,31 +660,23 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	}
     }
 
-    struct bview *target_view = NULL;
+    void *target_view = NULL;
     if (bu_vls_strlen(&view_name)) {
-	struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    struct bview *tview = (struct bview *)BU_PTBL_GET(views, i);
-	    if (!bu_vls_strcmp(&view_name, &tview->gv_name)) {
-		target_view = tview;
-		break;
-	    }
-	}
+	target_view = ged_view_find_ctx(gedp, bu_vls_cstr(&view_name));
     } else {
-	target_view = (gedp->ged_gvp->dmp) ? NULL : gedp->ged_gvp;
+	target_view = (active_view && !_dm_from_view(active_view)) ? active_view : NULL;
     }
 
     if (!target_view) {
-	BU_GET(target_view, struct bview);
-	bv_init(target_view, &gedp->ged_views);
-	bv_set_add_view(&gedp->ged_views, target_view);
+	target_view = ged_view_context_create_with_set(view_set);
+	ged_view_set_context_add(view_set, target_view);
 	// This view is being created by GED, so it needs to be cleaned
 	// up by GED as well
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)target_view);
+	ged_view_context_owned_add(gedp, target_view);
     }
 
-    if (target_view->dmp) {
-	bu_vls_printf(gedp->ged_result_str, "Target view %s of dm attach already has an associated dm\n", bu_vls_cstr(&target_view->gv_name));
+    if (_dm_from_view(target_view)) {
+	bu_vls_printf(gedp->ged_result_str, "Target view %s of dm attach already has an associated dm\n", _dm_view_name(target_view));
 	bu_vls_free(&dm_name);
 	bu_vls_free(&view_name);
 	return BRLCAD_ERROR;
@@ -671,11 +687,13 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
     // either shouldn't be necessary or probably should come after
     // dm_open has its chance to set up dm width and height (which
     // should be used before the fallback)
-    if (!target_view->gv_width) {
-	target_view->gv_width = 512;
-    }
-    if (!target_view->gv_height) {
-	target_view->gv_height = 512;
+    struct bv *target_bv = bv_context_view((struct bv_context *)target_view);
+    int target_width = bv_width_get(target_bv);
+    int target_height = bv_height_get(target_bv);
+    if (!target_width || !target_height) {
+	bv_dimensions_set(target_bv,
+		target_width ? target_width : 512,
+		target_height ? target_height : 512);
     }
 
     // If the application has not provided a toolkit specific context, use the
@@ -693,15 +711,47 @@ _dm_cmd_attach(void *ds, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    dm_set_vp(dmp, &gedp->ged_gvp->gv_scale);
+    void *scale_view = active_view ? active_view : target_view;
+    dm_set_vp(dmp, bv_scale_storage_get(bv_context_view((struct bv_context *)scale_view)));
     dm_configure_win(dmp, 0);
     dm_set_pathname(dmp, bu_vls_cstr(&dm_name));
     dm_set_zbuffer(dmp, 1);
-    fastf_t windowbounds[6] = { -1, 1, -1, 1, (int)BV_MIN, (int)BV_MAX };
+    fastf_t windowbounds[6] = { -1, 1, -1, 1, (int)RT_VIEW_MIN, (int)RT_VIEW_MAX };
     dm_set_win_bounds(dmp, windowbounds);
 
-    // We have the dmp - let the view know
-    target_view->dmp = dmp;
+    // We have the display manager - let the view know
+    ged_view_context_display_manager_set(target_view, dmp);
+    if (target_view == ged_view_active_ctx(gedp))
+	ged_draw_ensure_root_attached(gedp);
+
+    if (BU_STR_EQUAL(argv[0], "obol")) {
+	if (!ged_draw_obol_display_manager_attach_for_view(gedp,
+		target_view, dmp, 1, 1)) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "failed to attach GED draw state to Obol DM %s",
+		    bu_vls_cstr(&dm_name));
+	    ged_view_context_display_manager_set(target_view, NULL);
+	    dm_close(dmp);
+	    bu_vls_free(&dm_name);
+	    bu_vls_free(&view_name);
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    /* Record the framebuffer device corresponding to this active DM type so
+     * libged rt can launch a matching standalone fb window without querying
+     * libdm directly at rt execution time. */
+    if (BU_STR_EQUAL(argv[0], "swrast")) {
+	ged_rt_fb_set(gedp, "/dev/swrast");
+    } else if (BU_STR_EQUAL(argv[0], "qtgl")) {
+	ged_rt_fb_set(gedp, "/dev/qtgl");
+    } else if (BU_STR_EQUAL(argv[0], "ogl")) {
+	ged_rt_fb_set(gedp, "/dev/ogl");
+    } else if (BU_STR_EQUAL(argv[0], "wgl")) {
+	ged_rt_fb_set(gedp, "/dev/wgl");
+    } else {
+	ged_rt_fb_set(gedp, NULL);
+    }
 
     const char *cbav[4] = {"dm", "attach", argv[0], bu_vls_cstr(&dm_name)};
     _dm_cmd_during_clbk(gd, 4, cbav);

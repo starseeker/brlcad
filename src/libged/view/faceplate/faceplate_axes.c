@@ -41,7 +41,7 @@
 
 struct _ged_fp_axes_info {
     struct _ged_view_info *gd;
-    struct bv_axes *a;
+    struct bv_axes_state *a;
 };
 
 int
@@ -60,7 +60,7 @@ _fp_axes_cmd_size(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
      if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%f\n", a->axes_size);
 	return BRLCAD_OK;
@@ -98,7 +98,7 @@ _fp_axes_cmd_linewidth(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->line_width);
 	return BRLCAD_OK;
@@ -141,7 +141,7 @@ _fp_axes_cmd_pos_only(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->pos_only);
 	return BRLCAD_OK;
@@ -182,7 +182,7 @@ _fp_axes_cmd_fp_axes_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", a->axes_color[0], a->axes_color[1], a->axes_color[2]);
 	return BRLCAD_OK;
@@ -223,7 +223,7 @@ _fp_axes_cmd_label(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->label_flag);
 	return BRLCAD_OK;
@@ -263,7 +263,7 @@ _fp_axes_cmd_label_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", a->label_color[0], a->label_color[1], a->label_color[2]);
 	return BRLCAD_OK;
@@ -305,7 +305,7 @@ _fp_axes_cmd_triple_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->triple_color);
 	return BRLCAD_OK;
@@ -345,7 +345,7 @@ _fp_axes_cmd_tick(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->tick_enabled);
 	return BRLCAD_OK;
@@ -385,7 +385,7 @@ _fp_axes_cmd_tick_length(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->tick_length);
 	return BRLCAD_OK;
@@ -428,7 +428,7 @@ _fp_axes_cmd_tick_major_length(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->tick_major_length);
 	return BRLCAD_OK;
@@ -471,7 +471,7 @@ _fp_axes_cmd_tick_interval(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%f\n", a->tick_interval);
 	return BRLCAD_OK;
@@ -509,7 +509,7 @@ _fp_axes_cmd_ticks_per_major(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->ticks_per_major);
 	return BRLCAD_OK;
@@ -552,7 +552,7 @@ _fp_axes_cmd_tick_threshold(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d\n", a->tick_threshold);
 	return BRLCAD_OK;
@@ -595,7 +595,7 @@ _fp_axes_cmd_tick_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", a->tick_color[0], a->tick_color[1], a->tick_color[2]);
 	return BRLCAD_OK;
@@ -637,7 +637,7 @@ _fp_axes_cmd_tick_major_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct bv_axes *a = ainfo->a;
+    struct bv_axes_state *a = ainfo->a;
     if (argc == 0) {
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d\n", a->tick_major_color[0], a->tick_major_color[1], a->tick_major_color[2]);
 	return BRLCAD_OK;
@@ -686,28 +686,34 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate model_axes subcmd [args]";
     const char *purpose_string = "manipulate view axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!gedp->ged_gvp) {
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     // We know we're the axes command - start processing args
     argc--; argv++;
 
     if (argc == 1) {
+	struct bv_axes_state axes;
+	if (!bv_model_axes_state_get(&axes, view))
+	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    v->gv_s->gv_model_axes.draw = 1;
+	    axes.draw = 1;
+	    bv_model_axes_state_set(view, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    v->gv_s->gv_model_axes.draw = 0;
+	    axes.draw = 0;
+	    bv_model_axes_state_set(view, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -731,11 +737,18 @@ _fp_cmd_model_axes(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
+    struct bv_axes_state axes;
+    if (!bv_model_axes_state_get(&axes, view))
+	return BRLCAD_ERROR;
+
     struct _ged_fp_axes_info ainfo;
     ainfo.gd = gd;
-    ainfo.a = &v->gv_s->gv_model_axes;
+    ainfo.a = &axes;
 
-    return _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate model_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
+    int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate model_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
+    if (ret == BRLCAD_OK)
+	bv_model_axes_state_set(view, &axes);
+    return ret;
 }
 
 int
@@ -744,29 +757,35 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate view_axes subcmd [args]";
     const char *purpose_string = "manipulate view axes";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!gedp->ged_gvp) {
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
 
     // We know we're the axes command - start processing args
     argc--; argv++;
 
     if (argc == 1) {
+	struct bv_axes_state axes;
+	if (!bv_view_axes_state_get(&axes, view))
+	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    v->gv_s->gv_view_axes.draw = 1;
+	    axes.draw = 1;
+	    bv_view_axes_state_set(view, &axes);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    v->gv_s->gv_view_axes.draw = 0;
+	    axes.draw = 0;
+	    bv_view_axes_state_set(view, &axes);
 	    return BRLCAD_OK;
 	}
     }
@@ -790,11 +809,18 @@ _fp_cmd_view_axes(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
+    struct bv_axes_state axes;
+    if (!bv_view_axes_state_get(&axes, view))
+	return BRLCAD_ERROR;
+
     struct _ged_fp_axes_info ainfo;
     ainfo.gd = gd;
-    ainfo.a = &v->gv_s->gv_view_axes;
+    ainfo.a = &axes;
 
-    return _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate view_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
+    int ret = _ged_subcmd_exec(gedp, d, _fp_axes_cmds, "view faceplate view_axes", "[options] subcommand [args]", (void *)&ainfo, argc, argv, help, cmd_pos);
+    if (ret == BRLCAD_OK)
+	bv_view_axes_state_set(view, &axes);
+    return ret;
 }
 
 /*

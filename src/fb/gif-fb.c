@@ -77,6 +77,7 @@
 #include "bu/color.h"
 #include "bu/getopt.h"
 #include "bu/interrupt.h"
+#include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bu/exit.h"

@@ -1,21 +1,14 @@
 set(
   bv_headers
-  adc.h
-  defines.h
-  events.h
-  faceplate.h
-  lod.h
-  plot3.h
-  polygon.h
-  snap.h
-  tcl_data.h
-  util.h
-  vlist.h
-  view_sets.h
+  view.h
 )
+
 brlcad_manage_files(bv_headers ${INCLUDE_DIR}/brlcad/bv REQUIRED libbv)
 
-cmakefiles(CMakeLists.txt)
+cmakefiles(
+  CMakeLists.txt
+  ${bv_headers}
+)
 
 # Local Variables:
 # tab-width: 8

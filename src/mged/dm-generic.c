@@ -39,9 +39,12 @@
 #  include "tk.h"
 #endif
 
+#include "bv.h"
 #include "vmath.h"
 #include "raytrace.h"
 #include "ged.h"
+#include "ged/view.h"
+#include "rt/view.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -52,17 +55,27 @@ int
 common_dm(struct mged_state *s, int argc, const char *argv[])
 {
     int status;
+    struct bv_adc_state adc_record = {0};
+    struct bv_adc_state *adc = &adc_record;
+    struct bv_grid_state grid_record = BV_GRID_STATE_INIT;
+    struct bv_grid_state *grid = &grid_record;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (s->dbip == DBI_NULL)
 	return TCL_OK;
 
+    (void)mged_dm_adc_state_get(s->mged_curr_dm, adc);
+    (void)mged_dm_grid_state_get(s->mged_curr_dm, grid);
+
     if (BU_STR_EQUAL(argv[0], "idle")) {
 
 	/* redraw after scaling */
-	if (s->gedp && s->gedp->ged_gvp &&
-	    s->gedp->ged_gvp->gv_s->adaptive_plot_csg &&
-	    s->gedp->ged_gvp->gv_s->redraw_on_zoom &&
+	ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	void *active_view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
+	if (active_view_ctx &&
+	    ged_draw_view_context_lod_policy_get(&lod_policy, active_view_ctx) &&
+	    lod_policy.csg_enabled &&
+	    lod_policy.zoom_refresh &&
 	    (am_mode == AMM_SCALE ||
 	     am_mode == AMM_CON_SCALE_X ||
 	     am_mode == AMM_CON_SCALE_Y ||
@@ -101,6 +114,11 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	int old_orig_gui;
 	int stolen = 0;
 	fastf_t fx, fy;
+	mat_t view_center;
+	mat_t model2view;
+	mat_t view2model;
+	void *view_ctx = view_state->vs_gvp;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
 	if (argc < 3) {
 	    Tcl_AppendResult(s->interp, "dm m: need more parameters\n",
@@ -112,8 +130,11 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	fx = dm_Xx2Normal(DMP, atoi(argv[1]));
 	fy = dm_Xy2Normal(DMP, atoi(argv[2]), 0);
-	x = fx * BV_MAX;
-	y = fy * BV_MAX;
+	x = fx * RT_VIEW_MAX;
+	y = fy * RT_VIEW_MAX;
+	bv_center_mat_get(view_center, view);
+	bv_model2view_get(model2view, view);
+	bv_view2model_get(view2model, view);
 
 	if (mged_variables->mv_faceplate &&
 	    mged_variables->mv_orig_gui) {
@@ -132,14 +153,14 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	mged_variables->mv_orig_gui = 0;
 	fy = dm_Xy2Normal(DMP, atoi(argv[2]), 1);
-	y = fy * BV_MAX;
+	y = fy * RT_VIEW_MAX;
 
     end:
 	if (mged_variables->mv_mouse_behavior == 'q' && !stolen) {
 	    point_t view_pt;
 	    point_t model_pt;
 
-	    if (grid_state->snap)
+	    if (grid->snap)
 		snap_to_grid(s, &fx, &fy);
 
 	    if (mged_variables->mv_perspective_mode)
@@ -147,7 +168,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    else
 		VSET(view_pt, fx, fy, 1.0);
 
-	    MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+	    MAT4X3PNT(model_pt, view2model, view_pt);
 	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 	    if (dm_get_zclip(DMP))
 		bu_vls_printf(&vls, "nirt -c --xyz %lf %lf %lf",
@@ -159,7 +180,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 		    mged_variables->mv_mouse_behavior == 'r' ||
 		    mged_variables->mv_mouse_behavior == 'z') && !stolen) {
 
-	    if (grid_state->snap)
+	    if (grid->snap)
 		snap_to_grid(s, &fx, &fy);
 
 	    rubber_band->rb_active = 1;
@@ -184,42 +205,42 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    bu_vls_printf(&vls, "mouse_comb_edit_select %d %d", x, y);
 	} else if (mged_variables->mv_mouse_behavior == 'o' && !stolen) {
 	    bu_vls_printf(&vls, "mouse_rt_obj_select %d %d", x, y);
-	} else if (adc_state->adc_draw && mged_variables->mv_transform == 'a' && !stolen) {
+	} else if (adc->draw && mged_variables->mv_transform == 'a' && !stolen) {
 	    point_t model_pt;
 	    point_t view_pt;
 
-	    if (grid_state->snap)
+	    if (grid->snap)
 		snap_to_grid(s, &fx, &fy);
 
 	    VSET(view_pt, fx, fy, 1.0);
-	    MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+	    MAT4X3PNT(model_pt, view2model, view_pt);
 	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 	    bu_vls_printf(&vls, "adc xyz %lf %lf %lf\n", model_pt[X], model_pt[Y], model_pt[Z]);
-	} else if (grid_state->snap && !stolen &&
+	} else if (grid->snap && !stolen &&
 		   SEDIT_TRAN && mged_variables->mv_transform == 'e') {
 	    point_t view_pt;
 	    point_t model_pt;
 
 	    snap_to_grid(s, &fx, &fy);
-	    MAT4X3PNT(view_pt, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
+	    MAT4X3PNT(view_pt, model2view, MEDIT(s)->curr_e_axes_pos);
 	    view_pt[X] = fx;
 	    view_pt[Y] = fy;
-	    MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+	    MAT4X3PNT(model_pt, view2model, view_pt);
 	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 	    bu_vls_printf(&vls, "p %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
-	} else if (grid_state->snap && !stolen &&
+	} else if (grid->snap && !stolen &&
 		   OEDIT_TRAN && mged_variables->mv_transform == 'e') {
 	    point_t view_pt;
 	    point_t model_pt;
 
 	    snap_to_grid(s, &fx, &fy);
-	    MAT4X3PNT(view_pt, view_state->vs_gvp->gv_model2view, MEDIT(s)->curr_e_axes_pos);
+	    MAT4X3PNT(view_pt, model2view, MEDIT(s)->curr_e_axes_pos);
 	    view_pt[X] = fx;
 	    view_pt[Y] = fy;
-	    MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+	    MAT4X3PNT(model_pt, view2model, view_pt);
 	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 	    bu_vls_printf(&vls, "translate %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
-	} else if (grid_state->snap && !stolen &&
+	} else if (grid->snap && !stolen &&
 		   s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK &&
 		   s->global_editing_state != ST_O_PATH && !SEDIT_PICK && !EDIT_SCALE) {
 	    point_t view_pt;
@@ -227,11 +248,11 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    point_t vcenter;
 
 	    snap_to_grid(s, &fx, &fy);
-	    MAT_DELTAS_GET_NEG(vcenter, view_state->vs_gvp->gv_center);
-	    MAT4X3PNT(view_pt, view_state->vs_gvp->gv_model2view, vcenter);
+	    MAT_DELTAS_GET_NEG(vcenter, view_center);
+	    MAT4X3PNT(view_pt, model2view, vcenter);
 	    view_pt[X] = fx;
 	    view_pt[Y] = fy;
-	    MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+	    MAT4X3PNT(model_pt, view2model, view_pt);
 	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 	    bu_vls_printf(&vls, "center %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
 	} else
@@ -271,7 +292,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    case 't':
 		am_mode = AMM_TRAN;
 
-		if (grid_state->snap) {
+		if (grid->snap) {
 		    int save_edflag;
 
 		    if ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) &&
@@ -279,7 +300,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 			if (s->global_editing_state == ST_S_EDIT) {
 			    save_edflag = MEDIT(s)->edit_flag;
 			    if (!SEDIT_TRAN)
-				MEDIT(s)->edit_flag = STRANS;
+				MEDIT(s)->edit_flag = RT_PARAMS_EDIT_TRANS;
 			} else {
 			    save_edflag = edobj;
 			    edobj = BE_O_XY;
@@ -320,6 +341,10 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
     if (BU_STR_EQUAL(argv[0], "adc")) {
 	fastf_t fx, fy;
 	fastf_t td; /* tick distance */
+	fastf_t view_local_scale;
+	mat_t view2model;
+	void *view_ctx = view_state->vs_gvp;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
 	if (argc < 4) {
 	    Tcl_AppendResult(s->interp, "dm adc: need more parameters\n",
@@ -329,11 +354,13 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	dm_omx = atoi(argv[2]);
 	dm_omy = atoi(argv[3]);
+	view_local_scale = bv_scale_get(view) * s->dbip->dbi_base2local;
+	bv_view2model_get(view2model, view);
 
 	switch (*argv[1]) {
 	    case '1':
-		fx = dm_Xx2Normal(DMP, dm_omx) * BV_MAX - adc_state->adc_dv_x;
-		fy = dm_Xy2Normal(DMP, dm_omy, 1) * BV_MAX - adc_state->adc_dv_y;
+		fx = dm_Xx2Normal(DMP, dm_omx) * RT_VIEW_MAX - adc->dv_x;
+		fy = dm_Xy2Normal(DMP, dm_omy, 1) * RT_VIEW_MAX - adc->dv_y;
 
 		bu_vls_printf(&vls, "adc a1 %lf\n", RAD2DEG*atan2(fy, fx));
 		Tcl_Eval(s->interp, bu_vls_addr(&vls));
@@ -342,8 +369,8 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 		am_mode = AMM_ADC_ANG1;
 		break;
 	    case '2':
-		fx = dm_Xx2Normal(DMP, dm_omx) * BV_MAX - adc_state->adc_dv_x;
-		fy = dm_Xy2Normal(DMP, dm_omy, 1) * BV_MAX - adc_state->adc_dv_y;
+		fx = dm_Xx2Normal(DMP, dm_omx) * RT_VIEW_MAX - adc->dv_x;
+		fy = dm_Xy2Normal(DMP, dm_omy, 1) * RT_VIEW_MAX - adc->dv_y;
 
 		bu_vls_printf(&vls, "adc a2 %lf\n", RAD2DEG*atan2(fy, fx));
 		Tcl_Eval(s->interp, bu_vls_addr(&vls));
@@ -358,10 +385,10 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 		    VSET(view_pt, dm_Xx2Normal(DMP, dm_omx), dm_Xy2Normal(DMP, dm_omy, 1), 0.0);
 
-		    if (grid_state->snap)
+		    if (grid->snap)
 			snap_to_grid(s, &view_pt[X], &view_pt[Y]);
 
-		    MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+		    MAT4X3PNT(model_pt, view2model, view_pt);
 		    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 
 		    bu_vls_printf(&vls, "adc xyz %lf %lf %lf\n", model_pt[X], model_pt[Y], model_pt[Z]);
@@ -373,10 +400,10 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 		break;
 	    case 'd':
-		fx = (dm_Xx2Normal(DMP, dm_omx) * BV_MAX -
-		      adc_state->adc_dv_x) * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local * INV_BV;
-		fy = (dm_Xy2Normal(DMP, dm_omy, 1) * BV_MAX -
-		      adc_state->adc_dv_y) * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local * INV_BV;
+		fx = (dm_Xx2Normal(DMP, dm_omx) * RT_VIEW_MAX -
+		      adc->dv_x) * view_local_scale * RT_INV_VIEW;
+		fy = (dm_Xy2Normal(DMP, dm_omy, 1) * RT_VIEW_MAX -
+		      adc->dv_y) * view_local_scale * RT_INV_VIEW;
 
 		td = sqrt(fx * fx + fy * fy);
 
@@ -587,8 +614,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
 
-	DMP_dirty = 1;
-	dm_set_dirty(DMP, 1);
+	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
 	(void)dm_make_current(DMP);
 	return dm_set_bg(DMP, r, g, b, r, g, b);
     }
@@ -607,8 +633,10 @@ view_state_flag_hook(const struct bu_structparse *UNUSED(sdp),
                 void *data)
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    if (hs->vs)
-	hs->vs->vs_flag = 1;
+    if (hs->vs) {
+	struct bv *view = bv_context_view((struct bv_context *)hs->vs->vs_gvp);
+	bv_refresh_request(view, GED_VIEW_REFRESH_VIEW);
+    }
 }
 
 void
@@ -619,7 +647,7 @@ dirty_hook(const struct bu_structparse *UNUSED(sdp),
 	void *data)
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    *(hs->dirty_global) = 1;
+    mged_dm_repaint_request(hs->mdmp, MGED_REPAINT_DEVICE_SETTING);
 }
 
 void
@@ -630,7 +658,10 @@ zclip_hook(const struct bu_structparse *sdp,
 	void *data)
 {
     struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    hs->vs->vs_gvp->gv_s->gv_zclip = dm_get_zclip(hs->hs_dmp);
+    if (hs->vs) {
+	struct bv *view = bv_context_view((struct bv_context *)hs->vs->vs_gvp);
+	bv_zclip_set(view, dm_get_zclip(hs->hs_dmp));
+    }
     dirty_hook(sdp, name, base, value, data);
 }
 
@@ -638,7 +669,7 @@ void *
 set_hook_data(struct mged_state *s, struct mged_view_hook_state *hs) {
     hs->hs_dmp = DMP;
     hs->vs = view_state;
-    hs->dirty_global = &(DMP_dirty);
+    hs->mdmp = s->mged_curr_dm;
     return (void *)hs;
 }
 
@@ -666,10 +697,14 @@ dm_commands(int argc, const char *argv[], void *data)
         BU_STR_EQUAL(argv[0], "list") || BU_STR_EQUAL(argv[0], "type") ||
         BU_STR_EQUAL(argv[0], "types") ||
         BU_STR_EQUAL(argv[0], "width")) {
-        if (!s->gedp->ged_gvp)
-            s->gedp->ged_gvp = view_state->vs_gvp;
-        if (s->gedp->ged_gvp)
-            s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+	void *active_view_ctx = ged_view_active_ctx(s->gedp);
+        if (!active_view_ctx) {
+            ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+	    active_view_ctx = ged_view_active_ctx(s->gedp);
+	}
+        if (active_view_ctx)
+            ged_view_context_display_manager_set(active_view_ctx,
+		    (void *)s->mged_curr_dm->dm_dmp);
 
         const char **av = (const char **)bu_calloc((size_t)argc + 2, sizeof(char *), "dm forward argv");
         av[0] = "dm";

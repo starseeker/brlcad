@@ -89,11 +89,6 @@
 #include "dm.h"
 #include "pkg.h"
 
-/* Enable token generation for the server (fbserv.c generates and forwards
- * the token; server.c does the per-connection verification). */
-#define FBSERV_AUTH_SERVER
-#include "./auth.h"
-
 /* Enable TLS server-side functions */
 #define FBSERV_TLS_IMPL
 #define FBSERV_TLS_SERVER_CTX
@@ -167,13 +162,12 @@ static SSL_CTX *fbserv_ssl_ctx = NULL;
 #endif
 
 
-#define MAX_CLIENTS 32
 struct pkg_conn *clients[MAX_CLIENTS];
 
 int verbose = 0;
 
 /* from server.c */
-extern struct pkg_switch pkg_switch[];
+extern struct pkg_switch *fbserv_server_pkg_switch(void);
 extern struct fb *fb_server_fbp;
 extern fd_set *fb_server_select_list;
 extern int *fb_server_max_fd;
@@ -457,7 +451,7 @@ ipc_listener_loop(void)
 	struct pkg_conn *pcp;
 	int idx;
 
-	pcp = pkg_accept(netlistener, pkg_switch, communications_error, 0);
+	pcp = pkg_accept(netlistener, fbserv_server_pkg_switch(), communications_error, 0);
 	if (pcp == PKC_ERROR)
 	    break;
 	if (pcp == PKC_NULL)
@@ -538,7 +532,7 @@ main_loop(void)
 
 	/* Accept any new client connections */
 	if (netfd > 0 && FD_ISSET(netfd, &infds)) {
-	    fbserv_new_client(pkg_accept(netlistener, pkg_switch, communications_error, 0));
+	    fbserv_new_client(pkg_accept(netlistener, fbserv_server_pkg_switch(), communications_error, 0));
 	    nopens++;
 	}
 
@@ -632,7 +626,7 @@ main(int argc, char **argv)
     netfd = 0;
     if (is_socket(netfd)) {
 	init_syslog();
-	fbserv_new_client(pkg_adopt_stdio(pkg_switch, communications_error));
+	fbserv_new_client(pkg_adopt_stdio(fbserv_server_pkg_switch(), communications_error));
 	max_fd = 8;
 	once_only = 1;
 	main_loop();
@@ -696,7 +690,7 @@ main(int argc, char **argv)
 	    return 0;
 	}
 
-	pcp = pkg_connect_addr(ipc_addr_flag, pkg_switch, communications_error);
+	pcp = pkg_connect_addr(ipc_addr_flag, fbserv_server_pkg_switch(), communications_error);
 	if (pcp == PKC_ERROR || pcp == PKC_NULL) {
 	    fprintf(stderr, "fbserv: pkg_connect_addr('%s') failed\n",
 		    ipc_addr_flag);
@@ -803,7 +797,7 @@ main(int argc, char **argv)
 	int fbstat;
 	struct pkg_conn *pcp;
 
-	pcp = pkg_accept(netlistener, pkg_switch, communications_error, 0);
+	pcp = pkg_accept(netlistener, fbserv_server_pkg_switch(), communications_error, 0);
 	if (pcp == PKC_ERROR)
 	    break;		/* continue is unlikely to work */
 

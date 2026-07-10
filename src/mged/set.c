@@ -24,16 +24,15 @@
 #include "common.h"
 
 
+#include "bv.h"
 #include "vmath.h"
+#include "ged/view.h"
 
 #include "./sedit.h"
 #include "./mged.h"
 #include "./mged_dm.h"
 
 #include "tcl.h"
-
-/* external sp_hook functions */
-extern void predictor_hook(const struct bu_structparse *, const char *, void *, const char *, void *);
 
 /* exported sp_hook functions */
 void set_perspective(const struct bu_structparse *, const char *, void *, const char *, void *);
@@ -44,7 +43,7 @@ static void establish_perspective(const struct bu_structparse *, const char *, v
 static void nmg_eu_dist_set(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_coords(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
-static void set_dlist(const struct bu_structparse *, const char *, void *, const char *, void *);
+static void set_backend_cache(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_rotate_about(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void toggle_perspective(const struct bu_structparse *, const char *, void *, const char *, void *);
 
@@ -65,7 +64,7 @@ struct _mged_variables default_mged_variables = {
     /* mv_linestyle */		's',
     /* mv_hot_key */		0,
     /* mv_context */		1,
-    /* mv_dlist */		0,
+    /* mv_backend_cache */		0,
     /* mv_use_air */		0,
     /* mv_listen */		0,
     /* mv_port */		0,
@@ -76,9 +75,6 @@ struct _mged_variables default_mged_variables = {
     /* mv_coords */		'v',
     /* mv_rotate_about */	'v',
     /* mv_transform */		'v',
-    /* mv_predictor */		0,
-    /* mv_predictor_advance */	1.0,
-    /* mv_predictor_length */	2.0,
     /* mv_perspective */	-1,
     /* mv_perspective_mode */	0,
     /* mv_toggle_perspective */	1,
@@ -103,7 +99,7 @@ struct bu_structparse mged_vparse[] = {
     {"%c", 1, "linestyle",		MV_O(mv_linestyle),		set_dirty_flag, NULL, NULL },
     {"%d", 1, "hot_key",		MV_O(mv_hot_key),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%d", 1, "context",		MV_O(mv_context),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
-    {"%d", 1, "dlist",			MV_O(mv_dlist),			set_dlist, NULL, NULL },
+    {"%d", 1, "cache",			MV_O(mv_backend_cache),		set_backend_cache, NULL, NULL },
     {"%d", 1, "use_air",		MV_O(mv_use_air),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%d", 1, "listen",			MV_O(mv_listen),		fbserv_set_port, NULL, NULL },
     {"%d", 1, "port",			MV_O(mv_port),			fbserv_set_port, NULL, NULL },
@@ -114,9 +110,6 @@ struct bu_structparse mged_vparse[] = {
     {"%c", 1, "coords",			MV_O(mv_coords),		set_coords, NULL, NULL },
     {"%c", 1, "rotate_about",		MV_O(mv_rotate_about),		set_rotate_about, NULL, NULL },
     {"%c", 1, "transform",		MV_O(mv_transform),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
-    {"%d", 1, "predictor",		MV_O(mv_predictor),		predictor_hook, NULL, NULL },
-    {"%g", 1, "predictor_advance",	MV_O(mv_predictor_advance),	predictor_hook, NULL, NULL },
-    {"%g", 1, "predictor_length",	MV_O(mv_predictor_length),	predictor_hook, NULL, NULL },
     {"%g", 1, "perspective",		MV_O(mv_perspective),		set_perspective, NULL, NULL },
     {"%d", 1, "perspective_mode",	MV_O(mv_perspective_mode),	establish_perspective, NULL, NULL },
     {"%d", 1, "toggle_perspective",	MV_O(mv_toggle_perspective),	toggle_perspective, NULL, NULL },
@@ -140,8 +133,7 @@ set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (m_dmp->dm_mged_variables == mged_variables) {
-	    m_dmp->dm_dirty = 1;
-	    dm_set_dirty(m_dmp->dm_dmp, 1);
+	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
 }
@@ -220,6 +212,14 @@ write_var(ClientData clientData, Tcl_Interp *interp, const char *name1, const ch
 			 " TO ", newvalue, "\n", (char *)NULL);
     }
 
+    /* We don't want to expose mged_variables to the primitive editing code
+     * directly, but MGED uses "set context 1" to trigger a behavior change. Do
+     * a sync here to propagate the value to a more localized value in the
+     * editing context.  We have to first check for s_edit before doing this
+     * assignment (and always initialize it after creating an s_edit instance.)
+     */
+    MEDIT(s)->mv_context = mged_variables->mv_context;
+
     bu_vls_free(&str);
     return read_var(clientData, interp, name1, name2,
 		    (flags&(~TCL_TRACE_WRITES))|TCL_TRACE_READS);
@@ -253,6 +253,9 @@ unset_var(ClientData clientData, Tcl_Interp *interp, const char *name1, const ch
 		 (ClientData)sp);
     read_var(clientData, interp, name1, name2,
 	     (flags&(~TCL_TRACE_UNSETS))|TCL_TRACE_READS);
+
+    MGED_STATE->s_edit->e->mv_context = MGED_STATE->mged_curr_dm->dm_mged_variables->mv_context;
+
     return NULL;
 }
 
@@ -329,6 +332,8 @@ f_set(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     Tcl_AppendResult(interp, bu_vls_addr(&vls), (char *)NULL);
     bu_vls_free(&vls);
 
+    MEDIT(s)->mv_context = mged_variables->mv_context;
+
     return TCL_OK;
 }
 
@@ -356,8 +361,7 @@ set_scroll_private(const struct bu_structparse *UNUSED(sdp),
 		    mged_svbase(s);
 
 		set_scroll(s);		/* set scroll_array for drawing the scroll bars */
-		DMP_dirty = 1;
-		dm_set_dirty(DMP, 1);
+		mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
 	    }
 	}
     }
@@ -380,10 +384,16 @@ set_absolute_tran(struct mged_state *s)
 void
 set_absolute_view_tran(struct mged_state *s)
 {
+    mat_t model2view;
+    void *view_ctx = view_state->vs_gvp;
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+
+    bv_model2view_get(model2view, view);
+
     /* calculate absolute_tran */
-    MAT4X3PNT(view_state->k.tra_v_abs, view_state->vs_gvp->gv_model2view, view_state->vs_orig_pos);
+    MAT4X3PNT(view_state->k.abs_trans_view, model2view, view_state->vs_orig_pos);
     /* This is used in f_knob()  ---- needed in case absolute_tran is set from Tcl */
-    VMOVE(view_state->k.tra_v_abs_last, view_state->k.tra_v_abs);
+    VMOVE(view_state->k.abs_trans_view_last, view_state->k.abs_trans_view);
 }
 
 
@@ -392,18 +402,25 @@ set_absolute_model_tran(struct mged_state *s)
 {
     point_t new_pos;
     point_t diff;
+    mat_t view_center;
+    fastf_t view_scale;
+    void *view_ctx = view_state->vs_gvp;
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+
+    bv_center_mat_get(view_center, view);
+    view_scale = bv_scale_get(view);
 
     /* calculate absolute_model_tran */
-    MAT_DELTAS_GET_NEG(new_pos, view_state->vs_gvp->gv_center);
+    MAT_DELTAS_GET_NEG(new_pos, view_center);
     VSUB2(diff, view_state->vs_orig_pos, new_pos);
-    VSCALE(view_state->k.tra_m_abs, diff, 1/view_state->vs_gvp->gv_scale);
+    VSCALE(view_state->k.abs_trans_model, diff, 1/view_scale);
     /* This is used in f_knob()  ---- needed in case absolute_model_tran is set from Tcl */
-    VMOVE(view_state->k.tra_m_abs_last, view_state->k.tra_m_abs);
+    VMOVE(view_state->k.abs_trans_model_last, view_state->k.abs_trans_model);
 }
 
 
 static void
-set_dlist(const struct bu_structparse *UNUSED(sdp),
+set_backend_cache(const struct bu_structparse *UNUSED(sdp),
 	  const char *UNUSED(name),
 	  void *UNUSED(base),
 	  const char *UNUSED(value),
@@ -413,82 +430,18 @@ set_dlist(const struct bu_structparse *UNUSED(sdp),
     MGED_CK_STATE(s);
     struct mged_dm *save_dlp;
 
-    /* save current display manager */
+    /* The backend owns renderer cache contents.  MGED tracks only the user's
+     * cache policy and dirties affected display managers so the next refresh
+     * applies that policy through the backend resource cache. */
     save_dlp = s->mged_curr_dm;
 
-    if (mged_variables->mv_dlist) {
-	/* create display lists */
-
-	/* for each display manager dlp1 that shares its dm_mged_variables with save_dlp */
-	for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-
-	    struct mged_dm *dlp1 = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-
-	    if (dlp1->dm_mged_variables != save_dlp->dm_mged_variables) {
-		continue;
-	    }
-
-	    if (dm_get_displaylist(dlp1->dm_dmp) &&
-		dlp1->dm_dlist_state->dl_active == 0) {
-		set_curr_dm(s, dlp1);
-		createDLists((void *)s, (struct bu_list *)ged_dl(s->gedp));
-		dlp1->dm_dlist_state->dl_active = 1;
-		dlp1->dm_dirty = 1;
-		dm_set_dirty(dlp1->dm_dmp, 1);
-	    }
-	}
-    } else {
-	/*
-	 * Free display lists if not being used by another display manager
-	 */
-
-	/* for each display manager dlp1 that shares its dm_mged_variables with save_dlp */
-	for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-
-	    struct mged_dm *dlp1 = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-
-	    if (dlp1->dm_mged_variables != save_dlp->dm_mged_variables)
-		continue;
-
-	    if (dlp1->dm_dlist_state->dl_active) {
-		/* for each display manager dlp2 that is sharing display lists with dlp1 */
-		struct mged_dm *dlp2 = MGED_DM_NULL;
-		for (size_t dj = 0; dj < BU_PTBL_LEN(&active_dm_set); dj++) {
-		    struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-
-		    if (m_dmp->dm_dlist_state != dlp1->dm_dlist_state) {
-			continue;
-		    }
-
-		    /* found a dlp2 that is actively using dlp1's display lists */
-		    if (dlp2 && dlp2->dm_mged_variables->mv_dlist) {
-			dlp2 = m_dmp;
-			break;
-		    }
-		}
-
-		/* these display lists are not being used, so free them */
-		if (dlp2 == MGED_DM_NULL) {
-		    struct display_list *gdlp;
-		    struct display_list *next_gdlp;
-
-		    dlp1->dm_dlist_state->dl_active = 0;
-
-		    gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-		    while (BU_LIST_NOT_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp))) {
-			next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-			(void)dm_make_current(dlp1->dm_dmp);
-			(void)dm_free_dlists(dlp1->dm_dmp,
-				      BU_LIST_FIRST(bv_scene_obj, &gdlp->dl_head_scene_obj)->s_dlist,
-				      BU_LIST_LAST(bv_scene_obj, &gdlp->dl_head_scene_obj)->s_dlist -
-				      BU_LIST_FIRST(bv_scene_obj, &gdlp->dl_head_scene_obj)->s_dlist + 1);
-
-			gdlp = next_gdlp;
-		    }
-		}
-	    }
-	}
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
+	struct mged_dm *dlp1 = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+	if (dlp1->dm_mged_variables != save_dlp->dm_mged_variables)
+	    continue;
+	if (dm_get_backend_cache(dlp1->dm_dmp))
+	    dlp1->dm_backend_cache_state->cache_active = mged_variables->mv_backend_cache ? 1 : 0;
+	mged_dm_repaint_request(dlp1, MGED_REPAINT_DEVICE_SETTING);
     }
 
     /* restore current display manager */
@@ -511,8 +464,10 @@ set_perspective(const struct bu_structparse *sdp,
     else
 	mged_variables->mv_perspective_mode = 0;
 
-    /* keep view object in sync */
-    view_state->vs_gvp->gv_perspective = mged_variables->mv_perspective;
+    /* keep view feature in sync */
+    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_perspective_set(view, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -533,8 +488,10 @@ establish_perspective(const struct bu_structparse *sdp,
     mged_variables->mv_perspective = mged_variables->mv_perspective_mode ?
 	perspective_table[perspective_angle] : -1;
 
-    /* keep view object in sync */
-    view_state->vs_gvp->gv_perspective = mged_variables->mv_perspective;
+    /* keep view feature in sync */
+    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_perspective_set(view, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -575,8 +532,10 @@ toggle_perspective(const struct bu_structparse *sdp,
 
     mged_variables->mv_perspective = perspective_table[perspective_angle];
 
-    /* keep view object in sync */
-    view_state->vs_gvp->gv_perspective = mged_variables->mv_perspective;
+    /* keep view feature in sync */
+    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_perspective_set(view, mged_variables->mv_perspective);
 
     /* keep display manager in sync */
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
@@ -594,7 +553,9 @@ set_coords(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    view_state->vs_gvp->gv_coord = mged_variables->mv_coords;
+    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_coord_set(view, mged_variables->mv_coords);
 }
 
 
@@ -607,7 +568,9 @@ set_rotate_about(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    view_state->vs_gvp->gv_rotate_about = mged_variables->mv_rotate_about;
+    void *view_ctx = view_state->vs_gvp;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotate_about_set(view, mged_variables->mv_rotate_about);
 }
 
 

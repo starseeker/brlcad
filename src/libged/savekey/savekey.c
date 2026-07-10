@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -40,15 +42,16 @@
  * due to some oddball hackery in RT to determine old -vs- new format.
  */
 static void
-savekey_rt_oldwrite(struct ged *gedp, FILE *fp, fastf_t *eye_model)
+savekey_rt_oldwrite(FILE *fp, fastf_t view_size, const mat_t rotation,
+	const fastf_t *eye_model)
 {
     int i;
 
-    fprintf(fp, "%.9e\n", gedp->ged_gvp->gv_size);
+    fprintf(fp, "%.9e\n", view_size);
     fprintf(fp, "%.9e %.9e %.9e\n",
 		  eye_model[X], eye_model[Y], eye_model[Z]);
     for (i = 0; i < 16; i++) {
-	fprintf(fp, "%.9e ", gedp->ged_gvp->gv_rotation[i]);
+	fprintf(fp, "%.9e ", rotation[i]);
 	if ((i%4) == 3)
 	    fprintf(fp, "\n");
     }
@@ -61,8 +64,11 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
 {
     FILE *fp;
     fastf_t timearg;
+    mat_t rotation;
+    mat_t view2model;
     vect_t eye_model;
     vect_t temp;
+    void *view_ctx;
     static const char *usage = "file [time]";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -95,9 +101,13 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
     /*
      * Eye is in conventional place.
      */
+    view_ctx = ged_view_active_ctx(gedp);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_rotation_get(rotation, view);
+    bv_view2model_get(view2model, view);
     VSET(temp, 0.0, 0.0, 1.0);
-    MAT4X3PNT(eye_model, gedp->ged_gvp->gv_view2model, temp);
-    savekey_rt_oldwrite(gedp, fp, eye_model);
+    MAT4X3PNT(eye_model, view2model, temp);
+    savekey_rt_oldwrite(fp, bv_size_get(view), rotation, eye_model);
     (void)fclose(fp);
 
     return BRLCAD_OK;

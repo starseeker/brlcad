@@ -50,9 +50,9 @@
 
 #include "raytrace.h"
 
-#include "bv/defines.h"
 #include "dm.h"
 
+#include "ged/draw.h"
 #include "../../ged_private.h"
 #include "../ged_bot.h"
 #include "./ged_bot_dump.h"
@@ -460,7 +460,7 @@ bot_opt_unit(struct bu_vls *UNUSED(msg), size_t argc, const char **argv, void *s
 
 // TODO - right now this is not at all general, and in fact will only write out a few
 // Tcl specific data containers.  Needs to be rethought.  Probably should be revisited
-// after we switch to the new drawing path, which uses bview scene objects - that will
+// after we switch to the new drawing path, which uses bsg_view scene objects - that will
 // likely make writing out a scene simpler overall.
 static int
 viewdata_dump(struct _ged_bot_dump_client_data *d, struct ged *gedp, FILE *fp)
@@ -520,60 +520,72 @@ viewdata_dump(struct _ged_bot_dump_client_data *d, struct ged *gedp, FILE *fp)
     return BRLCAD_OK;
 }
 
-static void
-dl_botdump(struct _ged_bot_dump_client_data *d)
+static int
+botdump_export_record(const struct ged_draw_view_db_object_record *rec,
+		      void *data)
 {
-    struct bu_list *hdlp = (struct bu_list *)ged_dl(d->gedp);
+    struct _ged_bot_dump_client_data *d =
+	(struct _ged_bot_dump_client_data *)data;
+    if (!rec || !d || !rec->is_database_source || !rec->path)
+	return 1;
+
     struct db_i *dbip = d->gedp->dbip;
-    int ret;
+    struct directory *dp;
+    struct rt_db_internal intern;
+    struct rt_bot_internal *bot;
     mat_t mat;
-    struct display_list *gdlp;
+    int ret;
 
     MAT_IDN(mat);
 
-    for (BU_LIST_FOR(gdlp, display_list, hdlp)) {
-	struct bv_scene_obj *sp;
+    const char *path = rec->path;
+    const char *leaf = path ? strrchr(path, '/') : NULL;
+    leaf = leaf ? leaf + 1 : path;
+    if (!leaf || !leaf[0])
+	return 1;
+    dp = db_lookup(dbip, leaf, LOOKUP_QUIET);
+    if (!dp)
+	return 1;
 
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    struct directory *dp;
-	    struct rt_db_internal intern;
-	    struct rt_bot_internal *bot;
+    /* get the internal form */
+    ret = rt_db_get_internal(&intern, dp, dbip, mat);
 
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    dp = bdata->s_fullpath.fp_names[bdata->s_fullpath.fp_len-1];
-
-	    /* get the internal form */
-	    ret = rt_db_get_internal(&intern, dp, dbip, mat);
-
-	    if (ret < 0) {
-		bu_log("rt_get_internal failure %d on %s\n", ret, dp->d_namep);
-		continue;
-	    }
-
-	    if (ret != ID_BOT) {
-		bu_log("%s is not a bot (ignored)\n", dp->d_namep);
-		rt_db_free_internal(&intern);
-		continue;
-	    }
-
-	    /* Write out object color */
-	    if (d->material_info) {
-		d->curr_obj_color_valid = 1;
-		d->curr_obj_red = sp->s_color[0];
-		d->curr_obj_green = sp->s_color[1];
-		d->curr_obj_blue = sp->s_color[2];
-		d->curr_obj_alpha = sp->s_os->transparency;
-	    }
-
-	    bot = (struct rt_bot_internal *)intern.idb_ptr;
-	    _ged_bot_dump(d, dp, NULL, bot);
-	    rt_db_free_internal(&intern);
-	}
+    if (ret < 0) {
+	bu_log("rt_get_internal failure %d on %s\n", ret, dp->d_namep);
+	return 1;
     }
 
+    if (ret != ID_BOT) {
+	bu_log("%s is not a bot (ignored)\n", dp->d_namep);
+	rt_db_free_internal(&intern);
+	return 1;
+    }
+
+    /* Write out object color */
+    if (d->output_type == OTYPE_OBJ) {
+	d->curr_obj_color_valid = 1;
+	d->curr_obj_red = rec->color[0];
+	d->curr_obj_green = rec->color[1];
+	d->curr_obj_blue = rec->color[2];
+	d->curr_obj_alpha = rec->transparency;
+    }
+
+    bot = (struct rt_bot_internal *)intern.idb_ptr;
+    _ged_bot_dump(d, dp, NULL, bot);
+    rt_db_free_internal(&intern);
+    return 1;
+}
+
+static void
+dl_botdump(struct _ged_bot_dump_client_data *d)
+{
+    if (!d || !d->gedp)
+	return;
+    void *view_ctx = ged_view_active_ctx(d->gedp);
+    if (!view_ctx)
+	return;
+    ged_draw_foreach_visible_view_db_object_record(view_ctx,
+	    botdump_export_record, d);
 }
 
 void

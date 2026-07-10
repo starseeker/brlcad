@@ -31,44 +31,47 @@
 
 #include "vmath.h"
 #include "bv.h"
-#include "bv/snap.h"
 
 #include "../ged_private.h"
 
 
 static void
-grid_vsnap(struct ged *gedp)
+grid_vsnap(struct bv *view)
 {
     point_t view_pt;
     point_t model_pt;
+    mat_t model2view;
+    mat_t view2model;
 
-    MAT_DELTAS_GET_NEG(model_pt, gedp->ged_gvp->gv_center);
-    MAT4X3PNT(view_pt, gedp->ged_gvp->gv_model2view, model_pt);
-    bv_snap_grid_2d(gedp->ged_gvp, &view_pt[X], &view_pt[Y]);
-    MAT4X3PNT(model_pt, gedp->ged_gvp->gv_view2model, view_pt);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, model_pt);
-    bv_update(gedp->ged_gvp);
+    bv_center_get(model_pt, view);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
+
+    MAT4X3PNT(view_pt, model2view, model_pt);
+    bv_snap_grid_2d(view, &view_pt[X], &view_pt[Y]);
+    MAT4X3PNT(model_pt, view2model, view_pt);
+    bv_center_set(view, model_pt);
 }
 
 
 static void
-grid_vls_print(struct ged *gedp)
+grid_vls_print(struct ged *gedp, const struct bv_grid_state *grid)
 {
     double blval = (gedp->dbip) ? gedp->dbip->dbi_base2local : 1.0;
     bu_vls_printf(gedp->ged_result_str, "anchor = %g %g %g\n",
-		  gedp->ged_gvp->gv_s->gv_grid.anchor[0] * blval,
-		  gedp->ged_gvp->gv_s->gv_grid.anchor[1] * blval,
-		  gedp->ged_gvp->gv_s->gv_grid.anchor[2] * blval);
+		  grid->anchor[0] * blval,
+		  grid->anchor[1] * blval,
+		  grid->anchor[2] * blval);
     bu_vls_printf(gedp->ged_result_str, "color = %d %d %d\n",
-		  gedp->ged_gvp->gv_s->gv_grid.color[0],
-		  gedp->ged_gvp->gv_s->gv_grid.color[1],
-		  gedp->ged_gvp->gv_s->gv_grid.color[2]);
-    bu_vls_printf(gedp->ged_result_str, "draw = %d\n", gedp->ged_gvp->gv_s->gv_grid.draw);
-    bu_vls_printf(gedp->ged_result_str, "mrh = %d\n", gedp->ged_gvp->gv_s->gv_grid.res_major_h);
-    bu_vls_printf(gedp->ged_result_str, "mrv = %d\n", gedp->ged_gvp->gv_s->gv_grid.res_major_v);
-    bu_vls_printf(gedp->ged_result_str, "rh = %g\n", gedp->ged_gvp->gv_s->gv_grid.res_h * blval);
-    bu_vls_printf(gedp->ged_result_str, "rv = %g\n", gedp->ged_gvp->gv_s->gv_grid.res_v * blval);
-    bu_vls_printf(gedp->ged_result_str, "snap = %d\n", gedp->ged_gvp->gv_s->gv_grid.snap);
+		  grid->color[0],
+		  grid->color[1],
+		  grid->color[2]);
+    bu_vls_printf(gedp->ged_result_str, "draw = %d\n", grid->draw);
+    bu_vls_printf(gedp->ged_result_str, "mrh = %d\n", grid->res_major_h);
+    bu_vls_printf(gedp->ged_result_str, "mrv = %d\n", grid->res_major_v);
+    bu_vls_printf(gedp->ged_result_str, "rh = %g\n", grid->res_h * blval);
+    bu_vls_printf(gedp->ged_result_str, "rv = %g\n", grid->res_v * blval);
+    bu_vls_printf(gedp->ged_result_str, "snap = %d\n", grid->snap);
 }
 
 
@@ -107,6 +110,9 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -129,7 +135,11 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 	if (sscanf(argp[i], "%lf", &user_pt[i]) != 1) {
 	    grid_usage(gedp, argv[0]);
 	    return BRLCAD_ERROR;
-	}
+    }
+
+    struct bv_grid_state grid;
+    if (!bv_grid_state_get(&grid, view))
+	return BRLCAD_ERROR;
 
     // TODO - need more sophisticated grid drawing - when zoomed out too far
     // grid disappears.  Need to simply draw a coarse grid that aligns with the
@@ -141,15 +151,16 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     // points to target...
     if (BU_STR_EQUAL(parameter, "draw")) {
 	if (argc == 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", gedp->ged_gvp->gv_s->gv_grid.draw);
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.draw);
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    i = (int)user_pt[X];
 
 	    if (i)
-		gedp->ged_gvp->gv_s->gv_grid.draw = 1;
+		grid.draw = 1;
 	    else
-		gedp->ged_gvp->gv_s->gv_grid.draw = 0;
+		grid.draw = 0;
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -160,7 +171,8 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 
     if (BU_STR_EQUAL(parameter, "vsnap")) {
 	if (argc == 0) {
-	    grid_vsnap(gedp);
+	    grid_vsnap(view);
+	    ged_view_context_update(view_ctx);
 	    return BRLCAD_OK;
 	}
 
@@ -170,15 +182,16 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 
     if (BU_STR_EQUAL(parameter, "snap")) {
 	if (argc == 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", gedp->ged_gvp->gv_s->gv_grid.snap);
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.snap);
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
 	    i = (int)user_pt[X];
 
 	    if (i)
-		gedp->ged_gvp->gv_s->gv_grid.snap = 1;
+		grid.snap = 1;
 	    else
-		gedp->ged_gvp->gv_s->gv_grid.snap = 0;
+		grid.snap = 0;
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -190,10 +203,11 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     if (BU_STR_EQUAL(parameter, "rh")) {
 	if (argc == 0) {
 	    bu_vls_printf(gedp->ged_result_str, "%g",
-			  gedp->ged_gvp->gv_s->gv_grid.res_h * blval);
+			  grid.res_h * blval);
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
-	    gedp->ged_gvp->gv_s->gv_grid.res_h = user_pt[X] * lbval;
+	    grid.res_h = user_pt[X] * lbval;
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -205,10 +219,11 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     if (BU_STR_EQUAL(parameter, "rv")) {
 	if (argc == 0) {
 	    bu_vls_printf(gedp->ged_result_str, "%g",
-			  gedp->ged_gvp->gv_s->gv_grid.res_v * blval);
+			  grid.res_v * blval);
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
-	    gedp->ged_gvp->gv_s->gv_grid.res_v = user_pt[X] * lbval;
+	    grid.res_v = user_pt[X] * lbval;
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -219,10 +234,11 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 
     if (BU_STR_EQUAL(parameter, "mrh")) {
 	if (argc == 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", gedp->ged_gvp->gv_s->gv_grid.res_major_h);
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.res_major_h);
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
-	    gedp->ged_gvp->gv_s->gv_grid.res_major_h = (int)user_pt[X];
+	    grid.res_major_h = (int)user_pt[X];
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -233,10 +249,11 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
 
     if (BU_STR_EQUAL(parameter, "mrv")) {
 	if (argc == 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", gedp->ged_gvp->gv_s->gv_grid.res_major_v);
+	    bu_vls_printf(gedp->ged_result_str, "%d", grid.res_major_v);
 	    return BRLCAD_OK;
 	} else if (argc == 1) {
-	    gedp->ged_gvp->gv_s->gv_grid.res_major_v = (int)user_pt[X];
+	    grid.res_major_v = (int)user_pt[X];
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -248,14 +265,15 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     if (BU_STR_EQUAL(parameter, "anchor")) {
 	if (argc == 0) {
 	    bu_vls_printf(gedp->ged_result_str, "%g %g %g",
-			  gedp->ged_gvp->gv_s->gv_grid.anchor[X] * blval,
-			  gedp->ged_gvp->gv_s->gv_grid.anchor[Y] * blval,
-			  gedp->ged_gvp->gv_s->gv_grid.anchor[Z] * blval);
+			  grid.anchor[X] * blval,
+			  grid.anchor[Y] * blval,
+			  grid.anchor[Z] * blval);
 	    return BRLCAD_OK;
 	} else if (argc == 3) {
-	    gedp->ged_gvp->gv_s->gv_grid.anchor[0] = user_pt[X] * lbval;
-	    gedp->ged_gvp->gv_s->gv_grid.anchor[1] = user_pt[Y] * lbval;
-	    gedp->ged_gvp->gv_s->gv_grid.anchor[2] = user_pt[Z] * lbval;
+	    grid.anchor[0] = user_pt[X] * lbval;
+	    grid.anchor[1] = user_pt[Y] * lbval;
+	    grid.anchor[2] = user_pt[Z] * lbval;
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -267,14 +285,15 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     if (BU_STR_EQUAL(parameter, "color")) {
 	if (argc == 0) {
 	    bu_vls_printf(gedp->ged_result_str, "%d %d %d",
-			  gedp->ged_gvp->gv_s->gv_grid.color[X],
-			  gedp->ged_gvp->gv_s->gv_grid.color[Y],
-			  gedp->ged_gvp->gv_s->gv_grid.color[Z]);
+			  grid.color[X],
+			  grid.color[Y],
+			  grid.color[Z]);
 	    return BRLCAD_OK;
 	} else if (argc == 3) {
-	    gedp->ged_gvp->gv_s->gv_grid.color[0] = (int)user_pt[X];
-	    gedp->ged_gvp->gv_s->gv_grid.color[1] = (int)user_pt[Y];
-	    gedp->ged_gvp->gv_s->gv_grid.color[2] = (int)user_pt[Z];
+	    grid.color[0] = (int)user_pt[X];
+	    grid.color[1] = (int)user_pt[Y];
+	    grid.color[2] = (int)user_pt[Z];
+	    bv_grid_state_set(view, &grid);
 
 	    return BRLCAD_OK;
 	}
@@ -284,7 +303,7 @@ ged_grid_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (BU_STR_EQUAL(parameter, "vars")) {
-	grid_vls_print(gedp);
+	grid_vls_print(gedp, &grid);
 	return BRLCAD_OK;
     }
 

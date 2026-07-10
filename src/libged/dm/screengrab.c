@@ -30,6 +30,7 @@
 #include <string.h>
 #include "icv.h"
 #include "dm.h"
+#include "ged/draw_obol.h"
 
 #include "../ged_private.h"
 
@@ -98,17 +99,18 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 
     argc = opt_ret;
 
-    struct dm *cdmp = (gedp->ged_gvp) ? (struct dm *)gedp->ged_gvp->dmp : NULL;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct dm *cdmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
 
-    if (bu_vls_strlen(&dm_name) && gedp->ged_gvp) {
+    if (bu_vls_strlen(&dm_name) && view_ctx) {
 	// We have a name - see if we can match it.
-	struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
+	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t j = 0; j < BU_PTBL_LEN(views); j++) {
 	    if (dmp)
 		break;
-	    struct bview *gdvp = (struct bview *)BU_PTBL_GET(views, j);
-	    struct dm *ndmp = (struct dm *)gdvp->dmp;
-	    if (!bu_vls_strcmp(dm_get_pathname(ndmp), &dm_name))
+	    void *listed_view_ctx = (void *)BU_PTBL_GET(views, j);
+	    struct dm *ndmp = (struct dm *)ged_view_context_display_manager_get(listed_view_ctx);
+	    if (ndmp && !bu_vls_strcmp(dm_get_pathname(ndmp), &dm_name))
 		dmp = ndmp;
 	}
 	if (!dmp) {
@@ -147,9 +149,16 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 	bytes_per_pixel = 3;
 	bytes_per_line = dm_get_width(dmp) * bytes_per_pixel;
 
-	dm_get_display_image(dmp, &idata, 1, 0);
+	(void)ged_obol_fbserv_present(gedp);
+	int obol_image = ged_draw_obol_view_display_image(gedp, view_ctx, &idata, 1, 0);
+	if (obol_image < 0) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Obol view did not return image data.", argv[0]);
+	    return BRLCAD_ERROR;
+	}
+	if (!obol_image)
+	    dm_get_display_image(dmp, &idata, 1, 0);
 	if (!idata) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: display manager did not return image data.", argv[1]);
+	    bu_vls_printf(gedp->ged_result_str, "%s: display manager did not return image data.", argv[0]);
 	    return BRLCAD_ERROR;
 	}
 	bif = icv_image_create(dm_get_width(dmp), dm_get_height(dmp), ICV_COLOR_SPACE_RGB);

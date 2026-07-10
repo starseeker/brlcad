@@ -35,20 +35,74 @@ extern "C" {
 #include "bu/opt.h"
 #include "wdb.h"
 }
+#include "bg/line_layer.h"
+#include "ged/draw.h"
+#include "ged/event_txn.h"
 #include "./ged_lint.h"
+#include "../ged_private.h"
 
 lint_data::lint_data()
 {
     color = NULL;
-    vlfree = &rt_vlfree;
-    vbp = bv_vlblock_init(vlfree, 32);
 }
 
 lint_data::~lint_data()
 {
-    bv_vlblock_free(vbp);
-    vbp = NULL;
-    vlfree = NULL;
+    if (plot_points)
+	bu_free(plot_points, "lint plot points");
+    if (plot_cmds)
+	bu_free(plot_cmds, "lint plot commands");
+    plot_points = NULL;
+    plot_cmds = NULL;
+    plot_point_count = 0;
+    plot_point_capacity = 0;
+}
+
+void
+lint_data::plot_append_triangle(struct rt_bot_internal *bot, int tri_ind)
+{
+    if (!do_plot || !bot || tri_ind < 0)
+	return;
+
+    point_t v[3];
+    for (int i = 0; i < 3; i++)
+	VMOVE(v[i], &bot->vertices[bot->faces[tri_ind*3+i]*3]);
+
+    if (plot_point_count + 4 > plot_point_capacity) {
+	size_t ncap = plot_point_capacity ? plot_point_capacity * 2 : 64;
+	while (ncap < plot_point_count + 4)
+	    ncap *= 2;
+	plot_points = (point_t *)bu_realloc(plot_points,
+		ncap * sizeof(point_t), "lint plot points");
+	plot_cmds = (int *)bu_realloc(plot_cmds,
+		ncap * sizeof(int), "lint plot commands");
+	plot_point_capacity = ncap;
+    }
+    VMOVE(plot_points[plot_point_count], v[0]);
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_MOVE;
+    VMOVE(plot_points[plot_point_count], v[1]);
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_DRAW;
+    VMOVE(plot_points[plot_point_count], v[2]);
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_DRAW;
+    VMOVE(plot_points[plot_point_count], v[0]);
+    plot_cmds[plot_point_count++] = BG_GEOMETRY_LINE_DRAW;
+}
+
+void
+lint_data::plot_publish(const char *name)
+{
+    if (!do_plot || !gedp || !name)
+	return;
+
+    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    unsigned char rgb[3] = {255, 255, 0};
+    if (color)
+	bu_color_to_rgb_chars(color, rgb);
+    style.color_valid = 1;
+    VSET(style.color, rgb[0], rgb[1], rgb[2]);
+    (void)_ged_line_set_publish_command_scene_feature(gedp, name,
+	    (const point_t *)plot_points, plot_cmds, plot_point_count, &style,
+	    "lint", "command-result", NULL, "lint-visual", 0);
 }
 
 std::string
@@ -483,12 +537,7 @@ ged_lint_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (visualize) {
-	struct bview *view = gedp->ged_gvp;
-	if (gedp->new_cmd_forms) {
-	    bv_vlblock_obj(ldata.vbp, view, "lint_visual");
-	} else {
-	    _ged_cvt_vlblock_to_solids(gedp, ldata.vbp, "lint_visual", 0);
-	}
+	ldata.plot_publish("lint_visual");
     }
 
     if (dpa)
@@ -531,11 +580,21 @@ ged_lint_core(struct ged *gedp, int argc, const char *argv[])
 	if (onames.size()) {
 	    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
 	    struct wmember wcomb;
+	    int event_batch_opened = 0;
 	    BU_LIST_INIT(&wcomb.l);
 	    std::set<std::string>::iterator o_it;
 	    for (o_it = onames.begin(); o_it != onames.end(); o_it++)
 		(void)mk_addmember(o_it->c_str(), &(wcomb.l), NULL, DB_OP_UNION);
-	    mk_lcomb(wdbp, bu_vls_cstr(&gname), &wcomb, 1, NULL, NULL, NULL, 0);
+	    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	    if (mk_lcomb(wdbp, bu_vls_cstr(&gname), &wcomb, 1, NULL, NULL, NULL, 0) == 0) {
+		(void)ged_event_notify_object_added(gedp, bu_vls_cstr(&gname), NULL);
+	    } else {
+		bu_vls_printf(gedp->ged_result_str, "Failed to write lint output comb %s\n",
+			bu_vls_cstr(&gname));
+		ret = BRLCAD_ERROR;
+	    }
+	    if (event_batch_opened)
+		ged_event_batch_end(gedp, NULL);
 	}
     }
 

@@ -47,6 +47,9 @@ brlcad_addexec(rt_diff diff.c "${RT_TEST_LIBS}" TEST)
 brlcad_addexec(rt_default_object default_object.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_default_object COMMAND rt_default_object)
 
+brlcad_addexec(rt_fullpath_color fullpath_color.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_fullpath_color COMMAND rt_fullpath_color)
+
 if(BRLCAD_ENABLE_BINARY_ATTRIBUTES)
   brlcad_addexec(rt_binary_attribute binary_attribute.c "${RT_TEST_LIBS}" TEST)
   brlcad_add_test(NAME rt_binary_attribute COMMAND rt_binary_attribute)
@@ -76,11 +79,12 @@ brlcad_add_test(NAME rt_cache_serial_multiple_different_objects COMMAND rt_cache
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects  COMMAND rt_cache 6 10)
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects_hierarchy_1  COMMAND rt_cache 7 10)
 
-# lod testing
-brlcad_addexec(rt_lod lod.c "librt;libbg;${M_LIBRARY}" TEST)
+# RT view snapshot and transitional BSG adapter testing
+brlcad_addexec(rt_view_info view_info.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_view_info COMMAND rt_view_info)
 
-# bv_polygon <-> sketch testing
-brlcad_addexec(rt_bv_poly_sketch bv_poly_sketch.c "librt;libbv;${M_LIBRARY}" TEST)
+# view polygon <-> sketch testing
+brlcad_addexec(rt_poly_sketch poly_sketch.c "librt;libbg;libbu;${M_LIBRARY}" TEST)
 
 # arb8 testing
 brlcad_addexec(rt_arb8 arb8_tests.c "librt;libwdb;libbg;libbu;${M_LIBRARY}" TEST)
@@ -133,6 +137,7 @@ set(
   default_object.c
   dsp_raytrace_check.c
   dsp_sa_vol_check.c
+  fullpath_color.c
   brep_boolean_tests.g
   cyclic_tests.g
   extreme_ssi_test.g
@@ -140,6 +145,7 @@ set(
   nurbs_surfaces.g
   rt_datum.c
   rt_perturb.c
+  view_info.c
   search_stress.c
   sketch.g
   prim_tess.c

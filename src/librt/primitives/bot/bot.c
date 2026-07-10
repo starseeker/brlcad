@@ -30,6 +30,7 @@
 #include <string.h> // needed for memset, memcpy, and strlen
 #include <ctype.h> // needed for isdigit() and isspace() in rt_bot_adjust
 
+#include "bg/polygon.h"
 #include "bg/trimesh.h" // needed for the call in rt_bot_bbox
 #include "bg/tri_ray.h"
 #include "vmath.h"
@@ -1920,7 +1921,10 @@ rt_bot_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 	    bot_ip->thickness[i] = scan; /* convert double to fastf_t */
 	}
 
-	bot_ip->face_mode = bu_hex_to_bitv((const char *)(&rp->bot.bot_data[chars_used + bot_ip->num_faces * 8]));
+	const char *face_mode =
+	    (const char *)(&rp->bot.bot_data[chars_used + bot_ip->num_faces * 8]);
+	bot_ip->face_mode = face_mode[0] ? bu_hex_to_bitv(face_mode) :
+			    (struct bu_bitv *)NULL;
     } else {
 	bot_ip->thickness = (fastf_t *)NULL;
 	bot_ip->face_mode = (struct bu_bitv *)NULL;
@@ -2157,7 +2161,8 @@ rt_bot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 	    bip->thickness[i] = scan; /* convert double to fastf_t */
 	    cp += SIZEOF_NETWORK_DOUBLE;
 	}
-	bip->face_mode = bu_hex_to_bitv((const char *)cp);
+	bip->face_mode = cp[0] ? bu_hex_to_bitv((const char *)cp) :
+			 (struct bu_bitv *)NULL;
 	while (*(cp++) != '\0');
     } else {
 	bip->thickness = (fastf_t *)NULL;

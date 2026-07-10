@@ -31,6 +31,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QApplication>
+#include <QSurfaceFormat>
 #include <QTextStream>
 
 #include "bu/app.h"
@@ -88,7 +89,7 @@ main(int argc, char **argv)
     BU_OPT(d[0],  "h", "help",   "", NULL, &print_help,    "Print help and exit");
     BU_OPT(d[1],  "?", "",       "", NULL, &print_help,    "");
     BU_OPT(d[2],  "c", "no-gui", "", NULL, &console_mode,  "Run without GUI");
-    BU_OPT(d[3],  "s", "swrast", "", NULL, &swrast_mode,   "Use software rendering for 3D view");
+    BU_OPT(d[3],  "s", "swrast", "", NULL, &swrast_mode,   "Use offscreen rendering for 3D view");
     BU_OPT(d[4],  "4", "quad",   "", NULL, &quad_mode,     "Launch using quad view");
     BU_OPT_NULL(d[5]);
 
@@ -140,6 +141,20 @@ main(int argc, char **argv)
 	bu_log("Unimplemented\n");
 	return BRLCAD_ERROR;
     }
+
+    // Qt6 requires QSurfaceFormat::setDefaultFormat() to be called BEFORE
+    // QApplication is constructed.  Without specifying QSurfaceFormat::OpenGL
+    // here, Qt's RHI layer may fall back to OpenGL ES (QRhiGles2) even on a
+    // desktop system, causing context-creation failures at runtime.
+#ifdef BRLCAD_OPENGL
+    if (!swrast_mode) {
+	QSurfaceFormat fmt;
+	fmt.setRenderableType(QSurfaceFormat::OpenGL);
+	fmt.setDepthBufferSize(24);
+	fmt.setStencilBufferSize(8);
+	QSurfaceFormat::setDefaultFormat(fmt);
+    }
+#endif
 
     // We derive our own app type from QApplication
     QgEdApp app(argc, argv, swrast_mode, quad_mode);

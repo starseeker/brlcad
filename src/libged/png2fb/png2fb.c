@@ -147,12 +147,13 @@ ged_png2fb_core(struct ged *gedp, int argc, const char *argv[])
 
     struct png2fb_state p2fbs = PNG2FB_STATE_INIT_ZERO;
 
-    if (!gedp->ged_gvp) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "no current view set\n");
 	return BRLCAD_ERROR;
     }
 
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
     if (!dmp) {
 	bu_vls_printf(gedp->ged_result_str, "no display manager currently active");
 	return BRLCAD_ERROR;

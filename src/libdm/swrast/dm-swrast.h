@@ -32,8 +32,6 @@ extern "C" {
 #include "OSMesa/gl.h"
 #include "OSMesa/osmesa.h"
 
-#include "bv.h"
-
 /* For portable text in OpenGL, use fontstash */
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic push
@@ -64,7 +62,7 @@ extern "C" {
 extern struct dm dm_swrast;
 
 struct swrast_vars {
-    struct bview *v;
+    void *view_ctx;
     OSMesaContext ctx;
     void *os_b;
     struct FONScontext *fs;

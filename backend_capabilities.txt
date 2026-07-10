@@ -1,0 +1,101 @@
+Obol/libbrlobol Backend Capabilities
+====================================
+
+Last refreshed: 2026-07-07
+
+Purpose
+-------
+
+This file tracks the current backend migration state for retiring libbsg and
+legacy libdm-driven drawing from GED/qtcad workflows.  Active design state
+lives in `obol_activework.txt` and `doc/notes/`.
+
+Target Backend Contract
+-----------------------
+
+* Public and cross-library contracts stay neutral unless explicitly
+  libbrlobol-facing.
+* Obol/libbrlobol owns concrete scene, source, feature, polygon, render,
+  framebuffer, and display backend behavior.
+* libbv owns only non-scene view mechanics.
+* libbsg must not be an active fallback for migrated database draw behavior.
+* libdm adapters are transitional display/window/protocol glue, not long-term
+  drawing ownership.
+* Missing Obol ownership should be fixed directly or reported as explicit
+  no-op behavior, not hidden behind retained BSG records.
+
+Capability Status
+-----------------
+
+Database scene and source ownership: migrated for active draw flows.
+
+* GED owns an Obol scene controller and delegates database draw, erase,
+  redraw, source records, bounds, material, and path-state behavior through
+  Obol/libbrlobol.
+* Retained BSG database-source records are not an active fallback.
+* Source-local geometry, explicit instance transforms, material/color-table
+  refresh, and primitive `rt_db_internal` publication are libbrlobol
+  responsibilities.
+
+View feature, polygon, and selection stores: mostly migrated.
+
+* Obol/libbrlobol stores view features, annotations, polygons, line sets, and
+  command visuals.
+* No-owned-scene cases should return empty/no-op results.
+* Remaining work is primarily caller cleanup and removal of legacy wrapper
+  placement.
+
+Render/export/readback: partially migrated.
+
+* Obol record/query paths exist for migrated scene objects.
+* Application readback and older test baselines still need cleanup where they
+  depend on libdm or retained display behavior.
+
+Display stream and framebuffer: transitional.
+
+* qtcad ordinary painting is Obol-only.
+* qged uses a libbrlobol framebuffer stream bridge for fbserv traffic.
+* GSH and MGED have Obol attach/screengrab/ERT smoke coverage.
+* fbserv packet parsing remains in libdm and should move later to a small
+  image/framebuffer protocol layer beside libimgstream/libicv.
+
+Application host ownership: in progress.
+
+* `dm-obol` provides headless Obol display attachment.
+* High-level GED draw transactions are the intended application interface.
+* qged, MGED/TclCAD, and GSH still need cleanup around input, faceplate,
+  refresh, readback, and old display-manager assumptions.
+
+Current Guards
+--------------
+
+* `brlobol_pivot_guard` is now a compact boundary guard.  It checks guarded
+  dependency rows, retired BSG draw tests, public header leaks, legacy include
+  allowlists, retired GED draw helpers, and active Obol/qtcad BSG/DM scans.
+  It intentionally does not preserve thousands of historical implementation
+  token checks.
+* `libbsg_api_hygiene` tracks public dependency leaks.
+* Obol draw/view command tests cover the primary active paths.
+* qtcad progressive LoD and framebuffer tests cover the main Qt host behavior.
+
+Next Backend Steps
+------------------
+
+1. Remove or migrate remaining production callers of retained BSG and
+   scene-ref compatibility paths.
+2. Move neutral RT view wrappers out of legacy BSG source files.
+3. Finish Obol-native qged/MGED/TclCAD/GSH display host behavior: view
+   creation, input, refresh, faceplate, screengrab, and framebuffer updates.
+4. Move fbserv wire protocol ownership out of libdm after ERT smoke behavior
+   is stable across qged, MGED, and GSH.
+5. Replace old draw/image tests with Obol baselines once rendering differences
+   are understood and accepted.
+6. Continue deleting libbsg tests and paths when Obol coverage is equivalent
+   or better.
+
+Verification
+------------
+
+* `ninja -C .build`
+* `ctest --test-dir .build -R 'brlobol_pivot_guard|libbsg_api_hygiene|ged_test_obol_draw_sync|ged_test_view_command|test_qtcad_obol|mged_obol|gsh_obol' --output-on-failure`
+* `git diff --check`

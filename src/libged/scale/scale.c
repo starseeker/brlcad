@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "bv/defines.h"
+#include "bv.h"
 
 #include "../ged_private.h"
 
@@ -53,14 +53,16 @@ ged_scale_core(struct ged *gedp, int argc, const char *argv[])
     if (sf1 <= SMALL_FASTF || INFINITY < sf1)
 	return BRLCAD_OK;
 
-    /* scale the view */
-    gedp->ged_gvp->gv_scale *= sf1;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
-    if (gedp->ged_gvp->gv_scale < BV_MINVIEWSIZE)
-	gedp->ged_gvp->gv_scale = BV_MINVIEWSIZE;
-    gedp->ged_gvp->gv_size = 2.0 * gedp->ged_gvp->gv_scale;
-    gedp->ged_gvp->gv_isize = 1.0 / gedp->ged_gvp->gv_size;
-    bv_update(gedp->ged_gvp);
+    /* scale the view */
+    fastf_t view_scale = bv_scale_get(view) * sf1;
+    if (view_scale < BV_MIN_SIZE)
+	view_scale = BV_MIN_SIZE;
+
+    bv_scale_set(view, view_scale);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

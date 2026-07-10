@@ -38,7 +38,9 @@ extern void *fb_backends;
 #include <stdlib.h>
 
 #include "vmath.h"
+#include "bg/vlist.h"
 #include "dm.h"
+#include "rt/view.h"
 
 #include "./calltable.h"
 
@@ -52,14 +54,14 @@ extern void *fb_backends;
  * GED is using -2048..+2048,
  * X is 0..width, 0..height
  */
-#define DIVBY4096(x) (((double)(x))*INV_4096)
+#define DIVBY4096(x) (((double)(x))*RT_INV_4096)
 #define GED_TO_Xx(_dmp, x) ((int)((DIVBY4096(x)+0.5)*_dmp->i->dm_width))
 #define GED_TO_Xy(_dmp, x) ((int)((0.5-DIVBY4096(x))*_dmp->i->dm_height))
-#define Xx_TO_GED(_dmp, x) ((int)(((x)/(double)_dmp->i->dm_width - 0.5) * BV_RANGE))
-#define Xy_TO_GED(_dmp, x) ((int)((0.5 - (x)/(double)_dmp->i->dm_height) * BV_RANGE))
+#define Xx_TO_GED(_dmp, x) ((int)(((x)/(double)_dmp->i->dm_width - 0.5) * RT_VIEW_RANGE))
+#define Xy_TO_GED(_dmp, x) ((int)((0.5 - (x)/(double)_dmp->i->dm_height) * RT_VIEW_RANGE))
 
 /* +-2048 to +-1 */
-#define GED_TO_PM1(x) (((fastf_t)(x))*INV_BV)
+#define GED_TO_PM1(x) (((fastf_t)(x))*RT_INV_VIEW)
 
 
 /* Line Styles */
@@ -106,6 +108,111 @@ DM_EXPORT extern struct fb remote_interface; /* not in list[] */
 /* Always included */
 extern struct fb debug_interface, disk_interface, stk_interface;
 extern struct fb memory_interface, fb_null_interface;
+
+struct imgstream_fb;
+struct fb_imgstream_compat {
+    struct imgstream_fb *fb;
+    const char *spec;
+};
+
+DM_EXPORT extern int fb_imgstream_compat_supported(const char *spec);
+DM_EXPORT extern int fb_imgstream_compat_active(const struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_open(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	const char *spec,
+	int width,
+	int height);
+DM_EXPORT extern int fb_imgstream_compat_close(struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_configure(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	int width,
+	int height);
+DM_EXPORT extern int fb_imgstream_compat_flush(struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_poll(struct fb *ifp,
+	struct fb_imgstream_compat *compat);
+DM_EXPORT extern int fb_imgstream_compat_clear(struct fb_imgstream_compat *compat,
+	unsigned char *rgb);
+DM_EXPORT extern ssize_t fb_imgstream_compat_read(
+	const struct fb_imgstream_compat *compat,
+	int x,
+	int y,
+	unsigned char *rgb,
+	size_t count);
+DM_EXPORT extern ssize_t fb_imgstream_compat_write(
+	struct fb_imgstream_compat *compat,
+	int x,
+	int y,
+	const unsigned char *rgb,
+	size_t count);
+DM_EXPORT extern int fb_imgstream_compat_readrect(
+	const struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	unsigned char *rgb);
+DM_EXPORT extern int fb_imgstream_compat_writerect(
+	struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	const unsigned char *rgb);
+DM_EXPORT extern int fb_imgstream_compat_bwreadrect(
+	const struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	unsigned char *bw);
+DM_EXPORT extern int fb_imgstream_compat_bwwriterect(
+	struct fb_imgstream_compat *compat,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	const unsigned char *bw);
+DM_EXPORT extern int fb_imgstream_compat_view(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	int xcenter,
+	int ycenter,
+	int xzoom,
+	int yzoom);
+DM_EXPORT extern int fb_imgstream_compat_getview(
+	const struct fb_imgstream_compat *compat,
+	int *xcenter,
+	int *ycenter,
+	int *xzoom,
+	int *yzoom);
+DM_EXPORT extern int fb_imgstream_compat_cursor(struct fb *ifp,
+	struct fb_imgstream_compat *compat,
+	int mode,
+	int x,
+	int y);
+DM_EXPORT extern int fb_imgstream_compat_getcursor(
+	const struct fb_imgstream_compat *compat,
+	int *mode,
+	int *x,
+	int *y);
+DM_EXPORT extern int fb_imgstream_compat_setcursor(
+	struct fb_imgstream_compat *compat,
+	const unsigned char *bits,
+	int xbits,
+	int ybits,
+	int xorig,
+	int yorig);
+DM_EXPORT extern int fb_imgstream_compat_rmap(
+	const struct fb_imgstream_compat *compat,
+	ColorMap *cmap);
+DM_EXPORT extern int fb_imgstream_compat_wmap(
+	struct fb_imgstream_compat *compat,
+	const ColorMap *cmap);
+
+/* Private direct-device drawing for in-tree utilities and backend adapters.
+ * Normal application drawing must use retained render records instead. */
+DM_EXPORT extern int dm_draw_device_vlist(struct dm *dmp, bg_vlist *vp);
+DM_EXPORT extern int dm_draw_device_bg_vlist(struct dm *dmp, bg_vlist *vp);
+DM_EXPORT extern int dm_draw_device_vlist_hidden_line(struct dm *dmp, bg_vlist *vp);
 
 /* Shared memory (shmget et. al.) key common to multiple framebuffers */
 #define SHMEM_KEY 42
@@ -191,8 +298,8 @@ __END_DECLS
     static int _dmtype##_drawPoint2D(struct dm *dmp, fastf_t x, fastf_t y); \
     static int _dmtype##_drawPoint3D(struct dm *dmp, point_t point); \
     static int _dmtype##_drawPoints3D(struct dm *dmp, int npoints, point_t *points); \
-    static int _dmtype##_drawVList(struct dm *dmp, struct bv_vlist *vp); \
-    static int _dmtype##_draw(struct dm *dmp, struct bv_vlist *(*callback_function)(void *), void **data); \
+    static int _dmtype##_drawVList(struct dm *dmp, bg_vlist *vp); \
+    static int _dmtype##_draw(struct dm *dmp, bg_vlist *(*callback_function)(void *), void **data); \
     static int _dmtype##_setFGColor(struct dm *dmp, unsigned char r, unsigned char g, unsigned char b, int strict, fastf_t transparency); \
     static int _dmtype##_setBGColor(struct dm *dmp, unsigned char r, unsigned char g, unsigned char b); \
     static int _dmtype##_setLineAttr(struct dm *dmp, int width, int style); \
@@ -204,10 +311,6 @@ __END_DECLS
     static int _dmtype##_setZBuffer(struct dm *dmp, int zbuffer_on); \
     static int _dmtype##_setWinBounds(struct dm *dmp, fastf_t *w); \
     static int _dmtype##_debug(struct dm *dmp, int lvl); \
-    static int _dmtype##_beginDList(struct dm *dmp, unsigned int list); \
-    static int _dmtype##_endDList(struct dm *dmp); \
-    static int _dmtype##_drawDList(struct dm *dmp, unsigned int list); \
-    static int _dmtype##_freeDLists(struct dm *dmp, unsigned int list, int range); \
     static int _dmtype##_getDisplayImage(struct dm *dmp, unsigned char **image);
 
 #endif /* DM_PRIVATE_H */

@@ -32,6 +32,8 @@
 #include "raytrace.h"
 #include "rt/rt_ecmds.h"
 
+#include "edit_test_view.h"
+
 
 struct directory *
 make_ell(struct rt_wdb *wdbp)
@@ -130,22 +132,12 @@ return BRLCAD_ERROR;
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
 
-    /* Set up a view matching the tor test for comparability */
-    struct bview *v;
-    BU_GET(v, struct bview);
-    bv_init(v, NULL);
-    VSET(v->gv_aet, 45, 35, 0);
-    bv_mat_aet(v);
-    v->gv_size = 73.3197;
-    v->gv_isize = 1.0 / v->gv_size;
-    v->gv_scale = 0.5 * v->gv_size;
-    bv_update(v);
-    bu_vls_sprintf(&v->gv_name, "default");
-    v->gv_width = 512;
-    v->gv_height = 512;
+    /* Set up a view matching the tor test for comparability. */
+    struct rt_edit_view v;
+    rt_edit_test_view_init(&v);
 
     /* Set up rt_edit container */
-    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, v);
+    struct rt_edit *s = rt_edit_create(&fp, dbip, &tol, &v);
     s->mv_context = 1;
 
     /* Direct access to the working ellipsoid */
@@ -458,8 +450,8 @@ bu_exit(1, "ERROR: RT_PARAMS_EDIT_ROT(k) mv_context=0 failed rotating ell\n");
     {
 int xpos = 1372;
 int ypos = 1383;
-mousevec[X] = xpos * INV_BV;
-mousevec[Y] = ypos * INV_BV;
+mousevec[X] = xpos * RT_INV_VIEW;
+mousevec[Y] = ypos * RT_INV_VIEW;
 mousevec[Z] = 0;
     }
 
@@ -467,7 +459,7 @@ mousevec[Z] = 0;
     if ((*EDOBJ[dp->d_minor_type].ft_edit_xy)(s, mousevec) == BRLCAD_ERROR)
 bu_exit(1, "ERROR: ECMD_ELL_SCALE_A (xy) failed ft_edit_xy call: %s\n", bu_vls_cstr(s->log_str));
 
-    /* es_scale = 1.0 + 0.25 * |ypos * INV_BV| = 1 + 0.25*0.67529... = 1.16882...
+    /* es_scale = 1.0 + 0.25 * |ypos * RT_INV_VIEW| = 1 + 0.25*0.67529... = 1.16882...
      * a_new = a * es_scale = (4*1.16882..., 0, 0) */
     VMOVE(cmp_ell->v, orig_ell->v);
     VMOVE(cmp_ell->b, orig_ell->b);
@@ -493,8 +485,8 @@ bu_exit(1, "ERROR: ECMD_ELL_SCALE_A(xy) failed scaling ell a param\n");
     {
 int xpos = 1482;
 int ypos = 762;
-mousevec[X] = xpos * INV_BV;
-mousevec[Y] = ypos * INV_BV;
+mousevec[X] = xpos * RT_INV_VIEW;
+mousevec[Y] = ypos * RT_INV_VIEW;
 mousevec[Z] = 0;
     }
 
@@ -527,8 +519,8 @@ bu_exit(1, "ERROR: RT_PARAMS_EDIT_TRANS(xy) failed translating ell\n");
     {
 int xpos = 100;
 int ypos = -50;
-mousevec[X] = xpos * INV_BV;
-mousevec[Y] = ypos * INV_BV;
+mousevec[X] = xpos * RT_INV_VIEW;
+mousevec[Y] = ypos * RT_INV_VIEW;
 mousevec[Z] = 0;
     }
 

@@ -50,6 +50,8 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "ged.h"
+#include "ged/view.h"
+#include "rt/view.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -71,7 +73,7 @@ mged_dm_motion(struct mged_state *s, int x, int y)
     xmotion.x = x;
     xmotion.y = y;
     motion_event_handler(s, &xmotion);
-    dm_set_dirty(DMP, 1);
+    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
     return TCL_RETURN;
 #else
     (void)s;
@@ -108,7 +110,8 @@ doEvent(ClientData clientData, XEvent *eventPtr)
 
     /* calling the display manager specific event handler */
     status = dm_doevent(DMP, clientData, eventPtr);
-    DMP_dirty = dm_get_dirty(DMP);
+    if (dm_get_native_repaint_pending(DMP))
+	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_NATIVE_EVENT);
 
     /* no further processing of this event */
     if (status != TCL_OK) {
@@ -125,8 +128,7 @@ doEvent(ClientData clientData, XEvent *eventPtr)
 
 	dm_configure_win(DMP, 0);
 	rect_image2view(s);
-	DMP_dirty = 1;
-	dm_set_dirty(DMP, 1);
+	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_NATIVE_EVENT);
 
 	if (fbp)
 	    (void)fb_configure_window(fbp, conf->width, conf->height);
@@ -135,19 +137,19 @@ doEvent(ClientData clientData, XEvent *eventPtr)
 	status = TCL_RETURN;
     } else if (eventPtr->type == MapNotify) {
 	mapped = 1;
-	dm_set_dirty(DMP, 1);
+	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_NATIVE_EVENT);
 
 	/* no further processing of this event */
 	status = TCL_RETURN;
     } else if (eventPtr->type == UnmapNotify) {
 	mapped = 0;
-	dm_set_dirty(DMP, 1);
+	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_NATIVE_EVENT);
 
 	/* no further processing of this event */
 	status = TCL_RETURN;
     } else if (eventPtr->type == MotionNotify) {
 	motion_event_handler(s, (XMotionEvent *)eventPtr);
-	dm_set_dirty(DMP, 1);
+	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
 	/* no further processing of this event */
 	status = TCL_RETURN;
@@ -171,14 +173,25 @@ static void
 motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 {
     struct bu_vls cmd = BU_VLS_INIT_ZERO;
+    struct bv_adc_state adc_record = {0};
+    struct bv_adc_state *adc = &adc_record;
+    struct bv_grid_state grid_record = BV_GRID_STATE_INIT;
+    struct bv_grid_state *grid = &grid_record;
     int save_edflag = -1;
     fastf_t f;
     fastf_t fx, fy;
     fastf_t td;
+    fastf_t view_local_scale;
+    mat_t view_center;
+    mat_t view2model;
+    struct bv *view = mged_view_context_view(view_state->vs_gvp);
     int em = ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) && mged_variables->mv_transform == 'e') ? 1 : 0;
 
     if (s->dbip == DBI_NULL)
 	return;
+
+    (void)mged_dm_adc_state_get(s->mged_curr_dm, adc);
+    (void)mged_dm_grid_state_get(s->mged_curr_dm, grid);
 
     int width = dm_get_width(DMP);
     int height = dm_get_height(DMP);
@@ -186,18 +199,21 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     int my = xmotion->y;
     int dx = mx - dm_omx;
     int dy = my - dm_omy;
+    view_local_scale = bv_scale_get(view) * s->dbip->dbi_base2local;
+    bv_center_mat_get(view_center, view);
+    bv_view2model_get(view2model, view);
 
     switch (am_mode) {
 	case AMM_IDLE:
 	    if (scroll_active)
 		bu_vls_printf(&cmd, "M 1 %d %d\n",
-			      (int)(dm_Xx2Normal(DMP, mx) * BV_MAX),
-			      (int)(dm_Xy2Normal(DMP, my, 0) * BV_MAX));
+			      (int)(dm_Xx2Normal(DMP, mx) * RT_VIEW_MAX),
+			      (int)(dm_Xy2Normal(DMP, my, 0) * RT_VIEW_MAX));
 	    else if (rubber_band->rb_active) {
 		fastf_t x = dm_Xx2Normal(DMP, mx);
 		fastf_t y = dm_Xy2Normal(DMP, my, 1);
 
-		if (grid_state->snap)
+		if (grid->snap)
 		    snap_to_grid(s, &x, &y);
 
 		rubber_band->rb_width = x - rubber_band->rb_x;
@@ -224,8 +240,8 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		/* do the regular thing */
 		/* Constant tracking (e.g. illuminate mode) bound to M mouse */
 		bu_vls_printf(&cmd, "M 0 %d %d\n",
-			      (int)(dm_Xx2Normal(DMP, mx) * BV_MAX),
-			      (int)(dm_Xy2Normal(DMP, my, 0) * BV_MAX));
+			      (int)(dm_Xx2Normal(DMP, mx) * RT_VIEW_MAX),
+			      (int)(dm_Xy2Normal(DMP, my, 0) * RT_VIEW_MAX));
 	    else /* not doing motion */
 		goto handled;
 
@@ -242,7 +258,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		    if (s->global_editing_state == ST_S_EDIT) {
 			save_edflag = MEDIT(s)->edit_flag;
 			if (!SEDIT_ROTATE)
-			    MEDIT(s)->edit_flag = SROT;
+			    MEDIT(s)->edit_flag = RT_PARAMS_EDIT_ROT;
 		    } else {
 			save_edflag = edobj;
 			edobj = BE_O_ROTATE;
@@ -285,7 +301,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		    if (s->global_editing_state == ST_S_EDIT) {
 			save_edflag = MEDIT(s)->edit_flag;
 			if (!SEDIT_TRAN)
-			    MEDIT(s)->edit_flag = STRANS;
+			    MEDIT(s)->edit_flag = RT_PARAMS_EDIT_TRANS;
 		    } else {
 			save_edflag = edobj;
 			edobj = BE_O_XY;
@@ -293,7 +309,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 
 		    if (mged_variables->mv_rateknobs)
 			bu_vls_printf(&cmd, "knob -i X %lf Y %lf\n", fx, fy);
-		    else if (grid_state->snap) {
+		    else if (grid->snap) {
 			point_t view_pt;
 			point_t model_pt;
 			point_t vcenter, diff;
@@ -307,8 +323,8 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			view_pt[Z] = 0.0;
 			round_to_grid(s, &view_pt[X], &view_pt[Y]);
 
-			MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
-			MAT_DELTAS_GET_NEG(vcenter, view_state->vs_gvp->gv_center);
+			MAT4X3PNT(model_pt, view2model, view_pt);
+			MAT_DELTAS_GET_NEG(vcenter, view_center);
 			VSUB2(diff, model_pt, vcenter);
 			VSCALE(diff, diff, s->dbip->dbi_base2local);
 			VADD2(model_pt, dm_work_pt, diff);
@@ -318,12 +334,12 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			    bu_vls_printf(&cmd, "translate %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
 		    } else
 			bu_vls_printf(&cmd, "knob -i aX %lf aY %lf\n",
-				      fx*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local, fy*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+				      fx*view_local_scale, fy*view_local_scale);
 		} else {
 		    if (mged_variables->mv_rateknobs)      /* otherwise, drag to translate the view */
 			bu_vls_printf(&cmd, "knob -i -v X %lf Y %lf\n", fx, fy);
 		    else {
-			if (grid_state->snap) {
+			if (grid->snap) {
 			    /* accumulate distance mouse moved since starting to translate */
 			    dm_mouse_dx += dx;
 			    dm_mouse_dy += dy;
@@ -335,7 +351,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			    goto handled;
 			} else
 			    bu_vls_printf(&cmd, "knob -i -v aX %lf aY %lf\n",
-					  fx*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local, fy*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+					  fx*view_local_scale, fy*view_local_scale);
 		    }
 		}
 
@@ -348,7 +364,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 	    if (em) {
 		if (s->global_editing_state == ST_S_EDIT && !SEDIT_SCALE) {
 		    save_edflag = MEDIT(s)->edit_flag;
-		    MEDIT(s)->edit_flag = SSCALE;
+		    MEDIT(s)->edit_flag = RT_PARAMS_EDIT_SCALE;
 		} else if (s->global_editing_state == ST_O_EDIT && !OEDIT_SCALE) {
 		    save_edflag = edobj;
 		    edobj = BE_O_SCALE;
@@ -367,14 +383,14 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 
 	    break;
 	case AMM_ADC_ANG1:
-	    fx = dm_Xx2Normal(DMP, mx) * BV_MAX - adc_state->adc_dv_x;
-	    fy = dm_Xy2Normal(DMP, my, 1) * BV_MAX - adc_state->adc_dv_y;
+	    fx = dm_Xx2Normal(DMP, mx) * RT_VIEW_MAX - adc->dv_x;
+	    fy = dm_Xy2Normal(DMP, my, 1) * RT_VIEW_MAX - adc->dv_y;
 	    bu_vls_printf(&cmd, "adc a1 %lf\n", RAD2DEG*atan2(fy, fx));
 
 	    break;
 	case AMM_ADC_ANG2:
-	    fx = dm_Xx2Normal(DMP, mx) * BV_MAX - adc_state->adc_dv_x;
-	    fy = dm_Xy2Normal(DMP, my, 1) * BV_MAX - adc_state->adc_dv_y;
+	    fx = dm_Xx2Normal(DMP, mx) * RT_VIEW_MAX - adc->dv_x;
+	    fy = dm_Xy2Normal(DMP, my, 1) * RT_VIEW_MAX - adc->dv_y;
 	    bu_vls_printf(&cmd, "adc a2 %lf\n", RAD2DEG*atan2(fy, fx));
 
 	    break;
@@ -385,18 +401,18 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 
 		VSET(view_pt, dm_Xx2Normal(DMP, mx), dm_Xy2Normal(DMP, my, 1), 0.0);
 
-		if (grid_state->snap)
+		if (grid->snap)
 		    snap_to_grid(s, &view_pt[X], &view_pt[Y]);
 
-		MAT4X3PNT(model_pt, view_state->vs_gvp->gv_view2model, view_pt);
+		MAT4X3PNT(model_pt, view2model, view_pt);
 		VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
 		bu_vls_printf(&cmd, "adc xyz %lf %lf %lf\n", model_pt[X], model_pt[Y], model_pt[Z]);
 	    }
 
 	    break;
 	case AMM_ADC_DIST:
-	    fx = (dm_Xx2Normal(DMP, mx) * BV_MAX - adc_state->adc_dv_x) * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local * INV_BV;
-	    fy = (dm_Xy2Normal(DMP, my, 1) * BV_MAX - adc_state->adc_dv_y) * view_state->vs_gvp->gv_scale * s->dbip->dbi_base2local * INV_BV;
+	    fx = (dm_Xx2Normal(DMP, mx) * RT_VIEW_MAX - adc->dv_x) * view_local_scale * RT_INV_VIEW;
+	    fy = (dm_Xy2Normal(DMP, my, 1) * RT_VIEW_MAX - adc->dv_y) * view_local_scale * RT_INV_VIEW;
 	    td = sqrt(fx * fx + fy * fy);
 	    bu_vls_printf(&cmd, "adc dst %lf\n", td);
 
@@ -406,7 +422,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_ROTATE)
-			MEDIT(s)->edit_flag = SROT;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_ROT;
 		} else {
 		    save_edflag = edobj;
 		    edobj = BE_O_ROTATE;
@@ -430,7 +446,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_ROTATE)
-			MEDIT(s)->edit_flag = SROT;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_ROT;
 		} else {
 		    save_edflag = edobj;
 		    edobj = BE_O_ROTATE;
@@ -454,7 +470,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_ROTATE)
-			MEDIT(s)->edit_flag = SROT;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_ROT;
 		} else {
 		    save_edflag = edobj;
 		    edobj = BE_O_ROTATE;
@@ -478,7 +494,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_TRAN)
-			MEDIT(s)->edit_flag = STRANS;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_TRANS;
 		} else if (s->global_editing_state == ST_O_EDIT && !OEDIT_TRAN) {
 		    save_edflag = edobj;
 		    edobj = BE_O_X;
@@ -493,7 +509,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 	    if (mged_variables->mv_rateknobs)
 		bu_vls_printf(&cmd, "knob -i X %f\n", f);
 	    else
-		bu_vls_printf(&cmd, "knob -i aX %f\n", f*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+		bu_vls_printf(&cmd, "knob -i aX %f\n", f*view_local_scale);
 
 	    break;
 	case AMM_CON_TRAN_Y:
@@ -501,7 +517,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_TRAN)
-			MEDIT(s)->edit_flag = STRANS;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_TRANS;
 		} else if (s->global_editing_state == ST_O_EDIT && !OEDIT_TRAN) {
 		    save_edflag = edobj;
 		    edobj = BE_O_Y;
@@ -516,7 +532,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 	    if (mged_variables->mv_rateknobs)
 		bu_vls_printf(&cmd, "knob -i Y %f\n", f);
 	    else
-		bu_vls_printf(&cmd, "knob -i aY %f\n", f*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+		bu_vls_printf(&cmd, "knob -i aY %f\n", f*view_local_scale);
 
 	    break;
 	case AMM_CON_TRAN_Z:
@@ -524,7 +540,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_TRAN)
-			MEDIT(s)->edit_flag = STRANS;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_TRANS;
 		} else if (s->global_editing_state == ST_O_EDIT && !OEDIT_TRAN) {
 		    save_edflag = edobj;
 		    edobj = BE_O_XY;
@@ -539,7 +555,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 	    if (mged_variables->mv_rateknobs)
 		bu_vls_printf(&cmd, "knob -i Z %f\n", f);
 	    else
-		bu_vls_printf(&cmd, "knob -i aZ %f\n", f*view_state->vs_gvp->gv_scale*s->dbip->dbi_base2local);
+		bu_vls_printf(&cmd, "knob -i aZ %f\n", f*view_local_scale);
 
 	    break;
 	case AMM_CON_SCALE_X:
@@ -547,7 +563,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_SCALE)
-			MEDIT(s)->edit_flag = SSCALE;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_SCALE;
 		} else if (s->global_editing_state == ST_O_EDIT && !OEDIT_SCALE) {
 		    save_edflag = edobj;
 		    edobj = BE_O_XSCALE;
@@ -570,7 +586,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_SCALE)
-			MEDIT(s)->edit_flag = SSCALE;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_SCALE;
 		} else if (s->global_editing_state == ST_O_EDIT && !OEDIT_SCALE) {
 		    save_edflag = edobj;
 		    edobj = BE_O_YSCALE;
@@ -593,7 +609,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		if (s->global_editing_state == ST_S_EDIT) {
 		    save_edflag = MEDIT(s)->edit_flag;
 		    if (!SEDIT_SCALE)
-			MEDIT(s)->edit_flag = SSCALE;
+			MEDIT(s)->edit_flag = RT_PARAMS_EDIT_SCALE;
 		} else if (s->global_editing_state == ST_O_EDIT && !OEDIT_SCALE) {
 		    save_edflag = edobj;
 		    edobj = BE_O_ZSCALE;
@@ -618,7 +634,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		f = -dy;
 
 	    bu_vls_printf(&cmd, "knob -i xadc %f\n",
-			  f / (fastf_t)width * BV_RANGE);
+			  f / (fastf_t)width * RT_VIEW_RANGE);
 	    break;
 	case AMM_CON_YADC:
 	    if (abs(dx) >= abs(dy))
@@ -627,7 +643,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		f = -dy;
 
 	    bu_vls_printf(&cmd, "knob -i yadc %f\n",
-			  f / (fastf_t)height * BV_RANGE);
+			  f / (fastf_t)height * RT_VIEW_RANGE);
 	    break;
 	case AMM_CON_ANG1:
 	    if (abs(dx) >= abs(dy))
@@ -654,7 +670,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		f = -dy;
 
 	    bu_vls_printf(&cmd, "knob -i distadc %f\n",
-			  f / (fastf_t)width * BV_RANGE);
+			  f / (fastf_t)width * RT_VIEW_RANGE);
 	    break;
     }
 

@@ -29,6 +29,7 @@
 
 #include "vmath.h"
 #include "dm.h"
+#include "rt/view.h"
 #include "./include/private.h"
 
 void

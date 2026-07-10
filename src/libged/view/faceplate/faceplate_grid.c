@@ -393,28 +393,34 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
     int help = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     const char *usage_string = "view faceplate grid subcmd [args]";
     const char *purpose_string = "manipulate faceplate grid overlay";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
 
-    if (!gedp->ged_gvp) {
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return BRLCAD_ERROR;
     }
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     // We know we're the grid command - start processing args
     argc--; argv++;
 
     if (argc == 1) {
+	struct bv_grid_state grid;
+	if (!bv_grid_state_get(&grid, view))
+	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    v->gv_s->gv_grid.draw = 1;
+	    grid.draw = 1;
+	    bv_grid_state_set(view, &grid);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    v->gv_s->gv_grid.draw = 0;
+	    grid.draw = 0;
+	    bv_grid_state_set(view, &grid);
 	    return BRLCAD_OK;
 	}
     }
@@ -438,11 +444,18 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
+    struct bv_grid_state grid;
+    if (!bv_grid_state_get(&grid, view))
+	return BRLCAD_ERROR;
+
     struct _ged_fp_grid_info ginfo;
     ginfo.gd = gd;
-    ginfo.g = &v->gv_s->gv_grid;
+    ginfo.g = &grid;
 
-    return _ged_subcmd_exec(gedp, d, _fp_grid_cmds, "view faceplate grid", "[options] subcommand [args]", (void *)&ginfo, argc, argv, help, cmd_pos);
+    int ret = _ged_subcmd_exec(gedp, d, _fp_grid_cmds, "view faceplate grid", "[options] subcommand [args]", (void *)&ginfo, argc, argv, help, cmd_pos);
+    if (ret == BRLCAD_OK)
+	bv_grid_state_set(view, &grid);
+    return ret;
 }
 
 /*

@@ -51,6 +51,11 @@ extern struct fb swrast_interface;
 // core swrast logic, and we should always be able to replace the Qt dm here
 // with any other dm backend to achieve the same results.
 #include <QApplication>
+#include <QtGlobal>
+#include "bv.h"
+#include "QgLegacyViewContext.h"
+#include "QgLegacyViewDm.h"
+#include "qtcad/QgSW.h"
 #include "swrastwin.h"
 #endif
 
@@ -70,6 +75,7 @@ struct swrastinfo {
     short mi_cmap_flag;		/* enabled when there is a non-linear map in memory */
 
     int mi_memwidth;            /* width of scanline in if_mem */
+    struct fb_imgstream_compat imgstream;
 
     int alive;
 };
@@ -157,10 +163,14 @@ swrast_xmit_scanlines(struct fb *ifp, int ybase, int nlines, int xbase, int npix
 static void
 qt_destroy(struct swrastinfo *qi)
 {
+    if (!qi)
+	return;
     delete qi->mw;
     delete qi->qapp;
-    free(qi->av[0]);
-    free(qi->av);
+    if (qi->av) {
+	free(qi->av[0]);
+	free(qi->av);
+    }
 }
 #endif
 
@@ -181,6 +191,9 @@ swrast_getmem(struct fb *ifp)
 	SWRAST(ifp)->mi_memwidth = ifp->i->if_width;
 	pixsize = ifp->i->if_height * ifp->i->if_width * sizeof(struct fb_pixel);
 	size = pixsize + sizeof(struct fb_cmap);
+
+	fprintf(stderr, "swrast_getmem: allocating if_mem for if_size=(%d,%d) pixsize=%d\n",
+	       ifp->i->if_width, ifp->i->if_height, size);
 
 	if (!sp) {
 	    sp = (char *)calloc(1, size);
@@ -268,10 +281,35 @@ fb_clipper(struct fb *ifp)
 int
 swrast_configureWindow(struct fb *ifp, int width, int height)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_configure(ifp, &SWRAST(ifp)->imgstream,
+		width, height);
+
     int getmem = 0;
 
     if (!SWRAST(ifp)->mi_memwidth)
 	getmem = 1;
+
+    /* Phase A1 (ert reliability): if any fbserv client is streaming
+     * pixels into this framebuffer, we MUST NOT mutate the canvas
+     * dimensions or reallocate if_mem.  Doing so re-interprets in-flight
+     * scanline writes from rt as different-width rows, which produces
+     * the "tiled distorted copies of the raytrace output" symptom.
+     * Instead, just record the new viewport size — the OpenGL composite
+     * in paintGL/paintEvent stretches the existing fb image to fit. */
+    if (ifp->i->if_active_clients > 0) {
+	fprintf(stderr, "swrast_configureWindow: DEFERRED (active_clients=%d) vp=(%d,%d) if=(%d,%d)\n",
+	       ifp->i->if_active_clients, width, height,
+	       ifp->i->if_width, ifp->i->if_height);
+	SWRAST(ifp)->vp_width = width;
+	SWRAST(ifp)->vp_height = height;
+	dm_make_current(ifp->i->dmp);
+	return 0;
+    }
+
+    fprintf(stderr, "swrast_configureWindow: FULL path w=%d h=%d if_was=(%d,%d) win_was=(%d,%d)\n",
+	   width, height, ifp->i->if_width, ifp->i->if_height,
+	   SWRAST(ifp)->win_width, SWRAST(ifp)->win_height);
 
     SWRAST(ifp)->vp_width = width;
     SWRAST(ifp)->vp_height = height;
@@ -308,7 +346,14 @@ swrast_do_event(struct fb *UNUSED(ifp))
 #endif
 {
 #ifdef SWRAST_QT
-    SWRAST(ifp)->mw->update();
+    /* Phase F (ert reliability): only drive updates from the *standalone*
+     * Qt mainwindow path (where SWRAST(ifp)->mw is non-NULL).  In the
+     * embedded path used by qged, fb pixel writes flow through the libpkg
+     * client handler whose ::updated → dm_set_native_repaint_pending + widget update()
+     * chain already coalesces redraws on a per-message-batch basis.
+     * Calling mw->update() here when mw is NULL causes a crash. */
+    if (SWRAST(ifp)->mw)
+	SWRAST(ifp)->mw->update();
 #endif
 }
 
@@ -327,6 +372,7 @@ swrast_open_existing(struct fb *ifp, int width, int height, struct fb_platform_s
     }
 
     ifp->i->dmp = (struct dm *)fb_p->data;
+    SWRAST(ifp)->alive = 1;
 
     if (ifp->i->dmp) {
 	ifp->i->dmp->i->fbp = ifp;
@@ -365,6 +411,22 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
 {
     FB_CK_FB(ifp->i);
 
+    if (fb_imgstream_compat_supported("/dev/swrast")) {
+	if ((ifp->i->pp = (char *)calloc(1, sizeof(struct swrastinfo))) == NULL) {
+	    fb_log("fb_swrast:  swrastinfo malloc failed\n");
+	    return -1;
+	}
+	ifp->i->stand_alone = 1;
+	int stream_ret = fb_imgstream_compat_open(ifp, &SWRAST(ifp)->imgstream,
+		"/dev/swrast", width, height);
+	if (stream_ret == 0)
+	    return 0;
+	free(ifp->i->pp);
+	ifp->i->pp = NULL;
+	if (stream_ret < 0)
+	    return -1;
+    }
+
     if ((ifp->i->pp = (char *)calloc(1, sizeof(struct swrastinfo))) == NULL) {
 	fb_log("fb_swrast:  swrastinfo malloc failed\n");
 	return -1;
@@ -380,27 +442,46 @@ fb_swrast_open(struct fb *ifp, const char *UNUSED(file), int width, int height)
     FB_CK_FB(ifp->i);
 
     qi->win_width = qi->vp_width = width;
-    qi->win_height = qi->vp_width = height;
+    qi->win_height = qi->vp_height = height;
 
 #ifdef SWRAST_QT
     qi->qapp = new QApplication(qi->ac, qi->av);
-    qi->mw = new QgSWWin(ifp);
+    qi->mw = new QgSWWin(qg_legacy_view_framebuffer_handle_from_raw(ifp));
+    QgSW *canvas = qi->mw->canvasWidget();
+    if (!canvas) {
+	qt_destroy(qi);
+	free(ifp->i->pp);
+	ifp->i->pp = NULL;
+	return -1;
+    }
 
-    BU_GET(qi->mw->canvas->v, struct bview);
-    bv_init(qi->mw->canvas->v, NULL);
-    qi->mw->canvas->v->gv_s->gv_fb_mode = 1;
-    qi->mw->canvas->v->gv_width = width;
-    qi->mw->canvas->v->gv_height = height;
+    qg_legacy_view *canvas_view = canvas->view();
+    if (!canvas_view) {
+	qt_destroy(qi);
+	free(ifp->i->pp);
+	ifp->i->pp = NULL;
+	return -1;
+    }
+    bv_framebuffer_mode_set(bv_context_view(
+	    reinterpret_cast<struct bv_context *>(
+		qg_legacy_view_to_context(canvas_view))), 1);
+    qg_legacy_view_dimensions_set(canvas_view, width, height);
 
 
-    qi->mw->canvas->setFixedSize(width, height);
+    {
+	qreal dpr = canvas->devicePixelRatioF();
+	int lw = qMax(1, static_cast<int>(std::ceil(((qreal)width) / dpr)));
+	int lh = qMax(1, static_cast<int>(std::ceil(((qreal)height) / dpr)));
+	canvas->setFixedSize(lw, lh);
+	qg_legacy_view_dimensions_set(canvas_view, width, height);
+    }
     qi->mw->adjustSize();
     qi->mw->setFixedSize(qi->mw->size());
     qi->mw->show();
+    qi->qapp->processEvents();
 
     // Do the standard libdm attach to get our rendering backend.
-    const char *acmd = "attach";
-    struct dm *dmp = dm_open((void *)qi->mw->canvas->v, NULL, "swrast", 1, &acmd);
+    qg_legacy_dm *dmp = qg_legacy_view_dm_open_swrast(canvas_view, canvas);
     if (!dmp)
 	return -1;
 
@@ -435,23 +516,28 @@ swrast_put_fbps(struct fb_platform_specific *fbps)
 
 
 static int
-swrast_flush(struct fb *UNUSED(ifp))
+swrast_flush(struct fb *ifp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_flush(&SWRAST(ifp)->imgstream);
+
     glFlush();
     return 0;
 }
 
 
 static int
-#ifdef SWRAST_QT
 fb_swrast_close(struct fb *ifp)
-#else
-fb_swrast_close(struct fb *UNUSED(ifp))
-#endif
 {
+    struct swrastinfo *qi = SWRAST(ifp);
+    if (fb_imgstream_compat_active(&qi->imgstream)) {
+	(void)fb_imgstream_compat_close(&qi->imgstream);
+	free((char *)SWRASTL(ifp));
+	SWRASTL(ifp) = NULL;
+	return 0;
+    }
 
 #ifdef SWRAST_QT
-    struct swrastinfo *qi = SWRAST(ifp);
     /* if a window was created wait for user input and process events */
     if (qi->qapp) {
 	return qi->qapp->exec();
@@ -476,6 +562,13 @@ swrast_close_existing(struct fb *ifp)
 static int
 swrast_poll(struct fb *ifp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_poll(ifp, &SWRAST(ifp)->imgstream);
+
+#ifdef SWRAST_QT
+    if (SWRAST(ifp)->qapp)
+	SWRAST(ifp)->qapp->processEvents();
+#endif
     swrast_do_event(ifp);
 
     if (SWRAST(ifp)->alive)
@@ -497,6 +590,13 @@ swrast_free(struct fb *ifp)
     if (FB_DEBUG)
 	printf("swrast_free: All done...goodbye!\n");
 
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream)) {
+	(void)fb_imgstream_compat_close(&SWRAST(ifp)->imgstream);
+	free((char *)SWRASTL(ifp));
+	SWRASTL(ifp) = NULL;
+	return 0;
+    }
+
     if (ifp->i->if_mem != NULL) {
 	/* free up memory associated with image */
 	(void)free(ifp->i->if_mem);
@@ -514,6 +614,9 @@ swrast_free(struct fb *ifp)
 static int
 swrast_clear(struct fb *ifp, unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_clear(&SWRAST(ifp)->imgstream, pp);
+
     struct fb_pixel bg;
     struct fb_pixel *swrastp;
     int cnt;
@@ -561,6 +664,10 @@ swrast_clear(struct fb *ifp, unsigned char *pp)
 static int
 swrast_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_view(ifp, &SWRAST(ifp)->imgstream,
+		xcenter, ycenter, xzoom, yzoom);
+
     if (FB_DEBUG)
 	printf("entering swrast_view\n");
 
@@ -594,7 +701,7 @@ swrast_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 	gl_debug_print(ifp->i->dmp, "FB: qtgl_view after:", ifp->i->dmp->i->dm_debugLevel);
 
     // TODO - somehow, we need to trigger an update event here for incremental display...
-    dm_set_dirty(ifp->i->dmp, 1);
+    dm_set_native_repaint_pending(ifp->i->dmp, 1);
     return 0;
 }
 
@@ -602,6 +709,10 @@ swrast_view(struct fb *ifp, int xcenter, int ycenter, int xzoom, int yzoom)
 static int
 swrast_getview(struct fb *ifp, int *xcenter, int *ycenter, int *xzoom, int *yzoom)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_getview(&SWRAST(ifp)->imgstream,
+		xcenter, ycenter, xzoom, yzoom);
+
     if (FB_DEBUG)
 	printf("entering swrast_getview\n");
 
@@ -618,6 +729,10 @@ swrast_getview(struct fb *ifp, int *xcenter, int *ycenter, int *xzoom, int *yzoo
 static ssize_t
 swrast_read(struct fb *ifp, int x, int y, unsigned char *pixelp, size_t count)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_read(&SWRAST(ifp)->imgstream, x, y,
+		pixelp, count);
+
     size_t n;
     size_t scan_count;	/* # pix on this scanline */
     unsigned char *cp;
@@ -669,6 +784,10 @@ swrast_read(struct fb *ifp, int x, int y, unsigned char *pixelp, size_t count)
 static ssize_t
 swrast_write(struct fb *ifp, int xstart, int ystart, const unsigned char *pixelp, size_t count)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_write(&SWRAST(ifp)->imgstream, xstart,
+		ystart, pixelp, count);
+
     int x;
     int y;
     size_t scan_count;  /* # pix on this scanline */
@@ -765,6 +884,10 @@ swrast_write(struct fb *ifp, int xstart, int ystart, const unsigned char *pixelp
 static int
 swrast_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, const unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_writerect(&SWRAST(ifp)->imgstream,
+		xmin, ymin, width, height, pp);
+
     int x;
     int y;
     unsigned char *cp;
@@ -793,7 +916,9 @@ swrast_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, cons
     }
 
 #ifdef SWRAST_QT
-    SWRAST(ifp)->mw->update();
+    /* Phase F: standalone-window-only update (see comment in swrast_do_event). */
+    if (SWRAST(ifp)->mw)
+	SWRAST(ifp)->mw->update();
 #endif
     return width*height;
 }
@@ -807,6 +932,10 @@ swrast_writerect(struct fb *ifp, int xmin, int ymin, int width, int height, cons
 static int
 swrast_bwwriterect(struct fb *ifp, int xmin, int ymin, int width, int height, const unsigned char *pp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_bwwriterect(&SWRAST(ifp)->imgstream,
+		xmin, ymin, width, height, pp);
+
     int x;
     int y;
     unsigned char *cp;
@@ -835,15 +964,20 @@ swrast_bwwriterect(struct fb *ifp, int xmin, int ymin, int width, int height, co
     }
 
 #ifdef SWRAST_QT
-    SWRAST(ifp)->mw->update();
+    /* Phase F: standalone-window-only update (see comment in swrast_do_event). */
+    if (SWRAST(ifp)->mw)
+	SWRAST(ifp)->mw->update();
 #endif
     return width*height;
 }
 
 
 static int
-swrast_rmap(struct fb *UNUSED(ifp), ColorMap *UNUSED(cmp))
+swrast_rmap(struct fb *ifp, ColorMap *cmp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_rmap(&SWRAST(ifp)->imgstream, cmp);
+
     if (FB_DEBUG)
 	printf("entering swrast_rmap\n");
 #if 0
@@ -859,8 +993,11 @@ swrast_rmap(struct fb *UNUSED(ifp), ColorMap *UNUSED(cmp))
 
 
 static int
-swrast_wmap(struct fb *UNUSED(ifp), const ColorMap *UNUSED(cmp))
+swrast_wmap(struct fb *ifp, const ColorMap *cmp)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_wmap(&SWRAST(ifp)->imgstream, cmp);
+
     if (FB_DEBUG)
 	printf("entering swrast_wmap\n");
 
@@ -886,9 +1023,13 @@ swrast_help(struct fb *ifp)
 
 
 static int
-swrast_setcursor(struct fb *ifp, const unsigned char *UNUSED(bits), int UNUSED(xbits), int UNUSED(ybits), int UNUSED(xorig), int UNUSED(yorig))
+swrast_setcursor(struct fb *ifp, const unsigned char *bits, int xbits, int ybits, int xorig, int yorig)
 {
     FB_CK_FB(ifp->i);
+
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_setcursor(&SWRAST(ifp)->imgstream,
+		bits, xbits, ybits, xorig, yorig);
 
     // If it should ever prove desirable to alter the cursor or disable it, here's how it is done:
     // dynamic_cast<osgViewer::GraphicsWindow*>(camera->getGraphicsContext()))->setCursor(osgViewer::GraphicsWindow::NoCursor);
@@ -898,8 +1039,11 @@ swrast_setcursor(struct fb *ifp, const unsigned char *UNUSED(bits), int UNUSED(x
 
 
 static int
-swrast_cursor(struct fb *UNUSED(ifp), int UNUSED(mode), int UNUSED(x), int UNUSED(y))
+swrast_cursor(struct fb *ifp, int mode, int x, int y)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_cursor(ifp, &SWRAST(ifp)->imgstream,
+		mode, x, y);
 
     fb_log("swrast_cursor\n");
     return 0;
@@ -909,6 +1053,8 @@ swrast_cursor(struct fb *UNUSED(ifp), int UNUSED(mode), int UNUSED(x), int UNUSE
 int
 swrast_refresh(struct fb *ifp, int x, int y, int w, int h)
 {
+    if (fb_imgstream_compat_active(&SWRAST(ifp)->imgstream))
+	return fb_imgstream_compat_flush(&SWRAST(ifp)->imgstream);
 
     if (w < 0) {
 	w = -w;
@@ -951,7 +1097,7 @@ swrast_refresh(struct fb *ifp, int x, int y, int w, int h)
     if (ifp->i->dmp && ifp->i->dmp->i->dm_debugLevel > 3)
 	gl_debug_print(ifp->i->dmp, "FB: qtgl_refresh after:", ifp->i->dmp->i->dm_debugLevel);
 
-    dm_set_dirty(ifp->i->dmp, 1);
+    dm_set_native_repaint_pending(ifp->i->dmp, 1);
     return 0;
 }
 
@@ -1016,7 +1162,8 @@ struct fb_impl swrast_interface_impl =
     {0}, /* u3 */
     {0}, /* u4 */
     {0}, /* u5 */
-    {0}  /* u6 */
+    {0},  /* u6 */
+    0     /* if_active_clients */
 };
 
 extern "C" {
@@ -1048,4 +1195,3 @@ COMPILER_DLLEXPORT const struct fb_plugin *fb_plugin_info(void)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

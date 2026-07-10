@@ -30,17 +30,15 @@
 #include <string.h>
 
 #include "rt/geom.h"
+#include "rt/view.h"
 
+#include "ged/draw.h"
 #include "../ged_private.h"
 
-extern int ged_lod2_core(struct ged *gedp, int argc, const char *argv[]);
 int
 ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 {
-    if (gedp->new_cmd_forms)
-	return ged_lod2_core(gedp, argc, argv);
-
-    struct bview *gvp;
+    void *view_ctx;
     int printUsage = 0;
     static const char *usage = "lod (on|off|enabled)\n"
 			       "lod scale (points|curves) <factor>\n";
@@ -57,21 +55,23 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    gvp = gedp->ged_gvp;
-    if (gvp == NULL) {
+    view_ctx = ged_view_active_ctx(gedp);
+    if (view_ctx == NULL) {
 	return BRLCAD_OK;
     }
-
+    ged_draw_view_lod_policy lod_policy;
+    if (!ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx))
+	return BRLCAD_ERROR;
     /* Print current state if no args are supplied */
     if (argc == 1) {
-	if (gvp->gv_s->adaptive_plot_csg) {
+	if (lod_policy.csg_enabled) {
 	    bu_vls_printf(gedp->ged_result_str, "LoD drawing: enabled\n");
 	} else {
 	    bu_vls_printf(gedp->ged_result_str, "LoD drawing: disabled\n");
 	}
-	bu_vls_printf(gedp->ged_result_str, "Point scale: %g\n", gvp->gv_s->point_scale);
-	bu_vls_printf(gedp->ged_result_str, "Curve scale: %g\n", gvp->gv_s->curve_scale);
-	bu_vls_printf(gedp->ged_result_str, "BoT face threshold: %zd\n", gvp->gv_s->bot_threshold);
+	bu_vls_printf(gedp->ged_result_str, "Point scale: %g\n", lod_policy.point_scale);
+	bu_vls_printf(gedp->ged_result_str, "Curve scale: %g\n", lod_policy.curve_scale);
+	bu_vls_printf(gedp->ged_result_str, "BoT face threshold: %zu\n", lod_policy.bot_threshold);
 	return BRLCAD_OK;
     }
 
@@ -81,30 +81,37 @@ ged_lod_core(struct ged *gedp, int argc, const char *argv[])
     printUsage = 0;
     if (argc == 1 && BU_STR_EQUAL(argv[0], "on")) {
 	/* lod on */
-	gvp->gv_s->adaptive_plot_csg = 1;
+	lod_policy.csg_enabled = 1;
+	lod_policy.zoom_refresh = 1;
+	ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
     } else if (argc == 1 && BU_STR_EQUAL(argv[0], "off")) {
 	/* lod off */
-	gvp->gv_s->adaptive_plot_csg = 0;
+	lod_policy.csg_enabled = 0;
+	if (!lod_policy.mesh_enabled)
+	    lod_policy.zoom_refresh = 0;
+	ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
     } else if (argc == 1 && BU_STR_EQUAL(argv[0], "enabled")) {
 	/* lod enabled - return on state */
-	bu_vls_printf(gedp->ged_result_str, "%d", gvp->gv_s->adaptive_plot_csg);
+	bu_vls_printf(gedp->ged_result_str, "%d", lod_policy.csg_enabled);
     } else if (BU_STR_EQUAL(argv[0], "scale")) {
 	if (argc == 2 || argc == 3) {
 	    if (BU_STR_EQUAL(argv[1], "points")) {
 		if (argc == 2) {
 		    /* lod scale points - return current value */
-		    bu_vls_printf(gedp->ged_result_str, "%f", gvp->gv_s->point_scale);
+		    bu_vls_printf(gedp->ged_result_str, "%f", lod_policy.point_scale);
 		} else {
 		    /* lod scale points f - set value */
-		    gvp->gv_s->point_scale = atof(argv[2]);
+		    lod_policy.point_scale = atof(argv[2]);
+		    ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
 		}
 	    } else if (BU_STR_EQUAL(argv[1], "curves")) {
 		if (argc == 2) {
 		    /* lod scale curves - return current value */
-		    bu_vls_printf(gedp->ged_result_str, "%f", gvp->gv_s->curve_scale);
+		    bu_vls_printf(gedp->ged_result_str, "%f", lod_policy.curve_scale);
 		} else {
 		    /* lod scale curves f - set value */
-		    gvp->gv_s->curve_scale = atof(argv[2]);
+		    lod_policy.curve_scale = atof(argv[2]);
+		    ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
 		}
 	    } else {
 		printUsage = 1;

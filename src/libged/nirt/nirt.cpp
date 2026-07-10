@@ -53,27 +53,21 @@
 #include "bu/time.h"
 #include "bu/process.h"
 #include "vmath.h"
+#include "bv.h"
+#include "rt/view.h"
 
+#include "ged/draw.h"
 #include "../qray.h"
 #include "../ged_private.h"
 
 static void
-dl_set_wflag(struct bu_list *hdlp, int wflag)
+nirt_qray_result_clear(struct ged *gedp, const char *name)
 {
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    struct bv_scene_obj *sp;
-    /* calculate the bounding for of all solids being displayed */
-    gdlp = BU_LIST_NEXT(display_list, hdlp);
-    while (BU_LIST_NOT_HEAD(gdlp, hdlp)) {
-	next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
+    if (!gedp || !name || !name[0])
+	return;
 
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    sp->s_old.s_wflag = wflag;
-	}
-
-	gdlp = next_gdlp;
-    }
+    (void)_ged_command_scene_features_remove_prefix(gedp, name,
+	    "nirt", "command-result", 0);
 }
 
 struct nirt_info {
@@ -220,14 +214,13 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 	if (retcode != 0)
 	    _ged_wait_status(gedp->ged_result_str, retcode);
 
-	dl_set_wflag(gedp->i->ged_gdp->gd_headDisplay, DOWN);
-
 	return BRLCAD_OK;
     }
 
     /* Doing work with the database - start setting up */
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     // There are two possible sources of settings - the ones we deduce
     // from view state, and the ones we get from the user.  User supplied
@@ -351,8 +344,10 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     /* Calculate point from xyz point from which to fire the ray, if it was not
      * explicitly supplied by one of the above. */
     if (VNEAR_ZERO(nv.center_model, VUNITIZE_TOL)) {
-	struct bview *bv = gedp->ged_gvp;
-	VSET(nv.center_model, -bv->gv_center[MDX], -bv->gv_center[MDY], -bv->gv_center[MDZ]);
+	mat_t view_center;
+	bv_center_mat_get(view_center,
+		bv_context_view_const((const struct bv_context *)view_ctx));
+	MAT_DELTAS_GET_NEG(nv.center_model, view_center);
 	/* Because we are preparing an input for the nirt command line, we need
 	 * to convert to local units - lower level logic will be expecting
 	 * those units and convert back. */
@@ -511,7 +506,10 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 
     // calculate the ray direction from the view.
     vect_t dir = VINIT_ZERO;
-    VMOVEN(dir, gedp->ged_gvp->gv_rotation + 8, 3);
+    mat_t view_rotation;
+    bv_rotation_get(view_rotation,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
+    VMOVEN(dir, view_rotation + 8, 3);
     VSCALE(dir, dir, -1.0);
     bu_vls_sprintf(&nirt_cmd, "dir %0.17f %0.17f %0.17f", V3ARGS(dir));
     fprintf(np.fp_in, "%s\n", bu_vls_cstr(&nirt_cmd));
@@ -586,47 +584,24 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     if (retcode != 0)
 	_ged_wait_status(gedp->ged_result_str, retcode);
 
-    dl_set_wflag(gedp->i->ged_gdp->gd_headDisplay, DOWN);
-
-    /* Whether or not we're doing graphics, if we took a shot we should clear any
-     * old objects from prior shots. */
-    if (gedp->new_cmd_forms) {
-	struct bview *view = gedp->ged_gvp;
-	struct bv_scene_obj *nobj = bv_find_obj(view, bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
-	if (nobj)
-	    bv_obj_put(nobj);
-    } else {
-	struct directory **dpv;
-	struct bu_vls dp_pattern = BU_VLS_INIT_ZERO;
-	bu_vls_sprintf(&dp_pattern, "%s*", bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
-	size_t lscnt = db_ls(gedp->dbip, DB_LS_PHONY, bu_vls_cstr(&dp_pattern), &dpv);
-	for (size_t i = 0; i < lscnt; i++)
-	    dl_erasePathFromDisplay(gedp, dpv[i]->d_namep, 0);
-	bu_vls_free(&dp_pattern);
-    }
+    /* Whether or not we're doing graphics, if we took a shot we should clear
+     * any old command-owned objects from prior shots. */
+    nirt_qray_result_clear(gedp,
+	    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
 
     /* If we're supposed to do graphics, look for the plot file */
-    struct bu_list *vlfree = &rt_vlfree;
     if (DG_QRAY_GRAPHICS(gedp->i->ged_gdp) && bu_vls_strlen(&nv.plotfile)) {
 	FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
 	if (fp) {
-	    struct bv_vlblock*vbp = bv_vlblock_init(vlfree, 32);
-	    fastf_t csize = gedp->ged_gvp->gv_scale * 0.01;
-	    int pret = rt_uplot_to_vlist(vbp, fp, csize, gedp->i->ged_gdp->gd_uplotOutputMode);
+	    fastf_t csize = view_ctx ?
+		bv_scale_get(bv_context_view_const((const struct bv_context *)view_ctx)) * 0.01 : 1.0;
+	    int pret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
+		    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename),
+		    csize, gedp->i->ged_gdp->gd_uplotOutputMode,
+		    "nirt", "command-result", NULL, "query-ray", 0);
 	    fclose(fp);
-	    if (pret < 0) {
+	    if (pret != BRLCAD_OK)
 		bu_log("Error loading plot data from %s\n", bu_vls_cstr(&nv.plotfile));
-	    } else {
-		if (gedp->new_cmd_forms) {
-		    struct bview *view = gedp->ged_gvp;
-		    struct bv_scene_obj *nobj = bv_vlblock_obj(vbp, view, bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
-		    bu_vls_sprintf(&nobj->s_name, "%s", bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
-		} else {
-		    _ged_cvt_vlblock_to_solids(gedp, vbp, bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename), 0);
-		}
-
-		bv_vlblock_free(vbp);
-	    }
 	}
 	bu_file_delete(bu_vls_cstr(&nv.plotfile));
     }
@@ -647,7 +622,7 @@ int
 ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
 {
     int status;
-    fastf_t sf = 1.0 * INV_BV;
+    fastf_t sf = 1.0 * RT_INV_VIEW;
     vect_t view_ray_orig;
     vect_t center_model;
     double scan[3];
@@ -661,6 +636,7 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -688,14 +664,17 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
 	sscanf(argv[argc-1], "%lf", &scan[Y]) != 1) {
 	return BRLCAD_ERROR;
     }
-    scan[Z] = BV_MAX;
+    scan[Z] = RT_VIEW_MAX;
     argc -= 2;
 
     av = (char **)bu_calloc(1, sizeof(char *) * (argc + 5), "gd_vnirt_cmd: av");
 
     /* Calculate point from which to fire ray. */
     VSCALE(view_ray_orig, scan, sf);
-    MAT4X3PNT(center_model, gedp->ged_gvp->gv_view2model, view_ray_orig);
+    mat_t view2model;
+    bv_view2model_get(view2model,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
+    MAT4X3PNT(center_model, view2model, view_ray_orig);
     /* Initial center_model value will be in base units, and main nirt
      * evaluation path assumes inputs are in local units, so convert. */
     VSCALE(center_model, center_model, gedp->dbip->dbi_base2local);

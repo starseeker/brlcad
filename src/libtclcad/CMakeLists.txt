@@ -41,6 +41,7 @@ set(
   view/lines.c
   view/refresh.c
   view/util.c
+  view_data.c
   wrapper.c
 )
 
@@ -105,6 +106,7 @@ add_subdirectory(tests)
 
 cmakefiles(
   ${LIBTCLCAD_SRCS}
+  draw_view_move_helpers.h
   tclcad_private.h
   view/view.h
   CMakeLists.txt

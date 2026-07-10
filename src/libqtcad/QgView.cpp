@@ -26,18 +26,70 @@
 
 #include "common.h"
 
-#include "bg/polygon.h"
-#include "bv.h"
-#include "raytrace.h" // For finalize polygon sketch export functionality (TODO - need to move...)
+#include "QgLegacyViewContext.h"
+#include "qtcad/QgCanvasBase.h"
+#include "qtcad/QgGL.h"
+#include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
+#include "qtcad/QgViewFilter.h"
 #include "qtcad/QgSignalFlags.h"
+#include "bv.h"
 
 extern "C" {
 #include "bu/malloc.h"
 }
 
+#include <algorithm>
 
-QgView::QgView(QWidget *parent, int type, struct fb *fbp)
+static uint32_t
+qg_refresh_flags(QgViewUpdateFlags flags)
+{
+    uint32_t refresh_flags = 0;
+
+    if (!flags)
+	return BV_REFRESH_ALL;
+    if (flags & QG_VIEW_REFRESH)
+	refresh_flags |= BV_REFRESH_VIEW;
+    if (flags & QG_VIEW_DRAWN)
+	refresh_flags |= BV_REFRESH_DRAW;
+    if (flags & QG_VIEW_SELECT)
+	refresh_flags |= BV_REFRESH_OVERLAY;
+    if (flags & QG_VIEW_MODE)
+	refresh_flags |= BV_REFRESH_EDIT;
+    if (flags & QG_VIEW_DB)
+	refresh_flags |= BV_REFRESH_DRAW;
+
+    return refresh_flags ? refresh_flags : BV_REFRESH_ALL;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Factory: create the appropriate canvas widget for the requested type.  */
+/* The single BRLCAD_OPENGL guard lives here rather than being duplicated  */
+/* in every QgView method body.                                            */
+/* ---------------------------------------------------------------------- */
+static QgCanvasBase *
+make_canvas(QWidget *parent, int type)
+{
+    switch (type) {
+#ifdef BRLCAD_OPENGL
+    case QgView_GL:
+return new QgGL(parent);
+#endif
+    case QgView_SW:
+return new QgSW(parent);
+    default:
+/* QgView_AUTO or any other value: prefer hardware GL, fall back to SW */
+#ifdef BRLCAD_OPENGL
+return new QgGL(parent);
+#else
+return new QgSW(parent);
+#endif
+    }
+}
+
+/* ---------------------------------------------------------------------- */
+
+QgView::QgView(QWidget *parent, int type)
     : QWidget(parent)
 {
     this->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -45,80 +97,46 @@ QgView::QgView(QWidget *parent, int type, struct fb *fbp)
     l->setSpacing(0);
     l->setContentsMargins(0, 0, 0, 0);
 
-    switch (type) {
-#ifdef BRLCAD_OPENGL
-	case QgView_GL:
-	    canvas_gl = new QgGL(this, fbp);
-	    canvas_gl->setMinimumSize(50,50);
-	    canvas_gl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-	    l->addWidget(canvas_gl);
-	    QObject::connect(canvas_gl, &QgGL::changed, this, &QgView::do_view_changed);
-	    QObject::connect(canvas_gl, &QgGL::init_done, this, &QgView::do_init_done);
-	    break;
-#endif
-	case QgView_SW:
-	    canvas_sw = new QgSW(this, fbp);
-	    canvas_sw->setMinimumSize(50,50);
-	    canvas_sw->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-	    l->addWidget(canvas_sw);
-	    QObject::connect(canvas_sw, &QgSW::changed, this, &QgView::do_view_changed);
-	    QObject::connect(canvas_sw, &QgSW::init_done, this, &QgView::do_init_done);
-	    break;
-	default:
-#ifdef BRLCAD_OPENGL
-	    canvas_gl = new QgGL(this, fbp);
-	    canvas_gl->setMinimumSize(50,50);
-	    canvas_gl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-	    l->addWidget(canvas_gl);
-	    QObject::connect(canvas_gl, &QgGL::changed, this, &QgView::do_view_changed);
-	    QObject::connect(canvas_gl, &QgGL::init_done, this, &QgView::do_init_done);
-#else
-	    canvas_sw = new QgSW(this, fbp);
-	    canvas_sw->setMinimumSize(50,50);
-	    canvas_sw->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-	    l->addWidget(canvas_sw);
-	    QObject::connect(canvas_sw, &QgSW::changed, this, &QgView::do_view_changed);
-	    QObject::connect(canvas_sw, &QgSW::init_done, this, &QgView::do_init_done);
-#endif
-	    return;
-    }
+    canvas = make_canvas(this, type);
+    if (!canvas)
+return;
+
+    QWidget *w = canvas->canvasWidget();
+    w->setMinimumSize(50, 50);
+    w->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    l->addWidget(w);
+
+    /* Connect canvas signals via old-style macros (QgCanvasBase is not a
+     * QObject, so we obtain the QObject* via asQObject()). */
+    QObject::connect(canvas->asQObject(), SIGNAL(changed()),
+     this, SLOT(do_view_changed()));
+    QObject::connect(canvas->asQObject(), SIGNAL(init_done()),
+     this, SLOT(do_init_done()));
 }
 
 QgView::~QgView()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl)
-	delete canvas_gl;
-#endif
-    if (canvas_sw)
-	delete canvas_sw;
+    delete canvas;
 }
 
 bool
 QgView::isValid()
 {
-    if (canvas_sw)
-	return true;
-
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl)
-	return canvas_gl->isValid();
-#endif
-
-    return false;
+    if (!canvas)
+return false;
+    return canvas->isValid();
 }
 
 int
 QgView::view_type()
 {
+    if (!canvas)
+return -1;
 #ifdef BRLCAD_OPENGL
-    if (canvas_gl)
-	return QgView_GL;
+    if (dynamic_cast<QgGL *>(canvas))
+return QgView_GL;
 #endif
-    if (canvas_sw)
-	return QgView_SW;
-
-    return -1;
+    return QgView_SW;
 }
 
 
@@ -130,17 +148,26 @@ QgView::save_image(int UNUSED(quad))
 void
 QgView::render_to_file(const QString &filename)
 {
-    if (canvas_sw)
-	canvas_sw->render_to_file(filename);
+    if (canvas)
+canvas->render_to_file(filename);
 }
 
 void
 QgView::get_viewport_image(QImage &img)
 {
-    if (canvas_sw)
-	canvas_sw->get_viewport_image(img);
+    if (canvas)
+canvas->get_viewport_image(img);
     else
-	img = QImage();
+img = QImage();
+}
+
+void
+QgView::get_obol_viewport_image(QImage &img)
+{
+    if (canvas)
+canvas->get_obol_viewport_image(img);
+    else
+img = QImage();
 }
 
 void
@@ -151,155 +178,78 @@ QgView::do_view_changed()
 }
 
 void
-QgView::need_update(unsigned long long)
+QgView::need_update(QgViewUpdateFlags flags)
 {
-    bv_log(4, "QgView::need_update");
     QTCAD_SLOT("QgView::need_update", 1);
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->need_update();
-	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->need_update();
-	return;
-    }
+    uint32_t refresh_flags = qg_refresh_flags(flags);
+    if (qg_legacy_view *lv = view())
+	bv_refresh_request(qg_legacy_view_bv(lv), refresh_flags);
+    if (canvas)
+canvas->request_update(refresh_flags);
 }
 
-struct bview *
+qg_legacy_view *
 QgView::view()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl)
-	return canvas_gl->v;
-#endif
-    if (canvas_sw)
-	return canvas_sw->v;
-
-    return NULL;
+    return canvas ? canvas->view() : nullptr;
 }
 
-struct dm *
-QgView::dmp()
+bool
+QgView::legacyBackendInitialized() const
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl)
-	return canvas_gl->dmp;
-#endif
-    if (canvas_sw)
-	return canvas_sw->dmp;
-
-    return NULL;
+    return canvas ? canvas->legacyBackendInitialized() : false;
 }
 
-struct fb *
-QgView::ifp()
+BRLObolViewController *
+QgView::obolViewController()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl)
-	return canvas_gl->ifp;
-#endif
-    if (canvas_sw)
-	return canvas_sw->ifp;
+    return canvas ? canvas->obolViewController() : nullptr;
+}
 
-    return NULL;
+QgCanvasBase *
+QgView::canvasBase()
+{
+    return canvas;
 }
 
 void
-QgView::set_view(struct bview *nv)
+QgView::set_view(qg_legacy_view *nv)
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->v = nv;
-	if (canvas_gl->dmp && canvas_gl->v) {
-	    canvas_gl->v->dmp = canvas_gl->dmp;
-	    struct dm *dmp = (struct dm *)canvas_gl->dmp;
-	    dm_configure_win(dmp, 0);
-	    canvas_gl->v->gv_width = dm_get_width(dmp);
-	    canvas_gl->v->gv_height = dm_get_height(dmp);
-	}
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->v = nv;
-    	if (canvas_sw->dmp && canvas_sw->v) {
-	    canvas_sw->v->dmp = canvas_sw->dmp;
-	    struct dm *dmp = (struct dm *)canvas_sw->dmp;
-	    dm_configure_win(dmp, 0);
-	    canvas_sw->v->gv_width = dm_get_width(dmp);
-	    canvas_sw->v->gv_height = dm_get_height(dmp);
-	}
-    }
+    if (canvas)
+canvas->set_view(nv);
 }
 
 void
 QgView::stash_hashes()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->stash_hashes();
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->stash_hashes();
-    }
+    if (canvas)
+canvas->stash_hashes();
 }
 
 bool
 QgView::diff_hashes()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	return canvas_gl->diff_hashes();
-    }
-#endif
-    if (canvas_sw) {
-	return canvas_sw->diff_hashes();
-    }
-
-    return false;
+    return canvas ? canvas->diff_hashes() : false;
 }
 
 void
 QgView::aet(double a, double e, double t)
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->aet(a, e, t);
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->aet(a, e, t);
-    }
+    if (canvas)
+canvas->aet(a, e, t);
 }
 
 void
 QgView::set_current(int i)
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->current = i;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->current = i;
-    }
+    if (canvas)
+canvas->set_current(i);
 }
 
 int
 QgView::current()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	return canvas_gl->current;
-    }
-#endif
-    if (canvas_sw) {
-	return canvas_sw->current;
-    }
-
-    return 0;
+    return canvas ? canvas->currentView() : 0;
 }
 
 void
@@ -307,124 +257,77 @@ QgView::add_event_filter(QObject *o)
 {
     curr_event_filter = o;
     filters.push_back(o);
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->installEventFilter(o);
+    if (canvas)
+canvas->canvasWidget()->installEventFilter(o);
+}
+
+void
+QgView::installFilter(QgViewFilter *f)
+{
+    if (!f)
 	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->installEventFilter(o);
-	return;
-    }
+    f->set_view_widget(this);
+    add_event_filter(f);
 }
 
 void
 QgView::clear_event_filter(QObject *o)
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	if (o) {
-	    canvas_gl->removeEventFilter(o);
-	} else {
-	    for (size_t i = 0; i < filters.size(); i++) {
-		canvas_gl->removeEventFilter(filters[i]);
-	    }
-	    filters.clear();
-	}
+    if (!canvas)
+return;
+
+    QWidget *w = canvas->canvasWidget();
+    if (o) {
+w->removeEventFilter(o);
+auto fit = std::find(filters.begin(), filters.end(), o);
+if (fit != filters.end())
+    filters.erase(fit);
+    } else {
+for (size_t i = 0; i < filters.size(); i++)
+    w->removeEventFilter(filters[i]);
+filters.clear();
     }
-#endif
-    if (canvas_sw) {
-	if (o) {
-	    canvas_sw->removeEventFilter(o);
-	} else {
-	    for (size_t i = 0; i < filters.size(); i++) {
-		canvas_sw->removeEventFilter(filters[i]);
-	    }
-	    filters.clear();
-	}
-    }
-    curr_event_filter = NULL;
+
+    /* Passing nullptr is the documented "clear all managed filters" mode. */
+    if (!o || curr_event_filter == o)
+curr_event_filter = nullptr;
 }
 
 void
-QgView::set_draw_custom(void (*draw_custom)(struct bview *, void *), void *draw_udata)
+QgView::clearFilter(QgViewFilter *f)
 {
-
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->draw_custom = draw_custom;
-	canvas_gl->draw_udata = draw_udata;
+    if (!f)
 	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->draw_custom = draw_custom;
-	canvas_sw->draw_udata = draw_udata;
-	return;
-    }
+    clear_event_filter(f);
+    f->set_view_widget(nullptr);
 }
 
 void
 QgView::enableDefaultKeyBindings()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->enableDefaultKeyBindings();
-	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->enableDefaultKeyBindings();
-	return;
-    }
+    if (canvas)
+canvas->enableDefaultKeyBindings();
 }
 
 void
 QgView::disableDefaultKeyBindings()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->disableDefaultKeyBindings();
-	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->disableDefaultKeyBindings();
-	return;
-    }
+    if (canvas)
+canvas->disableDefaultKeyBindings();
 }
 
 void
 QgView::enableDefaultMouseBindings()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->enableDefaultMouseBindings();
-	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->enableDefaultMouseBindings();
-	return;
-    }
-
-
+    if (canvas)
+canvas->enableDefaultMouseBindings();
 }
 
 void
 QgView::disableDefaultMouseBindings()
 {
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->disableDefaultMouseBindings();
-	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->disableDefaultMouseBindings();
-	return;
-    }
+    if (canvas)
+canvas->disableDefaultMouseBindings();
 }
 
 
@@ -432,17 +335,8 @@ void
 QgView::set_lmouse_move_default(int mm)
 {
     QTCAD_SLOT("QgView::set_lmouse_move_default", 1);
-
-#ifdef BRLCAD_OPENGL
-    if (canvas_gl) {
-	canvas_gl->set_lmouse_move_default(mm);
-	return;
-    }
-#endif
-    if (canvas_sw) {
-	canvas_sw->set_lmouse_move_default(mm);
-	return;
-    }
+    if (canvas)
+canvas->set_lmouse_move_default(mm);
 }
 
 

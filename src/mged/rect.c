@@ -29,6 +29,7 @@
 
 #include "vmath.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "dm.h"
 #include "./mged.h"
 #include "./mged_dm.h"
@@ -75,8 +76,7 @@ rb_set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
 	if (m_dmp->dm_rubber_band == rubber_band) {
-	    m_dmp->dm_dirty = 1;
-	    dm_set_dirty(m_dmp->dm_dmp, 1);
+	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_INTERACTION);
 	}
     }
 }
@@ -288,7 +288,7 @@ mged_center(struct mged_state *s, point_t center)
     av[4] = (char *)0;
     ged_exec_center(s->gedp, 4, (const char **)av);
     (void)mged_svbase(s);
-    view_state->vs_flag = 1;
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 }
 
 void
@@ -300,16 +300,23 @@ zoom_rect_area(struct mged_state *s)
     point_t new_model_center;
     point_t old_view_center;
     point_t new_view_center;
+    mat_t view_center;
+    mat_t model2view;
+    mat_t view2model;
+    struct bv *view = mged_view_context_view(view_state->vs_gvp);
 
     if (ZERO(rubber_band->rb_width) &&
 	ZERO(rubber_band->rb_height))
 	return;
 
     adjust_rect_for_zoom(s);
+    bv_center_mat_get(view_center, view);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
     /* find old view center */
-    MAT_DELTAS_GET_NEG(old_model_center, view_state->vs_gvp->gv_center);
-    MAT4X3PNT(old_view_center, view_state->vs_gvp->gv_model2view, old_model_center);
+    MAT_DELTAS_GET_NEG(old_model_center, view_center);
+    MAT4X3PNT(old_view_center, model2view, old_model_center);
 
     /* calculate new view center */
     VSET(new_view_center,
@@ -318,7 +325,7 @@ zoom_rect_area(struct mged_state *s)
 	 old_view_center[Z]);
 
     /* find new model center */
-    MAT4X3PNT(new_model_center, view_state->vs_gvp->gv_view2model, new_view_center);
+    MAT4X3PNT(new_model_center, view2model, new_view_center);
     mged_center(s, new_model_center);
 
     /* zoom in to fill rectangle */

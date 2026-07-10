@@ -28,7 +28,9 @@
 #include <cstdlib>
 
 #include "bu/opt.h"
+#include "bv.h"
 #include "dm.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -47,6 +49,27 @@ _autoview_arg_is_num(const char *s, double *v)
 
     if (v)
 	*v = d;
+    return 1;
+}
+
+static int
+_autoview_obol_database_scene(
+	struct ged *gedp,
+	void *view_ctx,
+	fastf_t factor,
+	int all_view_objs)
+{
+    if (all_view_objs)
+	return 0;
+
+    vect_t min, max;
+    int empty = 1;
+    if (!ged_draw_obol_scene_database_autoview_bounds(gedp, &min, &max,
+	    &empty) || empty)
+	return 0;
+
+    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+	    factor, min, max);
     return 1;
 }
 
@@ -83,11 +106,11 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     int all_view_objs = 0;
     int print_help = 0;
     fastf_t scale = -1.0;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",      "",        NULL,     &print_help, "Print help and exit");
-    BU_OPT(d[1], "",   "all-objs", "",        NULL,  &all_view_objs, "Bound all non-faceplate view objects");
+    BU_OPT(d[1], "",   "all-objs", "",        NULL,  &all_view_objs, "Bound all non-faceplate view features");
     BU_OPT(d[2], "s", "scale",  "#", &bu_opt_fastf_t,         &scale, "Set view scale (model scale relative to view size)");
     BU_OPT(d[3], "V", "view",  "name", &bu_opt_vls,           &cvls, "Specify view to adjust");
     BU_OPT_NULL(d[4]);
@@ -104,8 +127,8 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
 
     if (bu_vls_strlen(&cvls)) {
-	v = bv_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
-	if (!v) {
+	view_ctx = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
+	if (!view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
@@ -137,10 +160,15 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	point_t min, max;
 	if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0, min, max) != BRLCAD_OK)
 	    return BRLCAD_ERROR;
-	bv_autoview_bounds(v, factor, min, max);
+	bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+		factor, min, max);
     } else {
-	// libbv has the nuts and bolts
-	bv_autoview(v, factor, all_view_objs);
+	vect_t min, max;
+	if (!_autoview_obol_database_scene(gedp, view_ctx, factor, all_view_objs)) {
+	    if (!ged_draw_bounds(gedp, &min, &max, all_view_objs))
+		bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+			factor, min, max);
+	}
     }
 
     return BRLCAD_OK;
@@ -154,4 +182,3 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

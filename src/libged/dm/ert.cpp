@@ -40,7 +40,9 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/process.h"
+#include "bv.h"
 #include "raytrace.h"
+#include "dm/fbserv.h"
 #include "dm.h"
 
 #include "../ged_private.h"
@@ -59,21 +61,45 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!gedp->ged_gvp) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "no current view set\n");
 	return BRLCAD_ERROR;
     }
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, "no current display manager set\n");
+    struct fbserv_obj *fbs = gedp->ged_fbs;
+    if (!fbs) {
+	bu_vls_printf(gedp->ged_result_str, "no framebuffer server configured\n");
 	return BRLCAD_ERROR;
     }
 
-    struct fb *fbp = dm_get_fb(dmp);
-    if (!fbp) {
-	bu_vls_printf(gedp->ged_result_str, "attached display manager has no embedded framebuffer\n");
-	return BRLCAD_ERROR;
+    struct fbserv_fb_info fbinfo;
+    int have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
+    struct dm *dmp = NULL;
+    struct fb *fbp = NULL;
+    if (!have_fbserv_backend) {
+	if (ged_obol_fbserv_ensure_for_view(gedp, view_ctx) == BRLCAD_OK)
+	    have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
+    }
+
+    if (!have_fbserv_backend) {
+	dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
+	if (!dmp) {
+	    bu_vls_printf(gedp->ged_result_str, "no current display manager or framebuffer backend set\n");
+	    return BRLCAD_ERROR;
+	}
+
+	fbp = dm_get_fb(dmp);
+	if (!fbp) {
+	    bu_vls_printf(gedp->ged_result_str, "attached display manager has no embedded framebuffer\n");
+	    return BRLCAD_ERROR;
+	}
+	fbs_set_legacy_framebuffer(fbs, fbp);
+	if (fbs_framebuffer_info(fbs, &fbinfo) != 0) {
+	    bu_vls_printf(gedp->ged_result_str, "could not query embedded framebuffer dimensions\n");
+	    return BRLCAD_ERROR;
+	}
     }
 
     if (!ged_who_argc(gedp)) {
@@ -82,25 +108,30 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     // If the framebuffer is not displayed, enable it in underlay mode so the
-    // output is visible.  TODO - we can support a -Q option or some such to
-    // suppress this behavior, but since the fb isn't up in default usage the
-    // behavior of ert is a bit too cryptic without doing this...
-    if (!gedp->ged_gvp->gv_s->gv_fb_mode)
-	gedp->ged_gvp->gv_s->gv_fb_mode = 2;
-
-    // Have a framebuffer to target and objects to raytrace.  Next we need a
-    // framebuffer server.
-    struct fbserv_obj *fbs = gedp->ged_fbs;
-    fbs->fbs_fbp = fbp;
+    // output is visible.
+    //
+    // Phase B1 (ert reliability) — gv_fb_mode lifecycle contract:
+    //   * `ert` deliberately leaves gv_fb_mode set after the rt subprocess
+    //     exits.  This is intentional so the user can keep the just-rendered
+    //     image visible underneath the 3D wireframe (the common interactive
+    //     "render → review → tweak view → re-render" workflow).
+    //   * To clear the lingering raytrace overlay and return to a plain 3D
+    //     view, the user runs `fbclear -m` (clears if_mem AND resets
+    //     gv_fb_mode = 0) — see src/libged/fbclear/fbclear.c.
+    //   * Programmatic callers that need to restore the prior fb_mode
+    //     should snapshot it before invoking ert and write it back after.
+    int prior_fb_mode = bv_framebuffer_mode_get(view);
+    if (!prior_fb_mode)
+	bv_framebuffer_mode_set(view, 2);
 
     /* Phase 3: Try the IPC fast path first (anonymous pipe / socketpair).
      * This avoids TCP port binding, firewall traversal, and port collisions.
      * Fall back to the traditional TCP listen path when IPC is unavailable.  */
     bool using_ipc = false;
-    if (fbs->fbs_open_ipc_client_handler && fbs_open_ipc(fbs) == BRLCAD_OK) {
+    if (fbs_can_open_ipc(fbs) && fbs_open_ipc(fbs) == BRLCAD_OK) {
 	using_ipc = true;
     } else {
-	if (!fbs->fbs_is_listening || fbs_open(fbs, 0) != BRLCAD_OK) {
+	if (!fbs_can_open_network(fbs) || fbs_open(fbs, 0) != BRLCAD_OK) {
 	    bu_vls_printf(gedp->ged_result_str, "could not open fb server\n");
 	    return BRLCAD_ERROR;
 	}
@@ -119,12 +150,22 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 	 * detect PKG_ADDR and use the IPC channel instead of TCP.         */
 	args.push_back(std::string("0"));
     } else {
-	args.push_back(std::to_string(fbs->fbs_listener.fbsl_port));
+	args.push_back(std::to_string(fbs_listener_port(fbs)));
     }
     args.push_back(std::string("-M"));
 
-    int width = dm_get_width(dmp);
-    int height = dm_get_height(dmp);
+    int width = fbinfo.width;
+    int height = fbinfo.height;
+    if (width <= 0 || height <= 0) {
+	if (dmp) {
+	    width = dm_get_width(dmp);
+	    height = dm_get_height(dmp);
+	}
+    }
+    if (width <= 0 || height <= 0) {
+	bu_vls_printf(gedp->ged_result_str, "invalid embedded framebuffer dimensions\n");
+	return BRLCAD_ERROR;
+    }
 
     args.push_back(std::string("-w"));
     args.push_back(std::to_string(width));
@@ -134,9 +175,10 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     double aspect = (double)width/(double)height;
     bu_vls_sprintf(&wstr, "%.14e", aspect);
     args.push_back(std::string(bu_vls_cstr(&wstr)));
-    if (gedp->ged_gvp->gv_perspective > 0) {
+    fastf_t perspective = bv_perspective_get(view);
+    if (perspective > 0) {
 	args.push_back(std::string("-p"));
-	bu_vls_sprintf(&wstr, "%.14e", gedp->ged_gvp->gv_perspective);
+	bu_vls_sprintf(&wstr, "%.14e", perspective);
 	args.push_back(std::string(bu_vls_cstr(&wstr)));
     }
 
@@ -190,12 +232,19 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 	if (addr_env) {
 	    /* addr_env is "PKG_ADDR=pipe:4,7" — strip the "KEY=" prefix */
 	    const char *eq = strchr(addr_env, '=');
-	    if (eq)
+	    if (eq) {
+		bu_log("ert: setting PKG_ADDR='%s' for rt subprocess\n", eq + 1);
 		bu_setenv(PKG_ADDR_ENVVAR, eq + 1, 1);
+	    }
+	} else {
+	    bu_log("ert: WARNING fbs_ipc_child_addr_env returned NULL - rt will not find IPC channel\n");
 	}
     }
 
+    bu_log("ert: calling _ged_run_rt (using_ipc=%d fb_size=%dx%d)\n",
+	   using_ipc, width, height);
     ret = _ged_run_rt(gedp, gd_rt_cmd_len, (const char **)gd_rt_cmd, (argc - i), &(argv[i]), 0, &rt_pid, clbk, u2);
+    bu_log("ert: _ged_run_rt returned %d rt_pid=%d\n", ret, rt_pid);
 
     if (using_ipc)
 	bu_setenv(PKG_ADDR_ENVVAR, "", 1); /* clear parent's env copy */
@@ -225,4 +274,3 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

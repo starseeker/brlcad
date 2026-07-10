@@ -19,8 +19,7 @@
  */
 /** @file CADViewSettings.cpp
  *
- * Widget implementation for viewing and controlling faceplate settings,
- * reflecting the current state of bview_settings and bv_params_state.
+ * Widget implementation for viewing and controlling faceplate settings.
  *
  */
 
@@ -31,10 +30,19 @@
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
+#include "ged/draw.h"
+#include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
-#include "QgEdApp.h"
+#include "rt/view.h"
 
 #include "CADViewSettings.h"
+#include "QgLegacyViewContext.h"
+
+static qg_legacy_view *
+qged_settings_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeView() : nullptr;
+}
 
 /* Helper: update a checkbox to reflect an integer flag, blocking signals
  * to prevent triggering a spurious view_refresh round-trip. */
@@ -181,29 +189,43 @@ CADViewSettings::view_update_int(int)
 void
 CADViewSettings::checkbox_refresh(unsigned long long)
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct bview *v = gedp->ged_gvp;
+    qg_legacy_view *v = qged_settings_view(m_ctx);
     if (!v)
 	return;
+    void *view_ctx = qg_legacy_view_to_context(v);
+    struct bv *view = qg_legacy_view_bv(v);
+
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
 
     /* Top-level faceplate elements */
-    set_ckbx(acsg_ckbx,     v->gv_s->adaptive_plot_csg);
-    set_ckbx(amesh_ckbx,    v->gv_s->adaptive_plot_mesh);
-    set_ckbx(adc_ckbx,      v->gv_s->gv_adc.draw);
-    set_ckbx(cdot_ckbx,     v->gv_s->gv_center_dot.gos_draw);
-    set_ckbx(grid_ckbx,     v->gv_s->gv_grid.draw);
-    set_ckbx(mdlaxes_ckbx,  v->gv_s->gv_model_axes.draw);
-    set_ckbx(scale_ckbx,    v->gv_s->gv_view_scale.gos_draw);
-    set_ckbx(viewaxes_ckbx, v->gv_s->gv_view_axes.draw);
+    struct bv_adc_state adc = {};
+    struct bv_other_state center_dot = {};
+    struct bv_grid_state grid = {};
+    struct bv_axes_state model_axes = {};
+    struct bv_other_state scale_state = {};
+    struct bv_axes_state view_axes = {};
+    struct bv_params_state params = {};
+    (void)bv_adc_state_get(&adc, view);
+    (void)bv_center_dot_state_get(&center_dot, view);
+    (void)bv_grid_state_get(&grid, view);
+    (void)bv_model_axes_state_get(&model_axes, view);
+    (void)bv_scale_overlay_state_get(&scale_state, view);
+    (void)bv_view_axes_state_get(&view_axes, view);
+    (void)bv_params_state_get(&params, view);
+
+    set_ckbx(acsg_ckbx,     lod_policy.csg_enabled);
+    set_ckbx(amesh_ckbx,    lod_policy.mesh_enabled);
+    set_ckbx(adc_ckbx,      adc.draw);
+    set_ckbx(cdot_ckbx,     center_dot.gos_draw);
+    set_ckbx(grid_ckbx,     grid.draw);
+    set_ckbx(mdlaxes_ckbx,  model_axes.draw);
+    set_ckbx(scale_ckbx,    scale_state.gos_draw);
+    set_ckbx(viewaxes_ckbx, view_axes.draw);
 
     /* Framebuffer mode (0=off, 1=overlay, 2=underlay) maps directly to
      * combo index. Clamp to a valid range in case of unexpected values. */
-    int fb_mode = v->gv_s->gv_fb_mode;
+    int fb_mode = bv_framebuffer_mode_get(view);
     if (fb_mode < 0 || fb_mode > 2)
 	fb_mode = 0;
     fb_mode_combo->blockSignals(true);
@@ -211,14 +233,13 @@ CADViewSettings::checkbox_refresh(unsigned long long)
     fb_mode_combo->blockSignals(false);
 
     /* Parameters group: master draw toggle + per-element sub-flags */
-    struct bv_params_state *pst = &v->gv_s->gv_view_params;
-    set_ckbx(params_ckbx,        pst->draw);
-    set_ckbx(params_size_ckbx,   pst->draw_size);
-    set_ckbx(params_center_ckbx, pst->draw_center);
-    set_ckbx(params_az_ckbx,     pst->draw_az);
-    set_ckbx(params_el_ckbx,     pst->draw_el);
-    set_ckbx(params_tw_ckbx,     pst->draw_tw);
-    set_ckbx(params_fps_ckbx,    pst->draw_fps);
+    set_ckbx(params_ckbx,        params.draw);
+    set_ckbx(params_size_ckbx,   params.draw_size);
+    set_ckbx(params_center_ckbx, params.draw_center);
+    set_ckbx(params_az_ckbx,     params.draw_az);
+    set_ckbx(params_el_ckbx,     params.draw_el);
+    set_ckbx(params_tw_ckbx,     params.draw_tw);
+    set_ckbx(params_fps_ckbx,    params.draw_fps);
 }
 
 /* Read all widget states and write them back to the view, then signal
@@ -226,38 +247,60 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 void
 CADViewSettings::view_refresh(unsigned long long)
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct bview *v = gedp->ged_gvp;
+    qg_legacy_view *v = qged_settings_view(m_ctx);
     if (!v)
 	return;
+    void *view_ctx = qg_legacy_view_to_context(v);
+    struct bv *view = qg_legacy_view_bv(v);
 
-    /* Top-level faceplate elements */
-    v->gv_s->adaptive_plot_csg     = ckbx_val(acsg_ckbx);
-    v->gv_s->adaptive_plot_mesh    = ckbx_val(amesh_ckbx);
-    v->gv_s->gv_adc.draw           = ckbx_val(adc_ckbx);
-    v->gv_s->gv_center_dot.gos_draw = ckbx_val(cdot_ckbx);
-    v->gv_s->gv_grid.draw          = ckbx_val(grid_ckbx);
-    v->gv_s->gv_model_axes.draw    = ckbx_val(mdlaxes_ckbx);
-    v->gv_s->gv_view_scale.gos_draw = ckbx_val(scale_ckbx);
-    v->gv_s->gv_view_axes.draw     = ckbx_val(viewaxes_ckbx);
+    /* Preserve non-widget LoD policy fields and update only the settings
+     * owned by this widget. */
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
+    lod_policy.csg_enabled = ckbx_val(acsg_ckbx);
+    lod_policy.mesh_enabled = ckbx_val(amesh_ckbx);
+    lod_policy.zoom_refresh =
+	lod_policy.csg_enabled || lod_policy.mesh_enabled;
+    (void)ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
+    (void)bv_framebuffer_mode_set(view, fb_mode_combo->currentIndex());
 
-    /* Framebuffer mode: combo index maps directly to gv_fb_mode (0/1/2) */
-    v->gv_s->gv_fb_mode = fb_mode_combo->currentIndex();
+    struct bv_adc_state adc = {};
+    struct bv_other_state center_dot = {};
+    struct bv_grid_state grid = {};
+    struct bv_axes_state model_axes = {};
+    struct bv_other_state scale_state = {};
+    struct bv_axes_state view_axes = {};
+    struct bv_params_state params = {};
+    (void)bv_adc_state_get(&adc, view);
+    (void)bv_center_dot_state_get(&center_dot, view);
+    (void)bv_grid_state_get(&grid, view);
+    (void)bv_model_axes_state_get(&model_axes, view);
+    (void)bv_scale_overlay_state_get(&scale_state, view);
+    (void)bv_view_axes_state_get(&view_axes, view);
+    (void)bv_params_state_get(&params, view);
 
-    /* Parameters: master draw flag + per-element sub-flags */
-    struct bv_params_state *pst = &v->gv_s->gv_view_params;
-    pst->draw        = ckbx_val(params_ckbx);
-    pst->draw_size   = ckbx_val(params_size_ckbx);
-    pst->draw_center = ckbx_val(params_center_ckbx);
-    pst->draw_az     = ckbx_val(params_az_ckbx);
-    pst->draw_el     = ckbx_val(params_el_ckbx);
-    pst->draw_tw     = ckbx_val(params_tw_ckbx);
-    pst->draw_fps    = ckbx_val(params_fps_ckbx);
+    adc.draw = ckbx_val(adc_ckbx);
+    center_dot.gos_draw = ckbx_val(cdot_ckbx);
+    grid.draw = ckbx_val(grid_ckbx);
+    model_axes.draw = ckbx_val(mdlaxes_ckbx);
+    scale_state.gos_draw = ckbx_val(scale_ckbx);
+    view_axes.draw = ckbx_val(viewaxes_ckbx);
+
+    params.draw        = ckbx_val(params_ckbx);
+    params.draw_size   = ckbx_val(params_size_ckbx);
+    params.draw_center = ckbx_val(params_center_ckbx);
+    params.draw_az     = ckbx_val(params_az_ckbx);
+    params.draw_el     = ckbx_val(params_el_ckbx);
+    params.draw_tw     = ckbx_val(params_tw_ckbx);
+    params.draw_fps    = ckbx_val(params_fps_ckbx);
+
+    bv_adc_state_set(view, &adc);
+    bv_center_dot_state_set(view, &center_dot);
+    bv_grid_state_set(view, &grid);
+    bv_model_axes_state_set(view, &model_axes);
+    bv_scale_overlay_state_set(view, &scale_state);
+    bv_view_axes_state_set(view, &view_axes);
+    bv_params_state_set(view, &params);
 
     emit settings_changed(QG_VIEW_DRAWN);
 }

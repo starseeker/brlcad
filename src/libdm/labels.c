@@ -28,9 +28,9 @@
 #include "raytrace.h"
 #include "nmg.h"
 #include "rt/geom.h"
-#include "bv/defines.h"
 #define DM_WITH_RT
 #include "dm.h"
+#include "rt/view.h"
 #include "./include/private.h"
 
 /*
@@ -599,8 +599,8 @@ dm_draw_prim_labels(struct dm *dmp,
 	    break;
 
 	dm_draw_string_2d(dmp, pl[i].str,
-			  (((int)(pl[i].pt[X]*BV_MAX))+15)*INV_BV,
-			  (((int)(pl[i].pt[Y]*BV_MAX))+15)*INV_BV, 0, 1);
+			  (((int)(pl[i].pt[X]*RT_VIEW_MAX))+15)*RT_INV_VIEW,
+			  (((int)(pl[i].pt[Y]*RT_VIEW_MAX))+15)*RT_INV_VIEW, 0, 1);
     }
 
     db_free_full_path(&path);

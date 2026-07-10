@@ -72,6 +72,7 @@ set(
   RPath_Setup.cmake
   ResetCache.cmake
   TrackFiles.cmake
+  brlobol_pivot_guard.cmake
   static_link_test_main.cpp
   compat/README
   compat/README.compat

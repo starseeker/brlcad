@@ -25,8 +25,11 @@
 /** @} */
 
 #include "common.h"
+#include "bv.h"
 #include "bu/units.h"
 #include "ged.h"
+#include "ged/view.h"
+#include "rt/view.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -42,7 +45,8 @@ to_faceplate(struct ged *gedp,
 	     int UNUSED(maxargs))
 {
     int i;
-    struct bview *gdvp;
+    void *view_ctx;
+    struct bv *view = NULL;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -56,34 +60,41 @@ to_faceplate(struct ged *gedp,
     if (argc < 4 || 7 < argc)
 	goto bad;
 
-    gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
-    if (!gdvp) {
+    view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
+    view = bv_context_view((struct bv_context *)view_ctx);
+    if (!view)
+	goto bad;
 
     if (BU_STR_EQUAL(argv[2], "center_dot")) {
+	struct bv_other_state center_dot;
+	if (!bv_center_dot_state_get(&center_dot, view))
+	    goto bad;
 	if (BU_STR_EQUAL(argv[3], "draw")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d", gdvp->gv_s->gv_center_dot.gos_draw);
+		bu_vls_printf(gedp->ged_result_str, "%d", center_dot.gos_draw);
 		return BRLCAD_OK;
 	    } else if (argc == 5) {
 		if (bu_sscanf(argv[4], "%d", &i) != 1)
 		    goto bad;
 
 		if (i)
-		    gdvp->gv_s->gv_center_dot.gos_draw = 1;
+		    center_dot.gos_draw = 1;
 		else
-		    gdvp->gv_s->gv_center_dot.gos_draw = 0;
+		    center_dot.gos_draw = 0;
 
-		to_refresh_view(gdvp);
+		bv_center_dot_state_set(view, &center_dot);
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}
 
 	if (BU_STR_EQUAL(argv[3], "color")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(gdvp->gv_s->gv_center_dot.gos_line_color));
+		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(center_dot.gos_line_color));
 		return BRLCAD_OK;
 	    } else if (argc == 7) {
 		int r, g, b;
@@ -93,8 +104,9 @@ to_faceplate(struct ged *gedp,
 		    bu_sscanf(argv[6], "%d", &b) != 1)
 		    goto bad;
 
-		VSET(gdvp->gv_s->gv_center_dot.gos_line_color, r, g, b);
-		to_refresh_view(gdvp);
+		VSET(center_dot.gos_line_color, r, g, b);
+		bv_center_dot_state_set(view, &center_dot);
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}
@@ -103,27 +115,33 @@ to_faceplate(struct ged *gedp,
     }
 
     if (BU_STR_EQUAL(argv[2], "prim_labels")) {
+	struct bv_other_state prim_labels;
+	if (!tclcad_view_prim_labels_state_from_view_ctx(&prim_labels, view_ctx))
+	    goto bad;
+
 	if (BU_STR_EQUAL(argv[3], "draw")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d", gdvp->gv_tcl.gv_prim_labels.gos_draw);
+		bu_vls_printf(gedp->ged_result_str, "%d", prim_labels.gos_draw);
 		return BRLCAD_OK;
 	    } else if (argc == 5) {
 		if (bu_sscanf(argv[4], "%d", &i) != 1)
 		    goto bad;
 
 		if (i)
-		    gdvp->gv_tcl.gv_prim_labels.gos_draw = 1;
+		    prim_labels.gos_draw = 1;
 		else
-		    gdvp->gv_tcl.gv_prim_labels.gos_draw = 0;
+		    prim_labels.gos_draw = 0;
 
-		to_refresh_view(gdvp);
+		if (!tclcad_view_prim_labels_state_set(view_ctx, &prim_labels))
+		    goto bad;
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}
 
 	if (BU_STR_EQUAL(argv[3], "color")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(gdvp->gv_tcl.gv_prim_labels.gos_text_color));
+		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(prim_labels.gos_text_color));
 		return BRLCAD_OK;
 	    } else if (argc == 7) {
 		int r, g, b;
@@ -133,8 +151,10 @@ to_faceplate(struct ged *gedp,
 		    bu_sscanf(argv[6], "%d", &b) != 1)
 		    goto bad;
 
-		VSET(gdvp->gv_tcl.gv_prim_labels.gos_text_color, r, g, b);
-		to_refresh_view(gdvp);
+		VSET(prim_labels.gos_text_color, r, g, b);
+		if (!tclcad_view_prim_labels_state_set(view_ctx, &prim_labels))
+		    goto bad;
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}
@@ -143,27 +163,31 @@ to_faceplate(struct ged *gedp,
     }
 
     if (BU_STR_EQUAL(argv[2], "view_params")) {
+	struct bv_params_state params;
+	if (!bv_params_state_get(&params, view))
+	    goto bad;
 	if (BU_STR_EQUAL(argv[3], "draw")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d", gdvp->gv_s->gv_view_params.draw);
+		bu_vls_printf(gedp->ged_result_str, "%d", params.draw);
 		return BRLCAD_OK;
 	    } else if (argc == 5) {
 		if (bu_sscanf(argv[4], "%d", &i) != 1)
 		    goto bad;
 
 		if (i)
-		    gdvp->gv_s->gv_view_params.draw = 1;
+		    params.draw = 1;
 		else
-		    gdvp->gv_s->gv_view_params.draw = 0;
+		    params.draw = 0;
 
-		to_refresh_view(gdvp);
+		bv_params_state_set(view, &params);
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}
 
 	if (BU_STR_EQUAL(argv[3], "color")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(gdvp->gv_s->gv_view_params.color));
+		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(params.color));
 		return BRLCAD_OK;
 	    } else if (argc == 7) {
 		int r, g, b;
@@ -173,8 +197,9 @@ to_faceplate(struct ged *gedp,
 		    bu_sscanf(argv[6], "%d", &b) != 1)
 		    goto bad;
 
-		VSET(gdvp->gv_s->gv_view_params.color, r, g, b);
-		to_refresh_view(gdvp);
+		VSET(params.color, r, g, b);
+		bv_params_state_set(view, &params);
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}
@@ -183,27 +208,31 @@ to_faceplate(struct ged *gedp,
     }
 
     if (BU_STR_EQUAL(argv[2], "view_scale")) {
+	struct bv_other_state scale_state;
+	if (!bv_scale_overlay_state_get(&scale_state, view))
+	    goto bad;
 	if (BU_STR_EQUAL(argv[3], "draw")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d", gdvp->gv_s->gv_view_scale.gos_draw);
+		bu_vls_printf(gedp->ged_result_str, "%d", scale_state.gos_draw);
 		return BRLCAD_OK;
 	    } else if (argc == 5) {
 		if (bu_sscanf(argv[4], "%d", &i) != 1)
 		    goto bad;
 
 		if (i)
-		    gdvp->gv_s->gv_view_scale.gos_draw = 1;
+		    scale_state.gos_draw = 1;
 		else
-		    gdvp->gv_s->gv_view_scale.gos_draw = 0;
+		    scale_state.gos_draw = 0;
 
-		to_refresh_view(gdvp);
+		bv_scale_overlay_state_set(view, &scale_state);
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}
 
 	if (BU_STR_EQUAL(argv[3], "color")) {
 	    if (argc == 4) {
-		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(gdvp->gv_s->gv_view_scale.gos_line_color));
+		bu_vls_printf(gedp->ged_result_str, "%d %d %d", V3ARGS(scale_state.gos_line_color));
 		return BRLCAD_OK;
 	    } else if (argc == 7) {
 		int r, g, b;
@@ -213,8 +242,9 @@ to_faceplate(struct ged *gedp,
 		    bu_sscanf(argv[6], "%d", &b) != 1)
 		    goto bad;
 
-		VSET(gdvp->gv_s->gv_view_scale.gos_line_color, r, g, b);
-		to_refresh_view(gdvp);
+		VSET(scale_state.gos_line_color, r, g, b);
+		bv_scale_overlay_state_set(view, &scale_state);
+		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
 	}

@@ -1,0 +1,71 @@
+BRL-CAD Obol Debug Draw Performance Notes
+=========================================
+
+Scope
+-----
+
+These numbers characterize the current unoptimized debug build using
+`build/bin/ged_draw_perf`, the source target in `src/gtools/ged_draw_perf.cpp`.
+All listed runs used `--profile --autoview --render`, a 512x512 Obol DM, and a
+fresh temporary cache directory with `--clear-cache`.
+
+Current Samples
+---------------
+
+| Model/root | Mode | draw_ms | render_ms | Main counters | Status |
+| --- | --- | ---: | ---: | --- | --- |
+| `Generic_Twin.g all` | normal wire | 1960 | 549 | 2248 sources, wire 627 ms, plot 3.6 ms, vlist 23.9 ms, source replace 159 ms | OK |
+| `havoc.g havoc` | normal wire | 2144 | 816 | 3461 sources, wire 713 ms, plot 4.7 ms, vlist 29.8 ms, source replace 258 ms | OK |
+| `Generic_Twin.g all` | LoD wire, `--lod-mesh 1 --lod-bot-threshold 50` | 1899 | 448 | vlist points drop from 576178 to 122202; draw remains source-management dominated | OK |
+| `Generic_Twin.g all` | shaded BoTs, `-m1` | 1937 | 589 | mesh 588 ms; non-BoT leaves remain wire fallback | OK |
+| `havoc.g havoc` | shaded BoTs, `-m1` | 2168 | 821 | mesh 731 ms; non-BoT leaves remain wire fallback | OK |
+| `Generic_Twin.g all` | full shaded, `-m2` | 7504 | 1941 | mesh/tessellation 5135 ms; verbose NMG/ARB diagnostics | OK, tessellation dominated |
+| `Generic_Twin.g all` | evaluated wire, `-m3` | 14326 | 222 | 592861 candidates, 585531 segments, wire 14284 ms | OK, candidate pipeline dominated |
+| `Generic_Twin.g all` | evaluated points, `-m5` | 1320 | 146 | one external mesh source; CLINE normal abort fixed | OK |
+| `havoc.g havoc` | evaluated points, `-m5` | 1040 | 127 | one external mesh source | OK |
+
+Interpretation
+--------------
+
+Normal wire is not dominated by primitive plotting: plot/vlist conversion is
+small compared to source realization, replacement, and render traversal.  The
+previous CAD aggregation experiments were not retained because measured
+complexity outweighed the benefit in this build.
+
+LoD wire improves rendered point count and render time for Generic_Twin, but
+source publication remains the draw-time bottleneck.
+
+Full shaded and hidden-line style paths are tessellation dominated on
+implicit-heavy models.  That is a shaded-mode optimization task, not a grid or
+faceplate regression.
+
+Evaluated wire is dominated by the librt candidate pipeline.  With
+`RT_EVAL_WIREFRAME_PROFILE=1`, `Generic_Twin.g all -m3` reported:
+
+* total evaluated-wire profile time: 10.77 s;
+* candidate stages: edge candidates 1.13 s, intersection candidates 3.78 s,
+  intersection face indexing 1.92 s, pair evaluation 1.44 s;
+* boolweave candidate evaluation: 1.18 s.
+
+The shorter `evaluated-wire boolweave eval summary` reports only the
+candidate-eval portion, not total candidate setup/export time.  Thin-shell
+havoc evaluated-wire remains a separate long-term algorithm task.
+
+Fixes From This Pass
+--------------------
+
+Evaluated-points mode previously aborted on some Generic_Twin CLINE samples
+because `rt_cline_norm` called `bu_bomb` on degenerate grazing normals.  CLINE
+normal calculation now falls back to a radial normal and otherwise lets the
+sampler discard an empty normal.  `Generic_Twin.g all -m5` and
+`havoc.g havoc -m5` now complete.
+
+Next Optimization Targets
+-------------------------
+
+* Reduce normal-wire source publication/render traversal overhead without
+  reintroducing high-complexity CAD aggregation unless fresh benchmarks prove
+  it pays.
+* Rework full shaded/hidden-line tessellation diagnostics and cost behavior.
+* Redesign evaluated-wire candidate generation for large and thin-shell
+  models; boolweave itself is not the dominant Generic_Twin cost.

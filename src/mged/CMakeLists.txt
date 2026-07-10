@@ -22,9 +22,6 @@ set(
   dodraw.c
   doevent.c
   dozoom.c
-  edarb.c
-  edars.c
-  edpipe.c
   edsol.c
   f_db.c
   facedef.c
@@ -34,10 +31,10 @@ set(
   mater.c
   menu.c
   mged.c
+  mged_impl.cpp
   mover.c
   overlay.c
   plot.c
-  predictor.c
   rect.c
   rtif.c
   scroll.c
@@ -68,6 +65,7 @@ set(
   libged
   libwdb
   libdm
+  libimgstream
   libnmg
   Threads::Threads
   ${WS2_32_LIBRARY}
@@ -89,13 +87,38 @@ if(BRLCAD_ENABLE_TCL)
   endif(TK_LIBRARY)
   target_include_directories(mged BEFORE PRIVATE ${MGED_INCLUDE_DIRS})
   add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
+  if(TARGET rt)
+    add_dependencies(mged rt)
+  endif(TARGET rt)
 
   # MGED needs the tclIndex and pkgIndex files set up correctly
-  add_dependencies(mged TclIndexBld)
+	  add_dependencies(mged TclIndexBld)
 
-  # MGED is one of the programs that gets a start menu entry
-  set_property(
-    INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>"
+	  if(SH_EXEC)
+	    brlcad_add_test(NAME mged_obol_smoke
+	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_smoke.sh"
+	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+	      "${CMAKE_CURRENT_BINARY_DIR}")
+	    set_property(TEST mged_obol_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+
+	    brlcad_add_test(NAME mged_obol_ert_smoke
+	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_ert_smoke.sh"
+	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+	      "${CMAKE_CURRENT_BINARY_DIR}")
+	    set_tests_properties(mged_obol_ert_smoke PROPERTIES TIMEOUT 90)
+	    set_property(TEST mged_obol_ert_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+
+	    brlcad_add_test(NAME mged_obol_progressive_lod
+	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_progressive_lod.sh"
+	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+	      "${CMAKE_CURRENT_BINARY_DIR}")
+	    set_tests_properties(mged_obol_progressive_lod PROPERTIES TIMEOUT 120)
+	    set_property(TEST mged_obol_progressive_lod APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+	  endif(SH_EXEC)
+
+	  # MGED is one of the programs that gets a start menu entry
+	  set_property(
+	    INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>"
     PROPERTY CPACK_START_MENU_SHORTCUTS "MGED ${BRLCAD_VERSION}"
   )
   set_property(INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>" PROPERTY CPACK_DESKTOP_SHORTCUTS "MGED ${BRLCAD_VERSION}")
@@ -113,10 +136,14 @@ set(
   cmd.h
   f_cmd.h
   menu.h
+  mged_obol_ert_smoke.sh
+  mged_obol_progressive_lod.sh
+  mged_obol_smoke.sh
   mged.h
   mged.ico
   mged.rc
   mged_dm.h
+  mged_impl.h
   mged_wdb.h
   sedit.h
 )

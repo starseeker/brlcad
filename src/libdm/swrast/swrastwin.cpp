@@ -22,10 +22,12 @@
  */
 
 #include "swrastwin.h"
+#include "QgLegacyViewDm.h"
+#include "qtcad/QgSW.h"
 
-QgSWWin::QgSWWin(struct fb *fbp)
+QgSWWin::QgSWWin(qg_legacy_fb *fbp)
 {
-    canvas = new QgSW(this, fbp);
+    canvas = QgCanvasBridgeFactory::create_swrast(this, fbp);
     this->setCentralWidget(canvas);
     canvas->setMinimumSize(1,1);
 }
@@ -40,4 +42,3 @@ QgSWWin::QgSWWin(struct fb *fbp)
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

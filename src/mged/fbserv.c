@@ -35,18 +35,13 @@
 #include "bsocket.h"
 
 #include "bu/str.h"
+#include "imgstream/fbserv.h"
 #include "tcl.h"
 #include "vmath.h"
 #include "raytrace.h"
 
 #include "./mged.h"
 #include "./mged_dm.h"
-
-/* Enable token verification for MGED's embedded fbserv */
-#define FBSERV_AUTH_IMPL
-#include "../fbserv/auth.h"
-
-#define NET_LONG_LEN 4 /* # bytes to network long */
 
 // FIXME: Global
 extern struct pkg_switch pkg_switch[];
@@ -163,8 +158,7 @@ found:
 	}
 
 	if (npp > 0) {
-	    DMP_dirty = 1;
-	    dm_set_dirty(DMP, 1);
+	    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_FRAMEBUFFER);
 	}
 
 	if (clients[i].c_fd != fd)
@@ -187,8 +181,7 @@ found:
 	}
 
 	if (npp > 0) {
-	    DMP_dirty = 1;
-	    dm_set_dirty(DMP, 1);
+	    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_FRAMEBUFFER);
 	}
     }
 

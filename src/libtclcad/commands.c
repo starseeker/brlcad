@@ -45,6 +45,7 @@
 #include "bio.h"
 
 #include "bn.h"
+#include "bv.h"
 #include "bu/cmd.h"
 #include "bu/path.h"
 #include "bu/process.h"
@@ -52,9 +53,13 @@
 #include "vmath.h"
 #include "rt/db4.h"
 #include "rt/geom.h"
+#include "rt/view.h"
 #include "wdb.h"
 #include "raytrace.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
+#include "ged/view.h"
+#include "ged/event_txn.h"
 #include "tclcad.h"
 
 // tclcad.h pulls in OpenNURBS in C++ compilation mode, which defines None,
@@ -64,15 +69,13 @@
 #  include "tk.h"
 #endif
 
-#include "bv/defines.h"
 #include "dm.h"
-#include "bv/util.h"
+#include "dm/fbserv.h"
 #include "bg/lseg.h"
 
 #include "icv/io.h"
 #include "icv/ops.h"
 #include "icv/crop.h"
-#include "dm.h"
 
 #ifdef HAVE_GL_GL_H
 #  include <GL/gl.h>
@@ -80,12 +83,71 @@
 
 /* For the moment call internal libged functions - a cleaner
  * solution will be needed eventually */
+#include "ged/draw.h"
 #include "../libged/ged_private.h"
 
 /* Private headers */
 #include "brlcad_version.h"
 #include "./tclcad_private.h"
 #include "./view/view.h"
+#include "./draw_view_move_helpers.h"
+
+static struct dm *
+tclcad_commands_display_manager(const void *view_ctx)
+{
+    return (struct dm *)ged_view_context_display_manager_get(view_ctx);
+}
+
+static const char *
+tclcad_commands_view_name(const void *view_ctx)
+{
+    const char *name = bv_context_name_get(
+	    (const struct bv_context *)view_ctx);
+    return name ? name : "";
+}
+
+static void
+tclcad_commands_sync_dm_dimensions(void *target_ctx, const void *source_ctx)
+{
+    struct dm *dmp = tclcad_commands_display_manager(source_ctx);
+    if (dmp)
+	bv_context_dimensions_set((struct bv_context *)target_ctx,
+		dm_get_width(dmp), dm_get_height(dmp));
+}
+
+static struct bv *
+tclcad_commands_bv(void *view_ctx)
+{
+    return bv_context_view((struct bv_context *)view_ctx);
+}
+
+static const struct bv *
+tclcad_commands_bv_const(const void *view_ctx)
+{
+    return bv_context_view_const((const struct bv_context *)view_ctx);
+}
+
+static unsigned long long
+tclcad_commands_prepare_snap(void *view_ctx)
+{
+    struct bv *view = tclcad_commands_bv(view_ctx);
+    int flags;
+
+    if (!view)
+	return 0ULL;
+
+    flags = bv_snap_source_flags_get(view);
+    (void)bv_snap_source_flags_set(view, flags | BV_SNAP_TCL);
+    return bv_snap_kind_mask_get(view);
+}
+
+static int
+tclcad_commands_snap_point_2d(void *view_ctx, fastf_t *vx, fastf_t *vy,
+	unsigned long long kinds)
+{
+    return (kinds & BV_SNAP_KIND_GRID) ?
+	bv_snap_grid_2d(tclcad_commands_bv_const(view_ctx), vx, vy) : 0;
+}
 
 static int to_base2local(struct ged *gedp,
 	int argc,
@@ -136,7 +198,7 @@ static int to_data_move(struct ged *gedp,
 	const char *usage,
 	int maxargs);
 static int to_data_move_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -147,7 +209,7 @@ static int to_data_move_object_mode(struct ged *gedp,
 	const char *usage,
 	int maxargs);
 static int to_data_move_object_mode_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -158,7 +220,7 @@ static int to_data_move_point_mode(struct ged *gedp,
 	const char *usage,
 	int maxargs);
 static int to_data_move_point_mode_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -170,7 +232,7 @@ static int to_data_pick(struct ged *gedp,
 	int maxargs);
 static int
 to_data_pick_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage);
@@ -186,7 +248,7 @@ static int to_dplot(struct ged *gedp,
 	ged_func_ptr func,
 	const char *usage,
 	int maxargs);
-static int to_dlist_on(struct ged *gedp,
+static int to_cache_on(struct ged *gedp,
 	int argc,
 	const char *argv[],
 	ged_func_ptr func,
@@ -533,9 +595,6 @@ static int to_zclip(struct ged *gedp,
 
 /* Utility Functions */
 
-static void to_create_vlist_callback_solid(void *, struct bv_scene_obj *gdlp);
-static void to_create_vlist_callback(void *, struct display_list *gdlp);
-static void to_destroy_vlist_callback(void *, unsigned int dlist, int range);
 static void to_rt_end_callback_internal(int aborted);
 
 static void to_output_handler(struct ged *gedp, char *line);
@@ -620,6 +679,7 @@ static struct to_cmdtab ged_cmds[] = {
     {"edmater",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_edmater},
     {"env",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_env},
     {"erase",	(char *)0, TO_UNLIMITED, to_pass_through_and_refresh_func, ged_exec_erase},
+    {"ert",	"[args]", TO_UNLIMITED, to_view_func, ged_exec_ert},
     {"ev",	(char *)0, TO_UNLIMITED, to_autoview_func, ged_exec_ev},
     {"expand",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_expand},
     {"eye",	"[x y z]", 5, to_view_func_plus, ged_exec_eye},
@@ -849,7 +909,7 @@ struct to_cmdtab to_cmds[] = {
     {"data_scale_mode",	"x y", TO_UNLIMITED, to_data_scale_mode, GED_FUNC_PTR_NULL},
     {"data_vZ",	"[z]", TO_UNLIMITED, to_data_vZ, GED_FUNC_PTR_NULL},
     {"delete_view",	"vname", TO_UNLIMITED, to_delete_view, GED_FUNC_PTR_NULL},
-    {"dlist_on",	"[0|1]", TO_UNLIMITED, to_dlist_on, GED_FUNC_PTR_NULL},
+    {"cache_on",	"[0|1]", TO_UNLIMITED, to_cache_on, GED_FUNC_PTR_NULL},
     {"edit_motion_delta_callback",	"vname [args]", TO_UNLIMITED, to_edit_motion_delta_callback, GED_FUNC_PTR_NULL},
     {"faceplate",	"center_dot|prim_labels|view_params|view_scale color|draw [val(s)]", TO_UNLIMITED, to_faceplate, GED_FUNC_PTR_NULL},
     {"fit_png_image",	"image_file_in req_width req_height scale image_file_out", 6, to_fit_png_image, GED_FUNC_PTR_NULL},
@@ -1101,30 +1161,32 @@ to_deleteProc(ClientData clientData)
     if (top->to_gedp) {
 
 	// Clean up the libtclcad view data.
-	struct bview *gdvp = NULL;
-	struct bu_ptbl *views = bv_set_views(&top->to_gedp->ged_views);
+	void *gdvp = NULL;
+	struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    gdvp = (struct bview *)BU_PTBL_GET(views, i);
+	    gdvp = BU_PTBL_GET(views, i);
 
 	    // There is a top level command created in the Tcl interp that is the name
 	    // of the dm.  Clear that command.
-	    struct bu_vls *dm_tcl_cmd = dm_get_pathname((struct dm *)gdvp->dmp);
+	    struct bu_vls *dm_tcl_cmd = dm_get_pathname(tclcad_commands_display_manager(gdvp));
 	    if (dm_tcl_cmd && bu_vls_strlen(dm_tcl_cmd))
 		Tcl_DeleteCommand(top->to_interp, bu_vls_cstr(dm_tcl_cmd));
 
 	    // Close the dm.  This is not done by libged because libged only manages the
 	    // data bv knows about.  From bv's perspective, dmp is just a pointer
 	    // to an opaque data structure it knows nothing about.
-	    (void)dm_close((struct dm *)gdvp->dmp);
+	    (void)dm_close(tclcad_commands_display_manager(gdvp));
 
 	    // Delete libtclcad specific parts of data - ged_free (called by
 	    // ged_close) will handle freeing the primary bv list entries.
-	    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+	    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
 	    if (tvd) {
 		bu_vls_free(&tvd->gdv_edit_motion_delta_callback);
 		bu_vls_free(&tvd->gdv_callback);
+		/* Clear the view binding before freeing tvd so later cleanup
+		 * paths cannot dereference freed TclCAD storage. */
+		tclcad_view_data_unbind_view_ctx(gdvp);
 		BU_PUT(tvd, struct tclcad_view_data);
-		gdvp->u_data = NULL;
 	    }
 
 	}
@@ -1252,7 +1314,16 @@ to_open_tcl(ClientData UNUSED(clientData),
 	Tcl_AppendResult(interp, "Unable to open geometry database: ", dbname, (char *)NULL);
 	return TCL_ERROR;
     }
+    const char *disable_events = Tcl_GetVar(interp, "tclcad_disable_events", TCL_GLOBAL_ONLY);
+    if (disable_events && atoi(disable_events))
+	ged_event_txn_disable(gedp);
     gedp->ged_interp = (void *)interp;
+
+    disable_events = Tcl_GetVar(interp, "tclcad_disable_events",
+	    TCL_GLOBAL_ONLY);
+    if (disable_events && disable_events[0] &&
+	    !BU_STR_EQUAL(disable_events, "0"))
+	(void)ged_event_bulk_begin(gedp);
 
     /* Set the Tcl specific I/O handlers for asynchronous subprocess I/O */
     struct tclcad_io_data *t_iod = tclcad_create_io_data();
@@ -1271,9 +1342,6 @@ to_open_tcl(ClientData UNUSED(clientData),
 
     top->to_gedp->ged_output_handler = to_output_handler;
     top->to_gedp->ged_refresh_handler = to_refresh_handler;
-    top->to_gedp->ged_create_vlist_scene_obj_callback = to_create_vlist_callback_solid;
-    top->to_gedp->ged_create_vlist_display_list_callback = to_create_vlist_callback;
-    top->to_gedp->ged_destroy_vlist_callback = to_destroy_vlist_callback;
 
     ged_dl_notify_func_set(top->to_gedp, to_rt_end_callback_internal);
 
@@ -1286,7 +1354,6 @@ to_open_tcl(ClientData UNUSED(clientData),
     tgd->go_more_args_callback_cnt = 0;
     tgd->go_dmv.edited_paths = bu_hash_create(0);
     tgd->gedp = top->to_gedp;
-    tgd->go_dmv.refresh_on = 1;
     gedp->u_data = (void *)tgd;
 
     bu_vls_strcpy(&top->to_gedp->go_name, argv[1]);
@@ -1341,7 +1408,7 @@ to_bg(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1350,7 +1417,7 @@ to_bg(struct ged *gedp,
     /* get background color */
     if (argc == 2) {
 	unsigned char *dm_bg;
-	dm_get_bg(&dm_bg, NULL, (struct dm *)gdvp->dmp);
+	dm_get_bg(&dm_bg, NULL, tclcad_commands_display_manager(gdvp));
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 		dm_bg[0],
 		dm_bg[1],
@@ -1370,8 +1437,8 @@ to_bg(struct ged *gedp,
 	    b < 0 || 255 < b)
 	goto bad_color;
 
-    (void)dm_make_current((struct dm *)gdvp->dmp);
-    (void)dm_set_bg((struct dm *)gdvp->dmp, (unsigned char)r, (unsigned char)g, (unsigned char)b, (unsigned char)r, (unsigned char)g, (unsigned char)b);
+    (void)dm_make_current(tclcad_commands_display_manager(gdvp));
+    (void)dm_set_bg(tclcad_commands_display_manager(gdvp), (unsigned char)r, (unsigned char)g, (unsigned char)b, (unsigned char)r, (unsigned char)g, (unsigned char)b);
 
     to_refresh_view(gdvp);
 
@@ -1410,7 +1477,7 @@ to_bounds(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1418,8 +1485,8 @@ to_bounds(struct ged *gedp,
 
     /* get window bounds */
     if (argc == 2) {
-	vect_t *cmin = dm_get_clipmin((struct dm *)gdvp->dmp);
-	vect_t *cmax = dm_get_clipmax((struct dm *)gdvp->dmp);
+	vect_t *cmin = dm_get_clipmin(tclcad_commands_display_manager(gdvp));
+	vect_t *cmax = dm_get_clipmax(tclcad_commands_display_manager(gdvp));
 	if (cmin && cmax) {
 	    bu_vls_printf(gedp->ged_result_str, "%g %g %g %g %g %g",
 		    (*cmin)[X], (*cmax)[X], (*cmin)[Y], (*cmax)[Y], (*cmin)[Z], (*cmax)[Z]);
@@ -1444,13 +1511,13 @@ to_bounds(struct ged *gedp,
      * use it for controlling the location of the zclipping plane in
      * dm-ogl.c. dm-X.c uses dm_clipmin and dm_clipmax.
      */
-    if (dm_get_clipmax((struct dm *)gdvp->dmp) && (*dm_get_clipmax((struct dm *)gdvp->dmp))[2] <= BV_MAX)
-	dm_set_bound((struct dm *)gdvp->dmp, 1.0);
+    if (dm_get_clipmax(tclcad_commands_display_manager(gdvp)) && (*dm_get_clipmax(tclcad_commands_display_manager(gdvp)))[2] <= BV_VIEW_MAX)
+	dm_set_bound(tclcad_commands_display_manager(gdvp), 1.0);
     else
-	dm_set_bound((struct dm *)gdvp->dmp, BV_MAX/((*dm_get_clipmax((struct dm *)gdvp->dmp))[2]));
+	dm_set_bound(tclcad_commands_display_manager(gdvp), BV_VIEW_MAX/((*dm_get_clipmax(tclcad_commands_display_manager(gdvp)))[2]));
 
-    (void)dm_make_current((struct dm *)gdvp->dmp);
-    (void)dm_set_win_bounds((struct dm *)gdvp->dmp, bounds);
+    (void)dm_make_current(tclcad_commands_display_manager(gdvp));
+    (void)dm_set_win_bounds(tclcad_commands_display_manager(gdvp), bounds);
 
     return BRLCAD_OK;
 }
@@ -1474,27 +1541,28 @@ to_configure(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
     /* configure the display manager window */
-    status = dm_configure_win((struct dm *)gdvp->dmp, 0);
+    status = dm_configure_win(tclcad_commands_display_manager(gdvp), 0);
 
     /* configure the framebuffer window */
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-    if (tvd->gdv_fbs.fbs_fbp != FB_NULL)
-	(void)fb_configure_window(tvd->gdv_fbs.fbs_fbp, dm_get_width((struct dm *)gdvp->dmp), dm_get_height((struct dm *)gdvp->dmp));
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
+    struct fb *fbp = tvd ? fbs_legacy_framebuffer(&tvd->gdv_fbs) : FB_NULL;
+    if (fbp != FB_NULL)
+	(void)fb_configure_window(fbp, dm_get_width(tclcad_commands_display_manager(gdvp)), dm_get_height(tclcad_commands_display_manager(gdvp)));
 
     {
 	char cdimX[32];
 	char cdimY[32];
 	const char *av[5];
 
-	snprintf(cdimX, 32, "%d", dm_get_width((struct dm *)gdvp->dmp));
-	snprintf(cdimY, 32, "%d", dm_get_height((struct dm *)gdvp->dmp));
+	snprintf(cdimX, 32, "%d", dm_get_width(tclcad_commands_display_manager(gdvp)));
+	snprintf(cdimY, 32, "%d", dm_get_height(tclcad_commands_display_manager(gdvp)));
 
 	av[0] = "rect";
 	av[1] = "cdim";
@@ -1502,7 +1570,7 @@ to_configure(struct ged *gedp,
 	av[3] = cdimY;
 	av[4] = NULL;
 
-	gedp->ged_gvp = gdvp;
+	ged_view_active_ctx_set(gedp, gdvp);
 	(void)ged_exec_rect(gedp, 4, (const char **)av);
     }
 
@@ -1542,7 +1610,7 @@ to_constrain_rmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1561,16 +1629,15 @@ to_constrain_rmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_CONSTRAINED_ROTATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_CONSTRAINED_ROTATE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_constrain_rot %s %s %%x %%y}; break",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
@@ -1607,7 +1674,7 @@ to_constrain_tmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1626,15 +1693,14 @@ to_constrain_tmode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_CONSTRAINED_TRANSLATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_CONSTRAINED_TRANSLATE_MODE);
 
-    if (dm_get_pathname((struct dm *)gdvp->dmp)) {
+    if (dm_get_pathname(tclcad_commands_display_manager(gdvp))) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_constrain_trans %s %s %%x %%y}; break",
-		bu_vls_addr(dm_get_pathname((struct dm *)gdvp->dmp)),
+		bu_vls_addr(dm_get_pathname(tclcad_commands_display_manager(gdvp))),
 		bu_vls_addr(&current_top->to_gedp->go_name),
-		bu_vls_addr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2]);
 	Tcl_Eval(current_top->to_interp, bu_vls_addr(&bindings));
     }
@@ -1773,11 +1839,12 @@ to_copy(struct ged *gedp,
 int
 go_data_move(Tcl_Interp *UNUSED(interp),
 	struct ged *gedp,
-	struct bview *gdvp,
+	void *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
 {
+    void *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -1791,14 +1858,11 @@ go_data_move(Tcl_Interp *UNUSED(interp),
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
 	return BRLCAD_ERROR;
     }
+    to_refresh_suppress_all_begin(current_top);
 
-    /* Don't allow go_refresh() to be called */
-    if (current_top != NULL) {
-	struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-	tgd->go_dmv.refresh_on = 0;
-    }
-
-    return to_data_move_func(gedp, gdvp, argc, argv, usage);
+    int ret = to_data_move_func(gedp, gdvp, argc, argv, usage);
+    to_refresh_suppress_all_end(current_top);
+    return ret;
 }
 
 
@@ -1827,7 +1891,7 @@ to_data_move(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -1841,7 +1905,7 @@ to_data_move(struct ged *gedp,
 
 static int
 to_data_move_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -1853,6 +1917,7 @@ to_data_move_func(struct ged *gedp,
     fastf_t vx, vy;
     fastf_t sf;
     point_t mpoint, vpoint;
+    mat_t model2view, view2model;
 
     if (bu_sscanf(argv[2], "%d", &dindex) != 1 || dindex < 0)
 	goto bad;
@@ -1868,17 +1933,22 @@ to_data_move_func(struct ged *gedp,
 	    goto bad;
     }
 
-    width = dm_get_width((struct dm *)gdvp->dmp);
+    width = dm_get_width(tclcad_commands_display_manager(gdvp));
     cx = 0.5 * (fastf_t)width;
-    height = dm_get_height((struct dm *)gdvp->dmp);
+    height = dm_get_height(tclcad_commands_display_manager(gdvp));
     cy = 0.5 * (fastf_t)height;
     sf = 2.0 / width;
     vx = (mx - cx) * sf;
     vy = (cy - my) * sf;
+    bv_model2view_get(model2view, tclcad_commands_bv_const(gdvp));
+    bv_view2model_get(view2model, tclcad_commands_bv_const(gdvp));
 
     if (BU_STR_EQUAL(argv[1], "data_polygons")) {
 	size_t i, j, k;
-	bv_data_polygon_state *gdpsp = &gdvp->gv_tcl.gv_data_polygons;
+	tclcad_polygon_state *gdpsp = tclcad_view_polygon_state_from_view_ctx(gdvp, 0);
+
+	if (!gdpsp)
+	    return BRLCAD_ERROR;
 
 	if (bu_sscanf(argv[2], "%zu %zu %zu", &i, &j, &k) != 3)
 	    goto bad;
@@ -1890,16 +1960,16 @@ to_data_move_func(struct ged *gedp,
 	    return BRLCAD_OK;
 
 	/* This section is for moving more than a single point on a contour */
-	if (gdvp->gv_tcl.gv_polygon_mode == TCLCAD_DATA_MOVE_OBJECT_MODE) {
+	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
 
 	    VMOVE(old_mpoint, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
+	    MAT4X3PNT(vpoint, model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 	    vpoint[X] = vx;
 	    vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
 
 	    /* Move all polygons and all their respective contours. */
@@ -1924,247 +1994,255 @@ to_data_move_func(struct ged *gedp,
 	    }
 	} else {
 	    /* This section is for moving a single point on a contour */
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
+	    MAT4X3PNT(vpoint, model2view, gdpsp->gdps_polygons.polygon[i].contour[j].point[k]);
 	    vpoint[X] = vx;
 	    vpoint[Y] = vy;
-	    MAT4X3PNT(gdpsp->gdps_polygons.polygon[i].contour[j].point[k], gdvp->gv_view2model, vpoint);
+	    MAT4X3PNT(gdpsp->gdps_polygons.polygon[i].contour[j].point[k], view2model, vpoint);
 	}
 
 	to_refresh_view(gdvp);
 	return BRLCAD_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "data_arrows")) {
-	struct bv_data_arrow_state *gdasp = &gdvp->gv_tcl.gv_data_arrows;
+	if (BU_STR_EQUAL(argv[1], "data_arrows")) {
+	    /* Operate on typed draw-view data-arrow state instead of gv_tcl. */
+	    const char *feature_name = "_tcl_data_arrows";
 
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_data_arrows.gdas_num_points)
-	    return BRLCAD_OK;
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_pts);
 
-	/* This section is for moving the entire arrow */
-	if (gdvp->gv_tcl.gv_polygon_mode == TCLCAD_DATA_MOVE_OBJECT_MODE) {
-	    int dindexA, dindexB;
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+
+	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
+	    int dindexA = dindex;
+	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
+
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
-
-	    dindexA = dindex;
-	    if (dindex%2)
-		dindexB = dindex - 1;
-	    else
-		dindexB = dindex + 1;
-
-	    VMOVE(old_mpoint, gdasp->gdas_points[dindexA]);
-
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdasp->gdas_points[dindexA]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    VMOVE(old_mpoint, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
-
-	    VMOVE(gdasp->gdas_points[dindexA], new_mpoint);
-	    VADD2(gdasp->gdas_points[dindexB], gdasp->gdas_points[dindexB], diff);
+	    VMOVE(_pts[dindexA], new_mpoint);
+	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdasp->gdas_points[dindex]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	    VMOVE(gdasp->gdas_points[dindex], mpoint);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    VMOVE(_pts[dindex], mpoint);
+	    }
+
+	    int _color[3]; int _lw, _tl, _tw, _vis;
+	    _tclcad_draw_view_data_arrows_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
+	    _tclcad_draw_view_data_arrows_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _tl, _tw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
 	}
 
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
+	if (BU_STR_EQUAL(argv[1], "sdata_arrows")) {
+	    /* Operate on typed draw-view data-arrow state instead of gv_tcl. */
+	    const char *feature_name = "_tcl_sdata_arrows";
 
-    if (BU_STR_EQUAL(argv[1], "sdata_arrows")) {
-	struct bv_data_arrow_state *gdasp = &gdvp->gv_tcl.gv_sdata_arrows;
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_pts);
 
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_sdata_arrows.gdas_num_points)
-	    return BRLCAD_OK;
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
-	/* This section is for moving the entire arrow */
-	if (gdvp->gv_tcl.gv_polygon_mode == TCLCAD_DATA_MOVE_OBJECT_MODE) {
-	    int dindexA, dindexB;
+	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
+	    int dindexA = dindex;
+	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
+
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
-
-	    dindexA = dindex;
-	    if (dindex%2)
-		dindexB = dindex - 1;
-	    else
-		dindexB = dindex + 1;
-
-	    VMOVE(old_mpoint, gdasp->gdas_points[dindexA]);
-
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdasp->gdas_points[dindexA]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    VMOVE(old_mpoint, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
-
-	    VMOVE(gdasp->gdas_points[dindexA], new_mpoint);
-	    VADD2(gdasp->gdas_points[dindexB], gdasp->gdas_points[dindexB], diff);
+	    VMOVE(_pts[dindexA], new_mpoint);
+	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdasp->gdas_points[dindex]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	    VMOVE(gdasp->gdas_points[dindex], mpoint);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    VMOVE(_pts[dindex], mpoint);
+	    }
+
+	    int _color[3]; int _lw, _tl, _tw, _vis;
+	    _tclcad_draw_view_data_arrows_style_read(gdvp, feature_name, _color, &_lw, &_tl, &_tw, &_vis);
+	    _tclcad_draw_view_data_arrows_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _tl, _tw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
 	}
 
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
+	if (BU_STR_EQUAL(argv[1], "data_axes")) {
+	    /* Extract typed draw-view center points, move one, rebuild. */
+	    const char *feature_name = "_tcl_data_axes";
+
+	    point_t *_cpts = NULL;
+	    int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
+
+	    if (!_ncpts || dindex >= _ncpts) { if (_cpts) bu_free(_cpts, "TclCAD draw-view axes points"); return BRLCAD_OK; }
+
+	MAT4X3PNT(vpoint, model2view, _cpts[dindex]);
+	vpoint[X] = vx; vpoint[Y] = vy;
+	MAT4X3PNT(mpoint, view2model, vpoint);
+	VMOVE(_cpts[dindex], mpoint);
+
+	    fastf_t _half = 1.0;
+	    ged_draw_view_context_data_axes_half_size_get(gdvp, feature_name, &_half);
+
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_axes_replace(gdvp, feature_name, _cpts, _ncpts, _half, _color, _lw, _vis);
+	    bu_free(_cpts, "TclCAD draw-view axes points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
+	}
+
+	if (BU_STR_EQUAL(argv[1], "sdata_axes")) {
+	    /* Extract typed draw-view center points, move one, rebuild. */
+	    const char *feature_name = "_tcl_sdata_axes";
+
+	    point_t *_cpts = NULL;
+	    int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
+
+	    if (!_ncpts || dindex >= _ncpts) { if (_cpts) bu_free(_cpts, "TclCAD draw-view axes points"); return BRLCAD_OK; }
+
+	MAT4X3PNT(vpoint, model2view, _cpts[dindex]);
+	vpoint[X] = vx; vpoint[Y] = vy;
+	MAT4X3PNT(mpoint, view2model, vpoint);
+	VMOVE(_cpts[dindex], mpoint);
+
+	    fastf_t _half = 1.0;
+	    ged_draw_view_context_data_axes_half_size_get(gdvp, feature_name, &_half);
+
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_axes_replace(gdvp, feature_name, _cpts, _ncpts, _half, _color, _lw, _vis);
+	    bu_free(_cpts, "TclCAD draw-view axes points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "data_axes")) {
-	struct bv_data_axes_state *gdasp = &gdvp->gv_tcl.gv_data_axes;
 
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_data_axes.num_points)
-	    return BRLCAD_OK;
+	if (BU_STR_EQUAL(argv[1], "data_labels")) {
+	    /* Modify typed draw-view label payloads through the data-label facade. */
+	    const char *label_name = "_tcl_data_labels";
+	    if ((size_t)dindex >= _tclcad_draw_view_data_labels_count(gdvp, label_name)) return BRLCAD_OK;
 
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, gdasp->points[dindex]);
-	vpoint[X] = vx;
-	vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	VMOVE(gdasp->points[dindex], mpoint);
-
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
-
-    if (BU_STR_EQUAL(argv[1], "sdata_axes")) {
-	struct bv_data_axes_state *gdasp = &gdvp->gv_tcl.gv_sdata_axes;
-
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_sdata_axes.num_points)
-	    return BRLCAD_OK;
-
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, gdasp->points[dindex]);
-	vpoint[X] = vx;
-	vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	VMOVE(gdasp->points[dindex], mpoint);
-
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
-
-
-    if (BU_STR_EQUAL(argv[1], "data_labels")) {
-	struct bv_data_label_state *gdlsp = &gdvp->gv_tcl.gv_data_labels;
-
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_data_labels.gdls_num_labels)
-	    return BRLCAD_OK;
-
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, gdlsp->gdls_points[dindex]);
-	vpoint[X] = vx;
-	vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	VMOVE(gdlsp->gdls_points[dindex], mpoint);
-
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
-
-    if (BU_STR_EQUAL(argv[1], "sdata_labels")) {
-	struct bv_data_label_state *gdlsp = &gdvp->gv_tcl.gv_sdata_labels;
-
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_sdata_labels.gdls_num_labels)
-	    return BRLCAD_OK;
-
-	MAT4X3PNT(vpoint, gdvp->gv_model2view, gdlsp->gdls_points[dindex]);
-	vpoint[X] = vx;
-	vpoint[Y] = vy;
-	MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	VMOVE(gdlsp->gdls_points[dindex], mpoint);
+	    point_t _label_pt;
+	    if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, (size_t)dindex, NULL, _label_pt, NULL))
+		return BRLCAD_OK;
+	    MAT4X3PNT(vpoint, model2view, _label_pt);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    (void)_tclcad_draw_view_data_label_point_set(gdvp, label_name, (size_t)dindex, mpoint);
 
 	to_refresh_view(gdvp);
 	return BRLCAD_OK;
     }
 
-    if (BU_STR_EQUAL(argv[1], "data_lines")) {
-	struct bv_data_line_state *gdlsp = &gdvp->gv_tcl.gv_data_lines;
+	if (BU_STR_EQUAL(argv[1], "sdata_labels")) {
+	    /* Modify typed draw-view label payloads through the data-label facade. */
+	    const char *label_name = "_tcl_sdata_labels";
+	    if ((size_t)dindex >= _tclcad_draw_view_data_labels_count(gdvp, label_name)) return BRLCAD_OK;
 
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_data_lines.gdls_num_points)
-	    return BRLCAD_OK;
+	    point_t _label_pt;
+	    if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, (size_t)dindex, NULL, _label_pt, NULL))
+		return BRLCAD_OK;
+	    MAT4X3PNT(vpoint, model2view, _label_pt);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    (void)_tclcad_draw_view_data_label_point_set(gdvp, label_name, (size_t)dindex, mpoint);
 
-	/* This section is for moving the entire line */
-	if (gdvp->gv_tcl.gv_polygon_mode == TCLCAD_DATA_MOVE_OBJECT_MODE) {
-	    int dindexA, dindexB;
+	to_refresh_view(gdvp);
+	return BRLCAD_OK;
+    }
+
+	if (BU_STR_EQUAL(argv[1], "data_lines")) {
+	    /* Operate on typed draw-view data-line points instead of gv_tcl. */
+	    const char *feature_name = "_tcl_data_lines";
+
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_pts);
+
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+
+	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
+	    int dindexA = dindex;
+	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
+
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
-
-	    dindexA = dindex;
-	    if (dindex%2)
-		dindexB = dindex - 1;
-	    else
-		dindexB = dindex + 1;
-
-	    VMOVE(old_mpoint, gdlsp->gdls_points[dindexA]);
-
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdlsp->gdls_points[dindexA]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    VMOVE(old_mpoint, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
-
-	    VMOVE(gdlsp->gdls_points[dindexA], new_mpoint);
-	    VADD2(gdlsp->gdls_points[dindexB], gdlsp->gdls_points[dindexB], diff);
+	    VMOVE(_pts[dindexA], new_mpoint);
+	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdlsp->gdls_points[dindex]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	    VMOVE(gdlsp->gdls_points[dindex], mpoint);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    VMOVE(_pts[dindex], mpoint);
+	    }
+
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_lines_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_lines_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
 	}
 
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
-    }
+	if (BU_STR_EQUAL(argv[1], "sdata_lines")) {
+	    /* Operate on typed draw-view data-line points instead of gv_tcl. */
+	    const char *feature_name = "_tcl_sdata_lines";
 
-    if (BU_STR_EQUAL(argv[1], "sdata_lines")) {
-	struct bv_data_line_state *gdlsp = &gdvp->gv_tcl.gv_sdata_lines;
+	    point_t *_pts = NULL;
+	    int _npts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_pts);
 
-	/* Silently ignore */
-	if (dindex >= gdvp->gv_tcl.gv_sdata_lines.gdls_num_points)
-	    return BRLCAD_OK;
+	    if (!_npts || dindex >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
 
-	/* This section is for moving the entire line */
-	if (gdvp->gv_tcl.gv_polygon_mode == TCLCAD_DATA_MOVE_OBJECT_MODE) {
-	    int dindexA, dindexB;
+	if (tclcad_view_polygon_mode_from_view_ctx(gdvp) == TCLCAD_DATA_MOVE_OBJECT_MODE) {
+	    int dindexA = dindex;
+	    int dindexB = (dindex % 2) ? dindex - 1 : dindex + 1;
+
+		    if (dindexB < 0 || dindexB >= _npts) { if (_pts) bu_free(_pts, "TclCAD draw-view points"); return BRLCAD_OK; }
+
 	    point_t old_mpoint, new_mpoint;
 	    vect_t diff;
-
-	    dindexA = dindex;
-	    if (dindex%2)
-		dindexB = dindex - 1;
-	    else
-		dindexB = dindex + 1;
-
-	    VMOVE(old_mpoint, gdlsp->gdls_points[dindexA]);
-
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdlsp->gdls_points[dindexA]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(new_mpoint, gdvp->gv_view2model, vpoint);
+	    VMOVE(old_mpoint, _pts[dindexA]);
+	    MAT4X3PNT(vpoint, model2view, _pts[dindexA]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(new_mpoint, view2model, vpoint);
 	    VSUB2(diff, new_mpoint, old_mpoint);
-
-	    VMOVE(gdlsp->gdls_points[dindexA], new_mpoint);
-	    VADD2(gdlsp->gdls_points[dindexB], gdlsp->gdls_points[dindexB], diff);
+	    VMOVE(_pts[dindexA], new_mpoint);
+	    VADD2(_pts[dindexB], _pts[dindexB], diff);
 	} else {
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdlsp->gdls_points[dindex]);
-	    vpoint[X] = vx;
-	    vpoint[Y] = vy;
-	    MAT4X3PNT(mpoint, gdvp->gv_view2model, vpoint);
-	    VMOVE(gdlsp->gdls_points[dindex], mpoint);
-	}
+	    MAT4X3PNT(vpoint, model2view, _pts[dindex]);
+	    vpoint[X] = vx; vpoint[Y] = vy;
+	    MAT4X3PNT(mpoint, view2model, vpoint);
+	    VMOVE(_pts[dindex], mpoint);
+	    }
 
-	to_refresh_view(gdvp);
-	return BRLCAD_OK;
+	    int _color[3]; int _lw, _vis;
+	    _tclcad_draw_view_data_lines_style_read(gdvp, feature_name, _color, &_lw, &_vis);
+	    _tclcad_draw_view_data_lines_replace(gdvp, feature_name, _pts, _npts, _color, _lw, _vis);
+	    bu_free(_pts, "TclCAD draw-view points");
+	    to_refresh_view(gdvp);
+	    return BRLCAD_OK;
     }
 
 bad:
@@ -2176,11 +2254,12 @@ bad:
 int
 go_data_move_object_mode(Tcl_Interp *UNUSED(interp),
 	struct ged *gedp,
-	struct bview *gdvp,
+	void *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
 {
+    void *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -2194,14 +2273,11 @@ go_data_move_object_mode(Tcl_Interp *UNUSED(interp),
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
 	return BRLCAD_ERROR;
     }
+    to_refresh_suppress_all_begin(current_top);
 
-    /* Don't allow go_refresh() to be called */
-    if (current_top != NULL) {
-	struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-	tgd->go_dmv.refresh_on = 0;
-    }
-
-    return to_data_move_object_mode_func(gedp, gdvp, argc, argv, usage);
+    int ret = to_data_move_object_mode_func(gedp, gdvp, argc, argv, usage);
+    to_refresh_suppress_all_end(current_top);
+    return ret;
 }
 
 
@@ -2227,7 +2303,7 @@ to_data_move_object_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2241,14 +2317,14 @@ to_data_move_object_mode(struct ged *gedp,
 
 static int
 to_data_move_object_mode_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int UNUSED(argc),
 	const char *argv[],
 	const char *usage)
 {
     int x, y;
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
 
     if (bu_sscanf(argv[1], "%d", &x) != 1 ||
 	    bu_sscanf(argv[2], "%d", &y) != 1) {
@@ -2256,10 +2332,9 @@ to_data_move_object_mode_func(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    /* At the moment, only gv_polygon_mode is being used. */
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_DATA_MOVE_OBJECT_MODE;
+    /* At the moment, only the TclCAD polygon mode is being used. */
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_DATA_MOVE_OBJECT_MODE);
 
     return BRLCAD_OK;
 }
@@ -2268,11 +2343,12 @@ to_data_move_object_mode_func(struct ged *gedp,
 int
 go_data_move_point_mode(Tcl_Interp *UNUSED(interp),
 	struct ged *gedp,
-	struct bview *gdvp,
+	void *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
 {
+    void *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -2286,14 +2362,11 @@ go_data_move_point_mode(Tcl_Interp *UNUSED(interp),
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
 	return BRLCAD_ERROR;
     }
+    to_refresh_suppress_all_begin(current_top);
 
-    /* Don't allow go_refresh() to be called */
-    if (current_top != NULL) {
-	struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-	tgd->go_dmv.refresh_on = 0;
-    }
-
-    return to_data_move_point_mode_func(gedp, gdvp, argc, argv, usage);
+    int ret = to_data_move_point_mode_func(gedp, gdvp, argc, argv, usage);
+    to_refresh_suppress_all_end(current_top);
+    return ret;
 }
 
 
@@ -2319,7 +2392,7 @@ to_data_move_point_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2333,14 +2406,14 @@ to_data_move_point_mode(struct ged *gedp,
 
 static int
 to_data_move_point_mode_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int UNUSED(argc),
 	const char *argv[],
 	const char *usage)
 {
     int x, y;
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
 
     if (bu_sscanf(argv[1], "%d", &x) != 1 ||
 	    bu_sscanf(argv[2], "%d", &y) != 1) {
@@ -2348,10 +2421,9 @@ to_data_move_point_mode_func(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    /* At the moment, only gv_polygon_mode is being used. */
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_DATA_MOVE_POINT_MODE;
+    /* At the moment, only the TclCAD polygon mode is being used. */
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_DATA_MOVE_POINT_MODE);
 
     return BRLCAD_OK;
 }
@@ -2359,11 +2431,12 @@ to_data_move_point_mode_func(struct ged *gedp,
 
 int
 go_data_pick(struct ged *gedp,
-	struct bview *gdvp,
+	void *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
 {
+    void *gdvp = draw_view_ctx;
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -2377,14 +2450,11 @@ go_data_pick(struct ged *gedp,
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
 	return BRLCAD_ERROR;
     }
+    to_refresh_suppress_all_begin(current_top);
 
-    /* Don't allow go_refresh() to be called */
-    if (current_top != NULL) {
-	struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-	tgd->go_dmv.refresh_on = 0;
-    }
-
-    return to_data_pick_func(gedp, gdvp, argc, argv, usage);
+    int ret = to_data_pick_func(gedp, gdvp, argc, argv, usage);
+    to_refresh_suppress_all_end(current_top);
+    return ret;
 }
 
 
@@ -2410,7 +2480,7 @@ to_data_pick(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2424,7 +2494,7 @@ to_data_pick(struct ged *gedp,
 
 static int
 to_data_pick_func(struct ged *gedp,
-	struct bview *gdvp,
+	void *gdvp,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -2434,6 +2504,7 @@ to_data_pick_func(struct ged *gedp,
     fastf_t vx, vy;
     fastf_t sf;
     point_t dpoint, vpoint;
+    mat_t model2view;
     int i;
     fastf_t top_z = -MAX_FASTF;
     point_t top_point = VINIT_ZERO;
@@ -2443,6 +2514,7 @@ to_data_pick_func(struct ged *gedp,
     int found_top = 0;
     const char *top_data_str = NULL;
     const char *top_data_label = NULL;
+    struct bu_vls top_label_vls = BU_VLS_INIT_ZERO;
     static fastf_t tol = 0.015;
     static const char *data_polygons_str = "data_polygons";
     static const char *data_labels_str = "data_labels";
@@ -2464,20 +2536,22 @@ to_data_pick_func(struct ged *gedp,
 	    goto bad;
     }
 
-    width = dm_get_width((struct dm *)gdvp->dmp);
+    width = dm_get_width(tclcad_commands_display_manager(gdvp));
     cx = 0.5 * (fastf_t)width;
-    height = dm_get_height((struct dm *)gdvp->dmp);
+    height = dm_get_height(tclcad_commands_display_manager(gdvp));
     cy = 0.5 * (fastf_t)height;
     sf = 2.0 / width;
     vx = (mx - cx) * sf;
     vy = (cy - my) * sf;
+    bv_model2view_get(model2view, tclcad_commands_bv_const(gdvp));
 
     /* check for polygon points */
-    if (gdvp->gv_tcl.gv_data_polygons.gdps_draw &&
-	    gdvp->gv_tcl.gv_data_polygons.gdps_polygons.num_polygons) {
+    tclcad_polygon_state *data_polygons = tclcad_view_polygon_state_from_view_ctx(gdvp, 0);
+    if (data_polygons && data_polygons->gdps_draw &&
+	    data_polygons->gdps_polygons.num_polygons) {
 	size_t si, sj, sk;
 
-	bv_data_polygon_state *gdpsp = &gdvp->gv_tcl.gv_data_polygons;
+	tclcad_polygon_state *gdpsp = data_polygons;
 
 	for (si = 0; si < gdpsp->gdps_polygons.num_polygons; ++si)
 	    for (sj = 0; sj < gdpsp->gdps_polygons.polygon[si].num_contours; ++sj)
@@ -2485,7 +2559,7 @@ to_data_pick_func(struct ged *gedp,
 		    fastf_t minX, maxX;
 		    fastf_t minY, maxY;
 
-		    MAT4X3PNT(vpoint, gdvp->gv_model2view, gdpsp->gdps_polygons.polygon[si].contour[sj].point[sk]);
+		    MAT4X3PNT(vpoint, model2view, gdpsp->gdps_polygons.polygon[si].contour[sj].point[sk]);
 		    minX = vpoint[X] - tol;
 		    maxX = vpoint[X] + tol;
 		    minY = vpoint[Y] - tol;
@@ -2509,67 +2583,84 @@ to_data_pick_func(struct ged *gedp,
     if (found_top) {
 	bu_vls_printf(gedp->ged_result_str, "%s {%zu %zu %zu} {%lf %lf %lf}",
 		top_data_str, top_i, top_j, top_k, V3ARGS(top_point));
+	bu_vls_free(&top_label_vls);
 	return BRLCAD_OK;
     }
 
     /* check for label points */
-    if (gdvp->gv_tcl.gv_data_labels.gdls_draw &&
-	    gdvp->gv_tcl.gv_data_labels.gdls_num_labels) {
-	struct bv_data_label_state *gdlsp = &gdvp->gv_tcl.gv_data_labels;
+    {
+	const char *label_name = "_tcl_data_labels";
+	size_t _child_cnt = _tclcad_draw_view_data_labels_count(gdvp, label_name);
+	if (_child_cnt > 0) {
+	    for (size_t _k = 0; _k < _child_cnt; _k++) {
+		fastf_t minX, maxX;
+		fastf_t minY, maxY;
 
-	for (i = 0; i < gdlsp->gdls_num_labels; ++i) {
-	    fastf_t minX, maxX;
-	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdlsp->gdls_points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X];
-	    maxX = vpoint[X] + (2 * tol);
-	    minY = vpoint[Y];
-	    maxY = vpoint[Y] + (2 * tol);
-
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
-		if (!found_top || top_z < vpoint[Z]) {
-		    top_z = vpoint[Z];
-		    top_data_str = data_labels_str;
-		    top_i = i;
-		    top_data_label = gdlsp->gdls_labels[i];
-		    VMOVE(top_point, dpoint);
-		    found_top = 1;
+		struct bu_vls label = BU_VLS_INIT_ZERO;
+		if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, _k, &label, dpoint, NULL)) {
+		    bu_vls_free(&label);
+		    continue;
 		}
+
+		MAT4X3PNT(vpoint, model2view, dpoint);
+
+		minX = vpoint[X];
+		maxX = vpoint[X] + (2 * tol);
+		minY = vpoint[Y];
+		maxY = vpoint[Y] + (2 * tol);
+
+		if (minX < vx && vx < maxX &&
+			minY < vy && vy < maxY) {
+		    if (!found_top || top_z < vpoint[Z]) {
+			top_z = vpoint[Z];
+			top_data_str = data_labels_str;
+			top_i = _k;
+			bu_vls_sprintf(&top_label_vls, "%s", bu_vls_cstr(&label));
+			top_data_label = bu_vls_cstr(&top_label_vls);
+			VMOVE(top_point, dpoint);
+			found_top = 1;
+		    }
+		}
+		bu_vls_free(&label);
 	    }
 	}
     }
 
     /* check for selected label points */
-    if (gdvp->gv_tcl.gv_sdata_labels.gdls_draw &&
-	    gdvp->gv_tcl.gv_sdata_labels.gdls_num_labels) {
-	struct bv_data_label_state *gdlsp = &gdvp->gv_tcl.gv_sdata_labels;
+    {
+	const char *label_name = "_tcl_sdata_labels";
+	size_t _child_cnt = _tclcad_draw_view_data_labels_count(gdvp, label_name);
+	if (_child_cnt > 0) {
+	    for (size_t _k = 0; _k < _child_cnt; _k++) {
+		fastf_t minX, maxX;
+		fastf_t minY, maxY;
 
-	for (i = 0; i < gdlsp->gdls_num_labels; ++i) {
-	    fastf_t minX, maxX;
-	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdlsp->gdls_points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X];
-	    maxX = vpoint[X] + (2 * tol);
-	    minY = vpoint[Y];
-	    maxY = vpoint[Y] + (2 * tol);
-
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
-		if (!found_top || top_z < vpoint[Z]) {
-		    top_z = vpoint[Z];
-		    top_data_str = sdata_labels_str;
-		    top_i = i;
-		    top_data_label = gdlsp->gdls_labels[i];
-		    VMOVE(top_point, dpoint);
-		    found_top = 1;
+		struct bu_vls label = BU_VLS_INIT_ZERO;
+		if (!_tclcad_draw_view_data_label_copy(gdvp, label_name, _k, &label, dpoint, NULL)) {
+		    bu_vls_free(&label);
+		    continue;
 		}
+
+		MAT4X3PNT(vpoint, model2view, dpoint);
+
+		minX = vpoint[X];
+		maxX = vpoint[X] + (2 * tol);
+		minY = vpoint[Y];
+		maxY = vpoint[Y] + (2 * tol);
+
+		if (minX < vx && vx < maxX &&
+			minY < vy && vy < maxY) {
+		    if (!found_top || top_z < vpoint[Z]) {
+			top_z = vpoint[Z];
+			top_data_str = sdata_labels_str;
+			top_i = _k;
+			bu_vls_sprintf(&top_label_vls, "%s", bu_vls_cstr(&label));
+			top_data_label = bu_vls_cstr(&top_label_vls);
+			VMOVE(top_point, dpoint);
+			found_top = 1;
+		    }
+		}
+		bu_vls_free(&label);
 	    }
 	}
     }
@@ -2577,197 +2668,182 @@ to_data_pick_func(struct ged *gedp,
     if (found_top) {
 	bu_vls_printf(gedp->ged_result_str, "%s %zu {{%s} {%lf %lf %lf}}",
 		top_data_str, top_i, top_data_label, V3ARGS(top_point));
+	bu_vls_free(&top_label_vls);
 	return BRLCAD_OK;
     }
 
     /* check for line points */
-    if (gdvp->gv_tcl.gv_data_lines.gdls_draw &&
-	    gdvp->gv_tcl.gv_data_lines.gdls_num_points) {
-	struct bv_data_line_state *gdlsp = &gdvp->gv_tcl.gv_data_lines;
-
-	for (i = 0; i < gdlsp->gdls_num_points; ++i) {
+    {
+	const char *feature_name = "_tcl_data_lines";
+	point_t *_lpts = NULL;
+	int _lnpts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_lpts);
+	for (i = 0; i < _lnpts; ++i) {
 	    fastf_t minX, maxX;
 	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdlsp->gdls_points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X] - tol;
-	    maxX = vpoint[X] + tol;
-	    minY = vpoint[Y] - tol;
-	    maxY = vpoint[Y] + tol;
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
+	    VMOVE(dpoint, _lpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
 		bu_vls_printf(gedp->ged_result_str, "data_lines %d {%lf %lf %lf}", i, V3ARGS(dpoint));
+		bu_free(_lpts, "TclCAD draw-view points");
+		bu_vls_free(&top_label_vls);
 		return BRLCAD_OK;
 	    }
 	}
+	if (_lpts)
+	    bu_free(_lpts, "TclCAD draw-view points");
     }
 
     /* check for selected line points */
-    if (gdvp->gv_tcl.gv_sdata_lines.gdls_draw &&
-	    gdvp->gv_tcl.gv_sdata_lines.gdls_num_points) {
-	struct bv_data_line_state *gdlsp = &gdvp->gv_tcl.gv_sdata_lines;
-
-	for (i = 0; i < gdlsp->gdls_num_points; ++i) {
+    {
+	const char *feature_name = "_tcl_sdata_lines";
+	point_t *_lpts = NULL;
+	int _lnpts = _tclcad_draw_view_data_lines_points_copy(gdvp, feature_name, &_lpts);
+	for (i = 0; i < _lnpts; ++i) {
 	    fastf_t minX, maxX;
 	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdlsp->gdls_points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X] - tol;
-	    maxX = vpoint[X] + tol;
-	    minY = vpoint[Y] - tol;
-	    maxY = vpoint[Y] + tol;
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
+	    VMOVE(dpoint, _lpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
 		if (!found_top || top_z < vpoint[Z]) {
 		    top_z = vpoint[Z];
 		    top_data_str = sdata_lines_str;
-		    top_i = i;
+		    top_i = (size_t)i;
 		    VMOVE(top_point, dpoint);
 		    found_top = 1;
 		}
 	    }
 	}
+	if (_lpts)
+	    bu_free(_lpts, "TclCAD draw-view points");
     }
 
     if (found_top) {
 	bu_vls_printf(gedp->ged_result_str, "%s %zu {%lf %lf %lf}",
 		top_data_str, top_i, V3ARGS(top_point));
+	bu_vls_free(&top_label_vls);
 	return BRLCAD_OK;
     }
 
     /* check for arrow points */
-    if (gdvp->gv_tcl.gv_data_arrows.gdas_draw &&
-	    gdvp->gv_tcl.gv_data_arrows.gdas_num_points) {
-	struct bv_data_arrow_state *gdasp = &gdvp->gv_tcl.gv_data_arrows;
-
-	for (i = 0; i < gdasp->gdas_num_points; ++i) {
-	    fastf_t minX, maxX;
-	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdasp->gdas_points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X] - tol;
-	    maxX = vpoint[X] + tol;
-	    minY = vpoint[Y] - tol;
-	    maxY = vpoint[Y] + tol;
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
+    {
+	const char *feature_name = "_tcl_data_arrows";
+	point_t *_apts = NULL;
+	int _anpts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_apts);
+	for (i = 0; i < _anpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _apts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
 		if (!found_top || top_z < vpoint[Z]) {
 		    top_z = vpoint[Z];
 		    top_data_str = data_arrows_str;
-		    top_i = i;
+		    top_i = (size_t)i;
 		    VMOVE(top_point, dpoint);
 		    found_top = 1;
 		}
 	    }
 	}
+	if (_apts)
+	    bu_free(_apts, "TclCAD draw-view points");
     }
 
     /* check for selected arrow points */
-    if (gdvp->gv_tcl.gv_sdata_arrows.gdas_draw &&
-	    gdvp->gv_tcl.gv_sdata_arrows.gdas_num_points) {
-	struct bv_data_arrow_state *gdasp = &gdvp->gv_tcl.gv_sdata_arrows;
-
-	for (i = 0; i < gdasp->gdas_num_points; ++i) {
-	    fastf_t minX, maxX;
-	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdasp->gdas_points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X] - tol;
-	    maxX = vpoint[X] + tol;
-	    minY = vpoint[Y] - tol;
-	    maxY = vpoint[Y] + tol;
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
+    {
+	const char *feature_name = "_tcl_sdata_arrows";
+	point_t *_apts = NULL;
+	int _anpts = _tclcad_draw_view_data_arrows_points_copy(gdvp, feature_name, &_apts);
+	for (i = 0; i < _anpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _apts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
 		if (!found_top || top_z < vpoint[Z]) {
 		    top_z = vpoint[Z];
 		    top_data_str = sdata_arrows_str;
-		    top_i = i;
+		    top_i = (size_t)i;
 		    VMOVE(top_point, dpoint);
 		    found_top = 1;
 		}
 	    }
 	}
+	if (_apts)
+	    bu_free(_apts, "TclCAD draw-view points");
     }
 
     if (found_top) {
 	bu_vls_printf(gedp->ged_result_str, "%s %zu {%lf %lf %lf}",
 		top_data_str, top_i, V3ARGS(top_point));
+	bu_vls_free(&top_label_vls);
 	return BRLCAD_OK;
     }
 
     /* check for axes points */
-    if (gdvp->gv_tcl.gv_data_axes.draw &&
-	    gdvp->gv_tcl.gv_data_axes.num_points) {
-	struct bv_data_axes_state *gdasp = &gdvp->gv_tcl.gv_data_axes;
-
-	for (i = 0; i < gdasp->num_points; ++i) {
-	    fastf_t minX, maxX;
-	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdasp->points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X] - tol;
-	    maxX = vpoint[X] + tol;
-	    minY = vpoint[Y] - tol;
-	    maxY = vpoint[Y] + tol;
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
+    {
+	const char *feature_name = "_tcl_data_axes";
+	point_t *_cpts = NULL;
+	int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
+	for (i = 0; i < _ncpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _cpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
 		if (!found_top || top_z < vpoint[Z]) {
 		    top_z = vpoint[Z];
-		    top_i = i;
+		    top_i = (size_t)i;
 		    top_data_str = data_axes_str;
 		    VMOVE(top_point, dpoint);
 		    found_top = 1;
 		}
 	    }
 	}
+	if (_cpts)
+	    bu_free(_cpts, "TclCAD draw-view axes points");
     }
 
     /* check for selected axes points */
-    if (gdvp->gv_tcl.gv_sdata_axes.draw &&
-	    gdvp->gv_tcl.gv_sdata_axes.num_points) {
-	struct bv_data_axes_state *gdasp = &gdvp->gv_tcl.gv_sdata_axes;
-
-	for (i = 0; i < gdasp->num_points; ++i) {
-	    fastf_t minX, maxX;
-	    fastf_t minY, maxY;
-
-	    VMOVE(dpoint, gdasp->points[i]);
-	    MAT4X3PNT(vpoint, gdvp->gv_model2view, dpoint);
-
-	    minX = vpoint[X] - tol;
-	    maxX = vpoint[X] + tol;
-	    minY = vpoint[Y] - tol;
-	    maxY = vpoint[Y] + tol;
-	    if (minX < vx && vx < maxX &&
-		    minY < vy && vy < maxY) {
+    {
+	const char *feature_name = "_tcl_sdata_axes";
+	point_t *_cpts = NULL;
+	int _ncpts = _tclcad_draw_view_data_axes_centers_copy(gdvp, feature_name, &_cpts);
+	for (i = 0; i < _ncpts; ++i) {
+	    fastf_t minX, maxX, minY, maxY;
+	    VMOVE(dpoint, _cpts[i]);
+	    MAT4X3PNT(vpoint, model2view, dpoint);
+	    minX = vpoint[X] - tol; maxX = vpoint[X] + tol;
+	    minY = vpoint[Y] - tol; maxY = vpoint[Y] + tol;
+	    if (minX < vx && vx < maxX && minY < vy && vy < maxY) {
 		if (!found_top || top_z < vpoint[Z]) {
 		    top_z = vpoint[Z];
-		    top_i = i;
+		    top_i = (size_t)i;
 		    top_data_str = sdata_axes_str;
 		    VMOVE(top_point, dpoint);
 		    found_top = 1;
 		}
 	    }
 	}
+	if (_cpts)
+	    bu_free(_cpts, "TclCAD draw-view axes points");
     }
 
     if (found_top)
 	bu_vls_printf(gedp->ged_result_str, "%s %zu {%lf %lf %lf}",
 		top_data_str, top_i, V3ARGS(top_point));
 
+    bu_vls_free(&top_label_vls);
     return BRLCAD_OK;
 
 bad:
+    bu_vls_free(&top_label_vls);
     bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
     return BRLCAD_ERROR;
 }
@@ -2798,7 +2874,7 @@ to_data_vZ(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -2806,7 +2882,7 @@ to_data_vZ(struct ged *gedp,
 
     /* Get the data vZ */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%lf", gdvp->gv_tcl.gv_data_vZ);
+	bu_vls_printf(gedp->ged_result_str, "%lf", tclcad_view_data_vZ_from_view_ctx(gdvp));
 	return BRLCAD_OK;
     }
 
@@ -2816,268 +2892,268 @@ to_data_vZ(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_tcl.gv_data_vZ = vZ;
+    (void)tclcad_view_data_vZ_set(gdvp, vZ);
 
     return BRLCAD_OK;
 }
 
 
 static void
-to_init_default_bindings(struct bview *gdvp)
+to_init_default_bindings(void *gdvp)
 {
     struct bu_vls bindings = BU_VLS_INIT_ZERO;
 
-    if (dm_get_pathname((struct dm *)gdvp->dmp)) {
-	struct bu_vls *pathvls = dm_get_pathname((struct dm *)gdvp->dmp);
+    if (dm_get_pathname(tclcad_commands_display_manager(gdvp))) {
+	struct bu_vls *pathvls = dm_get_pathname(tclcad_commands_display_manager(gdvp));
 	if (pathvls) {
 	    bu_vls_printf(&bindings, "bind %s <Configure> {%s configure %s; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Enter> {focus %s; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(pathvls));
 	    bu_vls_printf(&bindings, "bind %s <Expose> {%s handle_expose %s %%c; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "catch {wm protocol %s WM_DELETE_WINDOW {%s delete_view %s; break}}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Mouse Bindings */
 	    bu_vls_printf(&bindings, "bind %s <2> {%s vslew %s %%x %%y; focus %s; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name),
+		    tclcad_commands_view_name(gdvp),
 		    bu_vls_addr(pathvls));
 	    bu_vls_printf(&bindings, "bind %s <1> {%s zoom %s 0.5; focus %s; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name),
+		    tclcad_commands_view_name(gdvp),
 		    bu_vls_addr(pathvls));
 	    bu_vls_printf(&bindings, "bind %s <3> {%s zoom %s 2.0; focus %s;  break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name),
+		    tclcad_commands_view_name(gdvp),
 		    bu_vls_addr(pathvls));
 	    bu_vls_printf(&bindings, "bind %s <4> {%s zoom %s 1.1; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <5> {%s zoom %s 0.9; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <MouseWheel> {if {%%D < 0} {%s zoom %s 0.9} else {%s zoom %s 1.1}; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name),
+		    tclcad_commands_view_name(gdvp),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Idle Mode */
 	    bu_vls_printf(&bindings, "bind %s <ButtonRelease> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <KeyRelease-Control_L> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <KeyRelease-Control_R> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <KeyRelease-Shift_L> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <KeyRelease-Shift_R> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <KeyRelease-Alt_L> {%s idle_mode %s; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <KeyRelease-Alt_R> {%s idle_mode %s; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Rotate Mode */
 	    bu_vls_printf(&bindings, "bind %s <Control-ButtonRelease-1> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-ButtonPress-1> {%s rotate_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-ButtonPress-2> {%s rotate_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-ButtonPress-3> {%s rotate_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Translate Mode */
 	    bu_vls_printf(&bindings, "bind %s <Shift-ButtonRelease-1> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Shift-ButtonPress-1> {%s translate_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Shift-ButtonPress-2> {%s translate_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Shift-ButtonPress-3> {%s translate_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Scale Mode */
 	    bu_vls_printf(&bindings, "bind %s <Control-Shift-ButtonRelease-1> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-Shift-ButtonPress-1> {%s scale_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-Shift-ButtonPress-2> {%s scale_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-Shift-ButtonPress-3> {%s scale_mode %s %%x %%y}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Constrained Rotate Mode */
 	    bu_vls_printf(&bindings, "bind %s <Control-Lock-ButtonRelease-1> {%s idle_mode %s}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-Lock-ButtonPress-1> {%s constrain_rmode %s x %%x %%y; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-Lock-ButtonPress-2> {%s constrain_rmode %s y %%x %%y; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Control-Lock-ButtonPress-3> {%s constrain_rmode %s z %%x %%y; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Constrained Translate Mode */
 	    bu_vls_printf(&bindings, "bind %s <Shift-Lock-ButtonRelease-1> {%s idle_mode %s; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Shift-Lock-ButtonPress-1> {%s constrain_tmode %s x %%x %%y; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Shift-Lock-ButtonPress-2> {%s constrain_tmode %s y %%x %%y; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Shift-Lock-ButtonPress-3> {%s constrain_tmode %s z %%x %%y; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    /* Key Bindings */
 	    bu_vls_printf(&bindings, "bind %s 3 {%s aet %s 35 25; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s 4 {%s aet %s 45 45; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s f {%s aet %s 0 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s F {%s aet %s 0 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s R {%s aet %s 180 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s r {%s aet %s 270 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s l {%s aet %s 90 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s L {%s aet %s 90 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s t {%s aet %s 270 90; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s T {%s aet %s 270 90; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s b {%s aet %s 270 -90; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s B {%s aet %s 270 -90; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s + {%s zoom %s 2.0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s = {%s zoom %s 2.0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s _ {%s zoom %s 0.5; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s - {%s zoom %s 0.5; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Key-Left> {%s rot %s -v 0 1 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Key-Right> {%s rot %s -v 0 -1 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Key-Up> {%s rot %s -v 1 0 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 	    bu_vls_printf(&bindings, "bind %s <Key-Down> {%s rot %s -v -1 0 0; break}; ",
 		    bu_vls_addr(pathvls),
 		    bu_vls_addr(&current_top->to_gedp->go_name),
-		    bu_vls_addr(&gdvp->gv_name));
+		    tclcad_commands_view_name(gdvp));
 
 	    Tcl_Eval(current_top->to_interp, bu_vls_addr(&bindings));
 	}
@@ -3087,7 +3163,7 @@ to_init_default_bindings(struct bview *gdvp)
 
 
 static int
-to_dlist_on(struct ged *gedp,
+to_cache_on(struct ged *gedp,
 	int argc,
 	const char *argv[],
 	ged_func_ptr UNUSED(func),
@@ -3105,19 +3181,19 @@ to_dlist_on(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    /* Get dlist_on state */
+    /* Get cache_on state */
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%d", tgd->go_dmv.dlist_on);
+	bu_vls_printf(gedp->ged_result_str, "%d", tgd->go_dmv.cache_on);
 	return BRLCAD_OK;
     }
 
-    /* Set dlist_on state */
+    /* Set cache_on state */
     if (bu_sscanf(argv[1], "%d", &on) != 1) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s", argv[0]);
 	return BRLCAD_ERROR;
     }
 
-    tgd->go_dmv.dlist_on = on;
+    tgd->go_dmv.cache_on = on;
 
     return BRLCAD_OK;
 }
@@ -3136,7 +3212,7 @@ to_dplot(struct ged *gedp,
     struct bu_vls callback_cmd = BU_VLS_INIT_ZERO;
     struct bu_vls temp = BU_VLS_INIT_ZERO;
     struct bu_vls result_copy = BU_VLS_INIT_ZERO;
-    struct bview *gdvp;
+    void *gdvp;
     struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
     const char *who_av[3] = {"who", "b", NULL};
     int first = 1;
@@ -3169,12 +3245,11 @@ to_dplot(struct ged *gedp,
 
 	bu_vls_trunc(gedp->ged_result_str, 0);
 
-	struct bu_ptbl *views = bv_set_views(&current_top->to_gedp->ged_views);
+	struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    gdvp = (struct bview *)BU_PTBL_GET(views, i);
+	    gdvp = BU_PTBL_GET(views, i);
 	    if (to_is_viewable(gdvp)) {
-		gedp->ged_gvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-		gedp->ged_gvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+		tclcad_commands_sync_dm_dimensions(ged_view_active_ctx(gedp), gdvp);
 	    }
 	}
 
@@ -3242,12 +3317,11 @@ to_dplot(struct ged *gedp,
 	Tcl_Free((char *)av_more);
     }
 
-    struct bu_ptbl *views = bv_set_views(&current_top->to_gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
+	gdvp = BU_PTBL_GET(views, i);
 	if (to_is_viewable(gdvp)) {
-	    gedp->ged_gvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	    gedp->ged_gvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	    tclcad_commands_sync_dm_dimensions(ged_view_active_ctx(gedp), gdvp);
 	}
     }
     to_refresh_all_views(current_top);
@@ -3287,7 +3361,7 @@ to_fontsize(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3295,7 +3369,7 @@ to_fontsize(struct ged *gedp,
 
     /* get the font size */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_fontsize((struct dm *)gdvp->dmp));
+	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_fontsize(tclcad_commands_display_manager(gdvp)));
 	return BRLCAD_OK;
     }
 
@@ -3304,8 +3378,8 @@ to_fontsize(struct ged *gedp,
 	goto bad_fontsize;
 
     if (DM_VALID_FONT_SIZE(fontsize) || fontsize == 0) {
-	dm_set_fontsize((struct dm *)gdvp->dmp, fontsize);
-	(void)dm_configure_win((struct dm *)gdvp->dmp, 1);
+	dm_set_fontsize(tclcad_commands_display_manager(gdvp), fontsize);
+	(void)dm_configure_win(tclcad_commands_display_manager(gdvp), 1);
 	to_refresh_view(gdvp);
 	return BRLCAD_OK;
     }
@@ -3390,7 +3464,7 @@ to_init_view_bindings(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3424,7 +3498,7 @@ to_delete_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3492,7 +3566,7 @@ to_hide_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3500,7 +3574,7 @@ to_hide_view(struct ged *gedp,
 
     /* return the hide view setting */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", gdvp->gv_tcl.gv_hide);
+	bu_vls_printf(gedp->ged_result_str, "%d", tclcad_view_hide_from_view_ctx(gdvp));
 	return BRLCAD_OK;
     }
 
@@ -3515,7 +3589,7 @@ to_hide_view(struct ged *gedp,
 
 struct redraw_edited_path_data {
     struct ged *gedp;
-    struct bview *gdvp;
+    void *gdvp;
     int *need_refresh;
 };
 
@@ -3527,7 +3601,7 @@ redraw_edited_paths(struct bu_hash_tbl *t, void *udata)
     uint8_t *key;
     char *draw_path;
     struct redraw_edited_path_data *data;
-    int ret, dmode = 0;
+    int ret, draw_mode = 0;
     struct bu_vls path_dmode = BU_VLS_INIT_ZERO;
     struct dm_path_edit_params *params;
     struct bu_hash_entry *entry = bu_hash_next(t, NULL);
@@ -3555,7 +3629,7 @@ redraw_edited_paths(struct bu_hash_tbl *t, void *udata)
 	    bu_vls_printf(&tran_z_vls, "%lf", dvec[Z]);
 	    MAT_IDN(params->edit_mat);
 
-	    struct tclcad_view_data *tvd = (struct tclcad_view_data *)data->gdvp->u_data;
+	    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(data->gdvp);
 	    bu_vls_printf(&tcl_cmd, "%s otranslate %s %s %s",
 		    bu_vls_addr(&tvd->gdv_edit_motion_delta_callback),
 		    bu_vls_addr(&tran_x_vls), bu_vls_addr(&tran_y_vls),
@@ -3578,12 +3652,12 @@ redraw_edited_paths(struct bu_hash_tbl *t, void *udata)
 	av[2] = NULL;
 	ret = ged_exec_how(data->gedp, 2, av);
 	if (ret == BRLCAD_OK) {
-	    bu_sscanf(bu_vls_cstr(data->gedp->ged_result_str), "%d", &dmode);
+	    bu_sscanf(bu_vls_cstr(data->gedp->ged_result_str), "%d", &draw_mode);
 	}
-	if (dmode == 5) {
+	if (draw_mode == 5) {
 	    bu_vls_printf(&path_dmode, "-h");
 	} else {
-	    bu_vls_printf(&path_dmode, "-m%d", dmode);
+	    bu_vls_printf(&path_dmode, "-m%d", draw_mode);
 	}
 
 	av[0] = "erase";
@@ -3631,16 +3705,18 @@ to_idle_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    mode = gdvp->gv_tcl.gv_polygon_mode;
+    mode = tclcad_view_polygon_mode_from_view_ctx(gdvp);
 
-    if (gdvp->gv_s->adaptive_plot_csg &&
-	    gdvp->gv_s->redraw_on_zoom &&
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_view_context_lod_policy_get(&lod_policy, gdvp) &&
+	    lod_policy.csg_enabled &&
+	    lod_policy.zoom_refresh &&
 	    mode == TCLCAD_SCALE_MODE)
     {
 	const char *av[] = {"redraw", NULL};
@@ -3650,12 +3726,12 @@ to_idle_mode(struct ged *gedp,
 	need_refresh = 1;
     }
 
-    if (mode != BV_POLY_CONTOUR_MODE ||
-	    gdvp->gv_tcl.gv_data_polygons.gdps_cflag == 0)
+    if (mode != TCLCAD_POLY_CONTOUR_MODE ||
+	    tclcad_view_polygon_cflag_from_view_ctx(gdvp, 0) == 0)
     {
 	struct bu_vls bindings = BU_VLS_INIT_ZERO;
 
-	struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+	struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
 	if (pathname && bu_vls_strlen(pathname)) {
 	    bu_vls_printf(&bindings, "bind %s <Motion> {}", bu_vls_cstr(pathname));
 	    Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -3663,22 +3739,23 @@ to_idle_mode(struct ged *gedp,
 	bu_vls_free(&bindings);
     }
 
-    if (gdvp->gv_s->gv_grid.snap &&
+    struct bv_grid_state grid;
+    (void)bv_grid_state_get(&grid, tclcad_commands_bv_const(gdvp));
+    if (grid.snap &&
 	    (mode == TCLCAD_TRANSLATE_MODE ||
 	     mode == TCLCAD_CONSTRAINED_TRANSLATE_MODE))
     {
 	const char *av[3];
 
-	gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
 
-	gedp->ged_gvp = gdvp;
+	ged_view_active_ctx_set(gedp, gdvp);
 	av[0] = "grid";
 	av[1] = "vsnap";
 	av[2] = NULL;
 	ged_exec_grid(gedp, 2, (const char **)av);
 
-	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
 	if (0 < bu_vls_strlen(&tvd->gdv_callback)) {
 	    tvd->gdv_callback_cnt++;
 	    if (tvd->gdv_callback_cnt > 1) {
@@ -3708,8 +3785,8 @@ to_idle_mode(struct ged *gedp,
 	to_refresh_all_views(current_top);
     }
 
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_IDLE_MODE;
-    gdvp->gv_tcl.gv_sdata_polygons.gdps_cflag = 0;
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_IDLE_MODE);
+    tclcad_view_polygon_cflag_clear(gdvp, 1);
 
     return BRLCAD_OK;
 }
@@ -3739,7 +3816,7 @@ to_light(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3747,7 +3824,7 @@ to_light(struct ged *gedp,
 
     /* get light flag */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_light((struct dm *)gdvp->dmp));
+	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_light(tclcad_commands_display_manager(gdvp)));
 	return BRLCAD_OK;
     }
 
@@ -3760,8 +3837,8 @@ to_light(struct ged *gedp,
     if (light < 0)
 	light = 0;
 
-    (void)dm_make_current((struct dm *)gdvp->dmp);
-    (void)dm_set_light((struct dm *)gdvp->dmp, light);
+    (void)dm_make_current(tclcad_commands_display_manager(gdvp));
+    (void)dm_set_light(tclcad_commands_display_manager(gdvp), light);
     to_refresh_view(gdvp);
 
     return BRLCAD_OK;
@@ -3776,7 +3853,7 @@ to_list_views(struct ged *gedp,
 	const char *UNUSED(usage),
 	int UNUSED(maxargs))
 {
-    struct bview *gdvp;
+    void *gdvp;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -3786,10 +3863,10 @@ to_list_views(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bu_ptbl *views = bv_set_views(&current_top->to_gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	bu_vls_printf(gedp->ged_result_str, "%s ", bu_vls_addr(&gdvp->gv_name));
+	gdvp = BU_PTBL_GET(views, i);
+	bu_vls_printf(gedp->ged_result_str, "%s ", tclcad_commands_view_name(gdvp));
     }
 
     return BRLCAD_OK;
@@ -3821,12 +3898,12 @@ to_lod(struct ged *gedp,
 	const char *UNUSED(usage),
 	int UNUSED(maxargs))
 {
-    struct bview *gdvp;
+    void *gdvp;
 
-    struct bu_ptbl *views = bv_set_views(&current_top->to_gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	gedp->ged_gvp = gdvp;
+	gdvp = BU_PTBL_GET(views, i);
+	ged_view_active_ctx_set(gedp, gdvp);
 	(*func)(gedp, argc, (const char **)argv);
     }
 
@@ -3901,7 +3978,7 @@ to_edit_motion_delta_callback(struct ged *gedp,
 	return GED_HELP;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -3909,14 +3986,14 @@ to_edit_motion_delta_callback(struct ged *gedp,
 
     /* get the callback string */
     if (argc == 2) {
-	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
 	bu_vls_printf(gedp->ged_result_str, "%s", bu_vls_addr(&tvd->gdv_edit_motion_delta_callback));
 
 	return BRLCAD_OK;
     }
 
     /* set the callback string */
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
     bu_vls_trunc(&tvd->gdv_edit_motion_delta_callback, 0);
     for (i = 2; i < argc; ++i)
 	bu_vls_printf(&tvd->gdv_edit_motion_delta_callback, "%s ", argv[i]);
@@ -3992,7 +4069,7 @@ to_move_arb_edge_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4004,16 +4081,15 @@ to_move_arb_edge_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_MOVE_ARB_EDGE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_ARB_EDGE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_move_arb_edge %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -4051,7 +4127,7 @@ to_move_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4063,16 +4139,15 @@ to_move_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_MOVE_ARB_FACE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_ARB_FACE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_move_arb_face %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -4166,7 +4241,7 @@ to_bot_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4178,16 +4253,15 @@ to_bot_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_MOVE_BOT_POINT_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_BOT_POINT_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_bot_move_pnt -r %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -4226,7 +4300,7 @@ to_bot_move_pnts_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4238,16 +4312,15 @@ to_bot_move_pnts_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_MOVE_BOT_POINTS_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_BOT_POINTS_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_bot_move_pnts %s %%x %%y %s ",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[4]);
     }
     for (i = 5; i < argc; ++i)
@@ -4288,7 +4361,7 @@ to_metaball_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4300,16 +4373,15 @@ to_metaball_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_MOVE_METABALL_POINT_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_METABALL_POINT_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_metaball_move_pnt %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -4347,7 +4419,7 @@ to_pipe_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4359,16 +4431,15 @@ to_pipe_move_pnt_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_MOVE_PIPE_POINT_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_MOVE_PIPE_POINT_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_pipe_move_pnt %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -4418,7 +4489,10 @@ to_new_view(struct ged *gedp,
 	const char *usage,
 	int UNUSED(maxargs))
 {
-    struct bview *new_gdvp;
+    void *view_set_ctx = NULL;
+    void *active_view_ctx = NULL;
+    void *new_view_ctx = NULL;
+    int reuse_active_view = 0;
     static const int name_index = 1;
     const char *type = NULL;
     struct bu_vls event_vls = BU_VLS_INIT_ZERO;
@@ -4463,10 +4537,19 @@ to_new_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    if (!gedp->ged_gvp->u_data) {
-	new_gdvp = gedp->ged_gvp;
+    view_set_ctx = ged_view_set_ctx(current_top->to_gedp);
+    active_view_ctx = ged_view_active_ctx(gedp);
+    if (active_view_ctx && !tclcad_view_data_from_view_ctx(active_view_ctx)) {
+	new_view_ctx = active_view_ctx;
+	reuse_active_view = 1;
     } else {
-	BU_ALLOC(new_gdvp, struct bview);
+	new_view_ctx = ged_view_context_create_with_set(view_set_ctx);
+	if (!new_view_ctx) {
+	    bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", argv[1]);
+	    return BRLCAD_ERROR;
+	}
+	ged_view_set_context_add(view_set_ctx, new_view_ctx);
+	ged_view_context_owned_add(gedp, new_view_ctx);
     }
 
     struct bu_ptbl *callbacks;
@@ -4495,15 +4578,26 @@ to_new_view(struct ged *gedp,
 	    av[i+newargs] = argv[i];
 	av[i+newargs] = (const char *)NULL;
 
-	new_gdvp->dmp = (void *)dm_open(NULL, (void *)current_top->to_interp, type, ac, av);
-	if ((struct dm *)new_gdvp->dmp == DM_NULL) {
+	struct dm *new_dmp = dm_open(NULL, (void *)current_top->to_interp, type, ac, av);
+	if (new_dmp == DM_NULL) {
 	    bu_ptbl_free(callbacks);
 	    BU_PUT(callbacks, struct bu_ptbl);
-	    if (new_gdvp != gedp->ged_gvp)
-		bu_free((void *)new_gdvp, "ged_view");
+	    if (!reuse_active_view)
+		ged_view_context_free(new_view_ctx);
 	    bu_free((void *)av, "to_new_view: av");
 
 	    bu_vls_printf(gedp->ged_result_str, "Failed to create %s\n", argv[1]);
+	    return BRLCAD_ERROR;
+	}
+	if (!ged_view_context_display_manager_set(new_view_ctx, (void *)new_dmp)) {
+	    bu_ptbl_free(callbacks);
+	    BU_PUT(callbacks, struct bu_ptbl);
+	    (void)dm_close(new_dmp);
+	    if (!reuse_active_view)
+		ged_view_context_free(new_view_ctx);
+	    bu_free((void *)av, "to_new_view: av");
+
+	    bu_vls_printf(gedp->ged_result_str, "Failed to initialize %s\n", argv[1]);
 	    return BRLCAD_ERROR;
 	}
 
@@ -4511,48 +4605,56 @@ to_new_view(struct ged *gedp,
 
     }
 
-    if (new_gdvp != gedp->ged_gvp)
-	bu_vls_init(&new_gdvp->gv_name);
-
     struct tclcad_view_data *tvd;
     BU_GET(tvd, struct tclcad_view_data);
-    bu_vls_init(&tvd->gdv_edit_motion_delta_callback);
-    tvd->gdv_edit_motion_delta_callback_cnt = 0;
-    bu_vls_init(&tvd->gdv_callback);
-    tvd->gdv_callback_cnt = 0;
-    tvd->gedp = current_top->to_gedp;
-    new_gdvp->u_data = (void *)tvd;
+    tclcad_view_data_init(tvd, current_top->to_gedp);
 
-    bu_vls_sprintf(&new_gdvp->gv_name, "%s", argv[name_index]);
-    bv_init(new_gdvp, &current_top->to_gedp->ged_views);
-    new_gdvp->callbacks = callbacks;
-    bv_set_add_view(&current_top->to_gedp->ged_views, new_gdvp);
-    if (new_gdvp != gedp->ged_gvp)
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)new_gdvp);
+    if (!bv_name_set(tclcad_commands_bv(new_view_ctx), argv[name_index]) ||
+	    !tclcad_view_data_bind_view_ctx(new_view_ctx, tvd) ||
+	    !ged_view_context_callbacks_set(new_view_ctx, callbacks)) {
+	struct dm *failed_dmp = tclcad_commands_display_manager(new_view_ctx);
+	tclcad_view_data_unbind_view_ctx(new_view_ctx);
+	ged_view_context_display_manager_set(new_view_ctx, NULL);
+	(void)dm_close(failed_dmp);
+	bu_ptbl_free(callbacks);
+	BU_PUT(callbacks, struct bu_ptbl);
+	BU_PUT(tvd, struct tclcad_view_data);
+	if (!reuse_active_view)
+	    ged_view_context_free(new_view_ctx);
 
-    new_gdvp->gv_s->point_scale = 1.0;
-    new_gdvp->gv_s->curve_scale = 1.0;
+	bu_vls_printf(gedp->ged_result_str, "Failed to initialize %s\n", argv[1]);
+	return BRLCAD_ERROR;
+    }
+    callbacks = NULL;
 
-    tvd->gdv_fbs.fbs_listener.fbsl_fbsp = &tvd->gdv_fbs;
-    tvd->gdv_fbs.fbs_listener.fbsl_fd = -1;
-    tvd->gdv_fbs.fbs_listener.fbsl_port = -1;
-    tvd->gdv_fbs.fbs_fbp = FB_NULL;
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_view_context_lod_policy_get(&lod_policy, new_view_ctx)) {
+	lod_policy.point_scale = 1.0;
+	lod_policy.curve_scale = 1.0;
+	ged_draw_view_context_lod_policy_apply(new_view_ctx, &lod_policy);
+    }
+
+    fbs_init(&tvd->gdv_fbs);
     tvd->gdv_fbs.fbs_callback = (void (*)(void *clientData))to_fbs_callback;
-    tvd->gdv_fbs.fbs_clientData = new_gdvp;
+    tvd->gdv_fbs.fbs_clientData = new_view_ctx;
     tvd->gdv_fbs.fbs_interp = current_top->to_interp;
 
     /* open the framebuffer */
-    to_open_fbs(new_gdvp, current_top->to_interp);
+    to_open_fbs(new_view_ctx, current_top->to_interp);
 
     /* Set default bindings */
-    to_init_default_bindings(new_gdvp);
+    to_init_default_bindings(new_view_ctx);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)new_gdvp->dmp);
+    struct dm *path_dmp = tclcad_commands_display_manager(new_view_ctx);
+    struct bu_vls *pathname = dm_get_pathname(path_dmp);
+    const char *view_name = bv_name_get(tclcad_commands_bv_const(new_view_ctx));
+    if (!view_name)
+	view_name = argv[name_index];
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&event_vls, "event generate %s <Configure>; %s autoview %s",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&new_gdvp->gv_name));
+		view_name);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&event_vls));
     }
     bu_vls_free(&event_vls);
@@ -4561,16 +4663,16 @@ to_new_view(struct ged *gedp,
 	(void)Tcl_CreateCommand(current_top->to_interp,
 		bu_vls_cstr(pathname),
 		(Tcl_CmdProc *)to_view_cmd,
-		(ClientData)new_gdvp,
+		(ClientData)new_view_ctx,
 		NULL);
     }
 
-    // If we don't already have a default ged_gvp, set the one we just
+    // If we don't already have a default GED view, set the one we just
     // created as the new default
-    if (!gedp->ged_gvp)
-	gedp->ged_gvp = new_gdvp;
+    if (!ged_view_active_ctx(gedp))
+	ged_view_active_ctx_set(gedp, new_view_ctx);
 
-    bu_vls_printf(gedp->ged_result_str, "%s", bu_vls_cstr(&new_gdvp->gv_name));
+    bu_vls_printf(gedp->ged_result_str, "%s", view_name);
     return BRLCAD_OK;
 }
 
@@ -4602,7 +4704,7 @@ to_orotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4614,16 +4716,15 @@ to_orotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_OROTATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_OROTATE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_orotate %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
@@ -4660,7 +4761,7 @@ to_oscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4672,16 +4773,15 @@ to_oscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_OSCALE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_OSCALE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_oscale %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
@@ -4719,7 +4819,7 @@ to_otranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -4731,16 +4831,15 @@ to_otranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_OTRANSLATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_OTRANSLATE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_otranslate %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
@@ -4772,19 +4871,23 @@ to_paint_rect_area(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 0);
+    (void)dm_set_depth_mask(tclcad_commands_display_manager(gdvp), 0);
 
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-    (void)fb_refresh(tvd->gdv_fbs.fbs_fbp, gdvp->gv_s->gv_rect.pos[X], gdvp->gv_s->gv_rect.pos[Y],
-	    gdvp->gv_s->gv_rect.dim[X], gdvp->gv_s->gv_rect.dim[Y]);
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
+    struct fb *fbp = tvd ? fbs_legacy_framebuffer(&tvd->gdv_fbs) : FB_NULL;
+    struct bv_interactive_rect_state rect = BV_INTERACTIVE_RECT_STATE_INIT;
+    (void)bv_interactive_rect_state_get(&rect, tclcad_commands_bv_const(gdvp));
+    if (fbp)
+	(void)fb_refresh(fbp, rect.pos[X], rect.pos[Y],
+		rect.dim[X], rect.dim[Y]);
 
-    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 1);
+    (void)dm_set_depth_mask(tclcad_commands_display_manager(gdvp), 1);
 
     return BRLCAD_OK;
 }
@@ -4801,10 +4904,11 @@ to_pix(struct ged *gedp,
 {
     FILE *fp = NULL;
     unsigned char *scanline;
-    unsigned char *pixels;
+    unsigned char *pixels = NULL;
     static int bytes_per_pixel = 3;
     int i = 0;
     int height = 0;
+    int has_obol = 0;
     int make_ret = 0;
     int bytes_per_line;
 
@@ -4821,18 +4925,21 @@ to_pix(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    if (!BU_STR_EQUIV(dm_get_type((struct dm *)gdvp->dmp), "wgl") && !BU_STR_EQUIV(dm_get_type((struct dm *)gdvp->dmp), "ogl")) {
+    has_obol = ged_draw_obol_controller_opaque_for_view(gdvp) != NULL;
+    if (!has_obol &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
 	bu_vls_printf(gedp->ged_result_str, "%s: not yet supported for this display manager (i.e. must be OpenGL based)", argv[0]);
 	return BRLCAD_OK;
     }
 
-    bytes_per_line = dm_get_width((struct dm *)gdvp->dmp) * bytes_per_pixel;
+    bytes_per_line = dm_get_width(tclcad_commands_display_manager(gdvp)) * bytes_per_pixel;
 
     if ((fp = fopen(argv[2], "wb")) == NULL) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -4841,19 +4948,28 @@ to_pix(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    height = dm_get_height((struct dm *)gdvp->dmp);
+    height = dm_get_height(tclcad_commands_display_manager(gdvp));
 
-    make_ret = dm_make_current((struct dm *)gdvp->dmp);
-    if (!make_ret) {
-	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
-    }
+    if (has_obol) {
+	(void)ged_draw_obol_framebuffer_present(gedp);
+	if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get Obol display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
+    } else {
+	make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
+	if (!make_ret) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
 
-    if (dm_get_display_image((struct dm *)gdvp->dmp, &pixels, 0, 0) != BRLCAD_OK) {
-    	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
+	if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
     }
 
     for (i = 0; i < height; ++i) {
@@ -4884,12 +5000,13 @@ to_png(struct ged *gedp,
     png_infop info_p;
     FILE *fp = NULL;
     unsigned char **rows = NULL;
-    unsigned char *pixels;
+    unsigned char *pixels = NULL;
     static int bytes_per_pixel = 3;
     static int bits_per_channel = 8;  /* bits per color channel */
     int i = 0;
     int width = 0;
     int height = 0;
+    int has_obol = 0;
     int make_ret = 0;
     int bytes_per_line;
 
@@ -4906,18 +5023,21 @@ to_png(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    if (!BU_STR_EQUIV(dm_get_type((struct dm *)gdvp->dmp), "wgl") && !BU_STR_EQUIV(dm_get_type((struct dm *)gdvp->dmp), "ogl")) {
+    has_obol = ged_draw_obol_controller_opaque_for_view(gdvp) != NULL;
+    if (!has_obol &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") &&
+	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
 	bu_vls_printf(gedp->ged_result_str, "%s: not yet supported for this display manager (i.e. must be OpenGL based)", argv[0]);
 	return BRLCAD_OK;
     }
 
-    bytes_per_line = dm_get_width((struct dm *)gdvp->dmp) * bytes_per_pixel;
+    bytes_per_line = dm_get_width(tclcad_commands_display_manager(gdvp)) * bytes_per_pixel;
 
     if ((fp = fopen(argv[2], "wb")) == NULL) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -4940,19 +5060,28 @@ to_png(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    width = dm_get_width((struct dm *)gdvp->dmp);
-    height = dm_get_height((struct dm *)gdvp->dmp);
-    make_ret = dm_make_current((struct dm *)gdvp->dmp);
-    if (make_ret) {
-	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
-    }
+    width = dm_get_width(tclcad_commands_display_manager(gdvp));
+    height = dm_get_height(tclcad_commands_display_manager(gdvp));
+    if (has_obol) {
+	(void)ged_draw_obol_framebuffer_present(gedp);
+	if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get Obol display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
+    } else {
+	make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
+	if (make_ret) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
 
-    if (dm_get_display_image((struct dm *)gdvp->dmp, &pixels, 0, 0) != BRLCAD_OK) {
-    	bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
-	fclose(fp);
-	return BRLCAD_ERROR;
+	if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
+	    fclose(fp);
+	    return BRLCAD_ERROR;
+	}
     }
 
     rows = (unsigned char **)bu_calloc(height, sizeof(unsigned char *), "rows");
@@ -5009,13 +5138,13 @@ to_rect_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
 
     if (bu_sscanf(argv[2], "%d", &x) != 1 ||
 	    bu_sscanf(argv[3], "%d", &y) != 1) {
@@ -5023,9 +5152,9 @@ to_rect_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = dm_get_height((struct dm *)gdvp->dmp) - y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_RECTANGLE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x,
+	    dm_get_height(tclcad_commands_display_manager(gdvp)) - y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_RECTANGLE_MODE);
 
     ac = 4;
     av[0] = "rect";
@@ -5035,8 +5164,12 @@ to_rect_mode(struct ged *gedp,
     av[4] = (char *)0;
     (void)ged_exec_rect(gedp, ac, (const char **)av);
 
-    bu_vls_printf(&x_vls, "%d", (int)gdvp->gv_prevMouseX);
-    bu_vls_printf(&y_vls, "%d", (int)gdvp->gv_prevMouseY);
+    fastf_t prev_x = 0.0;
+    fastf_t prev_y = 0.0;
+    (void)bv_previous_mouse_get(&prev_x, &prev_y,
+	    tclcad_commands_bv_const(gdvp));
+    bu_vls_printf(&x_vls, "%d", (int)prev_x);
+    bu_vls_printf(&y_vls, "%d", (int)prev_y);
     av[1] = "pos";
     av[2] = bu_vls_addr(&x_vls);
     av[3] = bu_vls_addr(&y_vls);
@@ -5051,12 +5184,12 @@ to_rect_mode(struct ged *gedp,
     av[3] = (char *)0;
     (void)ged_exec_rect(gedp, ac, (const char **)av);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_rect %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name));
+		tclcad_commands_view_name(gdvp));
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
     bu_vls_free(&bindings);
@@ -5094,7 +5227,7 @@ to_rotate_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5106,16 +5239,15 @@ to_rotate_arb_face_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_ROTATE_ARB_FACE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_ROTATE_ARB_FACE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_rotate_arb_face %s %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3],
 		argv[4]);
@@ -5154,7 +5286,7 @@ to_rotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5166,16 +5298,15 @@ to_rotate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_ROTATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_ROTATE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_rot %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name));
+		tclcad_commands_view_name(gdvp));
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
     bu_vls_free(&bindings);
@@ -5317,7 +5448,7 @@ to_protate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5329,16 +5460,15 @@ to_protate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_PROTATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_PROTATE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_protate %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -5376,7 +5506,7 @@ to_pscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5388,16 +5518,15 @@ to_pscale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_PSCALE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_PSCALE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_pscale %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -5435,7 +5564,7 @@ to_ptranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5447,16 +5576,15 @@ to_ptranslate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_PTRANSLATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_PTRANSLATE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_ptranslate %s %s %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name),
+		tclcad_commands_view_name(gdvp),
 		argv[2],
 		argv[3]);
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
@@ -5494,7 +5622,7 @@ to_data_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5506,16 +5634,15 @@ to_data_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_DATA_SCALE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_DATA_SCALE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_data_scale %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name));
+		tclcad_commands_view_name(gdvp));
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
     bu_vls_free(&bindings);
@@ -5551,7 +5678,7 @@ to_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5563,16 +5690,15 @@ to_scale_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_SCALE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_SCALE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_scale %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name));
+		tclcad_commands_view_name(gdvp));
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
     bu_vls_free(&bindings);
@@ -5591,6 +5717,7 @@ to_screen2model(struct ged *gedp,
 {
     point_t view;
     point_t model;
+    mat_t view2model;
 
     /* must be double for scanf */
     double x, y;
@@ -5609,7 +5736,7 @@ to_screen2model(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5621,11 +5748,11 @@ to_screen2model(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
-    bv_screen_to_view(gdvp, &x, &y, x, y);
+    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
+    bv_screen_to_view(&x, &y, tclcad_commands_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
-    MAT4X3PNT(model, gdvp->gv_view2model, view);
+    bv_view2model_get(view2model, tclcad_commands_bv_const(gdvp));
+    MAT4X3PNT(model, view2model, view);
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf %lf", V3ARGS(model));
 
@@ -5660,7 +5787,7 @@ to_screen2view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5672,9 +5799,8 @@ to_screen2view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
-    bv_screen_to_view(gdvp, &x, &y, x, y);
+    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
+    bv_screen_to_view(&x, &y, tclcad_commands_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf %lf", V3ARGS(view));
@@ -5705,7 +5831,7 @@ to_set_coord(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5713,7 +5839,8 @@ to_set_coord(struct ged *gedp,
 
     /* Get coord */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%c", gdvp->gv_coord);
+	bu_vls_printf(gedp->ged_result_str, "%c",
+		bv_coord_get(tclcad_commands_bv_const(gdvp)));
 	return BRLCAD_OK;
     }
 
@@ -5723,7 +5850,7 @@ to_set_coord(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_coord = argv[2][0];
+    bv_coord_set(tclcad_commands_bv(gdvp), argv[2][0]);
 
     return BRLCAD_OK;
 }
@@ -5756,7 +5883,7 @@ to_snap_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5771,23 +5898,23 @@ to_snap_view(struct ged *gedp,
     fvx = vx;
     fvy = vy;
 
-    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
-    gdvp->gv_base2local = gedp->dbip->dbi_base2local;
+    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
+    bv_unit_conversion_set(tclcad_commands_bv(gdvp),
+	    bv_local2base_get(tclcad_commands_bv_const(gdvp)),
+	    gedp->dbip->dbi_base2local);
 
-    gedp->ged_gvp = gdvp;
-    if (!gedp->ged_gvp->gv_s->gv_snap_lines && !gedp->ged_gvp->gv_s->gv_grid.snap) {
+    ged_view_active_ctx_set(gedp, gdvp);
+    struct bv_grid_state grid;
+    (void)bv_grid_state_get(&grid, tclcad_commands_bv_const(gdvp));
+    if (!bv_snap_lines_get(tclcad_commands_bv_const(gdvp)) && !grid.snap) {
 	bu_vls_printf(gedp->ged_result_str, "%lf %lf", fvx, fvy);
 	return BRLCAD_OK;
     }
 
-    int snapped = 0;
-    if (gedp->ged_gvp->gv_s->gv_snap_lines) {
-	gedp->ged_gvp->gv_s->gv_snap_flags = BV_SNAP_TCL;
-	snapped = bv_snap_lines_2d(gedp->ged_gvp, &fvx, &fvy);
-    }
-    if (!snapped && gedp->ged_gvp->gv_s->gv_grid.snap) {
-	bv_snap_grid_2d(gedp->ged_gvp, &fvx, &fvy);
+    {
+	unsigned long long snap_kinds = tclcad_commands_prepare_snap(gdvp);
+	if (snap_kinds)
+	    tclcad_commands_snap_point_2d(gdvp, &fvx, &fvy, snap_kinds);
     }
 
     bu_vls_printf(gedp->ged_result_str, "%lf %lf", fvx, fvy);
@@ -5887,7 +6014,7 @@ to_translate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5899,16 +6026,15 @@ to_translate_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp->gv_prevMouseX = x;
-    gdvp->gv_prevMouseY = y;
-    gdvp->gv_tcl.gv_polygon_mode = TCLCAD_TRANSLATE_MODE;
+    bv_previous_mouse_set(tclcad_commands_bv(gdvp), x, y);
+    tclcad_view_polygon_mode_set(gdvp, TCLCAD_TRANSLATE_MODE);
 
-    struct bu_vls *pathname = dm_get_pathname((struct dm *)gdvp->dmp);
+    struct bu_vls *pathname = dm_get_pathname(tclcad_commands_display_manager(gdvp));
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_trans %s %%x %%y}",
 		bu_vls_cstr(pathname),
 		bu_vls_cstr(&current_top->to_gedp->go_name),
-		bu_vls_cstr(&gdvp->gv_name));
+		tclcad_commands_view_name(gdvp));
 	Tcl_Eval(current_top->to_interp, bu_vls_cstr(&bindings));
     }
     bu_vls_free(&bindings);
@@ -5941,7 +6067,7 @@ to_transparency(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5949,7 +6075,7 @@ to_transparency(struct ged *gedp,
 
     /* get transparency flag */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_transparency((struct dm *)gdvp->dmp));
+	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_transparency(tclcad_commands_display_manager(gdvp)));
 	return BRLCAD_OK;
     }
 
@@ -5960,8 +6086,8 @@ to_transparency(struct ged *gedp,
 	    return BRLCAD_ERROR;
 	}
 
-	(void)dm_make_current((struct dm *)gdvp->dmp);
-	(void)dm_set_transparency((struct dm *)gdvp->dmp, transparency);
+	(void)dm_make_current(tclcad_commands_display_manager(gdvp));
+	(void)dm_set_transparency(tclcad_commands_display_manager(gdvp), transparency);
 	return BRLCAD_OK;
     }
 
@@ -5988,7 +6114,7 @@ to_view_callback(struct ged *gedp,
 	return GED_HELP;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -5996,14 +6122,14 @@ to_view_callback(struct ged *gedp,
 
     /* get the callback string */
     if (argc == 2) {
-	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
 	bu_vls_printf(gedp->ged_result_str, "%s", bu_vls_addr(&tvd->gdv_callback));
 
 	return BRLCAD_OK;
     }
 
     /* set the callback string */
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
     bu_vls_trunc(&tvd->gdv_callback, 0);
     for (i = 2; i < argc; ++i)
 	bu_vls_printf(&tvd->gdv_callback, "%s ", argv[i]);
@@ -6036,14 +6162,14 @@ to_view_win_size(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d %d", dm_get_width((struct dm *)gdvp->dmp), dm_get_height((struct dm *)gdvp->dmp));
+	bu_vls_printf(gedp->ged_result_str, "%d %d", dm_get_width(tclcad_commands_display_manager(gdvp)), dm_get_height(tclcad_commands_display_manager(gdvp)));
 	return BRLCAD_OK;
     }
 
@@ -6066,7 +6192,7 @@ to_view_win_size(struct ged *gedp,
 	}
     }
 
-    dm_geometry_request((struct dm *)gdvp->dmp, width, height);
+    dm_geometry_request(tclcad_commands_display_manager(gdvp), width, height);
 
     return BRLCAD_OK;
 }
@@ -6101,7 +6227,7 @@ to_view2screen(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6112,8 +6238,8 @@ to_view2screen(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    width = dm_get_width((struct dm *)gdvp->dmp);
-    height = dm_get_height((struct dm *)gdvp->dmp);
+    width = dm_get_width(tclcad_commands_display_manager(gdvp));
+    height = dm_get_height(tclcad_commands_display_manager(gdvp));
     aspect = (fastf_t)width/(fastf_t)height;
     x = (view[X] + 1.0) * 0.5 * (fastf_t)width;
     y = (view[Y] * aspect - 1.0) * -0.5 * (fastf_t)height;
@@ -6146,7 +6272,7 @@ to_vmake(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6157,12 +6283,16 @@ to_vmake(struct ged *gedp,
 	const char *av[8];
 	char center[512];
 	char scale[128];
+	mat_t view_center;
+	fastf_t view_scale;
 
+	bv_center_mat_get(view_center, tclcad_commands_bv_const(gdvp));
+	view_scale = bv_scale_get(tclcad_commands_bv_const(gdvp));
 	sprintf(center, "%f %f %f",
-		-gdvp->gv_center[MDX],
-		-gdvp->gv_center[MDY],
-		-gdvp->gv_center[MDZ]);
-	sprintf(scale, "%f", gdvp->gv_scale * 2.0);
+		-view_center[MDX],
+		-view_center[MDY],
+		-view_center[MDZ]);
+	sprintf(scale, "%f", view_scale * 2.0);
 
 	av[0] = (char *)argv[0];
 	av[1] = "-o";
@@ -6219,7 +6349,7 @@ to_vslew(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6231,15 +6361,15 @@ to_vslew(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    width = dm_get_width((struct dm *)gdvp->dmp);
+    width = dm_get_width(tclcad_commands_display_manager(gdvp));
     xpos2 = 0.5 * (fastf_t)width;
-    height = dm_get_height((struct dm *)gdvp->dmp);
+    height = dm_get_height(tclcad_commands_display_manager(gdvp));
     ypos2 = 0.5 * (fastf_t)height;
     sf = 2.0 / width;
 
     bu_vls_printf(&slew_vec, "%lf %lf", (xpos1 - xpos2) * sf, (ypos2 - ypos1) * sf);
 
-    gedp->ged_gvp = gdvp;
+    ged_view_active_ctx_set(gedp, gdvp);
     ac = 2;
     av[0] = (char *)argv[0];
     av[1] = bu_vls_addr(&slew_vec);
@@ -6249,23 +6379,23 @@ to_vslew(struct ged *gedp,
     bu_vls_free(&slew_vec);
 
     if (ret == BRLCAD_OK) {
-	if (gdvp->gv_s->gv_grid.snap) {
+	struct bv_grid_state grid;
+	(void)bv_grid_state_get(&grid, tclcad_commands_bv_const(gdvp));
+	if (grid.snap) {
 
-	    gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	    gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	    tclcad_commands_sync_dm_dimensions(gdvp, gdvp);
 
-	    gedp->ged_gvp = gdvp;
+	    ged_view_active_ctx_set(gedp, gdvp);
 	    av[0] = "grid";
 	    av[1] = "vsnap";
 	    av[2] = NULL;
 	    ged_exec_grid(gedp, 2, (const char **)av);
 	}
 
-	if (gedp->ged_gvp->gv_s->gv_snap_lines) {
-	    bv_view_center_linesnap(gedp->ged_gvp);
-	}
+	/* BSG line-snap centering is retired; Obol scene snapping must own any
+	 * future line-snap recenter behavior. */
 
-	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
 	if (0 < bu_vls_strlen(&tvd->gdv_callback)) {
 	    tvd->gdv_callback_cnt++;
 	    if (tvd->gdv_callback_cnt > 1) {
@@ -6306,7 +6436,7 @@ to_zbuffer(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6314,7 +6444,7 @@ to_zbuffer(struct ged *gedp,
 
     /* get zbuffer flag */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_zbuffer((struct dm *)gdvp->dmp));
+	bu_vls_printf(gedp->ged_result_str, "%d", dm_get_zbuffer(tclcad_commands_display_manager(gdvp)));
 	return BRLCAD_OK;
     }
 
@@ -6329,8 +6459,8 @@ to_zbuffer(struct ged *gedp,
     else if (1 < zbuffer)
 	zbuffer = 1;
 
-    (void)dm_make_current((struct dm *)gdvp->dmp);
-    (void)dm_set_zbuffer((struct dm *)gdvp->dmp, zbuffer);
+    (void)dm_make_current(tclcad_commands_display_manager(gdvp));
+    (void)dm_set_zbuffer(tclcad_commands_display_manager(gdvp), zbuffer);
     to_refresh_view(gdvp);
 
     return BRLCAD_OK;
@@ -6361,7 +6491,7 @@ to_zclip(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct bview *gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
+    void *gdvp = ged_view_find_ctx(gedp, argv[1]);
     if (!gdvp) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -6369,7 +6499,8 @@ to_zclip(struct ged *gedp,
 
     /* get zclip flag */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", gdvp->gv_s->gv_zclip);
+	bu_vls_printf(gedp->ged_result_str, "%d",
+		bv_zclip_get(tclcad_commands_bv_const(gdvp)));
 	return BRLCAD_OK;
     }
 
@@ -6384,8 +6515,8 @@ to_zclip(struct ged *gedp,
     else if (1 < zclip)
 	zclip = 1;
 
-    gdvp->gv_s->gv_zclip = zclip;
-    dm_set_zclip((struct dm *)gdvp->dmp, zclip);
+    bv_zclip_set(tclcad_commands_bv(gdvp), zclip);
+    dm_set_zclip(tclcad_commands_display_manager(gdvp), zclip);
     to_refresh_view(gdvp);
 
     return BRLCAD_OK;
@@ -6393,74 +6524,6 @@ to_zclip(struct ged *gedp,
 
 
 /*************************** Local Utility Functions ***************************/
-
-static void
-to_create_vlist_callback_solid(void *UNUSED(ctx), struct bv_scene_obj *sp)
-{
-    struct bview *gdvp;
-    int first = 1;
-    struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-
-    struct bu_ptbl *views = bv_set_views(&current_top->to_gedp->ged_views);
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	if (tgd->go_dmv.dlist_on && to_is_viewable(gdvp)) {
-
-	    (void)dm_make_current((struct dm *)gdvp->dmp);
-
-	    if (first) {
-		sp->s_dlist = dm_gen_dlists((struct dm *)gdvp->dmp, 1);
-		first = 0;
-	    }
-
-	    (void)dm_begin_dlist((struct dm *)gdvp->dmp, sp->s_dlist);
-
-	    if (sp->s_iflag == UP)
-		(void)dm_set_fg((struct dm *)gdvp->dmp, 255, 255, 255, 0, sp->s_os->transparency);
-	    else
-		(void)dm_set_fg((struct dm *)gdvp->dmp,
-			(unsigned char)sp->s_color[0],
-			(unsigned char)sp->s_color[1],
-			(unsigned char)sp->s_color[2], 0, sp->s_os->transparency);
-
-	    if (sp->s_os->s_dmode == 4) {
-		(void)dm_draw_vlist_hidden_line((struct dm *)gdvp->dmp, (struct bv_vlist *)&sp->s_vlist);
-	    } else {
-		(void)dm_draw_vlist((struct dm *)gdvp->dmp, (struct bv_vlist *)&sp->s_vlist);
-	    }
-
-	    (void)dm_end_dlist((struct dm *)gdvp->dmp);
-	}
-    }
-}
-
-
-static void
-to_create_vlist_callback(void *ctx, struct display_list *gdlp)
-{
-    struct bv_scene_obj *sp;
-    for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	to_create_vlist_callback_solid(ctx, sp);
-    }
-}
-
-
-static void
-to_destroy_vlist_callback(void *UNUSED(ctx), unsigned int dlist, int range)
-{
-    struct bview *gdvp;
-    struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-
-    struct bu_ptbl *views = bv_set_views(&current_top->to_gedp->ged_views);
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	if (tgd->go_dmv.dlist_on && to_is_viewable(gdvp)) {
-	    (void)dm_make_current((struct dm *)gdvp->dmp);
-	    (void)dm_free_dlists((struct dm *)gdvp->dmp, dlist, range);
-	}
-    }
-}
-
 
 static void
 to_rt_end_callback_internal(int aborted)

@@ -35,6 +35,8 @@
 #include "bu/opt.h"
 #include "bu/vls.h"
 #include "bv.h"
+#include "ged/draw.h"
+#include "ged/draw_obol.h"
 
 #include "../../ged_private.h"
 #include "../ged_view.h"
@@ -83,26 +85,32 @@ _fp_cmd_center_dot(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    struct bv_other_state center_dot;
+    if (!bv_center_dot_state_get(&center_dot, view))
+	return BRLCAD_ERROR;
 
     if (!argc) {
 	if (gd->verbosity) {
-	    bu_vls_printf(gedp->ged_result_str, "%d (%d/%d/%d)", v->gv_s->gv_center_dot.gos_draw,
-		    v->gv_s->gv_center_dot.gos_line_color[0], v->gv_s->gv_center_dot.gos_line_color[1],
-		    v->gv_s->gv_center_dot.gos_line_color[2]);
+	    bu_vls_printf(gedp->ged_result_str, "%d (%d/%d/%d)", center_dot.gos_draw,
+		    center_dot.gos_line_color[0], center_dot.gos_line_color[1],
+		    center_dot.gos_line_color[2]);
 	} else {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_center_dot.gos_draw);
+	    bu_vls_printf(gedp->ged_result_str, "%d", center_dot.gos_draw);
 	}
 	return BRLCAD_OK;
     }
 
     if (argc == 1) {
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    v->gv_s->gv_center_dot.gos_draw = 1;
+	    center_dot.gos_draw = 1;
+	    bv_center_dot_state_set(view, &center_dot);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    v->gv_s->gv_center_dot.gos_draw = 0;
+	    center_dot.gos_draw = 0;
+	    bv_center_dot_state_set(view, &center_dot);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "value %s is invalid - valid values are 0 or 1\n", argv[0]);
@@ -120,8 +128,9 @@ _fp_cmd_center_dot(void *ds, int argc, const char **argv)
 	if (bu_opt_color(&msg, argc, argv, &c) == -1) {
 	    bu_vls_printf(gedp->ged_result_str, "invalid color specification\n");
 	}
-	int *cls = (int *)(v->gv_s->gv_center_dot.gos_line_color);
+	int *cls = (int *)(center_dot.gos_line_color);
 	bu_color_to_rgb_ints(&c, &cls[0], &cls[1], &cls[2]);
+	bv_center_dot_state_set(view, &center_dot);
 	return BRLCAD_OK;
     }
 
@@ -143,24 +152,26 @@ _fp_cmd_fb(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     if (!argc) {
-	bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_fb_mode);
+	bu_vls_printf(gedp->ged_result_str, "%d",
+		bv_framebuffer_mode_get(view));
 	return BRLCAD_OK;
     }
 
     if (argc == 1) {
 	if (BU_STR_EQUAL("2", argv[0])) {
-	    v->gv_s->gv_fb_mode = 2;
+	    bv_framebuffer_mode_set(view, 2);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    v->gv_s->gv_fb_mode = 1;
+	    bv_framebuffer_mode_set(view, 1);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    v->gv_s->gv_fb_mode = 0;
+	    bv_framebuffer_mode_set(view, 0);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "value %s is invalid - valid values are 0, 1 and 2\n", argv[0]);
@@ -185,26 +196,32 @@ _fp_cmd_scale(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    struct bv_other_state scale_state;
+    if (!bv_scale_overlay_state_get(&scale_state, view))
+	return BRLCAD_ERROR;
 
     if (!argc) {
 	if (gd->verbosity) {
-	    bu_vls_printf(gedp->ged_result_str, "%d (%d/%d/%d)", v->gv_s->gv_view_scale.gos_draw,
-		    v->gv_s->gv_view_scale.gos_line_color[0], v->gv_s->gv_view_scale.gos_line_color[1],
-		    v->gv_s->gv_view_scale.gos_line_color[2]);
+	    bu_vls_printf(gedp->ged_result_str, "%d (%d/%d/%d)", scale_state.gos_draw,
+		    scale_state.gos_line_color[0], scale_state.gos_line_color[1],
+		    scale_state.gos_line_color[2]);
 	} else {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_scale.gos_draw);
+	    bu_vls_printf(gedp->ged_result_str, "%d", scale_state.gos_draw);
 	}
 	return BRLCAD_OK;
     }
 
     if (argc == 1) {
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    v->gv_s->gv_view_scale.gos_draw = 1;
+	    scale_state.gos_draw = 1;
+	    bv_scale_overlay_state_set(view, &scale_state);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    v->gv_s->gv_view_scale.gos_draw = 0;
+	    scale_state.gos_draw = 0;
+	    bv_scale_overlay_state_set(view, &scale_state);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "value %s is invalid - valid values are 0 or 1\n", argv[0]);
@@ -222,8 +239,9 @@ _fp_cmd_scale(void *ds, int argc, const char **argv)
 	if (bu_opt_color(&msg, argc, argv, &c) == -1) {
 	    bu_vls_printf(gedp->ged_result_str, "invalid color specification\n");
 	}
-	int *cls = (int *)(v->gv_s->gv_view_scale.gos_line_color);
+	int *cls = (int *)(scale_state.gos_line_color);
 	bu_color_to_rgb_ints(&c, &cls[0], &cls[1], &cls[2]);
+	bv_scale_overlay_state_set(view, &scale_state);
 	return BRLCAD_OK;
     }
 
@@ -245,62 +263,68 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 
     struct _ged_fp_info *gd = (struct _ged_fp_info *)ds;
     struct ged *gedp = gd->gedp;
-    struct bview *v = gedp->ged_gvp;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    struct bv_params_state params;
+    if (!bv_params_state_get(&params, view))
+	return BRLCAD_ERROR;
 
     if (!argc) {
 	if (gd->verbosity) {
 	    bu_vls_printf(gedp->ged_result_str, "%d[%d] (%d/%d/%d) [%d %d %d %d %d %d]",
-		    v->gv_s->gv_view_params.draw,
-		    v->gv_s->gv_view_params.font_size,
-		    V3ARGS(v->gv_s->gv_view_params.color),
-		    v->gv_s->gv_view_params.draw_size,
-		    v->gv_s->gv_view_params.draw_center,
-		    v->gv_s->gv_view_params.draw_az,
-		    v->gv_s->gv_view_params.draw_el,
-		    v->gv_s->gv_view_params.draw_tw,
-		    v->gv_s->gv_view_params.draw_fps
+		    params.draw,
+		    params.font_size,
+		    V3ARGS(params.color),
+		    params.draw_size,
+		    params.draw_center,
+		    params.draw_az,
+		    params.draw_el,
+		    params.draw_tw,
+		    params.draw_fps
 		    );
 	} else {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.draw);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.draw);
 	}
 	return BRLCAD_OK;
     }
 
     if (argc == 1) {
 	if (BU_STR_EQUAL("1", argv[0])) {
-	    v->gv_s->gv_view_params.draw = 1;
+	    params.draw = 1;
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
-	    v->gv_s->gv_view_params.draw = 0;
+	    params.draw = 0;
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("size", argv[0])) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.draw_size);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.draw_size);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("center", argv[0])) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.draw_center);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.draw_center);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("az", argv[0])) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.draw_az);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.draw_az);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("el", argv[0])) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.draw_el);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.draw_el);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("tw", argv[0])) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.draw_tw);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.draw_tw);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("fps", argv[0])) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.draw_fps);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.draw_fps);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("font_size", argv[0])) {
-	    bu_vls_printf(gedp->ged_result_str, "%d", v->gv_s->gv_view_params.font_size);
+	    bu_vls_printf(gedp->ged_result_str, "%d", params.font_size);
 	    return BRLCAD_OK;
 	}
 	bu_vls_printf(gedp->ged_result_str, "input %s is invalid\n", argv[0]);
@@ -315,56 +339,63 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    if (bu_opt_color(&msg, argc, argv, &c) == -1) {
 		bu_vls_printf(gedp->ged_result_str, "invalid color specification\n");
 	    }
-	    int *cls = (int *)(v->gv_s->gv_view_params.color);
+	    int *cls = (int *)(params.color);
 	    bu_color_to_rgb_ints(&c, &cls[0], &cls[1], &cls[2]);
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("size", argv[0]))  {
-	    if (BU_STR_EQUAL("0", argv[0])) {
-		v->gv_s->gv_view_params.draw_size = 0;
+	    if (BU_STR_EQUAL("0", argv[1])) {
+		params.draw_size = 0;
 	    } else {
-		v->gv_s->gv_view_params.draw_size = 1;
+		params.draw_size = 1;
 	    }
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("center", argv[0]))  {
-	    if (BU_STR_EQUAL("0", argv[0])) {
-		v->gv_s->gv_view_params.draw_center = 0;
+	    if (BU_STR_EQUAL("0", argv[1])) {
+		params.draw_center = 0;
 	    } else {
-		v->gv_s->gv_view_params.draw_center = 1;
+		params.draw_center = 1;
 	    }
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("az", argv[0]))  {
-	    if (BU_STR_EQUAL("0", argv[0])) {
-		v->gv_s->gv_view_params.draw_az = 0;
+	    if (BU_STR_EQUAL("0", argv[1])) {
+		params.draw_az = 0;
 	    } else {
-		v->gv_s->gv_view_params.draw_az = 1;
+		params.draw_az = 1;
 	    }
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("el", argv[0]))  {
-	    if (BU_STR_EQUAL("0", argv[0])) {
-		v->gv_s->gv_view_params.draw_el = 0;
+	    if (BU_STR_EQUAL("0", argv[1])) {
+		params.draw_el = 0;
 	    } else {
-		v->gv_s->gv_view_params.draw_el = 1;
+		params.draw_el = 1;
 	    }
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("tw", argv[0]))  {
-	    if (BU_STR_EQUAL("0", argv[0])) {
-		v->gv_s->gv_view_params.draw_tw = 0;
+	    if (BU_STR_EQUAL("0", argv[1])) {
+		params.draw_tw = 0;
 	    } else {
-		v->gv_s->gv_view_params.draw_tw = 1;
+		params.draw_tw = 1;
 	    }
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("fps", argv[0]))  {
-	    if (BU_STR_EQUAL("0", argv[0])) {
-		v->gv_s->gv_view_params.draw_fps = 0;
+	    if (BU_STR_EQUAL("0", argv[1])) {
+		params.draw_fps = 0;
 	    } else {
-		v->gv_s->gv_view_params.draw_fps = 1;
+		params.draw_fps = 1;
 	    }
+	    bv_params_state_set(view, &params);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("font_size", argv[0])) {
@@ -373,10 +404,11 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 	    struct bu_vls msg = BU_VLS_INIT_ZERO;
 	    if (bu_opt_int(&msg, argc, argv, &fsize) == -1) {
 		bu_vls_printf(gedp->ged_result_str, "invalid font size specification\n");
-	    }
-	    v->gv_s->gv_view_params.font_size = fsize;
-	    return BRLCAD_OK;
 	}
+	params.font_size = fsize;
+	bv_params_state_set(view, &params);
+	return BRLCAD_OK;
+    }
 	bu_vls_printf(gedp->ged_result_str, "unknown subcommand %s\n", argv[0]);
 	return BRLCAD_ERROR;
     }
@@ -434,13 +466,16 @@ ged_faceplate_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_OK;
     }
 
-    if (!gedp->ged_gvp) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set");
 	return BRLCAD_ERROR;
     }
 
     int ret;
     if (bu_cmd(_fp_cmds, ac, argv, 0, (void *)&gd, &ret) == BRLCAD_OK) {
+	if (ret == BRLCAD_OK)
+	    (void)ged_draw_obol_view_context_faceplate_sync(gedp, view_ctx);
 	return ret;
     } else {
 	bu_vls_printf(gedp->ged_result_str, "subcommand %s not defined", argv[0]);

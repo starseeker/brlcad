@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -39,9 +41,10 @@
  * Angles are in radians.
  */
 static void
-usejoy(struct ged *gedp, double xangle, double yangle, double zangle)
+usejoy(struct bv *view, double xangle, double yangle, double zangle)
 {
     mat_t newrot;		/* NEW rot matrix, from joystick */
+    mat_t view_rotation;
 
     /* NORMAL CASE.
      * Apply delta viewing rotation for non-edited parts.
@@ -49,7 +52,9 @@ usejoy(struct ged *gedp, double xangle, double yangle, double zangle)
      */
     MAT_IDN(newrot);
     bn_mat_angles_rad(newrot, xangle, yangle, zangle);
-    bn_mat_mul2(newrot, gedp->ged_gvp->gv_rotation);
+    bv_rotation_get(view_rotation, view);
+    bn_mat_mul2(newrot, view_rotation);
+    bv_rotation_set(view, view_rotation);
 }
 
 
@@ -65,6 +70,8 @@ ged_qvrot_core(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -124,9 +131,12 @@ ged_qvrot_core(struct ged *gedp, int argc, const char *argv[])
 
     el = atan2(dz, sqrt(dx * dx + dy * dy));
 
-    bn_mat_angles(gedp->ged_gvp->gv_rotation, 270.0 + el * RAD2DEG, 0.0, 270.0 - az * RAD2DEG);
-    usejoy(gedp, 0.0, 0.0, theta*DEG2RAD);
-    bv_update(gedp->ged_gvp);
+    mat_t rotation;
+    bn_mat_angles(rotation, 270.0 + el * RAD2DEG, 0.0, 270.0 - az * RAD2DEG);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, rotation);
+    usejoy(view, 0.0, 0.0, theta*DEG2RAD);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

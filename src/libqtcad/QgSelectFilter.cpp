@@ -27,86 +27,171 @@
 
 extern "C" {
 #include "bu/malloc.h"
-#include "bg/aabb_ray.h"
-#include "bv.h"
+#include "bu/vls.h"
+#include "ged/draw.h"
 #include "raytrace.h"
 }
 
+#include <algorithm>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
+#include "qtcad/QgObolPick.h"
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgView.h"
+#include "QgLegacyViewContext.h"
 
-// Find the first bbox intersection under the XY view point.
-static struct bv_scene_obj *
-closest_obj_bbox(struct bu_ptbl *sset, struct bview *v)
+static qg_legacy_view *
+qg_select_filter_legacy_view(const QgSelectFilter *filter)
 {
-    fastf_t vx = -FLT_MAX;
-    fastf_t vy = -FLT_MAX;
-    struct bv_scene_obj *s_closest = NULL;
-    double dist = DBL_MAX;
-    bv_screen_to_view(v, &vx, &vy, v->gv_mouse_x, v->gv_mouse_y);
-    point_t vpnt, mpnt;
-    VSET(vpnt, vx, vy, 0);
-    MAT4X3PNT(mpnt, v->gv_view2model, vpnt);
-    point_t rmin, rmax;
-    vect_t dir;
-    VMOVEN(dir, v->gv_rotation + 8, 3);
-    VUNITIZE(dir);
-    VSCALE(dir, dir, v->radius);
-    VADD2(mpnt, mpnt, dir);
-    VUNITIZE(dir);
-    bg_ray_invdir(&dir, dir);
-    for (size_t i = 0; i < BU_PTBL_LEN(sset); i++) {
-	struct bv_scene_obj *s = (struct bv_scene_obj *)BU_PTBL_GET(sset, i);
-	if (bg_isect_aabb_ray(rmin, rmax, mpnt, dir, s->bmin, s->bmax)){
-	    double ndist = DIST_PNT_PNT(rmin, v->gv_vc_backout);
-	    if (ndist < dist) {
-		dist = ndist;
-		s_closest = s;
-	    }
+    QgView *display = filter ? filter->view_widget() : nullptr;
+    return display ? display->view() : nullptr;
+}
+
+static void
+qg_select_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
+{
+    if (!m_e || !sx || !sy)
+	return;
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    *sx = m_e->x();
+    *sy = m_e->y();
+#else
+    *sx = (int)m_e->position().x();
+    *sy = (int)m_e->position().y();
+#endif
+}
+
+class QgSelectFilter::QgSelectFilterPrivate {
+public:
+    struct ged_draw_pick_result *selected_result = nullptr;
+    std::vector<std::string> selected_path_strings;
+};
+
+static std::string
+_qg_normalize_path(const char *path)
+{
+    if (!path)
+	return std::string();
+    while (*path == '/')
+	path++;
+    return std::string(path);
+}
+
+static void
+_qg_append_unique_path(std::vector<std::string> &paths, const char *path)
+{
+    std::string normalized = _qg_normalize_path(path);
+    if (normalized.empty())
+	return;
+    if (std::find(paths.begin(), paths.end(), normalized) == paths.end())
+	paths.push_back(normalized);
+}
+
+static std::string
+_qg_pick_result_path(const void *result, size_t index)
+{
+    struct bu_vls path = BU_VLS_INIT_ZERO;
+    std::string ret;
+    if (ged_draw_pick_result_path(
+	    static_cast<const struct ged_draw_pick_result *>(result), index,
+	    &path))
+	ret = bu_vls_cstr(&path);
+    bu_vls_free(&path);
+    return ret;
+}
+
+static void
+_qg_append_unique_path_cb(const char *path, void *data)
+{
+    std::vector<std::string> *paths =
+	static_cast<std::vector<std::string> *>(data);
+    if (paths)
+	_qg_append_unique_path(*paths, path);
+}
+
+static int
+_qg_apply_obol_pick_selection(QgView *display,
+	const std::vector<QgObolPickRecord> &picks,
+	std::vector<std::string> &database_paths)
+{
+    std::vector<QgObolPickRecord> feature_picks;
+    for (const QgObolPickRecord &pick : picks) {
+	if (pick.featurePickResolved) {
+	    feature_picks.push_back(pick);
+	    continue;
 	}
+	_qg_append_unique_path(database_paths, pick.path.c_str());
     }
 
-    return s_closest;
+    return qg_obol_pick_apply_feature_states(display, feature_picks, true,
+	    true);
 }
 
-QMouseEvent *
-QgSelectFilter::view_sync(QEvent *e)
+QgSelectFilter::QgSelectFilter() :
+    m(new QgSelectFilterPrivate)
 {
-    if (!v)
-	return NULL;
-
-    // If we don't have one of the relevant mouse operations, there's nothing to do
-    QMouseEvent *m_e = NULL;
-    if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease || e->type() == QEvent::MouseButtonDblClick || e->type() == QEvent::MouseMove)
-	m_e = (QMouseEvent *)e;
-    if (!m_e)
-	return NULL;
-
-    // We're going to need the mouse position
-    int e_x, e_y;
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    e_x = m_e->x();
-    e_y = m_e->y();
-#else
-    e_x = m_e->position().x();
-    e_y = m_e->position().y();
-#endif
-
-    // Update relevant bview variables
-    v->gv_prevMouseX = v->gv_mouse_x;
-    v->gv_prevMouseY = v->gv_mouse_y;
-    v->gv_mouse_x = e_x;
-    v->gv_mouse_y = e_y;
-    bv_screen_pt(&v->gv_point, e_x, e_y, v);
-
-    // If we have modifiers, we're most likely doing shift grips
-    if (m_e->modifiers() != Qt::NoModifier)
-	return NULL;
-
-    return m_e;
 }
 
+QgSelectFilter::~QgSelectFilter()
+{
+    clear_selected_result();
+    delete m;
+    m = nullptr;
+}
+
+const std::vector<std::string> &
+QgSelectFilter::selected_paths() const
+{
+    static const std::vector<std::string> empty_paths;
+    return m ? m->selected_path_strings : empty_paths;
+}
+
+void
+QgSelectFilter::clear_selected_result()
+{
+    if (!m)
+	return;
+
+    m->selected_path_strings.clear();
+    if (m->selected_result) {
+	ged_draw_pick_result_free(m->selected_result);
+	m->selected_result = nullptr;
+    }
+}
+
+void
+QgSelectFilter::set_selected_result(struct ged_draw_pick_result *res)
+{
+    clear_selected_result();
+    if (!m)
+	return;
+
+    m->selected_result = res;
+    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    if (v)
+	ged_draw_view_context_selection_set_pick_result(
+		qg_legacy_view_to_context(v), m->selected_result,
+		_qg_append_unique_path_cb, &m->selected_path_strings);
+}
+
+void
+QgSelectFilter::set_selected_paths(const std::vector<std::string> &paths)
+{
+    clear_selected_result();
+    if (!m)
+	return;
+
+    for (const std::string &path : paths)
+	_qg_append_unique_path(m->selected_path_strings, path.c_str());
+
+    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    if (v)
+	ged_draw_view_context_selection_clear(qg_legacy_view_to_context(v));
+}
 
 bool
 QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
@@ -115,34 +200,43 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
+    qg_legacy_view *v = qg_select_filter_legacy_view(this);
 
-    // Eat everything except the mouse release
     if (e->type() != QEvent::MouseButtonRelease)
 	return true;
-
-    // Left mouse button only
     if (m_e->button() != Qt::LeftButton)
 	return true;
-
-    // If we don't have a view there's nothing we can do...
     if (!v)
 	return true;
 
-    // Do the actual selection, using a one pixel sized box projected into the
-    // scene.  This is faster than the raytrace-based test in some situations,
-    // but trades off that speed by only producing an approximate answer based
-    // on bounding boxes.
-    int scnt = bv_view_objs_select(&selected_set, v, v->gv_mouse_x, v->gv_mouse_y);
+    int sx = 0, sy = 0;
+    qg_select_mouse_xy(m_e, &sx, &sy);
 
-    // If the caller wants everything, or we got less than 2 objs, we're done
-    if (scnt < 2 || !first_only)
+    std::vector<QgObolPickRecord> obolPicks;
+    int submittedSourceRequests = 0;
+    if (qg_obol_pick_point(view_widget(), sx, sy,
+	    6.0f, !first_only, obolPicks,
+	    &submittedSourceRequests) > 0) {
+	std::vector<std::string> paths;
+	int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		obolPicks, paths);
+	if (!paths.empty() || feature_count > 0) {
+	    set_selected_paths(paths);
+	    return true;
+	}
+    }
+    if (submittedSourceRequests > 0) {
+	std::vector<std::string> paths;
+	set_selected_paths(paths);
 	return true;
+    }
 
-    // If we want only the closest object (or more precisely, in this mode, the
-    // object with the closest bounding box) there's more work to do.
-    struct bv_scene_obj *s_closest = closest_obj_bbox(&selected_set, v);
-    bu_ptbl_reset(&selected_set);
-    bu_ptbl_ins(&selected_set, (long *)s_closest);
+    struct ged_draw_pick_result *res = first_only ?
+	ged_draw_view_context_pick_nearest(qg_legacy_view_to_context(v),
+		sx, sy) :
+	ged_draw_view_context_pick_point(qg_legacy_view_to_context(v), sx,
+		sy, 0);
+    set_selected_result(res);
 
     return true;
 }
@@ -154,89 +248,159 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
+    qg_legacy_view *v = qg_select_filter_legacy_view(this);
     if (!v)
 	return false;
+    void *view_ctx = qg_legacy_view_to_context(v);
+    struct bv *view = qg_legacy_view_bv(v);
 
-    // Eat double clicks
     if (e->type() == QEvent::MouseButtonDblClick)
 	return true;
-
-    // Left mouse button and move events are the ones of interest
     if (m_e->button() != Qt::LeftButton && e->type() != QEvent::MouseMove)
 	return true;
 
+    int sx = 0, sy = 0;
+    qg_select_mouse_xy(m_e, &sx, &sy);
+
     if (e->type() == QEvent::MouseButtonPress) {
-	px = v->gv_mouse_x;
-	py = v->gv_mouse_y;
-	struct bv_interactive_rect_state *grsp = &v->gv_s->gv_rect;
-	grsp->line_width = 1;
-	grsp->dim[0] = 0;
-	grsp->dim[1] = 0;
-	grsp->x = px;
-	grsp->y = v->gv_height - py;
-	grsp->pos[0] = grsp->x;
-	grsp->pos[1] = grsp->y;
-	grsp->cdim[0] = v->gv_width;
-	grsp->cdim[1] = v->gv_height;
-	grsp->aspect = (fastf_t)v->gv_s->gv_rect.cdim[X] / v->gv_s->gv_rect.cdim[Y];
+	px = sx;
+	py = sy;
+	int view_width = bv_width_get(view);
+	int view_height = bv_height_get(view);
+	struct bv_interactive_rect_state rect;
+	if (!bv_interactive_rect_state_get(&rect, view))
+	    return true;
+	rect.line_width = 1;
+	rect.dim[0] = 0;
+	rect.dim[1] = 0;
+	rect.x = px;
+	rect.y = view_height - py;
+	rect.pos[0] = rect.x;
+	rect.pos[1] = rect.y;
+	rect.cdim[0] = view_width;
+	rect.cdim[1] = view_height;
+	rect.aspect = (fastf_t)rect.cdim[X] / rect.cdim[Y];
+	bv_interactive_rect_state_set(view, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
 
     if (e->type() == QEvent::MouseMove) {
-	struct bv_interactive_rect_state *grsp = &v->gv_s->gv_rect;
-	grsp->draw = 1;
-	grsp->dim[0] = v->gv_mouse_x - px;
-	grsp->dim[1] = (v->gv_height - v->gv_mouse_y) - v->gv_s->gv_rect.pos[1];
-	grsp->x = (grsp->pos[X] / (fastf_t)grsp->cdim[X] - 0.5) * 2.0;
-	grsp->y = ((0.5 - (grsp->cdim[Y] - grsp->pos[Y]) / (fastf_t)grsp->cdim[Y]) / grsp->aspect * 2.0);
-	grsp->width = grsp->dim[X] * 2.0 / (fastf_t)grsp->cdim[X];
-	grsp->height = grsp->dim[Y] * 2.0 / (fastf_t)grsp->cdim[X];
+	struct bv_interactive_rect_state rect;
+	if (!bv_interactive_rect_state_get(&rect, view))
+	    return true;
+	int view_height = bv_height_get(view);
+	rect.draw = 1;
+	rect.dim[0] = sx - px;
+	rect.dim[1] = (view_height - sy) - rect.pos[1];
+	rect.x = (rect.pos[X] / (fastf_t)rect.cdim[X] - 0.5) * 2.0;
+	rect.y = ((0.5 - (rect.cdim[Y] - rect.pos[Y]) / (fastf_t)rect.cdim[Y]) / rect.aspect * 2.0);
+	rect.width = rect.dim[X] * 2.0 / (fastf_t)rect.cdim[X];
+	rect.height = rect.dim[Y] * 2.0 / (fastf_t)rect.cdim[X];
+	bv_interactive_rect_state_set(view, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
 
     if (e->type() == QEvent::MouseButtonRelease) {
-	// Mouse release - time to use the rectangle to assemble the selected set
 	int ipx = (int)px;
 	int ipy = (int)py;
-	bv_view_objs_rect_select(&selected_set, v, ipx, ipy, v->gv_mouse_x, v->gv_mouse_y);
+	std::vector<QgObolPickRecord> obolPicks;
+	int submittedSourceRequests = 0;
+	if (qg_obol_pick_rect(view_widget(), ipx, ipy,
+		sx, sy, 6.0f, first_only,
+		obolPicks, &submittedSourceRequests) > 0) {
+	    std::vector<std::string> paths;
+	    int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		    obolPicks, paths);
+	    if (!paths.empty() || feature_count > 0) {
+		set_selected_paths(paths);
 
-#if 0
-	// If we want only the closest object (or more precisely, in this mode,
-	// the object with the closest bounding box) there's more work to do.
-	// TODO - this is the wrong test for the selection rectangle - should
-	// be the distance between an aabb and a view plane.  Looks like we
-	// need to add that one to libbg... there's DIST_PNT_PLANE and
-	// MAT4X3VEC(view_pl, v->gv_view2model, dir) as starting points...
-	struct bv_scene_obj *s_closest = closest_obj_bbox(&selected_set, v);
-	bu_ptbl_reset(&selected_set);
-	bu_ptbl_ins(&selected_set, (long *)s_closest);
-#endif
+		struct bv_interactive_rect_state rect;
+		if (!bv_interactive_rect_state_get(&rect, view))
+		    return true;
+		rect.draw = 0;
+		rect.line_width = 0;
+		rect.pos[0] = 0;
+		rect.pos[1] = 0;
+		rect.dim[0] = 0;
+		rect.dim[1] = 0;
+		bv_interactive_rect_state_set(view, &rect);
+		emit view_updated(QG_VIEW_DRAWN);
+		return true;
+	    }
+	}
 
-	// reset rectangle
-	struct bv_interactive_rect_state *grsp = &v->gv_s->gv_rect;
-	grsp->draw = 0;
-	grsp->line_width = 0;
-	grsp->pos[0] = 0;
-	grsp->pos[1] = 0;
-	grsp->dim[0] = 0;
-	grsp->dim[1] = 0;
+	if (submittedSourceRequests > 0) {
+	    std::vector<std::string> paths;
+	    set_selected_paths(paths);
+	    struct bv_interactive_rect_state rect;
+	    if (!bv_interactive_rect_state_get(&rect, view))
+		return true;
+	    rect.draw = 0;
+	    rect.line_width = 0;
+	    rect.pos[0] = 0;
+	    rect.pos[1] = 0;
+	    rect.dim[0] = 0;
+	    rect.dim[1] = 0;
+	    bv_interactive_rect_state_set(view, &rect);
+	    emit view_updated(QG_VIEW_DRAWN);
+	    return true;
+	}
+
+	struct ged_draw_pick_result *res =
+	    ged_draw_view_context_pick_rect(view_ctx, ipx, ipy, sx, sy);
+	if (first_only && res && ged_draw_pick_result_count(res) > 1) {
+	    struct ged_draw_pick_result *nearest =
+		ged_draw_pick_result_filter_first(res);
+	    ged_draw_pick_result_free(res);
+	    res = nearest;
+	}
+	set_selected_result(res);
+
+	struct bv_interactive_rect_state rect;
+	if (!bv_interactive_rect_state_get(&rect, view))
+	    return true;
+	rect.draw = 0;
+	rect.line_width = 0;
+	rect.pos[0] = 0;
+	rect.pos[1] = 0;
+	rect.dim[0] = 0;
+	rect.dim[1] = 0;
+	bv_interactive_rect_state_set(view, &rect);
 	emit view_updated(QG_VIEW_DRAWN);
 	return true;
     }
 
-    // Shouldn't get here
     return false;
 }
 
-
 struct select_rec_state {
-    std::unordered_set<std::string> active;
+    std::unordered_map<std::string, fastf_t> hits;
     int rec_all;
     double cdist;
     std::string closest;
 };
+
+static void
+_select_record_hit(struct select_rec_state *rc, const char *name, fastf_t hit_dist)
+{
+    if (!rc || !name || !name[0])
+	return;
+
+    std::string key = _qg_normalize_path(name);
+    if (key.empty())
+	return;
+
+    std::unordered_map<std::string, fastf_t>::iterator h_it = rc->hits.find(key);
+    if (h_it == rc->hits.end() || hit_dist < h_it->second)
+	rc->hits[key] = hit_dist;
+
+    if (hit_dist < rc->cdist) {
+	rc->closest = key;
+	rc->cdist = hit_dist;
+    }
+}
 
 static int
 _obj_record(struct application *ap, struct partition *p_hp, struct seg *UNUSED(segs))
@@ -244,16 +408,11 @@ _obj_record(struct application *ap, struct partition *p_hp, struct seg *UNUSED(s
     struct select_rec_state *rc = (struct select_rec_state *)ap->a_uptr;
     for (struct partition *pp = p_hp->pt_forw; pp != p_hp; pp = pp->pt_forw) {
 	if (rc->rec_all) {
-	    rc->active.insert(std::string(pp->pt_regionp->reg_name));
+	    _select_record_hit(rc, pp->pt_regionp->reg_name, pp->pt_inhit->hit_dist);
 	} else {
-	    struct hit *hitp = pp->pt_inhit;
-	    if (hitp->hit_dist < rc->cdist) {
-		rc->closest = std::string(pp->pt_regionp->reg_name);
-		rc->cdist = hitp->hit_dist;
-	    }
+	    _select_record_hit(rc, pp->pt_regionp->reg_name, pp->pt_inhit->hit_dist);
 	}
     }
-    bu_log("hit\n");
     return 1;
 }
 
@@ -262,14 +421,85 @@ _ovlp_record(struct application *ap, struct partition *pp, struct region *reg1, 
 {
     struct select_rec_state *rc = (struct select_rec_state *)ap->a_uptr;
     if (rc->rec_all) {
-	rc->active.insert(std::string(reg1->reg_name));
-	rc->active.insert(std::string(reg2->reg_name));
+	_select_record_hit(rc, reg1->reg_name, pp->pt_inhit->hit_dist);
+	_select_record_hit(rc, reg2->reg_name, pp->pt_inhit->hit_dist);
     } else {
-	rc->closest = std::string(reg1->reg_name);
-	rc->cdist = pp->pt_inhit->hit_dist;
+	_select_record_hit(rc, reg1->reg_name, pp->pt_inhit->hit_dist);
     }
-    bu_log("ovlp\n");
     return 1;
+}
+
+static struct ged_draw_pick_result *
+_qg_pick_result_from_ray_hits(const struct ged_draw_pick_result *candidates,
+			      const struct select_rec_state *rc,
+			      int first_only)
+{
+    struct ged_draw_pick_result *res = ged_draw_pick_result_create();
+    if (!res || !candidates || !rc)
+	return res;
+
+    std::unordered_set<std::string> seen_paths;
+    for (size_t i = 0; i < ged_draw_pick_result_count(candidates); i++) {
+	std::string key = _qg_normalize_path(_qg_pick_result_path(candidates, i).c_str());
+	if (key.empty())
+	    continue;
+
+	if (first_only) {
+	    if (key != rc->closest)
+		continue;
+	} else {
+	    if (rc->hits.find(key) == rc->hits.end())
+		continue;
+	}
+
+	if (!seen_paths.insert(key).second)
+	    continue;
+
+	fastf_t hit_dist = ged_draw_pick_result_hit_dist(candidates, i);
+	std::unordered_map<std::string, fastf_t>::const_iterator h_it = rc->hits.find(key);
+	if (h_it != rc->hits.end())
+	    hit_dist = h_it->second;
+
+	ged_draw_pick_result_append_copy(res, candidates, i, hit_dist);
+
+	if (first_only)
+	    break;
+    }
+
+    return res;
+}
+
+static bool
+_qg_select_ray_from_view(qg_legacy_view *v, int sx, int sy, point_t origin, vect_t direction)
+{
+    const struct bv *view = qg_legacy_view_bv_const(v);
+    if (!view || !origin || !direction)
+	return false;
+
+    fastf_t vx = 0.0;
+    fastf_t vy = 0.0;
+    if (!bv_screen_to_view(&vx, &vy, view, sx, sy))
+	return false;
+
+    point_t vpnt;
+    point_t mpnt;
+    VSET(vpnt, vx, vy, 0.0);
+
+    mat_t view2model;
+    if (!bv_view2model_get(view2model, view))
+	return false;
+    MAT4X3PNT(mpnt, view2model, vpnt);
+
+    mat_t view_rotation;
+    if (!bv_rotation_get(view_rotation, view))
+	return false;
+    VMOVEN(direction, view_rotation + 8, 3);
+    VUNITIZE(direction);
+    VSCALE(direction, direction, bv_radius_get(view));
+    VADD2(origin, mpnt, direction);
+    VUNITIZE(direction);
+    VSCALE(direction, direction, -1.0);
+    return true;
 }
 
 bool
@@ -279,109 +509,133 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
-    // If we're raytracing, the view itself isn't enough - we have
-    // to have the dbip as well.
-    if (!v || !dbip)
+    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    if (!v)
 	return false;
-
-    // Eat everything except the mouse release
     if (e->type() != QEvent::MouseButtonRelease)
 	return true;
-
-    // Left mouse button only
     if (m_e->button() != Qt::LeftButton)
 	return true;
 
-    // Pre-filter what we're going to be shooting using the bounding box tests.
-    // If we have no intersections, there's no point in doing the raytrace.
-    int scnt = bv_view_objs_select(&selected_set, v, v->gv_mouse_x, v->gv_mouse_y);
-    if (!scnt)
-	return true;
+    int sx = 0, sy = 0;
+    qg_select_mouse_xy(m_e, &sx, &sy);
 
-    // librt intersection test.
+    point_t rayOrigin;
+    vect_t rayDirection;
+    if (_qg_select_ray_from_view(v, sx, sy, rayOrigin, rayDirection)) {
+	std::vector<QgObolPickRecord> obolRayPicks;
+	int submittedSourceRequests = 0;
+	if (qg_obol_pick_ray(view_widget(),
+		SbVec3f(rayOrigin[0], rayOrigin[1], rayOrigin[2]),
+		SbVec3f(rayDirection[0], rayDirection[1], rayDirection[2]),
+		!first_only, obolRayPicks,
+		&submittedSourceRequests) > 0) {
+	    std::vector<std::string> paths;
+	    int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		    obolRayPicks, paths);
+	    if (!paths.empty() || feature_count > 0) {
+		set_selected_paths(paths);
+		return true;
+	    }
+	}
+	if (submittedSourceRequests > 0) {
+	    std::vector<std::string> paths;
+	    set_selected_paths(paths);
+	    return true;
+	}
+    }
+
+    std::vector<QgObolPickRecord> obolPicks;
+    int submittedSourceRequests = 0;
+    if (qg_obol_pick_point(view_widget(), sx, sy,
+	    6.0f, !first_only, obolPicks,
+	    &submittedSourceRequests) > 0) {
+	std::vector<std::string> paths;
+	int feature_count = _qg_apply_obol_pick_selection(view_widget(),
+		obolPicks, paths);
+	if (!paths.empty() || feature_count > 0) {
+	    set_selected_paths(paths);
+	    return true;
+	}
+    }
+    if (submittedSourceRequests > 0) {
+	std::vector<std::string> paths;
+	set_selected_paths(paths);
+	return true;
+    }
+
+    if (!dbip) {
+	std::vector<std::string> paths;
+	set_selected_paths(paths);
+	return true;
+    }
+
+    struct ged_draw_pick_result *candidates =
+	ged_draw_view_context_pick_point(qg_legacy_view_to_context(v), sx,
+		sy, 0);
+    size_t candidate_count = candidates ?
+	ged_draw_pick_result_count(candidates) : 0;
+    if (!candidates || !candidate_count) {
+	set_selected_result(candidates);
+	return true;
+    }
+
     struct application *ap;
     BU_GET(ap, struct application);
     RT_APPLICATION_INIT(ap);
     ap->a_onehit = 0;
     ap->a_hit = _obj_record;
-    ap->a_miss = NULL;
+    ap->a_miss = nullptr;
     ap->a_overlap = _ovlp_record;
-    ap->a_logoverlap = NULL;
+    ap->a_logoverlap = nullptr;
 
     struct rt_i *rtip = rt_i_create(dbip);
-    struct resource *resp = NULL;
+    struct resource *resp = nullptr;
     BU_GET(resp, struct resource);
     rt_init_resource(resp, 0, rtip);
     ap->a_resource = resp;
     ap->a_rt_i = rtip;
-    const char **objs = (const char **)bu_calloc(BU_PTBL_LEN(&selected_set) + 1, sizeof(char *), "objs");
-    for (size_t i = 0; i < BU_PTBL_LEN(&selected_set); i++) {
-	struct bv_scene_obj *s = (struct bv_scene_obj *)BU_PTBL_GET(&selected_set, i);
-	objs[i] = bu_vls_cstr(&s->s_name);
+    std::vector<std::string> candidate_paths;
+    candidate_paths.reserve(candidate_count);
+    const char **objs = (const char **)bu_calloc(candidate_count + 1, sizeof(char *), "objs");
+    for (size_t i = 0; i < candidate_count; i++) {
+	candidate_paths.push_back(_qg_pick_result_path(candidates, i));
+	objs[i] = candidate_paths.back().empty() ? nullptr : candidate_paths.back().c_str();
     }
-    if (rt_gettrees_and_attrs(rtip, NULL, scnt, objs, 1)) {
+    if (rt_gettrees_and_attrs(rtip, nullptr, (int)candidate_count, objs, 1)) {
 	bu_free(objs, "objs");
 	rt_i_destroy(rtip);
 	BU_PUT(resp, struct resource);
 	BU_PUT(ap, struct application);
+	ged_draw_pick_result_free(candidates);
 	return false;
     }
     size_t ncpus = bu_avail_cpus();
     rt_prep_parallel(rtip, (int)ncpus);
-    fastf_t vx = -FLT_MAX;
-    fastf_t vy = -FLT_MAX;
-    bv_screen_to_view(v, &vx, &vy, v->gv_mouse_x, v->gv_mouse_y);
-    point_t vpnt, mpnt;
-    VSET(vpnt, vx, vy, 0);
-    MAT4X3PNT(mpnt, v->gv_view2model, vpnt);
-    vect_t dir;
-    VMOVEN(dir, v->gv_rotation + 8, 3);
-    VUNITIZE(dir);
-    VSCALE(dir, dir, v->radius);
-    VADD2(ap->a_ray.r_pt, mpnt, dir);
-    VUNITIZE(dir);
-    VSCALE(ap->a_ray.r_dir, dir, -1);
 
     struct select_rec_state rc;
-
-    // Decide what we record in the hit function based on whether we want the
-    // closest or all hits.
+    rc.cdist = INFINITY;
     if (!first_only) {
 	rc.rec_all = 1;
     } else {
 	rc.rec_all = 0;
-	rc.cdist = INFINITY;
     }
     ap->a_uptr = (void *)&rc;
 
-    (void)rt_shootray(ap);
+    if (_qg_select_ray_from_view(v, sx, sy, rayOrigin, rayDirection)) {
+	VMOVE(ap->a_ray.r_pt, rayOrigin);
+	VMOVE(ap->a_ray.r_dir, rayDirection);
+	(void)rt_shootray(ap);
+    }
     bu_free(objs, "objs");
     rt_i_destroy(rtip);
     BU_PUT(resp, struct resource);
     BU_PUT(ap, struct application);
 
-    // We only have reg_names from the raytrace - translate into scene objects.
-    bu_ptbl_reset(&selected_set);
-    struct bu_vls dpath = BU_VLS_INIT_ZERO;
-    if (first_only) {
-	bu_vls_sprintf(&dpath, "%s",  rc.closest.c_str());
-	if (bu_vls_cstr(&dpath)[0] == '/')
-	    bu_vls_nibble(&dpath, 1);
-	struct bv_scene_obj *so = bv_find_obj(v, bu_vls_cstr(&dpath));
-	if (so)
-	    bu_ptbl_ins(&selected_set, (long *)so);
-    } else {
-	std::unordered_set<std::string>::iterator a_it;
-	for (a_it = rc.active.begin(); a_it != rc.active.end(); a_it++) {
-	    bu_vls_sprintf(&dpath, "%s",  a_it->c_str());
-	    if (bu_vls_cstr(&dpath)[0] == '/')
-		bu_vls_nibble(&dpath, 1);
-	    struct bv_scene_obj *so = bv_find_obj(v, bu_vls_cstr(&dpath));
-	    if (so)
-		bu_ptbl_ins(&selected_set, (long *)so);
-	}
-    }
-    bu_vls_free(&dpath);
+    struct ged_draw_pick_result *res =
+	_qg_pick_result_from_ray_hits(candidates, &rc, first_only);
+    ged_draw_pick_result_free(candidates);
+    set_selected_result(res);
 
     return true;
 }

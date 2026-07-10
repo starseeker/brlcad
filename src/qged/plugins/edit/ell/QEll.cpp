@@ -22,12 +22,23 @@
  */
 
 #include "common.h"
+#include <string.h>
+#include <QEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QButtonGroup>
 #include <QGroupBox>
-#include "../../../QgEdApp.h"
+#include "ged.h"
+#include "ged/draw.h"
+#include "rt/db_io.h"
+#include "rt/directory.h"
+#include "qtcad/QgGedEventBatch.h"
+#include "qtcad/QgLegacyView.h"
+#include "qtcad/QgPluginContext.h"
+#include "qtcad/QgSignalFlags.h"
+#include "../qged_edit_preview_util.h"
 #include "QEll.h"
+
 
 QEll::QEll()
     : QWidget()
@@ -85,18 +96,25 @@ QEll::QEll()
 
 QEll::~QEll()
 {
-    if (p)
-	bv_obj_put(p);
+    qged_edit_feature_clear_geometry(p);
+    if (m_ctx) {
+	qged_edit_feature_remove(m_ctx, "_ell_edit");
+	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
+    }
+    p = QGED_EDIT_FEATURE_REF_NULL;
     bu_vls_free(&oname);
+}
+
+struct ged *
+QEll::getGed() const
+{
+    return m_ctx ? m_ctx->getGed() : nullptr;
 }
 
 void
 QEll::read_from_db()
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
+    struct ged *gedp = getGed();
     if (!gedp)
 	return;
     struct db_i *dbip = gedp->dbip;
@@ -127,10 +145,7 @@ QEll::write_to_db()
 {
     if (!bu_vls_strlen(&oname))
 	return;
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
+    struct ged *gedp = getGed();
     if (!gedp)
 	return;
     struct db_i *dbip = gedp->dbip;
@@ -145,17 +160,21 @@ QEll::write_to_db()
 
     dp = db_lookup(dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
 
-    if (dp == RT_DIR_NULL)
-	dp = db_diradd(dbip, bu_vls_cstr(&oname), RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&intern.idb_type);
+    {
+	QgGedEventBatch event_batch(gedp);
 
-    if (dp == RT_DIR_NULL) {
-	rt_db_free_internal(&intern);
-	return;
-    }
+	if (dp == RT_DIR_NULL)
+	    dp = db_diradd(dbip, bu_vls_cstr(&oname), RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&intern.idb_type);
 
-    if (rt_db_put_internal(dp, dbip, &intern) < 0) {
-	rt_db_free_internal(&intern);
-	return;
+	if (dp == RT_DIR_NULL) {
+	    rt_db_free_internal(&intern);
+	    return;
+	}
+
+	if (rt_db_put_internal(dp, dbip, &intern) < 0) {
+	    rt_db_free_internal(&intern);
+	    return;
+	}
     }
 
     rt_db_free_internal(&intern);
@@ -166,25 +185,37 @@ QEll::write_to_db()
 void
 QEll::update_obj_wireframe()
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
+    struct ged *gedp = getGed();
     if (!gedp)
 	return;
-    struct bview *v = gedp->ged_gvp;
-    if (!v)
+
+    // Resolve the edit object fresh in case it was removed externally
+    // (e.g. by a clear/zap command).
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
+    if (qged_edit_feature_ref_is_null(p))
 	return;
 
-    // Make the object, if we've not already done so
-    if (!p)
-	p = bv_obj_get(v, BV_VIEW_OBJS);
+    // No active db or object name means there is nothing to edit - make sure
+    // the edit wireframe is hidden.
+    if (!gedp->dbip || !bu_vls_strlen(&oname)) {
+	qged_edit_feature_clear_geometry(p);
+	qged_edit_feature_set_visible(p, 0);
+	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
+	return;
+    }
 
-    // Clear any old wireframes, labels, etc.
-    bv_obj_reset(p);
+    // Refresh the directory pointer from the current object name.  This avoids
+    // stale pointers if scene/database content changed.
+    dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
+    if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_ELL) {
+	qged_edit_feature_clear_geometry(p);
+	qged_edit_feature_set_visible(p, 0);
+	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
+	return;
+    }
 
-    // Use whatever view is current to drive the update
-    p->s_v = v;
+    qged_edit_feature_clear_geometry(p);
+    qged_edit_feature_set_view(p, m_ctx);
 
     // Set up the rt_db_internal and trigger the plotting routine with the
     // current ell parameters
@@ -193,19 +224,22 @@ QEll::update_obj_wireframe()
     intern.idb_type = ID_ELL;
     intern.idb_ptr = &ell;
     intern.idb_meth = &OBJ[intern.idb_type];
-    if (!intern.idb_meth->ft_plot)
-	return;
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
+    if (!wdbp)
+	return;
     struct bn_tol *tol = &wdbp->wdb_tol;
-    struct bg_tess_tol *ttol = &wdbp->wdb_ttol;
-    intern.idb_meth->ft_plot(&p->s_vlist, &intern, ttol, tol, p->s_v);
+    qged_edit_feature_replace_ell_wireframe(p,
+	    QGED_EDIT_FEATURE_TRANSIENT_PREVIEW,
+	    (const struct rt_ell_internal *)intern.idb_ptr);
 
     // At least for now, mimic the MGED behavior and make editing wireframes white
     const char *wcolor = "255/255/255";
     const char *av[2] = {wcolor, NULL};
     struct bu_color cval;
     bu_opt_color(NULL, 1, (const char **)&av[0], (void *)&cval);
-    bu_color_to_rgb_chars(&cval, p->s_color);
+    unsigned char rgb[3] = {0, 0, 0};
+    bu_color_to_rgb_chars(&cval, rgb);
+    qged_edit_feature_set_color(p, rgb[0], rgb[1], rgb[2]);
 
     // When editing, we show the labels (if any)
     struct rt_point_labels pl[8+1];
@@ -215,23 +249,15 @@ QEll::update_obj_wireframe()
     if (intern.idb_meth->ft_labels)
 	lcnt = intern.idb_meth->ft_labels(pl, 8, idn_mat, &intern, tol);
 
-    for (int i = 0; i < lcnt; i++) {
-	struct bv_scene_obj *s = bv_obj_get_child(p);
-	struct bv_label *la;
-	BU_GET(la, struct bv_label);
-	s->s_i_data = (void *)la;
-
-	BU_LIST_INIT(&(s->s_vlist));
-	VSET(s->s_color, 255, 255, 0);
-	s->s_type_flags |= BV_DBOBJ_BASED;
-	s->s_type_flags |= BV_LABELS;
-	BU_VLS_INIT(&la->label);
-
-	bu_vls_sprintf(&la->label, "%s", pl[i].str);
-	VMOVE(la->p, pl[i].pt);
+    struct qged_edit_feature_ref labels_ref =
+	qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels", this);
+    if (!qged_edit_feature_ref_is_null(labels_ref)) {
+	const unsigned char label_color[3] = {255, 255, 0};
+	qged_edit_feature_labels_replace(labels_ref, pl, lcnt, label_color);
+	qged_edit_feature_set_visible(labels_ref, lcnt > 0 ? 1 : 0);
     }
 
-    p->s_flag = UP;
+    qged_edit_feature_set_visible(p, 1);
     // TODO - we should be able to set UP or DOWN on the various labels
     // when their respective controls are enabled/disabled...
 
@@ -241,21 +267,17 @@ QEll::update_obj_wireframe()
 void
 QEll::update_viewobj_name(const QString &)
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct bview *v = gedp->ged_gvp;
-    if (!v)
+    struct ged *gedp = getGed();
+    if (!gedp || !gedp->dbip)
 	return;
 
-    // Make the view object, if we've not already done so
-    if (!p)
-	p = bv_obj_get(v, BV_VIEW_OBJS);
+    // Resolve/create the edit view feature.  Don't trust cached pointers here
+    // since clear/zap may have removed it.
+    p = qged_edit_feature_overlay_ensure(m_ctx, "_ell_edit", this, NULL, NULL, NULL);
+    if (qged_edit_feature_ref_is_null(p))
+	return;
 
-    // Make sure the view object names match whatever the dialog says
+    // Make sure the view feature names match whatever the dialog says
     // is the current (proposed) name for the written object
     bu_vls_trunc(&oname, 0);
     if (ell_name->placeholderText().length())
@@ -264,7 +286,6 @@ QEll::update_viewobj_name(const QString &)
 	bu_vls_sprintf(&oname, "%s", ell_name->text().toLocal8Bit().data());
     if (!bu_vls_strlen(&oname))
 	return;
-    bu_vls_sprintf(&p->s_name, "%s:%s", bu_vls_cstr(&v->gv_name), bu_vls_cstr(&oname));
 
     // Update the directory pointer to reflect the name.  If there is a change,
     // and that change points us to a new object, we need to read the info from
@@ -273,10 +294,13 @@ QEll::update_viewobj_name(const QString &)
     if (ndp != dp) {
 	dp = ndp;
 	if (dp) {
+	    ged_draw_highlight_shape_ref_by_name(gedp, bu_vls_cstr(&oname));
 	    read_from_db();
 	} else {
-	    // Turning off wireframe - obj name is now invalid
-	    p->s_flag = DOWN;
+	    ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+	    qged_edit_feature_clear_geometry(p);
+	    qged_edit_feature_set_visible(p, 0);
+	    qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
 	    emit view_updated(QG_VIEW_REFRESH);
 	}
     }

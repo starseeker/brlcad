@@ -24,6 +24,7 @@ set(
   directory.h
   dspline.h
   edit.h
+  eval_wireframe.h
   func.h
   functab.h
   geom.h

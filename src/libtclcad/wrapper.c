@@ -20,12 +20,25 @@
 
 #include "common.h"
 
+#include "bv.h"
 #include "ged.h"
+#include "ged/draw.h"
+#include "ged/view.h"
+#include "rt/view.h"
 #include "tclcad.h"
 
 /* Private headers */
 #include "./tclcad_private.h"
 #include "./view/view.h"
+
+static void
+tclcad_wrapper_sync_dm_dimensions(void *target_ctx, const void *source_ctx)
+{
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(source_ctx);
+    struct bv *target_view = bv_context_view((struct bv_context *)target_ctx);
+    if (dmp && target_view)
+	bv_dimensions_set(target_view, dm_get_width(dmp), dm_get_height(dmp));
+}
 
 /* Wraps calls to commands like "draw" that need to reset the view */
 int
@@ -41,7 +54,7 @@ to_autoview_func(struct ged *gedp,
     const char *av[2];
     int aflag = 0;
     int rflag = 0;
-    struct bview *gdvp;
+    void *view_ctx;
 
     av[0] = "who";
     av[1] = (char *)0;
@@ -61,12 +74,11 @@ to_autoview_func(struct ged *gedp,
     if (!rflag && ret == BRLCAD_OK && strlen(bu_vls_addr(gedp->ged_result_str)) == 0)
 	aflag = 1;
 
-    struct bu_ptbl *views = bv_set_views(&current_top->to_gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	if (to_is_viewable(gdvp)) {
-	    gedp->ged_gvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	    gedp->ged_gvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	view_ctx = BU_PTBL_GET(views, i);
+	if (to_is_viewable(view_ctx)) {
+	    tclcad_wrapper_sync_dm_dimensions(ged_view_active_ctx(gedp), view_ctx);
 	}
     }
 
@@ -248,7 +260,7 @@ to_view_func_common(struct ged *gedp,
     int ret;
     int ac;
     char **av;
-    struct bview *gdvp;
+    void *view_ctx;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -265,15 +277,15 @@ to_view_func_common(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
-    if (!gdvp) {
+    view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
     /* Copy argv into av while skipping argv[1] (i.e. the view name) */
-    gedp->ged_gvp = gdvp;
-    gedp->ged_refresh_clientdata = (void *)gdvp;
+    ged_view_active_ctx_set(gedp, view_ctx);
+    gedp->ged_refresh_clientdata = view_ctx;
     av[0] = (char *)argv[0];
     ac = argc-1;
     for (i = 2; i < argc; ++i)
@@ -284,21 +296,27 @@ to_view_func_common(struct ged *gedp,
     bu_free(av, "free av copy");
 
     /* Keep the view's perspective in sync with its corresponding display manager */
-    dm_set_perspective((struct dm *)gdvp->dmp, gdvp->gv_perspective);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (dmp && view)
+	dm_set_perspective(dmp, bv_perspective_get(view));
 
-    if (gdvp->gv_s->adaptive_plot_csg &&
-	gdvp->gv_s->redraw_on_zoom)
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx) &&
+	lod_policy.csg_enabled && lod_policy.zoom_refresh)
     {
 	const char *gr_av[] = {"redraw", NULL};
 
 	ged_exec_redraw(gedp, 1, (const char **)gr_av);
 
-	gdvp->gv_width = dm_get_width((struct dm *)gdvp->dmp);
-	gdvp->gv_height = dm_get_height((struct dm *)gdvp->dmp);
+	tclcad_wrapper_sync_dm_dimensions(view_ctx, view_ctx);
     }
 
     if (ret == BRLCAD_OK) {
-	struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
+	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+	if (!tvd)
+	    return BRLCAD_ERROR;
 	if (cflag && 0 < bu_vls_strlen(&tvd->gdv_callback)) {
 	    struct bu_vls save_result = BU_VLS_INIT_ZERO;
 
@@ -310,7 +328,7 @@ to_view_func_common(struct ged *gedp,
 	}
 
 	if (rflag)
-	    to_refresh_view(gdvp);
+	    to_refresh_view(view_ctx);
     }
 
     return ret;
@@ -366,7 +384,7 @@ to_dm_func(struct ged *gedp,
     int ret;
     int ac;
     char **av;
-    struct bview *gdvp;
+    void *view_ctx;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -383,15 +401,15 @@ to_dm_func(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    gdvp = bv_set_find_view(&gedp->ged_views, argv[1]);
-    if (!gdvp) {
+    view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
     }
 
     /* Copy argv into av while skipping argv[1] (i.e. the view name) */
-    gedp->ged_gvp = gdvp;
-    gedp->ged_refresh_clientdata = (void *)gdvp;
+    ged_view_active_ctx_set(gedp, view_ctx);
+    gedp->ged_refresh_clientdata = view_ctx;
     av[0] = (char *)argv[0];
     ac = argc-1;
     for (i = 2; i < argc; ++i)
@@ -402,7 +420,11 @@ to_dm_func(struct ged *gedp,
     bu_free(av, "free av copy");
 
     /* Keep the view's perspective in sync with its corresponding display manager */
-    dm_set_perspective((struct dm *)gdvp->dmp, gdvp->gv_perspective);
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    if (dmp && view)
+	dm_set_perspective(dmp, bv_perspective_get(view));
 
     return ret;
 }

@@ -27,15 +27,23 @@
 #define QTGLWIN_H
 
 #include <QMainWindow>
-#include "dm.h"
-#include "qtcad/QgGL.h"
+
+class QgGL;
+struct qg_legacy_fb;
 
 class QgGLWin : public QMainWindow
 {
     Q_OBJECT
+    Q_DISABLE_COPY_MOVE(QgGLWin)
     public:
-	QgGLWin(struct fb *fbp);
-	QgGL *canvas = NULL;
+	QgGLWin(qg_legacy_fb *fbp);
+	QgGL *canvasWidget() const
+	{
+	    return canvas;
+	}
+
+    private:
+	QgGL *canvas = nullptr;
 };
 
 #endif /* QTGLWIN_H */
@@ -50,4 +58,3 @@ class QgGLWin : public QMainWindow
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

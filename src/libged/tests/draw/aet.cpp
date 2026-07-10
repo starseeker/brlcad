@@ -33,25 +33,24 @@
 #define DM_WITH_RT
 #include <dm.h>
 #include <ged.h>
-
-#include "../../dbi.h"
+#include <ged/draw.h>
+#include <rt/view.h>
+#include "view_test_util.h"
 
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
 void
 dm_refresh(struct ged *gedp, int vnum)
 {
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-    struct bview *v = (struct bview *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	return;
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    BViewState *bvs = dbis->get_view_state(v);
-    dbis->update();
-    std::unordered_set<struct bview *> uset;
-    uset.insert(v);
-    bvs->redraw(NULL, uset, 1);
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    txn.view = v;
+    ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     /* Ensure rendering goes to this view's DM context, not the last-active one.
      * With multiple DMs each view has its own OSMesa context; without making the
      * correct context current here dm_set_bg and dm_draw_objs will operate on
@@ -61,8 +60,8 @@ dm_refresh(struct ged *gedp, int vnum)
     unsigned char *dm_bg2;
     dm_get_bg(&dm_bg1, &dm_bg2, dmp);
     dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
-    dm_set_dirty(dmp, 0);
-    dm_draw_objs(v, NULL, NULL);
+    dm_set_native_repaint_pending(dmp, 0);
+    dm_draw_objs(v);
     dm_draw_end(dmp);
 }
 
@@ -82,11 +81,11 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, int soft_fail)
 
     dm_refresh(gedp, vnum);
 
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-    struct bview *v = (struct bview *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
-    struct dm *dmp = (struct dm *)v->dmp;
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
 
     const char *s_av[4] = {NULL};
     s_av[0] = "screengrab";
@@ -188,6 +187,12 @@ main(int ac, char *av[]) {
 	return 2;
     }
 
+    /* Use a local working-directory cache so we do not pollute the user's
+     * real BRL-CAD cache and so the test is fully self-contained. */
+    bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_aet_test_cache", NULL);
+    bu_mkdir(lcache);
+    bu_setenv("BU_DIR_CACHE", lcache, 1);
+
     /* make a temporary copy of moss */
     bu_vls_sprintf(&fname, "%s/moss.g", av[1]);
     std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
@@ -200,29 +205,27 @@ main(int ac, char *av[]) {
     const char *s_av[15] = {NULL};
     gedp = ged_open("db", "moss_aet_tmp.g", 1);
 
-    // Set up new cmd data (not yet done by default in ged_open
-    gedp->dbi_state = new DbiState(gedp);
-    gedp->new_cmd_forms = 1;
     bu_setenv("DM_SWRAST", "1", 1);
 
     // We don't want the default GED views for this test
-    bv_set_rm_view(&gedp->ged_views, NULL);
+    void *view_set_ctx = ged_view_set_ctx(gedp);
+    ged_view_set_context_remove(view_set_ctx, NULL);
 
     // Set up the views.  Unlike the other drawing tests, we are explicitly
     // out to test the behavior of multiple views and dms, so we need to
     // set up multiples.  We'll start out with four non-independent views,
     // to mimic the most common multi-dm/view display - a Quad view widget.
     // Each view will get its own attached swrast DM.
-    struct bview *views[4];
+    void *views[4];
     for (size_t i = 0; i < 4; i++) {
-	BU_GET(views[i], struct bview);
+	char view_name[16];
+	snprintf(view_name, sizeof(view_name), "V%zd", i);
+	views[i] = ged_view_context_create_with_set(view_set_ctx);
 	if (!i)
-	    gedp->ged_gvp = views[i];
-	struct bview *v = views[i];
-	bv_init(v, &gedp->ged_views);
-	bu_vls_sprintf(&v->gv_name, "V%zd", i);
-	bv_set_add_view(&gedp->ged_views, v);
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
+	    ged_view_active_ctx_set(gedp, views[i]);
+	bv_name_set(DRAW_TEST_BV(views[i]), view_name);
+	ged_view_set_context_add(view_set_ctx, views[i]);
+	ged_view_context_owned_add(gedp, views[i]);
 
 	/* To generate images that will allow us to check if the drawing
 	 * is proceeding as expected, we use the swrast off-screen dm. */
@@ -230,7 +233,7 @@ main(int ac, char *av[]) {
 	s_av[0] = "dm";
 	s_av[1] = "attach";
 	s_av[2] = "-V";
-	s_av[3] = bu_vls_cstr(&v->gv_name);
+	s_av[3] = view_name;
 	s_av[4] = "swrast";
 	bu_vls_sprintf(&dm_name, "SW%zd", i);
 	s_av[5] = bu_vls_cstr(&dm_name);
@@ -238,7 +241,7 @@ main(int ac, char *av[]) {
 	ged_exec_dm(gedp, 6, s_av);
 	bu_vls_free(&dm_name);
 
-	struct dm *dmp = (struct dm *)v->dmp;
+	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, 512);
 	dm_set_height(dmp, 512);
 
@@ -249,33 +252,32 @@ main(int ac, char *av[]) {
 	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
 	dm_set_win_bounds(dmp, windowbounds);
 
-	dm_set_vp(dmp, &v->gv_scale);
-	v->dmp = dmp;
-	v->gv_width = dm_get_width(dmp);
-	v->gv_height = dm_get_height(dmp);
-	v->gv_base2local = gedp->dbip->dbi_base2local;
-	v->gv_local2base = gedp->dbip->dbi_local2base;
+	dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(views[i])));
+	ged_view_context_display_manager_set(views[i], dmp);
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), dm_get_width(dmp), dm_get_height(dmp));
+	bv_unit_conversion_set(DRAW_TEST_BV(views[i]), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
     }
 
     /* Set distinct view az/el for each of the four quad views.  For
      * this test we are deliberately testing view settings that have
      * the potential to be challenging in "gimbal lock" positions in
      * multiples of 90 degrees and using non-zero twist components. */
-    VSET(views[0]->gv_aet, 0, 0, 90);
-    bv_mat_aet(views[0]);
-    bv_update(views[0]);
+    vect_t aet = VINIT_ZERO;
+    VSET(aet, 0, 0, 90);
+    bv_aet_set(DRAW_TEST_BV(views[0]), aet);
+    ged_view_context_update(views[0]);
 
-    VSET(views[1]->gv_aet, 90, 90, 180);
-    bv_mat_aet(views[1]);
-    bv_update(views[1]);
+    VSET(aet, 90, 90, 180);
+    bv_aet_set(DRAW_TEST_BV(views[1]), aet);
+    ged_view_context_update(views[1]);
 
-    VSET(views[2]->gv_aet, -90, 270, -90);
-    bv_mat_aet(views[2]);
-    bv_update(views[2]);
+    VSET(aet, -90, 270, -90);
+    bv_aet_set(DRAW_TEST_BV(views[2]), aet);
+    ged_view_context_update(views[2]);
 
-    VSET(views[3]->gv_aet, 270, -180, 90);
-    bv_mat_aet(views[3]);
-    bv_update(views[3]);
+    VSET(aet, 270, -180, 90);
+    bv_aet_set(DRAW_TEST_BV(views[3]), aet);
+    ged_view_context_update(views[3]);
 
 
     /************************************************************************/
@@ -299,15 +301,14 @@ main(int ac, char *av[]) {
     bu_log("Resize to 600x600...\n");
     int len = 600;
     for (size_t i = 0; i < 4; i++) {
-	struct dm *dmp = (struct dm *)views[i]->dmp;
+	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	views[i]->gv_width = len;
-	views[i]->gv_height = len;
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	bv_update(views[i]);
+	ged_view_context_update(views[i]);
     }
     ret += img_cmp(0, 2, gedp, lcache, soft_fail);
     ret += img_cmp(1, 2, gedp, lcache, soft_fail);
@@ -318,15 +319,14 @@ main(int ac, char *av[]) {
     bu_log("Shrink to 512x512...\n");
     len = 512;
     for (size_t i = 0; i < 4; i++) {
-	struct dm *dmp = (struct dm *)views[i]->dmp;
+	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	views[i]->gv_width = len;
-	views[i]->gv_height = len;
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	bv_update(views[i]);
+	ged_view_context_update(views[i]);
     }
     ret += img_cmp(0, 1, gedp, lcache, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, soft_fail);
@@ -337,28 +337,26 @@ main(int ac, char *av[]) {
     bu_log("Cycle through multiple resizes...\n");
     for (int i = 513; i < 600; i++) {
 	for (size_t j = 0; j < 4; j++) {
-	    struct dm *dmp = (struct dm *)views[j]->dmp;
+	    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[j]);
 	    dm_set_width(dmp, i);
 	    dm_set_height(dmp, i);
-	    views[j]->gv_width = i;
-	    views[j]->gv_height = i;
+	    bv_dimensions_set(DRAW_TEST_BV(views[j]), i, i);
 	    dm_configure_win(dmp, 0);
 	    // NOTE:  deliberately not resetting aet here - we want to see if it is
 	    // stable without adjustment.
-	    bv_update(views[j]);
+	    ged_view_context_update(views[j]);
 	}
     }
     len = 512;
     for (size_t i = 0; i < 4; i++) {
-	struct dm *dmp = (struct dm *)views[i]->dmp;
+	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(views[i]);
 	dm_set_width(dmp, len);
 	dm_set_height(dmp, len);
-	views[i]->gv_width = len;
-	views[i]->gv_height = len;
+	bv_dimensions_set(DRAW_TEST_BV(views[i]), len, len);
 	dm_configure_win(dmp, 0);
 	// NOTE:  deliberately not resetting aet here - we want to see if it is
 	// stable without adjustment.
-	bv_update(views[i]);
+	ged_view_context_update(views[i]);
     }
     ret += img_cmp(0, 1, gedp, lcache, soft_fail);
     ret += img_cmp(1, 1, gedp, lcache, soft_fail);
@@ -379,4 +377,3 @@ main(int ac, char *av[]) {
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

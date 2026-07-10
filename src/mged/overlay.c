@@ -27,6 +27,7 @@
 
 #include "vmath.h"
 #include "raytrace.h"
+#include "ged/view.h"
 
 #include "./mged.h"
 #include "./sedit.h"
@@ -48,8 +49,10 @@ cmd_overlay(ClientData clientData, Tcl_Interp *interp, int argc, const char *arg
 
     Tcl_DStringInit(&ds);
 
-    if (s->gedp->ged_gvp)
-	s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+    void *view_ctx = ged_view_active_ctx(s->gedp);
+    if (view_ctx)
+	ged_view_context_display_manager_set(view_ctx,
+		(void *)s->mged_curr_dm->dm_dmp);
     ret = ged_exec(s->gedp, argc, argv);
     Tcl_DStringAppend(&ds, bu_vls_addr(s->gedp->ged_result_str), -1);
     Tcl_DStringResult(interp, &ds);
@@ -60,8 +63,8 @@ cmd_overlay(ClientData clientData, Tcl_Interp *interp, int argc, const char *arg
     if (ret != BRLCAD_OK)
 	return TCL_ERROR;
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
 
     return ret;
 }

@@ -25,9 +25,13 @@
 /** @} */
 
 #include "common.h"
+#include "bv.h"
 #include "bu/units.h"
+#include "dm/fbserv.h"
 #include "ged.h"
-#define DM_WITH_RT
+#include "ged/draw_obol.h"
+#include "ged/view.h"
+#include "rt/view.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -35,154 +39,248 @@
 #include "../view/view.h"
 
 void
-go_refresh_draw(struct ged *gedp, struct bview *gdvp, int restore_zbuffer)
+go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
 {
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-    struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_OVERLAY) {
-	if (gdvp->gv_s->gv_rect.draw) {
-	    go_draw(gdvp);
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(draw_view_ctx);
+    if (!tvd)
+	return;
 
-	    // TODO - I wouldn't expect these values to differ from the dbi
-	    // versions, but to preserve the old behavior where the factors
-	    // were passed explicitly we stash and restore.  Need to figure
-	    // out whether this is ever needed (shouldn't be?)
-	    double l2b = gdvp->gv_local2base;
-	    double b2l = gdvp->gv_base2local;
-	    gdvp->gv_local2base = gedp->dbip->dbi_local2base;
-	    gdvp->gv_base2local = gedp->dbip->dbi_base2local;
-	    dm_draw_viewobjs(wdbp, gdvp, &tgd->go_dmv);
-	    gdvp->gv_local2base = l2b;
-	    gdvp->gv_base2local = b2l;
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(draw_view_ctx);
+    if (!dmp)
+	return;
+
+    struct bv_interactive_rect_state rect = BV_INTERACTIVE_RECT_STATE_INIT;
+    const struct bv *draw_view =
+	bv_context_view_const((const struct bv_context *)draw_view_ctx);
+    (void)bv_interactive_rect_state_get(&rect, draw_view);
+    struct fb *fbp = fbs_legacy_framebuffer(&tvd->gdv_fbs);
+    if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_OVERLAY) {
+	if (rect.draw) {
+	    go_draw(draw_view_ctx);
+
+	    /* Phase T2-final: replaced dm_draw_viewobjs with dm_draw_objs.
+	     * Stash/restore gv_local2base|base2local to keep faceplate unit
+	     * display consistent with the database unit factors. */
+	    struct bv *view = bv_context_view((struct bv_context *)draw_view_ctx);
+	    fastf_t l2b = bv_local2base_get(view);
+	    fastf_t b2l = bv_base2local_get(view);
+	    bv_unit_conversion_set(view,
+		    gedp->dbip->dbi_local2base,
+		    gedp->dbip->dbi_base2local);
+	    dm_draw_objs(draw_view_ctx);
+	    bv_unit_conversion_set(view, l2b, b2l);
 
 	    /* disable write to depth buffer */
-	    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 0);
+	    (void)dm_set_depth_mask(dmp, 0);
 
-	    fb_refresh(tvd->gdv_fbs.fbs_fbp,
-		       gdvp->gv_s->gv_rect.pos[X], gdvp->gv_s->gv_rect.pos[Y],
-		       gdvp->gv_s->gv_rect.dim[X], gdvp->gv_s->gv_rect.dim[Y]);
+	    if (fbp)
+		fb_refresh(fbp, rect.pos[X], rect.pos[Y],
+			   rect.dim[X], rect.dim[Y]);
 
 	    /* enable write to depth buffer */
-	    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 1);
+	    (void)dm_set_depth_mask(dmp, 1);
 
-	    if (gdvp->gv_s->gv_rect.line_width)
-		dm_draw_rect((struct dm *)gdvp->dmp, &gdvp->gv_s->gv_rect);
+	    if (rect.line_width)
+		dm_draw_rect(dmp, &rect);
 	} else {
 	    /* disable write to depth buffer */
-	    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 0);
+	    (void)dm_set_depth_mask(dmp, 0);
 
-	    fb_refresh(tvd->gdv_fbs.fbs_fbp, 0, 0,
-		       dm_get_width((struct dm *)gdvp->dmp), dm_get_height((struct dm *)gdvp->dmp));
+	    if (fbp)
+		fb_refresh(fbp, 0, 0, dm_get_width(dmp),
+			   dm_get_height(dmp));
 
 	    /* enable write to depth buffer */
-	    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 1);
+	    (void)dm_set_depth_mask(dmp, 1);
 	}
 
 	if (restore_zbuffer) {
-	    (void)dm_set_zbuffer((struct dm *)gdvp->dmp, 1);
+	    (void)dm_set_zbuffer(dmp, 1);
 	}
 
 	return;
     } else if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_INTERLAY) {
-	go_draw(gdvp);
+	go_draw(draw_view_ctx);
 
 	/* disable write to depth buffer */
-	(void)dm_set_depth_mask((struct dm *)gdvp->dmp, 0);
+	(void)dm_set_depth_mask(dmp, 0);
 
-	if (gdvp->gv_s->gv_rect.draw) {
-	    fb_refresh(tvd->gdv_fbs.fbs_fbp,
-		       gdvp->gv_s->gv_rect.pos[X], gdvp->gv_s->gv_rect.pos[Y],
-		       gdvp->gv_s->gv_rect.dim[X], gdvp->gv_s->gv_rect.dim[Y]);
-	} else
-	    fb_refresh(tvd->gdv_fbs.fbs_fbp, 0, 0,
-		       dm_get_width((struct dm *)gdvp->dmp), dm_get_height((struct dm *)gdvp->dmp));
+	if (rect.draw) {
+	    if (fbp)
+		fb_refresh(fbp, rect.pos[X], rect.pos[Y],
+			   rect.dim[X], rect.dim[Y]);
+	} else {
+	    if (fbp)
+		fb_refresh(fbp, 0, 0, dm_get_width(dmp),
+			   dm_get_height(dmp));
+	}
 
 	/* enable write to depth buffer */
-	(void)dm_set_depth_mask((struct dm *)gdvp->dmp, 1);
+	(void)dm_set_depth_mask(dmp, 1);
 
 	if (restore_zbuffer) {
-	    (void)dm_set_zbuffer((struct dm *)gdvp->dmp, 1);
+	    (void)dm_set_zbuffer(dmp, 1);
 	}
     } else {
 	if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_UNDERLAY) {
 	    /* disable write to depth buffer */
-	    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 0);
+	    (void)dm_set_depth_mask(dmp, 0);
 
-	    if (gdvp->gv_s->gv_rect.draw) {
-		fb_refresh(tvd->gdv_fbs.fbs_fbp,
-			   gdvp->gv_s->gv_rect.pos[X], gdvp->gv_s->gv_rect.pos[Y],
-			   gdvp->gv_s->gv_rect.dim[X], gdvp->gv_s->gv_rect.dim[Y]);
-	    } else
-		fb_refresh(tvd->gdv_fbs.fbs_fbp, 0, 0,
-			   dm_get_width((struct dm *)gdvp->dmp), dm_get_height((struct dm *)gdvp->dmp));
+	    if (rect.draw) {
+		if (fbp)
+		    fb_refresh(fbp, rect.pos[X], rect.pos[Y],
+			       rect.dim[X], rect.dim[Y]);
+	    } else {
+		if (fbp)
+		    fb_refresh(fbp, 0, 0, dm_get_width(dmp),
+			       dm_get_height(dmp));
+	    }
 
 	    /* enable write to depth buffer */
-	    (void)dm_set_depth_mask((struct dm *)gdvp->dmp, 1);
+	    (void)dm_set_depth_mask(dmp, 1);
 	}
 
 	if (restore_zbuffer) {
-	    (void)dm_set_zbuffer((struct dm *)gdvp->dmp, 1);
+	    (void)dm_set_zbuffer(dmp, 1);
 	}
 
-	go_draw(gdvp);
+	go_draw(draw_view_ctx);
     }
 
-    // TODO - I wouldn't expect these values to differ from the dbi versions,
-    // but to preserve the old behavior where the factors were passed
-    // explicitly we stash and restore.  Need to figure out whether this is
-    // ever needed (shouldn't be?)
-    double l2b = gdvp->gv_local2base;
-    double b2l = gdvp->gv_base2local;
-    gdvp->gv_local2base = gedp->dbip->dbi_local2base;
-    gdvp->gv_base2local = gedp->dbip->dbi_base2local;
-    dm_draw_viewobjs(wdbp, gdvp, &tgd->go_dmv);
-    dm_draw_viewobjs(wdbp, gdvp, &tgd->go_dmv);
-    gdvp->gv_local2base = l2b;
-    gdvp->gv_base2local = b2l;
+    /* Render the full retained view-scope feature set and faceplate through
+     * the current draw host.  Stash/restore the unit-conversion factors as
+     * before. */
+    struct bv *view = bv_context_view((struct bv_context *)draw_view_ctx);
+    fastf_t l2b = bv_local2base_get(view);
+    fastf_t b2l = bv_base2local_get(view);
+    bv_unit_conversion_set(view,
+	    gedp->dbip->dbi_local2base,
+	    gedp->dbip->dbi_base2local);
+    dm_draw_objs(draw_view_ctx);
+    bv_unit_conversion_set(view, l2b, b2l);
 }
 
 void
-go_refresh(struct ged *gedp, struct bview *gdvp)
+go_refresh(struct ged *gedp, void *draw_view_ctx)
 {
     int restore_zbuffer = 0;
+    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(draw_view_ctx);
+    if (!dmp)
+	return;
 
     /* Turn off the zbuffer if the framebuffer is active AND the zbuffer is on. */
-    struct tclcad_view_data *tvd = (struct tclcad_view_data *)gdvp->u_data;
-    if (tvd->gdv_fbs.fbs_mode != TCLCAD_OBJ_FB_MODE_OFF && dm_get_zbuffer((struct dm *)gdvp->dmp)) {
-	(void)dm_set_zbuffer((struct dm *)gdvp->dmp, 0);
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(draw_view_ctx);
+    if (!tvd)
+	return;
+
+    if (tvd->gdv_fbs.fbs_mode != TCLCAD_OBJ_FB_MODE_OFF && dm_get_zbuffer(dmp)) {
+	(void)dm_set_zbuffer(dmp, 0);
 	restore_zbuffer = 1;
     }
 
-    (void)dm_draw_begin((struct dm *)gdvp->dmp);
-    go_refresh_draw(gedp, gdvp, restore_zbuffer);
-    (void)dm_draw_end((struct dm *)gdvp->dmp);
+    (void)ged_draw_obol_framebuffer_present(gedp);
+    (void)dm_draw_begin(dmp);
+    go_refresh_draw(gedp, draw_view_ctx, restore_zbuffer);
+    (void)dm_draw_end(dmp);
 }
 
 void
-to_refresh_view(struct bview *gdvp)
+to_refresh_view(void *view_ctx)
 {
 
-    if (current_top == NULL)
+    if (current_top == NULL || view_ctx == NULL)
 	return;
 
-    struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-    if (!tgd->go_dmv.refresh_on)
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (!view || !bv_refresh_enabled_get(view) ||
+	    bv_refresh_suppressed_get(view))
 	return;
 
-    if (to_is_viewable(gdvp))
-	go_refresh(current_top->to_gedp, gdvp);
+    bv_refresh_request(view, GED_VIEW_REFRESH_ALL);
+    if (to_is_viewable(view_ctx)) {
+	(void)bv_refresh_consume(view);
+	go_refresh(current_top->to_gedp, view_ctx);
+	bv_refresh_complete(view);
+    }
 }
 
 void
 to_refresh_all_views(struct tclcad_obj *top)
 {
-    struct bview *gdvp;
+    void *view_ctx;
 
-    struct bu_ptbl *views = bv_set_views(&top->to_gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	gdvp = (struct bview *)BU_PTBL_GET(views, i);
-	to_refresh_view(gdvp);
+	view_ctx = BU_PTBL_GET(views, i);
+	to_refresh_view(view_ctx);
+    }
+}
+
+int
+to_refresh_all_enabled(struct tclcad_obj *top)
+{
+    void *view_ctx;
+
+    if (!top)
+	return 1;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
+    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	view_ctx = BU_PTBL_GET(views, i);
+	const struct bv *view =
+	    bv_context_view_const((const struct bv_context *)view_ctx);
+	if (!bv_refresh_enabled_get(view))
+	    return 0;
+    }
+
+    return 1;
+}
+
+void
+to_refresh_all_set_enabled(struct tclcad_obj *top, int enabled)
+{
+    void *view_ctx;
+
+    if (!top)
+	return;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
+    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	view_ctx = BU_PTBL_GET(views, i);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_refresh_enabled_set(view, enabled);
+    }
+}
+
+void
+to_refresh_suppress_all_begin(struct tclcad_obj *top)
+{
+    void *view_ctx;
+
+    if (!top)
+	return;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
+    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	view_ctx = BU_PTBL_GET(views, i);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_refresh_suppress_begin(view);
+    }
+}
+
+void
+to_refresh_suppress_all_end(struct tclcad_obj *top)
+{
+    void *view_ctx;
+
+    if (!top)
+	return;
+
+    struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
+    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	view_ctx = BU_PTBL_GET(views, i);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_refresh_suppress_end(view);
     }
 }
 
@@ -240,8 +338,6 @@ to_refresh_on(struct ged *gedp,
 	      int UNUSED(maxargs))
 {
     int on;
-    struct tclcad_ged_data *tgd = (struct tclcad_ged_data *)current_top->to_gedp->u_data;
-
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
@@ -252,7 +348,7 @@ to_refresh_on(struct ged *gedp,
 
     /* Get refresh_on state */
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%d", tgd->go_dmv.refresh_on);
+	bu_vls_printf(gedp->ged_result_str, "%d", to_refresh_all_enabled(current_top));
 	return BRLCAD_OK;
     }
 
@@ -262,7 +358,7 @@ to_refresh_on(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    tgd->go_dmv.refresh_on = on;
+    to_refresh_all_set_enabled(current_top, on);
 
     return BRLCAD_OK;
 }
@@ -271,15 +367,13 @@ int
 to_handle_refresh(struct ged *gedp,
 		  const char *name)
 {
-    struct bview *gdvp;
-
-    gdvp = bv_set_find_view(&gedp->ged_views, name);
-    if (!gdvp) {
+    void *view_ctx = ged_view_find_ctx(gedp, name);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", name);
 	return BRLCAD_ERROR;
     }
 
-    to_refresh_view(gdvp);
+    to_refresh_view(view_ctx);
 
     return BRLCAD_OK;
 }
@@ -288,11 +382,9 @@ to_handle_refresh(struct ged *gedp,
 void
 to_refresh_handler(void *clientdata)
 {
-    struct bview *gdvp = (struct bview *)clientdata;
-
     /* Possibly do more here */
 
-    to_refresh_view(gdvp);
+    to_refresh_view(clientdata);
 }
 
 

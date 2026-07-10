@@ -1,0 +1,107 @@
+BRL-CAD libbv Refactor Plan
+===========================
+
+Last refreshed: 2026-07-08
+
+Purpose
+-------
+
+libbv is BRL-CAD's scene-graph-free view mechanics library.  It owns passive
+view state, view math, view sets, lightweight lifecycle callbacks, and generic
+view-quality preferences.  It must not own databases, display managers,
+Obol/Coin scene objects, command policy, realized LoD payloads, framebuffer
+protocols, Tcl state, or BSG compatibility behavior.
+
+Current Ownership
+-----------------
+
+libbv currently owns:
+
+* `struct bv`, `struct bv_set`, `struct bv_context`, and
+  `struct bv_context_set`.
+* Camera/view scalars, matrices, AET/orientation, keypoint, current point,
+  model/view/screen transforms, autoview bounds math, and view hashes.
+* Passive mouse/input bookkeeping, knobs, refresh flags, frame time, zclip,
+  framebuffer mode, cleared state, and user data.
+* Passive faceplate/overlay records: grid, ADC, model axes, view axes, center
+  dot, scale overlay, parameter display, and interactive rectangle state.
+* Passive snap preferences and grid snap math.
+* Generic view snapshot and sampling preference data:
+  `bv_view_info`, `bv_lod_settings`, and `bv_lod_policy`.
+
+The old `rt_view_info` and `rt_view_lod_policy` names are compatibility
+aliases/wrappers over libbv data and helpers.  Primitive plotting/LoD
+signatures now use `bv_view_info` directly.
+
+Current Snapshot
+-------------------------
+
+* GED view-state storage owns `bv_context` and `bv_context_set` directly.
+* qtcad, MGED, TclCAD, GSH, and GED draw tests use libbv or GED owner APIs for
+  passive view state.
+* Production libged no longer depends on the removed RT view-context facade.
+* libbrlobol owns the retained Obol scene graph, view-local realized LoD
+  payloads, draw proxies/caches, and framebuffer presentation bridges.
+* librt primitive plotting and LoD callbacks use `bv_view_info` directly.
+* `ged_draw_scene_handle` replaces the old RT scene-ref draw plumbing in GED.
+* Obol edit previews, viewport readback, and app-host readback all route
+  through GED/libbrlobol helpers instead of the old direct-widget or backend
+  probe paths.
+* fbserv protocol contracts, auth, object state, PKG switch setup, and
+  backend-operation dispatch now live in `libimgstream`; libdm still hosts the
+  transitional TCP/IPC packet loop and legacy `struct fb` fallback.
+* qged, libged, GSH, and TclCAD now use `fbs_*` accessors for legacy framebuffer
+  attachment, transport state, and framebuffer-operation wrappers.
+
+Boundary Rules
+--------------
+
+Keep in libbv only data and math that are meaningful without a database, a
+display backend, Tcl, a framebuffer server, or an Obol scene.
+
+Do not move these into libbv:
+
+* Obol/Coin nodes, scene refs, CAD packets, source publication, or view-local
+  scene roots.
+* Drawable geometry, display lists, command visualization objects, realized
+  LoD payloads, LoD caches, or cache-population workers.
+* Selection state, picking results, feature stores, polygon stores, editing
+  behavior, manipulators, or object snap hit testing against scene/database
+  content.
+* Display-manager pointers, TclCAD data, application update hooks,
+  framebuffer protocol handling, Auth/TLS, or fbserv wire logic.
+* Compatibility wrappers whose only purpose is preserving BSG behavior.
+
+Remaining Targets
+-----------------
+
+1. Finish the remaining edit-visualization cleanup in the modern editing
+   stack: manipulator integration, edit-policy cleanup, and any residual
+   compatibility glue that still depends on the old preview model.
+2. Move the remaining fbserv packet transport and host event-loop ownership out
+   of libdm once the image-stream-side protocol layer is ready.  The contract,
+   auth, PKG switch, state, and backend dispatch are already in libimgstream;
+   what remains is the TCP/IPC loop and its host-specific glue.
+3. Keep libbv tests focused on pure view mechanics.  Selection, realized LoD,
+   progressive cache behavior, and framebuffer behavior belong in
+   libbrlobol/libged/qtcad/MGED/GSH tests, not in libbv itself.
+
+Verification
+------------
+
+Use `.build/` for implementation checks.  Reserve `.build_perf/` for final
+goal-level release/performance validation.
+
+Focused checks:
+
+* `ninja -C .build`
+* `ctest --test-dir .build -R '^(imgstream_fbserv_auth_test|brlobol_pivot_guard|test_qged_obol_fbserv|gsh_obol_ert_smoke|mged_obol_ert_smoke|gsh_obol_progressive_lod|mged_obol_progressive_lod)$' --output-on-failure`
+* `ctest --test-dir .build -R ged_draw --output-on-failure`
+* `git diff --check`
+
+Final goal-level checks:
+
+* Build and test the same targets in `.build_perf/`.
+* Run draw-performance/image gates that cover normal wire, LoD-enabled wire,
+  shaded/hidden-line, selection highlighting, faceplate/grid, and progressive
+  cache behavior.

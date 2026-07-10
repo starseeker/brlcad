@@ -31,7 +31,6 @@
 #include "vmath.h"
 #include "bu/vls.h"
 #include "bn.h"
-#include "bv.h"
 #include "icv.h"
 
 #include "./dm/defines.h"
@@ -60,6 +59,13 @@ __BEGIN_DECLS
 #  define DM_FONT_SIZE_TO_NAME(_size) (((_size) == 5) ? FONT5 : (((_size) == 6) ? FONT6 : (((_size) == 7) ? FONT7 : (((_size) == 8) ? FONT8 : (((_size) == 9) ? FONT9 : (((_size) == 10) ? FONT10 : FONT12))))))
 #endif
 
+struct bu_structparse;
+struct bu_structparse_map;
+struct bv_adc_state;
+struct bv_axes_state;
+struct bv_grid_state;
+struct bv_interactive_rect_state;
+
 /* This is how a parent application can pass a generic
  * hook function in when setting dm variables.  The dm_hook_data
  * container holds the bu_structparse hook function and data
@@ -82,8 +88,6 @@ DM_EXPORT extern void *dm_interp(struct dm *dmp);
 DM_EXPORT extern void *dm_get_ctx(struct dm *dmp);
 DM_EXPORT extern void *dm_get_udata(struct dm *dmp);
 DM_EXPORT extern void dm_set_udata(struct dm *dmp, void *udata);
-DM_EXPORT extern int dm_share_dlist(struct dm *dmp1,
-				    struct dm *dmp2);
 DM_EXPORT extern fastf_t dm_Xx2Normal(struct dm *dmp,
 				      int x);
 DM_EXPORT extern int dm_Normal2Xx(struct dm *dmp,
@@ -103,17 +107,13 @@ DM_EXPORT extern void dm_draw_adc(struct dm *dmp,
 				  struct bv_adc_state *adcp, mat_t view2model, mat_t model2view);
 
 /* axes.c */
-DM_EXPORT extern void dm_draw_data_axes(struct dm *dmp,
-					fastf_t viewSize,
-					struct bv_data_axes_state *bndasp);
-
-DM_EXPORT extern void dm_draw_scene_axes(struct dm *dmp, struct bv_scene_obj *s);
+DM_EXPORT extern void dm_draw_scene_axes_payload(struct dm *dmp, const struct bv_axes_state *axes);
 
 
 DM_EXPORT extern void dm_draw_hud_axes(struct dm *dmp,
 				   fastf_t viewSize,
 				   const mat_t rmat,
-				   struct bv_axes *bnasp);
+				   const struct bv_axes_state *bnasp);
 
 /* clip.c */
 DM_EXPORT extern int clip(fastf_t *,
@@ -148,7 +148,7 @@ DM_EXPORT extern int dm_draw_prim_labels(struct dm *dmp,
 
 /* rect.c */
 DM_EXPORT extern void dm_draw_rect(struct dm *dmp,
-				   struct bv_interactive_rect_state *grsp);
+				   const struct bv_interactive_rect_state *grsp);
 
 /* scale.c */
 DM_EXPORT extern void dm_draw_scale(struct dm *dmp,
@@ -194,17 +194,19 @@ DM_EXPORT extern int dm_graphical(const struct dm *dmp);
 DM_EXPORT extern const char *dm_get_type(struct dm *dmp);
 DM_EXPORT extern unsigned long dm_get_id(struct dm *dmp);
 DM_EXPORT extern void dm_set_id(struct dm *dmp, unsigned long new_id);
-DM_EXPORT extern int dm_get_displaylist(struct dm *dmp);
+DM_EXPORT extern int dm_get_backend_cache(struct dm *dmp);
 DM_EXPORT extern int dm_close(struct dm *dmp);
 DM_EXPORT extern int dm_get_bg(unsigned char **bg1, unsigned char **bg2, struct dm *dmp);
 DM_EXPORT extern int dm_set_bg(struct dm *dmp, unsigned char r1, unsigned char g1, unsigned char b1, unsigned char r2, unsigned char g2, unsigned char b2);
 DM_EXPORT extern unsigned char *dm_get_fg(struct dm *dmp);
 DM_EXPORT extern int dm_set_fg(struct dm *dmp, unsigned char r, unsigned char g, unsigned char b, int strict, fastf_t transparency);
+DM_EXPORT extern unsigned char *dm_get_geometry_default_color(struct dm *dmp);
+DM_EXPORT extern void dm_set_geometry_default_color(struct dm *dmp, unsigned char r, unsigned char g, unsigned char b);
 DM_EXPORT extern int dm_reshape(struct dm *dmp, int width, int height);
 DM_EXPORT extern int dm_make_current(struct dm *dmp);
 DM_EXPORT extern int dm_doevent(struct dm *dmp, void *clientData, void *eventPtr);
-DM_EXPORT extern int dm_get_dirty(struct dm *dmp);
-DM_EXPORT extern void dm_set_dirty(struct dm *dmp, int i);
+DM_EXPORT extern int dm_get_native_repaint_pending(struct dm *dmp);
+DM_EXPORT extern void dm_set_native_repaint_pending(struct dm *dmp, int i);
 DM_EXPORT extern vect_t *dm_get_clipmin(struct dm *dmp);
 DM_EXPORT extern vect_t *dm_get_clipmax(struct dm *dmp);
 DM_EXPORT extern int dm_get_stereo(struct dm *dmp);
@@ -225,8 +227,6 @@ DM_EXPORT extern void dm_set_linestyle(struct dm *dmp, int linestyle);
 DM_EXPORT extern int dm_get_perspective(struct dm *dmp);
 DM_EXPORT extern void dm_set_perspective(struct dm *dmp, fastf_t perspective);
 DM_EXPORT extern int dm_get_display_image(struct dm *dmp, unsigned char **image, int flip, int alpha);
-DM_EXPORT extern int dm_draw_vlist(struct dm *dmp, struct bv_vlist *vp);
-DM_EXPORT extern int dm_draw_vlist_hidden_line(struct dm *dmp, struct bv_vlist *vp);
 DM_EXPORT extern int dm_set_line_attr(struct dm *dmp, int width, int style);
 DM_EXPORT extern int dm_draw_begin(struct dm *dmp);
 DM_EXPORT extern int dm_draw_end(struct dm *dmp);
@@ -236,6 +236,7 @@ DM_EXPORT extern int dm_loadmatrix(struct dm *dmp, fastf_t *mat, int eye);
 DM_EXPORT extern int dm_loadpmatrix(struct dm *dmp, const fastf_t *mat);
 DM_EXPORT extern void dm_pop_pmatrix(struct dm *dmp);
 DM_EXPORT extern int dm_draw_string_2d(struct dm *dmp, const char *str, fastf_t x,  fastf_t y, int size, int use_aspect);
+DM_EXPORT extern int dm_draw_string_2d_rot(struct dm *dmp, const char *str, fastf_t x, fastf_t y, int size, int use_aspect, fastf_t angle);
 DM_EXPORT extern int dm_string_bbox_2d(struct dm *dmp, vect2d_t *bmin, vect2d_t *bmax, const char *str, fastf_t x,  fastf_t y, int size, int use_aspect);
 DM_EXPORT extern int dm_draw_line_2d(struct dm *dmp, fastf_t x1, fastf_t y1_2d, fastf_t x2, fastf_t y2);
 DM_EXPORT extern int dm_draw_line_3d(struct dm *dmp, point_t pt1, point_t pt2);
@@ -243,7 +244,6 @@ DM_EXPORT extern int dm_draw_lines_3d(struct dm *dmp, int npoints, point_t *poin
 DM_EXPORT extern int dm_draw_point_2d(struct dm *dmp, fastf_t x, fastf_t y);
 DM_EXPORT extern int dm_draw_point_3d(struct dm *dmp, point_t pt);
 DM_EXPORT extern int dm_draw_points_3d(struct dm *dmp, int npoints, point_t *points);
-DM_EXPORT extern int dm_draw(struct dm *dmp, struct bv_vlist *(*callback)(void *), void **data);
 DM_EXPORT extern int dm_set_depth_mask(struct dm *dmp, int d_on);
 DM_EXPORT extern int dm_set_debug(struct dm *dmp, int lvl);
 DM_EXPORT extern int dm_get_debug(struct dm *dmp);
@@ -269,48 +269,82 @@ DM_EXPORT extern void dm_set_bound_flag(struct dm *dmp, int bound);
 
 
 
-DM_EXPORT extern int dm_draw_obj(struct dm *dmp, struct bv_scene_obj *s);
-
-/* Dlist sensor API
+/* Modern renderer-backend contract.
  *
- * Sensors provide a push-based notification when a display list has been
- * regenerated, replacing per-frame polling of bv_scene_obj::s_dlist_stale.
+ * struct dm_backend_ops is the display-manager-side backend dispatch table.
+ * A backend (dm-gl, dm-swrast, future dm-obol) registers a single static
+ * dm_backend_ops with each dm instance it creates; scene rendering invokes
+ * backend operations through the thin dm_backend_*() wrappers below, which
+ * forward resolved render-item contexts to the registered ops.
  *
- * dm_register_dlist_sensor  - attach a callback to be invoked whenever
- *                             dm_fire_dlist_sensors() is called on this dm.
- * dm_fire_dlist_sensors     - invoke all registered sensor callbacks; call
- *                             this after regenerating any display list.
- * dm_dlist_sensors_clear    - free all sensors registered on this dm. */
-DM_EXPORT extern int  dm_register_dlist_sensor(struct dm *dmp,
-					       struct bv_scene_obj *s,
-					       void (*callback)(struct bv_scene_obj *, void *),
-					       void *data);
-DM_EXPORT extern void dm_fire_dlist_sensors(struct dm *dmp);
-DM_EXPORT extern void dm_dlist_sensors_clear(struct dm *dmp);
+ * Lifecycle of a backend resource:
+ *  - draw_item:      per-frame draw of one resolved render item.  Required
+ *                    for scene graph rendering.
+ *  - invalidate_item: source data has changed; cached resources for the
+ *                    render item/source are stale. Optional.
+ *  - release_source: source has gone away; release backend-owned resources
+ *                    whose source identity matches. Optional.
+ *
+ * The actual backend_ops pointer lives in struct dm_impl (libdm-private)
+ * and is set during dm initialization. */
+struct dm_backend_resource;
 
+typedef void (*dm_backend_resource_free_fn)(struct dm *dmp,
+					    struct dm_backend_resource *resource);
 
-/* Rather low level exposure of display list concepts.  Needed for MGED
- * and libtclcad, but we want to get to a point where the use (or not)
- * of display lists is an implementation level action rather than something
- * visible to the user. */
-DM_EXPORT extern int dm_gen_dlists(struct dm *dmp, size_t range);
-DM_EXPORT extern int dm_begin_dlist(struct dm *dmp, unsigned int list);
-DM_EXPORT extern int dm_draw_dlist(struct dm *dmp, unsigned int list);
-DM_EXPORT extern int dm_end_dlist(struct dm *dmp);
-DM_EXPORT extern int dm_free_dlists(struct dm *dmp, unsigned int list, int range);
-DM_EXPORT extern int dm_draw_display_list(struct dm *dmp, struct display_list *obj);
-DM_EXPORT extern int dm_draw_head_dl(struct dm *dmp,
-					  struct bu_list *dl,
-					  fastf_t transparency_threshold,
-					  fastf_t inv_viewsize,
-					  short r, short g, short b,
-					  int line_width,
-					  int draw_style,
-					  int draw_edit,
-					  unsigned char *gdc,
-					  int solids_down,
-					  int mv_dlist
-					 );
+struct dm_backend_resource {
+    uint64_t cache_identity;
+    uint64_t source_identity;
+    uint64_t backend_identity;
+    uint64_t last_seen_generation;
+    unsigned int stale;
+    void *handle;
+    dm_backend_resource_free_fn free_resource;
+    struct dm_backend_resource *next;
+};
+
+struct dm_backend_ops {
+    uint32_t type_tag;                                                     /**< @brief backend type tag */
+    int  (*begin_frame)(struct dm *dmp);                                   /**< @brief optional backend frame begin */
+    int  (*draw_item)(struct dm *dmp, const void *render_item_ctx);         /**< @brief resolved render-item draw; required for scene rendering */
+    void (*invalidate_item)(struct dm *dmp, const void *render_item_ctx, unsigned int reason_mask); /**< @brief mark item/source resources stale */
+    void (*release_source)(struct dm *dmp, uint64_t source_identity);      /**< @brief release resources for a render source */
+    void (*end_frame)(struct dm *dmp);                                     /**< @brief optional backend frame end */
+};
+
+/* Backend-ops accessors (libdm-private storage on dm_impl). */
+DM_EXPORT extern const struct dm_backend_ops *dm_get_backend_ops(struct dm *dmp);
+DM_EXPORT extern void dm_set_backend_ops(struct dm *dmp, const struct dm_backend_ops *ops);
+
+/* Backend-ops dispatch wrappers.  Each is safe to call with a NULL dmp or
+ * a NULL ops pointer.  Scene drawing requires draw_item; there is no node-only
+ * fallback from the modern render path. */
+DM_EXPORT extern int  dm_backend_draw_item(struct dm *dmp, const void *render_item_ctx);
+DM_EXPORT extern int  dm_backend_begin_frame(struct dm *dmp);
+DM_EXPORT extern void dm_backend_end_frame(struct dm *dmp);
+DM_EXPORT extern void dm_backend_invalidate_item(struct dm *dmp, const void *render_item_ctx, unsigned int reason_mask);
+DM_EXPORT extern void dm_backend_release_source(struct dm *dmp, uint64_t source_identity);
+
+DM_EXPORT extern struct dm_backend_resource *
+dm_backend_resource_get(struct dm *dmp,
+			uint64_t cache_identity,
+			uint64_t source_identity,
+			uint64_t backend_identity,
+			int create,
+			dm_backend_resource_free_fn free_resource);
+
+DM_EXPORT extern void
+dm_backend_resource_touch(struct dm *dmp, struct dm_backend_resource *resource);
+
+DM_EXPORT extern void
+dm_backend_resource_invalidate(struct dm *dmp, uint64_t source_identity);
+
+DM_EXPORT extern void
+dm_backend_resource_release_source(struct dm *dmp, uint64_t source_identity);
+
+DM_EXPORT extern void
+dm_backend_resource_reclaim_unseen(struct dm *dmp);
+
 
 // TODO - this should be using libicv  - right now this is just moving the guts
 // of dmo_png_cmd behind the call table, so only provides PNG...
@@ -512,42 +546,6 @@ DM_EXPORT extern const char *fb_version(void);
 
 typedef struct fb_internal FBIO;
 
-
-/*
- * Types of packages used for the remote frame buffer
- * communication
- */
-#define MSG_FBOPEN        1
-#define MSG_FBCLOSE       2
-#define MSG_FBCLEAR       3
-#define MSG_FBREAD        4
-#define MSG_FBWRITE       5
-#define MSG_FBCURSOR      6             /**< @brief fb_cursor(void) */
-#define MSG_FBWINDOW      7             /**< @brief OLD */
-#define MSG_FBZOOM        8             /**< @brief OLD */
-#define MSG_FBSCURSOR     9             /**< @brief OLD */
-#define MSG_FBVIEW        10            /**< @brief NEW */
-#define MSG_FBGETVIEW     11            /**< @brief NEW */
-#define MSG_FBRMAP        12
-#define MSG_FBWMAP        13
-#define MSG_FBHELP        14
-#define MSG_FBREADRECT    15
-#define MSG_FBWRITERECT   16
-#define MSG_FBFLUSH       17
-#define MSG_FBFREE        18
-#define MSG_FBGETCURSOR   19            /**< @brief NEW */
-#define MSG_FBPOLL        30            /**< @brief NEW */
-#define MSG_FBSETCURSOR   31            /**< @brief NEW in Release 4.4 */
-#define MSG_FBBWREADRECT  32            /**< @brief NEW in Release 4.6 */
-#define MSG_FBBWWRITERECT 33            /**< @brief NEW in Release 4.6 */
-#define MSG_FBAUTH        34            /**< @brief Session token authentication */
-
-#define MSG_DATA          20
-#define MSG_RETURN        21
-#define MSG_CLOSE         22
-#define MSG_ERROR         23
-
-#define MSG_NORETURN     100
 
 __END_DECLS
 
