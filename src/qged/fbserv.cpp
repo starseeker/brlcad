@@ -183,7 +183,7 @@ QFBSocket::client_handler()
 	return;
 
     // Read data.  NOTE:  we're using the Qt read routines rather than
-    // pkg_suckin, so we can't call fbs_existing_client_hander from libdm.
+    // pkg_suckin, so the legacy transport helper cannot be used here.
     // Initially tried pkg_suckin, but it didn't seem to work with the socket
     // as set up by Qt.
     QByteArray dbuff = s->read(s->bytesAvailable());

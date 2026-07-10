@@ -71,36 +71,6 @@ struct bu_vls;
 #define RT_VIEW_CLEAR_VIEW  0x02
 #define RT_VIEW_CLEAR_LOCAL 0x04
 
-/* Compatibility names.  New scene/view code should use the libbv names
- * directly; librt keeps these aliases for primitive draw/LoD callers that
- * still include rt/view.h. */
-#define RT_VIEW_LOD_OFF BV_LOD_OFF
-#define RT_VIEW_LOD_AUTO BV_LOD_AUTO
-#define RT_VIEW_LOD_FORCE_LEVEL BV_LOD_FORCE_LEVEL
-#define rt_view_lod_settings bv_lod_settings
-#define rt_view_lod_policy bv_lod_policy
-#define rt_view_info bv_view_info
-
-#define RT_VIEW_LOD_SETTINGS_INIT BV_LOD_SETTINGS_INIT
-#define RT_VIEW_LOD_POLICY_INIT BV_LOD_POLICY_INIT
-#define RT_VIEW_INFO_INIT BV_VIEW_INFO_INIT
-
-RT_EXPORT extern void rt_view_info_init(struct rt_view_info *info);
-RT_EXPORT extern void rt_view_info_sanitize(struct rt_view_info *info);
-RT_EXPORT extern void rt_view_lod_policy_init(struct rt_view_lod_policy *policy);
-RT_EXPORT extern void rt_view_lod_policy_sanitize(struct rt_view_lod_policy *policy);
-RT_EXPORT extern fastf_t rt_view_lod_curve_scale(const struct rt_view_info *info);
-RT_EXPORT extern size_t rt_view_lod_bot_threshold(const struct rt_view_info *info);
-RT_EXPORT extern fastf_t rt_view_avg_sample_spacing(const struct rt_view_info *info);
-RT_EXPORT extern fastf_t rt_view_solid_point_spacing(const struct rt_view_info *info, fastf_t solid_width);
-
-/**
- * NOTE: Normally, librt doesn't have a concept of a "display" of the geometry.
- * However for at least the plotting routines, view information is sometimes
- * needed to produce more intelligent output.  In those situations, the
- * application may pass in an rt_view_info snapshot.
- */
-
 /**
  * Specifies a subset of a primitive's geometry as the target for an
  * operation.

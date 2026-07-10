@@ -50,8 +50,6 @@
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <rt/view.h>
 #include "view_test_util.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/draw_obol.h>
@@ -134,6 +132,29 @@ draw_test_sync_obol_camera(BRLObolViewController *controller, void *view_ctx)
 	return 0;
 
     return controller->syncCameraFromViewContext(view_ctx) ? 1 : 0;
+}
+
+extern "C" int
+draw_test_obol_view_init(struct ged *gedp, void *view_ctx, int width, int height)
+{
+    if (!gedp || !view_ctx || width <= 0 || height <= 0)
+	return BRLCAD_ERROR;
+
+    bv_dimensions_set(DRAW_TEST_BV(view_ctx), width, height);
+    if (gedp->dbip) {
+	bv_unit_conversion_set(DRAW_TEST_BV(view_ctx), gedp->dbip->dbi_local2base,
+		gedp->dbip->dbi_base2local);
+    }
+    if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1))
+	return BRLCAD_ERROR;
+    BRLObolViewController *controller =
+	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
+    if (!controller)
+	return BRLCAD_ERROR;
+
+    controller->setViewportSize((unsigned int)width, (unsigned int)height);
+    return draw_test_sync_obol_camera(controller, view_ctx) ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 static void
@@ -434,7 +455,6 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 
     BRLObolViewController *controller =
 	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     if (!controller) {
 	(void)ged_draw_obol_scene_controller_ensure(gedp, 1);
 	controller = ged_draw_obol_controller(gedp);
@@ -444,10 +464,6 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 
     int width = bv_width_get(DRAW_TEST_BV_CONST(v));
     int height = bv_height_get(DRAW_TEST_BV_CONST(v));
-    if ((width <= 0 || height <= 0) && dmp) {
-	width = dm_get_width(dmp);
-	height = dm_get_height(dmp);
-    }
     if (width <= 0 || height <= 0)
 	return -1;
 
@@ -561,17 +577,10 @@ dm_refresh(struct ged *gedp)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    if (!dmp)
-	return;
-    dm_make_current(dmp);
-    unsigned char *dm_bg1;
-    unsigned char *dm_bg2;
-    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
-    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
-    dm_set_native_repaint_pending(dmp, 0);
-    dm_draw_begin(dmp);
-    dm_draw_end(dmp);
+    BRLObolViewController *controller =
+	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
+    if (controller)
+	(void)controller->realizePending();
 }
 
 extern "C" void
@@ -650,14 +659,10 @@ img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear
     }
 
     dm_refresh(gedp);
-    const char *s_av[2] = {"screengrab", NULL};
-    s_av[1] = bu_vls_cstr(&tname);
     int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
 		       bu_vls_cstr(&tname));
-    if (obol_capture < 0)
+    if (obol_capture != 1)
 	bu_file_delete(bu_vls_cstr(&tname));
-    else if (!obol_capture)
-	ged_exec_screengrab(gedp, 2, s_av);
 
     timg = icv_read(bu_vls_cstr(&tname), BU_MIME_IMAGE_PNG, 0, 0);
     if (!timg) {
@@ -793,14 +798,10 @@ img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool
     bu_vls_sprintf(&cname, "%s/empty.png", cdir);
 
     dm_refresh(gedp);
-    const char *s_av[2] = {"screengrab", NULL};
-    s_av[1] = bu_vls_cstr(&tname);
     int obol_capture = draw_test_obol_screengrab_if_enabled(gedp, id,
 		       bu_vls_cstr(&tname));
-    if (obol_capture < 0)
+    if (obol_capture != 1)
 	bu_file_delete(bu_vls_cstr(&tname));
-    else if (!obol_capture)
-	ged_exec_screengrab(gedp, 2, s_av);
 
     timg = icv_read(bu_vls_cstr(&tname), BU_MIME_IMAGE_PNG, 0, 0);
     ctrl = icv_read(bu_vls_cstr(&cname), BU_MIME_IMAGE_PNG, 0, 0);

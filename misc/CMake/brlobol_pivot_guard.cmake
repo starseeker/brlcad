@@ -13,10 +13,6 @@ if(NOT DEFINED BRLCAD_SOURCE_DIR)
   message(FATAL_ERROR "BRLCAD_SOURCE_DIR is required")
 endif()
 
-if(NOT DEFINED BRLOBOL_PIVOT_GUARD_MODE)
-  set(BRLOBOL_PIVOT_GUARD_MODE "transitional")
-endif()
-
 set(_brlobol_guard_extensions
   [[(CMakeLists\.txt|\.(c|cc|cpp|cxx|h|hh|hpp|cmake)$)]])
 
@@ -257,16 +253,6 @@ function(_brlobol_guard_check_retired_tests)
     endif()
   endforeach()
 
-  _brlobol_guard_read_rel(_librt_tests "src/librt/tests/CMakeLists.txt")
-  foreach(_token
-      "brlcad_addexec(rt_view_legacy_bsg"
-      "brlcad_add_test(NAME rt_view_legacy_bsg")
-    string(FIND "${_librt_tests}" "${_token}" _idx)
-    if(NOT _idx EQUAL -1)
-      _brlobol_guard_fail(
-	"src/librt/tests/CMakeLists.txt reintroduced retired RT view legacy test ${_token}")
-    endif()
-  endforeach()
 endfunction()
 
 function(_brlobol_guard_check_public_headers)
@@ -281,26 +267,6 @@ function(_brlobol_guard_check_public_headers)
   endforeach()
 endfunction()
 
-function(_brlobol_guard_check_legacy_include_allowlist)
-  _brlobol_guard_collect(_files
-    include
-    src/libged
-    src/librt)
-  foreach(_file IN LISTS _files)
-    file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
-    if(NOT "${_rel}" MATCHES "${_brlobol_guard_extensions}")
-      continue()
-    endif()
-    file(READ "${_file}" _contents)
-    string(REGEX MATCH [[#[ \t]*include[ \t]*[<"]rt/view_legacy_bsg\.h]]
-      _hit "${_contents}")
-    if(_hit)
-      _brlobol_guard_fail(
-	"${_rel} directly includes rt/view_legacy_bsg.h outside the retained adapter allowlist")
-    endif()
-  endforeach()
-endfunction()
-
 function(_brlobol_guard_check_retired_ged_draw_symbols)
   foreach(_rel
       src/libged/ged_draw_source.c
@@ -311,6 +277,61 @@ function(_brlobol_guard_check_retired_ged_draw_symbols)
       file(READ "${BRLCAD_SOURCE_DIR}/${_rel}" _contents)
       _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
 	${_brlobol_guard_retired_ged_draw_symbols})
+    endif()
+  endforeach()
+endfunction()
+
+function(_brlobol_guard_check_removed_rt_view_aliases)
+  _brlobol_guard_read_rel(_rt_view "include/rt/view.h")
+  foreach(_token
+      rt_view_info
+      rt_view_lod_policy
+      rt_view_lod_settings
+      RT_VIEW_INFO_INIT
+      RT_VIEW_LOD_POLICY_INIT
+      RT_VIEW_LOD_SETTINGS_INIT)
+    string(FIND "${_rt_view}" "${_token}" _idx)
+    if(NOT _idx EQUAL -1)
+      _brlobol_guard_fail(
+	"include/rt/view.h reintroduced removed libbv compatibility alias ${_token}")
+    endif()
+  endforeach()
+  foreach(_rel src/librt/view.c src/librt/tests/view_info.c)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_guard_fail("${_rel} reintroduced removed libbv wrapper code")
+    endif()
+  endforeach()
+endfunction()
+
+function(_brlobol_guard_check_native_drawing_tests)
+  foreach(_rel
+      src/libged/tests/draw/basic.cpp
+      src/libged/tests/draw/faceplate.cpp
+      src/libged/tests/draw/lod.cpp
+      src/libged/tests/draw/select.cpp
+      src/libged/tests/draw/quad.cpp
+      src/libged/tests/draw/util.cpp)
+    _brlobol_guard_read_rel(_contents "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[#[ \t]*include[ \t]*[<"]dm]]
+      [[(^|[^A-Za-z0-9_])DM_SWRAST([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])ged_exec_dm[ \t\r\n]*\(]]
+      [[(^|[^A-Za-z0-9_])ged_view_context_display_manager_get[ \t\r\n]*\(]])
+  endforeach()
+
+  _brlobol_guard_read_rel(_cmake "src/libged/tests/draw/CMakeLists.txt")
+  foreach(_target
+      ged_test_draw
+      ged_test_faceplate
+      ged_test_lod
+      ged_test_select_draw
+      ged_test_quad)
+    string(REGEX MATCH
+      "brlcad_addexec\\(${_target}[ \t][^\n]*libdm"
+      _legacy_link "${_cmake}")
+    if(_legacy_link)
+      _brlobol_guard_fail(
+	"src/libged/tests/draw/CMakeLists.txt links native Obol test ${_target} to libdm")
     endif()
   endforeach()
 endfunction()
@@ -680,33 +701,14 @@ function(_brlobol_guard_check_tkobol_host_ownership)
 endfunction()
 
 function(_brlobol_guard_collect_active_scan_files _outvar)
-  if("${BRLOBOL_PIVOT_GUARD_MODE}" STREQUAL "strict")
-    file(GLOB_RECURSE _files LIST_DIRECTORIES false
-      "${BRLCAD_SOURCE_DIR}/include/*"
-      "${BRLCAD_SOURCE_DIR}/src/*"
-      "${BRLCAD_SOURCE_DIR}/misc/CMake/*")
-  else()
-    _brlobol_guard_collect(_files
-      include/brlobol
-      include/brlobol.h
-      include/qtcad/QgObolExport.h
-      include/qtcad/QgObolMeasure.h
-      include/qtcad/QgObolPick.h
-      include/qtcad/QgObolSnap.h
-      include/qtcad/QgObolWindowHost.h
-      src/libbrlobol
-      src/libqtcad/QgObolDatabaseSync.cpp
-      src/libqtcad/QgObolDatabaseSyncPrivate.h
-      src/libqtcad/QgObolEditPreview.cpp
-      src/libqtcad/QgObolEditPreviewPrivate.h
-      src/libqtcad/QgObolExport.cpp
-      src/libqtcad/QgObolMeasure.cpp
-      src/libqtcad/QgObolOverlaySync.cpp
-      src/libqtcad/QgObolPick.cpp
-      src/libqtcad/QgObolSelectionSync.cpp
-      src/libqtcad/QgObolSnap.cpp
-      src/libqtcad/QgObolWindowHost.cpp)
-  endif()
+  _brlobol_guard_collect(_files
+    include/brlobol
+    include/brlobol.h
+    include/qtcad
+    src/libbrlobol
+    src/libqtcad
+    src/qged
+    src/gtools/gsh)
   set(${_outvar} "${_files}" PARENT_SCOPE)
 endfunction()
 
@@ -715,8 +717,9 @@ _brlobol_guard_check_libbsg_retired()
 _brlobol_guard_check_legacy_graphical_dm_retired()
 _brlobol_guard_check_retired_tests()
 _brlobol_guard_check_public_headers()
-_brlobol_guard_check_legacy_include_allowlist()
 _brlobol_guard_check_retired_ged_draw_symbols()
+_brlobol_guard_check_removed_rt_view_aliases()
+_brlobol_guard_check_native_drawing_tests()
 _brlobol_guard_check_obol_controller_quarantine()
 _brlobol_guard_check_qtcad_legacy_dm_open_quarantine()
 _brlobol_guard_check_qged_edit_preview_policy()
@@ -738,9 +741,9 @@ if(_failures)
   list(SORT _failures)
   string(REPLACE ";" "\n  " _failure_text "${_failures}")
   message(FATAL_ERROR
-    "Obol pivot guard failed in ${BRLOBOL_PIVOT_GUARD_MODE} mode:\n"
+    "Obol pivot guard failed:\n"
     "  ${_failure_text}\n"
     "New Obol-canonical code must not depend on retired BSG/DM APIs.")
 endif()
 
-message(STATUS "Obol pivot guard passed in ${BRLOBOL_PIVOT_GUARD_MODE} mode")
+message(STATUS "Obol pivot guard passed")

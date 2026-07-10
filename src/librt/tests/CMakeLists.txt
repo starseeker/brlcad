@@ -79,10 +79,6 @@ brlcad_add_test(NAME rt_cache_serial_multiple_different_objects COMMAND rt_cache
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects  COMMAND rt_cache 6 10)
 brlcad_add_test(NAME rt_cache_parallel_multiple_different_objects_hierarchy_1  COMMAND rt_cache 7 10)
 
-# RT view snapshot testing
-brlcad_addexec(rt_view_info view_info.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
-brlcad_add_test(NAME rt_view_info COMMAND rt_view_info)
-
 # view polygon <-> sketch testing
 brlcad_addexec(rt_poly_sketch poly_sketch.c "librt;libbg;libbu;${M_LIBRARY}" TEST)
 
@@ -145,7 +141,6 @@ set(
   nurbs_surfaces.g
   rt_datum.c
   rt_perturb.c
-  view_info.c
   search_stress.c
   sketch.g
   prim_tess.c

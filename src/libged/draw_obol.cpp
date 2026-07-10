@@ -6034,7 +6034,10 @@ ged_draw_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx)
     ged_obol_faceplate_sync_axes(controller, view_ctx);
     ged_obol_faceplate_sync_framebuffer(controller, view_ctx);
 
-    if (bv_framebuffer_mode_get(ged_obol_bv_const(view_ctx)) != 0)
+    const int framebuffer_visible =
+	bv_framebuffer_mode_get(ged_obol_bv_const(view_ctx)) != 0;
+    (void)ged_obol_fbserv_visibility_set(gedp, framebuffer_visible);
+    if (framebuffer_visible)
 	(void)ged_draw_obol_framebuffer_present(gedp);
 
     return BRLCAD_OK;
@@ -6487,12 +6490,11 @@ ged_draw_obol_view_context_feature_pick_primitive_resolve(
 extern "C" int
 ged_draw_obol_view_context_feature_visible(void *view_ctx, const char *name)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-				  view_ctx, name);
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
     BRLObolFeatureStyle style;
-    if (!handle.isValid() || !controller->features().style(handle, style))
+    if (!lookup.controller || !lookup.handle.isValid() ||
+	!lookup.controller->features().style(lookup.handle, style))
 	return 0;
     return (!style.hasVisible || style.visible) ? 1 : 0;
 }
@@ -6503,13 +6505,11 @@ ged_draw_obol_view_context_feature_visible_set(
     const char *name,
     int visible)
 {
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    BRLObolFeatureHandle handle = ged_obol_feature_handle(controller,
-				  view_ctx, name);
-    if (!handle.isValid())
+    ged_obol_feature_lookup lookup =
+	ged_obol_feature_lookup_for_context(view_ctx, name);
+    if (!lookup.controller || !lookup.handle.isValid())
 	return 0;
-    return controller->features().setVisible(handle,
+    return lookup.controller->features().setVisible(lookup.handle,
 	    visible ? TRUE : FALSE) ? 1 : 0;
 }
 
@@ -6915,9 +6915,11 @@ ged_draw_obol_view_context_feature_records_foreach(
     ged_draw_obol_view_feature_record_cb cb,
     void *userdata)
 {
-    BRLObolViewController *controller =
+    BRLObolViewController *local_controller =
 	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !cb)
+    BRLObolViewController *shared_controller =
+	ged_obol_shared_view_controller_ensure_for_context(view_ctx, 0);
+    if ((!local_controller && !shared_controller) || !cb)
 	return 0;
 
     const int wants_db =
@@ -6928,10 +6930,6 @@ ged_draw_obol_view_context_feature_records_foreach(
 	return 0;
 
     BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
-    unsigned int scope_mask = BRLOBOL_FEATURE_SCOPE_ALL;
-    if (query_flags & GED_DRAW_VIEW_EXPORT_QUERY_LOCAL_ONLY)
-	scope_mask = BRLOBOL_FEATURE_SCOPE_LOCAL;
-
     struct ged_obol_feature_records_visit ctx;
     ctx.view_ctx = view_ctx;
     ctx.query_flags = query_flags;
@@ -6939,8 +6937,17 @@ ged_draw_obol_view_context_feature_records_foreach(
     ctx.cb = cb;
     ctx.userdata = userdata;
     ctx.count = 0;
-    controller->features().visitRecords(ged_obol_feature_record_visit_cb,
-					&ctx, scope_mask, &owner);
+    if (local_controller) {
+	local_controller->features().visitRecords(
+		ged_obol_feature_record_visit_cb, &ctx,
+		BRLOBOL_FEATURE_SCOPE_LOCAL, &owner);
+    }
+    if (!(query_flags & GED_DRAW_VIEW_EXPORT_QUERY_LOCAL_ONLY) &&
+	shared_controller) {
+	shared_controller->features().visitRecords(
+		ged_obol_feature_record_visit_cb, &ctx,
+		BRLOBOL_FEATURE_SCOPE_SHARED, NULL);
+    }
     return ctx.count;
 }
 
@@ -8245,6 +8252,7 @@ struct ged_obol_polygon_ged_visit_context {
     BRLObolViewController *controller;
     ged_draw_view_polygon_record_cb callback;
     void *data;
+    BRLObolFeatureScope scope;
 };
 
 static int
@@ -8255,6 +8263,8 @@ ged_draw_obol_polygon_visit_ged_cb(const BRLObolPolygonRecord &obol_record,
 	static_cast<ged_obol_polygon_ged_visit_context *>(data);
     if (!ctx || !ctx->controller || !ctx->callback)
 	return 0;
+    if (obol_record.scope != ctx->scope)
+	return 1;
 
     ged_draw_view_polygon_ref ref =
 	ged_obol_ged_polygon_ref(ctx->controller, obol_record.handle);
@@ -8271,17 +8281,28 @@ ged_draw_obol_view_context_polygon_visit_records(
     ged_draw_view_polygon_record_cb callback,
     void *data)
 {
-    BRLObolViewController *controller =
+    BRLObolViewController *local_controller =
 	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !callback)
+    BRLObolViewController *shared_controller =
+	ged_obol_shared_view_controller_ensure_for_context(view_ctx, 0);
+    if ((!local_controller && !shared_controller) || !callback)
 	return;
 
     ged_obol_polygon_ged_visit_context ctx;
-    ctx.controller = controller;
     ctx.callback = callback;
     ctx.data = data;
-    controller->polygons().visitRecords(
-	    ged_draw_obol_polygon_visit_ged_cb, &ctx);
+    if (local_controller) {
+	ctx.controller = local_controller;
+	ctx.scope = BRLObolFeatureScope::Local;
+	local_controller->polygons().visitRecords(
+		ged_draw_obol_polygon_visit_ged_cb, &ctx);
+    }
+    if (shared_controller) {
+	ctx.controller = shared_controller;
+	ctx.scope = BRLObolFeatureScope::Shared;
+	shared_controller->polygons().visitRecords(
+		ged_draw_obol_polygon_visit_ged_cb, &ctx);
+    }
 }
 
 extern "C" size_t

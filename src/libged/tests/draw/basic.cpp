@@ -29,8 +29,6 @@
 #include <bu.h>
 #include "rt/view.h"
 #include "view_test_util.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 #include <ged/db_index.h>
 #include <ged/event_txn.h>
@@ -277,49 +275,13 @@ main(int ac, char *av[]) {
     const char *s_av[15] = {NULL};
     gedp = ged_open("db", "moss_tmp.g", 1);
 
-    bu_setenv("DM_SWRAST", "1", 1);
-
     // Set callback so database changes notify public GED services.
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    /* To generate images that will allow us to check if the drawing
-     * is proceeding as expected, use the headless Obol display host. */
-    s_av[0] = "dm";
-    s_av[1] = "attach";
-    s_av[2] = "obol";
-    s_av[3] = "SW";
-    s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
-
+    /* Image baselines use the GED-owned headless Obol render endpoint. */
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    dm_set_width(dmp, 512);
-    dm_set_height(dmp, 512);
-
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-
-    // See QtSW.cpp... TODO - if we need this consistently,
-    // it should be part of the dm setup.
-    fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
-    dm_set_win_bounds(dmp, windowbounds);
-
-    // TODO - these syncing operations need to happen whenever the dm size
-    // changes - can they be done in dm_set_width/dm_set_height?
-    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
-    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
-
-    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
-
-    // The default (fast) wireframe has some differences from
-    // the slower full OpenGL draw path - disable it for the
-    // purposes of these tests.
-    s_av[0] = "dm";
-    s_av[1] = "set";
-    s_av[2] = "fast_wireframe";
-    s_av[3] = "0";
-    s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
+    if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to initialize headless Obol render endpoint\n");
 
     /***** Basic wireframe draw *****/
     bu_log("Testing basic db wireframe draw...\n");

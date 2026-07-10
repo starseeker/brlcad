@@ -30,6 +30,7 @@
 
 #include "brlobol/framebuffer.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/viewport_image.h"
 #include "brlobol/window_host.h"
 #include "bu/log.h"
 #include "bv.h"
@@ -351,6 +352,23 @@ public:
 	return framebuffer.present();
     }
 
+    int setVisible(int visible)
+    {
+	std::lock_guard<std::mutex> guard(lock);
+	BRLObolWindowHost *host = framebuffer.host();
+	imgstream_fb_t *fb = framebuffer.framebuffer();
+	SoBRLViewportImage *viewport = host && fb ?
+	    host->getFramebufferViewportImage(fb) : NULL;
+	if (!viewport)
+	    return BRLCAD_ERROR;
+	viewport->visible = visible ? TRUE : FALSE;
+	if (viewport->rebuildGeometry() != 0)
+	    return BRLCAD_ERROR;
+	if (host->getController())
+	    host->getController()->requestRender("fb-visibility");
+	return BRLCAD_OK;
+    }
+
     int poll()
     {
 	std::lock_guard<std::mutex> guard(lock);
@@ -654,6 +672,15 @@ ged_obol_fbserv_release(struct ged *gedp)
     delete bridge;
 
     fbs_clear_transport(fbs);
+}
+
+extern "C" int
+ged_obol_fbserv_visibility_set(struct ged *gedp, int visible)
+{
+    if (!gedp || !gedp->ged_fbs)
+	return BRLCAD_ERROR;
+    GedObolFbservBridge *bridge = bridge_from_fbs(gedp->ged_fbs);
+    return bridge ? bridge->setVisible(visible) : BRLCAD_ERROR;
 }
 
 extern "C" GED_EXPORT int

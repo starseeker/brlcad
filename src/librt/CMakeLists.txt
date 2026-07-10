@@ -315,7 +315,6 @@ set(
   uv.c
   vds/vds.c
   vers.c
-  view.c
   vlist.c
   vshoot.c
   wdb.c

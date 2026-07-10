@@ -17,6 +17,15 @@
 
 #include "bv.h"
 
+struct ged;
+
+__BEGIN_DECLS
+
+int draw_test_obol_view_init(struct ged *gedp, void *view_ctx,
+	int width, int height);
+
+__END_DECLS
+
 static inline struct bv *
 draw_test_bv(void *view_ctx)
 {

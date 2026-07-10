@@ -189,6 +189,7 @@ void ged_view_state_init(struct ged *gedp);
 void ged_view_state_free(struct ged *gedp);
 int ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx);
 int ged_obol_fbserv_present(struct ged *gedp);
+int ged_obol_fbserv_visibility_set(struct ged *gedp, int visible);
 void ged_obol_fbserv_release(struct ged *gedp);
 __END_DECLS
 

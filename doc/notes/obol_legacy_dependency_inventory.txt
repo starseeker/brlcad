@@ -45,6 +45,14 @@ Current Clean Boundaries
 * libimgstream owns fbserv protocol types, authentication, TLS, message
   dispatch, packet handlers, bounded processing, listener/client lifecycle,
   backend dispatch, and cleanup.
+* librt primitive LoD callbacks use libbv view types and functions directly.
+  No `rt_view_info` or `rt_view_lod_policy` compatibility API remains.
+* The native basic, faceplate, LoD, selection, and quad image baselines own
+  GED/Obol render endpoints directly and have no direct libdm dependency.
+  DM-specific MGED compatibility tests remain separate and explicit.
+* The pivot guard uses one canonical scope over libbrlobol, libqtcad, qged,
+  and GSH, plus focused native-test and removed-API checks.  There is no
+  transitional mode or legacy BSG include allowlist.
 
 Remaining Compatibility Owners
 ------------------------------

@@ -95,12 +95,12 @@ Important retained dependencies:
   libdm retains a narrow `struct fb` backend adapter.
 * Retained BSG rendering and the OGL/WGL/X/QtGL/swrast/tkswrast graphical
   display and framebuffer paths are deleted.
-* `rt_view_info` and `rt_view_lod_policy` remain compatibility names and
-  wrappers over libbv data.  The old RT view-context/scene-ref facade itself
-  is gone.
-* The pivot guard is transitional only in scan scope.  It rejects libbsg,
-  retired graphical DMs, duplicated fbserv protocol ownership, qged/GSH
-  libdm dependencies, and external Tk widget ownership.
+* librt primitive callbacks use `bv_view_info` and libbv LoD policy directly;
+  the former `rt_view_info`/`rt_view_lod_policy` aliases and wrappers are gone.
+* The pivot guard has one canonical scan scope.  It rejects libbsg, retired
+  graphical DMs, duplicated fbserv protocol ownership, qged/GSH libdm
+  dependencies, external Tk widget ownership, and DM-backed native drawing
+  tests.
 
 Priority 0: Remove Parallel Scene Ownership
 -------------------------------------------
@@ -282,18 +282,30 @@ Priority 2: Performance, Cleanup, and Deletion
     * Separate shaded/hidden-line tessellation diagnostics and optimization
       from normal wire-draw performance.
 
-11. Remove compatibility aliases and stale guards when dependencies permit.
+11. Completed on Linux: remove compatibility aliases and stale guards when
+    dependencies permit.
 
-    * Decide whether the `rt_view_info`/`rt_view_lod_policy` source aliases are
-      still required; remove them after callers use libbv directly.
-    * Delete stale `view_legacy_bsg` allowlist entries and tighten the pivot
-      guard after each dependency removal.
-    * Convert drawing tests away from unnecessary DM/swrast construction
-      while retaining Obol image and semantic coverage.
-    * Keep `doc/notes/obol_legacy_dependency_inventory.txt` and dependency
-      rows synchronized as each legacy edge is removed.
-    * Exercise the built-in Tk Obol host on Windows and macOS, modernizing the
-      vendored Togl platform code without restoring WGL/OGL DM ownership.
+    * Removed the unused `rt_view_info`, `rt_view_lod_policy`, and
+      `rt_view_lod_settings` aliases, exported wrappers, implementation, and
+      duplicate librt wrapper test.  Primitive LoD callbacks use libbv types
+      and functions directly.
+    * Removed the dead `view_legacy_bsg` checks and transitional/strict guard
+      modes.  The single guard scope now covers all libbrlobol, libqtcad,
+      qged, and GSH sources and explicitly locks native drawing tests to
+      Obol-only setup.
+    * Basic, faceplate, LoD, selection, and quad drawing baselines now create
+      GED-owned Obol render endpoints without DM attachment, swrast setup, DM
+      readback fallback, or a direct libdm link.
+    * Split shared/per-view Obol controllers now resolve visibility, records,
+      and polygons across the correct stores.  The faceplate framebuffer test
+      uses the neutral imgstream backend, including explicit visibility and
+      lifecycle handling.
+    * The dependency inventory and guard-owned dependency rows are synchronized.
+
+    Linux verification: `brlobol_pivot_guard`, the five
+    `ged_test_drawing_*` baselines, native executable dependency inspection,
+    and the normal Ninja build.  Windows and macOS Tk-host runtime validation
+    remains intentionally deferred; it must not restore WGL/OGL DM ownership.
 
 Verification Gates
 ------------------

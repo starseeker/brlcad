@@ -34,8 +34,6 @@
 #include <icv.h>
 #include <rt/view.h>
 #include "view_test_util.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/event_txn.h>
@@ -89,18 +87,6 @@ dm_refresh(struct ged *gedp, int vnum)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    if (!dmp)
-	return;
-    /* Ensure rendering goes to this view's DM context, not the last-active
-     * one.  With multiple Obol DMs each view has its own OSMesa context. */
-    dm_make_current(dmp);
-    unsigned char *dm_bg1;
-    unsigned char *dm_bg2;
-    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
-    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
-    dm_set_native_repaint_pending(dmp, 0);
-    dm_draw_end(dmp);
 }
 
 void
@@ -157,21 +143,13 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     int cnum = ged_view_context_is_independent(v) ? vnum : -1;
 
-    const char *s_av[4] = {NULL};
-    s_av[0] = "screengrab";
-    s_av[1] = "-D";
-    s_av[2] = bu_vls_cstr(dm_get_pathname(dmp));
-    s_av[3] = bu_vls_cstr(&tname);
     int obol_capture = draw_test_obol_screengrab_view_if_enabled(gedp, v,
 	    id, bu_vls_cstr(&tname));
-    if (obol_capture < 0)
+    if (obol_capture != 1) {
+	bu_log("Failed to capture Obol view V%d\n", vnum);
 	bu_file_delete(bu_vls_cstr(&tname));
-    else if (!obol_capture &&
-	(ged_exec_screengrab(gedp, 4, s_av) & BRLCAD_ERROR)) {
-	bu_log("Failed to grab screen for DM %s\n", bu_vls_cstr(dm_get_pathname(dmp)));
 	if (clear)
 	    scene_clear(gedp, vnum, cnum);
 	bu_vls_free(&tname);
@@ -486,11 +464,8 @@ main(int ac, char *av[]) {
     // Set callback so database changes notify public GED services.
     db_add_changed_clbk(gedp->dbip, &quad_changed_callback, (void *)gedp);
 
-    // Set up the views.  Unlike the other drawing tests, we are explicitly
-    // out to test the behavior of multiple views and dms, so we need to
-    // set up multiples.  We'll start out with four non-independent views,
-    // to mimic the most common multi-dm/view display - a Quad view widget.
-    // Each view gets its own attached Obol DM/controller.
+    // Set up four non-independent views to mimic a quad-view widget.  Each
+    // view gets its own GED-owned Obol render endpoint.
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);
@@ -501,38 +476,10 @@ main(int ac, char *av[]) {
 	ged_view_set_context_add(view_set_ctx, v);
 	ged_view_context_owned_add(gedp, v);
 
-	/* To generate images that allow us to check multi-view behavior, use
-	 * the headless Obol/Coin display host rather than legacy immediate
-	 * draw streams. */
-	struct bu_vls dm_name = BU_VLS_INIT_ZERO;
-	s_av[0] = "dm";
-	s_av[1] = "attach";
-	s_av[2] = "-V";
-	s_av[3] = view_name;
-	s_av[4] = "obol";
-	bu_vls_sprintf(&dm_name, "OB%zd", i);
-	s_av[5] = bu_vls_cstr(&dm_name);
-	s_av[6] = NULL;
-	ged_exec_dm(gedp, 6, s_av);
-
-	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-	dm_set_width(dmp, 512);
-	dm_set_height(dmp, 512);
-
-	dm_configure_win(dmp, 0);
-	dm_set_zbuffer(dmp, 1);
-
-	// See QtSW.cpp...
-	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
-	dm_set_win_bounds(dmp, windowbounds);
-
-	dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
-	ged_view_context_display_manager_set(v, dmp);
-	bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
-	bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
-
-	// Done with dm name
-	bu_vls_free(&dm_name);
+	if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
+	    bu_exit(EXIT_FAILURE,
+		    "failed to initialize headless Obol endpoint for %s\n",
+		    view_name);
     }
 
     /* Set distinct view az/el for each of the four quad views */

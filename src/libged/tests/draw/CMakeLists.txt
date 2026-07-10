@@ -7,7 +7,19 @@ set(
   ged-brep
   ged-facetize
   ged-open
-  ged-png2fb
+  ged-select
+  ged-tol
+  ged-view
+  ged-zap
+)
+
+set(
+  obol_test_deps
+  ged-close
+  ged-draw
+  ged-brep
+  ged-facetize
+  ged-open
   ged-select
   ged-tol
   ged-view
@@ -15,9 +27,9 @@ set(
 )
 
 set(basic_view_test_ctrls basic.apng)
-brlcad_addexec(ged_test_draw "basic.cpp;util.cpp" "libged;libdm;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
+brlcad_addexec(ged_test_draw "basic.cpp;util.cpp" "libged;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if(TARGET ged_test_draw)
-  foreach(tdp ${test_deps})
+  foreach(tdp ${obol_test_deps})
     if (TARGET ${tdp})
       add_dependencies(ged_test_draw ${tdp})
     endif ()
@@ -29,9 +41,9 @@ if(TARGET ged_test_draw)
 endif(TARGET ged_test_draw)
 
 set(faceplate_test_ctrls faceplate.apng)
-brlcad_addexec(ged_test_faceplate "faceplate.cpp;util.cpp" "libged;libdm;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
+brlcad_addexec(ged_test_faceplate "faceplate.cpp;util.cpp" "libged;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if(TARGET ged_test_faceplate)
-  foreach(tdp ${test_deps})
+  foreach(tdp ${obol_test_deps})
     if (TARGET ${tdp})
       add_dependencies(ged_test_faceplate ${tdp})
     endif ()
@@ -43,9 +55,9 @@ if(TARGET ged_test_faceplate)
 endif(TARGET ged_test_faceplate)
 
 set(lod_test_ctrls lod.apng)
-brlcad_addexec(ged_test_lod "lod.cpp;util.cpp" "libged;libdm;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
+brlcad_addexec(ged_test_lod "lod.cpp;util.cpp" "libged;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if(TARGET ged_test_lod)
-  foreach(tdp ${test_deps})
+  foreach(tdp ${obol_test_deps})
     if (TARGET ${tdp})
       add_dependencies(ged_test_lod ${tdp})
     endif ()
@@ -59,9 +71,9 @@ endif(TARGET ged_test_lod)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_tmp.g)
 
 set(select_test_ctrls select.apng)
-brlcad_addexec(ged_test_select_draw "select.cpp;util.cpp" "libged;libdm;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
+brlcad_addexec(ged_test_select_draw "select.cpp;util.cpp" "libged;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if(TARGET ged_test_select_draw)
-  foreach(tdp ${test_deps})
+  foreach(tdp ${obol_test_deps})
     if (TARGET ${tdp})
       add_dependencies(ged_test_select_draw ${tdp})
     endif ()
@@ -75,9 +87,9 @@ endif(TARGET ged_test_select_draw)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_select_tmp.g)
 
 set(quad_test_ctrls quad_00.apng quad_01.apng quad_02.apng quad_03.apng)
-brlcad_addexec(ged_test_quad "quad.cpp;util.cpp" "libged;libdm;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
+brlcad_addexec(ged_test_quad "quad.cpp;util.cpp" "libged;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if(TARGET ged_test_quad)
-  foreach(tdp ${test_deps})
+  foreach(tdp ${obol_test_deps})
     if (TARGET ${tdp})
       add_dependencies(ged_test_quad ${tdp})
     endif ()

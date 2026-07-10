@@ -29,11 +29,12 @@
 #include <fstream>
 
 #include <bu.h>
+#include <icv.h>
+#include <imgstream/fbserv.h>
 #include "rt/view.h"
 #include "view_test_util.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
+#include <ged/draw_obol.h>
 
 #define ADIFF_THRES 0.99
 
@@ -95,48 +96,11 @@ main(int ac, char *av[]) {
     bu_vls_sprintf(&fname, "%s/moss.g", av[1]);
     gedp = ged_open("db", bu_vls_cstr(&fname), 1);
 
-    bu_setenv("DM_SWRAST", "1", 1);
-
-    /* To generate images that will allow us to check if the drawing
-     * is proceeding as expected, use the headless Obol display host. */
+    /* Image baselines use the GED-owned headless Obol render endpoint. */
     const char *s_av[15] = {NULL};
-    s_av[0] = "dm";
-    s_av[1] = "attach";
-    s_av[2] = "obol";
-    s_av[3] = "SW";
-    s_av[4] = NULL;
-    int dm_attach_ret = ged_exec_dm(gedp, 4, s_av);
     void *v = ged_view_active_ctx(gedp);
-    if (dm_attach_ret != BRLCAD_OK || !v || !ged_view_context_display_manager_get(v)) {
-	bu_exit(EXIT_FAILURE, "failed to attach Obol display manager: %s\n",
-		bu_vls_strlen(gedp->ged_result_str) ? bu_vls_cstr(gedp->ged_result_str) : "no display manager available");
-    }
-
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    dm_set_width(dmp, 512);
-    dm_set_height(dmp, 512);
-
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-
-    // See QtSW.cpp...
-    fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
-    dm_set_win_bounds(dmp, windowbounds);
-
-    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
-    ged_view_context_display_manager_set(v, dmp);
-    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
-    bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
-
-    // The default (fast) wireframe has some differences from
-    // the slower full OpenGL draw path - disable it for the
-    // purposes of these tests.
-    s_av[0] = "dm";
-    s_av[1] = "set";
-    s_av[2] = "fast_wireframe";
-    s_av[3] = "0";
-    s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
+    if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to initialize headless Obol render endpoint\n");
 
     /***** Sanity - basic wireframe draw *****/
     bu_log("Testing basic db wireframe draw...\n");
@@ -216,11 +180,6 @@ main(int ac, char *av[]) {
     bu_log("Testing turning on frames per second reporting...\n");
 
     // So we don't get random values here, override the timing variable values
-    dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    if (!dmp) {
-	bu_exit(EXIT_FAILURE, "no active display manager available for fps faceplate test\n");
-    }
-    dmp->start_time = 0;
     bv_frametime_set(DRAW_TEST_BV(v), 1000000000);
 
     s_av[0] = "view";
@@ -302,10 +261,26 @@ main(int ac, char *av[]) {
     bu_log("Testing framebuffer...\n");
     struct bu_vls fb_img = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fb_img, "%s/moss.png", av[1]);
-    s_av[0] = "png2fb";
-    s_av[1] = bu_vls_cstr(&fb_img);
-    s_av[2] = NULL;
-    ged_exec_png2fb(gedp, 2, s_av);
+    if (ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, v) !=
+	BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to initialize Obol framebuffer backend\n");
+    icv_image_t *fb_source = icv_read(bu_vls_cstr(&fb_img),
+	BU_MIME_IMAGE_PNG, 0, 0);
+    if (!fb_source)
+	bu_exit(EXIT_FAILURE, "failed to read framebuffer baseline image\n");
+    /* Match png-fb's default conversion of untagged input into a linear
+     * framebuffer. */
+    fb_source->gamma_corr = 0.5f;
+    unsigned char *fb_pixels = icv_data2uchar(fb_source);
+    if (!fb_pixels || !gedp->ged_fbs ||
+	fbserv_backend_writerect(gedp->ged_fbs, 0, 0,
+	    (int)fb_source->width, (int)fb_source->height, fb_pixels) !=
+	    (int)(fb_source->width * fb_source->height) ||
+	fbserv_backend_flush(gedp->ged_fbs) != 0)
+	bu_exit(EXIT_FAILURE, "failed to publish framebuffer baseline image\n");
+    bu_free(fb_pixels, "faceplate framebuffer pixels");
+    icv_destroy(fb_source);
+    bu_vls_free(&fb_img);
 
     s_av[0] = "view";
     s_av[1] = "faceplate";
@@ -313,7 +288,8 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail,
+	ADIFF_THRES, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -323,11 +299,13 @@ main(int ac, char *av[]) {
     // Re-enable and make sure clear works
     s_av[3] = "1";
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail,
+	ADIFF_THRES, "faceplate_clear", "fp");
 
-    s_av[0] = "fbclear";
-    s_av[1] = NULL;
-    ged_exec_fbclear(gedp, 1, s_av);
+    const unsigned char black[3] = {0, 0, 0};
+    if (fbserv_backend_clear(gedp->ged_fbs, black) != 0 ||
+	fbserv_backend_flush(gedp->ged_fbs) != 0)
+	bu_exit(EXIT_FAILURE, "failed to clear Obol framebuffer backend\n");
     ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
 
     s_av[0] = "view";
@@ -340,9 +318,11 @@ main(int ac, char *av[]) {
     bu_log("Done.\n");
 
 
+    ged_draw_obol_framebuffer_release(gedp);
     ged_close(gedp);
 
-    bu_dirclear(lcache);
+    if (!keep_images)
+	bu_dirclear(lcache);
 
     return ret;
 }
