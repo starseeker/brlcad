@@ -23,42 +23,10 @@
 
 #include "common.h"
 
-#include <stddef.h>
 #include <string.h>
 
-#include "bsg/tcl_data.h"
 #include "ged/view.h"
 #include "./tclcad_private.h"
-
-#define TCLCAD_LAYOUT_ASSERT(_expr, _name) \
-    typedef char tclcad_layout_assert_ ## _name[(_expr) ? 1 : -1]
-#define TCLCAD_LAYOUT_SIZE(_tcl_type, _bsg_type, _name) \
-    TCLCAD_LAYOUT_ASSERT(sizeof(_tcl_type) == sizeof(_bsg_type), _name)
-#define TCLCAD_LAYOUT_OFFSET(_tcl_type, _bsg_type, _member, _name) \
-    TCLCAD_LAYOUT_ASSERT(offsetof(_tcl_type, _member) == offsetof(_bsg_type, _member), _name)
-
-TCLCAD_LAYOUT_SIZE(struct tclcad_data_axes_state, struct bsg_data_axes_state, axes_size);
-TCLCAD_LAYOUT_SIZE(struct tclcad_data_arrow_state, struct bsg_data_arrow_state, arrow_size);
-TCLCAD_LAYOUT_SIZE(tclcad_label_state, struct bsg_data_label_state, label_size);
-TCLCAD_LAYOUT_SIZE(struct tclcad_data_line_state, struct bsg_data_line_state, line_size);
-TCLCAD_LAYOUT_SIZE(tclcad_polygon_state, bsg_data_polygon_state, polygon_size);
-TCLCAD_LAYOUT_SIZE(struct bv_other_state, struct bsg_other_state, other_size);
-TCLCAD_LAYOUT_SIZE(tclcad_view_state, struct bsg_data_tclcad, view_state_size);
-
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_polygon_mode, view_polygon_mode);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_hide, view_hide);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_data_vZ, view_data_vz);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_data_arrows, view_data_arrows);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_data_axes, view_data_axes);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_data_labels, view_data_labels);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_data_lines, view_data_lines);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_data_polygons, view_data_polygons);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_sdata_arrows, view_sdata_arrows);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_sdata_axes, view_sdata_axes);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_sdata_labels, view_sdata_labels);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_sdata_lines, view_sdata_lines);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_sdata_polygons, view_sdata_polygons);
-TCLCAD_LAYOUT_OFFSET(tclcad_view_state, struct bsg_data_tclcad, gv_prim_labels, view_prim_labels);
 
 #define TCLCAD_DEFAULT_FONT_SIZE 20
 

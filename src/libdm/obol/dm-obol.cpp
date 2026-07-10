@@ -736,10 +736,7 @@ struct dm_impl dm_obol_impl = {
     FB_NULL,
     0,				/* interpreter */
     NULL,			/* drawing context */
-    NULL,			/* app data */
-    NULL,			/* backend ops */
-    NULL,			/* backend resources */
-    0				/* backend frame generation */
+    NULL			/* app data */
 };
 
 struct dm dm_obol = { DM_MAGIC, &dm_obol_impl, 0 };

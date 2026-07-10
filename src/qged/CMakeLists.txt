@@ -54,6 +54,8 @@ if(BRLCAD_ENABLE_QT)
       qged
       libqtcad
       libged
+      libimgstream
+      libpkg
       librt
       libbu
       Qt6::Widgets
@@ -66,6 +68,8 @@ if(BRLCAD_ENABLE_QT)
       qged
       libqtcad
       libged
+      libimgstream
+      libpkg
       librt
       libbu
       Qt5::Widgets
@@ -87,7 +91,8 @@ if(BRLCAD_ENABLE_QT)
       test_qged_obol_fbserv
       libqtcad
       libged
-      libdm
+      libimgstream
+      libpkg
       librt
       libbu
       Qt6::Widgets
@@ -100,7 +105,8 @@ if(BRLCAD_ENABLE_QT)
       test_qged_obol_fbserv
       libqtcad
       libged
-      libdm
+      libimgstream
+      libpkg
       librt
       libbu
       Qt5::Widgets

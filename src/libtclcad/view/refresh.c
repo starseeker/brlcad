@@ -27,7 +27,7 @@
 #include "common.h"
 #include "bv.h"
 #include "bu/units.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"

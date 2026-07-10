@@ -62,7 +62,6 @@ set(
   ddisp.adoc
   decimate.adoc
   dfft.adoc
-  dm_ogl_probe.adoc
   dmod.adoc
   double-asc.adoc
   dpeak.adoc

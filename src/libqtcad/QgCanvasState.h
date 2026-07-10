@@ -50,7 +50,6 @@
 #include "brlobol/view_controller.h"
 #include "bv.h"
 #include "QgObolContextManager.h"
-#include "QgLegacyViewDm.h"
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgLegacyView.h"
 
@@ -83,20 +82,12 @@
  *            Passing nullptr to set_view() reverts v back to local_v.  The
  *            canvas never frees v — it only frees local_v.
  *
- * dmp      – Transitional retained-backend slot.  qtcad canvases no longer
- *            open qtgl/swrast DMs; this remains null while dependent code is
- *            being converted away from backend-specific framebuffer plumbing.
- *
- * ifp      – Optional caller-supplied framebuffer bridge.  qtcad no longer
- *            allocates fallback framebuffer state for ordinary canvases.
  */
 struct QgCanvasState {
-    /* ---- view / dm / fb plumbing ---- */
+    /* ---- view plumbing ---- */
     qg_legacy_view *v = nullptr;           /* active view: normally == local_v,
 	                                       set_view() can redirect to an
 	                                       external caller-owned legacy view     */
-    qg_legacy_dm   *dmp = nullptr;        /* transitional retained backend */
-    qg_legacy_fb   *ifp = nullptr;        /* optional framebuffer bridge */
     qg_legacy_view *local_v = nullptr;     /* widget-owned view (canvas owns)   */
     BRLObolViewController *obol = nullptr; /* Obol-canonical view controller */
 
@@ -111,7 +102,6 @@ struct QgCanvasState {
 
     /* ---- widget-level tracking ---- */
     int    current = 1;     /* 1 = this view is active */
-    bool   m_init = false;  /* retained-DM initialization; remains false */
     int    x_prev = -INT_MAX;
     int    y_prev = -INT_MAX;
     double x_press_pos = -INT_MAX;

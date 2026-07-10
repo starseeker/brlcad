@@ -136,12 +136,12 @@ function(_brlobol_guard_check_dependency_inventory)
   set(_expected_deps_libbv [[libbg;libbn;libbu]])
   set(_expected_deps_libnmg [[libbg;libbn;libbu]])
   set(_expected_deps_libbrep [[libbg;libbu]])
-  set(_expected_deps_librt [[libbrep;libnmg;libbsg;libbv;libbg;libbn;libbu]])
+  set(_expected_deps_librt [[libbrep;libnmg;libbv;libbg;libbn;libbu]])
   set(_expected_deps_libanalyze [[librt;libbg;libbn;libbu]])
   set(_expected_deps_libimgstream [[libicv;libbn;libpkg;libbu]])
-  set(_expected_deps_libdm [[libbsg;librt;libicv;libbn;libpkg;libbu]])
-  set(_expected_deps_libged [[libbrlobol;libicv;libanalyze;libwdb;liboptical;libdm;libbsg;libbu]])
-  set(_expected_deps_libqtcad [[libbrlobol;libged;libdm;libbg;libbn;libbu]])
+  set(_expected_deps_libdm [[librt;libicv;libbn;libpkg;libbu]])
+  set(_expected_deps_libged [[libbrlobol;libimgstream;libicv;libanalyze;libwdb;liboptical;libbu]])
+  set(_expected_deps_libqtcad [[libbrlobol;libged;libbg;libbn;libbu]])
   set(_expected_deps_libtclcad [[libged;libdm;libbn;libbu]])
   set(_expected_deps_qged [[libqtcad]])
   set(_expected_deps_mged [[libtclcad]])
@@ -189,11 +189,55 @@ function(_brlobol_guard_check_dependency_inventory)
     _brlobol_guard_fail(
       "src/libdm/CMakeLists.txt no longer links libimgstream privately for display-host framebuffer compatibility")
   endif()
-  string(FIND "${_inventory}" [[/dev/qtgl` and `/dev/swrast` can opt into imgstream display-host presentation]] _libdm_display_host_inventory_idx)
-  if(_libdm_display_host_inventory_idx EQUAL -1)
+  string(FIND "${_inventory}" [[libdm retains only the narrow `struct fb` fbserv backend adapter]] _libdm_adapter_inventory_idx)
+  if(_libdm_adapter_inventory_idx EQUAL -1)
     _brlobol_guard_fail(
-      "doc/notes/obol_legacy_dependency_inventory.txt no longer documents libdm imgstream display-host compatibility")
+      "doc/notes/obol_legacy_dependency_inventory.txt no longer documents the narrow libdm fbserv compatibility adapter")
   endif()
+endfunction()
+
+function(_brlobol_guard_check_libbsg_retired)
+  foreach(_rel include/bsg/CMakeLists.txt include/bsg.h src/libbsg/CMakeLists.txt)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_guard_fail("${_rel} reintroduced the retired libbsg API or implementation")
+    endif()
+  endforeach()
+
+  _brlobol_guard_collect(_files include src misc/CMake)
+  foreach(_file IN LISTS _files)
+    file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+    if("${_rel}" STREQUAL "misc/CMake/brlobol_pivot_guard.cmake" OR
+       NOT "${_rel}" MATCHES "${_brlobol_guard_extensions}")
+      continue()
+    endif()
+    file(READ "${_file}" _contents)
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[#[ \t]*include[ \t]*[<"]bsg]]
+      [[(^|[^A-Za-z0-9_])libbsg([^A-Za-z0-9_]|$)]])
+  endforeach()
+endfunction()
+
+function(_brlobol_guard_check_legacy_graphical_dm_retired)
+  foreach(_rel
+      src/libdm/dm-gl.c
+      src/libdm/dm-gl.h
+      src/libdm/X/CMakeLists.txt
+      src/libdm/glx/CMakeLists.txt
+      src/libdm/qtgl/CMakeLists.txt
+      src/libdm/swrast/CMakeLists.txt
+      src/libdm/tkswrast/CMakeLists.txt
+      src/libdm/wgl/CMakeLists.txt
+      src/libdm/fb_imgstream.c
+      src/libdm/tests/fb_imgstream.cpp)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_rel}")
+      _brlobol_guard_fail("${_rel} reintroduced a retired graphical display-manager path")
+    endif()
+  endforeach()
+
+  _brlobol_guard_read_rel(_libdm_cmake "src/libdm/CMakeLists.txt")
+  _brlobol_guard_forbid_regexes("src/libdm/CMakeLists.txt" "${_libdm_cmake}"
+    [[add_subdirectory\((X|glx|qtgl|swrast|tkswrast|wgl)\)]]
+    [[(^|[^A-Za-z0-9_])libdmgl([^A-Za-z0-9_]|$)]])
 endfunction()
 
 function(_brlobol_guard_check_retired_tests)
@@ -238,20 +282,12 @@ function(_brlobol_guard_check_public_headers)
 endfunction()
 
 function(_brlobol_guard_check_legacy_include_allowlist)
-  set(_allowed
-    src/libged/ged_view_state.cpp
-    src/librt/view_legacy_bsg.c)
-
   _brlobol_guard_collect(_files
     include
     src/libged
     src/librt)
   foreach(_file IN LISTS _files)
     file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
-    list(FIND _allowed "${_rel}" _allowed_idx)
-    if(NOT _allowed_idx EQUAL -1)
-      continue()
-    endif()
     if(NOT "${_rel}" MATCHES "${_brlobol_guard_extensions}")
       continue()
     endif()
@@ -283,7 +319,8 @@ function(_brlobol_guard_check_obol_controller_quarantine)
   set(_allowed
     include/dm/obol.h
     src/libdm/dm-generic.c
-    src/libged/draw_obol.cpp)
+    src/libged/dm/dm.c
+    src/mged/attach.c)
 
   _brlobol_guard_collect(_files
     include
@@ -315,12 +352,6 @@ function(_brlobol_guard_check_obol_controller_quarantine)
 endfunction()
 
 function(_brlobol_guard_check_qtcad_legacy_dm_open_quarantine)
-  set(_allowed
-    src/libqtcad/QgLegacyViewDm.h
-    src/libqtcad/QgLegacyView.cpp
-    src/libdm/qtgl/fb-qtgl.cpp
-    src/libdm/swrast/fb-swrast.cpp)
-
   _brlobol_guard_collect(_files
     include/qtcad
     src/libdm
@@ -328,10 +359,6 @@ function(_brlobol_guard_check_qtcad_legacy_dm_open_quarantine)
     src/qged)
   foreach(_file IN LISTS _files)
     file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
-    list(FIND _allowed "${_rel}" _allowed_idx)
-    if(NOT _allowed_idx EQUAL -1)
-      continue()
-    endif()
     if(NOT "${_rel}" MATCHES "${_brlobol_guard_extensions}")
       continue()
     endif()
@@ -504,8 +531,9 @@ function(_brlobol_guard_check_fbserv_backend_contract)
   _brlobol_guard_read_rel(_imgstream_auth "src/libimgstream/fbserv_auth.c")
   _brlobol_guard_read_rel(_imgstream_framebuffer "src/libimgstream/fbserv_framebuffer.c")
   _brlobol_guard_read_rel(_imgstream_pkg "src/libimgstream/fbserv_pkg.c")
+  _brlobol_guard_read_rel(_imgstream_server "src/libimgstream/fbserv_server.c")
   _brlobol_guard_read_rel(_imgstream_state "src/libimgstream/fbserv_state.c")
-  _brlobol_guard_read_rel(_libdm_fbserv_c "src/libdm/fbserv.c")
+  _brlobol_guard_read_rel(_libdm_cmake "src/libdm/CMakeLists.txt")
   _brlobol_guard_read_rel(_dm_h "include/dm.h")
   _brlobol_guard_read_rel(_dm_fbserv "include/dm/fbserv.h")
   _brlobol_guard_read_rel(_protocol_note
@@ -528,22 +556,56 @@ function(_brlobol_guard_check_fbserv_backend_contract)
       "include/imgstream/fbserv.h no longer owns the transitional fbserv object/transport type contract")
   endif()
   string(FIND "${_imgstream_state}" [[fbserv_obj_init]] _state_impl_idx)
-  string(FIND "${_libdm_fbserv_c}" [[fbserv_obj_init]] _libdm_state_wrapper_idx)
-  if(_state_impl_idx EQUAL -1 OR _libdm_state_wrapper_idx EQUAL -1)
+  string(FIND "${_imgstream_server}" [[fbs_init]] _server_state_wrapper_idx)
+  if(_state_impl_idx EQUAL -1 OR _server_state_wrapper_idx EQUAL -1)
     _brlobol_guard_fail(
-      "libimgstream no longer owns fbserv state helper implementations with libdm fbs_* compatibility wrappers")
+      "libimgstream no longer owns fbserv state helpers and complete fbs_* lifecycle wiring")
   endif()
   string(FIND "${_imgstream_pkg}" [[fbserv_pkg_switch_init]] _pkg_switch_impl_idx)
-  string(FIND "${_libdm_fbserv_c}" [[fbserv_pkg_switch_init]] _libdm_pkg_switch_wrapper_idx)
-  if(_pkg_switch_impl_idx EQUAL -1 OR _libdm_pkg_switch_wrapper_idx EQUAL -1)
+  string(FIND "${_imgstream_server}" [[fbserv_pkg_switch_init]] _server_pkg_switch_wrapper_idx)
+  if(_pkg_switch_impl_idx EQUAL -1 OR _server_pkg_switch_wrapper_idx EQUAL -1)
     _brlobol_guard_fail(
-      "libimgstream no longer owns the fbserv PKG message switch with libdm fbs_* compatibility wiring")
+      "libimgstream no longer owns the fbserv PKG message switch and fbs_* wiring")
   endif()
   string(FIND "${_imgstream_framebuffer}" [[fbserv_backend_info]] _backend_dispatch_idx)
-  string(FIND "${_libdm_fbserv_c}" [[fbserv_backend_info]] _libdm_backend_dispatch_idx)
-  if(_backend_dispatch_idx EQUAL -1 OR _libdm_backend_dispatch_idx EQUAL -1)
+  string(FIND "${_imgstream_server}" [[fbserv_backend_info]] _server_backend_dispatch_idx)
+  if(_backend_dispatch_idx EQUAL -1 OR _server_backend_dispatch_idx EQUAL -1)
     _brlobol_guard_fail(
-      "libimgstream no longer owns fbserv backend-operation dispatch with libdm legacy fallback wiring")
+      "libimgstream no longer owns fbserv backend-operation dispatch and server wiring")
+  endif()
+  foreach(_entry
+      [[fbs_open(]]
+      [[fbs_close(]]
+      [[fbs_new_client(]]
+      [[fbs_open_ipc(]]
+      [[fbs_process_client_bytes(]]
+      [[fbs_drain_client(]])
+    string(FIND "${_imgstream_server}" "${_entry}" _server_lifecycle_idx)
+    if(_server_lifecycle_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"src/libimgstream/fbserv_server.c no longer owns required lifecycle entry ${_entry}")
+    endif()
+  endforeach()
+  if(EXISTS "${BRLCAD_SOURCE_DIR}/src/libdm/fbserv.c")
+    _brlobol_guard_fail(
+      "src/libdm/fbserv.c reintroduced libdm ownership of the framebuffer protocol server")
+  endif()
+  if(EXISTS "${BRLCAD_SOURCE_DIR}/src/fbserv/server.c")
+    _brlobol_guard_fail(
+      "src/fbserv/server.c reintroduced a duplicate standalone framebuffer protocol server")
+  endif()
+  _brlobol_guard_read_rel(_mged_fbserv "src/mged/fbserv.c")
+  foreach(_token [[pkg_process(]] [[pkg_switch]] [[MSG_FBOPEN]])
+    string(FIND "${_mged_fbserv}" "${_token}" _mged_protocol_idx)
+    if(NOT _mged_protocol_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"src/mged/fbserv.c reintroduced private framebuffer protocol processing (${_token})")
+    endif()
+  endforeach()
+  string(FIND "${_libdm_cmake}" "  fbserv.c" _libdm_fbserv_source_idx)
+  if(NOT _libdm_fbserv_source_idx EQUAL -1)
+    _brlobol_guard_fail(
+      "src/libdm/CMakeLists.txt reintroduced the framebuffer protocol server core")
   endif()
   string(FIND "${_imgstream_fbserv}" [[fbserv_generate_token]] _auth_decl_idx)
   string(FIND "${_imgstream_auth}" [[fbserv_verify_token]] _auth_impl_idx)
@@ -585,6 +647,38 @@ function(_brlobol_guard_check_fbserv_backend_contract)
   endif()
 endfunction()
 
+function(_brlobol_guard_check_tkobol_host_ownership)
+  _brlobol_guard_read_rel(_tclcad_cmake "src/libtclcad/CMakeLists.txt")
+  _brlobol_guard_read_rel(_tclcad_dm "src/libtclcad/dm.c")
+  _brlobol_guard_read_rel(_dm_plugins "src/libdm/dm_plugins.cpp")
+  foreach(_needle
+      [[tkobol/dm-tkobol.cpp]]
+      [[tkobol/vendor/togl/togl.c]])
+    string(FIND "${_tclcad_cmake}" "${_needle}" _host_source_idx)
+    if(_host_source_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"src/libtclcad/CMakeLists.txt no longer owns required Tk Obol host source ${_needle}")
+    endif()
+  endforeach()
+  foreach(_needle [[dm_register_backend]] [[BrlcadTkObolHost_Init]])
+    string(FIND "${_tclcad_dm}" "${_needle}" _host_init_idx)
+    if(_host_init_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"src/libtclcad/dm.c no longer registers the built-in Tk Obol host (${_needle})")
+    endif()
+  endforeach()
+  _brlobol_guard_forbid_regexes("src/libtclcad/CMakeLists.txt" "${_tclcad_cmake}"
+    [[add_subdirectory\(tkobol\)]]
+    [[dm_plugin_library\(dm-tkobol]])
+  _brlobol_guard_forbid_regexes("src/libdm/dm_plugins.cpp" "${_dm_plugins}"
+    [[DM_SWRAST]]
+    [[(^|[^A-Za-z0-9_])(ogl|wgl|swrast|qtgl|tkswrast)([^A-Za-z0-9_]|$)]])
+
+  _brlobol_guard_read_rel(_gsh_cmake "src/gtools/gsh/CMakeLists.txt")
+  _brlobol_guard_forbid_regexes("src/gtools/gsh/CMakeLists.txt" "${_gsh_cmake}"
+    [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
+endfunction()
+
 function(_brlobol_guard_collect_active_scan_files _outvar)
   if("${BRLOBOL_PIVOT_GUARD_MODE}" STREQUAL "strict")
     file(GLOB_RECURSE _files LIST_DIRECTORIES false
@@ -617,6 +711,8 @@ function(_brlobol_guard_collect_active_scan_files _outvar)
 endfunction()
 
 _brlobol_guard_check_dependency_inventory()
+_brlobol_guard_check_libbsg_retired()
+_brlobol_guard_check_legacy_graphical_dm_retired()
 _brlobol_guard_check_retired_tests()
 _brlobol_guard_check_public_headers()
 _brlobol_guard_check_legacy_include_allowlist()
@@ -630,6 +726,7 @@ _brlobol_guard_check_fbserv_transport_quarantine()
 _brlobol_guard_check_fbserv_transport_setup_helpers()
 _brlobol_guard_check_qged_fbserv_backend_access()
 _brlobol_guard_check_fbserv_backend_contract()
+_brlobol_guard_check_tkobol_host_ownership()
 
 _brlobol_guard_collect_active_scan_files(_brlobol_guard_scan_files)
 foreach(_file IN LISTS _brlobol_guard_scan_files)

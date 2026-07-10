@@ -62,7 +62,7 @@ __BEGIN_DECLS
 
 struct rt_piecestate; /* forward declaration for ft_piece_shot / ft_piece_hitsegs */
 
-/* Keep command encodings aligned with BG line-layer and legacy BSG streams. */
+/* Keep command encodings aligned with BG line-layer and vlist streams. */
 enum rt_primitive_line_command {
     RT_PRIMITIVE_LINE_MOVE = 0,
     RT_PRIMITIVE_LINE_DRAW = 1,

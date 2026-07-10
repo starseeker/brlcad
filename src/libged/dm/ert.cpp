@@ -42,8 +42,9 @@
 #include "bu/process.h"
 #include "bv.h"
 #include "raytrace.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
 #include "dm.h"
+#include "dm/fbserv_legacy.h"
 
 #include "../ged_private.h"
 
@@ -79,7 +80,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
     struct dm *dmp = NULL;
     struct fb *fbp = NULL;
     if (!have_fbserv_backend) {
-	if (ged_obol_fbserv_ensure_for_view(gedp, view_ctx) == BRLCAD_OK)
+	if (ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) == BRLCAD_OK)
 	    have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
     }
 
@@ -95,7 +96,7 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 	    bu_vls_printf(gedp->ged_result_str, "attached display manager has no embedded framebuffer\n");
 	    return BRLCAD_ERROR;
 	}
-	fbs_set_legacy_framebuffer(fbs, fbp);
+	dm_fbserv_set_framebuffer(fbs, fbp);
 	if (fbs_framebuffer_info(fbs, &fbinfo) != 0) {
 	    bu_vls_printf(gedp->ged_result_str, "could not query embedded framebuffer dimensions\n");
 	    return BRLCAD_ERROR;

@@ -37,15 +37,12 @@
 #include "linenoise.hpp"
 
 #include "brlcad_ident.h"
+#include "brlobol/init.h"
+#include "brlobol/scene_group.h"
+#include "brlobol/view_controller.h"
 #include "bv.h"
 #include "bu.h"
-
-#define USE_DM 1
-#ifdef USE_DM
-#  define DM_WITH_RT
-#  include "dm.h"
-#  include "dm/fbserv.h"
-#endif
+#include "imgstream/fbserv.h"
 
 #include "ged.h"
 #include "ged/draw.h"
@@ -159,7 +156,6 @@ class DisplayHash
 public:
     bool hash(struct ged *, bool, bool);
     void dirty(struct ged *, const DisplayHash &);
-    unsigned long long d = 0;
     unsigned long long v = 0;
     unsigned long long l = 0;
     unsigned long long g = 0;
@@ -169,7 +165,6 @@ public:
 bool
 DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 {
-    d = 0;
     v = 0;
     l = 0;
     g = 0;
@@ -178,12 +173,7 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
     if (!view_ctx)
 	return false;
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp)
-	return false;
-
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    d = dm_hash(dmp);
     v = bv_hash(view);
 
     if (qged_display_mode) {
@@ -215,25 +205,9 @@ DisplayHash::dirty(struct ged *gedp, const DisplayHash &o)
     if (!view_ctx)
 	return;
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp)
-	return;
-
-    if (d != o.d) {
-	dm_set_native_repaint_pending(dmp, 1);
-    }
-    if (v != o.v) {
-	dm_set_native_repaint_pending(dmp, 1);
-    }
-    if (l != o.l) {
-	dm_set_native_repaint_pending(dmp, 1);
-    }
-    if (g != o.g) {
-	dm_set_native_repaint_pending(dmp, 1);
-    }
-    if (r != o.r || r) {
-	dm_set_native_repaint_pending(dmp, 1);
-    }
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (v != o.v || l != o.l || g != o.g || r != o.r || r)
+	(void)bv_refresh_request(view, 1);
 }
 
 /* The overall state of the gsh application is encapsulated by a state class
@@ -268,6 +242,7 @@ public:
     DisplayHash prev_hash;
 
     struct ged *gedp;
+    BRLObolViewController *view_controller = NULL;
     std::string gfile;  // Mostly used to test the post_opendb callback
     bool qged_display_mode = false;  // Set if we're testing QGED style commands
 private:
@@ -294,6 +269,17 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
     if (!s->gedp->dbip)
 	return BRLCAD_OK;
     s->gfile = std::string(s->gedp->dbip->dbi_filename);
+
+    void *view_ctx = ged_view_active_ctx(s->gedp);
+    if (!view_ctx || !s->view_controller ||
+	    !ged_draw_obol_controller_attach_opaque(s->gedp,
+		s->view_controller, 0) ||
+	    !ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
+		view_ctx, s->view_controller, 0) ||
+	    ged_draw_obol_framebuffer_backend_ensure_for_view(s->gedp,
+		view_ctx) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
     return BRLCAD_OK;
 }
 
@@ -396,8 +382,10 @@ Gsh_ClearScreen(int UNUSED(ac), const char **UNUSED(av), void *UNUSED(gedp), voi
 
 GshState::GshState()
 {
+    brlobol_init(brlobol_headless_context_manager());
     BU_GET(gedp, struct ged);
     ged_init(gedp);
+    view_controller = new BRLObolViewController(new SoBRLSceneGroup);
 
     view_checkpoint();
 
@@ -424,23 +412,16 @@ GshState::GshState()
 
 GshState::~GshState()
 {
-#ifdef USE_DM
     if (gedp)
 	ged_draw_obol_framebuffer_release(gedp);
 
     if (gedp && gedp->ged_fbs && fbs_can_close(gedp->ged_fbs))
 	(void)fbs_close(gedp->ged_fbs);
 
-    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	void *view_ctx = (void *)BU_PTBL_GET(views, i);
-	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-	if (dmp) {
-	    ged_view_context_display_manager_set(view_ctx, NULL);
-	    dm_close(dmp);
-	}
-    }
-#endif
+    if (gedp && view_controller)
+	ged_draw_obol_controller_detach_opaque(gedp, view_controller);
+    delete view_controller;
+    view_controller = NULL;
 
     ged_close(gedp);
 }
@@ -530,9 +511,7 @@ GshState::disconnect(struct ged_subprocess *p, bu_process_io_t t)
 void
 GshState::view_checkpoint()
 {
-#ifdef USE_DM
     prev_hash.hash(gedp, false, qged_display_mode);
-#endif
 }
 
 void
@@ -597,7 +576,6 @@ GshState::listeners_cnt()
 void
 GshState::view_update()
 {
-#ifdef USE_DM
     std::lock_guard<std::mutex> update_guard(view_update_mutex);
 
     DisplayHash hashes;
@@ -610,29 +588,19 @@ GshState::view_update()
     if (!view_ctx)
 	return;
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp)
-	return;
-
-    if (dm_get_native_repaint_pending(dmp)) {
-	if (qged_display_mode) {
-	    unsigned char *dm_bg1;
-	    unsigned char *dm_bg2;
-	    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
-	    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
-	    dm_set_native_repaint_pending(dmp, 0);
-	    if (!ged_draw_obol_controller_opaque_for_view(view_ctx)) {
-		struct ged_draw_transaction txn =
-		    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-		txn.view = view_ctx;
-		ged_draw_apply_transaction(gedp, &txn, NULL);
-	    }
-	    (void)ged_draw_obol_framebuffer_present(gedp);
-	    dm_draw_end(dmp);
-	    bv_context_refresh_complete((struct bv_context *)view_ctx);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (qged_display_mode && bv_refresh_dirty_get(view)) {
+	if (!ged_draw_obol_controller_opaque_for_view(view_ctx)) {
+	    (void)ged_draw_obol_render_endpoint_ensure_for_view(gedp,
+		view_ctx, 1);
+	    struct ged_draw_transaction txn =
+		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+	    txn.view = view_ctx;
+	    (void)ged_draw_apply_transaction(gedp, &txn, NULL);
 	}
+	(void)ged_draw_obol_framebuffer_present(gedp);
+	bv_context_refresh_complete((struct bv_context *)view_ctx);
     }
-#endif
 }
 
 // The primary interaction thread managing the command line
@@ -858,9 +826,6 @@ main(int argc, const char **argv)
 		       bn_version(),
 		       rt_version(),
 		       ged_version());
-#ifdef USE_DM
-	bu_vls_printf(&msg, "%s", dm_version());
-#endif
 	bu_vls_printf(&msg, "\n");
 	std::cout << bu_vls_cstr(&msg);
 	bu_vls_free(&msg);
@@ -878,9 +843,6 @@ main(int argc, const char **argv)
 
     // If we're using the new command forms, use qged-style display refresh.
     gs->qged_display_mode = (new_cmds) ? true : false;
-    if (gs->qged_display_mode) {
-	bu_setenv("DM_SWRAST", "1", 1);
-    }
 
     // If we're non-interactive, just evaluate and exit without getting into
     // linenoise and threading.  First, see if we've got a viable .g file.

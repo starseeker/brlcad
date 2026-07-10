@@ -196,8 +196,8 @@ QTCAD_EXPORT int qg_obol_export_geometry_full_detail(QgView *display,
 
 /**
  * Export grouped Obol object records using GED-compatible query semantics.
- * This is the qtcad-facing bridge for replacing BSG export/backend-scene
- * record queries with Obol/libbrlobol-owned record data.
+ * This is the qtcad-facing bridge for querying Obol/libbrlobol-owned record
+ * data without exposing scene implementation details.
  */
 QTCAD_EXPORT int qg_obol_export_object_records(QgView *display,
 	const QgObolExportObjectQuery &query,

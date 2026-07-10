@@ -64,21 +64,21 @@ ged_draw_stale_reason_name(ged_draw_stale_reason reason)
 }
 
 void
-#ifdef USE_BSG_LOG
+#ifdef USE_GED_DRAW_LOG
 ged_draw_log(int level, const char *fmt, ...)
 #else
 ged_draw_log(int UNUSED(level), const char *UNUSED(fmt), ...)
 #endif
 {
-#ifdef USE_BSG_LOG
+#ifdef USE_GED_DRAW_LOG
     if (level < 0 || !fmt)
 	return;
 
-    const char *brsig = getenv("BSG_LOG");
-    if (!brsig)
+    const char *draw_log_level = getenv("GED_DRAW_LOG");
+    if (!draw_log_level)
 	return;
 
-    if (atoi(brsig) < level)
+    if (atoi(draw_log_level) < level)
 	return;
 
     va_list ap;

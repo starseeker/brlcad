@@ -12,7 +12,6 @@
 
 #include "brlobol.h"
 #include "bu/log.h"
-#include "dm.h"
 
 #if defined(__GNUC__)
 #  pragma GCC diagnostic push
@@ -205,55 +204,6 @@ test_qtcad_display_host_bridge(void)
 }
 
 static int
-test_qtcad_legacy_fb_open_display_host_bridge(void)
-{
-    if (dm_valid_type("qtgl", NULL) != 1) {
-	bu_log("SKIP: qtgl display manager plugin is unavailable\n");
-	return 0;
-    }
-
-    QgSW canvas;
-    canvas.resize(64, 48);
-
-    QgObolWindowHost host(&canvas);
-    brlobol_window_host_unregister_display_host();
-    CHECK(brlobol_window_host_register_display_host(&host) == 0,
-	"qtcad window host registers for legacy fb_open bridge");
-
-    struct fb *fbp = fb_open("/dev/qtgl", 9, 7);
-    CHECK(fbp != NULL, "legacy fb_open uses registered Obol display host");
-    CHECK(fb_get_dm(fbp) == NULL,
-	"legacy fb_open host bridge does not create nested libdm backend");
-    CHECK(host.getFramebufferCount() == 1,
-	"legacy fb_open attaches one Obol framebuffer");
-
-    unsigned char rgb[3] = {11, 22, 33};
-    CHECK(fb_writerect(fbp, 1, 1, 1, 1, rgb) == 1,
-	"legacy fb_open bridge accepts RGB rectangle writes");
-    unsigned char readback[3] = {0, 0, 0};
-    CHECK(fb_read(fbp, 1, 1, readback, 1) == 1 &&
-	    readback[0] == 11 && readback[1] == 22 && readback[2] == 33,
-	"legacy fb_open bridge reads from imgstream storage");
-    CHECK(fb_view(fbp, 4, 3, 2, 2) == 0,
-	"legacy fb_open bridge forwards view state");
-    CHECK(fb_cursor(fbp, 1, 5, 4) == 0,
-	"legacy fb_open bridge forwards cursor state");
-    CHECK(fb_flush(fbp) == 0,
-	"legacy fb_open bridge flushes Obol viewport image");
-    CHECK(fb_poll(fbp) == 1,
-	"legacy fb_open bridge drains qtcad Obol readback");
-    CHECK(!host.lastFrameImage().isNull(),
-	"legacy fb_open bridge records qtcad readback image");
-
-    CHECK(fb_close(fbp) == 0,
-	"legacy fb_open bridge closes cleanly");
-    CHECK(host.getFramebufferCount() == 0,
-	"legacy fb_open bridge detaches Obol framebuffer on close");
-    brlobol_window_host_unregister_display_host();
-    return 0;
-}
-
-static int
 test_qtcad_owned_display_host_bridge(void)
 {
     QgObolWindowHost host;
@@ -304,8 +254,6 @@ main(int argc, char **argv)
     if (test_qtcad_owned_window_host())
 	return 1;
     if (test_qtcad_display_host_bridge())
-	return 1;
-    if (test_qtcad_legacy_fb_open_display_host_bridge())
 	return 1;
     if (test_qtcad_owned_display_host_bridge())
 	return 1;

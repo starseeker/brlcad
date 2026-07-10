@@ -26,8 +26,7 @@
 #include "common.h"
 #include <string.h>
 
-#include "dm.h" // For labelvert - see if we really need the dm_set_native_repaint_pending call there...
-
+#include "bv.h"
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/view.h"
@@ -175,9 +174,8 @@ ged_labelvert_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     labelvert_data_free(&lvd);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (dmp)
-	dm_set_native_repaint_pending(dmp, 1);
+    (void)bv_context_refresh_request((struct bv_context *)view_ctx,
+	GED_VIEW_REFRESH_DRAW);
     return BRLCAD_OK;
 }
 

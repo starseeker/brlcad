@@ -98,17 +98,17 @@ main(int ac, char *av[]) {
     bu_setenv("DM_SWRAST", "1", 1);
 
     /* To generate images that will allow us to check if the drawing
-     * is proceeding as expected, we use the swrast off-screen dm. */
+     * is proceeding as expected, use the headless Obol display host. */
     const char *s_av[15] = {NULL};
     s_av[0] = "dm";
     s_av[1] = "attach";
-    s_av[2] = "swrast";
+    s_av[2] = "obol";
     s_av[3] = "SW";
     s_av[4] = NULL;
     int dm_attach_ret = ged_exec_dm(gedp, 4, s_av);
     void *v = ged_view_active_ctx(gedp);
     if (dm_attach_ret != BRLCAD_OK || !v || !ged_view_context_display_manager_get(v)) {
-	bu_exit(EXIT_FAILURE, "failed to attach swrast display manager: %s\n",
+	bu_exit(EXIT_FAILURE, "failed to attach Obol display manager: %s\n",
 		bu_vls_strlen(gedp->ged_result_str) ? bu_vls_cstr(gedp->ged_result_str) : "no display manager available");
     }
 

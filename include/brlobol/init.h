@@ -30,4 +30,7 @@
  */
 BRLOBOL_EXPORT void brlobol_init(SoDB::ContextManager *contextManager);
 
+/** Return libbrlobol's process-lifetime OSMesa context manager. */
+BRLOBOL_EXPORT SoDB::ContextManager *brlobol_headless_context_manager(void);
+
 #endif /* BRLOBOL_INIT_H */

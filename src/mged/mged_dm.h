@@ -98,16 +98,6 @@ struct view_ring {
 #	define MAX_CLIENTS 32
 #endif
 
-struct client {
-    int			c_fd;
-    Tcl_Channel         c_chan;
-    Tcl_FileProc        *c_handler;
-    struct pkg_conn	*c_pkg;
-    int			c_auth_ok;         /**< @brief !0 if client sent a valid MSG_FBAUTH */
-    int			c_pending_drop;    /**< @brief !0 = drop after pkg_process() returns */
-};
-
-
 /* mged command variables for affecting the user environment */
 struct _mged_variables {
     int		mv_rc;
@@ -314,11 +304,7 @@ struct _menu_state {
 struct mged_dm {
     struct dm		*dm_dmp;
     struct fb		*dm_fbp;
-    int			dm_netfd;			/* socket used to listen for connections */
-    Tcl_Channel		dm_netchan;
-    struct client	dm_clients[MAX_CLIENTS];
-    char		dm_session_token[65];		/* fbserv auth token (64 hex + NUL); empty = no auth */
-    int			dm_require_auth;		/* !0 = reject unauthenticated fb clients */
+    struct fbserv_obj	dm_fbserv;
     int			repaint_pending;		/* true if this display needs another paint */
     unsigned int	repaint_reasons;		/* audit-only mged_repaint_reason flags */
     int			dm_mapped;
@@ -483,7 +469,6 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
 #define MGED_DM_NULL ((struct mged_dm *)NULL)
 #define DMP s->mged_curr_dm->dm_dmp
 #define fbp s->mged_curr_dm->dm_fbp
-#define clients s->mged_curr_dm->dm_clients
 #define mapped s->mged_curr_dm->dm_mapped
 #define am_mode s->mged_curr_dm->dm_am_mode
 #define perspective_angle s->mged_curr_dm->dm_perspective_angle

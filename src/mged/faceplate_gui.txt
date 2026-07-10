@@ -22,29 +22,8 @@ in-display menu/control layer.
 Modern faceplate/HUD state
 --------------------------
 
-Relevant files:
-
-* include/bsg/faceplate.h
-* include/bsg/hud.h
-* src/libged/view/faceplate/faceplate.c
-* src/libged/view/faceplate/faceplate_grid.c
-* src/libged/view/faceplate/faceplate_axes.c
-* src/libged/view/faceplate/interactive_rect.c
-* src/libdm/view.c
-* include/dm/view.h
-* src/libqtcad/QgCanvasState.h
-* src/libqtcad/tests/test_qtcad_obol_faceplate_sync.cpp
-
-include/bsg/faceplate.h defines canonical state for faceplate-style overlays:
-
-* ADC state;
-* grid state;
-* interactive rectangle state;
-* view parameter text state;
-* generic draw/color/font state used by other overlays.
-
-include/bsg/hud.h defines a HUD root associated with bsg_view.  The HUD root has
-one child per faceplate feature:
+Passive faceplate settings live in libbv view state.  libbrlobol realizes one
+retained feature per visible faceplate element:
 
 * center dot;
 * model axes;
@@ -56,19 +35,18 @@ one child per faceplate feature:
 * view parameters;
 * framebuffer.
 
-Each HUD child carries metadata such as feature type, coordinate space, overlay
-role, overlay class, lifecycle, and sort order.  bsg_hud_sync(struct bsg_view
-*v) synchronizes the HUD from faceplate settings, and libdm consumes the render
-items in its HUD pass.
+Each Obol feature carries coordinate-space, overlay-role, lifecycle, and sort
+metadata.  The application host synchronizes view state and renders the Obol
+scene; libdm is not a second HUD renderer.
 
 libged exposes command access through "view faceplate ..." subcommands.  The
 TclCAD wrapper in src/libtclcad/view/faceplate.c is now mostly a compatibility
 surface for Tcl-facing view state.
 
-libqtcad already synchronizes several faceplate features into Obol overlay nodes
-through qgcanvas_sync_obol_faceplate.  Current Qt/Obol coverage includes at
-least grid, model axes, view axes, and ADC, with tests verifying node
-creation/removal for those features.
+libqtcad synchronizes faceplate features through
+qgcanvas_sync_obol_faceplate.  Current Obol coverage includes grid, model axes,
+view axes, ADC, labels, framebuffer presentation, and command overlays, with
+tests verifying node creation and removal.
 
 
 Current MGED Faceplate GUI / orig_gui model

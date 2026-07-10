@@ -1119,7 +1119,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(2, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(3, -1, gedp, lcache, false, soft_fail);
 
-    //bu_setenv("BSG_LOG", "1", 1);
+    //bu_setenv("GED_DRAW_LOG", "1", 1);
 
     ged_close(gedp);
 

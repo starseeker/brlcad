@@ -2,7 +2,7 @@
 #
 # Tests the code added in the "Expand libpkg ipc usage" PR:
 #
-#   Phase 1: fbs_open_ipc() + fbs_ipc_child_addr_env()  (libdm/fbserv.c)
+#   Phase 1: fbs_open_ipc() + fbs_ipc_child_addr_env()  (libimgstream)
 #   Phase 2: BU_IPC_ADDR env-var detection               (libdm/if_remote.c)
 #   Phase 4: Tcl_CreateFileHandler callback mechanism    (libtclcad/fbserv.c)
 #   Phase 5: Qt QSocketNotifier IPC delivery             (src/qged/fbserv.cpp)
@@ -15,9 +15,9 @@
 # -------------------------------------------------------------------
 # regress_ipc: headless tests (Phases 1, 2, 4, 7)
 # -------------------------------------------------------------------
-if(TARGET libbu AND TARGET libdm AND TARGET libpkg AND TARGET libtclcad AND TARGET fbserv)
+if(TARGET libbu AND TARGET libimgstream AND TARGET libpkg AND TARGET libtclcad AND TARGET fbserv)
 
-  set(regress_ipc_libs libbu libdm libpkg libtclcad ${TCL_LIBRARY})
+  set(regress_ipc_libs libbu libimgstream libpkg libtclcad ${TCL_LIBRARY})
 
   brlcad_addexec(regress_ipc regress_ipc.cpp "${regress_ipc_libs}" TEST)
   if(TARGET regress_ipc)
@@ -32,13 +32,13 @@ if(TARGET libbu AND TARGET libdm AND TARGET libpkg AND TARGET libtclcad AND TARG
       ENVIRONMENT "FBSERV_BIN=$<TARGET_FILE:fbserv>;LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
       TIMEOUT 120
     )
-    brlcad_regression_test(regress-ipc "regress_ipc;fbserv;libbu;libdm;libpkg;libtclcad" TEST_DEFINED)
+    brlcad_regression_test(regress-ipc "regress_ipc;fbserv;libbu;libimgstream;libpkg;libtclcad" TEST_DEFINED)
     distclean(${CMAKE_CURRENT_BINARY_DIR}/regress-ipc.log)
     distclean(${CMAKE_CURRENT_BINARY_DIR}/regress_ipc_fbserv.log)
 
   endif(TARGET regress_ipc)
 
-endif(TARGET libbu AND TARGET libdm AND TARGET libpkg AND TARGET libtclcad AND TARGET fbserv)
+endif(TARGET libbu AND TARGET libimgstream AND TARGET libpkg AND TARGET libtclcad AND TARGET fbserv)
 
 # -------------------------------------------------------------------
 # test_qt_ipc: Qt QSocketNotifier delivery tests (Phase 5)
@@ -52,9 +52,9 @@ endif(TARGET libbu AND TARGET libdm AND TARGET libpkg AND TARGET libtclcad AND T
 # only after that same find_package call has been issued here, so
 # we re-invoke find_package_qt() if BRLCAD_ENABLE_QT is ON.
 # -------------------------------------------------------------------
-if(BRLCAD_ENABLE_QT AND TARGET libbu AND TARGET libdm AND TARGET libpkg)
+if(BRLCAD_ENABLE_QT AND TARGET libbu AND TARGET libimgstream AND TARGET libpkg)
   find_package_qt()
-  set(qt_ipc_libs libbu libdm libpkg)
+  set(qt_ipc_libs libbu libimgstream libpkg)
   if(Qt6Widgets_FOUND)
     list(APPEND qt_ipc_libs Qt6::Widgets Qt6::Core)
     set(HAVE_QT_IPC_DEPS TRUE)
@@ -77,7 +77,7 @@ if(HAVE_QT_IPC_DEPS)
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib"
       TIMEOUT 60
     )
-    brlcad_regression_test(regress-qt-ipc "test_qt_ipc;libbu;libdm;libpkg" STAND_ALONE TEST_DEFINED)
+    brlcad_regression_test(regress-qt-ipc "test_qt_ipc;libbu;libimgstream;libpkg" STAND_ALONE TEST_DEFINED)
     distclean(${CMAKE_CURRENT_BINARY_DIR}/regress-qt-ipc.log)
 
   endif(TARGET test_qt_ipc)

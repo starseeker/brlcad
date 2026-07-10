@@ -19,8 +19,7 @@
 
 typedef enum ged_draw_scene_backend {
     GED_DRAW_SCENE_BACKEND_NONE = 0,
-    GED_DRAW_SCENE_BACKEND_LEGACY = 1,
-    GED_DRAW_SCENE_BACKEND_OBOL = 2
+    GED_DRAW_SCENE_BACKEND_OBOL = 1
 } ged_draw_scene_backend;
 
 typedef struct ged_draw_scene_handle {

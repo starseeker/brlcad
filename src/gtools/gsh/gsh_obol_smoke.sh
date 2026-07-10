@@ -14,7 +14,7 @@ LOG="${WORKDIR}/gsh_obol_smoke.log"
 
 rm -f "$OUT" "$LOG"
 
-printf 'dm attach obol\ndraw all.g\nautoview\nscreengrab %s\nquit\n' "$OUT" \
+printf 'draw all.g\nautoview\nscreengrab %s\nquit\n' "$OUT" \
     | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
 
 if [ ! -s "$OUT" ]; then

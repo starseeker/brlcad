@@ -42,12 +42,12 @@
 #endif
 
 #include "vmath.h"
-#include "bsg/defines.h"
 #include "bu/env.h"
 #include "bu/ptbl.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
+#include "dm/obol.h"
 #include "tclcad.h"
 
 #include "./mged.h"
@@ -122,24 +122,21 @@ mged_dm_init(
     /* register application provided routines */
     cmd_hook = dm_commands;
 
-    /* In case the user wants swrast in headless mode, pass the view in the
-     * context slot.  Other dms will either not use the ctx argument or will
-     * catch the BSG_VIEW_MAGIC value and not initialize (such as qtgl, which needs a
-     * context from a parent Qt widget and won't work in MGED.) */
+    /* Pass the view through the context slot for Obol host attachment. */
     void *ctx = view_state->vs_gvp;
     if ((DMP = dm_open(ctx, (void *)s->interp, dm_type, argc-1, argv)) == DM_NULL)
 	return TCL_ERROR;
     ged_view_context_display_manager_set(view_state->vs_gvp, (void *)DMP);
-    if (!ged_draw_obol_display_manager_attach_for_view(s->gedp,
-	    view_state->vs_gvp, (void *)DMP, 1, 0)) {
+    void *obol_controller = dm_obol_controller(DMP);
+    if (obol_controller &&
+	!ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
+	    view_state->vs_gvp, obol_controller, 1)) {
 	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
 	dm_close(DMP);
 	DMP = DM_NULL;
 	return TCL_ERROR;
     }
-    const struct dm_backend_ops *backend_ops = dm_get_backend_ops(DMP);
-    if (backend_ops && backend_ops->type_tag == BSG_BACKEND_GL &&
-	!ged_draw_obol_render_endpoint_ensure_for_view(s->gedp,
+    if (!ged_draw_obol_render_endpoint_ensure_for_view(s->gedp,
 	    view_state->vs_gvp, 1)) {
 	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
 	dm_close(DMP);
@@ -152,8 +149,7 @@ mged_dm_init(
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
 #ifdef HAVE_TK
-    if (tkwin != NULL && dm_graphical(DMP) &&
-	    !BU_STR_EQUAL(dm_get_dm_name(DMP), "swrast")) {
+    if (tkwin != NULL && dm_graphical(DMP)) {
 	Tk_DeleteGenericHandler(doEvent, (ClientData)s);
 	Tk_CreateGenericHandler(doEvent, (ClientData)s);
     }
@@ -751,7 +747,7 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
 
     mged_dm_repaint_request(target_dm, MGED_REPAINT_NATIVE_EVENT);
     mapped = 1;
-    s->mged_curr_dm->dm_netfd = -1;
+    (void)fbs_init(&s->mged_curr_dm->dm_fbserv);
     s->mged_curr_dm->dm_owner = 1;
     am_mode = AMM_IDLE;
     adc_auto = 1;

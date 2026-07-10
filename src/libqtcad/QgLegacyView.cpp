@@ -26,31 +26,11 @@
 
 #include "bv.h"
 #include "bu/malloc.h"
-#include "dm.h"
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/view.h"
 #include "QgLegacyViewContext.h"
-#include "QgLegacyViewDm.h"
 #include "qtcad/QgLegacyView.h"
-
-static struct dm *
-qg_legacy_dm_to_dm(qg_legacy_dm *dmp)
-{
-    return reinterpret_cast<struct dm *>(dmp);
-}
-
-static qg_legacy_dm *
-qg_legacy_dm_from_dm(struct dm *dmp)
-{
-    return reinterpret_cast<qg_legacy_dm *>(dmp);
-}
-
-static struct fb *
-qg_legacy_fb_to_fb(qg_legacy_fb *ifp)
-{
-    return reinterpret_cast<struct fb *>(ifp);
-}
 
 qg_legacy_view *
 qg_legacy_view_local_create(const char *name)
@@ -156,80 +136,6 @@ qg_legacy_view_ged_view_set_attach(struct ged *gedp, qg_legacy_view *view)
     if (!ged_view_context_view_set_attach(view_ctx, ged_view_set_ctx(gedp)))
 	return 0;
     return ged_view_context_host_attach(gedp, view_ctx);
-}
-
-qg_legacy_dm *
-qg_legacy_view_dm_open_qtgl(void *context)
-{
-    const char *acmd = "attach";
-    return qg_legacy_dm_from_dm(dm_open(context, nullptr, "qtgl", 1, &acmd));
-}
-
-qg_legacy_dm *
-qg_legacy_view_dm_open_swrast(qg_legacy_view *view, void *context)
-{
-    const char *acmd = "attach";
-    struct dm *dmp = dm_open(qg_legacy_view_to_context(view), nullptr,
-	    "swrast", 1, &acmd);
-    if (dmp)
-	dm_set_udata(dmp, context);
-    return qg_legacy_dm_from_dm(dmp);
-}
-
-int
-qg_legacy_view_dm_close(qg_legacy_dm *dmp)
-{
-    struct dm *dm = qg_legacy_dm_to_dm(dmp);
-    return dm ? dm_close(dm) : 0;
-}
-
-qg_legacy_fb *
-qg_legacy_view_framebuffer_handle_from_raw(void *ifp)
-{
-    return reinterpret_cast<qg_legacy_fb *>(ifp);
-}
-
-QgGL *
-qg_legacy_view_framebuffer_qtgl_canvas_get(qg_legacy_fb *ifp)
-{
-    struct fb *fb = qg_legacy_fb_to_fb(ifp);
-    struct dm *dm = fb ? fb_get_dm(fb) : nullptr;
-    return dm ? reinterpret_cast<QgGL *>(dm_get_ctx(dm)) : nullptr;
-}
-
-QgSW *
-qg_legacy_view_framebuffer_swrast_canvas_get(qg_legacy_fb *ifp)
-{
-    struct fb *fb = qg_legacy_fb_to_fb(ifp);
-    struct dm *dm = fb ? fb_get_dm(fb) : nullptr;
-    return dm ? reinterpret_cast<QgSW *>(dm_get_udata(dm)) : nullptr;
-}
-
-int
-qg_legacy_view_framebuffer_release(qg_legacy_fb *ifp, int initialized)
-{
-    struct fb *fb = qg_legacy_fb_to_fb(ifp);
-    if (!fb || fb_get_standalone(fb))
-	return 0;
-
-    if (initialized)
-	return fb_close_existing(fb);
-
-    fb_put(fb);
-    return 1;
-}
-
-int
-qg_legacy_view_framebuffer_standalone_get(qg_legacy_fb *ifp)
-{
-    struct fb *fb = qg_legacy_fb_to_fb(ifp);
-    return fb ? fb_get_standalone(fb) : 0;
-}
-
-const char *
-qg_legacy_view_dm_init_messages(void)
-{
-    return dm_init_msgs();
 }
 
 /*

@@ -33,12 +33,17 @@
 
 #include "bg/polygon_types.h"
 #include "bu/vls.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
 #include "ged/defines.h"
 #include "rt/view.h"
 #include "tclcad/defines.h"
 
 __BEGIN_DECLS
+
+#ifdef HAVE_TKOBOL_HOST
+struct dm;
+extern void *tclcad_tkobol_controller(struct dm *dmp);
+#endif
 
 struct tclcad_data_axes_state {
     int       draw;

@@ -19,7 +19,7 @@
 #include "brlobol/viewport_image.h"
 #include "bu/app.h"
 #include "bu/log.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
 #include "ged.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgView.h"
@@ -56,6 +56,22 @@ lit_pixel_count(const QImage &image)
 	for (int x = 0; x < rgba.width(); x++) {
 	    const unsigned char *p = line + x * 4;
 	    if (p[0] > 32 || p[1] > 32 || p[2] > 32)
+		count++;
+	}
+    }
+    return count;
+}
+
+static int
+orange_pixel_count(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int count = 0;
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    if (p[0] > 200 && p[1] > 32 && p[1] < 100 && p[2] < 64)
 		count++;
 	}
     }
@@ -160,9 +176,10 @@ test_qged_obol_fbserv_backend(void)
 	pixels[i + 1] = 64;
 	pixels[i + 2] = 32;
     }
-    GED_CHECK(fbs_framebuffer_writerect(fbs, 0, 0, info.width, info.height,
-		pixels.data()) == info.width * info.height,
-	      "qged Obol fbserv backend must accept a full-frame pixel write");
+    int firstBandHeight = info.height / 2;
+    GED_CHECK(fbs_framebuffer_writerect(fbs, 0, 0, info.width, firstBandHeight,
+		pixels.data()) == info.width * firstBandHeight,
+	      "qged Obol fbserv backend must accept a partial scan band");
     GED_CHECK(source->hasPendingStreamUpdate() == TRUE,
 	      "qged framebuffer writes must mark source data pending only");
     GED_CHECK(source->dirtyRevision.getValue() == 0,
@@ -196,6 +213,23 @@ test_qged_obol_fbserv_backend(void)
 	      "qged framebuffer poll must drain the requested Obol render");
     GED_CHECK(!controller->isRenderRequested(),
 	      "qged framebuffer poll must consume the render request");
+
+    QImage intermediate;
+    view.get_obol_viewport_image(intermediate);
+    int intermediateOrange = orange_pixel_count(intermediate);
+    GED_CHECK(intermediateOrange > intermediate.width() * intermediate.height() / 4 &&
+	intermediateOrange < intermediate.width() * intermediate.height() * 3 / 4,
+	      "qged must visibly present a meaningful partial framebuffer update");
+
+    size_t secondBandOffset = (size_t)info.width * (size_t)firstBandHeight * 3;
+    int secondBandHeight = info.height - firstBandHeight;
+    GED_CHECK(fbs_framebuffer_writerect(fbs, 0, firstBandHeight,
+		info.width, secondBandHeight, pixels.data() + secondBandOffset) ==
+	      info.width * secondBandHeight,
+	      "qged Obol fbserv backend must accept the final scan band");
+    GED_CHECK(fbs_framebuffer_flush(fbs) == 0 &&
+	      fbs_framebuffer_poll(fbs) == 1,
+	      "qged must present the completed framebuffer update");
 
     QImage image;
     view.get_obol_viewport_image(image);

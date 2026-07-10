@@ -2535,7 +2535,7 @@ main(int argc, char *argv[])
     bu_ptbl_init(&active_dm_set, 8, "dm set");
     bu_ptbl_ins(&active_dm_set, (long *)s->mged_curr_dm);
     mged_dm_init_state = s->mged_curr_dm;
-    s->mged_curr_dm->dm_netfd = -1;
+    (void)fbs_init(&s->mged_curr_dm->dm_fbserv);
 
     setmode(fileno(stdin), O_BINARY);
     setmode(fileno(stdout), O_BINARY);
@@ -2669,7 +2669,7 @@ main(int argc, char *argv[])
     BU_OPT(opt_defs[36], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
     BU_OPT(opt_defs[37], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
     /* ---- window/display (Tcl mged_default array) ---- */
-    BU_OPT(opt_defs[38], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display manager type (e.g. tkobol, swrast)");
+    BU_OPT(opt_defs[38], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display host type (tkobol or headless obol)");
     BU_OPT(opt_defs[39], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
     BU_OPT(opt_defs[40], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
     /* ---- grid (rset g …) ---- */
@@ -3100,11 +3100,7 @@ main(int argc, char *argv[])
 	    if (old_mged_gui) {
 		if (attach && strlen(attach) > 0) {
 		    Tcl_SetVar2(s->interp, "mged_default", "dm_type", attach, TCL_GLOBAL_ONLY);
-		    if (BU_STR_EQUAL(attach, "tkswrast")) {
-			bu_vls_printf(&vls, "gui -dt %s -config g", attach);
-		    } else {
-			bu_vls_printf(&vls, "gui -dt %s", attach);
-		    }
+		    bu_vls_printf(&vls, "gui -dt %s", attach);
 		} else {
 		    bu_vls_strcpy(&vls, "gui");
 		}

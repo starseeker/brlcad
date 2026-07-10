@@ -248,7 +248,7 @@ _edit_get_obj_keypoint(point_t *kp, const char *name, struct ged *gedp)
  *
  *   1. If dp already has a live buffer entry (from a previous -i operation),
  *      reuse it; otherwise create a fresh rt_edit from the on-disk geometry.
- *   2. Install a minimal CLI bsg_view so edit_srot() resolves its rotate-about
+ *   2. Install a minimal CLI view so edit_srot() resolves its rotate-about
  *      axis without dereferencing a null vp.
  *   3. Run do_edit(s); return early on error.
  *   4. flag_i == 0 (normal): promote es_int to disk and clear buffer entry.

@@ -19,8 +19,8 @@
  */
 /** @file view_independent.cpp
  *
- * Phase V6 regression test: `view independent` is backed by a private
- * structural BSG scope rather than the legacy mode bit alone.
+ * Regression test: `view independent` uses private per-view draw state
+ * rather than the legacy mode bit alone.
  */
 
 #include "common.h"

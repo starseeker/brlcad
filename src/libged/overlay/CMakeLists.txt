@@ -1,6 +1,7 @@
-set(PLUGIN_LIBS libged libbu)
+set(PLUGIN_LIBS libged libdm libbu)
 
 ged_plugin_library(ged-overlay
+  PLUGIN_ONLY
   overlay.c
   LIBS ${PLUGIN_LIBS}
 )

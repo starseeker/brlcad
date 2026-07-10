@@ -119,19 +119,6 @@ ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
 	int sync_current_scene);
 
 /**
- * Attach a display-manager-owned Obol view controller for one GED view.
- *
- * @p dmp is an opaque struct dm pointer.  Non-Obol display managers are a
- * successful no-op unless @p require_obol_controller is nonzero.
- */
-GED_EXPORT int
-ged_draw_obol_display_manager_attach_for_view(struct ged *gedp,
-	void *view_ctx,
-	void *dmp,
-	int sync_current_scene,
-	int require_obol_controller);
-
-/**
  * Ensure @p view_ctx has an owned Obol render endpoint.
  *
  * Display hosts that render Obol through their own current graphics context
@@ -213,6 +200,14 @@ ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
 	int present_on_flush);
 
 /**
+ * Install the Obol framebuffer backend and libimgstream's default descriptor
+ * transport for a non-toolkit host.
+ */
+GED_EXPORT int
+ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
+	void *view_ctx);
+
+/**
  * Render an Obol-backed GED view into a caller-owned RGB/RGBA image buffer.
  *
  * Returns 1 when @p view_ctx has an attached Obol controller and image data was
@@ -227,22 +222,6 @@ ged_draw_obol_view_display_image(struct ged *gedp,
 	unsigned char **image,
 	int flip,
 	int alpha);
-
-/**
- * Render an Obol-backed GED view into the caller's current OpenGL context.
- *
- * Display hosts must make their target context current before calling.  The
- * Obol viewport and camera are synchronized from @p view_ctx before the frame
- * is rendered.
- *
- * Returns 1 when a frame was rendered, 0 when no Obol controller is
- * available, and -1 when the controller could not render the frame.
- */
-GED_EXPORT int
-ged_draw_obol_view_render_current(struct ged *gedp,
-	void *view_ctx,
-	int clear_window,
-	int clear_zbuffer);
 
 /**
  * Release the libged-owned Obol framebuffer bridge, if one is active.

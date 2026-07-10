@@ -215,7 +215,7 @@ main(int ac, char *av[]) {
     // out to test the behavior of multiple views and dms, so we need to
     // set up multiples.  We'll start out with four non-independent views,
     // to mimic the most common multi-dm/view display - a Quad view widget.
-    // Each view will get its own attached swrast DM.
+    // Each view gets its own attached headless Obol display host.
     void *views[4];
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
@@ -228,13 +228,13 @@ main(int ac, char *av[]) {
 	ged_view_context_owned_add(gedp, views[i]);
 
 	/* To generate images that will allow us to check if the drawing
-	 * is proceeding as expected, we use the swrast off-screen dm. */
+	 * is proceeding as expected, use the headless Obol display host. */
 	struct bu_vls dm_name = BU_VLS_INIT_ZERO;
 	s_av[0] = "dm";
 	s_av[1] = "attach";
 	s_av[2] = "-V";
 	s_av[3] = view_name;
-	s_av[4] = "swrast";
+	s_av[4] = "obol";
 	bu_vls_sprintf(&dm_name, "SW%zd", i);
 	s_av[5] = bu_vls_cstr(&dm_name);
 	s_av[6] = NULL;

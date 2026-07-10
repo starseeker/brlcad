@@ -33,8 +33,7 @@
 #include "rt/geom.h"
 #include "wdb.h"
 
-#include "dm.h"  // For labelface - see if the dm_set_native_repaint_pending is really needed
-
+#include "bv.h"
 #include "ged.h"
 #include "ged/draw.h"
 #include "../ged_private.h"
@@ -261,9 +260,8 @@ ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     labelface_data_free(&lfd);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (dmp)
-	dm_set_native_repaint_pending(dmp, 1);
+    (void)bv_context_refresh_request((struct bv_context *)view_ctx,
+	GED_VIEW_REFRESH_DRAW);
     return BRLCAD_OK;
 }
 

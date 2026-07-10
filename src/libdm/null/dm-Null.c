@@ -477,10 +477,7 @@ struct dm_impl dm_null_impl = {
     FB_NULL,
     0,				/* Tcl interpreter */
     NULL,                       /* Drawing context */
-    NULL,                       /* App data */
-    NULL,                       /* backend ops */
-    NULL,                       /* backend resource cache */
-    0                           /* backend frame generation */
+    NULL                        /* App data */
 };
 
 struct dm dm_null = { DM_MAGIC, &dm_null_impl, 0 };

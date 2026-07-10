@@ -1197,9 +1197,8 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 			       BV_AUTOVIEW_SCALE_DEFAULT, obol_min, obol_max)) {
 	    adjusted++;
 	} else if (allow_database_fallback) {
-	    /* The historical RT autoview fallback was BSG-only.  Obol/libbv
-	     * callers require explicit bounds; leave the view unchanged when
-	     * none are available. */
+	    /* Obol/libbv callers require explicit bounds; leave the view
+	     * unchanged when none are available. */
 	}
     }
 

@@ -124,12 +124,12 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
     if (!dmp)
 	dmp = cdmp;
 
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, ": no current display manager set and no valid name specified\n");
-	return BRLCAD_ERROR;
-    }
-
     if (grab_fb) {
+	if (!dmp) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    ": framebuffer capture requires a display manager\n");
+	    return BRLCAD_ERROR;
+	}
 	fbp = dm_get_fb(dmp);
 	if (!fbp) {
 	    bu_vls_printf(gedp->ged_result_str, ": display manager does not have a framebuffer");
@@ -145,30 +145,35 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 
     /* create image file */
     if (!grab_fb) {
+	const struct bv *view = bv_context_view_const(
+	    (const struct bv_context *)view_ctx);
+	int width = dmp ? dm_get_width(dmp) : (view ? bv_width_get(view) : 0);
+	int height = dmp ? dm_get_height(dmp) : (view ? bv_height_get(view) : 0);
+	if (width <= 0)
+	    width = 512;
+	if (height <= 0)
+	    height = 512;
 
 	bytes_per_pixel = 3;
-	bytes_per_line = dm_get_width(dmp) * bytes_per_pixel;
+	bytes_per_line = width * bytes_per_pixel;
 
-	(void)ged_obol_fbserv_present(gedp);
+	(void)ged_draw_obol_framebuffer_present(gedp);
 	int obol_image = ged_draw_obol_view_display_image(gedp, view_ctx, &idata, 1, 0);
-	if (obol_image < 0) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: Obol view did not return image data.", argv[0]);
-	    return BRLCAD_ERROR;
-	}
-	if (!obol_image)
-	    dm_get_display_image(dmp, &idata, 1, 0);
+	if (obol_image <= 0 && dmp && dm_make_current(dmp) == BRLCAD_OK)
+	    (void)dm_get_display_image(dmp, &idata, 1, 0);
 	if (!idata) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: display manager did not return image data.", argv[0]);
+	    bu_vls_printf(gedp->ged_result_str,
+		    "%s: Obol display host did not return image data.", argv[0]);
 	    return BRLCAD_ERROR;
 	}
-	bif = icv_image_create(dm_get_width(dmp), dm_get_height(dmp), ICV_COLOR_SPACE_RGB);
+	bif = icv_image_create(width, height, ICV_COLOR_SPACE_RGB);
 	if (bif == NULL) {
 	    bu_vls_printf(gedp->ged_result_str, ": could not create icv_image write structure.");
 	    return BRLCAD_ERROR;
 	}
-	rows = (unsigned char **)bu_calloc(dm_get_height(dmp), sizeof(unsigned char *), "rows");
-	for (i = 0; i < dm_get_height(dmp); ++i) {
-	    rows[i] = (unsigned char *)(idata + ((dm_get_height(dmp)-i-1)*bytes_per_line));
+	rows = (unsigned char **)bu_calloc(height, sizeof(unsigned char *), "rows");
+	for (i = 0; i < height; ++i) {
+	    rows[i] = (unsigned char *)(idata + ((height-i-1)*bytes_per_line));
 	    /* TODO : Add double type data to maintain resolution */
 	    icv_writeline(bif, i, rows[i], ICV_DATA_UCHAR);
 	}

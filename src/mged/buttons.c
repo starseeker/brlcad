@@ -60,19 +60,19 @@ int be_s_scale(ClientData, Tcl_Interp *, int, char **);
 int be_s_trans(ClientData, Tcl_Interp *, int, char **);
 int bv_35_25(ClientData, Tcl_Interp *, int, char **);
 int bv_45_45(ClientData, Tcl_Interp *, int, char **);
-int bsg_adcursor(ClientData, Tcl_Interp *, int, char **);
-int bsg_bottom(ClientData, Tcl_Interp *, int, char **);
-int bsg_front(ClientData, Tcl_Interp *, int, char **);
-int bsg_left(ClientData, Tcl_Interp *, int, char **);
-int bsg_rate_toggle(ClientData, Tcl_Interp *, int, char **);
-int bsg_rear(ClientData, Tcl_Interp *, int, char **);
-int bsg_reset(ClientData, Tcl_Interp *, int, char **);
-int bsg_right(ClientData, Tcl_Interp *, int, char **);
-int bsg_top(ClientData, Tcl_Interp *, int, char **);
-int bsg_vrestore(ClientData, Tcl_Interp *, int, char **);
-int bsg_vsave(ClientData, Tcl_Interp *, int, char **);
-int bsg_zoomin(ClientData, Tcl_Interp *, int, char **);
-int bsg_zoomout(ClientData, Tcl_Interp *, int, char **);
+int mged_button_adcursor(ClientData, Tcl_Interp *, int, char **);
+int mged_button_bottom(ClientData, Tcl_Interp *, int, char **);
+int mged_button_front(ClientData, Tcl_Interp *, int, char **);
+int mged_button_left(ClientData, Tcl_Interp *, int, char **);
+int mged_button_rate_toggle(ClientData, Tcl_Interp *, int, char **);
+int mged_button_rear(ClientData, Tcl_Interp *, int, char **);
+int mged_button_reset(ClientData, Tcl_Interp *, int, char **);
+int mged_button_right(ClientData, Tcl_Interp *, int, char **);
+int mged_button_top(ClientData, Tcl_Interp *, int, char **);
+int mged_button_vrestore(ClientData, Tcl_Interp *, int, char **);
+int mged_button_vsave(ClientData, Tcl_Interp *, int, char **);
+int mged_button_zoomin(ClientData, Tcl_Interp *, int, char **);
+int mged_button_zoomout(ClientData, Tcl_Interp *, int, char **);
 
 
 /*
@@ -105,10 +105,10 @@ struct buttons {
     {BV_35_25,		"35,25",	bv_35_25},
     {BV_45_45,		"45,45",	bv_45_45},
     {BE_ACCEPT,		"accept",	be_accept},
-    {BV_ADCURSOR,	"adc",		bsg_adcursor},
-    {BV_BOTTOM,		"bottom",	bsg_bottom},
-    {BV_FRONT,		"front",	bsg_front},
-    {BV_LEFT,		"left",		bsg_left},
+    {BV_ADCURSOR,	"adc",		mged_button_adcursor},
+    {BV_BOTTOM,		"bottom",	mged_button_bottom},
+    {BV_FRONT,		"front",	mged_button_front},
+    {BV_LEFT,		"left",		mged_button_left},
     {BE_O_ILLUMINATE,	"oill",		be_o_illuminate},
     {BE_O_ROTATE,	"orot",		be_o_rotate},
     {BE_O_SCALE,	"oscale",	be_o_scale},
@@ -118,21 +118,21 @@ struct buttons {
     {BE_O_Y,		"oy",		be_o_y},
     {BE_O_YSCALE,	"oyscale",	be_o_yscale},
     {BE_O_ZSCALE,	"ozscale",	be_o_zscale},
-    {BV_REAR,		"rear",		bsg_rear},
+    {BV_REAR,		"rear",		mged_button_rear},
     {BE_REJECT,		"reject",	be_reject},
-    {BV_RESET,		"reset",	bsg_reset},
-    {BV_VRESTORE,	"restore",	bsg_vrestore},
-    {BV_RIGHT,		"right",	bsg_right},
-    {BV_VSAVE,		"save",		bsg_vsave},
+    {BV_RESET,		"reset",	mged_button_reset},
+    {BV_VRESTORE,	"restore",	mged_button_vrestore},
+    {BV_RIGHT,		"right",	mged_button_right},
+    {BV_VSAVE,		"save",		mged_button_vsave},
     {BE_S_EDIT,		"sedit",	be_s_edit},
     {BE_S_ILLUMINATE,	"sill",		be_s_illuminate},
     {BE_S_ROTATE,	"srot",		be_s_rotate},
     {BE_S_SCALE,	"sscale",	be_s_scale},
     {BE_S_TRANS,	"sxy",		be_s_trans},
-    {BV_TOP,		"top",		bsg_top},
-    {BV_ZOOM_IN,	"zoomin",	bsg_zoomin},
-    {BV_ZOOM_OUT,	"zoomout",	bsg_zoomout},
-    {BV_RATE_TOGGLE,	"rate",		bsg_rate_toggle},
+    {BV_TOP,		"top",		mged_button_top},
+    {BV_ZOOM_IN,	"zoomin",	mged_button_zoomin},
+    {BV_ZOOM_OUT,	"zoomout",	mged_button_zoomout},
+    {BV_RATE_TOGGLE,	"rate",		mged_button_rate_toggle},
     {-1,		"-end-",	be_reject}
 };
 
@@ -285,7 +285,7 @@ label_button(struct mged_state *s, int bnum)
 
 
 int
-bsg_zoomin(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_zoomin(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -296,7 +296,7 @@ bsg_zoomin(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), 
 
 
 int
-bsg_zoomout(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_zoomout(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -308,7 +308,7 @@ bsg_zoomout(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc),
 
 
 int
-bsg_rate_toggle(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_rate_toggle(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -330,7 +330,7 @@ bsg_rate_toggle(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(ar
 
 
 int
-bsg_top(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_top(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -342,7 +342,7 @@ bsg_top(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), cha
 
 
 int
-bsg_bottom(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_bottom(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -354,7 +354,7 @@ bsg_bottom(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), 
 
 
 int
-bsg_right(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_right(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -366,7 +366,7 @@ bsg_right(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 
 
 int
-bsg_left(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_left(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -378,7 +378,7 @@ bsg_left(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), ch
 
 
 int
-bsg_front(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_front(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -390,7 +390,7 @@ bsg_front(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 
 
 int
-bsg_rear(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_rear(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -402,7 +402,7 @@ bsg_rear(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), ch
 
 
 int
-bsg_vrestore(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_vrestore(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -426,7 +426,7 @@ bsg_vrestore(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc)
 
 
 int
-bsg_vsave(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_vsave(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -448,7 +448,7 @@ bsg_vsave(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
  * can't be bound as "adc", only as "press adc".
  */
 int
-bsg_adcursor(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
+mged_button_adcursor(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[]))
 {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
@@ -473,7 +473,7 @@ bsg_adcursor(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc)
 
 
 int
-bsg_reset(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[])) {
+mged_button_reset(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), char *UNUSED(argv[])) {
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
@@ -1165,84 +1165,84 @@ f_bv_45_45(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 int
 f_bv_bottom(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_bottom(clientData, interp, argc, (char **)argv);
+    return mged_button_bottom(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_front(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_front(clientData, interp, argc, (char **)argv);
+    return mged_button_front(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_left(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_left(clientData, interp, argc, (char **)argv);
+    return mged_button_left(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_rate_toggle(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_rate_toggle(clientData, interp, argc, (char **)argv);
+    return mged_button_rate_toggle(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_rear(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_rear(clientData, interp, argc, (char **)argv);
+    return mged_button_rear(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_reset(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_reset(clientData, interp, argc, (char **)argv);
+    return mged_button_reset(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_right(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_right(clientData, interp, argc, (char **)argv);
+    return mged_button_right(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_top(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_top(clientData, interp, argc, (char **)argv);
+    return mged_button_top(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_vrestore(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_vrestore(clientData, interp, argc, (char **)argv);
+    return mged_button_vrestore(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_vsave(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_vsave(clientData, interp, argc, (char **)argv);
+    return mged_button_vsave(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_zoomin(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_zoomin(clientData, interp, argc, (char **)argv);
+    return mged_button_zoomin(clientData, interp, argc, (char **)argv);
 }
 
 
 int
 f_bv_zoomout(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 {
-    return bsg_zoomout(clientData, interp, argc, (char **)argv);
+    return mged_button_zoomout(clientData, interp, argc, (char **)argv);
 }
 
 

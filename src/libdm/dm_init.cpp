@@ -66,6 +66,23 @@ dm_init_msgs()
 }
 
 
+extern "C" int
+dm_register_backend(const struct dm *backend)
+{
+    if (!backend || backend->magic != DM_MAGIC || !backend->i)
+	return BRLCAD_ERROR;
+    const char *name = dm_get_name(backend);
+    if (!name || !name[0])
+	return BRLCAD_ERROR;
+    std::string key(name);
+    std::transform(key.begin(), key.end(), key.begin(),
+	[](unsigned char c) { return std::tolower(c); });
+    get_dm_map()[key] = backend;
+    dm_backends = (void *)&get_dm_map();
+    return BRLCAD_OK;
+}
+
+
 static void
 libdm_init(void)
 {

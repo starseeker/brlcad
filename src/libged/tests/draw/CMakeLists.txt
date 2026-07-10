@@ -1,6 +1,5 @@
 set(
   test_deps
-  dm-swrast
   dm-obol
   ged-close
   ged-draw

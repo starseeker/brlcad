@@ -122,7 +122,7 @@ struct vd_curve {
 struct ged_drawable {
     ged_draw_group_ref           gd_scene_root_group_ref; /**< @brief cache-style typed handle for the draw-scene root of the drawn-set tree */
     uint64_t                     gd_draw_rev;           /**< @brief  monotonic revision counter; bumped on every structural mutation of the draw tree; reset to 0 by ged_draw_clear */
-    struct bu_ptbl               gd_draw_registry;      /**< @brief GED-owned draw record registry; refs store registry ids, not BSG node addresses */
+    struct bu_ptbl               gd_draw_registry;      /**< @brief GED-owned draw record registry; refs store stable registry ids */
     uint64_t                     gd_draw_next_token;    /**< @brief next non-zero registry token */
     int                          gd_draw_registry_init; /**< @brief non-zero once gd_draw_registry is initialized */
     struct bu_hash_tbl          *gd_draw_shapes_by_component_hash;

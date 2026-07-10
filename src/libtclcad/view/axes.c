@@ -548,13 +548,13 @@ to_data_axes_func(Tcl_Interp *interp,
 		  int argc,
 		  const char *argv[])
 {
-    /* T3: BSG object name is the only per-variant state needed here. */
-    const char *bsg_name = (argv[0][0] == 's') ? "_tcl_sdata_axes" : "_tcl_data_axes";
+    /* The feature name is the only per-variant state needed here. */
+    const char *feature_name = (argv[0][0] == 's') ? "_tcl_sdata_axes" : "_tcl_data_axes";
 
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
 	    bu_vls_printf(gedp->ged_result_str, "%d",
-			  ged_draw_view_context_data_axes_draw_get(view_ctx, bsg_name) ? 1 : 0);
+			  ged_draw_view_context_data_axes_draw_get(view_ctx, feature_name) ? 1 : 0);
 	    return BRLCAD_OK;
 	}
 
@@ -564,7 +564,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &i) != 1)
 		goto bad;
 
-	    ged_draw_view_context_data_axes_draw_set(view_ctx, bsg_name, i ? 1 : 0);
+	    ged_draw_view_context_data_axes_draw_set(view_ctx, feature_name, i ? 1 : 0);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -576,7 +576,7 @@ to_data_axes_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_draw_view_context_data_axes_style_get(view_ctx, bsg_name, &style) && style.color_valid) {
+	    if (ged_draw_view_context_data_axes_style_get(view_ctx, feature_name, &style) && style.color_valid) {
 		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			      (int)style.color[0], (int)style.color[1], (int)style.color[2]);
 	    } else {
@@ -600,7 +600,7 @@ to_data_axes_func(Tcl_Interp *interp,
 		b < 0 || 255 < b)
 		goto bad;
 
-	    ged_draw_view_context_data_axes_color_set(view_ctx, bsg_name, r, g, b);
+	    ged_draw_view_context_data_axes_color_set(view_ctx, feature_name, r, g, b);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -612,7 +612,7 @@ to_data_axes_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "line_width")) {
 	if (argc == 2) {
 	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_draw_view_context_data_axes_style_get(view_ctx, bsg_name, &style))
+	    if (ged_draw_view_context_data_axes_style_get(view_ctx, feature_name, &style))
 		bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
 	    else
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -625,7 +625,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &line_width) != 1)
 		goto bad;
 
-	    ged_draw_view_context_data_axes_line_width_set(view_ctx, bsg_name, line_width);
+	    ged_draw_view_context_data_axes_line_width_set(view_ctx, feature_name, line_width);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -638,7 +638,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	if (argc == 2) {
 	    fastf_t size = 0.0;
 	    fastf_t sf = _tclcad_data_axes_display_scale(view_ctx);
-	    ged_draw_view_context_data_axes_size_get(view_ctx, bsg_name, sf,
+	    ged_draw_view_context_data_axes_size_get(view_ctx, feature_name, sf,
 		    &size);
 	    bu_vls_printf(gedp->ged_result_str, "%lf", size);
 	    return BRLCAD_OK;
@@ -652,19 +652,19 @@ to_data_axes_func(Tcl_Interp *interp,
 
 	    /* Extract current centers and rebuild with new halfAxesSize. */
 	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    ged_draw_view_context_data_axes_style_get(view_ctx, bsg_name,
+	    ged_draw_view_context_data_axes_style_get(view_ctx, feature_name,
 		    &saved_style);
 
 	    point_t *cpts = NULL;
 	    size_t ncpts = 0;
 	    (void)ged_draw_view_context_data_axes_centers_copy(view_ctx,
-		    bsg_name, &cpts, &ncpts);
+		    feature_name, &cpts, &ncpts);
 
 	    fastf_t sf = _tclcad_data_axes_display_scale(view_ctx);
 	    fastf_t half = (fastf_t)size * 0.5f * sf;
 
 	    if (cpts && ncpts)
-		(void)ged_draw_view_context_data_axes_centers_replace(view_ctx, bsg_name, cpts, ncpts,
+		(void)ged_draw_view_context_data_axes_centers_replace(view_ctx, feature_name, cpts, ncpts,
 			half, &saved_style);
 	    if (cpts)
 		bu_free(cpts, "GED draw view axes centers copy");
@@ -682,7 +682,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	if (argc == 2) {
 	    point_t *cpts = NULL;
 	    size_t ncpts = 0;
-	    if (ged_draw_view_context_data_axes_centers_copy(view_ctx, bsg_name, &cpts, &ncpts)) {
+	    if (ged_draw_view_context_data_axes_centers_copy(view_ctx, feature_name, &cpts, &ncpts)) {
 		for (size_t j = 0; j < ncpts; ++j)
 		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(cpts[j]));
 		if (cpts)
@@ -702,18 +702,18 @@ to_data_axes_func(Tcl_Interp *interp,
 
 	    /* Save style and size from existing object before replacing it. */
 	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    ged_draw_view_context_data_axes_style_get(view_ctx, bsg_name,
+	    ged_draw_view_context_data_axes_style_get(view_ctx, feature_name,
 		    &saved_style);
 
 	    /* Recover halfAxesSize from existing object (use default 1.0 if none). */
 	    fastf_t half = 1.0;
-	    ged_draw_view_context_data_axes_half_size_get(view_ctx, bsg_name,
+	    ged_draw_view_context_data_axes_half_size_get(view_ctx, feature_name,
 		    &half);
 
 	    /* Clear out: remove old GED draw-view feature. */
 	    if (ac < 1) {
 		ged_draw_view_context_data_axes_centers_replace(view_ctx,
-			bsg_name, NULL, 0, half, &saved_style);
+			feature_name, NULL, 0, half, &saved_style);
 		to_refresh_view(view_ctx);
 		Tcl_Free((char *)av);
 		return BRLCAD_OK;
@@ -734,7 +734,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    }
 
 	    /* Rebuild draw-view data axes from new centers, preserving style. */
-	    (void)ged_draw_view_context_data_axes_centers_replace(view_ctx, bsg_name, pts, (size_t)ac,
+	    (void)ged_draw_view_context_data_axes_centers_replace(view_ctx, feature_name, pts, (size_t)ac,
 		    half, &saved_style);
 	    bu_free(pts, "axes points");
 	    Tcl_Free((char *)av);

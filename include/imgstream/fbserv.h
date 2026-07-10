@@ -371,6 +371,14 @@ struct fbserv_pkg_handlers {
     void (*help)(struct pkg_conn *, char *);
 };
 
+struct fbserv_process_result {
+    size_t bytes_read;
+    int messages_processed;
+    int would_block;
+    int disconnected;
+    int error;
+};
+
 typedef void (*fbserv_drop_client_fn)(struct fbserv_obj *fbsp, int sub);
 
 IMGSTREAM_EXPORT int fbserv_pkg_switch_init(
@@ -520,6 +528,105 @@ IMGSTREAM_EXPORT int fbserv_backend_wmap(struct fbserv_obj *fbsp,
 IMGSTREAM_EXPORT int fbserv_backend_flush(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbserv_backend_poll(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbserv_backend_help(struct fbserv_obj *fbsp);
+
+/* Complete framebuffer server lifecycle and packet transport API. */
+IMGSTREAM_EXPORT int fbs_init(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_open(struct fbserv_obj *fbsp, int port);
+IMGSTREAM_EXPORT int fbs_close(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT void *fbs_tls_server_context_create(const char *certfile,
+	const char *keyfile);
+IMGSTREAM_EXPORT void fbs_tls_server_context_destroy(void *ctx);
+IMGSTREAM_EXPORT int fbs_set_backend(struct fbserv_obj *fbsp,
+	const struct fbserv_fb_ops *ops,
+	void *ctx);
+IMGSTREAM_EXPORT void fbs_clear_backend(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT void fbs_set_transport(struct fbserv_obj *fbsp,
+	const struct fbserv_transport_ops *ops);
+IMGSTREAM_EXPORT void fbs_clear_transport(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_can_open_ipc(const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_can_open_network(const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_can_close(const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_listener_port(const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_listener_fd(const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT void fbs_set_listener_fd(struct fbserv_obj *fbsp, int fd);
+IMGSTREAM_EXPORT void *fbs_listener_channel(const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT void fbs_set_listener_channel(struct fbserv_obj *fbsp,
+	void *chan);
+IMGSTREAM_EXPORT void *fbs_listener_handler_data(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT struct fbserv_obj *fbs_listener_owner(void *listener_data);
+IMGSTREAM_EXPORT int fbs_listener_data_fd(const void *listener_data);
+IMGSTREAM_EXPORT struct pkg_listener *fbs_listener_data_pkg_listener(
+	void *listener_data);
+IMGSTREAM_EXPORT void fbs_set_listener_pkg_listener(struct fbserv_obj *fbsp,
+	struct pkg_listener *listener);
+IMGSTREAM_EXPORT int fbs_client_active(const struct fbserv_obj *fbsp, int sub);
+IMGSTREAM_EXPORT int fbs_client_fd(const struct fbserv_obj *fbsp, int sub);
+IMGSTREAM_EXPORT struct pkg_conn *fbs_client_pkg(const struct fbserv_obj *fbsp,
+	int sub);
+IMGSTREAM_EXPORT struct pkg_conn *fbs_client_data_pkg(void *client_data);
+IMGSTREAM_EXPORT int fbs_client_data_fd(const void *client_data);
+IMGSTREAM_EXPORT void *fbs_client_channel(const struct fbserv_obj *fbsp,
+	int sub);
+IMGSTREAM_EXPORT void fbs_set_client_channel(struct fbserv_obj *fbsp,
+	int sub,
+	void *chan);
+IMGSTREAM_EXPORT void *fbs_client_handler(const struct fbserv_obj *fbsp,
+	int sub);
+IMGSTREAM_EXPORT void fbs_set_client_handler(struct fbserv_obj *fbsp,
+	int sub,
+	void *handler);
+IMGSTREAM_EXPORT void *fbs_client_handler_data(struct fbserv_obj *fbsp,
+	int sub);
+IMGSTREAM_EXPORT void fbs_set_client_data_channel(void *client_data,
+	void *chan);
+IMGSTREAM_EXPORT void fbs_set_legacy_framebuffer(struct fbserv_obj *fbsp,
+	struct fb *fbp);
+IMGSTREAM_EXPORT struct fb *fbs_legacy_framebuffer(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_framebuffer_backend_installed(
+	const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_framebuffer_info(struct fbserv_obj *fbsp,
+	struct fbserv_fb_info *info);
+IMGSTREAM_EXPORT int fbs_framebuffer_writerect(struct fbserv_obj *fbsp,
+	int xmin,
+	int ymin,
+	int width,
+	int height,
+	const unsigned char *rgb);
+IMGSTREAM_EXPORT int fbs_framebuffer_view(struct fbserv_obj *fbsp,
+	int xcenter,
+	int ycenter,
+	int xzoom,
+	int yzoom);
+IMGSTREAM_EXPORT int fbs_framebuffer_cursor(struct fbserv_obj *fbsp,
+	int mode,
+	int x,
+	int y);
+IMGSTREAM_EXPORT int fbs_framebuffer_flush(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_framebuffer_poll(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT struct pkg_switch *fbs_pkg_switch(void);
+IMGSTREAM_EXPORT void fbs_setup_socket(int fd);
+IMGSTREAM_EXPORT int fbs_new_client(struct fbserv_obj *fbsp,
+	struct pkg_conn *pcp,
+	void *data);
+IMGSTREAM_EXPORT int fbs_process_client_bytes(struct fbserv_obj *fbsp,
+	int sub,
+	const unsigned char *data,
+	size_t data_size,
+	unsigned char **remaining,
+	size_t *remaining_size,
+	struct fbserv_process_result *result);
+IMGSTREAM_EXPORT int fbs_drain_client(struct fbserv_obj *fbsp,
+	int sub,
+	size_t byte_budget,
+	int iteration_limit,
+	int64_t time_budget_usec,
+	struct fbserv_process_result *result);
+IMGSTREAM_EXPORT void fbs_existing_client_handler(void *client_data, int mask);
+IMGSTREAM_EXPORT void fbs_drop_client(struct fbserv_obj *fbsp, int sub);
+IMGSTREAM_EXPORT int fbs_drop_ipc_clients(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_open_ipc(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT const char *fbs_ipc_child_addr_env(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT const char *fbs_generate_token(struct fbserv_obj *fbsp);
 
 __END_DECLS
 

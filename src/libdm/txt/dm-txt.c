@@ -520,10 +520,7 @@ struct dm_impl dm_txt_impl = {
     FB_NULL,
     0,				/* Tcl interpreter */
     NULL,                       /* Drawing context */
-    NULL,                       /* App data */
-    NULL,                       /* backend ops */
-    NULL,                       /* backend resource cache */
-    0                           /* backend frame generation */
+    NULL                        /* App data */
 };
 
 struct dm dm_txt = { DM_MAGIC, &dm_txt_impl, 0 };

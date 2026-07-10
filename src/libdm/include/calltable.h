@@ -157,12 +157,6 @@ struct dm_impl {
     void *dm_interp;		/**< @brief interpreter */
     void *dm_ctx;		/**< @brief drawing context */
     void *dm_udata;		/**< @brief associate general application data here */
-    /** @brief Modern renderer-backend contract ops.  Set by dm initialization
-     * for backends that support render-item drawing; NULL otherwise.  See
-     * include/dm.h for the dispatch wrappers. */
-    const struct dm_backend_ops *dm_backend_ops;
-    struct dm_backend_resource *dm_backend_resources;
-    uint64_t dm_backend_generation;
 };
 
 struct fb_impl {
@@ -233,7 +227,7 @@ struct fb_impl {
     /**
      * @brief Reference count of fbserv clients currently streaming to this fb.
      *
-     * Maintained by libdm/fbserv.c (fbs_new_client / drop_client).  When
+     * Maintained by libimgstream's fbserv client lifecycle.  When
      * non-zero, the fb dimensions (if_width/if_height) are "locked" — any
      * attempt to mutate them via fb_configure_window (e.g. on a Qt widget
      * resize) is deferred until the streaming client(s) disconnect.  This

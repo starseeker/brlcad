@@ -62,8 +62,7 @@
 #include "bu/env.h"
 #include "bu/app.h"
 #include "bu/snooze.h"
-#include "dm/fbserv.h"
-#include "dm.h"    /* MSG_FBCLOSE, NET_LONG_LEN */
+#include "imgstream/fbserv.h"
 #include "pkg.h"
 
 /* Portable low-level fd write (used when we only have the raw fd). */

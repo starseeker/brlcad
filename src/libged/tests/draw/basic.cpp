@@ -283,10 +283,10 @@ main(int ac, char *av[]) {
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
     /* To generate images that will allow us to check if the drawing
-     * is proceeding as expected, we use the swrast off-screen dm. */
+     * is proceeding as expected, use the headless Obol display host. */
     s_av[0] = "dm";
     s_av[1] = "attach";
-    s_av[2] = "swrast";
+    s_av[2] = "obol";
     s_av[3] = "SW";
     s_av[4] = NULL;
     ged_exec_dm(gedp, 4, s_av);

@@ -972,10 +972,7 @@ struct dm_impl dm_ps_impl = {
     FB_NULL,
     0,				/* Tcl interpreter */
     NULL,                       /* Drawing context */
-    NULL,                       /* App data */
-    NULL,                       /* backend ops */
-    NULL,                       /* backend resource cache */
-    0                           /* backend frame generation */
+    NULL                        /* App data */
 };
 
 

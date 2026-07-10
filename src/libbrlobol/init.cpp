@@ -105,3 +105,10 @@ brlobol_init(SoDB::ContextManager *contextManager)
 
     initialized = true;
 }
+
+SoDB::ContextManager *
+brlobol_headless_context_manager(void)
+{
+    static SoDB::ContextManager *manager = SoDB::createOSMesaContextManager();
+    return manager;
+}

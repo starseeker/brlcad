@@ -39,29 +39,11 @@
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgSW.h"
 
-static thread_local qg_legacy_fb *qgsw_bridge_framebuffer = nullptr;
-
-struct QgSWBridgeFramebufferScope {
-    explicit QgSWBridgeFramebufferScope(qg_legacy_fb *fbp)
-	: previous(qgsw_bridge_framebuffer)
-    {
-	qgsw_bridge_framebuffer = fbp;
-    }
-
-    ~QgSWBridgeFramebufferScope()
-    {
-	qgsw_bridge_framebuffer = previous;
-    }
-
-    qg_legacy_fb *previous = nullptr;
-};
-
 QgSW::QgSW(QWidget *parent)
     : QWidget(parent)
 {
     d = new QgCanvasState();
     qgcanvas_init_obol(*d, this);
-    d->ifp = qgsw_bridge_framebuffer;
     d->lmouse_mode = BV_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
@@ -70,25 +52,14 @@ QgSW::QgSW(QWidget *parent)
     d->v = d->local_v;
     qgcanvas_sync_obol_camera(*d);
 
-    d->dmp = nullptr;
-
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
     // resolution scaling, rotation, etc.
     setFocusPolicy(Qt::WheelFocus);
 }
 
-QgSW *
-QgCanvasBridgeFactory::create_swrast(QWidget *parent, qg_legacy_fb *fbp)
-{
-    QgSWBridgeFramebufferScope scope(fbp);
-    return new QgSW(parent);
-}
-
 QgSW::~QgSW()
 {
-    qg_legacy_view_dm_close(d->dmp);
-    qg_legacy_view_framebuffer_release(d->ifp, 0);
     qgcanvas_destroy_obol(*d);
     qg_legacy_view_local_free(d->local_v);
     d->local_v = nullptr;
@@ -221,13 +192,6 @@ emit changed();
 
 void QgSW::mousePressEvent(QMouseEvent *e)
 {
-
-    if (qg_legacy_view_framebuffer_standalone_get(d->ifp) &&
-	    e->button() == Qt::RightButton) {
-if (window())
-    window()->close();
-return;
-    }
 
     if (!d->v || !d->current || !d->use_default_mousebindings) {
 QWidget::mousePressEvent(e);

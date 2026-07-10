@@ -10,8 +10,9 @@
  */
 /** @file libtclcad/tkobol/dm-tkobol.cpp
  *
- * Tk-native host for an Obol display manager.  Togl owns the Tk window and
- * OpenGL context; the wrapped headless Obol DM owns the retained controller.
+ * Tk-native host for an Obol view.  Togl owns the Tk window and OpenGL
+ * context; this host owns the retained controller directly.  The struct dm
+ * surface is a compatibility attachment for classic Tcl applications.
  */
 
 #include "common.h"
@@ -33,11 +34,15 @@ extern "C" {
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "dm.h"
-#include "dm/obol.h"
 #include "../../libdm/include/private.h"
+#include "../../libdm/null/dm-Null.h"
 }
 
+#include "brlobol/init.h"
+#include "brlobol/scene_group.h"
 #include "brlobol/view_controller.h"
+#include <Inventor/SoRenderManager.h>
+#include <Inventor/actions/SoGLRenderAction.h>
 #include "vendor/togl/togl.h"
 
 enum tkobol_callback_kind {
@@ -67,12 +72,15 @@ struct tkobol_vars {
     struct tkobol_callback reshape_callback;
     int widget_command_private;
     int closing;
+    fastf_t viewscale;
     int (*original_close)(struct dm *);
 };
 
 static int tkobol_close(struct dm *dmp);
 static int tkobol_configure(struct dm *dmp, int force);
 static int tkobol_draw_end(struct dm *dmp);
+static int tkobol_get_display_image(struct dm *dmp, unsigned char **image,
+	int flip, int alpha);
 static int tkobol_make_current(struct dm *dmp);
 static int tkobol_reshape(struct dm *dmp, int width, int height);
 static int tkobol_swap_buffers(struct dm *dmp);
@@ -165,6 +173,33 @@ tkobol_sync_view(struct tkobol_vars *tv, int request_render)
 }
 
 static int
+tkobol_render_frame(struct tkobol_vars *tv, GLenum render_buffer,
+	GLboolean double_buffered)
+{
+    if (!tv || !tv->controller)
+	return BRLCAD_ERROR;
+
+    tv->controller->getRenderManager()->setDoubleBuffer(double_buffered ?
+	TRUE : FALSE);
+    glDrawBuffer(render_buffer);
+    (void)tv->controller->realizePending();
+    (void)tv->controller->advanceProgressiveWork();
+    glClearColor(static_cast<GLfloat>(tv->dmp->i->dm_bg1[0]) / 255.0f,
+	static_cast<GLfloat>(tv->dmp->i->dm_bg1[1]) / 255.0f,
+	static_cast<GLfloat>(tv->dmp->i->dm_bg1[2]) / 255.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    if (tv->controller->getCamera() && tv->controller->getRenderRoot()) {
+	SoGLRenderAction *action =
+	    tv->controller->getRenderManager()->getGLRenderAction();
+	action->setViewportRegion(tv->controller->getViewportRegion());
+	action->apply(tv->controller->getRenderRoot());
+    }
+    tv->controller->clearRenderRequest();
+    return BRLCAD_OK;
+}
+
+static int
 tkobol_render_current(struct tkobol_vars *tv, int make_current)
 {
     if (!tv || !tv->controller)
@@ -174,17 +209,14 @@ tkobol_render_current(struct tkobol_vars *tv, int make_current)
     if (tkobol_sync_view(tv, 0) != BRLCAD_OK)
 	return BRLCAD_ERROR;
 
-    glClearColor(static_cast<GLfloat>(tv->dmp->i->dm_bg1[0]) / 255.0f,
-	static_cast<GLfloat>(tv->dmp->i->dm_bg1[1]) / 255.0f,
-	static_cast<GLfloat>(tv->dmp->i->dm_bg1[2]) / 255.0f, 1.0f);
-    tv->controller->requestRender("Tk Obol frame");
-    if (!tv->controller->renderPending(TRUE, TRUE)) {
-	/* An empty new_view has no render root yet; present a cleared frame. */
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	tv->controller->clearRenderRequest();
-    }
+    GLboolean double_buffered = GL_FALSE;
+    glGetBooleanv(GL_DOUBLEBUFFER, &double_buffered);
+    if (tkobol_render_frame(tv, double_buffered ? GL_BACK : GL_FRONT,
+		double_buffered) != BRLCAD_OK)
+	return BRLCAD_ERROR;
 
-    if (tkobol_widget_command(tv, "swapbuffers") != TCL_OK)
+    if (double_buffered &&
+	    tkobol_widget_command(tv, "swapbuffers") != TCL_OK)
 	return BRLCAD_ERROR;
 
     const int pending = tv->controller->isRenderRequested() ||
@@ -393,6 +425,7 @@ tkobol_close(struct dm *dmp)
 	bu_vls_free(&tv->widget_path);
 	bu_vls_free(&tv->widget_command);
 	bu_vls_free(&tv->container_command);
+	delete tv->controller;
 	dmp->i->dm_udata = NULL;
 	bu_free(tv, "tkobol private vars");
     }
@@ -415,6 +448,66 @@ static int
 tkobol_draw_end(struct dm *dmp)
 {
     return tkobol_render_current(tkobol_pvars(dmp), 1);
+}
+
+static int
+tkobol_get_display_image(struct dm *dmp, unsigned char **image, int flip,
+	int alpha)
+{
+    struct tkobol_vars *tv = tkobol_pvars(dmp);
+    if (!tv || !tv->controller || !image)
+	return BRLCAD_ERROR;
+    *image = NULL;
+
+    if (tkobol_widget_command(tv, "makecurrent") != TCL_OK ||
+	    tkobol_sync_view(tv, 0) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    GLboolean double_buffered = GL_FALSE;
+    glGetBooleanv(GL_DOUBLEBUFFER, &double_buffered);
+    const GLenum render_buffer = double_buffered ? GL_BACK : GL_FRONT;
+    if (tkobol_render_frame(tv, render_buffer, double_buffered) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    const int width = dmp->i->dm_width;
+    const int height = dmp->i->dm_height;
+    const int components = alpha ? 4 : 3;
+    if (width <= 0 || height <= 0)
+	return BRLCAD_ERROR;
+
+    GLint old_alignment = 4;
+    GLint old_read_buffer = GL_BACK;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &old_alignment);
+    glGetIntegerv(GL_READ_BUFFER, &old_read_buffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadBuffer(render_buffer);
+
+    const size_t stride = static_cast<size_t>(width) *
+	static_cast<size_t>(components);
+    unsigned char *pixels = static_cast<unsigned char *>(bu_malloc(
+	static_cast<size_t>(height) * stride, "Tk Obol display image"));
+    glReadPixels(0, 0, width, height, alpha ? GL_RGBA : GL_RGB,
+	GL_UNSIGNED_BYTE, pixels);
+    glFinish();
+    glReadBuffer(old_read_buffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, old_alignment);
+
+    if (flip) {
+	unsigned char *row = static_cast<unsigned char *>(
+	    bu_malloc(stride, "Tk Obol display image row"));
+	for (int y = 0; y < height / 2; y++) {
+	    unsigned char *lower = pixels + static_cast<size_t>(y) * stride;
+	    unsigned char *upper = pixels +
+		static_cast<size_t>(height - y - 1) * stride;
+	    std::memcpy(row, lower, stride);
+	    std::memcpy(lower, upper, stride);
+	    std::memcpy(upper, row, stride);
+	}
+	bu_free(row, "Tk Obol display image row");
+    }
+
+    *image = pixels;
+    return BRLCAD_OK;
 }
 
 static int
@@ -478,31 +571,71 @@ tkobol_viable(const char *display_name)
 static struct dm *
 tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
 {
+    static int count = 0;
     Tcl_Interp *interp = static_cast<Tcl_Interp *>(vinterp);
     if (!interp || !Tk_MainWindow(interp))
 	return DM_NULL;
     if (BrlcadTkObolHost_Init(interp) != TCL_OK)
 	return DM_NULL;
 
-    struct dm *dmp = dm_open(ctx, vinterp, "obol", argc, argv);
-    if (!dmp)
-	return DM_NULL;
+    struct dm *dmp = NULL;
+    struct dm_impl *dmpi = NULL;
+    BU_GET(dmp, struct dm);
+    BU_GET(dmpi, struct dm_impl);
+    dmp->magic = DM_MAGIC;
+    dmp->start_time = 0;
+    *dmpi = *dm_null.i;
+    dmp->i = dmpi;
+    dmp->i->dm_ctx = ctx;
+    dmp->i->dm_interp = vinterp;
+    dmp->i->dm_lineWidth = 1;
+    dmp->i->dm_depthMask = 1;
+    dmp->i->dm_top = 1;
+    dmp->i->dm_bytes_per_pixel = 3;
+    dmp->i->dm_bits_per_channel = 8;
+    dmp->i->dm_fontsize = 20;
+    dmp->i->dm_bg1[0] = dmp->i->dm_bg1[1] = dmp->i->dm_bg1[2] = 0;
+    dmp->i->dm_fg[0] = dmp->i->dm_fg[1] = dmp->i->dm_fg[2] = 255;
+    bu_vls_init(&dmp->i->dm_pathName);
+    bu_vls_init(&dmp->i->dm_tkName);
+    bu_vls_init(&dmp->i->dm_dName);
+    bu_vls_init(&dmp->i->dm_log);
 
-    if (BU_STR_EQUAL(bu_vls_cstr(&dmp->i->dm_pathName), ".dm_obol0"))
-	bu_vls_sprintf(&dmp->i->dm_pathName, ".dm_tkobol0");
+    struct bu_vls init_proc = BU_VLS_INIT_ZERO;
+    if (argc > 0)
+	dm_processOptions(dmp, &init_proc, argc - 1, argv + 1);
+    bu_vls_free(&init_proc);
+    const int view_width = ctx ? dm_view_context_width_get(ctx) : 0;
+    const int view_height = ctx ? dm_view_context_height_get(ctx) : 0;
+    if (dmp->i->dm_width <= 0)
+	dmp->i->dm_width = view_width > 0 ? view_width : 512;
+    if (dmp->i->dm_height <= 0)
+	dmp->i->dm_height = view_height > 0 ? view_height : 512;
+    dmp->i->dm_aspect = static_cast<fastf_t>(dmp->i->dm_width) /
+	static_cast<fastf_t>(dmp->i->dm_height);
+    if (bu_vls_strlen(&dmp->i->dm_pathName) == 0)
+	bu_vls_printf(&dmp->i->dm_pathName, ".dm_tkobol%d", count);
+    if (bu_vls_strlen(&dmp->i->dm_dName) == 0)
+	bu_vls_strcpy(&dmp->i->dm_dName, "tkobol");
+    ++count;
 
     struct tkobol_vars *tv = NULL;
     BU_ALLOC(tv, struct tkobol_vars);
     tv->dmp = dmp;
     tv->interp = interp;
-    tv->controller = static_cast<BRLObolViewController *>(dmp->i->p_vars);
-    tv->original_close = dmp->i->dm_close;
+    brlobol_init(brlobol_headless_context_manager());
+    tv->controller = new BRLObolViewController(new SoBRLSceneGroup);
+    tv->viewscale = 1.0;
+    tv->original_close = null_close;
     bu_vls_init(&tv->widget_path);
     bu_vls_init(&tv->widget_command);
     bu_vls_init(&tv->container_command);
     bu_vls_init(&tv->display_command);
     bu_vls_init(&tv->reshape_command);
     dmp->i->dm_udata = tv;
+    dmp->i->p_vars = tv->controller;
+    dmp->i->m_vars = tv;
+    dmp->i->dm_vp = &tv->viewscale;
 
     if (!tv->controller || tkobol_create_widget(tv) != TCL_OK) {
 	tkobol_close(dmp);
@@ -512,6 +645,7 @@ tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
     dmp->i->dm_close = tkobol_close;
     dmp->i->dm_viable = tkobol_viable;
     dmp->i->dm_drawEnd = tkobol_draw_end;
+    dmp->i->dm_getDisplayImage = tkobol_get_display_image;
     dmp->i->dm_configureWin = tkobol_configure;
     dmp->i->dm_reshape = tkobol_reshape;
     dmp->i->dm_makeCurrent = tkobol_make_current;
@@ -528,22 +662,28 @@ tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
 static struct dm_impl dm_tkobol_impl;
 static struct dm dm_tkobol = {DM_MAGIC, &dm_tkobol_impl, 0};
 
-#ifdef DM_PLUGIN
-static const struct dm_plugin plugin_info = {DM_API, &dm_tkobol};
+extern "C" void *
+tclcad_tkobol_controller(struct dm *dmp)
+{
+    if (!dmp || !BU_STR_EQUIV(dm_get_type(dmp), "tkobol"))
+	return NULL;
+    struct tkobol_vars *tv = tkobol_pvars(dmp);
+    return tv ? static_cast<void *>(tv->controller) : NULL;
+}
 
-extern "C" COMPILER_DLLEXPORT const struct dm_plugin *
-dm_plugin_info(void)
+extern "C" const struct dm *
+tclcad_tkobol_dm(void)
 {
     dm_tkobol_impl.dm_open = tkobol_open;
     dm_tkobol_impl.dm_close = tkobol_close;
     dm_tkobol_impl.dm_viable = tkobol_viable;
     dm_tkobol_impl.dm_graphical = 1;
+    dm_tkobol_impl.dm_getDisplayImage = tkobol_get_display_image;
     dm_tkobol_impl.graphics_system = "Tk/OpenGL";
     dm_tkobol_impl.dm_name = "tkobol";
     dm_tkobol_impl.dm_lname = "Tk Obol graphics";
-    return &plugin_info;
+    return &dm_tkobol;
 }
-#endif
 
 // Local Variables:
 // tab-width: 8

@@ -168,7 +168,7 @@ QgQuadView::createView(unsigned int index)
 
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
 	qg_legacy_view_ged_view_set_attach(gedp, view->view());
-	/* Independent view state is managed by BSG view-scope records. */
+	/* Each viewport owns independent libbv view state. */
 
 	QObject::connect(view, &QgView::changed, this, &QgQuadView::do_view_changed);
 	QObject::connect(view, &QgView::init_done, this, &QgQuadView::do_init_done);

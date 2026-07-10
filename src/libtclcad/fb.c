@@ -44,6 +44,7 @@
 #include "bu/str.h"
 #include "../libdm/include/private.h"
 #include "dm.h"
+#include "dm/fbserv_legacy.h"
 #include "ged/view.h"
 #include "tclcad.h"
 #include "./tclcad_private.h"
@@ -125,7 +126,7 @@ fbo_deleteProc(void *clientData)
 
     /* close framebuffer */
     fb_close(fbp);
-    fbs_set_legacy_framebuffer(&fbop->fbo_fbs, FB_NULL);
+    dm_fbserv_set_framebuffer(&fbop->fbo_fbs, FB_NULL);
 
     bu_vls_free(&fbop->fbo_name);
     memmove(fbop,
@@ -922,7 +923,7 @@ fbo_open_tcl(void *UNUSED(clientData), Tcl_Interp *interp, int argc, const char 
     bu_vls_init(&fbop->fbo_name);
     bu_vls_strcpy(&fbop->fbo_name, argv[1]);
     fbs_init(&fbop->fbo_fbs);
-    fbs_set_legacy_framebuffer(&fbop->fbo_fbs, ifp);
+    dm_fbserv_set_framebuffer(&fbop->fbo_fbs, ifp);
     fbop->fbo_interp = interp;
 
     fb_objs.size++;
@@ -976,7 +977,7 @@ to_close_fbs(void *view_ctx)
 
     fb_flush(fbp);
     fb_close_existing(fbp);
-    fbs_set_legacy_framebuffer(&tvd->gdv_fbs, FB_NULL);
+    dm_fbserv_set_framebuffer(&tvd->gdv_fbs, FB_NULL);
 
     return TCL_OK;
 }
@@ -997,7 +998,8 @@ to_open_fbs(void *view_ctx, Tcl_Interp *interp)
 	return TCL_OK;
 
     struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    fbs_set_legacy_framebuffer(&tvd->gdv_fbs, dmp ? dm_get_fb(dmp) : FB_NULL);
+    dm_fbserv_set_framebuffer(&tvd->gdv_fbs,
+	    dmp ? dm_get_fb(dmp) : FB_NULL);
 
     if (fbs_legacy_framebuffer(&tvd->gdv_fbs) == FB_NULL) {
 	Tcl_Obj *obj;

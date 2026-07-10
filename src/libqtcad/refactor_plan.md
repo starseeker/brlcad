@@ -14,7 +14,7 @@ Current tree notes:
 Phase 2 — Encapsulation pass
 
 Current tree notes:
-- This phase is started but not finished: QgGL/QgSW already expose defaultMouseMode as Q_PROPERTY and the public canvas surface now uses view()/legacyBackendInitialized() rather than raw display-manager/framebuffer getters; the BSG cast adapter is private to src/libqtcad rather than installed.
+- This phase is started but not finished: QgGL/QgSW already expose defaultMouseMode as Q_PROPERTY and the public canvas surface now uses view()/legacyBackendInitialized() rather than raw display-manager/framebuffer getters; retained-scene cast adapters have been removed.
 - QgView now keeps its active event-filter pointer private and manages it through add/remove helpers rather than exposing raw external writes.
 - The standalone dm Qt window wrappers now expose their QgGL/QgSW canvases through accessors instead of public member pointers.
 - QgToolPaletteElement now exposes its button/control/scroll state through accessors instead of public data members.

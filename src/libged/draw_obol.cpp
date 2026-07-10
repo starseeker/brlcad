@@ -38,8 +38,6 @@
 #include "bu/str.h"
 #include "bu/units.h"
 #include "bu/vls.h"
-#include "dm.h"
-#include "dm/obol.h"
 #include "ged.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
@@ -5953,83 +5951,12 @@ ged_obol_faceplate_sync_axes(BRLObolViewController *controller,
 
 static void
 ged_obol_faceplate_sync_framebuffer(BRLObolViewController *controller,
-				    void *view_ctx)
+			    void *view_ctx)
 {
     static const char name[] = "_faceplate/framebuffer";
-    if (bv_framebuffer_mode_get(ged_obol_bv_const(view_ctx)) == 0) {
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    struct dm *dmp =
-	    static_cast<struct dm *>(ged_view_context_display_manager_get(view_ctx));
-    struct fb *fbp = dmp ? dm_get_fb(dmp) : NULL;
-    if (!fbp) {
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    const int width = fb_getwidth(fbp);
-    const int height = fb_getheight(fbp);
-    if (width <= 0 || height <= 0) {
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    icv_image_t *image = fb_write_icv(fbp, 0, 0, width, height);
-    if (!image) {
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    SoBRLImageSource *source = new SoBRLImageSource;
-    source->ref();
-    const int source_ok = source->setImage(image);
-    icv_destroy(image);
-    if (source_ok != 0) {
-	source->unref();
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    SoBRLViewportImage *viewport = new SoBRLViewportImage;
-    viewport->ref();
-    viewport->overlayId = name;
-    viewport->imageSource = source;
-    source->unref();
-    viewport->visible = TRUE;
-    viewport->layer = SoBRLViewportImage::OVERLAY;
-    viewport->zOrder = 0;
-    viewport->anchor = SoBRLViewportImage::LOWER_LEFT;
-    viewport->units = SoBRLViewportImage::PIXELS;
-    viewport->position = SbVec2f(0.0f, 0.0f);
-    viewport->size = SbVec2f(
-			 static_cast<float>(bv_width_get(ged_obol_bv_const(view_ctx)) > 0 ?
-					    bv_width_get(ged_obol_bv_const(view_ctx)) : width),
-			 static_cast<float>(bv_height_get(ged_obol_bv_const(view_ctx)) > 0 ?
-					    bv_height_get(ged_obol_bv_const(view_ctx)) : height));
-    viewport->fit = SoBRLViewportImage::STRETCH;
-    viewport->preserveAspect = FALSE;
-    viewport->opacity = 1.0f;
-    if (viewport->rebuildGeometry() != 0) {
-	viewport->unref();
-	ged_obol_faceplate_remove(controller, view_ctx, name);
-	return;
-    }
-
-    BRLObolFeatureStyle style;
-    style.hasVisible = TRUE;
-    style.visible = TRUE;
-    style.hasSelectable = TRUE;
-    style.selectable = FALSE;
-    BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
-    BRLObolFeatureHandle handle =
-	controller->features().publishCustomNode(name,
-	    BRLObolFeatureScope::Local, viewport, &style, &owner);
-    viewport->unref();
-    (void)ged_obol_feature_mark_overlay(controller, handle,
-					ged_obol_faceplate_overlay_info(view_ctx,
-						BRLObolOverlayOrder::PostTransparent));
+    /* Framebuffer images are owned by BRLObolFramebufferStream.  Remove the
+     * retired display-manager snapshot feature if an older host created it. */
+    ged_obol_faceplate_remove(controller, view_ctx, name);
 }
 
 extern "C" int
@@ -19860,14 +19787,43 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
     if (!ged_obol_observer_ensure(gedp, gdp))
 	return 0;
 
-    SoBRLSceneController *shared_scene =
-	ged_draw_obol_scene_controller_ensure(gedp, sync_current_scene);
-    if (!shared_scene)
-	return 0;
-
     std::vector<ged_obol_attached_controller> *entries =
 	ged_obol_attached_controllers(gdp, 1);
     if (!entries)
+	return 0;
+
+    /* A single-view host may use its primary scene controller as the view's
+     * render endpoint.  Bind that existing entry instead of manufacturing a
+     * second primary/controller pair solely to register per-view services. */
+    for (ged_obol_attached_controller &entry : *entries) {
+	if (entry.view_controller != view_controller ||
+		entry.render_endpoint_only)
+	    continue;
+	if (entry.view_ctx == view_ctx)
+	    return 1;
+
+	(void)ged_view_context_host_attach(gedp, view_ctx);
+	if (!ged_view_context_obol_attachment_bind(view_ctx,
+		view_controller->getViewAttachment()))
+	    return 0;
+
+	entry.view_ctx = view_ctx;
+	entry.use_attached_view_scope = 1;
+	entry.render_shared_root_visible = 1;
+	if (!ged_obol_register_progressive_provider(gedp, view_ctx, entry)) {
+	    entry.view_ctx = NULL;
+	    entry.use_attached_view_scope = 0;
+	    (void)ged_view_context_obol_attachment_unbind(view_ctx,
+		view_controller->getViewAttachment());
+	    return 0;
+	}
+	ged_obol_primary_set(gdp, &entry);
+	return 1;
+    }
+
+    SoBRLSceneController *shared_scene =
+	ged_draw_obol_scene_controller_ensure(gedp, sync_current_scene);
+    if (!shared_scene)
 	return 0;
 
     for (size_t i = 0; i < entries->size(); i++) {
@@ -19971,23 +19927,6 @@ ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
     return ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
 	    static_cast<BRLObolViewController *>(controller),
 	    sync_current_scene);
-}
-
-extern "C" int
-ged_draw_obol_display_manager_attach_for_view(struct ged *gedp,
-	void *view_ctx,
-	void *dmp,
-	int sync_current_scene,
-	int require_obol_controller)
-{
-    void *controller = dmp ?
-	dm_obol_controller(static_cast<struct dm *>(dmp)) : NULL;
-
-    if (!controller)
-	return require_obol_controller ? 0 : 1;
-
-    return ged_draw_obol_controller_attach_opaque_for_view(gedp, view_ctx,
-	    controller, sync_current_scene);
 }
 
 extern "C" int

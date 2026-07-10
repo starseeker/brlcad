@@ -7,6 +7,9 @@ brlcad_add_test(NAME imgstream_fb_compat_test COMMAND imgstream_fb_compat_test)
 brlcad_addexec(imgstream_fbserv_auth_test fbserv_auth.c "libimgstream;libbu" TEST)
 brlcad_add_test(NAME imgstream_fbserv_auth_test COMMAND imgstream_fbserv_auth_test)
 
+brlcad_addexec(imgstream_fbserv_lifecycle_test fbserv_lifecycle.c "libimgstream;libpkg;libbu" TEST)
+brlcad_add_test(NAME imgstream_fbserv_lifecycle_test COMMAND imgstream_fbserv_lifecycle_test)
+
 cmakefiles(CMakeLists.txt)
 
 # Local Variables:

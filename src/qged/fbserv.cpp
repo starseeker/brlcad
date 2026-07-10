@@ -35,8 +35,8 @@
 
 /* bu/ipc.h removed - transport handled by libpkg */
 #include "bu/log.h"
-#include "dm.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
+#include "pkg.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
@@ -45,7 +45,6 @@
 #include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgTypes.h"
 #include "qtcad/QgView.h"
-#include <QElapsedTimer>
 #include <QSize>
 #include <QWidget>
 
@@ -197,40 +196,23 @@ QFBSocket::client_handler()
     if (!buff.length())
 	return;
 
-    // Now that we have the data read using Qt methods, prepare for processing
-    // using libpkg data structures.
-    pkc->pkc_inbuf = (char *)realloc(pkc->pkc_inbuf, buff.length());
-    memcpy(pkc->pkc_inbuf, buff.data(), buff.length());
-    pkc->pkc_incur = 0;
-    pkc->pkc_inlen = pkc->pkc_inend = buff.length();
-
-    // Now it's up to libpkg - if anything is left over, we'll know it after
-    // processing.  Clear buff so we're ready to preserve remaining data for
-    // the next processing cycle.
+    unsigned char *remaining = nullptr;
+    size_t remaining_size = 0;
+    struct fbserv_process_result result;
+    int process_status = fbs_process_client_bytes(fbs, ind,
+	    reinterpret_cast<const unsigned char *>(buff.constData()),
+	    static_cast<size_t>(buff.size()), &remaining, &remaining_size,
+	    &result);
     buff.clear();
+    if (remaining && remaining_size)
+	buff.append(reinterpret_cast<const char *>(remaining),
+	    static_cast<int>(remaining_size));
+    free(remaining);
 
-    // Use the defined callbacks to handle the data sent from the client
-    if ((pkg_process(pkc)) < 0)
-	bu_log("client_handler pkg_process error encountered\n");
-
-    /* Phase E1 (ert reliability): the unprocessed remainder of pkc_inbuf
-     * is the byte range [pkc_incur, pkc_inend) — *not* [pkc_inend,
-     * pkc_inlen) (which would be uninitialized buffer past the data).
-     * Preserve only the unread tail for the next read cycle. */
-    if (pkc->pkc_incur < pkc->pkc_inend) {
-	buff.append(&pkc->pkc_inbuf[pkc->pkc_incur],
-		    pkc->pkc_inend - pkc->pkc_incur);
-    }
-
-    emit updated();
-
-    // If we've got callbacks, execute them now.
-    if (fbs->fbs_callback != (void (*)(void *))FBS_CALLBACK_NULL) {
-	/* need to cast func pointer explicitly to get the function call */
-	void (*cfp)(void *);
-	cfp = (void (*)(void *))fbs->fbs_callback;
-	cfp(fbs->fbs_clientData);
-    }
+    if (process_status != BRLCAD_OK)
+	bu_log("client_handler framebuffer protocol processing failed\n");
+    if (result.messages_processed > 0)
+	emit updated();
 }
 
 /* Phase D2 (ert reliability): when the remote rt closes the TCP
@@ -388,13 +370,6 @@ qdm_configure_ged_fbserv_handlers(struct ged *gedp, QgView *display)
     gedp->ged_fbs->fbs_clientData = NULL;
 }
 
-const char *
-qdm_init_messages(void)
-{
-    return dm_init_msgs();
-}
-
-
 /* -----------------------------------------------------------------------
  * Phase 5: IPC client handler for qged (pipe/socketpair instead of TCP).
  *
@@ -439,60 +414,15 @@ QFBIPCSocket::ipc_handler()
     if (notifier)
 	notifier->setEnabled(false);
 
-    int got_real_eof = 0;
-    int got_error = 0;
-    int data_read = 0;
-    size_t bytes_drained = 0;
-    QElapsedTimer drain_timer;
-    drain_timer.start();
-    /* Adaptive burst draining:
-     *  - stop if we spend too long in one notifier callback (UI fairness)
-     *  - or if we have already drained a large burst of data
-     *  - with an absolute iteration cap as a final guardrail. */
-    for (int iter = 0; iter < DRAIN_ITERATION_CAP; ++iter) {
-	int r = pkg_suckin(pkc);
-	if (r > 0) {
-	    data_read = 1;
-	    bytes_drained += (size_t)r;
-	    if (bytes_drained >= DRAIN_BYTES_BUDGET || drain_timer.hasExpired(DRAIN_TIME_BUDGET_MS))
-		break;
-	    continue;
-	}
-	if (r < 0) {
-	    got_error = 1;
-	    break;
-	}
-	/* r == 0 — either EOF or EAGAIN/no-data on a non-blocking fd. */
-	if (pkc->pkc_would_block)
-	    break;	/* no more data right now */
-	got_real_eof = 1;
-	break;
-    }
-
-    if (data_read) {
-	if (pkg_process(pkc) < 0)
-	    bu_log("QFBIPCSocket::ipc_handler: pkg_process error\n");
+    struct fbserv_process_result result;
+    int process_status = fbs_drain_client(fbs, ind, DRAIN_BYTES_BUDGET,
+	DRAIN_ITERATION_CAP, DRAIN_TIME_BUDGET_MS * 1000, &result);
+    if (result.messages_processed > 0)
 	emit updated();
-
-	if (fbs->fbs_callback != (void (*)(void *))FBS_CALLBACK_NULL) {
-	    void (*cfp)(void *) = (void (*)(void *))fbs->fbs_callback;
-	    cfp(fbs->fbs_clientData);
-	}
-    }
-
-    /* Phase D1 (ert reliability): on EOF or unrecoverable read error,
-     * tear the client slot down on this thread.  We are already on the
-     * GUI thread (the slot is invoked by Qt's notifier dispatch), so
-     * direct teardown is safe.  fbs_drop_client() invokes the registered
-     * close-IPC handler (qdm_close_ipc_client_handler), which uses
-     * deleteLater() — meaning `this` remains valid through the rest of
-     * this slot but is destroyed at the next event-loop iteration. */
-    if (got_real_eof || got_error) {
-	bu_log("QFBIPCSocket::ipc_handler: ind=%d got_real_eof=%d got_error=%d data_read=%d -> dropping client\n",
-	       ind, got_real_eof, got_error, data_read);
-	fbs_drop_client(fbs, ind);
+    if (process_status != BRLCAD_OK)
+	bu_log("QFBIPCSocket::ipc_handler: framebuffer protocol processing failed\n");
+    if (result.disconnected)
 	return;
-    }
 
     if (notifier)
 	notifier->setEnabled(true);

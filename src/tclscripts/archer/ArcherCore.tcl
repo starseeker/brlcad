@@ -4530,7 +4530,7 @@ namespace eval ArcherCore {
     $color add command -label "Select..." \
 	-command [::itcl::code $this selectDisplayColor $_node]
 
-    if {($mDisplayType == "tkobol" || $mDisplayType == "wgl" || $mDisplayType == "ogl") && ($_nodeType != "leaf" || 0 < $mRenderMode)} {
+    if {$mDisplayType == "tkobol" && ($_nodeType != "leaf" || 0 < $mRenderMode)} {
 	# Build transparency menu
 	$_menu add cascade -label "Transparency" \
 	    -menu $_menu.trans

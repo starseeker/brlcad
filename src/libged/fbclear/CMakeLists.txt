@@ -1,6 +1,7 @@
 set(PLUGIN_LIBS libged libdm libbu)
 
 ged_plugin_library(ged-fbclear
+  PLUGIN_ONLY
   fbclear.c
   LIBS ${PLUGIN_LIBS}
 )

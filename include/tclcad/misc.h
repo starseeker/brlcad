@@ -178,6 +178,10 @@ TCLCAD_EXPORT extern struct application *to_rt_gettrees_application(struct ged *
 TCLCAD_EXPORT extern int
 tclcad_listen_ipc(struct fbserv_obj *fbsp, Tcl_Interp *interp);
 
+/** Install Tcl/Tk event-loop transport callbacks on an fbserv object. */
+TCLCAD_EXPORT extern void
+tclcad_fbserv_set_transport(struct fbserv_obj *fbsp);
+
 /**
  * Tcl specific I/O handlers
  */

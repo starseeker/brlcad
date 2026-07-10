@@ -25,19 +25,25 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-OUT="${WORKDIR}/gsh_obol_ert_smoke.png"
+PARTIAL="${WORKDIR}/gsh_obol_ert_partial.png"
+FINAL="${WORKDIR}/gsh_obol_ert_final.png"
 LOG="${WORKDIR}/gsh_obol_ert_smoke.log"
 
-rm -f "$OUT" "$LOG"
+rm -f "$PARTIAL" "$FINAL" "$LOG"
 
-printf 'dm attach obol
-draw all.g
+# One processor plus deterministic hypersampling keeps this render in flight
+# long enough to capture a bounded early frame.  zap removes the wire overlay,
+# so the intermediate image measures framebuffer progress rather than geometry.
+printf 'draw all.g
 autoview
-ert
+ert -P 1 -H 8
+zap
+delay 0 100000
+screengrab %s
 delay 5 0
 screengrab %s
 quit
-' "$OUT" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
+' "$PARTIAL" "$FINAL" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
 
 if ! grep -q "ert: calling _ged_run_rt (using_ipc=1" "$LOG"; then
     echo "gsh Obol ert smoke did not use the Obol IPC framebuffer path" 1>&2
@@ -57,13 +63,15 @@ if ! grep -q "SHOT:" "$LOG" || ! grep -q "Frame  *0:" "$LOG"; then
     exit 1
 fi
 
-if [ ! -s "$OUT" ]; then
-    echo "gsh Obol ert smoke did not create a PNG: $OUT" 1>&2
-    cat "$LOG" 1>&2
-    exit 1
-fi
+for image in "$PARTIAL" "$FINAL"; do
+    if [ ! -s "$image" ]; then
+	echo "gsh Obol ert smoke did not create a PNG: $image" 1>&2
+	cat "$LOG" 1>&2
+	exit 1
+    fi
+done
 
-"$PYTHON" - "$OUT" <<'PY'
+"$PYTHON" - "$PARTIAL" "$FINAL" <<'PY'
 import struct
 import sys
 import zlib
@@ -71,71 +79,75 @@ import zlib
 
 def paeth(a, b, c):
     p = a + b - c
-    pa = abs(p - a)
-    pb = abs(p - b)
-    pc = abs(p - c)
-    if pa <= pb and pa <= pc:
-        return a
-    return b if pb <= pc else c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    return a if pa <= pb and pa <= pc else b if pb <= pc else c
 
 
-path = sys.argv[1]
-data = open(path, "rb").read()
-if data[:8] != b"\x89PNG\r\n\x1a\n":
-    raise SystemExit("%s is not a PNG" % path)
+def decode(path):
+    data = open(path, "rb").read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise RuntimeError("%s is not a PNG" % path)
+    off, raw = 8, b""
+    width = height = color_type = None
+    while off < len(data):
+        n = struct.unpack(">I", data[off:off + 4])[0]
+        typ = data[off + 4:off + 8]
+        chunk = data[off + 8:off + 8 + n]
+        off += 12 + n
+        if typ == b"IHDR":
+            width, height, depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", chunk)
+            if depth != 8 or interlace != 0:
+                raise RuntimeError("%s uses unsupported PNG encoding" % path)
+        elif typ == b"IDAT":
+            raw += chunk
+    bpp = 3 if color_type == 2 else 4 if color_type == 6 else None
+    if bpp is None:
+        raise RuntimeError("%s uses unsupported PNG color type" % path)
+    encoded = zlib.decompress(raw)
+    prev = bytearray(width * bpp)
+    pos, rgb, nonblack = 0, bytearray(), 0
+    for _ in range(height):
+        filt = encoded[pos]
+        pos += 1
+        row = bytearray(encoded[pos:pos + width * bpp])
+        pos += width * bpp
+        for i in range(len(row)):
+            left = row[i - bpp] if i >= bpp else 0
+            up = prev[i]
+            upper_left = prev[i - bpp] if i >= bpp else 0
+            if filt == 1:
+                row[i] = (row[i] + left) & 255
+            elif filt == 2:
+                row[i] = (row[i] + up) & 255
+            elif filt == 3:
+                row[i] = (row[i] + ((left + up) // 2)) & 255
+            elif filt == 4:
+                row[i] = (row[i] + paeth(left, up, upper_left)) & 255
+            elif filt != 0:
+                raise RuntimeError("%s uses unsupported PNG filter" % path)
+        for i in range(0, len(row), bpp):
+            pixel = row[i:i + 3]
+            rgb.extend(pixel)
+            if pixel != b"\0\0\0":
+                nonblack += 1
+        prev = row
+    return width, height, bytes(rgb), nonblack
 
-off = 8
-width = height = color_type = None
-raw = b""
-while off < len(data):
-    n = struct.unpack(">I", data[off:off + 4])[0]
-    typ = data[off + 4:off + 8]
-    chunk = data[off + 8:off + 8 + n]
-    off += 12 + n
-    if typ == b"IHDR":
-        width, height, bit_depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", chunk)
-        if bit_depth != 8 or interlace != 0:
-            raise SystemExit("%s uses unsupported PNG encoding" % path)
-    elif typ == b"IDAT":
-        raw += chunk
 
-bpp = 3 if color_type == 2 else 4 if color_type == 6 else None
-if bpp is None:
-    raise SystemExit("%s uses unsupported PNG color type %s" % (path, color_type))
-
-pixels = zlib.decompress(raw)
-prev = bytearray(width * bpp)
-p = 0
-unique = set()
-nonblack = 0
-for _ in range(height):
-    filt = pixels[p]
-    p += 1
-    row = bytearray(pixels[p:p + width * bpp])
-    p += width * bpp
-    for i in range(len(row)):
-        left = row[i - bpp] if i >= bpp else 0
-        up = prev[i]
-        up_left = prev[i - bpp] if i >= bpp else 0
-        if filt == 1:
-            row[i] = (row[i] + left) & 255
-        elif filt == 2:
-            row[i] = (row[i] + up) & 255
-        elif filt == 3:
-            row[i] = (row[i] + ((left + up) // 2)) & 255
-        elif filt == 4:
-            row[i] = (row[i] + paeth(left, up, up_left)) & 255
-        elif filt != 0:
-            raise SystemExit("%s uses unsupported PNG filter %s" % (path, filt))
-    for i in range(0, len(row), bpp):
-        rgb = tuple(row[i:i + 3])
-        unique.add(rgb)
-        if rgb != (0, 0, 0):
-            nonblack += 1
-    prev = row
-
-if len(unique) <= 1 or nonblack <= 0:
-    raise SystemExit("%s has no visible framebuffer content" % path)
+partial = decode(sys.argv[1])
+final = decode(sys.argv[2])
+if partial[:2] != final[:2]:
+    raise RuntimeError("partial and final ERT frames have different dimensions")
+pixel_count = partial[0] * partial[1]
+if not pixel_count // 10 < partial[3] < pixel_count * 9 // 10:
+    raise RuntimeError("early ERT frame is not meaningfully partial: %d/%d" % (partial[3], pixel_count))
+if final[3] <= partial[3]:
+    raise RuntimeError("final ERT frame did not advance beyond partial frame")
+changed = sum(a != b for a, b in zip(partial[2], final[2]))
+if changed < pixel_count // 10:
+    raise RuntimeError("partial and final ERT frames changed too little: %d" % changed)
+print("ert_progress partial_lit=%d final_lit=%d changed_channels=%d" %
+      (partial[3], final[3], changed))
 PY
 
 exit 0

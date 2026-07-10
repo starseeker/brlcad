@@ -164,6 +164,7 @@ DM_EXPORT extern const char *dm_version(void);
 /* Plugin related functions */
 DM_EXPORT extern int dm_valid_type(const char *name, const char *dpy_string);
 DM_EXPORT const char * dm_init_msgs(void);
+DM_EXPORT int dm_register_backend(const struct dm *backend);
 DM_EXPORT extern struct dm *dm_open(void *ctx,
 	                     void *interp,
 			     const char *type,
@@ -267,83 +268,6 @@ DM_EXPORT extern void dm_set_bound(struct dm *dmp, fastf_t val);
 DM_EXPORT extern int dm_get_bound_flag(struct dm *dmp);
 DM_EXPORT extern void dm_set_bound_flag(struct dm *dmp, int bound);
 
-
-
-/* Modern renderer-backend contract.
- *
- * struct dm_backend_ops is the display-manager-side backend dispatch table.
- * A backend (dm-gl, dm-swrast, future dm-obol) registers a single static
- * dm_backend_ops with each dm instance it creates; scene rendering invokes
- * backend operations through the thin dm_backend_*() wrappers below, which
- * forward resolved render-item contexts to the registered ops.
- *
- * Lifecycle of a backend resource:
- *  - draw_item:      per-frame draw of one resolved render item.  Required
- *                    for scene graph rendering.
- *  - invalidate_item: source data has changed; cached resources for the
- *                    render item/source are stale. Optional.
- *  - release_source: source has gone away; release backend-owned resources
- *                    whose source identity matches. Optional.
- *
- * The actual backend_ops pointer lives in struct dm_impl (libdm-private)
- * and is set during dm initialization. */
-struct dm_backend_resource;
-
-typedef void (*dm_backend_resource_free_fn)(struct dm *dmp,
-					    struct dm_backend_resource *resource);
-
-struct dm_backend_resource {
-    uint64_t cache_identity;
-    uint64_t source_identity;
-    uint64_t backend_identity;
-    uint64_t last_seen_generation;
-    unsigned int stale;
-    void *handle;
-    dm_backend_resource_free_fn free_resource;
-    struct dm_backend_resource *next;
-};
-
-struct dm_backend_ops {
-    uint32_t type_tag;                                                     /**< @brief backend type tag */
-    int  (*begin_frame)(struct dm *dmp);                                   /**< @brief optional backend frame begin */
-    int  (*draw_item)(struct dm *dmp, const void *render_item_ctx);         /**< @brief resolved render-item draw; required for scene rendering */
-    void (*invalidate_item)(struct dm *dmp, const void *render_item_ctx, unsigned int reason_mask); /**< @brief mark item/source resources stale */
-    void (*release_source)(struct dm *dmp, uint64_t source_identity);      /**< @brief release resources for a render source */
-    void (*end_frame)(struct dm *dmp);                                     /**< @brief optional backend frame end */
-};
-
-/* Backend-ops accessors (libdm-private storage on dm_impl). */
-DM_EXPORT extern const struct dm_backend_ops *dm_get_backend_ops(struct dm *dmp);
-DM_EXPORT extern void dm_set_backend_ops(struct dm *dmp, const struct dm_backend_ops *ops);
-
-/* Backend-ops dispatch wrappers.  Each is safe to call with a NULL dmp or
- * a NULL ops pointer.  Scene drawing requires draw_item; there is no node-only
- * fallback from the modern render path. */
-DM_EXPORT extern int  dm_backend_draw_item(struct dm *dmp, const void *render_item_ctx);
-DM_EXPORT extern int  dm_backend_begin_frame(struct dm *dmp);
-DM_EXPORT extern void dm_backend_end_frame(struct dm *dmp);
-DM_EXPORT extern void dm_backend_invalidate_item(struct dm *dmp, const void *render_item_ctx, unsigned int reason_mask);
-DM_EXPORT extern void dm_backend_release_source(struct dm *dmp, uint64_t source_identity);
-
-DM_EXPORT extern struct dm_backend_resource *
-dm_backend_resource_get(struct dm *dmp,
-			uint64_t cache_identity,
-			uint64_t source_identity,
-			uint64_t backend_identity,
-			int create,
-			dm_backend_resource_free_fn free_resource);
-
-DM_EXPORT extern void
-dm_backend_resource_touch(struct dm *dmp, struct dm_backend_resource *resource);
-
-DM_EXPORT extern void
-dm_backend_resource_invalidate(struct dm *dmp, uint64_t source_identity);
-
-DM_EXPORT extern void
-dm_backend_resource_release_source(struct dm *dmp, uint64_t source_identity);
-
-DM_EXPORT extern void
-dm_backend_resource_reclaim_unseen(struct dm *dmp);
 
 
 // TODO - this should be using libicv  - right now this is just moving the guts

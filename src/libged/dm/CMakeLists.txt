@@ -7,6 +7,7 @@ set(DM_SRCS
 )
 
 ged_plugin_library(ged-dm
+  PLUGIN_ONLY
   ${DM_SRCS}
   LIBS ${PLUGIN_LIBS}
 )

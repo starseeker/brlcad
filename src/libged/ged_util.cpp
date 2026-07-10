@@ -58,7 +58,7 @@
 #include "bg/line_layer.h"
 #include "bg/plot3.h"
 #include "bv.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/event_txn.h"

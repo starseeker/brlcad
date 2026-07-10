@@ -32,7 +32,6 @@
 #include <math.h>
 #include "vmath.h"
 #include "bn.h"
-#include "bsg/defines.h"
 #include "dm/view.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
@@ -199,21 +198,12 @@ dozoom(struct mged_state *s, int which_eye)
 	if (view_perspective < SMALL_FASTF)
 	    bv_perspective_set(view, persp);
 
-	/* Stereo viewport / scissor selection.  gl_loadMatrix() inspects
-	 * which_eye (1 = right, 2 = left) and adjusts glViewport+glScissor
-	 * accordingly. */
+    /* Let the active display host select the stereo eye. */
 	dm_loadmatrix(DMP, model2view, which_eye);
     }
 
     int high_level_refresh = _mged_high_level_refresh(s, view_ctx);
-    int high_level_render = 0;
-    const struct dm_backend_ops *backend_ops = dm_get_backend_ops(DMP);
-    if (high_level_refresh && backend_ops &&
-	backend_ops->type_tag == BSG_BACKEND_GL) {
-	high_level_render = ged_draw_obol_view_render_current(s->gedp,
-	    view_ctx, 0, 0);
-    }
-    if (!high_level_refresh || high_level_render == 0) {
+    if (!high_level_refresh) {
 	/* Legacy fallback for non-Obol display managers. */
 	dm_draw_objs(view_ctx);
     }

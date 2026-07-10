@@ -52,7 +52,6 @@ INPUT += \"${CMAKE_SOURCE_DIR}/include/bsocket.h\""
     libbu
     libbn
     libbg
-    libbsg
     libnmg
     libbrep
     libfft
@@ -235,7 +234,6 @@ set(
   libbn.dox
   libbrep.dox
   libbu.dox
-  libbsg.dox
   libdm.dox
   libdm.dox
   libfft.dox

@@ -98,9 +98,6 @@ class QFBServer : public QTcpServer
 extern void
 qdm_configure_ged_fbserv_handlers(struct ged *gedp, QgView *display);
 
-extern const char *
-qdm_init_messages(void);
-
 #endif /* QDM_FBSERV_H */
 
 /** @} */

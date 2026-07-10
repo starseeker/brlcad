@@ -23,9 +23,8 @@
  *
  * Legacy display-manager vlist drawing API.
  *
- * New drawing code should publish typed render records and render them
- * through dm_backend_draw_item().  This header is isolated so modern dm.h
- * clients do not inherit the legacy BSG vlist dependency.
+ * New drawing code should publish retained Obol scene records.  This header
+ * keeps the immediate-mode compatibility entry point isolated from dm.h.
  */
 
 #ifndef DM_VLIST_H

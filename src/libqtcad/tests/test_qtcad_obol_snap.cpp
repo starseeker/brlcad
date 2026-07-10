@@ -306,7 +306,7 @@ main(int argc, char **argv)
     if (nearly_equal((float)snapped_point[X], 11.0f) &&
 	    nearly_equal((float)snapped_point[Y], 11.0f) &&
 	    nearly_equal((float)snapped_point[Z], 11.0f))
-	FAIL("qtcad view filter should leave view-scoped snapping on the BSG path");
+	FAIL("qtcad view-scoped snapping should not apply database refinement");
     if (view.legacyBackendInitialized())
 	FAIL("qtcad view-scoped snap fallback should not initialize the legacy display manager");
 

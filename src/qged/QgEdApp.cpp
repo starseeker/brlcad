@@ -451,10 +451,8 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     // can initialize themselves
     emit view_update(QG_VIEW_REFRESH);
 
-    // Generally speaking if we're going to have trouble initializing, it will
-    // be with either the GED plugins or the dm plugins.  Print relevant
-    // messages from those initialization routines (if any) so the user can
-    // tell what's going on.
+    // Report GED plugin initialization problems.  qged has no display-manager
+    // plugin dependency; its visible render endpoint is the Obol window host.
     int have_msg = 0;
     std::string ged_msgs(ged_init_msgs());
     if (ged_msgs.size()) {
@@ -462,15 +460,6 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 	w->console->printString("\n");
 	have_msg = 1;
     }
-    std::string dm_msgs(qdm_init_messages());
-    if (dm_msgs.size()) {
-	if (dm_msgs.find("qtgl") != std::string::npos || dm_msgs.find("swrast") != std::string::npos) {
-	    w->console->printString(dm_msgs.c_str());
-	    w->console->printString("\n");
-	    have_msg = 1;
-	}
-    }
-
     // If we did write any messages, need to restore the prompt
     if (have_msg) {
 	w->console->prompt("$ ");

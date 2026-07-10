@@ -70,7 +70,7 @@
 #endif
 
 #include "dm.h"
-#include "dm/fbserv.h"
+#include "imgstream/fbserv.h"
 #include "bg/lseg.h"
 
 #include "icv/io.h"
@@ -1145,6 +1145,42 @@ free_path_edit_params(struct bu_hash_tbl *t)
 }
 
 
+static void
+tclcad_view_host_destroy(struct tclcad_obj *top, void *view_ctx)
+{
+    if (!top || !top->to_gedp || !view_ctx)
+	return;
+
+    struct dm *dmp = tclcad_commands_display_manager(view_ctx);
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+
+    if (tvd) {
+	if (fbs_can_close(&tvd->gdv_fbs))
+	    (void)fbs_close(&tvd->gdv_fbs);
+	(void)to_close_fbs(view_ctx);
+    }
+
+    /* The Tk host owns this controller.  Remove every borrowed GED
+     * reference before dm_close destroys it. */
+    ged_draw_obol_controller_detach_for_view(top->to_gedp, view_ctx);
+
+    if (dmp) {
+	struct bu_vls *dm_tcl_cmd = dm_get_pathname(dmp);
+	if (dm_tcl_cmd && bu_vls_strlen(dm_tcl_cmd))
+	    Tcl_DeleteCommand(top->to_interp, bu_vls_cstr(dm_tcl_cmd));
+	ged_view_context_display_manager_set(view_ctx, NULL);
+	(void)dm_close(dmp);
+    }
+
+    if (tvd) {
+	bu_vls_free(&tvd->gdv_edit_motion_delta_callback);
+	bu_vls_free(&tvd->gdv_callback);
+	tclcad_view_data_unbind_view_ctx(view_ctx);
+	BU_PUT(tvd, struct tclcad_view_data);
+    }
+}
+
+
 /**
  * @brief
  * Called by Tcl when the object is destroyed.
@@ -1165,30 +1201,7 @@ to_deleteProc(ClientData clientData)
 	struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
 	    gdvp = BU_PTBL_GET(views, i);
-
-	    // There is a top level command created in the Tcl interp that is the name
-	    // of the dm.  Clear that command.
-	    struct bu_vls *dm_tcl_cmd = dm_get_pathname(tclcad_commands_display_manager(gdvp));
-	    if (dm_tcl_cmd && bu_vls_strlen(dm_tcl_cmd))
-		Tcl_DeleteCommand(top->to_interp, bu_vls_cstr(dm_tcl_cmd));
-
-	    // Close the dm.  This is not done by libged because libged only manages the
-	    // data bv knows about.  From bv's perspective, dmp is just a pointer
-	    // to an opaque data structure it knows nothing about.
-	    (void)dm_close(tclcad_commands_display_manager(gdvp));
-
-	    // Delete libtclcad specific parts of data - ged_free (called by
-	    // ged_close) will handle freeing the primary bv list entries.
-	    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);
-	    if (tvd) {
-		bu_vls_free(&tvd->gdv_edit_motion_delta_callback);
-		bu_vls_free(&tvd->gdv_callback);
-		/* Clear the view binding before freeing tvd so later cleanup
-		 * paths cannot dereference freed TclCAD storage. */
-		tclcad_view_data_unbind_view_ctx(gdvp);
-		BU_PUT(tvd, struct tclcad_view_data);
-	    }
-
+	    tclcad_view_host_destroy(top, gdvp);
 	}
 
 	// Clean up the other libtclcad data
@@ -3504,6 +3517,23 @@ to_delete_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
+    if (!current_top || current_top->to_gedp != gedp) {
+	bu_vls_printf(gedp->ged_result_str, "View host is unavailable - %s", argv[1]);
+	return BRLCAD_ERROR;
+    }
+
+    const int was_active = (ged_view_active_ctx(gedp) == gdvp);
+    tclcad_view_host_destroy(current_top, gdvp);
+    (void)ged_view_set_context_remove(ged_view_set_ctx(gedp), gdvp);
+
+    if (was_active) {
+	ged_view_active_ctx_set(gedp, NULL);
+	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+	if (views && BU_PTBL_LEN(views))
+	    ged_view_active_ctx_set(gedp, BU_PTBL_GET(views, 0));
+    }
+
+    ged_view_context_free(gdvp);
     return BRLCAD_OK;
 }
 
@@ -4563,7 +4593,8 @@ to_new_view(struct ged *gedp,
 	    av[i+newargs] = argv[i];
 	av[i+newargs] = (const char *)NULL;
 
-	struct dm *new_dmp = dm_open(NULL, (void *)current_top->to_interp, type, ac, av);
+	struct dm *new_dmp = dm_open(new_view_ctx,
+		(void *)current_top->to_interp, type, ac, av);
 	if (new_dmp == DM_NULL) {
 	    bu_ptbl_free(callbacks);
 	    BU_PUT(callbacks, struct bu_ptbl);
@@ -4611,6 +4642,44 @@ to_new_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
     callbacks = NULL;
+
+#ifdef HAVE_TKOBOL_HOST
+    struct dm *view_dmp = tclcad_commands_display_manager(new_view_ctx);
+    void *tkobol_controller = tclcad_tkobol_controller(view_dmp);
+
+    int have_obol_endpoint = 0;
+    struct bu_ptbl *obol_views = ged_view_set_views_ctx(gedp);
+    for (size_t i = 0; obol_views && i < BU_PTBL_LEN(obol_views); i++) {
+	void *candidate = BU_PTBL_GET(obol_views, i);
+	if (candidate != new_view_ctx &&
+		ged_draw_obol_controller_opaque_for_view(candidate)) {
+	    have_obol_endpoint = 1;
+	    break;
+	}
+    }
+
+    int attached_primary = 0;
+    if (tkobol_controller && !have_obol_endpoint) {
+	attached_primary = ged_draw_obol_controller_attach_opaque(gedp,
+		tkobol_controller, 1);
+    }
+    if (tkobol_controller &&
+	    ((!have_obol_endpoint && !attached_primary) ||
+	     !ged_draw_obol_controller_attach_opaque_for_view(gedp,
+		new_view_ctx, tkobol_controller, 1))) {
+	if (attached_primary)
+	    ged_draw_obol_controller_detach_opaque(gedp, tkobol_controller);
+	tclcad_view_data_unbind_view_ctx(new_view_ctx);
+	ged_view_context_display_manager_set(new_view_ctx, NULL);
+	(void)dm_close(view_dmp);
+	BU_PUT(tvd, struct tclcad_view_data);
+	if (!reuse_active_view)
+	    ged_view_context_free(new_view_ctx);
+	bu_vls_printf(gedp->ged_result_str,
+		"Failed to attach Obol controller for %s\n", argv[1]);
+	return BRLCAD_ERROR;
+    }
+#endif
 
     ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
     if (ged_draw_view_context_lod_policy_get(&lod_policy, new_view_ctx)) {
@@ -4893,8 +4962,6 @@ to_pix(struct ged *gedp,
     static int bytes_per_pixel = 3;
     int i = 0;
     int height = 0;
-    int has_obol = 0;
-    int make_ret = 0;
     int bytes_per_line;
 
     /* initialize result */
@@ -4916,12 +4983,10 @@ to_pix(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    has_obol = ged_draw_obol_controller_opaque_for_view(gdvp) != NULL;
-    if (!has_obol &&
-	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") &&
-	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
-	bu_vls_printf(gedp->ged_result_str, "%s: not yet supported for this display manager (i.e. must be OpenGL based)", argv[0]);
-	return BRLCAD_OK;
+    if (!ged_draw_obol_controller_opaque_for_view(gdvp)) {
+	bu_vls_printf(gedp->ged_result_str,
+		"%s: view does not have an Obol drawing controller", argv[0]);
+	return BRLCAD_ERROR;
     }
 
     bytes_per_line = dm_get_width(tclcad_commands_display_manager(gdvp)) * bytes_per_pixel;
@@ -4935,23 +5000,13 @@ to_pix(struct ged *gedp,
 
     height = dm_get_height(tclcad_commands_display_manager(gdvp));
 
-    if (has_obol) {
-	(void)ged_draw_obol_framebuffer_present(gedp);
-	if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get Obol display image\n", argv[0]);
-	    fclose(fp);
-	    return BRLCAD_ERROR;
-	}
-    } else {
-	make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
-	if (!make_ret) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
-	    fclose(fp);
-	    return BRLCAD_ERROR;
-	}
-
-	if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
+    (void)ged_draw_obol_framebuffer_present(gedp);
+    if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
+	struct dm *dmp = tclcad_commands_display_manager(gdvp);
+	if (!dmp || dm_make_current(dmp) != BRLCAD_OK ||
+		dm_get_display_image(dmp, &pixels, 0, 0) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "%s: Couldn't get Obol host display image\n", argv[0]);
 	    fclose(fp);
 	    return BRLCAD_ERROR;
 	}
@@ -4991,8 +5046,6 @@ to_png(struct ged *gedp,
     int i = 0;
     int width = 0;
     int height = 0;
-    int has_obol = 0;
-    int make_ret = 0;
     int bytes_per_line;
 
     /* initialize result */
@@ -5014,12 +5067,10 @@ to_png(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    has_obol = ged_draw_obol_controller_opaque_for_view(gdvp) != NULL;
-    if (!has_obol &&
-	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "wgl") &&
-	!BU_STR_EQUIV(dm_get_type(tclcad_commands_display_manager(gdvp)), "ogl")) {
-	bu_vls_printf(gedp->ged_result_str, "%s: not yet supported for this display manager (i.e. must be OpenGL based)", argv[0]);
-	return BRLCAD_OK;
+    if (!ged_draw_obol_controller_opaque_for_view(gdvp)) {
+	bu_vls_printf(gedp->ged_result_str,
+		"%s: view does not have an Obol drawing controller", argv[0]);
+	return BRLCAD_ERROR;
     }
 
     bytes_per_line = dm_get_width(tclcad_commands_display_manager(gdvp)) * bytes_per_pixel;
@@ -5047,23 +5098,13 @@ to_png(struct ged *gedp,
 
     width = dm_get_width(tclcad_commands_display_manager(gdvp));
     height = dm_get_height(tclcad_commands_display_manager(gdvp));
-    if (has_obol) {
-	(void)ged_draw_obol_framebuffer_present(gedp);
-	if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get Obol display image\n", argv[0]);
-	    fclose(fp);
-	    return BRLCAD_ERROR;
-	}
-    } else {
-	make_ret = dm_make_current(tclcad_commands_display_manager(gdvp));
-	if (make_ret) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't make context current\n", argv[0]);
-	    fclose(fp);
-	    return BRLCAD_ERROR;
-	}
-
-	if (dm_get_display_image(tclcad_commands_display_manager(gdvp), &pixels, 0, 0) != BRLCAD_OK) {
-	    bu_vls_printf(gedp->ged_result_str, "%s: Couldn't get display image\n", argv[0]);
+    (void)ged_draw_obol_framebuffer_present(gedp);
+    if (ged_draw_obol_view_display_image(gedp, gdvp, &pixels, 0, 0) != 1) {
+	struct dm *dmp = tclcad_commands_display_manager(gdvp);
+	if (!dmp || dm_make_current(dmp) != BRLCAD_OK ||
+		dm_get_display_image(dmp, &pixels, 0, 0) != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		    "%s: Couldn't get Obol host display image\n", argv[0]);
 	    fclose(fp);
 	    return BRLCAD_ERROR;
 	}
@@ -6377,7 +6418,7 @@ to_vslew(struct ged *gedp,
 	    ged_exec_grid(gedp, 2, (const char **)av);
 	}
 
-	/* BSG line-snap centering is retired; Obol scene snapping must own any
+	/* Legacy line-snap centering is retired; Obol scene snapping must own any
 	 * future line-snap recenter behavior. */
 
 	struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(gdvp);

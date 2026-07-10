@@ -176,6 +176,9 @@ Dm_Init(Tcl_Interp *interp)
     register_cmds(interp, cmdtab);
 
 #ifdef HAVE_TKOBOL_HOST
+    extern const struct dm *tclcad_tkobol_dm(void);
+    if (dm_register_backend(tclcad_tkobol_dm()) != BRLCAD_OK)
+	return TCL_ERROR;
     if (BrlcadTkObolHost_Init(interp) != TCL_OK)
 	return TCL_ERROR;
 #endif

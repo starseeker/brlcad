@@ -21,8 +21,8 @@
  *
  * LoD cross-run cache-stability test.
  *
- * The bsg_lod_cache unit test verifies in-process round-trips.  This test
- * exercises the cross-process (or cross-ged_open) scenario:
+ * The mesh LoD cache tests verify in-process round-trips.  This test exercises
+ * the cross-process (or cross-ged_open) scenario:
  *
  *  Run 1:
  *    a. Open moss.g, facetize all.g → all.bot.
@@ -39,9 +39,9 @@
  *    e. ged_close.
  *
  *  Assert that R2 renders non-empty LoD output from the cache established by
- *  Run 1.  Exact pixel equality is intentionally not required: the modern BSG
- *  render path may use different backend cache identities without changing
- *  user-facing LoD semantics.
+ *  Run 1.  Exact pixel equality is intentionally not required: the Obol render
+ *  path may use different cache identities without changing user-facing LoD
+ *  semantics.
  *
  * Usage: ged_test_lod_crossrun <directory-containing-moss.g>
  */

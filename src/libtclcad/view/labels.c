@@ -169,12 +169,12 @@ to_data_labels_func(Tcl_Interp *interp,
     if (!gdlsp)
 	return BRLCAD_ERROR;
 
-    const char *bsg_name = (argv[0][0] == 's') ? "_tcl_sdata_labels" : "_tcl_data_labels";
+    const char *feature_name = (argv[0][0] == 's') ? "_tcl_sdata_labels" : "_tcl_data_labels";
 
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
 	    bu_vls_printf(gedp->ged_result_str, "%d",
-			  ged_draw_view_context_data_labels_draw_get(view_ctx, bsg_name));
+			  ged_draw_view_context_data_labels_draw_get(view_ctx, feature_name));
 	    return BRLCAD_OK;
 	}
 
@@ -189,7 +189,7 @@ to_data_labels_func(Tcl_Interp *interp,
 	    else
 		gdlsp->gdls_draw = 0;
 
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, bsg_name);
+	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}
@@ -200,7 +200,7 @@ to_data_labels_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
 	    unsigned char rgb[3] = {0, 0, 0};
-	    if (ged_draw_view_context_data_labels_color_get(view_ctx, bsg_name, rgb)) {
+	    if (ged_draw_view_context_data_labels_color_get(view_ctx, feature_name, rgb)) {
 		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			      (int)rgb[0], (int)rgb[1], (int)rgb[2]);
 	    } else {
@@ -226,7 +226,7 @@ to_data_labels_func(Tcl_Interp *interp,
 
 	    VSET(gdlsp->gdls_color, r, g, b);
 
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, bsg_name);
+	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}
@@ -240,12 +240,12 @@ to_data_labels_func(Tcl_Interp *interp,
 	/* { {{label this} {0 0 0}} {{label that} {100 100 100}} }*/
 
 	if (argc == 2) {
-	    size_t _child_cnt = ged_draw_view_context_data_labels_count(view_ctx, bsg_name);
+	    size_t _child_cnt = ged_draw_view_context_data_labels_count(view_ctx, feature_name);
 	    if (_child_cnt > 0) {
 		for (size_t _k = 0; _k < _child_cnt; _k++) {
 		    struct bu_vls text = BU_VLS_INIT_ZERO;
 		    point_t pt;
-		    if (!ged_draw_view_context_data_labels_copy(view_ctx, bsg_name, _k, &text, pt, NULL)) {
+		    if (!ged_draw_view_context_data_labels_copy(view_ctx, feature_name, _k, &text, pt, NULL)) {
 			bu_vls_free(&text);
 			continue;
 		    }
@@ -277,7 +277,7 @@ to_data_labels_func(Tcl_Interp *interp,
 	    /* Clear out data points */
 	    if (ac < 1) {
 		Tcl_Free((char *)av);
-		(void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, bsg_name);
+		(void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
 		to_refresh_view(view_ctx);
 		return BRLCAD_OK;
 	    }
@@ -342,7 +342,7 @@ to_data_labels_func(Tcl_Interp *interp,
 	    }
 
 	    Tcl_Free((char *)av);
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, bsg_name);
+	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}
@@ -362,7 +362,7 @@ to_data_labels_func(Tcl_Interp *interp,
 
 	    gdlsp->gdls_size = size;
 
-	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, bsg_name);
+	    (void)_tclcad_data_labels_sync_draw_view(view_ctx, gdlsp, feature_name);
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
 	}

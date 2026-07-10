@@ -143,7 +143,6 @@ set(
   QgCanvasInput.h
   QgCanvasState.h
   QgLegacyViewContext.h
-  QgLegacyViewDm.h
   QgObolDatabaseSyncPrivate.h
   QgObolDrawSyncPrivate.h
   QgObolEditPreviewPrivate.h

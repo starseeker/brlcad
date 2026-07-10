@@ -47,6 +47,7 @@ set(
 
 set(TCLCAD_TKOBOL_HOST OFF)
 set(TCLCAD_TKOBOL_DEFINITIONS)
+set(TCLCAD_TKOBOL_DM_DEFINITION)
 if(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
   find_package(OpenGL)
   if("${TK_WINDOWING_SYSTEM}" STREQUAL "x11")
@@ -54,16 +55,26 @@ if(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
     if(OPENGL_FOUND AND X11_FOUND)
       set(TCLCAD_TKOBOL_HOST ON)
       set(TCLCAD_TKOBOL_DEFINITIONS TOGL_X11 TOGL_USE_OVERLAY=0)
+      set(TCLCAD_TKOBOL_DM_DEFINITION TKOBOL_X11)
     endif()
   elseif(WIN32)
     if(OPENGL_FOUND)
       set(TCLCAD_TKOBOL_HOST ON)
       set(TCLCAD_TKOBOL_DEFINITIONS TOGL_WGL TOGL_USE_OVERLAY=0)
+      set(TCLCAD_TKOBOL_DM_DEFINITION TKOBOL_WGL)
     endif()
   endif()
   if(TCLCAD_TKOBOL_HOST)
     set(TCLCAD_TKOBOL_HOST ON)
-    list(APPEND LIBTCLCAD_SRCS tkobol/vendor/togl/togl.c)
+    list(APPEND LIBTCLCAD_SRCS
+      tkobol/dm-tkobol.cpp
+      tkobol/vendor/togl/togl.c
+    )
+    set_property(
+      SOURCE tkobol/dm-tkobol.cpp
+      APPEND
+      PROPERTY COMPILE_DEFINITIONS ${TCLCAD_TKOBOL_DM_DEFINITION}
+    )
     if(WIN32)
       list(APPEND LIBTCLCAD_SRCS tkobol/vendor/togl/toglFont.c)
       set_property(
@@ -142,8 +153,6 @@ if(BRLCAD_ENABLE_TCL)
   # For anyone to do anything with tclcad, we need the libged plugins
   add_dependencies(libtclcad ged_plugins)
 endif(BRLCAD_ENABLE_TCL)
-
-add_subdirectory(tkobol)
 
 add_subdirectory(tests)
 

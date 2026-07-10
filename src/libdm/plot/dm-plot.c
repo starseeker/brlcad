@@ -890,10 +890,7 @@ struct dm_impl dm_plot_impl = {
     FB_NULL,
     NULL,			/* Tcl interpreter */
     NULL,                       /* Drawing context */
-    NULL,                       /* App data */
-    NULL,                       /* backend ops */
-    NULL,                       /* backend resource cache */
-    0                           /* backend frame generation */
+    NULL                        /* App data */
 };
 
 struct dm dm_plot = { DM_MAGIC, &dm_plot_impl, 0 };

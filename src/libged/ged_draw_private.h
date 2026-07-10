@@ -22,8 +22,8 @@
  * Private node-facing draw-scene bridge for libged implementation files.
  *
  * Installed GED drawing APIs are record/ref/transaction based.  These helpers
- * are intentionally not installed: they preserve the current BSG-backed draw
- * implementation while public callers migrate to semantic records and refs.
+ * are intentionally not installed: public callers use semantic records and
+ * refs while these helpers connect libged to its Obol scene controller.
  */
 
 #ifndef LIBGED_GED_DRAW_PRIVATE_H
@@ -489,9 +489,6 @@ GED_EXPORT extern int ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod
 							   struct directory *dp,
 							   const struct bg_tess_tol *ttol,
 							   const struct bn_tol *tol);
-GED_EXPORT extern ged_draw_group_ref ged_draw_source_root_create_group_ref(
-	struct ged *gedp,
-	void *view_ctx);
 GED_EXPORT extern void *ged_draw_source_root_attach_view_contexts(
 	struct ged *gedp,
 	void *active_view_ctx,

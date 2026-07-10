@@ -115,22 +115,10 @@ dm_graphics_system(const char *dmtype)
  * applications such as mged that open a DM via dm_open() outside of a Qt
  * widget context.  The ordering reflects historical platform priorities:
  *   tkobol - Tk-hosted retained Obol renderer
- *   wgl - legacy Windows OpenGL fallback (MSVC / MinGW builds)
- *   ogl - legacy X11 OpenGL fallback (Linux / macOS native GL)
- *   tkswrast - Tk-hosted OSMesa fallback for MGED/Tcl clients
- *   X - X11 non-GL fallback
- *
- * The Qt-based backends (dm-qtgl, qged's swrast canvas path) are intentionally
- * absent from this list because their widget lifetime is managed by qged.
- * tkswrast is different: it is a Tk display manager wrapper around the
- * headless OSMesa swrast backend, so it can be selected by MGED/Tcl clients
- * using their normal Tk window context.
- *
- * For headless / scripted use with mged, pass --dm-type swrast on the command
- * line; dm_open() accepts swrast without a widget context by using the bsg_view
- * pointer (view_state->vs_gvp) as the ctx argument.
+ * Qt Obol canvases are application hosts rather than libdm plugins.  Headless
+ * callers use dm-obol explicitly instead of a hidden software-raster DM.
  */
-static const char *priority_list[] = {"tkobol", "wgl", "ogl", "tkswrast", "X", NULL};
+static const char *priority_list[] = {"tkobol", NULL};
 
 
 extern "C" void
@@ -172,12 +160,7 @@ dm_list_types(struct bu_vls *list, const char *separator)
 	b = priority_list[i];
     }
 
-    /* Report anything not included in the priority list but still available */
-    const char *cmd2 = getenv("DM_SWRAST");
-    int report_swrast = 0;
-    if (BU_STR_EQUAL(cmd2, "1"))
-	report_swrast = 1;
-
+    /* Report anything not included in the priority list but still available. */
     std::map<std::string, const struct dm *>::iterator d_it;
     for (d_it = dmb->begin(); d_it != dmb->end(); d_it++) {
 	if (checked.find(d_it->first) != checked.end()) {
@@ -186,8 +169,6 @@ dm_list_types(struct bu_vls *list, const char *separator)
 	const struct dm *d = d_it->second;
 	const char *dname = dm_get_name(d);
 	if (dname) {
-	    if (BU_STR_EQUAL(dname, "swrast") && !report_swrast)
-		continue;
 	    if (strlen(bu_vls_cstr(list)) > 0)
 		bu_vls_printf(list, "%s", separator);
 	    bu_vls_printf(list, "%s", dname);
@@ -216,13 +197,6 @@ dm_validXType(const char *dpy_string, const char *name)
     if (d_it == dmb->end()) {
 	return 0;
     }
-
-    const char *cmd2 = getenv("DM_SWRAST");
-    int report_swrast = 0;
-    if (BU_STR_EQUAL(cmd2, "1"))
-	report_swrast = 1;
-    if (BU_STR_EQUAL(name, "swrast") && !report_swrast)
-	return 0;
 
     const struct dm *d = d_it->second;
     int is_valid = d->i->dm_viable(dpy_string);

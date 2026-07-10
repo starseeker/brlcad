@@ -1607,6 +1607,13 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open GED Obol draw-sync test database");
 
+    void *initial_view_ctx = ged_draw_active_view_ctx(gedp);
+    if (ged_draw_obol_scene_controller(gedp) ||
+	    ged_draw_obol_controller(gedp) ||
+	    ged_draw_ensure_root_attached(gedp) ||
+	    (initial_view_ctx && ged_draw_view_context_scene_attached(initial_view_ctx)))
+	FAIL("GED without an Obol owner should expose an explicitly empty scene");
+
     SoSeparator *root = new SoSeparator;
     root->ref();
     SoBRLSceneController scene(root);

@@ -367,10 +367,8 @@ turn `.DbDrawCache` setup into attempts to create `""` or `/.DbDrawCache`.
 The old librt `db_mesh_lod_*`/`rt_mesh_lod_*` facade and per-`db_i`
 mesh-cache state were removed.
 
-The remaining legacy BSG mesh LoD implementation is intentionally isolated
-under `BU_DIR_CACHE/.BsgMeshLodCache`.  It exists only for the retained BSG
-renderer path while that path is being retired, and it must not share
-`.DbDrawCache`, version files, or clear operations with libbrlobol.
+The legacy BSG mesh LoD implementation and its `.BsgMeshLodCache` storage were
+removed with libbsg.  `.DbDrawCache` is the sole retained drawing LoD cache.
 
 Path metadata is stored under an exact full-path key.  Exact-key invalidation,
 cache-wide clearing, GED database-index fanout for indexed affected paths, and
@@ -581,8 +579,7 @@ automatic pending-autoview scheduling and cancellation.
 
 Also keep adding scene-state coverage for no-owned-scene/no-feature-store
 no-op behavior so the view-local LoD invalidation contract is proven outside
-the primary attached-controller flow without recreating retained BSG fallback
-state.
+the primary attached-controller flow without recreating fallback scene state.
 
 Startup proxy publication now consumes cached full-path metadata and
 `test_qtcad_obol_progressive_lod_startup_refine` asserts that seeded cached

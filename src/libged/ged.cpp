@@ -46,8 +46,7 @@
 #include "rt/geom.h"
 #include "raytrace.h"
 #include "bg/plot3.h"
-#include "dm/fbserv.h"
-#include "dm.h"
+#include "imgstream/fbserv.h"
 
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
@@ -123,8 +122,8 @@ ged_close(struct ged *gedp)
 
     /* Clear all displayed geometry BEFORE closing the database.
      * Scene objects hold directory pointers that are only valid while dbip is
-     * open; closing dbip first causes use-after-free during BSG / dl_*
-     * scene-object teardown.  ged_close_core() in close/close.cpp already
+     * open; closing dbip first causes use-after-free during draw-scene
+     * teardown.  ged_close_core() in close/close.cpp already
      * follows this order — this function must match it. */
     if (gedp->dbip) {
 	const char *av[1] = {"zap"};
@@ -717,26 +716,10 @@ ged_rt_fb_get(struct ged *gedp)
 extern "C" GED_EXPORT void
 ged_rt_fb_refresh(struct ged *gedp)
 {
-    const char *dm_name = NULL;
-    void *view_ctx = ged_view_active_ctx(gedp);
-
-    if (!gedp || !view_ctx)
+    if (!gedp)
 	return;
 
     GED_CK_MAGIC(gedp);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp)
-	return;
-
-    dm_name = dm_get_dm_name(dmp);
-    if (!dm_name)
-	return;
-
-    if (BU_STR_EQUAL(dm_name, "swrast")) { ged_rt_fb_set(gedp, "/dev/swrast"); return; }
-    if (BU_STR_EQUAL(dm_name, "qtgl")) { ged_rt_fb_set(gedp, "/dev/qtgl"); return; }
-    if (BU_STR_EQUAL(dm_name, "ogl")) { ged_rt_fb_set(gedp, "/dev/ogl"); return; }
-    if (BU_STR_EQUAL(dm_name, "wgl")) { ged_rt_fb_set(gedp, "/dev/wgl"); return; }
-
     ged_rt_fb_set(gedp, NULL);
 }
 

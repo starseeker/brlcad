@@ -427,8 +427,6 @@ QgModel::QgModel(QObject *p, const char *npath)
 	m_session = new QgSession(this);
 	struct ged *gedp = m_session->ged();
 
-	/* Independent view state is managed through BSG view-scope records. */
-
 	// Set up the root item
 	rootItem = new QgItem(0, this);
 	rootItem->mdl = this;
