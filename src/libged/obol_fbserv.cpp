@@ -725,6 +725,53 @@ ged_draw_obol_view_display_image(struct ged *gedp,
     return ret == BRLCAD_OK ? 1 : -1;
 }
 
+extern "C" GED_EXPORT int
+ged_draw_obol_view_render_current(struct ged *gedp,
+				  void *view_ctx,
+				  int clear_window,
+				  int clear_zbuffer)
+{
+    if (!gedp)
+	return -1;
+    if (!view_ctx)
+	view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return -1;
+
+    BRLObolViewController *controller =
+	static_cast<BRLObolViewController *>(
+	    ged_draw_obol_controller_opaque_for_view(view_ctx));
+    if (!controller)
+	return 0;
+
+    struct dm *dmp =
+	(struct dm *)ged_view_context_display_manager_get(view_ctx);
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    int width = dmp ? dm_get_width(dmp) : 0;
+    int height = dmp ? dm_get_height(dmp) : 0;
+    if (view) {
+	if (width <= 0)
+	    width = bv_width_get(view);
+	if (height <= 0)
+	    height = bv_height_get(view);
+    }
+    if (width <= 0 || height <= 0)
+	return -1;
+
+    controller->setViewportSize((unsigned int)width,
+	(unsigned int)height);
+    if (!controller->syncCameraFromViewContext(view_ctx))
+	return -1;
+
+    (void)controller->realizePending();
+
+    /* Camera synchronization and realization request a frame.  renderPending
+     * deliberately uses the display host's already-current GL context. */
+    return controller->renderPending(clear_window ? TRUE : FALSE,
+	clear_zbuffer ? TRUE : FALSE, NULL) ? 1 : -1;
+}
+
 extern "C" int
 ged_obol_fbserv_present(struct ged *gedp)
 {

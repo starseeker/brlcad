@@ -28,6 +28,7 @@
  *   2. Edit matrix state is accepted by the neutral view context.
  *   3. Obol DM attachments use per-view controller attachments.
  *   4. Obol DMs do not inherit stale standalone rt framebuffer devices.
+ *   5. GL display hosts can own a per-view Obol render endpoint.
  *
  * Uses the headless Obol/Coin off-screen renderer; no display hardware
  * required.
@@ -535,6 +536,94 @@ test_obol_rt_framebuffer_cache(const char *datadir)
     return fail;
 }
 
+/* ========================================================================== */
+/* Test 5: non-Obol GL hosts can render through an owned Obol view endpoint   */
+/* ========================================================================== */
+static int
+test_owned_render_endpoint(const char *datadir)
+{
+    bu_log("\n--- Test 5: owned Obol render endpoint ---\n");
+
+    struct bu_vls fname = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&fname, "%s/moss.g", datadir);
+    std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
+    std::ofstream tmp("mged_view_state_t5.g", std::ios::binary);
+    tmp << orig.rdbuf();
+    orig.close(); tmp.close();
+    bu_vls_free(&fname);
+
+    struct ged *gedp = ged_open("db", "mged_view_state_t5.g", 1);
+    if (!gedp) {
+	bu_file_delete("mged_view_state_t5.g");
+	return 1;
+    }
+
+    int fail = 0;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    bv_dimensions_set(DRAW_TEST_BV(view_ctx), 384, 384);
+    bv_unit_conversion_set(DRAW_TEST_BV(view_ctx),
+	gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
+
+    if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1)) {
+	bu_log("FAIL: could not create an owned Obol render endpoint\n");
+	fail = 1;
+    }
+
+    BRLObolViewController *controller = obol_controller_for_view(view_ctx);
+    if (!fail && (!controller || !controller->getRenderSceneRoot())) {
+	bu_log("FAIL: owned endpoint did not bind a per-view render root\n");
+	fail = 1;
+    }
+
+    const char *av[3] = {"draw", "all.g", NULL};
+    if (!fail && ged_exec_draw(gedp, 2, av) != BRLCAD_OK) {
+	bu_log("FAIL: owned-endpoint draw failed: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    av[0] = "autoview";
+    if (!fail && ged_exec_autoview(gedp, 1, av) != BRLCAD_OK) {
+	bu_log("FAIL: owned-endpoint autoview failed: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    if (!fail)
+	do_full_refresh(gedp);
+
+    unsigned char *image = NULL;
+    if (!fail) {
+	controller->setViewportSize(384, 384);
+	controller->syncCameraFromViewContext(view_ctx);
+	int ret = controller->renderToImage(&image, 1, 0);
+	if (ret != BRLCAD_OK || !image) {
+	    bu_log("FAIL: owned endpoint did not render image data\n");
+	    fail = 1;
+	}
+    }
+
+    if (!fail) {
+	size_t lit_pixels = 0;
+	for (size_t i = 0; i < 384u * 384u; i++) {
+	    const unsigned char *p = image + i * 3;
+	    if (p[0] || p[1] || p[2])
+		lit_pixels++;
+	}
+	if (!lit_pixels) {
+	    bu_log("FAIL: owned endpoint rendered an empty image\n");
+	    fail = 1;
+	} else {
+	    bu_log("PASS: owned endpoint rendered %zu non-black pixels\n",
+		lit_pixels);
+	}
+    }
+
+    if (image)
+	bu_free(image, "owned Obol render endpoint test image");
+    ged_close(gedp);
+    bu_file_delete("mged_view_state_t5.g");
+    return fail;
+}
+
 /* main                                                                        */
 /* ========================================================================== */
 
@@ -560,9 +649,10 @@ main(int argc, char *argv[])
     failures += test_edit_context_snapshot(datadir);
     failures += test_multi_obol_dm_attachment(datadir);
     failures += test_obol_rt_framebuffer_cache(datadir);
+    failures += test_owned_render_endpoint(datadir);
 
     if (failures == 0) {
-	bu_log("\nAll MGED view-state tests PASSED (%d/4)\n", 4);
+	bu_log("\nAll MGED view-state tests PASSED (%d/5)\n", 5);
     } else {
 	bu_log("\n%d MGED view-state test(s) FAILED\n", failures);
     }

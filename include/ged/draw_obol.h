@@ -132,6 +132,17 @@ ged_draw_obol_display_manager_attach_for_view(struct ged *gedp,
 	int require_obol_controller);
 
 /**
+ * Ensure @p view_ctx has an owned Obol render endpoint.
+ *
+ * Display hosts that render Obol through their own current graphics context
+ * use this instead of supplying a controller through their display manager.
+ */
+GED_EXPORT int
+ged_draw_obol_render_endpoint_ensure_for_view(struct ged *gedp,
+	void *view_ctx,
+	int sync_current_scene);
+
+/**
  * Return the Obol view controller currently associated with @p view_ctx.
  *
  * The returned pointer is a borrowed BRLObolViewController pointer exposed as
@@ -216,6 +227,22 @@ ged_draw_obol_view_display_image(struct ged *gedp,
 	unsigned char **image,
 	int flip,
 	int alpha);
+
+/**
+ * Render an Obol-backed GED view into the caller's current OpenGL context.
+ *
+ * Display hosts must make their target context current before calling.  The
+ * Obol viewport and camera are synchronized from @p view_ctx before the frame
+ * is rendered.
+ *
+ * Returns 1 when a frame was rendered, 0 when no Obol controller is
+ * available, and -1 when the controller could not render the frame.
+ */
+GED_EXPORT int
+ged_draw_obol_view_render_current(struct ged *gedp,
+	void *view_ctx,
+	int clear_window,
+	int clear_zbuffer);
 
 /**
  * Release the libged-owned Obol framebuffer bridge, if one is active.

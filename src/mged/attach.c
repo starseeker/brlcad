@@ -42,6 +42,7 @@
 #endif
 
 #include "vmath.h"
+#include "bsg/defines.h"
 #include "bu/env.h"
 #include "bu/ptbl.h"
 #include "ged.h"
@@ -131,6 +132,15 @@ mged_dm_init(
     ged_view_context_display_manager_set(view_state->vs_gvp, (void *)DMP);
     if (!ged_draw_obol_display_manager_attach_for_view(s->gedp,
 	    view_state->vs_gvp, (void *)DMP, 1, 0)) {
+	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
+	dm_close(DMP);
+	DMP = DM_NULL;
+	return TCL_ERROR;
+    }
+    const struct dm_backend_ops *backend_ops = dm_get_backend_ops(DMP);
+    if (backend_ops && backend_ops->type_tag == BSG_BACKEND_GL &&
+	!ged_draw_obol_render_endpoint_ensure_for_view(s->gedp,
+	    view_state->vs_gvp, 1)) {
 	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
 	dm_close(DMP);
 	DMP = DM_NULL;

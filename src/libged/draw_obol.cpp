@@ -19990,6 +19990,41 @@ ged_draw_obol_display_manager_attach_for_view(struct ged *gedp,
 	    controller, sync_current_scene);
 }
 
+extern "C" int
+ged_draw_obol_render_endpoint_ensure_for_view(struct ged *gedp,
+	void *view_ctx,
+	int sync_current_scene)
+{
+    if (!gedp || !view_ctx)
+	return 0;
+
+    ged_obol_attached_controller *entry =
+	ged_obol_attached_controller_for_view(gedp, view_ctx);
+    if (entry && entry->view_controller)
+	return 1;
+
+    brlobol_init(NULL);
+    BRLObolViewController *controller =
+	new (std::nothrow) BRLObolViewController(new SoBRLSceneGroup);
+    if (!controller)
+	return 0;
+
+    if (!ged_draw_obol_attach_view_common(gedp, view_ctx,
+	controller->getSceneController(), controller, sync_current_scene)) {
+	delete controller;
+	return 0;
+    }
+
+    entry = ged_obol_attached_controller_for_view(gedp, view_ctx);
+    if (!entry || entry->view_controller != controller) {
+	ged_draw_obol_controller_detach_opaque(gedp, controller);
+	delete controller;
+	return 0;
+    }
+    entry->owned_view_controller = 1;
+    return 1;
+}
+
 extern "C" void *
 ged_draw_obol_controller_opaque_for_view(void *view_ctx)
 {
