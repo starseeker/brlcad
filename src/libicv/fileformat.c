@@ -430,31 +430,31 @@ icv_channels_match_color_space(ICV_COLOR_SPACE color_space, size_t channels)
 }
 
 icv_image_t *
-icv_create_with_channels(size_t width, size_t height, ICV_COLOR_SPACE color_space, size_t channels)
+icv_image_create_with_channels(size_t width, size_t height, ICV_COLOR_SPACE color_space, size_t channels)
 {
     icv_image_t *bif;
     size_t data_size;
 
     if (!icv_channels_match_color_space(color_space, channels)) {
-	bu_log("icv_create_with_channels : invalid color space/channel combination\n");
+	bu_log("icv_image_create_with_channels : invalid color space/channel combination\n");
 	return NULL;
     }
 
     if (width == 0 || height == 0) {
-	bu_log("icv_create_with_channels : image dimensions must be greater than zero\n");
+	bu_log("icv_image_create_with_channels : image dimensions must be greater than zero\n");
 	return NULL;
     }
 
     /* Prevent integer overflows on size calculations for massive images. */
     if (width > 0 && height > (size_t)-1 / width / channels / sizeof(double)) {
-	bu_log("icv_create_with_channels : image dimensions excessively large, causing integer overflow\n");
+	bu_log("icv_image_create_with_channels : image dimensions excessively large, causing integer overflow\n");
 	return NULL;
     }
 
     data_size = height * width * channels * sizeof(double);
     bif = (icv_image_t *)calloc(1, sizeof(struct icv_image));
     if (!bif) {
-	bu_log("icv_create_with_channels : image structure allocation failed\n");
+	bu_log("icv_image_create_with_channels : image structure allocation failed\n");
 	return NULL;
     }
 
@@ -468,7 +468,7 @@ icv_create_with_channels(size_t width, size_t height, ICV_COLOR_SPACE color_spac
     icv_image_data_set_stdlib(bif, (double *)calloc(1, data_size));
     if (!bif->data) {
 	free(bif);
-	bu_log("icv_create_with_channels : image data allocation failed\n");
+	bu_log("icv_image_create_with_channels : image data allocation failed\n");
 	return NULL;
     }
 
@@ -493,7 +493,7 @@ icv_image_create(size_t width, size_t height, ICV_COLOR_SPACE color_space)
 	    return NULL;
     }
 
-    bif = icv_create_with_channels(width, height, color_space, channels);
+    bif = icv_image_create_with_channels(width, height, color_space, channels);
     if (!bif) {
 	bu_log("icv_image_create : image allocation failed\n");
 	return NULL;
@@ -545,7 +545,7 @@ icv_clone(const icv_image_t *src)
     if (!ICV_IMAGE_IS_INITIALIZED(src))
 	return NULL;
 
-    dst = icv_create_with_channels(src->width, src->height, src->color_space, src->channels);
+    dst = icv_image_create_with_channels(src->width, src->height, src->color_space, src->channels);
     if (!dst)
 	return NULL;
 
@@ -589,7 +589,7 @@ icv_image_for_write(const icv_image_t *src, ICV_COLOR_SPACE color_space, size_t 
 		return NULL;
 	    }
 	} else if (dst->color_space == ICV_COLOR_SPACE_GRAY && dst->channels == 2) {
-	    icv_image_t *gray = icv_create_with_channels(dst->width, dst->height, ICV_COLOR_SPACE_GRAY, 1);
+	    icv_image_t *gray = icv_image_create_with_channels(dst->width, dst->height, ICV_COLOR_SPACE_GRAY, 1);
 	    if (!gray) {
 		icv_destroy(dst);
 		return NULL;
@@ -622,7 +622,7 @@ icv_image_for_write(const icv_image_t *src, ICV_COLOR_SPACE color_space, size_t 
 	}
 
 	if (src->color_space == ICV_COLOR_SPACE_RGB && (src->channels == 3 || src->channels == 4)) {
-	    dst = icv_create_with_channels(src->width, src->height, ICV_COLOR_SPACE_RGB, 3);
+	    dst = icv_image_create_with_channels(src->width, src->height, ICV_COLOR_SPACE_RGB, 3);
 	    if (!dst)
 		return NULL;
 	    npix = src->width * src->height;

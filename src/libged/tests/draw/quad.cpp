@@ -40,7 +40,7 @@
 #include <ged/draw.h>
 #include <ged/event_txn.h>
 
-#define QDIFF_THRES 25
+#define QUAD_SSIM_THRES 0.985
 
 static int keep_images = 0;
 
@@ -206,9 +206,9 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     int off_by_many_cnt = 0;
     int iret = icv_diff(&matching_cnt, &off_by_1_cnt, &off_by_many_cnt, ctrl,timg);
     if (iret) {
-	uint32_t pret = icv_pdiff(ctrl, timg);
-	bu_log("icv_pdiff Hamming distance(%d/%d): %" PRIu32 "\n", vnum, id, pret);
-	if (pret < QDIFF_THRES)
+	fastf_t score = icv_adiff(ctrl, timg, ICV_DIFF_SSIM);
+	bu_log("icv_adiff SSIM metric(%d/%d): %g\n", vnum, id, score);
+	if (score > QUAD_SSIM_THRES)
 	    iret = 0;
     }
     if (iret) {

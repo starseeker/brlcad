@@ -38,8 +38,8 @@
 #include <ged/event_txn.h>
 
 #define ADIFF_THRES 0.99
-#define CSG_SELECT_LOD_ADIFF_THRES 0.98
-#define MESH_SELECT_LOD_ADIFF_THRES 0.97
+#define CSG_SELECT_LOD_ADIFF_THRES 0.99
+#define MESH_SELECT_LOD_ADIFF_THRES 0.985
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);

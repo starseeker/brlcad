@@ -167,12 +167,8 @@ test_icv_conversion(void)
     imgstream_destroy(roundtrip);
     imgstream_destroy(stream);
 
-    icv_image_t *rgba = icv_create(1, 1, ICV_COLOR_SPACE_RGB);
-    CHECK(rgba != NULL, "created ICV base for RGBA");
-    bu_free(rgba->data, "Image Data");
-    rgba->channels = 4;
-    rgba->alpha_channel = 3;
-    rgba->data = (double *)bu_calloc(4, sizeof(double), "test rgba data");
+    icv_image_t *rgba = icv_image_create_with_channels(1, 1, ICV_COLOR_SPACE_RGB, 4);
+    CHECK(rgba != NULL, "created RGBA ICV image");
     rgba->data[0] = 1.0;
     rgba->data[1] = 0.5;
     rgba->data[2] = 0.0;
@@ -184,7 +180,7 @@ test_icv_conversion(void)
 
     icv_image_t *rgba_snapshot = imgstream_snapshot_icv(rgba_stream);
     CHECK(rgba_snapshot != NULL, "converted RGBA stream to ICV image");
-    CHECK(rgba_snapshot->channels == 4 && rgba_snapshot->alpha_channel == 3, "RGBA ICV snapshot preserves alpha channel");
+    CHECK(rgba_snapshot->channels == 4 && rgba_snapshot->alpha_channel == 1, "RGBA ICV snapshot preserves alpha channel");
 
     icv_destroy(rgba_snapshot);
     imgstream_destroy(rgba_stream);

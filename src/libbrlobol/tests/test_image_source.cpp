@@ -105,7 +105,7 @@ test_static_image_source(void)
     SoBRLImageSource *source = new SoBRLImageSource;
     source->ref();
 
-    icv_image_t *image = icv_create(2, 2, ICV_COLOR_SPACE_RGB);
+    icv_image_t *image = icv_image_create(2, 2, ICV_COLOR_SPACE_RGB);
     CHECK(image != NULL, "created ICV source image");
     for (size_t i = 0; i < image->width * image->height * (size_t)image->channels; i++)
 	image->data[i] = (double)(i % 3) / 2.0;

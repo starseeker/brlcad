@@ -496,17 +496,10 @@ imgstream_snapshot_icv(const imgstream_t *stream)
     if (!stream || !stream->pixels)
 	return NULL;
 
-    icv_image_t *image = icv_create(stream->width, stream->height, ICV_COLOR_SPACE_RGB);
+    icv_image_t *image = icv_image_create_with_channels(stream->width, stream->height,
+	    ICV_COLOR_SPACE_RGB, stream->channels);
     if (!image)
 	return NULL;
-
-    if (stream->channels == 4) {
-	double *data = (double *)bu_calloc(stream->width * stream->height * 4, sizeof(double), "imgstream icv rgba data");
-	bu_free(image->data, "Image Data");
-	image->data = data;
-	image->channels = 4;
-	image->alpha_channel = 3;
-    }
 
     for (size_t y = 0; y < stream->height; y++) {
 	for (size_t x = 0; x < stream->width; x++) {

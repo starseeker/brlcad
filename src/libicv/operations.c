@@ -164,7 +164,7 @@ icv_image_t *icv_add(icv_image_t *img1, icv_image_t *img2)
     data1 =img1->data;
     data2 =img2->data;
 
-    out_img = icv_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
+    out_img = icv_image_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
     if (!out_img)
 	return NULL;
 
@@ -195,7 +195,7 @@ icv_image_t *icv_sub(icv_image_t *img1, icv_image_t *img2)
     data1 =img1->data;
     data2 =img2->data;
 
-    out_img = icv_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
+    out_img = icv_image_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
     if (!out_img)
 	return NULL;
 
@@ -226,7 +226,7 @@ icv_image_t *icv_multiply(icv_image_t *img1, icv_image_t *img2)
     data1 =img1->data;
     data2 =img2->data;
 
-    out_img = icv_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
+    out_img = icv_image_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
     if (!out_img)
 	return NULL;
 
@@ -258,7 +258,7 @@ icv_image_t *icv_divide(icv_image_t *img1, icv_image_t *img2)
     data1 =img1->data;
     data2 =img2->data;
 
-    out_img = icv_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
+    out_img = icv_image_create_with_channels(img1->width, img1->height, img1->color_space, img1->channels);
     if (!out_img)
 	return NULL;
 

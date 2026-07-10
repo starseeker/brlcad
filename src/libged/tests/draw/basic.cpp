@@ -38,20 +38,20 @@
 #define ADIFF_THRES 0.99
 /* Polygon rasterization can vary at edges and fill hatch phase while
  * preserving the intended visual shape. */
-#define POLYGON_ADIFF_THRES 0.98
+#define POLYGON_ADIFF_THRES 0.99
 /* Obol labels use real text rendering rather than the legacy display-manager
  * baseline.  Require stable placement/visibility without pixel-locking glyph
  * rasterization.
  */
-#define LABEL_ADIFF_THRES 0.98
+#define LABEL_ADIFF_THRES 0.99
 /* Data axes are one-pixel raster sensitive at origin and endpoint joins. */
-#define AXES_ADIFF_THRES 0.98
+#define AXES_ADIFF_THRES 0.99
 /* Point-sampled triangle draws validate completeness, not stochastic point
  * distribution identity. */
 #define POINT_TRIANGLE_ADIFF_THRES 0.95
 /* Boolweave evaluated wireframe output is semantically stable but line raster
  * phase differs slightly from the historical control. */
-#define EVALUATED_WIREFRAME_ADIFF_THRES 0.98
+#define EVALUATED_WIREFRAME_ADIFF_THRES 0.99
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);

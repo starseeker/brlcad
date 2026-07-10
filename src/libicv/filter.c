@@ -417,7 +417,7 @@ icv_filter3(icv_image_t *old_img, icv_image_t *curr_img, icv_image_t *new_img, I
 	return NULL;
     }
 
-    out_img = icv_create_with_channels(curr_img->width, curr_img->height, curr_img->color_space, curr_img->channels);
+    out_img = icv_image_create_with_channels(curr_img->width, curr_img->height, curr_img->color_space, curr_img->channels);
     if (!out_img) {
 	bu_free(kern, "icv_filter3 : Kernel Allocation");
 	return NULL;

@@ -179,8 +179,8 @@ draw_test_write_rgb_png(const char *filename, const unsigned char *buffer,
     if (!filename || !buffer || width <= 0 || height <= 0)
 	return BRLCAD_ERROR;
 
-    icv_image_t *img = icv_create(static_cast<size_t>(width),
-				  static_cast<size_t>(height), ICV_COLOR_SPACE_RGB);
+    icv_image_t *img = icv_image_create(static_cast<size_t>(width),
+					static_cast<size_t>(height), ICV_COLOR_SPACE_RGB);
     if (!img)
 	return BRLCAD_ERROR;
 
