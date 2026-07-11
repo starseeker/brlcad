@@ -207,6 +207,8 @@ public:
 
     void setViewLodState(BRLObolViewLodState *viewState);
     BRLObolViewLodState *getViewLodState(void) const;
+    void setSoftwareWireMode(int mode);
+    int getSoftwareWireMode(void) const;
 
     virtual void doAction(SoAction *action) override;
     virtual void GLRender(SoGLRenderAction *action) override;
@@ -222,6 +224,7 @@ private:
     void popViewState(SoAction *action, SbBool pushed);
 
     BRLObolViewLodState *viewState;
+    int softwareWireMode;
 };
 
 BRLOBOL_EXPORT const BRLObolViewLodState::MeshPayload *

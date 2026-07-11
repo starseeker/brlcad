@@ -27,6 +27,7 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
@@ -57,6 +58,7 @@ struct options {
     int height = 512;
     int repeat = 1;
     int progressive_frames = 1;
+    int render_frames = 1;
     bool clear_cache = false;
     std::string cache_dir;
     std::string screengrab;
@@ -66,6 +68,8 @@ struct options {
     int lod_csg = -1;
     int lod_bot_threshold = -1;
     int cad_compact = -1;
+    BRLObolViewController::SoftwareWireMode software_wire =
+	BRLObolViewController::SOFTWARE_WIRE_AUTO;
 };
 
 struct timings {
@@ -75,6 +79,8 @@ struct timings {
     double redraw_ms = 0.0;
     double autoview_ms = 0.0;
     double render_ms = 0.0;
+    double render_first_ms = 0.0;
+    double render_steady_ms = 0.0;
     double screengrab_ms = 0.0;
 };
 
@@ -119,6 +125,7 @@ usage(FILE *fp)
 	"  --repeat <N>         repeat full open/endpoint/draw/close cycle\n"
 	"  --progressive-frames <N>\n"
 	"                       render up to N progressive frames (default: 1)\n"
+	"  --render-frames <N>  render at least N frames for steady-state timing\n"
 	"  --cache-dir <dir>    set BU_DIR_CACHE for this run\n"
 	"  --clear-cache        clear --cache-dir before the first iteration\n"
 	"  --lod-mesh <0|1>     run 'view lod mesh <0|1>' before draw\n"
@@ -126,6 +133,8 @@ usage(FILE *fp)
 	"  --lod-bot-threshold <N>\n"
 	"                       run 'view lod bot_threshold <N>' before draw\n"
 	"  --cad-compact <0|1>  compact eligible realized sources into CAD assemblies\n"
+	"  --software-wire <auto|quality|fast>\n"
+	"                       choose the OSMesa wireframe path (default: auto)\n"
 	"  --help               print this help\n"
 	"\n"
 	"Examples:\n"
@@ -189,6 +198,23 @@ parse_size(const char *str, int *width, int *height)
 	return false;
     *width = w;
     *height = h;
+    return true;
+}
+
+static bool
+parse_software_wire_mode(const char *str,
+	BRLObolViewController::SoftwareWireMode *mode)
+{
+    if (!str || !mode)
+	return false;
+    if (BU_STR_EQUAL(str, "auto"))
+	*mode = BRLObolViewController::SOFTWARE_WIRE_AUTO;
+    else if (BU_STR_EQUAL(str, "quality"))
+	*mode = BRLObolViewController::SOFTWARE_WIRE_QUALITY;
+    else if (BU_STR_EQUAL(str, "fast"))
+	*mode = BRLObolViewController::SOFTWARE_WIRE_FAST;
+    else
+	return false;
     return true;
 }
 
@@ -262,6 +288,11 @@ parse_args(int argc, const char **argv, struct options *opts)
 		return false;
 	    continue;
 	}
+	if (BU_STR_EQUAL(arg, "--render-frames")) {
+	    if (++i >= argc || !parse_positive_int(argv[i], &opts->render_frames))
+		return false;
+	    continue;
+	}
 	if (BU_STR_EQUAL(arg, "--lod-mesh")) {
 	    if (++i >= argc || !parse_bool_int(argv[i], &opts->lod_mesh))
 		return false;
@@ -280,6 +311,12 @@ parse_args(int argc, const char **argv, struct options *opts)
 	}
 	if (BU_STR_EQUAL(arg, "--cad-compact")) {
 	    if (++i >= argc || !parse_bool_int(argv[i], &opts->cad_compact))
+		return false;
+	    continue;
+	}
+	if (BU_STR_EQUAL(arg, "--software-wire")) {
+	    if (++i >= argc ||
+		    !parse_software_wire_mode(argv[i], &opts->software_wire))
 		return false;
 	    continue;
 	}
@@ -411,6 +448,7 @@ initialize_endpoint(struct ged *gedp, const struct options &opts)
 	return NULL;
     controller->setViewportSize((unsigned int)opts.width,
 	(unsigned int)opts.height);
+    controller->setSoftwareWireMode(opts.software_wire);
     if (!controller->syncCameraFromViewContext(view_ctx))
 	return NULL;
     return controller;
@@ -574,23 +612,33 @@ run_once(const struct options &opts, int iter)
     if (draw_ret == BRLCAD_OK && autoview_ret == BRLCAD_OK &&
 	(opts.render || !opts.screengrab.empty())) {
 	start = std::chrono::steady_clock::now();
-	for (int frame = 0; frame < opts.progressive_frames; frame++) {
+	const int frameLimit = std::max(opts.progressive_frames,
+	    opts.render_frames);
+	for (int frame = 0; frame < frameLimit; frame++) {
 	    if (image) {
 		bu_free(image, "ged_draw_perf intermediate image");
 		image = NULL;
 	    }
 	    BRLObolProgressiveStatus status;
+	    const auto frameStart = std::chrono::steady_clock::now();
 	    render_ret = run_render(gedp, controller, &image, &status);
+	    const double frameMs = elapsed_ms(frameStart);
 	    if (render_ret != BRLCAD_OK)
 		break;
+	    if (!progressive_frames)
+		t.render_first_ms = frameMs;
+	    else
+		t.render_steady_ms += frameMs;
 	    progressive_frames++;
 	    progressive_more = status.hasMore ? 1 : 0;
 	    progressive_expanded += status.expanded;
 	    progressive_remaining = status.remaining;
-	    if (!status.hasMore)
+	    if (progressive_frames >= opts.render_frames && !status.hasMore)
 		break;
 	}
 	t.render_ms = elapsed_ms(start);
+	if (progressive_frames > 1)
+	    t.render_steady_ms /= progressive_frames - 1;
     }
 
     if (draw_ret == BRLCAD_OK && autoview_ret == BRLCAD_OK &&
@@ -685,8 +733,9 @@ run_once(const struct options &opts, int iter)
     if (opts.autoview)
 	std::printf(" autoview_ms=%.3f", t.autoview_ms);
     if (opts.render)
-	std::printf(" render_ms=%.3f progressive_frames=%d progressive_more=%d progressive_expanded=%zu progressive_remaining=%zu",
-	    t.render_ms, progressive_frames, progressive_more,
+	std::printf(" render_ms=%.3f render_frame_ms=%.3f render_first_ms=%.3f render_steady_ms=%.3f render_frames=%d progressive_more=%d progressive_expanded=%zu progressive_remaining=%zu",
+	    t.render_ms, progressive_frames ? t.render_ms / progressive_frames : 0.0,
+	    t.render_first_ms, t.render_steady_ms, progressive_frames, progressive_more,
 	    progressive_expanded, progressive_remaining);
     if (!opts.screengrab.empty())
 	std::printf(" screengrab_ms=%.3f", t.screengrab_ms);

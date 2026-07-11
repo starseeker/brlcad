@@ -199,6 +199,34 @@ _dm_find(struct _ged_dm_info *gd, struct bu_vls *name)
     return _dm_name_lookup(gd, bu_vls_cstr(name));
 }
 
+static void *
+_dm_view_for_dm(struct ged *gedp, struct dm *dmp)
+{
+    if (!gedp || !dmp)
+	return NULL;
+    void *active_view = ged_view_active_ctx(gedp);
+    if (active_view && _dm_from_view(active_view) == dmp)
+	return active_view;
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    const size_t view_count = views ? BU_PTBL_LEN(views) : 0;
+    for (size_t i = 0; i < view_count; i++) {
+	void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	if (_dm_from_view(view_ctx) == dmp)
+	    return view_ctx;
+    }
+    return NULL;
+}
+
+static const char *
+_dm_software_wire_name(int mode)
+{
+    switch (mode) {
+	case GED_DRAW_OBOL_SOFTWARE_WIRE_QUALITY: return "quality";
+	case GED_DRAW_OBOL_SOFTWARE_WIRE_FAST: return "fast";
+	default: return "auto";
+    }
+}
+
 int
 _dm_cmd_bg(void *ds, int argc, const char **argv)
 {
@@ -490,6 +518,53 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
     if (!cdmp) {
 	bu_vls_free(&dm_name);
 	return BRLCAD_ERROR;
+    }
+
+    if (ac > 0 && BU_STR_EQUAL(argv[0], "software_wire")) {
+	void *view_ctx = _dm_view_for_dm(gd->gedp, cdmp);
+	int mode = GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO;
+	if (!view_ctx ||
+	    !ged_draw_obol_software_wire_mode_get_for_view(view_ctx, &mode)) {
+	    bu_vls_printf(gd->gedp->ged_result_str,
+		    "display manager view has no Obol controller\n");
+	    bu_vls_free(&dm_name);
+	    return BRLCAD_ERROR;
+	}
+	if (ac == 1) {
+	    bu_vls_printf(gd->gedp->ged_result_str, "%s",
+		    _dm_software_wire_name(mode));
+	    bu_vls_free(&dm_name);
+	    return BRLCAD_OK;
+	}
+	if (ac != 2) {
+	    bu_vls_printf(gd->gedp->ged_result_str,
+		    "software_wire requires auto, quality, or fast\n");
+	    bu_vls_free(&dm_name);
+	    return BRLCAD_ERROR;
+	}
+	if (BU_STR_EQUAL(argv[1], "auto"))
+	    mode = GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO;
+	else if (BU_STR_EQUAL(argv[1], "quality"))
+	    mode = GED_DRAW_OBOL_SOFTWARE_WIRE_QUALITY;
+	else if (BU_STR_EQUAL(argv[1], "fast"))
+	    mode = GED_DRAW_OBOL_SOFTWARE_WIRE_FAST;
+	else {
+	    bu_vls_printf(gd->gedp->ged_result_str,
+		    "invalid software_wire mode '%s'; expected auto, quality, or fast\n",
+		    argv[1]);
+	    bu_vls_free(&dm_name);
+	    return BRLCAD_ERROR;
+	}
+	if (!ged_draw_obol_software_wire_mode_set_for_view(view_ctx, mode)) {
+	    bu_vls_printf(gd->gedp->ged_result_str,
+		    "failed to set Obol software_wire mode\n");
+	    bu_vls_free(&dm_name);
+	    return BRLCAD_ERROR;
+	}
+	const char *cbav[4] = {"dm", "set", "software_wire", argv[1]};
+	_dm_cmd_during_clbk(gd, 4, cbav);
+	bu_vls_free(&dm_name);
+	return BRLCAD_OK;
     }
 
     struct bu_structparse *dmparse = dm_get_vparse(cdmp);

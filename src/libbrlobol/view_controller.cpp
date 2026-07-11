@@ -775,10 +775,13 @@ BRLObolViewController::BRLObolViewController(void) :
     renderBatchRoot(NULL),
     viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
+    imageRenderer(NULL),
+    imageRendererManager(NULL),
     activeCamera(NULL),
     viewportRegion(1, 1),
     backgroundBottom(0.0f, 0.0f, 0.0f),
     backgroundTop(0.0f, 0.0f, 0.0f),
+    softwareWireMode(SOFTWARE_WIRE_AUTO),
     renderRequested(FALSE),
     renderReason(""),
     lastRenderTimeNanoseconds(0),
@@ -842,10 +845,13 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     renderBatchRoot(NULL),
     viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
+    imageRenderer(NULL),
+    imageRendererManager(NULL),
     activeCamera(NULL),
     viewportRegion(1, 1),
     backgroundBottom(0.0f, 0.0f, 0.0f),
     backgroundTop(0.0f, 0.0f, 0.0f),
+    softwareWireMode(SOFTWARE_WIRE_AUTO),
     renderRequested(FALSE),
     renderReason(""),
     lastRenderTimeNanoseconds(0),
@@ -906,6 +912,9 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
 
 BRLObolViewController::~BRLObolViewController(void)
 {
+    delete this->imageRenderer;
+    this->imageRenderer = NULL;
+    this->imageRendererManager = NULL;
     this->clearProgressiveProviders();
     this->setLodService(NULL);
     this->clearRtPickCaches();
@@ -937,6 +946,8 @@ BRLObolViewController::setViewportSceneGraphWithLod(SoNode *root)
 	dynamic_cast<SoBRLCadRenderBatch *>(this->renderBatchRoot);
     if (batch)
 	batch->setBatchSourceRoot(NULL);
+    if (batch)
+	batch->setSoftwareWireMode(this->softwareWireMode);
     if (this->renderLodRoot) {
 	this->viewport->setSceneGraph(NULL);
 	this->renderLodRoot->unref();
@@ -951,6 +962,7 @@ BRLObolViewController::setViewportSceneGraphWithLod(SoNode *root)
     SoBRLViewLodGroup *wrapper = new SoBRLViewLodGroup;
     wrapper->ref();
     wrapper->setViewLodState(this->viewAttachment->getViewLodState());
+    wrapper->setSoftwareWireMode(this->softwareWireMode);
     wrapper->addChild(root);
     this->renderLodRoot = wrapper;
     this->viewport->setSceneGraph(wrapper);
@@ -1145,6 +1157,29 @@ const SbColor &
 BRLObolViewController::getBackgroundTopColor(void) const
 {
     return this->backgroundTop;
+}
+
+void
+BRLObolViewController::setSoftwareWireMode(SoftwareWireMode mode)
+{
+    if (mode < SOFTWARE_WIRE_AUTO || mode > SOFTWARE_WIRE_FAST)
+	mode = SOFTWARE_WIRE_AUTO;
+    if (this->softwareWireMode == mode)
+	return;
+    this->softwareWireMode = mode;
+    if (this->renderLodRoot)
+	this->renderLodRoot->setSoftwareWireMode(mode);
+    SoBRLCadRenderBatch *batch =
+	dynamic_cast<SoBRLCadRenderBatch *>(this->renderBatchRoot);
+    if (batch)
+	batch->setSoftwareWireMode(mode);
+    this->requestRender("software-wire-mode");
+}
+
+BRLObolViewController::SoftwareWireMode
+BRLObolViewController::getSoftwareWireMode(void) const
+{
+    return this->softwareWireMode;
 }
 
 void
@@ -1550,9 +1585,17 @@ BRLObolViewController::renderToImage(unsigned char **image,
 	return BRLCAD_ERROR;
     }
 
-    std::unique_ptr<SoOffscreenRenderer> renderer(contextManager ?
-	new SoOffscreenRenderer(contextManager, region) :
-	new SoOffscreenRenderer(region));
+    if (!this->imageRenderer ||
+	this->imageRendererManager != contextManager) {
+	delete this->imageRenderer;
+	this->imageRenderer = contextManager ?
+	    new SoOffscreenRenderer(contextManager, region) :
+	    new SoOffscreenRenderer(region);
+	this->imageRendererManager = contextManager;
+    } else {
+	this->imageRenderer->setViewportRegion(region);
+    }
+    SoOffscreenRenderer *renderer = this->imageRenderer;
     const SbColor imageBottom = background ? *background :
 	this->backgroundBottom;
     const SbColor imageTop =

@@ -16,6 +16,8 @@
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
 
+#include <obol/cad/SoCADViewState.h>
+
 #include <map>
 #include <vector>
 
@@ -131,7 +133,8 @@ SoBRLCadRenderBatch::SoBRLCadRenderBatch(void) :
     assembly(new SoBRLCadAssembly),
     sourceRoot(NULL),
     cachedSourceSignature(0),
-    batchValid(FALSE)
+    batchValid(FALSE),
+    softwareWireMode(SoCADViewState::SOFTWARE_WIRE_AUTO)
 {
     SO_NODE_CONSTRUCTOR(SoBRLCadRenderBatch);
     this->assembly->ref();
@@ -163,6 +166,15 @@ SoBRLCadRenderBatch::setBatchSourceRoot(SoNode *root)
     this->cachedSourceSignature = 0;
     this->batchValid = FALSE;
     this->batchedSources.clear();
+}
+
+void
+SoBRLCadRenderBatch::setSoftwareWireMode(int mode)
+{
+    if (mode < SoCADViewState::SOFTWARE_WIRE_AUTO ||
+	mode > SoCADViewState::SOFTWARE_WIRE_FAST)
+	mode = SoCADViewState::SOFTWARE_WIRE_AUTO;
+    this->softwareWireMode = mode;
 }
 
 SbBool
@@ -239,8 +251,13 @@ SoBRLCadRenderBatch::renderBatch(SoGLRenderAction *action)
     }
 
     SoState *state = action->getState();
-    if (state)
+    if (state) {
 	state->push();
+	obol::CadViewState cadState = SoCADViewStateElement::get(state);
+	cadState.softwareWireMode =
+	    static_cast<obol::CadSoftwareWireMode>(this->softwareWireMode);
+	SoCADViewStateElement::set(state, cadState);
+    }
     SoGroup *viewportRoot = dynamic_cast<SoGroup *>(this->getChild(0));
     if (viewportRoot) {
 	for (int i = 0; i < viewportRoot->getNumChildren(); i++) {

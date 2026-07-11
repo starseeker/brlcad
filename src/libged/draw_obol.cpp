@@ -20783,6 +20783,30 @@ ged_draw_obol_controller_opaque_for_view(void *view_ctx)
     return ged_obol_view_controller_for_context(view_ctx);
 }
 
+extern "C" int
+ged_draw_obol_software_wire_mode_get_for_view(void *view_ctx, int *mode)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller || !mode)
+	return 0;
+    *mode = static_cast<int>(controller->getSoftwareWireMode());
+    return 1;
+}
+
+extern "C" int
+ged_draw_obol_software_wire_mode_set_for_view(void *view_ctx, int mode)
+{
+    BRLObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller || mode < GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO ||
+	mode > GED_DRAW_OBOL_SOFTWARE_WIRE_FAST)
+	return 0;
+    controller->setSoftwareWireMode(
+	static_cast<BRLObolViewController::SoftwareWireMode>(mode));
+    return 1;
+}
+
 extern "C" void *
 ged_draw_obol_controller_ensure_opaque_for_view(void *view_ctx,
 	int sync_current_scene)

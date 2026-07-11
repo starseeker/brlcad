@@ -426,17 +426,32 @@ Priority 2: Performance, Cleanup, and Deletion
     remains required, but those platforms must not restore alternate scene
     synchronization or backend-selection paths.
 
-13.  Preserve the "fast" software wireframe only drawing mode as an option
-     to the Obol software backend.
+13.  COMPLETE: Preserve FAST and QUALITY software wireframe modes.
 
-    * The "fast" swrast wireframe drawing path (which might only be present in
-      main right now but should be in the history as an extraction of the fast
-      X software drawing logic) will need to be an option for Obol as well.
-      investigate if that is already available, and if not what a good
-      architectural structure would be to preserve that capability - it
-      intentionally makes a tradeoff of fewer OpenGL features and simpler
-      drawing for the fastest possible simplified wireframe-only visual so
-      there are some situations where we might want to enable that mode.
+    * Obol now carries a per-view AUTO/QUALITY/FAST software-wire policy.
+      AUTO and QUALITY use the full OpenGL path over OSMesa; explicit FAST
+      permits the direct transform/clip/raster path for eligible plain
+      wireframes and falls back to QUALITY for unsupported content.
+    * libbrlobol exposes the policy per view controller and propagates it
+      through traversal state to both compact CAD assemblies and ordinary
+      VList shapes.  `ged_draw_perf --software-wire` and `--render-frames`
+      provide repeatable selection and steady-state measurement.
+      Applications can query or switch the active view with
+      `dm set software_wire` and
+      `dm set software_wire auto|quality|fast`; `-d` selects a named DM/view.
+    * A 512-instance Obol benchmark measured QUALITY at 1.95 ms/frame and
+      FAST at 1.40 ms/frame (1.4x faster), with a 9.9/255 mean pixel
+      difference and essentially identical coverage.  Workload matters.
+      With a persistent OSMesa context and retained flattened fixed-function
+      QUALITY batch, compact `havoc` measured 161-165 ms first-frame and
+      13.8-14.1 ms steady-frame QUALITY; FAST samples measured 49-74 ms first
+      frame and 9.5-16.0 ms steady.  Generic_Twin measured
+      190.1/39.8 ms QUALITY versus 64.5/21.9 ms FAST.  AUTO remains
+      quality-first; FAST is an explicit lower-quality performance choice.
+    * OSMesa QUALITY avoids the bundled Mesa 7 GLSL interpreter, which was
+      measured at roughly 359 ms/frame on havoc.  Obol recognizes its
+      software context, retains a fixed-function flattened VBO batch, and
+      libbrlobol keeps offscreen renderers/contexts alive across image frames.
 
 14.  Remaining libdm capabilities survey
 

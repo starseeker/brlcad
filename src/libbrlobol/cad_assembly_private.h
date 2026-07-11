@@ -104,6 +104,7 @@ public:
     SoBRLCadRenderBatch(void);
     static void initClass(void);
     void setBatchSourceRoot(SoNode *root);
+    void setSoftwareWireMode(int mode);
 
 protected:
     ~SoBRLCadRenderBatch(void) override;
@@ -118,6 +119,7 @@ private:
     SoNode *sourceRoot;
     uint64_t cachedSourceSignature;
     SbBool batchValid;
+    int softwareWireMode;
     std::unordered_set<const SoBRLDatabaseSource *> batchedSources;
 };
 

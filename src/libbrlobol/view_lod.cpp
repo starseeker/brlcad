@@ -16,6 +16,7 @@
 #include "brlobol/view_lod.h"
 
 #include <obol/cad/SoCADAssembly.h>
+#include <obol/cad/SoCADViewState.h>
 
 #include <Inventor/actions/SoAction.h>
 #include <Inventor/actions/SoCallbackAction.h>
@@ -869,7 +870,8 @@ SoBRLViewLodElement::get(SoState *state)
 }
 
 SoBRLViewLodGroup::SoBRLViewLodGroup(void) :
-    viewState(NULL)
+    viewState(NULL),
+    softwareWireMode(SoCADViewState::SOFTWARE_WIRE_AUTO)
 {
     SO_NODE_CONSTRUCTOR(SoBRLViewLodGroup);
 }
@@ -899,6 +901,21 @@ SoBRLViewLodGroup::getViewLodState(void) const
     return this->viewState;
 }
 
+void
+SoBRLViewLodGroup::setSoftwareWireMode(int mode)
+{
+    if (mode < SoCADViewState::SOFTWARE_WIRE_AUTO ||
+	mode > SoCADViewState::SOFTWARE_WIRE_FAST)
+	mode = SoCADViewState::SOFTWARE_WIRE_AUTO;
+    this->softwareWireMode = mode;
+}
+
+int
+SoBRLViewLodGroup::getSoftwareWireMode(void) const
+{
+    return this->softwareWireMode;
+}
+
 SbBool
 SoBRLViewLodGroup::pushViewState(SoAction *action)
 {
@@ -911,6 +928,10 @@ SoBRLViewLodGroup::pushViewState(SoAction *action)
 
     state->push();
     SoBRLViewLodElement::set(state, this, this->viewState);
+    obol::CadViewState cadState = SoCADViewStateElement::get(state);
+    cadState.softwareWireMode =
+	static_cast<obol::CadSoftwareWireMode>(this->softwareWireMode);
+    SoCADViewStateElement::set(state, cadState);
     return TRUE;
 }
 

@@ -40,6 +40,10 @@ struct rt_db_internal;
 struct bg_tess_tol;
 struct bn_tol;
 
+#define GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO 0
+#define GED_DRAW_OBOL_SOFTWARE_WIRE_QUALITY 1
+#define GED_DRAW_OBOL_SOFTWARE_WIRE_FAST 2
+
 struct ged_draw_obol_lod_service_status_s {
     int attached;
     int running;
@@ -143,6 +147,14 @@ ged_draw_obol_render_endpoint_ensure_for_view(struct ged *gedp,
  */
 GED_EXPORT void *
 ged_draw_obol_controller_opaque_for_view(void *view_ctx);
+
+/** Get the active software-wire policy for an Obol-backed view. */
+GED_EXPORT int
+ged_draw_obol_software_wire_mode_get_for_view(void *view_ctx, int *mode);
+
+/** Set AUTO, QUALITY, or FAST software-wire policy for an Obol-backed view. */
+GED_EXPORT int
+ged_draw_obol_software_wire_mode_set_for_view(void *view_ctx, int mode);
 
 /**
  * Return or create the Obol view controller associated with @p view_ctx.

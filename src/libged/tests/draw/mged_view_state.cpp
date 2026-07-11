@@ -368,9 +368,50 @@ test_multi_obol_dm_attachment(const char *datadir)
     BRLObolViewController *v0_controller = obol_controller_for_view(v0);
     BRLObolViewController *v1_controller = obol_controller_for_view(v1);
     if (!v0_controller || !v1_controller ||
-	    v0_controller == v1_controller) {
+	v0_controller == v1_controller) {
 	bu_log("FAIL: views should have distinct Obol controllers\n");
 	fail = 1;
+    }
+    if (!fail) {
+	const char *fast_av[5] = {"dm", "set", "software_wire", "fast", NULL};
+	const int fast_ret = ged_exec_dm(gedp, 4, fast_av);
+	if (fast_ret != BRLCAD_OK ||
+		v0_controller->getSoftwareWireMode() !=
+		    BRLObolViewController::SOFTWARE_WIRE_FAST ||
+		v1_controller->getSoftwareWireMode() !=
+		    BRLObolViewController::SOFTWARE_WIRE_AUTO) {
+	    bu_log("FAIL: dm set software_wire fast did not update only the active "
+		    "view (ret=%d v0=%d v1=%d result=%s)\n", fast_ret,
+		    (int)v0_controller->getSoftwareWireMode(),
+		    (int)v1_controller->getSoftwareWireMode(),
+		    bu_vls_cstr(gedp->ged_result_str));
+	    fail = 1;
+	}
+	const char *query_av[4] = {"dm", "set", "software_wire", NULL};
+	if (!fail && (ged_exec_dm(gedp, 3, query_av) != BRLCAD_OK ||
+		!BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "fast"))) {
+	    bu_log("FAIL: dm set software_wire did not report fast: %s\n",
+		    bu_vls_cstr(gedp->ged_result_str));
+	    fail = 1;
+	}
+	const char *named_av[7] = {
+	    "dm", "set", "-d", "OBOL1", "software_wire", "quality", NULL
+	};
+	if (!fail && (ged_exec_dm(gedp, 6, named_av) != BRLCAD_OK ||
+		v0_controller->getSoftwareWireMode() !=
+		    BRLObolViewController::SOFTWARE_WIRE_FAST ||
+		v1_controller->getSoftwareWireMode() !=
+		    BRLObolViewController::SOFTWARE_WIRE_QUALITY)) {
+	    bu_log("FAIL: named dm software_wire setting was not view-local\n");
+	    fail = 1;
+	}
+	const char *bad_av[5] = {"dm", "set", "software_wire", "turbo", NULL};
+	if (!fail && ged_exec_dm(gedp, 4, bad_av) != BRLCAD_ERROR) {
+	    bu_log("FAIL: dm set software_wire accepted an invalid mode\n");
+	    fail = 1;
+	}
+	if (!fail)
+	    bu_log("PASS: dm software_wire modes are queryable and view-local\n");
     }
     if (!fail) {
 	BRLObolViewAttachment *v0_attachment =

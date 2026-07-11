@@ -11,6 +11,8 @@
 #include "brlobol/pick_detail.h"
 #include "brlobol/vlist_shape.h"
 
+#include <obol/cad/SoCADViewState.h>
+
 #include <Inventor/SoDB.h>
 #include <Inventor/SoPrimitiveVertex.h>
 #include <Inventor/actions/SoGLRenderAction.h>
@@ -771,6 +773,10 @@ static SbBool
 vlist_render_software_wireframe(SoBRLVListShape *shape,
 	const SoBRLVListShape *geom, int n, SoState *state)
 {
+    const obol::CadViewState viewState =
+	SoCADViewStateElement::get(state);
+    if (viewState.softwareWireMode != obol::CadSoftwareWireMode::FAST)
+	return FALSE;
     if (!shape->databaseIntent.getValue() ||
 	shape->drawMode.getValue() != BRLOBOL_LOD_DRAW_WIRE ||
 	shape->hiddenLine.getValue() || shape->lineWidth.getValue() > 1 ||

@@ -43,6 +43,7 @@ class SoBRLViewLodGroup;
 class SoCamera;
 class SoGroup;
 class SoNode;
+class SoOffscreenRenderer;
 class SoRenderManager;
 class SoViewport;
 struct bg_line_layer_builder;
@@ -119,6 +120,12 @@ struct BRLOBOL_EXPORT BRLObolProgressiveProviderRecord {
 class BRLOBOL_EXPORT BRLObolViewController
 {
 public:
+    enum SoftwareWireMode {
+	SOFTWARE_WIRE_AUTO = 0,
+	SOFTWARE_WIRE_QUALITY = 1,
+	SOFTWARE_WIRE_FAST = 2
+    };
+
     BRLObolViewController(void);
     explicit BRLObolViewController(SoNode *root, SoCamera *camera = NULL);
     ~BRLObolViewController(void);
@@ -143,6 +150,8 @@ public:
     const SbColor &getBackgroundBottomColor(void) const;
     const SbColor &getBackgroundTopColor(void) const;
     void renderBackground(void) const;
+    void setSoftwareWireMode(SoftwareWireMode mode);
+    SoftwareWireMode getSoftwareWireMode(void) const;
     SbBool syncCameraFromViewContext(const void *viewCtx,
 				     SbBool createCamera = TRUE);
     SbBool getViewInfo(struct bv_view_info *info) const;
@@ -473,10 +482,13 @@ private:
     SoNode *renderBatchRoot;
     BRLObolViewAttachment *viewAttachment;
     SoRenderManager *renderManager;
+    SoOffscreenRenderer *imageRenderer;
+    SoDB::ContextManager *imageRendererManager;
     SoCamera *activeCamera;
     SbViewportRegion viewportRegion;
     SbColor backgroundBottom;
     SbColor backgroundTop;
+    SoftwareWireMode softwareWireMode;
     SbBool renderRequested;
     SbString renderReason;
     uint64_t lastRenderTimeNanoseconds;
