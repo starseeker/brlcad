@@ -41,9 +41,94 @@ extern "C" {
 #include "brlobol/init.h"
 #include "brlobol/scene_group.h"
 #include "brlobol/view_controller.h"
+#include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
 #include <Inventor/actions/SoGLRenderAction.h>
 #include "vendor/togl/togl.h"
+
+static thread_local unsigned int tkobol_offscreen_depth = 0;
+
+class TkObolContextManager : public SoDB::ContextManager {
+public:
+    TkObolContextManager(void) : offscreen(SoDB::createOSMesaContextManager()) {}
+    ~TkObolContextManager(void) override { delete this->offscreen; }
+
+    void *createOffscreenContext(unsigned int width,
+	unsigned int height) override
+    {
+	return this->offscreen ?
+	    this->offscreen->createOffscreenContext(width, height) : NULL;
+    }
+
+    SbBool makeContextCurrent(void *context) override
+    {
+	if (!this->offscreen ||
+	    !this->offscreen->makeContextCurrent(context))
+	    return FALSE;
+	tkobol_offscreen_depth++;
+	return TRUE;
+    }
+
+    void restorePreviousContext(void *context) override
+    {
+	if (this->offscreen) {
+	    this->offscreen->restorePreviousContext(context);
+	    if (tkobol_offscreen_depth)
+		tkobol_offscreen_depth--;
+	}
+    }
+
+    void destroyContext(void *context) override
+    {
+	if (this->offscreen)
+	    this->offscreen->destroyContext(context);
+    }
+
+    SbBool isOSMesaContext(void *context) override
+    {
+	return this->offscreen ? this->offscreen->isOSMesaContext(context) : FALSE;
+    }
+
+    void maxOffscreenDimensions(unsigned int &width,
+	unsigned int &height) const override
+    {
+	if (this->offscreen)
+	    this->offscreen->maxOffscreenDimensions(width, height);
+	else
+	    width = height = 0;
+    }
+
+    void getActualSurfaceSize(void *context, unsigned int &width,
+	unsigned int &height) const override
+    {
+	if (this->offscreen)
+	    this->offscreen->getActualSurfaceSize(context, width, height);
+	else
+	    width = height = 0;
+    }
+
+    void *getProcAddress(const char *name) override
+    {
+	if (tkobol_offscreen_depth)
+	    return this->offscreen ? this->offscreen->getProcAddress(name) : NULL;
+#ifdef TKOBOL_X11
+	if (name && glXGetCurrentContext())
+	    return reinterpret_cast<void *>(
+		glXGetProcAddressARB(reinterpret_cast<const GLubyte *>(name)));
+#endif
+	return this->offscreen ? this->offscreen->getProcAddress(name) : NULL;
+    }
+
+private:
+    SoDB::ContextManager *offscreen;
+};
+
+static SoDB::ContextManager *
+tkobol_context_manager(void)
+{
+    static TkObolContextManager manager;
+    return &manager;
+}
 
 enum tkobol_callback_kind {
     TKOBOL_DISPLAY_CALLBACK = 1,
@@ -62,19 +147,52 @@ struct tkobol_vars {
     Tcl_Interp *interp;
     Tk_Window tkwin;
     Tk_Window container;
+    Tk_PhotoHandle photo;
     BRLObolViewController *controller;
     struct bu_vls widget_path;
     struct bu_vls widget_command;
     struct bu_vls container_command;
     struct bu_vls display_command;
     struct bu_vls reshape_command;
+    struct bu_vls photo_name;
     struct tkobol_callback display_callback;
     struct tkobol_callback reshape_callback;
     int widget_command_private;
+    int software_backend;
     int closing;
     fastf_t viewscale;
     int (*original_close)(struct dm *);
 };
+
+static int
+tkobol_photo_present(struct tkobol_vars *tv, unsigned char *pixels,
+	int width, int height)
+{
+    if (!tv || !tv->interp || !tv->photo || !pixels || width <= 0 ||
+	height <= 0)
+	return TCL_ERROR;
+
+    Tk_PhotoImageBlock block;
+    block.pixelPtr = pixels;
+    block.width = width;
+    block.height = height;
+    block.pitch = width * 3;
+    block.pixelSize = 3;
+    block.offset[0] = 0;
+    block.offset[1] = 1;
+    block.offset[2] = 2;
+    block.offset[3] = 0;
+#if TK_MAJOR_VERSION < 9
+    Tk_PhotoSetSize(tv->interp, tv->photo, width, height);
+    Tk_PhotoPutBlock(tv->interp, tv->photo, &block, 0, 0, width, height,
+	TK_PHOTO_COMPOSITE_SET);
+#else
+    Tk_PhotoSetSize(tv->photo, width, height);
+    Tk_PhotoPutBlock(tv->photo, &block, 0, 0, width, height,
+	TK_PHOTO_COMPOSITE_SET);
+#endif
+    return TCL_OK;
+}
 
 static int tkobol_close(struct dm *dmp);
 static int tkobol_configure(struct dm *dmp, int force);
@@ -184,10 +302,7 @@ tkobol_render_frame(struct tkobol_vars *tv, GLenum render_buffer,
     glDrawBuffer(render_buffer);
     (void)tv->controller->realizePending();
     (void)tv->controller->advanceProgressiveWork();
-    glClearColor(static_cast<GLfloat>(tv->dmp->i->dm_bg1[0]) / 255.0f,
-	static_cast<GLfloat>(tv->dmp->i->dm_bg1[1]) / 255.0f,
-	static_cast<GLfloat>(tv->dmp->i->dm_bg1[2]) / 255.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    tv->controller->renderBackground();
 
     const uint64_t started = tv->controller->beginRenderTiming();
     if (tv->controller->getCamera() && tv->controller->getRenderRoot()) {
@@ -202,10 +317,61 @@ tkobol_render_frame(struct tkobol_vars *tv, GLenum render_buffer,
 }
 
 static int
+tkobol_set_bg(struct dm *dmp, unsigned char r1, unsigned char g1,
+	unsigned char b1, unsigned char r2, unsigned char g2,
+	unsigned char b2)
+{
+    struct tkobol_vars *tv = tkobol_pvars(dmp);
+    if (!dmp || !tv || !tv->controller)
+	return BRLCAD_ERROR;
+
+    dmp->i->dm_bg1[0] = r1;
+    dmp->i->dm_bg1[1] = g1;
+    dmp->i->dm_bg1[2] = b1;
+    dmp->i->dm_bg2[0] = r2;
+    dmp->i->dm_bg2[1] = g2;
+    dmp->i->dm_bg2[2] = b2;
+    if (dmp->i->dm_ctx) {
+	struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+	VSET(background.bottom, r1, g1, b1);
+	VSET(background.top, r2, g2, b2);
+	(void)bv_background_state_set(
+	    bv_context_view(static_cast<struct bv_context *>(dmp->i->dm_ctx)),
+	    &background);
+    }
+    tv->controller->setBackgroundColors(
+	SbColor(r1 / 255.0f, g1 / 255.0f, b1 / 255.0f),
+	SbColor(r2 / 255.0f, g2 / 255.0f, b2 / 255.0f));
+    dm_set_native_repaint_pending(dmp, 1);
+    return BRLCAD_OK;
+}
+
+static int
 tkobol_render_current(struct tkobol_vars *tv, int make_current)
 {
     if (!tv || !tv->controller)
 	return BRLCAD_ERROR;
+    if (tv->software_backend) {
+	if (tkobol_sync_view(tv, 0) != BRLCAD_OK)
+	    return BRLCAD_ERROR;
+	unsigned char *pixels = NULL;
+	BRLObolProgressiveStatus progressive;
+	const int ret = tv->controller->renderToImage(&pixels, 1, 0, NULL,
+	    brlobol_headless_context_manager(), &progressive);
+	if (ret != BRLCAD_OK || !pixels)
+	    return BRLCAD_ERROR;
+	const int present_ret = tkobol_photo_present(tv, pixels,
+	    tv->dmp->i->dm_width, tv->dmp->i->dm_height);
+	bu_free(pixels, "Tk Obol software frame");
+	const int pending = progressive.hasMore ||
+	    tv->controller->isRenderRequested() ||
+	    tv->controller->hasProgressiveWorkPending();
+	dm_set_native_repaint_pending(tv->dmp, pending);
+	if (pending && tv->dmp->i->dm_ctx)
+	    dm_view_context_refresh_request(tv->dmp->i->dm_ctx,
+		DM_VIEW_REFRESH_VIEW);
+	return present_ret == TCL_OK ? BRLCAD_OK : BRLCAD_ERROR;
+    }
     if (make_current && tkobol_widget_command(tv, "makecurrent") != TCL_OK)
 	return BRLCAD_ERROR;
     if (tkobol_sync_view(tv, 0) != BRLCAD_OK)
@@ -269,6 +435,7 @@ tkobol_create_widget(struct tkobol_vars *tv)
 	"::brlcad::tkobol::widget_%lu", id);
     bu_vls_sprintf(&tv->container_command,
 	"::brlcad::tkobol::container_%lu", id);
+    bu_vls_sprintf(&tv->photo_name, "::brlcad::tkobol::photo_%lu", id);
     tv->display_callback.vars = tv;
     tv->display_callback.kind = TKOBOL_DISPLAY_CALLBACK;
     tv->reshape_callback.vars = tv;
@@ -316,6 +483,43 @@ tkobol_create_widget(struct tkobol_vars *tv)
     char height[32];
     snprintf(width, sizeof(width), "%d", tv->dmp->i->dm_width);
     snprintf(height, sizeof(height), "%d", tv->dmp->i->dm_height);
+    if (tv->software_backend) {
+	const char *image_argv[] = {
+	    "image", "create", "photo", bu_vls_cstr(&tv->photo_name),
+	    "-width", width, "-height", height
+	};
+	Tcl_Obj *image_objv[8];
+	for (int i = 0; i < 8; i++) {
+	    image_objv[i] = Tcl_NewStringObj(image_argv[i], -1);
+	    Tcl_IncrRefCount(image_objv[i]);
+	}
+	const int image_ret = Tcl_EvalObjv(tv->interp, 8, image_objv,
+	    TCL_EVAL_GLOBAL);
+	for (int i = 7; i >= 0; i--)
+	    Tcl_DecrRefCount(image_objv[i]);
+	if (image_ret != TCL_OK)
+	    return TCL_ERROR;
+
+	const char *label_argv[] = {
+	    "label", bu_vls_cstr(&tv->widget_path),
+	    "-image", bu_vls_cstr(&tv->photo_name),
+	    "-borderwidth", "0", "-highlightthickness", "0"
+	};
+	Tcl_Obj *label_objv[8];
+	for (int i = 0; i < 8; i++) {
+	    label_objv[i] = Tcl_NewStringObj(label_argv[i], -1);
+	    Tcl_IncrRefCount(label_objv[i]);
+	}
+	const int label_ret = Tcl_EvalObjv(tv->interp, 8, label_objv,
+	    TCL_EVAL_GLOBAL);
+	for (int i = 7; i >= 0; i--)
+	    Tcl_DecrRefCount(label_objv[i]);
+	if (label_ret != TCL_OK)
+	    return TCL_ERROR;
+	tv->photo = Tk_FindPhoto(tv->interp, bu_vls_cstr(&tv->photo_name));
+	if (!tv->photo)
+	    return TCL_ERROR;
+    } else {
     const char *argv[] = {
 	"::brlcad::tkobol::host",
 	bu_vls_cstr(&tv->widget_path),
@@ -351,6 +555,7 @@ tkobol_create_widget(struct tkobol_vars *tv)
 	    bu_vls_cstr(&tv->widget_command)) != TCL_OK)
 	return TCL_ERROR;
     tv->widget_command_private = 1;
+    }
 
     tv->tkwin = Tk_NameToWindow(tv->interp,
 	bu_vls_cstr(&tv->widget_path), Tk_MainWindow(tv->interp));
@@ -417,6 +622,18 @@ tkobol_close(struct dm *dmp)
 	if (tv->container)
 	    Tk_DestroyWindow(tv->container);
 	if (tv->interp) {
+	    if (tv->software_backend && bu_vls_strlen(&tv->photo_name)) {
+		Tcl_Obj *objv[3];
+		const char *argv[] = {"image", "delete",
+		    bu_vls_cstr(&tv->photo_name)};
+		for (int i = 0; i < 3; i++) {
+		    objv[i] = Tcl_NewStringObj(argv[i], -1);
+		    Tcl_IncrRefCount(objv[i]);
+		}
+		(void)Tcl_EvalObjv(tv->interp, 3, objv, TCL_EVAL_GLOBAL);
+		for (int i = 2; i >= 0; i--)
+		    Tcl_DecrRefCount(objv[i]);
+	    }
 	    Tcl_DeleteCommand(tv->interp,
 		    bu_vls_cstr(&tv->display_command));
 	    Tcl_DeleteCommand(tv->interp,
@@ -427,6 +644,7 @@ tkobol_close(struct dm *dmp)
 	bu_vls_free(&tv->widget_path);
 	bu_vls_free(&tv->widget_command);
 	bu_vls_free(&tv->container_command);
+	bu_vls_free(&tv->photo_name);
 	delete tv->controller;
 	dmp->i->dm_udata = NULL;
 	bu_free(tv, "tkobol private vars");
@@ -441,6 +659,8 @@ tkobol_configure(struct dm *dmp, int force)
     if (!tv)
 	return BRLCAD_ERROR;
     int ret = tkobol_sync_view(tv, force ? 1 : 0);
+    if (ret == BRLCAD_OK && tv->software_backend)
+	return tkobol_render_current(tv, 0);
     if (ret == BRLCAD_OK)
 	(void)tkobol_widget_command(tv, "postredisplay");
     return ret;
@@ -460,6 +680,13 @@ tkobol_get_display_image(struct dm *dmp, unsigned char **image, int flip,
     if (!tv || !tv->controller || !image)
 	return BRLCAD_ERROR;
     *image = NULL;
+
+    if (tv->software_backend) {
+	if (tkobol_sync_view(tv, 0) != BRLCAD_OK)
+	    return BRLCAD_ERROR;
+	return tv->controller->renderToImage(image, flip, alpha, NULL,
+	    brlobol_headless_context_manager(), NULL);
+    }
 
     if (tkobol_widget_command(tv, "makecurrent") != TCL_OK ||
 	    tkobol_sync_view(tv, 0) != BRLCAD_OK)
@@ -515,7 +742,10 @@ tkobol_get_display_image(struct dm *dmp, unsigned char **image, int flip,
 static int
 tkobol_make_current(struct dm *dmp)
 {
-    return tkobol_widget_command(tkobol_pvars(dmp), "makecurrent") == TCL_OK ?
+    struct tkobol_vars *tv = tkobol_pvars(dmp);
+    if (tv && tv->software_backend)
+	return BRLCAD_OK;
+    return tkobol_widget_command(tv, "makecurrent") == TCL_OK ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
 
@@ -529,13 +759,19 @@ tkobol_reshape(struct dm *dmp, int width, int height)
     dmp->i->dm_height = height;
     if (tv->tkwin)
 	Tk_GeometryRequest(tv->tkwin, width, height);
-    return tkobol_sync_view(tv, 1);
+    const int ret = tkobol_sync_view(tv, 1);
+    if (ret == BRLCAD_OK && tv->software_backend)
+	return tkobol_render_current(tv, 0);
+    return ret;
 }
 
 static int
 tkobol_swap_buffers(struct dm *dmp)
 {
-    return tkobol_widget_command(tkobol_pvars(dmp), "swapbuffers") == TCL_OK ?
+    struct tkobol_vars *tv = tkobol_pvars(dmp);
+    if (tv && tv->software_backend)
+	return BRLCAD_OK;
+    return tkobol_widget_command(tv, "swapbuffers") == TCL_OK ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
 
@@ -547,6 +783,8 @@ tkobol_doevent(struct dm *dmp, void *UNUSED(client_data),
     if (!tv)
 	return TCL_ERROR;
     (void)tkobol_sync_view(tv, 1);
+    if (tv->software_backend)
+	return tkobol_render_current(tv, 0) == BRLCAD_OK ? TCL_OK : TCL_ERROR;
     return tkobol_widget_command(tv, "postredisplay");
 }
 
@@ -558,12 +796,10 @@ tkobol_viable(const char *display_name)
 	display_name : NULL);
     if (!display)
 	return 0;
-    int error_base = 0;
-    int event_base = 0;
-    const int viable = glXQueryExtension(display, &error_base, &event_base) ?
-	1 : 0;
     XCloseDisplay(display);
-    return viable;
+    /* Software presentation needs X/Tk but does not require GLX.  Hardware
+     * mode reports a Togl creation error later if GLX is unavailable. */
+    return 1;
 #else
     (void)display_name;
     return 1;
@@ -579,6 +815,19 @@ tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
 	return DM_NULL;
     if (BrlcadTkObolHost_Init(interp) != TCL_OK)
 	return DM_NULL;
+
+    int software_backend = 0;
+    for (int i = 0; i < argc; i++) {
+	if (argv[i] && BU_STR_EQUAL(argv[i], "sw"))
+	    software_backend = 1;
+	if (argv[i] && BU_STR_EQUAL(argv[i], "hw"))
+	    software_backend = 0;
+    }
+    if (software_backend && !brlobol_headless_context_manager()) {
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(
+	    "tkobol software backend requires Obol OSMesa support", -1));
+	return DM_NULL;
+    }
 
     struct dm *dmp = NULL;
     struct dm_impl *dmpi = NULL;
@@ -625,7 +874,11 @@ tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
     BU_ALLOC(tv, struct tkobol_vars);
     tv->dmp = dmp;
     tv->interp = interp;
-    brlobol_init(brlobol_headless_context_manager());
+    tv->software_backend = software_backend;
+    tv->photo = NULL;
+    /* Keep the process-wide manager capable of serving live Togl contexts.
+     * Software views pass OSMesa explicitly when they render. */
+    brlobol_init(tkobol_context_manager());
     tv->controller = new BRLObolViewController(new SoBRLSceneGroup);
     tv->viewscale = 1.0;
     tv->original_close = null_close;
@@ -634,6 +887,7 @@ tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
     bu_vls_init(&tv->container_command);
     bu_vls_init(&tv->display_command);
     bu_vls_init(&tv->reshape_command);
+    bu_vls_init(&tv->photo_name);
     dmp->i->dm_udata = tv;
     dmp->i->p_vars = tv->controller;
     dmp->i->m_vars = tv;
@@ -647,6 +901,7 @@ tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
     dmp->i->dm_close = tkobol_close;
     dmp->i->dm_viable = tkobol_viable;
     dmp->i->dm_drawEnd = tkobol_draw_end;
+    dmp->i->dm_setBGColor = tkobol_set_bg;
     dmp->i->dm_getDisplayImage = tkobol_get_display_image;
     dmp->i->dm_configureWin = tkobol_configure;
     dmp->i->dm_reshape = tkobol_reshape;
@@ -654,7 +909,7 @@ tkobol_open(void *ctx, void *vinterp, int argc, const char **argv)
     dmp->i->dm_SwapBuffers = tkobol_swap_buffers;
     dmp->i->dm_doevent = tkobol_doevent;
     dmp->i->dm_graphical = 1;
-    dmp->i->graphics_system = "Tk/OpenGL";
+    dmp->i->graphics_system = software_backend ? "Tk/OSMesa" : "Tk/OpenGL";
     dmp->i->dm_name = "tkobol";
     dmp->i->dm_lname = "Tk Obol graphics";
     (void)tkobol_sync_view(tv, 1);

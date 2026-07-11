@@ -112,6 +112,7 @@ struct QgCanvasState {
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
     bool   fps_update_queued = false;
+    bool   software_backend = false;
     std::chrono::steady_clock::time_point fps_last_publish;
 
     /* ---- per-canvas input handler ---- */
@@ -146,10 +147,12 @@ qgcanvas_sync_obol_viewport(QgCanvasState &s, const QWidget *w)
 
 /** Application-wide qtcad Obol context manager. */
 static inline SoDB::ContextManager *
-qgcanvas_obol_context_manager(void)
+qgcanvas_obol_context_manager(bool software = false)
 {
-    static QgObolContextManager manager;
-    return &manager;
+    static QgObolContextManager hardwareManager(false);
+    static QgObolContextManager softwareManager(true);
+    return software ? static_cast<SoDB::ContextManager *>(&softwareManager) :
+	static_cast<SoDB::ContextManager *>(&hardwareManager);
 }
 
 static inline void
@@ -188,6 +191,23 @@ qgcanvas_sync_obol_camera(QgCanvasState &s)
     (void)s.obol->syncCameraFromViewContext(view_ctx);
 }
 
+static inline void
+qgcanvas_sync_obol_background(QgCanvasState &s)
+{
+    if (!s.obol || !s.v)
+	return;
+    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    if (!bv_background_state_get(&background, qg_legacy_view_bv_const(s.v)))
+	return;
+    s.obol->setBackgroundColors(
+	SbColor(background.bottom[0] / 255.0f,
+		background.bottom[1] / 255.0f,
+		background.bottom[2] / 255.0f),
+	SbColor(background.top[0] / 255.0f,
+		background.top[1] / 255.0f,
+		background.top[2] / 255.0f));
+}
+
 /** Render the Obol scene through SoOffscreenRenderer into a QImage. */
 static inline void
 qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img,
@@ -205,9 +225,14 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     if (size[0] <= 0 || size[1] <= 0)
 	return;
 
-    SoOffscreenRenderer renderer(qgcanvas_obol_context_manager(), region);
+    SoOffscreenRenderer renderer(
+	qgcanvas_obol_context_manager(s.software_backend), region);
     renderer.setComponents(SoOffscreenRenderer::RGB);
-    renderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    renderer.setBackgroundColor(s.obol->getBackgroundBottomColor());
+    if (s.obol->getBackgroundBottomColor() !=
+	s.obol->getBackgroundTopColor())
+	renderer.setBackgroundGradient(s.obol->getBackgroundBottomColor(),
+	    s.obol->getBackgroundTopColor());
     const uint64_t started = s.obol->beginRenderTiming();
     const SbBool rendered = s.obol->getViewport()->render(&renderer);
     s.obol->completeRenderTiming(started);
@@ -231,9 +256,13 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 
 /** Create the Obol view state every qtcad canvas exposes. */
 static inline void
-qgcanvas_init_obol(QgCanvasState &s, const QWidget *w)
+qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
+	bool software_backend)
 {
-    brlobol_init(qgcanvas_obol_context_manager());
+    s.software_backend = software_backend;
+    /* Direct GL controllers use the system manager.  Software canvases pass
+     * their dedicated OSMesa manager explicitly to each offscreen render. */
+    brlobol_init(qgcanvas_obol_context_manager(false));
     s.obol = new BRLObolViewController();
 
     SoSeparator *root = new SoSeparator;
@@ -525,6 +554,7 @@ qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
     uint32_t requested = flags ? flags : BV_REFRESH_ALL;
     if (requested & BV_REFRESH_VIEW)
 	qgcanvas_sync_obol_camera(s);
+    qgcanvas_sync_obol_background(s);
     qgcanvas_sync_obol_faceplate(s);
     if (s.v)
 	bv_refresh_request(qg_legacy_view_bv(s.v), requested);

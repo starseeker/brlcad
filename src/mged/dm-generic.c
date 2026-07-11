@@ -583,10 +583,11 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
     }
 
     if (BU_STR_EQUAL(argv[0], "bg")) {
-	int r, g, b;
+	int r1, g1, b1;
+	int r2, g2, b2;
 
-	if (argc != 1 && argc != 4) {
-	    bu_vls_printf(&vls, "Usage: dm bg [r g b]");
+	if (argc != 1 && argc != 4 && argc != 7) {
+	    bu_vls_printf(&vls, "Usage: dm bg [r1 g1 b1 [r2 g2 b2]]");
 	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
 	    bu_vls_free(&vls);
 
@@ -604,19 +605,31 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    return TCL_OK;
 	}
 
-	if (sscanf(argv[1], "%d", &r) != 1 ||
-	    sscanf(argv[2], "%d", &g) != 1 ||
-	    sscanf(argv[3], "%d", &b) != 1) {
-	    bu_vls_printf(&vls, "Usage: dm bg r g b");
+	if (sscanf(argv[1], "%d", &r1) != 1 ||
+	    sscanf(argv[2], "%d", &g1) != 1 ||
+	    sscanf(argv[3], "%d", &b1) != 1) {
+	    bu_vls_printf(&vls, "Usage: dm bg r1 g1 b1 [r2 g2 b2]");
 	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
 	    bu_vls_free(&vls);
 
 	    return TCL_ERROR;
 	}
+	r2 = r1;
+	g2 = g1;
+	b2 = b1;
+	if (argc == 7 &&
+	    (sscanf(argv[4], "%d", &r2) != 1 ||
+	     sscanf(argv[5], "%d", &g2) != 1 ||
+	     sscanf(argv[6], "%d", &b2) != 1)) {
+	    bu_vls_printf(&vls, "Usage: dm bg r1 g1 b1 [r2 g2 b2]");
+	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
+	    bu_vls_free(&vls);
+	    return TCL_ERROR;
+	}
 
 	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
 	(void)dm_make_current(DMP);
-	return dm_set_bg(DMP, r, g, b, r, g, b);
+	return dm_set_bg(DMP, r1, g1, b1, r2, g2, b2);
     }
 
     Tcl_AppendResult(s->interp, "dm: bad command - ", argv[0], "\n", (char *)NULL);

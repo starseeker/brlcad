@@ -729,10 +729,18 @@ ged_draw_obol_view_display_image(struct ged *gedp,
     if (!controller->syncCameraFromViewContext(view_ctx))
 	return -1;
 
-    SbColor background(0.0f, 0.0f, 0.0f);
+    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    if (view && bv_background_state_get(&background, view))
+	controller->setBackgroundColors(
+	    SbColor(background.bottom[0] / 255.0f,
+		background.bottom[1] / 255.0f,
+		background.bottom[2] / 255.0f),
+	    SbColor(background.top[0] / 255.0f,
+		background.top[1] / 255.0f,
+		background.top[2] / 255.0f));
 
     BRLObolProgressiveStatus progressiveStatus;
-    int ret = controller->renderToImage(image, flip, alpha, &background,
+    int ret = controller->renderToImage(image, flip, alpha, NULL,
 	NULL, &progressiveStatus);
     if (progressiveStatus.hasMore && view)
 	(void)bv_refresh_request(bv_context_view((struct bv_context *)view_ctx),

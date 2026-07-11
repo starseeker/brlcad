@@ -335,6 +335,7 @@ bv_copy(struct bv *dst, const struct bv *src)
     dst->center_dot = src->center_dot;
     dst->scale_overlay = src->scale_overlay;
     dst->params = src->params;
+    dst->background = src->background;
     dst->snap = src->snap;
     return 1;
 }
@@ -915,6 +916,8 @@ BV_STATE_GET(bv_grid_state, BV_GRID_STATE_INIT, grid)
 BV_STATE_SET(bv_grid_state, grid)
 BV_STATE_GET(bv_params_state, BV_PARAMS_STATE_INIT, params)
 BV_STATE_SET(bv_params_state, params)
+BV_STATE_GET(bv_background_state, BV_BACKGROUND_STATE_INIT, background)
+BV_STATE_SET(bv_background_state, background)
 
 #undef BV_STATE_GET
 #undef BV_STATE_SET

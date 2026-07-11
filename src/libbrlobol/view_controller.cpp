@@ -38,9 +38,12 @@
 #include <vector>
 
 #include <Inventor/SbName.h>
+#include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
 #include <Inventor/SoViewport.h>
 #include <Inventor/SoOffscreenRenderer.h>
+#include <Inventor/elements/SoGLCacheContextElement.h>
+#include <Inventor/gl.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoDirectionalLight.h>
 #include <Inventor/nodes/SoEnvironment.h>
@@ -57,6 +60,69 @@ static std::vector<SoBRLDatabaseSource *> controller_render_database_source_root
     const BRLObolViewController *controller);
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
     const BRLObolViewController *controller);
+
+struct ControllerGLFunctions {
+    SoDB::ContextManager *manager = NULL;
+    void (*clearColor)(GLclampf, GLclampf, GLclampf, GLclampf) = NULL;
+    void (*clear)(GLbitfield) = NULL;
+    void (*getIntegerv)(GLenum, GLint *) = NULL;
+    void (*pushAttrib)(GLbitfield) = NULL;
+    void (*popAttrib)(void) = NULL;
+    void (*enable)(GLenum) = NULL;
+    void (*disable)(GLenum) = NULL;
+    void (*depthMask)(GLboolean) = NULL;
+    void (*matrixMode)(GLenum) = NULL;
+    void (*pushMatrix)(void) = NULL;
+    void (*popMatrix)(void) = NULL;
+    void (*loadIdentity)(void) = NULL;
+    void (*begin)(GLenum) = NULL;
+    void (*end)(void) = NULL;
+    void (*color3f)(GLfloat, GLfloat, GLfloat) = NULL;
+    void (*vertex2f)(GLfloat, GLfloat) = NULL;
+
+    void load(SoDB::ContextManager *m)
+    {
+	manager = m;
+#define CONTROLLER_GL_LOAD(member, name) \
+	member = reinterpret_cast<decltype(member)>(m->getProcAddress(name))
+	CONTROLLER_GL_LOAD(clearColor, "glClearColor");
+	CONTROLLER_GL_LOAD(clear, "glClear");
+	CONTROLLER_GL_LOAD(getIntegerv, "glGetIntegerv");
+	CONTROLLER_GL_LOAD(pushAttrib, "glPushAttrib");
+	CONTROLLER_GL_LOAD(popAttrib, "glPopAttrib");
+	CONTROLLER_GL_LOAD(enable, "glEnable");
+	CONTROLLER_GL_LOAD(disable, "glDisable");
+	CONTROLLER_GL_LOAD(depthMask, "glDepthMask");
+	CONTROLLER_GL_LOAD(matrixMode, "glMatrixMode");
+	CONTROLLER_GL_LOAD(pushMatrix, "glPushMatrix");
+	CONTROLLER_GL_LOAD(popMatrix, "glPopMatrix");
+	CONTROLLER_GL_LOAD(loadIdentity, "glLoadIdentity");
+	CONTROLLER_GL_LOAD(begin, "glBegin");
+	CONTROLLER_GL_LOAD(end, "glEnd");
+	CONTROLLER_GL_LOAD(color3f, "glColor3f");
+	CONTROLLER_GL_LOAD(vertex2f, "glVertex2f");
+#undef CONTROLLER_GL_LOAD
+    }
+
+    bool complete(void) const
+    {
+	return clearColor && clear && getIntegerv && pushAttrib && popAttrib &&
+	    enable && disable && depthMask && matrixMode && pushMatrix &&
+	    popMatrix && loadIdentity && begin && end && color3f && vertex2f;
+    }
+};
+
+static ControllerGLFunctions *
+controller_system_gl_functions(void)
+{
+    SoDB::ContextManager *manager = SoDB::getContextManager();
+    if (!manager)
+	return NULL;
+    static thread_local ControllerGLFunctions functions;
+    if (functions.manager != manager)
+	functions.load(manager);
+    return functions.complete() ? &functions : NULL;
+}
 
 BRLObolProgressiveOptions::BRLObolProgressiveOptions(void) :
     maxLodResults(8),
@@ -709,6 +775,8 @@ BRLObolViewController::BRLObolViewController(void) :
     renderManager(new SoRenderManager),
     activeCamera(NULL),
     viewportRegion(1, 1),
+    backgroundBottom(0.0f, 0.0f, 0.0f),
+    backgroundTop(0.0f, 0.0f, 0.0f),
     renderRequested(FALSE),
     renderReason(""),
     lastRenderTimeNanoseconds(0),
@@ -756,6 +824,8 @@ BRLObolViewController::BRLObolViewController(void) :
     selectionStore(new BRLObolSelectionStore)
 {
     this->viewAttachment->ref();
+    this->renderManager->getGLRenderAction()->setCacheContext(
+	SoGLCacheContextElement::getUniqueCacheContext());
     controller_configure_render_environment(this->viewport);
 }
 
@@ -767,6 +837,8 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     renderManager(new SoRenderManager),
     activeCamera(NULL),
     viewportRegion(1, 1),
+    backgroundBottom(0.0f, 0.0f, 0.0f),
+    backgroundTop(0.0f, 0.0f, 0.0f),
     renderRequested(FALSE),
     renderReason(""),
     lastRenderTimeNanoseconds(0),
@@ -814,6 +886,8 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     selectionStore(new BRLObolSelectionStore)
 {
     this->viewAttachment->ref();
+    this->renderManager->getGLRenderAction()->setCacheContext(
+	SoGLCacheContextElement::getUniqueCacheContext());
     controller_configure_render_environment(this->viewport);
     this->setSceneRoot(root);
     this->setCamera(camera);
@@ -1009,14 +1083,90 @@ BRLObolViewController::setViewportSize(unsigned int width, unsigned int height)
     if (height == 0)
 	height = 1;
     const SbVec2s current = this->viewportRegion.getWindowSize();
+    const SbVec2s currentOrigin =
+	this->viewportRegion.getViewportOriginPixels();
+    const SbVec2s currentViewport =
+	this->viewportRegion.getViewportSizePixels();
     if (current[0] == static_cast<short>(width) &&
-	current[1] == static_cast<short>(height))
+	current[1] == static_cast<short>(height) &&
+	currentOrigin[0] == 0 && currentOrigin[1] == 0 &&
+	currentViewport[0] == static_cast<short>(width) &&
+	currentViewport[1] == static_cast<short>(height))
 	return;
     this->viewportRegion.setWindowSize((short)width, (short)height);
+    this->viewportRegion.setViewportPixels(0, 0, (short)width,
+	(short)height);
     this->viewport->setViewportRegion(this->viewportRegion);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
     this->requestRender("viewport-size");
+}
+
+void
+BRLObolViewController::setBackgroundColors(const SbColor &bottom,
+	const SbColor &top)
+{
+    if (this->backgroundBottom == bottom && this->backgroundTop == top)
+	return;
+    this->backgroundBottom = bottom;
+    this->backgroundTop = top;
+    this->requestRender("background");
+}
+
+const SbColor &
+BRLObolViewController::getBackgroundBottomColor(void) const
+{
+    return this->backgroundBottom;
+}
+
+const SbColor &
+BRLObolViewController::getBackgroundTopColor(void) const
+{
+    return this->backgroundTop;
+}
+
+void
+BRLObolViewController::renderBackground(void) const
+{
+    ControllerGLFunctions *gl = controller_system_gl_functions();
+    if (!gl)
+	return;
+    const SbColor &bottom = this->backgroundBottom;
+    const SbColor &top = this->backgroundTop;
+    if (bottom == top) {
+	gl->clearColor(bottom[0], bottom[1], bottom[2], 1.0f);
+	gl->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	return;
+    }
+
+    GLint matrixMode = GL_MODELVIEW;
+    gl->getIntegerv(GL_MATRIX_MODE, &matrixMode);
+    gl->pushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+	GL_CURRENT_BIT);
+    gl->disable(GL_LIGHTING);
+    gl->disable(GL_DEPTH_TEST);
+    gl->depthMask(GL_FALSE);
+    gl->matrixMode(GL_PROJECTION);
+    gl->pushMatrix();
+    gl->loadIdentity();
+    gl->matrixMode(GL_MODELVIEW);
+    gl->pushMatrix();
+    gl->loadIdentity();
+    gl->begin(GL_QUADS);
+    gl->color3f(bottom[0], bottom[1], bottom[2]);
+    gl->vertex2f(-1.0f, -1.0f);
+    gl->vertex2f(1.0f, -1.0f);
+    gl->color3f(top[0], top[1], top[2]);
+    gl->vertex2f(1.0f, 1.0f);
+    gl->vertex2f(-1.0f, 1.0f);
+    gl->end();
+    gl->matrixMode(GL_MODELVIEW);
+    gl->popMatrix();
+    gl->matrixMode(GL_PROJECTION);
+    gl->popMatrix();
+    gl->matrixMode(matrixMode);
+    gl->popAttrib();
+    gl->clear(GL_DEPTH_BUFFER_BIT);
 }
 
 SbBool
@@ -1301,7 +1451,11 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 	*reason = renderReasonCopy;
 
     const uint64_t started = this->beginRenderTiming();
-    this->renderManager->render(clearWindow, clearZBuffer);
+    if (clearWindow)
+	this->renderBackground();
+    else if (clearZBuffer)
+	glClear(GL_DEPTH_BUFFER_BIT);
+    this->renderManager->render(FALSE, FALSE);
     this->completeRenderTiming(started);
     return TRUE;
 }
@@ -1377,9 +1531,16 @@ BRLObolViewController::renderToImage(unsigned char **image,
     std::unique_ptr<SoOffscreenRenderer> renderer(contextManager ?
 	new SoOffscreenRenderer(contextManager, region) :
 	new SoOffscreenRenderer(region));
+    const SbColor imageBottom = background ? *background :
+	this->backgroundBottom;
+    const SbColor imageTop =
+	(background && *background != this->backgroundBottom) ?
+	*background : this->backgroundTop;
+    const SbBool gradient = imageBottom != imageTop;
     renderer->setComponents(SoOffscreenRenderer::RGB);
-    renderer->setBackgroundColor(background ? *background :
-	SbColor(0.0f, 0.0f, 0.0f));
+    renderer->setBackgroundColor(imageBottom);
+    if (gradient)
+	renderer->setBackgroundGradient(imageBottom, imageTop);
 
     const uint64_t started = this->beginRenderTiming();
     const SbBool rendered = this->getViewport()->render(renderer.get());

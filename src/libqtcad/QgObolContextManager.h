@@ -8,8 +8,9 @@
  *
  * Private qtcad Obol ContextManager backed by Qt-provided OpenGL contexts.
  * QgGL renders directly through the current QOpenGLWidget context; this
- * manager supplies matching Qt offscreen contexts for viewport image readback
- * and QgSW presentation, with OSMesa retained only as a fallback.
+ * manager supplies matching Qt offscreen contexts for viewport image readback.
+ * QgSW pins its separate manager to OSMesa; hardware readback may fall back to
+ * OSMesa when Qt cannot create an offscreen context.
  */
 
 #ifndef QGOBOLCONTEXTMANAGER_H
@@ -52,7 +53,8 @@ private:
     };
 
 public:
-    QgObolContextManager(void) :
+    explicit QgObolContextManager(bool softwareOnly = false) :
+	forceSoftware(softwareOnly),
 	fallbackManager(SoDB::createOSMesaContextManager())
     {
     }
@@ -67,7 +69,7 @@ public:
     {
 	QgObolContext *ctx = new QgObolContext;
 
-	if (qg_obol_context_force_osmesa())
+	if (this->forceSoftware || qg_obol_context_force_osmesa())
 	    return this->createFallbackContext(ctx, width, height);
 
 	QSurfaceFormat format = QSurfaceFormat::defaultFormat();
@@ -221,6 +223,7 @@ private:
 	return ctx;
     }
 
+    bool forceSoftware = false;
     SoDB::ContextManager *fallbackManager = NULL;
 };
 

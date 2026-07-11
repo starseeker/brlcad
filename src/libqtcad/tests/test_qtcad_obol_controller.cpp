@@ -163,6 +163,23 @@ main(int argc, char **argv)
     if (controller->getViewportRegion().getWindowSize()[0] <= 0 ||
 	    controller->getViewportRegion().getWindowSize()[1] <= 0)
 	FAIL("Obol view controller should have a valid viewport");
+    if (controller->getViewportRegion().getViewportOriginPixels() !=
+	    SbVec2s(0, 0) ||
+	controller->getViewportRegion().getViewportSizePixels() !=
+	    controller->getViewportRegion().getWindowSize())
+	FAIL("Obol view controller should render the full window viewport");
+
+    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    VSET(background.bottom, 16, 32, 48);
+    VSET(background.top, 64, 80, 96);
+    (void)bv_background_state_set(qg_legacy_view_bv(view.view()),
+	&background);
+    view.need_update(QG_VIEW_DRAWN);
+    if (controller->getBackgroundBottomColor() !=
+	    SbColor(16.0f / 255.0f, 32.0f / 255.0f, 48.0f / 255.0f) ||
+	controller->getBackgroundTopColor() !=
+	    SbColor(64.0f / 255.0f, 80.0f / 255.0f, 96.0f / 255.0f))
+	FAIL("qtcad should synchronize neutral view gradient colors to Obol");
 
     controller->clearRenderRequest();
     if (controller->isRenderRequested())
@@ -243,6 +260,9 @@ main(int argc, char **argv)
 		camera->farDistance.getValue());
 	FAIL("QgView Obol capture should produce non-empty pixels");
     }
+    if (obolImage.pixelColor(2, 2) ==
+	obolImage.pixelColor(2, obolImage.height() - 3))
+	FAIL("QgView Obol capture should preserve configured gradient endpoints");
 
     controller->requestRender("sw-visible-readback");
     QImage visibleImage;

@@ -43,7 +43,7 @@ QgSW::QgSW(QWidget *parent)
     : QWidget(parent)
 {
     d = new QgCanvasState();
-    qgcanvas_init_obol(*d, this);
+    qgcanvas_init_obol(*d, this, true);
     d->lmouse_mode = BV_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
@@ -135,6 +135,7 @@ return;
     qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
     qgcanvas_sync_obol_viewport(*d, this);
     qgcanvas_sync_obol_camera(*d);
+    qgcanvas_sync_obol_background(*d);
     qgcanvas_request_obol_render_if_idle(*d, "qtsw-paint");
 
     QImage image;

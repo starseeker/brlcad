@@ -139,6 +139,10 @@ public:
     void setViewportRegion(const SbViewportRegion &region);
     const SbViewportRegion &getViewportRegion(void) const;
     void setViewportSize(unsigned int width, unsigned int height);
+    void setBackgroundColors(const SbColor &bottom, const SbColor &top);
+    const SbColor &getBackgroundBottomColor(void) const;
+    const SbColor &getBackgroundTopColor(void) const;
+    void renderBackground(void) const;
     SbBool syncCameraFromViewContext(const void *viewCtx,
 				     SbBool createCamera = TRUE);
     SbBool getViewInfo(struct bv_view_info *info) const;
@@ -470,6 +474,8 @@ private:
     SoRenderManager *renderManager;
     SoCamera *activeCamera;
     SbViewportRegion viewportRegion;
+    SbColor backgroundBottom;
+    SbColor backgroundTop;
     SbBool renderRequested;
     SbString renderReason;
     uint64_t lastRenderTimeNanoseconds;

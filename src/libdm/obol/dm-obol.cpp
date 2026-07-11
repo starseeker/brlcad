@@ -446,6 +446,19 @@ obol_setBGColor(struct dm *dmp, unsigned char r1, unsigned char g1,
     dmp->i->dm_bg2[0] = r2;
     dmp->i->dm_bg2[1] = g2;
     dmp->i->dm_bg2[2] = b2;
+    if (dmp->i->dm_ctx) {
+	struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+	VSET(background.bottom, r1, g1, b1);
+	VSET(background.top, r2, g2, b2);
+	(void)bv_background_state_set(
+	    bv_context_view(static_cast<struct bv_context *>(dmp->i->dm_ctx)),
+	    &background);
+    }
+    struct obol_vars *pv = obol_pvars(dmp);
+    if (pv && pv->controller)
+	pv->controller->setBackgroundColors(
+	    SbColor(r1 / 255.0f, g1 / 255.0f, b1 / 255.0f),
+	    SbColor(r2 / 255.0f, g2 / 255.0f, b2 / 255.0f));
     return BRLCAD_OK;
 }
 

@@ -41,7 +41,7 @@ QgGL::QgGL(QWidget *parent)
     : QOpenGLWidget(parent)
 {
     d = new QgCanvasState();
-    qgcanvas_init_obol(*d, this);
+    qgcanvas_init_obol(*d, this, false);
     d->lmouse_mode = BV_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
@@ -112,6 +112,7 @@ return;
 
     qgcanvas_sync_obol_viewport(*d, this);
     qgcanvas_sync_obol_camera(*d);
+    qgcanvas_sync_obol_background(*d);
     initializeOpenGLFunctions();
     qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
 

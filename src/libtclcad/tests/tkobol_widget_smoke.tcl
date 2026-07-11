@@ -52,6 +52,31 @@ if {[winfo exists .host.v2]} {
 }
 destroy .host
 
+set sw_output "[file rootname $output]_sw[file extension $output]"
+g new_view vsw tkobol sw
+g draw all.g
+g autoview vsw
+g refresh vsw
+update
+if {![winfo exists .vsw] || ![winfo ismapped .vsw] ||
+        ![winfo exists .vsw.__obol] ||
+        [winfo class .vsw.__obol] ne "Label" ||
+        [winfo width .vsw] < 100 || [winfo height .vsw] < 100} {
+    puts stderr "Software Tk Obol view was not mapped as a usable image widget"
+    exit 1
+}
+g png vsw $sw_output
+if {![file exists $sw_output] || [file size $sw_output] < 1000} {
+    puts stderr "Software Tk Obol view did not produce a non-empty image"
+    exit 1
+}
+g delete_view vsw
+update
+if {[winfo exists .vsw]} {
+    puts stderr "Software Tk Obol view survived delete_view"
+    exit 1
+}
+
 rename g {}
 puts "TclCAD Tk Obol widget smoke passed"
 exit 0

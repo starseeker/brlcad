@@ -5604,7 +5604,7 @@ ged_obol_faceplate_sync_params(BRLObolViewController *controller,
     ged_obol_faceplate_params_string(view_ctx, &params, &text);
     std::vector<BRLObolLabel> labels;
     labels.push_back(ged_obol_faceplate_label(view_ctx, bu_vls_cstr(&text),
-		     -0.98, -0.965, params.color, 255, 255, 0,
+		     -0.98, -0.90, params.color, 255, 255, 0,
 		     params.font_size > 0 ? params.font_size : 20));
     bu_vls_free(&text);
 

@@ -313,6 +313,12 @@ struct bv_params_state {
     int font_size;
 };
 
+#define BV_BACKGROUND_STATE_INIT {{0, 0, 0}, {0, 0, 0}}
+struct bv_background_state {
+    int bottom[3];
+    int top[3];
+};
+
 struct bv_snap_state {
     int lines;
     int source_flags;
@@ -399,6 +405,7 @@ struct bv {
     struct bv_other_state center_dot;
     struct bv_other_state scale_overlay;
     struct bv_params_state params;
+    struct bv_background_state background;
     struct bv_snap_state snap;
 };
 
@@ -500,6 +507,8 @@ BV_EXPORT extern int bv_scale_overlay_state_get(struct bv_other_state *record, c
 BV_EXPORT extern int bv_scale_overlay_state_set(struct bv *v, const struct bv_other_state *record);
 BV_EXPORT extern int bv_params_state_get(struct bv_params_state *record, const struct bv *v);
 BV_EXPORT extern int bv_params_state_set(struct bv *v, const struct bv_params_state *record);
+BV_EXPORT extern int bv_background_state_get(struct bv_background_state *record, const struct bv *v);
+BV_EXPORT extern int bv_background_state_set(struct bv *v, const struct bv_background_state *record);
 BV_EXPORT extern int bv_snap_state_get(struct bv_snap_state *record, const struct bv *v);
 BV_EXPORT extern int bv_snap_state_set(struct bv *v, const struct bv_snap_state *record);
 BV_EXPORT extern int bv_snap_lines_get(const struct bv *v);

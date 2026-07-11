@@ -1918,6 +1918,56 @@ mged_refresh_request_all(struct mged_state *s, unsigned int flags)
 	mged_refresh_request_current(s, flags);
 }
 
+static void
+mged_obol_faceplate_state_sync(struct mged_state *s, struct mged_dm *p)
+{
+    if (!s || !p || !p->dm_view_state || !p->dm_view_state->vs_gvp)
+	return;
+
+    struct bv *view = mged_view_state_view(p->dm_view_state);
+    struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
+    center_dot.gos_draw =
+	(!mged_variables->mv_fb || mged_variables->mv_fb_overlay != 2);
+    VMOVE(center_dot.gos_line_color, color_scheme->cs_center_dot);
+    center_dot.gos_font_size = dm_get_fontsize(DMP);
+    (void)bv_center_dot_state_set(view, &center_dot);
+
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    params.draw = mged_variables->mv_faceplate;
+    params.draw_size = 1;
+    params.draw_center = 1;
+    params.draw_az = 1;
+    params.draw_el = 1;
+    params.draw_tw = 1;
+    VMOVE(params.color, color_scheme->cs_status_text1);
+    params.font_size = dm_get_fontsize(DMP);
+    (void)bv_params_state_set(view, &params);
+
+    struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
+    model_axes.draw = axes_state->ax_model_draw;
+    VMOVE(model_axes.axes_pos, axes_state->ax_model_pos);
+    model_axes.axes_size = axes_state->ax_model_size * RT_INV_VIEW;
+    model_axes.line_width = axes_state->ax_model_linewidth;
+    model_axes.label_flag = 1;
+    VMOVE(model_axes.axes_color, color_scheme->cs_model_axes);
+    VMOVE(model_axes.label_color, color_scheme->cs_model_axes_label);
+    (void)bv_model_axes_state_set(view, &model_axes);
+
+    struct bv_axes_state view_axes = BV_AXES_STATE_INIT;
+    view_axes.draw = axes_state->ax_view_draw;
+    VSET(view_axes.axes_pos,
+	axes_state->ax_view_pos[X] * RT_INV_VIEW,
+	axes_state->ax_view_pos[Y] * RT_INV_VIEW, 0.0);
+    if (VNEAR_ZERO(view_axes.axes_pos, SMALL_FASTF))
+	view_axes.axes_pos[X] = 10.0 * SMALL_FASTF;
+    view_axes.axes_size = axes_state->ax_view_size * RT_INV_VIEW;
+    view_axes.line_width = axes_state->ax_view_linewidth;
+    view_axes.label_flag = 1;
+    VMOVE(view_axes.axes_color, color_scheme->cs_view_axes);
+    VMOVE(view_axes.label_color, color_scheme->cs_view_axes_label);
+    (void)bv_view_axes_state_set(view, &view_axes);
+}
+
 int
 mged_refresh_pending(struct mged_state *s)
 {
@@ -2025,9 +2075,11 @@ refresh(struct mged_state *s)
 		dm_draw_begin(DMP);	/* update drawn scene prolog */
 		if (p->dm_view_state && p->dm_view_state->vs_gvp &&
 		    ged_draw_obol_controller_opaque_for_view(
-			    p->dm_view_state->vs_gvp))
+			    p->dm_view_state->vs_gvp)) {
+		    mged_obol_faceplate_state_sync(s, p);
 		    (void)ged_draw_obol_view_context_faceplate_sync(s->gedp,
 			    p->dm_view_state->vs_gvp);
+		}
 
 		if (s->dbip != DBI_NULL) {
 		    /* do framebuffer underlay */

@@ -14,7 +14,7 @@ LOG="${WORKDIR}/mged_obol_smoke.log"
 
 rm -f "$OUT" "$LOG"
 
-printf 'dm type\ndm size\ndraw all.g\nautoview\nrefresh\nscreengrab %s\nquit\n' "$OUT" \
+printf 'dm type\ndm size\ndm bg 0 0 32 64 0 0\ndraw all.g\nautoview\nrefresh\nscreengrab %s\nquit\n' "$OUT" \
     | "$MGED" -c -a obol -r "$DB" > "$LOG" 2>&1
 
 if ! grep -qx "obol" "$LOG"; then
