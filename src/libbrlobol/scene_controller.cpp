@@ -1230,7 +1230,23 @@ SoBRLSceneController::getFrameRevision(void) const
 void
 SoBRLSceneController::setCompactCadRealizationEnabled(SbBool enabled)
 {
-    this->compactCadRealizationEnabled = enabled ? TRUE : FALSE;
+    const SbBool next = enabled ? TRUE : FALSE;
+    if (this->compactCadRealizationEnabled == next)
+	return;
+
+    this->compactCadRealizationEnabled = next;
+    if (next)
+	return;
+
+    if (!this->databaseSourceIndexValid)
+	this->rebuildDatabaseSourceIndex();
+    int demoted = 0;
+    for (SoBRLDatabaseSource *source : this->databaseSourceOrder) {
+	if (source)
+	    demoted += source->demoteCompactGeometry();
+    }
+    if (demoted > 0)
+	this->advanceFrameRevision();
 }
 
 SbBool
@@ -1584,8 +1600,10 @@ SoBRLSceneController::ensureGroup(const char *groupPath)
 	SoGroup *child = this->findIndexedGroup(childPath.getString());
 	if (!child) {
 	    SoBRLSceneGroup *newGroup = new SoBRLSceneGroup;
+	    const SbBool notifyEnabled = newGroup->enableNotify(FALSE);
 	    newGroup->setName(SbName(components[i].c_str()));
 	    newGroup->groupPath = childPath;
+	    newGroup->enableNotify(notifyEnabled);
 	    current->addChild(newGroup);
 	    child = newGroup;
 	    this->indexSceneGroup(child);
@@ -2520,11 +2538,13 @@ SoBRLSceneController::publishDatabaseSourceInstance(
     SoBRLDatabaseSource *source =
 	this->findIndexedDatabaseSourceInstance(sourceInstanceKey);
     const int sourceExisted = source ? 1 : 0;
+    SbBool sourceNotifyEnabled = TRUE;
     SoGroup *sourceParent = NULL;
     int sourceIndex = -1;
     SbBool indexKeysUnchanged = FALSE;
     if (!source) {
 	source = new SoBRLDatabaseSource;
+	sourceNotifyEnabled = source->enableNotify(FALSE);
     } else {
 	sourceParent = this->findIndexedDatabaseSourceInstanceParent(
 			   sourceInstanceKey);
@@ -2621,6 +2641,7 @@ SoBRLSceneController::publishDatabaseSourceInstance(
 	changed = 1;
 
     if (!sourceExisted) {
+	source->enableNotify(sourceNotifyEnabled);
 	targetGroup->addChild(source);
 	this->indexDatabaseSource(source, targetGroup);
 	this->advanceStructuralRevision();

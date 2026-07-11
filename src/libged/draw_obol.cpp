@@ -2426,7 +2426,7 @@ ged_obol_replace_path(struct ged *gedp,
 	    publish_state.roleFlags |=
 		SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
     }
-    if (policy_state.valid) {
+    if (policy_state.valid && policy_state.viewDependent) {
 	publish_state.viewPolicyValid = TRUE;
 	publish_state.viewDependent =
 	    policy_state.viewDependent ? TRUE : FALSE;
@@ -3488,10 +3488,12 @@ ged_draw_obol_view_lod_policy_changed(struct ged *gedp, void *view_ctx)
 
     int changed = 1;
     if (scene) {
-	const int independent_view =
-	    ged_obol_view_scope_is_independent(view_ctx);
 	const ged_obol_view_lod_policy_state policy_state =
 	    ged_obol_view_lod_policy_state_for_source(gedp, view_ctx);
+	scene->setCompactCadRealizationEnabled(
+	    (!policy_state.valid || !policy_state.viewDependent) ? TRUE : FALSE);
+	const int independent_view =
+	    ged_obol_view_scope_is_independent(view_ctx);
 	const int source_count = scene->getDatabaseSourceCount();
 	for (int i = 0; i < source_count; i++) {
 	    BRLObolDatabaseSourceSummary summary;
@@ -3834,6 +3836,7 @@ ged_draw_obol_scene_controller_ensure_owned(struct ged *gedp,
     SoBRLSceneGroup *root = new SoBRLSceneGroup;
     BRLObolViewController *owned_controller = new BRLObolViewController(root);
     SoBRLSceneController *owned_scene = owned_controller->getSceneController();
+    owned_scene->setCompactCadRealizationEnabled(TRUE);
     std::vector<ged_obol_attached_controller> *entries =
 	ged_obol_attached_controllers(gdp, 1);
     if (!entries) {
@@ -20407,6 +20410,19 @@ ged_obol_observer_ensure(struct ged *gedp, struct ged_drawable *gdp)
     return gdp->gd_obol_observer_token ? 1 : 0;
 }
 
+static void
+ged_obol_configure_compact_realization(struct ged *gedp,
+	void *view_ctx, SoBRLSceneController *scene_controller)
+{
+    if (!scene_controller)
+	return;
+
+    const ged_obol_view_lod_policy_state policy_state =
+	ged_obol_view_lod_policy_state_for_source(gedp, view_ctx);
+    scene_controller->setCompactCadRealizationEnabled(
+	(!policy_state.valid || !policy_state.viewDependent) ? TRUE : FALSE);
+}
+
 static int
 ged_obol_register_progressive_provider(struct ged *gedp,
 				       void *view_ctx,
@@ -20445,6 +20461,8 @@ ged_draw_obol_attach_common(struct ged *gedp,
     struct ged_drawable *gdp = ged_obol_gdp(gedp);
     if (!gdp || !scene_controller)
 	return 0;
+
+    ged_obol_configure_compact_realization(gedp, NULL, scene_controller);
 
     ged_draw_obol_scene_controller_detach(gedp);
 
@@ -20528,6 +20546,9 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
     struct ged_drawable *gdp = ged_obol_gdp(gedp);
     if (!gdp || !scene_controller || !view_controller)
 	return 0;
+
+    ged_obol_configure_compact_realization(gedp, view_ctx,
+	    scene_controller);
 
     if (!ged_obol_observer_ensure(gedp, gdp))
 	return 0;

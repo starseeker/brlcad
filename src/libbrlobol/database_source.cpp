@@ -6192,7 +6192,6 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
 	this->lodBotThreshold = botThreshold;
 	if (this->lodBotThresholdSensor)
 	    this->lodBotThresholdSensor->attach(&this->lodBotThreshold);
-	this->realizationIdentity = source_realization_identity(this);
 	activePolicyChanged = 1;
 	changed = 1;
     }
@@ -8409,6 +8408,18 @@ find_shape_in_node(SoNode *node, int &index)
 SoBRLVListShape *
 SoBRLDatabaseSource::getRealizedShape(int index) const
 {
+    if (index < 0)
+	return NULL;
+    if (this->compactIndexActive && this->compactIndex) {
+	for (const BRLObolCompactInstanceEntry &entry :
+		this->compactIndex->entries) {
+	    if (!entry.vlist)
+		continue;
+	    if (index == 0)
+		return entry.vlist;
+	    index--;
+	}
+    }
     for (int i = 0; i < this->getNumChildren(); i++) {
 	SoBRLVListShape *shape = find_shape_in_node(this->getChild(i), index);
 	if (shape)
@@ -8714,6 +8725,18 @@ find_mesh_in_node(SoNode *node, int &index)
 SoBRLMeshShape *
 SoBRLDatabaseSource::getRealizedMesh(int index) const
 {
+    if (index < 0)
+	return NULL;
+    if (this->compactIndexActive && this->compactIndex) {
+	for (const BRLObolCompactInstanceEntry &entry :
+		this->compactIndex->entries) {
+	    if (!entry.mesh)
+		continue;
+	    if (index == 0)
+		return entry.mesh;
+	    index--;
+	}
+    }
     for (int i = 0; i < this->getNumChildren(); i++) {
 	SoBRLMeshShape *shape = find_mesh_in_node(this->getChild(i), index);
 	if (shape)
@@ -8790,6 +8813,11 @@ int
 SoBRLDatabaseSource::getRealizedShapeCount(void) const
 {
     int ret = 0;
+    if (this->compactIndexActive && this->compactIndex) {
+	for (const BRLObolCompactInstanceEntry &entry :
+		this->compactIndex->entries)
+	    ret += entry.vlist ? 1 : 0;
+    }
     for (int i = 0; i < this->getNumChildren(); i++)
 	ret += count_shapes_in_node(this->getChild(i));
     return ret;
@@ -8818,6 +8846,11 @@ int
 SoBRLDatabaseSource::getRealizedMeshCount(void) const
 {
     int ret = 0;
+    if (this->compactIndexActive && this->compactIndex) {
+	for (const BRLObolCompactInstanceEntry &entry :
+		this->compactIndex->entries)
+	    ret += entry.mesh ? 1 : 0;
+    }
     for (int i = 0; i < this->getNumChildren(); i++)
 	ret += count_meshes_in_node(this->getChild(i));
     return ret;
@@ -10530,6 +10563,28 @@ SoBRLDatabaseSource::getRealizedShapeSummary(int index,
     summary = BRLObolRealizedShapeSummary();
     if (index < 0)
 	return FALSE;
+
+    if (this->compactIndexActive && this->compactIndex) {
+	for (const BRLObolCompactInstanceEntry &entry :
+		this->compactIndex->entries) {
+	    if (entry.vlist) {
+		if (index == 0) {
+		    realized_vlist_shape_summary(entry.vlist, summary);
+		    realized_shape_summary_owner(this, -1, summary);
+		    return TRUE;
+		}
+		index--;
+	    }
+	    if (entry.mesh) {
+		if (index == 0) {
+		    realized_mesh_shape_summary(entry.mesh, summary);
+		    realized_shape_summary_owner(this, -1, summary);
+		    return TRUE;
+		}
+		index--;
+	    }
+	}
+    }
 
     int remaining = index;
     for (int i = 0; i < this->getNumChildren(); i++) {

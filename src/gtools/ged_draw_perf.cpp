@@ -363,17 +363,22 @@ apply_lod_options(struct ged *gedp, const struct options &opts)
 }
 
 static int
-apply_cad_options(struct ged *gedp, const struct options &opts)
+apply_cad_options(struct ged *gedp, BRLObolViewController *controller,
+	const struct options &opts)
 {
     if (opts.cad_compact < 0)
 	return BRLCAD_OK;
 
-    SoBRLSceneController *scene =
-	ged_draw_obol_scene_controller_ensure(gedp, 0);
+    SoBRLSceneController *scene = controller ?
+	controller->getSceneController() : NULL;
     if (!scene)
 	return BRLCAD_ERROR;
 
     scene->setCompactCadRealizationEnabled(opts.cad_compact ? TRUE : FALSE);
+    SoBRLSceneController *primary = ged_draw_obol_scene_controller(gedp);
+    if (primary && primary != scene)
+	primary->setCompactCadRealizationEnabled(
+	    opts.cad_compact ? TRUE : FALSE);
     return BRLCAD_OK;
 }
 
@@ -528,7 +533,7 @@ run_once(const struct options &opts, int iter)
     }
 
     if (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK) {
-	cad_ret = apply_cad_options(gedp, opts);
+	cad_ret = apply_cad_options(gedp, controller, opts);
     }
 
     if (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
