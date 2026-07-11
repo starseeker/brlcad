@@ -147,6 +147,7 @@ return;
     painter.drawImage(QPoint(0, 0), image);
     (void)bv_refresh_consume(qg_legacy_view_bv(d->v));
     bv_refresh_complete(qg_legacy_view_bv(d->v));
+    qgcanvas_frame_complete(*d, this);
     qgcanvas_queue_obol_progressive_update(*d, this);
     if (!d->obol_paint_initialized) {
 	d->obol_paint_initialized = true;

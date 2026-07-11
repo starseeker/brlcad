@@ -189,12 +189,14 @@ tkobol_render_frame(struct tkobol_vars *tv, GLenum render_buffer,
 	static_cast<GLfloat>(tv->dmp->i->dm_bg1[2]) / 255.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    const uint64_t started = tv->controller->beginRenderTiming();
     if (tv->controller->getCamera() && tv->controller->getRenderRoot()) {
 	SoGLRenderAction *action =
 	    tv->controller->getRenderManager()->getGLRenderAction();
 	action->setViewportRegion(tv->controller->getViewportRegion());
 	action->apply(tv->controller->getRenderRoot());
     }
+    tv->controller->completeRenderTiming(started);
     tv->controller->clearRenderRequest();
     return BRLCAD_OK;
 }

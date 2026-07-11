@@ -248,6 +248,17 @@ GED_EXPORT int
 ged_draw_obol_view_context_faceplate_sync(struct ged *gedp,
 					  void *view_ctx);
 
+/**
+ * Synchronize faceplate/HUD state into an explicitly supplied controller.
+ *
+ * This form is for application-owned render endpoints that intentionally do
+ * not participate in libged's controller attachment registry.
+ */
+GED_EXPORT int
+ged_draw_obol_view_context_faceplate_sync_opaque(struct ged *gedp,
+						 void *view_ctx,
+						 void *controller);
+
 GED_EXPORT int
 ged_draw_obol_lod_service_start(struct ged *gedp,
 				void *view_ctx,

@@ -13,6 +13,7 @@
 #endif
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
+#include "QgLegacyViewContext.h"
 
 #include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
@@ -192,6 +193,21 @@ main(int argc, char **argv)
     if (controller->renderPending(FALSE, FALSE, NULL))
 	FAIL("Obol render drain should be idle when no render is pending");
 
+    const SbVec2s stableSize =
+	controller->getViewportRegion().getWindowSize();
+    controller->clearRenderRequest();
+    controller->setViewportSize(static_cast<unsigned int>(stableSize[0]),
+	static_cast<unsigned int>(stableSize[1]));
+    if (controller->isRenderRequested())
+	FAIL("unchanged viewport size should not request another render");
+
+    void *viewCtx = qg_legacy_view_to_context(view.view());
+    (void)controller->syncCameraFromViewContext(viewCtx);
+    controller->clearRenderRequest();
+    (void)controller->syncCameraFromViewContext(viewCtx);
+    if (controller->isRenderRequested())
+	FAIL("unchanged view camera should not request another render");
+
     if (!controller->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 	FAIL("QgView default Obol scene root should be a separator");
     SoSeparator *sceneRoot = static_cast<SoSeparator *>(controller->getSceneRoot());
@@ -238,6 +254,12 @@ main(int argc, char **argv)
     if (view.legacyBackendInitialized())
 	FAIL("QgView visible SW capture should not initialize the legacy display manager for Obol content");
 
+    struct bv *fpsView = qg_legacy_view_bv(view.view());
+    struct bv_params_state fpsParams = BV_PARAMS_STATE_INIT;
+    (void)bv_params_state_get(&fpsParams, fpsView);
+    fpsParams.draw = 1;
+    fpsParams.draw_fps = 1;
+    (void)bv_params_state_set(fpsView, &fpsParams);
     controller->requestRender("sw-visible-paint");
     view.show();
     QImage paintTarget(view.size(), QImage::Format_RGBA8888);
@@ -251,6 +273,9 @@ main(int argc, char **argv)
 	FAIL("QgView visible SW paint should bypass the legacy display manager for Obol content");
     if (lit_pixel_count(paintTarget) < 10)
 	FAIL("QgView visible SW paint should draw populated Obol scenes");
+    if (controller->getLastRenderTimeNanoseconds() == 0 ||
+	controller->getSmoothedRenderTimeNanoseconds() == 0)
+	FAIL("Obol controller should record rendered frame telemetry");
 
     TestQgSW swCanvas(NULL);
     swCanvas.resize(160, 120);

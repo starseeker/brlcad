@@ -717,6 +717,16 @@ typedef int (*ged_draw_view_point_cb)(const point_t pt,
 typedef int (*ged_draw_shape_ref_index_cb)(ged_draw_shape_ref ref,
 	void *userdata);
 
+struct ged_draw_shape_candidate {
+    const char *path;
+    const char *instance_key;
+    int draw_mode;
+};
+
+typedef int (*ged_draw_shape_candidate_cb)(
+    const struct ged_draw_shape_candidate *candidate,
+    void *userdata);
+
 #define GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS 0x01u
 #define GED_DRAW_VIEW_RECORD_QUERY_DB_OBJECTS   0x02u
 #define GED_DRAW_VIEW_RECORD_QUERY_LOCAL_ONLY   0x04u
@@ -1073,9 +1083,14 @@ ged_draw_shape_ref_index_for_path_hash(struct ged *gedp,
 				       void *userdata);
 
 GED_EXPORT extern void
-ged_draw_foreach_visible_shape_ref(struct ged *gedp,
-				   ged_draw_shape_ref_index_cb cb,
-				   void *userdata);
+ged_draw_foreach_visible_shape_candidate(struct ged *gedp,
+					 ged_draw_shape_candidate_cb cb,
+					 void *userdata);
+
+GED_EXPORT extern ged_draw_shape_ref
+ged_draw_shape_ref_for_candidate(
+    struct ged *gedp,
+    const struct ged_draw_shape_candidate *candidate);
 
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_advance_shape_ref(struct ged *gedp, ged_draw_shape_ref ref, int delta);

@@ -510,12 +510,13 @@ bv_35_25(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), ch
 static int
 ill_common(struct mged_state *s) {
     /* Common part of illumination */
-    if (!ged_draw_has_shapes(s->gedp)) {
+    ged_draw_shape_ref first = mged_pen_pick_first(s);
+    if (ged_draw_shape_ref_is_null(first)) {
 	Tcl_AppendResult(s->interp, "no solids in view\n", (char *)NULL);
 	return 0;	/* BAD */
     }
 
-    mged_highlight_set_shape_ref(s, ged_draw_first_shape_ref(s->gedp));
+    mged_highlight_set_shape_ref(s, first);
     edobj = 0;		/* sanity */
     edsol = 0;		/* sanity */
     movedir = 0;		/* No edit modes set */

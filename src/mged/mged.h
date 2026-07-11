@@ -354,6 +354,7 @@ extern ged_draw_shape_ref mged_highlight_shape_ref(struct mged_state *s);
 extern int mged_highlight_shape_record(struct mged_state *s, struct ged_draw_shape_record *out);
 extern void mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref);
 extern void mged_highlight_clear(struct mged_state *s);
+extern ged_draw_shape_ref mged_pen_pick_first(struct mged_state *s);
 extern int sedraw; /* apply solid editing changes */
 extern int edobj; /* object editing options */
 

@@ -33,6 +33,7 @@
 #include "common.h"
 
 #include <climits>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <QImage>
@@ -49,6 +50,8 @@
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/view_controller.h"
 #include "bv.h"
+#include "ged/draw_obol.h"
+#include "ged/view.h"
 #include "QgObolContextManager.h"
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgLegacyView.h"
@@ -108,6 +111,8 @@ struct QgCanvasState {
     double y_press_pos = -INT_MAX;
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
+    bool   fps_update_queued = false;
+    std::chrono::steady_clock::time_point fps_last_publish;
 
     /* ---- per-canvas input handler ---- */
     QgCanvasInput input;
@@ -203,7 +208,10 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     SoOffscreenRenderer renderer(qgcanvas_obol_context_manager(), region);
     renderer.setComponents(SoOffscreenRenderer::RGB);
     renderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
-    if (!s.obol->getViewport()->render(&renderer))
+    const uint64_t started = s.obol->beginRenderTiming();
+    const SbBool rendered = s.obol->getViewport()->render(&renderer);
+    s.obol->completeRenderTiming(started);
+    if (!rendered)
 	return;
 
     unsigned char *buffer = renderer.getBuffer();
@@ -425,6 +433,15 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     if (!s.obol || !s.v)
 	return;
 
+    void *view_ctx = qg_legacy_view_to_context(s.v);
+    struct ged *gedp = static_cast<struct ged *>(
+	ged_view_context_user_data_get(view_ctx));
+    if (gedp) {
+	(void)ged_draw_obol_view_context_faceplate_sync_opaque(gedp, view_ctx,
+		s.obol);
+	return;
+    }
+
     SoNode *root = s.obol->getSceneRoot();
     if (!root || !root->isOfType(SoGroup::getClassTypeId()))
 	return;
@@ -434,7 +451,6 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     struct bv_axes_state modelAxes = {};
     struct bv_axes_state viewAxes = {};
     struct bv_adc_state adc = {};
-    void *view_ctx = qg_legacy_view_to_context(s.v);
     const struct bv *view = qg_legacy_context_bv_const(view_ctx);
     (void)bv_grid_state_get(&grid, view);
     (void)bv_model_axes_state_get(&modelAxes, view);
@@ -445,6 +461,42 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     qgcanvas_sync_obol_axes(s, group, "faceplate::model_axes", modelAxes);
     qgcanvas_sync_obol_axes(s, group, "faceplate::view_axes", viewAxes);
     qgcanvas_sync_obol_adc(s, group, adc);
+}
+
+/** Refresh an enabled FPS label from controller telemetry at a modest cadence. */
+static inline void
+qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
+{
+    if (!s.v || !s.obol || !w)
+	return;
+
+    struct bv *view = qg_legacy_view_bv(s.v);
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    if (!bv_params_state_get(&params, view) || !params.draw ||
+	!params.draw_fps)
+	return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!s.obol->getSmoothedRenderTimeNanoseconds())
+	return;
+
+    const bool first =
+	s.fps_last_publish.time_since_epoch().count() == 0;
+    const bool publish = first ||
+	std::chrono::duration_cast<std::chrono::milliseconds>(
+	    now - s.fps_last_publish).count() >= 250;
+    if (publish) {
+	s.fps_last_publish = now;
+	qgcanvas_sync_obol_faceplate(s);
+    }
+
+    if (!s.fps_update_queued) {
+	s.fps_update_queued = true;
+	QTimer::singleShot(250, w, [&s, w]() {
+	    s.fps_update_queued = false;
+	    w->update();
+	});
+    }
 }
 
 /** Render queued Obol work from a caller-owned current GL context. */
@@ -522,10 +574,12 @@ qgcanvas_set_view(QgCanvasState &s, qg_legacy_view *nv)
 	/* Revert to the widget-owned local view. */
 	s.v = s.local_v;
 	qgcanvas_sync_obol_camera(s);
+	qgcanvas_sync_obol_faceplate(s);
 	return;
     }
     s.v = nv;
     qgcanvas_sync_obol_camera(s);
+    qgcanvas_sync_obol_faceplate(s);
 }
 
 #endif /* QGCANVASSTATE_H */

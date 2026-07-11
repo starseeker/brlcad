@@ -156,6 +156,10 @@ public:
     SbBool renderPending(SbBool clearWindow = TRUE,
 			 SbBool clearZBuffer = TRUE,
 			 SbString *reason = NULL);
+    uint64_t beginRenderTiming(void) const;
+    void completeRenderTiming(uint64_t startedNanoseconds);
+    uint64_t getLastRenderTimeNanoseconds(void) const;
+    uint64_t getSmoothedRenderTimeNanoseconds(void) const;
     int renderToImage(unsigned char **image,
 		      int flip = 0,
 		      int alpha = 0,
@@ -468,6 +472,8 @@ private:
     SbViewportRegion viewportRegion;
     SbBool renderRequested;
     SbString renderReason;
+    uint64_t lastRenderTimeNanoseconds;
+    uint64_t smoothedRenderTimeNanoseconds;
     std::vector<BRLObolProgressiveProviderRecord> progressiveProviders;
     uint64_t progressiveProviderNextToken;
     std::atomic<int> progressiveWorkPending;

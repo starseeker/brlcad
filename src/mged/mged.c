@@ -71,6 +71,7 @@
 #include "libtermio.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
+#include "dm/obol.h"
 #include "tclcad.h"
 
 /* private */
@@ -2022,6 +2023,11 @@ refresh(struct mged_state *s)
 
 		(void)ged_draw_obol_framebuffer_present(s->gedp);
 		dm_draw_begin(DMP);	/* update drawn scene prolog */
+		if (p->dm_view_state && p->dm_view_state->vs_gvp &&
+		    ged_draw_obol_controller_opaque_for_view(
+			    p->dm_view_state->vs_gvp))
+		    (void)ged_draw_obol_view_context_faceplate_sync(s->gedp,
+			    p->dm_view_state->vs_gvp);
 
 		if (s->dbip != DBI_NULL) {
 		    /* do framebuffer underlay */
@@ -2194,8 +2200,13 @@ mged_finish(struct mged_state *s, int exitcode)
 	bu_ptbl_rm(&active_dm_set, (long *)p);
 
 	if (p && p->dm_dmp) {
-	    if (s->gedp)
+	    if (s->gedp) {
 		ged_draw_obol_framebuffer_release(s->gedp);
+		void *controller = dm_obol_controller(p->dm_dmp);
+		if (controller)
+		    ged_draw_obol_controller_detach_opaque(s->gedp,
+			    controller);
+	    }
 	    dm_close(p->dm_dmp);
 	    mged_slider_free_vls(p);
 	    bu_free(p, "release: mged_curr_dm");

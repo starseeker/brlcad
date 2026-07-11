@@ -44,11 +44,18 @@ struct mged_highlight_state mged_highlight = {GED_DRAW_SHAPE_REF_NULL_INIT, 0};
 
 struct mged_pen_pick_cache {
     struct ged *gedp;
-    ged_draw_shape_ref *refs;
+    struct mged_pen_pick_candidate *candidates;
     size_t count;
     size_t capacity;
     uint64_t scene_revision;
     int valid;
+};
+
+struct mged_pen_pick_candidate {
+    char *path;
+    char *instance_key;
+    int draw_mode;
+    ged_draw_shape_ref ref;
 };
 
 static struct mged_pen_pick_cache pen_pick_cache = {0};
@@ -56,25 +63,39 @@ static struct mged_pen_pick_cache pen_pick_cache = {0};
 static void
 mged_pen_pick_cache_clear(void)
 {
-    if (pen_pick_cache.refs)
-	bu_free(pen_pick_cache.refs, "MGED pen-pick refs");
+    for (size_t i = 0; i < pen_pick_cache.count; i++) {
+	bu_free(pen_pick_cache.candidates[i].path, "MGED pen-pick path");
+	bu_free(pen_pick_cache.candidates[i].instance_key,
+		"MGED pen-pick instance key");
+    }
+    if (pen_pick_cache.candidates)
+	bu_free(pen_pick_cache.candidates, "MGED pen-pick candidates");
     memset(&pen_pick_cache, 0, sizeof(pen_pick_cache));
 }
 
 static int
-mged_pen_pick_cache_append(ged_draw_shape_ref ref, void *userdata)
+mged_pen_pick_cache_append(const struct ged_draw_shape_candidate *candidate,
+	void *userdata)
 {
     struct mged_pen_pick_cache *cache =
 	(struct mged_pen_pick_cache *)userdata;
-    if (!cache || ged_draw_shape_ref_is_null(ref))
+    if (!cache || !candidate || !candidate->path || !candidate->path[0])
 	return 1;
     if (cache->count == cache->capacity) {
 	size_t capacity = cache->capacity ? cache->capacity * 2 : 64;
-	cache->refs = (ged_draw_shape_ref *)bu_realloc(cache->refs,
-		capacity * sizeof(ged_draw_shape_ref), "MGED pen-pick refs");
+	cache->candidates = (struct mged_pen_pick_candidate *)bu_realloc(
+		cache->candidates,
+		capacity * sizeof(struct mged_pen_pick_candidate),
+		"MGED pen-pick candidates");
 	cache->capacity = capacity;
     }
-    cache->refs[cache->count++] = ref;
+    struct mged_pen_pick_candidate *out =
+	&cache->candidates[cache->count++];
+    out->path = bu_strdup(candidate->path);
+    out->instance_key = bu_strdup(candidate->instance_key ?
+	    candidate->instance_key : candidate->path);
+    out->draw_mode = candidate->draw_mode;
+    out->ref = GED_DRAW_SHAPE_REF_NULL;
     return 1;
 }
 
@@ -91,9 +112,34 @@ mged_pen_pick_cache_ensure(struct mged_state *s)
     mged_pen_pick_cache_clear();
     pen_pick_cache.gedp = s->gedp;
     pen_pick_cache.scene_revision = revision;
-    ged_draw_foreach_visible_shape_ref(s->gedp,
+    ged_draw_foreach_visible_shape_candidate(s->gedp,
 	    mged_pen_pick_cache_append, &pen_pick_cache);
     pen_pick_cache.valid = 1;
+}
+
+static ged_draw_shape_ref
+mged_pen_pick_ref(struct mged_state *s, size_t index)
+{
+    mged_pen_pick_cache_ensure(s);
+    if (index >= pen_pick_cache.count)
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    struct mged_pen_pick_candidate *candidate =
+	&pen_pick_cache.candidates[index];
+    if (ged_draw_shape_ref_is_null(candidate->ref)) {
+	struct ged_draw_shape_candidate lookup;
+	lookup.path = candidate->path;
+	lookup.instance_key = candidate->instance_key;
+	lookup.draw_mode = candidate->draw_mode;
+	candidate->ref = ged_draw_shape_ref_for_candidate(s->gedp, &lookup);
+    }
+    return candidate->ref;
+}
+
+ged_draw_shape_ref
+mged_pen_pick_first(struct mged_state *s)
+{
+    return mged_pen_pick_ref(s, 0);
 }
 
 ged_draw_shape_ref
@@ -140,15 +186,15 @@ mged_highlight_clear(struct mged_state *s)
 static void
 highlight_from_y(struct mged_state *s, int y)
 {
-    mged_pen_pick_cache_ensure(s);
     void *view_ctx = view_state->vs_gvp;
     ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
+    mged_pen_pick_cache_ensure(s);
     if (pen_pick_cache.count) {
 	fastf_t pos = ((fastf_t)y + RT_VIEW_MAX) / RT_VIEW_RANGE;
 	size_t index = (size_t)(pos * pen_pick_cache.count);
 	if (index >= pen_pick_cache.count)
 	    index = pen_pick_cache.count - 1;
-	ref = pen_pick_cache.refs[index];
+	ref = mged_pen_pick_ref(s, index);
     }
     mged_highlight_set_shape_ref(s, ref);
 
@@ -414,8 +460,6 @@ f_mouse(
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    struct ged_draw_shape_record hrec;
-    int have_highlight = mged_highlight_shape_record(s, &hrec);
     vect_t mousevec;		/* float pt -1..+1 mouse pos vect */
     int isave;
     int up;
@@ -514,16 +558,19 @@ f_mouse(
 	    return TCL_OK;
 
 	case ST_O_PATH:
-	    /*
-	     * Convert DT position to path element select
-	     */
-	    isave = highlight_path_pos;
-	    if (have_highlight && hrec.fullpath)
-		highlight_path_pos = hrec.fullpath->fp_len-1 - (
-			(ypos+(int)RT_VIEW_MAX) * (hrec.fullpath->fp_len) / (int)RT_VIEW_RANGE);
-	    if (highlight_path_pos != isave)
-		mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
-	    return TCL_OK;
+	    {
+		/* Convert DT position to path element select. */
+		struct ged_draw_shape_record hrec;
+		int have_highlight = mged_highlight_shape_record(s, &hrec);
+		isave = highlight_path_pos;
+		if (have_highlight && hrec.fullpath)
+		    highlight_path_pos = hrec.fullpath->fp_len-1 - (
+			    (ypos+(int)RT_VIEW_MAX) * (hrec.fullpath->fp_len) / (int)RT_VIEW_RANGE);
+		if (highlight_path_pos != isave)
+		    mged_refresh_request_view(s, view_state,
+			    GED_VIEW_REFRESH_VIEW);
+		return TCL_OK;
+	    }
 
     } else switch (s->global_editing_state) {
 

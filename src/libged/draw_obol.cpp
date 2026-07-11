@@ -12,6 +12,7 @@
 #include "common.h"
 
 #include "brlobol/database_source.h"
+#include "brlobol/adc.h"
 #include "brlobol/draw_cache.h"
 #include "brlobol/grid.h"
 #include "brlobol/init.h"
@@ -5484,6 +5485,43 @@ ged_obol_faceplate_sync_grid(BRLObolViewController *controller,
 }
 
 static void
+ged_obol_faceplate_sync_adc(BRLObolViewController *controller,
+			    void *view_ctx)
+{
+    static const char name[] = "_faceplate/adc";
+    struct bv_adc_state state = BV_ADC_STATE_INIT;
+    if (!bv_adc_state_get(&state, ged_obol_bv_const(view_ctx)) ||
+	!state.draw) {
+	ged_obol_faceplate_remove(controller, view_ctx, name);
+	return;
+    }
+
+    SoBRLADC *node = new SoBRLADC;
+    node->ref();
+    node->overlayId = name;
+    node->center = SbVec3f(static_cast<float>(state.pos_model[X]),
+			  static_cast<float>(state.pos_model[Y]),
+			  static_cast<float>(state.pos_model[Z]));
+    node->angleDegrees = static_cast<float>(state.a1);
+    node->distance = static_cast<float>(state.dst > SMALL_FASTF ?
+					state.dst : 1.0);
+    node->visible = TRUE;
+    node->rebuildGeometry();
+
+    BRLObolFeatureStyle style = ged_obol_faceplate_style(
+	state.line_color, 255, 255, 255, state.line_width);
+    style.hasSelectable = TRUE;
+    style.selectable = FALSE;
+    BRLObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
+    BRLObolFeatureHandle handle =
+	controller->features().publishCustomNode(name,
+	    BRLObolFeatureScope::Local, node, &style, &owner);
+    node->unref();
+    (void)ged_obol_feature_mark_overlay(controller, handle,
+	ged_obol_faceplate_overlay_info(view_ctx));
+}
+
+static void
 ged_obol_faceplate_params_string(void *view_ctx,
 				 const struct bv_params_state *params,
 				 struct bu_vls *vls)
@@ -5537,7 +5575,7 @@ ged_obol_faceplate_params_string(void *view_ctx,
     if (params->draw_fps && frametime > 0) {
 	if (bu_vls_strlen(vls) > 0)
 	    bu_vls_putc(vls, ' ');
-	bu_vls_printf(vls, "FPS:%.2f", 1.0 / (fastf_t)frametime);
+	bu_vls_printf(vls, "FPS:%.2f", 1000000000.0 / (fastf_t)frametime);
     }
 }
 
@@ -6069,19 +6107,20 @@ ged_obol_faceplate_sync_framebuffer(BRLObolViewController *controller,
     ged_obol_faceplate_remove(controller, view_ctx, name);
 }
 
-extern "C" int
-ged_draw_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx)
+static int
+ged_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx,
+	BRLObolViewController *controller)
 {
-    if (!gedp || !view_ctx)
-	return BRLCAD_OK;
-
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller)
+    if (!gedp || !view_ctx || !controller)
 	return BRLCAD_OK;
 
     ged_obol_faceplate_sync_center_dot(controller, view_ctx);
     ged_obol_faceplate_sync_grid(controller, view_ctx);
+    ged_obol_faceplate_sync_adc(controller, view_ctx);
+    const uint64_t render_time =
+	controller->getSmoothedRenderTimeNanoseconds();
+    if (render_time)
+	(void)bv_frametime_set(ged_obol_bv(view_ctx), render_time);
     ged_obol_faceplate_sync_params(controller, view_ctx);
     ged_obol_faceplate_sync_scale(controller, view_ctx);
     ged_obol_faceplate_sync_axes(controller, view_ctx);
@@ -6094,6 +6133,21 @@ ged_draw_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx)
 	(void)ged_draw_obol_framebuffer_present(gedp);
 
     return BRLCAD_OK;
+}
+
+extern "C" int
+ged_draw_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx)
+{
+    return ged_obol_view_context_faceplate_sync(gedp, view_ctx,
+	ged_obol_view_controller_for_context(view_ctx));
+}
+
+extern "C" int
+ged_draw_obol_view_context_faceplate_sync_opaque(struct ged *gedp,
+	void *view_ctx, void *controller)
+{
+    return ged_obol_view_context_faceplate_sync(gedp, view_ctx,
+	static_cast<BRLObolViewController *>(controller));
 }
 
 extern "C" int

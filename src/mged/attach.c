@@ -265,8 +265,12 @@ release(struct mged_state *s, char *name, int need_close)
 	ged_view_context_display_manager_set(
 		s->mged_curr_dm->dm_view_state->vs_gvp, NULL);
 
-    if (need_close)
+    if (need_close) {
+	void *controller = dm_obol_controller(DMP);
+	if (s->gedp && controller)
+	    ged_draw_obol_controller_detach_opaque(s->gedp, controller);
 	dm_close(DMP);
+    }
 
     bu_ptbl_rm(&active_dm_set, (long *)s->mged_curr_dm);
     mged_slider_free_vls(s->mged_curr_dm);

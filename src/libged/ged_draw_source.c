@@ -3482,7 +3482,6 @@ struct ged_draw_source_root_shape_ref_ctx {
     struct ged *gedp;
     ged_draw_shape_ref_index_cb cb;
     void *userdata;
-    int visible_only;
 };
 
 
@@ -3614,9 +3613,6 @@ _ged_draw_source_root_obol_shape_record_cb(
     if (!gedp || !record || !record->database_path ||
 	    !record->database_path[0] || !ctx || !ctx->cb)
 	return 1;
-    if (ctx->visible_only && !record->visible)
-	return 1;
-
     ged_draw_shape_ref ref =
 	ged_draw_obol_shape_ref_for_database_source_record(gedp, record);
     if (ged_draw_shape_ref_is_null(ref))
@@ -3669,7 +3665,6 @@ ged_draw_source_root_foreach_shape_ref(struct ged *gedp,
     obol_ctx.gedp = gedp;
     obol_ctx.cb = cb;
     obol_ctx.userdata = userdata;
-    obol_ctx.visible_only = 0;
     if (ged_draw_obol_scene_controller_full_synced(gedp)) {
 	int obol_status = ged_draw_obol_database_source_records_foreach(gedp,
 		skip_overlay_groups, _ged_draw_source_root_obol_shape_record_cb,
@@ -3693,28 +3688,68 @@ ged_draw_source_root_foreach_shape_ref(struct ged *gedp,
     ctx.shape_ctx.gedp = gedp;
     ctx.shape_ctx.cb = cb;
     ctx.shape_ctx.userdata = userdata;
-    ctx.shape_ctx.visible_only = 0;
     ctx.skip_overlay_groups = skip_overlay_groups;
     return ged_draw_scene_handle_foreach_child(root_ref,
 	    _ged_draw_source_root_shape_child_cb, &ctx);
 }
 
 
+struct ged_draw_visible_shape_candidate_ctx {
+    ged_draw_shape_candidate_cb cb;
+    void *userdata;
+};
+
+
+static int
+_ged_draw_visible_shape_candidate_cb(
+	struct ged *UNUSED(gedp),
+	const struct ged_draw_obol_database_source_record *record,
+	void *userdata)
+{
+    struct ged_draw_visible_shape_candidate_ctx *ctx =
+	(struct ged_draw_visible_shape_candidate_ctx *)userdata;
+    if (!ctx || !ctx->cb || !record || !record->database_path)
+	return 0;
+
+    struct ged_draw_shape_candidate candidate;
+    candidate.path = record->database_path;
+    candidate.instance_key = record->instance_key;
+    candidate.draw_mode = record->draw_mode;
+    return ctx->cb(&candidate, ctx->userdata);
+}
+
+
 void
-ged_draw_foreach_visible_shape_ref(struct ged *gedp,
-				   ged_draw_shape_ref_index_cb cb,
-				   void *userdata)
+ged_draw_foreach_visible_shape_candidate(struct ged *gedp,
+					 ged_draw_shape_candidate_cb cb,
+					 void *userdata)
 {
     if (!gedp || !cb || !ged_draw_obol_scene_controller_full_synced(gedp))
 	return;
 
-    struct ged_draw_source_root_shape_ref_ctx ctx;
-    ctx.gedp = gedp;
+    struct ged_draw_visible_shape_candidate_ctx ctx;
     ctx.cb = cb;
     ctx.userdata = userdata;
-    ctx.visible_only = 1;
     (void)ged_draw_obol_visible_database_source_records_foreach_fast(gedp,
-	    _ged_draw_source_root_obol_shape_record_cb, &ctx);
+	    _ged_draw_visible_shape_candidate_cb, &ctx);
+}
+
+
+ged_draw_shape_ref
+ged_draw_shape_ref_for_candidate(
+    struct ged *gedp,
+    const struct ged_draw_shape_candidate *candidate)
+{
+    if (!gedp || !candidate || !candidate->path || !candidate->path[0])
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    struct ged_draw_obol_database_source_record record;
+    memset(&record, 0, sizeof(record));
+    record.valid = 1;
+    record.database_path = candidate->path;
+    record.instance_key = candidate->instance_key;
+    record.draw_mode = candidate->draw_mode;
+    return ged_draw_obol_shape_ref_for_database_source_record(gedp, &record);
 }
 
 

@@ -28,6 +28,7 @@
 #include "rt/view.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -710,6 +711,8 @@ BRLObolViewController::BRLObolViewController(void) :
     viewportRegion(1, 1),
     renderRequested(FALSE),
     renderReason(""),
+    lastRenderTimeNanoseconds(0),
+    smoothedRenderTimeNanoseconds(0),
     progressiveProviders(),
     progressiveProviderNextToken(1),
     progressiveWorkPending(0),
@@ -766,6 +769,8 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     viewportRegion(1, 1),
     renderRequested(FALSE),
     renderReason(""),
+    lastRenderTimeNanoseconds(0),
+    smoothedRenderTimeNanoseconds(0),
     progressiveProviders(),
     progressiveProviderNextToken(1),
     progressiveWorkPending(0),
@@ -1003,6 +1008,10 @@ BRLObolViewController::setViewportSize(unsigned int width, unsigned int height)
 	width = 1;
     if (height == 0)
 	height = 1;
+    const SbVec2s current = this->viewportRegion.getWindowSize();
+    if (current[0] == static_cast<short>(width) &&
+	current[1] == static_cast<short>(height))
+	return;
     this->viewportRegion.setWindowSize((short)width, (short)height);
     this->viewport->setViewportRegion(this->viewportRegion);
     this->syncRenderManager();
@@ -1096,32 +1105,75 @@ BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
 	viewRotation[8], viewRotation[9], viewRotation[10]
     };
 
-    camera->viewportMapping = SoCamera::LEAVE_ALONE;
-    camera->aspectRatio = static_cast<float>(aspect);
-    camera->position = SbVec3f(
-			   static_cast<float>(center[X] + viewZ[X] * distance),
-			   static_cast<float>(center[Y] + viewZ[Y] * distance),
-			   static_cast<float>(center[Z] + viewZ[Z] * distance));
-    camera->orientation = orientation;
-    camera->focalDistance = static_cast<float>(distance);
-    camera->nearDistance = static_cast<float>(
-			       std::max(distance * 0.001, 1.0e-6));
-    camera->farDistance = static_cast<float>(
-			      std::max(distance + horizontalSize * 100.0,
-				       distance + 1.0));
+    const float desiredAspect = static_cast<float>(aspect);
+    const SbVec3f desiredPosition(
+	static_cast<float>(center[X] + viewZ[X] * distance),
+	static_cast<float>(center[Y] + viewZ[Y] * distance),
+	static_cast<float>(center[Z] + viewZ[Z] * distance));
+    const float desiredFocal = static_cast<float>(distance);
+    const float desiredNear = static_cast<float>(
+	std::max(distance * 0.001, 1.0e-6));
+    const float desiredFar = static_cast<float>(
+	std::max(distance + horizontalSize * 100.0, distance + 1.0));
+    const auto float_changed = [](float current, float desired) {
+	const float scale = std::max(1.0f, std::fabs(desired));
+	return std::fabs(current - desired) > 1.0e-6f * scale;
+    };
+
+    SbBool changed = FALSE;
+    if (camera->viewportMapping.getValue() != SoCamera::LEAVE_ALONE) {
+	camera->viewportMapping = SoCamera::LEAVE_ALONE;
+	changed = TRUE;
+    }
+    if (float_changed(camera->aspectRatio.getValue(), desiredAspect)) {
+	camera->aspectRatio = desiredAspect;
+	changed = TRUE;
+    }
+    if (camera->position.getValue() != desiredPosition) {
+	camera->position = desiredPosition;
+	changed = TRUE;
+    }
+    if (camera->orientation.getValue() != orientation) {
+	camera->orientation = orientation;
+	changed = TRUE;
+    }
+    if (float_changed(camera->focalDistance.getValue(), desiredFocal)) {
+	camera->focalDistance = desiredFocal;
+	changed = TRUE;
+    }
+    if (float_changed(camera->nearDistance.getValue(), desiredNear)) {
+	camera->nearDistance = desiredNear;
+	changed = TRUE;
+    }
+    if (float_changed(camera->farDistance.getValue(), desiredFar)) {
+	camera->farDistance = desiredFar;
+	changed = TRUE;
+    }
 
     if (camera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
 	SoPerspectiveCamera *perspectiveCamera =
 	    static_cast<SoPerspectiveCamera *>(camera);
-	perspectiveCamera->heightAngle = static_cast<float>(heightAngle);
+	const float desiredAngle = static_cast<float>(heightAngle);
+	if (float_changed(perspectiveCamera->heightAngle.getValue(),
+		desiredAngle)) {
+	    perspectiveCamera->heightAngle = desiredAngle;
+	    changed = TRUE;
+	}
     } else if (orthographic) {
 	SoOrthographicCamera *orthographicCamera =
 	    static_cast<SoOrthographicCamera *>(camera);
-	orthographicCamera->height = static_cast<float>(verticalSize);
+	const float desiredHeight = static_cast<float>(verticalSize);
+	if (float_changed(orthographicCamera->height.getValue(),
+		desiredHeight)) {
+	    orthographicCamera->height = desiredHeight;
+	    changed = TRUE;
+	}
     }
 
-    this->syncLodViewSignature(TRUE);
-    this->requestRender("rt-view-camera");
+    if (changed) {
+	this->syncLodViewSignature(TRUE);
+	this->requestRender("rt-view-camera");
+    }
     return TRUE;
 }
 
@@ -1248,8 +1300,47 @@ BRLObolViewController::renderPending(SbBool clearWindow,
     if (reason)
 	*reason = renderReasonCopy;
 
+    const uint64_t started = this->beginRenderTiming();
     this->renderManager->render(clearWindow, clearZBuffer);
+    this->completeRenderTiming(started);
     return TRUE;
+}
+
+uint64_t
+BRLObolViewController::beginRenderTiming(void) const
+{
+    return static_cast<uint64_t>(
+	std::chrono::duration_cast<std::chrono::nanoseconds>(
+	    std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void
+BRLObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
+{
+    const uint64_t now = this->beginRenderTiming();
+    if (!startedNanoseconds || now <= startedNanoseconds)
+	return;
+
+    const uint64_t elapsed = now - startedNanoseconds;
+    if (elapsed >= 30000000000ULL)
+	return;
+
+    this->lastRenderTimeNanoseconds = elapsed;
+    this->smoothedRenderTimeNanoseconds =
+	this->smoothedRenderTimeNanoseconds ?
+	(this->smoothedRenderTimeNanoseconds * 9 + elapsed) / 10 : elapsed;
+}
+
+uint64_t
+BRLObolViewController::getLastRenderTimeNanoseconds(void) const
+{
+    return this->lastRenderTimeNanoseconds;
+}
+
+uint64_t
+BRLObolViewController::getSmoothedRenderTimeNanoseconds(void) const
+{
+    return this->smoothedRenderTimeNanoseconds;
 }
 
 int
@@ -1290,7 +1381,10 @@ BRLObolViewController::renderToImage(unsigned char **image,
     renderer->setBackgroundColor(background ? *background :
 	SbColor(0.0f, 0.0f, 0.0f));
 
-    if (!this->getViewport()->render(renderer.get())) {
+    const uint64_t started = this->beginRenderTiming();
+    const SbBool rendered = this->getViewport()->render(renderer.get());
+    this->completeRenderTiming(started);
+    if (!rendered) {
 	return BRLCAD_ERROR;
     }
 
