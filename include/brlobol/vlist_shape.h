@@ -28,10 +28,13 @@
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoShape.h>
 
+#include <map>
 #include <vector>
 
 class SoPickedPoint;
 class SoGLRenderAction;
+class SoGLDisplayList;
+class SoNotList;
 class SoRayPickAction;
 
 class BRLOBOL_EXPORT SoBRLVListShape : public SoShape {
@@ -168,11 +171,15 @@ public:
     void computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center) override;
 
 private:
+    void clearRenderLists(void);
+
     std::vector<double> precisePoints;
     std::vector<double> preciseAnnotationPoints;
+    std::map<int, SoGLDisplayList *> renderLists;
 
 protected:
     virtual ~SoBRLVListShape(void);
+    void notify(SoNotList *list) override;
     void generatePrimitives(SoAction *action) override;
     SoDetail *createLineSegmentDetail(SoRayPickAction *action,
 	    const SoPrimitiveVertex *v1,

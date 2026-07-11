@@ -7,15 +7,26 @@
 
 #include "common.h"
 
+#include "brlobol/lod_realization.h"
 #include "brlobol/pick_detail.h"
 #include "brlobol/vlist_shape.h"
 
+#include <Inventor/SoDB.h>
 #include <Inventor/SoPrimitiveVertex.h>
 #include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/details/SoPointDetail.h>
+#include <Inventor/elements/SoGLCacheContextElement.h>
+#include <Inventor/elements/SoGLDisplayList.h>
+#include <Inventor/elements/SoContextManagerElement.h>
+#include <Inventor/elements/SoModelMatrixElement.h>
+#include <Inventor/elements/SoProjectionMatrixElement.h>
+#include <Inventor/elements/SoViewingMatrixElement.h>
+#include <Inventor/elements/SoViewportRegionElement.h>
 #include <Inventor/gl.h>
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 SO_NODE_SOURCE(SoBRLVListShape);
@@ -114,6 +125,25 @@ SoBRLVListShape::SoBRLVListShape(void)
 
 SoBRLVListShape::~SoBRLVListShape(void)
 {
+    this->clearRenderLists();
+}
+
+void
+SoBRLVListShape::clearRenderLists(void)
+{
+    for (std::map<int, SoGLDisplayList *>::iterator it =
+	this->renderLists.begin(); it != this->renderLists.end(); ++it) {
+	if (it->second)
+	    it->second->unref();
+    }
+    this->renderLists.clear();
+}
+
+void
+SoBRLVListShape::notify(SoNotList *list)
+{
+    this->clearRenderLists();
+    inherited::notify(list);
 }
 
 void
@@ -191,6 +221,7 @@ SoBRLVListShape::setLineSet(const SbVec3f *points, const int32_t *commands, int 
 void
 SoBRLVListShape::setPrecisePoints(const double *points, int count)
 {
+    this->clearRenderLists();
     this->precisePoints.clear();
     if (!points || count <= 0)
 	return;
@@ -604,6 +635,202 @@ vlist_needs_independent_segment_rendering(const SoBRLVListShape *shape)
 	    shape->highlightedPrimitive.getNum() > 0);
 }
 
+struct VListClipPoint {
+    double v[4];
+};
+
+static VListClipPoint
+vlist_clip_point(const SbMatrix &matrix, const SbVec3f &point)
+{
+    VListClipPoint result;
+    for (int col = 0; col < 4; col++) {
+	result.v[col] = static_cast<double>(point[0]) * matrix[0][col] +
+	    static_cast<double>(point[1]) * matrix[1][col] +
+	    static_cast<double>(point[2]) * matrix[2][col] + matrix[3][col];
+    }
+    return result;
+}
+
+static double
+vlist_clip_plane_value(const VListClipPoint &point, int plane)
+{
+    switch (plane) {
+	case 0: return point.v[3] + point.v[0];
+	case 1: return point.v[3] - point.v[0];
+	case 2: return point.v[3] + point.v[1];
+	case 3: return point.v[3] - point.v[1];
+	case 4: return point.v[3] + point.v[2];
+	default: return point.v[3] - point.v[2];
+    }
+}
+
+static SbBool
+vlist_clip_segment(VListClipPoint &a, VListClipPoint &b)
+{
+    for (int plane = 0; plane < 6; plane++) {
+	double da = vlist_clip_plane_value(a, plane);
+	double db = vlist_clip_plane_value(b, plane);
+	if (da < 0.0 && db < 0.0)
+	    return FALSE;
+	if (da >= 0.0 && db >= 0.0)
+	    continue;
+
+	const double denominator = da - db;
+	if (fabs(denominator) < 1.0e-20)
+	    return FALSE;
+	const double t = da / denominator;
+	VListClipPoint clipped;
+	for (int i = 0; i < 4; i++)
+	    clipped.v[i] = a.v[i] + t * (b.v[i] - a.v[i]);
+	if (da < 0.0)
+	    a = clipped;
+	else
+	    b = clipped;
+    }
+    return fabs(a.v[3]) > 1.0e-20 && fabs(b.v[3]) > 1.0e-20;
+}
+
+static void
+vlist_put_software_pixel(unsigned char *pixels, unsigned int width,
+	unsigned int height, int x, int y, const unsigned char color[4])
+{
+    if (!pixels || x < 0 || y < 0 ||
+	static_cast<unsigned int>(x) >= width ||
+	static_cast<unsigned int>(y) >= height)
+	return;
+
+    unsigned char *pixel = pixels +
+	(static_cast<size_t>(y) * width + static_cast<unsigned int>(x)) * 4;
+    if (color[3] == 255) {
+	pixel[0] = color[0];
+	pixel[1] = color[1];
+	pixel[2] = color[2];
+	pixel[3] = 255;
+	return;
+    }
+
+    const unsigned int alpha = color[3];
+    const unsigned int inverse = 255 - alpha;
+    for (int i = 0; i < 3; i++)
+	pixel[i] = static_cast<unsigned char>(
+	    (color[i] * alpha + pixel[i] * inverse + 127) / 255);
+    pixel[3] = 255;
+}
+
+static void
+vlist_draw_software_line(unsigned char *pixels, unsigned int width,
+	unsigned int height, int x0, int y0, int x1, int y1,
+	const unsigned char color[4])
+{
+    int dx = abs(x1 - x0);
+    int sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0);
+    int sy = y0 < y1 ? 1 : -1;
+    int error = dx + dy;
+    for (;;) {
+	vlist_put_software_pixel(pixels, width, height, x0, y0, color);
+	if (x0 == x1 && y0 == y1)
+	    break;
+	const int twiceError = 2 * error;
+	if (twiceError >= dy) {
+	    error += dy;
+	    x0 += sx;
+	}
+	if (twiceError <= dx) {
+	    error += dx;
+	    y0 += sy;
+	}
+    }
+}
+
+static void
+vlist_software_color(const SoBRLVListShape *shape, unsigned char color[4])
+{
+    SbColor c;
+    float alpha = 1.0f;
+    if (shape->highlighted.getValue())
+	c = shape->highlightedColor.getValue();
+    else if (shape->selected.getValue())
+	c = shape->selectedColor.getValue();
+    else if (shape->ghosted.getValue()) {
+	c = shape->ghostedColor.getValue();
+	alpha = 0.35f;
+    } else if (shape->colorOverride.getValue())
+	c = shape->color.getValue();
+    else
+	c = shape->materialColorValid.getValue() ?
+	    shape->materialColor.getValue() : shape->color.getValue();
+
+    color[0] = static_cast<unsigned char>(std::clamp(c[0], 0.0f, 1.0f) * 255.0f);
+    color[1] = static_cast<unsigned char>(std::clamp(c[1], 0.0f, 1.0f) * 255.0f);
+    color[2] = static_cast<unsigned char>(std::clamp(c[2], 0.0f, 1.0f) * 255.0f);
+    color[3] = static_cast<unsigned char>(alpha * 255.0f);
+}
+
+static SbBool
+vlist_render_software_wireframe(SoBRLVListShape *shape,
+	const SoBRLVListShape *geom, int n, SoState *state)
+{
+    if (!shape->databaseIntent.getValue() ||
+	shape->drawMode.getValue() != BRLOBOL_LOD_DRAW_WIRE ||
+	shape->hiddenLine.getValue() || shape->lineWidth.getValue() > 1 ||
+	vlist_needs_independent_segment_rendering(shape))
+	return FALSE;
+
+    SoDB::ContextManager *manager = SoContextManagerElement::get(state);
+    unsigned char *pixels = NULL;
+    unsigned int width = 0, height = 0, components = 0;
+    const SbBool framebuffer = manager ? manager->getCurrentSoftwareFramebuffer(
+	pixels, width, height, components) : FALSE;
+    if (!manager || !framebuffer || components != 4)
+	return FALSE;
+
+    const SbViewportRegion &viewport = SoViewportRegionElement::get(state);
+    const SbVec2s origin = viewport.getViewportOriginPixels();
+    const SbVec2s size = viewport.getViewportSizePixels();
+    if (size[0] <= 0 || size[1] <= 0)
+	return FALSE;
+
+    const SbMatrix transform = SoModelMatrixElement::get(state) *
+	SoViewingMatrixElement::get(state) *
+	SoProjectionMatrixElement::get(state);
+    unsigned char color[4];
+    vlist_software_color(shape, color);
+
+    VListClipPoint previous = {};
+    SbBool havePrevious = FALSE;
+    for (int i = 0; i < n; i++) {
+	if (geom->command[i] == SoBRLVListShape::MOVE) {
+	    previous = vlist_clip_point(transform, geom->point[i]);
+	    havePrevious = TRUE;
+	    continue;
+	}
+	if (geom->command[i] != SoBRLVListShape::DRAW || !havePrevious)
+	    continue;
+
+	VListClipPoint current = vlist_clip_point(transform, geom->point[i]);
+	VListClipPoint a = previous;
+	VListClipPoint b = current;
+	previous = current;
+	if (!vlist_clip_segment(a, b))
+	    continue;
+	const double ax = a.v[0] / a.v[3];
+	const double ay = a.v[1] / a.v[3];
+	const double bx = b.v[0] / b.v[3];
+	const double by = b.v[1] / b.v[3];
+	const int x0 = origin[0] + static_cast<int>(
+	    std::lround((ax * 0.5 + 0.5) * (size[0] - 1)));
+	const int y0 = origin[1] + static_cast<int>(
+	    std::lround((ay * 0.5 + 0.5) * (size[1] - 1)));
+	const int x1 = origin[0] + static_cast<int>(
+	    std::lround((bx * 0.5 + 0.5) * (size[0] - 1)));
+	const int y1 = origin[1] + static_cast<int>(
+	    std::lround((by * 0.5 + 0.5) * (size[1] - 1)));
+	vlist_draw_software_line(pixels, width, height, x0, y0, x1, y1, color);
+    }
+    return TRUE;
+}
+
 static void
 vlist_gl_vertex_at(const SoBRLVListShape *shape,
 		   const SoBRLVListShape *geom,
@@ -659,7 +886,6 @@ vlist_render_line_strips(SoBRLVListShape *shape,
 {
     SbBool stripOpen = FALSE;
 
-    set_vlist_gl_color(shape, -1);
     for (int i = 0; i < n; i++) {
 	switch (geom->command[i]) {
 	    case SoBRLVListShape::MOVE:
@@ -706,10 +932,28 @@ SoBRLVListShape::GLRender(SoGLRenderAction *action)
     if (geom->command.getNum() < n)
 	n = geom->command.getNum();
 
-    if (vlist_needs_independent_segment_rendering(this))
+    if (vlist_render_software_wireframe(this, geom, n, action->getState())) {
+	/* The software backend wrote ordinary database wireframes directly. */
+    } else if (vlist_needs_independent_segment_rendering(this))
 	vlist_render_independent_segments(this, geom, n);
-    else
-	vlist_render_line_strips(this, geom, n);
+    else {
+	SoBRLVListShape *cacheOwner = const_cast<SoBRLVListShape *>(geom);
+	SoState *state = action->getState();
+	const int context = SoGLCacheContextElement::get(state);
+	std::map<int, SoGLDisplayList *>::iterator found =
+	    cacheOwner->renderLists.find(context);
+	if (found != cacheOwner->renderLists.end()) {
+	    found->second->call(state);
+	} else {
+	    SoGLDisplayList *list = new SoGLDisplayList(
+		state, SoGLDisplayList::DISPLAY_LIST);
+	    list->ref();
+	    cacheOwner->renderLists[context] = list;
+	    list->open(state);
+	    vlist_render_line_strips(this, geom, n);
+	    list->close(state);
+	}
+    }
 
     glBegin(GL_POINTS);
     for (int i = 0; i < n; i++) {

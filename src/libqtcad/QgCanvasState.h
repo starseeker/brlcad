@@ -113,6 +113,7 @@ struct QgCanvasState {
     bool   fb_update_queued = false;
     bool   fps_update_queued = false;
     bool   software_backend = false;
+    SoOffscreenRenderer *offscreen_renderer = nullptr;
     std::chrono::steady_clock::time_point fps_last_publish;
 
     /* ---- per-canvas input handler ---- */
@@ -211,7 +212,8 @@ qgcanvas_sync_obol_background(QgCanvasState &s)
 /** Render the Obol scene through SoOffscreenRenderer into a QImage. */
 static inline void
 qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img,
-				 bool consumeRenderRequest = false)
+				 bool consumeRenderRequest = false,
+				 bool borrowRendererBuffer = false)
 {
     img = QImage();
     if (!s.obol || !s.obol->getViewport())
@@ -225,9 +227,14 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     if (size[0] <= 0 || size[1] <= 0)
 	return;
 
-    SoOffscreenRenderer renderer(
-	qgcanvas_obol_context_manager(s.software_backend), region);
-    renderer.setComponents(SoOffscreenRenderer::RGB);
+    if (!s.offscreen_renderer) {
+	s.offscreen_renderer = new SoOffscreenRenderer(
+	    qgcanvas_obol_context_manager(s.software_backend), region);
+    } else {
+	s.offscreen_renderer->setViewportRegion(region);
+    }
+    SoOffscreenRenderer &renderer = *s.offscreen_renderer;
+    renderer.setComponents(SoOffscreenRenderer::RGB_TRANSPARENCY);
     renderer.setBackgroundColor(s.obol->getBackgroundBottomColor());
     if (s.obol->getBackgroundBottomColor() !=
 	s.obol->getBackgroundTopColor())
@@ -243,11 +250,16 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     if (!buffer)
 	return;
 
-    QImage raw(buffer, size[0], size[1], size[0] * 3, QImage::Format_RGB888);
-    img = QImage(size[0], size[1], QImage::Format_RGB888);
-    for (int y = 0; y < size[1]; y++)
-	std::memcpy(img.scanLine(size[1] - 1 - y), raw.constScanLine(y),
-		    static_cast<size_t>(size[0]) * 3);
+    QImage raw(buffer, size[0], size[1], size[0] * 4,
+	QImage::Format_RGBX8888);
+    if (borrowRendererBuffer) {
+	img = raw;
+    } else {
+	img = QImage(size[0], size[1], QImage::Format_RGBX8888);
+	for (int y = 0; y < size[1]; y++)
+	    std::memcpy(img.scanLine(size[1] - 1 - y), raw.constScanLine(y),
+		static_cast<size_t>(size[0]) * 4);
+    }
     if (w)
 	img.setDevicePixelRatio(w->devicePixelRatioF());
     if (consumeRenderRequest && s.obol->isRenderRequested())
@@ -278,6 +290,8 @@ qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
 static inline void
 qgcanvas_destroy_obol(QgCanvasState &s)
 {
+    delete s.offscreen_renderer;
+    s.offscreen_renderer = nullptr;
     delete s.obol;
     s.obol = nullptr;
 }

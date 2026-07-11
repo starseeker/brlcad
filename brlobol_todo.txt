@@ -1,7 +1,7 @@
 BRL-CAD Obol Drawing TODO
 =========================
 
-Last verified: 2026-07-10
+Last verified: 2026-07-11
 Branch: brlobol
 
 Purpose
@@ -82,6 +82,13 @@ Working Obol paths:
 * Drawing baselines capture Obol output and use SSIM-based approximate image
   comparison.  Basic, faceplate, LoD, selection, and quad coverage is active.
 * libbv is free of direct scene, libbsg, libdm, and database ownership.
+* Shared qged/qtcad views render the authoritative GED Obol scene through a
+  view-local attachment.  They do not duplicate database sources into a
+  second Qt-owned scene; only independent views own scoped local geometry.
+* Progressive LoD substitutions take precedence over retained compiled CAD
+  assemblies.  Compact source-level payloads preserve aggregate batching for
+  unaffected sources, while multi-instance deferred roots retain per-mesh
+  scheduling granularity.
 
 Important retained dependencies:
 
@@ -217,15 +224,32 @@ Priority 1: Complete Progressive Large-Model Behavior
      cancel stale work.
    * LoD requests and results have generation cancellation, queue and result
      limits, cache-write limits, and reservation-based backpressure.
+   * Shared-view endpoint reaffirmation repairs stale shared-root bindings
+     without rebuilding already-correct render roots.  Qt draw and selection
+     synchronization enumerate the actual rendered scene rather than assuming
+     controller-local source ownership.
+   * Compiled per-source CAD assemblies and the aggregate CAD render batch
+     honor active view-local LoD payloads.  Compact CAD proxy/mesh payloads
+     participate in the same active-payload counts as explicit mesh records.
+   * Unlimited visible-frontier expansion now continues until no pass makes
+     progress.  The former inverted stop condition expanded only the first
+     combination level and could never publish leaf proxies.
+   * Compact, single-instance sources retain source-level asynchronous LoD.
+     View-dependent compact sources containing multiple instances demote after
+     realization so current scheduling still exposes independent mesh
+     candidates instead of one oversized root task.
 
    Exit condition: focused tests cover duplicate instances, subtraction and
-   intersection trees, cancellation, multi-view independent LoD, and startup
-   without whole-root synchronous promotion.
+   intersection trees, cancellation, multi-view independent LoD, startup
+   without whole-root synchronous promotion, real AABB/OBB/mesh image
+   transitions, compact payload accounting, and proxy-first frontier
+   expansion through leaf depth.
 
    Linux verification: `libbrlobol_lod_realization`,
    `libbrlobol_lod_service`, `libbrlobol_lod_update_action`,
    `ged_test_obol_draw_sync`, and the qtcad progressive-LoD matrix, including
-   Generic Twin startup, auto-expansion, wire, and shaded/backpressure cases.
+   startup-only, refine, explicit and automatic expansion, wire, shaded,
+   backpressure, repeated Moss, and Generic Twin cases.
 
 8. Completed: harden compact CAD source records.
 
@@ -237,7 +261,10 @@ Priority 1: Complete Progressive Large-Model Behavior
    * Retained explicit shapes, semantic paths, materials, selection, and
      placement survive promotion, demotion, re-promotion, and cache-backed
      realization.  Erase and clear explicitly invalidate stale handles.
-   * Root/group aggregation remains absent pending benchmark evidence.
+   * The retained CAD render batch aggregates eligible source assemblies while
+     preserving per-source semantic ownership.  During compact LoD it omits
+     only sources with active CAD substitutions; unaffected sources remain in
+     the aggregate instead of dropping the whole scene to individual draws.
 
    Exit condition: compact and full records can replace each other without
    identity changes, stale handles, full-scene rebuilds, or leaked nodes.
@@ -291,13 +318,27 @@ Priority 2: Performance, Cleanup, and Deletion
       candidates from 17.3 million face pairs and spend about 12-13 seconds in
       pair evaluation.  Parallel work is deferred until pair jobs own isolated
       hit buffers, segment resources, counters, and ordered result records.
-    * Do not add CAD aggregation or redesign thin-shell candidates without a
-      measured whole-path gain.  Keep boolweave as the default evaluator and
-      keep shaded/hidden-line tessellation work separate from normal wire draw.
+    * Do not add further root/evaluator aggregation or redesign thin-shell
+      candidates without a measured whole-path gain.  Keep boolweave as the
+      default evaluator and keep shaded/hidden-line tessellation work separate
+      from normal wire draw.
     * Normal wire now preserves per-object Obol database sources across view
       changes.  REDRAW checks source staleness and requests rendering without
       replaying publication; Debug Havoc and Generic Twin redraw measure below
       1 ms with unchanged source counts and geometry hashes.
+    * Initial normal-wire realization now uses compact per-object CAD records.
+      Havoc retains 3,601 semantic database sources while eliminating 3,601
+      intermediate scene nodes.  Controlled compact/classic runs improve
+      setup by roughly 35-45 percent and produce identical rendered hashes.
+      A mesh-LoD-enabled Havoc draw remains compact and measured about 0.73
+      seconds in the current Release profiling build.
+    * Progressive Moss measurements after the retained-render fixes show
+      proxy-first draw publication around 12-19 ms and typical submitted
+      AABB/OBB/mesh availability around 25-50/50-65/65-75 ms.  A 192-candidate
+      stress run submitted in 10 ms and reached usable OBB/mesh results in
+      about 0.29/0.31 seconds.  Its slow initial frame was synchronous
+      full-detail overdraw, reinforcing that production large-model startup
+      must use the deferred proxy-first path.
     * Exact path operations use a normalized path-to-instance index.  qged tree
       rows cache their draw presentation state until existing draw-observer
       notifications invalidate the affected items, eliminating the scene-wide
@@ -308,16 +349,31 @@ Priority 2: Performance, Cleanup, and Deletion
       sources stale.  Share immutable geometry across occurrences, update source
       display state in place, and apply add/remove diffs transactionally rather
       than replacing complete path sets.
-    * The current post-fix Havoc interaction profile is rendering-bound in Obol
-      VList traversal and Mesa.  Investigate retained VList GPU buffers or
-      backend batching only with larger-model evidence; this work belongs in
-      Obol/libbrlobol, not another GED redraw layer.
+    * Retained CAD batching is now active and LoD-aware.  The current post-fix
+      Havoc interaction profile is still rendering-bound in Obol VList/CAD
+      traversal and Mesa.  Investigate retained backend GPU buffers only with
+      larger-model evidence; this work belongs in Obol/libbrlobol, not another
+      GED redraw layer.
+    * Replace multi-instance LoD demotion with compact-entry task scheduling.
+      Each retained compact instance must keep occurrence identity, transform,
+      Boolean role, cache identity, result binding, and cancellation ownership
+      without manufacturing scene nodes.
+    * Stress queue/result behavior at 10^4-10^6 candidates.  Measure and bound
+      obsolete stage results after the visible threshold is satisfied, coalesce
+      superseded AABB/OBB/mesh results per occurrence, and enforce a main-thread
+      application budget that cannot consume an interaction frame.
+    * Validate cold/warm deferred LoD in real qged and MGED sessions while
+      rotating, zooming, changing views, editing, erasing, and closing the
+      database.  Confirm stale generations cannot publish, autoview ownership
+      transfers correctly, and first useful pixels arrive before full-detail
+      evaluation on Generic Twin, Havoc, and substantially larger models.
 
     Exit condition: the Release corpus is deterministic; retained changes
     improve their targeted stage by at least 1.5x without small-model or normal
     wire regressions; any parallel result is merged in original job order.
     GUI verification must include a real-model REDRAW transaction, repeated tree
-    painting, and interactive view changes, not only headless initial drawing.
+    painting, cold/warm progressive startup, cancellation under camera churn,
+    and interactive view changes, not only headless initial drawing.
 
 11. Completed on Linux: remove compatibility aliases and stale guards when
     dependencies permit.
@@ -344,6 +400,60 @@ Priority 2: Performance, Cleanup, and Deletion
     and the normal Ninja build.  Windows and macOS Tk-host runtime validation
     remains intentionally deferred; it must not restore WGL/OGL DM ownership.
 
+12. In progress: delete unreachable drawing compatibility shims.
+
+    * Remove `QgObolDatabaseSync` once its remaining test-only direct-source
+      cases are expressed through GED transactions or libbrlobol source APIs.
+      Shared Qt views must not regain a second controller-local copy of GED
+      geometry to preserve this compatibility surface.
+    * Delete MGED `dozoom`/redraw branches that still describe or call a
+      non-Obol display-manager fallback after Linux, Windows, and macOS confirm
+      `tkobol` as the sole graphical Tk host.  Keep `dm-obol` only as the
+      explicit headless attachment.
+    * Inventory libtclcad's remaining generic Tcl DM and framebuffer-object
+      commands.  Move durable neutral behavior to GED, libbrlobol, or
+      libimgstream, then remove compatibility commands that have no supported
+      application caller.
+    * Extend the pivot guard to reject new local shared-scene replication and
+      new non-Obol graphical redraw branches, not merely retired library names.
+
+    Exit condition: qged/qtcad and Tk hosts have no alternate graphical scene
+    synchronization path; every retained compatibility command has a named
+    caller and platform test; test-only shims are deleted rather than becoming
+    accidental public architecture.
+
+13.  Preserve the "fast" software wireframe only drawing mode as an option
+     to the Obol software backend.
+
+    * The "fast" swrast wireframe drawing path (which might only be present in
+      main right now but should be in the history as an extraction of the fast
+      X software drawing logic) will need to be an option for Obol as well.
+      investigate if that is already available, and if not what a good
+      architectural structure would be to preserve that capability - it
+      intentionally makes a tradeoff of fewer OpenGL features and simpler
+      drawing for the fastest possible simplified wireframe-only visual so
+      there are some situations where we might want to enable that mode.
+
+14.  Remaining libdm capabilities survey
+
+    * More generally, the "dm" libged command's role will evolve from actual
+      different dm backends to providing options to Obol - sw vs hw vs rt
+      vs txt vs nu (no-op) Obol backend selection will replace the current
+      separate dm backends, and other libdm options that make sense should
+      be transitioned in some manner - please consider how best to do that
+      and propose a design.
+    * One specific concern I do know is there is the ability of libdm to
+      create a window.  That is deliberately not an Obol scope - my current
+      thought there is for libbrlobol to provide the equivalent of dm and fb
+      open functions that use caller registered functions - similarly to how
+      Obol itself needs information to set up a context provided by the app.
+      Then MGED and rt can register Tk window setup functions from libtclcad,
+      qged can do the same by registering appropriate libqtcad functions,
+      and by default (nothing registered) the opens fail as no-ops.  We *may*
+      consider guaranteeing window creation with GLFW down the road, but not
+      yet.  To make this work properly you may need to pull in work from the
+      https://github.com/BRL-CAD/brlcad/tree/bindings branch - that is allowed
+
 Verification Gates
 ------------------
 
@@ -367,6 +477,11 @@ Long-running LoD checks:
 
 * `ctest --test-dir .build -R '^(test_qtcad_obol_progressive_lod|test_qtcad_obol_progressive_lod_.*|slow-test_qtcad_obol_progressive_lod_repeated_moss)$' --output-on-failure`
 
+The slow/custom progressive cases are opt-in through
+`BRLCAD_RUN_SLOW_TESTS=1`.  Routine checks must keep the default Moss matrix
+short; large-model timing belongs in `.build_perf/` and must report individual
+draw, first-readback, submission, AABB, OBB, mesh, and service-stop phases.
+
 Before removing a legacy dependency, also build and test on every affected
 window-system platform.  Use `.build_perf/` for final release/performance
 measurements, not for routine development.
@@ -375,8 +490,9 @@ Definition of Fully Stood Up
 -----------------------------
 
 The migration is complete when supported GED, qged, MGED, rtwizard, Archer,
-and GSH workflows have one Obol scene and one host render endpoint; drawing,
-interaction, LoD, editing, readback, and framebuffer streaming do not require
-libbsg or libdm; no fallback silently creates legacy scene state; and the
-remaining libdm/libbsg targets can be disabled or deleted without reducing
-covered functionality.
+and GSH workflows have one authoritative shared Obol scene, scoped local
+geometry only for independent views, and one render endpoint per host view;
+drawing, interaction, LoD, editing, readback, and framebuffer streaming do
+not require libbsg or graphical libdm paths; no fallback silently creates
+legacy scene state; and the remaining drawing-related libdm compatibility can
+be disabled or deleted without reducing covered functionality.

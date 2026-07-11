@@ -139,12 +139,14 @@ return;
     qgcanvas_request_obol_render_if_idle(*d, "qtsw-paint");
 
     QImage image;
-    qgcanvas_get_obol_viewport_image(*d, this, image, true);
+    qgcanvas_get_obol_viewport_image(*d, this, image, true, true);
     if (image.isNull()) {
 	QWidget::paintEvent(e);
 	return;
     }
     QPainter painter(this);
+    painter.translate(0, height());
+    painter.scale(1, -1);
     painter.drawImage(QPoint(0, 0), image);
     (void)bv_refresh_consume(qg_legacy_view_bv(d->v));
     bv_refresh_complete(qg_legacy_view_bv(d->v));

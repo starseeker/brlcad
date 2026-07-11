@@ -203,6 +203,19 @@ public:
 	return this->fallbackManager ? this->fallbackManager->getProcAddress(funcName) : NULL;
     }
 
+    virtual SbBool getCurrentSoftwareFramebuffer(unsigned char *&pixels,
+	    unsigned int &width,
+	    unsigned int &height,
+	    unsigned int &components)
+    {
+	if (this->fallbackManager)
+	    return this->fallbackManager->getCurrentSoftwareFramebuffer(
+		pixels, width, height, components);
+	pixels = NULL;
+	width = height = components = 0;
+	return FALSE;
+    }
+
 private:
     void *createFallbackContext(QgObolContext *ctx,
 	    unsigned int width,
