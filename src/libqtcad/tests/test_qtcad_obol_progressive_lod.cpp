@@ -756,19 +756,38 @@ image_byte_diff(const QImage &a, const QImage &b)
 }
 
 static SoBRLMeshShape *
-first_realized_mesh(BRLObolViewController *controller)
+first_realized_mesh_in_node(SoNode *node)
 {
-    if (!controller)
+    if (!node)
 	return NULL;
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (!source)
-	    continue;
-	SoBRLMeshShape *mesh = source->getRealizedMesh();
-	if (mesh)
+
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
+	return static_cast<SoBRLMeshShape *>(node);
+
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(node);
+	if (SoBRLMeshShape *mesh = source->getRealizedMesh())
 	    return mesh;
     }
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    SoBRLMeshShape *mesh = first_realized_mesh_in_node(
+		group->getChild(i));
+	    if (mesh)
+		return mesh;
+	}
+    }
     return NULL;
+}
+
+static SoBRLMeshShape *
+first_realized_mesh(BRLObolViewController *controller)
+{
+    return controller ?
+	first_realized_mesh_in_node(controller->getRenderSceneRoot()) : NULL;
 }
 
 static int
@@ -782,6 +801,12 @@ accumulate_realized_mesh_count(SoNode *node)
     if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
 	return 1;
 
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(node);
+	return source->getRealizedMeshCount();
+    }
+
     if (node->isOfType(SoGroup::getClassTypeId())) {
 	SoGroup *group = static_cast<SoGroup *>(node);
 	for (int i = 0; i < group->getNumChildren(); i++)
@@ -794,20 +819,8 @@ accumulate_realized_mesh_count(SoNode *node)
 static int
 realized_mesh_count(BRLObolViewController *controller)
 {
-    int count = 0;
-
-    if (!controller)
-	return 0;
-
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	if (!source)
-	    continue;
-	for (int j = 0; j < source->getNumChildren(); j++)
-	    count += accumulate_realized_mesh_count(source->getChild(j));
-    }
-
-    return count;
+    return controller ?
+	accumulate_realized_mesh_count(controller->getRenderSceneRoot()) : 0;
 }
 
 static int
@@ -1287,19 +1300,17 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	draw_ret = ged_draw_apply_transaction(gedp, &txn, &draw_result);
 	record_progressive_lod_phase(timings.drawApplySeconds, phase_start,
 				     total_start, testCase, "draw_apply");
-	render_source_count = startup_deferred ?
-			      qtcad_obol_render_database_source_count(gedp, controller) :
-			      controller->getDatabaseSourceCount();
+	render_source_count =
+	    qtcad_obol_render_database_source_count(gedp, controller);
     }
-    if (!testCase.shadedLod && render_source_count <= 0) {
+    if (!testCase.shadedLod) {
 	phase_start = bu_gettime();
 	sync_changed = qg_obol_sync_ged_draw_transaction(gedp, &txn,
 		       &draw_result, &view);
 	record_progressive_lod_phase(timings.syncSeconds, phase_start,
 				     total_start, testCase, "obol_sync");
-	render_source_count = startup_deferred ?
-			      qtcad_obol_render_database_source_count(gedp, controller) :
-			      controller->getDatabaseSourceCount();
+	render_source_count =
+	    qtcad_obol_render_database_source_count(gedp, controller);
     } else if (phase_logging_enabled(testCase)) {
 	fprintf(stderr,
 		"qtcad_progressive_lod_phase case=%s phase=obol_sync seconds=0.000 total=%.3f skipped=already_synced\n",
@@ -1747,25 +1758,15 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 					 total_start, testCase,
 					 "refine_draw_apply");
 
-	    int refine_source_count = controller->getDatabaseSourceCount();
+	    double refine_sync_seconds = 0.0;
+	    phase_start = bu_gettime();
+	    (void)qg_obol_sync_ged_draw_transaction(gedp, &refine_txn,
+		    &draw_result, &view);
+	    record_progressive_lod_phase(refine_sync_seconds, phase_start,
+		    total_start, testCase, "refine_obol_sync");
+	    int refine_source_count =
+		qtcad_obol_render_database_source_count(gedp, controller);
 	    int refine_mesh_count = realized_mesh_count(controller);
-	    if (refine_source_count <= 0 || refine_mesh_count <= 0) {
-		double refine_sync_seconds = 0.0;
-		phase_start = bu_gettime();
-		controller->clearDatabaseSources();
-		(void)qg_obol_sync_ged_draw_transaction(gedp, &refine_txn,
-							&draw_result, &view);
-		record_progressive_lod_phase(refine_sync_seconds, phase_start,
-					     total_start, testCase,
-					     "refine_obol_sync");
-		refine_source_count = controller->getDatabaseSourceCount();
-		refine_mesh_count = realized_mesh_count(controller);
-	    } else if (phase_logging_enabled(testCase)) {
-		fprintf(stderr,
-			"qtcad_progressive_lod_phase case=%s phase=refine_obol_sync seconds=0.000 total=%.3f skipped=already_synced\n",
-			testCase.name, elapsed_seconds(total_start));
-		fflush(stderr);
-	    }
 
 	    if (refine_draw_ret < 0 || refine_source_count <= 0 ||
 		refine_mesh_count <= 0) {

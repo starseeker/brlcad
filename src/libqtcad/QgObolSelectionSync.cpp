@@ -19,6 +19,9 @@
 #include "QgObolViewSyncPrivate.h"
 #include "qtcad/QgView.h"
 
+#include <Inventor/nodes/SoGroup.h>
+
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -137,6 +140,27 @@ qg_obol_set_mesh_selection(SoBRLMeshShape *mesh, bool selected)
     return 1;
 }
 
+static void
+qg_obol_collect_render_sources(SoNode *node,
+	std::vector<SoBRLDatabaseSource *> &sources)
+{
+    if (!node)
+	return;
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(node);
+	if (std::find(sources.begin(), sources.end(), source) == sources.end())
+	    sources.push_back(source);
+	return;
+    }
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++)
+	qg_obol_collect_render_sources(group->getChild(i), sources);
+}
+
 int
 qg_obol_sync_selection_state(struct ged *gedp,
 	QgView *display,
@@ -155,9 +179,13 @@ qg_obol_sync_selection_state(struct ged *gedp,
     const std::vector<std::string> selectedPaths =
 	qg_obol_selection_paths(gedp, setName);
 
+    std::vector<SoBRLDatabaseSource *> sources;
+    qg_obol_collect_render_sources(obol->getRenderSceneRoot(), sources);
+    if (sources.empty())
+	qg_obol_collect_render_sources(obol->getSceneRoot(), sources);
+
     int changed = 0;
-    for (int i = 0; i < obol->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = obol->getDatabaseSource(i);
+    for (SoBRLDatabaseSource *source : sources) {
 	if (!source)
 	    continue;
 

@@ -25,6 +25,8 @@
 #include "raytrace.h"
 #include "wdb.h"
 
+#include <Inventor/nodes/SoGroup.h>
+
 #include <QApplication>
 
 #include <stdio.h>
@@ -68,25 +70,47 @@ apply_and_sync(struct ged *gedp,
 }
 
 static SoBRLDatabaseSource *
-find_source(BRLObolViewController *controller, const char *path)
+find_source_in_node(SoNode *node, const char *path)
 {
-    if (!controller || !path)
+    if (!node || !path)
 	return NULL;
 
     const char *normalized_path = path;
     while (*normalized_path == '/')
 	normalized_path++;
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(node);
 	const char *source_path = source ? source->path.getValue().getString() : NULL;
-	if (!source_path)
-	    continue;
-	while (*source_path == '/')
-	    source_path++;
-	if (BU_STR_EQUAL(source_path, normalized_path))
-	    return source;
+	if (source_path) {
+	    while (*source_path == '/')
+		source_path++;
+	    if (BU_STR_EQUAL(source_path, normalized_path))
+		return source;
+	}
+    }
+
+    if (node->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *group = static_cast<SoGroup *>(node);
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    SoBRLDatabaseSource *source = find_source_in_node(
+		group->getChild(i), path);
+	    if (source)
+		return source;
+	}
     }
     return NULL;
+}
+
+static SoBRLDatabaseSource *
+find_source(BRLObolViewController *controller, const char *path)
+{
+    if (!controller)
+	return NULL;
+    SoBRLDatabaseSource *source = find_source_in_node(
+	controller->getRenderSceneRoot(), path);
+    return source ? source : find_source_in_node(controller->getSceneRoot(), path);
 }
 
 static int

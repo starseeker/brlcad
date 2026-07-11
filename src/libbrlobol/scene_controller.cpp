@@ -1498,9 +1498,24 @@ SoBRLSceneController::realizePending(void)
 	}
     }
 
+    size_t demotedLodSourceCount = 0;
+    if (this->compactCadRealizationEnabled &&
+	this->lastFailedSourceCount == 0) {
+	if (!this->databaseSourceIndexValid)
+	    this->rebuildDatabaseSourceIndex();
+	for (SoBRLDatabaseSource *source : this->databaseSourceOrder) {
+	    if (!source || !source->hasCompactInstanceIndex() ||
+		source->getCompactInstanceCount() <= 1 ||
+		!source->realizationViewDependent.getValue())
+		continue;
+	    if (source->demoteCompactGeometry() > 0)
+		demotedLodSourceCount++;
+	}
+    }
+
     if (this->lastRealizedSourceCount > 0 ||
 	this->lastFailedSourceCount > 0 ||
-	compactedSourceCount > 0)
+	compactedSourceCount > 0 || demotedLodSourceCount > 0)
 	this->advanceFrameRevision();
     return this->lastFailedSourceCount == 0;
 }

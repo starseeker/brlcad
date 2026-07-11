@@ -9,6 +9,7 @@
 
 #include "./cad_assembly_private.h"
 #include "brlobol/database_source.h"
+#include "brlobol/view_lod.h"
 
 #include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/misc/SoState.h>
@@ -165,7 +166,7 @@ SoBRLCadRenderBatch::setBatchSourceRoot(SoNode *root)
 }
 
 SbBool
-SoBRLCadRenderBatch::syncBatch(void)
+SoBRLCadRenderBatch::syncBatch(const BRLObolViewLodState *viewState)
 {
     if (this->getNumChildren() != 1 || !this->getChild(0))
 	return FALSE;
@@ -179,6 +180,11 @@ SoBRLCadRenderBatch::syncBatch(void)
 	signature *= 1099511628211ULL;
 	signature ^= source->cadBatchRevision;
 	signature *= 1099511628211ULL;
+	const BRLObolViewLodState::CadPayload *payload =
+	    viewState ? viewState->findCad(source) : NULL;
+	signature ^= static_cast<uint64_t>(
+	    reinterpret_cast<uintptr_t>(payload));
+	signature *= 1099511628211ULL;
     }
     signature ^= static_cast<uint64_t>(sources.size());
     if (signature == this->cachedSourceSignature)
@@ -191,6 +197,8 @@ SoBRLCadRenderBatch::syncBatch(void)
     this->assembly->clear();
     this->assembly->clearSemanticMap();
     for (SoBRLDatabaseSource *source : sources) {
+	if (viewState && viewState->findCad(source))
+	    continue;
 	if (source && source->appendCadRenderBatch(&state))
 	    this->batchedSources.insert(source);
     }
@@ -218,7 +226,14 @@ SoBRLCadRenderBatch::renderBatch(SoGLRenderAction *action)
 {
     if (!action)
 	return;
-    if (!this->syncBatch()) {
+    const BRLObolViewLodState *viewState =
+	SoBRLViewLodElement::get(action->getState());
+    if (viewState && (viewState->meshPayloadCount() > 0 ||
+	    viewState->proxyPayloadCount() > 0)) {
+	inherited::GLRenderBelowPath(action);
+	return;
+    }
+    if (!this->syncBatch(viewState)) {
 	inherited::GLRenderBelowPath(action);
 	return;
     }

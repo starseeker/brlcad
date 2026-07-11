@@ -158,6 +158,8 @@ public:
     size_t meshPayloadCount(void) const;
     size_t proxyPayloadCount(int proxyKind = BRLOBOL_LOD_PROXY_NONE) const;
     size_t cadPayloadCount(void) const;
+    size_t cadMeshPayloadCount(void) const;
+    size_t cadProxyPayloadCount(int proxyKind = BRLOBOL_LOD_PROXY_NONE) const;
     size_t estimateDisplayMeshBytes(void) const;
     size_t evictDisplayMeshes(unsigned int *evictedMeshCount = NULL);
 

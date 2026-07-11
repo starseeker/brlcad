@@ -26,6 +26,7 @@ class SoGetBoundingBoxAction;
 class SoGLRenderAction;
 class SoRayPickAction;
 class SoBRLDatabaseSource;
+class BRLObolViewLodState;
 class SoBRLCadAssembly;
 
 struct BRLObolCadBatchBuildState {
@@ -111,7 +112,7 @@ protected:
 
 private:
     void renderBatch(SoGLRenderAction *action);
-    SbBool syncBatch(void);
+    SbBool syncBatch(const BRLObolViewLodState *viewState);
 
     SoBRLCadAssembly *assembly;
     SoNode *sourceRoot;

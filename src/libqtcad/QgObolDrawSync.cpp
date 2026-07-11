@@ -15,6 +15,7 @@
 #include "brlobol/view_controller.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
+#include "ged/view.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
@@ -54,6 +55,15 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
     struct ged_draw_transaction sync_txn = *txn;
     if (!sync_txn.view)
 	sync_txn.view = qg_legacy_view_to_context(display->view());
+
+    if (!ged_draw_obol_controller_attach_for_view(gedp, sync_txn.view,
+	    obol, 1))
+	return 0;
+
+    if (!ged_view_context_is_independent(sync_txn.view)) {
+	display->need_update(QG_VIEW_REFRESH);
+	return 1;
+    }
 
     SoBRLSceneController *scene = obol->getSceneController();
     const int changed = ged_draw_obol_scene_sync_transaction(gedp, &sync_txn,

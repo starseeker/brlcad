@@ -6919,6 +6919,27 @@ SoBRLDatabaseSource::needsRealization(void) const
 	   this->realizedViewRevision.getValue() != this->viewRevision.getValue();
 }
 
+static int
+source_has_view_lod_payload(SoAction *action, SoNode *node)
+{
+    if (!action || !node)
+	return 0;
+    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SoBRLMeshShape *mesh = static_cast<SoBRLMeshShape *>(node);
+	return brlobol_view_lod_mesh_for_action(action, mesh) ||
+	       brlobol_view_lod_proxy_for_action(action, mesh);
+    }
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return 0;
+
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	if (source_has_view_lod_payload(action, group->getChild(i)))
+	    return 1;
+    }
+    return 0;
+}
+
 void
 SoBRLDatabaseSource::GLRender(SoGLRenderAction *action)
 {
@@ -6927,6 +6948,11 @@ SoBRLDatabaseSource::GLRender(SoGLRenderAction *action)
     if (SoBRLCadAssembly *viewCad =
 	    cad_view_lod_assembly_for_action(action, this)) {
 	viewCad->render(action);
+	return;
+    }
+
+    if (source_has_view_lod_payload(action, this)) {
+	inherited::GLRender(action);
 	return;
     }
 
@@ -6946,6 +6972,11 @@ SoBRLDatabaseSource::GLRenderBelowPath(SoGLRenderAction *action)
     if (SoBRLCadAssembly *viewCad =
 	    cad_view_lod_assembly_for_action(action, this)) {
 	viewCad->render(action);
+	return;
+    }
+
+    if (source_has_view_lod_payload(action, this)) {
+	inherited::GLRenderBelowPath(action);
 	return;
     }
 

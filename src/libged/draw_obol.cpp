@@ -3490,8 +3490,7 @@ ged_draw_obol_view_lod_policy_changed(struct ged *gedp, void *view_ctx)
     if (scene) {
 	const ged_obol_view_lod_policy_state policy_state =
 	    ged_obol_view_lod_policy_state_for_source(gedp, view_ctx);
-	scene->setCompactCadRealizationEnabled(
-	    (!policy_state.valid || !policy_state.viewDependent) ? TRUE : FALSE);
+	scene->setCompactCadRealizationEnabled(TRUE);
 	const int independent_view =
 	    ged_obol_view_scope_is_independent(view_ctx);
 	const int source_count = scene->getDatabaseSourceCount();
@@ -17904,7 +17903,7 @@ ged_obol_database_source_expand_visible_children_impl(
 		&path_status);
 	}
 
-	if (!max_sources || !pass_changed)
+	if (!pass_changed)
 	    break;
     }
 
@@ -20417,10 +20416,9 @@ ged_obol_configure_compact_realization(struct ged *gedp,
     if (!scene_controller)
 	return;
 
-    const ged_obol_view_lod_policy_state policy_state =
-	ged_obol_view_lod_policy_state_for_source(gedp, view_ctx);
-    scene_controller->setCompactCadRealizationEnabled(
-	(!policy_state.valid || !policy_state.viewDependent) ? TRUE : FALSE);
+    (void)gedp;
+    (void)view_ctx;
+    scene_controller->setCompactCadRealizationEnabled(TRUE);
 }
 
 static int
@@ -20537,6 +20535,24 @@ ged_obol_bind_view_render_root(void *view_ctx,
 }
 
 static int
+ged_obol_node_contains(SoNode *root, SoNode *target)
+{
+    if (!root || !target)
+	return 0;
+    if (root == target)
+	return 1;
+    if (!root->isOfType(SoGroup::getClassTypeId()))
+	return 0;
+
+    SoGroup *group = static_cast<SoGroup *>(root);
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	if (ged_obol_node_contains(group->getChild(i), target))
+	    return 1;
+    }
+    return 0;
+}
+
+static int
 ged_draw_obol_attach_view_common(struct ged *gedp,
 				 void *view_ctx,
 				 SoBRLSceneController *scene_controller,
@@ -20566,7 +20582,20 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
 		entry.scene_controller != scene_controller ||
 		entry.view_controller != view_controller)
 	    continue;
-	ged_obol_primary_set(gdp, &entry);
+	ged_obol_primary_refresh_from_registry(gdp);
+	SoBRLSceneController *shared_scene =
+	    ged_draw_obol_scene_controller(gedp);
+	SoNode *shared_root = shared_scene ? shared_scene->getSceneRoot() : NULL;
+	const int shared_visible =
+	    !ged_obol_view_scope_is_independent(view_ctx);
+	const int shared_bound = ged_obol_node_contains(
+	    view_controller->getRenderSceneRoot(), shared_root);
+	if (shared_scene && shared_visible != shared_bound) {
+	    if (!ged_obol_bind_view_render_root(view_ctx, shared_scene,
+		    view_controller))
+		return 0;
+	    entry.render_shared_root_visible = shared_visible;
+	}
 	return 1;
     }
 

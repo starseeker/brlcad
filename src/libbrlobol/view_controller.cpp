@@ -2769,14 +2769,18 @@ BRLObolViewController::getLastLodDiagnostics(void) const
 size_t
 BRLObolViewController::getActiveLodMeshPayloadCount(void) const
 {
-    return this->viewAttachment->getViewLodState() ? this->viewAttachment->getViewLodState()->meshPayloadCount() : 0;
+    const BRLObolViewLodState *state =
+	this->viewAttachment->getViewLodState();
+    return state ? state->meshPayloadCount() + state->cadMeshPayloadCount() : 0;
 }
 
 size_t
 BRLObolViewController::getActiveLodProxyPayloadCount(int proxyKind) const
 {
-    return this->viewAttachment->getViewLodState() ?
-	   this->viewAttachment->getViewLodState()->proxyPayloadCount(proxyKind) : 0;
+    const BRLObolViewLodState *state =
+	this->viewAttachment->getViewLodState();
+    return state ? state->proxyPayloadCount(proxyKind) +
+	   state->cadProxyPayloadCount(proxyKind) : 0;
 }
 
 size_t

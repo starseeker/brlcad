@@ -700,6 +700,42 @@ BRLObolViewLodState::cadPayloadCount(void) const
 }
 
 size_t
+BRLObolViewLodState::cadMeshPayloadCount(void) const
+{
+    std::vector<CadPayloadPtr> payloads;
+    for (const auto &binding : this->cadBindings) {
+	const CadPayloadPtr &payload = binding.second;
+	if (!payload || !payload->isValid() ||
+	    (payload->resultKind != BRLOBOL_LOD_RESULT_MESH &&
+	     payload->resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL))
+	    continue;
+	if (std::find(payloads.begin(), payloads.end(), payload) ==
+	    payloads.end())
+	    payloads.push_back(payload);
+    }
+    return payloads.size();
+}
+
+size_t
+BRLObolViewLodState::cadProxyPayloadCount(int proxyKind) const
+{
+    std::vector<CadPayloadPtr> payloads;
+    for (const auto &binding : this->cadBindings) {
+	const CadPayloadPtr &payload = binding.second;
+	if (!payload || !payload->isValid() ||
+	    (payload->resultKind != BRLOBOL_LOD_RESULT_AABB &&
+	     payload->resultKind != BRLOBOL_LOD_RESULT_PROXY) ||
+	    (proxyKind != BRLOBOL_LOD_PROXY_NONE &&
+	     payload->proxy.kind != proxyKind))
+	    continue;
+	if (std::find(payloads.begin(), payloads.end(), payload) ==
+	    payloads.end())
+	    payloads.push_back(payload);
+    }
+    return payloads.size();
+}
+
+size_t
 BRLObolViewLodState::estimateDisplayMeshBytes(void) const
 {
     std::vector<MeshPayloadPtr> payloads =

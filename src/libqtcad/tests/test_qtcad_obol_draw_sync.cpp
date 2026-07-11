@@ -29,17 +29,20 @@
 
 #include <Inventor/SoViewport.h>
 #include <Inventor/nodes/SoCamera.h>
+#include <Inventor/nodes/SoGroup.h>
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QImage>
 
+#include <algorithm>
 #include <math.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <string>
+#include <vector>
 
 #define FAIL(_msg) \
     do { \
@@ -200,12 +203,59 @@ test_shape_record_by_path(struct ged *gedp,
 }
 
 static SoBRLDatabaseSource *
+render_source(BRLObolViewController *controller, int index);
+
+static void
+collect_render_sources(SoNode *node,
+	std::vector<SoBRLDatabaseSource *> &sources)
+{
+    if (!node)
+	return;
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(node);
+	if (std::find(sources.begin(), sources.end(), source) == sources.end())
+	    sources.push_back(source);
+	return;
+    }
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return;
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++)
+	collect_render_sources(group->getChild(i), sources);
+}
+
+static std::vector<SoBRLDatabaseSource *>
+render_sources(BRLObolViewController *controller)
+{
+    std::vector<SoBRLDatabaseSource *> sources;
+    if (controller)
+	collect_render_sources(controller->getRenderSceneRoot(), sources);
+    if (sources.empty() && controller)
+	collect_render_sources(controller->getSceneRoot(), sources);
+    return sources;
+}
+
+static int
+render_source_count(BRLObolViewController *controller)
+{
+    return static_cast<int>(render_sources(controller).size());
+}
+
+static SoBRLDatabaseSource *
+render_source(BRLObolViewController *controller, int index)
+{
+    std::vector<SoBRLDatabaseSource *> sources = render_sources(controller);
+    return index >= 0 && static_cast<size_t>(index) < sources.size() ?
+	sources[static_cast<size_t>(index)] : NULL;
+}
+
+static SoBRLDatabaseSource *
 source_for_path(BRLObolViewController *controller, const char *path)
 {
     if (!controller || !path)
 	return NULL;
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+    for (SoBRLDatabaseSource *source : render_sources(controller)) {
 	if (source && test_path_equal(source->path.getValue().getString(),
 		path))
 	    return source;
@@ -220,8 +270,7 @@ source_for_path_mode(BRLObolViewController *controller,
 {
     if (!controller || !path)
 	return NULL;
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+    for (SoBRLDatabaseSource *source : render_sources(controller)) {
 	if (source && test_path_equal(source->path.getValue().getString(),
 		path) && source->drawMode.getValue() == draw_mode)
 	    return source;
@@ -346,7 +395,7 @@ main(int argc, char **argv)
 	FAIL("real GED draw command should succeed for observer sync");
     if (obs.calls <= 0 || obs.changed <= 0)
 	FAIL("real GED draw command should notify and sync qtcad Obol");
-    if (controller->getDatabaseSourceCount() != 1)
+    if (render_source_count(controller) != 1)
 	FAIL("observer-synced GED draw should create one Obol database source");
     SoBRLDatabaseSource *observerSource = source_for_path(controller, "box.s");
     if (!observerSource ||
@@ -402,7 +451,7 @@ main(int argc, char **argv)
 	FAIL("real GED erase command should succeed for observer sync");
     if (obs.calls <= 0 || obs.changed <= 0)
 	FAIL("real GED erase command should notify and sync qtcad Obol");
-    if (controller->getDatabaseSourceCount() != 0)
+    if (render_source_count(controller) != 0)
 	FAIL("observer-synced GED erase should remove Obol database sources");
     if (ged_draw_observer_remove(gedp, observerToken) != 1)
 	FAIL("GED draw observer should unregister after qtcad Obol sync test");
@@ -421,9 +470,9 @@ main(int argc, char **argv)
     draw_box.appearance = &box_appearance;
     if (!apply_and_sync(gedp, &view, &draw_box, 1))
 	FAIL("GED draw should sync a wire Obol database source");
-    if (controller->getDatabaseSourceCount() != 1)
+    if (render_source_count(controller) != 1)
 	FAIL("Obol draw sync should create one database source");
-    SoBRLDatabaseSource *source = controller->getDatabaseSource(0);
+    SoBRLDatabaseSource *source = render_source(controller, 0);
     if (!source ||
 	    !test_path_equal(source->path.getValue().getString(), "box.s") ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
@@ -518,7 +567,7 @@ main(int argc, char **argv)
     erase_box.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &erase_box, 1))
 	FAIL("GED erase should remove an Obol database source");
-    if (controller->getDatabaseSourceCount() != 0)
+    if (render_source_count(controller) != 0)
 	FAIL("Obol draw sync should remove erased database sources");
     if (scene_display_summary_by_path(controller, "box.s",
 	    BRLObolSceneTreeSummary::NODE_GROUP, NULL))
@@ -534,7 +583,7 @@ main(int argc, char **argv)
     int drew_ball = apply_and_sync(gedp, &view, &draw_ball, 1);
     if (!drew_ball)
 	FAIL("GED shaded draw should sync a shaded Obol database source");
-    source = controller->getDatabaseSource(0);
+    source = render_source(controller, 0);
     if (!source ||
 	    !test_path_equal(source->path.getValue().getString(), "ball.s") ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
@@ -556,7 +605,7 @@ main(int argc, char **argv)
     int drew_both = apply_and_sync(gedp, &view, &draw_both, 1);
     if (!drew_both)
 	FAIL("multi-path GED draw should sync multiple Obol database sources");
-    if (controller->getDatabaseSourceCount() != 3 ||
+    if (render_source_count(controller) != 3 ||
 	    !source_for_path_mode(controller, "box.s",
 		SoBRLDatabaseSource::WIREFRAME) ||
 	    !source_for_path_mode(controller, "ball.s",
@@ -569,7 +618,7 @@ main(int argc, char **argv)
     if (!qg_obol_sync_database_sources(gedp->dbip, &direct_path, 1,
 	    QG_OBOL_DATABASE_SHADED, 123, &view))
 	FAIL("direct Obol database sync should replace a source without GED transaction input");
-    source = source_for_path(controller, "box.s");
+    source = controller->getDatabaseSource(0);
     if (!source ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
 	    source->sourceRevision.getValue() != 123 ||
@@ -578,15 +627,8 @@ main(int argc, char **argv)
 	FAIL("direct Obol database sync should preserve draw mode, revision, and mesh geometry");
     if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
 	FAIL("direct Obol database remove should remove one source without GED transaction input");
-    if (controller->getDatabaseSourceCount() != 2 ||
-	    source_for_path(controller, "box.s"))
-	FAIL("direct Obol database remove should leave only unrelated ball sources");
-
-    if (!source_for_path_mode(controller, "ball.s",
-	    SoBRLDatabaseSource::WIREFRAME) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::SHADED))
-	FAIL("direct Obol database remove should retain shared and representation-specific ball source owners");
+    if (controller->getDatabaseSourceCount() != 0)
+	FAIL("direct Obol database remove should clear the local compatibility source");
     if (!bv_name_set(qg_legacy_view_bv(view.view()), "QV0") ||
 	    ged_view_context_independent_scope_is_null(view_ctx, 1) ||
 	    !ged_view_context_is_independent(view_ctx))
@@ -603,55 +645,39 @@ main(int argc, char **argv)
     if (!scopedBoxSource ||
 	    !BU_STR_EQUAL(scopedBoxSource->path.getValue().getString(),
 		"box.s") ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::WIREFRAME) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::SHADED) ||
-	    controller->getDatabaseSourceCount() != 3)
-	FAIL("scoped direct Obol sync should coexist with shared source owners and mode-specific representations");
+	    controller->getDatabaseSourceCount() != 1)
+	FAIL("scoped direct Obol sync should create one local independent-view owner");
     if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
 	FAIL("direct Obol database remove should target scoped independent-view owners");
     if (source_for_instance(controller, scoped_box.c_str()) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::WIREFRAME) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::SHADED) ||
-	    controller->getDatabaseSourceCount() != 2)
-	FAIL("scoped direct Obol remove should leave shared source owners and mode-specific representations intact");
+	    controller->getDatabaseSourceCount() != 0)
+	FAIL("scoped direct Obol remove should clear the local independent-view owner");
     if (!qg_obol_sync_database_sources(gedp->dbip, paths, 2,
 	    QG_OBOL_DATABASE_WIREFRAME, 654, &view))
 	FAIL("direct Obol database sync should create multiple scoped owners");
     if (!source_for_instance(controller, scoped_box.c_str()) ||
 	    !source_for_instance(controller, scoped_ball.c_str()) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::WIREFRAME) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::SHADED) ||
-	    controller->getDatabaseSourceCount() != 4)
-	FAIL("scoped direct Obol sync should retain shared, scoped, and mode-specific owners separately");
+	    controller->getDatabaseSourceCount() != 2)
+	FAIL("scoped direct Obol sync should retain two local independent-view owners");
     if (!qg_obol_clear_database_sources(&view))
 	FAIL("direct Obol database clear should target the active source owner scope");
     if (source_for_instance(controller, scoped_box.c_str()) ||
 	    source_for_instance(controller, scoped_ball.c_str()) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::WIREFRAME) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::SHADED) ||
-	    controller->getDatabaseSourceCount() != 2)
-	FAIL("scoped direct Obol clear should leave shared source owners and mode-specific representations intact");
+	    controller->getDatabaseSourceCount() != 0)
+	FAIL("scoped direct Obol clear should clear local independent-view owners");
     ged_view_context_independent_scope_destroy(view_ctx);
     if (ged_view_context_is_independent(view_ctx))
 	FAIL("qtcad direct source-owner parity test should restore shared view scope");
 
     controller->clearDatabaseSources();
     if (controller->getDatabaseSourceCount() != 0)
-	FAIL("test setup should clear Obol sources before full redraw sync");
+	FAIL("test setup should clear local compatibility sources before redraw");
     struct ged_draw_transaction redraw_all =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     redraw_all.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &redraw_all, 1))
 	FAIL("GED redraw should rebuild Obol sources from the draw inventory");
-    if (controller->getDatabaseSourceCount() != 3 ||
+    if (render_source_count(controller) != 3 ||
 	    !source_for_path_mode(controller, "box.s",
 		SoBRLDatabaseSource::WIREFRAME) ||
 	    !source_for_path_mode(controller, "ball.s",
@@ -665,7 +691,7 @@ main(int argc, char **argv)
     clear_all.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &clear_all, 1))
 	FAIL("GED clear should clear Obol database sources");
-    if (controller->getDatabaseSourceCount() != 0)
+    if (render_source_count(controller) != 0)
 	FAIL("Obol draw sync should clear all database sources");
 
     struct ged_draw_transaction draw_nested =
@@ -673,7 +699,7 @@ main(int argc, char **argv)
     draw_nested.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &draw_nested, 1))
 	FAIL("nested GED draw should sync an Obol database source");
-    if (controller->getDatabaseSourceCount() != 1 ||
+    if (render_source_count(controller) != 1 ||
 	    !source_for_path(controller, "pair.c/box.s"))
 	FAIL("nested Obol draw sync should retain one full-path database source");
     source = source_for_path(controller, "pair.c/box.s");
@@ -686,7 +712,7 @@ main(int argc, char **argv)
     erase_nested.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &erase_nested, 1))
 	FAIL("nested GED erase should remove an Obol database source");
-    if (controller->getDatabaseSourceCount() != 0 ||
+    if (render_source_count(controller) != 0 ||
 	    scene_display_summary_by_path(controller, "pair.c/box.s",
 		BRLObolSceneTreeSummary::NODE_GROUP, NULL) ||
 	    scene_display_summary_by_path(controller, "pair.c",
