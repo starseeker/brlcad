@@ -20537,6 +20537,18 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
     if (!entries)
 	return 0;
 
+    /* Hosts may reaffirm their endpoint before every retained redraw.  An
+     * exact endpoint registration is already complete; rebuilding its render
+     * root here discards libbrlobol's aggregate cache on every camera frame. */
+    for (ged_obol_attached_controller &entry : *entries) {
+	if (!entry.render_endpoint_only || entry.view_ctx != view_ctx ||
+		entry.scene_controller != scene_controller ||
+		entry.view_controller != view_controller)
+	    continue;
+	ged_obol_primary_set(gdp, &entry);
+	return 1;
+    }
+
     /* A single-view host may use its primary scene controller as the view's
      * render endpoint.  Bind that existing entry instead of manufacturing a
      * second primary/controller pair solely to register per-view services. */

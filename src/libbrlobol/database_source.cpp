@@ -48,6 +48,7 @@
 #include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/nodes/SoGroup.h>
+
 #include <Inventor/nodes/SoMatrixTransform.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/sensors/SoFieldSensor.h>
@@ -4260,6 +4261,8 @@ cad_vlist_style(const SoBRLVListShape *shape)
 		    shape->transparency.getValue(), style.color);
     style.lineWidth = shape->lineWidth.getValue() > 0 ?
 		      static_cast<float>(shape->lineWidth.getValue()) : 1.0f;
+    if (shape->lineStyle.getValue() != 0)
+	style.linePattern = 0xcf33u;
     return style;
 }
 
@@ -4281,6 +4284,8 @@ cad_mesh_style(const SoBRLMeshShape *shape)
 		    shape->transparency.getValue(), style.color);
     style.lineWidth = shape->lineWidth.getValue() > 0 ?
 		      static_cast<float>(shape->lineWidth.getValue()) : 1.0f;
+    if (shape->lineStyle.getValue() != 0)
+	style.linePattern = 0xcf33u;
     return style;
 }
 
@@ -4327,7 +4332,6 @@ cad_vlist_part_geometry_supported(const SoBRLVListShape *shape,
 {
     if (!shape || shape->hiddenLine.getValue() ||
 	shape->editEmphasis.getValue() ||
-	shape->lineStyle.getValue() != 0 ||
 	shape->selectedPrimitive.getNum() > 0 ||
 	shape->highlightedPrimitive.getNum() > 0)
 	return 0;
@@ -4410,7 +4414,6 @@ cad_mesh_part_geometry(const SoBRLMeshShape *shape,
     if (!shape || shape->hiddenLine.getValue() ||
 	shape->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE ||
 	shape->editEmphasis.getValue() ||
-	shape->lineStyle.getValue() != 0 ||
 	shape->selectedPrimitive.getNum() > 0 ||
 	shape->highlightedPrimitive.getNum() > 0)
 	return 0;
@@ -4479,6 +4482,7 @@ struct cad_build_data {
     int unsupported;
     int wireCount;
     int shadedCount;
+    int storeSemantics;
 };
 
 static void
@@ -4577,6 +4581,8 @@ cad_source_style(const SoBRLDatabaseSource *source)
 		    source->transparency.getValue(), style.color);
     style.lineWidth = source->lineWidth.getValue() > 0 ?
 		      static_cast<float>(source->lineWidth.getValue()) : 1.0f;
+    if (source->lineStyle.getValue() != 0)
+	style.linePattern = 0xcf33u;
     return style;
 }
 
@@ -5001,7 +5007,8 @@ cad_add_vlist_instance(cad_build_data &data,
 	data.selectedInstances.push_back(instanceId);
     if (!shape->selectable.getValue())
 	data.unpickableInstances.push_back(instanceId);
-    data.assembly->setInstanceSemantic(instanceId, cad_vlist_semantic(shape));
+    if (data.storeSemantics)
+	data.assembly->setInstanceSemantic(instanceId, cad_vlist_semantic(shape));
     data.wireCount++;
 }
 
@@ -5051,7 +5058,8 @@ cad_add_mesh_instance(cad_build_data &data,
 	data.selectedInstances.push_back(instanceId);
     if (!shape->selectable.getValue())
 	data.unpickableInstances.push_back(instanceId);
-    data.assembly->setInstanceSemantic(instanceId, cad_mesh_semantic(shape));
+    if (data.storeSemantics)
+	data.assembly->setInstanceSemantic(instanceId, cad_mesh_semantic(shape));
     data.shadedCount++;
 }
 
@@ -5513,6 +5521,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
     data.unsupported = 0;
     data.wireCount = 0;
     data.shadedCount = 0;
+    data.storeSemantics = 1;
 
     const SbMatrix identity = SbMatrix::identity();
     for (int i = 0; i < this->getNumChildren() && !data.unsupported; i++)
@@ -5540,6 +5549,64 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
     return this->compiledAssemblyActive ? 1 : 0;
 }
 
+int
+SoBRLDatabaseSource::appendCadRenderBatch(BRLObolCadBatchBuildState *state)
+{
+    if (!state || !state->assembly || !this->visible.getValue() ||
+	this->auxiliarySource.getValue() ||
+	this->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
+	this->needsRealization() || source_has_auxiliary_children(this))
+	return 0;
+
+    if (this->compactIndexActive && this->compactIndex &&
+	!this->compactIndex->instances.empty()) {
+	state->parts.insert(state->parts.end(), this->compactIndex->parts.begin(),
+	    this->compactIndex->parts.end());
+	state->instances.insert(state->instances.end(),
+	    this->compactIndex->instances.begin(),
+	    this->compactIndex->instances.end());
+	state->hiddenInstances.insert(state->hiddenInstances.end(),
+	    this->compactIndex->hiddenInstances.begin(),
+	    this->compactIndex->hiddenInstances.end());
+	state->selectedInstances.insert(state->selectedInstances.end(),
+	    this->compactIndex->selectedInstances.begin(),
+	    this->compactIndex->selectedInstances.end());
+	state->unpickableInstances.insert(state->unpickableInstances.end(),
+	    this->compactIndex->unpickableInstances.begin(),
+	    this->compactIndex->unpickableInstances.end());
+	state->wireCount += this->compactIndex->wireCount;
+	state->shadedCount += this->compactIndex->shadedCount;
+	return 1;
+    }
+
+    cad_build_data data;
+    data.source = this;
+    data.assembly = state->assembly;
+    data.ordinal = 0;
+    data.unsupported = 0;
+    data.wireCount = 0;
+    data.shadedCount = 0;
+    data.storeSemantics = 0;
+
+    const SbMatrix identity = SbMatrix::identity();
+    for (int i = 0; i < this->getNumChildren() && !data.unsupported; i++)
+	cad_collect_realized_node(data, this->getChild(i), identity);
+    if (data.unsupported || data.instances.empty())
+	return 0;
+
+    state->parts.insert(state->parts.end(), data.parts.begin(), data.parts.end());
+    state->instances.insert(state->instances.end(), data.instances.begin(),
+	data.instances.end());
+    state->hiddenInstances.insert(state->hiddenInstances.end(),
+	data.hiddenInstances.begin(), data.hiddenInstances.end());
+    state->selectedInstances.insert(state->selectedInstances.end(),
+	data.selectedInstances.begin(), data.selectedInstances.end());
+    state->unpickableInstances.insert(state->unpickableInstances.end(),
+	data.unpickableInstances.begin(), data.unpickableInstances.end());
+    state->wireCount += data.wireCount;
+    state->shadedCount += data.shadedCount;
+    return 1;
+}
 
 SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     dbip(NULL),
@@ -5547,6 +5614,7 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     compiledAssembly(NULL),
     compactIndex(NULL),
     compactHandleSourceId(database_source_handle_id()),
+    cadBatchRevision(1),
     compiledAssemblyDirty(TRUE),
     compiledAssemblyActive(FALSE),
     compiledAssemblyNodeId(0),
@@ -5667,6 +5735,7 @@ SoBRLDatabaseSource::initClass(void)
 {
     SoCADAssembly::initClass();
     SoBRLCadAssembly::initClass();
+    SoBRLCadRenderBatch::initClass();
     SO_NODE_INIT_CLASS(SoBRLDatabaseSource, SoSeparator, "Separator");
 }
 
@@ -5808,6 +5877,7 @@ SoBRLDatabaseSource::clearCompiledAssembly(void)
     this->compiledAssemblyDirty = TRUE;
     this->compiledAssemblyActive = FALSE;
     this->compiledAssemblyNodeId = 0;
+    this->markCadBatchDirty();
 }
 
 void
@@ -5819,12 +5889,20 @@ SoBRLDatabaseSource::markCompiledAssemblyDirty(void)
 }
 
 void
+SoBRLDatabaseSource::markCadBatchDirty(void)
+{
+    if (++this->cadBatchRevision == 0)
+	this->cadBatchRevision = 1;
+}
+
+void
 SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 {
     delete this->compactIndex;
     this->compactIndex = NULL;
     this->compactIndexActive = FALSE;
     this->markCompiledAssemblyDirty();
+    this->markCadBatchDirty();
 }
 
 void
@@ -5941,6 +6019,7 @@ SoBRLDatabaseSource::setHierarchyState(
     this->occurrenceIndex = sourceOccurrenceIndex;
     this->booleanOperation = nextOperation;
     this->markCompiledAssemblyDirty();
+    this->markCadBatchDirty();
     return 1;
 }
 
@@ -5953,6 +6032,7 @@ SoBRLDatabaseSource::setMaterialPolicyState(int nextMaterialPolicy)
 	return 0;
 
     this->materialPolicy = nextMaterialPolicy;
+    this->markCadBatchDirty();
     this->syncRealizedShapeOwnerState();
     return 1;
 }
@@ -5964,6 +6044,9 @@ SoBRLDatabaseSource::setRealizationState(int nextStatus,
 	uint32_t nextStaleReason,
 	const char *diagnostic)
 {
+    const SbBool wasBatchEligible =
+	this->realizationStatus.getValue() == REALIZED &&
+	!this->stale.getValue();
     if (nextStatus != REALIZED && nextStatus != UNREALIZED &&
 	nextStatus != FAILED)
 	nextStatus = UNREALIZED;
@@ -6023,6 +6106,9 @@ SoBRLDatabaseSource::setRealizationState(int nextStatus,
 	this->realizedRevision = nextRealizedSourceRevision;
 	changed = 1;
     }
+    const SbBool isBatchEligible = realized && !nextStale;
+    if (wasBatchEligible != isBatchEligible)
+	this->markCadBatchDirty();
     if (changed)
 	this->syncRealizedShapeOwnerState();
     return changed;
@@ -6183,8 +6269,10 @@ SoBRLDatabaseSource::setDatabaseMetadataState(SbBool metadataValid,
 	changed = 1;
     }
 
-    if (changed)
+    if (changed) {
+	this->markCadBatchDirty();
 	this->syncRealizedShapeOwnerState();
+    }
     return changed;
 }
 
@@ -6295,8 +6383,10 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
     }
     if (hadMaterialOverride && !nextMaterialColorValid)
 	this->markStale(STALE_SOURCE);
-    if (changed)
+    if (changed) {
+	this->markCadBatchDirty();
 	this->syncRealizedShapeOwnerState();
+    }
     return changed;
 }
 
@@ -6362,8 +6452,10 @@ SoBRLDatabaseSource::applyDisplayPatch(
 	this->ghostedColor = patch.ghostedColor;
 	changed = 1;
     }
-    if (changed)
+    if (changed) {
+	this->markCadBatchDirty();
 	this->syncRealizedShapeOwnerState();
+    }
     return changed;
 }
 
@@ -6413,6 +6505,7 @@ SoBRLDatabaseSource::setPlacementState(SbBool nextDrawMatrixValid,
 	this->syncCompactInstancePlacementState();
 	sync_realized_shape_placement_state_in_node(this, this);
 	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
     }
     return changed;
 }
@@ -6830,6 +6923,8 @@ SoBRLDatabaseSource::needsRealization(void) const
 void
 SoBRLDatabaseSource::GLRender(SoGLRenderAction *action)
 {
+    if (brlobol_cad_batch_source_suppressed(this))
+	return;
     if (SoBRLCadAssembly *viewCad =
 	    cad_view_lod_assembly_for_action(action, this)) {
 	viewCad->render(action);
@@ -6842,6 +6937,25 @@ SoBRLDatabaseSource::GLRender(SoGLRenderAction *action)
     }
 
     inherited::GLRender(action);
+}
+
+void
+SoBRLDatabaseSource::GLRenderBelowPath(SoGLRenderAction *action)
+{
+    if (brlobol_cad_batch_source_suppressed(this))
+	return;
+    if (SoBRLCadAssembly *viewCad =
+	    cad_view_lod_assembly_for_action(action, this)) {
+	viewCad->render(action);
+	return;
+    }
+
+    if (this->syncCompiledAssembly() && this->compiledAssembly) {
+	this->compiledAssembly->render(action);
+	return;
+    }
+
+    inherited::GLRenderBelowPath(action);
 }
 
 void

@@ -194,6 +194,11 @@ main(int argc, char **argv)
     if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
 	    controller, 0))
 	FAIL("qtcad test should attach the QgView Obol controller to GED");
+    SoNode *attachedRenderRoot = controller->getRenderSceneRoot();
+    if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
+	    controller, 0) ||
+	controller->getRenderSceneRoot() != attachedRenderRoot)
+	FAIL("reaffirming an Obol endpoint should preserve its retained render root");
 
     QgView secondView(NULL, QgView_SW);
     secondView.resize(160, 120);

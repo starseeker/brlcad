@@ -519,6 +519,14 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (greenPixels < 20)
 	FAIL("OSMesa GL render should render Obol HUD labels");
 
+    {
+	SoOffscreenRenderer secondRenderer(&contextManager, viewport);
+	secondRenderer.setComponents(SoOffscreenRenderer::RGB);
+	secondRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+	if (!secondRenderer.render(root) || !secondRenderer.getBuffer())
+	    FAIL("retained CAD scene should render in a second GL context");
+    }
+
     BRLOBOLSoftwareLineContextManager softwareManager;
     SoOffscreenRenderer softwareRenderer(&softwareManager, viewport);
     softwareRenderer.setComponents(SoOffscreenRenderer::RGB);

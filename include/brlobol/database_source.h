@@ -33,6 +33,7 @@ class SoBRLVListShape;
 class SoBRLMeshShape;
 class SoBRLMaterialObject;
 class SoBRLCadAssembly;
+class SoBRLCadRenderBatch;
 class SoBRLExportAction;
 class SoBRLMeasureAction;
 class SoBRLSnapAction;
@@ -49,6 +50,7 @@ struct bn_tol;
 struct BRLObolDatabaseSourceRealizationCache;
 struct BRLObolCompactInstanceIndex;
 struct BRLObolCompactInstanceEntry;
+struct BRLObolCadBatchBuildState;
 namespace obol { struct PartGeometry; }
 
 BRLOBOL_EXPORT SbBool brlobol_database_source_fullpath_material_color(
@@ -794,10 +796,12 @@ public:
 protected:
     virtual ~SoBRLDatabaseSource(void);
     void GLRender(SoGLRenderAction *action) override;
+    void GLRenderBelowPath(SoGLRenderAction *action) override;
     void getBoundingBox(SoGetBoundingBoxAction *action) override;
     void rayPick(SoRayPickAction *action) override;
 
 private:
+    friend class SoBRLCadRenderBatch;
     friend class SoBRLExportAction;
     friend class SoBRLMeasureAction;
     friend class SoBRLSnapAction;
@@ -822,8 +826,10 @@ private:
     void syncCompactInstancePlacementState(void);
     void clearCompiledAssembly(void);
     void markCompiledAssemblyDirty(void);
+    void markCadBatchDirty(void);
     void clearCompactInstanceIndex(void);
     int syncCompiledAssembly(void);
+    int appendCadRenderBatch(struct BRLObolCadBatchBuildState *state);
     const struct BRLObolCompactInstanceEntry *findCompactInstanceEntry(
 	const BRLObolCompactInstanceHandle &handle) const;
     int exportCompactInstances(SoBRLExportAction *action,
@@ -838,6 +844,7 @@ private:
     SoBRLCadAssembly *compiledAssembly;
     struct BRLObolCompactInstanceIndex *compactIndex;
     uint64_t compactHandleSourceId;
+    uint64_t cadBatchRevision;
     SbBool compiledAssemblyDirty;
     SbBool compiledAssemblyActive;
     SbUniqueId compiledAssemblyNodeId;

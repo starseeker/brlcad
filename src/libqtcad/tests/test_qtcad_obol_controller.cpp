@@ -168,8 +168,21 @@ main(int argc, char **argv)
 	controller->getViewportRegion().getViewportSizePixels() !=
 	    controller->getViewportRegion().getWindowSize())
 	FAIL("Obol view controller should render the full window viewport");
-
     struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    if (!bv_background_state_get(&background,
+	    qg_legacy_view_bv_const(view.view())) ||
+	background.bottom[0] != 110 || background.bottom[1] != 110 ||
+	background.bottom[2] != 110 || background.top[0] != 0 ||
+	background.top[1] != 0 || background.top[2] != 50)
+	FAIL("qtcad local views should preserve the historical qged gradient");
+    view.need_update(QG_VIEW_DRAWN);
+    if (controller->getBackgroundBottomColor() !=
+	    SbColor(110.0f / 255.0f, 110.0f / 255.0f, 110.0f / 255.0f) ||
+	controller->getBackgroundTopColor() !=
+	    SbColor(0.0f, 0.0f, 50.0f / 255.0f))
+	FAIL("qtcad should synchronize its default gradient to Obol");
+
+    background = BV_BACKGROUND_STATE_INIT;
     VSET(background.bottom, 16, 32, 48);
     VSET(background.top, 64, 80, 96);
     (void)bv_background_state_set(qg_legacy_view_bv(view.view()),

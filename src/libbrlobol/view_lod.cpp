@@ -493,6 +493,9 @@ BRLObolViewLodState::applySourceResult(
 const BRLObolViewLodState::MeshPayload *
 BRLObolViewLodState::findMesh(const SoBRLMeshShape *shape) const
 {
+    if (this->meshBindings.empty())
+	return NULL;
+
     std::vector<std::string> keys;
     view_lod_shape_keys(keys, shape);
     for (size_t i = 0; i < keys.size(); i++) {
@@ -510,6 +513,9 @@ const BRLObolViewLodState::MeshPayload *
 BRLObolViewLodState::findMeshForResult(
     const BRLObolLodResult &result) const
 {
+    if (this->meshBindings.empty())
+	return NULL;
+
     std::vector<std::string> keys;
     view_lod_result_keys(keys, result);
     for (size_t i = 0; i < keys.size(); i++) {
@@ -526,6 +532,9 @@ BRLObolViewLodState::findMeshForResult(
 const BRLObolViewLodState::ProxyPayload *
 BRLObolViewLodState::findProxy(const SoBRLMeshShape *shape) const
 {
+    if (this->proxyBindings.empty())
+	return NULL;
+
     std::vector<std::string> keys;
     view_lod_shape_keys(keys, shape);
     for (size_t i = 0; i < keys.size(); i++) {
@@ -543,6 +552,9 @@ const BRLObolViewLodState::ProxyPayload *
 BRLObolViewLodState::findProxyForResult(
     const BRLObolLodResult &result) const
 {
+    if (this->proxyBindings.empty())
+	return NULL;
+
     std::vector<std::string> keys;
     view_lod_result_keys(keys, result);
     for (size_t i = 0; i < keys.size(); i++) {
@@ -559,6 +571,9 @@ BRLObolViewLodState::findProxyForResult(
 const BRLObolViewLodState::CadPayload *
 BRLObolViewLodState::findCad(const SoBRLDatabaseSource *source) const
 {
+    if (this->cadBindings.empty())
+	return NULL;
+
     std::vector<std::string> keys;
     view_lod_source_keys(keys, source);
     for (size_t i = 0; i < keys.size(); i++) {
@@ -576,6 +591,9 @@ const BRLObolViewLodState::CadPayload *
 BRLObolViewLodState::findCadForResult(
     const BRLObolLodResult &result) const
 {
+    if (this->cadBindings.empty())
+	return NULL;
+
     std::vector<std::string> keys;
     view_lod_result_keys(keys, result);
     for (size_t i = 0; i < keys.size(); i++) {

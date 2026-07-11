@@ -470,6 +470,7 @@ private:
     SoBRLSceneController sceneController;
     SoViewport *viewport;
     SoBRLViewLodGroup *renderLodRoot;
+    SoNode *renderBatchRoot;
     BRLObolViewAttachment *viewAttachment;
     SoRenderManager *renderManager;
     SoCamera *activeCamera;

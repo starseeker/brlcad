@@ -46,6 +46,8 @@
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 
+#include <Inventor/nodes/SoGroup.h>
+
 struct options {
     bool autoview = false;
     bool render = false;
@@ -81,6 +83,24 @@ elapsed_ms(std::chrono::steady_clock::time_point start)
 {
     auto end = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+static void
+collect_database_sources(SoNode *node,
+	std::vector<SoBRLDatabaseSource *> &sources)
+{
+    if (!node)
+	return;
+    SoBRLDatabaseSource *source = dynamic_cast<SoBRLDatabaseSource *>(node);
+    if (source) {
+	sources.push_back(source);
+	return;
+    }
+    SoGroup *group = dynamic_cast<SoGroup *>(node);
+    if (!group)
+	return;
+    for (int i = 0; i < group->getNumChildren(); i++)
+	collect_database_sources(group->getChild(i), sources);
 }
 
 static void
@@ -473,6 +493,20 @@ run_once(const struct options &opts, int iter)
     int progressive_more = 0;
     size_t progressive_expanded = 0;
     size_t progressive_remaining = 0;
+    size_t profile_sources_realized = 0;
+    size_t profile_sources_stale = 0;
+    size_t profile_sources_view_dependent = 0;
+    size_t profile_sources_auxiliary = 0;
+    size_t profile_sources_compact = 0;
+    size_t profile_sources_compiled = 0;
+    size_t profile_primary_shapes = 0;
+    size_t profile_primary_points = 0;
+    size_t profile_auxiliary_shapes = 0;
+    size_t profile_auxiliary_points = 0;
+    size_t profile_point_shapes = 0;
+    size_t profile_point_commands = 0;
+    size_t profile_styled_shapes = 0;
+    size_t profile_emphasis_shapes = 0;
     BRLObolViewController *controller = NULL;
 
     auto start = std::chrono::steady_clock::now();
@@ -572,6 +606,53 @@ run_once(const struct options &opts, int iter)
     if (profile_started) {
 	brlobol_performance_counters_set_enabled(0);
 	brlobol_performance_counters_get(&perf);
+        if (controller) {
+	    std::vector<SoBRLDatabaseSource *> sources;
+	    collect_database_sources(controller->getRenderSceneRoot(), sources);
+	    for (SoBRLDatabaseSource *source : sources) {
+		if (!source)
+		    continue;
+		profile_sources_realized += source->realizationStatus.getValue() ==
+		    SoBRLDatabaseSource::REALIZED;
+		profile_sources_stale += source->needsRealization() ? 1 : 0;
+		profile_sources_view_dependent +=
+		    source->realizationViewDependent.getValue() ? 1 : 0;
+		profile_sources_auxiliary += source->auxiliarySource.getValue() ? 1 : 0;
+		profile_sources_compact += source->hasCompactInstanceIndex() ? 1 : 0;
+		profile_sources_compiled += source->hasCompiledAssembly() ? 1 : 0;
+		for (int j = 0; j < source->getRealizedShapeSummaryCount(); j++) {
+		    SoBRLVListShape *shape = source->getRealizedShape(j);
+		    BRLObolRealizedShapeSummary summary;
+		    if (!source->getRealizedShapeSummary(j, summary))
+			continue;
+		    const bool auxiliary = BU_STR_EQUAL(
+			summary.recordRole.getString(), "auxiliary");
+		    if (auxiliary) {
+			profile_auxiliary_shapes++;
+			profile_auxiliary_points += summary.pointCount;
+		    } else {
+			profile_primary_shapes++;
+			profile_primary_points += summary.pointCount;
+		    }
+		    if (shape) {
+			bool hasPoints = false;
+			for (int k = 0; k < shape->command.getNum(); k++) {
+			    if (shape->command[k] == SoBRLVListShape::POINT) {
+				hasPoints = true;
+				profile_point_commands++;
+			    }
+			}
+			profile_point_shapes += hasPoints ? 1 : 0;
+			profile_styled_shapes += shape->lineStyle.getValue() != 0 ? 1 : 0;
+			profile_emphasis_shapes +=
+			    (shape->hiddenLine.getValue() ||
+			     shape->editEmphasis.getValue() ||
+			     shape->selectedPrimitive.getNum() > 0 ||
+			     shape->highlightedPrimitive.getNum() > 0) ? 1 : 0;
+		    }
+		}
+	    }
+	}
     }
 
     const char *result = ged_result(gedp);
@@ -654,6 +735,15 @@ run_once(const struct options &opts, int iter)
 	    perf.source_move_us / 1000.0,
 	    (unsigned long long)perf.source_index_rebuild_calls,
 	    perf.source_index_rebuild_us / 1000.0);
+	std::printf(" perf_source_state=%zu/%zu/%zu/%zu perf_source_residency=%zu/%zu perf_shape_points=%zu/%zu/%zu/%zu",
+	    profile_sources_realized, profile_sources_stale,
+	    profile_sources_view_dependent, profile_sources_auxiliary,
+	    profile_sources_compact, profile_sources_compiled,
+	    profile_primary_shapes, profile_primary_points,
+	    profile_auxiliary_shapes, profile_auxiliary_points);
+	std::printf(" perf_shape_features=%zu/%zu/%zu/%zu",
+	    profile_point_shapes, profile_point_commands,
+	    profile_styled_shapes, profile_emphasis_shapes);
     }
     std::printf(" status=%s\n",
 	(endpoint_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&

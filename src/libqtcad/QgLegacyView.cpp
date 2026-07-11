@@ -36,6 +36,12 @@ qg_legacy_view *
 qg_legacy_view_local_create(const char *name)
 {
     void *view_ctx = ged_view_context_create();
+    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    VSET(background.bottom, 110, 110, 110);
+    VSET(background.top, 0, 0, 50);
+    (void)bv_background_state_set(
+	bv_context_view(reinterpret_cast<struct bv_context *>(view_ctx)),
+	&background);
     if (name)
 	bv_context_name_set(reinterpret_cast<struct bv_context *>(view_ctx),
 		name);

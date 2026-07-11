@@ -15,13 +15,29 @@
 #include "brlobol/pick_detail.h"
 
 #include <obol/cad/SoCADAssembly.h>
+#include <Inventor/nodes/SoSeparator.h>
 
 #include <cstdint>
 #include <map>
+#include <unordered_set>
+#include <vector>
 
 class SoGetBoundingBoxAction;
 class SoGLRenderAction;
 class SoRayPickAction;
+class SoBRLDatabaseSource;
+class SoBRLCadAssembly;
+
+struct BRLObolCadBatchBuildState {
+    SoBRLCadAssembly *assembly = NULL;
+    std::vector<obol::PartUpdate> parts;
+    std::vector<obol::InstanceUpdate> instances;
+    std::vector<obol::InstanceId> hiddenInstances;
+    std::vector<obol::InstanceId> selectedInstances;
+    std::vector<obol::InstanceId> unpickableInstances;
+    int wireCount = 0;
+    int shadedCount = 0;
+};
 
 class SoBRLCadAssembly : public SoCADAssembly {
     typedef SoCADAssembly inherited;
@@ -77,5 +93,33 @@ protected:
 private:
     std::map<obol::InstanceId, InstanceSemantic> semantics;
 };
+
+class SoBRLCadRenderBatch : public SoSeparator {
+    typedef SoSeparator inherited;
+
+    SO_NODE_HEADER(SoBRLCadRenderBatch);
+
+public:
+    SoBRLCadRenderBatch(void);
+    static void initClass(void);
+    void setBatchSourceRoot(SoNode *root);
+
+protected:
+    ~SoBRLCadRenderBatch(void) override;
+    void GLRender(SoGLRenderAction *action) override;
+    void GLRenderBelowPath(SoGLRenderAction *action) override;
+
+private:
+    void renderBatch(SoGLRenderAction *action);
+    SbBool syncBatch(void);
+
+    SoBRLCadAssembly *assembly;
+    SoNode *sourceRoot;
+    uint64_t cachedSourceSignature;
+    SbBool batchValid;
+    std::unordered_set<const SoBRLDatabaseSource *> batchedSources;
+};
+
+int brlobol_cad_batch_source_suppressed(const SoBRLDatabaseSource *source);
 
 #endif /* BRLOBOL_CAD_ASSEMBLY_PRIVATE_H */

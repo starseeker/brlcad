@@ -305,12 +305,8 @@ tkobol_render_frame(struct tkobol_vars *tv, GLenum render_buffer,
     tv->controller->renderBackground();
 
     const uint64_t started = tv->controller->beginRenderTiming();
-    if (tv->controller->getCamera() && tv->controller->getRenderRoot()) {
-	SoGLRenderAction *action =
-	    tv->controller->getRenderManager()->getGLRenderAction();
-	action->setViewportRegion(tv->controller->getViewportRegion());
-	action->apply(tv->controller->getRenderRoot());
-    }
+    if (tv->controller->getCamera() && tv->controller->getRenderRoot())
+	tv->controller->getRenderManager()->render(FALSE, FALSE);
     tv->controller->completeRenderTiming(started);
     tv->controller->clearRenderRequest();
     return BRLCAD_OK;
@@ -661,7 +657,7 @@ tkobol_configure(struct dm *dmp, int force)
     int ret = tkobol_sync_view(tv, force ? 1 : 0);
     if (ret == BRLCAD_OK && tv->software_backend)
 	return tkobol_render_current(tv, 0);
-    if (ret == BRLCAD_OK)
+    if (ret == BRLCAD_OK && force)
 	(void)tkobol_widget_command(tv, "postredisplay");
     return ret;
 }
@@ -669,7 +665,17 @@ tkobol_configure(struct dm *dmp, int force)
 static int
 tkobol_draw_end(struct dm *dmp)
 {
-    return tkobol_render_current(tkobol_pvars(dmp), 1);
+    struct tkobol_vars *tv = tkobol_pvars(dmp);
+    if (!tv)
+	return BRLCAD_ERROR;
+    if (tv->software_backend)
+	return tkobol_render_current(tv, 0);
+
+    /* Togl owns hardware presentation.  Queueing its display callback lets
+     * Tk collapse motion-event bursts into one render instead of drawing
+     * synchronously here and then drawing the same frame again in Togl. */
+    return tkobol_widget_command(tv, "postredisplay") == TCL_OK ?
+	BRLCAD_OK : BRLCAD_ERROR;
 }
 
 static int

@@ -24,6 +24,7 @@
 #include "brlobol/view_controller.h"
 #include "brlobol/view_lod.h"
 #include "brlobol/view_store.h"
+#include "cad_assembly_private.h"
 #include "raytrace.h"
 #include "rt/view.h"
 
@@ -771,6 +772,7 @@ BRLObolViewController::BRLObolViewController(void) :
     sceneController(),
     viewport(new SoViewport),
     renderLodRoot(NULL),
+    renderBatchRoot(NULL),
     viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
     activeCamera(NULL),
@@ -824,6 +826,10 @@ BRLObolViewController::BRLObolViewController(void) :
     selectionStore(new BRLObolSelectionStore)
 {
     this->viewAttachment->ref();
+    SoBRLCadRenderBatch *batch = new SoBRLCadRenderBatch;
+    batch->ref();
+    batch->addChild(this->viewport->getRoot());
+    this->renderBatchRoot = batch;
     this->renderManager->getGLRenderAction()->setCacheContext(
 	SoGLCacheContextElement::getUniqueCacheContext());
     controller_configure_render_environment(this->viewport);
@@ -833,6 +839,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     sceneController(),
     viewport(new SoViewport),
     renderLodRoot(NULL),
+    renderBatchRoot(NULL),
     viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
     activeCamera(NULL),
@@ -886,6 +893,10 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     selectionStore(new BRLObolSelectionStore)
 {
     this->viewAttachment->ref();
+    SoBRLCadRenderBatch *batch = new SoBRLCadRenderBatch;
+    batch->ref();
+    batch->addChild(this->viewport->getRoot());
+    this->renderBatchRoot = batch;
     this->renderManager->getGLRenderAction()->setCacheContext(
 	SoGLCacheContextElement::getUniqueCacheContext());
     controller_configure_render_environment(this->viewport);
@@ -911,6 +922,10 @@ BRLObolViewController::~BRLObolViewController(void)
     this->renderManager->setSceneGraph(NULL);
     delete this->renderManager;
     this->renderManager = NULL;
+    if (this->renderBatchRoot) {
+	this->renderBatchRoot->unref();
+	this->renderBatchRoot = NULL;
+    }
     delete this->viewport;
     this->viewport = NULL;
 }
@@ -918,6 +933,10 @@ BRLObolViewController::~BRLObolViewController(void)
 void
 BRLObolViewController::setViewportSceneGraphWithLod(SoNode *root)
 {
+    SoBRLCadRenderBatch *batch =
+	dynamic_cast<SoBRLCadRenderBatch *>(this->renderBatchRoot);
+    if (batch)
+	batch->setBatchSourceRoot(NULL);
     if (this->renderLodRoot) {
 	this->viewport->setSceneGraph(NULL);
 	this->renderLodRoot->unref();
@@ -935,6 +954,8 @@ BRLObolViewController::setViewportSceneGraphWithLod(SoNode *root)
     wrapper->addChild(root);
     this->renderLodRoot = wrapper;
     this->viewport->setSceneGraph(wrapper);
+    if (batch)
+	batch->setBatchSourceRoot(root);
 }
 
 void
@@ -975,7 +996,8 @@ BRLObolViewController::getRenderSceneRoot(void) const
 SoNode *
 BRLObolViewController::getRenderRoot(void) const
 {
-    return this->viewport->getRoot();
+    return this->renderBatchRoot ? this->renderBatchRoot :
+	this->viewport->getRoot();
 }
 
 void
@@ -1543,7 +1565,7 @@ BRLObolViewController::renderToImage(unsigned char **image,
 	renderer->setBackgroundGradient(imageBottom, imageTop);
 
     const uint64_t started = this->beginRenderTiming();
-    const SbBool rendered = this->getViewport()->render(renderer.get());
+    const SbBool rendered = renderer->render(this->getRenderRoot());
     this->completeRenderTiming(started);
     if (!rendered) {
 	return BRLCAD_ERROR;
@@ -3640,7 +3662,7 @@ BRLObolViewController::getDatabaseSourceSummary(int index,
 void
 BRLObolViewController::syncRenderManager(void)
 {
-    this->renderManager->setSceneGraph(this->viewport->getRoot());
+    this->renderManager->setSceneGraph(this->getRenderRoot());
     this->renderManager->setCamera(this->activeCamera);
     this->renderManager->setViewportRegion(this->viewportRegion);
 }

@@ -234,7 +234,7 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	renderer.setBackgroundGradient(s.obol->getBackgroundBottomColor(),
 	    s.obol->getBackgroundTopColor());
     const uint64_t started = s.obol->beginRenderTiming();
-    const SbBool rendered = s.obol->getViewport()->render(&renderer);
+    const SbBool rendered = renderer.render(s.obol->getRenderRoot());
     s.obol->completeRenderTiming(started);
     if (!rendered)
 	return;
