@@ -616,6 +616,20 @@ test_owned_render_endpoint(const char *datadir)
 	fail = 1;
     }
 
+    const char *wire_av[5] = {"dm", "set", "software_wire", "fast", NULL};
+    if (!fail && (ged_exec_dm(gedp, 4, wire_av) != BRLCAD_OK ||
+	    controller->getSoftwareWireMode() !=
+		BRLObolViewController::SOFTWARE_WIRE_FAST)) {
+	bu_log("FAIL: dm software_wire could not configure a DM-less Obol view: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    } else if (!fail) {
+	bu_log("PASS: dm software_wire configures a DM-less Obol view\n");
+    }
+    wire_av[3] = "auto";
+    if (!fail && ged_exec_dm(gedp, 4, wire_av) != BRLCAD_OK)
+	fail = 1;
+
     const char *av[3] = {"draw", "all.g", NULL};
     if (!fail && ged_exec_draw(gedp, 2, av) != BRLCAD_OK) {
 	bu_log("FAIL: owned-endpoint draw failed: %s\n",

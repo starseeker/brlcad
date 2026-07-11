@@ -439,6 +439,8 @@ Priority 2: Performance, Cleanup, and Deletion
       Applications can query or switch the active view with
       `dm set software_wire` and
       `dm set software_wire auto|quality|fast`; `-d` selects a named DM/view.
+      The active-view form also works for qged-style Obol canvas endpoints
+      that deliberately have no libdm instance.
     * A 512-instance Obol benchmark measured QUALITY at 1.95 ms/frame and
       FAST at 1.40 ms/frame (1.4x faster), with a 9.9/255 mean pixel
       difference and essentially identical coverage.  Workload matters.
@@ -453,25 +455,258 @@ Priority 2: Performance, Cleanup, and Deletion
       software context, retains a fixed-function flattened VBO batch, and
       libbrlobol keeps offscreen renderers/contexts alive across image frames.
 
-14.  Remaining libdm capabilities survey
+14.  IN PROGRESS: Replace libdm with typed Obol endpoints and host factories
 
-    * More generally, the "dm" libged command's role will evolve from actual
-      different dm backends to providing options to Obol - sw vs hw vs rt
-      vs txt vs nu (no-op) Obol backend selection will replace the current
-      separate dm backends, and other libdm options that make sense should
-      be transitioned in some manner - please consider how best to do that
-      and propose a design.
-    * One specific concern I do know is there is the ability of libdm to
-      create a window.  That is deliberately not an Obol scope - my current
-      thought there is for libbrlobol to provide the equivalent of dm and fb
-      open functions that use caller registered functions - similarly to how
-      Obol itself needs information to set up a context provided by the app.
-      Then MGED and rt can register Tk window setup functions from libtclcad,
-      qged can do the same by registering appropriate libqtcad functions,
-      and by default (nothing registered) the opens fail as no-ops.  We *may*
-      consider guaranteeing window creation with GLFW down the road, but not
-      yet.  To make this work properly you may need to pull in work from the
-      https://github.com/BRL-CAD/brlcad/tree/bindings branch - that is allowed
+    Survey conclusion
+    -----------------
+
+    libdm currently combines four independent responsibilities behind one
+    backend call table:
+
+    * immediate rendering (`drawLine`, `drawVList`, matrices, HUD begin/end);
+    * native window/context/event ownership (`open`, `configure`, `doevent`,
+      `makeCurrent`, buffer swap);
+    * view and render policy (background, projection, depth, lighting, line
+      style, font size, clipping, stereo, navigation bounds); and
+    * the legacy framebuffer device API and display-server integration.
+
+    These responsibilities must not be reproduced in a renamed `struct dm`.
+    Post-libdm, a GED view owns an Obol/libbrlobol controller and a typed
+    display endpoint.  Obol owns rendering; a caller-supplied host owns native
+    windows, contexts, event integration, and presentation; libimgstream owns
+    image storage and transport.  Exports and diagnostics are not display
+    backends.
+
+    The `bindings` branch supplies a useful toolkit-neutral input model:
+    native events are normalized, JSON bindings map them to semantic actions,
+    and applications register action implementations.  Port that model (and
+    the useful portions of `dm_bindings.json`) as the endpoint input layer so
+    Tk and Qt do not maintain separate hard-coded interaction profiles.  Do
+    not use its process-global action/context registries as the display-host
+    ABI: host lifecycle, ownership, and callback versioning remain per factory
+    and per endpoint.  The host delivers normalized events to the binding
+    dispatcher; the dispatcher invokes view/controller actions.
+
+    Target objects and ownership
+    ----------------------------
+
+    1. Add an opaque `brlobol_display_endpoint_t` (with a C++ wrapper) that
+       binds exactly one `BRLObolViewController`, one render-engine policy,
+       and zero or one host instance.  The endpoint is the display identity;
+       neither a GL context nor a native window is the identity.
+    2. Add an opaque endpoint slot to GED view state with get/set/detach APIs.
+       Do not reuse `ged_view_context_display_manager_get` for the new object.
+       During migration a view may temporarily carry both handles, but Obol
+       commands must prefer the endpoint and must work when no `struct dm`
+       exists, as qged already does.
+    3. The endpoint owns or borrows its controller according to an explicit
+       creation flag.  It retains the selected host factory until close.
+       Close ordering is: stop/detach streams, stop callbacks, detach the
+       controller, destroy the host instance, release the factory reference,
+       then destroy an owned controller.
+    4. Registry state may be process-wide, but host instances and all mutable
+       display policy are per endpoint/view.  There must be no process-wide
+       "active display host" pointer.
+
+    Host factory ABI (libbrlobol)
+    --------------------------------
+
+    Replace the current single `BRLObolWindowHost`/imgstream display-host
+    registration with a copied, size/version checked callback table.  The
+    proposed factory record contains:
+
+    * `abi_version`, `struct_size`, stable name, priority, capability bits,
+      and caller user data;
+    * `probe(desc)`, `create(desc)`, and `destroy(instance)`;
+    * `bind_controller`, `request_frame`, `resize`, `capture`, `poll`, and
+      optional native-handle/context-manager accessors; and
+    * optional input and framebuffer-presentation callbacks.
+
+    Required capability bits initially include TOPLEVEL, EMBEDDED, SYSTEM_GL,
+    PIXEL_PRESENT, INPUT, READBACK, FRAMEBUFFER_PRESENT, PROGRESSIVE_PRESENT,
+    MULTI_VIEW, and THREAD_AFFINE.  Registration returns a token; unregister
+    is rejected while live endpoints reference the factory.  `libtclcad`
+    registers Tk/Togl and TkPhoto factories, and `libqtcad` registers Qt GL
+    and Qt image-presentation factories.  Command-line tools and tests may
+    explicitly register the headless factory.  With no compatible registered
+    host, a visible-window open fails cleanly; it must not silently construct
+    a different backend.  GLFW may later supply an optional factory, not a
+    hard libbrlobol dependency.
+
+    Toolkit calls (`create`, `destroy`, context activation, presentation, and
+    event delivery) occur on the host thread.  `request_frame` is the only
+    callback required to be callable from worker threads and must enqueue work.
+    No callback may run after close returns.  The API passes Obol context
+    managers as opaque handles at its C boundary so C hosts do not acquire a
+    C++ ABI dependency.
+
+    Render engines are not hosts
+    ----------------------------
+
+    The endpoint render-engine choices should be:
+
+    * `auto`: deterministic selection from host capabilities;
+    * `hw`: Obol through a host-provided system OpenGL context;
+    * `sw`: Obol through OSMesa, presented by the host;
+    * `rt`: an Obol render engine backed by BRL-CAD librt;
+    * `none`: retain controller and scene state but suppress rendering; and
+    * `diagnostic`: record traversal/render diagnostics without pretending to
+      be a graphical host.
+
+    Explicit `hw`, `sw`, and `rt` requests fail if their requirements cannot
+    be met.  They do not fall back.  FAST versus QUALITY remains a separate
+    OSMesa wire policy.  `nu` can temporarily alias `none`, and `txt` can alias
+    `diagnostic`; `rt` is not a compatibility spelling or an alias.
+
+    A render engine declares whether it renders directly into a host context
+    or publishes pixel/depth/identity frames for host presentation.  `hw` is
+    direct-context; `sw` and `rt` are pixel-producing engines.  This keeps
+    Togl/Qt GL context ownership out of librt and lets TkPhoto, Qt images, or a
+    headless consumer present the same librt result.
+
+    The `rt` engine consumes the same authoritative Obol scene identity,
+    camera, viewport, visibility, and style state as the raster engines.
+    libbrlobol maintains a retained, revision-keyed librt scene/acceleration
+    snapshot and updates only changed sources; a camera-only frame must not
+    re-walk or rebuild the database.  Rendering is tiled and progressive, with
+    a generation number and cancellation on camera or scene changes.  Partial
+    and final frames publish through the endpoint presentation contract.
+    Optional depth and object-identity planes support composition and exact
+    interaction without making selection depend on displayed pixel quality.
+    Frame budget, worker count, sampling, and progressive quality are typed
+    `render.rt.*` properties, not global librt settings.
+
+    Obol's Embree example is a useful proof of the render-engine seam, and an
+    Embree engine may remain available where configured, but it does not
+    replace the BRL-CAD-native `rt` engine or define its public semantics.
+
+    `plot` and `ps` are exports, not render engines or hosts.  Move them to an
+    Obol export action (with plot/PS/SVG serializers as appropriate) and delete
+    the DM plugins.  `ert` remains an explicit raytrace-to-imgstream command;
+    selecting the retained interactive `rt` engine is not equivalent to
+    launching an `ert` subprocess.
+
+    Typed policy mapping
+    --------------------
+
+    Replace backend `bu_structparse` tables with a typed property descriptor
+    table shared by the endpoint API and GED command.  Each property has a
+    stable name, type, allowed values/range, mutability, capability predicate,
+    getter, and setter.  Unknown or unsupported properties fail explicitly.
+
+    * width, height, device-pixel ratio, title, visibility, vsync, and native
+      identity are host/endpoint metadata;
+    * background and software-wire mode are controller render policy;
+    * perspective, camera, z clipping, and navigation bounds belong to the
+      `bv` view/input policy, not to a render backend;
+    * depth test/write, lighting model, transparency mode, antialiasing, and
+      stereo are typed Obol render policy, subject to engine capabilities;
+    * foreground, line width/style, transparency, and font size are styles on
+      retained scene/faceplate features, not mutable global drawing state;
+    * framebuffer visibility/order is retained scene composition state;
+    * debug/log settings become named diagnostic categories/sinks; and
+    * backend cache flags disappear because retained rendering is the required
+      architecture, not an optional backend feature.
+
+    Matrix loads, coordinate conversion, clipping helpers, fog hints, draw
+    begin/end, HUD begin/end, depth-mask toggling, immediate primitives, swap,
+    and flush/sync are not endpoint policy.  Migrate their callers to camera
+    synchronization, feature stores, scene ordering, and host frame requests,
+    then delete those APIs.
+
+    Framebuffer split
+    -----------------
+
+    libimgstream owns memory/file/remote streams, fbserv backend operations,
+    pixel rectangles, view/cursor state, and transport.  libbrlobol adapts an
+    imgstream to `SoBRLImageSource`/`SoBRLViewportImage` and asks the endpoint
+    host to present it.  Replace `imgstream_fb_display_host_set`'s single global
+    host with a factory or per-open host binding using the same endpoint
+    registry rules.
+
+    Display framebuffer specifications fail if no compatible application host
+    is registered.  Memory, file, and remote streams remain usable without a
+    GUI.  `ert` already prefers this architecture and its `dm_get_fb` fallback
+    should be deleted after host migration.  The standalone `fb_*` compatibility
+    surface and utilities should move to an imgstream compatibility library so
+    they no longer force all of legacy libdm to remain linked.
+
+    Immediate drawing migration
+    ---------------------------
+
+    * database geometry: GED draw transactions and Obol database sources;
+    * faceplate, labels, grid, ADC, axes, rubber band, menus, and center dot:
+      `BRLObolFeatureStore` records synchronized only when state changes;
+    * edit previews and selection: existing libbrlobol retained stores;
+    * camera/projection: controller synchronization from the `bv` view;
+    * framebuffer underlay/overlay: viewport image nodes and scene ordering;
+    * `plot3-dm`: a small retained Obol viewer/importer, not immediate DM calls.
+
+    MGED's current post-sync calls to `dm_draw_string_2d`, `dm_draw_line_2d`,
+    and similar functions are already no-ops in the Obol Tk host.  Delete them
+    once feature-store parity tests cover their output.  Do not implement those
+    callbacks in the new endpoint merely to ease migration.
+
+    Post-libdm `dm` GED command
+    ---------------------------
+
+    Keep the command name for scripts, but make it a view/display-endpoint
+    command rather than a plugin call-table inspector.  Target syntax:
+
+        dm status [-V view]
+        dm list [endpoints|hosts|renderers]
+        dm open [-V view] --host name --renderer auto|hw|sw|rt|none
+        dm close [-V view]
+        dm host [-V view]
+        dm renderer [-V view] [auto|hw|sw|rt|none|diagnostic]
+        dm get [-V view] [property ...]
+        dm set [-V view] property value
+        dm diagnostics [-V view]
+
+    `-V` names a view and is the canonical selector; `-d` remains a temporary
+    alias for scripts naming legacy DM instances.  `dm set software_wire` is
+    the first typed property and already works with both DM-backed MGED views
+    and DM-less qged endpoints.
+
+    Transitional aliases are `attach -> open`, `type -> host/renderer status`,
+    `types -> list hosts/renderers`, `initmsg -> diagnostics`, and `bg -> get/set
+    background`.  Raw backend `get/set` via `bu_structparse` is removed.  A
+    compatibility alias must translate into a typed operation; it must never
+    instantiate a compatibility renderer.  `screengrab` may remain its own
+    command but must use endpoint capture exclusively.
+
+    Execution order
+    ---------------
+
+    14A. Define the opaque endpoint, typed property descriptors, and GED
+         per-view endpoint slot.  Make status/get/set work without libdm.
+    14B. Implement the versioned multi-factory host registry and refactor the
+         existing headless, Qt, and Tk hosts into registered factories.
+    14C. Define Obol's render-engine contract for direct-context and
+         pixel-producing engines.  Implement explicit
+         `auto/hw/sw/none/diagnostic` selection and capability failures.
+    14D. Stand up the retained librt-backed `rt` engine with revisioned scene
+         updates, progressive publication, cancellation, and typed policy.
+    14E. Convert the `dm` command to endpoint-first syntax and retain only the
+         translation aliases listed above.
+    14F. Replace the global imgstream display host with per-endpoint/factory
+         presentation; remove `ert`, screengrab, and libged image-command DM
+         fallbacks.
+    14G. Finish MGED/libtclcad faceplate and immediate-call migration, then
+         remove `dm-tkobol` and `dm-obol` compatibility wrappers.
+    14H. Replace plot/PS/txt/null plugins with export, diagnostic, and `none`
+         policies; delete the DM plugin loader and render call table.
+    14I. Move the remaining legacy framebuffer compatibility API/utilities onto
+         libimgstream and remove the final libdm link dependencies.
+
+    Required gates include multi-view host isolation, no-host failure, explicit
+    backend mismatch failure, host-thread callback checks, endpoint close with
+    active streams, qged DM-less command operation, MGED Tk hw/sw/rt operation,
+    qged Qt hw/sw/rt operation, input-binding parity, rt camera cancellation,
+    rt incremental scene updates, headless capture, framebuffer
+    underlay/overlay, `ert`, screengrab, plot/PS equivalence, and platform
+    runtime checks on X11, Windows, and macOS.  Deleting the call table is last;
+    adding new production uses of it is prohibited now.
 
 Verification Gates
 ------------------

@@ -217,6 +217,17 @@ _dm_view_for_dm(struct ged *gedp, struct dm *dmp)
     return NULL;
 }
 
+static void *
+_dm_obol_target_view(struct _ged_dm_info *gd, struct bu_vls *dm_name)
+{
+    if (!gd || !gd->gedp)
+	return NULL;
+    if (!dm_name || !bu_vls_strlen(dm_name))
+	return ged_view_active_ctx(gd->gedp);
+    struct dm *dmp = _dm_name_lookup(gd, bu_vls_cstr(dm_name));
+    return _dm_view_for_dm(gd->gedp, dmp);
+}
+
 static const char *
 _dm_software_wire_name(int mode)
 {
@@ -514,19 +525,13 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
     int ac = bu_opt_parse(NULL, argc, argv, d);
 
     struct _ged_dm_info *gd = (struct _ged_dm_info *)ds;
-    struct dm *cdmp = _dm_find(gd, &dm_name);
-    if (!cdmp) {
-	bu_vls_free(&dm_name);
-	return BRLCAD_ERROR;
-    }
-
     if (ac > 0 && BU_STR_EQUAL(argv[0], "software_wire")) {
-	void *view_ctx = _dm_view_for_dm(gd->gedp, cdmp);
+	void *view_ctx = _dm_obol_target_view(gd, &dm_name);
 	int mode = GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO;
 	if (!view_ctx ||
 	    !ged_draw_obol_software_wire_mode_get_for_view(view_ctx, &mode)) {
 	    bu_vls_printf(gd->gedp->ged_result_str,
-		    "display manager view has no Obol controller\n");
+		    "target view has no Obol controller\n");
 	    bu_vls_free(&dm_name);
 	    return BRLCAD_ERROR;
 	}
@@ -565,6 +570,12 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
 	_dm_cmd_during_clbk(gd, 4, cbav);
 	bu_vls_free(&dm_name);
 	return BRLCAD_OK;
+    }
+
+    struct dm *cdmp = _dm_find(gd, &dm_name);
+    if (!cdmp) {
+	bu_vls_free(&dm_name);
+	return BRLCAD_ERROR;
     }
 
     struct bu_structparse *dmparse = dm_get_vparse(cdmp);
