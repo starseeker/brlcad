@@ -196,7 +196,6 @@ extern void tclcad_view_data_unbind_view_ctx(void *view_ctx);
 TCLCAD_EXPORT extern int Bu_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Bn_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Dm_Init(Tcl_Interp *interp);
-TCLCAD_EXPORT extern int Fbo_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Ged_Init(Tcl_Interp *interp);
 
 /* Fb functions */

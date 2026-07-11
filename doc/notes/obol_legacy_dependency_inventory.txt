@@ -57,9 +57,12 @@ Current Clean Boundaries
 Remaining Compatibility Owners
 ------------------------------
 
-libtclcad still links libdm because its public Tcl command surface exposes
-generic display-manager and legacy framebuffer-object operations.  This is a
-compatibility edge, not drawing or widget ownership.  The supported Tk drawing
+libtclcad still links libdm for the Tk Obol host shell, active framebuffer
+composition, and three named Tcl compatibility services: MGED uses
+`dm_bestXType`/`dm_validXType`, Ged/Archer/MGED use `dm_list`, and morphedit
+uses `fb_common_file_size`.  Generic discovery and validation expose only
+`tkobol`, headless `obol`, and the explicit `nu` no-op.  The unsupported Tcl
+`fb_open` object API has been removed.  The supported Tk drawing
 widget, its vendored Togl implementation, and its Obol controller are compiled
 into libtclcad.  `tkobol` is registered as a built-in backend during `Dm_Init`;
 there is no `dm-tkobol` plugin target.  Togl owns the native window and GL
@@ -110,7 +113,7 @@ Removal Conditions
 
 | Area | Retained edge | Removal condition |
 | --- | --- | --- |
-| libtclcad/MGED | Generic DM/Tcl commands and legacy framebuffer objects | Replace or retire the public compatibility commands and neutralize remaining input/view shell APIs |
+| libtclcad/MGED | Named DM-selection commands and legacy framebuffer composition | Replace DM selection with Obol host options and move remaining framebuffer composition to imgstream |
 | standalone fbserv | Legacy `struct fb` construction and backend adapter | Supply an imgstream-native configured backend for all supported modes |
 | libdm | Non-graphical DM and framebuffer compatibility APIs | Remaining applications and utilities use libbv, libimgstream/libicv, or Obol hosts directly |
 | utilities | Some utility-specific libdm/libfb use | Convert each use to image files, imgstream, neutral view state, or Obol readback |

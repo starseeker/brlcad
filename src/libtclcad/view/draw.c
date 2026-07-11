@@ -42,28 +42,13 @@
 void
 go_draw(void *view_ctx)
 {
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp)
+    if (!view_ctx || !current_top || !current_top->to_gedp)
 	return;
 
-    mat_t model2view;
-    mat_t pmat;
-    const struct bv *view =
-	bv_context_view_const((const struct bv_context *)view_ctx);
-    if (!view)
-	return;
-    fastf_t perspective = bv_perspective_get(view);
-
-    bv_model2view_get(model2view, view);
-    bv_pmat_get(pmat, view);
-    (void)dm_loadmatrix(dmp, model2view, 0);
-
-    if (SMALL_FASTF < perspective)
-	(void)dm_loadpmatrix(dmp, pmat);
-    else
-	(void)dm_loadpmatrix(dmp, (fastf_t *)NULL);
-
-    dm_draw_objs(view_ctx);
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    txn.view = view_ctx;
+    (void)ged_draw_apply_transaction(current_top->to_gedp, &txn, NULL);
 }
 
 

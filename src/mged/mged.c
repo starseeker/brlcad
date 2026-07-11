@@ -71,7 +71,6 @@
 #include "libtermio.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
-#include "dm/obol.h"
 #include "tclcad.h"
 
 /* private */
@@ -2254,10 +2253,7 @@ mged_finish(struct mged_state *s, int exitcode)
 	if (p && p->dm_dmp) {
 	    if (s->gedp) {
 		ged_draw_obol_framebuffer_release(s->gedp);
-		void *controller = dm_obol_controller(p->dm_dmp);
-		if (controller)
-		    ged_draw_obol_controller_detach_opaque(s->gedp,
-			    controller);
+		mged_obol_display_detach(s, p->dm_dmp);
 	    }
 	    dm_close(p->dm_dmp);
 	    mged_slider_free_vls(p);

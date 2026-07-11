@@ -21,10 +21,8 @@
  *
  * MGED scene refresh for normal and stereo eyes.
  *
- * Obol display managers refresh through the high-level GED draw transaction
- * path and let the outer MGED frame's dm_draw_end render the retained
- * Obol/Coin scene.  Older non-Obol display managers still use the legacy
- * immediate draw fallback until those display paths are retired.
+ * MGED refreshes through the GED draw transaction path and lets the outer
+ * frame's dm_draw_end render the retained Obol/Coin scene.
  */
 
 #include "common.h"
@@ -52,39 +50,20 @@ mat_t identity;
 /* This is a holding place for the current display managers default wireframe color */
 unsigned char geometry_default_color[] = { 255, 0, 0 };
 
-/* Count draw records whose drawn revision matches the view's current
- * current retained-view frame revision, i.e. shapes that were actually
- * painted in the frame just rendered.  Stored in the view refresh record for
- * mouse-pick sequencing. */
-struct _mged_count_drawn_ctx {
-    int *np;
-    uint64_t frame_rev;
-};
-static int
-_mged_count_drawn_cb(const struct ged_draw_shape_record *rec, void *userdata)
-{
-    struct _mged_count_drawn_ctx *ctx =
-	(struct _mged_count_drawn_ctx *)userdata;
-    if (rec && rec->drawn_revision == ctx->frame_rev)
-	(*ctx->np)++;
-    return 1; /* continue traversal */
-}
-
-static int
-_mged_high_level_refresh(struct mged_state *s, void *view_ctx)
+static void
+_mged_obol_refresh(struct mged_state *s, void *view_ctx)
 {
     if (!s || !s->gedp || !view_ctx || !DMP ||
 	    !ged_draw_obol_controller_opaque_for_view(view_ctx))
-	return 0;
+	return;
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     struct ged_draw_transaction_result result;
     ged_draw_transaction_result_init(&result);
     txn.view = view_ctx;
-    int ret = ged_draw_apply_transaction(s->gedp, &txn, &result);
+    (void)ged_draw_apply_transaction(s->gedp, &txn, &result);
     ged_draw_transaction_result_free(&result);
-    return ret >= 0 ? 1 : 0;
 }
 
 /*
@@ -94,14 +73,12 @@ _mged_high_level_refresh(struct mged_state *s, void *view_ctx)
  * which_eye == 1  Stereo right eye.
  * which_eye == 2  Stereo left eye.
  *
- * In the Obol case rendering is prepared by a GED redraw transaction; the
- * legacy fallback still calls dm_draw_objs().  The stereo case differs from
- * the non-stereo case only in that:
+ * Rendering is prepared by a GED redraw transaction.  The stereo case differs
+ * from the non-stereo case only in that:
  *   - v->gv_pmat is overridden with a Deering eye-offset perspective for
  *     the duration of the call;
- *   - dm_loadmatrix(DMP, gv_model2view, which_eye) is called once before
- *     refresh so legacy GL display managers can select the correct stereo
- *     viewport/scissor region.
+ *   - dm_loadmatrix(DMP, gv_model2view, which_eye) selects the Obol host's
+ *     stereo viewport before refresh.
  */
 void
 dozoom(struct mged_state *s, int which_eye)
@@ -193,25 +170,10 @@ dozoom(struct mged_state *s, int which_eye)
 	dm_loadmatrix(DMP, model2view, which_eye);
     }
 
-    int high_level_refresh = _mged_high_level_refresh(s, view_ctx);
-    if (!high_level_refresh) {
-	/* Legacy fallback for non-Obol display managers. */
-	dm_draw_objs(view_ctx);
-    }
+    _mged_obol_refresh(s, view_ctx);
 
     /* Restore gv_pmat (no-op for which_eye == 0). */
     bv_pmat_set(view, saved_pmat);
-
-    /* Legacy tablet picking uses the immediate-mode frame revision.  Obol
-     * builds its illuminate candidate snapshot lazily in usepen.c. */
-    if (!high_level_refresh && s->gedp && ged_draw_scene_available(s->gedp)) {
-	int ndrawn = 0;
-	struct _mged_count_drawn_ctx ctx;
-	ctx.np = &ndrawn;
-	ctx.frame_rev = bv_frame_revision_get(view);
-	ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
-	bv_refresh_drawn_count_set(view, ndrawn);
-    }
 
     if (s->mged_curr_dm != save_dm_list) set_curr_dm(s, save_dm_list);
 }

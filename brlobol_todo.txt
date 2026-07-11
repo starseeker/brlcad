@@ -400,27 +400,31 @@ Priority 2: Performance, Cleanup, and Deletion
     and the normal Ninja build.  Windows and macOS Tk-host runtime validation
     remains intentionally deferred; it must not restore WGL/OGL DM ownership.
 
-12. In progress: delete unreachable drawing compatibility shims.
+12. Completed on Linux: delete unreachable drawing compatibility shims.
 
-    * Remove `QgObolDatabaseSync` once its remaining test-only direct-source
-      cases are expressed through GED transactions or libbrlobol source APIs.
-      Shared Qt views must not regain a second controller-local copy of GED
-      geometry to preserve this compatibility surface.
-    * Delete MGED `dozoom`/redraw branches that still describe or call a
-      non-Obol display-manager fallback after Linux, Windows, and macOS confirm
-      `tkobol` as the sole graphical Tk host.  Keep `dm-obol` only as the
-      explicit headless attachment.
-    * Inventory libtclcad's remaining generic Tcl DM and framebuffer-object
-      commands.  Move durable neutral behavior to GED, libbrlobol, or
-      libimgstream, then remove compatibility commands that have no supported
-      application caller.
-    * Extend the pivot guard to reject new local shared-scene replication and
-      new non-Obol graphical redraw branches, not merely retired library names.
+    * Deleted the test-only `QgObolDatabaseSync` direct-source bridge and its
+      independent-view replication tests.  Qt drawing tests now exercise only
+      GED transactions and the libbrlobol publication path.
+    * MGED `dozoom` and libtclcad view refresh no longer call immediate-mode
+      `dm_draw_objs` fallbacks.  Both hosts prepare retained drawing with GED
+      REDRAW transactions; `tkobol` is the graphical Tk host and `dm-obol`
+      remains the explicit headless attachment.
+    * Removed libtclcad's uncalled Tcl `fb_open` object API and `Fbo_Init`
+      package surface.  Retained Tcl commands have named callers:
+      `dm_bestXType`/`dm_validXType` serve MGED, `dm_list` serves
+      Ged/Archer/MGED, and `fb_common_file_size` serves morphedit.
+    * Generic DM discovery and validation now report only `tkobol`, headless
+      `obol`, and explicit `nu`; registered plot/PostScript output helpers are
+      no longer selectable as interactive drawing backends.
+    * The pivot guard rejects restoration of the Qt direct-source bridge,
+      production qtcad controller-local database replication, MGED/libtclcad
+      immediate redraw fallbacks, the Tcl framebuffer-object API, and generic
+      non-Obol backend selection.
 
-    Exit condition: qged/qtcad and Tk hosts have no alternate graphical scene
-    synchronization path; every retained compatibility command has a named
-    caller and platform test; test-only shims are deleted rather than becoming
-    accidental public architecture.
+    Linux verification: pivot guard, `dm_test`, qtcad GED/Obol draw-sync test,
+    libtclcad build, and MGED build.  Windows and macOS host runtime validation
+    remains required, but those platforms must not restore alternate scene
+    synchronization or backend-selection paths.
 
 13.  Preserve the "fast" software wireframe only drawing mode as an option
      to the Obol software backend.

@@ -19,7 +19,6 @@
 #include "ged/draw.h"
 #include "ged/view.h"
 #include "QgLegacyViewContext.h"
-#include "QgObolDatabaseSyncPrivate.h"
 #include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
@@ -278,25 +277,6 @@ source_for_path_mode(BRLObolViewController *controller,
     return NULL;
 }
 
-static std::string
-source_instance_key_for_view(const char *view_name, const char *path)
-{
-    std::string key("ged-view:");
-    if (view_name)
-	key += view_name;
-    key += ":";
-    key += test_skip_leading_slash(path);
-    return key;
-}
-
-static SoBRLDatabaseSource *
-source_for_instance(BRLObolViewController *controller, const char *instanceKey)
-{
-    if (!controller || !instanceKey)
-	return NULL;
-    return controller->findDatabaseSourceInstance(instanceKey);
-}
-
 static int
 scene_display_summary_by_path(BRLObolViewController *controller,
 	const char *path,
@@ -420,7 +400,6 @@ main(int argc, char **argv)
     if (!camera)
 	FAIL("qtcad Obol controller should expose a camera for view sync");
     point_t offcenter = {100.0, 0.0, 0.0};
-    void *view_ctx = qg_legacy_view_to_context(view.view());
     bv_center_set(qg_legacy_view_bv(view.view()), offcenter);
     bv_scale_set(qg_legacy_view_bv(view.view()), 250.0);
     view.need_update(QG_VIEW_REFRESH);
@@ -613,61 +592,6 @@ main(int argc, char **argv)
 	    !source_for_path_mode(controller, "ball.s",
 		SoBRLDatabaseSource::SHADED))
 	FAIL("multi-path Obol draw sync should retain shared and representation-specific database sources");
-
-    const char *direct_path = "box.s";
-    if (!qg_obol_sync_database_sources(gedp->dbip, &direct_path, 1,
-	    QG_OBOL_DATABASE_SHADED, 123, &view))
-	FAIL("direct Obol database sync should replace a source without GED transaction input");
-    source = controller->getDatabaseSource(0);
-    if (!source ||
-	    source->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
-	    source->sourceRevision.getValue() != 123 ||
-	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	    source->getRealizedMeshCount() <= 0)
-	FAIL("direct Obol database sync should preserve draw mode, revision, and mesh geometry");
-    if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
-	FAIL("direct Obol database remove should remove one source without GED transaction input");
-    if (controller->getDatabaseSourceCount() != 0)
-	FAIL("direct Obol database remove should clear the local compatibility source");
-    if (!bv_name_set(qg_legacy_view_bv(view.view()), "QV0") ||
-	    ged_view_context_independent_scope_is_null(view_ctx, 1) ||
-	    !ged_view_context_is_independent(view_ctx))
-	FAIL("qtcad direct source-owner parity test should create an independent view scope");
-    const std::string scoped_box =
-	source_instance_key_for_view("QV0", "box.s");
-    const std::string scoped_ball =
-	source_instance_key_for_view("QV0", "ball.s");
-    if (!qg_obol_sync_database_sources(gedp->dbip, &direct_path, 1,
-	    QG_OBOL_DATABASE_WIREFRAME, 321, &view))
-	FAIL("direct Obol database sync should create scoped independent-view owners");
-    SoBRLDatabaseSource *scopedBoxSource =
-	source_for_instance(controller, scoped_box.c_str());
-    if (!scopedBoxSource ||
-	    !BU_STR_EQUAL(scopedBoxSource->path.getValue().getString(),
-		"box.s") ||
-	    controller->getDatabaseSourceCount() != 1)
-	FAIL("scoped direct Obol sync should create one local independent-view owner");
-    if (!qg_obol_remove_database_sources(&direct_path, 1, &view))
-	FAIL("direct Obol database remove should target scoped independent-view owners");
-    if (source_for_instance(controller, scoped_box.c_str()) ||
-	    controller->getDatabaseSourceCount() != 0)
-	FAIL("scoped direct Obol remove should clear the local independent-view owner");
-    if (!qg_obol_sync_database_sources(gedp->dbip, paths, 2,
-	    QG_OBOL_DATABASE_WIREFRAME, 654, &view))
-	FAIL("direct Obol database sync should create multiple scoped owners");
-    if (!source_for_instance(controller, scoped_box.c_str()) ||
-	    !source_for_instance(controller, scoped_ball.c_str()) ||
-	    controller->getDatabaseSourceCount() != 2)
-	FAIL("scoped direct Obol sync should retain two local independent-view owners");
-    if (!qg_obol_clear_database_sources(&view))
-	FAIL("direct Obol database clear should target the active source owner scope");
-    if (source_for_instance(controller, scoped_box.c_str()) ||
-	    source_for_instance(controller, scoped_ball.c_str()) ||
-	    controller->getDatabaseSourceCount() != 0)
-	FAIL("scoped direct Obol clear should clear local independent-view owners");
-    ged_view_context_independent_scope_destroy(view_ctx);
-    if (ged_view_context_is_independent(view_ctx))
-	FAIL("qtcad direct source-owner parity test should restore shared view scope");
 
     controller->clearDatabaseSources();
     if (controller->getDatabaseSourceCount() != 0)

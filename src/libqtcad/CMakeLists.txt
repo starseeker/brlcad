@@ -52,7 +52,6 @@ set(
   QgLegacyView.cpp
   QgMeasureFilter.cpp
   QgModel.cpp
-  QgObolDatabaseSync.cpp
   QgObolDrawSync.cpp
   QgObolExport.cpp
   QgObolMeasure.cpp
@@ -142,7 +141,6 @@ set(
   QgCanvasInput.h
   QgCanvasState.h
   QgLegacyViewContext.h
-  QgObolDatabaseSyncPrivate.h
   QgObolDrawSyncPrivate.h
   QgObolOverlaySyncPrivate.h
   QgObolSelectionSyncPrivate.h

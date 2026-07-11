@@ -700,6 +700,63 @@ function(_brlobol_guard_check_tkobol_host_ownership)
     [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
 endfunction()
 
+function(_brlobol_guard_check_unreachable_drawing_shims)
+  foreach(_retired
+      src/libqtcad/QgObolDatabaseSync.cpp
+      src/libqtcad/QgObolDatabaseSyncPrivate.h)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired}")
+      _brlobol_guard_fail("${_retired} restored the retired direct Qt database-source synchronization path")
+    endif()
+  endforeach()
+
+  _brlobol_guard_collect(_scene_files
+    src/libqtcad
+    src/qged)
+  foreach(_file IN LISTS _scene_files)
+    file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+    if(NOT "${_rel}" MATCHES "${_brlobol_guard_extensions}" OR
+       "${_rel}" MATCHES "/tests/")
+      continue()
+    endif()
+    file(READ "${_file}" _contents)
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[QgObolDatabaseSync]]
+      [[qg_obol_(sync|remove|clear)_database_sources]]
+      [[(^|[^A-Za-z0-9_])(replace|remove|clear)DatabaseSource(Instance|s)[A-Za-z0-9_]*[ \t\r\n]*\(]])
+  endforeach()
+
+  foreach(_rel
+      src/mged/dozoom.c
+      src/libtclcad/view/draw.c
+      src/libtclcad/view/refresh.c)
+    _brlobol_guard_read_rel(_contents "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[(^|[^A-Za-z0-9_])dm_draw_(objs|viewobjs)[ \t\r\n]*\(]])
+  endforeach()
+
+  foreach(_rel
+      include/tclcad/setup.h
+      src/libtclcad/tclcad_private.h
+      src/libtclcad/dm.c
+      src/libtclcad/fb.c)
+    _brlobol_guard_read_rel(_contents "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[(^|[^A-Za-z0-9_])Fbo_Init([^A-Za-z0-9_]|$)]]
+      [[Tcl_CreateCommand\([^\n]*"fb_open"]])
+  endforeach()
+
+  _brlobol_guard_read_rel(_dm_plugins "src/libdm/dm_plugins.cpp")
+  foreach(_needle
+      [[dm_is_obol_backend(d_it->first)]]
+      [[dm_is_obol_backend(key)]])
+    string(FIND "${_dm_plugins}" "${_needle}" _selection_idx)
+    if(_selection_idx EQUAL -1)
+      _brlobol_guard_fail(
+        "src/libdm/dm_plugins.cpp no longer limits generic DM discovery/validation to Obol backends (${_needle})")
+    endif()
+  endforeach()
+endfunction()
+
 function(_brlobol_guard_collect_active_scan_files _outvar)
   _brlobol_guard_collect(_files
     include/brlobol
@@ -730,6 +787,7 @@ _brlobol_guard_check_fbserv_transport_setup_helpers()
 _brlobol_guard_check_qged_fbserv_backend_access()
 _brlobol_guard_check_fbserv_backend_contract()
 _brlobol_guard_check_tkobol_host_ownership()
+_brlobol_guard_check_unreachable_drawing_shims()
 
 _brlobol_guard_collect_active_scan_files(_brlobol_guard_scan_files)
 foreach(_file IN LISTS _brlobol_guard_scan_files)

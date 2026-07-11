@@ -184,11 +184,7 @@ Dm_Init(Tcl_Interp *interp)
 #endif
 
 
-    /* initialize framebuffer object code */
-    Fbo_Init(interp);
-
     Tcl_PkgProvide(interp,  "Dm", brlcad_version());
-    Tcl_PkgProvide(interp,  "Fb", brlcad_version());
 
     return BRLCAD_OK;
 }

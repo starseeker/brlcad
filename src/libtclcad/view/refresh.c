@@ -39,7 +39,7 @@
 #include "../view/view.h"
 
 void
-go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
+go_refresh_draw(struct ged *UNUSED(gedp), void *draw_view_ctx, int restore_zbuffer)
 {
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(draw_view_ctx);
     if (!tvd)
@@ -57,18 +57,6 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
     if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_OVERLAY) {
 	if (rect.draw) {
 	    go_draw(draw_view_ctx);
-
-	    /* Phase T2-final: replaced dm_draw_viewobjs with dm_draw_objs.
-	     * Stash/restore gv_local2base|base2local to keep faceplate unit
-	     * display consistent with the database unit factors. */
-	    struct bv *view = bv_context_view((struct bv_context *)draw_view_ctx);
-	    fastf_t l2b = bv_local2base_get(view);
-	    fastf_t b2l = bv_base2local_get(view);
-	    bv_unit_conversion_set(view,
-		    gedp->dbip->dbi_local2base,
-		    gedp->dbip->dbi_base2local);
-	    dm_draw_objs(draw_view_ctx);
-	    bv_unit_conversion_set(view, l2b, b2l);
 
 	    /* disable write to depth buffer */
 	    (void)dm_set_depth_mask(dmp, 0);
@@ -146,18 +134,6 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int restore_zbuffer)
 
 	go_draw(draw_view_ctx);
     }
-
-    /* Render the full retained view-scope feature set and faceplate through
-     * the current draw host.  Stash/restore the unit-conversion factors as
-     * before. */
-    struct bv *view = bv_context_view((struct bv_context *)draw_view_ctx);
-    fastf_t l2b = bv_local2base_get(view);
-    fastf_t b2l = bv_base2local_get(view);
-    bv_unit_conversion_set(view,
-	    gedp->dbip->dbi_local2base,
-	    gedp->dbip->dbi_base2local);
-    dm_draw_objs(draw_view_ctx);
-    bv_unit_conversion_set(view, l2b, b2l);
 }
 
 void

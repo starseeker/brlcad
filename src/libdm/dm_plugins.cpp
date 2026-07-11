@@ -44,6 +44,12 @@
 #include "dm.h"
 #include "./include/private.h"
 
+static bool
+dm_is_obol_backend(const std::string &name)
+{
+    return name == "obol" || name == "tkobol";
+}
+
 
 extern "C" struct dm *
 dm_open(void *ctx, void *interp, const char *type, int argc, const char *argv[])
@@ -76,6 +82,8 @@ dm_have_graphics()
 
     for (d_it = dmb->begin(); d_it != dmb->end(); d_it++) {
 	std::string key = d_it->first;
+	if (!dm_is_obol_backend(key))
+	    continue;
 	const struct dm *d = d_it->second;
 	if (dm_graphical(d)) {
 	    ret = 1;
@@ -91,6 +99,11 @@ extern "C" const char *
 dm_graphics_system(const char *dmtype)
 {
     const char *ret = NULL;
+    std::string requested(dmtype ? dmtype : "");
+    std::transform(requested.begin(), requested.end(), requested.begin(),
+	[](unsigned char c) { return std::tolower(c); });
+    if (!dm_is_obol_backend(requested))
+	return ret;
 
     std::map<std::string, const struct dm *> *dmb = (std::map<std::string, const struct dm *> *)dm_backends;
     std::map<std::string, const struct dm *>::iterator d_it;
@@ -119,7 +132,6 @@ dm_graphics_system(const char *dmtype)
  * callers use dm-obol explicitly instead of a hidden software-raster DM.
  */
 static const char *priority_list[] = {"tkobol", NULL};
-
 
 extern "C" void
 dm_list_types(struct bu_vls *list, const char *separator)
@@ -166,6 +178,8 @@ dm_list_types(struct bu_vls *list, const char *separator)
 	if (checked.find(d_it->first) != checked.end()) {
 	    continue;
 	}
+	if (!dm_is_obol_backend(d_it->first))
+	    continue;
 	const struct dm *d = d_it->second;
 	const char *dname = dm_get_name(d);
 	if (dname) {
@@ -192,6 +206,8 @@ dm_validXType(const char *dpy_string, const char *name)
     std::map<std::string, const struct dm *> *dmb = (std::map<std::string, const struct dm *> *)dm_backends;
     std::string key(name);
     std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+    if (!dm_is_obol_backend(key))
+	return 0;
     std::map<std::string, const struct dm *>::iterator d_it = dmb->find(key);
 
     if (d_it == dmb->end()) {

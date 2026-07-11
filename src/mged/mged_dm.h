@@ -600,9 +600,6 @@ extern void cs_set_bg(const struct bu_structparse *, const char *, void *, const
 extern void mged_rtCmdNotify(int);
 
 /* indices into which_dm[] */
-#define DM_PLOT_INDEX 0
-#define DM_PS_INDEX 1
-
 struct mged_view_hook_state {
     struct dm *hs_dmp;
     struct _view_state *vs;

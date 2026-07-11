@@ -46,17 +46,14 @@ main(int UNUSED(argc), const char **argv)
     bu_log("nu valid: %d\n", vtype);
     vtype = dm_valid_type("plot", NULL);
     bu_log("plot valid: %d\n", vtype);
+    if (vtype)
+	bu_exit(1, "non-Obol plot backend was exposed by dm_valid_type\n");
     const char *av0 = "attach";
     struct dm *dmp;
     dmp = dm_open(NULL, NULL, "nu", 1, &av0);
     const char *name = dm_get_name(dmp);
     bu_log("dmp name: %s\n", (name)?name:"(NULL)");
     dm_close(dmp);
-    dmp = dm_open(NULL, NULL, "txt", 1, &av0);
-    name = dm_get_name(dmp);
-    bu_log("dmp name: %s\n", (name)?name:"(NULL)");
-    dm_close(dmp);
-
     bu_log("recommended type: %s\n", dm_bestXType(NULL));
 
     return 0;

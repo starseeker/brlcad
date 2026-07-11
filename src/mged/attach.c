@@ -194,6 +194,17 @@ mged_slider_free_vls(struct mged_dm *p)
 }
 
 
+void
+mged_obol_display_detach(struct mged_state *s, struct dm *dmp)
+{
+    if (!s || !s->gedp || !dmp)
+	return;
+
+    void *controller = dm_obol_controller(dmp);
+    if (controller)
+	ged_draw_obol_controller_detach_opaque(s->gedp, controller);
+}
+
 static int
 release(struct mged_state *s, char *name, int need_close)
 {
@@ -266,9 +277,7 @@ release(struct mged_state *s, char *name, int need_close)
 		s->mged_curr_dm->dm_view_state->vs_gvp, NULL);
 
     if (need_close) {
-	void *controller = dm_obol_controller(DMP);
-	if (s->gedp && controller)
-	    ged_draw_obol_controller_detach_opaque(s->gedp, controller);
+	mged_obol_display_detach(s, DMP);
 	dm_close(DMP);
     }
 
