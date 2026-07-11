@@ -2271,10 +2271,11 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     # set the size here in case the user didn't specify it in mged_default(ggeom)
     set height [expr [winfo screenheight $mged_gui($id,top)] - 70]
     set width $height
-    wm geometry $mged_gui($id,top) $width\x$height
-
-    # set geometry (i.e. size and position) according to mged_default(ggeom)
-    wm geometry $mged_gui($id,top) $mged_default(ggeom)
+    set ggeom $mged_default(ggeom)
+    if {[regexp {^[+-]} $ggeom]} {
+	set ggeom $width\x$height$ggeom
+    }
+    wm geometry $mged_gui($id,top) $ggeom
 
     wm protocol $mged_gui($id,top) WM_DELETE_WINDOW "dm_win_hide $id"
     wm protocol .$id WM_DELETE_WINDOW "cmd_win_hide $id"

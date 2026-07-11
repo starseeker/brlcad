@@ -81,15 +81,6 @@ struct ged_draw_highlight_ctx {
 };
 
 
-struct ged_draw_redraw_path_ctx {
-    struct ged *gedp;
-    struct db_full_path *obj_path;
-    void *view_ctx;
-    int found;
-    int ret;
-};
-
-
 struct ged_draw_redraw_shape_entry {
     ged_draw_shape_ref ref;
     void *view_ctx;
@@ -117,15 +108,6 @@ struct ged_draw_reexpand_source_ctx {
     const char *path;
     void *view_ctx;
     struct bu_ptbl groups;
-};
-
-
-struct ged_draw_lod_finalize_ctx {
-    struct ged *gedp;
-    void *first_view_ctx;
-    void **view_ctxs;
-    size_t view_ctx_count;
-    int ensured;
 };
 
 
@@ -875,81 +857,19 @@ _ged_draw_set_highlight(struct ged *gedp, const char *path, int highlighted)
 }
 
 
-static int
-_ged_draw_redraw_group_ref(struct ged *gedp, ged_draw_group_ref ref,
-			   int skip_subtractions, void *view_ctx)
+int
+ged_draw_redraw_group_ref(struct ged *gedp, ged_draw_group_ref ref,
+			  int UNUSED(skip_subtractions))
 {
     if (!gedp || ged_draw_group_ref_is_null(ref))
 	return -1;
-
-    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    if (!wdbp)
+    struct ged_draw_group_record_summary summary;
+    memset(&summary, 0, sizeof(summary));
+    if (!ged_draw_group_ref_record_summary(gedp, ref, &summary) ||
+	!summary.path || !summary.path[0])
 	return -1;
-
-    return ged_draw_group_ref_redraw_wireframe(gedp, ref, gedp->dbip,
-	    wdbp->wdb_initial_tree_state.ts_tol,
-	    wdbp->wdb_initial_tree_state.ts_ttol,
-	    view_ctx ? view_ctx : ged_draw_active_view_ctx(gedp),
-	    skip_subtractions);
-}
-
-
-int
-ged_draw_redraw_group_ref(struct ged *gedp, ged_draw_group_ref ref,
-			  int skip_subtractions)
-{
-    return _ged_draw_redraw_group_ref(gedp, ref, skip_subtractions, NULL);
-}
-
-
-static int
-_ged_draw_redraw_all_cb(const struct ged_draw_group_record *rec, void *ud)
-{
-    struct ged_draw_redraw_path_ctx *ctx =
-	(struct ged_draw_redraw_path_ctx *)ud;
-    if (!rec)
-	return 1;
-    if (ctx->view_ctx && !ged_draw_group_record_in_view(rec, ctx->view_ctx))
-	return 1;
-    void *redraw_view_ctx = ctx->view_ctx ? ctx->view_ctx :
-			    ((rec->in_view_scope && rec->view) ? rec->view :
-			     ged_draw_active_view_ctx(ctx->gedp));
-    int ret = _ged_draw_redraw_group_ref(ctx->gedp, rec->ref, 0,
-					 redraw_view_ctx);
-    if (ret < 0) {
-	ctx->ret = -1;
-	return 0;
-    }
-    ctx->found++;
-    return 1;
-}
-
-
-static int
-_ged_draw_redraw_path_cb(const struct ged_draw_group_record *rec, void *ud)
-{
-    struct ged_draw_redraw_path_ctx *ctx =
-	(struct ged_draw_redraw_path_ctx *)ud;
-    if (!rec)
-	return 1;
-    if (ctx->view_ctx && !ged_draw_group_record_in_view(rec, ctx->view_ctx))
-	return 1;
-    if (!rec->fullpath || rec->fullpath->fp_len <= 0) {
-	ctx->ret = -1;
-	return 0;
-    }
-
-    if (db_full_path_match_top(rec->fullpath, ctx->obj_path)) {
-	ctx->found = 1;
-	void *redraw_view_ctx = ctx->view_ctx ? ctx->view_ctx :
-				((rec->in_view_scope && rec->view) ? rec->view :
-				 ged_draw_active_view_ctx(ctx->gedp));
-	ctx->ret = _ged_draw_redraw_group_ref(ctx->gedp, rec->ref, 0,
-					      redraw_view_ctx);
-	return 0;
-    }
-
-    return 1;
+    return ged_draw_obol_database_sources_redraw(gedp, NULL, summary.path,
+	summary.draw_mode);
 }
 
 
@@ -959,38 +879,7 @@ _ged_draw_redraw(struct ged *gedp, const char *path, void *view_ctx)
     if (!gedp)
 	return -1;
 
-    if (!path) {
-	struct ged_draw_redraw_path_ctx ctx;
-	ctx.gedp = gedp;
-	ctx.obj_path = NULL;
-	ctx.view_ctx = view_ctx;
-	ctx.found = 0;
-	ctx.ret = 0;
-	ged_draw_foreach_group_record(gedp, _ged_draw_redraw_all_cb, &ctx);
-	if (ctx.ret < 0)
-	    return -1;
-	return ctx.found;
-    }
-
-    struct db_full_path obj_path;
-    db_full_path_init(&obj_path);
-    int ret = db_string_to_path(&obj_path, gedp->dbip,
-				ged_draw_dbpath_skip_lead_slash(path));
-    if (ret < 0)
-	return -1;
-
-    struct ged_draw_redraw_path_ctx ctx;
-    ctx.gedp = gedp;
-    ctx.obj_path = &obj_path;
-    ctx.view_ctx = view_ctx;
-    ctx.found = 0;
-    ctx.ret = 0;
-    ged_draw_foreach_group_record(gedp, _ged_draw_redraw_path_cb, &ctx);
-    db_free_full_path(&obj_path);
-
-    if (ctx.ret < 0)
-	return -1;
-    return ctx.found ? 1 : 0;
+    return ged_draw_obol_database_sources_redraw(gedp, view_ctx, path, -1);
 }
 
 
@@ -1204,47 +1093,6 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 
     bu_free(view_ctxs, "draw transaction view context array");
     return adjusted;
-}
-
-
-static int
-ged_draw_finalize_lod_shape_cb(const struct ged_draw_shape_record *rec,
-			       void *userdata)
-{
-    struct ged_draw_lod_finalize_ctx *ctx =
-	(struct ged_draw_lod_finalize_ctx *)userdata;
-    if (!ctx || !rec)
-	return 1;
-    if (ged_draw_shape_ref_lod_ensure(ctx->gedp, rec->ref,
-				      ctx->first_view_ctx, ctx->view_ctxs, ctx->view_ctx_count))
-	ctx->ensured++;
-    return 1;
-}
-
-
-static int
-ged_draw_finalize_lod_for_transaction(struct ged *gedp,
-				      void *view_ctx)
-{
-    if (!gedp || !view_ctx)
-	return 0;
-
-    void **view_ctxs = NULL;
-    size_t view_ctx_count = ged_draw_txn_view_array(gedp, view_ctx, &view_ctxs);
-    if (!view_ctx_count || !view_ctxs)
-	return 0;
-
-    struct ged_draw_lod_finalize_ctx ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.gedp = gedp;
-    ctx.first_view_ctx = view_ctx;
-    ctx.view_ctxs = view_ctxs;
-    ctx.view_ctx_count = view_ctx_count;
-
-    ged_draw_foreach_shape_record(gedp, ged_draw_finalize_lod_shape_cb, &ctx);
-
-    bu_free(view_ctxs, "draw transaction view context array");
-    return ctx.ensured;
 }
 
 
@@ -1779,9 +1627,6 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    break;
 	case GED_DRAW_TXN_REDRAW:
 	    ret = _ged_draw_redraw(gedp, path, txn->view);
-	    if (ret >= 0)
-		(void)ged_draw_finalize_lod_for_transaction(gedp,
-			txn->view ? txn->view : ged_draw_active_view_ctx(gedp));
 	    if (result)
 		result->redrawn_count = (ret > 0) ? ret : 0;
 	    break;

@@ -449,6 +449,9 @@ public:
 	BRLObolDatabaseSourceSummary &summary) const;
     SbBool getDatabaseSourceSummaryForPath(const char *sourcePath,
 	BRLObolDatabaseSourceSummary &summary) const;
+    int getDatabaseSourceInstanceCountForPath(const char *sourcePath) const;
+    SbBool getDatabaseSourceInstanceSummaryForPath(const char *sourcePath,
+	int instanceIndex, BRLObolDatabaseSourceSummary &summary) const;
     SbBool getDatabaseSourceSummaryForInstance(const char *sourceInstanceKey,
 	BRLObolDatabaseSourceSummary &summary) const;
     int getRealizedShapeSummaryCount(void) const;
@@ -513,6 +516,7 @@ private:
     mutable SbBool databaseSourceIndexValid;
     mutable std::unordered_map<std::string, SoGroup *> groupPathIndex;
     mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourcePathIndex;
+    mutable std::unordered_map<std::string, std::vector<SoBRLDatabaseSource *> > databaseSourcePathInstancesIndex;
     mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourceInstanceIndex;
     mutable std::unordered_map<std::string, SoGroup *> databaseSourceInstanceParentIndex;
     mutable std::vector<SoBRLDatabaseSource *> databaseSourceOrder;

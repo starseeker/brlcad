@@ -128,7 +128,7 @@ mged_dm_init(
 	return TCL_ERROR;
     ged_view_context_display_manager_set(view_state->vs_gvp, (void *)DMP);
     void *obol_controller = dm_obol_controller(DMP);
-    if (obol_controller &&
+    if (!obol_controller ||
 	!ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
 	    view_state->vs_gvp, obol_controller, 1)) {
 	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
@@ -136,15 +136,8 @@ mged_dm_init(
 	DMP = DM_NULL;
 	return TCL_ERROR;
     }
-    if (!ged_draw_obol_render_endpoint_ensure_for_view(s->gedp,
-	    view_state->vs_gvp, 1)) {
-	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
-	dm_close(DMP);
-	DMP = DM_NULL;
-	return TCL_ERROR;
-    }
 
-    /*XXXX this eventually needs to move into Ogl's private structure */
+    /* Keep the display host's scale and projection synchronized with MGED. */
     dm_set_vp(DMP, bv_scale_storage_get(mged_view_state_view(view_state)));
     dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 

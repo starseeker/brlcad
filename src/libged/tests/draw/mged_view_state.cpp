@@ -617,8 +617,49 @@ test_owned_render_endpoint(const char *datadir)
 	}
     }
 
+    unsigned char *deferred_root_image = NULL;
+    unsigned char *deferred_full_image = NULL;
+    if (!fail) {
+	const char *erase_av[2] = {"erase", "all.g"};
+	const char *deferred_av[3] = {
+	    "draw", "--defer-leaf-expansion", "all.g"
+	};
+	if (ged_exec_erase(gedp, 2, erase_av) != BRLCAD_OK ||
+	    ged_exec_draw(gedp, 3, deferred_av) != BRLCAD_OK) {
+	    bu_log("FAIL: owned-endpoint deferred draw failed: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	    fail = 1;
+	}
+    }
+
+    BRLObolProgressiveStatus root_status;
+    if (!fail &&
+	(controller->renderToImage(&deferred_root_image, 1, 0, NULL, NULL,
+	    &root_status) != BRLCAD_OK || !deferred_root_image ||
+	 !root_status.hasMore || root_status.changed ||
+	 memcmp(image, deferred_root_image, 384u * 384u * 3u) == 0)) {
+	bu_log("FAIL: deferred root frame should be distinct and request refinement\n");
+	fail = 1;
+    }
+
+    BRLObolProgressiveStatus full_status;
+    if (!fail &&
+	(controller->renderToImage(&deferred_full_image, 1, 0, NULL, NULL,
+	    &full_status) != BRLCAD_OK || !deferred_full_image ||
+	 full_status.hasMore || !full_status.changed ||
+	 memcmp(image, deferred_full_image, 384u * 384u * 3u) != 0)) {
+	bu_log("FAIL: deferred refinement should reproduce the direct image exactly\n");
+	fail = 1;
+    } else if (!fail) {
+	bu_log("PASS: deferred root refines to the exact direct image\n");
+    }
+
     if (image)
 	bu_free(image, "owned Obol render endpoint test image");
+    if (deferred_root_image)
+	bu_free(deferred_root_image, "owned Obol deferred root test image");
+    if (deferred_full_image)
+	bu_free(deferred_full_image, "owned Obol deferred full test image");
     ged_close(gedp);
     bu_file_delete("mged_view_state_t5.g");
     return fail;

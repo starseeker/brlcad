@@ -2733,7 +2733,7 @@ main(int argc, char *argv[])
     /* -o (developer option: use old GUI) */
     if (cl.old_gui_flag) {
 	bu_log("WARNING: -o is a developer option and subject to change.  Do not use.\n");
-	old_mged_gui = 0;
+	old_mged_gui = 1;
     }
 
     /* -x / --rt-debug  and  -X / --bu-debug: parse_debug_uint() stores the
@@ -3109,7 +3109,7 @@ main(int argc, char *argv[])
 		Tcl_DString temp;
 		const char *archer_trans;
 		Tcl_DStringInit(&temp);
-		const char *archer = bu_dir(NULL, 0, BU_DIR_DATA, "tclscripts", "archer", "archer_launch.tcl", NULL);
+		const char *archer = bu_dir(NULL, 0, BU_DIR_DATA, "tclscripts", "archer", "init", "archer_launch.tcl", NULL);
 		archer_trans = Tcl_TranslateFileName(s->interp, archer, &temp);
 		tclcad_set_argv(s->interp, argc, (const char **)argv);
 		status = Tcl_EvalFile(s->interp, archer_trans);

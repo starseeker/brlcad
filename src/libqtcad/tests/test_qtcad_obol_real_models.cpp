@@ -19,6 +19,7 @@
 #include "bu/time.h"
 #include "ged.h"
 #include "ged/draw.h"
+#include "icv.h"
 #include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgLegacyView.h"
@@ -87,6 +88,59 @@ lit_pixel_count(const QImage &image)
 	}
     }
     return count;
+}
+
+static int
+image_byte_diff(const QImage &a, const QImage &b)
+{
+    if (a.size() != b.size())
+	return -1;
+    QImage ar = a.convertToFormat(QImage::Format_RGBA8888);
+    QImage br = b.convertToFormat(QImage::Format_RGBA8888);
+    int different = 0;
+    for (int y = 0; y < ar.height(); y++) {
+	const unsigned char *ap = ar.constScanLine(y);
+	const unsigned char *bp = br.constScanLine(y);
+	for (int x = 0; x < ar.width() * 4; x++)
+	    different += ap[x] != bp[x];
+    }
+    return different;
+}
+
+static fastf_t
+image_ssim(const QImage &a, const QImage &b)
+{
+    if (a.size() != b.size())
+	return -1.0;
+    QImage ar = a.convertToFormat(QImage::Format_RGBA8888);
+    QImage br = b.convertToFormat(QImage::Format_RGBA8888);
+    icv_image_t *ai = icv_image_create((size_t)ar.width(),
+	(size_t)ar.height(), ICV_COLOR_SPACE_RGB);
+    icv_image_t *bi = icv_image_create((size_t)br.width(),
+	(size_t)br.height(), ICV_COLOR_SPACE_RGB);
+    if (!ai || !bi) {
+	if (ai)
+	    icv_destroy(ai);
+	if (bi)
+	    icv_destroy(bi);
+	return -1.0;
+    }
+    for (int y = 0; y < ar.height(); y++) {
+	const unsigned char *ap = ar.constScanLine(y);
+	const unsigned char *bp = br.constScanLine(y);
+	for (int x = 0; x < ar.width(); x++) {
+	    size_t offset = ((size_t)y * (size_t)ar.width() +
+		(size_t)x) * 3;
+	    for (int c = 0; c < 3; c++) {
+		ai->data[offset + (size_t)c] = ap[x * 4 + c] / 255.0;
+		bi->data[offset + (size_t)c] = bp[x * 4 + c] / 255.0;
+	    }
+	}
+    }
+    fastf_t score = icv_adiff(ai, bi, ICV_DIFF_SSIM);
+    icv_destroy(ai);
+    icv_destroy(bi);
+    return score;
 }
 
 static int
@@ -510,6 +564,7 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 0;
     }
+    controller->setViewportSize(220, 170);
     controller->clearDatabaseSources();
 
     struct ged_draw_appearance_settings appearance =
@@ -608,6 +663,66 @@ sync_draw_case(const struct model_case &testCase)
     if (view.legacyBackendInitialized()) {
 	fprintf(stderr, "%s:%s qtcad Obol real-model capture initialized the legacy display manager\n",
 		testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
+
+    struct ged_draw_transaction redrawTxn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    redrawTxn.view = qg_legacy_view_to_context(view.view());
+    struct ged_draw_transaction_result redrawResult;
+    ged_draw_transaction_result_init(&redrawResult);
+    phaseStart = bu_gettime();
+    int redrawRet = ged_draw_apply_transaction(gedp, &redrawTxn,
+	&redrawResult);
+    (void)qg_obol_sync_ged_draw_transaction(gedp, &redrawTxn,
+	&redrawResult, &view);
+    int64_t redrawUs = bu_gettime() - phaseStart;
+    print_timing(testCase, "redraw-transaction", phaseStart);
+    ged_draw_transaction_result_free(&redrawResult);
+    QCoreApplication::processEvents();
+    QImage redrawnImage;
+    view.get_viewport_image(redrawnImage);
+
+    struct ged_draw_transaction_result secondRedrawResult;
+    ged_draw_transaction_result_init(&secondRedrawResult);
+    int64_t secondRedrawStart = bu_gettime();
+    int secondRedrawRet = ged_draw_apply_transaction(gedp, &redrawTxn,
+	&secondRedrawResult);
+    (void)qg_obol_sync_ged_draw_transaction(gedp, &redrawTxn,
+	&secondRedrawResult, &view);
+    int64_t secondRedrawUs = bu_gettime() - secondRedrawStart;
+    ged_draw_transaction_result_free(&secondRedrawResult);
+    QCoreApplication::processEvents();
+    QImage secondRedrawnImage;
+    view.get_viewport_image(secondRedrawnImage);
+
+    fastf_t redrawSsim = image_ssim(redrawnImage, secondRedrawnImage);
+    int redrawByteDiff = image_byte_diff(redrawnImage, secondRedrawnImage);
+    int redrawLitPixels = lit_pixel_count(secondRedrawnImage);
+    int maxRasterDiff = redrawnImage.width() * redrawnImage.height() * 4 / 100;
+    struct geometry_counts redrawCounts = realized_geometry_counts(controller,
+	testCase.obolDrawMode, NULL, NULL);
+    if (redrawRet < 0 || secondRedrawRet < 0 ||
+	redrawUs > 10000000 || secondRedrawUs > 10000000 ||
+	controller->getDatabaseSourceCount() != sourceCount ||
+	redrawByteDiff < 0 || redrawByteDiff > maxRasterDiff ||
+	redrawCounts.shapeCount != counts.shapeCount ||
+	redrawCounts.segmentCount != counts.segmentCount ||
+	redrawCounts.meshCount != counts.meshCount ||
+	redrawCounts.triangleCount != counts.triangleCount) {
+	fprintf(stderr,
+		"%s:%s retained Obol redraw failed: ret=%d/%d elapsed=%.3f/%.3f sec sources=%d/%d image_diff=%d/%d ssim=%.9g lit=%d/%d geometry=%d,%d,%d,%d/%d,%d,%d,%d\n",
+		testCase.file, testCase.root, redrawRet, secondRedrawRet,
+		(double)redrawUs / 1000000.0,
+		(double)secondRedrawUs / 1000000.0,
+		controller->getDatabaseSourceCount(), sourceCount,
+		redrawByteDiff, maxRasterDiff, redrawSsim,
+		redrawLitPixels, lit_pixel_count(redrawnImage),
+		redrawCounts.shapeCount, redrawCounts.segmentCount,
+		redrawCounts.meshCount, redrawCounts.triangleCount,
+		counts.shapeCount, counts.segmentCount,
+		counts.meshCount, counts.triangleCount);
 	ged_close(gedp);
 	return 0;
     }

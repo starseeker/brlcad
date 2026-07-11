@@ -4557,7 +4557,8 @@ nmg_unbreak_handler(uint32_t *eup, void *state, int UNUSED(unused))
 
     eg = eu1->g.lseg_p;
     if (!eg) {
-	bu_log("nmg_unbreak_handler: no geometry for edge %p\n", (void *)e);
+	if (nmg_debug & NMG_DEBUG_BASIC)
+	    bu_log("nmg_unbreak_handler: no geometry for edge %p\n", (void *)e);
 	return;
     }
     NMG_CK_EDGE_G_EITHER(eg);

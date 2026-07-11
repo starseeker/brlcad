@@ -102,17 +102,33 @@ struct bigE_csg_eval_node {
     {}
 };
 
+struct bigE_face_edge_record {
+    point_t start;
+    vect_t dir;
+    vect_t unit_dir;
+
+    bigE_face_edge_record()
+    {
+	VSETALL(start, 0.0);
+	VSETALL(dir, 0.0);
+	VSETALL(unit_dir, 0.0);
+    }
+};
+
 struct bigE_face_record {
     struct faceuse *fu;
     struct face *face;
     point_t min_pt;
     point_t max_pt;
     plane_t plane;
+    std::vector<bigE_face_edge_record> edges;
+    bool edges_cached;
     size_t order;
 
     bigE_face_record() :
 	fu(NULL),
 	face(NULL),
+	edges_cached(false),
 	order(0)
     {
 	VSETALL(min_pt, 0.0);
@@ -2406,6 +2422,65 @@ bigE_build_leaf_face_index(union E_tree *leaf,
 
 
 static void
+bigE_cache_face_edges(bigE_face_record *face)
+{
+    if (!face || face->edges_cached)
+	return;
+
+    face->edges_cached = true;
+    if (!face->fu)
+	return;
+
+    struct loopuse *lu;
+    for (BU_LIST_FOR (lu, loopuse, &face->fu->lu_hd)) {
+	if (BU_LIST_FIRST_MAGIC(&lu->down_hd) != NMG_EDGEUSE_MAGIC)
+	    continue;
+	struct edgeuse *eu;
+	for (BU_LIST_FOR (eu, edgeuse, &lu->down_hd)) {
+	    struct vertex_g *v1 = eu->vu_p->v_p->vg_p;
+	    struct vertex_g *v2 = eu->eumate_p->vu_p->v_p->vg_p;
+	    if (!v1 || !v2)
+		continue;
+	    bigE_face_edge_record edge;
+	    VMOVE(edge.start, v1->coord);
+	    VSUB2(edge.dir, v2->coord, v1->coord);
+	    VMOVE(edge.unit_dir, edge.dir);
+	    VUNITIZE(edge.unit_dir);
+	    face->edges.push_back(edge);
+	}
+    }
+}
+
+
+static int
+bigE_isect_cached_edge_plane(fastf_t *dist,
+			     const bigE_face_edge_record &edge,
+			     const fastf_t *plane,
+			     const struct bn_tol *tol)
+{
+    const fastf_t norm_dist = plane[3] - VDOT(plane, edge.start);
+    const fastf_t slant_factor = VDOT(plane, edge.dir);
+    const fastf_t dot = VDOT(plane, edge.unit_dir);
+
+    if (slant_factor < -SMALL_FASTF && dot < -tol->perp) {
+	*dist = norm_dist / slant_factor;
+	return 1;
+    }
+    if (slant_factor > SMALL_FASTF && dot > tol->perp) {
+	*dist = norm_dist / slant_factor;
+	return 2;
+    }
+
+    *dist = 0.0;
+    if (norm_dist < -tol->dist)
+	return -2;
+    if (norm_dist > tol->dist)
+	return -1;
+    return 0;
+}
+
+
+static void
 bigE_collect_face_pairs(const bigE_leaf_face_index *a,
 			const bigE_leaf_face_index *b,
 			const struct bn_tol *tol,
@@ -3733,9 +3808,6 @@ Eplot(union E_tree *eptr,
 	    struct faceuse *fu1, *fu2;
 	    struct face *f1, *f2;
 	    plane_t pl1, pl2;
-	    struct loopuse *lu1, *lu2;
-	    struct edgeuse *eu1, *eu2;
-	    struct vertex_g *vg1a, *vg1b, *vg2a, *vg2b;
 	    struct bu_list *A, *B;
 
 	    leaf2_ptr = bigE_leaf_at(dgcdp, leaf2);
@@ -3808,7 +3880,7 @@ Eplot(union E_tree *eptr,
 			(size_t)face2_index >= face_indices[leaf2].faces.size())
 		    continue;
 
-		const bigE_face_record &face1 =
+		bigE_face_record &face1 =
 		    face_indices[leaf_no].faces[(size_t)face1_index];
 		fu1 = face1.fu;
 		f1 = face1.face;
@@ -3816,7 +3888,7 @@ Eplot(union E_tree *eptr,
 		    continue;
 		HMOVE(pl1, face1.plane);
 
-		const bigE_face_record &face2 =
+		bigE_face_record &face2 =
 		    face_indices[leaf2].faces[(size_t)face2_index];
 		fu2 = face2.fu;
 		f2 = face2.face;
@@ -3832,64 +3904,38 @@ Eplot(union E_tree *eptr,
 		    if (bg_coplanar(pl1, pl2, tol)) {
 			continue;
 		    }
+		    bigE_cache_face_edges(&face1);
+		    bigE_cache_face_edges(&face2);
 
 		    hit_count1=0;
 		    hit_count2=0;
-		    for (BU_LIST_FOR (lu1, loopuse, &fu1->lu_hd)) {
-			if (BU_LIST_FIRST_MAGIC(&lu1->down_hd) != NMG_EDGEUSE_MAGIC)
+		    for (const bigE_face_edge_record &edge : face1.edges) {
+			if (bigE_isect_cached_edge_plane(&dist, edge, pl2, tol) < 1)
+			    continue;
+			if (dist < -tol->dist || dist > 1.0 + tol->dist)
 			    continue;
 
-			for (BU_LIST_FOR (eu1, edgeuse, &lu1->down_hd)) {
-			    vg1a = eu1->vu_p->v_p->vg_p;
-			    vg1b = eu1->eumate_p->vu_p->v_p->vg_p;
-			    VSUB2(dir, vg1b->coord, vg1a->coord);
-
-			    /* find intersection of this edge with fu2 */
-
-			    if (bg_isect_line3_plane(&dist, vg1a->coord,
-						     dir, pl2,
-						     tol) < 1)
-				continue;
-
-			    if (dist < -tol->dist || dist > 1.0 + tol->dist)
-				continue;
-
-			    if (hit_count1 >= hits_avail1) {
-				hits_avail1 += HITS_BLOCK;
-				hits1 = (point_t *)bu_realloc(hits1,
-							      hits_avail1 * sizeof(point_t), "hits1");
-			    }
-			    VJOIN1(hits1[hit_count1], vg1a->coord, dist, dir);
-			    hit_count1++;
+			if (hit_count1 >= hits_avail1) {
+			    hits_avail1 += HITS_BLOCK;
+			    hits1 = (point_t *)bu_realloc(hits1,
+				    hits_avail1 * sizeof(point_t), "hits1");
 			}
+			VJOIN1(hits1[hit_count1], edge.start, dist, edge.dir);
+			hit_count1++;
 		    }
-		    for (BU_LIST_FOR (lu2, loopuse, &fu2->lu_hd)) {
-			if (BU_LIST_FIRST_MAGIC(&lu2->down_hd) != NMG_EDGEUSE_MAGIC)
+		    for (const bigE_face_edge_record &edge : face2.edges) {
+			if (bigE_isect_cached_edge_plane(&dist, edge, pl1, tol) < 1)
+			    continue;
+			if (dist < -tol->dist || dist > 1.0 + tol->dist)
 			    continue;
 
-			for (BU_LIST_FOR (eu2, edgeuse, &lu2->down_hd)) {
-			    vg2a = eu2->vu_p->v_p->vg_p;
-			    vg2b = eu2->eumate_p->vu_p->v_p->vg_p;
-			    VSUB2(dir, vg2b->coord, vg2a->coord);
-
-			    /* find intersection of this edge with fu1 */
-
-			    if (bg_isect_line3_plane(&dist, vg2a->coord,
-						     dir, pl1,
-						     tol) < 1)
-				continue;
-
-			    if (dist < -tol->dist || dist > 1.0 + tol->dist)
-				continue;
-
-			    if (hit_count2 >= hits_avail2) {
-				hits_avail2 += HITS_BLOCK;
-				hits2 = (point_t *)bu_realloc(hits2,
-							      hits_avail2 * sizeof(point_t), "hits2");
-			    }
-			    VJOIN1(hits2[hit_count2], vg2a->coord, dist, dir);
-			    hit_count2++;
+			if (hit_count2 >= hits_avail2) {
+			    hits_avail2 += HITS_BLOCK;
+			    hits2 = (point_t *)bu_realloc(hits2,
+				    hits_avail2 * sizeof(point_t), "hits2");
 			}
+			VJOIN1(hits2[hit_count2], edge.start, dist, edge.dir);
+			hit_count2++;
 		    }
 
 		    if (hit_count1 < 2 || hit_count2 < 2) {

@@ -294,10 +294,30 @@ Priority 2: Performance, Cleanup, and Deletion
     * Do not add CAD aggregation or redesign thin-shell candidates without a
       measured whole-path gain.  Keep boolweave as the default evaluator and
       keep shaded/hidden-line tessellation work separate from normal wire draw.
+    * Normal wire now preserves per-object Obol database sources across view
+      changes.  REDRAW checks source staleness and requests rendering without
+      replaying publication; Debug Havoc and Generic Twin redraw measure below
+      1 ms with unchanged source counts and geometry hashes.
+    * Exact path operations use a normalized path-to-instance index.  qged tree
+      rows cache their draw presentation state until existing draw-observer
+      notifications invalidate the affected items, eliminating the scene-wide
+      source sort and database walk previously performed for every paint.
+    * Mature persistence around stable identity `(database object, occurrence,
+      draw mode, view scope)`.  Track geometry, appearance, placement, and
+      selection revisions independently; database events must mark only affected
+      sources stale.  Share immutable geometry across occurrences, update source
+      display state in place, and apply add/remove diffs transactionally rather
+      than replacing complete path sets.
+    * The current post-fix Havoc interaction profile is rendering-bound in Obol
+      VList traversal and Mesa.  Investigate retained VList GPU buffers or
+      backend batching only with larger-model evidence; this work belongs in
+      Obol/libbrlobol, not another GED redraw layer.
 
     Exit condition: the Release corpus is deterministic; retained changes
     improve their targeted stage by at least 1.5x without small-model or normal
     wire regressions; any parallel result is merged in original job order.
+    GUI verification must include a real-model REDRAW transaction, repeated tree
+    painting, and interactive view changes, not only headless initial drawing.
 
 11. Completed on Linux: remove compatibility aliases and stale guards when
     dependencies permit.

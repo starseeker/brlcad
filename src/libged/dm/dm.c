@@ -495,8 +495,54 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
     struct bu_structparse *dmparse = dm_get_vparse(cdmp);
     void *mvars = dm_get_mvars(cdmp);
     if (!dmparse || !mvars) {
-	// No variables to set
-	bu_vls_printf(gd->gedp->ged_result_str, "display manager has not associated variables\n");
+	/* Standard display policy is part of libdm's public API and does not
+	 * require a backend-specific structparse table. */
+	int current = 0;
+	int property = 0;
+	if (ac > 0 && BU_STR_EQUAL(argv[0], "zclip")) {
+	    property = 1;
+	    current = dm_get_zclip(cdmp);
+	} else if (ac > 0 && BU_STR_EQUAL(argv[0], "zbuffer")) {
+	    property = 2;
+	    current = dm_get_zbuffer(cdmp);
+	} else if (ac > 0 && BU_STR_EQUAL(argv[0], "lighting")) {
+	    property = 3;
+	    current = dm_get_light(cdmp);
+	}
+
+	if (property && ac == 1) {
+	    bu_vls_printf(gd->gedp->ged_result_str, "%d", current);
+	    bu_vls_free(&dm_name);
+	    return BRLCAD_OK;
+	}
+	if (property && ac == 2) {
+	    int value = 0;
+	    char trailing = '\0';
+	    if (BU_STR_EQUAL(argv[1], "!")) {
+		value = !current;
+	    } else if (sscanf(argv[1], "%d%c", &value, &trailing) != 1) {
+		bu_vls_printf(gd->gedp->ged_result_str,
+			"invalid value '%s' for display manager property '%s'\n",
+			argv[1], argv[0]);
+		bu_vls_free(&dm_name);
+		return BRLCAD_ERROR;
+	    }
+	    if (property == 1)
+		dm_set_zclip(cdmp, value);
+	    else if (property == 2)
+		(void)dm_set_zbuffer(cdmp, value);
+	    else
+		(void)dm_set_light(cdmp, value);
+	    const char *cbav[4] = {"dm", "set", argv[0], argv[1]};
+	    _dm_cmd_during_clbk(gd, 4, cbav);
+	    bu_vls_free(&dm_name);
+	    return BRLCAD_OK;
+	}
+
+	bu_vls_printf(gd->gedp->ged_result_str,
+		"display manager property '%s' is not supported\n",
+		ac > 0 ? argv[0] : "");
+	bu_vls_free(&dm_name);
 	return BRLCAD_ERROR;
     }
 

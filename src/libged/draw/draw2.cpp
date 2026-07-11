@@ -355,7 +355,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     struct ged_draw_appearance_settings vs = GED_DRAW_APPEARANCE_SETTINGS_INIT;
 
     int drawing_modes[7] = {-1, 0, 0, 0, 0, 0, 0};
-    struct bu_opt_desc d[20];
+    struct bu_opt_desc d[21];
     BU_OPT(d[0],   "", "help",          "",                 NULL, &print_help,         "Print help and exit");
     BU_OPT(d[1],  "?", "",              "",                 NULL, &print_help,         "");
     BU_OPT(d[2],  "m", "mode",         "#",          &bu_opt_int, &drawing_modes[0],  "0=wireframe;1=shaded bots;2=shaded;3=evaluated wire;4=hidden line;5=evaluated points");
@@ -375,7 +375,8 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     BU_OPT(d[16],  "", "line-width",   "#",          &bu_opt_int, &vs.s_line_width,   "Override default line width");
     BU_OPT(d[17], "R", "no-autoview",   "",                 NULL, &no_autoview,       "Do not calculate automatic view, even if initial scene is empty.");
     BU_OPT(d[18],  "", "strict",        "",                 NULL, &vs.strict_fallback, "Do not fall back to wireframe when shaded or hidden-line tessellation fails");
-    BU_OPT_NULL(d[19]);
+    BU_OPT(d[19],  "", "defer-leaf-expansion", "",          NULL, &vs.defer_leaf_expansion, "Publish requested roots first and progressively expand database leaves");
+    BU_OPT_NULL(d[20]);
 
     /* If no args, must be wanting help */
     if (!argc) {

@@ -4,10 +4,10 @@ set -u
 
 usage()
 {
-    echo "Usage: $0 <build-dir> <output-dir> [repeat] [quick|full]" >&2
+    echo "Usage: $0 <build-dir> <output-dir> [repeat] [quick|full] [data-build-dir]" >&2
 }
 
-if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+if [ "$#" -lt 2 ] || [ "$#" -gt 5 ]; then
     usage
     exit 1
 fi
@@ -16,6 +16,7 @@ build_dir=$1
 output_dir=$2
 repeat=${3:-3}
 tier=${4:-quick}
+data_build_dir=${5:-$build_dir}
 perf_bin="$build_dir/bin/ged_draw_perf"
 
 if [ ! -x "$perf_bin" ]; then
@@ -72,28 +73,28 @@ run_case()
     echo "case=$label status=ok log=$log" | tee -a "$summary"
 }
 
-run_case moss_wire "$build_dir/share/db/moss.g" all.g ""
-run_case moss_evaluated "$build_dir/share/db/moss.g" all.g -m3
-run_case moss_shaded "$build_dir/share/db/moss.g" all.g -m2
-run_case moss_hidden "$build_dir/share/db/moss.g" all.g -m4
+run_case moss_wire "$data_build_dir/share/db/moss.g" all.g ""
+run_case moss_evaluated "$data_build_dir/share/db/moss.g" all.g -m3
+run_case moss_shaded "$data_build_dir/share/db/moss.g" all.g -m2
+run_case moss_hidden "$data_build_dir/share/db/moss.g" all.g -m4
 
-run_case m35_wire "$build_dir/share/db/m35.g" all.g ""
-run_case havoc_wire "$build_dir/share/db/havoc.g" havoc ""
-run_case generic_twin_wire "$build_dir/share/db/faa/Generic_Twin.g" all ""
+run_case m35_wire "$data_build_dir/share/db/m35.g" all.g ""
+run_case havoc_wire "$data_build_dir/share/db/havoc.g" havoc ""
+run_case generic_twin_wire "$data_build_dir/share/db/faa/Generic_Twin.g" all ""
 
 if [ "$tier" = "full" ]; then
-    run_case m35_evaluated "$build_dir/share/db/m35.g" all.g -m3
-    run_case havoc_evaluated "$build_dir/share/db/havoc.g" havoc -m3
+    run_case m35_evaluated "$data_build_dir/share/db/m35.g" all.g -m3
+    run_case havoc_evaluated "$data_build_dir/share/db/havoc.g" havoc -m3
     run_case generic_twin_evaluated \
-	"$build_dir/share/db/faa/Generic_Twin.g" all -m3
-    run_case m35_shaded "$build_dir/share/db/m35.g" all.g -m2
-    run_case havoc_shaded "$build_dir/share/db/havoc.g" havoc -m2
+	"$data_build_dir/share/db/faa/Generic_Twin.g" all -m3
+    run_case m35_shaded "$data_build_dir/share/db/m35.g" all.g -m2
+    run_case havoc_shaded "$data_build_dir/share/db/havoc.g" havoc -m2
     run_case generic_twin_shaded \
-	"$build_dir/share/db/faa/Generic_Twin.g" all -m2
-    run_case m35_hidden "$build_dir/share/db/m35.g" all.g -m4
-    run_case havoc_hidden "$build_dir/share/db/havoc.g" havoc -m4
+	"$data_build_dir/share/db/faa/Generic_Twin.g" all -m2
+    run_case m35_hidden "$data_build_dir/share/db/m35.g" all.g -m4
+    run_case havoc_hidden "$data_build_dir/share/db/havoc.g" havoc -m4
     run_case generic_twin_hidden \
-	"$build_dir/share/db/faa/Generic_Twin.g" all -m4
+	"$data_build_dir/share/db/faa/Generic_Twin.g" all -m4
 fi
 
 if [ "$failures" -ne 0 ]; then

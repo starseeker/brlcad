@@ -4,7 +4,7 @@ BRL-CAD Obol Debug Draw Performance Notes
 Scope
 -----
 
-These numbers characterize the current unoptimized debug build using
+The historical table below characterizes the initial debug build using
 `build/bin/ged_draw_perf`, the source target in `src/gtools/ged_draw_perf.cpp`.
 The probe owns a headless GED/Obol endpoint and has no libdm dependency.  All
 listed runs used `--profile --autoview --render`, a 512x512 render target, and
@@ -90,3 +90,43 @@ debug timing for optimization decisions:
 Continue to reduce normal-wire source publication/render traversal overhead
 without adding CAD aggregation unless fresh Release measurements prove it
 pays.  Treat full shaded/hidden-line tessellation as a separate workstream.
+
+July 2026 Retained-Source Results
+---------------------------------
+
+Normal wire publication and GUI redraw were profiled again with Havoc and
+Generic Twin after establishing indexed, persistent Obol database sources.
+
+* Obol node field metadata is now registered once per class rather than once
+  per instance.  Generic Twin normal-wire realization fell by about 30 percent
+  and warm whole-draw time fell by about 12 percent in the Release probe.
+* The scene controller maintains normalized path-to-instance indexes.  Exact
+  source operations no longer scan every database source, and removal of one
+  duplicate occurrence leaves another occurrence indexed for that path.
+* `GED_DRAW_TXN_REDRAW` no longer replays draw publication or enumerates shape
+  summaries.  It checks retained sources for stale realization, realizes once
+  only when necessary, and requests a render.  Debug Havoc redraw changed from
+  more than 20 seconds to 0.7 ms in `ged_draw_perf`; Generic Twin measured
+  0.6 ms.  Source counts and deterministic geometry hashes were unchanged.
+* The qged profile `qged_gui.perf` identified a separate presentation problem:
+  44.8 percent of sampled cycles were under `QTreeView::drawRow` because each
+  paint recomputed `ged_draw_path_state`, copied and stable-sorted all source
+  summaries, and walked database leaves.  `QgItem` now caches draw presentation
+  state and invalidates it from existing draw-observer notifications.
+* An interaction-only post-fix Havoc profile (five software-rendered viewport
+  drags) sampled about 735 million cycles.  `ged_draw_path_state` and GED redraw
+  work were no longer measurable.  Remaining active cost was real rendering:
+  about 47 percent below Obol scene traversal, 44 percent in
+  `SoBRLVListShape::GLRender`, with most of that in Mesa rasterization.
+
+Deferred-root startup is an explicit draw option rather than a changed default.
+The first stage publishes a root bounds proxy and the second stage promotes the
+same request to exact full detail.  Debug first-proxy times were about 89 ms for
+Havoc and 134 ms for Generic Twin.  Final normal-wire and shaded image hashes
+match direct full-detail draws.
+
+The next normal-wire rendering optimization, if larger models demonstrate a
+need, should target render batching or retained GPU buffers for VList sources.
+Do not reintroduce source aggregation into GED: the current profile shows that
+publication and redraw overhead have been removed and the remaining hot path is
+inside Obol/backend rendering.

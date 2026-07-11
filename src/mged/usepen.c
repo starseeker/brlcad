@@ -42,6 +42,60 @@
 
 struct mged_highlight_state mged_highlight = {GED_DRAW_SHAPE_REF_NULL_INIT, 0};
 
+struct mged_pen_pick_cache {
+    struct ged *gedp;
+    ged_draw_shape_ref *refs;
+    size_t count;
+    size_t capacity;
+    uint64_t scene_revision;
+    int valid;
+};
+
+static struct mged_pen_pick_cache pen_pick_cache = {0};
+
+static void
+mged_pen_pick_cache_clear(void)
+{
+    if (pen_pick_cache.refs)
+	bu_free(pen_pick_cache.refs, "MGED pen-pick refs");
+    memset(&pen_pick_cache, 0, sizeof(pen_pick_cache));
+}
+
+static int
+mged_pen_pick_cache_append(ged_draw_shape_ref ref, void *userdata)
+{
+    struct mged_pen_pick_cache *cache =
+	(struct mged_pen_pick_cache *)userdata;
+    if (!cache || ged_draw_shape_ref_is_null(ref))
+	return 1;
+    if (cache->count == cache->capacity) {
+	size_t capacity = cache->capacity ? cache->capacity * 2 : 64;
+	cache->refs = (ged_draw_shape_ref *)bu_realloc(cache->refs,
+		capacity * sizeof(ged_draw_shape_ref), "MGED pen-pick refs");
+	cache->capacity = capacity;
+    }
+    cache->refs[cache->count++] = ref;
+    return 1;
+}
+
+static void
+mged_pen_pick_cache_ensure(struct mged_state *s)
+{
+    if (!s || !s->gedp)
+	return;
+    uint64_t revision = ged_draw_scene_revision(s->gedp);
+    if (pen_pick_cache.valid && pen_pick_cache.gedp == s->gedp &&
+	pen_pick_cache.scene_revision == revision)
+	return;
+
+    mged_pen_pick_cache_clear();
+    pen_pick_cache.gedp = s->gedp;
+    pen_pick_cache.scene_revision = revision;
+    ged_draw_foreach_visible_shape_ref(s->gedp,
+	    mged_pen_pick_cache_append, &pen_pick_cache);
+    pen_pick_cache.valid = 1;
+}
+
 ged_draw_shape_ref
 mged_highlight_shape_ref(struct mged_state *s)
 {
@@ -77,51 +131,26 @@ mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref)
 void
 mged_highlight_clear(struct mged_state *s)
 {
+    mged_pen_pick_cache_clear();
     mged_highlight_set_shape_ref(s, GED_DRAW_SHAPE_REF_NULL);
 }
 
-/* Callback: select the shape at position 'count' in display order. */
-struct _highlight_pick_data {
-    int count;
-    ged_draw_shape_ref ref;
-};
-
-static int
-_highlight_pick_cb(const struct ged_draw_shape_record *rec, void *ud)
-{
-    struct _highlight_pick_data *d = (struct _highlight_pick_data *)ud;
-    if (rec && rec->visible) {
-	if (d->count-- == 0) {
-	    d->ref = rec->ref;
-	    return 0;
-	}
-    }
-    return 1;
-}
-
-
-/*
- * All shapes except the highlighted one are unhighlighted.  The highlighted
- * shape is recorded as a GED draw ref for MGED edit paths.
- */
+/* Preserve MGED's tablet-style vertical illuminate selection, but build its
+ * visible-source snapshot only while that interaction mode is active. */
 static void
-highlight_from_y(struct mged_state *s, int y) {
-    int count;
+highlight_from_y(struct mged_state *s, int y)
+{
+    mged_pen_pick_cache_ensure(s);
     void *view_ctx = view_state->vs_gvp;
-    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
-    int drawn_count = bv_refresh_drawn_count_get(view);
-
-    /*
-     * Divide the mouse into one vertical zone per shape painted in the last
-     * frame, and use the zone number as a sequential drawn-shape position.
-     */
-    count = ((fastf_t)y + RT_VIEW_MAX) * drawn_count / RT_VIEW_RANGE;
-
-    struct _highlight_pick_data d;
-    d.count = count;
-    d.ref = GED_DRAW_SHAPE_REF_NULL;
-    ged_draw_foreach_shape_record(s->gedp, _highlight_pick_cb, &d);
-    mged_highlight_set_shape_ref(s, d.ref);
+    ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
+    if (pen_pick_cache.count) {
+	fastf_t pos = ((fastf_t)y + RT_VIEW_MAX) / RT_VIEW_RANGE;
+	size_t index = (size_t)(pos * pen_pick_cache.count);
+	if (index >= pen_pick_cache.count)
+	    index = pen_pick_cache.count - 1;
+	ref = pen_pick_cache.refs[index];
+    }
+    mged_highlight_set_shape_ref(s, ref);
 
     /* Mirror the highlighted shape into the view interaction selection so
      * highlight rendering and resolved appearance see a typed record rather
@@ -157,10 +186,7 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
-    if (!bv_refresh_drawn_count_get(view)) {
-	return TCL_OK;
-    } else if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
+    if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
 	return TCL_OK;
     }
 

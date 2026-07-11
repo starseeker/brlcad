@@ -37,53 +37,15 @@ proc openmv { id w wc dpy dtype } {
     frame $wc.llF -relief sunken -borderwidth $mged_default(bd)
     frame $wc.lrF -relief sunken -borderwidth $mged_default(bd)
 
-    attach -d $dpy -t 0 -n $w.ul $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
+    foreach pane {ul ur ll lr} {
+	attach -d $dpy -t 0 -n $w.$pane $dtype
+	dm set zclip $mged_default(zclip)
+	dm set zbuffer $mged_default(zbuffer)
+	dm set lighting $mged_default(lighting)
+	set faceplate $mged_default(faceplate)
+	set orig_gui $mged_default(orig_gui)
+	set perspective_mode $mged_default(perspective_mode)
     }
-    catch {dm set zbuffer $mged_default(zbuffer)}
-    catch {dm set lighting $mged_default(lighting)}
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
-
-    attach -d $dpy -t 0 -n $w.ur $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
-    }
-    catch {dm set zbuffer $mged_default(zbuffer)}
-    catch {dm set lighting $mged_default(lighting)}
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
-
-    attach -d $dpy -t 0 -n $w.ll $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
-    }
-    catch {dm set zbuffer $mged_default(zbuffer)}
-    catch {dm set lighting $mged_default(lighting)}
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
-
-    attach -d $dpy -t 0 -n $w.lr $dtype
-    dm set zclip $mged_default(zclip)
-    if { $dtype == "rtgl" } {
-	dm set zclip 1
-	dm set zbuffer 1
-    }
-    catch {dm set zbuffer $mged_default(zbuffer)}
-    catch {dm set lighting $mged_default(lighting)}
-    set faceplate $mged_default(faceplate)
-    set orig_gui $mged_default(orig_gui)
-    set perspective_mode $mged_default(perspective_mode)
 
     set win_to_id($w.ul) $id
     set win_to_id($w.ur) $id

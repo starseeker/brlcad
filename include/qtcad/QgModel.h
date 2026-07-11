@@ -201,7 +201,9 @@ private:
 	struct directory *dp = nullptr;
 	QImage icon;
 	bool open_itm = false;
-	//int draw_state = 0;
+	mutable int draw_state = 0;
+	mutable bool draw_state_valid = false;
+	mutable void *draw_state_view_ctx = nullptr;
 	//bool select_state = false;
 };
 

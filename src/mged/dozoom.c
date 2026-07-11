@@ -71,15 +71,6 @@ _mged_count_drawn_cb(const struct ged_draw_shape_record *rec, void *userdata)
 }
 
 static int
-_mged_count_visible_cb(const struct ged_draw_shape_record *rec, void *userdata)
-{
-    int *np = (int *)userdata;
-    if (rec && rec->visible)
-	(*np)++;
-    return 1;
-}
-
-static int
 _mged_high_level_refresh(struct mged_state *s, void *view_ctx)
 {
     if (!s || !s->gedp || !view_ctx || !DMP ||
@@ -211,18 +202,14 @@ dozoom(struct mged_state *s, int which_eye)
     /* Restore gv_pmat (no-op for which_eye == 0). */
     bv_pmat_set(view, saved_pmat);
 
-    /* Count drawn objects for usepen.c zone-based picking. */
-    if (s->gedp && ged_draw_scene_available(s->gedp)) {
+    /* Legacy tablet picking uses the immediate-mode frame revision.  Obol
+     * builds its illuminate candidate snapshot lazily in usepen.c. */
+    if (!high_level_refresh && s->gedp && ged_draw_scene_available(s->gedp)) {
 	int ndrawn = 0;
-	if (high_level_refresh) {
-	    ged_draw_foreach_shape_record(s->gedp, _mged_count_visible_cb,
-		    &ndrawn);
-	} else {
-	    struct _mged_count_drawn_ctx ctx;
-	    ctx.np = &ndrawn;
-	    ctx.frame_rev = bv_frame_revision_get(view);
-	    ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
-	}
+	struct _mged_count_drawn_ctx ctx;
+	ctx.np = &ndrawn;
+	ctx.frame_rev = bv_frame_revision_get(view);
+	ged_draw_foreach_shape_record(s->gedp, _mged_count_drawn_cb, &ctx);
 	bv_refresh_drawn_count_set(view, ndrawn);
     }
 

@@ -263,6 +263,7 @@ index_database_sources_recursive(
     SoGroup *group,
     std::unordered_map<std::string, SoGroup *> &groupPathIndex,
     std::unordered_map<std::string, SoBRLDatabaseSource *> &pathIndex,
+    std::unordered_map<std::string, std::vector<SoBRLDatabaseSource *> > &pathInstancesIndex,
     std::unordered_map<std::string, SoBRLDatabaseSource *> &instanceIndex,
     std::unordered_map<std::string, SoGroup *> &instanceParentIndex,
     std::vector<SoBRLDatabaseSource *> &sourceOrder,
@@ -285,14 +286,16 @@ index_database_sources_recursive(
 	    const SbString instanceKey =
 		database_source_effective_instance_key(source);
 	    index_put(pathIndex, path.getString(), source);
+	    pathInstancesIndex[normalized_index_key(path.getString())].push_back(source);
 	    index_put(instanceIndex, instanceKey.getString(), source);
 	    parent_index_put(instanceParentIndex, instanceKey.getString(), group);
 	    source_order_put(sourceOrder, sourceOrderIndex, source);
 	}
 	if (node->isOfType(SoGroup::getClassTypeId()))
 	    index_database_sources_recursive(static_cast<SoGroup *>(node),
-					     groupPathIndex, pathIndex, instanceIndex, instanceParentIndex,
-					     sourceOrder, sourceOrderIndex);
+				     groupPathIndex, pathIndex, pathInstancesIndex,
+				     instanceIndex, instanceParentIndex,
+				     sourceOrder, sourceOrderIndex);
     }
 }
 
@@ -1276,6 +1279,7 @@ SoBRLSceneController::clearDatabaseSourceIndex(void) const
 {
     this->groupPathIndex.clear();
     this->databaseSourcePathIndex.clear();
+    this->databaseSourcePathInstancesIndex.clear();
     this->databaseSourceInstanceIndex.clear();
     this->databaseSourceInstanceParentIndex.clear();
     this->databaseSourceOrder.clear();
@@ -1300,6 +1304,8 @@ SoBRLSceneController::indexDatabaseSource(SoBRLDatabaseSource *source,
     const SbString path = source->path.getValue();
     const SbString instanceKey = database_source_effective_instance_key(source);
     index_put(this->databaseSourcePathIndex, path.getString(), source);
+    this->databaseSourcePathInstancesIndex[
+	normalized_index_key(path.getString())].push_back(source);
     index_put(this->databaseSourceInstanceIndex, instanceKey.getString(),
 	      source);
     parent_index_put(this->databaseSourceInstanceParentIndex,
@@ -1317,6 +1323,19 @@ SoBRLSceneController::unindexDatabaseSource(SoBRLDatabaseSource *source) const
     const SbString path = source->path.getValue();
     const SbString instanceKey = database_source_effective_instance_key(source);
     index_erase(this->databaseSourcePathIndex, path.getString());
+    const std::string normalizedPath = normalized_index_key(path.getString());
+    auto pathInstances = this->databaseSourcePathInstancesIndex.find(
+	normalizedPath);
+    if (pathInstances != this->databaseSourcePathInstancesIndex.end()) {
+	std::vector<SoBRLDatabaseSource *> &sources = pathInstances->second;
+	sources.erase(std::remove(sources.begin(), sources.end(), source),
+	    sources.end());
+	if (sources.empty()) {
+	    this->databaseSourcePathInstancesIndex.erase(pathInstances);
+	} else {
+	    this->databaseSourcePathIndex[normalizedPath] = sources.back();
+	}
+    }
     index_erase(this->databaseSourceInstanceIndex, instanceKey.getString());
     parent_index_erase(this->databaseSourceInstanceParentIndex,
 		       instanceKey.getString());
@@ -1334,6 +1353,7 @@ SoBRLSceneController::rebuildDatabaseSourceIndex(void) const
 
     this->groupPathIndex.clear();
     this->databaseSourcePathIndex.clear();
+    this->databaseSourcePathInstancesIndex.clear();
     this->databaseSourceInstanceIndex.clear();
     this->databaseSourceInstanceParentIndex.clear();
     this->databaseSourceOrder.clear();
@@ -1342,6 +1362,7 @@ SoBRLSceneController::rebuildDatabaseSourceIndex(void) const
 	index_database_sources_recursive(static_cast<SoGroup *>(this->root),
 					 this->groupPathIndex,
 					 this->databaseSourcePathIndex,
+					 this->databaseSourcePathInstancesIndex,
 					 this->databaseSourceInstanceIndex,
 					 this->databaseSourceInstanceParentIndex,
 					 this->databaseSourceOrder,
@@ -1481,6 +1502,9 @@ SoBRLSceneController::beginSceneMutationBatch(size_t expectedDatabaseSources,
 	if (expectedDatabaseSources > 0) {
 	    this->databaseSourcePathIndex.reserve(
 		this->databaseSourcePathIndex.size() + expectedDatabaseSources);
+	    this->databaseSourcePathInstancesIndex.reserve(
+		this->databaseSourcePathInstancesIndex.size() +
+		expectedDatabaseSources);
 	    this->databaseSourceInstanceIndex.reserve(
 		this->databaseSourceInstanceIndex.size() +
 		expectedDatabaseSources);
@@ -3506,6 +3530,42 @@ SoBRLSceneController::getDatabaseSourceSummaryForPath(
 	return FALSE;
     return this->databaseSourceSummaryForSource(
 	       this->findIndexedDatabaseSource(sourcePath), summary);
+}
+
+int
+SoBRLSceneController::getDatabaseSourceInstanceCountForPath(
+    const char *sourcePath) const
+{
+    if (!sourcePath || !sourcePath[0])
+	return 0;
+    if (!this->databaseSourceIndexValid)
+	this->rebuildDatabaseSourceIndex();
+
+    auto it = this->databaseSourcePathInstancesIndex.find(
+	normalized_index_key(sourcePath));
+    return it == this->databaseSourcePathInstancesIndex.end() ? 0 :
+	static_cast<int>(it->second.size());
+}
+
+SbBool
+SoBRLSceneController::getDatabaseSourceInstanceSummaryForPath(
+    const char *sourcePath,
+    int instanceIndex,
+    BRLObolDatabaseSourceSummary &summary) const
+{
+    summary = BRLObolDatabaseSourceSummary();
+    if (!sourcePath || !sourcePath[0] || instanceIndex < 0)
+	return FALSE;
+    if (!this->databaseSourceIndexValid)
+	this->rebuildDatabaseSourceIndex();
+
+    auto it = this->databaseSourcePathInstancesIndex.find(
+	normalized_index_key(sourcePath));
+    if (it == this->databaseSourcePathInstancesIndex.end() ||
+	static_cast<size_t>(instanceIndex) >= it->second.size())
+	return FALSE;
+    return this->databaseSourceSummaryForSource(
+	it->second[static_cast<size_t>(instanceIndex)], summary);
 }
 
 SbBool

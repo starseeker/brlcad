@@ -1901,8 +1901,15 @@ QgModel::data(const QModelIndex &index, int role) const
 	if (role == DirectoryInternalRole)
 		return QVariant::fromValue((void *)(qi->dp));
 	if (role == DrawnDisplayRole) {
+		void *view_ctx = qgmodel_active_view_context(this);
+		if (qi->draw_state_valid && qi->draw_state_view_ctx == view_ctx)
+			return QVariant(qi->draw_state);
 		std::string path = item_path(qi);
-		return QVariant(drawnPathState(path.c_str()));
+		qi->draw_state = (gedp && view_ctx) ?
+			ged_draw_path_state(gedp, view_ctx, path.c_str(), -1) : 0;
+		qi->draw_state_view_ctx = view_ctx;
+		qi->draw_state_valid = true;
+		return QVariant(qi->draw_state);
 	}
 	if (role == SelectDisplayRole) {
 		return QVariant(ged_selection_is_path_selected(gedp, nullptr, qi->path_hash()));
@@ -1967,6 +1974,8 @@ QgModel::notifyItemsChanged(const QVector<int> &roles)
 	for (QgItem *item : *items) {
 		if (!item)
 			continue;
+		if (roles.contains(DrawnDisplayRole))
+			item->draw_state_valid = false;
 		QModelIndex idx = NodeIndex(item);
 		if (idx.isValid()) {
 			emit dataChanged(idx, idx, roles);
@@ -1991,6 +2000,8 @@ QgModel::notifyItemSubtreeChanged(QgItem *item, const QVector<int> &roles,
 	}
 
 	if (notified.find(item) == notified.end()) {
+		if (roles.contains(DrawnDisplayRole))
+			item->draw_state_valid = false;
 		QModelIndex idx = NodeIndex(item);
 		if (idx.isValid()) {
 			emit dataChanged(idx, idx, roles);
@@ -2059,6 +2070,8 @@ QgModel::notifyPathItemsChanged(const char *path, const QVector<int> &roles,
 					changed += (int)(notified.size() -
 						before);
 				} else if (notified.find(item) == notified.end()) {
+					if (roles.contains(DrawnDisplayRole))
+						item->draw_state_valid = false;
 					QModelIndex idx = NodeIndex(item);
 					if (idx.isValid()) {
 						emit dataChanged(idx, idx, roles);

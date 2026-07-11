@@ -508,6 +508,7 @@ if(TARGET Qt6::Widgets)
     test_qtcad_obol_real_models
     libqtcad
     libged
+    libicv
     librt
     libbu
     Qt6::Widgets
@@ -519,6 +520,7 @@ if(NOT TARGET test_qtcad_obol_real_models AND TARGET Qt5::Widgets)
     test_qtcad_obol_real_models
     libqtcad
     libged
+    libicv
     librt
     libbu
     Qt5::Widgets

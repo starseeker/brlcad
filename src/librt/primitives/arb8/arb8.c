@@ -534,8 +534,9 @@ rt_arb_add_pnt(register pointp_t point, const char *title, struct prep_arb *pap,
 	    f = VDOT(afp->peqn, P_A);
 	    if (! NEAR_ZERO(f, RT_SLOPPY_DOT_TOL)) {
 		/* Non-planar face */
-		bu_log("arb(%s): face %s[%d] non-planar, dot=%g\n",
-		       name, title, ptno, f);
+		if (RT_G_DEBUG & RT_DEBUG_MESHING)
+		    bu_log("arb(%s): face %s[%d] non-planar, dot=%g\n",
+			   name, title, ptno, f);
 #ifdef CONSERVATIVE
 		return -1;			/* BAD */
 #endif

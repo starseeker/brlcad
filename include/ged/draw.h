@@ -1072,6 +1072,11 @@ ged_draw_shape_ref_index_for_path_hash(struct ged *gedp,
 				       ged_draw_shape_ref_index_cb cb,
 				       void *userdata);
 
+GED_EXPORT extern void
+ged_draw_foreach_visible_shape_ref(struct ged *gedp,
+				   ged_draw_shape_ref_index_cb cb,
+				   void *userdata);
+
 GED_EXPORT extern ged_draw_shape_ref
 ged_draw_advance_shape_ref(struct ged *gedp, ged_draw_shape_ref ref, int delta);
 

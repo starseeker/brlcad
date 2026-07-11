@@ -43,15 +43,18 @@
 #include <ged.h>
 #include "brlobol.h"
 #include "brlobol/performance.h"
+#include "ged/draw.h"
 #include "ged/draw_obol.h"
 
 struct options {
     bool autoview = false;
     bool render = false;
     bool profile = false;
+    bool redraw = false;
     int width = 512;
     int height = 512;
     int repeat = 1;
+    int progressive_frames = 1;
     bool clear_cache = false;
     std::string cache_dir;
     std::string screengrab;
@@ -67,6 +70,7 @@ struct timings {
     double open_ms = 0.0;
     double endpoint_ms = 0.0;
     double draw_ms = 0.0;
+    double redraw_ms = 0.0;
     double autoview_ms = 0.0;
     double render_ms = 0.0;
     double screengrab_ms = 0.0;
@@ -89,9 +93,12 @@ usage(FILE *fp)
 	"  --autoview           run autoview after draw\n"
 	"  --render             render the GED-owned Obol endpoint to RGB\n"
 	"  --profile            enable Obol and evaluated-wire stage counters\n"
+	"  --redraw             run the front-end redraw-all transaction after draw\n"
 	"  --screengrab <file>  write a screengrab after draw/autoview\n"
 	"  --size <WxH>         render size (default: 512x512)\n"
 	"  --repeat <N>         repeat full open/endpoint/draw/close cycle\n"
+	"  --progressive-frames <N>\n"
+	"                       render up to N progressive frames (default: 1)\n"
 	"  --cache-dir <dir>    set BU_DIR_CACHE for this run\n"
 	"  --clear-cache        clear --cache-dir before the first iteration\n"
 	"  --lod-mesh <0|1>     run 'view lod mesh <0|1>' before draw\n"
@@ -198,6 +205,10 @@ parse_args(int argc, const char **argv, struct options *opts)
 	    opts->profile = true;
 	    continue;
 	}
+	if (BU_STR_EQUAL(arg, "--redraw")) {
+	    opts->redraw = true;
+	    continue;
+	}
 	if (BU_STR_EQUAL(arg, "--clear-cache")) {
 	    opts->clear_cache = true;
 	    continue;
@@ -222,6 +233,12 @@ parse_args(int argc, const char **argv, struct options *opts)
 	}
 	if (BU_STR_EQUAL(arg, "--repeat")) {
 	    if (++i >= argc || !parse_positive_int(argv[i], &opts->repeat))
+		return false;
+	    continue;
+	}
+	if (BU_STR_EQUAL(arg, "--progressive-frames")) {
+	    if (++i >= argc ||
+		    !parse_positive_int(argv[i], &opts->progressive_frames))
 		return false;
 	    continue;
 	}
@@ -394,7 +411,7 @@ run_autoview(struct ged *gedp)
 
 static int
 run_render(struct ged *gedp, BRLObolViewController *controller,
-	   unsigned char **image)
+	   unsigned char **image, BRLObolProgressiveStatus *status)
 {
     void *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx || !controller || !image)
@@ -403,7 +420,7 @@ run_render(struct ged *gedp, BRLObolViewController *controller,
 	return BRLCAD_ERROR;
     (void)ged_draw_obol_view_context_faceplate_sync(gedp, view_ctx);
     return controller->renderToImage(image, 1, 0, NULL,
-	performance_context_manager(), NULL);
+	performance_context_manager(), status);
 }
 
 static int
@@ -442,6 +459,7 @@ run_once(const struct options &opts, int iter)
     int lod_ret = BRLCAD_OK;
     int cad_ret = BRLCAD_OK;
     int draw_ret = BRLCAD_OK;
+    int redraw_ret = BRLCAD_OK;
     int autoview_ret = BRLCAD_OK;
     int render_ret = BRLCAD_OK;
     int screengrab_ret = BRLCAD_OK;
@@ -451,6 +469,10 @@ run_once(const struct options &opts, int iter)
     unsigned char *image = NULL;
     uint64_t image_hash = 0;
     size_t image_nonzero = 0;
+    int progressive_frames = 0;
+    int progressive_more = 0;
+    size_t progressive_expanded = 0;
+    size_t progressive_remaining = 0;
     BRLObolViewController *controller = NULL;
 
     auto start = std::chrono::steady_clock::now();
@@ -488,6 +510,18 @@ run_once(const struct options &opts, int iter)
     }
 
     if (draw_ret == BRLCAD_OK) {
+	if (opts.redraw) {
+	    struct ged_draw_transaction txn =
+		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+	    struct ged_draw_transaction_result result;
+	    ged_draw_transaction_result_init(&result);
+	    start = std::chrono::steady_clock::now();
+	    const int txn_ret = ged_draw_apply_transaction(gedp, &txn, &result);
+	    t.redraw_ms = elapsed_ms(start);
+	    ged_draw_transaction_result_free(&result);
+	    redraw_ret = txn_ret < 0 ? BRLCAD_ERROR : BRLCAD_OK;
+	}
+
 	source_count_ret = ged_draw_obol_database_source_count(gedp, 0,
 	    &source_count);
     }
@@ -501,7 +535,22 @@ run_once(const struct options &opts, int iter)
     if (draw_ret == BRLCAD_OK && autoview_ret == BRLCAD_OK &&
 	(opts.render || !opts.screengrab.empty())) {
 	start = std::chrono::steady_clock::now();
-	render_ret = run_render(gedp, controller, &image);
+	for (int frame = 0; frame < opts.progressive_frames; frame++) {
+	    if (image) {
+		bu_free(image, "ged_draw_perf intermediate image");
+		image = NULL;
+	    }
+	    BRLObolProgressiveStatus status;
+	    render_ret = run_render(gedp, controller, &image, &status);
+	    if (render_ret != BRLCAD_OK)
+		break;
+	    progressive_frames++;
+	    progressive_more = status.hasMore ? 1 : 0;
+	    progressive_expanded += status.expanded;
+	    progressive_remaining = status.remaining;
+	    if (!status.hasMore)
+		break;
+	}
 	t.render_ms = elapsed_ms(start);
     }
 
@@ -534,6 +583,8 @@ run_once(const struct options &opts, int iter)
 	std::fprintf(stderr, "ged_draw_perf: CAD setup failed: %s\n", result);
     if (draw_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: draw failed: %s\n", result);
+    if (redraw_ret != BRLCAD_OK)
+	std::fprintf(stderr, "ged_draw_perf: redraw failed: %s\n", result);
     if (autoview_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: autoview failed: %s\n", result);
     if (render_ret != BRLCAD_OK)
@@ -543,10 +594,14 @@ run_once(const struct options &opts, int iter)
 
     std::printf("iter=%d open_ms=%.3f endpoint_ms=%.3f draw_ms=%.3f",
 	iter, t.open_ms, t.endpoint_ms, t.draw_ms);
+    if (opts.redraw)
+	std::printf(" redraw_ms=%.3f", t.redraw_ms);
     if (opts.autoview)
 	std::printf(" autoview_ms=%.3f", t.autoview_ms);
     if (opts.render)
-	std::printf(" render_ms=%.3f", t.render_ms);
+	std::printf(" render_ms=%.3f progressive_frames=%d progressive_more=%d progressive_expanded=%zu progressive_remaining=%zu",
+	    t.render_ms, progressive_frames, progressive_more,
+	    progressive_expanded, progressive_remaining);
     if (!opts.screengrab.empty())
 	std::printf(" screengrab_ms=%.3f", t.screengrab_ms);
     if (image)
@@ -602,12 +657,14 @@ run_once(const struct options &opts, int iter)
     }
     std::printf(" status=%s\n",
 	(endpoint_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&
+	 redraw_ret == BRLCAD_OK &&
 	 lod_ret == BRLCAD_OK && cad_ret == BRLCAD_OK &&
 	 autoview_ret == BRLCAD_OK && render_ret == BRLCAD_OK &&
 	 screengrab_ret == BRLCAD_OK) ? "ok" : "error");
 
     int ret = (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
 	cad_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&
+	redraw_ret == BRLCAD_OK &&
 	autoview_ret == BRLCAD_OK && render_ret == BRLCAD_OK &&
 	screengrab_ret == BRLCAD_OK) ? 0 : 1;
 
@@ -641,9 +698,10 @@ main(int argc, const char **argv)
 	opts.db_path.c_str());
     for (size_t i = 0; i < opts.draw_args.size(); i++)
 	std::printf("%s%s", i ? " " : "", opts.draw_args[i].c_str());
-    std::printf(" repeat=%d size=%dx%d autoview=%d render=%d profile=%d screengrab=%s",
+    std::printf(" repeat=%d size=%dx%d autoview=%d render=%d profile=%d redraw=%d screengrab=%s",
 	opts.repeat, opts.width, opts.height, opts.autoview ? 1 : 0,
 	opts.render ? 1 : 0, opts.profile ? 1 : 0,
+	opts.redraw ? 1 : 0,
 	opts.screengrab.empty() ? "none" : opts.screengrab.c_str());
     std::printf(" cache_dir=%s clear_cache=%d lod_mesh=%d lod_csg=%d lod_bot_threshold=%d\n",
 	opts.cache_dir.empty() ? "ambient" : opts.cache_dir.c_str(),

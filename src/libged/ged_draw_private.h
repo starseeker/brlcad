@@ -1160,6 +1160,10 @@ GED_EXPORT extern int ged_draw_obol_database_source_records_foreach(
 	int skip_overlay_groups,
 	ged_draw_obol_database_source_record_cb cb,
 	void *userdata);
+GED_EXPORT extern int ged_draw_obol_visible_database_source_records_foreach_fast(
+	struct ged *gedp,
+	ged_draw_obol_database_source_record_cb cb,
+	void *userdata);
 GED_EXPORT extern int ged_draw_obol_shape_paths_foreach(
 	struct ged *gedp,
 	int skip_overlay_groups,
@@ -1558,6 +1562,12 @@ ged_draw_obol_database_source_realize_for_path(struct ged *gedp,
 	const char *path);
 GED_EXPORT extern int
 ged_draw_obol_database_source_realize_pending(struct ged *gedp);
+
+int
+ged_draw_obol_database_sources_redraw(struct ged *gedp,
+	void *view_ctx,
+	const char *path,
+	int draw_mode);
 GED_EXPORT extern int ged_draw_obol_scene_controller_ensure_owned(
 	struct ged *gedp,
 	int sync_current_scene);

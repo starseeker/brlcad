@@ -64,7 +64,7 @@ BRLObolProgressiveOptions::BRLObolProgressiveOptions(void) :
     maxChildrenPerSource(64),
     maxSubmissions(128),
     flags(BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
-	  BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES)
+	  BRLOBOL_PROGRESSIVE_FULL_DETAIL)
 {
 }
 
