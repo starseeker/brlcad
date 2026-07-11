@@ -1744,7 +1744,8 @@ rt_bot_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
 	point_t center;
 
 	rt_bot_centroid(&center, ip);
-	bu_log("center pt = (%f %f %f)\n", V3ARGS(center));
+	if (RT_G_DEBUG & RT_DEBUG_MESHING)
+	    bu_log("center pt = (%f %f %f)\n", V3ARGS(center));
 
 	/* get the faces that use each vertex */
 	for (i = 0; i < bot_ip->num_vertices; i++) {
@@ -1761,7 +1762,8 @@ rt_bot_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
 		    }
 		}
 	    }
-	    bu_log("Vertex #%zu appears in %zu faces\n", i, faceCount);
+	    if (RT_G_DEBUG & RT_DEBUG_MESHING)
+		bu_log("Vertex #%zu appears in %zu faces\n", i, faceCount);
 	    if (faceCount == 0) {
 		continue;
 	    }
@@ -1775,7 +1777,9 @@ rt_bot_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, co
 			planes[i][3] = VDOT(planes[i], &bot_ip->vertices[bot_ip->faces[faces[i]*3]*3]);
 		    }
 		    plane = planes[i];
-		    bu_log("\tplane #%zu = (%f %f %f %f)\n", i, V4ARGS(plane));
+		    if (RT_G_DEBUG & RT_DEBUG_MESHING)
+			bu_log("\tplane #%zu = (%f %f %f %f)\n", i,
+			    V4ARGS(plane));
 		}
 	}
 	return -1;

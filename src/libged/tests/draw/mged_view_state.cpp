@@ -650,9 +650,10 @@ main(int argc, char *argv[])
     failures += test_multi_obol_dm_attachment(datadir);
     failures += test_obol_rt_framebuffer_cache(datadir);
     failures += test_owned_render_endpoint(datadir);
+    failures += test_owned_render_endpoint(datadir);
 
     if (failures == 0) {
-	bu_log("\nAll MGED view-state tests PASSED (%d/5)\n", 5);
+	bu_log("\nAll MGED view-state tests PASSED (%d/6)\n", 6);
     } else {
 	bu_log("\n%d MGED view-state test(s) FAILED\n", failures);
     }

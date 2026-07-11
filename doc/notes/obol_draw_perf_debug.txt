@@ -6,8 +6,16 @@ Scope
 
 These numbers characterize the current unoptimized debug build using
 `build/bin/ged_draw_perf`, the source target in `src/gtools/ged_draw_perf.cpp`.
-All listed runs used `--profile --autoview --render`, a 512x512 Obol DM, and a
-fresh temporary cache directory with `--clear-cache`.
+The probe owns a headless GED/Obol endpoint and has no libdm dependency.  All
+listed runs used `--profile --autoview --render`, a 512x512 render target, and
+a fresh temporary cache directory with `--clear-cache`.
+
+Use `misc/tools/obol_draw_perf.sh <build-dir> <output-dir> 3 quick` for the
+routine corpus.  The `full` tier also runs evaluated, shaded, and hidden-line
+draws on the large models and may take a long time.  Each case has an isolated
+cache, per-run log, stage counters, and rendered RGB hash.  A release build in
+`.build_perf` is required for performance conclusions; debug results are for
+instrumentation and correctness work only.
 
 Current Samples
 ---------------
@@ -63,9 +71,22 @@ sampler discard an empty normal.  `Generic_Twin.g all -m5` and
 Next Optimization Targets
 -------------------------
 
-* Reduce normal-wire source publication/render traversal overhead without
-  reintroducing high-complexity CAD aggregation unless fresh benchmarks prove
-  it pays.
-* Rework full shaded/hidden-line tessellation diagnostics and cost behavior.
-* Redesign evaluated-wire candidate generation for large and thin-shell
-  models; boolweave itself is not the dominant Generic_Twin cost.
+The neutral-endpoint Release measurements supersede the earlier DM-backed
+debug timing for optimization decisions:
+
+* Generic Twin evaluated wire emits 1,171,060 ordered line records.  Repeated
+  exact vector reservation made result merge take about 5.2 seconds.  A single
+  checked reservation and ordered move insertion reduces that stage to about
+  0.02 seconds and preserves image hash `b3852519b131c346` across repeated
+  open/draw/render/close cycles.
+* Generic Twin Release draw time changed from 9.32 seconds cold and about 6.3
+  seconds warm to 4.67 seconds cold and 4.7-5.1 seconds warm.  Candidate and
+  boolweave stages alone are not large enough to justify parallelism there.
+* Havoc evaluated wire emits 4,495,576 ordered records and remains dominated by
+  4.27 million candidates from 17.3 million face pairs.  Pair evaluation takes
+  about 12-13 seconds of a 21-23 second evaluator run.  This is the appropriate
+  parallelism experiment only after all per-job mutable state is isolated.
+
+Continue to reduce normal-wire source publication/render traversal overhead
+without adding CAD aggregation unless fresh Release measurements prove it
+pays.  Treat full shaded/hidden-line tessellation as a separate workstream.

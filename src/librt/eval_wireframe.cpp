@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -723,18 +724,6 @@ bigE_line_set_export_vlist(struct bigE_line_set *lines,
 
     lines->records.clear();
     return BRLCAD_OK;
-}
-
-
-static void
-bigE_line_set_append(struct bigE_line_set *dst, const struct bigE_line_set *src)
-{
-    if (!dst || !src || src->records.empty())
-	return;
-
-    dst->records.reserve(dst->records.size() + src->records.size());
-    dst->records.insert(dst->records.end(), src->records.begin(),
-	    src->records.end());
 }
 
 
@@ -4509,6 +4498,15 @@ bigE_regions_evaluate(struct db_i *dbip,
     std::vector<bigE_region_result> results(region_count);
     std::vector<bigE_data *> workers(nworkers, NULL);
     int ret = BRLCAD_OK;
+    size_t merged_record_count = 0;
+    const int profile_pipeline =
+	(eval_flags & RT_EVAL_WIREFRAME_F_PROFILE) ||
+	bigE_env_enabled("RT_EVAL_WIREFRAME_PROFILE");
+    const int64_t profile_start = profile_pipeline ? bu_gettime() : 0;
+    int64_t profile_prepare = profile_start;
+    int64_t profile_work = profile_start;
+    int64_t profile_merge = profile_start;
+    int64_t profile_worker_cleanup = profile_start;
 
     for (size_t i = 0; i < nworkers; i++) {
 	workers[i] = new bigE_data;
@@ -4518,6 +4516,8 @@ bigE_regions_evaluate(struct db_i *dbip,
 	    goto cleanup;
 	}
     }
+    if (profile_pipeline)
+	profile_prepare = bu_gettime();
 
     if (nworkers == 1) {
 	for (size_t i = 0; i < region_count; i++) {
@@ -4543,19 +4543,52 @@ bigE_regions_evaluate(struct db_i *dbip,
 	    goto cleanup;
 	}
     }
+    if (profile_pipeline)
+	profile_work = bu_gettime();
 
+    merged_record_count = lines_out->records.size();
     for (size_t i = 0; i < results.size(); i++) {
 	if (results[i].ret != BRLCAD_OK || results[i].index != i) {
 	    ret = BRLCAD_ERROR;
 	    goto cleanup;
 	}
-	bigE_line_set_append(lines_out, &results[i].lines);
+	const size_t result_count = results[i].lines.records.size();
+	if (result_count >
+	    std::numeric_limits<size_t>::max() - merged_record_count) {
+	    ret = BRLCAD_ERROR;
+	    goto cleanup;
+	}
+	merged_record_count += result_count;
     }
+    lines_out->records.reserve(merged_record_count);
+    for (size_t i = 0; i < results.size(); i++) {
+	std::vector<bigE_line_record> &records = results[i].lines.records;
+	lines_out->records.insert(lines_out->records.end(),
+	    std::make_move_iterator(records.begin()),
+	    std::make_move_iterator(records.end()));
+    }
+    if (profile_pipeline)
+	profile_merge = bu_gettime();
 
 cleanup:
     for (size_t i = 0; i < workers.size(); i++) {
 	delete workers[i];
 	workers[i] = NULL;
+    }
+    if (profile_pipeline)
+	profile_worker_cleanup = bu_gettime();
+    results.clear();
+    if (profile_pipeline && ret == BRLCAD_OK) {
+	const int64_t profile_result_cleanup = bu_gettime();
+	bu_log("evaluated-wire evaluate stages: prepare=%.6fs work=%.6fs "
+	    "merge=%.6fs worker_cleanup=%.6fs result_cleanup=%.6fs "
+	    "records=%zu\n",
+	    (profile_prepare - profile_start) / 1000000.0,
+	    (profile_work - profile_prepare) / 1000000.0,
+	    (profile_merge - profile_work) / 1000000.0,
+	    (profile_worker_cleanup - profile_merge) / 1000000.0,
+	    (profile_result_cleanup - profile_worker_cleanup) / 1000000.0,
+	    lines_out->records.size());
     }
     if (ret != BRLCAD_OK)
 	lines_out->records.clear();
@@ -4575,8 +4608,13 @@ rt_eval_wireframe(struct bu_list *vhead,
     int ret = BRLCAD_OK;
     int ncpu = 1;
     size_t region_count = 0;
+    size_t output_record_count = 0;
     uint32_t eval_flags = RT_EVAL_WIREFRAME_F_DEFAULT;
     struct bigE_line_set lines;
+    int64_t profile_start = 0;
+    int64_t profile_discover = 0;
+    int64_t profile_evaluate = 0;
+    int profile_pipeline = 0;
 
     if (!vhead || !vlfree || !dbip || !path || !tol || !ttol)
 	return BRLCAD_ERROR;
@@ -4593,18 +4631,37 @@ rt_eval_wireframe(struct bu_list *vhead,
 	return BRLCAD_ERROR;
     if (ncpu < 1)
 	ncpu = 1;
+    profile_pipeline = (eval_flags & RT_EVAL_WIREFRAME_F_PROFILE) ||
+	bigE_env_enabled("RT_EVAL_WIREFRAME_PROFILE");
+    if (profile_pipeline)
+	profile_start = bu_gettime();
 
     ret = bigE_region_count_discover(dbip, path, tol, ttol, eval_flags,
 	    &region_count);
     if (ret != BRLCAD_OK)
 	return ret;
+    if (profile_pipeline)
+	profile_discover = bu_gettime();
 
     ret = bigE_regions_evaluate(dbip, path, tol, ttol, eval_flags, ncpu,
 	    region_count, &lines);
     if (ret != BRLCAD_OK)
 	return ret;
+    if (profile_pipeline)
+	profile_evaluate = bu_gettime();
 
+    output_record_count = lines.records.size();
     ret = bigE_line_set_export_vlist(&lines, vhead, vlfree);
+    if (profile_pipeline) {
+	const int64_t profile_end = bu_gettime();
+	bu_log("evaluated-wire pipeline stages: discover=%.6fs "
+	    "evaluate=%.6fs export=%.6fs total=%.6fs regions=%zu records=%zu\n",
+	    (profile_discover - profile_start) / 1000000.0,
+	    (profile_evaluate - profile_discover) / 1000000.0,
+	    (profile_end - profile_evaluate) / 1000000.0,
+	    (profile_end - profile_start) / 1000000.0,
+	    region_count, output_record_count);
+    }
     return ret;
 }
 

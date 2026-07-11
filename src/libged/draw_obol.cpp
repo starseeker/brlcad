@@ -20250,6 +20250,12 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
     if (!shared_scene)
 	return 0;
 
+    /* Creating the shared scene replaces the attachment registry.  Never use
+     * the pointer acquired before scene-controller ensure after this point. */
+    entries = ged_obol_attached_controllers(gdp, 1);
+    if (!entries)
+	return 0;
+
     for (size_t i = 0; i < entries->size(); i++) {
 	ged_obol_attached_controller &entry = (*entries)[i];
 	if (entry.view_ctx == view_ctx ||

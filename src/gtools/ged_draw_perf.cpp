@@ -20,14 +20,15 @@
 /** @file ged_draw_perf.cpp
  *
  * Minimal libged/libbrlobol draw-stack timing probe.  This executable is
- * intentionally not a user shell: it opens a database, attaches an Obol DM by
- * default, runs one draw command, optionally autoviews/renders, reports stage
- * timings, and exits.
+ * intentionally not a user shell: it opens a database, creates a GED-owned
+ * Obol endpoint, runs one draw command, optionally autoviews/renders, reports
+ * stage timings and a stable image hash, and exits.
  */
 
 #include "common.h"
 
 #include <chrono>
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,18 +36,16 @@
 #include <vector>
 
 #include <bu.h>
-
-#define DM_WITH_RT
-#include "dm.h"
+#include <bu/hash.h>
+#include <icv.h>
 
 #include "bv.h"
 #include <ged.h>
+#include "brlobol.h"
 #include "brlobol/performance.h"
-#include "brlobol/scene_controller.h"
 #include "ged/draw_obol.h"
 
 struct options {
-    bool attach_dm = true;
     bool autoview = false;
     bool render = false;
     bool profile = false;
@@ -54,8 +53,6 @@ struct options {
     int height = 512;
     int repeat = 1;
     bool clear_cache = false;
-    std::string dm_backend = "obol";
-    std::string dm_name = "OBOL";
     std::string cache_dir;
     std::string screengrab;
     std::string db_path;
@@ -68,7 +65,7 @@ struct options {
 
 struct timings {
     double open_ms = 0.0;
-    double attach_ms = 0.0;
+    double endpoint_ms = 0.0;
     double draw_ms = 0.0;
     double autoview_ms = 0.0;
     double render_ms = 0.0;
@@ -89,15 +86,12 @@ usage(FILE *fp)
 	"Usage: ged_draw_perf [options] <model.g> <draw-arg> [draw-arg ...]\n"
 	"\n"
 	"Options:\n"
-	"  --no-dm              run draw without attaching a display manager\n"
-	"  --dm <backend>       display backend to attach (default: obol)\n"
-	"  --dm-name <name>     attached display name (default: OBOL)\n"
 	"  --autoview           run autoview after draw\n"
-	"  --render             call dm_draw_end after draw/autoview\n"
-	"  --profile            enable libbrlobol internal timing counters\n"
+	"  --render             render the GED-owned Obol endpoint to RGB\n"
+	"  --profile            enable Obol and evaluated-wire stage counters\n"
 	"  --screengrab <file>  write a screengrab after draw/autoview\n"
-	"  --size <WxH>         display size for DM-backed runs (default: 512x512)\n"
-	"  --repeat <N>         repeat full open/attach/draw/close cycle\n"
+	"  --size <WxH>         render size (default: 512x512)\n"
+	"  --repeat <N>         repeat full open/endpoint/draw/close cycle\n"
 	"  --cache-dir <dir>    set BU_DIR_CACHE for this run\n"
 	"  --clear-cache        clear --cache-dir before the first iteration\n"
 	"  --lod-mesh <0|1>     run 'view lod mesh <0|1>' before draw\n"
@@ -192,10 +186,6 @@ parse_args(int argc, const char **argv, struct options *opts)
 	    usage(stdout);
 	    std::exit(0);
 	}
-	if (BU_STR_EQUAL(arg, "--no-dm")) {
-	    opts->attach_dm = false;
-	    continue;
-	}
 	if (BU_STR_EQUAL(arg, "--autoview")) {
 	    opts->autoview = true;
 	    continue;
@@ -210,18 +200,6 @@ parse_args(int argc, const char **argv, struct options *opts)
 	}
 	if (BU_STR_EQUAL(arg, "--clear-cache")) {
 	    opts->clear_cache = true;
-	    continue;
-	}
-	if (BU_STR_EQUAL(arg, "--dm")) {
-	    if (++i >= argc)
-		return false;
-	    opts->dm_backend = argv[i];
-	    continue;
-	}
-	if (BU_STR_EQUAL(arg, "--dm-name")) {
-	    if (++i >= argc)
-		return false;
-	    opts->dm_name = argv[i];
 	    continue;
 	}
 	if (BU_STR_EQUAL(arg, "--screengrab")) {
@@ -362,43 +340,38 @@ apply_cad_options(struct ged *gedp, const struct options &opts)
     return BRLCAD_OK;
 }
 
-static int
-attach_display(struct ged *gedp, const struct options &opts)
+static SoDB::ContextManager *
+performance_context_manager(void)
 {
-    const char *av[5] = {
-	"dm",
-	"attach",
-	opts.dm_backend.c_str(),
-	opts.dm_name.c_str(),
-	NULL
-    };
+    static SoDB::ContextManager *manager = SoDB::createOSMesaContextManager();
+    return manager;
+}
 
-    if (ged_exec_dm(gedp, 4, av) != BRLCAD_OK)
-	return BRLCAD_ERROR;
-
+static BRLObolViewController *
+initialize_endpoint(struct ged *gedp, const struct options &opts)
+{
+    if (!gedp || !gedp->dbip)
+	return NULL;
     void *view_ctx = ged_view_active_ctx(gedp);
-    struct dm *dmp = view_ctx ?
-	(struct dm *)ged_view_context_display_manager_get(view_ctx) : NULL;
-    if (!dmp)
-	return BRLCAD_ERROR;
-
-    dm_set_width(dmp, opts.width);
-    dm_set_height(dmp, opts.height);
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-
-    fastf_t windowbounds[6] = {-1, 1, -1, 1, -100, 100};
-    dm_set_win_bounds(dmp, windowbounds);
-    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    dm_set_vp(dmp, bv_scale_storage_get(view));
-    ged_view_context_display_manager_set(view_ctx, dmp);
-    bv_dimensions_set(view, dm_get_width(dmp),
-	dm_get_height(dmp));
+    struct bv *view = view_ctx ?
+	bv_context_view((struct bv_context *)view_ctx) : NULL;
+    if (!view_ctx || !view)
+	return NULL;
+    bv_dimensions_set(view, opts.width, opts.height);
     bv_unit_conversion_set(view,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
-
-    return BRLCAD_OK;
+    if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1))
+	return NULL;
+    BRLObolViewController *controller =
+	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
+    if (!controller)
+	return NULL;
+    controller->setViewportSize((unsigned int)opts.width,
+	(unsigned int)opts.height);
+    if (!controller->syncCameraFromViewContext(view_ctx))
+	return NULL;
+    return controller;
 }
 
 static int
@@ -420,23 +393,43 @@ run_autoview(struct ged *gedp)
 }
 
 static int
-run_render(struct ged *gedp)
+run_render(struct ged *gedp, BRLObolViewController *controller,
+	   unsigned char **image)
 {
     void *view_ctx = ged_view_active_ctx(gedp);
-    struct dm *dmp = view_ctx ?
-	(struct dm *)ged_view_context_display_manager_get(view_ctx) : NULL;
-    if (!dmp)
+    if (!view_ctx || !controller || !image)
 	return BRLCAD_ERROR;
-    if (dm_draw_begin(dmp) != BRLCAD_OK)
+    if (!controller->syncCameraFromViewContext(view_ctx))
 	return BRLCAD_ERROR;
-    return dm_draw_end(dmp);
+    (void)ged_draw_obol_view_context_faceplate_sync(gedp, view_ctx);
+    return controller->renderToImage(image, 1, 0, NULL,
+	performance_context_manager(), NULL);
 }
 
 static int
-run_screengrab(struct ged *gedp, const char *filename)
+write_screengrab(const unsigned char *image, int width, int height,
+		 const char *filename)
 {
-    const char *av[3] = {"screengrab", filename, NULL};
-    return ged_exec_screengrab(gedp, 2, av);
+    if (!image || width <= 0 || height <= 0 || !filename || !filename[0])
+	return BRLCAD_ERROR;
+    icv_image_t *out = icv_image_create((size_t)width, (size_t)height,
+	ICV_COLOR_SPACE_RGB);
+    if (!out)
+	return BRLCAD_ERROR;
+    int ret = BRLCAD_OK;
+    const size_t stride = (size_t)width * 3;
+    for (int y = 0; y < height; y++) {
+	if (icv_writeline(out, (size_t)y,
+		(void *)(image + (size_t)y * stride), ICV_DATA_UCHAR) != 0) {
+	    ret = BRLCAD_ERROR;
+	    break;
+	}
+    }
+    if (ret == BRLCAD_OK &&
+	icv_write(out, filename, BU_MIME_IMAGE_PNG) != 0)
+	ret = BRLCAD_ERROR;
+    icv_destroy(out);
+    return ret;
 }
 
 static int
@@ -445,7 +438,7 @@ run_once(const struct options &opts, int iter)
     struct timings t;
     struct BRLObolPerformanceCounters perf;
     brlobol_performance_counters_init(&perf);
-    int attach_ret = BRLCAD_OK;
+    int endpoint_ret = BRLCAD_OK;
     int lod_ret = BRLCAD_OK;
     int cad_ret = BRLCAD_OK;
     int draw_ret = BRLCAD_OK;
@@ -455,6 +448,10 @@ run_once(const struct options &opts, int iter)
     int source_count_ret = 0;
     int profile_started = 0;
     size_t source_count = 0;
+    unsigned char *image = NULL;
+    uint64_t image_hash = 0;
+    size_t image_nonzero = 0;
+    BRLObolViewController *controller = NULL;
 
     auto start = std::chrono::steady_clock::now();
     struct ged *gedp = ged_open("db", opts.db_path.c_str(), 1);
@@ -465,21 +462,20 @@ run_once(const struct options &opts, int iter)
 	return 1;
     }
 
-    if (opts.attach_dm) {
-	start = std::chrono::steady_clock::now();
-	attach_ret = attach_display(gedp, opts);
-	t.attach_ms = elapsed_ms(start);
-    }
+    start = std::chrono::steady_clock::now();
+    controller = initialize_endpoint(gedp, opts);
+    endpoint_ret = controller ? BRLCAD_OK : BRLCAD_ERROR;
+    t.endpoint_ms = elapsed_ms(start);
 
-    if (attach_ret == BRLCAD_OK) {
+    if (endpoint_ret == BRLCAD_OK) {
 	lod_ret = apply_lod_options(gedp, opts);
     }
 
-    if (attach_ret == BRLCAD_OK && lod_ret == BRLCAD_OK) {
+    if (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK) {
 	cad_ret = apply_cad_options(gedp, opts);
     }
 
-    if (attach_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
+    if (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
 	    cad_ret == BRLCAD_OK) {
 	if (opts.profile) {
 	    brlobol_performance_counters_reset();
@@ -502,17 +498,26 @@ run_once(const struct options &opts, int iter)
 	t.autoview_ms = elapsed_ms(start);
     }
 
-    if (draw_ret == BRLCAD_OK && autoview_ret == BRLCAD_OK && opts.render) {
+    if (draw_ret == BRLCAD_OK && autoview_ret == BRLCAD_OK &&
+	(opts.render || !opts.screengrab.empty())) {
 	start = std::chrono::steady_clock::now();
-	render_ret = run_render(gedp);
+	render_ret = run_render(gedp, controller, &image);
 	t.render_ms = elapsed_ms(start);
     }
 
     if (draw_ret == BRLCAD_OK && autoview_ret == BRLCAD_OK &&
-	    opts.attach_dm && !opts.screengrab.empty()) {
+	    render_ret == BRLCAD_OK && !opts.screengrab.empty()) {
 	start = std::chrono::steady_clock::now();
-	screengrab_ret = run_screengrab(gedp, opts.screengrab.c_str());
+	screengrab_ret = write_screengrab(image, opts.width, opts.height,
+	    opts.screengrab.c_str());
 	t.screengrab_ms = elapsed_ms(start);
+    }
+
+    if (image) {
+	const size_t image_bytes = (size_t)opts.width * (size_t)opts.height * 3;
+	image_hash = bu_data_hash(image, image_bytes);
+	for (size_t i = 0; i < image_bytes; i++)
+	    image_nonzero += image[i] != 0;
     }
 
     if (profile_started) {
@@ -521,8 +526,8 @@ run_once(const struct options &opts, int iter)
     }
 
     const char *result = ged_result(gedp);
-    if (attach_ret != BRLCAD_OK)
-	std::fprintf(stderr, "ged_draw_perf: dm attach failed: %s\n", result);
+    if (endpoint_ret != BRLCAD_OK)
+	std::fprintf(stderr, "ged_draw_perf: endpoint setup failed: %s\n", result);
     if (lod_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: LoD setup failed: %s\n", result);
     if (cad_ret != BRLCAD_OK)
@@ -536,14 +541,17 @@ run_once(const struct options &opts, int iter)
     if (screengrab_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: screengrab failed: %s\n", result);
 
-    std::printf("iter=%d open_ms=%.3f attach_ms=%.3f draw_ms=%.3f",
-	iter, t.open_ms, t.attach_ms, t.draw_ms);
+    std::printf("iter=%d open_ms=%.3f endpoint_ms=%.3f draw_ms=%.3f",
+	iter, t.open_ms, t.endpoint_ms, t.draw_ms);
     if (opts.autoview)
 	std::printf(" autoview_ms=%.3f", t.autoview_ms);
     if (opts.render)
 	std::printf(" render_ms=%.3f", t.render_ms);
     if (!opts.screengrab.empty())
 	std::printf(" screengrab_ms=%.3f", t.screengrab_ms);
+    if (image)
+	std::printf(" image_hash=%016" PRIx64 " image_nonzero=%zu",
+	    image_hash, image_nonzero);
     if (source_count_ret)
 	std::printf(" obol_sources=%zu", source_count);
     if (perf.realize_calls || perf.source_replace_calls) {
@@ -593,16 +601,18 @@ run_once(const struct options &opts, int iter)
 	    perf.source_index_rebuild_us / 1000.0);
     }
     std::printf(" status=%s\n",
-	(attach_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&
+	(endpoint_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&
 	 lod_ret == BRLCAD_OK && cad_ret == BRLCAD_OK &&
 	 autoview_ret == BRLCAD_OK && render_ret == BRLCAD_OK &&
 	 screengrab_ret == BRLCAD_OK) ? "ok" : "error");
 
-    int ret = (attach_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
+    int ret = (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
 	cad_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&
 	autoview_ret == BRLCAD_OK && render_ret == BRLCAD_OK &&
 	screengrab_ret == BRLCAD_OK) ? 0 : 1;
 
+    if (image)
+	bu_free(image, "ged_draw_perf image");
     ged_close(gedp);
     return ret;
 }
@@ -617,9 +627,18 @@ main(int argc, const char **argv)
     }
     if (prepare_cache(opts) != BRLCAD_OK)
 	return 1;
+    if (opts.profile)
+	bu_setenv("RT_EVAL_WIREFRAME_PROFILE", "1", 1);
 
-    std::printf("ged_draw_perf db=%s dm=%s draw_args=",
-	opts.db_path.c_str(), opts.attach_dm ? opts.dm_backend.c_str() : "none");
+    SoDB::ContextManager *manager = performance_context_manager();
+    if (!manager) {
+	std::fprintf(stderr, "ged_draw_perf: OSMesa context manager unavailable\n");
+	return 1;
+    }
+    brlobol_init(manager);
+
+    std::printf("ged_draw_perf db=%s endpoint=obol draw_args=",
+	opts.db_path.c_str());
     for (size_t i = 0; i < opts.draw_args.size(); i++)
 	std::printf("%s%s", i ? " " : "", opts.draw_args[i].c_str());
     std::printf(" repeat=%d size=%dx%d autoview=%d render=%d profile=%d screengrab=%s",

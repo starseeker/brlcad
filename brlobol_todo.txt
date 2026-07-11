@@ -272,15 +272,32 @@ Priority 1: Finish Editing and Interaction
 Priority 2: Performance, Cleanup, and Deletion
 ----------------------------------------------
 
-10. Improve evaluated wireframe and large-model performance.
+10. In progress: characterize evaluated-wire and large-model performance, then
+    retain only benchmark-supported optimizations.
 
-    * Redesign thin-shell candidate generation for models such as `havoc.g`.
-    * Add deterministic parallel ray/classification work with per-thread
-      resources; retain boolweave as the default evaluator.
-    * Profile source publication and render traversal before adding new CAD
-      aggregation structures.
-    * Separate shaded/hidden-line tessellation diagnostics and optimization
-      from normal wire-draw performance.
+    * `ged_draw_perf` now owns a headless GED/Obol endpoint without libdm and
+      reports stage counters and deterministic rendered-image hashes.  The
+      quick/full corpus driver isolates caches and keeps expensive evaluated,
+      shaded, and hidden-line cases out of routine runs.
+    * Evaluated-wire pipeline profiling separates region discovery, region
+      work, deterministic result merge, VList export, and detailed candidate
+      stages.  Unconditional BoT/REC diagnostic floods are behind existing
+      librt debug flags.
+    * Generic Twin exposed a quadratic region-result merge: repeated exact
+      `reserve` calls recopied a 1.17-million-record vector for every region.
+      One checked reservation plus ordered move insertion reduced Release
+      merge time from about 5.2 seconds to 0.02 seconds with identical hashes.
+    * `havoc.g` remains evaluator-bound: Release runs produce 4.27 million
+      candidates from 17.3 million face pairs and spend about 12-13 seconds in
+      pair evaluation.  Parallel work is deferred until pair jobs own isolated
+      hit buffers, segment resources, counters, and ordered result records.
+    * Do not add CAD aggregation or redesign thin-shell candidates without a
+      measured whole-path gain.  Keep boolweave as the default evaluator and
+      keep shaded/hidden-line tessellation work separate from normal wire draw.
+
+    Exit condition: the Release corpus is deterministic; retained changes
+    improve their targeted stage by at least 1.5x without small-model or normal
+    wire regressions; any parallel result is merged in original job order.
 
 11. Completed on Linux: remove compatibility aliases and stale guards when
     dependencies permit.
