@@ -95,6 +95,7 @@ struct ps_segment_data {
     FILE *fp;
     matp_t psmat;
     fastf_t delta;
+    int zclip;
 };
 
 static int
@@ -145,6 +146,10 @@ ps_draw_segment_cb(const point_t a, const point_t b, void *data)
 
     if (!psd || !psd->fp || !psd->psmat)
 	return 0;
+    if (psd->zclip) {
+	clipmin[Z] = -1.0;
+	clipmax[Z] = 1.0;
+    }
     if (!ps_project_segment(a, b, psd->psmat, psd->perspective, psd->delta, start, fin))
 	return 1;
     if (bg_ray_vclip(start, fin, clipmin, clipmax) == 0)
@@ -161,7 +166,7 @@ ps_draw_segment_cb(const point_t a, const point_t b, void *data)
 }
 
 static void
-ps_draw_record(fastf_t perspective, FILE *fp,
+ps_draw_record(fastf_t perspective, FILE *fp, int zclip,
 	       const struct ged_draw_view_db_object_record *rec,
 	       matp_t psmat)
 {
@@ -189,6 +194,7 @@ ps_draw_record(fastf_t perspective, FILE *fp,
     psd.perspective = perspective;
     psd.fp = fp;
     psd.psmat = psmat;
+    psd.zclip = zclip;
 
     (void)ged_draw_view_db_object_record_foreach_segment(rec,
 	    ps_draw_segment_cb, &psd);
@@ -198,6 +204,7 @@ struct ps_draw_record_ctx {
     fastf_t perspective;
     FILE *fp;
     matp_t psmat;
+    int zclip;
 };
 
 static int
@@ -206,12 +213,13 @@ ps_draw_record_cb(const struct ged_draw_view_db_object_record *rec, void *data)
     struct ps_draw_record_ctx *ctx = (struct ps_draw_record_ctx *)data;
     if (!ctx)
 	return 1;
-    ps_draw_record(ctx->perspective, ctx->fp, rec, ctx->psmat);
+    ps_draw_record(ctx->perspective, ctx->fp, ctx->zclip, rec, ctx->psmat);
     return 1;
 }
 
 static void
-ps_draw_body(void *view_ctx, FILE *fp, mat_t model2view, fastf_t perspective, vect_t eye_pos)
+ps_draw_body(void *view_ctx, FILE *fp, mat_t model2view, fastf_t perspective,
+	    vect_t eye_pos, int zclip)
 {
     mat_t newmat;
     matp_t mat;
@@ -244,6 +252,7 @@ ps_draw_body(void *view_ctx, FILE *fp, mat_t model2view, fastf_t perspective, ve
     ctx.perspective = perspective;
     ctx.fp = fp;
     ctx.psmat = mat;
+    ctx.zclip = zclip;
     ged_draw_foreach_visible_view_record(view_ctx,
 	    ps_draw_record_cb, &ctx);
 }
@@ -269,12 +278,15 @@ ps_draw_footer(FILE *fp)
 
 
 static void
-dl_ps(void *view_ctx, FILE *fp, int border, char *font, char *title, char *creator, int linewidth, fastf_t scale, int xoffset, int yoffset, mat_t model2view, fastf_t perspective, vect_t eye_pos, float red, float green, float blue)
+dl_ps(void *view_ctx, FILE *fp, int border, char *font, char *title,
+      char *creator, int linewidth, fastf_t scale, int xoffset, int yoffset,
+      mat_t model2view, fastf_t perspective, vect_t eye_pos, int zclip,
+      float red, float green, float blue)
 {
     ps_draw_header(fp, font, title, creator, linewidth, scale, xoffset, yoffset);
     if (border)
 	ps_draw_border(fp, red, green, blue);
-    ps_draw_body(view_ctx, fp, model2view, perspective, eye_pos);
+    ps_draw_body(view_ctx, fp, model2view, perspective, eye_pos, zclip);
     ps_draw_footer(fp);
 
 }
@@ -294,6 +306,7 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
     int xoffset = 0;
     int yoffset = 0;
     int border = 0;
+    int zclip = 0;
     int k;
     int r, g, b;
     mat_t model2view;
@@ -306,7 +319,7 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
     float border_green = 0.0;
     float border_blue = 0.0;
 
-    static const char *usage = "[-a author] [-b] [-c r/g/b] [-f font] [-s size] [-t title] [-x offset] [-y offset] file";
+    static const char *usage = "[-a author] [-b] [-c r/g/b] [-f font] [-l line_width] [-s size] [-t title] [-x offset] [-y offset] [-z] file";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
@@ -329,7 +342,7 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Process options */
     bu_optind = 1;
-    while ((k = bu_getopt(argc, (char * const *)argv, "a:bc:f:s:t:x:y:")) != -1) {
+    while ((k = bu_getopt(argc, (char * const *)argv, "a:bc:f:l:s:t:x:y:z")) != -1) {
 	double tmp_f;
 
 	switch (k) {
@@ -373,6 +386,13 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
 		bu_vls_printf(&font, "%s", bu_optarg);
 
 		break;
+	    case 'l':
+		if (sscanf(bu_optarg, "%d", &linewidth) != 1 || linewidth < 1) {
+		    bu_vls_printf(gedp->ged_result_str,
+			    "%s: bad line width - %s\n", argv[0], bu_optarg);
+		    goto bad;
+		}
+		break;
 	    case 's':
 		if (sscanf(bu_optarg, "%lf", &tmp_f) != 1) {
 		    bu_vls_printf(gedp->ged_result_str, "%s: bad size - %s", argv[0], bu_optarg);
@@ -408,6 +428,9 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
 		yoffset = (int)(tmp_f * ps_default_ppi);
 
 		break;
+	    case 'z':
+		zclip = 1;
+		break;
 	    default:
 		bu_vls_printf(gedp->ged_result_str, "%s: Unrecognized option - %s", argv[0], argv[bu_optind-1]);
 		goto bad;
@@ -430,7 +453,10 @@ ged_ps_core(struct ged *gedp, int argc, const char *argv[])
     bv_model2view_get(model2view, view);
     perspective = bv_perspective_get(view);
     bv_eye_pos_get(eye_pos, view);
-    dl_ps(view_ctx, fp, border, bu_vls_addr(&font), bu_vls_addr(&title), bu_vls_addr(&creator), linewidth, scale, xoffset, yoffset, model2view, perspective, eye_pos, border_red, border_green, border_blue);
+    dl_ps(view_ctx, fp, border, bu_vls_addr(&font), bu_vls_addr(&title),
+	    bu_vls_addr(&creator), linewidth, scale, xoffset, yoffset,
+	    model2view, perspective, eye_pos, zclip,
+	    border_red, border_green, border_blue);
 
     fclose(fp);
 

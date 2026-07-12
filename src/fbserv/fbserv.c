@@ -28,13 +28,12 @@
 #include "bu/exit.h"
 #include "bu/getopt.h"
 #include "bu/log.h"
-#include "dm.h"
-#include "dm/fbserv_legacy.h"
+#include "imgstream/fb_compat.h"
 #include "imgstream/fbserv.h"
 #include "pkg.h"
 
 static struct fbserv_obj server;
-static struct fb *framebuffer = FB_NULL;
+static imgstream_fb_t *framebuffer = NULL;
 static const char *framebuffer_name = NULL;
 static const char *ipc_address = NULL;
 static int framebuffer_width = 0;
@@ -49,8 +48,8 @@ static const char usage[] =
     "              [-w width] [-n height] (-p port | -I ipc_address)\n"
     "       fbserv port [framebuffer]\n"
     "\n"
-    "The standalone server owns one framebuffer for its lifetime.\n"
-    "If -F is omitted, the default framebuffer is used.\n"
+    "The standalone server owns one image-stream framebuffer for its lifetime.\n"
+    "If -F is omitted, a memory framebuffer is used.\n"
     "  -T  enable TLS (requires an OpenSSL build)\n"
     "  -A  require FBSERV_TOKEN authentication\n"
     "  -I  listen on a libpkg IPC address\n";
@@ -181,12 +180,9 @@ service_loop(struct pkg_listener *listener)
 	    }
 	}
 
-	if (framebuffer != FB_NULL) {
-	    int fb_fd = fb_set_fd(framebuffer, &read_fds);
-	    if (fb_fd > max_fd)
-		max_fd = fb_fd;
-	    if (fb_poll_rate(framebuffer) > 0) {
-		long usec = fb_poll_rate(framebuffer);
+	if (framebuffer) {
+	    if (imgstream_fb_poll_rate(framebuffer) > 0) {
+		long usec = imgstream_fb_poll_rate(framebuffer);
 		timeout.tv_sec = usec / 1000000;
 		timeout.tv_usec = usec % 1000000;
 	    }
@@ -214,7 +210,7 @@ service_loop(struct pkg_listener *listener)
 	    return BRLCAD_ERROR;
 	}
 	if (selected == 0) {
-	    if (framebuffer != FB_NULL && fb_poll(framebuffer) != 0)
+	    if (framebuffer && imgstream_fb_poll(framebuffer) != 0)
 		return BRLCAD_OK;
 	    continue;
 	}
@@ -233,10 +229,6 @@ service_loop(struct pkg_listener *listener)
 		(void)service_client(i);
 	}
 
-	if (framebuffer != FB_NULL && fb_is_set_fd(framebuffer, &read_fds) &&
-	    fb_poll(framebuffer) != 0)
-	    return BRLCAD_OK;
-
 	if (!listener && active_clients(&server) == 0)
 	    return BRLCAD_OK;
     }
@@ -249,7 +241,6 @@ main(int argc, char **argv)
     int ret = BRLCAD_ERROR;
 
     bu_setprogname(argv[0]);
-    _fb_disk_enable = 0;
 #ifdef SIGPIPE
     (void)signal(SIGPIPE, SIG_IGN);
 #endif
@@ -272,11 +263,13 @@ main(int argc, char **argv)
 	    bu_exit(1, "fbserv: TLS is unavailable or failed to initialize\n");
     }
 
-    framebuffer = fb_open(framebuffer_name, framebuffer_width,
-	framebuffer_height);
-    if (framebuffer == FB_NULL)
-	bu_exit(1, "fbserv: unable to open framebuffer\n");
-    if (dm_fbserv_set_framebuffer(&server, framebuffer) != BRLCAD_OK)
+    framebuffer = imgstream_fb_open(framebuffer_name,
+	framebuffer_width > 0 ? (size_t)framebuffer_width : 0,
+	framebuffer_height > 0 ? (size_t)framebuffer_height : 0);
+    if (!framebuffer)
+	bu_exit(1, "fbserv: unsupported or invalid image-stream framebuffer '%s'\n",
+	    framebuffer_name ? framebuffer_name : "/dev/mem");
+    if (imgstream_fbserv_set_framebuffer(&server, framebuffer) != BRLCAD_OK)
 	bu_exit(1, "fbserv: unable to install framebuffer backend\n");
 
     if (ipc_address) {
@@ -302,8 +295,8 @@ main(int argc, char **argv)
 
     ret = service_loop(listener);
     (void)fbs_close(&server);
-    (void)dm_fbserv_set_framebuffer(&server, FB_NULL);
-    (void)fb_close(framebuffer);
+    (void)imgstream_fbserv_set_framebuffer(&server, NULL);
+    imgstream_fb_close(framebuffer);
 
     if (server.fbs_tls_ctx)
 	fbs_tls_server_context_destroy(server.fbs_tls_ctx);

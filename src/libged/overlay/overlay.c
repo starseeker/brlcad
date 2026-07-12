@@ -30,9 +30,25 @@
 #include "bu/mime.h"
 #include "bv.h"
 #include "icv.h"
-#include "dm.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
 
 #include "../ged_private.h"
+
+struct overlay_image_apply_state {
+    icv_image_t *image;
+    struct imgstream_fb_import_options options;
+};
+
+static int
+overlay_image_apply(struct imgstream_fb *fb, void *userdata)
+{
+    struct overlay_image_apply_state *state =
+	(struct overlay_image_apply_state *)userdata;
+    return state && state->image &&
+	imgstream_fb_import_icv(fb, state->image, &state->options) == 0 ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
 
 static int
 overlay_image_mime(struct bu_vls *msg, size_t argc, const char **argv, void *set_mime)
@@ -74,8 +90,6 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     int width = 0; /* may need to specify for some formats (such as PIX) */
     int write_fb = 0;
     int zoom = 0;
-    struct dm *dmp = NULL;
-    struct fb *fbp = NULL;
     struct bu_vls vname = BU_VLS_INIT_ZERO;
 
     static char usage[] = "Usage: overlay [options] file\n";
@@ -138,21 +152,6 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     argc = opt_ret;
-
-    if (write_fb) {
-	dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-	if (!dmp) {
-	    bu_vls_printf(gedp->ged_result_str, ": no display manager currently active");
-	    bu_vls_free(&vname);
-	    return BRLCAD_ERROR;
-	}
-	fbp = dm_get_fb(dmp);
-	if (!fbp) {
-	    bu_vls_printf(gedp->ged_result_str, ": display manager does not have a framebuffer");
-	    bu_vls_free(&vname);
-	    return BRLCAD_ERROR;
-	}
-    }
 
     /* must be wanting help */
     if (!argc) {
@@ -289,12 +288,22 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
+	/* Keep PNG framebuffer placement consistent with png2fb's historical
+	 * default display conversion for untagged images. */
+	if (type == BU_MIME_IMAGE_PNG)
+	    img->gamma_corr = 0.5f;
 
-	ret = fb_read_icv(fbp, img, 0, 0, 0, 0,	scr_xoff, scr_yoff, clear, zoom, inverse, 0, 0, gedp->ged_result_str);
-
-	(void)dm_draw_begin(dmp);
-	fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-	(void)dm_draw_end(dmp);
+	struct overlay_image_apply_state apply_state;
+	apply_state.image = img;
+	apply_state.options = (struct imgstream_fb_import_options)
+	    IMGSTREAM_FB_IMPORT_OPTIONS_INIT;
+	apply_state.options.screen_xoff = scr_xoff;
+	apply_state.options.screen_yoff = scr_yoff;
+	apply_state.options.clear = clear;
+	apply_state.options.zoom = zoom;
+	apply_state.options.inverse = inverse;
+	ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	    overlay_image_apply, &apply_state, 1);
 
 	icv_destroy(img);
 	bu_vls_free(&vname);

@@ -1,6 +1,5 @@
 set(
   test_deps
-  dm-obol
   ged-close
   ged-draw
   ged-dm
@@ -145,7 +144,7 @@ if(TARGET ged_test_snap_semantics)
 endif()
 
 # LoD cross-run cache stability (populate cache → close → reopen → same pixels)
-brlcad_addexec(ged_test_lod_crossrun "lod_crossrun.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
+brlcad_addexec(ged_test_lod_crossrun "lod_crossrun.cpp;util.cpp" "libged;libbrlobol" TEST)
 if(TARGET ged_test_lod_crossrun)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -163,7 +162,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_cr_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/lod_crossrun_cache)
 
 # MGED view-state regression tests not covered by image baselines.
-brlcad_addexec(ged_test_mged_view_state "mged_view_state.cpp;util.cpp" "libged;libdm;libbrlobol" TEST)
+brlcad_addexec(ged_test_mged_view_state "mged_view_state.cpp;util.cpp" "libged;libbrlobol" TEST)
 if(TARGET ged_test_mged_view_state)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -180,7 +179,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_view_state_t2.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/mged_view_state_t3.g)
 
 # rtwizard view pipeline regression tests.
-brlcad_addexec(ged_test_rtwizard_view "rtwizard_view.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
+brlcad_addexec(ged_test_rtwizard_view "rtwizard_view.cpp;util.cpp" "libged;libbrlobol;libicv" TEST)
 if(TARGET ged_test_rtwizard_view)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -244,7 +243,7 @@ if(TARGET ged_test_view_command)
 endif()
 
 # Lighting/zbuffer/zclip regression test (mged_shaded_mode_helper path)
-brlcad_addexec(ged_test_mged_shaded_mode "mged_shaded_mode.cpp;util.cpp" "libged;libdm;libbrlobol;libicv" TEST)
+brlcad_addexec(ged_test_mged_shaded_mode "mged_shaded_mode.cpp;util.cpp" "libged;libbrlobol;libicv" TEST)
 if(TARGET ged_test_mged_shaded_mode)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})

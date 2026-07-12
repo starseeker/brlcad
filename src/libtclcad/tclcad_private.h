@@ -41,8 +41,7 @@
 __BEGIN_DECLS
 
 #ifdef HAVE_TKOBOL_HOST
-struct dm;
-extern void *tclcad_tkobol_controller(struct dm *dmp);
+extern int tclcad_obol_host_factories_register(void);
 #endif
 
 struct tclcad_data_axes_state {
@@ -143,6 +142,7 @@ extern struct tclcad_obj *current_top;
 // instance.
 struct tclcad_view_data {
     struct ged *gedp;
+    struct bu_vls gdv_pathname;
     struct bu_vls gdv_edit_motion_delta_callback;
     int gdv_edit_motion_delta_callback_cnt;
     struct bu_vls gdv_callback;
@@ -176,6 +176,7 @@ extern int tclcad_eval_noresult(Tcl_Interp *interp, const char *command, size_t 
 
 extern void tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp);
 extern struct tclcad_view_data *tclcad_view_data_from_view_ctx(void *view_ctx);
+extern struct bu_vls *tclcad_view_pathname_vls(const void *view_ctx);
 extern tclcad_view_state *tclcad_view_tcl_data_from_view_ctx(void *view_ctx);
 extern tclcad_polygon_state *tclcad_view_polygon_state_from_view_ctx(void *view_ctx, int staged);
 extern int tclcad_view_polygon_mode_from_view_ctx(void *view_ctx);
@@ -403,6 +404,12 @@ extern int to_mouse_ray(struct ged *gedp,
                        ged_func_ptr func,
                        const char *usage,
                        int maxargs);
+extern int to_mouse_pick_detail(struct ged *gedp,
+                               int argc,
+                               const char *argv[],
+                               ged_func_ptr func,
+                               const char *usage,
+                               int maxargs);
 extern int to_mouse_rect(struct ged *gedp,
                         int argc,
                         const char *argv[],

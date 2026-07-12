@@ -80,6 +80,9 @@ public:
     /** Obol-canonical view controller for migrated drawing code. */
     virtual BRLObolViewController *obolViewController() const = 0;
 
+    /** Bind a borrowed endpoint-owned controller. */
+    virtual void setObolViewController(BRLObolViewController *) = 0;
+
     /** Bind an external transitional view.  Pass nullptr to revert to the local view. */
     virtual void set_view(qg_legacy_view *) = 0;
 

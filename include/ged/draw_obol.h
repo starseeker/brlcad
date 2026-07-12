@@ -39,6 +39,11 @@ __BEGIN_DECLS
 struct rt_db_internal;
 struct bg_tess_tol;
 struct bn_tol;
+struct imgstream_fb;
+
+typedef int (*ged_draw_obol_framebuffer_operation_t)(
+	struct imgstream_fb *fb,
+	void *userdata);
 
 #define GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO 0
 #define GED_DRAW_OBOL_SOFTWARE_WIRE_QUALITY 1
@@ -225,6 +230,21 @@ ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
 	void *view_ctx);
 
 /**
+ * Run an operation against the active view's Obol-owned image stream.
+ *
+ * Libged ensures the framebuffer bridge and serializes @p operation with
+ * fbserv transport access.  When @p publish is non-zero, a successful
+ * operation is flushed into the attached Obol endpoint and schedules a view
+ * refresh.  The framebuffer pointer is borrowed only for the callback.
+ */
+GED_EXPORT int
+ged_draw_obol_framebuffer_apply_for_view(struct ged *gedp,
+	void *view_ctx,
+	ged_draw_obol_framebuffer_operation_t operation,
+	void *userdata,
+	int publish);
+
+/**
  * Render an Obol-backed GED view into a caller-owned RGB/RGBA image buffer.
  *
  * Returns 1 when @p view_ctx has an attached Obol controller and image data was
@@ -349,6 +369,8 @@ GED_EXPORT int
 ged_draw_obol_database_source_remove_for_path(struct ged *gedp,
 					      const char *path);
 
+/* Synchronize an attached scene in place, creating a libged-owned controller
+ * only when no Obol scene is attached. */
 GED_EXPORT int
 ged_draw_obol_scene_controller_ensure_owned(struct ged *gedp,
 					    int sync_current_scene);

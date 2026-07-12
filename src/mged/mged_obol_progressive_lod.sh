@@ -38,7 +38,8 @@ rm -rf "$CACHE"
 mkdir -p "$CACHE"
 cp "$DB" "$TMPDB"
 
-printf 'dm type
+printf 'dm open --host headless --renderer sw
+dm host
 dm size
 view lod cache clear all_files
 tol rel 0.0002
@@ -57,7 +58,7 @@ refresh
 screengrab %s
 view lod service status
 delay 0 500000
-view lod service poll 1
+view lod service poll 8
 refresh
 screengrab %s
 view lod service status
@@ -68,10 +69,10 @@ view lod service status
 quit
 ' "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3" \
     | BU_DIR_CACHE="$CACHE" BRLOBOL_LOD_OBB_TASK_DELAY_MS="${BRLOBOL_LOD_OBB_TASK_DELAY_MS:-350}" BRLOBOL_LOD_TASK_DELAY_MS="${BRLOBOL_LOD_TASK_DELAY_MS:-700}" \
-    "$MGED" -c -a obol "$TMPDB" > "$LOG" 2>&1
+    "$MGED" -c -a nu "$TMPDB" > "$LOG" 2>&1
 
-if ! grep -qx "obol" "$LOG"; then
-    echo "MGED Obol progressive LoD did not attach an obol display manager" 1>&2
+if ! grep -qx "headless" "$LOG"; then
+    echo "MGED Obol progressive LoD did not open a headless endpoint host" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

@@ -303,6 +303,9 @@ struct _menu_state {
 
 struct mged_dm {
     struct dm		*dm_dmp;
+    struct bu_vls	dm_pathname;
+    unsigned long	dm_native_id;
+    int			dm_graphical;
     struct fb		*dm_fbp;
     struct fbserv_obj	dm_fbserv;
     int			repaint_pending;		/* true if this display needs another paint */
@@ -367,14 +370,27 @@ mged_dm_repaint_request(struct mged_dm *mdmp, unsigned int reason)
 	return;
     mdmp->repaint_pending = 1;
     mdmp->repaint_reasons |= reason;
-    if (mdmp->dm_dmp)
-	dm_set_native_repaint_pending(mdmp->dm_dmp, 1);
 }
 
 static inline int
 mged_dm_repaint_pending(const struct mged_dm *mdmp)
 {
     return mdmp ? mdmp->repaint_pending : 0;
+}
+
+static inline const char *
+mged_dm_pathname(const struct mged_dm *mdmp)
+{
+    return (mdmp && BU_VLS_IS_INITIALIZED(&mdmp->dm_pathname) &&
+	bu_vls_strlen(&mdmp->dm_pathname)) ?
+	bu_vls_cstr(&mdmp->dm_pathname) : NULL;
+}
+
+static inline struct bu_vls *
+mged_dm_pathname_vls(struct mged_dm *mdmp)
+{
+    return mdmp && BU_VLS_IS_INITIALIZED(&mdmp->dm_pathname) ?
+	&mdmp->dm_pathname : NULL;
 }
 
 static inline void
@@ -563,7 +579,7 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
     (p) = MGED_DM_NULL; \
     for (size_t dm_ind = 0; dm_ind < BU_PTBL_LEN(&active_dm_set); dm_ind++) { \
 	struct mged_dm *tp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, dm_ind); \
-	if ((id) == dm_get_id(tp->dm_dmp)) { \
+	if ((id) == tp->dm_native_id) { \
 	    (p) = tp; \
 	    break; \
 	} \
@@ -589,23 +605,12 @@ extern void dm_var_init(struct mged_state *s, struct mged_dm *target_dm);
 /* defined in dm-generic.c */
 extern int common_dm(struct mged_state *s, int argc, const char *argv[]);
 extern int mged_dm_motion(struct mged_state *s, int x, int y);
-extern void view_state_flag_hook(const struct bu_structparse *, const char *, void *,const char *, void *);
-extern void dirty_hook(const struct bu_structparse *, const char *, void *,const char *, void *);
-extern void zclip_hook(const struct bu_structparse *, const char *, void *,const char *, void *);
 
 /* external sp_hook functions */
 extern void cs_set_bg(const struct bu_structparse *, const char *, void *, const char *, void *); /* defined in color_scheme.c */
 
 /* defined in setup.c */
 extern void mged_rtCmdNotify(int);
-
-/* indices into which_dm[] */
-struct mged_view_hook_state {
-    struct dm *hs_dmp;
-    struct _view_state *vs;
-    struct mged_dm *mdmp;
-};
-extern void *set_hook_data(struct mged_state *s, struct mged_view_hook_state *hs);
 
 int dm_commands(int argc, const char *argv[], void *data);
 

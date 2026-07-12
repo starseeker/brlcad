@@ -38,9 +38,7 @@
 #include "bu/exit.h"
 #include "bu/malloc.h"
 #include "vmath.h"
-#include "dm.h"
-
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 
 char *framebuffer = NULL;
@@ -53,7 +51,8 @@ int screen_height;			/* input height */
 int screen_width;			/* input width */
 
 /* in cmap-crunch.c */
-extern void cmap_crunch(RGBpixel (*scan_buf), int pixel_ct, ColorMap *colormap);
+extern void cmap_crunch(unsigned char (*scan_buf)[3], int pixel_ct,
+	struct imgstream_fb_colormap *colormap);
 
 static int
 parse_positive_int_arg(const char *arg, int *value, const char *label)
@@ -146,13 +145,13 @@ get_args(int argc, char **argv)
 int
 main(int argc, char **argv)
 {
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     int y;
 
     unsigned char *scanline = NULL;	/* 1 scanline pixel buffer */
     int scanbytes;		/* # of bytes of scanline */
     int scanpix;		/* # of pixels of scanline */
-    ColorMap cmap;		/* libfb color map */
+    struct imgstream_fb_colormap cmap;
 
     char usage[] = "\
 Usage: fb-pix [-i -c] [-F framebuffer]\n\
@@ -170,24 +169,25 @@ Usage: fb-pix [-i -c] [-F framebuffer]\n\
     setmode(fileno(stdout), O_BINARY);
 
     scanpix = screen_width;
-    scanbytes = scanpix * sizeof(RGBpixel);
-    if ((scanline = (unsigned char *)malloc(scanbytes)) == RGBPIXEL_NULL) {
+    scanbytes = scanpix * 3;
+    if ((scanline = (unsigned char *)malloc(scanbytes)) == NULL) {
 	fprintf(stderr,
 		"fb-pix:  malloc(%d) failure\n", scanbytes);
 	bu_exit(2, NULL);
     }
 
-    if ((fbp = fb_open(framebuffer, screen_width, screen_height)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)screen_width,
+	    (size_t)screen_height)) == NULL) {
 	bu_exit(12, NULL);
     }
 
-    V_MIN(screen_height, fb_getheight(fbp));
-    V_MIN(screen_width, fb_getwidth(fbp));
+    V_MIN(screen_height, (int)imgstream_fb_height(fbp));
+    V_MIN(screen_width, (int)imgstream_fb_width(fbp));
 
     if (crunch) {
-	if (fb_rmap(fbp, &cmap) == -1) {
+	if (imgstream_fb_rmap(fbp, &cmap) == -1) {
 	    crunch = 0;
-	} else if (fb_is_linear_cmap(&cmap)) {
+	} else if (imgstream_fb_colormap_is_linear(&cmap)) {
 	    crunch = 0;
 	}
     }
@@ -195,9 +195,9 @@ Usage: fb-pix [-i -c] [-F framebuffer]\n\
     if (!inverse) {
 	/* Regular -- read bottom to top */
 	for (y=0; y < screen_height; y++) {
-	    fb_read(fbp, 0, y, scanline, screen_width);
+	    imgstream_fb_read(fbp, 0, y, scanline, (size_t)screen_width);
 	    if (crunch)
-		cmap_crunch((RGBpixel *)scanline, scanpix, &cmap);
+		cmap_crunch((unsigned char (*)[3])scanline, scanpix, &cmap);
 	    if (fwrite((char *)scanline, scanbytes, 1, outfp) != 1) {
 		perror("fwrite");
 		break;
@@ -206,16 +206,16 @@ Usage: fb-pix [-i -c] [-F framebuffer]\n\
     } else {
 	/* Inverse -- read top to bottom */
 	for (y = screen_height-1; y >= 0; y--) {
-	    fb_read(fbp, 0, y, scanline, screen_width);
+	    imgstream_fb_read(fbp, 0, y, scanline, (size_t)screen_width);
 	    if (crunch)
-		cmap_crunch((RGBpixel *)scanline, scanpix, &cmap);
+		cmap_crunch((unsigned char (*)[3])scanline, scanpix, &cmap);
 	    if (fwrite((char *)scanline, scanbytes, 1, outfp) != 1) {
 		perror("fwrite");
 		break;
 	    }
 	}
     }
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     if (scanline)
 	bu_free(scanline, "scanline");
     return 0;

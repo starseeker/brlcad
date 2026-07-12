@@ -202,7 +202,6 @@ set(
   pixtile.adoc
   pixuntile.adoc
   plot3-asc.adoc
-  plot3-dm.adoc
   plot3-fb.adoc
   plot3-plot3.adoc
   plot3-ps.adoc

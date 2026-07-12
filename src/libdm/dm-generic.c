@@ -33,7 +33,6 @@
 #include "bu/str.h"
 #include "bu/time.h"
 #include "dm.h"
-#include "dm/obol.h"
 #include "dm/vlist.h"
 #include "./include/private.h"
 #include "./null/dm-Null.h"
@@ -877,18 +876,6 @@ dm_get_mvars(struct dm *dmp)
     BU_CKMAG(dmp, DM_MAGIC, "dm internal");
     if (!dmp->i->m_vars) return (void *)dmp;
     return dmp->i->m_vars;
-}
-
-void *
-dm_obol_controller(struct dm *dmp)
-{
-    if (UNLIKELY(!dmp)) return NULL;
-    BU_CKMAG(dmp, DM_MAGIC, "dm internal");
-    if (!dmp->i || !dmp->i->dm_name ||
-	    (!BU_STR_EQUAL(dmp->i->dm_name, "obol") &&
-	     !BU_STR_EQUAL(dmp->i->dm_name, "tkobol")))
-	return NULL;
-    return dmp->i->p_vars;
 }
 
 void

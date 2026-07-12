@@ -53,7 +53,7 @@
 #include "bu/malloc.h"
 #include "bu/exit.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 /* Adapted from an assignment for
@@ -490,7 +490,7 @@ main(int argc, char **argv)
     }
 
     if (autosize) {
-	if (fb_common_file_size(&pa_width, &pa_height, picAname, 3) == 0) {
+	if (imgstream_image_file_size(&pa_width, &pa_height, picAname, 3) == 0) {
 	    fprintf(stderr, "pixmorph: unable to autosize\n");
 	    return 1;
 	}

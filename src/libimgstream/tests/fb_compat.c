@@ -205,7 +205,6 @@ test_spec_classification(void)
 {
     imgstream_fb_spec_info_t info;
 
-    imgstream_fb_display_host_clear();
     CHECK(imgstream_fb_spec_kind(NULL) == IMGSTREAM_FB_SPEC_MEMORY, "null spec maps to memory");
     CHECK(imgstream_fb_spec_kind("") == IMGSTREAM_FB_SPEC_MEMORY, "empty spec maps to memory");
     CHECK(imgstream_fb_spec_kind("/dev/mem") == IMGSTREAM_FB_SPEC_MEMORY, "memory spec maps to memory");
@@ -234,7 +233,7 @@ test_spec_classification(void)
     CHECK(imgstream_fb_spec_kind("localhost:5555") == IMGSTREAM_FB_SPEC_REMOTE, "host:port spec maps to remote");
     CHECK(imgstream_fb_spec_kind("ipc:/tmp/fb") == IMGSTREAM_FB_SPEC_REMOTE, "ipc spec maps to remote");
     CHECK(imgstream_fb_spec_kind("0") == IMGSTREAM_FB_SPEC_REMOTE, "numeric port spec maps to remote");
-    CHECK(imgstream_fb_spec_supported("0") == 0, "numeric remote spec is classified but not stream supported");
+    CHECK(imgstream_fb_spec_supported("0") == 1, "numeric remote spec is stream supported");
     CHECK(imgstream_fb_spec_info("0", &info) == 0 &&
 	    info.kind == IMGSTREAM_FB_SPEC_REMOTE &&
 	    info.remote == IMGSTREAM_FB_REMOTE_TCP &&
@@ -311,12 +310,16 @@ static int
 test_display_host_compat_stream(void)
 {
     struct display_host_test_state state;
+    struct display_host_test_state state2;
     struct imgstream_fb_display_host host;
     memset(&state, 0, sizeof(state));
+    memset(&state2, 0, sizeof(state2));
     memset(&host, 0, sizeof(host));
 
-    CHECK(imgstream_fb_display_host_set(NULL, &state) == -1, "null display host rejected");
-    CHECK(imgstream_fb_display_host_set(&host, &state) == -1, "display host without open callback rejected");
+    CHECK(imgstream_fb_open_display("/dev/qtgl", 4, 4, NULL, &state) == NULL,
+	    "null display host rejected");
+    CHECK(imgstream_fb_open_display("/dev/qtgl", 4, 4, &host, &state) == NULL,
+	    "display host without open callback rejected");
 
     host.open = display_host_open;
     host.close = display_host_close;
@@ -332,10 +335,10 @@ test_display_host_compat_stream(void)
     state.poll_return = 12;
     state.poll_rate_return = 30;
 
-    CHECK(imgstream_fb_display_host_set(&host, &state) == 0, "display host registered");
-    CHECK(imgstream_fb_spec_supported("/dev/qtgl") == 1, "display spec supported while host is registered");
+    CHECK(imgstream_fb_spec_supported("/dev/qtgl") == 0,
+	    "display spec requires an explicit host");
 
-    imgstream_fb_t *fb = imgstream_fb_open("/dev/qtgl", 5, 4);
+    imgstream_fb_t *fb = imgstream_fb_open_display("/dev/qtgl", 5, 4, &host, &state);
     CHECK(fb != NULL, "display compatibility stream opens through host");
     CHECK(state.open_count == 1 && state.open_display == IMGSTREAM_FB_DISPLAY_QTGL,
 	    "display host open callback saw qtgl display spec");
@@ -379,18 +382,26 @@ test_display_host_compat_stream(void)
     CHECK(imgstream_fb_poll_rate(fb) == 30 && state.poll_rate_count == 1,
 	    "display poll rate forwarded to host");
 
-    imgstream_fb_display_host_clear();
-    CHECK(imgstream_fb_spec_supported("/dev/qtgl") == 0,
-	    "clearing global host does not leave display spec globally supported");
+    state2.poll_return = 24;
+    state2.poll_rate_return = 60;
+    imgstream_fb_t *fb2 = imgstream_fb_open_display("/dev/swrast", 7, 6, &host, &state2);
+    CHECK(fb2 != NULL && state2.open_count == 1 && state.open_count == 1,
+	    "two display framebuffers open with isolated host state");
+    CHECK(imgstream_fb_poll(fb2) == 24 && state2.poll_count == 1 && state.poll_count == 1,
+	    "second display framebuffer dispatches only to its own host data");
     imgstream_fb_close(fb);
-    CHECK(state.close_count == 1, "display host close callback used copied host");
+    CHECK(state.close_count == 1 && state2.close_count == 0,
+	    "closing one display framebuffer leaves the other host active");
+    CHECK(imgstream_fb_poll_rate(fb2) == 60 && state2.poll_rate_count == 1,
+	    "remaining display framebuffer stays usable after peer teardown");
+    imgstream_fb_close(fb2);
+    CHECK(state2.close_count == 1, "second display framebuffer closes its own host");
 
     memset(&state, 0, sizeof(state));
     state.open_return = -1;
-    CHECK(imgstream_fb_display_host_set(&host, &state) == 0, "failing display host registered");
-    CHECK(imgstream_fb_open("/dev/qtgl", 2, 2) == NULL, "display host open failure rejects fb open");
+    CHECK(imgstream_fb_open_display("/dev/qtgl", 2, 2, &host, &state) == NULL,
+	    "display host open failure rejects fb open");
     CHECK(state.open_count == 1 && state.close_count == 0, "failed display open does not report close");
-    imgstream_fb_display_host_clear();
 
     return 0;
 }
@@ -819,6 +830,84 @@ test_diagnostic_compat_stream(void)
 
 
 static int
+test_image_io(void)
+{
+    static const unsigned char pixels[36] = {
+	1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+	21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+	41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52
+    };
+    char input_path[MAXPATHLEN] = {0};
+    FILE *input = bu_temp_file(input_path, sizeof(input_path));
+    CHECK(input != NULL, "allocated PIX import file");
+    CHECK(fwrite(pixels, 1, sizeof(pixels), input) == sizeof(pixels),
+	"wrote PIX import fixture");
+    CHECK(fflush(input) == 0 && fseek(input, 0, SEEK_SET) == 0,
+	"rewound PIX import fixture");
+
+    imgstream_fb_t *fb = imgstream_fb_open(NULL, 4, 3);
+    CHECK(fb != NULL, "opened image-I/O framebuffer");
+    struct imgstream_fb_import_options options =
+	IMGSTREAM_FB_IMPORT_OPTIONS_INIT;
+    CHECK(imgstream_fb_import_pix_fd(fb, fileno(input), input_path, 4, 3,
+	0, &options) == 0, "imported PIX fixture");
+    unsigned char readback[36] = {0};
+    CHECK(imgstream_fb_readrect(fb, 0, 0, 4, 3, readback) == 12 &&
+	memcmp(readback, pixels, sizeof(pixels)) == 0,
+	"PIX import preserved bottom-up rows");
+
+    char output_path[MAXPATHLEN] = {0};
+    FILE *output = bu_temp_file(output_path, sizeof(output_path));
+    CHECK(output != NULL, "allocated PIX export file");
+    CHECK(imgstream_fb_export_pix_fp(fb, output, 4, 3, 0, 0) == 0 &&
+	fflush(output) == 0 && fseek(output, 0, SEEK_SET) == 0,
+	"exported PIX fixture");
+    memset(readback, 0, sizeof(readback));
+    CHECK(fread(readback, 1, sizeof(readback), output) == sizeof(readback) &&
+	memcmp(readback, pixels, sizeof(pixels)) == 0,
+	"PIX export round trip was exact");
+
+    CHECK(fseek(input, 0, SEEK_SET) == 0, "rewound inverse PIX fixture");
+    options.inverse = 1;
+    CHECK(imgstream_fb_import_pix_fd(fb, fileno(input), input_path, 4, 3,
+	0, &options) == 0, "imported inverse PIX fixture");
+    memset(readback, 0, sizeof(readback));
+    CHECK(imgstream_fb_readrect(fb, 0, 0, 4, 3, readback) == 12 &&
+	memcmp(readback, pixels + 24, 12) == 0 &&
+	memcmp(readback + 24, pixels, 12) == 0,
+	"inverse PIX import flipped row placement");
+
+    icv_image_t *image = icv_image_create(2, 1, ICV_COLOR_SPACE_RGB);
+    CHECK(image != NULL, "created ICV import fixture");
+    image->data[0] = 1.0;
+    image->data[1] = 0.0;
+    image->data[2] = 0.0;
+    image->data[3] = 0.0;
+    image->data[4] = 1.0;
+    image->data[5] = 0.0;
+    options = (struct imgstream_fb_import_options)
+	IMGSTREAM_FB_IMPORT_OPTIONS_INIT;
+    options.screen_xoff = 1;
+    options.screen_yoff = 1;
+    CHECK(imgstream_fb_import_icv(fb, image, &options) == 0,
+	"imported ICV fixture");
+    unsigned char image_row[6] = {0};
+    CHECK(imgstream_fb_read(fb, 1, 1, image_row, 2) == 2 &&
+	image_row[0] == 255 && image_row[1] == 0 && image_row[2] == 0 &&
+	image_row[3] == 0 && image_row[4] == 255 && image_row[5] == 0,
+	"ICV import preserved RGB values and placement");
+
+    icv_destroy(image);
+    imgstream_fb_close(fb);
+    fclose(input);
+    fclose(output);
+    bu_file_delete(input_path);
+    bu_file_delete(output_path);
+    return 0;
+}
+
+
+static int
 test_defaults(void)
 {
     imgstream_fb_t *fb = imgstream_fb_open(NULL, 0, 0);
@@ -853,6 +942,8 @@ main(int ac, char **av)
     if (test_fanout_compat_stream())
 	return 1;
     if (test_diagnostic_compat_stream())
+	return 1;
+    if (test_image_io())
 	return 1;
     if (test_defaults())
 	return 1;

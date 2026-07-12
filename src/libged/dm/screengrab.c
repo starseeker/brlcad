@@ -28,8 +28,8 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include "brlobol/display_endpoint.h"
 #include "icv.h"
-#include "dm.h"
 #include "ged/draw_obol.h"
 
 #include "../ged_private.h"
@@ -60,24 +60,18 @@ screengrab_image_mime(struct bu_vls *msg, size_t argc, const char **argv, void *
 int
 ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 {
-    struct dm *dmp = NULL;
-    int i;
     int print_help = 0;
-    int bytes_per_pixel = 0;
-    int bytes_per_line = 0;
     int grab_fb = 0;
-    unsigned char **rows = NULL;
     unsigned char *idata = NULL;
     struct icv_image *bif = NULL;	/**< icv image container for saving images */
-    struct fb *fbp = NULL;
-    struct bu_vls dm_name = BU_VLS_INIT_ZERO;
+    struct bu_vls view_name = BU_VLS_INIT_ZERO;
     bu_mime_image_t type = BU_MIME_IMAGE_AUTO;
-    static char usage[] = "Usage: screengrab [-h] [-F] [-D name] [--format fmt] [file.img]\n";
+    static char usage[] = "Usage: screengrab [-h] [-F] [-V view] [--format fmt] [file.img]\n";
 
     struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",           "",     NULL,             &print_help,       "Print help and exit");
     BU_OPT(d[1], "F", "fb",             "",     NULL,             &grab_fb,          "screengrab framebuffer instead of scene display");
-    BU_OPT(d[2], "D", "dm",             "name", &bu_opt_vls,      &dm_name,          "name of DM to screengrab");
+    BU_OPT(d[2], "V", "view",           "name", &bu_opt_vls,      &view_name,        "view endpoint to capture");
     BU_OPT(d[3], "",  "format",         "fmt",  &screengrab_image_mime,      &type,             "output image file format");
     BU_OPT_NULL(d[4]);
 
@@ -99,43 +93,10 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 
     argc = opt_ret;
 
-    void *view_ctx = ged_view_active_ctx(gedp);
-    struct dm *cdmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-
-    if (bu_vls_strlen(&dm_name) && view_ctx) {
-	// We have a name - see if we can match it.
-	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-	for (size_t j = 0; j < BU_PTBL_LEN(views); j++) {
-	    if (dmp)
-		break;
-	    void *listed_view_ctx = (void *)BU_PTBL_GET(views, j);
-	    struct dm *ndmp = (struct dm *)ged_view_context_display_manager_get(listed_view_ctx);
-	    if (ndmp && !bu_vls_strcmp(dm_get_pathname(ndmp), &dm_name))
-		dmp = ndmp;
-	}
-	if (!dmp) {
-	    bu_vls_sprintf(gedp->ged_result_str, "DM %s specified, but not found in active set\n", bu_vls_cstr(&dm_name));
-	    bu_vls_free(&dm_name);
-	    return BRLCAD_ERROR;
-	}
-    }
-    bu_vls_free(&dm_name);
-
-    if (!dmp)
-	dmp = cdmp;
-
-    if (grab_fb) {
-	if (!dmp) {
-	    bu_vls_printf(gedp->ged_result_str,
-		    ": framebuffer capture requires a display manager\n");
-	    return BRLCAD_ERROR;
-	}
-	fbp = dm_get_fb(dmp);
-	if (!fbp) {
-	    bu_vls_printf(gedp->ged_result_str, ": display manager does not have a framebuffer");
-	    return BRLCAD_ERROR;
-	}
-    }
+    void *view_ctx = bu_vls_strlen(&view_name) ?
+	ged_view_find_ctx(gedp, bu_vls_cstr(&view_name)) :
+	ged_view_active_ctx(gedp);
+    bu_vls_free(&view_name);
 
     /* must be wanting help */
     if (!argc) {
@@ -143,50 +104,66 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    /* create image file */
-    if (!grab_fb) {
-	const struct bv *view = bv_context_view_const(
-	    (const struct bv_context *)view_ctx);
-	int width = dmp ? dm_get_width(dmp) : (view ? bv_width_get(view) : 0);
-	int height = dmp ? dm_get_height(dmp) : (view ? bv_height_get(view) : 0);
-	if (width <= 0)
-	    width = 512;
-	if (height <= 0)
-	    height = 512;
-
-	bytes_per_pixel = 3;
-	bytes_per_line = width * bytes_per_pixel;
-
-	(void)ged_draw_obol_framebuffer_present(gedp);
-	int obol_image = ged_draw_obol_view_display_image(gedp, view_ctx, &idata, 1, 0);
-	if (obol_image <= 0 && dmp && dm_make_current(dmp) == BRLCAD_OK)
-	    (void)dm_get_display_image(dmp, &idata, 1, 0);
-	if (!idata) {
-	    bu_vls_printf(gedp->ged_result_str,
-		    "%s: Obol display host did not return image data.", argv[0]);
-	    return BRLCAD_ERROR;
-	}
-	bif = icv_image_create(width, height, ICV_COLOR_SPACE_RGB);
-	if (bif == NULL) {
-	    bu_vls_printf(gedp->ged_result_str, ": could not create icv_image write structure.");
-	    return BRLCAD_ERROR;
-	}
-	rows = (unsigned char **)bu_calloc(height, sizeof(unsigned char *), "rows");
-	for (i = 0; i < height; ++i) {
-	    rows[i] = (unsigned char *)(idata + ((height-i-1)*bytes_per_line));
-	    /* TODO : Add double type data to maintain resolution */
-	    icv_writeline(bif, i, rows[i], ICV_DATA_UCHAR);
-	}
-	bu_free(rows, "rows");
-	bu_free(idata, "image data");
-
-    } else {
-	bif = fb_write_icv(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-	if (bif == NULL) {
-	    bu_vls_printf(gedp->ged_result_str, ": could not create icv_image from framebuffer.");
-	    return BRLCAD_ERROR;
-	}
+    if (!view_ctx) {
+	bu_vls_printf(gedp->ged_result_str, "view endpoint not found\n");
+	return BRLCAD_ERROR;
     }
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    if (!endpoint) {
+	bu_vls_printf(gedp->ged_result_str,
+		"view '%s' has no Obol display endpoint\n",
+		bv_name_get(bv_context_view_const(
+		    (const struct bv_context *)view_ctx)));
+	return BRLCAD_ERROR;
+    }
+
+    (void)ged_draw_obol_framebuffer_present(gedp);
+    if (!grab_fb && !brlobol_display_endpoint_view_sync(endpoint, view_ctx)) {
+	bu_vls_printf(gedp->ged_result_str,
+		"%s: could not synchronize the endpoint camera.", argv[0]);
+	return BRLCAD_ERROR;
+    }
+    size_t image_size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    enum brlobol_capture_plane capture_plane = grab_fb ?
+	BRLOBOL_CAPTURE_FRAMEBUFFER : BRLOBOL_CAPTURE_COMPOSITE;
+    if (!brlobol_display_endpoint_capture_plane(endpoint, capture_plane,
+	    &idata, &image_size, &width, &height, &components) || !idata ||
+	    !width || !height ||
+	    (components != 3 && components != 4) ||
+	    image_size < (size_t)width * height * components) {
+	bu_vls_printf(gedp->ged_result_str,
+		"%s: Obol display endpoint did not return %s image data.",
+		argv[0], grab_fb ? "framebuffer" : "composite");
+	if (idata)
+	    bu_free(idata, "endpoint image data");
+	return BRLCAD_ERROR;
+    }
+
+    bif = icv_image_create((int)width, (int)height, ICV_COLOR_SPACE_RGB);
+    if (!bif) {
+	bu_free(idata, "endpoint image data");
+	bu_vls_printf(gedp->ged_result_str,
+		": could not create icv_image write structure.");
+	return BRLCAD_ERROR;
+    }
+    unsigned char *row = (unsigned char *)bu_malloc((size_t)width * 3,
+	"endpoint image row");
+    for (unsigned int y = 0; y < height; y++) {
+	for (unsigned int x = 0; x < width; x++) {
+	    const unsigned char *source = idata +
+		((size_t)y * width + x) * components;
+	    row[(size_t)x * 3] = source[0];
+	    row[(size_t)x * 3 + 1] = source[1];
+	    row[(size_t)x * 3 + 2] = source[2];
+	}
+	icv_writeline(bif, (int)y, row, ICV_DATA_UCHAR);
+    }
+    bu_free(row, "endpoint image row");
+    bu_free(idata, "endpoint image data");
 
     icv_write(bif, argv[0], type);
     icv_destroy(bif);

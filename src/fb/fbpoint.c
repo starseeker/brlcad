@@ -39,16 +39,16 @@
 #include "bu/exit.h"
 #include "bu/getopt.h"
 #include "vmath.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #define LIBTERMIO_IMPLEMENTATION
 #include "libtermio.h"
 
 
-struct fb *fbp;
+imgstream_fb_t *fbp;
 
 int JumpSpeed;		/* # pixels skipped with fast commands. */
 
-RGBpixel curPix; 		/* Current pixel value */
+unsigned char curPix[3]; 	/* Current pixel value */
 int curX, curY;		/* current position */
 int oldX, oldY;		/* previous position */
 
@@ -269,16 +269,17 @@ main(int argc, char **argv)
     if (yprefix == NULL)
 	yprefix = &null_str;
 
-    if ((fbp = fb_open(framebuffer, width, height)) == NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)width,
+				 (size_t)height)) == NULL)
 	bu_exit(12, "Unable to open framebuffer\n");
 
-    JumpSpeed = fb_getwidth(fbp)/16;
+    JumpSpeed = (int)imgstream_fb_width(fbp)/16;
     if (JumpSpeed < 2) JumpSpeed = 2;
     /* check for default starting positions */
     if (curX < 0)
-	curX = fb_getwidth(fbp)/2;
+	curX = (int)imgstream_fb_width(fbp)/2;
     if (curY < 0)
-	curY = fb_getheight(fbp)/2;
+	curY = (int)imgstream_fb_height(fbp)/2;
     oldX = oldY = -1;
 
     /* Set RAW mode */
@@ -287,13 +288,13 @@ main(int argc, char **argv)
     clr_Echo(0);
 
     while (Run) {
-	CLAMP(curX, 0, fb_getwidth(fbp)-1);
-	CLAMP(curY, 0, fb_getheight(fbp)-1);
+	CLAMP(curX, 0, (int)imgstream_fb_width(fbp)-1);
+	CLAMP(curY, 0, (int)imgstream_fb_height(fbp)-1);
 
 	if (oldX != curX || oldY != curY) {
 	    /* get pixel value, move cursor */
-	    fb_read(fbp, curX, curY, curPix, 1);
-	    fb_cursor(fbp, 1, curX, curY);
+	    imgstream_fb_read(fbp, curX, curY, curPix, 1);
+	    imgstream_fb_cursor(fbp, 1, curX, curY);
 	    oldX = curX;
 	    oldY = curY;
 	}
@@ -304,7 +305,7 @@ main(int argc, char **argv)
 	SimpleInput();			/* read and do keyboard */
     }
 
-    fb_cursor(fbp, 0, curX, curY);	/* turn off */
+    imgstream_fb_cursor(fbp, 0, curX, curY);	/* turn off */
 
     fprintf(stderr, "\n");
     fflush(stderr);
@@ -319,7 +320,7 @@ main(int argc, char **argv)
     else
 	printf("%s%d %s%d\n", xprefix, curX, yprefix, curY);
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

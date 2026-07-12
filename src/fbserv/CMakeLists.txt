@@ -1,8 +1,5 @@
-include_directories(${DM_INCLUDE_DIRS})
-
-brlcad_addexec(fbserv "fbserv.c" "libdm;libimgstream;libpkg")
+brlcad_addexec(fbserv "fbserv.c" "libimgstream;libpkg;libbu")
 target_link_libraries(fbserv ${WINSOCK_LIB})
-add_target_deps(fbserv dm_plugins)
 
 cmakefiles(
   tls_wrap.h

@@ -1,11 +1,14 @@
 set(
   LIBIMGSTREAM_SOURCES
   fb_compat.c
+  fb_io.c
+  fb_remote.c
   fbserv_auth.c
   fbserv_framebuffer.c
   fbserv_pkg.c
   fbserv_server.c
   fbserv_state.c
+  image_size.c
   stream.c
 )
 
@@ -18,6 +21,7 @@ endif()
 # Note - libimgstream_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
 brlcad_addlib(libimgstream "${LIBIMGSTREAM_SOURCES}" "" ""
   PRIVATE_LIBS ${LIBIMGSTREAM_PRIVATE_LIBS}
+  UNITY_BUILD_SKIP fb_remote.c
 )
 set_target_properties(libimgstream PROPERTIES VERSION 20.0.1 SOVERSION 20)
 
@@ -36,6 +40,7 @@ add_subdirectory(tests)
 
 cmakefiles(
   CMakeLists.txt
+  fb_remote.h
 )
 
 # Local Variables:

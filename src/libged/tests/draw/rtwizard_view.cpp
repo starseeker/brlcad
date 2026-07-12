@@ -67,8 +67,6 @@
 
 #include <bu.h>
 #include "bu/opt.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 #include <icv.h>
 #include "ged/draw.h"
@@ -357,8 +355,7 @@ test_multiple_null_views(const char *datadir)
 /* ---- helpers for Obol display-backed tests -------------------------------- */
 
 /*
- * Open a GED instance with an attached Obol DM (mirrors the rtwizard GUI
- * context, where the MGED widget has a real display manager for rendering).
+ * Open a GED instance with a headless Obol endpoint.
  */
 static struct ged *
 open_gedp_obol(const char *gfile, int width, int height)
@@ -368,24 +365,15 @@ open_gedp_obol(const char *gfile, int width, int height)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    const char *s_av[6] = {"dm", "attach", "obol", "RTW_OBOL", NULL};
-    ged_exec_dm(gedp, 4, s_av);
-
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)ged_view_context_display_manager_get(v);
-    if (!dmp) {
+    bv_dimensions_set(DRAW_TEST_BV(v), width, height);
+    const char *s_av[7] = {
+	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
+    };
+    if (ged_exec_dm(gedp, 6, s_av) != BRLCAD_OK) {
 	ged_close(gedp);
 	return NULL;
     }
-    dm_set_width(dmp, width);
-    dm_set_height(dmp, height);
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-    fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
-    dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
-    ged_view_context_display_manager_set(v, dmp);
-    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
     bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     return gedp;

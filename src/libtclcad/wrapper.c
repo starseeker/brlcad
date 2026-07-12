@@ -26,18 +26,30 @@
 #include "ged/view.h"
 #include "rt/view.h"
 #include "tclcad.h"
+#include "brlobol/display_endpoint.h"
 
 /* Private headers */
 #include "./tclcad_private.h"
 #include "./view/view.h"
 
 static void
-tclcad_wrapper_sync_dm_dimensions(void *target_ctx, const void *source_ctx)
+tclcad_wrapper_sync_dimensions(void *target_ctx, void *source_ctx)
 {
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(source_ctx);
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(source_ctx);
+    struct brlobol_endpoint_property_value width =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct brlobol_endpoint_property_value height =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     struct bv *target_view = bv_context_view((struct bv_context *)target_ctx);
-    if (dmp && target_view)
-	bv_dimensions_set(target_view, dm_get_width(dmp), dm_get_height(dmp));
+    if (endpoint && target_view &&
+	brlobol_display_endpoint_property_get(endpoint, "endpoint.width",
+	    &width) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	brlobol_display_endpoint_property_get(endpoint, "endpoint.height",
+	    &height) == BRLOBOL_ENDPOINT_PROPERTY_OK && width.uint_value &&
+	height.uint_value)
+	bv_dimensions_set(target_view, (int)width.uint_value,
+	    (int)height.uint_value);
 }
 
 /* Wraps calls to commands like "draw" that need to reset the view */
@@ -78,7 +90,7 @@ to_autoview_func(struct ged *gedp,
     for (i = 0; i < BU_PTBL_LEN(views); i++) {
 	view_ctx = BU_PTBL_GET(views, i);
 	if (to_is_viewable(view_ctx)) {
-	    tclcad_wrapper_sync_dm_dimensions(ged_view_active_ctx(gedp), view_ctx);
+	    tclcad_wrapper_sync_dimensions(ged_view_active_ctx(gedp), view_ctx);
 	}
     }
 
@@ -295,13 +307,6 @@ to_view_func_common(struct ged *gedp,
 
     bu_free(av, "free av copy");
 
-    /* Keep the view's perspective in sync with its corresponding display manager */
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    const struct bv *view =
-	bv_context_view_const((const struct bv_context *)view_ctx);
-    if (dmp && view)
-	dm_set_perspective(dmp, bv_perspective_get(view));
-
     ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
     if (ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh)
@@ -310,7 +315,7 @@ to_view_func_common(struct ged *gedp,
 
 	ged_exec_redraw(gedp, 1, (const char **)gr_av);
 
-	tclcad_wrapper_sync_dm_dimensions(view_ctx, view_ctx);
+	tclcad_wrapper_sync_dimensions(view_ctx, view_ctx);
     }
 
     if (ret == BRLCAD_OK) {
@@ -418,13 +423,6 @@ to_dm_func(struct ged *gedp,
     ret = (*func)(gedp, ac, (const char **)av);
 
     bu_free(av, "free av copy");
-
-    /* Keep the view's perspective in sync with its corresponding display manager */
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    const struct bv *view =
-	bv_context_view_const((const struct bv_context *)view_ctx);
-    if (dmp && view)
-	dm_set_perspective(dmp, bv_perspective_get(view));
 
     return ret;
 }

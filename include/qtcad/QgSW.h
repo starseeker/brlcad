@@ -62,6 +62,7 @@ bool isValid() const    override { return true; }
 qg_legacy_view *view()           const override;
 bool legacyBackendInitialized() const override;
 BRLObolViewController *obolViewController() const override;
+void setObolViewController(BRLObolViewController *) override;
 
 void set_view(qg_legacy_view *)               override;
 

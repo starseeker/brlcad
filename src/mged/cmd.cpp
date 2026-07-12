@@ -1869,10 +1869,10 @@ mged_get_filename(int ac, const char **av, void *d, void *sret)
 	bu_free((void *)dir, "get_file_name: directory string");
     }
 
-    if (dm_get_pathname(DMP)) {
+    if (mged_dm_pathname(s->mged_curr_dm)) {
 	bu_vls_printf(&cmd,
 		"getFile %s %s {{{All Files} {*}}} {Get File}",
-		bu_vls_addr(dm_get_pathname(DMP)),
+		mged_dm_pathname(s->mged_curr_dm),
 		bu_vls_addr(&varname_vls));
     }
     bu_vls_free(&varname_vls);
@@ -1999,7 +1999,7 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 	for (BU_LIST_FOR (clp, cmd_list, &head_cmd_list.l)) {
 	    bu_vls_trunc(&vls, 0);
 	    if (clp->cl_tie) {
-		struct bu_vls *pn = dm_get_pathname(clp->cl_tie->dm_dmp);
+		struct bu_vls *pn = mged_dm_pathname_vls(clp->cl_tie);
 		if (pn && bu_vls_strlen(pn)) {
 		    bu_vls_printf(&vls, "%s %s", bu_vls_cstr(&clp->cl_name), bu_vls_cstr(pn));
 		    Tcl_AppendElement(interpreter, bu_vls_cstr(&vls));
@@ -2012,7 +2012,7 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 
 	bu_vls_trunc(&vls, 0);
 	if (clp->cl_tie) {
-	    struct bu_vls *pn = dm_get_pathname(clp->cl_tie->dm_dmp);
+	    struct bu_vls *pn = mged_dm_pathname_vls(clp->cl_tie);
 	    if (pn && bu_vls_strlen(pn)) {
 		bu_vls_printf(&vls, "%s %s", bu_vls_cstr(&clp->cl_name), bu_vls_cstr(pn));
 		Tcl_AppendElement(interpreter, bu_vls_cstr(&vls));
@@ -2064,7 +2064,7 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
     /* print out the display manager that we're tied to */
     if (argc == 2) {
 	if (clp->cl_tie) {
-	    struct bu_vls *pn = dm_get_pathname(clp->cl_tie->dm_dmp);
+	    struct bu_vls *pn = mged_dm_pathname_vls(clp->cl_tie);
 	    if (pn && bu_vls_strlen(pn)) {
 		Tcl_AppendElement(interpreter, bu_vls_cstr(pn));
 	    }
@@ -2082,7 +2082,7 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	struct bu_vls *pn = dm_get_pathname(m_dmp->dm_dmp);
+	struct bu_vls *pn = mged_dm_pathname_vls(m_dmp);
 	if (pn && !bu_vls_strcmp(&vls, pn)) {
 	    dlp = m_dmp;
 	    break;
@@ -2116,9 +2116,6 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 int
 f_postscript(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
 {
-    int status;
-    struct mged_dm *dml;
-    struct _view_state *vsp;
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
@@ -2134,31 +2131,21 @@ f_postscript(ClientData clientData, Tcl_Interp *interpreter, int argc, const cha
     if (s->gedp == GED_NULL)
 	return TCL_OK;
 
-    dml = s->mged_curr_dm;
-    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
-    status = mged_attach(s, "postscript", argc, argv);
-    if (status == TCL_ERROR)
-	return TCL_ERROR;
-
-    vsp = view_state;  /* save state info pointer */
-
-    bu_free((void *)menu_state, "f_postscript: menu_state");
-    menu_state = dml->dm_menu_state;
-
-    scroll_top = dml->dm_scroll_top;
-    scroll_active = dml->dm_scroll_active;
-    scroll_y = dml->dm_scroll_y;
-    memmove((void *)scroll_array, (void *)dml->dm_scroll_array, sizeof(struct scroll_item *) * 6);
-
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
-    refresh(s);
-
-    view_state = vsp;  /* restore state info pointer */
-    status = Tcl_Eval(interpreter, "release");
-    set_curr_dm(s, dml);
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
-    return status;
+    /* The historical MGED command uses -c for creator, while the GED
+     * exporter uses -a so -c remains available for border color. */
+    char **ged_argv = bu_argv_dup((size_t)argc, argv);
+    for (int i = 1; i < argc; i++) {
+	if (ged_argv[i][0] == '-' && ged_argv[i][1] == 'c')
+	    ged_argv[i][1] = 'a';
+    }
+
+    int status = ged_exec(s->gedp, argc, (const char **)ged_argv);
+    bu_argv_free((size_t)argc, ged_argv);
+    GED_OUTPUT;
+
+    return (status == BRLCAD_OK || (status & GED_HELP)) ? TCL_OK : TCL_ERROR;
 }
 
 
@@ -2180,7 +2167,7 @@ f_winset(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 
     /* print pathname of drawing window with primary focus */
     if (argc == 1) {
-	struct bu_vls *pn = dm_get_pathname(DMP);
+	struct bu_vls *pn = mged_dm_pathname_vls(s->mged_curr_dm);
 	if (pn && bu_vls_strlen(pn)) {
 	    Tcl_AppendResult(interpreter, bu_vls_cstr(pn), (char *)NULL);
 	}
@@ -2190,7 +2177,7 @@ f_winset(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     /* change primary focus to window argv[1] */
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	struct bu_vls *pn = dm_get_pathname(p->dm_dmp);
+	struct bu_vls *pn = mged_dm_pathname_vls(p);
 	if (pn && BU_STR_EQUAL(argv[1], bu_vls_cstr(pn))) {
 	    set_curr_dm(s, p);
 
@@ -2592,11 +2579,6 @@ cmd_draw(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, const
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-
-    void *view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
-    if (view_ctx && DMP) {
-	bv_dimensions_set(mged_view_context_view(view_ctx), dm_get_width(DMP), dm_get_height(DMP));
-    }
 
     return edit_com(s, argc, argv);
 }

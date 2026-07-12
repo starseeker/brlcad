@@ -34,6 +34,7 @@
 #include "common.h"
 
 /* bu/ipc.h removed - transport handled by libpkg */
+#include "brlobol/display_endpoint.h"
 #include "bu/log.h"
 #include "imgstream/fbserv.h"
 #include "pkg.h"
@@ -73,12 +74,12 @@ public:
     void setDisplay(QgView *v)
     {
 	display = v;
-	host.setCanvas(display ? display->canvasBase() : nullptr);
     }
 
     int configure(struct ged *new_gedp, QgView *v)
     {
-	if (!new_gedp || !v || !v->canvasBase() || !v->obolViewController())
+	if (!new_gedp || !v || !v->canvasBase() || !v->obolViewController() ||
+	    !v->displayEndpoint())
 	    return -1;
 
 	/* Detach image nodes before moving the persistent host to another view. */
@@ -91,13 +92,17 @@ public:
 	if (!view_ctx)
 	    return -1;
 
-	if (!ged_draw_obol_controller_attach_opaque_for_view(gedp,
-		view_ctx, v->obolViewController(), 1))
+	if (!ged_view_context_display_endpoint_set(view_ctx,
+		v->displayEndpoint(), 0))
 	    return -1;
 
+	QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
+	    brlobol_display_endpoint_host(v->displayEndpoint()));
+	if (!host || host->canvas() != v->canvasBase())
+	    return -1;
 	QSize size = renderSize();
 	return ged_draw_obol_framebuffer_backend_install_for_view(gedp,
-	    view_ctx, &host, size.width(), size.height(), 1);
+	    view_ctx, host, size.width(), size.height(), 1);
     }
 
     void notifyUpdated()
@@ -130,7 +135,6 @@ private:
     struct ged *gedp = nullptr;
     void *view_ctx = nullptr;
     QgView *display = nullptr;
-    QgObolWindowHost host;
 };
 
 static QDMObolFramebufferBridge *qdm_active_obol_bridge = nullptr;

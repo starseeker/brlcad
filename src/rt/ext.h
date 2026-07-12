@@ -27,7 +27,7 @@
 #define RT_EXT_H
 
 #include "optical.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "rt/cmd.h"
 #include "bu/parallel.h" /* for MAX_PSW */
 #include "bu/ptbl.h"
@@ -35,6 +35,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef unsigned char rt_pixel_t[3];
 
 /*
  *	A Bit vector to determine how much stuff rt prints when not in
@@ -102,7 +104,7 @@ extern point_t viewbase_model;		/* model-space location of viewplane corner */
 extern fastf_t gift_grid_rounding;
 
 /***** variables from main.c *****/
-extern struct fb *fbp;			/* framebuffer handle */
+extern imgstream_fb_t *fbp;		/* framebuffer handle */
 extern FILE *outfp;			/* optional output file */
 extern int output_is_binary;		/* !0 means output is binary */
 extern int report_progress;		/* !0 = user wants progress report */
@@ -202,7 +204,7 @@ enum {
     CLT_ACCUM = (1<<1)      /* TODO */
 };
 
-extern void clt_connect_fb(struct fb *fbp);
+extern void clt_connect_fb(imgstream_fb_t *fbp);
 
 extern void clt_view_init(unsigned int mode);
 extern void clt_run(int cur_pixel, int last_pixel);

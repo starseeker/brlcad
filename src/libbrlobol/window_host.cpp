@@ -651,11 +651,12 @@ brlobol_fb_host_poll_rate(const imgstream_fb_t *UNUSED(fb), void *data)
     return host ? host->pollRate() : 0;
 }
 
-int
-brlobol_window_host_register_display_host(BRLObolWindowHost *host)
+imgstream_fb_t *
+brlobol_window_host_open_display_framebuffer(BRLObolWindowHost *host,
+	const char *spec, size_t width, size_t height)
 {
     if (!host)
-	return -1;
+	return NULL;
 
     struct imgstream_fb_display_host displayHost;
     memset(&displayHost, 0, sizeof(displayHost));
@@ -670,11 +671,5 @@ brlobol_window_host_register_display_host(BRLObolWindowHost *host)
     displayHost.setcursor = brlobol_fb_host_setcursor;
     displayHost.poll = brlobol_fb_host_poll;
     displayHost.poll_rate = brlobol_fb_host_poll_rate;
-    return imgstream_fb_display_host_set(&displayHost, host);
-}
-
-void
-brlobol_window_host_unregister_display_host(void)
-{
-    imgstream_fb_display_host_clear();
+    return imgstream_fb_open_display(spec, width, height, &displayHost, host);
 }

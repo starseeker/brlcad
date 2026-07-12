@@ -15,6 +15,7 @@
 #include "common.h"
 
 #include <atomic>
+#include <climits>
 #include <cerrno>
 #include <cstring>
 #include <map>
@@ -33,6 +34,7 @@
 #include "brlobol/viewport_image.h"
 #include "brlobol/window_host.h"
 #include "bu/log.h"
+#include "bu/malloc.h"
 #include "bv.h"
 #include "imgstream/fbserv.h"
 #include "ged/draw_obol.h"
@@ -46,6 +48,10 @@ class BRLObolViewController;
 namespace {
 
 class GedObolFbservBridge;
+
+static int ged_obol_capture_framebuffer(void *ctx, unsigned char **pixels,
+	size_t *size, unsigned int *width, unsigned int *height,
+	unsigned int *components);
 
 static int ged_obol_fb_info(void *ctx, struct fbserv_fb_info *info);
 static int ged_obol_fb_clear(void *ctx, const unsigned char rgb[3]);
@@ -119,6 +125,7 @@ public:
     ~GedObolFbservBridge()
     {
 	stopWatchers();
+	clearCaptureProvider();
 	framebuffer.close();
     }
 
@@ -135,10 +142,11 @@ public:
 
 	gedp = new_gedp;
 	view_ctx = new_view_ctx;
+	bindCaptureProviderLocked();
 	present_on_flush = requested_present_on_flush ? 1 : 0;
 	BRLObolWindowHost *active_host = window_host ? window_host :
 	    &default_host;
-	if (active_host == &default_host || !active_host->getController())
+	if (active_host->getController() != controller)
 	    active_host->attachController(controller, FALSE);
 	framebuffer.setHost(active_host);
 
@@ -349,7 +357,64 @@ public:
     int present()
     {
 	std::lock_guard<std::mutex> guard(lock);
+	bindCaptureProviderLocked();
 	return framebuffer.present();
+    }
+
+    int apply(ged_draw_obol_framebuffer_operation_t operation,
+	    void *userdata, int publish)
+    {
+	if (!operation)
+	    return BRLCAD_ERROR;
+	std::lock_guard<std::mutex> guard(lock);
+	if (framebuffer.ensure() != 0)
+	    return BRLCAD_ERROR;
+	int ret = operation(framebuffer.framebuffer(), userdata);
+	if (ret != BRLCAD_OK || !publish)
+	    return ret;
+	bindCaptureProviderLocked();
+	/* Publication marks the image stream complete and schedules endpoint
+	 * presentation.  Refresh host-side retained image data now, but tolerate a
+	 * host that can only finish presentation from its normal update thread. */
+	(void)framebuffer.present();
+	if (imgstream_fb_flush(framebuffer.framebuffer()) != 0)
+	    return BRLCAD_ERROR;
+	notifyUpdatedLocked();
+	return BRLCAD_OK;
+    }
+
+    int captureFramebuffer(unsigned char **pixels, size_t *size,
+	    unsigned int *width, unsigned int *height,
+	    unsigned int *components)
+    {
+	if (!pixels || !size || !width || !height || !components)
+	    return 0;
+	*pixels = NULL;
+	*size = 0;
+	*width = 0;
+	*height = 0;
+	*components = 0;
+
+	std::lock_guard<std::mutex> guard(lock);
+	BRLObolFramebufferInfo info;
+	if (framebuffer.info(&info) != 0 || info.width <= 0 ||
+	    info.height <= 0 || info.width > INT_MAX / info.height)
+	    return 0;
+	const size_t byte_count = (size_t)info.width *
+	    (size_t)info.height * 3;
+	unsigned char *data = static_cast<unsigned char *>(bu_malloc(
+	    byte_count, "Obol framebuffer-plane capture"));
+	if (framebuffer.readrect(0, 0, info.width, info.height, data) !=
+	    info.width * info.height) {
+	    bu_free(data, "Obol framebuffer-plane capture");
+	    return 0;
+	}
+	*pixels = data;
+	*size = byte_count;
+	*width = (unsigned int)info.width;
+	*height = (unsigned int)info.height;
+	*components = 3;
+	return 1;
     }
 
     int setVisible(int visible)
@@ -449,6 +514,24 @@ public:
     }
 
 private:
+    void bindCaptureProviderLocked()
+    {
+	brlobol_display_endpoint_t *endpoint = view_ctx ?
+	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	if (endpoint)
+	    (void)brlobol_display_endpoint_framebuffer_capture_provider_set(
+		endpoint, ged_obol_capture_framebuffer, this);
+    }
+
+    void clearCaptureProvider()
+    {
+	brlobol_display_endpoint_t *endpoint = view_ctx ?
+	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	if (endpoint)
+	    (void)brlobol_display_endpoint_framebuffer_capture_provider_set(
+		endpoint, NULL, this);
+    }
+
     void notifyUpdatedLocked()
     {
 	if (view_ctx)
@@ -589,6 +672,15 @@ static int ged_obol_fb_flush(void *ctx) { return bridge_from_ctx(ctx)->flush(); 
 static int ged_obol_fb_poll(void *ctx) { return bridge_from_ctx(ctx)->poll(); }
 static int ged_obol_fb_help(void *ctx) { return bridge_from_ctx(ctx)->help(); }
 
+static int
+ged_obol_capture_framebuffer(void *ctx, unsigned char **pixels, size_t *size,
+	unsigned int *width, unsigned int *height, unsigned int *components)
+{
+    GedObolFbservBridge *bridge = bridge_from_ctx(ctx);
+    return bridge ? bridge->captureFramebuffer(pixels, size, width, height,
+	components) : 0;
+}
+
 } // namespace
 
 static int
@@ -641,6 +733,27 @@ ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
 {
     return ged_obol_fbserv_configure_for_view(gedp, view_ctx, NULL, 0, 0,
 	0, 1);
+}
+
+extern "C" GED_EXPORT int
+ged_draw_obol_framebuffer_apply_for_view(struct ged *gedp,
+	void *view_ctx,
+	ged_draw_obol_framebuffer_operation_t operation,
+	void *userdata,
+	int publish)
+{
+    if (!gedp || !operation)
+	return BRLCAD_ERROR;
+    if (!view_ctx)
+	view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx ||
+	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) !=
+	    BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    GedObolFbservBridge *bridge = bridge_from_fbs(gedp->ged_fbs);
+    return bridge ? bridge->apply(operation, userdata, publish) :
+	BRLCAD_ERROR;
 }
 
 extern "C" GED_EXPORT int

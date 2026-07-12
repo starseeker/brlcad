@@ -25,6 +25,7 @@
 #include "common.h"
 
 #include <math.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,6 +63,16 @@ struct ged_draw_transparency_ctx {
     fastf_t transparency;
     int changed;
 };
+
+
+static int
+_ged_draw_retained_source_count(struct ged *gedp)
+{
+    size_t source_count = 0;
+    if (!ged_draw_obol_database_source_count(gedp, 0, &source_count))
+	return 0;
+    return source_count > (size_t)INT_MAX ? INT_MAX : (int)source_count;
+}
 
 
 struct ged_draw_visibility_ctx {
@@ -1617,13 +1628,13 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    ged_draw_bump_material_revision(gedp);
 	    ret = 1;
 	    if (result)
-		result->affected_shapes = ged_draw_shape_count(gedp);
+		result->affected_shapes = _ged_draw_retained_source_count(gedp);
 	    break;
 	case GED_DRAW_TXN_REFRESH_MATERIAL_COLORS:
 	    ged_draw_refresh_material_colors(gedp);
 	    ret = 1;
 	    if (result)
-		result->affected_shapes = ged_draw_shape_count(gedp);
+		result->affected_shapes = _ged_draw_retained_source_count(gedp);
 	    break;
 	case GED_DRAW_TXN_REDRAW:
 	    ret = _ged_draw_redraw(gedp, path, txn->view);

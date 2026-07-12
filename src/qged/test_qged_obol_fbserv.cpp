@@ -14,6 +14,7 @@
 
 #include "fbserv.h"
 
+#include "brlobol/display_endpoint.h"
 #include "brlobol/image_source.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/viewport_image.h"
@@ -21,6 +22,7 @@
 #include "bu/log.h"
 #include "imgstream/fbserv.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgView.h"
 
@@ -122,6 +124,12 @@ test_qged_obol_fbserv_backend(void)
     } while (0)
 
     qdm_configure_ged_fbserv_handlers(gedp, &view);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    GED_CHECK(view.displayEndpoint() != NULL &&
+	ged_view_context_display_endpoint_get(view_ctx) == view.displayEndpoint(),
+	"qged framebuffer uses the visible view display endpoint");
+    GED_CHECK(brlobol_display_endpoint_host(view.displayEndpoint()) != NULL,
+	"qged visible endpoint retains its Qt host");
     struct fbserv_obj *fbs = gedp->ged_fbs;
     GED_CHECK(fbs != NULL, "GED must own an fbserv object");
     GED_CHECK(fbs_legacy_framebuffer(fbs) == NULL,

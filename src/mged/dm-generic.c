@@ -44,6 +44,7 @@
 #include "raytrace.h"
 #include "ged.h"
 #include "ged/view.h"
+#include "brlobol/display_endpoint.h"
 #include "rt/view.h"
 
 #include "./mged.h"
@@ -128,10 +129,16 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	old_orig_gui = mged_variables->mv_orig_gui;
 
-	fx = dm_Xx2Normal(DMP, atoi(argv[1]));
-	fy = dm_Xy2Normal(DMP, atoi(argv[2]), 0);
+	if (!bv_screen_to_view(&fx, &fy, view, atoi(argv[1]), atoi(argv[2]))) {
+	    Tcl_AppendResult(s->interp, "dm m: view has no usable dimensions\n",
+		    (char *)NULL);
+	    return TCL_ERROR;
+	}
+	const int view_width = bv_width_get(view);
+	const int view_height = bv_height_get(view);
+	const fastf_t aspect = (fastf_t)view_width / (fastf_t)view_height;
 	x = fx * RT_VIEW_MAX;
-	y = fy * RT_VIEW_MAX;
+	y = fy * aspect * RT_VIEW_MAX;
 	bv_center_mat_get(view_center, view);
 	bv_model2view_get(model2view, view);
 	bv_view2model_get(view2model, view);
@@ -152,7 +159,6 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	}
 
 	mged_variables->mv_orig_gui = 0;
-	fy = dm_Xy2Normal(DMP, atoi(argv[2]), 1);
 	y = fy * RT_VIEW_MAX;
 
     end:
@@ -170,7 +176,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	    MAT4X3PNT(model_pt, view2model, view_pt);
 	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
-	    if (dm_get_zclip(DMP))
+	    if (bv_zclip_get(view))
 		bu_vls_printf(&vls, "nirt -c --xyz %lf %lf %lf",
 			      model_pt[X], model_pt[Y], model_pt[Z]);
 	    else
@@ -354,13 +360,21 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 	dm_omx = atoi(argv[2]);
 	dm_omy = atoi(argv[3]);
+	fastf_t mouse_view_x = 0.0;
+	fastf_t mouse_view_y = 0.0;
+	if (!bv_screen_to_view(&mouse_view_x, &mouse_view_y, view,
+		dm_omx, dm_omy)) {
+	    Tcl_AppendResult(s->interp,
+		    "dm adc: view has no usable dimensions\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
 	view_local_scale = bv_scale_get(view) * s->dbip->dbi_base2local;
 	bv_view2model_get(view2model, view);
 
 	switch (*argv[1]) {
 	    case '1':
-		fx = dm_Xx2Normal(DMP, dm_omx) * RT_VIEW_MAX - adc->dv_x;
-		fy = dm_Xy2Normal(DMP, dm_omy, 1) * RT_VIEW_MAX - adc->dv_y;
+		fx = mouse_view_x * RT_VIEW_MAX - adc->dv_x;
+		fy = mouse_view_y * RT_VIEW_MAX - adc->dv_y;
 
 		bu_vls_printf(&vls, "adc a1 %lf\n", RAD2DEG*atan2(fy, fx));
 		Tcl_Eval(s->interp, bu_vls_addr(&vls));
@@ -369,8 +383,8 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 		am_mode = AMM_ADC_ANG1;
 		break;
 	    case '2':
-		fx = dm_Xx2Normal(DMP, dm_omx) * RT_VIEW_MAX - adc->dv_x;
-		fy = dm_Xy2Normal(DMP, dm_omy, 1) * RT_VIEW_MAX - adc->dv_y;
+		fx = mouse_view_x * RT_VIEW_MAX - adc->dv_x;
+		fy = mouse_view_y * RT_VIEW_MAX - adc->dv_y;
 
 		bu_vls_printf(&vls, "adc a2 %lf\n", RAD2DEG*atan2(fy, fx));
 		Tcl_Eval(s->interp, bu_vls_addr(&vls));
@@ -383,7 +397,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 		    point_t model_pt;
 		    point_t view_pt;
 
-		    VSET(view_pt, dm_Xx2Normal(DMP, dm_omx), dm_Xy2Normal(DMP, dm_omy, 1), 0.0);
+		    VSET(view_pt, mouse_view_x, mouse_view_y, 0.0);
 
 		    if (grid->snap)
 			snap_to_grid(s, &view_pt[X], &view_pt[Y]);
@@ -400,9 +414,9 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
 		break;
 	    case 'd':
-		fx = (dm_Xx2Normal(DMP, dm_omx) * RT_VIEW_MAX -
+		fx = (mouse_view_x * RT_VIEW_MAX -
 		      adc->dv_x) * view_local_scale * RT_INV_VIEW;
-		fy = (dm_Xy2Normal(DMP, dm_omy, 1) * RT_VIEW_MAX -
+		fy = (mouse_view_y * RT_VIEW_MAX -
 		      adc->dv_y) * view_local_scale * RT_INV_VIEW;
 
 		td = sqrt(fx * fx + fy * fy);
@@ -545,10 +559,13 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 
     if (BU_STR_EQUAL(argv[0], "size")) {
 	int width, height;
+	void *view_ctx = view_state->vs_gvp;
+	struct bv *view = mged_view_context_view(view_ctx);
 
 	/* get the window size */
 	if (argc == 1) {
-	    bu_vls_printf(&vls, "%d %d", dm_get_width(DMP), dm_get_height(DMP));
+	    bu_vls_printf(&vls, "%d %d", bv_width_get(view),
+		    bv_height_get(view));
 	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
 	    bu_vls_free(&vls);
 
@@ -559,9 +576,23 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	if (argc == 3) {
 	    width = atoi(argv[1]);
 	    height = atoi(argv[2]);
+	    if (width <= 0 || height <= 0) {
+		Tcl_AppendResult(s->interp,
+			"dm size: width and height must be positive\n",
+			(char *)NULL);
+		return TCL_ERROR;
+	    }
 
-	    dm_set_width(DMP, width);
-	    dm_set_height(DMP, height);
+	    brlobol_display_endpoint_t *endpoint =
+		ged_view_context_display_endpoint_get(view_ctx);
+	    if (endpoint && !brlobol_display_endpoint_resize(endpoint,
+		    (unsigned int)width, (unsigned int)height, 1.0)) {
+		Tcl_AppendResult(s->interp,
+			"dm size: endpoint resize failed\n", (char *)NULL);
+		return TCL_ERROR;
+	    }
+	    (void)bv_dimensions_set(view, width, height);
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	    return TCL_OK;
 	}
 
@@ -569,157 +600,31 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    if (BU_STR_EQUAL(argv[0], "getx")) {
-	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
-	if (argc == 1) {
-	    /* Bare set command, print out current settings */
-	    dm_internal_var(&tmp_vls, DMP, NULL);
-	} else if (argc == 2) {
-	    dm_internal_var(&tmp_vls, DMP, argv[1]);
-	}
-	Tcl_AppendResult(s->interp, bu_vls_addr(&tmp_vls), (char *)NULL);
-	bu_vls_free(&tmp_vls);
-	return TCL_OK;
-    }
-
-    if (BU_STR_EQUAL(argv[0], "bg")) {
-	int r1, g1, b1;
-	int r2, g2, b2;
-
-	if (argc != 1 && argc != 4 && argc != 7) {
-	    bu_vls_printf(&vls, "Usage: dm bg [r1 g1 b1 [r2 g2 b2]]");
-	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
-	    bu_vls_free(&vls);
-
-	    return TCL_ERROR;
-	}
-
-	/* return background color of current display manager */
-	if (argc == 1) {
-	    unsigned char *dm_bg;
-	    dm_get_bg(&dm_bg, NULL, DMP);
-	    bu_vls_printf(&vls, "%d %d %d", dm_bg[0], dm_bg[1], dm_bg[2]);
-	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
-	    bu_vls_free(&vls);
-
-	    return TCL_OK;
-	}
-
-	if (sscanf(argv[1], "%d", &r1) != 1 ||
-	    sscanf(argv[2], "%d", &g1) != 1 ||
-	    sscanf(argv[3], "%d", &b1) != 1) {
-	    bu_vls_printf(&vls, "Usage: dm bg r1 g1 b1 [r2 g2 b2]");
-	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
-	    bu_vls_free(&vls);
-
-	    return TCL_ERROR;
-	}
-	r2 = r1;
-	g2 = g1;
-	b2 = b1;
-	if (argc == 7 &&
-	    (sscanf(argv[4], "%d", &r2) != 1 ||
-	     sscanf(argv[5], "%d", &g2) != 1 ||
-	     sscanf(argv[6], "%d", &b2) != 1)) {
-	    bu_vls_printf(&vls, "Usage: dm bg r1 g1 b1 [r2 g2 b2]");
-	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
-	    bu_vls_free(&vls);
-	    return TCL_ERROR;
-	}
-
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
-	(void)dm_make_current(DMP);
-	return dm_set_bg(DMP, r1, g1, b1, r2, g2, b2);
-    }
-
     Tcl_AppendResult(s->interp, "dm: bad command - ", argv[0], "\n", (char *)NULL);
     return TCL_ERROR;
 }
-
-/* common sp_hook functions */
-
-void
-view_state_flag_hook(const struct bu_structparse *UNUSED(sdp),
-		const char *UNUSED(name),
-		void *UNUSED(base),
-		const char *UNUSED(value),
-                void *data)
-{
-    struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    if (hs->vs) {
-	struct bv *view = bv_context_view((struct bv_context *)hs->vs->vs_gvp);
-	bv_refresh_request(view, GED_VIEW_REFRESH_VIEW);
-    }
-}
-
-void
-dirty_hook(const struct bu_structparse *UNUSED(sdp),
-	const char *UNUSED(name),
-	void *UNUSED(base),
-	const char *UNUSED(value),
-	void *data)
-{
-    struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    mged_dm_repaint_request(hs->mdmp, MGED_REPAINT_DEVICE_SETTING);
-}
-
-void
-zclip_hook(const struct bu_structparse *sdp,
-	const char *name,
-	void *base,
-	const char *value,
-	void *data)
-{
-    struct mged_view_hook_state *hs = (struct mged_view_hook_state *)data;
-    if (hs->vs) {
-	struct bv *view = bv_context_view((struct bv_context *)hs->vs->vs_gvp);
-	bv_zclip_set(view, dm_get_zclip(hs->hs_dmp));
-    }
-    dirty_hook(sdp, name, base, value, data);
-}
-
-void *
-set_hook_data(struct mged_state *s, struct mged_view_hook_state *hs) {
-    hs->hs_dmp = DMP;
-    hs->vs = view_state;
-    hs->mdmp = s->mged_curr_dm;
-    return (void *)hs;
-}
-
-struct bu_structparse_map vparse_map[] = {
-    {"depthcue",	view_state_flag_hook      },
-    {"zclip",		zclip_hook		  },
-    {"zbuffer",		view_state_flag_hook      },
-    {"lighting",	view_state_flag_hook      },
-    {"transparency",	view_state_flag_hook      },
-    {"fastfog",		view_state_flag_hook      },
-    {"density",		dirty_hook  		  },
-    {"bound",		dirty_hook  		  },
-    {"useBound",	dirty_hook  	  	  },
-    {(char *)0,		BU_STRUCTPARSE_FUNC_NULL  }
-};
 
 int
 dm_commands(int argc, const char *argv[], void *data)
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    if (BU_STR_EQUAL(argv[0], "set") || BU_STR_EQUAL(argv[0], "bg") ||
-        BU_STR_EQUAL(argv[0], "debug") || BU_STR_EQUAL(argv[0], "get") ||
-        BU_STR_EQUAL(argv[0], "height") || BU_STR_EQUAL(argv[0], "initmsg") ||
-        BU_STR_EQUAL(argv[0], "list") || BU_STR_EQUAL(argv[0], "type") ||
-        BU_STR_EQUAL(argv[0], "types") ||
-        BU_STR_EQUAL(argv[0], "width")) {
+    if (BU_STR_EQUAL(argv[0], "bg") ||
+	BU_STR_EQUAL(argv[0], "close") ||
+	BU_STR_EQUAL(argv[0], "diagnostics") ||
+	BU_STR_EQUAL(argv[0], "get") ||
+	BU_STR_EQUAL(argv[0], "host") ||
+	BU_STR_EQUAL(argv[0], "list") ||
+	BU_STR_EQUAL(argv[0], "open") ||
+	BU_STR_EQUAL(argv[0], "renderer") ||
+	BU_STR_EQUAL(argv[0], "set") ||
+	BU_STR_EQUAL(argv[0], "status")) {
 	void *active_view_ctx = ged_view_active_ctx(s->gedp);
         if (!active_view_ctx) {
             ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	    active_view_ctx = ged_view_active_ctx(s->gedp);
 	}
-        if (active_view_ctx)
-            ged_view_context_display_manager_set(active_view_ctx,
-		    (void *)s->mged_curr_dm->dm_dmp);
-
-        const char **av = (const char **)bu_calloc((size_t)argc + 2, sizeof(char *), "dm forward argv");
+	const char **av = (const char **)bu_calloc((size_t)argc + 2, sizeof(char *), "dm forward argv");
         av[0] = "dm";
         for (int i = 0; i < argc; i++)
             av[i + 1] = argv[i];

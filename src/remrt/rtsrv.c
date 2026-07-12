@@ -58,7 +58,7 @@
 #include "optical/debug.h"
 #include "optical/light.h"
 #include "pkg.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "icv.h"
 
 #include "../rt/rtuif.h"
@@ -81,7 +81,7 @@ struct pkg_queue {
 
 
 /***** Variables shared with viewing model *** */
-struct fb *fbp = FB_NULL;	/* Framebuffer handle */
+imgstream_fb_t *fbp = NULL;	/* Framebuffer handle */
 FILE *outfp = NULL;	/* optional pixel output file */
 
 int srv_startpix = 0;	/* offset for view_pixel */

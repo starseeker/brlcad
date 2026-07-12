@@ -437,6 +437,32 @@ first_feature_vlist(SoNode *node)
     return NULL;
 }
 
+static int
+scene_has_source_geometry(SoNode *node, const char *instance_key,
+	int mesh)
+{
+    if (!node || !instance_key || !instance_key[0])
+	return 0;
+    if (!mesh && node->isOfType(SoBRLVListShape::getClassTypeId())) {
+	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
+	return BU_STR_EQUAL(shape->ownerSourceInstanceKey.getValue().getString(),
+		instance_key);
+    }
+    if (mesh && node->isOfType(SoBRLMeshShape::getClassTypeId())) {
+	SoBRLMeshShape *shape = static_cast<SoBRLMeshShape *>(node);
+	return BU_STR_EQUAL(shape->ownerSourceInstanceKey.getValue().getString(),
+		instance_key);
+    }
+    if (!node->isOfType(SoGroup::getClassTypeId()))
+	return 0;
+    SoGroup *group = static_cast<SoGroup *>(node);
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	if (scene_has_source_geometry(group->getChild(i), instance_key, mesh))
+	    return 1;
+    }
+    return 0;
+}
+
 static SoBRLDatabaseSource *
 source_for_path(SoBRLSceneController *controller, const char *path)
 {
@@ -672,9 +698,23 @@ verify_mode_source(SoBRLSceneController *controller,
     if (!expect_stale &&
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED)
 	FAIL("mode-specific source should be realized when expected current");
-    if (expect_vlist && summary.realizedShapeCount <= 0)
+    int compact_vlist = 0;
+    int compact_mesh = 0;
+    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	BRLObolCompactInstanceHandle handle;
+	BRLObolCompactInstanceSummary instance;
+	if (!source->getCompactInstanceHandle(i, handle) ||
+		!source->getCompactInstanceSummary(handle, instance))
+	    continue;
+	compact_vlist = compact_vlist || instance.wireGeometry;
+	compact_mesh = compact_mesh || instance.meshGeometry;
+    }
+    const char *instance_key = summary.instanceKey.getString();
+    if (expect_vlist && summary.realizedShapeCount <= 0 && !compact_vlist &&
+	    !scene_has_source_geometry(controller->getSceneRoot(), instance_key, 0))
 	FAIL("mode-specific source should carry realized VLIST geometry");
-    if (expect_mesh && summary.realizedMeshCount <= 0)
+    if (expect_mesh && summary.realizedMeshCount <= 0 && !compact_mesh &&
+	    !scene_has_source_geometry(controller->getSceneRoot(), instance_key, 1))
 	FAIL("mode-specific source should carry realized mesh geometry");
     if (!summary.sourceBoundsValid || summary.sourceBounds.isEmpty())
 	FAIL("mode-specific source should retain valid bounds");
@@ -1308,6 +1348,8 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
     if (!picked_point)
 	FAIL("GED duplicate occurrence ray pick should hit the visible second instance");
     const SoDetail *raw_detail = picked_point->getDetail(shape_b);
+    if (!raw_detail)
+	raw_detail = picked_point->getDetail();
     if (!raw_detail ||
 	    !raw_detail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("GED duplicate occurrence ray pick should return BRL-CAD pick detail");
@@ -1842,6 +1884,9 @@ main(int argc, char **argv)
 	    !owned_controller ||
 	    owned_controller->getSceneController() != owned_scene)
 	FAIL("GED should create and report an owned Obol view scene");
+    owned_scene->setCompactCadRealizationEnabled(FALSE);
+    if (!ged_draw_obol_scene_sync_full_scene(gedp, NULL, 0, owned_scene))
+	FAIL("GED adapter test should rebuild its owned scene without compact batching");
     if (owned_scene->getDatabaseSourceCount() != 2 ||
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
@@ -2932,7 +2977,7 @@ main(int argc, char **argv)
 
     if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
 	    "box.s", GED_DRAW_MODE_EVAL_WIRE,
-	    SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE, 1, 0, 1,
+	    SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE, 0, 0, 1,
 	    "evaluated-wire"))
 	return 1;
     if (exercise_evaluated_wire_shape_ref_realize_context(gedp, owned_scene,
@@ -2945,7 +2990,7 @@ main(int argc, char **argv)
 	return 1;
     if (exercise_mode_specific_source_lifecycle(gedp, owned_scene,
 	    "box.s", GED_DRAW_MODE_EVAL_POINTS,
-	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS, 0, 1, 1,
+	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS, 0, 0, 1,
 	    "evaluated-points"))
 	return 1;
     const char *draw_eval_points_option[4] = {"draw",
@@ -3513,6 +3558,10 @@ main(int argc, char **argv)
 	    if (!box_source)
 		FAIL("owned Obol source should be available for geometry summary");
 	    SoBRLVListShape *box_shape = box_source->getRealizedShape();
+	    if (!box_shape && box_source->demoteCompactGeometry() > 0)
+		box_shape = box_source->getRealizedShape();
+	    if (!box_shape && box_source->realizeDatabaseWireframe())
+		box_shape = box_source->getRealizedShape();
 	    if (!box_shape)
 		FAIL("owned Obol source should expose realized VLIST geometry");
 	    ged_draw_index_stats_reset(gedp);

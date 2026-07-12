@@ -21,6 +21,7 @@
 
 #include <float.h>
 #include <math.h>
+#include <algorithm>
 #include <vector>
 
 SO_DETAIL_SOURCE(SoBRLPickDetail);
@@ -209,7 +210,67 @@ pick_path_string(const char *name)
 
 struct brlobol_rt_pick_state {
     BRLObolRtPickResult pick;
+    SbPlane clipPlanes[2];
+    size_t clipPlaneCount = 0;
 };
+
+static SbBool
+pick_point_inside_clip_planes(const SbVec3f &point,
+	const SbPlane *clipPlanes, size_t clipPlaneCount)
+{
+    for (size_t i = 0; clipPlanes && i < clipPlaneCount; i++) {
+	if (!clipPlanes[i].isInHalfSpace(point))
+	    return FALSE;
+    }
+    return TRUE;
+}
+
+static SbBool
+pick_clip_ray_interval(const struct application *ap,
+	const brlobol_rt_pick_state *state, double inputMinimum,
+	double inputMaximum, double *outputMinimum,
+	SbVec3f *enteringNormal)
+{
+    if (!ap || !state || !outputMinimum || inputMinimum > inputMaximum)
+	return FALSE;
+    double minimum = std::max(0.0, inputMinimum);
+    double maximum = inputMaximum;
+    SbVec3f syntheticNormal(0.0f, 0.0f, 0.0f);
+    const SbVec3f origin(
+	static_cast<float>(ap->a_ray.r_pt[X]),
+	static_cast<float>(ap->a_ray.r_pt[Y]),
+	static_cast<float>(ap->a_ray.r_pt[Z]));
+    const SbVec3f direction(
+	static_cast<float>(ap->a_ray.r_dir[X]),
+	static_cast<float>(ap->a_ray.r_dir[Y]),
+	static_cast<float>(ap->a_ray.r_dir[Z]));
+    for (size_t i = 0; i < state->clipPlaneCount; i++) {
+	const SbPlane &plane = state->clipPlanes[i];
+	const float originDistance = plane.getDistance(origin);
+	const float slope = plane.getNormal().dot(direction);
+	if (fabsf(slope) <= 1.0e-8f) {
+	    if (originDistance < 0.0f)
+		return FALSE;
+	    continue;
+	}
+	const double crossing = -static_cast<double>(originDistance) /
+	    static_cast<double>(slope);
+	if (slope > 0.0f) {
+	    if (crossing > minimum) {
+		minimum = crossing;
+		syntheticNormal = plane.getNormal();
+	    }
+	} else {
+	    maximum = std::min(maximum, crossing);
+	}
+	if (minimum > maximum)
+	    return FALSE;
+    }
+    *outputMinimum = minimum;
+    if (enteringNormal)
+	*enteringNormal = syntheticNormal;
+    return TRUE;
+}
 
 static int
 brlobol_pick_rt_hit(struct application *ap,
@@ -224,25 +285,36 @@ brlobol_pick_rt_hit(struct application *ap,
 
     for (struct partition *pp = PartHeadp->pt_forw;
 	 pp != PartHeadp; pp = pp->pt_forw) {
-	if (!pp || !pp->pt_inhit || pp->pt_inhit->hit_dist < 0.0 ||
-	    pp->pt_inhit->hit_dist >= state->pick.distance)
+	if (!pp || !pp->pt_inhit || !pp->pt_outhit)
+	    continue;
+	double visibleDistance = 0.0;
+	SbVec3f clipNormal(0.0f, 0.0f, 0.0f);
+	if (!pick_clip_ray_interval(ap, state, pp->pt_inhit->hit_dist,
+		pp->pt_outhit->hit_dist, &visibleDistance, &clipNormal) ||
+	    visibleDistance >= state->pick.distance)
 	    continue;
 
 	struct soltab *stp = pp->pt_inseg ? pp->pt_inseg->seg_stp : NULL;
 	point_t hitPoint = VINIT_ZERO;
 	vect_t hitNormal = VINIT_ZERO;
-	VJOIN1(hitPoint, ap->a_ray.r_pt, pp->pt_inhit->hit_dist,
+	VJOIN1(hitPoint, ap->a_ray.r_pt, visibleDistance,
 	       ap->a_ray.r_dir);
-	if (stp)
+	const SbVec3f candidatePoint(
+	    static_cast<float>(hitPoint[X]),
+	    static_cast<float>(hitPoint[Y]),
+	    static_cast<float>(hitPoint[Z]));
+	const SbBool synthetic = clipNormal.length() > 0.0f;
+	if (synthetic) {
+	    VSET(hitNormal, clipNormal[0], clipNormal[1], clipNormal[2]);
+	} else if (stp) {
 	    RT_HIT_NORMAL(hitNormal, pp->pt_inhit, stp, &(ap->a_ray),
 			  pp->pt_inflip);
+	}
 
 	state->pick.clear();
 	state->pick.hit = TRUE;
-	state->pick.distance = static_cast<float>(pp->pt_inhit->hit_dist);
-	state->pick.point = SbVec3f(static_cast<float>(hitPoint[X]),
-				    static_cast<float>(hitPoint[Y]),
-				    static_cast<float>(hitPoint[Z]));
+	state->pick.distance = static_cast<float>(visibleDistance);
+	state->pick.point = candidatePoint;
 	state->pick.normal = SbVec3f(static_cast<float>(hitNormal[X]),
 				     static_cast<float>(hitNormal[Y]),
 				     static_cast<float>(hitNormal[Z]));
@@ -258,6 +330,7 @@ brlobol_pick_rt_hit(struct application *ap,
 	state->pick.detail.setSourceName(primitiveName ? primitiveName : "");
 	state->pick.detail.setSourceType(typeName ? typeName : "");
 	state->pick.detail.setPrimitive(SoBRLPickDetail::IMPLICIT_SOLID,
+					synthetic ? -1 :
 					pp->pt_inhit->hit_surfno);
 	state->pick.detail.setModelPoint(state->pick.point);
 	if (pp->pt_regionp) {
@@ -402,7 +475,9 @@ BRLObolRtPickCache::getObjectPathCount(void) const
 SbBool
 BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
 			    const SbVec3f &rayOrigin,
-			    const SbVec3f &rayDirection) const
+			    const SbVec3f &rayDirection,
+			    const SbPlane *clipPlanes,
+			    size_t clipPlaneCount) const
 {
     pick.clear();
     if (!this->isReady())
@@ -414,6 +489,10 @@ BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
     direction.normalize();
 
     brlobol_rt_pick_state state;
+    state.clipPlaneCount = std::min(clipPlaneCount,
+	static_cast<size_t>(2));
+    for (size_t i = 0; clipPlanes && i < state.clipPlaneCount; i++)
+	state.clipPlanes[i] = clipPlanes[i];
     struct application ap;
     RT_APPLICATION_INIT(&ap);
     ap.a_magic = RT_AP_MAGIC;
@@ -491,7 +570,9 @@ brlobol_pick_source_full_detail_result(
     const BRLObolSourceMeshRequest &sourceRequest,
     const BRLObolLodResult &result,
     const SbVec3f &rayOrigin,
-    const SbVec3f &rayDirection)
+    const SbVec3f &rayDirection,
+    const SbPlane *clipPlanes,
+    size_t clipPlaneCount)
 {
     pick.clear();
     if (!pick_source_full_detail_result_valid(sourceRequest, result))
@@ -548,6 +629,9 @@ brlobol_pick_source_full_detail_result(
 	SbVec3f worldHit = worldVertices[0] +
 			   (worldVertices[1] - worldVertices[0]) * u +
 			   (worldVertices[2] - worldVertices[0]) * v;
+	if (!pick_point_inside_clip_planes(worldHit, clipPlanes,
+		clipPlaneCount))
+	    continue;
 
 	pick.distance = t;
 	pick.point = worldHit;

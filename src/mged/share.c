@@ -142,7 +142,7 @@ f_share(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *ar
 
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	struct bu_vls *pname = dm_get_pathname(m_dmp->dm_dmp);
+	struct bu_vls *pname = mged_dm_pathname_vls(m_dmp);
 	if (BU_STR_EQUAL(argv[2], bu_vls_cstr(pname))) {
 	    dlp1 = m_dmp;
 	    break;
@@ -158,7 +158,7 @@ f_share(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *ar
     if (!uflag) {
 	for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	    struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	    struct bu_vls *pname = dm_get_pathname(m_dmp->dm_dmp);
+	    struct bu_vls *pname = mged_dm_pathname_vls(m_dmp);
 	    if (BU_STR_EQUAL(argv[3], bu_vls_cstr(pname))) {
 		dlp2 = m_dmp;
 		break;

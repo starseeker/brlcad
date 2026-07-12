@@ -37,6 +37,7 @@
 #include "bv.h"
 #include "ged/view.h"
 #include "tclcad.h"
+#include "brlobol/display_endpoint.h"
 
 /* Private headers */
 #include "ged/draw.h"
@@ -44,12 +45,23 @@
 #include "./view/view.h"
 
 static void
-tclcad_polygons_sync_dm_dimensions(void *view_ctx)
+tclcad_polygons_sync_dimensions(void *view_ctx)
 {
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (dmp)
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    struct brlobol_endpoint_property_value width =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct brlobol_endpoint_property_value height =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (endpoint && brlobol_display_endpoint_property_get(endpoint,
+	    "endpoint.width", &width) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	brlobol_display_endpoint_property_get(endpoint, "endpoint.height",
+	    &height) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	width.type == BRLOBOL_ENDPOINT_PROPERTY_UINT &&
+	height.type == BRLOBOL_ENDPOINT_PROPERTY_UINT && width.uint_value &&
+	height.uint_value)
 	bv_context_dimensions_set((struct bv_context *)view_ctx,
-		dm_get_width(dmp), dm_get_height(dmp));
+	    (int)width.uint_value, (int)height.uint_value);
 }
 
 static const char *
@@ -1333,8 +1345,7 @@ to_poly_circ_mode(struct ged *gedp,
     argv[1] = argv[0];
     ret = to_poly_circ_mode_func(current_top->to_interp, gedp, gdvp, argc-1, argv+1, usage);
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(gdvp);
-    struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
+    struct bu_vls *pathname = tclcad_view_pathname_vls(gdvp);
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_circ %s %%x %%y}",
 		      bu_vls_cstr(pathname),
@@ -1383,7 +1394,7 @@ to_poly_circ_mode_func(Tcl_Interp *interp,
     bv_previous_mouse_set(tclcad_polygons_bv(gdvp), x, y);
     (void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_CIRCLE_MODE);
 
-    tclcad_polygons_sync_dm_dimensions(gdvp);
+    tclcad_polygons_sync_dimensions(gdvp);
     bv_screen_to_view(&fx, &fy, tclcad_polygons_bv_const(gdvp), x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {
@@ -1448,7 +1459,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
     bv_previous_mouse_set(tclcad_polygons_bv(gdvp), x, y);
     (void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_CONTOUR_MODE);
 
-    tclcad_polygons_sync_dm_dimensions(gdvp);
+    tclcad_polygons_sync_dimensions(gdvp);
     bv_screen_to_view(&fx, &fy, tclcad_polygons_bv_const(gdvp), x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {
@@ -1481,8 +1492,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
 	(void)to_data_polygons_func(interp, gedp, gdvp, ac, (const char **)av);
 	bu_vls_free(&plist);
 
-	struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(gdvp);
-	struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
+	struct bu_vls *pathname = tclcad_view_pathname_vls(gdvp);
 	if (doBind && pathname && bu_vls_strlen(pathname)) {
 	    bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_cont %s %%x %%y}",
 			  bu_vls_cstr(pathname),
@@ -1760,8 +1770,7 @@ to_poly_ell_mode(struct ged *gedp,
     argv[1] = argv[0];
     ret = to_poly_ell_mode_func(current_top->to_interp, gedp, gdvp, argc-1, argv+1, usage);
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(gdvp);
-    struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
+    struct bu_vls *pathname = tclcad_view_pathname_vls(gdvp);
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_ell %s %%x %%y}",
 		      bu_vls_cstr(pathname),
@@ -1810,7 +1819,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
     bv_previous_mouse_set(tclcad_polygons_bv(gdvp), x, y);
     (void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_ELLIPSE_MODE);
 
-    tclcad_polygons_sync_dm_dimensions(gdvp);
+    tclcad_polygons_sync_dimensions(gdvp);
     bv_screen_to_view(&fx, &fy, tclcad_polygons_bv_const(gdvp), x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {
@@ -1908,8 +1917,7 @@ to_poly_rect_mode(struct ged *gedp,
     argv[1] = argv[0];
     ret = to_poly_rect_mode_func(current_top->to_interp, gedp, gdvp, argc-1, argv+1, usage);
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(gdvp);
-    struct bu_vls *pathname = dmp ? dm_get_pathname(dmp) : NULL;
+    struct bu_vls *pathname = tclcad_view_pathname_vls(gdvp);
     if (pathname && bu_vls_strlen(pathname)) {
 	bu_vls_printf(&bindings, "bind %s <Motion> {%s mouse_poly_rect %s %%x %%y}",
 		      bu_vls_cstr(pathname),
@@ -1971,7 +1979,7 @@ to_poly_rect_mode_func(Tcl_Interp *interp,
     else
 	(void)tclcad_view_polygon_mode_set(gdvp, TCLCAD_POLY_RECTANGLE_MODE);
 
-    tclcad_polygons_sync_dm_dimensions(gdvp);
+    tclcad_polygons_sync_dimensions(gdvp);
     bv_screen_to_view(&fx, &fy, tclcad_polygons_bv_const(gdvp), x, y);
     VSET(v_pt, fx, fy, tclcad_view_data_vZ_from_view_ctx(gdvp));
     {

@@ -42,7 +42,6 @@
 #include "bu/vls.h"
 #include "tclcad.h"
 /* private headers */
-#include "../libdm/include/private.h"
 #include "brlcad_version.h"
 #include "./tclcad_private.h"
 
@@ -64,7 +63,7 @@ dm_validXType_tcl(void *clientData, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    int valid = dm_validXType(argv[1], argv[2]);
+    int valid = BU_STR_EQUAL(argv[2], "tkobol");
 
     bu_vls_printf(&vls, "%d", (valid == 1) ? 1 : 0);
     obj = Tcl_GetObjResult(interp);
@@ -79,12 +78,10 @@ dm_validXType_tcl(void *clientData, int argc, const char **argv)
 
 
 static int
-dm_bestXType_tcl(void *clientData, int argc, const char **argv)
+dm_bestXType_tcl(void *clientData, int argc, const char **UNUSED(argv))
 {
     Tcl_Interp *interp = (Tcl_Interp *)clientData;
     Tcl_Obj *obj;
-    const char *best_dm;
-    char buffer[256] = {0};
 
     if (argc != 2) {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
@@ -98,14 +95,9 @@ dm_bestXType_tcl(void *clientData, int argc, const char **argv)
     obj = Tcl_GetObjResult(interp);
     if (Tcl_IsShared(obj))
 	obj = Tcl_DuplicateObj(obj);
-    snprintf(buffer, 256, "%s", argv[1]);
-    best_dm = dm_bestXType(buffer);
-    if (best_dm) {
-	Tcl_AppendStringsToObj(obj, best_dm, (char *)NULL);
-	Tcl_SetObjResult(interp, obj);
-	return BRLCAD_OK;
-    }
-    return BRLCAD_ERROR;
+    Tcl_AppendStringsToObj(obj, "tkobol", (char *)NULL);
+    Tcl_SetObjResult(interp, obj);
+    return BRLCAD_OK;
 }
 
 /**
@@ -176,8 +168,7 @@ Dm_Init(Tcl_Interp *interp)
     register_cmds(interp, cmdtab);
 
 #ifdef HAVE_TKOBOL_HOST
-    extern const struct dm *tclcad_tkobol_dm(void);
-    if (dm_register_backend(tclcad_tkobol_dm()) != BRLCAD_OK)
+    if (!tclcad_obol_host_factories_register())
 	return TCL_ERROR;
     if (BrlcadTkObolHost_Init(interp) != TCL_OK)
 	return TCL_ERROR;
@@ -201,10 +192,7 @@ dm_list_tcl(ClientData UNUSED(clientData),
 	    int UNUSED(argc),
 	    const char **UNUSED(argv))
 {
-    struct bu_vls list = BU_VLS_INIT_ZERO;
-    dm_list_types(&list, ",");
-    Tcl_SetResult(interp, bu_vls_addr(&list), TCL_VOLATILE);
-    bu_vls_free(&list);
+    Tcl_SetResult(interp, "tkobol", TCL_STATIC);
     return TCL_OK;
 }
 

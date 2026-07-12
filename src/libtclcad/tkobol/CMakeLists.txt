@@ -1,4 +1,4 @@
-cmakefiles(CMakeLists.txt dm-tkobol.cpp)
+cmakefiles(CMakeLists.txt)
 
 # Local Variables:
 # tab-width: 8

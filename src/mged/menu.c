@@ -31,6 +31,7 @@
 #include "./mged_dm.h"
 #include "./sedit.h"
 #include "./menu.h"
+#include "./hud.h"
 
 #include "ged.h"
 #include "ged/view.h"
@@ -324,36 +325,25 @@ mmenu_set_all(struct mged_state *s, int index, struct rt_edit_menu_item *value)
 
 
 void
-mged_highlight_menu_item(struct mged_state *s, struct rt_edit_menu_item *mptr, int y)
+mged_highlight_menu_item(struct mged_state *s,
+	struct mged_hud_builder *hud, struct rt_edit_menu_item *mptr, int y)
 {
     switch (mptr->menu_arg) {
 	case BV_RATE_TOGGLE:
 	    if (mged_variables->mv_rateknobs) {
-		dm_set_fg(DMP,
-			       color_scheme->cs_menu_text1[0],
-			       color_scheme->cs_menu_text1[1],
-			       color_scheme->cs_menu_text1[2], 1, 1.0);
-		dm_draw_string_2d(DMP, "Rate",
-				  GED2PM1(MENUX), GED2PM1(y-15), 0, 0);
-		dm_set_fg(DMP,
-			       color_scheme->cs_menu_text2[0],
-			       color_scheme->cs_menu_text2[1],
-			       color_scheme->cs_menu_text2[2], 1, 1.0);
-		dm_draw_string_2d(DMP, "/Abs",
-				  GED2PM1(MENUX+4*40), GED2PM1(y-15), 0, 0);
+		mged_hud_color_set(hud, color_scheme->cs_menu_text1);
+		(void)mged_hud_label_add(hud, "Rate",
+			GED2PM1(MENUX), GED2PM1(y-15), 0.0, 0);
+		mged_hud_color_set(hud, color_scheme->cs_menu_text2);
+		(void)mged_hud_label_add(hud, "/Abs",
+			GED2PM1(MENUX+4*40), GED2PM1(y-15), 0.0, 0);
 	    } else {
-		dm_set_fg(DMP,
-			       color_scheme->cs_menu_text2[0],
-			       color_scheme->cs_menu_text2[1],
-			       color_scheme->cs_menu_text2[2], 1, 1.0);
-		dm_draw_string_2d(DMP, "Rate/",
-				  GED2PM1(MENUX), GED2PM1(y-15), 0, 0);
-		dm_set_fg(DMP,
-			       color_scheme->cs_menu_text1[0],
-			       color_scheme->cs_menu_text1[1],
-			       color_scheme->cs_menu_text1[2], 1, 1.0);
-		dm_draw_string_2d(DMP, "Abs",
-				  GED2PM1(MENUX+5*40), GED2PM1(y-15), 0, 0);
+		mged_hud_color_set(hud, color_scheme->cs_menu_text2);
+		(void)mged_hud_label_add(hud, "Rate/",
+			GED2PM1(MENUX), GED2PM1(y-15), 0.0, 0);
+		mged_hud_color_set(hud, color_scheme->cs_menu_text1);
+		(void)mged_hud_label_add(hud, "Abs",
+			GED2PM1(MENUX+5*40), GED2PM1(y-15), 0.0, 0);
 	    }
 	    break;
 	default:
@@ -368,7 +358,7 @@ mged_highlight_menu_item(struct mged_state *s, struct rt_edit_menu_item *mptr, i
  * menu item will be indicated with an arrow.
  */
 void
-mmenu_display(struct mged_state *s, int y_top)
+mmenu_display(struct mged_state *s, struct mged_hud_builder *hud, int y_top)
 {
     static int menu, item;
     struct rt_edit_menu_item **m;
@@ -376,16 +366,11 @@ mmenu_display(struct mged_state *s, int y_top)
     int y = y_top;
 
     menu_state->ms_top = y - MENU_DY / 2;
-    dm_set_fg(DMP,
-		   color_scheme->cs_menu_line[0],
-		   color_scheme->cs_menu_line[1],
-		   color_scheme->cs_menu_line[2], 1, 1.0);
-
-    dm_set_line_attr(DMP, mged_variables->mv_linewidth, 0);
-
-    dm_draw_line_2d(DMP,
-		    GED2PM1(MENUXLIM), GED2PM1(menu_state->ms_top),
-		    GED2PM1(-2048), GED2PM1(menu_state->ms_top));
+    mged_hud_line_style_set(hud, mged_variables->mv_linewidth, 0);
+    mged_hud_color_set(hud, color_scheme->cs_menu_line);
+    (void)mged_hud_line_add(hud,
+	    GED2PM1(MENUXLIM), GED2PM1(menu_state->ms_top),
+	    GED2PM1(-2048), GED2PM1(menu_state->ms_top));
 
     for (menu=0, m = menu_state->ms_menus; m - menu_state->ms_menus < NMENU; m++, menu++) {
 	if (*m == NULL) continue;
@@ -394,36 +379,24 @@ mmenu_display(struct mged_state *s, int y_top)
 		 && (mptr->menu_arg == BV_RATE_TOGGLE
 		     || mptr->menu_arg == BV_EDIT_TOGGLE
 		     || mptr->menu_arg == BV_EYEROT_TOGGLE)))
-		mged_highlight_menu_item(s, mptr, y);
+		mged_highlight_menu_item(s, hud, mptr, y);
 	    else {
 		if (mptr == *m)
-		    dm_set_fg(DMP,
-				   color_scheme->cs_menu_title[0],
-				   color_scheme->cs_menu_title[1],
-				   color_scheme->cs_menu_title[2], 1, 1.0);
+		    mged_hud_color_set(hud, color_scheme->cs_menu_title);
 		else
-		    dm_set_fg(DMP,
-				   color_scheme->cs_menu_text2[0],
-				   color_scheme->cs_menu_text2[1],
-				   color_scheme->cs_menu_text2[2], 1, 1.0);
-		dm_draw_string_2d(DMP, mptr->menu_string,
-				  GED2PM1(MENUX), GED2PM1(y-15), 0, 0);
+		    mged_hud_color_set(hud, color_scheme->cs_menu_text2);
+		(void)mged_hud_label_add(hud, mptr->menu_string,
+			GED2PM1(MENUX), GED2PM1(y-15), 0.0, 0);
 	    }
-	    dm_set_fg(DMP,
-			   color_scheme->cs_menu_line[0],
-			   color_scheme->cs_menu_line[1],
-			   color_scheme->cs_menu_line[2], 1, 1.0);
-	    dm_draw_line_2d(DMP,
-			    GED2PM1(MENUXLIM), GED2PM1(y+(MENU_DY/2)),
-			    GED2PM1(-2048), GED2PM1(y+(MENU_DY/2)));
+	    mged_hud_color_set(hud, color_scheme->cs_menu_line);
+	    (void)mged_hud_line_add(hud,
+		    GED2PM1(MENUXLIM), GED2PM1(y+(MENU_DY/2)),
+		    GED2PM1(-2048), GED2PM1(y+(MENU_DY/2)));
 	    if (menu_state->ms_cur_item == item && menu_state->ms_cur_menu == menu && menu_state->ms_flag) {
 		/* prefix item selected with "==>" */
-		dm_set_fg(DMP,
-			       color_scheme->cs_menu_arrow[0],
-			       color_scheme->cs_menu_arrow[1],
-			       color_scheme->cs_menu_arrow[2], 1, 1.0);
-		dm_draw_string_2d(DMP, "==>",
-				  GED2PM1(-2048), GED2PM1(y-15), 0, 0);
+		mged_hud_color_set(hud, color_scheme->cs_menu_arrow);
+		(void)mged_hud_label_add(hud, "==>",
+			GED2PM1(-2048), GED2PM1(y-15), 0.0, 0);
 	    }
 	}
     }
@@ -431,16 +404,10 @@ mmenu_display(struct mged_state *s, int y_top)
     if (y == y_top)
 	return;	/* no active menus */
 
-    dm_set_fg(DMP,
-		   color_scheme->cs_menu_line[0],
-		   color_scheme->cs_menu_line[1],
-		   color_scheme->cs_menu_line[2], 1, 1.0);
-
-    dm_set_line_attr(DMP, mged_variables->mv_linewidth, 0);
-
-    dm_draw_line_2d(DMP,
-		    GED2PM1(MENUXLIM), GED2PM1(menu_state->ms_top-1),
-		    GED2PM1(MENUXLIM), GED2PM1(y-(MENU_DY/2)));
+    mged_hud_color_set(hud, color_scheme->cs_menu_line);
+    (void)mged_hud_line_add(hud,
+	    GED2PM1(MENUXLIM), GED2PM1(menu_state->ms_top-1),
+	    GED2PM1(MENUXLIM), GED2PM1(y-(MENU_DY/2)));
 }
 
 

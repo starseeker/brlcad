@@ -177,7 +177,7 @@ struct mged_edit_state {
  * For object editing and solid edit, model2objview translates from
  * model space to view space with all the modelchanges too.
  *
- * These are allocated storage in dozoom.c
+ * These are allocated storage in scene_refresh.c
  */
 
 // Callback registration mechanism for librt edit callbacks.
@@ -300,7 +300,7 @@ extern jmp_buf jmp_env;
 extern void mged_setup(struct mged_state *s);
 extern void mged_global_variable_teardown(struct mged_state *s); /* cmd.c */
 extern void mged_variable_teardown(struct mged_state *s); /* set.c */
-extern void dozoom(struct mged_state *s, int which_eye);
+extern void mged_obol_scene_refresh(struct mged_state *s);
 extern void mged_finish(struct mged_state *s, int exitcode);
 extern void mged_request_shutdown(struct mged_state *s, int exitcode);
 extern int mged_shutting_down(struct mged_state *s);
@@ -313,7 +313,7 @@ extern void moveHinstance(struct mged_state *s, struct directory *cdp, struct di
 extern void moveHobj(struct mged_state *s, struct directory *dp, matp_t xlate);
 extern void quit(struct mged_state *s);
 extern void refresh(struct mged_state *s);
-extern void mged_obol_display_detach(struct mged_state *s, struct dm *dmp);
+extern void mged_obol_display_detach(struct mged_state *s, struct mged_dm *mdmp);
 extern void setview(struct mged_state *s, double a1, double a2, double a3);
 extern void adcursor(struct mged_state *s);
 extern void get_attached(struct mged_state *s);
@@ -482,7 +482,7 @@ int replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref);
 void add_solid_record_path_to_result(Tcl_Interp *interpreter, const struct ged_draw_shape_record *rec);
 int redraw_visible_objects(struct mged_state *s);
 
-/* dozoom.c */
+/* scene_refresh.c */
 
 /* f_db.c */
 struct mged_opendb_ctx {
@@ -547,7 +547,6 @@ void dotitles(struct mged_state *s, struct bu_vls *overlay_vls);
 
 /* rect.c */
 void zoom_rect_area(struct mged_state *);
-void paint_rect_area(struct mged_state *);
 void rt_rect_area(struct mged_state *);
 void draw_rect(struct mged_state *);
 void set_rect(const struct bu_structparse *, const char *, void *, const char *, void *);
@@ -588,9 +587,11 @@ extern void set_scroll_private(const struct bu_structparse *, const char *, void
 extern void mged_variable_setup(struct mged_state *s);
 
 /* scroll.c */
+struct mged_hud_builder;
 void set_scroll(struct mged_state *);
 int scroll_select(struct mged_state *s, int pen_x, int pen_y, int do_func);
-int scroll_display(struct mged_state *s, int y_top);
+int scroll_display(struct mged_state *s, struct mged_hud_builder *hud,
+	int y_top);
 
 /* vparse.c */
 extern void mged_vls_struct_parse(struct mged_state *s, struct bu_vls *vls, const char *title, struct bu_structparse *how_to_parse, const char *structp, int argc, const char *argv[]); /* defined in vparse.c */

@@ -61,6 +61,7 @@ tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp)
     if (!tvd)
 	return;
 
+    bu_vls_init(&tvd->gdv_pathname);
     bu_vls_init(&tvd->gdv_edit_motion_delta_callback);
     tvd->gdv_edit_motion_delta_callback_cnt = 0;
     bu_vls_init(&tvd->gdv_callback);
@@ -68,6 +69,15 @@ tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp)
     tvd->gedp = gedp;
 
     tclcad_view_state_init(&tvd->tcl_data);
+}
+
+struct bu_vls *
+tclcad_view_pathname_vls(const void *view_ctx)
+{
+    struct tclcad_view_data *tvd =
+	tclcad_view_data_from_view_ctx((void *)view_ctx);
+    return tvd && BU_VLS_IS_INITIALIZED(&tvd->gdv_pathname) ?
+	&tvd->gdv_pathname : NULL;
 }
 
 struct tclcad_view_data *

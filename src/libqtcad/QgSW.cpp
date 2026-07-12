@@ -86,6 +86,12 @@ QgSW::obolViewController() const
     return d->obol;
 }
 
+void
+QgSW::setObolViewController(BRLObolViewController *controller)
+{
+    qgcanvas_bind_obol_controller(*d, this, controller);
+}
+
 int
 QgSW::currentView() const
 {

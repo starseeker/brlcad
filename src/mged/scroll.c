@@ -35,6 +35,7 @@
 #include "rt/view.h"
 #include "./mged.h"
 #include "./mged_dm.h"
+#include "./hud.h"
 
 #include "./sedit.h"
 
@@ -298,7 +299,8 @@ sl_itol(struct scroll_item *mptr, double val)
 
 /* Handle second (ADC) menu display. */
 static void
-second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
+second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr,
+	struct mged_state *s, struct mged_hud_builder *hud)
 {
     struct bv_adc_state adc = {0};
 
@@ -326,17 +328,15 @@ second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_sta
 	    return;
     }
 
-    dm_set_fg(DMP,
-	    color_scheme->cs_slider_text2[0],
-	    color_scheme->cs_slider_text2[1],
-	    color_scheme->cs_slider_text2[2], 1, 1.0);
+    mged_hud_color_set(hud, color_scheme->cs_slider_text2);
 }
 
 /* Handle edit mode values for a given scroll item.
  * Returns 1 if handled (an edit mode applicable), 0 otherwise.
  */
 static int
-edit_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
+edit_scroll_display(fastf_t *f, struct scroll_item *mptr,
+	struct mged_state *s, struct mged_hud_builder *hud)
 {
     /* Determine which edit transform (if any) is active for this scroll_val */
     switch (mptr->scroll_val) {
@@ -405,16 +405,14 @@ edit_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	    return 0;
     }
 
-    dm_set_fg(DMP,
-	    color_scheme->cs_slider_text1[0],
-	    color_scheme->cs_slider_text1[1],
-	    color_scheme->cs_slider_text1[2], 1, 1.0);
+    mged_hud_color_set(hud, color_scheme->cs_slider_text1);
     return 1;
 }
 
 /* Handle non-edit (view) values (first menu only). */
 static void
-view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
+view_scroll_display(fastf_t *f, struct scroll_item *mptr,
+	struct mged_state *s, struct mged_hud_builder *hud)
 {
     switch (mptr->scroll_val) {
 	case 0: /* X translation */
@@ -462,10 +460,7 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
 	    return;
     }
 
-    dm_set_fg(DMP,
-	    color_scheme->cs_slider_text2[0],
-	    color_scheme->cs_slider_text2[1],
-	    color_scheme->cs_slider_text2[2], 1, 1.0);
+    mged_hud_color_set(hud, color_scheme->cs_slider_text2);
 }
 
 /************************************************************************
@@ -480,7 +475,7 @@ view_scroll_display(fastf_t *f, struct scroll_item *mptr, struct mged_state *s)
  * position used.
  */
 int
-scroll_display(struct mged_state *s, int y_top)
+scroll_display(struct mged_state *s, struct mged_hud_builder *hud, int y_top)
 {
     int y;
     struct scroll_item *mptr;
@@ -492,7 +487,7 @@ scroll_display(struct mged_state *s, int y_top)
     scroll_top = y_top;
     y = y_top;
 
-    dm_set_line_attr(DMP, mged_variables->mv_linewidth, 0);
+    mged_hud_line_style_set(hud, mged_variables->mv_linewidth, 0);
 
     /* Precompute if any edit mode could be active */
     int edit_flag = 0;
@@ -510,16 +505,16 @@ scroll_display(struct mged_state *s, int y_top)
 
 	    if (second_menu) {
 		/* ADC menu has priority when present */
-		second_menu_scroll_display(&f, mptr, s);
+		second_menu_scroll_display(&f, mptr, s, hud);
 		did_op = 1;
 	    } else if (edit_flag) {
 		/* Try edit logic first */
-		did_op = edit_scroll_display(&f, mptr, s);
+		did_op = edit_scroll_display(&f, mptr, s, hud);
 	    }
 
 	    if (!did_op && !second_menu) {
 		/* Fallback to view (non-edit) logic */
-		view_scroll_display(&f, mptr, s);
+		view_scroll_display(&f, mptr, s, hud);
 	    }
 
 	    if (f > 0)
@@ -529,13 +524,10 @@ scroll_display(struct mged_state *s, int y_top)
 	    else
 		xpos = 0;
 
-	    dm_draw_string_2d(DMP, mptr->scroll_string,
-		    GED2PM1(xpos), GED2PM1(y-SCROLL_DY/2), 0, 0);
-	    dm_set_fg(DMP,
-		    color_scheme->cs_slider_line[0],
-		    color_scheme->cs_slider_line[1],
-		    color_scheme->cs_slider_line[2], 1, 1.0);
-	    dm_draw_line_2d(DMP,
+	    (void)mged_hud_label_add(hud, mptr->scroll_string,
+		    GED2PM1(xpos), GED2PM1(y-SCROLL_DY/2), 0.0, 0);
+	    mged_hud_color_set(hud, color_scheme->cs_slider_line);
+	    (void)mged_hud_line_add(hud,
 		    GED2PM1((int)RT_VIEW_MAX), GED2PM1(y),
 		    GED2PM1(MENUXLIM), GED2PM1(y));
 	}
@@ -543,11 +535,8 @@ scroll_display(struct mged_state *s, int y_top)
 
     if (y != y_top) {
 	/* Sliders were drawn, so make left vert edge */
-	dm_set_fg(DMP,
-		color_scheme->cs_slider_line[0],
-		color_scheme->cs_slider_line[1],
-		color_scheme->cs_slider_line[2], 1, 1.0);
-	dm_draw_line_2d(DMP,
+	mged_hud_color_set(hud, color_scheme->cs_slider_line);
+	(void)mged_hud_line_add(hud,
 		GED2PM1(MENUXLIM), GED2PM1(scroll_top-1),
 		GED2PM1(MENUXLIM), GED2PM1(y));
     }

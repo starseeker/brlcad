@@ -493,6 +493,30 @@ GED_EXPORT extern void *ged_draw_source_root_attach_view_contexts(
 	struct bu_ptbl *views);
 GED_EXPORT extern int ged_draw_obol_view_context_feature_store_active(
 	void *view_ctx);
+GED_EXPORT extern int ged_draw_obol_view_context_hud_axes_replace(
+	void *view_ctx,
+	const char *name,
+	const struct bv_axes_state *axes,
+	const mat_t rotation);
+GED_EXPORT extern int ged_draw_obol_view_context_hud_lines_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_hud_labels_replace(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_label_data *labels,
+	size_t label_count,
+	const struct ged_draw_view_feature_style *style);
+GED_EXPORT extern int ged_draw_obol_view_context_hud_line_layers_replace(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_line_layer_data *layers,
+	size_t layer_count,
+	const struct ged_draw_view_feature_style *style);
 GED_EXPORT extern int ged_draw_obol_view_context_feature_exists(
 	void *view_ctx,
 	const char *name);

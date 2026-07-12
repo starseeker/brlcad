@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "bu/log.h"
+#include "imgstream/fb_compat.h"
 #include "imgstream/fbserv.h"
 #include "pkg.h"
 
@@ -184,5 +185,32 @@ main(void)
 
     fbs_clear_backend(&fbs);
     fbs_clear_transport(&fbs);
+
+    struct fbserv_obj native_fbs;
+    imgstream_fb_t *native_fb = imgstream_fb_open("/dev/mem", 2, 2);
+    unsigned char native_pixels[12] = {
+	1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+    };
+    unsigned char native_readback[12] = {0};
+    struct fbserv_fb_info native_info = {0};
+    if (!native_fb || fbs_init(&native_fbs) != BRLCAD_OK ||
+	imgstream_fbserv_set_framebuffer(&native_fbs, native_fb) != BRLCAD_OK ||
+	!fbs_framebuffer_backend_installed(&native_fbs) ||
+	fbserv_backend_info(&native_fbs, &native_info) != 0 ||
+	native_info.width != 2 || native_info.height != 2 ||
+	fbserv_backend_writerect(&native_fbs, 0, 0, 2, 2,
+	    native_pixels) != 4 ||
+	fbserv_backend_readrect(&native_fbs, 0, 0, 2, 2,
+	    native_readback) != 4 ||
+	memcmp(native_pixels, native_readback, sizeof(native_pixels)) != 0) {
+	bu_log("imgstream-native framebuffer backend installation failed\n");
+	return 1;
+    }
+    if (imgstream_fbserv_set_framebuffer(&native_fbs, NULL) != BRLCAD_OK ||
+	fbs_framebuffer_backend_installed(&native_fbs)) {
+	bu_log("imgstream-native framebuffer backend detach failed\n");
+	return 1;
+    }
+    imgstream_fb_close(native_fb);
     return 0;
 }

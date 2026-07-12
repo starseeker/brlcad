@@ -38,6 +38,7 @@ class QImage;
 class QObject;
 class QgViewFilter;
 class BRLObolViewController;
+struct brlobol_display_endpoint;
 
 class QTCAD_EXPORT QgView : public QWidget {
 Q_OBJECT
@@ -67,6 +68,7 @@ bool isValid();
 qg_legacy_view * view();
 bool legacyBackendInitialized() const;
 BRLObolViewController *obolViewController();
+struct brlobol_display_endpoint *displayEndpoint();
 QgCanvasBase *canvasBase();
 
 void set_view(qg_legacy_view *);
@@ -110,6 +112,7 @@ void set_lmouse_move_default(int);
 private:
 QBoxLayout  *l = nullptr;
 QgCanvasBase *canvas = nullptr;
+struct brlobol_display_endpoint *endpoint = nullptr;
 QObject     *curr_event_filter = nullptr;
 std::vector<QObject *> filters;
 };

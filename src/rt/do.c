@@ -47,7 +47,6 @@
 #include "bu/vls.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "icv.h"
 
 #include "./rtuif.h"
@@ -688,11 +687,11 @@ extern double airdensity;
 static unsigned int clt_mode;           /* Active render buffers */
 static uint8_t clt_o[2];		/* Sub buffer offsets in bytes: {CLT_COLOR, MAX} */
 
-static struct fb *clt_fbp = FB_NULL;
+static imgstream_fb_t *clt_fbp = NULL;
 
 
 void
-clt_connect_fb(struct fb *fbp)
+clt_connect_fb(imgstream_fb_t *fbp)
 {
     clt_fbp = fbp;
 }
@@ -774,9 +773,10 @@ clt_run(int cur_pixel, int last_pixel)
 
     pixelp = pixels + cur_pixel*clt_o[1];
 
-    if (clt_fbp != FB_NULL) {
+    if (clt_fbp != NULL) {
         bu_semaphore_acquire(BU_SEM_SYSCALL);
-        count = fb_write(clt_fbp, a_x, a_y, pixelp, npix);
+        count = (int)imgstream_fb_write(clt_fbp, a_x, a_y, pixelp,
+		(size_t)npix);
         bu_semaphore_release(BU_SEM_SYSCALL);
         if (count < npix)
             bu_exit(EXIT_FAILURE, "pixel fb_write error");
@@ -1022,7 +1022,7 @@ do_frame(int framenumber)
 
     /* Allocate data for pixel map for rerendering of black pixels */
     if (pixmap == NULL) {
-	pixmap = (unsigned char*)bu_calloc(sizeof(RGBpixel), width*height, "pixmap allocate");
+	pixmap = (unsigned char *)bu_calloc(3, width*height, "pixmap allocate");
     }
 
     /*
@@ -1081,7 +1081,7 @@ do_frame(int framenumber)
 
 		/* check if partial result */
 		ret = fstat(fd, &sb);
-		if (ret >= 0 && sb.st_size > 0 && (size_t)sb.st_size < width*height*sizeof(RGBpixel)) {
+		if (ret >= 0 && sb.st_size > 0 && (size_t)sb.st_size < width*height*3) {
 
 		    /* Read existing pix data into the frame buffer */
 		    if (sb.st_size > 0) {

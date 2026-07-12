@@ -41,6 +41,7 @@
 #include "ged/selection_state.h"
 #include "qtcad/QgGeomImport.h"
 #include "qtcad/QgLegacyView.h"
+#include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgPluginCommands.h"
 #include "qtcad/QgPluginInterfaces.h"
 #include "qtcad/QgPluginManager.h"
@@ -292,6 +293,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     setOrganizationDomain("brlcad.org");
     setApplicationName("QGED");
     setApplicationVersion(brlcad_version());
+    (void)qtcad_obol_host_factories_register();
 
     // NOTE - these env variables should ultimately be temporary - we are using
     // them to enable behavior in LIBRT/LIBGED we don't yet want on by default
@@ -800,6 +802,8 @@ QgEdApp::run_qcmd(const QString &command)
     // Run as a GED command.
     int ret = BRLCAD_OK;
     ret = run_cmd(&msg, ac, (const char **)av);
+    if ((ret & BRLCAD_ERROR) && bu_vls_strlen(&msg) > 0)
+	bu_log("qged command failed: %s\n", bu_vls_cstr(&msg));
     if (bu_vls_strlen(&msg) > 0 && console) {
 	console->printString(bu_vls_cstr(&msg));
     }

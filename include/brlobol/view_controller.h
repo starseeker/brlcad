@@ -149,6 +149,17 @@ public:
     void setBackgroundColors(const SbColor &bottom, const SbColor &top);
     const SbColor &getBackgroundBottomColor(void) const;
     const SbColor &getBackgroundTopColor(void) const;
+    void setDepthTestEnabled(SbBool enabled);
+    SbBool isDepthTestEnabled(void) const;
+    void setLightingEnabled(SbBool enabled);
+    SbBool isLightingEnabled(void) const;
+    void setTransparencyEnabled(SbBool enabled);
+    SbBool isTransparencyEnabled(void) const;
+    SbBool setClipBounds(double minimum, double maximum);
+    void getClipBounds(double &minimum, double &maximum) const;
+    size_t getActiveClipPlanes(SbPlane planes[2]) const;
+    void setDepthCueEnabled(SbBool enabled);
+    SbBool isDepthCueEnabled(void) const;
     void renderBackground(void) const;
     void setSoftwareWireMode(SoftwareWireMode mode);
     SoftwareWireMode getSoftwareWireMode(void) const;
@@ -489,6 +500,9 @@ private:
     SbColor backgroundBottom;
     SbColor backgroundTop;
     SoftwareWireMode softwareWireMode;
+    SbBool transparencyEnabled;
+    double clipMinimum;
+    double clipMaximum;
     SbBool renderRequested;
     SbString renderReason;
     uint64_t lastRenderTimeNanoseconds;

@@ -147,6 +147,20 @@ GED_EXPORT extern void *ged_view_context_display_manager_get(const void *view_ct
 GED_EXPORT extern int ged_view_context_display_manager_set(void *view_ctx, void *dmp);
 
 /**
+ * Get or replace the Obol display endpoint associated with a GED view.
+ *
+ * Setting an endpoint also binds its controller to the view's Obol draw
+ * synchronization.  When @p take_ownership is non-zero, GED destroys the
+ * endpoint after detaching its controller during replacement or view teardown.
+ */
+struct brlobol_display_endpoint;
+GED_EXPORT extern struct brlobol_display_endpoint *
+ged_view_context_display_endpoint_get(const void *view_ctx);
+GED_EXPORT extern int ged_view_context_display_endpoint_set(
+    void *view_ctx, struct brlobol_display_endpoint *endpoint,
+    int take_ownership);
+
+/**
  * Translate the view.
  */
 GED_EXPORT extern int ged_tra_args(struct ged *gedp, int argc, const char *argv[], char *coord, vect_t tvec);

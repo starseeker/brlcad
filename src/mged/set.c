@@ -469,9 +469,6 @@ set_perspective(const struct bu_structparse *sdp,
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     bv_perspective_set(view, mged_variables->mv_perspective);
 
-    /* keep display manager in sync */
-    dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
-
     set_dirty_flag(sdp, name, base, value, data);
 }
 
@@ -492,9 +489,6 @@ establish_perspective(const struct bu_structparse *sdp,
     void *view_ctx = view_state->vs_gvp;
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     bv_perspective_set(view, mged_variables->mv_perspective);
-
-    /* keep display manager in sync */
-    dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
     set_dirty_flag(sdp, name, base, value, data);
 }
@@ -536,9 +530,6 @@ toggle_perspective(const struct bu_structparse *sdp,
     void *view_ctx = view_state->vs_gvp;
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     bv_perspective_set(view, mged_variables->mv_perspective);
-
-    /* keep display manager in sync */
-    dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
 
     set_dirty_flag(sdp, name, base, value, data);
 }

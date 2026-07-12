@@ -54,7 +54,6 @@
 #include "icv.h"
 #include "raytrace.h"
 #include "bu/cv.h"
-#include "dm.h"
 #include "bg/plot3.h"
 #include "optical/photonmap.h"
 #include "scanline.h"
@@ -65,7 +64,7 @@
 
 extern fastf_t** timeTable_init(size_t x, size_t y);  /* from heatgraph.c */
 extern void timeTable_clear(size_t x, size_t y);  /* from heatgraph.c */
-extern void timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), struct fb *efbp); /* from heatgraph.c */
+extern void timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), imgstream_fb_t *efbp); /* from heatgraph.c */
 extern void free_scanlines(int, struct scanline *);
 extern struct scanline* alloc_scanlines(int);
 
@@ -180,10 +179,10 @@ view_pixel(struct application *ap)
      * need to revisit and test making this be runtime requestable.
      */
 
-    RGBpixel white = {255, 255, 255};
+    rt_pixel_t white = {255, 255, 255};
 
     bu_semaphore_acquire(BU_SEM_SYSCALL);
-    (void)fb_write(fbp, ap->a_x, ap->a_y, (unsigned char *)white, 1);
+    (void)imgstream_fb_write(fbp, ap->a_x, ap->a_y, white, 1);
     bu_semaphore_release(BU_SEM_SYSCALL);
 #endif
 
@@ -295,7 +294,7 @@ view_pixel(struct application *ap)
 
 	case BUFMODE_UNBUF:
 	    {
-		RGBpixel p;
+		rt_pixel_t p;
 		int npix;
 
 		p[0] = r;
@@ -313,10 +312,10 @@ view_pixel(struct application *ap)
 		    bu_semaphore_release(BU_SEM_SYSCALL);
 		}
 
-		if (fbp != FB_NULL) {
+		if (fbp != NULL) {
 		    /* Framebuffer output */
 		    bu_semaphore_acquire(BU_SEM_SYSCALL);
-		    npix = fb_write(fbp, ap->a_x, ap->a_y,
+		    npix = (int)imgstream_fb_write(fbp, ap->a_x, ap->a_y,
 				    (const unsigned char *)p, 1);
 		    bu_semaphore_release(BU_SEM_SYSCALL);
 		    if (npix < 1)
@@ -457,7 +456,7 @@ view_pixel(struct application *ap)
 		long spread;
 		size_t npix = 0;
 
-		if (fbp == FB_NULL)
+		if (fbp == NULL)
 		    bu_exit(EXIT_FAILURE, "Incremental rendering with no framebuffer?");
 
 		spread = (1<<(incr_nlevel-incr_level))-1;
@@ -467,12 +466,12 @@ view_pixel(struct application *ap)
 		    if (sub_grid_mode) {
 			if (dy < sub_ymin || dy > sub_ymax)
 			    continue;
-			npix = fb_write(fbp, sub_xmin, yy,
+			npix = (int)imgstream_fb_write(fbp, sub_xmin, yy,
 					(unsigned char *)scanline[yy].sl_buf+3*sub_xmin,
 					sub_xmax-sub_xmin+1);
 			if (npix != (size_t)sub_xmax-(size_t)sub_xmin+1) break;
 		    } else {
-			npix = fb_write(fbp, 0, yy,
+			npix = (int)imgstream_fb_write(fbp, 0, yy,
 					(unsigned char *)scanline[yy].sl_buf,
 					width);
 			if (npix != width) break;
@@ -486,15 +485,15 @@ view_pixel(struct application *ap)
 	case BUFMODE_ACC:
 	case BUFMODE_SCANLINE:
 	case BUFMODE_DYNAMIC:
-	    if (fbp != FB_NULL) {
+	    if (fbp != NULL) {
 		size_t npix;
 		bu_semaphore_acquire(BU_SEM_SYSCALL);
 		if (sub_grid_mode) {
-		    npix = fb_write(fbp, sub_xmin, ap->a_y,
+		    npix = (int)imgstream_fb_write(fbp, sub_xmin, ap->a_y,
 				    (unsigned char *)scanline[ap->a_y].sl_buf+3*sub_xmin,
 				    sub_xmax-sub_xmin+1);
 		} else {
-		    npix = fb_write(fbp, 0, ap->a_y,
+		    npix = (int)imgstream_fb_write(fbp, 0, ap->a_y,
 				    (unsigned char *)scanline[ap->a_y].sl_buf, width);
 		}
 		bu_semaphore_release(BU_SEM_SYSCALL);

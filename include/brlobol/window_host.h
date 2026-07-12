@@ -153,7 +153,7 @@ private:
     BRLObolWindowHostPrivate *p;
 };
 
-BRLOBOL_EXPORT int brlobol_window_host_register_display_host(BRLObolWindowHost *host);
-BRLOBOL_EXPORT void brlobol_window_host_unregister_display_host(void);
+BRLOBOL_EXPORT imgstream_fb_t *brlobol_window_host_open_display_framebuffer(
+    BRLObolWindowHost *host, const char *spec, size_t width, size_t height);
 
 #endif /* BRLOBOL_WINDOW_HOST_H */

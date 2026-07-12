@@ -488,15 +488,6 @@ namespace eval ArcherCore {
 	variable mMaxCombMembersShownPref ""
 	variable mCombWarningList ""
 
-	variable mZClipBack 100.0
-	variable mZClipBackPref 100.0
-	variable mZClipFront 100.0
-	variable mZClipFrontPref 100.0
-	variable mZClipBackMax 1000
-	variable mZClipBackMaxPref 1000
-	variable mZClipFrontMax 1000
-	variable mZClipFrontMaxPref 1000
-
 	variable mLightingMode 1
 	variable mLightingModePref ""
 	variable mBackendCacheMode 1
@@ -666,14 +657,7 @@ namespace eval ArcherCore {
 	method updateDisplaySettings {}
 	method updateLightingMode {}
 	method updatePerspective {_unused}
-	method updateZClipPlanes {_front _front_max _back _back_max}
-	method updateZClipPlanesFromSettings {}
-	method updateZClipPlanesFromPreferences {{_unused 0.0}}
-	method calculateZClipMax {}
-	method calculateZClipBackMax {}
-	method calculateZClipFrontMax {}
 	method pushPerspectiveSettings {}
-	method validateZClipMax {_d}
 
 	method shootRay_doit {_start _op _target _prep _no_bool _onehit _bot_dflag _objects}
 
@@ -2044,7 +2028,6 @@ namespace eval ArcherCore {
 	$itk_component(ged) set_outputHandler "$itk_component(cmd) putstring"
     }
     $itk_component(ged) transparency_all 1
-    $itk_component(ged) bounds_all "-4096 4095 -4096 4095 -4096 4095"
     $itk_component(ged) more_args_callback [::itcl::code $this handleMoreArgs]
     $itk_component(ged) history_callback [::itcl::code $this addHistory]
 
@@ -5944,7 +5927,6 @@ namespace eval ArcherCore {
 ::itcl::body ArcherCore::updateDisplaySettings {} {
     $itk_component(ged) refresh_off
 
-    updateZClipPlanesFromSettings
     updatePerspective 0
     doLighting
     gedCmd cache_on $mBackendCacheMode
@@ -5970,64 +5952,6 @@ namespace eval ArcherCore {
 
 ::itcl::body ArcherCore::updatePerspective {_unused} {
     $itk_component(ged) perspective_all $mPerspectivePref
-}
-
-::itcl::body ArcherCore::updateZClipPlanes {_front _front_max _back _back_max} {
-    set near [expr {0.01 * $_front * $_front_max}]
-    set far [expr {0.01 * $_back * $_back_max}]
-    $itk_component(ged) bounds_all "-1.0 1.0 -1.0 1.0 -$near $far"
-    $itk_component(ged) refresh_all
-}
-
-::itcl::body ArcherCore::updateZClipPlanesFromSettings {} {
-    updateZClipPlanes $mZClipFront $mZClipFrontMax $mZClipBack $mZClipBackMax
-}
-
-# Note: This method is used by scale widgets in the Archer Preferences
-# dialog, which is why it has an unused parameter.
-::itcl::body ArcherCore::updateZClipPlanesFromPreferences {{_unused 0.0}} {
-    updateZClipPlanes $mZClipFrontPref $mZClipFrontMaxPref $mZClipBackPref \
-	$mZClipBackMaxPref
-}
-
-::itcl::body ArcherCore::calculateZClipMax {} {
-    set size [$itk_component(ged) size]
-    set autoview_l [$itk_component(ged) get_autoview]
-    set asize [lindex $autoview_l end]
-
-    set max [expr {($asize / $size) * 0.5}]
-    set maxSq [expr {$max * $max}]
-
-    # return the length of the diagonal
-    return [expr {sqrt($maxSq + $maxSq)}]
-}
-
-::itcl::body ArcherCore::calculateZClipBackMax {} {
-    set mZClipBackMaxPref [calculateZClipMax]
-    updateZClipPlanesFromPreferences
-}
-
-::itcl::body ArcherCore::calculateZClipFrontMax {} {
-    set mZClipFrontMaxPref [calculateZClipMax]
-    updateZClipPlanesFromPreferences
-}
-
-::itcl::body ArcherCore::validateZClipMax {_d} {
-    if {[::cadwidgets::Ged::validateDouble $_d]} {
-
-	if {$_d == "" || $_d == "."} {
-	    return 1
-	}
-
-	if {$_d < 0} {
-	    return 0
-	}
-
-	after idle [::itcl::code $this updateZClipPlanesFromPreferences]
-	return 1
-    }
-
-    return 0
 }
 
 ::itcl::body ArcherCore::pushPerspectiveSettings {} {

@@ -866,4 +866,17 @@ private:
     SoFieldSensor *viewRevisionSensor;
 };
 
+/**
+ * Refresh effective database material colors for a retained source set.
+ * Combination state and shared path prefixes are resolved once per sweep;
+ * callers should prefer this over invoking the single-source database lookup
+ * repeatedly.
+ */
+BRLOBOL_EXPORT int
+brlobol_database_sources_refresh_material_colors(
+    SoBRLDatabaseSource *const *sources,
+    size_t sourceCount,
+    uint32_t materialRevision,
+    struct db_i *dbip);
+
 #endif /* BRLOBOL_DATABASE_SOURCE_H */

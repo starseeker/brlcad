@@ -15,6 +15,7 @@
 #include "brlobol/edit_preview.h"
 #include "brlobol/export_action.h"
 #include "brlobol/grid.h"
+#include "brlobol/headless_window_host.h"
 #include "brlobol/hud_label_overlay.h"
 #include "brlobol/image_plane.h"
 #include "brlobol/image_source.h"
@@ -36,45 +37,21 @@
 
 #include <Inventor/SoDB.h>
 
-namespace
-{
-
-class BRLOBOLNullContextManager : public SoDB::ContextManager
-{
-public:
-    virtual void *createOffscreenContext(unsigned int UNUSED(width), unsigned int UNUSED(height))
-    {
-	return NULL;
-    }
-
-    virtual SbBool makeContextCurrent(void *UNUSED(context))
-    {
-	return FALSE;
-    }
-
-    virtual void restorePreviousContext(void *UNUSED(context))
-    {
-    }
-
-    virtual void destroyContext(void *UNUSED(context))
-    {
-    }
-};
-
-}
+extern void brlobol_osmesa_runtime_link(void);
 
 void
 brlobol_init(SoDB::ContextManager *contextManager)
 {
+    brlobol_osmesa_runtime_link();
     static bool initialized = false;
     if (initialized) {
 	if (contextManager)
 	    SoDB::setContextManager(contextManager);
 	return;
     }
-
-    static BRLOBOLNullContextManager nullContextManager;
-    SoDB::init(contextManager ? contextManager : &nullContextManager);
+    if (!contextManager)
+	contextManager = brlobol_headless_context_manager();
+    SoDB::init(contextManager);
 
     SoBRLPickDetail::initClass();
     SoBRLVListShape::initClass();
@@ -104,6 +81,7 @@ brlobol_init(SoDB::ContextManager *contextManager)
     SoBRLSceneGroup::initClass();
 
     initialized = true;
+    (void)brlobol_headless_host_factory_register();
 }
 
 SoDB::ContextManager *

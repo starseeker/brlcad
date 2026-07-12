@@ -15,6 +15,7 @@
 
 #include <Inventor/SbBox.h>
 #include <Inventor/SbColor.h>
+#include <Inventor/SbPlane.h>
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec3f.h>
@@ -172,7 +173,9 @@ public:
     int getObjectPathCount(void) const;
     SbBool pickRay(BRLObolRtPickResult &pick,
 	    const SbVec3f &rayOrigin,
-	    const SbVec3f &rayDirection) const;
+	    const SbVec3f &rayDirection,
+	    const SbPlane *clipPlanes = NULL,
+	    size_t clipPlaneCount = 0) const;
 
 private:
     BRLObolRtPickCache(const BRLObolRtPickCache &);
@@ -190,7 +193,9 @@ brlobol_pick_source_full_detail_result(
 	const BRLObolSourceMeshRequest &sourceRequest,
 	const BRLObolLodResult &result,
 	const SbVec3f &rayOrigin,
-	const SbVec3f &rayDirection);
+	const SbVec3f &rayDirection,
+	const SbPlane *clipPlanes = NULL,
+	size_t clipPlaneCount = 0);
 
 BRLOBOL_EXPORT SbBool
 brlobol_pick_rt_ray(BRLObolRtPickResult &pick,

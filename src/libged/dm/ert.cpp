@@ -43,8 +43,7 @@
 #include "bv.h"
 #include "raytrace.h"
 #include "imgstream/fbserv.h"
-#include "dm.h"
-#include "dm/fbserv_legacy.h"
+#include "pkg.h"
 
 #include "../ged_private.h"
 
@@ -77,30 +76,15 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 
     struct fbserv_fb_info fbinfo;
     int have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
-    struct dm *dmp = NULL;
-    struct fb *fbp = NULL;
     if (!have_fbserv_backend) {
 	if (ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) == BRLCAD_OK)
 	    have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
     }
 
     if (!have_fbserv_backend) {
-	dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-	if (!dmp) {
-	    bu_vls_printf(gedp->ged_result_str, "no current display manager or framebuffer backend set\n");
-	    return BRLCAD_ERROR;
-	}
-
-	fbp = dm_get_fb(dmp);
-	if (!fbp) {
-	    bu_vls_printf(gedp->ged_result_str, "attached display manager has no embedded framebuffer\n");
-	    return BRLCAD_ERROR;
-	}
-	dm_fbserv_set_framebuffer(fbs, fbp);
-	if (fbs_framebuffer_info(fbs, &fbinfo) != 0) {
-	    bu_vls_printf(gedp->ged_result_str, "could not query embedded framebuffer dimensions\n");
-	    return BRLCAD_ERROR;
-	}
+	bu_vls_printf(gedp->ged_result_str,
+		"view has no endpoint-backed framebuffer stream\n");
+	return BRLCAD_ERROR;
     }
 
     if (!ged_who_argc(gedp)) {
@@ -157,12 +141,6 @@ ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 
     int width = fbinfo.width;
     int height = fbinfo.height;
-    if (width <= 0 || height <= 0) {
-	if (dmp) {
-	    width = dm_get_width(dmp);
-	    height = dm_get_height(dmp);
-	}
-    }
     if (width <= 0 || height <= 0) {
 	bu_vls_printf(gedp->ged_result_str, "invalid embedded framebuffer dimensions\n");
 	return BRLCAD_ERROR;

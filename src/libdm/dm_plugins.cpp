@@ -122,16 +122,8 @@ dm_graphics_system(const char *dmtype)
 }
 
 
-/* Backend default policy:
- *
- * The priority_list drives dm_bestXType / dm_default_type for legacy
- * applications such as mged that open a DM via dm_open() outside of a Qt
- * widget context.  The ordering reflects historical platform priorities:
- *   tkobol - Tk-hosted retained Obol renderer
- * Qt Obol canvases are application hosts rather than libdm plugins.  Headless
- * callers use dm-obol explicitly instead of a hidden software-raster DM.
- */
-static const char *priority_list[] = {"tkobol", NULL};
+/* Graphical hosts are selected by libbrlobol endpoints, not libdm. */
+static const char *priority_list[] = {NULL};
 
 extern "C" void
 dm_list_types(struct bu_vls *list, const char *separator)

@@ -24,11 +24,10 @@
  * Verifies the lighting / zbuffer / zclip plumbing used by
  * mged_shaded_mode_helper and the GED draw-mode pipeline:
  *
- *   Test 1 — dm_set_light / dm_set_zbuffer / dm_set_zclip round-trip
- *             Simulates what mged_shaded_mode_helper does:
+ *   Test 1 — endpoint renderer-policy and view-state round-trip
+ *             Exercises what mged_shaded_mode_helper does:
  *               dm set zbuffer $val; dm set zclip $val; dm set lighting $val
- *             Asserts the corresponding dm_get_* functions return the new value.
- *             Also verifies toggling back to 0 restores the off state.
+ *             Verifies the GED command updates Obol renderer and libbv state.
  *
  *   Test 2 — shaded draw-mode pipeline (draw -m1, draw -m2) produces expected
  *             Obol-rendered output relative to wireframe (draw -m0).
@@ -36,12 +35,7 @@
  *             does not require display hardware or the legacy retained-DM
  *             rendering path.
  *
- *   Test 3 — dm_set/get_geometry_default_color round-trip
- *             Phase 4 added dm_get/set_geometry_default_color.  Verify the
- *             accessor round-trips correctly so that render-item appearance
- *             resolution can honour canonical default-color metadata.
- *
- *   Test 4 — Obol-rendered output stability across zap/redraw
+ *   Test 3 — Obol-rendered output stability across zap/redraw
  *             Draw once, capture the non-black pixel count.  Zap and re-draw.
  *             The second count must match the first within a small tolerance.
  *
@@ -63,10 +57,10 @@
 #include "bu/opt.h"
 #include "rt/view.h"
 #include "view_test_util.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 #include "ged/draw.h"
+#include "brlobol/display_endpoint.h"
+#include "brlobol/view_controller.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" long draw_test_count_nonblack_pixels(const char *filename);
@@ -115,25 +109,15 @@ open_gedp(const char *gfile, int width, int height)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    const char *s_av[16] = {NULL};
-    s_av[0] = "dm"; s_av[1] = "attach"; s_av[2] = "obol"; s_av[3] = "OBOL"; s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
-
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)ged_view_context_display_manager_get(v);
-    if (!dmp) {
+    bv_dimensions_set(DRAW_TEST_BV(v), width, height);
+    const char *s_av[16] = {
+	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
+    };
+    if (ged_exec_dm(gedp, 6, s_av) != BRLCAD_OK) {
 	ged_close(gedp);
 	return NULL;
     }
-    dm_set_width(dmp, width);
-    dm_set_height(dmp, height);
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-    fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
-    dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
-    ged_view_context_display_manager_set(v, dmp);
-    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
     bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
@@ -165,63 +149,58 @@ test_dm_lighting_flags(const char *datadir)
     if (!gedp) { bu_log("FAIL: ged_open failed\n"); bu_file_delete("smb_t1.g"); return 1; }
 
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
     int fail = 0;
 
-    /* --- turn everything ON (val=1) --------------------------------------- */
-    dm_set_light(dmp, 1);
-    dm_set_zbuffer(dmp, 1);
-    dm_set_zclip(dmp, 1);
-
-    int l = dm_get_light(dmp);
-    int z = dm_get_zbuffer(dmp);
-    int c = dm_get_zclip(dmp);
-    if (!l) { bu_log("FAIL: dm_get_light returned %d after set to 1\n", l); fail++; }
-    else      bu_log("PASS: dm_get_light == 1\n");
-    if (!z) { bu_log("FAIL: dm_get_zbuffer returned %d after set to 1\n", z); fail++; }
-    else      bu_log("PASS: dm_get_zbuffer == 1\n");
-    if (!c) { bu_log("FAIL: dm_get_zclip returned %d after set to 1\n", c); fail++; }
-    else      bu_log("PASS: dm_get_zclip == 1\n");
-
-    /* --- turn everything OFF (val=0) --------------------------------------- */
-    dm_set_light(dmp, 0);
-    dm_set_zbuffer(dmp, 0);
-    dm_set_zclip(dmp, 0);
-
-    l = dm_get_light(dmp);
-    z = dm_get_zbuffer(dmp);
-    c = dm_get_zclip(dmp);
-    if (l)  { bu_log("FAIL: dm_get_light returned %d after set to 0\n", l); fail++; }
-    else     bu_log("PASS: dm_get_light == 0\n");
-    if (z)  { bu_log("FAIL: dm_get_zbuffer returned %d after set to 0\n", z); fail++; }
-    else     bu_log("PASS: dm_get_zbuffer == 0\n");
-    if (c)  { bu_log("FAIL: dm_get_zclip returned %d after set to 0\n", c); fail++; }
-    else     bu_log("PASS: dm_get_zclip == 0\n");
-
-    /* --- ged_exec_dm path (what the Tcl mged command uses) ---------------- */
-    /* "dm set lighting 1"  */
-    {
+    /* --- endpoint-native ged_exec_dm path used by applications ------------ */
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(v);
+    BRLObolViewController *controller = endpoint ?
+	static_cast<BRLObolViewController *>(
+	    brlobol_display_endpoint_controller(endpoint)) : NULL;
+    if (!controller) {
+	bu_log("FAIL: Obol DM did not publish a view endpoint\n");
+	fail++;
+    } else {
 	const char *s_av[5] = {"dm", "set", "lighting", "1", NULL};
-	ged_exec_dm(gedp, 4, s_av);
-	int lv = dm_get_light(dmp);
-	if (!lv) {
-	    bu_log("FAIL: 'dm set lighting 1' → dm_get_light returned %d\n", lv);
+	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
+	    !controller->isLightingEnabled()) {
+	    bu_log("FAIL: dm set lighting 1 did not enable Obol lighting\n");
 	    fail++;
-	} else {
-	    bu_log("PASS: 'dm set lighting 1' → dm_get_light == 1\n");
 	}
-    }
-    /* "dm set lighting 0"  */
-    {
-	const char *s_av[5] = {"dm", "set", "lighting", "0", NULL};
-	ged_exec_dm(gedp, 4, s_av);
-	int lv = dm_get_light(dmp);
-	if (lv) {
-	    bu_log("FAIL: 'dm set lighting 0' → dm_get_light returned %d\n", lv);
+	s_av[2] = "zbuffer";
+	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
+	    !controller->isDepthTestEnabled()) {
+	    bu_log("FAIL: dm set zbuffer 1 did not enable Obol depth testing\n");
 	    fail++;
-	} else {
-	    bu_log("PASS: 'dm set lighting 0' → dm_get_light == 0\n");
 	}
+	s_av[2] = "zclip";
+	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
+	    !bv_zclip_get(DRAW_TEST_BV(v))) {
+	    bu_log("FAIL: dm set zclip 1 did not enable libbv clipping\n");
+	    fail++;
+	}
+
+	s_av[3] = "0";
+	s_av[2] = "lighting";
+	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
+	    controller->isLightingEnabled()) {
+	    bu_log("FAIL: dm set lighting 0 did not disable Obol lighting\n");
+	    fail++;
+	}
+	s_av[2] = "zbuffer";
+	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
+	    controller->isDepthTestEnabled()) {
+	    bu_log("FAIL: dm set zbuffer 0 did not disable Obol depth testing\n");
+	    fail++;
+	}
+	s_av[2] = "zclip";
+	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
+	    bv_zclip_get(DRAW_TEST_BV(v))) {
+	    bu_log("FAIL: dm set zclip 0 did not disable libbv clipping\n");
+	    fail++;
+	}
+	if (!fail)
+	    bu_log("PASS: GED dm policy aliases update typed owners\n");
     }
 
     ged_close(gedp);
@@ -326,69 +305,12 @@ test_shaded_mode_draw(const char *datadir)
 }
 
 /* ========================================================================== */
-/* Test 3: dm_get/set_geometry_default_color round-trip (Phase 4 addition)    */
-/* ========================================================================== */
-static int
-test_geometry_default_color(const char *datadir)
-{
-    bu_log("\n--- Test 3: dm_get/set_geometry_default_color round-trip ---\n");
-
-    struct bu_vls fname = BU_VLS_INIT_ZERO;
-    bu_vls_sprintf(&fname, "%s/moss.g", datadir);
-    std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
-    std::ofstream tmp("smb_t3.g", std::ios::binary);
-    tmp << orig.rdbuf();
-    orig.close(); tmp.close();
-    bu_vls_free(&fname);
-
-    struct ged *gedp = open_gedp("smb_t3.g", 256, 256);
-    if (!gedp) { bu_file_delete("smb_t3.g"); return 1; }
-
-    void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    int fail = 0;
-
-    /* Set a recognisable test colour */
-    dm_set_geometry_default_color(dmp, 0, 200, 100);
-
-    unsigned char *dgc = dm_get_geometry_default_color(dmp);
-
-    if (!dgc || dgc[0] != 0 || dgc[1] != 200 || dgc[2] != 100) {
-	bu_log("FAIL: dm_get_geometry_default_color returned (%u,%u,%u), "
-	       "expected (0,200,100)\n",
-	       dgc ? (unsigned)dgc[0] : 0,
-	       dgc ? (unsigned)dgc[1] : 0,
-	       dgc ? (unsigned)dgc[2] : 0);
-	fail++;
-    } else {
-	bu_log("PASS: dm_get_geometry_default_color round-trips (0,200,100)\n");
-    }
-
-    /* Reset to the MGED default (255,0,0) and verify */
-    dm_set_geometry_default_color(dmp, 255, 0, 0);
-    dgc = dm_get_geometry_default_color(dmp);
-    if (!dgc || dgc[0] != 255 || dgc[1] != 0 || dgc[2] != 0) {
-	bu_log("FAIL: reset to default (255,0,0) returned (%u,%u,%u)\n",
-	       dgc ? (unsigned)dgc[0] : 0,
-	       dgc ? (unsigned)dgc[1] : 0,
-	       dgc ? (unsigned)dgc[2] : 0);
-	fail++;
-    } else {
-	bu_log("PASS: dm_get_geometry_default_color round-trips (255,0,0)\n");
-    }
-
-    ged_close(gedp);
-    bu_file_delete("smb_t3.g");
-    return fail;
-}
-
-/* ========================================================================== */
-/* Test 4: Obol-rendered output is stable across zap/redraw                    */
+/* Test 3: Obol-rendered output is stable across zap/redraw                    */
 /* ========================================================================== */
 static int
 test_obol_render_stability(const char *datadir)
 {
-    bu_log("\n--- Test 4: Obol render stability across zap/redraw ---\n");
+    bu_log("\n--- Test 3: Obol render stability across zap/redraw ---\n");
 
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
@@ -464,11 +386,10 @@ main(int argc, char *argv[])
     int failures = 0;
     failures += test_dm_lighting_flags(datadir);
     failures += test_shaded_mode_draw(datadir);
-    failures += test_geometry_default_color(datadir);
     failures += test_obol_render_stability(datadir);
 
     if (failures == 0) {
-	bu_log("\nAll MGED shaded-mode tests PASSED (4/4)\n");
+	bu_log("\nAll MGED shaded-mode tests PASSED (3/3)\n");
     } else {
 	bu_log("\n%d MGED shaded-mode test(s) FAILED\n", failures);
     }

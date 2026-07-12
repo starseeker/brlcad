@@ -593,22 +593,25 @@ main(int argc, char **argv)
 		SoBRLDatabaseSource::SHADED))
 	FAIL("multi-path Obol draw sync should retain shared and representation-specific database sources");
 
-    controller->clearDatabaseSources();
-    if (controller->getDatabaseSourceCount() != 0)
-	FAIL("test setup should clear local compatibility sources before redraw");
+    SoBRLDatabaseSource *boxWireBeforeRedraw =
+	source_for_path_mode(controller, "box.s", SoBRLDatabaseSource::WIREFRAME);
+    SoBRLDatabaseSource *ballWireBeforeRedraw =
+	source_for_path_mode(controller, "ball.s", SoBRLDatabaseSource::WIREFRAME);
+    SoBRLDatabaseSource *ballShadedBeforeRedraw =
+	source_for_path_mode(controller, "ball.s", SoBRLDatabaseSource::SHADED);
     struct ged_draw_transaction redraw_all =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     redraw_all.view = qg_legacy_view_to_context(view.view());
     if (!apply_and_sync(gedp, &view, &redraw_all, 1))
-	FAIL("GED redraw should rebuild Obol sources from the draw inventory");
+	FAIL("GED redraw should invalidate the retained Obol render");
     if (render_source_count(controller) != 3 ||
-	    !source_for_path_mode(controller, "box.s",
-		SoBRLDatabaseSource::WIREFRAME) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::WIREFRAME) ||
-	    !source_for_path_mode(controller, "ball.s",
-		SoBRLDatabaseSource::SHADED))
-	FAIL("Obol full redraw sync should rebuild current GED draw sources");
+	    source_for_path_mode(controller, "box.s",
+		SoBRLDatabaseSource::WIREFRAME) != boxWireBeforeRedraw ||
+	    source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::WIREFRAME) != ballWireBeforeRedraw ||
+	    source_for_path_mode(controller, "ball.s",
+		SoBRLDatabaseSource::SHADED) != ballShadedBeforeRedraw)
+	FAIL("Obol redraw should preserve retained database sources");
 
     struct ged_draw_transaction clear_all =
 	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);

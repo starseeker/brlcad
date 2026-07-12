@@ -54,6 +54,7 @@
 #include "ged/defines.h"
 #include "ged/commands.h"
 #include "ged/draw.h"
+#include "ged/view.h"
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgLegacyView.h"
 #include "qtcad/QgQuadView.h"
@@ -63,6 +64,16 @@
 #include <Inventor/SoViewport.h>
 
 static const char *VIEW_NAMES[] = {"Q1", "Q2", "Q3", "Q4"};
+
+static int
+qg_quad_attach_endpoint(struct ged *gedp, QgView *view)
+{
+    if (!gedp || !view || !view->displayEndpoint())
+	return 0;
+    void *view_ctx = qg_legacy_view_to_context(view->view());
+    return ged_view_context_display_endpoint_set(view_ctx,
+	view->displayEndpoint(), 0);
+}
 
 static void
 qg_quad_insert_obol_path(std::set<std::string> &paths, const SbString &path)
@@ -168,6 +179,7 @@ QgQuadView::createView(unsigned int index)
 
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
 	qg_legacy_view_ged_view_set_attach(gedp, view->view());
+	(void)qg_quad_attach_endpoint(gedp, view);
 	/* Each viewport owns independent libbv view state. */
 
 	QObject::connect(view, &QgView::changed, this, &QgQuadView::do_view_changed);

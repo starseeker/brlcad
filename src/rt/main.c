@@ -57,7 +57,6 @@
 #include "bu/vls.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "pkg.h"
 
 /* private */
@@ -73,7 +72,7 @@ extern const char title[];
 
 
 /***** Variables shared with viewing model *** */
-struct fb	*fbp = FB_NULL;	/* Framebuffer handle */
+imgstream_fb_t *fbp = NULL;	/* Framebuffer handle */
 FILE		*outfp = NULL;		/* optional pixel output file */
 struct icv_image *bif = NULL;
 
@@ -145,17 +144,17 @@ int fb_setup(void) {
     }
 
     bu_semaphore_acquire(BU_SEM_SYSCALL);
-    fbp = fb_open(framebuffer, xx, yy);
+    fbp = imgstream_fb_open(framebuffer, (size_t)xx, (size_t)yy);
     bu_semaphore_release(BU_SEM_SYSCALL);
-    if (fbp == FB_NULL) {
+    if (fbp == NULL) {
 	fprintf(stderr, "rt:  can't open frame buffer\n");
 	return 12;
     }
 
     bu_semaphore_acquire(BU_SEM_SYSCALL);
     /* If fb came out smaller than requested, do less work */
-    size_t fbwidth = (size_t)fb_getwidth(fbp);
-    size_t fbheight = (size_t)fb_getheight(fbp);
+    size_t fbwidth = imgstream_fb_width(fbp);
+    size_t fbheight = imgstream_fb_height(fbp);
     if (width > fbwidth)
 	width = fbwidth;
     if (height > fbheight)
@@ -165,9 +164,9 @@ int fb_setup(void) {
     if (width > 0 && height > 0) {
 	zoom = fbwidth/width;
 	if (fbheight/height < (size_t)zoom) {
-	    zoom = fb_getheight(fbp)/height;
+	    zoom = (int)imgstream_fb_height(fbp)/height;
 	}
-	(void)fb_view(fbp, width/2, height/2, zoom, zoom);
+	(void)imgstream_fb_view(fbp, width/2, height/2, zoom, zoom);
     }
     bu_semaphore_release(BU_SEM_SYSCALL);
 
@@ -616,8 +615,8 @@ int main(int argc, char *argv[])
 	frame_retval = do_frame(curframe);
 	if (frame_retval != 0) {
 	    /* Release the framebuffer, if any */
-	    if (fbp != FB_NULL) {
-		fb_close(fbp);
+	    if (fbp != NULL) {
+		imgstream_fb_close(fbp);
 	    }
 	    ret = 1;
 	    goto rt_cleanup;
@@ -718,8 +717,8 @@ int main(int argc, char *argv[])
     }
 
     /* Release the framebuffer, if any */
-    if (fbp != FB_NULL) {
-	fb_close(fbp);
+    if (fbp != NULL) {
+	imgstream_fb_close(fbp);
     }
 
 rt_cleanup:

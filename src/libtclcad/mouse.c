@@ -24,18 +24,13 @@
 #include "bu/path.h"
 #include "ged/view.h"
 #include "tclcad.h"
+#include "brlobol/display_endpoint.h"
 
 /* Private headers */
 #include "ged/draw.h"
 #include "./tclcad_private.h"
 #include "./view/view.h"
 #include "./draw_view_move_helpers.h"
-
-static struct dm *
-tclcad_mouse_display_manager(const void *view_ctx)
-{
-    return (struct dm *)ged_view_context_display_manager_get(view_ctx);
-}
 
 static const char *
 tclcad_mouse_view_name(const void *view_ctx)
@@ -60,33 +55,44 @@ tclcad_mouse_bv_const(const void *view_ctx)
 static int
 tclcad_mouse_display_width(const void *view_ctx)
 {
-    struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
-    return dmp ? dm_get_width(dmp) :
-	bv_context_width_get((const struct bv_context *)view_ctx);
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    struct brlobol_endpoint_property_value property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (endpoint && brlobol_display_endpoint_property_get(endpoint,
+	    "endpoint.width", &property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	property.type == BRLOBOL_ENDPOINT_PROPERTY_UINT && property.uint_value)
+	return (int)property.uint_value;
+    return bv_context_width_get((const struct bv_context *)view_ctx);
 }
 
 static int
 tclcad_mouse_display_height(const void *view_ctx)
 {
-    struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
-    return dmp ? dm_get_height(dmp) :
-	bv_context_height_get((const struct bv_context *)view_ctx);
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    struct brlobol_endpoint_property_value property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (endpoint && brlobol_display_endpoint_property_get(endpoint,
+	    "endpoint.height", &property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	property.type == BRLOBOL_ENDPOINT_PROPERTY_UINT && property.uint_value)
+	return (int)property.uint_value;
+    return bv_context_height_get((const struct bv_context *)view_ctx);
 }
 
 static struct bu_vls *
 tclcad_mouse_display_pathname(const void *view_ctx)
 {
-    struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
-    return dmp ? dm_get_pathname(dmp) : NULL;
+    return tclcad_view_pathname_vls(view_ctx);
 }
 
 static void
-tclcad_mouse_sync_dm_dimensions(void *view_ctx)
+tclcad_mouse_sync_dimensions(void *view_ctx)
 {
-    struct dm *dmp = tclcad_mouse_display_manager(view_ctx);
-    if (dmp)
-	bv_context_dimensions_set((struct bv_context *)view_ctx,
-		dm_get_width(dmp), dm_get_height(dmp));
+    int width = tclcad_mouse_display_width(view_ctx);
+    int height = tclcad_mouse_display_height(view_ctx);
+    if (width > 0 && height > 0)
+	bv_context_dimensions_set((struct bv_context *)view_ctx, width, height);
 }
 
 static void
@@ -263,11 +269,11 @@ to_mouse_append_pnt_common(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&x, &y, tclcad_mouse_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
 
     ged_view_active_ctx_set(gedp, gdvp);
     {
@@ -351,7 +357,7 @@ to_mouse_brep_selection_append(struct ged *gedp,
     bv_previous_mouse_set(tclcad_mouse_bv(gdvp), screen_pt[X], screen_pt[Y]);
 
     /* convert screen point to model-space start point and direction */
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&view_pt[X], &view_pt[Y], tclcad_mouse_bv_const(gdvp),
 	    screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
@@ -465,7 +471,7 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     fastf_t prev_y = 0.0;
     (void)bv_previous_mouse_get(&prev_x, &prev_y,
 	    tclcad_mouse_bv_const(gdvp));
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&view_start[X], &view_start[Y],
 	    tclcad_mouse_bv_const(gdvp),
 	    prev_x, prev_y);
@@ -473,7 +479,7 @@ to_mouse_brep_selection_translate(struct ged *gedp,
     bv_view2model_get(view2model, tclcad_mouse_bv_const(gdvp));
     MAT4X3PNT(model_start, view2model, view_start);
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&view_end[X], &view_end[Y],
 	    tclcad_mouse_bv_const(gdvp),
 	    screen_end[X], screen_end[Y]);
@@ -763,7 +769,7 @@ to_mouse_find_arb_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&x, &y, tclcad_mouse_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
 
@@ -825,7 +831,7 @@ to_mouse_find_bot_edge(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&x, &y, tclcad_mouse_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
 
@@ -886,7 +892,7 @@ to_mouse_find_bot_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&x, &y, tclcad_mouse_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
 
@@ -949,7 +955,7 @@ to_mouse_find_metaball_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&x, &y, tclcad_mouse_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
     bv_view2model_get(view2model, tclcad_mouse_bv_const(gdvp));
@@ -1014,7 +1020,7 @@ to_mouse_find_pipe_pnt(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&x, &y, tclcad_mouse_bv_const(gdvp), x, y);
     VSET(view, x, y, 0.0);
     bv_view2model_get(view2model, tclcad_mouse_bv_const(gdvp));
@@ -1089,7 +1095,7 @@ to_mouse_joint_select(
     bv_previous_mouse_set(tclcad_mouse_bv(gdvp), screen_pt[X], screen_pt[Y]);
 
     /* convert screen point to model-space start point and direction */
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&view_pt[X], &view_pt[Y], tclcad_mouse_bv_const(gdvp),
 	    screen_pt[X], screen_pt[Y]);
     view_pt[Z] = 1.0;
@@ -1201,7 +1207,7 @@ to_mouse_joint_selection_translate(
     fastf_t prev_y = 0.0;
     (void)bv_previous_mouse_get(&prev_x, &prev_y,
 	    tclcad_mouse_bv_const(gdvp));
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&view_start[X], &view_start[Y],
 	    tclcad_mouse_bv_const(gdvp),
 	    prev_x, prev_y);
@@ -1209,7 +1215,7 @@ to_mouse_joint_selection_translate(
     bv_view2model_get(view2model, tclcad_mouse_bv_const(gdvp));
     MAT4X3PNT(model_start, view2model, view_start);
 
-    tclcad_mouse_sync_dm_dimensions(gdvp);
+    tclcad_mouse_sync_dimensions(gdvp);
     bv_screen_to_view(&view_end[X], &view_end[Y],
 	    tclcad_mouse_bv_const(gdvp),
 	    screen_end[X], screen_end[Y]);
@@ -1611,7 +1617,7 @@ to_mouse_move_bot_pnt(struct ged *gedp,
 	bv_view2model_get(v2m_mat, tclcad_mouse_bv_const(gdvp));
 	MAT4X3PNT(view, model2view, &botip->vertices[vertex_i*3]);
 
-	tclcad_mouse_sync_dm_dimensions(gdvp);
+	tclcad_mouse_sync_dimensions(gdvp);
 	bv_screen_to_view(&dx, &dy, tclcad_mouse_bv_const(gdvp), x, y);
 	dz = view[Z];
 
@@ -2277,7 +2283,7 @@ to_mouse_poly_circ_func(Tcl_Interp *interp,
 
     bv_previous_mouse_set(tclcad_mouse_bv(view_ctx), x, y);
 
-    tclcad_mouse_sync_dm_dimensions(view_ctx);
+    tclcad_mouse_sync_dimensions(view_ctx);
     bv_screen_to_view(&fx, &fy, tclcad_mouse_bv_const(view_ctx), x, y);
     bv_view2model_get(view2model, tclcad_mouse_bv_const(view_ctx));
 
@@ -2444,7 +2450,7 @@ to_mouse_poly_cont_func(Tcl_Interp *interp,
 
     bv_previous_mouse_set(tclcad_mouse_bv(view_ctx), x, y);
 
-    tclcad_mouse_sync_dm_dimensions(view_ctx);
+    tclcad_mouse_sync_dimensions(view_ctx);
     bv_screen_to_view(&fx, &fy, tclcad_mouse_bv_const(view_ctx), x, y);
     VSET(v_pt, fx, fy, gdpsp->gdps_data_vZ);
 
@@ -2584,7 +2590,7 @@ to_mouse_poly_ell_func(Tcl_Interp *interp,
     bv_previous_mouse_set(tclcad_mouse_bv(view_ctx), x, y);
 
 
-    tclcad_mouse_sync_dm_dimensions(view_ctx);
+    tclcad_mouse_sync_dimensions(view_ctx);
     bv_screen_to_view(&fx, &fy, tclcad_mouse_bv_const(view_ctx), x, y);
     bv_view2model_get(view2model, tclcad_mouse_bv_const(view_ctx));
 
@@ -2763,7 +2769,7 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
 
     bv_previous_mouse_set(tclcad_mouse_bv(view_ctx), x, y);
 
-    tclcad_mouse_sync_dm_dimensions(view_ctx);
+    tclcad_mouse_sync_dimensions(view_ctx);
     bv_screen_to_view(&fx, &fy, tclcad_mouse_bv_const(view_ctx), x, y);
     bv_view2model_get(view2model, tclcad_mouse_bv_const(view_ctx));
 
@@ -2826,13 +2832,127 @@ to_mouse_poly_rect_func(Tcl_Interp *interp,
 
 
 int
-to_mouse_ray(struct ged *UNUSED(gedp),
-	     int UNUSED(argc),
-	     const char *UNUSED(argv[]),
+to_mouse_ray(struct ged *gedp,
+	     int argc,
+	     const char *argv[],
 	     ged_func_ptr UNUSED(func),
-	     const char *UNUSED(usage),
+	     const char *usage,
 	     int UNUSED(maxargs))
 {
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (argc == 1) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	return GED_HELP;
+    }
+    if (argc != 4) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	return BRLCAD_ERROR;
+    }
+
+    void *view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    double screen_x = 0.0;
+    double screen_y = 0.0;
+    if (!view_ctx || bu_sscanf(argv[2], "%lf", &screen_x) != 1 ||
+	bu_sscanf(argv[3], "%lf", &screen_y) != 1)
+	return BRLCAD_ERROR;
+
+    tclcad_mouse_sync_dimensions(view_ctx);
+    bv_screen_to_view(&screen_x, &screen_y,
+	tclcad_mouse_bv_const(view_ctx), screen_x, screen_y);
+    struct bv_grid_state grid = BV_GRID_STATE_INIT;
+    if (bv_grid_state_get(&grid, tclcad_mouse_bv_const(view_ctx)) &&
+	grid.snap)
+	(void)bv_snap_grid_2d(tclcad_mouse_bv_const(view_ctx),
+	    &screen_x, &screen_y);
+    mat_t view2model;
+    bv_view2model_get(view2model, tclcad_mouse_bv_const(view_ctx));
+    point_t view_point;
+    point_t ray_start;
+    point_t ray_target;
+    VSET(view_point, screen_x, screen_y, BV_VIEW_MAX);
+    MAT4X3PNT(ray_start, view2model, view_point);
+    VSET(view_point, screen_x, screen_y, 0.0);
+    MAT4X3PNT(ray_target, view2model, view_point);
+    bu_vls_printf(gedp->ged_result_str,
+	"{%0.17g %0.17g %0.17g} {%0.17g %0.17g %0.17g}",
+	V3ARGS(ray_start), V3ARGS(ray_target));
+    return BRLCAD_OK;
+}
+
+static int
+tclcad_pick_path_matches(const char *path, const char *target)
+{
+    if (!target || !target[0])
+	return 1;
+    while (path && path[0] == '/')
+	path++;
+    while (target[0] == '/')
+	target++;
+    if (!path)
+	return 0;
+    if (BU_STR_EQUAL(path, target))
+	return 1;
+    const size_t path_len = strlen(path);
+    const size_t target_len = strlen(target);
+    return path_len > target_len &&
+	path[path_len - target_len - 1] == '/' &&
+	BU_STR_EQUAL(path + path_len - target_len, target);
+}
+
+int
+to_mouse_pick_detail(struct ged *gedp,
+	int argc,
+	const char *argv[],
+	ged_func_ptr UNUSED(func),
+	const char *usage,
+	int UNUSED(maxargs))
+{
+    bu_vls_trunc(gedp->ged_result_str, 0);
+    if (argc == 1) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	return GED_HELP;
+    }
+    if (argc != 4 && argc != 5) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	return BRLCAD_ERROR;
+    }
+
+    void *view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    int x = 0;
+    int y = 0;
+    if (!view_ctx || bu_sscanf(argv[2], "%d", &x) != 1 ||
+	bu_sscanf(argv[3], "%d", &y) != 1)
+	return BRLCAD_ERROR;
+
+    const char *target = argc == 5 ? argv[4] : NULL;
+    struct ged_draw_pick_result *result =
+	ged_draw_view_context_pick_point(view_ctx, x, y, target ? 0 : 1);
+    const size_t count = ged_draw_pick_result_count(result);
+    for (size_t i = 0; i < count; i++) {
+	struct bu_vls path = BU_VLS_INIT_ZERO;
+	struct ged_draw_pick_detail detail = GED_DRAW_PICK_DETAIL_INIT;
+	if (!ged_draw_pick_result_path(result, i, &path) ||
+	    !tclcad_pick_path_matches(bu_vls_cstr(&path), target) ||
+	    !ged_draw_pick_result_detail(result, i, &detail)) {
+	    bu_vls_free(&path);
+	    continue;
+	}
+	bu_vls_printf(gedp->ged_result_str,
+	    "path {%s} hit_distance %.17g primitive_kind %d "
+	    "primitive_index %d source_id %u material_id %d "
+	    "face_vertices {%d %d %d} nearest_face_vertex %d",
+	    bu_vls_cstr(&path), ged_draw_pick_result_hit_dist(result, i),
+	    detail.primitive_kind, detail.primitive_index, detail.source_id,
+	    detail.material_id, detail.face_vertex_index[0],
+	    detail.face_vertex_index[1], detail.face_vertex_index[2],
+	    detail.nearest_face_vertex_index);
+	if (detail.model_point_valid)
+	    bu_vls_printf(gedp->ged_result_str, " model_point {%0.17g %0.17g %0.17g}",
+		V3ARGS(detail.model_point));
+	bu_vls_free(&path);
+	break;
+    }
+    ged_draw_pick_result_free(result);
     return BRLCAD_OK;
 }
 

@@ -163,6 +163,8 @@ if(TARGET Qt6::Widgets)
     test_qtcad_obol_window_host
     libqtcad
     libimgstream
+    libged
+    libwdb
     libbu
     Qt6::Widgets
     )
@@ -173,11 +175,14 @@ if(NOT TARGET test_qtcad_obol_window_host AND TARGET Qt5::Widgets)
     test_qtcad_obol_window_host
     libqtcad
     libimgstream
+    libged
+    libwdb
     libbu
     Qt5::Widgets
     )
 endif(NOT TARGET test_qtcad_obol_window_host AND TARGET Qt5::Widgets)
 if(TARGET test_qtcad_obol_window_host)
+  add_dependencies(test_qtcad_obol_window_host ged_plugins)
   target_compile_definitions(test_qtcad_obol_window_host PRIVATE BRLCADBUILD HAVE_CONFIG_H)
   brlcad_add_test(NAME test_qtcad_obol_window_host COMMAND test_qtcad_obol_window_host)
   set_property(TEST test_qtcad_obol_window_host

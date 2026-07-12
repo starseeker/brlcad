@@ -71,6 +71,7 @@
 #include "libtermio.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
+#include "brlobol/display_endpoint.h"
 #include "tclcad.h"
 
 /* private */
@@ -89,9 +90,9 @@
 #define SPACES "                                                                                                                                                                                                                                                                                                           "
 
 
-extern void draw_e_axes(struct mged_state *);
-extern void draw_m_axes(struct mged_state *);
-extern void draw_v_axes(struct mged_state *);
+extern void mged_edit_axes_state_sync(struct mged_state *);
+extern void mged_adc_state_refresh(struct mged_state *);
+extern void mged_rubber_band_state_sync(struct mged_state *);
 
 /* defined in chgmodel.c */
 extern void set_localunit_TclVar(struct mged_state *s);
@@ -102,9 +103,6 @@ extern struct bu_vls *history_cur(void);
 extern struct bu_vls *history_next(const char *);
 
 // FIXME: Globals
-
-/* defined in dozoom.c */
-extern unsigned char geometry_default_color[];
 
 /* defined in set.c */
 extern struct _mged_variables default_mged_variables;
@@ -475,11 +473,8 @@ mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
     }
 
     if (BU_STR_EQUAL(av[1], "set")) {
-        if (ac > 2 && BU_STR_EQUAL(av[2], "zclip") && DMP && view_state && view_state->vs_gvp) {
-            bv_zclip_set(mged_view_context_view(view_state->vs_gvp), dm_get_zclip(DMP));
-        }
-        if (view_state)
-            mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
+	if (view_state)
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
         mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
         return BRLCAD_OK;
     }
@@ -1925,22 +1920,24 @@ mged_obol_faceplate_state_sync(struct mged_state *s, struct mged_dm *p)
 
     struct bv *view = mged_view_state_view(p->dm_view_state);
     struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
+    (void)bv_center_dot_state_get(&center_dot, view);
     center_dot.gos_draw =
 	(!mged_variables->mv_fb || mged_variables->mv_fb_overlay != 2);
     VMOVE(center_dot.gos_line_color, color_scheme->cs_center_dot);
-    center_dot.gos_font_size = dm_get_fontsize(DMP);
     (void)bv_center_dot_state_set(view, &center_dot);
 
     struct bv_params_state params = BV_PARAMS_STATE_INIT;
-    params.draw = mged_variables->mv_faceplate;
-    params.draw_size = 1;
-    params.draw_center = 1;
-    params.draw_az = 1;
-    params.draw_el = 1;
-    params.draw_tw = 1;
+    (void)bv_params_state_get(&params, view);
+    /* MGED publishes its complete status line through dotitles().  Keep the
+     * generic bv parameter overlay disabled so the same camera state is not
+     * drawn a second time. */
+    params.draw = 0;
     VMOVE(params.color, color_scheme->cs_status_text1);
-    params.font_size = dm_get_fontsize(DMP);
     (void)bv_params_state_set(view, &params);
+
+    mged_adc_state_refresh(s);
+    mged_edit_axes_state_sync(s);
+    mged_rubber_band_state_sync(s);
 
     struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
     model_axes.draw = axes_state->ax_model_draw;
@@ -2028,156 +2025,47 @@ refresh(struct mged_state *s)
     save_dm_list = s->mged_curr_dm;
     for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
 	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	/*
-	 * if something has changed, then go update the display.
-	 * Otherwise, we are happy with the view we have
-	 */
 	set_curr_dm(s, p);
-	(void)dm_configure_win(DMP, 0);
-	if (mapped && mged_dm_repaint_pending(p)) {
-	    int restore_zbuffer = 0;
-	    if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		(void)bv_refresh_consume(mged_view_state_view(p->dm_view_state));
+	if (!mapped || !mged_dm_repaint_pending(p))
+	    continue;
 
-	    if (mged_variables->mv_fb &&
-		dm_get_zbuffer(DMP)) {
-		restore_zbuffer = 1;
-		(void)dm_make_current(DMP);
-		(void)dm_set_zbuffer(DMP, 0);
+	void *view_ctx = p->dm_view_state ? p->dm_view_state->vs_gvp : NULL;
+	struct bv *view = view_ctx ? mged_view_state_view(p->dm_view_state) : NULL;
+	brlobol_display_endpoint_t *endpoint = view_ctx ?
+	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	mged_dm_repaint_consume(p);
+	if (!view || !endpoint)
+	    continue;
+
+	(void)bv_refresh_consume(view);
+	do_time = 1;
+	if (s->dbip != DBI_NULL) {
+	    if (do_overlay) {
+		bu_vls_trunc(&overlay_vls, 0);
+		create_text_overlay(s, &overlay_vls);
+		do_overlay = 0;
 	    }
+	    if (viewpoint_hook)
+		(*viewpoint_hook)();
+	}
 
-	    mged_dm_repaint_consume(p);
-	    do_time = 1;
-	    VMOVE(geometry_default_color, color_scheme->cs_geo_def);
-	    /* Push the current geometry default colour into the dm so render-item
-	     * appearance resolution can honour default-colour draw sources without
-	     * reaching back into MGED globals. */
-	    dm_set_geometry_default_color(DMP,
-					  geometry_default_color[0],
-					  geometry_default_color[1],
-					  geometry_default_color[2]);
+	(void)bv_framebuffer_mode_set(view, mged_variables->mv_fb ? 1 : 0);
+	mged_obol_faceplate_state_sync(s, p);
+	(void)ged_draw_obol_view_context_faceplate_sync(s->gedp, view_ctx);
 
-	    if (s->dbip != DBI_NULL) {
-		if (do_overlay) {
-		    bu_vls_trunc(&overlay_vls, 0);
-		    create_text_overlay(s, &overlay_vls);
-		    do_overlay = 0;
-		}
-
-		/* XXX VR hack */
-		if (viewpoint_hook)  (*viewpoint_hook)();
-	    }
-
-	    if (dm_get_native_repaint_pending(DMP)) {
-
-		(void)ged_draw_obol_framebuffer_present(s->gedp);
-		dm_draw_begin(DMP);	/* update drawn scene prolog */
-		if (p->dm_view_state && p->dm_view_state->vs_gvp &&
-		    ged_draw_obol_controller_opaque_for_view(
-			    p->dm_view_state->vs_gvp)) {
-		    mged_obol_faceplate_state_sync(s, p);
-		    (void)ged_draw_obol_view_context_faceplate_sync(s->gedp,
-			    p->dm_view_state->vs_gvp);
-		}
-
-		if (s->dbip != DBI_NULL) {
-		    /* do framebuffer underlay */
-		    if (mged_variables->mv_fb && !mged_variables->mv_fb_overlay) {
-			if (mged_variables->mv_fb_all)
-			    fb_refresh(fbp, 0, 0, dm_get_width(DMP), dm_get_height(DMP));
-			else if (mged_variables->mv_mouse_behavior != 'z')
-			    paint_rect_area(s);
-		    }
-
-		    /* do framebuffer overlay for entire window */
-		    if (mged_variables->mv_fb &&
-			    mged_variables->mv_fb_overlay &&
-			    mged_variables->mv_fb_all) {
-			fb_refresh(fbp, 0, 0, dm_get_width(DMP), dm_get_height(DMP));
-
-			if (restore_zbuffer)
-			    dm_set_zbuffer(DMP, 1);
-		    } else {
-			if (restore_zbuffer)
-			    dm_set_zbuffer(DMP, 1);
-
-			/* Draw each solid in its proper place on the
-			 * screen by applying zoom, rotation, and translation.
-			 */
-
-			if (dm_get_stereo(DMP) == 0 ||
-				mged_variables->mv_eye_sep_dist <= 0) {
-			    /* Normal viewing */
-			    dozoom(s, 0);
-			} else {
-			    /* Stereo viewing */
-			    dozoom(s, 1);
-			    dozoom(s, 2);
-			}
-
-			/* do framebuffer overlay in rectangular area */
-			if (mged_variables->mv_fb &&
-				mged_variables->mv_fb_overlay &&
-				mged_variables->mv_mouse_behavior != 'z')
-			    paint_rect_area(s);
-		    }
-
-
-		    /* Restore to non-rotated, full brightness */
-		    dm_hud_begin(DMP);
-
-		    /* only if not doing overlay */
-		    if (!mged_variables->mv_fb ||
-			    mged_variables->mv_fb_overlay != 2) {
-			if (rubber_band->rb_active || rubber_band->rb_draw)
-			    draw_rect(s);
-
-			struct bv_grid_state grid = {0};
-			(void)mged_dm_grid_state_get(s->mged_curr_dm, &grid);
-			if (grid.draw)
-			    draw_grid(s);
-
-			/* Compute and display angle/distance cursor */
-			struct bv_adc_state adc = {0};
-			(void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
-			if (adc.draw)
-			    adcursor(s);
-
-			if (axes_state->ax_view_draw)
-			    draw_v_axes(s);
-
-			if (axes_state->ax_model_draw)
-			    draw_m_axes(s);
-
-			if (axes_state->ax_edit_draw &&
-				(s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT))
-			    draw_e_axes(s);
-
-			/* Display titles, etc., if desired */
-			bu_vls_strcpy(&tmp_vls, bu_vls_addr(&overlay_vls));
-			dotitles(s, &tmp_vls);
-			bu_vls_trunc(&tmp_vls, 0);
-		    }
-		}
-
-		/* only if not doing overlay */
-		if (!mged_variables->mv_fb ||
-			mged_variables->mv_fb_overlay != 2) {
-		    /* Draw center dot */
-		    dm_set_fg(DMP,
-			    color_scheme->cs_center_dot[0],
-			    color_scheme->cs_center_dot[1],
-			    color_scheme->cs_center_dot[2], 1, 1.0);
-		    dm_draw_point_2d(DMP, 0.0, 0.0);
-		}
-
-		dm_draw_end(DMP);
-		dm_set_native_repaint_pending(DMP, 0);
-		if (p->dm_view_state && p->dm_view_state->vs_gvp)
-		    bv_refresh_complete(mged_view_state_view(p->dm_view_state));
-
+	if (s->dbip != DBI_NULL) {
+	    mged_obol_scene_refresh(s);
+	    if (!mged_variables->mv_fb || mged_variables->mv_fb_overlay != 2) {
+		bu_vls_strcpy(&tmp_vls, bu_vls_addr(&overlay_vls));
+		dotitles(s, &tmp_vls);
+		bu_vls_trunc(&tmp_vls, 0);
 	    }
 	}
+
+	if (brlobol_display_endpoint_view_sync(endpoint, view_ctx))
+	    (void)brlobol_display_endpoint_request_frame(endpoint,
+		"MGED refresh");
+	bv_refresh_complete(view);
     }
 
     /* a frame was drawn */
@@ -2253,7 +2141,7 @@ mged_finish(struct mged_state *s, int exitcode)
 	if (p && p->dm_dmp) {
 	    if (s->gedp) {
 		ged_draw_obol_framebuffer_release(s->gedp);
-		mged_obol_display_detach(s, p->dm_dmp);
+		mged_obol_display_detach(s, p);
 	    }
 	    dm_close(p->dm_dmp);
 	    mged_slider_free_vls(p);
@@ -2591,6 +2479,8 @@ main(int argc, char *argv[])
 
     char *attach = (char *)NULL;
     BU_ALLOC(s->mged_curr_dm, struct mged_dm);
+    bu_vls_init(&s->mged_curr_dm->dm_pathname);
+    bu_vls_strcpy(&s->mged_curr_dm->dm_pathname, "nu");
     bu_ptbl_init(&active_dm_set, 8, "dm set");
     bu_ptbl_ins(&active_dm_set, (long *)s->mged_curr_dm);
     mged_dm_init_state = s->mged_curr_dm;
@@ -2604,26 +2494,8 @@ main(int argc, char *argv[])
 
     bu_setprogname(argv[0]);
 
-    /* If any libdm display manager plugins failed to load, surface the
-     * diagnostic now so users don't see a silent fallback (e.g. "ogl"
-     * missing from `attach` / `dm_list_types`) without any clue why.
-     * This mirrors the diagnostic qged already prints (see
-     * src/qged/QgEdApp.cpp). */
-    {
-	const char *dm_msgs = dm_init_msgs();
-	if (dm_msgs && dm_msgs[0] != '\0') {
-	    size_t dm_msgs_len = strlen(dm_msgs);
-	    bu_log("WARNING: libdm plugin initialization issues:\n%s",
-		   dm_msgs);
-	    if (dm_msgs[dm_msgs_len - 1] != '\n')
-		bu_log("\n");
-	}
-    }
-
 #if defined(HAVE_TK)
-    if (dm_have_graphics()) {
-	s->classic_mged = 0;
-    }
+    s->classic_mged = 0;
 #endif
 
     /*
@@ -2938,10 +2810,6 @@ main(int argc, char *argv[])
     /* register application provided routines */
 
     DMP = dm_open(NULL, s->interp, "nu", 0, NULL);
-    struct bu_vls *dpvp = dm_get_pathname(DMP);
-    if (dpvp) {
-	bu_vls_strcpy(dpvp, "nu");
-    }
 
     /* If we're only doing the 'nu' dm we don't need most of mged_dm_init, but
      * we do still need to register the dm_commands */
@@ -3232,15 +3100,6 @@ main(int argc, char *argv[])
 
     } /* interactive */
 
-    /* XXX total hack that fixes a dm init issue on Mac OS X where the
-     * dm first opens filled with garbage.
-     */
-    {
-	unsigned char *dm_bg;
-	dm_get_bg(&dm_bg, NULL, DMP);
-	dm_set_bg(DMP, dm_bg[0], dm_bg[1], dm_bg[2], dm_bg[0], dm_bg[1], dm_bg[2]);
-    }
-
     /* initialize a display manager.  Interactive classic MGED prompts when no
      * target is specified; batch/classic MGED only attaches when the user
      * explicitly requests a non-nu display manager. */
@@ -3257,14 +3116,14 @@ main(int argc, char *argv[])
 	 * this in their .mgedrc before the attach happens, e.g.:
 	 *   set mged_default(ggeom) 512x512+0+0
 	 */
-	if (DMP && dm_graphical(DMP)) {
-	    struct bu_vls *pn = dm_get_pathname(DMP);
+	if (s->mged_curr_dm && s->mged_curr_dm->dm_graphical) {
+	    const char *pn = mged_dm_pathname(s->mged_curr_dm);
 	    const char *ggeom = Tcl_GetVar(s->interp, "mged_default(ggeom)", TCL_GLOBAL_ONLY);
-	    if (pn && bu_vls_strlen(pn) && ggeom && strlen(ggeom)) {
+	    if (pn && ggeom && strlen(ggeom)) {
 		struct bu_vls geom_cmd = BU_VLS_INIT_ZERO;
 		/* Brace the geometry string so Tcl does not interpret any
 		 * special characters that might appear in a user's .mgedrc. */
-		bu_vls_printf(&geom_cmd, "wm geometry %s {%s}", bu_vls_cstr(pn), ggeom);
+		bu_vls_printf(&geom_cmd, "wm geometry %s {%s}", pn, ggeom);
 		if (Tcl_Eval(s->interp, bu_vls_cstr(&geom_cmd)) != TCL_OK)
 		    bu_log("mged: failed to apply mged_default(ggeom) \"%s\": %s\n",
 			   ggeom, Tcl_GetStringResult(s->interp));

@@ -49,11 +49,10 @@
 #include "rt/edit.h"
 #include "rt/view.h"
 #include "view_test_util.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
+#include "brlobol/display_endpoint.h"
 #include "brlobol/view_attachment.h"
 #include "brlobol/scene_controller.h"
 #include "brlobol/view_controller.h"
@@ -108,21 +107,15 @@ obol_controller_for_view(void *view_ctx)
 static int
 configure_obol_view(struct ged *gedp, void *view_ctx, int width, int height)
 {
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp)
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    if (!endpoint)
 	return 0;
 
-    dm_set_width(dmp, width);
-    dm_set_height(dmp, height);
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-    fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
-    dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(view_ctx)));
-    ged_view_context_display_manager_set(view_ctx, dmp);
-    bv_dimensions_set(DRAW_TEST_BV(view_ctx), dm_get_width(dmp), dm_get_height(dmp));
+    bv_dimensions_set(DRAW_TEST_BV(view_ctx), width, height);
     bv_unit_conversion_set(DRAW_TEST_BV(view_ctx), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
-    return 1;
+    return brlobol_display_endpoint_resize(endpoint, (unsigned int)width,
+	    (unsigned int)height, 1.0);
 }
 
 /* ---- common GED + Obol setup --------------------------------------------- */
@@ -135,31 +128,22 @@ open_gedp(const char *gfile, int width, int height)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    /* Attach the headless Obol display manager. */
+    /* Open a headless Obol endpoint without a compatibility DM. */
     const char *s_av[16] = {NULL};
-    s_av[0] = "dm"; s_av[1] = "attach"; s_av[2] = "obol"; s_av[3] = "OBOL"; s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
-
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp  = (struct dm *)ged_view_context_display_manager_get(v);
-    if (!dmp) {
+    bv_dimensions_set(DRAW_TEST_BV(v), width, height);
+    s_av[0] = "dm"; s_av[1] = "open"; s_av[2] = "--host";
+    s_av[3] = "headless"; s_av[4] = "--renderer"; s_av[5] = "sw";
+    s_av[6] = NULL;
+    if (ged_exec_dm(gedp, 6, s_av) != BRLCAD_OK) {
 	ged_close(gedp);
 	return NULL;
     }
     if (!ged_draw_obol_controller_opaque_for_view(v)) {
-	bu_log("FAIL: Obol DM attach did not associate a GED view controller\n");
+	bu_log("FAIL: Obol endpoint open did not associate a GED view controller\n");
 	ged_close(gedp);
 	return NULL;
     }
-    dm_set_width(dmp, width);
-    dm_set_height(dmp, height);
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-    fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
-    dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
-    ged_view_context_display_manager_set(v, dmp);
-    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
     bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
@@ -355,9 +339,10 @@ test_multi_obol_dm_attachment(const char *datadir)
 	ged_view_set_context_add(view_set_ctx, v1);
 	ged_view_context_owned_add(gedp, v1);
 
-	const char *dm_av[7] = {"dm", "attach", "-V", "V1", "obol",
-	    "OBOL1", NULL};
-	if (ged_exec_dm(gedp, 6, dm_av) != BRLCAD_OK ||
+	bv_dimensions_set(DRAW_TEST_BV(v1), 384, 384);
+	const char *dm_av[9] = {"dm", "open", "-V", "V1", "--host",
+	    "headless", "--renderer", "sw", NULL};
+	if (ged_exec_dm(gedp, 8, dm_av) != BRLCAD_OK ||
 		!configure_obol_view(gedp, v1, 384, 384)) {
 	    bu_log("FAIL: secondary Obol DM attachment failed: %s\n",
 		    bu_vls_cstr(gedp->ged_result_str));
@@ -395,7 +380,7 @@ test_multi_obol_dm_attachment(const char *datadir)
 	    fail = 1;
 	}
 	const char *named_av[7] = {
-	    "dm", "set", "-d", "OBOL1", "software_wire", "quality", NULL
+	    "dm", "set", "-V", "V1", "software_wire", "quality", NULL
 	};
 	if (!fail && (ged_exec_dm(gedp, 6, named_av) != BRLCAD_OK ||
 		v0_controller->getSoftwareWireMode() !=
@@ -488,10 +473,8 @@ test_multi_obol_dm_attachment(const char *datadir)
 		"attached Obol view (ret=%d)\n", bridge_ret);
 	fail = 1;
     } else {
-	struct dm *v0_dmp =
-	    (struct dm *)ged_view_context_display_manager_get(v0);
-	size_t pixel_count = (size_t)dm_get_width(v0_dmp) *
-	    (size_t)dm_get_height(v0_dmp);
+	size_t pixel_count = (size_t)bv_width_get(DRAW_TEST_BV(v0)) *
+	    (size_t)bv_height_get(DRAW_TEST_BV(v0));
 	size_t lit_pixels = 0;
 	for (size_t i = 0; i < pixel_count; i++) {
 	    const unsigned char *p = bridge_image + i * 3;
@@ -544,9 +527,12 @@ test_obol_rt_framebuffer_cache(const char *datadir)
 	fail = 1;
     }
 
-    const char *dm_av[5] = {"dm", "attach", "obol", "OBOLRTFB", NULL};
-    if (!fail && ged_exec_dm(gedp, 4, dm_av) != BRLCAD_OK) {
-	bu_log("FAIL: could not attach Obol DM for rt framebuffer cache test: %s\n",
+    bv_dimensions_set(DRAW_TEST_BV(ged_view_active_ctx(gedp)), 128, 128);
+    const char *dm_av[7] = {
+	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
+    };
+    if (!fail && ged_exec_dm(gedp, 6, dm_av) != BRLCAD_OK) {
+	bu_log("FAIL: could not open Obol endpoint for rt framebuffer cache test: %s\n",
 		bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
     }
@@ -615,6 +601,67 @@ test_owned_render_endpoint(const char *datadir)
 	bu_log("FAIL: owned endpoint did not bind a per-view render root\n");
 	fail = 1;
     }
+
+    const char *status_av[3] = {"dm", "status", NULL};
+    if (!fail && (ged_exec_dm(gedp, 2, status_av) != BRLCAD_OK ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "renderer=auto") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "width="))) {
+	bu_log("FAIL: dm status could not report a DM-less endpoint: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *get_renderer_av[4] = {
+	"dm", "get", "endpoint.renderer", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 3, get_renderer_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "auto"))) {
+	bu_log("FAIL: dm get did not read a typed endpoint property: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *set_bg_av[5] = {
+	"dm", "set", "controller.background.bottom", "0.1/0.2/0.3", NULL
+    };
+    if (!fail && ged_exec_dm(gedp, 4, set_bg_av) != BRLCAD_OK) {
+	bu_log("FAIL: dm set did not write a typed color property: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *get_bg_av[4] = {
+	"dm", "get", "controller.background.bottom", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 3, get_bg_av) != BRLCAD_OK ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "0.1"))) {
+	bu_log("FAIL: typed background property did not round trip: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *renderer_none_av[4] = {"dm", "renderer", "none", NULL};
+    if (!fail && ged_exec_dm(gedp, 3, renderer_none_av) != BRLCAD_OK) {
+	bu_log("FAIL: dm renderer could not select none: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *renderer_query_av[3] = {"dm", "renderer", NULL};
+    if (!fail && (ged_exec_dm(gedp, 2, renderer_query_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "none"))) {
+	bu_log("FAIL: dm renderer did not report its selected engine: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    renderer_none_av[2] = "rt";
+    if (!fail && ged_exec_dm(gedp, 3, renderer_none_av) != BRLCAD_ERROR) {
+	bu_log("FAIL: dm renderer accepted the unimplemented rt engine\n");
+	fail = 1;
+    }
+    renderer_none_av[2] = "auto";
+    if (!fail && ged_exec_dm(gedp, 3, renderer_none_av) != BRLCAD_OK)
+	fail = 1;
+    if (!fail)
+	bu_log("PASS: dm endpoint status, typed properties, and renderer selection\n");
 
     const char *wire_av[5] = {"dm", "set", "software_wire", "fast", NULL};
     if (!fail && (ged_exec_dm(gedp, 4, wire_av) != BRLCAD_OK ||
@@ -720,6 +767,210 @@ test_owned_render_endpoint(const char *datadir)
     return fail;
 }
 
+/* ========================================================================== */
+/* Test 6: endpoint-native dm host lifecycle                                  */
+/* ========================================================================== */
+static int
+test_endpoint_dm_lifecycle(const char *datadir)
+{
+    bu_log("\n--- Test 6: endpoint-native dm host lifecycle ---\n");
+
+    struct bu_vls fname = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&fname, "%s/moss.g", datadir);
+    std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
+    std::ofstream tmp("mged_view_state_t6.g", std::ios::binary);
+    tmp << orig.rdbuf();
+    orig.close(); tmp.close();
+    bu_vls_free(&fname);
+
+    struct ged *gedp = ged_open("db", "mged_view_state_t6.g", 1);
+    if (!gedp) {
+	bu_file_delete("mged_view_state_t6.g");
+	return 1;
+    }
+
+    int fail = 0;
+    void *view_ctx = ged_view_active_ctx(gedp);
+    bv_dimensions_set(DRAW_TEST_BV(view_ctx), 0, 0);
+    if (ged_view_context_display_endpoint_get(view_ctx)) {
+	bu_log("FAIL: lifecycle test unexpectedly started with an endpoint\n");
+	fail = 1;
+    }
+
+    const char *open_av[7] = {
+	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
+    };
+    if (!fail && ged_exec_dm(gedp, 6, open_av) != BRLCAD_OK) {
+	bu_log("FAIL: dm open could not create a headless software endpoint: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    void *controller = endpoint ?
+	brlobol_display_endpoint_controller(endpoint) : NULL;
+    if (!fail && (!endpoint || !controller ||
+	    brlobol_display_endpoint_render_engine_get(endpoint) !=
+		BRLOBOL_RENDER_ENGINE_SW ||
+	    !brlobol_display_endpoint_host_factory_name(endpoint) ||
+	    !BU_STR_EQUAL(brlobol_display_endpoint_host_factory_name(endpoint),
+		"headless"))) {
+	bu_log("FAIL: dm open did not establish the requested endpoint state\n");
+	fail = 1;
+    }
+    struct brlobol_endpoint_property_value endpoint_width =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct brlobol_endpoint_property_value endpoint_height =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (!fail && (bv_width_get(DRAW_TEST_BV(view_ctx)) != 512 ||
+	bv_height_get(DRAW_TEST_BV(view_ctx)) != 512 ||
+	brlobol_display_endpoint_property_get(endpoint, "endpoint.width",
+	    &endpoint_width) != BRLOBOL_ENDPOINT_PROPERTY_OK ||
+	brlobol_display_endpoint_property_get(endpoint, "endpoint.height",
+	    &endpoint_height) != BRLOBOL_ENDPOINT_PROPERTY_OK ||
+	endpoint_width.uint_value != 512 || endpoint_height.uint_value != 512)) {
+	bu_log("FAIL: dm open did not seed a usable canonical viewport\n");
+	fail = 1;
+    }
+
+    const char *host_av[3] = {"dm", "host", NULL};
+    if (!fail && (ged_exec_dm(gedp, 2, host_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "headless"))) {
+	bu_log("FAIL: dm host did not report headless: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *diagnostics_av[3] = {"dm", "diagnostics", NULL};
+    if (!fail && (ged_exec_dm(gedp, 2, diagnostics_av) != BRLCAD_OK ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "host=headless") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "renderer=sw") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		"property.endpoint.renderer type=enum access=rw"))) {
+	bu_log("FAIL: dm diagnostics omitted endpoint state: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *bg_set_av[9] = {
+	"dm", "bg", "0", "0", "32", "64", "0", "0", NULL
+    };
+    if (!fail && ged_exec_dm(gedp, 8, bg_set_av) != BRLCAD_OK) {
+	bu_log("FAIL: dm bg could not set an endpoint gradient: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *bg_get_av[3] = {"dm", "bg", NULL};
+    if (!fail && (ged_exec_dm(gedp, 2, bg_get_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str),
+		"0/0/32->64/0/0\n"))) {
+	bu_log("FAIL: dm bg endpoint gradient did not round trip: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *policy_av[5] = {"dm", "set", "zclip", "1", NULL};
+    if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
+	    !bv_zclip_get(DRAW_TEST_BV(view_ctx)))) {
+	bu_log("FAIL: dm set zclip did not update the owning bv view\n");
+	fail = 1;
+    }
+    BRLObolViewController *view_controller =
+	static_cast<BRLObolViewController *>(controller);
+    policy_av[2] = "zbuffer";
+    policy_av[3] = "0";
+    if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
+	    view_controller->isDepthTestEnabled())) {
+	bu_log("FAIL: dm set zbuffer did not update Obol depth state\n");
+	fail = 1;
+    }
+    policy_av[2] = "lighting";
+    if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
+	    view_controller->isLightingEnabled())) {
+	bu_log("FAIL: dm set lighting did not update Obol lighting state\n");
+	fail = 1;
+    }
+    policy_av[3] = "!";
+    if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
+	    !view_controller->isLightingEnabled())) {
+	bu_log("FAIL: dm set lighting ! did not toggle typed lighting state\n");
+	fail = 1;
+    }
+    policy_av[2] = "depthcue";
+    policy_av[3] = "1";
+    if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
+	    !view_controller->isDepthCueEnabled())) {
+	bu_log("FAIL: dm set depthcue did not update Obol fog state\n");
+	fail = 1;
+    }
+
+    const char *close_av[3] = {"dm", "close", NULL};
+    if (!fail && ged_exec_dm(gedp, 2, close_av) != BRLCAD_OK) {
+	bu_log("FAIL: dm close rejected an open endpoint: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    if (!fail && (ged_view_context_display_endpoint_get(view_ctx) != endpoint ||
+	    brlobol_display_endpoint_controller(endpoint) != controller ||
+	    brlobol_display_endpoint_host_factory_name(endpoint))) {
+	bu_log("FAIL: dm close did not retain endpoint scene identity\n");
+	fail = 1;
+    }
+    if (!fail && (ged_exec_dm(gedp, 2, host_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "unbound"))) {
+	bu_log("FAIL: dm host did not report the closed endpoint as unbound\n");
+	fail = 1;
+    }
+
+    const char *attach_bad_av[4] = {"dm", "attach", "obol", NULL};
+    if (!fail && ged_exec_dm(gedp, 3, attach_bad_av) != BRLCAD_ERROR) {
+	bu_log("FAIL: GED dm still exposes the compatibility attach command\n");
+	fail = 1;
+    }
+    if (!fail && brlobol_display_endpoint_host_factory_name(endpoint)) {
+	bu_log("FAIL: rejected dm attach changed the endpoint host\n");
+	fail = 1;
+    }
+
+    const char *list_av[3] = {"dm", "list", NULL};
+    if (!fail && (ged_exec_dm(gedp, 2, list_av) != BRLCAD_OK ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		bv_name_get(DRAW_TEST_BV(view_ctx))))) {
+	bu_log("FAIL: bare dm list did not report retained endpoints\n");
+	fail = 1;
+    }
+    open_av[3] = "no-such-host";
+    if (!fail && ged_exec_dm(gedp, 6, open_av) != BRLCAD_ERROR) {
+	bu_log("FAIL: dm open accepted an unknown host factory\n");
+	fail = 1;
+    }
+    if (!fail && (ged_view_context_display_endpoint_get(view_ctx) != endpoint ||
+	    brlobol_display_endpoint_controller(endpoint) != controller ||
+	    brlobol_display_endpoint_host_factory_name(endpoint))) {
+	bu_log("FAIL: failed dm open changed retained endpoint identity\n");
+	fail = 1;
+    }
+
+    open_av[3] = "headless";
+    open_av[5] = "hw";
+    if (!fail && ged_exec_dm(gedp, 6, open_av) != BRLCAD_ERROR) {
+	bu_log("FAIL: dm open accepted hardware rendering on headless host\n");
+	fail = 1;
+    }
+    open_av[5] = "sw";
+    if (!fail && ged_exec_dm(gedp, 6, open_av) != BRLCAD_OK)
+	fail = 1;
+    if (!fail && ged_exec_dm(gedp, 2, close_av) != BRLCAD_OK)
+	fail = 1;
+
+    if (!fail)
+	bu_log("PASS: dm open/close/host/diagnostics use retained endpoints\n");
+    ged_close(gedp);
+    bu_file_delete("mged_view_state_t6.g");
+    return fail;
+}
+
 /* main                                                                        */
 /* ========================================================================== */
 
@@ -746,7 +997,7 @@ main(int argc, char *argv[])
     failures += test_multi_obol_dm_attachment(datadir);
     failures += test_obol_rt_framebuffer_cache(datadir);
     failures += test_owned_render_endpoint(datadir);
-    failures += test_owned_render_endpoint(datadir);
+    failures += test_endpoint_dm_lifecycle(datadir);
 
     if (failures == 0) {
 	bu_log("\nAll MGED view-state tests PASSED (%d/6)\n", 6);

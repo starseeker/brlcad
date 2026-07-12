@@ -40,7 +40,6 @@
 #include "icv.h"
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "bg/plot3.h"
 #include "scanline.h"
 
@@ -259,7 +258,7 @@ timeTable_singleProcess(struct application *app, fastf_t **timeTable, fastf_t *t
  * heat graph based on time taken for each pixel.
  */
 void
-timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), struct fb *out_fbp)
+timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), imgstream_fb_t *out_fbp)
 {
     fastf_t maxTime = -MAX_FASTF;		/* The 255 value */
     fastf_t minTime = MAX_FASTF; 		/* The 1 value */
@@ -275,7 +274,7 @@ timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), struct f
     int zoomH = 0;
     int zoomW = 0;
     int outfp_error = 0;
-    RGBpixel *line = NULL;
+    rt_pixel_t *line = NULL;
 
     /* The following loop will work as follows, it will loop through
      * timeTable and search for pixels which have a non-negative value.
@@ -319,7 +318,7 @@ timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), struct f
     bu_log("Time: %lf\n  Max = %lf\n  Min = %lf\n  Mean = %lf\n  Range = %lf\n", totalTime, maxTime, minTime, meanTime, range);
 
     /* Now fill out the framebuffer with the Heat Graph information */
-    line = (RGBpixel *)bu_malloc(maxX * sizeof(RGBpixel), "heatgraph scanline");
+    line = (rt_pixel_t *)bu_malloc(maxX * sizeof(rt_pixel_t), "heatgraph scanline");
 
     for (y = 0; y < maxY; y++) {
 	for (x = 0; x < maxX; x++) {
@@ -336,17 +335,18 @@ timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), struct f
 
 	if (outfp != NULL && !outfp_error) {
 	    bu_semaphore_acquire(BU_SEM_SYSCALL);
-	    if (bu_fseek(outfp, y * maxX * sizeof(RGBpixel), 0) != 0 ||
-		fwrite(line, sizeof(RGBpixel), maxX, outfp) != maxX) {
+	    if (bu_fseek(outfp, y * maxX * sizeof(rt_pixel_t), 0) != 0 ||
+		fwrite(line, sizeof(rt_pixel_t), maxX, outfp) != maxX) {
 		outfp_error = 1;
 		bu_log("WARNING: heatgraph file write error\n");
 	    }
 	    bu_semaphore_release(BU_SEM_SYSCALL);
 	}
 
-	if (out_fbp != FB_NULL) {
+	if (out_fbp != NULL) {
 	    bu_semaphore_acquire(BU_SEM_SYSCALL);
-	    npix = fb_write(out_fbp, 0, (int)y, (unsigned char *)line, maxX);
+	    npix = (int)imgstream_fb_write(out_fbp, 0, (int)y,
+		    (unsigned char *)line, maxX);
 	    bu_semaphore_release(BU_SEM_SYSCALL);
 	    if (npix != (ssize_t)maxX)
 		bu_exit(EXIT_FAILURE, "heatgraph fb_write error");
@@ -354,10 +354,10 @@ timeTable_process(fastf_t **timeTable, struct application *UNUSED(app), struct f
     }
     bu_free(line, "heatgraph scanline");
 
-    if (out_fbp != FB_NULL) {
-      zoomH = fb_getheight(out_fbp) / height;
-      zoomW = fb_getwidth(out_fbp) / width;
-      (void)fb_view(out_fbp, width/2, height/2, zoomH, zoomW);
+    if (out_fbp != NULL) {
+      zoomH = (int)imgstream_fb_height(out_fbp) / height;
+      zoomW = (int)imgstream_fb_width(out_fbp) / width;
+      (void)imgstream_fb_view(out_fbp, width/2, height/2, zoomH, zoomW);
     }
 }
 

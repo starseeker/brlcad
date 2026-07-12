@@ -26,6 +26,7 @@
 
 #include "common.h"
 
+#include "brlobol/display_endpoint.h"
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgGL.h"
@@ -33,13 +34,17 @@
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
 #include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgObolWindowHost.h"
 #include "bv.h"
+#include "ged/view.h"
 
 extern "C" {
 #include "bu/malloc.h"
 }
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
 static uint32_t
 qg_refresh_flags(QgViewUpdateFlags flags)
@@ -106,6 +111,40 @@ return;
     w->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     l->addWidget(w);
 
+    if (qtcad_obol_host_factories_register()) {
+	struct brlobol_host_desc desc;
+	std::memset(&desc, 0, sizeof(desc));
+	desc.struct_size = sizeof(desc);
+	desc.mode = BRLOBOL_HOST_MODE_EMBEDDED;
+	const qreal dpr = w->devicePixelRatioF();
+	desc.width = static_cast<unsigned int>(std::max(1,
+	    static_cast<int>(std::ceil(w->width() * dpr))));
+	desc.height = static_cast<unsigned int>(std::max(1,
+	    static_cast<int>(std::ceil(w->height() * dpr))));
+	desc.device_pixel_ratio = dpr > 0.0 ? dpr : 1.0;
+	desc.visible = w->isVisible() ? 1 : 0;
+	desc.application_context = canvas;
+#ifdef BRLCAD_OPENGL
+	const bool use_gl = dynamic_cast<QgGL *>(canvas) != nullptr;
+#else
+	const bool use_gl = false;
+#endif
+	desc.required_capabilities = BRLOBOL_HOST_CAP_EMBEDDED |
+	    BRLOBOL_HOST_CAP_READBACK | (use_gl ?
+	    BRLOBOL_HOST_CAP_SYSTEM_GL : BRLOBOL_HOST_CAP_PIXEL_PRESENT);
+	endpoint = brlobol_display_endpoint_create(NULL, 0);
+	if (!endpoint || !brlobol_display_endpoint_render_engine_set(endpoint,
+		use_gl ? BRLOBOL_RENDER_ENGINE_HW : BRLOBOL_RENDER_ENGINE_SW) ||
+	    !brlobol_display_endpoint_host_open(endpoint,
+		use_gl ? "qt-gl" : "qt-sw", &desc)) {
+	    brlobol_display_endpoint_destroy(endpoint);
+	    endpoint = nullptr;
+	    canvas->setObolViewController(nullptr);
+	}
+    } else {
+	canvas->setObolViewController(nullptr);
+    }
+
     /* Connect canvas signals via old-style macros (QgCanvasBase is not a
      * QObject, so we obtain the QObject* via asQObject()). */
     QObject::connect(canvas->asQObject(), SIGNAL(changed()),
@@ -116,13 +155,19 @@ return;
 
 QgView::~QgView()
 {
+    void *view_ctx = qg_legacy_view_to_context(view());
+    if (endpoint && view_ctx &&
+	ged_view_context_display_endpoint_get(view_ctx) == endpoint)
+	(void)ged_view_context_display_endpoint_set(view_ctx, nullptr, 0);
+    brlobol_display_endpoint_destroy(endpoint);
+    endpoint = nullptr;
     delete canvas;
 }
 
 bool
 QgView::isValid()
 {
-    if (!canvas)
+    if (!canvas || !endpoint)
 return false;
     return canvas->isValid();
 }
@@ -204,6 +249,12 @@ BRLObolViewController *
 QgView::obolViewController()
 {
     return canvas ? canvas->obolViewController() : nullptr;
+}
+
+struct brlobol_display_endpoint *
+QgView::displayEndpoint()
+{
+    return endpoint;
 }
 
 QgCanvasBase *

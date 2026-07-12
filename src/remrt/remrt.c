@@ -98,7 +98,7 @@ extern int gettimeofday(struct timeval *, void *);
 #include "bn.h"
 #include "raytrace.h"
 #include "optical.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "pkg.h"
 
 /* private */
@@ -265,7 +265,7 @@ struct servers {
 } servers[MAXSERVERS];
 
 
-struct fb *fbp = FB_NULL;		/* Current framebuffer ptr */
+imgstream_fb_t *fbp = NULL;		/* Current framebuffer ptr */
 int cur_fbwidth;		/* current fb width */
 int fbwidth;			/* fb width - S command */
 int fbheight;			/* fb height - S command */
@@ -1659,7 +1659,7 @@ init_fb(const char *name)
 {
     size_t xx, yy;
 
-    if (fbp != FB_NULL) fb_close(fbp);
+    if (fbp != NULL) imgstream_fb_close(fbp);
 
     xx = fbwidth;
     yy = fbheight;
@@ -1672,13 +1672,14 @@ init_fb(const char *name)
 	xx <<= 1;
     while (yy < height)
 	yy <<= 1;
-    if ((fbp = fb_open(name?name:framebuffer, xx, yy)) == FB_NULL) {
+    if ((fbp = imgstream_fb_open(name ? name : framebuffer, xx, yy)) == NULL) {
 	bu_log("fb_open %zu, %zu failed\n", xx, yy);
 	return -1;
     }
     /* New way:  center, zoom */
-    fb_view(fbp, xx/2, yy/2,
-	    fb_getwidth(fbp)/xx, fb_getheight(fbp)/yy);
+    imgstream_fb_view(fbp, (int)xx/2, (int)yy/2,
+	    (int)(imgstream_fb_width(fbp)/xx),
+	    (int)(imgstream_fb_height(fbp)/yy));
 
     cur_fbwidth = 0;
     return 0;
@@ -1691,21 +1692,22 @@ size_display(struct frame *fr)
     CHECK_FRAME(fr);
     if (cur_fbwidth == fr->fr_width)
 	return;
-    if (fbp == FB_NULL)
+    if (fbp == NULL)
 	return;
-    if (fr->fr_width > fb_getwidth(fbp)) {
+    if (fr->fr_width > (int)imgstream_fb_width(fbp)) {
 	bu_log("Warning:  fb not big enough for %d pixels, display truncated\n", fr->fr_width);
 	cur_fbwidth = fr->fr_width;
-	fb_view(fbp, fb_getwidth(fbp)/2, fb_getheight(fbp)/2, 1, 1);
+	imgstream_fb_view(fbp, (int)imgstream_fb_width(fbp)/2,
+		(int)imgstream_fb_height(fbp)/2, 1, 1);
 	return;
     }
     cur_fbwidth = fr->fr_width;
 
     /* Center, zoom */
-    fb_view(fbp,
+    imgstream_fb_view(fbp,
 	    fr->fr_width/2, fr->fr_height/2,
-	    fb_getwidth(fbp)/fr->fr_width,
-	    fb_getheight(fbp)/fr->fr_height);
+	    (int)imgstream_fb_width(fbp)/fr->fr_width,
+	    (int)imgstream_fb_height(fbp)/fr->fr_height);
 }
 
 
@@ -1723,7 +1725,7 @@ repaint_fb(struct frame *fr)
     int w;
     int cnt;
 
-    if (fbp == FB_NULL) return;
+    if (fbp == NULL) return;
     CHECK_FRAME(fr);
     size_display(fr);
 
@@ -1738,12 +1740,12 @@ repaint_fb(struct frame *fr)
 	return;
     }
     w = fr->fr_width;
-    if (w > fb_getwidth(fbp)) w = fb_getwidth(fbp);
+    if (w > (int)imgstream_fb_width(fbp)) w = (int)imgstream_fb_width(fbp);
 
     for (y = 0; y < fr->fr_height; y++) {
 	cnt = fread((char *)line, nby, 1, fp);
 	/* Write out even partial results, then quit */
-	fb_write(fbp, 0, y, line, w);
+	imgstream_fb_write(fbp, 0, y, line, (size_t)w);
 	if (cnt != 1) break;
     }
     bu_free((char *)line, "scanline");
@@ -2836,7 +2838,7 @@ cd_attach(const int argc, const char **argv)
 	name = argv[1];
     }
     if (init_fb(name) < 0) return -1;
-    if (fbp == FB_NULL) return -1;
+    if (fbp == NULL) return -1;
     if ((fr = FrameHead.fr_forw) == &FrameHead) return -1;
     CHECK_FRAME(fr);
 
@@ -2848,8 +2850,8 @@ cd_attach(const int argc, const char **argv)
 static int
 cd_release(const int UNUSED(argc), const char **UNUSED(argv))
 {
-    if (fbp != FB_NULL) fb_close(fbp);
-    fbp = FB_NULL;
+    if (fbp != NULL) imgstream_fb_close(fbp);
+    fbp = NULL;
     return 0;
 }
 
@@ -2956,8 +2958,8 @@ cd_status(const int UNUSED(argc), const char **UNUSED(argv))
 	       s, file_fullname, object_list);
     }
 
-    if (fbp != FB_NULL)
-	bu_log("%s Framebuffer is %s\n", s, fb_get_name(fbp));
+    if (fbp != NULL)
+	bu_log("%s Framebuffer is %s\n", s, imgstream_fb_name(fbp));
     else
 	bu_log("%s No framebuffer\n", s);
     if (outputfile)
@@ -3009,8 +3011,8 @@ cd_status(const int UNUSED(argc), const char **UNUSED(argv))
 static int
 cd_clear(const int UNUSED(argc), const char **UNUSED(argv))
 {
-    if (fbp == FB_NULL) return -1;
-    fb_clear(fbp, PIXEL_NULL);
+    if (fbp == NULL) return -1;
+    imgstream_fb_clear(fbp, NULL);
     cur_fbwidth = 0;
     return 0;
 }
@@ -3517,9 +3519,8 @@ write_fb(unsigned char *pp, struct frame *fr, int a, int b)
     pixels_todo = b - a;
 
     /* Simple case -- use multiple scanline writes */
-    if (fr->fr_width == fb_getwidth(fbp)) {
-	fb_write(fbp, x, y,
-		 pp, pixels_todo);
+    if (fr->fr_width == (int)imgstream_fb_width(fbp)) {
+	imgstream_fb_write(fbp, x, y, pp, (size_t)pixels_todo);
 	return;
     }
 
@@ -3532,17 +3533,17 @@ write_fb(unsigned char *pp, struct frame *fr, int a, int b)
      */
     offset = 0;
     while (pixels_todo > 0) {
-	if (fr->fr_width < fb_getwidth(fbp)) {
+	if (fr->fr_width < (int)imgstream_fb_width(fbp)) {
 	    /* zoomed case */
 	    write_len = fr->fr_width - x;
 	} else {
 	    /* clipping case */
-	    write_len = fb_getwidth(fbp) - x;
+	    write_len = (int)imgstream_fb_width(fbp) - x;
 	}
 	len_to_eol = fr->fr_width - x;
 	if (write_len > pixels_todo) write_len = pixels_todo;
 	if (write_len > 0)
-	    fb_write(fbp, x, y, pp+offset, write_len);
+	    imgstream_fb_write(fbp, x, y, pp+offset, (size_t)write_len);
 	offset += len_to_eol*3;
 	y = (y+1) % fr->fr_height;
 	x = 0;
@@ -3876,7 +3877,7 @@ ph_pixels(struct pkg_conn *pc, char *buf)
     }
 
     /* If display attached, also draw it */
-    if (fbp != FB_NULL) {
+    if (fbp != NULL) {
 	write_fb((unsigned char *)buf + ext.ext_nbytes, fr,
 		 info.li_startpix, info.li_endpix+1);
     }

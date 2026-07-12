@@ -10,6 +10,7 @@
 #include "brlobol.h"
 
 #include "bu/log.h"
+#include "bu/malloc.h"
 
 #if defined(__GNUC__)
 #  pragma GCC diagnostic push
@@ -41,7 +42,8 @@ public:
 	lastWidth(0),
 	lastHeight(0),
 	lastComponents(0),
-	lastScene(NULL)
+	lastScene(NULL),
+	lastBackground(0.0f, 0.0f, 0.0f)
     {
     }
 
@@ -67,7 +69,6 @@ public:
 			       unsigned char *pixels, unsigned int nrcomponents,
 			       const float background_rgb[3])
     {
-	(void)background_rgb;
 	if (!scene || !pixels || width == 0 || height == 0 ||
 	    nrcomponents < 1 || nrcomponents > 4)
 	    return FALSE;
@@ -77,6 +78,7 @@ public:
 	this->lastHeight = height;
 	this->lastComponents = nrcomponents;
 	this->lastScene = scene;
+	this->lastBackground.setValue(background_rgb);
 
 	const size_t byteCount = (size_t)width * (size_t)height * (size_t)nrcomponents;
 	for (size_t i = 0; i < byteCount; i += nrcomponents) {
@@ -96,6 +98,7 @@ public:
     unsigned int lastHeight;
     unsigned int lastComponents;
     SoNode *lastScene;
+    SbColor lastBackground;
 };
 
 static BRLObolWindowDesc
@@ -142,6 +145,12 @@ test_headless_contract(void)
     CHECK(host.getOutputComponents() == 4, "headless host accepts RGBA output");
     host.setOutputComponents(99);
     CHECK(host.getOutputComponents() == 3, "headless host rejects invalid components");
+    host.setBackgroundColor(SbColor(0.25f, 0.5f, 0.75f));
+    CHECK(host.getController()->getBackgroundBottomColor() ==
+	  SbColor(0.25f, 0.5f, 0.75f) &&
+	  host.getController()->getBackgroundTopColor() ==
+	  SbColor(0.25f, 0.5f, 0.75f),
+	  "headless host background setter updates controller policy");
     return 0;
 }
 
@@ -154,14 +163,18 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
 
     SoGroup *root = static_cast<SoGroup *>(host.getController()->getSceneRoot());
     root->addChild(new SoCube);
+    host.getController()->setBackgroundColors(
+	SbColor(0.125f, 0.25f, 0.5f), SbColor(0.75f, 0.5f, 0.25f));
 
     CHECK(host.renderPending() == 1, "open-requested render is drained");
     CHECK(!host.getController()->isRenderRequested(),
 	  "successful headless render consumes request");
     CHECK(host.getRenderCount() == 1 && manager->renderCount == 1,
 	  "headless host records render count");
-    CHECK(strcmp(host.getLastRenderReason().getString(), "camera") == 0,
-	  "headless host records consumed render reason");
+    CHECK(manager->lastBackground == SbColor(0.125f, 0.25f, 0.5f),
+	  "headless render uses controller background policy");
+    CHECK(strcmp(host.getLastRenderReason().getString(), "background") == 0,
+	  "headless host records the latest consumed render reason");
     CHECK(host.getLastFrameWidth() == 6 && host.getLastFrameHeight() == 4 &&
 	  host.getLastFrameComponents() == 3,
 	  "headless host records frame dimensions");
@@ -185,11 +198,7 @@ test_imgstream_headless_poll(HeadlessTestContextManager *UNUSED(manager))
     BRLObolHeadlessWindowHost host;
     host.setOutputComponents(4);
 
-    brlobol_window_host_unregister_display_host();
-    CHECK(brlobol_window_host_register_display_host(&host) == 0,
-	  "headless host registers as display host");
-
-    imgstream_fb_t *fb = imgstream_fb_open("/dev/swrast", 3, 2);
+    imgstream_fb_t *fb = brlobol_window_host_open_display_framebuffer(&host, "/dev/swrast", 3, 2);
     CHECK(fb != NULL, "swrast framebuffer opens through headless host");
     CHECK(host.isOpen(), "swrast framebuffer opens headless host");
     CHECK(host.getDesc().mode == BRLOBOL_WINDOW_HEADLESS &&
@@ -210,7 +219,67 @@ test_imgstream_headless_poll(HeadlessTestContextManager *UNUSED(manager))
 	  "swrast poll records framebuffer render reason");
 
     imgstream_fb_close(fb);
-    brlobol_window_host_unregister_display_host();
+    return 0;
+}
+
+static int
+test_headless_factory_endpoint(void)
+{
+    CHECK(brlobol_headless_host_factory_register() != NULL,
+	  "built-in headless factory is registered");
+
+    struct brlobol_host_desc desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    desc.width = 5;
+    desc.height = 3;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_READBACK;
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint != NULL, "headless factory test creates endpoint");
+    CHECK(brlobol_display_endpoint_render_engine_set(endpoint,
+	  BRLOBOL_RENDER_ENGINE_HW),
+	  "endpoint accepts hardware policy before host selection");
+    CHECK(!brlobol_display_endpoint_host_open(endpoint, "headless", &desc),
+	  "hardware renderer rejects a pixel-presentation-only host");
+    CHECK(brlobol_display_endpoint_render_engine_set(endpoint,
+	  BRLOBOL_RENDER_ENGINE_SW),
+	  "endpoint accepts software policy before compatible host selection");
+    CHECK(brlobol_display_endpoint_host_open(endpoint, "headless", &desc),
+	  "endpoint opens the built-in headless factory");
+    CHECK(strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+	  "headless") == 0,
+	  "endpoint reports built-in headless factory identity");
+    CHECK(!brlobol_display_endpoint_render_engine_set(endpoint,
+	  BRLOBOL_RENDER_ENGINE_HW) &&
+	  brlobol_display_endpoint_render_engine_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_SW,
+	  "endpoint rejects an incompatible renderer change after host open");
+
+    BRLObolViewController *controller =
+	static_cast<BRLObolViewController *>(
+	    brlobol_display_endpoint_controller(endpoint));
+    SoGroup *root = static_cast<SoGroup *>(controller->getSceneRoot());
+    root->addChild(new SoCube);
+    CHECK(brlobol_display_endpoint_request_frame(endpoint, "factory-test"),
+	  "headless factory accepts endpoint frame request");
+
+    unsigned char *pixels = NULL;
+    size_t size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    CHECK(brlobol_display_endpoint_capture(endpoint, &pixels, &size, &width,
+	  &height, &components),
+	  "headless factory captures through endpoint API");
+    CHECK(pixels && width == 5 && height == 3 && components == 3 &&
+	  size == 5u * 3u * 3u,
+	  "headless factory capture reports endpoint dimensions");
+    bu_free(pixels, "headless factory endpoint capture");
+    brlobol_display_endpoint_destroy(endpoint);
     return 0;
 }
 
@@ -230,6 +299,8 @@ main(int ac, char **av)
     if (test_headless_render_pending(&manager))
 	return 1;
     if (test_imgstream_headless_poll(&manager))
+	return 1;
+    if (test_headless_factory_endpoint())
 	return 1;
 
     return 0;

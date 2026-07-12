@@ -835,10 +835,22 @@ ged_event_process_owned(struct ged_event_txn_state *state,
 
     int status = 0;
     int index_status = 0;
+    std::unordered_set<std::string> material_names;
+    for (const ged_event_owned &event : coalesced) {
+	if (event.kind == GED_EVENT_MATERIAL_CHANGED && !event.name.empty())
+	    material_names.insert(event.name);
+    }
     for (const ged_event_owned &event : coalesced) {
 	index_status += ged_event_reconcile_db_index(state->gedp, event);
 
-	int ret = ged_event_reconcile_draw(state->gedp, event, result);
+	/* A paired material event refreshes retained path metadata as well as
+	 * effective color.  Do not first treat the attribute notification as a
+	 * geometry mutation and re-expand the same combination. */
+	const int covered_material_attribute =
+	    event.kind == GED_EVENT_ATTRIBUTE_CHANGED &&
+	    material_names.find(event.name) != material_names.end();
+	int ret = covered_material_attribute ? 0 :
+	    ged_event_reconcile_draw(state->gedp, event, result);
 	if (ret < 0) {
 	    status = ret;
 	    if (bu_vls_strlen(&result->errors))

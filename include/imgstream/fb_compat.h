@@ -25,6 +25,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "imgstream/stream.h"
 
@@ -32,6 +33,19 @@ __BEGIN_DECLS
 
 struct imgstream_fb;
 typedef struct imgstream_fb imgstream_fb_t;
+struct icv_image;
+
+struct imgstream_fb_import_options {
+    int file_xoff;
+    int file_yoff;
+    int screen_xoff;
+    int screen_yoff;
+    int clear;
+    int zoom;
+    int inverse;
+};
+
+#define IMGSTREAM_FB_IMPORT_OPTIONS_INIT {0, 0, 0, 0, 0, 0, 0}
 
 enum imgstream_fb_spec_kind {
     IMGSTREAM_FB_SPEC_MEMORY,
@@ -110,6 +124,15 @@ struct imgstream_fb_display_host {
     long (*poll_rate)(const imgstream_fb_t *fb, void *data);
 };
 
+struct imgstream_fb_remote_options {
+    uint32_t struct_size;
+    const char *auth_token;
+    int use_tls;
+};
+
+#define IMGSTREAM_FB_REMOTE_OPTIONS_INIT { \
+    sizeof(struct imgstream_fb_remote_options), NULL, 0 }
+
 struct imgstream_fb_colormap {
     uint16_t red[256];
     uint16_t green[256];
@@ -120,12 +143,21 @@ IMGSTREAM_EXPORT enum imgstream_fb_spec_kind imgstream_fb_spec_kind(const char *
 IMGSTREAM_EXPORT int imgstream_fb_spec_info(const char *spec, imgstream_fb_spec_info_t *info);
 IMGSTREAM_EXPORT const char *imgstream_fb_spec_kind_name(enum imgstream_fb_spec_kind kind);
 IMGSTREAM_EXPORT int imgstream_fb_spec_supported(const char *spec);
-IMGSTREAM_EXPORT int imgstream_fb_display_host_set(const struct imgstream_fb_display_host *host, void *data);
-IMGSTREAM_EXPORT void imgstream_fb_display_host_clear(void);
 IMGSTREAM_EXPORT void imgstream_fb_colormap_linear(struct imgstream_fb_colormap *cmap);
 IMGSTREAM_EXPORT int imgstream_fb_colormap_is_linear(const struct imgstream_fb_colormap *cmap);
+IMGSTREAM_EXPORT int imgstream_image_name_size(size_t *width, size_t *height,
+	const char *name);
+IMGSTREAM_EXPORT int imgstream_image_file_size(size_t *width, size_t *height,
+	const char *filename, int bytes_per_pixel);
+IMGSTREAM_EXPORT int imgstream_image_size(size_t *width, size_t *height,
+	size_t pixel_count);
 
 IMGSTREAM_EXPORT imgstream_fb_t *imgstream_fb_open(const char *spec, size_t width, size_t height);
+IMGSTREAM_EXPORT imgstream_fb_t *imgstream_fb_open_remote(const char *spec,
+	size_t width, size_t height,
+	const struct imgstream_fb_remote_options *options);
+IMGSTREAM_EXPORT imgstream_fb_t *imgstream_fb_open_display(const char *spec, size_t width, size_t height,
+	const struct imgstream_fb_display_host *host, void *data);
 IMGSTREAM_EXPORT void imgstream_fb_close(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT imgstream_t *imgstream_fb_stream(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT const imgstream_t *imgstream_fb_cstream(const imgstream_fb_t *fb);
@@ -142,6 +174,14 @@ IMGSTREAM_EXPORT int imgstream_fb_writerect(imgstream_fb_t *fb, int xmin, int ym
 IMGSTREAM_EXPORT int imgstream_fb_bwreadrect(const imgstream_fb_t *fb, int xmin, int ymin, int width, int height, unsigned char *bw);
 IMGSTREAM_EXPORT int imgstream_fb_bwwriterect(imgstream_fb_t *fb, int xmin, int ymin, int width, int height, const unsigned char *bw);
 IMGSTREAM_EXPORT int imgstream_fb_flush(imgstream_fb_t *fb);
+IMGSTREAM_EXPORT int imgstream_fb_export_pix_fp(const imgstream_fb_t *fb,
+	FILE *fp, size_t width, size_t height, int crunch, int inverse);
+IMGSTREAM_EXPORT int imgstream_fb_import_pix_fd(imgstream_fb_t *fb, int fd,
+	const char *filename, size_t width, size_t height, int autosize,
+	const struct imgstream_fb_import_options *options);
+IMGSTREAM_EXPORT int imgstream_fb_import_icv(imgstream_fb_t *fb,
+	const struct icv_image *image,
+	const struct imgstream_fb_import_options *options);
 
 IMGSTREAM_EXPORT int imgstream_fb_reset(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT int imgstream_fb_viewport(imgstream_fb_t *fb, int left, int top, int right, int bottom);

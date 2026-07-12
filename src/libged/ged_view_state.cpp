@@ -30,10 +30,12 @@
 
 #include "common.h"
 
+#include "brlobol/display_endpoint.h"
 #include "brlobol/view_attachment.h"
 #include "bv.h"
 #include "bu/malloc.h"
 #include "bu/ptbl.h"
+#include "bu/str.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "./ged_draw_private.h"
@@ -51,6 +53,8 @@ struct ged_view_host_record {
     void *view_ctx;
     struct ged *gedp;
     void *display_manager;
+    brlobol_display_endpoint_t *display_endpoint;
+    int owns_display_endpoint;
     void *tclcad_data;
     struct bu_ptbl *callbacks;
     ged_view_context_update_callback_t update_callback;
@@ -197,6 +201,16 @@ ged_view_host_record_destroy(struct ged_view_host_record *record)
 	}
     }
 
+    if (record->display_endpoint) {
+	(void)brlobol_display_endpoint_property_provider_set(
+	    record->display_endpoint, NULL, NULL, NULL);
+	ged_draw_obol_controller_detach_for_view(record->gedp,
+		record->view_ctx);
+	if (record->owns_display_endpoint)
+	    brlobol_display_endpoint_destroy(record->display_endpoint);
+	record->display_endpoint = NULL;
+	record->owns_display_endpoint = 0;
+    }
     ged_view_host_callbacks_free(record->callbacks);
     record->obol_attachment->unref();
     record->obol_attachment = NULL;
@@ -745,6 +759,103 @@ ged_view_context_display_manager_set(void *view_ctx, void *dmp)
     }
 
     return 0;
+}
+
+extern "C" GED_EXPORT struct brlobol_display_endpoint *
+ged_view_context_display_endpoint_get(const void *view_ctx)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+
+    return record ? record->display_endpoint : NULL;
+}
+
+static int
+ged_endpoint_property_get(void *user_data, const char *name,
+	struct brlobol_endpoint_property_value *out)
+{
+    void *view_ctx = user_data;
+    if (!view_ctx || !name || !out)
+	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    if (BU_STR_EQUAL(name, "view.zclip")) {
+	out->bool_value = bv_zclip_get(
+	    bv_context_view_const((const struct bv_context *)view_ctx)) ? 1 : 0;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+}
+
+static int
+ged_endpoint_property_set(void *user_data, const char *name,
+	const struct brlobol_endpoint_property_value *value)
+{
+    void *view_ctx = user_data;
+    if (!view_ctx || !name || !value)
+	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    if (BU_STR_EQUAL(name, "view.zclip")) {
+	if (!bv_zclip_set(bv_context_view((struct bv_context *)view_ctx),
+		value->bool_value))
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	(void)ged_view_context_update(view_ctx);
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+}
+
+extern "C" GED_EXPORT int
+ged_view_context_display_endpoint_set(
+	void *view_ctx, struct brlobol_display_endpoint *endpoint,
+	int take_ownership)
+{
+    struct ged_view_host_record *record =
+	ged_view_host_record_find_global(view_ctx);
+    if (!record)
+	return 0;
+
+    if (record->display_endpoint == endpoint) {
+	record->owns_display_endpoint = take_ownership ? 1 : 0;
+	if (endpoint)
+	    (void)brlobol_display_endpoint_property_provider_set(endpoint,
+		ged_endpoint_property_get, ged_endpoint_property_set, view_ctx);
+	return 1;
+    }
+
+    if (endpoint) {
+	void *controller = brlobol_display_endpoint_controller(endpoint);
+	if (!controller || !record->gedp)
+	    return 0;
+	void *attached =
+	    ged_draw_obol_controller_opaque_for_view(view_ctx);
+	if (attached != controller &&
+	    !ged_draw_obol_controller_attach_opaque_for_view(record->gedp,
+		view_ctx, controller, 1)) {
+	    if (record->display_endpoint && record->gedp) {
+		void *old_controller = brlobol_display_endpoint_controller(
+		    record->display_endpoint);
+		if (old_controller)
+		    (void)ged_draw_obol_controller_attach_opaque_for_view(
+			record->gedp, view_ctx, old_controller, 1);
+	    }
+	    return 0;
+	}
+    } else if (record->gedp) {
+	ged_draw_obol_controller_detach_for_view(record->gedp, view_ctx);
+    }
+
+    brlobol_display_endpoint_t *old_endpoint = record->display_endpoint;
+    const int owned_old_endpoint = record->owns_display_endpoint;
+    if (old_endpoint)
+	(void)brlobol_display_endpoint_property_provider_set(old_endpoint,
+	    NULL, NULL, NULL);
+    record->display_endpoint = endpoint;
+    record->owns_display_endpoint = take_ownership ? 1 : 0;
+    if (endpoint)
+	(void)brlobol_display_endpoint_property_provider_set(endpoint,
+	    ged_endpoint_property_get, ged_endpoint_property_set, view_ctx);
+
+    if (old_endpoint && owned_old_endpoint)
+	brlobol_display_endpoint_destroy(old_endpoint);
+    return 1;
 }
 
 extern "C" GED_EXPORT int

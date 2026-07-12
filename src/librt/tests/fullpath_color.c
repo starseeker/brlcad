@@ -98,7 +98,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     failures += add_sphere(wdbp, "leaf.s");
     failures += db5_update_attribute("leaf.s", "color", "250/250/0", dbip);
-    db_mater_add(dbip, 77, 77, 10, 20, 30, MATER_NO_ADDR);
+    db_mater_add(dbip, 77, 77, 10, 20, 255, MATER_NO_ADDR);
 
     failures += add_comb(wdbp, "region_table.r", "leaf.s", 1, NULL, 77, 0);
     failures += add_comb(wdbp, "region_blue.r", "leaf.s", 1, blue, 77, 0);
@@ -116,7 +116,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     failures += expect_rgb(dbip, "lower region explicit color",
 	    "parent_lower.c/region_blue.r/leaf.s", 0, 0, 200);
     failures += expect_rgb(dbip, "region-id table fallback",
-	    "parent_table.c/region_table.r/leaf.s", 11, 21, 31);
+	    "parent_table.c/region_table.r/leaf.s", 10, 20, 255);
 
     db_close(dbip);
     return failures ? 1 : 0;

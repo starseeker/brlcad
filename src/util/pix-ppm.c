@@ -38,7 +38,7 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 static int autosize = 0;		/* !0 to autosize input */
@@ -244,7 +244,7 @@ main(int argc, char *argv[])
     /* autosize input? */
     if (fileinput && autosize) {
 	size_t w, h;
-	if (fb_common_file_size(&w, &h, file_name, pixbytes)) {
+	if (imgstream_image_file_size(&w, &h, file_name, pixbytes)) {
 	    file_width = (long)w;
 	    file_height = (long)h;
 	} else {

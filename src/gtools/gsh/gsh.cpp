@@ -276,6 +276,8 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
 		s->view_controller, 0) ||
 	    !ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
 		view_ctx, s->view_controller, 0) ||
+	    !ged_draw_obol_render_endpoint_ensure_for_view(s->gedp,
+		view_ctx, 0) ||
 	    ged_draw_obol_framebuffer_backend_ensure_for_view(s->gedp,
 		view_ctx) != BRLCAD_OK)
 	return BRLCAD_ERROR;

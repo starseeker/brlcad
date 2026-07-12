@@ -31,6 +31,8 @@
 #include "bu/str.h"
 #include "imgstream.h"
 
+#include "fb_remote.h"
+
 
 #define IMGSTREAM_FB_DEFAULT_SIZE 512
 #define IMGSTREAM_FB_RGB_CHANNELS 3
@@ -54,19 +56,8 @@ struct imgstream_fb {
     size_t child_count;
     imgstream_fb_view_t view;
     imgstream_fb_cursor_t cursor;
+    struct imgstream_fb_remote *remote;
 };
-
-
-static struct imgstream_fb_display_host fb_display_host;
-static void *fb_display_host_data = NULL;
-static int fb_display_host_active = 0;
-
-
-static int
-fb_display_host_registered(void)
-{
-    return fb_display_host_active && fb_display_host.open;
-}
 
 
 static int
@@ -548,28 +539,6 @@ imgstream_fb_spec_info(const char *spec, imgstream_fb_spec_info_t *info)
 }
 
 
-int
-imgstream_fb_display_host_set(const struct imgstream_fb_display_host *host, void *data)
-{
-    if (!host || !host->open)
-	return -1;
-
-    fb_display_host = *host;
-    fb_display_host_data = data;
-    fb_display_host_active = 1;
-    return 0;
-}
-
-
-void
-imgstream_fb_display_host_clear(void)
-{
-    memset(&fb_display_host, 0, sizeof(fb_display_host));
-    fb_display_host_data = NULL;
-    fb_display_host_active = 0;
-}
-
-
 const char *
 imgstream_fb_spec_kind_name(enum imgstream_fb_spec_kind kind)
 {
@@ -609,8 +578,11 @@ fb_spec_supported_no_fanout(const char *spec)
     if (kind == IMGSTREAM_FB_SPEC_DIAGNOSTIC)
 	return 1;
 
+    if (kind == IMGSTREAM_FB_SPEC_REMOTE)
+	return 1;
+
     if (kind == IMGSTREAM_FB_SPEC_DISPLAY)
-	return fb_display_host_registered() ? 1 : 0;
+	return 0;
 
     return 0;
 }
@@ -858,16 +830,13 @@ fb_open_fanout(const char *spec, size_t width, size_t height)
 }
 
 
-imgstream_fb_t *
-imgstream_fb_open(const char *spec, size_t width, size_t height)
+static imgstream_fb_t *
+fb_open_single(const char *spec, size_t width, size_t height,
+	const struct imgstream_fb_display_host *display_host,
+	void *display_host_data,
+	const struct imgstream_fb_remote_options *remote_options)
 {
-    if (!imgstream_fb_spec_supported(spec))
-	return NULL;
-
     enum imgstream_fb_spec_kind kind = imgstream_fb_spec_kind(spec);
-
-    if (kind == IMGSTREAM_FB_SPEC_FANOUT)
-	return fb_open_fanout(spec, width, height);
 
     if (!width)
 	width = IMGSTREAM_FB_DEFAULT_SIZE;
@@ -878,6 +847,31 @@ imgstream_fb_open(const char *spec, size_t width, size_t height)
     if (kind == IMGSTREAM_FB_SPEC_FILE)
 	file_path = fb_file_path_from_spec(spec);
     enum imgstream_fb_diagnostic_kind diagnostic_kind = fb_diagnostic_kind_from_spec(spec);
+
+    if (kind == IMGSTREAM_FB_SPEC_REMOTE) {
+	imgstream_fb_spec_info_t info;
+	struct imgstream_fb_remote *remote = NULL;
+	size_t actual_width = 0;
+	size_t actual_height = 0;
+	if (imgstream_fb_spec_info(spec, &info) != 0 ||
+	    !imgstream_fb_remote_open(&info, width, height, remote_options, &remote,
+		&actual_width, &actual_height))
+	    return NULL;
+	imgstream_t *remote_stream = imgstream_create(actual_width,
+	    actual_height, IMGSTREAM_PIXEL_RGB8);
+	if (!remote_stream) {
+	    imgstream_fb_remote_close(remote);
+	    return NULL;
+	}
+	imgstream_fb_t *remote_fb = fb_wrap_stream(spec, remote_stream, NULL);
+	if (!remote_fb) {
+	    imgstream_destroy(remote_stream);
+	    imgstream_fb_remote_close(remote);
+	    return NULL;
+	}
+	remote_fb->remote = remote;
+	return remote_fb;
+    }
 
     imgstream_t *stream = imgstream_create(width, height, IMGSTREAM_PIXEL_RGB8);
     if (!stream)
@@ -904,21 +898,58 @@ imgstream_fb_open(const char *spec, size_t width, size_t height)
 	fb->diagnostic_flags = fb_diagnostic_flags_from_spec(spec);
 	if (kind == IMGSTREAM_FB_SPEC_DISPLAY) {
 	    imgstream_fb_spec_info_t info;
-	    struct imgstream_fb_display_host host = fb_display_host;
-	    void *host_data = fb_display_host_data;
-	    if (!fb_display_host_registered() ||
+	    if (!display_host || !display_host->open ||
 		    imgstream_fb_spec_info(fb->name, &info) != 0 ||
-		    host.open(fb, &info, host_data) != 0) {
+		    display_host->open(fb, &info, display_host_data) != 0) {
 		imgstream_fb_close(fb);
 		return NULL;
 	    }
-	    fb->display_host = host;
-	    fb->display_host_data = host_data;
+	    fb->display_host = *display_host;
+	    fb->display_host_data = display_host_data;
 	    fb->display_backed = 1;
 	}
 	fb_diagnostic_log(fb, "open");
     }
     return fb;
+}
+
+
+imgstream_fb_t *
+imgstream_fb_open(const char *spec, size_t width, size_t height)
+{
+    if (!imgstream_fb_spec_supported(spec))
+	return NULL;
+
+    if (imgstream_fb_spec_kind(spec) == IMGSTREAM_FB_SPEC_FANOUT)
+	return fb_open_fanout(spec, width, height);
+
+    struct imgstream_fb_remote_options remote_options =
+	IMGSTREAM_FB_REMOTE_OPTIONS_INIT;
+    remote_options.auth_token = getenv(FBSERV_AUTH_TOKEN_ENVVAR);
+    remote_options.use_tls = getenv("FBSERV_TLS") ? 1 : 0;
+    return fb_open_single(spec, width, height, NULL, NULL, &remote_options);
+}
+
+
+imgstream_fb_t *
+imgstream_fb_open_remote(const char *spec, size_t width, size_t height,
+	const struct imgstream_fb_remote_options *options)
+{
+    if (imgstream_fb_spec_kind(spec) != IMGSTREAM_FB_SPEC_REMOTE ||
+	!options || options->struct_size < sizeof(*options))
+	return NULL;
+    return fb_open_single(spec, width, height, NULL, NULL, options);
+}
+
+
+imgstream_fb_t *
+imgstream_fb_open_display(const char *spec, size_t width, size_t height,
+	const struct imgstream_fb_display_host *host, void *data)
+{
+    if (!host || !host->open || imgstream_fb_spec_kind(spec) != IMGSTREAM_FB_SPEC_DISPLAY)
+	return NULL;
+
+    return fb_open_single(spec, width, height, host, data, NULL);
 }
 
 
@@ -937,6 +968,8 @@ imgstream_fb_close(imgstream_fb_t *fb)
     } else if (fb->display_backed && fb->display_host.close) {
 	fb->display_host.close(fb, fb->display_host_data);
     }
+    if (fb->remote)
+	imgstream_fb_remote_close(fb->remote);
     fb_diagnostic_log(fb, "close");
     if (fb->owns_stream && fb->stream)
 	imgstream_destroy(fb->stream);
@@ -1002,6 +1035,9 @@ imgstream_fb_clear(imgstream_fb_t *fb, const unsigned char *rgb)
 	return 0;
     }
 
+    if (fb->remote && imgstream_fb_remote_clear(fb->remote, rgb) != 0)
+	return -1;
+
     return imgstream_clear(fb->stream, rgb);
 }
 
@@ -1045,6 +1081,29 @@ imgstream_fb_read(const imgstream_fb_t *fb, int x, int y, unsigned char *rgb, si
     size_t pixels_to_end = width * height - offset;
     if (count > pixels_to_end)
 	count = pixels_to_end;
+
+    if (fb->remote) {
+	ssize_t remote_count = imgstream_fb_remote_read(fb->remote, x, y,
+	    rgb, count);
+	if (remote_count < 0)
+	    return -1;
+	count = (size_t)remote_count;
+	size_t mirrored = 0;
+	size_t mx = (size_t)x;
+	size_t my = (size_t)y;
+	while (mirrored < count) {
+	    size_t run = width - mx;
+	    if (run > count - mirrored)
+		run = count - mirrored;
+	    if (imgstream_write_rect(fb->stream, mx, my, run, 1,
+		    rgb + mirrored * 3, run * 3) != 0)
+		return -1;
+	    mirrored += run;
+	    mx = 0;
+	    my++;
+	}
+	return remote_count;
+    }
 
     size_t done = 0;
     size_t cx = (size_t)x;
@@ -1095,6 +1154,14 @@ imgstream_fb_write(imgstream_fb_t *fb, int x, int y, const unsigned char *rgb, s
     size_t pixels_to_end = width * height - offset;
     if (count > pixels_to_end)
 	count = pixels_to_end;
+
+    if (fb->remote) {
+	ssize_t remote_count = imgstream_fb_remote_write(fb->remote, x, y,
+	    rgb, count);
+	if (remote_count < 0)
+	    return -1;
+	count = (size_t)remote_count;
+    }
 
     size_t done = 0;
     size_t cx = (size_t)x;
@@ -1162,6 +1229,17 @@ imgstream_fb_readrect(const imgstream_fb_t *fb, int xmin, int ymin, int width, i
     if (!fb_rect_valid(fb, xmin, ymin, width, height) || !rgb)
 	return -1;
 
+    if (fb->remote) {
+	int ret = imgstream_fb_remote_readrect(fb->remote, xmin, ymin, width,
+	    height, rgb);
+	if (ret != width * height)
+	    return ret;
+	if (imgstream_write_rect(fb->stream, (size_t)xmin, (size_t)ymin,
+		(size_t)width, (size_t)height, rgb, (size_t)width * 3) != 0)
+	    return -1;
+	return ret;
+    }
+
     if (imgstream_read_rect(fb->stream, (size_t)xmin, (size_t)ymin, (size_t)width, (size_t)height, rgb, (size_t)width * 3) != 0)
 	return -1;
 
@@ -1200,6 +1278,17 @@ imgstream_fb_writerect(imgstream_fb_t *fb, int xmin, int ymin, int width, int he
 
     if (!fb_rect_valid(fb, xmin, ymin, width, height) || !rgb)
 	return -1;
+
+    if (fb->remote) {
+	int ret = imgstream_fb_remote_writerect(fb->remote, xmin, ymin, width,
+	    height, rgb);
+	if (ret != width * height)
+	    return ret;
+	if (imgstream_write_rect(fb->stream, (size_t)xmin, (size_t)ymin,
+		(size_t)width, (size_t)height, rgb, (size_t)width * 3) != 0)
+	    return -1;
+	return ret;
+    }
 
     if (imgstream_write_rect(fb->stream, (size_t)xmin, (size_t)ymin, (size_t)width, (size_t)height, rgb, (size_t)width * 3) != 0)
 	return -1;
@@ -1243,6 +1332,10 @@ imgstream_fb_bwreadrect(const imgstream_fb_t *fb, int xmin, int ymin, int width,
 
     if (!fb_rect_valid(fb, xmin, ymin, width, height) || !bw)
 	return -1;
+
+    if (fb->remote)
+	return imgstream_fb_remote_bwreadrect(fb->remote, xmin, ymin, width,
+	    height, bw);
 
     size_t row_bytes = 0;
     if (fb_rgb_pixel_byte_count((size_t)width, &row_bytes) != 0)
@@ -1292,6 +1385,35 @@ imgstream_fb_bwwriterect(imgstream_fb_t *fb, int xmin, int ymin, int width, int 
     if (!fb_rect_valid(fb, xmin, ymin, width, height) || !bw)
 	return -1;
 
+    if (fb->remote) {
+	int ret = imgstream_fb_remote_bwwriterect(fb->remote, xmin, ymin,
+	    width, height, bw);
+	if (ret != width * height)
+	    return ret;
+	/* Keep the local mirror coherent for image-stream subscribers. */
+	size_t mirror_bytes = 0;
+	if (fb_rgb_pixel_byte_count((size_t)width, &mirror_bytes) != 0)
+	    return -1;
+	unsigned char *mirror = (unsigned char *)bu_malloc(mirror_bytes,
+	    "imgstream remote bw mirror");
+	for (int row_index = 0; row_index < height; row_index++) {
+	    for (int x_index = 0; x_index < width; x_index++) {
+		unsigned char value = bw[(size_t)row_index * width + x_index];
+		mirror[(size_t)x_index * 3 + 0] = value;
+		mirror[(size_t)x_index * 3 + 1] = value;
+		mirror[(size_t)x_index * 3 + 2] = value;
+	    }
+	    if (imgstream_write_rect(fb->stream, (size_t)xmin,
+		    (size_t)(ymin + row_index), (size_t)width, 1, mirror,
+		    mirror_bytes) != 0) {
+		bu_free(mirror, "imgstream remote bw mirror");
+		return -1;
+	    }
+	}
+	bu_free(mirror, "imgstream remote bw mirror");
+	return ret;
+    }
+
     size_t row_bytes = 0;
     if (fb_rgb_pixel_byte_count((size_t)width, &row_bytes) != 0)
 	return -1;
@@ -1331,6 +1453,8 @@ imgstream_fb_flush(imgstream_fb_t *fb)
     }
 
     fb_diagnostic_log(fb, "flush");
+    if (fb->remote)
+	return imgstream_fb_remote_flush(fb->remote);
     if (fb->display_backed && fb->display_host.flush)
 	return fb->display_host.flush(fb, fb->display_host_data);
     return fb_stream_flush_file(fb);
@@ -1390,6 +1514,9 @@ imgstream_fb_view(imgstream_fb_t *fb, int xcenter, int ycenter, int xzoom, int y
 		return -1;
 	}
     }
+    if (fb->remote && imgstream_fb_remote_view(fb->remote, xcenter, ycenter,
+	    xzoom, yzoom) != 0)
+	return -1;
     fb->view.xcenter = xcenter;
     fb->view.ycenter = ycenter;
     fb->view.xzoom = xzoom;
@@ -1406,6 +1533,9 @@ imgstream_fb_getview(const imgstream_fb_t *fb, int *xcenter, int *ycenter, int *
     if (!fb || !xcenter || !ycenter || !xzoom || !yzoom)
 	return -1;
 
+    if (fb->remote)
+	return imgstream_fb_remote_getview(fb->remote, xcenter, ycenter,
+	    xzoom, yzoom);
     *xcenter = fb->view.xcenter;
     *ycenter = fb->view.ycenter;
     *xzoom = fb->view.xzoom;
@@ -1446,6 +1576,8 @@ imgstream_fb_cursor(imgstream_fb_t *fb, int mode, int x, int y)
 		return -1;
 	}
     }
+    if (fb->remote && imgstream_fb_remote_cursor(fb->remote, mode, x, y) != 0)
+	return -1;
     fb->cursor.mode = mode;
     fb->cursor.x = x;
     fb->cursor.y = y;
@@ -1461,6 +1593,8 @@ imgstream_fb_getcursor(const imgstream_fb_t *fb, int *mode, int *x, int *y)
     if (!fb || !mode || !x || !y)
 	return -1;
 
+    if (fb->remote)
+	return imgstream_fb_remote_getcursor(fb->remote, mode, x, y);
     *mode = fb->cursor.mode;
     *x = fb->cursor.x;
     *y = fb->cursor.y;
@@ -1481,6 +1615,8 @@ imgstream_fb_scursor(imgstream_fb_t *fb, int mode, int x, int y)
 	}
     }
 
+    if (fb->remote)
+	return imgstream_fb_remote_scursor(fb->remote, mode, x, y);
     if (fb->display_backed && fb->display_host.scursor)
 	return fb->display_host.scursor(fb, mode, x, y, fb->display_host_data);
     return 0;
@@ -1501,6 +1637,9 @@ imgstream_fb_setcursor(imgstream_fb_t *fb, const unsigned char *bits, int xbits,
     }
 
     fb_diagnostic_log(fb, "setcursor");
+    if (fb->remote)
+	return imgstream_fb_remote_setcursor(fb->remote, bits, xbits, ybits,
+	    xorig, yorig);
     if (fb->display_backed && fb->display_host.setcursor)
 	return fb->display_host.setcursor(fb, bits, xbits, ybits, xorig,
 		yorig, fb->display_host_data);
@@ -1516,6 +1655,9 @@ imgstream_fb_rmap(const imgstream_fb_t *fb, struct imgstream_fb_colormap *cmap)
 
     if (fb->child_count)
 	return imgstream_fb_rmap(fb->children[0], cmap);
+
+    if (fb->remote)
+	return imgstream_fb_remote_rmap(fb->remote, cmap);
 
     fb_diagnostic_log(fb, "rmap");
     *cmap = fb->colormap;
@@ -1559,6 +1701,8 @@ imgstream_fb_wmap(imgstream_fb_t *fb, const struct imgstream_fb_colormap *cmap)
 
     fb_diagnostic_log(fb, "wmap");
     fb_diagnostic_log_colormap(fb, cmap);
+    if (fb->remote && imgstream_fb_remote_wmap(fb->remote, cmap) != 0)
+	return -1;
     if (cmap)
 	fb->colormap = *cmap;
     else
@@ -1582,6 +1726,9 @@ imgstream_fb_poll(imgstream_fb_t *fb)
 
     if (fb->display_backed && fb->display_host.poll)
 	return fb->display_host.poll(fb, fb->display_host_data);
+
+    if (fb->remote)
+	return imgstream_fb_remote_poll(fb->remote);
 
     return 0;
 }

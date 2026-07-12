@@ -120,7 +120,7 @@ export LD_LIBRARY_PATH="${BDIR}/lib:${LD_LIBRARY_PATH:-}"
 export XDG_CONFIG_HOME="$TMPDIR_TEST/config"
 mkdir -p "$XDG_CONFIG_HOME"
 
-"$QGED_BIN" -s "$TEST_DB" >"$QGED_LOG" 2>"$QGED_ERRLOG" &
+"$QGED_BIN" -s --exec "draw $DRAW_OBJECT;ert" "$TEST_DB" >"$QGED_LOG" 2>"$QGED_ERRLOG" &
 QGED_PID=$!
 
 # Wait up to 15 s for qged window to appear
@@ -147,48 +147,14 @@ sleep 2
 check "qged process still running after init" "-d /proc/$QGED_PID"
 
 # -------------------------------------------------------------------
-# 5. Draw geometry and run ert via the console widget
+# 5. Verify the startup commands launched ERT through the GUI event loop
 # -------------------------------------------------------------------
 if [ "$HAVE_XDOTOOL" -eq 1 ]; then
-    # Focus and raise the window
-    WIN=$(xdotool search --pid "$QGED_PID" 2>/dev/null | head -1)
-    if [ -n "$WIN" ]; then
-        xdotool windowfocus --sync "$WIN" 2>/dev/null || true
-        xdotool windowraise "$WIN" 2>/dev/null || true
-    fi
-
-    sleep 0.5
-
-    # Click in the console dock text area.
-    # qged lays out its docks as: toolbar at top (~50px), 3D view in centre,
-    # console dock at bottom.  With a default 1100x800 window, the console text
-    # area (QPlainTextEdit dark background) is at approximately y=600-777.
-    # Click at the bottom-centre of the text area to give it keyboard focus.
-    WIN_H=$(xdotool getwindowgeometry "$WIN" 2>/dev/null | awk '/Geometry/{split($2,g,"x"); print g[2]}')
-    WIN_W=$(xdotool getwindowgeometry "$WIN" 2>/dev/null | awk '/Geometry/{split($2,g,"x"); print g[1]}')
-    WIN_H="${WIN_H:-800}"
-    WIN_W="${WIN_W:-1100}"
-    CONSOLE_Y=$(( WIN_H * 79 / 100 ))   # ~79% from top = upper part of bottom dock
-    CONSOLE_X=$(( WIN_W / 2 ))
-    xdotool mousemove --window "$WIN" "$CONSOLE_X" "$CONSOLE_Y" 2>/dev/null || true
-    xdotool click --window "$WIN" 1 2>/dev/null || true
-    sleep 0.5
-
-    # Draw the requested top-level object ("all" in boolean-ops.g by default).
-    xdotool type --clearmodifiers "draw $DRAW_OBJECT" 2>/dev/null || true
-    sleep 0.2
-    xdotool key Return 2>/dev/null || true
-    sleep 2
-
-    # Run ert
-    xdotool type --clearmodifiers "ert" 2>/dev/null || true
-    sleep 0.2
-    xdotool key Return 2>/dev/null || true
-
     # Wait for rt to start (up to 30 s)
     rt_appeared=0
     for i in $(seq 1 300); do
-        if pgrep -x rt >/dev/null 2>&1; then
+        if pgrep -x rt >/dev/null 2>&1 ||
+	    grep -q "ert: _ged_run_rt returned" "$QGED_ERRLOG" 2>/dev/null; then
             rt_appeared=1; break
         fi
         sleep 0.1

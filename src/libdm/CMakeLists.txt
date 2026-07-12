@@ -79,21 +79,13 @@ set_target_properties(dm_plugins PROPERTIES FOLDER "BRL-CAD Plugins")
 # Retired plugin targets can survive indefinitely in an existing build tree,
 # where libdm will still discover and attempt to load them.  Remove those
 # orphaned outputs when configuring the consolidated Obol backend.
-set(DM_RETIRED_PLUGINS dm-X dm-ogl dm-qtgl dm-swrast dm-tkswrast dm-tkobol)
+set(DM_RETIRED_PLUGINS dm-X dm-obol dm-ogl dm-plot dm-ps dm-qtgl dm-swrast dm-tkswrast dm-tkobol dm-txt)
 foreach(retired_plugin IN LISTS DM_RETIRED_PLUGINS)
   file(
     REMOVE
     "${CMAKE_BINARY_DIR}/${LIBEXEC_DIR}/dm/${CMAKE_SHARED_LIBRARY_PREFIX}${retired_plugin}${CMAKE_SHARED_LIBRARY_SUFFIX}"
   )
 endforeach()
-
-# Backend implementations
-add_subdirectory(plot)
-add_subdirectory(postscript)
-if(TARGET libbrlobol)
-  add_subdirectory(obol)
-endif(TARGET libbrlobol)
-add_subdirectory(txt)
 
 add_subdirectory(tests)
 

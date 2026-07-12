@@ -30,7 +30,8 @@ LOG="${WORKDIR}/mged_obol_ert_smoke.log"
 
 rm -f "$OUT" "$LOG"
 
-printf 'dm type
+printf 'dm open --host headless --renderer sw
+dm host
 draw all.g
 autoview
 ert
@@ -38,10 +39,10 @@ delay 5 0
 refresh
 screengrab %s
 quit
-' "$OUT" | "$MGED" -c -a obol -r "$DB" > "$LOG" 2>&1
+' "$OUT" | "$MGED" -c -a nu -r "$DB" > "$LOG" 2>&1
 
-if ! grep -qx "obol" "$LOG"; then
-    echo "MGED Obol ert smoke did not attach an obol display manager" 1>&2
+if ! grep -qx "headless" "$LOG"; then
+    echo "MGED Obol ert smoke did not open a headless endpoint host" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

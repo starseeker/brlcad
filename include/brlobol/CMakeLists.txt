@@ -4,6 +4,7 @@ set(
   axes.h
   database_source.h
   defines.h
+  display_endpoint.h
   draw_cache.h
   edit_preview.h
   evaluated_points.h
@@ -12,6 +13,7 @@ set(
   framebuffer.h
   grid.h
   headless_window_host.h
+  host_factory.h
   hud_label_overlay.h
   image_plane.h
   image_source.h

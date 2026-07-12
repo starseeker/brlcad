@@ -38,8 +38,7 @@
 #include "bu/getopt.h"
 #include "bu/log.h"
 #include "bu/snooze.h"
-#include "dm.h"
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 
 static char *framebuffer = NULL;
@@ -684,9 +683,9 @@ main(int argc, char **argv)
 {
     int i;
     int fudge;
-    ColorMap cmap;
-    ColorMap *cp = &cmap;
-    struct fb *fbp;
+    struct imgstream_fb_colormap cmap = {{0}, {0}, {0}};
+    struct imgstream_fb_colormap *cp = &cmap;
+    imgstream_fb_t *fbp;
 
     bu_setprogname(argv[0]);
 
@@ -698,22 +697,22 @@ main(int argc, char **argv)
     if (! pars_Argv(argc, argv))
 	usage();
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL)
 	return 1;
 
     switch (flavor) {
 
 	case 0 : /* Standard - Linear color map */
 	    (void) fprintf(stderr, "Color map #0, linear (standard).\n");
-	    cp = (ColorMap *) NULL;
+	    cp = NULL;
 	    break;
 
 	case 1 : /* Reverse linear color map */
 	    (void) fprintf(stderr, "Color map #1, reverse-linear (negative).\n");
 	    for (i = 0; i < 256; i++) {
-		cp->cm_red[255-i] =
-		    cp->cm_green[255-i] =
-		    cp->cm_blue[255-i] = i << 8;
+		cp->red[255-i] = cp->green[255-i] =
+		    cp->blue[255-i] = (uint16_t)(i << 8);
 	    }
 	    break;
 
@@ -726,24 +725,23 @@ main(int argc, char **argv)
 	    ((int)((bias)+((float)(point)/256.*(255-(bias)))))
 	    for (i = 1; i < 256; i++) {
 		fudge = BOOST(i, 70);
-		cp->cm_red[i] = fudge << 8;		/* B */
+		cp->red[i] = (uint16_t)(fudge << 8);		/* B */
 	    }
 	    for (i = 1; i < 256; i++) {
 		fudge = i;
-		cp->cm_green[i] = fudge << 8;	/* G */
+		cp->green[i] = (uint16_t)(fudge << 8);	/* G */
 	    }
 	    for (i = 1; i < 256; i++) {
 		fudge = BOOST(i, 30);
-		cp->cm_blue[i] = fudge << 8;	/* R */
+		cp->blue[i] = (uint16_t)(fudge << 8);	/* R */
 	    }
 	    break;
 
 	case 3 : /* Standard, with low intensities set to black */
 	    (void) fprintf(stderr, "Color map #3, low 100 entries black.\n");
 	    for (i = 100; i < 256; i++) {
-		cp->cm_red[i] =
-		    cp->cm_green[i] =
-		    cp->cm_blue[i] = i << 8;
+		cp->red[i] = cp->green[i] = cp->blue[i] =
+		    (uint16_t)(i << 8);
 	    }
 	    break;
 
@@ -754,14 +752,12 @@ main(int argc, char **argv)
 	    /* First entry black */
 	    for (i = 1; i< 256-UPSHIFT; i++) {
 		int j = i + UPSHIFT;
-		cp->cm_red[i] =
-		    cp->cm_green[i] =
-		    cp->cm_blue[i] = j << 8;
+		cp->red[i] = cp->green[i] = cp->blue[i] =
+		    (uint16_t)(j << 8);
 	    }
 	    for (i = 256-UPSHIFT; i < 256; i++) {
-		cp->cm_red[i] =
-		    cp->cm_green[i] =
-		    cp->cm_blue[i] = 255 << 8;	/* Full Scale */
+		cp->red[i] = cp->green[i] = cp->blue[i] =
+		    (uint16_t)(255 << 8);	/* Full Scale */
 	    }
 	    break;
 
@@ -769,49 +765,43 @@ main(int argc, char **argv)
 	    (void) fprintf(stderr,
 			   "Color map #5, University of Utah's gamma correcting map.\n");
 	    for (i = 0; i < 256; i++)
-		cp->cm_red[i] =
-		    cp->cm_green[i] =
-		    cp->cm_blue[i] = utah_cmap[i] << 8;
+		cp->red[i] = cp->green[i] = cp->blue[i] =
+		    (uint16_t)(utah_cmap[i] << 8);
 	    break;
 
 	case 6 :	/* Delta's */
 	    (void) fprintf(stderr, "Color map #6, color deltas.\n");
 	    /* white at zero */
-	    cp->cm_red[0] = 65535;
-	    cp->cm_green[0] = 65535;
-	    cp->cm_blue[0] = 65535;
+	    cp->red[0] = cp->green[0] = cp->blue[0] = 65535;
 	    /* magenta at 32 */
-	    cp->cm_red[32] = 65535;
-	    cp->cm_blue[32] = 65535;
+	    cp->red[32] = cp->blue[32] = 65535;
 	    /* Red at 64 */
-	    cp->cm_red[32*2] = 65535;
+	    cp->red[32*2] = 65535;
 	    /* Yellow ... */
-	    cp->cm_red[32*3] = 65535;
-	    cp->cm_green[32*3] = 65535;
+	    cp->red[32*3] = cp->green[32*3] = 65535;
 	    /* Green */
-	    cp->cm_green[32*4] = 65535;
+	    cp->green[32*4] = 65535;
 	    /* Cyan */
-	    cp->cm_green[32*5] = 65535;
-	    cp->cm_blue[32*5] = 65535;
+	    cp->green[32*5] = cp->blue[32*5] = 65535;
 	    /* Blue */
-	    cp->cm_blue[32*6] = 65535;
+	    cp->blue[32*6] = 65535;
 	    break;
 
 	case 8:
 	    (void) fprintf(stderr, "Color map #8, Ikcmap 8.\n");
 	    for (i = 0; i < 256; i++) {
-		cp->cm_red[i] = utah8[3*i] << 8;
-		cp->cm_green[i] = utah8[3*i+1] << 8;
-		cp->cm_blue[i] = utah8[3*i+2] << 8;
+		cp->red[i] = (uint16_t)(utah8[3*i] << 8);
+		cp->green[i] = (uint16_t)(utah8[3*i+1] << 8);
+		cp->blue[i] = (uint16_t)(utah8[3*i+2] << 8);
 	    }
 	    break;
 
 	case 9:
 	    (void) fprintf(stderr, "Color map #9, Ikcmap 9.\n");
 	    for (i = 0; i < 256; i++) {
-		cp->cm_red[i] = utah9[3*i] << 8;
-		cp->cm_green[i] = utah9[3*i+1] << 8;
-		cp->cm_blue[i] = utah9[3*i+2] << 8;
+		cp->red[i] = (uint16_t)(utah9[3*i] << 8);
+		cp->green[i] = (uint16_t)(utah9[3*i+1] << 8);
+		cp->blue[i] = (uint16_t)(utah9[3*i+2] << 8);
 	    }
 	    break;
 
@@ -822,18 +812,16 @@ main(int argc, char **argv)
 	case 11:	/* White */
 	    (void) fprintf(stderr, "Color map #11, solid white.\n");
 	    for (i = 0; i < 256; i++) {
-		cp->cm_red[i] =
-		    cp->cm_green[i] =
-		    cp->cm_blue[i] = 255 << 8;
+		cp->red[i] = cp->green[i] = cp->blue[i] =
+		    (uint16_t)(255 << 8);
 	    }
 	    break;
 
 	case 12:	/* 18% Grey */
 	    (void) fprintf(stderr, "Color map #12, 18%% neutral grey.\n");
 	    for (i = 0; i < 256; i++) {
-		cp->cm_red[i] =
-		    cp->cm_green[i] =
-		    cp->cm_blue[i] = 46 << 8;
+		cp->red[i] = cp->green[i] = cp->blue[i] =
+		    (uint16_t)(46 << 8);
 	    }
 	    break;
 
@@ -844,8 +832,9 @@ main(int argc, char **argv)
 	    usage();
 	    return 1;
     }
-    fb_wmap(fbp, cp);
-    return fb_close(fbp);
+    int ret = imgstream_fb_wmap(fbp, cp);
+    imgstream_fb_close(fbp);
+    return ret == 0 ? 0 : 1;
 }
 
 

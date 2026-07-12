@@ -62,6 +62,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -295,6 +296,264 @@ brlobol_database_source_path_material_color(
 						       color);
     db_free_full_path(&fullpath);
     return matched;
+}
+
+namespace {
+
+struct BRLObolMaterialCombState {
+    BRLObolMaterialCombState(void) :
+	isCombination(false),
+	rgbValid(false),
+	inherit(DB_INH_LOWER),
+	isRegion(false),
+	regionId(-1),
+	airCode(0),
+	materialId(0),
+	los(0)
+    {
+	rgb[0] = rgb[1] = rgb[2] = 0;
+    }
+
+    bool isCombination;
+    bool rgbValid;
+    unsigned char rgb[3];
+    int inherit;
+    bool isRegion;
+    int regionId;
+    int airCode;
+    int materialId;
+    int los;
+    std::string shader;
+};
+
+struct BRLObolMaterialPathState {
+    BRLObolMaterialPathState(void) :
+	explicitColorValid(false),
+	colorInherit(DB_INH_LOWER),
+	inRegion(false),
+	regionId(-1),
+	airCode(0),
+	materialId(0),
+	los(0),
+	color(1.0f, 0.0f, 0.0f)
+    {
+    }
+
+    bool explicitColorValid;
+    int colorInherit;
+    bool inRegion;
+    int regionId;
+    int airCode;
+    int materialId;
+    int los;
+    std::string shader;
+    SbColor color;
+};
+
+class BRLObolMaterialColorSweep {
+public:
+    explicit BRLObolMaterialColorSweep(struct db_i *database) : dbip(database)
+    {
+    }
+
+    bool resolve(const char *sourcePath, BRLObolMaterialPathState &resolved)
+    {
+	if (!this->dbip || !sourcePath || !sourcePath[0])
+	    return false;
+
+	const std::string path =
+	    database_source_db_path_without_instance_suffixes(sourcePath);
+	const char *cp = path.c_str();
+	while (*cp == '/')
+	    cp++;
+	if (!cp[0])
+	    return false;
+
+	BRLObolMaterialPathState state;
+	std::string prefix;
+	while (*cp) {
+	    const char *slash = strchr(cp, '/');
+	    const size_t length = slash ? static_cast<size_t>(slash - cp) :
+		strlen(cp);
+	    if (!length) {
+		cp = slash ? slash + 1 : cp + length;
+		continue;
+	    }
+
+	    const std::string component(cp, length);
+	    if (!prefix.empty())
+		prefix.push_back('/');
+	    prefix.append(component);
+
+	    std::unordered_map<std::string,
+		BRLObolMaterialPathState>::const_iterator cached =
+		this->pathStates.find(prefix);
+	    if (cached != this->pathStates.end()) {
+		state = cached->second;
+	    } else {
+		struct directory *dp = db_lookup(this->dbip,
+			component.c_str(), LOOKUP_QUIET);
+		if (!dp)
+		    return false;
+		this->applyCombination(state, dp);
+		this->pathStates.emplace(prefix, state);
+	    }
+
+	    if (!slash)
+		break;
+	    cp = slash + 1;
+	}
+
+	if (!state.explicitColorValid && state.regionId >= 0)
+	    state.color = this->regionColor(state.regionId);
+	resolved = state;
+	return true;
+    }
+
+private:
+    const BRLObolMaterialCombState &combinationState(struct directory *dp)
+    {
+	std::unordered_map<struct directory *,
+	    BRLObolMaterialCombState>::iterator found =
+	    this->combStates.find(dp);
+	if (found != this->combStates.end())
+	    return found->second;
+
+	BRLObolMaterialCombState state;
+	state.isCombination = (dp->d_flags & RT_DIR_COMB) != 0;
+	if (state.isCombination) {
+	    struct rt_db_internal intern;
+	    RT_DB_INTERNAL_INIT(&intern);
+	    if (rt_db_get_internal(&intern, dp, this->dbip, NULL) >= 0) {
+		if (intern.idb_type == ID_COMBINATION && intern.idb_ptr) {
+		    const struct rt_comb_internal *comb =
+			static_cast<const struct rt_comb_internal *>(intern.idb_ptr);
+		    RT_CK_COMB(comb);
+		    state.rgbValid = comb->rgb_valid == 1;
+		    if (state.rgbValid) {
+			state.rgb[0] = comb->rgb[0];
+			state.rgb[1] = comb->rgb[1];
+			state.rgb[2] = comb->rgb[2];
+		    }
+		    state.inherit = comb->inherit;
+		    state.isRegion = comb->region_flag != 0;
+		    state.regionId = comb->region_id;
+		    state.airCode = comb->aircode;
+		    state.materialId = comb->GIFTmater;
+		    state.los = comb->los;
+		    state.shader = bu_vls_cstr(&comb->shader);
+		}
+		rt_db_free_internal(&intern);
+	    }
+	}
+	return this->combStates.emplace(dp, state).first->second;
+    }
+
+    void applyCombination(BRLObolMaterialPathState &pathState,
+	struct directory *dp)
+    {
+	const BRLObolMaterialCombState &comb = this->combinationState(dp);
+	if (!comb.isCombination)
+	    return;
+
+	if (!pathState.inRegion && pathState.colorInherit == DB_INH_LOWER &&
+	    comb.rgbValid) {
+	    pathState.color = SbColor(
+		static_cast<float>(comb.rgb[0]) / 255.0f,
+		static_cast<float>(comb.rgb[1]) / 255.0f,
+		static_cast<float>(comb.rgb[2]) / 255.0f);
+	    pathState.explicitColorValid = true;
+	    pathState.colorInherit = comb.inherit;
+	}
+	if (!pathState.inRegion && comb.isRegion) {
+	    pathState.regionId = comb.regionId;
+	    pathState.airCode = comb.airCode;
+	    pathState.materialId = comb.materialId;
+	    pathState.los = comb.los;
+	    pathState.shader = comb.shader;
+	    pathState.inRegion = true;
+	}
+    }
+
+    SbColor regionColor(int regionId)
+    {
+	std::unordered_map<int, SbColor>::const_iterator found =
+	    this->regionColors.find(regionId);
+	if (found != this->regionColors.end())
+	    return found->second;
+
+	SbColor color(1.0f, 0.0f, 0.0f);
+	struct region regionState;
+	memset(&regionState, 0, sizeof(regionState));
+	regionState.reg_regionid = regionId;
+	db_mater_color_region(this->dbip, &regionState);
+	if (regionState.reg_mater.ma_color_valid) {
+	    color = SbColor(
+		static_cast<float>(regionState.reg_mater.ma_color[0]),
+		static_cast<float>(regionState.reg_mater.ma_color[1]),
+		static_cast<float>(regionState.reg_mater.ma_color[2]));
+	}
+	this->regionColors.emplace(regionId, color);
+	return color;
+    }
+
+    struct db_i *dbip;
+    std::unordered_map<struct directory *, BRLObolMaterialCombState>
+	combStates;
+    std::unordered_map<std::string, BRLObolMaterialPathState> pathStates;
+    std::unordered_map<int, SbColor> regionColors;
+};
+
+} // namespace
+
+
+int
+brlobol_database_sources_refresh_material_colors(
+    SoBRLDatabaseSource *const *sources,
+    size_t sourceCount,
+    uint32_t materialRevision,
+    struct db_i *dbip)
+{
+    if (!sourceCount)
+	return 0;
+    if (!sources || !dbip)
+	return -1;
+
+    BRLObolMaterialColorSweep sweep(dbip);
+    int changed = 0;
+    for (size_t i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = sources[i];
+	if (!source || source->materialRevision.getValue() == materialRevision)
+	    continue;
+
+	BRLObolMaterialPathState resolved;
+	if (!sweep.resolve(source->path.getValue().getString(), resolved))
+	    continue;
+	if (resolved.inRegion) {
+	    (void)source->setDatabaseMetadataState(
+		TRUE, resolved.regionId, resolved.airCode, resolved.materialId,
+		resolved.los, TRUE, resolved.color,
+		SbString(resolved.shader.c_str()));
+	}
+	const int sourceChanged = source->setDisplayState(
+	    FALSE,
+	    source->sourceRevision.getValue(),
+	    source->inputsRevision.getValue(),
+	    source->visible.getValue(),
+	    source->selected.getValue(),
+	    source->highlighted.getValue(),
+	    source->lineStyle.getValue(),
+	    source->lineWidth.getValue(),
+	    source->transparency.getValue(),
+	    source->colorOverride.getValue(),
+	    source->color.getValue(),
+	    TRUE,
+	    resolved.color,
+	    materialRevision);
+	if (sourceChanged > 0)
+	    changed = 1;
+    }
+    return changed;
 }
 
 BRLObolDatabaseSourceSummary::BRLObolDatabaseSourceSummary(void) :
@@ -6280,6 +6539,13 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
     uint32_t nextMaterialRevision,
     struct db_i *overrideDbip)
 {
+    /* A material revision is the synchronization stamp for the effective
+     * display color.  The primary scene is refreshed before attached-scene
+     * observers run, so avoid repeating the comparatively expensive full-path
+     * database lookup when an observer targets that same scene. */
+    if (this->materialRevision.getValue() == nextMaterialRevision)
+	return 0;
+
     struct db_i *colorDbip = overrideDbip ? overrideDbip : this->dbip;
     SbColor nextMaterialColor(1.0f, 1.0f, 1.0f);
     if (!brlobol_database_source_path_material_color(

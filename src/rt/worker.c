@@ -35,7 +35,6 @@
 #include "vmath.h"
 #include "bn.h"
 #include "raytrace.h"
-#include "dm.h"		/* Added because RGBpixel is now needed in do_pixel() */
 
 #include "./rtuif.h"
 #include "./ext.h"
@@ -151,7 +150,7 @@ do_pixel(int cpu, int pat_num, int pixelnum)
     vect_t colorsum = {(fastf_t)0.0, (fastf_t)0.0, (fastf_t)0.0};
     int samplenum = 0;
     static const double one_over_255 = 1.0 / 255.0;
-    const int pindex = (pixelnum * sizeof(RGBpixel));
+    const int pindex = pixelnum * 3;
     int64_t pixel_start = 0;
 
     /* for stereo output */

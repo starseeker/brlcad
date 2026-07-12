@@ -18,6 +18,7 @@ set(
   QgModel.h
   QgObolExport.h
   QgObolMeasure.h
+  QgObolWindowHost.h
   QgObolPick.h
   QgObolSnap.h
   QgPaletteController.h

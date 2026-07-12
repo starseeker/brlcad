@@ -533,6 +533,35 @@ test_rt_exact_pick_provider(void)
 	return 1;
     }
 
+    const SbPlane sectionPlane(SbVec3f(0.0f, 0.0f, -1.0f),
+	SbVec3f(0.0f, 0.0f, 0.0f));
+    BRLObolRtPickResult sectionPick;
+    if (!pickCache.pickRay(sectionPick,
+	    SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f), &sectionPlane, 1) ||
+	!sectionPick.hit || fabsf(sectionPick.distance - 5.0f) > 1.0e-5f ||
+	fabsf(sectionPick.point[2]) > 1.0e-5f ||
+	sectionPick.normal[2] > -0.9f ||
+	sectionPick.detail.getPrimitiveIndex() != -1) {
+	printf("FAIL: RT exact pick did not realize a cut-plane section hit\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
+    const SbPlane removePlane(SbVec3f(0.0f, 0.0f, 1.0f),
+	SbVec3f(0.0f, 0.0f, 3.0f));
+    BRLObolRtPickResult clippedMiss;
+    if (pickCache.pickRay(clippedMiss,
+	    SbVec3f(0.0f, 0.0f, 5.0f),
+	    SbVec3f(0.0f, 0.0f, -1.0f), &removePlane, 1) ||
+	clippedMiss.hit) {
+	printf("FAIL: RT exact pick selected geometry removed by cut plane\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
     BRLObolRtPickResult miss;
     if (pickCache.pickRay(miss,
 			  SbVec3f(10.0f, 10.0f, 5.0f),

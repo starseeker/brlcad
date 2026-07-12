@@ -236,87 +236,11 @@ calc_adc_dst(struct mged_state *s, struct bv_adc_state *adc)
 }
 
 
-static void
-draw_ticks(struct mged_state *s, struct bv_adc_state *adc, fastf_t angle)
-{
-    fastf_t c_tdist;
-    fastf_t d1, d2;
-    fastf_t t1, t2;
-    fastf_t x1, Y1;       /* not "y1", due to conflict with math lib */
-    fastf_t x2, y2;
-
-    /*
-     * Position tic marks from dial 9.
-     */
-    /* map -2048 - 2047 into 0 - 2048 * sqrt (2) */
-    /* Tick distance */
-    c_tdist = ((fastf_t)(adc->dv_dist) + RT_VIEW_MAX) * M_SQRT1_2;
-
-    d1 = c_tdist * cos (angle);
-    d2 = c_tdist * sin (angle);
-    t1 = 20.0 * sin (angle);
-    t2 = 20.0 * cos (angle);
-
-    /* Quadrant 1 */
-    x1 = adc->dv_x + d1 + t1;
-    Y1 = adc->dv_y + d2 - t2;
-    x2 = adc->dv_x + d1 -t1;
-    y2 = adc->dv_y + d2 + t2;
-    if (clip(&x1, &Y1, &x2, &y2) == 0) {
-	dm_draw_line_2d(DMP,
-			GED2PM1(x1), GED2PM1(Y1) * dm_get_aspect(DMP),
-			GED2PM1(x2), GED2PM1(y2) * dm_get_aspect(DMP));
-    }
-
-    /* Quadrant 2 */
-    x1 = adc->dv_x - d2 + t2;
-    Y1 = adc->dv_y + d1 + t1;
-    x2 = adc->dv_x - d2 - t2;
-    y2 = adc->dv_y + d1 - t1;
-    if (clip (&x1, &Y1, &x2, &y2) == 0) {
-	dm_draw_line_2d(DMP,
-			GED2PM1(x1), GED2PM1(Y1) * dm_get_aspect(DMP),
-			GED2PM1(x2), GED2PM1(y2) * dm_get_aspect(DMP));
-    }
-
-    /* Quadrant 3 */
-    x1 = adc->dv_x - d1 - t1;
-    Y1 = adc->dv_y - d2 + t2;
-    x2 = adc->dv_x - d1 + t1;
-    y2 = adc->dv_y - d2 - t2;
-    if (clip (&x1, &Y1, &x2, &y2) == 0) {
-	dm_draw_line_2d(DMP,
-			GED2PM1(x1), GED2PM1(Y1) * dm_get_aspect(DMP),
-			GED2PM1(x2), GED2PM1(y2) * dm_get_aspect(DMP));
-    }
-
-    /* Quadrant 4 */
-    x1 = adc->dv_x + d2 - t2;
-    Y1 = adc->dv_y - d1 - t1;
-    x2 = adc->dv_x + d2 + t2;
-    y2 = adc->dv_y - d1 + t1;
-    if (clip (&x1, &Y1, &x2, &y2) == 0) {
-	dm_draw_line_2d(DMP,
-			GED2PM1(x1), GED2PM1(Y1) * dm_get_aspect(DMP),
-			GED2PM1(x2), GED2PM1(y2) * dm_get_aspect(DMP));
-    }
-}
-
-
-/**
- * Compute and display the angle/distance cursor.
- */
 void
-adcursor(struct mged_state *s)
+mged_adc_state_refresh(struct mged_state *s)
 {
     struct bv_adc_state adc_record;
     struct bv_adc_state *adc = &adc_record;
-    fastf_t x1, Y1;	/* not "y1", due to conflict with math lib */
-    fastf_t x2, y2;
-    fastf_t x3, y3;
-    fastf_t x4, y4;
-    fastf_t d1, d2;
-    fastf_t angle1, angle2;
 
     if (!mged_dm_adc_state_get(s->mged_curr_dm, adc))
 	return;
@@ -325,74 +249,6 @@ adcursor(struct mged_state *s)
     calc_adc_a1(s, adc);
     calc_adc_a2(s, adc);
     calc_adc_dst(s, adc);
-
-    dm_set_fg(DMP,
-		   color_scheme->cs_adc_line[0],
-		   color_scheme->cs_adc_line[1],
-		   color_scheme->cs_adc_line[2], 1, 1.0);
-    dm_set_line_attr(DMP, mged_variables->mv_linewidth, 0);
-
-    /* Horizontal */
-    dm_draw_line_2d(DMP,
-		    GED2PM1(RT_VIEW_MIN), GED2PM1(adc->dv_y) * dm_get_aspect(DMP),
-		    GED2PM1(RT_VIEW_MAX), GED2PM1(adc->dv_y) * dm_get_aspect(DMP));
-
-    /* Vertical */
-    dm_draw_line_2d(DMP,
-		    GED2PM1(adc->dv_x), GED2PM1(RT_VIEW_MAX),
-		    GED2PM1(adc->dv_x), GED2PM1(RT_VIEW_MIN));
-
-    angle1 = adc->a1 * DEG2RAD;
-    angle2 = adc->a2 * DEG2RAD;
-
-    /* sin for X and cos for Y to reverse sense of knob */
-    d1 = cos (angle1) * 8000.0;
-    d2 = sin (angle1) * 8000.0;
-    x1 = adc->dv_x + d1;
-    Y1 = adc->dv_y + d2;
-    x2 = adc->dv_x - d1;
-    y2 = adc->dv_y - d2;
-
-    x3 = adc->dv_x + d2;
-    y3 = adc->dv_y - d1;
-    x4 = adc->dv_x - d2;
-    y4 = adc->dv_y + d1;
-
-    dm_draw_line_2d(DMP,
-		    GED2PM1(x1), GED2PM1(Y1) * dm_get_aspect(DMP),
-		    GED2PM1(x2), GED2PM1(y2) * dm_get_aspect(DMP));
-    dm_draw_line_2d(DMP,
-		    GED2PM1(x3), GED2PM1(y3) * dm_get_aspect(DMP),
-		    GED2PM1(x4), GED2PM1(y4) * dm_get_aspect(DMP));
-
-    d1 = cos(angle2) * 8000.0;
-    d2 = sin(angle2) * 8000.0;
-    x1 = adc->dv_x + d1;
-    Y1 = adc->dv_y + d2;
-    x2 = adc->dv_x - d1;
-    y2 = adc->dv_y - d2;
-
-    x3 = adc->dv_x + d2;
-    y3 = adc->dv_y - d1;
-    x4 = adc->dv_x - d2;
-    y4 = adc->dv_y + d1;
-
-    dm_set_line_attr(DMP, mged_variables->mv_linewidth, 1);
-    dm_draw_line_2d(DMP,
-		    GED2PM1(x1), GED2PM1(Y1) * dm_get_aspect(DMP),
-		    GED2PM1(x2), GED2PM1(y2) * dm_get_aspect(DMP));
-    dm_draw_line_2d(DMP,
-		    GED2PM1(x3), GED2PM1(y3) * dm_get_aspect(DMP),
-		    GED2PM1(x4), GED2PM1(y4) * dm_get_aspect(DMP));
-    dm_set_line_attr(DMP, mged_variables->mv_linewidth, 0);
-
-    dm_set_fg(DMP,
-		   color_scheme->cs_adc_tick[0],
-		   color_scheme->cs_adc_tick[1],
-		   color_scheme->cs_adc_tick[2], 1, 1.0);
-    draw_ticks(s, adc, 0.0);
-    draw_ticks(s, adc, angle1);
-    draw_ticks(s, adc, angle2);
     mged_dm_adc_state_set(s->mged_curr_dm, adc);
 }
 

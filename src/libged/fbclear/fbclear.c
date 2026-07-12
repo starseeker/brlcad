@@ -37,14 +37,22 @@
 #  include <winsock.h>
 #endif
 
-#include "dm.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
 #include "bv.h"
 #include "bu/str.h"
 
 
 #define FB_CONSTRAIN(_v, _a, _b) \
     (((_v) > (_a)) ? ((_v) < (_b) ? (_v) : (_b)) : (_a))
+
+static int
+fbclear_apply(struct imgstream_fb *fb, void *userdata)
+{
+    return imgstream_fb_clear(fb, (const unsigned char *)userdata) == 0 ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
 
 int
 ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
@@ -58,16 +66,8 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, "no display manager currently active");
-	return BRLCAD_ERROR;
-    }
-
-    struct fb *fbp = dm_get_fb(dmp);
-
-    if (!fbp) {
-	bu_vls_printf(gedp->ged_result_str, "display manager does not have a framebuffer");
+    if (!view_ctx) {
+	bu_vls_printf(gedp->ged_result_str, "no current view set");
 	return BRLCAD_ERROR;
     }
 
@@ -104,19 +104,16 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    ret = fb_clear(fbp, clearColor);
-
-    if (ret)
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	fbclear_apply, clearColor, 1);
+    if (ret != BRLCAD_OK) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "unable to clear the active Obol framebuffer");
 	return BRLCAD_ERROR;
+    }
 
     if (reset_mode)
 	bv_framebuffer_mode_set(bv_context_view((struct bv_context *)view_ctx), 0);
-
-    (void)dm_draw_begin(dmp);
-    fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-    (void)dm_draw_end(dmp);
-
-    dm_set_native_repaint_pending(dmp, 1);
 
     return BRLCAD_OK;
 }

@@ -44,8 +44,7 @@ to_is_viewable(void *view_ctx)
 {
     int result_int;
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    const struct bu_vls *pathvls = dmp ? dm_get_pathname(dmp) : NULL;
+    const struct bu_vls *pathvls = tclcad_view_pathname_vls(view_ctx);
     if (!pathvls || !bu_vls_strlen(pathvls)) {
 	return 0;
     }

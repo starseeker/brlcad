@@ -4572,7 +4572,7 @@ The “prj_add” command appends information to the specified _shaderfile_. The
 
 
 ps [_-f font_] [_-t title_] [_-c creator_] [__-s size_in_inches__] [__-l line_width__] output_file::
-The “ps” command temporarily attaches the _Postscript_ display manager and outputs the current MGED display to the specified __output_file__ in _PostScript_ format. The _-f_ option allows the _font_ to be user-specified. The _-t_ option allows the user to provide a title (the default is “No Title”). The _-c_ option allows the user to specify the creator of the file (the default is “LIBDM dm-ps”). The _s_ specifies the size of the drawing in inches. The _l_ specifies the width of the lines drawn.
+The “ps” command exports the retained current view to the specified __output_file__ in _PostScript_ format. The _-f_ option allows the _font_ to be user-specified. The _-t_ option allows the user to provide a title (the default is “No Title”). The _-c_ option allows the user to specify the creator of the file. The _s_ specifies the size of the drawing in inches. The _l_ specifies the width of the lines drawn.
 
 
 Examples:::

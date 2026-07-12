@@ -15,7 +15,7 @@ set(
 
 brlcad_addlib(librtuif "${LIBRTUIF_SOURCES}" "" "${CMAKE_CURRENT_SOURCE_DIR}"
   STATIC NO_INSTALL NO_STATIC_LINK_TEST
-  PRIVATE_LIBS librt ${M_LIBRARY}
+  PRIVATE_LIBS librt libimgstream ${M_LIBRARY}
 )
 
 list(APPEND LIBRTUIF_SOURCES main.c)
@@ -33,7 +33,7 @@ set(
   ${RT_STD_LIBS}
   librt
   libnmg
-  libdm
+  libimgstream
   liboptical
   libicv
   ${M_LIBRARY}
@@ -41,22 +41,19 @@ set(
 
 brlcad_adddata(rtexample.c sample_applications)
 
-brlcad_addexec(rtexample "rtexample.c" "librt;libdm;liboptical;libicv" NO_INSTALL)
+brlcad_addexec(rtexample "rtexample.c" "librt;liboptical;libicv" NO_INSTALL)
 
-brlcad_addexec(reshoot "reshoot.c" "Threads::Threads;librt;libdm;liboptical;libicv" FOLDER Rt)
+brlcad_addexec(reshoot "reshoot.c" "Threads::Threads;librt;liboptical;libicv" FOLDER Rt)
 target_include_directories(reshoot BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 brlcad_addexec(rtshot "rtshot.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtshot BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtshot dm_plugins)
 
-brlcad_addexec(rtscale "read-rtlog.c;rtscale.c" "Threads::Threads;librt;libdm;liboptical;libicv;${M_LIBRARY}" FOLDER Rt)
+brlcad_addexec(rtscale "read-rtlog.c;rtscale.c" "Threads::Threads;librt;liboptical;libicv;${M_LIBRARY}" FOLDER Rt)
 target_include_directories(rtscale BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtscale dm_plugins)
 
 brlcad_addexec(rt "${LIBRTUIF_SOURCES};view.c" "${OPENCL_LIBS};${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rt BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rt dm_plugins dm-txt)
 
 brlcad_addexec(rtarea "${LIBRTUIF_SOURCES};viewarea.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtarea BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -68,7 +65,6 @@ set_property(TARGET rtcheck APPEND PROPERTY COMPILE_DEFINITIONS "RT_TXT_OUTPUT")
 
 brlcad_addexec(rtedge "${LIBRTUIF_SOURCES};viewedge.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtedge BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtedge dm_plugins)
 
 brlcad_addexec(rtg3 "${LIBRTUIF_SOURCES};viewg3.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtg3 BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -80,9 +76,8 @@ set_property(TARGET rthide APPEND PROPERTY COMPILE_DEFINITIONS "RT_TXT_OUTPUT")
 
 brlcad_addexec(rtsil "${LIBRTUIF_SOURCES};viewsil.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtsil BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtxray dm_plugins)
 
-brlcad_addexec(rtsurf "rtsurf.c;rtsurf_hits.cpp" "libanalyze;librt;libdm;liboptical;libicv")
+brlcad_addexec(rtsurf "rtsurf.c;rtsurf_hits.cpp" "libanalyze;librt;liboptical;libicv")
 target_include_directories(rtsurf BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 brlcad_addexec(rtweight "${LIBRTUIF_SOURCES};viewweight.c" "libanalyze;${RT_STD_LIBS}" FOLDER Rt)
@@ -91,17 +86,14 @@ set_property(TARGET rtweight APPEND PROPERTY COMPILE_DEFINITIONS "RT_TXT_OUTPUT"
 
 brlcad_addexec(rtxray "${LIBRTUIF_SOURCES};viewxray.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtxray BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtxray dm_plugins)
 
 brlcad_addexec(rtdepth "${LIBRTUIF_SOURCES};viewdepth.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtdepth BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtdepth dm_plugins)
 
 set(
   rt_ignore_files
   CMakeLists.txt
   ext.h
-  libfb-dummy.c
   main.c
   rtuif.h
   rtsurf_hits.h

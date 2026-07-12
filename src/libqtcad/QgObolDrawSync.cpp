@@ -60,7 +60,21 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
 	    obol, 1))
 	return 0;
 
-    if (!ged_view_context_is_independent(sync_txn.view)) {
+    if (!ged_view_context_is_independent(sync_txn.view) &&
+	ged_draw_obol_controller(gedp) != obol) {
+	display->need_update(QG_VIEW_REFRESH);
+	return 1;
+    }
+
+    const int transaction_changed = result && result->status >= 0 &&
+	(result->scene_revision_after != result->scene_revision_before ||
+	 result->affected_groups > 0 || result->affected_shapes > 0 ||
+	 result->stale_count > 0 || result->redrawn_count > 0);
+
+    /* libged's database-source draw provider has already published a
+     * successful draw to the primary endpoint before observers run. */
+    if (sync_txn.kind == GED_DRAW_TXN_DRAW && result && result->status > 0 &&
+	ged_draw_obol_controller(gedp) == obol) {
 	display->need_update(QG_VIEW_REFRESH);
 	return 1;
     }
@@ -68,9 +82,9 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
     SoBRLSceneController *scene = obol->getSceneController();
     const int changed = ged_draw_obol_scene_sync_transaction(gedp, &sync_txn,
 	    result, scene);
-    if (changed)
+    if (changed || transaction_changed)
 	display->need_update(QG_VIEW_REFRESH);
-    return changed;
+    return changed || transaction_changed;
 }
 
 // Local Variables:

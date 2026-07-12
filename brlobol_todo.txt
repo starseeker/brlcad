@@ -23,7 +23,12 @@ display hosts.  FAST and QUALITY OSMesa wireframe modes are available.
 The remaining architectural compatibility layer is libdm.  libtclcad/MGED
 still use portions of its command, display, and framebuffer surface.  The
 goal is to replace those responsibilities rather than reproduce `struct dm`
-under a new name.
+under a new name.  MGED and TclCAD now create libbrlobol display endpoints
+directly; Tk/Togl and TkPhoto widget, presentation, context, capture, and
+lifetime logic resides in libtclcad host factories.  Each qtcad `QgView` owns
+an embedded endpoint, and qged uses that same endpoint host for visible scene
+and framebuffer composition.  GED `dm` is endpoint-native and scene
+screengrab selects views with `-V`; neither path includes or inspects libdm.
 
 Required Architecture
 ---------------------
@@ -66,13 +71,20 @@ E1. Keep the dependency and ownership boundaries mechanically visible.
     responsibility moves so deleted dependencies, global hosts, immediate DM
     drawing, and alternate scene publication cannot return unnoticed.
 
+    Treat an endpoint-owned controller attached to GED as a fully capable
+    authoritative scene.  Controller ownership governs destruction only; it
+    must not gate scene queries, mutations, redraw, bounds, or material
+    refresh.  libged may create an owned controller only when no scene is
+    attached.
+
 E2. Isolate compatibility at narrow, deletable boundaries.
 
     Move surviving `struct dm`, callback-table, and `struct fb` access behind
     explicitly named migration adapters.  New endpoint, host, renderer, input,
     and image-stream code must not include libdm headers.  Each adapter needs a
     caller inventory and a deletion condition tied to the numbered task that
-    replaces it.
+    replaces it.  The `dm-tkobol` adapter is deleted; do not reintroduce a
+    graphical DM wrapper around Tk endpoint hosts.
 
 E3. Factor common host and presentation mechanics before adding engines.
 
@@ -100,34 +112,46 @@ E5. Delete superseded code in the same change that removes its final caller.
 Priority 0: Display Endpoints and Host Factories
 ------------------------------------------------
 
-1. Define the display endpoint API.
+1. Complete display endpoint integration.
 
-   Add an opaque `brlobol_display_endpoint_t`, with a C++ wrapper, binding one
-   `BRLObolViewController`, one render-engine policy, and zero or one host
-   instance.  Add a dedicated endpoint slot to GED view state; do not overload
-   the legacy display-manager slot.
+   The endpoint lifecycle, renderer policy, GED per-view slot, frame request,
+   resize, capture, and host-factory dispatch are implemented.  Complete typed
+   property access and migrate applications from independent controller/host
+   ownership to the endpoint identity.
 
-   Specify controller ownership, host-factory retention, stream detachment,
-   callback shutdown, and destruction order.  Mutable state is per endpoint;
-   there must be no process-global active display host.
+   qged `QgView` and `QgQuadView` now use an embedded endpoint as the visible
+   controller/host identity, including framebuffer presentation.  MGED and
+   TclCAD likewise create and own endpoints directly.  Continue the
+   application inventory and typed-property work;
+   no application should create a parallel host for an endpoint-owned canvas.
+
+   Preserve stream detachment, callback shutdown, and destruction order while
+   replacing the transitional direct host binding with retained factory tokens.
+   Mutable state is per endpoint; there must be no process-global active
+   display host.
 
    Exit condition: endpoint status, capture, and typed property access work in
    DM-less qged, Tk-hosted MGED, and headless tests.
 
-2. Replace single-host registration with a versioned factory ABI.
+2. Complete host-factory conversion.
 
-   Use a copied, size/version-checked callback table with stable name,
-   priority, capabilities, probe/create/destroy, controller binding, frame
-   request, resize, capture, polling, input delivery, and pixel presentation.
-   Registration returns a retained token; unregister must reject live use.
+   The copied, versioned C factory ABI, capability/priority selection, retained
+   tokens, live-use unregister rejection, endpoint instance ownership, and
+   built-in headless factory are implemented.  Extend the callback surface as
+   needed for input and progressive pixel presentation without introducing
+   toolkit or C++ types into the ABI.
 
    Initial capabilities include TOPLEVEL, EMBEDDED, SYSTEM_GL, PIXEL_PRESENT,
    PROGRESSIVE_PRESENT, INPUT, READBACK, FRAMEBUFFER_PRESENT, MULTI_VIEW, and
    THREAD_AFFINE.  Toolkit calls run on the host thread.  Worker threads may
    only enqueue frame requests, and no callback may occur after close returns.
 
-   Refactor the existing headless, Tk/Togl, TkPhoto, Qt GL, and Qt image hosts
-   into factories.  A visible open with no compatible host fails cleanly.
+   Qt software and system-GL factories now serve top-level and borrowed
+   existing canvases; qged `QgView` uses the embedded mode.  Tk system-GL/Togl
+   and software/TkPhoto factories serve top-level and embedded views directly.
+   Complete input/progressive callback coverage
+   and stress simultaneous teardown with active frame and image-stream work.
+   A visible open with no compatible host must fail cleanly.
 
    Exit condition: simultaneous endpoints use isolated hosts and teardown is
    safe with active rendering and image streams.
@@ -162,10 +186,30 @@ Priority 0: Render Engines and Typed Policy
    SVG are export actions, not render engines.  `ert` remains a separate
    command-driven render stream rather than an alias for interactive `rt`.
 
+   Investigate Obol/Coin stereo before exposing it as endpoint policy.
+   `SoRenderManager` declares anaglyph, interleaved, and separate/quad-buffer
+   modes plus an eye offset, but initial runtime checks found that interleaved
+   rendering can stall under Xvfb/Togl and anaglyph capture can lose the scene
+   output.  Coin aliases separate output to quad-buffer mode, and its current
+   stereo test only round-trips the mode enum before rendering in mono.  Keep
+   MGED mono and do not restore per-eye scene replay.  If this feature is
+   revisited, validate real hardware and software images and capability failure
+   behavior before adding typed `renderer.stereo.*` properties.
+
    Exit condition: engine selection is independent of toolkit host selection,
    and a headless endpoint can exercise every compatible engine.
 
 5. Replace libdm option tables with typed endpoint properties.
+
+   The stable C/C++ property registry, tagged values, descriptors, strict
+   access/type/range errors, and initial endpoint/controller properties are
+   implemented for renderer selection, viewport size/DPR, background gradient,
+   host identity, FAST/QUALITY software wire policy, renderer depth testing and
+   lighting/transparency, retained view-aligned clipping planes, and libbv
+   z-clipping enable state through an external-owner callback.  Extend
+   the same registry at the owning boundary rather than adding toolkit-specific
+   option parsers.  Obol depth cue is renderer-owned haze policy.  GED
+   `dm get/set` no longer reads or mutates backend `bu_structparse` tables.
 
    Each property needs a stable name, type, allowed range/values, mutability,
    capability predicate, getter, and setter.  Initial ownership is:
@@ -201,38 +245,24 @@ Priority 0: Render Engines and Typed Policy
    cancels stale work; unchanged geometry is retained; headless image results
    are deterministic at a fixed final quality.
 
-Priority 1: Replace the libdm Command and Compatibility Surface
----------------------------------------------------------------
-
-7. Convert the GED `dm` command to endpoint operations.
-
-   Preserve the command name for scripts, with this target surface:
-
-       dm status [-V view]
-       dm list [endpoints|hosts|renderers]
-       dm open [-V view] --host name --renderer auto|hw|sw|rt|none
-       dm close [-V view]
-       dm host [-V view]
-       dm renderer [-V view] [auto|hw|sw|rt|none|diagnostic]
-       dm get [-V view] [property ...]
-       dm set [-V view] property value
-       dm diagnostics [-V view]
-
-   `-V` is the canonical view selector.  Temporary aliases may translate
-   `attach`, `type`, `types`, `initmsg`, `bg`, and `-d` into typed endpoint
-   operations, but may not instantiate compatibility renderers.  Screengrab
-   must use endpoint capture exclusively.
-
-   Exit condition: qged and MGED control equivalent endpoint state through the
-   same command without inspecting a DM plugin call table.
+Priority 1: Remove the libdm Compatibility Surface
+--------------------------------------------------
 
 8. Complete framebuffer separation.
 
-   Replace `imgstream_fb_display_host_set` and other single global host state
-   with per-open endpoint/factory presentation.  Remove `dm_get_fb` fallbacks
-   from `ert`, screengrab, and libged image commands after host coverage exists.
-   Move remaining standalone `fb_*` compatibility APIs and utilities onto an
-   imgstream compatibility library.
+   The standalone server and reusable remote client are imgstream-native.
+   TCP and local IPC use explicit per-open authentication/TLS policy and share
+   exact pixel, view, cursor, and teardown coverage.  The standalone `src/fb`
+   programs, signal display, histogram viewers, and raw image utilities are
+   now DM-independent and no longer link libdm or load DM plugins.
+   The RT family, remrt/rtsrv, and ART now share imgstream framebuffer state;
+   RT no longer loads DM plugins, and ART publishes complete RGB tiles instead
+   of individual legacy pixels.  GED `fb2pix`, `pix2fb`, `png2fb`, `fbclear`,
+   and image `overlay -F` now use serialized endpoint-owned imgstream access;
+   their headless integration test covers exact import/export and presentation.
+   The uncalled `plot3-dm` sample and Tcl shell are retired in favor of the
+   retained Obol `overlay` importer.  Runtime-verify ART when an
+   Appleseed-enabled build is available.
 
    Exit condition: GUI framebuffer presentation and fbserv do not require
    `struct dm`; memory, file, and remote streams remain GUI-independent.
@@ -244,10 +274,98 @@ Priority 1: Replace the libdm Command and Compatibility Surface
    ordering.  Delete their post-sync immediate DM calls rather than
    implementing them in the endpoint API.
 
-   Replace plot/PS plugins with retained-scene export actions and convert
-   `plot3-dm` to a small Obol viewer/importer if it remains useful.  Remove
-   `dm-tkobol`, `dm-obol`, the DM plugin loader, and the rendering call table
-   once their callers are gone.
+   Plot3 and PostScript export are retained GED actions, and the unreachable
+   `dm-plot`/`dm-ps` modules are deleted.  MGED's `postscript` command now
+   delegates directly to the retained exporter, including its documented
+   creator, line-width, size, and z-clipping options.  Remove the thin
+   The `dm-tkobol` and `dm-obol` endpoint adapters are deleted.  Remove the DM
+   plugin loader and rendering call table once their remaining callers are gone.
+
+   MGED no longer build-depends on `dm_plugins` or reports loader diagnostics;
+   its built-in `tkobol` host is registered directly by libtclcad.
+   Grid, ADC, model/view axes, and center-dot refresh no longer execute null
+   immediate-DM drawing after retained publication; anchored ADC state is
+   recomputed before the retained faceplate sync.  MGED edit axes now use the
+   renderer-neutral retained HUD-axes API, eliminating the final immediate
+   axes call.
+   The rubber-band rectangle likewise publishes through retained HUD lines;
+   its immediate line/color calls are deleted.
+   MGED title/status text, illuminated paths, edit markers, legacy menu text
+   and separators, and slider text and rails now contribute to one retained
+   per-view HUD batch.  The pivot guard rejects immediate DM drawing in
+   `titles.c`, `menu.c`, and `scroll.c`.  Endpoint screengrab preserves the
+   documented bottom-left row order through ICV, and the MGED smoke test now
+   verifies gradient orientation rather than accepting an arbitrary nonempty
+   image.  TclCAD `pix` and `png` capture likewise read the selected view's
+   endpoint directly for both Tk system-GL and TkPhoto/OSMesa hosts; they no
+   longer inspect DM dimensions, make a DM context current, or fall back to a
+   DM display-image callback.  The Tk host smoke test verifies both formats on
+   both render paths.
+   TclCAD viewport math now consumes endpoint-host dimensions through the
+   canonical `bview`; toolkit-initiated resizes are queried from the host
+   factory, and DM width/height/aspect mirrors are rejected in TclCAD input,
+   polygon, wrapper, and axes paths.
+   The TclCAD `fontsize` command likewise updates retained parameter, scale,
+   and center-dot HUD state rather than a toolkit-specific DM font mirror.
+   MGED's main refresh loop likewise consumes one retained repaint, publishes
+   scene, faceplate, and framebuffer state, synchronizes the endpoint camera,
+   and requests one endpoint frame.  It no longer brackets frames, changes
+   contexts/z-buffer state, replays framebuffer rectangles, or mirrors native
+   repaint flags through DM.
+   Its former `dozoom` stereo/DM replay is now a mono retained-scene refresh;
+   future stereo support must be an endpoint/renderer capability rather than
+   multiple DM eye passes.
+   Headless MGED smoke tests bootstrap with the explicit no-display adapter
+   and open their endpoint host directly; they no longer load `dm-obol` before
+   replacing it.
+   MGED Configure events, motion interaction, and rubber-band selection now
+   use canonical `bview` dimensions and coordinate transforms rather than
+   libdm width, height, aspect, and pixel-conversion mirrors.  Its retained
+   parameter state likewise owns faceplate font size; refresh preserves that
+   policy and title batching no longer reads the libdm font mirror.  MGED's
+   `dm m`, ADC setup, z-clipped query ray, and `dm size` operations now consume
+   the same retained view state; endpoint resize replaces mutation of libdm
+   dimension fields, and draw no longer bootstraps the view from those fields.
+   The uncalled libdm structparse hook table is deleted; typed endpoint `dm set`
+   writes owning view state directly rather than triggering a callback that
+   copies the libdm option value back into the view.  The unreachable legacy
+   `common_dm bg` implementation is also deleted; background get/set always
+   uses the endpoint-native GED command.  The unreferenced backend-internal
+   `dm getx` diagnostic is removed rather than reproducing plugin internals in
+   the endpoint API; typed `dm get` and `dm diagnostics` are the supported
+   inspection surfaces.  Perspective mutation is now exclusively retained
+   `bview` state, and the obsolete startup workaround that re-wrote a DM's
+   background to itself is removed rather than carried into Obol.  MGED now
+   owns each display's logical pathname and native event id; event routing,
+   release lookup, command-window ties, BOT dialogs, geometry preferences, and
+   Tcl status variables no longer query those identities from libdm.
+   MGED and TclCAD now create Tk hardware or software endpoints and hosts
+   directly, own toolkit path/native identities at the application/view layer,
+   and destroy the endpoint through GED view ownership.  `dm-tkobol` and its
+   built-in backend registration are deleted.  Dedicated tests cover MGED
+   top-level attach/resize/capture/release and TclCAD top-level, embedded,
+   hardware, software, input, capture, and teardown paths.
+   TclCAD refresh no longer replays the DM-era depth-mask, framebuffer
+   refresh, and draw-begin/end sequence.  It applies one retained redraw,
+   publishes endpoint-owned framebuffer state, synchronizes the endpoint
+   camera, and requests one host frame; the pivot guard rejects restoration of
+   those immediate refresh calls.
+   TclCAD background, lighting, transparency, depth-test, and zclip commands
+   now use libbv/typed endpoint state rather than mirroring DM flags.  The
+   legacy TclCAD `bounds` command and Archer `bounds_all` projection workaround
+   are deleted.  Obol owns an explicit retained clipping-plane pair.  Mouse
+   rays are DM-independent, but retained and exact candidates share those
+   visibility planes; librt refinement clips each partition interval with the
+   individual-ray equivalent of `rt -k`.  Archer face selection consumes the
+   central typed Obol pick detail instead of launching a private Tcl raytrace.
+   Archer's
+   unused ZClip percent/max preference UI and persistence are removed;
+   front-most BOT selection remains a boolean interaction policy.
+   The MGED progressive-LoD smoke deterministically drains the delayed proxy
+   batch before final meshes, avoiding a timing-dependent requirement to
+   sample an OBB that was still queued.
+   The unreachable logging-only `dm-txt` module is retired independently of
+   the still-supported `/dev/debug` framebuffer diagnostic.
 
    Exit condition: adding a new production use of an immediate DM callback or
    graphical DM plugin is rejected by the pivot guard.
@@ -257,6 +375,12 @@ Priority 1: Replace the libdm Command and Compatibility Surface
     Audit libtclcad, MGED, rtwizard, Archer, RT tools, ART/ADRT, framebuffer
     utilities, and image commands.  Migrate required behavior to endpoints,
     host factories, Obol export actions, or libimgstream; delete unused paths.
+
+    Correct the vendored Obol package target to export its OSMesa dependency
+    transitively.  libbrlobol currently carries a direct OSMesa link anchor so
+    existing Obol packages remain loadable under `--as-needed`; delete that
+    anchor and direct dependency once the corrected Obol package is the
+    required baseline.
 
     Exit condition: drawing, window hosting, input, readback, and framebuffer
     streaming build and run without libdm.  Any unrelated surviving libdm API
@@ -341,7 +465,7 @@ Core drawing and interaction checks:
 
 Host and streaming checks:
 
-* `ctest --test-dir .build -R '^(test_qged_obol_fbserv|regress-qged-ert|gsh_obol_(smoke|ert_smoke|progressive_lod)|mged_obol_(smoke|ert_smoke|progressive_lod))$' --output-on-failure`
+* `ctest --test-dir .build -R '^(tclcad_test_tkobol_widget_smoke|test_qged_obol_fbserv|regress-qged-ert|gsh_obol_(smoke|ert_smoke|progressive_lod)|mged_obol_(smoke|ert_smoke|progressive_lod))$' --output-on-failure`
 * `ctest --test-dir .build -R '^test_qtcad_obol_' --output-on-failure`
 
 Slow progressive-LoD cases remain opt-in through `BRLCAD_RUN_SLOW_TESTS=1`.

@@ -93,6 +93,7 @@ struct QgCanvasState {
 	                                       external caller-owned legacy view     */
     qg_legacy_view *local_v = nullptr;     /* widget-owned view (canvas owns)   */
     BRLObolViewController *obol = nullptr; /* Obol-canonical view controller */
+    bool owns_obol = false;
 
     /* ---- hash tracking for incremental updates ---- */
     unsigned long long prev_dhash = 0;
@@ -276,6 +277,7 @@ qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
      * their dedicated OSMesa manager explicitly to each offscreen render. */
     brlobol_init(qgcanvas_obol_context_manager(false));
     s.obol = new BRLObolViewController();
+    s.owns_obol = true;
 
     SoSeparator *root = new SoSeparator;
     SoOrthographicCamera *camera = new SoOrthographicCamera;
@@ -292,8 +294,38 @@ qgcanvas_destroy_obol(QgCanvasState &s)
 {
     delete s.offscreen_renderer;
     s.offscreen_renderer = nullptr;
-    delete s.obol;
+    if (s.owns_obol)
+	delete s.obol;
     s.obol = nullptr;
+    s.owns_obol = false;
+}
+
+/** Replace the canvas-owned controller with a borrowed endpoint controller. */
+static inline void
+qgcanvas_bind_obol_controller(QgCanvasState &s, const QWidget *w,
+	BRLObolViewController *controller)
+{
+    if (s.obol == controller)
+	return;
+
+    delete s.offscreen_renderer;
+    s.offscreen_renderer = nullptr;
+    if (s.owns_obol)
+	delete s.obol;
+    s.obol = controller;
+    s.owns_obol = false;
+    s.obol_paint_initialized = false;
+
+    if (!s.obol)
+	return;
+    if (!s.obol->getSceneRoot())
+	s.obol->setSceneRoot(new SoSeparator);
+    if (!s.obol->getCamera())
+	s.obol->setCamera(new SoOrthographicCamera);
+    qgcanvas_sync_obol_viewport(s, w);
+    qgcanvas_sync_obol_camera(s);
+    qgcanvas_sync_obol_background(s);
+    s.obol->requestRender("qt-controller-bind");
 }
 
 static inline bool

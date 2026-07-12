@@ -21,13 +21,14 @@ set(
   dm-generic.c
   dodraw.c
   doevent.c
-  dozoom.c
+  scene_refresh.c
   edsol.c
   f_db.c
   facedef.c
   fbserv.c
   grid.c
   history.c
+  hud.c
   mater.c
   menu.c
   mged.c
@@ -51,6 +52,8 @@ set(
   vparse.c
   wdb_obj.c
 )
+
+cmakefiles(hud.h)
 
 if(HAVE_WINDOWS_H)
   # To associate an icon with the application for Windows (needed
@@ -86,7 +89,7 @@ if(BRLCAD_ENABLE_TCL)
     target_compile_definitions(mged PRIVATE HAVE_TK=1)
   endif(TK_LIBRARY)
   target_include_directories(mged BEFORE PRIVATE ${MGED_INCLUDE_DIRS})
-  add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
+  add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld)
   if(TARGET rt)
     add_dependencies(mged rt)
   endif(TARGET rt)
@@ -100,6 +103,18 @@ if(BRLCAD_ENABLE_TCL)
 	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
 	      "${CMAKE_CURRENT_BINARY_DIR}")
 	    set_property(TEST mged_obol_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+
+	    if(UNIX)
+	      find_program(MGED_XVFB_RUN_EXECUTABLE xvfb-run)
+	      if(MGED_XVFB_RUN_EXECUTABLE)
+		brlcad_add_test(NAME mged_tkobol_attach_smoke
+		  COMMAND ${MGED_XVFB_RUN_EXECUTABLE} -a ${SH_EXEC}
+		  "${CMAKE_CURRENT_SOURCE_DIR}/mged_tkobol_attach_smoke.sh"
+		  "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+		  "${CMAKE_CURRENT_BINARY_DIR}")
+		set_property(TEST mged_tkobol_attach_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+	      endif(MGED_XVFB_RUN_EXECUTABLE)
+	    endif(UNIX)
 
 	    brlcad_add_test(NAME mged_obol_ert_smoke
 	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_ert_smoke.sh"
@@ -139,6 +154,7 @@ set(
   mged_obol_ert_smoke.sh
   mged_obol_progressive_lod.sh
   mged_obol_smoke.sh
+  mged_tkobol_attach_smoke.sh
   mged.h
   mged.ico
   mged.rc

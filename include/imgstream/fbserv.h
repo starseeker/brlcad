@@ -218,6 +218,8 @@ IMGSTREAM_EXPORT int fbserv_verify_token(const char *provided, const char *expec
 
 struct bu_vls;
 struct fb;
+struct imgstream_fb;
+typedef struct imgstream_fb imgstream_fb_t;
 struct pkg_conn;
 struct pkg_listener;
 struct pkg_switch;
@@ -401,6 +403,9 @@ IMGSTREAM_EXPORT int fbserv_set_backend(struct fbserv_obj *fbsp,
 	const struct fbserv_fb_ops *ops,
 	void *ctx);
 IMGSTREAM_EXPORT void fbserv_clear_backend(struct fbserv_obj *fbsp);
+/** Install or detach an imgstream framebuffer as the protocol backend. */
+IMGSTREAM_EXPORT int imgstream_fbserv_set_framebuffer(
+	struct fbserv_obj *fbsp, imgstream_fb_t *fb);
 IMGSTREAM_EXPORT void fbserv_set_transport(struct fbserv_obj *fbsp,
 	const struct fbserv_transport_ops *ops);
 IMGSTREAM_EXPORT void fbserv_clear_transport(struct fbserv_obj *fbsp);

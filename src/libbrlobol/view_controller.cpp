@@ -39,6 +39,7 @@
 #include <vector>
 
 #include <Inventor/SbName.h>
+#include <Inventor/SbPlane.h>
 #include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
 #include <Inventor/SoViewport.h>
@@ -46,6 +47,8 @@
 #include <Inventor/elements/SoGLCacheContextElement.h>
 #include <Inventor/gl.h>
 #include <Inventor/nodes/SoCamera.h>
+#include <Inventor/nodes/SoClipPlane.h>
+#include <Inventor/nodes/SoDepthBuffer.h>
 #include <Inventor/nodes/SoDirectionalLight.h>
 #include <Inventor/nodes/SoEnvironment.h>
 #include <Inventor/nodes/SoGroup.h>
@@ -222,6 +225,12 @@ controller_render_environment_name(void)
     return "BRLObolRenderEnvironment";
 }
 
+static const char *
+controller_clip_plane_name(SbBool minimum)
+{
+    return minimum ? "BRLObolClipMinimum" : "BRLObolClipMaximum";
+}
+
 static SoGroup *
 controller_find_render_environment(SoSeparator *root)
 {
@@ -249,6 +258,36 @@ controller_configure_render_environment(SoViewport *viewport)
     SoSeparator *root = viewport->getRoot();
     SoGroup *renderEnvironment = controller_find_render_environment(root);
     if (renderEnvironment) {
+	int hasDepthBuffer = 0;
+	int hasClipMinimum = 0;
+	int hasClipMaximum = 0;
+	for (int i = 0; i < renderEnvironment->getNumChildren(); i++) {
+	    SoNode *child = renderEnvironment->getChild(i);
+	    if (child && child->isOfType(SoDepthBuffer::getClassTypeId())) {
+		hasDepthBuffer = 1;
+	    }
+	    if (child && child->isOfType(SoClipPlane::getClassTypeId())) {
+		const char *name = child->getName().getString();
+		hasClipMinimum |= strcmp(name,
+		    controller_clip_plane_name(TRUE)) == 0;
+		hasClipMaximum |= strcmp(name,
+		    controller_clip_plane_name(FALSE)) == 0;
+	    }
+	}
+	if (!hasDepthBuffer)
+	    renderEnvironment->insertChild(new SoDepthBuffer, 0);
+	if (!hasClipMinimum) {
+	    SoClipPlane *plane = new SoClipPlane;
+	    plane->setName(SbName(controller_clip_plane_name(TRUE)));
+	    plane->on = FALSE;
+	    renderEnvironment->addChild(plane);
+	}
+	if (!hasClipMaximum) {
+	    SoClipPlane *plane = new SoClipPlane;
+	    plane->setName(SbName(controller_clip_plane_name(FALSE)));
+	    plane->on = FALSE;
+	    renderEnvironment->addChild(plane);
+	}
 	const int index = root->findChild(renderEnvironment);
 	if (index > 0) {
 	    renderEnvironment->ref();
@@ -261,6 +300,11 @@ controller_configure_render_environment(SoViewport *viewport)
 
     renderEnvironment = new SoGroup;
     renderEnvironment->setName(SbName(controller_render_environment_name()));
+
+    SoDepthBuffer *depthBuffer = new SoDepthBuffer;
+    depthBuffer->test = TRUE;
+    depthBuffer->write = TRUE;
+    renderEnvironment->addChild(depthBuffer);
 
     SoEnvironment *environment = new SoEnvironment;
     environment->ambientIntensity = 0.3f;
@@ -277,7 +321,109 @@ controller_configure_render_environment(SoViewport *viewport)
     headlight->direction = SbVec3f(0.0f, 0.0f, -1.0f);
     renderEnvironment->addChild(headlight);
 
+    SoClipPlane *clipMinimum = new SoClipPlane;
+    clipMinimum->setName(SbName(controller_clip_plane_name(TRUE)));
+    clipMinimum->on = FALSE;
+    renderEnvironment->addChild(clipMinimum);
+
+    SoClipPlane *clipMaximum = new SoClipPlane;
+    clipMaximum->setName(SbName(controller_clip_plane_name(FALSE)));
+    clipMaximum->on = FALSE;
+    renderEnvironment->addChild(clipMaximum);
+
     root->insertChild(renderEnvironment, 0);
+}
+
+static SoClipPlane *
+controller_clip_plane(SoViewport *viewport, SbBool minimum)
+{
+    if (!viewport || !viewport->getRoot())
+	return NULL;
+    controller_configure_render_environment(viewport);
+    SoGroup *environment =
+	controller_find_render_environment(viewport->getRoot());
+    if (!environment)
+	return NULL;
+    const char *wanted = controller_clip_plane_name(minimum);
+    for (int i = 0; i < environment->getNumChildren(); i++) {
+	SoNode *child = environment->getChild(i);
+	if (child && child->isOfType(SoClipPlane::getClassTypeId()) &&
+	    strcmp(child->getName().getString(), wanted) == 0)
+	    return static_cast<SoClipPlane *>(child);
+    }
+    return NULL;
+}
+
+static SoDepthBuffer *
+controller_depth_buffer(SoViewport *viewport)
+{
+    if (!viewport || !viewport->getRoot())
+	return NULL;
+    controller_configure_render_environment(viewport);
+    SoGroup *environment =
+	controller_find_render_environment(viewport->getRoot());
+    if (!environment)
+	return NULL;
+    for (int i = 0; i < environment->getNumChildren(); i++) {
+	SoNode *child = environment->getChild(i);
+	if (child && child->isOfType(SoDepthBuffer::getClassTypeId()))
+	    return static_cast<SoDepthBuffer *>(child);
+    }
+    return NULL;
+}
+
+static SoLightModel *
+controller_light_model(SoViewport *viewport)
+{
+    if (!viewport || !viewport->getRoot())
+	return NULL;
+    controller_configure_render_environment(viewport);
+    SoGroup *environment =
+	controller_find_render_environment(viewport->getRoot());
+    if (!environment)
+	return NULL;
+    for (int i = 0; i < environment->getNumChildren(); i++) {
+	SoNode *child = environment->getChild(i);
+	if (child && child->isOfType(SoLightModel::getClassTypeId()))
+	    return static_cast<SoLightModel *>(child);
+    }
+    return NULL;
+}
+
+static SoEnvironment *
+controller_environment(SoViewport *viewport)
+{
+    if (!viewport || !viewport->getRoot())
+	return NULL;
+    controller_configure_render_environment(viewport);
+    SoGroup *renderEnvironment =
+	controller_find_render_environment(viewport->getRoot());
+    if (!renderEnvironment)
+	return NULL;
+    for (int i = 0; i < renderEnvironment->getNumChildren(); i++) {
+	SoNode *child = renderEnvironment->getChild(i);
+	if (child && child->isOfType(SoEnvironment::getClassTypeId()))
+	    return static_cast<SoEnvironment *>(child);
+    }
+    return NULL;
+}
+
+static SoDirectionalLight *
+controller_headlight(SoViewport *viewport)
+{
+    if (!viewport || !viewport->getRoot())
+	return NULL;
+    controller_configure_render_environment(viewport);
+    SoGroup *environment =
+	controller_find_render_environment(viewport->getRoot());
+    if (!environment)
+	return NULL;
+    for (int i = 0; i < environment->getNumChildren(); i++) {
+	SoNode *child = environment->getChild(i);
+	if (child && child->isOfType(SoDirectionalLight::getClassTypeId()))
+	    return static_cast<SoDirectionalLight *>(child);
+    }
+    return NULL;
 }
 
 static void
@@ -782,6 +928,9 @@ BRLObolViewController::BRLObolViewController(void) :
     backgroundBottom(0.0f, 0.0f, 0.0f),
     backgroundTop(0.0f, 0.0f, 0.0f),
     softwareWireMode(SOFTWARE_WIRE_AUTO),
+    transparencyEnabled(TRUE),
+    clipMinimum(BV_VIEW_MIN),
+    clipMaximum(BV_VIEW_MAX),
     renderRequested(FALSE),
     renderReason(""),
     lastRenderTimeNanoseconds(0),
@@ -852,6 +1001,9 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     backgroundBottom(0.0f, 0.0f, 0.0f),
     backgroundTop(0.0f, 0.0f, 0.0f),
     softwareWireMode(SOFTWARE_WIRE_AUTO),
+    transparencyEnabled(TRUE),
+    clipMinimum(BV_VIEW_MIN),
+    clipMaximum(BV_VIEW_MAX),
     renderRequested(FALSE),
     renderReason(""),
     lastRenderTimeNanoseconds(0),
@@ -1144,6 +1296,9 @@ BRLObolViewController::setBackgroundColors(const SbColor &bottom,
 	return;
     this->backgroundBottom = bottom;
     this->backgroundTop = top;
+    SoEnvironment *environment = controller_environment(this->viewport);
+    if (environment)
+	environment->fogColor = top;
     this->requestRender("background");
 }
 
@@ -1157,6 +1312,129 @@ const SbColor &
 BRLObolViewController::getBackgroundTopColor(void) const
 {
     return this->backgroundTop;
+}
+
+void
+BRLObolViewController::setDepthTestEnabled(SbBool enabled)
+{
+    SoDepthBuffer *depth = controller_depth_buffer(this->viewport);
+    if (!depth || (depth->test.getValue() == enabled &&
+	depth->write.getValue() == enabled))
+	return;
+    depth->test = enabled;
+    depth->write = enabled;
+    this->requestRender("depth-test");
+}
+
+SbBool
+BRLObolViewController::isDepthTestEnabled(void) const
+{
+    SoDepthBuffer *depth = controller_depth_buffer(this->viewport);
+    return depth ? depth->test.getValue() : TRUE;
+}
+
+void
+BRLObolViewController::setTransparencyEnabled(SbBool enabled)
+{
+    enabled = enabled ? TRUE : FALSE;
+    if (this->transparencyEnabled == enabled)
+	return;
+    this->transparencyEnabled = enabled;
+    const SoGLRenderAction::TransparencyType type = enabled ?
+	SoGLRenderAction::BLEND : SoGLRenderAction::NONE;
+    this->renderManager->getGLRenderAction()->setTransparencyType(type);
+    if (this->imageRenderer)
+	this->imageRenderer->getGLRenderAction()->setTransparencyType(type);
+    this->requestRender("transparency");
+}
+
+SbBool
+BRLObolViewController::isTransparencyEnabled(void) const
+{
+    return this->transparencyEnabled;
+}
+
+SbBool
+BRLObolViewController::setClipBounds(double minimum, double maximum)
+{
+    if (!std::isfinite(minimum) || !std::isfinite(maximum) ||
+	minimum > maximum)
+	return FALSE;
+    this->clipMinimum = minimum;
+    this->clipMaximum = maximum;
+    this->requestRender("clip-bounds");
+    return TRUE;
+}
+
+void
+BRLObolViewController::getClipBounds(double &minimum, double &maximum) const
+{
+    minimum = this->clipMinimum;
+    maximum = this->clipMaximum;
+}
+
+size_t
+BRLObolViewController::getActiveClipPlanes(SbPlane planes[2]) const
+{
+    if (!planes)
+	return 0;
+    size_t count = 0;
+    SoClipPlane *minimum = controller_clip_plane(this->viewport, TRUE);
+    SoClipPlane *maximum = controller_clip_plane(this->viewport, FALSE);
+    if (minimum && minimum->on.getValue())
+	planes[count++] = minimum->plane.getValue();
+    if (maximum && maximum->on.getValue())
+	planes[count++] = maximum->plane.getValue();
+    return count;
+}
+
+void
+BRLObolViewController::setLightingEnabled(SbBool enabled)
+{
+    SoLightModel *model = controller_light_model(this->viewport);
+    SoDirectionalLight *light = controller_headlight(this->viewport);
+    if (!model || !light)
+	return;
+    const int requested = enabled ? SoLightModel::PHONG :
+	SoLightModel::BASE_COLOR;
+    if (model->model.getValue() == requested &&
+	light->on.getValue() == enabled)
+	return;
+    model->model = requested;
+    light->on = enabled;
+    this->requestRender("lighting");
+}
+
+SbBool
+BRLObolViewController::isLightingEnabled(void) const
+{
+    SoLightModel *model = controller_light_model(this->viewport);
+    return model && model->model.getValue() == SoLightModel::PHONG;
+}
+
+void
+BRLObolViewController::setDepthCueEnabled(SbBool enabled)
+{
+    SoEnvironment *environment = controller_environment(this->viewport);
+    if (!environment)
+	return;
+    const int requested = enabled ? SoEnvironment::HAZE :
+	SoEnvironment::NONE;
+    if (environment->fogType.getValue() == requested)
+	return;
+    environment->fogType = requested;
+    environment->fogColor = this->backgroundTop;
+    /* Zero delegates visibility distance to the active camera volume. */
+    environment->fogVisibility = 0.0f;
+    this->requestRender("depth-cue");
+}
+
+SbBool
+BRLObolViewController::isDepthCueEnabled(void) const
+{
+    SoEnvironment *environment = controller_environment(this->viewport);
+    return environment && environment->fogType.getValue() !=
+	SoEnvironment::NONE;
 }
 
 void
@@ -1311,6 +1589,38 @@ BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
     const double viewZ[3] = {
 	viewRotation[8], viewRotation[9], viewRotation[10]
     };
+
+    SoClipPlane *clipMinimumNode =
+	controller_clip_plane(this->viewport, TRUE);
+    SoClipPlane *clipMaximumNode =
+	controller_clip_plane(this->viewport, FALSE);
+    const SbBool clipping = bv_zclip_get(view) ? TRUE : FALSE;
+    if (clipMinimumNode && clipMaximumNode) {
+	const double viewScale = horizontalSize * 0.5;
+	const SbVec3f minimumNormal(
+	    static_cast<float>(viewZ[X]),
+	    static_cast<float>(viewZ[Y]),
+	    static_cast<float>(viewZ[Z]));
+	const SbVec3f maximumNormal = -minimumNormal;
+	const SbVec3f minimumPoint(
+	    static_cast<float>(center[X] + viewZ[X] *
+		this->clipMinimum * viewScale),
+	    static_cast<float>(center[Y] + viewZ[Y] *
+		this->clipMinimum * viewScale),
+	    static_cast<float>(center[Z] + viewZ[Z] *
+		this->clipMinimum * viewScale));
+	const SbVec3f maximumPoint(
+	    static_cast<float>(center[X] + viewZ[X] *
+		this->clipMaximum * viewScale),
+	    static_cast<float>(center[Y] + viewZ[Y] *
+		this->clipMaximum * viewScale),
+	    static_cast<float>(center[Z] + viewZ[Z] *
+		this->clipMaximum * viewScale));
+	clipMinimumNode->plane = SbPlane(minimumNormal, minimumPoint);
+	clipMaximumNode->plane = SbPlane(maximumNormal, maximumPoint);
+	clipMinimumNode->on = clipping;
+	clipMaximumNode->on = clipping;
+    }
 
     const float desiredAspect = static_cast<float>(aspect);
     const SbVec3f desiredPosition(
@@ -1592,6 +1902,9 @@ BRLObolViewController::renderToImage(unsigned char **image,
 	    new SoOffscreenRenderer(contextManager, region) :
 	    new SoOffscreenRenderer(region);
 	this->imageRendererManager = contextManager;
+	this->imageRenderer->getGLRenderAction()->setTransparencyType(
+	    this->transparencyEnabled ? SoGLRenderAction::BLEND :
+	    SoGLRenderAction::NONE);
     } else {
 	this->imageRenderer->setViewportRegion(region);
     }
@@ -2203,6 +2516,8 @@ BRLObolViewController::pickSourceMeshExactRay(
     SoBRLSourceMeshPickAction sourcePickAction;
     sourcePickAction.setRay(rayOrigin, rayDirection);
     sourcePickAction.apply(this->viewport->getRoot());
+    SbPlane clipPlanes[2];
+    const size_t clipPlaneCount = this->getActiveClipPlanes(clipPlanes);
 
     const int requestCount =
 	sourcePickAction.getSourceBackedFullDetailRequestCount();
@@ -2280,7 +2595,8 @@ BRLObolViewController::pickSourceMeshExactRay(
 		    if (brlobol_pick_source_full_detail_result(candidate,
 			    expectedSourceRequests[i], sourceResults[j],
 			    sourcePickAction.getRayOrigin(),
-			    sourcePickAction.getRayDirection())) {
+			    sourcePickAction.getRayDirection(), clipPlanes,
+			    clipPlaneCount)) {
 			requestConsumed[static_cast<size_t>(requestIndex)] =
 			    TRUE;
 			if (!pick.hit || candidate.distance < pick.distance)
@@ -2333,13 +2649,16 @@ BRLObolViewController::pickRtExactRay(
     direction.normalize();
 
     const int cacheCount = this->prepareRtPickCaches();
+    SbPlane clipPlanes[2];
+    const size_t clipPlaneCount = this->getActiveClipPlanes(clipPlanes);
     for (int i = 0; i < cacheCount; i++) {
 	BRLObolRtPickCache *cache = this->getRtPickCache(i);
 	if (!cache || !cache->isReady())
 	    continue;
 
 	BRLObolRtPickResult rtPick;
-	if (!cache->pickRay(rtPick, rayOrigin, direction) || !rtPick.hit)
+	if (!cache->pickRay(rtPick, rayOrigin, direction, clipPlanes,
+		clipPlaneCount) || !rtPick.hit)
 	    continue;
 	if (rt_pick_result_path_recorded(results, rtPick))
 	    continue;

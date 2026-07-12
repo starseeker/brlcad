@@ -270,9 +270,9 @@ ecmd_bot_mode_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUSE
     int ret_tcl = TCL_ERROR;
 
     sprintf(mode, " %d", bot->mode - 1);
-    if (dm_get_pathname(ms->mged_curr_dm->dm_dmp)) {
+    if (mged_dm_pathname(ms->mged_curr_dm)) {
 	ret_tcl = Tcl_VarEval(ms->interp, "cad_radio", " .bot_mode_radio ",
-		bu_vls_cstr(dm_get_pathname(ms->mged_curr_dm->dm_dmp)), " _bot_mode_result",
+		mged_dm_pathname(ms->mged_curr_dm), " _bot_mode_result",
 		" \"BOT Mode\"", "  \"Select the desired mode\"", mode,
 		" { surface volume plate plate/nocosine }",
 		" { \"In surface mode, each triangle represents part of a zero thickness surface and no volume is enclosed\" \"In volume mode, the triangles are expected to enclose a volume and that volume becomes the solid\" \"In plate mode, each triangle represents a plate with a specified thickness\" \"In plate/nocosine mode, each triangle represents a plate with a specified thickness, but the LOS thickness reported by the raytracer is independent of obliquity angle\" } ", (char *)NULL);
@@ -299,9 +299,9 @@ ecmd_bot_orient_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNU
     int ret_tcl = TCL_ERROR;
 
     sprintf(orient, " %d", bot->orientation - 1);
-    if (dm_get_pathname(DMP)) {
+    if (mged_dm_pathname(s->mged_curr_dm)) {
 	ret_tcl = Tcl_VarEval(s->interp, "cad_radio", " .bot_orient_radio ",
-		bu_vls_addr(dm_get_pathname(DMP)), " _bot_orient_result",
+		mged_dm_pathname(s->mged_curr_dm), " _bot_orient_result",
 		" \"BOT Face Orientation\"", "  \"Select the desired orientation\"", orient,
 		" { none right-hand-rule left-hand-rule }",
 		" { \"No orientation means that there is no particular order for the vertices of the triangles\" \"right-hand-rule means that the vertices of each triangle are ordered such that the right-hand-rule produces an outward pointing normal\"  \"left-hand-rule means that the vertices of each triangle are ordered such that the left-hand-rule produces an outward pointing normal\" } ", (char *)NULL);
@@ -391,13 +391,13 @@ ecmd_bot_flags_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUS
     if (bot->bot_flags & RT_BOT_USE_FLOATS)
 	cur_settings[5] = '1';
 
-    if (dm_get_pathname(DMP)) {
+    if (mged_dm_pathname(s->mged_curr_dm)) {
 	/* Invoke a Tk checkbox dialog to let the user toggle the two BOT flags.
 	 * The result is stored as a two-element list in _bot_flags_result (e.g. "1 0"). */
 	ret_tcl = Tcl_VarEval(s->interp,
 		"cad_list_buts",
 		" .bot_list_flags ",
-		bu_vls_addr(dm_get_pathname(DMP)),
+		mged_dm_pathname(s->mged_curr_dm),
 		" _bot_flags_result ",
 		cur_settings,
 		" \"BOT Flags\"",
@@ -481,8 +481,8 @@ ecmd_bot_fmode_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUS
     else
 	sprintf(fmode, " %d", BU_BITTEST(bot->face_mode, 0)?1:0);
 
-    if (dm_get_pathname(DMP)) {
-	ret_tcl = Tcl_VarEval(s->interp, "cad_radio", " .bot_fmode_radio ", bu_vls_addr(dm_get_pathname(DMP)),
+    if (mged_dm_pathname(s->mged_curr_dm)) {
+	ret_tcl = Tcl_VarEval(s->interp, "cad_radio", " .bot_fmode_radio ", mged_dm_pathname(s->mged_curr_dm),
 		" _bot_fmode_result ", "\"BOT Face Mode\"",
 		" \"Select the desired face mode\"", fmode,
 		" { {Thickness centered about hit point} {Thickness appended to hit point} }",

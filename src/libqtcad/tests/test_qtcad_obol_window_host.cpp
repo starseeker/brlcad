@@ -8,10 +8,19 @@
 #include "common.h"
 
 #include "qtcad/QgObolWindowHost.h"
+#include "qtcad/QgQuadView.h"
+#include "qtcad/QgSession.h"
 #include "qtcad/QgSW.h"
+#include "qtcad/QgView.h"
 
 #include "brlobol.h"
 #include "bu/log.h"
+#include "bu/malloc.h"
+#include "bu/file.h"
+#include "ged.h"
+#include "ged/view.h"
+#include "wdb.h"
+#include "QgLegacyViewContext.h"
 
 #if defined(__GNUC__)
 #  pragma GCC diagnostic push
@@ -169,11 +178,7 @@ test_qtcad_display_host_bridge(void)
     canvas.resize(64, 48);
 
     QgObolWindowHost host(&canvas);
-    brlobol_window_host_unregister_display_host();
-    CHECK(brlobol_window_host_register_display_host(&host) == 0,
-	"qtcad window host registers as display host");
-
-    imgstream_fb_t *fb = imgstream_fb_open("/dev/qtgl", 8, 6);
+    imgstream_fb_t *fb = brlobol_window_host_open_display_framebuffer(&host, "/dev/qtgl", 8, 6);
     CHECK(fb != NULL, "qtgl framebuffer opens through qtcad window host");
     CHECK(host.isOpen(), "qtgl framebuffer opens qtcad host");
     CHECK(host.getFramebufferCount() == 1,
@@ -199,7 +204,6 @@ test_qtcad_display_host_bridge(void)
     imgstream_fb_close(fb);
     CHECK(host.getFramebufferCount() == 0,
 	"qtcad display host closes framebuffer attachment");
-    brlobol_window_host_unregister_display_host();
     return 0;
 }
 
@@ -207,11 +211,7 @@ static int
 test_qtcad_owned_display_host_bridge(void)
 {
     QgObolWindowHost host;
-    brlobol_window_host_unregister_display_host();
-    CHECK(brlobol_window_host_register_display_host(&host) == 0,
-	"owned qtcad window host registers as display host");
-
-    imgstream_fb_t *fb = imgstream_fb_open("/dev/qtgl", 10, 7);
+    imgstream_fb_t *fb = brlobol_window_host_open_display_framebuffer(&host, "/dev/qtgl", 10, 7);
     CHECK(fb != NULL, "qtgl framebuffer creates owned qtcad host");
     CHECK(host.isOpen(), "owned qtgl framebuffer opens qtcad host");
     CHECK(host.canvas() != NULL, "owned qtgl framebuffer creates qtcad canvas");
@@ -239,7 +239,193 @@ test_qtcad_owned_display_host_bridge(void)
 	"owned qtcad display host closes framebuffer attachment");
     host.close();
     CHECK(host.canvas() == NULL, "owned display host releases qtcad canvas on close");
-    brlobol_window_host_unregister_display_host();
+    return 0;
+}
+
+static int
+test_qtcad_factory_endpoint(void)
+{
+    CHECK(qtcad_obol_host_factories_register(),
+	"qtcad registers Obol host factories");
+
+    struct brlobol_host_desc desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_TOPLEVEL;
+    desc.width = 80;
+    desc.height = 60;
+    desc.device_pixel_ratio = 1.0;
+    desc.visible = 0;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT |
+	BRLOBOL_HOST_CAP_READBACK;
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint != NULL, "qtcad factory test creates endpoint");
+    CHECK(brlobol_display_endpoint_host_open(endpoint, "qt-sw", &desc),
+	"endpoint opens Qt software factory");
+    CHECK(strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+	"qt-sw") == 0,
+	"endpoint reports Qt software factory identity");
+
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
+	brlobol_display_endpoint_host(endpoint));
+    BRLObolViewController *controller =
+	static_cast<BRLObolViewController *>(
+	    brlobol_display_endpoint_controller(endpoint));
+    CHECK(host && host->canvas() &&
+	host->canvas()->obolViewController() == controller &&
+	host->getController() == controller,
+	"Qt factory canvas borrows the endpoint controller");
+
+    add_visible_obol_content(controller);
+    CHECK(brlobol_display_endpoint_request_frame(endpoint, "qt-factory-test"),
+	"Qt factory queues endpoint frame request");
+    QApplication::processEvents();
+
+    unsigned char *pixels = NULL;
+    size_t size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    CHECK(brlobol_display_endpoint_capture(endpoint, &pixels, &size, &width,
+	&height, &components),
+	"Qt software factory captures through endpoint API");
+    CHECK(pixels && width == 80 && height == 60 && components == 4 &&
+	size == 80u * 60u * 4u,
+	"Qt software factory capture reports packed endpoint dimensions");
+    bu_free(pixels, "Qt software factory capture");
+
+    brlobol_display_endpoint_destroy(endpoint);
+    return 0;
+}
+
+static int
+test_qtcad_embedded_factory_endpoint(void)
+{
+    QWidget parent;
+    parent.resize(120, 90);
+    QgSW canvas(&parent);
+    canvas.resize(72, 54);
+
+    struct brlobol_host_desc desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_EMBEDDED;
+    desc.width = 80;
+    desc.height = 60;
+    desc.device_pixel_ratio = 1.0;
+    desc.visible = 1;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_EMBEDDED |
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT | BRLOBOL_HOST_CAP_READBACK;
+    desc.application_context = static_cast<QgCanvasBase *>(&canvas);
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint != NULL, "embedded Qt factory test creates endpoint");
+    CHECK(brlobol_display_endpoint_host_open(endpoint, "qt-sw", &desc),
+	"endpoint opens Qt software factory on existing canvas");
+
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
+	brlobol_display_endpoint_host(endpoint));
+    BRLObolViewController *controller =
+	static_cast<BRLObolViewController *>(
+	    brlobol_display_endpoint_controller(endpoint));
+    CHECK(host && host->canvas() == &canvas &&
+	canvas.obolViewController() == controller,
+	"embedded Qt factory borrows canvas and endpoint controller");
+    CHECK(!canvas.isWindow() && canvas.parentWidget() == &parent,
+	"embedded Qt factory preserves canvas parent and window mode");
+    CHECK(!canvas.isVisible() && canvas.size() == QSize(72, 54),
+	"embedded Qt host does not show or resize its borrowed canvas");
+    CHECK(host->getDesc().mode == BRLOBOL_WINDOW_EMBEDDED,
+	"embedded Qt host preserves endpoint mode");
+
+    add_visible_obol_content(controller);
+    unsigned char *pixels = NULL;
+    size_t size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    CHECK(brlobol_display_endpoint_capture(endpoint, &pixels, &size, &width,
+	&height, &components),
+	"embedded Qt software host captures through endpoint");
+    CHECK(pixels && width == 72 && height == 54 && components == 4,
+	"embedded Qt capture follows the application-owned canvas dimensions");
+    bu_free(pixels, "embedded Qt factory capture");
+
+    brlobol_display_endpoint_destroy(endpoint);
+    CHECK(canvas.obolViewController() == NULL,
+	"embedded Qt factory unbinds canvas before controller destruction");
+    CHECK(canvas.parentWidget() == &parent,
+	"embedded Qt endpoint teardown does not destroy borrowed canvas");
+
+    desc.application_context = NULL;
+    endpoint = brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint != NULL,
+	"missing embedded Qt canvas test creates endpoint");
+    CHECK(!brlobol_display_endpoint_host_open(endpoint, "qt-sw", &desc),
+	"embedded Qt factory rejects a missing borrowed canvas");
+    brlobol_display_endpoint_destroy(endpoint);
+    return 0;
+}
+
+static int
+test_qtcad_quad_view_endpoint_association(void)
+{
+    QgSession session;
+    QgQuadView quad(NULL, &session, QgView_SW);
+    QgView *view = quad.curr_view();
+    CHECK(view && view->displayEndpoint(),
+	"qtcad quad view creates an endpoint-hosted viewport");
+    void *view_ctx = qg_legacy_view_to_context(view->view());
+    CHECK(ged_view_context_display_endpoint_get(view_ctx) ==
+	view->displayEndpoint(),
+	"qtcad quad view associates its endpoint with the GED view record");
+    CHECK(brlobol_display_endpoint_controller(view->displayEndpoint()) ==
+	view->obolViewController(),
+	"qtcad GED view and visible canvas share one endpoint controller");
+    return 0;
+}
+
+static int
+test_qtcad_dm_open_command(void)
+{
+    const char *dbpath = "qtcad_dm_open.g";
+    struct rt_wdb *wdbp = wdb_fopen(dbpath);
+    CHECK(wdbp != NULL, "Qt dm open test creates a database");
+    mk_id(wdbp, "Qt endpoint dm open test");
+    wdb_close(wdbp);
+
+    struct ged *gedp = ged_open("db", dbpath, 1);
+    CHECK(gedp != NULL, "Qt dm open test opens GED");
+    void *view = ged_view_active_ctx(gedp);
+    bv_dimensions_set(bv_context_view((struct bv_context *)view), 96, 72);
+    CHECK(!ged_view_context_display_endpoint_get(view),
+	"Qt dm open test starts without an endpoint");
+
+    const char *open_av[7] = {
+	"dm", "open", "--host", "qt-sw", "--renderer", "sw", NULL
+    };
+    int ret = ged_exec_dm(gedp, 6, open_av);
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view);
+    CHECK(ret == BRLCAD_OK && endpoint &&
+	brlobol_display_endpoint_host_factory_name(endpoint) &&
+	strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+	    "qt-sw") == 0,
+	"dm open creates a Qt software endpoint through the registered factory");
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
+	brlobol_display_endpoint_host(endpoint));
+    CHECK(host && host->canvas() && host->canvas()->canvasWidget()->isWindow(),
+	"dm open creates a top-level Qt canvas");
+
+    const char *close_av[3] = {"dm", "close", NULL};
+    CHECK(ged_exec_dm(gedp, 2, close_av) == BRLCAD_OK &&
+	!brlobol_display_endpoint_host_factory_name(endpoint),
+	"dm close releases the Qt host while retaining the endpoint");
+    ged_close(gedp);
+    bu_file_delete(dbpath);
     return 0;
 }
 
@@ -256,6 +442,14 @@ main(int argc, char **argv)
     if (test_qtcad_display_host_bridge())
 	return 1;
     if (test_qtcad_owned_display_host_bridge())
+	return 1;
+    if (test_qtcad_factory_endpoint())
+	return 1;
+    if (test_qtcad_embedded_factory_endpoint())
+	return 1;
+    if (test_qtcad_quad_view_endpoint_association())
+	return 1;
+    if (test_qtcad_dm_open_command())
 	return 1;
     return 0;
 }

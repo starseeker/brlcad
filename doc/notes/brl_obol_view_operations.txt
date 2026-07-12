@@ -86,17 +86,15 @@ feature.
 Display-Host Migration Boundary
 -------------------------------
 
-The headless `dm-obol` backend is a retained Obol/Coin display host, not a
-translation layer for old immediate drawing streams.  It renders the attached
-Obol scene for normal `screengrab`, and its raw libdm draw callbacks are
-intentionally no-ops.  If MGED, GSH, RTWizard, TclCAD, or qged code reaches for
-callbacks such as `dm_draw_objs`, treat that as one of two migration signals:
+Headless rendering uses a libbrlobol display endpoint and registered headless
+host directly; the former `dm-obol` adapter is deleted.  If MGED, GSH,
+RTWizard, TclCAD, or qged code reaches for callbacks such as `dm_draw_objs`,
+treat that as one of two migration signals:
 the caller should be retargeted to a high-level GED/Obol operation, or the
 Obol path is missing a high-level capability that should be implemented there.
-`dm attach obol` registers a borrowed `BRLObolViewController` for the target
-GED view, so multi-view applications should attach one Obol DM/controller per
-view rather than sharing a raw immediate draw stream.  The GED owns one
-authoritative shared Obol scene; attached view controllers are render
+`dm open --host headless` creates an endpoint-owned controller for the target
+GED view, so multi-view applications should create one endpoint per view.  The
+GED owns one authoritative shared Obol scene; view controllers are render
 endpoints with their own local roots.  Shared views render the shared scene
 plus their local root.  Independent views render only their local root, where
 independent database display and view-local objects live.

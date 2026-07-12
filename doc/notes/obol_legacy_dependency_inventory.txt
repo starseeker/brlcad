@@ -27,6 +27,7 @@ These rows match `src/source_dirs.cmake`:
 * libtclcad: libged;libdm;libbn;libbu
 * qged: libqtcad
 * mged: libtclcad
+* fbserv: libimgstream;libpkg;libbu
 
 Current Clean Boundaries
 ------------------------
@@ -36,15 +37,31 @@ Current Clean Boundaries
 * libbrlobol owns retained scene sources, instances, materials, realized LoD,
   interaction features, edit previews, draw caches, and framebuffer image
   presentation.  It has no direct libdm or libbsg dependency.
-* libged owns command policy and neutral Obol controller attachment.  Its core
-  has no direct libdm dependency.  Commands that intrinsically operate on a
-  display manager are isolated in GED plugins.
+* libged owns command policy and neutral Obol controller attachment.  Its core,
+  endpoint command, screengrab, and ERT plugin have no direct libdm dependency.
+  ERT uses the per-view Obol/imgstream framebuffer backend exclusively.
 * libqtcad and qged use one Obol controller/window host for visible drawing.
   They do not link libdm or require `dm_plugins`.
 * GSH owns a direct Obol controller and does not link libdm.
+* Plot3 and PostScript output are retained-view GED export actions.  MGED
+  delegates to those actions directly; the `dm-plot` and `dm-ps` display
+  managers are retired.
+* MGED grid, ADC, axes, rubber band, title/status text, edit annotations,
+  menus, and sliders publish retained per-view Obol features.  Their former
+  immediate line, point, color, and string callbacks are guarded against
+  reintroduction.
+* The logging-only `dm-txt` display manager is retired.  The distinct
+  `/dev/debug` framebuffer remains available as a non-graphical diagnostic.
 * libimgstream owns fbserv protocol types, authentication, TLS, message
   dispatch, packet handlers, bounded processing, listener/client lifecycle,
-  backend dispatch, and cleanup.
+  backend dispatch, cleanup, and the standalone server's configured
+  framebuffer.  Its remote framebuffer client supports TCP and reusable local
+  IPC addresses with explicit per-open authentication and TLS policy; it does
+  not depend on libdm or process-global client credentials.
+* Standalone `fbserv` opens and serves an `imgstream_fb_t` directly.  It has
+  no libdm dependency, plugin discovery, or legacy `struct fb` adapter.
+  Concurrent TCP and IPC regressions exercise the public imgstream client with
+  isolated tokens, exact pixel readback, view state, and cursor state.
 * librt primitive LoD callbacks use libbv view types and functions directly.
   No `rt_view_info` or `rt_view_lod_policy` compatibility API remains.
 * The native basic, faceplate, LoD, selection, and quad image baselines own
@@ -63,28 +80,71 @@ composition, and three named Tcl compatibility services: MGED uses
 uses `fb_common_file_size`.  Generic discovery and validation expose only
 `tkobol`, headless `obol`, and the explicit `nu` no-op.  The unsupported Tcl
 `fb_open` object API has been removed.  The supported Tk drawing
-widget, its vendored Togl implementation, and its Obol controller are compiled
-into libtclcad.  `tkobol` is registered as a built-in backend during `Dm_Init`;
-there is no `dm-tkobol` plugin target.  Togl owns the native window and GL
-context, while the libtclcad host owns the Obol controller and renders through
-the controller's GL action.  Standalone widgets default to top-level windows;
+widget and its vendored Togl implementation are compiled into libtclcad.
+`Dm_Init` registers the Tk host factories, not a graphical DM backend; the
+former `dm-tkobol` adapter is deleted.  Togl owns the native window and GL
+context, while the libtclcad factory hosts the endpoint-owned Obol controller
+and renders through the controller's GL action.  Standalone widgets default to top-level windows;
 existing embedded clients select `-t 0` explicitly.
 
 MGED still uses `struct dm` as its application compatibility shell for view
 commands, input plumbing, and legacy framebuffer objects.  Its graphical Tk
-host is `tkobol`; MGED attaches the host's Obol controller through the neutral
-GED bridge.  Its fbserv event adapter delegates protocol work to libimgstream
-and does not carry a private packet switch.
+host is `tkobol`; MGED associates the adapter's endpoint with its GED view.
+The host is registered directly by libtclcad, so MGED neither
+build-depends on DM plugins nor reports plugin-loader diagnostics.  Its fbserv
+event adapter delegates protocol work to libimgstream and does not carry a
+private packet switch.
+MGED's frame refresh itself is endpoint-native: it consumes retained dirty
+state, publishes scene/HUD/framebuffer state, synchronizes the endpoint camera,
+and requests one frame.  DM configure/current/z-buffer/frame brackets, native
+repaint mirrors, stereo replay, and legacy framebuffer refresh are not part of
+the frame loop.
+Obol's `SoRenderManager` declares anaglyph, interleaved, and
+separate/quad-buffer stereo modes plus an eye offset, but actual stereo
+rendering is not currently exposed.  Initial validation found an interleaved
+render stall under Xvfb/Togl and blank anaglyph capture; Coin's current stereo
+test only round-trips the mode enum before rendering in mono.  Treat the root
+cause as unresolved until hardware and software output paths are validated.
+MGED remains mono and must not restore its former per-eye scene replay.
 
-libdm retains non-graphical compatibility backends and framebuffer APIs.
+TclCAD `pix` and `png` capture use the selected view's display endpoint for
+size, rendering, and readback.  Hardware Togl and software TkPhoto hosts share
+the endpoint capture contract; neither command uses DM context or display-image
+callbacks.  libbrlobol temporarily names OSMesa directly to retain its runtime
+dependency with existing Obol packages under `--as-needed`.  Remove that
+compatibility anchor when the minimum vendored Obol package exports OSMesa as
+a transitive dependency.
+
+TclCAD refresh is endpoint-native.  It performs a retained GED redraw,
+publishes the endpoint-owned framebuffer composition, synchronizes the view,
+and requests one frame.  The former DM depth-mask, z-buffer, framebuffer
+refresh, and draw-begin/end sequence has no remaining refresh-loop owner.
+Viewport width, height, and aspect calculations use canonical `bview`
+dimensions refreshed from the endpoint's toolkit host; the host-factory
+contract reports toolkit-initiated resizes, and TclCAD no longer reads or
+requests DM window geometry.  TclCAD `fontsize` updates retained parameter,
+scale, and center-dot HUD state instead of a DM font field.
+
+TclCAD display-policy commands use typed endpoint properties and libbv view
+state for background, lighting, transparency, depth testing, and zclip enable.
+The retired `bounds` command no longer stores an OGL projection workaround in
+DM or libbv.  libbrlobol realizes clipping as two retained, view-aligned Obol
+clip planes; normal camera near/far planes remain scene-derived.  Mouse and
+face rays are independent of DM state, while candidate visibility is not:
+Obol traversal and exact source-mesh/librt refinement apply the same retained
+clip planes.  librt refinement intersects partition intervals with those
+halfspaces, the individual-ray equivalent of `rt -k`, so fully clipped
+geometry cannot be selected and partial cuts retain section identity.  Archer
+face selection consumes the central typed pick detail rather than launching a
+private Tcl raytrace.  Archer no longer carries ZClip percentage/max
+preference or persistence state; its front-most BOT editing choice is an
+interaction boolean.
+
+libdm retains non-graphical compatibility APIs and framebuffer APIs.
 libdm retains only the narrow `struct fb` fbserv backend adapter in
 `src/libdm/fbserv_legacy.c`; all protocol and lifecycle behavior is owned by
 libimgstream.  The deleted imgstream graphical-device adapter and
 `/dev/swrast` bridge must not return.
-
-Standalone `fbserv` still links libdm solely to construct or adapt a requested
-legacy `struct fb`.  Its listener loop delegates authentication, TLS, packet
-processing, bounded drain, disconnect, and cancellation to libimgstream.
 
 TclCAD and qged retain toolkit event-loop adapters because Tcl channels and Qt
 notifiers must be owned by their toolkits.  These adapters use the common
@@ -114,9 +174,8 @@ Removal Conditions
 | Area | Retained edge | Removal condition |
 | --- | --- | --- |
 | libtclcad/MGED | Named DM-selection commands and legacy framebuffer composition | Replace DM selection with Obol host options and move remaining framebuffer composition to imgstream |
-| standalone fbserv | Legacy `struct fb` construction and backend adapter | Supply an imgstream-native configured backend for all supported modes |
 | libdm | Non-graphical DM and framebuffer compatibility APIs | Remaining applications and utilities use libbv, libimgstream/libicv, or Obol hosts directly |
-| utilities | Some utility-specific libdm/libfb use | Convert each use to image files, imgstream, neutral view state, or Obol readback |
+| utilities | Drawing utilities and GED framebuffer image commands are DM-independent; the uncalled `plot3-dm` sample was retired in favor of retained Obol `overlay` import. ART, remrt/rtsrv, and the RT family use imgstream framebuffer state | Runtime-verify ART tile publication in an Appleseed-enabled build |
 
 Cross-platform validation of the built-in Tk host is still required on
 Windows and macOS.  That work may change Togl platform code, but must not

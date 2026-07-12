@@ -67,11 +67,11 @@ if(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
   if(TCLCAD_TKOBOL_HOST)
     set(TCLCAD_TKOBOL_HOST ON)
     list(APPEND LIBTCLCAD_SRCS
-      tkobol/dm-tkobol.cpp
+      tkobol/tk-obol-host.cpp
       tkobol/vendor/togl/togl.c
     )
     set_property(
-      SOURCE tkobol/dm-tkobol.cpp
+      SOURCE tkobol/tk-obol-host.cpp
       APPEND
       PROPERTY COMPILE_DEFINITIONS ${TCLCAD_TKOBOL_DM_DEFINITION}
     )
@@ -161,7 +161,7 @@ cmakefiles(
   draw_view_move_helpers.h
   tclcad_private.h
   view/view.h
-  tkobol/dm-tkobol.cpp
+  tkobol/tk-obol-host.cpp
   tkobol/vendor/togl/LICENSE
   tkobol/vendor/togl/README.brlcad
   tkobol/vendor/togl/Tcl3D_License.txt

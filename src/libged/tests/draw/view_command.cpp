@@ -16,6 +16,7 @@
 #include <string>
 
 #include <Inventor/SoViewport.h>
+#include "brlobol/display_endpoint.h"
 #include "brlobol/measure_action.h"
 #include "brlobol/view_controller.h"
 #include <bu.h>
@@ -108,6 +109,30 @@ refresh_scene_records(struct ged *gedp, void *v)
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
     ASSERT(ged_draw_apply_transaction(gedp, &txn, NULL) >= 0);
+}
+
+static void
+test_display_endpoint_slot(void *view)
+{
+    brlobol_display_endpoint_t *owned =
+	brlobol_display_endpoint_create(NULL, 0);
+    ASSERT(owned != NULL);
+    void *owned_controller = brlobol_display_endpoint_controller(owned);
+    ASSERT(owned_controller != NULL);
+    ASSERT(ged_view_context_display_endpoint_set(view, owned, 1));
+    ASSERT(ged_view_context_display_endpoint_get(view) == owned);
+    ASSERT(ged_view_context_display_manager_get(view) == NULL);
+    ASSERT(ged_draw_obol_controller_opaque_for_view(view) == owned_controller);
+
+    brlobol_display_endpoint_t *borrowed =
+	brlobol_display_endpoint_create(NULL, 0);
+    ASSERT(borrowed != NULL);
+    ASSERT(ged_view_context_display_endpoint_set(view, borrowed, 0));
+    ASSERT(ged_view_context_display_endpoint_get(view) == borrowed);
+    ASSERT(ged_draw_obol_controller_opaque_for_view(view) ==
+	brlobol_display_endpoint_controller(borrowed));
+    ASSERT(ged_view_context_display_endpoint_set(view, NULL, 0));
+    brlobol_display_endpoint_destroy(borrowed);
 }
 
 static void
@@ -206,6 +231,7 @@ main(int argc, const char **argv)
 	    ged_view_active_ctx_set(gedp, views[i]);
     }
 
+    test_display_endpoint_slot(views[0]);
     test_command_report_record_consistency(gedp, views[0]);
 
     const char *c0[] = {"view", "annotation", "line", "create", "u_line", "0", "0", "0", "1", "0", "0", NULL};

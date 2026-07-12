@@ -56,8 +56,6 @@
 #include <bu.h>
 #include "rt/view.h"
 #include "view_test_util.h"
-#define DM_WITH_RT
-#include <dm.h>
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/draw_obol.h>
@@ -91,7 +89,7 @@ wait_for_lod_service(struct ged *gedp, int timeout_ms)
 }
 
 /* ------------------------------------------------------------------ */
-/* Minimal GED setup (Obol DM, 512x512, az/el 35/25)                  */
+/* Minimal GED setup (headless Obol endpoint, 512x512, az/el 35/25)  */
 /* ------------------------------------------------------------------ */
 static struct ged *
 open_and_attach(const char *gfile)
@@ -102,20 +100,15 @@ open_and_attach(const char *gfile)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    const char *s_av[6] = {"dm", "attach", "obol", "OBOL", NULL};
-    ged_exec_dm(gedp, 4, s_av);
-
     void *v = ged_view_active_ctx(gedp);
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    dm_set_width(dmp, 512);
-    dm_set_height(dmp, 512);
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-    fastf_t wb[6] = {-1, 1, -1, 1, -100, 100};
-    dm_set_win_bounds(dmp, wb);
-    dm_set_vp(dmp, bv_scale_storage_get(DRAW_TEST_BV(v)));
-    ged_view_context_display_manager_set(v, dmp);
-    bv_dimensions_set(DRAW_TEST_BV(v), dm_get_width(dmp), dm_get_height(dmp));
+    bv_dimensions_set(DRAW_TEST_BV(v), 512, 512);
+    const char *s_av[7] = {
+	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
+    };
+    if (ged_exec_dm(gedp, 6, s_av) != BRLCAD_OK) {
+	ged_close(gedp);
+	return NULL;
+    }
     bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     /* Set view orientation */
@@ -137,14 +130,6 @@ render_to_file(struct ged *gedp, const char *outfile)
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
-
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(v);
-    unsigned char *bg1, *bg2;
-    dm_get_bg(&bg1, &bg2, dmp);
-    dm_set_bg(dmp, bg1[0], bg1[1], bg1[2], bg2[0], bg2[1], bg2[2]);
-    dm_set_native_repaint_pending(dmp, 0);
-    dm_draw_begin(dmp);
-    dm_draw_end(dmp);
 
     const char *sg_av[2] = {"screengrab", outfile};
     return ged_exec_screengrab(gedp, 2, sg_av);

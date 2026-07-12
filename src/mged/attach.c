@@ -47,7 +47,7 @@
 #include "ged.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
-#include "dm/obol.h"
+#include "brlobol/display_endpoint.h"
 #include "tclcad.h"
 
 #include "./mged.h"
@@ -63,6 +63,7 @@ struct mged_dm *mged_dm_init_state = NULL;
 extern struct _color_scheme default_color_scheme;
 extern void share_backend_cache(struct mged_dm *dlp2);	/* defined in share.c */
 int mged_default_backend_cache = 0;   /* This variable is available via Tcl for controlling use of backend caches */
+static unsigned long mged_tkobol_count = 0;
 
 static fastf_t windowbounds[6] = { BV_VIEW_MIN, BV_VIEW_MAX, BV_VIEW_MIN, BV_VIEW_MAX, BV_VIEW_MIN, BV_VIEW_MAX };
 
@@ -116,47 +117,154 @@ mged_dm_init(
 	const char *argv[])
 {
     struct bu_vls vls = BU_VLS_INIT_ZERO;
+    const char *failure = "unknown direct endpoint error";
+
+    if (!BU_STR_EQUAL(dm_type, "tkobol"))
+	return TCL_ERROR;
 
     dm_var_init(s, o_dm);
 
     /* register application provided routines */
     cmd_hook = dm_commands;
 
-    /* Pass the view through the context slot for Obol host attachment. */
     void *ctx = view_state->vs_gvp;
-    if ((DMP = dm_open(ctx, (void *)s->interp, dm_type, argc-1, argv)) == DM_NULL)
+    if ((DMP = dm_open(NULL, (void *)s->interp, "nu", 0, NULL)) == DM_NULL)
 	return TCL_ERROR;
-    ged_view_context_display_manager_set(view_state->vs_gvp, (void *)DMP);
-    void *obol_controller = dm_obol_controller(DMP);
-    if (!obol_controller ||
-	!ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
-	    view_state->vs_gvp, obol_controller, 1)) {
-	ged_view_context_display_manager_set(view_state->vs_gvp, NULL);
-	dm_close(DMP);
-	DMP = DM_NULL;
-	return TCL_ERROR;
+
+    int width = bv_width_get(mged_view_state_view(view_state));
+    int height = bv_height_get(mged_view_state_view(view_state));
+    int toplevel = 1;
+    int software = 0;
+    struct bu_vls pathname = BU_VLS_INIT_ZERO;
+    for (int i = 1; i < argc - 1; i++) {
+	if (BU_STR_EQUAL(argv[i], "sw")) {
+	    software = 1;
+	    continue;
+	}
+	if (BU_STR_EQUAL(argv[i], "hw")) {
+	    software = 0;
+	    continue;
+	}
+	if (i + 1 >= argc - 1)
+	    continue;
+	if (BU_STR_EQUAL(argv[i], "-W"))
+	    width = atoi(argv[++i]);
+	else if (BU_STR_EQUAL(argv[i], "-N"))
+	    height = atoi(argv[++i]);
+	else if (BU_STR_EQUAL(argv[i], "-S") ||
+		BU_STR_EQUAL(argv[i], "-s")) {
+	    width = height = atoi(argv[++i]);
+	} else if (BU_STR_EQUAL(argv[i], "-t"))
+	    toplevel = atoi(argv[++i]) ? 1 : 0;
+	else if (BU_STR_EQUAL(argv[i], "-n")) {
+	    const char *name = argv[++i];
+	    if (name[0] == '.')
+		bu_vls_strcpy(&pathname, name);
+	    else
+		bu_vls_printf(&pathname, ".%s", name);
+	} else if (BU_STR_EQUAL(argv[i], "-d") ||
+		BU_STR_EQUAL(argv[i], "-i")) {
+	    i++;
+	}
+    }
+    if (width <= 0)
+	width = 512;
+    if (height <= 0)
+	height = 512;
+    if (!bu_vls_strlen(&pathname))
+	bu_vls_printf(&pathname, ".dm_tkobol%lu", ++mged_tkobol_count);
+    bu_vls_strcpy(&s->mged_curr_dm->dm_pathname, bu_vls_cstr(&pathname));
+    (void)bv_dimensions_set(mged_view_state_view(view_state), width, height);
+
+
+    if (!tclcad_obol_host_factories_register()) {
+	failure = "Tk Obol host factory registration failed";
+	goto attach_fail;
+    }
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+
+    if (!endpoint) {
+	failure = "Obol display endpoint creation failed";
+	goto attach_fail;
+    }
+    if (!brlobol_display_endpoint_render_engine_set(endpoint,
+	    software ? BRLOBOL_RENDER_ENGINE_SW : BRLOBOL_RENDER_ENGINE_HW)) {
+	failure = "Obol render-engine selection failed";
+	brlobol_display_endpoint_destroy(endpoint);
+	goto attach_fail;
+    }
+    if (!ged_view_context_display_endpoint_set(ctx, endpoint, 1)) {
+	failure = "GED view endpoint attachment failed";
+	brlobol_display_endpoint_destroy(endpoint);
+	goto attach_fail;
     }
 
-    /* Keep the display host's scale and projection synchronized with MGED. */
-    dm_set_vp(DMP, bv_scale_storage_get(mged_view_state_view(view_state)));
-    dm_set_perspective(DMP, mged_variables->mv_perspective_mode);
+    struct brlobol_host_desc desc = {0};
+    desc.struct_size = sizeof(desc);
+    desc.mode = toplevel ? BRLOBOL_HOST_MODE_TOPLEVEL :
+	BRLOBOL_HOST_MODE_EMBEDDED;
+    desc.width = (unsigned int)width;
+    desc.height = (unsigned int)height;
+    desc.device_pixel_ratio = 1.0;
+    desc.visible = 1;
+    desc.required_capabilities = software ?
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT : BRLOBOL_HOST_CAP_SYSTEM_GL;
+    desc.title = bu_vls_cstr(&pathname);
+    desc.native_id_hint = bu_vls_cstr(&pathname);
+    desc.application_context = s->interp;
+    if (!brlobol_display_endpoint_host_open(endpoint,
+	    software ? "tk-photo" : "tk-gl", &desc)) {
+	failure = software ? "TkPhoto host open failed" :
+	    "Tk OpenGL host open failed";
+	(void)ged_view_context_display_endpoint_set(ctx, NULL, 0);
+	goto attach_fail;
+    }
 
 #ifdef HAVE_TK
-    if (tkwin != NULL && dm_graphical(DMP)) {
+    struct bu_vls widget_path = BU_VLS_INIT_ZERO;
+    if (toplevel)
+	bu_vls_printf(&widget_path, "%s.__obol", bu_vls_cstr(&pathname));
+    else
+	bu_vls_strcpy(&widget_path, bu_vls_cstr(&pathname));
+    Tk_Window host_window = Tk_NameToWindow(s->interp,
+	bu_vls_cstr(&widget_path), Tk_MainWindow(s->interp));
+    if (!host_window) {
+	failure = "Tk host window lookup failed";
+	bu_vls_free(&widget_path);
+	(void)ged_view_context_display_endpoint_set(ctx, NULL, 0);
+	goto attach_fail;
+    }
+    Tk_MakeWindowExist(host_window);
+    s->mged_curr_dm->dm_native_id = Tk_WindowId(host_window);
+    bu_vls_free(&widget_path);
+#endif
+    s->mged_curr_dm->dm_graphical = 1;
+
+#ifdef HAVE_TK
+    if (tkwin != NULL) {
 	Tk_DeleteGenericHandler(doEvent, (ClientData)s);
 	Tk_CreateGenericHandler(doEvent, (ClientData)s);
     }
 #endif
-    (void)dm_configure_win(DMP, 0);
 
-    struct bu_vls *pathname = dm_get_pathname(DMP);
-    if (pathname && bu_vls_strlen(pathname)) {
-	bu_vls_printf(&vls, "mged_bind_dm %s", bu_vls_cstr(pathname));
+    const char *logical_path = mged_dm_pathname(s->mged_curr_dm);
+    if (logical_path) {
+	bu_vls_printf(&vls, "mged_bind_dm %s", logical_path);
 	Tcl_Eval(s->interp, bu_vls_cstr(&vls));
     }
     bu_vls_free(&vls);
+    bu_vls_free(&pathname);
 
     return TCL_OK;
+
+attach_fail:
+    Tcl_AppendResult(s->interp, "attach(tkobol): ", failure, "\n",
+	    (char *)NULL);
+    bu_vls_free(&pathname);
+    dm_close(DMP);
+    DMP = DM_NULL;
+    return TCL_ERROR;
 }
 
 
@@ -191,25 +299,24 @@ mged_slider_free_vls(struct mged_dm *p)
 	bu_vls_free(&p->dm_size_name);
 	bu_vls_free(&p->dm_adc_name);
     }
+    if (BU_VLS_IS_INITIALIZED(&p->dm_pathname))
+	bu_vls_free(&p->dm_pathname);
 }
 
 
 void
-mged_obol_display_detach(struct mged_state *s, struct dm *dmp)
+mged_obol_display_detach(struct mged_state *s, struct mged_dm *mdmp)
 {
-    if (!s || !s->gedp || !dmp)
+    if (!s || !s->gedp || !mdmp || !mdmp->dm_view_state)
 	return;
-
-    void *controller = dm_obol_controller(dmp);
-    if (controller)
-	ged_draw_obol_controller_detach_opaque(s->gedp, controller);
+    (void)ged_view_context_display_endpoint_set(mdmp->dm_view_state->vs_gvp,
+	    NULL, 0);
 }
 
 static int
 release(struct mged_state *s, char *name, int need_close)
 {
     struct mged_dm *save_dm_list = MGED_DM_NULL;
-    struct bu_vls *pathname = NULL;
 
     if (name != NULL) {
 	struct mged_dm *p = MGED_DM_NULL;
@@ -222,8 +329,8 @@ release(struct mged_state *s, char *name, int need_close)
 	    if (!m_dmp || !m_dmp->dm_dmp)
 		continue;
 
-	    pathname = dm_get_pathname(m_dmp->dm_dmp);
-	    if (!BU_STR_EQUAL(name, bu_vls_cstr(pathname)))
+	    const char *dm_path = mged_dm_pathname(m_dmp);
+	    if (!dm_path || !BU_STR_EQUAL(name, dm_path))
 		continue;
 
 	    /* found it */
@@ -239,8 +346,11 @@ release(struct mged_state *s, char *name, int need_close)
 	    Tcl_AppendResult(s->interp, "release: ", name, " not found\n", (char *)NULL);
 	    return TCL_ERROR;
 	}
-    } else if (DMP && BU_STR_EQUAL("nu", bu_vls_cstr(dm_get_pathname(DMP))))
-	return TCL_OK;  /* Ignore */
+    } else {
+	const char *dm_path = mged_dm_pathname(s->mged_curr_dm);
+	if (dm_path && BU_STR_EQUAL("nu", dm_path))
+	    return TCL_OK;  /* Ignore */
+    }
 
     if (fbp) {
 	if (mged_variables->mv_listen) {
@@ -271,13 +381,8 @@ release(struct mged_state *s, char *name, int need_close)
     if (need_close && s->gedp)
 	ged_draw_obol_framebuffer_release(s->gedp);
 
-    if (s->mged_curr_dm && s->mged_curr_dm->dm_view_state &&
-	    s->mged_curr_dm->dm_view_state->vs_gvp)
-	ged_view_context_display_manager_set(
-		s->mged_curr_dm->dm_view_state->vs_gvp, NULL);
-
     if (need_close) {
-	mged_obol_display_detach(s, DMP);
+	mged_obol_display_detach(s, s->mged_curr_dm);
 	dm_close(DMP);
     }
 
@@ -335,17 +440,9 @@ f_release(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *
 static void
 print_valid_dm(Tcl_Interp *interpreter)
 {
-    Tcl_AppendResult(interpreter, "\tThe following display manager types are valid: ", (char *)NULL);
-    struct bu_vls dm_types = BU_VLS_INIT_ZERO;
-    dm_list_types(&dm_types, " ");
-
-    if (bu_vls_strlen(&dm_types)) {
-	Tcl_AppendResult(interpreter, bu_vls_cstr(&dm_types), (char *)NULL);
-    } else {
-	Tcl_AppendResult(interpreter, "NONE AVAILABLE", (char *)NULL);
-    }
-    bu_vls_free(&dm_types);
-    Tcl_AppendResult(interpreter, "\n", (char *)NULL);
+    Tcl_AppendResult(interpreter,
+	    "\tThe following display host types are valid: nu tkobol\n",
+	    (char *)NULL);
 }
 
 
@@ -372,12 +469,9 @@ f_attach(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	return TCL_OK;
     }
 
-    if (!dm_valid_type(argv[argc-1], NULL)) {
+    if (!BU_STR_EQUAL(argv[argc-1], "tkobol")) {
 	Tcl_AppendResult(interpreter, "attach(", argv[argc - 1], "): BAD\n", (char *)NULL);
 	print_valid_dm(interpreter);
-	Tcl_AppendResult(interpreter,
-			 "Hint: run `dm initmsg` to see why display-manager plugins may have failed to register.\n",
-			 (char *)NULL);
 	return TCL_ERROR;
     }
 
@@ -479,7 +573,7 @@ mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *arg
     BU_ALLOC(s->mged_curr_dm, struct mged_dm);
 
     /* Only need to do this once */
-    if (tkwin == NULL && BU_STR_EQUIV(dm_graphics_system(wp_name), "Tk")) {
+    if (tkwin == NULL && BU_STR_EQUAL(wp_name, "tkobol")) {
 	struct dm *tmp_dmp;
 	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
 
@@ -535,8 +629,10 @@ mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *arg
     mged_link_vars(s->mged_curr_dm);
 
     Tcl_ResetResult(s->interp);
-    const char *dm_name = dm_get_dm_name(DMP);
-    const char *dm_lname = dm_get_dm_lname(DMP);
+    const char *dm_name = s->mged_curr_dm->dm_graphical ? "tkobol" :
+	dm_get_dm_name(DMP);
+    const char *dm_lname = s->mged_curr_dm->dm_graphical ?
+	"Tk Obol display endpoint" : dm_get_dm_lname(DMP);
     if (dm_name && dm_lname) {
 	Tcl_AppendResult(s->interp, "ATTACHING ", dm_name, " (", dm_lname,	")\n", (char *)NULL);
     }
@@ -574,30 +670,11 @@ mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *arg
 void
 get_attached(struct mged_state *s)
 {
-    char *tok;
     int inflimit = MAX_ATTACH_RETRIES;
     int ret;
-    struct bu_vls avail_types = BU_VLS_INIT_ZERO;
     struct bu_vls wanted_type = BU_VLS_INIT_ZERO;
     struct bu_vls prompt = BU_VLS_INIT_ZERO;
-
-    const char *DELIM = " ";
-
-    dm_list_types(&avail_types, DELIM);
-
-    bu_vls_sprintf(&prompt, "attach (nu");
-    for (tok = strtok(bu_vls_addr(&avail_types), " "); tok; tok = strtok(NULL, " ")) {
-	if (BU_STR_EQUAL(tok, "nu"))
-	    continue;
-	if (BU_STR_EQUAL(tok, "plot"))
-	    continue;
-	if (BU_STR_EQUAL(tok, "postscript"))
-	    continue;
-	bu_vls_printf(&prompt, " %s", tok);
-    }
-    bu_vls_printf(&prompt, ")[nu]? ");
-
-    bu_vls_free(&avail_types);
+    bu_vls_sprintf(&prompt, "attach (nu tkobol)[nu]? ");
 
     while (inflimit > 0) {
 	bu_log("%s", bu_vls_cstr(&prompt));
@@ -621,7 +698,7 @@ get_attached(struct mged_state *s)
 	/* trim whitespace before comparisons (but not before checking empty) */
 	bu_vls_trimspace(&wanted_type);
 
-	if (dm_valid_type(bu_vls_cstr(&wanted_type), NULL)) {
+	if (BU_STR_EQUAL(bu_vls_cstr(&wanted_type), "tkobol")) {
 	    break;
 	}
 
@@ -674,7 +751,8 @@ f_dm(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[
 	    bu_vls_free(&vls);
 	    return TCL_ERROR;
 	}
-	if (dm_valid_type(argv[argc-1], NULL)) {
+	if (BU_STR_EQUAL(argv[argc-1], "nu") ||
+	    BU_STR_EQUAL(argv[argc-1], "tkobol")) {
 	    Tcl_AppendResult(interpreter, argv[argc-1], (char *)NULL);
 	}
 	return TCL_OK;
@@ -697,6 +775,7 @@ f_dm(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[
 void
 dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
 {
+    bu_vls_init(&s->mged_curr_dm->dm_pathname);
     BU_ALLOC(menu_state, struct _menu_state);
     *menu_state = *target_dm->dm_menu_state;		/* struct copy */
     menu_state->ms_rc = 1;
@@ -765,14 +844,14 @@ void
 mged_link_vars(struct mged_dm *p)
 {
     mged_slider_init_vls(p);
-    struct bu_vls *pn = dm_get_pathname(p->dm_dmp);
+    const char *pn = mged_dm_pathname(p);
     if (pn) {
-	bu_vls_printf(&p->dm_fps_name, "%s(%s,fps)", MGED_DISPLAY_VAR,	bu_vls_cstr(pn));
-	bu_vls_printf(&p->dm_aet_name, "%s(%s,aet)", MGED_DISPLAY_VAR,	bu_vls_cstr(pn));
-	bu_vls_printf(&p->dm_ang_name, "%s(%s,ang)", MGED_DISPLAY_VAR,	bu_vls_cstr(pn));
-	bu_vls_printf(&p->dm_center_name, "%s(%s,center)", MGED_DISPLAY_VAR, bu_vls_cstr(pn));
-	bu_vls_printf(&p->dm_size_name, "%s(%s,size)", MGED_DISPLAY_VAR, bu_vls_cstr(pn));
-	bu_vls_printf(&p->dm_adc_name, "%s(%s,adc)", MGED_DISPLAY_VAR,	bu_vls_cstr(pn));
+	bu_vls_printf(&p->dm_fps_name, "%s(%s,fps)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->dm_aet_name, "%s(%s,aet)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->dm_ang_name, "%s(%s,ang)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->dm_center_name, "%s(%s,center)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->dm_size_name, "%s(%s,size)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->dm_adc_name, "%s(%s,adc)", MGED_DISPLAY_VAR, pn);
     }
 }
 
@@ -792,9 +871,9 @@ f_get_dm_list(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, 
 
     for (size_t i = 0; i < BU_PTBL_LEN(&active_dm_set); i++) {
 	struct mged_dm *dlp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, i);
-	struct bu_vls *pn = dm_get_pathname(dlp->dm_dmp);
-	if (pn && bu_vls_strlen(pn))
-	    Tcl_AppendElement(interpreter, bu_vls_cstr(pn));
+	const char *pn = mged_dm_pathname(dlp);
+	if (pn)
+	    Tcl_AppendElement(interpreter, pn);
     }
     return TCL_OK;
 }

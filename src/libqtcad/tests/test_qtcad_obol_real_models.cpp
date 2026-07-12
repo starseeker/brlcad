@@ -19,6 +19,7 @@
 #include "bu/time.h"
 #include "ged.h"
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "icv.h"
 #include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
@@ -42,6 +43,7 @@
 #include <fstream>
 #include <math.h>
 #include <stdint.h>
+#include <set>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,8 +317,42 @@ source_material_matches_db_color(struct ged *gedp,
     return source_material_matches_rgb(summary, rgb);
 }
 
+static int
+all_source_materials_match_db_colors(struct ged *gedp,
+	SoBRLSceneController *controller)
+{
+    if (!gedp || !gedp->dbip || !controller)
+	return 0;
+
+    const int sourceCount = controller->getDatabaseSourceCount();
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	BRLObolDatabaseSourceSummary summary;
+	if (!source || !source->getSummary(summary) || !summary.valid)
+	    return 0;
+
+	SbColor expected;
+	if (!brlobol_database_source_path_material_color(gedp->dbip,
+		summary.path.getString(), expected) ||
+	    !summary.materialColorValid ||
+	    fabsf(summary.materialColor[0] - expected[0]) >= 1.0e-5f ||
+	    fabsf(summary.materialColor[1] - expected[1]) >= 1.0e-5f ||
+	    fabsf(summary.materialColor[2] - expected[2]) >= 1.0e-5f) {
+	    fprintf(stderr,
+		"material sweep/reference mismatch: source=%d path=%s "
+		"valid=%d actual=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
+		i, summary.path.getString(),
+		(int)summary.materialColorValid,
+		summary.materialColor[0], summary.materialColor[1],
+		summary.materialColor[2], expected[0], expected[1], expected[2]);
+	    return 0;
+	}
+    }
+    return sourceCount > 0;
+}
+
 static SoBRLDatabaseSource *
-find_source_by_path_suffix(BRLObolViewController *controller,
+find_source_by_path_suffix(SoBRLSceneController *controller,
 	const char *suffix,
 	BRLObolDatabaseSourceSummary &summary)
 {
@@ -409,6 +445,30 @@ realized_geometry_counts(BRLObolViewController *controller,
 	counts.segmentCount += sourceCounts.segmentCount;
 	counts.meshCount += sourceCounts.meshCount;
 	counts.triangleCount += sourceCounts.triangleCount;
+    }
+
+    /* Retained batches deliberately decouple source records from emitted
+     * shape nodes.  Validate their public export records when geometry is no
+     * longer parented directly below each database source. */
+    if (!counts.segmentCount && !counts.triangleCount &&
+	controller->getViewport() && controller->getViewport()->getRoot()) {
+	SoBRLExportAction export_action;
+	export_action.apply(controller->getViewport()->getRoot());
+	std::set<std::string> line_paths;
+	std::set<std::string> triangle_paths;
+	for (int i = 0; i < export_action.getLineCount(); i++) {
+	    const SoBRLExportAction::LineRecord &record = export_action.getLine(i);
+	    line_paths.insert(record.path.getString());
+	}
+	for (int i = 0; i < export_action.getTriangleCount(); i++) {
+	    const SoBRLExportAction::TriangleRecord &record =
+		export_action.getTriangle(i);
+	    triangle_paths.insert(record.path.getString());
+	}
+	counts.shapeCount = static_cast<int>(line_paths.size());
+	counts.segmentCount = export_action.getLineCount();
+	counts.meshCount = static_cast<int>(triangle_paths.size());
+	counts.triangleCount = export_action.getTriangleCount();
     }
 
     return counts;
@@ -558,6 +618,11 @@ sync_draw_case(const struct model_case &testCase)
     QgView view(NULL, QgView_SW);
     view.resize(220, 170);
     qg_legacy_view_ged_active_set(gedp, view.view());
+    if (!ged_view_context_display_endpoint_set(
+	    qg_legacy_view_to_context(view.view()), view.displayEndpoint(), 0)) {
+	ged_close(gedp);
+	return 0;
+    }
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller) {
@@ -594,6 +659,9 @@ sync_draw_case(const struct model_case &testCase)
     }
     ged_draw_transaction_result_free(&result);
 
+    /* QgView endpoints use the same deferred publication boundary as the
+     * interactive canvas.  Drain it explicitly before inspecting geometry. */
+    (void)controller->realizePending();
     const int sourceCount = controller->getDatabaseSourceCount();
     if (!changed || sourceCount <= 0) {
 	fprintf(stderr, "%s:%s did not create Obol database sources\n",
@@ -741,6 +809,9 @@ sync_draw_case(const struct model_case &testCase)
 static int
 sync_material_refresh_to_view(struct ged *gedp, QgView &view)
 {
+    /* Direct librt mutations bypass GED's material-change event.  Advance the
+     * synchronization stamp explicitly before requesting a recolor sweep. */
+    ged_draw_bump_material_revision(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS, NULL);
     txn.view = qg_legacy_view_to_context(view.view());
@@ -748,8 +819,11 @@ sync_material_refresh_to_view(struct ged *gedp, QgView &view)
     struct ged_draw_transaction_result result;
     ged_draw_transaction_result_init(&result);
     result.status = 1;
-    int changed = qg_obol_sync_ged_draw_transaction(gedp, &txn, &result,
-	    &view);
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    int changed = scene ? ged_draw_obol_scene_sync_transaction(gedp, &txn,
+	    &result, scene) : 0;
+    if (changed)
+	view.need_update(QG_VIEW_REFRESH);
     ged_draw_transaction_result_free(&result);
     return changed;
 }
@@ -775,6 +849,13 @@ static int
 exercise_m35_color_table_mutation(void)
 {
     int64_t totalStart = bu_gettime();
+    int64_t phaseStart = totalStart;
+    auto report_phase = [&phaseStart](const char *name) {
+	int64_t now = bu_gettime();
+	fprintf(stderr, "m35_color_table_mutation:%s %.6f sec\n", name,
+		(double)(now - phaseStart) / 1000000.0);
+	phaseStart = now;
+    };
     char src_db[MAXPATHLEN] = {0};
     if (!model_path("m35.g", src_db, sizeof(src_db))) {
 	fprintf(stderr, "missing qtcad Obol m35 color-table source model: %s\n",
@@ -808,6 +889,12 @@ exercise_m35_color_table_mutation(void)
     QgView view(NULL, QgView_SW);
     view.resize(220, 170);
     qg_legacy_view_ged_active_set(gedp, view.view());
+    if (!ged_view_context_display_endpoint_set(
+	    qg_legacy_view_to_context(view.view()), view.displayEndpoint(), 0)) {
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller) {
@@ -816,6 +903,7 @@ exercise_m35_color_table_mutation(void)
 	return 0;
     }
     controller->clearDatabaseSources();
+    report_phase("setup");
 
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
@@ -829,6 +917,7 @@ exercise_m35_color_table_mutation(void)
     struct ged_draw_transaction_result result;
     ged_draw_transaction_result_init(&result);
     int drawRet = ged_draw_apply_transaction(gedp, &txn, &result);
+    report_phase("draw-transaction");
     int changed = qg_obol_sync_ged_draw_transaction(gedp, &txn, &result,
 	    &view);
     if (drawRet < 0 || !changed) {
@@ -840,9 +929,13 @@ exercise_m35_color_table_mutation(void)
 	return 0;
     }
     ged_draw_transaction_result_free(&result);
+    report_phase("initial-draw");
+
+    SoBRLSceneController *source_controller =
+	ged_draw_obol_scene_controller(gedp);
 
     BRLObolDatabaseSourceSummary canary_summary;
-    SoBRLDatabaseSource *canary = find_source_by_path_suffix(controller,
+    SoBRLDatabaseSource *canary = find_source_by_path_suffix(source_controller,
 	    "r850/s850", canary_summary);
     unsigned char expectedRgb[3] = {0, 0, 0};
     if (!canary || !source_material_matches_db_color(gedp, canary_summary,
@@ -864,15 +957,23 @@ exercise_m35_color_table_mutation(void)
     const char *global_color_av[6] = {
 	"color", "0", "15000", "20", "30", "40"
     };
-    if (ged_exec_color(gedp, 6, global_color_av) != BRLCAD_OK ||
-	    !sync_material_refresh_to_view(gedp, view)) {
+    if (ged_exec_color(gedp, 6, global_color_av) != BRLCAD_OK) {
 	fprintf(stderr, "m35 color-table global color mutation did not sync\n");
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
 	return 0;
     }
+    report_phase("global-color-refresh");
 
-    canary = find_source_by_path_suffix(controller, "r850/s850",
+    if (!all_source_materials_match_db_colors(gedp, source_controller)) {
+	fprintf(stderr, "m35 color-table cached sweep disagrees with full-path colors\n");
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+    report_phase("global-color-reference-validation");
+
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
 	    canary_summary);
     if (!canary || !source_material_matches_db_color(gedp, canary_summary,
 	    expectedRgb)) {
@@ -893,31 +994,32 @@ exercise_m35_color_table_mutation(void)
     const char *new_id_color_av[6] = {
 	"color", "16001", "16001", "80", "90", "100"
     };
-    if (ged_exec_color(gedp, 6, new_id_color_av) != BRLCAD_OK ||
-	    !sync_material_refresh_to_view(gedp, view)) {
+    if (ged_exec_color(gedp, 6, new_id_color_av) != BRLCAD_OK) {
 	fprintf(stderr, "m35 color-table new region-id color mutation did not sync\n");
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
 	return 0;
     }
+    report_phase("new-id-color-refresh");
 
     const char *item_av[3] = {"item", "r850", "16001"};
-    if (ged_exec_item(gedp, 3, item_av) != BRLCAD_OK ||
-	    !sync_material_refresh_to_view(gedp, view)) {
+    if (ged_exec_item(gedp, 3, item_av) != BRLCAD_OK) {
 	fprintf(stderr, "m35 color-table region-id mutation did not sync\n");
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
 	return 0;
     }
+    report_phase("item-refresh");
 
-    canary = find_source_by_path_suffix(controller, "r850/s850",
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
 	    canary_summary);
-    if (!canary || !source_material_matches_db_color(gedp, canary_summary,
-	    expectedRgb)) {
+    if (!canary || canary_summary.databaseRegionId != 16001 ||
+	!source_material_matches_db_color(gedp, canary_summary, expectedRgb)) {
 	fprintf(stderr,
-		"m35 color-table canary region-id update mismatch: found=%d path=%s valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
+		"m35 color-table canary region-id update mismatch: found=%d path=%s region=%d valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
 		canary ? 1 : 0,
 		canary ? canary_summary.path.getString() : "",
+		canary ? canary_summary.databaseRegionId : -1,
 		canary ? (int)canary_summary.materialColorValid : 0,
 		expectedRgb[0], expectedRgb[1], expectedRgb[2],
 		canary ? canary_summary.materialColor[0] : 0.0f,
@@ -937,8 +1039,9 @@ exercise_m35_color_table_mutation(void)
 	bu_file_delete(tmp_db);
 	return 0;
     }
+    report_phase("direct-global-refresh");
 
-    canary = find_source_by_path_suffix(controller, "r850/s850",
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
 	    canary_summary);
     if (!canary || !source_material_matches_db_color(gedp, canary_summary,
 	    expectedRgb)) {
@@ -963,15 +1066,17 @@ exercise_m35_color_table_mutation(void)
 	bu_file_delete(tmp_db);
 	return 0;
     }
+    report_phase("direct-region-refresh");
 
-    canary = find_source_by_path_suffix(controller, "r850/s850",
+    canary = find_source_by_path_suffix(source_controller, "r850/s850",
 	    canary_summary);
-    if (!canary || !source_material_matches_db_color(gedp, canary_summary,
-	    expectedRgb)) {
+    if (!canary || canary_summary.databaseRegionId != 17002 ||
+	!source_material_matches_db_color(gedp, canary_summary, expectedRgb)) {
 	fprintf(stderr,
-		"m35 color-table canary direct region-id attr update mismatch: found=%d path=%s valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
+		"m35 color-table canary direct region-id attr update mismatch: found=%d path=%s region=%d valid=%d expected=(%u %u %u) color=(%.9g %.9g %.9g)\n",
 		canary ? 1 : 0,
 		canary ? canary_summary.path.getString() : "",
+		canary ? canary_summary.databaseRegionId : -1,
 		canary ? (int)canary_summary.materialColorValid : 0,
 		expectedRgb[0], expectedRgb[1], expectedRgb[2],
 		canary ? canary_summary.materialColor[0] : 0.0f,

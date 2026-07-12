@@ -38,6 +38,7 @@
 #include "./sedit.h"
 #include "./mged_dm.h"
 #include "./menu.h"
+#include "./hud.h"
 
 #define USE_OLD_MENUS 0
 
@@ -69,11 +70,7 @@ create_text_overlay(struct mged_state *s, struct bu_vls *vp)
 
     BU_CK_VLS(vp);
 
-    /*
-     * Set up for character output.  For the best generality, we
-     * don't assume that the display can process a CRLF sequence,
-     * so each line is written with a separate call to dm_draw_string_2d().
-     */
+    /* Preserve line boundaries for retained HUD label publication. */
 
     /* print solid info at top of screen
      * Check if the highlighted shape still exists or it has been killed
@@ -167,16 +164,16 @@ create_text_overlay(struct mged_state *s, struct bu_vls *vp)
 
 
 /*
- * Output a vls string to the display manager,
- * as a text overlay on the graphics area (ugh).
+ * Add a vls string to the retained graphics-area text overlay.
  *
  * Set up for character output.  For the best generality, we
  * don't assume that the display can process a CRLF sequence,
- * so each line is written with a separate call to dm_draw_string_2d().
+ * so each line becomes a separate retained label.
  */
 void
 screen_vls(
 	struct mged_state *s,
+	struct mged_hud_builder *hud,
 	int xbase,
 	int ybase,
 	struct bu_vls *vp)
@@ -188,10 +185,7 @@ screen_vls(
     BU_CK_VLS(vp);
     y = ybase;
 
-    dm_set_fg(DMP,
-		   color_scheme->cs_edit_info[0],
-		   color_scheme->cs_edit_info[1],
-		   color_scheme->cs_edit_info[2], 1, 1.0);
+    mged_hud_color_set(hud, color_scheme->cs_edit_info);
 
     start = bu_vls_addr(vp);
     while (*start != '\0') {
@@ -199,8 +193,8 @@ screen_vls(
 
 	*end = '\0';
 
-	dm_draw_string_2d(DMP, start,
-			  GED2PM1(xbase), GED2PM1(y), 0, 0);
+	(void)mged_hud_label_add(hud, start, GED2PM1(xbase), GED2PM1(y),
+		0.0, 0);
 	start = end+1;
 	y += TEXT0_DY;
     }
@@ -209,7 +203,8 @@ screen_vls(
 
 /*
  * Produce titles, etc., on the screen.
- * NOTE that this routine depends on being called AFTER dozoom();
+ * NOTE that this routine depends on being called after the retained scene
+ * refresh.
  */
 void
 dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
@@ -250,6 +245,16 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 
     void *view_ctx = view_state->vs_gvp;
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    (void)bv_params_state_get(&params, view);
+    struct mged_hud_builder hud;
+    mged_hud_builder_init(&hud, view_ctx, "_faceplate/mged");
+    mged_hud_font_size_set(&hud, params.font_size > 0 ? params.font_size : 20);
+    mged_hud_line_style_set(&hud, mged_variables->mv_linewidth, 0);
+    const int view_width = bv_width_get(view);
+    const int view_height = bv_height_get(view);
+    const fastf_t view_aspect = (view_width > 0 && view_height > 0) ?
+	(fastf_t)view_width / (fastf_t)view_height : 1.0;
     bv_center_mat_get(view_center, view);
     bv_aet_get(view_aet, view);
     view_perspective = bv_perspective_get(view);
@@ -265,8 +270,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	const struct db_full_path *dbfp = hrec.fullpath;
 
 	if (!dbfp) {
-	    bu_vls_free(&vls);
-	    return;
+	    goto done;
 	}
 	RT_CK_FULL_PATH(dbfp);
 
@@ -352,8 +356,6 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_ang_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
-    dm_set_line_attr(DMP, mged_variables->mv_linewidth, 0);
-
     /* Label the vertices of the edited solid */
     if (MEDIT(s) && (MEDIT(s)->edit_flag >= 0 || (s->global_editing_state == ST_O_EDIT && !highlighted_legacy_eval))) {
 	mat_t xform;
@@ -372,61 +374,54 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 
 	label_edited_solid(s, &num_lines, lines,  pl, 8+1, xform, &MEDIT(s)->es_int);
 
-	dm_set_fg(DMP,
-		       color_scheme->cs_geo_label[0],
-		       color_scheme->cs_geo_label[1],
-		       color_scheme->cs_geo_label[2], 1, 1.0);
+	mged_hud_color_set(&hud, color_scheme->cs_geo_label);
 	for (i=0; i<(size_t)num_lines; i++)
-	    dm_draw_line_2d(DMP,
+	    (void)mged_hud_line_add(&hud,
 			    GED2PM1(((int)(lines[i*2][X]*RT_VIEW_MAX))),
-			    GED2PM1(((int)(lines[i*2][Y]*RT_VIEW_MAX)) * dm_get_aspect(DMP)),
+			    GED2PM1(((int)(lines[i*2][Y]*RT_VIEW_MAX)) * view_aspect),
 			    GED2PM1(((int)(lines[i*2+1][X]*RT_VIEW_MAX))),
-			    GED2PM1(((int)(lines[i*2+1][Y]*RT_VIEW_MAX)) * dm_get_aspect(DMP)));
+			    GED2PM1(((int)(lines[i*2+1][Y]*RT_VIEW_MAX)) * view_aspect));
 	for (i=0; i<8+1; i++) {
 	    if (pl[i].str[0] == '\0') break;
-	    dm_draw_string_2d(DMP, pl[i].str,
+	    (void)mged_hud_label_add(&hud, pl[i].str,
 			      GED2PM1(((int)(pl[i].pt[X]*RT_VIEW_MAX))+15),
-			      GED2PM1(((int)(pl[i].pt[Y]*RT_VIEW_MAX))+15), 0, 1);
+			      GED2PM1(((int)(pl[i].pt[Y]*RT_VIEW_MAX))+15),
+			      0.0, 0);
 	}
     }
 
     if (mged_variables->mv_faceplate) {
 	/* Line across the bottom, above two bottom status lines */
-	dm_set_fg(DMP,
-		       color_scheme->cs_other_line[0],
-		       color_scheme->cs_other_line[1],
-		       color_scheme->cs_other_line[2], 1, 1.0);
-	dm_draw_line_2d(DMP,
+	mged_hud_color_set(&hud, color_scheme->cs_other_line);
+	(void)mged_hud_line_add(&hud,
 			GED2PM1((int)RT_VIEW_MIN), GED2PM1(TITLE_YBASE-TEXT1_DY),
 			GED2PM1((int)RT_VIEW_MAX), GED2PM1(TITLE_YBASE-TEXT1_DY));
 
 	if (mged_variables->mv_orig_gui) {
 	    /* Enclose window in decorative box.  Mostly for alignment. */
-	    dm_draw_line_2d(DMP,
+	    (void)mged_hud_line_add(&hud,
 			    GED2PM1((int)RT_VIEW_MIN), GED2PM1((int)RT_VIEW_MIN),
 			    GED2PM1((int)RT_VIEW_MAX), GED2PM1((int)RT_VIEW_MIN));
-	    dm_draw_line_2d(DMP,
+	    (void)mged_hud_line_add(&hud,
 			    GED2PM1((int)RT_VIEW_MAX), GED2PM1((int)RT_VIEW_MIN),
 			    GED2PM1((int)RT_VIEW_MAX), GED2PM1((int)RT_VIEW_MAX));
-	    dm_draw_line_2d(DMP,
+	    (void)mged_hud_line_add(&hud,
 			    GED2PM1((int)RT_VIEW_MAX), GED2PM1((int)RT_VIEW_MAX),
 			    GED2PM1((int)RT_VIEW_MIN), GED2PM1((int)RT_VIEW_MAX));
-	    dm_draw_line_2d(DMP,
+	    (void)mged_hud_line_add(&hud,
 			    GED2PM1((int)RT_VIEW_MIN), GED2PM1((int)RT_VIEW_MAX),
 			    GED2PM1((int)RT_VIEW_MIN), GED2PM1((int)RT_VIEW_MIN));
 
 	    /* Display scroll bars */
-	    scroll_ybot = scroll_display(s, SCROLLY);
+	    scroll_ybot = scroll_display(s, &hud, SCROLLY);
 	    y = MENUY;
 	    x = MENUX;
 
 	    /* Display state and local unit in upper left corner, boxed */
-	    dm_set_fg(DMP,
-			   color_scheme->cs_state_text1[0],
-			   color_scheme->cs_state_text1[1],
-			   color_scheme->cs_state_text1[2], 1, 1.0);
-	    dm_draw_string_2d(DMP, state_str[s->global_editing_state],
-			      GED2PM1(MENUX), GED2PM1(MENUY - MENU_DY), 1, 0);
+	    mged_hud_color_set(&hud, color_scheme->cs_state_text1);
+	    (void)mged_hud_label_add(&hud, state_str[s->global_editing_state],
+		    GED2PM1(MENUX), GED2PM1(MENUY - MENU_DY),
+		    0.0, 0);
 	} else {
 	    scroll_ybot = SCROLLY;
 	    x = (int)RT_VIEW_MIN + 20;
@@ -441,37 +436,28 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 
 	    for (i=0; i < hrec.fullpath->fp_len; i++) {
 		if (i == (size_t)highlight_path_pos  &&  s->global_editing_state == ST_O_PATH) {
-		    dm_set_fg(DMP,
-				   color_scheme->cs_state_text1[0],
-				   color_scheme->cs_state_text1[1],
-				   color_scheme->cs_state_text1[2], 1, 1.0);
-		    dm_draw_string_2d(DMP, "[MATRIX]",
-				      GED2PM1(x), GED2PM1(y), 0, 0);
+		    mged_hud_color_set(&hud, color_scheme->cs_state_text1);
+		    (void)mged_hud_label_add(&hud, "[MATRIX]",
+			    GED2PM1(x), GED2PM1(y), 0.0, 0);
 		    y += MENU_DY;
 		}
-		dm_set_fg(DMP,
-			       color_scheme->cs_state_text2[0],
-			       color_scheme->cs_state_text2[1],
-			       color_scheme->cs_state_text2[2], 1, 1.0);
-		dm_draw_string_2d(DMP,
+		mged_hud_color_set(&hud, color_scheme->cs_state_text2);
+		(void)mged_hud_label_add(&hud,
 				  DB_FULL_PATH_GET(hrec.fullpath, i)->d_namep,
-				  GED2PM1(x), GED2PM1(y), 0, 0);
+				  GED2PM1(x), GED2PM1(y), 0.0, 0);
 		y += MENU_DY;
 	    }
 	}
 
 	if (mged_variables->mv_orig_gui) {
-	    dm_set_fg(DMP,
-			   color_scheme->cs_other_line[0],
-			   color_scheme->cs_other_line[1],
-			   color_scheme->cs_other_line[2], 1, 1.0);
-	    dm_draw_line_2d(DMP,
+	    mged_hud_color_set(&hud, color_scheme->cs_other_line);
+	    (void)mged_hud_line_add(&hud,
 			    GED2PM1(MENUXLIM), GED2PM1(y),
 			    GED2PM1(MENUXLIM), GED2PM1((int)RT_VIEW_MAX));	/* vert. */
 	    /*
 	     * The top of the menu (if any) begins at the Y value specified.
 	     */
-	    mmenu_display(s, y);
+	    mmenu_display(s, &hud, y);
 
 	    /* print parameter locations on screen */
 	    if (s->global_editing_state == ST_O_EDIT && highlighted_legacy_eval) {
@@ -479,26 +465,23 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		MAT4X3PNT(temp, view_state->vs_model2objview, MEDIT(s)->e_keypoint);
 		xloc = (int)(temp[X]*RT_VIEW_MAX);
 		yloc = (int)(temp[Y]*RT_VIEW_MAX);
-		dm_set_fg(DMP,
-			       color_scheme->cs_edit_info[0],
-			       color_scheme->cs_edit_info[1],
-			       color_scheme->cs_edit_info[2], 1, 1.0);
-		dm_draw_line_2d(DMP,
+		mged_hud_color_set(&hud, color_scheme->cs_edit_info);
+		(void)mged_hud_line_add(&hud,
 				GED2PM1(xloc-TEXT0_DY), GED2PM1(yloc+TEXT0_DY),
 				GED2PM1(xloc+TEXT0_DY), GED2PM1(yloc-TEXT0_DY));
-		dm_draw_line_2d(DMP,
+		(void)mged_hud_line_add(&hud,
 				GED2PM1(xloc-TEXT0_DY), GED2PM1(yloc-TEXT0_DY),
 				GED2PM1(xloc+TEXT0_DY), GED2PM1(yloc+TEXT0_DY));
-		dm_draw_line_2d(DMP,
+		(void)mged_hud_line_add(&hud,
 				GED2PM1(xloc+TEXT0_DY), GED2PM1(yloc+TEXT0_DY),
 				GED2PM1(xloc-TEXT0_DY), GED2PM1(yloc+TEXT0_DY));
-		dm_draw_line_2d(DMP,
+		(void)mged_hud_line_add(&hud,
 				GED2PM1(xloc+TEXT0_DY), GED2PM1(yloc-TEXT0_DY),
 				GED2PM1(xloc-TEXT0_DY), GED2PM1(yloc-TEXT0_DY));
-		dm_draw_line_2d(DMP,
+		(void)mged_hud_line_add(&hud,
 				GED2PM1(xloc+TEXT0_DY), GED2PM1(yloc+TEXT0_DY),
 				GED2PM1(xloc+TEXT0_DY), GED2PM1(yloc-TEXT0_DY));
-		dm_draw_line_2d(DMP,
+		(void)mged_hud_line_add(&hud,
 				GED2PM1(xloc-TEXT0_DY), GED2PM1(yloc+TEXT0_DY),
 				GED2PM1(xloc-TEXT0_DY), GED2PM1(yloc-TEXT0_DY));
 	    }
@@ -509,9 +492,9 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	 */
 	/* create_text_overlay(s, &vls); */
 	if (mged_variables->mv_orig_gui) {
-	    screen_vls(s, SOLID_XBASE, scroll_ybot+TEXT0_DY, overlay_vls);
+	    screen_vls(s, &hud, SOLID_XBASE, scroll_ybot+TEXT0_DY, overlay_vls);
 	} else {
-	    screen_vls(s, x, y, overlay_vls);
+	    screen_vls(s, &hud, x, y, overlay_vls);
 	}
 
 	/*
@@ -523,12 +506,10 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		      size, bu_units_string(s->dbip->dbi_local2base));
 	bu_vls_printf(&vls, "az=%3.2f el=%3.2f tw=%3.2f ang=(%s, %s, %s)", V3ARGS(view_aet),
 		      ang_x, ang_y, ang_z);
-	dm_set_fg(DMP,
-		       color_scheme->cs_status_text1[0],
-		       color_scheme->cs_status_text1[1],
-		       color_scheme->cs_status_text1[2], 1, 1.0);
-	dm_draw_string_2d(DMP, bu_vls_addr(&vls),
-			  GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE), 1, 0);
+	mged_hud_color_set(&hud, color_scheme->cs_status_text1);
+	(void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
+		GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE),
+		0.0, 0);
     } /* if faceplate !0 */
 
     /*
@@ -558,12 +539,10 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		      adc.pos_grid[X] * f, adc.pos_grid[Y] * f,
 		      adc.pos_view[X] * f, adc.pos_view[Y] * f);
 	if (mged_variables->mv_faceplate) {
-	    dm_set_fg(DMP,
-			   color_scheme->cs_status_text2[0],
-			   color_scheme->cs_status_text2[1],
-			   color_scheme->cs_status_text2[2], 1, 1.0);
-	    dm_draw_string_2d(DMP, bu_vls_addr(&vls),
-			      GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY), 1, 0);
+	    mged_hud_color_set(&hud, color_scheme->cs_status_text2);
+	    (void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
+		    GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
+		    0.0, 0);
 	}
 	Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_adc_name),
 		   bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
@@ -583,12 +562,10 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		      MEDIT(s)->e_keypoint[Y] * s->dbip->dbi_base2local,
 		      MEDIT(s)->e_keypoint[Z] * s->dbip->dbi_base2local);
 	if (mged_variables->mv_faceplate && ss_line_not_drawn) {
-	    dm_set_fg(DMP,
-			   color_scheme->cs_status_text2[0],
-			   color_scheme->cs_status_text2[1],
-			   color_scheme->cs_status_text2[2], 1, 1.0);
-	    dm_draw_string_2d(DMP, bu_vls_addr(&kp_vls),
-			      GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY), 1, 0);
+	    mged_hud_color_set(&hud, color_scheme->cs_status_text2);
+	    (void)mged_hud_label_add(&hud, bu_vls_addr(&kp_vls),
+		    GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
+		    0.0, 0);
 	    ss_line_not_drawn = 0;
 	}
 
@@ -616,12 +593,10 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		bu_vls_printf(&vls, "/%s",
 			      DB_FULL_PATH_GET(hrec.fullpath, i)->d_namep);
 	    }
-	    dm_set_fg(DMP,
-			   color_scheme->cs_status_text2[0],
-			   color_scheme->cs_status_text2[1],
-			   color_scheme->cs_status_text2[2], 1, 1.0);
-	    dm_draw_string_2d(DMP, bu_vls_addr(&vls),
-			      GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY), 1, 0);
+	    mged_hud_color_set(&hud, color_scheme->cs_status_text2);
+	    (void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
+		    GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
+		    0.0, 0);
 
 	    ss_line_not_drawn = 0;
 	}
@@ -630,16 +605,17 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     bu_vls_trunc(&vls, 0);
     bu_vls_printf(&vls, "%.2f fps", 1/frametime);
     if (mged_variables->mv_faceplate && ss_line_not_drawn) {
-	dm_set_fg(DMP,
-		       color_scheme->cs_status_text2[0],
-		       color_scheme->cs_status_text2[1],
-		       color_scheme->cs_status_text2[2], 1, 1.0);
-	dm_draw_string_2d(DMP, bu_vls_addr(&vls),
-			  GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY), 1, 0);
+	mged_hud_color_set(&hud, color_scheme->cs_status_text2);
+	(void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
+		GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
+		0.0, 0);
     }
     Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_fps_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
+done:
+    (void)mged_hud_builder_publish(&hud);
+    mged_hud_builder_free(&hud);
     bu_vls_free(&vls);
 }
 

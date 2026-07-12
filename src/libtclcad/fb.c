@@ -90,9 +90,7 @@ to_open_fbs(void *view_ctx, Tcl_Interp *interp)
     if (fbs_legacy_framebuffer(&tvd->gdv_fbs) != FB_NULL)
 	return TCL_OK;
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    dm_fbserv_set_framebuffer(&tvd->gdv_fbs,
-	    dmp ? dm_get_fb(dmp) : FB_NULL);
+    dm_fbserv_set_framebuffer(&tvd->gdv_fbs, FB_NULL);
 
     if (fbs_legacy_framebuffer(&tvd->gdv_fbs) == FB_NULL) {
 	Tcl_Obj *obj;

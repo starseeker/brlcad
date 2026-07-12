@@ -3047,17 +3047,20 @@ SoBRLSceneController::refreshDatabaseSourceMaterialColorsFromDatabase(
 	return -1;
 
     const int sourceCount = this->getDatabaseSourceCount();
-    int changed = 0;
+    std::vector<SoBRLDatabaseSource *> sources;
+    sources.reserve(static_cast<size_t>(sourceCount));
     for (int i = 0; i < sourceCount; i++) {
 	SoBRLDatabaseSource *source = this->getDatabaseSource(i);
-	if (!source)
-	    continue;
-	const int sourceChanged =
-	    source->refreshMaterialColorFromDatabase(materialRevision,
-		overrideDbip);
-	if (sourceChanged > 0)
-	    changed = 1;
+	if (source)
+	    sources.push_back(source);
     }
+    struct db_i *dbip = overrideDbip;
+    if (!dbip && !sources.empty())
+	dbip = sources.front()->getDatabase();
+    const int changed = brlobol_database_sources_refresh_material_colors(
+	sources.data(), sources.size(), materialRevision, dbip);
+    if (changed < 0)
+	return -1;
     if (changed)
 	this->advanceFrameRevision();
     return changed;

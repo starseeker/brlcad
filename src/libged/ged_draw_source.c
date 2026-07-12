@@ -4867,8 +4867,7 @@ ged_draw_group_ref_lookup_or_create(struct ged *gedp,
 	return GED_DRAW_GROUP_REF_NULL;
 
     const char *path = ged_draw_dbpath_skip_lead_slash(s);
-    if (!ged_draw_obol_scene_controller_is_owned(gedp) &&
-	    !ged_draw_obol_scene_controller_ensure_owned(gedp, 1)) {
+    if (!ged_draw_obol_scene_controller_ensure_owned(gedp, 1)) {
 	bu_free(s, "draw group path string");
 	return GED_DRAW_GROUP_REF_NULL;
     }

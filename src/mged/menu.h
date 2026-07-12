@@ -60,11 +60,14 @@ struct mged_state;
 extern struct rt_edit_menu_item sed_menu[];
 extern struct rt_edit_menu_item oed_menu[];
 
+struct mged_hud_builder;
+
 void btn_head_menu(struct rt_edit *s, int i, int menu, int item, void *data);
 void chg_l2menu(struct mged_state *s, int i);
 
 extern void mmenu_init(struct mged_state *s);
-extern void mmenu_display(struct mged_state *s, int y_top);
+extern void mmenu_display(struct mged_state *s, struct mged_hud_builder *hud,
+	int y_top);
 extern void mmenu_set(struct mged_state *s, int idx, struct rt_edit_menu_item *value);
 extern void mmenu_set_all(struct mged_state *s, int idx, struct rt_edit_menu_item *value);
 extern void sedit_menu(struct mged_state *s);

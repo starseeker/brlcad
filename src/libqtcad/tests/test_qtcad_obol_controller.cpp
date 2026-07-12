@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "brlobol/display_endpoint.h"
 #include "brlobol/view_controller.h"
 #ifdef BRLCAD_OPENGL
 #include "qtcad/QgGL.h"
@@ -136,6 +137,13 @@ main(int argc, char **argv)
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol view controller");
+    if (!view.displayEndpoint() ||
+	brlobol_display_endpoint_controller(view.displayEndpoint()) != controller)
+	FAIL("QgView should expose its endpoint-owned Obol controller");
+    if (!brlobol_display_endpoint_host(view.displayEndpoint()) ||
+	strcmp(brlobol_display_endpoint_host_factory_name(view.displayEndpoint()),
+	    "qt-sw") != 0)
+	FAIL("QgView should host its software canvas through the Qt endpoint factory");
 
     if (controller != view.obolViewController())
 	FAIL("QgView should return a stable Obol view controller");

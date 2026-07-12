@@ -159,8 +159,6 @@ package provide cadwidgets::Ged 1.0
 	method bot_split {args}
 	method bot_sync {args}
 	method bot_vertex_fuse {args}
-	method bounds {args}
-	method bounds_all {args}
 	method brep {args}
 	method bu_units_conversion {args}
 	method bu_get_value_by_keyword {args}
@@ -1366,16 +1364,6 @@ package provide cadwidgets::Ged 1.0
 
 ::itcl::body cadwidgets::Ged::bot_vertex_fuse {args} {
     eval $mGed bot_vertex_fuse $args
-}
-
-::itcl::body cadwidgets::Ged::bounds {args} {
-    eval $mGed bounds $itk_component($itk_option(-pane)) $args
-}
-
-::itcl::body cadwidgets::Ged::bounds_all {args} {
-    foreach dm {ur ul ll lr} {
-	eval $mGed bounds $itk_component($dm) $args
-    }
 }
 
 ::itcl::body cadwidgets::Ged::brep {args} {
@@ -2987,16 +2975,8 @@ package provide cadwidgets::Ged 1.0
     set mPrevGedMouseX $_mx
     set mPrevGedMouseY $_my
 
-    set view [pane_screen2view $_pane $_mx $_my]
-    set target [eval pane_v2m_point $_pane $view]
-
-    set view [lreplace $view 2 2 $_viewz]
-    set start [eval pane_v2m_point $_pane $view]
-
-    set partitions [shoot_ray obj_ray $start "at" $target 1 1 1 1 $_obj]
-    set partition [lindex $partitions 0]
-    if {[catch {bu_get_value_by_keyword in $partition} in] ||
-	[catch {bu_get_value_by_keyword surfno $in} surfno]} {
+    set pick [$mGed mouse_pick_detail $itk_component($_pane) $_mx $_my $_obj]
+    if {[catch {bu_get_value_by_keyword primitive_index $pick} surfno]} {
 	set surfno ""
     }
 
@@ -5265,15 +5245,10 @@ package provide cadwidgets::Ged 1.0
 ::itcl::body cadwidgets::Ged::pane_mouse_ray {_pane _x _y {_pflag 0} {_prflag 1} {_nbflag 0} {_ohflag 0} {_bdflag 1}} {
     set mLastMouseRayPos "$_x $_y"
 
-    set view [$mGed screen2view $itk_component($_pane) $_x $_y]
-    set view [$mGed snap_view $itk_component($_pane) [lindex $view 0] [lindex $view 1]]
-
     set mRayCurrWho [$mGed who]
-
-    set bounds [$mGed bounds $itk_component($_pane)]
-    set vZ [lindex $bounds 5]
-    set mLastMouseRayStart [$mGed v2m_point $itk_component($_pane) [lindex $view 0] [lindex $view 1] $vZ]
-    set mLastMouseRayTarget [$mGed v2m_point $itk_component($_pane) [lindex $view 0] [lindex $view 1] 0]
+    set ray [$mGed mouse_ray $itk_component($_pane) $_x $_y]
+    set mLastMouseRayStart [lindex $ray 0]
+    set mLastMouseRayTarget [lindex $ray 1]
 
     if {[catch {shoot_ray_who $mLastMouseRayStart "at" $mLastMouseRayTarget $_prflag $_nbflag $_ohflag $_bdflag} partitions]} {
 	return $partitions

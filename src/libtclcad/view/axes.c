@@ -27,7 +27,6 @@
 #include "common.h"
 #include "bv.h"
 #include "bu/units.h"
-#include "dm.h"
 #include "ged.h"
 #include "ged/view.h"
 #include "rt/view.h"
@@ -39,25 +38,18 @@
 #include "../view/view.h"
 
 /* Data-axes getters and setters operate through typed GED draw-view data-axis
- * facades.  gv_tcl is no longer read or written by this path; the draw-view
- * feature is the canonical store.  BVDAS_DEFAULT_DM_WIDTH is the pixel-width
- * fallback for dm_width in sf calcs. */
-#define BVDAS_DEFAULT_DM_WIDTH 512  /* fallback pixel width when no DM is attached */
+ * facades.  The view dimensions are the canonical pixel geometry. */
+#define BVDAS_DEFAULT_VIEW_WIDTH 512
 
 static fastf_t
 _tclcad_data_axes_display_scale(void *view_ctx)
 {
-    fastf_t dm_width = (fastf_t)BVDAS_DEFAULT_DM_WIDTH;
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(view_ctx);
-    if (dmp) {
-	int width = dm_get_width(dmp);
-	if (width > 0)
-	    dm_width = (fastf_t)width;
-    }
-
     const struct bv *view =
 	bv_context_view_const((const struct bv_context *)view_ctx);
-    return bv_size_get(view) / dm_width;
+    const int width = bv_context_width_get(
+	(const struct bv_context *)view_ctx);
+    return bv_size_get(view) /
+	(fastf_t)(width > 0 ? width : BVDAS_DEFAULT_VIEW_WIDTH);
 }
 
 int

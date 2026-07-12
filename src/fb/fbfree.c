@@ -31,7 +31,7 @@
 
 #include "bu/app.h"
 #include "bu/getopt.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 static char *framebuffer = NULL;
@@ -43,7 +43,7 @@ int
 main(int argc, char **argv)
 {
     int c;
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
 
     bu_setprogname(argv[0]);
 
@@ -63,11 +63,12 @@ main(int argc, char **argv)
 	return 1;
     }
 
-    if ((fbp = fb_open(framebuffer, 0, 0)) == FB_NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, 0, 0)) == NULL) {
 	fprintf(stderr, "fbfree: Can't open frame buffer\n");
 	return 1;
     }
-    return fb_free(fbp);
+    imgstream_fb_close(fbp);
+    return 0;
 }
 
 

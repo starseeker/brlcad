@@ -91,16 +91,13 @@ ged_item_core(struct ged *gedp, int argc, const char *argv[])
     comb = (struct rt_comb_internal *)intern.idb_ptr;
     RT_CK_COMB(comb);
     int attr_changed = 0;
-    int material_changed = 0;
     if (comb->region_id != ident) {
 	attr_changed = 1;
-	material_changed = 1;
     }
     if (comb->aircode != air)
 	attr_changed = 1;
     if (GIFTmater_set && comb->GIFTmater != GIFTmater) {
 	attr_changed = 1;
-	material_changed = 1;
     }
     if (los_set && comb->los != los)
 	attr_changed = 1;
@@ -129,8 +126,7 @@ ged_item_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
     (void)ged_event_notify_attribute_changed(gedp, dp->d_namep, 1, NULL);
-    if (material_changed)
-	(void)ged_event_notify_object_material_changed(gedp, dp->d_namep, NULL);
+    (void)ged_event_notify_object_material_changed(gedp, dp->d_namep, NULL);
     if (event_batch_opened)
 	ged_event_batch_end(gedp, NULL);
 

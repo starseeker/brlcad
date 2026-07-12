@@ -25,13 +25,11 @@
 /** @} */
 
 #include "common.h"
+#include "brlobol/display_endpoint.h"
 #include "bv.h"
-#include "bu/units.h"
-#include "imgstream/fbserv.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
-#include "rt/view.h"
 #include "tclcad.h"
 
 /* Private headers */
@@ -39,125 +37,27 @@
 #include "../view/view.h"
 
 void
-go_refresh_draw(struct ged *UNUSED(gedp), void *draw_view_ctx, int restore_zbuffer)
+go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int UNUSED(restore_zbuffer))
 {
-    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(draw_view_ctx);
-    if (!tvd)
+    if (!gedp || !draw_view_ctx)
 	return;
 
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(draw_view_ctx);
-    if (!dmp)
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(draw_view_ctx);
+    if (!endpoint)
 	return;
 
-    struct bv_interactive_rect_state rect = BV_INTERACTIVE_RECT_STATE_INIT;
-    const struct bv *draw_view =
-	bv_context_view_const((const struct bv_context *)draw_view_ctx);
-    (void)bv_interactive_rect_state_get(&rect, draw_view);
-    struct fb *fbp = fbs_legacy_framebuffer(&tvd->gdv_fbs);
-    if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_OVERLAY) {
-	if (rect.draw) {
-	    go_draw(draw_view_ctx);
-
-	    /* disable write to depth buffer */
-	    (void)dm_set_depth_mask(dmp, 0);
-
-	    if (fbp)
-		fb_refresh(fbp, rect.pos[X], rect.pos[Y],
-			   rect.dim[X], rect.dim[Y]);
-
-	    /* enable write to depth buffer */
-	    (void)dm_set_depth_mask(dmp, 1);
-
-	    if (rect.line_width)
-		dm_draw_rect(dmp, &rect);
-	} else {
-	    /* disable write to depth buffer */
-	    (void)dm_set_depth_mask(dmp, 0);
-
-	    if (fbp)
-		fb_refresh(fbp, 0, 0, dm_get_width(dmp),
-			   dm_get_height(dmp));
-
-	    /* enable write to depth buffer */
-	    (void)dm_set_depth_mask(dmp, 1);
-	}
-
-	if (restore_zbuffer) {
-	    (void)dm_set_zbuffer(dmp, 1);
-	}
-
+    go_draw(draw_view_ctx);
+    (void)ged_draw_obol_framebuffer_present(gedp);
+    if (!brlobol_display_endpoint_view_sync(endpoint, draw_view_ctx))
 	return;
-    } else if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_INTERLAY) {
-	go_draw(draw_view_ctx);
-
-	/* disable write to depth buffer */
-	(void)dm_set_depth_mask(dmp, 0);
-
-	if (rect.draw) {
-	    if (fbp)
-		fb_refresh(fbp, rect.pos[X], rect.pos[Y],
-			   rect.dim[X], rect.dim[Y]);
-	} else {
-	    if (fbp)
-		fb_refresh(fbp, 0, 0, dm_get_width(dmp),
-			   dm_get_height(dmp));
-	}
-
-	/* enable write to depth buffer */
-	(void)dm_set_depth_mask(dmp, 1);
-
-	if (restore_zbuffer) {
-	    (void)dm_set_zbuffer(dmp, 1);
-	}
-    } else {
-	if (tvd->gdv_fbs.fbs_mode == TCLCAD_OBJ_FB_MODE_UNDERLAY) {
-	    /* disable write to depth buffer */
-	    (void)dm_set_depth_mask(dmp, 0);
-
-	    if (rect.draw) {
-		if (fbp)
-		    fb_refresh(fbp, rect.pos[X], rect.pos[Y],
-			       rect.dim[X], rect.dim[Y]);
-	    } else {
-		if (fbp)
-		    fb_refresh(fbp, 0, 0, dm_get_width(dmp),
-			       dm_get_height(dmp));
-	    }
-
-	    /* enable write to depth buffer */
-	    (void)dm_set_depth_mask(dmp, 1);
-	}
-
-	if (restore_zbuffer) {
-	    (void)dm_set_zbuffer(dmp, 1);
-	}
-
-	go_draw(draw_view_ctx);
-    }
+    (void)brlobol_display_endpoint_request_frame(endpoint, "TclCAD refresh");
 }
 
 void
 go_refresh(struct ged *gedp, void *draw_view_ctx)
 {
-    int restore_zbuffer = 0;
-    struct dm *dmp = (struct dm *)ged_view_context_display_manager_get(draw_view_ctx);
-    if (!dmp)
-	return;
-
-    /* Turn off the zbuffer if the framebuffer is active AND the zbuffer is on. */
-    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(draw_view_ctx);
-    if (!tvd)
-	return;
-
-    if (tvd->gdv_fbs.fbs_mode != TCLCAD_OBJ_FB_MODE_OFF && dm_get_zbuffer(dmp)) {
-	(void)dm_set_zbuffer(dmp, 0);
-	restore_zbuffer = 1;
-    }
-
-    (void)ged_draw_obol_framebuffer_present(gedp);
-    (void)dm_draw_begin(dmp);
-    go_refresh_draw(gedp, draw_view_ctx, restore_zbuffer);
-    (void)dm_draw_end(dmp);
+    go_refresh_draw(gedp, draw_view_ctx, 0);
 }
 
 void

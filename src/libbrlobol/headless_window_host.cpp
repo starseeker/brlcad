@@ -8,7 +8,10 @@
 #include "common.h"
 
 #include "brlobol/headless_window_host.h"
+#include "brlobol/init.h"
 #include "brlobol/view_controller.h"
+
+#include "bu/malloc.h"
 
 #include <Inventor/SoDB.h>
 #include <Inventor/SoOffscreenRenderer.h>
@@ -17,11 +20,14 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
 
+#include <cstring>
+#include <new>
 #include <vector>
 
 struct BRLObolHeadlessWindowHostPrivate {
     BRLObolHeadlessWindowHostPrivate(void) :
 	pollRate(0),
+	contextManager(NULL),
 	backgroundColor(0.0f, 0.0f, 0.0f),
 	outputComponents(3),
 	frameWidth(0),
@@ -33,6 +39,7 @@ struct BRLObolHeadlessWindowHostPrivate {
     }
 
     long pollRate;
+    SoDB::ContextManager *contextManager;
     SbColor backgroundColor;
     int outputComponents;
     std::vector<unsigned char> frame;
@@ -179,6 +186,18 @@ BRLObolHeadlessWindowHost::setPollRate(long rate)
     this->hp->pollRate = rate > 0 ? rate : 0;
 }
 
+void
+BRLObolHeadlessWindowHost::setContextManager(SoDB::ContextManager *manager)
+{
+    this->hp->contextManager = manager;
+}
+
+SoDB::ContextManager *
+BRLObolHeadlessWindowHost::getContextManager(void) const
+{
+    return this->hp->contextManager;
+}
+
 int
 BRLObolHeadlessWindowHost::renderPending(void)
 {
@@ -201,13 +220,19 @@ BRLObolHeadlessWindowHost::renderPending(void)
     if (windowSize[0] <= 0 || windowSize[1] <= 0)
 	return -1;
 
-    SoDB::ContextManager *manager = SoDB::getContextManager();
+    SoDB::ContextManager *manager = this->hp->contextManager ?
+	this->hp->contextManager : SoDB::getContextManager();
     if (!manager)
 	return -1;
 
     SoOffscreenRenderer renderer(manager, region);
     renderer.setComponents(renderer_components(this->hp->outputComponents));
-    renderer.setBackgroundColor(this->hp->backgroundColor);
+    const SbColor &backgroundBottom =
+	controller->getBackgroundBottomColor();
+    const SbColor &backgroundTop = controller->getBackgroundTopColor();
+    renderer.setBackgroundColor(backgroundBottom);
+    if (backgroundBottom != backgroundTop)
+	renderer.setBackgroundGradient(backgroundBottom, backgroundTop);
     if (!renderer.render(root))
 	return -1;
 
@@ -241,6 +266,8 @@ void
 BRLObolHeadlessWindowHost::setBackgroundColor(const SbColor &color)
 {
     this->hp->backgroundColor = color;
+    if (this->getController())
+	this->getController()->setBackgroundColors(color, color);
 }
 
 const SbColor &
@@ -301,4 +328,156 @@ const SbString &
 BRLObolHeadlessWindowHost::getLastRenderReason(void) const
 {
     return this->hp->lastRenderReason;
+}
+
+static BRLObolWindowDesc
+headless_factory_window_desc(const struct brlobol_host_desc *desc)
+{
+    BRLObolWindowDesc actual;
+    actual.mode = BRLOBOL_WINDOW_HEADLESS;
+    actual.backend = BRLOBOL_WINDOW_BACKEND_OFFSCREEN;
+    actual.width = desc && desc->width ? desc->width : 1;
+    actual.height = desc && desc->height ? desc->height : 1;
+    actual.title = desc && desc->title ? desc->title : "BRL-CAD Obol Headless";
+    actual.display = desc && desc->display ? desc->display : "";
+    actual.nativeIdHint = desc && desc->native_id_hint ?
+	desc->native_id_hint : "";
+    actual.visible = FALSE;
+    return actual;
+}
+
+static int
+headless_factory_probe(const struct brlobol_host_desc *desc,
+	void *UNUSED(user_data))
+{
+    return !desc || desc->mode == BRLOBOL_HOST_MODE_HEADLESS ||
+	desc->mode == BRLOBOL_HOST_MODE_DIAGNOSTIC;
+}
+
+static void *
+headless_factory_create(const struct brlobol_host_desc *UNUSED(desc),
+	void *UNUSED(user_data))
+{
+    BRLObolHeadlessWindowHost *host =
+	new (std::nothrow) BRLObolHeadlessWindowHost;
+    if (host)
+	host->setContextManager(brlobol_headless_context_manager());
+    return host;
+}
+
+static void
+headless_factory_destroy(void *instance, void *UNUSED(user_data))
+{
+    delete static_cast<BRLObolHeadlessWindowHost *>(instance);
+}
+
+static int
+headless_factory_bind(void *instance, void *controller,
+	void *UNUSED(user_data))
+{
+    BRLObolHeadlessWindowHost *host =
+	static_cast<BRLObolHeadlessWindowHost *>(instance);
+    if (!host)
+	return 0;
+    host->attachController(static_cast<BRLObolViewController *>(controller),
+	FALSE);
+    return 1;
+}
+
+static int
+headless_factory_open(void *instance, const struct brlobol_host_desc *desc,
+	void *UNUSED(user_data))
+{
+    BRLObolHeadlessWindowHost *host =
+	static_cast<BRLObolHeadlessWindowHost *>(instance);
+    BRLObolWindowDesc actual = headless_factory_window_desc(desc);
+    return host && host->open(&actual) == 0 ? 1 : 0;
+}
+
+static void
+headless_factory_close(void *instance, void *UNUSED(user_data))
+{
+    BRLObolHeadlessWindowHost *host =
+	static_cast<BRLObolHeadlessWindowHost *>(instance);
+    if (host)
+	host->close();
+}
+
+static int
+headless_factory_request_frame(void *instance, const char *reason,
+	void *UNUSED(user_data))
+{
+    BRLObolHeadlessWindowHost *host =
+	static_cast<BRLObolHeadlessWindowHost *>(instance);
+    if (!host || !host->getController())
+	return 0;
+    host->getController()->requestRender(reason);
+    return 1;
+}
+
+static int
+headless_factory_resize(void *instance, unsigned int width,
+	unsigned int height, double device_pixel_ratio, void *UNUSED(user_data))
+{
+    BRLObolHeadlessWindowHost *host =
+	static_cast<BRLObolHeadlessWindowHost *>(instance);
+    if (!host || !host->getController() || !width || !height ||
+	device_pixel_ratio <= 0.0)
+	return 0;
+    host->getController()->setViewportSize(width, height);
+    return 1;
+}
+
+static int
+headless_factory_capture(void *instance, unsigned char **pixels, size_t *size,
+	unsigned int *width, unsigned int *height, unsigned int *components,
+	void *UNUSED(user_data))
+{
+    BRLObolHeadlessWindowHost *host =
+	static_cast<BRLObolHeadlessWindowHost *>(instance);
+    if (!host || !pixels || !size || !width || !height || !components)
+	return 0;
+
+    if (host->getController())
+	host->getController()->requestRender("capture");
+    if (host->renderPending() < 0 || !host->getLastFrameBuffer())
+	return 0;
+
+    *size = host->getLastFrameBufferSize();
+    *width = host->getLastFrameWidth();
+    *height = host->getLastFrameHeight();
+    *components = (unsigned int)host->getLastFrameComponents();
+    *pixels = static_cast<unsigned char *>(bu_malloc(*size,
+	"headless endpoint capture"));
+    memcpy(*pixels, host->getLastFrameBuffer(), *size);
+    return 1;
+}
+
+brlobol_host_factory_token_t *
+brlobol_headless_host_factory_register(void)
+{
+    static brlobol_host_factory_token_t *token = []() {
+	struct brlobol_host_factory factory;
+	memset(&factory, 0, sizeof(factory));
+	factory.abi_version = BRLOBOL_HOST_FACTORY_ABI_VERSION;
+	factory.struct_size = sizeof(factory);
+	factory.name = "headless";
+	factory.priority = 0;
+	factory.capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT |
+	    BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
+	    BRLOBOL_HOST_CAP_READBACK |
+	    BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT |
+	    BRLOBOL_HOST_CAP_MULTI_VIEW;
+	factory.probe = headless_factory_probe;
+	factory.create = headless_factory_create;
+	factory.destroy = headless_factory_destroy;
+	factory.bind_controller = headless_factory_bind;
+	factory.open = headless_factory_open;
+	factory.close = headless_factory_close;
+	factory.request_frame = headless_factory_request_frame;
+	factory.resize = headless_factory_resize;
+	factory.capture = headless_factory_capture;
+	return brlobol_host_factory_register(&factory);
+    }();
+    return token;
 }

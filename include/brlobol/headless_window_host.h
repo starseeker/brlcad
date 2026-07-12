@@ -10,9 +10,11 @@
 #define BRLOBOL_HEADLESS_WINDOW_HOST_H
 
 #include "brlobol/window_host.h"
+#include "brlobol/host_factory.h"
 
 #include <Inventor/SbColor.h>
 #include <Inventor/SbString.h>
+#include <Inventor/SoDB.h>
 
 #include <stddef.h>
 
@@ -29,6 +31,8 @@ public:
 
     void setPollRate(long rate);
     int renderPending(void);
+    void setContextManager(SoDB::ContextManager *manager);
+    SoDB::ContextManager *getContextManager(void) const;
 
     void setBackgroundColor(const SbColor &color);
     const SbColor &getBackgroundColor(void) const;
@@ -47,5 +51,9 @@ public:
 private:
     BRLObolHeadlessWindowHostPrivate *hp;
 };
+
+/** Return the process-lifetime built-in headless host factory token. */
+BRLOBOL_EXPORT brlobol_host_factory_token_t *
+brlobol_headless_host_factory_register(void);
 
 #endif /* BRLOBOL_HEADLESS_WINDOW_HOST_H */

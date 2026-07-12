@@ -55,6 +55,9 @@ TCLCAD_EXPORT extern int Bn_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Dm_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Ged_Init(Tcl_Interp *interp);
 
+/** Register the Tk OpenGL and TkPhoto Obol display-host factories. */
+TCLCAD_EXPORT extern int tclcad_obol_host_factories_register(void);
+
 
 /* defined in cmdhist_obj.c */
 TCLCAD_EXPORT extern int Cho_Init(Tcl_Interp *interp);

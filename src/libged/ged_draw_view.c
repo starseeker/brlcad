@@ -207,6 +207,54 @@ ged_draw_view_context_hud_sync(void *UNUSED(view_ctx))
     return 1;
 }
 
+int
+ged_draw_view_context_hud_axes_replace(
+	void *view_ctx,
+	const char *name,
+	const struct bv_axes_state *axes,
+	const mat_t rotation)
+{
+    return ged_draw_obol_view_context_hud_axes_replace(view_ctx, name,
+	    axes, rotation);
+}
+
+int
+ged_draw_view_context_hud_lines_replace(
+	void *view_ctx,
+	const char *name,
+	const point_t *points,
+	const int *cmds,
+	size_t point_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    return ged_draw_obol_view_context_hud_lines_replace(view_ctx, name,
+	    points, cmds, point_count, style);
+}
+
+int
+ged_draw_view_context_hud_labels_replace(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_label_data *labels,
+	size_t label_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    return ged_draw_obol_view_context_hud_labels_replace(view_ctx, name,
+	    labels, label_count, style);
+}
+
+int
+ged_draw_view_context_hud_line_layers_replace(
+	void *view_ctx,
+	const char *name,
+	const struct ged_draw_view_line_layer_data *layers,
+	size_t layer_count,
+	const struct ged_draw_view_feature_style *style)
+{
+    return ged_draw_obol_view_context_hud_line_layers_replace(view_ctx, name,
+	    layers, layer_count, style);
+}
+
 
 int
 ged_draw_view_context_selection_available(void *view_ctx)
