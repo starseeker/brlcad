@@ -1528,6 +1528,134 @@ rt_tor_spindle_tess(struct nmgregion **r, struct model *m,
 
 
 int
+rt_tor_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
+{
+    struct rt_tor_internal *tor;
+    fastf_t tube_radius;
+    int major_segments;
+    int minor_segments;
+
+    if (face_set)
+	memset(face_set, 0, sizeof(*face_set));
+    if (!face_set || !ip || !ttol || !tol)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    BG_CK_TESS_TOL(ttol);
+    BN_CK_TOL(tol);
+    tor = (struct rt_tor_internal *)ip->idb_ptr;
+    RT_TOR_CK_MAGIC(tor);
+    tube_radius = fabs(tor->r_h);
+    if (tor->r_a <= tol->dist || tube_radius <= tol->dist ||
+	tube_radius >= tor->r_a - tol->dist ||
+	MAGNITUDE(tor->a) <= tol->dist ||
+	MAGNITUDE(tor->b) <= tol->dist ||
+	MAGNITUDE(tor->h) <= tol->dist)
+	return BRLCAD_ERROR;
+
+    {
+	fastf_t abs_major = primitive_get_absolute_tolerance(ttol,
+	    tor->r_a);
+	fastf_t abs_minor = primitive_get_absolute_tolerance(ttol,
+	    tube_radius);
+	fastf_t ntol_dummy = M_PI;
+	const fastf_t bbox_diag = 2.0 * (tor->r_a + tube_radius);
+	primitive_clamp_tess_tol(&abs_major, &ntol_dummy, bbox_diag);
+	ntol_dummy = M_PI;
+	primitive_clamp_tess_tol(&abs_minor, &ntol_dummy, bbox_diag);
+	major_segments = rt_num_circular_segments(abs_major, tor->r_a);
+	minor_segments = rt_num_circular_segments(abs_minor, tube_radius);
+    }
+    if (ttol->norm > 0.0) {
+	const fastf_t min_ntol = prim_min_norm_tol();
+	const fastf_t ntol_eff = ttol->norm < min_ntol ?
+	    min_ntol : ttol->norm;
+	const int normal_segments = (int)(M_PI / ntol_eff) + 1;
+	if (normal_segments > major_segments)
+	    major_segments = normal_segments;
+	if (normal_segments > minor_segments)
+	    minor_segments = normal_segments;
+    }
+    if (major_segments < 6)
+	major_segments = 6;
+    if (minor_segments < 6)
+	minor_segments = 6;
+    if (major_segments > INT_MAX / minor_segments)
+	return BRLCAD_ERROR;
+
+    const size_t point_count =
+	(size_t)major_segments * (size_t)minor_segments;
+    const size_t index_count = point_count * 5;
+    face_set->points = (point_t *)bu_calloc(point_count, sizeof(point_t),
+	"TOR indexed-face points");
+    face_set->indices = (int *)bu_calloc(index_count, sizeof(int),
+	"TOR indexed-face indices");
+    vect_t *normals = (vect_t *)bu_calloc(point_count, sizeof(vect_t),
+	"TOR indexed-face normals");
+
+    const fastf_t dist_to_rim = tube_radius / tor->r_a;
+    for (int major = 0; major < major_segments; major++) {
+	const fastf_t beta = M_2PI * (fastf_t)major /
+	    (fastf_t)major_segments;
+	vect_t radius, rim;
+	VCOMB2(radius, cos(beta), tor->a, sin(beta), tor->b);
+	VSCALE(rim, radius, dist_to_rim);
+	for (int minor = 0; minor < minor_segments; minor++) {
+	    const fastf_t alpha = M_2PI * (fastf_t)minor /
+		(fastf_t)minor_segments;
+	    const size_t index = (size_t)minor * major_segments + major;
+	    VCOMB2(normals[index], cos(alpha), rim,
+		sin(alpha) * tube_radius, tor->h);
+	    VADD3(face_set->points[index], tor->v, radius, normals[index]);
+	    VUNITIZE(normals[index]);
+	}
+    }
+
+    size_t out = 0;
+    for (int minor = 0; minor < minor_segments; minor++) {
+	const int next_minor = (minor + 1) % minor_segments;
+	for (int major = 0; major < major_segments; major++) {
+	    const int next_major = (major + 1) % major_segments;
+	    int face[4];
+	    vect_t edge1, edge2, face_normal, expected;
+	    face[0] = minor * major_segments + major;
+	    face[1] = minor * major_segments + next_major;
+	    face[2] = next_minor * major_segments + next_major;
+	    face[3] = next_minor * major_segments + major;
+	    VSUB2(edge1, face_set->points[face[1]],
+		face_set->points[face[0]]);
+	    VSUB2(edge2, face_set->points[face[2]],
+		face_set->points[face[0]]);
+	    VCROSS(face_normal, edge1, edge2);
+	    VADD4(expected, normals[face[0]], normals[face[1]],
+		normals[face[2]], normals[face[3]]);
+	    if (VDOT(face_normal, expected) < 0.0) {
+		const int tmp = face[1];
+		face[1] = face[3];
+		face[3] = tmp;
+	    }
+	    for (int corner = 0; corner < 4; corner++)
+		face_set->indices[out++] = face[corner];
+	    face_set->indices[out++] = -1;
+	}
+    }
+    bu_free(normals, "TOR indexed-face normals");
+    if (out != index_count) {
+	bu_free(face_set->points, "TOR indexed-face points");
+	bu_free(face_set->indices, "TOR indexed-face indices");
+	memset(face_set, 0, sizeof(*face_set));
+	return BRLCAD_ERROR;
+    }
+    face_set->point_count = point_count;
+    face_set->index_count = index_count;
+    face_set->source_identity = (uint64_t)(uintptr_t)tor;
+    face_set->geometry_revision = 1;
+    return BRLCAD_OK;
+}
+
+
+int
 rt_tor_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {
     fastf_t alpha;

@@ -33,6 +33,7 @@ public:
 
     void clearResults(void);
     void addResult(const BRLObolLodResult &result);
+    void addResult(BRLObolLodResult &&result);
     void setResults(const std::vector<BRLObolLodResult> &results);
     size_t drainService(BRLObolLodService &service, size_t maxResults = 0);
     void setViewLodState(BRLObolViewLodState *viewState);

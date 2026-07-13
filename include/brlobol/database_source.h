@@ -11,6 +11,8 @@
 
 #include "brlobol/defines.h"
 #include "brlobol/mesh_lod_cache.h"
+#include "brlobol/source_mesh_request.h"
+#include "brlobol/view_lod.h"
 
 #include <stdint.h>
 
@@ -28,6 +30,8 @@
 #include <Inventor/fields/SoSFUInt32.h>
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoSeparator.h>
+
+#include <memory>
 
 class SoBRLVListShape;
 class SoBRLMeshShape;
@@ -153,12 +157,29 @@ struct BRLOBOL_EXPORT BRLObolCompactInstanceSummary {
     SbBool valid;
     BRLObolCompactInstanceHandle handle;
     SbString path;
+    SbString sourceName;
     SbString sourceInstanceKey;
     SbMatrix localToSource;
+    SbBox3f localBounds;
+    uint64_t geometryIdentity;
+    uint64_t geometryRevision;
+    uint64_t appearanceRevision;
+    uint64_t placementRevision;
+    uint64_t visibilityRevision;
+    uint64_t selectionRevision;
     uint32_t occurrenceIndex;
     int booleanOperation;
+    int regionId;
+    int airCode;
+    int materialId;
+    int los;
+    SbBool materialColorValid;
+    SbColor materialColor;
+    SbString materialShader;
     SbBool wireGeometry;
+    SbBool pointGeometry;
     SbBool meshGeometry;
+    SbBool lodBacked;
     SbBool visible;
     SbBool selectable;
     SbBool selected;
@@ -341,6 +362,18 @@ struct BRLOBOL_EXPORT BRLObolRealizedShapeSummary {
     SbString editIntentId;
     SbString editIntentRole;
     uint32_t lodPolicy;
+    SbBool colorOverride;
+    SbColor color;
+    SbBool lodAvailable;
+    int lodActiveLevel;
+    uint64_t lodFaceCount;
+    uint64_t lodPointCount;
+    uint64_t lodOriginalPointCount;
+    uint64_t lodNormalCount;
+    SbBool lodHasSnappedPoints;
+    SbBool lodHasNormals;
+    SbVec3f lodBoundsMin;
+    SbVec3f lodBoundsMax;
     int pointCount;
     int commandCount;
     int segmentCount;
@@ -349,6 +382,20 @@ struct BRLOBOL_EXPORT BRLObolRealizedShapeSummary {
     int indexCount;
     SbBool boundsValid;
     SbBox3f bounds;
+};
+
+/** Immutable geometry and semantic state for one compact CAD occurrence. */
+struct BRLOBOL_EXPORT BRLObolCompactOccurrence {
+    BRLObolCompactOccurrence(void);
+
+    std::shared_ptr<const obol::PartGeometry> geometry;
+    BRLObolRealizedShapeSummary summary;
+    SbMatrix localTransform;
+    SbBool lodBacked;
+    SbBool sourceMeshRequestValid;
+    BRLObolSourceMeshRequest sourceMeshRequest;
+    uint32_t occurrenceIndex;
+    int booleanOperation;
 };
 
 struct BRLOBOL_EXPORT BRLObolRealizedMaterialSummary {
@@ -636,6 +683,15 @@ public:
 	struct db_i *database,
 	int mode,
 	uint32_t revision);
+    /* Create an unattached, ref-counted source with copied field state and an
+     * immutable database snapshot containing the draw root and its recursive
+     * dependencies.  The caller must unref the returned source, db_close the
+     * returned database, and delete snapshotPathOut when it is nonempty. */
+    SoBRLDatabaseSource *createDetachedRealizationSource(
+	struct db_i **databaseOut, SbString *snapshotPathOut = NULL) const;
+    /* Transfer a completed detached compact registry into this live source.
+     * Call only on the live source's owner thread. */
+    int adoptDetachedCompactRealization(SoBRLDatabaseSource *detached);
     int retargetDatabaseSource(const char *sourcePath,
 	uint32_t revision);
     int retargetDatabaseSourceInstance(const char *sourceInstanceKey,
@@ -732,6 +788,7 @@ public:
     SoBRLVListShape *getRealizedShape(void) const;
     SoBRLVListShape *getRealizedShape(int index) const;
     int getRealizedShapeCount(void) const;
+    SbBool hasRealizedWireGeometry(void) const;
     SoBRLVListShape *findAuxiliaryVListShape(const char *name) const;
     SoBRLDatabaseSource *findAuxiliarySource(const char *sourcePath) const;
     int setAuxiliaryLineSet(const char *name,
@@ -749,15 +806,15 @@ public:
     SoBRLMeshShape *getRealizedMesh(void) const;
     SoBRLMeshShape *getRealizedMesh(int index) const;
     int getRealizedMeshCount(void) const;
+    SbBool hasRealizedMeshGeometry(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
     int getRealizedMaterialObjectCount(void) const;
-    int compactRealizedGeometry(void);
-    int setCompactVListInstance(SoBRLVListShape *shape);
-    int setCompactVListInstanceWithGeometry(SoBRLVListShape *shape,
-	const obol::PartGeometry *geometry);
-    int setCompactMeshInstance(SoBRLMeshShape *shape);
+    int setCompactOccurrence(const BRLObolCompactOccurrence &occurrence);
+    int setCompactOccurrenceRegistry(
+	const std::vector<BRLObolCompactOccurrence> &occurrences);
     SbBool hasCompactInstanceIndex(void) const;
+    SbBool isCompactOccurrenceRegistry(void) const;
     int getCompactInstanceCount(void) const;
     SbBool getCompactInstanceHandle(int index,
 	BRLObolCompactInstanceHandle &handle) const;
@@ -766,8 +823,33 @@ public:
 	BRLObolCompactInstanceSummary &summary) const;
     SbBool isCompactInstanceHandleValid(
 	const BRLObolCompactInstanceHandle &handle) const;
-    int demoteCompactGeometry(void);
+    int getCompactInstanceCountForPath(const char *path,
+	SbBool includeDescendants = TRUE) const;
+    SbBool getCompactInstanceBoundsForPath(const char *path,
+	SbBool includeDescendants, SbBox3f &bounds) const;
+    int setCompactInstanceDisplayStateForPath(const char *path,
+	SbBool includeDescendants,
+	int visibleValid, SbBool visible,
+	int selectedValid, SbBool selected,
+	int highlightedValid, SbBool highlighted);
+    int setCompactInstanceSelectableForPath(const char *path,
+	SbBool includeDescendants, SbBool selectable);
+    int setCompactInstanceRegionIdForPath(const char *path,
+	SbBool includeDescendants, int regionId);
+    int setCompactInstanceRegionMetadataForPath(const char *path,
+	SbBool includeDescendants, int regionId, int airCode,
+	int materialId, int los);
+    int setCompactInstanceMetadataForPath(const char *path,
+	SbBool includeDescendants, int regionId, int airCode,
+	int materialId, int los, SbBool materialColorValid,
+	const SbColor &materialColor, const SbString &materialShader);
+    int setCompactSubtractLineStyle(int lineStyle);
+    int refreshCompactObjectGeometry(const char *objectPath,
+	uint32_t sourceRevision = 0);
     int prepareCompiledAssembly(void);
+    SoBRLCadAssembly *compactViewLodAssembly(
+	const std::vector<const BRLObolViewLodState::CadPayload *> &payloads)
+	const;
     SbBool hasCompiledAssembly(void) const;
     int getCompiledAssemblyPartCount(void) const;
     int getCompiledAssemblyInstanceCount(void) const;
@@ -817,19 +899,31 @@ private:
     friend int brlobol_database_source_realize_mesh_compact_with_cache(
 	    SoBRLDatabaseSource *source,
 	    BRLObolDatabaseSourceRealizationCache *cache);
+    friend void brlobol_database_source_seed_realization_cache(
+	    SoBRLDatabaseSource *source,
+	    BRLObolDatabaseSourceRealizationCache *cache);
 
     static void fieldSensorCB(void *data, SoSensor *sensor);
     void attachFieldSensors(void);
     void detachFieldSensors(void);
     void syncRealizedShapeOwnerState(void);
     void syncCompactInstanceDisplayState(void);
+    void rebuildCompactInstanceDisplayState(SbBool syncSourceState);
     void syncCompactInstancePlacementState(void);
+    void seedCompactRealizationCache(
+	BRLObolDatabaseSourceRealizationCache *cache) const;
     void clearCompiledAssembly(void);
     void markCompiledAssemblyDirty(void);
     void markCadBatchDirty(void);
     void clearCompactInstanceIndex(void);
+    void discardCompactInstanceHistory(void);
+    void installCompactInstanceIndex(
+	struct BRLObolCompactInstanceIndex *index,
+	SbBool occurrenceRegistry);
     int syncCompiledAssembly(void);
-    int appendCadRenderBatch(struct BRLObolCadBatchBuildState *state);
+    uint64_t cadBatchStructureSignature(void) const;
+    int appendCadRenderBatch(struct BRLObolCadBatchBuildState *state,
+	SbBool includeGeometry);
     const struct BRLObolCompactInstanceEntry *findCompactInstanceEntry(
 	const BRLObolCompactInstanceHandle &handle) const;
     int exportCompactInstances(SoBRLExportAction *action,
@@ -843,12 +937,17 @@ private:
     struct BRLObolMeshLod *meshLod;
     SoBRLCadAssembly *compiledAssembly;
     struct BRLObolCompactInstanceIndex *compactIndex;
+    struct BRLObolCompactInstanceIndex *previousCompactIndex;
     uint64_t compactHandleSourceId;
     uint64_t cadBatchRevision;
     SbBool compiledAssemblyDirty;
     SbBool compiledAssemblyActive;
     SbUniqueId compiledAssemblyNodeId;
+    uint64_t compiledCompactStructureSignature;
+    uint64_t compiledCompactHiddenSignature;
+    uint64_t compiledCompactUnpickableSignature;
     SbBool compactIndexActive;
+    SbBool compactOccurrenceRegistry;
     SbBool meshLodBoundsValid;
     SbVec3f meshLodBoundsMin;
     SbVec3f meshLodBoundsMax;

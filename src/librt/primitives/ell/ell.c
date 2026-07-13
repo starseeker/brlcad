@@ -960,6 +960,171 @@ struct ell_vert_strip {
  * -1 failure
  * 0 OK.  *r points to nmgregion that holds this tessellation.
  */
+static void
+ell_indexed_face_append(int *indices, size_t *out, const point_t *points,
+	const point_t center, const int *face, int count)
+{
+    vect_t edge1, edge2, normal, outward;
+    point_t face_center = VINIT_ZERO;
+    int reverse = 0;
+
+    VSUB2(edge1, points[face[1]], points[face[0]]);
+    VSUB2(edge2, points[face[2]], points[face[0]]);
+    VCROSS(normal, edge1, edge2);
+    for (int i = 0; i < count; i++)
+	VADD2(face_center, face_center, points[face[i]]);
+    VSCALE(face_center, face_center, 1.0 / (fastf_t)count);
+    VSUB2(outward, face_center, center);
+    reverse = VDOT(normal, outward) < 0.0;
+    for (int i = 0; i < count; i++)
+	indices[(*out)++] = reverse ? face[count - 1 - i] : face[i];
+    indices[(*out)++] = -1;
+}
+
+
+int
+rt_ell_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
+{
+    struct rt_ell_internal *ell;
+    fastf_t alen, blen, clen, radius, dtol, theta_tol;
+    vect_t au, bu, cu;
+    int quarter_segments;
+
+    if (face_set)
+	memset(face_set, 0, sizeof(*face_set));
+    if (!face_set || !ip || !ttol || !tol)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    BG_CK_TESS_TOL(ttol);
+    BN_CK_TOL(tol);
+    ell = (struct rt_ell_internal *)ip->idb_ptr;
+    RT_ELL_CK_MAGIC(ell);
+
+    alen = MAGNITUDE(ell->a);
+    blen = MAGNITUDE(ell->b);
+    clen = MAGNITUDE(ell->c);
+    if (alen <= tol->dist || blen <= tol->dist || clen <= tol->dist)
+	return BRLCAD_ERROR;
+    VSCALE(au, ell->a, 1.0 / alen);
+    VSCALE(bu, ell->b, 1.0 / blen);
+    VSCALE(cu, ell->c, 1.0 / clen);
+    if (!NEAR_ZERO(VDOT(au, bu), tol->dist) ||
+	!NEAR_ZERO(VDOT(au, cu), tol->dist) ||
+	!NEAR_ZERO(VDOT(bu, cu), tol->dist))
+	return BRLCAD_ERROR;
+
+    radius = FMAX(alen, FMAX(blen, clen));
+    dtol = primitive_get_absolute_tolerance(ttol, radius);
+    {
+	fastf_t ntol_dummy = M_PI;
+	primitive_clamp_tess_tol(&dtol, &ntol_dummy, 2.0 * radius);
+    }
+    if (dtol > radius)
+	dtol = radius;
+    theta_tol = 2.0 * acos(1.0 - dtol / radius);
+    if (ttol->norm > 0.0) {
+	const fastf_t min_ntol = prim_min_norm_tol();
+	const fastf_t ntol_eff = ttol->norm < min_ntol ?
+	    min_ntol : ttol->norm;
+	if (ntol_eff < theta_tol)
+	    theta_tol = ntol_eff;
+    }
+    {
+	const fastf_t bbox_diag = 2.0 * radius;
+	fastf_t min_chord = bbox_diag > SMALL_FASTF && bbox_diag < 1.0 ?
+	    bbox_diag * 0.01 : prim_min_abs_tol();
+	fastf_t theta_min;
+	if (min_chord < BN_TOL_DIST)
+	    min_chord = BN_TOL_DIST;
+	theta_min = 2.0 * asin(FMIN(1.0, min_chord / (2.0 * radius)));
+	if (theta_tol < theta_min)
+	    theta_tol = theta_min;
+    }
+    quarter_segments = (int)(M_PI_2 / theta_tol + 0.999);
+    if (quarter_segments < 2)
+	quarter_segments = 2;
+    if (quarter_segments > INT_MAX / 8)
+	return BRLCAD_ERROR;
+
+    const int latitude_segments = quarter_segments * 2;
+    const int longitude_segments = quarter_segments * 4;
+    const size_t point_count = 2 +
+	(size_t)(latitude_segments - 1) * longitude_segments;
+    const size_t triangle_faces = (size_t)longitude_segments * 2;
+    const size_t quad_faces =
+	(size_t)(latitude_segments - 2) * longitude_segments;
+    const size_t index_count = triangle_faces * 4 + quad_faces * 5;
+    if (point_count > INT_MAX)
+	return BRLCAD_ERROR;
+    face_set->points = (point_t *)bu_calloc(point_count, sizeof(point_t),
+	"ELL indexed-face points");
+    face_set->indices = (int *)bu_calloc(index_count, sizeof(int),
+	"ELL indexed-face indices");
+
+    VADD2(face_set->points[0], ell->v, ell->b);
+    size_t point_out = 1;
+    for (int latitude = 1; latitude < latitude_segments; latitude++) {
+	const fastf_t phi = M_PI * (fastf_t)latitude /
+	    (fastf_t)latitude_segments;
+	const fastf_t sin_phi = sin(phi);
+	const fastf_t cos_phi = cos(phi);
+	for (int longitude = 0; longitude < longitude_segments; longitude++) {
+	    const fastf_t theta = M_2PI * (fastf_t)longitude /
+		(fastf_t)longitude_segments;
+	    VJOIN3(face_set->points[point_out], ell->v,
+		sin_phi * cos(theta), ell->a,
+		cos_phi, ell->b,
+		sin_phi * sin(theta), ell->c);
+	    point_out++;
+	}
+    }
+    const int south = (int)point_out;
+    VSUB2(face_set->points[point_out], ell->v, ell->b);
+    point_out++;
+
+    size_t index_out = 0;
+    for (int longitude = 0; longitude < longitude_segments; longitude++) {
+	const int next = (longitude + 1) % longitude_segments;
+	int face[4];
+	face[0] = 0;
+	face[1] = 1 + longitude;
+	face[2] = 1 + next;
+	ell_indexed_face_append(face_set->indices, &index_out,
+	    (const point_t *)face_set->points, ell->v, face, 3);
+	for (int latitude = 0; latitude < latitude_segments - 2; latitude++) {
+	    const int ring = 1 + latitude * longitude_segments;
+	    const int next_ring = ring + longitude_segments;
+	    face[0] = ring + longitude;
+	    face[1] = next_ring + longitude;
+	    face[2] = next_ring + next;
+	    face[3] = ring + next;
+	    ell_indexed_face_append(face_set->indices, &index_out,
+		(const point_t *)face_set->points, ell->v, face, 4);
+	}
+	const int last_ring = 1 +
+	    (latitude_segments - 2) * longitude_segments;
+	face[0] = last_ring + longitude;
+	face[1] = south;
+	face[2] = last_ring + next;
+	ell_indexed_face_append(face_set->indices, &index_out,
+	    (const point_t *)face_set->points, ell->v, face, 3);
+    }
+    if (point_out != point_count || index_out != index_count) {
+	bu_free(face_set->points, "ELL indexed-face points");
+	bu_free(face_set->indices, "ELL indexed-face indices");
+	memset(face_set, 0, sizeof(*face_set));
+	return BRLCAD_ERROR;
+    }
+    face_set->point_count = point_count;
+    face_set->index_count = index_count;
+    face_set->source_identity = (uint64_t)(uintptr_t)ell;
+    face_set->geometry_revision = 1;
+    return BRLCAD_OK;
+}
+
+
 int
 rt_ell_tess(struct nmgregion **r, struct model *m, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol)
 {

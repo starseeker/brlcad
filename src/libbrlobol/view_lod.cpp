@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <string.h>
+#include <utility>
 
 SO_ELEMENT_SOURCE(SoBRLViewLodElement);
 SO_NODE_SOURCE(SoBRLViewLodGroup);
@@ -126,6 +127,20 @@ view_lod_leaf_name_from_path(const SbString &path)
 	return "";
     const char *slash = strrchr(p, '/');
     return (slash && slash[1]) ? slash + 1 : p;
+}
+
+static bool
+view_lod_paths_equal(const SbString &a, const SbString &b)
+{
+    const char *ap = a.getString();
+    const char *bp = b.getString();
+    if (!ap || !bp)
+	return false;
+    if (ap[0] == '/')
+	ap++;
+    if (bp[0] == '/')
+	bp++;
+    return strcmp(ap, bp) == 0;
 }
 
 static std::string
@@ -356,6 +371,14 @@ SbBool
 BRLObolViewLodState::applyMeshResult(const SoBRLMeshShape *shape,
 				     const BRLObolLodResult &result)
 {
+    BRLObolLodResult copy = result;
+    return this->applyMeshResultInternal(shape, copy, FALSE);
+}
+
+SbBool
+BRLObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
+	BRLObolLodResult &result, SbBool consume)
+{
     if (!shape ||
 	result.resultKind != BRLOBOL_LOD_RESULT_MESH ||
 	result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
@@ -363,7 +386,10 @@ BRLObolViewLodState::applyMeshResult(const SoBRLMeshShape *shape,
 	return FALSE;
 
     MeshPayloadPtr payload(new MeshPayload);
-    payload->mesh = result.mesh;
+    if (consume)
+	payload->mesh = std::move(result.mesh);
+    else
+	payload->mesh = result.mesh;
     payload->sourcePath = shape->sourcePath.getValue();
     payload->sourceName = shape->sourceName.getValue();
     payload->sourceIdentity = shape->sourceIdentity.getValue();
@@ -394,6 +420,14 @@ SbBool
 BRLObolViewLodState::applyProxyResult(const SoBRLMeshShape *shape,
 				      const BRLObolLodResult &result)
 {
+    BRLObolLodResult copy = result;
+    return this->applyProxyResultInternal(shape, copy, FALSE);
+}
+
+SbBool
+BRLObolViewLodState::applyProxyResultInternal(const SoBRLMeshShape *shape,
+	BRLObolLodResult &result, SbBool consume)
+{
     if (!shape ||
 	(result.resultKind != BRLOBOL_LOD_RESULT_AABB &&
 	 result.resultKind != BRLOBOL_LOD_RESULT_PROXY) ||
@@ -402,7 +436,10 @@ BRLObolViewLodState::applyProxyResult(const SoBRLMeshShape *shape,
 	return FALSE;
 
     ProxyPayloadPtr payload(new ProxyPayload);
-    payload->proxy = result.proxy;
+    if (consume)
+	payload->proxy = std::move(result.proxy);
+    else
+	payload->proxy = result.proxy;
     payload->sourcePath = shape->sourcePath.getValue();
     payload->sourceName = shape->sourceName.getValue();
     payload->sourceIdentity = shape->sourceIdentity.getValue();
@@ -438,9 +475,37 @@ BRLObolViewLodState::applyDisplayResult(const SoBRLMeshShape *shape,
 }
 
 SbBool
+BRLObolViewLodState::consumeDisplayResult(const SoBRLMeshShape *shape,
+	BRLObolLodResult &result)
+{
+    if (result.resultKind == BRLOBOL_LOD_RESULT_MESH ||
+	result.resultKind == BRLOBOL_LOD_RESULT_FULL_DETAIL)
+	return this->applyMeshResultInternal(shape, result, TRUE);
+    return this->applyProxyResultInternal(shape, result, TRUE);
+}
+
+SbBool
 BRLObolViewLodState::applySourceResult(
     const SoBRLDatabaseSource *source,
     const BRLObolLodResult &result)
+{
+    BRLObolLodResult copy = result;
+    return this->applySourceResultInternal(source, copy, FALSE);
+}
+
+SbBool
+BRLObolViewLodState::consumeSourceResult(
+    const SoBRLDatabaseSource *source,
+    BRLObolLodResult &result)
+{
+    return this->applySourceResultInternal(source, result, TRUE);
+}
+
+SbBool
+BRLObolViewLodState::applySourceResultInternal(
+    const SoBRLDatabaseSource *source,
+    BRLObolLodResult &result,
+    SbBool consume)
 {
     if (!source || result.providerStatus != BRLOBOL_LOD_PROVIDER_READY)
 	return FALSE;
@@ -460,14 +525,24 @@ BRLObolViewLodState::applySourceResult(
 	return FALSE;
 
     CadPayloadPtr payload(new CadPayload);
-    payload->mesh = result.mesh;
-    payload->proxy = result.proxy;
-    payload->sourcePath = source->path.getValue();
-    payload->sourceName = view_lod_leaf_name_from_path(source->path.getValue());
+    if (consume) {
+	payload->mesh = std::move(result.mesh);
+	payload->proxy = std::move(result.proxy);
+    } else {
+	payload->mesh = result.mesh;
+	payload->proxy = result.proxy;
+    }
+    payload->sourcePath = result.request.objectPath.getLength() > 0 ?
+	result.request.objectPath : source->path.getValue();
+    payload->sourceName = result.request.objectName.getLength() > 0 ?
+	result.request.objectName :
+	SbString(view_lod_leaf_name_from_path(payload->sourcePath));
     payload->sourceIdentity =
 	source->realizationIdentity.getValue().getLength() > 0 ?
 	source->realizationIdentity.getValue() : source->path.getValue();
     payload->sourceInstanceKey = source->instanceKey.getValue();
+    const std::string sourceBindingKey = view_lod_source_primary_key(source);
+    payload->sourceBindingKey = sourceBindingKey.c_str();
     payload->cacheIdentity = result.cacheKey.value;
     payload->cacheKey = result.cacheKey.value;
     payload->resultKind = result.resultKind;
@@ -482,11 +557,27 @@ BRLObolViewLodState::applySourceResult(
     payload->hasNormals = result.hasNormals;
     payload->diagnostic = result.diagnostic;
 
-    std::vector<std::string> keys;
-    view_lod_source_keys(keys, source);
-    view_lod_result_keys(keys, result);
-    for (size_t i = 0; i < keys.size(); i++)
-	this->cadBindings[keys[i]] = payload;
+    std::vector<std::string> resultKeys;
+    view_lod_result_keys(resultKeys, result);
+    for (const std::string &resultKey : resultKeys) {
+	std::string key = "source:";
+	key += sourceBindingKey;
+	key += '|';
+	key += resultKey;
+	this->cadBindings[key] = payload;
+    }
+
+    /* Preserve the source-wide lookup for a root result.  Entry results must
+     * coexist, so binding them under the root keys would make the last
+     * completed occurrence replace every sibling. */
+    if (result.request.objectPath.getLength() == 0 ||
+	view_lod_paths_equal(source->path.getValue(),
+	    result.request.objectPath)) {
+	std::vector<std::string> sourceKeys;
+	view_lod_source_keys(sourceKeys, source);
+	for (const std::string &key : sourceKeys)
+	    this->cadBindings[key] = payload;
+    }
 
     return TRUE;
 }
@@ -588,6 +679,33 @@ BRLObolViewLodState::findCad(const SoBRLDatabaseSource *source) const
     return NULL;
 }
 
+void
+BRLObolViewLodState::findCadPayloads(
+    const SoBRLDatabaseSource *source,
+    std::vector<const CadPayload *> &payloads) const
+{
+    payloads.clear();
+    if (!source || this->cadBindings.empty())
+	return;
+
+    const std::string sourceKey = view_lod_source_primary_key(source);
+    for (const auto &binding : this->cadBindings) {
+	const CadPayloadPtr &payload = binding.second;
+	if (!payload || !payload->isValid() ||
+	    strcmp(payload->sourceBindingKey.getString(),
+		sourceKey.c_str()) != 0)
+	    continue;
+	if (std::find(payloads.begin(), payloads.end(), payload.get()) ==
+	    payloads.end())
+	    payloads.push_back(payload.get());
+    }
+    std::sort(payloads.begin(), payloads.end(),
+	[](const CadPayload *a, const CadPayload *b) {
+	    return strcmp(a->sourcePath.getString(),
+		b->sourcePath.getString()) < 0;
+	});
+}
+
 const BRLObolViewLodState::CadPayload *
 BRLObolViewLodState::findCadForResult(
     const BRLObolLodResult &result) const
@@ -595,14 +713,20 @@ BRLObolViewLodState::findCadForResult(
     if (this->cadBindings.empty())
 	return NULL;
 
-    std::vector<std::string> keys;
-    view_lod_result_keys(keys, result);
-    for (size_t i = 0; i < keys.size(); i++) {
-	std::unordered_map<std::string, CadPayloadPtr>::const_iterator it =
-	    this->cadBindings.find(keys[i]);
-	if (it != this->cadBindings.end() && it->second &&
-	    it->second->isValid())
-	    return it->second.get();
+    std::vector<const CadPayload *> seen;
+    for (const auto &binding : this->cadBindings) {
+	const CadPayloadPtr &payload = binding.second;
+	if (!payload || !payload->isValid() ||
+	    std::find(seen.begin(), seen.end(), payload.get()) != seen.end())
+	    continue;
+	seen.push_back(payload.get());
+	if (view_lod_paths_equal(payload->sourcePath,
+		result.request.objectPath) ||
+	    (payload->sourceName.getLength() > 0 &&
+	     result.request.objectName.getLength() > 0 &&
+	     strcmp(payload->sourceName.getString(),
+		result.request.objectName.getString()) == 0))
+	    return payload.get();
     }
 
     return NULL;
@@ -928,10 +1052,13 @@ SoBRLViewLodGroup::pushViewState(SoAction *action)
 
     state->push();
     SoBRLViewLodElement::set(state, this, this->viewState);
-    obol::CadViewState cadState = SoCADViewStateElement::get(state);
-    cadState.softwareWireMode =
-	static_cast<obol::CadSoftwareWireMode>(this->softwareWireMode);
-    SoCADViewStateElement::set(state, cadState);
+    if (state->isElementEnabled(
+	    SoCADViewStateElement::getClassStackIndex())) {
+	obol::CadViewState cadState = SoCADViewStateElement::get(state);
+	cadState.softwareWireMode =
+	    static_cast<obol::CadSoftwareWireMode>(this->softwareWireMode);
+	SoCADViewStateElement::set(state, cadState);
+    }
     return TRUE;
 }
 
@@ -996,6 +1123,12 @@ brlobol_view_lod_mesh_for_action(SoAction *action,
     const BRLObolViewLodState *viewState =
 	SoBRLViewLodElement::get(action->getState());
     return viewState ? viewState->findMesh(shape) : NULL;
+}
+
+const BRLObolViewLodState *
+brlobol_view_lod_state_for_action(SoAction *action)
+{
+    return action ? SoBRLViewLodElement::get(action->getState()) : NULL;
 }
 
 const BRLObolViewLodState::ProxyPayload *

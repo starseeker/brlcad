@@ -12,6 +12,7 @@
 #include "common.h"
 
 #include "brlobol/database_source.h"
+#include "brlobol/export_action.h"
 #include "brlobol/init.h"
 #include "brlobol/lod_realization.h"
 #include "brlobol/mesh_shape.h"
@@ -45,6 +46,7 @@
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SoPickedPoint.h>
+#include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
@@ -52,7 +54,9 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define FAIL(_msg) \
@@ -698,22 +702,11 @@ verify_mode_source(SoBRLSceneController *controller,
     if (!expect_stale &&
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED)
 	FAIL("mode-specific source should be realized when expected current");
-    int compact_vlist = 0;
-    int compact_mesh = 0;
-    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
-	BRLObolCompactInstanceHandle handle;
-	BRLObolCompactInstanceSummary instance;
-	if (!source->getCompactInstanceHandle(i, handle) ||
-		!source->getCompactInstanceSummary(handle, instance))
-	    continue;
-	compact_vlist = compact_vlist || instance.wireGeometry;
-	compact_mesh = compact_mesh || instance.meshGeometry;
-    }
     const char *instance_key = summary.instanceKey.getString();
-    if (expect_vlist && summary.realizedShapeCount <= 0 && !compact_vlist &&
+    if (expect_vlist && !source->hasRealizedWireGeometry() &&
 	    !scene_has_source_geometry(controller->getSceneRoot(), instance_key, 0))
 	FAIL("mode-specific source should carry realized VLIST geometry");
-    if (expect_mesh && summary.realizedMeshCount <= 0 && !compact_mesh &&
+    if (expect_mesh && !source->hasRealizedMeshGeometry() &&
 	    !scene_has_source_geometry(controller->getSceneRoot(), instance_key, 1))
 	FAIL("mode-specific source should carry realized mesh geometry");
     if (!summary.sourceBoundsValid || summary.sourceBounds.isEmpty())
@@ -994,38 +987,6 @@ box3f_near(const SbBox3f &box,
 }
 
 static int
-vlist_geometry_bounds(const SoBRLVListShape *shape, SbBox3f &bounds)
-{
-    bounds.makeEmpty();
-    if (!shape)
-	return 0;
-
-    const SoBRLVListShape *geometry = shape->getGeometrySource();
-    if (!geometry || geometry->point.getNum() <= 0)
-	return 0;
-
-    for (int i = 0; i < geometry->point.getNum(); i++)
-	bounds.extendBy(geometry->point[i]);
-    return bounds.isEmpty() ? 0 : 1;
-}
-
-static int
-mesh_geometry_bounds(const SoBRLMeshShape *shape, SbBox3f &bounds)
-{
-    bounds.makeEmpty();
-    if (!shape)
-	return 0;
-
-    const SoBRLMeshShape *geometry = shape->getGeometrySource();
-    if (!geometry || geometry->point.getNum() <= 0)
-	return 0;
-
-    for (int i = 0; i < geometry->point.getNum(); i++)
-	bounds.extendBy(geometry->point[i]);
-    return bounds.isEmpty() ? 0 : 1;
-}
-
-static int
 exercise_multi_instance_transform_reuse(struct ged *gedp,
 	SoBRLSceneController *controller)
 {
@@ -1041,134 +1002,116 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     if (ged_exec_draw(gedp, 2, draw_reuse_root) != BRLCAD_OK)
 	FAIL("GED multi-instance transform root draw should succeed");
 
-    SoBRLDatabaseSource *source_a = source_for_representation(controller,
-	    path_a, SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    SoBRLDatabaseSource *source_b = source_for_representation(controller,
-	    path_b, SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    if (!source_a || !source_b)
-	FAIL("GED multi-instance root draw should create both transformed leaf sources");
+    auto compact_for_path = [](SoBRLDatabaseSource *source,
+	    const char *path, BRLObolCompactInstanceHandle &handle,
+	    BRLObolCompactInstanceSummary &summary) {
+	if (!source || !path)
+	    return false;
+	for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	    BRLObolCompactInstanceHandle candidate;
+	    BRLObolCompactInstanceSummary candidateSummary;
+	    if (!source->getCompactInstanceHandle(i, candidate) ||
+		!source->getCompactInstanceSummary(candidate, candidateSummary))
+		continue;
+	    if (path_equal(candidateSummary.path.getString(), path)) {
+		handle = candidate;
+		summary = candidateSummary;
+		return true;
+	    }
+	}
+	return false;
+    };
+    auto transformed_bounds = [](const BRLObolCompactInstanceSummary &summary) {
+	SbBox3f bounds = summary.localBounds;
+	bounds.transform(summary.localToSource);
+	return bounds;
+    };
 
-    BRLObolDatabaseSourceSummary summary_a;
-    BRLObolDatabaseSourceSummary summary_b;
-    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid)
-	FAIL("GED multi-instance transformed sources should report summaries");
-
-    SoBRLVListShape *shape_a = source_a->getRealizedShape();
-    SoBRLVListShape *shape_b = source_b->getRealizedShape();
-    const SoBRLVListShape *geometry_a =
-	shape_a ? shape_a->getGeometrySource() : NULL;
-    const SoBRLVListShape *geometry_b =
-	shape_b ? shape_b->getGeometrySource() : NULL;
-    if (!shape_a || !shape_b || !geometry_a || !geometry_b ||
-	    geometry_a == shape_a || geometry_b == shape_b ||
-	    geometry_a != geometry_b)
-	FAIL("GED multi-instance transformed sources should reuse one local geometry node");
-
-    SbBox3f local_bounds;
-    if (!vlist_geometry_bounds(shape_a, local_bounds) ||
-	    !box3f_near(local_bounds, -1.0f, -1.0f, -1.0f,
+    SoBRLDatabaseSource *wire_source = source_for_representation(controller,
+	"reuse_root.c", SoBRLDatabaseSource::REPRESENTATION_WIRE);
+    BRLObolCompactInstanceHandle handle_a;
+    BRLObolCompactInstanceHandle handle_b;
+    BRLObolCompactInstanceSummary compact_a;
+    BRLObolCompactInstanceSummary compact_b;
+    if (!wire_source || !wire_source->hasCompactInstanceIndex() ||
+	    wire_source->getCompactInstanceCountForPath(path_a, FALSE) != 1 ||
+	    wire_source->getCompactInstanceCountForPath(path_b, FALSE) != 1 ||
+	    !compact_for_path(wire_source, path_a, handle_a, compact_a) ||
+	    !compact_for_path(wire_source, path_b, handle_b, compact_b))
+	FAIL("GED multi-instance root should retain both compact occurrences");
+    if (handle_a.instanceWord0 == handle_b.instanceWord0 &&
+	    handle_a.instanceWord1 == handle_b.instanceWord1)
+	FAIL("GED multi-instance occurrences should have distinct stable handles");
+    if (!compact_a.wireGeometry || !compact_b.wireGeometry ||
+	    compact_a.geometryIdentity == 0 ||
+	    compact_a.geometryIdentity != compact_b.geometryIdentity ||
+	    !box3f_near(compact_a.localBounds, -1.0f, -1.0f, -1.0f,
 		1.0f, 1.0f, 1.0f))
-	FAIL("GED multi-instance shared geometry should remain source-local");
-
-    if (!summary_a.sourceBoundsValid ||
-	    !box3f_near(summary_a.sourceBounds, -13.0f, 2.0f, -1.0f,
-		-11.0f, 4.0f, 1.0f) ||
-	    !summary_b.sourceBoundsValid ||
-	    !box3f_near(summary_b.sourceBounds, 17.0f, 2.0f, -1.0f,
+	FAIL("GED multi-instance occurrences should share source-local wire geometry");
+    const SbBox3f bounds_a = transformed_bounds(compact_a);
+    const SbBox3f bounds_b = transformed_bounds(compact_b);
+    if (!box3f_near(bounds_a, -13.0f, 2.0f, -1.0f,
+	    -11.0f, 4.0f, 1.0f) ||
+	    !box3f_near(bounds_b, 17.0f, 2.0f, -1.0f,
 		19.0f, 4.0f, 1.0f))
-	FAIL("GED multi-instance source bounds should include explicit tree-walk transforms");
+	FAIL("GED multi-instance occurrence transforms should place shared geometry");
 
     SbBox3f scene_bounds_a;
     SbBox3f scene_bounds_b;
     SbBox3f scene_bounds_root;
-    if (!controller->getSceneSubtreeBounds(path_a, TRUE, scene_bounds_a) ||
+    const SbBool have_scene_bounds_a = controller->getSceneSubtreeBounds(
+	path_a, TRUE, scene_bounds_a);
+    if (!have_scene_bounds_a ||
 	    !box3f_near(scene_bounds_a, -13.0f, 2.0f, -1.0f,
-		-11.0f, 4.0f, 1.0f) ||
-	    !controller->getSceneSubtreeBounds(path_b, TRUE, scene_bounds_b) ||
+		-11.0f, 4.0f, 1.0f)) {
+	fprintf(stderr, "first occurrence bounds valid=%d min=(%g,%g,%g) max=(%g,%g,%g)\n",
+	    have_scene_bounds_a, scene_bounds_a.getMin()[0],
+	    scene_bounds_a.getMin()[1], scene_bounds_a.getMin()[2],
+	    scene_bounds_a.getMax()[0], scene_bounds_a.getMax()[1],
+	    scene_bounds_a.getMax()[2]);
+	FAIL("GED multi-instance first occurrence bounds should apply its transform");
+    }
+    if (!controller->getSceneSubtreeBounds(path_b, TRUE, scene_bounds_b) ||
 	    !box3f_near(scene_bounds_b, 17.0f, 2.0f, -1.0f,
-		19.0f, 4.0f, 1.0f) ||
-	    !controller->getSceneSubtreeBounds("reuse_root.c", TRUE,
-		scene_bounds_root) ||
+		19.0f, 4.0f, 1.0f))
+	FAIL("GED multi-instance second occurrence bounds should apply its transform");
+    if (!controller->getSceneSubtreeBounds("reuse_root.c", TRUE,
+	    scene_bounds_root) ||
 	    !box3f_near(scene_bounds_root, -13.0f, 2.0f, -1.0f,
 		19.0f, 4.0f, 1.0f))
-	FAIL("GED multi-instance scene bounds should apply explicit transforms");
+	FAIL("GED multi-instance root bounds should include both occurrences");
 
     if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
 	    path_a, GED_DRAW_MODE_WIRE, 0.0, "multi-instance visibility"))
 	return 1;
-    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid ||
-	    summary_a.visible ||
-	    summary_b.visible ||
-	    shape_a->visible.getValue() ||
-	    shape_b->visible.getValue())
-	FAIL("GED multi-instance visibility should update repeated logical instances consistently");
+    if (!wire_source->getCompactInstanceSummary(handle_a, compact_a) ||
+	    !wire_source->getCompactInstanceSummary(handle_b, compact_b) ||
+	    compact_a.visible || !compact_b.visible)
+	FAIL("GED multi-instance visibility should target one occurrence path");
     if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_VISIBILITY,
 	    path_a, GED_DRAW_MODE_WIRE, 1.0, "multi-instance visibility restore"))
 	return 1;
-    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid ||
-	    !summary_a.visible ||
-	    !summary_b.visible ||
-	    !shape_a->visible.getValue() ||
-	    !shape_b->visible.getValue())
+    if (!wire_source->getCompactInstanceSummary(handle_a, compact_a) ||
+	    !wire_source->getCompactInstanceSummary(handle_b, compact_b) ||
+	    !compact_a.visible || !compact_b.visible)
 	FAIL("GED multi-instance visibility restore should update repeated logical instances consistently");
 
     if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_HIGHLIGHT,
 	    "reuse_root.c", GED_DRAW_MODE_WIRE, 1.0,
 	    "multi-instance highlight"))
 	return 1;
-    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid ||
-	    !summary_a.highlighted ||
-	    !summary_b.highlighted ||
-	    !shape_a->highlighted.getValue() ||
-	    !shape_b->highlighted.getValue())
+    if (!wire_source->getCompactInstanceSummary(handle_a, compact_a) ||
+	    !wire_source->getCompactInstanceSummary(handle_b, compact_b) ||
+	    !compact_a.highlighted || !compact_b.highlighted)
 	FAIL("GED multi-instance highlight should update repeated logical instances consistently");
     if (apply_mode_value_transaction(gedp, GED_DRAW_TXN_HIGHLIGHT,
 	    "reuse_root.c", GED_DRAW_MODE_WIRE, 0.0,
 	    "multi-instance highlight restore"))
 	return 1;
-    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid ||
-	    summary_a.highlighted ||
-	    summary_b.highlighted ||
-	    shape_a->highlighted.getValue() ||
-	    shape_b->highlighted.getValue())
+    if (!wire_source->getCompactInstanceSummary(handle_a, compact_a) ||
+	    !wire_source->getCompactInstanceSummary(handle_b, compact_b) ||
+	    compact_a.highlighted || compact_b.highlighted)
 	FAIL("GED multi-instance highlight restore should update repeated logical instances consistently");
-
-    const SoBRLVListShape *seed_geometry = geometry_b;
-    if (summary_a.instanceKey.getLength() <= 0 ||
-	    controller->markDatabaseSourceInstanceStale(
-		summary_a.instanceKey.getString(),
-		SoBRLDatabaseSource::STALE_DRAW) <= 0)
-	FAIL("GED multi-instance direct source stale should target one transformed source");
-    if (!source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid ||
-	    !summary_a.stale ||
-	    !(summary_a.staleReason & SoBRLDatabaseSource::STALE_DRAW) ||
-	    summary_b.stale)
-	FAIL("GED multi-instance direct source stale should preserve sibling current state");
-    if (!controller->realizePending())
-	FAIL("GED multi-instance direct source redraw should realize pending source");
-    source_a = source_for_representation(controller, path_a,
-	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    source_b = source_for_representation(controller, path_b,
-	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    shape_a = source_a ? source_a->getRealizedShape() : NULL;
-    shape_b = source_b ? source_b->getRealizedShape() : NULL;
-    geometry_a = shape_a ? shape_a->getGeometrySource() : NULL;
-    geometry_b = shape_b ? shape_b->getGeometrySource() : NULL;
-    if (!source_a || !source_b ||
-	    !source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid ||
-	    summary_a.stale ||
-	    summary_b.stale ||
-	    !shape_a || !shape_b || !geometry_a || !geometry_b ||
-	    geometry_a != seed_geometry ||
-	    geometry_b != seed_geometry)
-	FAIL("GED multi-instance direct source redraw should reuse seeded sibling geometry");
 
     ged_draw_index_stats_reset(gedp);
     if (apply_mode_path_transaction(gedp, GED_DRAW_TXN_REDRAW,
@@ -1180,67 +1123,44 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     if (redraw_stats.slow_path_shape_scans ||
 	    redraw_stats.slow_path_group_scans)
 	FAIL("GED multi-instance logical redraw should avoid registry/index slow-path scans");
-    source_a = source_for_representation(controller, path_a,
+    wire_source = source_for_representation(controller, "reuse_root.c",
 	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    source_b = source_for_representation(controller, path_b,
-	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    shape_a = source_a ? source_a->getRealizedShape() : NULL;
-    shape_b = source_b ? source_b->getRealizedShape() : NULL;
-    geometry_a = shape_a ? shape_a->getGeometrySource() : NULL;
-    geometry_b = shape_b ? shape_b->getGeometrySource() : NULL;
-    if (!source_a || !source_b ||
-	    !source_a->getSummary(summary_a) || !summary_a.valid ||
-	    !source_b->getSummary(summary_b) || !summary_b.valid ||
-	    summary_a.stale ||
-	    summary_b.stale ||
-	    !shape_a || !shape_b || !geometry_a || !geometry_b ||
-	    geometry_a == shape_a || geometry_b == shape_b ||
-	    geometry_a != geometry_b)
-	FAIL("GED multi-instance logical redraw should preserve shared local geometry");
+    BRLObolCompactInstanceHandle redraw_handle_a;
+    BRLObolCompactInstanceHandle redraw_handle_b;
+    BRLObolCompactInstanceSummary redraw_a;
+    BRLObolCompactInstanceSummary redraw_b;
+    if (!compact_for_path(wire_source, path_a, redraw_handle_a, redraw_a) ||
+	    !compact_for_path(wire_source, path_b, redraw_handle_b, redraw_b) ||
+	    redraw_handle_a.instanceWord0 != handle_a.instanceWord0 ||
+	    redraw_handle_a.instanceWord1 != handle_a.instanceWord1 ||
+	    redraw_handle_b.instanceWord0 != handle_b.instanceWord0 ||
+	    redraw_handle_b.instanceWord1 != handle_b.instanceWord1 ||
+	    redraw_a.geometryIdentity != compact_a.geometryIdentity ||
+	    redraw_b.geometryIdentity != compact_b.geometryIdentity)
+	FAIL("GED multi-instance redraw should preserve handles and shared geometry");
 
     const char *draw_reuse_root_shaded[3] = {
 	"draw", "-m2", "reuse_root.c"
     };
     if (ged_exec_draw(gedp, 3, draw_reuse_root_shaded) != BRLCAD_OK)
 	FAIL("GED multi-instance shaded root draw should succeed");
-    SoBRLDatabaseSource *mesh_source_a =
-	source_for_representation(controller, path_a,
-		SoBRLDatabaseSource::REPRESENTATION_SHADED);
-    SoBRLDatabaseSource *mesh_source_b =
-	source_for_representation(controller, path_b,
-		SoBRLDatabaseSource::REPRESENTATION_SHADED);
-    BRLObolDatabaseSourceSummary mesh_summary_a;
-    BRLObolDatabaseSourceSummary mesh_summary_b;
-    if (!mesh_source_a || !mesh_source_b ||
-	    !mesh_source_a->getSummary(mesh_summary_a) ||
-	    !mesh_summary_a.valid ||
-	    !mesh_source_b->getSummary(mesh_summary_b) ||
-	    !mesh_summary_b.valid ||
-	    mesh_summary_a.realizedMeshCount <= 0 ||
-	    mesh_summary_b.realizedMeshCount <= 0)
-	FAIL("GED multi-instance shaded draw should create transformed mesh sources");
-    SoBRLMeshShape *mesh_a = mesh_source_a->getRealizedMesh();
-    SoBRLMeshShape *mesh_b = mesh_source_b->getRealizedMesh();
-    const SoBRLMeshShape *mesh_geometry_a =
-	mesh_a ? mesh_a->getGeometrySource() : NULL;
-    const SoBRLMeshShape *mesh_geometry_b =
-	mesh_b ? mesh_b->getGeometrySource() : NULL;
-    if (!mesh_a || !mesh_b || !mesh_geometry_a || !mesh_geometry_b ||
-	    mesh_geometry_a == mesh_a || mesh_geometry_b == mesh_b ||
-	    mesh_geometry_a != mesh_geometry_b)
-	FAIL("GED multi-instance shaded sources should reuse one local mesh node");
-    SbBox3f mesh_local_bounds;
-    if (!mesh_geometry_bounds(mesh_a, mesh_local_bounds) ||
-	    !box3f_near(mesh_local_bounds, -1.0f, -1.0f, -1.0f,
-		1.0f, 1.0f, 1.0f))
-	FAIL("GED multi-instance shaded shared mesh should remain source-local");
-    if (!mesh_summary_a.sourceBoundsValid ||
-	    !box3f_near(mesh_summary_a.sourceBounds, -13.0f, 2.0f, -1.0f,
-		-11.0f, 4.0f, 1.0f) ||
-	    !mesh_summary_b.sourceBoundsValid ||
-	    !box3f_near(mesh_summary_b.sourceBounds, 17.0f, 2.0f, -1.0f,
-		19.0f, 4.0f, 1.0f))
-	FAIL("GED multi-instance shaded source bounds should apply transforms");
+    SoBRLDatabaseSource *mesh_source = source_for_representation(controller,
+	"reuse_root.c", SoBRLDatabaseSource::REPRESENTATION_SHADED);
+    BRLObolCompactInstanceHandle mesh_handle_a;
+    BRLObolCompactInstanceHandle mesh_handle_b;
+    BRLObolCompactInstanceSummary mesh_a;
+    BRLObolCompactInstanceSummary mesh_b;
+    if (!mesh_source || !mesh_source->hasCompactInstanceIndex() ||
+	    !compact_for_path(mesh_source, path_a, mesh_handle_a, mesh_a) ||
+	    !compact_for_path(mesh_source, path_b, mesh_handle_b, mesh_b) ||
+	    !mesh_a.meshGeometry || !mesh_b.meshGeometry ||
+	    mesh_a.geometryIdentity == 0 ||
+	    mesh_a.geometryIdentity != mesh_b.geometryIdentity ||
+	    !box3f_near(transformed_bounds(mesh_a),
+		-13.0f, 2.0f, -1.0f, -11.0f, 4.0f, 1.0f) ||
+	    !box3f_near(transformed_bounds(mesh_b),
+		17.0f, 2.0f, -1.0f, 19.0f, 4.0f, 1.0f))
+	FAIL("GED multi-instance shaded draw should retain transformed mesh occurrences");
 
     const char *autoview_cmd[2] = {"autoview", NULL};
     if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
@@ -1256,11 +1176,9 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
     const char *erase_reuse_root[2] = {"erase", "reuse_root.c"};
     if (ged_exec_erase(gedp, 2, erase_reuse_root) != BRLCAD_OK)
 	FAIL("GED multi-instance transform root erase should succeed");
-    if (source_for_path(controller, path_a) ||
-	    source_for_path(controller, path_b) ||
-	    source_for_representation(controller, path_a,
-		SoBRLDatabaseSource::REPRESENTATION_SHADED) ||
-	    source_for_representation(controller, path_b,
+    if (source_for_representation(controller, "reuse_root.c",
+		SoBRLDatabaseSource::REPRESENTATION_WIRE) ||
+	    source_for_representation(controller, "reuse_root.c",
 		SoBRLDatabaseSource::REPRESENTATION_SHADED) ||
 	    controller->getDatabaseSourceCount() != initial_source_count)
 	FAIL("GED multi-instance transform cleanup should restore prior source state");
@@ -1281,6 +1199,86 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
     const char *draw_duplicate[2] = {"draw", "dup_twice.c"};
     if (ged_exec_draw(gedp, 2, draw_duplicate) != BRLCAD_OK)
 	FAIL("GED duplicate occurrence draw should succeed");
+
+    SoBRLDatabaseSource *aggregate = source_for_path(controller,
+	"dup_twice.c");
+    if (aggregate && aggregate->hasCompactInstanceIndex()) {
+	if (aggregate->getCompactInstanceCountForPath(path_a, FALSE) != 1 ||
+	    aggregate->getCompactInstanceCountForPath(path_b, FALSE) != 1)
+	    FAIL("GED duplicate occurrences should have distinct registry paths");
+	BRLObolCompactInstanceHandle handle_a;
+	BRLObolCompactInstanceHandle handle_b;
+	BRLObolCompactInstanceSummary summary_a;
+	BRLObolCompactInstanceSummary summary_b;
+	SbString key_a;
+	SbString key_b;
+	for (int i = 0; i < aggregate->getCompactInstanceCount(); i++) {
+	    BRLObolCompactInstanceHandle handle;
+	    BRLObolCompactInstanceSummary summary;
+	    if (!aggregate->getCompactInstanceHandle(i, handle) ||
+		!aggregate->getCompactInstanceSummary(handle, summary))
+		FAIL("GED duplicate registry should expose valid handles");
+	    if (path_equal(summary.path.getString(), path_a)) {
+		handle_a = handle;
+		summary_a = summary;
+		key_a = summary.sourceInstanceKey;
+	    }
+	    if (path_equal(summary.path.getString(), path_b)) {
+		handle_b = handle;
+		summary_b = summary;
+		key_b = summary.sourceInstanceKey;
+	    }
+	}
+	if (key_a.getLength() == 0 || key_b.getLength() == 0) {
+	    FAIL("GED duplicate registry occurrences should expose identities");
+	}
+	if (key_a == key_b)
+	    FAIL("GED duplicate registry occurrence identities should be distinct");
+	if (aggregate->setCompactInstanceDisplayStateForPath(path_a, FALSE,
+		1, FALSE, 0, FALSE, 0, FALSE) <= 0 ||
+	    !aggregate->getCompactInstanceSummary(handle_a, summary_a) ||
+	    !aggregate->getCompactInstanceSummary(handle_b, summary_b) ||
+	    summary_a.visible == summary_b.visible)
+	    FAIL("GED duplicate registry visibility should target one occurrence");
+	const char *visible_path = summary_a.visible ? path_a : path_b;
+	const SbString &visible_key = summary_a.visible ? key_a : key_b;
+	SoBRLExportAction export_action;
+	export_action.apply(controller->getSceneRoot());
+	SbVec3f midpoint;
+	SbBool found_visible_segment = FALSE;
+	for (int i = 0; i < export_action.getLineCount(); i++) {
+	    const SoBRLExportAction::LineRecord &line = export_action.getLine(i);
+	    if (!path_equal(line.path.getString(), visible_path))
+		continue;
+	    midpoint = (line.a + line.b) * 0.5f;
+	    found_visible_segment = TRUE;
+	    break;
+	}
+	if (!found_visible_segment)
+	    FAIL("GED duplicate registry export should expose the visible occurrence");
+	SbViewportRegion viewport(200, 200);
+	SoRayPickAction pick_action(viewport);
+	pick_action.setRay(SbVec3f(midpoint[0], midpoint[1],
+	    midpoint[2] + 10.0f), SbVec3f(0.0f, 0.0f, -1.0f));
+	pick_action.apply(controller->getSceneRoot());
+	const SoPickedPoint *picked_point = pick_action.getPickedPoint();
+	const SoDetail *raw_detail = picked_point ? picked_point->getDetail() : NULL;
+	if (!raw_detail ||
+	    !raw_detail->isOfType(SoBRLPickDetail::getClassTypeId()))
+	    FAIL("GED duplicate registry pick should return BRL-CAD detail");
+	const SoBRLPickDetail *pick_detail =
+	    static_cast<const SoBRLPickDetail *>(raw_detail);
+	if (!path_equal(pick_detail->getPath().getString(), visible_path) ||
+	    !BU_STR_EQUAL(pick_detail->getSourceInstanceKey().getString(),
+		visible_key.getString()))
+	    FAIL("GED duplicate registry pick should identify the visible occurrence");
+
+	const char *erase_duplicate[2] = {"erase", "dup_twice.c"};
+	if (ged_exec_erase(gedp, 2, erase_duplicate) != BRLCAD_OK ||
+	    controller->getDatabaseSourceCount() != initial_source_count)
+	    FAIL("GED duplicate registry cleanup should restore prior state");
+	return 0;
+    }
 
     SoBRLDatabaseSource *source_a = source_for_representation(controller,
 	    path_a, SoBRLDatabaseSource::REPRESENTATION_WIRE);
@@ -1488,6 +1486,12 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     if (!gedp || !controller || !view_ctx)
 	FAIL("progressive autoview test needs an attached view");
 
+    struct bv *view = DRAW_TEST_BV(view_ctx);
+    const uint64_t initial_revision = bv_frame_revision_get(view);
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    const int initial_scene_source_count = scene ?
+	scene->getDatabaseSourceCount() : 0;
+
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     appearance.defer_leaf_expansion = 1;
@@ -1504,15 +1508,86 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     if (draw_ret <= 0)
 	FAIL("progressive autoview deferred draw should succeed");
 
-    struct bv *view = DRAW_TEST_BV(view_ctx);
-    const uint64_t initial_revision = bv_frame_revision_get(view);
+    SoBRLDatabaseSource *proxy_source = scene ?
+	source_for_path(scene, "progressive_root.c") : NULL;
+    SbBox3f proxy_bounds;
+    proxy_bounds.makeEmpty();
+    if (!proxy_source || !proxy_source->getEffectiveSourceBounds(proxy_bounds) ||
+	proxy_bounds.isEmpty())
+	FAIL("deferred root should publish conservative indexed proxy bounds");
+
+    /* A redraw can advance the aggregate draw revision while this source is
+     * realizing.  It must not invalidate an otherwise matching snapshot. */
+    const uint64_t revision_before_redraw = ged_draw_scene_revision(gedp);
+    struct ged_draw_transaction redraw_txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, "progressive_root.c");
+    redraw_txn.view = view_ctx;
+    if (ged_draw_apply_transaction(gedp, &redraw_txn, NULL) < 0 ||
+	ged_draw_scene_revision(gedp) <= revision_before_redraw)
+	FAIL("progressive redraw should advance scene bookkeeping without cancelling refinement");
+
     BRLObolProgressiveOptions options;
-    options.flags = BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
-	BRLOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES;
     BRLObolProgressiveStatus status;
-    if (controller->advanceProgressiveWork(&options, &status) <= 0 ||
-	!status.changed || bv_frame_revision_get(view) <= initial_revision)
-	FAIL("progressive refinement should settle its owned initial autoview");
+    int initial_progress = 0;
+    int settled = 0;
+    SoBRLDatabaseSource *settled_source = NULL;
+    for (int attempt = 0; attempt < 2000; attempt++) {
+	initial_progress = controller->advanceProgressiveWork(&options, &status);
+	settled_source = scene ? source_for_path(scene,
+	    "progressive_root.c") : NULL;
+	if (settled_source && settled_source->isCompactOccurrenceRegistry() &&
+	    settled_source->getCompactInstanceCount() == 4) {
+	    settled = 1;
+	    break;
+	}
+	if (!status.hasMore)
+	    break;
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    SbBox3f settled_bounds;
+    settled_bounds.makeEmpty();
+    if (settled_source)
+	(void)settled_source->getEffectiveSourceBounds(settled_bounds);
+    const SbVec3f proxy_min = proxy_bounds.getMin();
+    const SbVec3f proxy_max = proxy_bounds.getMax();
+    const SbVec3f settled_min = settled_bounds.getMin();
+    const SbVec3f settled_max = settled_bounds.getMax();
+    const bool proxy_contains_settled = !settled_bounds.isEmpty() &&
+	proxy_min[0] <= settled_min[0] + 0.001f &&
+	proxy_min[1] <= settled_min[1] + 0.001f &&
+	proxy_min[2] <= settled_min[2] + 0.001f &&
+	proxy_max[0] >= settled_max[0] - 0.001f &&
+	proxy_max[1] >= settled_max[1] - 0.001f &&
+	proxy_max[2] >= settled_max[2] - 0.001f;
+    if (!settled || initial_progress <= 0 || !settled_source ||
+	!settled_source->isCompactOccurrenceRegistry() ||
+	settled_source->getCompactInstanceCount() != 4 ||
+	!proxy_contains_settled ||
+	scene->getDatabaseSourceCount() != initial_scene_source_count + 1 ||
+	bv_frame_revision_get(view) <= initial_revision) {
+	fprintf(stderr, "progressive settle ret=%d changed=%d frame=%llu initial=%llu providers=%zu advanced=%zu remaining=%zu pending=%zu scene=%d/%d source=%p compact=%d count=%d\n",
+	    initial_progress, status.changed,
+	    static_cast<unsigned long long>(bv_frame_revision_get(view)),
+	    static_cast<unsigned long long>(initial_revision), status.providerCount,
+	    status.providerAdvanced, status.remaining, status.pendingTasks,
+	    scene ? scene->getDatabaseSourceCount() : -1,
+	    initial_scene_source_count, (void *)settled_source,
+	    settled_source ? settled_source->isCompactOccurrenceRegistry() : -1,
+	    settled_source ? settled_source->getCompactInstanceCount() : -1);
+	if (scene) {
+	    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+		BRLObolDatabaseSourceSummary summary;
+		SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+		if (scene->getDatabaseSourceSummary(i, summary) && summary.valid)
+		    fprintf(stderr, "  source[%d] key=%s path=%s rep=%d compact=%d count=%d\n",
+			i, summary.instanceKey.getString(), summary.path.getString(),
+			summary.representationMode,
+			source ? source->isCompactOccurrenceRegistry() : -1,
+			source ? source->getCompactInstanceCount() : -1);
+	    }
+	}
+	FAIL("background progressive refinement should atomically settle one compact root and its owned initial autoview");
+    }
 
     if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
 	    "progressive_root.c", view_ctx, -1,
@@ -1526,14 +1601,35 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	FAIL("progressive autoview cancellation draw should succeed");
     bv_size_set(view, 1234.0);
     const fastf_t user_size = bv_size_get(view);
-    if (controller->advanceProgressiveWork(&options, &status) <= 0 ||
-	!NEAR_EQUAL(bv_size_get(view), user_size, SMALL_FASTF))
-	FAIL("user view change should cancel pending progressive autoview");
-
+    const char *rename_progressive[3] = {
+	"move", "progressive_root.c", "progressive_root_async.c"
+    };
+    if (ged_exec(gedp, 3, rename_progressive) != BRLCAD_OK)
+	FAIL("active background refinement database rename should succeed");
+    for (int attempt = 0; attempt < 20; attempt++) {
+	(void)controller->advanceProgressiveWork(&options, &status);
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (scene && (source_for_path(scene, "progressive_root.c") ||
+	!source_for_path(scene, "progressive_root_async.c")))
+	FAIL("database rename should cancel stale refinement and retarget only the live proxy");
+    const char *restore_progressive[3] = {
+	"move", "progressive_root_async.c", "progressive_root.c"
+    };
+    if (ged_exec(gedp, 3, restore_progressive) != BRLCAD_OK)
+	FAIL("active background refinement database rename restore should succeed");
     if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
 	    "progressive_root.c", view_ctx, -1,
 	    "progressive autoview cancellation cleanup"))
 	return 1;
+    for (int attempt = 0; attempt < 20; attempt++) {
+	(void)controller->advanceProgressiveWork(&options, &status);
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!NEAR_EQUAL(bv_size_get(view), user_size, SMALL_FASTF))
+	FAIL("user view change should cancel pending progressive autoview");
+    if (scene && source_for_path(scene, "progressive_root.c"))
+	FAIL("cancelled background refinement must not republish an erased root");
     return 0;
 }
 
@@ -1862,7 +1958,8 @@ main(int argc, char **argv)
     if (!box_source ||
 	    box_source->realizationStatus.getValue() !=
 	    SoBRLDatabaseSource::REALIZED ||
-	    box_source->getRealizedShapeCount() <= 0)
+	    !box_source->hasRealizedWireGeometry() ||
+	    box_source->getRealizedShapeCount() != 0)
 	FAIL("mirrored GED draw should realize Obol wire geometry");
 
     ged_draw_obol_scene_controller_detach(gedp);
@@ -1884,9 +1981,8 @@ main(int argc, char **argv)
 	    !owned_controller ||
 	    owned_controller->getSceneController() != owned_scene)
 	FAIL("GED should create and report an owned Obol view scene");
-    owned_scene->setCompactCadRealizationEnabled(FALSE);
     if (!ged_draw_obol_scene_sync_full_scene(gedp, NULL, 0, owned_scene))
-	FAIL("GED adapter test should rebuild its owned scene without compact batching");
+	FAIL("GED adapter test should rebuild its owned scene");
     if (owned_scene->getDatabaseSourceCount() != 2 ||
 	    !source_for_path(owned_scene, "box.s") ||
 	    !source_for_path(owned_scene, "ball.s"))
@@ -3027,23 +3123,20 @@ main(int argc, char **argv)
 	FAIL("GED annotation geometry summary should read owned Obol annotation VLIST");
     SoBRLDatabaseSource *annot_source =
 	source_for_path(owned_scene, "annot_line.s");
-    SoBRLVListShape *annot_shape = annot_source ?
-	annot_source->getRealizedShape() : NULL;
-    const SoBRLVListShape *annot_geom_source = annot_shape ?
-	annot_shape->getGeometrySource() : NULL;
+    BRLObolRealizedShapeSummary annot_summary;
+    SoBRLExportAction annot_export;
+    if (annot_source)
+	annot_export.apply(annot_source);
     if (owned_scene->getDatabaseSourceCount() != 3 ||
-	    !annot_shape || !annot_geom_source ||
-	    annot_geom_source->point.getNum() != 2 ||
-	    annot_geom_source->command.getNum() != 2 ||
-	    annot_geom_source->command[0] != SoBRLVListShape::MOVE ||
-	    annot_geom_source->command[1] != SoBRLVListShape::DRAW ||
-	    strcmp(annot_shape->sourceType.getValue().getString(),
-		"annotation") != 0 ||
-	    strcmp(annot_shape->geometryKind.getValue().getString(),
-		"annotation") != 0 ||
-	    fabs(annot_geom_source->point[1][0] - 50.25f) > 0.001f ||
-	    fabs(annot_geom_source->point[1][1] - 0.5f) > 0.001f ||
-	    fabs(annot_geom_source->point[1][2]) > 0.001f)
+	    !annot_source || annot_source->getRealizedShapeCount() != 0 ||
+	    !annot_source->getRealizedShapeSummary(0, annot_summary) ||
+	    annot_summary.segmentCount != 1 ||
+	    strcmp(annot_summary.sourceType.getString(), "annotation") != 0 ||
+	    strcmp(annot_summary.geometryKind.getString(), "annotation") != 0 ||
+	    annot_export.getLineCount() != 1 ||
+	    fabs(annot_export.getLine(0).b[0] - 50.25f) > 0.001f ||
+	    fabs(annot_export.getLine(0).b[1] - 0.5f) > 0.001f ||
+	    fabs(annot_export.getLine(0).b[2]) > 0.001f)
 	FAIL("GED annotation draw should publish line segments into the owned Obol source");
     const char *erase_annot_line[2] = {"erase", "annot_line.s"};
     if (ged_exec_erase(gedp, 2, erase_annot_line) != BRLCAD_OK ||
@@ -3057,18 +3150,13 @@ main(int argc, char **argv)
 	source_for_path(owned_scene, "submodel_owner.s");
     if (!submodel_source || owned_scene->getDatabaseSourceCount() != 3)
 	FAIL("GED submodel draw should create an owned Obol source");
-    SoBRLVListShape *submodel_shape = submodel_source->getRealizedShape();
-    const SoBRLVListShape *submodel_geom = submodel_shape ?
-	submodel_shape->getGeometrySource() : NULL;
-    if (!submodel_shape || !submodel_geom ||
-	    submodel_geom->point.getNum() == 0 ||
-	    submodel_geom->command.getNum() != submodel_geom->point.getNum() ||
-	    strcmp(submodel_shape->recordRole.getValue().getString(),
-		"database") != 0 ||
-	    strcmp(submodel_shape->sourceType.getValue().getString(),
-		"submodel") != 0 ||
-	    !path_equal(submodel_shape->ownerSourcePath.getValue().getString(),
-		"submodel_owner.s") ||
+    BRLObolRealizedShapeSummary submodel_summary;
+    if (submodel_source->getRealizedShapeCount() != 0 ||
+	    !submodel_source->getRealizedShapeSummary(0, submodel_summary) ||
+	    submodel_summary.pointCount == 0 ||
+	    submodel_summary.commandCount != submodel_summary.pointCount ||
+	    strcmp(submodel_summary.recordRole.getString(), "database") != 0 ||
+	    strcmp(submodel_summary.sourceType.getString(), "submodel") != 0 ||
 	    auxiliary_for_path_variant(submodel_source, "box.s")) {
 	FAIL("GED submodel draw should realize direct primary owned Obol geometry without legacy auxiliary staging");
     }
@@ -3087,14 +3175,12 @@ main(int argc, char **argv)
     if (!submodel_temp_source || owned_scene->getDatabaseSourceCount() != 3 ||
 	    source_for_path(owned_scene, "nested_leaf.s"))
 	FAIL("GED submodel temp-source draw should not leak a temporary owned Obol leaf source");
-    SoBRLVListShape *submodel_temp_shape =
-	submodel_temp_source->getRealizedShape();
-    const SoBRLVListShape *submodel_temp_geom = submodel_temp_shape ?
-	submodel_temp_shape->getGeometrySource() : NULL;
-    if (!submodel_temp_shape || !submodel_temp_geom ||
-	    submodel_temp_geom->point.getNum() == 0 ||
-	    strcmp(submodel_temp_shape->recordRole.getValue().getString(),
-		"database") != 0 ||
+    BRLObolRealizedShapeSummary submodel_temp_summary;
+    if (submodel_temp_source->getRealizedShapeCount() != 0 ||
+	    !submodel_temp_source->getRealizedShapeSummary(0,
+		submodel_temp_summary) ||
+	    submodel_temp_summary.pointCount == 0 ||
+	    strcmp(submodel_temp_summary.recordRole.getString(), "database") != 0 ||
 	    auxiliary_for_path_variant(submodel_temp_source, "nested_leaf.s"))
 	FAIL("GED submodel temp-source draw should realize direct primary owned Obol geometry");
     const char *erase_submodel_temp_owner[2] = {
@@ -3277,13 +3363,14 @@ main(int argc, char **argv)
 	    renamed_summary.inputsRevision != 7 ||
 	    renamed_summary.sourceRevision == 9191)
 	FAIL("GED rename transaction should rename the owned Obol source in place");
-    SoBRLVListShape *renamed_shape = renamed_source->getRealizedShape();
-    if (!renamed_shape ||
-	    !path_equal(renamed_shape->sourcePath.getValue().getString(),
+    BRLObolRealizedShapeSummary renamed_shape_summary;
+    if (renamed_source->getRealizedShapeCount() != 0 ||
+	    !renamed_source->getRealizedShapeSummary(0,
+		renamed_shape_summary) ||
+	    !path_equal(renamed_shape_summary.path.getString(),
 		"renamed_source.s") ||
-	    !path_equal(renamed_shape->ownerSourcePath.getValue().getString(),
-		"renamed_source.s") ||
-	    renamed_shape->lineWidth.getValue() != 11)
+	    !path_equal(renamed_shape_summary.ownerSourcePath.getString(),
+		"renamed_source.s"))
 	FAIL("GED rename transaction should retarget owned Obol realized shape metadata");
     const char *erase_renamed_source[2] = {"erase", "renamed_source.s"};
     if (ged_exec_erase(gedp, 2, erase_renamed_source) != BRLCAD_OK ||
@@ -3555,19 +3642,29 @@ main(int argc, char **argv)
     box_source = owned_scene->findDatabaseSource("/box.s");
     if (!box_source)
 	box_source = source_for_path(owned_scene, "box.s");
-	    if (!box_source)
-		FAIL("owned Obol source should be available for geometry summary");
-	    SoBRLVListShape *box_shape = box_source->getRealizedShape();
-	    if (!box_shape && box_source->demoteCompactGeometry() > 0)
-		box_shape = box_source->getRealizedShape();
-	    if (!box_shape && box_source->realizeDatabaseWireframe())
-		box_shape = box_source->getRealizedShape();
-	    if (!box_shape)
-		FAIL("owned Obol source should expose realized VLIST geometry");
-	    ged_draw_index_stats_reset(gedp);
-	    if (!ged_draw_shape_ref_set_evaluated_region(gedp, box_record.ref, 1) ||
-		    box_shape->regionId.getValue() != 1)
-		FAIL("GED evaluated-region setter should mutate owned Obol shape metadata");
+    if (!box_source)
+	FAIL("owned Obol source should be available for geometry summary");
+    SbVec3f sentinel_points[2] = {
+	SbVec3f(11.0f, 0.0f, 0.0f),
+	SbVec3f(12.0f, 0.0f, 0.0f)
+    };
+    int32_t sentinel_commands[2] = {
+	SoBRLVListShape::MOVE,
+	SoBRLVListShape::DRAW
+    };
+    BRLObolExternalLineSet external_line;
+    external_line.points = sentinel_points;
+    external_line.commands = sentinel_commands;
+    external_line.count = 2;
+    if (box_source->publishExternalLineSet(external_line) <= 0)
+	FAIL("shape-context test should publish explicit external line geometry");
+    SoBRLVListShape *box_shape = box_source->getRealizedShape();
+    if (!box_shape)
+	FAIL("external line publication should expose realized VLIST geometry");
+    ged_draw_index_stats_reset(gedp);
+    if (!ged_draw_shape_ref_set_evaluated_region(gedp, box_record.ref, 1) ||
+	box_shape->regionId.getValue() != 1)
+	FAIL("GED evaluated-region setter should mutate owned Obol shape metadata");
     struct ged_draw_shape_record eval_record;
     memset(&eval_record, 0, sizeof(eval_record));
     if (!ged_draw_shape_record_get(gedp, box_record.ref, &eval_record) ||
@@ -3576,15 +3673,6 @@ main(int argc, char **argv)
 	    if (!ged_draw_shape_ref_set_evaluated_region(gedp, box_record.ref, 0) ||
 		    box_shape->regionId.getValue() != 0)
 		FAIL("GED evaluated-region setter should clear owned Obol shape metadata");
-	    SbVec3f sentinel_points[2] = {
-		SbVec3f(11.0f, 0.0f, 0.0f),
-	SbVec3f(12.0f, 0.0f, 0.0f)
-    };
-    int32_t sentinel_commands[2] = {
-	SoBRLVListShape::MOVE,
-	SoBRLVListShape::DRAW
-    };
-    box_shape->setLineSet(sentinel_points, sentinel_commands, 2);
     struct ged_draw_view_line_summary box_line;
     memset(&box_line, 0, sizeof(box_line));
     if (!ged_draw_shape_ref_line_summary(gedp, box_record.ref, &box_line) ||
@@ -3999,15 +4087,14 @@ main(int argc, char **argv)
 	    }
 	    if (!box_source)
 		FAIL("owned Obol source should remain available after shaded draw source realization");
-	    box_mesh = box_source->getRealizedMesh();
-	    {
-		const SoBRLMeshShape *box_mesh_geom = box_mesh ?
-		    box_mesh->getGeometrySource() : NULL;
-		if (!box_mesh_geom ||
-			box_mesh_geom->point.getNum() == 0 ||
-			box_mesh_geom->coordIndex.getNum() == 0)
-		FAIL("GED shaded source realization should publish owned Obol mesh fields");
-	    }
+	    BRLObolRealizedShapeSummary box_mesh_summary;
+	    if (box_source->getRealizedMeshCount() != 0 ||
+		!box_source->getRealizedShapeSummary(0, box_mesh_summary) ||
+		box_mesh_summary.shapeKind !=
+		    BRLObolRealizedShapeSummary::SHAPE_MESH ||
+		box_mesh_summary.pointCount == 0 ||
+		box_mesh_summary.indexCount == 0)
+		FAIL("GED shaded source realization should publish carrier-free Obol mesh geometry");
 	    BRLObolDatabaseSourceSummary box_realized_summary;
 	    if (!box_source->getSummary(box_realized_summary) ||
 		    box_realized_summary.stale ||
@@ -4055,17 +4142,14 @@ main(int argc, char **argv)
 		    !box_realized_summary.drawSizeValid ||
 		    fabs(box_realized_summary.drawSize - 12.5f) > 0.001f)
 		FAIL("GED Obol source placement bridge should update source summary");
-	    box_mesh = box_source->getRealizedMesh();
-	    if (!box_mesh ||
-		    !box_mesh->drawMatrixValid.getValue() ||
-		    !box_mesh->drawMatrix.getValue().equals(
-			source_placement_sb, 0.0001f) ||
-		    !box_mesh->drawCenterValid.getValue() ||
-		    fabs(box_mesh->drawCenter.getValue()[0] - 3.0f) >
-			0.001f ||
-		    !box_mesh->drawSizeValid.getValue() ||
-		    fabs(box_mesh->drawSize.getValue() - 12.5f) > 0.001f)
-		FAIL("GED Obol source placement bridge should sync realized shape placement");
+	    if (box_source->prepareCompiledAssembly() != 1)
+		FAIL("GED Obol source placement bridge should retain a compiled assembly");
+	    SoGetBoundingBoxAction placement_bounds(SbViewportRegion(200, 200));
+	    placement_bounds.apply(box_source);
+	    const SbBox3f placed_box = placement_bounds.getBoundingBox();
+	    if (placed_box.isEmpty() || placed_box.getMin()[0] > 23.1f ||
+		placed_box.getMax()[0] < 24.9f)
+		FAIL("GED Obol source placement bridge should transform compact geometry bounds");
 	    std::string box_source_path =
 		box_source->path.getValue().getString();
 	    if (owned_scene->setDatabaseSourcePlacementState(
@@ -4845,6 +4929,9 @@ main(int argc, char **argv)
     BRLObolDatabaseSourceSummary nested_sibling_summary;
     if (!nested_sibling_source->getSummary(nested_sibling_initial_summary))
 	FAIL("GED nested sibling source should expose a state summary");
+    if (nested_sibling_initial_summary.realizationStatus !=
+	    SoBRLDatabaseSource::REALIZED || nested_sibling_initial_summary.stale)
+	FAIL("GED nested sibling source should initially be realized and current");
     if (owned_scene->setDatabaseSourceState(nested_sibling_source_path,
 	    TRUE,
 	    nested_sibling_initial_summary.sourceRevision,
@@ -4950,6 +5037,9 @@ main(int argc, char **argv)
 	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
 	    nested_sibling_summary.lineWidth != 23)
 	FAIL("GED root path-prefix erase redraw restore should preserve sibling owned Obol source state");
+    if (nested_sibling_summary.realizationStatus !=
+	    SoBRLDatabaseSource::REALIZED || nested_sibling_summary.stale)
+	FAIL("GED root path-prefix erase redraw restore should keep the sibling realization current");
     struct ged_draw_transaction reexpand_nested_child =
 	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_UPDATED,
 		"nested_child.c");
@@ -4992,6 +5082,8 @@ main(int argc, char **argv)
     if (!nested_sibling_source ||
 	    !nested_sibling_source->getSummary(nested_sibling_summary))
 	FAIL("GED nested leaf stale transaction should preserve the sibling source");
+    if (!nested_sibling_source->hasRealizedWireGeometry())
+	FAIL("GED nested leaf stale transaction should retain sibling occurrence geometry");
     if (nested_sibling_summary.stale)
 	FAIL("GED nested leaf stale transaction should not stale the sibling source");
     if (nested_sibling_summary.lineWidth != 23)
@@ -5292,9 +5384,14 @@ main(int argc, char **argv)
     if (!seed_view_lod_probe_payload(&view_controller, "box.s", "box.s"))
 	FAIL("attached Obol view-controller LoD invalidation probe should seed draw payload");
     const char *attached_draw_draft[2] = {"draw", "draft_move.s"};
-    if (ged_exec_draw(gedp, 2, attached_draw_draft) != BRLCAD_OK ||
-	    view_controller.getViewLodState()->payloadCount() != 0)
+    const int attached_draw_ret = ged_exec_draw(gedp, 2, attached_draw_draft);
+    if (attached_draw_ret != BRLCAD_OK ||
+	    view_controller.getViewLodState()->payloadCount() != 0) {
+	fprintf(stderr, "attached draw ret=%d lod_payloads=%zu\n",
+	    attached_draw_ret,
+	    view_controller.getViewLodState()->payloadCount());
 	FAIL("attached Obol draw transaction should clear view-local LoD state");
+    }
     if (view_scene->getDatabaseSourceCount() != 3 ||
 	    !source_for_path(view_scene, "draft_move.s"))
 	FAIL("attached Obol draw transaction should still sync the drawn source");

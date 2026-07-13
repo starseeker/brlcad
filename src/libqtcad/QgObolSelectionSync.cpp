@@ -21,8 +21,8 @@
 
 #include <Inventor/nodes/SoGroup.h>
 
-#include <algorithm>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 static const char *
@@ -142,15 +142,14 @@ qg_obol_set_mesh_selection(SoBRLMeshShape *mesh, bool selected)
 
 static void
 qg_obol_collect_render_sources(SoNode *node,
-	std::vector<SoBRLDatabaseSource *> &sources)
+	std::unordered_set<SoBRLDatabaseSource *> &sources)
 {
     if (!node)
 	return;
     if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	SoBRLDatabaseSource *source =
 	    static_cast<SoBRLDatabaseSource *>(node);
-	if (std::find(sources.begin(), sources.end(), source) == sources.end())
-	    sources.push_back(source);
+	sources.insert(source);
 	return;
     }
     if (!node->isOfType(SoGroup::getClassTypeId()))
@@ -161,10 +160,11 @@ qg_obol_collect_render_sources(SoNode *node,
 	qg_obol_collect_render_sources(group->getChild(i), sources);
 }
 
-int
-qg_obol_sync_selection_state(struct ged *gedp,
+static int
+qg_obol_sync_selection_state_impl(struct ged *gedp,
 	QgView *display,
-	const char *setName)
+	const char *setName,
+	bool require_active_selection)
 {
     if (!gedp || !display)
 	return 0;
@@ -178,8 +178,10 @@ qg_obol_sync_selection_state(struct ged *gedp,
 
     const std::vector<std::string> selectedPaths =
 	qg_obol_selection_paths(gedp, setName);
+    if (require_active_selection && selectedPaths.empty())
+	return 0;
 
-    std::vector<SoBRLDatabaseSource *> sources;
+    std::unordered_set<SoBRLDatabaseSource *> sources;
     qg_obol_collect_render_sources(obol->getRenderSceneRoot(), sources);
     if (sources.empty())
 	qg_obol_collect_render_sources(obol->getSceneRoot(), sources);
@@ -191,6 +193,24 @@ qg_obol_sync_selection_state(struct ged *gedp,
 
 	const bool wholeSourceSelected =
 	    qg_obol_source_selected(source, selectedPaths);
+	if (source->hasCompactInstanceIndex()) {
+	    for (int j = 0; j < source->getCompactInstanceCount(); j++) {
+		BRLObolCompactInstanceHandle handle;
+		BRLObolCompactInstanceSummary summary;
+		if (!source->getCompactInstanceHandle(j, handle) ||
+		    !source->getCompactInstanceSummary(handle, summary))
+		    continue;
+		const bool selected = wholeSourceSelected ||
+		    qg_obol_realized_path_selected(summary.path.getString(),
+			selectedPaths);
+		if (summary.selected == (selected ? TRUE : FALSE))
+		    continue;
+		changed |= source->setCompactInstanceDisplayStateForPath(
+		    summary.path.getString(), FALSE, 0, FALSE, 1,
+		    selected ? TRUE : FALSE, 0, FALSE);
+	    }
+	    continue;
+	}
 
 	for (int j = 0; j < source->getRealizedShapeCount(); j++) {
 	    SoBRLVListShape *shape = source->getRealizedShape(j);
@@ -220,6 +240,22 @@ qg_obol_sync_selection_state(struct ged *gedp,
 	display->need_update(QG_VIEW_REFRESH | QG_VIEW_SELECT);
     }
     return changed;
+}
+
+int
+qg_obol_sync_selection_state(struct ged *gedp,
+	QgView *display,
+	const char *setName)
+{
+    return qg_obol_sync_selection_state_impl(gedp, display, setName, false);
+}
+
+int
+qg_obol_sync_selection_state_if_active(struct ged *gedp,
+	QgView *display,
+	const char *setName)
+{
+    return qg_obol_sync_selection_state_impl(gedp, display, setName, true);
 }
 
 // Local Variables:

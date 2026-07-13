@@ -19,6 +19,7 @@
 #include <Inventor/SbVec3f.h>
 
 #include <stdint.h>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,6 +27,7 @@
 class SoNode;
 class SoGroup;
 class SoBRLDatabaseSource;
+class BRLObolRealizationRepository;
 struct BRLObolAuxiliaryLineSetDisplayState;
 struct BRLObolDatabaseSourceDisplayPatch;
 struct BRLObolExternalAnnotation;
@@ -125,14 +127,11 @@ public:
     uint64_t getFrameRevision(void) const;
     SbBool getSceneSummary(BRLObolSceneSummary &summary) const;
 
-    /*
-     * Enable direct compact CAD realization for stable synchronous sources.
-     * Progressive cache-backed AABB/OBB/LoD promotion is a separate
-     * drain/apply path because worker threads must not mutate Coin state.
-     */
-    void setCompactCadRealizationEnabled(SbBool enabled);
-    SbBool getCompactCadRealizationEnabled(void) const;
     SbBool realizePending(void);
+    void shareRealizationRepository(SoBRLSceneController *source);
+    void clearRealizationRepository(void);
+    void invalidateRealizationViewVariants(void);
+    void renameRealizationObject(const char *oldName, const char *newName);
     void beginSceneMutationBatch(size_t expectedDatabaseSources = 0,
 	size_t expectedGroups = 0);
     void endSceneMutationBatch(void);
@@ -397,6 +396,8 @@ public:
 	uint32_t staleReason);
     int markDatabaseSourceInstanceStale(const char *sourceInstanceKey,
 	uint32_t staleReason);
+    int refreshDatabaseSourceInstanceObject(const char *sourceInstanceKey,
+	const char *objectPath, uint32_t sourceRevision = 0);
     int setDatabaseSourceRealizationState(const char *sourcePath,
 	int realizationStatus,
 	uint32_t realizedSourceRevision,
@@ -512,7 +513,6 @@ private:
     int mutationBatchDepth;
     SbBool mutationBatchStructuralRevisionPending;
     SbBool mutationBatchFrameRevisionPending;
-    SbBool compactCadRealizationEnabled;
     mutable SbBool databaseSourceIndexValid;
     mutable std::unordered_map<std::string, SoGroup *> groupPathIndex;
     mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourcePathIndex;
@@ -525,6 +525,7 @@ private:
     unsigned int lastRealizedSourceCount;
     unsigned int lastFailedSourceCount;
     SbString lastDiagnostics;
+    std::shared_ptr<BRLObolRealizationRepository> realizationRepository;
 };
 
 #endif /* BRLOBOL_SCENE_CONTROLLER_H */

@@ -10,6 +10,7 @@
 #define BRLOBOL_HOST_FACTORY_H
 
 #include "brlobol/defines.h"
+#include "brlobol/input.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -26,6 +27,13 @@
 #define BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT  UINT64_C(0x00000080)
 #define BRLOBOL_HOST_CAP_MULTI_VIEW           UINT64_C(0x00000100)
 #define BRLOBOL_HOST_CAP_THREAD_AFFINE        UINT64_C(0x00000200)
+#define BRLOBOL_HOST_CAP_PRESENT_VSYNC        UINT64_C(0x00000400)
+
+enum brlobol_host_vsync {
+    BRLOBOL_HOST_VSYNC_AUTO = 0,
+    BRLOBOL_HOST_VSYNC_OFF = 1,
+    BRLOBOL_HOST_VSYNC_ON = 2
+};
 
 enum brlobol_host_mode {
     BRLOBOL_HOST_MODE_TOPLEVEL = 0,
@@ -48,6 +56,10 @@ struct brlobol_host_desc {
     /** Factory-defined toolkit/application context.  Embedded factories use
      * this to receive the native canvas or interpreter they must borrow. */
     void *application_context;
+    enum brlobol_host_vsync vsync;
+    /** Endpoint-owned normalized input dispatcher for this host instance. */
+    BRLObolInputEventHandler input_dispatch;
+    void *input_dispatch_data;
 };
 
 typedef struct brlobol_host_factory_token brlobol_host_factory_token_t;
@@ -75,6 +87,9 @@ struct brlobol_host_factory {
 	void *user_data);
     int (*dimensions)(void *instance, unsigned int *width,
 	unsigned int *height, double *device_pixel_ratio, void *user_data);
+    int (*set_title)(void *instance, const char *title, void *user_data);
+    int (*set_visible)(void *instance, int visible, void *user_data);
+    int (*set_vsync)(void *instance, int enabled, void *user_data);
 };
 
 __BEGIN_DECLS
@@ -129,6 +144,12 @@ BRLOBOL_EXPORT int brlobol_host_factory_instance_capture(
 BRLOBOL_EXPORT int brlobol_host_factory_instance_dimensions(
 	brlobol_host_factory_token_t *token, void *instance,
 	unsigned int *width, unsigned int *height, double *device_pixel_ratio);
+BRLOBOL_EXPORT int brlobol_host_factory_instance_set_title(
+	brlobol_host_factory_token_t *token, void *instance, const char *title);
+BRLOBOL_EXPORT int brlobol_host_factory_instance_set_visible(
+	brlobol_host_factory_token_t *token, void *instance, int visible);
+BRLOBOL_EXPORT int brlobol_host_factory_instance_set_vsync(
+	brlobol_host_factory_token_t *token, void *instance, int enabled);
 
 __END_DECLS
 

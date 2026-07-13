@@ -15,23 +15,185 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 
+#include <algorithm>
+#include <iterator>
+#include <set>
+#include <string>
+#include <unordered_map>
+
 SO_ACTION_SOURCE(SoBRLRealizeAction);
+
+struct BRLObolRealizationRepository::Residency {
+    std::unordered_map<const SoBRLDatabaseSource *, std::set<std::string> >
+	sourceObjects;
+    std::unordered_map<std::string, size_t> objectReferences;
+};
+
+static std::set<std::string>
+repository_source_objects(SoBRLDatabaseSource *source)
+{
+    std::set<std::string> objects;
+    if (!source)
+	return objects;
+
+    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	BRLObolCompactInstanceHandle handle;
+	BRLObolCompactInstanceSummary summary;
+	if (!source->getCompactInstanceHandle(i, handle) ||
+	    !source->getCompactInstanceSummary(handle, summary))
+	    continue;
+	const char *name = summary.sourceName.getString();
+	if (name && name[0])
+	    objects.insert(name);
+    }
+    if (source->hasCompactInstanceIndex())
+	return objects;
+    for (int i = 0; i < source->getRealizedShapeSummaryCount(); i++) {
+	BRLObolRealizedShapeSummary summary;
+	if (!source->getRealizedShapeSummary(i, summary))
+	    continue;
+	const char *name = summary.sourceName.getString();
+	if (name && name[0])
+	    objects.insert(name);
+    }
+    return objects;
+}
+
+template <typename ResidencyType>
+static void
+repository_release_objects(ResidencyType *residency,
+    BRLObolDatabaseSourceRealizationCache *cache,
+    const std::set<std::string> &objects)
+{
+    if (!residency)
+	return;
+    for (const std::string &name : objects) {
+	auto found = residency->objectReferences.find(name);
+	if (found == residency->objectReferences.end())
+	    continue;
+	if (found->second > 1) {
+	    found->second--;
+	    continue;
+	}
+	residency->objectReferences.erase(found);
+	if (cache)
+	    cache->eraseObject(name);
+    }
+}
+
+BRLObolRealizationRepository::BRLObolRealizationRepository(void) :
+    cache(new BRLObolDatabaseSourceRealizationCache),
+    residency(new Residency)
+{
+}
+
+BRLObolRealizationRepository::~BRLObolRealizationRepository(void)
+{
+    delete this->cache;
+    delete this->residency;
+}
+
+void
+BRLObolRealizationRepository::clear(void)
+{
+    if (this->cache)
+	this->cache->clear();
+}
+
+void
+BRLObolRealizationRepository::invalidateObject(const char *name)
+{
+    if (this->cache && name && name[0])
+	this->cache->eraseObject(name);
+}
+
+void
+BRLObolRealizationRepository::renameObject(
+    const char *oldName, const char *newName)
+{
+    if (!oldName || !oldName[0] || !newName || !newName[0])
+	return;
+    if (this->cache)
+	this->cache->renameObject(oldName, newName);
+    if (!this->residency || strcmp(oldName, newName) == 0)
+	return;
+
+    auto oldCount = this->residency->objectReferences.find(oldName);
+    if (oldCount != this->residency->objectReferences.end()) {
+	this->residency->objectReferences[newName] += oldCount->second;
+	this->residency->objectReferences.erase(oldCount);
+    }
+    for (auto &sourceEntry : this->residency->sourceObjects) {
+	if (sourceEntry.second.erase(oldName))
+	    sourceEntry.second.insert(newName);
+    }
+}
+
+void
+BRLObolRealizationRepository::invalidateViewVariants(void)
+{
+    if (this->cache)
+	this->cache->eraseViewVariants();
+}
+
+void
+BRLObolRealizationRepository::seedSource(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return;
+    const std::set<std::string> nextObjects = repository_source_objects(source);
+    std::set<std::string> previousObjects;
+    auto previous = this->residency->sourceObjects.find(source);
+    if (previous != this->residency->sourceObjects.end())
+	previousObjects = previous->second;
+
+    std::set<std::string> removed;
+    std::set_difference(previousObjects.begin(), previousObjects.end(),
+	nextObjects.begin(), nextObjects.end(),
+	std::inserter(removed, removed.end()));
+    repository_release_objects(this->residency, this->cache, removed);
+    for (const std::string &name : nextObjects) {
+	if (!previousObjects.count(name))
+	    this->residency->objectReferences[name]++;
+    }
+    this->residency->sourceObjects[source] = nextObjects;
+    if (this->cache)
+	brlobol_database_source_seed_realization_cache(source, this->cache);
+}
+
+void
+BRLObolRealizationRepository::releaseSource(SoBRLDatabaseSource *source)
+{
+    if (!this->residency || !source)
+	return;
+    auto found = this->residency->sourceObjects.find(source);
+    if (found == this->residency->sourceObjects.end())
+	return;
+    repository_release_objects(this->residency, this->cache, found->second);
+    this->residency->sourceObjects.erase(found);
+}
 
 SoBRLRealizeAction::SoBRLRealizeAction(void) :
     visitedSourceCount(0),
     realizedSourceCount(0),
     failedSourceCount(0),
     diagnostics(""),
-    realizationCache(new BRLObolDatabaseSourceRealizationCache),
+    realizationCache(NULL),
+    realizationRepository(new BRLObolRealizationRepository),
+    ownsRealizationRepository(TRUE),
     seedingCache(FALSE),
-    compactCadRealizationEnabled(FALSE)
+    retainRealizationCache(FALSE)
 {
+    this->realizationCache = this->realizationRepository->cache;
     SO_ACTION_CONSTRUCTOR(SoBRLRealizeAction);
 }
 
 SoBRLRealizeAction::~SoBRLRealizeAction(void)
 {
-    delete this->realizationCache;
+    if (this->ownsRealizationRepository)
+	delete this->realizationRepository;
+    this->realizationRepository = NULL;
+    this->realizationCache = NULL;
 }
 
 void
@@ -68,15 +230,38 @@ SoBRLRealizeAction::getDiagnostics(void) const
 }
 
 void
-SoBRLRealizeAction::setCompactCadRealizationEnabled(SbBool enabled)
+SoBRLRealizeAction::setRetainRealizationCache(SbBool retain)
 {
-    this->compactCadRealizationEnabled = enabled ? TRUE : FALSE;
+    this->retainRealizationCache = retain ? TRUE : FALSE;
+    if (!this->retainRealizationCache)
+	this->clearRealizationCache();
 }
 
-SbBool
-SoBRLRealizeAction::getCompactCadRealizationEnabled(void) const
+void
+SoBRLRealizeAction::clearRealizationCache(void)
 {
-    return this->compactCadRealizationEnabled;
+    if (this->realizationRepository)
+	this->realizationRepository->clear();
+}
+
+void
+SoBRLRealizeAction::invalidateRealizationObject(const char *name)
+{
+    if (this->realizationRepository)
+	this->realizationRepository->invalidateObject(name);
+}
+
+void
+SoBRLRealizeAction::setRealizationRepository(
+    BRLObolRealizationRepository *repository)
+{
+    if (!repository || repository == this->realizationRepository)
+	return;
+    if (this->ownsRealizationRepository)
+	delete this->realizationRepository;
+    this->realizationRepository = repository;
+    this->realizationCache = repository->cache;
+    this->ownsRealizationRepository = FALSE;
 }
 
 void
@@ -90,7 +275,7 @@ SoBRLRealizeAction::beginTraversal(SoNode *node)
     this->realizedSourceCount = 0;
     this->failedSourceCount = 0;
     this->diagnostics = "";
-    if (this->realizationCache)
+    if (this->realizationCache && !this->retainRealizationCache)
 	this->realizationCache->clear();
     this->seedingCache = TRUE;
     int64_t phaseStart = brlobol_performance_time_now();
@@ -147,8 +332,11 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
     SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
 
     if (realizeAction->seedingCache) {
-	brlobol_database_source_seed_realization_cache(
-	    source, realizeAction->realizationCache);
+	if (realizeAction->realizationRepository)
+	    realizeAction->realizationRepository->seedSource(source);
+	else
+	    brlobol_database_source_seed_realization_cache(
+		source, realizeAction->realizationCache);
 	source->doAction(action);
 	return;
     }
@@ -159,33 +347,27 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
 	!(roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)) {
 	if (source->getDatabase()) {
 	    SbBool realized = FALSE;
-	    int compactRealized = 0;
+	    const int representation = source->representationMode.getValue();
+	    const bool evaluated =
+		representation == SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE ||
+		representation == SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS;
 	    if ((roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
-		source->representationMode.getValue() ==
+		representation ==
 		SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ||
-		source->representationMode.getValue() ==
+		representation ==
 		SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS ||
 		source->drawMode.getValue() == SoBRLDatabaseSource::SHADED) {
-		if (realizeAction->compactCadRealizationEnabled)
-		    compactRealized =
-			brlobol_database_source_realize_mesh_compact_with_cache(
-			    source, realizeAction->realizationCache);
-		if (compactRealized > 0)
-		    realized = TRUE;
-		else if (compactRealized == 0)
-		    realized = brlobol_database_source_realize_mesh_with_cache(
-				   source, realizeAction->realizationCache);
+		realized = evaluated ?
+		    brlobol_database_source_realize_mesh_with_cache(
+			source, realizeAction->realizationCache) :
+		    (brlobol_database_source_realize_mesh_compact_with_cache(
+			source, realizeAction->realizationCache) > 0 ? TRUE : FALSE);
 	    } else {
-		if (realizeAction->compactCadRealizationEnabled)
-		    compactRealized =
-			brlobol_database_source_realize_wireframe_compact_with_cache(
-			    source, realizeAction->realizationCache);
-		if (compactRealized > 0)
-		    realized = TRUE;
-		else if (compactRealized == 0)
-		    realized =
-			brlobol_database_source_realize_wireframe_with_cache(
-			    source, realizeAction->realizationCache);
+		realized = evaluated ?
+		    brlobol_database_source_realize_wireframe_with_cache(
+			source, realizeAction->realizationCache) :
+		    (brlobol_database_source_realize_wireframe_compact_with_cache(
+			source, realizeAction->realizationCache) > 0 ? TRUE : FALSE);
 	    }
 
 	    if (realized)
@@ -203,6 +385,9 @@ SoBRLRealizeAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    realizeAction->appendDiagnostic(source);
 	}
     }
+
+    if (realizeAction->realizationRepository)
+	realizeAction->realizationRepository->seedSource(source);
 
     source->doAction(action);
 }

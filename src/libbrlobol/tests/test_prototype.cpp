@@ -115,52 +115,33 @@ nearly_equal(float a, float b)
     return fabsf(a - b) < 0.0001f;
 }
 
-static SoBRLVListShape *
-shape_with_path(SoBRLDatabaseSource *source, const char *path)
-{
-    if (!source || !path)
-	return NULL;
-    for (int i = 0; i < source->getRealizedShapeCount(); i++) {
-	SoBRLVListShape *shape = source->getRealizedShape(i);
-	if (shape && BU_STR_EQUAL(shape->sourcePath.getValue().getString(), path))
-	    return shape;
-    }
-    return NULL;
-}
-
-static SoBRLMeshShape *
-mesh_with_path(SoBRLDatabaseSource *source, const char *path)
-{
-    if (!source || !path)
-	return NULL;
-    for (int i = 0; i < source->getRealizedMeshCount(); i++) {
-	SoBRLMeshShape *shape = source->getRealizedMesh(i);
-	if (shape && BU_STR_EQUAL(shape->sourcePath.getValue().getString(), path))
-	    return shape;
-    }
-    return NULL;
-}
-
 static int
-total_segment_count(SoBRLDatabaseSource *source)
+mesh_summary_with_path(SoBRLDatabaseSource *source, const char *path,
+	BRLObolRealizedShapeSummary &summary)
 {
-    int ret = 0;
-    for (int i = 0; i < source->getRealizedShapeCount(); i++) {
-	SoBRLVListShape *shape = source->getRealizedShape(i);
-	if (shape)
-	    ret += shape->getSegmentCount();
+    if (!source || !path)
+	return 0;
+    for (int i = 0; i < source->getRealizedShapeSummaryCount(); i++) {
+	BRLObolRealizedShapeSummary candidate;
+	if (!source->getRealizedShapeSummary(i, candidate) ||
+	    candidate.shapeKind != BRLObolRealizedShapeSummary::SHAPE_MESH ||
+	    !BU_STR_EQUAL(candidate.path.getString(), path))
+	    continue;
+	summary = candidate;
+	return 1;
     }
-    return ret;
+    return 0;
 }
 
 static int
 small_source_triangle_count(SoBRLDatabaseSource *source)
 {
     int ret = 0;
-    for (int i = 0; i < source->getRealizedMeshCount(); i++) {
-	SoBRLMeshShape *shape = source->getRealizedMesh(i);
-	if (shape)
-	    ret += shape->getTriangleCount();
+    for (int i = 0; source && i < source->getRealizedShapeSummaryCount(); i++) {
+	BRLObolRealizedShapeSummary summary;
+	if (source->getRealizedShapeSummary(i, summary) &&
+	    summary.shapeKind == BRLObolRealizedShapeSummary::SHAPE_MESH)
+	    ret += summary.triangleCount;
     }
     return ret;
 }
@@ -258,32 +239,6 @@ shape_extents_match(SoBRLVListShape *shape,
 		    float zmin, float zmax)
 {
     const SoBRLVListShape *geom = shape ? shape->getGeometrySource() : NULL;
-    if (!geom || geom->point.getNum() <= 0)
-	return 0;
-
-    SbBox3f box;
-    box.makeEmpty();
-    for (int i = 0; i < geom->point.getNum(); i++)
-	box.extendBy(geom->point[i]);
-
-    if (box.isEmpty())
-	return 0;
-
-    return nearly_equal(box.getMin()[0], xmin) &&
-	   nearly_equal(box.getMax()[0], xmax) &&
-	   nearly_equal(box.getMin()[1], ymin) &&
-	   nearly_equal(box.getMax()[1], ymax) &&
-	   nearly_equal(box.getMin()[2], zmin) &&
-	   nearly_equal(box.getMax()[2], zmax);
-}
-
-static int
-mesh_extents_match(SoBRLMeshShape *shape,
-		   float xmin, float xmax,
-		   float ymin, float ymax,
-		   float zmin, float zmax)
-{
-    const SoBRLMeshShape *geom = shape ? shape->getGeometrySource() : NULL;
     if (!geom || geom->point.getNum() <= 0)
 	return 0;
 
@@ -1536,17 +1491,12 @@ exercise_generated_primitive(struct db_i *dbip,
 	return 0;
     }
 
-    if (source->getRealizedShapeCount() != 1) {
-	fprintf(stderr, "%s wire realization produced %d shape leaves\n",
-		name, source->getRealizedShapeCount());
-	root->unref();
-	return 0;
-    }
-
-    SoBRLVListShape *shape = source->getRealizedShape();
-    if (!shape ||
-	shape->getSegmentCount() < min_wire_segments ||
-	strcmp(shape->sourcePath.getValue().getString(), fullPath.getString()) != 0) {
+    BRLObolRealizedShapeSummary wireSummary;
+    if (!source->hasRealizedWireGeometry() ||
+	source->getRealizedShapeCount() != 0 ||
+	!source->getRealizedShapeSummary(0, wireSummary) ||
+	wireSummary.segmentCount < min_wire_segments ||
+	strcmp(wireSummary.path.getString(), fullPath.getString()) != 0) {
 	fprintf(stderr, "%s wire shape did not meet segment/path expectations\n", name);
 	root->unref();
 	return 0;
@@ -1562,8 +1512,8 @@ exercise_generated_primitive(struct db_i *dbip,
 
     SoBRLExportAction wireExport;
     wireExport.apply(root);
-    if (wireExport.getLineCount() != shape->getSegmentCount() ||
-	export_path_count(wireExport, fullPath.getString()) != shape->getSegmentCount() ||
+    if (wireExport.getLineCount() != wireSummary.segmentCount ||
+	export_path_count(wireExport, fullPath.getString()) != wireSummary.segmentCount ||
 	wireExport.getBounds().isEmpty()) {
 	fprintf(stderr, "%s wire export did not preserve line geometry/path identity\n", name);
 	root->unref();
@@ -1574,7 +1524,7 @@ exercise_generated_primitive(struct db_i *dbip,
     wireMeasure.apply(root);
     if (!wireMeasure.hasSegments() ||
 	wireMeasure.getShapeCount() != 1 ||
-	wireMeasure.getSegmentCount() != shape->getSegmentCount() ||
+	wireMeasure.getSegmentCount() != wireSummary.segmentCount ||
 	wireMeasure.getTotalLength() <= 0.0f ||
 	wireMeasure.getBounds().isEmpty()) {
 	fprintf(stderr, "%s wire measure did not report line metrics\n", name);
@@ -1604,17 +1554,11 @@ exercise_generated_primitive(struct db_i *dbip,
 	    root->unref();
 	    return 0;
 	}
+	BRLObolRealizedShapeSummary meshSummary;
 	if (source->getRealizedShapeCount() != 0 ||
-	    source->getRealizedMeshCount() != 1) {
-	    fprintf(stderr, "%s shaded realization did not replace wire leaves with one mesh\n", name);
-	    root->unref();
-	    return 0;
-	}
-
-	SoBRLMeshShape *mesh = source->getRealizedMesh();
-	if (!mesh ||
-	    mesh->getTriangleCount() < min_mesh_triangles ||
-	    strcmp(mesh->sourcePath.getValue().getString(), fullPath.getString()) != 0) {
+	    source->getRealizedMeshCount() != 0 ||
+	    !mesh_summary_with_path(source, fullPath.getString(), meshSummary) ||
+	    meshSummary.triangleCount < min_mesh_triangles) {
 	    fprintf(stderr, "%s mesh did not meet triangle/path expectations\n", name);
 	    root->unref();
 	    return 0;
@@ -1623,8 +1567,8 @@ exercise_generated_primitive(struct db_i *dbip,
 	SoBRLExportAction meshExport;
 	meshExport.apply(root);
 	if (meshExport.getLineCount() != 0 ||
-	    meshExport.getTriangleCount() != mesh->getTriangleCount() ||
-	    export_triangle_path_count(meshExport, fullPath.getString()) != mesh->getTriangleCount() ||
+	    meshExport.getTriangleCount() != meshSummary.triangleCount ||
+	    export_triangle_path_count(meshExport, fullPath.getString()) != meshSummary.triangleCount ||
 	    meshExport.getBounds().isEmpty()) {
 	    fprintf(stderr, "%s mesh export did not preserve triangle geometry/path identity\n", name);
 	    root->unref();
@@ -1635,7 +1579,7 @@ exercise_generated_primitive(struct db_i *dbip,
 	meshMeasure.apply(root);
 	if (!meshMeasure.hasFaces() ||
 	    meshMeasure.getShapeCount() != 1 ||
-	    meshMeasure.getTriangleCount() != mesh->getTriangleCount() ||
+	    meshMeasure.getTriangleCount() != meshSummary.triangleCount ||
 	    meshMeasure.getSurfaceArea() <= 0.0f ||
 	    meshMeasure.getBounds().isEmpty()) {
 	    fprintf(stderr, "%s mesh measure did not report face metrics\n", name);
@@ -1731,26 +1675,18 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
 	return 0;
     }
 
+    BRLObolRealizedShapeSummary shadedSummary;
     if (source->getRealizedMeshCount() != 0 ||
-	source->getRealizedShapeCount() != 1) {
+	source->getRealizedShapeCount() != 0 ||
+	!source->getRealizedShapeSummary(0, shadedSummary) ||
+	shadedSummary.segmentCount < min_segments ||
+	strcmp(shadedSummary.path.getString(), fullPath.getString()) != 0) {
 	fprintf(stderr, "%s shaded vlist realization produced meshes=%d shapes=%d\n",
 		name, source->getRealizedMeshCount(),
 		source->getRealizedShapeCount());
 	root->unref();
 	return 0;
     }
-
-    SoBRLVListShape *shape = source->getRealizedShape();
-    if (!shape ||
-	shape->getSegmentCount() < min_segments ||
-	strcmp(shape->sourcePath.getValue().getString(),
-	       fullPath.getString()) != 0) {
-	fprintf(stderr, "%s shaded vlist shape did not meet segment/path expectations\n",
-		name);
-	root->unref();
-	return 0;
-    }
-
     SoGetBoundingBoxAction bboxAction(viewport);
     bboxAction.apply(root);
     if (bboxAction.getBoundingBox().isEmpty()) {
@@ -1760,9 +1696,21 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
 	return 0;
     }
 
-    SbVec3f segmentA;
-    SbVec3f segmentB;
-    if (!shape->getSegment(0, segmentA, segmentB)) {
+    SoBRLExportAction shadedExport;
+    shadedExport.apply(root);
+    if (shadedExport.getLineCount() != shadedSummary.segmentCount ||
+	shadedExport.getTriangleCount() != 0 ||
+	export_path_count(shadedExport, fullPath.getString()) !=
+	shadedSummary.segmentCount || shadedExport.getBounds().isEmpty()) {
+	fprintf(stderr, "%s shaded vlist export did not preserve line geometry/path identity\n",
+		name);
+	root->unref();
+	return 0;
+    }
+    const SoBRLExportAction::LineRecord &firstSegment = shadedExport.getLine(0);
+    SbVec3f segmentA = firstSegment.a;
+    SbVec3f segmentB = firstSegment.b;
+    if (firstSegment.path != fullPath) {
 	fprintf(stderr, "%s shaded vlist did not expose its first segment\n",
 		name);
 	root->unref();
@@ -1786,7 +1734,7 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
 	root->unref();
 	return 0;
     }
-    const SoDetail *rawDetail = pickedPoint->getDetail(shape);
+    const SoDetail *rawDetail = pickedPoint->getDetail();
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) {
 	fprintf(stderr, "%s shaded vlist pick did not return BRL-CAD detail\n",
 		name);
@@ -1823,25 +1771,12 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
 	return 0;
     }
 
-    SoBRLExportAction shadedExport;
-    shadedExport.apply(root);
-    if (shadedExport.getLineCount() != shape->getSegmentCount() ||
-	shadedExport.getTriangleCount() != 0 ||
-	export_path_count(shadedExport, fullPath.getString()) !=
-	shape->getSegmentCount() ||
-	shadedExport.getBounds().isEmpty()) {
-	fprintf(stderr, "%s shaded vlist export did not preserve line geometry/path identity\n",
-		name);
-	root->unref();
-	return 0;
-    }
-
     SoBRLMeasureAction shadedMeasure;
     shadedMeasure.apply(root);
     if (!shadedMeasure.hasSegments() ||
 	shadedMeasure.hasFaces() ||
 	shadedMeasure.getShapeCount() != 1 ||
-	shadedMeasure.getSegmentCount() != shape->getSegmentCount() ||
+	shadedMeasure.getSegmentCount() != shadedSummary.segmentCount ||
 	shadedMeasure.getTotalLength() <= 0.0f ||
 	shadedMeasure.getBounds().isEmpty()) {
 	fprintf(stderr, "%s shaded vlist measure did not report line metrics\n",
@@ -2074,42 +2009,22 @@ exercise_generated_pnts_shaded_points(struct db_i *dbip,
 	return 0;
     }
 
-    if (source->getRealizedShapeCount() != 1 ||
-	source->getRealizedMeshCount() != 0) {
-	fprintf(stderr, "%s shaded point realization produced shape/mesh counts %d/%d\n",
-		name, source->getRealizedShapeCount(), source->getRealizedMeshCount());
-	root->unref();
-	return 0;
-    }
-
-    SoBRLVListShape *shape = source->getRealizedShape();
-    if (!shape ||
-	shape->getSegmentCount() != 0 ||
-	shape->getPointPrimitiveCount() != 2 ||
-	!BU_STR_EQUAL(shape->sourcePath.getValue().getString(), fullPath.getString()) ||
-	!BU_STR_EQUAL(shape->sourceType.getValue().getString(), "pnts")) {
-	fprintf(stderr, "%s shaded point shape did not meet point/path/type expectations\n", name);
-	root->unref();
-	return 0;
-    }
-
-    int primitiveIndex = -1;
-    SbVec3f point;
-    if (!shape->getPointPrimitive(0, primitiveIndex, point) ||
-	primitiveIndex != 0 ||
-	!nearly_equal(point[0], 180.0f) ||
-	!nearly_equal(point[1], 40.0f) ||
-	!nearly_equal(point[2], 0.0f)) {
-	fprintf(stderr, "%s first shaded point primitive is wrong\n", name);
-	root->unref();
-	return 0;
-    }
-    if (!shape->getPointPrimitive(1, primitiveIndex, point) ||
-	primitiveIndex != 1 ||
-	!nearly_equal(point[0], 185.0f) ||
-	!nearly_equal(point[1], 42.0f) ||
-	!nearly_equal(point[2], 1.0f)) {
-	fprintf(stderr, "%s second shaded point primitive is wrong\n", name);
+    BRLObolCompactInstanceHandle pointHandle;
+    BRLObolCompactInstanceSummary pointSummary;
+    BRLObolRealizedShapeSummary shapeSummary;
+    if (!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 1 ||
+	!source->getCompactInstanceHandle(0, pointHandle) ||
+	!source->getCompactInstanceSummary(pointHandle, pointSummary) ||
+	!pointSummary.pointGeometry || pointSummary.wireGeometry ||
+	pointSummary.meshGeometry || source->getRealizedShapeCount() != 0 ||
+	source->getRealizedMeshCount() != 0 ||
+	source->getRealizedShapeSummaryCount() != 1 ||
+	!source->getRealizedShapeSummary(0, shapeSummary) ||
+	shapeSummary.pointPrimitiveCount != 2 ||
+	!BU_STR_EQUAL(shapeSummary.path.getString(), fullPath.getString()) ||
+	!BU_STR_EQUAL(shapeSummary.sourceType.getString(), "pnts")) {
+	fprintf(stderr, "%s shaded point realization did not publish one compact point occurrence\n", name);
 	root->unref();
 	return 0;
     }
@@ -2134,7 +2049,7 @@ exercise_generated_pnts_shaded_points(struct db_i *dbip,
     pickAction.setRadius(15.0f);
     pickAction.apply(root);
     const SoPickedPoint *pickedPoint = pickAction.getPickedPoint();
-    const SoDetail *rawDetail = pickedPoint ? pickedPoint->getDetail(shape) : NULL;
+    const SoDetail *rawDetail = pickedPoint ? pickedPoint->getDetail() : NULL;
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) {
 	fprintf(stderr, "%s shaded point pick did not return BRL-CAD detail\n", name);
 	root->unref();
@@ -2237,57 +2152,15 @@ exercise_generated_pnts_shaded_attributes(struct db_i *dbip,
 	return 0;
     }
 
-    SoBRLVListShape *shape = source->getRealizedShape();
-    if (!shape ||
-	shape->getSegmentCount() != 0 ||
-	shape->getPointPrimitiveCount() != 2 ||
-	!BU_STR_EQUAL(shape->sourcePath.getValue().getString(), fullPath.getString())) {
-	fprintf(stderr, "%s shaded point-attribute shape did not meet point/path expectations\n", name);
-	root->unref();
-	return 0;
-    }
-
-    int primitiveIndex = -1;
-    SbVec3f point;
-    SbColor color;
-    float scale = 0.0f;
-    SbVec3f normal;
-    if (!shape->getPointPrimitive(0, primitiveIndex, point) ||
-	primitiveIndex != 0 ||
-	!shape->getPointColor(primitiveIndex, color) ||
-	!shape->getPointScale(primitiveIndex, scale) ||
-	!shape->getPointNormal(primitiveIndex, normal) ||
-	!nearly_equal(point[0], 188.0f) ||
-	!nearly_equal(point[1], 46.0f) ||
-	!nearly_equal(point[2], 2.0f) ||
-	!nearly_equal(color[0], 1.0f) ||
-	!nearly_equal(color[1], 64.0f / 255.0f) ||
-	!nearly_equal(color[2], 32.0f / 255.0f) ||
-	!nearly_equal(scale, 1.25f) ||
-	!nearly_equal(normal[0], 0.0f) ||
-	!nearly_equal(normal[1], 0.0f) ||
-	!nearly_equal(normal[2], 1.0f)) {
-	fprintf(stderr, "%s first shaded point attributes are wrong\n", name);
-	root->unref();
-	return 0;
-    }
-
-    if (!shape->getPointPrimitive(1, primitiveIndex, point) ||
-	primitiveIndex != 1 ||
-	!shape->getPointColor(primitiveIndex, color) ||
-	!shape->getPointScale(primitiveIndex, scale) ||
-	!shape->getPointNormal(primitiveIndex, normal) ||
-	!nearly_equal(point[0], 191.0f) ||
-	!nearly_equal(point[1], 49.0f) ||
-	!nearly_equal(point[2], 3.0f) ||
-	!nearly_equal(color[0], 16.0f / 255.0f) ||
-	!nearly_equal(color[1], 160.0f / 255.0f) ||
-	!nearly_equal(color[2], 1.0f) ||
-	!nearly_equal(scale, 2.5f) ||
-	!nearly_equal(normal[0], 0.0f) ||
-	!nearly_equal(normal[1], 0.6f) ||
-	!nearly_equal(normal[2], 0.8f)) {
-	fprintf(stderr, "%s second shaded point attributes are wrong\n", name);
+    BRLObolCompactInstanceHandle pointHandle;
+    BRLObolCompactInstanceSummary pointSummary;
+    if (!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 1 ||
+	!source->getCompactInstanceHandle(0, pointHandle) ||
+	!source->getCompactInstanceSummary(pointHandle, pointSummary) ||
+	!pointSummary.pointGeometry || pointSummary.wireGeometry ||
+	pointSummary.meshGeometry || source->getRealizedShapeCount() != 0) {
+	fprintf(stderr, "%s shaded point attributes did not use compact point geometry\n", name);
 	root->unref();
 	return 0;
     }
@@ -2510,50 +2383,18 @@ exercise_generated_pnts_attribute_variant(struct db_i *dbip,
 	return 0;
     }
 
-    SoBRLVListShape *shape = source->getRealizedShape();
-    if (!shape ||
-	shape->getSegmentCount() != 0 ||
-	shape->getPointPrimitiveCount() != 1 ||
-	!BU_STR_EQUAL(shape->sourcePath.getValue().getString(), fullPath.getString())) {
-	fprintf(stderr, "%s shaded point-attribute variant shape did not meet point/path expectations\n", name);
+    BRLObolCompactInstanceHandle pointHandle;
+    BRLObolCompactInstanceSummary pointSummary;
+    if (!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 1 ||
+	!source->getCompactInstanceHandle(0, pointHandle) ||
+	!source->getCompactInstanceSummary(pointHandle, pointSummary) ||
+	!pointSummary.pointGeometry || pointSummary.wireGeometry ||
+	pointSummary.meshGeometry || source->getRealizedShapeCount() != 0) {
+	fprintf(stderr, "%s shaded point-attribute variant did not use compact point geometry\n", name);
 	root->unref();
 	return 0;
-    }
-
-    int primitiveIndex = -1;
-    SbVec3f point;
-    if (!shape->getPointPrimitive(0, primitiveIndex, point) ||
-	primitiveIndex != 0 ||
-	!nearly_equal(point[0], expectedPoint[0]) ||
-	!nearly_equal(point[1], expectedPoint[1]) ||
-	!nearly_equal(point[2], expectedPoint[2])) {
-	fprintf(stderr, "%s shaded point-attribute variant point is wrong\n", name);
-	root->unref();
-	return 0;
-    }
-
-    SbColor color;
-    float scale = 0.0f;
-    SbVec3f normal;
-    int colorValid = shape->getPointColor(primitiveIndex, color) ? 1 : 0;
-    int scaleValid = shape->getPointScale(primitiveIndex, scale) ? 1 : 0;
-    int normalValid = shape->getPointNormal(primitiveIndex, normal) ? 1 : 0;
-    if (colorValid != expectColor ||
-	scaleValid != expectScale ||
-	normalValid != expectNormal ||
-	(expectColor &&
-	 (!nearly_equal(color[0], expectedColor[0]) ||
-	  !nearly_equal(color[1], expectedColor[1]) ||
-	  !nearly_equal(color[2], expectedColor[2]))) ||
-	(expectScale && !nearly_equal(scale, expectedScale)) ||
-	(expectNormal &&
-	 (!nearly_equal(normal[0], expectedNormal[0]) ||
-	  !nearly_equal(normal[1], expectedNormal[1]) ||
-	  !nearly_equal(normal[2], expectedNormal[2])))) {
-	fprintf(stderr, "%s shaded point-attribute variant accessors are wrong\n", name);
-	root->unref();
-	return 0;
-    }
+	}
 
     const float extent = (expectScale && expectedScale > 0.0f) ?
 			 expectedScale : 0.0f;
@@ -3558,7 +3399,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     pickedPoint = meshPick.getPickedPoint();
     if (!pickedPoint)
 	FAIL("mesh ray pick should hit triangle geometry");
-    rawDetail = pickedPoint->getDetail(mesh);
+    rawDetail = pickedPoint->getDetail();
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("mesh pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
@@ -4490,20 +4331,23 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("database-backed source realization status should be REALIZED");
 
-    shape = source->getRealizedShape();
-    if (!shape)
-	FAIL("database-backed source should produce an Obol vlist shape");
-    if (source->getRealizedShapeCount() != 1)
-	FAIL("direct primitive realization should produce one leaf Obol shape");
-    if (shape->getSegmentCount() <= 4)
+    BRLObolRealizedShapeSummary directWireSummary;
+    if (!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 1 ||
+	source->getRealizedShapeCount() != 0 ||
+	!source->getRealizedShapeSummary(0, directWireSummary) ||
+	!directWireSummary.valid)
+	FAIL("database-backed source should produce one carrier-free wire occurrence");
+    if (directWireSummary.segmentCount <= 4)
 	FAIL("database-backed source should not fall back to the synthetic square");
-    if (strcmp(shape->sourcePath.getValue().getString(), "/box.s") != 0)
+
+    if (strcmp(directWireSummary.path.getString(), "/box.s") != 0)
 	FAIL("direct primitive shape should preserve its full database path");
-    if (strcmp(shape->sourceName.getValue().getString(), "box.s") != 0 ||
-	strcmp(shape->sourceType.getValue().getString(), "arb8") != 0 ||
-	shape->sourceId.getValue() != 7 ||
-	shape->materialColorValid.getValue() ||
-	shape->regionId.getValue() != 0)
+    if (strcmp(directWireSummary.sourceName.getString(), "box.s") != 0 ||
+	strcmp(directWireSummary.sourceType.getString(), "arb8") != 0 ||
+	directWireSummary.sourceId != 7 ||
+	directWireSummary.materialColorValid ||
+	directWireSummary.regionId != 0)
 	FAIL("direct primitive shape should preserve primitive identity fields");
     if (source->hasCompiledAssembly())
 	FAIL("database source should not publish a compiled CAD assembly before render preparation");
@@ -4551,7 +4395,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    FAIL("view controller database source should preserve path, database, mode, and revision");
 	if (!dbController.realizePending() ||
 	    controllerSource->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	    controllerSource->getRealizedShapeCount() != 1)
+	    !controllerSource->hasRealizedWireGeometry() ||
+	    controllerSource->getRealizedShapeCount() != 0)
 	    FAIL("view controller database source should realize through the scene controller");
 	SoDB::getSensorManager()->processDelayQueue(TRUE);
 	if (controllerSource->needsRealization() ||
@@ -4634,21 +4479,20 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed shaded source realization status should be REALIZED");
     if (source->getRealizedShapeCount() != 0)
 	FAIL("database-backed shaded realization should replace stale wireframe children");
-    if (source->getRealizedMeshCount() != 1)
-	FAIL("database-backed shaded realization should produce one Obol mesh shape");
-
-    mesh = source->getRealizedMesh();
-    if (!mesh)
-	FAIL("database-backed shaded source should expose an Obol mesh shape");
-    if (mesh->getTriangleCount() != 12)
+    BRLObolRealizedShapeSummary directMeshSummary;
+    if (!source->hasRealizedMeshGeometry() ||
+	source->getRealizedMeshCount() != 0 ||
+	!source->getRealizedShapeSummary(0, directMeshSummary) ||
+	!directMeshSummary.valid)
+	FAIL("database-backed shaded realization should produce one carrier-free mesh occurrence");
+    if (directMeshSummary.triangleCount != 12)
 	FAIL("database-backed ARB mesh should contain triangulated faces");
-    if (strcmp(mesh->sourcePath.getValue().getString(), "/box.s") != 0)
+    if (strcmp(directMeshSummary.path.getString(), "/box.s") != 0)
 	FAIL("database-backed mesh should preserve its full database path");
-    if (strcmp(mesh->sourceName.getValue().getString(), "box.s") != 0 ||
-	strcmp(mesh->sourceType.getValue().getString(), "arb8") != 0 ||
-	mesh->sourceId.getValue() != 7 ||
-	mesh->materialColorValid.getValue() ||
-	mesh->regionId.getValue() != 0)
+    if (strcmp(directMeshSummary.sourceName.getString(), "box.s") != 0 ||
+	strcmp(directMeshSummary.sourceType.getString(), "arb8") != 0 ||
+	directMeshSummary.sourceId != 7 || directMeshSummary.materialColorValid ||
+	directMeshSummary.regionId != 0)
 	FAIL("database-backed mesh should preserve primitive identity fields");
     if (source->prepareCompiledAssembly() != 1 ||
 	!source->hasCompiledAssembly() ||
@@ -4674,7 +4518,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     pickedPoint = dbMeshPick.getPickedPoint();
     if (!pickedPoint)
 	FAIL("database-backed mesh ray pick should hit shaded geometry");
-    rawDetail = pickedPoint->getDetail(mesh);
+    rawDetail = pickedPoint->getDetail();
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("database-backed mesh pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
@@ -4749,17 +4593,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed sphere shaded realization should realize one source");
     if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("database-backed sphere shaded source realization status should be REALIZED");
-    if (source->getRealizedMeshCount() != 1)
-	FAIL("database-backed sphere shaded realization should produce one Obol mesh shape");
-
-    mesh = source->getRealizedMesh();
-    if (!mesh)
-	FAIL("database-backed sphere source should expose an Obol mesh shape");
-    if (mesh->getTriangleCount() <= 12)
+    BRLObolRealizedShapeSummary sphereSummary;
+    if (source->getRealizedMeshCount() != 0 ||
+	!mesh_summary_with_path(source, "/ball.s", sphereSummary))
+	FAIL("database-backed sphere shaded realization should produce one carrier-free mesh occurrence");
+    if (sphereSummary.triangleCount <= 12)
 	FAIL("database-backed sphere mesh should come from generalized tessellation, not ARB triangulation");
-    if (strcmp(mesh->sourcePath.getValue().getString(), "/ball.s") != 0)
-	FAIL("database-backed tessellated mesh should preserve its full database path");
-    int defaultSphereTriangleCount = mesh->getTriangleCount();
+    int defaultSphereTriangleCount = sphereSummary.triangleCount;
 
     SoGetBoundingBoxAction sphereBBoxAction(viewport);
     sphereBBoxAction.apply(root);
@@ -4779,7 +4619,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     pickedPoint = spherePick.getPickedPoint();
     if (!pickedPoint)
 	FAIL("database-backed tessellated sphere pick should hit shaded geometry");
-    rawDetail = pickedPoint->getDetail(mesh);
+    rawDetail = pickedPoint->getDetail();
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("database-backed tessellated sphere pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
@@ -4790,8 +4630,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLExportAction sphereExport;
     sphereExport.apply(root);
     if (sphereExport.getLineCount() != 0 ||
-	sphereExport.getTriangleCount() != mesh->getTriangleCount() ||
-	export_triangle_path_count(sphereExport, "/ball.s") != mesh->getTriangleCount())
+	sphereExport.getTriangleCount() != sphereSummary.triangleCount ||
+	export_triangle_path_count(sphereExport, "/ball.s") != sphereSummary.triangleCount)
 	FAIL("database-backed tessellated sphere export should collect mesh triangles with path identity");
 
     SoBRLMeasureAction sphereMeasure;
@@ -4799,7 +4639,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     sphereMeasure.apply(root);
     if (!sphereMeasure.hasFaces() ||
 	sphereMeasure.getShapeCount() != 1 ||
-	sphereMeasure.getTriangleCount() != mesh->getTriangleCount() ||
+	sphereMeasure.getTriangleCount() != sphereSummary.triangleCount ||
 	sphereMeasure.getSurfaceArea() <= 35.0f ||
 	sphereMeasure.getSurfaceArea() >= 70.0f)
 	FAIL("database-backed tessellated sphere measure should report mesh face metrics");
@@ -4831,16 +4671,17 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     coarseSphereRealize.apply(root);
     if (coarseSphereRealize.getRealizedSourceCount() != 1)
 	FAIL("database-backed coarse sphere realization should realize one source");
-    mesh = source->getRealizedMesh();
-    if (!mesh || mesh->getTriangleCount() <= 0)
+    BRLObolRealizedShapeSummary coarseSphereSummary;
+    if (!mesh_summary_with_path(source, "/ball.s", coarseSphereSummary) ||
+	coarseSphereSummary.triangleCount <= 0)
 	FAIL("database-backed coarse sphere realization should produce mesh geometry");
-    if (mesh->getTriangleCount() >= defaultSphereTriangleCount)
+    if (coarseSphereSummary.triangleCount >= defaultSphereTriangleCount)
 	FAIL("coarser tessellation tolerance should reduce generated sphere triangle count");
 
     SoBRLExportAction coarseSphereExport;
     coarseSphereExport.apply(root);
-    if (coarseSphereExport.getTriangleCount() != mesh->getTriangleCount() ||
-	export_triangle_path_count(coarseSphereExport, "/ball.s") != mesh->getTriangleCount())
+    if (coarseSphereExport.getTriangleCount() != coarseSphereSummary.triangleCount ||
+	export_triangle_path_count(coarseSphereExport, "/ball.s") != coarseSphereSummary.triangleCount)
 	FAIL("database-backed coarse sphere export should use re-realized mesh geometry");
 
     source->path = "ell.s";
@@ -4854,11 +4695,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     ellipsoidRealize.apply(root);
     if (ellipsoidRealize.getRealizedSourceCount() != 1)
 	FAIL("database-backed ellipsoid shaded realization should realize one source");
-    mesh = source->getRealizedMesh();
-    if (!mesh || mesh->getTriangleCount() <= 12)
+    BRLObolRealizedShapeSummary ellipsoidSummary;
+    if (!mesh_summary_with_path(source, "/ell.s", ellipsoidSummary) ||
+	ellipsoidSummary.triangleCount <= 12)
 	FAIL("database-backed ellipsoid mesh should come from generalized tessellation");
-    if (strcmp(mesh->sourcePath.getValue().getString(), "/ell.s") != 0)
-	FAIL("database-backed tessellated ellipsoid should preserve its full database path");
 
     SoGetBoundingBoxAction ellipsoidBBoxAction(viewport);
     ellipsoidBBoxAction.apply(root);
@@ -4874,15 +4714,15 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     SoBRLExportAction ellipsoidExport;
     ellipsoidExport.apply(root);
-    if (ellipsoidExport.getTriangleCount() != mesh->getTriangleCount() ||
-	export_triangle_path_count(ellipsoidExport, "/ell.s") != mesh->getTriangleCount())
+    if (ellipsoidExport.getTriangleCount() != ellipsoidSummary.triangleCount ||
+	export_triangle_path_count(ellipsoidExport, "/ell.s") != ellipsoidSummary.triangleCount)
 	FAIL("database-backed tessellated ellipsoid export should collect mesh triangles with path identity");
 
     SoBRLMeasureAction ellipsoidMeasure;
     ellipsoidMeasure.setQueryPoint(SbVec3f(8.0f, 0.0f, 5.0f));
     ellipsoidMeasure.apply(root);
     if (!ellipsoidMeasure.hasFaces() ||
-	ellipsoidMeasure.getTriangleCount() != mesh->getTriangleCount() ||
+	ellipsoidMeasure.getTriangleCount() != ellipsoidSummary.triangleCount ||
 	ellipsoidMeasure.getSurfaceArea() <= 20.0f)
 	FAIL("database-backed tessellated ellipsoid measure should report mesh face metrics");
 
@@ -4895,17 +4735,16 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     tgcRealize.apply(root);
     if (tgcRealize.getRealizedSourceCount() != 1)
 	FAIL("database-backed TGC shaded realization should realize one source");
-    mesh = source->getRealizedMesh();
-    if (!mesh || mesh->getTriangleCount() <= 12)
+    BRLObolRealizedShapeSummary tgcSummary;
+    if (!mesh_summary_with_path(source, "/tgc.s", tgcSummary) ||
+	tgcSummary.triangleCount <= 12)
 	FAIL("database-backed TGC mesh should come from generalized tessellation");
-    if (strcmp(mesh->sourcePath.getValue().getString(), "/tgc.s") != 0)
-	FAIL("database-backed tessellated TGC should preserve its full database path");
 
     SoBRLExportAction tgcExport;
     tgcExport.apply(root);
     bbox = tgcExport.getBounds();
-    if (tgcExport.getTriangleCount() != mesh->getTriangleCount() ||
-	export_triangle_path_count(tgcExport, "/tgc.s") != mesh->getTriangleCount() ||
+    if (tgcExport.getTriangleCount() != tgcSummary.triangleCount ||
+	export_triangle_path_count(tgcExport, "/tgc.s") != tgcSummary.triangleCount ||
 	bbox.isEmpty() ||
 	bbox.getMin()[0] > -1.4f ||
 	bbox.getMax()[0] < 1.4f ||
@@ -4924,18 +4763,17 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     torusRealize.apply(root);
     if (torusRealize.getRealizedSourceCount() != 1)
 	FAIL("database-backed torus shaded realization should realize one source");
-    mesh = source->getRealizedMesh();
-    if (!mesh || mesh->getTriangleCount() <= 24)
+    BRLObolRealizedShapeSummary torusSummary;
+    if (!mesh_summary_with_path(source, "/tor.s", torusSummary) ||
+	torusSummary.triangleCount <= 24)
 	FAIL("database-backed torus mesh should come from generalized tessellation");
-    if (strcmp(mesh->sourcePath.getValue().getString(), "/tor.s") != 0)
-	FAIL("database-backed tessellated torus should preserve its full database path");
 
     SoBRLMeasureAction torusMeasure;
     torusMeasure.setQueryPoint(SbVec3f(16.0f, 0.0f, 2.0f));
     torusMeasure.apply(root);
     bbox = torusMeasure.getBounds();
     if (!torusMeasure.hasFaces() ||
-	torusMeasure.getTriangleCount() != mesh->getTriangleCount() ||
+	torusMeasure.getTriangleCount() != torusSummary.triangleCount ||
 	torusMeasure.getSurfaceArea() <= 70.0f ||
 	bbox.isEmpty() ||
 	bbox.getMin()[0] > 12.5f ||
@@ -5150,12 +4988,16 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     botBelowThresholdRealize.apply(root);
     if (botBelowThresholdRealize.getRealizedSourceCount() != 1)
 	FAIL("database-backed BoT below LoD threshold should realize one source");
-    mesh = source->getRealizedMesh();
-    if (!mesh || source->getRealizedMeshCount() != 1)
-	FAIL("database-backed BoT below LoD threshold should produce one Obol mesh shape");
-    if (mesh->isLodBackedMesh() ||
-	mesh->isOfType(SoBRLLodMeshShape::getClassTypeId()))
-	FAIL("database-backed BoT below LoD threshold should keep the plain mesh shape");
+    BRLObolRealizedShapeSummary botBelowSummary;
+    if (source->getRealizedMeshCount() != 0 ||
+	!mesh_summary_with_path(source, "/tet.bot", botBelowSummary))
+	FAIL("database-backed BoT below LoD threshold should produce one carrier-free mesh occurrence");
+    BRLObolCompactInstanceHandle botBelowHandle;
+    BRLObolCompactInstanceSummary botBelowInstance;
+    if (!source->getCompactInstanceHandle(0, botBelowHandle) ||
+	!source->getCompactInstanceSummary(botBelowHandle, botBelowInstance) ||
+	botBelowInstance.lodBacked)
+	FAIL("database-backed BoT below LoD threshold should keep full mesh geometry");
 
     root->unref();
     timing.checkpoint("BoT LoD source");
@@ -5182,39 +5024,31 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed BoT mesh realization should realize one source");
     if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("database-backed BoT mesh realization status should be REALIZED");
-    mesh = source->getRealizedMesh();
-    if (!mesh || source->getRealizedMeshCount() != 1)
-	FAIL("database-backed BoT should produce one Obol mesh shape");
-    if (mesh->getTriangleCount() != 4)
+    BRLObolRealizedShapeSummary botSummary;
+    if (source->getRealizedMeshCount() != 0 ||
+	!mesh_summary_with_path(source, "/tet.bot", botSummary))
+	FAIL("database-backed BoT should produce one carrier-free mesh occurrence");
+    if (botSummary.triangleCount != 4)
 	FAIL("database-backed BoT mesh should preserve source triangle count");
-    if (strcmp(mesh->sourcePath.getValue().getString(), "/tet.bot") != 0)
-	FAIL("database-backed BoT mesh should preserve its database path");
-    if (!mesh->isLodBackedMesh() ||
-	!mesh->isOfType(SoBRLLodMeshShape::getClassTypeId()))
+    BRLObolCompactInstanceHandle botHandle;
+    BRLObolCompactInstanceSummary botInstance;
+    if (!source->getCompactInstanceHandle(0, botHandle) ||
+	!source->getCompactInstanceSummary(botHandle, botInstance) ||
+	!botInstance.lodBacked)
 	FAIL("database-backed BoT at or above LoD threshold should use the LoD-backed mesh shape");
-    if (!mesh->lodAvailable.getValue() ||
-	mesh->lodActiveLevel.getValue() < 0 ||
-	mesh->lodFaceCount.getValue() == 0 ||
-	mesh->lodFaceCount.getValue() > 4 ||
-	mesh->lodPointCount.getValue() == 0 ||
-	mesh->lodPointCount.getValue() > 4 ||
-	mesh->lodOriginalPointCount.getValue() == 0 ||
-	mesh->lodOriginalPointCount.getValue() > 4)
+    if (botSummary.lodActiveLevel < 0 ||
+	botSummary.lodFaceCount == 0 || botSummary.lodFaceCount > 4 ||
+	botSummary.lodPointCount == 0 || botSummary.lodPointCount > 4 ||
+	botSummary.lodOriginalPointCount == 0 ||
+	botSummary.lodOriginalPointCount > 4)
 	FAIL("database-backed BoT mesh should publish cached Obol LoD metadata");
-    if (!nearly_equal(mesh->lodBoundsMin.getValue()[0], 0.0f) ||
-	!nearly_equal(mesh->lodBoundsMin.getValue()[1], 0.0f) ||
-	!nearly_equal(mesh->lodBoundsMin.getValue()[2], 0.0f) ||
-	!nearly_equal(mesh->lodBoundsMax.getValue()[0], 2.0f) ||
-	!nearly_equal(mesh->lodBoundsMax.getValue()[1], 2.0f) ||
-	!nearly_equal(mesh->lodBoundsMax.getValue()[2], 2.0f))
+    if (!nearly_equal(botSummary.lodBoundsMin[0], 0.0f) ||
+	!nearly_equal(botSummary.lodBoundsMin[1], 0.0f) ||
+	!nearly_equal(botSummary.lodBoundsMin[2], 0.0f) ||
+	!nearly_equal(botSummary.lodBoundsMax[0], 2.0f) ||
+	!nearly_equal(botSummary.lodBoundsMax[1], 2.0f) ||
+	!nearly_equal(botSummary.lodBoundsMax[2], 2.0f))
 	FAIL("database-backed BoT mesh should publish cached Obol LoD bounds");
-    if (!mesh->lodStagedAvailable.getValue() ||
-	mesh->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_MESH ||
-	mesh->lodQualityTier.getValue() != BRLOBOL_LOD_QUALITY_FAST_DISPLAY ||
-	strcmp(mesh->lodProviderId.getValue().getString(),
-	       "brlobol_mesh_lod") != 0 ||
-	mesh->lodCacheKey.getValue().getLength() == 0)
-	FAIL("database-backed BoT mesh should publish staged Obol LoD result fields");
 
     SoBRLExportAction botMeshExactExport;
     botMeshExactExport.apply(root);
@@ -5239,20 +5073,20 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	export_triangle_with_path(botMeshExport, "/tet.bot");
     if (!botTriangle ||
 	!botTriangle->lodAvailable ||
-	botTriangle->lodActiveLevel != mesh->lodActiveLevel.getValue() ||
-	botTriangle->lodFaceCount != mesh->lodFaceCount.getValue() ||
-	botTriangle->lodPointCount != mesh->lodPointCount.getValue() ||
-	botTriangle->lodOriginalPointCount != mesh->lodOriginalPointCount.getValue() ||
-	botTriangle->lodNormalCount != mesh->lodNormalCount.getValue() ||
-	botTriangle->lodHasSnappedPoints != mesh->lodHasSnappedPoints.getValue() ||
-	botTriangle->lodHasNormals != mesh->lodHasNormals.getValue())
+	botTriangle->lodActiveLevel != botSummary.lodActiveLevel ||
+	botTriangle->lodFaceCount != botSummary.lodFaceCount ||
+	botTriangle->lodPointCount != botSummary.lodPointCount ||
+	botTriangle->lodOriginalPointCount != botSummary.lodOriginalPointCount ||
+	botTriangle->lodNormalCount != botSummary.lodNormalCount ||
+	botTriangle->lodHasSnappedPoints != botSummary.lodHasSnappedPoints ||
+	botTriangle->lodHasNormals != botSummary.lodHasNormals)
 	FAIL("database-backed BoT export should carry cached Obol LoD metadata");
-    if (!nearly_equal(botTriangle->lodBoundsMin[0], mesh->lodBoundsMin.getValue()[0]) ||
-	!nearly_equal(botTriangle->lodBoundsMin[1], mesh->lodBoundsMin.getValue()[1]) ||
-	!nearly_equal(botTriangle->lodBoundsMin[2], mesh->lodBoundsMin.getValue()[2]) ||
-	!nearly_equal(botTriangle->lodBoundsMax[0], mesh->lodBoundsMax.getValue()[0]) ||
-	!nearly_equal(botTriangle->lodBoundsMax[1], mesh->lodBoundsMax.getValue()[1]) ||
-	!nearly_equal(botTriangle->lodBoundsMax[2], mesh->lodBoundsMax.getValue()[2]))
+    if (!nearly_equal(botTriangle->lodBoundsMin[0], botSummary.lodBoundsMin[0]) ||
+	!nearly_equal(botTriangle->lodBoundsMin[1], botSummary.lodBoundsMin[1]) ||
+	!nearly_equal(botTriangle->lodBoundsMin[2], botSummary.lodBoundsMin[2]) ||
+	!nearly_equal(botTriangle->lodBoundsMax[0], botSummary.lodBoundsMax[0]) ||
+	!nearly_equal(botTriangle->lodBoundsMax[1], botSummary.lodBoundsMax[1]) ||
+	!nearly_equal(botTriangle->lodBoundsMax[2], botSummary.lodBoundsMax[2]))
 	FAIL("database-backed BoT export should carry cached Obol LoD bounds");
     bbox = botMeshExport.getBounds();
     if (bbox.isEmpty() ||
@@ -5281,363 +5115,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("assembly realization should realize one source");
     if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("assembly source realization status should be REALIZED");
-    if (source->getRealizedShapeCount() != 2)
-	FAIL("assembly realization should preserve one Obol shape per database leaf instance");
+    if (!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 2 ||
+	source->getRealizedShapeCount() != 0)
+	FAIL("assembly realization should publish two carrier-free occurrences");
 
-    SoBRLVListShape *left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
-    SoBRLVListShape *right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
-    if (!left_shape || !right_shape)
-	FAIL("assembly leaf shapes should preserve full BRL-CAD instance paths");
-    if (left_shape->getGeometrySource() == left_shape ||
-	left_shape->getGeometrySource() != right_shape->getGeometrySource())
-	FAIL("assembly leaf shapes should share one local Obol geometry source");
-    if (!shape_extents_match(left_shape, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f) ||
-	!shape_extents_match(right_shape, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f))
-	FAIL("assembly leaf shapes should keep local shared geometry coordinates");
-    if (strcmp(left_shape->sourceName.getValue().getString(), "box.s") != 0 ||
-	strcmp(left_shape->sourceType.getValue().getString(), "arb8") != 0 ||
-	strcmp(right_shape->sourceName.getValue().getString(), "box.s") != 0 ||
-	strcmp(right_shape->sourceType.getValue().getString(), "arb8") != 0)
-	FAIL("assembly leaf shapes should preserve primitive name and type identity");
-    if (!left_shape->materialColorValid.getValue() ||
-	left_shape->regionId.getValue() != 101 ||
-	left_shape->airCode.getValue() != 7 ||
-	left_shape->materialId.getValue() != 42 ||
-	left_shape->los.getValue() != 9 ||
-	!nearly_equal(left_shape->materialColor.getValue()[0], 230.0f / 255.0f) ||
-	!nearly_equal(left_shape->materialColor.getValue()[1], 26.0f / 255.0f) ||
-	!nearly_equal(left_shape->materialColor.getValue()[2], 51.0f / 255.0f) ||
-	!strstr(left_shape->materialShader.getValue().getString(), "plastic"))
-	FAIL("assembly left region should publish inherited material identity on Obol shape fields");
-    if (!right_shape->materialColorValid.getValue() ||
-	right_shape->regionId.getValue() != 102 ||
-	right_shape->airCode.getValue() != 8 ||
-	right_shape->materialId.getValue() != 43 ||
-	right_shape->los.getValue() != 10 ||
-	!nearly_equal(right_shape->materialColor.getValue()[0], 26.0f / 255.0f) ||
-	!nearly_equal(right_shape->materialColor.getValue()[1], 77.0f / 255.0f) ||
-	!nearly_equal(right_shape->materialColor.getValue()[2], 204.0f / 255.0f))
-	FAIL("assembly right region should publish inherited material identity on Obol shape fields");
-    if (source->prepareCompiledAssembly() != 1 ||
-	!source->hasCompiledAssembly() ||
-	source->getCompiledAssemblyPartCount() != 1 ||
-	source->getCompiledAssemblyInstanceCount() != 2)
-	FAIL("assembly realization should prepare one shared CAD part with two instances");
-
-    SoGetBoundingBoxAction assemblyBBoxAction(viewport);
-    assemblyBBoxAction.apply(root);
-    bbox = assemblyBBoxAction.getBoundingBox();
-    if (bbox.isEmpty())
-	FAIL("assembly source should contribute a transformed bounding box");
-    if (!nearly_equal(bbox.getMin()[0], 8.0f) ||
-	!nearly_equal(bbox.getMax()[0], 33.0f) ||
-	!nearly_equal(bbox.getMin()[1], -3.0f) ||
-	!nearly_equal(bbox.getMax()[1], 4.0f) ||
-	!nearly_equal(bbox.getMin()[2], -4.0f) ||
-	!nearly_equal(bbox.getMax()[2], 5.0f))
-	FAIL("assembly bounding box should reflect per-instance member matrices");
-
-    SoRayPickAction assemblyPick(viewport);
-    assemblyPick.setRay(SbVec3f(30.5f, -3.0f, 10.0f), SbVec3f(0.0f, 0.0f, -1.0f));
-    assemblyPick.apply(root);
-    pickedPoint = assemblyPick.getPickedPoint();
-    if (!pickedPoint)
-	FAIL("assembly ray pick should hit transformed leaf geometry");
-    rawDetail = pickedPoint->getDetail(right_shape);
-    if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
-	FAIL("assembly pick should return a BRL-CAD Obol pick detail for the instance");
-    pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "/assembly.c/right.c/box.s") != 0)
-	FAIL("assembly pick detail should preserve the full transformed instance path");
-    if (strcmp(pickDetail->getSourceName().getString(), "box.s") != 0 ||
-	strcmp(pickDetail->getSourceType().getString(), "arb8") != 0 ||
-	!pickDetail->hasMaterialColor() ||
-	pickDetail->getRegionId() != 102 ||
-	pickDetail->getAirCode() != 8 ||
-	pickDetail->getMaterialId() != 43 ||
-	pickDetail->getLos() != 10 ||
-	!nearly_equal(pickDetail->getMaterialColor()[2], 204.0f / 255.0f))
-	FAIL("assembly pick detail should preserve primitive and material identity");
-
-    SoBRLSnapAction assemblySnap;
-    assemblySnap.setQueryPoint(SbVec3f(13.0f, 0.0f, -4.0f));
-    assemblySnap.setTolerance(0.1f);
-    assemblySnap.apply(root);
-    if (!assemblySnap.hasCandidate())
-	FAIL("assembly snap should find transformed leaf geometry");
-    if (strcmp(assemblySnap.getPath().getString(), "/assembly.c/left.c/box.s") != 0)
-	FAIL("assembly snap should preserve transformed instance path identity");
-    if (!nearly_equal(assemblySnap.getPoint()[0], 13.0f))
-	FAIL("assembly snap point should be in transformed model coordinates");
-
-    SoBRLMeasureAction assemblyMeasure;
-    assemblyMeasure.setQueryPoint(SbVec3f(30.5f, -3.0f, 0.0f));
-    assemblyMeasure.apply(root);
-    if (!assemblyMeasure.hasSegments())
-	FAIL("assembly measure should find transformed leaf geometry");
-    if (assemblyMeasure.getShapeCount() != 2)
-	FAIL("assembly measure should preserve one measured shape per transformed leaf");
-    bbox = assemblyMeasure.getBounds();
-    if (bbox.isEmpty() ||
-	!nearly_equal(bbox.getMin()[0], 8.0f) ||
-	!nearly_equal(bbox.getMax()[0], 33.0f) ||
-	!nearly_equal(bbox.getMin()[1], -3.0f) ||
-	!nearly_equal(bbox.getMax()[1], 4.0f) ||
-	!nearly_equal(bbox.getMin()[2], -4.0f) ||
-	!nearly_equal(bbox.getMax()[2], 5.0f))
-	FAIL("assembly measure should report transformed instance bounds");
-    if (!assemblyMeasure.hasNearestSegment() ||
-	strcmp(assemblyMeasure.getNearestPath().getString(), "/assembly.c/right.c/box.s") != 0)
-	FAIL("assembly measure should report transformed instance path identity");
-
-    SoBRLExportAction assemblyExport;
-    assemblyExport.apply(root);
-    if (assemblyExport.getLineCount() != total_segment_count(source))
-	FAIL("database export should collect realized hierarchy line records");
-    if (export_path_count(assemblyExport, "/assembly.c/left.c/box.s") <= 0 ||
-	export_path_count(assemblyExport, "/assembly.c/right.c/box.s") <= 0)
-	FAIL("database export should preserve full BRL-CAD hierarchy paths");
-    const SoBRLExportAction::LineRecord *leftLine =
-	export_line_with_path(assemblyExport, "/assembly.c/left.c/box.s");
-    if (!leftLine ||
-	strcmp(leftLine->sourceName.getString(), "box.s") != 0 ||
-	strcmp(leftLine->sourceType.getString(), "arb8") != 0 ||
-	!leftLine->materialColorValid ||
-	leftLine->regionId != 101 ||
-	leftLine->airCode != 7 ||
-	leftLine->materialId != 42 ||
-	leftLine->los != 9 ||
-	!nearly_equal(leftLine->materialColor[0], 230.0f / 255.0f) ||
-	!nearly_equal(leftLine->materialColor[1], 26.0f / 255.0f) ||
-	!nearly_equal(leftLine->materialColor[2], 51.0f / 255.0f) ||
-	!strstr(leftLine->materialShader.getString(), "plastic"))
-	FAIL("database export should carry primitive and material identity");
-    bbox = assemblyExport.getBounds();
-    if (bbox.isEmpty() ||
-	!nearly_equal(bbox.getMin()[0], 8.0f) ||
-	!nearly_equal(bbox.getMax()[0], 33.0f))
-	FAIL("database export should apply combination transform state");
-
-    if (!left_shape->visible.getValue() ||
-	!left_shape->selectable.getValue() ||
-	left_shape->colorOverride.getValue() ||
-	left_shape->selected.getValue() ||
-	left_shape->highlighted.getValue() ||
-	left_shape->hiddenLine.getValue() ||
-	left_shape->editEmphasis.getValue() ||
-	left_shape->lodPolicy.getValue() != 0)
-	FAIL("realized database shapes should expose default draw-intent fields");
-
-    left_shape->selectedPrimitive.set1Value(0, 0);
-    left_shape->highlightedPrimitive.set1Value(0, 0);
-    SoBRLMeasureAction selectedSegmentMeasure;
-    selectedSegmentMeasure.setSelectionFilter(SoBRLMeasureAction::SELECTED_ONLY);
-    selectedSegmentMeasure.apply(root);
-    if (!selectedSegmentMeasure.hasSegments() ||
-	selectedSegmentMeasure.getSegmentCount() != 1)
-	FAIL("selected-only measure policy should accept selected wire segment geometry");
-
-    SoBRLMeasureAction highlightedSegmentMeasure;
-    highlightedSegmentMeasure.setHighlightFilter(SoBRLMeasureAction::HIGHLIGHTED_ONLY);
-    highlightedSegmentMeasure.apply(root);
-    if (!highlightedSegmentMeasure.hasSegments() ||
-	highlightedSegmentMeasure.getSegmentCount() != 1)
-	FAIL("highlighted-only measure policy should accept highlighted wire segment geometry");
-
-    SoBRLExportAction segmentIntentExport;
-    segmentIntentExport.apply(root);
-    if (segmentIntentExport.getLineCount() < 2 ||
-	!segmentIntentExport.getLine(0).selected ||
-	!segmentIntentExport.getLine(0).highlighted ||
-	segmentIntentExport.getLine(1).selected ||
-	segmentIntentExport.getLine(1).highlighted)
-	FAIL("wire export should carry per-segment selected and highlighted draw intent");
-    if (source->prepareCompiledAssembly() != 0 ||
-	source->hasCompiledAssembly())
-	FAIL("per-primitive wire draw intent should fall back from compiled CAD assembly rendering");
-
-    left_shape->colorOverride = TRUE;
-    left_shape->color = SbColor(0.9f, 0.1f, 0.2f);
-    left_shape->selected = TRUE;
-    left_shape->highlighted = TRUE;
-    left_shape->ghosted = TRUE;
-    left_shape->hiddenLine = TRUE;
-    left_shape->editEmphasis = TRUE;
-    left_shape->lodPolicy = 5;
-    right_shape->visible = FALSE;
-
-    if (!left_shape->selected.getValue() ||
-	!left_shape->highlighted.getValue() ||
-	!left_shape->ghosted.getValue() ||
-	!left_shape->hiddenLine.getValue() ||
-	!left_shape->editEmphasis.getValue() ||
-	left_shape->lodPolicy.getValue() != 5 ||
-	right_shape->visible.getValue())
-	FAIL("per-instance draw-intent fields should be inspectable on Obol shapes");
-
-    SoGetBoundingBoxAction intentBBoxAction(viewport);
-    intentBBoxAction.apply(root);
-    bbox = intentBBoxAction.getBoundingBox();
-    if (bbox.isEmpty() ||
-	!nearly_equal(bbox.getMin()[0], 8.0f) ||
-	!nearly_equal(bbox.getMax()[0], 13.0f))
-	FAIL("visibility draw intent should affect Obol bounding boxes per instance");
-
-    SoRayPickAction hiddenPick(viewport);
-    hiddenPick.setRay(SbVec3f(30.5f, -3.0f, 10.0f), SbVec3f(0.0f, 0.0f, -1.0f));
-    hiddenPick.apply(root);
-    if (hiddenPick.getPickedPoint())
-	FAIL("hidden database instance should not be pickable");
-
-    SoBRLSnapAction hiddenSnap;
-    hiddenSnap.setQueryPoint(SbVec3f(33.0f, 0.0f, -4.0f));
-    hiddenSnap.setTolerance(0.1f);
-    hiddenSnap.apply(root);
-    if (hiddenSnap.hasCandidate())
-	FAIL("hidden database instance should not contribute snap candidates");
-
-    SoBRLMeasureAction intentMeasure;
-    intentMeasure.setQueryPoint(SbVec3f(30.5f, -3.0f, 0.0f));
-    intentMeasure.apply(root);
-    if (!intentMeasure.hasSegments() ||
-	intentMeasure.getShapeCount() != 1 ||
-	!intentMeasure.hasNearestSegment() ||
-	strcmp(intentMeasure.getNearestPath().getString(), "/assembly.c/left.c/box.s") != 0)
-	FAIL("visibility draw intent should filter measure traversal per instance");
-    bbox = intentMeasure.getBounds();
-    if (bbox.isEmpty() ||
-	!nearly_equal(bbox.getMin()[0], 8.0f) ||
-	!nearly_equal(bbox.getMax()[0], 13.0f))
-	FAIL("visibility-filtered measure should report only visible instance bounds");
-
-    SoBRLExportAction intentExport;
-    intentExport.apply(root);
-    if (export_path_count(intentExport, "/assembly.c/right.c/box.s") != 0)
-	FAIL("hidden database instance should not be exported");
-    if (export_path_count(intentExport, "/assembly.c/left.c/box.s") != left_shape->getSegmentCount())
-	FAIL("visible selected instance should remain exported");
-    if (intentExport.getLineCount() <= 0 ||
-	!intentExport.getLine(0).selected ||
-	!intentExport.getLine(0).highlighted ||
-	!intentExport.getLine(0).ghosted ||
-	!intentExport.getLine(0).hiddenLine ||
-	!intentExport.getLine(0).editEmphasis ||
-	intentExport.getLine(0).lodPolicy != 5 ||
-	!intentExport.getLine(0).colorOverride ||
-	!nearly_equal(intentExport.getLine(0).color[0], 0.9f) ||
-	!nearly_equal(intentExport.getLine(0).color[1], 0.1f) ||
-	!nearly_equal(intentExport.getLine(0).color[2], 0.2f))
-	FAIL("export should carry complete wire draw intent");
-
-    right_shape->visible = TRUE;
-    right_shape->selectable = FALSE;
-
-    SoRayPickAction unselectablePick(viewport);
-    unselectablePick.setRay(SbVec3f(30.5f, -3.0f, 10.0f), SbVec3f(0.0f, 0.0f, -1.0f));
-    unselectablePick.apply(root);
-    if (unselectablePick.getPickedPoint())
-	FAIL("unselectable visible database instance should not be pickable");
-
-    SoBRLSnapAction unselectableSnap;
-    unselectableSnap.setQueryPoint(SbVec3f(33.0f, 0.0f, -4.0f));
-    unselectableSnap.setTolerance(0.1f);
-    unselectableSnap.apply(root);
-    if (unselectableSnap.hasCandidate())
-	FAIL("unselectable visible database instance should not contribute snap candidates");
-
-    SoBRLExportAction unselectableExport;
-    unselectableExport.apply(root);
-    if (export_path_count(unselectableExport, "/assembly.c/right.c/box.s") <= 0)
-	FAIL("unselectable visible instance should remain available to export traversal");
-
-    {
-	BRLObolViewController rebuiltController(root, NULL);
-	if (rebuiltController.getDatabaseSourceCount() != 1)
-	    FAIL("rebuilt view controller should discover existing database source nodes");
-	SoBRLDatabaseSource *rebuiltSource = rebuiltController.getDatabaseSource(0);
-	if (rebuiltSource != source ||
-	    strcmp(rebuiltSource->path.getValue().getString(), "assembly.c") != 0 ||
-	    rebuiltSource->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	    rebuiltSource->needsRealization() ||
-	    rebuiltSource->getRealizedShapeCount() != 2)
-	    FAIL("rebuilt view controller should preserve realized database source state");
-
-	SoBRLVListShape *rebuiltLeft = shape_with_path(rebuiltSource, "/assembly.c/left.c/box.s");
-	SoBRLVListShape *rebuiltRight = shape_with_path(rebuiltSource, "/assembly.c/right.c/box.s");
-	if (!rebuiltLeft || !rebuiltRight ||
-	    !rebuiltLeft->selected.getValue() ||
-	    !rebuiltLeft->highlighted.getValue() ||
-	    !rebuiltLeft->ghosted.getValue() ||
-	    !rebuiltLeft->hiddenLine.getValue() ||
-	    !rebuiltLeft->editEmphasis.getValue() ||
-	    rebuiltLeft->lodPolicy.getValue() != 5 ||
-	    !rebuiltLeft->colorOverride.getValue() ||
-	    !nearly_equal(rebuiltLeft->color.getValue()[0], 0.9f) ||
-	    !rebuiltRight->visible.getValue() ||
-	    rebuiltRight->selectable.getValue())
-	    FAIL("rebuilt view controller should preserve Obol-held draw-intent fields");
-
-	rebuiltController.clearRenderRequest();
-	if (!rebuiltController.realizePending() ||
-	    rebuiltController.getLastVisitedSourceCount() != 1 ||
-	    rebuiltController.getLastRealizedSourceCount() != 0 ||
-	    rebuiltController.getLastFailedSourceCount() != 0 ||
-	    rebuiltSource->needsRealization() ||
-	    !rebuiltController.isRenderRequested())
-	    FAIL("rebuilt view controller should inspect existing realized scene without forcing refresh");
-	if (strcmp(rebuiltController.getRenderReason().getString(), "realize-failed") == 0)
-	    FAIL("rebuilt view controller should not report failed realization for current scene");
-
-	SoBRLVListShape *oldAssemblyShared = rebuiltLeft->getGeometrySource();
-	if (!oldAssemblyShared || oldAssemblyShared == rebuiltLeft ||
-	    oldAssemblyShared != rebuiltRight->getGeometrySource())
-	    FAIL("rebuilt assembly instances should still reference shared local geometry");
-	oldAssemblyShared->ref();
-
-	SbVec3f editedLinePoints[2] = {
-	    SbVec3f(11.0f, 0.0f, 0.0f),
-	    SbVec3f(12.0f, 0.0f, 0.0f)
-	};
-	int32_t editedLineCommands[2] = {
-	    SoBRLVListShape::MOVE,
-	    SoBRLVListShape::DRAW
-	};
-	rebuiltLeft->setLineSet(editedLinePoints, editedLineCommands, 2);
-	if (rebuiltLeft->getGeometrySource() != rebuiltLeft ||
-	    rebuiltRight->getGeometrySource() != oldAssemblyShared ||
-	    !shape_extents_match(rebuiltLeft, 11.0f, 12.0f,
-				 0.0f, 0.0f, 0.0f, 0.0f))
-	    FAIL("direct VLIST geometry edits should detach only the edited instance from shared geometry");
-
-	if (rebuiltController.replaceDatabaseSource("/assembly.c", dbip,
-		SoBRLDatabaseSource::WIREFRAME, 10) != 1 ||
-	    rebuiltController.getDatabaseSourceCount() != 1 ||
-	    rebuiltController.getDatabaseSource(0) != rebuiltSource ||
-	    rebuiltSource->sourceRevision.getValue() != 10 ||
-	    !rebuiltSource->needsRealization())
-	    FAIL("rebuilt view controller should partial-refresh existing source by path identity");
-
-	if (!rebuiltController.realizePending() ||
-	    rebuiltController.getLastVisitedSourceCount() != 1 ||
-	    rebuiltController.getLastRealizedSourceCount() != 1 ||
-	    rebuiltController.getLastFailedSourceCount() != 0 ||
-	    rebuiltSource->getRealizedShapeCount() != 2 ||
-	    !shape_with_path(rebuiltSource, "/assembly.c/left.c/box.s") ||
-	    !shape_with_path(rebuiltSource, "/assembly.c/right.c/box.s"))
-	    FAIL("rebuilt view controller should re-realize partial refresh from existing scene");
-	SoBRLVListShape *refreshedLeft = shape_with_path(rebuiltSource,
-					 "/assembly.c/left.c/box.s");
-	SoBRLVListShape *refreshedRight = shape_with_path(rebuiltSource,
-					  "/assembly.c/right.c/box.s");
-	if (!refreshedLeft || !refreshedRight ||
-	    refreshedLeft->getGeometrySource() == refreshedLeft ||
-	    refreshedLeft->getGeometrySource() != refreshedRight->getGeometrySource() ||
-	    refreshedLeft->getGeometrySource() == oldAssemblyShared ||
-	    !shape_extents_match(refreshedLeft, -2.0f, 3.0f,
-				 -3.0f, 4.0f, -4.0f, 5.0f))
-	    FAIL("database source refresh should rebuild shared local geometry and discard edited instance geometry");
-	oldAssemblyShared->unref();
-    }
 
     root->unref();
 
@@ -5653,21 +5135,29 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLRealizeAction compactAssemblyRealize;
     compactAssemblyRealize.apply(root);
     if (compactAssemblyRealize.getRealizedSourceCount() != 1 ||
-	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
-	FAIL("compact assembly source should realize before compaction");
-    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
-    right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
-    if (!left_shape || !right_shape)
-	FAIL("compact assembly setup should preserve explicit instance shapes before compaction");
-    const int compactLeftSegments = left_shape->getSegmentCount();
-    const int compactRightSegments = right_shape->getSegmentCount();
-    const int compactTotalSegments = total_segment_count(source);
-    left_shape->selected = TRUE;
-    if (source->compactRealizedGeometry() != 2 ||
+	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	!source->hasCompactInstanceIndex() ||
 	source->getCompactInstanceCount() != 2 ||
 	source->getRealizedShapeCount() != 0)
-	FAIL("compact assembly should replace explicit wire instance nodes with a compact instance index");
+	FAIL("database assembly realization should publish a compact occurrence registry directly");
+
+    int compactLeftSegments = 0;
+    int compactRightSegments = 0;
+    for (int i = 0; i < source->getRealizedShapeSummaryCount(); i++) {
+	BRLObolRealizedShapeSummary shapeSummary;
+	if (!source->getRealizedShapeSummary(i, shapeSummary))
+	    continue;
+	if (shapeSummary.path == "/assembly.c/left.c/box.s")
+	    compactLeftSegments = shapeSummary.segmentCount;
+	if (shapeSummary.path == "/assembly.c/right.c/box.s")
+	    compactRightSegments = shapeSummary.segmentCount;
+    }
+    const int compactTotalSegments = compactLeftSegments + compactRightSegments;
+    if (compactLeftSegments <= 0 || compactRightSegments <= 0 ||
+	source->setCompactInstanceDisplayStateForPath(
+	    "/assembly.c/left.c/box.s", FALSE, 0, FALSE, 1, TRUE,
+	    0, FALSE) != 1)
+	FAIL("compact assembly summaries and path-addressed selection should be available");
 
     BRLObolCompactInstanceHandle compactHandle0;
     BRLObolCompactInstanceHandle compactHandle1;
@@ -5681,33 +5171,6 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!source->getCompactInstanceSummary(compactHandle1, compactSummary1) ||
 	compactSummary0.path == compactSummary1.path)
 	FAIL("compact assembly should expose distinct stable off-scene handles");
-
-    if (source->demoteCompactGeometry() != 2 ||
-	source->hasCompactInstanceIndex() ||
-	source->getRealizedShapeCount() != 2)
-	FAIL("compact demotion should restore explicit nodes");
-    if (!source->isCompactInstanceHandleValid(compactHandle0) ||
-	!source->isCompactInstanceHandleValid(compactHandle1) ||
-	!source->getCompactInstanceSummary(compactHandle0, compactSummary0) ||
-	!source->getCompactInstanceSummary(compactHandle1, compactSummary1))
-	FAIL("compact demotion should retain off-scene handles");
-    if (!shape_with_path(source, "/assembly.c/left.c/box.s") ||
-	!shape_with_path(source, "/assembly.c/right.c/box.s"))
-	FAIL("compact demotion should preserve explicit path identity");
-    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
-    right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
-    if (!left_shape || !right_shape || !left_shape->selected.getValue() ||
-	right_shape->selected.getValue())
-	FAIL("compact demotion should preserve per-instance selection state");
-
-    if (source->compactRealizedGeometry() != 2 ||
-	!source->hasCompactInstanceIndex() ||
-	source->getRealizedShapeCount() != 0 ||
-	!source->isCompactInstanceHandleValid(compactHandle0) ||
-	!source->isCompactInstanceHandleValid(compactHandle1) ||
-	!source->getCompactInstanceSummary(compactHandle0, compactSummary0) ||
-	!source->getCompactInstanceSummary(compactHandle1, compactSummary1))
-	FAIL("compact re-promotion should preserve stable handles and semantic state");
 
     SbMatrix compactPlacement = SbMatrix::identity();
     compactPlacement.setTranslate(SbVec3f(100.0f, 0.0f, 0.0f));
@@ -5817,6 +5280,61 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!compactLeftLine->selected || compactRightLine->selected)
 	FAIL("compact assembly export should preserve selected/unselected instance grouping");
 
+    if (source->setCompactInstanceSelectableForPath(
+	    "/assembly.c/right.c/box.s", FALSE, FALSE) != 1 ||
+	source->prepareCompiledAssembly() != 1)
+	FAIL("compiled compact assembly should accept incremental pickability changes");
+    SoRayPickAction compactSelectablePick(viewport);
+    compactSelectablePick.setRay(SbVec3f(30.5f, -3.0f, 10.0f),
+				 SbVec3f(0.0f, 0.0f, -1.0f));
+    compactSelectablePick.apply(root);
+    if (compactSelectablePick.getPickedPoint())
+	FAIL("compiled compact assembly should apply incremental pickability changes");
+
+    if (source->setCompactInstanceSelectableForPath(
+	    "/assembly.c/right.c/box.s", FALSE, TRUE) != 1 ||
+	source->prepareCompiledAssembly() != 1)
+	FAIL("compiled compact assembly should restore incremental pickability");
+    SoRayPickAction compactSelectableRestorePick(viewport);
+    compactSelectableRestorePick.setRay(SbVec3f(30.5f, -3.0f, 10.0f),
+				SbVec3f(0.0f, 0.0f, -1.0f));
+    compactSelectableRestorePick.apply(root);
+    if (!compactSelectableRestorePick.getPickedPoint())
+	FAIL("compiled compact assembly should restore pickable occurrences");
+
+    if (source->setCompactInstanceDisplayStateForPath(
+	    "/assembly.c/right.c/box.s", FALSE, 1, FALSE, 0, FALSE,
+	    0, FALSE) != 1 || source->prepareCompiledAssembly() != 1)
+	FAIL("compiled compact assembly should accept incremental visibility changes");
+    SoRayPickAction compactVisibilityPick(viewport);
+    compactVisibilityPick.setRay(SbVec3f(30.5f, -3.0f, 10.0f),
+				 SbVec3f(0.0f, 0.0f, -1.0f));
+    compactVisibilityPick.apply(root);
+    if (compactVisibilityPick.getPickedPoint())
+	FAIL("compiled compact assembly should apply incremental visibility changes");
+
+    if (source->setCompactInstanceDisplayStateForPath(
+	    "/assembly.c/right.c/box.s", FALSE, 1, TRUE, 0, FALSE,
+	    0, FALSE) != 1 || source->prepareCompiledAssembly() != 1)
+	FAIL("compiled compact assembly should restore incremental visibility");
+    SoRayPickAction compactMetadataPick(viewport);
+    if (source->setCompactInstanceMetadataForPath(
+	    "/assembly.c/right.c/box.s", FALSE, 303, 17, 29, 43, TRUE,
+	    SbColor(0.25f, 0.50f, 0.75f), "plastic") != 1 ||
+	source->prepareCompiledAssembly() != 1)
+	FAIL("compiled compact assembly should accept incremental semantic metadata");
+    compactMetadataPick.setRay(SbVec3f(30.5f, -3.0f, 10.0f),
+				 SbVec3f(0.0f, 0.0f, -1.0f));
+    compactMetadataPick.apply(root);
+    pickedPoint = compactMetadataPick.getPickedPoint();
+    rawDetail = pickedPoint ? pickedPoint->getDetail() : NULL;
+    if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()) ||
+	static_cast<const SoBRLPickDetail *>(rawDetail)->getRegionId() != 303 ||
+	static_cast<const SoBRLPickDetail *>(rawDetail)->getAirCode() != 17 ||
+	static_cast<const SoBRLPickDetail *>(rawDetail)->getMaterialId() != 29 ||
+	static_cast<const SoBRLPickDetail *>(rawDetail)->getLos() != 43)
+	FAIL("compiled compact assembly should refresh incremental semantic pick detail");
+
     source->clearRealizedGeometry(FALSE);
     if (source->isCompactInstanceHandleValid(compactHandle0) ||
 	source->isCompactInstanceHandleValid(compactHandle1))
@@ -5835,17 +5353,16 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     SoBRLRealizeAction compactIntentRealize;
     compactIntentRealize.apply(root);
-    if (compactIntentRealize.getRealizedSourceCount() != 1)
-	FAIL("compact draw-intent setup should realize one source");
-    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
-    right_shape = shape_with_path(source, "/assembly.c/right.c/box.s");
-    if (!left_shape || !right_shape)
-	FAIL("compact draw-intent setup should preserve explicit instance shapes before compaction");
-    left_shape->selectable = FALSE;
-    right_shape->visible = FALSE;
-    if (source->compactRealizedGeometry() != 2 ||
+    if (compactIntentRealize.getRealizedSourceCount() != 1 ||
 	!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 2 ||
 	source->getRealizedShapeCount() != 0)
+	FAIL("compact draw-intent setup should realize one source");
+    if (source->setCompactInstanceSelectableForPath(
+	    "/assembly.c/left.c/box.s", FALSE, FALSE) != 1 ||
+	source->setCompactInstanceDisplayStateForPath(
+	    "/assembly.c/right.c/box.s", FALSE, 1, FALSE,
+	    0, FALSE, 0, FALSE) != 1)
 	FAIL("compact draw-intent source should accept whole-instance visibility/selectability");
 
     SoGetBoundingBoxAction compactIntentBBoxAction(viewport);
@@ -5892,37 +5409,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source = new SoBRLDatabaseSource;
     source->setDatabase(dbip);
     source->path = "assembly.c";
-    source->sourceRevision = 14;
-    root->addChild(source);
-
-    SoBRLRealizeAction compactPrimitiveIntentRealize;
-    compactPrimitiveIntentRealize.apply(root);
-    if (compactPrimitiveIntentRealize.getRealizedSourceCount() != 1)
-	FAIL("compact primitive-intent setup should realize one source");
-    left_shape = shape_with_path(source, "/assembly.c/left.c/box.s");
-    if (!left_shape)
-	FAIL("compact primitive-intent setup should have a left instance");
-    left_shape->selectedPrimitive.set1Value(0, 0);
-    if (source->compactRealizedGeometry() != 0 ||
-	source->hasCompactInstanceIndex() ||
-	source->getRealizedShapeCount() != 2)
-	FAIL("per-primitive wire draw intent should keep explicit scene nodes");
-
-    root->unref();
-
-    root = new SoSeparator;
-    root->ref();
-
-    source = new SoBRLDatabaseSource;
-    source->setDatabase(dbip);
-    source->path = "assembly.c";
     source->sourceRevision = 15;
     root->addChild(source);
 
     SoBRLSceneController compactPolicyController(root);
-    compactPolicyController.setCompactCadRealizationEnabled(TRUE);
-    if (!compactPolicyController.getCompactCadRealizationEnabled() ||
-	!compactPolicyController.realizePending() ||
+    if (!compactPolicyController.realizePending() ||
 	compactPolicyController.getLastVisitedSourceCount() != 1 ||
 	compactPolicyController.getLastRealizedSourceCount() != 1 ||
 	compactPolicyController.getLastFailedSourceCount() != 0 ||
@@ -5945,7 +5436,6 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     lodRoot->addChild(source);
 
     SoBRLSceneController compactProxyController(lodRoot);
-    compactProxyController.setCompactCadRealizationEnabled(TRUE);
     if (!compactProxyController.realizePending() ||
 	!source->hasCompactInstanceIndex() ||
 	source->getRealizedShapeCount() != 0)
@@ -6002,6 +5492,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT)
 	FAIL("compact view-local CAD proxy pick should preserve source identity");
 
+    lodRoot->setViewLodState(NULL);
     lodRoot->unref();
 
     compactViewLodState.clear();
@@ -6019,7 +5510,6 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     lodRoot->addChild(source);
 
     SoBRLSceneController compactMeshLodController(lodRoot);
-    compactMeshLodController.setCompactCadRealizationEnabled(TRUE);
     if (!compactMeshLodController.realizePending() ||
 	!source->hasCompactInstanceIndex() ||
 	source->getRealizedMeshCount() != 0)
@@ -6087,6 +5577,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
 	FAIL("compact view-local CAD mesh pick should preserve source face identity");
 
+    lodRoot->setViewLodState(NULL);
     lodRoot->unref();
 
     root = new SoSeparator;
@@ -6104,26 +5595,18 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (assemblyMeshRealize.getRealizedSourceCount() != 1 ||
 	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("shaded assembly realization should realize one source");
-    if (source->getRealizedMeshCount() != 2)
-	FAIL("shaded assembly realization should preserve one mesh instance per database leaf");
-
-    SoBRLMeshShape *left_mesh = mesh_with_path(source,
-				"/assembly.c/left.c/box.s");
-    SoBRLMeshShape *right_mesh = mesh_with_path(source,
-				 "/assembly.c/right.c/box.s");
-    if (!left_mesh || !right_mesh)
-	FAIL("shaded assembly leaf meshes should preserve full BRL-CAD instance paths");
-    if (left_mesh->getGeometrySource() == left_mesh ||
-	left_mesh->getGeometrySource() != right_mesh->getGeometrySource())
-	FAIL("shaded assembly leaf meshes should share one local Obol geometry source");
-    if (!mesh_extents_match(left_mesh, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f) ||
-	!mesh_extents_match(right_mesh, -2.0f, 3.0f, -3.0f, 4.0f, -4.0f, 5.0f))
-	FAIL("shaded assembly meshes should keep local shared geometry coordinates");
-    if (!left_mesh->materialColorValid.getValue() ||
-	left_mesh->regionId.getValue() != 101 ||
-	!right_mesh->materialColorValid.getValue() ||
-	right_mesh->regionId.getValue() != 102)
-	FAIL("shaded assembly mesh instances should keep independent inherited material identity");
+    BRLObolRealizedShapeSummary leftMeshSummary;
+    BRLObolRealizedShapeSummary rightMeshSummary;
+    if (source->getRealizedMeshCount() != 0 ||
+	!mesh_summary_with_path(source, "/assembly.c/left.c/box.s",
+	    leftMeshSummary) ||
+	!mesh_summary_with_path(source, "/assembly.c/right.c/box.s",
+	    rightMeshSummary) ||
+	leftMeshSummary.triangleCount != 12 ||
+	rightMeshSummary.triangleCount != 12 ||
+	!leftMeshSummary.materialColorValid || leftMeshSummary.regionId != 101 ||
+	!rightMeshSummary.materialColorValid || rightMeshSummary.regionId != 102)
+	FAIL("shaded assembly should retain two carrier-free mesh occurrences with independent metadata");
 
     SoGetBoundingBoxAction assemblyMeshBBoxAction(viewport);
     assemblyMeshBBoxAction.apply(root);
@@ -6146,7 +5629,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 				   "/assembly.c/right.c/box.s") <= 0)
 	FAIL("shaded assembly export should preserve transformed mesh instance identity");
 
-    right_mesh->visible = FALSE;
+    if (source->setCompactInstanceDisplayStateForPath(
+	    "/assembly.c/right.c/box.s", FALSE, 1, FALSE,
+	    0, FALSE, 0, FALSE) != 1)
+	FAIL("shaded assembly should hide one compact mesh occurrence");
     SoGetBoundingBoxAction assemblyMeshVisibleBBoxAction(viewport);
     assemblyMeshVisibleBBoxAction.apply(root);
     bbox = assemblyMeshVisibleBBoxAction.getBoundingBox();
@@ -6154,25 +5640,6 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(bbox.getMin()[0], 8.0f) ||
 	!nearly_equal(bbox.getMax()[0], 13.0f))
 	FAIL("shaded assembly mesh visibility should remain per-instance");
-
-    SoBRLMeshShape *oldMeshShared = left_mesh->getGeometrySource();
-    if (!oldMeshShared || oldMeshShared == left_mesh ||
-	oldMeshShared != right_mesh->getGeometrySource())
-	FAIL("shaded assembly mesh instances should still share local geometry before edit");
-    oldMeshShared->ref();
-    SbVec3f editedMeshPoints[3] = {
-	SbVec3f(0.0f, 0.0f, 0.0f),
-	SbVec3f(1.0f, 0.0f, 0.0f),
-	SbVec3f(0.0f, 1.0f, 0.0f)
-    };
-    int32_t editedMeshIndices[3] = {0, 1, 2};
-    left_mesh->setIndexedTriangles(editedMeshPoints, 3, editedMeshIndices, 3);
-    if (left_mesh->getGeometrySource() != left_mesh ||
-	right_mesh->getGeometrySource() != oldMeshShared ||
-	left_mesh->getTriangleCount() != 1 ||
-	right_mesh->getTriangleCount() != 12)
-	FAIL("direct mesh geometry edits should detach only the edited instance from shared geometry");
-    oldMeshShared->unref();
 
     root->unref();
     db_close(dbip);

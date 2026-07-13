@@ -677,8 +677,8 @@ test_owned_render_endpoint(const char *datadir)
     if (!fail && ged_exec_dm(gedp, 4, wire_av) != BRLCAD_OK)
 	fail = 1;
 
-    const char *av[3] = {"draw", "all.g", NULL};
-    if (!fail && ged_exec_draw(gedp, 2, av) != BRLCAD_OK) {
+    const char *av[3] = {"draw", "--eager-leaf-expansion", "all.g"};
+    if (!fail && ged_exec_draw(gedp, 3, av) != BRLCAD_OK) {
 	bu_log("FAIL: owned-endpoint draw failed: %s\n",
 	    bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
@@ -723,12 +723,10 @@ test_owned_render_endpoint(const char *datadir)
     unsigned char *deferred_full_image = NULL;
     if (!fail) {
 	const char *erase_av[2] = {"erase", "all.g"};
-	const char *deferred_av[3] = {
-	    "draw", "--defer-leaf-expansion", "all.g"
-	};
+	const char *deferred_av[2] = {"draw", "all.g"};
 	if (ged_exec_erase(gedp, 2, erase_av) != BRLCAD_OK ||
-	    ged_exec_draw(gedp, 3, deferred_av) != BRLCAD_OK) {
-	    bu_log("FAIL: owned-endpoint deferred draw failed: %s\n",
+	    ged_exec_draw(gedp, 2, deferred_av) != BRLCAD_OK) {
+	    bu_log("FAIL: owned-endpoint automatic deferred draw failed: %s\n",
 		bu_vls_cstr(gedp->ged_result_str));
 	    fail = 1;
 	}
@@ -753,7 +751,7 @@ test_owned_render_endpoint(const char *datadir)
 	bu_log("FAIL: deferred refinement should reproduce the direct image exactly\n");
 	fail = 1;
     } else if (!fail) {
-	bu_log("PASS: deferred root refines to the exact direct image\n");
+	bu_log("PASS: interactive draw defaults to a deferred root and refines exactly\n");
     }
 
     if (image)

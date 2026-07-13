@@ -21,6 +21,10 @@ QTCAD_EXPORT int qg_obol_sync_selection_state(struct ged *gedp,
 	QgView *display,
 	const char *setName);
 
+QTCAD_EXPORT int qg_obol_sync_selection_state_if_active(struct ged *gedp,
+	QgView *display,
+	const char *setName);
+
 #endif /* QGOBOLSELECTIONSYNCPRIVATE_H */
 
 /*

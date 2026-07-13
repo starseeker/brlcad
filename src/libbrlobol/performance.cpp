@@ -90,6 +90,8 @@ brlobol_performance_counters_get(
     counters->direct_leaf_fallback = values[BRLOBOL_PERF_DIRECT_LEAF_FALLBACK];
     counters->wire_cache_hits = values[BRLOBOL_PERF_WIRE_CACHE_HITS];
     counters->wire_cache_misses = values[BRLOBOL_PERF_WIRE_CACHE_MISSES];
+    counters->mesh_cache_hits = values[BRLOBOL_PERF_MESH_CACHE_HITS];
+    counters->mesh_cache_misses = values[BRLOBOL_PERF_MESH_CACHE_MISSES];
     counters->plot_calls = values[BRLOBOL_PERF_PLOT_CALLS];
     counters->plot_us = values[BRLOBOL_PERF_PLOT_US];
     counters->vlist_convert_calls = values[BRLOBOL_PERF_VLIST_CONVERT_CALLS];

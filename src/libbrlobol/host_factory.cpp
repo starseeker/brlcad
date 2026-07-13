@@ -61,6 +61,9 @@ sanitize_desc(const struct brlobol_host_desc *desc)
 	actual.height = 1;
     if (actual.device_pixel_ratio <= 0.0)
 	actual.device_pixel_ratio = 1.0;
+    if (actual.vsync < BRLOBOL_HOST_VSYNC_AUTO ||
+	actual.vsync > BRLOBOL_HOST_VSYNC_ON)
+	actual.vsync = BRLOBOL_HOST_VSYNC_AUTO;
     return actual;
 }
 
@@ -83,7 +86,9 @@ brlobol_host_factory_register(const struct brlobol_host_factory *factory)
 	return NULL;
 
     if ((factory->capabilities & BRLOBOL_HOST_CAP_READBACK) &&
-	(!factory->capture || factory->struct_size < sizeof(*factory)))
+	(!factory->capture || factory->struct_size <
+	 offsetof(struct brlobol_host_factory, capture) +
+	 sizeof(factory->capture)))
 	return NULL;
 
     std::lock_guard<std::mutex> lock(registry_mutex);
@@ -308,4 +313,34 @@ brlobol_host_factory_instance_dimensions(brlobol_host_factory_token_t *token,
 	return 0;
     return token->factory.dimensions(instance, width, height,
 	device_pixel_ratio, token->factory.user_data);
+}
+
+extern "C" int
+brlobol_host_factory_instance_set_title(brlobol_host_factory_token_t *token,
+	void *instance, const char *title)
+{
+    if (!token || !instance || !token->factory.set_title || !title)
+	return 0;
+    return token->factory.set_title(instance, title,
+	token->factory.user_data);
+}
+
+extern "C" int
+brlobol_host_factory_instance_set_visible(brlobol_host_factory_token_t *token,
+	void *instance, int visible)
+{
+    if (!token || !instance || !token->factory.set_visible)
+	return 0;
+    return token->factory.set_visible(instance, visible ? 1 : 0,
+	token->factory.user_data);
+}
+
+extern "C" int
+brlobol_host_factory_instance_set_vsync(brlobol_host_factory_token_t *token,
+	void *instance, int enabled)
+{
+    if (!token || !instance || !token->factory.set_vsync)
+	return 0;
+    return token->factory.set_vsync(instance, enabled ? 1 : 0,
+	token->factory.user_data);
 }

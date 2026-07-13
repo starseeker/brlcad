@@ -27,6 +27,25 @@ g new_view v1 tkobol
 g draw all.g
 g autoview v1
 
+g dm set -V v1 endpoint.title "Tk typed endpoint title"
+if {[g dm get -V v1 endpoint.title] ne "Tk typed endpoint title" ||
+        [wm title .v1] ne "Tk typed endpoint title"} {
+    puts stderr "GED dm title property did not reach the Tk toplevel host"
+    exit 1
+}
+g dm set -V v1 endpoint.visible 0
+update
+if {[winfo ismapped .v1]} {
+    puts stderr "GED dm visibility property did not withdraw the Tk toplevel"
+    exit 1
+}
+g dm set -V v1 endpoint.visible 1
+update
+if {![winfo ismapped .v1]} {
+    puts stderr "GED dm visibility property did not restore the Tk toplevel"
+    exit 1
+}
+
 
 g bg v1 12 34 56
 if {[g bg v1] ne "12 34 56"} {

@@ -27,6 +27,7 @@
 #include <sstream>
 #include <string.h>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 BRLObolMeshLodProvider::BRLObolMeshLodProvider(void)
@@ -313,6 +314,30 @@ lod_obb_proxy_from_points(BRLObolLodProxy &proxy, const point_t *points,
     }
 
     return proxy.isValid();
+}
+
+static BRLObolLodResult
+lod_obb_result_from_request(const BRLObolLodRequest &request,
+			    SbBool useRequestBounds)
+{
+    if (!useRequestBounds || request.bounds.isEmpty())
+	return lod_provider_status_result(request, BRLOBOL_LOD_PROVIDER_CACHE_MISS,
+				  "Obol OBB draw proxy cache entry unavailable");
+
+    const SbVec3f &minimum = request.bounds.getMin();
+    const SbVec3f &maximum = request.bounds.getMax();
+    BRLObolLodProxy proxy;
+
+    proxy.kind = BRLOBOL_LOD_PROXY_OBB;
+    proxy.bounds = request.bounds;
+    proxy.center = (minimum + maximum) * 0.5f;
+    proxy.halfExtents = (maximum - minimum) * 0.5f;
+
+    BRLObolLodCounts counts = lod_counts_from_request(request);
+    BRLObolLodResult result = brlobol_lod_proxy_result(request, proxy,
+						&counts);
+    result.diagnostic = "Obol OBB draw proxy using request bounds";
+    return result;
 }
 
 static BRLObolLodResult
@@ -1122,11 +1147,10 @@ brlobol_rt_proxy_provider_task(const BRLObolLodRequest &request,
     if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY)
 	return result;
 
-    result = lod_aabb_result_from_cache_or_db(request, provider->dbip,
-	     provider->useRequestBounds);
-    if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY)
-	result.diagnostic = "Obol OBB draw proxy unavailable; using AABB proxy";
-    return result;
+    BRLObolLodResult fallback = lod_obb_result_from_request(
+	request, provider->useRequestBounds);
+    return fallback.providerStatus == BRLOBOL_LOD_PROVIDER_READY ?
+	fallback : result;
 }
 
 void
@@ -1190,6 +1214,9 @@ struct BRLObolLodServicePrivate {
 	resultReservations(0),
 	cacheWriteReservations(0),
 	rejectedTasks(0),
+	coalescedResults(0),
+	coalescedCacheWrites(0),
+	discardedStaleResults(0),
 	inFlight(0),
 	cacheWriteInFlight(0),
 	delayedTasks(0)
@@ -1217,13 +1244,19 @@ struct BRLObolLodServicePrivate {
     size_t resultReservations;
     size_t cacheWriteReservations;
     uint64_t rejectedTasks;
+    uint64_t coalescedResults;
+    uint64_t coalescedCacheWrites;
+    uint64_t discardedStaleResults;
     std::deque<BRLObolLodWorkItem> pending;
     std::deque<BRLObolLodResult> results;
     std::deque<BRLObolLodCacheWriteItem> cacheWrites;
     std::vector<BRLObolLodSubscriber> subscribers;
-    std::vector<SbString> activeRequestKeys;
+    std::unordered_map<std::string, size_t> activeRequestKeyCounts;
     std::set<uint64_t> completed;
+    std::unordered_map<uint64_t, uint64_t> taskGenerations;
     std::set<uint64_t> cancelledGenerations;
+    std::deque<uint64_t> cancelledGenerationOrder;
+    std::unordered_map<uint64_t, size_t> generationTaskCounts;
     size_t inFlight;
     size_t cacheWriteInFlight;
     size_t delayedTasks;
@@ -1253,6 +1286,39 @@ lod_generation_cancelled_or_stopping(BRLObolLodServicePrivate *p,
 	   lod_generation_cancelled_unlocked(p, generation) ? TRUE : FALSE;
 }
 
+static void
+lod_prune_cancelled_generations_unlocked(BRLObolLodServicePrivate *p)
+{
+    static const size_t maxHistory = 1024;
+    if (!p || p->cancelledGenerationOrder.size() <= maxHistory)
+	return;
+    for (auto it = p->cancelledGenerationOrder.begin();
+	it != p->cancelledGenerationOrder.end() &&
+	p->cancelledGenerationOrder.size() > maxHistory;) {
+	if (p->generationTaskCounts.find(*it) !=
+	    p->generationTaskCounts.end()) {
+	    ++it;
+	    continue;
+	}
+	p->cancelledGenerations.erase(*it);
+	it = p->cancelledGenerationOrder.erase(it);
+    }
+}
+
+static void
+lod_generation_task_finished_unlocked(BRLObolLodServicePrivate *p,
+	uint64_t generation)
+{
+    auto found = p->generationTaskCounts.find(generation);
+    if (found != p->generationTaskCounts.end()) {
+	if (found->second > 1)
+	    found->second--;
+	else
+	    p->generationTaskCounts.erase(found);
+    }
+    lod_prune_cancelled_generations_unlocked(p);
+}
+
 static SbBool
 lod_request_has_identity(const BRLObolLodRequest &request)
 {
@@ -1276,13 +1342,8 @@ lod_active_request_key_recorded_unlocked(const BRLObolLodServicePrivate *p,
     if (!p || key.getLength() == 0)
 	return FALSE;
 
-    for (size_t i = 0; i < p->activeRequestKeys.size(); i++) {
-	if (strcmp(p->activeRequestKeys[i].getString(),
-		   key.getString()) == 0)
-	    return TRUE;
-    }
-
-    return FALSE;
+    return p->activeRequestKeyCounts.find(key.getString()) !=
+	   p->activeRequestKeyCounts.end() ? TRUE : FALSE;
 }
 
 static void
@@ -1292,13 +1353,13 @@ lod_active_request_key_remove_unlocked(BRLObolLodServicePrivate *p,
     if (!p || key.getLength() == 0)
 	return;
 
-    for (size_t i = 0; i < p->activeRequestKeys.size(); i++) {
-	if (strcmp(p->activeRequestKeys[i].getString(),
-		   key.getString()) != 0)
-	    continue;
-	p->activeRequestKeys.erase(p->activeRequestKeys.begin() + (long)i);
+    auto found = p->activeRequestKeyCounts.find(key.getString());
+    if (found == p->activeRequestKeyCounts.end())
 	return;
-    }
+    if (found->second > 1)
+	found->second--;
+    else
+	p->activeRequestKeyCounts.erase(found);
 }
 
 static BRLObolLodResult
@@ -1506,18 +1567,69 @@ lod_notify_result_ready(BRLObolLodServicePrivate *p)
     }
 }
 
+static std::string
+lod_result_slot_key(const BRLObolLodResult &result)
+{
+    const BRLObolLodRequest &request = result.request;
+    std::string key = request.databaseId.getString();
+    key.push_back('\x1f');
+    key += request.objectPath.getLength() > 0 ?
+	request.objectPath.getString() : request.objectName.getString();
+    key.push_back('\x1f');
+    key += request.providerId.getString();
+    char state[160] = {0};
+    snprintf(state, sizeof(state),
+	"|%d|%d|%d", request.drawMode, result.resultKind,
+	result.resultKind == BRLOBOL_LOD_RESULT_PROXY ? result.proxy.kind : 0);
+    key += state;
+    return key;
+}
+
+static bool
+lod_result_supersedes(const BRLObolLodResult &candidate,
+	const BRLObolLodResult &current)
+{
+    if (candidate.request.databaseRevision != current.request.databaseRevision)
+	return candidate.request.databaseRevision > current.request.databaseRevision;
+    if (candidate.request.sourceRevision != current.request.sourceRevision)
+	return candidate.request.sourceRevision > current.request.sourceRevision;
+    if (candidate.request.viewRevision != current.request.viewRevision)
+	return candidate.request.viewRevision > current.request.viewRevision;
+    if (candidate.request.policyRevision != current.request.policyRevision)
+	return candidate.request.policyRevision > current.request.policyRevision;
+    if (candidate.qualityTier != current.qualityTier)
+	return candidate.qualityTier > current.qualityTier;
+    if (candidate.providerStatus == BRLOBOL_LOD_PROVIDER_READY &&
+	current.providerStatus != BRLOBOL_LOD_PROVIDER_READY)
+	return true;
+    if (candidate.providerStatus != BRLOBOL_LOD_PROVIDER_READY &&
+	current.providerStatus == BRLOBOL_LOD_PROVIDER_READY)
+	return false;
+    return true;
+}
+
 static void
 lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
-		const BRLObolLodResult &result)
+		BRLObolLodResult &&result)
 {
     SbBool notifyResultReady = FALSE;
-    BRLObolLodResult completedResult = result;
+    BRLObolLodResult completedResult = std::move(result);
     completedResult.generation = item.task.generation;
+    BRLObolLodResult cacheResult;
+    const bool duplicateForCache = item.task.publishResult &&
+	item.task.writeCache && item.task.cacheWrite;
+    if (duplicateForCache)
+	cacheResult = completedResult;
 
     {
 	std::lock_guard<std::mutex> lock(p->mutex);
 
-	p->completed.insert(item.id);
+	const SbBool discardResult = p->stopping ||
+	    lod_generation_cancelled_unlocked(p, item.task.generation);
+	if (!discardResult)
+	    p->completed.insert(item.id);
+	else
+	    p->taskGenerations.erase(item.id);
 	if (p->inFlight > 0)
 	    p->inFlight--;
 	lod_active_request_key_remove_unlocked(p,
@@ -1526,20 +1638,55 @@ lod_finish_task(BRLObolLodServicePrivate *p, const BRLObolLodWorkItem &item,
 	if (item.task.publishResult) {
 	    if (p->resultReservations > 0)
 		p->resultReservations--;
-	    notifyResultReady = p->results.empty() ? TRUE : FALSE;
-	    p->results.push_back(completedResult);
+	    if (discardResult) {
+		p->discardedStaleResults++;
+	    } else {
+		const std::string slot = lod_result_slot_key(completedResult);
+		auto existing = std::find_if(p->results.begin(), p->results.end(),
+		    [&](const BRLObolLodResult &queued) {
+			return queued.generation == completedResult.generation &&
+			       lod_result_slot_key(queued) == slot;
+		    });
+		if (existing != p->results.end()) {
+		    if (lod_result_supersedes(completedResult, *existing))
+			*existing = std::move(completedResult);
+		    p->coalescedResults++;
+		} else {
+		    notifyResultReady = p->results.empty() ? TRUE : FALSE;
+		    p->results.push_back(std::move(completedResult));
+		}
+	    }
 	}
 
 	if (p->cacheWriterEnabled && item.task.writeCache &&
 	    item.task.cacheWrite) {
 	    if (p->cacheWriteReservations > 0)
 		p->cacheWriteReservations--;
-	    BRLObolLodCacheWriteItem writeItem;
-	    writeItem.result = completedResult;
-	    writeItem.write = item.task.cacheWrite;
-	    writeItem.writeData = item.task.cacheWriteData;
-	    p->cacheWrites.push_back(writeItem);
+	    if (!discardResult) {
+		BRLObolLodCacheWriteItem writeItem;
+		writeItem.result = duplicateForCache ? std::move(cacheResult) :
+		    std::move(completedResult);
+		writeItem.write = item.task.cacheWrite;
+		writeItem.writeData = item.task.cacheWriteData;
+		const std::string slot = lod_result_slot_key(writeItem.result);
+		auto existing = std::find_if(p->cacheWrites.begin(),
+		    p->cacheWrites.end(),
+		    [&](const BRLObolLodCacheWriteItem &queued) {
+			return queued.result.generation ==
+				writeItem.result.generation &&
+			       lod_result_slot_key(queued.result) == slot;
+		    });
+		if (existing != p->cacheWrites.end()) {
+		    if (lod_result_supersedes(writeItem.result,
+			    existing->result))
+			*existing = std::move(writeItem);
+		    p->coalescedCacheWrites++;
+		} else {
+		    p->cacheWrites.push_back(std::move(writeItem));
+		}
+	    }
 	}
+	lod_generation_task_finished_unlocked(p, item.task.generation);
     }
 
     p->workerCv.notify_all();
@@ -1572,7 +1719,7 @@ lod_worker_loop(BRLObolLodServicePrivate *p)
 	}
 
 	BRLObolLodResult result = lod_execute_task(p, item.task);
-	lod_finish_task(p, item, result);
+	lod_finish_task(p, item, std::move(result));
 	lod_task_free_realize_data(item.task);
     }
 }
@@ -1595,7 +1742,7 @@ lod_cache_writer_loop(BRLObolLodServicePrivate *p)
 	    if (p->cacheWrites.empty())
 		continue;
 
-	    item = p->cacheWrites.front();
+	    item = std::move(p->cacheWrites.front());
 	    p->cacheWrites.pop_front();
 	    p->cacheWriteInFlight++;
 	}
@@ -1684,7 +1831,7 @@ BRLObolLodService::stop(void)
 	this->p->inFlight = 0;
 	this->p->resultReservations = 0;
 	this->p->cacheWriteReservations = 0;
-	this->p->activeRequestKeys.clear();
+	this->p->activeRequestKeyCounts.clear();
 	this->p->cacheWriterStopping = TRUE;
     }
     for (size_t i = 0; i < pending.size(); i++)
@@ -1699,6 +1846,13 @@ BRLObolLodService::stop(void)
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	this->p->cacheWrites.clear();
+	this->p->results.clear();
+	this->p->completed.clear();
+	this->p->taskGenerations.clear();
+	this->p->cancelledGenerations.clear();
+	this->p->cancelledGenerationOrder.clear();
+	this->p->generationTaskCounts.clear();
+	this->p->activeGeneration = 0;
 	this->p->cacheWriteInFlight = 0;
 	this->p->delayedTasks = 0;
 	this->p->running = FALSE;
@@ -1743,7 +1897,8 @@ BRLObolLodService::cancelGeneration(uint64_t generation)
     std::deque<BRLObolLodWorkItem> cancelled;
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
-	this->p->cancelledGenerations.insert(generation);
+	if (this->p->cancelledGenerations.insert(generation).second)
+	    this->p->cancelledGenerationOrder.push_back(generation);
 	if (this->p->activeGeneration == generation)
 	    this->p->activeGeneration = 0;
 
@@ -1756,6 +1911,7 @@ BRLObolLodService::cancelGeneration(uint64_t generation)
 	    this->p->completed.insert(it->id);
 	    if (this->p->inFlight > 0)
 		this->p->inFlight--;
+	    lod_generation_task_finished_unlocked(this->p, generation);
 	    if (it->task.publishResult && this->p->resultReservations > 0)
 		this->p->resultReservations--;
 	    if (this->p->cacheWriterEnabled && it->task.writeCache &&
@@ -1766,6 +1922,7 @@ BRLObolLodService::cancelGeneration(uint64_t generation)
 	    cancelled.push_back(*it);
 	    it = this->p->pending.erase(it);
 	}
+	lod_prune_cancelled_generations_unlocked(this->p);
 
 	for (std::deque<BRLObolLodResult>::iterator it =
 		 this->p->results.begin(); it != this->p->results.end();) {
@@ -1780,6 +1937,15 @@ BRLObolLodService::cancelGeneration(uint64_t generation)
 		it = this->p->cacheWrites.erase(it);
 	    else
 		++it;
+	}
+	for (auto it = this->p->taskGenerations.begin();
+	     it != this->p->taskGenerations.end();) {
+	    if (it->second != generation) {
+		++it;
+		continue;
+	    }
+	    this->p->completed.erase(it->first);
+	    it = this->p->taskGenerations.erase(it);
 	}
     }
     for (size_t i = 0; i < cancelled.size(); i++)
@@ -1814,6 +1980,19 @@ BRLObolLodService::getQueueLimits(size_t &maxActiveTasks,
     maxActiveTasks = this->p->maxActiveTasks;
     maxQueuedResults = this->p->maxQueuedResults;
     maxQueuedCacheWrites = this->p->maxQueuedCacheWrites;
+}
+
+size_t
+BRLObolLodService::availableResultTaskCapacity(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const size_t active = this->p->inFlight < this->p->maxActiveTasks ?
+	this->p->maxActiveTasks - this->p->inFlight : 0;
+    const size_t reserved = this->p->results.size() +
+	this->p->resultReservations;
+    const size_t results = reserved < this->p->maxQueuedResults ?
+	this->p->maxQueuedResults - reserved : 0;
+    return std::min(active, results);
 }
 
 static uint64_t
@@ -1861,7 +2040,9 @@ lod_service_submit_task(BRLObolLodServicePrivate *p,
 
 	id = item.id;
 	p->pending.push_back(item);
-	p->activeRequestKeys.push_back(activeKey);
+	p->activeRequestKeyCounts[activeKey.getString()]++;
+	p->generationTaskCounts[item.task.generation]++;
+	p->taskGenerations[item.id] = item.task.generation;
 	if (item.task.publishResult)
 	    p->resultReservations++;
 	if (p->cacheWriterEnabled && item.task.writeCache &&
@@ -1905,7 +2086,7 @@ BRLObolLodService::drainResults(std::vector<BRLObolLodResult> &results,
 
     while (!this->p->results.empty() &&
 	   (maxResults == 0 || count < maxResults)) {
-	results.push_back(this->p->results.front());
+	results.push_back(std::move(this->p->results.front()));
 	this->p->results.pop_front();
 	count++;
     }
@@ -1942,7 +2123,7 @@ BRLObolLodService::drainMatchingResults(
 	    continue;
 	}
 
-	results.push_back(*it);
+	results.push_back(std::move(*it));
 	it = this->p->results.erase(it);
 	count++;
     }
@@ -2042,6 +2223,48 @@ BRLObolLodService::rejectedTaskCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->rejectedTasks;
+}
+
+uint64_t
+BRLObolLodService::coalescedResultCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->coalescedResults;
+}
+
+uint64_t
+BRLObolLodService::coalescedCacheWriteCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->coalescedCacheWrites;
+}
+
+uint64_t
+BRLObolLodService::discardedStaleResultCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->discardedStaleResults;
+}
+
+size_t
+BRLObolLodService::activeRequestCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->activeRequestKeyCounts.size();
+}
+
+size_t
+BRLObolLodService::completedTaskCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->completed.size();
+}
+
+size_t
+BRLObolLodService::cancelledGenerationCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->cancelledGenerations.size();
 }
 
 /*

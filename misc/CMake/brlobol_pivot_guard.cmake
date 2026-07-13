@@ -545,6 +545,7 @@ function(_brlobol_guard_check_display_endpoint_boundary)
   foreach(_needle
       [[bool owns_obol = false]]
       [[if (s.owns_obol)]]
+      [[if (!s.obol && create_controller)]]
       [[qgcanvas_bind_obol_controller]])
     string(FIND "${_canvas_state}" "${_needle}" _canvas_idx)
     if(_canvas_idx EQUAL -1)
@@ -558,11 +559,56 @@ function(_brlobol_guard_check_display_endpoint_boundary)
       [[brlobol_display_endpoint_create]]
       [[brlobol_display_endpoint_render_engine_set]]
       [[brlobol_display_endpoint_host_open]]
-      [[BRLOBOL_HOST_MODE_EMBEDDED]])
+      [[BRLOBOL_HOST_MODE_EMBEDDED]]
+      [[new QgGL(parent, nullptr, false)]]
+      [[new QgSW(parent, nullptr, false)]])
     string(FIND "${_qg_view}" "${_needle}" _qg_endpoint_idx)
     if(_qg_endpoint_idx EQUAL -1)
       _brlobol_guard_fail(
 	"QgView no longer owns its visible canvas through an embedded endpoint (${_needle})")
+    endif()
+  endforeach()
+
+  _brlobol_guard_read_rel(_qg_host "src/libqtcad/QgObolWindowHost.cpp")
+  foreach(_needle
+      [[new QgGL(NULL, nullptr, false)]]
+      [[new QgSW(NULL, nullptr, false)]]
+      [[factory.set_title = qg_factory_set_title]]
+      [[factory.set_visible = qg_factory_set_visible]]
+      [[factory.set_vsync = qg_factory_set_vsync]]
+      [[BRLOBOL_HOST_CAP_PRESENT_VSYNC]])
+    string(FIND "${_qg_host}" "${_needle}" _qg_host_controller_idx)
+    if(_qg_host_controller_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"Qt endpoint host factories reintroduced a temporary canvas-owned controller (${_needle})")
+    endif()
+  endforeach()
+
+  _brlobol_guard_read_rel(_endpoint "src/libbrlobol/display_endpoint.cpp")
+  foreach(_needle
+      [["endpoint.title"]]
+      [["endpoint.visible"]]
+      [["endpoint.vsync"]]
+      [[brlobol_host_factory_instance_set_title]]
+      [[brlobol_host_factory_instance_set_visible]]
+      [[brlobol_host_factory_instance_set_vsync]])
+    string(FIND "${_endpoint}" "${_needle}" _endpoint_property_idx)
+    if(_endpoint_property_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"display endpoint lost typed toplevel host policy (${_needle})")
+    endif()
+  endforeach()
+
+  _brlobol_guard_read_rel(_tk_host "src/libtclcad/tkobol/tk-obol-host.cpp")
+  foreach(_needle
+      [[factory.set_title = tk_factory_set_title]]
+      [[factory.set_visible = tk_factory_set_visible]]
+      [[factory.set_vsync = tk_factory_set_vsync]]
+      [[BRLOBOL_HOST_CAP_PRESENT_VSYNC]])
+    string(FIND "${_tk_host}" "${_needle}" _tk_host_property_idx)
+    if(_tk_host_property_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"Tk endpoint host lost typed toplevel policy (${_needle})")
     endif()
   endforeach()
 
@@ -1327,6 +1373,16 @@ function(_brlobol_guard_check_tkobol_host_ownership)
   _brlobol_guard_read_rel(_gsh_cmake "src/gtools/gsh/CMakeLists.txt")
   _brlobol_guard_forbid_regexes("src/gtools/gsh/CMakeLists.txt" "${_gsh_cmake}"
     [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
+  _brlobol_guard_read_rel(_gsh "src/gtools/gsh/gsh.cpp")
+  string(FIND "${_gsh}" [[ged_draw_obol_render_endpoint_ensure_for_view]]
+    _gsh_endpoint_idx)
+  if(_gsh_endpoint_idx EQUAL -1)
+    _brlobol_guard_fail(
+      "src/gtools/gsh/gsh.cpp no longer obtains drawing through its GED view endpoint")
+  endif()
+  _brlobol_guard_forbid_regexes("src/gtools/gsh/gsh.cpp" "${_gsh}"
+    [[new[ \t\r\n]+BRLObolViewController]]
+    [[ged_draw_obol_controller_(attach|detach)]])
 endfunction()
 
 function(_brlobol_guard_check_retained_export_ownership)

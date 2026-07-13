@@ -43,6 +43,7 @@
 #include "rt/view.h"
 
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "ged/database.h"
 #include "ged/view.h"
 
@@ -353,9 +354,10 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
      * Option defaults may be overridden for the purposes of the current draw
      * command by command line options. */
     struct ged_draw_appearance_settings vs = GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    int eager_leaf_expansion = 0;
 
     int drawing_modes[7] = {-1, 0, 0, 0, 0, 0, 0};
-    struct bu_opt_desc d[21];
+    struct bu_opt_desc d[22];
     BU_OPT(d[0],   "", "help",          "",                 NULL, &print_help,         "Print help and exit");
     BU_OPT(d[1],  "?", "",              "",                 NULL, &print_help,         "");
     BU_OPT(d[2],  "m", "mode",         "#",          &bu_opt_int, &drawing_modes[0],  "0=wireframe;1=shaded bots;2=shaded;3=evaluated wire;4=hidden line;5=evaluated points");
@@ -376,7 +378,8 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     BU_OPT(d[17], "R", "no-autoview",   "",                 NULL, &no_autoview,       "Do not calculate automatic view, even if initial scene is empty.");
     BU_OPT(d[18],  "", "strict",        "",                 NULL, &vs.strict_fallback, "Do not fall back to wireframe when shaded or hidden-line tessellation fails");
     BU_OPT(d[19],  "", "defer-leaf-expansion", "",          NULL, &vs.defer_leaf_expansion, "Publish requested roots first and progressively expand database leaves");
-    BU_OPT_NULL(d[20]);
+    BU_OPT(d[20],  "", "eager-leaf-expansion", "",          NULL, &eager_leaf_expansion, "Realize all database leaves before publishing the draw result");
+    BU_OPT_NULL(d[21]);
 
     /* If no args, must be wanting help */
     if (!argc) {
@@ -437,6 +440,15 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     if (drawing_modes[0] > -1) {
 	vs.draw_mode = draw_user_mode_to_internal(drawing_modes[0]);
     }
+
+    if (vs.defer_leaf_expansion && eager_leaf_expansion) {
+	bu_vls_printf(gedp->ged_result_str,
+		"Conflicting deferred and eager leaf expansion options\n");
+	return BRLCAD_ERROR;
+    }
+    if (!eager_leaf_expansion && !vs.defer_leaf_expansion &&
+	ged_draw_obol_progressive_available(gedp, cv))
+	vs.defer_leaf_expansion = 1;
 
     // Before we start doing anything with the object set, record if things are
     // starting out empty.

@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <new>
+#include <string>
 
 struct brlobol_display_endpoint {
     brlobol_display_endpoint(void) :
@@ -26,15 +27,19 @@ struct brlobol_display_endpoint {
 	factory(NULL),
 	factory_instance(NULL),
 	engine(BRLOBOL_RENDER_ENGINE_AUTO),
+	host_mode(BRLOBOL_HOST_MODE_HEADLESS),
 	width(1),
 	height(1),
 	device_pixel_ratio(1.0),
+	visible(false),
+	vsync(true),
 	framebuffer_capture_callback(NULL),
 	framebuffer_capture_user_data(NULL),
 	property_get_callback(NULL),
 	property_set_callback(NULL),
 	property_user_data(NULL)
     {
+	input.setProfile(brlobol_input_default_view_profile());
     }
 
     BRLObolViewController *controller;
@@ -44,17 +49,40 @@ struct brlobol_display_endpoint {
     brlobol_host_factory_token_t *factory;
     void *factory_instance;
     enum brlobol_render_engine engine;
+    enum brlobol_host_mode host_mode;
     unsigned int width;
     unsigned int height;
     double device_pixel_ratio;
+    std::string title;
+    bool visible;
+    bool vsync;
     brlobol_endpoint_framebuffer_capture_callback framebuffer_capture_callback;
     void *framebuffer_capture_user_data;
+    BRLObolInputContext input;
     brlobol_endpoint_property_get_callback property_get_callback;
     brlobol_endpoint_property_set_callback property_set_callback;
     void *property_user_data;
 };
 
 static bool valid_engine(enum brlobol_render_engine engine);
+
+static void
+endpoint_frame_requested(void *user_data, const char *reason)
+{
+    brlobol_display_endpoint_t *endpoint =
+	static_cast<brlobol_display_endpoint_t *>(user_data);
+    if (!endpoint || !endpoint->factory || !endpoint->factory_instance)
+	return;
+    (void)brlobol_host_factory_instance_request_frame(endpoint->factory,
+	endpoint->factory_instance, reason);
+}
+
+static int
+endpoint_input_dispatch(void *user_data, const BRLObolInputEvent *event)
+{
+    return brlobol_display_endpoint_input_dispatch(
+	static_cast<brlobol_display_endpoint_t *>(user_data), event);
+}
 
 static void
 endpoint_dimensions_refresh(brlobol_display_endpoint_t *endpoint)
@@ -95,6 +123,18 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
     {sizeof(brlobol_endpoint_property_desc), "endpoint.host",
 	BRLOBOL_ENDPOINT_PROPERTY_STRING, BRLOBOL_ENDPOINT_PROPERTY_READ,
 	0, 0.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "endpoint.title",
+	BRLOBOL_ENDPOINT_PROPERTY_STRING,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	BRLOBOL_HOST_CAP_TOPLEVEL, 0.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "endpoint.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	BRLOBOL_HOST_CAP_TOPLEVEL, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "endpoint.vsync",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	BRLOBOL_HOST_CAP_PRESENT_VSYNC, 0.0, 1.0, NULL},
     {sizeof(brlobol_endpoint_property_desc), "controller.background.bottom",
 	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -147,6 +187,24 @@ endpoint_property(const char *name)
 	    return &property;
     }
     return NULL;
+}
+
+static int
+endpoint_property_host_supported(const brlobol_display_endpoint_t *endpoint,
+	const brlobol_endpoint_property_desc *property)
+{
+    if (!endpoint || !property)
+	return 0;
+    if (property->required_host_capabilities &&
+	(brlobol_display_endpoint_host_capabilities(endpoint) &
+	 property->required_host_capabilities) !=
+	 property->required_host_capabilities)
+	return 0;
+    if ((std::strcmp(property->name, "endpoint.title") == 0 ||
+	 std::strcmp(property->name, "endpoint.visible") == 0) &&
+	endpoint->host_mode != BRLOBOL_HOST_MODE_TOPLEVEL)
+	return 0;
+    return 1;
 }
 
 static const char *
@@ -237,6 +295,9 @@ brlobol_display_endpoint_host_detach(brlobol_display_endpoint_t *endpoint)
     if (!endpoint)
 	return;
 
+    if (endpoint->controller)
+	endpoint->controller->clearFrameRequestCallback(endpoint);
+
     if (endpoint->factory) {
 	brlobol_host_factory_instance_destroy(endpoint->factory,
 	    endpoint->factory_instance);
@@ -244,6 +305,11 @@ brlobol_display_endpoint_host_detach(brlobol_display_endpoint_t *endpoint)
 	endpoint->factory = NULL;
 	endpoint->factory_instance = NULL;
     }
+
+    endpoint->host_mode = BRLOBOL_HOST_MODE_HEADLESS;
+    endpoint->title.clear();
+    endpoint->visible = false;
+    endpoint->vsync = true;
 
     if (!endpoint->host)
 	return;
@@ -349,6 +415,10 @@ brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
 	required_desc.required_capabilities |= BRLOBOL_HOST_CAP_SYSTEM_GL;
     else if (endpoint->engine == BRLOBOL_RENDER_ENGINE_SW)
 	required_desc.required_capabilities |= BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+    if (required_desc.vsync != BRLOBOL_HOST_VSYNC_AUTO)
+	required_desc.required_capabilities |= BRLOBOL_HOST_CAP_PRESENT_VSYNC;
+    required_desc.input_dispatch = endpoint_input_dispatch;
+    required_desc.input_dispatch_data = endpoint;
 
     brlobol_host_factory_token_t *factory =
 	brlobol_host_factory_acquire(factory_name, &required_desc);
@@ -370,12 +440,21 @@ brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
     brlobol_display_endpoint_host_detach(endpoint);
     endpoint->factory = factory;
     endpoint->factory_instance = instance;
+    endpoint->host_mode = required_desc.mode;
     endpoint->width = required_desc.width ? required_desc.width :
 	endpoint->width;
     endpoint->height = required_desc.height ? required_desc.height :
 	endpoint->height;
     endpoint->device_pixel_ratio = required_desc.device_pixel_ratio > 0.0 ?
 	required_desc.device_pixel_ratio : endpoint->device_pixel_ratio;
+    endpoint->title = required_desc.title ? required_desc.title : "";
+    endpoint->visible = required_desc.visible != 0;
+    endpoint->vsync = required_desc.vsync != BRLOBOL_HOST_VSYNC_OFF;
+    endpoint->controller->setFrameRequestCallback(endpoint_frame_requested,
+	endpoint);
+    if (endpoint->controller->isRenderRequested() ||
+	endpoint->controller->hasProgressiveWorkPending())
+	endpoint_frame_requested(endpoint, "endpoint-host-open");
     return 1;
 }
 
@@ -424,6 +503,45 @@ brlobol_display_endpoint_resize(brlobol_display_endpoint_t *endpoint,
     endpoint->height = height;
     endpoint->device_pixel_ratio = device_pixel_ratio;
     return 1;
+}
+
+extern "C" int
+brlobol_display_endpoint_input_profile_set(
+	brlobol_display_endpoint_t *endpoint,
+	const BRLObolInputProfile *profile)
+{
+    if (!endpoint)
+	return 0;
+    endpoint->input.setProfile(profile ? profile :
+	brlobol_input_default_view_profile());
+    return 1;
+}
+
+extern "C" int
+brlobol_display_endpoint_input_action_handler_set(
+	brlobol_display_endpoint_t *endpoint, BRLObolInputActionHandler handler,
+	void *user_data)
+{
+    if (!endpoint)
+	return 0;
+    endpoint->input.setActionHandler(handler, user_data);
+    return 1;
+}
+
+extern "C" int
+brlobol_display_endpoint_input_action_handler_clear_if(
+	brlobol_display_endpoint_t *endpoint, BRLObolInputActionHandler handler,
+	void *user_data)
+{
+    return endpoint ? endpoint->input.clearActionHandlerIf(handler,
+	user_data) : 0;
+}
+
+extern "C" int
+brlobol_display_endpoint_input_dispatch(brlobol_display_endpoint_t *endpoint,
+	const BRLObolInputEvent *event)
+{
+    return endpoint ? endpoint->input.dispatch(event) : -1;
 }
 
 extern "C" int
@@ -560,6 +678,8 @@ brlobol_display_endpoint_property_get(
     const brlobol_endpoint_property_desc *property = endpoint_property(name);
     if (!property)
 	return BRLOBOL_ENDPOINT_PROPERTY_UNKNOWN;
+    if (!endpoint_property_host_supported(endpoint, property))
+	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
     property_value_prepare(out, property->type);
 
     if (std::strcmp(name, "endpoint.width") == 0 ||
@@ -581,6 +701,12 @@ brlobol_display_endpoint_property_get(
 	    brlobol_display_endpoint_host_factory_name(endpoint);
 	out->string_value = factory_name ? factory_name :
 	    (endpoint->host ? "bound" : "");
+    } else if (std::strcmp(name, "endpoint.title") == 0) {
+	out->string_value = endpoint->title.c_str();
+    } else if (std::strcmp(name, "endpoint.visible") == 0) {
+	out->bool_value = endpoint->visible ? 1 : 0;
+    } else if (std::strcmp(name, "endpoint.vsync") == 0) {
+	out->bool_value = endpoint->vsync ? 1 : 0;
     } else if (std::strcmp(name, "controller.background.bottom") == 0 ||
 	std::strcmp(name, "controller.background.top") == 0) {
 	const SbColor color = std::strcmp(name,
@@ -650,6 +776,8 @@ brlobol_display_endpoint_property_set(
 	return BRLOBOL_ENDPOINT_PROPERTY_READ_ONLY;
     if (value->type != property->type)
 	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    if (!endpoint_property_host_supported(endpoint, property))
+	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 
     if (std::strcmp(name, "endpoint.renderer") == 0) {
 	enum brlobol_render_engine engine = BRLOBOL_RENDER_ENGINE_AUTO;
@@ -677,6 +805,23 @@ brlobol_display_endpoint_property_set(
 	    !brlobol_display_endpoint_resize(endpoint, endpoint->width,
 		endpoint->height, value->double_value))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    } else if (std::strcmp(name, "endpoint.title") == 0) {
+	if (!value->string_value)
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	if (!brlobol_host_factory_instance_set_title(endpoint->factory,
+	    endpoint->factory_instance, value->string_value))
+	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	endpoint->title = value->string_value;
+    } else if (std::strcmp(name, "endpoint.visible") == 0) {
+	if (!brlobol_host_factory_instance_set_visible(endpoint->factory,
+	    endpoint->factory_instance, value->bool_value))
+	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	endpoint->visible = value->bool_value != 0;
+    } else if (std::strcmp(name, "endpoint.vsync") == 0) {
+	if (!brlobol_host_factory_instance_set_vsync(endpoint->factory,
+	    endpoint->factory_instance, value->bool_value))
+	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	endpoint->vsync = value->bool_value != 0;
     } else if (std::strcmp(name, "controller.background.bottom") == 0 ||
 	std::strcmp(name, "controller.background.top") == 0) {
 	if (!valid_color3(value->color3))

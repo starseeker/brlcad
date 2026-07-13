@@ -3,30 +3,18 @@
  *
  * Copyright (c) 2021-2026 United States Government as represented by
  * the U.S. Army Research Laboratory.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public License
- * version 2.1 as published by the Free Software Foundation.
- *
- * This library is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this file; see the file named COPYING for more
- * information.
  */
 /** @file QgCanvasInput.cpp
  *
- * CAD-specific mouse/keyboard bindings, held as per-canvas-instance
- * state.
+ * Qt event normalization and endpoint-local BRL-CAD view actions.
  */
 
 #include "common.h"
 
 #include <QtGlobal>
+
 #include <chrono>
+#include <cmath>
 #include <unordered_map>
 
 extern "C" {
@@ -36,332 +24,378 @@ extern "C" {
 #include "qtcad/defines.h"
 #include "QgCanvasInput.h"
 #include "QgLegacyViewContext.h"
+#include "brlobol/display_endpoint.h"
 #include "bv.h"
 
 struct QgCanvasInput::Impl {
-	std::unordered_map<qg_legacy_view *, long long> drag_update_ts;
+    std::unordered_map<qg_legacy_view *, long long> drag_update_ts;
+    BRLObolInputContext context;
+    brlobol_display_endpoint_t *endpoint = NULL;
+    qg_legacy_view *dispatch_view = NULL;
+    double press_x = 0.0;
+    double press_y = 0.0;
+    int mouse_mode = BV_ADJUST_SCALE;
 };
-
-QgCanvasInput::QgCanvasInput() :
-	m(new Impl)
-{
-}
-
-QgCanvasInput::~QgCanvasInput()
-{
-	delete m;
-}
 
 static int
 qgcanvasinput_set_aet(qg_legacy_view *v, const char *aet_string)
 {
-	vect_t aet_vec;
-	bn_decode_vect(aet_vec, aet_string);
-	(void)bv_aet_set(qg_legacy_view_bv(v), aet_vec);
-	(void)bv_context_update(qg_legacy_view_context(v), BV_CONTEXT_CHANGED_VIEW);
-	return 1;
-}
-
-// TODO - look into QShortcut, see if it might be a better way
-// to manage this
-int
-QgCanvasInput::keyPressEvent(qg_legacy_view *v, int UNUSED(x_prev),
-                             int UNUSED(y_prev), QKeyEvent *k)
-{
-	QTCAD_EVENT("keyPress", 1);
-	if (!v)
-		return 0;
-#if 0
-	QString kstr = QKeySequence(k->key()).toString();
-	bu_log("%s\n", kstr.toStdString().c_str());
-#endif
-	switch (k->key()) {
-		case 'A': {
-			struct bv_adc_state adc;
-			if (!bv_adc_state_get(&adc, qg_legacy_view_bv_const(v)))
-				return 0;
-			adc.draw = !adc.draw;
-			bv_adc_state_set(qg_legacy_view_bv(v), &adc);
-			return 1;
-		}
-		case 'M': {
-			struct bv_axes_state axes;
-			if (!bv_model_axes_state_get(&axes, qg_legacy_view_bv_const(v)))
-				return 0;
-			axes.draw = !axes.draw;
-			bv_model_axes_state_set(qg_legacy_view_bv(v), &axes);
-			return 1;
-		}
-		case 'V': {
-			struct bv_axes_state axes;
-			if (!bv_view_axes_state_get(&axes, qg_legacy_view_bv_const(v)))
-				return 0;
-			axes.draw = !axes.draw;
-			bv_view_axes_state_set(qg_legacy_view_bv(v), &axes);
-			return 1;
-		}
-		case '2': {
-				return qgcanvasinput_set_aet(v, "35 -25 0");
-			}
-		case '3': {
-				return qgcanvasinput_set_aet(v, "35 25 0");
-			}
-		case '4': {
-				return qgcanvasinput_set_aet(v, "45 45 0");
-			}
-		case '5': {
-				return qgcanvasinput_set_aet(v, "145 25 0");
-			}
-		case '6': {
-				return qgcanvasinput_set_aet(v, "215 25 0");
-			}
-		case '7': {
-				return qgcanvasinput_set_aet(v, "325 25 0");
-			}
-		case 'F': {
-				return qgcanvasinput_set_aet(v, "0 0 0");
-			}
-		case 'T': {
-				return qgcanvasinput_set_aet(v, "270 90 0");
-			}
-		case 'B': {
-				return qgcanvasinput_set_aet(v, "270 -90 0");
-			}
-		case 'L': {
-				return qgcanvasinput_set_aet(v, "90 0 0");
-			}
-		case 'R': {
-				if (k->modifiers().testFlag(Qt::ShiftModifier) == true) {
-					return qgcanvasinput_set_aet(v, "180 0 0");
-				}
-				return qgcanvasinput_set_aet(v, "270 0 0");
-			}
-		default:
-			break;
-	}
+    if (!v || !aet_string)
 	return 0;
+    vect_t aet_vec;
+    bn_decode_vect(aet_vec, aet_string);
+    (void)bv_aet_set(qg_legacy_view_bv(v), aet_vec);
+    (void)bv_context_update(qg_legacy_view_context(v), BV_CONTEXT_CHANGED_VIEW);
+    return 1;
 }
 
-int
-QgCanvasInput::mousePressEvent(qg_legacy_view *v, int UNUSED(x_prev),
-                               int UNUSED(y_prev), QMouseEvent *e)
+static unsigned int
+qgcanvasinput_modifiers(Qt::KeyboardModifiers modifiers)
 {
-	QTCAD_EVENT("mousePress", 1);
-
-	if (!v)
-		return 0;
-
-	// If we're intending the mouse motion to do the work,
-	// then the press has to be a no-op.  If we're going
-	// to do configurable key bindings, this will take some
-	// thought - if we want unmodded left button to be a
-	// rotation, and Ctrl+Left to do something else, these
-	// checks are all going to have to be exact-flag-combo-only
-	// actions.
-	if (e->modifiers()) {
-		return 0;
-	}
-
-	if (e->buttons().testFlag(Qt::LeftButton)) {
-		//bu_log("Press Left\n");
-	}
-	if (e->buttons().testFlag(Qt::RightButton)) {
-		//bu_log("Press Right\n");
-	}
-	if (e->buttons().testFlag(Qt::MiddleButton)) {
-		//bu_log("Press Middle\n");
-	}
-
-	return 0;
+    unsigned int result = BRLOBOL_INPUT_MOD_NONE;
+    if (modifiers.testFlag(Qt::ShiftModifier))
+	result |= BRLOBOL_INPUT_MOD_SHIFT;
+    if (modifiers.testFlag(Qt::ControlModifier))
+	result |= BRLOBOL_INPUT_MOD_CONTROL;
+    if (modifiers.testFlag(Qt::AltModifier))
+	result |= BRLOBOL_INPUT_MOD_ALT;
+    if (modifiers.testFlag(Qt::MetaModifier))
+	result |= BRLOBOL_INPUT_MOD_META;
+    return result;
 }
 
-int
-QgCanvasInput::mouseReleaseEvent(qg_legacy_view *v, double x_press,
-                                 double y_press, int UNUSED(x_prev),
-                                 int UNUSED(y_prev), QMouseEvent *e, int mode)
+static int
+qgcanvasinput_button(Qt::MouseButton button)
 {
-	QTCAD_EVENT("mouseRelease", 1);
+    switch (button) {
+	case Qt::LeftButton:
+	    return 0;
+	case Qt::MiddleButton:
+	    return 1;
+	case Qt::RightButton:
+	    return 2;
+	default:
+	    return BRLOBOL_INPUT_ANY;
+    }
+}
 
-	if (!v)
-		return 0;
+static unsigned int
+qgcanvasinput_buttons(Qt::MouseButtons buttons)
+{
+    unsigned int result = 0;
+    if (buttons.testFlag(Qt::LeftButton))
+	result |= 1u << 0;
+    if (buttons.testFlag(Qt::MiddleButton))
+	result |= 1u << 1;
+    if (buttons.testFlag(Qt::RightButton))
+	result |= 1u << 2;
+    return result;
+}
 
-	m->drag_update_ts.erase(v);
-
-	// If we're intending the mouse motion to do the work,
-	// then the release has to be a no-op.  If we're going
-	// to do configurable key bindings, this will take some
-	// thought - if we want unmodded left button to be a
-	// rotation, and Ctrl+Left to do something else, these
-	// checks are all going to have to be exact-flag-combo-only
-	// actions.
-	if (e->modifiers()) {
-		return 0;
-	}
-	if (e->buttons().testFlag(Qt::LeftButton) || e->buttons().testFlag(Qt::RightButton)) {
-		return 0;
-	}
-
-	double cx, cy;
+static void
+qgcanvasinput_position(const QMouseEvent *event, int &x, int &y)
+{
+    if (!event) {
+	x = 0;
+	y = 0;
+	return;
+    }
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	cx = (double)e->x();
-	cy = (double)e->y();
+    x = event->x();
+    y = event->y();
 #else
-	cx = e->position().x();
-	cy = e->position().y();
+    x = static_cast<int>(event->position().x());
+    y = static_cast<int>(event->position().y());
 #endif
-	if ((fabs(cx - x_press) > 10) || (fabs(cy - y_press) > 10))
+}
+
+QgCanvasInput::QgCanvasInput() :
+    m(new Impl)
+{
+    m->context.setProfile(&BRLObolInputContext::defaultViewProfile());
+    m->context.setActionHandler(QgCanvasInput::actionDispatch, this);
+}
+
+QgCanvasInput::~QgCanvasInput()
+{
+	this->setEndpoint(NULL);
+    delete m;
+}
+
+void
+QgCanvasInput::setEndpoint(brlobol_display_endpoint_t *endpoint)
+{
+    if (!m || m->endpoint == endpoint)
+	return;
+    if (m->endpoint)
+	(void)brlobol_display_endpoint_input_action_handler_clear_if(
+	    m->endpoint, QgCanvasInput::actionDispatch, this);
+    m->endpoint = endpoint;
+    if (!m->endpoint)
+	return;
+    (void)brlobol_display_endpoint_input_profile_set(m->endpoint,
+	brlobol_input_default_view_profile());
+    (void)brlobol_display_endpoint_input_action_handler_set(m->endpoint,
+	QgCanvasInput::actionDispatch, this);
+}
+
+int
+QgCanvasInput::actionDispatch(void *userData, BRLObolInputAction action,
+	const BRLObolInputEvent *event)
+{
+    QgCanvasInput *input = static_cast<QgCanvasInput *>(userData);
+    return input ? input->applyAction(action, event) : -1;
+}
+
+int
+QgCanvasInput::applyAction(BRLObolInputAction action,
+	const BRLObolInputEvent *event)
+{
+    if (!m || !m->dispatch_view || !event)
+	return 0;
+    qg_legacy_view *view = m->dispatch_view;
+
+    switch (action) {
+	case BRLOBOL_ACTION_TOGGLE_ADC: {
+	    struct bv_adc_state adc;
+	    if (!bv_adc_state_get(&adc, qg_legacy_view_bv_const(view)))
 		return 0;
-
-	int dx = 1;
-	int dy = 1;
-	unsigned long long view_flags = BV_ADJUST_IDLE;
-
-	if (e->button() == Qt::LeftButton) {
-		//bu_log("Release Left\n");
-		if (mode != BV_ADJUST_CENTER) {
-			view_flags = BV_ADJUST_SCALE;
-			dx = 10;
-			dy = 5;
-		}
-		else {
-			view_flags = BV_ADJUST_CENTER;
-			dx = (int)cx;
-			dy = (int)cy;
-		}
+	    adc.draw = !adc.draw;
+	    bv_adc_state_set(qg_legacy_view_bv(view), &adc);
+	    return 1;
 	}
-	if (e->button() == Qt::RightButton) {
-		//bu_log("Release Right\n");
-		if (mode == BV_ADJUST_CENTER)
-			return 0;
-		view_flags = BV_ADJUST_SCALE;
+	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES: {
+	    struct bv_axes_state axes;
+	    if (!bv_model_axes_state_get(&axes,
+		qg_legacy_view_bv_const(view)))
+		return 0;
+	    axes.draw = !axes.draw;
+	    bv_model_axes_state_set(qg_legacy_view_bv(view), &axes);
+	    return 1;
+	}
+	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES: {
+	    struct bv_axes_state axes;
+	    if (!bv_view_axes_state_get(&axes,
+		qg_legacy_view_bv_const(view)))
+		return 0;
+	    axes.draw = !axes.draw;
+	    bv_view_axes_state_set(qg_legacy_view_bv(view), &axes);
+	    return 1;
+	}
+	case BRLOBOL_ACTION_VIEW_2:
+	    return qgcanvasinput_set_aet(view, "35 -25 0");
+	case BRLOBOL_ACTION_VIEW_3:
+	    return qgcanvasinput_set_aet(view, "35 25 0");
+	case BRLOBOL_ACTION_VIEW_4:
+	    return qgcanvasinput_set_aet(view, "45 45 0");
+	case BRLOBOL_ACTION_VIEW_5:
+	    return qgcanvasinput_set_aet(view, "145 25 0");
+	case BRLOBOL_ACTION_VIEW_6:
+	    return qgcanvasinput_set_aet(view, "215 25 0");
+	case BRLOBOL_ACTION_VIEW_7:
+	    return qgcanvasinput_set_aet(view, "325 25 0");
+	case BRLOBOL_ACTION_VIEW_FRONT:
+	    return qgcanvasinput_set_aet(view, "0 0 0");
+	case BRLOBOL_ACTION_VIEW_TOP:
+	    return qgcanvasinput_set_aet(view, "270 90 0");
+	case BRLOBOL_ACTION_VIEW_BOTTOM:
+	    return qgcanvasinput_set_aet(view, "270 -90 0");
+	case BRLOBOL_ACTION_VIEW_LEFT:
+	    return qgcanvasinput_set_aet(view, "90 0 0");
+	case BRLOBOL_ACTION_VIEW_REAR:
+	    return qgcanvasinput_set_aet(view, "180 0 0");
+	case BRLOBOL_ACTION_VIEW_RIGHT:
+	    return qgcanvasinput_set_aet(view, "270 0 0");
+	case BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE:
+	case BRLOBOL_ACTION_VIEW_SECONDARY_RELEASE:
+	case BRLOBOL_ACTION_VIEW_CENTER_RELEASE: {
+	    if (event->buttons ||
+	std::fabs(static_cast<double>(event->x) - m->press_x) > 10.0 ||
+	std::fabs(static_cast<double>(event->y) - m->press_y) > 10.0)
+		return 0;
+	    int dx = 1;
+	    int dy = 1;
+	    unsigned long long viewFlags = BV_ADJUST_IDLE;
+	    if (action == BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE) {
+		if (m->mouse_mode == BV_ADJUST_CENTER) {
+		    viewFlags = BV_ADJUST_CENTER;
+		    dx = event->x;
+		    dy = event->y;
+		} else {
+		    viewFlags = BV_ADJUST_SCALE;
+		    dx = 10;
+		    dy = 5;
+		}
+	    } else if (action == BRLOBOL_ACTION_VIEW_SECONDARY_RELEASE) {
+		if (m->mouse_mode == BV_ADJUST_CENTER)
+		    return 0;
+		viewFlags = BV_ADJUST_SCALE;
 		dx = 1;
 		dy = 2;
+	    } else {
+		viewFlags = BV_ADJUST_CENTER;
+		dx = event->x;
+		dy = event->y;
+	    }
+	    point_t keypt = VINIT_ZERO;
+	    return bv_adjust(qg_legacy_view_bv(view), dx, dy, keypt, 0,
+		viewFlags);
 	}
-
-	if (e->button() == Qt::MiddleButton) {
-		//bu_log("Release Center\n");
-		view_flags = BV_ADJUST_CENTER;
-		dx = (int)cx;
-		dy = (int)cy;
+	case BRLOBOL_ACTION_VIEW_ROTATE:
+	case BRLOBOL_ACTION_VIEW_PAN:
+	case BRLOBOL_ACTION_VIEW_ZOOM:
+	case BRLOBOL_ACTION_VIEW_ADJUST: {
+	    if (event->type == BRLOBOL_INPUT_WHEEL) {
+		const int dx = 100 + event->wheelDelta;
+		point_t origin = VINIT_ZERO;
+		return bv_adjust(qg_legacy_view_bv(view), dx, 100, origin, 0,
+		    BV_ADJUST_SCALE);
+	    }
+	    unsigned long long viewFlags = BV_ADJUST_SCALE;
+	    if (action == BRLOBOL_ACTION_VIEW_ROTATE)
+		viewFlags = BV_ADJUST_ROT;
+	    else if (action == BRLOBOL_ACTION_VIEW_PAN)
+		viewFlags = BV_ADJUST_TRANS;
+	    else if (action == BRLOBOL_ACTION_VIEW_ADJUST) {
+		viewFlags = m->mouse_mode;
+		if (viewFlags == BV_ADJUST_CENTER)
+		    viewFlags = BV_ADJUST_SCALE;
+	    }
+	    int dx = event->dx;
+	    int dy = event->dy;
+	    if (viewFlags == BV_ADJUST_SCALE) {
+		const int mdelta = std::abs(dx) > std::abs(dy) ? dx : -dy;
+		const int height = std::max(1, bv_height_get(
+		    qg_legacy_view_bv_const(view)));
+		const int factor = static_cast<int>(200.0 * std::abs(mdelta) /
+		    static_cast<double>(height));
+		dy = mdelta > 0 ? 101 + factor : 99 - factor;
+		dx = 100;
+	    }
+	    point_t center;
+	    mat_t viewCenter;
+	    bv_center_mat_get(viewCenter, qg_legacy_view_bv_const(view));
+	    MAT_DELTAS_GET_NEG(center, viewCenter);
+	    return bv_adjust(qg_legacy_view_bv(view), dx, dy, center, 0,
+		viewFlags);
 	}
-
-	point_t keypt = VINIT_ZERO;
-	return bv_adjust(qg_legacy_view_bv(v), dx, dy, keypt, 0, view_flags);
+	default:
+	    return 0;
+    }
 }
 
 int
-QgCanvasInput::mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
-                              QMouseEvent *e, int mode)
+QgCanvasInput::keyPressEvent(qg_legacy_view *view, int UNUSED(x_prev),
+	int UNUSED(y_prev), QKeyEvent *event)
 {
-	QTCAD_EVENT("mouseMove", 2);
-
-	if (!v)
-		return 0;
-
-	unsigned long long view_flags = BV_ADJUST_IDLE;
-
-	if (x_prev == -INT_MAX) {
-		//x_prev = e->x();
-		//y_prev = e->y();
-		return 0;
-	}
-
-	view_flags = mode;
-	if (mode == BV_ADJUST_CENTER)
-		view_flags = BV_ADJUST_SCALE;
-
-	if (e->buttons().testFlag(Qt::LeftButton)) {
-		//bu_log("Left\n");
-
-		if (e->modifiers().testFlag(Qt::ControlModifier)) {
-			//bu_log("Ctrl+Left\n");
-			view_flags = BV_ADJUST_ROT;
-		}
-
-		if (e->modifiers().testFlag(Qt::ShiftModifier)) {
-			//bu_log("Shift+Left\n");
-			view_flags = BV_ADJUST_TRANS;
-		}
-
-		if (e->modifiers().testFlag(Qt::ShiftModifier) && e->modifiers().testFlag(Qt::ControlModifier)) {
-			//bu_log("Ctrl+Shift+Left\n");
-			view_flags = BV_ADJUST_SCALE;
-		}
-	}
-
-	if (e->buttons().testFlag(Qt::MiddleButton)) {
-		//bu_log("Middle\n");
-	}
-
-	if (e->buttons().testFlag(Qt::RightButton)) {
-		//bu_log("Right\n");
-	}
-
-	if (!e->buttons().testFlag(Qt::LeftButton))
-		return 0;
-
-	long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-	                           std::chrono::steady_clock::now().time_since_epoch()).count();
-	auto ts_it = m->drag_update_ts.find(v);
-	if (ts_it != m->drag_update_ts.end() && (now_ms - ts_it->second) < s_drag_update_interval_ms)
-		return -1;
-	m->drag_update_ts[v] = now_ms;
-
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	int dx = e->x() - x_prev;
-	int dy = e->y() - y_prev;
-#else
-	int dx = e->position().x() - x_prev;
-	int dy = e->position().y() - y_prev;
-#endif
-
-	if (view_flags == BV_ADJUST_SCALE) {
-		// Build in some sensitivity to how much the mouse moved when doing
-		// a motion based scale
-		int mdelta = (abs(dx) > abs(dy)) ? dx : -dy;
-		int f = (int)(2*100*(double)abs(mdelta) /
-			(double)bv_height_get(qg_legacy_view_bv_const(v)));
-
-		if (mdelta > 0) {
-			dy = 101 + f;
-			dx = 100;
-		}
-		else {
-			dy = 99 - f;
-			dx = 100;
-		}
-	}
-
-
-	// TODO - the key point and the mode/flags are all hardcoded
-	// right now, but eventually for shift grips they will need to
-	// respond to the various mod keys.  The intent is to set flags
-	// based on which mod keys are set to allow bv_adjust to
-	// do the correct math.
-	point_t center;
-	mat_t view_center;
-	bv_center_mat_get(view_center, qg_legacy_view_bv_const(v));
-	MAT_DELTAS_GET_NEG(center, view_center);
-
-	return bv_adjust(qg_legacy_view_bv(v), dx, dy, center, 0, view_flags);
+    QTCAD_EVENT("keyPress", 1);
+    if (!view || !event)
+	return 0;
+    BRLObolInputEvent input;
+    input.type = BRLOBOL_INPUT_KEY_PRESS;
+    input.key = event->key();
+    input.modifiers = qgcanvasinput_modifiers(event->modifiers());
+    m->dispatch_view = view;
+    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+	m->endpoint, &input) : m->context.dispatch(&input);
+    m->dispatch_view = NULL;
+    return ret;
 }
 
 int
-QgCanvasInput::wheelEvent(qg_legacy_view *v, QWheelEvent *e)
+QgCanvasInput::mousePressEvent(qg_legacy_view *view, int UNUSED(x_prev),
+	int UNUSED(y_prev), QMouseEvent *event)
 {
-	QTCAD_EVENT("mouseWheel", 1);
+    QTCAD_EVENT("mousePress", 1);
+    if (!view || !event)
+	return 0;
+    BRLObolInputEvent input;
+    input.type = BRLOBOL_INPUT_POINTER_PRESS;
+    qgcanvasinput_position(event, input.x, input.y);
+    input.button = qgcanvasinput_button(event->button());
+    input.buttons = qgcanvasinput_buttons(event->buttons());
+    input.modifiers = qgcanvasinput_modifiers(event->modifiers());
+    m->dispatch_view = view;
+    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+	m->endpoint, &input) : m->context.dispatch(&input);
+    m->dispatch_view = NULL;
+    return ret;
+}
 
-	if (!v)
-		return 0;
+int
+QgCanvasInput::mouseReleaseEvent(qg_legacy_view *view, double x_press,
+	double y_press, int UNUSED(x_prev), int UNUSED(y_prev), QMouseEvent *event,
+	int mode)
+{
+    QTCAD_EVENT("mouseRelease", 1);
+    if (!view || !event)
+	return 0;
+    m->drag_update_ts.erase(view);
 
-	QPoint delta = e->angleDelta();
-	int mdelta = -1 * delta.y() / 8;
+    BRLObolInputEvent input;
+    input.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    qgcanvasinput_position(event, input.x, input.y);
+    input.button = qgcanvasinput_button(event->button());
+    input.buttons = qgcanvasinput_buttons(event->buttons());
+    input.modifiers = qgcanvasinput_modifiers(event->modifiers());
+    m->dispatch_view = view;
+    m->press_x = x_press;
+    m->press_y = y_press;
+    m->mouse_mode = mode;
+    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+	m->endpoint, &input) : m->context.dispatch(&input);
+    m->dispatch_view = NULL;
+    return ret;
+}
 
-	int dx = 100 + mdelta;
-	int dy = 100;
+int
+QgCanvasInput::mouseMoveEvent(qg_legacy_view *view, int x_prev, int y_prev,
+	QMouseEvent *event, int mode)
+{
+    QTCAD_EVENT("mouseMove", 2);
+    if (!view || !event || x_prev == -INT_MAX ||
+	!event->buttons().testFlag(Qt::LeftButton))
+	return 0;
 
-	point_t origin = VINIT_ZERO;
-	return bv_adjust(qg_legacy_view_bv(v), dx, dy, origin, 0, BV_ADJUST_SCALE);
+    const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+	std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto previous = m->drag_update_ts.find(view);
+    if (previous != m->drag_update_ts.end() && now - previous->second <
+	s_drag_update_interval_ms)
+	return -1;
+    m->drag_update_ts[view] = now;
+
+    BRLObolInputEvent input;
+    input.type = BRLOBOL_INPUT_POINTER_MOTION;
+    qgcanvasinput_position(event, input.x, input.y);
+    input.dx = input.x - x_prev;
+    input.dy = input.y - y_prev;
+    input.button = 0;
+    input.buttons = qgcanvasinput_buttons(event->buttons());
+    input.modifiers = qgcanvasinput_modifiers(event->modifiers());
+    m->dispatch_view = view;
+    m->mouse_mode = mode;
+    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+	m->endpoint, &input) : m->context.dispatch(&input);
+    m->dispatch_view = NULL;
+    return ret;
+}
+
+int
+QgCanvasInput::wheelEvent(qg_legacy_view *view, QWheelEvent *event)
+{
+    QTCAD_EVENT("mouseWheel", 1);
+    if (!view || !event)
+	return 0;
+    BRLObolInputEvent input;
+    input.type = BRLOBOL_INPUT_WHEEL;
+    input.wheelDelta = -event->angleDelta().y() / 8;
+    input.modifiers = qgcanvasinput_modifiers(event->modifiers());
+    m->dispatch_view = view;
+    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+	m->endpoint, &input) : m->context.dispatch(&input);
+    m->dispatch_view = NULL;
+    return ret;
 }
 
 // Local Variables:
@@ -371,4 +405,3 @@ QgCanvasInput::wheelEvent(qg_legacy_view *v, QWheelEvent *e)
 // indent-tabs-mode: t
 // c-file-style: "stroustrup"
 // End:
-// ex: shiftwidth=4 tabstop=8

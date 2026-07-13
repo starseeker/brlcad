@@ -81,6 +81,7 @@ struct progressive_lod_case {
     int startupWireLod;
     int shadedLod;
     int slowLodDelays;
+    int diagnosticStages;
     int startupExpandPasses;
 };
 
@@ -167,6 +168,7 @@ phase_logging_enabled(const struct progressive_lod_case &testCase)
     const char *env = getenv("QTCAD_OBOL_PROGRESSIVE_LOD_PHASE_LOG");
     return testCase.startupOnly || testCase.startupRefine ||
 	   testCase.startupWireLod || testCase.shadedLod ||
+	   testCase.diagnosticStages ||
 	   (env && BU_STR_EQUAL(env, "1"));
 }
 
@@ -306,12 +308,14 @@ qtcad_obol_scene_realized_database_geometry_count(SoBRLSceneController *scene)
 	return 0;
 
     const int sourceCount = scene->getDatabaseSourceCount();
-    for (int i = 0; i < sourceCount; i++) {
-	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
-	if (!source)
-	    continue;
-	count += source->getRealizedShapeCount();
-	count += source->getRealizedMeshCount();
+	for (int i = 0; i < sourceCount; i++) {
+	    SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+	    if (!source)
+		continue;
+	    if (source->hasRealizedWireGeometry())
+		count++;
+	    if (source->hasRealizedMeshGeometry())
+		count++;
     }
 
     return count;
@@ -755,41 +759,6 @@ image_byte_diff(const QImage &a, const QImage &b)
     return diff;
 }
 
-static SoBRLMeshShape *
-first_realized_mesh_in_node(SoNode *node)
-{
-    if (!node)
-	return NULL;
-
-    if (node->isOfType(SoBRLMeshShape::getClassTypeId()))
-	return static_cast<SoBRLMeshShape *>(node);
-
-    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
-	SoBRLDatabaseSource *source =
-	    static_cast<SoBRLDatabaseSource *>(node);
-	if (SoBRLMeshShape *mesh = source->getRealizedMesh())
-	    return mesh;
-    }
-
-    if (node->isOfType(SoGroup::getClassTypeId())) {
-	SoGroup *group = static_cast<SoGroup *>(node);
-	for (int i = 0; i < group->getNumChildren(); i++) {
-	    SoBRLMeshShape *mesh = first_realized_mesh_in_node(
-		group->getChild(i));
-	    if (mesh)
-		return mesh;
-	}
-    }
-    return NULL;
-}
-
-static SoBRLMeshShape *
-first_realized_mesh(BRLObolViewController *controller)
-{
-    return controller ?
-	first_realized_mesh_in_node(controller->getRenderSceneRoot()) : NULL;
-}
-
 static int
 accumulate_realized_mesh_count(SoNode *node)
 {
@@ -804,6 +773,18 @@ accumulate_realized_mesh_count(SoNode *node)
     if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
 	SoBRLDatabaseSource *source =
 	    static_cast<SoBRLDatabaseSource *>(node);
+	if (source->isCompactOccurrenceRegistry()) {
+	    int compactCount = 0;
+	    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+		BRLObolCompactInstanceHandle handle;
+		BRLObolCompactInstanceSummary summary;
+		if (source->getCompactInstanceHandle(i, handle) &&
+		    source->getCompactInstanceSummary(handle, summary) &&
+		    summary.valid && summary.meshGeometry)
+		    compactCount++;
+	    }
+	    return compactCount;
+	}
 	return source->getRealizedMeshCount();
     }
 
@@ -893,7 +874,6 @@ qtcad_obol_expansion_status_accumulate(
 static int
 process_until_proxy_kind(BRLObolViewController *controller,
 			 BRLObolLodService &service,
-			 const SoBRLMeshShape *mesh,
 			 int expected_kind,
 			 size_t min_active_payload_count,
 			 size_t &applied_total,
@@ -909,7 +889,6 @@ process_until_proxy_kind(BRLObolViewController *controller,
 		    label, controller->getLastLodDiagnostics().getString());
 	    return 0;
 	}
-	(void)mesh;
 	if (controller->getActiveLodProxyPayloadCount(expected_kind) >=
 	    min_active_payload_count)
 	    return 1;
@@ -933,7 +912,6 @@ process_until_proxy_kind(BRLObolViewController *controller,
 static int
 process_until_mesh(BRLObolViewController *controller,
 		   BRLObolLodService &service,
-		   const SoBRLMeshShape *mesh,
 		   size_t min_active_payload_count,
 		   size_t &applied_total,
 		   int timeout_ms)
@@ -947,7 +925,6 @@ process_until_mesh(BRLObolViewController *controller,
 		    controller->getLastLodDiagnostics().getString());
 	    return 0;
 	}
-	(void)mesh;
 	if (controller->getActiveLodMeshPayloadCount() >=
 	    min_active_payload_count)
 	    return 1;
@@ -1089,10 +1066,21 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     bu_dirclear(cache_dir);
     bu_mkdir(cache_dir);
     bu_setenv("BU_DIR_CACHE", cache_dir, 1);
-    set_default_env("BRLOBOL_LOD_OBB_TASK_DELAY_MS",
-		    testCase.slowLodDelays ? "350" : "0");
-    set_default_env("BRLOBOL_LOD_TASK_DELAY_MS",
-		    testCase.slowLodDelays ? "700" : "0");
+    /*
+     * Normal delivery coalesces completed stages so first presentation uses
+     * the best available payload.  Delays are exclusively for the explicit
+     * diagnostic test that verifies each publication boundary.
+     */
+    if (testCase.diagnosticStages) {
+	/* An explicit diagnostic request must be independent of its caller. */
+	bu_setenv("BRLOBOL_LOD_OBB_TASK_DELAY_MS",
+		  testCase.slowLodDelays ? "350" : "75", 1);
+	bu_setenv("BRLOBOL_LOD_TASK_DELAY_MS",
+		  testCase.slowLodDelays ? "700" : "150", 1);
+    } else {
+	set_default_env("BRLOBOL_LOD_OBB_TASK_DELAY_MS", "0");
+	set_default_env("BRLOBOL_LOD_TASK_DELAY_MS", "0");
+    }
 
     phase_start = bu_gettime();
     bu_file_delete(tmp_db.c_str());
@@ -1796,13 +1784,12 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     record_progressive_lod_phase(timings.serviceStartSeconds, phase_start,
 				 total_start, testCase, "service_start");
 
-    SoBRLMeshShape *mesh = first_realized_mesh(controller);
-    if (!mesh) {
-	fprintf(stderr, "qtcad Obol progressive LoD could not find realized mesh\n");
+    int source_mesh_count = realized_mesh_count(controller);
+    if (source_mesh_count <= 0) {
+	fprintf(stderr, "qtcad Obol progressive LoD could not find realized mesh geometry\n");
 	cleanup();
 	return 0;
-    }
-    int source_mesh_count = realized_mesh_count(controller);
+	}
 
     int64_t submit_start = bu_gettime();
     int submitted = controller->submitLodRequestsIfNeeded();
@@ -1842,35 +1829,45 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     }
 
     size_t applied_total = 0;
-    if (!process_until_proxy_kind(controller, service, mesh,
-				  BRLOBOL_LOD_PROXY_AABB, testCase.minActivePayloadCount, applied_total,
-				  testCase.aabbTimeoutMs, "AABB")) {
-	cleanup();
-	return 0;
-    }
-    record_progressive_lod_phase(timings.aabbSeconds, submit_start,
-				 total_start, testCase, "aabb");
-    size_t active_aabb_payload_count =
-	controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_AABB);
+    size_t active_aabb_payload_count = 0;
+    size_t active_obb_payload_count = 0;
     QImage frame1;
-    view.get_viewport_image(frame1);
-
-    if (!process_until_proxy_kind(controller, service, mesh,
-				  BRLOBOL_LOD_PROXY_OBB, testCase.minActivePayloadCount, applied_total,
-				  testCase.obbTimeoutMs, "OBB")) {
-	cleanup();
-	return 0;
-    }
-    record_progressive_lod_phase(timings.obbSeconds, submit_start,
-				 total_start, testCase, "obb");
-    size_t active_obb_payload_count =
-	controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_OBB);
     QImage frame2;
-    view.get_viewport_image(frame2);
+    if (testCase.diagnosticStages) {
+	if (!process_until_proxy_kind(controller, service,
+			      BRLOBOL_LOD_PROXY_AABB,
+			      testCase.minActivePayloadCount, applied_total,
+			      testCase.aabbTimeoutMs, "AABB")) {
+	    cleanup();
+	    return 0;
+	}
+	record_progressive_lod_phase(timings.aabbSeconds, submit_start,
+				     total_start, testCase, "aabb");
+	active_aabb_payload_count =
+	    controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_AABB);
+	view.get_viewport_image(frame1);
 
-    if (!process_until_mesh(controller, service, mesh,
-			    testCase.minActivePayloadCount, applied_total,
-			    testCase.meshTimeoutMs)) {
+	if (!process_until_proxy_kind(controller, service,
+			      BRLOBOL_LOD_PROXY_OBB,
+			      testCase.minActivePayloadCount, applied_total,
+			      testCase.obbTimeoutMs, "OBB")) {
+	    cleanup();
+	    return 0;
+	}
+	record_progressive_lod_phase(timings.obbSeconds, submit_start,
+				     total_start, testCase, "obb");
+	active_obb_payload_count =
+	    controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_OBB);
+	view.get_viewport_image(frame2);
+    } else {
+	/* Coalesced delivery need not expose transient proxy stages. */
+	frame1 = frame0;
+	frame2 = frame0;
+    }
+
+	if (!process_until_mesh(controller, service,
+				testCase.minActivePayloadCount, applied_total,
+				testCase.meshTimeoutMs)) {
 	cleanup();
 	return 0;
     }
@@ -2055,6 +2052,7 @@ main(int argc, char **argv)
     testCase.startupWireLod = 0;
     testCase.shadedLod = 0;
     testCase.slowLodDelays = 0;
+    testCase.diagnosticStages = 0;
     testCase.startupExpandPasses = 1;
 
     if (argc == 2) {
@@ -2065,6 +2063,11 @@ main(int argc, char **argv)
 	while (arg < argc && argv[arg] && argv[arg][0] == '-') {
 	    if (BU_STR_EQUAL(argv[arg], "--slow")) {
 		slow = 1;
+		arg++;
+		continue;
+	    }
+	    if (BU_STR_EQUAL(argv[arg], "--diagnostic-stages")) {
+		testCase.diagnosticStages = 1;
 		arg++;
 		continue;
 	    }
@@ -2129,7 +2132,7 @@ main(int argc, char **argv)
 	}
 
 	if (argc - arg < 4 || argc - arg > 7)
-	    FAIL("usage: test_qtcad_obol_progressive_lod <moss.g> OR test_qtcad_obol_progressive_lod [--slow] [--startup-only|--startup-refine|--startup-expand|--startup-auto-expand|--startup-wire-lod] [--shaded-lod] [--startup-expand-passes N] <db> <facetize-root|-> <draw-target> <facetize|direct> [min-visited] [min-active-payloads] [copy-count]");
+	    FAIL("usage: test_qtcad_obol_progressive_lod <moss.g> OR test_qtcad_obol_progressive_lod [--slow] [--diagnostic-stages] [--startup-only|--startup-refine|--startup-expand|--startup-auto-expand|--startup-wire-lod] [--shaded-lod] [--startup-expand-passes N] <db> <facetize-root|-> <draw-target> <facetize|direct> [min-visited] [min-active-payloads] [copy-count]");
 
 	if (testCase.startupOnly)
 	    testCase.name = "startup";
@@ -2168,6 +2171,7 @@ main(int argc, char **argv)
 				 arg < argc ? argv[arg++] : NULL, 1);
 	if (slow) {
 	    testCase.slowLodDelays = 1;
+	    testCase.diagnosticStages = 1;
 	    testCase.aabbTimeoutMs = 30000;
 	    testCase.obbTimeoutMs = 45000;
 	    testCase.meshTimeoutMs = 90000;

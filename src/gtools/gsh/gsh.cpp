@@ -38,8 +38,6 @@
 
 #include "brlcad_ident.h"
 #include "brlobol/init.h"
-#include "brlobol/scene_group.h"
-#include "brlobol/view_controller.h"
 #include "bv.h"
 #include "bu.h"
 #include "imgstream/fbserv.h"
@@ -242,7 +240,6 @@ public:
     DisplayHash prev_hash;
 
     struct ged *gedp;
-    BRLObolViewController *view_controller = NULL;
     std::string gfile;  // Mostly used to test the post_opendb callback
     bool qged_display_mode = false;  // Set if we're testing QGED style commands
 private:
@@ -271,11 +268,7 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
     s->gfile = std::string(s->gedp->dbip->dbi_filename);
 
     void *view_ctx = ged_view_active_ctx(s->gedp);
-    if (!view_ctx || !s->view_controller ||
-	    !ged_draw_obol_controller_attach_opaque(s->gedp,
-		s->view_controller, 0) ||
-	    !ged_draw_obol_controller_attach_opaque_for_view(s->gedp,
-		view_ctx, s->view_controller, 0) ||
+    if (!view_ctx ||
 	    !ged_draw_obol_render_endpoint_ensure_for_view(s->gedp,
 		view_ctx, 0) ||
 	    ged_draw_obol_framebuffer_backend_ensure_for_view(s->gedp,
@@ -387,7 +380,11 @@ GshState::GshState()
     brlobol_init(brlobol_headless_context_manager());
     BU_GET(gedp, struct ged);
     ged_init(gedp);
-    view_controller = new BRLObolViewController(new SoBRLSceneGroup);
+
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx ||
+	!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 0))
+	bu_log("gsh: unable to create the headless Obol display endpoint\n");
 
     view_checkpoint();
 
@@ -419,11 +416,6 @@ GshState::~GshState()
 
     if (gedp && gedp->ged_fbs && fbs_can_close(gedp->ged_fbs))
 	(void)fbs_close(gedp->ged_fbs);
-
-    if (gedp && view_controller)
-	ged_draw_obol_controller_detach_opaque(gedp, view_controller);
-    delete view_controller;
-    view_controller = NULL;
 
     ged_close(gedp);
 }

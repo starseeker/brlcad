@@ -36,6 +36,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 
+#include "brlobol/input.h"
 #include "qtcad/QgLegacyView.h"
 
 /**
@@ -50,6 +51,7 @@ class QgCanvasInput {
 public:
 	QgCanvasInput();
 	~QgCanvasInput();
+	void setEndpoint(struct brlobol_display_endpoint *endpoint);
 
 	int keyPressEvent(qg_legacy_view *v, int x_prev, int y_prev,
 	                  QKeyEvent *k);
@@ -67,6 +69,10 @@ public:
 
 private:
 	struct Impl;
+	static int actionDispatch(void *userData, BRLObolInputAction action,
+		const BRLObolInputEvent *event);
+	int applyAction(BRLObolInputAction action,
+		const BRLObolInputEvent *event);
 
 	Impl *m = nullptr;
 	static const long long s_drag_update_interval_ms = 16;

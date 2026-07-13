@@ -10,6 +10,7 @@
 #define BRLOBOL_WINDOW_HOST_H
 
 #include "brlobol/defines.h"
+#include "brlobol/input.h"
 
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbString.h>
@@ -54,57 +55,6 @@ struct BRLOBOL_EXPORT BRLObolWindowDesc {
     SbString display;
     SbString nativeIdHint;
     SbBool visible;
-};
-
-enum BRLObolInputEventType {
-    BRLOBOL_INPUT_NONE = 0,
-    BRLOBOL_INPUT_KEY = 1,
-    BRLOBOL_INPUT_POINTER = 2,
-    BRLOBOL_INPUT_WHEEL = 3,
-    BRLOBOL_INPUT_RESIZE = 4,
-    BRLOBOL_INPUT_FOCUS = 5,
-    BRLOBOL_INPUT_CLOSE = 6,
-    BRLOBOL_INPUT_EXPOSE = 7
-};
-
-enum BRLObolInputAction {
-    BRLOBOL_ACTION_NONE = 0,
-    BRLOBOL_ACTION_VIEW_ROTATE = 1,
-    BRLOBOL_ACTION_VIEW_PAN = 2,
-    BRLOBOL_ACTION_VIEW_ZOOM = 3,
-    BRLOBOL_ACTION_VIEW_CENTER = 4,
-    BRLOBOL_ACTION_VIEW_FRONT = 5,
-    BRLOBOL_ACTION_VIEW_TOP = 6,
-    BRLOBOL_ACTION_APP_CANCEL = 7,
-    BRLOBOL_ACTION_APP_ACCEPT = 8
-};
-
-struct BRLOBOL_EXPORT BRLObolInputEvent {
-    BRLObolInputEventType type;
-    unsigned int timestamp;
-    int x;
-    int y;
-    int dx;
-    int dy;
-    int button;
-    int key;
-    unsigned int modifiers;
-    unsigned int width;
-    unsigned int height;
-};
-
-struct BRLOBOL_EXPORT BRLObolInputBinding {
-    BRLObolInputEventType eventType;
-    int key;
-    int button;
-    unsigned int modifiers;
-    BRLObolInputAction action;
-};
-
-struct BRLOBOL_EXPORT BRLObolInputProfile {
-    SbString name;
-    const BRLObolInputBinding *bindings;
-    size_t bindingCount;
 };
 
 struct BRLObolWindowHostPrivate;

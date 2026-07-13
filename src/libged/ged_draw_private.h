@@ -108,6 +108,7 @@ enum {
 struct ged_draw_obol_database_source_record {
     int valid;
     const char *database_path;
+    const char *source_path;
     const char *instance_key;
     const char *owner_group_path;
     int visible;
@@ -1481,10 +1482,10 @@ GED_EXPORT extern int ged_draw_obol_database_source_set_selected_for_instance_ke
 	struct ged *gedp,
 	const char *instance_key,
 	int selected);
-GED_EXPORT extern int ged_draw_obol_database_sources_set_selected_for_path(
+GED_EXPORT extern int ged_draw_obol_database_sources_sync_selected_paths(
 	struct ged *gedp,
-	const char *path,
-	int selected);
+	const char *const *paths,
+	size_t path_count);
 GED_EXPORT extern int ged_draw_obol_shape_update_display_for_path(
 	struct ged *gedp,
 	const char *path,

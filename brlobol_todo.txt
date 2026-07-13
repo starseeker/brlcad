@@ -1,7 +1,7 @@
 BRL-CAD Obol Drawing TODO
 =========================
 
-Last reviewed: 2026-07-11
+Last reviewed: 2026-07-12
 Branch: brlobol
 
 Purpose
@@ -36,6 +36,10 @@ Required Architecture
 * A GED view has one authoritative Obol scene and one display endpoint.
 * Geometry is source-local; instances supply placement and retain occurrence
   identity, material, visibility, selection, edit intent, and export metadata.
+* Normal eager wireframe, shaded, and hidden-line roots retain occurrences in
+  one compact libbrlobol registry/Obol assembly rather than one Coin node per
+  occurrence.  Stable handles and semantic paths address selection,
+  visibility, highlight, erase, redraw, picking, measurement, and export state.
 * Realized LoD is view-local.  Shared sources are not mutated for one view.
 * libbv owns passive view mechanics, not scene or display ownership.
 * libbrlobol owns BRL-CAD source realization, retained features, picking,
@@ -125,6 +129,14 @@ Priority 0: Display Endpoints and Host Factories
    application inventory and typed-property work;
    no application should create a parallel host for an endpoint-owned canvas.
 
+   GSH now asks its active GED view to create the headless endpoint and no
+   longer allocates, attaches, detaches, or deletes an application-owned view
+   controller.  Endpoint-hosted `QgView`, `QgGL`, and `QgSW` canvases likewise
+   begin controller-less and borrow the endpoint controller during host-factory
+   binding; only explicitly standalone canvas construction creates a private
+   controller.  Canvas detachment precedes endpoint destruction.  The pivot
+   guard enforces both ownership decisions.
+
    Preserve stream detachment, callback shutdown, and destruction order while
    replacing the transitional direct host binding with retained factory tokens.
    Mutable state is per endpoint; there must be no process-global active
@@ -149,6 +161,16 @@ Priority 0: Display Endpoints and Host Factories
    Qt software and system-GL factories now serve top-level and borrowed
    existing canvases; qged `QgView` uses the embedded mode.  Tk system-GL/Togl
    and software/TkPhoto factories serve top-level and embedded views directly.
+   Direct system-GL hosts bind their toolkit context manager to the
+   `SoGLRenderAction` cache context; they do not depend on Obol guessing GLX,
+   EGL, or platform-native current-context state.  Obol now resolves its early
+   core GL queries through that per-context manager before process-level
+   symbols, preventing OSMesa/system-GL dispatch mixing in qged.  The Havoc Qt
+   real-model test can exercise a native GL canvas and requires a material
+   empty-to-drawn framebuffer change, rather than accepting a lit background
+   as visible geometry.  TkPhoto and Togl smoke coverage now both pass under
+   Xvfb after classifying a null render-action context as on-screen rather than
+   OSMesa; retain platform-specific software-host validation below.
    Complete input/progressive callback coverage
    and stress simultaneous teardown with active frame and image-stream work.
    A visible open with no compatible host must fail cleanly.
@@ -158,10 +180,24 @@ Priority 0: Display Endpoints and Host Factories
 
 3. Adopt the bindings branch's semantic input model.
 
-   Port normalized events, binding contexts, and action dispatch so Tk and Qt
-   do not maintain separate hard-coded interaction profiles.  Keep action and
-   context ownership scoped to an application/endpoint rather than copying the
-   branch's process-global registries into the host ABI.
+   libbrlobol now provides typed normalized events, a standard view profile,
+   binding precedence, and endpoint-local profile/action contexts.  The
+   factory descriptor carries only a per-instance normalized-event dispatcher;
+   it does not carry a global action registry.  Qt canvas events dispatch
+   through the endpoint context while the existing per-canvas libbv actions
+   remain its installed handler.  Tk/X11 normalizes key, pointer, motion,
+   resize, focus, and expose events through the same dispatcher and requests a
+   frame only when an action is handled, preserving existing MGED native-event
+   behavior during migration.  Endpoint and factory tests verify handler and
+   profile isolation, and the Tk widget/MGED attach smoke tests cover the host
+   lifecycle.
+
+   Next, move MGED's camera, selection, edit, framebuffer, and faceplate
+   policies into explicit endpoint action handlers, then retire the matching
+   native interaction paths.  Add the equivalent Windows and macOS Tk event
+   adapters before advertising semantic input capability there.  Do not import
+   the bindings branch's process-global registries, JSON per-event processing,
+   or DM-context strings into the host ABI.
 
    Exit condition: Tk and Qt produce the same semantic camera, selection,
    edit, framebuffer, and faceplate actions from equivalent input.
@@ -210,6 +246,14 @@ Priority 0: Render Engines and Typed Policy
    the same registry at the owning boundary rather than adding toolkit-specific
    option parsers.  Obol depth cue is renderer-owned haze policy.  GED
    `dm get/set` no longer reads or mutates backend `bu_structparse` tables.
+
+   Toplevel title and visibility are now stable typed endpoint properties.
+   Optional versioned host-factory callbacks apply them in Qt and Tk, while
+   embedded/headless or older factories report `UNSUPPORTED` rather than
+   pretending to mutate application-owned windows.  Endpoint state is updated
+   only after native host success, and shorter factory descriptors remain
+   valid through `struct_size`.  Vsync and the remaining camera, retained
+   feature, and composition properties still need their owning implementations.
 
    Each property needs a stable name, type, allowed range/values, mutability,
    capability predicate, getter, and setter.  Initial ownership is:
@@ -389,28 +433,164 @@ Priority 1: Remove the libdm Compatibility Surface
 Priority 1: Large-Model Interactivity
 -------------------------------------
 
-11. Complete incremental retained-source updates.
+11. Incremental retained-source updates (complete).
 
-    Use stable identity `(database object, occurrence, draw mode, view scope)`.
-    Track geometry, appearance, placement, visibility, and selection revisions
-    independently.  Database events mark only affected sources stale; add,
-    remove, and update operations apply transactionally without replacing the
-    complete displayed path set.  Share immutable geometry across occurrences.
+    Normal eager wireframe, shaded, and hidden-line roots now build one compact
+    occurrence registry per draw root.  Immutable part geometry is shared,
+    duplicate occurrences have stable handles and pick identities, and
+    path-addressed display mutations update Obol instance state without
+    creating leaf Coin sources.  Obol part IDs are content-derived rather than
+    hashes of transient Coin pointers, and repeated occurrences hash a shared
+    payload only once per registry build.  Primitive edits replace only the
+    affected part.  Combination membership and transform edits preserve
+    surviving occurrence handles, part identities, sibling placement, and
+    display state.  A ref-counted libbrlobol realization repository is shared
+    by controllers bound to the same authoritative scene, survives source-node
+    replacement, and is invalidated per primitive.  Direct primitive refresh
+    republishes its replacement payload immediately.  Tests require unchanged
+    wire parts to hit the repository with only the added primitive plotted,
+    and transform-only shaded edits to incur no mesh cache misses.  Member
+    removal invalidates only the removed handle; database rename migrates the
+    repository key while preserving occurrence identity; and material refresh
+    updates style without invoking mesh realization.  Repository residency is
+    released on top-level erase, scope clear, scene clear, and teardown;
+    nested visibility erase remains cache-resident because geometry ownership
+    is unchanged.  Draw/style staleness preserves geometry, view staleness
+    removes only view-LoD variants, and database/input/tessellation staleness
+    invalidates geometry payloads.  The focused aggregate update tests now
+    inspect stable compact handles/summaries rather than retained Coin leaf
+    shapes.  Each compact occurrence now owns independent geometry,
+    appearance, placement, visibility, and selection revisions.  Visibility,
+    selection, highlight, and effective style are authoritative in that
+    record rather than read back from retained Coin geometry carriers.
+    Selection synchronization in libged and libqtcad compares the desired path
+    set in one pass instead of clearing and reselecting every occurrence.
+    Stale/rebuild transitions retain the previous occurrence index long enough
+    to merge runtime identity and revisions, then release it.
+
+    Full and attached-scene reconciliation publish matching instance keys in
+    place and remove only obsolete keys, rather than clearing and republishing
+    the destination scene.  The GED draw-record adapter exposes compact
+    occurrence paths directly, preserving `path_state`, expanded `who`, and
+    other semantic queries without leaf Coin nodes.  A second scene with a
+    distinct view policy is required by tests to reuse shared repository parts
+    with zero plotting while leaving the first scene's occurrence geometry
+    unchanged.  Deferred-root refinement explicitly replaces its temporary
+    proxy while preserving ordinary external primaries.  Aggregate occurrence
+    registries now release their temporary VList/mesh import shapes after
+    extracting immutable Obol geometry, semantics, appearance, and summaries.
+    Bounds, export, measurement, snap, selection, and summary queries enumerate
+    the Obol payload directly.  Legacy realized-shape counts consequently
+    describe only actual Coin nodes; aggregate geometry remains visible through
+    compact handles and realized-shape summaries.  The wire realization cache
+    treats immutable CAD geometry as authoritative in both tree-walk and direct
+    leaf paths, so a missing legacy shape carrier no longer causes a re-plot.
+    The repository has distinct typed immutable payload channels for normal
+    wire, shaded wire fallback, and shaded mesh geometry.  Each payload retains
+    source/geometry kind, local bounds, and LoD provenance.  Compact direct and
+    tree-walk realization consult these payloads before shape caches and do not
+    deposit Coin geometry in the repository; only explicitly noncompact
+    realization owns legacy shape caches.  Shaded transform tests require all
+    parts to hit the correct typed channel with no misses or plots and reject
+    accidental normal-wire reuse.  Repository rename moves cached values
+    without retaining an iterator across destination erasure.
+
+    Compact handles report region, air, material, LOS, effective material
+    color, and shader metadata.  Leaf-addressed metadata mutation updates only
+    matching occurrences and advances appearance rather than geometry state.
+    libged region/material mutation and controller geometry-presence queries no
+    longer infer aggregate state from legacy shape nodes.
+
+    Compact entry storage is now carrier-free by construction: entries contain
+    immutable Obol part geometry, semantic identity, placement, appearance,
+    visibility, selection, revision, and LoD request metadata, but no retained
+    `SoBRLVListShape` or `SoBRLMeshShape` pointer.  Realized node counts describe
+    only actual noncompact/external Coin nodes.  Stale compact geometry remains
+    displayable until its replacement is installed, and explicit source-update
+    paths do not invalidate unaffected siblings.  Mode-scoped external
+    publication resolves the exact representation owner rather than the shared
+    wire source.
+
+    Compact direct-leaf and tree-walk construction now publish typed immutable
+    geometry, semantic summaries, transforms, Boolean roles, LoD provenance,
+    and exact-mesh requests directly.  The temporary compact VList/mesh import
+    APIs and adapters are deleted, and multi-instance GED coverage asserts the
+    aggregate registry rather than legacy leaf Coin sources.  Keep explicit
+    external publication and evaluated/diagnostic modes separate; they are
+    real Coin-node use cases, not aggregate fallbacks.
+
+    Obol `PartGeometry` now has a native point channel with stable point IDs,
+    sparse color/scale/normal attributes, retained GPU rendering, bounds,
+    primitive counts, and tolerant point picking.  libbrlobol publishes
+    point-only and mixed point/line realizations directly into compact
+    occurrences, preserves attributes through export, and enumerates points
+    for snap and summary queries.  PNTS tests require zero retained Coin shape
+    nodes.  Compact occurrence paths also supply subtree bounds directly, and
+    completed direct publication invalidates obsolete view-local LoD state
+    without republishing the primary scene.  Public database wire/mesh
+    realization helpers use the compact builders for normal modes; only the
+    explicitly evaluated modes retain their diagnostic Coin-node realization.
+
+    A focused 1,024-occurrence integration fixture now exercises three
+    independent view policies against one shared repository.  A transform-only
+    database edit preserves every handle and geometry identity, advances one
+    placement revision in each view, and performs no plotting, cache miss,
+    source replacement, or unrelated realization walk.  Normal source-local
+    wire payloads no longer acquire view-policy cache keys unless CSG LoD
+    actually changes their geometry.  Repository residency is reference-counted
+    by live source: one-view erase retains geometry owned by other views, while
+    last-owner erase, scope clear, root replacement, and teardown release it.
+    Compact handle lookup uses an instance index rather than a linear scan;
+    the 1,024-occurrence edit/three-view test dropped from about 1.09 to 0.63
+    seconds on the development host.  Camera-only qtcad updates are required
+    to produce zero source publication and realization counters.
 
     Exit condition: camera-only redraw performs no source publication;
     placement/style edits do not rebuild geometry; localized database edits do
     not walk or republish unaffected sources.
 
-12. Finish compact-entry LoD scheduling.
+12. Compact-entry LoD scheduling (complete).
 
-    Replace multi-instance demotion with tasks addressed directly to retained
-    compact entries.  Preserve occurrence identity, transform, Boolean role,
-    cache identity, result binding, and cancellation ownership without creating
-    intermediate scene nodes.
+    Aggregate registries are no longer demoted merely because they contain
+    multiple view-dependent entries.  LoD tasks are addressed directly to
+    retained entries and preserve occurrence path, transform, Boolean role,
+    part-derived content identity, local bounds, and cancellation generation.
+    Multiple view-local proxy and mesh results coexist and compile into one
+    mixed aggregate assembly without creating intermediate scene nodes.
+    Source-backed full-detail mesh requests are retained as value metadata on
+    compact entries, so exact export does not require a mesh carrier.
 
-    Stress 10^4-10^6 candidates.  Coalesce superseded AABB/OBB/mesh results per
-    occurrence, bound queued and obsolete results, and enforce a main-thread
-    application budget that cannot consume an interaction frame.
+    Submission now resumes from a per-source/per-entry cursor instead of
+    attempting to enqueue an entire aggregate at once.  Service reservations
+    hard-bound active tasks, queued results, and cache writes.  Same-stage
+    results and cache writes are coalesced per occurrence, with revision and
+    quality ordering preventing a late older task from replacing newer work;
+    AABB, OBB, and mesh stages remain independently progressive.  Cancelled or
+    stopping generations cannot publish, active-request lookup is constant
+    time, cancellation history is bounded, and stop discards undrained
+    results and dependency bookkeeping.  Tests cover a 10^4-request pending
+    cancellation, 2048-generation churn, late-result rejection, teardown,
+    and cursor continuation through a queue bounded to one occurrence.
+    Result application has a count limit and a default four-millisecond
+    progressive-work budget.
+
+    A typed bulk registry builder and opt-in 100,000-entry compact stress now
+    exercise bounded submission under camera and completed-edit churn.  Each
+    generation examines at most the capacity-derived entry window, cancelled
+    generations do not apply, and the newest results publish without stale
+    rejection.  The debug slow test completes in about 82 seconds and 558 MB
+    on the development host.  Residency discovery and legacy realized-summary
+    indexing no longer redundantly scan compact entries quadratically.
+
+    Compact occurrence submission reserves AABB, OBB, and mesh result slots as
+    one atomic scheduling unit.  Capacities below three now fail with an
+    explicit diagnostic instead of silently stalling; a per-stage cursor is
+    intentionally unnecessary.  Worker completion, result queues, drains,
+    update actions, retained view payloads, and cache-writer dequeue transfer
+    mesh storage by move.  A 1.5-million-point regression preserves the exact
+    worker vector allocations through retained publication and applies in
+    about 102 microseconds on the development host, below the four-millisecond
+    progressive budget without chunked main-thread assembly.
 
     Exit condition: proxy-first startup and progressive refinement remain
     responsive under camera churn, view replacement, edits, erase, database
@@ -423,10 +603,160 @@ Priority 1: Large-Model Interactivity
     presentation in real qged and MGED sessions.  Use Generic Twin, Havoc, and
     substantially larger models.  Compare hw and both OSMesa wire policies.
 
-    Investigate retained backend GPU buffers or deeper Obol batching only when
-    profiles show traversal/submission remains material.  Changes belong in
+    Obol now flattens large wire, shaded, and hidden-line assemblies into
+    retained aggregate GPU buffers while keeping the semantic occurrence
+    registry for interaction.  Geometry and presentation have independent
+    frame-plan revisions: color, selection, line-width, and pattern changes
+    rebuild only contiguous style groups and retain flattened position/normal
+    buffers.  Mixed-style batches preserve stable per-instance geometry order
+    instead of assigning an entire draw item the first instance's color.
+    libbrlobol likewise retains the aggregate assembly and publishes bulk style
+    deltas.  A single compact root renders that assembly directly; the
+    cross-source batch is reserved for at least 32 independent sources and
+    rejects smaller sets before collecting geometry.  LoD payload presence
+    rather than transient payload address participates in its cache identity.
+    Immutable part payloads remain shared across the repository, compact
+    registry, libbrlobol assembly, Obol assembly, renderer, and picking rather
+    than deep-copying large vectors at each ownership boundary.
+    Compiled single-source and cross-source assemblies likewise refresh hidden,
+    selected, unpickable, and pick-semantic state independently of their
+    geometry/placement structure.  Visibility, selectability, and material
+    metadata changes therefore do not recreate shared parts or leave stale
+    pick detail in an already-compiled aggregate.
+
+    In the debug OSMesa benchmark, twenty alternating full-model color,
+    selection/highlight, width, and stipple mutations reduced average changed
+    frame time from about 32.7 to 18.5 ms for Havoc and from about 88.6 to 52.7
+    ms for Generic Twin.  Source-side mutation setup dropped from about 19.5
+    to 7.3 ms and from 12.0 to 3.9 ms respectively by separating immutable
+    geometry summaries from mutable display summaries and avoiding full-entry
+    copies.  `perf` no longer reports WireRep/PartGeometry copying or flattened
+    vertex upload in those frames; the remaining hot samples are OSMesa line
+    rasterization, buffer clear/readback, and the intentionally expensive thick
+    stippled case.
+
+    OSMesa fixed-function CAD rendering no longer compiles unused hardware
+    shaders.  Obol's flattened builders size their buffers exactly, and shared
+    immutable parts avoid a second geometry copy on first compilation.  In
+    sequential debug benchmarks, eager first full-detail frames dropped from
+    about 140 to 66 ms for Havoc and from 179 to 102 ms for Generic Twin;
+    settled frames are about 17 and 39 ms.  Deferred and eager final hashes
+    match for both models.  Continue profiling memory bounds, real hardware,
+    shaded first use, and substantially larger models; changes belong in
     Obol/libbrlobol, not another GED redraw layer.  Require deterministic image
-    hashes and a measured whole-path improvement without small-model regressions.
+    hashes and a measured whole-path improvement without small-model
+    regressions.
+
+    Shaded root realization now honors the existing fallback contract.
+    Non-strict eager and deferred mode-2 draws retry a failed mesh aggregate as
+    compact wire geometry; the deferred worker performs that retry only on its
+    detached snapshot before atomic adoption.  `--strict` performs no retry,
+    and a known eager realization failure returns a command error instead of
+    reporting a successful blank draw.  Generic Twin exercises this case: its
+    mode-2 mesh attempt fails, the default path settles to the same complete
+    wire image as mode 0, and strict mode reports the provider failure.  Havoc
+    supplies a successful shaded aggregate baseline.  A shaded Havoc profile
+    attributed nearly all of its original 8.4-second realization to primitive
+    NMG tessellation, led by the quadratic `nmg_edge_g_fuse` pass rather than
+    Coin/Obol publication.  libbrlobol now delegates NMG conversion to
+    librt's optimized `nmg_mdl_to_bot` path, which skips full edge fusion for
+    clean primitive tessellations and retains it only for degenerate fallback.
+    That first change reduced eager shaded realization to about 5.4 seconds and
+    indexed retained positions from about 1.99 million to 338,000.
+
+    Compact mesh construction is now explicitly phased.  A lightweight first
+    walk imports each unique local primitive once, immutable geometry is built
+    without attached Coin carriers or repository mutation, completed parts are
+    merged into the cache on the caller thread, and the final occurrence walk
+    publishes stable semantic order entirely from those values.  In-process
+    NMG parallelism was measured and rejected: two workers were neutral to
+    slightly slower and eight increased Havoc realization to about 9.2 seconds
+    because of NMG allocator and global semaphore contention.  Do not make the
+    shared database walk, Coin state, or repository maps concurrently mutable;
+    future concurrency must use isolated workers or avoid NMG.
+
+    librt now exposes exact indexed-face geometry for ARB4-ARB8, including
+    collapsed vertex encodings, and tolerance-driven direct providers for
+    cylinders, cones, general valid TGCs, ellipsoids, and ring tori.  General
+    TGCs use a direct ruled-surface mesh with tolerance-bounded height
+    subdivision; invalid/partially degenerate TGCs and horn/spindle tori retain
+    the established NMG fallback.  A focused librt test
+    requires closed, outward-oriented ARB8, ARB5, elliptical-cylinder, cone,
+    ellipsoid, and torus meshes, validates signed volume against analytic
+    answers, including an unequal-axis general TGC, and verifies invalid TGC
+    and spindle-torus fallback.  It passes under Valgrind with no invalid
+    access or non-global leaks.  The full libbrlobol primitive sweep and
+    draw-sync/render tests pass.
+
+    Havoc contains 1,508 TGCs, 628 ARBs, 148 ellipsoids, and 59 tori among its
+    2,427 unique mesh parts.  Removing the first two families from NMG reduced
+    eager shaded realization to about 2.16-2.23 seconds.  Removing ellipsoids
+    and ring tori as well reduces it to about 0.97-1.00 seconds.  The tighter,
+    tolerance-consistent torus sampling and regular ellipsoid grid increase
+    retained positions from 191,358 to 233,238, but avoid substantially more
+    NMG work.  Moving the remaining valid TGCs to the direct provider reduces
+    realization again to about 0.43-0.45 seconds and retained positions to
+    216,222.  Three clean runs have the same image hash and 85,221
+    non-background pixels.  Generic Twin's failed mesh attempt plus complete
+    wire fallback remains about 1.15 seconds, down from 5.1, and is dominated
+    by its 576,178-point wire fallback.
+
+    Obol no longer builds `TrianglePopLod` hierarchies synchronously for every
+    inserted shaded part.  It records LoD capability, invalidates any old
+    hierarchy on replacement, and constructs the hierarchy only when a render
+    first requests an Obol triangle level.  Ordinary full-detail Havoc retains
+    deterministic output while first OSMesa render falls from about 236-239 ms
+    to about 142-145 ms.  Focused Obol tests cover first-demand access and
+    replacement invalidation.
+
+    Direct indexed-face geometry is now built during the detached unique-part
+    prefill and stored immediately as immutable `obol::PartGeometry`.  The
+    final semantic occurrence walk performs no `SoBRLMeshShape` construction,
+    Coin field evaluation, or geometry round trip: Havoc reports all 3,576
+    occurrence lookups as cache hits and no mesh misses.  This reduces eager
+    shaded realization further to about 0.33-0.34 seconds without changing the
+    final image.  Next profile substantially larger shaded models and residual
+    invalid/unsupported primitive fallback; do not reintroduce synchronous
+    per-part LoD or Coin-carrier preparation into normal publication.
+
+    Eager aggregate construction now uses streaming content-derived part IDs,
+    deterministic name/occurrence instance IDs, and explicit duplicate
+    ordinals; repository eviction and rename operate on indexed key ranges.
+    Havoc retains all 3,576 occurrences without instance-ID collisions, and
+    repeated clean-process renders produce the same image hash.  Generic Twin
+    cold wire realization is about 325-345 ms in the debug build, down from
+    about 415-430 ms before this pass; Havoc is about 224-242 ms.
+
+    Deferred roots now snapshot an unattached database source, construct the
+    compact registry on a private worker, and atomically transfer it to the
+    exact authoritative source after scene, source, input, view, draw, and
+    representation revision validation.  The worker does not access GED,
+    attached Coin scene state, render actions, or toolkit objects.  Superseding
+    work and teardown retain and join private jobs; erase cancellation cannot
+    republish its result.  Havoc's intervening frames average about 1.1 ms
+    before 3,576 occurrences publish; Generic Twin's average about 1.2 ms
+    before 2,248 occurrences publish.  The initial proxy no longer calls
+    `rt_obj_bounds` and prepares raytrace BOT BVHs: a conservative index walk
+    caches each primitive's `ft_bbox`, transforms its corners per occurrence,
+    and safely unions all Boolean operands.  Havoc's initial draw transaction
+    is now about 38-48 ms instead of 97-102 ms, and Generic Twin's is about
+    46-57 ms instead of 246-264 ms.  Repeated results have deterministic final
+    image hashes that match eager full-detail autoview, and shaded Havoc
+    follows the same path.  Focused tests require proxy bounds to contain the
+    completed aggregate and exercise erase, active database rename, rename
+    restoration, and teardown cancellation without stale publication; a
+   ten-run mutation stress passes.  Deferred-root publication validates the
+   live source identity, source/input/view revisions, draw mode, and
+   representation before adoption; it intentionally does not reject a
+   completed source solely because unrelated observer bookkeeping advanced the
+   aggregate scene revision.  The worker now receives an immutable source
+   closure database snapshot rather than `db_clone_dbi`'s refcounted alias of
+   the live `db_i`: v5 snapshots are in-memory, v4 snapshots use a temporary
+   same-version database, and both retain recursive combination dependencies,
+   `_GLOBAL`, units, title, and auxiliary-file lookup context.  A focused
+   regression mutates the live source while a detached worker realizes the
+   snapshot and requires the original bounds, for both formats.  Continue
+   platform and larger-model stress.
 
     Exit condition: first useful pixels precede full-detail realization,
     rotations avoid scene/source work, and interaction remains bounded while

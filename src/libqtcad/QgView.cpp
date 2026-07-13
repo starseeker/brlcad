@@ -78,16 +78,16 @@ make_canvas(QWidget *parent, int type)
     switch (type) {
 #ifdef BRLCAD_OPENGL
     case QgView_GL:
-return new QgGL(parent);
+return new QgGL(parent, nullptr, false);
 #endif
     case QgView_SW:
-return new QgSW(parent);
+return new QgSW(parent, nullptr, false);
     default:
 /* QgView_AUTO or any other value: prefer hardware GL, fall back to SW */
 #ifdef BRLCAD_OPENGL
-return new QgGL(parent);
+return new QgGL(parent, nullptr, false);
 #else
-return new QgSW(parent);
+return new QgSW(parent, nullptr, false);
 #endif
     }
 }
@@ -137,9 +137,9 @@ return;
 		use_gl ? BRLOBOL_RENDER_ENGINE_HW : BRLOBOL_RENDER_ENGINE_SW) ||
 	    !brlobol_display_endpoint_host_open(endpoint,
 		use_gl ? "qt-gl" : "qt-sw", &desc)) {
+	    canvas->setObolViewController(nullptr);
 	    brlobol_display_endpoint_destroy(endpoint);
 	    endpoint = nullptr;
-	    canvas->setObolViewController(nullptr);
 	}
     } else {
 	canvas->setObolViewController(nullptr);
@@ -159,6 +159,10 @@ QgView::~QgView()
     if (endpoint && view_ctx &&
 	ged_view_context_display_endpoint_get(view_ctx) == endpoint)
 	(void)ged_view_context_display_endpoint_set(view_ctx, nullptr, 0);
+    if (canvas) {
+	canvas->setObolInputEndpoint(nullptr);
+	canvas->setObolViewController(nullptr);
+    }
     brlobol_display_endpoint_destroy(endpoint);
     endpoint = nullptr;
     delete canvas;

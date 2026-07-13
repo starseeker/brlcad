@@ -380,7 +380,7 @@ main(int argc, char **argv)
     SoBRLDatabaseSource *observerSource = source_for_path(controller, "box.s");
     if (!observerSource ||
 	    observerSource->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	    observerSource->getRealizedShapeCount() <= 0)
+	    !observerSource->hasRealizedWireGeometry())
 	FAIL("observer-synced GED draw should realize Obol wire geometry");
 
     controller->getViewport()->viewAll();
@@ -456,7 +456,7 @@ main(int argc, char **argv)
 	    !test_path_equal(source->path.getValue().getString(), "box.s") ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
 	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	    source->getRealizedShapeCount() <= 0)
+	    !source->hasRealizedWireGeometry())
 	FAIL("wire Obol database source should preserve path and realized geometry");
     struct ged_draw_shape_record box_record;
     if (!test_shape_record_by_path(gedp, "box.s", &box_record))
@@ -567,7 +567,7 @@ main(int argc, char **argv)
 	    !test_path_equal(source->path.getValue().getString(), "ball.s") ||
 	    source->drawMode.getValue() != SoBRLDatabaseSource::SHADED ||
 	    source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	    source->getRealizedMeshCount() <= 0)
+	    !source->hasRealizedMeshGeometry())
 	FAIL("shaded Obol database source should preserve draw mode and mesh geometry");
 
     const char *paths[2] = {"box.s", "ball.s"};

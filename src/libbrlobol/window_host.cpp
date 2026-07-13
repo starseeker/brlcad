@@ -58,6 +58,7 @@ struct BRLObolWindowHostPrivate {
     SbBool open;
     BRLObolWindowDesc desc;
     long pollRate;
+    BRLObolInputContext input;
     std::vector<BRLObolFramebufferAttachment> framebuffers;
 };
 
@@ -243,6 +244,14 @@ BRLObolWindowHost::getController(void) const
     return this->p->controller;
 }
 
+static int
+window_host_input_action(void *data, BRLObolInputAction action,
+	const BRLObolInputEvent *event)
+{
+    BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
+    return host ? host->applyInputAction(action, event) : -1;
+}
+
 int
 BRLObolWindowHost::handleInputEvent(const BRLObolInputEvent *event,
 				    const BRLObolInputProfile *profile)
@@ -252,19 +261,9 @@ BRLObolWindowHost::handleInputEvent(const BRLObolInputEvent *event,
     if (!profile || !profile->bindings || profile->bindingCount == 0)
 	return 0;
 
-    for (size_t i = 0; i < profile->bindingCount; i++) {
-	const BRLObolInputBinding &binding = profile->bindings[i];
-	if (binding.eventType != event->type)
-	    continue;
-	if (binding.key && binding.key != event->key)
-	    continue;
-	if (binding.button && binding.button != event->button)
-	    continue;
-	if (binding.modifiers != event->modifiers)
-	    continue;
-	return this->applyInputAction(binding.action, event);
-    }
-    return 0;
+    this->p->input.setProfile(profile);
+    this->p->input.setActionHandler(window_host_input_action, this);
+    return this->p->input.dispatch(event);
 }
 
 int

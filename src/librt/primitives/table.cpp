@@ -149,6 +149,10 @@ extern void rt_crofton_volume_implicit(fastf_t *vol, const struct rt_db_internal
 extern void rt_pg_volume(fastf_t *volume, const struct rt_db_internal *ip);
 extern void rt_pg_surf_area(fastf_t *area, const struct rt_db_internal *ip);
 extern int rt_pg_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
+extern int rt_tor_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
+extern int rt_tgc_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
+extern int rt_ell_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
+extern int rt_arb_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
 
 extern int rt_bot_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
 extern int rt_brep_indexed_face_set(struct rt_primitive_indexed_face_set *face_set, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *tol, const struct bv_view_info *info);
@@ -288,7 +292,7 @@ const struct rt_functab OBJ[] = {
 	RTFUNCTAB_FUNC_KEYPOINT_CAST(rt_tor_keypoint), /* keypoint */
 	RTFUNCTAB_FUNC_MAT_CAST(rt_tor_mat),
 	RTFUNCTAB_FUNC_PERTURB_CAST(rt_tor_perturb), /* perturb */
-	NULL, /* indexed_face_set */
+	RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(rt_tor_indexed_face_set),
     },
 
     {
@@ -339,7 +343,7 @@ const struct rt_functab OBJ[] = {
 	RTFUNCTAB_FUNC_KEYPOINT_CAST(rt_tgc_keypoint), /* keypoint */
 	RTFUNCTAB_FUNC_MAT_CAST(rt_tgc_mat),
 	RTFUNCTAB_FUNC_PERTURB_CAST(rt_tgc_perturb), /* perturb */
-	NULL, /* indexed_face_set */
+	RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(rt_tgc_indexed_face_set),
     },
 
     {
@@ -390,7 +394,7 @@ const struct rt_functab OBJ[] = {
 	RTFUNCTAB_FUNC_KEYPOINT_CAST(rt_ell_keypoint), /* keypoint */
 	RTFUNCTAB_FUNC_MAT_CAST(rt_ell_mat),
 	RTFUNCTAB_FUNC_PERTURB_CAST(rt_ell_perturb), /* perturb */
-	NULL, /* indexed_face_set */
+	RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(rt_ell_indexed_face_set),
     },
 
     {
@@ -441,7 +445,7 @@ const struct rt_functab OBJ[] = {
 	RTFUNCTAB_FUNC_KEYPOINT_CAST(rt_arb_keypoint), /* keypoint */
 	RTFUNCTAB_FUNC_MAT_CAST(rt_arb_mat),
 	RTFUNCTAB_FUNC_PERTURB_CAST(rt_arb_perturb), /* perturb */
-	NULL, /* indexed_face_set */
+	RTFUNCTAB_FUNC_INDEXED_FACE_SET_CAST(rt_arb_indexed_face_set),
     },
 
     {

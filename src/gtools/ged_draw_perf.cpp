@@ -59,6 +59,7 @@ struct options {
     int repeat = 1;
     int progressive_frames = 1;
     int render_frames = 1;
+    int style_updates = 0;
     bool clear_cache = false;
     std::string cache_dir;
     std::string screengrab;
@@ -67,7 +68,6 @@ struct options {
     int lod_mesh = -1;
     int lod_csg = -1;
     int lod_bot_threshold = -1;
-    int cad_compact = -1;
     BRLObolViewController::SoftwareWireMode software_wire =
 	BRLObolViewController::SOFTWARE_WIRE_AUTO;
 };
@@ -81,6 +81,8 @@ struct timings {
     double render_ms = 0.0;
     double render_first_ms = 0.0;
     double render_steady_ms = 0.0;
+    double style_update_ms = 0.0;
+    double style_render_ms = 0.0;
     double screengrab_ms = 0.0;
 };
 
@@ -126,13 +128,13 @@ usage(FILE *fp)
 	"  --progressive-frames <N>\n"
 	"                       render up to N progressive frames (default: 1)\n"
 	"  --render-frames <N>  render at least N frames for steady-state timing\n"
+	"  --style-updates <N>  mutate aggregate appearance and render N times\n"
 	"  --cache-dir <dir>    set BU_DIR_CACHE for this run\n"
 	"  --clear-cache        clear --cache-dir before the first iteration\n"
 	"  --lod-mesh <0|1>     run 'view lod mesh <0|1>' before draw\n"
 	"  --lod-csg <0|1>      run 'view lod csg <0|1>' before draw\n"
 	"  --lod-bot-threshold <N>\n"
 	"                       run 'view lod bot_threshold <N>' before draw\n"
-	"  --cad-compact <0|1>  compact eligible realized sources into CAD assemblies\n"
 	"  --software-wire <auto|quality|fast>\n"
 	"                       choose the OSMesa wireframe path (default: auto)\n"
 	"  --help               print this help\n"
@@ -293,6 +295,12 @@ parse_args(int argc, const char **argv, struct options *opts)
 		return false;
 	    continue;
 	}
+	if (BU_STR_EQUAL(arg, "--style-updates")) {
+	    if (++i >= argc || !parse_positive_int(argv[i], &opts->style_updates))
+		return false;
+	    opts->render = true;
+	    continue;
+	}
 	if (BU_STR_EQUAL(arg, "--lod-mesh")) {
 	    if (++i >= argc || !parse_bool_int(argv[i], &opts->lod_mesh))
 		return false;
@@ -306,11 +314,6 @@ parse_args(int argc, const char **argv, struct options *opts)
 	if (BU_STR_EQUAL(arg, "--lod-bot-threshold")) {
 	    if (++i >= argc ||
 		    !parse_nonnegative_int(argv[i], &opts->lod_bot_threshold))
-		return false;
-	    continue;
-	}
-	if (BU_STR_EQUAL(arg, "--cad-compact")) {
-	    if (++i >= argc || !parse_bool_int(argv[i], &opts->cad_compact))
 		return false;
 	    continue;
 	}
@@ -396,26 +399,6 @@ apply_lod_options(struct ged *gedp, const struct options &opts)
 		BRLCAD_OK)
 	    return BRLCAD_ERROR;
     }
-    return BRLCAD_OK;
-}
-
-static int
-apply_cad_options(struct ged *gedp, BRLObolViewController *controller,
-	const struct options &opts)
-{
-    if (opts.cad_compact < 0)
-	return BRLCAD_OK;
-
-    SoBRLSceneController *scene = controller ?
-	controller->getSceneController() : NULL;
-    if (!scene)
-	return BRLCAD_ERROR;
-
-    scene->setCompactCadRealizationEnabled(opts.cad_compact ? TRUE : FALSE);
-    SoBRLSceneController *primary = ged_draw_obol_scene_controller(gedp);
-    if (primary && primary != scene)
-	primary->setCompactCadRealizationEnabled(
-	    opts.cad_compact ? TRUE : FALSE);
     return BRLCAD_OK;
 }
 
@@ -520,11 +503,11 @@ run_once(const struct options &opts, int iter)
     brlobol_performance_counters_init(&perf);
     int endpoint_ret = BRLCAD_OK;
     int lod_ret = BRLCAD_OK;
-    int cad_ret = BRLCAD_OK;
     int draw_ret = BRLCAD_OK;
     int redraw_ret = BRLCAD_OK;
     int autoview_ret = BRLCAD_OK;
     int render_ret = BRLCAD_OK;
+    int style_ret = BRLCAD_OK;
     int screengrab_ret = BRLCAD_OK;
     int source_count_ret = 0;
     int profile_started = 0;
@@ -571,11 +554,6 @@ run_once(const struct options &opts, int iter)
     }
 
     if (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK) {
-	cad_ret = apply_cad_options(gedp, controller, opts);
-    }
-
-    if (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
-	    cad_ret == BRLCAD_OK) {
 	if (opts.profile) {
 	    brlobol_performance_counters_reset();
 	    brlobol_performance_counters_set_enabled(1);
@@ -641,8 +619,60 @@ run_once(const struct options &opts, int iter)
 	    t.render_steady_ms /= progressive_frames - 1;
     }
 
+    if (opts.style_updates > 0 && draw_ret == BRLCAD_OK &&
+	autoview_ret == BRLCAD_OK && render_ret == BRLCAD_OK) {
+	std::vector<SoBRLDatabaseSource *> sources;
+	if (controller)
+	    collect_database_sources(controller->getRenderSceneRoot(), sources);
+	if (sources.empty() || progressive_more) {
+	    style_ret = BRLCAD_ERROR;
+	} else {
+	    if (profile_started)
+		brlobol_performance_counters_reset();
+	    for (int update = 0; update < opts.style_updates; update++) {
+		const bool alternate = (update & 1) != 0;
+		const auto updateStart = std::chrono::steady_clock::now();
+		for (SoBRLDatabaseSource *source : sources) {
+		    if (!source)
+			continue;
+		    BRLObolDatabaseSourceDisplayPatch patch;
+		    patch.colorOverrideValid = TRUE;
+		    patch.colorOverride = TRUE;
+		    patch.colorValid = TRUE;
+		    patch.color = alternate ? SbColor(0.12f, 0.72f, 0.24f) :
+			SbColor(0.88f, 0.16f, 0.10f);
+		    patch.lineWidthValid = TRUE;
+		    patch.lineWidth = alternate ? 2 : 1;
+		    patch.lineStyleValid = TRUE;
+		    patch.lineStyle = alternate ? 1 : 0;
+		    (void)source->applyDisplayPatch(patch);
+		    (void)source->setCompactInstanceDisplayStateForPath("", TRUE,
+			0, FALSE, 1, alternate ? TRUE : FALSE,
+			1, alternate ? FALSE : TRUE);
+		}
+		t.style_update_ms += elapsed_ms(updateStart);
+
+		if (image) {
+		    bu_free(image, "ged_draw_perf style image");
+		    image = NULL;
+		}
+		BRLObolProgressiveStatus styleStatus;
+		const auto renderStart = std::chrono::steady_clock::now();
+		style_ret = run_render(gedp, controller, &image, &styleStatus);
+		t.style_render_ms += elapsed_ms(renderStart);
+		if (style_ret != BRLCAD_OK || styleStatus.hasMore) {
+		    style_ret = BRLCAD_ERROR;
+		    break;
+		}
+	    }
+	    t.style_update_ms /= opts.style_updates;
+	    t.style_render_ms /= opts.style_updates;
+	}
+    }
+
     if (draw_ret == BRLCAD_OK && autoview_ret == BRLCAD_OK &&
-	    render_ret == BRLCAD_OK && !opts.screengrab.empty()) {
+	    render_ret == BRLCAD_OK && style_ret == BRLCAD_OK &&
+	    !opts.screengrab.empty()) {
 	start = std::chrono::steady_clock::now();
 	screengrab_ret = write_screengrab(image, opts.width, opts.height,
 	    opts.screengrab.c_str());
@@ -713,8 +743,6 @@ run_once(const struct options &opts, int iter)
 	std::fprintf(stderr, "ged_draw_perf: endpoint setup failed: %s\n", result);
     if (lod_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: LoD setup failed: %s\n", result);
-    if (cad_ret != BRLCAD_OK)
-	std::fprintf(stderr, "ged_draw_perf: CAD setup failed: %s\n", result);
     if (draw_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: draw failed: %s\n", result);
     if (redraw_ret != BRLCAD_OK)
@@ -723,6 +751,8 @@ run_once(const struct options &opts, int iter)
 	std::fprintf(stderr, "ged_draw_perf: autoview failed: %s\n", result);
     if (render_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: render failed: %s\n", result);
+    if (style_ret != BRLCAD_OK)
+	std::fprintf(stderr, "ged_draw_perf: style churn failed: %s\n", result);
     if (screengrab_ret != BRLCAD_OK)
 	std::fprintf(stderr, "ged_draw_perf: screengrab failed: %s\n", result);
 
@@ -737,6 +767,9 @@ run_once(const struct options &opts, int iter)
 	    t.render_ms, progressive_frames ? t.render_ms / progressive_frames : 0.0,
 	    t.render_first_ms, t.render_steady_ms, progressive_frames, progressive_more,
 	    progressive_expanded, progressive_remaining);
+    if (opts.style_updates > 0)
+	std::printf(" style_updates=%d style_update_ms=%.3f style_render_ms=%.3f",
+	    opts.style_updates, t.style_update_ms, t.style_render_ms);
     if (!opts.screengrab.empty())
 	std::printf(" screengrab_ms=%.3f", t.screengrab_ms);
     if (image)
@@ -744,7 +777,7 @@ run_once(const struct options &opts, int iter)
 	    image_hash, image_nonzero);
     if (source_count_ret)
 	std::printf(" obol_sources=%zu", source_count);
-    if (perf.realize_calls || perf.source_replace_calls) {
+    if (profile_started) {
 	std::printf(" perf_realize_ms=%.3f perf_seed_ms=%.3f perf_walk_ms=%.3f",
 	    perf.realize_total_us / 1000.0, perf.realize_seed_us / 1000.0,
 	    perf.realize_walk_us / 1000.0);
@@ -765,6 +798,9 @@ run_once(const struct options &opts, int iter)
 	std::printf(" perf_wire_cache=%llu/%llu",
 	    (unsigned long long)perf.wire_cache_hits,
 	    (unsigned long long)perf.wire_cache_misses);
+	std::printf(" perf_mesh_cache=%llu/%llu",
+	    (unsigned long long)perf.mesh_cache_hits,
+	    (unsigned long long)perf.mesh_cache_misses);
 	std::printf(" perf_plot_ms=%.3f perf_plot_calls=%llu",
 	    perf.plot_us / 1000.0,
 	    (unsigned long long)perf.plot_calls);
@@ -802,14 +838,19 @@ run_once(const struct options &opts, int iter)
     std::printf(" status=%s\n",
 	(endpoint_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&
 	 redraw_ret == BRLCAD_OK &&
-	 lod_ret == BRLCAD_OK && cad_ret == BRLCAD_OK &&
+	 lod_ret == BRLCAD_OK &&
 	 autoview_ret == BRLCAD_OK && render_ret == BRLCAD_OK &&
+	 style_ret == BRLCAD_OK &&
 	 screengrab_ret == BRLCAD_OK) ? "ok" : "error");
+    if (controller && controller->getLastDiagnostics().getLength() > 0)
+	std::fprintf(stderr, "ged_draw_perf: Obol realization diagnostics: %s\n",
+	    controller->getLastDiagnostics().getString());
 
     int ret = (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK &&
-	cad_ret == BRLCAD_OK && draw_ret == BRLCAD_OK &&
+	draw_ret == BRLCAD_OK &&
 	redraw_ret == BRLCAD_OK &&
 	autoview_ret == BRLCAD_OK && render_ret == BRLCAD_OK &&
+	style_ret == BRLCAD_OK &&
 	screengrab_ret == BRLCAD_OK) ? 0 : 1;
 
     if (image)
@@ -842,16 +883,15 @@ main(int argc, const char **argv)
 	opts.db_path.c_str());
     for (size_t i = 0; i < opts.draw_args.size(); i++)
 	std::printf("%s%s", i ? " " : "", opts.draw_args[i].c_str());
-    std::printf(" repeat=%d size=%dx%d autoview=%d render=%d profile=%d redraw=%d screengrab=%s",
+    std::printf(" repeat=%d size=%dx%d autoview=%d render=%d profile=%d redraw=%d style_updates=%d screengrab=%s",
 	opts.repeat, opts.width, opts.height, opts.autoview ? 1 : 0,
 	opts.render ? 1 : 0, opts.profile ? 1 : 0,
-	opts.redraw ? 1 : 0,
+	opts.redraw ? 1 : 0, opts.style_updates,
 	opts.screengrab.empty() ? "none" : opts.screengrab.c_str());
     std::printf(" cache_dir=%s clear_cache=%d lod_mesh=%d lod_csg=%d lod_bot_threshold=%d\n",
 	opts.cache_dir.empty() ? "ambient" : opts.cache_dir.c_str(),
 	opts.clear_cache ? 1 : 0, opts.lod_mesh, opts.lod_csg,
 	opts.lod_bot_threshold);
-    std::printf("cad_compact=%d\n", opts.cad_compact);
 
     int ret = 0;
     for (int i = 1; i <= opts.repeat; i++) {

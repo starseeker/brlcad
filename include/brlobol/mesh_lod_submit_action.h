@@ -18,6 +18,7 @@
 #include <Inventor/actions/SoSubAction.h>
 
 #include <stdint.h>
+#include <stddef.h>
 
 class BRLObolLodService;
 class BRLObolViewLodState;
@@ -57,6 +58,10 @@ public:
     SbBool getSubmitObbProxyStage(void) const;
     void setViewLodState(const BRLObolViewLodState *viewState);
     const BRLObolViewLodState *getViewLodState(void) const;
+    void setCompactEntryRange(size_t first, size_t count);
+    size_t getCompactEntryNext(void) const;
+    size_t getCompactEntryTotal(void) const;
+    SbBool hasDeferredCompactEntries(void) const;
 
     unsigned int getVisitedMeshCount(void) const;
     unsigned int getSubmittedTaskCount(void) const;
@@ -91,6 +96,11 @@ private:
     SbBool submitAabbProxyStage;
     SbBool submitObbProxyStage;
     const BRLObolViewLodState *viewState;
+    size_t compactEntryFirst;
+    size_t compactEntryLimit;
+    size_t compactEntryNext;
+    size_t compactEntryTotal;
+    SbBool deferredCompactEntries;
     unsigned int visitedMeshCount;
     unsigned int submittedTaskCount;
     unsigned int skippedMeshCount;

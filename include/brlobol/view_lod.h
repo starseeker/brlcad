@@ -111,6 +111,7 @@ public:
 	SbString sourceName;
 	SbString sourceIdentity;
 	SbString sourceInstanceKey;
+	SbString sourceBindingKey;
 	SbString cacheIdentity;
 	SbString cacheKey;
 	int resultKind;
@@ -147,11 +148,17 @@ public:
 			      const BRLObolLodResult &result);
     SbBool applySourceResult(const SoBRLDatabaseSource *source,
 			     const BRLObolLodResult &result);
+    SbBool consumeDisplayResult(const SoBRLMeshShape *shape,
+	BRLObolLodResult &result);
+    SbBool consumeSourceResult(const SoBRLDatabaseSource *source,
+	BRLObolLodResult &result);
     const MeshPayload *findMesh(const SoBRLMeshShape *shape) const;
     const MeshPayload *findMeshForResult(const BRLObolLodResult &result) const;
     const ProxyPayload *findProxy(const SoBRLMeshShape *shape) const;
     const ProxyPayload *findProxyForResult(const BRLObolLodResult &result) const;
     const CadPayload *findCad(const SoBRLDatabaseSource *source) const;
+    void findCadPayloads(const SoBRLDatabaseSource *source,
+	std::vector<const CadPayload *> &payloads) const;
     const CadPayload *findCadForResult(const BRLObolLodResult &result) const;
     size_t bindingCount(void) const;
     size_t payloadCount(void) const;
@@ -164,6 +171,12 @@ public:
     size_t evictDisplayMeshes(unsigned int *evictedMeshCount = NULL);
 
 private:
+    SbBool applyMeshResultInternal(const SoBRLMeshShape *shape,
+	BRLObolLodResult &result, SbBool consume);
+    SbBool applyProxyResultInternal(const SoBRLMeshShape *shape,
+	BRLObolLodResult &result, SbBool consume);
+    SbBool applySourceResultInternal(const SoBRLDatabaseSource *source,
+	BRLObolLodResult &result, SbBool consume);
     std::unordered_map<std::string, MeshPayloadPtr> meshBindings;
     std::unordered_map<std::string, ProxyPayloadPtr> proxyBindings;
     std::unordered_map<std::string, CadPayloadPtr> cadBindings;
@@ -238,5 +251,8 @@ brlobol_view_lod_proxy_for_action(SoAction *action,
 BRLOBOL_EXPORT const BRLObolViewLodState::CadPayload *
 brlobol_view_lod_cad_for_action(SoAction *action,
 				const SoBRLDatabaseSource *source);
+
+BRLOBOL_EXPORT const BRLObolViewLodState *
+brlobol_view_lod_state_for_action(SoAction *action);
 
 #endif /* BRLOBOL_VIEW_LOD_H */

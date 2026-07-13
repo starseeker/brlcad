@@ -604,7 +604,7 @@ if(TARGET test_qtcad_obol_progressive_lod)
     APPEND PROPERTY LABELS drawing_baseline)
   brlcad_add_test(
     NAME test_qtcad_obol_progressive_lod_startup_refine
-    COMMAND test_qtcad_obol_progressive_lod --startup-refine "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g" all.g all.bot facetize 2 2)
+    COMMAND test_qtcad_obol_progressive_lod --diagnostic-stages --startup-refine "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g" all.g all.bot facetize 2 2)
   set_tests_properties(test_qtcad_obol_progressive_lod_startup_refine PROPERTIES TIMEOUT 120)
   set_property(TEST test_qtcad_obol_progressive_lod_startup_refine
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
@@ -652,7 +652,7 @@ if(TARGET test_qtcad_obol_progressive_lod)
     APPEND PROPERTY LABELS drawing_baseline)
   brlcad_add_test(
     NAME test_qtcad_obol_progressive_lod_generic_twin_wire_lod
-    COMMAND test_qtcad_obol_progressive_lod --startup-wire-lod --startup-expand-passes 4 "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
+    COMMAND test_qtcad_obol_progressive_lod --diagnostic-stages --startup-wire-lod --startup-expand-passes 4 "${CMAKE_BINARY_DIR}/share/db/faa/Generic_Twin.g" - all direct 4 1)
   set_tests_properties(test_qtcad_obol_progressive_lod_generic_twin_wire_lod PROPERTIES TIMEOUT 180)
   set_property(TEST test_qtcad_obol_progressive_lod_generic_twin_wire_lod
     APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})

@@ -9,6 +9,7 @@
 
 #include "qtcad/QgObolWindowHost.h"
 
+#include "brlobol/display_endpoint.h"
 #include "brlobol/view_controller.h"
 #include "bu/malloc.h"
 #include "qtcad/QgCanvasBase.h"
@@ -21,6 +22,10 @@
 #include <QCoreApplication>
 #include <QImage>
 #include <QMetaObject>
+#ifdef BRLCAD_OPENGL
+#  include <QOpenGLContext>
+#  include <QSurfaceFormat>
+#endif
 #include <QSize>
 #include <QString>
 #include <QThread>
@@ -154,6 +159,8 @@ QgObolWindowHost::QgObolWindowHost(QgCanvasBase *canvas,
 QgObolWindowHost::~QgObolWindowHost(void)
 {
     this->close();
+    if (this->qp->canvas)
+	this->qp->canvas->setObolInputEndpoint(NULL);
     delete this->qp;
     this->qp = NULL;
 }
@@ -356,17 +363,46 @@ qg_factory_create(const struct brlobol_host_desc *desc, void *data)
 #endif
     }
 
-    if (canvas)
+    if (canvas) {
+#ifdef BRLCAD_OPENGL
+	if (!kind->software && desc->vsync != BRLOBOL_HOST_VSYNC_AUTO) {
+	    QgGL *gl_canvas = dynamic_cast<QgGL *>(canvas);
+	    if (!gl_canvas)
+		return NULL;
+	    QOpenGLContext *context = gl_canvas->context();
+	    const bool enabled = desc->vsync != BRLOBOL_HOST_VSYNC_OFF;
+	    if (context &&
+		((context->format().swapInterval() != 0) != enabled))
+		return NULL;
+	    if (!context) {
+		QSurfaceFormat format = gl_canvas->format();
+		format.setSwapInterval(enabled ? 1 : 0);
+		gl_canvas->setFormat(format);
+	    }
+	}
+#endif
+	canvas->setObolInputEndpoint(
+	    static_cast<brlobol_display_endpoint_t *>(desc->input_dispatch_data));
 	return new QgObolWindowHost(canvas, owns_canvas);
+    }
     if (kind->software) {
-	canvas = new QgSW(NULL);
+	canvas = new QgSW(NULL, nullptr, false);
     } else {
 #ifdef BRLCAD_OPENGL
-	canvas = new QgGL(NULL);
+	QgGL *gl_canvas = new QgGL(NULL, nullptr, false);
+	if (desc->vsync != BRLOBOL_HOST_VSYNC_AUTO) {
+	    QSurfaceFormat format = gl_canvas->format();
+	    format.setSwapInterval(desc->vsync == BRLOBOL_HOST_VSYNC_OFF ?
+		0 : 1);
+	    gl_canvas->setFormat(format);
+	}
+	canvas = gl_canvas;
 #else
 	return NULL;
 #endif
     }
+	canvas->setObolInputEndpoint(
+	static_cast<brlobol_display_endpoint_t *>(desc->input_dispatch_data));
     return new QgObolWindowHost(canvas, owns_canvas);
 }
 
@@ -446,6 +482,57 @@ qg_factory_resize(void *instance, unsigned int width, unsigned int height,
 }
 
 static int
+qg_factory_set_title(void *instance, const char *title,
+	void *UNUSED(user_data))
+{
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(instance);
+    QWidget *widget = host && host->canvas() ?
+	host->canvas()->canvasWidget() : NULL;
+    if (!widget || !title)
+	return 0;
+    widget->setWindowTitle(QString::fromUtf8(title));
+    return 1;
+}
+
+static int
+qg_factory_set_visible(void *instance, int visible,
+	void *UNUSED(user_data))
+{
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(instance);
+    QWidget *widget = host && host->canvas() ?
+	host->canvas()->canvasWidget() : NULL;
+    if (!widget)
+	return 0;
+    widget->setVisible(visible != 0);
+    return 1;
+}
+
+static int
+qg_factory_set_vsync(void *instance, int enabled,
+	void *UNUSED(user_data))
+{
+#ifdef BRLCAD_OPENGL
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(instance);
+    QgGL *canvas = host && host->canvas() ?
+	dynamic_cast<QgGL *>(host->canvas()) : NULL;
+    if (!canvas)
+	return 0;
+    QOpenGLContext *context = canvas->context();
+    if (context)
+	return (context->format().swapInterval() != 0) == (enabled != 0) ?
+	    1 : 0;
+    QSurfaceFormat format = canvas->format();
+    format.setSwapInterval(enabled ? 1 : 0);
+    canvas->setFormat(format);
+    return 1;
+#else
+    (void)instance;
+    (void)enabled;
+    return 0;
+#endif
+}
+
+static int
 qg_factory_capture(void *instance, unsigned char **pixels, size_t *size,
 	unsigned int *width, unsigned int *height, unsigned int *components,
 	void *UNUSED(user_data))
@@ -495,6 +582,9 @@ qg_factory_register(const char *name, int priority, uint64_t capabilities,
     factory.request_frame = qg_factory_request_frame;
     factory.resize = qg_factory_resize;
     factory.capture = qg_factory_capture;
+    factory.set_title = qg_factory_set_title;
+    factory.set_visible = qg_factory_set_visible;
+    factory.set_vsync = qg_factory_set_vsync;
     return brlobol_host_factory_register(&factory);
 }
 
@@ -519,6 +609,7 @@ qtcad_obol_host_factories_register(void)
     static brlobol_host_factory_token_t *gl_token = qg_factory_register(
 	"qt-gl", 60, BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_EMBEDDED |
 	BRLOBOL_HOST_CAP_SYSTEM_GL |
+	BRLOBOL_HOST_CAP_PRESENT_VSYNC |
 	BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
 	BRLOBOL_HOST_CAP_INPUT | BRLOBOL_HOST_CAP_READBACK |
 	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT |

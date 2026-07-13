@@ -10,6 +10,7 @@
 
 #include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
+#include "QgObolSelectionSyncPrivate.h"
 
 #include "brlobol/scene_controller.h"
 #include "brlobol/view_controller.h"
@@ -62,6 +63,7 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
 
     if (!ged_view_context_is_independent(sync_txn.view) &&
 	ged_draw_obol_controller(gedp) != obol) {
+	(void)qg_obol_sync_selection_state_if_active(gedp, display, nullptr);
 	display->need_update(QG_VIEW_REFRESH);
 	return 1;
     }
@@ -75,6 +77,7 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
      * successful draw to the primary endpoint before observers run. */
     if (sync_txn.kind == GED_DRAW_TXN_DRAW && result && result->status > 0 &&
 	ged_draw_obol_controller(gedp) == obol) {
+	(void)qg_obol_sync_selection_state_if_active(gedp, display, nullptr);
 	display->need_update(QG_VIEW_REFRESH);
 	return 1;
     }
@@ -82,9 +85,11 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
     SoBRLSceneController *scene = obol->getSceneController();
     const int changed = ged_draw_obol_scene_sync_transaction(gedp, &sync_txn,
 	    result, scene);
-    if (changed || transaction_changed)
+    const int selection_changed =
+	qg_obol_sync_selection_state_if_active(gedp, display, nullptr);
+    if (changed || transaction_changed || selection_changed)
 	display->need_update(QG_VIEW_REFRESH);
-    return changed || transaction_changed;
+    return changed || transaction_changed || selection_changed;
 }
 
 // Local Variables:

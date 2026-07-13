@@ -17,6 +17,7 @@
 #include <Inventor/nodes/SoNode.h>
 
 #include <string.h>
+#include <utility>
 
 SO_ACTION_SOURCE(SoBRLLodUpdateAction);
 
@@ -57,6 +58,12 @@ void
 SoBRLLodUpdateAction::addResult(const BRLObolLodResult &result)
 {
     this->results.push_back(result);
+}
+
+void
+SoBRLLodUpdateAction::addResult(BRLObolLodResult &&result)
+{
+    this->results.push_back(std::move(result));
 }
 
 void
@@ -179,6 +186,11 @@ lod_update_matches_source(const SoBRLDatabaseSource *source,
     if (lod_update_string_matches(source->instanceKey.getValue(),
 				  result.request.objectPath))
 	return TRUE;
+    if (source->hasCompactInstanceIndex() &&
+	result.request.objectPath.getLength() > 0 &&
+	source->getCompactInstanceCountForPath(
+	    result.request.objectPath.getString(), FALSE) > 0)
+	return TRUE;
 
     const char *path = source->path.getValue().getString();
     const char *leaf = path ? strrchr(path, '/') : NULL;
@@ -225,6 +237,8 @@ SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
 
     for (size_t i = 0; i < updateAction->results.size(); i++) {
 	BRLObolLodResult &result = updateAction->results[i];
+	if (updateAction->matched[i])
+	    continue;
 	if (!lod_update_matches_source(source, result))
 	    continue;
 
@@ -240,7 +254,7 @@ SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    continue;
 	}
 
-	if (updateAction->viewState->applySourceResult(source, result))
+	if (updateAction->viewState->consumeSourceResult(source, result))
 	    updateAction->appliedResultCount++;
 	else {
 	    updateAction->rejectedResultCount++;
@@ -261,6 +275,8 @@ SoBRLLodUpdateAction::meshShapeAction(SoAction *action, SoNode *node)
 
     for (size_t i = 0; i < updateAction->results.size(); i++) {
 	BRLObolLodResult &result = updateAction->results[i];
+	if (updateAction->matched[i])
+	    continue;
 	if (!lod_update_matches_shape(shape, result))
 	    continue;
 
@@ -276,7 +292,7 @@ SoBRLLodUpdateAction::meshShapeAction(SoAction *action, SoNode *node)
 	    continue;
 	}
 
-	if (updateAction->viewState->applyDisplayResult(shape, result))
+	if (updateAction->viewState->consumeDisplayResult(shape, result))
 	    updateAction->appliedResultCount++;
 	else {
 	    updateAction->rejectedResultCount++;

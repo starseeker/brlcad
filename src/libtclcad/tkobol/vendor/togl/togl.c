@@ -4017,3 +4017,20 @@ Togl_GetToglFromName(Tcl_Interp *interp, const char *cmdName, Togl **toglPtr)
     return TCL_OK;
 }
 
+int
+BrlcadTkObolHost_SetSwapInterval(Tcl_Interp *interp,
+        const char *widget_command, int interval)
+{
+    Togl *togl = NULL;
+
+    if (!interp || !widget_command ||
+            Togl_GetToglFromName(interp, widget_command, &togl) != TCL_OK ||
+            !togl || !togl->Ctx)
+        return 0;
+    Togl_MakeCurrent(togl);
+    if (!Togl_SwapInterval(togl, interval ? 1 : 0))
+        return 0;
+    togl->SwapInterval = interval ? 1 : 0;
+    return 1;
+}
+

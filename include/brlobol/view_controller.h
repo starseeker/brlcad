@@ -24,6 +24,7 @@
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SoDB.h>
 #include <atomic>
+#include <mutex>
 #include <stddef.h>
 #include <stdint.h>
 #include <vector>
@@ -65,6 +66,7 @@ struct BRLOBOL_EXPORT BRLObolProgressiveOptions {
     BRLObolProgressiveOptions(void);
 
     size_t maxLodResults;
+    uint64_t maxLodApplyMicroseconds;
     size_t maxProviders;
     size_t maxSources;
     size_t maxChildrenPerSource;
@@ -100,6 +102,9 @@ typedef int (*BRLObolProgressiveAdvanceCallback)(
     void *userData,
     const BRLObolProgressiveOptions *options,
     BRLObolProgressiveStatus *status);
+
+typedef void (*BRLObolFrameRequestCallback)(void *userData,
+    const char *reason);
 
 struct BRLOBOL_EXPORT BRLObolProgressiveProviderRecord {
     BRLObolProgressiveProviderRecord(void);
@@ -175,6 +180,9 @@ public:
     const SbString &getLastDiagnostics(void) const;
 
     void requestRender(const char *reason = NULL);
+    void setFrameRequestCallback(BRLObolFrameRequestCallback callback,
+	void *userData);
+    void clearFrameRequestCallback(void *userData);
     void clearRenderRequest(void);
     SbBool consumeRenderRequest(SbString *reason = NULL);
     SbBool renderPending(SbBool clearWindow = TRUE,
@@ -259,7 +267,9 @@ public:
     unsigned int getLastMeshBudgetEvictedFullDetailMeshCount(void) const;
     unsigned int getLastMeshBudgetEvictedDisplayMeshCount(void) const;
     SbBool hasPendingLodResults(void) const;
-    size_t processPendingLodResults(size_t maxResults = 0);
+    SbBool hasPendingLodSubmissions(void) const;
+    size_t processPendingLodResults(size_t maxResults = 0,
+	uint64_t maxMicroseconds = 0);
     int submitLodRequestsIfNeeded(SbBool refreshMissing = TRUE,
 				  int reset = 0);
     int submitLodRequests(BRLObolLodService *service = NULL,
@@ -478,6 +488,7 @@ public:
 				    BRLObolDatabaseSourceSummary &summary) const;
 
 private:
+    void notifyFrameRequest(const char *reason);
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
     void syncRenderManager(void);
@@ -505,6 +516,9 @@ private:
     double clipMaximum;
     SbBool renderRequested;
     SbString renderReason;
+    std::mutex frameRequestMutex;
+    BRLObolFrameRequestCallback frameRequestCallback;
+    void *frameRequestUserData;
     uint64_t lastRenderTimeNanoseconds;
     uint64_t smoothedRenderTimeNanoseconds;
     std::vector<BRLObolProgressiveProviderRecord> progressiveProviders;
@@ -516,6 +530,11 @@ private:
     std::atomic<int> lodResultsPending;
     SbBool lodAutoSubmit;
     uint64_t lodActiveGeneration;
+    size_t lodSubmissionSourceIndex;
+    size_t lodSubmissionEntryOffset;
+    SbBool lodSubmissionPending;
+    SbBool lodSubmissionRefreshMissing;
+    int lodSubmissionReset;
     uint64_t lodLastSubmittedViewRevision;
     uint64_t lodLastSubmittedPolicyRevision;
     SbString lodLastSubmittedSourceSignature;

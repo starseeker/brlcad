@@ -25,7 +25,9 @@
 #include "performance_private.h"
 
 #include "bg/line_layer.h"
+#include "bu/app.h"
 #include "bu/color.h"
+#include "bu/file.h"
 #include "bu/list.h"
 #include "bu/str.h"
 #include "bu/vls.h"
@@ -41,6 +43,7 @@
 #include "rt/tree.h"
 #include "rt/vlist.h"
 #include "rt/view.h"
+#include "wdb.h"
 
 #include <Inventor/SbName.h>
 #include <Inventor/SbViewportRegion.h>
@@ -55,6 +58,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <inttypes.h>
 #include <limits.h>
 #include <map>
 #include <math.h>
@@ -63,6 +67,7 @@
 #include <string.h>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -70,28 +75,61 @@ struct BRLObolCompactInstanceEntry {
     BRLObolCompactInstanceEntry(void) :
 	instance(obol::CadIdBuilder::Root()),
 	part(obol::CadIdBuilder::Root()),
-	vlist(NULL),
-	mesh(NULL),
 	localToSource(SbMatrix::identity()),
 	localTransform(SbMatrix::identity()),
 	visible(TRUE),
 	selectable(TRUE),
 	selected(FALSE),
-	highlighted(FALSE)
+	highlighted(FALSE),
+	wireGeometry(FALSE),
+	pointGeometry(FALSE),
+	meshGeometry(FALSE),
+	lodBacked(FALSE),
+	sourceMeshRequestValid(FALSE),
+	geometryRevision(1),
+	appearanceRevision(1),
+	placementRevision(1),
+	visibilityRevision(1),
+	selectionRevision(1),
+	occurrenceIndex(0),
+	booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION)
     {
     }
 
     obol::InstanceId instance;
     obol::PartId part;
-    SoBRLVListShape *vlist;
-    SoBRLMeshShape *mesh;
     SbMatrix localToSource;
     SbMatrix localTransform;
     SoBRLCadAssembly::InstanceSemantic semantic;
+    SbString instanceKey;
     SbBool visible;
     SbBool selectable;
     SbBool selected;
     SbBool highlighted;
+    SbBool wireGeometry;
+    SbBool pointGeometry;
+    SbBool meshGeometry;
+    SbBool lodBacked;
+    SbBool sourceMeshRequestValid;
+    BRLObolSourceMeshRequest sourceMeshRequest;
+    std::shared_ptr<const obol::PartGeometry> geometry;
+    BRLObolRealizedShapeSummary shapeSummary;
+    obol::InstanceStyle normalStyle;
+    obol::InstanceStyle selectedStyle;
+    obol::InstanceStyle highlightedStyle;
+    obol::InstanceStyle style;
+    uint64_t geometryRevision;
+    uint64_t appearanceRevision;
+    uint64_t placementRevision;
+    uint64_t visibilityRevision;
+    uint64_t selectionRevision;
+    uint32_t occurrenceIndex;
+    int booleanOperation;
+};
+
+struct BRLObolCompactPartReference {
+    obol::PartId part;
+    std::shared_ptr<const obol::PartGeometry> geometry;
 };
 
 struct BRLObolCompactInstanceIndex {
@@ -101,26 +139,53 @@ struct BRLObolCompactInstanceIndex {
     {
     }
 
-    ~BRLObolCompactInstanceIndex(void)
-    {
-	for (size_t i = 0; i < entries.size(); i++) {
-	    if (entries[i].vlist)
-		entries[i].vlist->unref();
-	    if (entries[i].mesh)
-		entries[i].mesh->unref();
-	}
-    }
-
     std::map<std::string, obol::PartId> partIdByKey;
-    std::vector<obol::PartUpdate> parts;
+    std::unordered_map<const obol::PartGeometry *, obol::PartId>
+	partIdByGeometry;
+    std::vector<BRLObolCompactPartReference> parts;
     std::vector<obol::InstanceUpdate> instances;
     std::vector<obol::InstanceId> hiddenInstances;
     std::vector<obol::InstanceId> selectedInstances;
     std::vector<obol::InstanceId> unpickableInstances;
     std::vector<BRLObolCompactInstanceEntry> entries;
+    std::unordered_map<obol::InstanceId, size_t,
+	std::hash<obol::InstanceId>> entryIndex;
     int wireCount;
     int shadedCount;
 };
+
+static void realized_vlist_shape_summary(const SoBRLVListShape *shape,
+	BRLObolRealizedShapeSummary &summary);
+static void realized_mesh_shape_summary(const SoBRLMeshShape *shape,
+	BRLObolRealizedShapeSummary &summary);
+
+static SbString
+compact_instance_identity(const BRLObolCompactInstanceEntry &entry)
+{
+    if (entry.instanceKey.getLength() > 0)
+	return entry.instanceKey;
+    SbString key;
+    key.sprintf("obol-instance:%016" PRIx64 "%016" PRIx64,
+	entry.instance.w1, entry.instance.w0);
+    return key;
+}
+
+static SbBox3f
+compact_part_geometry_bounds(
+    const std::shared_ptr<const obol::PartGeometry> &geometry)
+{
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    if (!geometry)
+	return bounds;
+    if (geometry->points)
+	bounds.extendBy(geometry->points->bounds);
+    if (geometry->wire)
+	bounds.extendBy(geometry->wire->bounds);
+    if (geometry->shaded)
+	bounds.extendBy(geometry->shaded->bounds);
+    return bounds;
+}
 
 SO_NODE_SOURCE(SoBRLDatabaseSource);
 
@@ -525,6 +590,12 @@ brlobol_database_sources_refresh_material_colors(
 	SoBRLDatabaseSource *source = sources[i];
 	if (!source || source->materialRevision.getValue() == materialRevision)
 	    continue;
+	if (source->hasCompactInstanceIndex()) {
+	    if (source->refreshMaterialColorFromDatabase(materialRevision,
+		    dbip) > 0)
+		changed = 1;
+	    continue;
+	}
 
 	BRLObolMaterialPathState resolved;
 	if (!sweep.resolve(source->path.getValue().getString(), resolved))
@@ -662,10 +733,25 @@ BRLObolCompactInstanceHandle::isValid(void) const
 BRLObolCompactInstanceSummary::BRLObolCompactInstanceSummary(void) :
     valid(FALSE),
     localToSource(SbMatrix::identity()),
+    geometryIdentity(0),
+    geometryRevision(0),
+    appearanceRevision(0),
+    placementRevision(0),
+    visibilityRevision(0),
+    selectionRevision(0),
     occurrenceIndex(0),
     booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION),
+    regionId(0),
+    airCode(0),
+    materialId(0),
+    los(0),
+    materialColorValid(FALSE),
+    materialColor(1.0f, 1.0f, 1.0f),
+    materialShader(""),
     wireGeometry(FALSE),
+    pointGeometry(FALSE),
     meshGeometry(FALSE),
+    lodBacked(FALSE),
     visible(TRUE),
     selectable(TRUE),
     selected(FALSE),
@@ -808,6 +894,18 @@ BRLObolRealizedShapeSummary::BRLObolRealizedShapeSummary(void) :
     editIntentId(""),
     editIntentRole(""),
     lodPolicy(0),
+    colorOverride(FALSE),
+    color(1.0f, 1.0f, 1.0f),
+    lodAvailable(FALSE),
+    lodActiveLevel(-1),
+    lodFaceCount(0),
+    lodPointCount(0),
+    lodOriginalPointCount(0),
+    lodNormalCount(0),
+    lodHasSnappedPoints(FALSE),
+    lodHasNormals(FALSE),
+    lodBoundsMin(0.0f, 0.0f, 0.0f),
+    lodBoundsMax(0.0f, 0.0f, 0.0f),
     pointCount(0),
     commandCount(0),
     segmentCount(0),
@@ -818,6 +916,18 @@ BRLObolRealizedShapeSummary::BRLObolRealizedShapeSummary(void) :
     bounds()
 {
     this->bounds.makeEmpty();
+}
+
+BRLObolCompactOccurrence::BRLObolCompactOccurrence(void) :
+    geometry(),
+    summary(),
+    localTransform(SbMatrix::identity()),
+    lodBacked(FALSE),
+    sourceMeshRequestValid(FALSE),
+    sourceMeshRequest(),
+    occurrenceIndex(0),
+    booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION)
+{
 }
 
 BRLObolRealizedMaterialSummary::BRLObolRealizedMaterialSummary(void) :
@@ -1066,6 +1176,28 @@ source_effective_instance_key(const SoBRLDatabaseSource *source)
     if (key.getLength() > 0)
 	return key;
     return source->path.getValue();
+}
+
+static uint64_t
+source_stable_compact_handle_id(const SoBRLDatabaseSource *source)
+{
+    uint64_t hash = 1469598103934665603ULL;
+    const uintptr_t databaseIdentity = reinterpret_cast<uintptr_t>(
+	source ? source->getDatabase() : NULL);
+    const unsigned char *dbBytes = reinterpret_cast<const unsigned char *>(
+	&databaseIdentity);
+    for (size_t i = 0; i < sizeof(databaseIdentity); i++) {
+	hash ^= dbBytes[i];
+	hash *= 1099511628211ULL;
+    }
+    const SbString key = source_effective_instance_key(source);
+    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(
+	key.getString());
+    for (int i = 0; i < key.getLength(); i++) {
+	hash ^= bytes[i];
+	hash *= 1099511628211ULL;
+    }
+    return hash ? hash : 1;
 }
 
 static SbString
@@ -1337,7 +1469,11 @@ source_lod_cache_key_append(std::string &cacheKey,
 			    const SoBRLDatabaseSource *source,
 			    const SbBox3f &localBounds)
 {
-    if (!source_view_lod_active(source))
+    /* Normal wire geometry is source-local and independent of viewport
+     * policy.  Only CSG LoD realizes a view-dependent line payload here;
+     * mesh/BOT proxy variants carry their geometry-affecting threshold in
+     * their own key. */
+    if (!source_csg_lod_active(source))
 	return;
 
     char suffix[256] = {0};
@@ -1569,7 +1705,8 @@ store_cached_geometry_map(std::map<std::string, ShapeT *> &cached,
     cached[key] = shape;
 }
 
-BRLObolDatabaseSourceRealizationCache::BRLObolDatabaseSourceRealizationCache(void)
+BRLObolDatabaseSourceRealizationCache::BRLObolDatabaseSourceRealizationCache(void) :
+    preserveCompactSourceOnFailure(false)
 {
 }
 
@@ -1586,6 +1723,187 @@ BRLObolDatabaseSourceRealizationCache::clear(void)
     unref_cached_geometry_map(this->sharedMeshGeometry);
     this->sharedWireBounds.clear();
     this->sharedWireCadGeometry.clear();
+    this->sharedMeshVListCadGeometry.clear();
+    this->sharedMeshCadGeometry.clear();
+}
+
+template <typename ValueT>
+static void
+erase_realization_cache_values(std::map<std::string, ValueT> &values,
+	const std::string &name)
+{
+    values.erase(name);
+    const std::string prefix = name + ":";
+    for (auto it = values.lower_bound(prefix); it != values.end() &&
+	it->first.compare(0, prefix.size(), prefix) == 0;)
+	it = values.erase(it);
+}
+
+template <typename ShapeT>
+static void
+erase_realization_cache_shapes(std::map<std::string, ShapeT *> &values,
+	const std::string &name)
+{
+
+    auto exact = values.find(name);
+    if (exact != values.end()) {
+	if (exact->second)
+	    exact->second->unref();
+	values.erase(exact);
+    }
+    const std::string prefix = name + ":";
+    for (auto it = values.lower_bound(prefix); it != values.end() &&
+	it->first.compare(0, prefix.size(), prefix) == 0;) {
+	if (it->second)
+	    it->second->unref();
+	it = values.erase(it);
+    }
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::eraseObject(const std::string &path)
+{
+    const size_t slash = path.find_last_of('/');
+    const std::string name = slash == std::string::npos ? path :
+	path.substr(slash + 1);
+    if (name.empty())
+	return;
+    erase_realization_cache_shapes(this->sharedWireGeometry, name);
+    erase_realization_cache_values(this->sharedWireBounds, name);
+    erase_realization_cache_shapes(this->sharedMeshVListGeometry, name);
+    erase_realization_cache_shapes(this->sharedMeshGeometry, name);
+    erase_realization_cache_values(this->sharedWireCadGeometry, name);
+    erase_realization_cache_values(this->sharedMeshVListCadGeometry, name);
+    erase_realization_cache_values(this->sharedMeshCadGeometry, name);
+}
+
+static std::string
+realization_cache_object_name(const std::string &path)
+{
+    const size_t slash = path.find_last_of('/');
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+template <typename ValueT>
+static void
+rename_realization_cache_values(std::map<std::string, ValueT> &values,
+	const std::string &oldName, const std::string &newName)
+{
+    std::vector<std::string> keys;
+    if (values.find(oldName) != values.end())
+	keys.push_back(oldName);
+    const std::string prefix = oldName + ":";
+    for (auto it = values.lower_bound(prefix); it != values.end() &&
+	it->first.compare(0, prefix.size(), prefix) == 0; ++it)
+	keys.push_back(it->first);
+    for (const std::string &key : keys) {
+	auto it = values.find(key);
+	if (it == values.end())
+	    continue;
+	const std::string nextKey = newName + key.substr(oldName.size());
+	ValueT value = std::move(it->second);
+	values.erase(it);
+	values.erase(nextKey);
+	values.emplace(nextKey, std::move(value));
+    }
+}
+
+template <typename ShapeT>
+static void
+rename_realization_cache_shapes(std::map<std::string, ShapeT *> &values,
+	const std::string &oldName, const std::string &newName)
+{
+    std::vector<std::string> keys;
+    if (values.find(oldName) != values.end())
+	keys.push_back(oldName);
+    const std::string prefix = oldName + ":";
+    for (auto it = values.lower_bound(prefix); it != values.end() &&
+	it->first.compare(0, prefix.size(), prefix) == 0; ++it)
+	keys.push_back(it->first);
+    for (const std::string &key : keys) {
+	auto it = values.find(key);
+	if (it == values.end())
+	    continue;
+	const std::string nextKey = newName + key.substr(oldName.size());
+	ShapeT *shape = it->second;
+	values.erase(it);
+	auto destination = values.find(nextKey);
+	if (destination != values.end()) {
+	    if (destination->second)
+		destination->second->unref();
+	    values.erase(destination);
+	}
+	values.emplace(nextKey, shape);
+    }
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::renameObject(
+    const std::string &oldPath, const std::string &newPath)
+{
+    const std::string oldName = realization_cache_object_name(oldPath);
+    const std::string newName = realization_cache_object_name(newPath);
+    if (oldName.empty() || newName.empty() || oldName == newName)
+	return;
+    rename_realization_cache_shapes(this->sharedWireGeometry, oldName,
+	newName);
+    rename_realization_cache_values(this->sharedWireBounds, oldName, newName);
+    rename_realization_cache_shapes(this->sharedMeshVListGeometry, oldName,
+	newName);
+    rename_realization_cache_shapes(this->sharedMeshGeometry, oldName,
+	newName);
+    rename_realization_cache_values(this->sharedWireCadGeometry, oldName,
+	newName);
+    rename_realization_cache_values(this->sharedMeshVListCadGeometry, oldName,
+	newName);
+    rename_realization_cache_values(this->sharedMeshCadGeometry, oldName,
+	newName);
+}
+
+template <typename ValueT>
+static void
+erase_realization_cache_variant_values(
+    std::map<std::string, ValueT> &values, const char *marker)
+{
+    for (auto it = values.begin(); it != values.end();) {
+	if (it->first.find(marker) != std::string::npos)
+	    it = values.erase(it);
+	else
+	    ++it;
+    }
+}
+
+template <typename ShapeT>
+static void
+erase_realization_cache_variant_shapes(
+    std::map<std::string, ShapeT *> &values, const char *marker)
+{
+    for (auto it = values.begin(); it != values.end();) {
+	if (it->first.find(marker) == std::string::npos) {
+	    ++it;
+	    continue;
+	}
+	if (it->second)
+	    it->second->unref();
+	it = values.erase(it);
+    }
+}
+
+void
+BRLObolDatabaseSourceRealizationCache::eraseViewVariants(void)
+{
+    static const char marker[] = ":view-lod:";
+    erase_realization_cache_variant_shapes(this->sharedWireGeometry, marker);
+    erase_realization_cache_variant_values(this->sharedWireBounds, marker);
+    erase_realization_cache_variant_shapes(this->sharedMeshVListGeometry,
+	marker);
+    erase_realization_cache_variant_shapes(this->sharedMeshGeometry, marker);
+    erase_realization_cache_variant_values(this->sharedWireCadGeometry,
+	marker);
+    erase_realization_cache_variant_values(this->sharedMeshVListCadGeometry,
+	marker);
+    erase_realization_cache_variant_values(this->sharedMeshCadGeometry,
+	marker);
 }
 
 void
@@ -1623,15 +1941,88 @@ BRLObolDatabaseSourceRealizationCache::storeMeshGeometry(
     store_cached_geometry_map(this->sharedMeshGeometry, key, shape);
 }
 
-void
-BRLObolDatabaseSourceRealizationCache::storeWireCadGeometry(
-    const std::string &key,
-    const obol::PartGeometry &geometry)
+static std::shared_ptr<const obol::PartGeometry>
+store_cached_part_geometry(
+    std::map<std::string, BRLObolCachedPartGeometry> &cache,
+    const std::string &key, obol::PartGeometry &&geometry,
+    const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
+    bool lodBacked)
 {
     if (key.empty())
-	return;
+	return std::shared_ptr<const obol::PartGeometry>();
 
-    this->sharedWireCadGeometry[key] = geometry;
+    BRLObolCachedPartGeometry &stored = cache[key];
+    stored.geometry =
+	std::make_shared<const obol::PartGeometry>(std::move(geometry));
+    stored.sourceType = sourceType ? sourceType : "";
+    stored.geometryKind = geometryKind ? geometryKind : "";
+    if (bounds)
+	stored.bounds = *bounds;
+    else
+	stored.bounds = compact_part_geometry_bounds(stored.geometry);
+    stored.lodBacked = lodBacked;
+    return stored.geometry;
+}
+
+std::shared_ptr<const obol::PartGeometry>
+BRLObolDatabaseSourceRealizationCache::storeWireCadGeometry(
+    const std::string &key, obol::PartGeometry &&geometry,
+    const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
+    bool lodBacked)
+{
+    return store_cached_part_geometry(this->sharedWireCadGeometry, key,
+	std::move(geometry), sourceType, geometryKind, bounds, lodBacked);
+}
+
+std::shared_ptr<const obol::PartGeometry>
+BRLObolDatabaseSourceRealizationCache::storeMeshVListCadGeometry(
+    const std::string &key, obol::PartGeometry &&geometry,
+    const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
+    bool lodBacked)
+{
+    return store_cached_part_geometry(this->sharedMeshVListCadGeometry, key,
+	std::move(geometry), sourceType, geometryKind, bounds, lodBacked);
+}
+
+std::shared_ptr<const obol::PartGeometry>
+BRLObolDatabaseSourceRealizationCache::storeMeshCadGeometry(
+    const std::string &key, obol::PartGeometry &&geometry,
+    const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
+    bool lodBacked)
+{
+    return store_cached_part_geometry(this->sharedMeshCadGeometry, key,
+	std::move(geometry), sourceType, geometryKind, bounds, lodBacked);
+}
+
+static const BRLObolCachedPartGeometry *
+find_cached_part_geometry(
+    const std::map<std::string, BRLObolCachedPartGeometry> &cache,
+    const std::string &key)
+{
+    auto found = cache.find(key);
+    return found == cache.end() || !found->second.geometry ? NULL :
+	&found->second;
+}
+
+const BRLObolCachedPartGeometry *
+BRLObolDatabaseSourceRealizationCache::findWireCadGeometry(
+    const std::string &key) const
+{
+    return find_cached_part_geometry(this->sharedWireCadGeometry, key);
+}
+
+const BRLObolCachedPartGeometry *
+BRLObolDatabaseSourceRealizationCache::findMeshVListCadGeometry(
+    const std::string &key) const
+{
+    return find_cached_part_geometry(this->sharedMeshVListCadGeometry, key);
+}
+
+const BRLObolCachedPartGeometry *
+BRLObolDatabaseSourceRealizationCache::findMeshCadGeometry(
+    const std::string &key) const
+{
+    return find_cached_part_geometry(this->sharedMeshCadGeometry, key);
 }
 
 template <typename ShapeT>
@@ -1692,6 +2083,9 @@ seed_realization_cache_from_node(SoNode *node,
     }
 }
 
+static SbBool source_bounds_for_realized_node(const SoNode *node,
+	const SbMatrix &matrix, SbBox3f &bounds);
+
 void
 brlobol_database_source_seed_realization_cache(
     SoBRLDatabaseSource *source,
@@ -1707,18 +2101,211 @@ brlobol_database_source_seed_realization_cache(
     if (roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL)
 	return;
 
+    if (source->hasCompactInstanceIndex()) {
+	source->seedCompactRealizationCache(cache);
+	return;
+    }
+
     seed_realization_cache_from_node(source, cache,
 				     source_uses_mesh_realization(source));
 }
 
+void
+SoBRLDatabaseSource::seedCompactRealizationCache(
+    BRLObolDatabaseSourceRealizationCache *cache) const
+{
+    if (!cache || !this->compactIndex)
+	return;
+
+    const bool meshRealization = source_uses_mesh_realization(this);
+
+    for (const BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries) {
+	const char *name = entry.semantic.sourceName.getString();
+	if (!name || !name[0])
+	    continue;
+
+	const SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
+	std::string cacheKey(name);
+	/* Realization lookup keys are formed before an internal is fetched, so
+	 * their LoD size fallback intentionally starts with empty bounds. */
+	SbBox3f lookupBounds;
+	source_lod_cache_key_append(cacheKey, this, lookupBounds);
+
+	if (entry.geometry) {
+	    BRLObolCachedPartGeometry cached;
+	    cached.geometry = entry.geometry;
+	    cached.sourceType = entry.shapeSummary.sourceType.getString();
+	    cached.geometryKind = entry.shapeSummary.geometryKind.getString();
+	    cached.bounds = localBounds;
+	    cached.lodBacked = entry.lodBacked;
+	    if (entry.meshGeometry)
+		cache->sharedMeshCadGeometry[cacheKey] = cached;
+	    else if ((entry.wireGeometry || entry.pointGeometry) && meshRealization)
+		cache->sharedMeshVListCadGeometry[cacheKey] = cached;
+	    else if (entry.wireGeometry || entry.pointGeometry)
+		cache->sharedWireCadGeometry[cacheKey] = cached;
+	}
+	if (!localBounds.isEmpty() &&
+	    (entry.wireGeometry || entry.pointGeometry) && !meshRealization)
+	    cache->storeWireBounds(cacheKey, localBounds);
+    }
+}
+
 struct realize_walk_data {
+    realize_walk_data(void) :
+	source(NULL),
+	cache(NULL),
+	revision(0),
+	realized_shapes(0),
+	failed_shapes(0),
+	compact_index(NULL),
+	compact_ordinal(0),
+	compact_unsupported(0),
+	compact_bounds_valid(FALSE)
+    {
+	compact_bounds.makeEmpty();
+    }
+
     SoBRLDatabaseSource *source;
     BRLObolDatabaseSourceRealizationCache *cache;
     uint32_t revision;
     int realized_shapes;
     int failed_shapes;
     SbString diagnostic;
+    BRLObolCompactInstanceIndex *compact_index;
+    int compact_ordinal;
+    int compact_unsupported;
+    SbBox3f compact_bounds;
+    SbBool compact_bounds_valid;
+    std::unordered_set<std::string> compact_seen_instances;
+    std::unordered_map<std::string, uint32_t> compact_occurrence_counts;
 };
+
+static int cad_vlist_part_geometry(const SoBRLVListShape *shape,
+	obol::PartGeometry &geometry);
+static int cad_mesh_part_geometry(const SoBRLMeshShape *shape,
+	obol::PartGeometry &geometry);
+struct compact_occurrence_build {
+    BRLObolCompactOccurrence occurrence;
+    SoBRLCadAssembly::InstanceSemantic semantic;
+    obol::InstanceStyle normalStyle;
+    obol::InstanceStyle selectedStyle;
+    obol::InstanceStyle highlightedStyle;
+    SbBool stylesValid = FALSE;
+    SbBool dashed = FALSE;
+};
+static SoBRLCadAssembly::InstanceSemantic compact_semantic_from_summary(
+	const BRLObolRealizedShapeSummary &summary);
+static void compact_add_occurrence(SoBRLDatabaseSource *source,
+	BRLObolCompactInstanceIndex &index,
+	const compact_occurrence_build &input, int &ordinal,
+	int &unsupported);
+static SbBool source_bounds_for_realized_node(const SoNode *node,
+	const SbMatrix &matrix, SbBox3f &bounds);
+
+static std::string
+realize_walk_instance_identity(const struct db_tree_state *tsp,
+	const struct db_full_path *pathp)
+{
+    std::string key;
+    if (!tsp || !pathp)
+	return key;
+    const uint32_t version = 1;
+    const int sofar = tsp->ts_sofar &
+	(TS_SOFAR_MINUS | TS_SOFAR_INTER | TS_SOFAR_REGION);
+    auto append = [&key](const void *data, size_t size) {
+	key.append(static_cast<const char *>(data), size);
+    };
+    append(&version, sizeof(version));
+    append(&pathp->fp_len, sizeof(pathp->fp_len));
+    append(&sofar, sizeof(sofar));
+    append(tsp->ts_mat, sizeof(tsp->ts_mat));
+    for (size_t i = 0; i < pathp->fp_len; i++) {
+	const struct directory *dp = pathp->fp_names ? pathp->fp_names[i] : NULL;
+	const char *name = dp && dp->d_namep ? dp->d_namep : "";
+	const size_t len = strlen(name) + 1;
+	const int cinst = pathp->fp_cinst ?
+	    DB_FULL_PATH_GET_COMB_INST(pathp, i) : 0;
+	append(&len, sizeof(len));
+	append(name, len);
+	append(&cinst, sizeof(cinst));
+    }
+    return key;
+}
+
+static std::string
+realize_walk_occurrence_identity(const struct db_full_path *pathp)
+{
+    std::string key;
+    if (!pathp)
+	return key;
+    const uint32_t version = 1;
+    auto append = [&key](const void *data, size_t size) {
+	key.append(static_cast<const char *>(data), size);
+    };
+    append(&version, sizeof(version));
+    append(&pathp->fp_len, sizeof(pathp->fp_len));
+    for (size_t i = 0; i < pathp->fp_len; i++) {
+	const struct directory *dp = pathp->fp_names ? pathp->fp_names[i] : NULL;
+	const char *name = dp && dp->d_namep ? dp->d_namep : "";
+	const size_t len = strlen(name) + 1;
+	const int cinst = pathp->fp_cinst ?
+	    DB_FULL_PATH_GET_COMB_INST(pathp, i) : 0;
+	append(&len, sizeof(len));
+	append(name, len);
+	append(&cinst, sizeof(cinst));
+    }
+    return key;
+}
+
+static void
+compact_apply_walk_identity(const SoBRLDatabaseSource *source,
+    BRLObolCompactInstanceIndex &index,
+    size_t previousEntryCount, const struct db_tree_state *tsp,
+    const struct db_full_path *pathp, const std::string &walkIdentity,
+    uint32_t duplicateOrdinal)
+{
+    if (!tsp || !pathp || index.entries.size() <= previousEntryCount ||
+	index.instances.empty())
+	return;
+
+    BRLObolCompactInstanceEntry &entry = index.entries.back();
+    std::string occurrenceKey = walkIdentity;
+    if (!occurrenceKey.empty()) {
+	const SbString sourceKey = source_effective_instance_key(source);
+	occurrenceKey.insert(0, sourceKey.getString(), sourceKey.getLength());
+	if (duplicateOrdinal > 0) {
+	    occurrenceKey.push_back('\0');
+	    for (int i = 0; i < 4; i++)
+		occurrenceKey.push_back(static_cast<char>(
+		    duplicateOrdinal >> (i * 8)));
+	}
+	const obol::InstanceId instance =
+	    obol::CadIdBuilder::hash128(occurrenceKey);
+	entry.instance = instance;
+	index.instances.back().instance = instance;
+	char key[96] = {0};
+	snprintf(key, sizeof(key), "compact:%016llx:%016llx",
+	    static_cast<unsigned long long>(instance.w0),
+	    static_cast<unsigned long long>(instance.w1));
+	entry.instanceKey = key;
+	entry.semantic.sourceInstanceKey = key;
+    }
+    entry.occurrenceIndex = pathp->fp_cinst && pathp->fp_len ?
+	static_cast<uint32_t>(DB_FULL_PATH_GET_COMB_INST(pathp,
+		pathp->fp_len - 1)) : 0;
+    entry.booleanOperation = (tsp->ts_sofar & TS_SOFAR_MINUS) ?
+	SoBRLDatabaseSource::BOOLEAN_SUBTRACT :
+	((tsp->ts_sofar & TS_SOFAR_INTER) ?
+	 SoBRLDatabaseSource::BOOLEAN_INTERSECT :
+	 SoBRLDatabaseSource::BOOLEAN_UNION);
+    obol::InstanceRecord &record = index.instances.back().record;
+    record.occurrenceIndex = entry.occurrenceIndex;
+    record.boolOp = entry.booleanOperation ==
+	SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? 1 :
+	(entry.booleanOperation == SoBRLDatabaseSource::BOOLEAN_INTERSECT ? 2 : 0);
+}
 
 static SbMatrix
 mat_to_sbmatrix(const mat_t mat)
@@ -2125,6 +2712,151 @@ assign_shared_geometry_identity(ShapeT *shape,
 	shape->geometryKind = geometryKind;
 }
 
+static BRLObolRealizedShapeSummary
+compact_occurrence_summary(const SoBRLDatabaseSource *source,
+	const char *path, const char *sourceName, const char *sourceType,
+	const char *geometryKind, uint32_t sourceId, int shapeKind)
+{
+    BRLObolRealizedShapeSummary summary;
+    summary.valid = TRUE;
+    summary.shapeKind = shapeKind;
+    summary.path = path ? path : "";
+    summary.sourceName = sourceName ? sourceName : "";
+    summary.sourceType = sourceType ? sourceType : "";
+    summary.sourceId = sourceId;
+    summary.displayName = source &&
+	source->displayName.getValue().getLength() > 0 ?
+	source->displayName.getValue() : summary.sourceName;
+    summary.geometryName = summary.sourceName;
+    summary.sourceIdentity = source_record_identity(source, path);
+    summary.cacheIdentity = record_identity_with_revision(
+	summary.sourceIdentity.getString(), sourceId);
+    summary.databaseIntent = TRUE;
+    summary.localSource = FALSE;
+    summary.sharedSource = FALSE;
+    summary.nonDatabaseSource = FALSE;
+    summary.drawMode = source_record_draw_mode(source);
+    summary.recordRole = "database";
+    summary.geometryKind = geometryKind ? geometryKind : "";
+    summary.visible = source ? source->visible.getValue() : TRUE;
+    summary.selectable = TRUE;
+    summary.selected = source ? source->selected.getValue() : FALSE;
+    summary.highlighted = source ? source->highlighted.getValue() : FALSE;
+    summary.hiddenLine = summary.drawMode == BRLOBOL_LOD_DRAW_HIDDEN_LINE;
+    summary.colorOverride = source ? source->colorOverride.getValue() : FALSE;
+    summary.color = source ? source->color.getValue() :
+	SbColor(1.0f, 1.0f, 1.0f);
+    summary.materialColorValid = source ?
+	source->materialColorValid.getValue() : FALSE;
+    summary.materialColor = source ? source->materialColor.getValue() :
+	SbColor(1.0f, 1.0f, 1.0f);
+    summary.materialRevision = source ?
+	source->materialRevision.getValue() : 0;
+    if (source && source->databaseMetadataValid.getValue()) {
+	summary.regionId = source->databaseRegionId.getValue();
+	summary.airCode = source->databaseAirCode.getValue();
+	summary.materialId = source->databaseMaterialId.getValue();
+	summary.los = source->databaseLos.getValue();
+	summary.materialColorValid =
+	    source->databaseMaterialColorValid.getValue();
+	if (summary.materialColorValid)
+	    summary.materialColor = source->databaseMaterialColor.getValue();
+	summary.materialShader = source->databaseMaterialShader.getValue();
+    }
+    if (source) {
+	summary.ownerSourcePath = source->path.getValue();
+	summary.ownerSourceInstanceKey = source_effective_instance_key(source);
+	summary.ownerDrawMode = source->drawMode.getValue();
+	summary.ownerSourceRevision = source->sourceRevision.getValue();
+	summary.ownerInputsRevision = source->inputsRevision.getValue();
+	summary.ownerViewRevision = source->viewRevision.getValue();
+    }
+    return summary;
+}
+
+static BRLObolRealizedShapeSummary
+compact_occurrence_tree_summary(const SoBRLDatabaseSource *source,
+	const struct db_tree_state *tsp, const char *path,
+	const char *sourceName, const char *sourceType,
+	const char *geometryKind, uint32_t sourceId, int shapeKind)
+{
+    BRLObolRealizedShapeSummary summary = compact_occurrence_summary(source,
+	path, sourceName, sourceType, geometryKind, sourceId, shapeKind);
+    if (!tsp)
+	return summary;
+    summary.regionId = tsp->ts_regionid;
+    summary.airCode = tsp->ts_aircode;
+    summary.materialId = tsp->ts_gmater;
+    summary.los = tsp->ts_los;
+    summary.materialColorValid = tsp->ts_mater.ma_color_valid ? TRUE : FALSE;
+    summary.materialColor = SbColor(
+	static_cast<float>(tsp->ts_mater.ma_color[0]),
+	static_cast<float>(tsp->ts_mater.ma_color[1]),
+	static_cast<float>(tsp->ts_mater.ma_color[2]));
+    summary.materialShader = tsp->ts_mater.ma_shader ?
+	tsp->ts_mater.ma_shader : "";
+    if (source && source->materialColorValid.getValue() &&
+	(source->materialPolicy.getValue() !=
+	 SoBRLDatabaseSource::MATERIAL_DATABASE ||
+	 !summary.materialColorValid)) {
+	summary.materialColorValid = TRUE;
+	summary.materialColor = source->materialColor.getValue();
+    }
+    if (source && !source->colorOverride.getValue()) {
+	SbColor databaseColor;
+	if (brlobol_database_source_path_material_color(source->getDatabase(),
+		path, databaseColor)) {
+	    summary.materialColorValid = TRUE;
+	    summary.materialColor = databaseColor;
+	}
+    }
+    /* Compact entries represent individual database occurrences.  Source
+     * metadata belongs to the aggregate and must not replace the occurrence's
+     * full-path material state resolved above. */
+    return summary;
+}
+
+static void
+compact_source_mesh_request_sync(BRLObolSourceMeshRequest &request,
+	const BRLObolRealizedShapeSummary &summary)
+{
+    request.path = summary.path;
+    request.sourceName = summary.sourceName;
+    request.sourceType = summary.sourceType;
+    request.sourceId = summary.sourceId;
+    request.displayName = summary.displayName;
+    request.geometryName = summary.geometryName;
+    request.cacheIdentity = summary.cacheIdentity;
+    request.sourceIdentity = summary.sourceIdentity;
+    request.ownerSourceInstanceKey = summary.ownerSourceInstanceKey;
+    request.databaseIntent = summary.databaseIntent;
+    request.overlayIntent = summary.overlayIntent;
+    request.hudIntent = summary.hudIntent;
+    request.localSource = summary.localSource;
+    request.sharedSource = summary.sharedSource;
+    request.nonDatabaseSource = summary.nonDatabaseSource;
+    request.drawMode = summary.drawMode;
+    request.recordRole = summary.recordRole;
+    request.geometryKind = summary.geometryKind;
+    request.regionId = summary.regionId;
+    request.airCode = summary.airCode;
+    request.materialId = summary.materialId;
+    request.los = summary.los;
+    request.materialColorValid = summary.materialColorValid;
+    request.materialColor = summary.materialColor;
+    request.materialShader = summary.materialShader;
+    request.selected = summary.selected;
+    request.highlighted = summary.highlighted;
+    request.ghosted = summary.ghosted;
+    request.hiddenLine = summary.hiddenLine;
+    request.editEmphasis = summary.editEmphasis;
+    request.editIntentId = summary.editIntentId;
+    request.editIntentRole = summary.editIntentRole;
+    request.lodPolicy = summary.lodPolicy;
+    request.colorOverride = summary.colorOverride;
+    request.color = summary.color;
+}
+
 static void
 retarget_realized_node_source(SoNode *node,
 			      const SoBRLDatabaseSource *source,
@@ -2472,6 +3204,21 @@ static union tree *
 	!dp)
 	return TREE_NULL;
 
+    std::string walkOccurrenceIdentity;
+    uint32_t duplicateOrdinal = 0;
+    if (data->compact_index) {
+	const std::string identity = realize_walk_instance_identity(tsp, pathp);
+	if (identity.empty()) {
+	    data->compact_unsupported = 1;
+	    return TREE_NULL;
+	}
+	if (!data->compact_seen_instances.insert(identity).second)
+	    return make_nop_tree();
+	walkOccurrenceIdentity = realize_walk_occurrence_identity(pathp);
+	duplicateOrdinal = data->compact_occurrence_counts[
+	    walkOccurrenceIdentity]++;
+    }
+
     SoBRLVListShape *sharedShape = NULL;
     SbBox3f cacheBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
@@ -2480,12 +3227,23 @@ static union tree *
 	data->cache->sharedWireGeometry.find(cacheKey);
     if (found != data->cache->sharedWireGeometry.end())
 	sharedShape = found->second;
-    brlobol_performance_counter_add(sharedShape ? BRLOBOL_PERF_WIRE_CACHE_HITS :
+    std::shared_ptr<const obol::PartGeometry> cachedCadGeometry;
+    const BRLObolCachedPartGeometry *cachedCad = NULL;
+    if (data->compact_index) {
+	cachedCad = data->cache->findWireCadGeometry(cacheKey);
+	if (cachedCad)
+	    cachedCadGeometry = cachedCad->geometry;
+    }
+    brlobol_performance_counter_add(
+	(sharedShape || cachedCadGeometry) ? BRLOBOL_PERF_WIRE_CACHE_HITS :
 	BRLOBOL_PERF_WIRE_CACHE_MISSES, 1);
 
     const char *typeLabel = sharedShape ?
-			    sharedShape->sourceType.getValue().getString() : NULL;
-    if (!sharedShape) {
+			    sharedShape->sourceType.getValue().getString() :
+			    (cachedCad && !cachedCad->sourceType.empty() ?
+			     cachedCad->sourceType.c_str() :
+			     (cachedCadGeometry ? "wire" : NULL));
+    if (!sharedShape && !cachedCadGeometry) {
 	valid_walk_internal validInternal;
 	struct rt_db_internal *localIntern =
 	    fetch_local_walk_internal(tsp, pathp, &validInternal);
@@ -2546,22 +3304,67 @@ static union tree *
 	    sharedShape->sourceType = "annotation";
 	    sharedShape->geometryKind = "annotation";
 	}
-	data->cache->storeWireGeometry(cacheKey, sharedShape);
+	if (!data->compact_index)
+	    data->cache->storeWireGeometry(cacheKey, sharedShape);
 	typeLabel = sharedShape->sourceType.getValue().getString();
     }
 
     char *path = db_path_to_string(pathp);
-    {
+    if (data->compact_index) {
+	const char *geometryKind = sharedShape ?
+	    sharedShape->geometryKind.getValue().getString() :
+	    (cachedCad && !cachedCad->geometryKind.empty() ?
+	     cachedCad->geometryKind.c_str() : "line");
+	std::shared_ptr<const obol::PartGeometry> cadGeometry =
+	    cachedCadGeometry;
+	if (!cadGeometry && sharedShape) {
+	    obol::PartGeometry generated;
+	    if (cad_vlist_part_geometry(sharedShape, generated))
+		cadGeometry = data->cache->storeWireCadGeometry(cacheKey,
+		    std::move(generated), typeLabel, geometryKind);
+	}
+	if (!cadGeometry) {
+	    data->compact_unsupported = 1;
+	} else {
+	    compact_occurrence_build input;
+	    input.occurrence.geometry = cadGeometry;
+	    input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
+	    input.occurrence.summary = compact_occurrence_tree_summary(
+		data->source, tsp, path, dp->d_namep,
+		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
+		"annotation" : typeLabel,
+		geometryKind, data->revision,
+		BRLObolRealizedShapeSummary::SHAPE_VLIST);
+	    input.occurrence.occurrenceIndex =
+		data->source->occurrenceIndex.getValue();
+	    input.occurrence.booleanOperation =
+		data->source->booleanOperation.getValue();
+	    input.semantic = compact_semantic_from_summary(
+		input.occurrence.summary);
+	    input.dashed = (tsp->ts_sofar & TS_SOFAR_MINUS) ? TRUE : FALSE;
+	    const size_t entryCount = data->compact_index->entries.size();
+	    compact_add_occurrence(data->source, *data->compact_index, input,
+		data->compact_ordinal, data->compact_unsupported);
+	    compact_apply_walk_identity(data->source, *data->compact_index,
+		entryCount, tsp, pathp, walkOccurrenceIdentity,
+		duplicateOrdinal);
+	    SbBox3f bounds = database_source_transform_bounds(
+		compact_part_geometry_bounds(cadGeometry),
+		input.occurrence.localTransform);
+	    if (!bounds.isEmpty()) {
+		data->compact_bounds.extendBy(bounds);
+		data->compact_bounds_valid = TRUE;
+	    }
+	}
+    } else {
 	BRLObolPerformanceTimer timer(BRLOBOL_PERF_REALIZED_INSTANCE_NODE_US);
 	SoSeparator *leaf = realize_instance_leaf_separator(tsp);
 	SoBRLVListShape *shape = new SoBRLVListShape;
 	assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
-				 data->revision, data->source);
+	    data->revision, data->source);
 	shape->setSharedGeometry(sharedShape);
-	const char *geometryKind =
-	    sharedShape->geometryKind.getValue().getString();
-	shape->geometryKind = (geometryKind && geometryKind[0]) ?
-			      geometryKind : "line";
+	const char *geometryKind = sharedShape->geometryKind.getValue().getString();
+	shape->geometryKind = geometryKind && geometryKind[0] ? geometryKind : "line";
 	if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
 	    shape->sourceType = "annotation";
 	leaf->addChild(shape);
@@ -2862,7 +3665,6 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 		sharedShape->geometryKind = "annotation";
 	    }
 	}
-	cache->storeWireGeometry(cacheKey, sharedShape);
 	if (localBoundsValid)
 	    cache->storeWireBounds(cacheKey, localBounds);
 	typeLabel = sharedShape->sourceType.getValue().getString();
@@ -2934,13 +3736,22 @@ realize_direct_leaf_wireframe_compact(
 	cache->sharedWireGeometry.find(cacheKey);
     if (found != cache->sharedWireGeometry.end())
 	sharedShape = found->second;
-    brlobol_performance_counter_add(sharedShape ? BRLOBOL_PERF_WIRE_CACHE_HITS :
+    std::shared_ptr<const obol::PartGeometry> cadGeometry;
+    const BRLObolCachedPartGeometry *cachedCad =
+	cache->findWireCadGeometry(cacheKey);
+    if (cachedCad)
+	cadGeometry = cachedCad->geometry;
+    brlobol_performance_counter_add(
+	(sharedShape || cadGeometry) ? BRLOBOL_PERF_WIRE_CACHE_HITS :
 	BRLOBOL_PERF_WIRE_CACHE_MISSES, 1);
 
     const char *typeLabel = sharedShape ?
-			    sharedShape->sourceType.getValue().getString() : NULL;
+			    sharedShape->sourceType.getValue().getString() :
+			    (cachedCad && !cachedCad->sourceType.empty() ?
+			     cachedCad->sourceType.c_str() :
+			     (cadGeometry ? "wire" : NULL));
     int usedLodProxy = 0;
-    if (!sharedShape) {
+    if (!sharedShape && !cadGeometry) {
 	valid_walk_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
@@ -2971,7 +3782,23 @@ realize_direct_leaf_wireframe_compact(
 		    lodProxyBounds.getMin(), lodProxyBounds.getMax());
 	    }
 	} else if (validInternal.local.idb_type == ID_MATERIAL) {
-	    return 0;
+	    SoBRLMaterialObject *materialObject = material_object_from_internal(
+		static_cast<struct rt_material_internal *>(
+		    validInternal.local.idb_ptr));
+	    if (!materialObject) {
+		SbString msg;
+		msg.sprintf("%s: material object realization failed",
+		    fullPath.c_str());
+		source->realizationDiagnostic = msg;
+		return -1;
+	    }
+	    SoSeparator *leaf = new SoSeparator;
+	    assign_material_identity(materialObject, fullPath.c_str(),
+		dp->d_namep, typeLabel, revision);
+	    leaf->addChild(materialObject);
+	    database_source_add_realized_child(source, leaf);
+	    source->clearSourceBounds();
+	    return 1;
 	}
 
 	if (!sharedShape) {
@@ -3010,44 +3837,72 @@ realize_direct_leaf_wireframe_compact(
 	typeLabel = sharedShape->sourceType.getValue().getString();
     }
 
-    SoBRLVListShape *shape = new SoBRLVListShape;
-    shape->ref();
-    assign_realized_identity(shape, NULL, fullPath.c_str(), dp->d_namep,
-			     typeLabel, revision, source);
-    shape->setSharedGeometry(sharedShape);
-    const char *geometryKind = sharedShape->geometryKind.getValue().getString();
-    shape->geometryKind = (geometryKind && geometryKind[0]) ?
-			  geometryKind : "line";
-    if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
-	shape->sourceType = "annotation";
+    const char *geometryKind = sharedShape ?
+	sharedShape->geometryKind.getValue().getString() :
+	(cachedCad && !cachedCad->geometryKind.empty() ?
+	 cachedCad->geometryKind.c_str() : "line");
+    if (sharedShape && sharedShape->getPointPrimitiveCount() > 0 &&
+	sharedShape->getSegmentCount() == 0) {
+	SoBRLVListShape *shape = new SoBRLVListShape;
+	shape->ref();
+	assign_realized_identity(shape, NULL, fullPath.c_str(), dp->d_namep,
+	    typeLabel, revision, source);
+	shape->setSharedGeometry(sharedShape);
+	shape->geometryKind = geometryKind;
+	SoSeparator *leaf = new SoSeparator;
+	leaf->addChild(shape);
+	database_source_add_realized_child(source, leaf);
+	SbBox3f pointBounds;
+	pointBounds.makeEmpty();
+	const SoBRLVListShape *pointGeometry = shape->getGeometrySource();
+	for (int i = 0; i < pointGeometry->point.getNum(); i++)
+	    pointBounds.extendBy(pointGeometry->point[i]);
+	set_source_bounds_from_local_box(source, pointBounds);
+	shape->unref();
+	return 1;
+    }
 
-    const obol::PartGeometry *cadGeometry = NULL;
-    std::map<std::string, obol::PartGeometry>::iterator cadFound =
-	cache->sharedWireCadGeometry.find(cacheKey);
-    if (cadFound != cache->sharedWireCadGeometry.end()) {
-	cadGeometry = &cadFound->second;
-    } else {
+    if (!cadGeometry && sharedShape) {
 	obol::PartGeometry generatedGeometry;
 	int generated = 0;
 	{
 	    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
-	    generated = cad_vlist_part_geometry(shape, generatedGeometry);
+	    generated = cad_vlist_part_geometry(sharedShape, generatedGeometry);
 	}
 	if (generated) {
-	    cache->storeWireCadGeometry(cacheKey, generatedGeometry);
-	    cadFound = cache->sharedWireCadGeometry.find(cacheKey);
-	    if (cadFound != cache->sharedWireCadGeometry.end())
-		cadGeometry = &cadFound->second;
+	    cadGeometry = cache->storeWireCadGeometry(cacheKey,
+		std::move(generatedGeometry), typeLabel, geometryKind,
+		localBoundsValid ? &localBounds : NULL);
 	}
     }
 
-    const int compacted = cadGeometry ?
-	source->setCompactVListInstanceWithGeometry(shape, cadGeometry) :
-	source->setCompactVListInstance(shape);
-    shape->unref();
+    BRLObolCompactOccurrence occurrence;
+    occurrence.geometry = cadGeometry;
+    occurrence.summary = compact_occurrence_summary(source,
+	fullPath.c_str(), dp->d_namep,
+	geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
+	"annotation" : typeLabel,
+	geometryKind, revision, BRLObolRealizedShapeSummary::SHAPE_VLIST);
+    occurrence.occurrenceIndex = source->occurrenceIndex.getValue();
+    occurrence.booleanOperation = source->booleanOperation.getValue();
+    const int compacted = source->setCompactOccurrence(occurrence);
+    if (!localBoundsValid && cadGeometry) {
+	localBounds = compact_part_geometry_bounds(cadGeometry);
+	localBoundsValid = !localBounds.isEmpty();
+    }
     if (localBoundsValid)
 	set_source_bounds_from_local_box(source, localBounds);
-    return compacted > 0 ? 1 : 0;
+    if (compacted <= 0) {
+	SbString msg;
+	msg.sprintf("%s: direct compact wire geometry installation failed for primitive type '%s' (points=%d commands=%d segments=%d)",
+	    fullPath.c_str(), typeLabel ? typeLabel : "",
+	    sharedShape ? sharedShape->point.getNum() : 0,
+	    sharedShape ? sharedShape->command.getNum() : 0,
+	    sharedShape ? sharedShape->getSegmentCount() : 0);
+	source->realizationDiagnostic = msg;
+	return -1;
+    }
+    return 1;
 }
 
 static SoBRLVListShape *
@@ -3218,6 +4073,51 @@ mesh_from_bot(const struct rt_bot_internal *bot,
     return shape;
 }
 
+static int
+cad_mesh_part_geometry_from_bot(const struct rt_bot_internal *bot,
+	obol::PartGeometry &geometry)
+{
+    if (!bot || !bot->vertices || !bot->faces ||
+	bot->num_vertices == 0 || bot->num_faces == 0)
+	return 0;
+    RT_BOT_CK_MAGIC(bot);
+
+    obol::TriMesh mesh;
+    mesh.bounds.makeEmpty();
+    mesh.positions.reserve(bot->num_vertices);
+    for (size_t i = 0; i < bot->num_vertices; i++) {
+	const SbVec3f point(static_cast<float>(bot->vertices[i * 3]),
+	    static_cast<float>(bot->vertices[i * 3 + 1]),
+	    static_cast<float>(bot->vertices[i * 3 + 2]));
+	mesh.positions.push_back(point);
+	mesh.bounds.extendBy(point);
+    }
+
+    if (bot->num_faces > std::numeric_limits<size_t>::max() / 3)
+	return 0;
+    mesh.indices.reserve(bot->num_faces * 3);
+    for (size_t i = 0; i < bot->num_faces; i++) {
+	const int *face = &bot->faces[i * 3];
+	if (face[0] < 0 || face[1] < 0 || face[2] < 0 ||
+	    static_cast<size_t>(face[0]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[1]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[2]) >= bot->num_vertices)
+	    return 0;
+	mesh.indices.push_back(static_cast<uint32_t>(face[0]));
+	if (bot->orientation == RT_BOT_CW) {
+	    mesh.indices.push_back(static_cast<uint32_t>(face[2]));
+	    mesh.indices.push_back(static_cast<uint32_t>(face[1]));
+	} else {
+	    mesh.indices.push_back(static_cast<uint32_t>(face[1]));
+	    mesh.indices.push_back(static_cast<uint32_t>(face[2]));
+	}
+    }
+    if (mesh.bounds.isEmpty() || mesh.indices.empty())
+	return 0;
+    geometry.shaded = std::move(mesh);
+    return 1;
+}
+
 static void
 primitive_indexed_face_set_free(struct rt_primitive_indexed_face_set *faceSet)
 {
@@ -3379,6 +4279,63 @@ sanitize_triangle_normals(std::vector<SbVec3f> &normals,
     }
 }
 
+static int
+cad_mesh_part_geometry_from_indexed_face_set(
+	const struct rt_primitive_indexed_face_set *faceSet,
+	obol::PartGeometry &geometry)
+{
+    if (!faceSet || !faceSet->points || !faceSet->point_count ||
+	!faceSet->indices || !faceSet->index_count)
+	return 0;
+
+    std::vector<int32_t> triangles;
+    if (!indexed_faces_to_triangles(faceSet->indices, faceSet->index_count,
+	    faceSet->point_count, triangles))
+	return 0;
+
+    obol::TriMesh mesh;
+    mesh.bounds.makeEmpty();
+    mesh.positions.reserve(faceSet->point_count);
+    for (size_t i = 0; i < faceSet->point_count; i++) {
+	const SbVec3f point(
+	    static_cast<float>(faceSet->points[i][X]),
+	    static_cast<float>(faceSet->points[i][Y]),
+	    static_cast<float>(faceSet->points[i][Z]));
+	mesh.positions.push_back(point);
+	mesh.bounds.extendBy(point);
+    }
+    mesh.indices.reserve(triangles.size());
+    for (const int32_t index : triangles) {
+	if (index < 0 || static_cast<size_t>(index) >= faceSet->point_count)
+	    return 0;
+	mesh.indices.push_back(static_cast<uint32_t>(index));
+    }
+    if (mesh.bounds.isEmpty() || mesh.indices.empty())
+	return 0;
+    geometry.shaded = std::move(mesh);
+    return 1;
+}
+
+static int
+cad_mesh_part_geometry_from_primitive_face_set(
+	struct rt_db_internal *intern, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, obol::PartGeometry &geometry)
+{
+    if (!internal_payload_magic_valid(intern) ||
+	!intern->idb_meth->ft_indexed_face_set || !ttol || !tol)
+	return 0;
+
+    struct rt_primitive_indexed_face_set faceSet;
+    struct bv_view_info viewInfo = BV_VIEW_INFO_INIT;
+    memset(&faceSet, 0, sizeof(faceSet));
+    const int ret = intern->idb_meth->ft_indexed_face_set(&faceSet, intern,
+	ttol, tol, &viewInfo);
+    const int converted = ret == BRLCAD_OK ?
+	cad_mesh_part_geometry_from_indexed_face_set(&faceSet, geometry) : 0;
+    primitive_indexed_face_set_free(&faceSet);
+    return converted;
+}
+
 static SoBRLMeshShape *
 mesh_from_indexed_face_set(const struct rt_primitive_indexed_face_set *faceSet,
 			   const SoBRLDatabaseSource *source)
@@ -3537,83 +4494,25 @@ publish_lod_mesh_if_available(SoBRLMeshShape *shape,
     brlobol_mesh_lod_destroy(lod);
 }
 
-static void
-append_nmg_triangle_points(std::vector<SbVec3f> &points,
-			   std::vector<int32_t> &indices,
-			   const struct vertex *v0,
-			   const struct vertex *v1,
-			   const struct vertex *v2)
-{
-    if (!v0 || !v1 || !v2 || !v0->vg_p || !v1->vg_p || !v2->vg_p)
-	return;
-
-    int32_t base = static_cast<int32_t>(points.size());
-    points.push_back(SbVec3f(static_cast<float>(v0->vg_p->coord[X]),
-			     static_cast<float>(v0->vg_p->coord[Y]),
-			     static_cast<float>(v0->vg_p->coord[Z])));
-    points.push_back(SbVec3f(static_cast<float>(v1->vg_p->coord[X]),
-			     static_cast<float>(v1->vg_p->coord[Y]),
-			     static_cast<float>(v1->vg_p->coord[Z])));
-    points.push_back(SbVec3f(static_cast<float>(v2->vg_p->coord[X]),
-			     static_cast<float>(v2->vg_p->coord[Y]),
-			     static_cast<float>(v2->vg_p->coord[Z])));
-    indices.push_back(base);
-    indices.push_back(base + 1);
-    indices.push_back(base + 2);
-}
-
 static SoBRLMeshShape *
 mesh_from_nmg_region(struct nmgregion *r, struct bu_list *vlfree,
 		     const struct bn_tol *tol)
 {
-    std::vector<SbVec3f> points;
-    std::vector<int32_t> indices;
-
     if (!r || !r->m_p || !vlfree || !tol)
 	return NULL;
 
-    nmg_triangulate_model(r->m_p, vlfree, tol);
-
-    for (struct shell *s = BU_LIST_FIRST(shell, &r->s_hd);
-	 BU_LIST_NOT_HEAD(s, &r->s_hd);
-	 s = BU_LIST_PNEXT(shell, &s->l)) {
-	NMG_CK_SHELL(s);
-	for (struct faceuse *fu = BU_LIST_FIRST(faceuse, &s->fu_hd);
-	     BU_LIST_NOT_HEAD(fu, &s->fu_hd);
-	     fu = BU_LIST_PNEXT(faceuse, &fu->l)) {
-	    NMG_CK_FACEUSE(fu);
-	    if (fu->orientation != OT_SAME)
-		continue;
-	    for (struct loopuse *lu = BU_LIST_FIRST(loopuse, &fu->lu_hd);
-		 BU_LIST_NOT_HEAD(lu, &fu->lu_hd);
-		 lu = BU_LIST_PNEXT(loopuse, &lu->l)) {
-		struct vertex *verts[3] = {NULL, NULL, NULL};
-		int vert_count = 0;
-
-		NMG_CK_LOOPUSE(lu);
-		if (BU_LIST_FIRST_MAGIC(&lu->down_hd) != NMG_EDGEUSE_MAGIC)
-		    continue;
-
-		for (struct edgeuse *eu = BU_LIST_FIRST(edgeuse, &lu->down_hd);
-		     BU_LIST_NOT_HEAD(eu, &lu->down_hd);
-		     eu = BU_LIST_PNEXT(edgeuse, &eu->l)) {
-		    NMG_CK_EDGEUSE(eu);
-		    if (vert_count < 3)
-			verts[vert_count] = eu->vu_p ? eu->vu_p->v_p : NULL;
-		    vert_count++;
-		}
-		if (vert_count == 3)
-		    append_nmg_triangle_points(points, indices, verts[0], verts[1], verts[2]);
-	    }
-	}
-    }
-
-    if (points.empty() || indices.empty())
+    /* librt's converter skips the quadratic edge-fusion pipeline for clean
+     * primitive tessellations and retains it only as a degenerate fallback. */
+    struct rt_bot_internal *bot = nmg_mdl_to_bot(r->m_p, vlfree, tol);
+    if (!bot)
 	return NULL;
 
-    SoBRLMeshShape *shape = new SoBRLMeshShape;
-    shape->setIndexedTriangles(points.data(), static_cast<int>(points.size()),
-			       indices.data(), static_cast<int>(indices.size()));
+    SoBRLMeshShape *shape = mesh_from_bot(bot, NULL);
+    if (bot->vertices)
+	bu_free(bot->vertices, "temporary tessellation BOT vertices");
+    if (bot->faces)
+	bu_free(bot->faces, "temporary tessellation BOT faces");
+    bu_free(bot, "temporary tessellation BOT");
     return shape;
 }
 
@@ -3675,6 +4574,240 @@ mesh_from_internal(struct rt_db_internal *intern,
 	return faceSetShape;
 
     return mesh_from_tessellated_internal(intern, source);
+}
+
+struct compact_mesh_prefill_job {
+    compact_mesh_prefill_job(void) : ownsInternal(false), success(false)
+    {
+	RT_DB_INTERNAL_INIT(&intern);
+    }
+
+    ~compact_mesh_prefill_job(void)
+    {
+	if (ownsInternal)
+	    rt_db_free_internal(&intern);
+    }
+
+    struct directory *dp = NULL;
+    struct rt_db_internal intern;
+    bool ownsInternal;
+    std::string cacheKey;
+    std::string path;
+    std::string sourceType;
+    obol::PartGeometry geometry;
+    bool success;
+};
+
+struct compact_mesh_prefill_collect {
+    SoBRLDatabaseSource *source = NULL;
+    BRLObolDatabaseSourceRealizationCache *cache = NULL;
+    std::vector<std::unique_ptr<compact_mesh_prefill_job>> jobs;
+    std::unordered_set<std::string> seen;
+    SbString diagnostic;
+    int failed = 0;
+};
+
+static union tree *
+compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
+	const struct db_full_path *pathp, struct directory *dp,
+	void *clientData)
+{
+    compact_mesh_prefill_collect *collect =
+	static_cast<compact_mesh_prefill_collect *>(clientData);
+    if (!collect || !collect->source || !collect->cache || !tsp ||
+	!tsp->ts_dbip || !pathp || !dp)
+	return TREE_NULL;
+
+    SbBox3f cacheBounds;
+    std::string cacheKey = realize_geometry_cache_key(dp);
+    source_lod_cache_key_append(cacheKey, collect->source, cacheBounds);
+    if (!collect->seen.insert(cacheKey).second)
+	return make_nop_tree();
+    if (collect->cache->findMeshVListCadGeometry(cacheKey) ||
+	collect->cache->findMeshCadGeometry(cacheKey))
+	return make_nop_tree();
+
+    std::unique_ptr<compact_mesh_prefill_job> job(
+	new compact_mesh_prefill_job);
+    job->dp = dp;
+    job->cacheKey = cacheKey;
+    char *path = db_path_to_string(pathp);
+    if (path) {
+	job->path = path;
+	bu_free(path, "compact mesh prefill path");
+    }
+    if (rt_db_get_internal(&job->intern, dp, tsp->ts_dbip, NULL) < 0 ||
+	!internal_payload_magic_valid(&job->intern)) {
+	collect->failed = 1;
+	if (collect->diagnostic.getLength() == 0) {
+	    collect->diagnostic.sprintf("%s: compact mesh internal fetch failed",
+		job->path.empty() ? dp->d_namep : job->path.c_str());
+	}
+	return make_nop_tree();
+    }
+    job->ownsInternal = true;
+    job->sourceType = primitive_type_label(&job->intern);
+
+    const int internalType = job->intern.idb_type;
+    const int drawMode = source_record_draw_mode(collect->source);
+    const bool wireInstead = drawMode == BRLOBOL_LOD_DRAW_WIRE ||
+	(drawMode == BRLOBOL_LOD_DRAW_SHADED_BOTS &&
+	 (!job->intern.idb_meth ||
+	  !job->intern.idb_meth->ft_indexed_face_set) &&
+	 internalType != ID_BOT);
+    const bool special = internalType == ID_MATERIAL ||
+	internalType == ID_PNTS || internalType == ID_SKETCH ||
+	internalType == ID_ANNOT;
+    const bool lodBot = internalType == ID_BOT &&
+	collect->source->lodBotThreshold.getValue() > 0;
+    if (wireInstead || special || lodBot)
+	return make_nop_tree();
+
+    collect->jobs.push_back(std::move(job));
+    return make_nop_tree();
+}
+
+struct compact_mesh_prefill_workers {
+    std::vector<std::unique_ptr<compact_mesh_prefill_job>> *jobs = NULL;
+    struct bg_tess_tol ttol = BG_TESS_TOL_INIT_ZERO;
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+};
+
+static int
+cad_mesh_part_geometry_from_tessellated_internal(
+	struct rt_db_internal *intern, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, obol::PartGeometry &geometry)
+{
+    if (!internal_payload_magic_valid(intern) || !ttol || !tol)
+	return 0;
+
+    struct bu_list vlfree;
+    struct model *model = nmg_mm();
+    struct nmgregion *region = NULL;
+    int ret = -1;
+    BU_LIST_INIT(&vlfree);
+    if (!model)
+	return 0;
+
+    if (!BU_SETJUMP) {
+	ret = rt_obj_tess(&region, model, intern, ttol, tol);
+    } else {
+	BU_UNSETJUMP;
+	nmg_km(model);
+	bu_list_free(&vlfree);
+	return 0;
+    }
+    BU_UNSETJUMP;
+
+    struct rt_bot_internal *bot = NULL;
+    if (ret == 0 && region) {
+	if (!BU_SETJUMP) {
+	    bot = nmg_mdl_to_bot(region->m_p, &vlfree, tol);
+	} else {
+	    BU_UNSETJUMP;
+	    bot = NULL;
+	}
+	BU_UNSETJUMP;
+    }
+    const int converted = bot ?
+	cad_mesh_part_geometry_from_bot(bot, geometry) : 0;
+    if (bot) {
+	if (bot->vertices)
+	    bu_free(bot->vertices, "prefill tessellation BOT vertices");
+	if (bot->faces)
+	    bu_free(bot->faces, "prefill tessellation BOT faces");
+	bu_free(bot, "prefill tessellation BOT");
+    }
+    nmg_km(model);
+    bu_list_free(&vlfree);
+    return converted;
+}
+
+static void
+compact_mesh_prefill_realize(compact_mesh_prefill_workers *workers)
+{
+    if (!workers || !workers->jobs)
+	return;
+
+    for (std::unique_ptr<compact_mesh_prefill_job> &jobPtr : *workers->jobs) {
+	compact_mesh_prefill_job &job = *jobPtr;
+	if (job.intern.idb_type == ID_BOT) {
+	    job.success = cad_mesh_part_geometry_from_bot(
+		static_cast<const struct rt_bot_internal *>(job.intern.idb_ptr),
+		job.geometry) != 0;
+	} else {
+	    if (job.intern.idb_meth &&
+		job.intern.idb_meth->ft_indexed_face_set)
+		job.success = cad_mesh_part_geometry_from_primitive_face_set(
+		    &job.intern, &workers->ttol, &workers->tol,
+		    job.geometry) != 0;
+	    if (!job.success)
+		job.success = cad_mesh_part_geometry_from_tessellated_internal(
+		    &job.intern, &workers->ttol, &workers->tol,
+		    job.geometry) != 0;
+	}
+    }
+}
+
+static int
+compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
+	BRLObolDatabaseSourceRealizationCache *cache, const char *treeName)
+{
+    struct db_i *dbip = source ? source->getDatabase() : NULL;
+    if (!source || !cache || !dbip || !treeName || !treeName[0])
+	return 0;
+
+    compact_mesh_prefill_collect collect;
+    collect.source = source;
+    collect.cache = cache;
+    struct db_tree_state initState;
+    db_init_db_tree_state(&initState, dbip);
+    initState.ts_stop_at_regions = 0;
+    const char *av[1] = {treeName};
+    const int walkRet = db_walk_tree_leaf_instances(dbip, 1, av, 1,
+	&initState, NULL, NULL, compact_mesh_prefill_collect_leaf, &collect);
+    db_free_db_tree_state(&initState);
+    if (walkRet < 0 || collect.failed) {
+	if (collect.diagnostic.getLength() > 0)
+	    source->realizationDiagnostic = collect.diagnostic;
+	else {
+	    SbString diagnostic;
+	    diagnostic.sprintf("%s: compact mesh occurrence discovery failed",
+		treeName);
+	    source->realizationDiagnostic = diagnostic;
+	}
+	return -1;
+    }
+    if (collect.jobs.empty())
+	return 0;
+
+    compact_mesh_prefill_workers workers;
+    workers.jobs = &collect.jobs;
+    workers.ttol = source_tess_tol(source);
+    compact_mesh_prefill_realize(&workers);
+
+    for (std::unique_ptr<compact_mesh_prefill_job> &job : collect.jobs) {
+	if (!job->success) {
+	    SbString diagnostic;
+	    diagnostic.sprintf(
+		"%s: compact mesh conversion/tessellation failed for primitive type '%s'",
+		job->path.empty() ? job->dp->d_namep : job->path.c_str(),
+		job->sourceType.c_str());
+	    source->realizationDiagnostic = diagnostic;
+	    return -1;
+	}
+	SbBox3f bounds;
+	bounds.makeEmpty();
+	if (job->geometry.points)
+	    bounds.extendBy(job->geometry.points->bounds);
+	if (job->geometry.wire)
+	    bounds.extendBy(job->geometry.wire->bounds);
+	if (job->geometry.shaded)
+	    bounds.extendBy(job->geometry.shaded->bounds);
+	cache->storeMeshCadGeometry(job->cacheKey, std::move(job->geometry),
+	    job->sourceType.c_str(), "surface", &bounds, false);
+    }
+    return static_cast<int>(collect.jobs.size());
 }
 
 static std::string
@@ -3884,6 +5017,9 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 	if (foundMesh != cache->sharedMeshGeometry.end())
 	    sharedMeshShape = foundMesh->second;
     }
+    brlobol_performance_counter_add(
+	(sharedVListShape || sharedMeshShape) ? BRLOBOL_PERF_MESH_CACHE_HITS :
+	BRLOBOL_PERF_MESH_CACHE_MISSES, 1);
 
     const char *typeLabel = sharedVListShape ?
 			    sharedVListShape->sourceType.getValue().getString() :
@@ -4059,13 +5195,24 @@ realize_direct_leaf_mesh_compact(
 	if (foundMesh != cache->sharedMeshGeometry.end())
 	    sharedMeshShape = foundMesh->second;
     }
+    const BRLObolCachedPartGeometry *cachedWire =
+	cache->findMeshVListCadGeometry(cacheKey);
+    const BRLObolCachedPartGeometry *cachedMesh =
+	cache->findMeshCadGeometry(cacheKey);
+    brlobol_performance_counter_add(
+	(sharedVListShape || sharedMeshShape || cachedWire || cachedMesh) ?
+	BRLOBOL_PERF_MESH_CACHE_HITS :
+	BRLOBOL_PERF_MESH_CACHE_MISSES, 1);
 
     const char *typeLabel = sharedVListShape ?
 			    sharedVListShape->sourceType.getValue().getString() :
 			    (sharedMeshShape ?
 			     sharedMeshShape->sourceType.getValue().getString() :
-			     NULL);
-    if (!sharedVListShape && !sharedMeshShape) {
+			     (cachedWire && !cachedWire->sourceType.empty() ?
+			      cachedWire->sourceType.c_str() :
+			      (cachedMesh && !cachedMesh->sourceType.empty() ?
+			       cachedMesh->sourceType.c_str() : NULL)));
+    if (!sharedVListShape && !sharedMeshShape && !cachedWire && !cachedMesh) {
 	valid_walk_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
@@ -4084,8 +5231,25 @@ realize_direct_leaf_mesh_compact(
 	SbBox3f localBounds;
 	if (source_view_lod_active(source))
 	    (void)local_bounds_from_internal(&validInternal.local, localBounds);
-	if (internalType == ID_MATERIAL)
-	    return 0;
+	if (internalType == ID_MATERIAL) {
+	    SoBRLMaterialObject *materialObject = material_object_from_internal(
+		static_cast<struct rt_material_internal *>(
+		    validInternal.local.idb_ptr));
+	    if (!materialObject) {
+		SbString msg;
+		msg.sprintf("%s: material object realization failed",
+		    fullPath.c_str());
+		source->realizationDiagnostic = msg;
+		return -1;
+	    }
+	    SoSeparator *leaf = new SoSeparator;
+	    assign_material_identity(materialObject, fullPath.c_str(),
+		dp->d_namep, typeLabel, revision);
+	    leaf->addChild(materialObject);
+	    database_source_add_realized_child(source, leaf);
+	    source->clearSourceBounds();
+	    return 1;
+	}
 
 	if (internalType == ID_PNTS) {
 	    sharedVListShape = vlist_from_pnts(
@@ -4139,48 +5303,89 @@ realize_direct_leaf_mesh_compact(
 	}
 
 	if (sharedVListShape) {
-	    cache->storeMeshVListGeometry(cacheKey, sharedVListShape);
 	    typeLabel = sharedVListShape->sourceType.getValue().getString();
 	} else {
-	    cache->storeMeshGeometry(cacheKey, sharedMeshShape);
 	    typeLabel = sharedMeshShape->sourceType.getValue().getString();
 	}
     }
 
-    int compacted = 0;
-    if (sharedVListShape) {
-	SoBRLVListShape *shape = new SoBRLVListShape;
-	shape->ref();
-	assign_realized_identity(shape, NULL, fullPath.c_str(),
-	    dp->d_namep, typeLabel, revision, source);
-	shape->setSharedGeometry(sharedVListShape);
-	const char *geometryKind =
-	    sharedVListShape->geometryKind.getValue().getString();
-	shape->geometryKind = (geometryKind && geometryKind[0]) ?
-			      geometryKind : "line";
-	if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
-	    shape->sourceType = "annotation";
-	compacted = source->setCompactVListInstance(shape);
-	shape->unref();
+    BRLObolCompactOccurrence occurrence;
+    if (sharedVListShape || cachedWire) {
+	const char *geometryKind = sharedVListShape ?
+	    sharedVListShape->geometryKind.getValue().getString() :
+	    (cachedWire && !cachedWire->geometryKind.empty() ?
+	     cachedWire->geometryKind.c_str() : "line");
+	occurrence.geometry = cachedWire ? cachedWire->geometry :
+	    std::shared_ptr<const obol::PartGeometry>();
+	if (!occurrence.geometry && sharedVListShape) {
+	    obol::PartGeometry generated;
+	    if (cad_vlist_part_geometry(sharedVListShape, generated))
+		occurrence.geometry = cache->storeMeshVListCadGeometry(cacheKey,
+		    std::move(generated), typeLabel, geometryKind);
+	}
+	occurrence.summary = compact_occurrence_summary(source,
+	    fullPath.c_str(), dp->d_namep,
+	    geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
+	    "annotation" : typeLabel,
+	    geometryKind, revision, BRLObolRealizedShapeSummary::SHAPE_VLIST);
     } else {
-	SoBRLMeshShape *shape = mesh_instance_for_shared_geometry(
-				    sharedMeshShape);
-	shape->ref();
-	assign_realized_identity(shape, NULL, fullPath.c_str(),
-	    dp->d_namep, typeLabel, revision, source);
-	shape->setSharedGeometry(sharedMeshShape);
-	const char *geometryKind =
-	    sharedMeshShape->geometryKind.getValue().getString();
-	shape->geometryKind = (geometryKind && geometryKind[0]) ?
-			      geometryKind : "surface";
-	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
-	    source->lodBotThreshold.getValue() > 0)
-	    publish_lod_mesh_if_available(shape, source, dbip, dp->d_namep);
-	compacted = source->setCompactMeshInstance(shape);
-	shape->unref();
+	const char *geometryKind = sharedMeshShape ?
+	    sharedMeshShape->geometryKind.getValue().getString() :
+	    (cachedMesh && !cachedMesh->geometryKind.empty() ?
+	     cachedMesh->geometryKind.c_str() : "surface");
+	if (sharedMeshShape) {
+	    sharedMeshShape->drawMode = source_record_draw_mode(source);
+	    sharedMeshShape->hiddenLine =
+		source_record_draw_mode(source) ==
+		BRLOBOL_LOD_DRAW_HIDDEN_LINE ? TRUE : FALSE;
+	    if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
+		source->lodBotThreshold.getValue() > 0)
+		publish_lod_mesh_if_available(sharedMeshShape, source, dbip,
+		    dp->d_namep);
+	}
+	occurrence.geometry = cachedMesh ? cachedMesh->geometry :
+	    std::shared_ptr<const obol::PartGeometry>();
+	if (!occurrence.geometry && sharedMeshShape) {
+	    obol::PartGeometry generated;
+	    if (cad_mesh_part_geometry(sharedMeshShape, generated))
+		occurrence.geometry = cache->storeMeshCadGeometry(cacheKey,
+		    std::move(generated), typeLabel, geometryKind, NULL,
+		    sharedMeshShape->isLodBackedMesh());
+	}
+	occurrence.lodBacked = sharedMeshShape ?
+	    sharedMeshShape->isLodBackedMesh() :
+	    (cachedMesh && cachedMesh->lodBacked ? TRUE : FALSE);
+	if (sharedMeshShape)
+	    occurrence.sourceMeshRequestValid =
+		sharedMeshShape->makeSourceMeshRequest(
+		    occurrence.sourceMeshRequest);
+	occurrence.summary = compact_occurrence_summary(source,
+	    fullPath.c_str(), dp->d_namep, typeLabel, geometryKind, revision,
+	    BRLObolRealizedShapeSummary::SHAPE_MESH);
+	if (sharedMeshShape) {
+	    BRLObolRealizedShapeSummary meshSummary;
+	    realized_mesh_shape_summary(sharedMeshShape, meshSummary);
+	    occurrence.summary.lodAvailable = meshSummary.lodAvailable;
+	    occurrence.summary.lodActiveLevel = meshSummary.lodActiveLevel;
+	    occurrence.summary.lodFaceCount = meshSummary.lodFaceCount;
+	    occurrence.summary.lodPointCount = meshSummary.lodPointCount;
+	    occurrence.summary.lodOriginalPointCount =
+		meshSummary.lodOriginalPointCount;
+	    occurrence.summary.lodNormalCount = meshSummary.lodNormalCount;
+	    occurrence.summary.lodHasSnappedPoints =
+		meshSummary.lodHasSnappedPoints;
+	    occurrence.summary.lodHasNormals = meshSummary.lodHasNormals;
+	    occurrence.summary.lodBoundsMin = meshSummary.lodBoundsMin;
+	    occurrence.summary.lodBoundsMax = meshSummary.lodBoundsMax;
+	}
+	if (occurrence.sourceMeshRequestValid)
+	    compact_source_mesh_request_sync(occurrence.sourceMeshRequest,
+		occurrence.summary);
     }
 
-    return compacted > 0 ? 1 : 0;
+    occurrence.occurrenceIndex = source->occurrenceIndex.getValue();
+    occurrence.booleanOperation = source->booleanOperation.getValue();
+    return source->setCompactOccurrence(occurrence) > 0 ? 1 : 0;
 }
 
 static union tree *
@@ -4193,6 +5398,21 @@ static union tree *
     if (!data || !data->source || !pathp || !tsp || !tsp->ts_dbip ||
 	!dp)
 	return TREE_NULL;
+
+    std::string walkOccurrenceIdentity;
+    uint32_t duplicateOrdinal = 0;
+    if (data->compact_index) {
+	const std::string identity = realize_walk_instance_identity(tsp, pathp);
+	if (identity.empty()) {
+	    data->compact_unsupported = 1;
+	    return TREE_NULL;
+	}
+	if (!data->compact_seen_instances.insert(identity).second)
+	    return make_nop_tree();
+	walkOccurrenceIdentity = realize_walk_occurrence_identity(pathp);
+	duplicateOrdinal = data->compact_occurrence_counts[
+	    walkOccurrenceIdentity]++;
+    }
 
     SoBRLVListShape *sharedVListShape = NULL;
     SoBRLMeshShape *sharedMeshShape = NULL;
@@ -4209,11 +5429,24 @@ static union tree *
 	if (foundMesh != data->cache->sharedMeshGeometry.end())
 	    sharedMeshShape = foundMesh->second;
     }
+    const BRLObolCachedPartGeometry *cachedWire = data->compact_index ?
+	data->cache->findMeshVListCadGeometry(cacheKey) : NULL;
+    const BRLObolCachedPartGeometry *cachedMesh = data->compact_index ?
+	data->cache->findMeshCadGeometry(cacheKey) : NULL;
+    brlobol_performance_counter_add(
+	(sharedVListShape || sharedMeshShape || cachedWire || cachedMesh) ?
+	BRLOBOL_PERF_MESH_CACHE_HITS :
+	BRLOBOL_PERF_MESH_CACHE_MISSES, 1);
 
     const char *typeLabel = sharedVListShape ?
 			    sharedVListShape->sourceType.getValue().getString() :
-			    (sharedMeshShape ? sharedMeshShape->sourceType.getValue().getString() : NULL);
-    if (!sharedVListShape && !sharedMeshShape) {
+			    (sharedMeshShape ?
+			     sharedMeshShape->sourceType.getValue().getString() :
+			     (cachedWire && !cachedWire->sourceType.empty() ?
+			      cachedWire->sourceType.c_str() :
+			      (cachedMesh && !cachedMesh->sourceType.empty() ?
+			       cachedMesh->sourceType.c_str() : NULL)));
+    if (!sharedVListShape && !sharedMeshShape && !cachedWire && !cachedMesh) {
 	valid_walk_internal validInternal;
 	struct rt_db_internal *localIntern =
 	    fetch_local_walk_internal(tsp, pathp, &validInternal);
@@ -4289,7 +5522,7 @@ static union tree *
 	    sharedMeshShape = mesh_from_internal(localIntern, data->source);
 	    if (sharedMeshShape)
 		assign_shared_geometry_identity(sharedMeshShape,
-						dp->d_namep, typeLabel, data->revision, "surface");
+				dp->d_namep, typeLabel, data->revision, "surface");
 	}
 
 	if (!sharedVListShape && !sharedMeshShape) {
@@ -4303,44 +5536,159 @@ static union tree *
 	}
 
 	if (sharedVListShape) {
-	    data->cache->storeMeshVListGeometry(cacheKey, sharedVListShape);
+	    if (!data->compact_index)
+		data->cache->storeMeshVListGeometry(cacheKey, sharedVListShape);
 	    typeLabel = sharedVListShape->sourceType.getValue().getString();
 	} else {
-	    data->cache->storeMeshGeometry(cacheKey, sharedMeshShape);
+	    if (!data->compact_index)
+		data->cache->storeMeshGeometry(cacheKey, sharedMeshShape);
 	    typeLabel = sharedMeshShape->sourceType.getValue().getString();
 	}
     }
 
     char *path = db_path_to_string(pathp);
-    SoSeparator *leaf = realize_instance_leaf_separator(tsp);
-    if (sharedVListShape) {
-	SoBRLVListShape *vlistShape = new SoBRLVListShape;
-	assign_realized_identity(vlistShape, tsp, path, dp->d_namep, typeLabel,
-				 data->revision, data->source);
-	vlistShape->setSharedGeometry(sharedVListShape);
-	const char *geometryKind =
-	    sharedVListShape->geometryKind.getValue().getString();
-	vlistShape->geometryKind = (geometryKind && geometryKind[0]) ?
-				   geometryKind : "line";
-	if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
-	    vlistShape->sourceType = "annotation";
-	leaf->addChild(vlistShape);
+    if (data->compact_index) {
+	const SbMatrix localMatrix = mat_to_sbmatrix(tsp->ts_mat);
+	const size_t entryCount = data->compact_index->entries.size();
+	compact_occurrence_build input;
+	input.occurrence.localTransform = localMatrix;
+	input.occurrence.occurrenceIndex =
+	    data->source->occurrenceIndex.getValue();
+	input.occurrence.booleanOperation =
+	    data->source->booleanOperation.getValue();
+	if (sharedVListShape || cachedWire) {
+	    const char *geometryKind = sharedVListShape ?
+		sharedVListShape->geometryKind.getValue().getString() :
+		(cachedWire && !cachedWire->geometryKind.empty() ?
+		 cachedWire->geometryKind.c_str() : "line");
+	    input.occurrence.geometry =
+		cachedWire ? cachedWire->geometry :
+		std::shared_ptr<const obol::PartGeometry>();
+	    if (!input.occurrence.geometry && sharedVListShape) {
+		obol::PartGeometry generated;
+		if (cad_vlist_part_geometry(sharedVListShape, generated))
+		    input.occurrence.geometry =
+			data->cache->storeMeshVListCadGeometry(cacheKey,
+			    std::move(generated), typeLabel, geometryKind);
+	    }
+	    input.occurrence.summary = compact_occurrence_tree_summary(
+		data->source, tsp, path, dp->d_namep,
+		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
+		"annotation" : typeLabel,
+		geometryKind, data->revision,
+		BRLObolRealizedShapeSummary::SHAPE_VLIST);
+	} else {
+	    const char *geometryKind = sharedMeshShape ?
+		sharedMeshShape->geometryKind.getValue().getString() :
+		(cachedMesh && !cachedMesh->geometryKind.empty() ?
+		 cachedMesh->geometryKind.c_str() : "surface");
+	    if (sharedMeshShape) {
+		sharedMeshShape->drawMode = source_record_draw_mode(data->source);
+		sharedMeshShape->hiddenLine =
+		    source_record_draw_mode(data->source) ==
+		    BRLOBOL_LOD_DRAW_HIDDEN_LINE ? TRUE : FALSE;
+		if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
+		    data->source->lodBotThreshold.getValue() > 0)
+		    publish_lod_mesh_if_available(sharedMeshShape, data->source,
+			tsp->ts_dbip, dp->d_namep);
+	    }
+	    input.occurrence.geometry =
+		cachedMesh ? cachedMesh->geometry :
+		std::shared_ptr<const obol::PartGeometry>();
+	    if (!input.occurrence.geometry && sharedMeshShape) {
+		obol::PartGeometry generated;
+		if (cad_mesh_part_geometry(sharedMeshShape, generated))
+		    input.occurrence.geometry =
+			data->cache->storeMeshCadGeometry(cacheKey,
+			    std::move(generated), typeLabel, geometryKind, NULL,
+			    sharedMeshShape->isLodBackedMesh());
+	    }
+	    input.occurrence.lodBacked = sharedMeshShape ?
+		sharedMeshShape->isLodBackedMesh() :
+		(cachedMesh && cachedMesh->lodBacked ? TRUE : FALSE);
+	    if (sharedMeshShape)
+		input.occurrence.sourceMeshRequestValid =
+		    sharedMeshShape->makeSourceMeshRequest(
+			input.occurrence.sourceMeshRequest);
+	    input.occurrence.summary = compact_occurrence_tree_summary(
+		data->source, tsp, path, dp->d_namep, typeLabel, geometryKind,
+		data->revision, BRLObolRealizedShapeSummary::SHAPE_MESH);
+	    if (sharedMeshShape) {
+		BRLObolRealizedShapeSummary meshSummary;
+		realized_mesh_shape_summary(sharedMeshShape, meshSummary);
+		input.occurrence.summary.lodAvailable = meshSummary.lodAvailable;
+		input.occurrence.summary.lodActiveLevel =
+		    meshSummary.lodActiveLevel;
+		input.occurrence.summary.lodFaceCount = meshSummary.lodFaceCount;
+		input.occurrence.summary.lodPointCount = meshSummary.lodPointCount;
+		input.occurrence.summary.lodOriginalPointCount =
+		    meshSummary.lodOriginalPointCount;
+		input.occurrence.summary.lodNormalCount =
+		    meshSummary.lodNormalCount;
+		input.occurrence.summary.lodHasSnappedPoints =
+		    meshSummary.lodHasSnappedPoints;
+		input.occurrence.summary.lodHasNormals = meshSummary.lodHasNormals;
+		input.occurrence.summary.lodBoundsMin = meshSummary.lodBoundsMin;
+		input.occurrence.summary.lodBoundsMax = meshSummary.lodBoundsMax;
+	    }
+	    if (input.occurrence.sourceMeshRequestValid)
+		compact_source_mesh_request_sync(
+		    input.occurrence.sourceMeshRequest,
+		    input.occurrence.summary);
+	}
+	if (!input.occurrence.geometry) {
+	    data->compact_unsupported = 1;
+	} else {
+	    input.semantic = compact_semantic_from_summary(
+		input.occurrence.summary);
+	    compact_add_occurrence(data->source, *data->compact_index, input,
+		data->compact_ordinal, data->compact_unsupported);
+	    compact_apply_walk_identity(data->source, *data->compact_index,
+		entryCount, tsp, pathp, walkOccurrenceIdentity,
+		duplicateOrdinal);
+	}
+	BRLObolCompactInstanceEntry *entry =
+	    data->compact_index->entries.size() > entryCount ?
+	    &data->compact_index->entries.back() : NULL;
+	SbBox3f bounds = entry ?
+	    database_source_transform_bounds(
+		compact_part_geometry_bounds(entry->geometry), localMatrix) :
+	    SbBox3f();
+	if (!bounds.isEmpty()) {
+	    data->compact_bounds.extendBy(bounds);
+	    data->compact_bounds_valid = TRUE;
+	}
     } else {
-	SoBRLMeshShape *shape = mesh_instance_for_shared_geometry(sharedMeshShape);
-	assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
-				 data->revision, data->source);
-	shape->setSharedGeometry(sharedMeshShape);
-	const char *geometryKind =
-	    sharedMeshShape->geometryKind.getValue().getString();
-	shape->geometryKind = (geometryKind && geometryKind[0]) ?
-			      geometryKind : "surface";
-	if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
-	    data->source->lodBotThreshold.getValue() > 0)
-	    publish_lod_mesh_if_available(shape, data->source, tsp->ts_dbip,
-		dp->d_namep);
-	leaf->addChild(shape);
+	SoSeparator *leaf = realize_instance_leaf_separator(tsp);
+	if (sharedVListShape) {
+	    SoBRLVListShape *vlistShape = new SoBRLVListShape;
+	    assign_realized_identity(vlistShape, tsp, path, dp->d_namep,
+		typeLabel, data->revision, data->source);
+	    vlistShape->setSharedGeometry(sharedVListShape);
+	    const char *geometryKind =
+		sharedVListShape->geometryKind.getValue().getString();
+	    vlistShape->geometryKind = geometryKind && geometryKind[0] ?
+		geometryKind : "line";
+	    if (geometryKind && BU_STR_EQUAL(geometryKind, "annotation"))
+		vlistShape->sourceType = "annotation";
+	    leaf->addChild(vlistShape);
+	} else {
+	    SoBRLMeshShape *shape = mesh_instance_for_shared_geometry(sharedMeshShape);
+	    assign_realized_identity(shape, tsp, path, dp->d_namep, typeLabel,
+		data->revision, data->source);
+	    shape->setSharedGeometry(sharedMeshShape);
+	    const char *geometryKind =
+		sharedMeshShape->geometryKind.getValue().getString();
+	    shape->geometryKind = geometryKind && geometryKind[0] ?
+		geometryKind : "surface";
+	    if (typeLabel && BU_STR_EQUAL(typeLabel, "bot") &&
+		data->source->lodBotThreshold.getValue() > 0)
+		publish_lod_mesh_if_available(shape, data->source, tsp->ts_dbip,
+		    dp->d_namep);
+	    leaf->addChild(shape);
+	}
+	database_source_add_realized_child(data->source, leaf);
     }
-    database_source_add_realized_child(data->source, leaf);
     data->realized_shapes++;
     if (path)
 	bu_free(path, "db_path_to_string");
@@ -4502,16 +5850,151 @@ cad_shape_color(const SbBool selected,
     colorOut = SbColor4f(color[0], color[1], color[2], alpha);
 }
 
+static uint64_t
+compact_next_revision(uint64_t revision)
+{
+    return revision == UINT64_MAX ? 1 : revision + 1;
+}
+
+static bool
+compact_style_equal(const obol::InstanceStyle &a,
+	const obol::InstanceStyle &b)
+{
+    return a.hasColorOverride == b.hasColorOverride &&
+	!database_source_float_different(a.color[0], b.color[0]) &&
+	!database_source_float_different(a.color[1], b.color[1]) &&
+	!database_source_float_different(a.color[2], b.color[2]) &&
+	!database_source_float_different(a.color[3], b.color[3]) &&
+	!database_source_float_different(a.lineWidth, b.lineWidth) &&
+	a.linePattern == b.linePattern &&
+	a.linePatternFactor == b.linePatternFactor;
+}
+
 static obol::InstanceStyle
-cad_vlist_style(const SoBRLVListShape *shape)
+compact_effective_style(const BRLObolCompactInstanceEntry &entry)
+{
+    if (entry.highlighted)
+	return entry.highlightedStyle;
+    if (entry.selected)
+	return entry.selectedStyle;
+    return entry.normalStyle;
+}
+
+static void
+compact_sync_shape_summary_state(BRLObolCompactInstanceEntry &entry)
+{
+    BRLObolRealizedShapeSummary &summary = entry.shapeSummary;
+    summary.valid = TRUE;
+    summary.shapeKind = entry.meshGeometry ?
+	BRLObolRealizedShapeSummary::SHAPE_MESH :
+	BRLObolRealizedShapeSummary::SHAPE_VLIST;
+    summary.path = entry.semantic.path;
+    summary.sourceName = entry.semantic.sourceName;
+    summary.sourceType = entry.semantic.sourceType;
+    summary.sourceId = entry.semantic.sourceId;
+    summary.regionId = entry.semantic.regionId;
+    summary.airCode = entry.semantic.airCode;
+    summary.materialId = entry.semantic.materialId;
+    summary.los = entry.semantic.los;
+    summary.materialColorValid = entry.semantic.materialColorValid;
+    summary.materialColor = entry.semantic.materialColor;
+    summary.materialShader = entry.semantic.materialShader;
+    summary.editIntentId = entry.semantic.editIntentId;
+    summary.editIntentRole = entry.semantic.editIntentRole;
+    summary.visible = entry.visible;
+    summary.selectable = entry.selectable;
+    summary.selected = entry.selected;
+    summary.highlighted = entry.highlighted;
+}
+
+static void
+compact_sync_shape_summary(BRLObolCompactInstanceEntry &entry)
+{
+    compact_sync_shape_summary_state(entry);
+    BRLObolRealizedShapeSummary &summary = entry.shapeSummary;
+    summary.bounds = compact_part_geometry_bounds(entry.geometry);
+    summary.boundsValid = !summary.bounds.isEmpty();
+    summary.pointCount = 0;
+    summary.commandCount = 0;
+    summary.segmentCount = 0;
+    summary.triangleCount = 0;
+    summary.indexCount = 0;
+    if (entry.geometry && entry.geometry->points) {
+	const obol::PointRep &points = *entry.geometry->points;
+	summary.pointCount = static_cast<int>(points.positions.size());
+	summary.commandCount = summary.pointCount;
+	summary.pointPrimitiveCount = summary.pointCount;
+    }
+    if (entry.geometry && entry.geometry->wire) {
+	const obol::WireRep &wire = *entry.geometry->wire;
+	const int wirePointCount = static_cast<int>(wire.segmentPoints.size());
+	summary.pointCount += wirePointCount;
+	summary.commandCount += wirePointCount;
+	summary.segmentCount = static_cast<int>(wire.segmentCount());
+	for (const obol::WirePolyline &polyline : wire.polylines) {
+	    summary.pointCount += static_cast<int>(polyline.points.size());
+	    summary.segmentCount += polyline.points.empty() ? 0 :
+		static_cast<int>(polyline.points.size() - 1);
+	}
+    }
+    if (entry.geometry && entry.geometry->shaded) {
+	const obol::TriMesh &mesh = *entry.geometry->shaded;
+	summary.pointCount = static_cast<int>(mesh.positions.size());
+	summary.indexCount = static_cast<int>(mesh.indices.size());
+	summary.triangleCount = static_cast<int>(mesh.indices.size() / 3);
+    }
+}
+
+static bool
+compact_appearance_equal(const BRLObolCompactInstanceEntry &a,
+	const BRLObolCompactInstanceEntry &b)
+{
+    return compact_style_equal(a.normalStyle, b.normalStyle) &&
+	compact_style_equal(a.selectedStyle, b.selectedStyle) &&
+	compact_style_equal(a.highlightedStyle, b.highlightedStyle);
+}
+
+static obol::InstanceStyle
+cad_vlist_style_state(const SoBRLVListShape *shape, SbBool selected,
+	SbBool highlighted)
 {
     obol::InstanceStyle style;
     if (!shape)
 	return style;
 
     style.hasColorOverride = true;
-    cad_shape_color(shape->selected.getValue(), shape->selectedColor.getValue(),
-		    shape->highlighted.getValue(),
+    cad_shape_color(selected, shape->selectedColor.getValue(), highlighted,
+		    shape->highlightedColor.getValue(),
+		    shape->ghosted.getValue(), shape->ghostedColor.getValue(),
+		    shape->colorOverride.getValue(), shape->color.getValue(),
+		    shape->materialColorValid.getValue(),
+		    shape->materialColor.getValue(), shape->color.getValue(),
+		    shape->transparency.getValue(), style.color);
+    style.lineWidth = shape->lineWidth.getValue() > 0 ?
+		      static_cast<float>(shape->lineWidth.getValue()) : 1.0f;
+    if (shape->lineStyle.getValue() != 0)
+	style.linePattern = 0xcf33u;
+    return style;
+}
+
+static obol::InstanceStyle
+cad_vlist_style(const SoBRLVListShape *shape)
+{
+    return cad_vlist_style_state(shape,
+	shape ? shape->selected.getValue() : FALSE,
+	shape ? shape->highlighted.getValue() : FALSE);
+}
+
+static obol::InstanceStyle
+cad_mesh_style_state(const SoBRLMeshShape *shape, SbBool selected,
+	SbBool highlighted)
+{
+    obol::InstanceStyle style;
+    if (!shape)
+	return style;
+
+    style.hasColorOverride = true;
+    cad_shape_color(selected, shape->selectedColor.getValue(), highlighted,
 		    shape->highlightedColor.getValue(),
 		    shape->ghosted.getValue(), shape->ghostedColor.getValue(),
 		    shape->colorOverride.getValue(), shape->color.getValue(),
@@ -4528,24 +6011,9 @@ cad_vlist_style(const SoBRLVListShape *shape)
 static obol::InstanceStyle
 cad_mesh_style(const SoBRLMeshShape *shape)
 {
-    obol::InstanceStyle style;
-    if (!shape)
-	return style;
-
-    style.hasColorOverride = true;
-    cad_shape_color(shape->selected.getValue(), shape->selectedColor.getValue(),
-		    shape->highlighted.getValue(),
-		    shape->highlightedColor.getValue(),
-		    shape->ghosted.getValue(), shape->ghostedColor.getValue(),
-		    shape->colorOverride.getValue(), shape->color.getValue(),
-		    shape->materialColorValid.getValue(),
-		    shape->materialColor.getValue(), shape->color.getValue(),
-		    shape->transparency.getValue(), style.color);
-    style.lineWidth = shape->lineWidth.getValue() > 0 ?
-		      static_cast<float>(shape->lineWidth.getValue()) : 1.0f;
-    if (shape->lineStyle.getValue() != 0)
-	style.linePattern = 0xcf33u;
-    return style;
+    return cad_mesh_style_state(shape,
+	shape ? shape->selected.getValue() : FALSE,
+	shape ? shape->highlighted.getValue() : FALSE);
 }
 
 static int
@@ -4569,18 +6037,151 @@ cad_vlist_point(const SoBRLVListShape *shape,
     return 1;
 }
 
+class CadGeometryHash {
+public:
+    CadGeometryHash(void) :
+	first(14695981039346656037ULL),
+	second(7809847782465536322ULL)
+    {
+    }
+
+    void appendByte(uint8_t value)
+    {
+	first = (first ^ value) * 1099511628211ULL;
+	second = (second ^ value) * 14029467366897019727ULL;
+    }
+
+    void appendU32(uint32_t value)
+    {
+	first = (first ^ value) * 1099511628211ULL;
+	second = (second ^ value) * 14029467366897019727ULL;
+    }
+
+    void appendFloat(float value)
+    {
+	uint32_t bits = 0;
+	static_assert(sizeof(bits) == sizeof(value), "float hash encoding");
+	memcpy(&bits, &value, sizeof(bits));
+	this->appendU32(bits);
+    }
+
+    void appendVec3(const SbVec3f &value)
+    {
+	this->appendFloat(value[0]);
+	this->appendFloat(value[1]);
+	this->appendFloat(value[2]);
+    }
+
+    void appendString(const char *value)
+    {
+	if (!value)
+	    return;
+	for (; *value; value++)
+	    this->appendByte(static_cast<uint8_t>(*value));
+	this->appendByte(0);
+    }
+
+    obol::PartId id(void) const
+    {
+	obol::PartId result;
+	result.w0 = first;
+	result.w1 = second;
+	return result;
+    }
+
+private:
+    uint64_t first;
+    uint64_t second;
+};
+
 static int
 cad_part_key_for_geometry(const char *kind,
-			  const SoNode *geometry,
+			  const obol::PartGeometry &geometry,
 			  std::string &key)
 {
-    if (!kind || !geometry)
+    if (!kind)
 	return 0;
 
-    char buf[128] = {0};
-    snprintf(buf, sizeof(buf), "%s:%p", kind,
-	     static_cast<const void *>(geometry));
-    key = buf;
+    CadGeometryHash hash;
+    hash.appendString(kind);
+    hash.appendByte(geometry.points ? 1 : 0);
+    if (geometry.points) {
+	const obol::PointRep &points = *geometry.points;
+	hash.appendU32(
+	    static_cast<uint32_t>(points.positions.size()));
+	for (const SbVec3f &point : points.positions)
+	    hash.appendVec3(point);
+	hash.appendU32(
+	    static_cast<uint32_t>(points.pointIds.size()));
+	for (uint32_t id : points.pointIds)
+	    hash.appendU32(id);
+	hash.appendU32(
+	    static_cast<uint32_t>(points.colorValid.size()));
+	for (uint8_t valid : points.colorValid)
+	    hash.appendByte(valid);
+	hash.appendU32(
+	    static_cast<uint32_t>(points.colors.size()));
+	for (const SbColor &color : points.colors)
+	    hash.appendVec3(color);
+	hash.appendU32(
+	    static_cast<uint32_t>(points.scaleValid.size()));
+	for (uint8_t valid : points.scaleValid)
+	    hash.appendByte(valid);
+	hash.appendU32(
+	    static_cast<uint32_t>(points.scales.size()));
+	for (float scale : points.scales)
+	    hash.appendFloat(scale);
+	hash.appendU32(
+	    static_cast<uint32_t>(points.normalValid.size()));
+	for (uint8_t valid : points.normalValid)
+	    hash.appendByte(valid);
+	hash.appendU32(
+	    static_cast<uint32_t>(points.normals.size()));
+	for (const SbVec3f &normal : points.normals)
+	    hash.appendVec3(normal);
+    }
+    hash.appendByte(geometry.wire ? 1 : 0);
+    if (geometry.wire) {
+	const obol::WireRep &wire = *geometry.wire;
+	hash.appendU32(
+	    static_cast<uint32_t>(wire.segmentPoints.size()));
+	for (const SbVec3f &point : wire.segmentPoints)
+	    hash.appendVec3(point);
+	hash.appendU32(
+	    static_cast<uint32_t>(wire.segmentIds.size()));
+	for (uint32_t id : wire.segmentIds)
+	    hash.appendU32(id);
+	hash.appendU32(
+	    static_cast<uint32_t>(wire.polylines.size()));
+	for (const obol::WirePolyline &polyline : wire.polylines) {
+	    hash.appendU32(polyline.edgeId);
+	    hash.appendU32(
+		static_cast<uint32_t>(polyline.points.size()));
+	    for (const SbVec3f &point : polyline.points)
+		hash.appendVec3(point);
+	}
+    }
+    hash.appendByte(geometry.shaded ? 1 : 0);
+    if (geometry.shaded) {
+	const obol::TriMesh &mesh = *geometry.shaded;
+	hash.appendU32(
+	    static_cast<uint32_t>(mesh.positions.size()));
+	for (const SbVec3f &point : mesh.positions)
+	    hash.appendVec3(point);
+	hash.appendU32(
+	    static_cast<uint32_t>(mesh.normals.size()));
+	for (const SbVec3f &normal : mesh.normals)
+	    hash.appendVec3(normal);
+	hash.appendU32(
+	    static_cast<uint32_t>(mesh.indices.size()));
+	for (uint32_t index : mesh.indices)
+	    hash.appendU32(index);
+    }
+    const obol::PartId contentId = hash.id();
+    char digest[96] = {0};
+    snprintf(digest, sizeof(digest), "%s:%016" PRIx64 "%016" PRIx64,
+	kind, contentId.w1, contentId.w0);
+    key.assign(digest);
     return 1;
 }
 
@@ -4589,16 +6190,9 @@ cad_vlist_part_geometry_supported(const SoBRLVListShape *shape,
 				  const SoBRLVListShape **geomOut,
 				  int *countOut)
 {
-    if (!shape || shape->hiddenLine.getValue() ||
-	shape->editEmphasis.getValue() ||
+    if (!shape || shape->editEmphasis.getValue() ||
 	shape->selectedPrimitive.getNum() > 0 ||
 	shape->highlightedPrimitive.getNum() > 0)
-	return 0;
-
-    const char *geometryKind = shape->geometryKind.getValue().getString();
-    const char *sourceType = shape->sourceType.getValue().getString();
-    if ((geometryKind && BU_STR_EQUAL(geometryKind, "annotation")) ||
-	(sourceType && BU_STR_EQUAL(sourceType, "annotation")))
 	return 0;
 
     const SoBRLVListShape *geom = shape->getGeometrySource();
@@ -4629,15 +6223,45 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 
     obol::WireRep wire;
     wire.bounds.makeEmpty();
-    wire.segmentPoints.reserve(static_cast<size_t>(n));
-    wire.segmentIds.reserve(static_cast<size_t>(n / 2));
+    wire.segmentPoints.reserve(static_cast<size_t>(n) * 2u);
+    wire.segmentIds.reserve(static_cast<size_t>(n));
+    obol::PointRep points;
+    points.bounds.makeEmpty();
+    points.positions.reserve(static_cast<size_t>(n));
+    points.pointIds.reserve(static_cast<size_t>(n));
     SbBool haveLast = FALSE;
     int lastIndex = -1;
     uint32_t segmentIndex = 0;
     for (int i = 0; i < n; i++) {
 	const int command = geom->command[i];
-	if (command == SoBRLVListShape::POINT)
-	    return 0;
+	if (command == SoBRLVListShape::POINT) {
+	    SbVec3f point;
+	    if (!cad_vlist_point(shape, geom, i, point))
+		return 0;
+	    points.positions.push_back(point);
+	    points.pointIds.push_back(static_cast<uint32_t>(i));
+	    points.bounds.extendBy(point);
+	    SbColor color;
+	    const SbBool colorValid = shape->getPointColor(i, color);
+	    points.colorValid.push_back(colorValid ? 1u : 0u);
+	    points.colors.push_back(colorValid ? color :
+		SbColor(1.0f, 1.0f, 1.0f));
+	    float scale = 0.0f;
+	    const SbBool scaleValid = shape->getPointScale(i, scale);
+	    points.scaleValid.push_back(scaleValid ? 1u : 0u);
+	    points.scales.push_back(scaleValid ? scale : 0.0f);
+	    if (scaleValid && scale > 0.0f) {
+		const SbVec3f extent(scale, scale, scale);
+		points.bounds.extendBy(point - extent);
+		points.bounds.extendBy(point + extent);
+	    }
+	    SbVec3f normal;
+	    const SbBool normalValid = shape->getPointNormal(i, normal);
+	    points.normalValid.push_back(normalValid ? 1u : 0u);
+	    points.normals.push_back(normalValid ? normal :
+		SbVec3f(0.0f, 0.0f, 1.0f));
+	    continue;
+	}
 	if (command == SoBRLVListShape::MOVE) {
 	    haveLast = TRUE;
 	    lastIndex = i;
@@ -4660,9 +6284,12 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 	lastIndex = i;
     }
 
-    if (wire.segmentPoints.empty() || wire.bounds.isEmpty())
+    if (wire.segmentPoints.empty() && points.positions.empty())
 	return 0;
-    geometry.wire = wire;
+    if (!points.positions.empty())
+	geometry.points = std::move(points);
+    if (!wire.segmentPoints.empty())
+	geometry.wire = std::move(wire);
     return 1;
 }
 
@@ -4670,9 +6297,7 @@ static int
 cad_mesh_part_geometry(const SoBRLMeshShape *shape,
 		       obol::PartGeometry &geometry)
 {
-    if (!shape || shape->hiddenLine.getValue() ||
-	shape->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE ||
-	shape->editEmphasis.getValue() ||
+    if (!shape || shape->editEmphasis.getValue() ||
 	shape->selectedPrimitive.getNum() > 0 ||
 	shape->highlightedPrimitive.getNum() > 0)
 	return 0;
@@ -4699,7 +6324,32 @@ cad_mesh_part_geometry(const SoBRLMeshShape *shape,
     if (mesh.indices.empty() || mesh.bounds.isEmpty())
 	return 0;
 
-    geometry.shaded = mesh;
+    const SbBool hiddenLine = shape->hiddenLine.getValue() ||
+	shape->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE;
+    if (hiddenLine) {
+	obol::WireRep wire;
+	wire.bounds = mesh.bounds;
+	std::unordered_set<uint64_t> edges;
+	uint32_t segmentId = 0;
+	auto addEdge = [&](uint32_t a, uint32_t b) {
+	    if (a > b)
+		std::swap(a, b);
+	    const uint64_t key = (static_cast<uint64_t>(a) << 32) | b;
+	    if (!edges.insert(key).second)
+		return;
+	    wire.segmentPoints.push_back(mesh.positions[a]);
+	    wire.segmentPoints.push_back(mesh.positions[b]);
+	    wire.segmentIds.push_back(segmentId++);
+	};
+	for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+	    addEdge(mesh.indices[i], mesh.indices[i + 1]);
+	    addEdge(mesh.indices[i + 1], mesh.indices[i + 2]);
+	    addEdge(mesh.indices[i + 2], mesh.indices[i]);
+	}
+	if (!wire.segmentPoints.empty())
+	    geometry.wire = std::move(wire);
+    }
+    geometry.shaded = std::move(mesh);
     return 1;
 }
 
@@ -5195,7 +6845,9 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
     assembly->setInstanceSemantic(instanceId,
 	cad_source_semantic(source, primitiveKind));
 
-    if (shadedCount > 0 && wireCount > 0)
+    if (source_record_draw_mode(source) == BRLOBOL_LOD_DRAW_HIDDEN_LINE)
+	assembly->drawMode = SoCADAssembly::HIDDEN_LINE;
+    else if (shadedCount > 0 && wireCount > 0)
 	assembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
     else if (shadedCount > 0)
 	assembly->drawMode = SoCADAssembly::SHADED;
@@ -5211,10 +6863,229 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
     return assembly;
 }
 
+static bool
+cad_lod_path_equal(const SbString &a, const SbString &b)
+{
+    const char *ap = a.getString();
+    const char *bp = b.getString();
+    if (!ap || !bp)
+	return false;
+    if (ap[0] == '/')
+	ap++;
+    if (bp[0] == '/')
+	bp++;
+    return strcmp(ap, bp) == 0;
+}
+
+static const BRLObolViewLodState::CadPayload *
+cad_compact_payload_for_entry(
+    const std::vector<const BRLObolViewLodState::CadPayload *> &payloads,
+    const BRLObolCompactInstanceEntry &entry)
+{
+    for (const BRLObolViewLodState::CadPayload *payload : payloads) {
+	if (payload && cad_lod_path_equal(payload->sourcePath,
+		entry.semantic.path))
+	    return payload;
+    }
+    return NULL;
+}
+
+static std::string
+cad_compact_view_lod_key(
+    const SoBRLDatabaseSource *source,
+    const std::vector<const BRLObolViewLodState::CadPayload *> &payloads)
+{
+    char header[256] = {0};
+    snprintf(header, sizeof(header), "%p|%u|%u|%u|%d|%zu",
+	static_cast<const void *>(source),
+	source ? source->sourceRevision.getValue() : 0,
+	source ? source->inputsRevision.getValue() : 0,
+	source ? source->viewRevision.getValue() : 0,
+	source ? source_record_draw_mode(source) : 0, payloads.size());
+    std::string key(header);
+    if (source) {
+	for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	    BRLObolCompactInstanceHandle handle;
+	    BRLObolCompactInstanceSummary entry;
+	    if (!source->getCompactInstanceHandle(i, handle) ||
+		!source->getCompactInstanceSummary(handle, entry))
+		continue;
+	    char occurrenceState[192] = {0};
+	    snprintf(occurrenceState, sizeof(occurrenceState),
+		"|i:%016" PRIx64 ":%016" PRIx64 ":%llu:%llu:%llu:%llu",
+		handle.instanceWord1, handle.instanceWord0,
+		static_cast<unsigned long long>(entry.appearanceRevision),
+		static_cast<unsigned long long>(entry.placementRevision),
+		static_cast<unsigned long long>(entry.visibilityRevision),
+		static_cast<unsigned long long>(entry.selectionRevision));
+	    key += occurrenceState;
+	}
+    }
+    for (const BRLObolViewLodState::CadPayload *payload : payloads) {
+	if (!payload)
+	    continue;
+	key += '|';
+	key += payload->sourcePath.getString();
+	key += '|';
+	key += payload->cacheKey.getString();
+	char state[128] = {0};
+	snprintf(state, sizeof(state), "|%d|%d|%llu|%llu",
+	    payload->resultKind, payload->qualityTier,
+	    static_cast<unsigned long long>(payload->viewRevision),
+	    static_cast<unsigned long long>(payload->policyRevision));
+	key += state;
+    }
+    return key;
+}
+
+SoBRLCadAssembly *
+SoBRLDatabaseSource::compactViewLodAssembly(
+    const std::vector<const BRLObolViewLodState::CadPayload *> &payloads)
+    const
+{
+    if (!this->compactIndex || payloads.empty())
+	return NULL;
+
+    const BRLObolViewLodState::CadPayload *owner = payloads.front();
+    if (!owner)
+	return NULL;
+    const std::string assemblyKey =
+	cad_compact_view_lod_key(this, payloads);
+    if (owner->assembly &&
+	strcmp(owner->assemblyKey.getString(), assemblyKey.c_str()) == 0) {
+	SoBRLCadAssembly *assembly =
+	    static_cast<SoBRLCadAssembly *>(owner->assembly);
+	assembly->setHiddenInstances(this->compactIndex->hiddenInstances);
+	assembly->setSelectedInstances(this->compactIndex->selectedInstances);
+	assembly->setUnpickableInstances(
+	    this->compactIndex->unpickableInstances);
+	return assembly;
+    }
+
+    owner->clearAssembly();
+    SoBRLCadAssembly *assembly = new SoBRLCadAssembly;
+    assembly->ref();
+    assembly->beginUpdate();
+    assembly->clear();
+    assembly->clearSemanticMap();
+
+    std::vector<obol::PartUpdate> parts;
+    std::unordered_map<obol::PartId, uint8_t, std::hash<obol::PartId>>
+	partChannels;
+    parts.reserve(this->compactIndex->parts.size() + payloads.size());
+    for (const BRLObolCompactPartReference &partRef :
+	 this->compactIndex->parts) {
+	if (!partRef.geometry)
+	    continue;
+	obol::PartUpdate part;
+	part.part = partRef.part;
+	part.geometry = *partRef.geometry;
+	partChannels[part.part] =
+	    (part.geometry.wire.has_value() ? 1u : 0u) |
+	    (part.geometry.shaded.has_value() ? 2u : 0u) |
+	    (part.geometry.points.has_value() ? 4u : 0u);
+	parts.push_back(std::move(part));
+    }
+
+    std::vector<obol::InstanceUpdate> instances =
+	this->compactIndex->instances;
+    int wireCount = 0;
+    int shadedCount = 0;
+    const int sourceDrawMode = source_record_draw_mode(this);
+    const bool hiddenLine = sourceDrawMode == BRLOBOL_LOD_DRAW_HIDDEN_LINE;
+    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+	const BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[i];
+	const BRLObolViewLodState::CadPayload *payload =
+	    cad_compact_payload_for_entry(payloads, entry);
+	if (payload && payload->isValid()) {
+	    obol::PartGeometry geometry;
+	    bool geometryValid = false;
+	    if (payload->resultKind == BRLOBOL_LOD_RESULT_AABB ||
+		payload->resultKind == BRLOBOL_LOD_RESULT_PROXY) {
+		geometryValid = cad_proxy_part_geometry(payload->proxy,
+		    geometry) != 0;
+	    } else {
+		const int wire = sourceDrawMode == BRLOBOL_LOD_DRAW_WIRE ||
+		    hiddenLine;
+		const int shaded = sourceDrawMode == BRLOBOL_LOD_DRAW_SHADED ||
+		    hiddenLine;
+		geometryValid = cad_mesh_payload_part_geometry(payload->mesh,
+		    wire, shaded, geometry) != 0;
+	    }
+	    if (geometryValid) {
+		std::string partKey("compact-lod:");
+		partKey += compact_instance_identity(entry).getString();
+		partKey += ':';
+		partKey += payload->cacheKey.getString();
+		partKey += ':';
+		partKey += std::to_string(payload->resultKind);
+		const obol::PartId partId =
+		    obol::CadIdBuilder::hash128(partKey);
+		obol::PartUpdate part;
+		part.part = partId;
+		part.geometry = std::move(geometry);
+		partChannels[part.part] =
+		    (part.geometry.wire.has_value() ? 1u : 0u) |
+		    (part.geometry.shaded.has_value() ? 2u : 0u) |
+		    (part.geometry.points.has_value() ? 4u : 0u);
+		parts.push_back(std::move(part));
+		if (i < instances.size())
+		    instances[i].record.part = partId;
+	    }
+	}
+
+	const obol::PartId activePart = i < instances.size() ?
+	    instances[i].record.part : entry.part;
+	const auto channelIt = partChannels.find(activePart);
+	if (channelIt != partChannels.end()) {
+	    if (channelIt->second & (1u | 4u))
+		wireCount++;
+	    if (channelIt->second & 2u)
+		shadedCount++;
+	}
+	SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
+	semantic.sourceInstanceKey = compact_instance_identity(entry);
+	assembly->setInstanceSemantic(entry.instance, semantic);
+    }
+
+    assembly->upsertParts(parts);
+    assembly->upsertInstances(instances);
+    assembly->setHiddenInstances(this->compactIndex->hiddenInstances);
+    assembly->setSelectedInstances(this->compactIndex->selectedInstances);
+    assembly->setUnpickableInstances(this->compactIndex->unpickableInstances);
+    if (hiddenLine)
+	assembly->drawMode = SoCADAssembly::HIDDEN_LINE;
+    else if (shadedCount > 0 && wireCount > 0)
+	assembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
+    else if (shadedCount > 0)
+	assembly->drawMode = SoCADAssembly::SHADED;
+    else
+	assembly->drawMode = SoCADAssembly::WIREFRAME;
+    assembly->endUpdate();
+
+    owner->assembly = assembly;
+    owner->assemblyKey = assemblyKey.c_str();
+    return assembly;
+}
+
 static SoBRLCadAssembly *
 cad_view_lod_assembly_for_action(SoAction *action,
 				 const SoBRLDatabaseSource *source)
 {
+    const BRLObolViewLodState *viewState =
+	brlobol_view_lod_state_for_action(action);
+    if (source && source->isCompactOccurrenceRegistry()) {
+	if (viewState) {
+	    std::vector<const BRLObolViewLodState::CadPayload *> payloads;
+	    viewState->findCadPayloads(source, payloads);
+	    if (!payloads.empty())
+		return source->compactViewLodAssembly(payloads);
+	}
+	/* Aggregate sources require an exact source binding.  The legacy
+	 * path/name lookup may otherwise attach a sibling source's payload. */
+	return NULL;
+    }
     const BRLObolViewLodState::CadPayload *payload =
 	brlobol_view_lod_cad_for_action(action, source);
     return cad_view_lod_assembly(source, payload);
@@ -5233,9 +7104,8 @@ cad_add_vlist_instance(cad_build_data &data,
 	return;
     }
 
-    const SoBRLVListShape *geom = shape->getGeometrySource();
     std::string partKey;
-    if (!cad_part_key_for_geometry("wire", geom, partKey)) {
+    if (!cad_part_key_for_geometry("wire", geometry, partKey)) {
 	data.unsupported = 1;
 	return;
     }
@@ -5284,9 +7154,8 @@ cad_add_mesh_instance(cad_build_data &data,
 	return;
     }
 
-    const SoBRLMeshShape *geom = shape->getGeometrySource();
     std::string partKey;
-    if (!cad_part_key_for_geometry("mesh", geom, partKey)) {
+    if (!cad_part_key_for_geometry("mesh", geometry, partKey)) {
 	data.unsupported = 1;
 	return;
     }
@@ -5368,7 +7237,7 @@ cad_collect_realized_node(cad_build_data &data,
 static void
 compact_add_part_if_needed(BRLObolCompactInstanceIndex &index,
 			   const std::string &partKey,
-			   const obol::PartGeometry &geometry,
+			   const std::shared_ptr<const obol::PartGeometry> &geometry,
 			   obol::PartId &partId)
 {
     std::map<std::string, obol::PartId>::iterator found =
@@ -5380,337 +7249,440 @@ compact_add_part_if_needed(BRLObolCompactInstanceIndex &index,
 
     partId = obol::CadIdBuilder::hash128(partKey);
     index.partIdByKey[partKey] = partId;
-    obol::PartUpdate update;
-    update.part = partId;
-    update.geometry = geometry;
-    index.parts.push_back(update);
+    BRLObolCompactPartReference part;
+    part.part = partId;
+    part.geometry = geometry;
+    index.parts.push_back(part);
+}
+
+static int
+compact_add_geometry_part_if_needed(BRLObolCompactInstanceIndex &index,
+	const char *kind,
+	const std::shared_ptr<const obol::PartGeometry> &geometry,
+	obol::PartId &partId)
+{
+    if (!geometry)
+	return 0;
+    const auto found = index.partIdByGeometry.find(geometry.get());
+    if (found != index.partIdByGeometry.end()) {
+	partId = found->second;
+	return 1;
+    }
+
+    std::string partKey;
+    if (!cad_part_key_for_geometry(kind, *geometry, partKey))
+	return 0;
+    compact_add_part_if_needed(index, partKey, geometry, partId);
+    index.partIdByGeometry[geometry.get()] = partId;
+    return 1;
+}
+
+static void compact_sync_entry_from_source(BRLObolCompactInstanceEntry &entry,
+	const SoBRLDatabaseSource *source);
+
+static SoBRLCadAssembly::InstanceSemantic
+compact_semantic_from_summary(const BRLObolRealizedShapeSummary &summary)
+{
+    SoBRLCadAssembly::InstanceSemantic semantic;
+    semantic.path = summary.path;
+    semantic.sourceName = summary.sourceName;
+    semantic.sourceType = summary.sourceType;
+    semantic.sourceId = summary.sourceId;
+    semantic.regionId = summary.regionId;
+    semantic.airCode = summary.airCode;
+    semantic.materialId = summary.materialId;
+    semantic.los = summary.los;
+    semantic.materialColorValid = summary.materialColorValid;
+    semantic.materialColor = summary.materialColor;
+    semantic.materialShader = summary.materialShader;
+    semantic.editIntentId = summary.editIntentId;
+    semantic.editIntentRole = summary.editIntentRole;
+    const char *geometryKind = summary.geometryKind.getString();
+    if (geometryKind && strstr(geometryKind, "point"))
+	semantic.primitiveKind = SoBRLPickDetail::POINT;
+    else
+	semantic.primitiveKind = summary.shapeKind ==
+	    BRLObolRealizedShapeSummary::SHAPE_MESH ? SoBRLPickDetail::FACE :
+	    SoBRLPickDetail::LINE_SEGMENT;
+    return semantic;
 }
 
 static void
-compact_add_vlist_instance(SoBRLDatabaseSource *source,
-			   BRLObolCompactInstanceIndex &index,
-			   SoBRLVListShape *shape,
-			   const SbMatrix &localMatrix,
-			   int &ordinal,
-			   int &unsupported,
-			   const obol::PartGeometry *cachedGeometry = NULL)
+compact_add_occurrence(SoBRLDatabaseSource *source,
+	BRLObolCompactInstanceIndex &index,
+	const compact_occurrence_build &input,
+	int &ordinal,
+	int &unsupported)
 {
-    if (!shape)
+    const std::shared_ptr<const obol::PartGeometry> &geometry =
+	input.occurrence.geometry;
+    if (!source || !geometry) {
+	unsupported = 1;
 	return;
+    }
 
-    obol::PartGeometry geometry;
-    if (cachedGeometry) {
-	const SoBRLVListShape *geom = NULL;
-	int n = 0;
-	if (!cad_vlist_part_geometry_supported(shape, &geom, &n)) {
+    const bool meshOccurrence = input.occurrence.summary.shapeKind ==
+	BRLObolRealizedShapeSummary::SHAPE_MESH;
+    const char *partKind = meshOccurrence ? "mesh" :
+	(geometry->points && !geometry->wire ? "point" : "wire");
+    obol::PartId partId;
+    if (!compact_add_geometry_part_if_needed(index,
+	    partKind, geometry, partId)) {
+	unsupported = 1;
+	return;
+    }
+
+    const char *path = input.occurrence.summary.path.getString();
+    if (!path || !path[0])
+	path = source->path.getValue().getString();
+    const SbMatrix matrix = cad_instance_matrix(source,
+	input.occurrence.localTransform);
+    const std::string instanceKey = cad_instance_key(source, path, ordinal++);
+    const obol::InstanceId instanceId =
+	obol::CadIdBuilder::hash128(instanceKey);
+
+    BRLObolCompactInstanceEntry entry;
+    entry.instance = instanceId;
+    entry.part = partId;
+    entry.geometry = geometry;
+    entry.wireGeometry = geometry->wire ? TRUE : FALSE;
+    entry.pointGeometry = geometry->points ? TRUE : FALSE;
+    entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
+    entry.lodBacked = input.occurrence.lodBacked;
+    entry.sourceMeshRequestValid = input.occurrence.sourceMeshRequestValid;
+    if (entry.sourceMeshRequestValid)
+	entry.sourceMeshRequest = input.occurrence.sourceMeshRequest;
+    entry.localToSource = matrix;
+    entry.localTransform = input.occurrence.localTransform;
+    entry.semantic = input.semantic;
+    if (entry.semantic.path.getLength() == 0)
+	entry.semantic.path = path;
+    entry.instanceKey = instanceKey.c_str();
+    entry.semantic.sourceInstanceKey = instanceKey.c_str();
+    entry.visible = input.occurrence.summary.visible;
+    entry.selectable = input.occurrence.summary.selectable;
+    entry.selected = input.occurrence.summary.selected;
+    entry.highlighted = input.occurrence.summary.highlighted;
+    entry.shapeSummary = input.occurrence.summary;
+    entry.occurrenceIndex = input.occurrence.occurrenceIndex;
+    entry.booleanOperation = input.occurrence.booleanOperation;
+    compact_sync_entry_from_source(entry, source);
+    if (input.stylesValid) {
+	entry.normalStyle = input.normalStyle;
+	entry.selectedStyle = input.selectedStyle;
+	entry.highlightedStyle = input.highlightedStyle;
+    }
+    if (input.dashed) {
+	entry.normalStyle.linePattern = 0xcf33u;
+	entry.selectedStyle.linePattern = 0xcf33u;
+	entry.highlightedStyle.linePattern = 0xcf33u;
+    }
+    entry.style = compact_effective_style(entry);
+    compact_sync_shape_summary(entry);
+
+    obol::InstanceRecord record;
+    record.part = partId;
+    record.localToRoot = matrix;
+    record.parent = cad_source_parent_instance(source);
+    record.childName = path;
+    record.occurrenceIndex = entry.occurrenceIndex;
+    record.boolOp = entry.booleanOperation ==
+	SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? 1 :
+	(entry.booleanOperation == SoBRLDatabaseSource::BOOLEAN_INTERSECT ? 2 : 0);
+    record.style = entry.style;
+
+    obol::InstanceUpdate update;
+    update.instance = instanceId;
+    update.record = record;
+    index.instances.push_back(update);
+    if (!entry.visible)
+	index.hiddenInstances.push_back(instanceId);
+    if (entry.selected)
+	index.selectedInstances.push_back(instanceId);
+    if (!entry.selectable)
+	index.unpickableInstances.push_back(instanceId);
+    index.entries.push_back(entry);
+    if (meshOccurrence)
+	index.shadedCount++;
+    else
+	index.wireCount++;
+}
+
+static void
+compact_rebuild_entry_index(BRLObolCompactInstanceIndex &index)
+{
+    index.entryIndex.clear();
+    index.entryIndex.reserve(index.entries.size());
+    for (size_t i = 0; i < index.entries.size(); i++)
+	index.entryIndex[index.entries[i].instance] = i;
+}
+
+static void
+compact_merge_runtime_state(const BRLObolCompactInstanceIndex *current,
+    BRLObolCompactInstanceIndex *next)
+{
+    if (!next)
+	return;
+    if (!current) {
+	compact_rebuild_entry_index(*next);
+	return;
+    }
+    std::unordered_map<obol::InstanceId,
+	const BRLObolCompactInstanceEntry *, std::hash<obol::InstanceId>> old;
+    std::unordered_map<std::string, const BRLObolCompactInstanceEntry *>
+	oldByPath;
+    std::unordered_map<std::string, const BRLObolCompactInstanceEntry *>
+	oldByName;
+    old.reserve(current->entries.size());
+    for (const BRLObolCompactInstanceEntry &entry : current->entries) {
+	old[entry.instance] = &entry;
+	std::string path = database_source_skip_leading_slash(
+	    entry.semantic.path.getString());
+	if (!path.empty()) {
+	    auto inserted = oldByPath.emplace(path, &entry);
+	    if (!inserted.second)
+		inserted.first->second = NULL;
+	}
+	std::string name = entry.semantic.sourceName.getString();
+	if (!name.empty()) {
+	    auto inserted = oldByName.emplace(name, &entry);
+	    if (!inserted.second)
+		inserted.first->second = NULL;
+	}
+    }
+
+    bool equivalentOrder = current->entries.size() == next->entries.size();
+    for (size_t i = 0; equivalentOrder && i < next->entries.size(); i++) {
+	const BRLObolCompactInstanceEntry &before = current->entries[i];
+	const BRLObolCompactInstanceEntry &after = next->entries[i];
+	equivalentOrder = before.part == after.part &&
+	    before.occurrenceIndex == after.occurrenceIndex &&
+	    before.booleanOperation == after.booleanOperation;
+    }
+
+    next->hiddenInstances.clear();
+    next->selectedInstances.clear();
+    next->unpickableInstances.clear();
+    for (size_t i = 0; i < next->entries.size(); i++) {
+	BRLObolCompactInstanceEntry &entry = next->entries[i];
+	auto found = old.find(entry.instance);
+	const BRLObolCompactInstanceEntry *previousEntry =
+	    found != old.end() ? found->second : NULL;
+	if (!previousEntry) {
+	    std::string path = database_source_skip_leading_slash(
+		entry.semantic.path.getString());
+	    const auto pathIt = oldByPath.find(path);
+	    if (pathIt != oldByPath.end())
+		previousEntry = pathIt->second;
+	}
+	if (!previousEntry) {
+	    const auto nameIt = oldByName.find(
+		entry.semantic.sourceName.getString());
+	    if (nameIt != oldByName.end())
+		previousEntry = nameIt->second;
+	}
+	if (!previousEntry && equivalentOrder)
+	    previousEntry = &current->entries[i];
+	if (previousEntry) {
+	    const BRLObolCompactInstanceEntry &previous = *previousEntry;
+	    if (entry.instance != previous.instance) {
+		entry.instance = previous.instance;
+		entry.instanceKey = previous.instanceKey;
+		entry.semantic.sourceInstanceKey = previous.instanceKey;
+		if (i < next->instances.size()) {
+		    next->instances[i].instance = previous.instance;
+		}
+	    }
+	    entry.visible = previous.visible;
+	    entry.selectable = previous.selectable;
+	    entry.selected = previous.selected;
+	    entry.highlighted = previous.highlighted;
+	    entry.geometryRevision = previous.geometryRevision;
+	    if (entry.part != previous.part)
+		entry.geometryRevision = compact_next_revision(
+		    entry.geometryRevision);
+	    entry.placementRevision = previous.placementRevision;
+	    if (!entry.localToSource.equals(previous.localToSource,
+		    0.000001f))
+		entry.placementRevision = compact_next_revision(
+		    entry.placementRevision);
+	    entry.visibilityRevision = previous.visibilityRevision;
+	    entry.selectionRevision = previous.selectionRevision;
+	    entry.appearanceRevision = previous.appearanceRevision;
+	}
+	entry.style = compact_effective_style(entry);
+	if (previousEntry && !compact_appearance_equal(entry, *previousEntry))
+	    entry.appearanceRevision = compact_next_revision(
+		entry.appearanceRevision);
+	if (i < next->instances.size())
+	    next->instances[i].record.style = entry.style;
+	compact_sync_shape_summary(entry);
+	if (!entry.visible)
+	    next->hiddenInstances.push_back(entry.instance);
+	if (entry.selected)
+	    next->selectedInstances.push_back(entry.instance);
+	if (!entry.selectable)
+	    next->unpickableInstances.push_back(entry.instance);
+    }
+    compact_rebuild_entry_index(*next);
+}
+
+int
+SoBRLDatabaseSource::setCompactOccurrence(
+    const BRLObolCompactOccurrence &occurrence)
+{
+    if (!occurrence.geometry)
+	return 0;
+
+    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
+    if (timer.active())
+	brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_ATTEMPTS, 1);
+
+    BRLObolCompactInstanceIndex *next = new BRLObolCompactInstanceIndex;
+    compact_occurrence_build input;
+    input.occurrence = occurrence;
+    input.semantic = compact_semantic_from_summary(occurrence.summary);
+    int ordinal = 0;
+    int unsupported = 0;
+    compact_add_occurrence(this, *next, input, ordinal, unsupported);
+    if (unsupported || next->entries.empty()) {
+	delete next;
+	return 0;
+    }
+
+    this->installCompactInstanceIndex(next, FALSE);
+    remove_non_auxiliary_children(this);
+    this->markCompiledAssemblyDirty();
+
+    const SbBox3f bounds = compact_part_geometry_bounds(occurrence.geometry);
+    if (!bounds.isEmpty())
+	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+    else
+	this->clearSourceBounds();
+
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
+	static_cast<uint64_t>(this->compactIndex->entries.size()));
+    return static_cast<int>(this->compactIndex->entries.size());
+}
+
+int
+SoBRLDatabaseSource::setCompactOccurrenceRegistry(
+    const std::vector<BRLObolCompactOccurrence> &occurrences)
+{
+    if (occurrences.empty())
+	return 0;
+
+    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
+    if (timer.active())
+	brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_ATTEMPTS, 1);
+
+    BRLObolCompactInstanceIndex *next = new BRLObolCompactInstanceIndex;
+    int ordinal = 0;
+    int unsupported = 0;
+    SbBox3f aggregateBounds;
+    aggregateBounds.makeEmpty();
+    for (const BRLObolCompactOccurrence &occurrence : occurrences) {
+	if (!occurrence.geometry) {
 	    unsupported = 1;
-	    return;
+	    break;
 	}
-	geometry = *cachedGeometry;
-    } else if (!cad_vlist_part_geometry(shape, geometry)) {
-	unsupported = 1;
-	return;
+	compact_occurrence_build input;
+	input.occurrence = occurrence;
+	input.semantic = compact_semantic_from_summary(occurrence.summary);
+	compact_add_occurrence(this, *next, input, ordinal, unsupported);
+	if (unsupported)
+	    break;
+	const SbBox3f bounds = database_source_transform_bounds(
+	    compact_part_geometry_bounds(occurrence.geometry),
+	    occurrence.localTransform);
+	if (!bounds.isEmpty())
+	    aggregateBounds.extendBy(bounds);
+    }
+    if (unsupported || next->entries.size() != occurrences.size()) {
+	delete next;
+	return 0;
     }
 
-    const SoBRLVListShape *geom = shape->getGeometrySource();
-    std::string partKey;
-    if (!cad_part_key_for_geometry("wire", geom, partKey)) {
-	unsupported = 1;
-	return;
+    this->installCompactInstanceIndex(next, TRUE);
+    remove_non_auxiliary_children(this);
+    this->markCompiledAssemblyDirty();
+    if (!aggregateBounds.isEmpty())
+	(void)this->setSourceBoundsState(TRUE, aggregateBounds.getMin(),
+	    aggregateBounds.getMax());
+    else
+	this->clearSourceBounds();
+
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
+	static_cast<uint64_t>(this->compactIndex->entries.size()));
+    return this->compactIndex->entries.size() >
+	static_cast<size_t>(INT_MAX) ? INT_MAX :
+	static_cast<int>(this->compactIndex->entries.size());
+}
+
+static uint64_t
+compact_structure_signature(const BRLObolCompactInstanceIndex *index)
+{
+    if (!index)
+	return 0;
+    uint64_t signature = 1469598103934665603ULL;
+    auto mix = [&signature](uint64_t value) {
+	signature ^= value;
+	signature *= 1099511628211ULL;
+    };
+    mix(index->parts.size());
+    mix(index->entries.size());
+    for (const BRLObolCompactInstanceEntry &entry : index->entries) {
+	mix(entry.instance.w0);
+	mix(entry.instance.w1);
+	mix(entry.part.w0);
+	mix(entry.part.w1);
+	mix(entry.geometryRevision);
+	mix(entry.placementRevision);
     }
+    return signature ? signature : 1;
+}
 
-    obol::PartId partId;
-    compact_add_part_if_needed(index, partKey, geometry, partId);
-
-    const SbMatrix matrix = cad_instance_matrix(source, localMatrix);
-    const std::string instanceKey =
-	cad_instance_key(source, shape->sourcePath.getValue().getString(),
-			 ordinal++);
-    obol::InstanceId instanceId = obol::CadIdBuilder::hash128(instanceKey);
-
-    obol::InstanceRecord record;
-    record.part = partId;
-    record.localToRoot = matrix;
-    record.parent = cad_source_parent_instance(source);
-    record.childName = shape->sourcePath.getValue().getString();
-    record.occurrenceIndex = source->occurrenceIndex.getValue();
-    record.boolOp = cad_source_boolean_operation(source);
-    record.style = cad_vlist_style(shape);
-
-    obol::InstanceUpdate update;
-    update.instance = instanceId;
-    update.record = record;
-    index.instances.push_back(update);
-    if (!shape->visible.getValue())
-	index.hiddenInstances.push_back(instanceId);
-    if (shape->selected.getValue())
-	index.selectedInstances.push_back(instanceId);
-    if (!shape->selectable.getValue())
-	index.unpickableInstances.push_back(instanceId);
-
-    BRLObolCompactInstanceEntry entry;
-    entry.instance = instanceId;
-    entry.part = partId;
-    entry.vlist = shape;
-    entry.localToSource = matrix;
-    entry.localTransform = localMatrix;
-    entry.semantic = cad_vlist_semantic(shape);
-    entry.visible = shape->visible.getValue();
-    entry.selectable = shape->selectable.getValue();
-    entry.selected = shape->selected.getValue();
-    entry.highlighted = shape->highlighted.getValue();
-    shape->ref();
-    index.entries.push_back(entry);
-    index.wireCount++;
+static uint64_t
+compact_state_signature(const std::vector<obol::InstanceId> &instances)
+{
+    uint64_t signature = 1469598103934665603ULL;
+    for (const obol::InstanceId &instance : instances) {
+	signature ^= instance.w0;
+	signature *= 1099511628211ULL;
+	signature ^= instance.w1;
+	signature *= 1099511628211ULL;
+    }
+    return signature ? signature : 1;
 }
 
 static void
-compact_add_mesh_instance(SoBRLDatabaseSource *source,
-			  BRLObolCompactInstanceIndex &index,
-			  SoBRLMeshShape *shape,
-			  const SbMatrix &localMatrix,
-			  int &ordinal,
-			  int &unsupported)
+compact_assembly_draw_mode(SoBRLCadAssembly *assembly,
+    const SoBRLDatabaseSource *source,
+    const BRLObolCompactInstanceIndex *index)
 {
-    if (!shape)
+    if (!assembly || !source || !index)
 	return;
-
-    obol::PartGeometry geometry;
-    if (!cad_mesh_part_geometry(shape, geometry)) {
-	unsupported = 1;
-	return;
-    }
-
-    const SoBRLMeshShape *geom = shape->getGeometrySource();
-    std::string partKey;
-    if (!cad_part_key_for_geometry("mesh", geom, partKey)) {
-	unsupported = 1;
-	return;
-    }
-
-    obol::PartId partId;
-    compact_add_part_if_needed(index, partKey, geometry, partId);
-
-    const SbMatrix matrix = cad_instance_matrix(source, localMatrix);
-    const std::string instanceKey =
-	cad_instance_key(source, shape->sourcePath.getValue().getString(),
-			 ordinal++);
-    obol::InstanceId instanceId = obol::CadIdBuilder::hash128(instanceKey);
-
-    obol::InstanceRecord record;
-    record.part = partId;
-    record.localToRoot = matrix;
-    record.parent = cad_source_parent_instance(source);
-    record.childName = shape->sourcePath.getValue().getString();
-    record.occurrenceIndex = source->occurrenceIndex.getValue();
-    record.boolOp = cad_source_boolean_operation(source);
-    record.style = cad_mesh_style(shape);
-
-    obol::InstanceUpdate update;
-    update.instance = instanceId;
-    update.record = record;
-    index.instances.push_back(update);
-    if (!shape->visible.getValue())
-	index.hiddenInstances.push_back(instanceId);
-    if (shape->selected.getValue())
-	index.selectedInstances.push_back(instanceId);
-    if (!shape->selectable.getValue())
-	index.unpickableInstances.push_back(instanceId);
-
-    BRLObolCompactInstanceEntry entry;
-    entry.instance = instanceId;
-    entry.part = partId;
-    entry.mesh = shape;
-    entry.localToSource = matrix;
-    entry.localTransform = localMatrix;
-    entry.semantic = cad_mesh_semantic(shape);
-    entry.visible = shape->visible.getValue();
-    entry.selectable = shape->selectable.getValue();
-    entry.selected = shape->selected.getValue();
-    entry.highlighted = shape->highlighted.getValue();
-    shape->ref();
-    index.entries.push_back(entry);
-    index.shadedCount++;
-}
-
-static void
-compact_collect_realized_node(SoBRLDatabaseSource *source,
-			      BRLObolCompactInstanceIndex &index,
-			      SoNode *node,
-			      const SbMatrix &matrix,
-			      int &ordinal,
-			      int &unsupported)
-{
-    if (!node || unsupported)
-	return;
-
-    if (node_is_source_placement_transform(node) ||
-	node_is_auxiliary_vlist(node) || node_is_auxiliary_source(node))
-	return;
-
-    if (node->isOfType(SoBRLVListShape::getClassTypeId())) {
-	compact_add_vlist_instance(source, index,
-	    static_cast<SoBRLVListShape *>(node), matrix, ordinal,
-	    unsupported);
-	return;
-    }
-
-    if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
-	compact_add_mesh_instance(source, index,
-	    static_cast<SoBRLMeshShape *>(node), matrix, ordinal,
-	    unsupported);
-	return;
-    }
-
-    if (!node->isOfType(SoGroup::getClassTypeId()))
-	return;
-
-    SoGroup *group = static_cast<SoGroup *>(node);
-    SbMatrix childMatrix = matrix;
-    for (int i = 0; i < group->getNumChildren() && !unsupported; i++) {
-	SoNode *child = group->getChild(i);
-	if (!child)
-	    continue;
-	if (child->isOfType(SoMatrixTransform::getClassTypeId())) {
-	    SoMatrixTransform *transform =
-		static_cast<SoMatrixTransform *>(child);
-	    childMatrix.multRight(transform->matrix.getValue());
-	    continue;
-	}
-	compact_collect_realized_node(source, index, child, childMatrix,
-				      ordinal, unsupported);
-    }
-}
-
-int
-SoBRLDatabaseSource::setCompactVListInstance(SoBRLVListShape *shape)
-{
-    if (!shape)
-	return 0;
-
-    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
-    if (timer.active())
-	brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_ATTEMPTS, 1);
-
-    sync_shape_owner_state(shape, this);
-
-    BRLObolCompactInstanceIndex *next = new BRLObolCompactInstanceIndex;
-    int ordinal = 0;
-    int unsupported = 0;
-    const SbMatrix identity = SbMatrix::identity();
-    compact_add_vlist_instance(this, *next, shape, identity, ordinal,
-	unsupported);
-
-    if (unsupported || next->entries.empty()) {
-	delete next;
-	return 0;
-    }
-
-    this->clearCompactInstanceIndex();
-    this->compactIndex = next;
-    this->compactIndexActive = TRUE;
-    remove_non_auxiliary_children(this);
-    this->markCompiledAssemblyDirty();
-
-    SbBox3f bounds;
-    if (source_bounds_for_realized_node(shape, identity, bounds))
-	(void)this->setSourceBoundsState(TRUE, bounds.getMin(),
-	    bounds.getMax());
+    if (source_record_draw_mode(source) == BRLOBOL_LOD_DRAW_HIDDEN_LINE)
+	assembly->drawMode = SoCADAssembly::HIDDEN_LINE;
+    else if (index->shadedCount > 0 && index->wireCount > 0)
+	assembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
+    else if (index->shadedCount > 0)
+	assembly->drawMode = SoCADAssembly::SHADED;
     else
-	this->clearSourceBounds();
-
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(this->compactIndex->entries.size()));
-    return static_cast<int>(this->compactIndex->entries.size());
+	assembly->drawMode = SoCADAssembly::WIREFRAME;
 }
 
-int
-SoBRLDatabaseSource::setCompactVListInstanceWithGeometry(
-    SoBRLVListShape *shape,
-    const obol::PartGeometry *geometry)
+uint64_t
+SoBRLDatabaseSource::cadBatchStructureSignature(void) const
 {
-    if (!shape || !geometry)
-	return 0;
-
-    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
-    if (timer.active())
-	brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_ATTEMPTS, 1);
-
-    sync_shape_owner_state(shape, this);
-
-    BRLObolCompactInstanceIndex *next = new BRLObolCompactInstanceIndex;
-    int ordinal = 0;
-    int unsupported = 0;
-    const SbMatrix identity = SbMatrix::identity();
-    compact_add_vlist_instance(this, *next, shape, identity, ordinal,
-	unsupported, geometry);
-
-    if (unsupported || next->entries.empty()) {
-	delete next;
-	return 0;
-    }
-
-    this->clearCompactInstanceIndex();
-    this->compactIndex = next;
-    this->compactIndexActive = TRUE;
-    remove_non_auxiliary_children(this);
-    this->markCompiledAssemblyDirty();
-
-    SbBox3f bounds;
-    if (source_bounds_for_realized_node(shape, identity, bounds))
-	(void)this->setSourceBoundsState(TRUE, bounds.getMin(),
-	    bounds.getMax());
-    else
-	this->clearSourceBounds();
-
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(this->compactIndex->entries.size()));
-    return static_cast<int>(this->compactIndex->entries.size());
-}
-
-int
-SoBRLDatabaseSource::setCompactMeshInstance(SoBRLMeshShape *shape)
-{
-    if (!shape)
-	return 0;
-
-    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
-    if (timer.active())
-	brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_ATTEMPTS, 1);
-
-    sync_shape_owner_state(shape, this);
-
-    BRLObolCompactInstanceIndex *next = new BRLObolCompactInstanceIndex;
-    int ordinal = 0;
-    int unsupported = 0;
-    const SbMatrix identity = SbMatrix::identity();
-    compact_add_mesh_instance(this, *next, shape, identity, ordinal,
-	unsupported);
-
-    if (unsupported || next->entries.empty()) {
-	delete next;
-	return 0;
-    }
-
-    this->clearCompactInstanceIndex();
-    this->compactIndex = next;
-    this->compactIndexActive = TRUE;
-    remove_non_auxiliary_children(this);
-    this->markCompiledAssemblyDirty();
-
-    SbBox3f bounds;
-    if (source_bounds_for_realized_node(shape, identity, bounds))
-	(void)this->setSourceBoundsState(TRUE, bounds.getMin(),
-	    bounds.getMax());
-    else
-	this->clearSourceBounds();
-
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(this->compactIndex->entries.size()));
-    return static_cast<int>(this->compactIndex->entries.size());
+    uint64_t signature = this->compactIndexActive && this->compactIndex ?
+	compact_structure_signature(this->compactIndex) : this->cadBatchRevision;
+    signature ^= static_cast<uint64_t>(source_record_draw_mode(this));
+    signature *= 1099511628211ULL;
+    signature ^= static_cast<uint64_t>(this->visible.getValue());
+    return signature ? signature : 1;
 }
 
 int
@@ -5720,15 +7692,19 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
     if (!this->compiledAssemblyDirty &&
 	this->compiledAssemblyNodeId == sourceNodeId)
 	return this->compiledAssemblyActive ? 1 : 0;
-
     this->compiledAssemblyActive = FALSE;
 
+    const SbBool hasCompactPayload = this->compactIndexActive &&
+	this->compactIndex && !this->compactIndex->instances.empty();
     if (!this->visible.getValue() ||
 	this->auxiliarySource.getValue() ||
-	this->realizationStatus.getValue() !=
-	SoBRLDatabaseSource::REALIZED ||
-	this->needsRealization() ||
+	(!hasCompactPayload &&
+	 (this->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
+	  this->needsRealization())) ||
 	source_has_auxiliary_children(this)) {
+	this->compiledCompactStructureSignature = 0;
+	this->compiledCompactHiddenSignature = 0;
+	this->compiledCompactUnpickableSignature = 0;
 	this->compiledAssemblyNodeId = sourceNodeId;
 	this->compiledAssemblyDirty = FALSE;
 	return 0;
@@ -5739,13 +7715,71 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	this->compiledAssembly->ref();
     }
 
+    const uint64_t structureSignature = hasCompactPayload ?
+	compact_structure_signature(this->compactIndex) : 0;
+    if (hasCompactPayload && this->compiledCompactStructureSignature != 0 &&
+	this->compiledCompactStructureSignature == structureSignature &&
+	this->compiledAssembly->instanceCount() ==
+	    this->compactIndex->instances.size() &&
+	this->compiledAssembly->partCount() == this->compactIndex->parts.size()) {
+	std::vector<obol::InstanceStyleUpdate> styles;
+	styles.reserve(this->compactIndex->instances.size());
+	for (const obol::InstanceUpdate &instance :
+	     this->compactIndex->instances) {
+	    obol::InstanceStyleUpdate style;
+	    style.instance = instance.instance;
+	    style.style = instance.record.style;
+	    styles.push_back(style);
+	}
+	this->compiledAssembly->updateInstanceStyles(styles);
+	const uint64_t hiddenSignature = compact_state_signature(
+	    this->compactIndex->hiddenInstances);
+	if (this->compiledCompactHiddenSignature != hiddenSignature) {
+	    this->compiledAssembly->setHiddenInstances(
+		this->compactIndex->hiddenInstances);
+	    this->compiledCompactHiddenSignature = hiddenSignature;
+	}
+	this->compiledAssembly->setSelectedInstances(
+	    this->compactIndex->selectedInstances);
+	const uint64_t unpickableSignature = compact_state_signature(
+	    this->compactIndex->unpickableInstances);
+	if (this->compiledCompactUnpickableSignature != unpickableSignature) {
+	    this->compiledAssembly->setUnpickableInstances(
+		this->compactIndex->unpickableInstances);
+	    this->compiledCompactUnpickableSignature = unpickableSignature;
+	}
+	for (const BRLObolCompactInstanceEntry &entry :
+	     this->compactIndex->entries) {
+	    SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
+	    semantic.sourceInstanceKey = compact_instance_identity(entry);
+	    this->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
+	}
+	compact_assembly_draw_mode(this->compiledAssembly, this,
+	    this->compactIndex);
+	this->compiledAssemblyActive = TRUE;
+	this->compiledAssemblyNodeId = sourceNodeId;
+	this->compiledAssemblyDirty = FALSE;
+	return 1;
+    }
+
     this->compiledAssembly->beginUpdate();
     this->compiledAssembly->clear();
     this->compiledAssembly->clearSemanticMap();
 
     if (this->compactIndexActive && this->compactIndex &&
 	!this->compactIndex->instances.empty()) {
-	this->compiledAssembly->upsertParts(this->compactIndex->parts);
+	std::vector<obol::SharedPartUpdate> parts;
+	parts.reserve(this->compactIndex->parts.size());
+	for (const BRLObolCompactPartReference &partRef :
+	     this->compactIndex->parts) {
+	    if (!partRef.geometry)
+		continue;
+	    obol::SharedPartUpdate part;
+	    part.part = partRef.part;
+	    part.geometry = partRef.geometry;
+	    parts.push_back(part);
+	}
+	this->compiledAssembly->upsertSharedParts(parts);
 	this->compiledAssembly->upsertInstances(this->compactIndex->instances);
 	this->compiledAssembly->setHiddenInstances(
 	    this->compactIndex->hiddenInstances);
@@ -5753,26 +7787,31 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	    this->compactIndex->selectedInstances);
 	this->compiledAssembly->setUnpickableInstances(
 	    this->compactIndex->unpickableInstances);
+	this->compiledCompactHiddenSignature = compact_state_signature(
+	    this->compactIndex->hiddenInstances);
+	this->compiledCompactUnpickableSignature = compact_state_signature(
+	    this->compactIndex->unpickableInstances);
 	for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
 	    const BRLObolCompactInstanceEntry &entry =
 		this->compactIndex->entries[i];
-	    this->compiledAssembly->setInstanceSemantic(entry.instance,
-		entry.semantic);
+	    SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
+	    semantic.sourceInstanceKey = compact_instance_identity(entry);
+	    this->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
 	}
-	if (this->compactIndex->shadedCount > 0 &&
-	    this->compactIndex->wireCount > 0)
-	    this->compiledAssembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
-	else if (this->compactIndex->shadedCount > 0)
-	    this->compiledAssembly->drawMode = SoCADAssembly::SHADED;
-	else
-	    this->compiledAssembly->drawMode = SoCADAssembly::WIREFRAME;
+	compact_assembly_draw_mode(this->compiledAssembly, this,
+	    this->compactIndex);
 	this->compiledAssemblyActive = TRUE;
+	this->compiledCompactStructureSignature = structureSignature;
 	this->compiledAssembly->endUpdate();
 	this->compiledAssemblyNodeId = sourceNodeId;
 	this->compiledAssemblyDirty = FALSE;
 	return 1;
     }
 
+    /* The retained compact signature has no meaning for a child-graph build. */
+    this->compiledCompactStructureSignature = 0;
+    this->compiledCompactHiddenSignature = 0;
+    this->compiledCompactUnpickableSignature = 0;
     cad_build_data data;
     data.source = this;
     data.assembly = this->compiledAssembly;
@@ -5793,7 +7832,9 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	this->compiledAssembly->setSelectedInstances(data.selectedInstances);
 	this->compiledAssembly->setUnpickableInstances(
 	    data.unpickableInstances);
-	if (data.shadedCount > 0 && data.wireCount > 0)
+	if (source_record_draw_mode(this) == BRLOBOL_LOD_DRAW_HIDDEN_LINE)
+	    this->compiledAssembly->drawMode = SoCADAssembly::HIDDEN_LINE;
+	else if (data.shadedCount > 0 && data.wireCount > 0)
 	    this->compiledAssembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
 	else if (data.shadedCount > 0)
 	    this->compiledAssembly->drawMode = SoCADAssembly::SHADED;
@@ -5809,18 +7850,33 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 }
 
 int
-SoBRLDatabaseSource::appendCadRenderBatch(BRLObolCadBatchBuildState *state)
+SoBRLDatabaseSource::appendCadRenderBatch(BRLObolCadBatchBuildState *state,
+	SbBool includeGeometry)
 {
+    const SbBool hasCompactPayload = this->compactIndexActive &&
+	this->compactIndex && !this->compactIndex->instances.empty();
     if (!state || !state->assembly || !this->visible.getValue() ||
 	this->auxiliarySource.getValue() ||
-	this->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	this->needsRealization() || source_has_auxiliary_children(this))
+	source_record_draw_mode(this) == BRLOBOL_LOD_DRAW_HIDDEN_LINE ||
+	(!hasCompactPayload &&
+	 (this->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
+	  this->needsRealization())) || source_has_auxiliary_children(this))
 	return 0;
 
     if (this->compactIndexActive && this->compactIndex &&
 	!this->compactIndex->instances.empty()) {
-	state->parts.insert(state->parts.end(), this->compactIndex->parts.begin(),
-	    this->compactIndex->parts.end());
+	if (includeGeometry) {
+	    for (const BRLObolCompactPartReference &partRef :
+		 this->compactIndex->parts) {
+		if (!partRef.geometry ||
+		    !state->partIds.insert(partRef.part).second)
+		    continue;
+		obol::SharedPartUpdate part;
+		part.part = partRef.part;
+		part.geometry = partRef.geometry;
+		state->parts.push_back(part);
+	    }
+	}
 	state->instances.insert(state->instances.end(),
 	    this->compactIndex->instances.begin(),
 	    this->compactIndex->instances.end());
@@ -5833,6 +7889,12 @@ SoBRLDatabaseSource::appendCadRenderBatch(BRLObolCadBatchBuildState *state)
 	state->unpickableInstances.insert(state->unpickableInstances.end(),
 	    this->compactIndex->unpickableInstances.begin(),
 	    this->compactIndex->unpickableInstances.end());
+	for (const BRLObolCompactInstanceEntry &entry :
+	     this->compactIndex->entries) {
+	    SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
+	    semantic.sourceInstanceKey = compact_instance_identity(entry);
+	    state->assembly->setInstanceSemantic(entry.instance, semantic);
+	}
 	state->wireCount += this->compactIndex->wireCount;
 	state->shadedCount += this->compactIndex->shadedCount;
 	return 1;
@@ -5853,7 +7915,15 @@ SoBRLDatabaseSource::appendCadRenderBatch(BRLObolCadBatchBuildState *state)
     if (data.unsupported || data.instances.empty())
 	return 0;
 
-    state->parts.insert(state->parts.end(), data.parts.begin(), data.parts.end());
+    for (obol::PartUpdate &part : data.parts) {
+	if (state->partIds.insert(part.part).second) {
+	    obol::SharedPartUpdate sharedPart;
+	    sharedPart.part = part.part;
+	    sharedPart.geometry =
+		std::make_shared<const obol::PartGeometry>(std::move(part.geometry));
+	    state->parts.push_back(std::move(sharedPart));
+	}
+    }
     state->instances.insert(state->instances.end(), data.instances.begin(),
 	data.instances.end());
     state->hiddenInstances.insert(state->hiddenInstances.end(),
@@ -5872,12 +7942,17 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     meshLod(NULL),
     compiledAssembly(NULL),
     compactIndex(NULL),
+    previousCompactIndex(NULL),
     compactHandleSourceId(database_source_handle_id()),
     cadBatchRevision(1),
     compiledAssemblyDirty(TRUE),
     compiledAssemblyActive(FALSE),
     compiledAssemblyNodeId(0),
+    compiledCompactStructureSignature(0),
+    compiledCompactHiddenSignature(0),
+    compiledCompactUnpickableSignature(0),
     compactIndexActive(FALSE),
+    compactOccurrenceRegistry(FALSE),
     meshLodBoundsValid(FALSE),
     meshLodBoundsMin(0.0f, 0.0f, 0.0f),
     meshLodBoundsMax(0.0f, 0.0f, 0.0f),
@@ -5985,7 +8060,7 @@ SoBRLDatabaseSource::~SoBRLDatabaseSource(void)
 {
     this->detachFieldSensors();
     this->clearCompiledAssembly();
-    this->clearCompactInstanceIndex();
+    this->discardCompactInstanceHistory();
     this->clearMeshLod();
 }
 
@@ -6136,6 +8211,9 @@ SoBRLDatabaseSource::clearCompiledAssembly(void)
     this->compiledAssemblyDirty = TRUE;
     this->compiledAssemblyActive = FALSE;
     this->compiledAssemblyNodeId = 0;
+    this->compiledCompactStructureSignature = 0;
+    this->compiledCompactHiddenSignature = 0;
+    this->compiledCompactUnpickableSignature = 0;
     this->markCadBatchDirty();
 }
 
@@ -6157,11 +8235,46 @@ SoBRLDatabaseSource::markCadBatchDirty(void)
 void
 SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 {
-    delete this->compactIndex;
+    if (this->compactIndex) {
+	delete this->previousCompactIndex;
+	this->previousCompactIndex = this->compactIndex;
+    }
     this->compactIndex = NULL;
     this->compactIndexActive = FALSE;
+    this->compactOccurrenceRegistry = FALSE;
     this->markCompiledAssemblyDirty();
     this->markCadBatchDirty();
+}
+
+void
+SoBRLDatabaseSource::discardCompactInstanceHistory(void)
+{
+    delete this->compactIndex;
+    this->compactIndex = NULL;
+    delete this->previousCompactIndex;
+    this->previousCompactIndex = NULL;
+    this->compactIndexActive = FALSE;
+    this->compactOccurrenceRegistry = FALSE;
+    this->markCompiledAssemblyDirty();
+    this->markCadBatchDirty();
+}
+
+void
+SoBRLDatabaseSource::installCompactInstanceIndex(
+    BRLObolCompactInstanceIndex *index, SbBool occurrenceRegistry)
+{
+    if (!index)
+	return;
+    const BRLObolCompactInstanceIndex *previous = this->compactIndex ?
+	this->compactIndex : this->previousCompactIndex;
+    compact_merge_runtime_state(previous, index);
+    this->clearCompactInstanceIndex();
+    this->compactIndex = index;
+    this->compactIndexActive = TRUE;
+    this->compactOccurrenceRegistry = occurrenceRegistry;
+
+    delete this->previousCompactIndex;
+    this->previousCompactIndex = NULL;
 }
 
 void
@@ -6179,8 +8292,10 @@ SoBRLDatabaseSource::markStale(uint32_t reason)
     this->staleReason = this->staleReason.getValue() | reason;
     this->realizationStatus = UNREALIZED;
     this->realizationDiagnostic = "";
-    this->clearCompactInstanceIndex();
+    /* Retain immutable compact geometry until its replacement is ready.  A
+     * stale source describes realization currency, not display validity. */
     this->markCompiledAssemblyDirty();
+    this->markCadBatchDirty();
     this->syncRealizedShapeOwnerState();
 }
 
@@ -6196,8 +8311,8 @@ SoBRLDatabaseSource::setDrawModeState(int nextDrawMode)
 	(this->realizationRoleFlags.getValue() & REALIZATION_ROLE_EXTERNAL) &&
 	this->realizationStatus.getValue() == REALIZED &&
 	!this->stale.getValue() &&
-	((nextDrawMode == SHADED && this->getRealizedMeshCount() > 0) ||
-	 (nextDrawMode == WIREFRAME && this->getRealizedShapeCount() > 0));
+	((nextDrawMode == SHADED && this->hasRealizedMeshGeometry()) ||
+	 (nextDrawMode == WIREFRAME && this->hasRealizedWireGeometry()));
 
     if (this->drawModeSensor)
 	this->drawModeSensor->detach();
@@ -6547,6 +8662,59 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
 	return 0;
 
     struct db_i *colorDbip = overrideDbip ? overrideDbip : this->dbip;
+    if (this->compactIndex) {
+	if (!colorDbip)
+	    return 0;
+	BRLObolMaterialColorSweep sweep(colorDbip);
+	int changed = 0;
+	BRLObolMaterialPathState sourceResolved;
+	if (sweep.resolve(this->path.getValue().getString(), sourceResolved) &&
+	    (!this->materialColorValid.getValue() ||
+	     !database_source_color_equal(this->materialColor.getValue(),
+		 sourceResolved.color))) {
+	    /* The aggregate summary tracks its own effective color, but compact
+	     * entries retain their individual full-path material colors below. */
+	    this->materialColorValid = TRUE;
+	    this->materialColor = sourceResolved.color;
+	    changed = 1;
+	}
+	for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	    BRLObolMaterialPathState resolved;
+	    if (!sweep.resolve(entry.semantic.path.getString(), resolved))
+		continue;
+	    const SbString shader(resolved.shader.c_str());
+	    if (entry.semantic.regionId == resolved.regionId &&
+		entry.semantic.airCode == resolved.airCode &&
+		entry.semantic.materialId == resolved.materialId &&
+		entry.semantic.los == resolved.los &&
+		entry.semantic.materialColorValid &&
+		database_source_color_equal(entry.semantic.materialColor,
+		    resolved.color) &&
+		strcmp(entry.semantic.materialShader.getString(),
+		    shader.getString()) == 0)
+		continue;
+	    entry.semantic.regionId = resolved.regionId;
+	    entry.semantic.airCode = resolved.airCode;
+	    entry.semantic.materialId = resolved.materialId;
+	    entry.semantic.los = resolved.los;
+	    entry.semantic.materialColorValid = TRUE;
+	    entry.semantic.materialColor = resolved.color;
+	    entry.semantic.materialShader = shader;
+	    entry.appearanceRevision = compact_next_revision(
+		entry.appearanceRevision);
+	    changed = 1;
+	}
+	if (!changed) {
+	    this->materialRevision = nextMaterialRevision;
+	    return 0;
+	}
+	this->materialRevision = nextMaterialRevision;
+	this->rebuildCompactInstanceDisplayState(FALSE);
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+	this->touch();
+	return changed;
+    }
     SbColor nextMaterialColor(1.0f, 1.0f, 1.0f);
     if (!brlobol_database_source_path_material_color(
 	    colorDbip,
@@ -6588,6 +8756,10 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
 				     uint32_t nextMaterialRevision)
 {
     int changed = 0;
+    int appearanceChanged = 0;
+    int visibilityChanged = 0;
+    int selectedChanged = 0;
+    int highlightedChanged = 0;
     const SbBool hadMaterialOverride = this->materialColorValid.getValue();
     if (sourceRevisionValid &&
 	this->sourceRevision.getValue() != nextSourceRevision) {
@@ -6600,46 +8772,56 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
     }
     if (this->visible.getValue() != nextVisible) {
 	this->visible = nextVisible;
+	visibilityChanged = 1;
 	changed = 1;
     }
     if (this->selected.getValue() != nextSelected) {
 	this->selected = nextSelected;
+	selectedChanged = 1;
 	changed = 1;
     }
     if (this->highlighted.getValue() != nextHighlighted) {
 	this->highlighted = nextHighlighted;
+	highlightedChanged = 1;
 	changed = 1;
     }
     if (this->lineStyle.getValue() != nextLineStyle) {
 	this->lineStyle = nextLineStyle;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (this->lineWidth.getValue() != nextLineWidth) {
 	this->lineWidth = nextLineWidth;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (database_source_float_different(this->transparency.getValue(),
 					nextTransparency)) {
 	this->transparency = nextTransparency;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (this->colorOverride.getValue() != nextColorOverride) {
 	this->colorOverride = nextColorOverride;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (nextColorOverride &&
 	!database_source_color_equal(this->color.getValue(), nextColor)) {
 	this->color = nextColor;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (this->materialColorValid.getValue() != nextMaterialColorValid) {
 	this->materialColorValid = nextMaterialColorValid;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (nextMaterialColorValid &&
 	!database_source_color_equal(this->materialColor.getValue(),
 				     nextMaterialColor)) {
 	this->materialColor = nextMaterialColor;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (this->materialRevision.getValue() != nextMaterialRevision) {
@@ -6649,6 +8831,17 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
     if (hadMaterialOverride && !nextMaterialColorValid)
 	this->markStale(STALE_SOURCE);
     if (changed) {
+	(void)this->setCompactInstanceDisplayStateForPath("", TRUE,
+	    visibilityChanged, nextVisible,
+	    selectedChanged && !this->isCompactOccurrenceRegistry(),
+	    nextSelected,
+	    highlightedChanged && !this->isCompactOccurrenceRegistry(),
+	    nextHighlighted);
+	if (appearanceChanged && this->compactIndex) {
+	    this->rebuildCompactInstanceDisplayState(TRUE);
+	    this->markCompiledAssemblyDirty();
+	    this->touch();
+	}
 	this->markCadBatchDirty();
 	this->syncRealizedShapeOwnerState();
     }
@@ -6660,64 +8853,90 @@ SoBRLDatabaseSource::applyDisplayPatch(
     const BRLObolDatabaseSourceDisplayPatch &patch)
 {
     int changed = 0;
+    int appearanceChanged = 0;
+    int visibilityChanged = 0;
+    int selectedChanged = 0;
+    int highlightedChanged = 0;
     if (patch.visibleValid && this->visible.getValue() != patch.visible) {
 	this->visible = patch.visible;
+	visibilityChanged = 1;
 	changed = 1;
     }
     if (patch.selectedValid && this->selected.getValue() != patch.selected) {
 	this->selected = patch.selected;
+	selectedChanged = 1;
 	changed = 1;
     }
     if (patch.highlightedValid &&
 	this->highlighted.getValue() != patch.highlighted) {
 	this->highlighted = patch.highlighted;
+	highlightedChanged = 1;
 	changed = 1;
     }
     if (patch.lineStyleValid &&
 	this->lineStyle.getValue() != patch.lineStyle) {
 	this->lineStyle = patch.lineStyle;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (patch.lineWidthValid &&
 	this->lineWidth.getValue() != patch.lineWidth) {
 	this->lineWidth = patch.lineWidth;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (patch.transparencyValid &&
 	database_source_float_different(this->transparency.getValue(),
 					patch.transparency)) {
 	this->transparency = patch.transparency;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (patch.colorOverrideValid &&
 	this->colorOverride.getValue() != patch.colorOverride) {
 	this->colorOverride = patch.colorOverride;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (patch.colorValid &&
 	!database_source_color_equal(this->color.getValue(), patch.color)) {
 	this->color = patch.color;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (patch.selectedColorValid &&
 	!database_source_color_equal(this->selectedColor.getValue(),
 				     patch.selectedColor)) {
 	this->selectedColor = patch.selectedColor;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (patch.highlightedColorValid &&
 	!database_source_color_equal(this->highlightedColor.getValue(),
 				     patch.highlightedColor)) {
 	this->highlightedColor = patch.highlightedColor;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (patch.ghostedColorValid &&
 	!database_source_color_equal(this->ghostedColor.getValue(),
 				     patch.ghostedColor)) {
 	this->ghostedColor = patch.ghostedColor;
+	appearanceChanged = 1;
 	changed = 1;
     }
     if (changed) {
+	(void)this->setCompactInstanceDisplayStateForPath("", TRUE,
+	    visibilityChanged, patch.visible,
+	    selectedChanged && !this->isCompactOccurrenceRegistry(),
+	    patch.selected,
+	    highlightedChanged && !this->isCompactOccurrenceRegistry(),
+	    patch.highlighted);
+	if (appearanceChanged && this->compactIndex) {
+	    this->rebuildCompactInstanceDisplayState(TRUE);
+	    this->markCompiledAssemblyDirty();
+	    this->touch();
+	}
 	this->markCadBatchDirty();
 	this->syncRealizedShapeOwnerState();
     }
@@ -6998,6 +9217,297 @@ SoBRLDatabaseSource::configureDatabaseSourceInstanceRepresentation(
     this->attachFieldSensors();
 }
 
+static void
+database_snapshot_collect_tree_dependencies(const union tree *tree,
+	std::vector<std::string> &dependencies)
+{
+    if (!tree)
+	return;
+
+    switch (tree->tr_op) {
+	case OP_UNION:
+	case OP_INTERSECT:
+	case OP_SUBTRACT:
+	case OP_XOR:
+	    database_snapshot_collect_tree_dependencies(tree->tr_b.tb_right,
+		dependencies);
+	    /* fall through */
+	case OP_NOT:
+	case OP_GUARD:
+	case OP_XNOP:
+	    database_snapshot_collect_tree_dependencies(tree->tr_b.tb_left,
+		dependencies);
+	    break;
+	case OP_DB_LEAF:
+	    if (tree->tr_l.tl_name && tree->tr_l.tl_name[0])
+		dependencies.push_back(tree->tr_l.tl_name);
+	    break;
+	default:
+	    break;
+    }
+}
+
+static int
+database_snapshot_copy_object(struct db_i *source,
+	struct rt_wdb *targetWdb, const char *name,
+	std::unordered_set<std::string> &copied,
+	std::unordered_set<std::string> &visiting)
+{
+    if (!source || !targetWdb || !name || !name[0])
+	return 0;
+
+    const std::string objectName(name);
+    if (copied.find(objectName) != copied.end())
+	return 1;
+    if (visiting.find(objectName) != visiting.end())
+	return 1;
+
+    struct directory *dp = db_lookup(source, name, LOOKUP_QUIET);
+	if (!dp) {
+	bu_log("Obol detached realization snapshot could not find '%s'\n", name);
+	return 0;
+	}
+    visiting.insert(objectName);
+
+    if (dp->d_flags & RT_DIR_COMB) {
+	struct rt_db_internal intern;
+	RT_DB_INTERNAL_INIT(&intern);
+	if (rt_db_get_internal(&intern, dp, source, NULL) < 0) {
+	    bu_log("Obol detached realization snapshot could not read combination '%s'\n",
+		name);
+	    visiting.erase(objectName);
+	    return 0;
+	}
+	std::vector<std::string> dependencies;
+	if (intern.idb_type == ID_COMBINATION && intern.idb_ptr) {
+	    const struct rt_comb_internal *comb =
+		static_cast<const struct rt_comb_internal *>(intern.idb_ptr);
+	    database_snapshot_collect_tree_dependencies(comb->tree,
+		dependencies);
+	}
+	rt_db_free_internal(&intern);
+	for (const std::string &dependency : dependencies) {
+	    if (!database_snapshot_copy_object(source, targetWdb,
+		    dependency.c_str(), copied, visiting)) {
+		bu_log("Obol detached realization snapshot could not copy dependency '%s' of '%s'\n",
+		    dependency.c_str(), name);
+		visiting.erase(objectName);
+		return 0;
+	    }
+	}
+    }
+
+    struct bu_external external;
+    BU_EXTERNAL_INIT(&external);
+    if (db_get_external(&external, dp, source) < 0) {
+	bu_log("Obol detached realization snapshot could not read '%s'\n", name);
+	visiting.erase(objectName);
+	return 0;
+    }
+    const int copiedObject = wdb_export_external(targetWdb, &external,
+	name, dp->d_flags & ~RT_DIR_INMEM, dp->d_minor_type) >= 0;
+    bu_free_external(&external);
+    visiting.erase(objectName);
+    if (!copiedObject)
+	{
+	bu_log("Obol detached realization snapshot could not export '%s'\n", name);
+	return 0;
+	}
+
+    copied.insert(objectName);
+    return 1;
+}
+
+static std::string
+database_snapshot_root_name(const SbString &sourcePath)
+{
+    const std::string path = database_lookup_path_from_source_path(sourcePath);
+    const std::string::size_type slash = path.find('/');
+    return slash == std::string::npos ? path : path.substr(0, slash);
+}
+
+static void
+database_snapshot_copy_lookup_context(struct db_i *snapshot,
+	const struct db_i *source)
+{
+    if (!snapshot || !source)
+	return;
+
+    snapshot->dbi_local2base = source->dbi_local2base;
+    snapshot->dbi_base2local = source->dbi_base2local;
+    if (snapshot->dbi_filename) {
+	bu_free(snapshot->dbi_filename, "database snapshot filename");
+	snapshot->dbi_filename = NULL;
+    }
+    if (source->dbi_filename)
+	snapshot->dbi_filename = bu_strdup(source->dbi_filename);
+    if (snapshot->dbi_title) {
+	bu_free(snapshot->dbi_title, "database snapshot title");
+	snapshot->dbi_title = NULL;
+    }
+    if (source->dbi_title)
+	snapshot->dbi_title = bu_strdup(source->dbi_title);
+    if (snapshot->dbi_filepath) {
+	bu_argv_free(2, snapshot->dbi_filepath);
+	snapshot->dbi_filepath = NULL;
+    }
+    if (!source->dbi_filepath)
+	return;
+
+    /* db_close owns the standard two search entries, so retain that ABI even
+     * for an in-memory snapshot. */
+    snapshot->dbi_filepath = static_cast<char **>(bu_calloc(3,
+	sizeof(char *), "database snapshot filepath"));
+    snapshot->dbi_filepath[0] = bu_strdup(source->dbi_filepath[0] ?
+	source->dbi_filepath[0] : ".");
+    snapshot->dbi_filepath[1] = bu_strdup(source->dbi_filepath[1] ?
+	source->dbi_filepath[1] : ".");
+}
+
+static struct db_i *
+database_snapshot_create(struct db_i *source, const SbString &sourcePath,
+	SbString *snapshotPathOut)
+{
+    if (snapshotPathOut)
+	*snapshotPathOut = "";
+    if (!source)
+	return NULL;
+
+    const std::string rootName = database_snapshot_root_name(sourcePath);
+    const int version = db_version(source);
+    struct db_i *snapshot = NULL;
+    SbString snapshotPath;
+    int wdbType = RT_WDB_TYPE_DB_INMEM;
+
+    if (rootName.empty() || (version != 4 && version != 5))
+	return NULL;
+    if (version == 5) {
+	snapshot = db_open_inmem();
+    } else {
+	char path[MAXPATHLEN] = {0};
+	FILE *file = bu_temp_file(path, sizeof(path));
+	if (!file)
+	    return NULL;
+	(void)fclose(file);
+	(void)bu_file_delete(path);
+	snapshot = db_create(path, version);
+	if (snapshot)
+	    snapshotPath = path;
+	wdbType = RT_WDB_TYPE_DB_DISK;
+    }
+    if (!snapshot)
+	{
+	bu_log("Obol detached realization could not create a v%d database snapshot\n",
+	    version);
+	return NULL;
+	}
+
+    struct rt_wdb *snapshotWdb = wdb_dbopen(snapshot, wdbType);
+    std::unordered_set<std::string> copied;
+    std::unordered_set<std::string> visiting;
+    int success = snapshotWdb ? 1 : 0;
+    struct directory *global = db_lookup(source, DB5_GLOBAL_OBJECT_NAME,
+	LOOKUP_QUIET);
+    if (success && global)
+	success = database_snapshot_copy_object(source, snapshotWdb,
+	    DB5_GLOBAL_OBJECT_NAME, copied, visiting);
+    if (success)
+	success = database_snapshot_copy_object(source, snapshotWdb,
+	    rootName.c_str(), copied, visiting);
+    if (!success) {
+	bu_log("Obol detached realization could not copy source closure '%s' into a v%d database snapshot\n",
+	    rootName.c_str(), version);
+	db_close(snapshot);
+	if (snapshotPath.getLength() > 0)
+	    (void)bu_file_delete(snapshotPath.getString());
+	return NULL;
+    }
+
+    if (wdbType == RT_WDB_TYPE_DB_DISK)
+	db_sync(snapshot);
+    database_snapshot_copy_lookup_context(snapshot, source);
+    snapshot->dbi_read_only = 1;
+    if (snapshotPathOut)
+	*snapshotPathOut = snapshotPath;
+    return snapshot;
+}
+
+SoBRLDatabaseSource *
+SoBRLDatabaseSource::createDetachedRealizationSource(
+	struct db_i **databaseOut, SbString *snapshotPathOut) const
+{
+    if (databaseOut)
+	*databaseOut = NULL;
+    if (snapshotPathOut)
+	*snapshotPathOut = "";
+    if (!databaseOut || !this->dbip)
+	return NULL;
+
+    struct db_i *database = database_snapshot_create(this->dbip,
+	this->path.getValue(), snapshotPathOut);
+    if (!database)
+	return NULL;
+
+    SoBRLDatabaseSource *detached = new SoBRLDatabaseSource;
+    detached->ref();
+    detached->detachFieldSensors();
+    detached->copyFieldValues(this, FALSE);
+    detached->dbip = database;
+    detached->stale = TRUE;
+    detached->staleReason = STALE_SOURCE;
+    detached->realizationStatus = UNREALIZED;
+    detached->realizationDiagnostic = "";
+    detached->attachFieldSensors();
+    *databaseOut = database;
+    return detached;
+}
+
+int
+SoBRLDatabaseSource::adoptDetachedCompactRealization(
+    SoBRLDatabaseSource *detached)
+{
+    if (!detached || !detached->compactIndex ||
+	detached->compactIndex->entries.empty() ||
+	strcmp(this->instanceKey.getValue().getString(),
+	    detached->instanceKey.getValue().getString()) != 0 ||
+	strcmp(this->path.getValue().getString(),
+	    detached->path.getValue().getString()) != 0 ||
+	this->sourceRevision.getValue() !=
+	    detached->sourceRevision.getValue() ||
+	this->inputsRevision.getValue() !=
+	    detached->inputsRevision.getValue() ||
+	this->viewRevision.getValue() != detached->viewRevision.getValue() ||
+	this->drawMode.getValue() != detached->drawMode.getValue() ||
+	this->representationMode.getValue() !=
+	    detached->representationMode.getValue())
+	return 0;
+
+    BRLObolCompactInstanceIndex *next = detached->compactIndex;
+    detached->compactIndex = NULL;
+    this->compactHandleSourceId = detached->compactHandleSourceId;
+    this->installCompactInstanceIndex(next, TRUE);
+    remove_non_auxiliary_children(this);
+    this->markCompiledAssemblyDirty();
+    this->markCadBatchDirty();
+
+    SbBox3f bounds;
+    if (detached->getSourceBounds(bounds) && !bounds.isEmpty())
+	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+    else
+	this->clearSourceBounds();
+
+    this->realizedRevision = this->sourceRevision.getValue();
+    this->realizedSourceRevision = this->sourceRevision.getValue();
+    this->realizedInputsRevision = this->inputsRevision.getValue();
+    this->realizedViewRevision = this->viewRevision.getValue();
+    this->realizationStatus = REALIZED;
+    this->realizationDiagnostic = "";
+    this->realizationIdentity = source_realization_identity(this);
+    this->stale = FALSE;
+    this->staleReason = STALE_NONE;
+    return static_cast<int>(this->compactIndex->entries.size());
+}
+
 template <typename ShapeT>
 static void
 retarget_realized_shape_source(ShapeT *shape,
@@ -7190,6 +9700,20 @@ source_has_view_lod_payload(SoAction *action, SoNode *node)
 {
     if (!action || !node)
 	return 0;
+
+    /* A compact source is rendered and picked from its occurrence registry.
+     * Per-shape payloads may still be present in the view state while the LoD
+     * controller transitions to aggregate payloads, but traversing those
+     * shapes would discard the compact representation and recreate the large
+     * Coin render graph it is intended to replace.  A source-level payload is
+     * handled by cad_view_lod_assembly_for_action before this query. */
+    if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(node);
+	if (source->hasCompactInstanceIndex())
+	    return 0;
+    }
+
     if (node->isOfType(SoBRLMeshShape::getClassTypeId())) {
 	SoBRLMeshShape *mesh = static_cast<SoBRLMeshShape *>(node);
 	return brlobol_view_lod_mesh_for_action(action, mesh) ||
@@ -7263,9 +9787,23 @@ SoBRLDatabaseSource::getBoundingBox(SoGetBoundingBoxAction *action)
 	return;
     }
 
-    if (this->hasCompactInstanceIndex() &&
-	this->syncCompiledAssembly() && this->compiledAssembly) {
-	this->compiledAssembly->getBounds(action);
+    if (this->hasCompactInstanceIndex()) {
+	SbBox3f bounds;
+	bounds.makeEmpty();
+	if (this->visible.getValue()) {
+	    for (const BRLObolCompactInstanceEntry &entry :
+		 this->compactIndex->entries) {
+		if (!entry.visible || !entry.geometry)
+		    continue;
+		bounds.extendBy(database_source_transform_bounds(
+		    compact_part_geometry_bounds(entry.geometry),
+		    entry.localToSource));
+	    }
+	}
+	if (!bounds.isEmpty()) {
+	    action->extendBy(bounds);
+	    action->setCenter(bounds.getCenter(), TRUE);
+	}
 	return;
     }
 
@@ -7294,7 +9832,10 @@ SbBool
 SoBRLDatabaseSource::realizeDatabaseWireframe(void)
 {
     BRLObolDatabaseSourceRealizationCache cache;
-    return brlobol_database_source_realize_wireframe_with_cache(this, &cache);
+    if (source_uses_evaluated_wire_realization(this))
+	return brlobol_database_source_realize_wireframe_with_cache(this, &cache);
+    return brlobol_database_source_realize_wireframe_compact_with_cache(
+	this, &cache) > 0 ? TRUE : FALSE;
 }
 
 static void
@@ -7332,6 +9873,8 @@ brlobol_database_source_realize_wireframe_compact_with_cache(
 
     if (source_uses_evaluated_path_realization(source))
 	return 0;
+
+    source->compactHandleSourceId = source_stable_compact_handle_id(source);
 
     source->realizationDiagnostic = "";
     if (!source->dbip) {
@@ -7375,12 +9918,61 @@ brlobol_database_source_realize_wireframe_compact_with_cache(
 	return 1;
     }
     if (directRealized < 0) {
-	remove_non_auxiliary_children(source);
-	source->clearCompactInstanceIndex();
-	source->realizationIdentity = "";
+	if (!cache->preserveCompactSourceOnFailure) {
+	    remove_non_auxiliary_children(source);
+	    source->discardCompactInstanceHistory();
+	    source->realizationIdentity = "";
+	}
 	return -1;
     }
-    return 0;
+
+    struct db_tree_state init_state;
+    db_init_db_tree_state(&init_state, source->dbip);
+    init_state.ts_stop_at_regions = 0;
+
+    realize_walk_data data;
+    data.source = source;
+    data.cache = cache;
+    data.revision = revision;
+    data.compact_index = new BRLObolCompactInstanceIndex;
+
+    const char *av[1] = {treeName};
+    const int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1,
+	&init_state, NULL, NULL, realize_leaf, &data);
+    db_free_db_tree_state(&init_state);
+
+    if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0 ||
+	data.compact_unsupported || data.compact_index->entries.empty()) {
+	delete data.compact_index;
+	if (!cache->preserveCompactSourceOnFailure) {
+	    remove_non_auxiliary_children(source);
+	    source->discardCompactInstanceHistory();
+	    source->realizationIdentity = "";
+	}
+	if (data.diagnostic.getLength() > 0)
+	    source->realizationDiagnostic = data.diagnostic;
+	else {
+	    SbString diagnostic;
+	    diagnostic.sprintf(
+		"%s: compact wireframe realization produced no usable occurrences",
+		treeName);
+	    source->realizationDiagnostic = diagnostic;
+	}
+	return ret < 0 || data.failed_shapes > 0 ? -1 : 0;
+    }
+
+    source->installCompactInstanceIndex(data.compact_index, TRUE);
+    source->markCompiledAssemblyDirty();
+    if (data.compact_bounds_valid && !data.compact_bounds.isEmpty())
+	(void)source->setSourceBoundsState(TRUE, data.compact_bounds.getMin(),
+	    data.compact_bounds.getMax());
+    else
+	source->clearSourceBounds();
+    mark_source_realized_current(source);
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
+	static_cast<uint64_t>(source->compactIndex->entries.size()));
+    return 1;
 }
 
 SbBool
@@ -7414,7 +10006,7 @@ brlobol_database_source_realize_wireframe_with_cache(
     }
 
     remove_non_auxiliary_children(source);
-    source->clearCompactInstanceIndex();
+    source->discardCompactInstanceHistory();
     (void)remove_source_placement_transform(source);
 
     const uint32_t revision = source->sourceRevision.getValue();
@@ -7522,7 +10114,10 @@ SbBool
 SoBRLDatabaseSource::realizeDatabaseMesh(void)
 {
     BRLObolDatabaseSourceRealizationCache cache;
-    return brlobol_database_source_realize_mesh_with_cache(this, &cache);
+    if (source_uses_evaluated_points_realization(this))
+	return brlobol_database_source_realize_mesh_with_cache(this, &cache);
+    return brlobol_database_source_realize_mesh_compact_with_cache(
+	this, &cache) > 0 ? TRUE : FALSE;
 }
 
 int
@@ -7543,6 +10138,8 @@ brlobol_database_source_realize_mesh_compact_with_cache(
 
     if (source_uses_evaluated_path_realization(source))
 	return 0;
+
+    source->compactHandleSourceId = source_stable_compact_handle_id(source);
 
     source->realizationDiagnostic = "";
     if (!source->dbip) {
@@ -7586,12 +10183,70 @@ brlobol_database_source_realize_mesh_compact_with_cache(
 	return 1;
     }
     if (directRealized < 0) {
-	remove_non_auxiliary_children(source);
-	source->clearCompactInstanceIndex();
-	source->realizationIdentity = "";
+	if (!cache->preserveCompactSourceOnFailure) {
+	    remove_non_auxiliary_children(source);
+	    source->discardCompactInstanceHistory();
+	    source->realizationIdentity = "";
+	}
 	return -1;
     }
-    return 0;
+
+    if (compact_mesh_prefill_cache(source, cache, treeName) < 0) {
+	if (!cache->preserveCompactSourceOnFailure) {
+	    remove_non_auxiliary_children(source);
+	    source->discardCompactInstanceHistory();
+	    source->realizationIdentity = "";
+	}
+	return -1;
+    }
+
+    struct db_tree_state init_state;
+    db_init_db_tree_state(&init_state, source->dbip);
+    init_state.ts_stop_at_regions = 0;
+
+    realize_walk_data data;
+    data.source = source;
+    data.cache = cache;
+    data.revision = revision;
+    data.compact_index = new BRLObolCompactInstanceIndex;
+
+    const char *av[1] = {treeName};
+    const int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1,
+	&init_state, NULL, NULL, realize_mesh_leaf, &data);
+    db_free_db_tree_state(&init_state);
+
+    if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0 ||
+	data.compact_unsupported || data.compact_index->entries.empty()) {
+	delete data.compact_index;
+	if (!cache->preserveCompactSourceOnFailure) {
+	    remove_non_auxiliary_children(source);
+	    source->discardCompactInstanceHistory();
+	    source->realizationIdentity = "";
+	}
+	if (data.diagnostic.getLength() > 0)
+	    source->realizationDiagnostic = data.diagnostic;
+	else {
+	    SbString diagnostic;
+	    diagnostic.sprintf(
+		"%s: compact mesh realization produced no usable occurrences",
+		treeName);
+	    source->realizationDiagnostic = diagnostic;
+	}
+	return ret < 0 || data.failed_shapes > 0 ? -1 : 0;
+    }
+
+    source->installCompactInstanceIndex(data.compact_index, TRUE);
+    source->markCompiledAssemblyDirty();
+    if (data.compact_bounds_valid && !data.compact_bounds.isEmpty())
+	(void)source->setSourceBoundsState(TRUE, data.compact_bounds.getMin(),
+	    data.compact_bounds.getMax());
+    else
+	source->clearSourceBounds();
+    mark_source_realized_current(source);
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
+    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
+	static_cast<uint64_t>(source->compactIndex->entries.size()));
+    return 1;
 }
 
 SbBool
@@ -7625,7 +10280,7 @@ brlobol_database_source_realize_mesh_with_cache(
     }
 
     remove_non_auxiliary_children(source);
-    source->clearCompactInstanceIndex();
+    source->discardCompactInstanceHistory();
     (void)remove_source_placement_transform(source);
 
     const uint32_t revision = source->sourceRevision.getValue();
@@ -7989,7 +10644,7 @@ clear_external_primary_mesh(SoBRLDatabaseSource *source,
 int
 SoBRLDatabaseSource::clearRealizedGeometry(SbBool preserveAuxiliary)
 {
-    this->clearCompactInstanceIndex();
+    this->discardCompactInstanceHistory();
     this->clearCompiledAssembly();
     const int before = this->getNumChildren();
     if (preserveAuxiliary) {
@@ -8582,6 +11237,70 @@ SoBRLDatabaseSource::publishPrimitiveWireframe(
 void
 SoBRLDatabaseSource::syncCompactInstanceDisplayState(void)
 {
+    this->rebuildCompactInstanceDisplayState(TRUE);
+}
+
+static obol::InstanceStyle
+compact_entry_style_from_source(const SoBRLDatabaseSource *source,
+	const BRLObolCompactInstanceEntry &entry, SbBool selected,
+	SbBool highlighted)
+{
+    obol::InstanceStyle style;
+    if (!source)
+	return style;
+
+    const BRLObolRealizedShapeSummary &summary = entry.shapeSummary;
+    style.hasColorOverride = true;
+    cad_shape_color(selected, source->selectedColor.getValue(), highlighted,
+	source->highlightedColor.getValue(), summary.ghosted,
+	source->ghostedColor.getValue(), source->colorOverride.getValue(),
+	source->color.getValue(), entry.semantic.materialColorValid,
+	entry.semantic.materialColor, source->color.getValue(),
+	source->transparency.getValue(), style.color);
+    style.lineWidth = source->lineWidth.getValue() > 0 ?
+	static_cast<float>(source->lineWidth.getValue()) : 1.0f;
+    if (source->lineStyle.getValue() != 0)
+	style.linePattern = 0xcf33u;
+    return style;
+}
+
+static void
+compact_sync_entry_from_source(BRLObolCompactInstanceEntry &entry,
+	const SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return;
+
+    /* A compact entry owns occurrence metadata.  The aggregate source's
+     * metadata describes the root draw request, not every leaf under it. */
+    if (source->materialColorValid.getValue() &&
+	(source->materialPolicy.getValue() !=
+	 SoBRLDatabaseSource::MATERIAL_DATABASE ||
+	 !entry.semantic.materialColorValid)) {
+	entry.semantic.materialColorValid = TRUE;
+	entry.semantic.materialColor = source->materialColor.getValue();
+    }
+
+    BRLObolRealizedShapeSummary &summary = entry.shapeSummary;
+    summary.displayName = source->displayName.getValue();
+    summary.drawMode = source_record_draw_mode(source);
+    summary.hiddenLine = summary.drawMode == BRLOBOL_LOD_DRAW_HIDDEN_LINE;
+    summary.materialRevision = source->materialRevision.getValue();
+    summary.colorOverride = source->colorOverride.getValue();
+    summary.color = source->color.getValue();
+
+    entry.normalStyle = compact_entry_style_from_source(source, entry,
+	FALSE, FALSE);
+    entry.selectedStyle = compact_entry_style_from_source(source, entry,
+	TRUE, FALSE);
+    entry.highlightedStyle = compact_entry_style_from_source(source, entry,
+	FALSE, TRUE);
+}
+
+void
+SoBRLDatabaseSource::rebuildCompactInstanceDisplayState(
+    SbBool syncSourceState)
+{
     if (!this->compactIndex)
 	return;
 
@@ -8591,51 +11310,52 @@ SoBRLDatabaseSource::syncCompactInstanceDisplayState(void)
 
     for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
 	BRLObolCompactInstanceEntry &entry = this->compactIndex->entries[i];
-	if (entry.vlist) {
-	    sync_shape_display_state(entry.vlist, this);
-	    sync_shape_owner_state(entry.vlist, this);
-	    entry.semantic = cad_vlist_semantic(entry.vlist);
-	} else if (entry.mesh) {
-	    sync_shape_display_state(entry.mesh, this);
-	    sync_shape_owner_state(entry.mesh, this);
-	    entry.semantic = cad_mesh_semantic(entry.mesh);
-	}
+	const SbBool previousVisible = entry.visible;
+	const SbBool previousSelectable = entry.selectable;
+	const SbBool previousSelected = entry.selected;
+	const SbBool previousHighlighted = entry.highlighted;
+	const obol::InstanceStyle previousNormalStyle = entry.normalStyle;
+	const obol::InstanceStyle previousSelectedStyle = entry.selectedStyle;
+	const obol::InstanceStyle previousHighlightedStyle =
+	    entry.highlightedStyle;
+	if (syncSourceState)
+	    compact_sync_entry_from_source(entry, this);
+	entry.semantic.sourceInstanceKey = compact_instance_identity(entry);
 
-	SbBool entryVisible = TRUE;
-	SbBool entrySelectable = TRUE;
-	SbBool entrySelected = FALSE;
-	SbBool entryHighlighted = FALSE;
-	obol::InstanceStyle style;
-	if (entry.vlist) {
-	    entryVisible = entry.vlist->visible.getValue();
-	    entrySelectable = entry.vlist->selectable.getValue();
-	    entrySelected = entry.vlist->selected.getValue();
-	    entryHighlighted = entry.vlist->highlighted.getValue();
-	    style = cad_vlist_style(entry.vlist);
-	} else if (entry.mesh) {
-	    entryVisible = entry.mesh->visible.getValue();
-	    entrySelectable = entry.mesh->selectable.getValue();
-	    entrySelected = entry.mesh->selected.getValue();
-	    entryHighlighted = entry.mesh->highlighted.getValue();
-	    style = cad_mesh_style(entry.mesh);
-	}
-
-	entry.visible = entryVisible;
-	entry.selectable = entrySelectable;
-	entry.selected = entrySelected;
-	entry.highlighted = entryHighlighted;
-	if (!entryVisible)
+	if (entry.visible != previousVisible ||
+	    entry.selectable != previousSelectable)
+	    entry.visibilityRevision = compact_next_revision(
+		entry.visibilityRevision);
+	if (entry.selected != previousSelected ||
+	    entry.highlighted != previousHighlighted)
+	    entry.selectionRevision = compact_next_revision(
+		entry.selectionRevision);
+	if (!compact_style_equal(entry.normalStyle, previousNormalStyle) ||
+	    !compact_style_equal(entry.selectedStyle, previousSelectedStyle) ||
+	    !compact_style_equal(entry.highlightedStyle,
+		previousHighlightedStyle))
+	    entry.appearanceRevision = compact_next_revision(
+		entry.appearanceRevision);
+	entry.style = compact_effective_style(entry);
+	compact_sync_shape_summary_state(entry);
+	if (!entry.visible)
 	    this->compactIndex->hiddenInstances.push_back(entry.instance);
-	if (entrySelected)
+	if (entry.selected)
 	    this->compactIndex->selectedInstances.push_back(entry.instance);
-	if (!entrySelectable)
+	if (!entry.selectable)
 	    this->compactIndex->unpickableInstances.push_back(entry.instance);
 
-	for (size_t j = 0; j < this->compactIndex->instances.size(); j++) {
-	    if (this->compactIndex->instances[j].instance == entry.instance) {
-		this->compactIndex->instances[j].record.style = style;
-		break;
-	    }
+	if (i < this->compactIndex->instances.size() &&
+	    this->compactIndex->instances[i].instance == entry.instance) {
+	    this->compactIndex->instances[i].record.style = entry.style;
+	} else {
+	    auto found = std::find_if(this->compactIndex->instances.begin(),
+		this->compactIndex->instances.end(),
+		[&entry](const obol::InstanceUpdate &update) {
+		    return update.instance == entry.instance;
+		});
+	    if (found != this->compactIndex->instances.end())
+		found->record.style = entry.style;
 	}
     }
 }
@@ -8648,11 +11368,13 @@ SoBRLDatabaseSource::syncCompactInstancePlacementState(void)
 
     for (BRLObolCompactInstanceEntry &entry :
 	 this->compactIndex->entries) {
-	entry.localToSource = cad_instance_matrix(this, entry.localTransform);
-	if (entry.vlist)
-	    sync_shape_placement_state(entry.vlist, this);
-	else if (entry.mesh)
-	    sync_shape_placement_state(entry.mesh, this);
+	const SbMatrix nextMatrix = cad_instance_matrix(this,
+	    entry.localTransform);
+	if (!entry.localToSource.equals(nextMatrix, 0.000001f)) {
+	    entry.localToSource = nextMatrix;
+	    entry.placementRevision = compact_next_revision(
+		entry.placementRevision);
+	}
 	for (obol::InstanceUpdate &update : this->compactIndex->instances) {
 	    if (update.instance == entry.instance) {
 		update.record.localToRoot = entry.localToSource;
@@ -8707,16 +11429,6 @@ SoBRLDatabaseSource::getRealizedShape(int index) const
 {
     if (index < 0)
 	return NULL;
-    if (this->compactIndexActive && this->compactIndex) {
-	for (const BRLObolCompactInstanceEntry &entry :
-		this->compactIndex->entries) {
-	    if (!entry.vlist)
-		continue;
-	    if (index == 0)
-		return entry.vlist;
-	    index--;
-	}
-    }
     for (int i = 0; i < this->getNumChildren(); i++) {
 	SoBRLVListShape *shape = find_shape_in_node(this->getChild(i), index);
 	if (shape)
@@ -9024,16 +11736,6 @@ SoBRLDatabaseSource::getRealizedMesh(int index) const
 {
     if (index < 0)
 	return NULL;
-    if (this->compactIndexActive && this->compactIndex) {
-	for (const BRLObolCompactInstanceEntry &entry :
-		this->compactIndex->entries) {
-	    if (!entry.mesh)
-		continue;
-	    if (index == 0)
-		return entry.mesh;
-	    index--;
-	}
-    }
     for (int i = 0; i < this->getNumChildren(); i++) {
 	SoBRLMeshShape *shape = find_mesh_in_node(this->getChild(i), index);
 	if (shape)
@@ -9110,14 +11812,22 @@ int
 SoBRLDatabaseSource::getRealizedShapeCount(void) const
 {
     int ret = 0;
-    if (this->compactIndexActive && this->compactIndex) {
-	for (const BRLObolCompactInstanceEntry &entry :
-		this->compactIndex->entries)
-	    ret += entry.vlist ? 1 : 0;
-    }
     for (int i = 0; i < this->getNumChildren(); i++)
 	ret += count_shapes_in_node(this->getChild(i));
     return ret;
+}
+
+SbBool
+SoBRLDatabaseSource::hasRealizedWireGeometry(void) const
+{
+    if (this->compactIndexActive && this->compactIndex) {
+	for (const BRLObolCompactInstanceEntry &entry :
+	     this->compactIndex->entries) {
+	    if (entry.wireGeometry || entry.pointGeometry)
+		return TRUE;
+	}
+    }
+    return this->getRealizedShapeCount() > 0 ? TRUE : FALSE;
 }
 
 static int
@@ -9143,53 +11853,22 @@ int
 SoBRLDatabaseSource::getRealizedMeshCount(void) const
 {
     int ret = 0;
-    if (this->compactIndexActive && this->compactIndex) {
-	for (const BRLObolCompactInstanceEntry &entry :
-		this->compactIndex->entries)
-	    ret += entry.mesh ? 1 : 0;
-    }
     for (int i = 0; i < this->getNumChildren(); i++)
 	ret += count_meshes_in_node(this->getChild(i));
     return ret;
 }
 
-int
-SoBRLDatabaseSource::compactRealizedGeometry(void)
+SbBool
+SoBRLDatabaseSource::hasRealizedMeshGeometry(void) const
 {
-    if (this->compactIndexActive && this->compactIndex)
-	return static_cast<int>(this->compactIndex->entries.size());
-
-    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
-    if (timer.active())
-	brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_ATTEMPTS, 1);
-
-    if (this->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	this->needsRealization() ||
-	source_has_auxiliary_children(this))
-	return 0;
-
-    BRLObolCompactInstanceIndex *next = new BRLObolCompactInstanceIndex;
-    int ordinal = 0;
-    int unsupported = 0;
-    const SbMatrix identity = SbMatrix::identity();
-    for (int i = 0; i < this->getNumChildren() && !unsupported; i++)
-	compact_collect_realized_node(this, *next, this->getChild(i),
-				      identity, ordinal, unsupported);
-
-    if (unsupported || next->entries.empty()) {
-	delete next;
-	return 0;
+    if (this->compactIndexActive && this->compactIndex) {
+	for (const BRLObolCompactInstanceEntry &entry :
+	     this->compactIndex->entries) {
+	    if (entry.meshGeometry)
+		return TRUE;
+	}
     }
-
-    this->clearCompactInstanceIndex();
-    this->compactIndex = next;
-    this->compactIndexActive = TRUE;
-    remove_non_auxiliary_children(this);
-    this->markCompiledAssemblyDirty();
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_SOURCES, 1);
-    brlobol_performance_counter_add(BRLOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(this->compactIndex->entries.size()));
-    return static_cast<int>(this->compactIndex->entries.size());
+    return this->getRealizedMeshCount() > 0 ? TRUE : FALSE;
 }
 
 SbBool
@@ -9197,6 +11876,12 @@ SoBRLDatabaseSource::hasCompactInstanceIndex(void) const
 {
     return (this->compactIndexActive && this->compactIndex &&
 	    !this->compactIndex->entries.empty()) ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLDatabaseSource::isCompactOccurrenceRegistry(void) const
+{
+    return this->compactIndexActive && this->compactOccurrenceRegistry;
 }
 
 int
@@ -9232,13 +11917,14 @@ SoBRLDatabaseSource::findCompactInstanceEntry(
     if (!this->compactIndex || !handle.isValid() ||
 	handle.sourceNodeId != this->compactHandleSourceId)
 	return NULL;
-    for (const BRLObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries) {
-	if (entry.instance.w0 == handle.instanceWord0 &&
-	    entry.instance.w1 == handle.instanceWord1)
-	    return &entry;
-    }
-    return NULL;
+    obol::InstanceId instance;
+    instance.w0 = handle.instanceWord0;
+    instance.w1 = handle.instanceWord1;
+    const auto found = this->compactIndex->entryIndex.find(instance);
+    if (found == this->compactIndex->entryIndex.end() ||
+	found->second >= this->compactIndex->entries.size())
+	return NULL;
+    return &this->compactIndex->entries[found->second];
 }
 
 SbBool
@@ -9262,50 +11948,544 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
     summary.valid = TRUE;
     summary.handle = handle;
     summary.path = entry->semantic.path;
-    summary.sourceInstanceKey = entry->semantic.sourceInstanceKey;
+    summary.sourceName = entry->semantic.sourceName;
+    summary.sourceInstanceKey = compact_instance_identity(*entry);
     summary.localToSource = entry->localTransform;
-    summary.occurrenceIndex = this->occurrenceIndex.getValue();
-    summary.booleanOperation = this->booleanOperation.getValue();
-    summary.wireGeometry = entry->vlist ? TRUE : FALSE;
-    summary.meshGeometry = entry->mesh ? TRUE : FALSE;
-    summary.visible = entry->vlist ? entry->vlist->visible.getValue() :
-	(entry->mesh ? entry->mesh->visible.getValue() : entry->visible);
-    summary.selectable = entry->vlist ? entry->vlist->selectable.getValue() :
-	(entry->mesh ? entry->mesh->selectable.getValue() : entry->selectable);
-    summary.selected = entry->vlist ? entry->vlist->selected.getValue() :
-	(entry->mesh ? entry->mesh->selected.getValue() : entry->selected);
-    summary.highlighted = entry->vlist ?
-	entry->vlist->highlighted.getValue() :
-	(entry->mesh ? entry->mesh->highlighted.getValue() : entry->highlighted);
+    summary.geometryIdentity = entry->part.w0 ^
+	(entry->part.w1 + 0x9e3779b97f4a7c15ULL +
+	 (entry->part.w0 << 6) + (entry->part.w0 >> 2));
+    summary.geometryRevision = entry->geometryRevision;
+    summary.appearanceRevision = entry->appearanceRevision;
+    summary.placementRevision = entry->placementRevision;
+    summary.visibilityRevision = entry->visibilityRevision;
+    summary.selectionRevision = entry->selectionRevision;
+    summary.occurrenceIndex = entry->occurrenceIndex;
+    summary.booleanOperation = entry->booleanOperation;
+    summary.regionId = entry->semantic.regionId;
+    summary.airCode = entry->semantic.airCode;
+    summary.materialId = entry->semantic.materialId;
+    summary.los = entry->semantic.los;
+    summary.materialColorValid = entry->semantic.materialColorValid;
+    summary.materialColor = entry->semantic.materialColor;
+    summary.materialShader = entry->semantic.materialShader;
+    summary.wireGeometry = entry->wireGeometry;
+    summary.pointGeometry = entry->pointGeometry;
+    summary.meshGeometry = entry->meshGeometry;
+    summary.lodBacked = entry->lodBacked;
+    summary.localBounds = compact_part_geometry_bounds(entry->geometry);
+    summary.visible = entry->visible;
+    summary.selectable = entry->selectable;
+    summary.selected = entry->selected;
+    summary.highlighted = entry->highlighted;
     return TRUE;
 }
 
-int
-SoBRLDatabaseSource::demoteCompactGeometry(void)
+static SbBool
+compact_path_matches(const char *candidate, const char *path,
+    SbBool includeDescendants)
 {
-    if (!this->compactIndexActive || !this->compactIndex ||
-	this->compactIndex->entries.empty())
-	return 0;
+    candidate = database_source_skip_leading_slash(candidate ? candidate : "");
+    path = database_source_skip_leading_slash(path ? path : "");
+    if (!path[0])
+	return TRUE;
+    if (strcmp(candidate, path) == 0)
+	return TRUE;
+    if (!strchr(path, '/')) {
+	const char *leaf = strrchr(candidate, '/');
+	leaf = leaf ? leaf + 1 : candidate;
+	const char *suffix = strchr(leaf, '@');
+	const size_t leafLength = suffix ? static_cast<size_t>(suffix - leaf) :
+	    strlen(leaf);
+	if (strlen(path) == leafLength && strncmp(leaf, path, leafLength) == 0)
+	    return TRUE;
+    }
+    if (!includeDescendants)
+	return FALSE;
+    const size_t len = strlen(path);
+    return strncmp(candidate, path, len) == 0 &&
+	(candidate[len] == '/' || candidate[len] == '@') ? TRUE : FALSE;
+}
 
-    const int count = static_cast<int>(this->compactIndex->entries.size());
-    this->compactIndexActive = FALSE;
-    this->clearCompiledAssembly();
+int
+SoBRLDatabaseSource::getCompactInstanceCountForPath(const char *queryPath,
+    SbBool includeDescendants) const
+{
+    if (!this->compactIndex)
+	return 0;
+    int count = 0;
     for (const BRLObolCompactInstanceEntry &entry :
 	 this->compactIndex->entries) {
-	SoNode *shape = entry.vlist ? static_cast<SoNode *>(entry.vlist) :
-	    static_cast<SoNode *>(entry.mesh);
-	if (!shape)
-	    continue;
-	SoSeparator *holder = new SoSeparator;
-	if (!entry.localTransform.equals(SbMatrix::identity(), 0.000001f)) {
-	    SoMatrixTransform *transform = new SoMatrixTransform;
-	    transform->matrix = entry.localTransform;
-	    holder->addChild(transform);
-	}
-	holder->addChild(shape);
-	this->addChild(holder);
+	if (compact_path_matches(entry.semantic.path.getString(), queryPath,
+		includeDescendants))
+	    count++;
     }
     return count;
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactInstanceBoundsForPath(const char *queryPath,
+    SbBool includeDescendants, SbBox3f &bounds) const
+{
+    bounds.makeEmpty();
+    if (!this->compactIndex || !this->visible.getValue())
+	return FALSE;
+    for (const BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries) {
+	if (!entry.visible ||
+	    !compact_path_matches(entry.semantic.path.getString(), queryPath,
+		includeDescendants))
+	    continue;
+	const SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
+	if (!localBounds.isEmpty())
+	    bounds.extendBy(database_source_transform_bounds(localBounds,
+		entry.localToSource));
+    }
+    return bounds.isEmpty() ? FALSE : TRUE;
+}
+
+int
+SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath,
+    SbBool includeDescendants,
+    int visibleValid, SbBool nextVisible,
+    int selectedValid, SbBool nextSelected,
+    int highlightedValid, SbBool nextHighlighted)
+{
+    if (!this->compactIndex)
+	return 0;
+    int changed = 0;
+    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
+		includeDescendants))
+	    continue;
+	bool visibilityChanged = false;
+	bool selectionChanged = false;
+	if (visibleValid && entry.visible != nextVisible) {
+	    entry.visible = nextVisible;
+	    visibilityChanged = true;
+	    changed++;
+	}
+	if (selectedValid && entry.selected != nextSelected) {
+	    entry.selected = nextSelected;
+	    selectionChanged = true;
+	    changed++;
+	}
+	if (highlightedValid && entry.highlighted != nextHighlighted) {
+	    entry.highlighted = nextHighlighted;
+	    selectionChanged = true;
+	    changed++;
+	}
+	if (visibilityChanged)
+	    entry.visibilityRevision = compact_next_revision(
+		entry.visibilityRevision);
+	if (selectionChanged) {
+	    entry.selectionRevision = compact_next_revision(
+		entry.selectionRevision);
+	    entry.style = compact_effective_style(entry);
+	}
+    }
+    if (changed) {
+	this->rebuildCompactInstanceDisplayState(FALSE);
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+	this->touch();
+    }
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setCompactInstanceSelectableForPath(
+    const char *queryPath, SbBool includeDescendants, SbBool nextSelectable)
+{
+    if (!this->compactIndex)
+	return 0;
+    int changed = 0;
+    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
+		includeDescendants) || entry.selectable == nextSelectable)
+	    continue;
+	entry.selectable = nextSelectable;
+	entry.selectionRevision = compact_next_revision(
+	    entry.selectionRevision);
+	changed++;
+    }
+    if (changed) {
+	this->rebuildCompactInstanceDisplayState(FALSE);
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+	this->touch();
+    }
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setCompactInstanceRegionIdForPath(const char *queryPath,
+    SbBool includeDescendants, int regionId)
+{
+    if (!this->compactIndex)
+	return 0;
+    int changed = 0;
+    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
+		includeDescendants) || entry.semantic.regionId == regionId)
+	    continue;
+	entry.semantic.regionId = regionId;
+	entry.appearanceRevision = compact_next_revision(
+	    entry.appearanceRevision);
+	compact_sync_shape_summary_state(entry);
+	changed++;
+    }
+    if (changed) {
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+    }
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setCompactInstanceRegionMetadataForPath(
+    const char *queryPath, SbBool includeDescendants, int regionId,
+    int airCode, int materialId, int los)
+{
+    if (!this->compactIndex)
+	return 0;
+    int changed = 0;
+    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
+		includeDescendants) ||
+	    (entry.semantic.regionId == regionId &&
+	     entry.semantic.airCode == airCode &&
+	     entry.semantic.materialId == materialId &&
+	     entry.semantic.los == los))
+	    continue;
+	entry.semantic.regionId = regionId;
+	entry.semantic.airCode = airCode;
+	entry.semantic.materialId = materialId;
+	entry.semantic.los = los;
+	entry.appearanceRevision = compact_next_revision(
+	    entry.appearanceRevision);
+	compact_sync_shape_summary_state(entry);
+	changed++;
+    }
+    if (changed) {
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+    }
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setCompactInstanceMetadataForPath(const char *queryPath,
+    SbBool includeDescendants, int regionId, int airCode, int materialId,
+    int los, SbBool nextMaterialColorValid, const SbColor &nextMaterialColor,
+    const SbString &materialShader)
+{
+    if (!this->compactIndex)
+	return 0;
+    int changed = 0;
+    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
+		includeDescendants))
+	    continue;
+	const bool same = entry.semantic.regionId == regionId &&
+	    entry.semantic.airCode == airCode &&
+	    entry.semantic.materialId == materialId &&
+	    entry.semantic.los == los &&
+	    entry.semantic.materialColorValid == nextMaterialColorValid &&
+	    (!nextMaterialColorValid || database_source_color_equal(
+		entry.semantic.materialColor, nextMaterialColor)) &&
+	    strcmp(entry.semantic.materialShader.getString(),
+		materialShader.getString()) == 0;
+	if (same)
+	    continue;
+	entry.semantic.regionId = regionId;
+	entry.semantic.airCode = airCode;
+	entry.semantic.materialId = materialId;
+	entry.semantic.los = los;
+	entry.semantic.materialColorValid = nextMaterialColorValid;
+	entry.semantic.materialColor = nextMaterialColorValid ? nextMaterialColor :
+	    SbColor(1.0f, 1.0f, 1.0f);
+	entry.semantic.materialShader = materialShader;
+	entry.normalStyle = compact_entry_style_from_source(this, entry,
+	    FALSE, FALSE);
+	entry.selectedStyle = compact_entry_style_from_source(this, entry,
+	    TRUE, FALSE);
+	entry.highlightedStyle = compact_entry_style_from_source(this, entry,
+	    FALSE, TRUE);
+	entry.style = compact_effective_style(entry);
+	entry.appearanceRevision = compact_next_revision(
+	    entry.appearanceRevision);
+	compact_sync_shape_summary_state(entry);
+	changed++;
+    }
+    if (changed) {
+	this->rebuildCompactInstanceDisplayState(FALSE);
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+    }
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::setCompactSubtractLineStyle(int nextLineStyle)
+{
+    if (!this->compactIndex)
+	return 0;
+    int changed = 0;
+    const uint16_t pattern = nextLineStyle != 0 ? 0xcf33u : 0xffffu;
+    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	if (entry.booleanOperation != BOOLEAN_SUBTRACT || !entry.wireGeometry ||
+	    entry.normalStyle.linePattern == pattern)
+	    continue;
+	entry.normalStyle.linePattern = pattern;
+	entry.selectedStyle.linePattern = pattern;
+	entry.highlightedStyle.linePattern = pattern;
+	entry.style = compact_effective_style(entry);
+	entry.appearanceRevision = compact_next_revision(
+	    entry.appearanceRevision);
+	changed++;
+    }
+    if (changed) {
+	this->rebuildCompactInstanceDisplayState(FALSE);
+	this->markCompiledAssemblyDirty();
+	this->markCadBatchDirty();
+    }
+    return changed;
+}
+
+int
+SoBRLDatabaseSource::refreshCompactObjectGeometry(
+    const char *objectPath, uint32_t nextSourceRevision)
+{
+    if (!this->isCompactOccurrenceRegistry() || !this->compactIndex ||
+	!this->dbip || !objectPath || !objectPath[0])
+	return 0;
+
+    const char *objectName = strrchr(objectPath, '/');
+    objectName = objectName && objectName[1] ? objectName + 1 : objectPath;
+    if (!objectName[0])
+	return 0;
+
+    struct directory *dp = db_lookup(this->dbip, objectName, LOOKUP_QUIET);
+    if (!dp)
+	return -1;
+    if (dp->d_flags & RT_DIR_COMB) {
+	BRLObolDatabaseSourceRealizationCache cache;
+	cache.preserveCompactSourceOnFailure = true;
+	this->seedCompactRealizationCache(&cache);
+
+	const uint32_t previousRevision = this->sourceRevision.getValue();
+	const uint32_t revision = nextSourceRevision ? nextSourceRevision :
+	    previousRevision + 1;
+	this->detachFieldSensors();
+	this->sourceRevision = revision;
+	this->attachFieldSensors();
+
+	const int realized = source_uses_mesh_realization(this) ?
+	    brlobol_database_source_realize_mesh_compact_with_cache(this,
+		&cache) :
+	    brlobol_database_source_realize_wireframe_compact_with_cache(this,
+		&cache);
+	if (realized <= 0) {
+	    this->detachFieldSensors();
+	    this->sourceRevision = previousRevision;
+	    this->attachFieldSensors();
+	    mark_source_realized_current(this);
+	    return -1;
+	}
+	this->markCadBatchDirty();
+	return this->getCompactInstanceCount();
+    }
+
+    std::vector<size_t> matching;
+    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+	const BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[i];
+	const char *entryName = entry.semantic.sourceName.getString();
+	const char *entryPath = entry.semantic.path.getString();
+	const char *entryLeaf = entryPath ? strrchr(entryPath, '/') : NULL;
+	entryLeaf = entryLeaf && entryLeaf[1] ? entryLeaf + 1 : entryPath;
+	if ((entryName && BU_STR_EQUAL(entryName, objectName)) ||
+	    (entryLeaf && BU_STR_EQUAL(entryLeaf, objectName)))
+	    matching.push_back(i);
+    }
+    if (matching.empty())
+	return 0;
+
+    valid_walk_internal validInternal;
+    if (rt_db_get_internal(&validInternal.local, dp, this->dbip, NULL) < 0 ||
+	!internal_payload_magic_valid(&validInternal.local)) {
+	if (validInternal.local.idb_ptr)
+	    rt_db_free_internal(&validInternal.local);
+	return -1;
+    }
+    validInternal.ownsLocal = true;
+
+    const char *typeLabel = primitive_type_label(&validInternal.local);
+    const int sourceDrawMode = source_record_draw_mode(this);
+    const bool wantWire = sourceDrawMode == BRLOBOL_LOD_DRAW_WIRE;
+    SoBRLVListShape *sharedWire = NULL;
+    SoBRLMeshShape *sharedMesh = NULL;
+    SbBox3f localBounds;
+    (void)local_bounds_from_internal(&validInternal.local, localBounds);
+    if (wantWire) {
+	if (validInternal.local.idb_type == ID_BOT)
+	    sharedWire = vlist_from_bot_wireframe(
+		static_cast<const struct rt_bot_internal *>(
+		    validInternal.local.idb_ptr));
+	else
+	    sharedWire = vlist_from_lod_realization_internal(
+		&validInternal.local, this, localBounds);
+	if (!sharedWire)
+	    sharedWire = vlist_from_plot_internal(&validInternal.local, this);
+    } else {
+	sharedMesh = mesh_from_internal(&validInternal.local, this);
+	if (!sharedMesh) {
+	    sharedWire = vlist_from_lod_realization_internal(
+		&validInternal.local, this, localBounds);
+	    if (!sharedWire)
+		sharedWire = vlist_from_plot_internal(&validInternal.local, this);
+	}
+    }
+    if (!sharedWire && !sharedMesh)
+	return -1;
+
+    if (sharedWire)
+	sharedWire->ref();
+    if (sharedMesh)
+	sharedMesh->ref();
+    const uint32_t revision = nextSourceRevision ? nextSourceRevision :
+	this->sourceRevision.getValue() + 1;
+    if (sharedWire)
+	assign_shared_geometry_identity(sharedWire, objectName, typeLabel,
+	    revision, "line");
+    if (sharedMesh)
+	assign_shared_geometry_identity(sharedMesh, objectName, typeLabel,
+	    revision, "surface");
+
+    obol::PartGeometry generated;
+    bool geometryValid = false;
+    for (size_t index : matching) {
+	const BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[index];
+	if ((sharedWire && !entry.wireGeometry && !entry.pointGeometry) ||
+	    (sharedMesh && !entry.meshGeometry)) {
+	    if (sharedWire)
+		sharedWire->unref();
+	    if (sharedMesh)
+		sharedMesh->unref();
+	    return -1;
+	}
+    }
+    if (sharedWire) {
+	SoBRLVListShape *geometryShape = new SoBRLVListShape;
+	geometryShape->ref();
+	geometryShape->setSharedGeometry(sharedWire);
+	geometryValid = cad_vlist_part_geometry(geometryShape, generated) != 0;
+	geometryShape->unref();
+    } else if (sharedMesh) {
+	SoBRLMeshShape *geometryShape = new SoBRLMeshShape;
+	geometryShape->ref();
+	geometryShape->setSharedGeometry(sharedMesh);
+	geometryShape->hiddenLine =
+	    sourceDrawMode == BRLOBOL_LOD_DRAW_HIDDEN_LINE ? TRUE : FALSE;
+	geometryShape->drawMode = sourceDrawMode;
+	geometryValid = cad_mesh_part_geometry(geometryShape, generated) != 0;
+	geometryShape->unref();
+    }
+    if (!geometryValid) {
+	if (sharedWire)
+	    sharedWire->unref();
+	if (sharedMesh)
+	    sharedMesh->unref();
+	return -1;
+    }
+
+    std::string partKey;
+    if (!cad_part_key_for_geometry(sharedWire ? "wire" : "mesh",
+	generated, partKey)) {
+	if (sharedWire)
+	    sharedWire->unref();
+	if (sharedMesh)
+	    sharedMesh->unref();
+	return -1;
+    }
+    const obol::PartId partId = obol::CadIdBuilder::hash128(partKey);
+    std::shared_ptr<const obol::PartGeometry> geometry =
+	std::make_shared<const obol::PartGeometry>(std::move(generated));
+    BRLObolCompactPartReference partRef;
+    partRef.part = partId;
+    partRef.geometry = geometry;
+    this->compactIndex->parts.push_back(partRef);
+    this->compactIndex->partIdByKey[partKey] = partId;
+    this->compactIndex->partIdByGeometry[geometry.get()] = partId;
+
+    std::unordered_set<obol::PartId, std::hash<obol::PartId>> oldParts;
+    for (size_t index : matching) {
+	BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[index];
+	oldParts.insert(entry.part);
+	entry.part = partId;
+	entry.geometry = geometry;
+	entry.wireGeometry = geometry->wire ? TRUE : FALSE;
+	entry.pointGeometry = geometry->points ? TRUE : FALSE;
+	entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
+	entry.geometryRevision = compact_next_revision(entry.geometryRevision);
+	entry.semantic.sourceId = revision;
+	compact_sync_shape_summary(entry);
+	if (index < this->compactIndex->instances.size())
+	    this->compactIndex->instances[index].record.part = partId;
+    }
+    if (sharedWire)
+	sharedWire->unref();
+    if (sharedMesh)
+	sharedMesh->unref();
+
+    std::unordered_set<obol::PartId, std::hash<obol::PartId>> liveParts;
+    for (const BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries)
+	liveParts.insert(entry.part);
+    this->compactIndex->parts.erase(
+	std::remove_if(this->compactIndex->parts.begin(),
+	    this->compactIndex->parts.end(),
+	    [&](const BRLObolCompactPartReference &part) {
+		return oldParts.find(part.part) != oldParts.end() &&
+		       liveParts.find(part.part) == liveParts.end();
+	    }), this->compactIndex->parts.end());
+    for (auto it = this->compactIndex->partIdByKey.begin();
+	 it != this->compactIndex->partIdByKey.end();) {
+	if (oldParts.find(it->second) != oldParts.end() &&
+	    liveParts.find(it->second) == liveParts.end())
+	    it = this->compactIndex->partIdByKey.erase(it);
+	else
+	    ++it;
+    }
+    for (auto it = this->compactIndex->partIdByGeometry.begin();
+	 it != this->compactIndex->partIdByGeometry.end();) {
+	if (oldParts.find(it->second) != oldParts.end() &&
+	    liveParts.find(it->second) == liveParts.end())
+	    it = this->compactIndex->partIdByGeometry.erase(it);
+	else
+	    ++it;
+    }
+
+    SbBox3f bounds;
+    bounds.makeEmpty();
+    for (const BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries) {
+	const SbBox3f entryBounds = database_source_transform_bounds(
+	    compact_part_geometry_bounds(entry.geometry), entry.localTransform);
+	if (!entryBounds.isEmpty())
+	    bounds.extendBy(entryBounds);
+    }
+    if (!bounds.isEmpty())
+	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+    this->detachFieldSensors();
+    this->sourceRevision = revision;
+    mark_source_realized_current(this);
+    this->attachFieldSensors();
+    this->markCompiledAssemblyDirty();
+    this->markCadBatchDirty();
+    return static_cast<int>(matching.size());
 }
 
 static SbMatrix
@@ -9315,6 +12495,84 @@ compact_entry_local_to_world(const BRLObolCompactInstanceEntry &entry,
     SbMatrix matrix = entry.localToSource;
     matrix.multRight(parentToWorld);
     return matrix;
+}
+
+template <typename Callback>
+static void
+compact_for_each_point(const BRLObolCompactInstanceEntry &entry,
+	Callback callback)
+{
+    if (!entry.geometry || !entry.geometry->points)
+	return;
+    const obol::PointRep &points = *entry.geometry->points;
+    for (size_t i = 0; i < points.positions.size(); i++) {
+	const int primitiveIndex = i < points.pointIds.size() ?
+	    static_cast<int>(points.pointIds[i]) : static_cast<int>(i);
+	const SbBool colorValid = i < points.colorValid.size() &&
+	    points.colorValid[i] && i < points.colors.size();
+	const SbBool scaleValid = i < points.scaleValid.size() &&
+	    points.scaleValid[i] && i < points.scales.size();
+	const SbBool normalValid = i < points.normalValid.size() &&
+	    points.normalValid[i] && i < points.normals.size();
+	callback(primitiveIndex, points.positions[i], colorValid,
+	    colorValid ? points.colors[i] : SbColor(1.0f, 1.0f, 1.0f),
+	    scaleValid, scaleValid ? points.scales[i] : 0.0f,
+	    normalValid, normalValid ? points.normals[i] :
+	    SbVec3f(0.0f, 0.0f, 1.0f));
+    }
+}
+
+template <typename Callback>
+static void
+compact_for_each_wire_segment(const BRLObolCompactInstanceEntry &entry,
+	Callback callback)
+{
+    if (!entry.geometry || !entry.geometry->wire)
+	return;
+    const obol::WireRep &wire = *entry.geometry->wire;
+    int primitiveIndex = 0;
+    for (size_t i = 0; i + 1 < wire.segmentPoints.size(); i += 2)
+	callback(primitiveIndex++, wire.segmentPoints[i],
+	    wire.segmentPoints[i + 1]);
+    for (const obol::WirePolyline &polyline : wire.polylines) {
+	for (size_t i = 1; i < polyline.points.size(); i++)
+	    callback(primitiveIndex++, polyline.points[i - 1],
+		polyline.points[i]);
+    }
+}
+
+static float
+compact_transform_point_scale(const SbMatrix &matrix, float scale)
+{
+    SbVec3f x;
+    SbVec3f y;
+    SbVec3f z;
+    matrix.multDirMatrix(SbVec3f(scale, 0.0f, 0.0f), x);
+    matrix.multDirMatrix(SbVec3f(0.0f, scale, 0.0f), y);
+    matrix.multDirMatrix(SbVec3f(0.0f, 0.0f, scale), z);
+    return std::max(x.length(), std::max(y.length(), z.length()));
+}
+
+template <typename Callback>
+static void
+compact_for_each_triangle(const BRLObolCompactInstanceEntry &entry,
+	Callback callback)
+{
+    if (!entry.geometry || !entry.geometry->shaded)
+	return;
+    const obol::TriMesh &mesh = *entry.geometry->shaded;
+    int primitiveIndex = 0;
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+	const uint32_t ia = mesh.indices[i];
+	const uint32_t ib = mesh.indices[i + 1];
+	const uint32_t ic = mesh.indices[i + 2];
+	if (ia >= mesh.positions.size() || ib >= mesh.positions.size() ||
+	    ic >= mesh.positions.size())
+	    continue;
+	callback(primitiveIndex++, mesh.positions[ia], mesh.positions[ib],
+	    mesh.positions[ic], static_cast<int>(ia), static_cast<int>(ib),
+	    static_cast<int>(ic));
+    }
 }
 
 static SbVec3f
@@ -9627,100 +12885,94 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 
 	const SbMatrix localToWorld =
 	    compact_entry_local_to_world(entry, parentToWorld);
-	if (entry.vlist) {
-	    SoBRLVListShape *shape = entry.vlist;
-	    const SoBRLVListShape *geom = shape->getGeometrySource();
-	    SbVec3f last;
-	    SbBool haveLast = FALSE;
-	    int lastIndex = -1;
-	    int segmentIndex = 0;
-	    int n = geom ? geom->point.getNum() : 0;
-	    if (geom && geom->command.getNum() < n)
-		n = geom->command.getNum();
-	    for (int j = 0; j < n; j++) {
-		if (geom->command[j] == SoBRLVListShape::MOVE) {
-		    if (!cad_vlist_point(shape, geom, j, last))
-			continue;
-		    haveLast = TRUE;
-		    lastIndex = j;
-		    continue;
-		}
-		if (geom->command[j] != SoBRLVListShape::DRAW ||
-		    !haveLast || lastIndex < 0)
-		    continue;
-
-		SbVec3f localB;
-		if (!cad_vlist_point(shape, geom, j, localB))
-		    continue;
+	const BRLObolRealizedShapeSummary &summary = entry.shapeSummary;
+	if (entry.meshGeometry && entry.lodBacked &&
+	    action->getGeometryPolicy() == SoBRLExportAction::FULL_DETAIL &&
+	    entry.sourceMeshRequestValid) {
+	    BRLObolSourceMeshRequest request = entry.sourceMeshRequest;
+	    request.localToWorld = localToWorld;
+	    action->sourceBackedFullDetailRequests.push_back(request);
+	    action->skippedLodDisplayMeshCount++;
+	    continue;
+	}
+	if (entry.pointGeometry) {
+	    compact_for_each_point(entry,
+		[&](int primitiveIndex, const SbVec3f &localPoint,
+		    SbBool pointColorValid, const SbColor &pointColor,
+		    SbBool pointScaleValid, float pointScale,
+		    SbBool pointNormalValid, const SbVec3f &pointNormal) {
+		    SbVec3f worldPoint;
+		    SbVec3f worldNormal = pointNormal;
+		    localToWorld.multVecMatrix(localPoint, worldPoint);
+		    if (pointNormalValid) {
+			const SbMatrix normalMatrix =
+			    localToWorld.inverse().transpose();
+			normalMatrix.multDirMatrix(pointNormal, worldNormal);
+			worldNormal.normalize();
+		    }
+		    action->appendPoint(summary.path, summary.sourceName,
+			summary.sourceType, summary.sourceId, summary.regionId,
+			summary.airCode, summary.materialId, summary.los,
+			summary.materialColorValid, summary.materialColor,
+			summary.materialShader, primitiveIndex, entry.selected,
+			entry.highlighted, summary.ghosted, summary.hiddenLine,
+			summary.editEmphasis, summary.editIntentId,
+			summary.editIntentRole, summary.lodPolicy,
+			summary.colorOverride, summary.color, pointColorValid,
+			pointColor, pointScaleValid,
+			pointScaleValid ? compact_transform_point_scale(
+			    localToWorld, pointScale) : 0.0f,
+			pointNormalValid, worldNormal, worldPoint);
+		});
+	}
+	if (entry.wireGeometry) {
+	    compact_for_each_wire_segment(entry,
+		[&](int segmentIndex, const SbVec3f &localA,
+		    const SbVec3f &localB) {
 		SbVec3f worldA;
 		SbVec3f worldB;
-		localToWorld.multVecMatrix(last, worldA);
+		localToWorld.multVecMatrix(localA, worldA);
 		localToWorld.multVecMatrix(localB, worldB);
-		action->appendLine(shape->sourcePath.getValue(),
-		    shape->sourceName.getValue(), shape->sourceType.getValue(),
-		    shape->sourceId.getValue(), shape->regionId.getValue(),
-		    shape->airCode.getValue(), shape->materialId.getValue(),
-		    shape->los.getValue(),
-		    shape->materialColorValid.getValue(),
-		    shape->materialColor.getValue(),
-		    shape->materialShader.getValue(), segmentIndex,
-		    entry.selected, entry.highlighted, shape->ghosted.getValue(),
-		    shape->hiddenLine.getValue(), shape->editEmphasis.getValue(),
-		    shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), shape->lodPolicy.getValue(),
-		    shape->colorOverride.getValue(), shape->color.getValue(),
+		action->appendLine(summary.path, summary.sourceName,
+		    summary.sourceType, summary.sourceId, summary.regionId,
+		    summary.airCode, summary.materialId, summary.los,
+		    summary.materialColorValid, summary.materialColor,
+		    summary.materialShader, segmentIndex, entry.selected,
+		    entry.highlighted, summary.ghosted, summary.hiddenLine,
+		    summary.editEmphasis, summary.editIntentId,
+		    summary.editIntentRole, summary.lodPolicy,
+		    summary.colorOverride, summary.color,
 		    worldA, worldB);
-		last = localB;
-		lastIndex = j;
-		segmentIndex++;
-	    }
+	    });
 	    continue;
 	}
 
-	if (entry.mesh) {
-	    SoBRLMeshShape *shape = entry.mesh;
-	    const int triangleCount = shape->getTriangleCount();
-	    for (int j = 0; j < triangleCount; j++) {
-		SbVec3f a;
-		SbVec3f b;
-		SbVec3f c;
-		int ia = -1;
-		int ib = -1;
-		int ic = -1;
-		if (!shape->getTriangle(j, a, b, c) ||
-		    !shape->getTriangleVertexIndices(j, ia, ib, ic))
-		    continue;
+	if (entry.meshGeometry) {
+	    compact_for_each_triangle(entry,
+		[&](int triangleIndex, const SbVec3f &a, const SbVec3f &b,
+		    const SbVec3f &c, int ia, int ib, int ic) {
 		SbVec3f worldA;
 		SbVec3f worldB;
 		SbVec3f worldC;
 		localToWorld.multVecMatrix(a, worldA);
 		localToWorld.multVecMatrix(b, worldB);
 		localToWorld.multVecMatrix(c, worldC);
-		action->appendTriangle(shape->sourcePath.getValue(),
-		    shape->sourceName.getValue(), shape->sourceType.getValue(),
-		    shape->sourceId.getValue(), shape->regionId.getValue(),
-		    shape->airCode.getValue(), shape->materialId.getValue(),
-		    shape->los.getValue(),
-		    shape->materialColorValid.getValue(),
-		    shape->materialColor.getValue(),
-		    shape->materialShader.getValue(), j, ia, ib, ic,
-		    entry.selected, entry.highlighted, shape->ghosted.getValue(),
-		    shape->hiddenLine.getValue(), shape->editEmphasis.getValue(),
-		    shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), shape->lodPolicy.getValue(),
-		    shape->lodAvailable.getValue(),
-		    shape->lodActiveLevel.getValue(),
-		    shape->lodFaceCount.getValue(),
-		    shape->lodPointCount.getValue(),
-		    shape->lodOriginalPointCount.getValue(),
-		    shape->lodNormalCount.getValue(),
-		    shape->lodHasSnappedPoints.getValue(),
-		    shape->lodHasNormals.getValue(),
-		    shape->lodBoundsMin.getValue(),
-		    shape->lodBoundsMax.getValue(),
-		    shape->colorOverride.getValue(), shape->color.getValue(),
+		action->appendTriangle(summary.path, summary.sourceName,
+		    summary.sourceType, summary.sourceId, summary.regionId,
+		    summary.airCode, summary.materialId, summary.los,
+		    summary.materialColorValid, summary.materialColor,
+		    summary.materialShader, triangleIndex, ia, ib, ic,
+		    entry.selected, entry.highlighted, summary.ghosted,
+		    summary.hiddenLine, summary.editEmphasis,
+		    summary.editIntentId, summary.editIntentRole,
+		    summary.lodPolicy, summary.lodAvailable,
+		    summary.lodActiveLevel, summary.lodFaceCount,
+		    summary.lodPointCount, summary.lodOriginalPointCount,
+		    summary.lodNormalCount, summary.lodHasSnappedPoints,
+		    summary.lodHasNormals, summary.lodBoundsMin,
+		    summary.lodBoundsMax, summary.colorOverride, summary.color,
 		    worldA, worldB, worldC);
-	    }
+	    });
 	}
     }
     return 1;
@@ -9746,54 +12998,31 @@ SoBRLDatabaseSource::measureCompactInstances(SoBRLMeasureAction *action,
 	const SbMatrix localToWorld =
 	    compact_entry_local_to_world(entry, parentToWorld);
 	SbBool measuredShape = FALSE;
-	if (entry.vlist) {
-	    SoBRLVListShape *shape = entry.vlist;
-	    const SoBRLVListShape *geom = shape->getGeometrySource();
-	    SbVec3f last;
-	    SbBool haveLast = FALSE;
-	    int lastIndex = -1;
-	    int segmentIndex = 0;
-	    int n = geom ? geom->point.getNum() : 0;
-	    if (geom && geom->command.getNum() < n)
-		n = geom->command.getNum();
+	if (entry.wireGeometry) {
 	    std::vector<compact_measure_segment_record> measuredSegments;
-	    for (int j = 0; j < n; j++) {
-		if (geom->command[j] == SoBRLVListShape::MOVE) {
-		    if (!cad_vlist_point(shape, geom, j, last))
-			continue;
-		    haveLast = TRUE;
-		    lastIndex = j;
-		    continue;
-		}
-		if (geom->command[j] != SoBRLVListShape::DRAW ||
-		    !haveLast || lastIndex < 0)
-		    continue;
-		SbVec3f localB;
-		if (!cad_vlist_point(shape, geom, j, localB))
-		    continue;
+	    compact_for_each_wire_segment(entry,
+		[&](int segmentIndex, const SbVec3f &localA,
+		    const SbVec3f &localB) {
 		SbVec3f pointA =
-		    action->pointForCoordinateSpace(localToWorld, last);
+		    action->pointForCoordinateSpace(localToWorld, localA);
 		SbVec3f pointB =
 		    action->pointForCoordinateSpace(localToWorld, localB);
-		action->measureSegment(shape->sourcePath.getValue(),
-		    shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), segmentIndex,
+		action->measureSegment(entry.semantic.path,
+		    entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, segmentIndex,
 		    pointA, pointB);
 		if (action->angleComputationEnabled) {
 		    compact_measure_segment_record record;
-		    record.path = shape->sourcePath.getValue();
-		    record.editIntentId = shape->editIntentId.getValue();
-		    record.editIntentRole = shape->editIntentRole.getValue();
+		    record.path = entry.semantic.path;
+		    record.editIntentId = entry.semantic.editIntentId;
+		    record.editIntentRole = entry.semantic.editIntentRole;
 		    record.primitiveIndex = segmentIndex;
 		    record.a = pointA;
 		    record.b = pointB;
 		    measuredSegments.push_back(record);
 		}
 		measuredShape = TRUE;
-		last = localB;
-		lastIndex = j;
-		segmentIndex++;
-	    }
+	    });
 	    if (action->angleComputationEnabled) {
 		std::vector<compact_measure_angle_record> angleRecords;
 		compact_measure_collect_connected_angles(measuredSegments,
@@ -9810,31 +13039,22 @@ SoBRLDatabaseSource::measureCompactInstances(SoBRLMeasureAction *action,
 			segmentB.primitiveIndex, angle.shared, angle.degrees);
 		}
 	    }
-	} else if (entry.mesh) {
-	    SoBRLMeshShape *shape = entry.mesh;
-	    const int triangleCount = shape->getTriangleCount();
-	    for (int j = 0; j < triangleCount; j++) {
-		SbVec3f a;
-		SbVec3f b;
-		SbVec3f c;
-		int ia = -1;
-		int ib = -1;
-		int ic = -1;
-		if (!shape->getTriangle(j, a, b, c) ||
-		    !shape->getTriangleVertexIndices(j, ia, ib, ic))
-		    continue;
+	} else if (entry.meshGeometry) {
+	    compact_for_each_triangle(entry,
+		[&](int triangleIndex, const SbVec3f &a, const SbVec3f &b,
+		    const SbVec3f &c, int ia, int ib, int ic) {
 		SbVec3f pointA =
 		    action->pointForCoordinateSpace(localToWorld, a);
 		SbVec3f pointB =
 		    action->pointForCoordinateSpace(localToWorld, b);
 		SbVec3f pointC =
 		    action->pointForCoordinateSpace(localToWorld, c);
-		action->measureTriangle(shape->sourcePath.getValue(),
-		    shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, pointA, pointB,
+		action->measureTriangle(entry.semantic.path,
+		    entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, pointA, pointB,
 		    pointC, ia, ib, ic);
 		measuredShape = TRUE;
-	    }
+	    });
 	}
 	if (measuredShape)
 	    action->shapeCount++;
@@ -9863,69 +13083,51 @@ SoBRLDatabaseSource::snapCompactInstances(SoBRLSnapAction *action,
 	    compact_entry_local_to_world(entry, parentToWorld);
 	SbBox3f centerBox;
 	centerBox.makeEmpty();
-	if (entry.vlist) {
-	    SoBRLVListShape *shape = entry.vlist;
-	    const SoBRLVListShape *geom = shape->getGeometrySource();
-	    SbVec3f last;
-	    SbBool haveLast = FALSE;
-	    int lastIndex = -1;
-	    int segmentIndex = 0;
-	    int n = geom ? geom->point.getNum() : 0;
-	    if (geom && geom->command.getNum() < n)
-		n = geom->command.getNum();
-	    for (int j = 0; j < n; j++) {
-		if (geom->command[j] == SoBRLVListShape::MOVE) {
-		    if (!cad_vlist_point(shape, geom, j, last))
-			continue;
-		    haveLast = TRUE;
-		    lastIndex = j;
-		    continue;
-		}
-		if (geom->command[j] != SoBRLVListShape::DRAW ||
-		    !haveLast || lastIndex < 0)
-		    continue;
-		SbVec3f localB;
-		if (!cad_vlist_point(shape, geom, j, localB))
-		    continue;
+	if (entry.pointGeometry) {
+	    compact_for_each_point(entry,
+		[&](int primitiveIndex, const SbVec3f &localPoint,
+		    SbBool, const SbColor &, SbBool, float,
+		    SbBool, const SbVec3f &) {
+		    const SbVec3f point = action->pointForCoordinateSpace(
+			localToWorld, localPoint);
+		    centerBox.extendBy(point);
+		    action->consider(SoBRLSnapAction::ENDPOINT,
+			entry.semantic.path, entry.semantic.editIntentId,
+			entry.semantic.editIntentRole, primitiveIndex, query,
+			point);
+		});
+	}
+	if (entry.wireGeometry) {
+	    compact_for_each_wire_segment(entry,
+		[&](int segmentIndex, const SbVec3f &localA,
+		    const SbVec3f &localB) {
 		SbVec3f pointA =
-		    action->pointForCoordinateSpace(localToWorld, last);
+		    action->pointForCoordinateSpace(localToWorld, localA);
 		SbVec3f pointB =
 		    action->pointForCoordinateSpace(localToWorld, localB);
 		centerBox.extendBy(pointA);
 		centerBox.extendBy(pointB);
 		action->consider(SoBRLSnapAction::ENDPOINT,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), segmentIndex, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, segmentIndex, query,
 		    pointA);
 		action->consider(SoBRLSnapAction::ENDPOINT,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), segmentIndex, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, segmentIndex, query,
 		    pointB);
 		action->consider(SoBRLSnapAction::LINE_NEAREST,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), segmentIndex, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, segmentIndex, query,
 		    compact_closest_point_on_segment(query, pointA, pointB));
 		action->consider(SoBRLSnapAction::MIDPOINT,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), segmentIndex, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, segmentIndex, query,
 		    (pointA + pointB) * 0.5f);
-		last = localB;
-		lastIndex = j;
-		segmentIndex++;
-	    }
-	} else if (entry.mesh) {
-	    SoBRLMeshShape *shape = entry.mesh;
-	    const int triangleCount = shape->getTriangleCount();
-	    for (int j = 0; j < triangleCount; j++) {
-		SbVec3f a;
-		SbVec3f b;
-		SbVec3f c;
-		int ia = -1;
-		int ib = -1;
-		int ic = -1;
-		if (!shape->getTriangle(j, a, b, c) ||
-		    !shape->getTriangleVertexIndices(j, ia, ib, ic))
-		    continue;
+	    });
+	} else if (entry.meshGeometry) {
+	    compact_for_each_triangle(entry,
+		[&](int triangleIndex, const SbVec3f &a, const SbVec3f &b,
+		    const SbVec3f &c, int ia, int ib, int ic) {
 		SbVec3f pointA =
 		    action->pointForCoordinateSpace(localToWorld, a);
 		SbVec3f pointB =
@@ -9936,35 +13138,35 @@ SoBRLDatabaseSource::snapCompactInstances(SoBRLSnapAction *action,
 		centerBox.extendBy(pointB);
 		centerBox.extendBy(pointC);
 		action->consider(SoBRLSnapAction::VERTEX,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, query, pointA, ia);
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, query, pointA, ia);
 		action->consider(SoBRLSnapAction::VERTEX,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, query, pointB, ib);
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, query, pointB, ib);
 		action->consider(SoBRLSnapAction::VERTEX,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, query, pointC, ic);
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, query, pointC, ic);
 		action->consider(SoBRLSnapAction::FACE_NEAREST,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, query,
 		    compact_closest_point_on_triangle(query, pointA, pointB,
-						      pointC));
+					      pointC));
 		action->consider(SoBRLSnapAction::EDGE_NEAREST,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, query,
 		    compact_closest_point_on_segment(query, pointA, pointB),
 		    -1, 0, ia, ib);
 		action->consider(SoBRLSnapAction::EDGE_NEAREST,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, query,
 		    compact_closest_point_on_segment(query, pointB, pointC),
 		    -1, 1, ib, ic);
 		action->consider(SoBRLSnapAction::EDGE_NEAREST,
-		    shape->sourcePath.getValue(), shape->editIntentId.getValue(),
-		    shape->editIntentRole.getValue(), j, query,
+		    entry.semantic.path, entry.semantic.editIntentId,
+		    entry.semantic.editIntentRole, triangleIndex, query,
 		    compact_closest_point_on_segment(query, pointC, pointA),
 		    -1, 2, ic, ia);
-	    }
+	    });
 	}
 	if (!centerBox.isEmpty()) {
 	    const SoBRLCadAssembly::InstanceSemantic &semantic =
@@ -10697,6 +13899,8 @@ realized_shape_summary_common(const ShapeT *shape,
     summary.editIntentId = shape->editIntentId.getValue();
     summary.editIntentRole = shape->editIntentRole.getValue();
     summary.lodPolicy = shape->lodPolicy.getValue();
+    summary.colorOverride = shape->colorOverride.getValue();
+    summary.color = shape->color.getValue();
 }
 
 static void
@@ -10806,6 +14010,16 @@ realized_mesh_shape_summary(const SoBRLMeshShape *shape,
     summary.indexCount = geom->coordIndex.getNum();
     summary.triangleCount = shape->getTriangleCount();
     realized_shape_summary_bounds(geom->point, summary);
+    summary.lodAvailable = shape->lodAvailable.getValue();
+    summary.lodActiveLevel = shape->lodActiveLevel.getValue();
+    summary.lodFaceCount = shape->lodFaceCount.getValue();
+    summary.lodPointCount = shape->lodPointCount.getValue();
+    summary.lodOriginalPointCount = shape->lodOriginalPointCount.getValue();
+    summary.lodNormalCount = shape->lodNormalCount.getValue();
+    summary.lodHasSnappedPoints = shape->lodHasSnappedPoints.getValue();
+    summary.lodHasNormals = shape->lodHasNormals.getValue();
+    summary.lodBoundsMin = shape->lodBoundsMin.getValue();
+    summary.lodBoundsMax = shape->lodBoundsMax.getValue();
 }
 
 static SbBool
@@ -10850,7 +14064,13 @@ find_realized_shape_summary_in_node(SoNode *node, int &index,
 int
 SoBRLDatabaseSource::getRealizedShapeSummaryCount(void) const
 {
-    return this->getRealizedShapeCount() + this->getRealizedMeshCount();
+    int count = this->compactIndexActive && this->compactIndex ?
+	static_cast<int>(this->compactIndex->entries.size()) : 0;
+    for (int i = 0; i < this->getNumChildren(); i++) {
+	count += count_shapes_in_node(this->getChild(i));
+	count += count_meshes_in_node(this->getChild(i));
+    }
+    return count;
 }
 
 SbBool
@@ -10862,25 +14082,14 @@ SoBRLDatabaseSource::getRealizedShapeSummary(int index,
 	return FALSE;
 
     if (this->compactIndexActive && this->compactIndex) {
-	for (const BRLObolCompactInstanceEntry &entry :
-		this->compactIndex->entries) {
-	    if (entry.vlist) {
-		if (index == 0) {
-		    realized_vlist_shape_summary(entry.vlist, summary);
-		    realized_shape_summary_owner(this, -1, summary);
-		    return TRUE;
-		}
-		index--;
-	    }
-	    if (entry.mesh) {
-		if (index == 0) {
-		    realized_mesh_shape_summary(entry.mesh, summary);
-		    realized_shape_summary_owner(this, -1, summary);
-		    return TRUE;
-		}
-		index--;
-	    }
+	const size_t compactCount = this->compactIndex->entries.size();
+	if (static_cast<size_t>(index) < compactCount) {
+	    summary = this->compactIndex->entries[
+		static_cast<size_t>(index)].shapeSummary;
+	    realized_shape_summary_owner(this, -1, summary);
+	    return summary.valid;
 	}
+	index -= static_cast<int>(compactCount);
     }
 
     int remaining = index;

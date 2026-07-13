@@ -19,6 +19,7 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 
+#include <algorithm>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,11 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     submitAabbProxyStage(FALSE),
     submitObbProxyStage(FALSE),
     viewState(NULL),
+    compactEntryFirst(0),
+    compactEntryLimit(SIZE_MAX),
+    compactEntryNext(0),
+    compactEntryTotal(0),
+    deferredCompactEntries(FALSE),
     visitedMeshCount(0),
     submittedTaskCount(0),
     skippedMeshCount(0),
@@ -222,6 +228,31 @@ SoBRLMeshLodSubmitAction::getViewLodState(void) const
     return this->viewState;
 }
 
+void
+SoBRLMeshLodSubmitAction::setCompactEntryRange(size_t first, size_t count)
+{
+    this->compactEntryFirst = first;
+    this->compactEntryLimit = count;
+}
+
+size_t
+SoBRLMeshLodSubmitAction::getCompactEntryNext(void) const
+{
+    return this->compactEntryNext;
+}
+
+size_t
+SoBRLMeshLodSubmitAction::getCompactEntryTotal(void) const
+{
+    return this->compactEntryTotal;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::hasDeferredCompactEntries(void) const
+{
+    return this->deferredCompactEntries;
+}
+
 unsigned int
 SoBRLMeshLodSubmitAction::getVisitedMeshCount(void) const
 {
@@ -253,7 +284,12 @@ SoBRLMeshLodSubmitAction::beginTraversal(SoNode *node)
     this->submittedTaskCount = 0;
     this->skippedMeshCount = 0;
     this->diagnostics = "";
+    this->compactEntryNext = this->compactEntryFirst;
+    this->compactEntryTotal = 0;
+    this->deferredCompactEntries = FALSE;
     this->traverse(node);
+    this->deferredCompactEntries =
+	this->compactEntryNext < this->compactEntryTotal ? TRUE : FALSE;
 }
 
 void
@@ -411,6 +447,153 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     SoBRLDatabaseSource *source = static_cast<SoBRLDatabaseSource *>(node);
 
     if (!source->hasCompactInstanceIndex()) {
+	source->doAction(action);
+	return;
+    }
+
+    if (source->isCompactOccurrenceRegistry()) {
+	const int sourceDrawMode =
+	    source->representationMode.getValue() ==
+		SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ?
+	    BRLOBOL_LOD_DRAW_HIDDEN_LINE :
+	    (source->drawMode.getValue() == SoBRLDatabaseSource::SHADED ?
+	    BRLOBOL_LOD_DRAW_SHADED : BRLOBOL_LOD_DRAW_WIRE);
+	const int count = source->getCompactInstanceCount();
+	const size_t sourceFirst = submitAction->compactEntryTotal;
+	submitAction->compactEntryTotal += static_cast<size_t>(count);
+	const size_t rangeFirst = submitAction->compactEntryFirst;
+	const size_t rangeLast = submitAction->compactEntryLimit == SIZE_MAX ||
+	    rangeFirst > SIZE_MAX - submitAction->compactEntryLimit ? SIZE_MAX :
+	    rangeFirst + submitAction->compactEntryLimit;
+	const size_t localFirst = rangeFirst > sourceFirst ?
+	    std::min(static_cast<size_t>(count), rangeFirst - sourceFirst) : 0;
+	const size_t sourceLast = sourceFirst + static_cast<size_t>(count);
+	const size_t localLast = rangeLast < sourceLast ?
+	    (rangeLast > sourceFirst ? rangeLast - sourceFirst : 0) :
+	    static_cast<size_t>(count);
+	for (size_t i = localFirst; i < localLast; i++) {
+	    BRLObolCompactInstanceHandle handle;
+	    BRLObolCompactInstanceSummary summary;
+	    if (!source->getCompactInstanceHandle(static_cast<int>(i), handle) ||
+		!source->getCompactInstanceSummary(handle, summary) ||
+		!summary.valid || !summary.visible)
+		continue;
+
+	    submitAction->visitedMeshCount++;
+	    const SbString target = summary.path.getLength() > 0 ?
+		summary.path : source->path.getValue();
+	    if (!submitAction->service || !submitAction->service->isRunning()) {
+		submitAction->skippedMeshCount++;
+		submitAction->appendDiagnostic(target,
+		    "LoD service is not running");
+		continue;
+	    }
+	    if (!submitAction->dbip) {
+		submitAction->skippedMeshCount++;
+		submitAction->appendDiagnostic(target,
+		    "LoD submit action has no database");
+		continue;
+	    }
+
+	    BRLObolLodRequest request;
+	    request.databaseId = submitAction->databaseId;
+	    request.databaseRevision = submitAction->databaseRevision;
+	    request.sourceRevision = source->sourceRevision.getValue();
+	    request.sourceContentHash = summary.geometryIdentity;
+	    request.objectPath = target;
+	    request.objectName = summary.sourceName;
+	    if (request.objectName.getLength() == 0)
+		request.objectName = mesh_lod_source_leaf_name(source);
+	    request.viewRevision = submitAction->viewRevision;
+	    request.policyRevision = submitAction->policyRevision;
+	    request.drawMode = sourceDrawMode;
+	    request.providerId = submitAction->providerId;
+	    request.providerVersion = submitAction->providerVersion;
+	    request.qualityTier = submitAction->qualityTier;
+	    request.bounds = summary.localBounds;
+
+	    uint64_t dependencyTaskId = 0;
+	    if (!summary.localBounds.isEmpty() &&
+		(submitAction->submitAabbProxyStage ||
+		 submitAction->submitObbProxyStage)) {
+		BRLObolLodRequest proxyRequest = request;
+		proxyRequest.providerId = "rt_proxy_aabb";
+		proxyRequest.providerVersion = "rt-proxy-v1";
+		proxyRequest.qualityTier = BRLOBOL_LOD_QUALITY_PROXY;
+		if (submitAction->submitAabbProxyStage)
+		    (void)mesh_lod_submit_proxy_task(submitAction->service,
+			submitAction->dbip, submitAction->generation,
+			proxyRequest, BRLOBOL_LOD_PROXY_AABB, 0,
+			"BRLOBOL_LOD_AABB_TASK_DELAY_MS",
+			&submitAction->submittedTaskCount,
+			&dependencyTaskId);
+		if (submitAction->submitObbProxyStage) {
+		    proxyRequest.providerId = "rt_proxy_obb";
+		    uint64_t obbTaskId = 0;
+		    (void)mesh_lod_submit_proxy_task(submitAction->service,
+			submitAction->dbip, submitAction->generation,
+			proxyRequest, BRLOBOL_LOD_PROXY_OBB,
+			dependencyTaskId,
+			"BRLOBOL_LOD_OBB_TASK_DELAY_MS",
+			&submitAction->submittedTaskCount, &obbTaskId);
+		    if (obbTaskId)
+			dependencyTaskId = obbTaskId;
+		}
+	    }
+
+	    const bool meshEligible = summary.meshGeometry ||
+		(source->realizationRoleFlags.getValue() &
+		 SoBRLDatabaseSource::REALIZATION_ROLE_MESH);
+	    if (!meshEligible ||
+		(submitAction->requireLodBacked && !summary.lodBacked &&
+		 source->lodBotThreshold.getValue() == 0)) {
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
+
+	    const SbBool suppressActiveDuplicate =
+		(!submitAction->useForcedLevel && submitAction->reset == 0) ?
+		TRUE : FALSE;
+	    if (suppressActiveDuplicate &&
+		submitAction->service->hasActiveRequest(request)) {
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
+
+	    BRLObolMeshLodProvider *provider = new BRLObolMeshLodProvider;
+	    provider->dbip = submitAction->dbip;
+	    provider->view = submitAction->view;
+	    provider->useView = TRUE;
+	    provider->refreshMissing = submitAction->refreshMissing;
+	    provider->useForcedLevel = submitAction->useForcedLevel;
+	    provider->forcedLevel = submitAction->forcedLevel;
+	    provider->shrinkAfterCopy = TRUE;
+	    provider->reset = submitAction->reset;
+
+	    BRLObolLodTask task;
+	    task.generation = submitAction->generation;
+	    task.request = request;
+	    task.realize = brlobol_mesh_lod_provider_task;
+	    task.realizeData = provider;
+	    task.realizeDataFree = brlobol_mesh_lod_provider_free;
+	    if (dependencyTaskId)
+		task.addDependency(dependencyTaskId);
+	    task.debugDelayMilliseconds = mesh_lod_debug_delay_milliseconds(
+		"BRLOBOL_LOD_TASK_DELAY_MS");
+	    const uint64_t taskId = suppressActiveDuplicate ?
+		submitAction->service->submitIfNotActive(task) :
+		submitAction->service->submit(task);
+	    if (!taskId) {
+		brlobol_mesh_lod_provider_free(provider);
+		submitAction->skippedMeshCount++;
+	    } else {
+		submitAction->submittedTaskCount++;
+	    }
+	}
+	submitAction->compactEntryNext = std::max(
+	    submitAction->compactEntryNext, sourceFirst + localLast);
+	/* Auxiliary overlays remain ordinary child nodes and retain their own
+	 * scheduling behavior. */
 	source->doAction(action);
 	return;
     }

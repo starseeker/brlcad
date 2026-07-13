@@ -3708,6 +3708,196 @@ rt_tgc_lod_realize(struct rt_primitive_lod_realization *realization, struct rt_d
     return primitive_lod_line_set_finish(realization) ? ret : -1;
 }
 
+int
+rt_tgc_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
+{
+    struct rt_tgc_internal *tgc;
+    fastf_t amag, bmag, cmag, dmag, max_radius, min_radius;
+    fastf_t cscale = 0.0, dscale = 0.0;
+    fastf_t chord_tol;
+    vect_t residual, cross;
+    int segments;
+    int height_segments = 1;
+    int top_apex;
+    int forward;
+
+    if (face_set)
+	memset(face_set, 0, sizeof(*face_set));
+    if (!face_set || !ip || !ttol || !tol)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    BG_CK_TESS_TOL(ttol);
+    BN_CK_TOL(tol);
+    tgc = (struct rt_tgc_internal *)ip->idb_ptr;
+    RT_TGC_CK_MAGIC(tgc);
+
+    amag = MAGNITUDE(tgc->a);
+    bmag = MAGNITUDE(tgc->b);
+    cmag = MAGNITUDE(tgc->c);
+    dmag = MAGNITUDE(tgc->d);
+    if (amag <= tol->dist || bmag <= tol->dist ||
+	MAGNITUDE(tgc->h) <= tol->dist)
+	return BRLCAD_ERROR;
+    top_apex = cmag <= tol->dist && dmag <= tol->dist;
+    if (!top_apex) {
+	if (cmag <= tol->dist || dmag <= tol->dist)
+	    return BRLCAD_ERROR;
+	cscale = VDOT(tgc->c, tgc->a) / MAGSQ(tgc->a);
+	dscale = VDOT(tgc->d, tgc->b) / MAGSQ(tgc->b);
+	VSCALE(residual, tgc->a, cscale);
+	VSUB2(residual, tgc->c, residual);
+	if (MAGSQ(residual) > tol->dist_sq)
+	    return BRLCAD_ERROR;
+	VSCALE(residual, tgc->b, dscale);
+	VSUB2(residual, tgc->d, residual);
+	if (MAGSQ(residual) > tol->dist_sq || cscale < 0.0 || dscale < 0.0)
+	    return BRLCAD_ERROR;
+    }
+
+    max_radius = FMAX(FMAX(amag, bmag), FMAX(cmag, dmag));
+    min_radius = FMIN(amag, bmag);
+    if (!top_apex)
+	min_radius = FMIN(min_radius, FMIN(cmag, dmag));
+    if (ttol->abs > 0.0)
+	chord_tol = FMAX(ttol->abs, tol->dist);
+    else if (ttol->rel > 0.0)
+	chord_tol = max_radius * FMIN(ttol->rel, 1.0);
+    else
+	chord_tol = max_radius * 0.1;
+    segments = rt_num_circular_segments(chord_tol, max_radius);
+    if (ttol->norm > 0.0 && min_radius > SMALL_FASTF) {
+	const fastf_t alpha = 2.0 * atan(tan(ttol->norm) *
+	    FMIN(1.0, min_radius / max_radius));
+	if (alpha > SMALL_FASTF) {
+	    const int normal_segments = (int)(M_2PI / alpha + 0.999999);
+	    if (normal_segments > segments)
+		segments = normal_segments;
+	}
+    }
+    if (segments < 8)
+	segments = 8;
+    if (segments > INT_MAX / 8)
+	return BRLCAD_ERROR;
+    segments = ((segments + 3) / 4) * 4;
+
+    /* A general TGC is linear along each corresponding bottom/top point.
+     * Between two angular samples, however, changing ellipse axes form a
+     * bilinear patch.  A triangle pair differs from that patch by at most one
+     * quarter of the change in its angular edge vector.  Subdivide height
+     * until that conservative bound is within the requested chord tolerance. */
+    if (!top_apex) {
+	fastf_t max_edge_delta = 0.0;
+	for (int i = 0; i < segments; i++) {
+	    const fastf_t a0 = M_2PI * (fastf_t)i / (fastf_t)segments;
+	    const fastf_t a1 = M_2PI * (fastf_t)(i + 1) /
+		(fastf_t)segments;
+	    vect_t bottom_edge, top_edge, edge_delta;
+	    VCOMB2(bottom_edge, cos(a1) - cos(a0), tgc->a,
+		sin(a1) - sin(a0), tgc->b);
+	    VCOMB2(top_edge, cos(a1) - cos(a0), tgc->c,
+		sin(a1) - sin(a0), tgc->d);
+	    VSUB2(edge_delta, top_edge, bottom_edge);
+	    max_edge_delta = FMAX(max_edge_delta, MAGNITUDE(edge_delta));
+	}
+	if (max_edge_delta > 4.0 * chord_tol) {
+	    const fastf_t required = max_edge_delta / (4.0 * chord_tol);
+	    if (required > (fastf_t)INT_MAX)
+		return BRLCAD_ERROR;
+	    height_segments = (int)(required + 0.999999);
+	}
+	if (height_segments < 1 || height_segments > INT_MAX / segments)
+	    return BRLCAD_ERROR;
+    }
+
+    const size_t point_count = top_apex ?
+	(size_t)segments + 1 :
+	(size_t)segments * (size_t)(height_segments + 1);
+    const size_t side_faces = top_apex ?
+	(size_t)segments :
+	(size_t)segments * (size_t)height_segments * 2;
+    const size_t cap_count = top_apex ? 1 : 2;
+    const size_t index_count = side_faces * 4 +
+	cap_count * ((size_t)segments + 1);
+    face_set->points = (point_t *)bu_calloc(point_count, sizeof(point_t),
+	"TGC indexed-face points");
+    face_set->indices = (int *)bu_calloc(index_count, sizeof(int),
+	"TGC indexed-face indices");
+
+    if (top_apex) {
+	for (int i = 0; i < segments; i++) {
+	    const fastf_t angle = M_2PI * (fastf_t)i / (fastf_t)segments;
+	    VJOIN2(face_set->points[i], tgc->v, cos(angle), tgc->a,
+		sin(angle), tgc->b);
+	}
+	VADD2(face_set->points[segments], tgc->v, tgc->h);
+    } else {
+	for (int ring = 0; ring <= height_segments; ring++) {
+	    const fastf_t f = (fastf_t)ring / (fastf_t)height_segments;
+	    point_t center;
+	    vect_t axis_a, axis_b;
+	    VJOIN1(center, tgc->v, f, tgc->h);
+	    VBLEND2(axis_a, 1.0 - f, tgc->a, f, tgc->c);
+	    VBLEND2(axis_b, 1.0 - f, tgc->b, f, tgc->d);
+	    for (int i = 0; i < segments; i++) {
+		const fastf_t angle = M_2PI * (fastf_t)i /
+		    (fastf_t)segments;
+		const size_t point_index =
+		    (size_t)ring * (size_t)segments + (size_t)i;
+		VJOIN2(face_set->points[point_index], center,
+		    cos(angle), axis_a, sin(angle), axis_b);
+	    }
+	}
+    }
+
+    VCROSS(cross, tgc->a, tgc->b);
+    forward = VDOT(cross, tgc->h) >= 0.0;
+    size_t out = 0;
+    for (int ring = 0; ring < height_segments; ring++) {
+	const int bottom_offset = ring * segments;
+	const int top_offset = (ring + 1) * segments;
+	for (int i = 0; i < segments; i++) {
+	    const int next = forward ? (i + 1) % segments :
+		(i + segments - 1) % segments;
+	if (top_apex) {
+	    face_set->indices[out++] = i;
+	    face_set->indices[out++] = next;
+	    face_set->indices[out++] = segments;
+	    face_set->indices[out++] = -1;
+	} else {
+	    face_set->indices[out++] = bottom_offset + i;
+	    face_set->indices[out++] = bottom_offset + next;
+	    face_set->indices[out++] = top_offset + next;
+	    face_set->indices[out++] = -1;
+	    face_set->indices[out++] = bottom_offset + i;
+	    face_set->indices[out++] = top_offset + next;
+	    face_set->indices[out++] = top_offset + i;
+	    face_set->indices[out++] = -1;
+	}
+	}
+    }
+    for (int i = 0; i < segments; i++) {
+	const int vertex = forward ? segments - 1 - i : i;
+	face_set->indices[out++] = vertex;
+    }
+    face_set->indices[out++] = -1;
+    if (!top_apex) {
+	const int top_offset = height_segments * segments;
+	for (int i = 0; i < segments; i++) {
+	    const int vertex = forward ? i : segments - 1 - i;
+	    face_set->indices[out++] = top_offset + vertex;
+	}
+	face_set->indices[out++] = -1;
+    }
+
+    face_set->point_count = point_count;
+    face_set->index_count = out;
+    face_set->source_identity = (uint64_t)(uintptr_t)tgc;
+    face_set->geometry_revision = 1;
+    return out == index_count ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
 C_DECL int
 rt_tgc_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol), const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {

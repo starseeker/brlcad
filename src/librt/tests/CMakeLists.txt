@@ -110,6 +110,10 @@ add_subdirectory(edit)
 brlcad_addexec(rt_prim_tess prim_tess.c "librt;libnmg;libwdb;libbg;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_prim_tess COMMAND rt_prim_tess)
 
+# Direct renderer-facing primitive mesh providers
+brlcad_addexec(rt_indexed_face_set indexed_face_set.c "librt;libbu;${M_LIBRARY}" TEST)
+brlcad_add_test(NAME rt_indexed_face_set COMMAND rt_indexed_face_set)
+
 # stand-alone Crofton estimator tests
 brlcad_addexec(rt_crofton crofton.c "librt;libwdb;libbu;${M_LIBRARY}" TEST)
 brlcad_add_test(NAME rt_crofton COMMAND rt_crofton)
@@ -134,6 +138,7 @@ set(
   dsp_raytrace_check.c
   dsp_sa_vol_check.c
   fullpath_color.c
+  indexed_face_set.c
   brep_boolean_tests.g
   cyclic_tests.g
   extreme_ssi_test.g

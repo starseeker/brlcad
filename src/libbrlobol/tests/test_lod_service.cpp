@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "brlobol.h"
+#include "brlobol/database_source.h"
 #include "brlobol/lod_service.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -298,6 +300,81 @@ test_filtered_result_drain(void)
     return 0;
 }
 
+static BRLObolLodResult
+ready_mesh_task(const BRLObolLodRequest &request, void *userData)
+{
+    BRLObolLodResult result = ready_task(request, userData);
+    result.resultKind = BRLOBOL_LOD_RESULT_MESH;
+    result.mesh.points.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
+    result.mesh.points.push_back(SbVec3f(0.0f, 1.0f, 0.0f));
+    result.mesh.coordIndex.push_back(0);
+    result.mesh.coordIndex.push_back(1);
+    result.mesh.coordIndex.push_back(2);
+    return result;
+}
+
+static int
+test_occurrence_result_coalescing(void)
+{
+    BRLObolLodService service;
+    ServiceTestContext context;
+    TaskData oldData{&context, 1};
+    TaskData newData{&context, 2};
+    TaskData meshData{&context, 3};
+    if (!service.start(2, FALSE)) {
+	printf("FAIL: LoD coalescing service did not start\n");
+	return 1;
+    }
+
+    const uint64_t generation = service.beginGeneration();
+    BRLObolLodTask oldTask;
+    oldTask.generation = generation;
+    oldTask.request = make_request("/coalesced.bot");
+    oldTask.realize = ready_task;
+    oldTask.realizeData = &oldData;
+    oldTask.debugDelayMilliseconds = 80;
+
+    BRLObolLodTask newTask = oldTask;
+    newTask.request.viewRevision++;
+    newTask.realizeData = &newData;
+    newTask.debugDelayMilliseconds = 0;
+
+    BRLObolLodTask meshTask = newTask;
+    meshTask.realize = ready_mesh_task;
+    meshTask.realizeData = &meshData;
+
+    if (service.submit(oldTask) == 0 || service.submit(newTask) == 0 ||
+	service.submit(meshTask) == 0 || wait_for_settled(service, 2)) {
+	printf("FAIL: LoD service did not execute coalescing tasks\n");
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BRLObolLodResult> results;
+    service.drainResults(results);
+    const BRLObolLodResult *aabb = NULL;
+    const BRLObolLodResult *mesh = NULL;
+    for (const BRLObolLodResult &result : results) {
+	if (result.resultKind == BRLOBOL_LOD_RESULT_AABB)
+	    aabb = &result;
+	if (result.resultKind == BRLOBOL_LOD_RESULT_MESH)
+	    mesh = &result;
+    }
+    if (results.size() != 2 || !aabb || !mesh ||
+	aabb->request.viewRevision != newTask.request.viewRevision ||
+	aabb->counts.faceCount != 2 || mesh->counts.faceCount != 3 ||
+	service.coalescedResultCountForDiagnostics() != 1 ||
+	service.discardedStaleResultCountForDiagnostics() != 0) {
+	printf("FAIL: LoD service did not retain newest per-occurrence stages\n");
+	service.stop();
+	return 1;
+    }
+
+    service.stop();
+    return 0;
+}
+
 struct BlockingTaskData {
     std::mutex mutex;
     std::condition_variable cv;
@@ -384,17 +461,12 @@ test_generation_cancellation(void)
 	blockingData.cv.notify_all();
     }
 
-    if (wait_for_settled(service, 1))
-	return 1;
-
-    std::vector<BRLObolLodResult> results;
-    service.drainResults(results);
-    if (results.size() != 1 ||
-	results[0].providerStatus != BRLOBOL_LOD_PROVIDER_CANCELLED ||
-	!results[0].stale ||
-	results[0].diagnostic.getLength() == 0 ||
-	results[0].counts.faceCount != 0) {
-	printf("FAIL: LoD service did not publish cancellation result\n");
+    for (int i = 0; i < 400 && service.inFlightCount() != 0; i++)
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (service.inFlightCount() != 0 ||
+	service.queuedResultCountForDiagnostics() != 0 ||
+	service.discardedStaleResultCountForDiagnostics() == 0) {
+	printf("FAIL: LoD service published or retained a cancelled generation result\n");
 	return 1;
     }
 
@@ -404,6 +476,56 @@ test_generation_cancellation(void)
     }
 
     service.stop();
+    return 0;
+}
+
+static int
+test_stop_discards_undrained_state(void)
+{
+    BRLObolLodService service;
+    ServiceTestContext context;
+    TaskData data;
+    data.context = &context;
+    data.value = 19;
+
+    if (!service.start(1, FALSE)) {
+	printf("FAIL: LoD service did not start for teardown test\n");
+	return 1;
+    }
+
+    BRLObolLodTask task;
+    task.generation = service.beginGeneration();
+    task.request = make_request("/teardown.bot");
+    task.realize = ready_task;
+    task.realizeData = &data;
+    if (service.submit(task) == 0) {
+	printf("FAIL: LoD service rejected teardown task\n");
+	service.stop();
+	return 1;
+    }
+
+    for (int i = 0; i < 400 &&
+	 service.queuedResultCountForDiagnostics() == 0; i++)
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (service.queuedResultCountForDiagnostics() != 1) {
+	printf("FAIL: LoD teardown task did not publish a result\n");
+	service.stop();
+	return 1;
+    }
+
+    service.stop();
+    if (service.isRunning() || service.inFlightCount() != 0 ||
+	service.pendingTaskCountForDiagnostics() != 0 ||
+	service.queuedResultCountForDiagnostics() != 0 ||
+	service.queuedCacheWriteCountForDiagnostics() != 0 ||
+	service.activeRequestCountForDiagnostics() != 0 ||
+	service.completedTaskCountForDiagnostics() != 0 ||
+	service.cancelledGenerationCountForDiagnostics() != 0 ||
+	service.currentGeneration() != 0) {
+	printf("FAIL: LoD service retained state after stop\n");
+	return 1;
+    }
+
     return 0;
 }
 
@@ -843,6 +965,67 @@ test_queue_limits_and_pending_cancellation(void)
     return 0;
 }
 
+static int
+test_large_pending_cancellation_and_generation_history(void)
+{
+    static const int requestCount = 10000;
+    BRLObolLodService service;
+    service.setQueueLimits(requestCount + 16, 1, 1);
+    if (!service.start(1, FALSE)) {
+	printf("FAIL: LoD scale service did not start\n");
+	return 1;
+    }
+
+    const uint64_t generation = service.beginGeneration();
+    for (int i = 0; i < requestCount; i++) {
+	char name[96] = {0};
+	snprintf(name, sizeof(name), "/scale/%d.bot", i);
+	BRLObolLodTask task;
+	task.generation = generation;
+	task.request = make_request(name);
+	task.realize = ready_task;
+	task.publishResult = FALSE;
+	task.addDependency(UINT64_MAX - 1);
+	if (service.submitIfNotActive(task) == 0) {
+	    printf("FAIL: LoD scale service rejected request %d\n", i);
+	    service.stop();
+	    return 1;
+	}
+    }
+    if (service.pendingTaskCountForDiagnostics() != requestCount ||
+	service.activeRequestCountForDiagnostics() != requestCount ||
+	service.inFlightCount() != requestCount) {
+	printf("FAIL: LoD scale service did not retain bounded pending state\n");
+	service.stop();
+	return 1;
+    }
+
+    service.cancelGeneration(generation);
+    if (service.pendingTaskCountForDiagnostics() != 0 ||
+	service.activeRequestCountForDiagnostics() != 0 ||
+	service.inFlightCount() != 0 ||
+	service.completedTaskCountForDiagnostics() != 0) {
+	printf("FAIL: LoD scale cancellation did not release request bookkeeping\n");
+	service.stop();
+	return 1;
+    }
+
+    uint64_t newestGeneration = 0;
+    for (int i = 0; i < 2048; i++) {
+	newestGeneration = service.beginGeneration();
+	service.cancelGeneration(newestGeneration);
+    }
+    if (!service.isGenerationCancelled(newestGeneration) ||
+	service.cancelledGenerationCountForDiagnostics() > 1024) {
+	printf("FAIL: LoD cancellation history is not bounded\n");
+	service.stop();
+	return 1;
+    }
+
+    service.stop();
+    return 0;
+}
+
 struct DebugDelayTaskData {
     std::mutex mutex;
     int calls;
@@ -916,15 +1099,12 @@ test_debug_delay_cancellation(void)
 
     service.cancelGeneration(generation);
 
-    if (wait_for_settled(service, 1))
-	return 1;
 
-    std::vector<BRLObolLodResult> results;
-    service.drainResults(results);
-    if (results.size() != 1 ||
-	results[0].providerStatus != BRLOBOL_LOD_PROVIDER_CANCELLED ||
-	!results[0].stale ||
-	results[0].diagnostic.getLength() == 0 ||
+    for (int i = 0; i < 400 && service.inFlightCount() != 0; i++)
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (service.inFlightCount() != 0 ||
+	service.queuedResultCountForDiagnostics() != 0 ||
+	service.discardedStaleResultCountForDiagnostics() == 0 ||
 	service.delayedTaskCountForDiagnostics() != 0) {
 	printf("FAIL: LoD service did not cancel delayed task cleanly\n");
 	return 1;
@@ -943,7 +1123,8 @@ test_debug_delay_cancellation(void)
 }
 
 static int
-make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
+make_provider_test_db_version(char *dbpath, size_t dbpath_len,
+	struct db_i **dbip_out, int databaseVersion)
 {
     static const char *objname = "lod-provider.bot";
     static const char *tri_objname = "lod-two-tri.bot";
@@ -983,7 +1164,7 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
     }
     fclose(fp);
 
-    struct db_i *dbip = db_create(dbpath, 5);
+    struct db_i *dbip = db_create(dbpath, databaseVersion);
     if (!dbip) {
 	printf("FAIL: LoD Obol mesh provider db_create\n");
 	bu_file_delete(dbpath);
@@ -1013,8 +1194,25 @@ make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
 	return 1;
     }
 
+    struct wmember snapshot_members;
+    BU_LIST_INIT(&snapshot_members.l);
+    if (!mk_addmember(objname, &snapshot_members.l, NULL, WMOP_UNION) ||
+	mk_lcomb(wdbp, "lod-snapshot.c", &snapshot_members, 0, NULL, NULL,
+	    NULL, 0) != 0) {
+	printf("FAIL: LoD detached snapshot combination\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
     *dbip_out = dbip;
     return 0;
+}
+
+static int
+make_provider_test_db(char *dbpath, size_t dbpath_len, struct db_i **dbip_out)
+{
+    return make_provider_test_db_version(dbpath, dbpath_len, dbip_out, 5);
 }
 
 static int
@@ -2042,6 +2240,142 @@ test_rt_mesh_provider_task(void)
     return ret;
 }
 
+static int
+test_detached_database_snapshot_version(int databaseVersion)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    struct db_i *snapshotDb = NULL;
+    SoBRLDatabaseSource *source = NULL;
+    SoBRLDatabaseSource *detached = NULL;
+    SbString snapshotPath;
+    struct directory *dp = NULL;
+    struct rt_db_internal intern;
+    struct rt_bot_internal *bot = NULL;
+    SbBox3f bounds;
+    int workerRealized = 0;
+    int mutationResult = 0;
+    int ret = 1;
+
+    RT_DB_INTERNAL_INIT(&intern);
+
+
+    if (make_provider_test_db_version(dbpath, sizeof(dbpath), &dbip,
+	    databaseVersion))
+	return 1;
+
+    source = new SoBRLDatabaseSource;
+    source->ref();
+    const char *sourcePath = databaseVersion == 4 ?
+	"/lod-provider.bot" : "/lod-snapshot.c";
+    source->configureDatabaseSourceInstance("snapshot-root",
+	sourcePath, dbip, SoBRLDatabaseSource::WIREFRAME, 1);
+    detached = source->createDetachedRealizationSource(&snapshotDb,
+	&snapshotPath);
+    if (!detached || !snapshotDb || snapshotDb == dbip) {
+	printf("FAIL: detached database source did not create an independent snapshot\n");
+	goto cleanup;
+    }
+    if (databaseVersion == 5 &&
+	!db_lookup(snapshotDb, DB5_GLOBAL_OBJECT_NAME, LOOKUP_QUIET)) {
+	printf("FAIL: detached database snapshot did not retain _GLOBAL metadata\n");
+	goto cleanup;
+    }
+    if ((dbip->dbi_filename &&
+	 (!snapshotDb->dbi_filename ||
+	  strcmp(snapshotDb->dbi_filename, dbip->dbi_filename) != 0)) ||
+	(dbip->dbi_filepath &&
+	 (!snapshotDb->dbi_filepath ||
+	  strcmp(snapshotDb->dbi_filepath[0], dbip->dbi_filepath[0]) != 0 ||
+	  strcmp(snapshotDb->dbi_filepath[1], dbip->dbi_filepath[1]) != 0))) {
+	printf("FAIL: detached database snapshot did not retain file lookup context\n");
+	goto cleanup;
+    }
+
+    dp = db_lookup(dbip, "lod-provider.bot", LOOKUP_QUIET);
+    if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
+	intern.idb_type != ID_BOT || !intern.idb_ptr) {
+	printf("FAIL: detached database snapshot mutation setup\n");
+	if (intern.idb_ptr)
+	    rt_db_free_internal(&intern);
+	goto cleanup;
+    }
+    bot = static_cast<struct rt_bot_internal *>(intern.idb_ptr);
+    for (size_t i = 0; i < bot->num_vertices; i++)
+	bot->vertices[i * 3] += 100.0;
+    {
+	std::atomic<int> workerResult(0);
+	std::thread worker([&]() {
+	    workerResult.store(detached->realizeDatabaseWireframe() ? 1 : -1,
+		std::memory_order_release);
+	});
+	mutationResult = rt_db_put_internal(dp, dbip, &intern);
+	worker.join();
+	workerRealized = workerResult.load(std::memory_order_acquire);
+    }
+    if (mutationResult < 0) {
+	printf("FAIL: detached database snapshot live mutation\n");
+	goto cleanup;
+    }
+
+    if (workerRealized != 1) {
+	printf("FAIL: detached database snapshot worker realization\n");
+	goto cleanup;
+    }
+    if (!detached->getSourceBounds(bounds) || bounds.isEmpty() ||
+	bounds.getMin()[0] < -0.01f || bounds.getMax()[0] > 1.01f) {
+	printf("FAIL: detached database snapshot observed post-snapshot mutation\n");
+	goto cleanup;
+    }
+
+    ret = 0;
+cleanup:
+    if (detached)
+	detached->unref();
+    if (snapshotDb)
+	db_close(snapshotDb);
+    if (snapshotPath.getLength() > 0)
+	bu_file_delete(snapshotPath.getString());
+    if (source)
+	source->unref();
+    if (dbip)
+	db_close(dbip);
+    if (dbpath[0])
+	bu_file_delete(dbpath);
+    return ret;
+}
+
+static int
+test_detached_database_snapshot(void)
+{
+    return test_detached_database_snapshot_version(5) ||
+	test_detached_database_snapshot_version(4) ? 1 : 0;
+}
+
+static int
+test_rt_obb_proxy_provider_request_bounds(void)
+{
+    BRLObolLodRequest request = make_request("/proxy.bot");
+    BRLObolRtProxyProvider provider;
+
+    provider.proxyKind = BRLOBOL_LOD_PROXY_OBB;
+    provider.useRequestBounds = TRUE;
+    BRLObolLodResult result = brlobol_rt_proxy_provider_task(request,
+						      &provider);
+    if (result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
+	result.resultKind != BRLOBOL_LOD_RESULT_PROXY ||
+	result.proxy.kind != BRLOBOL_LOD_PROXY_OBB ||
+	!result.proxy.isValid() ||
+	result.proxy.bounds != request.bounds ||
+	result.proxy.center != SbVec3f(0.0f, 0.0f, 0.0f) ||
+	result.proxy.halfExtents != SbVec3f(1.0f, 1.0f, 1.0f)) {
+	printf("FAIL: LoD OBB proxy provider did not preserve the OBB stage from request bounds\n");
+	return 1;
+    }
+
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2050,12 +2384,17 @@ main(int argc, char **argv)
 	return 1;
     }
     bu_setprogname(argv[0]);
+    brlobol_init(NULL);
 
     if (test_dependency_order_and_cache_write())
 	return 1;
     if (test_filtered_result_drain())
 	return 1;
+    if (test_occurrence_result_coalescing())
+	return 1;
     if (test_generation_cancellation())
+	return 1;
+    if (test_stop_discards_undrained_state())
 	return 1;
     if (test_stale_result_rejection())
 	return 1;
@@ -2067,6 +2406,8 @@ main(int argc, char **argv)
 	return 1;
     if (test_queue_limits_and_pending_cancellation())
 	return 1;
+    if (test_large_pending_cancellation_and_generation_history())
+	return 1;
     if (test_debug_delay_cancellation())
 	return 1;
     if (test_active_request_duplicate_suppression())
@@ -2074,6 +2415,10 @@ main(int argc, char **argv)
     if (test_rt_source_full_detail_provider_task())
 	return 1;
     if (test_rt_mesh_provider_task())
+	return 1;
+    if (test_detached_database_snapshot())
+	return 1;
+    if (test_rt_obb_proxy_provider_request_bounds())
 	return 1;
 
     return 0;

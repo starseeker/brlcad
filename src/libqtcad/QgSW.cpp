@@ -39,11 +39,12 @@
 #include "QgLegacyViewContext.h"
 #include "qtcad/QgSW.h"
 
-QgSW::QgSW(QWidget *parent)
+QgSW::QgSW(QWidget *parent, BRLObolViewController *controller,
+    bool create_controller)
     : QWidget(parent)
 {
     d = new QgCanvasState();
-    qgcanvas_init_obol(*d, this, true);
+    qgcanvas_init_obol(*d, this, true, controller, create_controller);
     d->lmouse_mode = BV_ADJUST_SCALE;
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
@@ -60,6 +61,7 @@ QgSW::QgSW(QWidget *parent)
 
 QgSW::~QgSW()
 {
+	d->input.setEndpoint(NULL);
     qgcanvas_destroy_obol(*d);
     qg_legacy_view_local_free(d->local_v);
     d->local_v = nullptr;
@@ -90,6 +92,12 @@ void
 QgSW::setObolViewController(BRLObolViewController *controller)
 {
     qgcanvas_bind_obol_controller(*d, this, controller);
+}
+
+void
+QgSW::setObolInputEndpoint(struct brlobol_display_endpoint *endpoint)
+{
+	d->input.setEndpoint(endpoint);
 }
 
 int

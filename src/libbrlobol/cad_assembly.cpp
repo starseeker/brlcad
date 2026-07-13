@@ -52,6 +52,19 @@ cad_batch_collect_sources(SoNode *node,
 	cad_batch_collect_sources(group->getChild(i), sources);
 }
 
+static uint64_t
+cad_batch_instance_state_signature(const std::vector<obol::InstanceId> &ids)
+{
+    uint64_t signature = 1469598103934665603ULL;
+    for (const obol::InstanceId &id : ids) {
+	signature ^= id.w0;
+	signature *= 1099511628211ULL;
+	signature ^= id.w1;
+	signature *= 1099511628211ULL;
+    }
+    return signature ? signature : 1;
+}
+
 SoBRLCadAssembly::SoBRLCadAssembly(void)
 {
     SO_NODE_CONSTRUCTOR(SoBRLCadAssembly);
@@ -133,6 +146,10 @@ SoBRLCadRenderBatch::SoBRLCadRenderBatch(void) :
     assembly(new SoBRLCadAssembly),
     sourceRoot(NULL),
     cachedSourceSignature(0),
+    cachedStructureSignature(0),
+    cachedHiddenSignature(0),
+    cachedSelectedSignature(0),
+    cachedUnpickableSignature(0),
     batchValid(FALSE),
     softwareWireMode(SoCADViewState::SOFTWARE_WIRE_AUTO)
 {
@@ -164,6 +181,10 @@ SoBRLCadRenderBatch::setBatchSourceRoot(SoNode *root)
 	this->sourceRoot->unref();
     this->sourceRoot = root;
     this->cachedSourceSignature = 0;
+    this->cachedStructureSignature = 0;
+    this->cachedHiddenSignature = 0;
+    this->cachedSelectedSignature = 0;
+    this->cachedUnpickableSignature = 0;
     this->batchValid = FALSE;
     this->batchedSources.clear();
 }
@@ -186,48 +207,103 @@ SoBRLCadRenderBatch::syncBatch(const BRLObolViewLodState *viewState)
     SoNode *root = this->sourceRoot ? this->sourceRoot : this->getChild(0);
     std::vector<SoBRLDatabaseSource *> sources;
     cad_batch_collect_sources(root, sources);
+    /* A compact source already compiles its occurrences into one retained
+     * assembly.  Cross-source batching only pays for itself when it combines
+     * many independently compiled sources; decide that before collecting or
+     * copying any part geometry. */
+    if (sources.size() < 32) {
+	this->cachedSourceSignature = 0;
+	this->cachedStructureSignature = 0;
+	this->cachedHiddenSignature = 0;
+	this->cachedSelectedSignature = 0;
+	this->cachedUnpickableSignature = 0;
+	this->batchValid = FALSE;
+	this->batchedSources.clear();
+	return FALSE;
+    }
     uint64_t signature = 1469598103934665603ULL;
+    uint64_t structureSignature = signature;
     for (SoBRLDatabaseSource *source : sources) {
 	signature ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(source));
 	signature *= 1099511628211ULL;
 	signature ^= source->cadBatchRevision;
 	signature *= 1099511628211ULL;
+	structureSignature ^=
+	    source ? source->cadBatchStructureSignature() : 0;
+	structureSignature *= 1099511628211ULL;
 	const BRLObolViewLodState::CadPayload *payload =
 	    viewState ? viewState->findCad(source) : NULL;
-	signature ^= static_cast<uint64_t>(
-	    reinterpret_cast<uintptr_t>(payload));
+	signature ^= payload ? 1ULL : 0ULL;
 	signature *= 1099511628211ULL;
+	structureSignature ^= payload ? 1ULL : 0ULL;
+	structureSignature *= 1099511628211ULL;
     }
     signature ^= static_cast<uint64_t>(sources.size());
+    structureSignature ^= static_cast<uint64_t>(sources.size());
     if (signature == this->cachedSourceSignature)
 	return this->batchValid;
 
+    const SbBool structureChanged = !this->batchValid ||
+	structureSignature != this->cachedStructureSignature;
+
     BRLObolCadBatchBuildState state;
     state.assembly = this->assembly;
+    state.parts.reserve(sources.size());
+    state.partIds.reserve(sources.size());
+    state.instances.reserve(sources.size());
     this->batchedSources.clear();
-    this->assembly->beginUpdate();
-    this->assembly->clear();
-    this->assembly->clearSemanticMap();
+    if (structureChanged) {
+	this->assembly->beginUpdate();
+	this->assembly->clear();
+	this->assembly->clearSemanticMap();
+    }
     for (SoBRLDatabaseSource *source : sources) {
 	if (viewState && viewState->findCad(source))
 	    continue;
-	if (source && source->appendCadRenderBatch(&state))
+	if (source && source->appendCadRenderBatch(&state, structureChanged))
 	    this->batchedSources.insert(source);
     }
-    this->assembly->upsertParts(state.parts);
-    this->assembly->upsertInstances(state.instances);
-    this->assembly->setHiddenInstances(state.hiddenInstances);
-    this->assembly->setSelectedInstances(state.selectedInstances);
-    this->assembly->setUnpickableInstances(state.unpickableInstances);
+    if (structureChanged) {
+	this->assembly->upsertSharedParts(state.parts);
+	this->assembly->upsertInstances(state.instances);
+    } else {
+	std::vector<obol::InstanceStyleUpdate> styles;
+	styles.reserve(state.instances.size());
+	for (const obol::InstanceUpdate &instance : state.instances) {
+	    obol::InstanceStyleUpdate style;
+	    style.instance = instance.instance;
+	    style.style = instance.record.style;
+	    styles.push_back(style);
+	}
+	this->assembly->updateInstanceStyles(styles);
+    }
+    const uint64_t hiddenSignature =
+	cad_batch_instance_state_signature(state.hiddenInstances);
+    if (structureChanged || hiddenSignature != this->cachedHiddenSignature)
+	this->assembly->setHiddenInstances(state.hiddenInstances);
+    const uint64_t selectedSignature =
+	cad_batch_instance_state_signature(state.selectedInstances);
+    if (structureChanged || selectedSignature != this->cachedSelectedSignature)
+	this->assembly->setSelectedInstances(state.selectedInstances);
+    const uint64_t unpickableSignature =
+	cad_batch_instance_state_signature(state.unpickableInstances);
+    if (structureChanged ||
+	unpickableSignature != this->cachedUnpickableSignature)
+	this->assembly->setUnpickableInstances(state.unpickableInstances);
     if (state.shadedCount > 0 && state.wireCount > 0)
 	this->assembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
     else if (state.shadedCount > 0)
 	this->assembly->drawMode = SoCADAssembly::SHADED;
     else
 	this->assembly->drawMode = SoCADAssembly::WIREFRAME;
-    this->assembly->endUpdate();
+    if (structureChanged)
+	this->assembly->endUpdate();
 
     this->cachedSourceSignature = signature;
+    this->cachedStructureSignature = structureSignature;
+    this->cachedHiddenSignature = hiddenSignature;
+    this->cachedSelectedSignature = selectedSignature;
+    this->cachedUnpickableSignature = unpickableSignature;
     this->batchValid = this->batchedSources.size() >= 32 &&
 	this->assembly->instanceCount() > 0 ? TRUE : FALSE;
     return this->batchValid;

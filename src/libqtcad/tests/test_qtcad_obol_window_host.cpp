@@ -10,6 +10,9 @@
 #include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgQuadView.h"
 #include "qtcad/QgSession.h"
+#ifdef BRLCAD_OPENGL
+#  include "qtcad/QgGL.h"
+#endif
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
 
@@ -278,6 +281,23 @@ test_qtcad_factory_endpoint(void)
 	host->getController() == controller,
 	"Qt factory canvas borrows the endpoint controller");
 
+    struct brlobol_endpoint_property_value property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property.type = BRLOBOL_ENDPOINT_PROPERTY_STRING;
+    property.string_value = "Qt typed endpoint title";
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.title",
+	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	host->canvas()->canvasWidget()->windowTitle() ==
+	    QStringLiteral("Qt typed endpoint title"),
+	"Qt toplevel factory applies the typed title property");
+    property = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    property.bool_value = 1;
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.visible",
+	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	host->canvas()->canvasWidget()->isVisible(),
+	"Qt toplevel factory applies the typed visibility property");
+
     add_visible_obol_content(controller);
     CHECK(brlobol_display_endpoint_request_frame(endpoint, "qt-factory-test"),
 	"Qt factory queues endpoint frame request");
@@ -295,6 +315,12 @@ test_qtcad_factory_endpoint(void)
 	size == 80u * 60u * 4u,
 	"Qt software factory capture reports packed endpoint dimensions");
     bu_free(pixels, "Qt software factory capture");
+
+    property.bool_value = 0;
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.visible",
+	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	!host->canvas()->canvasWidget()->isVisible(),
+	"Qt typed visibility property hides the toplevel host");
 
     brlobol_display_endpoint_destroy(endpoint);
     return 0;
@@ -369,6 +395,55 @@ test_qtcad_embedded_factory_endpoint(void)
     brlobol_display_endpoint_destroy(endpoint);
     return 0;
 }
+
+#ifdef BRLCAD_OPENGL
+static int
+test_qtcad_gl_vsync_policy(void)
+{
+    const QString platform_name = QGuiApplication::platformName();
+    if (platform_name == QStringLiteral("offscreen") ||
+	platform_name == QStringLiteral("minimal"))
+	return 0;
+
+    struct brlobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_TOPLEVEL;
+    desc.width = 32;
+    desc.height = 24;
+    desc.device_pixel_ratio = 1.0;
+    desc.vsync = BRLOBOL_HOST_VSYNC_OFF;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_SYSTEM_GL |
+	BRLOBOL_HOST_CAP_PRESENT_VSYNC;
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint && brlobol_display_endpoint_render_engine_set(endpoint,
+	BRLOBOL_RENDER_ENGINE_HW) &&
+	brlobol_display_endpoint_host_open(endpoint, "qt-gl", &desc),
+	"Qt GL factory accepts an explicit construction-time vsync policy");
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
+	brlobol_display_endpoint_host(endpoint));
+    QgGL *canvas = host && host->canvas() ?
+	dynamic_cast<QgGL *>(host->canvas()) : NULL;
+    CHECK(canvas && canvas->format().swapInterval() == 0,
+	"Qt GL canvas applies disabled vsync before context creation");
+
+    struct brlobol_endpoint_property_value property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    property.bool_value = 1;
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.vsync",
+	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK,
+	"Qt GL host applies typed vsync while its context is unrealized");
+    property = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    CHECK(brlobol_display_endpoint_property_get(endpoint, "endpoint.vsync",
+	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK && property.bool_value &&
+	canvas->format().swapInterval() != 0,
+	"Qt GL host reports the applied typed vsync policy");
+    brlobol_display_endpoint_destroy(endpoint);
+    return 0;
+}
+#endif
 
 static int
 test_qtcad_quad_view_endpoint_association(void)
@@ -447,6 +522,10 @@ main(int argc, char **argv)
 	return 1;
     if (test_qtcad_embedded_factory_endpoint())
 	return 1;
+#ifdef BRLCAD_OPENGL
+    if (test_qtcad_gl_vsync_policy())
+	return 1;
+#endif
     if (test_qtcad_quad_view_endpoint_association())
 	return 1;
     if (test_qtcad_dm_open_command())

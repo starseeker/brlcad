@@ -18,6 +18,7 @@ set(
   image_display_util.cpp
   image_plane.cpp
   image_source.cpp
+  input.cpp
   init.cpp
   line_layer_overlay.cpp
   lod_realization.cpp
@@ -109,6 +110,7 @@ cmakefiles(
   image_display_util.h
   image_plane.cpp
   image_source.cpp
+  input.cpp
   init.cpp
   line_layer_overlay.cpp
   lod_realization.cpp

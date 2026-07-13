@@ -18,6 +18,8 @@
 #include "brlobol/vlist_shape.h"
 #include "performance_private.h"
 
+#include "raytrace.h"
+
 #include <Inventor/SbName.h>
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
@@ -342,8 +344,33 @@ count_scene_groups_recursive(const SoGroup *group)
     return count;
 }
 
+static void
+repository_sources_recursive(SoGroup *group,
+	BRLObolRealizationRepository *repository, bool release)
+{
+    if (!group || !repository)
+	return;
+    for (int i = 0; i < group->getNumChildren(); i++) {
+	SoNode *node = group->getChild(i);
+	if (!node)
+	    continue;
+	if (node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	    SoBRLDatabaseSource *source =
+		static_cast<SoBRLDatabaseSource *>(node);
+	    if (release)
+		repository->releaseSource(source);
+	    else
+		repository->seedSource(source);
+	}
+	if (node->isOfType(SoGroup::getClassTypeId()))
+	    repository_sources_recursive(static_cast<SoGroup *>(node),
+		repository, release);
+    }
+}
+
 static int
-clear_database_sources_recursive(SoGroup *group)
+clear_database_sources_recursive(SoGroup *group,
+	BRLObolRealizationRepository *repository)
 {
     if (!group)
 	return 0;
@@ -358,13 +385,15 @@ clear_database_sources_recursive(SoGroup *group)
 		static_cast<SoBRLDatabaseSource *>(node);
 	    if (source->auxiliarySource.getValue())
 		continue;
+	    if (repository)
+		repository->releaseSource(source);
 	    group->removeChild(i);
 	    removed++;
 	    continue;
 	}
 	if (node->isOfType(SoGroup::getClassTypeId()))
 	    removed += clear_database_sources_recursive(
-			   static_cast<SoGroup *>(node));
+			   static_cast<SoGroup *>(node), repository);
     }
     return removed;
 }
@@ -1074,7 +1103,8 @@ scene_shape_owner_source_instance_key(const SoNode *node)
 
 static int
 scene_group_erase_nested_subpath(SoGroup *parent,
-				 const std::vector<std::string> &components)
+				 const std::vector<std::string> &components,
+				 BRLObolRealizationRepository *repository)
 {
     if (!parent || components.empty())
 	return 0;
@@ -1091,6 +1121,7 @@ scene_group_erase_nested_subpath(SoGroup *parent,
     if (!target)
 	return 0;
 
+    repository_sources_recursive(target, repository, true);
     current->removeChild(target);
     return 1;
 }
@@ -1163,12 +1194,12 @@ SoBRLSceneController::SoBRLSceneController(void) :
     mutationBatchDepth(0),
     mutationBatchStructuralRevisionPending(FALSE),
     mutationBatchFrameRevisionPending(FALSE),
-    compactCadRealizationEnabled(FALSE),
     databaseSourceIndexValid(FALSE),
     lastVisitedSourceCount(0),
     lastRealizedSourceCount(0),
     lastFailedSourceCount(0),
-    lastDiagnostics("")
+    lastDiagnostics(""),
+    realizationRepository(std::make_shared<BRLObolRealizationRepository>())
 {
 }
 
@@ -1179,12 +1210,12 @@ SoBRLSceneController::SoBRLSceneController(SoNode *sceneRoot) :
     mutationBatchDepth(0),
     mutationBatchStructuralRevisionPending(FALSE),
     mutationBatchFrameRevisionPending(FALSE),
-    compactCadRealizationEnabled(FALSE),
     databaseSourceIndexValid(FALSE),
     lastVisitedSourceCount(0),
     lastRealizedSourceCount(0),
     lastFailedSourceCount(0),
-    lastDiagnostics("")
+    lastDiagnostics(""),
+    realizationRepository(std::make_shared<BRLObolRealizationRepository>())
 {
     this->setSceneRoot(sceneRoot);
 }
@@ -1200,13 +1231,62 @@ SoBRLSceneController::setSceneRoot(SoNode *sceneRoot)
     if (this->root == sceneRoot)
 	return;
 
+    SoGroup *oldGroup = scene_root_group(this->root);
+    if (oldGroup && this->realizationRepository)
+	repository_sources_recursive(oldGroup,
+	    this->realizationRepository.get(), true);
     if (sceneRoot)
 	sceneRoot->ref();
     if (this->root)
 	this->root->unref();
     this->root = sceneRoot;
+    SoGroup *newGroup = scene_root_group(this->root);
+    if (newGroup && this->realizationRepository)
+	repository_sources_recursive(newGroup,
+	    this->realizationRepository.get(), false);
     this->clearDatabaseSourceIndex();
     this->advanceStructuralRevision();
+}
+
+void
+SoBRLSceneController::shareRealizationRepository(
+    SoBRLSceneController *source)
+{
+    if (!source || source == this || !source->realizationRepository ||
+	this->realizationRepository == source->realizationRepository)
+	return;
+    std::shared_ptr<BRLObolRealizationRepository> repository =
+	source->realizationRepository;
+    SoGroup *group = scene_root_group(this->root);
+    if (group)
+	repository_sources_recursive(group,
+	    this->realizationRepository.get(), true);
+    this->realizationRepository = repository;
+    if (group)
+	repository_sources_recursive(group,
+	    this->realizationRepository.get(), false);
+}
+
+void
+SoBRLSceneController::clearRealizationRepository(void)
+{
+    if (this->realizationRepository)
+	this->realizationRepository->clear();
+}
+
+void
+SoBRLSceneController::invalidateRealizationViewVariants(void)
+{
+    if (this->realizationRepository)
+	this->realizationRepository->invalidateViewVariants();
+}
+
+void
+SoBRLSceneController::renameRealizationObject(
+    const char *oldName, const char *newName)
+{
+    if (this->realizationRepository)
+	this->realizationRepository->renameObject(oldName, newName);
 }
 
 SoNode *
@@ -1225,34 +1305,6 @@ uint64_t
 SoBRLSceneController::getFrameRevision(void) const
 {
     return this->frameRevision;
-}
-
-void
-SoBRLSceneController::setCompactCadRealizationEnabled(SbBool enabled)
-{
-    const SbBool next = enabled ? TRUE : FALSE;
-    if (this->compactCadRealizationEnabled == next)
-	return;
-
-    this->compactCadRealizationEnabled = next;
-    if (next)
-	return;
-
-    if (!this->databaseSourceIndexValid)
-	this->rebuildDatabaseSourceIndex();
-    int demoted = 0;
-    for (SoBRLDatabaseSource *source : this->databaseSourceOrder) {
-	if (source)
-	    demoted += source->demoteCompactGeometry();
-    }
-    if (demoted > 0)
-	this->advanceFrameRevision();
-}
-
-SbBool
-SoBRLSceneController::getCompactCadRealizationEnabled(void) const
-{
-    return this->compactCadRealizationEnabled;
 }
 
 SbBool
@@ -1477,45 +1529,16 @@ SoBRLSceneController::realizePending(void)
 	return FALSE;
 
     SoBRLRealizeAction action;
-    action.setCompactCadRealizationEnabled(this->compactCadRealizationEnabled);
+    action.setRealizationRepository(this->realizationRepository.get());
+    action.setRetainRealizationCache(TRUE);
     action.apply(this->root);
     this->lastVisitedSourceCount = action.getVisitedSourceCount();
     this->lastRealizedSourceCount = action.getRealizedSourceCount();
     this->lastFailedSourceCount = action.getFailedSourceCount();
     this->lastDiagnostics = action.getDiagnostics();
 
-    size_t compactedSourceCount = 0;
-    if (this->compactCadRealizationEnabled &&
-	this->lastFailedSourceCount == 0) {
-	if (!this->databaseSourceIndexValid)
-	    this->rebuildDatabaseSourceIndex();
-	for (size_t i = 0; i < this->databaseSourceOrder.size(); i++) {
-	    SoBRLDatabaseSource *source = this->databaseSourceOrder[i];
-	    if (!source || source->hasCompactInstanceIndex())
-		continue;
-	    if (source->compactRealizedGeometry() > 0)
-		compactedSourceCount++;
-	}
-    }
-
-    size_t demotedLodSourceCount = 0;
-    if (this->compactCadRealizationEnabled &&
-	this->lastFailedSourceCount == 0) {
-	if (!this->databaseSourceIndexValid)
-	    this->rebuildDatabaseSourceIndex();
-	for (SoBRLDatabaseSource *source : this->databaseSourceOrder) {
-	    if (!source || !source->hasCompactInstanceIndex() ||
-		source->getCompactInstanceCount() <= 1 ||
-		!source->realizationViewDependent.getValue())
-		continue;
-	    if (source->demoteCompactGeometry() > 0)
-		demotedLodSourceCount++;
-	}
-    }
-
     if (this->lastRealizedSourceCount > 0 ||
-	this->lastFailedSourceCount > 0 ||
-	compactedSourceCount > 0 || demotedLodSourceCount > 0)
+	this->lastFailedSourceCount > 0)
 	this->advanceFrameRevision();
     return this->lastFailedSourceCount == 0;
 }
@@ -1815,11 +1838,17 @@ SoBRLSceneController::appendChildToGroup(const char *groupPath,
 	return 0;
 
     group->addChild(child);
-    if (child->isOfType(SoBRLDatabaseSource::getClassTypeId()))
-	this->indexDatabaseSource(static_cast<SoBRLDatabaseSource *>(child),
-				  group);
-    else if (child->isOfType(SoGroup::getClassTypeId()))
+    if (child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(child);
+	this->indexDatabaseSource(source, group);
+	if (this->realizationRepository)
+	    this->realizationRepository->seedSource(source);
+    } else if (child->isOfType(SoGroup::getClassTypeId())) {
 	this->clearDatabaseSourceIndex();
+	repository_sources_recursive(static_cast<SoGroup *>(child),
+	    this->realizationRepository.get(), false);
+    }
     this->advanceStructuralRevision();
     return 1;
 }
@@ -1839,10 +1868,17 @@ SoBRLSceneController::removeChildFromGroup(const char *groupPath,
     if (childIndex < 0)
 	return 0;
 
-    if (child->isOfType(SoBRLDatabaseSource::getClassTypeId()))
-	this->unindexDatabaseSource(static_cast<SoBRLDatabaseSource *>(child));
-    else if (child->isOfType(SoGroup::getClassTypeId()))
+    if (child->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *source =
+	    static_cast<SoBRLDatabaseSource *>(child);
+	if (this->realizationRepository)
+	    this->realizationRepository->releaseSource(source);
+	this->unindexDatabaseSource(source);
+    } else if (child->isOfType(SoGroup::getClassTypeId())) {
+	repository_sources_recursive(static_cast<SoGroup *>(child),
+	    this->realizationRepository.get(), true);
 	this->clearDatabaseSourceIndex();
+    }
     group->removeChild(childIndex);
     this->advanceStructuralRevision();
     return 1;
@@ -1861,7 +1897,8 @@ SoBRLSceneController::eraseGroupSubpath(const char *parentGroupPath,
     if (components.empty())
 	return 0;
 
-    const int erased = scene_group_erase_nested_subpath(parent, components);
+    const int erased = scene_group_erase_nested_subpath(parent, components,
+	this->realizationRepository.get());
     if (erased > 0) {
 	this->clearDatabaseSourceIndex();
 	this->advanceStructuralRevision();
@@ -1892,6 +1929,8 @@ SoBRLSceneController::removeGroup(const char *groupPath)
     if (!target)
 	return 0;
 
+    repository_sources_recursive(target, this->realizationRepository.get(),
+	true);
     this->clearDatabaseSourceIndex();
     parent->removeChild(target);
     this->advanceStructuralRevision();
@@ -1909,6 +1948,8 @@ SoBRLSceneController::clearGroup(const char *groupPath)
     if (removed <= 0)
 	return 0;
 
+    repository_sources_recursive(group, this->realizationRepository.get(),
+	true);
     this->clearDatabaseSourceIndex();
     group->removeAllChildren();
     this->advanceStructuralRevision();
@@ -2769,6 +2810,8 @@ SoBRLSceneController::renameDatabaseSourceInstance(
     }
     if (conflict && conflict != source && conflictParent &&
 	conflictIndex >= 0) {
+	if (this->realizationRepository)
+	    this->realizationRepository->releaseSource(conflict);
 	this->unindexDatabaseSource(conflict);
 	conflictParent->removeChild(conflictIndex);
     }
@@ -3197,6 +3240,24 @@ SoBRLSceneController::markDatabaseSourceInstanceStale(
     if (!staleReason)
 	staleReason = SoBRLDatabaseSource::STALE_SOURCE;
 
+    if (this->realizationRepository) {
+	if (staleReason & (SoBRLDatabaseSource::STALE_DATABASE |
+		SoBRLDatabaseSource::STALE_INPUTS |
+		SoBRLDatabaseSource::STALE_TESSELLATION)) {
+	    this->realizationRepository->clear();
+	} else if (staleReason & SoBRLDatabaseSource::STALE_VIEW) {
+	    this->realizationRepository->invalidateViewVariants();
+	} else if (staleReason & SoBRLDatabaseSource::STALE_SOURCE) {
+	    const char *path = source->path.getValue().getString();
+	    const char *name = path ? strrchr(path, '/') : NULL;
+	    name = name && name[1] ? name + 1 : path;
+	    struct directory *dp = source->getDatabase() && name && name[0] ?
+		db_lookup(source->getDatabase(), name, LOOKUP_QUIET) : NULL;
+	    if (dp && !(dp->d_flags & RT_DIR_COMB))
+		this->realizationRepository->invalidateObject(name);
+	}
+    }
+
     uint32_t nextSourceRevision = source->sourceRevision.getValue();
     if (staleReason & (SoBRLDatabaseSource::STALE_SOURCE |
 		       SoBRLDatabaseSource::STALE_DATABASE))
@@ -3217,6 +3278,35 @@ SoBRLSceneController::markDatabaseSourceInstanceStale(
     source->markStale(staleReason);
     this->advanceFrameRevision();
     return 1;
+}
+
+int
+SoBRLSceneController::refreshDatabaseSourceInstanceObject(
+    const char *sourceInstanceKey, const char *objectPath,
+    uint32_t sourceRevision)
+{
+    SoBRLDatabaseSource *source =
+	this->findDatabaseSourceInstance(sourceInstanceKey);
+    if (!source)
+	source = this->findDatabaseSource(sourceInstanceKey);
+    if (!source)
+	return -1;
+    if (this->realizationRepository && objectPath && objectPath[0]) {
+	const char *name = strrchr(objectPath, '/');
+	name = name && name[1] ? name + 1 : objectPath;
+	struct directory *dp = source->getDatabase() && name[0] ?
+	    db_lookup(source->getDatabase(), name, LOOKUP_QUIET) : NULL;
+	if (!dp || !(dp->d_flags & RT_DIR_COMB))
+	    this->realizationRepository->invalidateObject(name);
+    }
+    const int changed = source->refreshCompactObjectGeometry(objectPath,
+	sourceRevision);
+    if (changed > 0) {
+	if (this->realizationRepository)
+	    this->realizationRepository->seedSource(source);
+	this->advanceFrameRevision();
+    }
+    return changed;
 }
 
 int
@@ -3467,8 +3557,13 @@ SoBRLSceneController::removeDatabaseSourceInstance(
 	return 0;
 
     SoNode *node = sourceParent->getChild(childIndex);
-    if (node && node->isOfType(SoBRLDatabaseSource::getClassTypeId()))
-	this->unindexDatabaseSource(static_cast<SoBRLDatabaseSource *>(node));
+    if (node && node->isOfType(SoBRLDatabaseSource::getClassTypeId())) {
+	SoBRLDatabaseSource *removedSource =
+	    static_cast<SoBRLDatabaseSource *>(node);
+	if (this->realizationRepository)
+	    this->realizationRepository->releaseSource(removedSource);
+	this->unindexDatabaseSource(removedSource);
+    }
     sourceParent->removeChild(childIndex);
     this->advanceStructuralRevision();
     return 1;
@@ -3481,7 +3576,8 @@ SoBRLSceneController::clearDatabaseSources(void)
 	return -1;
 
     SoGroup *group = static_cast<SoGroup *>(this->root);
-    int removed = clear_database_sources_recursive(group);
+    int removed = clear_database_sources_recursive(group,
+	this->realizationRepository.get());
     if (removed > 0) {
 	this->clearDatabaseSourceIndex();
 	this->advanceStructuralRevision();
@@ -4596,8 +4692,9 @@ scene_database_source_uses_realized_placement(
 	 SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL))
 	return FALSE;
 
-    return (source->getRealizedShapeCount() > 0 ||
-	    source->getRealizedMeshCount() > 0 ||
+
+    return (source->hasRealizedWireGeometry() ||
+	    source->hasRealizedMeshGeometry() ||
 	    source->getRealizedMaterialObjectCount() > 0) ? TRUE : FALSE;
 }
 
@@ -4714,10 +4811,11 @@ scene_autoview_padded_bounds(const SbBox3f &bounds)
     if (bmax[2] - bmin[2] > size)
 	size = bmax[2] - bmin[2];
 
-    padded.extendBy(SbVec3f(center[0] - size, center[1] - size,
-			    center[2] - size));
-    padded.extendBy(SbVec3f(center[0] + size, center[1] + size,
-			    center[2] + size));
+    const float halfSize = 0.5f * size;
+    padded.extendBy(SbVec3f(center[0] - halfSize, center[1] - halfSize,
+			    center[2] - halfSize));
+    padded.extendBy(SbVec3f(center[0] + halfSize, center[1] + halfSize,
+			    center[2] + halfSize));
     return padded;
 }
 
@@ -4810,6 +4908,21 @@ SoBRLSceneController::getSceneSubtreeBounds(const char *nodePath,
     const char *path = nodePath ? nodePath : "/";
     const char *normalizedPath = skip_leading_slash(path);
     const SoNode *node = NULL;
+
+    SbBool compactBoundsValid = FALSE;
+    for (int i = 0; i < this->getDatabaseSourceCount(); i++) {
+	const SoBRLDatabaseSource *source = this->getDatabaseSource(i);
+	if (!source || !source->hasCompactInstanceIndex() ||
+	    (!includeOverlays && source->auxiliarySource.getValue()))
+	    continue;
+	SbBox3f sourceBounds;
+	if (source->getCompactInstanceBoundsForPath(path, TRUE, sourceBounds)) {
+	    bounds.extendBy(sourceBounds);
+	    compactBoundsValid = TRUE;
+	}
+    }
+    if (compactBoundsValid)
+	return TRUE;
 
     if (!path[0] || !normalizedPath[0])
 	node = this->root;

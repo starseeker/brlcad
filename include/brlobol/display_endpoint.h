@@ -11,6 +11,7 @@
 
 #include "brlobol/defines.h"
 #include "brlobol/host_factory.h"
+#include "brlobol/input.h"
 
 struct brlobol_display_endpoint;
 typedef struct brlobol_display_endpoint brlobol_display_endpoint_t;
@@ -147,6 +148,32 @@ brlobol_display_endpoint_request_frame(brlobol_display_endpoint_t *endpoint,
 BRLOBOL_EXPORT int
 brlobol_display_endpoint_resize(brlobol_display_endpoint_t *endpoint,
 	unsigned int width, unsigned int height, double device_pixel_ratio);
+
+/** Set an endpoint-local input profile.  A NULL profile restores BRL-CAD's
+ * standard view bindings. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_input_profile_set(
+	brlobol_display_endpoint_t *endpoint,
+	const BRLObolInputProfile *profile);
+
+/** Set an endpoint-local action handler.  A NULL handler leaves events
+ * unhandled so the embedding application may retain its native bindings. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_input_action_handler_set(
+	brlobol_display_endpoint_t *endpoint,
+	BRLObolInputActionHandler handler, void *user_data);
+
+/** Clear an action handler only when it is still owned by the specified
+ * adapter.  This protects application-installed handlers during teardown. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_input_action_handler_clear_if(
+	brlobol_display_endpoint_t *endpoint,
+	BRLObolInputActionHandler handler, void *user_data);
+
+/** Match and deliver a normalized event using this endpoint's profile. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_input_dispatch(brlobol_display_endpoint_t *endpoint,
+	const BRLObolInputEvent *event);
 
 /** Capture RGB/RGBA pixels in bottom-left row order.  A successful call
  * returns storage freed with bu_free. */

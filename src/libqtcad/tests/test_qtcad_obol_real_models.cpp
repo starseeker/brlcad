@@ -188,6 +188,12 @@ timing_enabled()
     return BU_STR_EQUAL(getenv("BRLOBOL_QTCAD_REAL_MODEL_TIMING"), "1");
 }
 
+static int
+system_gl_enabled()
+{
+    return BU_STR_EQUAL(getenv("BRLOBOL_QTCAD_REAL_MODEL_GL"), "1");
+}
+
 static void
 print_timing(const struct model_case &testCase, const char *phase, int64_t start)
 {
@@ -265,6 +271,28 @@ path_has_component_suffix(const char *path, const char *suffix)
 }
 
 static int
+summary_from_compact_instance(SoBRLDatabaseSource *source,
+	const BRLObolCompactInstanceSummary &instance,
+	BRLObolDatabaseSourceSummary &summary)
+{
+    if (!source || !instance.valid || !source->getSummary(summary) ||
+	!summary.valid)
+	return 0;
+
+    summary.path = instance.path;
+    summary.materialColorValid = instance.materialColorValid;
+    summary.materialColor = instance.materialColor;
+    summary.databaseMetadataValid = TRUE;
+    summary.databaseRegionId = instance.regionId;
+    summary.databaseAirCode = instance.airCode;
+    summary.databaseMaterialId = instance.materialId;
+    summary.databaseLos = instance.los;
+    summary.databaseMaterialColorValid = instance.materialColorValid;
+    summary.databaseMaterialColor = instance.materialColor;
+    return 1;
+}
+
+static int
 source_material_matches_rgb(const BRLObolDatabaseSourceSummary &summary,
 	const unsigned char rgb[3])
 {
@@ -325,11 +353,41 @@ all_source_materials_match_db_colors(struct ged *gedp,
 	return 0;
 
     const int sourceCount = controller->getDatabaseSourceCount();
+    int materialCount = 0;
     for (int i = 0; i < sourceCount; i++) {
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
 	BRLObolDatabaseSourceSummary summary;
 	if (!source || !source->getSummary(summary) || !summary.valid)
 	    return 0;
+	if (source->hasCompactInstanceIndex()) {
+	    const int instanceCount = source->getCompactInstanceCount();
+	    for (int j = 0; j < instanceCount; j++) {
+		BRLObolCompactInstanceHandle handle;
+		BRLObolCompactInstanceSummary instance;
+		if (!source->getCompactInstanceHandle(j, handle) ||
+		    !source->getCompactInstanceSummary(handle, instance) ||
+		    !summary_from_compact_instance(source, instance, summary))
+		    return 0;
+		SbColor expected;
+		if (!brlobol_database_source_path_material_color(gedp->dbip,
+			summary.path.getString(), expected) ||
+		    !summary.materialColorValid ||
+		    fabsf(summary.materialColor[0] - expected[0]) >= 1.0e-5f ||
+		    fabsf(summary.materialColor[1] - expected[1]) >= 1.0e-5f ||
+		    fabsf(summary.materialColor[2] - expected[2]) >= 1.0e-5f) {
+		    fprintf(stderr,
+			"material sweep/reference mismatch: source=%d path=%s "
+			"valid=%d actual=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
+			i, summary.path.getString(),
+			(int)summary.materialColorValid,
+			summary.materialColor[0], summary.materialColor[1],
+			summary.materialColor[2], expected[0], expected[1], expected[2]);
+		    return 0;
+		}
+		materialCount++;
+	    }
+	    continue;
+	}
 
 	SbColor expected;
 	if (!brlobol_database_source_path_material_color(gedp->dbip,
@@ -347,8 +405,9 @@ all_source_materials_match_db_colors(struct ged *gedp,
 		summary.materialColor[2], expected[0], expected[1], expected[2]);
 	    return 0;
 	}
+	materialCount++;
     }
-    return sourceCount > 0;
+    return materialCount > 0;
 }
 
 static SoBRLDatabaseSource *
@@ -365,6 +424,20 @@ find_source_by_path_suffix(SoBRLSceneController *controller,
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
 	if (!source || !source->getSummary(summary) || !summary.valid)
 	    continue;
+	if (source->hasCompactInstanceIndex()) {
+	    const int instanceCount = source->getCompactInstanceCount();
+	    for (int j = 0; j < instanceCount; j++) {
+		BRLObolCompactInstanceHandle handle;
+		BRLObolCompactInstanceSummary instance;
+		if (!source->getCompactInstanceHandle(j, handle) ||
+		    !source->getCompactInstanceSummary(handle, instance) ||
+		    !summary_from_compact_instance(source, instance, summary))
+		    continue;
+		if (path_has_component_suffix(summary.path.getString(), suffix))
+		    return source;
+	    }
+	    continue;
+	}
 	if (path_has_component_suffix(summary.path.getString(), suffix))
 	    return source;
     }
@@ -615,8 +688,12 @@ sync_draw_case(const struct model_case &testCase)
 	return 0;
     }
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, system_gl_enabled() ? QgView_GL : QgView_SW);
     view.resize(220, 170);
+    if (system_gl_enabled()) {
+	view.show();
+	QCoreApplication::processEvents();
+    }
     qg_legacy_view_ged_active_set(gedp, view.view());
     if (!ged_view_context_display_endpoint_set(
 	    qg_legacy_view_to_context(view.view()), view.displayEndpoint(), 0)) {
@@ -631,6 +708,10 @@ sync_draw_case(const struct model_case &testCase)
     }
     controller->setViewportSize(220, 170);
     controller->clearDatabaseSources();
+    controller->requestRender("real-model-empty-baseline");
+    QCoreApplication::processEvents();
+    QImage emptyImage;
+    view.get_viewport_image(emptyImage);
 
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
@@ -662,7 +743,12 @@ sync_draw_case(const struct model_case &testCase)
     /* QgView endpoints use the same deferred publication boundary as the
      * interactive canvas.  Drain it explicitly before inspecting geometry. */
     (void)controller->realizePending();
-    const int sourceCount = controller->getDatabaseSourceCount();
+    BRLObolViewController *geometryController =
+	ged_draw_obol_controller(gedp);
+    if (!geometryController)
+	geometryController = controller;
+    (void)geometryController->realizePending();
+    const int sourceCount = geometryController->getDatabaseSourceCount();
     if (!changed || sourceCount <= 0) {
 	fprintf(stderr, "%s:%s did not create Obol database sources\n",
 		testCase.file, testCase.root);
@@ -673,7 +759,7 @@ sync_draw_case(const struct model_case &testCase)
     int realizedSources = 0;
     int modeMismatches = 0;
     phaseStart = bu_gettime();
-    struct geometry_counts counts = realized_geometry_counts(controller,
+    struct geometry_counts counts = realized_geometry_counts(geometryController,
 	testCase.obolDrawMode, &realizedSources, &modeMismatches);
     if (realizedSources <= 0 || modeMismatches > 0) {
 	fprintf(stderr,
@@ -714,11 +800,18 @@ sync_draw_case(const struct model_case &testCase)
     QImage visibleImage;
     view.get_viewport_image(visibleImage);
     int litPixels = lit_pixel_count(visibleImage);
+    QImage comparisonEmpty = emptyImage.size() == visibleImage.size() ?
+	emptyImage : emptyImage.scaled(visibleImage.size(), Qt::IgnoreAspectRatio,
+	    Qt::SmoothTransformation);
+    int visibleByteDiff = image_byte_diff(comparisonEmpty, visibleImage);
+    fastf_t visibleSsim = image_ssim(comparisonEmpty, visibleImage);
     print_timing(testCase, "render-readback", phaseStart);
-    if (visibleImage.isNull() || litPixels < 20) {
-	fprintf(stderr, "%s:%s qtcad Obol capture too dark: width=%d height=%d lit=%d\n",
+    if (visibleImage.isNull() || litPixels < 20 || visibleByteDiff < 100 ||
+	visibleSsim >= 0.9999) {
+	fprintf(stderr, "%s:%s qtcad Obol capture did not show geometry: width=%d height=%d lit=%d diff=%d ssim=%.9g\n",
 		testCase.file, testCase.root,
-		visibleImage.width(), visibleImage.height(), litPixels);
+		visibleImage.width(), visibleImage.height(), litPixels,
+		visibleByteDiff, visibleSsim);
 	ged_close(gedp);
 	return 0;
     }
@@ -769,11 +862,11 @@ sync_draw_case(const struct model_case &testCase)
     int redrawByteDiff = image_byte_diff(redrawnImage, secondRedrawnImage);
     int redrawLitPixels = lit_pixel_count(secondRedrawnImage);
     int maxRasterDiff = redrawnImage.width() * redrawnImage.height() * 4 / 100;
-    struct geometry_counts redrawCounts = realized_geometry_counts(controller,
+    struct geometry_counts redrawCounts = realized_geometry_counts(geometryController,
 	testCase.obolDrawMode, NULL, NULL);
     if (redrawRet < 0 || secondRedrawRet < 0 ||
 	redrawUs > 10000000 || secondRedrawUs > 10000000 ||
-	controller->getDatabaseSourceCount() != sourceCount ||
+	geometryController->getDatabaseSourceCount() != sourceCount ||
 	redrawByteDiff < 0 || redrawByteDiff > maxRasterDiff ||
 	redrawCounts.shapeCount != counts.shapeCount ||
 	redrawCounts.segmentCount != counts.segmentCount ||
@@ -784,7 +877,7 @@ sync_draw_case(const struct model_case &testCase)
 		testCase.file, testCase.root, redrawRet, secondRedrawRet,
 		(double)redrawUs / 1000000.0,
 		(double)secondRedrawUs / 1000000.0,
-		controller->getDatabaseSourceCount(), sourceCount,
+	geometryController->getDatabaseSourceCount(), sourceCount,
 		redrawByteDiff, maxRasterDiff, redrawSsim,
 		redrawLitPixels, lit_pixel_count(redrawnImage),
 		redrawCounts.shapeCount, redrawCounts.segmentCount,
@@ -949,6 +1042,18 @@ exercise_m35_color_table_mutation(void)
 		canary ? canary_summary.materialColor[0] : 0.0f,
 		canary ? canary_summary.materialColor[1] : 0.0f,
 		canary ? canary_summary.materialColor[2] : 0.0f);
+	ged_close(gedp);
+	bu_file_delete(tmp_db);
+	return 0;
+    }
+
+    /* Aggregate metadata describes the draw root, not every compact leaf.
+     * A root fallback must not erase the individual full-path colors. */
+    (void)canary->setDatabaseMetadataState(TRUE, 0, 0, 0, 0, TRUE,
+	SbColor(1.0f, 1.0f, 1.0f), SbString("aggregate-test"));
+    if (!all_source_materials_match_db_colors(gedp, source_controller)) {
+	fprintf(stderr,
+		"m35 aggregate metadata overrode compact occurrence colors\n");
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
 	return 0;

@@ -36,6 +36,7 @@
 #include <memory>
 #include <sstream>
 #include <string.h>
+#include <utility>
 #include <vector>
 
 #include <Inventor/SbName.h>
@@ -64,6 +65,18 @@ static std::vector<SoBRLDatabaseSource *> controller_render_database_source_root
     const BRLObolViewController *controller);
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
     const BRLObolViewController *controller);
+
+static void
+controller_initialize_render_action(SoRenderManager *manager)
+{
+    SoGLRenderAction *action = manager ? manager->getGLRenderAction() : NULL;
+    if (!action)
+	return;
+    SoDB::ContextManager *contextManager = SoDB::getContextManager();
+    if (contextManager)
+	action->setContextManager(contextManager);
+    action->setCacheContext(SoGLCacheContextElement::getUniqueCacheContext());
+}
 
 struct ControllerGLFunctions {
     SoDB::ContextManager *manager = NULL;
@@ -130,6 +143,7 @@ controller_system_gl_functions(void)
 
 BRLObolProgressiveOptions::BRLObolProgressiveOptions(void) :
     maxLodResults(8),
+    maxLodApplyMicroseconds(4000),
     maxProviders(0),
     maxSources(4),
     maxChildrenPerSource(64),
@@ -933,6 +947,8 @@ BRLObolViewController::BRLObolViewController(void) :
     clipMaximum(BV_VIEW_MAX),
     renderRequested(FALSE),
     renderReason(""),
+    frameRequestCallback(NULL),
+    frameRequestUserData(NULL),
     lastRenderTimeNanoseconds(0),
     smoothedRenderTimeNanoseconds(0),
     progressiveProviders(),
@@ -944,6 +960,11 @@ BRLObolViewController::BRLObolViewController(void) :
     lodResultsPending(0),
     lodAutoSubmit(FALSE),
     lodActiveGeneration(0),
+    lodSubmissionSourceIndex(0),
+    lodSubmissionEntryOffset(0),
+    lodSubmissionPending(FALSE),
+    lodSubmissionRefreshMissing(TRUE),
+    lodSubmissionReset(0),
     lodLastSubmittedViewRevision(0),
     lodLastSubmittedPolicyRevision(0),
     lodLastSubmittedSourceSignature(""),
@@ -982,8 +1003,7 @@ BRLObolViewController::BRLObolViewController(void) :
     batch->ref();
     batch->addChild(this->viewport->getRoot());
     this->renderBatchRoot = batch;
-    this->renderManager->getGLRenderAction()->setCacheContext(
-	SoGLCacheContextElement::getUniqueCacheContext());
+    controller_initialize_render_action(this->renderManager);
     controller_configure_render_environment(this->viewport);
 }
 
@@ -1006,6 +1026,8 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     clipMaximum(BV_VIEW_MAX),
     renderRequested(FALSE),
     renderReason(""),
+    frameRequestCallback(NULL),
+    frameRequestUserData(NULL),
     lastRenderTimeNanoseconds(0),
     smoothedRenderTimeNanoseconds(0),
     progressiveProviders(),
@@ -1017,6 +1039,11 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     lodResultsPending(0),
     lodAutoSubmit(FALSE),
     lodActiveGeneration(0),
+    lodSubmissionSourceIndex(0),
+    lodSubmissionEntryOffset(0),
+    lodSubmissionPending(FALSE),
+    lodSubmissionRefreshMissing(TRUE),
+    lodSubmissionReset(0),
     lodLastSubmittedViewRevision(0),
     lodLastSubmittedPolicyRevision(0),
     lodLastSubmittedSourceSignature(""),
@@ -1055,8 +1082,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     batch->ref();
     batch->addChild(this->viewport->getRoot());
     this->renderBatchRoot = batch;
-    this->renderManager->getGLRenderAction()->setCacheContext(
-	SoGLCacheContextElement::getUniqueCacheContext());
+    controller_initialize_render_action(this->renderManager);
     controller_configure_render_environment(this->viewport);
     this->setSceneRoot(root);
     this->setCamera(camera);
@@ -1783,6 +1809,39 @@ BRLObolViewController::requestRender(const char *reason)
 }
 
 void
+BRLObolViewController::setFrameRequestCallback(
+    BRLObolFrameRequestCallback callback, void *userData)
+{
+    std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+    this->frameRequestCallback = callback;
+    this->frameRequestUserData = callback ? userData : NULL;
+}
+
+void
+BRLObolViewController::clearFrameRequestCallback(void *userData)
+{
+    std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+    if (this->frameRequestUserData != userData)
+	return;
+    this->frameRequestCallback = NULL;
+    this->frameRequestUserData = NULL;
+}
+
+void
+BRLObolViewController::notifyFrameRequest(const char *reason)
+{
+    BRLObolFrameRequestCallback callback = NULL;
+    void *userData = NULL;
+    {
+	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	callback = this->frameRequestCallback;
+	userData = this->frameRequestUserData;
+    }
+    if (callback)
+	(*callback)(userData, reason ? reason : "");
+}
+
+void
 BRLObolViewController::clearRenderRequest(void)
 {
     this->renderRequested = FALSE;
@@ -2080,7 +2139,8 @@ BRLObolViewController::advanceProgressiveWork(
     if (this->hasPendingLodResults() ||
 	(this->lodService &&
 	 this->lodService->queuedResultCountForDiagnostics() > 0)) {
-	(void)this->processPendingLodResults(options->maxLodResults);
+	(void)this->processPendingLodResults(options->maxLodResults,
+	    options->maxLodApplyMicroseconds);
 	localStatus.lodResultsProcessed = this->lastLodResultCount;
 	localStatus.lodResultsApplied = this->lastLodAppliedResultCount;
 	if (this->lastLodAppliedResultCount > 0)
@@ -2141,7 +2201,8 @@ BRLObolViewController::advanceProgressiveWork(
 void
 BRLObolViewController::markProgressiveWorkPending(void)
 {
-    this->progressiveWorkPending.store(1);
+    if (this->progressiveWorkPending.exchange(1) == 0)
+	this->notifyFrameRequest("progressive-work");
 }
 
 void
@@ -2224,7 +2285,7 @@ controller_lod_source_signature(const BRLObolViewController *controller)
 	    continue;
 	if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	    source->needsRealization() ||
-	    source->getRealizedMeshCount() <= 0)
+	    !source->hasRealizedMeshGeometry())
 	    continue;
 
 	out << "source;";
@@ -2248,8 +2309,10 @@ BRLObolViewController::lodResultReadyCB(
 {
     BRLObolViewController *controller =
 	static_cast<BRLObolViewController *>(userData);
-    if (controller)
+    if (controller) {
 	controller->lodResultsPending.store(1);
+	controller->markProgressiveWorkPending();
+    }
 }
 
 void
@@ -2266,6 +2329,9 @@ BRLObolViewController::setLodService(BRLObolLodService *service)
     this->lodResultSubscriberId = 0;
     this->lodResultsPending.store(0);
     this->lodActiveGeneration = 0;
+    this->lodSubmissionSourceIndex = 0;
+    this->lodSubmissionEntryOffset = 0;
+    this->lodSubmissionPending = FALSE;
     this->lodLastSubmittedViewRevision = 0;
     this->lodLastSubmittedPolicyRevision = 0;
     this->lodLastSubmittedSourceSignature = "";
@@ -2282,6 +2348,9 @@ BRLObolViewController::cancelActiveLodGeneration(void)
     if (this->lodService && this->lodActiveGeneration != 0)
 	this->lodService->cancelGeneration(this->lodActiveGeneration);
     this->lodActiveGeneration = 0;
+    this->lodSubmissionSourceIndex = 0;
+    this->lodSubmissionEntryOffset = 0;
+    this->lodSubmissionPending = FALSE;
     this->lodResultsPending.store(0);
     this->lodLastSubmittedViewRevision = 0;
     this->lodLastSubmittedPolicyRevision = 0;
@@ -2854,8 +2923,15 @@ BRLObolViewController::hasPendingLodResults(void) const
     return this->lodResultsPending.load() != 0 ? TRUE : FALSE;
 }
 
+SbBool
+BRLObolViewController::hasPendingLodSubmissions(void) const
+{
+    return this->lodSubmissionPending;
+}
+
 size_t
-BRLObolViewController::processPendingLodResults(size_t maxResults)
+BRLObolViewController::processPendingLodResults(size_t maxResults,
+	uint64_t maxMicroseconds)
 {
     if (!this->lodService)
 	return 0;
@@ -2864,8 +2940,44 @@ BRLObolViewController::processPendingLodResults(size_t maxResults)
 	this->lodService->queuedResultCountForDiagnostics() == 0)
 	return 0;
 
-    (void)this->applyLodResults(this->lodService, maxResults);
-    return this->lastLodResultCount;
+    if (maxMicroseconds == 0) {
+	(void)this->applyLodResults(this->lodService, maxResults);
+	return this->lastLodResultCount;
+    }
+
+    const int64_t start = bu_gettime();
+    size_t processed = 0;
+    unsigned int matched = 0;
+    unsigned int applied = 0;
+    unsigned int rejected = 0;
+    unsigned int unmatched = 0;
+    SbString diagnostics;
+    while (maxResults == 0 || processed < maxResults) {
+	(void)this->applyLodResults(this->lodService, 1);
+	if (this->lastLodResultCount == 0)
+	    break;
+	processed += this->lastLodResultCount;
+	matched += this->lastLodMatchedResultCount;
+	applied += this->lastLodAppliedResultCount;
+	rejected += this->lastLodRejectedResultCount;
+	unmatched += this->lastLodUnmatchedResultCount;
+	if (this->lastLodDiagnostics.getLength() > 0) {
+	    if (diagnostics.getLength() > 0)
+		diagnostics += "\n";
+	    diagnostics += this->lastLodDiagnostics;
+	}
+	const int64_t elapsed = bu_gettime() - start;
+	if (elapsed >= 0 &&
+	    static_cast<uint64_t>(elapsed) >= maxMicroseconds)
+	    break;
+    }
+    this->lastLodResultCount = processed;
+    this->lastLodMatchedResultCount = matched;
+    this->lastLodAppliedResultCount = applied;
+    this->lastLodRejectedResultCount = rejected;
+    this->lastLodUnmatchedResultCount = unmatched;
+    this->lastLodDiagnostics = diagnostics;
+    return processed;
 }
 
 int
@@ -2887,13 +2999,23 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
     if (this->lodLastSubmittedViewRevision == this->lodViewRevision &&
 	this->lodLastSubmittedPolicyRevision == this->lodPolicyRevision &&
 	strcmp(this->lodLastSubmittedSourceSignature.getString(),
-	       signature.getString()) == 0)
+	       signature.getString()) == 0) {
+	if (this->lodSubmissionPending && this->lodActiveGeneration != 0)
+	    return this->submitLodRequests(this->lodService,
+		this->lodActiveGeneration, this->lodSubmissionRefreshMissing,
+		this->lodSubmissionReset);
 	return 0;
+    }
 
     if (this->lodActiveGeneration != 0)
 	this->cancelActiveLodGeneration();
 
     uint64_t generation = this->lodService->beginGeneration();
+    this->lodSubmissionSourceIndex = 0;
+    this->lodSubmissionEntryOffset = 0;
+    this->lodSubmissionPending = TRUE;
+    this->lodSubmissionRefreshMissing = refreshMissing;
+    this->lodSubmissionReset = reset;
     int submitted = this->submitLodRequests(this->lodService, generation,
 					    refreshMissing, reset);
     if (submitted >= 0) {
@@ -2936,18 +3058,39 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	return -1;
     }
 
+    if (!this->lodSubmissionPending) {
+	this->lodSubmissionSourceIndex = 0;
+	this->lodSubmissionEntryOffset = 0;
+	this->lodSubmissionPending = TRUE;
+	this->lodSubmissionRefreshMissing = refreshMissing;
+	this->lodSubmissionReset = reset;
+    }
+
     std::vector<SoBRLDatabaseSource *> sources =
 	controller_render_database_source_roots(this);
-    for (size_t i = 0; i < sources.size(); i++) {
+    for (size_t i = this->lodSubmissionSourceIndex;
+	 i < sources.size();) {
+	const size_t capacity = service->availableResultTaskCapacity();
+	if (capacity < 3) {
+	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
+		sources[i] ? sources[i]->path.getValue() : SbString("<source>"),
+		"compact LoD submission requires three result slots for atomic AABB, OBB, and mesh stages");
+	    break;
+	}
 	SoBRLDatabaseSource *source = sources[i];
-	if (!source)
+	if (!source) {
+	    this->lodSubmissionSourceIndex = ++i;
+	    this->lodSubmissionEntryOffset = 0;
 	    continue;
+	}
 
 	struct db_i *dbip = source->getDatabase();
 	if (!dbip) {
 	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
 					     source->path.getValue(),
 					     "database source has no database for LoD submission");
+	    this->lodSubmissionSourceIndex = ++i;
+	    this->lodSubmissionEntryOffset = 0;
 	    continue;
 	}
 
@@ -2962,6 +3105,8 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	action.setReset(reset);
 	action.setViewLodState(this->viewAttachment->getViewLodState());
 	action.setProxyStages(TRUE, TRUE);
+	action.setCompactEntryRange(this->lodSubmissionEntryOffset,
+	    std::max(static_cast<size_t>(1), capacity / 3));
 	if (this->lodUseForcedLevel)
 	    action.setForcedLevel(this->lodForcedLevel);
 	action.apply(source);
@@ -2973,7 +3118,19 @@ BRLObolViewController::submitLodRequests(BRLObolLodService *service,
 	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
 					     source->path.getValue(),
 					     action.getDiagnostics().getString());
+	if (action.hasDeferredCompactEntries()) {
+	    this->lodSubmissionEntryOffset = action.getCompactEntryNext();
+	    this->lodSubmissionSourceIndex = i;
+	    break;
+	}
+	this->lodSubmissionSourceIndex = ++i;
+	this->lodSubmissionEntryOffset = 0;
     }
+
+    this->lodSubmissionPending =
+	this->lodSubmissionSourceIndex < sources.size() ? TRUE : FALSE;
+    if (this->lodSubmissionPending)
+	this->markProgressiveWorkPending();
 
     if (this->lastLodSubmittedTaskCount > 0)
 	this->requestRender("lod-submit");
@@ -3027,7 +3184,7 @@ BRLObolViewController::applyLodResults(BRLObolLodService *service,
 					     "stale LoD result revision rejected");
 	    continue;
 	}
-	update.addResult(drained[i]);
+	update.addResult(std::move(drained[i]));
     }
 
     update.apply(root);

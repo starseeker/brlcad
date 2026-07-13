@@ -19,6 +19,7 @@
 #include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
 #include <Inventor/SoViewport.h>
+#include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoCube.h>
 #include <Inventor/nodes/SoDirectionalLight.h>
@@ -415,6 +416,11 @@ main(int argc, char **argv)
 	    if (!paintController ||
 		    !paintController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 		FAIL("QgGL paint test should expose an Obol scene");
+	    SoGLRenderAction *paintAction =
+		paintController->getRenderManager()->getGLRenderAction();
+	    if (!paintAction ||
+		paintAction->getContextManager() != SoDB::getContextManager())
+		FAIL("QgGL direct rendering should bind its Qt context manager to the render action");
 	    SoSeparator *paintRoot = static_cast<SoSeparator *>(paintController->getSceneRoot());
 	    paintRoot->addChild(new SoDirectionalLight);
 	    SoMaterial *paintMaterial = new SoMaterial;

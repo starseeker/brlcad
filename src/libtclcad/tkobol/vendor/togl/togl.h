@@ -79,6 +79,8 @@ typedef void (Togl_Callback) (Togl *togl);
 typedef int (Togl_CmdProc) (Togl *togl, int argc, const char *argv[]);
 
 TCLCAD_EXPORT int BrlcadTkObolHost_Init(Tcl_Interp *interp);
+TCLCAD_EXPORT int BrlcadTkObolHost_SetSwapInterval(
+    Tcl_Interp *interp, const char *widget_command, int interval);
 
 #  ifdef __cplusplus
    }

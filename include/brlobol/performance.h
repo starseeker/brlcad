@@ -37,6 +37,8 @@ struct BRLOBOL_EXPORT BRLObolPerformanceCounters {
 
     uint64_t wire_cache_hits;
     uint64_t wire_cache_misses;
+    uint64_t mesh_cache_hits;
+    uint64_t mesh_cache_misses;
     uint64_t plot_calls;
     uint64_t plot_us;
     uint64_t vlist_convert_calls;

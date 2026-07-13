@@ -144,6 +144,15 @@ ged_draw_obol_render_endpoint_ensure_for_view(struct ged *gedp,
 	int sync_current_scene);
 
 /**
+ * Report whether @p view_ctx has an attached progressive Obol provider.
+ *
+ * Interactive draw commands use this to publish a prompt initial frame while
+ * retaining eager realization for headless and explicitly synchronous users.
+ */
+GED_EXPORT int
+ged_draw_obol_progressive_available(struct ged *gedp, void *view_ctx);
+
+/**
  * Return the Obol view controller currently associated with @p view_ctx.
  *
  * The returned pointer is a borrowed BRLObolViewController pointer exposed as

@@ -31,7 +31,8 @@ class SoBRLCadAssembly;
 
 struct BRLObolCadBatchBuildState {
     SoBRLCadAssembly *assembly = NULL;
-    std::vector<obol::PartUpdate> parts;
+    std::vector<obol::SharedPartUpdate> parts;
+    std::unordered_set<obol::PartId, std::hash<obol::PartId>> partIds;
     std::vector<obol::InstanceUpdate> instances;
     std::vector<obol::InstanceId> hiddenInstances;
     std::vector<obol::InstanceId> selectedInstances;
@@ -118,6 +119,10 @@ private:
     SoBRLCadAssembly *assembly;
     SoNode *sourceRoot;
     uint64_t cachedSourceSignature;
+    uint64_t cachedStructureSignature;
+    uint64_t cachedHiddenSignature;
+    uint64_t cachedSelectedSignature;
+    uint64_t cachedUnpickableSignature;
     SbBool batchValid;
     int softwareWireMode;
     std::unordered_set<const SoBRLDatabaseSource *> batchedSources;

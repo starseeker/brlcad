@@ -507,8 +507,12 @@ QgEdApp::do_view_changed(QgViewUpdateFlags flags)
 
     if ((flags & QG_VIEW_SELECT) || (flags & QG_VIEW_DRAWN)) {
 	QgView *display = w ? w->CurrentDisplay() : NULL;
-	if (qg_obol_sync_selection_state(mdl ? mdl->ged() : GED_NULL,
-		display, nullptr))
+	int selection_changed = (flags & QG_VIEW_SELECT) ?
+	    qg_obol_sync_selection_state(mdl ? mdl->ged() : GED_NULL,
+		display, nullptr) :
+	    qg_obol_sync_selection_state_if_active(
+		mdl ? mdl->ged() : GED_NULL, display, nullptr);
+	if (selection_changed)
 	    flags |= QG_VIEW_REFRESH;
     }
 
@@ -660,7 +664,10 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 
 	if ((view_flags & QG_VIEW_SELECT) || (view_flags & QG_VIEW_DRAWN)) {
 	    QgView *display = w ? w->CurrentDisplay() : NULL;
-	    if (qg_obol_sync_selection_state(gedp, display, nullptr))
+	    int selection_changed = (view_flags & QG_VIEW_SELECT) ?
+		qg_obol_sync_selection_state(gedp, display, nullptr) :
+		qg_obol_sync_selection_state_if_active(gedp, display, nullptr);
+	    if (selection_changed)
 		view_flags |= QG_VIEW_REFRESH;
 	}
     }

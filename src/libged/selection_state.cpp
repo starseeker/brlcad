@@ -1023,15 +1023,16 @@ ged_selection_native_draw_sync(struct ged *gedp,
     ctx.new_selection = &new_selection;
     ctx.display_changed = 0;
 
-    if (ged_draw_obol_database_sources_set_selected_for_path(gedp, NULL, 0))
-	ctx.display_changed = 1;
-
+    std::vector<const char *> selected_paths;
+    selected_paths.reserve(set->selected_paths.size());
     for (const std::string &path : set->selected_paths) {
-	if (ged_draw_obol_database_sources_set_selected_for_path(gedp,
-		path.c_str(), 1))
-	    ctx.display_changed = 1;
+	selected_paths.push_back(path.c_str());
 	ged_selection_native_add_path_to_views(&ctx, path);
     }
+    if (ged_draw_obol_database_sources_sync_selected_paths(gedp,
+	    selected_paths.empty() ? NULL : selected_paths.data(),
+	    selected_paths.size()))
+	ctx.display_changed = 1;
 
     return old_selection != new_selection || ctx.display_changed;
 }

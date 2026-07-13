@@ -48,7 +48,9 @@ Q_PROPERTY(int defaultMouseMode READ lmouseMoveDefault WRITE set_lmouse_move_def
 
 
 public:
-explicit QgGL(QWidget *parent = nullptr);
+explicit QgGL(QWidget *parent = nullptr,
+    BRLObolViewController *controller = nullptr,
+    bool create_controller = true);
 ~QgGL() override;
 
 /* -- QgCanvasBase interface -- */
@@ -60,6 +62,7 @@ qg_legacy_view *view()           const override;
 bool legacyBackendInitialized() const override;
 BRLObolViewController *obolViewController() const override;
 void setObolViewController(BRLObolViewController *) override;
+void setObolInputEndpoint(struct brlobol_display_endpoint *) override;
 
 void set_view(qg_legacy_view *)               override;
 

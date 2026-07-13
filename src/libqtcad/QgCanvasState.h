@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstring>
 #include <QImage>
+#include <QOpenGLContext>
 #include <QSize>
 #include <QTimer>
 #include <QWidget>
@@ -57,7 +58,9 @@
 #include "qtcad/QgLegacyView.h"
 
 #include <Inventor/SoOffscreenRenderer.h>
+#include <Inventor/SoRenderManager.h>
 #include <Inventor/SoViewport.h>
+#include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/SbColor.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
@@ -112,6 +115,7 @@ struct QgCanvasState {
     double y_press_pos = -INT_MAX;
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
+    bool   progressive_update_queued = false;
     bool   fps_update_queued = false;
     bool   software_backend = false;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
@@ -158,6 +162,17 @@ qgcanvas_obol_context_manager(bool software = false)
 }
 
 static inline void
+qgcanvas_bind_obol_render_context(QgCanvasState &s)
+{
+    if (!s.obol || s.software_backend)
+	return;
+    SoRenderManager *manager = s.obol->getRenderManager();
+    SoGLRenderAction *action = manager ? manager->getGLRenderAction() : NULL;
+    if (action)
+	action->setContextManager(qgcanvas_obol_context_manager(false));
+}
+
+static inline void
 qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 {
     if (s.obol && !s.obol->isRenderRequested())
@@ -175,11 +190,15 @@ static inline void
 qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 {
     if (!s.obol || !w || !s.obol->hasProgressiveWorkPending() ||
-	s.fb_update_queued)
+	s.progressive_update_queued)
 	return;
 
-    s.fb_update_queued = true;
-    QTimer::singleShot(16, w, SLOT(queued_update()));
+    s.progressive_update_queued = true;
+    QTimer::singleShot(16, w, [&s, w]() {
+	s.progressive_update_queued = false;
+	if (s.obol && s.obol->hasProgressiveWorkPending())
+	    w->update();
+    });
 }
 
 /** Mirror the current RT view state into the Obol direct camera. */
@@ -270,14 +289,22 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 /** Create the Obol view state every qtcad canvas exposes. */
 static inline void
 qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
-	bool software_backend)
+	bool software_backend, BRLObolViewController *controller = nullptr,
+	bool create_controller = true)
 {
     s.software_backend = software_backend;
     /* Direct GL controllers use the system manager.  Software canvases pass
      * their dedicated OSMesa manager explicitly to each offscreen render. */
     brlobol_init(qgcanvas_obol_context_manager(false));
-    s.obol = new BRLObolViewController();
-    s.owns_obol = true;
+    s.obol = controller;
+    s.owns_obol = false;
+    if (!s.obol && create_controller) {
+	s.obol = new BRLObolViewController();
+	s.owns_obol = true;
+    }
+    if (!s.obol)
+	return;
+    qgcanvas_bind_obol_render_context(s);
 
     SoSeparator *root = new SoSeparator;
     SoOrthographicCamera *camera = new SoOrthographicCamera;
@@ -318,6 +345,7 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, const QWidget *w,
 
     if (!s.obol)
 	return;
+    qgcanvas_bind_obol_render_context(s);
     if (!s.obol->getSceneRoot())
 	s.obol->setSceneRoot(new SoSeparator);
     if (!s.obol->getCamera())
@@ -582,6 +610,9 @@ qgcanvas_render_obol_pending(QgCanvasState &s,
 {
     if (!s.obol)
 	return FALSE;
+    if (!s.software_backend && !QOpenGLContext::currentContext())
+	return FALSE;
+    qgcanvas_bind_obol_render_context(s);
     return s.obol->renderPending(clearWindow, clearZBuffer, NULL);
 }
 

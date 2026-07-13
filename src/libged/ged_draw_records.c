@@ -306,6 +306,9 @@ _draw_obol_record_instance_in_view(
     if (!record || !record->database_path || !record->database_path[0])
 	return 0;
 
+    const char *scope_path = record->source_path && record->source_path[0] ?
+	record->source_path : record->database_path;
+
     const char *instance_key = record->instance_key;
     if (!view_ctx || !ged_view_context_is_independent(view_ctx)) {
 	if (!instance_key || !instance_key[0])
@@ -333,7 +336,7 @@ _draw_obol_record_instance_in_view(
 	else if (bu_strncmp(base, "brlcad-direct:", 14) == 0)
 	    ret = 1;
 	else
-	    ret = _draw_path_equal(base, record->database_path);
+	    ret = _draw_path_equal(base, scope_path);
 	bu_vls_free(&base_key);
 	return ret;
     }

@@ -1216,6 +1216,138 @@ rt_arb_validate(struct bu_vls *error_msg_ret, const struct rt_arb_internal *arb,
 }
 
 
+int
+rt_arb_indexed_face_set(struct rt_primitive_indexed_face_set *face_set,
+	struct rt_db_internal *ip, const struct bg_tess_tol *UNUSED(ttol),
+	const struct bn_tol *tol, const struct bv_view_info *UNUSED(info))
+{
+    const int arb_faces[5][24] = rt_arb_faces;
+    struct rt_arb_internal *arb;
+    struct bn_tol default_tol = BN_TOL_INIT_TOL;
+    int faces[6][4] = {{0}};
+    int face_counts[6] = {0};
+    int equiv[8] = {0};
+    int unique[8] = {0};
+    int unique_count = 0;
+    int cgtype = 0;
+    int uvec[8] = {0};
+    int svec[11] = {0};
+    int face_count = 0;
+    size_t index_count = 0;
+    point_t centroid = VINIT_ZERO;
+
+    if (face_set)
+	memset(face_set, 0, sizeof(*face_set));
+    if (!face_set || !ip)
+	return BRLCAD_ERROR;
+    RT_CK_DB_INTERNAL(ip);
+    arb = (struct rt_arb_internal *)ip->idb_ptr;
+    RT_ARB_CK_MAGIC(arb);
+    if (!tol)
+	tol = &default_tol;
+    BN_CK_TOL(tol);
+
+    if (rt_arb_get_cgtype(&cgtype, arb, tol, uvec, svec) == 0 ||
+	cgtype < ARB4 || cgtype > ARB8)
+	return BRLCAD_ERROR;
+
+    for (int i = 0; i < 8; i++) {
+	equiv[i] = i;
+	for (int j = 0; j < i; j++) {
+	    vect_t delta;
+	    VSUB2(delta, arb->pt[i], arb->pt[j]);
+	    if (MAGSQ(delta) <= tol->dist_sq) {
+		equiv[i] = equiv[j];
+		break;
+	    }
+	}
+	int seen = 0;
+	for (int j = 0; j < unique_count; j++) {
+	    if (unique[j] == equiv[i]) {
+		seen = 1;
+		break;
+	    }
+	}
+	if (!seen)
+	    unique[unique_count++] = equiv[i];
+    }
+    if (unique_count < 4)
+	return BRLCAD_ERROR;
+    for (int i = 0; i < unique_count; i++)
+	VADD2(centroid, centroid, arb->pt[unique[i]]);
+    VSCALE(centroid, centroid, 1.0 / (fastf_t)unique_count);
+
+    const int type = cgtype - ARB4;
+    for (int f = 0; f < 6; f++) {
+	const int *raw = &arb_faces[type][f * 4];
+	if (raw[0] < 0)
+	    break;
+	for (int c = 0; c < 4; c++) {
+	    const int vertex = equiv[raw[c]];
+	    int duplicate = 0;
+	    for (int j = 0; j < face_counts[face_count]; j++) {
+		if (faces[face_count][j] == vertex) {
+		    duplicate = 1;
+		    break;
+		}
+	    }
+	    if (!duplicate)
+		faces[face_count][face_counts[face_count]++] = vertex;
+	}
+	if (face_counts[face_count] < 3)
+	    continue;
+
+	vect_t edge1, edge2, normal, outward;
+	point_t face_center = VINIT_ZERO;
+	VSUB2(edge1, arb->pt[faces[face_count][1]],
+	    arb->pt[faces[face_count][0]]);
+	VSUB2(edge2, arb->pt[faces[face_count][2]],
+	    arb->pt[faces[face_count][0]]);
+	VCROSS(normal, edge1, edge2);
+	if (MAGSQ(normal) <= tol->dist_sq) {
+	    face_counts[face_count] = 0;
+	    continue;
+	}
+	for (int c = 0; c < face_counts[face_count]; c++)
+	    VADD2(face_center, face_center,
+		arb->pt[faces[face_count][c]]);
+	VSCALE(face_center, face_center,
+	    1.0 / (fastf_t)face_counts[face_count]);
+	VSUB2(outward, face_center, centroid);
+	if (VDOT(normal, outward) < 0.0) {
+	    for (int lo = 0, hi = face_counts[face_count] - 1;
+		 lo < hi; lo++, hi--) {
+		const int tmp = faces[face_count][lo];
+		faces[face_count][lo] = faces[face_count][hi];
+		faces[face_count][hi] = tmp;
+	    }
+	}
+	index_count += (size_t)face_counts[face_count] + 1;
+	face_count++;
+    }
+    if (!face_count || !index_count)
+	return BRLCAD_ERROR;
+
+    face_set->points = (point_t *)bu_calloc(8, sizeof(point_t),
+	"ARB indexed-face points");
+    face_set->indices = (int *)bu_calloc(index_count, sizeof(int),
+	"ARB indexed-face indices");
+    for (int i = 0; i < 8; i++)
+	VMOVE(face_set->points[i], arb->pt[i]);
+    size_t out = 0;
+    for (int f = 0; f < face_count; f++) {
+	for (int c = 0; c < face_counts[f]; c++)
+	    face_set->indices[out++] = faces[f][c];
+	face_set->indices[out++] = -1;
+    }
+    face_set->point_count = 8;
+    face_set->index_count = index_count;
+    face_set->source_identity = (uint64_t)(uintptr_t)arb;
+    face_set->geometry_revision = 1;
+    return BRLCAD_OK;
+}
+
+
 /* helper: is triangle (p,q,r) oriented the same as face normal N ? */
 static bool
 tri_matches_face(const point_t p, const point_t q, const point_t r, const vect_t  N)

@@ -28,6 +28,7 @@
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <Inventor/nodes/SoShape.h>
 #include <Inventor/nodes/SoSeparator.h>
+#include <obol/cad/SoCADAssembly.h>
 #include <OSMesa/osmesa.h>
 
 #include <algorithm>
@@ -526,6 +527,47 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	if (!secondRenderer.render(root) || !secondRenderer.getBuffer())
 	    FAIL("retained CAD scene should render in a second GL context");
     }
+
+    SoSeparator *pointRoot = new SoSeparator;
+    pointRoot->ref();
+    SoOrthographicCamera *pointCamera = new SoOrthographicCamera;
+    pointCamera->position = SbVec3f(0.0f, 0.0f, 10.0f);
+    pointCamera->height = 6.0f;
+    pointCamera->nearDistance = 1.0f;
+    pointCamera->farDistance = 20.0f;
+    pointRoot->addChild(pointCamera);
+    SoCADAssembly *pointAssembly = new SoCADAssembly;
+    obol::PartGeometry pointGeometry;
+    obol::PointRep points;
+    points.positions = {SbVec3f(-1.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 0.0f, 0.0f)};
+    points.pointIds = {7u, 11u};
+    points.colorValid = {1u, 1u};
+    points.colors = {SbColor(1.0f, 0.0f, 0.0f),
+	SbColor(0.0f, 1.0f, 0.0f)};
+    points.bounds.setBounds(SbVec3f(-1.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 0.0f, 0.0f));
+    pointGeometry.points = points;
+    const obol::PartId pointPart = obol::CadIdBuilder::hash128("render-points");
+    pointAssembly->upsertPart(pointPart, pointGeometry);
+    obol::InstanceRecord pointInstance;
+    pointInstance.part = pointPart;
+    pointInstance.parent = obol::CadIdBuilder::Root();
+    pointInstance.childName = "render-points";
+    pointInstance.localToRoot.makeIdentity();
+    pointInstance.style.lineWidth = 9.0f;
+    pointAssembly->upsertInstanceAuto(pointInstance);
+    pointRoot->addChild(pointAssembly);
+
+    SoOffscreenRenderer pointRenderer(&contextManager, viewport);
+    pointRenderer.setComponents(SoOffscreenRenderer::RGB);
+    pointRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    if (!pointRenderer.render(pointRoot) || !pointRenderer.getBuffer())
+	FAIL("retained Obol point geometry should render through OSMesa");
+    if (count_lit_pixels(pointRenderer.getBuffer(), width, height) < 20 ||
+	count_green_pixels(pointRenderer.getBuffer(), width, height) < 5)
+	FAIL("retained Obol point rendering should preserve point size and color");
+    pointRoot->unref();
 
     BRLOBOLSoftwareLineContextManager softwareManager;
     SoOffscreenRenderer softwareRenderer(&softwareManager, viewport);

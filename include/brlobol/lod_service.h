@@ -142,6 +142,7 @@ public:
 	size_t maxQueuedResults, size_t maxQueuedCacheWrites);
     void getQueueLimits(size_t &maxActiveTasks,
 	size_t &maxQueuedResults, size_t &maxQueuedCacheWrites) const;
+    size_t availableResultTaskCapacity(void) const;
 
     uint64_t submit(const BRLObolLodTask &task);
     uint64_t submitIfNotActive(const BRLObolLodTask &task);
@@ -161,6 +162,12 @@ public:
     size_t queuedCacheWriteCountForDiagnostics(void) const;
     size_t delayedTaskCountForDiagnostics(void) const;
     uint64_t rejectedTaskCountForDiagnostics(void) const;
+    uint64_t coalescedResultCountForDiagnostics(void) const;
+    uint64_t coalescedCacheWriteCountForDiagnostics(void) const;
+    uint64_t discardedStaleResultCountForDiagnostics(void) const;
+    size_t activeRequestCountForDiagnostics(void) const;
+    size_t completedTaskCountForDiagnostics(void) const;
+    size_t cancelledGenerationCountForDiagnostics(void) const;
 
 private:
     BRLObolLodService(const BRLObolLodService &);

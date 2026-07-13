@@ -29,6 +29,8 @@
 #include <math.h>
 #include <string.h>
 
+#include <string>
+
 #define CHECK(_expr, _msg) do { \
     if (!(_expr)) { \
 	bu_log("FAIL: %s\n", _msg); \
@@ -89,6 +91,64 @@ test_property_provider_set(void *data, const char *name,
     return BRLOBOL_ENDPOINT_PROPERTY_OK;
 }
 
+struct InputActionState {
+    int calls = 0;
+    BRLObolInputAction action = BRLOBOL_ACTION_NONE;
+};
+
+static int
+test_input_action(void *data, BRLObolInputAction action,
+	const BRLObolInputEvent *event)
+{
+    InputActionState *state = static_cast<InputActionState *>(data);
+    if (!state || !event)
+	return -1;
+    state->calls++;
+    state->action = action;
+    return 1;
+}
+
+static int
+test_input_context(void)
+{
+    InputActionState firstState;
+    InputActionState secondState;
+    BRLObolInputContext first;
+    BRLObolInputContext second;
+    first.setProfile(&BRLObolInputContext::defaultViewProfile());
+    first.setActionHandler(test_input_action, &firstState);
+    second.setActionHandler(test_input_action, &secondState);
+
+    BRLObolInputEvent event;
+    event.type = BRLOBOL_INPUT_POINTER_MOTION;
+    event.button = 0;
+    event.modifiers = BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_SHIFT;
+    CHECK(first.dispatch(&event) == 1 && firstState.calls == 1 &&
+	  firstState.action == BRLOBOL_ACTION_VIEW_ZOOM,
+	  "input context chooses the most-specific modifier binding");
+    CHECK(second.dispatch(&event) == 0 && secondState.calls == 0,
+	  "input contexts do not share bindings or action handlers");
+
+    event.type = BRLOBOL_INPUT_KEY_PRESS;
+    event.key = 'R';
+    event.button = BRLOBOL_INPUT_ANY;
+    event.modifiers = BRLOBOL_INPUT_MOD_SHIFT;
+    CHECK(first.dispatch(&event) == 1 &&
+	  firstState.action == BRLOBOL_ACTION_VIEW_REAR,
+	  "input context preserves modifier-specific view actions");
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    event.button = 0;
+    event.modifiers = BRLOBOL_INPUT_MOD_NONE;
+    CHECK(first.dispatch(&event) == 1,
+	  "input context dispatches pointer-release actions");
+    CHECK(firstState.action == BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE,
+	  "input context normalizes pointer-release actions");
+    CHECK(first.hasAction(BRLOBOL_ACTION_VIEW_ROTATE) &&
+	  !second.hasAction(BRLOBOL_ACTION_VIEW_ROTATE),
+	  "input contexts report their own action vocabulary");
+    return 0;
+}
+
 static int
 test_window_host_contract(void)
 {
@@ -117,8 +177,8 @@ test_window_host_contract(void)
     BRLObolInputBinding binding;
     binding.eventType = BRLOBOL_INPUT_KEY;
     binding.key = 'f';
-    binding.button = 0;
-    binding.modifiers = 0;
+    binding.button = BRLOBOL_INPUT_ANY;
+    binding.requiredModifiers = 0;
     binding.action = BRLOBOL_ACTION_VIEW_FRONT;
 
     BRLObolInputProfile profile;
@@ -127,7 +187,6 @@ test_window_host_contract(void)
     profile.bindingCount = 1;
 
     BRLObolInputEvent event;
-    memset(&event, 0, sizeof(event));
     event.type = BRLOBOL_INPUT_KEY;
     event.key = 'f';
     CHECK(host.handleInputEvent(&event, &profile) == 1,
@@ -156,7 +215,8 @@ int CountingWindowHost::destroyed = 0;
 struct FactoryTestState {
     FactoryTestState(void) :
 	probe_result(1), open_result(1), creates(0), destroys(0), binds(0),
-	detaches(0), opens(0), closes(0), frames(0), resizes(0)
+	detaches(0), opens(0), closes(0), frames(0), resizes(0), visible(0),
+	vsync(-1)
     {
     }
 
@@ -173,6 +233,11 @@ struct FactoryTestState {
     int captures = 0;
     int dimension_queries = 0;
     int framebuffer_captures = 0;
+    std::string title;
+    int visible;
+    int vsync;
+    BRLObolInputEventHandler input_dispatch = NULL;
+    void *input_dispatch_data = NULL;
 };
 
 struct FactoryTestInstance {
@@ -188,12 +253,14 @@ factory_test_probe(const struct brlobol_host_desc *UNUSED(desc), void *data)
 }
 
 static void *
-factory_test_create(const struct brlobol_host_desc *UNUSED(desc), void *data)
+factory_test_create(const struct brlobol_host_desc *desc, void *data)
 {
     FactoryTestState *state = static_cast<FactoryTestState *>(data);
     FactoryTestInstance *instance = new FactoryTestInstance;
     instance->state = state;
     instance->controller = NULL;
+    state->input_dispatch = desc ? desc->input_dispatch : NULL;
+    state->input_dispatch_data = desc ? desc->input_dispatch_data : NULL;
     state->creates++;
     return instance;
 }
@@ -283,6 +350,32 @@ factory_test_dimensions(void *UNUSED(instance), unsigned int *width,
 }
 
 static int
+factory_test_set_title(void *UNUSED(instance), const char *title, void *data)
+{
+    FactoryTestState *state = static_cast<FactoryTestState *>(data);
+    if (!title)
+	return 0;
+    state->title = title;
+    return 1;
+}
+
+static int
+factory_test_set_visible(void *UNUSED(instance), int visible, void *data)
+{
+    FactoryTestState *state = static_cast<FactoryTestState *>(data);
+    state->visible = visible ? 1 : 0;
+    return 1;
+}
+
+static int
+factory_test_set_vsync(void *UNUSED(instance), int enabled, void *data)
+{
+    FactoryTestState *state = static_cast<FactoryTestState *>(data);
+    state->vsync = enabled ? 1 : 0;
+    return 1;
+}
+
+static int
 factory_test_framebuffer_capture(void *data, unsigned char **pixels,
 	size_t *size, unsigned int *width, unsigned int *height,
 	unsigned int *components)
@@ -325,6 +418,9 @@ factory_test_desc(const char *name, int priority, uint64_t capabilities,
     factory.resize = factory_test_resize;
     factory.capture = factory_test_capture;
     factory.dimensions = factory_test_dimensions;
+    factory.set_title = factory_test_set_title;
+    factory.set_visible = factory_test_set_visible;
+    factory.set_vsync = factory_test_set_vsync;
     return factory;
 }
 
@@ -347,7 +443,8 @@ test_host_factory_contract(void)
 	"endpoint-test-low", 10, BRLOBOL_HOST_CAP_PIXEL_PRESENT, &low_state);
     struct brlobol_host_factory high = factory_test_desc(
 	"endpoint-test-high", 20,
-	BRLOBOL_HOST_CAP_PIXEL_PRESENT | BRLOBOL_HOST_CAP_READBACK,
+	BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_PIXEL_PRESENT |
+	BRLOBOL_HOST_CAP_READBACK | BRLOBOL_HOST_CAP_PRESENT_VSYNC,
 	&high_state);
     struct brlobol_host_factory failed = factory_test_desc(
 	"endpoint-test-failed", 30, BRLOBOL_HOST_CAP_PIXEL_PRESENT,
@@ -373,7 +470,8 @@ test_host_factory_contract(void)
 	    found_high_capabilities =
 		brlobol_host_factory_registry_capabilities(i) ==
 		(BRLOBOL_HOST_CAP_PIXEL_PRESENT |
-		 BRLOBOL_HOST_CAP_READBACK);
+		 BRLOBOL_HOST_CAP_READBACK | BRLOBOL_HOST_CAP_TOPLEVEL |
+		 BRLOBOL_HOST_CAP_PRESENT_VSYNC);
 	}
     }
     CHECK(found_high_capabilities,
@@ -382,10 +480,11 @@ test_host_factory_contract(void)
     struct brlobol_host_desc desc;
     memset(&desc, 0, sizeof(desc));
     desc.struct_size = sizeof(desc);
-    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    desc.mode = BRLOBOL_HOST_MODE_TOPLEVEL;
     desc.width = 8;
     desc.height = 6;
     desc.device_pixel_ratio = 1.0;
+    desc.vsync = BRLOBOL_HOST_VSYNC_OFF;
     desc.required_capabilities = BRLOBOL_HOST_CAP_READBACK;
 
     brlobol_display_endpoint_t *endpoint =
@@ -397,13 +496,24 @@ test_host_factory_contract(void)
 	  "endpoint-test-high") == 0,
 	  "endpoint selection honors capabilities before priority");
     CHECK(brlobol_display_endpoint_host_capabilities(endpoint) ==
-	  (BRLOBOL_HOST_CAP_PIXEL_PRESENT | BRLOBOL_HOST_CAP_READBACK),
+	  (BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_PIXEL_PRESENT |
+	   BRLOBOL_HOST_CAP_READBACK | BRLOBOL_HOST_CAP_PRESENT_VSYNC),
 	  "endpoint exposes its active host capabilities");
     FactoryTestInstance *instance = static_cast<FactoryTestInstance *>(
 	brlobol_display_endpoint_host(endpoint));
     CHECK(instance && instance->controller ==
 	  brlobol_display_endpoint_controller(endpoint),
 	  "factory host instance binds the endpoint controller");
+    InputActionState input_state;
+    BRLObolInputEvent input_event;
+    input_event.type = BRLOBOL_INPUT_KEY_PRESS;
+    input_event.key = 'F';
+    CHECK(brlobol_display_endpoint_input_action_handler_set(endpoint,
+	  test_input_action, &input_state) && high_state.input_dispatch &&
+	  high_state.input_dispatch_data == endpoint &&
+	  high_state.input_dispatch(high_state.input_dispatch_data, &input_event) == 1 &&
+	  input_state.action == BRLOBOL_ACTION_VIEW_FRONT,
+	  "factory receives the endpoint-local semantic input dispatcher");
     CHECK(!brlobol_host_factory_unregister(high_token),
 	  "live endpoint prevents host factory unregister");
 
@@ -414,8 +524,41 @@ test_host_factory_contract(void)
 	  host_dimension.uint_value == 13 && high_state.dimension_queries == 1,
 	  "endpoint dimensions refresh from the active toolkit host");
 
+    struct brlobol_endpoint_property_value host_property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    host_property.type = BRLOBOL_ENDPOINT_PROPERTY_STRING;
+    host_property.string_value = "Updated endpoint title";
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.title",
+	  &host_property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  high_state.title == "Updated endpoint title",
+	  "typed title property dispatches to a toplevel host");
+    property_value_init(&host_property);
+    CHECK(brlobol_display_endpoint_property_get(endpoint, "endpoint.title",
+	  &host_property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  host_property.string_value &&
+	  strcmp(host_property.string_value, "Updated endpoint title") == 0,
+	  "typed title property retains endpoint state");
+    property_value_init(&host_property);
+    host_property.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    host_property.bool_value = 1;
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.visible",
+	  &host_property) == BRLOBOL_ENDPOINT_PROPERTY_OK && high_state.visible,
+	  "typed visibility property dispatches to a toplevel host");
+    property_value_init(&host_property);
+    CHECK(brlobol_display_endpoint_property_get(endpoint, "endpoint.vsync",
+	  &host_property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  host_property.bool_value == 0,
+	  "explicit host creation policy initializes typed vsync state");
+    host_property.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    host_property.bool_value = 1;
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.vsync",
+	  &host_property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  high_state.vsync == 1,
+	  "typed vsync property dispatches to a capable presentation host");
+
+	const int frames_before_request = high_state.frames;
     CHECK(brlobol_display_endpoint_request_frame(endpoint, "test-frame") &&
-	  high_state.frames == 1,
+	  high_state.frames == frames_before_request + 1,
 	  "factory dispatches frame requests");
     CHECK(brlobol_display_endpoint_resize(endpoint, 10, 7, 1.5) &&
 	  high_state.resizes == 1 &&
@@ -463,6 +606,7 @@ test_host_factory_contract(void)
 	  "endpoint closes, detaches, and destroys its factory host");
 
     desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+    desc.vsync = BRLOBOL_HOST_VSYNC_AUTO;
     endpoint = brlobol_display_endpoint_create(NULL, 0);
     CHECK(!brlobol_display_endpoint_host_open(endpoint,
 	  "endpoint-test-failed", &desc),
@@ -503,9 +647,12 @@ test_display_endpoint_contract(void)
 	  (enum brlobol_render_engine)99),
 	  "display endpoint rejects an invalid renderer policy");
 
-    CHECK(brlobol_display_endpoint_property_count() == 15,
+    CHECK(brlobol_display_endpoint_property_count() == 18,
 	  "display endpoint exposes the typed property registry");
     int found_renderer_property = 0;
+    int found_title_property = 0;
+    int found_visibility_property = 0;
+    int found_vsync_property = 0;
     for (size_t i = 0; i < brlobol_display_endpoint_property_count(); i++) {
 	struct brlobol_endpoint_property_desc property = {};
 	property.struct_size = sizeof(property);
@@ -520,12 +667,35 @@ test_display_endpoint_contract(void)
 		strcmp(property.allowed_values,
 		    "auto,hw,sw,rt,none,diagnostic") == 0;
 	}
+	if (strcmp(property.name, "endpoint.title") == 0)
+	    found_title_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_STRING &&
+		property.required_host_capabilities == BRLOBOL_HOST_CAP_TOPLEVEL;
+	if (strcmp(property.name, "endpoint.visible") == 0)
+	    found_visibility_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
+		property.required_host_capabilities == BRLOBOL_HOST_CAP_TOPLEVEL;
+	if (strcmp(property.name, "endpoint.vsync") == 0)
+	    found_vsync_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
+		property.required_host_capabilities ==
+		    BRLOBOL_HOST_CAP_PRESENT_VSYNC;
     }
     CHECK(found_renderer_property,
 	  "renderer property declares its type, access, and allowed values");
+    CHECK(found_title_property && found_visibility_property,
+	  "toplevel host properties declare typed capability predicates");
+    CHECK(found_vsync_property,
+	  "vsync property declares its presentation capability predicate");
 
     struct brlobol_endpoint_property_value property_value =
 	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_STRING;
+    property_value.string_value = "No host";
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "endpoint.title",
+	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  "host properties fail explicitly without a compatible toplevel host");
+    property_value_init(&property_value);
     CHECK(brlobol_display_endpoint_property_get(endpoint,
 	  "endpoint.renderer", &property_value) ==
 	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
@@ -745,6 +915,49 @@ test_display_endpoint_contract(void)
 }
 
 static int
+test_display_endpoint_input(void)
+{
+    brlobol_display_endpoint_t *first =
+	brlobol_display_endpoint_create(NULL, 0);
+    brlobol_display_endpoint_t *second =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(first && second, "display endpoints allocate input contexts");
+
+    InputActionState state;
+    BRLObolInputEvent event;
+    event.type = BRLOBOL_INPUT_KEY_PRESS;
+    event.key = 'F';
+    CHECK(brlobol_display_endpoint_input_action_handler_set(first,
+	  test_input_action, &state) &&
+	  brlobol_display_endpoint_input_dispatch(first, &event) == 1 &&
+	  state.action == BRLOBOL_ACTION_VIEW_FRONT,
+	  "display endpoint dispatches its default input profile");
+    CHECK(brlobol_display_endpoint_input_dispatch(second, &event) == 0,
+	  "display endpoint with no action handler leaves input unhandled");
+
+    BRLObolInputBinding binding;
+    binding.eventType = BRLOBOL_INPUT_KEY_PRESS;
+    binding.key = 'P';
+    binding.button = BRLOBOL_INPUT_ANY;
+    binding.requiredModifiers = BRLOBOL_INPUT_MOD_NONE;
+    binding.forbiddenModifiers = BRLOBOL_INPUT_MOD_NONE;
+    binding.priority = 0;
+    binding.action = BRLOBOL_ACTION_VIEW_PAN;
+    BRLObolInputProfile profile = {"endpoint-custom", &binding, 1};
+    CHECK(brlobol_display_endpoint_input_profile_set(first, &profile) &&
+	  brlobol_display_endpoint_input_dispatch(first, &event) == 0,
+	  "endpoint-local profiles replace only their own bindings");
+    event.key = 'P';
+    CHECK(brlobol_display_endpoint_input_dispatch(first, &event) == 1 &&
+	  state.action == BRLOBOL_ACTION_VIEW_PAN,
+	  "endpoint dispatches a custom semantic profile");
+
+    brlobol_display_endpoint_destroy(second);
+    brlobol_display_endpoint_destroy(first);
+    return 0;
+}
+
+static int
 texture_matches(SoTexture2 *texture, int width, int height, int channels)
 {
     if (!texture)
@@ -905,9 +1118,13 @@ main(int ac, char **av)
 
     brlobol_init(NULL);
 
+    if (test_input_context())
+	return 1;
     if (test_window_host_contract())
 	return 1;
     if (test_display_endpoint_contract())
+	return 1;
+    if (test_display_endpoint_input())
 	return 1;
     if (test_host_factory_contract())
 	return 1;

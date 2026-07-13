@@ -24,6 +24,7 @@
 #include "brlobol/hud_label_overlay.h"
 #include "brlobol/image_plane.h"
 #include "brlobol/image_source.h"
+#include "brlobol/input.h"
 #include "brlobol/line_layer_overlay.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_realization.h"

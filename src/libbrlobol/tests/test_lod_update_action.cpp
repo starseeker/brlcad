@@ -12,6 +12,7 @@
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
+#include "bu/time.h"
 #include "rt/view.h"
 #include "wdb.h"
 
@@ -27,6 +28,7 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 
+#include <atomic>
 #include <chrono>
 #include <math.h>
 #include <stdio.h>
@@ -261,6 +263,42 @@ static BRLObolLodResult
 mesh_payload_refined_task(const BRLObolLodRequest &request, void *UNUSED(userData))
 {
     return mesh_payload_variant_result(request, 2, 3);
+}
+
+struct large_payload_task_data {
+    size_t pointCount;
+    std::atomic<uintptr_t> pointStorage;
+    std::atomic<uintptr_t> indexStorage;
+
+    large_payload_task_data(void) :
+	pointCount(0),
+	pointStorage(0),
+	indexStorage(0)
+    {
+    }
+};
+
+static BRLObolLodResult
+large_mesh_payload_task(const BRLObolLodRequest &request, void *userData)
+{
+    large_payload_task_data *data =
+	static_cast<large_payload_task_data *>(userData);
+    BRLObolLodResult result = mesh_payload_result(request);
+    result.mesh.clear();
+    const size_t pointCount = data ? data->pointCount : 0;
+    result.mesh.points.resize(pointCount, SbVec3f(0.0f, 0.0f, 0.0f));
+    const size_t indexCount = pointCount >= 3 ?
+	pointCount - (pointCount % 3) : 0;
+    result.mesh.coordIndex.resize(indexCount, 0);
+    result.counts.pointCount = result.mesh.points.size();
+    result.counts.faceCount = result.mesh.coordIndex.size() / 3;
+    if (data) {
+	data->pointStorage.store(reinterpret_cast<uintptr_t>(
+	    result.mesh.points.data()));
+	data->indexStorage.store(reinterpret_cast<uintptr_t>(
+	    result.mesh.coordIndex.data()));
+    }
+    return result;
 }
 
 static BRLObolLodResult
@@ -2655,7 +2693,9 @@ test_scene_database_source_summary(void)
 	!ownedScene.getDatabaseSourceSummary(0, summary) ||
 	summary.stale ||
 	summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
-	summary.realizedMeshCount != 1 ||
+	!ownedSource->hasCompactInstanceIndex() ||
+	!ownedSource->hasRealizedMeshGeometry() ||
+	summary.realizedMeshCount != 0 ||
 	summary.realizedShapeCount != 0) {
 	printf("FAIL: mesh realization role should realize database mesh even in wire draw mode\n");
 	ownedRoot->unref();
@@ -2664,12 +2704,13 @@ test_scene_database_source_summary(void)
 	return 1;
     }
     {
-	SoBRLMeshShape *realizedMesh = ownedSource->getRealizedMesh();
-	const SoBRLMeshShape *realizedMeshGeom = realizedMesh ?
-	    realizedMesh->getGeometrySource() : NULL;
-	if (!realizedMesh || !realizedMeshGeom ||
-	    realizedMeshGeom->point.getNum() == 0 ||
-	    realizedMeshGeom->coordIndex.getNum() == 0) {
+	BRLObolRealizedShapeSummary realizedMeshSummary;
+	if (!ownedSource->getRealizedShapeSummary(0, realizedMeshSummary) ||
+	    !realizedMeshSummary.valid ||
+	    realizedMeshSummary.shapeKind !=
+		BRLObolRealizedShapeSummary::SHAPE_MESH ||
+	    realizedMeshSummary.pointCount == 0 ||
+	    realizedMeshSummary.triangleCount == 0) {
 	    printf("FAIL: mesh realization role should expose database mesh geometry\n");
 	    ownedRoot->unref();
 	    db_close(dbip);
@@ -5728,6 +5769,67 @@ test_view_controller_progressive_lod_results(void)
 }
 
 static int
+test_view_controller_large_result_transfer(void)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    SoBRLLodMeshShape *mesh = make_lod_mesh("/large/lod.bot", "lod.bot");
+    root->addChild(mesh);
+
+    BRLObolLodService service;
+    if (!service.start(1, FALSE)) {
+	root->unref();
+	return 1;
+    }
+
+    int ret = 0;
+    {
+	BRLObolViewController controller(root, NULL);
+	controller.setLodService(&service);
+	controller.setLodPolicyRevision(23);
+	BRLObolLodRequest request = make_request("/large/lod.bot", "lod.bot");
+	request.viewRevision = controller.getLodViewRevision();
+	request.policyRevision = controller.getLodPolicyRevision();
+
+	large_payload_task_data data;
+	data.pointCount = 1500000;
+	BRLObolLodTask task;
+	task.generation = service.beginGeneration();
+	task.request = request;
+	task.realize = large_mesh_payload_task;
+	task.realizeData = &data;
+	if (service.submit(task) == 0 || wait_for_service(service)) {
+	    ret = 1;
+	} else {
+	    const uintptr_t workerPoints = data.pointStorage.load();
+	    const uintptr_t workerIndices = data.indexStorage.load();
+	    const int64_t started = bu_gettime();
+	    const size_t processed = controller.processPendingLodResults(1, 4000);
+	    const int64_t elapsed = bu_gettime() - started;
+	    const BRLObolViewLodState::MeshPayload *payload =
+		controller.getViewLodState()->findMesh(mesh);
+	    if (processed != 1 ||
+		controller.getLastLodAppliedResultCount() != 1 || !payload ||
+		payload->mesh.points.size() != data.pointCount ||
+		workerPoints == 0 || workerIndices == 0 ||
+		reinterpret_cast<uintptr_t>(payload->mesh.points.data()) !=
+		    workerPoints ||
+		reinterpret_cast<uintptr_t>(payload->mesh.coordIndex.data()) !=
+		    workerIndices || elapsed < 0 || elapsed > 4000) {
+		printf("FAIL: large LoD result transfer copied storage or exceeded bounded apply time (elapsed=%lld us)\n",
+		    (long long)elapsed);
+		ret = 1;
+	    }
+	}
+	controller.setLodService(NULL);
+    }
+
+    service.stop();
+    root->unref();
+    return ret;
+}
+
+static int
 test_view_local_lod_only_pick(void)
 {
     SoSeparator *root = new SoSeparator;
@@ -5842,6 +5944,8 @@ main(int argc, char **argv)
     if (test_view_controller_shared_lod_is_view_local())
 	return 1;
     if (test_view_controller_progressive_lod_results())
+	return 1;
+    if (test_view_controller_large_result_transfer())
 	return 1;
     if (test_view_local_lod_only_pick())
 	return 1;

@@ -53,6 +53,7 @@ class QObject;
 class QString;
 class QWidget;
 class BRLObolViewController;
+struct brlobol_display_endpoint;
 
 class QTCAD_EXPORT QgCanvasBase {
 public:
@@ -82,6 +83,9 @@ public:
 
     /** Bind a borrowed endpoint-owned controller. */
     virtual void setObolViewController(BRLObolViewController *) = 0;
+
+    /** Route normalized canvas input through a borrowed display endpoint. */
+    virtual void setObolInputEndpoint(struct brlobol_display_endpoint *) = 0;
 
     /** Bind an external transitional view.  Pass nullptr to revert to the local view. */
     virtual void set_view(qg_legacy_view *) = 0;
