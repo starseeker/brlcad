@@ -1496,7 +1496,11 @@ cad_wire_part_geometry_from_aabb(const SbBox3f &bounds,
 	points.push_back(corners[edges[i][1]]);
 	commands.push_back(SoBRLVListShape::DRAW);
     }
-    return cad_wire_part_geometry_from_line_set(points, commands, geometry);
+    if (!cad_wire_part_geometry_from_line_set(points, commands, geometry))
+	return 0;
+    /* This helper is used only for the mesh LoD AABB threshold path. */
+    geometry.subpixelProxyEligible = true;
+    return 1;
 }
 
 static int
@@ -7945,7 +7949,12 @@ cad_proxy_part_geometry(const BRLObolLodProxy &proxy,
     SbVec3f corners[8];
     if (!cad_proxy_corners(proxy, corners))
 	return 0;
-    return cad_wire_geometry_from_corners(corners, geometry);
+    if (!cad_wire_geometry_from_corners(corners, geometry))
+	return 0;
+    /* This is a view-LoD AABB/OBB, not authored wire geometry.  Obol may
+     * collapse it into a view-local point when the entire proxy is subpixel. */
+    geometry.subpixelProxyEligible = true;
+    return 1;
 }
 
 static int
