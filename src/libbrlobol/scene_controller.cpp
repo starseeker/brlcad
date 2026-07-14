@@ -34,6 +34,7 @@
 #include <string.h>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 static const char *
@@ -1522,6 +1523,54 @@ SoBRLSceneController::findIndexedDatabaseSourceInstanceParent(
     return NULL;
 }
 
+static int
+scene_retire_compact_hierarchy_descendants(SoBRLSceneController *scene)
+{
+    if (!scene)
+	return 0;
+
+    std::unordered_set<std::string> knownKeys;
+    std::vector<std::string> descendants;
+    const int sourceCount = scene->getDatabaseSourceCount();
+    for (int i = 0; i < sourceCount; i++) {
+	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+	BRLObolDatabaseSourceSummary summary;
+	if (!source || !source->hasCompactInstanceIndex() ||
+	    !source->getSummary(summary) || !summary.valid ||
+	    summary.instanceKey.getLength() == 0)
+	    continue;
+	knownKeys.insert(summary.instanceKey.getString());
+    }
+    if (knownKeys.empty())
+	return 0;
+
+    int found = 1;
+    while (found) {
+	found = 0;
+	for (int i = 0; i < sourceCount; i++) {
+	    BRLObolDatabaseSourceSummary summary;
+	    if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid ||
+		summary.instanceKey.getLength() == 0 ||
+		summary.parentInstanceKey.getLength() == 0 ||
+		knownKeys.find(summary.parentInstanceKey.getString()) ==
+		    knownKeys.end())
+		continue;
+	    if (knownKeys.insert(summary.instanceKey.getString()).second) {
+		descendants.push_back(summary.instanceKey.getString());
+		found = 1;
+	    }
+	}
+    }
+
+    int retired = 0;
+    std::reverse(descendants.begin(), descendants.end());
+    for (const std::string &key : descendants) {
+	if (scene->removeDatabaseSourceInstance(key.c_str()) > 0)
+	    retired = 1;
+    }
+    return retired;
+}
+
 SbBool
 SoBRLSceneController::realizePending(void)
 {
@@ -1541,6 +1590,8 @@ SoBRLSceneController::realizePending(void)
     this->lastRealizedSourceCount = action.getRealizedSourceCount();
     this->lastFailedSourceCount = action.getFailedSourceCount();
     this->lastDiagnostics = action.getDiagnostics();
+
+    (void)scene_retire_compact_hierarchy_descendants(this);
 
     if (this->lastRealizedSourceCount > 0 ||
 	this->lastFailedSourceCount > 0)

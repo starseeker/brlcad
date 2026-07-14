@@ -361,6 +361,18 @@ brlcad_addexec(bg_trimesh_sync trimesh_sync.c "${BG_TEST_LIBS}" TEST)
 
 brlcad_add_test(NAME bg_trimesh_sync  COMMAND bg_trimesh_sync)
 
+#  ************ trimesh_diff.cpp tests ***********
+
+brlcad_addexec(bg_trimesh_diff trimesh_diff.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_trimesh_diff  COMMAND bg_trimesh_diff)
+
+#  ************ pca.cpp tests ***********
+
+brlcad_addexec(bg_pca pca.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_pca  COMMAND bg_pca)
+
 #  ************ triangle area tests ***********
 
 brlcad_addexec(bg_tri_area tri_area.c "${BG_TEST_LIBS}" TEST)
@@ -389,6 +401,8 @@ cmakefiles(
   plane_dist.c
   plane_isect.c
   plane_pt.c
+  pca.cpp
+  trimesh_diff.cpp
   vlist.c
   CMakeLists.txt
 )

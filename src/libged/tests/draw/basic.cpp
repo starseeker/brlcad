@@ -721,7 +721,7 @@ main(int ac, char *av[]) {
     s_av[1] = "-m0";
     s_av[2] = "all.g";
     s_av[3] = NULL;
-    ged_exec_draw(gedp, 4, s_av);
+    ged_exec_draw(gedp, 3, s_av);
 
     wait_for_progressive_draw(gedp);
 

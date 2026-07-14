@@ -168,6 +168,9 @@ public:
     size_t cadMeshPayloadCount(void) const;
     size_t cadProxyPayloadCount(int proxyKind = BRLOBOL_LOD_PROXY_NONE) const;
     size_t estimateDisplayMeshBytes(void) const;
+    /* Drop only mesh/full-detail display data.  Coarse proxy bindings remain
+     * resident so memory pressure degrades detail without emptying a scene. */
+    size_t evictDisplayMeshPayloads(unsigned int *evictedMeshCount = NULL);
     size_t evictDisplayMeshes(unsigned int *evictedMeshCount = NULL);
 
 private:

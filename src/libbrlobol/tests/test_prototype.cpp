@@ -1182,6 +1182,36 @@ write_test_db(char *dbpath, size_t dbpath_len)
 	return 0;
     }
 
+    /* Two separately stored BoTs with one baked rigid transform.  Their
+     * compact shaded realization should share one immutable PartGeometry. */
+    fastf_t pca_bot_a_vertices[12] = {
+	0.0, 0.0, 0.0,
+	4.0, 0.0, 0.0,
+	0.0, 2.0, 0.0,
+	0.0, 0.0, 1.0
+    };
+    fastf_t pca_bot_b_vertices[12] = {
+	50.0, -10.0, 3.0,
+	50.0, -6.0, 3.0,
+	48.0, -10.0, 3.0,
+	50.0, -10.0, 4.0
+    };
+    if (mk_bot(wdbp, "pca_a.bot", RT_BOT_SOLID, RT_BOT_CCW, 0,
+	       4, 4, pca_bot_a_vertices, bot_faces, NULL, NULL) != 0 ||
+	mk_bot(wdbp, "pca_b.bot", RT_BOT_SOLID, RT_BOT_CCW, 0,
+	       4, 4, pca_bot_b_vertices, bot_faces, NULL, NULL) != 0) {
+	wdb_close(wdbp);
+	return 0;
+	}
+    struct wmember pcaPair;
+    BU_LIST_INIT(&pcaPair.l);
+    if (!mk_addmember("pca_a.bot", &pcaPair.l, NULL, WMOP_UNION) ||
+	!mk_addmember("pca_b.bot", &pcaPair.l, NULL, WMOP_UNION) ||
+	mk_lcomb(wdbp, "pca_pair.c", &pcaPair, 0, NULL, NULL, NULL, 0) != 0) {
+	wdb_close(wdbp);
+	return 0;
+    }
+
     struct wmember left;
     BU_LIST_INIT(&left.l);
     mat_t left_mat;
@@ -5801,6 +5831,51 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(bbox.getMax()[0], 13.0f))
 	FAIL("shaded assembly mesh visibility should remain per-instance");
 
+    root->unref();
+
+    root = new SoSeparator;
+    root->ref();
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "pca_pair.c";
+    source->sourceRevision = 14;
+    source->drawMode = SoBRLDatabaseSource::SHADED;
+    root->addChild(source);
+
+    SoBRLRealizeAction pcaPairRealize;
+    pcaPairRealize.apply(root);
+    if (pcaPairRealize.getRealizedSourceCount() != 1 ||
+	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
+	source->getCompactInstanceCount() != 2 || source->getCompactPartCount() != 1 ||
+	source->prepareCompiledAssembly() != 1 ||
+	source->getCompiledAssemblyPartCount() != 1 ||
+	source->getCompiledAssemblyInstanceCount() != 2)
+	FAIL("transformed duplicate BoTs should share one compact CAD part");
+    SoGetBoundingBoxAction pcaPairBBoxAction(viewport);
+    pcaPairBBoxAction.apply(root);
+    bbox = pcaPairBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() || !nearly_equal(bbox.getMin()[0], 0.0f) ||
+	!nearly_equal(bbox.getMax()[0], 50.0f) ||
+	!nearly_equal(bbox.getMin()[1], -10.0f) ||
+	!nearly_equal(bbox.getMax()[1], 2.0f) ||
+	!nearly_equal(bbox.getMin()[2], 0.0f) ||
+	!nearly_equal(bbox.getMax()[2], 4.0f))
+	FAIL("transformed duplicate BoTs should retain their baked placement");
+    if (source->refreshCompactObjectGeometry("pca_b.bot", 15) != 1 ||
+	source->getCompactPartCount() != 2 ||
+	source->prepareCompiledAssembly() != 1 ||
+	source->getCompiledAssemblyPartCount() != 2)
+	FAIL("refreshing a transformed duplicate should restore native geometry");
+    SoGetBoundingBoxAction pcaPairRefreshBBoxAction(viewport);
+    pcaPairRefreshBBoxAction.apply(root);
+    bbox = pcaPairRefreshBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() || !nearly_equal(bbox.getMin()[0], 0.0f) ||
+	!nearly_equal(bbox.getMax()[0], 50.0f) ||
+	!nearly_equal(bbox.getMin()[1], -10.0f) ||
+	!nearly_equal(bbox.getMax()[1], 2.0f) ||
+	!nearly_equal(bbox.getMin()[2], 0.0f) ||
+	!nearly_equal(bbox.getMax()[2], 4.0f))
+	FAIL("refreshing a transformed duplicate should preserve placement");
     root->unref();
 
     /* The aggregate registry is the normal presentation for repeated

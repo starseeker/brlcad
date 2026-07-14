@@ -67,6 +67,84 @@ check_proxy_point(const char *label,
 }
 
 static int
+check_manifest(const BRLObolDrawManifest *manifest)
+{
+    if (!manifest || manifest->occurrenceCount != 2 ||
+	!manifest->occurrences || !manifest->occurrences[0].path ||
+	!manifest->occurrences[0].sourceName ||
+	!manifest->occurrences[1].path ||
+	!manifest->occurrences[1].sourceName ||
+	bu_strcmp(manifest->occurrences[0].path, path_full_name) != 0 ||
+	bu_strcmp(manifest->occurrences[0].sourceName, path_leaf_name) != 0 ||
+	bu_strcmp(manifest->occurrences[1].path, path_region_full_name) != 0 ||
+	bu_strcmp(manifest->occurrences[1].sourceName, path_region_name) != 0 ||
+	manifest->occurrences[0].booleanOperation != DB_OP_UNION ||
+	manifest->occurrences[1].booleanOperation != DB_OP_SUBTRACT ||
+	manifest->occurrences[0].occurrenceIndex != 3 ||
+	manifest->occurrences[1].occurrenceIndex != 7 ||
+	!manifest->occurrences[0].metadataValid ||
+	!manifest->occurrences[0].metadata.hasColor ||
+	manifest->occurrences[0].metadata.color[0] != 10 ||
+	manifest->occurrences[0].metadata.color[1] != 20 ||
+	manifest->occurrences[0].metadata.color[2] != 30 ||
+	!fastf_equal(manifest->occurrences[0].localMatrix[MDX], 11.0) ||
+	!fastf_equal(manifest->occurrences[1].localMatrix[MDY], 13.0) ||
+	!fastf_equal(manifest->occurrences[0].boundsMin[X], -1.0) ||
+	!fastf_equal(manifest->occurrences[1].boundsMax[Z], 9.0)) {
+	printf("FAIL: draw manifest data\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+make_manifest(BRLObolDrawManifest *manifest)
+{
+    if (!manifest)
+	return 0;
+    brlobol_draw_manifest_init(manifest);
+    manifest->occurrenceCount = 2;
+    manifest->occurrences = static_cast<BRLObolDrawManifestOccurrence *>(
+	bu_calloc(manifest->occurrenceCount, sizeof(*manifest->occurrences),
+	    "test draw manifest occurrences"));
+    if (!manifest->occurrences)
+	return 0;
+
+    BRLObolDrawManifestOccurrence &leaf = manifest->occurrences[0];
+    leaf.path = bu_strdup(path_full_name);
+    leaf.sourceName = bu_strdup(path_leaf_name);
+    MAT_IDN(leaf.localMatrix);
+    MAT_DELTAS(leaf.localMatrix, 11.0, 12.0, 13.0);
+    VSET(leaf.boundsMin, -1.0, -2.0, -3.0);
+    VSET(leaf.boundsMax, 4.0, 5.0, 6.0);
+    leaf.booleanOperation = DB_OP_UNION;
+    leaf.occurrenceIndex = 3;
+    leaf.metadataValid = 1;
+    brlobol_draw_metadata_record_init(&leaf.metadata);
+    leaf.metadata.directoryFound = 1;
+    leaf.metadata.hasColor = 1;
+    leaf.metadata.color[0] = 10;
+    leaf.metadata.color[1] = 20;
+    leaf.metadata.color[2] = 30;
+
+    BRLObolDrawManifestOccurrence &region = manifest->occurrences[1];
+    region.path = bu_strdup(path_region_full_name);
+    region.sourceName = bu_strdup(path_region_name);
+    MAT_IDN(region.localMatrix);
+    MAT_DELTAS(region.localMatrix, 11.0, 13.0, 17.0);
+    VSET(region.boundsMin, -4.0, -5.0, -6.0);
+    VSET(region.boundsMax, 7.0, 8.0, 9.0);
+    region.booleanOperation = DB_OP_SUBTRACT;
+    region.occurrenceIndex = 7;
+
+    if (!leaf.path || !leaf.sourceName || !region.path || !region.sourceName) {
+	brlobol_draw_manifest_free(manifest);
+	return 0;
+    }
+    return 1;
+}
+
+static int
 make_path_metadata_tree(rt_wdb *wdbp)
 {
     point_t path_center;
@@ -256,12 +334,17 @@ main(int argc, char *argv[])
     BRLObolDrawCacheStatus status;
     BRLObolDrawProxyRecord proxy;
     BRLObolDrawMetadataRecord metadata;
+    BRLObolDrawManifest manifest;
+    BRLObolDrawManifest loadedManifest;
     point_t center;
     point_t aabbMin;
     point_t aabbMax;
+    point_t aabbPoints[2];
     point_t obbPoints[8];
 
     bu_setprogname(argv[0]);
+    brlobol_draw_manifest_init(&manifest);
+    brlobol_draw_manifest_init(&loadedManifest);
 
     if (argc != 1) {
 	printf("Usage: %s\n", argv[0]);
@@ -276,6 +359,8 @@ main(int argc, char *argv[])
     VSET(center, 1.0, 2.0, 3.0);
     VSET(aabbMin, -3.0, -2.0, -1.0);
     VSET(aabbMax, 5.0, 6.0, 7.0);
+	VMOVE(aabbPoints[0], aabbMin);
+	VMOVE(aabbPoints[1], aabbMax);
     for (size_t i = 0; i < 8; i++)
 	VSET(obbPoints[i], (fastf_t)i, (fastf_t)(i + 10),
 	     (fastf_t)(i + 20));
@@ -365,12 +450,15 @@ main(int argc, char *argv[])
 					 BRLOBOL_LOD_PROXY_AABB, &status) != BRLCAD_ERROR ||
 	!status.directoryFound || status.hasCachedPayload ||
 	brlobol_draw_proxy_cache_store(dbip, path_top_name,
-				       BRLOBOL_LOD_PROXY_OBB, obbPoints, 8,
-				       &status) != BRLCAD_ERROR ||
-	!status.directoryFound || status.hasCachedPayload ||
+				       BRLOBOL_LOD_PROXY_AABB, aabbPoints, 2,
+				       &status) != BRLCAD_OK ||
+	!status.directoryFound || !status.hasCachedPayload ||
 	brlobol_draw_proxy_cache_get(dbip, path_top_name,
-				     BRLOBOL_LOD_PROXY_OBB, &proxy) != BRLCAD_ERROR) {
-	printf("FAIL: draw cache comb proxy rejection\n");
+				     BRLOBOL_LOD_PROXY_AABB, &proxy) != BRLCAD_OK ||
+	proxy.pointCount != 2 ||
+	check_proxy_point("comb AABB min", &proxy, 0, aabbMin) ||
+	check_proxy_point("comb AABB max", &proxy, 1, aabbMax)) {
+	printf("FAIL: draw cache derived combination proxy\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -424,6 +512,18 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    if (!make_manifest(&manifest) ||
+	brlobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
+	BRLCAD_OK ||
+	brlobol_draw_manifest_cache_get(dbip, path_top_name, &loadedManifest) !=
+	BRLCAD_OK || check_manifest(&loadedManifest)) {
+	printf("FAIL: draw manifest store/get\n");
+	ret = 1;
+	goto cleanup;
+    }
+    brlobol_draw_manifest_free(&manifest);
+    brlobol_draw_manifest_free(&loadedManifest);
+
     db_close(dbip);
     dbip = db_open(dbpath, DB_OPEN_READWRITE);
     if (!dbip || db_dirbuild(dbip) < 0) {
@@ -450,6 +550,14 @@ main(int argc, char *argv[])
 	ret = 1;
 	goto cleanup;
     }
+
+    if (brlobol_draw_manifest_cache_get(dbip, path_top_name,
+	&loadedManifest) != BRLCAD_OK || check_manifest(&loadedManifest)) {
+	printf("FAIL: draw manifest persistent reopen data\n");
+	ret = 1;
+	goto cleanup;
+    }
+    brlobol_draw_manifest_free(&loadedManifest);
 
     if (brlobol_draw_path_metadata_cache_invalidate(dbip, path_full_name,
 	    &status) != BRLCAD_OK ||
@@ -530,6 +638,18 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    if (brlobol_draw_manifest_cache_invalidate_database(dbip) != BRLCAD_OK ||
+	brlobol_draw_manifest_cache_get(dbip, path_top_name,
+		&loadedManifest) != BRLCAD_ERROR ||
+	!make_manifest(&manifest) ||
+	brlobol_draw_manifest_cache_store(dbip, path_top_name,
+		&manifest) != BRLCAD_OK) {
+	printf("FAIL: draw manifest database invalidation\n");
+	ret = 1;
+	goto cleanup;
+    }
+    brlobol_draw_manifest_free(&manifest);
+
     if (brlobol_draw_cache_clear_database(dbip) != BRLCAD_OK ||
 	brlobol_draw_proxy_cache_get(dbip, objname, BRLOBOL_LOD_PROXY_OBB,
 				     &proxy) != BRLCAD_ERROR ||
@@ -537,7 +657,9 @@ main(int argc, char *argv[])
 	BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_get(dbip, path_full_name,
 		&metadata) !=
-	BRLCAD_ERROR) {
+	BRLCAD_ERROR ||
+	brlobol_draw_manifest_cache_get(dbip, path_top_name,
+		&loadedManifest) != BRLCAD_ERROR) {
 	printf("FAIL: draw cache database clear\n");
 	ret = 1;
 	goto cleanup;
@@ -595,13 +717,22 @@ main(int argc, char *argv[])
 	brlobol_draw_path_metadata_cache_status(dbip, NULL,
 		&status) != BRLCAD_ERROR ||
 	brlobol_draw_path_metadata_cache_status(dbip, path_full_name,
-		NULL) != BRLCAD_ERROR) {
+		NULL) != BRLCAD_ERROR ||
+	brlobol_draw_manifest_cache_get(NULL, path_top_name,
+		&loadedManifest) != BRLCAD_ERROR ||
+	brlobol_draw_manifest_cache_get(dbip, NULL,
+		&loadedManifest) != BRLCAD_ERROR ||
+	brlobol_draw_manifest_cache_get(dbip, path_top_name,
+		NULL) != BRLCAD_ERROR ||
+	brlobol_draw_manifest_cache_invalidate_database(NULL) != BRLCAD_ERROR) {
 	printf("FAIL: draw cache null handling\n");
 	ret = 1;
 	goto cleanup;
     }
 
 cleanup:
+    brlobol_draw_manifest_free(&manifest);
+    brlobol_draw_manifest_free(&loadedManifest);
     brlobol_draw_cache_clear_all();
     if (dbip)
 	db_close(dbip);

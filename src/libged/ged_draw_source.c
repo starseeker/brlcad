@@ -479,6 +479,31 @@ _ged_draw_view_export_detail_line_from_obol(
     if (!detail || !gedp || !shape_path)
 	return 0;
 
+    if (database_source) {
+	point_t *compact_points = NULL;
+	int *compact_commands = NULL;
+	size_t compact_count = 0;
+	if (ged_draw_obol_database_source_line_data_copy_for_path(gedp,
+		shape_path, &compact_points, &compact_commands,
+		&compact_count)) {
+	    detail->geometry_kind = GED_DRAW_VIEW_EXPORT_GEOMETRY_LINE_SET;
+	    detail->arrays.points = compact_points;
+	    detail->arrays.commands = compact_commands;
+	    detail->arrays.point_count = compact_count;
+	    detail->arrays.command_count = compact_count;
+	    size_t structure_count = 0;
+	    for (size_t i = 0; i < compact_count; i++) {
+		if (compact_commands[i] != GED_DRAW_VIEW_LINE_MOVE)
+		    structure_count++;
+	    }
+	    detail->record.vlist_structure_count = structure_count;
+	    detail->record.vlist_point_count = compact_count;
+	    _ged_draw_view_export_record_bounds_from_points(&detail->record,
+		compact_points, compact_count);
+	    return 1;
+	}
+    }
+
     struct ged_draw_view_line_summary line_summary;
     int valid = database_source ?
 	ged_draw_obol_database_source_line_summary_for_path(gedp,

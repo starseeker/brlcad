@@ -438,6 +438,14 @@ main(int argc, char **argv)
 	if (!glController ||
 		!glController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 	    FAIL("QgGL should expose an Obol scene before first paint");
+	SoGLRenderAction *glAction =
+	    glController->getRenderManager()->getGLRenderAction();
+	SoGLRenderAction *swAction =
+	    controller->getRenderManager()->getGLRenderAction();
+	if (!glAction || !glAction->getContextManager() || !swAction ||
+		!swAction->getContextManager() ||
+		glAction->getContextManager() == swAction->getContextManager())
+	    FAIL("QgGL and QgSW should retain separate Obol context managers");
 
 	SoSeparator *glRoot = static_cast<SoSeparator *>(glController->getSceneRoot());
 	glRoot->addChild(new SoDirectionalLight);
@@ -472,9 +480,9 @@ main(int argc, char **argv)
 		FAIL("QgGL paint test should expose an Obol scene");
 	    SoGLRenderAction *paintAction =
 		paintController->getRenderManager()->getGLRenderAction();
-	    if (!paintAction ||
-		paintAction->getContextManager() != SoDB::getContextManager())
-		FAIL("QgGL direct rendering should bind its Qt context manager to the render action");
+	    if (!paintAction || !paintAction->getContextManager() ||
+		paintAction->getContextManager() == swAction->getContextManager())
+		FAIL("QgGL direct rendering should retain its Qt context manager");
 	    SoSeparator *paintRoot = static_cast<SoSeparator *>(paintController->getSceneRoot());
 	    paintRoot->addChild(new SoDirectionalLight);
 	    SoMaterial *paintMaterial = new SoMaterial;

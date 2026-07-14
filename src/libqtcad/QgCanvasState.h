@@ -312,9 +312,12 @@ qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
 	bool create_controller = true)
 {
     s.software_backend = software_backend;
-    /* Direct GL controllers use the system manager.  Software canvases pass
-     * their dedicated OSMesa manager explicitly to each offscreen render. */
-    brlobol_init(qgcanvas_obol_context_manager(false));
+    /* Coin has one process-global fallback manager.  Keep it stable and use
+    * explicit per-renderer managers below: QgGL binds its direct-rendering
+    * manager to its render action, while QgSW supplies its private OSMesa manager to
+     * every SoOffscreenRenderer.  Replacing the global manager as canvases
+     * are constructed can otherwise cross-contaminate those backends. */
+    brlobol_init(NULL);
     s.obol = controller;
     s.owns_obol = false;
     if (!s.obol && create_controller) {

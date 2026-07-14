@@ -185,6 +185,7 @@ BRLObolLodRequest::clear(void)
     sourceContentHash = 0;
     objectPath = "";
     objectName = "";
+    occurrenceKey = "";
     viewRevision = 0;
     policyRevision = 0;
     drawMode = BRLOBOL_LOD_DRAW_UNKNOWN;
@@ -317,13 +318,14 @@ brlobol_lod_cache_key(const BRLObolLodRequest &request)
     BRLObolLodCacheKey key;
     std::ostringstream out;
 
-    out << "brlobol-lod-v1;";
+    out << "brlobol-lod-v2;";
     append_string_field(out, "database_id", request.databaseId);
     append_uint_field(out, "database_revision", request.databaseRevision);
     append_uint_field(out, "source_revision", request.sourceRevision);
     append_uint_field(out, "source_content_hash", request.sourceContentHash);
     append_string_field(out, "object_path", request.objectPath);
     append_string_field(out, "object_name", request.objectName);
+    append_string_field(out, "occurrence_key", request.occurrenceKey);
     append_uint_field(out, "view_revision", request.viewRevision);
     append_uint_field(out, "policy_revision", request.policyRevision);
     append_int_field(out, "draw_mode", request.drawMode);

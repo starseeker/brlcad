@@ -1252,6 +1252,12 @@ GED_EXPORT extern int ged_draw_obol_database_source_line_command_at_for_path(
 	const char *path,
 	size_t index,
 	int *out);
+GED_EXPORT extern int ged_draw_obol_database_source_line_data_copy_for_path(
+	struct ged *gedp,
+	const char *path,
+	point_t **points,
+	int **commands,
+	size_t *point_count);
 GED_EXPORT extern int ged_draw_obol_database_source_surface_summary_for_path(
 	struct ged *gedp,
 	const char *path,

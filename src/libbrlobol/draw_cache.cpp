@@ -28,20 +28,28 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <sys/stat.h>
 
 #include <cmath>
+#include <array>
 #include <map>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #define BRLOBOL_DRAW_CACHE_FORMAT_FILE "draw_data.format"
-#define BRLOBOL_DRAW_CACHE_CURRENT_FORMAT 3
+#define BRLOBOL_DRAW_CACHE_CURRENT_FORMAT 4
 #define BRLOBOL_DRAW_CACHE_AABB "bb"
 #define BRLOBOL_DRAW_CACHE_OBB "obb"
 #define BRLOBOL_DRAW_CACHE_METADATA "meta"
 #define BRLOBOL_DRAW_CACHE_PATH_METADATA "meta_path"
 #define BRLOBOL_DRAW_CACHE_PATH_METADATA_INDEX "meta_path_index"
+#define BRLOBOL_DRAW_CACHE_MANIFEST "manifest"
 #define BRLOBOL_DRAW_METADATA_DISK_MAGIC 0x4f424d45u /* OBME */
+#define BRLOBOL_DRAW_PROXY_DISK_MAGIC 0x4f425058u /* OBPX */
+#define BRLOBOL_DRAW_PROXY_DISK_VERSION 1u
+#define BRLOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
+#define BRLOBOL_DRAW_MANIFEST_DISK_VERSION 1u
 
 struct BRLObolDrawCacheContext {
     bu_cache *cache;
@@ -84,6 +92,45 @@ struct BRLObolDrawMetadataDiskRecord {
     char shader[BRLOBOL_DRAW_CACHE_METADATA_SHADER_MAX];
 };
 
+/* Cache keys are intentionally short hashes because bu_cache keys have a
+ * fixed size.  The payload carries all identity fields so a hash collision or
+ * a changed database object is always treated as a cache miss. */
+struct BRLObolDrawProxyDiskHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t kind;
+    uint32_t pointCount;
+    uint32_t nameLength;
+    uint32_t directoryFlags;
+    uint32_t directoryMajorType;
+    uint32_t directoryMinorType;
+    uint64_t databaseFingerprint;
+    uint64_t directoryAddress;
+    uint64_t directoryLength;
+};
+
+struct BRLObolDrawManifestDiskHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t databaseFingerprint;
+    uint64_t occurrenceCount;
+    uint32_t rootPathLength;
+    uint32_t reserved;
+};
+
+struct BRLObolDrawManifestOccurrenceDiskHeader {
+    uint32_t pathLength;
+    uint32_t sourceNameLength;
+    int32_t booleanOperation;
+    uint32_t occurrenceIndex;
+    uint32_t metadataValid;
+    uint32_t reserved;
+    fastf_t localMatrix[16];
+    point_t boundsMin;
+    point_t boundsMax;
+    BRLObolDrawMetadataDiskRecord metadata;
+};
+
 static int
 brlobol_draw_cache_semaphore(void)
 {
@@ -105,6 +152,22 @@ brlobol_draw_cache_registry(void)
 {
     static std::map<std::string, BRLObolDrawCacheContext *> registry;
     return registry;
+}
+
+/* A compact assembly may contain thousands of occurrences of one leaf.  The
+ * persistent record is shared, but cold-cache refresh used to duplicate its
+ * realization for every occurrence. */
+static std::mutex &
+brlobol_draw_proxy_refresh_mutex(struct db_i *dbip, const char *name, int kind)
+{
+    static std::array<std::mutex, 127> refreshLocks;
+    uint64_t hash = bu_data_hash(name ? name : "", name ? strlen(name) : 0);
+
+    hash ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(dbip));
+    hash *= 1099511628211ULL;
+    hash ^= static_cast<uint64_t>(kind);
+    hash *= 1099511628211ULL;
+    return refreshLocks[hash % refreshLocks.size()];
 }
 
 static void
@@ -186,6 +249,136 @@ brlobol_draw_proxy_leaf_solid_name(db_i *dbip, const char *name,
     if (dp_out)
 	*dp_out = dp;
     return brlobol_draw_proxy_leaf_solid_directory(dp);
+}
+
+static int
+brlobol_draw_proxy_cache_directory(db_i *dbip, const char *name,
+				  directory **dp_out)
+{
+    if (dp_out)
+	*dp_out = RT_DIR_NULL;
+    if (!dbip || !name || !name[0])
+	return 0;
+
+    directory *dp = db_lookup(dbip, name, LOOKUP_QUIET);
+    if (dp_out)
+	*dp_out = dp;
+    return dp != RT_DIR_NULL && dp->d_addr != RT_DIR_PHONY_ADDR &&
+	!(dp->d_flags & RT_DIR_NON_GEOM) ? 1 : 0;
+}
+
+static uint64_t
+brlobol_draw_cache_mix(uint64_t hash, uint64_t value)
+{
+    hash ^= value;
+    return hash * 1099511628211ULL;
+}
+
+static uint64_t
+brlobol_draw_cache_database_fingerprint(const db_i *dbip)
+{
+    if (!dbip)
+	return 0;
+
+    const char *name = dbip->dbi_filename ? dbip->dbi_filename : "";
+    uint64_t fingerprint = 1469598103934665603ULL;
+    fingerprint = brlobol_draw_cache_mix(fingerprint,
+	bu_data_hash(name, strlen(name)));
+    struct stat sb;
+    if (name[0] && stat(name, &sb) == 0) {
+	fingerprint = brlobol_draw_cache_mix(fingerprint,
+	    static_cast<uint64_t>(sb.st_dev));
+	fingerprint = brlobol_draw_cache_mix(fingerprint,
+	    static_cast<uint64_t>(sb.st_ino));
+	fingerprint = brlobol_draw_cache_mix(fingerprint,
+	    static_cast<uint64_t>(sb.st_size));
+	fingerprint = brlobol_draw_cache_mix(fingerprint,
+	    static_cast<uint64_t>(sb.st_mtime));
+	fingerprint = brlobol_draw_cache_mix(fingerprint,
+	    static_cast<uint64_t>(sb.st_ctime));
+    }
+    return fingerprint;
+}
+
+static size_t
+brlobol_draw_proxy_disk_size(size_t name_length, size_t point_count)
+{
+    if (name_length > SIZE_MAX - sizeof(BRLObolDrawProxyDiskHeader) ||
+	point_count > (SIZE_MAX - sizeof(BRLObolDrawProxyDiskHeader) -
+	name_length) / sizeof(point_t))
+	return 0;
+    return sizeof(BRLObolDrawProxyDiskHeader) + name_length +
+	point_count * sizeof(point_t);
+}
+
+static int
+brlobol_draw_proxy_disk_pack(std::vector<unsigned char> &buffer,
+	const db_i *dbip, const directory *dp, const char *name, int kind,
+	const point_t *points, size_t point_count)
+{
+    if (!dbip || !dp || !name || !points || !point_count)
+	return 0;
+    const size_t name_length = strlen(name);
+    const size_t disk_size = brlobol_draw_proxy_disk_size(name_length,
+	point_count);
+    if (!disk_size || name_length > UINT32_MAX || point_count > UINT32_MAX)
+	return 0;
+
+    buffer.assign(disk_size, 0);
+    BRLObolDrawProxyDiskHeader header;
+    memset(&header, 0, sizeof(header));
+    header.magic = BRLOBOL_DRAW_PROXY_DISK_MAGIC;
+    header.version = BRLOBOL_DRAW_PROXY_DISK_VERSION;
+    header.kind = static_cast<uint32_t>(kind);
+    header.pointCount = static_cast<uint32_t>(point_count);
+    header.nameLength = static_cast<uint32_t>(name_length);
+    header.directoryFlags = static_cast<uint32_t>(dp->d_flags);
+    header.directoryMajorType = static_cast<uint32_t>(dp->d_major_type);
+    header.directoryMinorType = static_cast<uint32_t>(dp->d_minor_type);
+    header.databaseFingerprint = brlobol_draw_cache_database_fingerprint(dbip);
+    header.directoryAddress = static_cast<uint64_t>(dp->d_addr);
+    header.directoryLength = static_cast<uint64_t>(dp->d_len);
+    memcpy(buffer.data(), &header, sizeof(header));
+    memcpy(buffer.data() + sizeof(header), name, name_length);
+    memcpy(buffer.data() + sizeof(header) + name_length, points,
+	point_count * sizeof(point_t));
+    return 1;
+}
+
+static int
+brlobol_draw_proxy_disk_unpack(const void *data, size_t data_size,
+	const db_i *dbip, const directory *dp, const char *name, int kind,
+	point_t *points, size_t point_count)
+{
+    if (!data || !dbip || !dp || !name || !points || !point_count ||
+	data_size < sizeof(BRLObolDrawProxyDiskHeader))
+	return 0;
+
+    BRLObolDrawProxyDiskHeader header;
+    memcpy(&header, data, sizeof(header));
+    const size_t name_length = strlen(name);
+    const size_t expected_size = brlobol_draw_proxy_disk_size(name_length,
+	point_count);
+    if (!expected_size || data_size != expected_size ||
+	header.magic != BRLOBOL_DRAW_PROXY_DISK_MAGIC ||
+	header.version != BRLOBOL_DRAW_PROXY_DISK_VERSION ||
+	header.kind != static_cast<uint32_t>(kind) ||
+	header.pointCount != point_count ||
+	header.nameLength != name_length ||
+	header.directoryFlags != static_cast<uint32_t>(dp->d_flags) ||
+	header.directoryMajorType != static_cast<uint32_t>(dp->d_major_type) ||
+	header.directoryMinorType != static_cast<uint32_t>(dp->d_minor_type) ||
+	header.databaseFingerprint != brlobol_draw_cache_database_fingerprint(dbip) ||
+	header.directoryAddress != static_cast<uint64_t>(dp->d_addr) ||
+	header.directoryLength != static_cast<uint64_t>(dp->d_len))
+	return 0;
+
+    const unsigned char *bytes = static_cast<const unsigned char *>(data);
+    if (memcmp(bytes + sizeof(header), name, name_length) != 0)
+	return 0;
+    memcpy(points, bytes + sizeof(header) + name_length,
+	point_count * sizeof(point_t));
+    return 1;
 }
 
 
@@ -495,6 +688,35 @@ brlobol_draw_cache_clear_database(db_i *dbip)
     return opened ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
+extern "C" int
+brlobol_draw_manifest_cache_invalidate_database(db_i *dbip)
+{
+    BRLObolDrawCacheHandle handle;
+    char **keys = NULL;
+    int nkeys = 0;
+
+    if (!dbip)
+	return BRLCAD_ERROR;
+
+    int sem = brlobol_draw_cache_semaphore();
+    bu_semaphore_acquire(sem);
+    int opened = brlobol_draw_cache_open(&handle, dbip);
+    if (opened) {
+	nkeys = bu_cache_keys(&keys, handle.cache);
+	for (int i = 0; i < nkeys; i++) {
+	    if (brlobol_draw_cache_key_component_is(keys[i],
+		    BRLOBOL_DRAW_CACHE_MANIFEST))
+		bu_cache_clear(keys[i], handle.cache, NULL);
+	}
+    }
+    brlobol_draw_cache_close(&handle);
+    bu_semaphore_release(sem);
+
+    if (nkeys)
+	bu_argv_free((size_t)nkeys, keys);
+    return opened ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
 static void
 brlobol_draw_proxy_status_current(db_i *dbip,
 				  const char *name,
@@ -503,19 +725,18 @@ brlobol_draw_proxy_status_current(db_i *dbip,
 {
     void *data = NULL;
     char key[BU_CACHE_KEY_MAXLEN] = {0};
-    size_t expectedSize = brlobol_draw_proxy_point_count(kind) *
-			  sizeof(point_t);
+    const size_t pointCount = brlobol_draw_proxy_point_count(kind);
 
     if (!status)
 	return;
     brlobol_draw_cache_status_init(status);
-    if (!dbip || !name || !expectedSize)
+    if (!dbip || !name || !pointCount)
 	return;
 
     directory *dp = RT_DIR_NULL;
-    int leaf_solid = brlobol_draw_proxy_leaf_solid_name(dbip, name, &dp);
+    int cacheable = brlobol_draw_proxy_cache_directory(dbip, name, &dp);
     status->directoryFound = (dp != RT_DIR_NULL) ? 1 : 0;
-    if (!leaf_solid)
+    if (!cacheable)
 	return;
 
     brlobol_draw_proxy_cache_key(key, name, kind);
@@ -525,9 +746,11 @@ brlobol_draw_proxy_status_current(db_i *dbip,
     int sem = brlobol_draw_cache_semaphore();
     bu_semaphore_acquire(sem);
     BRLObolDrawCacheHandle handle;
-    if (brlobol_draw_cache_open(&handle, dbip)) {
+	if (brlobol_draw_cache_open(&handle, dbip)) {
 	size_t dsize = bu_cache_get(&data, key, handle.cache, NULL);
-	status->hasCachedPayload = (data && dsize == expectedSize) ? 1 : 0;
+	point_t points[8];
+	status->hasCachedPayload = brlobol_draw_proxy_disk_unpack(data, dsize,
+	    dbip, dp, name, kind, points, pointCount);
 	brlobol_draw_cache_close(&handle);
     }
     bu_semaphore_release(sem);
@@ -594,6 +817,7 @@ brlobol_draw_proxy_cache_store(db_i *dbip,
     BRLObolDrawCacheStatus current;
     char key[BU_CACHE_KEY_MAXLEN] = {0};
     size_t expectedCount = brlobol_draw_proxy_point_count(kind);
+    std::vector<unsigned char> disk;
 
     if (status)
 	brlobol_draw_cache_status_init(status);
@@ -603,9 +827,10 @@ brlobol_draw_proxy_cache_store(db_i *dbip,
     brlobol_draw_cache_status_init(&current);
 
     directory *dp = RT_DIR_NULL;
-    int leaf_solid = brlobol_draw_proxy_leaf_solid_name(dbip, name, &dp);
+    int cacheable = brlobol_draw_proxy_cache_directory(dbip, name, &dp);
     current.directoryFound = (dp != RT_DIR_NULL) ? 1 : 0;
-    if (!leaf_solid) {
+    if (!cacheable || !brlobol_draw_proxy_disk_pack(disk, dbip, dp, name,
+	kind, points, pointCount)) {
 	if (status)
 	    *status = current;
 	return BRLCAD_ERROR;
@@ -620,14 +845,13 @@ brlobol_draw_proxy_cache_store(db_i *dbip,
     BRLObolDrawCacheHandle handle;
     size_t wsize = 0;
     if (brlobol_draw_cache_open(&handle, dbip)) {
-	wsize = bu_cache_write((void *)points,
-			       expectedCount * sizeof(point_t), key, handle.cache, NULL);
+	wsize = bu_cache_write(disk.data(), disk.size(), key, handle.cache,
+	    NULL);
 	brlobol_draw_cache_close(&handle);
     }
     bu_semaphore_release(sem);
 
-    current.hasCachedPayload = (wsize == expectedCount *
-				sizeof(point_t)) ? 1 : 0;
+    current.hasCachedPayload = (wsize == disk.size()) ? 1 : 0;
     current.generatedCacheEntry = current.hasCachedPayload ? 1 : 0;
     if (status)
 	*status = current;
@@ -643,12 +867,12 @@ brlobol_draw_proxy_cache_get(db_i *dbip,
     void *data = NULL;
     char key[BU_CACHE_KEY_MAXLEN] = {0};
     size_t expectedCount = brlobol_draw_proxy_point_count(kind);
-    size_t expectedSize = expectedCount * sizeof(point_t);
 
     if (!dbip || !name || !record || !expectedCount)
 	return BRLCAD_ERROR;
     brlobol_draw_proxy_record_init(record);
-    if (!brlobol_draw_proxy_leaf_solid_name(dbip, name, NULL))
+    directory *dp = RT_DIR_NULL;
+    if (!brlobol_draw_proxy_cache_directory(dbip, name, &dp))
 	return BRLCAD_ERROR;
 
     brlobol_draw_proxy_cache_key(key, name, kind);
@@ -665,7 +889,8 @@ brlobol_draw_proxy_cache_get(db_i *dbip,
     }
     bu_semaphore_release(sem);
 
-    if (!data || dsize != expectedSize) {
+    if (!brlobol_draw_proxy_disk_unpack(data, dsize, dbip, dp, name, kind,
+	record->points, expectedCount)) {
 	if (data)
 	    bu_free(data, "brlobol draw proxy get data");
 	return BRLCAD_ERROR;
@@ -673,7 +898,6 @@ brlobol_draw_proxy_cache_get(db_i *dbip,
 
     record->kind = kind;
     record->pointCount = expectedCount;
-    memcpy(record->points, data, expectedSize);
     bu_free(data, "brlobol draw proxy get data");
     return BRLCAD_OK;
 }
@@ -692,6 +916,19 @@ brlobol_draw_proxy_cache_refresh(db_i *dbip,
 	brlobol_draw_cache_status_init(status);
     if (!dbip || !name || !brlobol_draw_proxy_point_count(kind))
 	return BRLCAD_ERROR;
+
+    std::lock_guard<std::mutex> refreshGuard(
+	brlobol_draw_proxy_refresh_mutex(dbip, name, kind));
+
+    /* A competing occurrence may have filled this persistent record while
+     * this request waited for its leaf/kind refresh lock. */
+    BRLObolDrawCacheStatus cached;
+    if (brlobol_draw_proxy_cache_status(dbip, name, kind, &cached) ==
+	BRLCAD_OK && cached.hasCachedPayload) {
+	if (status)
+	    *status = cached;
+	return BRLCAD_OK;
+    }
 
     directory *dp = RT_DIR_NULL;
     int leaf_solid = brlobol_draw_proxy_leaf_solid_name(dbip, name, &dp);
@@ -1478,4 +1715,283 @@ brlobol_draw_path_metadata_cache_refresh(db_i *dbip,
 
     return brlobol_draw_path_metadata_cache_store(dbip, path, &record,
 	    status);
+}
+
+static int
+brlobol_draw_manifest_add_size(size_t *total, size_t add)
+{
+    if (!total || add > SIZE_MAX - *total)
+	return 0;
+    *total += add;
+    return 1;
+}
+
+static char *
+brlobol_draw_manifest_copy_string(const unsigned char *data, size_t length)
+{
+    if (!data || length > SIZE_MAX - 1)
+	return NULL;
+    char *copy = static_cast<char *>(bu_malloc(length + 1,
+	"brlobol draw manifest string"));
+    if (!copy)
+	return NULL;
+    memcpy(copy, data, length);
+    copy[length] = '\0';
+    return copy;
+}
+
+static int
+brlobol_draw_manifest_matrix_valid(const fastf_t matrix[16])
+{
+    if (!matrix)
+	return 0;
+    for (size_t i = 0; i < 16; i++) {
+	if (!std::isfinite(matrix[i]))
+	    return 0;
+    }
+    return 1;
+}
+
+static int
+brlobol_draw_manifest_boolean_valid(int operation)
+{
+    return operation == DB_OP_UNION || operation == DB_OP_SUBTRACT ||
+	operation == DB_OP_INTERSECT;
+}
+
+extern "C" void
+brlobol_draw_manifest_init(BRLObolDrawManifest *manifest)
+{
+    if (!manifest)
+	return;
+    manifest->occurrenceCount = 0;
+    manifest->occurrences = NULL;
+}
+
+extern "C" void
+brlobol_draw_manifest_free(BRLObolDrawManifest *manifest)
+{
+    if (!manifest)
+	return;
+    for (size_t i = 0; i < manifest->occurrenceCount; i++) {
+	if (manifest->occurrences[i].path)
+	    bu_free(manifest->occurrences[i].path,
+		"brlobol draw manifest path");
+	if (manifest->occurrences[i].sourceName)
+	    bu_free(manifest->occurrences[i].sourceName,
+		"brlobol draw manifest source name");
+    }
+    if (manifest->occurrences)
+	bu_free(manifest->occurrences, "brlobol draw manifest occurrences");
+    brlobol_draw_manifest_init(manifest);
+}
+
+extern "C" int
+brlobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
+	const BRLObolDrawManifest *manifest)
+{
+    if (!dbip || !rootPath || !rootPath[0] || !manifest ||
+	!manifest->occurrenceCount || !manifest->occurrences)
+	return BRLCAD_ERROR;
+
+    const size_t rootLength = strlen(rootPath);
+    if (rootLength > UINT32_MAX)
+	return BRLCAD_ERROR;
+    size_t size = sizeof(BRLObolDrawManifestDiskHeader);
+    if (!brlobol_draw_manifest_add_size(&size, rootLength))
+	return BRLCAD_ERROR;
+    for (size_t i = 0; i < manifest->occurrenceCount; i++) {
+	const BRLObolDrawManifestOccurrence &occurrence =
+	    manifest->occurrences[i];
+	if (!occurrence.path || !occurrence.path[0] || !occurrence.sourceName)
+	    return BRLCAD_ERROR;
+	const size_t pathLength = strlen(occurrence.path);
+	const size_t sourceNameLength = strlen(occurrence.sourceName);
+	if (pathLength > UINT32_MAX || sourceNameLength > UINT32_MAX ||
+	    !brlobol_draw_manifest_add_size(&size,
+		sizeof(BRLObolDrawManifestOccurrenceDiskHeader)) ||
+	    !brlobol_draw_manifest_add_size(&size, pathLength) ||
+	    !brlobol_draw_manifest_add_size(&size, sourceNameLength))
+	    return BRLCAD_ERROR;
+    }
+
+    std::vector<unsigned char> disk(size, 0);
+    BRLObolDrawManifestDiskHeader header;
+    memset(&header, 0, sizeof(header));
+    header.magic = BRLOBOL_DRAW_MANIFEST_DISK_MAGIC;
+    header.version = BRLOBOL_DRAW_MANIFEST_DISK_VERSION;
+    header.databaseFingerprint = brlobol_draw_cache_database_fingerprint(dbip);
+    header.occurrenceCount = static_cast<uint64_t>(manifest->occurrenceCount);
+    header.rootPathLength = static_cast<uint32_t>(rootLength);
+    memcpy(disk.data(), &header, sizeof(header));
+    size_t offset = sizeof(header);
+    memcpy(disk.data() + offset, rootPath, rootLength);
+    offset += rootLength;
+    for (size_t i = 0; i < manifest->occurrenceCount; i++) {
+	const BRLObolDrawManifestOccurrence &occurrence =
+	    manifest->occurrences[i];
+	const size_t pathLength = strlen(occurrence.path);
+	const size_t sourceNameLength = strlen(occurrence.sourceName);
+	BRLObolDrawManifestOccurrenceDiskHeader occurrenceHeader;
+	memset(&occurrenceHeader, 0, sizeof(occurrenceHeader));
+	occurrenceHeader.pathLength = static_cast<uint32_t>(pathLength);
+	occurrenceHeader.sourceNameLength =
+	    static_cast<uint32_t>(sourceNameLength);
+	occurrenceHeader.booleanOperation = occurrence.booleanOperation;
+	occurrenceHeader.occurrenceIndex = occurrence.occurrenceIndex;
+	occurrenceHeader.metadataValid = occurrence.metadataValid ? 1u : 0u;
+	memcpy(occurrenceHeader.localMatrix, occurrence.localMatrix,
+	    sizeof(occurrenceHeader.localMatrix));
+	VMOVE(occurrenceHeader.boundsMin, occurrence.boundsMin);
+	VMOVE(occurrenceHeader.boundsMax, occurrence.boundsMax);
+	if (occurrence.metadataValid)
+	    brlobol_draw_metadata_to_disk(&occurrenceHeader.metadata,
+		&occurrence.metadata);
+	memcpy(disk.data() + offset, &occurrenceHeader,
+	    sizeof(occurrenceHeader));
+	offset += sizeof(occurrenceHeader);
+	memcpy(disk.data() + offset, occurrence.path, pathLength);
+	offset += pathLength;
+	memcpy(disk.data() + offset, occurrence.sourceName, sourceNameLength);
+	offset += sourceNameLength;
+    }
+
+    char key[BU_CACHE_KEY_MAXLEN] = {0};
+    brlobol_draw_cache_key(key, rootPath, BRLOBOL_DRAW_CACHE_MANIFEST);
+    if (!key[0] || offset != disk.size())
+	return BRLCAD_ERROR;
+
+    size_t written = 0;
+    int sem = brlobol_draw_cache_semaphore();
+    bu_semaphore_acquire(sem);
+    BRLObolDrawCacheHandle handle;
+    if (brlobol_draw_cache_open(&handle, dbip)) {
+	written = bu_cache_write(disk.data(), disk.size(), key, handle.cache,
+	    NULL);
+	brlobol_draw_cache_close(&handle);
+    }
+    bu_semaphore_release(sem);
+    return written == disk.size() ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
+extern "C" int
+brlobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
+	BRLObolDrawManifest *manifest)
+{
+    if (!dbip || !rootPath || !rootPath[0] || !manifest)
+	return BRLCAD_ERROR;
+
+    char key[BU_CACHE_KEY_MAXLEN] = {0};
+    brlobol_draw_cache_key(key, rootPath, BRLOBOL_DRAW_CACHE_MANIFEST);
+    if (!key[0])
+	return BRLCAD_ERROR;
+
+    void *data = NULL;
+    size_t dataSize = 0;
+    int sem = brlobol_draw_cache_semaphore();
+    bu_semaphore_acquire(sem);
+    BRLObolDrawCacheHandle handle;
+    if (brlobol_draw_cache_open(&handle, dbip)) {
+	dataSize = bu_cache_get(&data, key, handle.cache, NULL);
+	brlobol_draw_cache_close(&handle);
+    }
+    bu_semaphore_release(sem);
+    if (!data || dataSize < sizeof(BRLObolDrawManifestDiskHeader)) {
+	if (data)
+	    bu_free(data, "brlobol draw manifest data");
+	return BRLCAD_ERROR;
+    }
+
+    BRLObolDrawManifestDiskHeader header;
+    memcpy(&header, data, sizeof(header));
+    const size_t rootLength = strlen(rootPath);
+    if (rootLength > UINT32_MAX ||
+	header.magic != BRLOBOL_DRAW_MANIFEST_DISK_MAGIC ||
+	header.version != BRLOBOL_DRAW_MANIFEST_DISK_VERSION ||
+	header.databaseFingerprint != brlobol_draw_cache_database_fingerprint(dbip) ||
+	header.rootPathLength != rootLength || !header.occurrenceCount ||
+	header.occurrenceCount > SIZE_MAX / sizeof(BRLObolDrawManifestOccurrence)) {
+	bu_free(data, "brlobol draw manifest data");
+	return BRLCAD_ERROR;
+    }
+
+    const unsigned char *bytes = static_cast<const unsigned char *>(data);
+    size_t offset = sizeof(header);
+    if (rootLength > dataSize - offset ||
+	memcmp(bytes + offset, rootPath, rootLength) != 0) {
+	bu_free(data, "brlobol draw manifest data");
+	return BRLCAD_ERROR;
+    }
+	offset += rootLength;
+
+    BRLObolDrawManifest loaded;
+    brlobol_draw_manifest_init(&loaded);
+    loaded.occurrenceCount = static_cast<size_t>(header.occurrenceCount);
+    loaded.occurrences = static_cast<BRLObolDrawManifestOccurrence *>(
+	bu_calloc(loaded.occurrenceCount, sizeof(*loaded.occurrences),
+	    "brlobol draw manifest occurrences"));
+    if (!loaded.occurrences) {
+	bu_free(data, "brlobol draw manifest data");
+	return BRLCAD_ERROR;
+    }
+
+    int valid = 1;
+    for (size_t i = 0; valid && i < loaded.occurrenceCount; i++) {
+	if (offset > dataSize ||
+	    dataSize - offset < sizeof(BRLObolDrawManifestOccurrenceDiskHeader)) {
+	    valid = 0;
+	    break;
+	}
+	BRLObolDrawManifestOccurrenceDiskHeader occurrenceHeader;
+	memcpy(&occurrenceHeader, bytes + offset, sizeof(occurrenceHeader));
+	offset += sizeof(occurrenceHeader);
+	const size_t pathLength = occurrenceHeader.pathLength;
+	const size_t sourceNameLength = occurrenceHeader.sourceNameLength;
+	if (!pathLength || pathLength > dataSize - offset ||
+	    sourceNameLength > dataSize - offset - pathLength ||
+	    occurrenceHeader.metadataValid > 1 ||
+	    !brlobol_draw_manifest_boolean_valid(
+		occurrenceHeader.booleanOperation) ||
+	    !brlobol_draw_manifest_matrix_valid(occurrenceHeader.localMatrix) ||
+	    !brlobol_draw_proxy_bbox_valid(occurrenceHeader.boundsMin,
+		occurrenceHeader.boundsMax) ||
+	    memchr(bytes + offset, '\0', pathLength) ||
+	    memchr(bytes + offset + pathLength, '\0', sourceNameLength) ||
+	    (occurrenceHeader.metadataValid &&
+	     !brlobol_draw_metadata_disk_valid(&occurrenceHeader.metadata,
+		 sizeof(occurrenceHeader.metadata)))) {
+	    valid = 0;
+	    break;
+	}
+	BRLObolDrawManifestOccurrence &occurrence = loaded.occurrences[i];
+	occurrence.path = brlobol_draw_manifest_copy_string(bytes + offset,
+	    pathLength);
+	offset += pathLength;
+	occurrence.sourceName = brlobol_draw_manifest_copy_string(bytes + offset,
+	    sourceNameLength);
+	offset += sourceNameLength;
+	if (!occurrence.path || !occurrence.sourceName) {
+	    valid = 0;
+	    break;
+	}
+	occurrence.booleanOperation = occurrenceHeader.booleanOperation;
+	occurrence.occurrenceIndex = occurrenceHeader.occurrenceIndex;
+	occurrence.metadataValid = occurrenceHeader.metadataValid ? 1 : 0;
+	memcpy(occurrence.localMatrix, occurrenceHeader.localMatrix,
+	    sizeof(occurrence.localMatrix));
+	VMOVE(occurrence.boundsMin, occurrenceHeader.boundsMin);
+	VMOVE(occurrence.boundsMax, occurrenceHeader.boundsMax);
+	brlobol_draw_metadata_from_disk(&occurrence.metadata,
+	    &occurrenceHeader.metadata);
+    }
+    if (!valid || offset != dataSize) {
+	brlobol_draw_manifest_free(&loaded);
+	bu_free(data, "brlobol draw manifest data");
+	return BRLCAD_ERROR;
+    }
+
+    bu_free(data, "brlobol draw manifest data");
+    brlobol_draw_manifest_free(manifest);
+    *manifest = loaded;
+    return BRLCAD_OK;
 }

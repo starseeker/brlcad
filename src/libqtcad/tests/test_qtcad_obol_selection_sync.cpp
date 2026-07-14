@@ -373,25 +373,37 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 	const int editSubmitted = controller.submitLodRequestsIfNeeded();
 	const int editVisited = controller.getLastLodVisitedMeshCount();
 
-	for (int i = 0; i < 500 && service.inFlightCount() != 0; i++)
+	/*
+	 * Camera and edit churn must not wait for every OBB refinement to finish.
+	 * Drive completion as a view frame does, and require a usable proxy result
+	 * within one second while the bounded remainder continues asynchronously.
+	 */
+	int processed = 0;
+	unsigned int applied = 0;
+	unsigned int rejected = 0;
+	for (int i = 0; i < 500; i++) {
+	    processed += static_cast<int>(
+		controller.processPendingLodResults(8, 2000));
+	    applied += controller.getLastLodAppliedResultCount();
+	    rejected += controller.getLastLodRejectedResultCount();
+	    if (applied > 0)
+		break;
 	    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-	const int processed = controller.processPendingLodResults(96);
+	}
+	const size_t inFlight = service.inFlightCount();
+	const size_t queued = service.queuedResultCountForDiagnostics();
 	passed = initialSubmitted > 0 && cameraSubmitted > 0 &&
 	    editSubmitted > 0 && initialSubmitted <= 96 &&
 	    cameraSubmitted <= 96 && editSubmitted <= 96 &&
 	    initialVisited <= 32 && cameraVisited <= 32 && editVisited <= 32 &&
-	    processed > 0 && controller.getLastLodAppliedResultCount() > 0 &&
-	    controller.getLastLodRejectedResultCount() == 0 &&
-	    service.inFlightCount() == 0;
+	    processed > 0 && applied > 0 && rejected == 0 &&
+	    inFlight <= 96 && queued <= 96;
 	if (!passed)
 	    fprintf(stderr, "large LoD churn: submit=%d/%d/%d visit=%d/%d/%d "
 		"processed=%d applied=%u rejected=%u inflight=%zu queued=%zu\n",
 		initialSubmitted, cameraSubmitted, editSubmitted,
-		initialVisited, cameraVisited, editVisited, processed,
-		controller.getLastLodAppliedResultCount(),
-		controller.getLastLodRejectedResultCount(),
-		service.inFlightCount(),
-		service.queuedResultCountForDiagnostics());
+		initialVisited, cameraVisited, editVisited, processed, applied,
+		rejected, inFlight, queued);
 	controller.setLodService(NULL);
     }
     bu_setenv("BRLOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);

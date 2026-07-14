@@ -182,6 +182,23 @@ lod_update_matches_source(const SoBRLDatabaseSource *source,
     if (!source)
 	return FALSE;
 
+    if (result.request.occurrenceKey.getLength() > 0) {
+	if (!source->hasCompactInstanceIndex())
+	    return FALSE;
+	const int count = source->getCompactInstanceCount();
+	for (int i = 0; i < count; i++) {
+	    BRLObolCompactInstanceHandle handle;
+	    BRLObolCompactInstanceSummary summary;
+	    if (source->getCompactInstanceHandle(i, handle) &&
+		source->getCompactInstanceSummary(handle, summary) &&
+		summary.valid &&
+		lod_update_string_matches(summary.sourceInstanceKey,
+		    result.request.occurrenceKey))
+		return TRUE;
+	}
+	return FALSE;
+    }
+
     if (lod_update_path_matches(source->path.getValue(),
 				result.request.objectPath))
 	return TRUE;

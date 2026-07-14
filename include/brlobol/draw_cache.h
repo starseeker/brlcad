@@ -21,6 +21,7 @@
 #include "vmath.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 __BEGIN_DECLS
 
@@ -75,6 +76,25 @@ struct BRLObolDrawMetadataRecord {
     char shader[BRLOBOL_DRAW_CACHE_METADATA_SHADER_MAX];
 };
 
+/* A compact, cacheable structural occurrence used to rebuild the initial
+ * drawing registry without recursively importing database objects. */
+struct BRLObolDrawManifestOccurrence {
+    char *path;
+    char *sourceName;
+    mat_t localMatrix;
+    point_t boundsMin;
+    point_t boundsMax;
+    int booleanOperation;
+    uint32_t occurrenceIndex;
+    int metadataValid;
+    struct BRLObolDrawMetadataRecord metadata;
+};
+
+struct BRLObolDrawManifest {
+    size_t occurrenceCount;
+    struct BRLObolDrawManifestOccurrence *occurrences;
+};
+
 BRLOBOL_EXPORT void
 brlobol_draw_cache_status_init(struct BRLObolDrawCacheStatus *status);
 
@@ -83,6 +103,27 @@ brlobol_draw_proxy_record_init(struct BRLObolDrawProxyRecord *record);
 
 BRLOBOL_EXPORT void
 brlobol_draw_metadata_record_init(struct BRLObolDrawMetadataRecord *record);
+
+BRLOBOL_EXPORT void
+brlobol_draw_manifest_init(struct BRLObolDrawManifest *manifest);
+
+BRLOBOL_EXPORT void
+brlobol_draw_manifest_free(struct BRLObolDrawManifest *manifest);
+
+BRLOBOL_EXPORT int
+brlobol_draw_manifest_cache_store(struct db_i *dbip, const char *rootPath,
+	const struct BRLObolDrawManifest *manifest);
+
+/* manifest must first be initialized with brlobol_draw_manifest_init.  A
+ * successful call replaces its contents; callers release them with free. */
+BRLOBOL_EXPORT int
+brlobol_draw_manifest_cache_get(struct db_i *dbip, const char *rootPath,
+	struct BRLObolDrawManifest *manifest);
+
+/* A manifest describes an entire draw-root hierarchy, so an edit to any
+ * object conservatively invalidates all manifests for that database. */
+BRLOBOL_EXPORT int
+brlobol_draw_manifest_cache_invalidate_database(struct db_i *dbip);
 
 BRLOBOL_EXPORT void
 brlobol_draw_metadata_record_from_tree_state(

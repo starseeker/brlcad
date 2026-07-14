@@ -25,6 +25,8 @@
 #include "performance_private.h"
 
 #include "bg/line_layer.h"
+#include "bg/pca.h"
+#include "bg/trimesh.h"
 #include "bu/app.h"
 #include "bu/color.h"
 #include "bu/file.h"
@@ -79,6 +81,7 @@ struct BRLObolCompactInstanceEntry {
 	instance(obol::CadIdBuilder::Root()),
 	part(obol::CadIdBuilder::Root()),
 	localToSource(SbMatrix::identity()),
+	geometryTransform(SbMatrix::identity()),
 	localTransform(SbMatrix::identity()),
 	visible(TRUE),
 	selectable(TRUE),
@@ -102,6 +105,7 @@ struct BRLObolCompactInstanceEntry {
     obol::InstanceId instance;
     obol::PartId part;
     SbMatrix localToSource;
+    SbMatrix geometryTransform;
     SbMatrix localTransform;
     SoBRLCadAssembly::InstanceSemantic semantic;
     SbString instanceKey;
@@ -932,6 +936,7 @@ BRLObolRealizedShapeSummary::BRLObolRealizedShapeSummary(void) :
 BRLObolCompactOccurrence::BRLObolCompactOccurrence(void) :
     geometry(),
     summary(),
+    geometryTransform(SbMatrix::identity()),
     localTransform(SbMatrix::identity()),
     lodBacked(FALSE),
     sourceMeshRequestValid(FALSE),
@@ -2119,6 +2124,35 @@ store_cached_part_geometry(
 	stored.bounds = *bounds;
     else
 	stored.bounds = compact_part_geometry_bounds(stored.geometry);
+    stored.geometryTransform = SbMatrix::identity();
+    stored.lodBacked = lodBacked;
+    stored.sourceMeshRequestValid = sourceMeshRequest != NULL;
+    if (sourceMeshRequest)
+	stored.sourceMeshRequest = *sourceMeshRequest;
+    return stored.geometry;
+}
+
+static std::shared_ptr<const obol::PartGeometry>
+store_cached_part_geometry_reference(
+    std::map<std::string, BRLObolCachedPartGeometry> &cache,
+    const std::string &key, const std::shared_ptr<const obol::PartGeometry> &geometry,
+    const SbMatrix &geometryTransform, const char *sourceType,
+    const char *geometryKind, const SbBox3f *bounds, bool lodBacked,
+    const BRLObolSourceMeshRequest *sourceMeshRequest)
+{
+    if (key.empty() || !geometry)
+	return std::shared_ptr<const obol::PartGeometry>();
+
+    BRLObolCachedPartGeometry &stored = cache[key];
+    stored.geometry = geometry;
+    stored.sourceType = sourceType ? sourceType : "";
+    stored.geometryKind = geometryKind ? geometryKind : "";
+    if (bounds)
+	stored.bounds = *bounds;
+    else
+	stored.bounds = database_source_transform_bounds(
+	    compact_part_geometry_bounds(geometry), geometryTransform);
+    stored.geometryTransform = geometryTransform;
     stored.lodBacked = lodBacked;
     stored.sourceMeshRequestValid = sourceMeshRequest != NULL;
     if (sourceMeshRequest)
@@ -2157,6 +2191,19 @@ BRLObolDatabaseSourceRealizationCache::storeMeshCadGeometry(
     return store_cached_part_geometry(this->sharedMeshCadGeometry, key,
 	std::move(geometry), sourceType, geometryKind, bounds, lodBacked,
 	sourceMeshRequest);
+}
+
+std::shared_ptr<const obol::PartGeometry>
+BRLObolDatabaseSourceRealizationCache::storeMeshCadGeometryReference(
+    const std::string &key,
+    const std::shared_ptr<const obol::PartGeometry> &geometry,
+    const SbMatrix &geometryTransform, const char *sourceType,
+    const char *geometryKind, const SbBox3f *bounds, bool lodBacked,
+    const BRLObolSourceMeshRequest *sourceMeshRequest)
+{
+    return store_cached_part_geometry_reference(this->sharedMeshCadGeometry,
+	key, geometry, geometryTransform, sourceType, geometryKind, bounds,
+	lodBacked, sourceMeshRequest);
 }
 
 static const BRLObolCachedPartGeometry *
@@ -2329,7 +2376,9 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
 	    cached.geometry = entry.geometry;
 	    cached.sourceType = entry.shapeSummary.sourceType.getString();
 	    cached.geometryKind = entry.shapeSummary.geometryKind.getString();
-	    cached.bounds = localBounds;
+	    cached.geometryTransform = entry.geometryTransform;
+	    cached.bounds = database_source_transform_bounds(localBounds,
+		entry.geometryTransform);
 	    cached.lodBacked = entry.lodBacked;
 	    cached.sourceMeshRequestValid = entry.sourceMeshRequestValid;
 	    if (cached.sourceMeshRequestValid)
@@ -5329,7 +5378,11 @@ mesh_from_internal(struct rt_db_internal *intern,
 }
 
 struct compact_mesh_prefill_job {
-    compact_mesh_prefill_job(void) : ownsInternal(false), success(false)
+    compact_mesh_prefill_job(void) :
+	ownsInternal(false),
+	geometryTransform(SbMatrix::identity()),
+	representative(NULL),
+	success(false)
     {
 	RT_DB_INTERNAL_INIT(&intern);
     }
@@ -5347,6 +5400,10 @@ struct compact_mesh_prefill_job {
     std::string path;
     std::string sourceType;
     obol::PartGeometry geometry;
+    /* A non-null representative means this job reuses its immutable geometry
+     * under geometryTransform rather than building a second mesh payload. */
+    SbMatrix geometryTransform;
+    compact_mesh_prefill_job *representative;
     bool success;
 };
 
@@ -5416,6 +5473,173 @@ compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
 
     collect->jobs.push_back(std::move(job));
     return make_nop_tree();
+}
+
+static const struct rt_bot_internal *
+compact_mesh_prefill_bot(const compact_mesh_prefill_job &job)
+{
+    if (job.intern.idb_type != ID_BOT || !job.intern.idb_ptr)
+	return NULL;
+    return static_cast<const struct rt_bot_internal *>(job.intern.idb_ptr);
+}
+
+static bool
+compact_mesh_prefill_bot_cacheable(const struct rt_bot_internal *bot)
+{
+    /* Authored corner normals are geometry data.  A future extension can
+     * transform and verify them, but never substitute them silently. */
+    return bot && bot->vertices && bot->faces && bot->num_vertices > 0 &&
+	bot->num_faces > 0 && !(bot->bot_flags & RT_BOT_HAS_SURFACE_NORMALS);
+}
+
+static bool
+compact_mesh_prefill_bot_semantics_match(const struct rt_bot_internal *first,
+	const struct rt_bot_internal *second)
+{
+    return compact_mesh_prefill_bot_cacheable(first) &&
+	compact_mesh_prefill_bot_cacheable(second) &&
+	first->mode == second->mode && first->orientation == second->orientation;
+}
+
+struct compact_mesh_prefill_bot_candidate {
+    compact_mesh_prefill_job *job;
+    struct bg_trimesh_pca_signature signature;
+};
+
+static bool
+compact_mesh_prefill_pca_bucket(std::array<int64_t, 3> &bucket,
+	const struct bg_pca_frame &frame)
+{
+    for (size_t i = 0; i < bucket.size(); i++) {
+	const double value = static_cast<double>(frame.singular_values[i]);
+	if (value <= SMALL_FASTF) {
+	    bucket[i] = std::numeric_limits<int64_t>::min();
+	    continue;
+	}
+	const double scaled = log2(value) * 4096.0;
+	if (!std::isfinite(scaled) ||
+	    scaled > static_cast<double>(std::numeric_limits<int64_t>::max()) ||
+	    scaled < static_cast<double>(std::numeric_limits<int64_t>::min()))
+	    return false;
+	bucket[i] = static_cast<int64_t>(llround(scaled));
+    }
+    return true;
+}
+
+static std::string
+compact_mesh_prefill_pca_bucket_key(const struct rt_bot_internal *bot,
+	const std::array<int64_t, 3> &bucket)
+{
+    char key[256] = {0};
+    snprintf(key, sizeof(key), "%zu:%zu:%u:%u:%" PRId64 ":%" PRId64 ":%" PRId64,
+	bot->num_vertices, bot->num_faces, static_cast<unsigned int>(bot->mode),
+	static_cast<unsigned int>(bot->orientation), bucket[0], bucket[1],
+	bucket[2]);
+    return key;
+}
+
+static void
+compact_mesh_prefill_find_transformed_reuse(
+	std::vector<std::unique_ptr<compact_mesh_prefill_job>> &jobs)
+{
+    std::unordered_map<unsigned long long, std::vector<size_t>> candidates;
+	std::unordered_map<std::string, std::vector<size_t>> broadCandidates;
+    std::vector<compact_mesh_prefill_bot_candidate> representatives;
+    representatives.reserve(jobs.size());
+
+    for (const std::unique_ptr<compact_mesh_prefill_job> &jobPtr : jobs) {
+	compact_mesh_prefill_job *job = jobPtr.get();
+	const struct rt_bot_internal *bot = job ? compact_mesh_prefill_bot(*job) :
+	    NULL;
+	if (!compact_mesh_prefill_bot_cacheable(bot))
+	    continue;
+
+	struct bg_trimesh_pca_signature signature;
+	if (bg_trimesh_pca_get_signature(&signature, bot->faces,
+		bot->num_faces, reinterpret_cast<const point_t *>(bot->vertices),
+		bot->num_vertices, VUNITIZE_TOL, 1.0e-6) != BRLCAD_OK)
+	    continue;
+
+	std::array<int64_t, 3> bucket;
+	if (!compact_mesh_prefill_pca_bucket(bucket, signature.frame))
+	    continue;
+	const auto matchesCandidate = [&](size_t candidateIndex) {
+	    const compact_mesh_prefill_bot_candidate &candidate =
+		representatives[candidateIndex];
+	    const struct rt_bot_internal *representativeBot =
+		compact_mesh_prefill_bot(*candidate.job);
+	    if (!compact_mesh_prefill_bot_semantics_match(representativeBot, bot) ||
+		bg_trimesh_pca_equal(&candidate.signature,
+		    representativeBot->faces, representativeBot->num_faces,
+		    reinterpret_cast<const point_t *>(representativeBot->vertices),
+		    representativeBot->num_vertices, &signature, bot->faces,
+		    bot->num_faces, reinterpret_cast<const point_t *>(bot->vertices),
+		    bot->num_vertices, VUNITIZE_TOL) != 0)
+		return false;
+
+	    mat_t representativeToCandidate;
+	    if (bg_pca_frame_relative_matrix(representativeToCandidate,
+		&candidate.signature.frame, &signature.frame) != BRLCAD_OK)
+		return false;
+	    job->representative = candidate.job;
+	    job->geometryTransform = mat_to_sbmatrix(representativeToCandidate);
+	    return true;
+	};
+
+	bool reused = false;
+	const auto found = candidates.find(signature.hash);
+	if (found != candidates.end()) {
+	    for (size_t candidateIndex : found->second) {
+		if (matchesCandidate(candidateIndex)) {
+		    reused = true;
+		    break;
+		}
+	    }
+	}
+	if (!reused) {
+	    for (int xoffset = -1; xoffset <= 1 && !reused; xoffset++) {
+		for (int yoffset = -1; yoffset <= 1 && !reused; yoffset++) {
+		    for (int zoffset = -1; zoffset <= 1 && !reused; zoffset++) {
+			std::array<int64_t, 3> nearby = bucket;
+			const int offsets[3] = {xoffset, yoffset, zoffset};
+			bool valid = true;
+			for (size_t axis = 0; axis < nearby.size(); axis++) {
+			    if (nearby[axis] == std::numeric_limits<int64_t>::min())
+				continue;
+			    if ((offsets[axis] > 0 && nearby[axis] >
+				std::numeric_limits<int64_t>::max() - offsets[axis]) ||
+				(offsets[axis] < 0 && nearby[axis] <
+				std::numeric_limits<int64_t>::min() - offsets[axis])) {
+				valid = false;
+				break;
+			    }
+			    nearby[axis] += offsets[axis];
+			}
+			if (!valid)
+			    continue;
+			const auto broadFound = broadCandidates.find(
+			    compact_mesh_prefill_pca_bucket_key(bot, nearby));
+			if (broadFound == broadCandidates.end())
+			    continue;
+			for (size_t candidateIndex : broadFound->second) {
+			    if (matchesCandidate(candidateIndex)) {
+				reused = true;
+				break;
+			    }
+			}
+		    }
+		}
+	    }
+	}
+	if (reused)
+	    continue;
+
+	const size_t candidateIndex = representatives.size();
+	representatives.push_back({job, signature});
+	candidates[signature.hash].push_back(candidateIndex);
+	broadCandidates[compact_mesh_prefill_pca_bucket_key(bot, bucket)].push_back(
+	    candidateIndex);
+    }
 }
 
 struct compact_mesh_prefill_workers {
@@ -5535,6 +5759,10 @@ compact_mesh_prefill_realize(compact_mesh_prefill_workers *workers)
 
     for (std::unique_ptr<compact_mesh_prefill_job> &jobPtr : *workers->jobs) {
 	compact_mesh_prefill_job &job = *jobPtr;
+	if (job.representative) {
+	    job.success = true;
+	    continue;
+	}
 	if (job.intern.idb_type == ID_BOT) {
 	    job.success = cad_mesh_part_geometry_from_bot(
 		static_cast<const struct rt_bot_internal *>(job.intern.idb_ptr),
@@ -5585,6 +5813,7 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
     if (collect.jobs.empty())
 	return 0;
 
+    compact_mesh_prefill_find_transformed_reuse(collect.jobs);
     compact_mesh_prefill_workers workers;
     workers.jobs = &collect.jobs;
     workers.ttol = source_tess_tol(source);
@@ -5599,6 +5828,21 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
 		job->sourceType.c_str());
 	    source->realizationDiagnostic = diagnostic;
 	    return -1;
+	}
+	if (job->representative) {
+	    const BRLObolCachedPartGeometry *representative =
+		cache->findMeshCadGeometry(job->representative->cacheKey);
+	    if (!representative || !representative->geometry) {
+		source->realizationDiagnostic =
+		    "compact mesh transformed-geometry representative is unavailable";
+		return -1;
+	    }
+	    const SbBox3f bounds = database_source_transform_bounds(
+		representative->bounds, job->geometryTransform);
+	    cache->storeMeshCadGeometryReference(job->cacheKey,
+		representative->geometry, job->geometryTransform,
+		job->sourceType.c_str(), "surface", &bounds, false);
+	    continue;
 	}
 	SbBox3f bounds;
 	bounds.makeEmpty();
@@ -6649,6 +6893,8 @@ static union tree *
 	    input.occurrence.geometry =
 		cachedMesh ? cachedMesh->geometry :
 		std::shared_ptr<const obol::PartGeometry>();
+	    if (cachedMesh)
+		input.occurrence.geometryTransform = cachedMesh->geometryTransform;
 	    if (!input.occurrence.geometry && sharedMeshShape) {
 		obol::PartGeometry generated;
 		if (cad_mesh_part_geometry(sharedMeshShape, generated))
@@ -8052,9 +8298,19 @@ cad_compact_payload_for_entry(
     const std::vector<const BRLObolViewLodState::CadPayload *> &payloads,
     const BRLObolCompactInstanceEntry &entry)
 {
+    const SbString occurrenceKey = compact_instance_identity(entry);
     for (const BRLObolViewLodState::CadPayload *payload : payloads) {
-	if (payload && cad_lod_path_equal(payload->sourcePath,
-		entry.semantic.path))
+	if (payload && payload->sourceInstanceKey.getLength() > 0 &&
+	    bu_strcmp(payload->sourceInstanceKey.getString(),
+		occurrenceKey.getString()) == 0)
+	    return payload;
+    }
+    /* Source-wide legacy results deliberately have no occurrence key.  They
+     * may still bind by path, but an occurrence-specific result never aliases
+     * a sibling merely because both paths are textual matches. */
+    for (const BRLObolViewLodState::CadPayload *payload : payloads) {
+	if (payload && payload->sourceInstanceKey.getLength() == 0 &&
+	    cad_lod_path_equal(payload->sourcePath, entry.semantic.path))
 	    return payload;
     }
     return NULL;
@@ -8505,8 +8761,9 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     const char *path = input.occurrence.summary.path.getString();
     if (!path || !path[0])
 	path = source->path.getValue().getString();
-    const SbMatrix matrix = cad_instance_matrix(source,
-	input.occurrence.localTransform);
+    SbMatrix geometryToSource = input.occurrence.geometryTransform;
+    geometryToSource.multRight(input.occurrence.localTransform);
+    const SbMatrix matrix = cad_instance_matrix(source, geometryToSource);
     const std::string instanceKey = cad_instance_key(source, path, ordinal++);
     const obol::InstanceId instanceId =
 	obol::CadIdBuilder::hash128(instanceKey);
@@ -8523,7 +8780,8 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     if (entry.sourceMeshRequestValid)
 	entry.sourceMeshRequest = input.occurrence.sourceMeshRequest;
     entry.localToSource = matrix;
-    entry.localTransform = input.occurrence.localTransform;
+    entry.geometryTransform = input.occurrence.geometryTransform;
+    entry.localTransform = geometryToSource;
     entry.semantic = input.semantic;
     if (entry.semantic.path.getLength() == 0)
 	entry.semantic.path = path;
@@ -13221,6 +13479,42 @@ SoBRLDatabaseSource::getCompactOccurrence(
     return occurrence.geometry ? TRUE : FALSE;
 }
 
+SbBool
+SoBRLDatabaseSource::copyCompactWireGeometry(
+    std::vector<SbVec3f> &points, std::vector<int32_t> &commands) const
+{
+    points.clear();
+    commands.clear();
+    if (!this->compactIndex)
+	return FALSE;
+
+    for (const BRLObolCompactInstanceEntry &entry :
+	 this->compactIndex->entries) {
+	if (!entry.visible || !entry.geometry || !entry.geometry->wire)
+	    continue;
+
+	const obol::WireRep &wire = *entry.geometry->wire;
+	const auto appendPoint = [&entry, &points, &commands](
+	    const SbVec3f &point, int32_t command) {
+	    SbVec3f transformed;
+	    entry.localToSource.multVecMatrix(point, transformed);
+	    points.push_back(transformed);
+	    commands.push_back(command);
+	};
+
+	for (size_t i = 1; i < wire.segmentPoints.size(); i += 2) {
+	    appendPoint(wire.segmentPoints[i - 1], 0);
+	    appendPoint(wire.segmentPoints[i], 1);
+	}
+	for (const obol::WirePolyline &polyline : wire.polylines) {
+	    for (size_t i = 0; i < polyline.points.size(); i++)
+		appendPoint(polyline.points[i], i == 0 ? 0 : 1);
+	}
+    }
+
+    return points.empty() ? FALSE : TRUE;
+}
+
 const BRLObolCompactInstanceEntry *
 SoBRLDatabaseSource::findCompactInstanceEntry(
 	const BRLObolCompactInstanceHandle &handle)
@@ -13840,6 +14134,14 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	if (oldPartCount != this->compactIndex->partReferenceCounts.end() &&
 	    oldPartCount->second > 0)
 	    oldPartCount->second--;
+	/* The replacement is native object-local geometry.  Preserve the tree
+	 * placement while discarding any representative-to-object transform that
+	 * belonged to the shared PCA match. */
+	SbMatrix objectToSource = entry.geometryTransform.inverse();
+	objectToSource.multRight(entry.localTransform);
+	entry.geometryTransform = SbMatrix::identity();
+	entry.localTransform = objectToSource;
+	entry.localToSource = cad_instance_matrix(this, entry.localTransform);
 	entry.part = partId;
 	entry.geometry = geometry;
 	entry.wireGeometry = geometry->wire ? TRUE : FALSE;
@@ -13862,8 +14164,11 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 		entry.sourceMeshRequest);
 	}
 	compact_index_bounds_add(*this->compactIndex, entry);
-	if (index < this->compactIndex->instances.size())
+	if (index < this->compactIndex->instances.size()) {
 	    this->compactIndex->instances[index].record.part = partId;
+	    this->compactIndex->instances[index].record.localToRoot =
+		entry.localToSource;
+	}
     }
     this->compactIndex->partReferenceCounts[partId] += matching.size();
     if (sharedWire)

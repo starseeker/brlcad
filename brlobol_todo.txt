@@ -551,6 +551,13 @@ Priority 2: Supported-Matrix Validation
     native X11, Windows, and macOS coverage.  Platform fixes improve Obol hosts;
     they do not revive OGL/WGL or another scene path.
 
+Other
+-----------------
+QGED still has meaningful scaling headroom. The next structural targets are
+caching the Obol frame plan/compiled-instance state across pure camera changes
+and avoiding full Qt parent-background painting around the GL canvas.
+
+
 Verification Gates
 ------------------
 

@@ -18,6 +18,8 @@
 #include "rt/view.h"
 #include "wdb.h"
 
+#include <obol/cad/SoCADAssembly.h>
+
 #include <Inventor/SbBox.h>
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbViewVolume.h>
@@ -5910,6 +5912,213 @@ test_view_local_lod_only_pick(void)
     return ret;
 }
 
+static std::shared_ptr<const obol::PartGeometry>
+compact_duplicate_proxy_geometry(void)
+{
+    std::shared_ptr<obol::PartGeometry> geometry(new obol::PartGeometry);
+    obol::WireRep wire;
+    wire.segmentPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    wire.segmentPoints.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
+    wire.segmentIds.push_back(1);
+    wire.bounds = SbBox3f(SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 0.0f, 0.0f));
+    geometry->wire = std::move(wire);
+    return geometry;
+}
+
+static int
+test_view_lod_mesh_eviction_preserves_proxy(void)
+{
+    SoBRLMeshShape *mesh = make_mesh("/eviction/mesh.bot", "mesh.bot");
+    mesh->ref();
+    BRLObolViewLodState viewState;
+    BRLObolLodRequest meshRequest =
+	make_request("/eviction/mesh.bot", "mesh.bot");
+    BRLObolLodResult meshResult = mesh_payload_result(meshRequest);
+    BRLObolLodRequest proxyRequest = meshRequest;
+    proxyRequest.providerId = "rt_proxy_aabb";
+    proxyRequest.providerVersion = "rt-proxy-v1";
+    proxyRequest.qualityTier = BRLOBOL_LOD_QUALITY_PROXY;
+    BRLObolLodResult proxyResult = brlobol_lod_aabb_result(proxyRequest,
+	proxyRequest.bounds, NULL);
+
+    int ret = 0;
+    if (!viewState.applyDisplayResult(mesh, meshResult) ||
+	!viewState.applyDisplayResult(mesh, proxyResult) ||
+	viewState.meshPayloadCount() != 1 ||
+	viewState.proxyPayloadCount(BRLOBOL_LOD_PROXY_AABB) != 1) {
+	printf("FAIL: mesh eviction fixture did not install display payloads\n");
+	ret = 1;
+    }
+
+    unsigned int evicted = 0;
+	const size_t freed = viewState.evictDisplayMeshPayloads(&evicted);
+    if (!ret && (freed == 0 || evicted != 1 || viewState.findMesh(mesh) ||
+	!viewState.findProxy(mesh) || viewState.meshPayloadCount() != 0 ||
+	viewState.proxyPayloadCount(BRLOBOL_LOD_PROXY_AABB) != 1)) {
+	printf("FAIL: mesh eviction discarded the retained proxy frontier\n");
+	ret = 1;
+    }
+
+    mesh->unref();
+    return ret;
+}
+
+static int
+test_compact_occurrence_lod_identity(void)
+{
+    BRLObolViewLodState viewState;
+    SoBRLViewLodGroup *root = new SoBRLViewLodGroup;
+    root->ref();
+    root->setViewLodState(&viewState);
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->path = "duplicate-root.c";
+    source->instanceKey = "duplicate-root";
+    root->addChild(source);
+
+    std::shared_ptr<const obol::PartGeometry> geometry =
+	compact_duplicate_proxy_geometry();
+    BRLObolCompactOccurrence first;
+    first.geometry = geometry;
+    first.summary.valid = TRUE;
+    first.summary.shapeKind = BRLObolRealizedShapeSummary::SHAPE_VLIST;
+    first.summary.path = "duplicate-root.c/duplicate.s";
+    first.summary.sourceName = "duplicate.s";
+    first.summary.sourceType = "proxy";
+    first.summary.sourceId = 91;
+    first.summary.visible = TRUE;
+    first.summary.selectable = TRUE;
+    first.localTransform = SbMatrix::identity();
+    first.lodBacked = TRUE;
+    first.occurrenceIndex = 0;
+
+    BRLObolCompactOccurrence second = first;
+    second.localTransform.setTranslate(SbVec3f(10.0f, 0.0f, 0.0f));
+    second.occurrenceIndex = 1;
+    std::vector<BRLObolCompactOccurrence> occurrences;
+    occurrences.push_back(first);
+    occurrences.push_back(second);
+    if (source->setCompactOccurrenceRegistry(occurrences) != 2) {
+	printf("FAIL: compact occurrence LoD identity setup\n");
+	root->setViewLodState(NULL);
+	root->unref();
+	return 1;
+    }
+
+    BRLObolCompactInstanceHandle firstHandle;
+    BRLObolCompactInstanceHandle secondHandle;
+    BRLObolCompactInstanceSummary firstSummary;
+    BRLObolCompactInstanceSummary secondSummary;
+    if (!source->getCompactInstanceHandle(0, firstHandle) ||
+	!source->getCompactInstanceHandle(1, secondHandle) ||
+	!source->getCompactInstanceSummary(firstHandle, firstSummary) ||
+	!source->getCompactInstanceSummary(secondHandle, secondSummary) ||
+	firstSummary.sourceInstanceKey.getLength() == 0 ||
+	secondSummary.sourceInstanceKey.getLength() == 0 ||
+	bu_strcmp(firstSummary.sourceInstanceKey.getString(),
+		secondSummary.sourceInstanceKey.getString()) == 0) {
+	printf("FAIL: compact occurrence LoD identity handles\n");
+	root->setViewLodState(NULL);
+	root->unref();
+	return 1;
+    }
+
+    BRLObolLodRequest firstRequest =
+	make_request("duplicate-root.c/duplicate.s", "duplicate.s");
+    firstRequest.drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    firstRequest.qualityTier = BRLOBOL_LOD_QUALITY_PROXY;
+    firstRequest.occurrenceKey = firstSummary.sourceInstanceKey;
+    BRLObolLodRequest secondRequest = firstRequest;
+    secondRequest.occurrenceKey = secondSummary.sourceInstanceKey;
+    const SbBox3f firstBounds(SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(2.0f, 2.0f, 2.0f));
+    const SbBox3f secondBounds(SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(3.0f, 3.0f, 3.0f));
+    BRLObolLodResult firstResult =
+	brlobol_lod_aabb_result(firstRequest, firstBounds, NULL);
+    BRLObolLodResult secondResult =
+	brlobol_lod_aabb_result(secondRequest, secondBounds, NULL);
+
+    SoBRLLodUpdateAction update;
+    update.setViewLodState(&viewState);
+    update.addResult(firstResult);
+    update.addResult(secondResult);
+    update.apply(root);
+
+    int ret = 0;
+    if (update.getMatchedResultCount() != 2 ||
+	update.getAppliedResultCount() != 2 ||
+	viewState.cadPayloadCount() != 2) {
+	printf("FAIL: compact occurrence LoD results did not bind independently\n");
+	ret = 1;
+    }
+    if (!ret) {
+	/* The OBB must replace, rather than coexist with, the first
+	 * occurrence's AABB.  A late coarse result must not displace it. */
+	BRLObolLodRequest obbRequest = firstRequest;
+	obbRequest.providerId = "rt_proxy_obb";
+	obbRequest.providerVersion = "rt-proxy-v1";
+	BRLObolLodProxy obb;
+	obb.kind = BRLOBOL_LOD_PROXY_OBB;
+	obb.bounds = firstBounds;
+	obb.center = SbVec3f(1.0f, 1.0f, 1.0f);
+	obb.axisX = SbVec3f(1.0f, 0.0f, 0.0f);
+	obb.axisY = SbVec3f(0.0f, 1.0f, 0.0f);
+	obb.axisZ = SbVec3f(0.0f, 0.0f, 1.0f);
+	obb.halfExtents = SbVec3f(1.0f, 1.0f, 1.0f);
+	BRLObolLodResult obbResult =
+	    brlobol_lod_proxy_result(obbRequest, obb, NULL);
+	SoBRLLodUpdateAction obbUpdate;
+	obbUpdate.setViewLodState(&viewState);
+	obbUpdate.addResult(obbResult);
+	obbUpdate.apply(root);
+	const BRLObolViewLodState::CadPayload *obbPayload =
+	    viewState.findCadForResult(obbResult);
+	if (obbUpdate.getMatchedResultCount() != 1 ||
+	    obbUpdate.getAppliedResultCount() != 1 ||
+	    viewState.cadPayloadCount() != 2 || !obbPayload ||
+	    obbPayload->proxy.kind != BRLOBOL_LOD_PROXY_OBB) {
+	    printf("FAIL: compact OBB refinement did not replace its AABB\n");
+	    ret = 1;
+	}
+
+	BRLObolLodRequest lateAabbRequest = firstRequest;
+	lateAabbRequest.providerId = "rt_proxy_aabb";
+	lateAabbRequest.providerVersion = "rt-proxy-v1";
+	BRLObolLodResult lateAabb =
+	    brlobol_lod_aabb_result(lateAabbRequest, firstBounds, NULL);
+	SoBRLLodUpdateAction lateUpdate;
+	lateUpdate.setViewLodState(&viewState);
+	lateUpdate.addResult(lateAabb);
+	lateUpdate.apply(root);
+	obbPayload = viewState.findCadForResult(obbResult);
+	if (lateUpdate.getMatchedResultCount() != 1 ||
+	    lateUpdate.getAppliedResultCount() != 1 ||
+	    viewState.cadPayloadCount() != 2 || !obbPayload ||
+	    obbPayload->proxy.kind != BRLOBOL_LOD_PROXY_OBB) {
+	    printf("FAIL: late compact AABB displaced a better OBB\n");
+	    ret = 1;
+	}
+    }
+    if (!ret) {
+	SbViewportRegion viewport(100, 100);
+	SoGetBoundingBoxAction boundsAction(viewport);
+	boundsAction.apply(root);
+	const SbBox3f bounds = boundsAction.getBoundingBox();
+	if (bounds.isEmpty() || fabs(bounds.getMin()[0]) > 0.0001f ||
+	    fabs(bounds.getMax()[0] - 13.0f) > 0.0001f ||
+	    fabs(bounds.getMax()[1] - 3.0f) > 0.0001f) {
+	    printf("FAIL: compact occurrence LoD result aliased duplicate paths\n");
+	    ret = 1;
+	}
+    }
+
+    root->setViewLodState(NULL);
+    root->unref();
+    return ret;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -5937,6 +6146,8 @@ main(int argc, char **argv)
 	return 1;
     if (test_view_controller_mesh_residency_budget_auto())
 	return 1;
+    if (test_view_lod_mesh_eviction_preserves_proxy())
+	return 1;
     if (test_mesh_lod_submit_action())
 	return 1;
     if (test_view_controller_source_backed_multi_source_exact_submit())
@@ -5950,6 +6161,8 @@ main(int argc, char **argv)
     if (test_view_controller_large_result_transfer())
 	return 1;
     if (test_view_local_lod_only_pick())
+	return 1;
+    if (test_compact_occurrence_lod_identity())
 	return 1;
     if (test_view_controller_lod_submit_and_apply())
 	return 1;

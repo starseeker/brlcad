@@ -10,6 +10,7 @@
 
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbBox.h>
+#include <Inventor/SbMatrix.h>
 
 #include "brlobol/source_mesh_request.h"
 
@@ -25,6 +26,7 @@ class SoBRLMeshShape;
 
 struct BRLObolCachedPartGeometry {
     BRLObolCachedPartGeometry(void) :
+	geometryTransform(SbMatrix::identity()),
 	lodBacked(false),
 	sourceMeshRequestValid(false)
     {
@@ -35,6 +37,9 @@ struct BRLObolCachedPartGeometry {
     std::string sourceType;
     std::string geometryKind;
     SbBox3f bounds;
+    /* Maps the shared geometry's local coordinates into this cache key's
+     * object-local coordinates.  Identity for ordinary cache entries. */
+    SbMatrix geometryTransform;
     bool lodBacked;
     bool sourceMeshRequestValid;
     BRLObolSourceMeshRequest sourceMeshRequest;
@@ -67,6 +72,13 @@ struct BRLObolDatabaseSourceRealizationCache {
 	const std::string &key, obol::PartGeometry &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
 	const SbBox3f *bounds = NULL, bool lodBacked = false,
+	const BRLObolSourceMeshRequest *sourceMeshRequest = NULL);
+    std::shared_ptr<const obol::PartGeometry> storeMeshCadGeometryReference(
+	const std::string &key,
+	const std::shared_ptr<const obol::PartGeometry> &geometry,
+	const SbMatrix &geometryTransform, const char *sourceType = NULL,
+	const char *geometryKind = NULL, const SbBox3f *bounds = NULL,
+	bool lodBacked = false,
 	const BRLObolSourceMeshRequest *sourceMeshRequest = NULL);
     const BRLObolCachedPartGeometry *findWireCadGeometry(
 	const std::string &key) const;

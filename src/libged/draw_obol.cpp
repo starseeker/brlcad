@@ -68,6 +68,7 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoSeparator.h>
+#include <obol/cad/SoCADAssembly.h>
 #include <float.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -3811,7 +3812,11 @@ ged_draw_obol_view_lod_policy_changed(struct ged *gedp, void *view_ctx)
 	    if (ged_obol_apply_view_lod_policy(gedp, view_ctx, scene,
 					       summary.instanceKey.getString()) > 0)
 		changed = 1;
+	    /* A compact registry owns stable occurrence state.  LoD changes only
+	     * its view-local backing payloads; marking it stale would rebuild the
+	     * scene merely to turn LoD off. */
 	    if (policy_state.valid && !policy_state.meshEnabled &&
+		!scene->getDatabaseSource(i)->isCompactOccurrenceRegistry() &&
 		scene->markDatabaseSourceInstanceStale(
 		    summary.instanceKey.getString(),
 		    SoBRLDatabaseSource::STALE_VIEW) > 0)
@@ -16390,6 +16395,52 @@ ged_draw_obol_database_source_line_command_at_for_path(
 }
 
 extern "C" int
+ged_draw_obol_database_source_line_data_copy_for_path(
+    struct ged *gedp,
+    const char *path,
+    point_t **points,
+    int **commands,
+    size_t *point_count)
+{
+    if (points)
+	*points = NULL;
+    if (commands)
+	*commands = NULL;
+    if (point_count)
+	*point_count = 0;
+    if (!points || !commands || !point_count)
+	return 0;
+
+    SoBRLDatabaseSource *source =
+	ged_obol_owned_database_source_for_path(gedp, path);
+    if (!source || !source->hasCompactInstanceIndex())
+	return 0;
+
+    std::vector<SbVec3f> compactPoints;
+    std::vector<int32_t> compactCommands;
+    if (!source->copyCompactWireGeometry(compactPoints, compactCommands) ||
+	compactPoints.size() != compactCommands.size())
+	return 0;
+
+    point_t *copiedPoints = (point_t *)bu_calloc(compactPoints.size(),
+	sizeof(point_t), "GED Obol compact export points");
+    int *copiedCommands = (int *)bu_calloc(compactCommands.size(),
+	sizeof(int), "GED Obol compact export commands");
+    for (size_t i = 0; i < compactPoints.size(); i++) {
+	copiedPoints[i][X] = compactPoints[i][0];
+	copiedPoints[i][Y] = compactPoints[i][1];
+	copiedPoints[i][Z] = compactPoints[i][2];
+	copiedCommands[i] = compactCommands[i] == 0 ?
+	    GED_DRAW_VIEW_LINE_MOVE : GED_DRAW_VIEW_LINE_DRAW;
+    }
+
+    *points = copiedPoints;
+    *commands = copiedCommands;
+    *point_count = compactPoints.size();
+    return 1;
+}
+
+extern "C" int
 ged_draw_obol_database_source_surface_summary_for_path(
     struct ged *gedp,
     const char *path,
@@ -17921,8 +17972,10 @@ struct ged_obol_cheap_bounds_context {
     struct ged *gedp;
     struct bg_tess_tol ttol;
     struct bn_tol tol;
-    std::unordered_map<const struct directory *, ged_obol_cheap_local_bounds>
-	primitiveBounds;
+    /* Bounds are object-local and may be reused by every occurrence in the
+     * initial structural proxy snapshot. */
+    std::unordered_map<ged_db_index_id, ged_obol_cheap_local_bounds>
+	objectBounds;
     std::unordered_set<ged_db_index_id> activeObjects;
 };
 
@@ -17949,9 +18002,8 @@ ged_obol_transform_bounds(point_t outMin, point_t outMax,
 }
 
 static int
-ged_obol_cheap_bounds_object(ged_obol_cheap_bounds_context &ctx,
-    ged_db_index_id objectId, const mat_t matrix, point_t boundsMin,
-    point_t boundsMax)
+ged_obol_cheap_local_bounds_object(ged_obol_cheap_bounds_context &ctx,
+    ged_db_index_id objectId, point_t boundsMin, point_t boundsMax)
 {
     struct ged_db_index_record record;
     memset(&record, 0, sizeof(record));
@@ -17961,19 +18013,43 @@ ged_obol_cheap_bounds_object(ged_obol_cheap_bounds_context &ctx,
 
     const ged_db_index_id canonicalId = record.object_id ?
 	record.object_id : record.id;
+
+    auto cached = ctx.objectBounds.find(canonicalId);
+    if (cached != ctx.objectBounds.end()) {
+	VMOVE(boundsMin, cached->second.bmin);
+	VMOVE(boundsMax, cached->second.bmax);
+	return 1;
+    }
+
+    ged_obol_cheap_local_bounds local;
+    const char *objectName = record.dp->d_namep;
+    struct BRLObolDrawProxyRecord cachedProxy;
+    brlobol_draw_proxy_record_init(&cachedProxy);
+    if (objectName && objectName[0] &&
+	brlobol_draw_proxy_cache_get(ctx.gedp->dbip, objectName,
+	    BRLOBOL_DRAW_CACHE_PROXY_AABB, &cachedProxy) == BRLCAD_OK &&
+	cachedProxy.pointCount == 2) {
+	VMOVE(local.bmin, cachedProxy.points[0]);
+	VMOVE(local.bmax, cachedProxy.points[1]);
+	ctx.objectBounds.emplace(canonicalId, local);
+	VMOVE(boundsMin, local.bmin);
+	VMOVE(boundsMax, local.bmax);
+	return 1;
+    }
+
     if (!record.is_comb) {
-	auto found = ctx.primitiveBounds.find(record.dp);
-	if (found == ctx.primitiveBounds.end()) {
-	    ged_obol_cheap_local_bounds local;
-	    mat_t identity;
-	    MAT_IDN(identity);
-	    if (rt_bound_instance(&local.bmin, &local.bmax, record.dp,
-		ctx.gedp->dbip, &ctx.ttol, &ctx.tol, &identity) < 0)
-		return 0;
-	    found = ctx.primitiveBounds.emplace(record.dp, local).first;
-	}
-	return ged_obol_transform_bounds(boundsMin, boundsMax,
-	    found->second.bmin, found->second.bmax, matrix);
+	mat_t identity;
+	MAT_IDN(identity);
+	if (rt_bound_instance(&local.bmin, &local.bmax, record.dp,
+	    ctx.gedp->dbip, &ctx.ttol, &ctx.tol, &identity) < 0)
+	    return 0;
+	if (objectName && objectName[0])
+	    (void)brlobol_draw_proxy_cache_store(ctx.gedp->dbip, objectName,
+		BRLOBOL_DRAW_CACHE_PROXY_AABB, &local.bmin, 2, NULL);
+	ctx.objectBounds.emplace(canonicalId, local);
+	VMOVE(boundsMin, local.bmin);
+	VMOVE(boundsMax, local.bmax);
+	return 1;
     }
 
     if (!ctx.activeObjects.insert(canonicalId).second)
@@ -17990,25 +18066,50 @@ ged_obol_cheap_bounds_object(ged_obol_cheap_bounds_context &ctx,
 	    !child.record.valid)
 	    continue;
 	mat_t childMatrix;
-	mat_t accumulated;
-	if (child.matrix_valid)
-	    MAT_COPY(childMatrix, child.matrix);
-	else
-	    MAT_IDN(childMatrix);
-	bn_mat_mul(accumulated, matrix, childMatrix);
 	point_t childMin;
 	point_t childMax;
 	const ged_db_index_id childId = child.record.object_id ?
 	    child.record.object_id : child.record.id;
-	if (!ged_obol_cheap_bounds_object(ctx, childId, accumulated,
-		childMin, childMax))
+	if (!ged_obol_cheap_local_bounds_object(ctx, childId, childMin,
+		childMax))
 	    continue;
-	VMINMAX(boundsMin, boundsMax, childMin);
-	VMINMAX(boundsMin, boundsMax, childMax);
+	if (child.matrix_valid)
+	    MAT_COPY(childMatrix, child.matrix);
+	else
+	    MAT_IDN(childMatrix);
+	point_t transformedMin;
+	point_t transformedMax;
+	if (!ged_obol_transform_bounds(transformedMin, transformedMax,
+		childMin, childMax, childMatrix))
+	    continue;
+	VMINMAX(boundsMin, boundsMax, transformedMin);
+	VMINMAX(boundsMin, boundsMax, transformedMax);
 	haveBounds = 1;
     }
     ctx.activeObjects.erase(canonicalId);
+    if (haveBounds) {
+	VMOVE(local.bmin, boundsMin);
+	VMOVE(local.bmax, boundsMax);
+	ctx.objectBounds.emplace(canonicalId, local);
+	if (objectName && objectName[0])
+	    (void)brlobol_draw_proxy_cache_store(ctx.gedp->dbip, objectName,
+		BRLOBOL_DRAW_CACHE_PROXY_AABB, &local.bmin, 2, NULL);
+    }
     return haveBounds;
+}
+
+static int
+ged_obol_cheap_bounds_object(ged_obol_cheap_bounds_context &ctx,
+    ged_db_index_id objectId, const mat_t matrix, point_t boundsMin,
+    point_t boundsMax)
+{
+    point_t localMin;
+    point_t localMax;
+    if (!ged_obol_cheap_local_bounds_object(ctx, objectId, localMin,
+	localMax))
+	return 0;
+    return ged_obol_transform_bounds(boundsMin, boundsMax, localMin,
+	localMax, matrix);
 }
 
 static int
@@ -18037,6 +18138,444 @@ ged_obol_cheap_proxy_bounds(struct ged *gedp, const char *path,
 	boundsMin, boundsMax);
 }
 
+/* Initial proxy publication must remain bounded: it is the synchronous part
+ * of an interactive draw.  These limits provide a useful, colored structural
+ * outline without turning a large assembly walk into a full realization. */
+static const size_t ged_obol_structural_proxy_max_nodes = 128;
+static const size_t ged_obol_structural_proxy_max_proxies = 64;
+static const size_t ged_obol_structural_proxy_max_depth = 2;
+static const size_t ged_obol_structural_proxy_max_metadata = 64;
+
+struct ged_obol_structural_proxy_node {
+    std::string path;
+    std::string objectName;
+    std::string instanceKey;
+    std::string parentInstanceKey;
+    struct ged_db_index_record record;
+    int boolOp;
+    size_t row;
+    /* This is relative to the root source.  The root source owns its own
+     * placement matrix, so compact occurrences must not bake it in. */
+    SbMatrix localMatrix;
+    point_t boundsMin;
+    point_t boundsMax;
+    int publishBounds;
+    int metadataValid;
+    struct BRLObolDrawMetadataRecord metadata;
+};
+
+struct ged_obol_structural_proxy_context {
+    struct ged *gedp;
+    void *viewCtx;
+    int drawMode;
+    uint32_t sourceRevision;
+    ged_obol_cheap_bounds_context boundsContext;
+    std::vector<ged_obol_structural_proxy_node> nodes;
+    size_t proxyCount;
+    size_t metadataCount;
+};
+
+static int
+ged_obol_structural_proxy_metadata(struct ged_obol_structural_proxy_context &ctx,
+	const char *path, struct BRLObolDrawMetadataRecord *metadata)
+{
+    if (!metadata || !ctx.gedp || !ctx.gedp->dbip || !path || !path[0] ||
+	ctx.metadataCount >= ged_obol_structural_proxy_max_metadata)
+	return 0;
+
+    ctx.metadataCount++;
+    brlobol_draw_metadata_record_init(metadata);
+    const char *cache_path = ged_obol_skip_leading_slash(path);
+    if (!cache_path || !cache_path[0])
+	return 0;
+    if (brlobol_draw_path_metadata_cache_get(ctx.gedp->dbip, cache_path,
+	metadata) != BRLCAD_OK &&
+	brlobol_draw_path_metadata_cache_refresh(ctx.gedp->dbip, cache_path,
+	NULL) != BRLCAD_OK)
+	return 0;
+    if (!metadata->directoryFound)
+	return brlobol_draw_path_metadata_cache_get(ctx.gedp->dbip, cache_path,
+	metadata) == BRLCAD_OK && metadata->directoryFound;
+    return 1;
+}
+
+static int
+ged_obol_collect_structural_proxy_children(
+	struct ged_obol_structural_proxy_context &ctx,
+	ged_db_index_id parentId,
+	const std::string &parentPath,
+	const std::string &parentInstanceKey,
+	const SbMatrix &parentLocalMatrix,
+	size_t depth)
+{
+    if (!ctx.gedp || !ctx.gedp->dbip || parentPath.empty() ||
+	parentInstanceKey.empty())
+	return 0;
+
+    const size_t childCount = ged_db_index_child_count(ctx.gedp, parentId);
+    int collected = 0;
+    for (size_t row = 0; row < childCount; row++) {
+	if (ctx.nodes.size() >= ged_obol_structural_proxy_max_nodes) {
+	    break;
+	}
+
+	struct ged_db_index_child child;
+	memset(&child, 0, sizeof(child));
+	if (!ged_db_index_child_at(ctx.gedp, parentId, row, &child) ||
+	    !child.record.valid)
+	    continue;
+	const char *childName = ged_obol_child_object_name(&child);
+	if (!childName || !childName[0])
+	    continue;
+
+	std::string childPath(parentPath);
+	if (!childPath.empty())
+	    childPath += "/";
+	childPath += childName;
+	const std::string childInstanceKey = ged_obol_child_instance_key(
+	    ctx.viewCtx, parentInstanceKey.c_str(), &child, ctx.drawMode);
+	if (childInstanceKey.empty())
+	    continue;
+
+	const ged_db_index_id childId = child.record.object_id ?
+	    child.record.object_id : child.record.id;
+	point_t boundsMin;
+	point_t boundsMax;
+	if (!ged_obol_cheap_local_bounds_object(ctx.boundsContext, childId,
+		boundsMin, boundsMax))
+	    continue;
+
+	ged_obol_structural_proxy_node node;
+	node.path = childPath;
+	node.objectName = childName;
+	node.instanceKey = childInstanceKey;
+	node.parentInstanceKey = parentInstanceKey;
+	node.record = child.record;
+	node.boolOp = child.bool_op;
+	node.row = child.row;
+	node.localMatrix = child.matrix_valid ?
+	    ged_obol_sbmatrix_from_mat(child.matrix) : SbMatrix::identity();
+	node.localMatrix.multRight(parentLocalMatrix);
+	VMOVE(node.boundsMin, boundsMin);
+	VMOVE(node.boundsMax, boundsMax);
+	node.publishBounds = 0;
+	node.metadataValid = ged_obol_structural_proxy_metadata(ctx,
+	    childPath.c_str(), &node.metadata);
+
+	/* Material boundaries are a better first visual than arbitrary comb
+	 * levels.  Regions and primitive leaves are semantic boundaries even
+	 * without an explicit material override. */
+	const int semanticBoundary = !child.record.is_comb ||
+	    (child.record.dp && (child.record.dp->d_flags & RT_DIR_REGION)) ||
+	    (node.metadataValid && (node.metadata.isRegion ||
+			      node.metadata.hasColor)) ||
+	    depth >= ged_obol_structural_proxy_max_depth;
+	if (semanticBoundary) {
+	    if (ctx.proxyCount >= ged_obol_structural_proxy_max_proxies) {
+		break;
+	    }
+	    node.publishBounds = 1;
+	    ctx.proxyCount++;
+	}
+
+	ctx.nodes.push_back(node);
+	collected = 1;
+	if (!semanticBoundary &&
+	    !ged_obol_collect_structural_proxy_children(ctx, childId,
+		childPath, childInstanceKey, node.localMatrix, depth + 1))
+	    continue;
+    }
+    return collected;
+}
+
+static std::shared_ptr<const obol::PartGeometry>
+ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max)
+{
+    if (!bounds_min || !bounds_max)
+	return std::shared_ptr<const obol::PartGeometry>();
+
+    std::shared_ptr<obol::PartGeometry> geometry(
+	new obol::PartGeometry);
+    obol::WireRep wire;
+    const SbVec3f corners[8] = {
+	SbVec3f(static_cast<float>(bounds_min[X]),
+		static_cast<float>(bounds_min[Y]),
+		static_cast<float>(bounds_min[Z])),
+	SbVec3f(static_cast<float>(bounds_max[X]),
+		static_cast<float>(bounds_min[Y]),
+		static_cast<float>(bounds_min[Z])),
+	SbVec3f(static_cast<float>(bounds_min[X]),
+		static_cast<float>(bounds_max[Y]),
+		static_cast<float>(bounds_min[Z])),
+	SbVec3f(static_cast<float>(bounds_max[X]),
+		static_cast<float>(bounds_max[Y]),
+		static_cast<float>(bounds_min[Z])),
+	SbVec3f(static_cast<float>(bounds_min[X]),
+		static_cast<float>(bounds_min[Y]),
+		static_cast<float>(bounds_max[Z])),
+	SbVec3f(static_cast<float>(bounds_max[X]),
+		static_cast<float>(bounds_min[Y]),
+		static_cast<float>(bounds_max[Z])),
+	SbVec3f(static_cast<float>(bounds_min[X]),
+		static_cast<float>(bounds_max[Y]),
+		static_cast<float>(bounds_max[Z])),
+	SbVec3f(static_cast<float>(bounds_max[X]),
+		static_cast<float>(bounds_max[Y]),
+		static_cast<float>(bounds_max[Z]))
+    };
+    static const unsigned int edges[12][2] = {
+	{0, 1}, {1, 3}, {3, 2}, {2, 0},
+	{4, 5}, {5, 7}, {7, 6}, {6, 4},
+	{0, 4}, {1, 5}, {2, 6}, {3, 7}
+    };
+    wire.segmentPoints.reserve(24);
+    wire.segmentIds.reserve(12);
+    for (unsigned int edge = 0; edge < 12; edge++) {
+	wire.segmentPoints.push_back(corners[edges[edge][0]]);
+	wire.segmentPoints.push_back(corners[edges[edge][1]]);
+	wire.segmentIds.push_back(edge + 1);
+    }
+    wire.bounds = SbBox3f(corners[0], corners[7]);
+    geometry->wire = std::move(wire);
+    return geometry;
+}
+
+static BRLObolCompactOccurrence
+ged_obol_structural_proxy_occurrence(
+    const ged_obol_structural_proxy_context &ctx,
+    const ged_obol_structural_proxy_node &node)
+{
+    BRLObolCompactOccurrence occurrence;
+    occurrence.geometry = ged_obol_aabb_proxy_geometry(node.boundsMin,
+	node.boundsMax);
+    occurrence.localTransform = node.localMatrix;
+    occurrence.lodBacked = TRUE;
+    occurrence.occurrenceIndex = static_cast<uint32_t>(node.row);
+    occurrence.booleanOperation = node.boolOp == DB_OP_SUBTRACT ?
+	SoBRLDatabaseSource::BOOLEAN_SUBTRACT :
+	(node.boolOp == DB_OP_INTERSECT ?
+	 SoBRLDatabaseSource::BOOLEAN_INTERSECT :
+	 SoBRLDatabaseSource::BOOLEAN_UNION);
+
+    BRLObolRealizedShapeSummary &summary = occurrence.summary;
+    summary.valid = occurrence.geometry ? TRUE : FALSE;
+    summary.shapeKind = BRLObolRealizedShapeSummary::SHAPE_VLIST;
+    summary.path = node.path.c_str();
+    summary.sourceName = node.objectName.c_str();
+    summary.sourceType = "proxy";
+    summary.sourceId = ctx.sourceRevision;
+    summary.sourceIdentity = node.instanceKey.c_str();
+    summary.databaseIntent = TRUE;
+    summary.localSource = TRUE;
+    summary.drawMode = ged_obol_lod_draw_mode_from_ged(ctx.drawMode);
+    summary.recordRole = "lod-aabb";
+    summary.geometryKind = "aabb";
+    summary.visible = TRUE;
+    summary.selectable = TRUE;
+    summary.lodAvailable = TRUE;
+    summary.lodActiveLevel = BRLOBOL_LOD_QUALITY_PROXY;
+    summary.lodBoundsMin = SbVec3f(static_cast<float>(node.boundsMin[X]),
+	static_cast<float>(node.boundsMin[Y]), static_cast<float>(node.boundsMin[Z]));
+    summary.lodBoundsMax = SbVec3f(static_cast<float>(node.boundsMax[X]),
+	static_cast<float>(node.boundsMax[Y]), static_cast<float>(node.boundsMax[Z]));
+    summary.pointCount = 24;
+    summary.segmentCount = 12;
+    summary.commandCount = 24;
+    summary.boundsValid = TRUE;
+    summary.bounds = SbBox3f(summary.lodBoundsMin, summary.lodBoundsMax);
+    if (node.metadataValid) {
+	if (node.metadata.hasRegionId)
+	    summary.regionId = node.metadata.regionId;
+	if (node.metadata.hasAircode)
+	    summary.airCode = node.metadata.aircode;
+	if (node.metadata.hasMaterialId)
+	    summary.materialId = node.metadata.materialId;
+	if (node.metadata.hasLos)
+	    summary.los = node.metadata.los;
+	if (node.metadata.hasColor) {
+	    summary.materialColorValid = TRUE;
+	    summary.materialColor = ged_obol_color_from_rgb(node.metadata.color);
+	}
+	if (node.metadata.hasShader)
+	    summary.materialShader = node.metadata.shader;
+    }
+    return occurrence;
+}
+
+static BRLObolCompactOccurrence
+ged_obol_structural_proxy_manifest_occurrence(
+    const ged_obol_structural_proxy_context &ctx,
+    const struct BRLObolDrawManifestOccurrence &cached)
+{
+    ged_obol_structural_proxy_node node;
+    node.path = cached.path ? cached.path : "";
+    node.objectName = cached.sourceName ? cached.sourceName : "";
+    /* The compact index derives the stable occurrence key from the root
+     * source, path, and registry order.  This path identity is retained for
+     * diagnostics and future request construction. */
+    node.instanceKey = node.path;
+    node.boolOp = cached.booleanOperation;
+    node.row = cached.occurrenceIndex;
+    node.localMatrix = ged_obol_sbmatrix_from_mat(cached.localMatrix);
+    VMOVE(node.boundsMin, cached.boundsMin);
+    VMOVE(node.boundsMax, cached.boundsMax);
+    node.publishBounds = 1;
+    node.metadataValid = cached.metadataValid;
+    if (node.metadataValid)
+	node.metadata = cached.metadata;
+    return ged_obol_structural_proxy_occurrence(ctx, node);
+}
+
+static int
+ged_obol_store_structural_proxy_manifest(
+    struct ged *gedp,
+    const std::string &rootPath,
+    const ged_obol_structural_proxy_context &ctx)
+{
+    if (!gedp || !gedp->dbip || rootPath.empty())
+	return 0;
+
+    size_t count = 0;
+    for (const ged_obol_structural_proxy_node &node : ctx.nodes) {
+	if (node.publishBounds)
+	    count++;
+    }
+    if (!count)
+	return 0;
+
+    struct BRLObolDrawManifest manifest;
+    brlobol_draw_manifest_init(&manifest);
+    manifest.occurrenceCount = count;
+    manifest.occurrences = static_cast<BRLObolDrawManifestOccurrence *>(
+	bu_calloc(count, sizeof(*manifest.occurrences),
+	    "Obol structural proxy manifest"));
+    if (!manifest.occurrences)
+	return 0;
+
+    size_t index = 0;
+    int valid = 1;
+    for (const ged_obol_structural_proxy_node &node : ctx.nodes) {
+	if (!node.publishBounds)
+	    continue;
+	struct BRLObolDrawManifestOccurrence &cached =
+	    manifest.occurrences[index++];
+	cached.path = bu_strdup(node.path.c_str());
+	cached.sourceName = bu_strdup(node.objectName.c_str());
+	if (!cached.path || !cached.sourceName) {
+	    valid = 0;
+	    break;
+	}
+	ged_obol_mat_from_sbmatrix(node.localMatrix, cached.localMatrix);
+	VMOVE(cached.boundsMin, node.boundsMin);
+	VMOVE(cached.boundsMax, node.boundsMax);
+	cached.booleanOperation = node.boolOp;
+	cached.occurrenceIndex = static_cast<uint32_t>(node.row);
+	cached.metadataValid = node.metadataValid;
+	if (cached.metadataValid)
+	    cached.metadata = node.metadata;
+    }
+
+    const int stored = valid && index == count &&
+	brlobol_draw_manifest_cache_store(gedp->dbip, rootPath.c_str(),
+	    &manifest) == BRLCAD_OK;
+    brlobol_draw_manifest_free(&manifest);
+    return stored ? 1 : 0;
+}
+
+static int
+ged_obol_publish_deferred_structural_proxy_snapshot(
+	struct ged *gedp,
+	void *view_ctx,
+	const char *path,
+	const char *root_instance_key,
+	int draw_mode)
+{
+    if (!gedp || !gedp->dbip || !path || !path[0] ||
+	!root_instance_key || !root_instance_key[0])
+	return 0;
+
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    ged_obol_structural_proxy_context ctx;
+    ctx.gedp = gedp;
+    ctx.viewCtx = view_ctx;
+    ctx.drawMode = draw_mode;
+    ctx.sourceRevision = ged_obol_fold_revision(ged_draw_scene_revision(gedp));
+    const struct bg_tess_tol defaultTtol = BG_TESS_TOL_INIT_TOL;
+    ctx.boundsContext.gedp = gedp;
+    ctx.boundsContext.ttol = defaultTtol;
+    BN_TOL_INIT(&ctx.boundsContext.tol);
+    ctx.proxyCount = 0;
+    ctx.metadataCount = 0;
+
+    const std::string rootPath = ged_obol_skip_leading_slash(path);
+    SoBRLDatabaseSource *root = scene->findDatabaseSourceInstance(
+	root_instance_key);
+    if (!root)
+	return 0;
+
+    struct BRLObolDrawManifest manifest;
+    brlobol_draw_manifest_init(&manifest);
+    if (brlobol_draw_manifest_cache_get(gedp->dbip, rootPath.c_str(),
+	&manifest) == BRLCAD_OK) {
+	std::vector<BRLObolCompactOccurrence> occurrences;
+	occurrences.reserve(manifest.occurrenceCount);
+	for (size_t i = 0; i < manifest.occurrenceCount; i++) {
+	    BRLObolCompactOccurrence occurrence =
+		ged_obol_structural_proxy_manifest_occurrence(ctx,
+		    manifest.occurrences[i]);
+	    if (!occurrence.geometry) {
+		occurrences.clear();
+		break;
+	    }
+	    occurrences.push_back(std::move(occurrence));
+	}
+	brlobol_draw_manifest_free(&manifest);
+	if (!occurrences.empty()) {
+	    ged_obol_scene_mutation_batch_scope batch(scene, 1,
+		occurrences.size());
+	    if (root->setCompactOccurrenceRegistry(occurrences) > 0)
+		return ged_obol_database_source_mark_published_current(scene, root);
+	}
+    }
+
+    if (!ged_db_index_available(gedp))
+	return 0;
+    const size_t pathLength = ged_db_index_path_resolve(gedp, path, NULL, 0);
+    if (!pathLength)
+	return 0;
+    std::vector<ged_db_index_id> ids(pathLength);
+    if (ged_db_index_path_resolve(gedp, path, ids.data(), ids.size()) !=
+	pathLength)
+	return 0;
+
+    if (!ged_obol_collect_structural_proxy_children(ctx, ids.back(), rootPath,
+	root_instance_key, SbMatrix::identity(), 1) || !ctx.proxyCount)
+	return 0;
+
+    std::vector<BRLObolCompactOccurrence> occurrences;
+    occurrences.reserve(ctx.proxyCount);
+    for (const ged_obol_structural_proxy_node &node : ctx.nodes) {
+	if (!node.publishBounds)
+	    continue;
+	BRLObolCompactOccurrence occurrence =
+	    ged_obol_structural_proxy_occurrence(ctx, node);
+	if (occurrence.geometry)
+	    occurrences.push_back(std::move(occurrence));
+    }
+
+    if (occurrences.empty())
+	return 0;
+    ged_obol_scene_mutation_batch_scope batch(scene, 1, occurrences.size());
+    if (root->setCompactOccurrenceRegistry(occurrences) <= 0) {
+	return 0;
+	}
+	(void)ged_obol_store_structural_proxy_manifest(gedp, rootPath, ctx);
+    return ged_obol_database_source_mark_published_current(scene, root);
+}
+
 static int
 ged_obol_publish_deferred_root_proxy(struct ged *gedp,
 				     void *view_ctx,
@@ -18047,6 +18586,10 @@ ged_obol_publish_deferred_root_proxy(struct ged *gedp,
     if (!gedp || !gedp->dbip || !path || !path[0] ||
 	!source_instance_key || !source_instance_key[0])
 	return 0;
+
+    if (ged_obol_publish_deferred_structural_proxy_snapshot(gedp, view_ctx,
+	path, source_instance_key, draw_mode))
+	return 1;
 
     const char *cache_name = strrchr(path, '/');
     cache_name = cache_name ? cache_name + 1 : path;
@@ -18948,10 +19491,15 @@ ged_obol_publish_deferred_realization(
 	    job->items[i]->source);
 	if (adopted_count > 0) {
 	    adopted++;
-	    SoBRLSceneController *item_scene = job->items[i]->primaryScene ?
-		primaryScene : scene;
-	    (void)ged_obol_remove_database_source_descendants(item_scene,
-		job->items[i]->instanceKey);
+	    /* A per-view worker can realize a synchronized scene while the
+	     * structural frontier is owned by the primary scene.  Retire matching
+	     * proxies from both; either side may be the adopted live source. */
+	    if (primaryScene)
+		(void)ged_obol_remove_database_source_descendants(primaryScene,
+		    job->items[i]->instanceKey);
+	    if (scene && scene != primaryScene)
+		(void)ged_obol_remove_database_source_descendants(scene,
+		    job->items[i]->instanceKey);
 	}
     }
     return adopted;
@@ -19326,6 +19874,36 @@ ged_obol_database_source_geometry_summary_for_source(
 	    static_cast<size_t>(annotation_geom->point.getNum());
 	out->index_count = 0;
 	return 1;
+    }
+
+    if (source->hasCompactInstanceIndex()) {
+	for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	    BRLObolCompactOccurrence occurrence;
+	    if (!source->getCompactOccurrence(i, occurrence) ||
+		!occurrence.geometry)
+		continue;
+	    const char *geometryName =
+		ged_obol_realized_geometry_name(occurrence.summary);
+	    if (!geometryName)
+		continue;
+	    size_t pointCount = occurrence.summary.pointCount > 0 ?
+		static_cast<size_t>(occurrence.summary.pointCount) : 0;
+	    if (BU_STR_EQUAL(geometryName, "line-set") &&
+		occurrence.geometry->wire) {
+		pointCount = occurrence.geometry->wire->segmentPoints.size();
+		for (const obol::WirePolyline &polyline :
+		     occurrence.geometry->wire->polylines)
+		    pointCount += polyline.points.size();
+	    }
+	    if (!pointCount)
+		continue;
+	    out->valid = 1;
+	    out->geometry_name = geometryName;
+	    out->point_count = pointCount;
+	    out->index_count = occurrence.summary.indexCount > 0 ?
+		static_cast<size_t>(occurrence.summary.indexCount) : 0;
+	    return 1;
+	}
     }
 
     const int count = source->getRealizedShapeSummaryCount();
@@ -20163,8 +20741,13 @@ ged_obol_apply_draw_paths_to_scene(
 	if (changed)
 	    changed |= ged_obol_restore_source_display_states(scene,
 		preserved_display_states);
+	/* A deferred root is still the sole representation for its draw path.
+	 * Normal draw replaces every existing representation; only --add-mode
+	 * retains another mode alongside this root. */
 	if (remove_obsolete_root_sources())
 	    changed = 1;
+	/* Deferred roots own a structural proxy frontier.  Its descendants are
+	 * not obsolete roots; full-detail adoption retires them atomically. */
 	if (result) {
 	    result->affected_groups = realized_roots;
 	    result->affected_shapes = realized_sources;

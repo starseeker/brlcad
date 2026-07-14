@@ -530,6 +530,10 @@ ged_db_index_note_lod_change(struct ged *gedp, const char *name)
     if (!gedp || !gedp->dbip || !name || !name[0])
 	return;
 
+    /* Structural manifests are draw-root snapshots.  An edit anywhere in
+     * this database can change one, so retain no stale hierarchy records. */
+    (void)brlobol_draw_manifest_cache_invalidate_database(gedp->dbip);
+
     std::unordered_set<std::string> affected_names;
     affected_names.insert(std::string(name));
 

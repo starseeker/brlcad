@@ -504,6 +504,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    request.sourceContentHash = summary.geometryIdentity;
 	    request.objectPath = target;
 	    request.objectName = summary.sourceName;
+	    request.occurrenceKey = summary.sourceInstanceKey;
 	    if (request.objectName.getLength() == 0)
 		request.objectName = mesh_lod_source_leaf_name(source);
 	    request.viewRevision = submitAction->viewRevision;

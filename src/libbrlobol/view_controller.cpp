@@ -3058,7 +3058,8 @@ BRLObolViewController::evictMeshPayloadsToBudget(
 	this->lastMeshBudgetFinalResidentBytes > maxBytes &&
 	this->viewAttachment->getViewLodState()) {
 	unsigned int evicted = 0;
-	size_t freed = this->viewAttachment->getViewLodState()->evictDisplayMeshes(&evicted);
+	size_t freed = this->viewAttachment->getViewLodState()->
+	    evictDisplayMeshPayloads(&evicted);
 	if (freed > 0) {
 	    this->lastMeshBudgetFreedDisplayBytes += freed;
 	    this->lastMeshBudgetEvictedDisplayMeshCount += evicted;

@@ -169,6 +169,9 @@ struct BRLOBOL_EXPORT BRLObolLodRequest {
     uint64_t sourceContentHash;
     SbString objectPath;
     SbString objectName;
+    /* Stable compact-occurrence identity.  Empty for legacy/source-wide
+     * requests; populated whenever a result targets one CAD occurrence. */
+    SbString occurrenceKey;
     uint64_t viewRevision;
     uint64_t policyRevision;
     int drawMode;

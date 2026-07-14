@@ -32,6 +32,7 @@
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <memory>
+#include <vector>
 
 class SoBRLVListShape;
 class SoBRLMeshShape;
@@ -391,6 +392,8 @@ struct BRLOBOL_EXPORT BRLObolCompactOccurrence {
 
     std::shared_ptr<const obol::PartGeometry> geometry;
     BRLObolRealizedShapeSummary summary;
+    /* Maps geometry coordinates into the occurrence's object-local frame. */
+    SbMatrix geometryTransform;
     SbMatrix localTransform;
     SbBool lodBacked;
     SbBool sourceMeshRequestValid;
@@ -823,6 +826,10 @@ public:
 	BRLObolCompactInstanceHandle &handle) const;
     SbBool getCompactOccurrence(int index,
 	BRLObolCompactOccurrence &occurrence) const;
+    /* Flatten visible compact wire instances for non-raster consumers such as
+     * vector export without constructing per-occurrence Coin shape nodes. */
+    SbBool copyCompactWireGeometry(std::vector<SbVec3f> &points,
+	std::vector<int32_t> &commands) const;
     SbBool getCompactInstanceSummary(
 	const BRLObolCompactInstanceHandle &handle,
 	BRLObolCompactInstanceSummary &summary) const;

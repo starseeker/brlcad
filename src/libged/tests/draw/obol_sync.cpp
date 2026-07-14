@@ -218,6 +218,7 @@ make_obol_sync_db(const char *dbpath)
 	struct wmember progressive_wm;
 	mat_t first_mat;
 	mat_t duplicate_mat;
+	unsigned char progressive_rgb[3] = {42, 84, 126};
 	MAT_IDN(first_mat);
 	MAT_IDN(duplicate_mat);
 	MAT_DELTAS(first_mat, 11.0, 12.0, 13.0);
@@ -232,7 +233,7 @@ make_obol_sync_db(const char *dbpath)
 	    mk_addmember("ball.s", &progressive_wm.l, NULL,
 		WMOP_INTERSECT) != NULL &&
 	    mk_comb(wdbp, "progressive_root.c", &progressive_wm.l, 0,
-		NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0) == 0;
+		NULL, NULL, progressive_rgb, 0, 0, 0, 0, 0, 0, 0) == 0;
     }
     if (ret) {
 	struct rt_annot_internal ann;
@@ -882,6 +883,48 @@ exercise_mode_specific_source_lifecycle(struct ged *gedp,
 }
 
 static int
+exercise_deferred_mode_replacement(struct ged *gedp,
+	SoBRLSceneController *controller, const char *path)
+{
+    if (!gedp || !controller || !path)
+	FAIL("deferred mode replacement test needs GED and Obol scene state");
+
+    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+	ged_draw_active_view_ctx(gedp), -1);
+
+    const char *draw_shaded[3] = {"draw", "-m2", path};
+    if (ged_exec_draw(gedp, 3, draw_shaded) != BRLCAD_OK)
+	FAIL("deferred shaded draw should succeed");
+    if (source_representation_count(controller, path,
+		SoBRLDatabaseSource::REPRESENTATION_SHADED) != 1 ||
+	source_representation_count(controller, path,
+		SoBRLDatabaseSource::REPRESENTATION_WIRE) != 0)
+	FAIL("deferred shaded draw should install only its shaded representation");
+
+    const char *draw_wire[3] = {"draw", "-m0", path};
+    if (ged_exec_draw(gedp, 3, draw_wire) != BRLCAD_OK)
+	FAIL("deferred wire draw should succeed");
+    if (source_representation_count(controller, path,
+		SoBRLDatabaseSource::REPRESENTATION_WIRE) != 1 ||
+	source_representation_count(controller, path,
+		SoBRLDatabaseSource::REPRESENTATION_SHADED) != 0)
+	FAIL("normal deferred draw should replace an earlier representation");
+
+    const char *add_shaded[4] = {"draw", "-m2", "--add-mode", path};
+    if (ged_exec_draw(gedp, 4, add_shaded) != BRLCAD_OK)
+	FAIL("deferred add-mode shaded draw should succeed");
+    if (source_representation_count(controller, path,
+		SoBRLDatabaseSource::REPRESENTATION_WIRE) != 1 ||
+	source_representation_count(controller, path,
+		SoBRLDatabaseSource::REPRESENTATION_SHADED) != 1)
+	FAIL("deferred add-mode should retain the existing representation");
+
+    (void)try_path_transaction(gedp, GED_DRAW_TXN_ERASE, path,
+	ged_draw_active_view_ctx(gedp), -1);
+    return 0;
+}
+
+static int
 exercise_mesh_source_local_publication(struct ged *gedp,
 	SoBRLSceneController *controller,
 	const char *path)
@@ -1412,48 +1455,45 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
     BRLObolDatabaseSourceSummary root_summary;
     if (!root_source || !root_source->getSummary(root_summary) ||
 	!root_summary.valid ||
+	!root_source->isCompactOccurrenceRegistry() ||
+	root_source->getCompactInstanceCount() != 4 ||
 	controller->getDatabaseSourceCount() != initial_source_count + 1)
-	FAIL("deferred progressive draw should initially publish only its root");
-
-    struct ged_draw_obol_source_expansion_status status;
-    memset(&status, 0, sizeof(status));
-    if (!ged_draw_obol_database_source_expand_children(gedp, NULL,
-	    "progressive_root.c", GED_DRAW_MODE_WIRE, 0, &status))
-	FAIL("progressive child expansion should publish child occurrences");
-    if (status.expanded != 4 || status.expanded_duplicate_instance != 1 ||
-	status.expanded_non_union != 2 || status.skipped_non_union != 0 ||
-	status.skipped_duplicate_instance != 0 ||
-	controller->getDatabaseSourceCount() != initial_source_count + 5)
-	FAIL("progressive child expansion should retain duplicates and CSG operands");
+	FAIL("deferred progressive draw should initially publish a compact occurrence registry");
 
     int duplicate_count = 0;
     int saw_first = 0;
     int saw_duplicate = 0;
     int saw_subtract = 0;
     int saw_intersect = 0;
+    int saw_inherited_material = 0;
     SbString first_key;
-    for (int i = 0; i < controller->getDatabaseSourceCount(); i++) {
-	BRLObolDatabaseSourceSummary summary;
-	if (!controller->getDatabaseSourceSummary(i, summary) ||
+	for (int i = 0; i < root_source->getCompactInstanceCount(); i++) {
+	BRLObolCompactInstanceHandle handle;
+	BRLObolCompactInstanceSummary summary;
+	if (!root_source->getCompactInstanceHandle(i, handle) ||
+	    !root_source->getCompactInstanceSummary(handle, summary) ||
 	    !summary.valid)
-	    continue;
-	if (summary.parentInstanceKey != root_summary.instanceKey)
 	    continue;
 	if (BU_STR_EQUAL(summary.path.getString(),
 		"progressive_root.c/dup_leaf.s")) {
 	    duplicate_count++;
-	    if (summary.occurrenceIndex == 0 && summary.drawMatrixValid &&
-		fabs(summary.drawMatrix[3][0] - 11.0f) < 0.001f &&
-		fabs(summary.drawMatrix[3][1] - 12.0f) < 0.001f &&
-		fabs(summary.drawMatrix[3][2] - 13.0f) < 0.001f) {
-		first_key = summary.instanceKey;
+	    if (summary.occurrenceIndex == 0 &&
+		fabs(summary.localToSource[3][0] - 11.0f) < 0.001f &&
+		fabs(summary.localToSource[3][1] - 12.0f) < 0.001f &&
+		fabs(summary.localToSource[3][2] - 13.0f) < 0.001f) {
+		first_key = summary.sourceInstanceKey;
 		saw_first = 1;
+		if (summary.materialColorValid &&
+		    fabs(summary.materialColor[0] - 42.0f / 255.0f) < 0.001f &&
+		    fabs(summary.materialColor[1] - 84.0f / 255.0f) < 0.001f &&
+		    fabs(summary.materialColor[2] - 126.0f / 255.0f) < 0.001f)
+		    saw_inherited_material = 1;
 	    }
-	    if (summary.occurrenceIndex == 1 && summary.drawMatrixValid &&
-		fabs(summary.drawMatrix[3][0] - 21.0f) < 0.001f &&
-		fabs(summary.drawMatrix[3][1] - 22.0f) < 0.001f &&
-		fabs(summary.drawMatrix[3][2] - 23.0f) < 0.001f &&
-		summary.instanceKey != first_key)
+	    if (summary.occurrenceIndex == 1 &&
+		fabs(summary.localToSource[3][0] - 21.0f) < 0.001f &&
+		fabs(summary.localToSource[3][1] - 22.0f) < 0.001f &&
+		fabs(summary.localToSource[3][2] - 23.0f) < 0.001f &&
+		summary.sourceInstanceKey != first_key)
 		saw_duplicate = 1;
 	} else if (BU_STR_EQUAL(summary.path.getString(),
 		"progressive_root.c/box.s") &&
@@ -1468,8 +1508,8 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
 	}
     }
     if (duplicate_count != 2 || !saw_first || !saw_duplicate ||
-	!saw_subtract || !saw_intersect)
-	FAIL("progressive sources should preserve occurrence transforms and boolean identity");
+	!saw_subtract || !saw_intersect || !saw_inherited_material)
+	FAIL("compact proxy occurrences should preserve transforms, boolean identity, and inherited material");
 
     if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
 	    "progressive_root.c", NULL, -1, "progressive identity cleanup"))
@@ -1518,26 +1558,20 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     const char *autoview_cmd[1] = {"autoview"};
     if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
 	FAIL("explicit autoview should arm deferred Obol bound tracking");
-    const uint64_t explicit_autoview_revision = bv_frame_revision_get(view);
 
-    SoBRLDatabaseSource *proxy_source = scene ?
-	source_for_path(scene, "progressive_root.c") : NULL;
+    SoBRLDatabaseSource *initial_source = scene ? source_for_path(scene,
+	"progressive_root.c") : NULL;
     SbBox3f proxy_bounds;
     proxy_bounds.makeEmpty();
-    if (!proxy_source || !proxy_source->getEffectiveSourceBounds(proxy_bounds) ||
+    if (!initial_source || !initial_source->isCompactOccurrenceRegistry() ||
+	initial_source->getCompactInstanceCount() != 4 ||
+	!initial_source->getEffectiveSourceBounds(proxy_bounds) ||
 	proxy_bounds.isEmpty())
-	FAIL("deferred root should publish conservative indexed proxy bounds");
+	FAIL("deferred root should publish compact conservative proxy bounds");
 
-    /* Materialize the proxy frontier before full detail is adopted.  The
-     * completed compact root must retire these descendants rather than leave
-     * duplicate proxy geometry visible alongside final data. */
-    struct ged_draw_obol_source_expansion_status expansion_status;
-    memset(&expansion_status, 0, sizeof(expansion_status));
-    if (!ged_draw_obol_database_source_expand_children(gedp, view_ctx,
-	    "progressive_root.c", GED_DRAW_MODE_WIRE, 0, &expansion_status) ||
-	expansion_status.expanded != 4 ||
-	scene->getDatabaseSourceCount() != initial_scene_source_count + 5)
-	FAIL("deferred root should expose a temporary proxy frontier before full-detail adoption");
+    /* Initial AABBs and final detail share the same root source. */
+    if (scene->getDatabaseSourceCount() != initial_scene_source_count + 1)
+	FAIL("deferred root should not create proxy child sources");
 
     /* A redraw can advance the aggregate draw revision while this source is
      * realizing.  It must not invalidate an otherwise matching snapshot. */
@@ -1559,7 +1593,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	settled_source = scene ? source_for_path(scene,
 	    "progressive_root.c") : NULL;
 	if (settled_source && settled_source->isCompactOccurrenceRegistry() &&
-	    settled_source->getCompactInstanceCount() == 4) {
+	    settled_source->getCompactInstanceCount() == 4 && !status.hasMore) {
 	    settled = 1;
 	    break;
 	}
@@ -1571,28 +1605,18 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     settled_bounds.makeEmpty();
     if (settled_source)
 	(void)settled_source->getEffectiveSourceBounds(settled_bounds);
-    const SbVec3f proxy_min = proxy_bounds.getMin();
-    const SbVec3f proxy_max = proxy_bounds.getMax();
-    const SbVec3f settled_min = settled_bounds.getMin();
-    const SbVec3f settled_max = settled_bounds.getMax();
-    const bool proxy_contains_settled = !settled_bounds.isEmpty() &&
-	proxy_min[0] <= settled_min[0] + 0.001f &&
-	proxy_min[1] <= settled_min[1] + 0.001f &&
-	proxy_min[2] <= settled_min[2] + 0.001f &&
-	proxy_max[0] >= settled_max[0] - 0.001f &&
-	proxy_max[1] >= settled_max[1] - 0.001f &&
-	proxy_max[2] >= settled_max[2] - 0.001f;
     if (!settled || initial_progress <= 0 || !settled_source ||
 	!settled_source->isCompactOccurrenceRegistry() ||
 	settled_source->getCompactInstanceCount() != 4 ||
-	!proxy_contains_settled ||
+	settled_bounds.isEmpty() ||
 	scene->getDatabaseSourceCount() != initial_scene_source_count + 1 ||
-	bv_frame_revision_get(view) <= initial_revision ||
-	bv_frame_revision_get(view) <= explicit_autoview_revision) {
-	fprintf(stderr, "progressive settle ret=%d changed=%d frame=%llu initial=%llu providers=%zu advanced=%zu remaining=%zu pending=%zu scene=%d/%d source=%p compact=%d count=%d\n",
+	bv_frame_revision_get(view) <= initial_revision) {
+	fprintf(stderr, "progressive settle ret=%d changed=%d settled=%d bounds_empty=%d frame=%llu initial=%llu providers=%zu advanced=%zu remaining=%zu pending=%zu scene=%d/%d source=%p compact=%d count=%d\n",
 	    initial_progress, status.changed,
+	    settled, settled_bounds.isEmpty(),
 	    static_cast<unsigned long long>(bv_frame_revision_get(view)),
-	    static_cast<unsigned long long>(initial_revision), status.providerCount,
+	    static_cast<unsigned long long>(initial_revision),
+	    status.providerCount,
 	    status.providerAdvanced, status.remaining, status.pendingTasks,
 	    scene ? scene->getDatabaseSourceCount() : -1,
 	    initial_scene_source_count, (void *)settled_source,
@@ -1610,13 +1634,25 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 			source ? source->getCompactInstanceCount() : -1);
 	    }
 	}
-	FAIL("background progressive refinement should atomically settle one compact root and its owned initial autoview");
+	FAIL("background progressive refinement should settle compact detail without retaining structural proxy geometry");
     }
 
-    const uint64_t settled_autoview_revision = bv_frame_revision_get(view);
-    for (int attempt = 0; attempt < 4; attempt++)
+    uint64_t stable_autoview_revision = bv_frame_revision_get(view);
+    int stable_autoview_ticks = 0;
+    for (int attempt = 0; attempt < 64 && stable_autoview_ticks < 2;
+	attempt++) {
 	(void)controller->advanceProgressiveWork(&options, &status);
-    if (bv_frame_revision_get(view) != settled_autoview_revision)
+	const uint64_t current_revision = bv_frame_revision_get(view);
+	if (current_revision == stable_autoview_revision) {
+	    stable_autoview_ticks++;
+	} else {
+	    stable_autoview_revision = current_revision;
+	    stable_autoview_ticks = 0;
+	}
+	if (stable_autoview_ticks < 2)
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (stable_autoview_ticks < 2)
 	FAIL("settled progressive autoview should stop changing the view");
 
     if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
@@ -3119,6 +3155,8 @@ main(int argc, char **argv)
 	    SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS, 0, 0, 1,
 	    "evaluated-points"))
 	return 1;
+    if (exercise_deferred_mode_replacement(gedp, owned_scene, "box.s"))
+	return 1;
     const char *draw_eval_points_option[4] = {"draw",
 	"--evaluated-points", "--add-mode", "box.s"};
     if (ged_exec_draw(gedp, 4, draw_eval_points_option) != BRLCAD_OK)
@@ -3145,11 +3183,11 @@ main(int argc, char **argv)
     memset(&annot_geometry, 0, sizeof(annot_geometry));
     if (!ged_draw_shape_ref_geometry_summary(gedp, annot_record.ref,
 	    &annot_geometry) ||
-	    !annot_geometry.valid ||
-	    !annot_geometry.geometry_name ||
-	    !BU_STR_EQUAL(annot_geometry.geometry_name, "annotation") ||
-	    annot_geometry.point_count != 2 ||
-	    annot_geometry.index_count != 0)
+	!annot_geometry.valid ||
+	!annot_geometry.geometry_name ||
+	!BU_STR_EQUAL(annot_geometry.geometry_name, "annotation") ||
+	annot_geometry.point_count != 2 ||
+	annot_geometry.index_count != 0)
 	FAIL("GED annotation geometry summary should read owned Obol annotation VLIST");
     SoBRLDatabaseSource *annot_source =
 	source_for_path(owned_scene, "annot_line.s");

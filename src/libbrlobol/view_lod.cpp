@@ -111,6 +111,14 @@ static void
 view_lod_result_keys(std::vector<std::string> &keys,
 		     const BRLObolLodResult &result)
 {
+    /* A compact occurrence may share both object path and object name with
+     * siblings.  Its immutable identity is consequently the only valid
+     * display binding key. */
+    if (result.request.occurrenceKey.getLength() > 0) {
+	view_lod_append_unique_key(keys, view_lod_string_key("occurrence",
+			       result.request.occurrenceKey));
+	return;
+    }
     view_lod_append_unique_key(keys, view_lod_string_key("path",
 			       result.request.objectPath));
     if (result.request.objectPath.getLength() > 1 &&
@@ -353,6 +361,78 @@ BRLObolViewLodState::CadPayload::estimateBytes(void) const
 	   sizeof(*this);
 }
 
+/* One compact occurrence has one active display representation.  Retaining
+ * every completed stage both wastes memory and makes an unordered binding map
+ * choose AABB versus OBB versus mesh by accident. */
+static int
+view_lod_cad_payload_rank(const BRLObolViewLodState::CadPayload &payload)
+{
+    int rank = payload.qualityTier * 16;
+    switch (payload.resultKind) {
+	case BRLOBOL_LOD_RESULT_FULL_DETAIL:
+	    return 512 + rank;
+	case BRLOBOL_LOD_RESULT_MESH:
+	    return 448 + rank;
+	case BRLOBOL_LOD_RESULT_PROXY:
+	    if (payload.proxy.kind == BRLOBOL_LOD_PROXY_OBB)
+		return 320 + rank;
+	    return 256 + rank;
+	case BRLOBOL_LOD_RESULT_AABB:
+	    return 192 + rank;
+	default:
+	    return rank;
+    }
+}
+
+static SbBool
+view_lod_cad_payload_targets(const BRLObolViewLodState::CadPayload &payload,
+	const std::string &sourceBindingKey, const SbString &occurrenceKey)
+{
+    return bu_strcmp(payload.sourceBindingKey.getString(),
+		     sourceBindingKey.c_str()) == 0 &&
+	bu_strcmp(payload.sourceInstanceKey.getString(),
+		  occurrenceKey.getString()) == 0 ? TRUE : FALSE;
+}
+
+static SbBool
+view_lod_cad_payload_can_replace(
+	const std::unordered_map<std::string,
+	BRLObolViewLodState::CadPayloadPtr> &bindings,
+	const std::string &sourceBindingKey, const SbString &occurrenceKey,
+	const BRLObolViewLodState::CadPayload &candidate)
+{
+    const int candidateRank = view_lod_cad_payload_rank(candidate);
+    for (const auto &binding : bindings) {
+	const BRLObolViewLodState::CadPayloadPtr &payload = binding.second;
+	if (!payload || !view_lod_cad_payload_targets(*payload,
+		sourceBindingKey, occurrenceKey))
+	    continue;
+	if (view_lod_cad_payload_rank(*payload) > candidateRank)
+	    return FALSE;
+    }
+    return TRUE;
+}
+
+static void
+view_lod_remove_superseded_cad_payloads(
+	std::unordered_map<std::string, BRLObolViewLodState::CadPayloadPtr>
+	&bindings, const std::string &sourceBindingKey,
+	const SbString &occurrenceKey,
+	const BRLObolViewLodState::CadPayload &candidate)
+{
+    const int candidateRank = view_lod_cad_payload_rank(candidate);
+    for (auto binding = bindings.begin(); binding != bindings.end();) {
+	const BRLObolViewLodState::CadPayloadPtr &payload = binding->second;
+	if (payload && view_lod_cad_payload_targets(*payload,
+		sourceBindingKey, occurrenceKey) &&
+	    view_lod_cad_payload_rank(*payload) <= candidateRank) {
+	    binding = bindings.erase(binding);
+	    continue;
+	}
+	++binding;
+    }
+}
+
 BRLObolViewLodState::BRLObolViewLodState(void)
 {
 }
@@ -542,7 +622,10 @@ BRLObolViewLodState::applySourceResultInternal(
     payload->sourceIdentity =
 	source->realizationIdentity.getValue().getLength() > 0 ?
 	source->realizationIdentity.getValue() : source->path.getValue();
-    payload->sourceInstanceKey = source->instanceKey.getValue();
+    /* This field intentionally means a compact occurrence key, not the
+     * source-node key.  An empty value is a source-wide legacy binding that
+     * may fall back to a path; a nonempty value must never alias a sibling. */
+    payload->sourceInstanceKey = result.request.occurrenceKey;
     const std::string sourceBindingKey = view_lod_source_primary_key(source);
     payload->sourceBindingKey = sourceBindingKey.c_str();
     payload->cacheIdentity = result.cacheKey.value;
@@ -559,6 +642,13 @@ BRLObolViewLodState::applySourceResultInternal(
     payload->hasNormals = result.hasNormals;
     payload->diagnostic = result.diagnostic;
 
+    if (!view_lod_cad_payload_can_replace(this->cadBindings,
+	    sourceBindingKey, payload->sourceInstanceKey, *payload))
+	return TRUE;
+
+    view_lod_remove_superseded_cad_payloads(this->cadBindings,
+	sourceBindingKey, payload->sourceInstanceKey, *payload);
+
     std::vector<std::string> resultKeys;
     view_lod_result_keys(resultKeys, result);
     for (const std::string &resultKey : resultKeys) {
@@ -572,9 +662,10 @@ BRLObolViewLodState::applySourceResultInternal(
     /* Preserve the source-wide lookup for a root result.  Entry results must
      * coexist, so binding them under the root keys would make the last
      * completed occurrence replace every sibling. */
-    if (result.request.objectPath.getLength() == 0 ||
+	if (result.request.occurrenceKey.getLength() == 0 &&
+	(result.request.objectPath.getLength() == 0 ||
 	view_lod_paths_equal(source->path.getValue(),
-	    result.request.objectPath)) {
+	    result.request.objectPath))) {
 	std::vector<std::string> sourceKeys;
 	view_lod_source_keys(sourceKeys, source);
 	for (const std::string &key : sourceKeys)
@@ -703,8 +794,16 @@ BRLObolViewLodState::findCadPayloads(
     }
     std::sort(payloads.begin(), payloads.end(),
 	[](const CadPayload *a, const CadPayload *b) {
-	    return bu_strcmp(a->sourcePath.getString(),
-		b->sourcePath.getString()) < 0;
+	    const int instanceOrder = bu_strcmp(a->sourceInstanceKey.getString(),
+		b->sourceInstanceKey.getString());
+	    if (instanceOrder != 0)
+		return instanceOrder < 0;
+	    const int pathOrder = bu_strcmp(a->sourcePath.getString(),
+		b->sourcePath.getString());
+	    if (pathOrder != 0)
+		return pathOrder < 0;
+	    return bu_strcmp(a->cacheKey.getString(),
+		b->cacheKey.getString()) < 0;
 	});
 }
 
@@ -722,6 +821,12 @@ BRLObolViewLodState::findCadForResult(
 	    std::find(seen.begin(), seen.end(), payload.get()) != seen.end())
 	    continue;
 	seen.push_back(payload.get());
+	if (result.request.occurrenceKey.getLength() > 0) {
+	    if (bu_strcmp(payload->sourceInstanceKey.getString(),
+		result.request.occurrenceKey.getString()) == 0)
+		return payload.get();
+	    continue;
+	}
 	if (view_lod_paths_equal(payload->sourcePath,
 		result.request.objectPath) ||
 	    (payload->sourceName.getLength() > 0 &&
@@ -921,6 +1026,49 @@ BRLObolViewLodState::evictDisplayMeshes(unsigned int *evictedMeshCount)
     this->meshBindings.clear();
     this->proxyBindings.clear();
     this->cadBindings.clear();
+    return bytes;
+}
+
+size_t
+BRLObolViewLodState::evictDisplayMeshPayloads(
+    unsigned int *evictedMeshCount)
+{
+    std::vector<MeshPayloadPtr> meshPayloads =
+	view_lod_unique_payloads(this->meshBindings);
+    std::vector<CadPayloadPtr> cadMeshPayloads;
+    for (const auto &binding : this->cadBindings) {
+	const CadPayloadPtr &payload = binding.second;
+	if (!payload || !payload->isValid() ||
+	    (payload->resultKind != BRLOBOL_LOD_RESULT_MESH &&
+	     payload->resultKind != BRLOBOL_LOD_RESULT_FULL_DETAIL) ||
+	    std::find(cadMeshPayloads.begin(), cadMeshPayloads.end(), payload) !=
+		cadMeshPayloads.end())
+	    continue;
+	cadMeshPayloads.push_back(payload);
+    }
+
+    size_t bytes = 0;
+    for (const MeshPayloadPtr &payload : meshPayloads)
+	bytes += payload->estimateBytes();
+    for (const CadPayloadPtr &payload : cadMeshPayloads)
+	bytes += payload->estimateBytes();
+
+    if (evictedMeshCount)
+	*evictedMeshCount = static_cast<unsigned int>(
+	    meshPayloads.size() + cadMeshPayloads.size());
+    this->meshBindings.clear();
+    for (auto binding = this->cadBindings.begin();
+	 binding != this->cadBindings.end();) {
+	const CadPayloadPtr &payload = binding->second;
+	if (payload &&
+	    (payload->resultKind == BRLOBOL_LOD_RESULT_MESH ||
+	     payload->resultKind == BRLOBOL_LOD_RESULT_FULL_DETAIL)) {
+	    binding = this->cadBindings.erase(binding);
+	    continue;
+	}
+	++binding;
+    }
+
     return bytes;
 }
 
