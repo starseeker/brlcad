@@ -96,9 +96,6 @@ Sets the line style: `s` for solid, `d` for dashed.
 *--faceplate*, *--no-faceplate*::
 Shows or hides the faceplate overlay.
 
-*--cache*, *--no-cache*::
-Enables or disables backend caches for wireframe rendering.
-
 === View and Interaction
 
 *--perspective* _#_::

@@ -316,6 +316,7 @@ set(
   edit_buf.cpp
   event_txn.cpp
   exec.cpp
+  external_rt.cpp
   ged_init.cpp
   columns.c
   db_index.cpp

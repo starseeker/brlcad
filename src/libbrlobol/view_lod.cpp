@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/export_action.h"
 #include "brlobol/database_source.h"
 #include "brlobol/measure_action.h"
@@ -140,7 +142,7 @@ view_lod_paths_equal(const SbString &a, const SbString &b)
 	ap++;
     if (bp[0] == '/')
 	bp++;
-    return strcmp(ap, bp) == 0;
+    return bu_strcmp(ap, bp) == 0;
 }
 
 static std::string
@@ -692,7 +694,7 @@ BRLObolViewLodState::findCadPayloads(
     for (const auto &binding : this->cadBindings) {
 	const CadPayloadPtr &payload = binding.second;
 	if (!payload || !payload->isValid() ||
-	    strcmp(payload->sourceBindingKey.getString(),
+	    bu_strcmp(payload->sourceBindingKey.getString(),
 		sourceKey.c_str()) != 0)
 	    continue;
 	if (std::find(payloads.begin(), payloads.end(), payload.get()) ==
@@ -701,7 +703,7 @@ BRLObolViewLodState::findCadPayloads(
     }
     std::sort(payloads.begin(), payloads.end(),
 	[](const CadPayload *a, const CadPayload *b) {
-	    return strcmp(a->sourcePath.getString(),
+	    return bu_strcmp(a->sourcePath.getString(),
 		b->sourcePath.getString()) < 0;
 	});
 }
@@ -724,7 +726,7 @@ BRLObolViewLodState::findCadForResult(
 		result.request.objectPath) ||
 	    (payload->sourceName.getLength() > 0 &&
 	     result.request.objectName.getLength() > 0 &&
-	     strcmp(payload->sourceName.getString(),
+	     bu_strcmp(payload->sourceName.getString(),
 		result.request.objectName.getString()) == 0))
 	    return payload.get();
     }

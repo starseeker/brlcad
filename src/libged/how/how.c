@@ -30,7 +30,6 @@
 
 #include "bu/cmd.h"
 #include "bu/str.h"
-#include "dm.h"
 #include "ged/draw.h"
 #include "../ged_private.h"
 

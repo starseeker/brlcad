@@ -27,6 +27,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -633,7 +635,7 @@ ged_db_index_standard_tops(struct ged_db_index *index)
 	[](const struct directory *a, const struct directory *b) {
 	    const char *aname = (a && a->d_namep) ? a->d_namep : "";
 	    const char *bname = (b && b->d_namep) ? b->d_namep : "";
-	    return strcmp(aname, bname) < 0;
+	    return bu_strcmp(aname, bname) < 0;
 	});
 	for (int i = 0; i < tops_cnt; i++) {
 	    if (!all_paths[i] || !all_paths[i]->d_namep)

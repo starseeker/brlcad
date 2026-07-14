@@ -40,6 +40,8 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 #include <set>
 #include <string>
 
@@ -55,8 +57,6 @@
 #include "ged/commands.h"
 #include "ged/draw.h"
 #include "ged/view.h"
-#include "QgLegacyViewContext.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgQuadView.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgView.h"
@@ -65,12 +65,77 @@
 
 static const char *VIEW_NAMES[] = {"Q1", "Q2", "Q3", "Q4"};
 
+static constexpr int
+qg_quadrant_index(QgQuadrantId quadrant)
+{
+	return static_cast<int>(quadrant);
+}
+
+static constexpr int kUpperRightQuadrant =
+	qg_quadrant_index(QgQuadrantId::UpperRight);
+static constexpr int kUpperLeftQuadrant =
+	qg_quadrant_index(QgQuadrantId::UpperLeft);
+static constexpr int kLowerLeftQuadrant =
+	qg_quadrant_index(QgQuadrantId::LowerLeft);
+static constexpr int kLowerRightQuadrant =
+	qg_quadrant_index(QgQuadrantId::LowerRight);
+static constexpr int kQuadrantCount = kLowerRightQuadrant + 1;
+
+static struct bv_context *
+qg_quad_view_context(QgView *view)
+{
+    return view ? view->viewContext() : NULL;
+}
+
+static const struct bv_context *
+qg_quad_view_context_const(const QgView *view)
+{
+    return view ? view->viewContext() : NULL;
+}
+
+static int
+qg_quad_view_set_add(struct ged *gedp, QgView *view)
+{
+    void *view_ctx = view ? view->viewContext() : NULL;
+    if (!gedp || !view_ctx ||
+	!ged_view_set_context_add(ged_view_set_ctx(gedp), view_ctx))
+	return 0;
+    return ged_view_context_host_attach(gedp, view_ctx);
+}
+
+static int
+qg_quad_view_set_attach(struct ged *gedp, QgView *view)
+{
+    void *view_ctx = view ? view->viewContext() : NULL;
+    if (!gedp || !view_ctx ||
+	!ged_view_context_view_set_attach(view_ctx, ged_view_set_ctx(gedp)))
+	return 0;
+    return ged_view_context_host_attach(gedp, view_ctx);
+}
+
+static int
+qg_quad_view_set_remove(struct ged *gedp, QgView *view)
+{
+    return gedp && view ? ged_view_set_context_remove(ged_view_set_ctx(gedp),
+	view->viewContext()) : 0;
+}
+
+static void
+qg_quad_view_destroy(struct ged *gedp, QgView *&view)
+{
+    if (!view)
+	return;
+    (void)qg_quad_view_set_remove(gedp, view);
+    delete view;
+    view = nullptr;
+}
+
 static int
 qg_quad_attach_endpoint(struct ged *gedp, QgView *view)
 {
     if (!gedp || !view || !view->displayEndpoint())
 	return 0;
-    void *view_ctx = qg_legacy_view_to_context(view->view());
+    void *view_ctx = view->viewContext();
     return ged_view_context_display_endpoint_set(view_ctx,
 	view->displayEndpoint(), 0);
 }
@@ -116,32 +181,41 @@ qg_quad_obol_visible_paths(QgView *view)
  * @param session  Associated qtcad/GED session
  * @param type     Requesting either a GL or SWRAST display mechanism
  */
-QgQuadView::QgQuadView(QWidget *parent, QgSession *session, int type) : QWidget(parent)
+QgQuadView::QgQuadView(QWidget *parent, QgSession *session,
+	QgViewType type) : QWidget(parent)
 {
 	m_session = session;
 	graphicsType = type;
 
-	views[UPPER_RIGHT_QUADRANT] = createView(UPPER_RIGHT_QUADRANT);
+	views[kUpperRightQuadrant] = createView(kUpperRightQuadrant);
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
 	if (gedp)
-		qg_legacy_view_ged_view_set_add(gedp,
-			views[UPPER_RIGHT_QUADRANT]->view());
+		qg_quad_view_set_add(gedp, views[kUpperRightQuadrant]);
 	if (m_session)
-		m_session->setActiveView(views[UPPER_RIGHT_QUADRANT]->view());
+		m_session->setActiveViewContext(
+		    views[kUpperRightQuadrant]->viewContext());
 
-	views[UPPER_RIGHT_QUADRANT]->set_current(1);
-	currentView = views[UPPER_RIGHT_QUADRANT];
+	views[kUpperRightQuadrant]->set_current(1);
+	currentView = views[kUpperRightQuadrant];
 
 	default_views(1);
 }
 
 QgQuadView::~QgQuadView()
 {
-	for (int i = 0; i < 4; i++) {
-		if (views[i] != nullptr) {
-			delete views[i];
-			views[i] = nullptr;
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
+	if (m_session) {
+		struct bv_context *active_view = m_session->activeViewContext();
+		for (int i = kUpperRightQuadrant;
+			i <= kLowerRightQuadrant; i++) {
+			if (views[i] && views[i]->viewContext() == active_view) {
+				m_session->setActiveViewContext(nullptr);
+				break;
+			}
 		}
+	}
+	for (int i = 0; i < 4; i++) {
+		qg_quad_view_destroy(gedp, views[i]);
 	}
 
 	if (spacerTop)
@@ -159,8 +233,7 @@ QgQuadView::~QgQuadView()
 QgView *
 QgQuadView::curr_view()
 {
-	int s = get_selected();
-	return get(s);
+	return get(get_selected());
 }
 
 /**
@@ -173,12 +246,12 @@ QgView *
 QgQuadView::createView(unsigned int index)
 {
 	QgView *view = new QgView(this, graphicsType);
-	qg_legacy_view_name_set(view->view(), VIEW_NAMES[index]);
+	bv_context_name_set(qg_quad_view_context(view), VIEW_NAMES[index]);
 	view->set_current(0);
 	view->installEventFilter(this);
 
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
-	qg_legacy_view_ged_view_set_attach(gedp, view->view());
+	qg_quad_view_set_attach(gedp, view);
 	(void)qg_quad_attach_endpoint(gedp, view);
 	/* Each viewport owns independent libbv view state. */
 
@@ -222,23 +295,27 @@ QgQuadView::changeToSingleFrame()
 	if (layout == nullptr) {
 		layout = createLayout();
 	}
-	while (layout->takeAt(0) != nullptr);
-	layout->addWidget(views[UPPER_RIGHT_QUADRANT], 0, 2);
+	QLayoutItem *layout_item = nullptr;
+	while ((layout_item = layout->takeAt(0)) != nullptr)
+		delete layout_item;
+	layout->addWidget(views[kUpperRightQuadrant], 0, 2);
+
+	/* A secondary quadrant may have been active.  Select the surviving view
+	 * before releasing its peers so GED never retains a dangling active context. */
+	if (m_session)
+		m_session->setActiveViewContext(
+			views[kUpperRightQuadrant]->viewContext());
 
 	for (int i = 1; i < 4; i++) {
 		// Don't want use cpu for views that are not visible
 		if (views[i] != nullptr) {
 			views[i]->disconnect();
-			if (gedp)
-				qg_legacy_view_ged_view_set_remove(gedp,
-					views[i]->view());
-			delete views[i];
-			views[i] = nullptr;
+			qg_quad_view_destroy(gedp, views[i]);
 		}
 	}
 
-	views[UPPER_RIGHT_QUADRANT]->set_current(1);
-	currentView = views[UPPER_RIGHT_QUADRANT];
+	views[kUpperRightQuadrant]->set_current(1);
+	currentView = views[kUpperRightQuadrant];
 
 	// No need to indicate active quad
 	delete spacerTop;
@@ -263,39 +340,39 @@ void
 QgQuadView::changeToQuadFrame()
 {
 	struct ged *gedp = m_session ? m_session->ged() : nullptr;
-	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant + 1; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] == nullptr) {
 			// Make the new view
 			views[i] = createView(i);
 
 			// Out of the gate, have the new view units match the first view's
 			// units (which should usually be based on the database units)
-			const void *source_view_ctx =
-				qg_legacy_view_to_context(views[0]->view());
-			qg_legacy_view_unit_conversion_set(views[i]->view(),
-				bv_local2base_get(qg_legacy_context_bv_const(source_view_ctx)),
-				bv_base2local_get(qg_legacy_context_bv_const(source_view_ctx)));
+			const struct bv_context *source_view_ctx =
+				qg_quad_view_context_const(views[0]);
+			bv_unit_conversion_set(bv_context_view(qg_quad_view_context(views[i])),
+				bv_local2base_get(bv_context_view_const(source_view_ctx)),
+				bv_base2local_get(bv_context_view_const(source_view_ctx)));
 
 			// For initial layout calculations, we need to set a screen width
 			// and height.  This won't be right in the end, but it gives
 			// the LoD bounds update something to work with
-			const void *layout_view_ctx =
-				qg_legacy_view_to_context(views[UPPER_RIGHT_QUADRANT]->view());
-			qg_legacy_view_dimensions_set(views[i]->view(),
-				bv_width_get(qg_legacy_context_bv_const(layout_view_ctx)),
-				bv_height_get(qg_legacy_context_bv_const(layout_view_ctx)));
+			const struct bv_context *layout_view_ctx =
+				qg_quad_view_context_const(views[kUpperRightQuadrant]);
+			bv_context_dimensions_set(qg_quad_view_context(views[i]),
+				bv_width_get(bv_context_view_const(layout_view_ctx)),
+				bv_height_get(bv_context_view_const(layout_view_ctx)));
 		}
 		// Copy the LoD source policy so all quadrants use the same
 		// source-selection behavior.
 		ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
 		if (ged_draw_view_context_lod_policy_get(&lod_policy,
-				qg_legacy_view_to_context(views[UPPER_RIGHT_QUADRANT]->view()))) {
+				views[kUpperRightQuadrant]->viewContext())) {
 			ged_draw_view_context_lod_policy_apply(
-				qg_legacy_view_to_context(views[i]->view()),
+				views[i]->viewContext(),
 				&lod_policy);
 		}
 		if (gedp)
-			qg_legacy_view_ged_view_set_add(gedp, views[i]->view());
+			qg_quad_view_set_add(gedp, views[i]);
 	}
 
 	// Define the spacers
@@ -326,17 +403,19 @@ QgQuadView::changeToQuadFrame()
 	if (layout == nullptr) {
 		layout = createLayout();
 	}
-	while (layout->takeAt(0) != nullptr);
+	QLayoutItem *layout_item = nullptr;
+	while ((layout_item = layout->takeAt(0)) != nullptr)
+		delete layout_item;
 
-	layout->addWidget(views[UPPER_LEFT_QUADRANT], 0, 0);
+	layout->addWidget(views[kUpperLeftQuadrant], 0, 0);
 	layout->addWidget(spacerTop, 0, 1);
-	layout->addWidget(views[UPPER_RIGHT_QUADRANT], 0, 2);
+	layout->addWidget(views[kUpperRightQuadrant], 0, 2);
 	layout->addWidget(spacerLeft, 1, 0);
 	layout->addWidget(spacerCenter, 1, 1);
 	layout->addWidget(spacerRight, 1, 2);
-	layout->addWidget(views[LOWER_LEFT_QUADRANT], 2, 0);
+	layout->addWidget(views[kLowerLeftQuadrant], 2, 0);
 	layout->addWidget(spacerBottom, 2, 1);
-	layout->addWidget(views[LOWER_RIGHT_QUADRANT], 2, 2);
+	layout->addWidget(views[kLowerRightQuadrant], 2, 2);
 
 	default_views(0);
 
@@ -347,40 +426,41 @@ QgQuadView::changeToQuadFrame()
 	// specific version of the object.  The refresh cycle will populate this eventually,
 	// but if we don't do it here we'll start out with blank windows until something notifies
 	// the draw logic it needs to do updates.
-	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
-		void *view_ctx = qg_legacy_view_to_context(views[i]->view());
+	for (int i = kUpperRightQuadrant + 1; i < kLowerRightQuadrant + 1; i++) {
+		void *view_ctx = views[i]->viewContext();
 		ged_draw_view_context_lod_bounds_update(view_ctx);
 	}
 	{
-		std::set<std::string> paths =
-			qg_quad_obol_visible_paths(views[UPPER_RIGHT_QUADRANT]);
+	std::set<std::string> paths =
+			qg_quad_obol_visible_paths(views[kUpperRightQuadrant]);
 		if (gedp && m_session && !paths.empty()) {
-			qg_legacy_view *saved_view = m_session->activeView();
-			for (int j = UPPER_RIGHT_QUADRANT + 1; j < LOWER_RIGHT_QUADRANT + 1; j++) {
-				m_session->setActiveView(views[j]->view());
+			struct bv_context *saved_view = m_session->activeViewContext();
+			for (int j = kUpperRightQuadrant + 1; j < kLowerRightQuadrant + 1; j++) {
+				m_session->setActiveViewContext(views[j]->viewContext());
 				for (const std::string &path : paths) {
 					const char *draw_av[] = {"draw", path.c_str(), nullptr};
 					(void)ged_exec(gedp, 2, draw_av);
 				}
 			}
-			m_session->setActiveView(saved_view);
+			m_session->setActiveViewContext(saved_view);
 		}
 	}
 
-	const void *layout_view_ctx =
-		qg_legacy_view_to_context(views[UPPER_RIGHT_QUADRANT]->view());
-	for (int i = UPPER_RIGHT_QUADRANT + 1; i < LOWER_RIGHT_QUADRANT + 1; i++) {
-		qg_legacy_view_dimensions_set(views[i]->view(),
-			bv_width_get(qg_legacy_context_bv_const(layout_view_ctx)),
-			bv_height_get(qg_legacy_context_bv_const(layout_view_ctx)));
+	const struct bv_context *layout_view_ctx =
+		qg_quad_view_context_const(views[kUpperRightQuadrant]);
+	for (int i = kUpperRightQuadrant + 1; i < kLowerRightQuadrant + 1; i++) {
+		bv_context_dimensions_set(qg_quad_view_context(views[i]),
+			bv_width_get(bv_context_view_const(layout_view_ctx)),
+			bv_height_get(bv_context_view_const(layout_view_ctx)));
 	}
 
 	// Current view selection pieces
-	select(UPPER_RIGHT_QUADRANT);
+	select(QgQuadrantId::UpperRight);
 	if (m_session)
-		m_session->setActiveView(views[UPPER_RIGHT_QUADRANT]->view());
-	views[UPPER_RIGHT_QUADRANT]->set_current(1);
-	currentView = views[UPPER_RIGHT_QUADRANT];
+		m_session->setActiveViewContext(
+		    views[kUpperRightQuadrant]->viewContext());
+	views[kUpperRightQuadrant]->set_current(1);
+	currentView = views[kUpperRightQuadrant];
 }
 
 void
@@ -393,7 +473,7 @@ QgQuadView::do_view_changed()
 bool
 QgQuadView::isValid()
 {
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr && !views[i]->isValid())
 			return false;
 	}
@@ -404,9 +484,9 @@ bool
 QgQuadView::eventFilter(QObject *t, QEvent *e)
 {
 	if (e->type() == QEvent::KeyPress || e->type() == QEvent::MouseButtonPress) {
-		for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+		for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 			if (views[i] != nullptr && t == views[i]) {
-				select(i);
+				select(static_cast<QgQuadrantId>(i));
 				break;
 			}
 		}
@@ -417,32 +497,34 @@ QgQuadView::eventFilter(QObject *t, QEvent *e)
 void
 QgQuadView::default_views(int all_views)
 {
-	if (all_views && views[UPPER_RIGHT_QUADRANT] != nullptr) {
-		if (views[UPPER_LEFT_QUADRANT] == nullptr) {
-			views[UPPER_RIGHT_QUADRANT]->aet(270, 90, 0);
+	if (all_views && views[kUpperRightQuadrant] != nullptr) {
+		if (views[kUpperLeftQuadrant] == nullptr) {
+			views[kUpperRightQuadrant]->aet(270, 90, 0);
 		}
 		else {
-			views[UPPER_RIGHT_QUADRANT]->aet(35, 25, 0);
+			views[kUpperRightQuadrant]->aet(35, 25, 0);
 		}
 	}
-	if (views[UPPER_LEFT_QUADRANT] != nullptr) {
-		views[UPPER_LEFT_QUADRANT]->aet(0, 90, 0);
+	if (views[kUpperLeftQuadrant] != nullptr) {
+		views[kUpperLeftQuadrant]->aet(0, 90, 0);
 	}
-	if (views[LOWER_LEFT_QUADRANT] != nullptr) {
-		views[LOWER_LEFT_QUADRANT]->aet(0, 0, 0);
+	if (views[kLowerLeftQuadrant] != nullptr) {
+		views[kLowerLeftQuadrant]->aet(0, 0, 0);
 	}
-	if (views[LOWER_RIGHT_QUADRANT] != nullptr) {
-		views[LOWER_RIGHT_QUADRANT]->aet(90, 0, 0);
+	if (views[kLowerRightQuadrant] != nullptr) {
+		views[kLowerRightQuadrant]->aet(90, 0, 0);
 	}
 }
 
 QgView *
-QgQuadView::get(int quadrantId)
+QgQuadView::get(QgQuadrantId quadrant)
 {
-	if (quadrantId > LOWER_RIGHT_QUADRANT || quadrantId < UPPER_RIGHT_QUADRANT) quadrantId = UPPER_RIGHT_QUADRANT;
-
-	if (views[quadrantId] != nullptr) {
-		return views[quadrantId];
+	const int quadrant_index = qg_quadrant_index(quadrant);
+	if (quadrant_index < kUpperRightQuadrant ||
+		quadrant_index >= kQuadrantCount)
+		return currentView;
+	if (views[quadrant_index] != nullptr) {
+		return views[quadrant_index];
 	}
 
 	return currentView;
@@ -452,7 +534,7 @@ QgView *
 QgQuadView::get(const QPoint &gpos)
 {
 	QgView *retv = nullptr;
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		QgView *cv = views[i];
 		if (cv == nullptr)
 			continue;
@@ -484,15 +566,18 @@ QgQuadView::get(QEvent *e)
 }
 
 void
-QgQuadView::select(int quadrantId)
+QgQuadView::select(QgQuadrantId quadrant)
 {
-	if (quadrantId > LOWER_RIGHT_QUADRANT || quadrantId < UPPER_RIGHT_QUADRANT) quadrantId = UPPER_RIGHT_QUADRANT;
+	const int quadrant_index = qg_quadrant_index(quadrant);
+	if (quadrant_index < kUpperRightQuadrant ||
+		quadrant_index >= kQuadrantCount)
+		return;
 
 	QgView *oc = currentView;
 
 	// Set new selection
-	if (views[quadrantId] != nullptr) {
-		currentView = views[quadrantId];
+	if (views[quadrant_index] != nullptr) {
+		currentView = views[quadrant_index];
 	}
 
 	// Clear any old selections
@@ -506,36 +591,36 @@ QgQuadView::select(int quadrantId)
 		spacerRight->setStyleSheet("");
 
 	// If we're not in Quad mode, done
-	if (views[1] == nullptr)
+	if (views[kUpperLeftQuadrant] == nullptr)
 		return;
 
 	// If we're in quad mode, more work to do
 	currentView->set_current(1);
 
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
-		if (i == quadrantId)
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
+		if (i == quadrant_index)
 			continue;
 		if (views[i] != nullptr) {
 			views[i]->set_current(0);
 		}
 	}
 
-	if (quadrantId == UPPER_RIGHT_QUADRANT) {
+	if (quadrant == QgQuadrantId::UpperRight) {
 		spacerTop->setStyleSheet("background-color:yellow;");
 		spacerRight->setStyleSheet("background-color:yellow;");
 	}
 
-	if (quadrantId == UPPER_LEFT_QUADRANT) {
+	if (quadrant == QgQuadrantId::UpperLeft) {
 		spacerTop->setStyleSheet("background-color:yellow;");
 		spacerLeft->setStyleSheet("background-color:yellow;");
 	}
 
-	if (quadrantId == LOWER_LEFT_QUADRANT) {
+	if (quadrant == QgQuadrantId::LowerLeft) {
 		spacerBottom->setStyleSheet("background-color:yellow;");
 		spacerLeft->setStyleSheet("background-color:yellow;");
 	}
 
-	if (quadrantId == LOWER_RIGHT_QUADRANT) {
+	if (quadrant == QgQuadrantId::LowerRight) {
 		spacerBottom->setStyleSheet("background-color:yellow;");
 		spacerRight->setStyleSheet("background-color:yellow;");
 	}
@@ -548,48 +633,48 @@ void
 QgQuadView::select(const char *quadrant_id)
 {
 	if (BU_STR_EQUIV(quadrant_id, "ur")) {
-		select(UPPER_RIGHT_QUADRANT);
+		select(QgQuadrantId::UpperRight);
 		return;
 	}
 	if (BU_STR_EQUIV(quadrant_id, "ul")) {
-		select(UPPER_LEFT_QUADRANT);
+		select(QgQuadrantId::UpperLeft);
 		return;
 	}
 	if (BU_STR_EQUIV(quadrant_id, "ll")) {
-		select(LOWER_LEFT_QUADRANT);
+		select(QgQuadrantId::LowerLeft);
 		return;
 	}
 	if (BU_STR_EQUIV(quadrant_id, "lr")) {
-		select(LOWER_RIGHT_QUADRANT);
+		select(QgQuadrantId::LowerRight);
 		return;
 	}
 }
 
 
-int
+QgQuadrantId
 QgQuadView::get_selected()
 {
-	if (currentView == views[UPPER_RIGHT_QUADRANT]) {
-		return 0;
+	if (currentView == views[kUpperRightQuadrant]) {
+		return QgQuadrantId::UpperRight;
 	}
-	if (currentView == views[UPPER_LEFT_QUADRANT]) {
-		return 1;
+	if (currentView == views[kUpperLeftQuadrant]) {
+		return QgQuadrantId::UpperLeft;
 	}
-	if (currentView == views[LOWER_LEFT_QUADRANT]) {
-		return 2;
+	if (currentView == views[kLowerLeftQuadrant]) {
+		return QgQuadrantId::LowerLeft;
 	}
-	if (currentView == views[LOWER_RIGHT_QUADRANT]) {
-		return 3;
+	if (currentView == views[kLowerRightQuadrant]) {
+		return QgQuadrantId::LowerRight;
 	}
 
-	return 0;
+	return QgQuadrantId::UpperRight;
 }
 
 void
 QgQuadView::do_view_update(QgViewUpdateFlags flags)
 {
 	QTCAD_SLOT("QgQuadView::do_view_update", 1);
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			views[i]->need_update(flags);
 		}
@@ -599,7 +684,7 @@ QgQuadView::do_view_update(QgViewUpdateFlags flags)
 void
 QgQuadView::stash_hashes()
 {
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			views[i]->stash_hashes();
 		}
@@ -610,7 +695,7 @@ bool
 QgQuadView::diff_hashes()
 {
 	bool ret = false;
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			if (views[i]->diff_hashes()) {
 				ret = true;
@@ -624,7 +709,7 @@ QgQuadView::diff_hashes()
 void
 QgQuadView::enableDefaultKeyBindings()
 {
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			views[i]->enableDefaultKeyBindings();
 		}
@@ -634,7 +719,7 @@ QgQuadView::enableDefaultKeyBindings()
 void
 QgQuadView::disableDefaultKeyBindings()
 {
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			views[i]->disableDefaultKeyBindings();
 		}
@@ -644,7 +729,7 @@ QgQuadView::disableDefaultKeyBindings()
 void
 QgQuadView::enableDefaultMouseBindings()
 {
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			views[i]->enableDefaultMouseBindings();
 		}
@@ -654,7 +739,7 @@ QgQuadView::enableDefaultMouseBindings()
 void
 QgQuadView::disableDefaultMouseBindings()
 {
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			views[i]->disableDefaultMouseBindings();
 		}
@@ -665,7 +750,7 @@ void
 QgQuadView::set_lmouse_move_default(int mm)
 {
 	QTCAD_SLOT("QgQuadView::set_lmouse_move_default", 1);
-	for (int i = UPPER_RIGHT_QUADRANT; i < LOWER_RIGHT_QUADRANT + 1; i++) {
+	for (int i = kUpperRightQuadrant; i < kLowerRightQuadrant + 1; i++) {
 		if (views[i] != nullptr) {
 			views[i]->set_lmouse_move_default(mm);
 		}

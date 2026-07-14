@@ -22,7 +22,7 @@
  * Private (libqtcad-internal) pimpl struct that consolidates the state
  * shared between QgGL and QgSW, together with inline helper operations
  * that eliminate textual duplication in those two canvas implementation
- * files (Phase 3, §2.4 of the refactor plan).
+ * files.
  *
  * This header is NOT part of the installed libqtcad public API.
  */
@@ -31,6 +31,8 @@
 #define QGCANVASSTATE_H
 
 #include "common.h"
+
+#include "bu/str.h"
 
 #include <climits>
 #include <chrono>
@@ -54,8 +56,6 @@
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "QgObolContextManager.h"
-#include "QgLegacyViewContext.h"
-#include "qtcad/QgLegacyView.h"
 
 #include <Inventor/SoOffscreenRenderer.h>
 #include <Inventor/SoRenderManager.h>
@@ -76,25 +76,14 @@
  *
  * Ownership summary
  * ─────────────────
- * local_v  – Opaque handle for the view created by
- *            qg_legacy_view_local_create in the canvas constructor; destroyed
- *            through the normal RT view-context lifetime path by
- *            qg_legacy_view_local_free in the canvas destructor.  The canvas
- *            owns it unconditionally.
- *
- * v        – Normally points to local_v (the widget-owned view).  When
- *            QgCanvasBase::set_view() is called with a non-null external
- *            view, v points to that caller-owned qg_legacy_view instead.
- *            Passing nullptr to set_view() reverts v back to local_v.  The
- *            canvas never frees v — it only frees local_v.
+ * v        – GED/bv view context created and owned by this canvas.  A canvas
+ *            never swaps in externally-owned view state; the owning QgView
+ *            exposes this context to GED and endpoint-facing clients.
  *
  */
 struct QgCanvasState {
     /* ---- view plumbing ---- */
-    qg_legacy_view *v = nullptr;           /* active view: normally == local_v,
-	                                       set_view() can redirect to an
-	                                       external caller-owned legacy view     */
-    qg_legacy_view *local_v = nullptr;     /* widget-owned view (canvas owns)   */
+    struct bv_context *v = nullptr;         /* widget-owned view context */
     BRLObolViewController *obol = nullptr; /* Obol-canonical view controller */
     bool owns_obol = false;
 
@@ -128,6 +117,30 @@ struct QgCanvasState {
 /* ------------------------------------------------------------------ */
 /* Shared inline helpers (static so each TU gets its own copy)        */
 /* ------------------------------------------------------------------ */
+
+static inline struct bv_context *
+qgcanvas_view_context_create(const char *name)
+{
+    struct bv_context *view_ctx = static_cast<struct bv_context *>(
+	ged_view_context_create());
+    if (!view_ctx)
+	return NULL;
+
+    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    VSET(background.bottom, 110, 110, 110);
+    VSET(background.top, 0, 0, 50);
+    (void)bv_background_state_set(bv_context_view(view_ctx), &background);
+    if (name)
+	(void)bv_context_name_set(view_ctx, name);
+    return view_ctx;
+}
+
+static inline void
+qgcanvas_view_context_destroy(struct bv_context *view_ctx)
+{
+    if (view_ctx)
+	ged_view_context_free(view_ctx);
+}
 
 /** Compute the physical render size of a widget (accounting for DPR). */
 static inline QSize
@@ -208,17 +221,18 @@ qgcanvas_sync_obol_camera(QgCanvasState &s)
     if (!s.obol || !s.v)
 	return;
 
-    const void *view_ctx = qg_legacy_view_to_context(s.v);
-    (void)s.obol->syncCameraFromViewContext(view_ctx);
+    (void)s.obol->syncCameraFromViewContext(s.v);
 }
 
+/* Seed a new controller from passive view state once.  Thereafter the
+ * endpoint/controller owns background policy. */
 static inline void
-qgcanvas_sync_obol_background(QgCanvasState &s)
+qgcanvas_initialize_obol_background(QgCanvasState &s)
 {
-    if (!s.obol || !s.v)
+	if (!s.obol || !s.v)
 	return;
     struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
-    if (!bv_background_state_get(&background, qg_legacy_view_bv_const(s.v)))
+    if (!bv_background_state_get(&background, bv_context_view_const(s.v)))
 	return;
     s.obol->setBackgroundColors(
 	SbColor(background.bottom[0] / 255.0f,
@@ -255,6 +269,11 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     }
     SoOffscreenRenderer &renderer = *s.offscreen_renderer;
     renderer.setComponents(SoOffscreenRenderer::RGB_TRANSPARENCY);
+    SoGLRenderAction *action = renderer.getGLRenderAction();
+    if (action) {
+	action->setSmoothing(s.obol->isAntialiasingEnabled());
+	action->setNumPasses(1);
+    }
     renderer.setBackgroundColor(s.obol->getBackgroundBottomColor());
     if (s.obol->getBackgroundBottomColor() !=
 	s.obol->getBackgroundTopColor())
@@ -352,7 +371,9 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, const QWidget *w,
 	s.obol->setCamera(new SoOrthographicCamera);
     qgcanvas_sync_obol_viewport(s, w);
     qgcanvas_sync_obol_camera(s);
-    qgcanvas_sync_obol_background(s);
+    /* The endpoint's GED view seeds renderer policy at attachment.  Host
+     * canvases have their own passive view state, so applying it here would
+     * overwrite a retained endpoint property during host replacement. */
     s.obol->requestRender("qt-controller-bind");
 }
 
@@ -403,7 +424,7 @@ qgcanvas_find_obol_axes_child(SoGroup *group, const char *overlayId)
 	if (!node || !node->isOfType(SoBRLAxes::getClassTypeId()))
 	    continue;
 	SoBRLAxes *axes = static_cast<SoBRLAxes *>(node);
-	if (std::strcmp(axes->overlayId.getValue().getString(), overlayId) == 0)
+	if (bu_strcmp(axes->overlayId.getValue().getString(), overlayId) == 0)
 	    return i;
     }
     return -1;
@@ -419,7 +440,7 @@ qgcanvas_find_obol_grid_child(SoGroup *group, const char *overlayId)
 	if (!node || !node->isOfType(SoBRLGrid::getClassTypeId()))
 	    continue;
 	SoBRLGrid *grid = static_cast<SoBRLGrid *>(node);
-	if (std::strcmp(grid->overlayId.getValue().getString(), overlayId) == 0)
+	if (bu_strcmp(grid->overlayId.getValue().getString(), overlayId) == 0)
 	    return i;
     }
     return -1;
@@ -435,7 +456,7 @@ qgcanvas_find_obol_adc_child(SoGroup *group, const char *overlayId)
 	if (!node || !node->isOfType(SoBRLADC::getClassTypeId()))
 	    continue;
 	SoBRLADC *adc = static_cast<SoBRLADC *>(node);
-	if (std::strcmp(adc->overlayId.getValue().getString(), overlayId) == 0)
+	if (bu_strcmp(adc->overlayId.getValue().getString(), overlayId) == 0)
 	    return i;
     }
     return -1;
@@ -523,6 +544,11 @@ qgcanvas_sync_obol_adc(QgCanvasState &s,
     adc->angleDegrees = static_cast<float>(state.a1);
     adc->distance = static_cast<float>(state.dst > SMALL_FASTF ?
 				       state.dst : 1.0);
+    adc->lineColor = SbColor(state.line_color[0] / 255.0f,
+	state.line_color[1] / 255.0f, state.line_color[2] / 255.0f);
+    adc->tickColor = SbColor(state.tick_color[0] / 255.0f,
+	state.tick_color[1] / 255.0f, state.tick_color[2] / 255.0f);
+    adc->lineWidth = state.line_width > 0 ? state.line_width : 1;
     adc->visible = TRUE;
     adc->rebuildGeometry();
     if (childIndex < 0)
@@ -536,7 +562,7 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     if (!s.obol || !s.v)
 	return;
 
-    void *view_ctx = qg_legacy_view_to_context(s.v);
+    void *view_ctx = s.v;
     struct ged *gedp = static_cast<struct ged *>(
 	ged_view_context_user_data_get(view_ctx));
     if (gedp) {
@@ -554,7 +580,8 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     struct bv_axes_state modelAxes = {};
     struct bv_axes_state viewAxes = {};
     struct bv_adc_state adc = {};
-    const struct bv *view = qg_legacy_context_bv_const(view_ctx);
+    const struct bv *view = bv_context_view_const(
+	static_cast<const struct bv_context *>(view_ctx));
     (void)bv_grid_state_get(&grid, view);
     (void)bv_model_axes_state_get(&modelAxes, view);
     (void)bv_view_axes_state_get(&viewAxes, view);
@@ -573,7 +600,7 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
     if (!s.v || !s.obol || !w)
 	return;
 
-    struct bv *view = qg_legacy_view_bv(s.v);
+    struct bv *view = bv_context_view(s.v);
     struct bv_params_state params = BV_PARAMS_STATE_INIT;
     if (!bv_params_state_get(&params, view) || !params.draw ||
 	!params.draw_fps)
@@ -621,7 +648,7 @@ static inline void
 qgcanvas_stash_hashes(QgCanvasState &s)
 {
     s.prev_dhash = 0;
-    s.prev_vhash = bv_hash(qg_legacy_view_bv_const(s.v));
+    s.prev_vhash = bv_hash(bv_context_view_const(s.v));
 }
 
 /** Request a semantic view refresh and wake the canvas backend. */
@@ -631,10 +658,9 @@ qgcanvas_request_update(QgCanvasState &s, uint32_t flags)
     uint32_t requested = flags ? flags : BV_REFRESH_ALL;
     if (requested & BV_REFRESH_VIEW)
 	qgcanvas_sync_obol_camera(s);
-    qgcanvas_sync_obol_background(s);
     qgcanvas_sync_obol_faceplate(s);
     if (s.v)
-	bv_refresh_request(qg_legacy_view_bv(s.v), requested);
+	bv_refresh_request(bv_context_view(s.v), requested);
 }
 
 /**
@@ -649,8 +675,7 @@ static inline bool
 qgcanvas_diff_hashes_check(QgCanvasState &s)
 {
     bool ret = false;
-    unsigned long long c_vhash =
-	bv_hash(qg_legacy_view_bv_const(s.v));
+    unsigned long long c_vhash = bv_hash(bv_context_view_const(s.v));
 
     if (s.prev_vhash != c_vhash) {
 	qgcanvas_request_update(s, BV_REFRESH_VIEW | BV_REFRESH_DRAW);
@@ -668,25 +693,9 @@ qgcanvas_aet(QgCanvasState &s, double a, double e, double t)
     fastf_t aet_v[3];
     double  aetd[3] = {a, e, t};
     VMOVE(aet_v, aetd);
-    bv_aet_set(qg_legacy_view_bv(s.v), aet_v);
-    bv_context_update(qg_legacy_view_context(s.v), BV_CONTEXT_CHANGED_VIEW);
+    bv_aet_set(bv_context_view(s.v), aet_v);
+    bv_context_update(s.v, BV_CONTEXT_CHANGED_VIEW);
     qgcanvas_sync_obol_camera(s);
-}
-
-/** Bind an external legacy view (or nullptr to revert to the widget-local view). */
-static inline void
-qgcanvas_set_view(QgCanvasState &s, qg_legacy_view *nv)
-{
-    if (!nv) {
-	/* Revert to the widget-owned local view. */
-	s.v = s.local_v;
-	qgcanvas_sync_obol_camera(s);
-	qgcanvas_sync_obol_faceplate(s);
-	return;
-    }
-    s.v = nv;
-    qgcanvas_sync_obol_camera(s);
-    qgcanvas_sync_obol_faceplate(s);
 }
 
 #endif /* QGCANVASSTATE_H */

@@ -31,7 +31,7 @@
 #include "ged/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 
 #define MGED_EDIT_PREVIEW_PREFIX "_mged_edit_preview::"
@@ -81,10 +81,10 @@ mged_edit_preview_exists_any(struct mged_state *s, const char *name)
     if (!s || !name || !name[0])
 	return 0;
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	void *view_ctx = (m_dmp && m_dmp->dm_view_state) ?
-	    m_dmp->dm_view_state->vs_gvp : NULL;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	void *view_ctx = (m_dmp && m_dmp->display_view_state) ?
+	    m_dmp->display_view_state->vs_gvp : NULL;
 	if (!view_ctx)
 	    continue;
 	checked = 1;
@@ -156,12 +156,12 @@ mged_edit_preview_publish_all(
     if (!s || !name || !name[0] || !ip)
 	return 0;
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!m_dmp || !m_dmp->dm_view_state || !m_dmp->dm_view_state->vs_gvp)
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!m_dmp || !m_dmp->display_view_state || !m_dmp->display_view_state->vs_gvp)
 	    continue;
 	attempted = 1;
-	int ret = mged_edit_preview_publish_view(s, m_dmp->dm_view_state,
+	int ret = mged_edit_preview_publish_view(s, m_dmp->display_view_state,
 	    name, source_path, ip, mat);
 	if (ret > 0)
 	    published = 1;
@@ -214,12 +214,12 @@ mged_edit_preview_clear_all(struct mged_state *s, const char *name)
     if (!s || !name || !name[0])
 	return 0;
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!m_dmp || !m_dmp->dm_view_state || !m_dmp->dm_view_state->vs_gvp)
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!m_dmp || !m_dmp->display_view_state || !m_dmp->display_view_state->vs_gvp)
 	    continue;
 	attempted = 1;
-	if (mged_edit_preview_clear_view(s, m_dmp->dm_view_state, name))
+	if (mged_edit_preview_clear_view(s, m_dmp->display_view_state, name))
 	    removed = 1;
     }
 

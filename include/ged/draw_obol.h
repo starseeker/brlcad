@@ -45,10 +45,6 @@ typedef int (*ged_draw_obol_framebuffer_operation_t)(
 	struct imgstream_fb *fb,
 	void *userdata);
 
-#define GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO 0
-#define GED_DRAW_OBOL_SOFTWARE_WIRE_QUALITY 1
-#define GED_DRAW_OBOL_SOFTWARE_WIRE_FAST 2
-
 struct ged_draw_obol_lod_service_status_s {
     int attached;
     int running;
@@ -162,14 +158,6 @@ ged_draw_obol_progressive_available(struct ged *gedp, void *view_ctx);
 GED_EXPORT void *
 ged_draw_obol_controller_opaque_for_view(void *view_ctx);
 
-/** Get the active software-wire policy for an Obol-backed view. */
-GED_EXPORT int
-ged_draw_obol_software_wire_mode_get_for_view(void *view_ctx, int *mode);
-
-/** Set AUTO, QUALITY, or FAST software-wire policy for an Obol-backed view. */
-GED_EXPORT int
-ged_draw_obol_software_wire_mode_set_for_view(void *view_ctx, int mode);
-
 /**
  * Return or create the Obol view controller associated with @p view_ctx.
  *
@@ -211,9 +199,10 @@ ged_draw_obol_framebuffer_present(struct ged *gedp);
 /**
  * Install libged's Obol/imgstream fbserv backend for @p view_ctx.
  *
- * This only installs the backend operation table used by fbserv packet
- * handlers.  Application hosts that own toolkit-specific socket/notifier
- * integration keep installing their own fbserv transport callbacks.
+ * This installs the backend operation table used by fbserv packet handlers.
+ * If no transport is registered yet, libged installs its default descriptor
+ * transport so the backend is safe to close.  Application hosts that own
+ * toolkit-specific socket/notifier integration may replace it afterward.
  *
  * @p window_host is a borrowed BRLObolWindowHost pointer passed as opaque
  * storage so C callers do not depend on C++ types.  Passing NULL uses
@@ -231,8 +220,9 @@ ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
 	int present_on_flush);
 
 /**
- * Install the Obol framebuffer backend and libimgstream's default descriptor
- * transport for a non-toolkit host.
+ * Install the Obol framebuffer backend with libged's generic image host and
+ * libimgstream's default descriptor transport.  Toolkit factory instances are
+ * opaque; toolkit shells use this form and may replace the transport afterward.
  */
 GED_EXPORT int
 ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
@@ -359,6 +349,8 @@ ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
     size_t max_children_per_source,
     struct ged_draw_obol_source_prewarm_status *status);
 
+/* Expand a bounded visible source frontier using only already-cached leaf
+ * AABB proxies.  Missing bounds remain asynchronous prewarm work. */
 GED_EXPORT int
 ged_draw_obol_database_source_expand_visible_children(
     struct ged *gedp,

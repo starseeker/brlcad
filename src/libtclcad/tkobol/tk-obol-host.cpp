@@ -18,6 +18,9 @@
 #  include <X11/Xlib.h>
 #  include <GL/gl.h>
 #  include <GL/glx.h>
+#  include <errno.h>
+#  include <fcntl.h>
+#  include <unistd.h>
 #elif defined(TKOBOL_WGL)
 #  include <windows.h>
 #  include <GL/gl.h>
@@ -45,6 +48,10 @@
 #include <vector>
 
 static thread_local unsigned int tk_endpoint_offscreen_depth = 0;
+
+#if defined(TKOBOL_WGL) && defined(TCL_THREADS)
+static Tcl_Mutex tk_endpoint_event_mutex;
+#endif
 
 class TkEndpointContextManager : public SoDB::ContextManager {
 public:
@@ -143,15 +150,28 @@ struct TkEndpointEvent {
     TkObolEndpointHost *host;
 };
 
+#ifdef TKOBOL_X11
+static bool
+tk_endpoint_set_nonblocking(int fd)
+{
+    const int flags = fcntl(fd, F_GETFL, 0);
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+#endif
+
 class TkObolEndpointHost {
 public:
     TkObolEndpointHost(Tcl_Interp *new_interp, bool use_software) :
 	interp(new_interp), owner_thread(Tcl_GetCurrentThread()), software(use_software),
 	controller(NULL), tkwin(NULL), container(NULL), photo(NULL), opened(false),
 	closing(false), toplevel(false), visible(false), event_queued(false),
-	input_handler_registered(false), input_dispatch(NULL),
+	input_handler_registered(false), container_key_handler_registered(false),
+	input_dispatch(NULL),
 	input_dispatch_data(NULL), last_motion_x(0), last_motion_y(0),
 	last_motion_valid(false), width(1), height(1)
+#ifdef TKOBOL_X11
+	, request_pipe_read(-1), request_pipe_write(-1)
+#endif
     {
     }
 
@@ -196,6 +216,8 @@ public:
 	const bool is_toplevel = this->toplevel;
 	if (!is_toplevel && (!desc->native_id_hint || !desc->native_id_hint[0]))
 	    return 0;
+	if (!this->setup_request_notifier())
+	    return this->open_failed();
 	this->widget_path = is_toplevel ? this->container_path + ".__obol" :
 	    this->container_path;
 	this->display_command = "::brlcad::tkobol::endpoint_display_" +
@@ -265,6 +287,13 @@ public:
 		ButtonReleaseMask | PointerMotionMask | ExposureMask |
 		StructureNotifyMask | FocusChangeMask,
 		input_event_handler, this);
+	    /* Tk directs keyboard focus to a toplevel while pointer events target
+	     * its child widget.  A generic handler observes the former without
+	     * attaching an event record to Tk's renamed toplevel command. */
+	    if (this->container != this->tkwin)
+		Tk_CreateGenericHandler(container_key_event_handler, this);
+	    this->container_key_handler_registered =
+		this->container != this->tkwin;
 	    this->input_handler_registered = true;
 	}
 	#endif
@@ -304,15 +333,21 @@ public:
 	if (Tcl_GetCurrentThread() == this->owner_thread)
 	    Tcl_DeleteEvents(delete_event, this);
 	this->event_queued.store(false);
+	this->teardown_request_notifier();
 	#ifdef TKOBOL_X11
-	if (this->input_handler_registered && this->tkwin)
-	    Tk_DeleteEventHandler(this->tkwin,
-		KeyPressMask | KeyReleaseMask | ButtonPressMask |
-		ButtonReleaseMask | PointerMotionMask | ExposureMask |
-		StructureNotifyMask | FocusChangeMask,
-		input_event_handler, this);
+	if (this->input_handler_registered) {
+	    if (this->tkwin)
+		Tk_DeleteEventHandler(this->tkwin,
+		    KeyPressMask | KeyReleaseMask | ButtonPressMask |
+		    ButtonReleaseMask | PointerMotionMask | ExposureMask |
+		    StructureNotifyMask | FocusChangeMask,
+		    input_event_handler, this);
+	}
+	if (this->container_key_handler_registered)
+	    Tk_DeleteGenericHandler(container_key_event_handler, this);
 	#endif
 	this->input_handler_registered = false;
+	this->container_key_handler_registered = false;
 	this->input_dispatch = NULL;
 	this->input_dispatch_data = NULL;
 	this->last_motion_valid = false;
@@ -344,18 +379,100 @@ public:
 	bool expected = false;
 	if (!this->event_queued.compare_exchange_strong(expected, true))
 	    return 1;
+	return this->queue_frame_event();
+    }
+
+    int queue_frame_event(void)
+    {
+#ifdef TKOBOL_X11
+	if (this->request_pipe_write < 0) {
+	    this->event_queued.store(false);
+	    return 0;
+	}
+	char marker = 0;
+	ssize_t written = -1;
+	do {
+	    written = write(this->request_pipe_write, &marker, 1);
+	} while (written < 0 && errno == EINTR);
+	if (written == 1 || (written < 0 &&
+		(errno == EAGAIN || errno == EWOULDBLOCK)))
+	    return 1;
+	this->event_queued.store(false);
+	return 0;
+#else
 	TkEndpointEvent *event = reinterpret_cast<TkEndpointEvent *>(
 	    Tcl_Alloc(sizeof(TkEndpointEvent)));
 	event->header.proc = event_proc;
 	event->host = this;
+	if (Tcl_GetCurrentThread() == this->owner_thread) {
+	    Tcl_QueueEvent(&event->header, TCL_QUEUE_TAIL);
+	    return 1;
+	}
+#  ifdef TCL_THREADS
+	Tcl_MutexLock(&tk_endpoint_event_mutex);
 	Tcl_ThreadQueueEvent(this->owner_thread, &event->header, TCL_QUEUE_TAIL);
 	Tcl_ThreadAlert(this->owner_thread);
+	Tcl_MutexUnlock(&tk_endpoint_event_mutex);
 	return 1;
-    }
+#  else
+	Tcl_Free(reinterpret_cast<char *>(event));
+	this->event_queued.store(false);
+	return 0;
+#  endif
+#endif
+	}
+
+    void dispatch_frame_event(void)
+    {
+	this->event_queued.store(false);
+	if (!this->opened || this->closing)
+	    return;
+	if (!this->software)
+	    (void)this->widget_command("postredisplay");
+	else
+	    (void)this->render();
+	}
+
+    bool setup_request_notifier(void)
+    {
+#ifdef TKOBOL_X11
+	if (this->request_pipe_read >= 0 || this->request_pipe_write >= 0)
+	    return true;
+	int fds[2] = {-1, -1};
+	if (pipe(fds) != 0 || !tk_endpoint_set_nonblocking(fds[0]) ||
+	    !tk_endpoint_set_nonblocking(fds[1])) {
+	    if (fds[0] >= 0)
+		::close(fds[0]);
+	    if (fds[1] >= 0)
+		::close(fds[1]);
+	    return false;
+	}
+	this->request_pipe_read = fds[0];
+	this->request_pipe_write = fds[1];
+	Tcl_CreateFileHandler(this->request_pipe_read, TCL_READABLE,
+	    request_pipe_handler, this);
+#endif
+	return true;
+	}
+
+    void teardown_request_notifier(void)
+    {
+#ifdef TKOBOL_X11
+	if (this->request_pipe_read >= 0) {
+	    Tcl_DeleteFileHandler(this->request_pipe_read);
+	    ::close(this->request_pipe_read);
+	}
+	if (this->request_pipe_write >= 0)
+	    ::close(this->request_pipe_write);
+	this->request_pipe_read = -1;
+	this->request_pipe_write = -1;
+#endif
+	}
+
 
     int resize(unsigned int new_width, unsigned int new_height,
 	double device_pixel_ratio)
-    {
+	{
 	if (!this->opened || !this->tkwin || !new_width || !new_height ||
 	    device_pixel_ratio <= 0.0)
 	    return 0;
@@ -366,7 +483,7 @@ public:
 	    std::max(1, (int)(new_height / device_pixel_ratio)));
 	this->controller->setViewportSize(new_width, new_height);
 	return this->request("Tk endpoint resize");
-    }
+	}
 
     int capture(unsigned char **pixels, size_t *size, unsigned int *out_width,
 	unsigned int *out_height, unsigned int *components)
@@ -682,6 +799,19 @@ private:
 	    }
 	    case ButtonPress:
 	    case ButtonRelease: {
+		if (xevent->type == ButtonPress &&
+		    (xevent->xbutton.button == Button4 ||
+		     xevent->xbutton.button == Button5)) {
+		    event.type = BRLOBOL_INPUT_WHEEL;
+		    event.timestamp = xevent->xbutton.time;
+		    event.x = xevent->xbutton.x;
+		    event.y = xevent->xbutton.y;
+		    event.modifiers = input_modifiers(xevent->xbutton.state);
+		    /* Match Qt's angleDelta()/8 normalization. */
+		    event.wheelDelta = xevent->xbutton.button == Button4 ? -15 : 15;
+		    host->dispatch_input(event);
+		    return;
+		}
 		event.type = xevent->type == ButtonPress ? BRLOBOL_INPUT_POINTER_PRESS :
 	    BRLOBOL_INPUT_POINTER_RELEASE;
 		event.timestamp = xevent->xbutton.time;
@@ -691,11 +821,17 @@ private:
 		event.buttons = input_buttons(xevent->xbutton.state);
 		if (xevent->type == ButtonPress && event.button != BRLOBOL_INPUT_ANY)
 		    event.buttons |= 1u << event.button;
-		if (xevent->type == ButtonRelease && event.button != BRLOBOL_INPUT_ANY)
-		    event.buttons &= ~(1u << event.button);
-		event.modifiers = input_modifiers(xevent->xbutton.state);
-		host->last_motion_valid = false;
-		host->dispatch_input(event);
+	if (xevent->type == ButtonRelease && event.button != BRLOBOL_INPUT_ANY)
+	    event.buttons &= ~(1u << event.button);
+	event.modifiers = input_modifiers(xevent->xbutton.state);
+	if (xevent->type == ButtonPress) {
+	    host->last_motion_x = event.x;
+	    host->last_motion_y = event.y;
+	    host->last_motion_valid = true;
+	} else {
+	    host->last_motion_valid = false;
+	}
+	host->dispatch_input(event);
 		return;
 	    }
 	    case MotionNotify:
@@ -733,9 +869,20 @@ private:
 		event.type = BRLOBOL_INPUT_EXPOSE;
 		host->dispatch_input(event);
 		return;
-	    default:
-		return;
+	default:
+	    return;
 	}
+    }
+
+    static int container_key_event_handler(ClientData data, XEvent *xevent)
+    {
+	TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(data);
+	if (!host || !xevent || !host->container || host->closing ||
+	    (xevent->type != KeyPress && xevent->type != KeyRelease) ||
+	    xevent->xany.window != Tk_WindowId(host->container))
+	    return 0;
+	input_event_handler(data, xevent);
+	return 0;
     }
 #endif
 
@@ -745,13 +892,23 @@ private:
 	TkObolEndpointHost *host = event ? event->host : NULL;
 	if (!host)
 	    return 1;
-	host->event_queued.store(false);
-	if (!host->software && host->opened && !host->closing)
-	    (void)host->widget_command("postredisplay");
-	else if (host->software)
-	    (void)host->render();
+	host->dispatch_frame_event();
 	return 1;
     }
+
+#ifdef TKOBOL_X11
+    static void request_pipe_handler(ClientData data, int UNUSED(mask))
+    {
+	TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(data);
+	if (!host || host->request_pipe_read < 0)
+	    return;
+	char buffer[64];
+	while (read(host->request_pipe_read, buffer, sizeof(buffer)) > 0) {
+	    /* Drain all coalesced worker requests before rendering once. */
+	}
+	host->dispatch_frame_event();
+    }
+#endif
 
     static int delete_event(Tcl_Event *event_ptr, ClientData data)
     {
@@ -772,6 +929,7 @@ private:
     bool visible;
     std::atomic<bool> event_queued;
     bool input_handler_registered;
+    bool container_key_handler_registered;
     BRLObolInputEventHandler input_dispatch;
     void *input_dispatch_data;
     int last_motion_x;
@@ -779,6 +937,10 @@ private:
     bool last_motion_valid;
     unsigned int width;
     unsigned int height;
+#ifdef TKOBOL_X11
+    int request_pipe_read;
+    int request_pipe_write;
+#endif
     std::string container_path;
     std::string container_command_name;
     std::string widget_path;
@@ -933,8 +1095,10 @@ tclcad_obol_host_factories_register(void)
     uint64_t common = BRLOBOL_HOST_CAP_TOPLEVEL |
 	BRLOBOL_HOST_CAP_EMBEDDED | BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
 	BRLOBOL_HOST_CAP_READBACK |
-	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT | BRLOBOL_HOST_CAP_MULTI_VIEW |
-	BRLOBOL_HOST_CAP_THREAD_AFFINE;
+	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT | BRLOBOL_HOST_CAP_MULTI_VIEW;
+#if defined(TKOBOL_X11) || defined(TCL_THREADS)
+    common |= BRLOBOL_HOST_CAP_THREAD_AFFINE;
+#endif
 #ifdef TKOBOL_X11
     common |= BRLOBOL_HOST_CAP_INPUT;
 #endif

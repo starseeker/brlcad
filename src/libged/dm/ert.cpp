@@ -3,253 +3,31 @@
  *
  * Copyright (c) 2008-2026 United States Government as represented by
  * the U.S. Army Research Laboratory.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public License
- * version 2.1 as published by the Free Software Foundation.
- *
- * This library is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this file; see the file named COPYING for more
- * information.
  */
-/** @file libged/dm/ert.c
+/** @file libged/dm/ert.cpp
  *
- * Raytrace the current view and display the results in the current
- * embedded fb.
- *
+ * Render the active view with the external rt executable into the endpoint
+ * framebuffer stream.  ERT owns the command-level policy and callbacks; the
+ * process and stream setup is shared with other external image commands.
  */
 
 #include "common.h"
 
-#include <vector>
-#include <string>
-
-#include <stdlib.h>
-#include <string.h>
-
-#ifdef HAVE_SYS_TYPES_H
-#  include <sys/types.h>
-#endif
-#include "bresource.h"
-
-#include "bu/app.h"
-#include "bu/env.h"
-#include "bu/process.h"
-#include "bv.h"
-#include "raytrace.h"
-#include "imgstream/fbserv.h"
-#include "pkg.h"
-
 #include "../ged_private.h"
+
 
 extern "C" int
 ged_ert_core(struct ged *gedp, int argc, const char *argv[])
 {
-
-    int ret = BRLCAD_OK;
-
-    GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
-    GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
-    GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
-    GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
-
-    /* initialize result */
-    bu_vls_trunc(gedp->ged_result_str, 0);
-
-    void *view_ctx = ged_view_active_ctx(gedp);
-    if (!view_ctx) {
-	bu_vls_printf(gedp->ged_result_str, "no current view set\n");
-	return BRLCAD_ERROR;
-    }
-    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-
-    struct fbserv_obj *fbs = gedp->ged_fbs;
-    if (!fbs) {
-	bu_vls_printf(gedp->ged_result_str, "no framebuffer server configured\n");
-	return BRLCAD_ERROR;
-    }
-
-    struct fbserv_fb_info fbinfo;
-    int have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
-    if (!have_fbserv_backend) {
-	if (ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) == BRLCAD_OK)
-	    have_fbserv_backend = (fbs_framebuffer_info(fbs, &fbinfo) == 0);
-    }
-
-    if (!have_fbserv_backend) {
-	bu_vls_printf(gedp->ged_result_str,
-		"view has no endpoint-backed framebuffer stream\n");
-	return BRLCAD_ERROR;
-    }
-
-    if (!ged_who_argc(gedp)) {
-	bu_vls_printf(gedp->ged_result_str, "no objects displayed\n");
-	return BRLCAD_ERROR;
-    }
-
-    // If the framebuffer is not displayed, enable it in underlay mode so the
-    // output is visible.
-    //
-    // Phase B1 (ert reliability) — gv_fb_mode lifecycle contract:
-    //   * `ert` deliberately leaves gv_fb_mode set after the rt subprocess
-    //     exits.  This is intentional so the user can keep the just-rendered
-    //     image visible underneath the 3D wireframe (the common interactive
-    //     "render → review → tweak view → re-render" workflow).
-    //   * To clear the lingering raytrace overlay and return to a plain 3D
-    //     view, the user runs `fbclear -m` (clears if_mem AND resets
-    //     gv_fb_mode = 0) — see src/libged/fbclear/fbclear.c.
-    //   * Programmatic callers that need to restore the prior fb_mode
-    //     should snapshot it before invoking ert and write it back after.
-    int prior_fb_mode = bv_framebuffer_mode_get(view);
-    if (!prior_fb_mode)
-	bv_framebuffer_mode_set(view, 2);
-
-    /* Phase 3: Try the IPC fast path first (anonymous pipe / socketpair).
-     * This avoids TCP port binding, firewall traversal, and port collisions.
-     * Fall back to the traditional TCP listen path when IPC is unavailable.  */
-    bool using_ipc = false;
-    if (fbs_can_open_ipc(fbs) && fbs_open_ipc(fbs) == BRLCAD_OK) {
-	using_ipc = true;
-    } else {
-	if (!fbs_can_open_network(fbs) || fbs_open(fbs, 0) != BRLCAD_OK) {
-	    bu_vls_printf(gedp->ged_result_str, "could not open fb server\n");
-	    return BRLCAD_ERROR;
-	}
-    }
-
-    // Assemble the arguments
-    struct bu_vls wstr = BU_VLS_INIT_ZERO;
-    std::vector<std::string> args;
-
-    char rt[MAXPATHLEN] = {0};
-    bu_dir(rt, MAXPATHLEN, BU_DIR_BIN, "rt", BU_DIR_EXT, NULL);
-    args.push_back(std::string(rt));
-    args.push_back(std::string("-F"));
-    if (using_ipc) {
-	/* Any numeric framebuffer spec routes through if_remote.c, which will
-	 * detect PKG_ADDR and use the IPC channel instead of TCP.         */
-	args.push_back(std::string("0"));
-    } else {
-	args.push_back(std::to_string(fbs_listener_port(fbs)));
-    }
-    args.push_back(std::string("-M"));
-
-    int width = fbinfo.width;
-    int height = fbinfo.height;
-    if (width <= 0 || height <= 0) {
-	bu_vls_printf(gedp->ged_result_str, "invalid embedded framebuffer dimensions\n");
-	return BRLCAD_ERROR;
-    }
-
-    args.push_back(std::string("-w"));
-    args.push_back(std::to_string(width));
-    args.push_back(std::string("-n"));
-    args.push_back(std::to_string(height));
-    args.push_back(std::string("-V"));
-    double aspect = (double)width/(double)height;
-    bu_vls_sprintf(&wstr, "%.14e", aspect);
-    args.push_back(std::string(bu_vls_cstr(&wstr)));
-    fastf_t perspective = bv_perspective_get(view);
-    if (perspective > 0) {
-	args.push_back(std::string("-p"));
-	bu_vls_sprintf(&wstr, "%.14e", perspective);
-	args.push_back(std::string(bu_vls_cstr(&wstr)));
-    }
-
-    // Everything before the "--" argument is incorporated into the
-    // initial command args
-    int units_supplied = 0;
-    int i = 0;
-    for (i = 1; i < argc; i++) {
-	if (BU_STR_EQUAL(argv[1], "-u")) {
-	    units_supplied=1;
-	} else if (argv[i][0] == '-' && argv[i][1] == '-' && argv[i][2] == '\0') {
-	    ++i;
-	    break;
-	}
-	args.push_back(std::string(argv[i]));
-    }
-
-    /* default to local units when not specified on command line */
-    if (!units_supplied) {
-	args.push_back(std::string("-u"));
-	args.push_back(std::string("model"));
-    }
-
-    args.push_back(std::string(gedp->dbip->dbi_filename));
-
-    int gd_rt_cmd_len = (int)args.size();
-    char **gd_rt_cmd = (char **)bu_calloc(gd_rt_cmd_len + ged_who_argc(gedp), sizeof(char *), "alloc gd_rt_cmd");
-    for (size_t j = 0; j < args.size(); j++) {
-	gd_rt_cmd[j] = bu_strdup(args[j].c_str());
-    }
-
-    // If we need to do something at the end of the ert cmd, find out - we'll have to pass that on to the rt
-    // subprocess control.
-    bu_clbk_t clbk = NULL;
-    void *u1 = NULL;
-    void *u2 = NULL;
-    ged_clbk_get(&clbk, &u2, gedp, "ert", BU_CLBK_LINGER);
-
-    // We need to know the pid of the rt command that has been launched
-    int rt_pid = -1;
-
-    /* When using IPC, advertise the child-end address via the process
-     * environment immediately before forking.  bu_process_create() inherits
-     * all open file descriptors (the child-end fds have been moved high by
-     * fbs_open_ipc to survive any descriptor sweep), and the child reads
-     * PKG_ADDR via getenv() in if_remote.c::rem_open().
-     * We clear the variable right after the fork because the child already
-     * has its own independent copy of the environment.                       */
-    if (using_ipc) {
-	const char *addr_env = fbs_ipc_child_addr_env(fbs);
-	if (addr_env) {
-	    /* addr_env is "PKG_ADDR=pipe:4,7" — strip the "KEY=" prefix */
-	    const char *eq = strchr(addr_env, '=');
-	    if (eq) {
-		bu_log("ert: setting PKG_ADDR='%s' for rt subprocess\n", eq + 1);
-		bu_setenv(PKG_ADDR_ENVVAR, eq + 1, 1);
-	    }
-	} else {
-	    bu_log("ert: WARNING fbs_ipc_child_addr_env returned NULL - rt will not find IPC channel\n");
-	}
-    }
-
-    bu_log("ert: calling _ged_run_rt (using_ipc=%d fb_size=%dx%d)\n",
-	   using_ipc, width, height);
-    ret = _ged_run_rt(gedp, gd_rt_cmd_len, (const char **)gd_rt_cmd, (argc - i), &(argv[i]), 0, &rt_pid, clbk, u2);
-    bu_log("ert: _ged_run_rt returned %d rt_pid=%d\n", ret, rt_pid);
-
-    if (using_ipc)
-	bu_setenv(PKG_ADDR_ENVVAR, "", 1); /* clear parent's env copy */
-
-    clbk = NULL;
-    u1 = (void *)&rt_pid;
-    u2 = NULL;
-    ged_clbk_get(&clbk, &u2, gedp, "ert", BU_CLBK_DURING);
-
-    if (clbk)
-	(*clbk)(argc, argv, u1, u2);
-
-    bu_vls_cstr(&wstr);
-    for (size_t j = 0; j < args.size(); j++) {
-	bu_free(gd_rt_cmd[j], "free gd_rt_cmd arg");
-    }
-    bu_free(gd_rt_cmd, "free gd_rt_cmd");
-
-    return ret;
+    return _ged_external_rt_to_endpoint(gedp, argc, argv, "rt", "ert");
 }
 
-// Local Variables:
-// tab-width: 8
-// mode: C++
-// c-basic-offset: 4
-// indent-tabs-mode: t
-// c-file-style: "stroustrup"
-// End:
-// ex: shiftwidth=4 tabstop=8
+/*
+ * Local Variables:
+ * mode: C++
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

@@ -158,6 +158,11 @@ IMGSTREAM_EXPORT imgstream_fb_t *imgstream_fb_open_remote(const char *spec,
 	const struct imgstream_fb_remote_options *options);
 IMGSTREAM_EXPORT imgstream_fb_t *imgstream_fb_open_display(const char *spec, size_t width, size_t height,
 	const struct imgstream_fb_display_host *host, void *data);
+/*
+ * Disconnect the display host, invoking its close callback once now while the
+ * pixel stream remains usable.  Later framebuffer close does not call it.
+ */
+IMGSTREAM_EXPORT int imgstream_fb_detach_display_host(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT void imgstream_fb_close(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT imgstream_t *imgstream_fb_stream(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT const imgstream_t *imgstream_fb_cstream(const imgstream_fb_t *fb);

@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/material_object.h"
 
 #include <string.h>
@@ -94,8 +96,8 @@ SoBRLMaterialObject::findProperty(const char *group, const char *name,
 	if (!this->getProperty(i, propertyGroupValue, propertyNameValue,
 			       propertyValueValue))
 	    continue;
-	if (strcmp(propertyGroupValue.getString(), group) == 0 &&
-	    strcmp(propertyNameValue.getString(), name) == 0) {
+	if (bu_strcmp(propertyGroupValue.getString(), group) == 0 &&
+	    bu_strcmp(propertyNameValue.getString(), name) == 0) {
 	    valueOut = propertyValueValue;
 	    return TRUE;
 	}

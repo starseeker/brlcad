@@ -33,8 +33,6 @@
 
 #include "vmath.h"
 
-#include "bu/hash.h"
-#include "bu/vls.h"
 #include "dm/defines.h"
 
 #ifndef DM_VIEW_H
@@ -47,13 +45,6 @@ struct dm_path_edit_params {
     double dx;
     double dy;
     mat_t edit_mat;
-};
-
-struct dm_view_data {
-    struct bu_hash_tbl  *edited_paths;
-    struct bu_vls       *prim_label_list;
-    int                 prim_label_list_size;
-    int                 cache_on;
 };
 
 #define DM_VIEW_REFRESH_VIEW        0x00000001u

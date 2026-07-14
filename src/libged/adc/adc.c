@@ -31,11 +31,42 @@
 #include "vmath.h"
 #include "bv.h"
 #include "ged.h"
+#include "ged/view.h"
+#include "brlobol/display_endpoint.h"
 
 void ged_calc_adc_pos(const void *view_ctx, struct bv_adc_state *adc);
 void ged_calc_adc_a1(const void *view_ctx, struct bv_adc_state *adc);
 void ged_calc_adc_a2(const void *view_ctx, struct bv_adc_state *adc);
 void ged_calc_adc_dst(const void *view_ctx, struct bv_adc_state *adc);
+
+
+/* An attached view publishes ADC visibility through its endpoint.  The ADC
+ * geometry remains passive per-view state, so an unattached view can still be
+ * configured before a host is created. */
+static int
+adc_draw_set(struct ged *gedp, void *view_ctx, struct bv_adc_state *adc,
+	int enabled)
+{
+    if (!gedp || !view_ctx || !adc)
+	return BRLCAD_ERROR;
+
+    if (ged_view_context_display_endpoint_get(view_ctx)) {
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	value.bool_value = enabled ? 1 : 0;
+	if (ged_view_context_display_property_set(view_ctx,
+		"view.faceplate.adc.visible", &value) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"active view has no Obol ADC visibility policy\n");
+	    return BRLCAD_ERROR;
+	}
+    }
+
+    adc->draw = enabled ? 1 : 0;
+    return BRLCAD_OK;
+}
 
 static void
 adc_vls_print(const void *view_ctx, const struct bv_adc_state *adc, fastf_t base2local, struct bu_vls *out_vp)
@@ -188,11 +219,8 @@ ged_adc_core(struct ged *gedp,
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	} else if (argc == 1) {
 	    i = (int)user_pt[X];
-
-	    if (i)
-		adc.draw = 1;
-	    else
-		adc.draw = 0;
+	    if (adc_draw_set(gedp, view_ctx, &adc, i) != BRLCAD_OK)
+		return BRLCAD_ERROR;
 
 	    ADC_COMMIT_RETURN(BRLCAD_OK);
 	}

@@ -33,7 +33,6 @@
 #include "bu/cmd.h"
 #include "bu/process.h"
 #include "tcl.h"
-#include "dm.h"
 #include "tclcad/defines.h"
 
 __BEGIN_DECLS

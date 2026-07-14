@@ -26,10 +26,8 @@
 
 #include "bv.h"
 #include "qtcad/QgObolSnap.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
-#include "QgLegacyViewContext.h"
 
 static uint32_t
 qg_obol_snap_kinds_from_bv_mask(unsigned long long kinds, int source_flags)
@@ -55,25 +53,23 @@ qg_obol_snap_kinds_from_bv_mask(unsigned long long kinds, int source_flags)
 }
 
 static const struct bv *
-qg_obol_snap_bv_const(const qg_legacy_view *v)
+qg_obol_snap_bv_const(const void *view_ctx)
 {
-    const void *view_ctx = qg_legacy_view_to_context(v);
     return view_ctx ? bv_context_view_const(
-	reinterpret_cast<const struct bv_context *>(view_ctx)) : nullptr;
+	static_cast<const struct bv_context *>(view_ctx)) : nullptr;
 }
 
 static struct bv *
-qg_obol_snap_bv(qg_legacy_view *v)
+qg_obol_snap_bv(void *view_ctx)
 {
-    void *view_ctx = qg_legacy_view_to_context(v);
     return view_ctx ? bv_context_view(
-	reinterpret_cast<struct bv_context *>(view_ctx)) : nullptr;
+	static_cast<struct bv_context *>(view_ctx)) : nullptr;
 }
 
 static int
-qg_obol_snap_enabled(const qg_legacy_view *v)
+qg_obol_snap_enabled(const void *view_ctx)
 {
-    const struct bv *view = qg_obol_snap_bv_const(v);
+    const struct bv *view = qg_obol_snap_bv_const(view_ctx);
     if (!view || !bv_snap_lines_get(view))
 	return 0;
 
@@ -86,12 +82,12 @@ qg_obol_snap_enabled(const qg_legacy_view *v)
 }
 
 static float
-qg_obol_snap_tolerance(const qg_legacy_view *v)
+qg_obol_snap_tolerance(const void *view_ctx)
 {
-    if (!v)
+	if (!view_ctx)
 	return 0.0f;
 
-    const struct bv *view = qg_obol_snap_bv_const(v);
+    const struct bv *view = qg_obol_snap_bv_const(view_ctx);
     int width = bv_width_get(view);
     int height = bv_height_get(view);
     if (width <= 0 || height <= 0)
@@ -106,16 +102,16 @@ qg_obol_snap_tolerance(const qg_legacy_view *v)
 }
 
 static void
-qg_obol_refine_db_snap(QgView *display, qg_legacy_view *v)
+qg_obol_refine_db_snap(QgView *display, void *view_ctx)
 {
-    if (!display || !qg_obol_snap_enabled(v))
+	if (!display || !qg_obol_snap_enabled(view_ctx))
 	return;
 
-    struct bv *view = qg_obol_snap_bv(v);
+    struct bv *view = qg_obol_snap_bv(view_ctx);
     const int source_flags = bv_snap_source_flags_get(view);
     uint32_t obol_kinds = qg_obol_snap_kinds_from_bv_mask(
 			      bv_snap_kind_mask_get(view), source_flags);
-    float tolerance = qg_obol_snap_tolerance(v);
+    float tolerance = qg_obol_snap_tolerance(view_ctx);
     if (!obol_kinds || tolerance <= 0.0f)
 	return;
 
@@ -167,8 +163,8 @@ QgViewFilter::view_widget() const
 QMouseEvent *
 QgViewFilter::view_sync(QEvent *e)
 {
-    qg_legacy_view *lv = m->display ? m->display->view() : nullptr;
-    if (!lv)
+	void *view_ctx = m->display ? m->display->viewContext() : nullptr;
+	if (!view_ctx)
 	return nullptr;
 
     /* If this is not a supported mouse event, there is nothing to do. */
@@ -189,8 +185,8 @@ QgViewFilter::view_sync(QEvent *e)
 #endif
 
     /* Keep neutral view state synchronized with the event stream. */
-    bv_mouse_state_set(qg_obol_snap_bv(lv), e_x, e_y);
-    qg_obol_refine_db_snap(m->display, lv);
+	bv_mouse_state_set(qg_obol_snap_bv(view_ctx), e_x, e_y);
+	qg_obol_refine_db_snap(m->display, view_ctx);
 
     /* Modifier keys are typically view-nav gestures, not edit operations. */
     if (m_e->modifiers() != Qt::NoModifier)

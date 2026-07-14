@@ -390,23 +390,24 @@ to_prim_label(struct ged *gedp,
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* Free the previous list of primitives scheduled for labeling */
-    if (tgd->go_dmv.prim_label_list_size) {
-	for (i = 0; i < tgd->go_dmv.prim_label_list_size; ++i)
-	    bu_vls_free(&tgd->go_dmv.prim_label_list[i]);
-	bu_free((void *)tgd->go_dmv.prim_label_list, "prim_label");
-	tgd->go_dmv.prim_label_list = (struct bu_vls *)0;
+    if (tgd->go_prim_label_list_size) {
+	for (i = 0; i < tgd->go_prim_label_list_size; ++i)
+	    bu_vls_free(&tgd->go_prim_label_list[i]);
+	bu_free(tgd->go_prim_label_list, "prim_label");
+	tgd->go_prim_label_list = NULL;
+	tgd->go_prim_label_list_size = 0;
     }
 
     /* Set the list of primitives scheduled for labeling */
-    tgd->go_dmv.prim_label_list_size = argc - 1;
-    if (tgd->go_dmv.prim_label_list_size < 1)
+    tgd->go_prim_label_list_size = argc - 1;
+    if (tgd->go_prim_label_list_size < 1)
 	return BRLCAD_OK;
 
-    tgd->go_dmv.prim_label_list = (struct bu_vls *)bu_calloc(tgd->go_dmv.prim_label_list_size,
-									 sizeof(struct bu_vls), "prim_label");
-    for (i = 0; i < tgd->go_dmv.prim_label_list_size; ++i) {
-	bu_vls_init(&tgd->go_dmv.prim_label_list[i]);
-	bu_vls_printf(&tgd->go_dmv.prim_label_list[i], "%s", argv[i+1]);
+    tgd->go_prim_label_list = (struct bu_vls *)bu_calloc(tgd->go_prim_label_list_size,
+									  sizeof(struct bu_vls), "prim_label");
+    for (i = 0; i < tgd->go_prim_label_list_size; ++i) {
+	bu_vls_init(&tgd->go_prim_label_list[i]);
+	bu_vls_printf(&tgd->go_prim_label_list[i], "%s", argv[i+1]);
     }
 
     return BRLCAD_OK;

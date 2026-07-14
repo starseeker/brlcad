@@ -34,7 +34,8 @@ public:
     enum Layer {
 	UNDERLAY = 0,
 	OVERLAY = 1,
-	HUD = 2
+	HUD = 2,
+	INTERLAY = 3
     };
 
     enum Anchor {

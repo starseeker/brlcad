@@ -19,7 +19,7 @@
  */
 /**
  *
- * Tcl logic specific to libdm.
+ * Tcl initialization for the Tk Obol host and image utilities.
  *
  */
 
@@ -36,7 +36,7 @@
 
 #include "tcl.h"
 #include "vmath.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "bu/cmd.h"
 #include "bu/log.h"
 #include "bu/vls.h"
@@ -49,59 +49,8 @@
 extern int BrlcadTkObolHost_Init(Tcl_Interp *interp);
 #endif
 
-static int
-dm_validXType_tcl(void *clientData, int argc, const char **argv)
-{
-    Tcl_Interp *interp = (Tcl_Interp *)clientData;
-    struct bu_vls vls = BU_VLS_INIT_ZERO;
-    Tcl_Obj *obj;
-
-    if (argc != 3) {
-	bu_vls_printf(&vls, "helplib dm_validXType");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-	return BRLCAD_ERROR;
-    }
-
-    int valid = BU_STR_EQUAL(argv[2], "tkobol");
-
-    bu_vls_printf(&vls, "%d", (valid == 1) ? 1 : 0);
-    obj = Tcl_GetObjResult(interp);
-    if (Tcl_IsShared(obj))
-	obj = Tcl_DuplicateObj(obj);
-    Tcl_AppendStringsToObj(obj, bu_vls_addr(&vls), (char *)NULL);
-    bu_vls_free(&vls);
-
-    Tcl_SetObjResult(interp, obj);
-    return BRLCAD_OK;
-}
-
-
-static int
-dm_bestXType_tcl(void *clientData, int argc, const char **UNUSED(argv))
-{
-    Tcl_Interp *interp = (Tcl_Interp *)clientData;
-    Tcl_Obj *obj;
-
-    if (argc != 2) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "helplib dm_bestXType");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-	return BRLCAD_ERROR;
-    }
-
-    obj = Tcl_GetObjResult(interp);
-    if (Tcl_IsShared(obj))
-	obj = Tcl_DuplicateObj(obj);
-    Tcl_AppendStringsToObj(obj, "tkobol", (char *)NULL);
-    Tcl_SetObjResult(interp, obj);
-    return BRLCAD_OK;
-}
-
 /**
- * Hook function wrapper to the fb_common_file_size Tcl command
+ * Hook function wrapper to the image-size Tcl command.
  */
 int
 fb_cmd_common_file_size(ClientData clientData, int argc, const char **argv)
@@ -119,7 +68,7 @@ fb_cmd_common_file_size(ClientData clientData, int argc, const char **argv)
 	pixel_size = atoi(argv[2]);
     }
 
-    if (fb_common_file_size(&width, &height, argv[1], pixel_size) > 0) {
+    if (imgstream_image_file_size(&width, &height, argv[1], pixel_size) > 0) {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	bu_vls_printf(&vls, "%lu %lu", (unsigned long)width, (unsigned long)height);
 	Tcl_SetObjResult(interp,
@@ -158,8 +107,6 @@ TCLCAD_EXPORT int
 Dm_Init(Tcl_Interp *interp)
 {
     static struct bu_cmdtab cmdtab[] = {
-	{"dm_validXType", dm_validXType_tcl},
-	{"dm_bestXType", dm_bestXType_tcl},
 	{"fb_common_file_size",	 fb_cmd_common_file_size},
 	{(const char *)NULL, BU_CMD_NULL}
     };
@@ -179,23 +126,6 @@ Dm_Init(Tcl_Interp *interp)
 
     return BRLCAD_OK;
 }
-
-/**
- * @brief
- * A TCL interface to dm_list_types()).
- *
- * @return a list of available dm types.
- */
-int
-dm_list_tcl(ClientData UNUSED(clientData),
-	    Tcl_Interp *interp,
-	    int UNUSED(argc),
-	    const char **UNUSED(argv))
-{
-    Tcl_SetResult(interp, "tkobol", TCL_STATIC);
-    return TCL_OK;
-}
-
 
 /*
  * Local Variables:

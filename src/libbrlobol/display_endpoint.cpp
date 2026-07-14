@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/display_endpoint.h"
 #include "brlobol/init.h"
 #include "brlobol/scene_group.h"
@@ -35,6 +37,7 @@ struct brlobol_display_endpoint {
 	vsync(true),
 	framebuffer_capture_callback(NULL),
 	framebuffer_capture_user_data(NULL),
+	factory_frame_callback_bound(false),
 	property_get_callback(NULL),
 	property_set_callback(NULL),
 	property_user_data(NULL)
@@ -58,6 +61,7 @@ struct brlobol_display_endpoint {
     bool vsync;
     brlobol_endpoint_framebuffer_capture_callback framebuffer_capture_callback;
     void *framebuffer_capture_user_data;
+    bool factory_frame_callback_bound;
     BRLObolInputContext input;
     brlobol_endpoint_property_get_callback property_get_callback;
     brlobol_endpoint_property_set_callback property_set_callback;
@@ -102,6 +106,80 @@ endpoint_dimensions_refresh(brlobol_display_endpoint_t *endpoint)
     if (device_pixel_ratio > 0.0)
 	endpoint->device_pixel_ratio = device_pixel_ratio;
 }
+
+#define FACEPLATE_AXES_STYLE_PROPERTIES(_axis) \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".position.x", \
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, -1.0e12, 1.0e12, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".position.y", \
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, -1.0e12, 1.0e12, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".position.z", \
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, -1.0e12, 1.0e12, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".size", \
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0e12, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".line_width", \
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 1.0, 1048576.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".color", \
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".position_only", \
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".labels.visible", \
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".labels.color", \
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".triple_color", \
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.visible", \
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.length", \
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 1.0, 1048576.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.major_length", \
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 1.0, 1048576.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.interval", \
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0e12, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.per_major", \
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1048576.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.threshold", \
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 2147483647.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.color", \
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}, \
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate." _axis ".ticks.major_color", \
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3, \
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE, \
+	0, 0.0, 1.0, NULL}
 
 static const brlobol_endpoint_property_desc endpoint_properties[] = {
     {sizeof(brlobol_endpoint_property_desc), "endpoint.renderer",
@@ -159,6 +237,10 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "renderer.antialiasing",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
     {sizeof(brlobol_endpoint_property_desc), "renderer.clip.minimum",
 	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -171,11 +253,167 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.perspective",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 179.999, NULL},
     {sizeof(brlobol_endpoint_property_desc), "view.zclip",
 	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
-	0, 0.0, 1.0, NULL}
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.navigation.min_delta",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, -10000.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.navigation.max_delta",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 10000.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.navigation.rotate_scale",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.001, 10.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.navigation.scale_scale",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.001, 100.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.adc.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.adc.line_color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.adc.tick_color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.adc.line_width",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 1.0, 1048576.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.center_dot.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.adaptive",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.snap",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.anchor.x",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, -1.0e12, 1.0e12, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.anchor.y",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, -1.0e12, 1.0e12, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.anchor.z",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, -1.0e12, 1.0e12, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.resolution.horizontal",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0e12, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.resolution.vertical",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0e12, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.major.horizontal",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 2147483647.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.major.vertical",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 2147483647.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.model_axes.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    FACEPLATE_AXES_STYLE_PROPERTIES("model_axes"),
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.scale.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.view_axes.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    FACEPLATE_AXES_STYLE_PROPERTIES("view_axes"),
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.size",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.center",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.azimuth",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.elevation",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.twist",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.fps",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.font_size",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 5.0, 96.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.center_dot.font_size",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 5.0, 96.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.scale.font_size",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 5.0, 96.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.params.color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.center_dot.color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "view.faceplate.scale.color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "composition.framebuffer.mode",
+	BRLOBOL_ENDPOINT_PROPERTY_ENUM,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 0.0, "off,overlay,underlay,interlay"}
 };
+
+#undef FACEPLATE_AXES_STYLE_PROPERTIES
 
 static const brlobol_endpoint_property_desc *
 endpoint_property(const char *name)
@@ -183,7 +421,7 @@ endpoint_property(const char *name)
     if (!name || !name[0])
 	return NULL;
     for (const brlobol_endpoint_property_desc &property : endpoint_properties) {
-	if (std::strcmp(property.name, name) == 0)
+	if (bu_strcmp(property.name, name) == 0)
 	    return &property;
     }
     return NULL;
@@ -200,8 +438,8 @@ endpoint_property_host_supported(const brlobol_display_endpoint_t *endpoint,
 	 property->required_host_capabilities) !=
 	 property->required_host_capabilities)
 	return 0;
-    if ((std::strcmp(property->name, "endpoint.title") == 0 ||
-	 std::strcmp(property->name, "endpoint.visible") == 0) &&
+    if ((bu_strcmp(property->name, "endpoint.title") == 0 ||
+	 bu_strcmp(property->name, "endpoint.visible") == 0) &&
 	endpoint->host_mode != BRLOBOL_HOST_MODE_TOPLEVEL)
 	return 0;
     return 1;
@@ -223,7 +461,7 @@ render_engine_from_name(const char *name, enum brlobol_render_engine *engine)
 	return 0;
     for (int i = BRLOBOL_RENDER_ENGINE_AUTO;
 	    i <= BRLOBOL_RENDER_ENGINE_DIAGNOSTIC; i++) {
-	if (std::strcmp(name, render_engine_name(
+	if (bu_strcmp(name, render_engine_name(
 		static_cast<enum brlobol_render_engine>(i))) == 0) {
 	    *engine = static_cast<enum brlobol_render_engine>(i);
 	    return 1;
@@ -295,8 +533,12 @@ brlobol_display_endpoint_host_detach(brlobol_display_endpoint_t *endpoint)
     if (!endpoint)
 	return;
 
-    if (endpoint->controller)
+	/* The factory callback is endpoint-owned.  Once it is cleared, a second
+	 * detach must not touch a controller that GED may already have released. */
+    if (endpoint->factory_frame_callback_bound && endpoint->controller) {
 	endpoint->controller->clearFrameRequestCallback(endpoint);
+    }
+    endpoint->factory_frame_callback_bound = false;
 
     if (endpoint->factory) {
 	brlobol_host_factory_instance_destroy(endpoint->factory,
@@ -452,6 +694,7 @@ brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
     endpoint->vsync = required_desc.vsync != BRLOBOL_HOST_VSYNC_OFF;
     endpoint->controller->setFrameRequestCallback(endpoint_frame_requested,
 	endpoint);
+	endpoint->factory_frame_callback_bound = true;
     if (endpoint->controller->isRenderRequested() ||
 	endpoint->controller->hasProgressiveWorkPending())
 	endpoint_frame_requested(endpoint, "endpoint-host-open");
@@ -682,41 +925,41 @@ brlobol_display_endpoint_property_get(
 	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
     property_value_prepare(out, property->type);
 
-    if (std::strcmp(name, "endpoint.width") == 0 ||
-	std::strcmp(name, "endpoint.height") == 0 ||
-	std::strcmp(name, "endpoint.device_pixel_ratio") == 0)
+    if (bu_strcmp(name, "endpoint.width") == 0 ||
+	bu_strcmp(name, "endpoint.height") == 0 ||
+	bu_strcmp(name, "endpoint.device_pixel_ratio") == 0)
 	endpoint_dimensions_refresh(
 	    const_cast<brlobol_display_endpoint_t *>(endpoint));
 
-    if (std::strcmp(name, "endpoint.renderer") == 0) {
+    if (bu_strcmp(name, "endpoint.renderer") == 0) {
 	out->string_value = render_engine_name(endpoint->engine);
-    } else if (std::strcmp(name, "endpoint.width") == 0) {
+    } else if (bu_strcmp(name, "endpoint.width") == 0) {
 	out->uint_value = endpoint->width;
-    } else if (std::strcmp(name, "endpoint.height") == 0) {
+    } else if (bu_strcmp(name, "endpoint.height") == 0) {
 	out->uint_value = endpoint->height;
-    } else if (std::strcmp(name, "endpoint.device_pixel_ratio") == 0) {
+    } else if (bu_strcmp(name, "endpoint.device_pixel_ratio") == 0) {
 	out->double_value = endpoint->device_pixel_ratio;
-    } else if (std::strcmp(name, "endpoint.host") == 0) {
+    } else if (bu_strcmp(name, "endpoint.host") == 0) {
 	const char *factory_name =
 	    brlobol_display_endpoint_host_factory_name(endpoint);
 	out->string_value = factory_name ? factory_name :
 	    (endpoint->host ? "bound" : "");
-    } else if (std::strcmp(name, "endpoint.title") == 0) {
+    } else if (bu_strcmp(name, "endpoint.title") == 0) {
 	out->string_value = endpoint->title.c_str();
-    } else if (std::strcmp(name, "endpoint.visible") == 0) {
+    } else if (bu_strcmp(name, "endpoint.visible") == 0) {
 	out->bool_value = endpoint->visible ? 1 : 0;
-    } else if (std::strcmp(name, "endpoint.vsync") == 0) {
+    } else if (bu_strcmp(name, "endpoint.vsync") == 0) {
 	out->bool_value = endpoint->vsync ? 1 : 0;
-    } else if (std::strcmp(name, "controller.background.bottom") == 0 ||
-	std::strcmp(name, "controller.background.top") == 0) {
-	const SbColor color = std::strcmp(name,
+    } else if (bu_strcmp(name, "controller.background.bottom") == 0 ||
+	bu_strcmp(name, "controller.background.top") == 0) {
+	const SbColor color = bu_strcmp(name,
 	    "controller.background.bottom") == 0 ?
 	    endpoint->controller->getBackgroundBottomColor() :
 	    endpoint->controller->getBackgroundTopColor();
 	out->color3[0] = color[0];
 	out->color3[1] = color[1];
 	out->color3[2] = color[2];
-    } else if (std::strcmp(name, "controller.software_wire") == 0) {
+    } else if (bu_strcmp(name, "controller.software_wire") == 0) {
 	switch (endpoint->controller->getSoftwareWireMode()) {
 	    case BRLObolViewController::SOFTWARE_WIRE_QUALITY:
 		out->string_value = "quality";
@@ -728,20 +971,22 @@ brlobol_display_endpoint_property_get(
 		out->string_value = "auto";
 		break;
 	}
-    } else if (std::strcmp(name, "renderer.depth_test") == 0) {
+    } else if (bu_strcmp(name, "renderer.depth_test") == 0) {
 	out->bool_value = endpoint->controller->isDepthTestEnabled() ? 1 : 0;
-    } else if (std::strcmp(name, "renderer.lighting") == 0) {
+    } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	out->bool_value = endpoint->controller->isLightingEnabled() ? 1 : 0;
-    } else if (std::strcmp(name, "renderer.transparency") == 0) {
+    } else if (bu_strcmp(name, "renderer.transparency") == 0) {
 	out->bool_value = endpoint->controller->isTransparencyEnabled() ? 1 : 0;
-    } else if (std::strcmp(name, "renderer.clip.minimum") == 0 ||
-	std::strcmp(name, "renderer.clip.maximum") == 0) {
+    } else if (bu_strcmp(name, "renderer.antialiasing") == 0) {
+	out->bool_value = endpoint->controller->isAntialiasingEnabled() ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.clip.minimum") == 0 ||
+	bu_strcmp(name, "renderer.clip.maximum") == 0) {
 	double minimum = 0.0;
 	double maximum = 0.0;
 	endpoint->controller->getClipBounds(minimum, maximum);
-	out->double_value = std::strcmp(name, "renderer.clip.minimum") == 0 ?
+	out->double_value = bu_strcmp(name, "renderer.clip.minimum") == 0 ?
 	    minimum : maximum;
-    } else if (std::strcmp(name, "renderer.depth_cue") == 0) {
+    } else if (bu_strcmp(name, "renderer.depth_cue") == 0) {
 	out->bool_value = endpoint->controller->isDepthCueEnabled() ? 1 : 0;
     } else if (endpoint->property_get_callback) {
 	return endpoint->property_get_callback(endpoint->property_user_data,
@@ -776,10 +1021,27 @@ brlobol_display_endpoint_property_set(
 	return BRLOBOL_ENDPOINT_PROPERTY_READ_ONLY;
     if (value->type != property->type)
 	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    if (property->type == BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
+	value->bool_value != 0 && value->bool_value != 1)
+	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    if (property->type == BRLOBOL_ENDPOINT_PROPERTY_DOUBLE &&
+	(!std::isfinite(value->double_value) ||
+	 (property->minimum < property->maximum &&
+	  (value->double_value < property->minimum ||
+	   value->double_value > property->maximum))))
+	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    if (property->type == BRLOBOL_ENDPOINT_PROPERTY_UINT &&
+	property->minimum < property->maximum &&
+	(value->uint_value < static_cast<uint64_t>(property->minimum) ||
+	 value->uint_value > static_cast<uint64_t>(property->maximum)))
+	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+    if (property->type == BRLOBOL_ENDPOINT_PROPERTY_COLOR3 &&
+	!valid_color3(value->color3))
+	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
     if (!endpoint_property_host_supported(endpoint, property))
 	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 
-    if (std::strcmp(name, "endpoint.renderer") == 0) {
+    if (bu_strcmp(name, "endpoint.renderer") == 0) {
 	enum brlobol_render_engine engine = BRLOBOL_RENDER_ENGINE_AUTO;
 	if (!render_engine_from_name(value->string_value, &engine))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
@@ -787,91 +1049,94 @@ brlobol_display_endpoint_property_set(
 	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 	if (!brlobol_display_endpoint_render_engine_set(endpoint, engine))
 	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
-    } else if (std::strcmp(name, "endpoint.width") == 0) {
+    } else if (bu_strcmp(name, "endpoint.width") == 0) {
 	if (value->uint_value < 1 || value->uint_value > 32767 ||
 	    !brlobol_display_endpoint_resize(endpoint,
 		static_cast<unsigned int>(value->uint_value), endpoint->height,
 		endpoint->device_pixel_ratio))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
-    } else if (std::strcmp(name, "endpoint.height") == 0) {
+    } else if (bu_strcmp(name, "endpoint.height") == 0) {
 	if (value->uint_value < 1 || value->uint_value > 32767 ||
 	    !brlobol_display_endpoint_resize(endpoint, endpoint->width,
 		static_cast<unsigned int>(value->uint_value),
 		endpoint->device_pixel_ratio))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
-    } else if (std::strcmp(name, "endpoint.device_pixel_ratio") == 0) {
+    } else if (bu_strcmp(name, "endpoint.device_pixel_ratio") == 0) {
 	if (!std::isfinite(value->double_value) ||
 	    value->double_value < 0.01 || value->double_value > 64.0 ||
 	    !brlobol_display_endpoint_resize(endpoint, endpoint->width,
 		endpoint->height, value->double_value))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
-    } else if (std::strcmp(name, "endpoint.title") == 0) {
+    } else if (bu_strcmp(name, "endpoint.title") == 0) {
 	if (!value->string_value)
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
 	if (!brlobol_host_factory_instance_set_title(endpoint->factory,
 	    endpoint->factory_instance, value->string_value))
 	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 	endpoint->title = value->string_value;
-    } else if (std::strcmp(name, "endpoint.visible") == 0) {
+    } else if (bu_strcmp(name, "endpoint.visible") == 0) {
 	if (!brlobol_host_factory_instance_set_visible(endpoint->factory,
 	    endpoint->factory_instance, value->bool_value))
 	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 	endpoint->visible = value->bool_value != 0;
-    } else if (std::strcmp(name, "endpoint.vsync") == 0) {
+    } else if (bu_strcmp(name, "endpoint.vsync") == 0) {
 	if (!brlobol_host_factory_instance_set_vsync(endpoint->factory,
 	    endpoint->factory_instance, value->bool_value))
 	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 	endpoint->vsync = value->bool_value != 0;
-    } else if (std::strcmp(name, "controller.background.bottom") == 0 ||
-	std::strcmp(name, "controller.background.top") == 0) {
+    } else if (bu_strcmp(name, "controller.background.bottom") == 0 ||
+	bu_strcmp(name, "controller.background.top") == 0) {
 	if (!valid_color3(value->color3))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
 	const SbColor updated(static_cast<float>(value->color3[0]),
 	    static_cast<float>(value->color3[1]),
 	    static_cast<float>(value->color3[2]));
-	const SbColor bottom = std::strcmp(name,
+	const SbColor bottom = bu_strcmp(name,
 	    "controller.background.bottom") == 0 ? updated :
 	    endpoint->controller->getBackgroundBottomColor();
-	const SbColor top = std::strcmp(name,
+	const SbColor top = bu_strcmp(name,
 	    "controller.background.top") == 0 ? updated :
 	    endpoint->controller->getBackgroundTopColor();
 	endpoint->controller->setBackgroundColors(bottom, top);
-    } else if (std::strcmp(name, "controller.software_wire") == 0) {
+    } else if (bu_strcmp(name, "controller.software_wire") == 0) {
 	BRLObolViewController::SoftwareWireMode mode =
 	    BRLObolViewController::SOFTWARE_WIRE_AUTO;
 	if (!value->string_value)
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
-	if (std::strcmp(value->string_value, "quality") == 0)
+	if (bu_strcmp(value->string_value, "quality") == 0)
 	    mode = BRLObolViewController::SOFTWARE_WIRE_QUALITY;
-	else if (std::strcmp(value->string_value, "fast") == 0)
+	else if (bu_strcmp(value->string_value, "fast") == 0)
 	    mode = BRLObolViewController::SOFTWARE_WIRE_FAST;
-	else if (std::strcmp(value->string_value, "auto") != 0)
+	else if (bu_strcmp(value->string_value, "auto") != 0)
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
 	endpoint->controller->setSoftwareWireMode(mode);
-    } else if (std::strcmp(name, "renderer.depth_test") == 0) {
+    } else if (bu_strcmp(name, "renderer.depth_test") == 0) {
 	endpoint->controller->setDepthTestEnabled(
 	    value->bool_value ? TRUE : FALSE);
-    } else if (std::strcmp(name, "renderer.lighting") == 0) {
+    } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	endpoint->controller->setLightingEnabled(
 	    value->bool_value ? TRUE : FALSE);
-    } else if (std::strcmp(name, "renderer.transparency") == 0) {
+    } else if (bu_strcmp(name, "renderer.transparency") == 0) {
 	endpoint->controller->setTransparencyEnabled(
 	    value->bool_value ? TRUE : FALSE);
-    } else if (std::strcmp(name, "renderer.clip.minimum") == 0 ||
-	std::strcmp(name, "renderer.clip.maximum") == 0) {
+    } else if (bu_strcmp(name, "renderer.antialiasing") == 0) {
+	endpoint->controller->setAntialiasingEnabled(
+	    value->bool_value ? TRUE : FALSE);
+    } else if (bu_strcmp(name, "renderer.clip.minimum") == 0 ||
+	bu_strcmp(name, "renderer.clip.maximum") == 0) {
 	if (!std::isfinite(value->double_value) ||
 	    value->double_value < -1.0e12 || value->double_value > 1.0e12)
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
 	double minimum = 0.0;
 	double maximum = 0.0;
 	endpoint->controller->getClipBounds(minimum, maximum);
-	if (std::strcmp(name, "renderer.clip.minimum") == 0)
+	if (bu_strcmp(name, "renderer.clip.minimum") == 0)
 	    minimum = value->double_value;
 	else
 	    maximum = value->double_value;
 	if (!endpoint->controller->setClipBounds(minimum, maximum))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
-    } else if (std::strcmp(name, "renderer.depth_cue") == 0) {
+    } else if (bu_strcmp(name, "renderer.depth_cue") == 0) {
 	endpoint->controller->setDepthCueEnabled(
 	    value->bool_value ? TRUE : FALSE);
     } else if (endpoint->property_set_callback) {

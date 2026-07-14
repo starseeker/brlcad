@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/realize_action.h"
 #include "database_source_realization.h"
@@ -115,7 +117,7 @@ BRLObolRealizationRepository::renameObject(
 	return;
     if (this->cache)
 	this->cache->renameObject(oldName, newName);
-    if (!this->residency || strcmp(oldName, newName) == 0)
+    if (!this->residency || bu_strcmp(oldName, newName) == 0)
 	return;
 
     auto oldCount = this->residency->objectReferences.find(oldName);

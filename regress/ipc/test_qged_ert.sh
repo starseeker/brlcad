@@ -5,14 +5,14 @@
 #   - qged starts under Xvfb with software-rasterizer mode (-s)
 #   - A geometry object is drawn
 #   - The "ert" GED command is issued via xdotool
-#   - We confirm that rt was spawned and the IPC path was taken
-#     (no TCP port binding, BU_IPC_ADDR_ENVVAR visible in rt's /proc/environ)
+#   - We confirm that rt was launched into the active endpoint's IPC stream
+#     at the laid-out canvas size.
 #
 # Environment variables consumed:
 #   QGED_BIN      path to the qged binary (required)
 #   RT_BIN        path to the rt binary   (required)
 #   TEST_DB       path to a .g file with objects (defaults to boolean-ops.g)
-#   DISPLAY       X display to use — if unset or not usable, start Xvfb
+#   DISPLAY       verified isolated X display supplied by the CTest launcher
 #
 # Exit status: 0 = all checks passed, 1 = any check failed
 
@@ -28,6 +28,7 @@ DRAW_OBJECT="${DRAW_OBJECT:-all}"
 PASS=0
 FAIL=0
 VERBOSE="${VERBOSE:-0}"
+SKIP=77
 
 pass() { PASS=$((PASS+1)); [ "$VERBOSE" = "1" ] && echo "PASS: $1"; }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1"; }
@@ -37,12 +38,10 @@ check() {
 }
 
 TMPDIR_TEST=$(mktemp -d /tmp/test_qged_ert.XXXXXX)
-XVFB_PID=""
 QGED_PID=""
 
 cleanup() {
     if [ -n "$QGED_PID" ]; then kill "$QGED_PID" 2>/dev/null || true; fi
-    if [ -n "$XVFB_PID" ]; then kill "$XVFB_PID" 2>/dev/null || true; fi
     rm -rf "$TMPDIR_TEST"
 }
 trap 'cleanup' EXIT
@@ -59,24 +58,24 @@ check "test .g file exists" "-f $TEST_DB"
 if [ ! -x "$QGED_BIN" ] || [ ! -x "$RT_BIN" ] || [ ! -f "$TEST_DB" ]; then
     echo "SKIP: required binaries or test database not found"
     echo "Tests: 0/$((PASS+FAIL)) passed"
-    exit 0
+    exit "$SKIP"
 fi
 
 # -------------------------------------------------------------------
 # 2. Check that xdotool is available (needed to send commands to qged)
 # -------------------------------------------------------------------
-HAVE_XDOTOOL=0
-if command -v xdotool >/dev/null 2>&1; then
-    HAVE_XDOTOOL=1
+if ! command -v xdotool >/dev/null 2>&1; then
+    echo "SKIP: xdotool is unavailable; cannot drive QGED ERT"
+    exit "$SKIP"
 fi
-check "xdotool available" "$HAVE_XDOTOOL -eq 1"
+HAVE_XDOTOOL=1
+pass "xdotool available"
 
 # -------------------------------------------------------------------
-# 3. Ensure we have a working X display
-#    When invoked via xvfb-run (from CTest), DISPLAY is pre-set.
-#    If DISPLAY is not set or not usable, start our own Xvfb.
+# 3. Verify the isolated X display supplied by the CTest launcher.
+#    This test must not start a second X server: that hides launch failures and
+#    permits the GUI to attach to a display outside the test's lifecycle.
 # -------------------------------------------------------------------
-XVFB_PID=""
 display_ok=0
 if [ -n "$DISPLAY" ]; then
     # Verify the display accepts connections (up to 5 s to allow startup)
@@ -88,25 +87,11 @@ if [ -n "$DISPLAY" ]; then
     done
 fi
 
-if [ "$display_ok" -ne 1 ]; then
-    # No usable display - start our own Xvfb
-    DISPLAY=":$(shuf -i 200-299 -n 1)"
-    export DISPLAY
-    Xvfb "$DISPLAY" -screen 0 1280x960x24 &
-    XVFB_PID=$!
-    for i in $(seq 1 50); do
-        if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-            display_ok=1; break
-        fi
-        sleep 0.1
-    done
-fi
-
 check "X display ($DISPLAY) is usable" "$display_ok -eq 1"
 
 if [ "$display_ok" -ne 1 ]; then
-    echo "ABORT: no usable X display (tried $DISPLAY)"
-    exit 1
+    echo "SKIP: CTest launcher did not provide a usable isolated X display"
+    exit "$SKIP"
 fi
 
 # -------------------------------------------------------------------
@@ -150,30 +135,27 @@ check "qged process still running after init" "-d /proc/$QGED_PID"
 # 5. Verify the startup commands launched ERT through the GUI event loop
 # -------------------------------------------------------------------
 if [ "$HAVE_XDOTOOL" -eq 1 ]; then
-    # Wait for rt to start (up to 30 s)
+    # A small scene can complete before /proc can observe its child.  The
+    # common endpoint launcher records the handoff before it starts rt, which
+    # is the durable evidence that this GUI command used the endpoint stream.
     rt_appeared=0
     for i in $(seq 1 300); do
         if pgrep -x rt >/dev/null 2>&1 ||
-	    grep -q "ert: _ged_run_rt returned" "$QGED_ERRLOG" 2>/dev/null; then
+	    grep -q "rt: launching endpoint framebuffer renderer" "$QGED_ERRLOG" 2>/dev/null; then
             rt_appeared=1; break
         fi
         sleep 0.1
     done
     check "rt process was spawned by ert" "$rt_appeared -eq 1"
 
-    # Check that BU_IPC_ADDR_ENVVAR was passed to rt (IPC path taken)
+    # Check that the launcher selected the IPC endpoint.  Sampling a finished
+    # child process through /proc is intentionally not a test requirement.
     ipc_used=0
-    for pid in $(pgrep -x rt 2>/dev/null); do
-	if cat /proc/"$pid"/environ 2>/dev/null | tr '\0' '\n' | grep -q "BU_IPC_ADDR="; then
-	    ipc_used=1; break
-	fi
-    done
-    # Small scenes may finish before /proc can be sampled.  qged logs the
-    # exact child IPC address immediately before spawning rt.
-    if [ "$ipc_used" -ne 1 ] && grep -q "ert: setting PKG_ADDR=" "$QGED_ERRLOG" 2>/dev/null; then
+
+    if grep -q "rt: launching endpoint framebuffer renderer (ipc=1" "$QGED_ERRLOG" 2>/dev/null; then
 	ipc_used=1
     fi
-    check "rt received BU_IPC_ADDR_ENVVAR (IPC path taken)" "$ipc_used -eq 1"
+    check "rt launched through the endpoint IPC stream" "$ipc_used -eq 1"
 
     # Wait for rt to finish (up to 60 s); treat zombie as completed
     rt_done=0
@@ -194,7 +176,7 @@ if [ "$HAVE_XDOTOOL" -eq 1 ]; then
 
     # Reject the historical pre-layout framebuffer (typically only tens of
     # pixels wide/high) even if IPC and rendering otherwise complete.
-    set -- $(sed -n 's/.*fb_size=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$QGED_ERRLOG" | tail -1)
+    set -- $(sed -n 's/.*endpoint framebuffer renderer (ipc=[01] size=\([0-9][0-9]*\)x\([0-9][0-9]*\)).*/\1 \2/p' "$QGED_ERRLOG" | tail -1)
     FB_WIDTH="${1:-0}"
     FB_HEIGHT="${2:-0}"
     check "ert used laid-out canvas dimensions (${FB_WIDTH}x${FB_HEIGHT})" \

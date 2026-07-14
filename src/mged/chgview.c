@@ -38,7 +38,7 @@
 #include "tclcad.h"
 #include "./sedit.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 
 
@@ -268,7 +268,7 @@ mged_librt_knob_edit_apply(struct mged_state *s,
     /* Update MGED's cached edit matrices and mark for redraw */
     new_edit_mats(s);
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     /* Synchronize MGED es_edclass (used by token_should_edit, knob printouts, rate loop) */
     if (did_rot) {
@@ -294,7 +294,7 @@ mged_librt_rotate_apply(struct mged_state *s, char coords, char rotate_about, ma
 	rt_edit_process(MEDIT(s));
     new_edit_mats(s);
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
 
@@ -310,7 +310,7 @@ mged_librt_translate_apply(struct mged_state *s, char coords, const vect_t tvec)
 	rt_edit_process(MEDIT(s));
     new_edit_mats(s);
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
 
@@ -425,7 +425,7 @@ edit_com(struct mged_state *s,
 	 int argc,
 	 const char *argv[])
 {
-    struct mged_dm *save_m_dmp;
+    struct mged_display *save_m_dmp;
     struct cmd_list *save_cmd_list;
     int ret;
     int initial_blank_screen = 1;
@@ -589,7 +589,7 @@ edit_com(struct mged_state *s,
     }
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     if (flag_R_noresize) {
 	/* we're done */
@@ -598,16 +598,16 @@ edit_com(struct mged_state *s,
 
     /* update and resize the views */
 
-    save_m_dmp = s->mged_curr_dm;
+    save_m_dmp = s->mged_curr_display;
     save_cmd_list = curr_cmd_list;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	int non_empty = 0; /* start out empty */
 
-	set_curr_dm(s, m_dmp);
+	mged_current_display_set(s, m_dmp);
 
-	if (s->mged_curr_dm->dm_tie) {
-	    curr_cmd_list = s->mged_curr_dm->dm_tie;
+	if (s->mged_curr_display->display_tie) {
+	    curr_cmd_list = s->mged_curr_display->display_tie;
 	} else {
 	    curr_cmd_list = &head_cmd_list;
 	}
@@ -634,7 +634,7 @@ edit_com(struct mged_state *s,
 	}
     }
 
-    set_curr_dm(s, save_m_dmp);
+    mged_current_display_set(s, save_m_dmp);
     curr_cmd_list = save_cmd_list;
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
@@ -647,7 +647,7 @@ cmd_autoview(ClientData clientData, Tcl_Interp *interp, int argc, const char *ar
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-    struct mged_dm *save_m_dmp;
+    struct mged_display *save_m_dmp;
     struct cmd_list *save_cmd_list;
 
     if (argc > 2) {
@@ -665,16 +665,16 @@ cmd_autoview(ClientData clientData, Tcl_Interp *interp, int argc, const char *ar
 	return TCL_OK;
     }
 
-    save_m_dmp = s->mged_curr_dm;
+    save_m_dmp = s->mged_curr_display;
     save_cmd_list = curr_cmd_list;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	struct view_ring *vrp;
 
-	set_curr_dm(s, m_dmp);
+	mged_current_display_set(s, m_dmp);
 
-	if (s->mged_curr_dm->dm_tie) {
-	    curr_cmd_list = s->mged_curr_dm->dm_tie;
+	if (s->mged_curr_display->display_tie) {
+	    curr_cmd_list = s->mged_curr_display->display_tie;
 	} else {
 	    curr_cmd_list = &head_cmd_list;
 	}
@@ -704,7 +704,7 @@ cmd_autoview(ClientData clientData, Tcl_Interp *interp, int argc, const char *ar
 	    vrp->vr_scale = view_scale;
 	}
     }
-    set_curr_dm(s, save_m_dmp);
+    mged_current_display_set(s, save_m_dmp);
     curr_cmd_list = save_cmd_list;
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
@@ -732,44 +732,6 @@ solid_list_callback(struct mged_state *s)
 }
 
 
-/*
- * Display-manager specific "hardware register" debugging.
- */
-int
-f_regdebug(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
-{
-    struct cmdtab *ctp = (struct cmdtab *)clientData;
-    MGED_CK_CMD(ctp);
-    struct mged_state *s = ctp->s;
-    static int regdebug = 0;
-    static char debug_str[10];
-
-    if (argc < 1 || 2 < argc) {
-	struct bu_vls vls = BU_VLS_INIT_ZERO;
-
-	bu_vls_printf(&vls, "help regdebug");
-	Tcl_Eval(interp, bu_vls_addr(&vls));
-	bu_vls_free(&vls);
-
-	return TCL_ERROR;
-    }
-
-    if (argc == 1) {
-	regdebug = !regdebug;    /* toggle */
-    } else {
-	regdebug = atoi(argv[1]);
-    }
-
-    sprintf(debug_str, "%d", regdebug);
-
-    Tcl_AppendResult(interp, "regdebug=", debug_str, "\n", (char *)NULL);
-
-    dm_set_debug(DMP, regdebug);
-
-    return TCL_OK;
-}
-
-
 /* ZAP the display -- everything dropped */
 /* Format: Z */
 int
@@ -783,7 +745,7 @@ cmd_zap(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), con
     CHECK_DBI_NULL;
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     /* FIRST, reject any editing in progress */
     if (s->global_editing_state != ST_VIEW) {
@@ -1174,10 +1136,6 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     /* Make the specified solid the highlighted shape */
     mged_highlight_set_shape_ref(s, lastfound);
 
-    /* Mirror into the view selection so D3 consumers see the selection. */
-    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
-	    view_state->vs_gvp, mged_highlight.shape);
-
     if (!illum_only) {
 	if (s->global_editing_state == ST_O_PICK) {
 	    highlight_path_pos = 0;
@@ -1189,7 +1147,7 @@ f_ill(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     }
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     if (path_piece) {
 	for (i = 0; path_piece[i] != 0; ++i) {
@@ -1262,7 +1220,7 @@ f_sed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     }
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     button(s, BE_S_ILLUMINATE);	/* To ST_S_PICK */
 
@@ -1381,7 +1339,7 @@ mged_print_knobvals(struct mged_state *s, Tcl_Interp *interp)
     }
 
     struct bv_adc_state adc = {0};
-    (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
+    (void)mged_display_adc_state_get(s->mged_curr_display, &adc);
     if (adc.draw) {
 	bu_vls_printf(&vls, "xadc = %d\n", adc.dv_x);
 	bu_vls_printf(&vls, "yadc = %d\n", adc.dv_y);
@@ -1641,7 +1599,7 @@ f_knob(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	/* Legacy parity: request an explicit redraw after any view transform
 	 * before marking the active DM dirty for the current event frame. */
 	mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     }
 
@@ -1660,7 +1618,7 @@ f_knob(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
      * added, but for now preserve behavior.*/
     if (view_abs_scale_changed && !view_do_tran && !view_do_rot) {
 	mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	/* Absolute translations already refreshed in abs_zoom via set_absolute_* */
     }
@@ -1966,7 +1924,7 @@ mged_svbase(struct mged_state *s)
     }
 
     if (mged_variables->mv_faceplate && mged_variables->mv_orig_gui) {
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
     }
 
     return TCL_OK;
@@ -1997,13 +1955,13 @@ f_svbase(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
 
     status = mged_svbase(s);
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	/* if sharing view while faceplate and original gui (i.e. button menu, sliders) are on */
-	if (m_dmp->dm_view_state == view_state &&
-	    m_dmp->dm_mged_variables->mv_faceplate &&
-	    m_dmp->dm_mged_variables->mv_orig_gui) {
-	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
+	if (m_dmp->display_view_state == view_state &&
+	    m_dmp->display_variables->mv_faceplate &&
+	    m_dmp->display_variables->mv_orig_gui) {
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
 
@@ -2152,12 +2110,12 @@ view_ring_init(struct _view_state *vsp1, struct _view_state *vsp2)
 
 
 void
-view_ring_destroy(struct mged_dm *dlp)
+view_ring_destroy(struct mged_display *dlp)
 {
     struct view_ring *vrp;
 
-    while (BU_LIST_NON_EMPTY(&dlp->dm_view_state->vs_headView.l)) {
-	vrp = BU_LIST_FIRST(view_ring, &dlp->dm_view_state->vs_headView.l);
+    while (BU_LIST_NON_EMPTY(&dlp->display_view_state->vs_headView.l)) {
+	vrp = BU_LIST_FIRST(view_ring, &dlp->display_view_state->vs_headView.l);
 	BU_LIST_DEQUEUE(&vrp->l);
 	bu_free((void *)vrp, "view_ring_destroy: vrp");
     }
@@ -2686,7 +2644,7 @@ mged_escale(struct mged_state *s, fastf_t sfactor)
 
 	rt_edit_process(MEDIT(s));
 	mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
 	MEDIT(s)->edit_flag = save_edflag;
     } else {

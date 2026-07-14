@@ -56,6 +56,12 @@ The removed `/dev/ogl`, `/dev/wgl`, `/dev/qtgl`, `/dev/swrast`, and
 embedded image presentation fallbacks.  Supported visible presentation is an
 Obol window host over imgstream data.
 
+When a GED view has an endpoint, the external `rt`, `rtedge`, enabled `art`,
+and ERT commands launch their child renderer against that endpoint's imgstream
+listener.  They do not query a display manager or select a graphical device
+name.  This process bridge is distinct from the future retained interactive
+librt renderer.
+
 Threading Contract
 ------------------
 

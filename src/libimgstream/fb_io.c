@@ -11,6 +11,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <limits.h>
 #include <string.h>
 
@@ -134,7 +136,7 @@ imgstream_fb_import_pix_fd(imgstream_fb_t *fb, int fd,
     if (!fb || fd < 0 || fb_dimensions(fb, &screen_width, &screen_height) != 0)
 	return -1;
 
-    if (autosize && filename && filename[0] && strcmp(filename, "-") != 0) {
+    if (autosize && filename && filename[0] && bu_strcmp(filename, "-") != 0) {
 	size_t width = 0;
 	size_t height = 0;
 	if (imgstream_image_file_size(&width, &height, filename,

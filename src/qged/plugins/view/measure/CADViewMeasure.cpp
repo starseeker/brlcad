@@ -29,7 +29,6 @@
 #include <QtGlobal>
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgColorRGB.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
@@ -44,10 +43,10 @@
 
 #include "./CADViewMeasure.h"
 
-static qg_legacy_view *
+static void *
 qged_measure_view(const QgPluginContext *ctx)
 {
-    return ctx ? ctx->activeView() : nullptr;
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 static QgView *
@@ -182,7 +181,7 @@ CADViewMeasure::eventFilter(QObject *o, QEvent *e)
     QgView *display = qged_measure_view_from_event_object(o);
     if (!display && m_ctx)
 	display = m_ctx->getViewWidget();
-    qg_legacy_view *v = display ? display->view() : qged_measure_view(m_ctx);
+    void *v = display ? display->viewContext() : qged_measure_view(m_ctx);
     if (!v)
 	return false;
 

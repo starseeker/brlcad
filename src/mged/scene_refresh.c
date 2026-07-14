@@ -26,14 +26,13 @@
 
 #include "vmath.h"
 #include "bn.h"
-#include "dm/view.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 
 #include "./mged.h"
 #include "./sedit.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 mat_t perspective_mat;
 

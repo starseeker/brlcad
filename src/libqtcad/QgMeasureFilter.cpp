@@ -25,19 +25,19 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 #include <string>
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
-#include "QgLegacyViewContext.h"
 
-static qg_legacy_view *
+static void *
 qg_measure_filter_view(const QgMeasureFilter *filter)
 {
 	QgView *display = filter ? filter->view_widget() : nullptr;
-	return display ? display->view() : nullptr;
+	return display ? display->viewContext() : nullptr;
 }
 
 void
@@ -146,8 +146,8 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 		return false;
 	update_current_mouse(m_e);
 
-	qg_legacy_view *v = qg_measure_filter_view(this);
-	if (!v)
+	void *view_ctx = qg_measure_filter_view(this);
+	if (!view_ctx)
 		return false;
 
 	if (e->type() == QEvent::MouseButtonPress) {
@@ -270,13 +270,14 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 bool
 QMeasure2DFilter::get_point()
 {
-	qg_legacy_view *v = qg_measure_filter_view(this);
-	if (!v)
+	void *view_ctx = qg_measure_filter_view(this);
+	if (!view_ctx)
 		return false;
 	int sx = 0, sy = 0;
 	if (!current_mouse_xy(&sx, &sy))
 		return false;
-	const struct bv *view = qg_legacy_view_bv_const(v);
+	const struct bv *view = bv_context_view_const(
+	    static_cast<const struct bv_context *>(view_ctx));
 	fastf_t vx, vy;
 	if (!bv_screen_to_view(&vx, &vy, view, sx, sy))
 		return false;
@@ -306,8 +307,8 @@ QMeasure3DFilter::~QMeasure3DFilter()
 bool
 QMeasure3DFilter::get_point()
 {
-	qg_legacy_view *v = qg_measure_filter_view(this);
-	if (!v)
+	void *view_ctx = qg_measure_filter_view(this);
+	if (!view_ctx)
 		return false;
 
 	SbVec3f obolPoint;

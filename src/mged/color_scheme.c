@@ -27,7 +27,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 void cs_update(const struct bu_structparse *, const char *, void *, const char *, void *);
 void cs_set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
@@ -234,20 +234,41 @@ struct bu_structparse color_scheme_vparse[] = {
 
 
 void
+mged_color_scheme_changed(struct mged_state *s, struct _color_scheme *scheme)
+{
+    if (!s || !scheme)
+	return;
+
+    MGED_CK_STATE(s);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (m_dmp->display_color_scheme == scheme) {
+	    m_dmp->display_color_scheme_dirty = 1;
+	    /* Model and view axis colors are retained scheme policy. */
+	    m_dmp->display_axes_state_dirty = 1;
+	    m_dmp->display_adc_style_dirty = 1;
+	    /* A headless host has no mapped paint loop.  Apply an explicit scheme
+	     * change now so command-visible faceplate state is consistent there
+	     * as well as in interactive hosts. */
+	    mged_obol_faceplate_color_scheme_sync(s, m_dmp);
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
+	}
+    }
+}
+
+
+void
 cs_set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
 		  const char *UNUSED(name),
-		  void *UNUSED(base),
+		  void *base,
 		  const char *UNUSED(value),
 		  void *data)
 {
-    struct mged_state *s = (struct mged_state *)data;
-    MGED_CK_STATE(s);
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (m_dmp->dm_color_scheme == color_scheme) {
-	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
-	}
-    }
+    struct _color_scheme *scheme = (struct _color_scheme *)base;
+    if (!scheme)
+	return;
+
+    mged_color_scheme_changed((struct mged_state *)data, scheme);
 }
 
 
@@ -290,7 +311,7 @@ cs_set_bg(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    struct mged_dm *save_curr_m_dmp = s->mged_curr_dm;
+    struct mged_display *save_curr_m_dmp = s->mged_curr_display;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     bu_vls_printf(&vls, "dm bg %d %d %d",
@@ -298,24 +319,24 @@ cs_set_bg(const struct bu_structparse *UNUSED(sdp),
 		  color_scheme->cs_bg[1],
 		  color_scheme->cs_bg[2]);
 
-    // set_curr_dm will update the active GED view, but we don't
+    // mged_current_display_set will update the active GED view, but we don't
     // want that here - stash the current active-view
     // state.  Need to rethink how we're managing
     // the notion of the "current" dm in situations
-    // where we act on all dm instances.  set_curr_dm
+    // where we act on all dm instances.  mged_current_display_set
     // should probably be replaced with get_next_dm
     void *cbv = ged_view_active_ctx(s->gedp);
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (m_dmp->dm_color_scheme == color_scheme) {
-	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
-	    set_curr_dm(s, m_dmp);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (m_dmp->display_color_scheme == color_scheme) {
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
+	    mged_current_display_set(s, m_dmp);
 	    Tcl_Eval(s->interp, bu_vls_addr(&vls));
 	}
     }
 
     bu_vls_free(&vls);
-    set_curr_dm(s, save_curr_m_dmp);
+    mged_current_display_set(s, save_curr_m_dmp);
     ged_view_active_ctx_set(s->gedp, cbv);
 }
 

@@ -45,7 +45,7 @@
 
 #include "./sedit.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 
 
@@ -105,10 +105,6 @@ _rtif_use_current_view(struct mged_state *s)
 	return;
 
     ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
-    void *view_ctx = ged_view_active_ctx(s->gedp);
-    if (s->mged_curr_dm && view_ctx)
-	ged_view_context_display_manager_set(view_ctx,
-		(void *)s->mged_curr_dm->dm_dmp);
 }
 
 static void
@@ -116,7 +112,7 @@ _rtif_request_current_view_refresh(struct mged_state *s)
 {
     mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     if (s)
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 }
 
 /**

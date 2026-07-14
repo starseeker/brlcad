@@ -34,10 +34,10 @@ Validation expectations
 For every major implementation phase, configure and build with Qt enabled.  At
 minimum, build the touched qtcad/qged targets and relevant plugin targets:
 libqtcad, qged, qged_plugins, and any converted plugin library.  When touching
-display-manager or view-event-filter behavior, also build dm-qtgl, dm-swrast,
-qged, and the relevant libqtcad/qged tests.  Run available tests that exercise
-the touched area, especially any new QgPluginManager/QgPaletteController tests
-and existing qged/libqtcad headless tests.
+an Obol host or view-event-filter behavior, also build qged and the relevant
+libqtcad/qged tests.  Run available tests that exercise the touched area,
+especially any new QgPluginManager/QgPaletteController tests and existing
+qged/libqtcad headless tests.
 
 Do not build or validate the non-Qt path for this work unless specifically
 requested; this modernization is Qt-specific and should use

@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include "brlobol.h"
 
 #include "bu/log.h"
@@ -141,6 +143,7 @@ test_static_image_source(void)
 int
 main(int ac, char **av)
 {
+    bu_setprogname(av[0]);
     (void)ac;
     (void)av;
 

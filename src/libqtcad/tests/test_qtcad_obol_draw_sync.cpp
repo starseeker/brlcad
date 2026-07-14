@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/lod_realization.h"
 #include "brlobol/view_controller.h"
@@ -18,9 +20,7 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/view.h"
-#include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
 #include "rt/db_fullpath.h"
@@ -355,9 +355,10 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol draw-sync test database");
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -400,8 +401,8 @@ main(int argc, char **argv)
     if (!camera)
 	FAIL("qtcad Obol controller should expose a camera for view sync");
     point_t offcenter = {100.0, 0.0, 0.0};
-    bv_center_set(qg_legacy_view_bv(view.view()), offcenter);
-    bv_scale_set(qg_legacy_view_bv(view.view()), 250.0);
+    bv_center_set(bv_context_view(static_cast<struct bv_context *>(view.viewContext())), offcenter);
+    bv_scale_set(bv_context_view(static_cast<struct bv_context *>(view.viewContext())), 250.0);
     view.need_update(QG_VIEW_REFRESH);
     SbVec3f offTargetCamera = camera->position.getValue();
     if (offTargetCamera[0] < 50.0f)
@@ -445,7 +446,7 @@ main(int argc, char **argv)
     box_appearance.s_line_width = 5;
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = qg_legacy_view_to_context(view.view());
+    draw_box.view = view.viewContext();
     draw_box.appearance = &box_appearance;
     if (!apply_and_sync(gedp, &view, &draw_box, 1))
 	FAIL("GED draw should sync a wire Obol database source");
@@ -512,7 +513,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction stale_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "box.s");
-    stale_box.view = qg_legacy_view_to_context(view.view());
+    stale_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &stale_box, 1))
 	FAIL("GED stale-source event should refresh Obol source state");
     struct ged_draw_shape_record stale_record;
@@ -543,7 +544,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction erase_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "box.s");
-    erase_box.view = qg_legacy_view_to_context(view.view());
+    erase_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &erase_box, 1))
 	FAIL("GED erase should remove an Obol database source");
     if (render_source_count(controller) != 0)
@@ -557,7 +558,7 @@ main(int argc, char **argv)
     shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_ball =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
-    draw_ball.view = qg_legacy_view_to_context(view.view());
+    draw_ball.view = view.viewContext();
     draw_ball.appearance = &shaded_appearance;
     int drew_ball = apply_and_sync(gedp, &view, &draw_ball, 1);
     if (!drew_ball)
@@ -577,7 +578,7 @@ main(int argc, char **argv)
     wire_appearance.mixed_modes = 1;
     struct ged_draw_transaction draw_both =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
-    draw_both.view = qg_legacy_view_to_context(view.view());
+    draw_both.view = view.viewContext();
     draw_both.paths = paths;
     draw_both.path_count = 2;
     draw_both.appearance = &wire_appearance;
@@ -601,7 +602,7 @@ main(int argc, char **argv)
 	source_for_path_mode(controller, "ball.s", SoBRLDatabaseSource::SHADED);
     struct ged_draw_transaction redraw_all =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    redraw_all.view = qg_legacy_view_to_context(view.view());
+    redraw_all.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &redraw_all, 1))
 	FAIL("GED redraw should invalidate the retained Obol render");
     if (render_source_count(controller) != 3 ||
@@ -615,7 +616,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction clear_all =
 	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
-    clear_all.view = qg_legacy_view_to_context(view.view());
+    clear_all.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &clear_all, 1))
 	FAIL("GED clear should clear Obol database sources");
     if (render_source_count(controller) != 0)
@@ -623,7 +624,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction draw_nested =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c/box.s");
-    draw_nested.view = qg_legacy_view_to_context(view.view());
+    draw_nested.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &draw_nested, 1))
 	FAIL("nested GED draw should sync an Obol database source");
     if (render_source_count(controller) != 1 ||
@@ -636,7 +637,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction erase_nested =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "pair.c/box.s");
-    erase_nested.view = qg_legacy_view_to_context(view.view());
+    erase_nested.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &erase_nested, 1))
 	FAIL("nested GED erase should remove an Obol database source");
     if (render_source_count(controller) != 0 ||

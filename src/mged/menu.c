@@ -28,7 +28,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./sedit.h"
 #include "./menu.h"
 #include "./hud.h"
@@ -261,12 +261,12 @@ mged_mmenu_set(int UNUSED(ac), const char **UNUSED(av), void *d, void *ms)
     Tcl_DStringFree(&ds_menu);
     bu_vls_free(&menu_string);
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *dlp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (menu_state == dlp->dm_menu_state &&
-	    dlp->dm_mged_variables->mv_faceplate &&
-	    dlp->dm_mged_variables->mv_orig_gui) {
-	    mged_refresh_request_view(s, dlp->dm_view_state, GED_VIEW_REFRESH_VIEW);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *dlp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (menu_state == dlp->display_menu_state &&
+	    dlp->display_variables->mv_faceplate &&
+	    dlp->display_variables->mv_orig_gui) {
+	    mged_refresh_request_view(s, dlp->display_view_state, GED_VIEW_REFRESH_VIEW);
 	}
     }
 
@@ -291,12 +291,12 @@ mmenu_set(struct mged_state *s, int index, struct rt_edit_menu_item *value)
     Tcl_DStringFree(&ds_menu);
     bu_vls_free(&menu_string);
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *dlp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (menu_state == dlp->dm_menu_state &&
-	    dlp->dm_mged_variables->mv_faceplate &&
-	    dlp->dm_mged_variables->mv_orig_gui) {
-	    mged_refresh_request_view(s, dlp->dm_view_state, GED_VIEW_REFRESH_VIEW);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *dlp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (menu_state == dlp->display_menu_state &&
+	    dlp->display_variables->mv_faceplate &&
+	    dlp->display_variables->mv_orig_gui) {
+	    mged_refresh_request_view(s, dlp->display_view_state, GED_VIEW_REFRESH_VIEW);
 	}
     }
 }
@@ -306,21 +306,21 @@ void
 mmenu_set_all(struct mged_state *s, int index, struct rt_edit_menu_item *value)
 {
     struct cmd_list *save_cmd_list;
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
 
     save_cmd_list = curr_cmd_list;
-    save_dm_list = s->mged_curr_dm;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (p->dm_tie)
-	    curr_cmd_list = p->dm_tie;
+    save_display = s->mged_curr_display;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (p->display_tie)
+	    curr_cmd_list = p->display_tie;
 
-	set_curr_dm(s, p);
+	mged_current_display_set(s, p);
 	mmenu_set(s, index, value);
     }
 
     curr_cmd_list = save_cmd_list;
-    set_curr_dm(s, save_dm_list);
+    mged_current_display_set(s, save_display);
 }
 
 

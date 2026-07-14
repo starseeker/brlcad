@@ -27,16 +27,14 @@
 #include <QPushButton>
 
 #include "ged.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "HostStatusCommon.h"
-#include "QgLegacyViewContext.h"
 
-static qg_legacy_view *
+static void *
 qged_host_view(const QgPluginContext *ctx)
 {
-    return ctx ? ctx->activeView() : nullptr;
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 static QString
@@ -55,10 +53,10 @@ qged_host_view_name(QgPluginContext *ctx)
 {
     if (!ctx)
 	return QStringLiteral("Unavailable");
-    qg_legacy_view *view = qged_host_view(ctx);
+    void *view = qged_host_view(ctx);
     if (!view)
 	return QStringLiteral("No active view");
-    const char *view_name = bv_name_get(qg_legacy_view_bv_const(view));
+    const char *view_name = bv_name_get(bv_context_view_const(static_cast<const struct bv_context *>(view)));
     if (!view_name)
 	return QStringLiteral("Active view");
     return QString::fromLocal8Bit(view_name);

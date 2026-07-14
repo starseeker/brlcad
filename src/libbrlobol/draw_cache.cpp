@@ -259,10 +259,10 @@ brlobol_draw_path_component_is_instance_of(const char *component,
     if (!component || !componentLen || !name || !nameLen)
 	return 0;
     if (componentLen == nameLen &&
-	strncmp(component, name, nameLen) == 0)
+	bu_strncmp(component, name, nameLen) == 0)
 	return 1;
     if (componentLen <= nameLen + 1 ||
-	strncmp(component, name, nameLen) != 0 ||
+	bu_strncmp(component, name, nameLen) != 0 ||
 	component[nameLen] != '@')
 	return 0;
 

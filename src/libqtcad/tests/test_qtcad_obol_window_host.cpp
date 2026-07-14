@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 #include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgQuadView.h"
 #include "qtcad/QgSession.h"
@@ -23,7 +25,6 @@
 #include "ged.h"
 #include "ged/view.h"
 #include "wdb.h"
-#include "QgLegacyViewContext.h"
 
 #if defined(__GNUC__)
 #  pragma GCC diagnostic push
@@ -41,10 +42,13 @@
 #include <Inventor/SoViewport.h>
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QImage>
+#include <QThread>
 #include <QWidget>
 
 #include <string.h>
+#include <thread>
 
 #define CHECK(_expr, _msg) do { \
     if (!(_expr)) { \
@@ -52,6 +56,22 @@
 	return 1; \
     } \
 } while (0)
+
+class ThreadAffinityCanvas : public QgSW {
+public:
+    explicit ThreadAffinityCanvas(QWidget *parent = nullptr) : QgSW(parent) {}
+
+    void need_update() override
+    {
+	need_update_calls++;
+	update_on_application_thread &=
+	    QThread::currentThread() == QCoreApplication::instance()->thread();
+	QgSW::need_update();
+    }
+
+    int need_update_calls = 0;
+    bool update_on_application_thread = true;
+};
 
 static void
 add_visible_obol_content(BRLObolViewController *controller)
@@ -396,6 +416,52 @@ test_qtcad_embedded_factory_endpoint(void)
     return 0;
 }
 
+static int
+test_qtcad_factory_frame_thread_affinity(void)
+{
+    QWidget parent;
+    ThreadAffinityCanvas canvas(&parent);
+    canvas.resize(72, 54);
+
+    struct brlobol_host_desc desc;
+    memset(&desc, 0, sizeof(desc));
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_EMBEDDED;
+    desc.width = 72;
+    desc.height = 54;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_EMBEDDED |
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+    desc.application_context = static_cast<QgCanvasBase *>(&canvas);
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint != NULL, "Qt affinity test creates endpoint");
+    CHECK(brlobol_display_endpoint_host_open(endpoint, "qt-sw", &desc),
+	"Qt affinity test opens embedded software factory");
+
+    QApplication::processEvents();
+    const int calls_before = canvas.need_update_calls;
+    canvas.update_on_application_thread = true;
+    int request_ok = 0;
+    std::thread worker([&]() {
+	request_ok = brlobol_display_endpoint_request_frame(endpoint,
+	    "worker-thread-frame");
+    });
+    worker.join();
+
+    QElapsedTimer timer;
+    timer.start();
+    while (canvas.need_update_calls == calls_before && timer.elapsed() < 2000)
+	QApplication::processEvents();
+    CHECK(request_ok && canvas.need_update_calls > calls_before &&
+	canvas.update_on_application_thread,
+	"Qt factory queues worker frame requests on the application thread");
+
+    brlobol_display_endpoint_destroy(endpoint);
+    return 0;
+}
+
 #ifdef BRLCAD_OPENGL
 static int
 test_qtcad_gl_vsync_policy(void)
@@ -449,17 +515,63 @@ static int
 test_qtcad_quad_view_endpoint_association(void)
 {
     QgSession session;
-    QgQuadView quad(NULL, &session, QgView_SW);
+    QgQuadView quad(NULL, &session, QgViewType::SW);
     QgView *view = quad.curr_view();
     CHECK(view && view->displayEndpoint(),
 	"qtcad quad view creates an endpoint-hosted viewport");
-    void *view_ctx = qg_legacy_view_to_context(view->view());
+    void *view_ctx = view->viewContext();
     CHECK(ged_view_context_display_endpoint_get(view_ctx) ==
 	view->displayEndpoint(),
 	"qtcad quad view associates its endpoint with the GED view record");
+    CHECK(session.activeViewContext() == view_ctx,
+	"qtcad session records the active endpoint view context");
     CHECK(brlobol_display_endpoint_controller(view->displayEndpoint()) ==
 	view->obolViewController(),
 	"qtcad GED view and visible canvas share one endpoint controller");
+
+    quad.changeToQuadFrame();
+    const QgQuadrantId quadrants[] = {
+	QgQuadrantId::UpperRight,
+	QgQuadrantId::UpperLeft,
+	QgQuadrantId::LowerLeft,
+	QgQuadrantId::LowerRight
+    };
+    for (QgQuadrantId quadrant : quadrants) {
+	QgView *quadrant_view = quad.get(quadrant);
+	CHECK(quadrant_view && quadrant_view->displayEndpoint(),
+	    "qtcad lazy quad creation gives every pane an endpoint");
+	CHECK(ged_view_context_display_endpoint_get(
+	    quadrant_view->viewContext()) == quadrant_view->displayEndpoint(),
+	    "qtcad lazy quad pane has one GED-associated endpoint");
+	CHECK(brlobol_display_endpoint_controller(
+	    quadrant_view->displayEndpoint()) ==
+	    quadrant_view->obolViewController(),
+	    "qtcad lazy quad pane shares its endpoint controller with its canvas");
+    }
+
+    QgView *upper_right = quad.get(QgQuadrantId::UpperRight);
+    QgView *upper_left = quad.get(QgQuadrantId::UpperLeft);
+    CHECK(upper_right && upper_left && upper_right != upper_left &&
+	upper_right->viewContext() != upper_left->viewContext() &&
+	upper_right->displayEndpoint() != upper_left->displayEndpoint(),
+	"qtcad quad panes retain independent context and endpoint identities");
+    quad.select(QgQuadrantId::UpperLeft);
+    session.setActiveViewContext(upper_left->viewContext());
+    quad.changeToSingleFrame();
+    CHECK(quad.curr_view() == upper_right &&
+	session.activeViewContext() == upper_right->viewContext(),
+	"qtcad quad-to-single switch selects a surviving GED view before teardown");
+    CHECK(quad.get(QgQuadrantId::UpperLeft) == upper_right,
+	"qtcad quad-to-single switch deletes lazy secondary panes");
+
+    quad.changeToQuadFrame();
+    for (QgQuadrantId quadrant : quadrants) {
+	QgView *quadrant_view = quad.get(quadrant);
+	CHECK(quadrant_view && quadrant_view->displayEndpoint() &&
+	    ged_view_context_display_endpoint_get(quadrant_view->viewContext()) ==
+	    quadrant_view->displayEndpoint(),
+	    "qtcad lazy quad recreation restores one endpoint per pane");
+    }
     return 0;
 }
 
@@ -494,11 +606,49 @@ test_qtcad_dm_open_command(void)
 	brlobol_display_endpoint_host(endpoint));
     CHECK(host && host->canvas() && host->canvas()->canvasWidget()->isWindow(),
 	"dm open creates a top-level Qt canvas");
+    void *controller = brlobol_display_endpoint_controller(endpoint);
+
+    struct brlobol_endpoint_property_value background =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    background.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    VSET(background.color3, 0.10, 0.20, 0.30);
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	"controller.background.bottom", &background) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK,
+	"Qt dm open test updates the endpoint-owned lower background");
+    VSET(background.color3, 0.40, 0.50, 0.60);
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	"controller.background.top", &background) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK,
+	"Qt dm open test updates the endpoint-owned upper background");
 
     const char *close_av[3] = {"dm", "close", NULL};
     CHECK(ged_exec_dm(gedp, 2, close_av) == BRLCAD_OK &&
+	ged_view_context_display_endpoint_get(view) == endpoint &&
+	brlobol_display_endpoint_controller(endpoint) == controller &&
 	!brlobol_display_endpoint_host_factory_name(endpoint),
 	"dm close releases the Qt host while retaining the endpoint");
+    CHECK(ged_exec_dm(gedp, 6, open_av) == BRLCAD_OK &&
+	ged_view_context_display_endpoint_get(view) == endpoint &&
+	brlobol_display_endpoint_controller(endpoint) == controller &&
+	brlobol_display_endpoint_host_factory_name(endpoint) &&
+	strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+	"qt-sw") == 0,
+	"dm open reattaches the existing Qt endpoint to a fresh host");
+    host = static_cast<QgObolWindowHost *>(
+	brlobol_display_endpoint_host(endpoint));
+    CHECK(host && host->canvas() && host->canvas()->canvasWidget()->isWindow(),
+	"reopened Qt endpoint owns a new top-level canvas");
+    BRLObolViewController *endpoint_controller =
+	static_cast<BRLObolViewController *>(controller);
+    CHECK(endpoint_controller->getBackgroundBottomColor() ==
+	SbColor(0.10f, 0.20f, 0.30f) &&
+	endpoint_controller->getBackgroundTopColor() ==
+	SbColor(0.40f, 0.50f, 0.60f),
+	"replacement Qt host preserves endpoint-owned background policy");
+    CHECK(ged_exec_dm(gedp, 2, close_av) == BRLCAD_OK &&
+	!brlobol_display_endpoint_host_factory_name(endpoint),
+	"reopened Qt endpoint closes its replacement host");
     ged_close(gedp);
     bu_file_delete(dbpath);
     return 0;
@@ -521,6 +671,8 @@ main(int argc, char **argv)
     if (test_qtcad_factory_endpoint())
 	return 1;
     if (test_qtcad_embedded_factory_endpoint())
+	return 1;
+    if (test_qtcad_factory_frame_thread_affinity())
 	return 1;
 #ifdef BRLCAD_OPENGL
     if (test_qtcad_gl_vsync_policy())

@@ -29,7 +29,7 @@
 #include "rt/geom.h"
 #include "raytrace.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 
 char **promp;

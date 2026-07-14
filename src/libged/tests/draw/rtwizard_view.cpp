@@ -161,13 +161,6 @@ test_null_view_context(const char *datadir)
 	bu_log("PASS: secondary null-DM view is a valid RT view context\n");
     }
 
-    if (ged_view_context_display_manager_get(v1) != NULL) {
-	bu_log("FAIL: secondary null-DM view unexpectedly has a display manager\n");
-	fail = 1;
-    } else {
-	bu_log("PASS: secondary null-DM view has no display manager\n");
-    }
-
     const char *vname = bv_name_get(DRAW_TEST_BV_CONST(v1));
     if (!vname || BU_STR_EQUAL(vname, "v1") == 0) {
 	bu_log("FAIL: secondary null-DM view name is not v1\n");
@@ -240,6 +233,18 @@ test_eyemodel_finite(const char *datadir)
     /* Apply default az/el/twist (rtwizard "db aet v1 35 25 0") */
     s_av[0] = "ae"; s_av[1] = "35"; s_av[2] = "25"; s_av[3] = NULL;
     ged_exec_ae(gedp, 3, s_av);
+
+    /* The no-GUI wizard uses a null-DM context, but an orthographic camera
+     * policy remains valid before an Obol host is attached. */
+    s_av[0] = "perspective"; s_av[1] = "0"; s_av[2] = NULL;
+    if (ged_exec_perspective(gedp, 2, s_av) != BRLCAD_OK ||
+	std::fabs(bv_perspective_get(DRAW_TEST_BV_CONST(v1))) > SMALL_FASTF) {
+	bu_log("FAIL: null-DM perspective policy rejected orthographic mode\n");
+	ged_view_active_ctx_set(gedp, prev);
+	close_gedp(gedp);
+	bu_file_delete("rtw_view_t2.g");
+	return 1;
+    }
 
     /* Extract eye model (rtwizard "db get_eyemodel v1") */
     s_av[0] = "get_eyemodel"; s_av[1] = NULL;
@@ -337,10 +342,6 @@ test_multiple_null_views(const char *datadir)
 
 	if (!views[i] || !bv_context_is_valid((struct bv_context *)(views[i]))) {
 	    bu_log("FAIL: view '%s' is not a valid RT view context\n", vname[i]);
-	    fail = 1;
-	}
-	if (ged_view_context_display_manager_get(views[i]) != NULL) {
-	    bu_log("FAIL: view '%s' unexpectedly has a display manager\n", vname[i]);
 	    fail = 1;
 	}
     }

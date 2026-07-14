@@ -42,7 +42,108 @@
 struct _ged_fp_grid_info {
     struct _ged_view_info *gd;
     struct bv_grid_state *g;
+    int draw_property_set;
 };
+
+
+static int
+_fp_grid_endpoint_property_set(void *view_ctx, const char *name,
+	const struct brlobol_endpoint_property_value *value)
+{
+    return ged_view_context_display_property_set(view_ctx, name, value) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK;
+}
+
+static int
+_fp_grid_endpoint_bool_set(void *view_ctx, const char *name, int enabled)
+{
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    value.bool_value = enabled ? 1 : 0;
+    return _fp_grid_endpoint_property_set(view_ctx, name, &value);
+}
+
+static int
+_fp_grid_endpoint_double_set(void *view_ctx, const char *name, double number)
+{
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    value.double_value = number;
+    return _fp_grid_endpoint_property_set(view_ctx, name, &value);
+}
+
+static int
+_fp_grid_endpoint_uint_set(void *view_ctx, const char *name, int number)
+{
+    if (number < 0)
+	return 0;
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+    value.uint_value = (uint64_t)number;
+    return _fp_grid_endpoint_property_set(view_ctx, name, &value);
+}
+
+static int
+_fp_grid_endpoint_state_apply(void *view_ctx,
+	const struct bv_grid_state *before, const struct bv_grid_state *after)
+{
+    if (!before || !after)
+	return 0;
+    if (before->adaptive != after->adaptive &&
+	!_fp_grid_endpoint_bool_set(view_ctx, "view.faceplate.grid.adaptive",
+	    after->adaptive))
+	return 0;
+    if (before->snap != after->snap &&
+	!_fp_grid_endpoint_bool_set(view_ctx, "view.faceplate.grid.snap",
+	    after->snap))
+	return 0;
+
+    const char *anchor_properties[] = {
+	"view.faceplate.grid.anchor.x",
+	"view.faceplate.grid.anchor.y",
+	"view.faceplate.grid.anchor.z"
+    };
+
+    for (int axis = 0; axis < 3; axis++) {
+	if (!NEAR_EQUAL(before->anchor[axis], after->anchor[axis],
+		SMALL_FASTF) &&
+	    !_fp_grid_endpoint_double_set(view_ctx, anchor_properties[axis],
+		after->anchor[axis]))
+	    return 0;
+    }
+
+    if (!NEAR_EQUAL(before->res_h, after->res_h, SMALL_FASTF) &&
+	!_fp_grid_endpoint_double_set(view_ctx,
+	    "view.faceplate.grid.resolution.horizontal", after->res_h))
+	return 0;
+
+    if (!NEAR_EQUAL(before->res_v, after->res_v, SMALL_FASTF) &&
+	!_fp_grid_endpoint_double_set(view_ctx,
+	    "view.faceplate.grid.resolution.vertical", after->res_v))
+	return 0;
+    if (before->res_major_h != after->res_major_h &&
+	!_fp_grid_endpoint_uint_set(view_ctx,
+	    "view.faceplate.grid.major.horizontal", after->res_major_h))
+	return 0;
+    if (before->res_major_v != after->res_major_v &&
+	!_fp_grid_endpoint_uint_set(view_ctx,
+	    "view.faceplate.grid.major.vertical", after->res_major_v))
+	return 0;
+    if (memcmp(before->color, after->color, sizeof(after->color)) != 0) {
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+	for (int axis = 0; axis < 3; axis++)
+	    value.color3[axis] = after->color[axis] / 255.0;
+	if (!_fp_grid_endpoint_property_set(view_ctx,
+		"view.faceplate.grid.color", &value))
+	    return 0;
+    }
+    return 1;
+}
 
 int
 _fp_grid_cmd_draw(void *bs, int argc, const char **argv)
@@ -78,7 +179,14 @@ _fp_grid_cmd_draw(void *bs, int argc, const char **argv)
     }
 
     val = (val) ? 1 : 0;
-
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (ged_view_context_display_endpoint_get(view_ctx)) {
+	if (_fp_bool_property_set(gedp, view_ctx,
+		"view.faceplate.grid.visible", val) != BRLCAD_OK)
+	    return BRLCAD_ERROR;
+	ginfo->draw_property_set = 1;
+	return BRLCAD_OK;
+    }
     g->draw = val;
 
     return BRLCAD_OK;
@@ -414,11 +522,17 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
 	if (!bv_grid_state_get(&grid, view))
 	    return BRLCAD_ERROR;
 	if (BU_STR_EQUAL("1", argv[0])) {
+	    if (ged_view_context_display_endpoint_get(view_ctx))
+		return _fp_bool_property_set(gedp, view_ctx,
+		    "view.faceplate.grid.visible", 1);
 	    grid.draw = 1;
 	    bv_grid_state_set(view, &grid);
 	    return BRLCAD_OK;
 	}
 	if (BU_STR_EQUAL("0", argv[0])) {
+	    if (ged_view_context_display_endpoint_get(view_ctx))
+		return _fp_bool_property_set(gedp, view_ctx,
+		    "view.faceplate.grid.visible", 0);
 	    grid.draw = 0;
 	    bv_grid_state_set(view, &grid);
 	    return BRLCAD_OK;
@@ -447,14 +561,22 @@ _fp_cmd_grid(void *bs, int argc, const char **argv)
     struct bv_grid_state grid;
     if (!bv_grid_state_get(&grid, view))
 	return BRLCAD_ERROR;
+    const struct bv_grid_state initial_grid = grid;
 
     struct _ged_fp_grid_info ginfo;
     ginfo.gd = gd;
     ginfo.g = &grid;
+    ginfo.draw_property_set = 0;
 
     int ret = _ged_subcmd_exec(gedp, d, _fp_grid_cmds, "view faceplate grid", "[options] subcommand [args]", (void *)&ginfo, argc, argv, help, cmd_pos);
-    if (ret == BRLCAD_OK)
-	bv_grid_state_set(view, &grid);
+    if (ret == BRLCAD_OK && !ginfo.draw_property_set) {
+	if (ged_view_context_display_endpoint_get(view_ctx)) {
+	    if (!_fp_grid_endpoint_state_apply(view_ctx, &initial_grid, &grid))
+		return BRLCAD_ERROR;
+	} else {
+	    bv_grid_state_set(view, &grid);
+	}
+    }
     return ret;
 }
 

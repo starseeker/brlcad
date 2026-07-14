@@ -108,6 +108,14 @@ __BEGIN_DECLS
 #define BV_REFRESH_FORCE       0x80000000u
 #define BV_REFRESH_ALL         0xffffffffu
 
+enum bv_framebuffer_mode {
+    BV_FRAMEBUFFER_MODE_OFF = 0,
+    BV_FRAMEBUFFER_MODE_OVERLAY = 1,
+    BV_FRAMEBUFFER_MODE_UNDERLAY = 2,
+    /* Above model geometry but below view-local screen features. */
+    BV_FRAMEBUFFER_MODE_INTERLAY = 3
+};
+
 struct bv_lod_settings {
     fastf_t scale;
     fastf_t curve_scale;
@@ -566,6 +574,12 @@ BV_EXPORT extern int bv_plane_get(plane_t *plane, const struct bv *v);
 BV_EXPORT extern int bv_previous_mouse_get(fastf_t *x, fastf_t *y, const struct bv *v);
 BV_EXPORT extern int bv_previous_mouse_set(struct bv *v, fastf_t x, fastf_t y);
 BV_EXPORT extern int bv_mouse_delta_settings_get(struct bv_mouse_delta_settings *settings, const struct bv *v);
+/** Set validated, passive pointer-delta navigation policy for one view. */
+BV_EXPORT extern int bv_mouse_delta_settings_set(struct bv *v, const struct bv_mouse_delta_settings *settings);
+/** Clamp a signed pointer delta according to the view's navigation policy. */
+BV_EXPORT extern int bv_mouse_delta_clamp(fastf_t *dx, fastf_t *dy, const struct bv *v);
+/** Apply a normalized pointer drag using the view's navigation policy. */
+BV_EXPORT extern int bv_mouse_delta_adjust(struct bv *v, int dx, int dy, const point_t keypoint, unsigned long long flags);
 BV_EXPORT extern int bv_mouse_state_set(struct bv *v, int x, int y);
 BV_EXPORT extern int bv_adjust(struct bv *v, int dx, int dy, const point_t keypoint, int mode, unsigned long long flags);
 

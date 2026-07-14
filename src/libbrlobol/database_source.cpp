@@ -47,6 +47,7 @@
 
 #include <Inventor/SbName.h>
 #include <Inventor/SbViewportRegion.h>
+#include <Inventor/actions/SoCallbackAction.h>
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/actions/SoRayPickAction.h>
@@ -57,11 +58,13 @@
 #include <Inventor/sensors/SoFieldSensor.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <inttypes.h>
 #include <limits.h>
 #include <map>
 #include <math.h>
+#include <set>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -150,6 +153,14 @@ struct BRLObolCompactInstanceIndex {
     std::vector<BRLObolCompactInstanceEntry> entries;
     std::unordered_map<obol::InstanceId, size_t,
 	std::hash<obol::InstanceId>> entryIndex;
+    /* Semantic operations address occurrences by full path or leaf name. */
+    std::vector<size_t> pathEntryOrder;
+    std::unordered_map<std::string, std::vector<size_t>> entryIndicesByLeaf;
+    std::unordered_map<std::string, std::vector<size_t>> entryIndicesBySourceName;
+    std::unordered_map<obol::PartId, size_t, std::hash<obol::PartId>>
+	partReferenceCounts;
+    std::array<std::multiset<float>, 3> sourceBoundsMinimum;
+    std::array<std::multiset<float>, 3> sourceBoundsMaximum;
     int wireCount;
     int shadedCount;
 };
@@ -225,7 +236,7 @@ database_source_vec3f_equal(const SbVec3f &a, const SbVec3f &b)
 static int
 database_source_string_equal(const SbString &a, const char *b)
 {
-    return strcmp(a.getString(), b ? b : "") == 0;
+    return bu_strcmp(a.getString(), b ? b : "") == 0;
 }
 
 template <typename FieldT>
@@ -1221,9 +1232,9 @@ source_instance_matches_record_path(const SbString &instanceKey,
 	return 0;
 
     const char *key = instanceKey.getString();
-    if (strcmp(key, recordPath) == 0)
+    if (bu_strcmp(key, recordPath) == 0)
 	return 1;
-    return strcmp(key[0] == '/' ? key + 1 : key,
+    return bu_strcmp(key[0] == '/' ? key + 1 : key,
 		  recordPath[0] == '/' ? recordPath + 1 : recordPath) == 0;
 }
 
@@ -1386,6 +1397,151 @@ vlist_from_bot_wireframe(const struct rt_bot_internal *bot)
     return shape;
 }
 
+static int
+cad_wire_part_geometry_from_line_set(const std::vector<SbVec3f> &points,
+	const std::vector<int32_t> &commands, obol::PartGeometry &geometry)
+{
+    const size_t count = std::min(points.size(), commands.size());
+    if (!count)
+	return 0;
+
+    obol::WireRep wire;
+    wire.bounds.makeEmpty();
+    wire.segmentPoints.reserve(count * 2u);
+    wire.segmentIds.reserve(count);
+    obol::PointRep pointRep;
+    pointRep.bounds.makeEmpty();
+    pointRep.positions.reserve(count);
+    pointRep.pointIds.reserve(count);
+    bool haveLast = false;
+    size_t lastIndex = 0;
+    uint32_t segmentIndex = 0;
+    for (size_t i = 0; i < count; i++) {
+	const int command = commands[i];
+	if (command == SoBRLVListShape::POINT) {
+	    const SbVec3f &point = points[i];
+	    pointRep.positions.push_back(point);
+	    pointRep.pointIds.push_back(static_cast<uint32_t>(i));
+	    pointRep.colorValid.push_back(0u);
+	    pointRep.colors.push_back(SbColor(1.0f, 1.0f, 1.0f));
+	    pointRep.scaleValid.push_back(0u);
+	    pointRep.scales.push_back(0.0f);
+	    pointRep.normalValid.push_back(0u);
+	    pointRep.normals.push_back(SbVec3f(0.0f, 0.0f, 1.0f));
+	    pointRep.bounds.extendBy(point);
+	    continue;
+	}
+	if (command == SoBRLVListShape::MOVE) {
+	    lastIndex = i;
+	    haveLast = true;
+	    continue;
+	}
+	if (command != SoBRLVListShape::DRAW || !haveLast)
+	    continue;
+	const SbVec3f &a = points[lastIndex];
+	const SbVec3f &b = points[i];
+	wire.segmentPoints.push_back(a);
+	wire.segmentPoints.push_back(b);
+	wire.segmentIds.push_back(segmentIndex++);
+	wire.bounds.extendBy(a);
+	wire.bounds.extendBy(b);
+	lastIndex = i;
+    }
+    if (wire.segmentPoints.empty() && pointRep.positions.empty())
+	return 0;
+    if (!wire.segmentPoints.empty())
+	geometry.wire = std::move(wire);
+    if (!pointRep.positions.empty())
+	geometry.points = std::move(pointRep);
+    return 1;
+}
+
+static int
+cad_wire_part_geometry_from_aabb(const SbBox3f &bounds,
+	obol::PartGeometry &geometry)
+{
+    if (bounds.isEmpty())
+	return 0;
+
+    const SbVec3f bmin = bounds.getMin();
+    const SbVec3f bmax = bounds.getMax();
+    const SbVec3f corners[8] = {
+	SbVec3f(bmin[0], bmin[1], bmin[2]),
+	SbVec3f(bmax[0], bmin[1], bmin[2]),
+	SbVec3f(bmax[0], bmax[1], bmin[2]),
+	SbVec3f(bmin[0], bmax[1], bmin[2]),
+	SbVec3f(bmin[0], bmin[1], bmax[2]),
+	SbVec3f(bmax[0], bmin[1], bmax[2]),
+	SbVec3f(bmax[0], bmax[1], bmax[2]),
+	SbVec3f(bmin[0], bmax[1], bmax[2])
+    };
+    static const int edges[12][2] = {
+	{0, 1}, {1, 2}, {2, 3}, {3, 0},
+	{4, 5}, {5, 6}, {6, 7}, {7, 4},
+	{0, 4}, {1, 5}, {2, 6}, {3, 7}
+    };
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    points.reserve(24);
+    commands.reserve(24);
+    for (size_t i = 0; i < 12; i++) {
+	points.push_back(corners[edges[i][0]]);
+	commands.push_back(SoBRLVListShape::MOVE);
+	points.push_back(corners[edges[i][1]]);
+	commands.push_back(SoBRLVListShape::DRAW);
+    }
+    return cad_wire_part_geometry_from_line_set(points, commands, geometry);
+}
+
+static int
+cad_wire_part_geometry_from_bot(const struct rt_bot_internal *bot,
+	obol::PartGeometry &geometry)
+{
+    if (!bot || !bot->vertices || !bot->faces || !bot->num_vertices ||
+	!bot->num_faces ||
+	bot->num_faces > std::numeric_limits<size_t>::max() / 6u ||
+	bot->num_faces > std::numeric_limits<uint32_t>::max() / 3u)
+	return 0;
+    RT_BOT_CK_MAGIC(bot);
+
+    obol::WireRep wire;
+    wire.bounds.makeEmpty();
+    wire.segmentPoints.reserve(bot->num_faces * 6u);
+    wire.segmentIds.reserve(bot->num_faces * 3u);
+    uint32_t segmentId = 0;
+    for (size_t i = 0; i < bot->num_faces; i++) {
+	const int *face = &bot->faces[i * 3];
+	if (face[0] < 0 || face[1] < 0 || face[2] < 0 ||
+	    static_cast<size_t>(face[0]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[1]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[2]) >= bot->num_vertices)
+	    continue;
+	const int edge[3][2] = {
+	    {face[0], face[1]}, {face[1], face[2]}, {face[2], face[0]}
+	};
+	for (size_t j = 0; j < 3; j++) {
+	    const fastf_t *a = &bot->vertices[edge[j][0] * 3];
+	    const fastf_t *b = &bot->vertices[edge[j][1] * 3];
+	    const SbVec3f start(static_cast<float>(a[X]),
+		static_cast<float>(a[Y]), static_cast<float>(a[Z]));
+	    const SbVec3f end(static_cast<float>(b[X]),
+		static_cast<float>(b[Y]), static_cast<float>(b[Z]));
+	    wire.segmentPoints.push_back(start);
+	    wire.segmentPoints.push_back(end);
+	    wire.segmentIds.push_back(segmentId++);
+	    wire.bounds.extendBy(start);
+	    wire.bounds.extendBy(end);
+	}
+    }
+    if (wire.segmentPoints.empty())
+	return 0;
+    geometry.wire = std::move(wire);
+    brlobol_performance_counter_add(BRLOBOL_PERF_VLIST_POINTS,
+	static_cast<uint64_t>(bot->num_faces) * 4u);
+    return 1;
+}
+
 static double
 nonnegative_or_default(float value, double defaultValue)
 {
@@ -1496,6 +1652,9 @@ static void
 primitive_realization_line_set_free(
     struct rt_primitive_lod_realization *realization);
 
+static int32_t
+primitive_realization_command_to_vlist_command(int command);
+
 static SoBRLVListShape *
 vlist_from_primitive_realization_line_set(
     struct rt_primitive_lod_realization *realization,
@@ -1512,7 +1671,7 @@ node_is_auxiliary_vlist(const SoNode *node)
 	return FALSE;
 
     const SoBRLVListShape *shape = static_cast<const SoBRLVListShape *>(node);
-    return strcmp(shape->recordRole.getValue().getString(), "auxiliary") == 0 ?
+    return bu_strcmp(shape->recordRole.getValue().getString(), "auxiliary") == 0 ?
 	   TRUE : FALSE;
 }
 
@@ -1946,7 +2105,7 @@ store_cached_part_geometry(
     std::map<std::string, BRLObolCachedPartGeometry> &cache,
     const std::string &key, obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked)
+    bool lodBacked, const BRLObolSourceMeshRequest *sourceMeshRequest)
 {
     if (key.empty())
 	return std::shared_ptr<const obol::PartGeometry>();
@@ -1961,6 +2120,9 @@ store_cached_part_geometry(
     else
 	stored.bounds = compact_part_geometry_bounds(stored.geometry);
     stored.lodBacked = lodBacked;
+    stored.sourceMeshRequestValid = sourceMeshRequest != NULL;
+    if (sourceMeshRequest)
+	stored.sourceMeshRequest = *sourceMeshRequest;
     return stored.geometry;
 }
 
@@ -1968,30 +2130,33 @@ std::shared_ptr<const obol::PartGeometry>
 BRLObolDatabaseSourceRealizationCache::storeWireCadGeometry(
     const std::string &key, obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked)
+    bool lodBacked, const BRLObolSourceMeshRequest *sourceMeshRequest)
 {
     return store_cached_part_geometry(this->sharedWireCadGeometry, key,
-	std::move(geometry), sourceType, geometryKind, bounds, lodBacked);
+	std::move(geometry), sourceType, geometryKind, bounds, lodBacked,
+	sourceMeshRequest);
 }
 
 std::shared_ptr<const obol::PartGeometry>
 BRLObolDatabaseSourceRealizationCache::storeMeshVListCadGeometry(
     const std::string &key, obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked)
+    bool lodBacked, const BRLObolSourceMeshRequest *sourceMeshRequest)
 {
     return store_cached_part_geometry(this->sharedMeshVListCadGeometry, key,
-	std::move(geometry), sourceType, geometryKind, bounds, lodBacked);
+	std::move(geometry), sourceType, geometryKind, bounds, lodBacked,
+	sourceMeshRequest);
 }
 
 std::shared_ptr<const obol::PartGeometry>
 BRLObolDatabaseSourceRealizationCache::storeMeshCadGeometry(
     const std::string &key, obol::PartGeometry &&geometry,
     const char *sourceType, const char *geometryKind, const SbBox3f *bounds,
-    bool lodBacked)
+    bool lodBacked, const BRLObolSourceMeshRequest *sourceMeshRequest)
 {
     return store_cached_part_geometry(this->sharedMeshCadGeometry, key,
-	std::move(geometry), sourceType, geometryKind, bounds, lodBacked);
+	std::move(geometry), sourceType, geometryKind, bounds, lodBacked,
+	sourceMeshRequest);
 }
 
 static const BRLObolCachedPartGeometry *
@@ -2024,6 +2189,33 @@ BRLObolDatabaseSourceRealizationCache::findMeshCadGeometry(
 {
     return find_cached_part_geometry(this->sharedMeshCadGeometry, key);
 }
+
+static void
+cache_mesh_cad_source_request(
+    BRLObolDatabaseSourceRealizationCache *cache,
+    const std::string &key, const BRLObolSourceMeshRequest &request)
+{
+    if (!cache || key.empty() || !request.faceCount || !request.pointCount ||
+	request.bounds.isEmpty())
+	return;
+
+    std::map<std::string, BRLObolCachedPartGeometry>::iterator found =
+	cache->sharedMeshCadGeometry.find(key);
+    if (found == cache->sharedMeshCadGeometry.end())
+	return;
+    found->second.sourceMeshRequest = request;
+    found->second.sourceMeshRequestValid = true;
+}
+
+static int
+cad_source_mesh_request_from_geometry(BRLObolSourceMeshRequest &request,
+	const obol::PartGeometry &geometry);
+
+static int
+cad_mesh_lod_display_geometry_from_cache(obol::PartGeometry &display,
+	BRLObolSourceMeshRequest &sourceRequest,
+	const SoBRLDatabaseSource *source, struct db_i *dbip,
+	const char *sourceName);
 
 template <typename ShapeT>
 static int
@@ -2139,6 +2331,9 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
 	    cached.geometryKind = entry.shapeSummary.geometryKind.getString();
 	    cached.bounds = localBounds;
 	    cached.lodBacked = entry.lodBacked;
+	    cached.sourceMeshRequestValid = entry.sourceMeshRequestValid;
+	    if (cached.sourceMeshRequestValid)
+		cached.sourceMeshRequest = entry.sourceMeshRequest;
 	    if (entry.meshGeometry)
 		cache->sharedMeshCadGeometry[cacheKey] = cached;
 	    else if ((entry.wireGeometry || entry.pointGeometry) && meshRealization)
@@ -2285,6 +2480,17 @@ compact_apply_walk_identity(const SoBRLDatabaseSource *source,
 	    obol::CadIdBuilder::hash128(occurrenceKey);
 	entry.instance = instance;
 	index.instances.back().instance = instance;
+	/* db_path_to_string omits a direct combination member's occurrence
+	 * number.  Preserve the first legacy path and distinguish subsequent
+	 * identical paths so an exact-path edit remains occurrence-local. */
+	if (duplicateOrdinal > 0) {
+	    SbString occurrencePath;
+	    occurrencePath.sprintf("%s@%u", entry.semantic.path.getString(),
+		duplicateOrdinal);
+	    entry.semantic.path = occurrencePath;
+	    entry.shapeSummary.path = occurrencePath;
+	    index.instances.back().record.childName = occurrencePath.getString();
+	}
 	char key[96] = {0};
 	snprintf(key, sizeof(key), "compact:%016llx:%016llx",
 	    static_cast<unsigned long long>(instance.w0),
@@ -2858,6 +3064,24 @@ compact_source_mesh_request_sync(BRLObolSourceMeshRequest &request,
 }
 
 static void
+compact_summary_lod_from_source_mesh_request(
+	BRLObolRealizedShapeSummary &summary,
+	const BRLObolSourceMeshRequest &request)
+{
+    summary.lodPolicy = request.lodPolicy;
+    summary.lodAvailable = request.lodAvailable ? TRUE : FALSE;
+    summary.lodActiveLevel = request.lodActiveLevel;
+    summary.lodFaceCount = request.lodFaceCount;
+    summary.lodPointCount = request.lodPointCount;
+    summary.lodOriginalPointCount = request.lodOriginalPointCount;
+    summary.lodNormalCount = request.lodNormalCount;
+    summary.lodHasSnappedPoints = request.lodHasSnappedPoints ? TRUE : FALSE;
+    summary.lodHasNormals = request.lodHasNormals ? TRUE : FALSE;
+    summary.lodBoundsMin = request.lodBoundsMin;
+    summary.lodBoundsMax = request.lodBoundsMax;
+}
+
+static void
 retarget_realized_node_source(SoNode *node,
 			      const SoBRLDatabaseSource *source,
 			      const char *oldSourcePath,
@@ -3157,6 +3381,63 @@ vlist_from_plot_internal(struct rt_db_internal *intern,
     return shape;
 }
 
+static int
+cad_wire_part_geometry_from_plot_internal(struct rt_db_internal *intern,
+	const SoBRLDatabaseSource *source, obol::PartGeometry &geometry)
+{
+    if (!internal_payload_magic_valid(intern) || !intern->idb_meth ||
+	!intern->idb_meth->ft_plot)
+	return 0;
+
+    point_t annotationBase = VINIT_ZERO;
+    const char *typeLabel = primitive_type_label(intern);
+    const bool addAnnotationBase = primitive_is_annotation(intern->idb_type,
+	typeLabel);
+    if (addAnnotationBase) {
+	struct rt_annot_internal *annotation =
+	    static_cast<struct rt_annot_internal *>(intern->idb_ptr);
+	RT_ANNOT_CK_MAGIC(annotation);
+	VMOVE(annotationBase, annotation->V);
+    }
+
+    struct bu_list vhead;
+    BU_LIST_INIT(&vhead);
+    struct bg_tess_tol ttol = source_tess_tol(source);
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    int ret = 0;
+    {
+	BRLObolPerformanceTimer timer(BRLOBOL_PERF_PLOT_US);
+	if (timer.active())
+	    brlobol_performance_counter_add(BRLOBOL_PERF_PLOT_CALLS, 1);
+	ret = rt_obj_plot(&vhead, intern, &ttol, &tol);
+    }
+    if (ret < 0) {
+	RT_FREE_VLIST(&rt_vlfree, &vhead);
+	return 0;
+    }
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    {
+	BRLObolPerformanceTimer timer(BRLOBOL_PERF_VLIST_CONVERT_US);
+	if (timer.active())
+	    brlobol_performance_counter_add(BRLOBOL_PERF_VLIST_CONVERT_CALLS, 1);
+	convert_vlist(points, commands, &vhead);
+	if (!points.empty())
+	    brlobol_performance_counter_add(BRLOBOL_PERF_VLIST_POINTS,
+		static_cast<uint64_t>(points.size()));
+    }
+    RT_FREE_VLIST(&rt_vlfree, &vhead);
+    if (addAnnotationBase) {
+	for (SbVec3f &point : points) {
+	    point.setValue(point[0] + static_cast<float>(annotationBase[X]),
+		point[1] + static_cast<float>(annotationBase[Y]),
+		point[2] + static_cast<float>(annotationBase[Z]));
+	}
+    }
+    return cad_wire_part_geometry_from_line_set(points, commands, geometry);
+}
+
 
 static SoBRLVListShape *
 vlist_from_lod_realization_internal(struct rt_db_internal *intern,
@@ -3184,12 +3465,59 @@ vlist_from_lod_realization_internal(struct rt_db_internal *intern,
     const fastf_t solidSize = source_lod_solid_size(source, localBounds);
     const int ret = intern->idb_meth->ft_lod_realize(&realization, intern,
 	&tol, &viewInfo, solidSize);
-    if (ret < 0 || !realization.has_line_set) {
+    if (ret < 0 || !realization.has_line_set ||
+	(realization.line_count && !realization.line_points)) {
 	primitive_realization_line_set_free(&realization);
 	return NULL;
     }
 
     return vlist_from_primitive_realization_line_set(&realization, "line");
+}
+
+static int
+cad_wire_part_geometry_from_lod_realization_internal(
+	struct rt_db_internal *intern, const SoBRLDatabaseSource *source,
+	const SbBox3f &localBounds, obol::PartGeometry &geometry)
+{
+    if (!source_csg_lod_active(source) || !internal_payload_magic_valid(intern)
+	|| !intern->idb_meth || !intern->idb_meth->ft_lod_realize ||
+	intern->idb_type == ID_BOT || intern->idb_type == ID_MATERIAL)
+	return 0;
+
+    struct rt_primitive_lod_realization realization;
+    memset(&realization, 0, sizeof(realization));
+    struct bv_view_info viewInfo;
+    source_view_info(&viewInfo, source);
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    const fastf_t solidSize = source_lod_solid_size(source, localBounds);
+    const int ret = intern->idb_meth->ft_lod_realize(&realization, intern,
+	&tol, &viewInfo, solidSize);
+    if (ret < 0 || !realization.has_line_set ||
+	(realization.line_count && !realization.line_points)) {
+	primitive_realization_line_set_free(&realization);
+	return 0;
+    }
+
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    points.reserve(realization.line_count);
+    commands.reserve(realization.line_count);
+    for (size_t i = 0; i < realization.line_count; i++) {
+	const int32_t command = primitive_realization_command_to_vlist_command(
+	    realization.line_commands ? realization.line_commands[i] :
+	    RT_PRIMITIVE_LINE_DRAW);
+	if (command < 0) {
+	    primitive_realization_line_set_free(&realization);
+	    return 0;
+	}
+	points.push_back(SbVec3f(
+	    static_cast<float>(realization.line_points[i][X]),
+	    static_cast<float>(realization.line_points[i][Y]),
+	    static_cast<float>(realization.line_points[i][Z])));
+	commands.push_back(command);
+    }
+    primitive_realization_line_set_free(&realization);
+    return cad_wire_part_geometry_from_line_set(points, commands, geometry);
 }
 
 
@@ -3217,6 +3545,122 @@ static union tree *
 	walkOccurrenceIdentity = realize_walk_occurrence_identity(pathp);
 	duplicateOrdinal = data->compact_occurrence_counts[
 	    walkOccurrenceIdentity]++;
+    }
+
+    /*
+     * The compact path is the normal aggregate publication path.  Build its
+     * immutable Obol geometry directly rather than allocating a Coin vlist
+     * carrier and immediately converting it again below.
+     */
+    if (data->compact_index) {
+	SbBox3f cacheBounds;
+	std::string cacheKey = realize_geometry_cache_key(dp);
+	source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
+	const BRLObolCachedPartGeometry *cachedCad =
+	    data->cache->findWireCadGeometry(cacheKey);
+	std::shared_ptr<const obol::PartGeometry> cadGeometry = cachedCad ?
+	    cachedCad->geometry : std::shared_ptr<const obol::PartGeometry>();
+	brlobol_performance_counter_add(cadGeometry ?
+	    BRLOBOL_PERF_WIRE_CACHE_HITS : BRLOBOL_PERF_WIRE_CACHE_MISSES, 1);
+	const char *typeLabel = cachedCad && !cachedCad->sourceType.empty() ?
+	    cachedCad->sourceType.c_str() : (cadGeometry ? "wire" : NULL);
+	const char *geometryKind = cachedCad && !cachedCad->geometryKind.empty() ?
+	    cachedCad->geometryKind.c_str() : "line";
+	if (!cadGeometry) {
+	    valid_walk_internal validInternal;
+	    struct rt_db_internal *localIntern =
+		fetch_local_walk_internal(tsp, pathp, &validInternal);
+	    if (!localIntern) {
+		data->failed_shapes++;
+		set_invalid_internal_diagnostic(data, pathp, NULL,
+			validInternal.refetched);
+		return TREE_NULL;
+	    }
+
+	    typeLabel = primitive_type_label(localIntern);
+	    SbBox3f localBounds;
+	    if (source_view_lod_active(data->source))
+		(void)local_bounds_from_internal(localIntern, localBounds);
+	    if (localIntern->idb_type == ID_MATERIAL) {
+		SoBRLMaterialObject *materialObject = material_object_from_internal(
+		    static_cast<struct rt_material_internal *>(localIntern->idb_ptr));
+		if (!materialObject) {
+		    data->failed_shapes++;
+		    set_walk_diagnostic(data, pathp,
+			"material object realization failed");
+		    return TREE_NULL;
+		}
+		char *path = db_path_to_string(pathp);
+		SoSeparator *leaf = new SoSeparator;
+		assign_material_identity(materialObject, path, dp->d_namep,
+		    typeLabel, data->revision);
+		leaf->addChild(materialObject);
+		database_source_add_realized_child(data->source, leaf);
+		data->realized_shapes++;
+		if (path)
+		    bu_free(path, "db_path_to_string");
+		return make_nop_tree();
+	    }
+
+	    obol::PartGeometry generated;
+	    int generatedGeometry = localIntern->idb_type == ID_BOT ?
+		cad_wire_part_geometry_from_bot(
+		    static_cast<const struct rt_bot_internal *>(localIntern->idb_ptr),
+		    generated) : cad_wire_part_geometry_from_lod_realization_internal(
+			localIntern, data->source, localBounds, generated);
+	    if (!generatedGeometry)
+		generatedGeometry = cad_wire_part_geometry_from_plot_internal(
+		    localIntern, data->source, generated);
+	    if (!generatedGeometry) {
+		char reason[256] = {0};
+		data->failed_shapes++;
+		snprintf(reason, sizeof(reason),
+		    "wireframe plot produced no usable geometry for primitive type '%s'",
+		    typeLabel ? typeLabel : "");
+		set_walk_diagnostic(data, pathp, reason);
+		return TREE_NULL;
+	    }
+	    if (primitive_is_annotation(localIntern->idb_type, typeLabel)) {
+		typeLabel = "annotation";
+		geometryKind = "annotation";
+	    }
+	    cadGeometry = data->cache->storeWireCadGeometry(cacheKey,
+		std::move(generated), typeLabel, geometryKind,
+		localBounds.isEmpty() ? NULL : &localBounds);
+	}
+
+	char *path = db_path_to_string(pathp);
+	compact_occurrence_build input;
+	input.occurrence.geometry = cadGeometry;
+	input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
+	input.occurrence.summary = compact_occurrence_tree_summary(
+	    data->source, tsp, path, dp->d_namep,
+	    geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
+	    "annotation" : typeLabel,
+	    geometryKind, data->revision,
+	    BRLObolRealizedShapeSummary::SHAPE_VLIST);
+	input.occurrence.occurrenceIndex =
+	    data->source->occurrenceIndex.getValue();
+	input.occurrence.booleanOperation =
+	    data->source->booleanOperation.getValue();
+	input.semantic = compact_semantic_from_summary(input.occurrence.summary);
+	input.dashed = (tsp->ts_sofar & TS_SOFAR_MINUS) ? TRUE : FALSE;
+	const size_t entryCount = data->compact_index->entries.size();
+	compact_add_occurrence(data->source, *data->compact_index, input,
+	    data->compact_ordinal, data->compact_unsupported);
+	compact_apply_walk_identity(data->source, *data->compact_index,
+	    entryCount, tsp, pathp, walkOccurrenceIdentity, duplicateOrdinal);
+	SbBox3f bounds = database_source_transform_bounds(
+	    compact_part_geometry_bounds(cadGeometry),
+	    input.occurrence.localTransform);
+	if (!bounds.isEmpty()) {
+	    data->compact_bounds.extendBy(bounds);
+	    data->compact_bounds_valid = TRUE;
+	}
+	data->realized_shapes++;
+	if (path)
+	    bu_free(path, "db_path_to_string");
+	return make_nop_tree();
     }
 
     SoBRLVListShape *sharedShape = NULL;
@@ -3718,7 +4162,6 @@ realize_direct_leaf_wireframe_compact(
 
     const std::string fullPath =
 	database_source_full_path_string(source->path.getValue());
-    SoBRLVListShape *sharedShape = NULL;
     SbBox3f localBounds;
     SbBool localBoundsValid = FALSE;
     std::string cacheKey = realize_geometry_cache_key(dp);
@@ -3732,26 +4175,24 @@ realize_direct_leaf_wireframe_compact(
 	cacheKey += suffix;
     }
     source_lod_cache_key_append(cacheKey, source, localBounds);
-    std::map<std::string, SoBRLVListShape *>::iterator found =
-	cache->sharedWireGeometry.find(cacheKey);
-    if (found != cache->sharedWireGeometry.end())
-	sharedShape = found->second;
     std::shared_ptr<const obol::PartGeometry> cadGeometry;
     const BRLObolCachedPartGeometry *cachedCad =
 	cache->findWireCadGeometry(cacheKey);
     if (cachedCad)
 	cadGeometry = cachedCad->geometry;
     brlobol_performance_counter_add(
-	(sharedShape || cadGeometry) ? BRLOBOL_PERF_WIRE_CACHE_HITS :
-	BRLOBOL_PERF_WIRE_CACHE_MISSES, 1);
+	(cadGeometry ? BRLOBOL_PERF_WIRE_CACHE_HITS :
+	BRLOBOL_PERF_WIRE_CACHE_MISSES), 1);
 
-    const char *typeLabel = sharedShape ?
-			    sharedShape->sourceType.getValue().getString() :
-			    (cachedCad && !cachedCad->sourceType.empty() ?
-			     cachedCad->sourceType.c_str() :
-			     (cadGeometry ? "wire" : NULL));
-    int usedLodProxy = 0;
-    if (!sharedShape && !cadGeometry) {
+    const char *typeLabel = cachedCad && !cachedCad->sourceType.empty() ?
+	cachedCad->sourceType.c_str() : (cadGeometry ? "wire" : NULL);
+    const char *geometryKind = cachedCad && !cachedCad->geometryKind.empty() ?
+	cachedCad->geometryKind.c_str() : "line";
+    if (cachedCad && !cachedCad->bounds.isEmpty()) {
+	localBounds = cachedCad->bounds;
+	localBoundsValid = TRUE;
+    }
+    if (!cadGeometry) {
 	valid_walk_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
@@ -3771,15 +4212,17 @@ realize_direct_leaf_wireframe_compact(
 	    localBoundsValid = local_bounds_from_internal(&validInternal.local,
 		localBounds);
 	SbBox3f lodProxyBounds;
-	usedLodProxy = bot_lod_proxy_bounds(&validInternal.local,
+	const int usedLodProxy = bot_lod_proxy_bounds(&validInternal.local,
 	    wireLodThreshold, lodProxyBounds);
 	if (usedLodProxy) {
-	    sharedShape = vlist_from_aabb_proxy_bounds(lodProxyBounds);
-	    if (sharedShape) {
-		assign_shared_geometry_identity(sharedShape, dp->d_namep,
-						typeLabel, revision, "proxy");
-		(void)source->setSourceBoundsState(TRUE,
-		    lodProxyBounds.getMin(), lodProxyBounds.getMax());
+	    obol::PartGeometry generated;
+	    if (cad_wire_part_geometry_from_aabb(lodProxyBounds, generated)) {
+		geometryKind = "proxy";
+		localBounds = lodProxyBounds;
+		localBoundsValid = TRUE;
+		cadGeometry = cache->storeWireCadGeometry(cacheKey,
+		    std::move(generated), typeLabel, geometryKind, &localBounds,
+		    true);
 	    }
 	} else if (validInternal.local.idb_type == ID_MATERIAL) {
 	    SoBRLMaterialObject *materialObject = material_object_from_internal(
@@ -3801,78 +4244,38 @@ realize_direct_leaf_wireframe_compact(
 	    return 1;
 	}
 
-	if (!sharedShape) {
-	    if (validInternal.local.idb_type == ID_BOT) {
-		sharedShape = vlist_from_bot_wireframe(
+	if (!cadGeometry) {
+	    obol::PartGeometry generated;
+	    int generatedGeometry = 0;
+	    if (validInternal.local.idb_type == ID_BOT)
+		generatedGeometry = cad_wire_part_geometry_from_bot(
 		    static_cast<const struct rt_bot_internal *>(
-			validInternal.local.idb_ptr));
-	    } else {
-		sharedShape = vlist_from_lod_realization_internal(
-		    &validInternal.local, source, localBounds);
-		if (!sharedShape)
-		    sharedShape = vlist_from_plot_internal(&validInternal.local,
-			source);
+			validInternal.local.idb_ptr), generated);
+	    else
+		generatedGeometry =
+		    cad_wire_part_geometry_from_lod_realization_internal(
+			&validInternal.local, source, localBounds, generated);
+	    if (!generatedGeometry)
+		generatedGeometry = cad_wire_part_geometry_from_plot_internal(
+		    &validInternal.local, source, generated);
+	    if (generatedGeometry) {
+		if (primitive_is_annotation(validInternal.local.idb_type,
+			typeLabel)) {
+		    typeLabel = "annotation";
+		    geometryKind = "annotation";
+		}
+		cadGeometry = cache->storeWireCadGeometry(cacheKey,
+		    std::move(generated), typeLabel, geometryKind,
+		    localBoundsValid ? &localBounds : NULL);
 	    }
 	}
-	if (!sharedShape) {
+	if (!cadGeometry) {
 	    SbString msg;
 	    msg.sprintf(
 		"%s: direct compact leaf wireframe plot produced no usable geometry for primitive type '%s'",
 		fullPath.c_str(), typeLabel ? typeLabel : "");
 	    source->realizationDiagnostic = msg;
 	    return -1;
-	}
-	if (!usedLodProxy) {
-	    assign_shared_geometry_identity(sharedShape, dp->d_namep,
-					    typeLabel, revision, "line");
-	    if (primitive_is_annotation(validInternal.local.idb_type,
-		    typeLabel)) {
-		sharedShape->sourceType = "annotation";
-		sharedShape->geometryKind = "annotation";
-	    }
-	}
-	cache->storeWireGeometry(cacheKey, sharedShape);
-	if (localBoundsValid)
-	    cache->storeWireBounds(cacheKey, localBounds);
-	typeLabel = sharedShape->sourceType.getValue().getString();
-    }
-
-    const char *geometryKind = sharedShape ?
-	sharedShape->geometryKind.getValue().getString() :
-	(cachedCad && !cachedCad->geometryKind.empty() ?
-	 cachedCad->geometryKind.c_str() : "line");
-    if (sharedShape && sharedShape->getPointPrimitiveCount() > 0 &&
-	sharedShape->getSegmentCount() == 0) {
-	SoBRLVListShape *shape = new SoBRLVListShape;
-	shape->ref();
-	assign_realized_identity(shape, NULL, fullPath.c_str(), dp->d_namep,
-	    typeLabel, revision, source);
-	shape->setSharedGeometry(sharedShape);
-	shape->geometryKind = geometryKind;
-	SoSeparator *leaf = new SoSeparator;
-	leaf->addChild(shape);
-	database_source_add_realized_child(source, leaf);
-	SbBox3f pointBounds;
-	pointBounds.makeEmpty();
-	const SoBRLVListShape *pointGeometry = shape->getGeometrySource();
-	for (int i = 0; i < pointGeometry->point.getNum(); i++)
-	    pointBounds.extendBy(pointGeometry->point[i]);
-	set_source_bounds_from_local_box(source, pointBounds);
-	shape->unref();
-	return 1;
-    }
-
-    if (!cadGeometry && sharedShape) {
-	obol::PartGeometry generatedGeometry;
-	int generated = 0;
-	{
-	    BRLObolPerformanceTimer timer(BRLOBOL_PERF_CAD_COMPACT_US);
-	    generated = cad_vlist_part_geometry(sharedShape, generatedGeometry);
-	}
-	if (generated) {
-	    cadGeometry = cache->storeWireCadGeometry(cacheKey,
-		std::move(generatedGeometry), typeLabel, geometryKind,
-		localBoundsValid ? &localBounds : NULL);
 	}
     }
 
@@ -3894,11 +4297,8 @@ realize_direct_leaf_wireframe_compact(
 	set_source_bounds_from_local_box(source, localBounds);
     if (compacted <= 0) {
 	SbString msg;
-	msg.sprintf("%s: direct compact wire geometry installation failed for primitive type '%s' (points=%d commands=%d segments=%d)",
-	    fullPath.c_str(), typeLabel ? typeLabel : "",
-	    sharedShape ? sharedShape->point.getNum() : 0,
-	    sharedShape ? sharedShape->command.getNum() : 0,
-	    sharedShape ? sharedShape->getSegmentCount() : 0);
+	msg.sprintf("%s: direct compact wire geometry installation failed for primitive type '%s'",
+	    fullPath.c_str(), typeLabel ? typeLabel : "");
 	source->realizationDiagnostic = msg;
 	return -1;
     }
@@ -4031,6 +4431,246 @@ vlist_from_pnts(const struct rt_pnts_internal *pnts)
     return shape;
 }
 
+static int
+cad_points_part_geometry_from_pnts(const struct rt_pnts_internal *pnts,
+	obol::PartGeometry &geometry)
+{
+    if (!pnts || !pnts->point || pnts->count == 0)
+	return 0;
+    RT_PNTS_CK_MAGIC(pnts);
+
+    obol::PointRep points;
+    points.bounds.makeEmpty();
+    points.positions.reserve(pnts->count);
+    points.pointIds.reserve(pnts->count);
+    points.colorValid.reserve(pnts->count);
+    points.colors.reserve(pnts->count);
+    points.scaleValid.reserve(pnts->count);
+    points.scales.reserve(pnts->count);
+    points.normalValid.reserve(pnts->count);
+    points.normals.reserve(pnts->count);
+
+    const double defaultScale = pnts->scale;
+    auto appendPoint = [&](const fastf_t *v, const struct bu_color *c,
+	const fastf_t *s, const fastf_t *n) {
+	const SbVec3f point(static_cast<float>(v[X]),
+	    static_cast<float>(v[Y]), static_cast<float>(v[Z]));
+	points.positions.push_back(point);
+	points.pointIds.push_back(
+	    static_cast<uint32_t>(points.pointIds.size()));
+	points.bounds.extendBy(point);
+	if (c) {
+	    points.colorValid.push_back(1u);
+	    points.colors.push_back(SbColor(
+		static_cast<float>(c->buc_rgb[RED]),
+		static_cast<float>(c->buc_rgb[GRN]),
+		static_cast<float>(c->buc_rgb[BLU])));
+	} else {
+	    points.colorValid.push_back(0u);
+	    points.colors.push_back(SbColor(1.0f, 1.0f, 1.0f));
+	}
+	const float scale = s && *s > 0.0 ? static_cast<float>(*s) :
+	    (!s && defaultScale > 0.0 ? static_cast<float>(defaultScale) :
+	    0.0f);
+	points.scaleValid.push_back(scale > 0.0f ? 1u : 0u);
+	points.scales.push_back(scale);
+	if (scale > 0.0f) {
+	    const SbVec3f extent(scale, scale, scale);
+	    points.bounds.extendBy(point - extent);
+	    points.bounds.extendBy(point + extent);
+	}
+	if (n) {
+	    points.normalValid.push_back(1u);
+	    points.normals.push_back(SbVec3f(static_cast<float>(n[X]),
+		static_cast<float>(n[Y]), static_cast<float>(n[Z])));
+	} else {
+	    points.normalValid.push_back(0u);
+	    points.normals.push_back(SbVec3f(0.0f, 0.0f, 1.0f));
+	}
+    };
+
+    switch (pnts->type) {
+	case RT_PNT_TYPE_PNT: {
+	    const struct pnt *point = NULL;
+	    for (BU_LIST_FOR(point, pnt, &(((struct pnt *)pnts->point)->l)))
+		appendPoint(point->v, NULL, NULL, NULL);
+	}
+	break;
+	case RT_PNT_TYPE_COL: {
+	    const struct pnt_color *point = NULL;
+	    for (BU_LIST_FOR(point, pnt_color,
+		&(((struct pnt_color *)pnts->point)->l)))
+		appendPoint(point->v, &point->c, NULL, NULL);
+	}
+	break;
+	case RT_PNT_TYPE_SCA: {
+	    const struct pnt_scale *point = NULL;
+	    for (BU_LIST_FOR(point, pnt_scale,
+		&(((struct pnt_scale *)pnts->point)->l)))
+		appendPoint(point->v, NULL, &point->s, NULL);
+	}
+	break;
+	case RT_PNT_TYPE_NRM: {
+	    const struct pnt_normal *point = NULL;
+	    for (BU_LIST_FOR(point, pnt_normal,
+		&(((struct pnt_normal *)pnts->point)->l)))
+		appendPoint(point->v, NULL, NULL, point->n);
+	}
+	break;
+	case RT_PNT_TYPE_COL_SCA: {
+	    const struct pnt_color_scale *point = NULL;
+	    for (BU_LIST_FOR(point, pnt_color_scale,
+		&(((struct pnt_color_scale *)pnts->point)->l)))
+		appendPoint(point->v, &point->c, &point->s, NULL);
+	}
+	break;
+	case RT_PNT_TYPE_COL_NRM: {
+	    const struct pnt_color_normal *point = NULL;
+	    for (BU_LIST_FOR(point, pnt_color_normal,
+		&(((struct pnt_color_normal *)pnts->point)->l)))
+		appendPoint(point->v, &point->c, NULL, point->n);
+	}
+	break;
+	case RT_PNT_TYPE_SCA_NRM: {
+	    const struct pnt_scale_normal *point = NULL;
+	    for (BU_LIST_FOR(point, pnt_scale_normal,
+		&(((struct pnt_scale_normal *)pnts->point)->l)))
+		appendPoint(point->v, NULL, &point->s, point->n);
+	}
+	break;
+	case RT_PNT_TYPE_COL_SCA_NRM: {
+	    const struct pnt_color_scale_normal *point = NULL;
+	    for (BU_LIST_FOR(point, pnt_color_scale_normal,
+		&(((struct pnt_color_scale_normal *)pnts->point)->l)))
+		appendPoint(point->v, &point->c, &point->s, point->n);
+	}
+	break;
+	default:
+	    return 0;
+    }
+
+    if (points.positions.empty())
+	return 0;
+    geometry.points = std::move(points);
+    return 1;
+}
+
+static void
+sanitize_triangle_normals(std::vector<SbVec3f> &normals,
+			  const std::vector<SbVec3f> &points,
+			  const std::vector<int32_t> &triangles);
+
+static int
+canonicalize_corner_normal_mesh(obol::TriMesh &mesh,
+	const std::vector<SbVec3f> &cornerNormals);
+
+/* Generate per-corner normals without smoothing across a sharp edge.  A
+ * 60-degree crease is the same policy used by the mesh LoD cache. */
+template <typename Index>
+static void
+generate_crease_triangle_normals(std::vector<SbVec3f> &normals,
+				 const std::vector<SbVec3f> &points,
+				 const std::vector<Index> &triangles)
+{
+    normals.clear();
+    if (points.empty() || triangles.empty() || triangles.size() % 3)
+	return;
+
+    const size_t faceCount = triangles.size() / 3;
+    std::vector<SbVec3f> faceNormals(faceCount);
+    std::vector<std::vector<size_t>> vertexFaces(points.size());
+    for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+	const size_t indexBase = faceIndex * 3;
+	const uint64_t ia = static_cast<uint64_t>(triangles[indexBase]);
+	const uint64_t ib = static_cast<uint64_t>(triangles[indexBase + 1]);
+	const uint64_t ic = static_cast<uint64_t>(triangles[indexBase + 2]);
+	if (ia >= points.size() || ib >= points.size() || ic >= points.size()) {
+	    normals.clear();
+	    return;
+	}
+
+	SbVec3f normal =
+	    (points[static_cast<size_t>(ib)] - points[static_cast<size_t>(ia)]).cross(
+		points[static_cast<size_t>(ic)] - points[static_cast<size_t>(ia)]);
+	if (normal.length() > 0.0f)
+	    normal.normalize();
+	else
+	    normal = SbVec3f(0.0f, 0.0f, 1.0f);
+	faceNormals[faceIndex] = normal;
+	vertexFaces[static_cast<size_t>(ia)].push_back(faceIndex);
+	vertexFaces[static_cast<size_t>(ib)].push_back(faceIndex);
+	vertexFaces[static_cast<size_t>(ic)].push_back(faceIndex);
+    }
+
+    normals.reserve(triangles.size());
+    const float creaseCosine = 0.5f;
+    for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+	const SbVec3f &faceNormal = faceNormals[faceIndex];
+	for (size_t corner = 0; corner < 3; corner++) {
+	    const size_t vertexIndex = static_cast<size_t>(
+		triangles[faceIndex * 3 + corner]);
+	    SbVec3f smoothNormal(0.0f, 0.0f, 0.0f);
+	    for (const size_t adjacentFace : vertexFaces[vertexIndex]) {
+		const SbVec3f &candidate = faceNormals[adjacentFace];
+		if (candidate.dot(faceNormal) >= creaseCosine)
+		    smoothNormal += candidate;
+	    }
+	    if (smoothNormal.length() > 0.0f)
+		smoothNormal.normalize();
+	    else
+		smoothNormal = faceNormal;
+	    normals.push_back(smoothNormal);
+	}
+    }
+}
+
+static bool
+bot_authored_triangle_normals(std::vector<SbVec3f> &normals,
+			     const struct rt_bot_internal *bot)
+{
+    normals.clear();
+    if (!bot || !(bot->bot_flags & RT_BOT_HAS_SURFACE_NORMALS) ||
+	!bot->normals || !bot->face_normals ||
+	bot->num_face_normals < bot->num_faces)
+	return false;
+
+    normals.reserve(bot->num_faces * 3);
+    for (size_t faceIndex = 0; faceIndex < bot->num_faces; faceIndex++) {
+	for (size_t corner = 0; corner < 3; corner++) {
+	    const size_t sourceCorner =
+		(bot->orientation == RT_BOT_CW && corner > 0) ? 3 - corner : corner;
+	    const int normalIndex =
+		bot->face_normals[faceIndex * 3 + sourceCorner];
+	    if (normalIndex < 0 ||
+		static_cast<size_t>(normalIndex) >= bot->num_normals) {
+		normals.clear();
+		return false;
+	    }
+	    const fastf_t *normal = &bot->normals[static_cast<size_t>(normalIndex) * 3];
+	    SbVec3f converted(static_cast<float>(normal[X]),
+		static_cast<float>(normal[Y]), static_cast<float>(normal[Z]));
+	    if (converted.length() <= 0.0f) {
+		normals.clear();
+		return false;
+	    }
+	    converted.normalize();
+	    normals.push_back(converted);
+	}
+    }
+    return true;
+}
+
+template <typename Index>
+static void
+bot_triangle_normals(std::vector<SbVec3f> &normals,
+		     const struct rt_bot_internal *bot,
+		     const std::vector<SbVec3f> &points,
+		     const std::vector<Index> &triangles)
+{
+    if (!bot_authored_triangle_normals(normals, bot))
+	generate_crease_triangle_normals(normals, points, triangles);
+}
+
 static SoBRLMeshShape *
 mesh_from_bot(const struct rt_bot_internal *bot,
 	      const SoBRLDatabaseSource *source)
@@ -4053,6 +4693,11 @@ mesh_from_bot(const struct rt_bot_internal *bot,
     indices.reserve(bot->num_faces * 3);
     for (size_t i = 0; i < bot->num_faces; i++) {
 	const int *face = &bot->faces[i * 3];
+	if (face[0] < 0 || face[1] < 0 || face[2] < 0 ||
+	    static_cast<size_t>(face[0]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[1]) >= bot->num_vertices ||
+	    static_cast<size_t>(face[2]) >= bot->num_vertices)
+	    return NULL;
 	if (bot->orientation == RT_BOT_CW) {
 	    indices.push_back(static_cast<int32_t>(face[0]));
 	    indices.push_back(static_cast<int32_t>(face[2]));
@@ -4064,12 +4709,18 @@ mesh_from_bot(const struct rt_bot_internal *bot,
 	}
     }
 
+    std::vector<SbVec3f> normals;
+    bot_triangle_normals(normals, bot, points, indices);
+    sanitize_triangle_normals(normals, points, indices);
+
     uint32_t threshold = source ? source->lodBotThreshold.getValue() : 0;
     SoBRLMeshShape *shape = (threshold > 0 &&
 			     bot->num_faces >= static_cast<size_t>(threshold)) ?
 			    new SoBRLLodMeshShape : new SoBRLMeshShape;
     shape->setIndexedTriangles(points.data(), static_cast<int>(points.size()),
-			       indices.data(), static_cast<int>(indices.size()));
+			       indices.data(), static_cast<int>(indices.size()),
+			       normals.empty() ? NULL : normals.data(),
+			       static_cast<int>(normals.size()));
     return shape;
 }
 
@@ -4113,6 +4764,9 @@ cad_mesh_part_geometry_from_bot(const struct rt_bot_internal *bot,
 	}
     }
     if (mesh.bounds.isEmpty() || mesh.indices.empty())
+	return 0;
+    bot_triangle_normals(mesh.normals, bot, mesh.positions, mesh.indices);
+    if (!canonicalize_corner_normal_mesh(mesh, mesh.normals))
 	return 0;
     geometry.shaded = std::move(mesh);
     return 1;
@@ -4237,6 +4891,10 @@ sanitize_triangle_normals(std::vector<SbVec3f> &normals,
 			  const std::vector<SbVec3f> &points,
 			  const std::vector<int32_t> &triangles)
 {
+    if (normals.empty()) {
+	generate_crease_triangle_normals(normals, points, triangles);
+	return;
+    }
     if (normals.size() != triangles.size())
 	return;
 
@@ -4264,8 +4922,8 @@ sanitize_triangle_normals(std::vector<SbVec3f> &normals,
 	    if (n.length() > 0.0f) {
 		n.normalize();
 		normalDot += n.dot(faceNormal);
-	    }
 	}
+}
 
 	if (normalDot < 0.0f) {
 	    for (size_t j = 0; j < 3; j++)
@@ -4279,6 +4937,84 @@ sanitize_triangle_normals(std::vector<SbVec3f> &normals,
     }
 }
 
+static uint32_t
+corner_normal_float_bits(float value)
+{
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+struct CornerNormalVertexKey {
+    uint32_t position;
+    uint32_t normalX;
+    uint32_t normalY;
+    uint32_t normalZ;
+
+    bool operator<(const CornerNormalVertexKey &other) const
+    {
+	if (position != other.position)
+	    return position < other.position;
+	if (normalX != other.normalX)
+	    return normalX < other.normalX;
+	if (normalY != other.normalY)
+	    return normalY < other.normalY;
+	return normalZ < other.normalZ;
+    }
+};
+
+/* Obol's indexed mesh format binds one normal to each vertex.  BRL-CAD mesh
+ * producers keep normals per triangle corner, so split only corners whose
+ * normal differs instead of losing smooth shading or duplicating every vertex. */
+static int
+canonicalize_corner_normal_mesh(obol::TriMesh &mesh,
+	const std::vector<SbVec3f> &cornerNormals)
+{
+    if (cornerNormals.empty()) {
+	mesh.normals.clear();
+	return 1;
+    }
+    if (cornerNormals.size() != mesh.indices.size())
+	return 0;
+
+    std::map<CornerNormalVertexKey, uint32_t> vertexByCorner;
+    std::vector<SbVec3f> positions;
+    std::vector<SbVec3f> normals;
+    std::vector<uint32_t> indices;
+    positions.reserve(mesh.indices.size());
+    normals.reserve(mesh.indices.size());
+    indices.reserve(mesh.indices.size());
+    for (size_t i = 0; i < mesh.indices.size(); ++i) {
+	const uint32_t sourceIndex = mesh.indices[i];
+	if (sourceIndex >= mesh.positions.size())
+	    return 0;
+	SbVec3f normal = cornerNormals[i];
+	if (normal.sqrLength() > 0.0f)
+	    normal.normalize();
+	else
+	    normal.setValue(0.0f, 0.0f, 1.0f);
+	const CornerNormalVertexKey key = {
+	    sourceIndex,
+	    corner_normal_float_bits(normal[0]),
+	    corner_normal_float_bits(normal[1]),
+	    corner_normal_float_bits(normal[2])
+	};
+	auto found = vertexByCorner.find(key);
+	if (found == vertexByCorner.end()) {
+	    const uint32_t index = static_cast<uint32_t>(positions.size());
+	    positions.push_back(mesh.positions[sourceIndex]);
+	    normals.push_back(normal);
+	    found = vertexByCorner.emplace(key, index).first;
+	}
+	indices.push_back(found->second);
+    }
+
+    mesh.positions = std::move(positions);
+    mesh.normals = std::move(normals);
+    mesh.indices = std::move(indices);
+    return 1;
+}
+
 static int
 cad_mesh_part_geometry_from_indexed_face_set(
 	const struct rt_primitive_indexed_face_set *faceSet,
@@ -4288,9 +5024,20 @@ cad_mesh_part_geometry_from_indexed_face_set(
 	!faceSet->indices || !faceSet->index_count)
 	return 0;
 
+    size_t cornerCount = 0;
+    for (size_t i = 0; i < faceSet->index_count; i++) {
+	if (faceSet->indices[i] >= 0)
+	    cornerCount++;
+    }
+    const int haveCompleteNormals =
+	faceSet->normals && faceSet->normal_count == cornerCount;
     std::vector<int32_t> triangles;
+    std::vector<SbVec3f> normals;
     if (!indexed_faces_to_triangles(faceSet->indices, faceSet->index_count,
-	    faceSet->point_count, triangles))
+	faceSet->point_count, triangles,
+	haveCompleteNormals ? faceSet->normals : NULL,
+	haveCompleteNormals ? faceSet->normal_count : 0,
+	haveCompleteNormals ? &normals : NULL))
 	return 0;
 
     obol::TriMesh mesh;
@@ -4304,6 +5051,9 @@ cad_mesh_part_geometry_from_indexed_face_set(
 	mesh.positions.push_back(point);
 	mesh.bounds.extendBy(point);
     }
+    /* Keep authored corner normals when present; otherwise publish smooth
+     * crease-aware normals so Obol does not fall back to flat triangles. */
+    sanitize_triangle_normals(normals, mesh.positions, triangles);
     mesh.indices.reserve(triangles.size());
     for (const int32_t index : triangles) {
 	if (index < 0 || static_cast<size_t>(index) >= faceSet->point_count)
@@ -4311,6 +5061,8 @@ cad_mesh_part_geometry_from_indexed_face_set(
 	mesh.indices.push_back(static_cast<uint32_t>(index));
     }
     if (mesh.bounds.isEmpty() || mesh.indices.empty())
+	return 0;
+    if (!canonicalize_corner_normal_mesh(mesh, normals))
 	return 0;
     geometry.shaded = std::move(mesh);
     return 1;
@@ -4658,9 +5410,8 @@ compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
     const bool special = internalType == ID_MATERIAL ||
 	internalType == ID_PNTS || internalType == ID_SKETCH ||
 	internalType == ID_ANNOT;
-    const bool lodBot = internalType == ID_BOT &&
-	collect->source->lodBotThreshold.getValue() > 0;
-    if (wireInstead || special || lodBot)
+    const bool lodCandidate = collect->source->lodBotThreshold.getValue() > 0;
+    if (wireInstead || special || lodCandidate)
 	return make_nop_tree();
 
     collect->jobs.push_back(std::move(job));
@@ -4721,6 +5472,59 @@ cad_mesh_part_geometry_from_tessellated_internal(
     nmg_km(model);
     bu_list_free(&vlfree);
     return converted;
+}
+
+static int
+cad_mesh_append_hidden_line_edges(obol::PartGeometry &geometry)
+{
+    if (!geometry.shaded)
+	return 0;
+    const obol::TriMesh &mesh = *geometry.shaded;
+    obol::WireRep wire;
+    wire.bounds = mesh.bounds;
+    std::unordered_set<uint64_t> edges;
+    uint32_t segmentId = 0;
+    auto addEdge = [&](uint32_t a, uint32_t b) {
+	if (a >= mesh.positions.size() || b >= mesh.positions.size())
+	    return;
+	if (a > b)
+	    std::swap(a, b);
+	const uint64_t key = (static_cast<uint64_t>(a) << 32) | b;
+	if (!edges.insert(key).second)
+	    return;
+	wire.segmentPoints.push_back(mesh.positions[a]);
+	wire.segmentPoints.push_back(mesh.positions[b]);
+	wire.segmentIds.push_back(segmentId++);
+    };
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+	addEdge(mesh.indices[i], mesh.indices[i + 1]);
+	addEdge(mesh.indices[i + 1], mesh.indices[i + 2]);
+	addEdge(mesh.indices[i + 2], mesh.indices[i]);
+    }
+    if (wire.segmentPoints.empty())
+	return 0;
+    geometry.wire = std::move(wire);
+    return 1;
+}
+
+static int
+cad_mesh_part_geometry_from_internal(struct rt_db_internal *intern,
+	const SoBRLDatabaseSource *source, obol::PartGeometry &geometry)
+{
+    if (!internal_payload_magic_valid(intern))
+	return 0;
+    if (intern->idb_type == ID_BOT)
+	return cad_mesh_part_geometry_from_bot(
+	    static_cast<const struct rt_bot_internal *>(intern->idb_ptr), geometry);
+
+    struct bg_tess_tol ttol = source_tess_tol(source);
+    struct bn_tol tol = BN_TOL_INIT_TOL;
+    if (intern->idb_meth && intern->idb_meth->ft_indexed_face_set &&
+	cad_mesh_part_geometry_from_primitive_face_set(intern, &ttol, &tol,
+	    geometry))
+	return 1;
+    return cad_mesh_part_geometry_from_tessellated_internal(intern, &ttol,
+	&tol, geometry);
 }
 
 static void
@@ -5199,8 +6003,115 @@ realize_direct_leaf_mesh_compact(
 	cache->findMeshVListCadGeometry(cacheKey);
     const BRLObolCachedPartGeometry *cachedMesh =
 	cache->findMeshCadGeometry(cacheKey);
+
+    /*
+     * Normal compact leaves do not need a Coin mesh or vlist carrier.  Mesh
+     * LoD metadata and its optional cached display payload are value-backed
+     * below, so the threshold does not require a temporary shape.
+     */
+    const bool hadCachedCad = cachedWire || cachedMesh;
+    if (!sharedVListShape && !sharedMeshShape && !hadCachedCad) {
+	valid_walk_internal validInternal;
+	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
+	    !internal_payload_magic_valid(&validInternal.local)) {
+	    SbString msg;
+	    msg.sprintf("%s: direct compact leaf mesh internal fetch failed",
+		fullPath.c_str());
+	    source->realizationDiagnostic = msg;
+	    if (validInternal.local.idb_ptr)
+		rt_db_free_internal(&validInternal.local);
+	    return -1;
+	}
+	validInternal.ownsLocal = true;
+
+	const int internalType = validInternal.local.idb_type;
+	const char *directTypeLabel = primitive_type_label(&validInternal.local);
+	if (internalType == ID_MATERIAL) {
+	    SoBRLMaterialObject *materialObject = material_object_from_internal(
+		static_cast<struct rt_material_internal *>(
+		    validInternal.local.idb_ptr));
+	    if (!materialObject) {
+		SbString msg;
+		msg.sprintf("%s: material object realization failed",
+		    fullPath.c_str());
+		source->realizationDiagnostic = msg;
+		return -1;
+	    }
+	    SoSeparator *leaf = new SoSeparator;
+	    assign_material_identity(materialObject, fullPath.c_str(),
+		dp->d_namep, directTypeLabel, revision);
+	    leaf->addChild(materialObject);
+	    database_source_add_realized_child(source, leaf);
+	    source->clearSourceBounds();
+	    return 1;
+	}
+
+	const int drawMode = source_record_draw_mode(source);
+	const bool wireGeometry = internalType == ID_SKETCH ||
+	    internalType == ID_ANNOT ||
+	    ((drawMode == BRLOBOL_LOD_DRAW_WIRE ||
+	      (drawMode == BRLOBOL_LOD_DRAW_SHADED_BOTS &&
+	       (!validInternal.local.idb_meth ||
+		!validInternal.local.idb_meth->ft_indexed_face_set))) &&
+	     internalType != ID_BOT);
+	{
+	    SbBox3f localBounds;
+	    if (source_view_lod_active(source))
+		(void)local_bounds_from_internal(&validInternal.local, localBounds);
+	    obol::PartGeometry generated;
+	    int generatedGeometry = 0;
+	    if (internalType == ID_PNTS) {
+		generatedGeometry = cad_points_part_geometry_from_pnts(
+		    static_cast<const struct rt_pnts_internal *>(
+			validInternal.local.idb_ptr), generated);
+	    } else if (wireGeometry) {
+		generatedGeometry = cad_wire_part_geometry_from_lod_realization_internal(
+		    &validInternal.local, source, localBounds, generated);
+		if (!generatedGeometry)
+		    generatedGeometry = cad_wire_part_geometry_from_plot_internal(
+			&validInternal.local, source, generated);
+	    } else {
+		generatedGeometry = cad_mesh_part_geometry_from_internal(
+		    &validInternal.local, source, generated);
+		if (generatedGeometry &&
+		    drawMode == BRLOBOL_LOD_DRAW_HIDDEN_LINE)
+		    (void)cad_mesh_append_hidden_line_edges(generated);
+	    }
+	    if (generatedGeometry) {
+		const char *geometryKind = internalType == ID_PNTS ? "point" :
+		    (wireGeometry ? "line" : "surface");
+		BRLObolSourceMeshRequest sourceMeshRequest;
+		bool lodBacked = false;
+		if (!wireGeometry && internalType != ID_PNTS &&
+		    generated.shaded &&
+		    source->lodBotThreshold.getValue() > 0 &&
+		    generated.shaded->indices.size() / 3u >=
+		    source->lodBotThreshold.getValue() &&
+		    cad_source_mesh_request_from_geometry(sourceMeshRequest,
+			generated)) {
+		    lodBacked = true;
+		    (void)cad_mesh_lod_display_geometry_from_cache(generated,
+			sourceMeshRequest, source, dbip, dp->d_namep);
+		}
+		if (primitive_is_annotation(internalType, directTypeLabel)) {
+		    directTypeLabel = "annotation";
+		    geometryKind = "annotation";
+		}
+		if (wireGeometry || internalType == ID_PNTS)
+		    cache->storeMeshVListCadGeometry(cacheKey,
+			std::move(generated), directTypeLabel, geometryKind,
+			localBounds.isEmpty() ? NULL : &localBounds);
+		else
+		    cache->storeMeshCadGeometry(cacheKey, std::move(generated),
+			directTypeLabel, geometryKind, NULL, lodBacked,
+			lodBacked ? &sourceMeshRequest : NULL);
+		cachedWire = cache->findMeshVListCadGeometry(cacheKey);
+		cachedMesh = cache->findMeshCadGeometry(cacheKey);
+	    }
+	}
+    }
     brlobol_performance_counter_add(
-	(sharedVListShape || sharedMeshShape || cachedWire || cachedMesh) ?
+	(sharedVListShape || sharedMeshShape || hadCachedCad) ?
 	BRLOBOL_PERF_MESH_CACHE_HITS :
 	BRLOBOL_PERF_MESH_CACHE_MISSES, 1);
 
@@ -5359,6 +6270,10 @@ realize_direct_leaf_mesh_compact(
 	    occurrence.sourceMeshRequestValid =
 		sharedMeshShape->makeSourceMeshRequest(
 		    occurrence.sourceMeshRequest);
+	else if (cachedMesh && cachedMesh->sourceMeshRequestValid) {
+	    occurrence.sourceMeshRequestValid = TRUE;
+	    occurrence.sourceMeshRequest = cachedMesh->sourceMeshRequest;
+	}
 	occurrence.summary = compact_occurrence_summary(source,
 	    fullPath.c_str(), dp->d_namep, typeLabel, geometryKind, revision,
 	    BRLObolRealizedShapeSummary::SHAPE_MESH);
@@ -5381,6 +6296,12 @@ realize_direct_leaf_mesh_compact(
 	if (occurrence.sourceMeshRequestValid)
 	    compact_source_mesh_request_sync(occurrence.sourceMeshRequest,
 		occurrence.summary);
+	if (occurrence.sourceMeshRequestValid)
+	    compact_summary_lod_from_source_mesh_request(occurrence.summary,
+		occurrence.sourceMeshRequest);
+	if (occurrence.sourceMeshRequestValid)
+	    cache_mesh_cad_source_request(cache, cacheKey,
+		occurrence.sourceMeshRequest);
     }
 
     occurrence.occurrenceIndex = source->occurrenceIndex.getValue();
@@ -5412,6 +6333,139 @@ static union tree *
 	walkOccurrenceIdentity = realize_walk_occurrence_identity(pathp);
 	duplicateOrdinal = data->compact_occurrence_counts[
 	    walkOccurrenceIdentity]++;
+    }
+
+    /*
+     * Mesh prefill covers unthresholded ordinary shaded leaves.  Publish
+     * point, wire, and thresholded mesh cases directly instead of making a
+     * transient Coin carrier only to convert it into cached PartGeometry.
+     */
+    if (data->compact_index) {
+	SbBox3f cacheBounds;
+	std::string cacheKey = realize_geometry_cache_key(dp);
+	source_lod_cache_key_append(cacheKey, data->source, cacheBounds);
+	const BRLObolCachedPartGeometry *cachedWire =
+	    data->cache->findMeshVListCadGeometry(cacheKey);
+	const BRLObolCachedPartGeometry *cachedMesh =
+	    data->cache->findMeshCadGeometry(cacheKey);
+	const bool hadCachedWire = cachedWire != NULL;
+	if (!cachedWire && !cachedMesh) {
+	    valid_walk_internal validInternal;
+	    struct rt_db_internal *localIntern =
+		fetch_local_walk_internal(tsp, pathp, &validInternal);
+	    if (!localIntern) {
+		data->failed_shapes++;
+		set_invalid_internal_diagnostic(data, pathp, NULL,
+			validInternal.refetched);
+		return TREE_NULL;
+	    }
+
+	    const int internalType = localIntern->idb_type;
+	    const int drawMode = source_record_draw_mode(data->source);
+	    const bool wireGeometry = internalType == ID_SKETCH ||
+		internalType == ID_ANNOT ||
+		((drawMode == BRLOBOL_LOD_DRAW_WIRE ||
+		  (drawMode == BRLOBOL_LOD_DRAW_SHADED_BOTS &&
+		   (!localIntern->idb_meth ||
+		    !localIntern->idb_meth->ft_indexed_face_set))) &&
+		 internalType != ID_BOT);
+	    if (internalType == ID_PNTS || wireGeometry) {
+		SbBox3f localBounds;
+		if (source_view_lod_active(data->source))
+		    (void)local_bounds_from_internal(localIntern, localBounds);
+		obol::PartGeometry generated;
+		const int generatedGeometry = internalType == ID_PNTS ?
+		    cad_points_part_geometry_from_pnts(
+			static_cast<const struct rt_pnts_internal *>(
+			    localIntern->idb_ptr), generated) :
+		    (cad_wire_part_geometry_from_lod_realization_internal(
+			localIntern, data->source, localBounds, generated) ||
+		     cad_wire_part_geometry_from_plot_internal(localIntern,
+			data->source, generated));
+		if (generatedGeometry) {
+		    const char *typeLabel = primitive_type_label(localIntern);
+		    const char *geometryKind = internalType == ID_PNTS ? "point" :
+			"line";
+		    if (primitive_is_annotation(internalType, typeLabel)) {
+			typeLabel = "annotation";
+			geometryKind = "annotation";
+		    }
+		    data->cache->storeMeshVListCadGeometry(cacheKey,
+			std::move(generated), typeLabel, geometryKind,
+			localBounds.isEmpty() ? NULL : &localBounds);
+		    cachedWire = data->cache->findMeshVListCadGeometry(cacheKey);
+		}
+	    } else if (data->source->lodBotThreshold.getValue() > 0) {
+		obol::PartGeometry generated;
+		int generatedGeometry = cad_mesh_part_geometry_from_internal(
+		    localIntern, data->source, generated);
+		if (generatedGeometry &&
+		    drawMode == BRLOBOL_LOD_DRAW_HIDDEN_LINE)
+		    (void)cad_mesh_append_hidden_line_edges(generated);
+		if (generatedGeometry) {
+		    BRLObolSourceMeshRequest sourceMeshRequest;
+		    bool lodBacked = false;
+		    if (generated.shaded &&
+			generated.shaded->indices.size() / 3u >=
+			data->source->lodBotThreshold.getValue() &&
+			cad_source_mesh_request_from_geometry(sourceMeshRequest,
+			    generated)) {
+			lodBacked = true;
+			(void)cad_mesh_lod_display_geometry_from_cache(generated,
+			    sourceMeshRequest, data->source, tsp->ts_dbip,
+			    dp->d_namep);
+		    }
+		    const char *typeLabel = primitive_type_label(localIntern);
+		    data->cache->storeMeshCadGeometry(cacheKey,
+			std::move(generated), typeLabel, "surface", NULL,
+			lodBacked,
+			lodBacked ? &sourceMeshRequest : NULL);
+		    cachedMesh = data->cache->findMeshCadGeometry(cacheKey);
+		}
+	    }
+	}
+	if (cachedWire) {
+	    brlobol_performance_counter_add(hadCachedWire ?
+		BRLOBOL_PERF_MESH_CACHE_HITS : BRLOBOL_PERF_MESH_CACHE_MISSES,
+		1);
+	    char *path = db_path_to_string(pathp);
+	    const char *typeLabel = cachedWire->sourceType.empty() ? "wire" :
+		cachedWire->sourceType.c_str();
+	    const char *geometryKind = cachedWire->geometryKind.empty() ? "line" :
+		cachedWire->geometryKind.c_str();
+	    compact_occurrence_build input;
+	    input.occurrence.geometry = cachedWire->geometry;
+	    input.occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
+	    input.occurrence.summary = compact_occurrence_tree_summary(
+		data->source, tsp, path, dp->d_namep,
+		geometryKind && BU_STR_EQUAL(geometryKind, "annotation") ?
+		"annotation" : typeLabel,
+		geometryKind, data->revision,
+		BRLObolRealizedShapeSummary::SHAPE_VLIST);
+	    input.occurrence.occurrenceIndex =
+		data->source->occurrenceIndex.getValue();
+	    input.occurrence.booleanOperation =
+		data->source->booleanOperation.getValue();
+	    input.semantic = compact_semantic_from_summary(
+		input.occurrence.summary);
+	    input.dashed = (tsp->ts_sofar & TS_SOFAR_MINUS) ? TRUE : FALSE;
+	    const size_t entryCount = data->compact_index->entries.size();
+	    compact_add_occurrence(data->source, *data->compact_index, input,
+		data->compact_ordinal, data->compact_unsupported);
+	    compact_apply_walk_identity(data->source, *data->compact_index,
+		entryCount, tsp, pathp, walkOccurrenceIdentity, duplicateOrdinal);
+	    SbBox3f bounds = database_source_transform_bounds(
+		compact_part_geometry_bounds(cachedWire->geometry),
+		input.occurrence.localTransform);
+	    if (!bounds.isEmpty()) {
+		data->compact_bounds.extendBy(bounds);
+		data->compact_bounds_valid = TRUE;
+	    }
+	    data->realized_shapes++;
+	    if (path)
+		bu_free(path, "db_path_to_string");
+	    return make_nop_tree();
+	}
     }
 
     SoBRLVListShape *sharedVListShape = NULL;
@@ -5610,6 +6664,11 @@ static union tree *
 		input.occurrence.sourceMeshRequestValid =
 		    sharedMeshShape->makeSourceMeshRequest(
 			input.occurrence.sourceMeshRequest);
+	    else if (cachedMesh && cachedMesh->sourceMeshRequestValid) {
+		input.occurrence.sourceMeshRequestValid = TRUE;
+		input.occurrence.sourceMeshRequest =
+		    cachedMesh->sourceMeshRequest;
+	    }
 	    input.occurrence.summary = compact_occurrence_tree_summary(
 		data->source, tsp, path, dp->d_namep, typeLabel, geometryKind,
 		data->revision, BRLObolRealizedShapeSummary::SHAPE_MESH);
@@ -5635,6 +6694,12 @@ static union tree *
 		compact_source_mesh_request_sync(
 		    input.occurrence.sourceMeshRequest,
 		    input.occurrence.summary);
+	    if (input.occurrence.sourceMeshRequestValid)
+		compact_summary_lod_from_source_mesh_request(
+		    input.occurrence.summary, input.occurrence.sourceMeshRequest);
+	    if (input.occurrence.sourceMeshRequestValid)
+		cache_mesh_cad_source_request(data->cache, cacheKey,
+		    input.occurrence.sourceMeshRequest);
 	}
 	if (!input.occurrence.geometry) {
 	    data->compact_unsupported = 1;
@@ -6315,41 +7380,32 @@ cad_mesh_part_geometry(const SoBRLMeshShape *shape,
 	mesh.bounds.extendBy(geom->point[i]);
     }
     mesh.indices.reserve(static_cast<size_t>(geom->coordIndex.getNum()));
+    std::vector<int32_t> cornerIndices;
+    cornerIndices.reserve(static_cast<size_t>(geom->coordIndex.getNum()));
     for (int i = 0; i < geom->coordIndex.getNum(); i++) {
 	const int idx = geom->coordIndex[i];
 	if (idx < 0 || idx >= geom->point.getNum())
 	    return 0;
 	mesh.indices.push_back(static_cast<uint32_t>(idx));
+	cornerIndices.push_back(idx);
     }
     if (mesh.indices.empty() || mesh.bounds.isEmpty())
 	return 0;
 
-    const SbBool hiddenLine = shape->hiddenLine.getValue() ||
-	shape->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE;
-    if (hiddenLine) {
-	obol::WireRep wire;
-	wire.bounds = mesh.bounds;
-	std::unordered_set<uint64_t> edges;
-	uint32_t segmentId = 0;
-	auto addEdge = [&](uint32_t a, uint32_t b) {
-	    if (a > b)
-		std::swap(a, b);
-	    const uint64_t key = (static_cast<uint64_t>(a) << 32) | b;
-	    if (!edges.insert(key).second)
-		return;
-	    wire.segmentPoints.push_back(mesh.positions[a]);
-	    wire.segmentPoints.push_back(mesh.positions[b]);
-	    wire.segmentIds.push_back(segmentId++);
-	};
-	for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
-	    addEdge(mesh.indices[i], mesh.indices[i + 1]);
-	    addEdge(mesh.indices[i + 1], mesh.indices[i + 2]);
-	    addEdge(mesh.indices[i + 2], mesh.indices[i]);
-	}
-	if (!wire.segmentPoints.empty())
-	    geometry.wire = std::move(wire);
+    std::vector<SbVec3f> cornerNormals;
+    if (geom->normal.getNum() == geom->coordIndex.getNum()) {
+	cornerNormals.reserve(static_cast<size_t>(geom->normal.getNum()));
+	for (int i = 0; i < geom->normal.getNum(); ++i)
+	    cornerNormals.push_back(geom->normal[i]);
     }
+    sanitize_triangle_normals(cornerNormals, mesh.positions, cornerIndices);
+    if (!canonicalize_corner_normal_mesh(mesh, cornerNormals))
+	return 0;
+
     geometry.shaded = std::move(mesh);
+    if (shape->hiddenLine.getValue() ||
+	shape->drawMode.getValue() == BRLOBOL_LOD_DRAW_HIDDEN_LINE)
+	(void)cad_mesh_append_hidden_line_edges(geometry);
     return 1;
 }
 
@@ -6675,6 +7731,14 @@ cad_mesh_payload_part_geometry(const BRLObolLodMeshPayload &payload,
 	}
 	if (mesh.indices.empty())
 	    return 0;
+	std::vector<int32_t> cornerIndices;
+	cornerIndices.reserve(payload.coordIndex.size());
+	for (const int index : payload.coordIndex)
+	    cornerIndices.push_back(index);
+	std::vector<SbVec3f> cornerNormals;
+	sanitize_triangle_normals(cornerNormals, mesh.positions, cornerIndices);
+	if (!canonicalize_corner_normal_mesh(mesh, cornerNormals))
+	    return 0;
 	geometry.shaded = mesh;
     }
 
@@ -6710,6 +7774,112 @@ cad_mesh_payload_part_geometry(const BRLObolLodMeshPayload &payload,
     }
 
     return 1;
+}
+
+static int
+cad_source_mesh_request_from_geometry(BRLObolSourceMeshRequest &request,
+	const obol::PartGeometry &geometry)
+{
+    request.clear();
+    if (!geometry.shaded)
+	return 0;
+
+    const obol::TriMesh &mesh = *geometry.shaded;
+    if (mesh.positions.empty() || mesh.indices.empty() ||
+	mesh.indices.size() % 3u || mesh.bounds.isEmpty())
+	return 0;
+    request.faceCount = static_cast<uint64_t>(mesh.indices.size() / 3u);
+    request.pointCount = static_cast<uint64_t>(mesh.positions.size());
+    request.bounds = mesh.bounds;
+    return 1;
+}
+
+static int
+cad_mesh_lod_display_geometry_from_cache(obol::PartGeometry &display,
+	BRLObolSourceMeshRequest &sourceRequest,
+	const SoBRLDatabaseSource *source, struct db_i *dbip,
+	const char *sourceName)
+{
+    if (!source || !dbip || !sourceName || !sourceName[0] ||
+	!source_mesh_lod_active(source) || !sourceRequest.faceCount ||
+	!sourceRequest.pointCount || sourceRequest.bounds.isEmpty())
+	return 0;
+
+    struct BRLObolMeshLodCacheStatus status =
+	BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    if (brlobol_mesh_lod_cache_status(dbip, sourceName, &status) != BRLCAD_OK)
+	return 0;
+    if (!status.has_cache_key || !status.has_cached_payload ||
+	status.stale_cache_entry) {
+	if (brlobol_mesh_lod_cache_refresh(dbip, sourceName, &status) !=
+	    BRLCAD_OK)
+	    return 0;
+    }
+    if (!status.has_cache_key || !status.has_cached_payload ||
+	status.stale_cache_entry)
+	return 0;
+
+    struct BRLObolMeshLod *lod = brlobol_mesh_lod_get(dbip, sourceName);
+    if (!lod)
+	return 0;
+
+    int loaded = 0;
+    struct bv_view_info viewInfo;
+    source_view_info(&viewInfo, source);
+    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
+    if (brlobol_mesh_lod_load_view(lod, &viewInfo, 0) >= 0 &&
+	brlobol_mesh_lod_info_get(lod, &info)) {
+	BRLObolLodRequest request;
+	request.databaseId = dbip->dbi_filename ? dbip->dbi_filename : "";
+	request.databaseRevision = source->sourceRevision.getValue();
+	request.sourceRevision = source->sourceRevision.getValue();
+	request.sourceContentHash = status.cache_key;
+	request.objectPath = sourceName;
+	request.objectName = sourceName;
+	request.viewRevision = source->viewRevision.getValue();
+	request.policyRevision = 0;
+	request.drawMode = BRLOBOL_LOD_DRAW_SHADED;
+	request.providerId = "brlobol_mesh_lod";
+	request.providerVersion = "brlobol-cache-v1";
+	request.qualityTier = BRLOBOL_LOD_QUALITY_FAST_DISPLAY;
+	request.bounds = sourceRequest.bounds;
+	request.sourceCounts.faceCount = sourceRequest.faceCount;
+	request.sourceCounts.pointCount = sourceRequest.pointCount;
+
+	BRLObolLodResult result =
+	    brlobol_lod_result_from_mesh_lod_info(request, info, &status);
+	struct BRLObolMeshLodData data;
+	obol::PartGeometry generated;
+	if (result.providerStatus == BRLOBOL_LOD_PROVIDER_READY &&
+	    brlobol_mesh_lod_data_get(lod, &data) &&
+	    brlobol_lod_mesh_payload_from_mesh_lod_data(result.mesh, data) &&
+	    cad_mesh_payload_part_geometry(result.mesh, 0, 1, generated)) {
+	    display = std::move(generated);
+	    sourceRequest.lodAvailable = 1;
+	    sourceRequest.lodActiveLevel = result.geometry.activeLevel;
+	    sourceRequest.lodFaceCount =
+		static_cast<uint32_t>(std::min<uint64_t>(result.counts.faceCount,
+		    std::numeric_limits<uint32_t>::max()));
+	    sourceRequest.lodPointCount =
+		static_cast<uint32_t>(std::min<uint64_t>(result.counts.pointCount,
+		    std::numeric_limits<uint32_t>::max()));
+	    sourceRequest.lodOriginalPointCount = static_cast<uint32_t>(
+		std::min<uint64_t>(result.counts.originalPointCount,
+		    std::numeric_limits<uint32_t>::max()));
+	    sourceRequest.lodNormalCount =
+		static_cast<uint32_t>(std::min<uint64_t>(result.counts.normalCount,
+		    std::numeric_limits<uint32_t>::max()));
+	    sourceRequest.lodHasSnappedPoints = result.hasSnappedPoints ? 1 : 0;
+	    sourceRequest.lodHasNormals = result.hasNormals ? 1 : 0;
+	    sourceRequest.lodBoundsMin = result.bounds.getMin();
+	    sourceRequest.lodBoundsMax = result.bounds.getMax();
+	    loaded = 1;
+	}
+    }
+
+    brlobol_mesh_lod_memshrink(lod);
+    brlobol_mesh_lod_destroy(lod);
+    return loaded;
 }
 
 static std::string
@@ -6773,7 +7943,7 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
     const std::string assemblyKey =
 	cad_view_lod_assembly_key(source, payload, matrix);
     if (payload->assembly &&
-	strcmp(payload->assemblyKey.getString(), assemblyKey.c_str()) == 0)
+	bu_strcmp(payload->assemblyKey.getString(), assemblyKey.c_str()) == 0)
 	return static_cast<SoBRLCadAssembly *>(payload->assembly);
 
     obol::PartGeometry geometry;
@@ -6874,7 +8044,7 @@ cad_lod_path_equal(const SbString &a, const SbString &b)
 	ap++;
     if (bp[0] == '/')
 	bp++;
-    return strcmp(ap, bp) == 0;
+    return bu_strcmp(ap, bp) == 0;
 }
 
 static const BRLObolViewLodState::CadPayload *
@@ -6952,7 +8122,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     const std::string assemblyKey =
 	cad_compact_view_lod_key(this, payloads);
     if (owner->assembly &&
-	strcmp(owner->assemblyKey.getString(), assemblyKey.c_str()) == 0) {
+	bu_strcmp(owner->assemblyKey.getString(), assemblyKey.c_str()) == 0) {
 	SoBRLCadAssembly *assembly =
 	    static_cast<SoBRLCadAssembly *>(owner->assembly);
 	assembly->setHiddenInstances(this->compactIndex->hiddenInstances);
@@ -7409,12 +8579,103 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
 }
 
 static void
+compact_index_bounds_add(BRLObolCompactInstanceIndex &index,
+	const BRLObolCompactInstanceEntry &entry)
+{
+    const SbBox3f bounds = database_source_transform_bounds(
+	compact_part_geometry_bounds(entry.geometry), entry.localTransform);
+    if (bounds.isEmpty())
+	return;
+
+    const SbVec3f minimum = bounds.getMin();
+    const SbVec3f maximum = bounds.getMax();
+    for (int axis = 0; axis < 3; axis++) {
+	index.sourceBoundsMinimum[axis].insert(minimum[axis]);
+	index.sourceBoundsMaximum[axis].insert(maximum[axis]);
+    }
+}
+
+static void
+compact_index_bounds_remove(BRLObolCompactInstanceIndex &index,
+	const BRLObolCompactInstanceEntry &entry)
+{
+    const SbBox3f bounds = database_source_transform_bounds(
+	compact_part_geometry_bounds(entry.geometry), entry.localTransform);
+    if (bounds.isEmpty())
+	return;
+
+    const SbVec3f minimum = bounds.getMin();
+    const SbVec3f maximum = bounds.getMax();
+    for (int axis = 0; axis < 3; axis++) {
+	std::multiset<float>::iterator minimumIt =
+	    index.sourceBoundsMinimum[axis].find(minimum[axis]);
+	if (minimumIt != index.sourceBoundsMinimum[axis].end())
+	    index.sourceBoundsMinimum[axis].erase(minimumIt);
+	std::multiset<float>::iterator maximumIt =
+	    index.sourceBoundsMaximum[axis].find(maximum[axis]);
+	if (maximumIt != index.sourceBoundsMaximum[axis].end())
+	    index.sourceBoundsMaximum[axis].erase(maximumIt);
+    }
+}
+
+static SbBool
+compact_index_source_bounds(const BRLObolCompactInstanceIndex &index,
+	SbBox3f &bounds)
+{
+    bounds.makeEmpty();
+    for (int axis = 0; axis < 3; axis++) {
+	if (index.sourceBoundsMinimum[axis].empty() ||
+	    index.sourceBoundsMaximum[axis].empty())
+	    return FALSE;
+    }
+
+    bounds = SbBox3f(SbVec3f(*index.sourceBoundsMinimum[0].begin(),
+	*index.sourceBoundsMinimum[1].begin(),
+	*index.sourceBoundsMinimum[2].begin()),
+	SbVec3f(*index.sourceBoundsMaximum[0].rbegin(),
+	*index.sourceBoundsMaximum[1].rbegin(),
+	*index.sourceBoundsMaximum[2].rbegin()));
+    return TRUE;
+}
+
+static void
 compact_rebuild_entry_index(BRLObolCompactInstanceIndex &index)
 {
     index.entryIndex.clear();
     index.entryIndex.reserve(index.entries.size());
-    for (size_t i = 0; i < index.entries.size(); i++)
+
+    index.pathEntryOrder.clear();
+    index.pathEntryOrder.reserve(index.entries.size());
+    index.entryIndicesByLeaf.clear();
+    index.entryIndicesByLeaf.reserve(index.entries.size());
+    index.entryIndicesBySourceName.clear();
+    index.entryIndicesBySourceName.reserve(index.entries.size());
+    index.partReferenceCounts.clear();
+    index.partReferenceCounts.reserve(index.parts.size());
+    for (int axis = 0; axis < 3; axis++) {
+	index.sourceBoundsMinimum[axis].clear();
+	index.sourceBoundsMaximum[axis].clear();
+    }
+    for (size_t i = 0; i < index.entries.size(); i++) {
 	index.entryIndex[index.entries[i].instance] = i;
+	index.pathEntryOrder.push_back(i);
+	const std::string leaf = database_source_leaf_component(
+	    index.entries[i].semantic.path);
+	if (!leaf.empty())
+	    index.entryIndicesByLeaf[leaf].push_back(i);
+	const char *sourceName = index.entries[i].semantic.sourceName.getString();
+	if (sourceName && sourceName[0])
+	    index.entryIndicesBySourceName[sourceName].push_back(i);
+	index.partReferenceCounts[index.entries[i].part]++;
+	compact_index_bounds_add(index, index.entries[i]);
+	}
+    std::stable_sort(index.pathEntryOrder.begin(), index.pathEntryOrder.end(),
+	[&index](size_t left, size_t right) {
+	    return bu_strcmp(database_source_skip_leading_slash(
+		index.entries[left].semantic.path.getString()),
+		database_source_skip_leading_slash(
+		index.entries[right].semantic.path.getString())) < 0;
+	});
 }
 
 static void
@@ -7757,6 +9018,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	compact_assembly_draw_mode(this->compiledAssembly, this,
 	    this->compactIndex);
 	this->compiledAssemblyActive = TRUE;
+	this->ensureCompiledAssemblyChild();
 	this->compiledAssemblyNodeId = sourceNodeId;
 	this->compiledAssemblyDirty = FALSE;
 	return 1;
@@ -7803,6 +9065,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	this->compiledAssemblyActive = TRUE;
 	this->compiledCompactStructureSignature = structureSignature;
 	this->compiledAssembly->endUpdate();
+	this->ensureCompiledAssemblyChild();
 	this->compiledAssemblyNodeId = sourceNodeId;
 	this->compiledAssemblyDirty = FALSE;
 	return 1;
@@ -8205,6 +9468,9 @@ void
 SoBRLDatabaseSource::clearCompiledAssembly(void)
 {
     if (this->compiledAssembly) {
+	const int childIndex = this->findChild(this->compiledAssembly);
+	if (childIndex >= 0)
+	    this->removeChild(childIndex);
 	this->compiledAssembly->unref();
 	this->compiledAssembly = NULL;
     }
@@ -8215,6 +9481,13 @@ SoBRLDatabaseSource::clearCompiledAssembly(void)
     this->compiledCompactHiddenSignature = 0;
     this->compiledCompactUnpickableSignature = 0;
     this->markCadBatchDirty();
+}
+
+void
+SoBRLDatabaseSource::ensureCompiledAssemblyChild(void)
+{
+    if (this->compiledAssembly && this->findChild(this->compiledAssembly) < 0)
+	this->addChild(this->compiledAssembly);
 }
 
 void
@@ -8452,7 +9725,7 @@ SoBRLDatabaseSource::setRealizationState(int nextStatus,
 	this->staleReason = nextStaleReason;
 	changed = 1;
     }
-    if (strcmp(this->realizationDiagnostic.getValue().getString(),
+    if (bu_strcmp(this->realizationDiagnostic.getValue().getString(),
 	       nextDiagnostic.getString()) != 0) {
 	this->realizationDiagnostic = nextDiagnostic;
 	changed = 1;
@@ -8636,7 +9909,7 @@ SoBRLDatabaseSource::setDatabaseMetadataState(SbBool metadataValid,
 	this->databaseMaterialColor = SbColor(1.0f, 1.0f, 1.0f);
 	changed = 1;
     }
-    if (strcmp(this->databaseMaterialShader.getValue().getString(),
+    if (bu_strcmp(this->databaseMaterialShader.getValue().getString(),
 	       metadataMaterialShader.getString()) != 0) {
 	this->databaseMaterialShader = metadataMaterialShader;
 	changed = 1;
@@ -8690,7 +9963,7 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
 		entry.semantic.materialColorValid &&
 		database_source_color_equal(entry.semantic.materialColor,
 		    resolved.color) &&
-		strcmp(entry.semantic.materialShader.getString(),
+		bu_strcmp(entry.semantic.materialShader.getString(),
 		    shader.getString()) == 0)
 		continue;
 	    entry.semantic.regionId = resolved.regionId;
@@ -9186,19 +10459,19 @@ SoBRLDatabaseSource::configureDatabaseSourceInstanceRepresentation(
 	(sourceInstanceKey && sourceInstanceKey[0]) ?
 	sourceInstanceKey : stableSourcePath.c_str();
     const char *effectiveInstanceKey = stableInstanceKey.c_str();
-    if (strcmp(this->instanceKey.getValue().getString(),
+    if (bu_strcmp(this->instanceKey.getValue().getString(),
 	       effectiveInstanceKey) != 0)
 	reason |= STALE_SOURCE;
     const std::string stableRepresentationKey =
 	(sourceRepresentationKey && sourceRepresentationKey[0]) ?
 	sourceRepresentationKey : stableInstanceKey.c_str();
     const char *effectiveRepresentationKey = stableRepresentationKey.c_str();
-    if (strcmp(this->representationKey.getValue().getString(),
+    if (bu_strcmp(this->representationKey.getValue().getString(),
 	       effectiveRepresentationKey) != 0)
 	reason |= STALE_SOURCE;
     if (this->representationMode.getValue() != sourceRepresentationMode)
 	reason |= STALE_DRAW;
-    if (strcmp(this->path.getValue().getString(),
+    if (bu_strcmp(this->path.getValue().getString(),
 	       stableSourcePath.c_str()) != 0)
 	reason |= STALE_SOURCE;
     if (this->sourceRevision.getValue() != revision)
@@ -9468,9 +10741,9 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
 {
     if (!detached || !detached->compactIndex ||
 	detached->compactIndex->entries.empty() ||
-	strcmp(this->instanceKey.getValue().getString(),
+	bu_strcmp(this->instanceKey.getValue().getString(),
 	    detached->instanceKey.getValue().getString()) != 0 ||
-	strcmp(this->path.getValue().getString(),
+	bu_strcmp(this->path.getValue().getString(),
 	    detached->path.getValue().getString()) != 0 ||
 	this->sourceRevision.getValue() !=
 	    detached->sourceRevision.getValue() ||
@@ -9776,6 +11049,15 @@ SoBRLDatabaseSource::GLRenderBelowPath(SoGLRenderAction *action)
     }
 
     inherited::GLRenderBelowPath(action);
+}
+
+void
+SoBRLDatabaseSource::callback(SoCallbackAction *action)
+{
+    /* Non-GL renderers traverse the retained aggregate through its one node. */
+    if (this->hasCompactInstanceIndex())
+	(void)this->syncCompiledAssembly();
+    inherited::callback(action);
 }
 
 void
@@ -11441,7 +12723,7 @@ static SbBool
 vlist_shape_is_auxiliary(const SoBRLVListShape *shape)
 {
     return shape &&
-	   strcmp(shape->recordRole.getValue().getString(), "auxiliary") == 0 ?
+	   bu_strcmp(shape->recordRole.getValue().getString(), "auxiliary") == 0 ?
 	   TRUE : FALSE;
 }
 
@@ -11459,7 +12741,7 @@ SoBRLDatabaseSource::findAuxiliaryVListShape(const char *name) const
 
 	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(node);
 	if (vlist_shape_is_auxiliary(shape) &&
-	    strcmp(shape->geometryName.getValue().getString(), name) == 0)
+	    bu_strcmp(shape->geometryName.getValue().getString(), name) == 0)
 	    return shape;
     }
 
@@ -11482,8 +12764,8 @@ SoBRLDatabaseSource::findAuxiliarySource(const char *sourcePath) const
 	    continue;
 
 	const char *candidate = source->path.getValue().getString();
-	if (strcmp(candidate, sourcePath) == 0 ||
-	    strcmp(database_source_skip_leading_slash(candidate),
+	if (bu_strcmp(candidate, sourcePath) == 0 ||
+	    bu_strcmp(database_source_skip_leading_slash(candidate),
 		   database_source_skip_leading_slash(sourcePath)) == 0)
 	    return source;
     }
@@ -11892,6 +13174,14 @@ SoBRLDatabaseSource::getCompactInstanceCount(void) const
     return static_cast<int>(this->compactIndex->entries.size());
 }
 
+int
+SoBRLDatabaseSource::getCompactPartCount(void) const
+{
+    if (!this->hasCompactInstanceIndex())
+	return 0;
+    return static_cast<int>(this->compactIndex->parts.size());
+}
+
 SbBool
 SoBRLDatabaseSource::getCompactInstanceHandle(
     int index, BRLObolCompactInstanceHandle &handle) const
@@ -11907,6 +13197,28 @@ SoBRLDatabaseSource::getCompactInstanceHandle(
     handle.instanceWord0 = entry.instance.w0;
     handle.instanceWord1 = entry.instance.w1;
     return handle.isValid();
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactOccurrence(
+    int index, BRLObolCompactOccurrence &occurrence) const
+{
+    occurrence = BRLObolCompactOccurrence();
+    if (!this->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->compactIndex->entries.size())
+	return FALSE;
+
+    const BRLObolCompactInstanceEntry &entry =
+	this->compactIndex->entries[static_cast<size_t>(index)];
+    occurrence.geometry = entry.geometry;
+    occurrence.summary = entry.shapeSummary;
+    occurrence.localTransform = entry.localTransform;
+    occurrence.lodBacked = entry.lodBacked;
+    occurrence.sourceMeshRequestValid = entry.sourceMeshRequestValid;
+    occurrence.sourceMeshRequest = entry.sourceMeshRequest;
+    occurrence.occurrenceIndex = entry.occurrenceIndex;
+    occurrence.booleanOperation = entry.booleanOperation;
+    return occurrence.geometry ? TRUE : FALSE;
 }
 
 const BRLObolCompactInstanceEntry *
@@ -11980,30 +13292,62 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
     return TRUE;
 }
 
-static SbBool
-compact_path_matches(const char *candidate, const char *path,
-    SbBool includeDescendants)
+template <typename Visitor>
+static void
+compact_visit_entries_for_path(const BRLObolCompactInstanceIndex *index,
+	const char *queryPath, SbBool includeDescendants, Visitor visitor)
 {
-    candidate = database_source_skip_leading_slash(candidate ? candidate : "");
-    path = database_source_skip_leading_slash(path ? path : "");
-    if (!path[0])
-	return TRUE;
-    if (strcmp(candidate, path) == 0)
-	return TRUE;
-    if (!strchr(path, '/')) {
-	const char *leaf = strrchr(candidate, '/');
-	leaf = leaf ? leaf + 1 : candidate;
-	const char *suffix = strchr(leaf, '@');
-	const size_t leafLength = suffix ? static_cast<size_t>(suffix - leaf) :
-	    strlen(leaf);
-	if (strlen(path) == leafLength && strncmp(leaf, path, leafLength) == 0)
-	    return TRUE;
+    if (!index)
+	return;
+
+    const char *query = database_source_skip_leading_slash(
+	queryPath ? queryPath : "");
+    if (!query[0]) {
+	for (size_t entryIndex : index->pathEntryOrder)
+	    visitor(entryIndex);
+	return;
     }
-    if (!includeDescendants)
-	return FALSE;
-    const size_t len = strlen(path);
-    return strncmp(candidate, path, len) == 0 &&
-	(candidate[len] == '/' || candidate[len] == '@') ? TRUE : FALSE;
+
+    const bool leafQuery = !strchr(query, '/') && !strchr(query, '@');
+    if (leafQuery) {
+	auto leafEntries = index->entryIndicesByLeaf.find(query);
+	if (leafEntries != index->entryIndicesByLeaf.end()) {
+	    for (size_t entryIndex : leafEntries->second)
+		visitor(entryIndex);
+	}
+	if (!includeDescendants)
+	    return;
+    }
+
+    const std::string pathKey(query);
+    const size_t prefixLength = pathKey.size();
+    std::vector<size_t>::const_iterator entryIt = std::lower_bound(
+	index->pathEntryOrder.begin(), index->pathEntryOrder.end(), pathKey,
+	[index](size_t entryIndex, const std::string &key) {
+	    return bu_strcmp(database_source_skip_leading_slash(
+		index->entries[entryIndex].semantic.path.getString()),
+		key.c_str()) < 0;
+	});
+    for (; entryIt != index->pathEntryOrder.end(); ++entryIt) {
+	const BRLObolCompactInstanceEntry &entry =
+	    index->entries[*entryIt];
+	const char *candidate = database_source_skip_leading_slash(
+	    entry.semantic.path.getString());
+	if (bu_strncmp(candidate, pathKey.c_str(), prefixLength) != 0)
+	    break;
+	const char suffix = candidate[prefixLength];
+	if (!includeDescendants && suffix != '\0')
+	    break;
+	if (includeDescendants && suffix != '\0' && suffix != '/' &&
+	    suffix != '@')
+	    break;
+	if (leafQuery && database_source_leaf_component(entry.semantic.path) ==
+	    pathKey)
+	    continue;
+	visitor(*entryIt);
+	if (!includeDescendants)
+	    continue;
+    }
 }
 
 int
@@ -12013,12 +13357,10 @@ SoBRLDatabaseSource::getCompactInstanceCountForPath(const char *queryPath,
     if (!this->compactIndex)
 	return 0;
     int count = 0;
-    for (const BRLObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries) {
-	if (compact_path_matches(entry.semantic.path.getString(), queryPath,
-		includeDescendants))
+    compact_visit_entries_for_path(this->compactIndex, queryPath,
+	includeDescendants, [&count](size_t UNUSED(entryIndex)) {
 	    count++;
-    }
+	});
     return count;
 }
 
@@ -12029,17 +13371,18 @@ SoBRLDatabaseSource::getCompactInstanceBoundsForPath(const char *queryPath,
     bounds.makeEmpty();
     if (!this->compactIndex || !this->visible.getValue())
 	return FALSE;
-    for (const BRLObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries) {
-	if (!entry.visible ||
-	    !compact_path_matches(entry.semantic.path.getString(), queryPath,
-		includeDescendants))
-	    continue;
+
+    compact_visit_entries_for_path(this->compactIndex, queryPath,
+	includeDescendants, [this, &bounds](size_t entryIndex) {
+	const BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[entryIndex];
+	if (!entry.visible)
+	    return;
 	const SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
 	if (!localBounds.isEmpty())
 	    bounds.extendBy(database_source_transform_bounds(localBounds,
 		entry.localToSource));
-    }
+    });
     return bounds.isEmpty() ? FALSE : TRUE;
 }
 
@@ -12053,10 +13396,12 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
     if (!this->compactIndex)
 	return 0;
     int changed = 0;
-    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
-	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
-		includeDescendants))
-	    continue;
+
+    compact_visit_entries_for_path(this->compactIndex, queryPath,
+	includeDescendants, [this, visibleValid, nextVisible, selectedValid,
+	nextSelected, highlightedValid, nextHighlighted, &changed](size_t entryIndex) {
+	BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[entryIndex];
 	bool visibilityChanged = false;
 	bool selectionChanged = false;
 	if (visibleValid && entry.visible != nextVisible) {
@@ -12082,7 +13427,7 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 		entry.selectionRevision);
 	    entry.style = compact_effective_style(entry);
 	}
-    }
+    });
     if (changed) {
 	this->rebuildCompactInstanceDisplayState(FALSE);
 	this->markCompiledAssemblyDirty();
@@ -12099,15 +13444,18 @@ SoBRLDatabaseSource::setCompactInstanceSelectableForPath(
     if (!this->compactIndex)
 	return 0;
     int changed = 0;
-    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
-	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
-		includeDescendants) || entry.selectable == nextSelectable)
-	    continue;
+
+    compact_visit_entries_for_path(this->compactIndex, queryPath,
+	includeDescendants, [this, nextSelectable, &changed](size_t entryIndex) {
+	BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[entryIndex];
+	if (entry.selectable == nextSelectable)
+	    return;
 	entry.selectable = nextSelectable;
 	entry.selectionRevision = compact_next_revision(
 	    entry.selectionRevision);
 	changed++;
-    }
+    });
     if (changed) {
 	this->rebuildCompactInstanceDisplayState(FALSE);
 	this->markCompiledAssemblyDirty();
@@ -12124,16 +13472,19 @@ SoBRLDatabaseSource::setCompactInstanceRegionIdForPath(const char *queryPath,
     if (!this->compactIndex)
 	return 0;
     int changed = 0;
-    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
-	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
-		includeDescendants) || entry.semantic.regionId == regionId)
-	    continue;
+
+    compact_visit_entries_for_path(this->compactIndex, queryPath,
+	includeDescendants, [this, regionId, &changed](size_t entryIndex) {
+	BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[entryIndex];
+	if (entry.semantic.regionId == regionId)
+	    return;
 	entry.semantic.regionId = regionId;
 	entry.appearanceRevision = compact_next_revision(
 	    entry.appearanceRevision);
 	compact_sync_shape_summary_state(entry);
 	changed++;
-    }
+    });
     if (changed) {
 	this->markCompiledAssemblyDirty();
 	this->markCadBatchDirty();
@@ -12149,14 +13500,17 @@ SoBRLDatabaseSource::setCompactInstanceRegionMetadataForPath(
     if (!this->compactIndex)
 	return 0;
     int changed = 0;
-    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
-	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
-		includeDescendants) ||
-	    (entry.semantic.regionId == regionId &&
+
+    compact_visit_entries_for_path(this->compactIndex, queryPath,
+	includeDescendants, [this, regionId, airCode, materialId, los,
+	&changed](size_t entryIndex) {
+	BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[entryIndex];
+	if (entry.semantic.regionId == regionId &&
 	     entry.semantic.airCode == airCode &&
 	     entry.semantic.materialId == materialId &&
-	     entry.semantic.los == los))
-	    continue;
+	     entry.semantic.los == los)
+	    return;
 	entry.semantic.regionId = regionId;
 	entry.semantic.airCode = airCode;
 	entry.semantic.materialId = materialId;
@@ -12165,7 +13519,7 @@ SoBRLDatabaseSource::setCompactInstanceRegionMetadataForPath(
 	    entry.appearanceRevision);
 	compact_sync_shape_summary_state(entry);
 	changed++;
-    }
+    });
     if (changed) {
 	this->markCompiledAssemblyDirty();
 	this->markCadBatchDirty();
@@ -12182,10 +13536,13 @@ SoBRLDatabaseSource::setCompactInstanceMetadataForPath(const char *queryPath,
     if (!this->compactIndex)
 	return 0;
     int changed = 0;
-    for (BRLObolCompactInstanceEntry &entry : this->compactIndex->entries) {
-	if (!compact_path_matches(entry.semantic.path.getString(), queryPath,
-		includeDescendants))
-	    continue;
+
+    compact_visit_entries_for_path(this->compactIndex, queryPath,
+	includeDescendants, [this, regionId, airCode, materialId, los,
+	nextMaterialColorValid, &nextMaterialColor, &materialShader,
+	&changed](size_t entryIndex) {
+	BRLObolCompactInstanceEntry &entry =
+	    this->compactIndex->entries[entryIndex];
 	const bool same = entry.semantic.regionId == regionId &&
 	    entry.semantic.airCode == airCode &&
 	    entry.semantic.materialId == materialId &&
@@ -12193,10 +13550,10 @@ SoBRLDatabaseSource::setCompactInstanceMetadataForPath(const char *queryPath,
 	    entry.semantic.materialColorValid == nextMaterialColorValid &&
 	    (!nextMaterialColorValid || database_source_color_equal(
 		entry.semantic.materialColor, nextMaterialColor)) &&
-	    strcmp(entry.semantic.materialShader.getString(),
+	    bu_strcmp(entry.semantic.materialShader.getString(),
 		materialShader.getString()) == 0;
 	if (same)
-	    continue;
+	    return;
 	entry.semantic.regionId = regionId;
 	entry.semantic.airCode = airCode;
 	entry.semantic.materialId = materialId;
@@ -12216,7 +13573,7 @@ SoBRLDatabaseSource::setCompactInstanceMetadataForPath(const char *queryPath,
 	    entry.appearanceRevision);
 	compact_sync_shape_summary_state(entry);
 	changed++;
-    }
+    });
     if (changed) {
 	this->rebuildCompactInstanceDisplayState(FALSE);
 	this->markCompiledAssemblyDirty();
@@ -12297,17 +13654,18 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     }
 
     std::vector<size_t> matching;
-    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
-	const BRLObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[i];
-	const char *entryName = entry.semantic.sourceName.getString();
-	const char *entryPath = entry.semantic.path.getString();
-	const char *entryLeaf = entryPath ? strrchr(entryPath, '/') : NULL;
-	entryLeaf = entryLeaf && entryLeaf[1] ? entryLeaf + 1 : entryPath;
-	if ((entryName && BU_STR_EQUAL(entryName, objectName)) ||
-	    (entryLeaf && BU_STR_EQUAL(entryLeaf, objectName)))
-	    matching.push_back(i);
-    }
+    const std::unordered_map<std::string, std::vector<size_t>>::const_iterator
+	bySourceName = this->compactIndex->entryIndicesBySourceName.find(objectName);
+    if (bySourceName != this->compactIndex->entryIndicesBySourceName.end())
+	matching.insert(matching.end(), bySourceName->second.begin(),
+	    bySourceName->second.end());
+    const std::unordered_map<std::string, std::vector<size_t>>::const_iterator
+	byLeaf = this->compactIndex->entryIndicesByLeaf.find(objectName);
+    if (byLeaf != this->compactIndex->entryIndicesByLeaf.end())
+	matching.insert(matching.end(), byLeaf->second.begin(), byLeaf->second.end());
+    std::sort(matching.begin(), matching.end());
+    matching.erase(std::unique(matching.begin(), matching.end()),
+	matching.end());
     if (matching.empty())
 	return 0;
 
@@ -12325,28 +13683,64 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     const bool wantWire = sourceDrawMode == BRLOBOL_LOD_DRAW_WIRE;
     SoBRLVListShape *sharedWire = NULL;
     SoBRLMeshShape *sharedMesh = NULL;
+    obol::PartGeometry generated;
+    bool geometryValid = false;
+    bool directWire = false;
+    bool directMesh = false;
+    bool replacementLodBacked = false;
+    bool replacementSourceMeshRequestValid = false;
+    BRLObolSourceMeshRequest replacementSourceMeshRequest;
     SbBox3f localBounds;
     (void)local_bounds_from_internal(&validInternal.local, localBounds);
     if (wantWire) {
 	if (validInternal.local.idb_type == ID_BOT)
+	    geometryValid = cad_wire_part_geometry_from_bot(
+		static_cast<const struct rt_bot_internal *>(
+		    validInternal.local.idb_ptr), generated) != 0;
+	else
+	    geometryValid = cad_wire_part_geometry_from_lod_realization_internal(
+		&validInternal.local, this, localBounds, generated) != 0;
+	if (!geometryValid)
+	    geometryValid = cad_wire_part_geometry_from_plot_internal(
+		&validInternal.local, this, generated) != 0;
+	directWire = geometryValid;
+	if (!geometryValid && validInternal.local.idb_type == ID_BOT)
 	    sharedWire = vlist_from_bot_wireframe(
 		static_cast<const struct rt_bot_internal *>(
 		    validInternal.local.idb_ptr));
-	else
+	else if (!geometryValid)
 	    sharedWire = vlist_from_lod_realization_internal(
 		&validInternal.local, this, localBounds);
-	if (!sharedWire)
+	if (!geometryValid && !sharedWire)
 	    sharedWire = vlist_from_plot_internal(&validInternal.local, this);
     } else {
-	sharedMesh = mesh_from_internal(&validInternal.local, this);
-	if (!sharedMesh) {
+	geometryValid = cad_mesh_part_geometry_from_internal(
+	    &validInternal.local, this, generated) != 0;
+	if (geometryValid &&
+	    sourceDrawMode == BRLOBOL_LOD_DRAW_HIDDEN_LINE)
+	    (void)cad_mesh_append_hidden_line_edges(generated);
+	if (geometryValid && generated.shaded &&
+	    this->lodBotThreshold.getValue() > 0 &&
+	    generated.shaded->indices.size() / 3u >=
+	    this->lodBotThreshold.getValue() &&
+	    cad_source_mesh_request_from_geometry(replacementSourceMeshRequest,
+		generated)) {
+	    replacementLodBacked = true;
+	    replacementSourceMeshRequestValid = true;
+	    (void)cad_mesh_lod_display_geometry_from_cache(generated,
+		replacementSourceMeshRequest, this, this->dbip, objectName);
+	}
+	directMesh = geometryValid;
+	if (!geometryValid)
+	    sharedMesh = mesh_from_internal(&validInternal.local, this);
+	if (!geometryValid && !sharedMesh) {
 	    sharedWire = vlist_from_lod_realization_internal(
 		&validInternal.local, this, localBounds);
 	    if (!sharedWire)
 		sharedWire = vlist_from_plot_internal(&validInternal.local, this);
 	}
     }
-    if (!sharedWire && !sharedMesh)
+    if (!geometryValid && !sharedWire && !sharedMesh)
 	return -1;
 
     if (sharedWire)
@@ -12362,13 +13756,12 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	assign_shared_geometry_identity(sharedMesh, objectName, typeLabel,
 	    revision, "surface");
 
-    obol::PartGeometry generated;
-    bool geometryValid = false;
     for (size_t index : matching) {
 	const BRLObolCompactInstanceEntry &entry =
 	    this->compactIndex->entries[index];
-	if ((sharedWire && !entry.wireGeometry && !entry.pointGeometry) ||
-	    (sharedMesh && !entry.meshGeometry)) {
+	if (((sharedWire || directWire) && !entry.wireGeometry &&
+	     !entry.pointGeometry) ||
+	    ((sharedMesh || directMesh) && !entry.meshGeometry)) {
 	    if (sharedWire)
 		sharedWire->unref();
 	    if (sharedMesh)
@@ -12376,13 +13769,13 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    return -1;
 	}
     }
-    if (sharedWire) {
+    if (!geometryValid && sharedWire) {
 	SoBRLVListShape *geometryShape = new SoBRLVListShape;
 	geometryShape->ref();
 	geometryShape->setSharedGeometry(sharedWire);
 	geometryValid = cad_vlist_part_geometry(geometryShape, generated) != 0;
 	geometryShape->unref();
-    } else if (sharedMesh) {
+    } else if (!geometryValid && sharedMesh) {
 	SoBRLMeshShape *geometryShape = new SoBRLMeshShape;
 	geometryShape->ref();
 	geometryShape->setSharedGeometry(sharedMesh);
@@ -12401,7 +13794,8 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     }
 
     std::string partKey;
-    if (!cad_part_key_for_geometry(sharedWire ? "wire" : "mesh",
+    const char *partKind = (sharedWire || directWire) ? "wire" : "mesh";
+    if (!cad_part_key_for_geometry(partKind,
 	generated, partKey)) {
 	if (sharedWire)
 	    sharedWire->unref();
@@ -12409,76 +13803,111 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    sharedMesh->unref();
 	return -1;
     }
-    const obol::PartId partId = obol::CadIdBuilder::hash128(partKey);
-    std::shared_ptr<const obol::PartGeometry> geometry =
-	std::make_shared<const obol::PartGeometry>(std::move(generated));
-    BRLObolCompactPartReference partRef;
-    partRef.part = partId;
-    partRef.geometry = geometry;
-    this->compactIndex->parts.push_back(partRef);
-    this->compactIndex->partIdByKey[partKey] = partId;
-    this->compactIndex->partIdByGeometry[geometry.get()] = partId;
+	obol::PartId partId;
+	std::shared_ptr<const obol::PartGeometry> geometry;
+	const std::map<std::string, obol::PartId>::const_iterator existingPart =
+	this->compactIndex->partIdByKey.find(partKey);
+	if (existingPart != this->compactIndex->partIdByKey.end()) {
+	    partId = existingPart->second;
+	    for (const BRLObolCompactPartReference &partRef :
+		 this->compactIndex->parts) {
+		if (partRef.part == partId) {
+		    geometry = partRef.geometry;
+		    break;
+		}
+	    }
+	}
+	if (!geometry) {
+	    partId = obol::CadIdBuilder::hash128(partKey);
+	    geometry = std::make_shared<const obol::PartGeometry>(
+		std::move(generated));
+	    BRLObolCompactPartReference partRef;
+	    partRef.part = partId;
+	    partRef.geometry = geometry;
+	    this->compactIndex->parts.push_back(partRef);
+	}
+	this->compactIndex->partIdByKey[partKey] = partId;
+	this->compactIndex->partIdByGeometry[geometry.get()] = partId;
 
     std::unordered_set<obol::PartId, std::hash<obol::PartId>> oldParts;
     for (size_t index : matching) {
 	BRLObolCompactInstanceEntry &entry =
 	    this->compactIndex->entries[index];
 	oldParts.insert(entry.part);
+	compact_index_bounds_remove(*this->compactIndex, entry);
+	std::unordered_map<obol::PartId, size_t, std::hash<obol::PartId>>::iterator
+	    oldPartCount = this->compactIndex->partReferenceCounts.find(entry.part);
+	if (oldPartCount != this->compactIndex->partReferenceCounts.end() &&
+	    oldPartCount->second > 0)
+	    oldPartCount->second--;
 	entry.part = partId;
 	entry.geometry = geometry;
 	entry.wireGeometry = geometry->wire ? TRUE : FALSE;
 	entry.pointGeometry = geometry->points ? TRUE : FALSE;
 	entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
+	entry.lodBacked = replacementLodBacked ? TRUE : FALSE;
+	entry.sourceMeshRequestValid = replacementSourceMeshRequestValid ?
+	    TRUE : FALSE;
+	if (entry.sourceMeshRequestValid)
+	    entry.sourceMeshRequest = replacementSourceMeshRequest;
+	else
+	    entry.sourceMeshRequest.clear();
 	entry.geometryRevision = compact_next_revision(entry.geometryRevision);
 	entry.semantic.sourceId = revision;
 	compact_sync_shape_summary(entry);
+	if (entry.sourceMeshRequestValid) {
+	    compact_source_mesh_request_sync(entry.sourceMeshRequest,
+		entry.shapeSummary);
+	    compact_summary_lod_from_source_mesh_request(entry.shapeSummary,
+		entry.sourceMeshRequest);
+	}
+	compact_index_bounds_add(*this->compactIndex, entry);
 	if (index < this->compactIndex->instances.size())
 	    this->compactIndex->instances[index].record.part = partId;
     }
+    this->compactIndex->partReferenceCounts[partId] += matching.size();
     if (sharedWire)
 	sharedWire->unref();
     if (sharedMesh)
 	sharedMesh->unref();
 
-    std::unordered_set<obol::PartId, std::hash<obol::PartId>> liveParts;
-    for (const BRLObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries)
-	liveParts.insert(entry.part);
+    std::unordered_set<obol::PartId, std::hash<obol::PartId>> releasedParts;
+    for (const obol::PartId &oldPart : oldParts) {
+	const std::unordered_map<obol::PartId, size_t,
+	    std::hash<obol::PartId>>::iterator count =
+	    this->compactIndex->partReferenceCounts.find(oldPart);
+	if (count != this->compactIndex->partReferenceCounts.end() &&
+	    count->second == 0) {
+	    releasedParts.insert(oldPart);
+	    this->compactIndex->partReferenceCounts.erase(count);
+	}
+    }
     this->compactIndex->parts.erase(
 	std::remove_if(this->compactIndex->parts.begin(),
 	    this->compactIndex->parts.end(),
 	    [&](const BRLObolCompactPartReference &part) {
-		return oldParts.find(part.part) != oldParts.end() &&
-		       liveParts.find(part.part) == liveParts.end();
+		return releasedParts.find(part.part) != releasedParts.end();
 	    }), this->compactIndex->parts.end());
     for (auto it = this->compactIndex->partIdByKey.begin();
 	 it != this->compactIndex->partIdByKey.end();) {
-	if (oldParts.find(it->second) != oldParts.end() &&
-	    liveParts.find(it->second) == liveParts.end())
+	if (releasedParts.find(it->second) != releasedParts.end())
 	    it = this->compactIndex->partIdByKey.erase(it);
 	else
 	    ++it;
     }
     for (auto it = this->compactIndex->partIdByGeometry.begin();
 	 it != this->compactIndex->partIdByGeometry.end();) {
-	if (oldParts.find(it->second) != oldParts.end() &&
-	    liveParts.find(it->second) == liveParts.end())
+	if (releasedParts.find(it->second) != releasedParts.end())
 	    it = this->compactIndex->partIdByGeometry.erase(it);
 	else
 	    ++it;
     }
 
     SbBox3f bounds;
-    bounds.makeEmpty();
-    for (const BRLObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries) {
-	const SbBox3f entryBounds = database_source_transform_bounds(
-	    compact_part_geometry_bounds(entry.geometry), entry.localTransform);
-	if (!entryBounds.isEmpty())
-	    bounds.extendBy(entryBounds);
-    }
-    if (!bounds.isEmpty())
+    if (compact_index_source_bounds(*this->compactIndex, bounds))
 	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
+    else
+	this->clearSourceBounds();
     this->detachFieldSensors();
     this->sourceRevision = revision;
     mark_source_realized_current(this);

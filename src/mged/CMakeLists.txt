@@ -18,7 +18,7 @@ set(
   cmd.cpp
   color_scheme.c
   columns.c
-  dm-generic.c
+  display-command.c
   dodraw.c
   doevent.c
   scene_refresh.c
@@ -67,7 +67,6 @@ set(
   libtclcad
   libged
   libwdb
-  libdm
   libimgstream
   libnmg
   Threads::Threads
@@ -90,6 +89,18 @@ if(BRLCAD_ENABLE_TCL)
   endif(TK_LIBRARY)
   target_include_directories(mged BEFORE PRIVATE ${MGED_INCLUDE_DIRS})
   add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld)
+  # MGED commands may dispatch libged plugins and ged_exec subprocesses.
+  # Build those runtime helpers with the executable so command-driven LoD
+  # workflows cannot start with a partially populated BRLCAD_ROOT.
+  if(TARGET ged_plugins)
+    add_dependencies(mged ged_plugins)
+  endif(TARGET ged_plugins)
+  if(TARGET ged_subprocesses)
+    add_dependencies(mged ged_subprocesses)
+  endif(TARGET ged_subprocesses)
+  if(TARGET ged_exec)
+    add_dependencies(mged ged_exec)
+  endif(TARGET ged_exec)
   if(TARGET rt)
     add_dependencies(mged rt)
   endif(TARGET rt)
@@ -158,7 +169,7 @@ set(
   mged.h
   mged.ico
   mged.rc
-  mged_dm.h
+  mged_display.h
   mged_impl.h
   mged_wdb.h
   sedit.h

@@ -35,6 +35,7 @@
 #include "ged/draw.h"
 #include "ged/selection_state.h"
 
+#include "./ged_draw_view_private.h"
 #include "./ged_private.h"
 
 

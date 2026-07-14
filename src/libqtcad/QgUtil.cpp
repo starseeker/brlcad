@@ -109,7 +109,7 @@ db_find_region(int *ret, struct directory *search, struct db_i *dbip, int *depth
 	return;
 }
 
-int
+QgCombTypeId
 QgCombType(struct directory *dp, struct db_i *dbip)
 {
 	struct bu_attribute_value_set avs;
@@ -139,18 +139,19 @@ QgCombType(struct directory *dp, struct db_i *dbip)
 		if (search_results) assembly_flag = 1;
 	}
 
-	if (region_flag && !air_flag) return G_REGION;
-	if (!region_id_flag && air_flag) return G_AIR;
-	if (region_id_flag && air_flag) return G_AIR_REGION;
-	if (assembly_flag) return G_ASSEMBLY;
+	if (region_flag && !air_flag) return QgCombTypeId::Region;
+	if (!region_id_flag && air_flag) return QgCombTypeId::Air;
+	if (region_id_flag && air_flag) return QgCombTypeId::AirRegion;
+	if (assembly_flag) return QgCombTypeId::Assembly;
 
-	return G_STANDARD_OBJ;
+	return QgCombTypeId::StandardObj;
 }
 
 QImage
 QgIcon(struct directory *dp, struct db_i *dbip)
 {
 	int type = 0;
+	QgCombTypeId comb_type = QgCombTypeId::StandardObj;
 	QImage raw_type_icon;
 	if (dbip != DBI_NULL && dp != RT_DIR_NULL) {
 		switch(dp->d_minor_type) {
@@ -265,18 +266,18 @@ QgIcon(struct directory *dp, struct db_i *dbip)
 			raw_type_icon.load(":/images/primitives/bot.png");
 			break;
 		case DB5_MINORTYPE_BRLCAD_COMBINATION:
-			type = QgCombType(dp, dbip);
-			switch (type) {
-			case G_REGION:
+			comb_type = QgCombType(dp, dbip);
+			switch (comb_type) {
+			case QgCombTypeId::Region:
 				raw_type_icon.load(":/images/primitives/region.png");
 				break;
-			case G_AIR:
+			case QgCombTypeId::Air:
 				raw_type_icon.load(":/images/primitives/air.png");
 				break;
-			case G_AIR_REGION:
+			case QgCombTypeId::AirRegion:
 				raw_type_icon.load(":/images/primitives/airregion.png");
 				break;
-			case G_ASSEMBLY:
+			case QgCombTypeId::Assembly:
 				raw_type_icon.load(":/images/primitives/assembly.png");
 				break;
 			default:
@@ -328,4 +329,3 @@ QgIcon(struct directory *dp, struct db_i *dbip)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

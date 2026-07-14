@@ -762,6 +762,10 @@ bv_faceplate_defaults(struct bv *v)
     grid.res_major_v = 5;
     VSET(grid.color, 255, 255, 255);
 
+    VSET(adc.line_color, 255, 255, 0);
+    VSET(adc.tick_color, 255, 255, 255);
+    adc.line_width = 1;
+
     VSET(view_axes.axes_pos, 0.80, -0.80, 0.0);
     view_axes.axes_size = 0.2;
     view_axes.pos_only = 1;
@@ -1665,6 +1669,140 @@ bv_mouse_delta_settings_get(struct bv_mouse_delta_settings *settings,
 }
 
 int
+bv_mouse_delta_settings_set(struct bv *v,
+	const struct bv_mouse_delta_settings *settings)
+{
+    if (!bv_is_valid(v) || !settings ||
+	!isfinite(settings->min_delta) || !isfinite(settings->max_delta) ||
+	!isfinite(settings->rotate_scale) || !isfinite(settings->scale_scale) ||
+	settings->min_delta > 0.0 || settings->max_delta < 0.0 ||
+	settings->min_delta > settings->max_delta ||
+	settings->rotate_scale <= 0.0 || settings->scale_scale <= 0.0)
+	return 0;
+
+    v->min_mouse_delta = settings->min_delta;
+    v->max_mouse_delta = settings->max_delta;
+    v->rotate_scale = settings->rotate_scale;
+    v->scale_scale = settings->scale_scale;
+    return 1;
+}
+
+int
+bv_mouse_delta_clamp(fastf_t *dx, fastf_t *dy, const struct bv *v)
+{
+    struct bv_mouse_delta_settings settings = BV_MOUSE_DELTA_SETTINGS_INIT;
+
+    if (!dx || !dy || !bv_mouse_delta_settings_get(&settings, v))
+	return 0;
+
+    if (*dx < settings.min_delta)
+	*dx = settings.min_delta;
+    else if (*dx > settings.max_delta)
+	*dx = settings.max_delta;
+    if (*dy < settings.min_delta)
+	*dy = settings.min_delta;
+    else if (*dy > settings.max_delta)
+	*dy = settings.max_delta;
+    return 1;
+}
+
+static int
+bv_adjust_rotation(struct bv *v, fastf_t dx, fastf_t dy,
+	const point_t keypoint, fastf_t rotate_scale)
+{
+    point_t rot_pt;
+    point_t new_origin;
+    mat_t viewchg;
+    mat_t viewchginv;
+    point_t new_cent_view;
+    point_t new_cent_model;
+    mat_t newrot;
+
+    if (!keypoint)
+	return 0;
+    bn_mat_angles(newrot, dy * rotate_scale, dx * rotate_scale, 0.0);
+    MAT4X3PNT(rot_pt, v->model2view, keypoint);
+    bn_mat_xform_about_pnt(viewchg, newrot, rot_pt);
+    bn_mat_inv(viewchginv, viewchg);
+    VSET(new_origin, 0.0, 0.0, 0.0);
+    MAT4X3PNT(new_cent_view, viewchginv, new_origin);
+    MAT4X3PNT(new_cent_model, v->view2model, new_cent_view);
+    MAT_DELTAS_VEC_NEG(v->center, new_cent_model);
+    bn_mat_mul2(newrot, v->rotation);
+    return bv_update(v);
+}
+
+static int
+bv_adjust_translation(struct bv *v, fastf_t dx, fastf_t dy)
+{
+    fastf_t aspect;
+    fastf_t fx;
+    fastf_t fy;
+    vect_t tt;
+    point_t delta;
+    point_t work;
+    point_t vc;
+    point_t nvc;
+
+    if (!v->width || !v->height)
+	return 0;
+    aspect = (fastf_t)v->width / (fastf_t)v->height;
+    fx = dx / (fastf_t)v->width * 2.0;
+    fy = -dy / (fastf_t)v->height / aspect * 2.0;
+    VSET(tt, fx, fy, 0.0);
+    MAT4X3PNT(work, v->view2model, tt);
+    MAT_DELTAS_GET_NEG(vc, v->center);
+    VSUB2(delta, work, vc);
+    VSUB2(nvc, vc, delta);
+    MAT_DELTAS_VEC_NEG(v->center, nvc);
+    return bv_update(v);
+}
+
+static int
+bv_adjust_scale_factor(struct bv *v, double factor)
+{
+    if (NEAR_ZERO(factor, SQRT_SMALL_FASTF))
+	return 0;
+    v->scale /= factor;
+    if (v->scale < BV_MIN_SCALE)
+	v->scale = BV_MIN_SCALE;
+    v->size = 2.0 * v->scale;
+    v->inverse_size = (v->size > 0.0) ? 1.0 / v->size : 0.0;
+    return bv_update(v);
+}
+
+int
+bv_mouse_delta_adjust(struct bv *v, int dx, int dy, const point_t keypoint,
+	unsigned long long flags)
+{
+    struct bv_mouse_delta_settings settings = BV_MOUSE_DELTA_SETTINGS_INIT;
+    fastf_t mouse_dx = (fastf_t)dx;
+    fastf_t mouse_dy = (fastf_t)dy;
+
+    if (!bv_is_valid(v) || flags == BV_ADJUST_IDLE ||
+	!(flags & (BV_ADJUST_ROT | BV_ADJUST_TRANS | BV_ADJUST_SCALE)) ||
+	!bv_mouse_delta_settings_get(&settings, v) ||
+	!bv_mouse_delta_clamp(&mouse_dx, &mouse_dy, v))
+	return 0;
+
+    if (flags & BV_ADJUST_ROT)
+	return bv_adjust_rotation(v, mouse_dx, mouse_dy, keypoint,
+	    settings.rotate_scale);
+    if (flags & BV_ADJUST_TRANS)
+	return bv_adjust_translation(v, mouse_dx, mouse_dy);
+
+    const fastf_t delta = fabs(mouse_dx) > fabs(mouse_dy) ? mouse_dx :
+	-mouse_dy;
+    if (!v->height || NEAR_ZERO(delta, SQRT_SMALL_FASTF))
+	return 0;
+    const double factor = 1.0 + (double)delta *
+	(double)settings.scale_scale / (double)v->height;
+    if (!isfinite(factor) || factor <= SQRT_SMALL_FASTF)
+	return 0;
+    return bv_adjust_scale_factor(v, factor);
+}
+
+int
 bv_mouse_state_set(struct bv *v, int x, int y)
 {
     if (!bv_is_valid(v))
@@ -1683,67 +1821,16 @@ bv_adjust(struct bv *v, int dx, int dy, const point_t keypoint, int UNUSED(mode)
     if (!bv_is_valid(v) || flags == BV_ADJUST_IDLE)
 	return 0;
 
-    if (flags & BV_ADJUST_ROT) {
-	point_t rot_pt;
-	point_t new_origin;
-	mat_t viewchg;
-	mat_t viewchginv;
-	point_t new_cent_view;
-	point_t new_cent_model;
-	mat_t newrot;
+    if (flags & BV_ADJUST_ROT)
+	return bv_adjust_rotation(v, (fastf_t)dx, (fastf_t)dy, keypoint, 0.25);
 
-	if (!keypoint)
-	    return 0;
-	bn_mat_angles(newrot, (fastf_t)dy * 0.25, (fastf_t)dx * 0.25, 0.0);
-	MAT4X3PNT(rot_pt, v->model2view, keypoint);
-	bn_mat_xform_about_pnt(viewchg, newrot, rot_pt);
-	bn_mat_inv(viewchginv, viewchg);
-	VSET(new_origin, 0.0, 0.0, 0.0);
-	MAT4X3PNT(new_cent_view, viewchginv, new_origin);
-	MAT4X3PNT(new_cent_model, v->view2model, new_cent_view);
-	MAT_DELTAS_VEC_NEG(v->center, new_cent_model);
-	bn_mat_mul2(newrot, v->rotation);
-	return bv_update(v);
-    }
-
-    if (flags & BV_ADJUST_TRANS) {
-	fastf_t aspect;
-	fastf_t fx;
-	fastf_t fy;
-	vect_t tt;
-	point_t delta;
-	point_t work;
-	point_t vc;
-	point_t nvc;
-
-	if (!v->width || !v->height)
-	    return 0;
-	aspect = (fastf_t)v->width / (fastf_t)v->height;
-	fx = (fastf_t)dx / (fastf_t)v->width * 2.0;
-	fy = -(fastf_t)dy / (fastf_t)v->height / aspect * 2.0;
-	VSET(tt, fx, fy, 0.0);
-	MAT4X3PNT(work, v->view2model, tt);
-	MAT_DELTAS_GET_NEG(vc, v->center);
-	VSUB2(delta, work, vc);
-	VSUB2(nvc, vc, delta);
-	MAT_DELTAS_VEC_NEG(v->center, nvc);
-	return bv_update(v);
-    }
+    if (flags & BV_ADJUST_TRANS)
+	return bv_adjust_translation(v, (fastf_t)dx, (fastf_t)dy);
 
     if (flags & BV_ADJUST_SCALE) {
-	double f;
-
 	if (!dx || !dy)
 	    return 0;
-	f = (double)dy / (double)dx;
-	if (NEAR_ZERO(f, SQRT_SMALL_FASTF))
-	    return 0;
-	v->scale /= f;
-	if (v->scale < BV_MIN_SCALE)
-	    v->scale = BV_MIN_SCALE;
-	v->size = 2.0 * v->scale;
-	v->inverse_size = (v->size > 0.0) ? 1.0 / v->size : 0.0;
-	return bv_update(v);
+	return bv_adjust_scale_factor(v, (double)dy / (double)dx);
     }
 
     if (flags & BV_ADJUST_CENTER) {

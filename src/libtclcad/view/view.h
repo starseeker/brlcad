@@ -61,9 +61,10 @@ extern int to_autoview_func(struct ged *gedp,
 
 /* Axes */
 extern int to_axes(struct ged *gedp,
-		   void *view_ctx,
-		   struct bv_axes_state *gasp,
-		   int argc,
+	void *view_ctx,
+	struct bv_axes_state *gasp,
+	const char *visibility_property,
+	int argc,
 		   const char *argv[],
 		   const char *usage);
 extern int to_data_axes(struct ged *gedp,

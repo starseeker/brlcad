@@ -138,7 +138,7 @@ function(_brlobol_guard_check_dependency_inventory)
   set(_expected_deps_libdm [[librt;libicv;libbn;libpkg;libbu]])
   set(_expected_deps_libged [[libbrlobol;libimgstream;libicv;libanalyze;libwdb;liboptical;libbu]])
   set(_expected_deps_libqtcad [[libbrlobol;libged;libbg;libbn;libbu]])
-  set(_expected_deps_libtclcad [[libged;libdm;libbn;libbu]])
+  set(_expected_deps_libtclcad [[libged;libimgstream;libpkg;libbn;libbu]])
   set(_expected_deps_qged [[libqtcad]])
   set(_expected_deps_mged [[libtclcad]])
   set(_expected_deps_fbserv [[libimgstream;libpkg;libbu]])
@@ -266,6 +266,37 @@ function(_brlobol_guard_check_public_headers)
       [[(^|[^A-Za-z0-9_])bsg_view([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])bsg_scene_ref([^A-Za-z0-9_]|$)]])
   endforeach()
+  foreach(_retired_qtcad_namespace_header
+      include/qtcad/QgNamespace.h
+      include/qtcad/QgNamespaceCompat.h)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired_qtcad_namespace_header}")
+      _brlobol_guard_fail(
+        "${_retired_qtcad_namespace_header} restored a retired Qt namespace compatibility surface")
+    endif()
+  endforeach()
+  _brlobol_guard_read_rel(_qg_types "include/qtcad/QgTypes.h")
+  foreach(_alias
+      QgView_AUTO
+      QgView_SW
+      QgView_GL
+      UPPER_RIGHT_QUADRANT
+      UPPER_LEFT_QUADRANT
+      LOWER_LEFT_QUADRANT
+      LOWER_RIGHT_QUADRANT
+      QgViewMode
+      QgInstanceEditMode
+      QgPrimitiveEditMode
+      G_STANDARD_OBJ
+      G_REGION
+      G_AIR
+      G_AIR_REGION
+      G_ASSEMBLY)
+    string(FIND "${_qg_types}" "${_alias}" _qg_type_alias_idx)
+    if(NOT _qg_type_alias_idx EQUAL -1)
+      _brlobol_guard_fail(
+        "include/qtcad/QgTypes.h reintroduced retired integer compatibility alias ${_alias}")
+    endif()
+  endforeach()
 endfunction()
 
 function(_brlobol_guard_check_retired_ged_draw_symbols)
@@ -372,27 +403,6 @@ function(_brlobol_guard_check_obol_controller_quarantine)
   endforeach()
 endfunction()
 
-function(_brlobol_guard_check_qtcad_legacy_dm_open_quarantine)
-  _brlobol_guard_collect(_files
-    include/qtcad
-    src/libdm
-    src/libqtcad
-    src/qged)
-  foreach(_file IN LISTS _files)
-    file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
-    if(NOT "${_rel}" MATCHES "${_brlobol_guard_extensions}")
-      continue()
-    endif()
-    file(READ "${_file}" _contents)
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])qg_legacy_view_dm_open_(qtgl|swrast)[ \t\r\n]*\(]]
-      _hit "${_contents}")
-    if(_hit)
-      _brlobol_guard_fail(
-	"${_rel} opens a qtcad legacy DM outside the standalone framebuffer fallback quarantine")
-    endif()
-  endforeach()
-endfunction()
-
 function(_brlobol_guard_check_display_endpoint_boundary)
   foreach(_rel
       include/brlobol/display_endpoint.h
@@ -432,12 +442,62 @@ function(_brlobol_guard_check_display_endpoint_boundary)
     string(FIND "${_ged_view_state}" "${_needle}" _endpoint_idx)
     if(_endpoint_idx EQUAL -1)
       _brlobol_guard_fail(
-	"src/libged/ged_view_state.cpp no longer keeps ${_needle} separate from the legacy DM slot")
+	"src/libged/ged_view_state.cpp no longer maintains ${_needle}")
     endif()
   endforeach()
   _brlobol_guard_forbid_regexes("src/libged/ged_view_state.cpp"
     "${_ged_view_state}"
     [[ged_draw_obol_scene_controller_owned]])
+
+  foreach(_rel
+      include/ged/view.h
+      src/libged/ged_view_state.cpp
+      src/mged/cmd.cpp
+      src/mged/overlay.c
+      src/mged/rtif.c)
+    _brlobol_guard_read_rel(_contents "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[(^|[^A-Za-z0-9_])ged_view_context_display_manager_(get|set)[ \t\r\n]*\(]])
+  endforeach()
+
+  foreach(_rel
+      include/ged/draw_obol.h
+      src/libged/draw_obol.cpp)
+    _brlobol_guard_read_rel(_contents "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[GED_DRAW_OBOL_SOFTWARE_WIRE_(AUTO|QUALITY|FAST)]]
+      [[ged_draw_obol_software_wire_mode_(get|set)_for_view]])
+  endforeach()
+
+  _brlobol_guard_read_rel(_brlobol_input_h "include/brlobol/input.h")
+  _brlobol_guard_forbid_regexes("include/brlobol/input.h"
+    "${_brlobol_input_h}"
+    [[(^|[^A-Za-z0-9_])BRLOBOL_INPUT_KEY([^A-Za-z0-9_]|$)]]
+    [[(^|[^A-Za-z0-9_])BRLOBOL_INPUT_POINTER([^A-Za-z0-9_]|$)]])
+
+  foreach(_rel
+      src/libged/ged.cpp
+      src/libged/ged_private.h
+      src/libged/dm/dm.c
+      src/libged/rt/rt.c)
+    _brlobol_guard_read_rel(_contents "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[ged_rt_fb_(set|get|refresh)]]
+      [[rt_fb_dev]])
+  endforeach()
+  foreach(_rel
+      include/ged/defines.h
+      src/libged/ged.cpp
+      src/libged/ged_private.h
+      src/libged/dm/dm.c)
+    _brlobol_guard_read_rel(_contents "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[ged_dm_ctx_]]
+      [[dm_map]])
+  endforeach()
+  _brlobol_guard_read_rel(_ged_rt "src/libged/rt/rt.c")
+  _brlobol_guard_forbid_regexes("src/libged/rt/rt.c" "${_ged_rt}"
+    [[/dev/ogl]])
 
   _brlobol_guard_read_rel(_ged_dm "src/libged/dm/dm.c")
   _brlobol_guard_forbid_regexes("src/libged/dm/dm.c" "${_ged_dm}"
@@ -532,6 +592,23 @@ function(_brlobol_guard_check_display_endpoint_boundary)
     "${_ged_dm_cmake}"
     [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
 
+  _brlobol_guard_read_rel(_ged_get_autoview_cmake
+    "src/libged/get_autoview/CMakeLists.txt")
+  _brlobol_guard_forbid_regexes("src/libged/get_autoview/CMakeLists.txt"
+    "${_ged_get_autoview_cmake}"
+    [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
+
+  _brlobol_guard_collect(_libged_files src/libged)
+  foreach(_file IN LISTS _libged_files)
+    file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
+    if(NOT "${_rel}" MATCHES "${_brlobol_guard_extensions}")
+      continue()
+    endif()
+    file(READ "${_file}" _contents)
+    _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
+      [[#[ \t]*include[ \t]*[<"]dm\.h]])
+  endforeach()
+
   _brlobol_guard_read_rel(_tclcad_commands "src/libtclcad/commands.c")
   string(FIND "${_tclcad_commands}" [[{"dm",]] _tclcad_dm_name_idx)
   string(FIND "${_tclcad_commands}"
@@ -568,6 +645,11 @@ function(_brlobol_guard_check_display_endpoint_boundary)
 	"QgView no longer owns its visible canvas through an embedded endpoint (${_needle})")
     endif()
   endforeach()
+
+  _brlobol_guard_read_rel(_qg_session "src/libqtcad/QgSession.cpp")
+  _brlobol_guard_forbid_regexes("src/libqtcad/QgSession.cpp" "${_qg_session}"
+    [[#[ \t]*include[ \t]*[<\"]dm]]
+    [[(^|[^A-Za-z0-9_])DM_SWRAST([^A-Za-z0-9_]|$)]])
 
   _brlobol_guard_read_rel(_qg_host "src/libqtcad/QgObolWindowHost.cpp")
   foreach(_needle
@@ -1326,11 +1408,26 @@ function(_brlobol_guard_check_tkobol_host_ownership)
     [[tkobol/dm-tkobol\.cpp]]
     [[dm_plugin_library\(dm-tkobol]])
   _brlobol_guard_forbid_regexes("src/libtclcad/dm.c" "${_tclcad_dm}"
-    [[(^|[^A-Za-z0-9_])dm_register_backend[ \t\r\n]*\(]])
+    [[(^|[^A-Za-z0-9_])dm_register_backend[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])dm_bestXType_tcl([^A-Za-z0-9_]|$)]]
+    [[(^|[^A-Za-z0-9_])dm_validXType_tcl([^A-Za-z0-9_]|$)]])
   _brlobol_guard_forbid_regexes("src/mged/CMakeLists.txt" "${_mged_cmake}"
-    [[(^|[^A-Za-z0-9_])dm_plugins([^A-Za-z0-9_]|$)]])
+    [[(^|[^A-Za-z0-9_])dm_plugins([^A-Za-z0-9_]|$)]]
+    [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
+  foreach(_helper [[ged_plugins]] [[ged_subprocesses]] [[ged_exec]])
+    string(FIND "${_mged_cmake}" "${_helper}" _mged_helper_idx)
+    if(_mged_helper_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"src/mged/CMakeLists.txt no longer builds runtime GED helper ${_helper}")
+    endif()
+  endforeach()
+  _brlobol_guard_forbid_regexes("src/mged/attach.c" "${_mged_attach}"
+    [[(^|[^A-Za-z0-9_])dm_(make_current|set_win_bounds|processOptions)[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])dm_get_(dname|dm_name|dm_lname)[ \t\r\n]*\(]])
   _brlobol_guard_forbid_regexes("src/mged/mged.c" "${_mged_main}"
-    [[dm_init_msgs[ \t\r\n]*\(]])
+    [[dm_init_msgs[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])dm_version[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])fb_version[ \t\r\n]*\(]])
   if(EXISTS "${BRLCAD_SOURCE_DIR}/src/libtclcad/tkobol/dm-tkobol.cpp")
     _brlobol_guard_fail("dm-tkobol compatibility adapter was restored")
   endif()
@@ -1343,6 +1440,28 @@ function(_brlobol_guard_check_tkobol_host_ownership)
     endif()
   endforeach()
   _brlobol_guard_read_rel(_tclcad_commands "src/libtclcad/commands.c")
+  _brlobol_guard_forbid_regexes("src/libtclcad/commands.c" "${_tclcad_commands}"
+    [[(^|[^A-Za-z0-9_])dm_list_tcl([^A-Za-z0-9_]|$)]])
+  foreach(_rel
+      src/tclscripts/lib/Ged.tcl
+      src/tclscripts/archer/ArcherCore.tcl
+      src/tclscripts/mged/rt.tcl
+      src/tclscripts/mged/openw.tcl)
+    _brlobol_guard_read_rel(_tclcad_script "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_tclcad_script}"
+      [[(^|[^A-Za-z0-9_])dm_list[ \t\r\n]*\(]]
+      [[(^|[^A-Za-z0-9_])dm_bestXType[ \t\r\n]*\(]]
+      [[(^|[^A-Za-z0-9_])dm_validXType[ \t\r\n]*\(]])
+  endforeach()
+  _brlobol_guard_read_rel(_tclcad_ged_script "src/tclscripts/lib/Ged.tcl")
+  _brlobol_guard_forbid_regexes("src/tclscripts/lib/Ged.tcl"
+    "${_tclcad_ged_script}"
+    [[itk_option[ \t]+define[ \t]+-type[ \t]+type[ \t]+Type]])
+  _brlobol_guard_read_rel(_archer_core_script
+    "src/tclscripts/archer/ArcherCore.tcl")
+  _brlobol_guard_forbid_regexes("src/tclscripts/archer/ArcherCore.tcl"
+    "${_archer_core_script}"
+    [[(^|[^A-Za-z0-9_])mDisplayType([^A-Za-z0-9_]|$)]])
   foreach(_direct_source _mged_attach _tclcad_commands)
     foreach(_needle
         [[brlobol_display_endpoint_create]]
@@ -1373,6 +1492,13 @@ function(_brlobol_guard_check_tkobol_host_ownership)
   _brlobol_guard_read_rel(_gsh_cmake "src/gtools/gsh/CMakeLists.txt")
   _brlobol_guard_forbid_regexes("src/gtools/gsh/CMakeLists.txt" "${_gsh_cmake}"
     [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
+  foreach(_helper [[ged_plugins]] [[ged_subprocesses]] [[ged_exec]])
+    string(FIND "${_gsh_cmake}" "${_helper}" _gsh_helper_idx)
+    if(_gsh_helper_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"src/gtools/gsh/CMakeLists.txt no longer builds runtime GED helper ${_helper}")
+    endif()
+  endforeach()
   _brlobol_guard_read_rel(_gsh "src/gtools/gsh/gsh.cpp")
   string(FIND "${_gsh}" [[ged_draw_obol_render_endpoint_ensure_for_view]]
     _gsh_endpoint_idx)
@@ -1444,6 +1570,9 @@ endfunction()
 
 function(_brlobol_guard_check_unreachable_drawing_shims)
   foreach(_retired
+      include/qtcad/QgLegacyView.h
+      src/libqtcad/QgLegacyView.cpp
+      src/libqtcad/QgLegacyViewContext.h
       src/libqtcad/QgObolDatabaseSync.cpp
       src/libqtcad/QgObolDatabaseSyncPrivate.h)
     if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired}")
@@ -1532,7 +1661,8 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
     [[(^|[^A-Za-z0-9_])fb_refresh[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])paint_rect_area[ \t\r\n]*\(]])
   foreach(_needle
-      [[bv_framebuffer_mode_set]]
+      [[mged_obol_framebuffer_composition_sync]]
+      [[composition.framebuffer.mode]]
       [[mged_obol_faceplate_state_sync]]
       [[ged_draw_obol_view_context_faceplate_sync]]
       [[brlobol_display_endpoint_view_sync]]
@@ -1543,9 +1673,24 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
 	"MGED refresh lost retained endpoint rendering (${_needle})")
     endif()
   endforeach()
-  _brlobol_guard_read_rel(_mged_repaint "src/mged/mged_dm.h")
-  _brlobol_guard_forbid_regexes("src/mged/mged_dm.h" "${_mged_repaint}"
+  _brlobol_guard_read_rel(_mged_repaint "src/mged/mged_display.h")
+  _brlobol_guard_forbid_regexes("src/mged/mged_display.h" "${_mged_repaint}"
     [[(^|[^A-Za-z0-9_])dm_set_native_repaint_pending[ \t\r\n]*\(]])
+  if(EXISTS "${BRLCAD_SOURCE_DIR}/src/mged/mged_dm.h")
+    _brlobol_guard_fail(
+      "src/mged/mged_dm.h restored a retired display-manager state record")
+  endif()
+  foreach(_rel
+      src/mged/mged_display.h
+      src/mged/mged.h
+      src/mged/attach.c
+      src/mged/mged.c)
+    _brlobol_guard_read_rel(_mged_display_identity "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_mged_display_identity}"
+      [[(^|[^A-Za-z0-9_])mged_dm([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])mged_curr_dm([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])active_dm_set([^A-Za-z0-9_]|$)]])
+  endforeach()
   _brlobol_guard_read_rel(_ged_dm_endpoint "src/libged/dm/dm.c")
   foreach(_needle
       [[host_width = bview && bv_width_get(bview) > 0]]
@@ -1591,9 +1736,13 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
     [[(^|[^A-Za-z0-9_])dm_(Xx2Normal|Xy2Normal|Normal2Xx|Normal2Xy|get_width|get_height|get_aspect)[ \t\r\n]*\(]])
   _brlobol_guard_read_rel(_mged_events "src/mged/doevent.c")
   _brlobol_guard_forbid_regexes("src/mged/doevent.c" "${_mged_events}"
-    [[(^|[^A-Za-z0-9_])dm_(Xx2Normal|Xy2Normal|get_width|get_height|get_aspect|configure_win)[ \t\r\n]*\(]])
-  _brlobol_guard_read_rel(_mged_dm_commands "src/mged/dm-generic.c")
-  _brlobol_guard_forbid_regexes("src/mged/dm-generic.c" "${_mged_dm_commands}"
+    [[(^|[^A-Za-z0-9_])dm_(Xx2Normal|Xy2Normal|get_width|get_height|get_aspect|configure_win|doevent)[ \t\r\n]*\(]])
+  if(EXISTS "${BRLCAD_SOURCE_DIR}/src/mged/dm-generic.c")
+    _brlobol_guard_fail(
+      "src/mged/dm-generic.c restored a retired display-manager command implementation")
+  endif()
+  _brlobol_guard_read_rel(_mged_display_commands "src/mged/display-command.c")
+  _brlobol_guard_forbid_regexes("src/mged/display-command.c" "${_mged_display_commands}"
     [[(^|[^A-Za-z0-9_])dm_(Xx2Normal|Xy2Normal|get_width|get_height|set_width|set_height)[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])dm_(get_bg|set_bg|make_current|internal_var)[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])(view_state_flag_hook|dirty_hook|zclip_hook|set_hook_data)[ \t\r\n]*\(]]
@@ -1604,16 +1753,120 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
   _brlobol_guard_read_rel(_mged_settings "src/mged/set.c")
   _brlobol_guard_forbid_regexes("src/mged/set.c" "${_mged_settings}"
     [[(^|[^A-Za-z0-9_])dm_set_perspective[ \t\r\n]*\(]])
+  _brlobol_guard_read_rel(_mged_fbserv "src/mged/fbserv.c")
+  _brlobol_guard_forbid_regexes("src/mged/fbserv.c" "${_mged_fbserv}"
+    [[#[ \t]*include[ \t]*[<"]dm/fbserv_legacy\.h]]
+    [[(^|[^A-Za-z0-9_])dm_interp[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])dm_fbserv_set_framebuffer[ \t\r\n]*\(]])
+  foreach(_needle
+      [[s->gedp->ged_fbs]]
+      [[mged_obol_framebuffer_ensure]]
+      [[fbs_framebuffer_backend_installed]])
+    string(FIND "${_mged_fbserv}" "${_needle}" _mged_fbserv_endpoint_idx)
+    if(_mged_fbserv_endpoint_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"MGED fbserv no longer uses the session-owned Obol/imgstream backend (${_needle})")
+    endif()
+  endforeach()
   foreach(_rel
-      src/mged/mged_dm.h
+      src/mged/mged_display.h
+      src/mged/attach.c
+      src/mged/mged.c)
+    _brlobol_guard_read_rel(_mged_null_dm_shell "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_mged_null_dm_shell}"
+      [[(^|[^A-Za-z0-9_])dm_dmp([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_fbp([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_fbserv([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])DMP([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_(open|close|get_fb)[ \t\r\n]*\(]])
+  endforeach()
+  _brlobol_guard_read_rel(_mged_attach "src/mged/attach.c")
+  foreach(_needle
+      [[mged_obol_framebuffer_ensure]]
+      [[ged_draw_obol_framebuffer_backend_ensure_for_view]])
+    string(FIND "${_mged_attach}" "${_needle}" _mged_fb_backend_idx)
+    if(_mged_fb_backend_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"MGED attachment lost endpoint-owned framebuffer setup (${_needle})")
+    endif()
+  endforeach()
+  foreach(_needle
+      [[mged_obol_framebuffer_ensure]]
+      [[fbs_framebuffer_backend_installed]])
+    string(FIND "${_mged_rect}" "${_needle}" _mged_rect_fb_idx)
+    if(_mged_rect_fb_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"MGED rectangle rendering lost the endpoint framebuffer contract (${_needle})")
+    endif()
+  endforeach()
+  foreach(_rel
+      src/mged/mged_display.h
+      src/mged/attach.c
+      src/mged/mged.c
+      src/mged/set.c
+      src/mged/share.c
+      src/mged/cmd.cpp)
+    _brlobol_guard_read_rel(_mged_backend_cache "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_mged_backend_cache}"
+      [[(^|[^A-Za-z0-9_])mv_backend_cache([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])_backend_cache_state([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_backend_cache_state([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])mged_default_backend_cache([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])share_backend_cache([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_get_backend_cache[ \t\r\n]*\(]]
+      [[--cache]]
+      [[no-cache]])
+  endforeach()
+  foreach(_rel src/mged/chgview.c src/mged/f_cmd.h src/mged/setup.c)
+    _brlobol_guard_read_rel(_mged_register_debug "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_mged_register_debug}"
+      [[(^|[^A-Za-z0-9_])f_regdebug([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_set_debug[ \t\r\n]*\(]])
+  endforeach()
+  _brlobol_guard_read_rel(_mged_help "src/tclscripts/mged/help.tcl")
+  _brlobol_guard_forbid_regexes("src/tclscripts/mged/help.tcl" "${_mged_help}"
+    [[mged_help_data\(regdebug\)]])
+  foreach(_rel src/tclscripts/mged/openw.tcl src/tclscripts/mged/mgedrc.tcl)
+    _brlobol_guard_read_rel(_mged_backend_cache_tcl "${_rel}")
+    foreach(_needle [[mged_gui($id,cache)]] [[mged_default(cache)]] [[Backend Cache]])
+      string(FIND "${_mged_backend_cache_tcl}" "${_needle}" _mged_cache_idx)
+      if(NOT _mged_cache_idx EQUAL -1)
+        _brlobol_guard_fail("${_rel} restored retired backend-cache policy (${_needle})")
+      endif()
+    endforeach()
+  endforeach()
+  foreach(_rel
+      src/mged/mged_display.h
       src/mged/mged.c
       src/mged/cmd.cpp
       src/mged/edsol.c
       src/mged/share.c)
     _brlobol_guard_read_rel(_mged_identity "${_rel}")
     _brlobol_guard_forbid_regexes("${_rel}" "${_mged_identity}"
-      [[(^|[^A-Za-z0-9_])dm_get_(pathname|id)[ \t\r\n]*\(]])
+      [[(^|[^A-Za-z0-9_])dm_get_(pathname|id|tkname)[ \t\r\n]*\(]])
   endforeach()
+  _brlobol_guard_read_rel(_mged_bindings "src/tclscripts/mged/bindings.tcl")
+  _brlobol_guard_forbid_regexes("src/tclscripts/mged/bindings.tcl"
+    "${_mged_bindings}"
+    [[(^|[^A-Za-z0-9_])tkswrast([^A-Za-z0-9_]|$)]])
+  foreach(_rel include/tclcad/misc.h include/tclcad/setup.h)
+    _brlobol_guard_read_rel(_tclcad_public_header "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_tclcad_public_header}"
+      [[#[ \t]*include[ \t]*[<"]dm\.h]])
+  endforeach()
+  foreach(_rel
+      include/dm/view.h
+      src/libtclcad/commands.c
+      src/tclscripts/lib/Ged.tcl
+      src/tclscripts/archer/Archer.tcl
+      src/tclscripts/archer/ArcherCore.tcl)
+    _brlobol_guard_read_rel(_retired_backend_cache "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_retired_backend_cache}"
+      [[(^|[^A-Za-z0-9_])(dm_view_data|cache_on|mBackendCacheMode)([^A-Za-z0-9_]|$)]])
+  endforeach()
+  _brlobol_guard_read_rel(_mged_edsol "src/mged/edsol.c")
+  _brlobol_guard_forbid_regexes("src/mged/edsol.c" "${_mged_edsol}"
+    [[(^|[^A-Za-z0-9_])dm_get_dname[ \t\r\n]*\(]])
   foreach(_needle
       [[mged_rubber_band_state_sync]]
       [[ged_draw_view_context_hud_lines_replace]]
@@ -1690,7 +1943,6 @@ _brlobol_guard_check_retired_ged_draw_symbols()
 _brlobol_guard_check_removed_rt_view_aliases()
 _brlobol_guard_check_native_drawing_tests()
 _brlobol_guard_check_obol_controller_quarantine()
-_brlobol_guard_check_qtcad_legacy_dm_open_quarantine()
 _brlobol_guard_check_display_endpoint_boundary()
 _brlobol_guard_check_imgstream_display_host_ownership()
 _brlobol_guard_check_imgstream_remote_client_ownership()

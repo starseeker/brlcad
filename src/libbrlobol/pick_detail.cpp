@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/lod_realization.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_shape.h"
@@ -376,7 +378,7 @@ pick_rt_same_object_paths(const std::vector<SbString> &a,
     if (a.size() != b.size())
 	return FALSE;
     for (size_t i = 0; i < a.size(); i++) {
-	if (strcmp(a[i].getString(), b[i].getString()) != 0)
+	if (bu_strcmp(a[i].getString(), b[i].getString()) != 0)
 	    return FALSE;
     }
     return TRUE;

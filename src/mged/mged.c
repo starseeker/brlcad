@@ -70,6 +70,7 @@
 #define LIBTERMIO_IMPLEMENTATION
 #include "libtermio.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "ged/draw_obol.h"
 #include "brlobol/display_endpoint.h"
 #include "tclcad.h"
@@ -78,7 +79,7 @@
 #include "./mged.h"
 #include "./sedit.h"
 #include "./menu.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 #include "./f_cmd.h" // for f_opendb
 #include "brlcad_ident.h"
@@ -401,15 +402,15 @@ sig3(int UNUSED(sig))
 void
 new_edit_mats(struct mged_state *s)
 {
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
 
-    save_dm_list = s->mged_curr_dm;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p->dm_owner)
+    save_display = s->mged_curr_display;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p->display_owner)
 	    continue;
 
-	set_curr_dm(s, p);
+	mged_current_display_set(s, p);
 	mat_t model2view;
 	struct bv *view = mged_view_context_view(view_state->vs_gvp);
 	bv_model2view_get(model2view, view);
@@ -422,7 +423,7 @@ new_edit_mats(struct mged_state *s)
 	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     }
 
-    set_curr_dm(s, save_dm_list);
+    mged_current_display_set(s, save_display);
 }
 
 
@@ -443,7 +444,7 @@ mged_view_callback(void *view_ctx,
 	bn_mat_inv(vsp->vs_objview2model, vsp->vs_model2objview);
     }
     mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_VIEW_RECORD);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_VIEW_RECORD);
 }
 
 
@@ -458,7 +459,7 @@ new_mats(struct mged_state *s)
 }
 
 static int
-mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
+mged_display_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
 {
     struct mged_state *s = (struct mged_state *)u2;
     if (!s || ac < 2 || !av)
@@ -475,14 +476,14 @@ mged_dm_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
     if (BU_STR_EQUAL(av[1], "set")) {
 	if (view_state)
 	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
-        mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
+        mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
         return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(av[1], "bg") || BU_STR_EQUAL(av[1], "attach")) {
         if (view_state)
             mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
-        mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
+        mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
     }
 
     return BRLCAD_OK;
@@ -558,7 +559,6 @@ struct mged_cli_overrides {
 
     /* mged_variables (rset var / set <name>) */
     int use_air;            /* --use-air / --no-use-air */
-    int cache;              /* --cache   / --no-cache   */
     int faceplate;          /* --faceplate / --no-faceplate */
     int orig_gui;           /* MGED_CLI_UNSET_INT / 0 / 1 */
     int linewidth;          /* --linewidth #  (pixels, >=1) */
@@ -943,7 +943,7 @@ mged_process_char(struct mged_state *s, char ch)
 	    if (Tcl_CommandComplete(bu_vls_addr(&s->input_str_prefix))) {
 		curr_cmd_list = &head_cmd_list;
 		if (curr_cmd_list->cl_tie)
-		    set_curr_dm(s, curr_cmd_list->cl_tie);
+		    mged_current_display_set(s, curr_cmd_list->cl_tie);
 
 		reset_Tty(fileno(stdin)); /* Backwards compatibility */
 		(void)signal(SIGINT, SIG_IGN);
@@ -1328,7 +1328,7 @@ mged_process_char(struct mged_state *s, char ch)
 int
 event_check(struct mged_state *s, int non_blocking)
 {
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
     int save_edflag;
 
     if (mged_shutting_down(s))
@@ -1367,12 +1367,12 @@ event_check(struct mged_state *s, int non_blocking)
     /*********************************
      * Handle rate-based processing *
      *********************************/
-    save_dm_list = s->mged_curr_dm;
+    save_display = s->mged_curr_display;
     if (MEDIT(s)->k.rot_m_flag) {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	char save_coords;
 
-	set_curr_dm(s, s->s_edit->edit_rate_mr_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_mr_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'm';
 
@@ -1406,7 +1406,7 @@ event_check(struct mged_state *s, int non_blocking)
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	char save_coords;
 
-	set_curr_dm(s, s->s_edit->edit_rate_or_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_or_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'o';
 
@@ -1440,7 +1440,7 @@ event_check(struct mged_state *s, int non_blocking)
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	char save_coords;
 
-	set_curr_dm(s, s->s_edit->edit_rate_vr_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_vr_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'v';
 
@@ -1474,7 +1474,7 @@ event_check(struct mged_state *s, int non_blocking)
 	char save_coords;
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 
-	set_curr_dm(s, s->s_edit->edit_rate_mt_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_mt_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'm';
 
@@ -1508,7 +1508,7 @@ event_check(struct mged_state *s, int non_blocking)
 	char save_coords;
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 
-	set_curr_dm(s, s->s_edit->edit_rate_vt_dm);
+	mged_current_display_set(s, s->s_edit->edit_rate_vt_display);
 	save_coords = mged_variables->mv_coords;
 	mged_variables->mv_coords = 'v';
 
@@ -1563,12 +1563,12 @@ event_check(struct mged_state *s, int non_blocking)
 	    edobj = save_edflag;
     }
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p->dm_owner)
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p->display_owner)
 	    continue;
 
-	set_curr_dm(s, p);
+	mged_current_display_set(s, p);
 	fastf_t view_local_scale = bv_scale_get(mged_view_state_view(view_state)) * s->dbip->dbi_base2local;
 
 	if (view_state->k.rot_model_active) {
@@ -1631,7 +1631,7 @@ event_check(struct mged_state *s, int non_blocking)
 	    bu_vls_free(&vls);
 	}
 
-	set_curr_dm(s, save_dm_list);
+	mged_current_display_set(s, save_display);
     }
 
     return non_blocking;
@@ -1748,7 +1748,7 @@ stdin_input(ClientData clientData, int UNUSED(mask))
 	    int cmd_status;
 	    curr_cmd_list = &head_cmd_list;
 	    if (curr_cmd_list->cl_tie)
-		set_curr_dm(s, curr_cmd_list->cl_tie);
+		mged_current_display_set(s, curr_cmd_list->cl_tie);
 
 	    cmd_status = cmdline(s, &s->input_str_prefix, 1);
 	    if (cmd_status == CMD_MORE) {
@@ -1900,11 +1900,11 @@ mged_refresh_request_all(struct mged_state *s, unsigned int flags)
     if (!s)
 	return;
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p || !p->dm_view_state)
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p || !p->display_view_state)
 	    continue;
-	mged_refresh_request_view(s, p->dm_view_state, flags);
+	mged_refresh_request_view(s, p->display_view_state, flags);
 	requested = 1;
     }
 
@@ -1913,17 +1913,113 @@ mged_refresh_request_all(struct mged_state *s, unsigned int flags)
 }
 
 static void
-mged_obol_faceplate_state_sync(struct mged_state *s, struct mged_dm *p)
+mged_obol_faceplate_color_scheme_apply(struct mged_display *p)
 {
-    if (!s || !p || !p->dm_view_state || !p->dm_view_state->vs_gvp)
+    if (!p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_color_scheme || !p->display_color_scheme_dirty)
 	return;
 
-    struct bv *view = mged_view_state_view(p->dm_view_state);
+    struct bv *view = mged_view_state_view(p->display_view_state);
+    struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
+    (void)bv_center_dot_state_get(&center_dot, view);
+    VMOVE(center_dot.gos_line_color, p->display_color_scheme->cs_center_dot);
+    (void)bv_center_dot_state_set(view, &center_dot);
+
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    (void)bv_params_state_get(&params, view);
+    VMOVE(params.color, p->display_color_scheme->cs_status_text1);
+    (void)bv_params_state_set(view, &params);
+    p->display_color_scheme_dirty = 0;
+}
+
+/* MGED owns these retained axes defaults.  Do not apply them on routine
+ * redraws: a live endpoint may have a more recent typed policy value. */
+static void
+mged_obol_faceplate_axes_state_apply(struct mged_display *p)
+{
+    if (!p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_color_scheme || !p->display_axes_state || !p->display_axes_state_dirty)
+	return;
+
+    struct bv *view = mged_view_state_view(p->display_view_state);
+    const struct _axes_state *display_axes = p->display_axes_state;
+    const struct _color_scheme *display_scheme = p->display_color_scheme;
+
+    struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
+    (void)bv_model_axes_state_get(&model_axes, view);
+    model_axes.draw = display_axes->ax_model_draw;
+    VMOVE(model_axes.axes_pos, display_axes->ax_model_pos);
+    model_axes.axes_size = display_axes->ax_model_size * RT_INV_VIEW;
+    model_axes.line_width = display_axes->ax_model_linewidth;
+    model_axes.label_flag = 1;
+    VMOVE(model_axes.axes_color, display_scheme->cs_model_axes);
+    VMOVE(model_axes.label_color, display_scheme->cs_model_axes_label);
+    (void)bv_model_axes_state_set(view, &model_axes);
+
+    struct bv_axes_state view_axes = BV_AXES_STATE_INIT;
+    (void)bv_view_axes_state_get(&view_axes, view);
+    view_axes.draw = display_axes->ax_view_draw;
+    VSET(view_axes.axes_pos,
+	display_axes->ax_view_pos[X] * RT_INV_VIEW,
+	display_axes->ax_view_pos[Y] * RT_INV_VIEW, 0.0);
+    if (VNEAR_ZERO(view_axes.axes_pos, SMALL_FASTF))
+	view_axes.axes_pos[X] = 10.0 * SMALL_FASTF;
+    view_axes.axes_size = display_axes->ax_view_size * RT_INV_VIEW;
+    view_axes.line_width = display_axes->ax_view_linewidth;
+    view_axes.label_flag = 1;
+    VMOVE(view_axes.axes_color, display_scheme->cs_view_axes);
+    VMOVE(view_axes.label_color, display_scheme->cs_view_axes_label);
+    (void)bv_view_axes_state_set(view, &view_axes);
+    p->display_axes_state_dirty = 0;
+}
+
+static void
+mged_obol_faceplate_adc_style_apply(struct mged_display *p)
+{
+    if (!p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_color_scheme || !p->display_adc_style_dirty)
+	return;
+
+    struct bv_adc_state adc = BV_ADC_STATE_INIT;
+    struct bv *view = mged_view_state_view(p->display_view_state);
+    if (bv_adc_state_get(&adc, view)) {
+	VMOVE(adc.line_color, p->display_color_scheme->cs_adc_line);
+	VMOVE(adc.tick_color, p->display_color_scheme->cs_adc_tick);
+	(void)bv_adc_state_set(view, &adc);
+    }
+    p->display_adc_style_dirty = 0;
+}
+
+void
+mged_obol_faceplate_color_scheme_sync(struct mged_state *s, struct mged_display *p)
+{
+	if (!p || (!p->display_color_scheme_dirty && !p->display_axes_state_dirty &&
+	    !p->display_adc_style_dirty))
+	return;
+
+    mged_obol_faceplate_color_scheme_apply(p);
+    mged_obol_faceplate_axes_state_apply(p);
+    mged_obol_faceplate_adc_style_apply(p);
+    if (!s || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
+	return;
+
+    (void)ged_draw_obol_view_context_faceplate_sync(s->gedp,
+	p->display_view_state->vs_gvp);
+}
+
+static void
+mged_obol_faceplate_state_sync(struct mged_state *s, struct mged_display *p)
+{
+    if (!s || !p || !p->display_view_state || !p->display_view_state->vs_gvp ||
+	!p->display_variables || !p->display_color_scheme || !p->display_axes_state)
+	return;
+
+    struct bv *view = mged_view_state_view(p->display_view_state);
     struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
     (void)bv_center_dot_state_get(&center_dot, view);
     center_dot.gos_draw =
-	(!mged_variables->mv_fb || mged_variables->mv_fb_overlay != 2);
-    VMOVE(center_dot.gos_line_color, color_scheme->cs_center_dot);
+	(!p->display_variables->mv_fb ||
+	 p->display_variables->mv_fb_overlay != 2);
     (void)bv_center_dot_state_set(view, &center_dot);
 
     struct bv_params_state params = BV_PARAMS_STATE_INIT;
@@ -1932,36 +2028,58 @@ mged_obol_faceplate_state_sync(struct mged_state *s, struct mged_dm *p)
      * generic bv parameter overlay disabled so the same camera state is not
      * drawn a second time. */
     params.draw = 0;
-    VMOVE(params.color, color_scheme->cs_status_text1);
     (void)bv_params_state_set(view, &params);
+    mged_obol_faceplate_color_scheme_apply(p);
 
     mged_adc_state_refresh(s);
+    mged_obol_faceplate_adc_style_apply(p);
     mged_edit_axes_state_sync(s);
     mged_rubber_band_state_sync(s);
 
-    struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
-    model_axes.draw = axes_state->ax_model_draw;
-    VMOVE(model_axes.axes_pos, axes_state->ax_model_pos);
-    model_axes.axes_size = axes_state->ax_model_size * RT_INV_VIEW;
-    model_axes.line_width = axes_state->ax_model_linewidth;
-    model_axes.label_flag = 1;
-    VMOVE(model_axes.axes_color, color_scheme->cs_model_axes);
-    VMOVE(model_axes.label_color, color_scheme->cs_model_axes_label);
-    (void)bv_model_axes_state_set(view, &model_axes);
+    mged_obol_faceplate_axes_state_apply(p);
+}
 
-    struct bv_axes_state view_axes = BV_AXES_STATE_INIT;
-    view_axes.draw = axes_state->ax_view_draw;
-    VSET(view_axes.axes_pos,
-	axes_state->ax_view_pos[X] * RT_INV_VIEW,
-	axes_state->ax_view_pos[Y] * RT_INV_VIEW, 0.0);
-    if (VNEAR_ZERO(view_axes.axes_pos, SMALL_FASTF))
-	view_axes.axes_pos[X] = 10.0 * SMALL_FASTF;
-    view_axes.axes_size = axes_state->ax_view_size * RT_INV_VIEW;
-    view_axes.line_width = axes_state->ax_view_linewidth;
-    view_axes.label_flag = 1;
-    VMOVE(view_axes.axes_color, color_scheme->cs_view_axes);
-    VMOVE(view_axes.label_color, color_scheme->cs_view_axes_label);
-    (void)bv_view_axes_state_set(view, &view_axes);
+void
+mged_obol_faceplate_sync(struct mged_state *s, struct mged_display *p)
+{
+    mged_obol_faceplate_state_sync(s, p);
+    if (!s || !p || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
+	return;
+
+    (void)ged_draw_obol_view_context_faceplate_sync(s->gedp,
+	p->display_view_state->vs_gvp);
+}
+
+static void
+mged_obol_framebuffer_composition_sync(const struct mged_display *display,
+	void *view_ctx)
+{
+	if (!view_ctx || !display || !display->display_variables)
+	    return;
+
+	const struct _mged_variables *variables = display->display_variables;
+    const char *mode = "off";
+	if (variables->mv_fb) {
+	/* MGED's fb_overlay is intentionally not libbv's historic numeric
+	 * ordering: 0=underlay, 1=interlay, 2=overlay. */
+	mode = variables->mv_fb_overlay == 0 ? "underlay" :
+	       variables->mv_fb_overlay == 1 ? "interlay" : "overlay";
+    }
+
+    struct brlobol_endpoint_property_value current =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (ged_view_context_display_property_get(view_ctx,
+	    "composition.framebuffer.mode", &current) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK && current.string_value &&
+	BU_STR_EQUAL(current.string_value, mode))
+	return;
+
+    struct brlobol_endpoint_property_value next =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    next.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    next.string_value = mode;
+    (void)ged_view_context_display_property_set(view_ctx,
+	"composition.framebuffer.mode", &next);
 }
 
 int
@@ -1970,11 +2088,11 @@ mged_refresh_pending(struct mged_state *s)
     if (!s)
 	return 0;
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p || !p->dm_view_state || !p->dm_view_state->vs_gvp)
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p || !p->display_view_state || !p->display_view_state->vs_gvp)
 	    continue;
-	if (bv_refresh_dirty_get(mged_view_state_view(p->dm_view_state)))
+	if (bv_refresh_dirty_get(mged_view_state_view(p->display_view_state)))
 	    return 1;
     }
 
@@ -1998,7 +2116,7 @@ mged_refresh_pending(struct mged_state *s)
 void
 refresh(struct mged_state *s)
 {
-    struct mged_dm *save_dm_list;
+    struct mged_display *save_display;
     struct bu_vls overlay_vls = BU_VLS_INIT_ZERO;
     struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
     int do_overlay = 1;
@@ -2014,26 +2132,26 @@ refresh(struct mged_state *s)
     mged_pr_output(s->interp);
 
     /* Display Manager / Views */
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (!p->dm_view_state || !p->dm_view_state->vs_gvp)
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!p->display_view_state || !p->display_view_state->vs_gvp)
 	    continue;
-	if (bv_refresh_dirty_get(mged_view_state_view(p->dm_view_state)))
-	    mged_dm_repaint_request(p, MGED_REPAINT_VIEW_RECORD);
+	if (bv_refresh_dirty_get(mged_view_state_view(p->display_view_state)))
+	    mged_display_repaint_request(p, MGED_REPAINT_VIEW_RECORD);
     }
 
-    save_dm_list = s->mged_curr_dm;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	set_curr_dm(s, p);
-	if (!mapped || !mged_dm_repaint_pending(p))
+    save_display = s->mged_curr_display;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	mged_current_display_set(s, p);
+	if (!mapped || !mged_display_repaint_pending(p))
 	    continue;
 
-	void *view_ctx = p->dm_view_state ? p->dm_view_state->vs_gvp : NULL;
-	struct bv *view = view_ctx ? mged_view_state_view(p->dm_view_state) : NULL;
+	void *view_ctx = p->display_view_state ? p->display_view_state->vs_gvp : NULL;
+	struct bv *view = view_ctx ? mged_view_state_view(p->display_view_state) : NULL;
 	brlobol_display_endpoint_t *endpoint = view_ctx ?
 	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
-	mged_dm_repaint_consume(p);
+	mged_display_repaint_consume(p);
 	if (!view || !endpoint)
 	    continue;
 
@@ -2049,9 +2167,8 @@ refresh(struct mged_state *s)
 		(*viewpoint_hook)();
 	}
 
-	(void)bv_framebuffer_mode_set(view, mged_variables->mv_fb ? 1 : 0);
-	mged_obol_faceplate_state_sync(s, p);
-	(void)ged_draw_obol_view_context_faceplate_sync(s->gedp, view_ctx);
+	mged_obol_framebuffer_composition_sync(p, view_ctx);
+	mged_obol_faceplate_sync(s, p);
 
 	if (s->dbip != DBI_NULL) {
 	    mged_obol_scene_refresh(s);
@@ -2078,7 +2195,7 @@ refresh(struct mged_state *s)
 	}
     }
 
-    set_curr_dm(s, save_dm_list);
+    mged_current_display_set(s, save_display);
 
     bu_vls_free(&overlay_vls);
     bu_vls_free(&tmp_vls);
@@ -2106,7 +2223,7 @@ mged_finish(struct mged_state *s, int exitcode)
     mged_quiesce_tcl(s);
 
     (void)sprintf(place, "exit_status=%d", exitcode);
-    size_t active_dm_cnt;
+    size_t active_display_count;
 
     /* If we're in script mode, wait for subprocesses to finish before we
      * wrap up */
@@ -2129,28 +2246,27 @@ mged_finish(struct mged_state *s, int exitcode)
     }
 
     /* Release all displays. */
-    active_dm_cnt = BU_PTBL_LEN(&active_dm_set);
-    while (active_dm_cnt > 0) {
-	struct mged_dm *p;
+    active_display_count = BU_PTBL_LEN(&active_display_set);
+    while (active_display_count > 0) {
+	struct mged_display *p;
 
-	active_dm_cnt--;
-	p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, active_dm_cnt);
+	active_display_count--;
+	p = (struct mged_display *)BU_PTBL_GET(&active_display_set, active_display_count);
 
-	bu_ptbl_rm(&active_dm_set, (long *)p);
+	bu_ptbl_rm(&active_display_set, (long *)p);
 
-	if (p && p->dm_dmp) {
+	if (p) {
 	    if (s->gedp) {
 		ged_draw_obol_framebuffer_release(s->gedp);
 		mged_obol_display_detach(s, p);
 	    }
-	    dm_close(p->dm_dmp);
 	    mged_slider_free_vls(p);
-	    bu_free(p, "release: mged_curr_dm");
+	    bu_free(p, "release: mged_curr_display");
 	}
 
-	set_curr_dm(s, MGED_DM_NULL);
+	mged_current_display_set(s, MGED_DISPLAY_NULL);
     }
-    bu_ptbl_free(&active_dm_set);
+    bu_ptbl_free(&active_display_set);
 
     for (BU_LIST_FOR (c, cmd_list, &head_cmd_list.l)) {
 	bu_vls_free(&c->cl_name);
@@ -2294,7 +2410,6 @@ apply_cli_overrides(struct mged_state *s, struct mged_cli_overrides *cl)
 
     /* --- mged_variables -------------------------------------------------- */
     if (cl->use_air        != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("use_air",        cl->use_air);
-    if (cl->cache          != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("cache",          cl->cache);
     if (cl->faceplate      != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("faceplate",      cl->faceplate);
     if (cl->orig_gui       != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("orig_gui",       cl->orig_gui);
     if (cl->linewidth      != MGED_CLI_UNSET_INT) CLI_SETVAR_INT("linewidth",      cl->linewidth);
@@ -2478,13 +2593,12 @@ main(int argc, char *argv[])
     mged_global_db_ctx.init_flag = 1;
 
     char *attach = (char *)NULL;
-    BU_ALLOC(s->mged_curr_dm, struct mged_dm);
-    bu_vls_init(&s->mged_curr_dm->dm_pathname);
-    bu_vls_strcpy(&s->mged_curr_dm->dm_pathname, "nu");
-    bu_ptbl_init(&active_dm_set, 8, "dm set");
-    bu_ptbl_ins(&active_dm_set, (long *)s->mged_curr_dm);
-    mged_dm_init_state = s->mged_curr_dm;
-    (void)fbs_init(&s->mged_curr_dm->dm_fbserv);
+    BU_ALLOC(s->mged_curr_display, struct mged_display);
+    bu_vls_init(&s->mged_curr_display->display_pathname);
+    bu_vls_strcpy(&s->mged_curr_display->display_pathname, "nu");
+    bu_ptbl_init(&active_display_set, 8, "dm set");
+    bu_ptbl_ins(&active_display_set, (long *)s->mged_curr_display);
+    mged_initial_display = s->mged_curr_display;
 
     setmode(fileno(stdin), O_BINARY);
     setmode(fileno(stdout), O_BINARY);
@@ -2511,7 +2625,6 @@ main(int argc, char *argv[])
 
     /* Initialise all int fields to MGED_CLI_UNSET_INT ("not given") */
     cl.use_air          = MGED_CLI_UNSET_INT;
-    cl.cache            = MGED_CLI_UNSET_INT;
     cl.faceplate        = MGED_CLI_UNSET_INT;
     cl.orig_gui         = MGED_CLI_UNSET_INT;
     cl.linewidth        = MGED_CLI_UNSET_INT;
@@ -2579,41 +2692,39 @@ main(int argc, char *argv[])
     /* ---- mged_variables: boolean on/off pairs ---- */
     BU_OPT(opt_defs[17], NULL, "use-air",          "",        NULL,            &cl.use_air,          "enable use_air");
     BU_OPT(opt_defs[18], NULL, "no-use-air",       "",        flag_set_zero,   &cl.use_air,          "disable use_air");
-    BU_OPT(opt_defs[19], NULL, "cache",            "",        NULL,            &cl.cache,            "enable backend caching");
-    BU_OPT(opt_defs[20], NULL, "no-cache",         "",        flag_set_zero,   &cl.cache,            "disable backend caching");
-    BU_OPT(opt_defs[21], NULL, "faceplate",        "",        NULL,            &cl.faceplate,        "show faceplate overlay");
-    BU_OPT(opt_defs[22], NULL, "no-faceplate",     "",        flag_set_zero,   &cl.faceplate,        "hide faceplate overlay");
+    BU_OPT(opt_defs[19], NULL, "faceplate",        "",        NULL,            &cl.faceplate,        "show faceplate overlay");
+    BU_OPT(opt_defs[20], NULL, "no-faceplate",     "",        flag_set_zero,   &cl.faceplate,        "hide faceplate overlay");
     /* ---- mged_variables: valued options ---- */
-    BU_OPT(opt_defs[23], NULL, "linewidth",        "#",       bu_opt_int,      &cl.linewidth,        "wireframe line width (pixels, >=1)");
-    BU_OPT(opt_defs[24], NULL, "linestyle",        "s|d",     bu_opt_char,     &cl.linestyle,        "line style: s=solid, d=dashed");
-    BU_OPT(opt_defs[25], NULL, "perspective",      "#",       bu_opt_fastf_t,  &cl.perspective,      "perspective angle in degrees (-1=off)");
-    BU_OPT(opt_defs[26], NULL, "eye-sep-dist",     "#",       bu_opt_fastf_t,  &cl.eye_sep_dist,     "stereo eye separation (mm, 0=mono)");
-    BU_OPT(opt_defs[27], NULL, "port",             "#",       bu_opt_int,      &cl.port,             "framebuffer server listen port (0-65535)");
-    BU_OPT(opt_defs[28], NULL, "coords",           "m|v",     bu_opt_char,     &cl.coords,           "constraint coords: m=model v=view");
-    BU_OPT(opt_defs[29], NULL, "rotate-about",     "m|v|e",   bu_opt_char,     &cl.rotate_about,     "rotate center: m=model v=view e=eye");
-    BU_OPT(opt_defs[30], NULL, "transform",        "v|a|e",   bu_opt_char,     &cl.transform,        "mouse transform: v=view a=adc e=edit");
-    BU_OPT(opt_defs[31], NULL, "nmg-eu-dist",      "#",       bu_opt_fastf_t,  &cl.nmg_eu_dist,      "NMG edge-use distance tolerance");
-    BU_OPT(opt_defs[32], NULL, "mouse-behavior",   "v|a|e",   bu_opt_char,     &cl.mouse_behavior,   "mouse behavior mode");
-    BU_OPT(opt_defs[33], NULL, "perspective-mode", "0|1",     bu_opt_int,      &cl.perspective_mode, "enable/disable perspective mode");
-    BU_OPT(opt_defs[34], NULL, "context",          "0|1",     bu_opt_int,      &cl.context,          "context mode (0=off)");
-    BU_OPT(opt_defs[35], NULL, "sliders",          "0|1",     bu_opt_int,      &cl.sliders,          "show sliders");
-    BU_OPT(opt_defs[36], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
-    BU_OPT(opt_defs[37], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
+    BU_OPT(opt_defs[21], NULL, "linewidth",        "#",       bu_opt_int,      &cl.linewidth,        "wireframe line width (pixels, >=1)");
+    BU_OPT(opt_defs[22], NULL, "linestyle",        "s|d",     bu_opt_char,     &cl.linestyle,        "line style: s=solid, d=dashed");
+    BU_OPT(opt_defs[23], NULL, "perspective",      "#",       bu_opt_fastf_t,  &cl.perspective,      "perspective angle in degrees (-1=off)");
+    BU_OPT(opt_defs[24], NULL, "eye-sep-dist",     "#",       bu_opt_fastf_t,  &cl.eye_sep_dist,     "stereo eye separation (mm, 0=mono)");
+    BU_OPT(opt_defs[25], NULL, "port",             "#",       bu_opt_int,      &cl.port,             "framebuffer server listen port (0-65535)");
+    BU_OPT(opt_defs[26], NULL, "coords",           "m|v",     bu_opt_char,     &cl.coords,           "constraint coords: m=model v=view");
+    BU_OPT(opt_defs[27], NULL, "rotate-about",     "m|v|e",   bu_opt_char,     &cl.rotate_about,     "rotate center: m=model v=view e=eye");
+    BU_OPT(opt_defs[28], NULL, "transform",        "v|a|e",   bu_opt_char,     &cl.transform,        "mouse transform: v=view a=adc e=edit");
+    BU_OPT(opt_defs[29], NULL, "nmg-eu-dist",      "#",       bu_opt_fastf_t,  &cl.nmg_eu_dist,      "NMG edge-use distance tolerance");
+    BU_OPT(opt_defs[30], NULL, "mouse-behavior",   "v|a|e",   bu_opt_char,     &cl.mouse_behavior,   "mouse behavior mode");
+    BU_OPT(opt_defs[31], NULL, "perspective-mode", "0|1",     bu_opt_int,      &cl.perspective_mode, "enable/disable perspective mode");
+    BU_OPT(opt_defs[32], NULL, "context",          "0|1",     bu_opt_int,      &cl.context,          "context mode (0=off)");
+    BU_OPT(opt_defs[33], NULL, "sliders",          "0|1",     bu_opt_int,      &cl.sliders,          "show sliders");
+    BU_OPT(opt_defs[34], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
+    BU_OPT(opt_defs[35], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
     /* ---- window/display (Tcl mged_default array) ---- */
-    BU_OPT(opt_defs[38], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display host type (tkobol or headless obol)");
-    BU_OPT(opt_defs[39], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
-    BU_OPT(opt_defs[40], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
+    BU_OPT(opt_defs[36], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display host type (tkobol or headless obol)");
+    BU_OPT(opt_defs[37], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
+    BU_OPT(opt_defs[38], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
     /* ---- grid (rset g …) ---- */
-    BU_OPT(opt_defs[41], NULL, "grid-draw",        "0|1",     bu_opt_int,      &cl.grid_draw,        "show/hide grid");
-    BU_OPT(opt_defs[42], NULL, "grid-snap",        "0|1",     bu_opt_int,      &cl.grid_snap,        "enable/disable grid snap");
-    BU_OPT(opt_defs[43], NULL, "grid-rh",          "#",       bu_opt_fastf_t,  &cl.grid_rh,          "horizontal grid resolution");
-    BU_OPT(opt_defs[44], NULL, "grid-rv",          "#",       bu_opt_fastf_t,  &cl.grid_rv,          "vertical grid resolution");
-    BU_OPT(opt_defs[45], NULL, "grid-mrh",         "#",       bu_opt_int,      &cl.grid_mrh,         "horizontal major grid interval");
-    BU_OPT(opt_defs[46], NULL, "grid-mrv",         "#",       bu_opt_int,      &cl.grid_mrv,         "vertical major grid interval");
+    BU_OPT(opt_defs[39], NULL, "grid-draw",        "0|1",     bu_opt_int,      &cl.grid_draw,        "show/hide grid");
+    BU_OPT(opt_defs[40], NULL, "grid-snap",        "0|1",     bu_opt_int,      &cl.grid_snap,        "enable/disable grid snap");
+    BU_OPT(opt_defs[41], NULL, "grid-rh",          "#",       bu_opt_fastf_t,  &cl.grid_rh,          "horizontal grid resolution");
+    BU_OPT(opt_defs[42], NULL, "grid-rv",          "#",       bu_opt_fastf_t,  &cl.grid_rv,          "vertical grid resolution");
+    BU_OPT(opt_defs[43], NULL, "grid-mrh",         "#",       bu_opt_int,      &cl.grid_mrh,         "horizontal major grid interval");
+    BU_OPT(opt_defs[44], NULL, "grid-mrv",         "#",       bu_opt_int,      &cl.grid_mrv,         "vertical major grid interval");
     /* ---- colour scheme subset (rset cs …) ---- */
-    BU_OPT(opt_defs[47], NULL, "bg",               "R G B",   parse_opt_color, &cl.bg_color,         "background colour (0-255 per component, or #RRGGBB)");
-    BU_OPT(opt_defs[48], NULL, "geo-color",        "R G B",   parse_opt_color, &cl.geo_def_color,    "default geometry wireframe colour");
-    BU_OPT_NULL(opt_defs[49]);
+    BU_OPT(opt_defs[45], NULL, "bg",               "R G B",   parse_opt_color, &cl.bg_color,         "background colour (0-255 per component, or #RRGGBB)");
+    BU_OPT(opt_defs[46], NULL, "geo-color",        "R G B",   parse_opt_color, &cl.geo_def_color,    "default geometry wireframe colour");
+    BU_OPT_NULL(opt_defs[47]);
 
     /* bu_opt_parse does not consume argv[0] (the program name).
      * Skip it manually so that the remaining args match what the
@@ -2639,10 +2750,8 @@ main(int argc, char *argv[])
 
     /* -v / --version */
     if (cl.print_version) {
-	printf("%s%s%s%s%s%s\n",
+	printf("%s%s%s%s\n",
 	       brlcad_ident("MGED Geometry Editor"),
-	       dm_version(),
-	       fb_version(),
 	       rt_version(),
 	       bn_version(),
 	       bu_version());
@@ -2807,19 +2916,9 @@ main(int argc, char *argv[])
     bu_vls_strcpy(&head_cmd_list.cl_name, "mged");
     curr_cmd_list = &head_cmd_list;
 
-    /* register application provided routines */
-
-    DMP = dm_open(NULL, s->interp, "nu", 0, NULL);
-
-    /* If we're only doing the 'nu' dm we don't need most of mged_dm_init, but
-     * we do still need to register the dm_commands */
-    s->mged_curr_dm->dm_cmd_hook = dm_commands;
-
-    struct bu_vls *tnvp = dm_get_tkname(s->mged_curr_dm->dm_dmp);
-    if (tnvp) {
-	bu_vls_init(tnvp); /* this may leak */
-	bu_vls_strcpy(tnvp, "nu");
-    }
+    /* The initial no-window state still needs the command dispatcher, but
+     * no longer opens a null display manager. */
+    s->mged_curr_display->display_command_hook = mged_display_command;
 
     BU_ALLOC(rubber_band, struct _rubber_band);
     *rubber_band = default_rubber_band;		/* struct copy */
@@ -2829,19 +2928,19 @@ main(int argc, char *argv[])
 
     BU_ALLOC(color_scheme, struct _color_scheme);
     *color_scheme = default_color_scheme;	/* struct copy */
+    s->mged_curr_display->display_color_scheme_dirty = 1;
 
     BU_ALLOC(axes_state, struct _axes_state);
     *axes_state = default_axes_state;		/* struct copy */
+    s->mged_curr_display->display_axes_state_dirty = 1;
+    s->mged_curr_display->display_adc_style_dirty = 1;
 
     BU_ALLOC(menu_state, struct _menu_state);
     menu_state->ms_rc = 1;
 
-    BU_ALLOC(backend_cache_state, struct _backend_cache_state);
-    backend_cache_state->cache_rc = 1;
-
     BU_ALLOC(view_state, struct _view_state);
     view_state->vs_rc = 1;
-    view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);
+    view_ring_init(s->mged_curr_display->display_view_state, (struct _view_state *)NULL);
     MAT_IDN(view_state->vs_ModelDelta);
     if (view_state->vs_gvp) {
 	struct bv *view = mged_view_state_view(view_state);
@@ -2857,7 +2956,7 @@ main(int argc, char *argv[])
     }
 
     am_mode = AMM_IDLE;
-    s->mged_curr_dm->dm_owner = 1;
+    s->mged_curr_display->display_owner = 1;
     frametime = 1;
 
     MAT_IDN(MEDIT(s)->model_changes);
@@ -2887,12 +2986,12 @@ main(int argc, char *argv[])
     /* prepare mged, adjust our path, get set up to use Tcl */
 
     mged_setup(s);
-    (void)ged_clbk_set(s->gedp, "dm", BU_CLBK_DURING, mged_dm_during_clbk, (void *)s);
+    (void)ged_clbk_set(s->gedp, "dm", BU_CLBK_DURING, mged_display_during_clbk, (void *)s);
     new_mats(s);
 
     mmenu_init(s);
     btn_head_menu(MEDIT(s), 0, 0, 0, s);
-    mged_link_vars(s->mged_curr_dm);
+    mged_link_vars(s->mged_curr_display);
 
     bu_vls_printf(&s->input_str, "set version \"%s\"", brlcad_ident("Geometry Editor (MGED)"));
     (void)Tcl_Eval(s->interp, bu_vls_addr(&s->input_str));
@@ -3116,8 +3215,8 @@ main(int argc, char *argv[])
 	 * this in their .mgedrc before the attach happens, e.g.:
 	 *   set mged_default(ggeom) 512x512+0+0
 	 */
-	if (s->mged_curr_dm && s->mged_curr_dm->dm_graphical) {
-	    const char *pn = mged_dm_pathname(s->mged_curr_dm);
+	if (s->mged_curr_display && s->mged_curr_display->display_hosted) {
+	    const char *pn = mged_display_pathname(s->mged_curr_display);
 	    const char *ggeom = Tcl_GetVar(s->interp, "mged_default(ggeom)", TCL_GLOBAL_ONLY);
 	    if (pn && ggeom && strlen(ggeom)) {
 		struct bu_vls geom_cmd = BU_VLS_INIT_ZERO;

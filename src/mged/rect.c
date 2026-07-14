@@ -30,9 +30,9 @@
 #include "vmath.h"
 #include "ged.h"
 #include "ged/view.h"
-#include "dm.h"
+#include "imgstream/fbserv.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 extern int mged_vscale(struct mged_state *s, fastf_t sfactor);
 
@@ -73,10 +73,10 @@ rb_set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (m_dmp->dm_rubber_band == rubber_band) {
-	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_INTERACTION);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (m_dmp->display_rubber_band == rubber_band) {
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_INTERACTION);
 	}
     }
 }
@@ -240,7 +240,9 @@ rt_rect_area(struct mged_state *s)
     int width, height;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
-    if (!fbp)
+
+    if (!s || !s->gedp || !mged_obol_framebuffer_ensure(s) ||
+	!fbs_framebuffer_backend_installed(s->gedp->ged_fbs))
 	return;
 
     if (ZERO(rubber_band->rb_width) &&

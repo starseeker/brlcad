@@ -1,6 +1,14 @@
+/*              I N D E X E D _ F A C E _ S E T . C
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ */
 /* Validate direct primitive indexed-face providers. */
 
 #include "common.h"
+
+#include "bu/app.h"
 
 #include <math.h>
 #include <string.h>
@@ -322,6 +330,7 @@ check_tor(void)
 int
 main(void)
 {
+    bu_setprogname("indexed_face_set");
     if (!check_arb()) {
 	bu_log("ARB indexed-face validation failed\n");
 	return 1;

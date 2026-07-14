@@ -27,7 +27,6 @@
 #include "common.h"
 
 #include "brlobol/display_endpoint.h"
-#include "QgLegacyViewContext.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
@@ -73,17 +72,17 @@ qg_refresh_flags(QgViewUpdateFlags flags)
 /* in every QgView method body.                                            */
 /* ---------------------------------------------------------------------- */
 static QgCanvasBase *
-make_canvas(QWidget *parent, int type)
+make_canvas(QWidget *parent, QgViewType type)
 {
     switch (type) {
 #ifdef BRLCAD_OPENGL
-    case QgView_GL:
+    case QgViewType::GL:
 return new QgGL(parent, nullptr, false);
 #endif
-    case QgView_SW:
+    case QgViewType::SW:
 return new QgSW(parent, nullptr, false);
     default:
-/* QgView_AUTO or any other value: prefer hardware GL, fall back to SW */
+/* Auto prefers hardware GL and otherwise uses software presentation. */
 #ifdef BRLCAD_OPENGL
 return new QgGL(parent, nullptr, false);
 #else
@@ -94,7 +93,40 @@ return new QgSW(parent, nullptr, false);
 
 /* ---------------------------------------------------------------------- */
 
-QgView::QgView(QWidget *parent, int type)
+/* The view, rather than a native host, initializes a freshly created
+ * endpoint from its passive GED state.  A host may be replaced while the
+ * endpoint survives, so it must never own this policy transfer. */
+static bool
+qg_endpoint_background_seed(brlobol_display_endpoint_t *endpoint,
+	struct bv_context *view_ctx)
+{
+    if (!endpoint || !view_ctx)
+	return false;
+
+    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    if (!bv_background_state_get(&background,
+	    bv_context_view_const(view_ctx)))
+	return false;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    for (int i = 0; i < 3; i++)
+	value.color3[i] = background.bottom[i] / 255.0;
+    if (brlobol_display_endpoint_property_set(endpoint,
+	    "controller.background.bottom", &value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	return false;
+    for (int i = 0; i < 3; i++)
+	value.color3[i] = background.top[i] / 255.0;
+    return brlobol_display_endpoint_property_set(endpoint,
+	"controller.background.top", &value) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK;
+}
+
+/* ---------------------------------------------------------------------- */
+
+QgView::QgView(QWidget *parent, QgViewType type)
     : QWidget(parent)
 {
     this->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -136,7 +168,8 @@ return;
 	if (!endpoint || !brlobol_display_endpoint_render_engine_set(endpoint,
 		use_gl ? BRLOBOL_RENDER_ENGINE_HW : BRLOBOL_RENDER_ENGINE_SW) ||
 	    !brlobol_display_endpoint_host_open(endpoint,
-		use_gl ? "qt-gl" : "qt-sw", &desc)) {
+		use_gl ? "qt-gl" : "qt-sw", &desc) ||
+	    !qg_endpoint_background_seed(endpoint, viewContext())) {
 	    canvas->setObolViewController(nullptr);
 	    brlobol_display_endpoint_destroy(endpoint);
 	    endpoint = nullptr;
@@ -155,7 +188,7 @@ return;
 
 QgView::~QgView()
 {
-    void *view_ctx = qg_legacy_view_to_context(view());
+    struct bv_context *view_ctx = viewContext();
     if (endpoint && view_ctx &&
 	ged_view_context_display_endpoint_get(view_ctx) == endpoint)
 	(void)ged_view_context_display_endpoint_set(view_ctx, nullptr, 0);
@@ -176,16 +209,16 @@ return false;
     return canvas->isValid();
 }
 
-int
-QgView::view_type()
+QgViewType
+QgView::view_type() const
 {
     if (!canvas)
-return -1;
+	return QgViewType::Auto;
 #ifdef BRLCAD_OPENGL
     if (dynamic_cast<QgGL *>(canvas))
-return QgView_GL;
+	return QgViewType::GL;
 #endif
-    return QgView_SW;
+    return QgViewType::SW;
 }
 
 
@@ -231,22 +264,22 @@ QgView::need_update(QgViewUpdateFlags flags)
 {
     QTCAD_SLOT("QgView::need_update", 1);
     uint32_t refresh_flags = qg_refresh_flags(flags);
-    if (qg_legacy_view *lv = view())
-	bv_refresh_request(qg_legacy_view_bv(lv), refresh_flags);
+    if (struct bv_context *view_ctx = viewContext())
+	bv_refresh_request(bv_context_view(view_ctx), refresh_flags);
     if (canvas)
 canvas->request_update(refresh_flags);
 }
 
-qg_legacy_view *
-QgView::view()
+struct bv_context *
+QgView::viewContext()
 {
-    return canvas ? canvas->view() : nullptr;
+    return canvas ? canvas->viewContext() : nullptr;
 }
 
-bool
-QgView::legacyBackendInitialized() const
+const struct bv_context *
+QgView::viewContext() const
 {
-    return canvas ? canvas->legacyBackendInitialized() : false;
+	return canvas ? canvas->viewContext() : nullptr;
 }
 
 BRLObolViewController *
@@ -265,13 +298,6 @@ QgCanvasBase *
 QgView::canvasBase()
 {
     return canvas;
-}
-
-void
-QgView::set_view(qg_legacy_view *nv)
-{
-    if (canvas)
-canvas->set_view(nv);
 }
 
 void

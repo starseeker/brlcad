@@ -45,7 +45,7 @@ screengrab %s
 quit
 ' "$PARTIAL" "$FINAL" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
 
-if ! grep -q "ert: calling _ged_run_rt (using_ipc=1" "$LOG"; then
+if ! grep -q "rt: launching endpoint framebuffer renderer (ipc=1" "$LOG"; then
     echo "gsh Obol ert smoke did not use the Obol IPC framebuffer path" 1>&2
     cat "$LOG" 1>&2
     exit 1

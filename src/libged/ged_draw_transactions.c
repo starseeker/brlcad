@@ -1242,7 +1242,7 @@ _ged_draw_reexpand_group_add(struct ged_draw_reexpand_source_ctx *ctx,
     if (!ged_draw_group_ref_appearance_settings(ctx->gedp, rec->ref,
 	    &appearance)) {
 	appearance.draw_mode = rec->draw_mode;
-	appearance.transparency = rec->transparency;
+	appearance.transparency = 1.0 - rec->transparency;
     }
     entry->appearance = appearance;
     bu_ptbl_ins(&ctx->groups, (long *)entry);

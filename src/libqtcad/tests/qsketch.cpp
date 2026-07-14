@@ -132,11 +132,10 @@
 #include <QWidgetAction>
 
 #include "qtcad/QgSignalFlags.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSketchFilter.h"
-#include "QgLegacyViewContext.h"
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
+#include "bv.h"
 
 /* ------------------------------------------------------------------ */
 /* Helpers: create a minimal in-plane sketch                          */
@@ -426,16 +425,15 @@ public:
 		      QWidget *parent = NULL);
     ~QSketchEditWindow();
 
-    /* Render the sketch view and save a composite screenshot.
-     * Grabs the Qt window chrome and overlays the swrast DM viewport render,
-     * giving a picture that shows both the UI and the sketch wireframe. */
+    /* Render the sketch view and save a composite screenshot.  The viewport
+     * image is the current Obol presentation, including the sketch wireframe. */
     void screenshot_to_file(const QString &filename) {
 	if (!m_view) return;
 
 	/* Step 1: Grab the full Qt window (UI chrome) */
 	QPixmap winpix = grab();
 
-	/* Step 2: Get the DM viewport image from swrast */
+	/* Step 2: Get the Obol viewport image. */
 	QImage dm_img;
 	m_view->get_viewport_image(dm_img);
 
@@ -444,7 +442,7 @@ public:
 	    QPoint vp_offset = m_view->mapTo(this, QPoint(0, 0));
 	    QSize  vp_size   = m_view->size();
 
-	    /* Paint the DM image into the window pixmap */
+	    /* Paint the viewport image into the window pixmap. */
 	    QPainter p(&winpix);
 	    p.drawImage(QRect(vp_offset, vp_size),
 		       dm_img.convertToFormat(QImage::Format_RGB32));
@@ -507,7 +505,6 @@ private:
     /* ---- data ---- */
     struct db_i          *m_dbip = NULL;
     struct directory     *m_dp   = NULL;
-    qg_legacy_view   *m_legacy_view = NULL;
     struct rt_edit       *m_es   = NULL;
     struct bn_tol         m_tol;
     qsketch_line_set *m_sketch_lines = NULL;
@@ -545,10 +542,11 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
     /* ---- tolerance ---- */
     BN_TOL_INIT(&m_tol);
 
-    /* ---- staged view ---- */
-    m_legacy_view = qg_legacy_view_local_create("qsketch");
-    if (!m_legacy_view) {
-	bu_log("qsketch: staged view creation failed\n");
+    /* QgView owns the one retained context used by editing and rendering. */
+    m_view = new QgView(this, QgViewType::SW);
+    void *view_ctx = m_view ? m_view->viewContext() : NULL;
+    if (!view_ctx) {
+	bu_log("qsketch: view-context creation failed\n");
 	return;
     }
 
@@ -557,18 +555,20 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
      * u_vec (1,0,0) and v_vec (0,1,0) defaults. */
     vect_t aet;
     VSET(aet, 0.0, 90.0, 0.0);
-    bv_aet_set(qg_legacy_view_bv(m_legacy_view), aet);
-    bv_scale_set(qg_legacy_view_bv(m_legacy_view), 250.0);
-    bv_context_update(qg_legacy_view_context(m_legacy_view),
+    struct bv_context *view_context =
+	static_cast<struct bv_context *>(view_ctx);
+    bv_aet_set(bv_context_view(view_context), aet);
+    bv_scale_set(bv_context_view(view_context), 250.0);
+    bv_context_update(view_context,
 	    BV_CONTEXT_CHANGED_VIEW);
-    qg_legacy_view_dimensions_set(m_legacy_view, 700, 700);
+    (void)bv_context_dimensions_set(view_context, 700, 700);
 
     /* ---- rt_edit ---- */
     struct db_full_path fp;
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
     m_es = rt_edit_create_context(&fp, dbip, &m_tol,
-	    qg_legacy_view_to_context(m_legacy_view));
+	    view_ctx);
     db_free_full_path(&fp);
 
     if (!m_es) {
@@ -581,10 +581,6 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
 
     /* Take an initial checkpoint for undo */
     rt_edit_checkpoint(m_es);
-
-    /* ----  QgView ---- */
-    m_view = new QgView(this, QgView_SW);
-    m_view->set_view(m_legacy_view);
 
     /* Create a field-backed line-set node for the sketch wireframe under the
      * view's initialized scene anchor.  qsketch refreshes the line-set fields
@@ -762,13 +758,9 @@ QSketchEditWindow::~QSketchEditWindow()
     clear_filter();
     if (m_es)
 	rt_edit_destroy(m_es);
-    if (m_legacy_view) {
-	/* Destroy the sketch line-set before releasing the view. */
-	qsketch_line_set_destroy(m_sketch_lines);
-	m_sketch_lines = NULL;
-	qg_legacy_view_local_destroy(m_legacy_view);
-	m_legacy_view = NULL;
-    }
+    /* The QgView owns its context; only this sketch's retained node is ours. */
+    qsketch_line_set_destroy(m_sketch_lines);
+    m_sketch_lines = NULL;
 }
 
 /* ---------- filter management ---------- */
@@ -1265,9 +1257,13 @@ void QSketchEditWindow::on_fit_view()
     world_center[0] = skt2->V[0] + cx * skt2->u_vec[0] + cy * skt2->v_vec[0];
     world_center[1] = skt2->V[1] + cx * skt2->u_vec[1] + cy * skt2->v_vec[1];
     world_center[2] = skt2->V[2] + cx * skt2->u_vec[2] + cy * skt2->v_vec[2];
-    bv_center_set(qg_legacy_view_bv(m_legacy_view), world_center);
-    bv_size_set(qg_legacy_view_bv(m_legacy_view), span);
-    bv_context_update(qg_legacy_view_context(m_legacy_view),
+	struct bv_context *view_ctx = m_view ?
+	static_cast<struct bv_context *>(m_view->viewContext()) : NULL;
+	if (!view_ctx)
+	return;
+    bv_center_set(bv_context_view(view_ctx), world_center);
+    bv_size_set(bv_context_view(view_ctx), span);
+    bv_context_update(view_ctx,
 	    BV_CONTEXT_CHANGED_VIEW);
 
     m_view->need_update(QG_VIEW_REFRESH);
@@ -1418,11 +1414,13 @@ void QSketchEditWindow::on_mode_set_tangency()
 
 void QSketchEditWindow::on_toggle_grid(bool checked)
 {
-    if (!m_legacy_view) return;
+	struct bv_context *view_ctx = m_view ?
+	static_cast<struct bv_context *>(m_view->viewContext()) : NULL;
+	if (!view_ctx) return;
     struct bv_grid_state grid;
-    if (!bv_grid_state_get(&grid, qg_legacy_view_bv_const(m_legacy_view))) return;
+	if (!bv_grid_state_get(&grid, bv_context_view_const(view_ctx))) return;
     grid.draw = checked ? 1 : 0;
-    bv_grid_state_set(qg_legacy_view_bv(m_legacy_view), &grid);
+	bv_grid_state_set(bv_context_view(view_ctx), &grid);
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(checked ? "Grid enabled." : "Grid disabled.");
 }
@@ -1431,10 +1429,12 @@ void QSketchEditWindow::on_toggle_grid(bool checked)
 
 void QSketchEditWindow::on_grid_settings()
 {
-    if (!m_legacy_view) return;
+	struct bv_context *view_ctx = m_view ?
+	static_cast<struct bv_context *>(m_view->viewContext()) : NULL;
+	if (!view_ctx) return;
 
     struct bv_grid_state grid;
-    if (!bv_grid_state_get(&grid, qg_legacy_view_bv_const(m_legacy_view))) return;
+	if (!bv_grid_state_get(&grid, bv_context_view_const(view_ctx))) return;
 
     QDialog dlg(this);
     dlg.setWindowTitle("Grid Settings");
@@ -1516,7 +1516,7 @@ void QSketchEditWindow::on_grid_settings()
     grid.anchor[1]   = (fastf_t)sb_anchor_v->value();
     grid.snap        = cb_snap->isChecked() ? 1 : 0;
     grid.adaptive    = cb_adaptive->isChecked() ? 1 : 0;
-    bv_grid_state_set(qg_legacy_view_bv(m_legacy_view), &grid);
+	bv_grid_state_set(bv_context_view(view_ctx), &grid);
 
     m_view->need_update(QG_VIEW_REFRESH);
     set_status(QString("Grid: H=%1 V=%2 mm  anchor=(%3,%4)  snap=%5.")
@@ -2224,7 +2224,7 @@ main(int argc, char *argv[])
     win.show();
 
     if (screenshot_file) {
-	/* Headless screenshot: render directly from swrast DM buffer.
+	/* Headless screenshot: render from the Obol viewport.
 	 * Wait for the initial fit-view timer (singleShot(0)) to fire and
 	 * for Qt to finish laying out the window before we capture. */
 	static const int SCREENSHOT_DELAY_MS = 500;

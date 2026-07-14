@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 extern "C" {
 #include "bu/malloc.h"
 #include "bu/vls.h"
@@ -41,13 +43,12 @@ extern "C" {
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
-#include "QgLegacyViewContext.h"
 
-static qg_legacy_view *
-qg_select_filter_legacy_view(const QgSelectFilter *filter)
+static void *
+qg_select_filter_view_context(const QgSelectFilter *filter)
 {
     QgView *display = filter ? filter->view_widget() : nullptr;
-    return display ? display->view() : nullptr;
+    return display ? display->viewContext() : nullptr;
 }
 
 static void
@@ -171,10 +172,10 @@ QgSelectFilter::set_selected_result(struct ged_draw_pick_result *res)
 	return;
 
     m->selected_result = res;
-    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    void *v = qg_select_filter_view_context(this);
     if (v)
 	ged_draw_view_context_selection_set_pick_result(
-		qg_legacy_view_to_context(v), m->selected_result,
+		v, m->selected_result,
 		_qg_append_unique_path_cb, &m->selected_path_strings);
 }
 
@@ -188,9 +189,9 @@ QgSelectFilter::set_selected_paths(const std::vector<std::string> &paths)
     for (const std::string &path : paths)
 	_qg_append_unique_path(m->selected_path_strings, path.c_str());
 
-    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    void *v = qg_select_filter_view_context(this);
     if (v)
-	ged_draw_view_context_selection_clear(qg_legacy_view_to_context(v));
+	ged_draw_view_context_selection_clear(v);
 }
 
 bool
@@ -200,7 +201,7 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
-    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    void *v = qg_select_filter_view_context(this);
 
     if (e->type() != QEvent::MouseButtonRelease)
 	return true;
@@ -232,9 +233,9 @@ QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
     }
 
     struct ged_draw_pick_result *res = first_only ?
-	ged_draw_view_context_pick_nearest(qg_legacy_view_to_context(v),
+	ged_draw_view_context_pick_nearest(v,
 		sx, sy) :
-	ged_draw_view_context_pick_point(qg_legacy_view_to_context(v), sx,
+	ged_draw_view_context_pick_point(v, sx,
 		sy, 0);
     set_selected_result(res);
 
@@ -248,11 +249,11 @@ QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
-    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    void *v = qg_select_filter_view_context(this);
     if (!v)
 	return false;
-    void *view_ctx = qg_legacy_view_to_context(v);
-    struct bv *view = qg_legacy_view_bv(v);
+    void *view_ctx = v;
+    struct bv *view = bv_context_view(static_cast<struct bv_context *>(v));
 
     if (e->type() == QEvent::MouseButtonDblClick)
 	return true;
@@ -470,9 +471,9 @@ _qg_pick_result_from_ray_hits(const struct ged_draw_pick_result *candidates,
 }
 
 static bool
-_qg_select_ray_from_view(qg_legacy_view *v, int sx, int sy, point_t origin, vect_t direction)
+_qg_select_ray_from_view(void *v, int sx, int sy, point_t origin, vect_t direction)
 {
-    const struct bv *view = qg_legacy_view_bv_const(v);
+    const struct bv *view = bv_context_view_const(static_cast<const struct bv_context *>(v));
     if (!view || !origin || !direction)
 	return false;
 
@@ -509,7 +510,7 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     if (!m_e)
 	return false;
 
-    qg_legacy_view *v = qg_select_filter_legacy_view(this);
+    void *v = qg_select_filter_view_context(this);
     if (!v)
 	return false;
     if (e->type() != QEvent::MouseButtonRelease)
@@ -571,7 +572,7 @@ QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
     }
 
     struct ged_draw_pick_result *candidates =
-	ged_draw_view_context_pick_point(qg_legacy_view_to_context(v), sx,
+	ged_draw_view_context_pick_point(v, sx,
 		sy, 0);
     size_t candidate_count = candidates ?
 	ged_draw_pick_result_count(candidates) : 0;

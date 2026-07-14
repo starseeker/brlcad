@@ -22,6 +22,8 @@
  */
 
 #include "common.h"
+
+#include "bv.h"
 #include <vector>
 #include <QLabel>
 #include <QLineEdit>
@@ -36,7 +38,6 @@
 #include "ged/draw.h"
 #include "rt/directory.h"
 #include "rt/db_io.h"
-#include "QgLegacyViewContext.h"
 #include "QPolyCreate.h"
 #include "qtcad/QgSignalFlags.h"
 
@@ -54,10 +55,10 @@ _qpolycreate_poly_collect_cb(qg_polygon_ref ref, const qg_polygon_record *, void
     return 1;
 }
 
-static qg_legacy_view *
+static void *
 qpolycreate_view(const QgPluginContext *ctx)
 {
-    return ctx ? ctx->activeView() : nullptr;
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 static QgView *
@@ -260,7 +261,7 @@ QPolyCreate::do_vpoly_copy()
     if (!gedp)
 	return;
 
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     if (!v)
 	return;
 
@@ -277,7 +278,7 @@ QPolyCreate::do_vpoly_copy()
 	return;
     }
     char *sname = bu_strdup(vpoly_name->text().toLocal8Bit().data());
-    p = ged_draw_view_context_polygon_dup(qg_legacy_view_to_context(v), sname,
+    p = ged_draw_view_context_polygon_dup(v, sname,
 	    bu_vls_cstr(&vname));
     bu_free(sname, "name cpy");
     bu_vls_free(&vname);
@@ -304,7 +305,7 @@ QPolyCreate::do_import_sketch()
     if (!gedp)
 	return;
 
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     if (!v)
 	return;
 
@@ -330,7 +331,7 @@ QPolyCreate::do_import_sketch()
 
     // Names are valid, dp is ready - try the sketch import
     p = ged_draw_view_context_polygon_import_sketch(bu_vls_cstr(&vname),
-	    gedp->dbip, dp, qg_legacy_view_to_context(v), 0);
+	    gedp->dbip, dp, v, 0);
     bu_vls_free(&vname);
     if (ged_draw_view_polygon_ref_is_null(p))
 	return;
@@ -413,19 +414,19 @@ QPolyCreate::sketch_sync()
 void
 QPolyCreate::toggle_line_snapping(bool s)
 {
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     qg_polygon_ref co = (cf) ? cf->polygon : qg_polygon_ref{0, 0};
     if (!v || ged_draw_view_polygon_ref_is_null(co))
 	return;
 
-    struct bv *view = qg_legacy_view_bv(v);
+    struct bv *view = bv_context_view(static_cast<struct bv_context *>(v));
     bv_snap_source_flags_set(view, BV_SNAP_VIEW);
     if (!s) {
 	bv_snap_lines_set(view, 0);
     } else {
-	ged_draw_view_context_polygon_snap_exclude_set(qg_legacy_view_to_context(v), co);
+	ged_draw_view_context_polygon_snap_exclude_set(v, co);
 	bv_snap_lines_set(view,
-		ged_draw_view_context_polygon_snap_count(qg_legacy_view_to_context(v), co) ? 1 : 0);
+		ged_draw_view_context_polygon_snap_count(v, co) ? 1 : 0);
     }
 
     emit settings_changed(QG_VIEW_DRAWN);
@@ -434,11 +435,11 @@ QPolyCreate::toggle_line_snapping(bool s)
 void
 QPolyCreate::toggle_grid_snapping(bool s)
 {
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     if (!v)
 	return;
 
-    struct bv *view = qg_legacy_view_bv(v);
+    struct bv *view = bv_context_view(static_cast<struct bv_context *>(v));
     bv_snap_source_flags_set(view, BV_SNAP_VIEW);
     struct bv_grid_state grid;
     if (!bv_grid_state_get(&grid, view))
@@ -452,12 +453,12 @@ QPolyCreate::toggle_grid_snapping(bool s)
 void
 QPolyCreate::checkbox_refresh(unsigned long long)
 {
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     if (!v)
 	return;
 
     ps->grid_snapping->blockSignals(true);
-    const struct bv *view = qg_legacy_view_bv_const(v);
+    const struct bv *view = bv_context_view_const(static_cast<const struct bv_context *>(v));
     struct bv_grid_state grid = {};
     (void)bv_grid_state_get(&grid, view);
     if (grid.snap) {
@@ -489,7 +490,7 @@ QPolyCreate::view_sync()
     if (!gedp)
 	return;
 
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     if (!v)
 	return;
 
@@ -505,7 +506,7 @@ QPolyCreate::toplevel_config(bool)
 {
     // Initialize
     struct ged *gedp = getGed();
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     if (!gedp || !v)
 	return;
 
@@ -519,7 +520,7 @@ QPolyCreate::toplevel_config(bool)
     // by a selection button.  Clear any selected points being displayed.
     if (gedp)
 	draw_change = ged_draw_view_context_polygon_clear_point_selection(
-		qg_legacy_view_to_context(v)) ? true : false;
+		v) ? true : false;
 
     if (draw_change && gedp)
 	emit view_updated(QG_VIEW_REFRESH);
@@ -537,7 +538,7 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
     struct ged *gedp = getGed();
     if (!gedp)
 	return false;
-    qg_legacy_view *v = qpolycreate_view(m_ctx);
+    void *v = qpolycreate_view(m_ctx);
     if (!v)
 	return false;
     QgView *display = qpolycreate_view_widget(m_ctx);
@@ -618,7 +619,7 @@ QPolyCreate::eventFilter(QObject *, QEvent *e)
 	struct _qpolycreate_poly_collect pc;
 	pc.polys = &polyvec;
 	pc.exclude = p;
-	ged_draw_view_context_polygon_visit_records(qg_legacy_view_to_context(v),
+	ged_draw_view_context_polygon_visit_records(v,
 		_qpolycreate_poly_collect_cb, &pc);
 	for (auto s : polyvec)
 	    pcf->bool_objs.push_back(s);

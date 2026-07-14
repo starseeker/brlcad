@@ -36,7 +36,6 @@
 #include "bu/path.h"
 #include "bu/vls.h"
 #include "bn.h"
-#include "dm.h"
 #include "raytrace.h"
 #include "tclcad.h"
 

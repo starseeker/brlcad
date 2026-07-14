@@ -343,6 +343,13 @@ ged_free(struct ged *gedp)
 
     bu_vls_free(&gedp->go_name);
 
+	/* Framebuffer bridge teardown can remove retained nodes and request a
+	 * frame, so release it before the endpoint/controller registry. */
+	if (gedp->ged_fbs) {
+	    ged_obol_fbserv_release(gedp);
+	    BU_PUT(gedp->ged_fbs, struct fbserv_obj);
+	}
+
     ged_view_state_free(gedp);
 
 	if (gedp->i->ged_gdp != GED_DRAWABLE_NULL) {
@@ -402,11 +409,6 @@ ged_free(struct ged *gedp)
     BU_PUT(gedp->ged_cbs, struct ged_callback_state);
 
     bu_ptbl_free(&gedp->ged_subp);
-
-    if (gedp->ged_fbs) {
-	ged_obol_fbserv_release(gedp);
-	BU_PUT(gedp->ged_fbs, struct fbserv_obj);
-    }
 
     bu_ptbl_free(&gedp->editor_opts);
     bu_ptbl_free(&gedp->terminal_opts);
@@ -662,65 +664,6 @@ ged_clbk_get(bu_clbk_t *f, void **d, struct ged *gedp, const char *cmd_str, int 
     (*f) = c_it->second.first;
     (*d) = c_it->second.second;
     return BRLCAD_OK;
-}
-
-void
-ged_dm_ctx_set(struct ged *gedp, const char *dm_type, void *ctx)
-{
-    if (!gedp || !dm_type)
-	return;
-
-    GED_CK_MAGIC(gedp);
-    Ged_Internal *gedip = gedp->i->i;
-    gedip->dm_map[std::string(dm_type)] = ctx;
-}
-
-void *
-ged_dm_ctx_get(struct ged *gedp, const char *dm_type)
-{
-    if (!gedp || !dm_type)
-	return NULL;
-
-    GED_CK_MAGIC(gedp);
-    Ged_Internal *gedip = gedp->i->i;
-    std::string dm(dm_type);
-    if (gedip->dm_map.find(dm) == gedip->dm_map.end())
-	return NULL;
-    return gedip->dm_map[dm];
-}
-
-extern "C" GED_EXPORT void
-ged_rt_fb_set(struct ged *gedp, const char *fb_dev)
-{
-    if (!gedp)
-	return;
-
-    GED_CK_MAGIC(gedp);
-    Ged_Internal *gedip = gedp->i->i;
-    gedip->rt_fb_dev = (fb_dev) ? std::string(fb_dev) : std::string();
-}
-
-extern "C" GED_EXPORT const char *
-ged_rt_fb_get(struct ged *gedp)
-{
-    if (!gedp)
-	return NULL;
-
-    GED_CK_MAGIC(gedp);
-    Ged_Internal *gedip = gedp->i->i;
-    if (gedip->rt_fb_dev.empty())
-	return NULL;
-    return gedip->rt_fb_dev.c_str();
-}
-
-extern "C" GED_EXPORT void
-ged_rt_fb_refresh(struct ged *gedp)
-{
-    if (!gedp)
-	return;
-
-    GED_CK_MAGIC(gedp);
-    ged_rt_fb_set(gedp, NULL);
 }
 
 // Local Variables:

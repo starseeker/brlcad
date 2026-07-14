@@ -133,21 +133,10 @@ tclcad_mouse_delta_settings(struct bv_mouse_delta_settings *settings,
 static void
 tclcad_mouse_clamp_delta(fastf_t *dx, fastf_t *dy, const void *view_ctx)
 {
-    struct bv_mouse_delta_settings settings = BV_MOUSE_DELTA_SETTINGS_INIT;
-
     if (!dx || !dy)
 	return;
 
-    tclcad_mouse_delta_settings(&settings, view_ctx);
-    if (*dx < settings.min_delta)
-	*dx = settings.min_delta;
-    else if (settings.max_delta < *dx)
-	*dx = settings.max_delta;
-
-    if (*dy < settings.min_delta)
-	*dy = settings.min_delta;
-    else if (settings.max_delta < *dy)
-	*dy = settings.max_delta;
+    (void)bv_mouse_delta_clamp(dx, dy, tclcad_mouse_bv_const(view_ctx));
 }
 
 static unsigned long long
@@ -2129,15 +2118,15 @@ to_mouse_otranslate(struct ged *gedp,
     if (0 < bu_vls_strlen(&tvd->gdv_edit_motion_delta_callback)) {
 	const char *path_string = argv[2];
 	vect_t dvec;
-	struct dm_path_edit_params *params = (struct dm_path_edit_params *)bu_hash_get(tgd->go_dmv.edited_paths,
+	struct tclcad_path_edit_params *params = (struct tclcad_path_edit_params *)bu_hash_get(tgd->go_edited_paths,
 										 (uint8_t *)path_string,
 										 sizeof(char) * strlen(path_string) + 1);
 
 	if (!params) {
-	    BU_GET(params, struct dm_path_edit_params);
+	    BU_GET(params, struct tclcad_path_edit_params);
 	    params->edit_mode = tclcad_view_polygon_mode_from_view_ctx(gdvp);
 	    params->dx = params->dy = 0.0;
-	    (void)bu_hash_set(tgd->go_dmv.edited_paths,
+	    (void)bu_hash_set(tgd->go_edited_paths,
 			      (uint8_t *)path_string,
 			      sizeof(char) * strlen(path_string) + 1, (void *)params);
 	}

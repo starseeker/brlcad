@@ -61,7 +61,7 @@ Relevant files:
 * src/mged/titles.c
 * src/mged/scroll.c
 * src/mged/usepen.c
-* src/mged/dm-generic.c
+* src/mged/display-command.c
 * src/mged/set.c
 * src/tclscripts/mged/openw.tcl
 * src/tclscripts/mged/color_scheme.tcl
@@ -105,7 +105,7 @@ machinery such as sedit(s) or set_e_axes_pos(s, 1).
 
 scroll.c implements the parallel slider display and hit-testing logic.  titles.c
 draws faceplate framing, scroll areas, menu boundaries, state text, unit text,
-and selected path text.  usepen.c and dm-generic.c divert mouse input into menu
+and selected path text.  usepen.c and display-command.c divert mouse input into menu
 or scroll hit-testing when both mv_faceplate and mv_orig_gui are enabled.
 
 src/tclscripts/mged/openw.tcl exposes checkbuttons for "Faceplate" and

@@ -11,6 +11,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/draw_cache.h"
 #include "brlobol/lod_realization.h"
 
@@ -178,9 +180,9 @@ check_metadata(const BRLObolDrawMetadataRecord *record)
 	!record->hasColor || record->color[0] != 10 ||
 	record->color[1] != 20 || record->color[2] != 30 ||
 	!record->hasMaterialName ||
-	std::strcmp(record->materialName, "DrawCacheMaterial") != 0 ||
+	bu_strcmp(record->materialName, "DrawCacheMaterial") != 0 ||
 	!record->hasShader ||
-	std::strcmp(record->shader, "plastic {di .7 sp .2}") != 0) {
+	bu_strcmp(record->shader, "plastic {di .7 sp .2}") != 0) {
 	printf("FAIL: draw metadata fields\n");
 	return 1;
     }

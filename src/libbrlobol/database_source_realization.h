@@ -11,6 +11,8 @@
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbBox.h>
 
+#include "brlobol/source_mesh_request.h"
+
 #include <obol/cad/SoCADAssembly.h>
 
 #include <map>
@@ -23,7 +25,8 @@ class SoBRLMeshShape;
 
 struct BRLObolCachedPartGeometry {
     BRLObolCachedPartGeometry(void) :
-	lodBacked(false)
+	lodBacked(false),
+	sourceMeshRequestValid(false)
     {
 	bounds.makeEmpty();
     }
@@ -33,6 +36,8 @@ struct BRLObolCachedPartGeometry {
     std::string geometryKind;
     SbBox3f bounds;
     bool lodBacked;
+    bool sourceMeshRequestValid;
+    BRLObolSourceMeshRequest sourceMeshRequest;
 };
 
 struct BRLObolDatabaseSourceRealizationCache {
@@ -51,15 +56,18 @@ struct BRLObolDatabaseSourceRealizationCache {
     std::shared_ptr<const obol::PartGeometry> storeWireCadGeometry(
 	const std::string &key, obol::PartGeometry &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
-	const SbBox3f *bounds = NULL, bool lodBacked = false);
+	const SbBox3f *bounds = NULL, bool lodBacked = false,
+	const BRLObolSourceMeshRequest *sourceMeshRequest = NULL);
     std::shared_ptr<const obol::PartGeometry> storeMeshVListCadGeometry(
 	const std::string &key, obol::PartGeometry &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
-	const SbBox3f *bounds = NULL, bool lodBacked = false);
+	const SbBox3f *bounds = NULL, bool lodBacked = false,
+	const BRLObolSourceMeshRequest *sourceMeshRequest = NULL);
     std::shared_ptr<const obol::PartGeometry> storeMeshCadGeometry(
 	const std::string &key, obol::PartGeometry &&geometry,
 	const char *sourceType = NULL, const char *geometryKind = NULL,
-	const SbBox3f *bounds = NULL, bool lodBacked = false);
+	const SbBox3f *bounds = NULL, bool lodBacked = false,
+	const BRLObolSourceMeshRequest *sourceMeshRequest = NULL);
     const BRLObolCachedPartGeometry *findWireCadGeometry(
 	const std::string &key) const;
     const BRLObolCachedPartGeometry *findMeshVListCadGeometry(

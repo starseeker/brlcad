@@ -50,7 +50,8 @@ class QTCAD_EXPORT QgQuadView : public QWidget {
 
 
 public:
-	explicit QgQuadView(QWidget *parent, QgSession *session, int type);
+	explicit QgQuadView(QWidget *parent, QgSession *session,
+		QgViewType type);
 	~QgQuadView();
 
 	void stash_hashes(); // Store current dmp and v hash values
@@ -59,14 +60,14 @@ public:
 	bool isValid();
 
 	void default_views(int); // Set the aet of the four quadrants to their standard defaults.  If 0 is supplied the upper right quadrant isn't altered, if 1 is supplied all are adjusted.
-	QgView *get(int quadrant_num = UPPER_RIGHT_QUADRANT);
+	QgView *get(QgQuadrantId quadrant = QgQuadrantId::UpperRight);
 	QgView *get(const QPoint &p); // Test is global point coordinates correspond to one of the quad view
 	QgView *get(QEvent *e); // Given a MouseButtonPress QEvent, see if the point identifies a view
 	QgView *curr_view(); // return the currently selected view
 
-	void select(int quadrant_num);
+	void select(QgQuadrantId quadrant);
 	void select(const char *id); // valid inputs: ur, ul, ll and lr
-	int get_selected(); // returns UPPER_RIGHT_QUADRANT, UPPER_LEFT_QUADRANT, LOWER_LEFT_QUADRANT, or LOWER_RIGHT_QUADRANT
+	QgQuadrantId get_selected();
 
 	void changeToSingleFrame();
 	void changeToQuadFrame();
@@ -94,7 +95,7 @@ private:
 	QgView *createView(unsigned int index);
 	QGridLayout *createLayout();
 
-	int graphicsType = QgView_SW;
+	QgViewType graphicsType = QgViewType::SW;
 	// Holds up to 4 views in single view only the first view is constructed
 	// The other views are constructed if quad view mode is selected by the user
 	QgView *views[4] = {nullptr, nullptr, nullptr, nullptr};

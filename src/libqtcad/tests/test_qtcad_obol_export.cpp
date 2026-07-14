@@ -143,9 +143,10 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol export test database");
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -502,11 +503,6 @@ main(int argc, char **argv)
     }
     controller->setExactFullDetailBudget(0, 0);
 
-    if (view.legacyBackendInitialized()) {
-	controller->setLodService(NULL);
-	sourceService.stop();
-	FAIL("qtcad source-backed exact Obol export should not initialize the legacy display manager");
-    }
     controller->setLodService(NULL);
     sourceService.stop();
 

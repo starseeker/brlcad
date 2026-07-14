@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/mesh_shape.h"
 #include "brlobol/lod_service.h"
@@ -19,10 +21,8 @@
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/selection_state.h"
-#include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
 #include "QgObolSelectionSyncPrivate.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
 #include "raytrace.h"
 #include "wdb.h"
@@ -483,9 +483,10 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol selection-sync test database");
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -494,7 +495,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = qg_legacy_view_to_context(view.view());
+    draw_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
@@ -503,7 +504,7 @@ main(int argc, char **argv)
     shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_ball =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "ball.s");
-    draw_ball.view = qg_legacy_view_to_context(view.view());
+    draw_ball.view = view.viewContext();
     draw_ball.appearance = &shaded_appearance;
     int drew_ball = apply_and_sync(gedp, &view, &draw_ball);
     if (!drew_ball)
@@ -550,7 +551,7 @@ main(int argc, char **argv)
     controller->clearDatabaseSources();
     struct ged_draw_transaction draw_pair =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c");
-    draw_pair.view = qg_legacy_view_to_context(view.view());
+    draw_pair.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &draw_pair))
 	FAIL("GED wire draw should publish a compact combination root");
     SoBRLDatabaseSource *pair = find_source(controller, "pair.c");
@@ -582,7 +583,7 @@ main(int argc, char **argv)
 	box_metadata.materialId != 9 || box_metadata.los != 75 ||
 	!box_metadata.materialColorValid ||
 	box_metadata.materialColor != compact_metadata_color ||
-	strcmp(box_metadata.materialShader.getString(), "plastic") != 0 ||
+	bu_strcmp(box_metadata.materialShader.getString(), "plastic") != 0 ||
 	box_metadata.appearanceRevision <= box_initial.appearanceRevision ||
 	box_metadata.geometryRevision != box_initial.geometryRevision ||
 	ball_metadata.appearanceRevision != ball_initial.appearanceRevision ||
@@ -653,7 +654,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction draw_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    draw_repeated.view = qg_legacy_view_to_context(view.view());
+    draw_repeated.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &draw_repeated))
 	FAIL("large repeated draw should publish a compact occurrence registry");
     SoBRLDatabaseSource *repeated = find_source(controller, "repeated.c");
@@ -783,7 +784,7 @@ main(int argc, char **argv)
 	FAIL("repeated transform edit should update the combination");
     struct ged_draw_transaction transform_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "repeated.c");
-    transform_repeated.view = qg_legacy_view_to_context(view.view());
+    transform_repeated.view = view.viewContext();
     transform_repeated.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
@@ -884,13 +885,13 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction erase_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "repeated.c");
-    erase_repeated.view = qg_legacy_view_to_context(view.view());
+    erase_repeated.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &erase_repeated) ||
 	find_source(controller, "repeated.c"))
 	FAIL("top-level erase should release the primary repeated source");
     struct ged_draw_transaction redraw_shared_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    redraw_shared_repeated.view = qg_legacy_view_to_context(view.view());
+    redraw_shared_repeated.view = view.viewContext();
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &redraw_shared_repeated))
@@ -904,7 +905,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction erase_repeated_again =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "repeated.c");
-    erase_repeated_again.view = qg_legacy_view_to_context(view.view());
+    erase_repeated_again.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &erase_repeated_again) ||
 	independent_scene.removeDatabaseSourceInstance(
 	    repeated_after_summary.instanceKey.getString()) <= 0 ||
@@ -913,7 +914,7 @@ main(int argc, char **argv)
 	FAIL("last-owner test should erase the repeated source from every view");
     struct ged_draw_transaction redraw_evicted_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    redraw_evicted_repeated.view = qg_legacy_view_to_context(view.view());
+    redraw_evicted_repeated.view = view.viewContext();
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &redraw_evicted_repeated))
@@ -940,12 +941,12 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction erase_repeated_for_lod =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "repeated.c");
-    erase_repeated_for_lod.view = qg_legacy_view_to_context(view.view());
+    erase_repeated_for_lod.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &erase_repeated_for_lod))
 	FAIL("large compact LoD test should replace the wire representation");
     struct ged_draw_transaction draw_repeated_shaded =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
-    draw_repeated_shaded.view = qg_legacy_view_to_context(view.view());
+    draw_repeated_shaded.view = view.viewContext();
     draw_repeated_shaded.appearance = &shaded_appearance;
     if (!apply_and_sync(gedp, &view, &draw_repeated_shaded))
 	FAIL("large compact LoD test should publish a shaded aggregate");
@@ -979,7 +980,7 @@ main(int argc, char **argv)
     struct ged_draw_transaction hide_box =
 	ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
 	    "pair.c/box.s", 0.0);
-    hide_box.view = qg_legacy_view_to_context(view.view());
+    hide_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &hide_box))
 	FAIL("nested visibility transaction should address aggregate geometry");
     int hidden_count = compact_hidden_count(pair);
@@ -1010,13 +1011,13 @@ main(int argc, char **argv)
     struct ged_draw_transaction show_box =
 	ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
 	    "pair.c/box.s", 1.0);
-    show_box.view = qg_legacy_view_to_context(view.view());
+    show_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &show_box))
 	FAIL("nested visibility restore should address aggregate geometry");
 
     struct ged_draw_transaction erase_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, "pair.c/box.s");
-    erase_box.view = qg_legacy_view_to_context(view.view());
+    erase_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &erase_box))
 	FAIL("nested erase should address aggregate geometry");
     hidden_count = compact_hidden_count(pair);
@@ -1025,7 +1026,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction redraw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, "pair.c/box.s");
-    redraw_box.view = qg_legacy_view_to_context(view.view());
+    redraw_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &redraw_box))
 	FAIL("nested redraw should restore aggregate geometry");
     hidden_count = compact_hidden_count(pair);
@@ -1039,7 +1040,7 @@ main(int argc, char **argv)
 	FAIL("aggregate refresh test should resolve stable occurrence handles");
     struct ged_draw_transaction stale_pair_style =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    stale_pair_style.view = qg_legacy_view_to_context(view.view());
+    stale_pair_style.view = view.viewContext();
     stale_pair_style.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
@@ -1092,7 +1093,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction stale_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "box.s");
-    stale_box.view = qg_legacy_view_to_context(view.view());
+    stale_box.view = view.viewContext();
     stale_box.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     if (!apply_and_sync(gedp, &view, &stale_box))
 	FAIL("primitive edit should refresh the matching compact part");
@@ -1171,7 +1172,7 @@ main(int argc, char **argv)
 	FAIL("aggregate structural refresh should append a combination member");
     struct ged_draw_transaction stale_pair =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    stale_pair.view = qg_legacy_view_to_context(view.view());
+    stale_pair.view = view.viewContext();
     stale_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
@@ -1224,7 +1225,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction transform_pair =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    transform_pair.view = qg_legacy_view_to_context(view.view());
+    transform_pair.view = view.viewContext();
     transform_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     if (!apply_and_sync(gedp, &view, &transform_pair))
 	FAIL("combination transform should reconcile retained occurrences");
@@ -1273,7 +1274,7 @@ main(int argc, char **argv)
     pair_shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_pair_shaded =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c");
-    draw_pair_shaded.view = qg_legacy_view_to_context(view.view());
+    draw_pair_shaded.view = view.viewContext();
     draw_pair_shaded.appearance = &pair_shaded_appearance;
     if (!apply_and_sync(gedp, &view, &draw_pair_shaded))
 	FAIL("GED shaded draw should publish a compact combination root");
@@ -1326,7 +1327,7 @@ main(int argc, char **argv)
 	FAIL("shaded transform diff should update the combination occurrence");
     struct ged_draw_transaction transform_shaded_pair =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    transform_shaded_pair.view = qg_legacy_view_to_context(view.view());
+    transform_shaded_pair.view = view.viewContext();
     transform_shaded_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
@@ -1379,7 +1380,7 @@ main(int argc, char **argv)
 	FAIL("shaded refresh test should update the sphere primitive");
     struct ged_draw_transaction stale_ball =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "ball.s");
-    stale_ball.view = qg_legacy_view_to_context(view.view());
+    stale_ball.view = view.viewContext();
     stale_ball.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     if (!apply_and_sync(gedp, &view, &stale_ball))
 	FAIL("shaded primitive edit should refresh the matching compact part");
@@ -1400,7 +1401,7 @@ main(int argc, char **argv)
     pair_hidden_appearance.draw_mode = GED_DRAW_MODE_HIDDEN_LINE;
     struct ged_draw_transaction draw_pair_hidden =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c");
-    draw_pair_hidden.view = qg_legacy_view_to_context(view.view());
+    draw_pair_hidden.view = view.viewContext();
     draw_pair_hidden.appearance = &pair_hidden_appearance;
     if (!apply_and_sync(gedp, &view, &draw_pair_hidden))
 	FAIL("GED hidden-line draw should publish a compact combination root");
@@ -1442,7 +1443,7 @@ main(int argc, char **argv)
 	FAIL("hidden-line removal diff should update the combination");
     struct ged_draw_transaction remove_hidden_member =
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
-    remove_hidden_member.view = qg_legacy_view_to_context(view.view());
+    remove_hidden_member.view = view.viewContext();
     remove_hidden_member.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
@@ -1482,7 +1483,7 @@ main(int argc, char **argv)
     struct ged_draw_transaction rename_hidden_member =
 	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_RENAMED, "ball.s");
     rename_hidden_member.new_path = "orb.s";
-    rename_hidden_member.view = qg_legacy_view_to_context(view.view());
+    rename_hidden_member.view = view.viewContext();
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &rename_hidden_member))
@@ -1522,7 +1523,7 @@ main(int argc, char **argv)
 	FAIL("aggregate material update should write the combination color");
     struct ged_draw_transaction material_pair =
 	ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED, "pair.c");
-    material_pair.view = qg_legacy_view_to_context(view.view());
+    material_pair.view = view.viewContext();
     brlobol_performance_counters_set_enabled(1);
     brlobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &material_pair))
@@ -1530,7 +1531,7 @@ main(int argc, char **argv)
     struct ged_draw_transaction refresh_pair_material =
 	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS,
 	    "pair.c");
-    refresh_pair_material.view = qg_legacy_view_to_context(view.view());
+    refresh_pair_material.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &refresh_pair_material))
 	FAIL("aggregate material refresh should update retained style");
     struct BRLObolPerformanceCounters material_counters;

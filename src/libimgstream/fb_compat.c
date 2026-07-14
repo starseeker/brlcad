@@ -953,6 +953,26 @@ imgstream_fb_open_display(const char *spec, size_t width, size_t height,
 }
 
 
+int
+imgstream_fb_detach_display_host(imgstream_fb_t *fb)
+{
+    if (!fb)
+	return -1;
+
+    if (!fb->display_backed)
+	return 0;
+
+    struct imgstream_fb_display_host display_host = fb->display_host;
+    void *display_host_data = fb->display_host_data;
+    memset(&fb->display_host, 0, sizeof(fb->display_host));
+    fb->display_host_data = NULL;
+    fb->display_backed = 0;
+    if (display_host.close)
+	display_host.close(fb, display_host_data);
+    return 0;
+}
+
+
 void
 imgstream_fb_close(imgstream_fb_t *fb)
 {

@@ -26,17 +26,16 @@
 #include <QPainter>
 #include <QString>
 
+#include "bv.h"
 #include "bu/vls.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "CADViewModel.h"
-#include "QgLegacyViewContext.h"
 
-static qg_legacy_view *
+static void *
 qged_view_model_view(const QgPluginContext *ctx)
 {
-    return ctx ? ctx->activeView() : nullptr;
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 CADViewModel::CADViewModel(QObject *parentobj)
@@ -61,7 +60,7 @@ CADViewModel::update()
 void
 CADViewModel::refresh(unsigned long long)
 {
-    qg_legacy_view *v = qged_view_model_view(m_ctx);
+    void *v = qged_view_model_view(m_ctx);
     if (!v)
 	return;
 
@@ -75,7 +74,7 @@ CADViewModel::refresh(unsigned long long)
     m_root = new QgKeyValNode();
     beginResetModel();
 
-    const struct bv *view = qg_legacy_view_bv_const(v);
+    const struct bv *view = bv_context_view_const(static_cast<const struct bv_context *>(v));
     bv_aet_get(aet, view);
     bv_center_mat_get(view_center, view);
 

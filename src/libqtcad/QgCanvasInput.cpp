@@ -23,29 +23,28 @@ extern "C" {
 
 #include "qtcad/defines.h"
 #include "QgCanvasInput.h"
-#include "QgLegacyViewContext.h"
 #include "brlobol/display_endpoint.h"
 #include "bv.h"
 
 struct QgCanvasInput::Impl {
-    std::unordered_map<qg_legacy_view *, long long> drag_update_ts;
+    std::unordered_map<struct bv_context *, long long> drag_update_ts;
     BRLObolInputContext context;
     brlobol_display_endpoint_t *endpoint = NULL;
-    qg_legacy_view *dispatch_view = NULL;
+    struct bv_context *dispatch_view = NULL;
     double press_x = 0.0;
     double press_y = 0.0;
     int mouse_mode = BV_ADJUST_SCALE;
 };
 
 static int
-qgcanvasinput_set_aet(qg_legacy_view *v, const char *aet_string)
+qgcanvasinput_set_aet(struct bv_context *view_ctx, const char *aet_string)
 {
-    if (!v || !aet_string)
+	if (!view_ctx || !aet_string)
 	return 0;
     vect_t aet_vec;
     bn_decode_vect(aet_vec, aet_string);
-    (void)bv_aet_set(qg_legacy_view_bv(v), aet_vec);
-    (void)bv_context_update(qg_legacy_view_context(v), BV_CONTEXT_CHANGED_VIEW);
+	(void)bv_aet_set(bv_context_view(view_ctx), aet_vec);
+	(void)bv_context_update(view_ctx, BV_CONTEXT_CHANGED_VIEW);
     return 1;
 }
 
@@ -153,59 +152,99 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 {
     if (!m || !m->dispatch_view || !event)
 	return 0;
-    qg_legacy_view *view = m->dispatch_view;
+    struct bv_context *view_ctx = m->dispatch_view;
+    struct bv *view = bv_context_view(view_ctx);
+    const struct bv *cview = bv_context_view_const(view_ctx);
 
     switch (action) {
 	case BRLOBOL_ACTION_TOGGLE_ADC: {
 	    struct bv_adc_state adc;
-	    if (!bv_adc_state_get(&adc, qg_legacy_view_bv_const(view)))
+	    if (!bv_adc_state_get(&adc, cview))
 		return 0;
+	    if (m->endpoint) {
+		struct brlobol_endpoint_property_value value =
+		    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+		value.bool_value = !adc.draw;
+		const int result = brlobol_display_endpoint_property_set(m->endpoint,
+		    "view.faceplate.adc.visible", &value);
+		if (result == BRLOBOL_ENDPOINT_PROPERTY_OK)
+		    return 1;
+		/* A standalone Qt canvas has no GED property owner yet.  It still
+		 * uses the same Obol controller, with local passive setup only. */
+		if (result != BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+		    return 0;
+	    }
 	    adc.draw = !adc.draw;
-	    bv_adc_state_set(qg_legacy_view_bv(view), &adc);
+	    bv_adc_state_set(view, &adc);
 	    return 1;
 	}
 	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES: {
 	    struct bv_axes_state axes;
 	    if (!bv_model_axes_state_get(&axes,
-		qg_legacy_view_bv_const(view)))
+		cview))
 		return 0;
+	    if (m->endpoint) {
+		struct brlobol_endpoint_property_value value =
+		    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+		value.bool_value = !axes.draw;
+		const int result = brlobol_display_endpoint_property_set(m->endpoint,
+		    "view.faceplate.model_axes.visible", &value);
+		if (result == BRLOBOL_ENDPOINT_PROPERTY_OK)
+		    return 1;
+		if (result != BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+		    return 0;
+	    }
 	    axes.draw = !axes.draw;
-	    bv_model_axes_state_set(qg_legacy_view_bv(view), &axes);
+	    bv_model_axes_state_set(view, &axes);
 	    return 1;
 	}
 	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES: {
 	    struct bv_axes_state axes;
 	    if (!bv_view_axes_state_get(&axes,
-		qg_legacy_view_bv_const(view)))
+		cview))
 		return 0;
+	    if (m->endpoint) {
+		struct brlobol_endpoint_property_value value =
+		    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+		value.bool_value = !axes.draw;
+		const int result = brlobol_display_endpoint_property_set(m->endpoint,
+		    "view.faceplate.view_axes.visible", &value);
+		if (result == BRLOBOL_ENDPOINT_PROPERTY_OK)
+		    return 1;
+		if (result != BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+		    return 0;
+	    }
 	    axes.draw = !axes.draw;
-	    bv_view_axes_state_set(qg_legacy_view_bv(view), &axes);
+	    bv_view_axes_state_set(view, &axes);
 	    return 1;
 	}
 	case BRLOBOL_ACTION_VIEW_2:
-	    return qgcanvasinput_set_aet(view, "35 -25 0");
+	    return qgcanvasinput_set_aet(view_ctx, "35 -25 0");
 	case BRLOBOL_ACTION_VIEW_3:
-	    return qgcanvasinput_set_aet(view, "35 25 0");
+	    return qgcanvasinput_set_aet(view_ctx, "35 25 0");
 	case BRLOBOL_ACTION_VIEW_4:
-	    return qgcanvasinput_set_aet(view, "45 45 0");
+	    return qgcanvasinput_set_aet(view_ctx, "45 45 0");
 	case BRLOBOL_ACTION_VIEW_5:
-	    return qgcanvasinput_set_aet(view, "145 25 0");
+	    return qgcanvasinput_set_aet(view_ctx, "145 25 0");
 	case BRLOBOL_ACTION_VIEW_6:
-	    return qgcanvasinput_set_aet(view, "215 25 0");
+	    return qgcanvasinput_set_aet(view_ctx, "215 25 0");
 	case BRLOBOL_ACTION_VIEW_7:
-	    return qgcanvasinput_set_aet(view, "325 25 0");
+	    return qgcanvasinput_set_aet(view_ctx, "325 25 0");
 	case BRLOBOL_ACTION_VIEW_FRONT:
-	    return qgcanvasinput_set_aet(view, "0 0 0");
+	    return qgcanvasinput_set_aet(view_ctx, "0 0 0");
 	case BRLOBOL_ACTION_VIEW_TOP:
-	    return qgcanvasinput_set_aet(view, "270 90 0");
+	    return qgcanvasinput_set_aet(view_ctx, "270 90 0");
 	case BRLOBOL_ACTION_VIEW_BOTTOM:
-	    return qgcanvasinput_set_aet(view, "270 -90 0");
+	    return qgcanvasinput_set_aet(view_ctx, "270 -90 0");
 	case BRLOBOL_ACTION_VIEW_LEFT:
-	    return qgcanvasinput_set_aet(view, "90 0 0");
+	    return qgcanvasinput_set_aet(view_ctx, "90 0 0");
 	case BRLOBOL_ACTION_VIEW_REAR:
-	    return qgcanvasinput_set_aet(view, "180 0 0");
+	    return qgcanvasinput_set_aet(view_ctx, "180 0 0");
 	case BRLOBOL_ACTION_VIEW_RIGHT:
-	    return qgcanvasinput_set_aet(view, "270 0 0");
+	    return qgcanvasinput_set_aet(view_ctx, "270 0 0");
 	case BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE:
 	case BRLOBOL_ACTION_VIEW_SECONDARY_RELEASE:
 	case BRLOBOL_ACTION_VIEW_CENTER_RELEASE: {
@@ -238,7 +277,7 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 		dy = event->y;
 	    }
 	    point_t keypt = VINIT_ZERO;
-	    return bv_adjust(qg_legacy_view_bv(view), dx, dy, keypt, 0,
+	    return bv_adjust(view, dx, dy, keypt, 0,
 		viewFlags);
 	}
 	case BRLOBOL_ACTION_VIEW_ROTATE:
@@ -248,7 +287,7 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 	    if (event->type == BRLOBOL_INPUT_WHEEL) {
 		const int dx = 100 + event->wheelDelta;
 		point_t origin = VINIT_ZERO;
-		return bv_adjust(qg_legacy_view_bv(view), dx, 100, origin, 0,
+		return bv_adjust(view, dx, 100, origin, 0,
 		    BV_ADJUST_SCALE);
 	    }
 	    unsigned long long viewFlags = BV_ADJUST_SCALE;
@@ -261,22 +300,11 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 		if (viewFlags == BV_ADJUST_CENTER)
 		    viewFlags = BV_ADJUST_SCALE;
 	    }
-	    int dx = event->dx;
-	    int dy = event->dy;
-	    if (viewFlags == BV_ADJUST_SCALE) {
-		const int mdelta = std::abs(dx) > std::abs(dy) ? dx : -dy;
-		const int height = std::max(1, bv_height_get(
-		    qg_legacy_view_bv_const(view)));
-		const int factor = static_cast<int>(200.0 * std::abs(mdelta) /
-		    static_cast<double>(height));
-		dy = mdelta > 0 ? 101 + factor : 99 - factor;
-		dx = 100;
-	    }
 	    point_t center;
 	    mat_t viewCenter;
-	    bv_center_mat_get(viewCenter, qg_legacy_view_bv_const(view));
+	    bv_center_mat_get(viewCenter, cview);
 	    MAT_DELTAS_GET_NEG(center, viewCenter);
-	    return bv_adjust(qg_legacy_view_bv(view), dx, dy, center, 0,
+	    return bv_mouse_delta_adjust(view, event->dx, event->dy, center,
 		viewFlags);
 	}
 	default:
@@ -285,17 +313,17 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 }
 
 int
-QgCanvasInput::keyPressEvent(qg_legacy_view *view, int UNUSED(x_prev),
+QgCanvasInput::keyPressEvent(struct bv_context *view_ctx, int UNUSED(x_prev),
 	int UNUSED(y_prev), QKeyEvent *event)
 {
     QTCAD_EVENT("keyPress", 1);
-    if (!view || !event)
+	if (!view_ctx || !event)
 	return 0;
     BRLObolInputEvent input;
     input.type = BRLOBOL_INPUT_KEY_PRESS;
     input.key = event->key();
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
-    m->dispatch_view = view;
+    m->dispatch_view = view_ctx;
     const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;
@@ -303,11 +331,11 @@ QgCanvasInput::keyPressEvent(qg_legacy_view *view, int UNUSED(x_prev),
 }
 
 int
-QgCanvasInput::mousePressEvent(qg_legacy_view *view, int UNUSED(x_prev),
+QgCanvasInput::mousePressEvent(struct bv_context *view_ctx, int UNUSED(x_prev),
 	int UNUSED(y_prev), QMouseEvent *event)
 {
     QTCAD_EVENT("mousePress", 1);
-    if (!view || !event)
+	if (!view_ctx || !event)
 	return 0;
     BRLObolInputEvent input;
     input.type = BRLOBOL_INPUT_POINTER_PRESS;
@@ -315,7 +343,7 @@ QgCanvasInput::mousePressEvent(qg_legacy_view *view, int UNUSED(x_prev),
     input.button = qgcanvasinput_button(event->button());
     input.buttons = qgcanvasinput_buttons(event->buttons());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
-    m->dispatch_view = view;
+    m->dispatch_view = view_ctx;
     const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;
@@ -323,14 +351,14 @@ QgCanvasInput::mousePressEvent(qg_legacy_view *view, int UNUSED(x_prev),
 }
 
 int
-QgCanvasInput::mouseReleaseEvent(qg_legacy_view *view, double x_press,
+QgCanvasInput::mouseReleaseEvent(struct bv_context *view_ctx, double x_press,
 	double y_press, int UNUSED(x_prev), int UNUSED(y_prev), QMouseEvent *event,
 	int mode)
 {
     QTCAD_EVENT("mouseRelease", 1);
-    if (!view || !event)
+	if (!view_ctx || !event)
 	return 0;
-    m->drag_update_ts.erase(view);
+	m->drag_update_ts.erase(view_ctx);
 
     BRLObolInputEvent input;
     input.type = BRLOBOL_INPUT_POINTER_RELEASE;
@@ -338,7 +366,7 @@ QgCanvasInput::mouseReleaseEvent(qg_legacy_view *view, double x_press,
     input.button = qgcanvasinput_button(event->button());
     input.buttons = qgcanvasinput_buttons(event->buttons());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
-    m->dispatch_view = view;
+    m->dispatch_view = view_ctx;
     m->press_x = x_press;
     m->press_y = y_press;
     m->mouse_mode = mode;
@@ -349,21 +377,22 @@ QgCanvasInput::mouseReleaseEvent(qg_legacy_view *view, double x_press,
 }
 
 int
-QgCanvasInput::mouseMoveEvent(qg_legacy_view *view, int x_prev, int y_prev,
+QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_prev,
 	QMouseEvent *event, int mode)
 {
     QTCAD_EVENT("mouseMove", 2);
-    if (!view || !event || x_prev == -INT_MAX ||
+	if (!view_ctx || !event || x_prev == -INT_MAX ||
 	!event->buttons().testFlag(Qt::LeftButton))
 	return 0;
 
     const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
 	std::chrono::steady_clock::now().time_since_epoch()).count();
-    const auto previous = m->drag_update_ts.find(view);
+	const auto previous = m->drag_update_ts.find(view_ctx);
     if (previous != m->drag_update_ts.end() && now - previous->second <
-	s_drag_update_interval_ms)
+	s_drag_update_interval_ms) {
 	return -1;
-    m->drag_update_ts[view] = now;
+	}
+	m->drag_update_ts[view_ctx] = now;
 
     BRLObolInputEvent input;
     input.type = BRLOBOL_INPUT_POINTER_MOTION;
@@ -373,7 +402,7 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *view, int x_prev, int y_prev,
     input.button = 0;
     input.buttons = qgcanvasinput_buttons(event->buttons());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
-    m->dispatch_view = view;
+    m->dispatch_view = view_ctx;
     m->mouse_mode = mode;
     const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
@@ -382,16 +411,16 @@ QgCanvasInput::mouseMoveEvent(qg_legacy_view *view, int x_prev, int y_prev,
 }
 
 int
-QgCanvasInput::wheelEvent(qg_legacy_view *view, QWheelEvent *event)
+QgCanvasInput::wheelEvent(struct bv_context *view_ctx, QWheelEvent *event)
 {
     QTCAD_EVENT("mouseWheel", 1);
-    if (!view || !event)
+	if (!view_ctx || !event)
 	return 0;
     BRLObolInputEvent input;
     input.type = BRLOBOL_INPUT_WHEEL;
     input.wheelDelta = -event->angleDelta().y() / 8;
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
-    m->dispatch_view = view;
+    m->dispatch_view = view_ctx;
     const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;

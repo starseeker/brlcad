@@ -7,6 +7,10 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
+#include "bu/str.h"
+
 #include "brlobol.h"
 
 #include "bu/log.h"
@@ -29,7 +33,13 @@
 #include <math.h>
 #include <string.h>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <future>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #define CHECK(_expr, _msg) do { \
     if (!(_expr)) { \
@@ -50,7 +60,7 @@ find_clip_plane(SoNode *node, const char *name)
     if (!node || !name)
 	return NULL;
     if (node->isOfType(SoClipPlane::getClassTypeId()) &&
-	strcmp(node->getName().getString(), name) == 0)
+	bu_strcmp(node->getName().getString(), name) == 0)
 	return static_cast<SoClipPlane *>(node);
     if (!node->isOfType(SoGroup::getClassTypeId()))
 	return NULL;
@@ -71,24 +81,76 @@ property_value_init(struct brlobol_endpoint_property_value *value)
     value->type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
 }
 
+struct TestPropertyProvider {
+    int zclip;
+    double perspective;
+    int framebufferMode;
+};
+
 static int
 test_property_provider_get(void *data, const char *name,
 	struct brlobol_endpoint_property_value *value)
 {
-    if (!data || !name || !value || strcmp(name, "view.zclip") != 0)
+    TestPropertyProvider *provider =
+	static_cast<TestPropertyProvider *>(data);
+    if (!provider || !name || !value)
 	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
-    value->bool_value = *(int *)data;
-    return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    if (bu_strcmp(name, "view.zclip") == 0) {
+	value->bool_value = provider->zclip;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.perspective") == 0) {
+	value->double_value = provider->perspective;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "composition.framebuffer.mode") == 0) {
+	if (provider->framebufferMode == 0)
+	    value->string_value = "off";
+	else if (provider->framebufferMode == 1)
+	    value->string_value = "overlay";
+	else if (provider->framebufferMode == 2)
+	    value->string_value = "underlay";
+	else if (provider->framebufferMode == 3)
+	    value->string_value = "interlay";
+	else
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 }
 
 static int
 test_property_provider_set(void *data, const char *name,
 	const struct brlobol_endpoint_property_value *value)
 {
-    if (!data || !name || !value || strcmp(name, "view.zclip") != 0)
+    TestPropertyProvider *provider =
+	static_cast<TestPropertyProvider *>(data);
+    if (!provider || !name || !value)
 	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
-    *(int *)data = value->bool_value ? 1 : 0;
-    return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    if (bu_strcmp(name, "view.zclip") == 0) {
+	provider->zclip = value->bool_value ? 1 : 0;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.perspective") == 0) {
+	provider->perspective = value->double_value;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "composition.framebuffer.mode") == 0) {
+	if (!value->string_value)
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	if (bu_strcmp(value->string_value, "off") == 0)
+	    provider->framebufferMode = 0;
+	else if (bu_strcmp(value->string_value, "overlay") == 0)
+	    provider->framebufferMode = 1;
+	else if (bu_strcmp(value->string_value, "underlay") == 0)
+	    provider->framebufferMode = 2;
+	else if (bu_strcmp(value->string_value, "interlay") == 0)
+	    provider->framebufferMode = 3;
+	else
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 }
 
 struct InputActionState {
@@ -105,6 +167,23 @@ test_input_action(void *data, BRLObolInputAction action,
 	return -1;
     state->calls++;
     state->action = action;
+    return 1;
+}
+
+struct PendingProgressState {
+    int calls = 0;
+};
+
+static int
+test_pending_progress_provider(BRLObolViewController *controller,
+	void *data, const BRLObolProgressiveOptions *options,
+	BRLObolProgressiveStatus *status)
+{
+    PendingProgressState *state = static_cast<PendingProgressState *>(data);
+    if (!controller || !state || !options || !status)
+	return -1;
+    state->calls++;
+    status->hasMore = 1;
     return 1;
 }
 
@@ -136,6 +215,23 @@ test_input_context(void)
     CHECK(first.dispatch(&event) == 1 &&
 	  firstState.action == BRLOBOL_ACTION_VIEW_REAR,
 	  "input context preserves modifier-specific view actions");
+    event.type = BRLOBOL_INPUT_WHEEL;
+    event.wheelDelta = -15;
+    event.button = BRLOBOL_INPUT_ANY;
+    event.modifiers = BRLOBOL_INPUT_MOD_NONE;
+    CHECK(first.dispatch(&event) == 1 &&
+	  firstState.action == BRLOBOL_ACTION_VIEW_ZOOM,
+	  "input context dispatches normalized wheel zoom");
+    const int actionCalls = firstState.calls;
+    event.type = BRLOBOL_INPUT_KEY_PRESS;
+    event.key = 'A';
+    event.modifiers = BRLOBOL_INPUT_MOD_SHIFT;
+    CHECK(first.dispatch(&event) == 0 && firstState.calls == actionCalls,
+	  "modified application shortcuts do not trigger plain view actions");
+    event.key = 'R';
+    event.modifiers = BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL;
+    CHECK(first.dispatch(&event) == 0 && firstState.calls == actionCalls,
+	  "rear view requires exactly the shift modifier");
     event.type = BRLOBOL_INPUT_POINTER_RELEASE;
     event.button = 0;
     event.modifiers = BRLOBOL_INPUT_MOD_NONE;
@@ -143,9 +239,55 @@ test_input_context(void)
 	  "input context dispatches pointer-release actions");
     CHECK(firstState.action == BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE,
 	  "input context normalizes pointer-release actions");
+    event.type = BRLOBOL_INPUT_POINTER_PRESS;
+    event.button = 0;
+    event.modifiers = BRLOBOL_INPUT_MOD_SHIFT;
+    CHECK(first.dispatch(&event) == 1,
+	  "input context dispatches primary pan-begin actions");
+    CHECK(firstState.action == BRLOBOL_ACTION_VIEW_PAN_BEGIN,
+	  "input context normalizes primary pan-begin actions");
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    CHECK(first.dispatch(&event) == 1,
+	  "input context dispatches primary pan-end actions");
+    CHECK(firstState.action == BRLOBOL_ACTION_VIEW_PAN_END,
+	  "input context normalizes primary pan-end actions");
     CHECK(first.hasAction(BRLOBOL_ACTION_VIEW_ROTATE) &&
+	  first.hasAction(BRLOBOL_ACTION_VIEW_PAN_BEGIN) &&
+	  first.hasAction(BRLOBOL_ACTION_VIEW_PAN_END) &&
 	  !second.hasAction(BRLOBOL_ACTION_VIEW_ROTATE),
 	  "input contexts report their own action vocabulary");
+
+    BRLObolInputContext keyboard;
+    keyboard.setProfile(brlobol_input_keyboard_view_profile());
+    keyboard.setActionHandler(test_input_action, &secondState);
+    event.type = BRLOBOL_INPUT_KEY_PRESS;
+    event.key = 'F';
+    event.modifiers = BRLOBOL_INPUT_MOD_NONE;
+    CHECK(keyboard.dispatch(&event) == 1 &&
+	  secondState.action == BRLOBOL_ACTION_VIEW_FRONT,
+	  "keyboard profile dispatches shared view shortcuts");
+    event.type = BRLOBOL_INPUT_WHEEL;
+    CHECK(keyboard.dispatch(&event) == 0,
+	  "keyboard profile leaves application pointer gestures unhandled");
+    return 0;
+}
+
+static int
+test_progressive_status_contract(void)
+{
+    BRLObolViewController controller;
+    PendingProgressState state;
+    const uint64_t token = controller.registerProgressiveProvider(
+	test_pending_progress_provider, &state);
+    CHECK(token != 0, "progressive provider registers");
+
+    BRLObolProgressiveStatus status;
+    CHECK(controller.advanceProgressiveWork(NULL, &status) > 0 &&
+	  state.calls == 1 && status.providerAdvanced == 1 &&
+	  status.hasMore && !status.changed,
+	  "pending progressive work does not claim a published scene change");
+    controller.unregisterProgressiveProvider(token);
+    controller.clearProgressiveWorkPending();
     return 0;
 }
 
@@ -175,7 +317,7 @@ test_window_host_contract(void)
 	  "window host applies requested viewport size");
 
     BRLObolInputBinding binding;
-    binding.eventType = BRLOBOL_INPUT_KEY;
+    binding.eventType = BRLOBOL_INPUT_KEY_PRESS;
     binding.key = 'f';
     binding.button = BRLOBOL_INPUT_ANY;
     binding.requiredModifiers = 0;
@@ -187,7 +329,7 @@ test_window_host_contract(void)
     profile.bindingCount = 1;
 
     BRLObolInputEvent event;
-    event.type = BRLOBOL_INPUT_KEY;
+    event.type = BRLOBOL_INPUT_KEY_PRESS;
     event.key = 'f';
     CHECK(host.handleInputEvent(&event, &profile) == 1,
 	  "window host applies semantic input profile action");
@@ -216,7 +358,8 @@ struct FactoryTestState {
     FactoryTestState(void) :
 	probe_result(1), open_result(1), creates(0), destroys(0), binds(0),
 	detaches(0), opens(0), closes(0), frames(0), resizes(0), visible(0),
-	vsync(-1)
+	vsync(-1), block_frames(false), frame_entered(false),
+	frame_release(false), frame_returned(false)
     {
     }
 
@@ -238,11 +381,19 @@ struct FactoryTestState {
     int vsync;
     BRLObolInputEventHandler input_dispatch = NULL;
     void *input_dispatch_data = NULL;
+    std::mutex frame_mutex;
+    std::condition_variable frame_cv;
+    bool block_frames;
+    bool frame_entered;
+    bool frame_release;
+    bool frame_returned;
 };
 
 struct FactoryTestInstance {
     FactoryTestState *state;
     void *controller;
+    BRLObolInputEventHandler input_dispatch;
+    void *input_dispatch_data;
 };
 
 static int
@@ -259,6 +410,8 @@ factory_test_create(const struct brlobol_host_desc *desc, void *data)
     FactoryTestInstance *instance = new FactoryTestInstance;
     instance->state = state;
     instance->controller = NULL;
+    instance->input_dispatch = desc ? desc->input_dispatch : NULL;
+    instance->input_dispatch_data = desc ? desc->input_dispatch_data : NULL;
     state->input_dispatch = desc ? desc->input_dispatch : NULL;
     state->input_dispatch_data = desc ? desc->input_dispatch_data : NULL;
     state->creates++;
@@ -308,7 +461,17 @@ factory_test_frame(void *UNUSED(instance), const char *UNUSED(reason),
 	void *data)
 {
     FactoryTestState *state = static_cast<FactoryTestState *>(data);
+    std::unique_lock<std::mutex> lock(state->frame_mutex);
     state->frames++;
+    if (state->block_frames) {
+	state->frame_entered = true;
+	state->frame_cv.notify_all();
+	state->frame_cv.wait(lock, [state]() {
+	    return state->frame_release;
+	});
+	state->frame_returned = true;
+	state->frame_cv.notify_all();
+    }
     return 1;
 }
 
@@ -466,7 +629,7 @@ test_host_factory_contract(void)
     for (size_t i = 0; i < brlobol_host_factory_registry_count(); i++) {
 	char name[64] = {0};
 	if (brlobol_host_factory_registry_name(i, name, sizeof(name)) &&
-	    strcmp(name, "endpoint-test-high") == 0) {
+	    bu_strcmp(name, "endpoint-test-high") == 0) {
 	    found_high_capabilities =
 		brlobol_host_factory_registry_capabilities(i) ==
 		(BRLOBOL_HOST_CAP_PIXEL_PRESENT |
@@ -492,7 +655,7 @@ test_host_factory_contract(void)
     CHECK(endpoint != NULL, "factory test creates display endpoint");
     CHECK(brlobol_display_endpoint_host_open(endpoint, NULL, &desc),
 	  "endpoint selects a compatible registered factory");
-    CHECK(strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+    CHECK(bu_strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
 	  "endpoint-test-high") == 0,
 	  "endpoint selection honors capabilities before priority");
     CHECK(brlobol_display_endpoint_host_capabilities(endpoint) ==
@@ -536,7 +699,7 @@ test_host_factory_contract(void)
     CHECK(brlobol_display_endpoint_property_get(endpoint, "endpoint.title",
 	  &host_property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
 	  host_property.string_value &&
-	  strcmp(host_property.string_value, "Updated endpoint title") == 0,
+	  bu_strcmp(host_property.string_value, "Updated endpoint title") == 0,
 	  "typed title property retains endpoint state");
     property_value_init(&host_property);
     host_property.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
@@ -627,6 +790,341 @@ test_host_factory_contract(void)
 }
 
 static int
+test_host_factory_simultaneous_endpoints(void)
+{
+    FactoryTestState state;
+    struct brlobol_host_factory factory = factory_test_desc(
+	"endpoint-test-simultaneous", 10,
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT | BRLOBOL_HOST_CAP_INPUT, &state);
+    brlobol_host_factory_token_t *token =
+	brlobol_host_factory_register(&factory);
+    CHECK(token != NULL, "simultaneous endpoint factory registers");
+
+    struct brlobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    desc.width = 16;
+    desc.height = 12;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+
+    brlobol_display_endpoint_t *first =
+	brlobol_display_endpoint_create(NULL, 0);
+    brlobol_display_endpoint_t *second =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(first && second && brlobol_display_endpoint_host_open(first,
+	  "endpoint-test-simultaneous", &desc) &&
+	  brlobol_display_endpoint_host_open(second,
+	  "endpoint-test-simultaneous", &desc),
+	  "simultaneous endpoints open isolated factory instances");
+
+    FactoryTestInstance *first_instance =
+	static_cast<FactoryTestInstance *>(brlobol_display_endpoint_host(first));
+    FactoryTestInstance *second_instance =
+	static_cast<FactoryTestInstance *>(brlobol_display_endpoint_host(second));
+    CHECK(first_instance && second_instance &&
+	  first_instance != second_instance &&
+	  first_instance->controller != second_instance->controller &&
+	  first_instance->input_dispatch && second_instance->input_dispatch,
+	  "simultaneous endpoints retain separate controllers and dispatchers");
+
+    InputActionState first_input;
+    InputActionState second_input;
+    BRLObolInputEvent event;
+    event.type = BRLOBOL_INPUT_KEY_PRESS;
+    event.key = 'F';
+    CHECK(brlobol_display_endpoint_input_action_handler_set(first,
+	  test_input_action, &first_input) &&
+	  brlobol_display_endpoint_input_action_handler_set(second,
+	  test_input_action, &second_input) &&
+	  first_instance->input_dispatch(first_instance->input_dispatch_data,
+	  &event) == 1 && first_input.calls == 1 && second_input.calls == 0 &&
+	  second_instance->input_dispatch(second_instance->input_dispatch_data,
+	  &event) == 1 && first_input.calls == 1 && second_input.calls == 1,
+	  "simultaneous endpoints dispatch input only to their own handler");
+
+    BRLObolViewController *second_controller =
+	static_cast<BRLObolViewController *>(
+	brlobol_display_endpoint_controller(second));
+    const int frames_before = state.frames;
+    CHECK(brlobol_display_endpoint_request_frame(first, "first-frame") &&
+	  brlobol_display_endpoint_request_frame(second, "second-frame") &&
+	  state.frames == frames_before + 2,
+	  "simultaneous endpoints route their own frame requests");
+
+    brlobol_display_endpoint_destroy(first);
+    const int frames_after_first_teardown = state.frames;
+    second_controller->markProgressiveWorkPending();
+    CHECK(state.frames == frames_after_first_teardown + 1 &&
+	  state.closes == 1 && state.destroys == 1,
+	  "surviving endpoint retains its progressive callback after peer teardown");
+    second_controller->clearProgressiveWorkPending();
+
+    brlobol_display_endpoint_destroy(second);
+    CHECK(state.closes == 2 && state.detaches == 2 && state.destroys == 2 &&
+	  brlobol_host_factory_unregister(token),
+	  "simultaneous endpoint teardown releases every host instance");
+    return 0;
+}
+
+static int
+test_host_factory_reattach(void)
+{
+    FactoryTestState first_state;
+    FactoryTestState second_state;
+    second_state.open_result = 0;
+    struct brlobol_host_factory first_factory = factory_test_desc(
+	"endpoint-test-reattach-first", 10,
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT | BRLOBOL_HOST_CAP_INPUT,
+	&first_state);
+    struct brlobol_host_factory second_factory = factory_test_desc(
+	"endpoint-test-reattach-second", 10,
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT | BRLOBOL_HOST_CAP_INPUT,
+	&second_state);
+    brlobol_host_factory_token_t *first_token =
+	brlobol_host_factory_register(&first_factory);
+    brlobol_host_factory_token_t *second_token =
+	brlobol_host_factory_register(&second_factory);
+    CHECK(first_token && second_token,
+	  "reattach endpoint factories register");
+
+    struct brlobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    desc.width = 16;
+    desc.height = 12;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint && brlobol_display_endpoint_host_open(endpoint,
+	  "endpoint-test-reattach-first", &desc),
+	  "endpoint opens its initial factory host");
+    FactoryTestInstance *first_instance =
+	static_cast<FactoryTestInstance *>(
+	brlobol_display_endpoint_host(endpoint));
+    void *controller = brlobol_display_endpoint_controller(endpoint);
+    CHECK(first_instance && controller && first_instance->controller == controller,
+	  "initial factory host receives the endpoint controller");
+
+    InputActionState input_state;
+    BRLObolInputEvent input_event;
+    input_event.type = BRLOBOL_INPUT_KEY_PRESS;
+    input_event.key = 'F';
+    CHECK(brlobol_display_endpoint_input_action_handler_set(endpoint,
+	  test_input_action, &input_state) && first_instance->input_dispatch &&
+	  first_instance->input_dispatch(first_instance->input_dispatch_data,
+	  &input_event) == 1 && input_state.calls == 1,
+	  "initial factory host dispatches the endpoint-local input handler");
+
+    const int first_frames = first_state.frames;
+    CHECK(brlobol_display_endpoint_request_frame(endpoint, "reattach-first") &&
+	  first_state.frames == first_frames + 1,
+	  "initial factory host receives endpoint frame requests");
+
+    CHECK(!brlobol_display_endpoint_host_open(endpoint,
+	  "endpoint-test-reattach-second", &desc),
+	  "failed replacement host leaves the existing endpoint host intact");
+    CHECK(brlobol_display_endpoint_host(endpoint) == first_instance &&
+	  bu_strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+	  "endpoint-test-reattach-first") == 0 &&
+	  first_state.closes == 0 && first_state.detaches == 0 &&
+	  first_state.destroys == 0 && second_state.creates == 1 &&
+	  second_state.binds == 1 && second_state.opens == 1 &&
+	  second_state.closes == 0 && second_state.detaches == 1 &&
+	  second_state.destroys == 1,
+	  "failed replacement cleans only its provisional factory instance");
+    CHECK(first_instance->input_dispatch(first_instance->input_dispatch_data,
+	  &input_event) == 1 && input_state.calls == 2,
+	  "failed replacement preserves the active host input route");
+
+    second_state.open_result = 1;
+    desc.width = 31;
+    desc.height = 23;
+    desc.device_pixel_ratio = 1.25;
+    CHECK(brlobol_display_endpoint_host_open(endpoint,
+	  "endpoint-test-reattach-second", &desc),
+	  "endpoint replaces its host after the new factory is ready");
+    FactoryTestInstance *second_instance =
+	static_cast<FactoryTestInstance *>(
+	brlobol_display_endpoint_host(endpoint));
+    CHECK(second_instance && second_instance->controller == controller &&
+	  bu_strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+	  "endpoint-test-reattach-second") == 0 &&
+	  first_state.closes == 1 && first_state.detaches == 1 &&
+	  first_state.destroys == 1 && second_state.creates == 2 &&
+	  second_state.binds == 2 && second_state.opens == 2,
+	  "replacement preserves endpoint identity and releases the old host");
+    CHECK(second_instance->input_dispatch &&
+	  second_instance->input_dispatch(second_instance->input_dispatch_data,
+	  &input_event) == 1 && input_state.calls == 3,
+	  "replacement host receives the existing endpoint input handler");
+
+    const int first_frames_after_replace = first_state.frames;
+    const int second_frames = second_state.frames;
+    CHECK(brlobol_display_endpoint_request_frame(endpoint, "reattach-second") &&
+	  first_state.frames == first_frames_after_replace &&
+	  second_state.frames == second_frames + 1,
+	  "replacement routes future frame requests only to the active host");
+
+    brlobol_display_endpoint_host_detach(endpoint);
+    CHECK(brlobol_display_endpoint_host(endpoint) == NULL &&
+	  second_state.closes == 1 && second_state.detaches == 2 &&
+	  second_state.destroys == 2,
+	  "endpoint detach releases the replacement host exactly once");
+    brlobol_display_endpoint_destroy(endpoint);
+    CHECK(brlobol_host_factory_unregister(second_token) &&
+	  brlobol_host_factory_unregister(first_token),
+	  "reattach factories unregister after endpoint teardown");
+    return 0;
+}
+
+struct BlockingFrameRequest {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    bool returned = false;
+};
+
+static void
+blocking_frame_request(void *data, const char *UNUSED(reason))
+{
+    BlockingFrameRequest *state = static_cast<BlockingFrameRequest *>(data);
+    std::unique_lock<std::mutex> lock(state->mutex);
+    state->entered = true;
+    state->cv.notify_all();
+    state->cv.wait(lock, [state]() {
+	return state->release;
+    });
+    state->returned = true;
+    state->cv.notify_all();
+}
+
+static int
+test_frame_request_callback_teardown(void)
+{
+    BRLObolViewController controller;
+    BlockingFrameRequest state;
+    controller.setFrameRequestCallback(blocking_frame_request, &state);
+
+    std::thread dispatch([&controller]() {
+	controller.markProgressiveWorkPending();
+    });
+    {
+	std::unique_lock<std::mutex> lock(state.mutex);
+	const bool entered = state.cv.wait_for(lock, std::chrono::seconds(2),
+	    [&state]() { return state.entered; });
+	if (!entered) {
+	    state.release = true;
+	    state.cv.notify_all();
+	    lock.unlock();
+	    dispatch.join();
+	    CHECK(false, "frame callback dispatch starts");
+	}
+    }
+
+    std::future<void> clear = std::async(std::launch::async, [&controller,
+	&state]() {
+	controller.clearFrameRequestCallback(&state);
+    });
+    const bool clear_waited = clear.wait_for(std::chrono::milliseconds(100)) ==
+	std::future_status::timeout;
+    {
+	std::lock_guard<std::mutex> lock(state.mutex);
+	state.release = true;
+    }
+    state.cv.notify_all();
+    dispatch.join();
+    const bool clear_finished = clear.wait_for(std::chrono::seconds(2)) ==
+	std::future_status::ready;
+    if (clear_finished)
+	clear.get();
+
+    CHECK(clear_waited && clear_finished && state.returned,
+	  "callback teardown waits for an in-flight progressive dispatch");
+    controller.clearProgressiveWorkPending();
+    return 0;
+}
+
+static int
+test_factory_endpoint_close_during_frame_request(void)
+{
+    FactoryTestState state;
+    state.block_frames = true;
+    struct brlobol_host_factory factory = factory_test_desc(
+	"endpoint-test-close-during-frame",
+	10, BRLOBOL_HOST_CAP_PIXEL_PRESENT, &state);
+    brlobol_host_factory_token_t *token =
+	brlobol_host_factory_register(&factory);
+    CHECK(token != NULL, "active-frame endpoint factory registers");
+
+    struct brlobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    desc.width = 16;
+    desc.height = 12;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint != NULL, "active-frame endpoint creates");
+    BRLObolViewController *controller =
+	static_cast<BRLObolViewController *>(
+	    brlobol_display_endpoint_controller(endpoint));
+    controller->clearRenderRequest();
+    controller->clearProgressiveWorkPending();
+    CHECK(brlobol_display_endpoint_host_open(endpoint,
+	  "endpoint-test-close-during-frame", &desc),
+	  "active-frame endpoint opens its factory host");
+
+    std::thread frame_request([controller]() {
+	controller->markProgressiveWorkPending();
+    });
+    {
+	std::unique_lock<std::mutex> lock(state.frame_mutex);
+	const bool entered = state.frame_cv.wait_for(lock,
+	    std::chrono::seconds(2), [&state]() {
+		return state.frame_entered;
+	    });
+	if (!entered) {
+	    state.frame_release = true;
+	    state.frame_cv.notify_all();
+	    lock.unlock();
+	    frame_request.join();
+	    brlobol_display_endpoint_destroy(endpoint);
+	    CHECK(false, "factory frame callback starts before endpoint teardown");
+	}
+    }
+
+    std::future<void> close = std::async(std::launch::async, [endpoint]() {
+	brlobol_display_endpoint_destroy(endpoint);
+    });
+    const bool close_waited =
+	close.wait_for(std::chrono::milliseconds(100)) ==
+	std::future_status::timeout;
+    {
+	std::lock_guard<std::mutex> lock(state.frame_mutex);
+	state.frame_release = true;
+    }
+    state.frame_cv.notify_all();
+    frame_request.join();
+    const bool close_finished = close.wait_for(std::chrono::seconds(2)) ==
+	std::future_status::ready;
+    if (close_finished)
+	close.get();
+
+    CHECK(close_waited && close_finished && state.frame_returned &&
+	  state.closes == 1 && state.detaches == 1 && state.destroys == 1,
+	  "endpoint close drains an active factory frame callback before host destroy");
+    CHECK(brlobol_host_factory_unregister(token),
+	  "active-frame endpoint releases its factory after close");
+    return 0;
+}
+
+static int
 test_display_endpoint_contract(void)
 {
     brlobol_display_endpoint_t *endpoint =
@@ -647,39 +1145,82 @@ test_display_endpoint_contract(void)
 	  (enum brlobol_render_engine)99),
 	  "display endpoint rejects an invalid renderer policy");
 
-    CHECK(brlobol_display_endpoint_property_count() == 18,
+    CHECK(brlobol_display_endpoint_property_count() >= 34,
 	  "display endpoint exposes the typed property registry");
     int found_renderer_property = 0;
     int found_title_property = 0;
     int found_visibility_property = 0;
     int found_vsync_property = 0;
+    int found_perspective_property = 0;
+    int found_faceplate_grid_property = 0;
+    int found_framebuffer_composition_property = 0;
+    int found_antialiasing_property = 0;
+    int found_faceplate_font_properties = 0;
+    int found_faceplate_color_properties = 0;
     for (size_t i = 0; i < brlobol_display_endpoint_property_count(); i++) {
 	struct brlobol_endpoint_property_desc property = {};
 	property.struct_size = sizeof(property);
 	CHECK(brlobol_display_endpoint_property_descriptor(i, &property) ==
 	      BRLOBOL_ENDPOINT_PROPERTY_OK && property.name,
 	      "display endpoint property descriptors are readable");
-	if (strcmp(property.name, "endpoint.renderer") == 0) {
+	if (bu_strcmp(property.name, "endpoint.renderer") == 0) {
 	    found_renderer_property = property.type ==
 		BRLOBOL_ENDPOINT_PROPERTY_ENUM &&
 		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE) &&
 		property.allowed_values &&
-		strcmp(property.allowed_values,
+		bu_strcmp(property.allowed_values,
 		    "auto,hw,sw,rt,none,diagnostic") == 0;
 	}
-	if (strcmp(property.name, "endpoint.title") == 0)
+	if (bu_strcmp(property.name, "endpoint.title") == 0)
 	    found_title_property = property.type ==
 		BRLOBOL_ENDPOINT_PROPERTY_STRING &&
 		property.required_host_capabilities == BRLOBOL_HOST_CAP_TOPLEVEL;
-	if (strcmp(property.name, "endpoint.visible") == 0)
+	if (bu_strcmp(property.name, "endpoint.visible") == 0)
 	    found_visibility_property = property.type ==
 		BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
 		property.required_host_capabilities == BRLOBOL_HOST_CAP_TOPLEVEL;
-	if (strcmp(property.name, "endpoint.vsync") == 0)
+	if (bu_strcmp(property.name, "endpoint.vsync") == 0)
 	    found_vsync_property = property.type ==
 		BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
 		property.required_host_capabilities ==
 		    BRLOBOL_HOST_CAP_PRESENT_VSYNC;
+	if (bu_strcmp(property.name, "view.perspective") == 0)
+	    found_perspective_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_DOUBLE &&
+		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		fabs(property.minimum) < 0.0001 && property.maximum < 180.0;
+	if (bu_strcmp(property.name, "view.faceplate.grid.visible") == 0)
+	    found_faceplate_grid_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
+		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE);
+	if (bu_strcmp(property.name, "composition.framebuffer.mode") == 0)
+	    found_framebuffer_composition_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_ENUM &&
+		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		property.allowed_values &&
+		bu_strcmp(property.allowed_values, "off,overlay,underlay,interlay") == 0;
+	if (bu_strcmp(property.name, "renderer.antialiasing") == 0)
+	    found_antialiasing_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
+		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE);
+	if (bu_strcmp(property.name, "view.faceplate.params.font_size") == 0 ||
+	    bu_strcmp(property.name, "view.faceplate.center_dot.font_size") == 0 ||
+	    bu_strcmp(property.name, "view.faceplate.scale.font_size") == 0) {
+	    if (property.type == BRLOBOL_ENDPOINT_PROPERTY_UINT &&
+		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		fabs(property.minimum - 5.0) < 0.0001 &&
+		fabs(property.maximum - 96.0) < 0.0001)
+		found_faceplate_font_properties++;
+	}
+	if (bu_strcmp(property.name, "view.faceplate.params.color") == 0 ||
+	    bu_strcmp(property.name, "view.faceplate.center_dot.color") == 0 ||
+	    bu_strcmp(property.name, "view.faceplate.scale.color") == 0) {
+	    if (property.type == BRLOBOL_ENDPOINT_PROPERTY_COLOR3 &&
+		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		fabs(property.minimum) < 0.0001 &&
+		fabs(property.maximum - 1.0) < 0.0001)
+		found_faceplate_color_properties++;
+	}
     }
     CHECK(found_renderer_property,
 	  "renderer property declares its type, access, and allowed values");
@@ -687,6 +1228,18 @@ test_display_endpoint_contract(void)
 	  "toplevel host properties declare typed capability predicates");
     CHECK(found_vsync_property,
 	  "vsync property declares its presentation capability predicate");
+    CHECK(found_perspective_property,
+	  "perspective property declares a bounded double camera policy");
+    CHECK(found_faceplate_grid_property,
+	  "faceplate visibility is a writable endpoint policy");
+    CHECK(found_framebuffer_composition_property,
+	  "framebuffer composition declares its typed ordering values");
+    CHECK(found_antialiasing_property,
+	  "antialiasing is a writable renderer policy");
+    CHECK(found_faceplate_font_properties == 3,
+	  "faceplate font policies declare bounded writable uint values");
+    CHECK(found_faceplate_color_properties == 3,
+	  "faceplate color policies declare bounded writable color values");
 
     struct brlobol_endpoint_property_value property_value =
 	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
@@ -700,7 +1253,7 @@ test_display_endpoint_contract(void)
 	  "endpoint.renderer", &property_value) ==
 	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
 	  property_value.type == BRLOBOL_ENDPOINT_PROPERTY_ENUM &&
-	  strcmp(property_value.string_value, "sw") == 0,
+	  bu_strcmp(property_value.string_value, "sw") == 0,
 	  "typed renderer property reads endpoint policy");
     property_value_init(&property_value);
     property_value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
@@ -743,6 +1296,26 @@ test_display_endpoint_contract(void)
 	  "renderer.transparency", &property_value) ==
 	  BRLOBOL_ENDPOINT_PROPERTY_OK && !property_value.bool_value,
 	  "typed transparency property round trips render policy");
+    property_value_init(&property_value);
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.bool_value = 1;
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	  "renderer.antialiasing", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  endpoint_controller->isAntialiasingEnabled(),
+	  "typed antialiasing property updates the Obol render action");
+    property_value_init(&property_value);
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "renderer.antialiasing", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK && property_value.bool_value,
+	  "typed antialiasing property round trips render policy");
+    property_value_init(&property_value);
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.bool_value = 2;
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	  "renderer.antialiasing", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_INVALID,
+	  "typed Boolean policy rejects values outside its declared range");
     property_value_init(&property_value);
     property_value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
     property_value.double_value = -4.0;
@@ -793,19 +1366,55 @@ test_display_endpoint_contract(void)
     CHECK(brlobol_display_endpoint_property_get(endpoint, "view.zclip",
 	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
 	  "external view property reports unsupported without an owner");
-    int zclip = 0;
+    CHECK(brlobol_display_endpoint_property_get(endpoint, "view.perspective",
+	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  "external perspective property reports unsupported without an owner");
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "composition.framebuffer.mode", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  "external composition property reports unsupported without an owner");
+    TestPropertyProvider provider = {};
     CHECK(brlobol_display_endpoint_property_provider_set(endpoint,
-	  test_property_provider_get, test_property_provider_set, &zclip),
+	  test_property_provider_get, test_property_provider_set, &provider),
 	  "endpoint accepts an external property owner");
+    property_value_init(&property_value);
     property_value.bool_value = 1;
     CHECK(brlobol_display_endpoint_property_set(endpoint, "view.zclip",
-	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_OK && zclip == 1,
+	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_OK && provider.zclip == 1,
 	  "external property setter updates owner state");
     property_value.bool_value = 0;
     CHECK(brlobol_display_endpoint_property_get(endpoint, "view.zclip",
 	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
 	  property_value.bool_value == 1,
 	  "external property getter reads owner state");
+    property_value_init(&property_value);
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    property_value.double_value = 45.0;
+    CHECK(brlobol_display_endpoint_property_set(endpoint, "view.perspective",
+	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  fabs(provider.perspective - 45.0) < 0.0001,
+	  "external perspective setter updates owner state");
+    property_value_init(&property_value);
+    CHECK(brlobol_display_endpoint_property_get(endpoint, "view.perspective",
+	  &property_value) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  property_value.type == BRLOBOL_ENDPOINT_PROPERTY_DOUBLE &&
+	  fabs(property_value.double_value - 45.0) < 0.0001,
+	  "external perspective getter reads owner state");
+    property_value_init(&property_value);
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    property_value.string_value = "interlay";
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	  "composition.framebuffer.mode", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK && provider.framebufferMode == 3,
+	  "external composition setter updates owner state");
+    property_value_init(&property_value);
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "composition.framebuffer.mode", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  property_value.type == BRLOBOL_ENDPOINT_PROPERTY_ENUM &&
+	  property_value.string_value &&
+	  bu_strcmp(property_value.string_value, "interlay") == 0,
+	  "external composition getter reads owner state");
     CHECK(brlobol_display_endpoint_property_provider_set(endpoint,
 	  NULL, NULL, NULL),
 	  "endpoint clears its external property owner");
@@ -993,10 +1602,38 @@ test_imgstream_display_host_bridge(void)
     CHECK(viewport->getTextureNode() != NULL &&
 	  texture_matches(viewport->getTextureNode(), 5, 4, 3),
 	  "display host realizes framebuffer texture");
-    CHECK(host.getController()->getSceneRoot()->isOfType(SoGroup::getClassTypeId()),
-	  "display host controller root is a group");
-    CHECK(static_cast<SoGroup *>(host.getController()->getSceneRoot())->getNumChildren() >= 2,
-	  "display host attaches image nodes to controller root");
+    SoGroup *underlay = host.getController()->getFramebufferUnderlayRoot();
+    SoGroup *interlay = host.getController()->getFramebufferInterlayRoot();
+    SoGroup *overlay = host.getController()->getFramebufferOverlayRoot();
+
+    CHECK(underlay && interlay && overlay && overlay->findChild(viewport) >= 0 &&
+	  underlay->findChild(viewport) < 0 &&
+	  interlay->findChild(viewport) < 0 &&
+	  viewport->layer.getValue() == SoBRLViewportImage::OVERLAY,
+	  "display host attaches a framebuffer image to the retained overlay layer");
+    CHECK(host.setFramebufferComposition(fb,
+	  BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY) == 0 &&
+	  underlay->findChild(viewport) >= 0 && overlay->findChild(viewport) < 0 &&
+	  viewport->visible.getValue() == TRUE &&
+	  viewport->layer.getValue() == SoBRLViewportImage::UNDERLAY,
+	  "display host moves framebuffer image beneath the CAD render batch");
+    CHECK(host.setFramebufferComposition(fb,
+	  BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY) == 0 &&
+	  interlay->findChild(viewport) >= 0 &&
+	  underlay->findChild(viewport) < 0 && overlay->findChild(viewport) < 0 &&
+	  viewport->visible.getValue() == TRUE &&
+	  viewport->layer.getValue() == SoBRLViewportImage::INTERLAY,
+	  "display host moves framebuffer image between CAD and view-local features");
+    CHECK(host.setFramebufferComposition(fb,
+	  BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF) == 0 &&
+	  underlay->findChild(viewport) < 0 &&
+	  interlay->findChild(viewport) < 0 && overlay->findChild(viewport) < 0 &&
+	  viewport->visible.getValue() == FALSE,
+	  "display host removes disabled framebuffer image from retained composition");
+    CHECK(host.setFramebufferComposition(fb,
+	  BRLOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY) == 0 &&
+	  overlay->findChild(viewport) >= 0 && viewport->visible.getValue() == TRUE,
+	  "display host restores framebuffer image above the CAD render batch");
 
     unsigned char red[3] = {255, 0, 0};
     CHECK(imgstream_fb_writerect(fb, 2, 1, 1, 1, red) == 1,
@@ -1110,15 +1747,53 @@ test_framebuffer_stream_helper(void)
     return 0;
 }
 
+static int
+test_framebuffer_host_teardown(void)
+{
+    for (int i = 0; i < 16; i++) {
+	BRLObolWindowHost *host = new BRLObolWindowHost;
+	BRLObolFramebufferStream *stream = new BRLObolFramebufferStream(host);
+	CHECK(stream->configure(3, 2) == 0 && stream->ensure() == 0,
+	      "stream opens before host teardown");
+
+	imgstream_fb_t *display = brlobol_window_host_open_display_framebuffer(
+	    host, "/dev/qtgl", 3, 2);
+	CHECK(display != NULL, "display framebuffer opens before host teardown");
+	unsigned char pixel[3] = {0, 127, 255};
+	CHECK(stream->write(0, 0, pixel, 1) == 1 && stream->present() == 0,
+	      "stream presents an active image before host teardown");
+	CHECK(imgstream_fb_write(display, 0, 0, pixel, 1) == 1 &&
+	      imgstream_fb_flush(display) == 0,
+	      "display framebuffer presents an active image before host teardown");
+
+	delete host;
+	CHECK(stream->host() == NULL,
+	      "host teardown invalidates registered framebuffer stream host");
+	CHECK(stream->present() == -1,
+	      "detached framebuffer stream refuses presentation without a host");
+	stream->close();
+	CHECK(imgstream_fb_flush(display) == 0,
+	      "display framebuffer remains usable after host teardown");
+	CHECK(imgstream_fb_view(display, 1, 1, 2, 2) == 0,
+	      "display framebuffer no longer dispatches to destroyed host");
+	imgstream_fb_close(display);
+	delete stream;
+    }
+    return 0;
+}
+
 int
 main(int ac, char **av)
 {
+    bu_setprogname(av[0]);
     (void)ac;
     (void)av;
 
     brlobol_init(NULL);
 
     if (test_input_context())
+	return 1;
+    if (test_progressive_status_contract())
 	return 1;
     if (test_window_host_contract())
 	return 1;
@@ -1128,9 +1803,19 @@ main(int ac, char **av)
 	return 1;
     if (test_host_factory_contract())
 	return 1;
+    if (test_host_factory_simultaneous_endpoints())
+	return 1;
+    if (test_host_factory_reattach())
+	return 1;
+    if (test_frame_request_callback_teardown())
+	return 1;
+    if (test_factory_endpoint_close_during_frame_request())
+	return 1;
     if (test_imgstream_display_host_bridge())
 	return 1;
     if (test_framebuffer_stream_helper())
+	return 1;
+    if (test_framebuffer_host_teardown())
 	return 1;
 
     return 0;

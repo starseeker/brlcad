@@ -27,6 +27,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cinttypes>
@@ -862,6 +864,7 @@ run_once(const struct options &opts, int iter)
 int
 main(int argc, const char **argv)
 {
+    bu_setprogname(argv[0]);
     struct options opts;
     if (!parse_args(argc, argv, &opts)) {
 	usage(stderr);

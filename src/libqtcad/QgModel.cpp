@@ -62,12 +62,10 @@
 #define ALPHANUM_IMPL
 #include "../libged/alphanum.h"
 
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgModel.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgUtil.h"
 #include "qtcad/QgSignalFlags.h"
-#include "QgLegacyViewContext.h"
 
 /* Validate the character constant stored in QgItem::op matches the enum. */
 static_assert(DB_OP_UNION == 'u', "DB_OP_UNION enum value changed; update QgItem::op default in QgModel.h");
@@ -152,17 +150,11 @@ static std::unordered_map<const QgModel *, QgModel::DrawTimingStats>
 qgmodel_draw_timing_stats;
 static std::unordered_set<const QgModel *> qgmodel_draw_timing_enabled;
 
-static qg_legacy_view *
-qgmodel_active_view(const QgModel *model)
-{
-	QgSession *session = model ? model->session() : nullptr;
-	return session ? session->activeView() : nullptr;
-}
-
 static void *
 qgmodel_active_view_context(const QgModel *model)
 {
-	return qg_legacy_view_to_context(qgmodel_active_view(model));
+	QgSession *session = model ? model->session() : nullptr;
+	return session ? session->activeViewContext() : nullptr;
 }
 
 static int
@@ -421,9 +413,7 @@ QgItem::path_hash() const
 QgModel::QgModel(QObject *p, const char *npath)
 	: QAbstractItemModel(p)
 {
-	// Create the session that owns the GED context for this model.
-	// The session constructor allocates struct ged, initializes the GED
-	// compatibility services, and creates the default fallback view.
+	// The session is the sole owner of the GED context for this model.
 	m_session = new QgSession(this);
 	struct ged *gedp = m_session->ged();
 

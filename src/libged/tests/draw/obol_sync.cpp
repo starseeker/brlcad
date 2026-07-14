@@ -360,7 +360,7 @@ command_result_cb(const struct ged_draw_command_result *result, void *data)
     }
     if (result->status == GED_DRAW_COMMAND_RESULT_REMOVED &&
 	    BU_STR_EQUAL(command, "removePrefix") &&
-	    strncmp(name, "rtcheck::", strlen("rtcheck::")) == 0)
+	    bu_strncmp(name, "rtcheck::", strlen("rtcheck::")) == 0)
 	ctx->saw_remove_prefix = 1;
     if (result->status == GED_DRAW_COMMAND_RESULT_FAILED &&
 	    BU_STR_EQUAL(name, "rtcheck::generation") &&
@@ -566,7 +566,7 @@ source_instance_is_view_scoped(SoBRLDatabaseSource *source, const char *view_nam
     prefix += view_name;
     prefix += ":";
     const char *instance_key = source->instanceKey.getValue().getString();
-    return instance_key && strncmp(instance_key, prefix.c_str(),
+    return instance_key && bu_strncmp(instance_key, prefix.c_str(),
 	    prefix.length()) == 0;
 }
 
@@ -576,7 +576,7 @@ source_instance_is_any_view_scoped(SoBRLDatabaseSource *source)
     if (!source)
 	return 0;
     const char *instance_key = source->instanceKey.getValue().getString();
-    return instance_key && strncmp(instance_key, "ged-view:", 9) == 0;
+    return instance_key && bu_strncmp(instance_key, "ged-view:", 9) == 0;
 }
 
 static SoBRLDatabaseSource *
@@ -1305,9 +1305,9 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
 	    geometry_a == shape_a || geometry_b == shape_b ||
 	    geometry_a != geometry_b)
 	FAIL("GED duplicate occurrences should remain separate sources sharing one geometry node");
-    if (strcmp(shape_a->ownerSourceInstanceKey.getValue().getString(),
+    if (bu_strcmp(shape_a->ownerSourceInstanceKey.getValue().getString(),
 	    summary_a.instanceKey.getString()) != 0 ||
-	    strcmp(shape_b->ownerSourceInstanceKey.getValue().getString(),
+	    bu_strcmp(shape_b->ownerSourceInstanceKey.getValue().getString(),
 		summary_b.instanceKey.getString()) != 0)
 	FAIL("GED duplicate occurrence shapes should retain owner source instance keys");
 
@@ -1353,9 +1353,9 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
 	FAIL("GED duplicate occurrence ray pick should return BRL-CAD pick detail");
     const SoBRLPickDetail *pick_detail =
 	static_cast<const SoBRLPickDetail *>(raw_detail);
-    if (strcmp(pick_detail->getPath().getString(),
+    if (bu_strcmp(pick_detail->getPath().getString(),
 	    summary_b.path.getString()) != 0 ||
-	    strcmp(pick_detail->getSourceInstanceKey().getString(),
+	    bu_strcmp(pick_detail->getSourceInstanceKey().getString(),
 		summary_b.instanceKey.getString()) != 0 ||
 	    BU_STR_EQUAL(pick_detail->getSourceInstanceKey().getString(),
 		summary_a.instanceKey.getString()))
@@ -1507,6 +1507,18 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     ged_draw_transaction_result_free(&result);
     if (draw_ret <= 0)
 	FAIL("progressive autoview deferred draw should succeed");
+    if (!(controller->getDefaultProgressiveOptions().flags &
+		BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER) ||
+	!(controller->getDefaultProgressiveOptions().flags &
+		BRLOBOL_PROGRESSIVE_FULL_DETAIL))
+	FAIL("default progressive policy should combine proxy and full-detail refinement");
+
+    /* An explicit autoview while the root is still realizing must replace
+     * the transaction's initial fit and continue following final bounds. */
+    const char *autoview_cmd[1] = {"autoview"};
+    if (ged_exec_autoview(gedp, 1, autoview_cmd) != BRLCAD_OK)
+	FAIL("explicit autoview should arm deferred Obol bound tracking");
+    const uint64_t explicit_autoview_revision = bv_frame_revision_get(view);
 
     SoBRLDatabaseSource *proxy_source = scene ?
 	source_for_path(scene, "progressive_root.c") : NULL;
@@ -1515,6 +1527,17 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     if (!proxy_source || !proxy_source->getEffectiveSourceBounds(proxy_bounds) ||
 	proxy_bounds.isEmpty())
 	FAIL("deferred root should publish conservative indexed proxy bounds");
+
+    /* Materialize the proxy frontier before full detail is adopted.  The
+     * completed compact root must retire these descendants rather than leave
+     * duplicate proxy geometry visible alongside final data. */
+    struct ged_draw_obol_source_expansion_status expansion_status;
+    memset(&expansion_status, 0, sizeof(expansion_status));
+    if (!ged_draw_obol_database_source_expand_children(gedp, view_ctx,
+	    "progressive_root.c", GED_DRAW_MODE_WIRE, 0, &expansion_status) ||
+	expansion_status.expanded != 4 ||
+	scene->getDatabaseSourceCount() != initial_scene_source_count + 5)
+	FAIL("deferred root should expose a temporary proxy frontier before full-detail adoption");
 
     /* A redraw can advance the aggregate draw revision while this source is
      * realizing.  It must not invalidate an otherwise matching snapshot. */
@@ -1564,7 +1587,8 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	settled_source->getCompactInstanceCount() != 4 ||
 	!proxy_contains_settled ||
 	scene->getDatabaseSourceCount() != initial_scene_source_count + 1 ||
-	bv_frame_revision_get(view) <= initial_revision) {
+	bv_frame_revision_get(view) <= initial_revision ||
+	bv_frame_revision_get(view) <= explicit_autoview_revision) {
 	fprintf(stderr, "progressive settle ret=%d changed=%d frame=%llu initial=%llu providers=%zu advanced=%zu remaining=%zu pending=%zu scene=%d/%d source=%p compact=%d count=%d\n",
 	    initial_progress, status.changed,
 	    static_cast<unsigned long long>(bv_frame_revision_get(view)),
@@ -1588,6 +1612,12 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	}
 	FAIL("background progressive refinement should atomically settle one compact root and its owned initial autoview");
     }
+
+    const uint64_t settled_autoview_revision = bv_frame_revision_get(view);
+    for (int attempt = 0; attempt < 4; attempt++)
+	(void)controller->advanceProgressiveWork(&options, &status);
+    if (bv_frame_revision_get(view) != settled_autoview_revision)
+	FAIL("settled progressive autoview should stop changing the view");
 
     if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
 	    "progressive_root.c", view_ctx, -1,
@@ -1660,7 +1690,7 @@ auxiliary_for_path_variant(SoBRLDatabaseSource *source, const char *path)
 	if (!child || !child->isOfType(SoBRLVListShape::getClassTypeId()))
 	    continue;
 	SoBRLVListShape *candidate = static_cast<SoBRLVListShape *>(child);
-	if (strcmp(candidate->recordRole.getValue().getString(),
+	if (bu_strcmp(candidate->recordRole.getValue().getString(),
 		"auxiliary") == 0)
 	    return candidate;
     }
@@ -3131,8 +3161,8 @@ main(int argc, char **argv)
 	    !annot_source || annot_source->getRealizedShapeCount() != 0 ||
 	    !annot_source->getRealizedShapeSummary(0, annot_summary) ||
 	    annot_summary.segmentCount != 1 ||
-	    strcmp(annot_summary.sourceType.getString(), "annotation") != 0 ||
-	    strcmp(annot_summary.geometryKind.getString(), "annotation") != 0 ||
+	    bu_strcmp(annot_summary.sourceType.getString(), "annotation") != 0 ||
+	    bu_strcmp(annot_summary.geometryKind.getString(), "annotation") != 0 ||
 	    annot_export.getLineCount() != 1 ||
 	    fabs(annot_export.getLine(0).b[0] - 50.25f) > 0.001f ||
 	    fabs(annot_export.getLine(0).b[1] - 0.5f) > 0.001f ||
@@ -3155,8 +3185,8 @@ main(int argc, char **argv)
 	    !submodel_source->getRealizedShapeSummary(0, submodel_summary) ||
 	    submodel_summary.pointCount == 0 ||
 	    submodel_summary.commandCount != submodel_summary.pointCount ||
-	    strcmp(submodel_summary.recordRole.getString(), "database") != 0 ||
-	    strcmp(submodel_summary.sourceType.getString(), "submodel") != 0 ||
+	    bu_strcmp(submodel_summary.recordRole.getString(), "database") != 0 ||
+	    bu_strcmp(submodel_summary.sourceType.getString(), "submodel") != 0 ||
 	    auxiliary_for_path_variant(submodel_source, "box.s")) {
 	FAIL("GED submodel draw should realize direct primary owned Obol geometry without legacy auxiliary staging");
     }
@@ -3180,7 +3210,7 @@ main(int argc, char **argv)
 	    !submodel_temp_source->getRealizedShapeSummary(0,
 		submodel_temp_summary) ||
 	    submodel_temp_summary.pointCount == 0 ||
-	    strcmp(submodel_temp_summary.recordRole.getString(), "database") != 0 ||
+	    bu_strcmp(submodel_temp_summary.recordRole.getString(), "database") != 0 ||
 	    auxiliary_for_path_variant(submodel_temp_source, "nested_leaf.s"))
 	FAIL("GED submodel temp-source draw should realize direct primary owned Obol geometry");
     const char *erase_submodel_temp_owner[2] = {
@@ -3279,7 +3309,7 @@ main(int argc, char **argv)
     if (!brep_wire_source || !brep_wire_shape ||
 	    brep_wire_shape->point.getNum() == 0 ||
 	    brep_wire_shape->command.getNum() == 0 ||
-	    strcmp(brep_wire_shape->sourceType.getValue().getString(),
+	    bu_strcmp(brep_wire_shape->sourceType.getValue().getString(),
 		"line-set") != 0)
 	FAIL("GED BREP wireframe draw should publish owned Obol line geometry");
     const char *erase_brep_wire[2] = {"erase", "brep_owner.brep"};
@@ -3358,7 +3388,7 @@ main(int argc, char **argv)
 	    !renamed_source ||
 	    owned_scene->getDatabaseSourceCount() != 3 ||
 	    !renamed_source->getSummary(renamed_summary) ||
-	    strcmp(renamed_summary.path.getString(), "renamed_source.s") != 0 ||
+	    bu_strcmp(renamed_summary.path.getString(), "renamed_source.s") != 0 ||
 	    renamed_summary.lineWidth != 11 ||
 	    renamed_summary.inputsRevision != 7 ||
 	    renamed_summary.sourceRevision == 9191)
@@ -3927,7 +3957,7 @@ main(int argc, char **argv)
 	    if (!aux_shape ||
 		    aux_shape->point.getNum() != 2 ||
 		    aux_shape->command.getNum() != 2 ||
-		    strcmp(aux_shape->recordRole.getValue().getString(),
+		    bu_strcmp(aux_shape->recordRole.getValue().getString(),
 			"auxiliary") != 0 ||
 		    aux_shape->drawMode.getValue() !=
 			BRLOBOL_LOD_DRAW_SHADED ||
@@ -4541,7 +4571,7 @@ main(int argc, char **argv)
     SoBRLSceneGroup *scene_group = static_cast<SoBRLSceneGroup *>(box_group);
     SbColor group_color = scene_group->color.getValue();
     if (scene_group->lineWidth.getValue() != 6 ||
-	    fabs(scene_group->transparency.getValue() - 0.45) > 0.001 ||
+	    fabs(scene_group->transparency.getValue() - 0.55) > 0.001 ||
 	    !scene_group->colorOverride.getValue() ||
 	    fabs(group_color[0] - (90.0f / 255.0f)) > 1.0e-6f ||
 	    fabs(group_color[1] - (100.0f / 255.0f)) > 1.0e-6f ||
@@ -4564,8 +4594,8 @@ main(int argc, char **argv)
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     if (!ged_draw_group_ref_appearance_settings(gedp, group_state.ref,
 	    &group_appearance_readback) ||
-	    group_appearance_readback.s_line_width != 9 ||
-	    fabs(group_appearance_readback.transparency - 0.23) > 0.001 ||
+	group_appearance_readback.s_line_width != 9 ||
+	fabs(group_appearance_readback.transparency - 0.77) > 0.001 ||
 	    !group_appearance_readback.color_override ||
 	    group_appearance_readback.color[0] != 12 ||
 	    group_appearance_readback.color[1] != 34 ||
@@ -4577,7 +4607,7 @@ main(int argc, char **argv)
 	    scene_group->highlighted.getValue(),
 	    scene_group->lineStyle.getValue(),
 	    6,
-	    0.45f,
+	    0.55f,
 	    TRUE,
 	    SbColor(90.0f / 255.0f, 100.0f / 255.0f, 110.0f / 255.0f),
 	    scene_group->materialColorValid.getValue(),
@@ -4587,7 +4617,7 @@ main(int argc, char **argv)
     struct ged_draw_group_record group_record;
     memset(&group_record, 0, sizeof(group_record));
     if (!ged_draw_group_record_get(gedp, group_state.ref, &group_record) ||
-	    fabs(group_record.transparency - 0.45) > 0.001 ||
+	fabs(group_record.transparency - 0.55) > 0.001 ||
 	    !group_record.visible ||
 	    group_record.draw_mode != GED_DRAW_MODE_WIRE)
 	FAIL("GED group records should read owned Obol group display state");

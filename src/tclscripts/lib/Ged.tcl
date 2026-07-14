@@ -50,7 +50,6 @@ package provide cadwidgets::Ged 1.0
     itk_option define -linewidth linewidth Linewidth 1
     itk_option define -perspective perspective Perspective 0
     itk_option define -transparency transparency Transparency 0
-    itk_option define -type type Type tkobol
     itk_option define -zbuffer zbuffer Zbuffer 0
     itk_option define -zclip zclip Zclip 0
 
@@ -206,7 +205,6 @@ package provide cadwidgets::Ged 1.0
 	method decompose {args}
 	method delay {args}
 	method dir2ae {args}
-	method cache_on {args}
 	method dplot {args}
 	method draw {args}
 	method draw_ray {_start _partitions}
@@ -975,24 +973,21 @@ package provide cadwidgets::Ged 1.0
     $itk_component(lpw) add llp
     $itk_component(lpw) add lrp
 
-    set dm_list [split [dm_list] ',']
-    set dmType [lindex $dm_list 0]
-
     # create four views
     itk_component add ul {
-	new_view [$itk_component(upw) childsite ulp].view $dmType -t 0
+	new_view [$itk_component(upw) childsite ulp].view tkobol -t 0
     } {}
 
     itk_component add ur {
-	new_view [$itk_component(upw) childsite urp].view $dmType -t 0
+	new_view [$itk_component(upw) childsite urp].view tkobol -t 0
     } {}
 
     itk_component add ll {
-	new_view [$itk_component(lpw) childsite llp].view $dmType -t 0
+	new_view [$itk_component(lpw) childsite llp].view tkobol -t 0
     } {}
 
     itk_component add lr {
-	new_view [$itk_component(lpw) childsite lrp].view $dmType -t 0
+	new_view [$itk_component(lpw) childsite lrp].view tkobol -t 0
     } {}
 
     # initialize the views
@@ -1606,10 +1601,6 @@ package provide cadwidgets::Ged 1.0
 
 ::itcl::body cadwidgets::Ged::dir2ae {args} {
     eval $mGed dir2ae $args
-}
-
-::itcl::body cadwidgets::Ged::cache_on {args} {
-    eval $mGed cache_on $args
 }
 
 ::itcl::body cadwidgets::Ged::dplot {args} {

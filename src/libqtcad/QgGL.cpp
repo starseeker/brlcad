@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -34,7 +36,6 @@
 #include <QtGlobal>
 
 #include "QgCanvasState.h"   /* pimpl definition + shared helpers */
-#include "QgLegacyViewContext.h"
 #include "qtcad/QgGL.h"
 
 QgGL::QgGL(QWidget *parent, BRLObolViewController *controller,
@@ -47,9 +48,9 @@ QgGL::QgGL(QWidget *parent, BRLObolViewController *controller,
 
     // Provide a view specific to this widget - set gedp->ged_gvp to v
     // if this is the current view
-    d->local_v = qg_legacy_view_local_create("qtgl");
-    d->v = d->local_v;
+    d->v = qgcanvas_view_context_create("qtgl");
     qgcanvas_sync_obol_camera(*d);
+    qgcanvas_initialize_obol_background(*d);
 
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
@@ -61,23 +62,16 @@ QgGL::~QgGL()
 {
 	d->input.setEndpoint(NULL);
     qgcanvas_destroy_obol(*d);
-    qg_legacy_view_local_free(d->local_v);
-    d->local_v = nullptr;
+    qgcanvas_view_context_destroy(d->v);
     d->v = nullptr;
     delete d;
     d = nullptr;
 }
 
-qg_legacy_view *
-QgGL::view() const
+struct bv_context *
+QgGL::viewContext() const
 {
-    return d->v;
-}
-
-bool
-QgGL::legacyBackendInitialized() const
-{
-    return false;
+    return d ? d->v : nullptr;
 }
 
 BRLObolViewController *
@@ -110,12 +104,6 @@ QgGL::set_current(int active)
     d->current = active;
 }
 
-void
-QgGL::set_view(qg_legacy_view *nv)
-{
-    qgcanvas_set_view(*d, nv);
-}
-
 void QgGL::paintGL()
 {
     int w = width();
@@ -126,13 +114,12 @@ return;
 
     qgcanvas_sync_obol_viewport(*d, this);
     qgcanvas_sync_obol_camera(*d);
-    qgcanvas_sync_obol_background(*d);
     initializeOpenGLFunctions();
     qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
 
     if (qgcanvas_render_obol_pending(*d, TRUE, TRUE) && d->v) {
-	(void)bv_refresh_consume(qg_legacy_view_bv(d->v));
-	bv_refresh_complete(qg_legacy_view_bv(d->v));
+	(void)bv_refresh_consume(bv_context_view(d->v));
+	bv_refresh_complete(bv_context_view(d->v));
     }
     qgcanvas_frame_complete(*d, this);
     qgcanvas_queue_obol_progressive_update(*d, this);
@@ -157,7 +144,7 @@ void QgGL::resizeEvent(QResizeEvent *e)
     if (!d->v)
 return;
     QSize rsize = qgcanvas_render_size(this);
-    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
     qgcanvas_request_update(*d, BV_REFRESH_VIEW);
     emit changed();
 }
@@ -195,7 +182,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.keyPressEvent(d->v, d->x_prev,
 	    d->y_prev, k)) {
@@ -218,7 +205,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.mousePressEvent(d->v, d->x_prev,
 	    d->y_prev, e)) {
@@ -273,7 +260,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
     int mret = d->input.mouseMoveEvent(d->v,
 	    d->x_prev, d->y_prev, e, d->lmouse_mode);
@@ -308,7 +295,7 @@ return;
     // Let bv know what the current view width and height are, in
     // case the dx/dy mouse translations need that information
     QSize rsize = qgcanvas_render_size(this);
-    qg_legacy_view_dimensions_set(d->v, rsize.width(), rsize.height());
+    bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
     if (d->input.wheelEvent(d->v, e)) {
 qgcanvas_request_update(*d, BV_REFRESH_VIEW);

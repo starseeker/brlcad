@@ -65,7 +65,7 @@ qged_dm_during_clbk(int ac, const char **av, void *u1, void *u2)
     return BRLCAD_OK;
 }
 
-QgEdMainWindow::QgEdMainWindow(int canvas_type, int quad_view)
+QgEdMainWindow::QgEdMainWindow(QgViewType canvas_type, int quad_view)
 {
     QgEdApp *ap = (QgEdApp *)qApp;
     ap->w = this;
@@ -102,7 +102,7 @@ QgEdMainWindow::QgEdMainWindow(int canvas_type, int quad_view)
 }
 
 void
-QgEdMainWindow::CreateWidgets(int canvas_type)
+QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
 {
     QgEdApp *ap = (QgEdApp *)qApp;
     QgModel *m = ap->mdl;

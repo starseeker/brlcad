@@ -37,7 +37,10 @@
 #include "linenoise.hpp"
 
 #include "brlcad_ident.h"
+#include "brlobol/display_endpoint.h"
+#include "brlobol/host_factory.h"
 #include "brlobol/init.h"
+#include "brlobol/window_host.h"
 #include "bv.h"
 #include "bu.h"
 #include "imgstream/fbserv.h"
@@ -251,6 +254,80 @@ private:
 
 };
 
+/* GSH has no native canvas.  Its endpoint must nevertheless use the standard
+ * headless host factory so capture and progressive presentation have an
+ * endpoint-owned rendering/context lifecycle. */
+static int
+gsh_headless_endpoint_ensure(struct ged *gedp, void *view_ctx,
+	int sync_current_scene)
+{
+    if (!gedp || !view_ctx ||
+	!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx,
+	    sync_current_scene))
+	return 0;
+
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    if (!endpoint)
+	return 0;
+
+    const struct bv *view = bv_context_view_const(
+	(const struct bv_context *)view_ctx);
+    const unsigned int width = view && bv_width_get(view) > 0 ?
+	(unsigned int)bv_width_get(view) : 512u;
+    const unsigned int height = view && bv_height_get(view) > 0 ?
+	(unsigned int)bv_height_get(view) : 512u;
+
+
+    const char *factory = brlobol_display_endpoint_host_factory_name(endpoint);
+    if (factory) {
+	if (!BU_STR_EQUAL(factory, "headless"))
+	    return 0;
+	return brlobol_display_endpoint_resize(endpoint, width, height, 1.0);
+    }
+
+    struct brlobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    desc.width = width;
+    desc.height = height;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT |
+	BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
+	BRLOBOL_HOST_CAP_READBACK |
+	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT;
+    desc.visible = 0;
+    desc.title = "GSH Obol";
+    desc.vsync = BRLOBOL_HOST_VSYNC_AUTO;
+
+    const enum brlobol_render_engine old_engine =
+	brlobol_display_endpoint_render_engine_get(endpoint);
+    if (!brlobol_display_endpoint_render_engine_set(endpoint,
+	BRLOBOL_RENDER_ENGINE_AUTO) ||
+	!brlobol_display_endpoint_host_open(endpoint, "headless", &desc) ||
+	!brlobol_display_endpoint_render_engine_set(endpoint,
+	    BRLOBOL_RENDER_ENGINE_SW)) {
+	brlobol_display_endpoint_host_detach(endpoint);
+	(void)brlobol_display_endpoint_render_engine_set(endpoint, old_engine);
+	return 0;
+    }
+
+    return 1;
+}
+
+static BRLObolWindowHost *
+gsh_headless_endpoint_host(void *view_ctx)
+{
+    brlobol_display_endpoint_t *endpoint = view_ctx ?
+	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+    const char *factory = endpoint ?
+	brlobol_display_endpoint_host_factory_name(endpoint) : NULL;
+    if (!endpoint || !factory || !BU_STR_EQUAL(factory, "headless"))
+	return NULL;
+    return static_cast<BRLObolWindowHost *>(
+	brlobol_display_endpoint_host(endpoint));
+}
+
 /* For gsh these are mostly no-op, but define placeholder functions in case we
  * need pre or post actions for database ops in the future. */
 extern "C" int
@@ -267,12 +344,13 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
 	return BRLCAD_OK;
     s->gfile = std::string(s->gedp->dbip->dbi_filename);
 
+
     void *view_ctx = ged_view_active_ctx(s->gedp);
-    if (!view_ctx ||
-	    !ged_draw_obol_render_endpoint_ensure_for_view(s->gedp,
-		view_ctx, 0) ||
-	    ged_draw_obol_framebuffer_backend_ensure_for_view(s->gedp,
-		view_ctx) != BRLCAD_OK)
+    if (!view_ctx || !gsh_headless_endpoint_ensure(s->gedp, view_ctx, 0))
+	return BRLCAD_ERROR;
+    BRLObolWindowHost *host = gsh_headless_endpoint_host(view_ctx);
+    if (!host || ged_draw_obol_framebuffer_backend_install_for_view(s->gedp,
+	view_ctx, host, 0, 0, 0) != BRLCAD_OK)
 	return BRLCAD_ERROR;
 
     return BRLCAD_OK;
@@ -382,8 +460,7 @@ GshState::GshState()
     ged_init(gedp);
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    if (!view_ctx ||
-	!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 0))
+    if (!view_ctx || !gsh_headless_endpoint_ensure(gedp, view_ctx, 0))
 	bu_log("gsh: unable to create the headless Obol display endpoint\n");
 
     view_checkpoint();
@@ -583,18 +660,29 @@ GshState::view_update()
 	return;
 
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    if (qged_display_mode && bv_refresh_dirty_get(view)) {
-	if (!ged_draw_obol_controller_opaque_for_view(view_ctx)) {
-	    (void)ged_draw_obol_render_endpoint_ensure_for_view(gedp,
-		view_ctx, 1);
-	    struct ged_draw_transaction txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-	    txn.view = view_ctx;
-	    (void)ged_draw_apply_transaction(gedp, &txn, NULL);
-	}
-	(void)ged_draw_obol_framebuffer_present(gedp);
-	bv_context_refresh_complete((struct bv_context *)view_ctx);
+    if (!bv_refresh_dirty_get(view))
+	return;
+
+    if (qged_display_mode &&
+	!ged_draw_obol_controller_opaque_for_view(view_ctx)) {
+	(void)gsh_headless_endpoint_ensure(gedp, view_ctx, 1);
+	struct ged_draw_transaction txn =
+	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+	txn.view = view_ctx;
+	(void)ged_draw_apply_transaction(gedp, &txn, NULL);
     }
+
+    /* Keep view-owned composition and faceplate state in the same controller
+     * used by headless capture.  In particular, ert enables framebuffer
+     * underlay in bv; publishing stream pixels alone cannot make that image
+     * part of the Obol render root. */
+    (void)ged_draw_obol_view_context_faceplate_sync(gedp, view_ctx);
+
+    /* ERT/fbserv traffic updates the shared view refresh state in every GSH
+     * mode.  Publish it here so headless delay pumping can expose in-flight
+     * frames, rather than waiting for a final screengrab. */
+    (void)ged_draw_obol_framebuffer_present(gedp);
+    bv_context_refresh_complete((struct bv_context *)view_ctx);
 }
 
 // The primary interaction thread managing the command line

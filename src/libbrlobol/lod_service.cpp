@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/draw_cache.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_lod_cache.h"
@@ -421,7 +423,7 @@ lod_provider_param(const BRLObolLodRequest &request, const char *name)
     if (!name)
 	return NULL;
     for (size_t i = 0; i < request.providerParams.size(); i++) {
-	if (strcmp(request.providerParams[i].name.getString(), name) != 0)
+	if (bu_strcmp(request.providerParams[i].name.getString(), name) != 0)
 	    continue;
 	if (found)
 	    return NULL;
@@ -437,7 +439,7 @@ lod_remove_source_query_provider_params(BRLObolLodRequest &request)
 	std::remove_if(request.providerParams.begin(),
 		       request.providerParams.end(),
     [](const BRLObolLodProviderParam &param) {
-	return strncmp(param.name.getString(), "source_query.",
+	return bu_strncmp(param.name.getString(), "source_query.",
 		       13) == 0;
     }),
     request.providerParams.end());
@@ -526,7 +528,7 @@ lod_request_query_space_is_source_local(const BRLObolLodRequest &request)
     const BRLObolLodProviderParam *spaceParam =
 	lod_provider_param(request, "source_query.space");
     return spaceParam &&
-	   strcmp(spaceParam->value.getString(), "source_local") == 0 ?
+	   bu_strcmp(spaceParam->value.getString(), "source_local") == 0 ?
 	   TRUE : FALSE;
 }
 
@@ -1515,6 +1517,19 @@ struct BRLObolLodSubscriberCall {
     void *userData;
 };
 
+/* Result-ready callbacks run on a worker thread.  Record the active callback
+ * there so an owner can safely unsubscribe itself during its final dispatch. */
+static thread_local BRLObolLodServicePrivate *lod_callback_service = NULL;
+static thread_local BRLObolLodSubscriberId lod_callback_subscriber = 0;
+
+static SbBool
+lod_callback_is_current(const BRLObolLodServicePrivate *p,
+	BRLObolLodSubscriberId id)
+{
+    return lod_callback_service == p && lod_callback_subscriber == id ?
+	TRUE : FALSE;
+}
+
 static std::vector<BRLObolLodSubscriberCall>
 lod_collect_result_ready_callbacks(BRLObolLodServicePrivate *p)
 {
@@ -1561,8 +1576,15 @@ lod_notify_result_ready(BRLObolLodServicePrivate *p)
 	lod_collect_result_ready_callbacks(p);
 
     for (size_t i = 0; i < calls.size(); i++) {
+	BRLObolLodServicePrivate *previous_service = lod_callback_service;
+	const BRLObolLodSubscriberId previous_subscriber =
+	    lod_callback_subscriber;
+	lod_callback_service = p;
+	lod_callback_subscriber = calls[i].id;
 	if (calls[i].callback)
 	    (*calls[i].callback)(p->owner, calls[i].userData);
+	lod_callback_service = previous_service;
+	lod_callback_subscriber = previous_subscriber;
 	lod_complete_result_ready_callback(p, calls[i].id);
     }
 }
@@ -1747,7 +1769,12 @@ lod_cache_writer_loop(BRLObolLodServicePrivate *p)
 	    p->cacheWriteInFlight++;
 	}
 
-	if (item.write)
+	/* A cancellation can arrive after this item leaves the queue.  Do not
+	 * persist a result that became stale while it was waiting for the cache
+	 * writer.  A callback already in progress remains intentionally
+	 * non-preemptible. */
+	if (item.write && !lod_generation_cancelled_or_stopping(p,
+		item.result.generation))
 	    (*item.write)(item.result, item.writeData);
 
 	{
@@ -2165,13 +2192,15 @@ BRLObolLodService::unsubscribeResultReady(BRLObolLodSubscriberId id)
 	    continue;
 
 	this->p->subscribers[i].active = FALSE;
-	this->p->subscriberCv.wait(lock, [this, id] {
-	    for (size_t j = 0; j < this->p->subscribers.size(); j++) {
-		if (this->p->subscribers[j].id == id)
-		    return this->p->subscribers[j].inFlight == 0;
-	    }
-	    return true;
-	});
+	if (!lod_callback_is_current(this->p, id)) {
+	    this->p->subscriberCv.wait(lock, [this, id] {
+		for (size_t j = 0; j < this->p->subscribers.size(); j++) {
+		    if (this->p->subscribers[j].id == id)
+			return this->p->subscribers[j].inFlight == 0;
+		}
+		return true;
+	    });
+	}
 	for (size_t j = 0; j < this->p->subscribers.size(); j++) {
 	    if (this->p->subscribers[j].id == id) {
 		this->p->subscribers.erase(

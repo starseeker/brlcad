@@ -7,7 +7,10 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/image_source.h"
+#include "brlobol/framebuffer.h"
 #include "brlobol/scene_group.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/viewport_image.h"
@@ -60,6 +63,8 @@ struct BRLObolWindowHostPrivate {
     long pollRate;
     BRLObolInputContext input;
     std::vector<BRLObolFramebufferAttachment> framebuffers;
+    std::vector<BRLObolFramebufferStream *> framebufferStreams;
+    std::vector<imgstream_fb_t *> displayFramebuffers;
 };
 
 static BRLObolWindowDesc
@@ -140,6 +145,17 @@ remove_child_if_present(SoGroup *group, SoNode *node)
     }
 }
 
+static void
+remove_framebuffer_viewport(BRLObolViewController *controller,
+	SoBRLViewportImage *viewport)
+{
+    if (!controller || !viewport)
+	return;
+    remove_child_if_present(controller->getFramebufferUnderlayRoot(), viewport);
+    remove_child_if_present(controller->getFramebufferInterlayRoot(), viewport);
+    remove_child_if_present(controller->getFramebufferOverlayRoot(), viewport);
+}
+
 static float
 positive_zoom(int xzoom, int yzoom)
 {
@@ -183,11 +199,72 @@ BRLObolWindowHost::BRLObolWindowHost(void) :
 
 BRLObolWindowHost::~BRLObolWindowHost(void)
 {
+    this->detachDisplayFramebuffers();
+    this->detachFramebufferStreams();
     this->close();
     if (this->p->ownsController)
 	delete this->p->controller;
     this->p->controller = NULL;
     delete this->p;
+}
+
+void
+BRLObolWindowHost::registerFramebufferStream(BRLObolFramebufferStream *stream)
+{
+    if (!stream || std::find(this->p->framebufferStreams.begin(),
+	this->p->framebufferStreams.end(), stream) !=
+	this->p->framebufferStreams.end())
+	return;
+    this->p->framebufferStreams.push_back(stream);
+}
+
+void
+BRLObolWindowHost::unregisterFramebufferStream(BRLObolFramebufferStream *stream)
+{
+    this->p->framebufferStreams.erase(std::remove_if(
+	this->p->framebufferStreams.begin(), this->p->framebufferStreams.end(),
+	[stream](BRLObolFramebufferStream *candidate) {
+	    return candidate == stream;
+	}),
+	this->p->framebufferStreams.end());
+}
+
+void
+BRLObolWindowHost::registerDisplayFramebuffer(imgstream_fb_t *fb)
+{
+    if (!fb || std::find(this->p->displayFramebuffers.begin(),
+	this->p->displayFramebuffers.end(), fb) != this->p->displayFramebuffers.end())
+	return;
+    this->p->displayFramebuffers.push_back(fb);
+}
+
+void
+BRLObolWindowHost::unregisterDisplayFramebuffer(imgstream_fb_t *fb)
+{
+    this->p->displayFramebuffers.erase(std::remove_if(
+	this->p->displayFramebuffers.begin(), this->p->displayFramebuffers.end(),
+	[fb](imgstream_fb_t *candidate) {
+	    return candidate == fb;
+	}),
+	this->p->displayFramebuffers.end());
+}
+
+void
+BRLObolWindowHost::detachFramebufferStreams(void)
+{
+    for (size_t i = 0; i < this->p->framebufferStreams.size(); i++)
+	this->p->framebufferStreams[i]->detachHost(this);
+    this->p->framebufferStreams.clear();
+}
+
+void
+BRLObolWindowHost::detachDisplayFramebuffers(void)
+{
+    while (!this->p->displayFramebuffers.empty()) {
+	imgstream_fb_t *fb = this->p->displayFramebuffers.back();
+	this->p->displayFramebuffers.pop_back();
+	(void)imgstream_fb_detach_display_host(fb);
+    }
 }
 
 int
@@ -319,8 +396,8 @@ BRLObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
     if (!stream)
 	return -1;
 
-    SoGroup *group = controller_root_group(this->p->controller);
-    if (!group)
+    if (!controller_root_group(this->p->controller) ||
+	!this->p->controller->getFramebufferOverlayRoot())
 	return -1;
 
     SoBRLImageSource *source = new SoBRLImageSource;
@@ -336,7 +413,7 @@ BRLObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
     viewport->ref();
     viewport->overlayId = source->imageId.getValue();
     viewport->imageSource.setValue(source);
-    viewport->layer = SoBRLViewportImage::HUD;
+    viewport->layer = SoBRLViewportImage::OVERLAY;
     viewport->anchor = SoBRLViewportImage::LOWER_LEFT;
     viewport->fit = SoBRLViewportImage::STRETCH;
     viewport->preserveAspect = FALSE;
@@ -352,14 +429,12 @@ BRLObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
 	return -1;
     }
 
-    group->addChild(source);
-    group->addChild(viewport);
-
     BRLObolFramebufferAttachment attachment;
     attachment.fb = fb;
     attachment.source = source;
     attachment.viewport = viewport;
     this->p->framebuffers.push_back(attachment);
+	this->p->controller->getFramebufferOverlayRoot()->addChild(viewport);
     this->p->controller->requestRender("fb-open");
     return 0;
 }
@@ -371,9 +446,8 @@ BRLObolWindowHost::closeFramebuffer(imgstream_fb_t *fb)
 	if (this->p->framebuffers[i].fb != fb)
 	    continue;
 
-	SoGroup *group = controller_root_group(this->p->controller);
-	remove_child_if_present(group, this->p->framebuffers[i].viewport);
-	remove_child_if_present(group, this->p->framebuffers[i].source);
+	remove_framebuffer_viewport(this->p->controller,
+		this->p->framebuffers[i].viewport);
 	this->p->framebuffers[i].viewport->unref();
 	this->p->framebuffers[i].source->unref();
 	this->p->framebuffers.erase(this->p->framebuffers.begin() + (ptrdiff_t)i);
@@ -381,6 +455,58 @@ BRLObolWindowHost::closeFramebuffer(imgstream_fb_t *fb)
 	    this->p->controller->requestRender("fb-close");
 	return;
     }
+}
+
+int
+BRLObolWindowHost::setFramebufferComposition(imgstream_fb_t *fb,
+	BRLObolFramebufferComposition composition)
+{
+    if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	return -1;
+
+    BRLObolFramebufferAttachment *attachment =
+	find_attachment(this->p->framebuffers, fb);
+    BRLObolViewController *controller = this->p->controller;
+    if (!attachment || !controller)
+	return -1;
+
+    SoBRLViewportImage *viewport = attachment->viewport;
+    remove_framebuffer_viewport(controller, viewport);
+    if (composition == BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF) {
+	viewport->visible = FALSE;
+	if (viewport->rebuildGeometry() != 0)
+	    return -1;
+	controller->requestRender("fb-composition");
+	return 0;
+    }
+
+    SoGroup *layer = NULL;
+    int viewport_layer = SoBRLViewportImage::OVERLAY;
+    switch (composition) {
+	case BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY:
+	    layer = controller->getFramebufferUnderlayRoot();
+	    viewport_layer = SoBRLViewportImage::UNDERLAY;
+	    break;
+	case BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY:
+	    layer = controller->getFramebufferInterlayRoot();
+	    viewport_layer = SoBRLViewportImage::INTERLAY;
+	    break;
+	case BRLOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY:
+	    layer = controller->getFramebufferOverlayRoot();
+	    break;
+	default:
+	    return -1;
+    }
+    if (!layer)
+	return -1;
+    viewport->visible = TRUE;
+    viewport->layer = viewport_layer;
+    if (viewport->rebuildGeometry() != 0)
+	return -1;
+    layer->addChild(viewport);
+    controller->requestRender("fb-composition");
+    return 0;
 }
 
 int
@@ -558,97 +684,93 @@ BRLObolWindowHost::getFramebufferViewportImage(imgstream_fb_t *fb) const
     return attachment ? attachment->viewport : NULL;
 }
 
-static int
-brlobol_fb_host_open(imgstream_fb_t *fb,
-		     const imgstream_fb_spec_info_t *info,
-		     void *data)
+struct BRLObolFramebufferBridge {
+    static int
+    open(imgstream_fb_t *fb, const imgstream_fb_spec_info_t *info, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
-    return host ? host->openFramebuffer(fb, info) : -1;
+    if (!host || host->openFramebuffer(fb, info) != 0)
+	return -1;
+    host->registerDisplayFramebuffer(fb);
+    return 0;
 }
 
-static void
-brlobol_fb_host_close(imgstream_fb_t *fb, void *data)
+    static void
+    close(imgstream_fb_t *fb, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
-    if (host)
+    if (host) {
+	host->unregisterDisplayFramebuffer(fb);
 	host->closeFramebuffer(fb);
+	    }
 }
 
-static int
-brlobol_fb_host_flush(imgstream_fb_t *fb, void *data)
+    static int
+    flush(imgstream_fb_t *fb, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->flushFramebuffer(fb) : -1;
 }
 
-static int
-brlobol_fb_host_reset(imgstream_fb_t *fb, void *data)
+    static int
+    reset(imgstream_fb_t *fb, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->resetFramebuffer(fb) : -1;
 }
 
-static int
-brlobol_fb_host_viewport(imgstream_fb_t *fb,
-			 int left, int top, int right, int bottom,
-			 void *data)
+    static int
+    viewport(imgstream_fb_t *fb, int left, int top, int right, int bottom,
+	     void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferViewport(fb, left, top, right, bottom) : -1;
 }
 
-static int
-brlobol_fb_host_view(imgstream_fb_t *fb,
-		     const imgstream_fb_view_t *view,
-		     void *data)
+    static int
+    view(imgstream_fb_t *fb, const imgstream_fb_view_t *view, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferView(fb, view) : -1;
 }
 
-static int
-brlobol_fb_host_cursor(imgstream_fb_t *fb,
-		       const imgstream_fb_cursor_t *cursor,
-		       void *data)
+    static int
+    cursor(imgstream_fb_t *fb, const imgstream_fb_cursor_t *cursor, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferCursor(fb, cursor) : -1;
 }
 
-static int
-brlobol_fb_host_scursor(imgstream_fb_t *fb,
-			int mode, int x, int y,
-			void *data)
+    static int
+    scursor(imgstream_fb_t *fb, int mode, int x, int y, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferScreenCursor(fb, mode, x, y) : -1;
 }
 
-static int
-brlobol_fb_host_setcursor(imgstream_fb_t *fb,
-			  const unsigned char *bits, int xbits, int ybits,
-			  int xorig, int yorig,
-			  void *data)
+    static int
+    setcursor(imgstream_fb_t *fb, const unsigned char *bits, int xbits, int ybits,
+	      int xorig, int yorig, void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->setFramebufferCursorShape(fb, bits, xbits, ybits,
 	    xorig, yorig) : -1;
 }
 
-static int
-brlobol_fb_host_poll(imgstream_fb_t *UNUSED(fb), void *data)
+    static int
+    poll(imgstream_fb_t *UNUSED(fb), void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->poll(NULL) : -1;
 }
 
-static long
-brlobol_fb_host_poll_rate(const imgstream_fb_t *UNUSED(fb), void *data)
+    static long
+    pollRate(const imgstream_fb_t *UNUSED(fb), void *data)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(data);
     return host ? host->pollRate() : 0;
 }
+};
 
 imgstream_fb_t *
 brlobol_window_host_open_display_framebuffer(BRLObolWindowHost *host,
@@ -659,16 +781,16 @@ brlobol_window_host_open_display_framebuffer(BRLObolWindowHost *host,
 
     struct imgstream_fb_display_host displayHost;
     memset(&displayHost, 0, sizeof(displayHost));
-    displayHost.open = brlobol_fb_host_open;
-    displayHost.close = brlobol_fb_host_close;
-    displayHost.flush = brlobol_fb_host_flush;
-    displayHost.reset = brlobol_fb_host_reset;
-    displayHost.viewport = brlobol_fb_host_viewport;
-    displayHost.view = brlobol_fb_host_view;
-    displayHost.cursor = brlobol_fb_host_cursor;
-    displayHost.scursor = brlobol_fb_host_scursor;
-    displayHost.setcursor = brlobol_fb_host_setcursor;
-    displayHost.poll = brlobol_fb_host_poll;
-    displayHost.poll_rate = brlobol_fb_host_poll_rate;
+    displayHost.open = BRLObolFramebufferBridge::open;
+    displayHost.close = BRLObolFramebufferBridge::close;
+    displayHost.flush = BRLObolFramebufferBridge::flush;
+    displayHost.reset = BRLObolFramebufferBridge::reset;
+    displayHost.viewport = BRLObolFramebufferBridge::viewport;
+    displayHost.view = BRLObolFramebufferBridge::view;
+    displayHost.cursor = BRLObolFramebufferBridge::cursor;
+    displayHost.scursor = BRLObolFramebufferBridge::scursor;
+    displayHost.setcursor = BRLObolFramebufferBridge::setcursor;
+    displayHost.poll = BRLObolFramebufferBridge::poll;
+    displayHost.poll_rate = BRLObolFramebufferBridge::pollRate;
     return imgstream_fb_open_display(spec, width, height, &displayHost, host);
 }

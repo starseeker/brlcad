@@ -33,7 +33,7 @@
 #include "ged/view.h"
 #include "rt/view.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 
 static char adc_syntax1[] = "\
@@ -79,10 +79,10 @@ void
 adc_set_dirty_flag(struct mged_state *s)
 {
 
-    for (size_t i = 0; i < BU_PTBL_LEN(&active_dm_set); i++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, i);
-	if (mged_dm_view_settings_shared(m_dmp, s->mged_curr_dm)) {
-	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
+    for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, i);
+	if (mged_display_view_settings_shared(m_dmp, s->mged_curr_display)) {
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
 }
@@ -91,18 +91,18 @@ adc_set_dirty_flag(struct mged_state *s)
 void
 adc_set_scroll(struct mged_state *s)
 {
-    struct mged_dm *save_m_dmp = s->mged_curr_dm;
+    struct mged_display *save_m_dmp = s->mged_curr_display;
 
-    for (size_t i = 0; i < BU_PTBL_LEN(&active_dm_set); i++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, i);
-	if (mged_dm_view_settings_shared(m_dmp, save_m_dmp)) {
-	    set_curr_dm(s, m_dmp);
+    for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, i);
+	if (mged_display_view_settings_shared(m_dmp, save_m_dmp)) {
+	    mged_current_display_set(s, m_dmp);
 	    set_scroll(s);
-	    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
+	    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
 
-    set_curr_dm(s, save_m_dmp);
+    mged_current_display_set(s, save_m_dmp);
 }
 
 
@@ -242,14 +242,14 @@ mged_adc_state_refresh(struct mged_state *s)
     struct bv_adc_state adc_record;
     struct bv_adc_state *adc = &adc_record;
 
-    if (!mged_dm_adc_state_get(s->mged_curr_dm, adc))
+    if (!mged_display_adc_state_get(s->mged_curr_display, adc))
 	return;
 
     calc_adc_pos(s, adc);
     calc_adc_a1(s, adc);
     calc_adc_a2(s, adc);
     calc_adc_dst(s, adc);
-    mged_dm_adc_state_set(s->mged_curr_dm, adc);
+    mged_display_adc_state_set(s->mged_curr_display, adc);
 }
 
 
@@ -336,11 +336,11 @@ f_adc (
     view_ctx = view_state->vs_gvp;
 
 #define ADC_RETURN(_ret) do { \
-	mged_dm_adc_state_set(s->mged_curr_dm, adc); \
+	mged_display_adc_state_set(s->mged_curr_display, adc); \
 	return (_ret); \
     } while (0)
 
-    if (!mged_dm_adc_state_get(s->mged_curr_dm, adc))
+    if (!mged_display_adc_state_get(s->mged_curr_display, adc))
 	return TCL_ERROR;
 
     view_local_scale = adc_view_local_scale(s);
@@ -403,10 +403,9 @@ f_adc (
 	} else if (argc == 1) {
 	    i = (int)user_pt[X];
 
-	    if (i)
-		adc->draw = 1;
-	    else
-		adc->draw = 0;
+	    if (!mged_display_adc_visibility_set(s->mged_curr_display, i))
+		ADC_RETURN(TCL_ERROR);
+	    adc->draw = i ? 1 : 0;
 
 	    adc_set_scroll(s);
 

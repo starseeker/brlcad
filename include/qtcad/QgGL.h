@@ -58,13 +58,11 @@ QWidget *canvasWidget() override { return this; }
 QObject *asQObject()    override { return this; }
 bool isValid() const    override { return QOpenGLWidget::isValid(); }
 
-qg_legacy_view *view()           const override;
-bool legacyBackendInitialized() const override;
+struct bv_context *viewContext() const override;
 BRLObolViewController *obolViewController() const override;
 void setObolViewController(BRLObolViewController *) override;
 void setObolInputEndpoint(struct brlobol_display_endpoint *) override;
 
-void set_view(qg_legacy_view *)               override;
 
 void stash_hashes() override;
 bool diff_hashes()  override;

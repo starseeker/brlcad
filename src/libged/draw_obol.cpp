@@ -106,6 +106,8 @@ static void ged_obol_transaction_observer(
     const struct ged_draw_transaction_result *result,
     void *client_data);
 static SbColor ged_obol_color_from_rgb(const unsigned char rgb[3]);
+static float ged_obol_transparency_from_appearance_opacity(fastf_t opacity);
+static fastf_t ged_obol_appearance_opacity_from_transparency(float transparency);
 static int ged_obol_observer_ensure(struct ged *gedp,
 				    struct ged_drawable *gdp);
 static int ged_obol_bind_view_render_root(
@@ -148,6 +150,7 @@ struct ged_obol_progressive_provider_data {
 	view_ctx(NULL),
 	pending_autoview(0),
 	expected_view_revision(0),
+	autoview_factor(BV_AUTOVIEW_SCALE_DEFAULT),
 	deferred_refine_stage(0)
     {
 	deferred_appearance = ged_draw_appearance_settings
@@ -160,10 +163,16 @@ struct ged_obol_progressive_provider_data {
     void *view_ctx;
     int pending_autoview;
     uint64_t expected_view_revision;
+    fastf_t autoview_factor;
     int deferred_refine_stage;
     struct ged_draw_appearance_settings deferred_appearance;
     std::vector<std::string> deferred_paths;
     std::shared_ptr<ged_obol_deferred_realization_job> deferred_job;
+    /* Draw modes may be added while a prior root is still being realized.
+     * Keep those independent jobs alive rather than leaving their root proxy
+     * permanently visible. */
+    std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>
+	pending_jobs;
     std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>
 	retired_jobs;
 };
@@ -282,11 +291,17 @@ ged_obol_progressive_provider_data::~ged_obol_progressive_provider_data(void)
     if (deferred_job)
 	deferred_job->cancel();
     for (const std::shared_ptr<ged_obol_deferred_realization_job> &job :
+	 pending_jobs) {
+	if (job)
+	    job->cancel();
+    }
+    for (const std::shared_ptr<ged_obol_deferred_realization_job> &job :
 	 retired_jobs) {
 	if (job)
 	    job->cancel();
     }
     deferred_job.reset();
+    pending_jobs.clear();
     retired_jobs.clear();
 }
 
@@ -397,7 +412,8 @@ ged_obol_source_state_apply_appearance(
 	return;
 
     state.lineWidth = settings->s_line_width;
-    state.transparency = static_cast<float>(settings->transparency);
+    state.transparency =
+	ged_obol_transparency_from_appearance_opacity(settings->transparency);
     state.colorOverride = settings->color_override ? true : false;
     state.color = ged_obol_color_from_rgb(settings->color);
     if (state.colorOverride) {
@@ -1053,7 +1069,7 @@ ged_obol_database_source_instance_in_scope(
     const std::string prefix =
 	ged_obol_database_source_instance_prefix(view_ctx);
     const char *key = summary.instanceKey.getString();
-    return key && strncmp(key, prefix.c_str(), prefix.size()) == 0;
+    return key && bu_strncmp(key, prefix.c_str(), prefix.size()) == 0;
 }
 
 static std::string
@@ -1366,7 +1382,7 @@ ged_obol_intent_is_ged_draw_group(const SbString &intent)
     const char *value = intent.getString();
     if (!value)
 	return 0;
-    return strncmp(value, ged_obol_group_intent_prefix,
+    return bu_strncmp(value, ged_obol_group_intent_prefix,
 		   sizeof(ged_obol_group_intent_prefix) - 1) == 0;
 }
 
@@ -1386,7 +1402,7 @@ ged_obol_group_path_from_record_path(const char *path)
 	return std::string();
 
     const size_t prefix_len = sizeof(ged_obol_group_intent_prefix) - 1;
-    if (strncmp(path, ged_obol_group_intent_prefix, prefix_len) == 0)
+    if (bu_strncmp(path, ged_obol_group_intent_prefix, prefix_len) == 0)
 	path += prefix_len;
     return std::string(ged_obol_skip_leading_slash(path));
 }
@@ -1416,7 +1432,7 @@ ged_obol_group_record_path(const SoBRLSceneGroup *scene_group)
 	return NULL;
 
     const size_t prefix_len = sizeof(ged_obol_group_intent_prefix) - 1;
-    if (strncmp(path, ged_obol_group_intent_prefix, prefix_len) == 0)
+    if (bu_strncmp(path, ged_obol_group_intent_prefix, prefix_len) == 0)
 	path += prefix_len;
     return ged_obol_skip_leading_slash(path);
 }
@@ -1559,7 +1575,7 @@ ged_obol_path_has_prefix(const char *path, const char *prefix)
     const size_t prefix_len = strlen(prefix);
     if (prefix_len == 0)
 	return 0;
-    if (strncmp(path, prefix, prefix_len) != 0)
+    if (bu_strncmp(path, prefix, prefix_len) != 0)
 	return 0;
     return path[prefix_len] == '\0' || path[prefix_len] == '/';
 }
@@ -1589,7 +1605,7 @@ ged_obol_path_has_component_name(const char *path,
 	size_t component_len = slash ?
 			       static_cast<size_t>(slash - cursor) : strlen(cursor);
 	if (idx >= first_idx && component_len == name_len &&
-	    strncmp(cursor, name, component_len) == 0)
+	    bu_strncmp(cursor, name, component_len) == 0)
 	    return 1;
 	if (!slash)
 	    break;
@@ -2539,7 +2555,10 @@ ged_obol_replace_path(struct ged *gedp,
 	}
     }
 
-    if (!source_metadata || !source_metadata->directoryFound)
+	/* Tree metadata only supersedes the database material when it provides a
+	 * color.  Root-backed primitive draws have directory metadata but no tree
+	 * material, and must still resolve their effective database color. */
+    if (!source_metadata || !source_metadata->hasColor)
 	ged_obol_source_state_resolve_database_material(source_state, dbip, path);
 
     ged_obol_view_lod_policy_state policy_state =
@@ -2617,6 +2636,17 @@ ged_obol_replace_path(struct ged *gedp,
     int changed = scene->publishDatabaseSourceInstance(publish_state);
     if (changed < 0)
 	return changed;
+
+    /* Database-source draws preserve material resolved for individual tree
+     * occurrences.  This also keeps independently synchronized views from
+     * applying an aggregate root color to every compact instance. */
+    const int material_policy_changed =
+	scene->setDatabaseSourceInstanceMaterialPolicy(instance_key.c_str(),
+	    SoBRLDatabaseSource::MATERIAL_DATABASE);
+    if (material_policy_changed < 0)
+	return material_policy_changed;
+    if (material_policy_changed > 0)
+	changed = 1;
     if (ged_obol_sync_group_state(scene, source_state,
 				  instance_key.c_str()))
 	changed = 1;
@@ -3142,13 +3172,14 @@ ged_obol_set_database_source_highlighted(SoBRLSceneController *scene,
     if (!source->getSummary(summary) || !summary.valid)
 	return 0;
 
-    (void)scene->setDatabaseSourceInstanceState(source_instance_key,
+    const SbBool next_highlighted = highlighted ? TRUE : FALSE;
+    int changed = scene->setDatabaseSourceInstanceState(source_instance_key,
 	    TRUE,
 	    summary.sourceRevision,
 	    summary.inputsRevision,
 	    summary.visible,
 	    summary.selected,
-	    highlighted ? TRUE : FALSE,
+	    next_highlighted,
 	    summary.lineStyle,
 	    summary.lineWidth,
 	    summary.transparency,
@@ -3157,7 +3188,18 @@ ged_obol_set_database_source_highlighted(SoBRLSceneController *scene,
 	    summary.materialColorValid,
 	    summary.materialColor,
 	    summary.materialRevision);
-    return 1;
+
+    /* A compact occurrence registry deliberately preserves per-occurrence
+     * selection styles when its source state changes.  This operation is the
+     * explicit global highlight command, so it must update every occurrence. */
+    if (source->hasCompactInstanceIndex()) {
+	const int compact_changed = source->setCompactInstanceDisplayStateForPath(
+		"", TRUE, 0, FALSE, 0, FALSE, 1, next_highlighted);
+	if (compact_changed > 0)
+	    changed = 1;
+    }
+
+    return changed > 0 ? 1 : 0;
 }
 
 static int
@@ -4198,6 +4240,29 @@ ged_obol_color_from_rgb(const unsigned char rgb[3])
 	       static_cast<float>(rgb[0]) / 255.0f,
 	       static_cast<float>(rgb[1]) / 255.0f,
 	       static_cast<float>(rgb[2]) / 255.0f);
+}
+
+/* ged_draw_appearance_settings predates the retained scene and calls its
+ * opacity field "transparency".  Keep that command-facing contract at this
+ * boundary; Obol display state uses conventional transparency. */
+static float
+ged_obol_transparency_from_appearance_opacity(fastf_t opacity)
+{
+    if (opacity <= 0.0)
+	return 1.0f;
+    if (opacity >= 1.0)
+	return 0.0f;
+    return 1.0f - static_cast<float>(opacity);
+}
+
+static fastf_t
+ged_obol_appearance_opacity_from_transparency(float transparency)
+{
+    if (transparency <= 0.0f)
+	return 1.0;
+    if (transparency >= 1.0f)
+	return 0.0;
+    return static_cast<fastf_t>(1.0f - transparency);
 }
 
 static fastf_t
@@ -5769,6 +5834,11 @@ ged_obol_faceplate_sync_adc(BRLObolViewController *controller,
     node->angleDegrees = static_cast<float>(state.a1);
     node->distance = static_cast<float>(state.dst > SMALL_FASTF ?
 					state.dst : 1.0);
+    node->lineColor = SbColor(state.line_color[0] / 255.0f,
+	state.line_color[1] / 255.0f, state.line_color[2] / 255.0f);
+    node->tickColor = SbColor(state.tick_color[0] / 255.0f,
+	state.tick_color[1] / 255.0f, state.tick_color[2] / 255.0f);
+    node->lineWidth = state.line_width > 0 ? state.line_width : 1;
     node->visible = TRUE;
     node->rebuildGeometry();
 
@@ -6552,9 +6622,13 @@ ged_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx,
     ged_obol_faceplate_sync_axes(controller, view_ctx);
     ged_obol_faceplate_sync_framebuffer(controller, view_ctx);
 
-    const int framebuffer_visible =
-	bv_framebuffer_mode_get(ged_obol_bv_const(view_ctx)) != 0;
-    (void)ged_obol_fbserv_visibility_set(gedp, framebuffer_visible);
+	const int framebuffer_mode =
+	bv_framebuffer_mode_get(ged_obol_bv_const(view_ctx));
+    const int framebuffer_visible = framebuffer_mode ==
+	BV_FRAMEBUFFER_MODE_OVERLAY || framebuffer_mode ==
+	BV_FRAMEBUFFER_MODE_UNDERLAY || framebuffer_mode ==
+	BV_FRAMEBUFFER_MODE_INTERLAY;
+    (void)ged_obol_fbserv_composition_set(gedp, framebuffer_mode);
     if (framebuffer_visible)
 	(void)ged_draw_obol_framebuffer_present(gedp);
 
@@ -11667,7 +11741,7 @@ ged_draw_obol_database_source_publication_appearance_set(
     ged_obol_database_source_publication_appearance = 1;
     ged_obol_database_source_publication_line_width = settings->s_line_width;
     ged_obol_database_source_publication_transparency =
-	static_cast<float>(settings->transparency);
+	ged_obol_transparency_from_appearance_opacity(settings->transparency);
     ged_obol_database_source_publication_color_override =
 	settings->color_override ? 1 : 0;
     ged_obol_database_source_publication_color[0] = settings->color[0];
@@ -11950,6 +12024,48 @@ ged_draw_obol_scene_database_autoview_bounds(
     VSETALL(*min, INFINITY);
     VSETALL(*max, -INFINITY);
     *empty_out = 1;
+
+    /* The legacy display path framed each displayed object's center plus
+     * and minus its maximum extent.  Preserve that safety margin for the
+     * ordinary all-displayed-object autoview, so a subsequent rotation does
+     * not immediately clip the scene.  Named-object autoviews intentionally
+     * use their direct database bounds instead. */
+    const int source_count = scene->getDatabaseSourceCount();
+    int have_source_bounds = 0;
+    for (int i = 0; i < source_count; i++) {
+	BRLObolDatabaseSourceSummary source;
+	if (!scene->getDatabaseSourceSummary(i, source) || !source.valid ||
+	    !source.visible || !source.sourceBoundsValid ||
+	    source.sourceBounds.isEmpty())
+	    continue;
+
+	const SbVec3f source_min = source.sourceBounds.getMin();
+	const SbVec3f source_max = source.sourceBounds.getMax();
+	const fastf_t center_x = (source_min[X] + source_max[X]) * 0.5;
+	const fastf_t center_y = (source_min[Y] + source_max[Y]) * 0.5;
+	const fastf_t center_z = (source_min[Z] + source_max[Z]) * 0.5;
+	fastf_t extent = source_max[X] - source_min[X];
+	extent = std::max(extent,
+		static_cast<fastf_t>(source_max[Y] - source_min[Y]));
+	extent = std::max(extent,
+		static_cast<fastf_t>(source_max[Z] - source_min[Z]));
+	if (extent < SQRT_SMALL_FASTF)
+	    extent = SQRT_SMALL_FASTF;
+
+	vect_t source_bounds_min;
+	vect_t source_bounds_max;
+	VSET(source_bounds_min, center_x - extent, center_y - extent,
+	     center_z - extent);
+	VSET(source_bounds_max, center_x + extent, center_y + extent,
+	     center_z + extent);
+	VMIN(*min, source_bounds_min);
+	VMAX(*max, source_bounds_max);
+	have_source_bounds = 1;
+    }
+    if (have_source_bounds) {
+	*empty_out = 0;
+	return 1;
+    }
 
     SbBox3f bounds;
     if (scene->getDatabaseSourceBounds(bounds, TRUE) && !bounds.isEmpty()) {
@@ -15027,9 +15143,9 @@ ged_draw_obol_group_update_appearance_for_path(
 		  scene_group->visible.getValue(),
 		  scene_group->selected.getValue(),
 		  scene_group->highlighted.getValue(),
-		  scene_group->lineStyle.getValue(),
-		  settings->s_line_width,
-		  static_cast<float>(settings->transparency),
+	  scene_group->lineStyle.getValue(),
+	  settings->s_line_width,
+	  ged_obol_transparency_from_appearance_opacity(settings->transparency),
 		  settings->color_override ? TRUE : FALSE,
 		  next_color,
 		  scene_group->materialColorValid.getValue(),
@@ -15061,7 +15177,8 @@ ged_draw_obol_group_appearance_for_path(
 	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
     next.draw_mode = ged_obol_lod_draw_mode_to_ged(
 			 scene_group->drawMode.getValue());
-    next.transparency = scene_group->transparency.getValue();
+    next.transparency = ged_obol_appearance_opacity_from_transparency(
+	scene_group->transparency.getValue());
     next.color_override = scene_group->colorOverride.getValue() ? 1 : 0;
     ged_obol_rgb_from_color(scene_group->color.getValue(), next.color);
     next.s_line_width = scene_group->lineWidth.getValue();
@@ -18509,7 +18626,7 @@ ged_draw_obol_database_source_expand_visible_children(
 {
     return ged_obol_database_source_expand_visible_children_impl(gedp,
 	    view_ctx, root_path, draw_mode, max_sources,
-	    max_children_per_source, 1, 0, status);
+	    max_children_per_source, 0, 1, status);
 }
 
 static size_t
@@ -18538,21 +18655,69 @@ ged_obol_progressive_autoview_apply(
 	return 0;
     }
 
-    SoBRLSceneController *scene =
-	ged_draw_obol_scene_controller(data->gedp);
-    SbBox3f bounds;
-    if (!scene || !scene->getDatabaseSourceBounds(bounds, TRUE) ||
-	bounds.isEmpty())
-	return 0;
-
     vect_t bmin;
     vect_t bmax;
-    ged_obol_bounds_to_vmath(bounds, &bmin, &bmax);
-    if (!bv_autoview_bounds(view, BV_AUTOVIEW_SCALE_DEFAULT, bmin, bmax))
+    int empty = 1;
+    if (!ged_draw_obol_scene_database_autoview_bounds(data->gedp, &bmin,
+	&bmax, &empty) || empty)
+	return 0;
+
+    if (!bv_autoview_bounds(view, data->autoview_factor, bmin, bmax))
 	return 0;
     data->expected_view_revision = bv_frame_revision_get(view);
     bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
     return 1;
+}
+
+static int
+ged_obol_progressive_autoview_arm(
+	ged_obol_progressive_provider_data *data,
+	fastf_t factor)
+{
+    if (!data || !data->view_ctx || data->deferred_refine_stage != 1 ||
+	!data->deferred_job)
+	return 0;
+
+    const struct bv *view = ged_obol_bv_const(data->view_ctx);
+    if (!view)
+	return 0;
+
+    data->pending_autoview = 1;
+    data->expected_view_revision = bv_frame_revision_get(view);
+    data->autoview_factor = factor;
+    return 1;
+}
+
+extern "C" int
+ged_draw_obol_progressive_autoview_follow(
+	struct ged *gedp,
+	void *view_ctx,
+	fastf_t factor)
+{
+    if (!gedp || !view_ctx)
+	return 0;
+
+    struct ged_drawable *gdp = ged_obol_gdp(gedp);
+    std::vector<ged_obol_attached_controller> *entries =
+	ged_obol_attached_controllers(gdp, 0);
+    if (!entries)
+	return 0;
+
+    int armed = 0;
+    for (ged_obol_attached_controller &entry : *entries) {
+	if (entry.view_ctx != view_ctx)
+	    continue;
+	ged_obol_progressive_provider_data *data =
+	    static_cast<ged_obol_progressive_provider_data *>(
+		entry.progressive_provider_data);
+	if (entry.view_controller &&
+	    ged_obol_progressive_autoview_arm(data, factor)) {
+	    entry.view_controller->markProgressiveWorkPending();
+	    armed = 1;
+	}
+    }
+
+    return armed;
 }
 
 static void
@@ -18563,6 +18728,23 @@ ged_obol_retire_deferred_job(ged_obol_progressive_provider_data *data)
     data->deferred_job->cancel();
     data->retired_jobs.push_back(data->deferred_job);
     data->deferred_job.reset();
+}
+
+static void
+ged_obol_retire_all_deferred_jobs(ged_obol_progressive_provider_data *data)
+{
+    if (!data)
+	return;
+
+    ged_obol_retire_deferred_job(data);
+    for (const std::shared_ptr<ged_obol_deferred_realization_job> &job :
+	 data->pending_jobs) {
+	if (!job)
+	    continue;
+	job->cancel();
+	data->retired_jobs.push_back(job);
+    }
+    data->pending_jobs.clear();
 }
 
 static void
@@ -18621,7 +18803,13 @@ ged_obol_start_deferred_realization(
     if (!scene)
 	scene = primaryScene;
 
-    ged_obol_retire_deferred_job(data);
+    if (data->deferred_job) {
+	/* A second deferred mode is additive.  Its realization must not cancel
+	 * an earlier mode, otherwise mixed shaded/wire draws get stuck at the
+	 * earlier root proxy. */
+	data->pending_jobs.push_back(data->deferred_job);
+	data->deferred_job.reset();
+    }
     std::shared_ptr<ged_obol_deferred_realization_job> job =
 	std::make_shared<ged_obol_deferred_realization_job>();
     const int representationMode =
@@ -18670,14 +18858,53 @@ ged_obol_start_deferred_realization(
 }
 
 static int
+ged_obol_remove_database_source_descendants(
+    SoBRLSceneController *scene,
+    const std::string &root_instance_key)
+{
+    if (!scene || root_instance_key.empty())
+	return 0;
+
+    /* Proxy-frontier sources are independent scene nodes, but their hierarchy
+     * key records which deferred root owns them.  Remove deepest nodes first
+     * so a completed compact root cannot leave proxy geometry behind. */
+    std::unordered_set<std::string> known_keys;
+    known_keys.insert(root_instance_key);
+    std::vector<std::string> descendants;
+    int found = 1;
+    while (found) {
+	found = 0;
+	const int source_count = scene->getDatabaseSourceCount();
+	for (int i = 0; i < source_count; i++) {
+	    BRLObolDatabaseSourceSummary summary;
+	    if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
+		continue;
+	    const char *instance_key = summary.instanceKey.getString();
+	    const char *parent_key = summary.parentInstanceKey.getString();
+	    if (!instance_key || !instance_key[0] || !parent_key || !parent_key[0] ||
+		known_keys.find(parent_key) == known_keys.end())
+		continue;
+	    if (known_keys.insert(instance_key).second) {
+		descendants.push_back(instance_key);
+		found = 1;
+	    }
+	}
+    }
+
+    if (descendants.empty())
+	return 0;
+    std::reverse(descendants.begin(), descendants.end());
+    return ged_obol_remove_instance_keys(descendants, scene);
+}
+
+static int
 ged_obol_publish_deferred_realization(
     ged_obol_progressive_provider_data *data,
-    BRLObolViewController *controller)
+    BRLObolViewController *controller,
+    const std::shared_ptr<ged_obol_deferred_realization_job> &job)
 {
-    if (!data || !data->gedp || !controller || !data->deferred_job)
+    if (!data || !data->gedp || !controller || !job)
 	return 0;
-    std::shared_ptr<ged_obol_deferred_realization_job> job =
-	data->deferred_job;
     job->join();
     if (job->state.load(std::memory_order_acquire) !=
 	ged_obol_deferred_realization_job::COMPLETE)
@@ -18719,9 +18946,30 @@ ged_obol_publish_deferred_realization(
     for (size_t i = 0; i < liveSources.size(); i++) {
 	const int adopted_count = liveSources[i]->adoptDetachedCompactRealization(
 	    job->items[i]->source);
-	adopted += adopted_count > 0 ? 1 : 0;
+	if (adopted_count > 0) {
+	    adopted++;
+	    SoBRLSceneController *item_scene = job->items[i]->primaryScene ?
+		primaryScene : scene;
+	    (void)ged_obol_remove_database_source_descendants(item_scene,
+		job->items[i]->instanceKey);
+	}
     }
     return adopted;
+}
+
+static void
+ged_obol_deferred_job_append_instance_keys(
+    std::unordered_set<std::string> &instance_keys,
+    const std::shared_ptr<ged_obol_deferred_realization_job> &job)
+{
+    if (!job)
+	return;
+
+    for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	 job->items) {
+	if (item && !item->instanceKey.empty())
+	    instance_keys.insert(item->instanceKey);
+    }
 }
 
 static int
@@ -18760,48 +19008,91 @@ ged_obol_progressive_advance_provider(
 	 (flags & BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES)) ? 1 : 0;
     const int full_detail =
 	(flags & BRLOBOL_PROGRESSIVE_FULL_DETAIL) ? 1 : 0;
+    int has_pending_job = 0;
+    std::unordered_set<std::string> active_deferred_roots;
     if (full_detail) {
 	ged_obol_cleanup_retired_jobs(data);
+	int refined = 0;
+	for (std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>::iterator
+		it = data->pending_jobs.begin(); it != data->pending_jobs.end();) {
+	    const std::shared_ptr<ged_obol_deferred_realization_job> job = *it;
+	    const int job_state = job ?
+		job->state.load(std::memory_order_acquire) :
+		ged_obol_deferred_realization_job::FAILED;
+	    if (job_state == ged_obol_deferred_realization_job::PENDING ||
+		job_state == ged_obol_deferred_realization_job::RUNNING) {
+		has_pending_job = 1;
+		ged_obol_deferred_job_append_instance_keys(active_deferred_roots,
+		    job);
+		++it;
+		continue;
+	    }
+	    if (job_state == ged_obol_deferred_realization_job::COMPLETE)
+		refined += ged_obol_publish_deferred_realization(data,
+			controller, job);
+	    it = data->pending_jobs.erase(it);
+	}
 	if (data->deferred_refine_stage == 1) {
 	    const int jobState = data->deferred_job ?
 		data->deferred_job->state.load(std::memory_order_acquire) :
 		ged_obol_deferred_realization_job::FAILED;
 	    if (jobState == ged_obol_deferred_realization_job::PENDING ||
 		jobState == ged_obol_deferred_realization_job::RUNNING) {
-		local_status.hasMore = 1;
-		controller->requestRender("ged-deferred-root-building");
-		if (status)
-		    *status = local_status;
-		return 1;
+		has_pending_job = 1;
+		ged_obol_deferred_job_append_instance_keys(active_deferred_roots,
+		    data->deferred_job);
+	    } else {
+		if (jobState == ged_obol_deferred_realization_job::COMPLETE)
+		    refined += ged_obol_publish_deferred_realization(data,
+			controller, data->deferred_job);
+		data->deferred_refine_stage = 3;
+		data->deferred_paths.clear();
+		data->deferred_job.reset();
 	    }
-	    const int refined = jobState ==
-		ged_obol_deferred_realization_job::COMPLETE ?
-		ged_obol_publish_deferred_realization(data, controller) : 0;
-	    data->deferred_refine_stage = 3;
-	    data->deferred_paths.clear();
-	    data->deferred_job.reset();
-	    local_status.changed = refined > 0 ? 1 : 0;
+	}
+	local_status.changed = refined > 0 ? 1 : 0;
+	local_status.hasMore = has_pending_job;
+
+	/* FULL_DETAIL-only retains the historical detached-root behavior.  When
+	 * VISIBLE_FRONTIER is also set, keep publishing bounded cached proxies
+	 * while that job runs; the compact adoption above removes those temporary
+	 * descendants atomically from the live scene. */
+	if (!(flags & BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER) ||
+	    !has_pending_job || active_deferred_roots.empty()) {
 	    if (local_status.changed && data->pending_autoview &&
 		ged_obol_progressive_autoview_apply(data))
 		controller->syncCameraFromViewContext(view_ctx, TRUE);
-	    data->pending_autoview = 0;
-	    controller->requestRender("ged-deferred-full-detail");
+	    if (!local_status.hasMore)
+		data->pending_autoview = 0;
+	    if (local_status.changed || local_status.hasMore)
+		controller->requestRender(local_status.changed ?
+		    "ged-deferred-full-detail" : "ged-deferred-root-building");
 	    if (status)
 		*status = local_status;
-	    return refined > 0 ? 1 : 0;
+	    return (local_status.changed || local_status.hasMore) ? 1 : 0;
 	}
-	return 0;
     }
 
     std::vector<ged_obol_drawn_source_path_mode> roots =
 	ged_obol_drawn_source_path_modes(gedp, view_ctx, -1, NULL);
-    if (roots.empty())
-	return 0;
+    if (roots.empty()) {
+	if (status)
+	    *status = local_status;
+	return local_status.hasMore ? 1 : 0;
+    }
 
     size_t used_sources = 0;
     size_t used_submissions = 0;
     int changed = 0;
     for (const ged_obol_drawn_source_path_mode &root : roots) {
+	if (full_detail) {
+	    const std::string root_instance_key =
+		ged_obol_database_source_instance_key_for_mode(view_ctx,
+		    root.path.c_str(), root.mode);
+	    if (active_deferred_roots.find(root_instance_key) ==
+		active_deferred_roots.end())
+		continue;
+	}
 	if (options->maxSources && used_sources >= options->maxSources) {
 	    local_status.hasMore = 1;
 	    break;
@@ -19775,7 +20066,10 @@ ged_obol_direct_draw_root_source(struct ged *gedp,
 			    path, settings->draw_mode, source_revision, scene,
 			    0, 1, settings, NULL, group_path.c_str(), NULL,
 			    metadata);
-    return changed >= 0 ? 1 : 0;
+    if (changed < 0)
+	return 0;
+
+    return 1;
 }
 
 static int ged_obol_apply_cached_path_metadata_to_scene(
@@ -21039,7 +21333,7 @@ ged_obol_progressive_autoview_transaction(
 	    entry.view_controller->clearViewLodState();
 	if (!deferred) {
 	    if (invalidate) {
-		ged_obol_retire_deferred_job(data);
+		ged_obol_retire_all_deferred_jobs(data);
 		ged_obol_cleanup_retired_jobs(data);
 		data->pending_autoview = 0;
 		data->deferred_refine_stage = 0;
@@ -21063,20 +21357,15 @@ ged_obol_progressive_autoview_transaction(
 	data->deferred_refine_stage =
 	    data->deferred_paths.empty() ? 0 : 1;
 
-	data->pending_autoview = 0;
-	if (arm_autoview) {
-	    const struct bv *view = ged_obol_bv_const(entry.view_ctx);
-	    if (!view)
-		continue;
-	    data->pending_autoview = 1;
-	    data->expected_view_revision = bv_frame_revision_get(view);
-	}
 	if (data->deferred_refine_stage == 1 &&
 	    !ged_obol_start_deferred_realization(data, entry.view_controller,
 		data->deferred_appearance.draw_mode)) {
 	    data->deferred_refine_stage = 3;
 	    data->deferred_paths.clear();
 	}
+	if (arm_autoview)
+	    (void)ged_obol_progressive_autoview_arm(data,
+		BV_AUTOVIEW_SCALE_DEFAULT);
 	entry.view_controller->markProgressiveWorkPending();
     }
 }
@@ -21389,6 +21678,12 @@ ged_obol_bind_view_render_root(void *view_ctx,
     SoSeparator *render_root = new SoSeparator;
     if (!ged_obol_view_scope_is_independent(view_ctx))
 	render_root->addChild(shared_root);
+    /* The interlay belongs after model geometry but before the view-local
+     * faceplate and interactive feature root. */
+    SoGroup *interlay = view_controller->getFramebufferInterlayRoot();
+    if (!interlay)
+	return 0;
+    render_root->addChild(interlay);
     if (local_root && local_root != shared_root)
 	render_root->addChild(local_root);
     view_controller->setRenderSceneRoot(render_root);
@@ -21646,14 +21941,16 @@ ged_draw_obol_render_endpoint_ensure_for_view(struct ged *gedp,
 	delete controller;
 	return 0;
     }
-    entry->owned_view_controller = 1;
-    brlobol_display_endpoint_t *endpoint =
-	brlobol_display_endpoint_create(controller, 0);
+	brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(controller,
+	    BRLOBOL_ENDPOINT_OWN_CONTROLLER);
     if (!endpoint ||
 	!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	ged_draw_obol_controller_detach_for_view(gedp, view_ctx);
 	if (endpoint)
 	    brlobol_display_endpoint_destroy(endpoint);
-	ged_draw_obol_controller_detach_for_view(gedp, view_ctx);
+	else
+	    delete controller;
 	return 0;
     }
     return 1;
@@ -21663,30 +21960,6 @@ extern "C" void *
 ged_draw_obol_controller_opaque_for_view(void *view_ctx)
 {
     return ged_obol_view_controller_for_context(view_ctx);
-}
-
-extern "C" int
-ged_draw_obol_software_wire_mode_get_for_view(void *view_ctx, int *mode)
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !mode)
-	return 0;
-    *mode = static_cast<int>(controller->getSoftwareWireMode());
-    return 1;
-}
-
-extern "C" int
-ged_draw_obol_software_wire_mode_set_for_view(void *view_ctx, int mode)
-{
-    BRLObolViewController *controller =
-	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || mode < GED_DRAW_OBOL_SOFTWARE_WIRE_AUTO ||
-	mode > GED_DRAW_OBOL_SOFTWARE_WIRE_FAST)
-	return 0;
-    controller->setSoftwareWireMode(
-	static_cast<BRLObolViewController::SoftwareWireMode>(mode));
-    return 1;
 }
 
 extern "C" void *

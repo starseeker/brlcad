@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "bv.h"
 #include "brlobol/edit_preview.h"
 #include "brlobol/export_action.h"
@@ -31,9 +33,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <new>
 #include <sstream>
 #include <string.h>
 #include <utility>
@@ -65,6 +69,51 @@ static std::vector<SoBRLDatabaseSource *> controller_render_database_source_root
     const BRLObolViewController *controller);
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
     const BRLObolViewController *controller);
+
+/* Kept out of the public controller layout so callback teardown is ABI-safe. */
+struct ControllerFrameRequestState {
+    ControllerFrameRequestState(BRLObolFrameRequestCallback callback_in,
+	void *user_data_in) :
+	callback(callback_in),
+	userData(user_data_in),
+	dispatches(0),
+	closing(false)
+    {
+    }
+
+    bool beginDispatch(void)
+    {
+	std::lock_guard<std::mutex> lock(this->mutex);
+	if (this->closing)
+	    return false;
+	this->dispatches++;
+	return true;
+    }
+
+    void finishDispatch(void)
+    {
+	std::lock_guard<std::mutex> lock(this->mutex);
+	this->dispatches--;
+	if (!this->dispatches)
+	    this->cv.notify_all();
+    }
+
+    void close(void)
+    {
+	std::unique_lock<std::mutex> lock(this->mutex);
+	this->closing = true;
+	this->cv.wait(lock, [this]() {
+	    return this->dispatches == 0;
+	});
+    }
+
+    BRLObolFrameRequestCallback callback;
+    void *userData;
+    std::mutex mutex;
+    std::condition_variable cv;
+    unsigned int dispatches;
+    bool closing;
+};
 
 static void
 controller_initialize_render_action(SoRenderManager *manager)
@@ -256,7 +305,7 @@ controller_find_render_environment(SoSeparator *root)
 	SoNode *child = root->getChild(i);
 	if (child &&
 	    child->isOfType(SoGroup::getClassTypeId()) &&
-	    strcmp(child->getName().getString(), name) == 0)
+	    bu_strcmp(child->getName().getString(), name) == 0)
 	    return static_cast<SoGroup *>(child);
     }
 
@@ -282,9 +331,9 @@ controller_configure_render_environment(SoViewport *viewport)
 	    }
 	    if (child && child->isOfType(SoClipPlane::getClassTypeId())) {
 		const char *name = child->getName().getString();
-		hasClipMinimum |= strcmp(name,
+		hasClipMinimum |= bu_strcmp(name,
 		    controller_clip_plane_name(TRUE)) == 0;
-		hasClipMaximum |= strcmp(name,
+		hasClipMaximum |= bu_strcmp(name,
 		    controller_clip_plane_name(FALSE)) == 0;
 	    }
 	}
@@ -362,7 +411,7 @@ controller_clip_plane(SoViewport *viewport, SbBool minimum)
     for (int i = 0; i < environment->getNumChildren(); i++) {
 	SoNode *child = environment->getChild(i);
 	if (child && child->isOfType(SoClipPlane::getClassTypeId()) &&
-	    strcmp(child->getName().getString(), wanted) == 0)
+	    bu_strcmp(child->getName().getString(), wanted) == 0)
 	    return static_cast<SoClipPlane *>(child);
     }
     return NULL;
@@ -463,7 +512,7 @@ controller_append_database_source_unique(
 	const SbString existingInstance = existing->instanceKey.getValue();
 	if (sourceInstance.getLength() > 0 &&
 	    existingInstance.getLength() > 0 &&
-	    strcmp(sourceInstance.getString(),
+	    bu_strcmp(sourceInstance.getString(),
 		   existingInstance.getString()) == 0)
 	    return;
 
@@ -471,7 +520,7 @@ controller_append_database_source_unique(
 	    existing->path.getValue().getLength() > 0 &&
 	    sourceDbip == existing->getDatabase() &&
 	    sourceDrawMode == existing->drawMode.getValue() &&
-	    strcmp(sourcePath.getString(),
+	    bu_strcmp(sourcePath.getString(),
 		   existing->path.getValue().getString()) == 0)
 	    return;
     }
@@ -622,7 +671,7 @@ rt_pick_result_path_recorded(
 	return FALSE;
 
     for (size_t i = 0; i < results.size(); i++) {
-	if (strcmp(rt_pick_result_path(results[i]).getString(),
+	if (bu_strcmp(rt_pick_result_path(results[i]).getString(),
 		   candidatePath.getString()) == 0)
 	    return TRUE;
     }
@@ -675,7 +724,7 @@ controller_path_contains_request(const char *sourcePath,
 	return FALSE;
 
     size_t sourceLen = strlen(source);
-    if (strncmp(request, source, sourceLen) != 0)
+    if (bu_strncmp(request, source, sourceLen) != 0)
 	return FALSE;
 
     return request[sourceLen] == '\0' || request[sourceLen] == '/' ?
@@ -702,8 +751,8 @@ controller_source_matches_request(SoBRLDatabaseSource *source,
 	return FALSE;
 
     const char *cleanSourcePath = controller_path_skip_slashes(sourcePath);
-    return strcmp(sourceName, cleanSourcePath) == 0 ||
-	   strcmp(sourceName, controller_path_leaf(sourcePath)) == 0 ? TRUE :
+    return bu_strcmp(sourceName, cleanSourcePath) == 0 ||
+	   bu_strcmp(sourceName, controller_path_leaf(sourcePath)) == 0 ? TRUE :
 	   FALSE;
 }
 
@@ -933,6 +982,10 @@ BRLObolViewController::BRLObolViewController(void) :
     viewport(new SoViewport),
     renderLodRoot(NULL),
     renderBatchRoot(NULL),
+    renderPresentationRoot(NULL),
+    framebufferUnderlayRoot(NULL),
+    framebufferInterlayRoot(NULL),
+    framebufferOverlayRoot(NULL),
     viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
     imageRenderer(NULL),
@@ -943,10 +996,12 @@ BRLObolViewController::BRLObolViewController(void) :
     backgroundTop(0.0f, 0.0f, 0.0f),
     softwareWireMode(SOFTWARE_WIRE_AUTO),
     transparencyEnabled(TRUE),
+    antialiasingEnabled(FALSE),
     clipMinimum(BV_VIEW_MIN),
     clipMaximum(BV_VIEW_MAX),
     renderRequested(FALSE),
     renderReason(""),
+    renderRequestSerial(0),
     frameRequestCallback(NULL),
     frameRequestUserData(NULL),
     lastRenderTimeNanoseconds(0),
@@ -1003,6 +1058,18 @@ BRLObolViewController::BRLObolViewController(void) :
     batch->ref();
     batch->addChild(this->viewport->getRoot());
     this->renderBatchRoot = batch;
+    SoSeparator *presentation = new SoSeparator;
+    presentation->ref();
+    this->framebufferUnderlayRoot = new SoGroup;
+    /* Unlike underlay/overlay this root is parented by GED's per-view render
+     * composition, so the controller keeps a reference across rebinds. */
+    this->framebufferInterlayRoot = new SoGroup;
+    this->framebufferInterlayRoot->ref();
+    this->framebufferOverlayRoot = new SoGroup;
+    presentation->addChild(this->framebufferUnderlayRoot);
+    presentation->addChild(batch);
+    presentation->addChild(this->framebufferOverlayRoot);
+    this->renderPresentationRoot = presentation;
     controller_initialize_render_action(this->renderManager);
     controller_configure_render_environment(this->viewport);
 }
@@ -1012,6 +1079,10 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     viewport(new SoViewport),
     renderLodRoot(NULL),
     renderBatchRoot(NULL),
+    renderPresentationRoot(NULL),
+    framebufferUnderlayRoot(NULL),
+    framebufferInterlayRoot(NULL),
+    framebufferOverlayRoot(NULL),
     viewAttachment(new BRLObolViewAttachment),
     renderManager(new SoRenderManager),
     imageRenderer(NULL),
@@ -1022,10 +1093,12 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     backgroundTop(0.0f, 0.0f, 0.0f),
     softwareWireMode(SOFTWARE_WIRE_AUTO),
     transparencyEnabled(TRUE),
+    antialiasingEnabled(FALSE),
     clipMinimum(BV_VIEW_MIN),
     clipMaximum(BV_VIEW_MAX),
     renderRequested(FALSE),
     renderReason(""),
+    renderRequestSerial(0),
     frameRequestCallback(NULL),
     frameRequestUserData(NULL),
     lastRenderTimeNanoseconds(0),
@@ -1082,6 +1155,18 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     batch->ref();
     batch->addChild(this->viewport->getRoot());
     this->renderBatchRoot = batch;
+    SoSeparator *presentation = new SoSeparator;
+    presentation->ref();
+    this->framebufferUnderlayRoot = new SoGroup;
+    /* Unlike underlay/overlay this root is parented by GED's per-view render
+     * composition, so the controller keeps a reference across rebinds. */
+    this->framebufferInterlayRoot = new SoGroup;
+    this->framebufferInterlayRoot->ref();
+    this->framebufferOverlayRoot = new SoGroup;
+    presentation->addChild(this->framebufferUnderlayRoot);
+    presentation->addChild(batch);
+    presentation->addChild(this->framebufferOverlayRoot);
+    this->renderPresentationRoot = presentation;
     controller_initialize_render_action(this->renderManager);
     controller_configure_render_environment(this->viewport);
     this->setSceneRoot(root);
@@ -1090,6 +1175,18 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
 
 BRLObolViewController::~BRLObolViewController(void)
 {
+    ControllerFrameRequestState *frameRequestState = NULL;
+    {
+	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	frameRequestState = static_cast<ControllerFrameRequestState *>(
+	    this->frameRequestUserData);
+	this->frameRequestCallback = NULL;
+	this->frameRequestUserData = NULL;
+    }
+    if (frameRequestState) {
+	frameRequestState->close();
+	delete frameRequestState;
+    }
     delete this->imageRenderer;
     this->imageRenderer = NULL;
     this->imageRendererManager = NULL;
@@ -1109,6 +1206,16 @@ BRLObolViewController::~BRLObolViewController(void)
     this->renderManager->setSceneGraph(NULL);
     delete this->renderManager;
     this->renderManager = NULL;
+    if (this->renderPresentationRoot) {
+	this->renderPresentationRoot->unref();
+	this->renderPresentationRoot = NULL;
+    }
+    this->framebufferUnderlayRoot = NULL;
+    if (this->framebufferInterlayRoot) {
+	this->framebufferInterlayRoot->unref();
+	this->framebufferInterlayRoot = NULL;
+    }
+    this->framebufferOverlayRoot = NULL;
     if (this->renderBatchRoot) {
 	this->renderBatchRoot->unref();
 	this->renderBatchRoot = NULL;
@@ -1155,7 +1262,17 @@ BRLObolViewController::setSceneRoot(SoNode *root)
     this->clearRtPickCaches();
     this->viewAttachment->setSceneRoot(root);
     this->sceneController.setSceneRoot(root);
-    this->setViewportSceneGraphWithLod(root);
+    if (root && this->framebufferInterlayRoot) {
+	/* A controller used without GED has no separate local feature root.
+	 * Keep interlay visible after its scene; hosted GED replaces this with
+	 * the more precise shared/interlay/local composition. */
+	SoSeparator *renderRoot = new SoSeparator;
+	renderRoot->addChild(root);
+	renderRoot->addChild(this->framebufferInterlayRoot);
+	this->setViewportSceneGraphWithLod(renderRoot);
+    } else {
+	this->setViewportSceneGraphWithLod(root);
+    }
     this->syncRenderManager();
     this->requestRender("scene-root");
 }
@@ -1186,8 +1303,27 @@ BRLObolViewController::getRenderSceneRoot(void) const
 SoNode *
 BRLObolViewController::getRenderRoot(void) const
 {
-    return this->renderBatchRoot ? this->renderBatchRoot :
+	return this->renderPresentationRoot ? this->renderPresentationRoot :
+	this->renderBatchRoot ? this->renderBatchRoot :
 	this->viewport->getRoot();
+}
+
+SoGroup *
+BRLObolViewController::getFramebufferUnderlayRoot(void) const
+{
+    return this->framebufferUnderlayRoot;
+}
+
+SoGroup *
+BRLObolViewController::getFramebufferInterlayRoot(void) const
+{
+    return this->framebufferInterlayRoot;
+}
+
+SoGroup *
+BRLObolViewController::getFramebufferOverlayRoot(void) const
+{
+    return this->framebufferOverlayRoot;
 }
 
 void
@@ -1378,6 +1514,30 @@ SbBool
 BRLObolViewController::isTransparencyEnabled(void) const
 {
     return this->transparencyEnabled;
+}
+
+void
+BRLObolViewController::setAntialiasingEnabled(SbBool enabled)
+{
+    enabled = enabled ? TRUE : FALSE;
+    if (this->antialiasingEnabled == enabled)
+	return;
+    this->antialiasingEnabled = enabled;
+    this->renderManager->setAntialiasing(enabled, 1);
+    if (this->imageRenderer) {
+	SoGLRenderAction *action = this->imageRenderer->getGLRenderAction();
+	if (action) {
+	    action->setSmoothing(enabled);
+	    action->setNumPasses(1);
+	}
+    }
+    this->requestRender("antialiasing");
+}
+
+SbBool
+BRLObolViewController::isAntialiasingEnabled(void) const
+{
+    return this->antialiasingEnabled;
 }
 
 SbBool
@@ -1804,27 +1964,50 @@ BRLObolViewController::getLastDiagnostics(void) const
 void
 BRLObolViewController::requestRender(const char *reason)
 {
+    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
     this->renderRequested = TRUE;
     this->renderReason = reason ? reason : "";
+    this->renderRequestSerial++;
 }
 
 void
 BRLObolViewController::setFrameRequestCallback(
     BRLObolFrameRequestCallback callback, void *userData)
 {
-    std::lock_guard<std::mutex> lock(this->frameRequestMutex);
-    this->frameRequestCallback = callback;
-    this->frameRequestUserData = callback ? userData : NULL;
+    ControllerFrameRequestState *replacement = callback ?
+	new (std::nothrow) ControllerFrameRequestState(callback, userData) : NULL;
+    if (callback && !replacement)
+	return;
+
+    ControllerFrameRequestState *previous = NULL;
+    {
+	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	previous = static_cast<ControllerFrameRequestState *>(
+	    this->frameRequestUserData);
+	this->frameRequestCallback = callback;
+	this->frameRequestUserData = replacement;
+    }
+    if (previous) {
+	previous->close();
+	delete previous;
+    }
 }
 
 void
 BRLObolViewController::clearFrameRequestCallback(void *userData)
 {
-    std::lock_guard<std::mutex> lock(this->frameRequestMutex);
-    if (this->frameRequestUserData != userData)
-	return;
-    this->frameRequestCallback = NULL;
-    this->frameRequestUserData = NULL;
+    ControllerFrameRequestState *state = NULL;
+    {
+	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	state = static_cast<ControllerFrameRequestState *>(
+	    this->frameRequestUserData);
+	if (!state || state->userData != userData)
+	    return;
+	this->frameRequestCallback = NULL;
+	this->frameRequestUserData = NULL;
+    }
+    state->close();
+    delete state;
 }
 
 void
@@ -1832,30 +2015,61 @@ BRLObolViewController::notifyFrameRequest(const char *reason)
 {
     BRLObolFrameRequestCallback callback = NULL;
     void *userData = NULL;
+    ControllerFrameRequestState *state = NULL;
     {
 	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
-	callback = this->frameRequestCallback;
-	userData = this->frameRequestUserData;
+	state = static_cast<ControllerFrameRequestState *>(
+	    this->frameRequestUserData);
+	if (this->frameRequestCallback && state && state->beginDispatch()) {
+	    callback = state->callback;
+	    userData = state->userData;
+	}
     }
-    if (callback)
-	(*callback)(userData, reason ? reason : "");
+    if (!callback)
+	return;
+
+    (*callback)(userData, reason ? reason : "");
+    state->finishDispatch();
 }
 
 void
 BRLObolViewController::clearRenderRequest(void)
 {
+    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
     this->renderRequested = FALSE;
     this->renderReason = "";
+    this->renderRequestSerial++;
 }
 
 SbBool
 BRLObolViewController::consumeRenderRequest(SbString *reason)
 {
+    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
     const SbBool ret = this->renderRequested;
     if (reason)
 	*reason = this->renderReason;
-    this->clearRenderRequest();
+    this->renderRequested = FALSE;
+    this->renderReason = "";
+    this->renderRequestSerial++;
     return ret;
+}
+
+void
+BRLObolViewController::clearRenderRequestIfUnchanged(uint64_t serial)
+{
+    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
+    if (this->renderRequestSerial != serial)
+	return;
+    this->renderRequested = FALSE;
+    this->renderReason = "";
+    this->renderRequestSerial++;
+}
+
+uint64_t
+BRLObolViewController::renderRequestSerialGet(void) const
+{
+    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
+    return this->renderRequestSerial;
 }
 
 SbBool
@@ -1865,8 +2079,8 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 {
     (void)this->advanceProgressiveWork(NULL, NULL);
 
-    if (!this->renderRequested || !this->renderManager ||
-	!this->activeCamera || !this->getRenderRoot())
+
+    if (!this->renderManager || !this->activeCamera || !this->getRenderRoot())
 	return FALSE;
 
     SbString renderReasonCopy;
@@ -1964,6 +2178,9 @@ BRLObolViewController::renderToImage(unsigned char **image,
 	this->imageRenderer->getGLRenderAction()->setTransparencyType(
 	    this->transparencyEnabled ? SoGLRenderAction::BLEND :
 	    SoGLRenderAction::NONE);
+	this->imageRenderer->getGLRenderAction()->setSmoothing(
+	    this->antialiasingEnabled);
+	this->imageRenderer->getGLRenderAction()->setNumPasses(1);
     } else {
 	this->imageRenderer->setViewportRegion(region);
     }
@@ -1979,6 +2196,7 @@ BRLObolViewController::renderToImage(unsigned char **image,
     if (gradient)
 	renderer->setBackgroundGradient(imageBottom, imageTop);
 
+    const uint64_t requestSerial = this->renderRequestSerialGet();
     const uint64_t started = this->beginRenderTiming();
     const SbBool rendered = renderer->render(this->getRenderRoot());
     this->completeRenderTiming(started);
@@ -2016,9 +2234,8 @@ BRLObolViewController::renderToImage(unsigned char **image,
 	}
     }
 
-    if (!localProgressiveStatus.hasMore) {
-	this->clearRenderRequest();
-    }
+    if (!localProgressiveStatus.hasMore)
+	this->clearRenderRequestIfUnchanged(requestSerial);
     *image = out;
     return BRLCAD_OK;
 }
@@ -2026,14 +2243,17 @@ BRLObolViewController::renderToImage(unsigned char **image,
 SbBool
 BRLObolViewController::isRenderRequested(void) const
 {
+
+    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
     return (this->renderRequested || this->hasPendingLodResults() ||
 	    this->hasProgressiveWorkPending()) ?
 	   TRUE : FALSE;
 }
 
-const SbString &
+SbString
 BRLObolViewController::getRenderReason(void) const
 {
+    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
     return this->renderReason;
 }
 
@@ -2166,7 +2386,6 @@ BRLObolViewController::advanceProgressiveWork(
 	int providerRet = (*record.callback)(this, record.userData, options,
 			 &providerStatus);
 	if (providerRet > 0) {
-	    providerStatus.changed = 1;
 	    providerStatus.providerAdvanced++;
 	} else if (providerRet < 0) {
 	    providerStatus.hasMore = 0;
@@ -2506,7 +2725,7 @@ BRLObolViewController::prepareRtPickCaches(void)
 	for (size_t i = 0; i < sourcePaths.size(); i++) {
 	    if (sourceDatabases[i] != this->rtPickCacheDatabases[i] ||
 		sourceRevisions[i] != this->rtPickCacheSourceRevisions[i] ||
-		strcmp(sourcePaths[i].getString(),
+		bu_strcmp(sourcePaths[i].getString(),
 		       this->rtPickCachePaths[i].getString()) != 0 ||
 		!this->rtPickCaches[i] ||
 		!this->rtPickCaches[i]->isReady()) {
@@ -2936,12 +3155,32 @@ BRLObolViewController::processPendingLodResults(size_t maxResults,
     if (!this->lodService)
 	return 0;
 
+    const auto clear_lod_wakeup_if_idle = [this]() {
+	if (!this->progressiveProviders.empty() ||
+	    this->lodSubmissionPending ||
+	    this->lodResultsPending.load() != 0 ||
+	    (this->lodService &&
+	     this->lodService->queuedResultCountForDiagnostics() > 0))
+	    return;
+
+	/* A result-ready callback may race this drain.  Clear first, then
+	 * recheck so a concurrent callback cannot lose its frame wakeup. */
+	this->clearProgressiveWorkPending();
+	if (this->lodSubmissionPending || this->lodResultsPending.load() != 0 ||
+	    (this->lodService &&
+	     this->lodService->queuedResultCountForDiagnostics() > 0))
+	    this->markProgressiveWorkPending();
+    };
+
     if (!this->hasPendingLodResults() &&
-	this->lodService->queuedResultCountForDiagnostics() == 0)
+	this->lodService->queuedResultCountForDiagnostics() == 0) {
+	clear_lod_wakeup_if_idle();
 	return 0;
+    }
 
     if (maxMicroseconds == 0) {
 	(void)this->applyLodResults(this->lodService, maxResults);
+	clear_lod_wakeup_if_idle();
 	return this->lastLodResultCount;
     }
 
@@ -2977,6 +3216,7 @@ BRLObolViewController::processPendingLodResults(size_t maxResults,
     this->lastLodRejectedResultCount = rejected;
     this->lastLodUnmatchedResultCount = unmatched;
     this->lastLodDiagnostics = diagnostics;
+	clear_lod_wakeup_if_idle();
     return processed;
 }
 
@@ -2998,7 +3238,7 @@ BRLObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 
     if (this->lodLastSubmittedViewRevision == this->lodViewRevision &&
 	this->lodLastSubmittedPolicyRevision == this->lodPolicyRevision &&
-	strcmp(this->lodLastSubmittedSourceSignature.getString(),
+	bu_strcmp(this->lodLastSubmittedSourceSignature.getString(),
 	       signature.getString()) == 0) {
 	if (this->lodSubmissionPending && this->lodActiveGeneration != 0)
 	    return this->submitLodRequests(this->lodService,
@@ -3390,7 +3630,7 @@ find_edit_preview_child(SoGroup *group, const char *previewId)
 	if (!node || !node->isOfType(SoBRLEditPreview::getClassTypeId()))
 	    continue;
 	SoBRLEditPreview *preview = static_cast<SoBRLEditPreview *>(node);
-	if (strcmp(preview->previewId.getValue().getString(), previewId) == 0)
+	if (bu_strcmp(preview->previewId.getValue().getString(), previewId) == 0)
 	    return i;
     }
     return -1;
@@ -3406,7 +3646,7 @@ find_hud_label_overlay_child(SoGroup *group, const char *labelId)
 	if (!node || !node->isOfType(SoBRLHUDLabelOverlay::getClassTypeId()))
 	    continue;
 	SoBRLHUDLabelOverlay *label = static_cast<SoBRLHUDLabelOverlay *>(node);
-	if (strcmp(label->labelId.getValue().getString(), labelId) == 0)
+	if (bu_strcmp(label->labelId.getValue().getString(), labelId) == 0)
 	    return i;
     }
     return -1;
@@ -3422,7 +3662,7 @@ find_line_layer_overlay_child(SoGroup *group, const char *overlayId)
 	if (!node || !node->isOfType(SoBRLLineLayerOverlay::getClassTypeId()))
 	    continue;
 	SoBRLLineLayerOverlay *overlay = static_cast<SoBRLLineLayerOverlay *>(node);
-	if (strcmp(overlay->overlayId.getValue().getString(), overlayId) == 0)
+	if (bu_strcmp(overlay->overlayId.getValue().getString(), overlayId) == 0)
 	    return i;
     }
     return -1;
@@ -4213,7 +4453,7 @@ BRLObolViewController::syncLodViewSignature(SbBool advanceOnChange)
     SbBool haveCamera = this->getViewInfo(&view);
     SbString signature = controller_lod_view_signature(view, haveCamera);
 
-    if (strcmp(this->lodViewSignature.getString(), signature.getString()) == 0)
+    if (bu_strcmp(this->lodViewSignature.getString(), signature.getString()) == 0)
 	return;
 
     this->lodViewSignature = signature;

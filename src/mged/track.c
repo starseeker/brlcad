@@ -36,7 +36,7 @@
 #include "rt/db4.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 
 

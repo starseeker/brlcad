@@ -318,10 +318,13 @@ AABB proxy line sets only for leaf solids when the relevant libbrlobol cache
 record is already available.  Comb children remain explicit source/metadata
 nodes until leaf descendants provide bottom-up bounds; forcing subtree AABB
 refreshes inside the expansion call would recreate the large-root blocking
-behavior this path is intended to avoid.  Duplicate direct-child instance
-names and non-union CSG children are
-currently skipped until explicit instance-path identity and correct CSG-aware
-partial visualization rules are designed.
+behavior this path is intended to avoid.  Each child source has an instance
+key derived from its parent key, occurrence row, and Boolean operation, so
+duplicate direct children remain distinct.  Subtract and intersect children
+retain their hierarchy operation in the compact assembly and use distinct
+fallback wire style where applicable.  These proxy sources preserve CSG
+identity and picking attribution, but do not claim to be an exact partial
+Boolean evaluation; the detached final root remains the exact result.
 
 The first cache population hook for this path is
 `ged_draw_obol_database_source_prewarm_child_aabb_proxies`.  It submits bounded
@@ -330,8 +333,10 @@ tasks refresh libbrlobol draw-cache records but do not publish view-LoD
 payloads.  `ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies`
 and `ged_draw_obol_database_source_expand_visible_children` wrap the
 single-source operations over the currently visible database-source frontier
-under a requested root.  Repeating those visible-frontier calls advances
-recursive refinement in bounded passes.  The automatic production path is now
+under a requested root.  Visible expansion only publishes already-cached leaf
+proxies; it does not synchronously regenerate missing leaf bounds.  Repeating
+bounded visible-frontier calls advances recursive refinement in controlled
+passes.  The automatic production path is now
 a narrow libbrlobol provider callback registered by the GED/Obol bridge when a
 view controller attaches to a GED view.  `BRLObolViewController` owns the
 bounded progressive tick, drains a limited number of LoD results, then calls
@@ -493,12 +498,14 @@ visible image refinement:
 * `test_qtcad_obol_progressive_lod` drives the qtcad/QGED path in-process with
   an offscreen Obol view, captures a pre-submit frame, drains to an AABB proxy,
   drains to an OBB proxy, then drains to mesh settlement and verifies both
-  scene-state payload progression and image-visible progression.  It now also
-  accepts parameterized root/draw/facetize/repeat settings, records
-  phase-level startup timings, time-to-first-visual, and staged-result
-  timings, requires the controller to visit multiple LoD candidates, and
-  verifies multiple active view-local payloads at the AABB, OBB, and mesh
-  stages rather than proving only the first realized mesh path;
+  scene-state payload progression and final presentable output.  Diagnostic
+  staged runs additionally require image-visible progression; normal runs may
+  coalesce to ready final data before the first captured frame.  It now also
+  accepts parameterized root/draw/facetize/repeat settings, records phase-level
+  startup timings, time-to-first-visual, and staged-result timings, requires
+  the controller to visit multiple LoD candidates, and verifies multiple
+  active view-local payloads at the AABB, OBB, and mesh stages rather than
+  proving only the first realized mesh path;
 * `test_qtcad_obol_progressive_lod_startup_refine` covers the qtcad startup
   transition explicitly.  It draws with deferred leaf expansion, verifies the
   first rendered frame contains cache-backed leaf proxy geometry for a
@@ -558,24 +565,23 @@ draw transaction, Obol sync, autoview, first framebuffer readback, service
 startup, submit, and AABB/OBB/mesh settlement.  Use those fields to distinguish
 first-visual startup regressions from post-proxy refinement cost.
 
-The remaining full-stack progressive gaps are policy and completeness issues,
-not the absence of an automatic tick.  Duplicate-occurrence handling in
-proxy/frontier expansion, CSG-aware handling for subtraction and intersection
-children, and autoview settlement still need production rules.  The scheduler
-is deliberately provider based so those rules can live in GED/libbrlobol
-providers while qtcad, gsh, and MGED simply ask the controller to advance one
-bounded tick before rendering.
+The production scheduler is deliberately provider based.  Duplicate
+occurrences, subtract/intersect hierarchy identity, and pending autoview are
+now handled by the GED provider while qtcad, gsh, and MGED simply advance one
+bounded controller tick before rendering.  Pending autoview follows published
+Obol source bounds until refinement settles, and a later user view revision
+cancels it.  A combined `VISIBLE_FRONTIER | FULL_DETAIL` policy advances
+cache-backed proxies while detached final realization runs; if final data is
+already ready before the first draw, it is adopted directly.  Otherwise,
+adoption retires only the temporary descendants owned by that root, preventing
+proxy and compact geometry from being displayed together.  The GED lifecycle
+test exercises duplicate and CSG identities, autoview cancellation, and this
+proxy-to-compact handoff.
 
-Autoview also needs a first-class progressive state.  A view can be framed from
-whatever Obol source bounds exist at a given time, but for a comb root that
-starts metadata-only the autoview result is not stable until enough leaf AABB
-records have been published to assert the drawn bounds.  Applications should
-retain a pending-autoview request after deferred draw, rerun it as new
-leaf-source bounds arrive, and mark it complete only when the relevant leaf
-frontier has settled or the user manually changes the camera.  The current
-qtcad startup-expand test proves the manual refresh path by rerunning GED
-autoview after leaf proxies are published; the remaining production work is
-automatic pending-autoview scheduling and cancellation.
+The remaining CSG work is limited to optional exact partial-Boolean proxy
+visualization.  Current proxy geometry is intentionally conservative and
+identity-preserving; it must never be mistaken for the exact final Boolean
+surface.
 
 Also keep adding scene-state coverage for no-owned-scene/no-feature-store
 no-op behavior so the view-local LoD invalidation contract is proven outside

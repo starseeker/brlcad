@@ -15,6 +15,7 @@
 
 #include <Inventor/SoDB.h>
 #include <Inventor/SoOffscreenRenderer.h>
+#include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/actions/SoSearchAction.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
@@ -209,6 +210,13 @@ BRLObolHeadlessWindowHost::renderPending(void)
     if (ensure_headless_camera(controller) != 0)
 	return -1;
 
+    const SbString requestedReason = controller->getRenderReason();
+
+    /* Keep factory-owned headless presentation on the same progressive path
+     * as the controller's direct image capture. */
+    (void)controller->realizePending();
+    (void)controller->advanceProgressiveWork(NULL, NULL);
+
     SoNode *root = controller->getRenderRoot();
     if (!root)
 	root = controller->getSceneRoot();
@@ -227,6 +235,11 @@ BRLObolHeadlessWindowHost::renderPending(void)
 
     SoOffscreenRenderer renderer(manager, region);
     renderer.setComponents(renderer_components(this->hp->outputComponents));
+    SoGLRenderAction *action = renderer.getGLRenderAction();
+    if (action) {
+	action->setSmoothing(controller->isAntialiasingEnabled());
+	action->setNumPasses(1);
+    }
     const SbColor &backgroundBottom =
 	controller->getBackgroundBottomColor();
     const SbColor &backgroundTop = controller->getBackgroundTopColor();
@@ -255,9 +268,10 @@ BRLObolHeadlessWindowHost::renderPending(void)
     this->hp->frameHeight = height;
     this->hp->frameComponents = components;
 
-    SbString reason;
-    controller->consumeRenderRequest(&reason);
-    this->hp->lastRenderReason = reason;
+    controller->consumeRenderRequest(NULL);
+    this->hp->lastRenderReason = requestedReason;
+    if (controller->hasProgressiveWorkPending())
+	controller->requestRender("progressive-pending");
     this->hp->renderCount++;
     return 1;
 }

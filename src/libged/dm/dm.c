@@ -667,12 +667,9 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	dpr_value.double_value : 1.0;
     desc.visible = desc.mode == BRLOBOL_HOST_MODE_TOPLEVEL ? 1 : 0;
     desc.title = _dm_view_name(view);
-    desc.application_context =
-	ged_dm_ctx_get(gd->gedp, bu_vls_cstr(&host_name));
-    if (!desc.application_context &&
-	BU_STR_EQUIV(bu_vls_cstr(&host_name), "tk-gl"))
-	desc.application_context = gd->gedp->ged_interp;
-    if (!desc.application_context &&
+    /* Tk is the only current host needing a toolkit context.  The old
+     * DM-type map had no writers, so its lookup could never contribute. */
+    if (BU_STR_EQUIV(bu_vls_cstr(&host_name), "tk-gl") ||
 	BU_STR_EQUIV(bu_vls_cstr(&host_name), "tk-photo"))
 	desc.application_context = gd->gedp->ged_interp;
     if (requested_engine == BRLOBOL_RENDER_ENGINE_HW)
@@ -710,8 +707,6 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	bu_vls_free(&renderer_name);
 	return BRLCAD_ERROR;
     }
-    ged_rt_fb_set(gd->gedp, NULL);
-
     const char *cbav[5] = {"dm", "open", "--host",
 	bu_vls_cstr(&host_name), _dm_render_engine_name(requested_engine)};
     _dm_cmd_during_clbk(gd, 5, cbav);

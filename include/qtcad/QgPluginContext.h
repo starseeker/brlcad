@@ -45,13 +45,13 @@
 #include <QObject>
 #include <QString>
 #include "qtcad/defines.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgTypes.h"
 
 /* Forward declarations: callers that actually need the full types
  * can include them directly.  Keeping these out of the API header
  * minimises transitive include pressure for hosts. */
 struct ged;
+struct bv_context;
 class QgModel;
 class QgView;
 
@@ -124,7 +124,7 @@ class QTCAD_EXPORT QgPluginContext
 	/* Convenience wrappers. */
 	struct ged *getGed() const { return gedAccessor ? gedAccessor() : nullptr; }
 	QgView *getViewWidget() const { return viewWidgetAccessor ? viewWidgetAccessor() : nullptr; }
-	qg_legacy_view *activeView() const;
+	struct bv_context *activeViewContext() const;
 	void logMessage(const QString &msg) const { if (log) log(msg); }
 };
 

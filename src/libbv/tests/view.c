@@ -20,6 +20,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include <stdio.h>
 
 #include "bv.h"
@@ -67,6 +69,7 @@ context_callback(struct bv_context *ctx, uint64_t changed_flags,
 int
 main(int UNUSED(argc), const char **UNUSED(argv))
 {
+    bu_setprogname("bv_test");
     struct bv *v = bv_create();
     struct bv *v2 = bv_create();
     struct bv_set *set = bv_set_create();
@@ -78,11 +81,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     point_t max;
     point_t center;
     point_t model;
+    point_t keypoint = VINIT_ZERO;
     struct bv_grid_state grid;
     struct bv_axes_state axes;
     struct bv_other_state overlay = BV_OTHER_STATE_INIT;
     struct bv_params_state params;
     struct bv_snap_state snap;
+    struct bv_mouse_delta_settings mouse_settings = BV_MOUSE_DELTA_SETTINGS_INIT;
     struct bv_view_info view_info = BV_VIEW_INFO_INIT;
     struct bv_lod_policy lod_policy;
     vect_t rvec = VINIT_ZERO;
@@ -167,6 +172,30 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !near_fastf(bv_local2base_get(v), 2.0) ||
 	    !near_fastf(bv_base2local_get(v), 0.5))
 	return fail("view scalar accessors failed");
+    if (!bv_mouse_delta_settings_get(&mouse_settings, v) ||
+	!near_fastf(mouse_settings.min_delta, -20.0) ||
+	!near_fastf(mouse_settings.max_delta, 20.0) ||
+	!near_fastf(mouse_settings.rotate_scale, 0.4) ||
+	!near_fastf(mouse_settings.scale_scale, 2.0))
+	return fail("mouse delta defaults are incorrect");
+    mouse_settings.min_delta = -5.0;
+    mouse_settings.max_delta = 5.0;
+    mouse_settings.rotate_scale = 0.5;
+    mouse_settings.scale_scale = 4.0;
+    if (!bv_mouse_delta_settings_set(v, &mouse_settings))
+	return fail("mouse delta settings set failed");
+    fastf_t mouse_dx = 99.0;
+    fastf_t mouse_dy = -99.0;
+    if (!bv_mouse_delta_clamp(&mouse_dx, &mouse_dy, v) ||
+	!near_fastf(mouse_dx, 5.0) || !near_fastf(mouse_dy, -5.0))
+	return fail("mouse delta clamp did not use view settings");
+    const fastf_t scale_before_mouse_adjust = bv_scale_get(v);
+    if (!bv_mouse_delta_adjust(v, 99, 0, keypoint, BV_ADJUST_SCALE) ||
+	!near_fastf(bv_scale_get(v), scale_before_mouse_adjust / 1.05))
+	return fail("mouse delta scale adjustment did not use view settings");
+    mouse_settings.min_delta = 1.0;
+    if (bv_mouse_delta_settings_set(v, &mouse_settings))
+	return fail("invalid mouse delta settings were accepted");
     if (!bv_user_data_set(v, sentinel) || bv_user_data_get(v) != sentinel)
 	return fail("failed to set view user data");
     bv_context_init(&ctx, v);

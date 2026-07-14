@@ -21,6 +21,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -104,6 +106,7 @@ is_hex_token(const char *token)
 int
 main(void)
 {
+    bu_setprogname("fbserv_auth");
     char token[FBSERV_AUTH_TOKEN_LEN + 1] = {0};
     char mismatch[FBSERV_AUTH_TOKEN_LEN + 1] = {0};
     struct fbserv_obj fbs;

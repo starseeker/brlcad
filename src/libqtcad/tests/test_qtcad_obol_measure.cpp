@@ -21,9 +21,7 @@
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgMeasureFilter.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgView.h"
@@ -206,9 +204,10 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol measure test database");
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -221,7 +220,7 @@ main(int argc, char **argv)
     shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = qg_legacy_view_to_context(view.view());
+    draw_box.view = view.viewContext();
     draw_box.appearance = &shaded_appearance;
     int drew_box = apply_and_sync(gedp, &view, &draw_box);
     if (!drew_box)
@@ -236,8 +235,6 @@ main(int argc, char **argv)
 	FAIL("qtcad Obol measure helper should pick the centered box");
     if (pickedPath != "/box.s")
 	FAIL("qtcad Obol measure helper should preserve picked path identity");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad Obol measure pick should not initialize the legacy display manager");
 
     SbVec3f guidePoints[2] = {
 	pickedPoint,
@@ -247,8 +244,6 @@ main(int argc, char **argv)
     if (!qg_obol_measure_update_overlay(&view, "tool:measurement",
 	    guidePoints, 2, &green))
 	FAIL("qtcad Obol measure helper should publish an Obol overlay");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad Obol measure overlay should not initialize the legacy display manager");
 
     SoBRLLineLayerOverlay *overlay =
 	find_measure_overlay(controller, "tool:measurement");
@@ -260,8 +255,6 @@ main(int argc, char **argv)
     if (!qg_obol_measure_clear_overlay(&view, "tool:measurement") ||
 	    find_measure_overlay(controller, "tool:measurement"))
 	FAIL("qtcad Obol measure helper should clear its overlay");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad Obol measure clear should not initialize the legacy display manager");
 
     QMeasure3DFilter filter;
     filter.set_view_widget(&view);
@@ -274,15 +267,11 @@ main(int argc, char **argv)
     overlay = find_measure_overlay(controller, "tool:measurement");
     if (!overlay || overlay->getPointCount() != 1)
 	FAIL("qtcad 3D measure filter should start with a single-point Obol overlay");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad 3D measure filter start should not initialize the legacy display manager");
 
     QMouseEvent move = mouse_event(QEvent::MouseMove, 115, 70,
 	    Qt::NoButton, Qt::LeftButton);
     if (!filter.eventFilter(NULL, &move))
 	FAIL("qtcad 3D measure filter should update the Obol guide line");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad 3D measure filter update should not initialize the legacy display manager");
 
     QMouseEvent release = mouse_event(QEvent::MouseButtonRelease, 115, 70,
 	    Qt::LeftButton, Qt::LeftButton);
@@ -294,16 +283,12 @@ main(int argc, char **argv)
     overlay = find_measure_overlay(controller, "tool:measurement");
     if (!overlay || overlay->getPointCount() != 2)
 	FAIL("qtcad 3D measure filter should publish the finalized segment as an Obol overlay");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad 3D measure filter finalize should not initialize the legacy display manager");
 
     QMouseEvent rightPress = mouse_event(QEvent::MouseButtonPress, 90, 70,
 	    Qt::RightButton, Qt::RightButton);
     if (!filter.eventFilter(NULL, &rightPress) ||
 	    find_measure_overlay(controller, "tool:measurement"))
 	FAIL("qtcad 3D measure filter should clear the Obol overlay on right click");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad 3D measure filter clear should not initialize the legacy display manager");
 
     SoSeparator *lodRoot = new SoSeparator;
     lodRoot->ref();
@@ -457,7 +442,7 @@ main(int argc, char **argv)
     sourceService.drainResults(overBudgetResults);
     if (overBudgetResults.size() != 1 ||
 	    overBudgetResults[0].providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
-	    strcmp(overBudgetResults[0].diagnostic.getString(),
+	    bu_strcmp(overBudgetResults[0].diagnostic.getString(),
 		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	    overBudgetResults[0].mesh.isValid()) {
 	controller->setExactFullDetailBudget(0, 0);
@@ -467,11 +452,6 @@ main(int argc, char **argv)
     }
     controller->setExactFullDetailBudget(0, 0);
 
-    if (view.legacyBackendInitialized()) {
-	controller->setLodService(NULL);
-	sourceService.stop();
-	FAIL("qtcad source-backed exact Obol measure should not initialize the legacy display manager");
-    }
     controller->setLodService(NULL);
     sourceService.stop();
 

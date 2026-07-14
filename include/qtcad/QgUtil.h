@@ -38,9 +38,9 @@
 
 /**
  * Given a dp and its parent dbip, report its comb type (non-combs will
- * return G_STANDARD_OBJ)
+ * return QgCombTypeId::StandardObj)
  */
-extern QTCAD_EXPORT int
+extern QTCAD_EXPORT QgCombTypeId
 QgCombType(struct directory *dp, struct db_i *dbip);
 
 /* Given a dp and its parent dbip, return an appropriate icon for the object

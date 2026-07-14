@@ -54,7 +54,7 @@
 #include "rt/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./sedit.h"
 
 // FIXME: Global
@@ -65,7 +65,7 @@ static void motion_event_handler(struct mged_state *, XMotionEvent *);
 #endif
 
 int
-mged_dm_motion(struct mged_state *s, int x, int y)
+mged_display_motion(struct mged_state *s, int x, int y)
 {
 #ifdef HAVE_X11_TYPES
     XMotionEvent xmotion;
@@ -73,7 +73,7 @@ mged_dm_motion(struct mged_state *s, int x, int y)
     xmotion.x = x;
     xmotion.y = y;
     motion_event_handler(s, &xmotion);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
     return TCL_RETURN;
 #else
     (void)s;
@@ -88,35 +88,43 @@ int
 doEvent(ClientData clientData, XEvent *eventPtr)
 {
     struct mged_state *s = (struct mged_state *)clientData;
-    struct mged_dm *save_dm_list;
-    int status;
+    struct mged_display *save_display;
+    int status = TCL_OK;
 
     if (eventPtr->type == DestroyNotify || (unsigned long)eventPtr->xany.window == 0 || !MGED_STATE)
 	return TCL_OK;
 
-    // The set_curr_dm logic here appears to be important for Multipane mode -
-    // it doesn't do much if only one dm is up, but if the set_curr_dm calls
+    // The mged_current_display_set logic here appears to be important for Multipane mode -
+    // it doesn't do much if only one dm is up, but if the mged_current_display_set calls
     // are removed MGED doesn't update the multipane views correctly.
-    save_dm_list = s->mged_curr_dm;
-    GET_MGED_DM(s->mged_curr_dm, (unsigned long)eventPtr->xany.window);
+    save_display = s->mged_curr_display;
+    GET_MGED_DISPLAY(s->mged_curr_display, (unsigned long)eventPtr->xany.window);
 
     /* it's an event for a window that I'm not handling */
-    if (s->mged_curr_dm == MGED_DM_NULL) {
-	if (save_dm_list)
+    if (s->mged_curr_display == MGED_DISPLAY_NULL) {
+	if (save_display)
 	    MGED_CK_STATE(s);
-	set_curr_dm(s, save_dm_list);
+	mged_current_display_set(s, save_display);
 	return TCL_OK;
     }
 
-    /* calling the display manager specific event handler */
-    status = dm_doevent(DMP, clientData, eventPtr);
-    /* no further processing of this event */
-    if (status != TCL_OK) {
-	if (save_dm_list)
+    /* Tk Obol may have already applied a normalized semantic view drag.
+     * Consume only that exact X motion so legacy edit/ADC input remains
+     * available for actions the endpoint handler deliberately left alone. */
+    if (eventPtr->type == MotionNotify &&
+	mged_obol_input_motion_consumed(s->mged_curr_display,
+	    (unsigned long)eventPtr->xmotion.time,
+	    eventPtr->xmotion.x, eventPtr->xmotion.y)) {
+	if (save_display)
 	    MGED_CK_STATE(s);
-	set_curr_dm(s, save_dm_list);
-	return status;
+	mged_current_display_set(s, save_display);
+	return TCL_RETURN;
     }
+
+    /* The only graphical host is Tk Obol, which owns its native context and
+     * event dispatch.  MGED's retained dm object is the nu no-op shell, so
+     * forwarding X events through dm_doevent would only preserve a dead
+     * renderer callback. */
 
     /* Continuing to process the event */
 
@@ -126,36 +134,36 @@ doEvent(ClientData clientData, XEvent *eventPtr)
 
 	(void)bv_dimensions_set(view, conf->width, conf->height);
 	rect_image2view(s);
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_NATIVE_EVENT);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_NATIVE_EVENT);
 
-	if (fbp)
-	    (void)fb_configure_window(fbp, conf->width, conf->height);
+	/* The endpoint-owned imgstream resizes from the active view context. */
+	(void)mged_obol_framebuffer_ensure(s);
 
 	/* no further processing of this event */
 	status = TCL_RETURN;
     } else if (eventPtr->type == MapNotify) {
 	mapped = 1;
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_NATIVE_EVENT);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_NATIVE_EVENT);
 
 	/* no further processing of this event */
 	status = TCL_RETURN;
     } else if (eventPtr->type == UnmapNotify) {
 	mapped = 0;
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_NATIVE_EVENT);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_NATIVE_EVENT);
 
 	/* no further processing of this event */
 	status = TCL_RETURN;
     } else if (eventPtr->type == MotionNotify) {
 	motion_event_handler(s, (XMotionEvent *)eventPtr);
-	mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+	mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
 	/* no further processing of this event */
 	status = TCL_RETURN;
     }
 
-    if (save_dm_list)
+    if (save_display)
 	MGED_CK_STATE(s);
-    set_curr_dm(s, save_dm_list);
+    mged_current_display_set(s, save_display);
     return status;
 }
 #else
@@ -188,8 +196,8 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     if (s->dbip == DBI_NULL)
 	return;
 
-    (void)mged_dm_adc_state_get(s->mged_curr_dm, adc);
-    (void)mged_dm_grid_state_get(s->mged_curr_dm, grid);
+    (void)mged_display_adc_state_get(s->mged_curr_display, adc);
+    (void)mged_display_grid_state_get(s->mged_curr_display, grid);
 
     int width = bv_width_get(view);
     int height = bv_height_get(view);
@@ -202,8 +210,8 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
     fastf_t mouse_view_y = 0.0;
     if (!bv_screen_to_view(&mouse_view_x, &mouse_view_y, view, mx, my))
 	return;
-    int dx = mx - dm_omx;
-    int dy = my - dm_omy;
+    int dx = mx - pointer_x;
+    int dy = my - pointer_y;
     view_local_scale = bv_scale_get(view) * s->dbip->dbi_base2local;
     bv_center_mat_get(view_center, view);
     bv_view2model_get(view2model, view);
@@ -320,11 +328,11 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			point_t vcenter, diff;
 
 			/* accumulate distance mouse moved since starting to translate */
-			dm_mouse_dx += dx;
-			dm_mouse_dy += dy;
+			mouse_dx += dx;
+			mouse_dy += dy;
 
-			view_pt[X] = dm_mouse_dx / (fastf_t)width * 2.0;
-			view_pt[Y] = -dm_mouse_dy / (fastf_t)height / aspect * 2.0;
+			view_pt[X] = mouse_dx / (fastf_t)width * 2.0;
+			view_pt[Y] = -mouse_dy / (fastf_t)height / aspect * 2.0;
 			view_pt[Z] = 0.0;
 			round_to_grid(s, &view_pt[X], &view_pt[Y]);
 
@@ -332,7 +340,7 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 			MAT_DELTAS_GET_NEG(vcenter, view_center);
 			VSUB2(diff, model_pt, vcenter);
 			VSCALE(diff, diff, s->dbip->dbi_base2local);
-			VADD2(model_pt, dm_work_pt, diff);
+			VADD2(model_pt, work_point, diff);
 			if (s->global_editing_state == ST_S_EDIT)
 			    bu_vls_printf(&cmd, "p %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
 			else
@@ -346,11 +354,11 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 		    else {
 			if (grid->snap) {
 			    /* accumulate distance mouse moved since starting to translate */
-			    dm_mouse_dx += dx;
-			    dm_mouse_dy += dy;
+			    mouse_dx += dx;
+			    mouse_dy += dy;
 
-			    snap_view_to_grid(s, dm_mouse_dx / (fastf_t)width * 2.0,
-					      -dm_mouse_dy / (fastf_t)height / aspect * 2.0);
+			    snap_view_to_grid(s, mouse_dx / (fastf_t)width * 2.0,
+				      -mouse_dy / (fastf_t)height / aspect * 2.0);
 
 			    mged_variables->mv_coords = save_coords;
 			    goto handled;
@@ -691,8 +699,8 @@ motion_event_handler(struct mged_state *s, XMotionEvent *xmotion)
 
  handled:
     bu_vls_free(&cmd);
-    dm_omx = mx;
-    dm_omy = my;
+    pointer_x = mx;
+    pointer_y = my;
 }
 #endif /* HAVE_X11_XLIB_H */
 

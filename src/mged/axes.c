@@ -33,7 +33,7 @@
 #include "rt/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 /* local sp_hook function */
 static void ax_set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
@@ -78,16 +78,18 @@ struct bu_structparse axes_vparse[] = {
 static void
 ax_set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
 		  const char *UNUSED(name),
-		  void *UNUSED(base),
+		  void *base,
 		  const char *UNUSED(value),
 		  void *data)
 {
     struct mged_state *s = (struct mged_state *)data;
+    struct _axes_state *changed_state = (struct _axes_state *)base;
     MGED_CK_STATE(s);
-    for (size_t i = 0; i < BU_PTBL_LEN(&active_dm_set); i++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, i);
-	if (m_dmp->dm_axes_state == axes_state) {
-	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
+    for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, i);
+	if (m_dmp->display_axes_state == changed_state) {
+	    m_dmp->display_axes_state_dirty = 1;
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
 }

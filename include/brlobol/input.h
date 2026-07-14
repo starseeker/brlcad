@@ -34,11 +34,7 @@ typedef enum BRLObolInputEventType {
     BRLOBOL_INPUT_RESIZE = 7,
     BRLOBOL_INPUT_FOCUS = 8,
     BRLOBOL_INPUT_CLOSE = 9,
-    BRLOBOL_INPUT_EXPOSE = 10,
-
-    /* Source-compatible names for the original host-only event API. */
-    BRLOBOL_INPUT_KEY = BRLOBOL_INPUT_KEY_PRESS,
-    BRLOBOL_INPUT_POINTER = BRLOBOL_INPUT_POINTER_MOTION
+    BRLOBOL_INPUT_EXPOSE = 10
 } BRLObolInputEventType;
 
 typedef enum BRLObolInputModifier {
@@ -75,7 +71,11 @@ typedef enum BRLObolInputAction {
     BRLOBOL_ACTION_VIEW_ADJUST = 22,
     BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE = 23,
     BRLOBOL_ACTION_VIEW_SECONDARY_RELEASE = 24,
-    BRLOBOL_ACTION_VIEW_CENTER_RELEASE = 25
+    BRLOBOL_ACTION_VIEW_CENTER_RELEASE = 25,
+    /* Marks the start of a semantic primary-button pan gesture. */
+    BRLOBOL_ACTION_VIEW_PAN_BEGIN = 26,
+    /* Marks the end of a semantic primary-button pan gesture. */
+    BRLOBOL_ACTION_VIEW_PAN_END = 27
 } BRLObolInputAction;
 
 enum {
@@ -138,6 +138,13 @@ __BEGIN_DECLS
 /** The standard BRL-CAD view binding profile. */
 BRLOBOL_EXPORT const BRLObolInputProfile *
 brlobol_input_default_view_profile(void);
+
+/**
+ * Shared keyboard-only view bindings for hosts whose application retains
+ * pointer gestures such as edit, selection, or constrained navigation.
+ */
+BRLOBOL_EXPORT const BRLObolInputProfile *
+brlobol_input_keyboard_view_profile(void);
 
 __END_DECLS
 

@@ -36,11 +36,11 @@
 #include "bu/file.h"
 #include "bu/log.h"
 #include "bu/vls.h"
+#include "bv.h"
 #include "ged/db_index.h"
 #include "ged/draw.h"
 #include "ged/selection_state.h"
 #include "qtcad/QgGeomImport.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgPluginCommands.h"
 #include "qtcad/QgPluginInterfaces.h"
@@ -130,17 +130,17 @@ qged_apply_redraw_transaction(struct ged *gedp)
     return ret;
 }
 
-static qg_legacy_view *
-qged_current_view(QgEdMainWindow *w)
+static struct bv_context *
+qged_current_view_context(QgEdMainWindow *w)
 {
     QgView *display = w ? w->CurrentDisplay() : NULL;
-    return display ? display->view() : NULL;
+    return display ? display->viewContext() : NULL;
 }
 
-static qg_legacy_view *
-qged_session_active_view(QgModel *mdl)
+static struct bv_context *
+qged_session_active_view_context(QgModel *mdl)
 {
-    return (mdl && mdl->session()) ? mdl->session()->activeView() : NULL;
+    return (mdl && mdl->session()) ? mdl->session()->activeViewContext() : NULL;
 }
 
 int
@@ -351,13 +351,11 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     //     OpenGL is unavailable.  It presents Obol/Coin output through an
     //     offscreen render/readback path.
     //
-    // The QgEdMainWindow constructor expects a QgView_* canvas type constant
-    // (QgView_GL or QgView_SW), not a raw swrast_mode boolean.  The
-    // translation is done here so that the policy is stated in one place.
+    // Translate the command-line policy once into the typed canvas choice.
 #ifdef BRLCAD_OPENGL
-    int canvas_type = swrast_mode ? QgView_SW : QgView_GL;
+    QgViewType canvas_type = swrast_mode ? QgViewType::SW : QgViewType::GL;
 #else
-    int canvas_type = QgView_SW; /* No OpenGL support - offscreen presentation only */
+    QgViewType canvas_type = QgViewType::SW;
 #endif
 
     // Create the windows
@@ -368,7 +366,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     struct ged *gedp = mdl->ged();
 
     // Let GED know to use the QgQuadView view as its current view
-    mdl->session()->setActiveView(qged_current_view(w));
+    mdl->session()->setActiveViewContext(qged_current_view_context(w));
     ged_diagnostic_line_layer_handler_set(gedp,
 	    &qged_line_layer_overlay_handler, (void *)this);
     ged_diagnostic_hud_label_handler_set(gedp,
@@ -486,7 +484,7 @@ QgEdApp::do_quad_view_change(QgView *cv)
 {
     QTCAD_SLOT("QgEdApp::do_quad_view_change", 1);
     if (mdl && mdl->session())
-	mdl->session()->setActiveView(cv ? cv->view() : NULL);
+	mdl->session()->setActiveViewContext(cv ? cv->viewContext() : NULL);
     if (w)
 	w->setActiveView(cv);
     if (mdl && mdl->ged() && cv)
@@ -596,10 +594,11 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
     select_hash = ged_selection_state_hash(gedp, nullptr);
 
     /* Set the local unit conversions */
-    if (gedp->dbip) {
-	qg_legacy_view_unit_conversion_set(qged_session_active_view(mdl),
-	    gedp->dbip->dbi_local2base,
-	    gedp->dbip->dbi_base2local);
+    void *view_ctx = qged_session_active_view_context(mdl);
+    if (gedp->dbip && view_ctx) {
+	bv_unit_conversion_set(bv_context_view(
+	    static_cast<struct bv_context *>(view_ctx)),
+	    gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
     }
 
     if (!tmp_av.size()) {
@@ -645,8 +644,7 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 	// Handle any necessary redrawing.
 	view_flags = qged_view_update(gedp);
 
-	/* Check if the ged_exec call changed either the display manager or
-	 * the view settings - in either case we'll need to redraw */
+	/* Redraw when the GED command changes visible view state. */
 	// TODO - there may be some utility in checking only the camera or only
 	// the who list, since we can set different update flags for each case...
 	// that's a complexity vs. performance trade-off determination
@@ -857,7 +855,9 @@ QgEdApp::element_selected(QgToolPaletteElement *el)
 
     if (el->use_event_filter)
 	curr_view->add_event_filter(controls);
-    qg_legacy_view_dimensions_set(qged_session_active_view(mdl),
+    void *view_ctx = qged_session_active_view_context(mdl);
+    if (view_ctx)
+	bv_context_dimensions_set(static_cast<struct bv_context *>(view_ctx),
 	    curr_view->width(), curr_view->height());
 }
 

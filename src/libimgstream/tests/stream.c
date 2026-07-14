@@ -21,6 +21,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include <string.h>
 
 #include "bu/log.h"
@@ -192,6 +194,7 @@ test_icv_conversion(void)
 int
 main(int ac, char **av)
 {
+    bu_setprogname(av[0]);
     (void)ac;
     (void)av;
 

@@ -84,16 +84,21 @@ if(HAVE_QT_IPC_DEPS)
 endif(HAVE_QT_IPC_DEPS)
 
 # -------------------------------------------------------------------
-# test_qged_ert: full qged+ert integration under Xvfb (Phase 3+5)
-# Requires qged, xvfb-run, and xdotool.  Skips gracefully if absent.
+# test_qged_ert: full qged+ert integration under a CTest-owned Xvfb (Phase 3+5)
+# The launcher maps absent/broken X infrastructure to CTest's standard skip
+# code.  A QGED or ERT failure after the display probe remains a failure.
 # -------------------------------------------------------------------
 find_program(XVFB_RUN xvfb-run)
-find_program(XDOTOOL  xdotool)
 
-if(TARGET qged AND XVFB_RUN AND XDOTOOL)
+if(TARGET qged)
   configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_ert.sh
     ${CMAKE_CURRENT_BINARY_DIR}/test_qged_ert.sh
+    COPYONLY
+  )
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/run_qged_ert_xvfb.sh
+    ${CMAKE_CURRENT_BINARY_DIR}/run_qged_ert_xvfb.sh
     COPYONLY
   )
   file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/test_qged_ert.sh
@@ -101,14 +106,20 @@ if(TARGET qged AND XVFB_RUN AND XDOTOOL)
                 GROUP_READ GROUP_EXECUTE
                 WORLD_READ WORLD_EXECUTE
   )
+  file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/run_qged_ert_xvfb.sh
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                GROUP_READ GROUP_EXECUTE
+                WORLD_READ WORLD_EXECUTE
+  )
   brlcad_add_test(
     NAME    regress-qged-ert
-    COMMAND ${XVFB_RUN} -a -s "-screen 0 1280x960x24"
-            ${CMAKE_CURRENT_BINARY_DIR}/test_qged_ert.sh
+    COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_qged_ert_xvfb.sh
+            ${XVFB_RUN} ${CMAKE_CURRENT_BINARY_DIR}/test_qged_ert.sh
   )
   set_tests_properties(regress-qged-ert PROPERTIES
     ENVIRONMENT "QGED_BIN=$<TARGET_FILE:qged>;RT_BIN=$<TARGET_FILE:rt>;TEST_DB=${CMAKE_BINARY_DIR}/share/db/boolean-ops.g;LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/lib;VERBOSE=1"
     TIMEOUT 120
+    SKIP_RETURN_CODE 77
   )
   brlcad_regression_test(regress-qged-ert "qged;rt" STAND_ALONE TEST_DEFINED)
   distclean(${CMAKE_CURRENT_BINARY_DIR}/regress-qged-ert.log)
@@ -119,6 +130,7 @@ cmakefiles(
   regress_ipc.cpp
   test_qt_ipc.cpp
   test_qged_ert.sh
+  run_qged_ert_xvfb.sh
 )
 
 # Local Variables:

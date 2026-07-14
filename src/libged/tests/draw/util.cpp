@@ -27,9 +27,11 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <chrono>
 #include <stdio.h>
 #include <inttypes.h>
 #include <fstream>
+#include <thread>
 
 #include <bu.h>
 #include <brlobol/init.h>
@@ -157,6 +159,32 @@ draw_test_obol_view_init(struct ged *gedp, void *view_ctx, int width, int height
 	BRLCAD_OK : BRLCAD_ERROR;
 }
 
+extern "C" int
+draw_test_obol_progressive_drain(struct ged *gedp, void *view_ctx,
+	unsigned int max_attempts, unsigned int sleep_milliseconds)
+{
+    if (!gedp || !view_ctx || !max_attempts)
+	return 0;
+
+    BRLObolViewController *controller =
+	static_cast<BRLObolViewController *>(
+	    ged_draw_obol_controller_opaque_for_view(view_ctx));
+    if (!controller)
+	return 0;
+
+    for (unsigned int attempt = 0; attempt < max_attempts; attempt++) {
+	BRLObolProgressiveStatus status;
+	(void)controller->advanceProgressiveWork(NULL, &status);
+	if (!status.hasMore)
+	    return 1;
+	if (sleep_milliseconds) {
+	    std::this_thread::sleep_for(std::chrono::milliseconds(
+		sleep_milliseconds));
+	}
+    }
+    return 0;
+}
+
 static void
 draw_test_obol_debug_dump_node(int id, int source_index, SoNode *node,
 			       int depth, int child_index)
@@ -275,7 +303,12 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 	}
     }
 
-    SoBRLSceneController *scene = controller->getSceneController();
+    /* Endpoint-only controllers render the GED-owned shared root rather than
+     * their empty private scene.  Report the scene that supplies autoview
+     * bounds and database geometry. */
+    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	scene = controller->getSceneController();
     if (!scene)
 	return;
 
@@ -484,7 +517,9 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
     SoOffscreenRenderer renderer(manager, region);
     renderer.setComponents(SoOffscreenRenderer::RGB);
     renderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
-    if (!controller->getViewport()->render(&renderer))
+    /* Capture the composed presentation graph, including framebuffer layers.
+     * Rendering only the viewport scene drops retained underlay/overlay nodes. */
+    if (!renderer.render(controller->getRenderRoot()))
 	return -1;
 
     const unsigned char *buffer = renderer.getBuffer();

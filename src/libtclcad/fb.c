@@ -17,7 +17,7 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @addtogroup libstruct fb */
+/** @addtogroup libtclcad */
 /** @{ */
 /**
  *
@@ -42,10 +42,10 @@
 #include "bu/getopt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
-#include "../libdm/include/private.h"
-#include "dm.h"
-#include "dm/fbserv_legacy.h"
+#include "brlobol/display_endpoint.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
+#include "imgstream/fbserv.h"
 #include "tclcad.h"
 #include "./tclcad_private.h"
 #include "./view/view.h"
@@ -56,56 +56,82 @@ to_fbs_callback(void *clientData)
     to_refresh_view(clientData);
 }
 
+static void
+tclcad_fbs_error(Tcl_Interp *interp, const char *message)
+{
+    if (!interp)
+	return;
+
+    Tcl_Obj *obj = Tcl_GetObjResult(interp);
+    if (Tcl_IsShared(obj))
+	obj = Tcl_DuplicateObj(obj);
+    Tcl_AppendStringsToObj(obj, message, (char *)NULL);
+    Tcl_SetObjResult(interp, obj);
+}
+
+
+/* Bind the one GED session stream to the requested view's Obol endpoint.  Factory
+ * instances such as TkObolEndpointHost are intentionally opaque and are not
+ * BRLObolWindowHost instances.  The libged bridge owns its generic image
+ * host and publishes that stream through the endpoint capture provider.
+ * TclCAD owns only notifier callbacks. */
+static int
+tclcad_obol_framebuffer_bind(void *view_ctx, Tcl_Interp *interp)
+{
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
+    if (!tvd || !tvd->gedp)
+	return TCL_ERROR;
+
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    if (!endpoint)
+	return TCL_OK;
+
+    if (ged_draw_obol_framebuffer_backend_ensure_for_view(tvd->gedp,
+	view_ctx) != BRLCAD_OK) {
+	tclcad_fbs_error(interp,
+	    "openfb: unable to attach the Obol framebuffer stream\n");
+	return TCL_ERROR;
+    }
+
+    struct fbserv_obj *fbsp = tvd->gedp->ged_fbs;
+    if (!fbsp)
+	return TCL_ERROR;
+    fbsp->fbs_callback = to_fbs_callback;
+    fbsp->fbs_clientData = view_ctx;
+    fbsp->fbs_interp = interp;
+    tclcad_fbserv_set_transport(fbsp);
+    return TCL_OK;
+}
+
 
 int
 to_close_fbs(void *view_ctx)
 {
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
-    if (!tvd)
+    if (!tvd || !tvd->gedp)
 	return TCL_ERROR;
 
-    struct fb *fbp = fbs_legacy_framebuffer(&tvd->gdv_fbs);
-    if (fbp == FB_NULL)
+    struct fbserv_obj *fbsp = tvd->gedp->ged_fbs;
+    if (!fbsp || fbsp->fbs_clientData != view_ctx)
 	return TCL_OK;
 
-    fb_flush(fbp);
-    fb_close_existing(fbp);
-    dm_fbserv_set_framebuffer(&tvd->gdv_fbs, FB_NULL);
+    ged_draw_obol_framebuffer_release(tvd->gedp);
+    fbsp->fbs_callback = NULL;
+    fbsp->fbs_clientData = NULL;
+    fbsp->fbs_interp = NULL;
 
     return TCL_OK;
 }
 
 
 /*
- * Open/activate the display managers framebuffer.
+ * Open or rebind the view's endpoint-owned Obol framebuffer stream.
  */
 int
 to_open_fbs(void *view_ctx, Tcl_Interp *interp)
 {
-    /* already open */
-    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
-    if (!tvd)
-	return TCL_ERROR;
-
-    if (fbs_legacy_framebuffer(&tvd->gdv_fbs) != FB_NULL)
-	return TCL_OK;
-
-    dm_fbserv_set_framebuffer(&tvd->gdv_fbs, FB_NULL);
-
-    if (fbs_legacy_framebuffer(&tvd->gdv_fbs) == FB_NULL) {
-	Tcl_Obj *obj;
-
-	obj = Tcl_GetObjResult(interp);
-	if (Tcl_IsShared(obj))
-	    obj = Tcl_DuplicateObj(obj);
-
-	Tcl_AppendStringsToObj(obj, "openfb: failed to allocate framebuffer memory\n", (char *)NULL);
-
-	Tcl_SetObjResult(interp, obj);
-	return TCL_ERROR;
-    }
-
-    return TCL_OK;
+    return tclcad_obol_framebuffer_bind(view_ctx, interp);
 }
 
 
@@ -140,13 +166,36 @@ to_set_fb_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
-    if (!tvd)
+    if (!tclcad_view_data_from_view_ctx(view_ctx))
 	return BRLCAD_ERROR;
 
-    /* Get fb mode */
+    /* TclCAD's public command ordering differs from libbv's historical
+     * ordering: 0=off, 1=underlay, 2=interlay, 3=overlay.  Keep the
+     * endpoint as the rendering authority and translate only at this API. */
     if (argc == 2) {
-	bu_vls_printf(gedp->ged_result_str, "%d", tvd->gdv_fbs.fbs_mode);
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (ged_view_context_display_property_get(view_ctx,
+		"composition.framebuffer.mode", &value) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK || !value.string_value) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"View has no Obol framebuffer composition policy");
+	    return BRLCAD_ERROR;
+	}
+	if (BU_STR_EQUAL(value.string_value, "underlay"))
+	    mode = TCLCAD_OBJ_FB_MODE_UNDERLAY;
+	else if (BU_STR_EQUAL(value.string_value, "interlay"))
+	    mode = TCLCAD_OBJ_FB_MODE_INTERLAY;
+	else if (BU_STR_EQUAL(value.string_value, "overlay"))
+	    mode = TCLCAD_OBJ_FB_MODE_OVERLAY;
+	else if (BU_STR_EQUAL(value.string_value, "off"))
+	    mode = TCLCAD_OBJ_FB_MODE_OFF;
+	else {
+	    bu_vls_printf(gedp->ged_result_str,
+		"View has an invalid Obol framebuffer composition policy");
+	    return BRLCAD_ERROR;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%d", mode);
 	return BRLCAD_OK;
     }
 
@@ -161,7 +210,21 @@ to_set_fb_mode(struct ged *gedp,
     else if (TCLCAD_OBJ_FB_MODE_OVERLAY < mode)
 	mode = TCLCAD_OBJ_FB_MODE_OVERLAY;
 
-    tvd->gdv_fbs.fbs_mode = mode;
+    const char *composition = mode == TCLCAD_OBJ_FB_MODE_UNDERLAY ?
+	"underlay" : mode == TCLCAD_OBJ_FB_MODE_INTERLAY ? "interlay" :
+	mode == TCLCAD_OBJ_FB_MODE_OVERLAY ? "overlay" : "off";
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    value.string_value = composition;
+    if (ged_view_context_display_property_set(view_ctx,
+	    "composition.framebuffer.mode", &value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "Unable to set Obol framebuffer composition policy");
+	return BRLCAD_ERROR;
+    }
+
     to_refresh_view(view_ctx);
 
     return BRLCAD_OK;
@@ -196,38 +259,39 @@ to_listen(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
-    if (!tvd)
-	return BRLCAD_ERROR;
-
-    if (fbs_legacy_framebuffer(&tvd->gdv_fbs) == FB_NULL) {
-	bu_vls_printf(gedp->ged_result_str, "%s listen: framebuffer not open!\n", argv[0]);
+    if (!tclcad_view_data_from_view_ctx(view_ctx) ||
+	to_open_fbs(view_ctx, (Tcl_Interp *)gedp->ged_interp) != TCL_OK ||
+	!gedp->ged_fbs ||
+	!fbs_framebuffer_backend_installed(gedp->ged_fbs)) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "%s listen: Obol framebuffer stream is unavailable\n", argv[0]);
 	return BRLCAD_ERROR;
     }
+    struct fbserv_obj *fbsp = gedp->ged_fbs;
 
     /* return the port number */
     if (argc == 2) {
-	const char *ipc_env = fbs_ipc_child_addr_env(&tvd->gdv_fbs);
+	const char *ipc_env = fbs_ipc_child_addr_env(fbsp);
 	if (ipc_env) {
 	    const char *eq = strchr(ipc_env, '=');
 	    const char *addr = eq ? eq + 1 : ipc_env;
 	    bu_vls_printf(gedp->ged_result_str, "%s", addr);
 	} else {
-	    bu_vls_printf(gedp->ged_result_str, "%d", fbs_listener_port(&tvd->gdv_fbs));
+	    bu_vls_printf(gedp->ged_result_str, "%d", fbs_listener_port(fbsp));
 	}
 	return BRLCAD_OK;
     }
 
     if (argc == 3) {
 	if (BU_STR_EQUAL(argv[2], "ipc")) {
-	    if (fbs_listener_port(&tvd->gdv_fbs) >= 0)
-		fbs_close(&tvd->gdv_fbs);
-	    if (tclcad_listen_ipc(&tvd->gdv_fbs, (Tcl_Interp *)gedp->ged_interp) != BRLCAD_OK) {
+	    if (fbs_can_close(fbsp))
+		fbs_close(fbsp);
+	    if (tclcad_listen_ipc(fbsp, (Tcl_Interp *)gedp->ged_interp) != BRLCAD_OK) {
 		bu_vls_printf(gedp->ged_result_str, "listen: failed to start IPC listener\n");
 		return BRLCAD_ERROR;
 	    }
 	    {
-		const char *ipc_env = fbs_ipc_child_addr_env(&tvd->gdv_fbs);
+		const char *ipc_env = fbs_ipc_child_addr_env(fbsp);
 		if (ipc_env) {
 		    const char *eq = strchr(ipc_env, '=');
 		    const char *addr = eq ? eq + 1 : ipc_env;
@@ -245,20 +309,22 @@ to_listen(struct ged *gedp,
 	}
 
 	if (port >= 0) {
-	    // Set up fbo_fbs callbacks, then call fbs_open
-	    tclcad_fbserv_set_transport(&tvd->gdv_fbs);
-	    fbs_open(&tvd->gdv_fbs, port);
+	    if (fbs_open(fbsp, port) != BRLCAD_OK) {
+		bu_vls_printf(gedp->ged_result_str,
+		    "listen: failed to open framebuffer listener\n");
+		return BRLCAD_ERROR;
+	    }
 	} else {
-	    fbs_close(&tvd->gdv_fbs);
+	    fbs_close(fbsp);
 	}
 	{
-	    const char *ipc_env = fbs_ipc_child_addr_env(&tvd->gdv_fbs);
+	    const char *ipc_env = fbs_ipc_child_addr_env(fbsp);
 	    if (ipc_env) {
 		const char *eq = strchr(ipc_env, '=');
 		const char *addr = eq ? eq + 1 : ipc_env;
 		bu_vls_printf(gedp->ged_result_str, "%s", addr);
 	    } else {
-		bu_vls_printf(gedp->ged_result_str, "%d", fbs_listener_port(&tvd->gdv_fbs));
+		bu_vls_printf(gedp->ged_result_str, "%d", fbs_listener_port(fbsp));
 	    }
 	}
 	return BRLCAD_OK;

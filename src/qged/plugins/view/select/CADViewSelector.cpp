@@ -42,15 +42,14 @@
 #include "ged.h"
 #include "ged/selection_state.h"
 
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSelectFilter.h"
 #include "qtcad/QgView.h"
 #include "./CADViewSelector.h"
 
-static qg_legacy_view *
+static void *
 qged_selector_view(const QgPluginContext *ctx)
 {
-    return ctx ? ctx->activeView() : nullptr;
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 static QgView *
@@ -393,7 +392,7 @@ CADViewSelector::eventFilter(QObject *o, QEvent *e)
     QgView *display = qged_view_from_event_object(o);
     if (!display && m_ctx)
 	display = m_ctx->getViewWidget();
-    qg_legacy_view *v = display ? display->view() : qged_selector_view(m_ctx);
+    void *v = display ? display->viewContext() : qged_selector_view(m_ctx);
     if (!v)
 	return false;
 

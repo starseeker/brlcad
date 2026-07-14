@@ -31,10 +31,11 @@ x 5.  temporary objects (nirt shotline, rtcheck/gqa overlap visuals, gdiff outpu
     legacy plot/vlist work scoped to explicit file/export compatibility paths.
 
 
-x 7.  color controls (background in particular) settable in MGED...
+x 7.  color controls (background in particular) settable through endpoint policy.
 
-    got background color setting supported via dm bg command - probably other things to set, will
-    come back to that later...
+    Background, lighting, transparency, depth testing, z-clip, and clip bounds
+    use the typed Obol endpoint properties.  QGED settings and the GED `dm`
+    command are clients of that common policy surface.
 
 x 8.  Fix fps meter drawing - should either be lower left, or appended to status line if that's enabled
 

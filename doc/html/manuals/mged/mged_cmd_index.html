@@ -277,7 +277,6 @@
                 <li class="menu"><a href="#red">red</a></li>
                 <li class="menu"><a href="#refresh">refresh</a></li>
 
-                <li class="menu"><a href="#regdebug">regdebug</a></li>
                 <li class="menu"><a href="#regdef">regdef</a></li>
                 <li class="menu"><a href="#regions">regions</a></li>
                 <li class="menu"><a href="#release">release</a></li>
@@ -5382,23 +5381,6 @@
 
     <hr class="c3">
     <dl>
-      <dt class="c8"><span class="c6"><b><a name="regdebug" id=
-                                            "regdebug"></a>regdebug</b> [<i>debug_level</i>]</span></dt>
-      <dd class="c9"><span class="c6">The "regdebug" command with no
-          options toggles the display manager debug flag. If a
-          <i>debug_level</i> is supplied, then the display manager debug
-          flag is set to that value.</span></dd>
-      <dd></dd>
-      <dt class="c8"><span class="c6">Examples:</span></dt>
-      <dd></dd>
-      <dd class="c9"><span class="c6"><tt>mged&gt; </tt>
-          <b>regdebug</b></span></dd>
-    </dl>
-    <p><span class="c6">-- Toggle the display manager debug
-        flag.</span></p>
-
-    <hr class="c3">
-    <dl>
       <dt class="c8"><span class="c6"><b><a name="regdef" id=
                                             "regdef"></a>regdef</b> <i>item</i> [<i>air</i> [<i>los</i>
           [<i>material_code</i>]]]</span></dt>
@@ -6664,8 +6646,6 @@
             <i>combination</i> tree above it). Note that this only
             affects primitive edit operations that use the <i>p</i>
             command.</span></span></li>
-      <li><span class="c6">dlist -- if nonzero, use display
-          lists.</span></li>
       <li><span class="c6">use_air -- if nonzero, use air while
           raytracing.</span></li>
       <li><span class="c6">listen -- if nonzero, listen for
@@ -7878,7 +7858,7 @@
           between two or more display managers, any change to that
           resource is seen only in the sharing display managers. The
           supported resource types are: ad (ADC), ax (Axes), c (Color
-          Schemes), d (Display Lists), g (Grid), m (Menu), r (Rubber
+          Schemes), g (Grid), m (Menu), r (Rubber
           Band), vi (View), and var (MGED Variables).</span></dd>
       <dd></dd>
       <dt class="c8"><span class="c16">Examples:</span></dt>

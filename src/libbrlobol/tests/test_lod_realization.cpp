@@ -7,6 +7,10 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
+#include "bu/str.h"
+
 #include "brlobol/lod_realization.h"
 
 #include <Inventor/SbBox.h>
@@ -60,14 +64,14 @@ test_key_determinism(void)
     BRLObolLodCacheKey key_a = brlobol_lod_cache_key(a);
     BRLObolLodCacheKey key_b = brlobol_lod_cache_key(b);
     if (!key_a.isValid() || !key_b.isValid() ||
-	strcmp(key_a.value.getString(), key_b.value.getString()) != 0) {
+	bu_strcmp(key_a.value.getString(), key_b.value.getString()) != 0) {
 	printf("FAIL: LoD cache key not deterministic across parameter order\n");
 	return 1;
     }
 
     b.viewRevision++;
     BRLObolLodCacheKey key_c = brlobol_lod_cache_key(b);
-    if (strcmp(key_a.value.getString(), key_c.value.getString()) == 0) {
+    if (bu_strcmp(key_a.value.getString(), key_c.value.getString()) == 0) {
 	printf("FAIL: LoD cache key did not include view revision\n");
 	return 1;
     }
@@ -237,7 +241,7 @@ test_stage_results(void)
 	result.providerStatus != BRLOBOL_LOD_PROVIDER_READY ||
 	result.terminal ||
 	result.dependencies.size() != 1 ||
-	strcmp(result.dependencies[0].objectPath.getString(),
+	bu_strcmp(result.dependencies[0].objectPath.getString(),
 	       "/all.g/child.bot") != 0 ||
 	!brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: LoD directory stage result\n");
@@ -252,7 +256,7 @@ test_stage_results(void)
     if (result.resultKind != BRLOBOL_LOD_RESULT_ATTRIBUTES ||
 	result.qualityTier != BRLOBOL_LOD_QUALITY_ATTRIBUTES ||
 	result.attributes.size() != 1 ||
-	strcmp(result.attributes[0].name.getString(), "display.color") != 0 ||
+	bu_strcmp(result.attributes[0].name.getString(), "display.color") != 0 ||
 	!brlobol_lod_result_matches_request(result, request)) {
 	printf("FAIL: LoD attributes stage result\n");
 	return 1;
@@ -306,7 +310,7 @@ test_stage_results(void)
     if (result.dependencies.size() != 1 ||
 	!result.dependencies[0].optional ||
 	result.attributes.size() != 1 ||
-	strcmp(result.attributes[0].value.getString(), "wire") != 0) {
+	bu_strcmp(result.attributes[0].value.getString(), "wire") != 0) {
 	printf("FAIL: LoD result append helpers\n");
 	return 1;
     }
@@ -317,6 +321,7 @@ test_stage_results(void)
 int
 main(int argc, char **argv)
 {
+    bu_setprogname(argv[0]);
     if (argc != 1) {
 	printf("Usage: %s\n", argv[0]);
 	return 1;

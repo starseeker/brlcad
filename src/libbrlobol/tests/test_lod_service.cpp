@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol.h"
 #include "brlobol/database_source.h"
 #include "brlobol/lod_service.h"
@@ -121,7 +123,7 @@ provider_param_count(const BRLObolLodRequest &request, const char *name)
 	return 0;
 
     for (size_t i = 0; i < request.providerParams.size(); i++) {
-	if (strcmp(request.providerParams[i].name.getString(), name) == 0)
+	if (bu_strcmp(request.providerParams[i].name.getString(), name) == 0)
 	    count++;
     }
 
@@ -625,7 +627,7 @@ test_staged_payload_delivery(void)
 	results[0].resultKind != BRLOBOL_LOD_RESULT_ATTRIBUTES ||
 	results[0].qualityTier != BRLOBOL_LOD_QUALITY_ATTRIBUTES ||
 	results[0].attributes.size() != 1 ||
-	strcmp(results[0].attributes[0].value.getString(), "proxy") != 0 ||
+	bu_strcmp(results[0].attributes[0].value.getString(), "proxy") != 0 ||
 	!brlobol_lod_result_matches_request(results[0], task.request)) {
 	printf("FAIL: LoD service did not deliver staged payload result\n");
 	return 1;
@@ -786,6 +788,104 @@ test_result_ready_subscription(void)
 	std::lock_guard<std::mutex> lock(readyContext.mutex);
 	if (readyContext.wakeups != wakeupsAfterUnsubscribe) {
 	    printf("FAIL: LoD result-ready unsubscribe did not suppress callbacks\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    service.stop();
+    return 0;
+}
+
+struct SelfUnsubscribeContext {
+    std::mutex mutex;
+    std::condition_variable cv;
+    BRLObolLodSubscriberId subscriber;
+    int calls;
+
+    SelfUnsubscribeContext(void) : subscriber(0), calls(0)
+    {
+    }
+};
+
+static void
+self_unsubscribe_result_ready(BRLObolLodService *service, void *userData)
+{
+    SelfUnsubscribeContext *context =
+	static_cast<SelfUnsubscribeContext *>(userData);
+    if (!context || !service)
+	return;
+
+    {
+	std::lock_guard<std::mutex> lock(context->mutex);
+	context->calls++;
+	context->cv.notify_all();
+    }
+    service->unsubscribeResultReady(context->subscriber);
+}
+
+static int
+test_result_ready_self_unsubscribe(void)
+{
+    BRLObolLodService service;
+    ServiceTestContext serviceContext;
+    SelfUnsubscribeContext callbackContext;
+    TaskData firstData{&serviceContext, 121};
+    TaskData secondData{&serviceContext, 122};
+
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD service did not start for self-unsubscribe test\n");
+	return 1;
+    }
+
+    callbackContext.subscriber = service.subscribeResultReady(
+	self_unsubscribe_result_ready, &callbackContext);
+    if (callbackContext.subscriber == 0) {
+	printf("FAIL: LoD service did not create self-unsubscribe subscription\n");
+	service.stop();
+	return 1;
+    }
+
+    const uint64_t generation = service.beginGeneration();
+    BRLObolLodTask first;
+    first.generation = generation;
+    first.request = make_request("/ready-self-unsubscribe-first.bot");
+    first.realize = ready_task;
+    first.realizeData = &firstData;
+    if (service.submit(first) == 0 || wait_for_settled(service, 1)) {
+	printf("FAIL: LoD service did not deliver self-unsubscribe result\n");
+	service.stop();
+	return 1;
+    }
+
+    {
+	std::unique_lock<std::mutex> lock(callbackContext.mutex);
+	if (!callbackContext.cv.wait_for(lock, std::chrono::seconds(2),
+				 [&callbackContext] {
+				     return callbackContext.calls == 1;
+				 })) {
+	    printf("FAIL: LoD self-unsubscribe callback did not return\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    std::vector<BRLObolLodResult> results;
+    service.drainResults(results);
+    BRLObolLodTask second;
+    second.generation = generation;
+    second.request = make_request("/ready-self-unsubscribe-second.bot");
+    second.realize = ready_task;
+    second.realizeData = &secondData;
+    if (service.submit(second) == 0 || wait_for_settled(service, 1)) {
+	printf("FAIL: LoD service did not run after self-unsubscribe\n");
+	service.stop();
+	return 1;
+    }
+    {
+	std::lock_guard<std::mutex> lock(callbackContext.mutex);
+	if (callbackContext.calls != 1) {
+	    printf("FAIL: LoD self-unsubscribe callback was invoked again\n");
 	    service.stop();
 	    return 1;
 	}
@@ -1122,6 +1222,178 @@ test_debug_delay_cancellation(void)
     return 0;
 }
 
+struct BlockingCacheWriteData {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool started;
+    bool release;
+    int calls;
+    std::vector<int> values;
+
+    BlockingCacheWriteData(void) : started(false), release(false), calls(0)
+    {
+    }
+};
+
+static void
+blocking_cache_write(const BRLObolLodResult &result, void *userData)
+{
+    BlockingCacheWriteData *data =
+	static_cast<BlockingCacheWriteData *>(userData);
+
+    std::unique_lock<std::mutex> lock(data->mutex);
+    data->started = true;
+    data->calls++;
+    data->values.push_back((int)result.counts.faceCount);
+    data->cv.notify_all();
+    while (!data->release)
+	data->cv.wait(lock);
+}
+
+static int
+wait_for_blocking_cache_write_started(BlockingCacheWriteData &data)
+{
+    std::unique_lock<std::mutex> lock(data.mutex);
+    if (!data.cv.wait_for(lock, std::chrono::seconds(2),
+			  [&data] { return data.started; })) {
+	printf("FAIL: LoD blocking cache write did not start\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+wait_for_cache_write_count(BRLObolLodService &service, size_t expected)
+{
+    for (int i = 0; i < 400; i++) {
+	if (service.queuedCacheWriteCountForDiagnostics() >= expected)
+	    return 0;
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    printf("FAIL: LoD cache-write queue did not reach %zu: cache=%zu\n",
+	   expected, service.queuedCacheWriteCountForDiagnostics());
+    return 1;
+}
+
+static int
+test_cancelled_cache_write_not_persisted(void)
+{
+    BRLObolLodService service;
+    ServiceTestContext context;
+    BlockingCacheWriteData blockingWrite;
+    TaskData firstData{&context, 401};
+    TaskData cancelledData{&context, 402};
+    TaskData finalData{&context, 403};
+
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD service did not start for cache cancellation test\n");
+	return 1;
+    }
+
+    const uint64_t cancelledGeneration = service.beginGeneration();
+    BRLObolLodTask first;
+    first.generation = cancelledGeneration;
+    first.request = make_request("/cache-first.bot");
+    first.realize = ready_task;
+    first.realizeData = &firstData;
+    first.publishResult = FALSE;
+    first.writeCache = TRUE;
+    first.cacheWrite = blocking_cache_write;
+    first.cacheWriteData = &blockingWrite;
+    if (service.submit(first) == 0 ||
+	wait_for_blocking_cache_write_started(blockingWrite)) {
+	printf("FAIL: LoD service did not start the cache-write blocker\n");
+	service.stop();
+	return 1;
+    }
+
+    BRLObolLodTask cancelled = first;
+    cancelled.request = make_request("/cache-cancelled.bot");
+    cancelled.realizeData = &cancelledData;
+    cancelled.cacheWrite = cache_write;
+    cancelled.cacheWriteData = &context;
+    if (service.submit(cancelled) == 0 ||
+	wait_for_cache_write_count(service, 2)) {
+	printf("FAIL: LoD service did not queue the cancellable cache write\n");
+	{
+	    std::lock_guard<std::mutex> lock(blockingWrite.mutex);
+	    blockingWrite.release = true;
+	    blockingWrite.cv.notify_all();
+	}
+	service.stop();
+	return 1;
+    }
+
+    service.cancelGeneration(cancelledGeneration);
+    if (!service.isGenerationCancelled(cancelledGeneration) ||
+	service.queuedCacheWriteCountForDiagnostics() != 1) {
+	printf("FAIL: LoD generation cancellation retained queued cache work\n");
+	{
+	    std::lock_guard<std::mutex> lock(blockingWrite.mutex);
+	    blockingWrite.release = true;
+	    blockingWrite.cv.notify_all();
+	}
+	service.stop();
+	return 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(blockingWrite.mutex);
+	blockingWrite.release = true;
+	blockingWrite.cv.notify_all();
+    }
+    if (wait_for_settled(service, 0)) {
+	service.stop();
+	return 1;
+    }
+    {
+	std::lock_guard<std::mutex> lock(blockingWrite.mutex);
+	if (blockingWrite.calls != 1 || blockingWrite.values.size() != 1 ||
+	    blockingWrite.values[0] != 401) {
+	    printf("FAIL: LoD cancellation persisted queued stale cache work\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+    {
+	std::lock_guard<std::mutex> lock(context.mutex);
+	if (!context.cacheWriteOrder.empty()) {
+	    printf("FAIL: LoD cancellation invoked the queued stale cache callback\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    const uint64_t liveGeneration = service.beginGeneration();
+    BRLObolLodTask finalTask;
+    finalTask.generation = liveGeneration;
+    finalTask.request = make_request("/cache-live.bot");
+    finalTask.realize = ready_task;
+    finalTask.realizeData = &finalData;
+    finalTask.publishResult = FALSE;
+    finalTask.writeCache = TRUE;
+    finalTask.cacheWrite = cache_write;
+    finalTask.cacheWriteData = &context;
+    if (service.submit(finalTask) == 0 || wait_for_settled(service, 0)) {
+	printf("FAIL: LoD service did not resume cache writes after cancellation\n");
+	service.stop();
+	return 1;
+    }
+    {
+	std::lock_guard<std::mutex> lock(context.mutex);
+	if (context.cacheWriteOrder.size() != 1 ||
+	    context.cacheWriteOrder[0] != 403) {
+	    printf("FAIL: LoD service cache writer did not isolate live generation\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    service.stop();
+    return 0;
+}
+
 static int
 make_provider_test_db_version(char *dbpath, size_t dbpath_len,
 	struct db_i **dbip_out, int databaseVersion)
@@ -1411,7 +1683,7 @@ test_rt_source_full_detail_provider_task(void)
 	emptyScopedResult.counts.faceCount != 0 ||
 	emptyScopedResult.counts.pointCount != 0 ||
 	emptyScopedResult.mesh.isValid() ||
-	strcmp(emptyScopedResult.diagnostic.getString(),
+	bu_strcmp(emptyScopedResult.diagnostic.getString(),
 	       "RT source full-detail provider scoped query matched no faces") != 0 ||
 	!brlobol_lod_result_matches_request(emptyScopedResult,
 					    emptyScopedRequest)) {
@@ -1453,7 +1725,7 @@ test_rt_source_full_detail_provider_task(void)
 	BRLOBOL_LOD_PROVIDER_FALLBACK ||
 	wrongSpaceLimitedResult.resultKind != BRLOBOL_LOD_RESULT_NONE ||
 	wrongSpaceLimitedResult.mesh.isValid() ||
-	strcmp(wrongSpaceLimitedResult.diagnostic.getString(),
+	bu_strcmp(wrongSpaceLimitedResult.diagnostic.getString(),
 	       "RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	!brlobol_lod_result_matches_request(wrongSpaceLimitedResult,
 					    wrongSpaceBoundsRequest)) {
@@ -1499,7 +1771,7 @@ test_rt_source_full_detail_provider_task(void)
 	malformedToleranceLimitedResult.resultKind !=
 	BRLOBOL_LOD_RESULT_NONE ||
 	malformedToleranceLimitedResult.mesh.isValid() ||
-	strcmp(malformedToleranceLimitedResult.diagnostic.getString(),
+	bu_strcmp(malformedToleranceLimitedResult.diagnostic.getString(),
 	       "RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	!brlobol_lod_result_matches_request(
 	    malformedToleranceLimitedResult, malformedToleranceRequest)) {
@@ -1550,7 +1822,7 @@ test_rt_source_full_detail_provider_task(void)
 	duplicateBoundsLimitedResult.resultKind !=
 	BRLOBOL_LOD_RESULT_NONE ||
 	duplicateBoundsLimitedResult.mesh.isValid() ||
-	strcmp(duplicateBoundsLimitedResult.diagnostic.getString(),
+	bu_strcmp(duplicateBoundsLimitedResult.diagnostic.getString(),
 	       "RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	!brlobol_lod_result_matches_request(duplicateBoundsLimitedResult,
 					    duplicateBoundsRequest)) {
@@ -1590,7 +1862,7 @@ test_rt_source_full_detail_provider_task(void)
 	BRLOBOL_LOD_PROVIDER_FALLBACK ||
 	mixedScopedLimitedResult.resultKind != BRLOBOL_LOD_RESULT_NONE ||
 	mixedScopedLimitedResult.mesh.isValid() ||
-	strcmp(mixedScopedLimitedResult.diagnostic.getString(),
+	bu_strcmp(mixedScopedLimitedResult.diagnostic.getString(),
 	       "RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	!brlobol_lod_result_matches_request(mixedScopedLimitedResult,
 					    mixedScopedRequest)) {
@@ -1696,7 +1968,7 @@ test_rt_source_full_detail_provider_task(void)
 	missRayResult.counts.faceCount != 0 ||
 	missRayResult.counts.pointCount != 0 ||
 	missRayResult.mesh.isValid() ||
-	strcmp(missRayResult.diagnostic.getString(),
+	bu_strcmp(missRayResult.diagnostic.getString(),
 	       "RT source full-detail provider scoped query matched no faces") != 0 ||
 	!brlobol_lod_result_matches_request(missRayResult,
 					    missRayRequest)) {
@@ -1849,7 +2121,7 @@ test_rt_source_full_detail_provider_task(void)
 	brlobol_rt_source_full_detail_provider_task(staleRequest, &provider);
     if (staleResult.providerStatus != BRLOBOL_LOD_PROVIDER_STALE ||
 	!staleResult.stale ||
-	strcmp(staleResult.diagnostic.getString(),
+	bu_strcmp(staleResult.diagnostic.getString(),
 	       "RT source full-detail provider source metrics changed") != 0 ||
 	staleResult.mesh.isValid()) {
 	printf("FAIL: LoD RT source full-detail provider did not reject stale source metrics\n");
@@ -1868,16 +2140,16 @@ test_rt_source_full_detail_provider_task(void)
     BRLObolLodRequest convertedRequest;
     if (!brlobol_lod_rt_source_full_detail_request_from_source_mesh_request(
 	    convertedRequest, sourceRequest, &request) ||
-	strcmp(convertedRequest.providerId.getString(),
+	bu_strcmp(convertedRequest.providerId.getString(),
 	       "rt_source_full_detail") != 0 ||
-	strcmp(convertedRequest.providerVersion.getString(),
+	bu_strcmp(convertedRequest.providerVersion.getString(),
 	       "direct-bot-v1") != 0 ||
 	convertedRequest.qualityTier != BRLOBOL_LOD_QUALITY_FULL_DETAIL ||
 	convertedRequest.sourceCounts.faceCount != 4 ||
 	convertedRequest.sourceCounts.pointCount != 4 ||
-	strcmp(convertedRequest.objectPath.getString(),
+	bu_strcmp(convertedRequest.objectPath.getString(),
 	       "/lod-provider.bot") != 0 ||
-	strcmp(convertedRequest.objectName.getString(),
+	bu_strcmp(convertedRequest.objectName.getString(),
 	       "lod-provider.bot") != 0) {
 	printf("FAIL: LoD RT source full-detail helper did not convert source request\n");
 	ret = 1;
@@ -1973,7 +2245,7 @@ test_rt_source_full_detail_provider_task(void)
     BRLObolLodResult limitedResult =
 	brlobol_rt_source_full_detail_provider_task(request, &limitProvider);
     if (limitedResult.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
-	strcmp(limitedResult.diagnostic.getString(),
+	bu_strcmp(limitedResult.diagnostic.getString(),
 	       "RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	limitedResult.mesh.isValid()) {
 	printf("FAIL: LoD RT source full-detail provider did not refuse over-budget full detail\n");
@@ -1986,7 +2258,7 @@ test_rt_source_full_detail_provider_task(void)
     BRLObolLodResult missingResult =
 	brlobol_rt_source_full_detail_provider_task(missingRequest, &provider);
     if (missingResult.providerStatus != BRLOBOL_LOD_PROVIDER_ERROR ||
-	strcmp(missingResult.diagnostic.getString(),
+	bu_strcmp(missingResult.diagnostic.getString(),
 	       "RT source full-detail provider could not find source object") != 0 ||
 	missingResult.mesh.isValid()) {
 	printf("FAIL: LoD RT source full-detail provider did not report missing source object\n");
@@ -2283,11 +2555,11 @@ test_detached_database_snapshot_version(int databaseVersion)
     }
     if ((dbip->dbi_filename &&
 	 (!snapshotDb->dbi_filename ||
-	  strcmp(snapshotDb->dbi_filename, dbip->dbi_filename) != 0)) ||
+	  bu_strcmp(snapshotDb->dbi_filename, dbip->dbi_filename) != 0)) ||
 	(dbip->dbi_filepath &&
 	 (!snapshotDb->dbi_filepath ||
-	  strcmp(snapshotDb->dbi_filepath[0], dbip->dbi_filepath[0]) != 0 ||
-	  strcmp(snapshotDb->dbi_filepath[1], dbip->dbi_filepath[1]) != 0))) {
+	  bu_strcmp(snapshotDb->dbi_filepath[0], dbip->dbi_filepath[0]) != 0 ||
+	  bu_strcmp(snapshotDb->dbi_filepath[1], dbip->dbi_filepath[1]) != 0))) {
 	printf("FAIL: detached database snapshot did not retain file lookup context\n");
 	goto cleanup;
     }
@@ -2402,6 +2674,8 @@ main(int argc, char **argv)
 	return 1;
     if (test_result_ready_subscription())
 	return 1;
+    if (test_result_ready_self_unsubscribe())
+	return 1;
     if (test_task_realize_data_cleanup())
 	return 1;
     if (test_queue_limits_and_pending_cancellation())
@@ -2409,6 +2683,8 @@ main(int argc, char **argv)
     if (test_large_pending_cancellation_and_generation_history())
 	return 1;
     if (test_debug_delay_cancellation())
+	return 1;
+    if (test_cancelled_cache_write_not_persisted())
 	return 1;
     if (test_active_request_duplicate_suppression())
 	return 1;

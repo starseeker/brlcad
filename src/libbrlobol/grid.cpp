@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "bv.h"
 #include "brlobol/grid.h"
 #include "brlobol/lod_realization.h"
@@ -365,7 +367,7 @@ grid_find_shape(const SoBRLGrid *grid, const char *geometryName)
 	if (!tail || !tail->isOfType(SoBRLVListShape::getClassTypeId()))
 	    continue;
 	SoBRLVListShape *shape = static_cast<SoBRLVListShape *>(tail);
-	if (strcmp(shape->geometryName.getValue().getString(),
+	if (bu_strcmp(shape->geometryName.getValue().getString(),
 		   geometryName) == 0)
 	    return shape;
     }

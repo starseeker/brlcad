@@ -78,6 +78,8 @@ do_refresh(struct ged *gedp)
     ged_draw_apply_transaction(gedp, &txn, NULL);
 }
 
+/* Screen grabs are a point-in-time assertion, so settle the small test model
+ * rather than accidentally comparing its shared deferred root each time. */
 static long
 capture_obol_pixels(struct ged *gedp, const char *filename,
 	const char *label, int require_nonempty)
@@ -235,6 +237,11 @@ test_shaded_mode_draw(const char *datadir)
     ged_exec_draw(gedp, 3, s_av);
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
+    if (!draw_test_obol_progressive_drain(gedp, ged_view_active_ctx(gedp),
+	    500, 1)) {
+	bu_log("FAIL: wireframe progressive realization did not settle\n");
+	fail++;
+    }
 
     long pix_m0 = capture_obol_pixels(gedp, "smb_t2_m0.png",
 	    "wireframe mode 0", 1);
@@ -252,6 +259,11 @@ test_shaded_mode_draw(const char *datadir)
     ged_exec_draw(gedp, 3, s_av);
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
+    if (!draw_test_obol_progressive_drain(gedp, ged_view_active_ctx(gedp),
+	    500, 1)) {
+	bu_log("FAIL: shaded-bots progressive realization did not settle\n");
+	fail++;
+    }
 
     long pix_m1 = capture_obol_pixels(gedp, "smb_t2_m1.png",
 	    "shaded bots mode 1", 1);
@@ -269,6 +281,11 @@ test_shaded_mode_draw(const char *datadir)
     ged_exec_draw(gedp, 3, s_av);
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
+    if (!draw_test_obol_progressive_drain(gedp, ged_view_active_ctx(gedp),
+	    500, 1)) {
+	bu_log("FAIL: shaded-all progressive realization did not settle\n");
+	fail++;
+    }
 
     long pix_m2 = capture_obol_pixels(gedp, "smb_t2_m2.png",
 	    "shaded all mode 2", 1);

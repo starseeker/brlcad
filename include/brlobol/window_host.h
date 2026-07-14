@@ -18,8 +18,10 @@
 #include <stddef.h>
 
 class BRLObolViewController;
+class BRLObolFramebufferStream;
 class SoBRLImageSource;
 class SoBRLViewportImage;
+struct BRLObolFramebufferBridge;
 
 struct imgstream_fb;
 typedef struct imgstream_fb imgstream_fb_t;
@@ -44,6 +46,14 @@ enum BRLObolWindowBackend {
     BRLOBOL_WINDOW_BACKEND_OPENGL = 3,
     BRLOBOL_WINDOW_BACKEND_OFFSCREEN = 4,
     BRLOBOL_WINDOW_BACKEND_DIAGNOSTIC = 5
+};
+
+enum BRLObolFramebufferComposition {
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF = 0,
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY = 1,
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY = 2,
+    /* Between the CAD scene and view-local screen features. */
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY = 3
 };
 
 struct BRLOBOL_EXPORT BRLObolWindowDesc {
@@ -94,12 +104,24 @@ public:
 	int mode, int x, int y);
     virtual int setFramebufferCursorShape(imgstream_fb_t *fb,
 	const unsigned char *bits, int xbits, int ybits, int xorig, int yorig);
+    virtual int setFramebufferComposition(imgstream_fb_t *fb,
+	BRLObolFramebufferComposition composition);
 
     int getFramebufferCount(void) const;
     SoBRLImageSource *getFramebufferImageSource(imgstream_fb_t *fb) const;
     SoBRLViewportImage *getFramebufferViewportImage(imgstream_fb_t *fb) const;
 
 private:
+    friend class BRLObolFramebufferStream;
+    friend struct BRLObolFramebufferBridge;
+
+    void registerFramebufferStream(BRLObolFramebufferStream *stream);
+    void unregisterFramebufferStream(BRLObolFramebufferStream *stream);
+    void registerDisplayFramebuffer(imgstream_fb_t *fb);
+    void unregisterDisplayFramebuffer(imgstream_fb_t *fb);
+    void detachFramebufferStreams(void);
+    void detachDisplayFramebuffers(void);
+
     BRLObolWindowHostPrivate *p;
 };
 

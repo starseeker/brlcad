@@ -13,7 +13,6 @@ set(
   QgGL.h
   QgGeomImport.h
   QgKeyVal.h
-  QgLegacyView.h
   QgMeasureFilter.h
   QgModel.h
   QgObolExport.h

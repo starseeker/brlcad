@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol.h"
 #include "bv.h"
 #include "bu/app.h"
@@ -107,7 +109,7 @@ find_database_source_summary_by_instance(SoBRLSceneController &scene,
 	if (!scene.getDatabaseSourceSummary(i, candidate) ||
 	    !candidate.valid)
 	    continue;
-	if (strcmp(candidate.instanceKey.getString(), instanceKey) == 0) {
+	if (bu_strcmp(candidate.instanceKey.getString(), instanceKey) == 0) {
 	    summary = candidate;
 	    return 1;
 	}
@@ -128,8 +130,8 @@ check_source_mesh_request(const BRLObolSourceMeshRequest &request,
 			  const char *name,
 			  uint32_t sourceId)
 {
-    if (strcmp(request.path.getString(), path) != 0 ||
-	strcmp(request.sourceName.getString(), name) != 0 ||
+    if (bu_strcmp(request.path.getString(), path) != 0 ||
+	bu_strcmp(request.sourceName.getString(), name) != 0 ||
 	request.sourceId != sourceId ||
 	request.faceCount != 1 ||
 	request.pointCount != 3 ||
@@ -147,10 +149,10 @@ check_source_full_detail_lod_request(const BRLObolLodRequest &request,
 				     const char *path,
 				     const char *name)
 {
-    if (strcmp(request.objectPath.getString(), path) != 0 ||
-	strcmp(request.objectName.getString(), name) != 0 ||
-	strcmp(request.providerId.getString(), "rt_source_full_detail") != 0 ||
-	strcmp(request.providerVersion.getString(), "direct-bot-v1") != 0 ||
+    if (bu_strcmp(request.objectPath.getString(), path) != 0 ||
+	bu_strcmp(request.objectName.getString(), name) != 0 ||
+	bu_strcmp(request.providerId.getString(), "rt_source_full_detail") != 0 ||
+	bu_strcmp(request.providerVersion.getString(), "direct-bot-v1") != 0 ||
 	request.qualityTier != BRLOBOL_LOD_QUALITY_FULL_DETAIL ||
 	request.sourceCounts.faceCount != 1 ||
 	request.sourceCounts.pointCount != 3 ||
@@ -167,7 +169,7 @@ static int
 has_lod_provider_param(const BRLObolLodRequest &request, const char *name)
 {
     for (size_t i = 0; i < request.providerParams.size(); i++) {
-	if (strcmp(request.providerParams[i].name.getString(), name) == 0)
+	if (bu_strcmp(request.providerParams[i].name.getString(), name) == 0)
 	    return 1;
     }
 
@@ -562,8 +564,8 @@ test_rt_exact_pick_provider(void)
 	pick.detail.getAirCode() != 2 ||
 	pick.detail.getMaterialId() != 33 ||
 	pick.detail.getLos() != 100 ||
-	strcmp(pick.detail.getSourceName().getString(), "implicit.s") != 0 ||
-	strcmp(pick.detail.getSourceType().getString(), "sph") != 0 ||
+	bu_strcmp(pick.detail.getSourceName().getString(), "implicit.s") != 0 ||
+	bu_strcmp(pick.detail.getSourceType().getString(), "sph") != 0 ||
 	!strstr(pick.detail.getPath().getString(), "implicit.r")) {
 	printf("FAIL: RT exact pick provider did not return implicit comb hit identity\n");
 	db_close(dbip);
@@ -809,7 +811,7 @@ test_update_action_direct(void)
     displaySnap.apply(renderRoot);
     if (displaySnap.getGeometryPolicy() != SoBRLSnapAction::DISPLAY_LEVEL ||
 	!displaySnap.hasCandidate() ||
-	strcmp(displaySnap.getPath().getString(), "/mesh/d") != 0 ||
+	bu_strcmp(displaySnap.getPath().getString(), "/mesh/d") != 0 ||
 	displaySnap.getSkippedLodDisplayMeshCount() != 0) {
 	printf("FAIL: display-level snap did not use active display LoD mesh\n");
 	renderRoot->unref();
@@ -843,7 +845,7 @@ test_update_action_direct(void)
     exactFullSnap.setTolerance(0.1f);
     exactFullSnap.apply(renderRoot);
     if (!exactFullSnap.hasCandidate() ||
-	strcmp(exactFullSnap.getPath().getString(), "/mesh/d") != 0 ||
+	bu_strcmp(exactFullSnap.getPath().getString(), "/mesh/d") != 0 ||
 	exactFullSnap.getSkippedLodDisplayMeshCount() != 1 ||
 	exactFullSnap.getSourceBackedFullDetailRequestCount() != 0) {
 	printf("FAIL: full-detail snap did not use preserved full-detail mesh\n");
@@ -871,7 +873,7 @@ test_update_action_direct(void)
 	(rawDetail && rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) ?
 	static_cast<const SoBRLPickDetail *>(rawDetail) : NULL;
     if (!pickDetail ||
-	strcmp(pickDetail->getPath().getString(), "/mesh/d") != 0 ||
+	bu_strcmp(pickDetail->getPath().getString(), "/mesh/d") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE) {
 	printf("FAIL: display-level pick did not use active display LoD mesh\n");
 	renderRoot->unref();
@@ -901,7 +903,7 @@ test_update_action_direct(void)
 	(rawDetail && rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) ?
 	static_cast<const SoBRLPickDetail *>(rawDetail) : NULL;
     if (!pickDetail ||
-	strcmp(pickDetail->getPath().getString(), "/mesh/d") != 0 ||
+	bu_strcmp(pickDetail->getPath().getString(), "/mesh/d") != 0 ||
 	pickDetail->getPrimitiveIndex() != 0 ||
 	pickDetail->getFaceVertexIndexA() != 0 ||
 	pickDetail->getFaceVertexIndexB() != 1 ||
@@ -962,10 +964,10 @@ test_scene_database_source_summary(void)
 	scene.getDatabaseSource(1) != NULL ||
 	!scene.getDatabaseSourceSummary(0, summary) ||
 	!summary.valid ||
-	strcmp(summary.path.getString(), "/summary/source") != 0 ||
+	bu_strcmp(summary.path.getString(), "/summary/source") != 0 ||
 	!summary.hasParent ||
 	summary.drawTreeDepth != 1 ||
-	strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
+	bu_strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
 	summary.sourceRevision != 11 ||
 	summary.inputsRevision != 2 ||
 	summary.viewRevision != 3 ||
@@ -987,7 +989,7 @@ test_scene_database_source_summary(void)
 	    view.getDatabaseSource(0) != source ||
 	    !view.getDatabaseSourceSummary(0, viewSummary) ||
 	    !viewSummary.hasParent ||
-	    strcmp(viewSummary.parentGroupPath.getString(), "/") != 0) {
+	    bu_strcmp(viewSummary.parentGroupPath.getString(), "/") != 0) {
 	    printf("FAIL: view controller should delegate database source lookup to scene controller\n");
 	    root->unref();
 	    return 1;
@@ -1026,7 +1028,7 @@ test_scene_database_source_summary(void)
     const uint64_t realizedFrameRevision = scene.getFrameRevision();
     SoBRLVListShape *realizedShape = source->getRealizedShape();
     if (!realizedShape ||
-	strcmp(realizedShape->ownerSourcePath.getValue().getString(),
+	bu_strcmp(realizedShape->ownerSourcePath.getValue().getString(),
 	       "/summary/source") != 0 ||
 	realizedShape->ownerSourceRevision.getValue() != 11 ||
 	realizedShape->ownerInputsRevision.getValue() != 2 ||
@@ -1036,7 +1038,7 @@ test_scene_database_source_summary(void)
 	realizedShape->ownerRealizedViewRevision.getValue() != 3 ||
 	realizedShape->ownerRealizationStatus.getValue() !=
 	SoBRLDatabaseSource::REALIZED ||
-	strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
+	bu_strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
 	       firstIdentity.getString()) != 0 ||
 	realizedShape->ownerSourceStale.getValue() ||
 	realizedShape->ownerStaleReason.getValue() !=
@@ -1052,14 +1054,14 @@ test_scene_database_source_summary(void)
 	!summary.stale ||
 	!(summary.staleReason & SoBRLDatabaseSource::STALE_INPUTS) ||
 	summary.realizationStatus != SoBRLDatabaseSource::UNREALIZED ||
-	strcmp(summary.realizationIdentity.getString(),
+	bu_strcmp(summary.realizationIdentity.getString(),
 	       firstIdentity.getString()) != 0 ||
 	!realizedShape->ownerSourceStale.getValue() ||
 	!(realizedShape->ownerStaleReason.getValue() &
 	  SoBRLDatabaseSource::STALE_INPUTS) ||
 	realizedShape->ownerRealizationStatus.getValue() !=
 	SoBRLDatabaseSource::UNREALIZED ||
-	strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
+	bu_strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
 	       firstIdentity.getString()) != 0) {
 	printf("FAIL: scene controller source summary should expose stale source state before refresh\n");
 	root->unref();
@@ -1081,7 +1083,7 @@ test_scene_database_source_summary(void)
 	summary.stale ||
 	summary.realizedInputsRevision != 4 ||
 	summary.realizationIdentity.getLength() == 0 ||
-	strcmp(summary.realizationIdentity.getString(),
+	bu_strcmp(summary.realizationIdentity.getString(),
 	       firstIdentity.getString()) == 0 ||
 	!strstr(summary.realizationIdentity.getString(),
 		"source=11;inputs=4;view=3")) {
@@ -1095,7 +1097,7 @@ test_scene_database_source_summary(void)
 	realizedShape->ownerRealizedInputsRevision.getValue() != 4 ||
 	realizedShape->ownerRealizationStatus.getValue() !=
 	SoBRLDatabaseSource::REALIZED ||
-	strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
+	bu_strcmp(realizedShape->ownerRealizationIdentity.getValue().getString(),
 	       summary.realizationIdentity.getString()) != 0 ||
 	realizedShape->ownerSourceStale.getValue() ||
 	realizedShape->ownerStaleReason.getValue() !=
@@ -1111,9 +1113,9 @@ test_scene_database_source_summary(void)
 	!source->getRealizedShapeSummary(0, shapeSummary) ||
 	!shapeSummary.valid ||
 	shapeSummary.shapeKind != BRLObolRealizedShapeSummary::SHAPE_VLIST ||
-	strcmp(shapeSummary.path.getString(), "/summary/source") != 0 ||
+	bu_strcmp(shapeSummary.path.getString(), "/summary/source") != 0 ||
 	shapeSummary.ownerSourceIndex != -1 ||
-	strcmp(shapeSummary.ownerSourcePath.getString(),
+	bu_strcmp(shapeSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	shapeSummary.ownerDrawMode != source->drawMode.getValue() ||
 	shapeSummary.ownerSourceRevision != 11 ||
@@ -1126,18 +1128,18 @@ test_scene_database_source_summary(void)
 	shapeSummary.ownerRealizationStatus !=
 	SoBRLDatabaseSource::REALIZED ||
 	shapeSummary.ownerRealizationDiagnostic.getLength() != 0 ||
-	strcmp(shapeSummary.ownerRealizationIdentity.getString(),
+	bu_strcmp(shapeSummary.ownerRealizationIdentity.getString(),
 	       summary.realizationIdentity.getString()) != 0 ||
 	shapeSummary.ownerSourceStale ||
 	shapeSummary.ownerStaleReason != SoBRLDatabaseSource::STALE_NONE ||
-	strcmp(shapeSummary.sourceName.getString(), "summary/source") != 0 ||
-	strcmp(shapeSummary.sourceType.getString(), "prototype") != 0 ||
-	strcmp(shapeSummary.displayName.getString(), "summary/source") != 0 ||
+	bu_strcmp(shapeSummary.sourceName.getString(), "summary/source") != 0 ||
+	bu_strcmp(shapeSummary.sourceType.getString(), "prototype") != 0 ||
+	bu_strcmp(shapeSummary.displayName.getString(), "summary/source") != 0 ||
 	!shapeSummary.localSource ||
 	!shapeSummary.nonDatabaseSource ||
 	shapeSummary.databaseIntent ||
 	shapeSummary.drawMode != BRLOBOL_LOD_DRAW_DIAGNOSTIC ||
-	strcmp(shapeSummary.recordRole.getString(), "prototype") != 0 ||
+	bu_strcmp(shapeSummary.recordRole.getString(), "prototype") != 0 ||
 	!shapeSummary.visible ||
 	!shapeSummary.selectable ||
 	shapeSummary.pointCount != 5 ||
@@ -1154,12 +1156,12 @@ test_scene_database_source_summary(void)
 	!sceneShapeSummary.valid ||
 	sceneShapeSummary.shapeKind !=
 	BRLObolRealizedShapeSummary::SHAPE_VLIST ||
-	strcmp(sceneShapeSummary.path.getString(),
+	bu_strcmp(sceneShapeSummary.path.getString(),
 	       shapeSummary.path.getString()) != 0 ||
 	sceneShapeSummary.ownerSourceIndex != 0 ||
-	strcmp(sceneShapeSummary.ownerSourcePath.getString(),
+	bu_strcmp(sceneShapeSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
-	strcmp(sceneShapeSummary.ownerRealizationIdentity.getString(),
+	bu_strcmp(sceneShapeSummary.ownerRealizationIdentity.getString(),
 	       summary.realizationIdentity.getString()) != 0 ||
 	scene.getRealizedShapeSummary(1, sceneShapeSummary)) {
 	printf("FAIL: scene controller should forward realized vlist shape summaries\n");
@@ -1197,7 +1199,7 @@ test_scene_database_source_summary(void)
     if (!auxShape ||
 	auxShape->point.getNum() != 2 ||
 	auxShape->command.getNum() != 2 ||
-	strcmp(auxShape->recordRole.getValue().getString(),
+	bu_strcmp(auxShape->recordRole.getValue().getString(),
 	       "auxiliary") != 0 ||
 	source->getRealizedShapeSummaryCount() != 2 ||
 	scene.getRealizedShapeSummaryCount() != 2 ||
@@ -1205,11 +1207,11 @@ test_scene_database_source_summary(void)
 	!shapeSummary.valid ||
 	shapeSummary.shapeKind !=
 	BRLObolRealizedShapeSummary::SHAPE_VLIST ||
-	strcmp(shapeSummary.sourceName.getString(), "summary_aux") != 0 ||
-	strcmp(shapeSummary.sourceType.getString(),
+	bu_strcmp(shapeSummary.sourceName.getString(), "summary_aux") != 0 ||
+	bu_strcmp(shapeSummary.sourceType.getString(),
 	       "auxiliary-line-set") != 0 ||
-	strcmp(shapeSummary.geometryName.getString(), "summary_aux") != 0 ||
-	strcmp(shapeSummary.recordRole.getString(), "auxiliary") != 0 ||
+	bu_strcmp(shapeSummary.geometryName.getString(), "summary_aux") != 0 ||
+	bu_strcmp(shapeSummary.recordRole.getString(), "auxiliary") != 0 ||
 	!shapeSummary.databaseIntent ||
 	shapeSummary.nonDatabaseSource ||
 	shapeSummary.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
@@ -1222,7 +1224,7 @@ test_scene_database_source_summary(void)
 	fabsf(shapeSummary.materialColor[2] - 0.75f) > 1.0e-6f ||
 	shapeSummary.pointCount != 2 ||
 	shapeSummary.segmentCount != 1 ||
-	strcmp(shapeSummary.ownerSourcePath.getString(),
+	bu_strcmp(shapeSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0) {
 	printf("FAIL: database source should summarize auxiliary line-set metadata\n");
 	root->unref();
@@ -1273,26 +1275,26 @@ test_scene_database_source_summary(void)
 	!source->getRealizedShapeSummary(1, shapeSummary) ||
 	!shapeSummary.valid ||
 	shapeSummary.shapeKind != BRLObolRealizedShapeSummary::SHAPE_MESH ||
-	strcmp(shapeSummary.path.getString(), "/summary/mesh") != 0 ||
+	bu_strcmp(shapeSummary.path.getString(), "/summary/mesh") != 0 ||
 	shapeSummary.ownerSourceIndex != -1 ||
-	strcmp(shapeSummary.ownerSourcePath.getString(),
+	bu_strcmp(shapeSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	shapeSummary.ownerInputsRevision != 4 ||
 	shapeSummary.ownerRealizationStatus !=
 	SoBRLDatabaseSource::REALIZED ||
-	strcmp(shapeSummary.sourceName.getString(), "mesh") != 0 ||
-	strcmp(shapeSummary.sourceType.getString(), "bot") != 0 ||
-	strcmp(shapeSummary.displayName.getString(), "Summary Mesh") != 0 ||
-	strcmp(shapeSummary.cacheIdentity.getString(),
+	bu_strcmp(shapeSummary.sourceName.getString(), "mesh") != 0 ||
+	bu_strcmp(shapeSummary.sourceType.getString(), "bot") != 0 ||
+	bu_strcmp(shapeSummary.displayName.getString(), "Summary Mesh") != 0 ||
+	bu_strcmp(shapeSummary.cacheIdentity.getString(),
 	       "cache://summary/mesh#44") != 0 ||
-	strcmp(shapeSummary.sourceIdentity.getString(),
+	bu_strcmp(shapeSummary.sourceIdentity.getString(),
 	       "db://summary/mesh") != 0 ||
 	!shapeSummary.databaseIntent ||
 	shapeSummary.localSource ||
 	shapeSummary.nonDatabaseSource ||
 	shapeSummary.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
-	strcmp(shapeSummary.recordRole.getString(), "database") != 0 ||
-	strcmp(shapeSummary.geometryKind.getString(), "surface") != 0 ||
+	bu_strcmp(shapeSummary.recordRole.getString(), "database") != 0 ||
+	bu_strcmp(shapeSummary.geometryKind.getString(), "surface") != 0 ||
 	shapeSummary.materialRevision != 77 ||
 	shapeSummary.pointCount != 3 ||
 	shapeSummary.indexCount != 3 ||
@@ -1307,9 +1309,9 @@ test_scene_database_source_summary(void)
 	!sceneShapeSummary.valid ||
 	sceneShapeSummary.shapeKind !=
 	BRLObolRealizedShapeSummary::SHAPE_MESH ||
-	strcmp(sceneShapeSummary.path.getString(), "/summary/mesh") != 0 ||
+	bu_strcmp(sceneShapeSummary.path.getString(), "/summary/mesh") != 0 ||
 	sceneShapeSummary.ownerSourceIndex != 0 ||
-	strcmp(sceneShapeSummary.ownerSourcePath.getString(),
+	bu_strcmp(sceneShapeSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	scene.getRealizedShapeSummary(2, sceneShapeSummary)) {
 	printf("FAIL: scene controller should forward realized mesh shape summaries\n");
@@ -1337,28 +1339,28 @@ test_scene_database_source_summary(void)
 	scene.getRealizedMaterialSummaryCount() != 1 ||
 	!source->getRealizedMaterialSummary(0, materialSummary) ||
 	!materialSummary.valid ||
-	strcmp(materialSummary.sourcePath.getString(),
+	bu_strcmp(materialSummary.sourcePath.getString(),
 	       "/summary/material") != 0 ||
-	strcmp(materialSummary.sourceName.getString(), "mat") != 0 ||
-	strcmp(materialSummary.sourceType.getString(), "material") != 0 ||
+	bu_strcmp(materialSummary.sourceName.getString(), "mat") != 0 ||
+	bu_strcmp(materialSummary.sourceType.getString(), "material") != 0 ||
 	materialSummary.sourceId != 77 ||
 	materialSummary.ownerSourceIndex != -1 ||
-	strcmp(materialSummary.ownerSourcePath.getString(),
+	bu_strcmp(materialSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	materialSummary.ownerInputsRevision != 4 ||
 	materialSummary.ownerRealizationStatus !=
 	SoBRLDatabaseSource::REALIZED ||
-	strcmp(materialSummary.ownerRealizationIdentity.getString(),
+	bu_strcmp(materialSummary.ownerRealizationIdentity.getString(),
 	       summary.realizationIdentity.getString()) != 0 ||
-	strcmp(materialSummary.materialName.getString(), "matte") != 0 ||
-	strcmp(materialSummary.parentName.getString(), "base") != 0 ||
-	strcmp(materialSummary.materialSource.getString(), "database") != 0 ||
+	bu_strcmp(materialSummary.materialName.getString(), "matte") != 0 ||
+	bu_strcmp(materialSummary.parentName.getString(), "base") != 0 ||
+	bu_strcmp(materialSummary.materialSource.getString(), "database") != 0 ||
 	materialSummary.propertyCount != 2 ||
 	!source->getRealizedMaterialProperty(0, 0, propertyGroup,
 		propertyName, propertyValue) ||
-	strcmp(propertyGroup.getString(), "physical") != 0 ||
-	strcmp(propertyName.getString(), "density") != 0 ||
-	strcmp(propertyValue.getString(), "7.8") != 0 ||
+	bu_strcmp(propertyGroup.getString(), "physical") != 0 ||
+	bu_strcmp(propertyName.getString(), "density") != 0 ||
+	bu_strcmp(propertyValue.getString(), "7.8") != 0 ||
 	source->getRealizedMaterialProperty(0, 2, propertyGroup,
 					    propertyName, propertyValue) ||
 	source->getRealizedMaterialSummary(1, materialSummary)) {
@@ -1371,15 +1373,15 @@ test_scene_database_source_summary(void)
     if (!scene.getRealizedMaterialSummary(0, sceneMaterialSummary) ||
 	!sceneMaterialSummary.valid ||
 	sceneMaterialSummary.ownerSourceIndex != 0 ||
-	strcmp(sceneMaterialSummary.ownerSourcePath.getString(),
+	bu_strcmp(sceneMaterialSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
-	strcmp(sceneMaterialSummary.sourcePath.getString(),
+	bu_strcmp(sceneMaterialSummary.sourcePath.getString(),
 	       "/summary/material") != 0 ||
 	!scene.getRealizedMaterialProperty(0, 1, propertyGroup,
 					   propertyName, propertyValue) ||
-	strcmp(propertyGroup.getString(), "optical") != 0 ||
-	strcmp(propertyName.getString(), "finish") != 0 ||
-	strcmp(propertyValue.getString(), "matte") != 0 ||
+	bu_strcmp(propertyGroup.getString(), "optical") != 0 ||
+	bu_strcmp(propertyName.getString(), "finish") != 0 ||
+	bu_strcmp(propertyValue.getString(), "matte") != 0 ||
 	scene.getRealizedMaterialProperty(1, 0, propertyGroup,
 					  propertyName, propertyValue) ||
 	scene.getRealizedMaterialSummary(1, sceneMaterialSummary)) {
@@ -1400,9 +1402,9 @@ test_scene_database_source_summary(void)
 	treeSummary.drawTreeDepth != 0 ||
 	treeSummary.childCount != 3 ||
 	treeSummary.ownerSourceIndex != -1 ||
-	strcmp(treeSummary.ownerSourcePath.getString(),
+	bu_strcmp(treeSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
-	strcmp(treeSummary.path.getString(), "/summary/source") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "/summary/source") != 0 ||
 	!source->getRealizedTreeSummary(1, treeSummary) ||
 	!treeSummary.valid ||
 	treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
@@ -1410,16 +1412,16 @@ test_scene_database_source_summary(void)
 	!treeSummary.hasParent ||
 	treeSummary.drawTreeDepth != 1 ||
 	treeSummary.childCount != 0 ||
-	strcmp(treeSummary.path.getString(), "/summary/source") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "/summary/source") != 0 ||
 	!source->getRealizedTreeSummary(2, treeSummary) ||
 	treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
-	strcmp(treeSummary.path.getString(), "/summary/mesh") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "/summary/mesh") != 0 ||
 	!source->getRealizedTreeSummary(3, treeSummary) ||
 	treeSummary.nodeKind !=
 	BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
 	!treeSummary.isMaterialObject ||
-	strcmp(treeSummary.path.getString(), "/summary/material") != 0 ||
-	strcmp(treeSummary.displayName.getString(), "matte") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "/summary/material") != 0 ||
+	bu_strcmp(treeSummary.displayName.getString(), "matte") != 0 ||
 	source->getRealizedTreeSummary(4, treeSummary)) {
 	printf("FAIL: database source should summarize realized source tree nodes\n");
 	root->unref();
@@ -1443,7 +1445,7 @@ test_scene_database_source_summary(void)
 	treeSummary.nodeKind !=
 	BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE ||
 	treeSummary.ownerSourceIndex != 0 ||
-	strcmp(treeSummary.ownerSourcePath.getString(),
+	bu_strcmp(treeSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	treeSummary.drawTreeDepth != 1 ||
 	!treeSummary.hasParent ||
@@ -1453,11 +1455,11 @@ test_scene_database_source_summary(void)
 	treeSummary.drawTreeDepth != 2 ||
 	!scene.getSceneTreeSummary(4, treeSummary) ||
 	treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
-	strcmp(treeSummary.path.getString(), "/summary/mesh") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "/summary/mesh") != 0 ||
 	!scene.getSceneTreeSummary(5, treeSummary) ||
 	treeSummary.nodeKind !=
 	BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
-	strcmp(treeSummary.path.getString(), "/summary/material") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "/summary/material") != 0 ||
 	scene.getSceneTreeSummary(6, treeSummary)) {
 	printf("FAIL: scene controller should summarize Obol scene tree nodes\n");
 	root->unref();
@@ -1471,7 +1473,7 @@ test_scene_database_source_summary(void)
 	!displaySummary.valid ||
 	!displaySummary.isDatabaseSource ||
 	!displaySummary.hasDrawIntent ||
-	strcmp(displaySummary.intentPath.getString(),
+	bu_strcmp(displaySummary.intentPath.getString(),
 	       "/summary/source") != 0 ||
 	displaySummary.intentDrawMode != source->drawMode.getValue() ||
 	displaySummary.drawMode != source->drawMode.getValue() ||
@@ -1490,12 +1492,12 @@ test_scene_database_source_summary(void)
 	displaySummary.materialColor[2] < 0.29f ||
 	displaySummary.materialColor[2] > 0.31f ||
 	displaySummary.ownerSourceIndex != -1 ||
-	strcmp(displaySummary.ownerSourcePath.getString(),
+	bu_strcmp(displaySummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	!source->getRealizedDisplaySummary(1, displaySummary) ||
 	displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_VLIST_SHAPE ||
 	!displaySummary.hasDrawIntent ||
-	strcmp(displaySummary.intentPath.getString(),
+	bu_strcmp(displaySummary.intentPath.getString(),
 	       "/summary/source") != 0 ||
 	displaySummary.intentDrawMode != BRLOBOL_LOD_DRAW_DIAGNOSTIC ||
 	!displaySummary.visible ||
@@ -1503,7 +1505,7 @@ test_scene_database_source_summary(void)
 	displaySummary.materialColor[0] < 0.99f ||
 	!source->getRealizedDisplaySummary(2, displaySummary) ||
 	displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
-	strcmp(displaySummary.intentPath.getString(), "/summary/mesh") != 0 ||
+	bu_strcmp(displaySummary.intentPath.getString(), "/summary/mesh") != 0 ||
 	!displaySummary.highlighted ||
 	displaySummary.lineStyle != 1 ||
 	displaySummary.lineWidth != 5 ||
@@ -1521,7 +1523,7 @@ test_scene_database_source_summary(void)
 	displaySummary.nodeKind !=
 	BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
 	displaySummary.hasDrawIntent ||
-	strcmp(displaySummary.path.getString(), "/summary/material") != 0 ||
+	bu_strcmp(displaySummary.path.getString(), "/summary/material") != 0 ||
 	source->getRealizedDisplaySummary(4, displaySummary)) {
 	printf("FAIL: database source should summarize realized display state\n");
 	root->unref();
@@ -1542,9 +1544,9 @@ test_scene_database_source_summary(void)
 	!scene.getSceneDisplaySummary(2, displaySummary) ||
 	!displaySummary.isDatabaseSource ||
 	displaySummary.ownerSourceIndex != 0 ||
-	strcmp(displaySummary.ownerSourcePath.getString(),
+	bu_strcmp(displaySummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
-	strcmp(displaySummary.intentPath.getString(),
+	bu_strcmp(displaySummary.intentPath.getString(),
 	       "/summary/source") != 0 ||
 	!displaySummary.visible ||
 	!displaySummary.highlighted ||
@@ -1572,7 +1574,7 @@ test_scene_database_source_summary(void)
 	!scene.getSceneDisplaySummary(5, displaySummary) ||
 	displaySummary.nodeKind !=
 	BRLObolSceneTreeSummary::NODE_MATERIAL_OBJECT ||
-	strcmp(displaySummary.path.getString(), "/summary/material") != 0 ||
+	bu_strcmp(displaySummary.path.getString(), "/summary/material") != 0 ||
 	scene.getSceneDisplaySummary(6, displaySummary)) {
 	printf("FAIL: scene controller should summarize Obol scene display state\n");
 	root->unref();
@@ -1626,7 +1628,7 @@ test_scene_database_source_summary(void)
 	materialStateSummary.nodeKind !=
 	BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
 	materialStateSummary.ownerSourceIndex != 0 ||
-	strcmp(materialStateSummary.ownerSourcePath.getString(),
+	bu_strcmp(materialStateSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	!materialStateSummary.materialValid ||
 	materialStateSummary.materialRevision != 77 ||
@@ -1651,7 +1653,7 @@ test_scene_database_source_summary(void)
 	BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE ||
 	!boundsSummary.boundsValid ||
 	boundsSummary.ownerSourceIndex != -1 ||
-	strcmp(boundsSummary.ownerSourcePath.getString(),
+	bu_strcmp(boundsSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	boundsSummary.bounds.getMin()[0] > -1.74f ||
 	boundsSummary.bounds.getMax()[0] < 1.74f ||
@@ -1695,7 +1697,7 @@ test_scene_database_source_summary(void)
 	boundsSummary.nodeKind !=
 	BRLObolSceneTreeSummary::NODE_DATABASE_SOURCE ||
 	boundsSummary.ownerSourceIndex != 0 ||
-	strcmp(boundsSummary.ownerSourcePath.getString(),
+	bu_strcmp(boundsSummary.ownerSourcePath.getString(),
 	       "/summary/source") != 0 ||
 	!boundsSummary.boundsValid ||
 	!scene.getSceneBoundsSummary(4, boundsSummary) ||
@@ -1794,7 +1796,7 @@ test_scene_database_source_summary(void)
 	groupScene.findGroup(NULL) != NULL ||
 	!createdLeaf ||
 	!retainedLeaf ||
-	strcmp(retainedLeaf->groupPath.getValue().getString(),
+	bu_strcmp(retainedLeaf->groupPath.getValue().getString(),
 	       "assembly/leaf") != 0 ||
 	groupScene.findGroup("assembly/leaf") != createdLeaf ||
 	groupScene.ensureGroup("/assembly/leaf") != createdLeaf ||
@@ -1819,17 +1821,17 @@ test_scene_database_source_summary(void)
     if (groupScene.getSceneTreeSummaryCount() != 3 ||
 	!groupScene.getSceneTreeSummary(0, treeSummary) ||
 	treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
-	strcmp(treeSummary.path.getString(), "/") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "/") != 0 ||
 	treeSummary.childCount != 1 ||
 	treeSummary.drawTreeDepth != 0 ||
 	!groupScene.getSceneTreeSummary(1, treeSummary) ||
 	treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
-	strcmp(treeSummary.path.getString(), "assembly") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "assembly") != 0 ||
 	treeSummary.childCount != 1 ||
 	treeSummary.drawTreeDepth != 1 ||
 	!groupScene.getSceneTreeSummary(2, treeSummary) ||
 	treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
-	strcmp(treeSummary.path.getString(), "assembly/leaf") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "assembly/leaf") != 0 ||
 	treeSummary.childCount != 0 ||
 	treeSummary.drawTreeDepth != 2 ||
 	groupScene.getSceneTreeSummary(3, treeSummary)) {
@@ -1840,10 +1842,10 @@ test_scene_database_source_summary(void)
 
     if (!groupScene.getSceneDisplaySummary(2, displaySummary) ||
 	displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
-	strcmp(displaySummary.path.getString(), "assembly/leaf") != 0 ||
+	bu_strcmp(displaySummary.path.getString(), "assembly/leaf") != 0 ||
 	!groupScene.getSceneBoundsSummary(2, boundsSummary) ||
 	boundsSummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
-	strcmp(boundsSummary.path.getString(), "assembly/leaf") != 0) {
+	bu_strcmp(boundsSummary.path.getString(), "assembly/leaf") != 0) {
 	printf("FAIL: scene controller display and bounds summaries should retain group paths\n");
 	groupRoot->unref();
 	return 1;
@@ -1892,9 +1894,9 @@ test_scene_database_source_summary(void)
 
     if (!groupScene.getSceneDisplaySummary(2, displaySummary) ||
 	displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_GROUP ||
-	strcmp(displaySummary.path.getString(), "assembly/leaf") != 0 ||
+	bu_strcmp(displaySummary.path.getString(), "assembly/leaf") != 0 ||
 	!displaySummary.hasDrawIntent ||
-	strcmp(displaySummary.intentPath.getString(),
+	bu_strcmp(displaySummary.intentPath.getString(),
 	       "draw://assembly/leaf") != 0 ||
 	displaySummary.intentDrawMode != BRLOBOL_LOD_DRAW_SHADED ||
 	displaySummary.visible ||
@@ -1934,7 +1936,7 @@ test_scene_database_source_summary(void)
     if (groupScene.getSceneTreeSummaryCount() != 4 ||
 	!groupScene.getSceneTreeSummary(3, treeSummary) ||
 	treeSummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
-	strcmp(treeSummary.path.getString(), "assembly/leaf/mesh") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "assembly/leaf/mesh") != 0 ||
 	treeSummary.drawTreeDepth != 3 ||
 	!groupScene.getSceneBoundsSummary(2, boundsSummary) ||
 	!boundsSummary.boundsValid ||
@@ -1987,7 +1989,7 @@ test_scene_database_source_summary(void)
     }
     if (!groupScene.getSceneDisplaySummary(3, displaySummary) ||
 	displaySummary.nodeKind != BRLObolSceneTreeSummary::NODE_MESH_SHAPE ||
-	strcmp(displaySummary.path.getString(), "assembly/leaf/mesh") != 0 ||
+	bu_strcmp(displaySummary.path.getString(), "assembly/leaf/mesh") != 0 ||
 	displaySummary.visible ||
 	!displaySummary.highlighted ||
 	displaySummary.lineStyle != 8 ||
@@ -2014,7 +2016,7 @@ test_scene_database_source_summary(void)
 				       "/owner/source", 10, 11, 12, 13, 14, 15, 16, 17,
 				       "stale source", "realized::shape", TRUE, 18) != 1 ||
 	groupScene.getFrameRevision() <= beforeShapeSourceFrameRevision ||
-	strcmp(groupMesh->ownerSourcePath.getValue().getString(),
+	bu_strcmp(groupMesh->ownerSourcePath.getValue().getString(),
 	       "/owner/source") != 0 ||
 	groupMesh->ownerSourceRevision.getValue() != 10 ||
 	groupMesh->ownerInputsRevision.getValue() != 11 ||
@@ -2024,9 +2026,9 @@ test_scene_database_source_summary(void)
 	groupMesh->ownerRealizedInputsRevision.getValue() != 15 ||
 	groupMesh->ownerRealizedViewRevision.getValue() != 16 ||
 	groupMesh->ownerRealizationStatus.getValue() != 17 ||
-	strcmp(groupMesh->ownerRealizationDiagnostic.getValue().getString(),
+	bu_strcmp(groupMesh->ownerRealizationDiagnostic.getValue().getString(),
 	       "stale source") != 0 ||
-	strcmp(groupMesh->ownerRealizationIdentity.getValue().getString(),
+	bu_strcmp(groupMesh->ownerRealizationIdentity.getValue().getString(),
 	       "realized::shape") != 0 ||
 	!groupMesh->ownerSourceStale.getValue() ||
 	groupMesh->ownerStaleReason.getValue() != 18) {
@@ -2086,13 +2088,13 @@ test_scene_database_source_summary(void)
 				       10, 11, 12, 13, 14, 15, 16, 17, "stale source",
 				       "realized::shape", TRUE, 18) != -1 ||
 	!groupScene.getSceneTreeSummary(3, treeSummary) ||
-	strcmp(treeSummary.ownerSourcePath.getString(),
+	bu_strcmp(treeSummary.ownerSourcePath.getString(),
 	       "/owner/source") != 0 ||
 	!groupScene.getSceneDisplaySummary(3, displaySummary) ||
-	strcmp(displaySummary.ownerSourcePath.getString(),
+	bu_strcmp(displaySummary.ownerSourcePath.getString(),
 	       "/owner/source") != 0 ||
 	!groupScene.getSceneBoundsSummary(3, boundsSummary) ||
-	strcmp(boundsSummary.ownerSourcePath.getString(),
+	bu_strcmp(boundsSummary.ownerSourcePath.getString(),
 	       "/owner/source") != 0) {
 	printf("FAIL: scene controller should summarize retained shape owner source state\n");
 	groupRoot->unref();
@@ -2161,14 +2163,14 @@ test_scene_database_source_summary(void)
 	groupScene.findGroup("assembly/leaf") != NULL ||
 	groupScene.findGroup("assembly/renamed") != createdLeaf ||
 	groupScene.findGroup("assembly/renamed/child") != createdChild ||
-	strcmp(retainedLeaf->groupPath.getValue().getString(),
+	bu_strcmp(retainedLeaf->groupPath.getValue().getString(),
 	       "assembly/renamed") != 0 ||
-	strcmp(retainedChild->groupPath.getValue().getString(),
+	bu_strcmp(retainedChild->groupPath.getValue().getString(),
 	       "assembly/renamed/child") != 0 ||
 	groupScene.getStructuralRevision() <=
 	afterGroupChildStructuralRevision ||
 	!groupScene.getSceneTreeSummary(2, treeSummary) ||
-	strcmp(treeSummary.path.getString(), "assembly/renamed") != 0 ||
+	bu_strcmp(treeSummary.path.getString(), "assembly/renamed") != 0 ||
 	groupScene.renameGroup("assembly/renamed", "renamed") != 0 ||
 	groupScene.renameGroup("assembly/renamed", "bad/name") != 0) {
 	printf("FAIL: scene controller should rename retained group leaf paths in place\n");
@@ -2218,7 +2220,7 @@ test_scene_database_source_summary(void)
 	    groupView.findGroup("view/leaf") != viewLeaf ||
 	    groupView.getGroupChildCount("view") != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-group") != 0) {
+	    bu_strcmp(renderReason.getString(), "scene-group") != 0) {
 	    printf("FAIL: view controller should expose retained group creation and render invalidation\n");
 	    groupRoot->unref();
 	    return 1;
@@ -2235,7 +2237,7 @@ test_scene_database_source_summary(void)
 					 "draw://view/leaf", BRLOBOL_LOD_DRAW_POINTS,
 					 BRLOBOL_LOD_DRAW_WIRE, FALSE, 5) != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-group") != 0) {
+	    bu_strcmp(renderReason.getString(), "scene-group") != 0) {
 	    printf("FAIL: view controller should expose retained group draw intent state\n");
 	    groupRoot->unref();
 	    return 1;
@@ -2254,7 +2256,7 @@ test_scene_database_source_summary(void)
 					   SbColor(0.1f, 0.2f, 0.3f), FALSE,
 					   SbColor(1.0f, 1.0f, 1.0f), 77) != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-group") != 0 ||
+	    bu_strcmp(renderReason.getString(), "scene-group") != 0 ||
 	    groupView.setGroupDisplayState("missing", TRUE, FALSE,
 					   FALSE, 0, 0, 0.0f, FALSE,
 					   SbColor(1.0f, 1.0f, 1.0f), FALSE,
@@ -2270,7 +2272,7 @@ test_scene_database_source_summary(void)
 	    groupView.appendChildToGroup("view/leaf", viewMesh) != 0 ||
 	    groupView.getGroupChildCount("view/leaf") != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-group") != 0) {
+	    bu_strcmp(renderReason.getString(), "scene-group") != 0) {
 	    printf("FAIL: view controller should expose retained group child ownership\n");
 	    groupRoot->unref();
 	    return 1;
@@ -2281,7 +2283,7 @@ test_scene_database_source_summary(void)
 	    groupView.setShapeDrawState("view/leaf/mesh",
 					BRLOBOL_LOD_DRAW_DIAGNOSTIC, FALSE, TRUE, FALSE) != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-shape") != 0 ||
+	    bu_strcmp(renderReason.getString(), "scene-shape") != 0 ||
 	    groupView.setShapeDrawState("view/leaf/mesh",
 					BRLOBOL_LOD_DRAW_DIAGNOSTIC, FALSE, TRUE, FALSE) != 0) {
 	    printf("FAIL: view controller should expose retained shape draw state\n");
@@ -2294,7 +2296,7 @@ test_scene_database_source_summary(void)
 					   SbColor(0.3f, 0.2f, 0.1f), TRUE,
 					   SbColor(0.6f, 0.5f, 0.4f), 88) != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-shape") != 0 ||
+	    bu_strcmp(renderReason.getString(), "scene-shape") != 0 ||
 	    groupView.setShapeDisplayState("missing", TRUE, FALSE,
 					   FALSE, 0, 0, 0.0f, FALSE,
 					   SbColor(1.0f, 1.0f, 1.0f), FALSE,
@@ -2310,7 +2312,7 @@ test_scene_database_source_summary(void)
 					     TRUE, viewPlacementMatrix, TRUE,
 					     SbVec3f(11.0f, 12.0f, 13.0f), TRUE, 14.5f) != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-shape") != 0 ||
+	    bu_strcmp(renderReason.getString(), "scene-shape") != 0 ||
 	    groupView.setShapePlacementState("view/leaf/mesh",
 					     TRUE, viewPlacementMatrix, TRUE,
 					     SbVec3f(11.0f, 12.0f, 13.0f), TRUE, 14.5f) != 0 ||
@@ -2326,7 +2328,7 @@ test_scene_database_source_summary(void)
 					  "view/source", 21, 22, 23, 24, 25, 26, 27, 28,
 					  "view diagnostic", "view identity", TRUE, 29) != 1 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-shape") != 0 ||
+	    bu_strcmp(renderReason.getString(), "scene-shape") != 0 ||
 	    groupView.setShapeSourceState("view/leaf/mesh",
 					  "view/source", 21, 22, 23, 24, 25, 26, 27, 28,
 					  "view diagnostic", "view identity", TRUE, 29) != 0 ||
@@ -2343,7 +2345,7 @@ test_scene_database_source_summary(void)
 	    groupView.moveShapeToGroup("view/leaf/mesh", "view") != 1 ||
 	    groupView.findShapeParent("view/leaf/mesh") != viewRootGroup ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-shape") != 0 ||
+	    bu_strcmp(renderReason.getString(), "scene-shape") != 0 ||
 	    groupView.moveShapeToGroup("view/leaf/mesh", "view/leaf") != 1 ||
 	    groupView.findShapeParent("view/leaf/mesh") != viewLeaf ||
 	    groupView.removeShape("view/leaf/mesh") != 1 ||
@@ -2364,7 +2366,7 @@ test_scene_database_source_summary(void)
 	    groupView.removeGroup("view") != 1 ||
 	    groupView.getGroupChildCount("/") != 0 ||
 	    !groupView.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "scene-group") != 0) {
+	    bu_strcmp(renderReason.getString(), "scene-group") != 0) {
 	    printf("FAIL: view controller should expose retained group rename, nested erase, clear, and remove\n");
 	    groupRoot->unref();
 	    return 1;
@@ -2416,10 +2418,10 @@ test_scene_database_source_summary(void)
 	ownedSource->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
 	ownedSource->sourceRevision.getValue() != 21 ||
 	!ownedScene.getDatabaseSourceSummary(0, summary) ||
-	strcmp(summary.path.getString(), "lod-submit.bot") != 0 ||
+	bu_strcmp(summary.path.getString(), "lod-submit.bot") != 0 ||
 	!summary.hasParent ||
 	summary.drawTreeDepth != 1 ||
-	strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
+	bu_strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
 	summary.drawMode != SoBRLDatabaseSource::WIREFRAME ||
 	summary.sourceRevision != 21) {
 	printf("FAIL: scene controller replacement should preserve source configuration\n");
@@ -2461,7 +2463,7 @@ test_scene_database_source_summary(void)
 	!ownedScene.getDatabaseSourceSummary(0, summary) ||
 	!summary.hasParent ||
 	summary.drawTreeDepth != 3 ||
-	strcmp(summary.parentGroupPath.getString(), "draw/group") != 0 ||
+	bu_strcmp(summary.parentGroupPath.getString(), "draw/group") != 0 ||
 	!ownedScene.getSceneSummary(sceneSummary) ||
 	sceneSummary.databaseSourceCount != 1 ||
 	sceneSummary.nonDatabaseRootChildCount != 2) {
@@ -2552,11 +2554,11 @@ test_scene_database_source_summary(void)
 	ownedScene.getStructuralRevision() != afterMoveStructuralRevision ||
 	ownedScene.getFrameRevision() <= afterSourceNameBaseFrameRevision ||
 	!ownedScene.getDatabaseSourceSummary(0, summary) ||
-	strcmp(summary.displayName.getString(),
+	bu_strcmp(summary.displayName.getString(),
 	       "LoD Submit Display") != 0 ||
 	!ownedScene.getSceneTreeSummaryForPath("lod-submit.bot",
 		treeSummary) ||
-	strcmp(treeSummary.displayName.getString(),
+	bu_strcmp(treeSummary.displayName.getString(),
 	       "LoD Submit Display") != 0) {
 	printf("FAIL: scene controller should own database source display name\n");
 	ownedRoot->unref();
@@ -2728,7 +2730,7 @@ test_scene_database_source_summary(void)
 	ownedSource->sourceRevision.getValue() != 25 ||
 	!ownedScene.getDatabaseSourceSummary(0, summary) ||
 	summary.drawTreeDepth != 3 ||
-	strcmp(summary.parentGroupPath.getString(), "draw/group") != 0 ||
+	bu_strcmp(summary.parentGroupPath.getString(), "draw/group") != 0 ||
 	ownedScene.getGroupChildCount("draw/group") != 1) {
 	printf("FAIL: scene controller should replace nested database sources in place\n");
 	ownedRoot->unref();
@@ -2744,7 +2746,7 @@ test_scene_database_source_summary(void)
 	!ownedScene.getDatabaseSourceSummary(0, summary) ||
 	!summary.hasParent ||
 	summary.drawTreeDepth != 1 ||
-	strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
+	bu_strcmp(summary.parentGroupPath.getString(), "/") != 0 ||
 	ownedScene.removeGroup("draw") != 1 ||
 	ownedRoot->getNumChildren() != 2) {
 	printf("FAIL: scene controller should move nested database sources back to the scene root\n");
@@ -2844,11 +2846,11 @@ test_scene_database_source_summary(void)
 	    sharedInstanceKey, sharedSummary) ||
 	!find_database_source_summary_by_instance(ownedScene,
 		viewInstanceKey, viewSummary) ||
-	strcmp(sharedSummary.path.getString(), "lod-submit.bot") != 0 ||
-	strcmp(viewSummary.path.getString(), "lod-submit.bot") != 0 ||
-	strcmp(sharedSummary.instanceKey.getString(),
+	bu_strcmp(sharedSummary.path.getString(), "lod-submit.bot") != 0 ||
+	bu_strcmp(viewSummary.path.getString(), "lod-submit.bot") != 0 ||
+	bu_strcmp(sharedSummary.instanceKey.getString(),
 	       sharedInstanceKey) != 0 ||
-	strcmp(viewSummary.instanceKey.getString(), viewInstanceKey) != 0 ||
+	bu_strcmp(viewSummary.instanceKey.getString(), viewInstanceKey) != 0 ||
 	sharedSummary.drawMode != SoBRLDatabaseSource::WIREFRAME ||
 	viewSummary.drawMode != SoBRLDatabaseSource::SHADED) {
 	printf("FAIL: scene controller source summaries should separate instance key from database path\n");
@@ -2873,7 +2875,7 @@ test_scene_database_source_summary(void)
 	sharedSummary.lineWidth != 11 ||
 	viewSummary.visible != TRUE ||
 	viewSummary.highlighted != FALSE ||
-	strcmp(viewSummary.parentGroupPath.getString(), "views/V0") != 0) {
+	bu_strcmp(viewSummary.parentGroupPath.getString(), "views/V0") != 0) {
 	printf("FAIL: scene controller source instance state should mutate only the targeted owner\n");
 	ownedRoot->unref();
 	db_close(dbip);
@@ -2906,15 +2908,15 @@ test_scene_database_source_summary(void)
 	const char *instanceShapePath =
 	    instanceShapeSummary.path.getString();
 	const int instancePathMatches =
-	    strcmp(instanceShapePath, "lod-submit.bot") == 0 ||
-	    strcmp(instanceShapePath, "/lod-submit.bot") == 0;
-	if (strcmp(instanceShapeSummary.ownerSourceInstanceKey.getString(),
+	    bu_strcmp(instanceShapePath, "lod-submit.bot") == 0 ||
+	    bu_strcmp(instanceShapePath, "/lod-submit.bot") == 0;
+	if (bu_strcmp(instanceShapeSummary.ownerSourceInstanceKey.getString(),
 		   sharedInstanceKey) == 0 &&
 	    instancePathMatches &&
 	    strstr(instanceShapeSummary.sourceIdentity.getString(),
 		   sharedInstanceKey))
 	    sharedRealized = 1;
-	if (strcmp(instanceShapeSummary.ownerSourceInstanceKey.getString(),
+	if (bu_strcmp(instanceShapeSummary.ownerSourceInstanceKey.getString(),
 		   viewInstanceKey) == 0 &&
 	    instancePathMatches &&
 	    strstr(instanceShapeSummary.sourceIdentity.getString(),
@@ -2935,8 +2937,8 @@ test_scene_database_source_summary(void)
 	!ownedScene.findDatabaseSourceInstance(viewInstanceKey) ||
 	!find_database_source_summary_by_instance(ownedScene,
 		viewInstanceKey, viewSummary) ||
-	strcmp(viewSummary.path.getString(), "lod-submit.bot") != 0 ||
-	strcmp(viewSummary.parentGroupPath.getString(), "views/V0") != 0) {
+	bu_strcmp(viewSummary.path.getString(), "lod-submit.bot") != 0 ||
+	bu_strcmp(viewSummary.parentGroupPath.getString(), "views/V0") != 0) {
 	printf("FAIL: scene controller should remove only the targeted source instance\n");
 	ownedRoot->unref();
 	db_close(dbip);
@@ -3055,16 +3057,16 @@ test_mesh_lod_request_and_view_info(void)
 			 "brlobol-cache-v1",
 			 BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
 
-    if (strcmp(request.databaseId.getString(), "db://request-test") != 0 ||
+    if (bu_strcmp(request.databaseId.getString(), "db://request-test") != 0 ||
 	request.databaseRevision != 12 ||
 	request.sourceRevision != 44 ||
-	strcmp(request.objectPath.getString(), "/mesh/request") != 0 ||
-	strcmp(request.objectName.getString(), "request") != 0 ||
+	bu_strcmp(request.objectPath.getString(), "/mesh/request") != 0 ||
+	bu_strcmp(request.objectName.getString(), "request") != 0 ||
 	request.viewRevision != 34 ||
 	request.policyRevision != 56 ||
 	request.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
 	request.lodPolicy != 9 ||
-	strcmp(request.providerId.getString(), "brlobol_mesh_lod") != 0 ||
+	bu_strcmp(request.providerId.getString(), "brlobol_mesh_lod") != 0 ||
 	request.qualityTier != BRLOBOL_LOD_QUALITY_FAST_DISPLAY ||
 	request.sourceCounts.faceCount != 1 ||
 	request.sourceCounts.pointCount != 3 ||
@@ -3085,7 +3087,7 @@ test_mesh_lod_request_and_view_info(void)
 			 "brlobol_mesh_lod",
 			 "brlobol-cache-v1",
 			 BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
-    if (strcmp(firstKey.value.getString(),
+    if (bu_strcmp(firstKey.value.getString(),
 	       brlobol_lod_cache_key(sameRequest).value.getString()) != 0) {
 	printf("FAIL: mesh LoD request helper produced unstable cache key\n");
 	mesh->unref();
@@ -3335,11 +3337,11 @@ test_export_record_metadata(void)
 
     const SoBRLExportAction::TriangleRecord &meshRecord =
 	exportAction.getTriangle(0);
-    if (strcmp(meshRecord.displayName.getString(), "Mesh Display") != 0 ||
-	strcmp(meshRecord.geometryName.getString(), "mesh geometry") != 0 ||
-	strcmp(meshRecord.cacheIdentity.getString(),
+    if (bu_strcmp(meshRecord.displayName.getString(), "Mesh Display") != 0 ||
+	bu_strcmp(meshRecord.geometryName.getString(), "mesh geometry") != 0 ||
+	bu_strcmp(meshRecord.cacheIdentity.getString(),
 	       "cache://metadata/mesh") != 0 ||
-	strcmp(meshRecord.sourceIdentity.getString(),
+	bu_strcmp(meshRecord.sourceIdentity.getString(),
 	       "db://metadata/mesh.bot") != 0 ||
 	meshRecord.cacheIdentityValue != meshCacheIdentity ||
 	meshRecord.sourceIdentityValue != meshSourceIdentity ||
@@ -3349,8 +3351,8 @@ test_export_record_metadata(void)
 	meshRecord.sharedSource ||
 	meshRecord.nonDatabaseSource ||
 	meshRecord.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
-	strcmp(meshRecord.recordRole.getString(), "database") != 0 ||
-	strcmp(meshRecord.geometryKind.getString(), "surface") != 0) {
+	bu_strcmp(meshRecord.recordRole.getString(), "database") != 0 ||
+	bu_strcmp(meshRecord.geometryKind.getString(), "surface") != 0) {
 	printf("FAIL: mesh export record did not preserve neutral metadata\n");
 	root->unref();
 	return 1;
@@ -3359,13 +3361,13 @@ test_export_record_metadata(void)
     const SoBRLExportAction::LineRecord &lineRecord = exportAction.getLine(0);
     const SoBRLExportAction::PointRecord &pointRecord =
 	exportAction.getPoint(0);
-    if (strcmp(lineRecord.displayName.getString(), "Curve Display") != 0 ||
-	strcmp(lineRecord.geometryName.getString(), "curve geometry") != 0 ||
-	strcmp(lineRecord.geometryKind.getString(), "line") != 0 ||
+    if (bu_strcmp(lineRecord.displayName.getString(), "Curve Display") != 0 ||
+	bu_strcmp(lineRecord.geometryName.getString(), "curve geometry") != 0 ||
+	bu_strcmp(lineRecord.geometryKind.getString(), "line") != 0 ||
 	lineRecord.cacheIdentityValue != curveCacheIdentity ||
 	lineRecord.sourceIdentityValue != curveSourceIdentity ||
-	strcmp(pointRecord.displayName.getString(), "Curve Display") != 0 ||
-	strcmp(pointRecord.geometryKind.getString(), "point") != 0 ||
+	bu_strcmp(pointRecord.displayName.getString(), "Curve Display") != 0 ||
+	bu_strcmp(pointRecord.geometryKind.getString(), "point") != 0 ||
 	pointRecord.cacheIdentityValue != curveCacheIdentity ||
 	pointRecord.sourceIdentityValue != curveSourceIdentity ||
 	pointRecord.drawMode != BRLOBOL_LOD_DRAW_WIRE ||
@@ -3387,7 +3389,7 @@ test_export_record_metadata(void)
 	exportAction.getObjectRecord(1);
     const SoBRLExportAction::ObjectRecord &vlistShadedObject =
 	exportAction.getObjectRecord(2);
-    if (strcmp(meshObject.path.getString(), "/metadata/mesh.bot") != 0 ||
+    if (bu_strcmp(meshObject.path.getString(), "/metadata/mesh.bot") != 0 ||
 	meshObject.triangleIndices.size() != 1 ||
 	!meshObject.lineIndices.empty() ||
 	!meshObject.pointIndices.empty() ||
@@ -3395,17 +3397,17 @@ test_export_record_metadata(void)
 	meshObject.sharedSource ||
 	meshObject.cacheIdentityValue != meshCacheIdentity ||
 	meshObject.sourceIdentityValue != meshSourceIdentity ||
-	strcmp(meshObject.geometryKind.getString(), "surface") != 0 ||
+	bu_strcmp(meshObject.geometryKind.getString(), "surface") != 0 ||
 	meshObject.bounds.isEmpty()) {
 	printf("FAIL: mesh object export record did not summarize triangle metadata\n");
 	root->unref();
 	return 1;
     }
-    if (strcmp(vlistObject.path.getString(), "/metadata/curve.sketch") != 0 ||
+    if (bu_strcmp(vlistObject.path.getString(), "/metadata/curve.sketch") != 0 ||
 	vlistObject.lineIndices.size() != 1 ||
 	vlistObject.pointIndices.size() != 1 ||
 	!vlistObject.triangleIndices.empty() ||
-	strcmp(vlistObject.geometryKind.getString(), "mixed") != 0 ||
+	bu_strcmp(vlistObject.geometryKind.getString(), "mixed") != 0 ||
 	vlistObject.cacheIdentityValue != curveCacheIdentity ||
 	vlistObject.sourceIdentityValue != curveSourceIdentity ||
 	vlistObject.drawMode != BRLOBOL_LOD_DRAW_WIRE) {
@@ -3413,7 +3415,7 @@ test_export_record_metadata(void)
 	root->unref();
 	return 1;
     }
-    if (strcmp(vlistShadedObject.path.getString(),
+    if (bu_strcmp(vlistShadedObject.path.getString(),
 	       "/metadata/curve.sketch") != 0 ||
 	vlistShadedObject.lineIndices.size() != 1 ||
 	!vlistShadedObject.pointIndices.empty() ||
@@ -3498,19 +3500,19 @@ test_export_record_metadata(void)
 
     const BRLObolSourceMeshRequest &sourceRequest =
 	exportAction.getSourceBackedFullDetailRequest(0);
-    if (strcmp(sourceRequest.displayName.getString(),
+    if (bu_strcmp(sourceRequest.displayName.getString(),
 	       "Source Mesh Display") != 0 ||
-	strcmp(sourceRequest.geometryName.getString(),
+	bu_strcmp(sourceRequest.geometryName.getString(),
 	       "source mesh geometry") != 0 ||
-	strcmp(sourceRequest.cacheIdentity.getString(),
+	bu_strcmp(sourceRequest.cacheIdentity.getString(),
 	       "cache://metadata/source") != 0 ||
-	strcmp(sourceRequest.sourceIdentity.getString(),
+	bu_strcmp(sourceRequest.sourceIdentity.getString(),
 	       "db://metadata/source.bot") != 0 ||
 	!sourceRequest.databaseIntent ||
 	sourceRequest.sharedSource ||
 	sourceRequest.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
-	strcmp(sourceRequest.recordRole.getString(), "database") != 0 ||
-	strcmp(sourceRequest.geometryKind.getString(), "surface") != 0) {
+	bu_strcmp(sourceRequest.recordRole.getString(), "database") != 0 ||
+	bu_strcmp(sourceRequest.geometryKind.getString(), "surface") != 0) {
 	printf("FAIL: source-backed request did not preserve neutral metadata\n");
 	root->unref();
 	return 1;
@@ -3533,11 +3535,11 @@ test_export_record_metadata(void)
     }
     const SoBRLExportAction::TriangleRecord &sourceRecord =
 	exportAction.getTriangle(beforeTriangleCount);
-    if (strcmp(sourceRecord.displayName.getString(),
+    if (bu_strcmp(sourceRecord.displayName.getString(),
 	       "Source Mesh Display") != 0 ||
-	strcmp(sourceRecord.cacheIdentity.getString(),
+	bu_strcmp(sourceRecord.cacheIdentity.getString(),
 	       "cache://metadata/source") != 0 ||
-	strcmp(sourceRecord.sourceIdentity.getString(),
+	bu_strcmp(sourceRecord.sourceIdentity.getString(),
 	       "db://metadata/source.bot") != 0 ||
 	sourceRecord.cacheIdentityValue != sourceCacheIdentity ||
 	sourceRecord.sourceIdentityValue != sourceSourceIdentity ||
@@ -3545,8 +3547,8 @@ test_export_record_metadata(void)
 	sourceRecord.sharedSource ||
 	sourceRecord.nonDatabaseSource ||
 	sourceRecord.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
-	strcmp(sourceRecord.recordRole.getString(), "database") != 0 ||
-	strcmp(sourceRecord.geometryKind.getString(), "surface") != 0) {
+	bu_strcmp(sourceRecord.recordRole.getString(), "database") != 0 ||
+	bu_strcmp(sourceRecord.geometryKind.getString(), "surface") != 0) {
 	printf("FAIL: source-backed full-detail export record did not preserve neutral metadata\n");
 	root->unref();
 	return 1;
@@ -3559,16 +3561,16 @@ test_export_record_metadata(void)
     }
     const SoBRLExportAction::ObjectRecord &sourceObject =
 	exportAction.getObjectRecord(3);
-    if (strcmp(sourceObject.path.getString(), "/metadata/source.bot") != 0 ||
+    if (bu_strcmp(sourceObject.path.getString(), "/metadata/source.bot") != 0 ||
 	sourceObject.triangleIndices.size() != 1 ||
 	!sourceObject.databaseIntent ||
 	sourceObject.sharedSource ||
 	sourceObject.nonDatabaseSource ||
-	strcmp(sourceObject.displayName.getString(),
+	bu_strcmp(sourceObject.displayName.getString(),
 	       "Source Mesh Display") != 0 ||
 	sourceObject.cacheIdentityValue != sourceCacheIdentity ||
 	sourceObject.sourceIdentityValue != sourceSourceIdentity ||
-	strcmp(sourceObject.cacheIdentity.getString(),
+	bu_strcmp(sourceObject.cacheIdentity.getString(),
 	       "cache://metadata/source") != 0) {
 	printf("FAIL: source-backed object export record did not preserve neutral metadata\n");
 	root->unref();
@@ -3691,7 +3693,7 @@ test_mesh_residency_budget_action(void)
 	    controller.getLastMeshBudgetEvictedFullDetailMeshCount() != 0 ||
 	    controller.getLastMeshBudgetEvictedDisplayMeshCount() != 2 ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-memory-budget") != 0 ||
 	    preservingMesh->isLodDisplayActive() ||
 	    lodMesh->isLodDisplayActive() ||
@@ -3779,7 +3781,7 @@ test_view_controller_mesh_residency_budget_auto(void)
 		controller.getLastMeshBudgetEvictedFullDetailMeshCount() != 1 ||
 		controller.getLastMeshBudgetEvictedDisplayMeshCount() != 1 ||
 		!controller.isRenderRequested() ||
-		strcmp(controller.getRenderReason().getString(),
+		bu_strcmp(controller.getRenderReason().getString(),
 		       "lod-memory-budget") != 0 ||
 		mesh->isLodDisplayActive() ||
 		mesh->hasFullDetailMesh() ||
@@ -4383,7 +4385,7 @@ test_mesh_lod_submit_action(void)
 		    !exactSnap.hasCandidate() ||
 		    exactSnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
 		    exactSnap.getPrimitiveIndex() != 0 ||
-		    strcmp(exactSnap.getPath().getString(),
+		    bu_strcmp(exactSnap.getPath().getString(),
 			   "/lod-submit.bot") != 0) {
 		    printf("FAIL: exact snap did not consume source-backed full-detail LoD result\n");
 		    ret = 1;
@@ -4426,7 +4428,7 @@ test_mesh_lod_submit_action(void)
 				    controllerSnap.getKind() !=
 				    SoBRLSnapAction::FACE_NEAREST ||
 				    controllerSnap.getPrimitiveIndex() != 0 ||
-				    strcmp(controllerSnap.getPath().getString(),
+				    bu_strcmp(controllerSnap.getPath().getString(),
 					   "/lod-submit.bot") != 0) {
 				    printf("FAIL: controller source-backed exact snap helper did not consume matching LoD result\n");
 				    ret = 1;
@@ -4443,7 +4445,7 @@ test_mesh_lod_submit_action(void)
 			SbVec3f(0.2f, 0.2f, 5.0f),
 			SbVec3f(0.0f, 0.0f, -1.0f)) ||
 		    !sourcePick.hit ||
-		    strcmp(sourcePick.detail.getPath().getString(),
+		    bu_strcmp(sourcePick.detail.getPath().getString(),
 			   "/lod-submit.bot") != 0 ||
 		    sourcePick.detail.getPrimitiveKind() !=
 		    SoBRLPickDetail::FACE ||
@@ -4490,7 +4492,7 @@ test_mesh_lod_submit_action(void)
 			if (sourcePickAction.consumeSourceBackedFullDetailResults(
 				actionPick, pickSourceResults) != 1 ||
 			    !actionPick.hit ||
-			    strcmp(actionPick.detail.getPath().getString(),
+			    bu_strcmp(actionPick.detail.getPath().getString(),
 				   "/lod-submit.bot") != 0 ||
 			    actionPick.detail.getPrimitiveIndex() != 0) {
 			    printf("FAIL: exact pick action did not collect and consume source-backed full-detail LoD result\n");
@@ -4522,7 +4524,7 @@ test_mesh_lod_submit_action(void)
 					    0, &submittedCount) != 1 ||
 					submittedCount != 0 ||
 					!controllerPick.hit ||
-					strcmp(controllerPick.detail.getPath().getString(),
+					bu_strcmp(controllerPick.detail.getPath().getString(),
 					       "/lod-submit.bot") != 0 ||
 					controllerPick.detail.getPrimitiveIndex() != 0) {
 					printf("FAIL: controller source-backed exact pick helper did not consume matching LoD result\n");
@@ -4978,10 +4980,10 @@ test_view_controller_source_backed_multi_source_exact_submit(void)
 	if (submittedResults.size() != 1 ||
 	    submittedResults[0].providerStatus !=
 	    BRLOBOL_LOD_PROVIDER_STALE ||
-	    strcmp(submittedResults[0].request.databaseId.getString(),
+	    bu_strcmp(submittedResults[0].request.databaseId.getString(),
 		   rightDbId) != 0 ||
 	    submittedResults[0].request.sourceRevision != 222 ||
-	    strcmp(submittedResults[0].request.objectPath.getString(),
+	    bu_strcmp(submittedResults[0].request.objectPath.getString(),
 		   "/lod-submit.bot") != 0) {
 	    printf("FAIL: controller multi-source source-backed exact submit did not use matching database source\n");
 	    ret = 1;
@@ -5168,7 +5170,7 @@ test_view_controller_source_backed_partial_ready_submit(void)
 			    &submittedCount) != 1 ||
 			submittedCount != 1 ||
 			!pick.hit ||
-			strcmp(pick.detail.getPath().getString(),
+			bu_strcmp(pick.detail.getPath().getString(),
 			       "/lod-submit.bot") != 0 ||
 			pick.detail.getPrimitiveIndex() != 0) {
 			printf("FAIL: controller partial-ready exact pick helper did not consume ready result and submit missing request\n");
@@ -5262,7 +5264,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    controller.getLastLodSkippedMeshCount() != 0 ||
 	    controller.getLastLodDiagnostics().getLength() != 0 ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-submit") != 0) {
 	    printf("FAIL: LoD view controller did not submit expected task\n");
 	    service.stop();
@@ -5307,7 +5309,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    !controller.getViewLodState()->findMesh(mesh) ||
 	    !controller.getViewLodState()->findProxy(mesh) ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-result") != 0 ||
 	    controller.hasPendingLodResults()) {
 	    printf("FAIL: LoD view controller did not apply service result\n");
@@ -5324,7 +5326,7 @@ test_view_controller_lod_submit_and_apply(void)
 	controller.setLodAutoSubmit(TRUE);
 	if (!controller.isLodAutoSubmitEnabled() ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-auto-submit") != 0) {
 	    printf("FAIL: LoD view controller did not enable auto submit\n");
 	    service.stop();
@@ -5410,7 +5412,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    controller.getLastLodSubmittedTaskCount() != 3 ||
 	    controller.getLodViewRevision() == previousViewRevision ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-submit") != 0) {
 	    printf("FAIL: LoD view controller did not auto-submit camera field change\n");
 	    service.stop();
@@ -5433,7 +5435,7 @@ test_view_controller_lod_submit_and_apply(void)
 	controller.clearRenderRequest();
 	if (controller.processPendingLodResults() != 3 ||
 	    controller.getLastLodAppliedResultCount() != 3 ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-result") != 0) {
 	    printf("FAIL: LoD view controller did not apply camera field result\n");
 	    service.stop();
@@ -5455,7 +5457,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    controller.getLodForcedLevel() != forcedLevel ||
 	    controller.getLodPolicyRevision() == previousPolicyRevision ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-policy") != 0) {
 	    printf("FAIL: LoD view controller did not record forced-level policy\n");
 	    service.stop();
@@ -5470,7 +5472,7 @@ test_view_controller_lod_submit_and_apply(void)
 	if (controller.submitLodRequestsIfNeeded() != 3 ||
 	    controller.getLastLodSubmittedTaskCount() != 3 ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-submit") != 0) {
 	    printf("FAIL: LoD view controller did not auto-submit forced-level policy\n");
 	    service.stop();
@@ -5496,7 +5498,7 @@ test_view_controller_lod_submit_and_apply(void)
 	    !controller.getViewLodState()->findMesh(mesh) ||
 	    controller.getViewLodState()->findMesh(mesh)->activeLevel !=
 	    forcedLevel ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-result") != 0) {
 	    printf("FAIL: LoD view controller did not apply forced-level result\n");
 	    service.stop();
@@ -5514,7 +5516,7 @@ test_view_controller_lod_submit_and_apply(void)
 	if (controller.hasLodForcedLevel() ||
 	    controller.getLodPolicyRevision() == previousPolicyRevision ||
 	    !controller.isRenderRequested() ||
-	    strcmp(controller.getRenderReason().getString(),
+	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-policy") != 0) {
 	    printf("FAIL: LoD view controller did not clear forced-level policy\n");
 	    service.stop();
@@ -5703,7 +5705,7 @@ test_view_controller_progressive_lod_results(void)
 	    if (controller.processPendingLodResults(1) != 1 ||
 		controller.getLastLodAppliedResultCount() != 1 ||
 		!controller.isRenderRequested() ||
-		strcmp(controller.getRenderReason().getString(),
+		bu_strcmp(controller.getRenderReason().getString(),
 		       "lod-result") != 0) {
 		printf("FAIL: progressive LoD controller did not apply coarse result\n");
 		ret = 1;
@@ -5736,7 +5738,7 @@ test_view_controller_progressive_lod_results(void)
 	    if (controller.processPendingLodResults(1) != 1 ||
 		controller.getLastLodAppliedResultCount() != 1 ||
 		!controller.isRenderRequested() ||
-		strcmp(controller.getRenderReason().getString(),
+		bu_strcmp(controller.getRenderReason().getString(),
 		       "lod-result") != 0) {
 		printf("FAIL: progressive LoD controller did not apply refined result\n");
 		ret = 1;
@@ -5880,7 +5882,7 @@ test_view_local_lod_only_pick(void)
 		 rawDetail->isOfType(SoBRLPickDetail::getClassTypeId())) ?
 		static_cast<const SoBRLPickDetail *>(rawDetail) : NULL;
 	    if (!pickDetail ||
-		strcmp(pickDetail->getPath().getString(), "/pick/lod.bot") != 0 ||
+		bu_strcmp(pickDetail->getPath().getString(), "/pick/lod.bot") != 0 ||
 		pickDetail->getSourceId() != 515 ||
 		pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE ||
 		pickDetail->getPrimitiveIndex() != 0) {

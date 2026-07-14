@@ -7,6 +7,12 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
+#include "bu/str.h"
+
+#include "bv.h"
+
 #include "brlobol/edit_preview.h"
 #include "brlobol/export_action.h"
 #include "brlobol/measure_action.h"
@@ -20,9 +26,7 @@
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
-#include "QgLegacyViewContext.h"
 #include "qtcad/QgGedEventBatch.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
@@ -57,7 +61,7 @@ find_preview(BRLObolViewController *controller, const char *previewId)
 	if (!node || !node->isOfType(SoBRLEditPreview::getClassTypeId()))
 	    continue;
 	SoBRLEditPreview *preview = static_cast<SoBRLEditPreview *>(node);
-	if (strcmp(preview->previewId.getValue().getString(), previewId) == 0)
+	if (bu_strcmp(preview->previewId.getValue().getString(), previewId) == 0)
 	    return preview;
     }
 
@@ -88,13 +92,13 @@ check_shape_metadata(SoBRLVListShape *shape,
 {
     if (!shape)
 	return 0;
-    if (strcmp(shape->sourcePath.getValue().getString(), path) != 0 ||
-	    strcmp(shape->sourceName.getValue().getString(), previewId) != 0 ||
-	    strcmp(shape->sourceType.getValue().getString(), "edit-preview") != 0 ||
+    if (bu_strcmp(shape->sourcePath.getValue().getString(), path) != 0 ||
+	    bu_strcmp(shape->sourceName.getValue().getString(), previewId) != 0 ||
+	    bu_strcmp(shape->sourceType.getValue().getString(), "edit-preview") != 0 ||
 	    shape->sourceId.getValue() != sourceRevision ||
 	    !shape->editEmphasis.getValue() ||
-	    strcmp(shape->editIntentId.getValue().getString(), editIntentId) != 0 ||
-	    strcmp(shape->editIntentRole.getValue().getString(), editIntentRole) != 0 ||
+	    bu_strcmp(shape->editIntentId.getValue().getString(), editIntentId) != 0 ||
+	    bu_strcmp(shape->editIntentRole.getValue().getString(), editIntentRole) != 0 ||
 	    shape->getSegmentCount() != segmentCount)
 	return 0;
     return 1;
@@ -143,7 +147,7 @@ edit_preview_update(QgView *view, const char *name, const char *path,
     transaction.source_revision = source_revision;
     transaction.inputs_revision = inputs_revision;
     const int ret = ged_draw_view_context_edit_transaction_apply(
-	qg_legacy_view_to_context(view->view()), &transaction, NULL);
+	view->viewContext(), &transaction, NULL);
     bu_free(ged_points, "edit transaction test points");
     if (ret)
 	view->need_update(QG_VIEW_DRAWN);
@@ -158,7 +162,7 @@ edit_preview_clear(QgView *view, const char *name)
     transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
     transaction.feature_name = name;
     const int ret = ged_draw_view_context_edit_transaction_apply(
-	qg_legacy_view_to_context(view->view()), &transaction, NULL);
+	view->viewContext(), &transaction, NULL);
     if (ret)
 	view->need_update(QG_VIEW_DRAWN);
     return ret;
@@ -167,17 +171,18 @@ edit_preview_clear(QgView *view, const char *name)
 int
 main(int argc, char **argv)
 {
+    bu_setprogname(argv[0]);
     QApplication app(argc, argv);
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(160, 120);
 
     QgPluginContext context;
     context.viewWidgetAccessor = [&view]() -> QgView * { return &view; };
     if (context.getViewWidget() != &view)
 	FAIL("plugin context should expose the active QgView widget");
-    if (context.activeView() != view.view())
-	FAIL("plugin context should expose the active opaque legacy view");
+    if (context.activeViewContext() != view.viewContext())
+	FAIL("plugin context should expose the active view context");
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -189,8 +194,9 @@ main(int argc, char **argv)
     struct ged *gedp = ged_open("db", dbpath, 1);
     if (!gedp)
 	FAIL("failed to open qtcad Obol edit-preview test database");
-    void *view_ctx = qg_legacy_view_to_context(view.view());
-    qg_legacy_view_ged_active_set(gedp, view.view());
+    void *view_ctx = view.viewContext();
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
     if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
 	    controller, 0))
 	FAIL("qtcad test should attach the QgView Obol controller to GED");
@@ -200,9 +206,9 @@ main(int argc, char **argv)
 	controller->getRenderSceneRoot() != attachedRenderRoot)
 	FAIL("reaffirming an Obol endpoint should preserve its retained render root");
 
-    QgView secondView(NULL, QgView_SW);
+    QgView secondView(NULL, QgViewType::SW);
     secondView.resize(160, 120);
-    void *second_view_ctx = qg_legacy_view_to_context(secondView.view());
+    void *second_view_ctx = secondView.viewContext();
     BRLObolViewController *second_controller =
 	secondView.obolViewController();
     if (!second_controller ||
@@ -339,10 +345,10 @@ main(int argc, char **argv)
     SoBRLExportAction previewExport;
     previewExport.apply(controller->getSceneRoot());
     if (previewExport.getLineCount() != 3 ||
-	    strcmp(previewExport.getLine(0).path.getString(), identity) != 0 ||
+	    bu_strcmp(previewExport.getLine(0).path.getString(), identity) != 0 ||
 	    !previewExport.getLine(0).editEmphasis ||
-	    strcmp(previewExport.getLine(0).editIntentId.getString(), previewId) != 0 ||
-	    strcmp(previewExport.getLine(0).editIntentRole.getString(), "preview") != 0)
+	    bu_strcmp(previewExport.getLine(0).editIntentId.getString(), previewId) != 0 ||
+	    bu_strcmp(previewExport.getLine(0).editIntentRole.getString(), "preview") != 0)
 	FAIL("qtcad edit preview export should preserve edit-intent metadata");
 
     SoBRLSnapAction previewSnap;
@@ -351,18 +357,18 @@ main(int argc, char **argv)
     previewSnap.setTolerance(0.01f);
     previewSnap.apply(controller->getSceneRoot());
     if (!previewSnap.hasCandidate() ||
-	    strcmp(previewSnap.getPath().getString(), identity) != 0 ||
-	    strcmp(previewSnap.getEditIntentId().getString(), previewId) != 0 ||
-	    strcmp(previewSnap.getEditIntentRole().getString(), "preview") != 0)
+	    bu_strcmp(previewSnap.getPath().getString(), identity) != 0 ||
+	    bu_strcmp(previewSnap.getEditIntentId().getString(), previewId) != 0 ||
+	    bu_strcmp(previewSnap.getEditIntentRole().getString(), "preview") != 0)
 	FAIL("qtcad edit preview snap should preserve edit-intent metadata");
 
     SoBRLMeasureAction previewMeasure;
     previewMeasure.setQueryPoint(SbVec3f(1.0f, 0.25f, 0.0f));
     previewMeasure.apply(controller->getSceneRoot());
     if (!previewMeasure.hasNearestSegment() ||
-	    strcmp(previewMeasure.getNearestPath().getString(), identity) != 0 ||
-	    strcmp(previewMeasure.getNearestEditIntentId().getString(), previewId) != 0 ||
-	    strcmp(previewMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
+	    bu_strcmp(previewMeasure.getNearestPath().getString(), identity) != 0 ||
+	    bu_strcmp(previewMeasure.getNearestEditIntentId().getString(), previewId) != 0 ||
+	    bu_strcmp(previewMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
 	FAIL("qtcad edit preview measure should preserve edit-intent metadata");
 
     SbVec3f replacementPoints[2] = {
@@ -397,8 +403,8 @@ main(int argc, char **argv)
     SoBRLExportAction replacementExport;
     replacementExport.apply(controller->getSceneRoot());
     if (replacementExport.getLineCount() != 1 ||
-	    strcmp(replacementExport.getLine(0).editIntentId.getString(), previewId) != 0 ||
-	    strcmp(replacementExport.getLine(0).editIntentRole.getString(), "preview") != 0)
+	    bu_strcmp(replacementExport.getLine(0).editIntentId.getString(), previewId) != 0 ||
+	    bu_strcmp(replacementExport.getLine(0).editIntentRole.getString(), "preview") != 0)
 	FAIL("replacement edit preview export should keep edit-intent metadata current");
 
     const char *customIntentId = "edit::box.s/translate";
@@ -414,8 +420,8 @@ main(int argc, char **argv)
     preview = find_preview(controller, previewId);
     if (!preview)
 	FAIL("custom intent replacement should keep the edit preview node present");
-    if (strcmp(preview->editIntentId.getValue().getString(), customIntentId) != 0 ||
-	    strcmp(preview->editIntentRole.getValue().getString(), customIntentRole) != 0 ||
+    if (bu_strcmp(preview->editIntentId.getValue().getString(), customIntentId) != 0 ||
+	    bu_strcmp(preview->editIntentRole.getValue().getString(), customIntentRole) != 0 ||
 	    preview->sourceRevision.getValue() != 21 ||
 	    preview->inputsRevision.getValue() != 22)
 	FAIL("edit preview node should record explicit live edit intent fields");
@@ -428,9 +434,9 @@ main(int argc, char **argv)
     SoBRLExportAction customIntentExport;
     customIntentExport.apply(controller->getSceneRoot());
     if (customIntentExport.getLineCount() != 1 ||
-	    strcmp(customIntentExport.getLine(0).editIntentId.getString(),
+	    bu_strcmp(customIntentExport.getLine(0).editIntentId.getString(),
 		customIntentId) != 0 ||
-	    strcmp(customIntentExport.getLine(0).editIntentRole.getString(),
+	    bu_strcmp(customIntentExport.getLine(0).editIntentRole.getString(),
 		customIntentRole) != 0)
 	FAIL("custom edit preview export should preserve explicit intent metadata");
 
@@ -440,9 +446,9 @@ main(int argc, char **argv)
     customIntentSnap.setTolerance(0.01f);
     customIntentSnap.apply(controller->getSceneRoot());
     if (!customIntentSnap.hasCandidate() ||
-	    strcmp(customIntentSnap.getEditIntentId().getString(),
+	    bu_strcmp(customIntentSnap.getEditIntentId().getString(),
 		customIntentId) != 0 ||
-	    strcmp(customIntentSnap.getEditIntentRole().getString(),
+	    bu_strcmp(customIntentSnap.getEditIntentRole().getString(),
 		customIntentRole) != 0)
 	FAIL("custom edit preview snap should preserve explicit intent metadata");
 
@@ -450,9 +456,9 @@ main(int argc, char **argv)
     customIntentMeasure.setQueryPoint(SbVec3f(2.0f, 0.25f, 0.0f));
     customIntentMeasure.apply(controller->getSceneRoot());
     if (!customIntentMeasure.hasNearestSegment() ||
-	    strcmp(customIntentMeasure.getNearestEditIntentId().getString(),
+	    bu_strcmp(customIntentMeasure.getNearestEditIntentId().getString(),
 		customIntentId) != 0 ||
-	    strcmp(customIntentMeasure.getNearestEditIntentRole().getString(),
+	    bu_strcmp(customIntentMeasure.getNearestEditIntentRole().getString(),
 		customIntentRole) != 0)
 	FAIL("custom edit preview measure should preserve explicit intent metadata");
 
@@ -469,12 +475,12 @@ main(int argc, char **argv)
     const char *gedIntentId = "edit::box.s/ged-preview";
     const char *gedIntentRole = "scale-handle";
     controller->clearRenderRequest();
-    (void)bv_context_refresh_complete(qg_legacy_view_context(view.view()));
+    (void)bv_context_refresh_complete(static_cast<struct bv_context *>(view.viewContext()));
     if (edit_preview_update(&view, gedPreviewId,
 	    gedIdentity, gedIntentId, gedIntentRole, points, commands, 4,
 	    41, 42) != 1)
 	FAIL("qtcad helper should publish GED-owned edit preview geometry");
-    if (!bv_refresh_dirty_get(qg_legacy_view_bv_const(view.view())))
+    if (!bv_refresh_dirty_get(bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext()))))
 	FAIL("GED-routed edit preview updates should request a qtcad view refresh");
 
     struct ged_draw_view_feature_summary gedSummary =
@@ -506,13 +512,13 @@ main(int argc, char **argv)
 	FAIL("GED-routed qtcad edit preview should preserve identity, intent, revisions, and local scope");
 
     controller->clearRenderRequest();
-    (void)bv_context_refresh_complete(qg_legacy_view_context(view.view()));
+    (void)bv_context_refresh_complete(static_cast<struct bv_context *>(view.viewContext()));
     if (edit_preview_clear(&view, gedPreviewId) != 1)
 	FAIL("qtcad helper should clear GED-routed edit preview geometry");
     if (ged_draw_view_context_feature_summary(view_ctx, gedPreviewId,
 	    &gedSummary) && gedSummary.exists)
 	FAIL("GED-routed edit preview clear should remove the transient feature");
-    if (!bv_refresh_dirty_get(qg_legacy_view_bv_const(view.view())))
+    if (!bv_refresh_dirty_get(bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext()))))
 	FAIL("GED-routed edit preview clears should request a qtcad view refresh");
 
     ged_draw_obol_controller_detach_for_view(gedp, second_view_ctx);

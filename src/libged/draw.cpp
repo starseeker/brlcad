@@ -281,7 +281,9 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 	    const int line_style =
 		(!solid_lines_only && dd->bool_op == OP_SUBTRACT) ? 1 : 0;
 	    const int line_width = dd->vs ? dd->vs->s_line_width : 1;
-	    const fastf_t transparency = dd->vs ? dd->vs->transparency : 1.0;
+	    const fastf_t opacity = dd->vs ? dd->vs->transparency : 1.0;
+	    const fastf_t transparency = opacity <= 0.0 ? 1.0 :
+		opacity >= 1.0 ? 0.0 : 1.0 - opacity;
 	    const int color_valid = (dd->vs && dd->vs->color_override) ? 1 : 0;
 	    const unsigned char *color = color_valid ? dd->vs->color : NULL;
 	    (void)ged_draw_obol_database_source_update_display_for_path(

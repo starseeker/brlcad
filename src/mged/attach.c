@@ -24,6 +24,7 @@
 #include "common.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #ifdef HAVE_SYS_TIME_H
 #  include <sys/time.h>		/* for struct timeval */
@@ -52,26 +53,342 @@
 
 #include "./mged.h"
 #include "./sedit.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 // FIXME: Globals
 /* Geometry display instances used by MGED */
-struct bu_ptbl active_dm_set = BU_PTBL_INIT_ZERO;  /* set of active display managers */
-struct mged_dm *mged_dm_init_state = NULL;
+struct bu_ptbl active_display_set = BU_PTBL_INIT_ZERO;  /* set of active display managers */
+struct mged_display *mged_initial_display = NULL;
 
 
 extern struct _color_scheme default_color_scheme;
-extern void share_backend_cache(struct mged_dm *dlp2);	/* defined in share.c */
-int mged_default_backend_cache = 0;   /* This variable is available via Tcl for controlling use of backend caches */
 static unsigned long mged_tkobol_count = 0;
 
-static fastf_t windowbounds[6] = { BV_VIEW_MIN, BV_VIEW_MAX, BV_VIEW_MIN, BV_VIEW_MAX, BV_VIEW_MIN, BV_VIEW_MAX };
+/* attach accepts only the built-in Tk Obol host.  Its only pre-Tk option is
+ * the target X display, so do not instantiate a generic DM just to parse it. */
+static const char *
+mged_tkobol_display_arg(int argc, const char *argv[])
+{
+    const char *display = NULL;
+
+    for (int i = 1; i < argc - 1; i++) {
+	if (!BU_STR_EQUAL(argv[i], "-d"))
+	    continue;
+	if (++i >= argc - 1)
+	    return NULL;
+	display = argv[i];
+    }
+
+    return display;
+}
+
+static void
+mged_obol_input_refresh(struct mged_state *s)
+{
+    if (!s || s->mged_curr_display == MGED_DISPLAY_NULL)
+	return;
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
+}
+
+static void
+mged_obol_input_update_gui(struct mged_state *s, const char *name, int value)
+{
+    const char *pathname = s ? mged_display_pathname(s->mged_curr_display) : NULL;
+    if (!s || !s->interp || !pathname || !name)
+	return;
+
+    Tcl_DString command;
+    Tcl_DStringInit(&command);
+    Tcl_DStringAppendElement(&command, "update_gui");
+    Tcl_DStringAppendElement(&command, pathname);
+    Tcl_DStringAppendElement(&command, name);
+    char value_string[32] = {0};
+    snprintf(value_string, sizeof(value_string), "%d", value);
+    Tcl_DStringAppendElement(&command, value_string);
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    (void)Tcl_EvalEx(s->interp, Tcl_DStringValue(&command), -1,
+	TCL_EVAL_GLOBAL);
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
+    Tcl_DStringFree(&command);
+}
+
+static int
+mged_obol_input_faceplate_visibility_set(struct mged_state *s,
+	const char *property_name, int enabled)
+{
+    if (!s || s->mged_curr_display == MGED_DISPLAY_NULL || !view_state ||
+	!view_state->vs_gvp || !property_name)
+	return 0;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    value.bool_value = enabled ? 1 : 0;
+    return ged_view_context_display_property_set(view_state->vs_gvp,
+	property_name, &value) == BRLOBOL_ENDPOINT_PROPERTY_OK;
+}
+
+static int
+mged_obol_input_set_aet(struct mged_state *s, fastf_t azimuth,
+	fastf_t elevation, fastf_t twist)
+{
+    if (!s || s->mged_curr_display == MGED_DISPLAY_NULL || !view_state ||
+	!view_state->vs_gvp)
+	return 0;
+
+    vect_t aet;
+    VSET(aet, azimuth, elevation, twist);
+    if (!bv_aet_set(mged_view_state_view(view_state), aet))
+	return 0;
+    (void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+    mged_obol_input_refresh(s);
+    return 1;
+}
+
+static int
+mged_obol_input_forwarding(const struct mged_state *s)
+{
+    const char *pathname = s ? mged_display_pathname(s->mged_curr_display) : NULL;
+    if (!s || !s->interp || !pathname)
+	return 0;
+    const char *forwarding = Tcl_GetVar2(s->interp, "forwarding_key",
+	pathname, TCL_GLOBAL_ONLY);
+    return forwarding && atoi(forwarding) != 0;
+}
+
+static int
+mged_obol_input_pan_begin(struct mged_state *s,
+	const BRLObolInputEvent *event)
+{
+    if (!s || !event || event->type != BRLOBOL_INPUT_POINTER_PRESS ||
+	event->button != 0 || s->mged_curr_display == MGED_DISPLAY_NULL ||
+	s->global_editing_state != ST_VIEW ||
+	mged_variables->mv_transform != 'v' || mged_variables->mv_rateknobs ||
+	!s->dbip)
+	return 0;
+
+    struct bv_grid_state grid = BV_GRID_STATE_INIT;
+    if (!mged_display_grid_state_get(s->mged_curr_display, &grid) || !grid.snap)
+	return 0;
+
+    /* This is the same baseline the historical "dm am t" path establishes
+     * before applying snapped view translations. */
+    snap_view_center_to_grid(s);
+    mouse_dx = 0;
+    mouse_dy = 0;
+    s->mged_curr_display->display_input_snap_pan_active = 1;
+    (void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+    mged_obol_input_refresh(s);
+    return 1;
+}
+
+static int
+mged_obol_input_camera_adjust(struct mged_state *s,
+	BRLObolInputAction action, const BRLObolInputEvent *event)
+{
+    const int wheel_zoom = event && event->type == BRLOBOL_INPUT_WHEEL &&
+	action == BRLOBOL_ACTION_VIEW_ZOOM;
+    if (!s || !event ||
+	(!wheel_zoom && event->type != BRLOBOL_INPUT_POINTER_MOTION) ||
+	s->mged_curr_display == MGED_DISPLAY_NULL ||
+	s->global_editing_state != ST_VIEW ||
+	mged_variables->mv_transform != 'v' ||
+	mged_variables->mv_rateknobs ||
+	(!wheel_zoom && !(event->buttons & (1u << 0))))
+	return 0;
+
+    struct bv_grid_state grid = BV_GRID_STATE_INIT;
+	if (!mged_display_grid_state_get(s->mged_curr_display, &grid))
+	return 0;
+
+    if (grid.snap) {
+	if (action != BRLOBOL_ACTION_VIEW_PAN ||
+	    !s->mged_curr_display->display_input_snap_pan_active)
+	    return 0;
+	const int width = bv_width_get(mged_view_state_view(view_state));
+	const int height = bv_height_get(mged_view_state_view(view_state));
+	if (width <= 0 || height <= 0)
+	    return 0;
+	s->mged_curr_display->display_mouse_dx += event->dx;
+	s->mged_curr_display->display_mouse_dy += event->dy;
+	const fastf_t aspect = (fastf_t)width / (fastf_t)height;
+	snap_view_to_grid(s,
+	    s->mged_curr_display->display_mouse_dx / (fastf_t)width * 2.0,
+	    -s->mged_curr_display->display_mouse_dy / (fastf_t)height / aspect * 2.0);
+	(void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+	mged_obol_input_refresh(s);
+	return 1;
+    }
+
+    unsigned long long flags = BV_ADJUST_IDLE;
+    if (action == BRLOBOL_ACTION_VIEW_ROTATE)
+	flags = BV_ADJUST_ROT;
+    else if (action == BRLOBOL_ACTION_VIEW_PAN)
+	flags = BV_ADJUST_TRANS;
+    else if (action == BRLOBOL_ACTION_VIEW_ZOOM)
+	flags = BV_ADJUST_SCALE;
+    else
+	return 0;
+
+    struct bv *view = mged_view_state_view(view_state);
+    if (!view)
+	return 0;
+
+    if (wheel_zoom) {
+	point_t origin = VINIT_ZERO;
+	/* Keep the toolkit-neutral wheel convention identical to QgCanvasInput. */
+	if (bv_adjust(view, 100 + event->wheelDelta, 100,
+		origin, 0, BV_ADJUST_SCALE)) {
+	    (void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+	    mged_obol_input_refresh(s);
+	}
+	return 1;
+    }
+
+    point_t center;
+    mat_t center_mat;
+    bv_center_mat_get(center_mat, view);
+    MAT_DELTAS_GET_NEG(center, center_mat);
+
+    if (bv_mouse_delta_adjust(view, event->dx, event->dy, center, flags)) {
+	(void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+	mged_obol_input_refresh(s);
+    }
+
+    /* A zero first motion still belongs to this semantic drag, not the
+     * legacy X-motion path that would otherwise apply a second adjustment. */
+    return 1;
+}
+
+static int
+mged_obol_input_action_apply(struct mged_state *s,
+	BRLObolInputAction action, const BRLObolInputEvent *event)
+{
+    if (!s || !event || s->mged_curr_display == MGED_DISPLAY_NULL)
+	return 0;
+    if (mged_obol_input_forwarding(s))
+	return 0;
+
+    if (action == BRLOBOL_ACTION_VIEW_ROTATE ||
+	action == BRLOBOL_ACTION_VIEW_PAN ||
+	action == BRLOBOL_ACTION_VIEW_ZOOM)
+	return mged_obol_input_camera_adjust(s, action, event);
+
+    switch (action) {
+	case BRLOBOL_ACTION_TOGGLE_ADC: {
+	    struct bv_adc_state adc = {0};
+	    if (!mged_display_adc_state_get(s->mged_curr_display, &adc))
+		return 0;
+	    if (!mged_display_adc_visibility_set(s->mged_curr_display, !adc.draw))
+		return 0;
+	    mged_obol_input_refresh(s);
+	    return 1;
+	}
+	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES: {
+	    const int previous = axes_state->ax_model_draw;
+	    axes_state->ax_model_draw = !previous;
+	    if (!mged_obol_input_faceplate_visibility_set(s,
+		"view.faceplate.model_axes.visible",
+		axes_state->ax_model_draw)) {
+		axes_state->ax_model_draw = previous;
+		return 0;
+	    }
+	    mged_obol_input_update_gui(s, "model_draw", axes_state->ax_model_draw);
+	    mged_obol_input_refresh(s);
+	    return 1;
+	}
+	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES: {
+	    const int previous = axes_state->ax_view_draw;
+	    axes_state->ax_view_draw = !previous;
+	    if (!mged_obol_input_faceplate_visibility_set(s,
+		"view.faceplate.view_axes.visible",
+		axes_state->ax_view_draw)) {
+		axes_state->ax_view_draw = previous;
+		return 0;
+	    }
+	    mged_obol_input_update_gui(s, "view_draw", axes_state->ax_view_draw);
+	    mged_obol_input_refresh(s);
+	    return 1;
+	}
+	case BRLOBOL_ACTION_VIEW_2:
+	    return mged_obol_input_set_aet(s, 35.0, -25.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_3:
+	    return mged_obol_input_set_aet(s, 35.0, 25.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_4:
+	    return mged_obol_input_set_aet(s, 45.0, 45.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_5:
+	    return mged_obol_input_set_aet(s, 145.0, 25.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_6:
+	    return mged_obol_input_set_aet(s, 215.0, 25.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_7:
+	    return mged_obol_input_set_aet(s, 325.0, 25.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_FRONT:
+	    return mged_obol_input_set_aet(s, 0.0, 0.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_TOP:
+	    return mged_obol_input_set_aet(s, 270.0, 90.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_BOTTOM:
+	    return mged_obol_input_set_aet(s, 270.0, -90.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_LEFT:
+	    return mged_obol_input_set_aet(s, 90.0, 0.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_REAR:
+	    return mged_obol_input_set_aet(s, 180.0, 0.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_RIGHT:
+	    return mged_obol_input_set_aet(s, 270.0, 0.0, 0.0);
+	case BRLOBOL_ACTION_VIEW_PAN_BEGIN:
+	    return mged_obol_input_pan_begin(s, event);
+	case BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE:
+	case BRLOBOL_ACTION_VIEW_PAN_END:
+	    s->mged_curr_display->display_input_snap_pan_active = 0;
+	    return 0;
+	default:
+	    return 0;
+    }
+}
+
+static int
+mged_obol_input_action(void *data, BRLObolInputAction action,
+	const BRLObolInputEvent *event)
+{
+    struct mged_display *mdmp = (struct mged_display *)data;
+    struct mged_state *s = mdmp ? mdmp->display_input_state : NULL;
+    if (!s || !mdmp || !event)
+	return 0;
+
+    struct mged_display *saved = s->mged_curr_display;
+    if (saved != mdmp)
+	mged_current_display_set(s, mdmp);
+    const int ret = mged_obol_input_action_apply(s, action, event);
+    if (ret > 0 && event->type == BRLOBOL_INPUT_POINTER_MOTION) {
+	mdmp->display_input_motion_pending = 1;
+	mdmp->display_input_motion_timestamp = (unsigned long)event->timestamp;
+	mdmp->display_input_motion_x = event->x;
+	mdmp->display_input_motion_y = event->y;
+    }
+    if (saved != mdmp)
+	mged_current_display_set(s, saved);
+    return ret;
+}
+
+int
+mged_obol_input_motion_consumed(struct mged_display *mdmp,
+	unsigned long timestamp, int x, int y)
+{
+    if (!mdmp || !mdmp->display_input_motion_pending ||
+	mdmp->display_input_motion_timestamp != timestamp ||
+	mdmp->display_input_motion_x != x || mdmp->display_input_motion_y != y)
+	return 0;
+    mdmp->display_input_motion_pending = 0;
+    return 1;
+}
 
 /* If we changed the active dm, need to update GEDP as well.. */
-void set_curr_dm(struct mged_state *s, struct mged_dm *nc)
+void mged_current_display_set(struct mged_state *s, struct mged_display *nc)
 {
     // Normally we can assume mged_state is present, since it is allocated early
-    // in the application startup, but set_curr_dm is called from doEvent which
+    // in the application startup, but mged_current_display_set is called from doEvent which
     // gets triggered even during shutdown.  So we need to sanity check in this
     // instance.
     if (!s)
@@ -87,10 +404,10 @@ void set_curr_dm(struct mged_state *s, struct mged_dm *nc)
 	return;
     }
 
-    s->mged_curr_dm = nc;
+    s->mged_curr_display = nc;
     if (s->gedp) {
-	if (nc != MGED_DM_NULL && nc->dm_view_state) {
-	    ged_view_active_ctx_set(s->gedp, nc->dm_view_state->vs_gvp);
+	if (nc != MGED_DISPLAY_NULL && nc->display_view_state) {
+	    ged_view_active_ctx_set(s->gedp, nc->display_view_state->vs_gvp);
 	} else {
 	    ged_view_active_ctx_set(s->gedp, NULL);
 	}
@@ -98,20 +415,45 @@ void set_curr_dm(struct mged_state *s, struct mged_dm *nc)
 }
 
 void
-mged_dm_adc_state_set(struct mged_dm *dm, const struct bv_adc_state *adc)
+mged_display_adc_state_set(struct mged_display *dm, const struct bv_adc_state *adc)
 {
     struct bv_adc_state bv_adc;
 
-    if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
+    if (!dm || !dm->display_view_state || !dm->display_view_state->vs_gvp)
 	return;
     memcpy(&bv_adc, adc, sizeof(bv_adc));
-    bv_adc_state_set(mged_view_state_view(dm->dm_view_state), &bv_adc);
+    bv_adc_state_set(mged_view_state_view(dm->display_view_state), &bv_adc);
 }
 
 int
-mged_dm_init(
+mged_display_adc_visibility_set(struct mged_display *dm, int enabled)
+{
+    if (!dm || !dm->display_view_state || !dm->display_view_state->vs_gvp)
+	return 0;
+
+    void *view_ctx = dm->display_view_state->vs_gvp;
+    if (ged_view_context_display_endpoint_get(view_ctx)) {
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	value.bool_value = enabled ? 1 : 0;
+	return ged_view_context_display_property_set(view_ctx,
+	    "view.faceplate.adc.visible", &value) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+
+    struct bv_adc_state adc = {0};
+    if (!mged_display_adc_state_get(dm, &adc))
+	return 0;
+    adc.draw = enabled ? 1 : 0;
+    mged_display_adc_state_set(dm, &adc);
+    return 1;
+}
+
+int
+mged_display_init(
 	struct mged_state *s,
-	struct mged_dm *o_dm,
+	struct mged_display *o_dm,
 	const char *dm_type,
 	int argc,
 	const char *argv[])
@@ -122,14 +464,12 @@ mged_dm_init(
     if (!BU_STR_EQUAL(dm_type, "tkobol"))
 	return TCL_ERROR;
 
-    dm_var_init(s, o_dm);
+    mged_display_var_init(s, o_dm);
 
     /* register application provided routines */
-    cmd_hook = dm_commands;
+    cmd_hook = mged_display_command;
 
     void *ctx = view_state->vs_gvp;
-    if ((DMP = dm_open(NULL, (void *)s->interp, "nu", 0, NULL)) == DM_NULL)
-	return TCL_ERROR;
 
     int width = bv_width_get(mged_view_state_view(view_state));
     int height = bv_height_get(mged_view_state_view(view_state));
@@ -173,7 +513,7 @@ mged_dm_init(
 	height = 512;
     if (!bu_vls_strlen(&pathname))
 	bu_vls_printf(&pathname, ".dm_tkobol%lu", ++mged_tkobol_count);
-    bu_vls_strcpy(&s->mged_curr_dm->dm_pathname, bu_vls_cstr(&pathname));
+    bu_vls_strcpy(&s->mged_curr_display->display_pathname, bu_vls_cstr(&pathname));
     (void)bv_dimensions_set(mged_view_state_view(view_state), width, height);
 
 
@@ -236,10 +576,17 @@ mged_dm_init(
 	goto attach_fail;
     }
     Tk_MakeWindowExist(host_window);
-    s->mged_curr_dm->dm_native_id = Tk_WindowId(host_window);
+    s->mged_curr_display->display_native_id = Tk_WindowId(host_window);
     bu_vls_free(&widget_path);
 #endif
-    s->mged_curr_dm->dm_graphical = 1;
+    s->mged_curr_display->display_hosted = 1;
+    s->mged_curr_display->display_input_state = s;
+    s->mged_curr_display->display_input_motion_pending = 0;
+    s->mged_curr_display->display_input_snap_pan_active = 0;
+    (void)brlobol_display_endpoint_input_profile_set(endpoint,
+	brlobol_input_default_view_profile());
+    (void)brlobol_display_endpoint_input_action_handler_set(endpoint,
+	mged_obol_input_action, s->mged_curr_display);
 
 #ifdef HAVE_TK
     if (tkwin != NULL) {
@@ -248,8 +595,10 @@ mged_dm_init(
     }
 #endif
 
-    const char *logical_path = mged_dm_pathname(s->mged_curr_dm);
+    const char *logical_path = mged_display_pathname(s->mged_curr_display);
     if (logical_path) {
+	(void)Tcl_SetVar2(s->interp, "mged_obol_semantic_input", logical_path,
+	    "1", TCL_GLOBAL_ONLY);
 	bu_vls_printf(&vls, "mged_bind_dm %s", logical_path);
 	Tcl_Eval(s->interp, bu_vls_cstr(&vls));
     }
@@ -262,106 +611,113 @@ attach_fail:
     Tcl_AppendResult(s->interp, "attach(tkobol): ", failure, "\n",
 	    (char *)NULL);
     bu_vls_free(&pathname);
-    dm_close(DMP);
-    DMP = DM_NULL;
     return TCL_ERROR;
 }
 
-
-
-void
-mged_fb_open(struct mged_state *s)
+int
+mged_obol_framebuffer_ensure(struct mged_state *s)
 {
-    fbp = dm_get_fb(DMP);
+    if (!s || !s->gedp || !s->mged_curr_display || !view_state ||
+	!view_state->vs_gvp)
+	return 0;
+    return ged_draw_obol_framebuffer_backend_ensure_for_view(s->gedp,
+	view_state->vs_gvp) == BRLCAD_OK;
 }
 
 
 void
-mged_slider_init_vls(struct mged_dm *p)
+mged_slider_init_vls(struct mged_display *p)
 {
-    bu_vls_init(&p->dm_fps_name);
-    bu_vls_init(&p->dm_aet_name);
-    bu_vls_init(&p->dm_ang_name);
-    bu_vls_init(&p->dm_center_name);
-    bu_vls_init(&p->dm_size_name);
-    bu_vls_init(&p->dm_adc_name);
+    bu_vls_init(&p->display_fps_name);
+    bu_vls_init(&p->display_aet_name);
+    bu_vls_init(&p->display_ang_name);
+    bu_vls_init(&p->display_center_name);
+    bu_vls_init(&p->display_size_name);
+    bu_vls_init(&p->display_adc_name);
 }
 
 
 void
-mged_slider_free_vls(struct mged_dm *p)
+mged_slider_free_vls(struct mged_display *p)
 {
-    if (BU_VLS_IS_INITIALIZED(&p->dm_fps_name)) {
-	bu_vls_free(&p->dm_fps_name);
-	bu_vls_free(&p->dm_aet_name);
-	bu_vls_free(&p->dm_ang_name);
-	bu_vls_free(&p->dm_center_name);
-	bu_vls_free(&p->dm_size_name);
-	bu_vls_free(&p->dm_adc_name);
+    if (BU_VLS_IS_INITIALIZED(&p->display_fps_name)) {
+	bu_vls_free(&p->display_fps_name);
+	bu_vls_free(&p->display_aet_name);
+	bu_vls_free(&p->display_ang_name);
+	bu_vls_free(&p->display_center_name);
+	bu_vls_free(&p->display_size_name);
+	bu_vls_free(&p->display_adc_name);
     }
-    if (BU_VLS_IS_INITIALIZED(&p->dm_pathname))
-	bu_vls_free(&p->dm_pathname);
+    if (BU_VLS_IS_INITIALIZED(&p->display_pathname))
+	bu_vls_free(&p->display_pathname);
 }
 
 
 void
-mged_obol_display_detach(struct mged_state *s, struct mged_dm *mdmp)
+mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp)
 {
-    if (!s || !s->gedp || !mdmp || !mdmp->dm_view_state)
+    if (!s || !s->gedp || !mdmp || !mdmp->display_view_state)
 	return;
-    (void)ged_view_context_display_endpoint_set(mdmp->dm_view_state->vs_gvp,
+
+    const char *logical_path = mged_display_pathname(mdmp);
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(mdmp->display_view_state->vs_gvp);
+    if (endpoint)
+	(void)brlobol_display_endpoint_input_action_handler_clear_if(endpoint,
+	    mged_obol_input_action, mdmp);
+    if (s->interp && logical_path)
+	(void)Tcl_UnsetVar2(s->interp, "mged_obol_semantic_input", logical_path,
+	    TCL_GLOBAL_ONLY);
+    mdmp->display_input_state = NULL;
+    mdmp->display_input_motion_pending = 0;
+    mdmp->display_input_snap_pan_active = 0;
+    (void)ged_view_context_display_endpoint_set(mdmp->display_view_state->vs_gvp,
 	    NULL, 0);
 }
 
 static int
 release(struct mged_state *s, char *name, int need_close)
 {
-    struct mged_dm *save_dm_list = MGED_DM_NULL;
+    struct mged_display *save_display = MGED_DISPLAY_NULL;
 
     if (name != NULL) {
-	struct mged_dm *p = MGED_DM_NULL;
+	struct mged_display *p = MGED_DISPLAY_NULL;
 
 	if (BU_STR_EQUAL("nu", name))
 	    return TCL_OK;  /* Ignore */
 
-	for (size_t i = 0; i < BU_PTBL_LEN(&active_dm_set); i++) {
-	    struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, i);
-	    if (!m_dmp || !m_dmp->dm_dmp)
+	for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {
+	    struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, i);
+	    if (!m_dmp)
 		continue;
 
-	    const char *dm_path = mged_dm_pathname(m_dmp);
+	    const char *dm_path = mged_display_pathname(m_dmp);
 	    if (!dm_path || !BU_STR_EQUAL(name, dm_path))
 		continue;
 
 	    /* found it */
-	    if (p != s->mged_curr_dm) {
-		save_dm_list = s->mged_curr_dm;
-		p = m_dmp;
-		set_curr_dm(s, p);
+	    p = m_dmp;
+	    if (p != s->mged_curr_display) {
+		save_display = s->mged_curr_display;
+		mged_current_display_set(s, p);
 	    }
 	    break;
 	}
 
-	if (p == MGED_DM_NULL) {
+	if (p == MGED_DISPLAY_NULL) {
 	    Tcl_AppendResult(s->interp, "release: ", name, " not found\n", (char *)NULL);
 	    return TCL_ERROR;
 	}
     } else {
-	const char *dm_path = mged_dm_pathname(s->mged_curr_dm);
+	const char *dm_path = mged_display_pathname(s->mged_curr_display);
 	if (dm_path && BU_STR_EQUAL("nu", dm_path))
 	    return TCL_OK;  /* Ignore */
     }
 
-    if (fbp) {
-	if (mged_variables->mv_listen) {
-	    /* drop all clients */
-	    mged_variables->mv_listen = 0;
-	    fbserv_set_port(NULL, NULL, NULL, NULL, s);
-	}
-
-	/* release framebuffer resources */
-	fb_close_existing(fbp);
-	fbp = (struct fb *)NULL;
+    if (mged_variables->mv_listen) {
+	/* Drop all clients before detaching the endpoint-owned backend. */
+	mged_variables->mv_listen = 0;
+	fbserv_set_port(NULL, NULL, NULL, NULL, s);
     }
 
     /*
@@ -370,33 +726,32 @@ release(struct mged_state *s, char *name, int need_close)
      * manager. So when another display manager is opened, it looks
      * like the last one the user had open.
      */
-    usurp_all_resources(mged_dm_init_state, s->mged_curr_dm);
+    usurp_all_resources(mged_initial_display, s->mged_curr_display);
 
     /* If this display is being referenced by a command window, then
      * remove the reference.
      */
-    if (s->mged_curr_dm->dm_tie != NULL)
-	s->mged_curr_dm->dm_tie->cl_tie = (struct mged_dm *)NULL;
+    if (s->mged_curr_display->display_tie != NULL)
+	s->mged_curr_display->display_tie->cl_tie = (struct mged_display *)NULL;
 
     if (need_close && s->gedp)
 	ged_draw_obol_framebuffer_release(s->gedp);
 
     if (need_close) {
-	mged_obol_display_detach(s, s->mged_curr_dm);
-	dm_close(DMP);
+	mged_obol_display_detach(s, s->mged_curr_display);
     }
 
-    bu_ptbl_rm(&active_dm_set, (long *)s->mged_curr_dm);
-    mged_slider_free_vls(s->mged_curr_dm);
-    bu_free((void *)s->mged_curr_dm, "release: s->mged_curr_dm");
+    bu_ptbl_rm(&active_display_set, (long *)s->mged_curr_display);
+    mged_slider_free_vls(s->mged_curr_display);
+    bu_free((void *)s->mged_curr_display, "release: s->mged_curr_display");
 
-    if (save_dm_list != MGED_DM_NULL)
-	set_curr_dm(s, save_dm_list);
+    if (save_display != MGED_DISPLAY_NULL)
+	mged_current_display_set(s, save_display);
     else {
-	if (BU_PTBL_LEN(&active_dm_set) > 0) {
-	    set_curr_dm(s, (struct mged_dm *)BU_PTBL_GET(&active_dm_set, 0));
+	if (BU_PTBL_LEN(&active_display_set) > 0) {
+	    mged_current_display_set(s, (struct mged_display *)BU_PTBL_GET(&active_display_set, 0));
 	} else {
-	    set_curr_dm(s, MGED_DM_NULL);
+	    mged_current_display_set(s, MGED_DISPLAY_NULL);
 	}
     }
     return TCL_OK;
@@ -561,58 +916,31 @@ gui_setup(struct mged_state *s, const char *dstr)
 int
 mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *argv[])
 {
-    int opt_argc;
-    char **opt_argv;
-    struct mged_dm *o_dm;
+    struct mged_display *o_dm;
 
     if (!wp_name) {
 	return TCL_ERROR;
     }
 
-    o_dm = s->mged_curr_dm;
-    BU_ALLOC(s->mged_curr_dm, struct mged_dm);
+    o_dm = s->mged_curr_display;
+    BU_ALLOC(s->mged_curr_display, struct mged_display);
 
     /* Only need to do this once */
     if (tkwin == NULL && BU_STR_EQUAL(wp_name, "tkobol")) {
-	struct dm *tmp_dmp;
-	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
-
-	/* look for "-d display_string" and use it if provided */
-	tmp_dmp = dm_open(NULL, s->interp, "nu", 0, NULL);
-
-	opt_argc = argc - 1;
-	opt_argv = bu_argv_dup(opt_argc, argv + 1);
-	dm_processOptions(tmp_dmp, &tmp_vls, opt_argc, (const char **)opt_argv);
-	bu_argv_free(opt_argc, opt_argv);
-
-	struct bu_vls *dname = dm_get_dname(tmp_dmp);
-	if (dname && bu_vls_strlen(dname)) {
-	    if (gui_setup(s, bu_vls_cstr(dname)) == TCL_ERROR) {
-		bu_free((void *)s->mged_curr_dm, "f_attach: dm_list");
-		set_curr_dm(s, o_dm);
-		bu_vls_free(&tmp_vls);
-		dm_close(tmp_dmp);
-		return TCL_ERROR;
-	    }
-	} else if (gui_setup(s, (char *)NULL) == TCL_ERROR) {
-	    bu_free((void *)s->mged_curr_dm, "f_attach: dm_list");
-	    set_curr_dm(s, o_dm);
-	    bu_vls_free(&tmp_vls);
-	    dm_close(tmp_dmp);
+	if (gui_setup(s, mged_tkobol_display_arg(argc, argv)) == TCL_ERROR) {
+	    bu_free((void *)s->mged_curr_display, "f_attach: current display");
+	    mged_current_display_set(s, o_dm);
 	    return TCL_ERROR;
 	}
-
-	bu_vls_free(&tmp_vls);
-	dm_close(tmp_dmp);
     }
 
-    bu_ptbl_ins(&active_dm_set, (long *)s->mged_curr_dm);
+    bu_ptbl_ins(&active_display_set, (long *)s->mged_curr_display);
 
     if (!wp_name) {
 	return TCL_ERROR;
     }
 
-    if (mged_dm_init(s, o_dm, wp_name, argc, argv) == TCL_ERROR) {
+    if (mged_display_init(s, o_dm, wp_name, argc, argv) == TCL_ERROR) {
 	goto Bad;
     }
 
@@ -626,40 +954,22 @@ mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *arg
 	cs_set_bg(sdp, name, base, value, s);
     }
 
-    mged_link_vars(s->mged_curr_dm);
+    mged_link_vars(s->mged_curr_display);
 
     Tcl_ResetResult(s->interp);
-    const char *dm_name = s->mged_curr_dm->dm_graphical ? "tkobol" :
-	dm_get_dm_name(DMP);
-    const char *dm_lname = s->mged_curr_dm->dm_graphical ?
-	"Tk Obol display endpoint" : dm_get_dm_lname(DMP);
-    if (dm_name && dm_lname) {
-	Tcl_AppendResult(s->interp, "ATTACHING ", dm_name, " (", dm_lname,	")\n", (char *)NULL);
-    }
+    Tcl_AppendResult(s->interp, "ATTACHING tkobol (Tk Obol display endpoint)\n",
+	    (char *)NULL);
 
-    share_backend_cache(s->mged_curr_dm);
+    (void)mged_obol_framebuffer_ensure(s);
 
-    if (dm_get_backend_cache(DMP) && mged_variables->mv_backend_cache && !backend_cache_state->cache_active) {
-	/* Backend caches are populated lazily by the renderer.  MGED tracks
-	 * policy state and lets the next refresh populate backend resources. */
-	backend_cache_state->cache_active = 1;
-    }
-
-    (void)dm_make_current(DMP);
-    (void)dm_set_win_bounds(DMP, windowbounds);
-    mged_fb_open(s);
-
-    ged_view_active_ctx_set(s->gedp, s->mged_curr_dm->dm_view_state->vs_gvp);
+    ged_view_active_ctx_set(s->gedp, s->mged_curr_display->display_view_state->vs_gvp);
 
     return TCL_OK;
 
  Bad:
     Tcl_AppendResult(s->interp, "attach(", argv[argc - 1], "): BAD\n", (char *)NULL);
 
-    if (DMP != (struct dm *)0)
-	release(s, (char *)NULL, 1);  /* release() will call dm_close */
-    else
-	release(s, (char *)NULL, 0);  /* release() will not call dm_close */
+    release(s, (char *)NULL, 1);
 
     return TCL_ERROR;
 }
@@ -759,12 +1069,9 @@ f_dm(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[
     }
 
     if (!cmd_hook) {
-	const char *dm_name = dm_get_dm_name(DMP);
-	if (dm_name) {
-	    Tcl_AppendResult(interpreter, "The '", dm_name,
-		    "' display manager does not support local commands.\n",
-		    (char *)NULL);
-	}
+	Tcl_AppendResult(interpreter,
+		"The current display host does not support local commands.\n",
+		(char *)NULL);
 	return TCL_ERROR;
     }
 
@@ -773,21 +1080,23 @@ f_dm(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[
 }
 
 void
-dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
+mged_display_var_init(struct mged_state *s, struct mged_display *target_dm)
 {
-    bu_vls_init(&s->mged_curr_dm->dm_pathname);
+    s->mged_curr_display->display_input_state = NULL;
+    s->mged_curr_display->display_input_motion_pending = 0;
+    s->mged_curr_display->display_input_snap_pan_active = 0;
+    bu_vls_init(&s->mged_curr_display->display_pathname);
     BU_ALLOC(menu_state, struct _menu_state);
-    *menu_state = *target_dm->dm_menu_state;		/* struct copy */
+    *menu_state = *target_dm->display_menu_state;		/* struct copy */
     menu_state->ms_rc = 1;
 
     BU_ALLOC(rubber_band, struct _rubber_band);
-    *rubber_band = *target_dm->dm_rubber_band;		/* struct copy */
+    *rubber_band = *target_dm->display_rubber_band;		/* struct copy */
     rubber_band->rb_rc = 1;
 
     BU_ALLOC(mged_variables, struct _mged_variables);
-    *mged_variables = *target_dm->dm_mged_variables;	/* struct copy */
+    *mged_variables = *target_dm->display_variables;	/* struct copy */
     mged_variables->mv_rc = 1;
-    mged_variables->mv_backend_cache = mged_default_backend_cache;
     mged_variables->mv_listen = 0;
     mged_variables->mv_port = 0;
     mged_variables->mv_fb = 0;
@@ -795,22 +1104,22 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
     BU_ALLOC(color_scheme, struct _color_scheme);
 
     /* initialize using the nu display manager */
-    if (mged_dm_init_state && mged_dm_init_state->dm_color_scheme) {
-	*color_scheme = *mged_dm_init_state->dm_color_scheme;
+    if (mged_initial_display && mged_initial_display->display_color_scheme) {
+	*color_scheme = *mged_initial_display->display_color_scheme;
     }
 
     color_scheme->cs_rc = 1;
+    s->mged_curr_display->display_color_scheme_dirty = 1;
 
     BU_ALLOC(axes_state, struct _axes_state);
-    *axes_state = *target_dm->dm_axes_state;		/* struct copy */
+    *axes_state = *target_dm->display_axes_state;		/* struct copy */
     axes_state->ax_rc = 1;
-
-    BU_ALLOC(backend_cache_state, struct _backend_cache_state);
-    backend_cache_state->cache_rc = 1;
+    s->mged_curr_display->display_axes_state_dirty = 1;
+    s->mged_curr_display->display_adc_style_dirty = 1;
 
     BU_ALLOC(view_state, struct _view_state);
-    *view_state = *target_dm->dm_view_state;			/* struct copy */
-    void *target_view_ctx = target_dm->dm_view_state->vs_gvp;
+    *view_state = *target_dm->display_view_state;			/* struct copy */
+    void *target_view_ctx = target_dm->display_view_state->vs_gvp;
     void *view_set_ctx = ged_view_set_ctx(s->gedp);
     void *view_ctx = ged_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
     view_state->vs_gvp = view_ctx;
@@ -828,12 +1137,11 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
 	ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
     }
     view_state->vs_rc = 1;
-    view_ring_init(s->mged_curr_dm->dm_view_state, (struct _view_state *)NULL);
+    view_ring_init(s->mged_curr_display->display_view_state, (struct _view_state *)NULL);
 
-    mged_dm_repaint_request(target_dm, MGED_REPAINT_NATIVE_EVENT);
+    mged_display_repaint_request(target_dm, MGED_REPAINT_NATIVE_EVENT);
     mapped = 1;
-    (void)fbs_init(&s->mged_curr_dm->dm_fbserv);
-    s->mged_curr_dm->dm_owner = 1;
+    s->mged_curr_display->display_owner = 1;
     am_mode = AMM_IDLE;
     adc_auto = 1;
     grid_auto_size = 1;
@@ -841,17 +1149,17 @@ dm_var_init(struct mged_state *s, struct mged_dm *target_dm)
 
 
 void
-mged_link_vars(struct mged_dm *p)
+mged_link_vars(struct mged_display *p)
 {
     mged_slider_init_vls(p);
-    const char *pn = mged_dm_pathname(p);
+    const char *pn = mged_display_pathname(p);
     if (pn) {
-	bu_vls_printf(&p->dm_fps_name, "%s(%s,fps)", MGED_DISPLAY_VAR, pn);
-	bu_vls_printf(&p->dm_aet_name, "%s(%s,aet)", MGED_DISPLAY_VAR, pn);
-	bu_vls_printf(&p->dm_ang_name, "%s(%s,ang)", MGED_DISPLAY_VAR, pn);
-	bu_vls_printf(&p->dm_center_name, "%s(%s,center)", MGED_DISPLAY_VAR, pn);
-	bu_vls_printf(&p->dm_size_name, "%s(%s,size)", MGED_DISPLAY_VAR, pn);
-	bu_vls_printf(&p->dm_adc_name, "%s(%s,adc)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->display_fps_name, "%s(%s,fps)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->display_aet_name, "%s(%s,aet)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->display_ang_name, "%s(%s,ang)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->display_center_name, "%s(%s,center)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->display_size_name, "%s(%s,size)", MGED_DISPLAY_VAR, pn);
+	bu_vls_printf(&p->display_adc_name, "%s(%s,adc)", MGED_DISPLAY_VAR, pn);
     }
 }
 
@@ -869,9 +1177,9 @@ f_get_dm_list(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, 
 	return TCL_ERROR;
     }
 
-    for (size_t i = 0; i < BU_PTBL_LEN(&active_dm_set); i++) {
-	struct mged_dm *dlp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, i);
-	const char *pn = mged_dm_pathname(dlp);
+    for (size_t i = 0; i < BU_PTBL_LEN(&active_display_set); i++) {
+	struct mged_display *dlp = (struct mged_display *)BU_PTBL_GET(&active_display_set, i);
+	const char *pn = mged_display_pathname(dlp);
 	if (pn)
 	    Tcl_AppendElement(interpreter, pn);
     }

@@ -34,7 +34,7 @@
 #include "rt/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 #include "./sedit.h"
 #include "./menu.h"
@@ -164,14 +164,22 @@ mged_highlight_shape_record(struct mged_state *s, struct ged_draw_shape_record *
 void
 mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref)
 {
+    /* The visual highlight is scene-wide, while interaction selection belongs
+     * to the active view that initiated the illuminate action. */
+    void *view_ctx = view_state ? view_state->vs_gvp : NULL;
     if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref)) {
 	mged_highlight.shape = GED_DRAW_SHAPE_REF_NULL;
-	if (s && s->gedp)
+	if (s && s->gedp) {
 	    ged_draw_set_highlighted_shape_ref(s->gedp, GED_DRAW_SHAPE_REF_NULL);
+	    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+		    view_ctx, GED_DRAW_SHAPE_REF_NULL);
+	}
 	return;
     }
     mged_highlight.shape = ref;
     ged_draw_set_highlighted_shape_ref(s->gedp, ref);
+    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+	    view_ctx, mged_highlight.shape);
 }
 
 void
@@ -186,7 +194,6 @@ mged_highlight_clear(struct mged_state *s)
 static void
 highlight_from_y(struct mged_state *s, int y)
 {
-    void *view_ctx = view_state->vs_gvp;
     ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
     mged_pen_pick_cache_ensure(s);
     if (pen_pick_cache.count) {
@@ -198,14 +205,8 @@ highlight_from_y(struct mged_state *s, int y)
     }
     mged_highlight_set_shape_ref(s, ref);
 
-    /* Mirror the highlighted shape into the view interaction selection so
-     * highlight rendering and resolved appearance see a typed record rather
-     * than only the legacy global. */
-    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
-	    view_ctx, mged_highlight.shape);
-
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 }
 
 
@@ -221,7 +222,6 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 
     struct ged_draw_shape_record hrec;
     int have_highlight = mged_highlight_shape_record(s, &hrec);
-    void *view_ctx = view_state->vs_gvp;
 
     if (argc < 1 || 2 < argc) {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
@@ -270,14 +270,8 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	mged_highlight_set_shape_ref(s, next_ref);
     }
 
-    /* Keep interaction selection in sync with the highlighted draw ref. */
-    {
-	(void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
-		view_ctx, mged_highlight.shape);
-    }
-
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
 
@@ -415,7 +409,7 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
     }
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
 

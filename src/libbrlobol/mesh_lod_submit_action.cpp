@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/mesh_lod_submit_action.h"
@@ -798,7 +800,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	 viewPayload->providerStatus == BRLOBOL_LOD_PROVIDER_READY &&
 	 requestKey.isValid() &&
 	 viewPayload->cacheKey.getLength() > 0 &&
-	 strcmp(viewPayload->cacheKey.getString(),
+	 bu_strcmp(viewPayload->cacheKey.getString(),
 		requestKey.value.getString()) == 0) ? TRUE : FALSE;
     const SbBool shapePayloadResident =
 	(shape->lodAvailable.getValue() &&
@@ -806,7 +808,7 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	 shape->lodProviderStatus.getValue() == BRLOBOL_LOD_PROVIDER_READY &&
 	 requestKey.isValid() &&
 	 shape->lodCacheKey.getValue().getLength() > 0 &&
-	 strcmp(shape->lodCacheKey.getValue().getString(),
+	 bu_strcmp(shape->lodCacheKey.getValue().getString(),
 		requestKey.value.getString()) == 0) ? TRUE : FALSE;
     if (!submitAction->useForcedLevel &&
 	submitAction->reset == 0 &&

@@ -40,7 +40,7 @@
 #include "ged/draw.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 
 /*
@@ -54,7 +54,7 @@ mged_color_soltab(struct mged_state *s)
 	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS, NULL);
     ged_draw_apply_transaction(s->gedp, &refresh, NULL);
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);		/* re-write control list with new colors */
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 }
 
 

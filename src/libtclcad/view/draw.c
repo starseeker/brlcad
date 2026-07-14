@@ -26,7 +26,6 @@
 
 #include "common.h"
 #include "bv.h"
-#include "dm/view.h"
 #include "ged.h"
 #include "ged/draw.h"
 #include "ged/view.h"

@@ -7,6 +7,12 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
+#include "bu/str.h"
+
+#include "bv.h"
+
 #include "brlobol/adc.h"
 #include "brlobol/axes.h"
 #include "brlobol/grid.h"
@@ -15,7 +21,6 @@
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 #include "vmath.h"
-#include "QgLegacyViewContext.h"
 
 #include <Inventor/nodes/SoGroup.h>
 
@@ -53,17 +58,17 @@ find_overlay(SoGroup *group, const char *overlayId)
 	    continue;
 	if (node->isOfType(SoBRLGrid::getClassTypeId())) {
 	    SoBRLGrid *grid = static_cast<SoBRLGrid *>(node);
-	    if (strcmp(grid->overlayId.getValue().getString(), overlayId) == 0)
+	    if (bu_strcmp(grid->overlayId.getValue().getString(), overlayId) == 0)
 		return node;
 	}
 	if (node->isOfType(SoBRLAxes::getClassTypeId())) {
 	    SoBRLAxes *axes = static_cast<SoBRLAxes *>(node);
-	    if (strcmp(axes->overlayId.getValue().getString(), overlayId) == 0)
+	    if (bu_strcmp(axes->overlayId.getValue().getString(), overlayId) == 0)
 		return node;
 	}
 	if (node->isOfType(SoBRLADC::getClassTypeId())) {
 	    SoBRLADC *adc = static_cast<SoBRLADC *>(node);
-	    if (strcmp(adc->overlayId.getValue().getString(), overlayId) == 0)
+	    if (bu_strcmp(adc->overlayId.getValue().getString(), overlayId) == 0)
 		return node;
 	}
     }
@@ -79,15 +84,14 @@ near_float(float a, float b)
 int
 main(int argc, char **argv)
 {
+    bu_setprogname(argv[0]);
     QApplication app(argc, argv);
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(160, 120);
 
-    if (!view.view())
-	FAIL("QgView should expose transitional view state");
-    if (view.legacyBackendInitialized())
-	FAIL("test should start before legacy DM initialization");
+    if (!view.viewContext())
+	FAIL("QgView should expose its GED view context");
 
     BRLObolViewController *controller = view.obolViewController();
     SoGroup *root = scene_group(controller);
@@ -98,7 +102,7 @@ main(int argc, char **argv)
     struct bv_axes_state modelAxes = {};
     struct bv_axes_state viewAxes = {};
     struct bv_adc_state adc = {};
-    struct bv *bv = qg_legacy_view_bv(view.view());
+    struct bv *bv = bv_context_view(static_cast<struct bv_context *>(view.viewContext()));
     (void)bv_grid_state_get(&grid, bv);
     (void)bv_model_axes_state_get(&modelAxes, bv);
     (void)bv_view_axes_state_get(&viewAxes, bv);
@@ -126,14 +130,15 @@ main(int argc, char **argv)
     VSET(adc.pos_model, 8.0, 9.0, 0.0);
     adc.a1 = 30.0;
     adc.dst = 12.0;
+    VSET(adc.line_color, 10, 20, 30);
+    VSET(adc.tick_color, 40, 50, 60);
+    adc.line_width = 3;
     bv_adc_state_set(bv, &adc);
 
     controller->clearRenderRequest();
     view.need_update(QG_VIEW_DRAWN);
-    if (view.legacyBackendInitialized())
-	FAIL("Obol faceplate sync should not require legacy DM initialization");
     if (!controller->isRenderRequested() ||
-	strcmp(controller->getRenderReason().getString(), "faceplate") != 0)
+	bu_strcmp(controller->getRenderReason().getString(), "faceplate") != 0)
 	FAIL("faceplate sync should request an Obol render");
 
     SoBRLGrid *obolGrid = static_cast<SoBRLGrid *>(
@@ -180,8 +185,13 @@ main(int argc, char **argv)
 	!near_float(obolAdc->angleDegrees.getValue(), 30.0f) ||
 	!near_float(obolAdc->distance.getValue(), 12.0f) ||
 	!obolAdc->getGeometryShape() ||
-	obolAdc->getGeometryShape()->getSegmentCount() != 4)
-	FAIL("ADC state should map to Obol ADC geometry");
+	!obolAdc->getTickGeometryShape() ||
+	obolAdc->getGeometryShape()->getSegmentCount() != 3 ||
+	obolAdc->getTickGeometryShape()->getSegmentCount() != 1 ||
+	!near_float(obolAdc->lineColor.getValue()[0], 10.0f / 255.0f) ||
+	!near_float(obolAdc->tickColor.getValue()[2], 60.0f / 255.0f) ||
+	obolAdc->lineWidth.getValue() != 3)
+	FAIL("ADC state should map to separately styled Obol geometry");
 
     grid.draw = 0;
     modelAxes.draw = 0;

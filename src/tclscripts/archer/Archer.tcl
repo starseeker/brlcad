@@ -514,7 +514,6 @@ package provide Archer 1.0
 	pushPerspectiveSettings
     }
 
-    gedCmd cache_on $mBackendCacheMode
     gedCmd configure -hideSubtractions $mHideSubtractions
 
     if {$mWireframeMode} {
@@ -2746,11 +2745,6 @@ proc title_node_handler {node} {
 	    -variable [::itcl::scope mDefaultDisplayModePref]
     } {}
 
-    itk_component add backendCacheModeCB {
-	::ttk::checkbutton $parent.backendCacheModeCB \
-	    -text "Use Backend Cache" \
-	    -variable [::itcl::scope mBackendCacheModePref]
-    } {}
     itk_component add hideSubCB {
 	::ttk::checkbutton $parent.hideSubCB \
 	    -text "Hide Subtractions" \
@@ -2791,11 +2785,9 @@ proc title_node_handler {node} {
     grid $itk_component(displayModeL) -column 0 -row $i -sticky ne
     grid $itk_component(displayModeF) -column 1 -row $i -sticky ew
     incr i
-    grid $itk_component(backendCacheModeCB) -columnspan 2 -column 0 -row $i -sticky sw
+    grid $itk_component(hideSubCB) -columnspan 2 -column 0 -row $i -sticky sw
     grid rowconfigure $parent $i -weight 1
     grid columnconfigure $parent 1 -weight 1
-    incr i
-    grid $itk_component(hideSubCB) -columnspan 2 -column 0 -row $i -sticky sw
     incr i
     grid $itk_component(wireframeModeCB) -columnspan 2 -column 0 -row $i -sticky sw
 
@@ -8483,12 +8475,6 @@ proc title_node_handler {node} {
 	set mDefaultDisplayMode $mDefaultDisplayModePref
     }
 
-    if {$mBackendCacheModePref != $mBackendCacheMode} {
-	set mBackendCacheMode $mBackendCacheModePref
-	gedCmd cache_on $mBackendCacheMode
-	set rflag 1
-    }
-
     if {$mHideSubtractionsPref != $mHideSubtractions} {
 	set mHideSubtractions $mHideSubtractionsPref
 	gedCmd configure -hideSubtractions $mHideSubtractions
@@ -9030,7 +9016,6 @@ proc title_node_handler {node} {
 
     set mLightingModePref $mLightingMode
     set mDefaultDisplayModePref $mDefaultDisplayMode
-    set mBackendCacheModePref $mBackendCacheMode
     set mHideSubtractionsPref $mHideSubtractions
     set mWireframeModePref $mWireframeMode
 
@@ -9191,7 +9176,6 @@ proc title_node_handler {node} {
     puts $_pfile "set mPerspective $mPerspective"
     puts $_pfile "set mLightingMode $mLightingMode"
     puts $_pfile "set mDefaultDisplayMode $mDefaultDisplayMode"
-    puts $_pfile "set mBackendCacheMode $mBackendCacheMode"
     puts $_pfile "set mHideSubtractions $mHideSubtractions"
     puts $_pfile "set mWireframeMode $mWireframeMode"
 

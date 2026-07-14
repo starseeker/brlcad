@@ -36,7 +36,7 @@
 
 #include "./mged.h"
 #include "./sedit.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./menu.h"
 #include "./hud.h"
 
@@ -325,7 +325,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     }
     bu_vls_trunc(&vls, 0);
     bu_vls_printf(&vls, "cent=(%s %s %s)", cent_x, cent_y, cent_z);
-    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_center_name),
+    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_center_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
     tmp_val = view_size*s->dbip->dbi_base2local;
@@ -334,7 +334,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     } else {
 	sprintf(size, "sz=%.3g", tmp_val);
     }
-    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_size_name),
+    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_size_name),
 	       size, TCL_GLOBAL_ONLY);
 
     bu_vls_trunc(&vls, 0);
@@ -344,7 +344,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 
     bu_vls_trunc(&vls, 0);
     bu_vls_printf(&vls, "az=%3.2f  el=%3.2f  tw=%3.2f", V3ARGS(view_aet));
-    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_aet_name),
+    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_aet_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
     sprintf(ang_x, "%.2f", view_state->k.rot_view[X]);
@@ -353,7 +353,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 
     bu_vls_trunc(&vls, 0);
     bu_vls_printf(&vls, "ang=(%s %s %s)", ang_x, ang_y, ang_z);
-    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_ang_name),
+    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_ang_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
     /* Label the vertices of the edited solid */
@@ -525,7 +525,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
      */
 
     struct bv_adc_state adc = {0};
-    (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
+    (void)mged_display_adc_state_get(s->mged_curr_display, &adc);
     if (adc.draw) {
 	fastf_t f;
 
@@ -544,11 +544,11 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		    GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
 		    0.0, 0);
 	}
-	Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_adc_name),
+	Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_adc_name),
 		   bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 	ss_line_not_drawn = 0;
     } else {
-	Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_adc_name), "", TCL_GLOBAL_ONLY);
+	Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_adc_name), "", TCL_GLOBAL_ONLY);
     }
 
     if (s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) {
@@ -610,7 +610,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
 		0.0, 0);
     }
-    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_dm->dm_fps_name),
+    Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_fps_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
 done:

@@ -8,6 +8,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/axes.h"
 #include "brlobol/edit_preview.h"
 #include "brlobol/hud_label_overlay.h"
@@ -113,13 +115,13 @@ store_owner_matches(const BRLObolFeatureOwner &recordOwner,
     const char *queryId = queryOwner->ownerId.getString();
     if (queryId && queryId[0]) {
 	const char *recordId = recordOwner.ownerId.getString();
-	return recordId && strcmp(recordId, queryId) == 0 ? TRUE : FALSE;
+	return recordId && bu_strcmp(recordId, queryId) == 0 ? TRUE : FALSE;
     }
 
     const char *queryRole = queryOwner->ownerRole.getString();
     if (queryRole && queryRole[0]) {
 	const char *recordRole = recordOwner.ownerRole.getString();
-	return recordRole && strcmp(recordRole, queryRole) == 0 ? TRUE : FALSE;
+	return recordRole && bu_strcmp(recordRole, queryRole) == 0 ? TRUE : FALSE;
     }
 
     return TRUE;

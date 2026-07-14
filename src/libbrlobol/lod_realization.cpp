@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/lod_realization.h"
 
 #include <Inventor/SbVec3f.h>
@@ -303,10 +305,10 @@ static bool
 param_less(const BRLObolLodProviderParam &a,
 	   const BRLObolLodProviderParam &b)
 {
-    int name_cmp = strcmp(a.name.getString(), b.name.getString());
+    int name_cmp = bu_strcmp(a.name.getString(), b.name.getString());
     if (name_cmp != 0)
 	return name_cmp < 0;
-    return strcmp(a.value.getString(), b.value.getString()) < 0;
+    return bu_strcmp(a.value.getString(), b.value.getString()) < 0;
 }
 
 BRLObolLodCacheKey
@@ -411,7 +413,7 @@ brlobol_lod_result_matches_request(const BRLObolLodResult &result,
     BRLObolLodCacheKey actual = result.cacheKey.isValid() ?
 				result.cacheKey : brlobol_lod_cache_key(result.request);
 
-    return strcmp(expected.value.getString(), actual.value.getString()) == 0 ?
+    return bu_strcmp(expected.value.getString(), actual.value.getString()) == 0 ?
 	   TRUE : FALSE;
 }
 

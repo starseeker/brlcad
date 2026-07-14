@@ -42,6 +42,7 @@ class SoBRLExportAction;
 class SoBRLMeasureAction;
 class SoBRLSnapAction;
 class SoFieldSensor;
+class SoCallbackAction;
 class SoGetBoundingBoxAction;
 class SoGLRenderAction;
 class SoRayPickAction;
@@ -816,8 +817,12 @@ public:
     SbBool hasCompactInstanceIndex(void) const;
     SbBool isCompactOccurrenceRegistry(void) const;
     int getCompactInstanceCount(void) const;
+    /* Unique immutable payloads shared by compact occurrences. */
+    int getCompactPartCount(void) const;
     SbBool getCompactInstanceHandle(int index,
 	BRLObolCompactInstanceHandle &handle) const;
+    SbBool getCompactOccurrence(int index,
+	BRLObolCompactOccurrence &occurrence) const;
     SbBool getCompactInstanceSummary(
 	const BRLObolCompactInstanceHandle &handle,
 	BRLObolCompactInstanceSummary &summary) const;
@@ -879,6 +884,7 @@ protected:
     virtual ~SoBRLDatabaseSource(void);
     void GLRender(SoGLRenderAction *action) override;
     void GLRenderBelowPath(SoGLRenderAction *action) override;
+    void callback(SoCallbackAction *action) override;
     void getBoundingBox(SoGetBoundingBoxAction *action) override;
     void rayPick(SoRayPickAction *action) override;
 
@@ -913,6 +919,7 @@ private:
     void seedCompactRealizationCache(
 	BRLObolDatabaseSourceRealizationCache *cache) const;
     void clearCompiledAssembly(void);
+    void ensureCompiledAssemblyChild(void);
     void markCompiledAssemblyDirty(void);
     void markCadBatchDirty(void);
     void clearCompactInstanceIndex(void);

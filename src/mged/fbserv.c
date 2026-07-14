@@ -14,12 +14,12 @@
 #include "common.h"
 
 #include "bu/log.h"
-#include "dm/fbserv_legacy.h"
+#include "ged/draw_obol.h"
 #include "imgstream/fbserv.h"
 #include "tclcad.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 void
 fbserv_set_port(const struct bu_structparse *UNUSED(sp),
@@ -29,34 +29,29 @@ fbserv_set_port(const struct bu_structparse *UNUSED(sp),
     struct mged_state *s = MGED_STATE;
     struct fbserv_obj *fbsp;
 
-    if (!s || !s->mged_curr_dm)
+    if (!s || !s->gedp || !s->mged_curr_display)
 	return;
-    fbsp = &s->mged_curr_dm->dm_fbserv;
+    fbsp = s->gedp->ged_fbs;
+    if (!fbsp)
+	return;
 
     if (fbs_can_close(fbsp) && fbs_listener_fd(fbsp) >= 0)
 	(void)fbs_close(fbsp);
-    (void)dm_fbserv_set_framebuffer(fbsp, FB_NULL);
 
     if (!mged_variables->mv_listen)
 	return;
-    if (!mged_variables->mv_fb || fbp == FB_NULL) {
+    if (!mged_variables->mv_fb || !mged_obol_framebuffer_ensure(s) ||
+	!fbs_framebuffer_backend_installed(fbsp)) {
 	mged_variables->mv_listen = 0;
 	return;
     }
 
-    (void)fbs_init(fbsp);
-    fbsp->fbs_interp = dm_interp(DMP);
+    fbsp->fbs_interp = s->interp;
     tclcad_fbserv_set_transport(fbsp);
-    if (dm_fbserv_set_framebuffer(fbsp, fbp) != BRLCAD_OK) {
-	bu_log("fbserv_set_port: failed to install the current framebuffer\n");
-	mged_variables->mv_listen = 0;
-	return;
-    }
 
     (void)fbs_generate_token(fbsp);
     if (fbs_open(fbsp, mged_variables->mv_port) != BRLCAD_OK) {
 	bu_log("fbserv_set_port: failed to open a framebuffer listener\n");
-	(void)dm_fbserv_set_framebuffer(fbsp, FB_NULL);
 	mged_variables->mv_listen = 0;
 	return;
     }

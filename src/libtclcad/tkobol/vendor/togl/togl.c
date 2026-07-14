@@ -1,8 +1,8 @@
 /* 
  * Togl - a Tk OpenGL widget
  *
- * Copyright (C) 1996-2002  Brian Paul and Ben Bederson
- * Copyright (C) 2005-2009  Greg Couch
+ * Copyright 1996-2002  Brian Paul and Ben Bederson
+ * Copyright 2005-2009  Greg Couch
  * See the LICENSE file for copyright details.
  *
  * This is an enhanced version of Togl called tcl3dTogl. 
@@ -11,7 +11,7 @@
  * It is part of the Tcl3D package.
  * The modifications are based on Togl Version 1.7.
  * Changes and additions are marked with TCL3D and are
- * Copyright (C) 2005-2025 Paul Obermeier
+ * Copyright 2005-2025 Paul Obermeier
  */
 
 /* 

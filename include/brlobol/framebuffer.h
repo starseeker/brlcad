@@ -72,6 +72,9 @@ public:
     int poll(void);
 
 private:
+    friend class BRLObolWindowHost;
+
+    void detachHost(BRLObolWindowHost *host);
     BRLObolFramebufferStreamPrivate *p;
 };
 

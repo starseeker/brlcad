@@ -15,7 +15,6 @@
 #include "brlobol/view_store.h"
 #include "bv.h"
 #include "qtcad/QgView.h"
-#include "QgLegacyViewContext.h"
 
 #include <Inventor/SbLine.h>
 #include <Inventor/SbViewVolume.h>
@@ -72,7 +71,7 @@ QgObolPickRecord::QgObolPickRecord(void) :
 static void *
 qg_obol_pick_view_context(QgView *display)
 {
-    return display ? qg_legacy_view_to_context(display->view()) : NULL;
+    return display ? display->viewContext() : NULL;
 }
 
 static std::string

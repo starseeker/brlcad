@@ -16,6 +16,8 @@
 #include <string>
 
 #include <Inventor/SoViewport.h>
+#include <Inventor/nodes/SoPerspectiveCamera.h>
+#include "bv.h"
 #include "brlobol/display_endpoint.h"
 #include "brlobol/measure_action.h"
 #include "brlobol/view_controller.h"
@@ -112,8 +114,28 @@ refresh_scene_records(struct ged *gedp, void *v)
 }
 
 static void
-test_display_endpoint_slot(void *view)
+assert_endpoint_background_color(brlobol_display_endpoint_t *endpoint,
+	const char *property_name, double r, double g, double b)
 {
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(brlobol_display_endpoint_property_get(endpoint, property_name,
+	&value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(value.type == BRLOBOL_ENDPOINT_PROPERTY_COLOR3);
+    ASSERT(std::fabs(value.color3[0] - r) < 0.0001);
+    ASSERT(std::fabs(value.color3[1] - g) < 0.0001);
+    ASSERT(std::fabs(value.color3[2] - b) < 0.0001);
+}
+
+static void
+test_display_endpoint_slot(struct ged *gedp, void *view)
+{
+    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
+    VSET(background.bottom, 12, 34, 56);
+    VSET(background.top, 78, 90, 123);
+    ASSERT(bv_background_state_set(bv_context_view(
+	static_cast<struct bv_context *>(view)), &background));
+
     brlobol_display_endpoint_t *owned =
 	brlobol_display_endpoint_create(NULL, 0);
     ASSERT(owned != NULL);
@@ -121,8 +143,444 @@ test_display_endpoint_slot(void *view)
     ASSERT(owned_controller != NULL);
     ASSERT(ged_view_context_display_endpoint_set(view, owned, 1));
     ASSERT(ged_view_context_display_endpoint_get(view) == owned);
-    ASSERT(ged_view_context_display_manager_get(view) == NULL);
     ASSERT(ged_draw_obol_controller_opaque_for_view(view) == owned_controller);
+    assert_endpoint_background_color(owned, "controller.background.bottom",
+	12.0 / 255.0, 34.0 / 255.0, 56.0 / 255.0);
+    assert_endpoint_background_color(owned, "controller.background.top",
+	78.0 / 255.0, 90.0 / 255.0, 123.0 / 255.0);
+
+    struct brlobol_endpoint_property_value background_property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    background_property.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    VSET(background_property.color3, 0.2, 0.4, 0.6);
+    ASSERT(brlobol_display_endpoint_property_set(owned,
+	"controller.background.bottom", &background_property) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    VSET(background_property.color3, 0.1, 0.3, 0.5);
+    ASSERT(brlobol_display_endpoint_property_set(owned,
+	"controller.background.top", &background_property) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+
+    /* Re-registering an endpoint must not import stale passive view state. */
+    ASSERT(ged_view_context_display_endpoint_set(view, owned, 1));
+    assert_endpoint_background_color(owned, "controller.background.bottom",
+	0.2, 0.4, 0.6);
+    assert_endpoint_background_color(owned, "controller.background.top",
+	0.1, 0.3, 0.5);
+
+    struct brlobol_endpoint_property_value perspective =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    perspective.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    perspective.double_value = 45.0;
+    ASSERT(ged_view_context_display_property_set(view, "view.perspective",
+	&perspective) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(std::fabs(bv_perspective_get(
+	bv_context_view(static_cast<struct bv_context *>(view))) - 45.0) <
+	0.0001);
+    perspective = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view, "view.perspective",
+	&perspective) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(perspective.type == BRLOBOL_ENDPOINT_PROPERTY_DOUBLE);
+    ASSERT(std::fabs(perspective.double_value - 45.0) < 0.0001);
+    ASSERT(brlobol_display_endpoint_view_sync(owned, view));
+    ASSERT(static_cast<BRLObolViewController *>(owned_controller)->getCamera()
+	->isOfType(SoPerspectiveCamera::getClassTypeId()));
+    perspective.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    perspective.double_value = -1.0;
+    ASSERT(ged_view_context_display_property_set(view, "view.perspective",
+	&perspective) == BRLOBOL_ENDPOINT_PROPERTY_INVALID);
+    perspective.double_value = 0.0;
+    ASSERT(ged_view_context_display_property_set(view, "view.perspective",
+	&perspective) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+    mat_t pmat;
+    ASSERT(bv_pmat_get(pmat,
+	bv_context_view(static_cast<struct bv_context *>(view))));
+    ASSERT(std::fabs(pmat[0] - 1.0) < 0.0001 &&
+	std::fabs(pmat[5] - 1.0) < 0.0001 &&
+	std::fabs(pmat[14]) < 0.0001);
+
+    struct brlobol_endpoint_property_value navigation =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    navigation.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    navigation.double_value = -12.0;
+    ASSERT(ged_view_context_display_property_set(view,
+	"view.navigation.min_delta", &navigation) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    navigation.double_value = 12.0;
+    ASSERT(ged_view_context_display_property_set(view,
+	"view.navigation.max_delta", &navigation) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    navigation.double_value = 0.6;
+    ASSERT(ged_view_context_display_property_set(view,
+	"view.navigation.rotate_scale", &navigation) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    navigation.double_value = 3.0;
+    ASSERT(ged_view_context_display_property_set(view,
+	"view.navigation.scale_scale", &navigation) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    navigation = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.navigation.rotate_scale", &navigation) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	navigation.type == BRLOBOL_ENDPOINT_PROPERTY_DOUBLE &&
+	std::fabs(navigation.double_value - 0.6) < 0.0001);
+    navigation.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    navigation.double_value = 0.0;
+    ASSERT(ged_view_context_display_property_set(view,
+	"view.navigation.scale_scale", &navigation) ==
+	BRLOBOL_ENDPOINT_PROPERTY_INVALID);
+
+    const char *font_properties[] = {
+	"view.faceplate.params.font_size",
+	"view.faceplate.center_dot.font_size",
+	"view.faceplate.scale.font_size"
+    };
+    struct brlobol_endpoint_property_value font_size =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    font_size.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+    font_size.uint_value = 18;
+    for (size_t i = 0; i < sizeof(font_properties) / sizeof(font_properties[0]); i++) {
+	ASSERT(ged_view_context_display_property_set(view, font_properties[i],
+	    &font_size) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	font_size = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ASSERT(ged_view_context_display_property_get(view, font_properties[i],
+	    &font_size) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	ASSERT(font_size.type == BRLOBOL_ENDPOINT_PROPERTY_UINT);
+	ASSERT(font_size.uint_value == 18);
+	font_size.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	font_size.uint_value = 97;
+	ASSERT(ged_view_context_display_property_set(view, font_properties[i],
+	    &font_size) == BRLOBOL_ENDPOINT_PROPERTY_INVALID);
+	font_size.uint_value = 18;
+    }
+
+    const char *color_properties[] = {
+	"view.faceplate.params.color",
+	"view.faceplate.center_dot.color",
+	"view.faceplate.scale.color"
+    };
+    struct brlobol_endpoint_property_value color =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    color.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    VSET(color.color3, 17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0);
+    for (size_t i = 0; i < sizeof(color_properties) / sizeof(color_properties[0]); i++) {
+	ASSERT(ged_view_context_display_property_set(view, color_properties[i],
+	    &color) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	color = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ASSERT(ged_view_context_display_property_get(view, color_properties[i],
+	    &color) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	ASSERT(color.type == BRLOBOL_ENDPOINT_PROPERTY_COLOR3);
+	ASSERT(std::fabs(color.color3[0] - 17.0 / 255.0) < 0.0001);
+	ASSERT(std::fabs(color.color3[1] - 34.0 / 255.0) < 0.0001);
+	ASSERT(std::fabs(color.color3[2] - 51.0 / 255.0) < 0.0001);
+	color.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+	VSET(color.color3, 1.1, 0.0, 0.0);
+	ASSERT(ged_view_context_display_property_set(view, color_properties[i],
+	    &color) == BRLOBOL_ENDPOINT_PROPERTY_INVALID);
+	VSET(color.color3, 17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0);
+    }
+
+    const char *adc_color_properties[] = {
+	"view.faceplate.adc.line_color",
+	"view.faceplate.adc.tick_color"
+    };
+    for (size_t i = 0; i < sizeof(adc_color_properties) /
+	 sizeof(adc_color_properties[0]); i++) {
+	ASSERT(ged_view_context_display_property_set(view, adc_color_properties[i],
+	    &color) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	color = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ASSERT(ged_view_context_display_property_get(view, adc_color_properties[i],
+	    &color) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	ASSERT(color.type == BRLOBOL_ENDPOINT_PROPERTY_COLOR3);
+	ASSERT(std::fabs(color.color3[0] - 17.0 / 255.0) < 0.0001);
+	ASSERT(std::fabs(color.color3[1] - 34.0 / 255.0) < 0.0001);
+	ASSERT(std::fabs(color.color3[2] - 51.0 / 255.0) < 0.0001);
+	color.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+	VSET(color.color3, 17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0);
+    }
+    struct brlobol_endpoint_property_value adc_line_width =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    adc_line_width.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+    adc_line_width.uint_value = 3;
+    ASSERT(ged_view_context_display_property_set(view,
+	"view.faceplate.adc.line_width", &adc_line_width) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    adc_line_width = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.adc.line_width", &adc_line_width) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(adc_line_width.type == BRLOBOL_ENDPOINT_PROPERTY_UINT);
+    ASSERT(adc_line_width.uint_value == 3);
+
+    const char *faceplate_visibility_properties[] = {
+	"view.faceplate.adc.visible",
+	"view.faceplate.center_dot.visible",
+	"view.faceplate.grid.visible",
+	"view.faceplate.model_axes.visible",
+	"view.faceplate.scale.visible",
+	"view.faceplate.view_axes.visible",
+	"view.faceplate.params.visible",
+	"view.faceplate.params.size",
+	"view.faceplate.params.center",
+	"view.faceplate.params.azimuth",
+	"view.faceplate.params.elevation",
+	"view.faceplate.params.twist",
+	"view.faceplate.params.fps"
+    };
+    struct brlobol_endpoint_property_value visibility =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    visibility.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    visibility.bool_value = 0;
+    for (size_t i = 0;
+	i < sizeof(faceplate_visibility_properties) /
+	    sizeof(faceplate_visibility_properties[0]); i++) {
+	ASSERT(ged_view_context_display_property_set(view,
+	    faceplate_visibility_properties[i], &visibility) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	visibility = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ASSERT(ged_view_context_display_property_get(view,
+	    faceplate_visibility_properties[i], &visibility) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	ASSERT(visibility.type == BRLOBOL_ENDPOINT_PROPERTY_BOOL);
+	ASSERT(visibility.bool_value == 0);
+	visibility.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	visibility.bool_value = 2;
+	ASSERT(ged_view_context_display_property_set(view,
+	    faceplate_visibility_properties[i], &visibility) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_INVALID);
+	visibility.bool_value = 0;
+    }
+
+    const char *adc_enable[] = {"adc", "draw", "1", NULL};
+    ASSERT(ged_exec_adc(gedp, 3, adc_enable) == BRLCAD_OK);
+    visibility = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.adc.visible", &visibility) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(visibility.type == BRLOBOL_ENDPOINT_PROPERTY_BOOL);
+    ASSERT(visibility.bool_value == 1);
+    const char *adc_disable[] = {"adc", "draw", "0", NULL};
+    ASSERT(ged_exec_adc(gedp, 3, adc_disable) == BRLCAD_OK);
+    visibility = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.adc.visible", &visibility) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(visibility.bool_value == 0);
+
+    const char *grid_bool_properties[] = {
+	"view.faceplate.grid.adaptive",
+	"view.faceplate.grid.snap"
+    };
+    for (size_t i = 0; i < sizeof(grid_bool_properties) /
+	 sizeof(grid_bool_properties[0]); i++) {
+	visibility = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	visibility.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	visibility.bool_value = 1;
+	ASSERT(ged_view_context_display_property_set(view,
+	    grid_bool_properties[i], &visibility) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	visibility = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ASSERT(ged_view_context_display_property_get(view,
+	    grid_bool_properties[i], &visibility) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	ASSERT(visibility.type == BRLOBOL_ENDPOINT_PROPERTY_BOOL);
+	ASSERT(visibility.bool_value == 1);
+    }
+    const char *grid_double_properties[] = {
+	"view.faceplate.grid.anchor.x",
+	"view.faceplate.grid.anchor.y",
+	"view.faceplate.grid.anchor.z",
+	"view.faceplate.grid.resolution.horizontal",
+	"view.faceplate.grid.resolution.vertical"
+    };
+    for (size_t i = 0; i < sizeof(grid_double_properties) /
+	 sizeof(grid_double_properties[0]); i++) {
+	struct brlobol_endpoint_property_value grid_value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	grid_value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	grid_value.double_value = 2.0 + static_cast<double>(i);
+	ASSERT(ged_view_context_display_property_set(view,
+	    grid_double_properties[i], &grid_value) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	grid_value = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ASSERT(ged_view_context_display_property_get(view,
+	    grid_double_properties[i], &grid_value) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	ASSERT(grid_value.type == BRLOBOL_ENDPOINT_PROPERTY_DOUBLE);
+	ASSERT(std::fabs(grid_value.double_value -
+	    (2.0 + static_cast<double>(i))) < 0.0001);
+    }
+    const char *grid_uint_properties[] = {
+	"view.faceplate.grid.major.horizontal",
+	"view.faceplate.grid.major.vertical"
+    };
+    for (size_t i = 0; i < sizeof(grid_uint_properties) /
+	 sizeof(grid_uint_properties[0]); i++) {
+	struct brlobol_endpoint_property_value grid_value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	grid_value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	grid_value.uint_value = 3 + i;
+	ASSERT(ged_view_context_display_property_set(view,
+	    grid_uint_properties[i], &grid_value) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	grid_value = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	ASSERT(ged_view_context_display_property_get(view,
+	    grid_uint_properties[i], &grid_value) ==
+	    BRLOBOL_ENDPOINT_PROPERTY_OK);
+	ASSERT(grid_value.type == BRLOBOL_ENDPOINT_PROPERTY_UINT);
+	ASSERT(grid_value.uint_value == 3 + i);
+    }
+    struct brlobol_endpoint_property_value grid_color =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    grid_color.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    VSET(grid_color.color3, 0.1, 0.2, 0.3);
+    ASSERT(ged_view_context_display_property_set(view,
+	"view.faceplate.grid.color", &grid_color) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    grid_color = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.grid.color", &grid_color) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(grid_color.type == BRLOBOL_ENDPOINT_PROPERTY_COLOR3);
+    ASSERT(std::fabs(grid_color.color3[0] - 26.0 / 255.0) < 0.0001);
+    ASSERT(std::fabs(grid_color.color3[1] - 51.0 / 255.0) < 0.0001);
+    ASSERT(std::fabs(grid_color.color3[2] - 77.0 / 255.0) < 0.0001);
+
+    const char *grid_snap[] = {"grid", "snap", "0", NULL};
+    ASSERT(ged_exec_grid(gedp, 3, grid_snap) == BRLCAD_OK);
+    visibility = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.grid.snap", &visibility) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(visibility.bool_value == 0);
+    const char *grid_anchor[] = {"grid", "anchor", "7", "8", "9", NULL};
+    ASSERT(ged_exec_grid(gedp, 5, grid_anchor) == BRLCAD_OK);
+    struct brlobol_endpoint_property_value anchor =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.grid.anchor.z", &anchor) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(std::fabs(anchor.double_value - 9.0) < 0.0001);
+    const char *grid_color_command[] = {
+	"grid", "color", "10", "20", "30", NULL
+    };
+    ASSERT(ged_exec_grid(gedp, 5, grid_color_command) == BRLCAD_OK);
+    grid_color = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.grid.color", &grid_color) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(std::fabs(grid_color.color3[0] - 10.0 / 255.0) < 0.0001);
+
+    const char *faceplate_grid_color[] = {
+	"view", "faceplate", "grid", "color", "11", "22", "33", NULL
+    };
+    ASSERT_VIEW_OK(gedp, 7, faceplate_grid_color);
+    grid_color = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.grid.color", &grid_color) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(std::fabs(grid_color.color3[2] - 33.0 / 255.0) < 0.0001);
+
+    const char *axes_names[] = {"model_axes", "view_axes"};
+    const char *axes_bool_suffixes[] = {
+	"position_only", "labels.visible", "triple_color", "ticks.visible"
+    };
+    const char *axes_double_suffixes[] = {
+	"position.x", "position.y", "position.z", "size", "ticks.interval"
+    };
+    const char *axes_uint_suffixes[] = {
+	"line_width", "ticks.length", "ticks.major_length",
+	"ticks.per_major", "ticks.threshold"
+    };
+    const char *axes_color_suffixes[] = {
+	"color", "labels.color", "ticks.color", "ticks.major_color"
+    };
+    for (const char *axes_name : axes_names) {
+	for (const char *suffix : axes_bool_suffixes) {
+	    const std::string property = "view.faceplate." +
+		std::string(axes_name) + "." + suffix;
+	    struct brlobol_endpoint_property_value axes_value =
+		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    axes_value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	    axes_value.bool_value = 1;
+	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    axes_value = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    ASSERT(axes_value.type == BRLOBOL_ENDPOINT_PROPERTY_BOOL);
+	    ASSERT(axes_value.bool_value == 1);
+	}
+	for (size_t i = 0; i < sizeof(axes_double_suffixes) /
+	     sizeof(axes_double_suffixes[0]); i++) {
+	    const std::string property = "view.faceplate." +
+		std::string(axes_name) + "." + axes_double_suffixes[i];
+	    struct brlobol_endpoint_property_value axes_value =
+		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    axes_value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	    axes_value.double_value = 2.0 + static_cast<double>(i);
+	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    axes_value = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    ASSERT(axes_value.type == BRLOBOL_ENDPOINT_PROPERTY_DOUBLE);
+	    ASSERT(std::fabs(axes_value.double_value -
+		(2.0 + static_cast<double>(i))) < 0.0001);
+	}
+	for (size_t i = 0; i < sizeof(axes_uint_suffixes) /
+	     sizeof(axes_uint_suffixes[0]); i++) {
+	    const std::string property = "view.faceplate." +
+		std::string(axes_name) + "." + axes_uint_suffixes[i];
+	    struct brlobol_endpoint_property_value axes_value =
+		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    axes_value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	    axes_value.uint_value = 2 + i;
+	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    axes_value = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    ASSERT(axes_value.type == BRLOBOL_ENDPOINT_PROPERTY_UINT);
+	    ASSERT(axes_value.uint_value == 2 + i);
+	}
+	for (const char *suffix : axes_color_suffixes) {
+	    const std::string property = "view.faceplate." +
+		std::string(axes_name) + "." + suffix;
+	    struct brlobol_endpoint_property_value axes_value =
+		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    axes_value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+	    VSET(axes_value.color3, 0.2, 0.4, 0.6);
+	    ASSERT(ged_view_context_display_property_set(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    axes_value = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    ASSERT(ged_view_context_display_property_get(view, property.c_str(),
+		&axes_value) == BRLOBOL_ENDPOINT_PROPERTY_OK);
+	    ASSERT(axes_value.type == BRLOBOL_ENDPOINT_PROPERTY_COLOR3);
+	    ASSERT(std::fabs(axes_value.color3[0] - 51.0 / 255.0) < 0.0001);
+	    ASSERT(std::fabs(axes_value.color3[2] - 153.0 / 255.0) < 0.0001);
+	}
+    }
+    const char *faceplate_model_axes_color[] = {
+	"view", "faceplate", "model_axes", "axes_color", "11", "22", "33", NULL
+    };
+    ASSERT_VIEW_OK(gedp, 7, faceplate_model_axes_color);
+    struct brlobol_endpoint_property_value axes_color =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.model_axes.color", &axes_color) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(std::fabs(axes_color.color3[1] - 22.0 / 255.0) < 0.0001);
+    const char *faceplate_view_axes_tick[] = {
+	"view", "faceplate", "view_axes", "tick_length", "9", NULL
+    };
+    ASSERT_VIEW_OK(gedp, 5, faceplate_view_axes_tick);
+    struct brlobol_endpoint_property_value axes_tick =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    ASSERT(ged_view_context_display_property_get(view,
+	"view.faceplate.view_axes.ticks.length", &axes_tick) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK);
+    ASSERT(axes_tick.uint_value == 9);
 
     brlobol_display_endpoint_t *borrowed =
 	brlobol_display_endpoint_create(NULL, 0);
@@ -231,7 +689,7 @@ main(int argc, const char **argv)
 	    ged_view_active_ctx_set(gedp, views[i]);
     }
 
-    test_display_endpoint_slot(views[0]);
+    test_display_endpoint_slot(gedp, views[0]);
     test_command_report_record_consistency(gedp, views[0]);
 
     const char *c0[] = {"view", "annotation", "line", "create", "u_line", "0", "0", "0", "1", "0", "0", NULL};

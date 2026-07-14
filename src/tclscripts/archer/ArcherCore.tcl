@@ -352,7 +352,6 @@ namespace eval ArcherCore {
 	variable mTarget ""
 	variable mTargetCopy ""
 	variable mTargetOldCopy ""
-	variable mDisplayType
 	variable mLighting 1
 	variable mRenderMode -1
 	variable mActivePane
@@ -490,8 +489,6 @@ namespace eval ArcherCore {
 
 	variable mLightingMode 1
 	variable mLightingModePref ""
-	variable mBackendCacheMode 1
-	variable mBackendCacheModePref ""
 	variable mWireframeMode 0
 	variable mWireframeModePref ""
 	variable mHideSubtractions 0
@@ -1081,9 +1078,6 @@ namespace eval ArcherCore {
     if {[llength $args] == 1} {
 	set args [lindex $args 0]
     }
-
-    set dm_list [split [dm_list] ',']
-    set mDisplayType [lindex $dm_list 0]
 
     # horizontal panes
     itk_component add hpane {
@@ -2004,7 +1998,6 @@ namespace eval ArcherCore {
 	}
 
 	cadwidgets::Ged $itk_component(canvasF).mged $_target \
-	    -type $mDisplayType \
 	    -showhandle 0 \
 	    -sashcursor sb_v_double_arrow \
 	    -hsashcursor sb_h_double_arrow \
@@ -2034,7 +2027,7 @@ namespace eval ArcherCore {
 
     # RT Control Panel
     itk_component add rtcntrl {
-	RtControl $itk_interior.rtcp -mged $itk_component(ged)
+	RtControl $itk_interior.rtcp -ged $itk_component(ged)
     } {
 	usual
     }
@@ -4107,7 +4100,7 @@ namespace eval ArcherCore {
 ::itcl::body ArcherCore::doMultiPane {} {
     gedCmd configure -multi_pane $mMultiPane
 
-    if {$mMultiPane && $mBackendCacheMode} {
+    if {$mMultiPane} {
 	::update
 	redrawWho
     }
@@ -4513,7 +4506,7 @@ namespace eval ArcherCore {
     $color add command -label "Select..." \
 	-command [::itcl::code $this selectDisplayColor $_node]
 
-    if {$mDisplayType == "tkobol" && ($_nodeType != "leaf" || 0 < $mRenderMode)} {
+    if {$_nodeType != "leaf" || 0 < $mRenderMode} {
 	# Build transparency menu
 	$_menu add cascade -label "Transparency" \
 	    -menu $_menu.trans
@@ -5918,10 +5911,7 @@ namespace eval ArcherCore {
 	set size [winfo width $itk_component(ged)]
     }
 
-    set dm_list [split [dm_list] ',']
-    set devtype "/dev/"
-    append devtype [lindex $dm_list 0]
-    $itk_component(ged) $app -s $size -F $devtype
+    $itk_component(ged) $app -s $size -F /dev/tkobol
 }
 
 ::itcl::body ArcherCore::updateDisplaySettings {} {
@@ -5929,7 +5919,6 @@ namespace eval ArcherCore {
 
     updatePerspective 0
     doLighting
-    gedCmd cache_on $mBackendCacheMode
     gedCmd configure -hideSubtractions $mHideSubtractions
 
     if {$mWireframeMode} {

@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include "bu/color.h"
 #include "raytrace.h"
 #include "wdb.h"
@@ -87,6 +89,7 @@ expect_rgb(struct db_i *dbip,
 int
 main(int UNUSED(argc), const char **UNUSED(argv))
 {
+    bu_setprogname("fullpath_color");
     struct db_i *dbip = db_create_inmem();
     struct rt_wdb *wdbp = wdb_dbopen(dbip, RT_WDB_TYPE_DB_INMEM);
     const unsigned char red[3] = {200, 0, 0};

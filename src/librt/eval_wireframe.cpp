@@ -31,6 +31,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -845,7 +847,7 @@ static int
 bigE_env_enabled(const char *name)
 {
     const char *value = getenv(name);
-    return (value && value[0] && strcmp(value, "0")) ? 1 : 0;
+    return (value && value[0] && bu_strcmp(value, "0")) ? 1 : 0;
 }
 
 
@@ -1239,9 +1241,9 @@ bigE_context_prepare(struct bigE_data *dgcdp,
     dgcdp->eval_flags = eval_flags;
 
     const char *bw_diag = getenv("BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG");
-    dgcdp->boolweave_diag_enabled = (bw_diag && bw_diag[0] && strcmp(bw_diag, "0"));
+    dgcdp->boolweave_diag_enabled = (bw_diag && bw_diag[0] && bu_strcmp(bw_diag, "0"));
     const char *bige_stats = getenv("BRLOBOL_EVAL_WIRE_BIGE_STATS");
-    dgcdp->bige_stats_enabled = (bige_stats && bige_stats[0] && strcmp(bige_stats, "0"));
+    dgcdp->bige_stats_enabled = (bige_stats && bige_stats[0] && bu_strcmp(bige_stats, "0"));
     const uint32_t method = eval_flags & RT_EVAL_WIREFRAME_F_METHOD_MASK;
     dgcdp->boolweave_eval_enabled =
 	(method != RT_EVAL_WIREFRAME_F_BIGE);

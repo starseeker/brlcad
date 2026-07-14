@@ -112,8 +112,19 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    if (reset_mode)
-	bv_framebuffer_mode_set(bv_context_view((struct bv_context *)view_ctx), 0);
+    if (reset_mode) {
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+	value.string_value = "off";
+	if (ged_view_context_display_property_set(view_ctx,
+		"composition.framebuffer.mode", &value) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"unable to disable the Obol framebuffer composition");
+	    return BRLCAD_ERROR;
+	}
+    }
 
     return BRLCAD_OK;
 }

@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/grid.h"
 #include "brlobol/line_layer_overlay.h"
@@ -62,9 +64,9 @@ scene_path_equal(const char *stored, const char *path)
 {
     if (!stored || !path)
 	return 0;
-    if (strcmp(stored, path) == 0)
+    if (bu_strcmp(stored, path) == 0)
 	return 1;
-    return strcmp(skip_leading_slash(stored), skip_leading_slash(path)) == 0;
+    return bu_strcmp(skip_leading_slash(stored), skip_leading_slash(path)) == 0;
 }
 
 static int
@@ -444,7 +446,7 @@ scene_group_node_name_equal(const SoNode *node, const char *leafName)
     if (!node || !leafName)
 	return 0;
     const SbName nodeName = node->getName();
-    if (strcmp(nodeName.getString(), leafName) == 0)
+    if (bu_strcmp(nodeName.getString(), leafName) == 0)
 	return 1;
 
     if (node->isOfType(SoBRLSceneGroup::getClassTypeId())) {
@@ -453,7 +455,7 @@ scene_group_node_name_equal(const SoNode *node, const char *leafName)
 	const char *groupPath = group->groupPath.getValue().getString();
 	const char *groupLeaf = strrchr(groupPath, '/');
 	groupLeaf = groupLeaf ? groupLeaf + 1 : groupPath;
-	if (groupLeaf && strcmp(groupLeaf, leafName) == 0)
+	if (groupLeaf && bu_strcmp(groupLeaf, leafName) == 0)
 	    return 1;
     }
 
@@ -539,7 +541,7 @@ scene_child_summary_path(const SbString &parentPath, const SoNode *child)
 	return "";
 
     if (parentPath.getLength() == 0 ||
-	strcmp(parentPath.getString(), "/") == 0)
+	bu_strcmp(parentPath.getString(), "/") == 0)
 	return SbString(childName.getString());
 
     SbString childPath = parentPath;
@@ -555,7 +557,7 @@ scene_group_append_path(const SbString &parentPath, const char *leafName)
 	return parentPath;
 
     if (parentPath.getLength() == 0 ||
-	strcmp(parentPath.getString(), "/") == 0)
+	bu_strcmp(parentPath.getString(), "/") == 0)
 	return SbString(leafName);
 
     SbString childPath = parentPath;
@@ -651,7 +653,7 @@ scene_group_vec3f_equal(const SbVec3f &a, const SbVec3f &b)
 static int
 scene_group_set_string(SoSFString &field, const SbString &value)
 {
-    if (strcmp(field.getValue().getString(), value.getString()) == 0)
+    if (bu_strcmp(field.getValue().getString(), value.getString()) == 0)
 	return 0;
     field = value;
     return 1;
@@ -688,9 +690,9 @@ scene_shape_path_equal(const SoNode *node, const char *shapePath)
 	return 0;
 
     const char *stored = nodePath.getString();
-    if (strcmp(stored, shapePath) == 0)
+    if (bu_strcmp(stored, shapePath) == 0)
 	return 1;
-    return strcmp(skip_leading_slash(stored),
+    return bu_strcmp(skip_leading_slash(stored),
 		  skip_leading_slash(shapePath)) == 0;
 }
 
@@ -1396,7 +1398,10 @@ SoBRLSceneController::unindexDatabaseSource(SoBRLDatabaseSource *source) const
 	normalizedPath);
     if (pathInstances != this->databaseSourcePathInstancesIndex.end()) {
 	std::vector<SoBRLDatabaseSource *> &sources = pathInstances->second;
-	sources.erase(std::remove(sources.begin(), sources.end(), source),
+	sources.erase(std::remove_if(sources.begin(), sources.end(),
+	    [source](SoBRLDatabaseSource *candidate) {
+		return candidate == source;
+	    }),
 	    sources.end());
 	if (sources.empty()) {
 	    this->databaseSourcePathInstancesIndex.erase(pathInstances);
@@ -2770,8 +2775,8 @@ SoBRLSceneController::renameDatabaseSourceInstance(
 	!newSourceInstanceKey || !newSourceInstanceKey[0] ||
 	!newSourcePath || !newSourcePath[0])
 	return -1;
-    if ((strcmp(sourceInstanceKey, newSourceInstanceKey) == 0 ||
-	 strcmp(skip_leading_slash(sourceInstanceKey),
+    if ((bu_strcmp(sourceInstanceKey, newSourceInstanceKey) == 0 ||
+	 bu_strcmp(skip_leading_slash(sourceInstanceKey),
 		skip_leading_slash(newSourceInstanceKey)) == 0) &&
 	database_source_path_equal(this->findDatabaseSourceInstance(
 				       sourceInstanceKey), newSourcePath))

@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol.h"
 #include "brlobol/edit_preview.h"
 #include "brlobol/hud_label_overlay.h"
@@ -250,7 +252,7 @@ test_feature_nodes(BRLObolViewController &view)
 	overlayRead.lifecycle != BRLObolOverlayLifecycle::PerCommand ||
 	overlayRead.order != BRLObolOverlayOrder::PostTransparent ||
 	overlayRead.sortOrder != 7 ||
-	strcmp(overlayRead.sourcePath.getString(), "local-line") != 0)
+	bu_strcmp(overlayRead.sourcePath.getString(), "local-line") != 0)
 	FAIL("feature overlay metadata should round-trip through overlayInfo");
 
     BRLObolFeatureSummary overlaySummary;
@@ -282,11 +284,11 @@ test_feature_nodes(BRLObolViewController &view)
     std::vector<BRLObolFeatureMetadata> metadataRead;
     if (!view.features().metadata(localA, metadataRead) ||
 	metadataRead.size() != 2 ||
-	strcmp(metadataRead[0].key.getString(), "result.kind") != 0 ||
-	strcmp(metadataRead[0].value.getString(),
+	bu_strcmp(metadataRead[0].key.getString(), "result.kind") != 0 ||
+	bu_strcmp(metadataRead[0].value.getString(),
 	       "diagnostic-line") != 0 ||
-	strcmp(metadataRead[1].key.getString(), "result.index") != 0 ||
-	strcmp(metadataRead[1].value.getString(), "7") != 0)
+	bu_strcmp(metadataRead[1].key.getString(), "result.index") != 0 ||
+	bu_strcmp(metadataRead[1].value.getString(), "7") != 0)
 	FAIL("feature metadata should round-trip through metadata readback");
 
     if (!view.features().summaryOwned("local-line", overlaySummary,
@@ -296,7 +298,7 @@ test_feature_nodes(BRLObolViewController &view)
 
     if (!view.features().record(localA, overlayRecord) ||
 	overlayRecord.metadata.size() != 2 ||
-	strcmp(overlayRecord.metadata[0].key.getString(),
+	bu_strcmp(overlayRecord.metadata[0].key.getString(),
 	       "result.kind") != 0)
 	FAIL("feature record should preserve metadata");
 
@@ -312,11 +314,11 @@ test_feature_nodes(BRLObolViewController &view)
 	FAIL("feature primitive metadata should be settable");
     if (!view.features().primitiveMetadata(localA, 0, metadataRead) ||
 	metadataRead.size() != 2 ||
-	strcmp(metadataRead[0].key.getString(), "overlap.objects") != 0 ||
-	strcmp(metadataRead[0].value.getString(),
+	bu_strcmp(metadataRead[0].key.getString(), "overlap.objects") != 0 ||
+	bu_strcmp(metadataRead[0].value.getString(),
 	       "box.s cone.s") != 0 ||
-	strcmp(metadataRead[1].key.getString(), "overlap.depth") != 0 ||
-	strcmp(metadataRead[1].value.getString(), "0.25") != 0)
+	bu_strcmp(metadataRead[1].key.getString(), "overlap.depth") != 0 ||
+	bu_strcmp(metadataRead[1].value.getString(), "0.25") != 0)
 	FAIL("feature primitive metadata should round-trip through readback");
     if (!view.features().summaryOwned("local-line", overlaySummary,
 				      BRLOBOL_FEATURE_SCOPE_LOCAL, &ownerA) ||
@@ -331,7 +333,7 @@ test_feature_nodes(BRLObolViewController &view)
     SoNode *localNode = view.features().node(localA);
     if (!localNode ||
 	!localNode->isOfType(SoBRLVListShape::getClassTypeId()) ||
-	strcmp(static_cast<SoBRLVListShape *>(localNode)->
+	bu_strcmp(static_cast<SoBRLVListShape *>(localNode)->
 	       recordRole.getValue().getString(), "view-feature") != 0)
 	FAIL("feature overlay metadata should preserve feature-store node role");
 
@@ -342,7 +344,7 @@ test_feature_nodes(BRLObolViewController &view)
     localNode = view.features().node(localA);
     if (!localNode ||
 	!localNode->isOfType(SoBRLVListShape::getClassTypeId()) ||
-	strcmp(static_cast<SoBRLVListShape *>(localNode)->
+	bu_strcmp(static_cast<SoBRLVListShape *>(localNode)->
 	       recordRole.getValue().getString(), "view-feature") != 0)
 	FAIL("cleared feature overlay metadata should restore view-feature node role");
 
@@ -370,7 +372,7 @@ test_feature_nodes(BRLObolViewController &view)
     if (!view.features().resolvePrimitivePick("local-line", 0,
 	    primitivePick, BRLOBOL_FEATURE_SCOPE_LOCAL, &ownerA) ||
 	primitivePick.handle.id != localA.id ||
-	strcmp(primitivePick.featureName.getString(), "local-line") != 0 ||
+	bu_strcmp(primitivePick.featureName.getString(), "local-line") != 0 ||
 	primitivePick.primitiveIndex != 0)
 	FAIL("feature primitive pick resolver should find direct local features");
 
@@ -429,13 +431,13 @@ test_feature_nodes(BRLObolViewController &view)
 	!view.features().resolvePrimitivePick("layered-line/red", 0,
 		primitivePick) ||
 	primitivePick.handle.id != layeredHandle.id ||
-	strcmp(primitivePick.featureName.getString(),
+	bu_strcmp(primitivePick.featureName.getString(),
 	       "layered-line") != 0 ||
 	primitivePick.primitiveIndex != 0 ||
 	primitivePick.metadata.size() != 2 ||
-	strcmp(primitivePick.metadata[0].key.getString(),
+	bu_strcmp(primitivePick.metadata[0].key.getString(),
 	       "overlap.objects") != 0 ||
-	strcmp(primitivePick.metadata[0].value.getString(),
+	bu_strcmp(primitivePick.metadata[0].value.getString(),
 	       "box.s cone.s") != 0)
 	FAIL("line-layer child primitive picks should resolve to parent primitive metadata");
     if (view.features().resolvePrimitivePick("layered-line/red", 1,
@@ -569,7 +571,7 @@ test_selection_store(BRLObolViewController &view)
     view.selection().visitPaths(count_selection_path_cb, &visit, &ownerA,
 				BRLOBOL_SELECTION_SELECTED_PATH);
     if (visit.count != 1 || !visit.last ||
-	strcmp(visit.last, "all.g/box.s") != 0)
+	bu_strcmp(visit.last, "all.g/box.s") != 0)
 	FAIL("selection visitPaths should filter to owner A selected path");
 
     view.selection().clear(&ownerA, BRLOBOL_SELECTION_HIGHLIGHTED_REF);

@@ -41,11 +41,15 @@ struct BRLObolFramebufferStreamPrivate {
 BRLObolFramebufferStream::BRLObolFramebufferStream(BRLObolWindowHost *host) :
     p(new BRLObolFramebufferStreamPrivate(host))
 {
+    if (host)
+	host->registerFramebufferStream(this);
 }
 
 BRLObolFramebufferStream::~BRLObolFramebufferStream(void)
 {
     this->close();
+    if (this->p->host)
+	this->p->host->unregisterFramebufferStream(this);
     delete this->p;
     this->p = NULL;
 }
@@ -56,13 +60,24 @@ BRLObolFramebufferStream::setHost(BRLObolWindowHost *host)
     if (this->p->host == host)
 	return;
     this->close();
+    if (this->p->host)
+	this->p->host->unregisterFramebufferStream(this);
     this->p->host = host;
+    if (host)
+	host->registerFramebufferStream(this);
 }
 
 BRLObolWindowHost *
 BRLObolFramebufferStream::host(void) const
 {
     return this->p->host;
+}
+
+void
+BRLObolFramebufferStream::detachHost(BRLObolWindowHost *host)
+{
+    if (this->p->host == host)
+	this->p->host = NULL;
 }
 
 int

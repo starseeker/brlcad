@@ -21,10 +21,8 @@
  *
  * Per-canvas CAD-specific mouse/keyboard binding handler.
  *
- * This class replaces the deleted legacy free-function input API and its
- * global static drag-tracking maps.  Moving the state inside a class
- * instance eliminates cross-canvas interference when multiple canvases are
- * simultaneously active (Phase 3 of the libqtcad refactor plan).
+ * Each canvas owns its drag state, so simultaneous canvases cannot interfere
+ * with each other.
  */
 
 #ifndef QGCANVASINPUT_H
@@ -37,15 +35,12 @@
 #include <QWheelEvent>
 
 #include "brlobol/input.h"
-#include "qtcad/QgLegacyView.h"
+#include "bv.h"
 
 /**
  * Per-canvas input-binding handler.
  *
- * Each QgGL / QgSW canvas embeds one instance of this class (via
- * QgCanvasState::input).  The drag-tracking maps that were previously
- * global statics in the deleted legacy binding layer are now per-instance,
- * so concurrent canvases cannot interfere with each other.
+ * Each QgGL / QgSW canvas embeds one instance through QgCanvasState::input.
  */
 class QgCanvasInput {
 public:
@@ -53,19 +48,19 @@ public:
 	~QgCanvasInput();
 	void setEndpoint(struct brlobol_display_endpoint *endpoint);
 
-	int keyPressEvent(qg_legacy_view *v, int x_prev, int y_prev,
+	int keyPressEvent(struct bv_context *view_ctx, int x_prev, int y_prev,
 	                  QKeyEvent *k);
 
-	int mousePressEvent(qg_legacy_view *v, int x_prev, int y_prev,
+	int mousePressEvent(struct bv_context *view_ctx, int x_prev, int y_prev,
 	                    QMouseEvent *e);
 
-	int mouseReleaseEvent(qg_legacy_view *v, double x_press, double y_press,
+	int mouseReleaseEvent(struct bv_context *view_ctx, double x_press, double y_press,
 	                      int x_prev, int y_prev, QMouseEvent *e, int mode);
 
-	int mouseMoveEvent(qg_legacy_view *v, int x_prev, int y_prev,
+	int mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_prev,
 	                   QMouseEvent *e, int mode);
 
-	int wheelEvent(qg_legacy_view *v, QWheelEvent *e);
+	int wheelEvent(struct bv_context *view_ctx, QWheelEvent *e);
 
 private:
 	struct Impl;

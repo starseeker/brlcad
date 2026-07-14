@@ -95,6 +95,7 @@ typedef enum ged_draw_mode {
 struct ged_draw_appearance_settings {
     int draw_mode;
     int mixed_modes;
+    /* Legacy draw-option opacity: 0 is clear and 1 is opaque. */
     fastf_t transparency;
     int color_override;
     unsigned char color[3];

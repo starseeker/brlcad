@@ -12,6 +12,7 @@
 #include "brlobol/view_lod.h"
 
 #include <Inventor/actions/SoGLRenderAction.h>
+#include <Inventor/SbName.h>
 #include <Inventor/misc/SoState.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
@@ -336,9 +337,13 @@ SoBRLCadRenderBatch::renderBatch(SoGLRenderAction *action)
     }
     SoGroup *viewportRoot = dynamic_cast<SoGroup *>(this->getChild(0));
     if (viewportRoot) {
+	const SbName environmentName("BRLObolRenderEnvironment");
 	for (int i = 0; i < viewportRoot->getNumChildren(); i++) {
 	    SoNode *child = viewportRoot->getChild(i);
-	    if (!dynamic_cast<SoCamera *>(child))
+	    /* The compact renderer bypasses the source subtree, but still needs
+	     * the controller's camera, depth, light, and clip state first. */
+	    if (!dynamic_cast<SoCamera *>(child) &&
+		child->getName() != environmentName)
 		continue;
 	    action->pushCurPath(i, child);
 	    action->traverse(child);

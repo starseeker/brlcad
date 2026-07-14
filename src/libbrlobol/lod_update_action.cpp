@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/lod_service.h"
 #include "brlobol/lod_update_action.h"
@@ -138,7 +140,7 @@ static SbBool
 lod_update_string_matches(const SbString &a, const SbString &b)
 {
     return a.getLength() > 0 && b.getLength() > 0 &&
-	   strcmp(a.getString(), b.getString()) == 0 ? TRUE : FALSE;
+	   bu_strcmp(a.getString(), b.getString()) == 0 ? TRUE : FALSE;
 }
 
 static SbBool
@@ -150,7 +152,7 @@ lod_update_path_matches(const SbString &shapePath,
 
     if (shapePath.getLength() > 1 && resultPath.getLength() > 0 &&
 	shapePath.getString()[0] == '/' &&
-	strcmp(shapePath.getString() + 1, resultPath.getString()) == 0)
+	bu_strcmp(shapePath.getString() + 1, resultPath.getString()) == 0)
 	return TRUE;
 
     return FALSE;
@@ -196,7 +198,7 @@ lod_update_matches_source(const SoBRLDatabaseSource *source,
     const char *leaf = path ? strrchr(path, '/') : NULL;
     leaf = (leaf && leaf[1]) ? leaf + 1 : path;
     if (leaf && result.request.objectName.getLength() > 0 &&
-	strcmp(leaf, result.request.objectName.getString()) == 0)
+	bu_strcmp(leaf, result.request.objectName.getString()) == 0)
 	return TRUE;
 
     return FALSE;

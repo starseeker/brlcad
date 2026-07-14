@@ -24,7 +24,9 @@ if(TARGET rtwizard)
   # necessary inputs for the CTest tests
   add_dependencies(regress-rtwizard rtwizard pixcmp m35.g)
 
-  # All rtwizard tests used the same script
+  # All rtwizard tests use the same script.  The controls were regenerated
+  # after Obol made autoview use the actual combined scene bounds rather than
+  # the legacy per-leaf safety cubes, which displaced otherwise correct views.
   set(TSCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/regress-rtwiz.cmake.in")
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")

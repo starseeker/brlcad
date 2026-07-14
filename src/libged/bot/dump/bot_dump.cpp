@@ -50,8 +50,6 @@
 
 #include "raytrace.h"
 
-#include "dm.h"
-
 #include "ged/draw.h"
 #include "../../ged_private.h"
 #include "../ged_bot.h"

@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include "brlobol.h"
 
 #include <Inventor/SbColor.h>
@@ -421,6 +423,7 @@ count_yellow_pixels(const unsigned char *buffer, int width, int height)
 int
 main(int UNUSED(argc), const char **UNUSED(argv))
 {
+    bu_setprogname("test_brlobol_render");
     const int width = 160;
     const int height = 120;
 

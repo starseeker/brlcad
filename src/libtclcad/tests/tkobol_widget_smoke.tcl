@@ -1,3 +1,7 @@
+# BRL-CAD
+# Copyright (c) 2026 United States Government as represented by
+# the U.S. Army Research Laboratory.
+
 if {$argc != 2} {
     puts stderr "Usage: tkobol_widget_smoke.tcl database.g output.png"
     exit 1
@@ -26,6 +30,15 @@ if {[g dm host] ne "unbound"} {
 g new_view v1 tkobol
 g draw all.g
 g autoview v1
+
+# TkObol owns the shared view-key profile.  The generic Tcl bindings must not
+# also apply those actions through the containing toplevel.
+foreach key {3 4 f F R r l L t T b B} {
+    if {[bind .v1 $key] ne ""} {
+	puts stderr "TclCAD retained an overlapping Tk view binding for $key"
+	exit 1
+    }
+}
 
 g dm set -V v1 endpoint.title "Tk typed endpoint title"
 if {[g dm get -V v1 endpoint.title] ne "Tk typed endpoint title" ||
@@ -66,6 +79,159 @@ g fontsize v1 18
 if {[g fontsize v1] ne "18"} {
     puts stderr "TclCAD fontsize command did not update retained HUD state"
     exit 1
+}
+foreach property {
+    view.faceplate.params.font_size
+    view.faceplate.center_dot.font_size
+    view.faceplate.scale.font_size
+} {
+    if {[g dm get -V v1 $property] ne "18"} {
+        puts stderr "TclCAD fontsize command did not update $property"
+        exit 1
+    }
+}
+foreach {kind property expected} {
+    center_dot view.faceplate.center_dot.color {0 255 0}
+    view_params view.faceplate.params.color {0 0 255}
+    view_scale view.faceplate.scale.color {255 0 0}
+} {
+    g faceplate v1 $kind color {*}$expected
+    set normalized [format "%g/%g/%g" \
+            [expr {[lindex $expected 0] / 255.0}] \
+            [expr {[lindex $expected 1] / 255.0}] \
+            [expr {[lindex $expected 2] / 255.0}]]
+    if {[g dm get -V v1 $property] ne $normalized} {
+        puts stderr "TclCAD faceplate color command did not update $property"
+        exit 1
+    }
+}
+foreach {kind property} {
+    center_dot view.faceplate.center_dot.visible
+    view_params view.faceplate.params.visible
+    view_scale view.faceplate.scale.visible
+} {
+    foreach {enabled expected} {0 false 1 true} {
+        g faceplate v1 $kind draw $enabled
+        if {[g dm get -V v1 $property] ne $expected} {
+            puts stderr "TclCAD faceplate draw command did not set $property"
+            exit 1
+        }
+    }
+}
+if {![catch {g faceplate v1 center_dot draw 2}]} {
+    puts stderr "TclCAD faceplate draw command accepted an invalid endpoint Boolean"
+    exit 1
+}
+foreach {command property} {
+    model_axes view.faceplate.model_axes.visible
+    view_axes view.faceplate.view_axes.visible
+} {
+    foreach {enabled expected} {0 false 1 true} {
+        g $command v1 draw $enabled
+        if {[g dm get -V v1 $property] ne $expected} {
+            puts stderr "TclCAD $command draw command did not set $property"
+            exit 1
+        }
+    }
+}
+if {![catch {g model_axes v1 draw 2}]} {
+    puts stderr "TclCAD model_axes draw command accepted an invalid endpoint Boolean"
+    exit 1
+}
+g model_axes v1 axes_pos 1 2 3
+g model_axes v1 axes_size 4
+g model_axes v1 axes_color 10 20 30
+g model_axes v1 label_color 40 50 60
+g model_axes v1 line_width 2
+g model_axes v1 pos_only 1
+g model_axes v1 triple_color 1
+g model_axes v1 tick_enable 1
+g model_axes v1 tick_length 3
+g model_axes v1 tick_major_length 4
+g model_axes v1 tick_interval 5
+g model_axes v1 ticks_per_major 6
+g model_axes v1 tick_threshold 7
+g model_axes v1 tick_color 70 80 90
+g model_axes v1 tick_major_color 100 110 120
+foreach {property expected} {
+    view.faceplate.model_axes.position.x 1
+    view.faceplate.model_axes.position.z 3
+    view.faceplate.model_axes.size 4
+    view.faceplate.model_axes.line_width 2
+    view.faceplate.model_axes.position_only true
+    view.faceplate.model_axes.triple_color true
+    view.faceplate.model_axes.ticks.visible true
+    view.faceplate.model_axes.ticks.length 3
+    view.faceplate.model_axes.ticks.major_length 4
+    view.faceplate.model_axes.ticks.interval 5
+    view.faceplate.model_axes.ticks.per_major 6
+    view.faceplate.model_axes.ticks.threshold 7
+} {
+    if {[g dm get -V v1 $property] ne $expected} {
+        puts stderr "TclCAD model axes command did not set $property"
+        exit 1
+    }
+}
+foreach {property expected} {
+    view.faceplate.model_axes.color 0.039215686274509803/0.078431372549019607/0.11764705882352941
+    view.faceplate.model_axes.labels.color 0.15686274509803921/0.19607843137254902/0.23529411764705882
+    view.faceplate.model_axes.ticks.color 0.27450980392156865/0.31372549019607843/0.35294117647058826
+    view.faceplate.model_axes.ticks.major_color 0.39215686274509803/0.43137254901960786/0.47058823529411764
+} {
+    if {[g dm get -V v1 $property] ne $expected} {
+        puts stderr "TclCAD model axes color command did not set $property"
+        exit 1
+    }
+}
+g view_axes v1 axes_size 8
+g view_axes v1 tick_enable 1
+g view_axes v1 tick_color 1 2 3
+if {[g dm get -V v1 view.faceplate.view_axes.size] ne "8" ||
+        [g dm get -V v1 view.faceplate.view_axes.ticks.visible] ne "true" ||
+        [g dm get -V v1 view.faceplate.view_axes.ticks.color] ne "0.0039215686274509803/0.0078431372549019607/0.011764705882352941"} {
+    puts stderr "TclCAD view axes commands did not set endpoint policy"
+    exit 1
+}
+foreach {enabled expected} {0 false 1 true} {
+    g grid v1 draw $enabled
+    if {[g dm get -V v1 view.faceplate.grid.visible] ne $expected} {
+	puts stderr "TclCAD grid draw command did not set the endpoint visibility property"
+	exit 1
+    }
+}
+g grid v1 snap 1
+if {[g dm get -V v1 view.faceplate.grid.snap] ne "true"} {
+    puts stderr "TclCAD grid snap command did not set the endpoint policy"
+    exit 1
+}
+g grid v1 anchor 7 8 9
+if {[g dm get -V v1 view.faceplate.grid.anchor.x] ne "7" ||
+        [g dm get -V v1 view.faceplate.grid.anchor.z] ne "9"} {
+    puts stderr "TclCAD grid anchor command did not set endpoint coordinates"
+    exit 1
+}
+g grid v1 rh 2
+g grid v1 rv 3
+g grid v1 mrh 4
+g grid v1 mrv 5
+if {[g dm get -V v1 view.faceplate.grid.resolution.horizontal] ne "2" ||
+        [g dm get -V v1 view.faceplate.grid.resolution.vertical] ne "3" ||
+        [g dm get -V v1 view.faceplate.grid.major.horizontal] ne "4" ||
+        [g dm get -V v1 view.faceplate.grid.major.vertical] ne "5"} {
+    puts stderr "TclCAD grid resolution commands did not set endpoint policy"
+    exit 1
+}
+g grid v1 color 10 20 30
+if {[g dm get -V v1 view.faceplate.grid.color] ne "0.039215686274509803/0.078431372549019607/0.11764705882352941"} {
+    puts stderr "TclCAD grid color command did not set endpoint policy"
+    exit 1
+}
+foreach {enabled expected} {1 true 0 false} {
+    g adc v1 draw $enabled
+    if {[g dm get -V v1 view.faceplate.adc.visible] ne $expected} {
+	puts stderr "TclCAD adc draw command did not set the endpoint visibility property"
+	exit 1
+    }
 }
 g dm set -V v1 renderer.clip.minimum 0.25
 g dm set -V v1 renderer.clip.maximum 0.75
@@ -126,10 +292,38 @@ if {![file exists $pix_output] || [file size $pix_output] < 1000} {
     exit 1
 }
 
+# Keep a software pane alive while deleting the active hardware pane.  This
+# exercises context promotion and the session framebuffer-provider handoff.
+set handoff_output "[file rootname $output]_handoff[file extension $output]"
+g new_view v2 tkobol sw
+g refresh v2
+update
+if {![winfo exists .v2] || ![winfo ismapped .v2] ||
+        ![winfo exists .v2.__obol] ||
+        [winfo class .v2.__obol] ne "Label" ||
+        [winfo width .v2] < 100 || [winfo height .v2] < 100} {
+    puts stderr "Surviving software Tk Obol view was not mapped at a usable size"
+    exit 1
+}
+
 g delete_view v1
 update
 if {[winfo exists .v1]} {
     puts stderr "Tk Obol view survived delete_view"
+    exit 1
+}
+g autoview v2
+g refresh v2
+update
+g png v2 $handoff_output
+if {![file exists $handoff_output] || [file size $handoff_output] < 1000} {
+    puts stderr "Surviving Tk Obol view did not capture after active-pane deletion"
+    exit 1
+}
+g delete_view v2
+update
+if {[winfo exists .v2]} {
+    puts stderr "Surviving Tk Obol view was not released after active-pane deletion"
     exit 1
 }
 

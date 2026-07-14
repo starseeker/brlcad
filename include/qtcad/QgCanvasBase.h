@@ -46,13 +46,13 @@
 
 #include "common.h"
 #include "qtcad/defines.h"
-#include "qtcad/QgLegacyView.h"
 
 class QImage;
 class QObject;
 class QString;
 class QWidget;
 class BRLObolViewController;
+struct bv_context;
 struct brlobol_display_endpoint;
 
 class QTCAD_EXPORT QgCanvasBase {
@@ -72,11 +72,8 @@ public:
      */
     virtual bool isValid() const = 0;
 
-    /** Transitional view handle associated with this canvas (may be nullptr). */
-    virtual qg_legacy_view *view() const = 0;
-
-    /** Transitional compatibility hook; Obol-only canvases return false. */
-    virtual bool legacyBackendInitialized() const = 0;
+    /** Widget-owned libbv view context used by GED and the endpoint. */
+    virtual struct bv_context *viewContext() const = 0;
 
     /** Obol-canonical view controller for migrated drawing code. */
     virtual BRLObolViewController *obolViewController() const = 0;
@@ -86,9 +83,6 @@ public:
 
     /** Route normalized canvas input through a borrowed display endpoint. */
     virtual void setObolInputEndpoint(struct brlobol_display_endpoint *) = 0;
-
-    /** Bind an external transitional view.  Pass nullptr to revert to the local view. */
-    virtual void set_view(qg_legacy_view *) = 0;
 
     /** Store current view hash values for later comparison. */
     virtual void stash_hashes() = 0;

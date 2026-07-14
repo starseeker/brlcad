@@ -446,9 +446,18 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
 		"Conflicting deferred and eager leaf expansion options\n");
 	return BRLCAD_ERROR;
     }
+    const int root_evaluated_mode =
+	vs.draw_mode == GED_DRAW_MODE_EVAL_WIRE ||
+	vs.draw_mode == GED_DRAW_MODE_EVAL_POINTS;
     if (!eager_leaf_expansion && !vs.defer_leaf_expansion &&
+	!root_evaluated_mode &&
 	ged_draw_obol_progressive_available(gedp, cv))
 	vs.defer_leaf_expansion = 1;
+    /* Deferred compact realization expands database leaves.  Evaluated modes
+     * instead produce one CSG result for the requested root, so retaining an
+     * AABB while generic leaves expand would not preserve their semantics. */
+    if (root_evaluated_mode)
+	vs.defer_leaf_expansion = 0;
 
     // Before we start doing anything with the object set, record if things are
     // starting out empty.

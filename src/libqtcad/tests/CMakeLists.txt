@@ -691,6 +691,22 @@ if(TARGET test_qtcad_obol_progressive_lod)
     APPEND PROPERTY ENVIRONMENT QTCAD_OBOL_FORCE_OSMESA=1)
   set_property(TEST slow-test_qtcad_obol_progressive_lod_repeated_moss
     APPEND PROPERTY LABELS drawing_baseline)
+
+  # Each scenario drives the same staged OSMesa/Obol LoD fixture.  Running
+  # scenarios together can make their capture checkpoints race, so preserve
+  # independent process state while serializing this fixture under ctest -j.
+  foreach(_qtcad_obol_progressive_lod_test
+      test_qtcad_obol_progressive_lod
+      test_qtcad_obol_progressive_lod_startup_refine
+      test_qtcad_obol_progressive_lod_generic_twin_startup
+      test_qtcad_obol_progressive_lod_generic_twin_startup_expand
+      test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand
+      test_qtcad_obol_progressive_lod_generic_twin_wire_lod
+      test_qtcad_obol_progressive_lod_generic_twin_shaded_lod
+      slow-test_qtcad_obol_progressive_lod_repeated_moss)
+    set_tests_properties(${_qtcad_obol_progressive_lod_test}
+      PROPERTIES RESOURCE_LOCK qtcad_obol_progressive_lod_fixture)
+  endforeach()
 endif(TARGET test_qtcad_obol_progressive_lod)
 
 foreach(_qtcad_obol_offscreen_test

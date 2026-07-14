@@ -1806,7 +1806,10 @@ ged_uplot_publish_command_scene_feature(struct ged *gedp,
 
     int ret = ged_draw_command_scene_line_layers_replace(scene, name,
 	    layers, live_layers, NULL) ? BRLCAD_OK : BRLCAD_ERROR;
-    if (ret == BRLCAD_OK) {
+    /* An empty plot clears the prior result feature.  There is consequently
+     * no feature to annotate, but the removal itself is a successful scene
+     * update. */
+    if (ret == BRLCAD_OK && live_layers > 0) {
 	char layer_count_buf[64] = {0};
 	char point_count_buf[64] = {0};
 	char generation_buf[64] = {0};

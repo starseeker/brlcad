@@ -21,7 +21,6 @@
 
 #include "bu/malloc.h"
 #include "ged/draw.h"
-#include "QgLegacyViewContext.h"
 #include "qtcad/QgPluginContext.h"
 
 #include "qged_edit_preview_util.h"
@@ -77,17 +76,10 @@ qged_edit_preview_event_to_ged(enum qged_edit_preview_event event)
 }
 
 
-static qg_legacy_view *
-qged_edit_view(const QgPluginContext *ctx)
-{
-    return ctx ? ctx->activeView() : nullptr;
-}
-
-
 void *
 qged_edit_view_context(const QgPluginContext *ctx)
 {
-    return qg_legacy_view_to_context(qged_edit_view(ctx));
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 

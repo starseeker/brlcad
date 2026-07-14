@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol.h"
 
 #include "bu/app.h"
@@ -228,6 +230,7 @@ count_green_pixels(const unsigned char *buffer, int width, int height)
 int
 main(int UNUSED(argc), const char **UNUSED(argv))
 {
+    bu_setprogname("test_brlobol_nanort_render");
     const int width = 180;
     const int height = 140;
     char dbpath[MAXPATHLEN] = {0};
@@ -289,11 +292,21 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("NanoRT scene should realize database-backed shaded source");
 
-    SoBRLMeshShape *mesh = source->getRealizedMesh();
-    if (!mesh || mesh->getTriangleCount() <= 12)
-	FAIL("NanoRT scene should expose tessellated BRL-CAD mesh geometry");
-    mesh->colorOverride = TRUE;
-    mesh->color = SbColor(0.85f, 0.05f, 0.05f);
+    BRLObolCompactInstanceHandle handle;
+    BRLObolCompactInstanceSummary instance;
+    BRLObolRealizedShapeSummary meshSummary;
+    if (!source->hasCompactInstanceIndex() ||
+	source->getCompactInstanceCount() != 1 ||
+	!source->getCompactInstanceHandle(0, handle) ||
+	!source->getCompactInstanceSummary(handle, instance) ||
+	!instance.meshGeometry || source->getRealizedMeshCount() != 0 ||
+	!source->getRealizedShapeSummary(0, meshSummary) ||
+	meshSummary.triangleCount <= 12)
+	FAIL("NanoRT scene should expose carrier-free tessellated BRL-CAD mesh geometry");
+    if (source->setCompactInstanceMetadataForPath("/backend_ball.s", FALSE,
+	    instance.regionId, instance.airCode, instance.materialId, instance.los,
+	    TRUE, SbColor(0.85f, 0.05f, 0.05f), instance.materialShader) != 1)
+	FAIL("NanoRT scene should apply retained compact mesh material color");
 
     SbViewportRegion viewport(width, height);
     BRLOBOLRenderContextManager osmesaManager;
@@ -337,11 +350,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     const SoPickedPoint *pickedPoint = backendPick.getPickedPoint();
     if (!pickedPoint)
 	FAIL("NanoRT-rendered scene should remain pickable through Obol traversal");
-    const SoDetail *rawDetail = pickedPoint->getDetail(mesh);
+    const SoDetail *rawDetail = pickedPoint->getDetail();
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("NanoRT-rendered scene pick should return a BRL-CAD Obol detail");
     const SoBRLPickDetail *pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "/backend_ball.s") != 0 ||
+    if (bu_strcmp(pickDetail->getPath().getString(), "/backend_ball.s") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
 	FAIL("NanoRT-rendered scene pick detail should preserve mesh face identity");
 

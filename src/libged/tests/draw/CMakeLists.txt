@@ -102,13 +102,17 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_quad_tmp.g)
 
 # The idea here is to test view stability across resize events
 set(aet_test_ctrls aet_00.apng aet_01.apng aet_02.apng aet_03.apng)
-brlcad_addexec(ged_test_aet "aet.cpp;util.cpp" "libged;libdm;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
+brlcad_addexec(ged_test_aet "aet.cpp;util.cpp" "libged;libbrlobol;PNG::PNG;ZLIB::ZLIB;Threads::Threads" TEST)
 if(TARGET ged_test_aet)
-  foreach(tdp ${test_deps})
+  foreach(tdp ${obol_test_deps})
     if (TARGET ${tdp})
       add_dependencies(ged_test_aet ${tdp})
     endif ()
   endforeach()
+endif(TARGET ged_test_aet)
+brlcad_add_test(NAME ged_test_drawing_aet COMMAND ged_test_aet -c "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET ged_test_aet)
+  set_property(TEST ged_test_drawing_aet APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif(TARGET ged_test_aet)
 
 # Typed selection, snap, and measure semantic records

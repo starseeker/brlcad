@@ -31,14 +31,14 @@ QgPluginNotifier::QgPluginNotifier(QObject *parent)
 
 QgPluginNotifier::~QgPluginNotifier() = default;
 
-qg_legacy_view *
-QgPluginContext::activeView() const
+struct bv_context *
+QgPluginContext::activeViewContext() const
 {
     QgView *view = this->getViewWidget();
     if (view)
-	return view->view();
+	return view->viewContext();
     return (this->model && this->model->session()) ?
-	this->model->session()->activeView() : nullptr;
+	this->model->session()->activeViewContext() : nullptr;
 }
 
 /*

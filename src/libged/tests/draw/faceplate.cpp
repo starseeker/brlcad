@@ -65,6 +65,14 @@ framebuffer_matches(brlobol_display_endpoint_t *endpoint,
     return matched;
 }
 
+static void
+wait_for_progressive_draw(struct ged *gedp, void *view_ctx)
+{
+    if (!draw_test_obol_progressive_drain(gedp, view_ctx, 2000, 1))
+	bu_exit(EXIT_FAILURE,
+	    "Obol progressive realization did not settle before baseline capture\n");
+}
+
 int
 main(int ac, char *av[]) {
     struct ged *gedp;
@@ -104,9 +112,13 @@ main(int ac, char *av[]) {
     /* Use a local working-directory cache so we do not pollute the user's
      * real BRL-CAD cache and so the test is fully self-contained. */
     char lcache[MAXPATHLEN] = {0};
+    char runtime_cache[MAXPATHLEN] = {0};
     bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_fp_test_cache", NULL);
     bu_mkdir(lcache);
-    bu_setenv("BU_DIR_CACHE", lcache, 1);
+    bu_dir(runtime_cache, MAXPATHLEN, BU_DIR_CURR, "ged_fp_test_cache",
+	   "cache", NULL);
+    bu_mkdir(runtime_cache);
+    bu_setenv("BU_DIR_CACHE", runtime_cache, 1);
 
     if (!bu_file_exists(av[1], NULL)) {
 	printf("ERROR: [%s] does not exist, expecting .g file\n", av[1]);
@@ -131,6 +143,8 @@ main(int ac, char *av[]) {
     s_av[1] = "all.g";
     s_av[2] = NULL;
     ged_exec_draw(gedp, 2, s_av);
+
+    wait_for_progressive_draw(gedp, v);
 
     s_av[0] = "autoview";
     s_av[1] = NULL;
@@ -174,9 +188,12 @@ main(int ac, char *av[]) {
     ged_exec_view(gedp, 4, s_av);
     ret += img_not_empty(3, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
-    // Check that turning off works
-    s_av[3] = "0";
-    ged_exec_view(gedp, 4, s_av);
+    // Exercise the draw subcommand too: it stages grid state before the
+    // endpoint provider applies the visibility property.
+    s_av[3] = "draw";
+    s_av[4] = "0";
+    s_av[5] = NULL;
+    ged_exec_view(gedp, 5, s_av);
     ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
     bu_log("Done.\n");
 

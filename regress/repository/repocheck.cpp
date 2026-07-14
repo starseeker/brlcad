@@ -516,6 +516,20 @@ init_repo_config(RepoConfig &cfg)
 	add_func_ex(".*/vls[.]c$", "strncpy");
 	add_func_ex(".*/wfobj/obj_util[.]cpp$", "strncpy");
 	add_func_ex(".*/libtermio[.]h$", "strncpy");
+
+	/* Togl is an upstream-vendored Tk/OpenGL component.  Keep its source
+	 * portable and independent of libbu rather than rewriting it to use
+	 * BRL-CAD wrappers. */
+	cfg.api.exemptions.emplace_back(std::make_pair(
+	    std::regex(".*/src/libtclcad/tkobol/vendor/togl/togl[.]c$"),
+	    std::string("")));
+	cfg.api.exemptions.emplace_back(std::make_pair(
+	    std::regex(".*/src/libtclcad/tkobol/vendor/togl/toglFont[.]c$"),
+	    std::string("")));
+
+	/* These are BRLObol public member names, not C remove(3) calls. */
+	add_func_ex(".*/include/brlobol/view_store[.]h$", "remove");
+	add_func_ex(".*/src/libbrlobol/view_store[.]cpp$", "remove");
     }
 
     /* DNU usage test (similar behavior to API) */

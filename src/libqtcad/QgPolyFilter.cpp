@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 extern "C" {
 #include "bg/polygon.h"
 #include "raytrace.h" // For finalize polygon sketch export functionality (TODO - need to move...)
@@ -33,13 +35,12 @@ extern "C" {
 #include "qtcad/QgPolyFilter.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
-#include "QgLegacyViewContext.h"
 
-static qg_legacy_view *
+static void *
 qg_poly_filter_view(const QgPolyFilter *filter)
 {
 	QgView *display = filter ? filter->view_widget() : nullptr;
-	return display ? display->view() : nullptr;
+	return display ? display->viewContext() : nullptr;
 }
 
 static void
@@ -58,7 +59,7 @@ qg_poly_mouse_xy(QMouseEvent *m_e, int *sx, int *sy)
 }
 
 static void
-qg_poly_screen_point(qg_legacy_view *v, QMouseEvent *m_e, point_t point)
+qg_poly_screen_point(void *v, QMouseEvent *m_e, point_t point)
 {
 	VSETALL(point, 0.0);
 	if (!v || !m_e)
@@ -67,12 +68,12 @@ qg_poly_screen_point(qg_legacy_view *v, QMouseEvent *m_e, point_t point)
 	int sx = 0;
 	int sy = 0;
 	qg_poly_mouse_xy(m_e, &sx, &sy);
-	(void)bv_screen_to_model(point, qg_legacy_view_bv_const(v),
+	(void)bv_screen_to_model(point, bv_context_view_const(static_cast<const struct bv_context *>(v)),
 		(fastf_t)sx, (fastf_t)sy);
 }
 
 static int
-qg_poly_update_from_event(qg_polygon_ref ref, qg_legacy_view *v,
+qg_poly_update_from_event(qg_polygon_ref ref, void *v,
 	QMouseEvent *m_e, qg_polygon_update_mode utype)
 {
 	if (!m_e)
@@ -82,7 +83,7 @@ qg_poly_update_from_event(qg_polygon_ref ref, qg_legacy_view *v,
 	int sy = 0;
 	qg_poly_mouse_xy(m_e, &sx, &sy);
 	return ged_draw_view_context_polygon_update_screen_pt(ref,
-		qg_legacy_view_to_context(v), sx, sy, utype);
+		v, sx, sy, utype);
 }
 
 bool
@@ -108,7 +109,7 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 
-	qg_legacy_view *v = qg_poly_filter_view(this);
+	void *v = qg_poly_filter_view(this);
 	if (!v)
 		return false;
 
@@ -121,7 +122,7 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 			qg_poly_screen_point(v, m_e, current_point);
 
 			polygon = ged_draw_view_context_polygon_create(
-				qg_legacy_view_to_context(v), "_tmp_view_polygon", 0,
+				v, "_tmp_view_polygon", 0,
 				ptype, current_point);
 			ged_draw_view_polygon_set_visual(polygon, &edge_color, &fill_color, fill_slope_x, fill_slope_y, fill_density, vZ, fill_poly ? 1 : 0);
 
@@ -296,7 +297,7 @@ QgPolySelectFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 
-	qg_legacy_view *v = qg_poly_filter_view(this);
+	void *v = qg_poly_filter_view(this);
 	if (!v)
 		return false;
 
@@ -307,7 +308,7 @@ QgPolySelectFilter::eventFilter(QObject *, QEvent *e)
 		point_t current_point = VINIT_ZERO;
 		qg_poly_screen_point(v, m_e, current_point);
 		polygon = ged_draw_view_context_polygon_select(
-			qg_legacy_view_to_context(v), current_point);
+			v, current_point);
 		if (ged_draw_view_polygon_ref_is_null(polygon))
 			return true;
 		qg_polygon_record rec;
@@ -384,7 +385,7 @@ QgPolyMoveFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 
-	qg_legacy_view *v = qg_poly_filter_view(this);
+	void *v = qg_poly_filter_view(this);
 	if (!v)
 		return false;
 

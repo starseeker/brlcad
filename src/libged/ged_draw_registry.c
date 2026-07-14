@@ -27,6 +27,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <string.h>
 
 #include "bu/hash.h"
@@ -739,7 +741,7 @@ _ged_draw_registry_entry_has_component_name(
 	if (!component || !component[0])
 	    continue;
 	if (_ged_draw_index_name_hash(component) == hash &&
-		strcmp(component, name) == 0)
+		bu_strcmp(component, name) == 0)
 	    return 1;
     }
 

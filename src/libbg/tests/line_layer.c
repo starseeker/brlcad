@@ -20,6 +20,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -64,7 +66,7 @@ expect_plot3_text(FILE *fp, const char *label, const char *expected)
     }
     got[nread] = '\0';
 
-    if (strcmp(got, expected) != 0) {
+    if (bu_strcmp(got, expected) != 0) {
 	bu_log("FAIL: %s plot3 stream is:\n%s\nexpected:\n%s\n",
 	       label, got, expected);
 	return 1;

@@ -58,6 +58,10 @@ class BRLObolViewController;
 #define BRLOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES 0x00000004U
 #define BRLOBOL_PROGRESSIVE_FULL_DETAIL 0x00000008U
 
+/* VISIBLE_FRONTIER and FULL_DETAIL may be combined.  Providers then advance
+ * bounded proxy work while detached final realization runs, and publish the
+ * final data when ready without requiring every intermediate stage to draw. */
+
 BRLOBOL_EXPORT SbMatrix brlobol_sbmatrix_from_brl_mat(const mat_t mat);
 BRLOBOL_EXPORT SbRotation brlobol_camera_orientation_from_brl_rotation(
     const mat_t rotation);
@@ -103,6 +107,10 @@ typedef int (*BRLObolProgressiveAdvanceCallback)(
     const BRLObolProgressiveOptions *options,
     BRLObolProgressiveStatus *status);
 
+/* A positive callback result records provider progress.  Set status->changed
+ * only when that progress published a visible scene update; status->hasMore
+ * independently requests a subsequent frame for pending work. */
+
 typedef void (*BRLObolFrameRequestCallback)(void *userData,
     const char *reason);
 
@@ -140,6 +148,12 @@ public:
     void setRenderSceneRoot(SoNode *root);
     SoNode *getRenderSceneRoot(void) const;
     SoNode *getRenderRoot(void) const;
+    /** Stable retained framebuffer layers.  Underlay and overlay surround
+     * the CAD render batch.  Interlay is inserted by the hosted GED render
+     * composition between model geometry and view-local screen features. */
+    SoGroup *getFramebufferUnderlayRoot(void) const;
+    SoGroup *getFramebufferInterlayRoot(void) const;
+    SoGroup *getFramebufferOverlayRoot(void) const;
     void setViewAttachment(BRLObolViewAttachment *attachment);
     BRLObolViewAttachment *getViewAttachment(void) const;
     BRLObolViewLodState *getViewLodState(void) const;
@@ -160,6 +174,10 @@ public:
     SbBool isLightingEnabled(void) const;
     void setTransparencyEnabled(SbBool enabled);
     SbBool isTransparencyEnabled(void) const;
+    /** Enable Obol's single-pass line and point smoothing.  This deliberately
+     * does not enable expensive accumulation-buffer multipass rendering. */
+    void setAntialiasingEnabled(SbBool enabled);
+    SbBool isAntialiasingEnabled(void) const;
     SbBool setClipBounds(double minimum, double maximum);
     void getClipBounds(double &minimum, double &maximum) const;
     size_t getActiveClipPlanes(SbPlane planes[2]) const;
@@ -199,7 +217,7 @@ public:
 		      SoDB::ContextManager *contextManager = NULL,
 		      BRLObolProgressiveStatus *progressiveStatus = NULL);
     SbBool isRenderRequested(void) const;
-    const SbString &getRenderReason(void) const;
+    SbString getRenderReason(void) const;
     uint64_t registerProgressiveProvider(
 	BRLObolProgressiveAdvanceCallback callback,
 	void *userData);
@@ -489,6 +507,8 @@ public:
 
 private:
     void notifyFrameRequest(const char *reason);
+    void clearRenderRequestIfUnchanged(uint64_t serial);
+    uint64_t renderRequestSerialGet(void) const;
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
     void syncRenderManager(void);
@@ -502,6 +522,10 @@ private:
     SoViewport *viewport;
     SoBRLViewLodGroup *renderLodRoot;
     SoNode *renderBatchRoot;
+    SoNode *renderPresentationRoot;
+    SoGroup *framebufferUnderlayRoot;
+    SoGroup *framebufferInterlayRoot;
+    SoGroup *framebufferOverlayRoot;
     BRLObolViewAttachment *viewAttachment;
     SoRenderManager *renderManager;
     SoOffscreenRenderer *imageRenderer;
@@ -512,10 +536,13 @@ private:
     SbColor backgroundTop;
     SoftwareWireMode softwareWireMode;
     SbBool transparencyEnabled;
+    SbBool antialiasingEnabled;
     double clipMinimum;
     double clipMaximum;
+    mutable std::mutex renderRequestMutex;
     SbBool renderRequested;
     SbString renderReason;
+    uint64_t renderRequestSerial;
     std::mutex frameRequestMutex;
     BRLObolFrameRequestCallback frameRequestCallback;
     void *frameRequestUserData;

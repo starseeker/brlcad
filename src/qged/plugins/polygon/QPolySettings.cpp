@@ -31,22 +31,20 @@
 #include "bu/vls.h"
 #include "bu/color.h"
 #include "ged/draw.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgView.h"
-#include "QgLegacyViewContext.h"
 #include "QPolySettings.h"
 
-static qg_legacy_view *
+static void *
 qpolysettings_view(const QgPluginContext *ctx)
 {
-    return ctx ? ctx->activeView() : nullptr;
+    return ctx ? ctx->activeViewContext() : nullptr;
 }
 
 static int
 qpolysettings_unique_polygon_name(struct bu_vls *oname,
 	const char *seed,
-	qg_legacy_view *view)
+	void *view)
 {
     if (!oname || !view)
 	return 0;
@@ -55,14 +53,14 @@ qpolysettings_unique_polygon_name(struct bu_vls *oname,
     if (seed && seed[0]) {
 	bu_vls_sprintf(&vseed, "%s", seed);
     } else {
-	const char *view_name = bv_name_get(qg_legacy_view_bv_const(view));
+	const char *view_name = bv_name_get(bv_context_view_const(static_cast<const struct bv_context *>(view)));
 	bu_vls_sprintf(&vseed, "%s:obj_0", view_name ? view_name : "view");
     }
 
     const char *npattern = "([-_:]*[0-9]+[-_:]*)[^0-9]*$";
     long int loop_guard = 0;
     while (!ged_draw_view_polygon_ref_is_null(
-	    ged_draw_view_context_polygon_find(qg_legacy_view_to_context(view),
+	    ged_draw_view_context_polygon_find(view,
 		    bu_vls_cstr(&vseed))) &&
 	    loop_guard < LONG_MAX) {
 	(void)bu_vls_incr(&vseed, npattern, NULL, NULL, NULL);
@@ -198,7 +196,7 @@ QPolySettings::~QPolySettings()
 bool
 QPolySettings::uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx)
 {
-    qg_legacy_view *v = qpolysettings_view(ctx);
+    void *v = qpolysettings_view(ctx);
     if (!v)
 	return false;
 

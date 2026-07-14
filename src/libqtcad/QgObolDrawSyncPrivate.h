@@ -6,9 +6,8 @@
  */
 /** @file QgObolDrawSyncPrivate.h
  *
- * Private qtcad/qged bridge for Obol draw synchronization.  Draw-sync callers
- * use neutral GED transactions; qg legacy draw transaction sync is retired
- * with the former installed public draw-sync header.
+ * Private qtcad/qged bridge for Obol draw synchronization through GED
+ * transactions.
  */
 
 #ifndef QGOBOLDRAWSYNCPRIVATE_H

@@ -30,7 +30,7 @@
 
 #include "./sedit.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 #include "tcl.h"
 
@@ -43,7 +43,6 @@ static void establish_perspective(const struct bu_structparse *, const char *, v
 static void nmg_eu_dist_set(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_coords(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
-static void set_backend_cache(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_rotate_about(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void toggle_perspective(const struct bu_structparse *, const char *, void *, const char *, void *);
 
@@ -64,7 +63,6 @@ struct _mged_variables default_mged_variables = {
     /* mv_linestyle */		's',
     /* mv_hot_key */		0,
     /* mv_context */		1,
-    /* mv_backend_cache */		0,
     /* mv_use_air */		0,
     /* mv_listen */		0,
     /* mv_port */		0,
@@ -99,7 +97,6 @@ struct bu_structparse mged_vparse[] = {
     {"%c", 1, "linestyle",		MV_O(mv_linestyle),		set_dirty_flag, NULL, NULL },
     {"%d", 1, "hot_key",		MV_O(mv_hot_key),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%d", 1, "context",		MV_O(mv_context),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
-    {"%d", 1, "cache",			MV_O(mv_backend_cache),		set_backend_cache, NULL, NULL },
     {"%d", 1, "use_air",		MV_O(mv_use_air),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%d", 1, "listen",			MV_O(mv_listen),		fbserv_set_port, NULL, NULL },
     {"%d", 1, "port",			MV_O(mv_port),			fbserv_set_port, NULL, NULL },
@@ -130,10 +127,10 @@ set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (m_dmp->dm_mged_variables == mged_variables) {
-	    mged_dm_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (m_dmp->display_variables == mged_variables) {
+	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
 }
@@ -254,7 +251,7 @@ unset_var(ClientData clientData, Tcl_Interp *interp, const char *name1, const ch
     read_var(clientData, interp, name1, name2,
 	     (flags&(~TCL_TRACE_UNSETS))|TCL_TRACE_READS);
 
-    MGED_STATE->s_edit->e->mv_context = MGED_STATE->mged_curr_dm->dm_mged_variables->mv_context;
+    MGED_STATE->s_edit->e->mv_context = MGED_STATE->mged_curr_display->display_variables->mv_context;
 
     return NULL;
 }
@@ -347,26 +344,26 @@ set_scroll_private(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    struct mged_dm *save_m_dmp;
+    struct mged_display *save_m_dmp;
 
-    save_m_dmp = s->mged_curr_dm;
+    save_m_dmp = s->mged_curr_display;
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (m_dmp->dm_mged_variables == save_m_dmp->dm_mged_variables) {
-	    set_curr_dm(s, m_dmp);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (m_dmp->display_variables == save_m_dmp->display_variables) {
+	    mged_current_display_set(s, m_dmp);
 
 	    if (mged_variables->mv_faceplate && mged_variables->mv_orig_gui) {
 		if (mged_variables->mv_sliders)	/* zero slider variables */
 		    mged_svbase(s);
 
 		set_scroll(s);		/* set scroll_array for drawing the scroll bars */
-		mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_DEVICE_SETTING);
+		mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
 	    }
 	}
     }
 
-    set_curr_dm(s, save_m_dmp);
+    mged_current_display_set(s, save_m_dmp);
 }
 
 
@@ -416,36 +413,6 @@ set_absolute_model_tran(struct mged_state *s)
     VSCALE(view_state->k.abs_trans_model, diff, 1/view_scale);
     /* This is used in f_knob()  ---- needed in case absolute_model_tran is set from Tcl */
     VMOVE(view_state->k.abs_trans_model_last, view_state->k.abs_trans_model);
-}
-
-
-static void
-set_backend_cache(const struct bu_structparse *UNUSED(sdp),
-	  const char *UNUSED(name),
-	  void *UNUSED(base),
-	  const char *UNUSED(value),
-	  void *data)
-{
-    struct mged_state *s = (struct mged_state *)data;
-    MGED_CK_STATE(s);
-    struct mged_dm *save_dlp;
-
-    /* The backend owns renderer cache contents.  MGED tracks only the user's
-     * cache policy and dirties affected display managers so the next refresh
-     * applies that policy through the backend resource cache. */
-    save_dlp = s->mged_curr_dm;
-
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *dlp1 = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	if (dlp1->dm_mged_variables != save_dlp->dm_mged_variables)
-	    continue;
-	if (dm_get_backend_cache(dlp1->dm_dmp))
-	    dlp1->dm_backend_cache_state->cache_active = mged_variables->mv_backend_cache ? 1 : 0;
-	mged_dm_repaint_request(dlp1, MGED_REPAINT_DEVICE_SETTING);
-    }
-
-    /* restore current display manager */
-    set_curr_dm(s, save_dlp);
 }
 
 

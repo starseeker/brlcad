@@ -34,7 +34,7 @@ brlcad_add_test(NAME libbrlobol_mesh_lod_cache COMMAND test_brlobol_mesh_lod_cac
 brlcad_addexec(test_brlobol_view_store test_view_store.cpp "libbrlobol;libwdb;librt;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_view_store COMMAND test_brlobol_view_store)
 
-brlcad_addexec(test_brlobol_window_host test_window_host.cpp "libbrlobol;libimgstream;libbu;Obol::Obol" TEST ALL_CXX)
+brlcad_addexec(test_brlobol_window_host test_window_host.cpp "libbrlobol;libimgstream;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_window_host COMMAND test_brlobol_window_host)
 
 brlcad_addexec(test_brlobol_headless_window_host test_headless_window_host.cpp "libbrlobol;libimgstream;libbu;Obol::Obol" TEST ALL_CXX)

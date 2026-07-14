@@ -1,4 +1,4 @@
-/*                    D M - G E N E R I C . C
+/*              D I S P L A Y - C O M M A N D . C
  * BRL-CAD
  *
  * Copyright (c) 2004-2026 United States Government as represented by
@@ -17,9 +17,9 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file mged/dm-generic.c
+/** @file mged/display-command.c
  *
- * Routines common to MGED's interface to LIBDM.
+ * Endpoint-native implementation of MGED's retained `dm` command surface.
  *
  */
 
@@ -49,11 +49,11 @@
 
 #include "./mged.h"
 #include "./sedit.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./menu.h"
 
 int
-common_dm(struct mged_state *s, int argc, const char *argv[])
+mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 {
     int status;
     struct bv_adc_state adc_record = {0};
@@ -65,8 +65,8 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
     if (s->dbip == DBI_NULL)
 	return TCL_OK;
 
-    (void)mged_dm_adc_state_get(s->mged_curr_dm, adc);
-    (void)mged_dm_grid_state_get(s->mged_curr_dm, grid);
+    (void)mged_display_adc_state_get(s->mged_curr_display, adc);
+    (void)mged_display_grid_state_get(s->mged_curr_display, grid);
 
     if (BU_STR_EQUAL(argv[0], "idle")) {
 
@@ -278,7 +278,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
 
-	return mged_dm_motion(s, atoi(argv[1]), atoi(argv[2]));
+	return mged_display_motion(s, atoi(argv[1]), atoi(argv[2]));
     }
 
     if (BU_STR_EQUAL(argv[0], "am")) {
@@ -288,8 +288,8 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
 
-	dm_omx = atoi(argv[2]);
-	dm_omy = atoi(argv[3]);
+	pointer_x = atoi(argv[2]);
+	pointer_y = atoi(argv[3]);
 
 	switch (*argv[1]) {
 	    case 'r':
@@ -358,12 +358,12 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
 
-	dm_omx = atoi(argv[2]);
-	dm_omy = atoi(argv[3]);
+	pointer_x = atoi(argv[2]);
+	pointer_y = atoi(argv[3]);
 	fastf_t mouse_view_x = 0.0;
 	fastf_t mouse_view_y = 0.0;
 	if (!bv_screen_to_view(&mouse_view_x, &mouse_view_y, view,
-		dm_omx, dm_omy)) {
+		pointer_x, pointer_y)) {
 	    Tcl_AppendResult(s->interp,
 		    "dm adc: view has no usable dimensions\n", (char *)NULL);
 	    return TCL_ERROR;
@@ -444,8 +444,8 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 	    return TCL_ERROR;
 	}
 
-	dm_omx = atoi(argv[3]);
-	dm_omy = atoi(argv[4]);
+	pointer_x = atoi(argv[3]);
+	pointer_y = atoi(argv[4]);
 
 	switch (*argv[1]) {
 	    case 'a':
@@ -605,7 +605,7 @@ common_dm(struct mged_state *s, int argc, const char *argv[])
 }
 
 int
-dm_commands(int argc, const char *argv[], void *data)
+mged_display_command(int argc, const char *argv[], void *data)
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
@@ -638,7 +638,7 @@ dm_commands(int argc, const char *argv[], void *data)
         return (ret == BRLCAD_OK || (ret & GED_HELP)) ? TCL_OK : TCL_ERROR;
     }
 
-    return common_dm(s, argc, argv);
+    return mged_display_command_common(s, argc, argv);
 }
 
 /*

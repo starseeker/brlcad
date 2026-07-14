@@ -21,9 +21,7 @@
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "icv.h"
-#include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolMeasure.h"
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgObolSnap.h"
@@ -688,15 +686,16 @@ sync_draw_case(const struct model_case &testCase)
 	return 0;
     }
 
-    QgView view(NULL, system_gl_enabled() ? QgView_GL : QgView_SW);
+    QgView view(NULL, system_gl_enabled() ? QgViewType::GL : QgViewType::SW);
     view.resize(220, 170);
     if (system_gl_enabled()) {
 	view.show();
 	QCoreApplication::processEvents();
     }
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
     if (!ged_view_context_display_endpoint_set(
-	    qg_legacy_view_to_context(view.view()), view.displayEndpoint(), 0)) {
+	    view.viewContext(), view.displayEndpoint(), 0)) {
 	ged_close(gedp);
 	return 0;
     }
@@ -719,7 +718,7 @@ sync_draw_case(const struct model_case &testCase)
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, testCase.root);
-    txn.view = qg_legacy_view_to_context(view.view());
+    txn.view = view.viewContext();
     txn.appearance = &appearance;
 
     struct ged_draw_transaction_result result;
@@ -821,16 +820,10 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 0;
     }
-    if (view.legacyBackendInitialized()) {
-	fprintf(stderr, "%s:%s qtcad Obol real-model capture initialized the legacy display manager\n",
-		testCase.file, testCase.root);
-	ged_close(gedp);
-	return 0;
-    }
 
     struct ged_draw_transaction redrawTxn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    redrawTxn.view = qg_legacy_view_to_context(view.view());
+    redrawTxn.view = view.viewContext();
     struct ged_draw_transaction_result redrawResult;
     ged_draw_transaction_result_init(&redrawResult);
     phaseStart = bu_gettime();
@@ -907,7 +900,7 @@ sync_material_refresh_to_view(struct ged *gedp, QgView &view)
     ged_draw_bump_material_revision(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS, NULL);
-    txn.view = qg_legacy_view_to_context(view.view());
+    txn.view = view.viewContext();
 
     struct ged_draw_transaction_result result;
     ged_draw_transaction_result_init(&result);
@@ -979,11 +972,12 @@ exercise_m35_color_table_mutation(void)
 	return 0;
     }
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(220, 170);
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
     if (!ged_view_context_display_endpoint_set(
-	    qg_legacy_view_to_context(view.view()), view.displayEndpoint(), 0)) {
+	    view.viewContext(), view.displayEndpoint(), 0)) {
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
 	return 0;
@@ -1004,7 +998,7 @@ exercise_m35_color_table_mutation(void)
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "all.g");
-    txn.view = qg_legacy_view_to_context(view.view());
+    txn.view = view.viewContext();
     txn.appearance = &appearance;
 
     struct ged_draw_transaction_result result;

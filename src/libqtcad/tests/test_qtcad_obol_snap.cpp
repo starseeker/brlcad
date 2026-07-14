@@ -7,6 +7,10 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
+#include "bv.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/lod_mesh_shape.h"
 #include "brlobol/lod_service.h"
@@ -18,9 +22,7 @@
 #include "bu/file.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgObolSnap.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"
@@ -218,14 +220,15 @@ left_move_at(int x, int y)
 }
 
 static void
-set_center_query(qg_legacy_view *view, fastf_t x, fastf_t y, fastf_t z)
+set_center_query(void *view, fastf_t x, fastf_t y, fastf_t z)
 {
     mat_t view2model;
-    qg_legacy_view_dimensions_set(view, 200, 200);
-    bv_size_set(qg_legacy_view_bv(view), 2.0);
+    (void)bv_context_dimensions_set(
+	static_cast<struct bv_context *>(view), 200, 200);
+    bv_size_set(bv_context_view(static_cast<struct bv_context *>(view)), 2.0);
     MAT_IDN(view2model);
     MAT_DELTAS(view2model, x, y, z);
-    bv_view2model_set(qg_legacy_view_bv(view), view2model);
+    bv_view2model_set(bv_context_view(static_cast<struct bv_context *>(view)), view2model);
 }
 
 int
@@ -244,9 +247,10 @@ main(int argc, char **argv)
     if (!gedp)
 	FAIL("failed to open qtcad Obol snap test database");
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(200, 200);
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
     BRLObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -256,7 +260,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = qg_legacy_view_to_context(view.view());
+    draw_box.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 
@@ -269,19 +273,15 @@ main(int argc, char **argv)
 	    record.primitiveIndex < 0 ||
 	    !near_point(record.point, 1.0f, 1.0f, 1.0f))
 	FAIL("qtcad Obol snap helper should preserve endpoint identity");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad Obol snap helper should not initialize the legacy display manager");
 
     if (controller->replaceDatabaseSource("snap_only.s", gedp->dbip,
 	    SoBRLDatabaseSource::WIREFRAME, 2) <= 0 ||
 	    !controller->realizePending())
 	FAIL("test should add an Obol-only snap source");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad Obol snap setup should not initialize the legacy display manager");
 
-    set_center_query(view.view(), 11.02, 11.02, 11.02);
-    bv_snap_source_flags_set(qg_legacy_view_bv(view.view()), BV_SNAP_DB);
-    bv_snap_lines_set(qg_legacy_view_bv(view.view()), 1);
+    set_center_query(view.viewContext(), 11.02, 11.02, 11.02);
+    bv_snap_source_flags_set(bv_context_view(static_cast<struct bv_context *>(view.viewContext())), BV_SNAP_DB);
+    bv_snap_lines_set(bv_context_view(static_cast<struct bv_context *>(view.viewContext())), 1);
 
     SnapProbeFilter filter;
     filter.set_view_widget(&view);
@@ -289,26 +289,22 @@ main(int argc, char **argv)
     if (!filter.sync(&move))
 	FAIL("qtcad view filter should accept a snap probe mouse event");
     point_t snapped_point = VINIT_ZERO;
-    bv_current_point_get(snapped_point, qg_legacy_view_bv_const(view.view()));
+    bv_current_point_get(snapped_point, bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext())));
     if (!nearly_equal((float)snapped_point[X], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Y], 11.0f) ||
 	    !nearly_equal((float)snapped_point[Z], 11.0f))
 	FAIL("qtcad view filter should refine database snapping through Obol");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad Obol snap refinement should not initialize the legacy display manager");
 
-    set_center_query(view.view(), 11.02, 11.02, 11.02);
-    bv_snap_source_flags_set(qg_legacy_view_bv(view.view()), BV_SNAP_VIEW);
+    set_center_query(view.viewContext(), 11.02, 11.02, 11.02);
+    bv_snap_source_flags_set(bv_context_view(static_cast<struct bv_context *>(view.viewContext())), BV_SNAP_VIEW);
     QMouseEvent viewScopedMove = left_move_at(100, 100);
     if (!filter.sync(&viewScopedMove))
 	FAIL("qtcad view filter should accept a view-scoped snap probe event");
-    bv_current_point_get(snapped_point, qg_legacy_view_bv_const(view.view()));
+    bv_current_point_get(snapped_point, bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext())));
     if (nearly_equal((float)snapped_point[X], 11.0f) &&
 	    nearly_equal((float)snapped_point[Y], 11.0f) &&
 	    nearly_equal((float)snapped_point[Z], 11.0f))
 	FAIL("qtcad view-scoped snapping should not apply database refinement");
-    if (view.legacyBackendInitialized())
-	FAIL("qtcad view-scoped snap fallback should not initialize the legacy display manager");
 
     SoSeparator *lodRoot = new SoSeparator;
     lodRoot->ref();
@@ -490,7 +486,7 @@ main(int argc, char **argv)
     sourceService.drainResults(overBudgetResults);
     if (overBudgetResults.size() != 1 ||
 	    overBudgetResults[0].providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
-	    strcmp(overBudgetResults[0].diagnostic.getString(),
+	    bu_strcmp(overBudgetResults[0].diagnostic.getString(),
 		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	    overBudgetResults[0].mesh.isValid()) {
 	controller->setExactFullDetailBudget(0, 0);
@@ -500,11 +496,6 @@ main(int argc, char **argv)
     }
     controller->setExactFullDetailBudget(0, 0);
 
-    if (view.legacyBackendInitialized()) {
-	controller->setLodService(NULL);
-	sourceService.stop();
-	FAIL("qtcad source-backed exact Obol snap should not initialize the legacy display manager");
-    }
     controller->setLodService(NULL);
     sourceService.stop();
 

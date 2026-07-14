@@ -147,11 +147,19 @@ struct tclcad_view_data {
     int gdv_edit_motion_delta_callback_cnt;
     struct bu_vls gdv_callback;
     int gdv_callback_cnt;
-    struct fbserv_obj gdv_fbs;
     /* Tcl-specific overlay state owned by TclCAD view data.  The view's
      * Tcl pointer is bound to this record while the view is live and cleared
      * when the view is freed. */
     tclcad_view_state tcl_data;
+};
+
+/* TclCAD-owned accumulation state for edit-motion callbacks.  This used to
+ * borrow a display-manager record even though it has no renderer semantics. */
+struct tclcad_path_edit_params {
+    int edit_mode;
+    double dx;
+    double dy;
+    mat_t edit_mat;
 };
 
 /**
@@ -215,13 +223,6 @@ extern int to_listen(struct ged *gedp,
 		     ged_func_ptr func,
 		     const char *usage,
 		     int maxargs);
-
-/* Dm functions */
-extern int
-dm_list_tcl(ClientData clientData,
-	    Tcl_Interp *interp,
-	    int argc,
-	    const char **argv);
 
 /* Tclcad mouse routines */
 extern int to_get_prev_mouse(struct ged *gedp,

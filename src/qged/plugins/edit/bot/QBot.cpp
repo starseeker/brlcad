@@ -26,6 +26,8 @@
  */
 
 #include "common.h"
+
+#include "bv.h"
 #include <QEvent>
 #include <QMouseEvent>
 #include <QLabel>
@@ -39,7 +41,6 @@
 #include "rt/directory.h"
 #include "rt/primitives/bot.h"
 #include "qtcad/QgGedEventBatch.h"
-#include "QgLegacyViewContext.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "../qged_edit_preview_util.h"
@@ -372,8 +373,8 @@ QBot::eventFilter(QObject *, QEvent *event)
 
     if (event->type() == QEvent::MouseMove && dragging) {
 	point_t current;
-	const struct bv *view = qg_legacy_context_bv_const(
-	    qged_edit_view_context(m_ctx));
+	const struct bv *view = bv_context_view_const(
+	    static_cast<const struct bv_context *>(qged_edit_view_context(m_ctx)));
 	if (!view || !bv_screen_to_model(current, view,
 		mouse->pos().x(), mouse->pos().y()))
 	    return true;
@@ -475,7 +476,8 @@ QBot::eventFilter(QObject *, QEvent *event)
 	    point + 3);
     }
 
-    const struct bv *view = qg_legacy_context_bv_const(view_ctx);
+    const struct bv *view = bv_context_view_const(
+	static_cast<const struct bv_context *>(view_ctx));
     if (!view || !bv_screen_to_model(drag_start, view,
 	    mouse->pos().x(), mouse->pos().y())) {
 	const int vertex = selected_vertices.front();

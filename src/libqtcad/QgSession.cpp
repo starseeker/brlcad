@@ -24,8 +24,8 @@
 
 #include "common.h"
 
-#include "bu/env.h"
 #include "ged.h"
+#include "ged/view.h"
 #include "raytrace.h"
 
 #include "qtcad/QgSession.h"
@@ -46,7 +46,7 @@
  * where subtype is:
  *   0   — most primitive types (no further discrimination required)
  *   0-8 — ARB8 actual type (return value of get_arb_type; 0 = unknown/other)
- *   0-4 — combination type  (G_STANDARD_OBJ / G_REGION / G_AIR / …)
+ *   0-4 — combination type (QgCombTypeId values)
  *
  * The special key -1 is used when dp or dbip is invalid.
  */
@@ -67,7 +67,7 @@ session_icon_key(struct directory *dp, struct db_i *dbip)
 	    rt_db_free_internal(&intern);
 	}
     } else if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_COMBINATION) {
-	sub = QgCombType(dp, dbip);
+	    sub = static_cast<int>(QgCombType(dp, dbip));
     }
 
     return (int)dp->d_minor_type * 16 + sub;
@@ -85,8 +85,6 @@ QgSession::QgSession(QObject *parent)
      * in QgModel so that ownership is unambiguously in one place. */
     BU_GET(gedp, struct ged);
     ged_init(gedp);
-
-    bu_setenv("DM_SWRAST", "1", 1);
 }
 
 QgSession::~QgSession()
@@ -101,16 +99,18 @@ QgSession::dbip() const
     return gedp ? gedp->dbip : nullptr;
 }
 
-qg_legacy_view *
-QgSession::activeView() const
+struct bv_context *
+QgSession::activeViewContext() const
 {
-    return qg_legacy_view_ged_active_get(gedp);
+	return static_cast<struct bv_context *>(ged_view_active_ctx(gedp));
 }
 
 void
-QgSession::setActiveView(qg_legacy_view *view)
+QgSession::setActiveViewContext(struct bv_context *view_ctx)
 {
-    qg_legacy_view_ged_active_set(gedp, view);
+    ged_view_active_ctx_set(gedp, view_ctx);
+    if (view_ctx)
+	(void)ged_view_context_host_attach(gedp, view_ctx);
 }
 
 void

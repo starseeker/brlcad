@@ -57,6 +57,7 @@
 #include "rt/view.h"
 
 #include "ged/draw.h"
+#include "ged/draw_obol.h"
 #include "../qray.h"
 #include "../ged_private.h"
 
@@ -589,10 +590,15 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     nirt_qray_result_clear(gedp,
 	    bu_vls_cstr(&gedp->i->ged_gdp->gd_qray_basename));
 
-    /* If we're supposed to do graphics, look for the plot file */
+    /* Graphical qray output is command-owned Obol content.  Headless clients
+     * still need an endpoint/controller so the result is retained for a host
+     * that attaches later; do not fall back to a legacy display path. */
     if (DG_QRAY_GRAPHICS(gedp->i->ged_gdp) && bu_vls_strlen(&nv.plotfile)) {
-	FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
-	if (fp) {
+	if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1)) {
+	    bu_log("Unable to initialize Obol command-result endpoint\n");
+	} else {
+	    FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
+	    if (fp) {
 	    fastf_t csize = view_ctx ?
 		bv_scale_get(bv_context_view_const((const struct bv_context *)view_ctx)) * 0.01 : 1.0;
 	    int pret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
@@ -602,6 +608,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
 	    fclose(fp);
 	    if (pret != BRLCAD_OK)
 		bu_log("Error loading plot data from %s\n", bu_vls_cstr(&nv.plotfile));
+	    }
 	}
 	bu_file_delete(bu_vls_cstr(&nv.plotfile));
     }

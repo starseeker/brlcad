@@ -1,4 +1,4 @@
-/*			M G E D _ D M . H
+/*		M G E D _ D I S P L A Y . H
  * BRL-CAD
  *
  * Copyright (c) 1985-2026 United States Government as represented by
@@ -17,21 +17,21 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @file mged/mged_dm.h
+/** @file mged/mged_display.h
  *
- * Header file for communication with the display manager.
+ * Internal MGED display, view, input, and GUI-state record.
  *
  */
 
-#ifndef MGED_MGED_DM_H
-#define MGED_MGED_DM_H
+#ifndef MGED_MGED_DISPLAY_H
+#define MGED_MGED_DISPLAY_H
 
 #include "common.h"
 
 #include <string.h>
 
 #include "bv.h"
-#include "dm.h"	/* struct dm */
+#include "imgstream/fbserv.h"
 
 #include "pkg.h" /* struct pkg_conn */
 #include "ged.h"
@@ -110,7 +110,6 @@ struct _mged_variables {
     char	mv_linestyle;
     int		mv_hot_key;
     int		mv_context;
-    int		mv_backend_cache;
     int		mv_use_air;
     int		mv_listen;			/* nonzero to listen on port */
     int		mv_port;			/* port to listen on */
@@ -150,12 +149,6 @@ struct _axes_state {
     int		ax_edit_linewidth2;
 };
 
-
-struct _backend_cache_state {
-    int		cache_rc;
-    int		cache_active;	/* 1 - actively using backend caches */
-    int		cache_flag;
-};
 
 struct _rubber_band {
     int		rb_rc;
@@ -301,58 +294,66 @@ struct _menu_state {
 };
 
 
-struct mged_dm {
-    struct dm		*dm_dmp;
-    struct bu_vls	dm_pathname;
-    unsigned long	dm_native_id;
-    int			dm_graphical;
-    struct fb		*dm_fbp;
-    struct fbserv_obj	dm_fbserv;
+struct mged_display {
+    struct bu_vls	display_pathname;
+    unsigned long	display_native_id;
+    int			display_hosted;
+
+    /* Direct endpoint input is per display, not a process-global Tk hook. */
+    struct mged_state	*display_input_state;
+    int			display_input_motion_pending;
+    unsigned long	display_input_motion_timestamp;
+    int			display_input_motion_x;
+    int			display_input_motion_y;
+    int			display_input_snap_pan_active;
+
     int			repaint_pending;		/* true if this display needs another paint */
     unsigned int	repaint_reasons;		/* audit-only mged_repaint_reason flags */
-    int			dm_mapped;
-    int			dm_owner;			/* true if owner of the view info */
-    int			dm_am_mode;			/* alternate mouse mode */
-    int			dm_perspective_angle;
-    int			*dm_zclip_ptr;
-    struct cmd_list	*dm_tie;
+    int			display_mapped;
+    int			display_owner;			/* true if owner of the view info */
+    int			display_alternate_mode;			/* alternate mouse mode */
+    int			display_perspective_angle;
+    int			*display_zclip_ptr;
+    struct cmd_list	*display_tie;
 
-    int			dm_adc_auto;
-    int			dm_grid_auto_size;
-    int			_dm_mouse_dx;
-    int			_dm_mouse_dy;
-    int			_dm_omx;
-    int			_dm_omy;
-    int			_dm_knobs[8];
-    point_t		_dm_work_pt;
+    int			display_adc_auto;
+    int			display_grid_auto_size;
+    int			display_mouse_dx;
+    int			display_mouse_dy;
+    int			display_pointer_x;
+    int			display_pointer_y;
+    int			display_knobs[8];
+    point_t		display_work_point;
 
     /* Tcl variable names for display info */
-    struct bu_vls	dm_fps_name;
-    struct bu_vls	dm_aet_name;
-    struct bu_vls	dm_ang_name;
-    struct bu_vls	dm_center_name;
-    struct bu_vls	dm_size_name;
-    struct bu_vls	dm_adc_name;
+    struct bu_vls	display_fps_name;
+    struct bu_vls	display_aet_name;
+    struct bu_vls	display_ang_name;
+    struct bu_vls	display_center_name;
+    struct bu_vls	display_size_name;
+    struct bu_vls	display_adc_name;
 
     /* Slider stuff */
-    int			dm_scroll_top;
-    int			dm_scroll_active;
-    int			dm_scroll_y;
-    struct scroll_item	*dm_scroll_array[6];
+    int			display_scroll_top;
+    int			display_scroll_active;
+    int			display_scroll_y;
+    struct scroll_item	*display_scroll_array[6];
 
     /* Shareable Resources */
-    struct _view_state	*dm_view_state;
-    struct _menu_state	*dm_menu_state;
-    struct _rubber_band	*dm_rubber_band;
-    struct _mged_variables *dm_mged_variables;
-    struct _color_scheme	*dm_color_scheme;
-    struct _axes_state	*dm_axes_state;
-    struct _backend_cache_state	*dm_backend_cache_state;
+    struct _view_state	*display_view_state;
+    struct _menu_state	*display_menu_state;
+    struct _rubber_band	*display_rubber_band;
+    struct _mged_variables *display_variables;
+    struct _color_scheme	*display_color_scheme;
+    int			display_color_scheme_dirty;
+    struct _axes_state	*display_axes_state;
+    int			display_axes_state_dirty;
+    int			display_adc_style_dirty;
 
     /* Hooks */
-    int			(*dm_cmd_hook)(int, const char **, void *);
-    void			(*dm_viewpoint_hook)(void);
-    int			(*dm_eventHandler)(void);
+    int			(*display_command_hook)(int, const char **, void *);
+    void			(*display_viewpoint_hook)(void);
+    int			(*display_event_handler)(void);
 };
 
 enum mged_repaint_reason {
@@ -364,7 +365,7 @@ enum mged_repaint_reason {
 };
 
 static inline void
-mged_dm_repaint_request(struct mged_dm *mdmp, unsigned int reason)
+mged_display_repaint_request(struct mged_display *mdmp, unsigned int reason)
 {
     if (!mdmp)
 	return;
@@ -373,28 +374,28 @@ mged_dm_repaint_request(struct mged_dm *mdmp, unsigned int reason)
 }
 
 static inline int
-mged_dm_repaint_pending(const struct mged_dm *mdmp)
+mged_display_repaint_pending(const struct mged_display *mdmp)
 {
     return mdmp ? mdmp->repaint_pending : 0;
 }
 
 static inline const char *
-mged_dm_pathname(const struct mged_dm *mdmp)
+mged_display_pathname(const struct mged_display *mdmp)
 {
-    return (mdmp && BU_VLS_IS_INITIALIZED(&mdmp->dm_pathname) &&
-	bu_vls_strlen(&mdmp->dm_pathname)) ?
-	bu_vls_cstr(&mdmp->dm_pathname) : NULL;
+    return (mdmp && BU_VLS_IS_INITIALIZED(&mdmp->display_pathname) &&
+	bu_vls_strlen(&mdmp->display_pathname)) ?
+	bu_vls_cstr(&mdmp->display_pathname) : NULL;
 }
 
 static inline struct bu_vls *
-mged_dm_pathname_vls(struct mged_dm *mdmp)
+mged_display_pathname_vls(struct mged_display *mdmp)
 {
-    return mdmp && BU_VLS_IS_INITIALIZED(&mdmp->dm_pathname) ?
-	&mdmp->dm_pathname : NULL;
+    return mdmp && BU_VLS_IS_INITIALIZED(&mdmp->display_pathname) ?
+	&mdmp->display_pathname : NULL;
 }
 
 static inline void
-mged_dm_repaint_consume(struct mged_dm *mdmp)
+mged_display_repaint_consume(struct mged_display *mdmp)
 {
     if (!mdmp)
 	return;
@@ -402,11 +403,20 @@ mged_dm_repaint_consume(struct mged_dm *mdmp)
     mdmp->repaint_reasons = 0;
 }
 
-/* If we're changing the active DM, use this function so
- * libged also gets the word. */
+/* Keep GED's active view context synchronized with the active display. */
 __BEGIN_DECLS
-extern void set_curr_dm(struct mged_state *s, struct mged_dm *nl);
-extern void mged_dm_adc_state_set(struct mged_dm *dm, const struct bv_adc_state *adc);
+extern void mged_current_display_set(struct mged_state *s, struct mged_display *nl);
+extern void mged_display_adc_state_set(struct mged_display *dm, const struct bv_adc_state *adc);
+extern int mged_display_adc_visibility_set(struct mged_display *dm, int enabled);
+extern void mged_color_scheme_changed(struct mged_state *s,
+	struct _color_scheme *scheme);
+extern void mged_obol_faceplate_color_scheme_sync(struct mged_state *s,
+	struct mged_display *display);
+extern void mged_obol_faceplate_sync(struct mged_state *s,
+	struct mged_display *display);
+extern int mged_obol_input_motion_consumed(struct mged_display *dm,
+	unsigned long timestamp, int x, int y);
+extern int mged_obol_framebuffer_ensure(struct mged_state *s);
 __END_DECLS
 
 static inline struct bv *
@@ -434,89 +444,86 @@ mged_view_context_view_const(const void *view_ctx)
 }
 
 static inline int
-mged_dm_adc_state_get(struct mged_dm *dm, struct bv_adc_state *adc)
+mged_display_adc_state_get(struct mged_display *dm, struct bv_adc_state *adc)
 {
     struct bv_adc_state bv_adc;
 
-    if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
+    if (!dm || !dm->display_view_state || !dm->display_view_state->vs_gvp)
 	return 0;
     if (!bv_adc_state_get(&bv_adc,
-	    mged_view_state_view_const(dm->dm_view_state)))
+	    mged_view_state_view_const(dm->display_view_state)))
 	return 0;
     memcpy(adc, &bv_adc, sizeof(*adc));
     return 1;
 }
 
 static inline int
-mged_dm_grid_state_get(struct mged_dm *dm, struct bv_grid_state *grid)
+mged_display_grid_state_get(struct mged_display *dm, struct bv_grid_state *grid)
 {
     struct bv_grid_state bv_grid;
 
-    if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
+    if (!dm || !dm->display_view_state || !dm->display_view_state->vs_gvp)
 	return 0;
     if (!bv_grid_state_get(&bv_grid,
-	    mged_view_state_view_const(dm->dm_view_state)))
+	    mged_view_state_view_const(dm->display_view_state)))
 	return 0;
     memcpy(grid, &bv_grid, sizeof(*grid));
     return 1;
 }
 
 static inline void
-mged_dm_grid_state_set(struct mged_dm *dm, const struct bv_grid_state *grid)
+mged_display_grid_state_set(struct mged_display *dm, const struct bv_grid_state *grid)
 {
     struct bv_grid_state bv_grid;
 
-    if (!dm || !dm->dm_view_state || !dm->dm_view_state->vs_gvp)
+    if (!dm || !dm->display_view_state || !dm->display_view_state->vs_gvp)
 	return;
     memcpy(&bv_grid, grid, sizeof(bv_grid));
-    bv_grid_state_set(mged_view_state_view(dm->dm_view_state), &bv_grid);
+    bv_grid_state_set(mged_view_state_view(dm->display_view_state), &bv_grid);
 }
 
 static inline int
-mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
+mged_display_view_settings_shared(struct mged_display *a, struct mged_display *b)
 {
-    if (!a || !a->dm_view_state || !a->dm_view_state->vs_gvp ||
-	    !b || !b->dm_view_state || !b->dm_view_state->vs_gvp)
+    if (!a || !a->display_view_state || !a->display_view_state->vs_gvp ||
+	    !b || !b->display_view_state || !b->display_view_state->vs_gvp)
 	return 0;
-    return bv_context_settings_shared(a->dm_view_state->vs_gvp,
-	    b->dm_view_state->vs_gvp);
+    return bv_context_settings_shared(a->display_view_state->vs_gvp,
+	    b->display_view_state->vs_gvp);
 }
 
-#define MGED_DM_NULL ((struct mged_dm *)NULL)
-#define DMP s->mged_curr_dm->dm_dmp
-#define fbp s->mged_curr_dm->dm_fbp
-#define mapped s->mged_curr_dm->dm_mapped
-#define am_mode s->mged_curr_dm->dm_am_mode
-#define perspective_angle s->mged_curr_dm->dm_perspective_angle
-#define zclip_ptr s->mged_curr_dm->dm_zclip_ptr
+#define MGED_DISPLAY_NULL ((struct mged_display *)NULL)
+#define mapped s->mged_curr_display->display_mapped
+#define am_mode s->mged_curr_display->display_alternate_mode
+#define perspective_angle s->mged_curr_display->display_perspective_angle
+#define zclip_ptr s->mged_curr_display->display_zclip_ptr
 
-#define view_state s->mged_curr_dm->dm_view_state
-#define menu_state s->mged_curr_dm->dm_menu_state
-#define rubber_band s->mged_curr_dm->dm_rubber_band
-#define mged_variables s->mged_curr_dm->dm_mged_variables
-#define color_scheme s->mged_curr_dm->dm_color_scheme
-#define axes_state s->mged_curr_dm->dm_axes_state
-#define backend_cache_state s->mged_curr_dm->dm_backend_cache_state
+#define view_state s->mged_curr_display->display_view_state
+#define menu_state s->mged_curr_display->display_menu_state
+#define rubber_band s->mged_curr_display->display_rubber_band
+#define mged_variables s->mged_curr_display->display_variables
+#define color_scheme s->mged_curr_display->display_color_scheme
+#define axes_state s->mged_curr_display->display_axes_state
 
-#define cmd_hook s->mged_curr_dm->dm_cmd_hook
-#define viewpoint_hook s->mged_curr_dm->dm_viewpoint_hook
-#define eventHandler s->mged_curr_dm->dm_eventHandler
+#define cmd_hook s->mged_curr_display->display_command_hook
+#define viewpoint_hook s->mged_curr_display->display_viewpoint_hook
+#define eventHandler s->mged_curr_display->display_event_handler
 
-#define adc_auto s->mged_curr_dm->dm_adc_auto
-#define grid_auto_size s->mged_curr_dm->dm_grid_auto_size
+#define adc_auto s->mged_curr_display->display_adc_auto
+#define grid_auto_size s->mged_curr_display->display_grid_auto_size
 
-/* Names of macros must be different than actual struct element */
-#define dm_mouse_dx s->mged_curr_dm->_dm_mouse_dx
-#define dm_mouse_dy s->mged_curr_dm->_dm_mouse_dy
-#define dm_omx s->mged_curr_dm->_dm_omx
-#define dm_omy s->mged_curr_dm->_dm_omy
-#define dm_knobs s->mged_curr_dm->_dm_knobs
-#define dm_work_pt s->mged_curr_dm->_dm_work_pt
+/* Shortcuts intentionally differ from the display-record field names. */
+#define mouse_dx s->mged_curr_display->display_mouse_dx
+#define mouse_dy s->mged_curr_display->display_mouse_dy
+#define pointer_x s->mged_curr_display->display_pointer_x
+#define pointer_y s->mged_curr_display->display_pointer_y
+#define knob_values s->mged_curr_display->display_knobs
+#define work_point s->mged_curr_display->display_work_point
 
-#define scroll_top s->mged_curr_dm->dm_scroll_top
-#define scroll_active s->mged_curr_dm->dm_scroll_active
-#define scroll_y s->mged_curr_dm->dm_scroll_y
-#define scroll_array s->mged_curr_dm->dm_scroll_array
+#define scroll_top s->mged_curr_display->display_scroll_top
+#define scroll_active s->mged_curr_display->display_scroll_active
+#define scroll_y s->mged_curr_display->display_scroll_y
+#define scroll_array s->mged_curr_display->display_scroll_array
 
 #define VIEWSIZE	(bv_size_get(mged_view_state_view_const(view_state)))	/* Width of viewing cube */
 #define VIEWFACTOR	(1/bv_scale_get(mged_view_state_view_const(view_state)))
@@ -574,12 +581,12 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
 
 #define BV_MAXFUNC	64	/* largest code used */
 
-#define GET_MGED_DM(p, id) { \
+#define GET_MGED_DISPLAY(p, id) { \
     \
-    (p) = MGED_DM_NULL; \
-    for (size_t dm_ind = 0; dm_ind < BU_PTBL_LEN(&active_dm_set); dm_ind++) { \
-	struct mged_dm *tp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, dm_ind); \
-	if ((id) == tp->dm_native_id) { \
+    (p) = MGED_DISPLAY_NULL; \
+    for (size_t display_index = 0; display_index < BU_PTBL_LEN(&active_display_set); display_index++) { \
+	struct mged_display *tp = (struct mged_display *)BU_PTBL_GET(&active_display_set, display_index); \
+	if ((id) == tp->display_native_id) { \
 	    (p) = tp; \
 	    break; \
 	} \
@@ -588,9 +595,8 @@ mged_dm_view_settings_shared(struct mged_dm *a, struct mged_dm *b)
 }
 
 extern double frametime;		/* defined in mged.c */
-extern int dm_pipe[];			/* defined in mged.c */
-extern struct bu_ptbl active_dm_set;	/* defined in attach.c */
-extern struct mged_dm *mged_dm_init_state;
+extern struct bu_ptbl active_display_set;	/* defined in attach.c */
+extern struct mged_display *mged_initial_display;
 
 /* defined in doevent.c */
 #ifdef HAVE_X11_TYPES
@@ -600,11 +606,12 @@ extern int doEvent(ClientData, void *);
 #endif
 
 /* defined in attach.c */
-extern void dm_var_init(struct mged_state *s, struct mged_dm *target_dm);
+extern void mged_display_var_init(struct mged_state *s,
+	struct mged_display *target_display);
 
-/* defined in dm-generic.c */
-extern int common_dm(struct mged_state *s, int argc, const char *argv[]);
-extern int mged_dm_motion(struct mged_state *s, int x, int y);
+/* defined in display-command.c */
+extern int mged_display_command_common(struct mged_state *s, int argc, const char *argv[]);
+extern int mged_display_motion(struct mged_state *s, int x, int y);
 
 /* external sp_hook functions */
 extern void cs_set_bg(const struct bu_structparse *, const char *, void *, const char *, void *); /* defined in color_scheme.c */
@@ -612,10 +619,10 @@ extern void cs_set_bg(const struct bu_structparse *, const char *, void *, const
 /* defined in setup.c */
 extern void mged_rtCmdNotify(int);
 
-int dm_commands(int argc, const char *argv[], void *data);
+int mged_display_command(int argc, const char *argv[], void *data);
 
 
-#endif /* MGED_MGED_DM_H */
+#endif /* MGED_MGED_DISPLAY_H */
 
 /*
  * Local Variables:

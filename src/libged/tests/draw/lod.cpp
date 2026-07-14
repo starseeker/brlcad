@@ -35,13 +35,21 @@
 #include <ged/event_txn.h>
 
 #define ADIFF_THRES 0.99
-#define MESH_LOD_ADIFF_THRES 0.99
+#define MESH_LOD_ADIFF_THRES 0.97
 #define CSG_LOD_ADIFF_THRES 0.99
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);
 extern "C" int img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, const char *clear_root, const char *img_root);
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
+
+static void
+wait_for_progressive_draw(struct ged *gedp, void *view_ctx)
+{
+    if (!draw_test_obol_progressive_drain(gedp, view_ctx, 2000, 1))
+	bu_exit(EXIT_FAILURE,
+	    "Obol progressive realization did not settle before baseline capture\n");
+}
 
 static int
 brep_lod_img_check(struct ged *gedp, const char *cdir, bool clear_scene, bool clear_images, int soft_fail, int run_unstable_tests)
@@ -96,9 +104,14 @@ main(int ac, char *av[]) {
 
     /* We want a local working dir cache */
     char lcache[MAXPATHLEN] = {0};
+    char lod_cache[MAXPATHLEN] = {0};
     bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_draw_test_lod_cache", NULL);
     bu_mkdir(lcache);
-    bu_setenv("BU_DIR_CACHE", lcache, 1);
+    bu_dir(lod_cache, MAXPATHLEN, BU_DIR_CURR, "ged_draw_test_lod_cache",
+	   "cache", NULL);
+    bu_mkdir(lod_cache);
+    /* LoD cache clears must not erase the extracted image controls. */
+    bu_setenv("BU_DIR_CACHE", lod_cache, 1);
 
     unpack_apng(av[1], "lod.apng", lcache, "lod");
 
@@ -169,6 +182,8 @@ main(int ac, char *av[]) {
     s_av[3] = NULL;
     ged_exec_draw(gedp, 3, s_av);
 
+    wait_for_progressive_draw(gedp, v);
+
     s_av[0] = "autoview";
     s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
@@ -195,6 +210,8 @@ main(int ac, char *av[]) {
      * Enabled mesh LoD validates proxy placement/materials rather than exact
      * tessellation rasterization.  Different renderers/builds may choose
      * slightly different triangle/normal edge pixels for the same coarse mesh.
+     * Keep this strict enough to catch proxy/camera/material changes while
+     * allowing the expected depth-rasterization differences at mesh edges.
      */
     ret += img_cmp(2, gedp, lcache, false, clear_images, soft_fail, MESH_LOD_ADIFF_THRES, "lod_clear", "lod");
 
@@ -251,6 +268,8 @@ main(int ac, char *av[]) {
     s_av[3] = NULL;
     ged_exec_draw(gedp, 3, s_av);
 
+    wait_for_progressive_draw(gedp, v);
+
     s_av[0] = "autoview";
     s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
@@ -305,6 +324,8 @@ main(int ac, char *av[]) {
     s_av[2] = "all.g";
     s_av[3] = NULL;
     ged_exec_draw(gedp, 3, s_av);
+
+    wait_for_progressive_draw(gedp, v);
 
     s_av[0] = "autoview";
     s_av[1] = NULL;
@@ -387,6 +408,8 @@ main(int ac, char *av[]) {
     s_av[3] = NULL;
     ged_exec_draw(gedp, 3, s_av);
 
+    wait_for_progressive_draw(gedp, v);
+
     s_av[0] = "autoview";
     s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
@@ -398,6 +421,8 @@ main(int ac, char *av[]) {
     s_av[2] = "all.brep";
     s_av[3] = NULL;
     ged_exec_draw(gedp, 3, s_av);
+
+    wait_for_progressive_draw(gedp, v);
 
     s_av[0] = "autoview";
     s_av[1] = NULL;

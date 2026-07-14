@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <cstring>
 #include <string>
 
@@ -54,7 +56,7 @@ namespace
     static bool
 	name_equal(const char *a, const char *b)
 	{
-	    return a && b && std::strcmp(a, b) == 0;
+	    return a && b && bu_strcmp(a, b) == 0;
 	}
 
 

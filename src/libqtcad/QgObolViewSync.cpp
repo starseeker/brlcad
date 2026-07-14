@@ -10,8 +10,9 @@
 
 #include "QgObolViewSyncPrivate.h"
 
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgView.h"
+
+#include "ged/view.h"
 
 int
 qg_obol_display_accepts_ged_active_view(struct ged *gedp, QgView *display)
@@ -19,11 +20,11 @@ qg_obol_display_accepts_ged_active_view(struct ged *gedp, QgView *display)
     if (!display)
 	return 0;
 
-    qg_legacy_view *active_view = qg_legacy_view_ged_active_get(gedp);
+    void *active_view = ged_view_active_ctx(gedp);
     if (!active_view)
 	return 1;
 
-    return display->view() == active_view;
+    return display->viewContext() == active_view;
 }
 
 // Local Variables:

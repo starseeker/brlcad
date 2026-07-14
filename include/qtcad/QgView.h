@@ -30,7 +30,6 @@
 #include <QBoxLayout>
 #include <QWidget>
 #include "qtcad/defines.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgTypes.h"
 
 class QgCanvasBase;
@@ -38,6 +37,7 @@ class QImage;
 class QObject;
 class QgViewFilter;
 class BRLObolViewController;
+struct bv_context;
 struct brlobol_display_endpoint;
 
 class QTCAD_EXPORT QgView : public QWidget {
@@ -46,10 +46,11 @@ Q_DISABLE_COPY_MOVE(QgView)
 
 
 public:
-explicit QgView(QWidget *parent = nullptr, int type = QgView_AUTO);
+explicit QgView(QWidget *parent = nullptr,
+	QgViewType type = QgViewType::Auto);
 ~QgView();
 
-int view_type();
+QgViewType view_type() const;
 void set_current(int);
 int current();
 
@@ -65,13 +66,12 @@ void get_obol_viewport_image(QImage &img);
 
 bool isValid();
 
-qg_legacy_view * view();
-bool legacyBackendInitialized() const;
+/* Widget-owned libbv view context used for GED and endpoint coordination. */
+struct bv_context *viewContext();
+const struct bv_context *viewContext() const;
 BRLObolViewController *obolViewController();
 struct brlobol_display_endpoint *displayEndpoint();
 QgCanvasBase *canvasBase();
-
-void set_view(qg_legacy_view *);
 
 void aet(double a, double e, double t);
 

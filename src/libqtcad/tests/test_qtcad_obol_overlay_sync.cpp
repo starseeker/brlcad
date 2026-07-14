@@ -132,11 +132,12 @@ main(int argc, char **argv)
 	    !add_line_point(builder, 0, 255, 255, 0.0, 40.0, 0.0, BG_GEOMETRY_LINE_DRAW))
 	FAIL("failed to populate qtcad diagnostic line-layer builder");
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
-    qg_legacy_view_ged_active_set(gedp, view.view());
+	ged_view_active_ctx_set(gedp, view.viewContext());
+	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
-    QgView otherView(NULL, QgView_SW);
+    QgView otherView(NULL, QgViewType::SW);
     otherView.resize(180, 140);
     if (qg_obol_sync_line_layer_overlay(gedp, "qtcad::wrong-view",
 		builder, &otherView) != 0)

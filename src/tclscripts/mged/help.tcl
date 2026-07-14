@@ -296,7 +296,6 @@ set mged_help_data(rcodes)	{{filename}	{read region ident codes from filename}}
 set mged_help_data(reair)	{{comb aircode}	{assign same aircode to all regions under a given combination}}
 set mged_help_data(red)		{{object}	{edit a group or region using a text editor}}
 set mged_help_data(refresh)	{{}	{send new control list}}
-set mged_help_data(regdebug)	{{[number]}	{toggle display manager debugging or set debug level}}
 set mged_help_data(regdef)	{{regionID [airID [los% [materialID]]]}	{change next region default codes}}
 set mged_help_data(regions)	{{file object(s)}	{make ascii summary of regions}}
 set mged_help_data(reid)	{{[-n num] comb regionID}	{sequentially assign idents to all regions under a specified combination starting from regionID in increments of 'num'}}

@@ -373,14 +373,6 @@ GED_EXPORT extern int ged_diagnostic_hud_label_publish(
 	struct ged *gedp,
 	const struct ged_diagnostic_hud_label *label);
 
-// Functions for associating and retrieving application context information for
-// specific dm types.  Not really using this yet, but we will eventually need
-// some way to provide application contents for the dm attach command to work.
-//
-// NOTE - this API is still experimental
-GED_EXPORT extern void ged_dm_ctx_set(struct ged *gedp, const char *dm_type, void *ctx);
-GED_EXPORT extern void *ged_dm_ctx_get(struct ged *gedp, const char *dm_type);
-
 /* accessor functions for ged_results - calling
  * applications should not work directly with the
  * internals of ged_results, which are not guaranteed

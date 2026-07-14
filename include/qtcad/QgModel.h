@@ -77,7 +77,6 @@
 #include <QModelIndex>
 
 #include "qtcad/defines.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgRoles.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgTypes.h"

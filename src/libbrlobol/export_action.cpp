@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol/database_source.h"
 #include "brlobol/export_action.h"
 #include "brlobol/lod_service.h"
@@ -355,7 +357,7 @@ export_object_update_common(SoBRLExportAction::ObjectRecord &object,
     if (object.geometryKind.getLength() == 0) {
 	object.geometryKind = record.geometryKind;
     } else if (record.geometryKind.getLength() > 0 &&
-	       strcmp(object.geometryKind.getString(),
+	       bu_strcmp(object.geometryKind.getString(),
 		      record.geometryKind.getString()) != 0) {
 	object.geometryKind = "mixed";
     }

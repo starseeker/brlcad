@@ -142,7 +142,8 @@ main(int argc, char *argv[])
     /* Deliberately leave gedAccessor and viewWidgetAccessor as nullptr
      * to exercise the null-safe paths in the sample plugins. */
     ctx.log = [](const QString &msg) { bu_log("plugin: %s\n", qPrintable(msg)); };
-    TCHECK(ctx.activeView() == nullptr, "empty plugin context has no active legacy view");
+    TCHECK(ctx.activeViewContext() == nullptr,
+	"empty plugin context has no active view context");
 
     /* ================================================================
      * 6. IQgCommand: enumerate, find host_status_command, invoke it.

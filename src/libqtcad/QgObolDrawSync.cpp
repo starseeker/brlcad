@@ -8,7 +8,6 @@
 
 #include "common.h"
 
-#include "QgLegacyViewContext.h"
 #include "QgObolDrawSyncPrivate.h"
 #include "QgObolSelectionSyncPrivate.h"
 
@@ -17,7 +16,6 @@
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 
@@ -30,7 +28,7 @@ qg_obol_display_accepts_ged_draw_transaction_view(
 	return 0;
     if (!txn || !txn->view)
 	return 1;
-    return qg_legacy_view_to_context(display->view()) == txn->view;
+    return display->viewContext() == txn->view;
 }
 
 int
@@ -55,7 +53,7 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
 
     struct ged_draw_transaction sync_txn = *txn;
     if (!sync_txn.view)
-	sync_txn.view = qg_legacy_view_to_context(display->view());
+    sync_txn.view = display->viewContext();
 
     if (!ged_draw_obol_controller_attach_for_view(gedp, sync_txn.view,
 	    obol, 1))

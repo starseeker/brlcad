@@ -34,7 +34,7 @@
 #include "ged/view.h"
 #include "rt/view.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./hud.h"
 
 #include "./sedit.h"
@@ -103,7 +103,7 @@ set_scroll(struct mged_state *s)
 {
     struct bv_adc_state adc = {0};
 
-    (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
+    (void)mged_display_adc_state_get(s->mged_curr_display, &adc);
 
     if (mged_variables->mv_sliders) {
 	if (mged_variables->mv_rateknobs)
@@ -304,7 +304,7 @@ second_menu_scroll_display(fastf_t *f, struct scroll_item *mptr,
 {
     struct bv_adc_state adc = {0};
 
-    (void)mged_dm_adc_state_get(s->mged_curr_dm, &adc);
+    (void)mged_display_adc_state_get(s->mged_curr_display, &adc);
 
     switch (mptr->scroll_val) {
 	case 0:

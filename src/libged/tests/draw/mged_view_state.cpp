@@ -29,6 +29,7 @@
  *   3. Obol DM attachments use per-view controller attachments.
  *   4. Obol DMs do not inherit stale standalone rt framebuffer devices.
  *   5. GL display hosts can own a per-view Obol render endpoint.
+ *   6. The session framebuffer capture provider moves between endpoints.
  *
  * Uses the headless Obol/Coin off-screen renderer; no display hardware
  * required.
@@ -56,6 +57,7 @@
 #include "brlobol/view_attachment.h"
 #include "brlobol/scene_controller.h"
 #include "brlobol/view_controller.h"
+#include <Inventor/nodes/SoGroup.h>
 #include "../../ged_private.h"
 #include "../../ged_draw_view_private.h"
 
@@ -102,6 +104,29 @@ obol_controller_for_view(void *view_ctx)
 {
     return (BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(
 	    view_ctx);
+}
+
+static int
+obol_interlay_is_between_scene_and_local_root(
+	BRLObolViewController *controller, SoNode *shared_root)
+{
+    if (!controller || !shared_root)
+	return 0;
+    SoNode *lod_root = controller->getRenderSceneRoot();
+    if (!lod_root || !lod_root->isOfType(SoGroup::getClassTypeId()))
+	return 0;
+    SoGroup *lod_group = static_cast<SoGroup *>(lod_root);
+    if (lod_group->getNumChildren() != 1)
+	return 0;
+    SoNode *composition_node = lod_group->getChild(0);
+    if (!composition_node ||
+	!composition_node->isOfType(SoGroup::getClassTypeId()))
+	return 0;
+    SoGroup *composition = static_cast<SoGroup *>(composition_node);
+    return composition->getNumChildren() == 3 &&
+	composition->getChild(0) == shared_root &&
+	composition->getChild(1) == controller->getFramebufferInterlayRoot() &&
+	composition->getChild(2) == controller->getSceneRoot();
 }
 
 static int
@@ -179,6 +204,14 @@ test_highlight_state(const char *datadir)
     do_full_refresh(gedp);
 
     int fail = 0;
+    /* Establish the baseline only after the asynchronous source realization
+     * settles.  Highlighting itself requests realization, so comparing its
+     * final frame to an initial proxy frame would test scheduling, not style. */
+    if (!draw_test_obol_progressive_drain(gedp, ged_view_active_ctx(gedp),
+	    500, 1)) {
+	bu_log("FAIL: initial Obol realization did not settle for highlight test\n");
+	fail = 1;
+    }
     uint64_t highlight_rev0 = ged_draw_highlight_revision(gedp);
     fail += capture_screengrab_nonempty(gedp,
 	    "mged_view_state_t1_base.png", "initial highlight state");
@@ -459,6 +492,13 @@ test_multi_obol_dm_attachment(const char *datadir)
 	    !v1_controller->getRenderSceneRoot()) {
 	bu_log("FAIL: Obol DMs should have per-view render scene roots\n");
 	fail = 1;
+	} else if (!obol_interlay_is_between_scene_and_local_root(v0_controller,
+		shared_scene->getSceneRoot()) ||
+	    !obol_interlay_is_between_scene_and_local_root(v1_controller,
+		shared_scene->getSceneRoot())) {
+	bu_log("FAIL: Obol framebuffer interlay should separate shared geometry "
+		"from view-local features\n");
+	fail = 1;
     } else {
 	bu_log("PASS: GED Obol scene owns shared draw state and both DMs "
 		"render through per-view roots (sources=%d)\n",
@@ -498,78 +538,12 @@ test_multi_obol_dm_attachment(const char *datadir)
     return fail;
 }
 
-/* Test 4: Obol DM attach clears stale standalone rt framebuffer cache        */
-/* ========================================================================== */
-static int
-test_obol_rt_framebuffer_cache(const char *datadir)
-{
-    bu_log("\n--- Test 4: Obol DM attach clears stale rt framebuffer cache ---\n");
-
-    struct bu_vls fname = BU_VLS_INIT_ZERO;
-    bu_vls_sprintf(&fname, "%s/moss.g", datadir);
-    std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
-    std::ofstream tmp("mged_view_state_t4.g", std::ios::binary);
-    tmp << orig.rdbuf();
-    orig.close(); tmp.close();
-    bu_vls_free(&fname);
-
-    struct ged *gedp = ged_open("db", "mged_view_state_t4.g", 1);
-    if (!gedp) {
-	bu_file_delete("mged_view_state_t4.g");
-	return 1;
-    }
-
-    int fail = 0;
-    ged_rt_fb_set(gedp, "/dev/swrast");
-    const char *stale_fb = ged_rt_fb_get(gedp);
-    if (!stale_fb || !BU_STR_EQUAL(stale_fb, "/dev/swrast")) {
-	bu_log("FAIL: test setup could not seed stale rt framebuffer device\n");
-	fail = 1;
-    }
-
-    bv_dimensions_set(DRAW_TEST_BV(ged_view_active_ctx(gedp)), 128, 128);
-    const char *dm_av[7] = {
-	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
-    };
-    if (!fail && ged_exec_dm(gedp, 6, dm_av) != BRLCAD_OK) {
-	bu_log("FAIL: could not open Obol endpoint for rt framebuffer cache test: %s\n",
-		bu_vls_cstr(gedp->ged_result_str));
-	fail = 1;
-    }
-
-    const char *fb_after_attach = ged_rt_fb_get(gedp);
-    if (!fail && fb_after_attach && fb_after_attach[0]) {
-	bu_log("FAIL: Obol DM attach should clear stale rt framebuffer "
-		"device, got %s\n", fb_after_attach);
-	fail = 1;
-    } else if (!fail) {
-	bu_log("PASS: Obol DM attach cleared stale rt framebuffer device\n");
-    }
-
-    ged_rt_fb_set(gedp, "/dev/qtgl");
-    ged_rt_fb_refresh(gedp);
-    const char *fb_after_refresh = ged_rt_fb_get(gedp);
-    if (!fail && fb_after_refresh && fb_after_refresh[0]) {
-	bu_log("FAIL: rt framebuffer refresh on Obol DM should clear "
-		"standalone device, got %s\n", fb_after_refresh);
-	fail = 1;
-    } else if (!fail) {
-	bu_log("PASS: rt framebuffer refresh on Obol DM keeps standalone "
-		"device clear\n");
-    }
-
-    ged_close(gedp);
-    bu_file_delete("mged_view_state_t4.g");
-    return fail;
-}
-
-/* ========================================================================== */
-/* Test 5: non-Obol GL hosts can render through an owned Obol view endpoint   */
+/* Test 4: non-Obol GL hosts can render through an owned Obol view endpoint   */
 /* ========================================================================== */
 static int
 test_owned_render_endpoint(const char *datadir)
 {
-    bu_log("\n--- Test 5: owned Obol render endpoint ---\n");
+    bu_log("\n--- Test 4: owned Obol render endpoint ---\n");
 
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
@@ -636,6 +610,57 @@ test_owned_render_endpoint(const char *datadir)
 	    !strstr(bu_vls_cstr(gedp->ged_result_str), "0.1"))) {
 	bu_log("FAIL: typed background property did not round trip: %s\n",
 	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    if (!fail && ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+	    view_ctx) != BRLCAD_OK) {
+	bu_log("FAIL: could not create an endpoint-backed framebuffer stream\n");
+	fail = 1;
+    }
+    const char *set_underlay_av[5] = {
+	"dm", "set", "composition.framebuffer.mode", "underlay", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 4, set_underlay_av) != BRLCAD_OK ||
+	    bv_framebuffer_mode_get(DRAW_TEST_BV(view_ctx)) !=
+	    BV_FRAMEBUFFER_MODE_UNDERLAY)) {
+	bu_log("FAIL: typed framebuffer composition did not select underlay: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *get_framebuffer_mode_av[4] = {
+	"dm", "get", "composition.framebuffer.mode", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 3, get_framebuffer_mode_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "underlay"))) {
+	bu_log("FAIL: typed framebuffer composition did not round trip: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    set_underlay_av[3] = "interlay";
+    if (!fail && (ged_exec_dm(gedp, 4, set_underlay_av) != BRLCAD_OK ||
+	    bv_framebuffer_mode_get(DRAW_TEST_BV(view_ctx)) !=
+	    BV_FRAMEBUFFER_MODE_INTERLAY)) {
+	bu_log("FAIL: typed framebuffer composition did not select interlay: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    if (!fail && (ged_exec_dm(gedp, 3, get_framebuffer_mode_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "interlay"))) {
+	bu_log("FAIL: typed framebuffer composition did not round trip interlay: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    set_underlay_av[3] = "invalid";
+    if (!fail && ged_exec_dm(gedp, 4, set_underlay_av) != BRLCAD_ERROR) {
+	bu_log("FAIL: typed framebuffer composition accepted an invalid mode\n");
+	fail = 1;
+    }
+    set_underlay_av[3] = "off";
+    if (!fail && (ged_exec_dm(gedp, 4, set_underlay_av) != BRLCAD_OK ||
+	    bv_framebuffer_mode_get(DRAW_TEST_BV(view_ctx)) !=
+	    BV_FRAMEBUFFER_MODE_OFF)) {
+	bu_log("FAIL: typed framebuffer composition did not disable display\n");
 	fail = 1;
     }
 
@@ -735,23 +760,37 @@ test_owned_render_endpoint(const char *datadir)
     BRLObolProgressiveStatus root_status;
     if (!fail &&
 	(controller->renderToImage(&deferred_root_image, 1, 0, NULL, NULL,
-	    &root_status) != BRLCAD_OK || !deferred_root_image ||
-	 !root_status.hasMore || root_status.changed ||
-	 memcmp(image, deferred_root_image, 384u * 384u * 3u) == 0)) {
-	bu_log("FAIL: deferred root frame should be distinct and request refinement\n");
+	    &root_status) != BRLCAD_OK || !deferred_root_image)) {
+	bu_log("FAIL: automatic deferred draw did not render a root frame\n");
 	fail = 1;
     }
 
     BRLObolProgressiveStatus full_status;
-    if (!fail &&
-	(controller->renderToImage(&deferred_full_image, 1, 0, NULL, NULL,
-	    &full_status) != BRLCAD_OK || !deferred_full_image ||
-	 full_status.hasMore || !full_status.changed ||
-	 memcmp(image, deferred_full_image, 384u * 384u * 3u) != 0)) {
-	bu_log("FAIL: deferred refinement should reproduce the direct image exactly\n");
-	fail = 1;
+    if (!fail && root_status.hasMore) {
+	if (!draw_test_obol_progressive_drain(gedp, view_ctx, 500, 1) ||
+	    controller->renderToImage(&deferred_full_image, 1, 0, NULL, NULL,
+		&full_status) != BRLCAD_OK || !deferred_full_image ||
+	    full_status.hasMore ||
+	    memcmp(image, deferred_full_image, 384u * 384u * 3u) != 0) {
+	    bu_log("FAIL: deferred refinement should reproduce the direct image exactly\n");
+	    fail = 1;
+	} else if (!fail) {
+	    bu_log("PASS: interactive draw published %s then refined exactly\n",
+		root_status.changed ? "a progressive root" : "pending final data");
+	}
     } else if (!fail) {
-	bu_log("PASS: interactive draw defaults to a deferred root and refines exactly\n");
+	/* A small job may complete before the first frame.  Prefer its final
+	 * geometry instead of forcing a visible intermediate proxy frame. */
+	if (memcmp(image, deferred_root_image, 384u * 384u * 3u) != 0 ||
+	    controller->renderToImage(&deferred_full_image, 1, 0, NULL, NULL,
+		&full_status) != BRLCAD_OK || !deferred_full_image ||
+	    full_status.hasMore ||
+	    memcmp(image, deferred_full_image, 384u * 384u * 3u) != 0) {
+	    bu_log("FAIL: completed deferred work did not use the final image\n");
+	    fail = 1;
+	} else {
+	    bu_log("PASS: interactive draw used completed final geometry immediately\n");
+	}
     }
 
     if (image)
@@ -766,12 +805,12 @@ test_owned_render_endpoint(const char *datadir)
 }
 
 /* ========================================================================== */
-/* Test 6: endpoint-native dm host lifecycle                                  */
+/* Test 5: endpoint-native dm host lifecycle                                  */
 /* ========================================================================== */
 static int
 test_endpoint_dm_lifecycle(const char *datadir)
 {
-    bu_log("\n--- Test 6: endpoint-native dm host lifecycle ---\n");
+    bu_log("\n--- Test 5: endpoint-native dm host lifecycle ---\n");
 
     struct bu_vls fname = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fname, "%s/moss.g", datadir);
@@ -969,6 +1008,124 @@ test_endpoint_dm_lifecycle(const char *datadir)
     return fail;
 }
 
+/* ========================================================================== */
+/* Test 6: session framebuffer capture provider belongs to one endpoint       */
+/* ========================================================================== */
+static int
+test_framebuffer_capture_provider_rebind(const char *datadir)
+{
+    bu_log("\n--- Test 6: framebuffer capture-provider rebinding ---\n");
+
+    struct bu_vls fname = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&fname, "%s/moss.g", datadir);
+    std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
+    std::ofstream tmp("mged_view_state_t7.g", std::ios::binary);
+    tmp << orig.rdbuf();
+    orig.close(); tmp.close();
+    bu_vls_free(&fname);
+
+    struct ged *gedp = open_gedp("mged_view_state_t7.g", 320, 240);
+    if (!gedp) {
+	bu_file_delete("mged_view_state_t7.g");
+	return 1;
+    }
+
+    int fail = 0;
+    void *first_view = ged_view_active_ctx(gedp);
+    brlobol_display_endpoint_t *first_endpoint =
+	ged_view_context_display_endpoint_get(first_view);
+    if (!first_endpoint ||
+	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+	    first_view) != BRLCAD_OK) {
+	bu_log("FAIL: could not bind the first framebuffer endpoint\n");
+	fail = 1;
+    }
+
+    unsigned char *pixels = NULL;
+    size_t size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    if (!fail && !brlobol_display_endpoint_capture_plane(first_endpoint,
+	    BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	    &components)) {
+	bu_log("FAIL: first endpoint did not expose the framebuffer provider\n");
+	fail = 1;
+    }
+    if (pixels)
+	bu_free(pixels, "first framebuffer capture");
+
+    void *view_set_ctx = ged_view_set_ctx(gedp);
+    void *second_view = ged_view_context_create_with_set(view_set_ctx);
+    if (!second_view) {
+	bu_log("FAIL: secondary framebuffer view creation failed\n");
+	fail = 1;
+    } else {
+	bv_name_set(DRAW_TEST_BV(second_view), "framebuffer-secondary");
+	bv_dimensions_set(DRAW_TEST_BV(second_view), 320, 240);
+	bv_unit_conversion_set(DRAW_TEST_BV(second_view),
+	    gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
+	ged_view_set_context_add(view_set_ctx, second_view);
+	ged_view_context_owned_add(gedp, second_view);
+	const char *open_av[] = {"dm", "open", "-V",
+	    "framebuffer-secondary", "--host", "headless", "--renderer",
+	    "sw", NULL};
+	const int endpoint_opened = ged_exec_dm(gedp, 8, open_av);
+	const int bridge_bound = endpoint_opened == BRLCAD_OK ?
+	    ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+		second_view) : BRLCAD_ERROR;
+	if (endpoint_opened != BRLCAD_OK || bridge_bound != BRLCAD_OK) {
+	    bu_log("FAIL: could not bind the second framebuffer endpoint "
+		"(open=%d bridge=%d result=%s)\n", endpoint_opened,
+		bridge_bound, bu_vls_cstr(gedp->ged_result_str));
+	    fail = 1;
+	}
+    }
+
+    brlobol_display_endpoint_t *second_endpoint = second_view ?
+	ged_view_context_display_endpoint_get(second_view) : NULL;
+    pixels = NULL;
+    size = 0;
+    width = 0;
+    height = 0;
+    components = 0;
+    if (!fail && brlobol_display_endpoint_capture_plane(first_endpoint,
+	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	&components)) {
+	bu_log("FAIL: previous endpoint retained the session framebuffer provider\n");
+	if (pixels) {
+	    bu_free(pixels, "stale framebuffer capture");
+	    pixels = NULL;
+	}
+	fail = 1;
+    }
+    if (!fail && !brlobol_display_endpoint_capture_plane(second_endpoint,
+	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	&components)) {
+	bu_log("FAIL: second endpoint did not receive the framebuffer provider\n");
+	fail = 1;
+    }
+    if (pixels)
+	bu_free(pixels, "second framebuffer capture");
+
+    ged_draw_obol_framebuffer_release(gedp);
+    pixels = NULL;
+    if (!fail && brlobol_display_endpoint_capture_plane(second_endpoint,
+	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	&components)) {
+	bu_log("FAIL: framebuffer release left a capture provider behind\n");
+	if (pixels)
+	    bu_free(pixels, "released framebuffer capture");
+	fail = 1;
+    }
+
+    if (!fail)
+	bu_log("PASS: framebuffer capture provider moves between endpoints\n");
+    ged_close(gedp);
+    bu_file_delete("mged_view_state_t7.g");
+    return fail;
+}
+
 /* main                                                                        */
 /* ========================================================================== */
 
@@ -993,9 +1150,9 @@ main(int argc, char *argv[])
     failures += test_highlight_state(datadir);
     failures += test_edit_context_snapshot(datadir);
     failures += test_multi_obol_dm_attachment(datadir);
-    failures += test_obol_rt_framebuffer_cache(datadir);
     failures += test_owned_render_endpoint(datadir);
     failures += test_endpoint_dm_lifecycle(datadir);
+    failures += test_framebuffer_capture_provider_rebind(datadir);
 
     if (failures == 0) {
 	bu_log("\nAll MGED view-state tests PASSED (%d/6)\n", 6);

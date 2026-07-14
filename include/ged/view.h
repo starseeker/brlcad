@@ -34,6 +34,7 @@
 #include "rt/db_fullpath.h"
 #include "rt/db_instance.h"
 #include "rt/view.h"
+#include "brlobol/display_endpoint.h"
 #include "ged/defines.h"
 #include "ged/draw_scene.h"
 
@@ -143,9 +144,6 @@ GED_EXPORT extern int ged_view_set_context_remove(void *view_set_ctx, void *view
 GED_EXPORT extern int ged_view_context_view_set_attach(void *view_ctx, void *view_set_ctx);
 GED_EXPORT extern int ged_view_context_update_callback_set(void *view_ctx, ged_view_context_update_callback_t callback, void *data);
 GED_EXPORT extern int ged_view_context_update(void *view_ctx);
-GED_EXPORT extern void *ged_view_context_display_manager_get(const void *view_ctx);
-GED_EXPORT extern int ged_view_context_display_manager_set(void *view_ctx, void *dmp);
-
 /**
  * Get or replace the Obol display endpoint associated with a GED view.
  *
@@ -159,6 +157,19 @@ ged_view_context_display_endpoint_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_display_endpoint_set(
     void *view_ctx, struct brlobol_display_endpoint *endpoint,
     int take_ownership);
+
+/**
+ * Access a render-affecting view policy through the view's Obol endpoint.
+ * GED retains the policy in the view context while an endpoint is absent, so
+ * headless clients can configure a view before it is presented.  This is
+ * policy storage, not a fallback rendering path.
+ */
+GED_EXPORT extern int ged_view_context_display_property_get(
+    const void *view_ctx, const char *name,
+    struct brlobol_endpoint_property_value *value);
+GED_EXPORT extern int ged_view_context_display_property_set(
+    void *view_ctx, const char *name,
+    const struct brlobol_endpoint_property_value *value);
 
 /**
  * Translate the view.

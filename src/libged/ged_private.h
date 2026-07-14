@@ -189,7 +189,7 @@ void ged_view_state_init(struct ged *gedp);
 void ged_view_state_free(struct ged *gedp);
 int ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx);
 int ged_obol_fbserv_present(struct ged *gedp);
-int ged_obol_fbserv_visibility_set(struct ged *gedp, int visible);
+int ged_obol_fbserv_composition_set(struct ged *gedp, int mode);
 void ged_obol_fbserv_release(struct ged *gedp);
 __END_DECLS
 
@@ -210,9 +210,6 @@ class Ged_Internal {
 	std::map<std::string, int> cmd_recursion_depth_cnt;
 
 	std::stack<std::string> exec_stack;
-
-	std::map<std::string, void *> dm_map;
-	std::string rt_fb_dev;
 
 	// Persisting state between loadview and preview
 	// commands and subcommands.
@@ -318,10 +315,13 @@ GED_EXPORT extern void ged_refresh_cb(struct ged *);
 GED_EXPORT extern void ged_output_handler_cb(struct ged *, char *);
 GED_EXPORT extern void ged_io_handler_cb(struct ged *, void *, int);
 
-/* Internal cache of preferred rt framebuffer backend based on active DM. */
-GED_EXPORT extern void ged_rt_fb_set(struct ged *gedp, const char *fb_dev);
-GED_EXPORT extern const char *ged_rt_fb_get(struct ged *gedp);
-GED_EXPORT extern void ged_rt_fb_refresh(struct ged *gedp);
+/* Launch an external image renderer through an active endpoint framebuffer. */
+GED_EXPORT extern int _ged_external_rt_to_endpoint(
+	struct ged *gedp,
+	int argc,
+	const char *argv[],
+	const char *program,
+	const char *callback_command);
 GED_EXPORT extern void ged_draw_registry_free(struct ged *gedp);
 GED_EXPORT extern void ged_draw_observers_free(struct ged *gedp);
 

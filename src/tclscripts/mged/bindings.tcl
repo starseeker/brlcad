@@ -43,7 +43,11 @@ proc mged_bind_dm { w } {
 
     #default key bindings
     set forwarding_key($w) 0
-    default_key_bindings $w
+    if {[info exists ::mged_obol_semantic_input($w)]} {
+	obol_semantic_key_bindings $w
+    } else {
+	default_key_bindings $w
+    }
 }
 
 proc print_return_val str {
@@ -176,6 +180,25 @@ proc default_key_bindings { w } {
     }
 }
 
+proc obol_semantic_key_bindings { w } {
+    default_key_bindings $w
+
+    # The endpoint owns these unmodified semantic view actions.  Shift-A
+    # remains MGED's accept binding, so only lower-case a is removed.
+    foreach key {2 3 4 5 6 7 a b f l m r t v} {
+	bind $w $key {}
+    }
+
+    # The Tk Obol X11 host turns physical wheel buttons into the same
+    # endpoint action used by Qt.  Do not generate a second Tcl zoom event.
+    if {$::tcl_platform(platform) == "unix" && $::tcl_platform(os) != "Darwin"} {
+	bind $w <MouseWheel> {}
+	bind $w <Button-4> {}
+	bind $w <Button-5> {}
+    }
+    bind $w R {}
+}
+
 proc reset_everything { w } {
     global mged_gui
 
@@ -197,6 +220,8 @@ proc set_forward_keys { w val } {
     set forwarding_key($w) $val
     if {$forwarding_key($w)} {
 	forward_key_bindings $w
+    } elseif {[info exists ::mged_obol_semantic_input($w)]} {
+	obol_semantic_key_bindings $w
     } else {
 	default_key_bindings $w
     }
@@ -206,7 +231,11 @@ proc toggle_forward_key_bindings { w } {
     global forwarding_key
 
     if {$forwarding_key($w)} {
-	default_key_bindings $w
+	if {[info exists ::mged_obol_semantic_input($w)]} {
+	    obol_semantic_key_bindings $w
+	} else {
+	    default_key_bindings $w
+	}
 	set forwarding_key($w) 0
     } else {
 	forward_key_bindings $w
@@ -335,7 +364,8 @@ proc default_mouse_bindings { w } {
     }
 
     bind $w <ButtonRelease> "winset $w; dm idle; break"
-    bind $w <Motion> "winset $w; if {\[dm type\] == \"tkswrast\"} {dm motion %x %y}; break"
+    # Tk Obol dispatches native motion through its endpoint handler.
+    bind $w <Motion> {break}
     bind $w <KeyRelease-Control_L> "winset $w; dm idle; break"
     bind $w <KeyRelease-Control_R> "winset $w; dm idle; break"
     bind $w <KeyRelease-Shift_L> "winset $w; dm idle; break"

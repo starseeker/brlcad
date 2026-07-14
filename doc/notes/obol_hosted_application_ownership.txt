@@ -1,0 +1,111 @@
+Obol Hosted Application Ownership Matrix
+========================================
+
+Last reviewed: 2026-07-13
+
+Purpose
+-------
+
+This matrix records the authoritative ownership chain for every currently
+supported graphical BRL-CAD application.  A hosted view must have exactly one
+GED view context, display endpoint, Obol controller, and native host.  The
+application owns its window and event loop only.  A row is source-audited when
+the named source establishes that chain; it is runtime-validated only when the
+listed test runs against an appropriate host.
+
+QGED
+----
+
+* GED context: `QgSession` owns `struct ged`; each `QgView` supplies the
+  active `bv_context` through `viewContext()`.
+* Endpoint/controller/host: `QgView` creates one embedded endpoint, selects
+  its HW or SW Obol engine, and opens the matching `qt-gl` or `qt-sw` host.
+  `QgQuadView` associates each visible endpoint with its GED view context.
+* Input/framebuffer/close: Qt canvases dispatch endpoint input; qged fbserv
+  reuses the visible endpoint.  `QgView` detaches that endpoint from GED
+  before destruction.
+* Evidence: `test_qtcad_obol_window_host`, controller, draw synchronization,
+  real-model, framebuffer, and progressive-LoD tests.  `regress-qged-ert`
+  owns an isolated Xvfb server and verifies the software endpoint launches
+  ERT through IPC at the laid-out canvas size, completes, and leaves QGED
+  alive; unavailable X infrastructure is an explicit skip.  The window-host
+  regression also closes and reopens a Qt software host through `dm`, proving
+  that this replaces only the native host while retaining its GED context,
+  display endpoint, and controller.  It also proves that an explicit
+  endpoint-owned background survives replacement; a newly created canvas may
+  not seed the retained controller from its own passive view defaults.
+
+MGED
+----
+
+* GED context: the active `mged_view_state` context is authoritative.
+* Endpoint/controller/host: `mged_display_init` creates one endpoint, selects HW
+  or SW explicitly, attaches it to that context, and opens `tk-gl` or
+  `tk-photo`.  The `mged_display` application record is an input/view shell;
+  MGED retains no `struct dm` or graphical renderer.
+* Input/framebuffer/close: semantic input is installed on the endpoint;
+  framebuffer composition is endpoint-based.  detach clears the endpoint
+  association before the host is released.
+* Evidence: headless MGED smoke, ERT, and progressive-LoD tests.  Native Tk
+  lifecycle still needs the usable-X11 coverage listed below.
+
+GSH
+---
+
+* GED context: the active GSH GED view context.
+* Endpoint/controller/host: GSH requests the standard headless endpoint from
+  GED.  It owns neither a private controller nor a separate native host.
+* Input/framebuffer/close: not applicable to the headless shell; framebuffer
+  and ERT publication use the endpoint composition path.
+* Evidence: GSH basic, ERT, and progressive-LoD smoke tests.
+
+Tcl Ged, Archer, and rtwizard
+-----------------------------
+
+* GED context: `cadwidgets::Ged` owns one `go_open` GED object.  It creates a
+  named context per pane with `new_view`; the active pane selects the GED
+  active context.
+* Endpoint/controller/host: `to_new_view` creates a context, then the Tk
+  `tkobol` path creates one endpoint, selects its engine, attaches it to the
+  context, and opens the `tk-gl` or `tk-photo` factory host.  Each intentional
+  quad pane is therefore a separate complete hosted view, rather than a
+  shared renderer with hidden state.
+* Input/framebuffer/close: `to_new_view` installs endpoint-aware bindings.
+  libged owns one session Obol/imgstream framebuffer bridge; TclCAD binds its
+  capture provider to the active or explicitly selected output endpoint and
+  never casts a factory-host instance to a generic window host.  Auxiliary
+  pane creation does not retarget that stream, and pane deletion rebinds the
+  surviving active endpoint before freeing the deleted context.
+  `to_deleteProc` iterates all owned view contexts and
+  `tclcad_view_host_destroy` releases each endpoint before GED closes.
+* Archer: `ArcherCore` embeds `cadwidgets::Ged`; it has no independent scene,
+  controller, or display host.  Its obsolete display-manager discovery and
+  ineffective `-type` option have been removed.  Archer now names the sole
+  Tk Obol host directly.
+* rtwizard: the historical GUI script embeds an `ArcherCore` view-only
+  instance and consequently uses the same Tk endpoint chain.  The GED
+  `rtwizard` command itself consumes the active view camera and launches the
+  standalone renderer with `--no-gui`; it does not create a parallel scene
+  display.
+* Evidence: `tclcad_test_new_view_cleanup` verifies GED destruction and that
+  the retired `dm_list` discovery command is absent.
+  `tclcad_test_tkobol_widget_smoke` passes under `xvfb-run` and covers direct
+  top-level, embedded, and software views, plus active hardware-pane deletion
+  while a software pane remains: the surviving endpoint renders, captures, and
+  is then released.  `tclcad_test_archer_obol_smoke` instantiates the view-only
+  embedded `ArcherCore` configuration used by the historical rtwizard GUI,
+  verifies its four `tkobol` endpoints, draws, and verifies that all four
+  widgets and the native GED command are removed.
+  `RtControl` is now a `cadwidgets::Ged`-only component; its unreachable
+  `Mged` branches have been deleted.
+
+Required Follow-up
+------------------
+
+1. Add a full historical-rwizard workflow smoke only if that GUI is restored
+   as a supported application.  Its hosted drawing ownership is already
+   covered by the embedded `ArcherCore` lifecycle test.
+2. Treat a hidden quad pane as an intentional inactive hosted view, not an
+   excuse to share controllers or native hosts.  If lazy pane creation is
+   introduced for resource use, preserve the same one-context/one-endpoint
+   ownership and add lifecycle coverage before deleting the eager path.

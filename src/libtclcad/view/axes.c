@@ -26,6 +26,7 @@
 
 #include "common.h"
 #include "bv.h"
+#include "brlobol/display_endpoint.h"
 #include "bu/units.h"
 #include "ged.h"
 #include "ged/view.h"
@@ -52,10 +53,128 @@ _tclcad_data_axes_display_scale(void *view_ctx)
 	(fastf_t)(width > 0 ? width : BVDAS_DEFAULT_VIEW_WIDTH);
 }
 
+static int
+tclcad_axes_visibility_endpoint_set(void *view_ctx,
+	const char *property_name, int enabled)
+{
+    if (!view_ctx || !property_name || enabled < 0 || enabled > 1)
+	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    value.bool_value = enabled;
+    return ged_view_context_display_property_set(view_ctx, property_name,
+	&value);
+}
+
+static int
+tclcad_axes_endpoint_property_set(void *view_ctx, const char *name,
+	const struct brlobol_endpoint_property_value *value)
+{
+    return ged_view_context_display_property_set(view_ctx, name, value) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK;
+}
+
+static int
+tclcad_axes_endpoint_style_set(void *view_ctx,
+	const char *visibility_property, const char *field,
+	const struct bv_axes_state *axes)
+{
+    if (!view_ctx || !visibility_property || !field || !axes)
+	return 0;
+    const char *prefix = BU_STR_EQUAL(visibility_property,
+	"view.faceplate.model_axes.visible") ?
+	"view.faceplate.model_axes." :
+	"view.faceplate.view_axes.";
+    char property[128] = {0};
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+
+    if (BU_STR_EQUAL(field, "axes_size")) {
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	value.double_value = axes->axes_size;
+	snprintf(property, sizeof(property), "%ssize", prefix);
+	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
+    }
+    if (BU_STR_EQUAL(field, "axes_pos")) {
+	const char *coordinates[] = {"position.x", "position.y", "position.z"};
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	for (int axis = 0; axis < 3; axis++) {
+	    value.double_value = axes->axes_pos[axis];
+	    snprintf(property, sizeof(property), "%s%s", prefix,
+		coordinates[axis]);
+	    if (!tclcad_axes_endpoint_property_set(view_ctx, property, &value))
+		return 0;
+	}
+	return 1;
+    }
+    if (BU_STR_EQUAL(field, "axes_color") ||
+	BU_STR_EQUAL(field, "label_color") ||
+	BU_STR_EQUAL(field, "tick_color") ||
+	BU_STR_EQUAL(field, "tick_major_color")) {
+	const int *color = BU_STR_EQUAL(field, "axes_color") ?
+	    axes->axes_color : BU_STR_EQUAL(field, "label_color") ?
+	    axes->label_color : BU_STR_EQUAL(field, "tick_color") ?
+	    axes->tick_color : axes->tick_major_color;
+	const char *suffix = BU_STR_EQUAL(field, "axes_color") ? "color" :
+	    BU_STR_EQUAL(field, "label_color") ? "labels.color" :
+	    BU_STR_EQUAL(field, "tick_color") ? "ticks.color" :
+	    "ticks.major_color";
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+	for (int axis = 0; axis < 3; axis++)
+	    value.color3[axis] = color[axis] / 255.0;
+	snprintf(property, sizeof(property), "%s%s", prefix, suffix);
+	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
+    }
+
+    const int is_bool = BU_STR_EQUAL(field, "pos_only") ||
+	BU_STR_EQUAL(field, "tick_enable") ||
+	BU_STR_EQUAL(field, "triple_color");
+    if (is_bool) {
+	const int enabled = BU_STR_EQUAL(field, "pos_only") ? axes->pos_only :
+	    BU_STR_EQUAL(field, "tick_enable") ? axes->tick_enabled :
+	    axes->triple_color;
+	const char *suffix = BU_STR_EQUAL(field, "pos_only") ?
+	    "position_only" : BU_STR_EQUAL(field, "tick_enable") ?
+	    "ticks.visible" : "triple_color";
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	value.bool_value = enabled ? 1 : 0;
+	snprintf(property, sizeof(property), "%s%s", prefix, suffix);
+	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
+    }
+
+    const int number = BU_STR_EQUAL(field, "line_width") ?
+	axes->line_width : BU_STR_EQUAL(field, "tick_length") ?
+	axes->tick_length : BU_STR_EQUAL(field, "tick_major_length") ?
+	axes->tick_major_length : BU_STR_EQUAL(field, "ticks_per_major") ?
+	axes->ticks_per_major : BU_STR_EQUAL(field, "tick_threshold") ?
+	axes->tick_threshold : -1;
+    if (number >= 0) {
+	const char *suffix = BU_STR_EQUAL(field, "line_width") ?
+	    "line_width" : BU_STR_EQUAL(field, "tick_length") ?
+	    "ticks.length" : BU_STR_EQUAL(field, "tick_major_length") ?
+	    "ticks.major_length" : BU_STR_EQUAL(field, "ticks_per_major") ?
+	    "ticks.per_major" : "ticks.threshold";
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	value.uint_value = (uint64_t)number;
+	snprintf(property, sizeof(property), "%s%s", prefix, suffix);
+	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
+    }
+    if (BU_STR_EQUAL(field, "tick_interval")) {
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	value.double_value = axes->tick_interval;
+	snprintf(property, sizeof(property), "%sticks.interval", prefix);
+	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
+    }
+    return 0;
+}
+
 int
 to_axes(struct ged *gedp,
 	void *view_ctx,
 	struct bv_axes_state *gasp,
+	const char *visibility_property,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -73,10 +192,13 @@ to_axes(struct ged *gedp,
 	    if (bu_sscanf(argv[3], "%d", &i) != 1)
 		goto bad;
 
-	    if (i)
-		gasp->draw = 1;
-	    else
-		gasp->draw = 0;
+	    if (ged_view_context_display_endpoint_get(view_ctx)) {
+		if (tclcad_axes_visibility_endpoint_set(view_ctx,
+			visibility_property, i) != BRLOBOL_ENDPOINT_PROPERTY_OK)
+		    goto bad;
+	    } else {
+		gasp->draw = i ? 1 : 0;
+	    }
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -776,9 +898,18 @@ to_model_axes(struct ged *gedp,
     struct bv_axes_state axes;
     if (!bv_model_axes_state_get(&axes, view))
 	return BRLCAD_ERROR;
-    int ret = to_axes(gedp, view_ctx, &axes, argc, argv, usage);
-    if (ret == BRLCAD_OK)
-	bv_model_axes_state_set(view, &axes);
+    int ret = to_axes(gedp, view_ctx, &axes,
+	"view.faceplate.model_axes.visible", argc, argv, usage);
+    if (ret == BRLCAD_OK) {
+	if (ged_view_context_display_endpoint_get(view_ctx)) {
+	    if (!(argc == 4 && BU_STR_EQUAL(argv[2], "draw")) && argc > 3 &&
+		!tclcad_axes_endpoint_style_set(view_ctx,
+		    "view.faceplate.model_axes.visible", argv[2], &axes))
+		return BRLCAD_ERROR;
+	} else {
+	    bv_model_axes_state_set(view, &axes);
+	}
+    }
     return ret;
 }
 
@@ -810,9 +941,18 @@ go_view_axes(struct ged *gedp,
     struct bv_axes_state axes;
     if (!bv_view_axes_state_get(&axes, view))
 	return BRLCAD_ERROR;
-    int ret = to_axes(gedp, draw_view_ctx, &axes, argc, argv, usage);
-    if (ret == BRLCAD_OK)
-	bv_view_axes_state_set(view, &axes);
+    int ret = to_axes(gedp, draw_view_ctx, &axes,
+	"view.faceplate.view_axes.visible", argc, argv, usage);
+    if (ret == BRLCAD_OK) {
+	if (ged_view_context_display_endpoint_get(draw_view_ctx)) {
+	    if (!(argc == 4 && BU_STR_EQUAL(argv[2], "draw")) && argc > 3 &&
+		!tclcad_axes_endpoint_style_set(draw_view_ctx,
+		    "view.faceplate.view_axes.visible", argv[2], &axes))
+		return BRLCAD_ERROR;
+	} else {
+	    bv_view_axes_state_set(view, &axes);
+	}
+    }
     return ret;
 }
 
@@ -854,9 +994,18 @@ to_view_axes(struct ged *gedp,
     struct bv_axes_state axes;
     if (!bv_view_axes_state_get(&axes, view))
 	return BRLCAD_ERROR;
-    int ret = to_axes(gedp, view_ctx, &axes, argc, argv, usage);
-    if (ret == BRLCAD_OK)
-	bv_view_axes_state_set(view, &axes);
+    int ret = to_axes(gedp, view_ctx, &axes,
+	"view.faceplate.view_axes.visible", argc, argv, usage);
+    if (ret == BRLCAD_OK) {
+	if (ged_view_context_display_endpoint_get(view_ctx)) {
+	    if (!(argc == 4 && BU_STR_EQUAL(argv[2], "draw")) && argc > 3 &&
+		!tclcad_axes_endpoint_style_set(view_ctx,
+		    "view.faceplate.view_axes.visible", argv[2], &axes))
+		return BRLCAD_ERROR;
+	} else {
+	    bv_view_axes_state_set(view, &axes);
+	}
+    }
     return ret;
 }
 

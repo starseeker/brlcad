@@ -7,6 +7,10 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
+#include "bu/str.h"
+
 #include "brlobol.h"
 
 #include "bu/log.h"
@@ -101,6 +105,22 @@ public:
     SbColor lastBackground;
 };
 
+struct HeadlessProgressiveState {
+    int advances;
+};
+
+static int
+headless_progressive_advance(BRLObolViewController *UNUSED(controller),
+	void *userData,
+	const BRLObolProgressiveOptions *UNUSED(options),
+	BRLObolProgressiveStatus *UNUSED(status))
+{
+    HeadlessProgressiveState *state =
+	static_cast<HeadlessProgressiveState *>(userData);
+    state->advances++;
+    return 1;
+}
+
 static BRLObolWindowDesc
 visible_desc(unsigned int width, unsigned int height)
 {
@@ -161,6 +181,12 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
     BRLObolWindowDesc desc = visible_desc(6, 4);
     CHECK(host.open(&desc) == 0, "headless host opens for render");
 
+    HeadlessProgressiveState progressiveState = {0};
+    const uint64_t progressiveToken =
+	host.getController()->registerProgressiveProvider(
+	    headless_progressive_advance, &progressiveState);
+    CHECK(progressiveToken != 0, "headless host registers progressive provider");
+
     SoGroup *root = static_cast<SoGroup *>(host.getController()->getSceneRoot());
     root->addChild(new SoCube);
     host.getController()->setBackgroundColors(
@@ -171,9 +197,11 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
 	  "successful headless render consumes request");
     CHECK(host.getRenderCount() == 1 && manager->renderCount == 1,
 	  "headless host records render count");
+    CHECK(progressiveState.advances == 1,
+	  "headless host advances progressive work before rendering");
     CHECK(manager->lastBackground == SbColor(0.125f, 0.25f, 0.5f),
 	  "headless render uses controller background policy");
-    CHECK(strcmp(host.getLastRenderReason().getString(), "background") == 0,
+    CHECK(bu_strcmp(host.getLastRenderReason().getString(), "background") == 0,
 	  "headless host records the latest consumed render reason");
     CHECK(host.getLastFrameWidth() == 6 && host.getLastFrameHeight() == 4 &&
 	  host.getLastFrameComponents() == 3,
@@ -187,8 +215,9 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
     CHECK(host.poll(NULL) == 0, "headless poll is idle without pending render");
     host.getController()->requestRender("poll-render");
     CHECK(host.poll(NULL) == 1, "headless poll drains pending render");
-    CHECK(strcmp(host.getLastRenderReason().getString(), "poll-render") == 0,
+    CHECK(bu_strcmp(host.getLastRenderReason().getString(), "poll-render") == 0,
 	  "headless poll records render reason");
+    host.getController()->unregisterProgressiveProvider(progressiveToken);
     return 0;
 }
 
@@ -215,7 +244,7 @@ test_imgstream_headless_poll(HeadlessTestContextManager *UNUSED(manager))
     CHECK(host.getLastFrameWidth() == 3 && host.getLastFrameHeight() == 2 &&
 	  host.getLastFrameComponents() == 4,
 	  "swrast poll records RGBA headless frame");
-    CHECK(strcmp(host.getLastRenderReason().getString(), "fb-flush") == 0,
+    CHECK(bu_strcmp(host.getLastRenderReason().getString(), "fb-flush") == 0,
 	  "swrast poll records framebuffer render reason");
 
     imgstream_fb_close(fb);
@@ -250,7 +279,7 @@ test_headless_factory_endpoint(void)
 	  "endpoint accepts software policy before compatible host selection");
     CHECK(brlobol_display_endpoint_host_open(endpoint, "headless", &desc),
 	  "endpoint opens the built-in headless factory");
-    CHECK(strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
+    CHECK(bu_strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
 	  "headless") == 0,
 	  "endpoint reports built-in headless factory identity");
     CHECK(!brlobol_display_endpoint_render_engine_set(endpoint,
@@ -286,6 +315,7 @@ test_headless_factory_endpoint(void)
 int
 main(int ac, char **av)
 {
+    bu_setprogname(av[0]);
     (void)ac;
     (void)av;
 

@@ -22,6 +22,7 @@
 #include "bu/log.h"
 #include "imgstream/fbserv.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgView.h"
@@ -84,12 +85,16 @@ static void
 find_framebuffer_nodes(SoNode *node, SoBRLImageSource **source,
 		       SoBRLViewportImage **viewport)
 {
-    if (!node || (*source && *viewport))
+    if (!node || ((source == NULL || *source) &&
+		  (viewport == NULL || *viewport))) {
 	return;
+    }
 
-    if (!*source && node->isOfType(SoBRLImageSource::getClassTypeId()))
+    if (source && !*source &&
+	node->isOfType(SoBRLImageSource::getClassTypeId()))
 	*source = static_cast<SoBRLImageSource *>(node);
-    if (!*viewport && node->isOfType(SoBRLViewportImage::getClassTypeId()))
+    if (viewport && !*viewport &&
+	node->isOfType(SoBRLViewportImage::getClassTypeId()))
 	*viewport = static_cast<SoBRLViewportImage *>(node);
 
     if (!node->isOfType(SoGroup::getClassTypeId()))
@@ -103,7 +108,7 @@ find_framebuffer_nodes(SoNode *node, SoBRLImageSource **source,
 static int
 test_qged_obol_fbserv_backend(void)
 {
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(160, 120);
     view.show();
     QApplication::processEvents();
@@ -123,8 +128,14 @@ test_qged_obol_fbserv_backend(void)
 	} \
     } while (0)
 
+    ged_view_active_ctx_set(gedp, view.viewContext());
+    GED_CHECK(ged_view_context_host_attach(gedp, view.viewContext()),
+	"qged framebuffer GED view must attach its endpoint context");
+
     qdm_configure_ged_fbserv_handlers(gedp, &view);
     void *view_ctx = ged_view_active_ctx(gedp);
+    GED_CHECK(ged_draw_obol_controller_opaque_for_view(view_ctx) == controller,
+	"qged framebuffer GED view must share the visible endpoint controller");
     GED_CHECK(view.displayEndpoint() != NULL &&
 	ged_view_context_display_endpoint_get(view_ctx) == view.displayEndpoint(),
 	"qged framebuffer uses the visible view display endpoint");
@@ -162,9 +173,21 @@ test_qged_obol_fbserv_backend(void)
 	      viewportSize[1] == expectedHeight,
 	      "qged Obol controller must track the physical canvas size");
 
+    struct brlobol_endpoint_property_value composition =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    composition.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    composition.string_value = "overlay";
+    GED_CHECK(brlobol_display_endpoint_property_set(view.displayEndpoint(),
+	      "composition.framebuffer.mode", &composition) ==
+	      BRLOBOL_ENDPOINT_PROPERTY_OK,
+	      "qged framebuffer endpoint must enable overlay composition");
+
     SoBRLImageSource *source = NULL;
     SoBRLViewportImage *viewport = NULL;
-    find_framebuffer_nodes(controller->getSceneRoot(), &source, &viewport);
+    /* Framebuffers are retained presentation layers, not model-scene nodes. */
+    find_framebuffer_nodes(controller->getRenderRoot(), NULL, &viewport);
+    if (viewport)
+	source = viewport->getImageSource();
     GED_CHECK(source != NULL && viewport != NULL,
 	      "qged Obol fbserv backend must create framebuffer scene nodes");
     GED_CHECK(viewport->getImageSource() == source,

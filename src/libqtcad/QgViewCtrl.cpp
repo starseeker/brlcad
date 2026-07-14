@@ -25,20 +25,19 @@
 
 #include "common.h"
 
-#include "QgLegacyViewContext.h"
+#include "brlobol/display_endpoint.h"
 #include "bv.h"
 #include "bu/env.h"
 #include "ged.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSession.h"
 #include "qtcad/QgViewCtrl.h"
 #include "qtcad/QgSignalFlags.h"
 
-static qg_legacy_view *
+static struct bv_context *
 qgviewctrl_active_view(const QgViewCtrl *ctrl)
 {
 	QgSession *session = ctrl ? ctrl->session() : nullptr;
-	return session ? session->activeView() : nullptr;
+	return session ? session->activeViewContext() : nullptr;
 }
 
 static struct ged *
@@ -62,7 +61,7 @@ QgViewCtrl::QgViewCtrl(QWidget *pparent, QgSession *session) : QToolBar(pparent)
 	addSeparator();
 
 	raytrace = addAction(QIcon(QPixmap(":images/view/raytrace.png")), "Raytrace");
-	fb_mode = addAction(QIcon(QPixmap(":images/view/framebuffer_off.png")), "Framebuffer Off/Overlay/Underlay");
+	fb_mode = addAction(QIcon(QPixmap(":images/view/framebuffer_off.png")), "Framebuffer Off");
 	fb_clear = addAction(QIcon(QPixmap(":images/view/framebuffer_clear.png")), "Clear Framebuffer");
 
 	// Connect buttons to standard actions
@@ -137,24 +136,30 @@ void
 QgViewCtrl::fb_mode_cmd()
 {
 	QTCAD_SLOT("QgViewCtrl::fb_mode_cmd", 1);
-	qg_legacy_view *v = qgviewctrl_active_view(this);
-	if (!v)
+	struct bv_context *view_ctx = qgviewctrl_active_view(this);
+	if (!view_ctx)
 		return;
-	struct bv *view = qg_legacy_view_bv(v);
-	switch (bv_framebuffer_mode_get(view)) {
-	case 0:
-		bv_framebuffer_mode_set(view, 2);
-		break;
-	case 2:
-		bv_framebuffer_mode_set(view, 1);
-		break;
-	case 1:
-		bv_framebuffer_mode_set(view, 0);
-		break;
-	default:
-		bu_log("Error - invalid fb mode: %d\n",
-			bv_framebuffer_mode_get(view));
-	}
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (ged_view_context_display_property_get(view_ctx,
+		"composition.framebuffer.mode", &value) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+		return;
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+	if (BU_STR_EQUAL(value.string_value, "off"))
+		value.string_value = "underlay";
+	else if (BU_STR_EQUAL(value.string_value, "underlay"))
+		value.string_value = "interlay";
+	else if (BU_STR_EQUAL(value.string_value, "interlay"))
+		value.string_value = "overlay";
+	else if (BU_STR_EQUAL(value.string_value, "overlay"))
+		value.string_value = "off";
+	else
+		return;
+	if (ged_view_context_display_property_set(view_ctx,
+		"composition.framebuffer.mode", &value) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+		return;
 	emit view_changed(QG_VIEW_REFRESH);
 }
 
@@ -162,23 +167,28 @@ void
 QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 {
 	QTCAD_SLOT("QgViewCtrl::do_view_update", 1);
-	qg_legacy_view *v = qgviewctrl_active_view(this);
-	if (!v || !flags)
+	struct bv_context *view_ctx = qgviewctrl_active_view(this);
+	if (!view_ctx || !flags)
 		return;
-	const struct bv *view = qg_legacy_view_bv_const(v);
-	switch (bv_framebuffer_mode_get(view)) {
-	case 0:
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (ged_view_context_display_property_get(view_ctx,
+		"composition.framebuffer.mode", &value) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+		return;
+	if (BU_STR_EQUAL(value.string_value, "off")) {
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_off.png")));
-		break;
-	case 1:
+		fb_mode->setText("Framebuffer Off");
+	} else if (BU_STR_EQUAL(value.string_value, "overlay")) {
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer.png")));
-		break;
-	case 2:
+		fb_mode->setText("Framebuffer Overlay");
+	} else if (BU_STR_EQUAL(value.string_value, "underlay")) {
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_underlay.png")));
-		break;
-	default:
-		bu_log("Error - invalid fb mode: %d\n",
-			bv_framebuffer_mode_get(view));
+		fb_mode->setText("Framebuffer Underlay");
+	} else if (BU_STR_EQUAL(value.string_value, "interlay")) {
+		/* Reuse the overlay glyph until an interlay-specific Qt asset exists. */
+		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer.png")));
+		fb_mode->setText("Framebuffer Interlay");
 	}
 }
 

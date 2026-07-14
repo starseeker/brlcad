@@ -18,7 +18,7 @@ PNG_PIX="`dirname "$MGED"`/png-pix"
 
 rm -f "$OUT" "$PIX_OUT" "$PS_OUT" "$PLOT_OUT" "$LOG"
 
-printf 'dm open --host headless --renderer sw\ndm host\ndm size 512 512\ndm size\ndm bg 0 0 32 64 0 0\ndraw all.g\nautoview\nrefresh\npostscript -c ObolSmoke -l 3 -z %s\nplot %s\nscreengrab %s\nquit\n' "$PS_OUT" "$PLOT_OUT" "$OUT" \
+printf 'regdebug\nset\ndm open --host headless --renderer sw\ndm host\ndm size 512 512\ndm size\ndm bg 0 0 32 64 0 0\ndraw all.g\nautoview\nrefresh\nadc draw 1\nputs OBOL_ADC_ON\ndm get view.faceplate.adc.visible\nadc draw 0\nputs OBOL_ADC_OFF\ndm get view.faceplate.adc.visible\ndm set view.faceplate.center_dot.color 0/1/0\nrefresh\nputs OBOL_CENTER_GREEN\ndm get view.faceplate.center_dot.color\nrset cs center_dot 255 0 0\nputs OBOL_CENTER_RED\ndm get view.faceplate.center_dot.color\nrefresh\nputs OBOL_CENTER_AFTER_REFRESH\ndm get view.faceplate.center_dot.color\ndm set view.faceplate.model_axes.color 0/1/0\nrefresh\nputs OBOL_AXES_GREEN\ndm get view.faceplate.model_axes.color\nrset cs model_axes 255 0 0\nputs OBOL_AXES_RED\ndm get view.faceplate.model_axes.color\nrefresh\nputs OBOL_AXES_AFTER_REFRESH\ndm get view.faceplate.model_axes.color\ndm set view.faceplate.adc.line_color 0/1/0\ndm set view.faceplate.adc.tick_color 0/1/0\nrefresh\nputs OBOL_ADC_STYLE_GREEN\ndm get view.faceplate.adc.line_color\ndm get view.faceplate.adc.tick_color\nrset cs adc_line 255 0 0\nrset cs adc_tick 0 0 255\nputs OBOL_ADC_STYLE_SCHEME\ndm get view.faceplate.adc.line_color\ndm get view.faceplate.adc.tick_color\npostscript -c ObolSmoke -l 3 -z %s\nplot %s\nscreengrab %s\nquit\n' "$PS_OUT" "$PLOT_OUT" "$OUT" \
     | "$MGED" -c -a nu -r "$DB" > "$LOG" 2>&1
 
 if ! grep -qx "headless" "$LOG"; then
@@ -29,6 +29,64 @@ fi
 
 if ! grep -qx '512 512' "$LOG"; then
     echo "MGED Obol smoke did not preserve the requested endpoint size" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if grep -Eq '(^|[[:space:]])cache=' "$LOG"; then
+    echo "MGED still exposes retired backend-cache policy" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -Fq 'invalid command name "regdebug"' "$LOG"; then
+    echo "MGED still accepts retired display-manager debug control" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -A1 -Fx 'OBOL_ADC_ON' "$LOG" | grep -Fx 'true' >/dev/null ||
+    ! grep -A1 -Fx 'OBOL_ADC_OFF' "$LOG" | grep -Fx 'false' >/dev/null; then
+    echo "MGED adc command did not update the Obol visibility policy" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -A1 -Fx 'OBOL_CENTER_GREEN' "$LOG" | grep -Fx '0/1/0' >/dev/null; then
+    echo "MGED Obol endpoint faceplate override did not survive refresh" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -A1 -Fx 'OBOL_CENTER_RED' "$LOG" | grep -Fx '1/0/0' >/dev/null ||
+    ! grep -A1 -Fx 'OBOL_CENTER_AFTER_REFRESH' "$LOG" | grep -Fx '1/0/0' >/dev/null; then
+    echo "MGED color-scheme update did not replace the endpoint faceplate override" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -A1 -Fx 'OBOL_AXES_GREEN' "$LOG" | grep -Fx '0/1/0' >/dev/null; then
+    echo "MGED endpoint axes override did not survive refresh" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -A1 -Fx 'OBOL_AXES_RED' "$LOG" | grep -Fx '1/0/0' >/dev/null ||
+    ! grep -A1 -Fx 'OBOL_AXES_AFTER_REFRESH' "$LOG" | grep -Fx '1/0/0' >/dev/null; then
+    echo "MGED color-scheme update did not republish endpoint axes colors" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if [ "$(grep -A2 -Fx 'OBOL_ADC_STYLE_GREEN' "$LOG" | grep -Fx '0/1/0' | wc -l)" -ne 2 ]; then
+    echo "MGED endpoint ADC style override did not survive refresh" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -A2 -Fx 'OBOL_ADC_STYLE_SCHEME' "$LOG" | grep -Fx '1/0/0' >/dev/null ||
+    ! grep -A2 -Fx 'OBOL_ADC_STYLE_SCHEME' "$LOG" | grep -Fx '0/0/1' >/dev/null; then
+    echo "MGED color-scheme update did not republish endpoint ADC style" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

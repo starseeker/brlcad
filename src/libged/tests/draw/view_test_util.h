@@ -24,6 +24,10 @@ __BEGIN_DECLS
 int draw_test_obol_view_init(struct ged *gedp, void *view_ctx,
 	int width, int height);
 
+/* Advance the endpoint controller until no progressive work remains. */
+int draw_test_obol_progressive_drain(struct ged *gedp, void *view_ctx,
+	unsigned int max_attempts, unsigned int sleep_milliseconds);
+
 __END_DECLS
 
 static inline struct bv *

@@ -41,7 +41,7 @@
 #include "ged/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 #if defined(HAVE_FDOPEN) && !defined(HAVE_DECL_FDOPEN)
 extern FILE *fdopen(int fd, const char *mode);

@@ -82,7 +82,6 @@ extern int f_qray(ClientData, Tcl_Interp *, int, const char *[]);
 extern int f_quit(ClientData, Tcl_Interp *, int, const char *[]);
 extern int f_red(ClientData, Tcl_Interp *, int, const char *[]);
 extern int f_refresh(ClientData, Tcl_Interp *, int, const char *[]);
-extern int f_regdebug(ClientData, Tcl_Interp *, int, const char *[]);
 extern int f_release(ClientData, Tcl_Interp *, int, const char *[]);
 extern int f_rfarb(ClientData, Tcl_Interp *, int, const char *[]);
 extern int f_rmats(ClientData, Tcl_Interp *, int, const char *[]);

@@ -140,14 +140,24 @@ public:
 	if (!new_gedp || !new_view_ctx || !controller)
 	    return BRLCAD_ERROR;
 
+	/* A GED session has one fbserv stream.  Its capture provider belongs to
+	 * exactly one endpoint, so remove the previous provider before moving the
+	 * stream to another view. */
+	if (view_ctx != new_view_ctx)
+	    clearCaptureProviderLocked(view_ctx);
 	gedp = new_gedp;
 	view_ctx = new_view_ctx;
 	bindCaptureProviderLocked();
 	present_on_flush = requested_present_on_flush ? 1 : 0;
 	BRLObolWindowHost *active_host = window_host ? window_host :
 	    &default_host;
-	if (active_host->getController() != controller)
+	if (active_host->getController() != controller) {
+	    /* Changing a host controller closes its retained framebuffer nodes.
+	     * Close the stream first so it can reopen and attach to the new
+	     * controller even when the generic host pointer itself is unchanged. */
+	    framebuffer.close();
 	    active_host->attachController(controller, FALSE);
+	}
 	framebuffer.setHost(active_host);
 
 	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
@@ -166,7 +176,13 @@ public:
 
 	if (framebuffer.configure(width, height) != 0)
 	    return BRLCAD_ERROR;
-	return framebuffer.ensure() == 0 ? BRLCAD_OK : BRLCAD_ERROR;
+	if (framebuffer.ensure() != 0)
+	    return BRLCAD_ERROR;
+	int composition = view ? bv_framebuffer_mode_get(view) : 0;
+	if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	    composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	    composition = BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF;
+	return setCompositionLocked(composition);
     }
 
     int info(struct fbserv_fb_info *fbinfo)
@@ -417,21 +433,24 @@ public:
 	return 1;
     }
 
-    int setVisible(int visible)
+    int setComposition(int composition)
     {
 	std::lock_guard<std::mutex> guard(lock);
+	return setCompositionLocked(composition);
+    }
+
+    int setCompositionLocked(int composition)
+    {
+	if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	    composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	    return BRLCAD_ERROR;
 	BRLObolWindowHost *host = framebuffer.host();
 	imgstream_fb_t *fb = framebuffer.framebuffer();
-	SoBRLViewportImage *viewport = host && fb ?
-	    host->getFramebufferViewportImage(fb) : NULL;
-	if (!viewport)
+	if (!host || !fb)
 	    return BRLCAD_ERROR;
-	viewport->visible = visible ? TRUE : FALSE;
-	if (viewport->rebuildGeometry() != 0)
-	    return BRLCAD_ERROR;
-	if (host->getController())
-	    host->getController()->requestRender("fb-visibility");
-	return BRLCAD_OK;
+	return host->setFramebufferComposition(fb,
+	    static_cast<BRLObolFramebufferComposition>(composition)) == 0 ?
+	    BRLCAD_OK : BRLCAD_ERROR;
     }
 
     int poll()
@@ -523,13 +542,19 @@ private:
 		endpoint, ged_obol_capture_framebuffer, this);
     }
 
-    void clearCaptureProvider()
+    void clearCaptureProviderLocked(void *context)
     {
-	brlobol_display_endpoint_t *endpoint = view_ctx ?
-	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
+	brlobol_display_endpoint_t *endpoint = context ?
+	    ged_view_context_display_endpoint_get(context) : NULL;
 	if (endpoint)
 	    (void)brlobol_display_endpoint_framebuffer_capture_provider_set(
 		endpoint, NULL, this);
+    }
+
+    void clearCaptureProvider()
+    {
+	std::lock_guard<std::mutex> guard(lock);
+	clearCaptureProviderLocked(view_ctx);
     }
 
     void notifyUpdatedLocked()
@@ -713,7 +738,11 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
 	}
     }
 
-    if (install_default_handlers)
+
+    /* A direct host install may supply its transport immediately afterward
+     * (Qt/Tk), but the bridge must still be independently closable during
+     * that interval.  Preserve any application transport already installed. */
+    if (install_default_handlers || !fbs_can_close(fbs))
 	fbs_set_transport(fbs, &ged_obol_transport_ops);
 
     return bridge->configure(gedp, view_ctx,
@@ -788,12 +817,12 @@ ged_obol_fbserv_release(struct ged *gedp)
 }
 
 extern "C" int
-ged_obol_fbserv_visibility_set(struct ged *gedp, int visible)
+ged_obol_fbserv_composition_set(struct ged *gedp, int mode)
 {
     if (!gedp || !gedp->ged_fbs)
 	return BRLCAD_ERROR;
     GedObolFbservBridge *bridge = bridge_from_fbs(gedp->ged_fbs);
-    return bridge ? bridge->setVisible(visible) : BRLCAD_ERROR;
+    return bridge ? bridge->setComposition(mode) : BRLCAD_ERROR;
 }
 
 extern "C" GED_EXPORT int
@@ -841,16 +870,6 @@ ged_draw_obol_view_display_image(struct ged *gedp,
 	(unsigned int)height);
     if (!controller->syncCameraFromViewContext(view_ctx))
 	return -1;
-
-    struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
-    if (view && bv_background_state_get(&background, view))
-	controller->setBackgroundColors(
-	    SbColor(background.bottom[0] / 255.0f,
-		background.bottom[1] / 255.0f,
-		background.bottom[2] / 255.0f),
-	    SbColor(background.top[0] / 255.0f,
-		background.top[1] / 255.0f,
-		background.top[2] / 255.0f));
 
     BRLObolProgressiveStatus progressiveStatus;
     int ret = controller->renderToImage(image, flip, alpha, NULL,

@@ -1130,6 +1130,10 @@ GED_EXPORT extern int ged_draw_obol_scene_database_autoview_bounds(
 	vect_t *min,
 	vect_t *max,
 	int *empty_out);
+GED_EXPORT extern int ged_draw_obol_progressive_autoview_follow(
+	struct ged *gedp,
+	void *view_ctx,
+	fastf_t factor);
 GED_EXPORT extern void ged_draw_obol_preserved_sources_free(
 	struct ged *gedp);
 GED_EXPORT extern int ged_draw_obol_highlight_state_set(

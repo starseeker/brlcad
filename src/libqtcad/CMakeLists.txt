@@ -49,7 +49,6 @@ set(
   QgFlowLayout.cpp
   QgGeomImport.cpp
   QgKeyVal.cpp
-  QgLegacyView.cpp
   QgMeasureFilter.cpp
   QgModel.cpp
   QgObolDrawSync.cpp
@@ -140,7 +139,6 @@ set(
   ${qtcad_hdrs}
   QgCanvasInput.h
   QgCanvasState.h
-  QgLegacyViewContext.h
   QgObolDrawSyncPrivate.h
   QgObolOverlaySyncPrivate.h
   QgObolSelectionSyncPrivate.h

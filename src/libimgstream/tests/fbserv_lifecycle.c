@@ -8,6 +8,8 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -80,6 +82,7 @@ append_packet(unsigned char *wire, size_t offset, unsigned short type,
 int
 main(void)
 {
+    bu_setprogname("fbserv_lifecycle");
     static const struct fbserv_fb_ops backend_ops = {
 	.info = backend_info,
 	.writerect = backend_writerect

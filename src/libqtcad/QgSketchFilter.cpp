@@ -25,6 +25,8 @@
 
 #include "common.h"
 
+#include "bv.h"
+
 #include <math.h>
 
 extern "C" {
@@ -37,16 +39,14 @@ extern "C" {
 }
 
 #include "qtcad/QgSketchFilter.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
-#include "QgLegacyViewContext.h"
 
-static qg_legacy_view *
-qg_sketch_filter_legacy_view(const QgSketchFilter *filter)
+static void *
+qg_sketch_filter_view_context(const QgSketchFilter *filter)
 {
 	QgView *display = filter ? filter->view_widget() : nullptr;
-	return display ? display->view() : nullptr;
+	return display ? display->viewContext() : nullptr;
 }
 
 static void
@@ -77,13 +77,13 @@ QgSketchFilter::QgSketchFilter(QObject *parent)
 void
 QgSketchFilter::screen_to_view(int sx, int sy, vect_t mvec) const
 {
-	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
+	void *v = qg_sketch_filter_view_context(this);
 	if (!v) {
 		VSETALL(mvec, 0.0);
 		return;
 	}
 	fastf_t vx = 0.0, vy = 0.0;
-	if (!bv_screen_to_view(&vx, &vy, qg_legacy_view_bv_const(v),
+	if (!bv_screen_to_view(&vx, &vy, bv_context_view_const(static_cast<const struct bv_context *>(v)),
 		(fastf_t)sx, (fastf_t)sy)) {
 		VSETALL(mvec, 0.0);
 		return;
@@ -95,7 +95,7 @@ bool
 QgSketchFilter::screen_to_uv(int sx, int sy,
                              fastf_t *u_out, fastf_t *v_out) const
 {
-	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
+	void *v = qg_sketch_filter_view_context(this);
 	if (!v || !es)
 		return false;
 
@@ -107,7 +107,7 @@ QgSketchFilter::screen_to_uv(int sx, int sy,
 
 	/* Unproject screen pixel → model-space 3-D point */
 	point_t p3d;
-	if (!bv_screen_to_model(p3d, qg_legacy_view_bv_const(v),
+	if (!bv_screen_to_model(p3d, bv_context_view_const(static_cast<const struct bv_context *>(v)),
 		(fastf_t)sx, (fastf_t)sy))
 		return false;
 
@@ -133,7 +133,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 	if (!screen_to_uv(sx, sy, u_out, v_out))
 		return false;
 
-	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
+	void *v = qg_sketch_filter_view_context(this);
 	if (snap_px <= 0.0 || !es || !v)
 		return true;
 
@@ -145,7 +145,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 	/* Model→view transform (including any edit transform) */
 	mat_t m2v;
 	mat_t model2view;
-	(void)bv_model2view_get(model2view, qg_legacy_view_bv_const(v));
+	(void)bv_model2view_get(model2view, bv_context_view_const(static_cast<const struct bv_context *>(v)));
 	bn_mat_mul(m2v, model2view, es->model_changes);
 
 	/* Cursor in view space */
@@ -154,7 +154,7 @@ QgSketchFilter::snap_vertex_uv(int sx, int sy,
 
 	/* Convert snap_px to view-space units.
 	 * One pixel = 2 / gv_width view units in X. */
-	int view_width = bv_width_get(qg_legacy_view_bv_const(v));
+	int view_width = bv_width_get(bv_context_view_const(static_cast<const struct bv_context *>(v)));
 	fastf_t px_to_view = (view_width > 0)
 	                     ? (2.0 / (fastf_t)view_width)
 	                     : 0.005;
@@ -457,9 +457,9 @@ QgSketchPickSegmentFilter::eventFilter(QObject *, QEvent *e)
 
 		/* Build model→view matrix including any edit transform */
 		mat_t m2v;
-		qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
+		void *v = qg_sketch_filter_view_context(this);
 		mat_t model2view;
-		(void)bv_model2view_get(model2view, qg_legacy_view_bv_const(v));
+		(void)bv_model2view_get(model2view, bv_context_view_const(static_cast<const struct bv_context *>(v)));
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */
@@ -656,7 +656,7 @@ sketch_arc_center_uv(const struct rt_sketch_internal *skt,
 bool
 QgSketchArcRadiusFilter::eventFilter(QObject *, QEvent *e)
 {
-	qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
+	void *v = qg_sketch_filter_view_context(this);
 	if (!es || !v)
 		return false;
 
@@ -802,9 +802,9 @@ QgSketchSetTangencyFilter::eventFilter(QObject *, QEvent *e)
 
 		/* Build model→view matrix */
 		mat_t m2v;
-		qg_legacy_view *v = qg_sketch_filter_legacy_view(this);
+		void *v = qg_sketch_filter_view_context(this);
 		mat_t model2view;
-		(void)bv_model2view_get(model2view, qg_legacy_view_bv_const(v));
+		(void)bv_model2view_get(model2view, bv_context_view_const(static_cast<const struct bv_context *>(v)));
 		bn_mat_mul(m2v, model2view, es->model_changes);
 
 		/* Cursor in view space */

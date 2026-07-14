@@ -1,3 +1,9 @@
+/*                 F B _ R E M O T E . H
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ */
 /* Private libimgstream remote framebuffer client contract. */
 
 #ifndef LIBIMGSTREAM_FB_REMOTE_H

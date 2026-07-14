@@ -52,7 +52,7 @@ class CADViewSettings : public QWidget
 	QCheckBox *scale_ckbx;
 	QCheckBox *viewaxes_ckbx;
 
-	/* Framebuffer mode: index 0=off, 1=overlay, 2=underlay */
+	/* Framebuffer mode: index 0=off, 1=overlay, 2=underlay, 3=interlay */
 	QComboBox *fb_mode_combo;
 
 	/* View parameters group */

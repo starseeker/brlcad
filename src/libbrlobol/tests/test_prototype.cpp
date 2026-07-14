@@ -7,7 +7,11 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include "brlobol.h"
+
+#include <obol/cad/SoCADAssembly.h>
 
 #include "bg/line_layer.h"
 #include "bu/app.h"
@@ -54,7 +58,7 @@ public:
     PrototypeTiming()
     {
 	const char *enabled_env = getenv("BRLOBOL_PROTOTYPE_TIMING");
-	enabled = (enabled_env && enabled_env[0] && strcmp(enabled_env, "0") != 0);
+	enabled = (enabled_env && enabled_env[0] && bu_strcmp(enabled_env, "0") != 0);
 	last = bu_gettime();
 	start = last;
     }
@@ -1213,6 +1217,38 @@ write_test_db(char *dbpath, size_t dbpath_len)
 	return 0;
     }
 
+    /* Exercise the compact registry with many occurrences of one shared part.
+     * Distinct member transforms must remain independently addressable. */
+    struct wmember largeAssembly;
+    BU_LIST_INIT(&largeAssembly.l);
+    for (int y = 0; y < 32; y++) {
+	for (int x = 0; x < 32; x++) {
+	    if (x == 31 && y == 31)
+		continue;
+	    mat_t member_mat;
+	    MAT_IDN(member_mat);
+	    MAT_DELTAS(member_mat, 10.0 * x, 10.0 * y, 0.0);
+	    if (!mk_addmember("box.s", &largeAssembly.l, member_mat,
+		    WMOP_UNION)) {
+		wdb_close(wdbp);
+		return 0;
+	    }
+	}
+    }
+    mat_t marker_mat;
+    MAT_IDN(marker_mat);
+    MAT_DELTAS(marker_mat, 310.0, 310.0, 0.0);
+    if (!mk_addmember("ball.s", &largeAssembly.l, marker_mat,
+	    WMOP_UNION)) {
+	wdb_close(wdbp);
+	return 0;
+    }
+    if (mk_lcomb(wdbp, "large_assembly.c", &largeAssembly, 0, NULL,
+	NULL, NULL, 0) != 0) {
+	wdb_close(wdbp);
+	return 0;
+    }
+
     wdb_close(wdbp);
     return 1;
 }
@@ -1496,7 +1532,7 @@ exercise_generated_primitive(struct db_i *dbip,
 	source->getRealizedShapeCount() != 0 ||
 	!source->getRealizedShapeSummary(0, wireSummary) ||
 	wireSummary.segmentCount < min_wire_segments ||
-	strcmp(wireSummary.path.getString(), fullPath.getString()) != 0) {
+	bu_strcmp(wireSummary.path.getString(), fullPath.getString()) != 0) {
 	fprintf(stderr, "%s wire shape did not meet segment/path expectations\n", name);
 	root->unref();
 	return 0;
@@ -1680,7 +1716,7 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
 	source->getRealizedShapeCount() != 0 ||
 	!source->getRealizedShapeSummary(0, shadedSummary) ||
 	shadedSummary.segmentCount < min_segments ||
-	strcmp(shadedSummary.path.getString(), fullPath.getString()) != 0) {
+	bu_strcmp(shadedSummary.path.getString(), fullPath.getString()) != 0) {
 	fprintf(stderr, "%s shaded vlist realization produced meshes=%d shapes=%d\n",
 		name, source->getRealizedMeshCount(),
 		source->getRealizedShapeCount());
@@ -1744,7 +1780,7 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
     const SoBRLPickDetail *pickDetail =
 	static_cast<const SoBRLPickDetail *>(rawDetail);
     if (pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT ||
-	strcmp(pickDetail->getPath().getString(),
+	bu_strcmp(pickDetail->getPath().getString(),
 	       fullPath.getString()) != 0) {
 	fprintf(stderr, "%s shaded vlist pick detail did not preserve line/path identity\n",
 		name);
@@ -1760,7 +1796,7 @@ exercise_generated_primitive_shaded_vlist(struct db_i *dbip,
     if (!snapAction.hasCandidate() ||
 	snapAction.getKind() != SoBRLSnapAction::LINE_NEAREST ||
 	snapAction.getPrimitiveIndex() != 0 ||
-	strcmp(snapAction.getPath().getString(),
+	bu_strcmp(snapAction.getPath().getString(),
 	       fullPath.getString()) != 0 ||
 	!nearly_equal(snapAction.getPoint()[0], segmentMidpoint[0]) ||
 	!nearly_equal(snapAction.getPoint()[1], segmentMidpoint[1]) ||
@@ -1844,23 +1880,23 @@ exercise_generated_material_object(struct db_i *dbip,
     SbString propertyName;
     SbString propertyValue;
     if (!material ||
-	strcmp(material->sourcePath.getValue().getString(),
+	bu_strcmp(material->sourcePath.getValue().getString(),
 	       fullPath.getString()) != 0 ||
-	strcmp(material->sourceName.getValue().getString(), name) != 0 ||
-	strcmp(material->sourceType.getValue().getString(),
+	bu_strcmp(material->sourceName.getValue().getString(), name) != 0 ||
+	bu_strcmp(material->sourceType.getValue().getString(),
 	       "material") != 0 ||
-	strcmp(material->materialName.getValue().getString(),
+	bu_strcmp(material->materialName.getValue().getString(),
 	       "obol-test-material") != 0 ||
 	material->parentName.getValue().getLength() != 0 ||
-	strcmp(material->materialSource.getValue().getString(),
+	bu_strcmp(material->materialSource.getValue().getString(),
 	       "test") != 0 ||
 	material->getPropertyCount() != 1 ||
 	!material->getProperty(0, group, propertyName, propertyValue) ||
-	strcmp(group.getString(), "physical") != 0 ||
-	strcmp(propertyName.getString(), "density") != 0 ||
-	strcmp(propertyValue.getString(), "1.0") != 0 ||
+	bu_strcmp(group.getString(), "physical") != 0 ||
+	bu_strcmp(propertyName.getString(), "density") != 0 ||
+	bu_strcmp(propertyValue.getString(), "1.0") != 0 ||
 	!material->findProperty("physical", "density", density) ||
-	strcmp(density.getString(), "1.0") != 0) {
+	bu_strcmp(density.getString(), "1.0") != 0) {
 	fprintf(stderr, "%s %s material object did not preserve metadata fields\n",
 		name, modeName);
 	root->unref();
@@ -2470,6 +2506,7 @@ exercise_generated_pnts_attribute_variant(struct db_i *dbip,
 int
 main(int UNUSED(argc), const char **UNUSED(argv))
 {
+    bu_setprogname("test_brlobol_prototype");
     PrototypeTiming timing;
 
     brlobol_init(NULL);
@@ -2533,7 +2570,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("pick should return a BRL-CAD Obol pick detail");
 
     const SoBRLPickDetail *pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "/prototype/arb8") != 0)
+    if (bu_strcmp(pickDetail->getPath().getString(), "/prototype/arb8") != 0)
 	FAIL("pick detail should preserve database path identity");
     if (pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT)
 	FAIL("pick detail should identify a line segment");
@@ -2546,7 +2583,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("snap action should find a vlist line candidate");
     if (snapAction.getKind() != SoBRLSnapAction::LINE_NEAREST)
 	FAIL("snap action should prefer nearest point on line for this query");
-    if (strcmp(snapAction.getPath().getString(), "/prototype/arb8") != 0)
+    if (bu_strcmp(snapAction.getPath().getString(), "/prototype/arb8") != 0)
 	FAIL("snap action should preserve database path identity");
     if (!nearly_equal(snapAction.getPoint()[0], halfExtent) ||
 	!nearly_equal(snapAction.getPoint()[1], 0.2f))
@@ -2559,7 +2596,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     midpointSnap.apply(root);
     if (!midpointSnap.hasCandidate() ||
 	midpointSnap.getKind() != SoBRLSnapAction::MIDPOINT ||
-	strcmp(midpointSnap.getPath().getString(), "/prototype/arb8") != 0 ||
+	bu_strcmp(midpointSnap.getPath().getString(), "/prototype/arb8") != 0 ||
 	!nearly_equal(midpointSnap.getPoint()[0], 0.0f) ||
 	!nearly_equal(midpointSnap.getPoint()[1], -halfExtent))
 	FAIL("snap action should support explicit midpoint-only policy");
@@ -2571,7 +2608,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     centerSnap.apply(root);
     if (!centerSnap.hasCandidate() ||
 	centerSnap.getKind() != SoBRLSnapAction::CENTER ||
-	strcmp(centerSnap.getPath().getString(), "/prototype/arb8") != 0 ||
+	bu_strcmp(centerSnap.getPath().getString(), "/prototype/arb8") != 0 ||
 	!nearly_equal(centerSnap.getPoint()[0], 0.0f) ||
 	!nearly_equal(centerSnap.getPoint()[1], 0.0f))
 	FAIL("snap action should support explicit center-only policy");
@@ -2586,7 +2623,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     planeSnap.apply(root);
     if (!planeSnap.hasCandidate() ||
 	planeSnap.getKind() != SoBRLSnapAction::CONSTRUCTION_PLANE ||
-	strcmp(planeSnap.getPath().getString(), "construction::workplane") != 0 ||
+	bu_strcmp(planeSnap.getPath().getString(), "construction::workplane") != 0 ||
 	!nearly_equal(planeSnap.getPoint()[0], 0.4f) ||
 	!nearly_equal(planeSnap.getPoint()[1], 0.6f) ||
 	!nearly_equal(planeSnap.getPoint()[2], 0.0f))
@@ -2618,7 +2655,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(bbox.getMax()[1], halfExtent))
 	FAIL("measure action should report synthetic source bounds");
     if (!measureAction.hasNearestSegment() ||
-	strcmp(measureAction.getNearestPath().getString(), "/prototype/arb8") != 0 ||
+	bu_strcmp(measureAction.getNearestPath().getString(), "/prototype/arb8") != 0 ||
 	!nearly_equal(measureAction.getNearestPoint()[0], halfExtent) ||
 	!nearly_equal(measureAction.getNearestPoint()[1], 0.2f))
 	FAIL("measure action should report nearest synthetic segment identity and point");
@@ -2637,7 +2674,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     angleMeasure.setQueryPoint(SbVec3f(halfExtent, halfExtent, 0.0f));
     angleMeasure.apply(root);
     if (!angleMeasure.hasAngle() ||
-	strcmp(angleMeasure.getAnglePath().getString(), "/prototype/arb8") != 0 ||
+	bu_strcmp(angleMeasure.getAnglePath().getString(), "/prototype/arb8") != 0 ||
 	!nearly_equal(angleMeasure.getAngleDegrees(), 90.0f) ||
 	!nearly_equal(angleMeasure.getAnglePoint()[0], halfExtent) ||
 	!nearly_equal(angleMeasure.getAnglePoint()[1], halfExtent) ||
@@ -2868,7 +2905,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	if (!sparseAngleMeasure.hasSegments() ||
 	    sparseAngleMeasure.getSegmentCount() != disconnectedSegmentCount + 2 ||
 	    !sparseAngleMeasure.hasAngle() ||
-	    strcmp(sparseAngleMeasure.getAnglePath().getString(),
+	    bu_strcmp(sparseAngleMeasure.getAnglePath().getString(),
 		   "/prototype/sparse-angle-bucket") != 0 ||
 	    !nearly_equal(sparseAngleMeasure.getAngleDegrees(), 90.0f) ||
 	    !nearly_equal(sparseAngleMeasure.getAnglePoint()[0], 1.0f) ||
@@ -2909,7 +2946,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	viewController.setViewportSize(320, 240);
 	SbString renderReason;
 	if (!viewController.isRenderRequested() ||
-	    strcmp(viewController.getRenderReason().getString(), "viewport-size") != 0 ||
+	    bu_strcmp(viewController.getRenderReason().getString(), "viewport-size") != 0 ||
 	    viewController.getViewportRegion().getWindowSize()[0] != 320 ||
 	    viewController.getViewportRegion().getWindowSize()[1] != 240 ||
 	    viewController.getViewport()->getViewportRegion().getWindowSize()[0] != 320 ||
@@ -2918,7 +2955,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    viewController.getRenderManager()->getViewportRegion().getWindowSize()[1] != 240)
 	    FAIL("view controller should track viewport-driven render requests");
 	if (!viewController.consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "viewport-size") != 0 ||
+	    bu_strcmp(renderReason.getString(), "viewport-size") != 0 ||
 	    viewController.isRenderRequested() ||
 	    viewController.consumeRenderRequest(NULL))
 	    FAIL("view controller should consume render requests atomically");
@@ -3092,9 +3129,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (preview->realizedSourceRevision.getValue() != 4 ||
 	preview->realizedInputsRevision.getValue() != 2)
 	FAIL("edit preview should synchronize realized revision fields");
-    if (strcmp(previewShape->editIntentId.getValue().getString(),
+    if (bu_strcmp(previewShape->editIntentId.getValue().getString(),
 	       "preview::drag-box") != 0 ||
-	strcmp(previewShape->editIntentRole.getValue().getString(),
+	bu_strcmp(previewShape->editIntentRole.getValue().getString(),
 	       "preview") != 0 ||
 	!previewShape->editEmphasis.getValue())
 	FAIL("edit preview should publish typed edit-intent metadata");
@@ -3123,10 +3160,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("edit preview pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "preview::drag-box/outline") != 0 ||
-	strcmp(pickDetail->getEditIntentId().getString(),
+    if (bu_strcmp(pickDetail->getPath().getString(), "preview::drag-box/outline") != 0 ||
+	bu_strcmp(pickDetail->getEditIntentId().getString(),
 	       "preview::drag-box") != 0 ||
-	strcmp(pickDetail->getEditIntentRole().getString(),
+	bu_strcmp(pickDetail->getEditIntentRole().getString(),
 	       "preview") != 0)
 	FAIL("edit preview pick should preserve preview and edit-intent identity");
 
@@ -3136,10 +3173,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     previewSnap.apply(root);
     if (!previewSnap.hasCandidate())
 	FAIL("edit preview snap should find transformed preview geometry");
-    if (strcmp(previewSnap.getPath().getString(), "preview::drag-box/outline") != 0)
+    if (bu_strcmp(previewSnap.getPath().getString(), "preview::drag-box/outline") != 0)
 	FAIL("edit preview snap should preserve preview identity");
-    if (strcmp(previewSnap.getEditIntentId().getString(), "preview::drag-box") != 0 ||
-	strcmp(previewSnap.getEditIntentRole().getString(), "preview") != 0)
+    if (bu_strcmp(previewSnap.getEditIntentId().getString(), "preview::drag-box") != 0 ||
+	bu_strcmp(previewSnap.getEditIntentRole().getString(), "preview") != 0)
 	FAIL("edit preview snap should preserve edit-intent metadata");
     if (!nearly_equal(previewSnap.getPoint()[0], 41.0f) ||
 	!nearly_equal(previewSnap.getPoint()[1], 0.2f))
@@ -3162,12 +3199,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(bbox.getMax()[1], 1.0f))
 	FAIL("edit preview measure should report transformed bounds");
     if (!previewMeasure.hasNearestSegment() ||
-	strcmp(previewMeasure.getNearestPath().getString(), "preview::drag-box/outline") != 0 ||
+	bu_strcmp(previewMeasure.getNearestPath().getString(), "preview::drag-box/outline") != 0 ||
 	!nearly_equal(previewMeasure.getNearestPoint()[0], 41.0f) ||
 	!nearly_equal(previewMeasure.getNearestPoint()[1], 0.2f))
 	FAIL("edit preview measure should report transformed preview identity");
-    if (strcmp(previewMeasure.getNearestEditIntentId().getString(), "preview::drag-box") != 0 ||
-	strcmp(previewMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
+    if (bu_strcmp(previewMeasure.getNearestEditIntentId().getString(), "preview::drag-box") != 0 ||
+	bu_strcmp(previewMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
 	FAIL("edit preview measure should preserve edit-intent metadata");
 
     SoBRLExportAction previewExport;
@@ -3180,9 +3217,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(previewExport.getLine(0).b[0], 41.0f))
 	FAIL("edit preview export should apply Obol transform state");
     if (!previewExport.getLine(0).editEmphasis ||
-	strcmp(previewExport.getLine(0).editIntentId.getString(),
+	bu_strcmp(previewExport.getLine(0).editIntentId.getString(),
 	       "preview::drag-box") != 0 ||
-	strcmp(previewExport.getLine(0).editIntentRole.getString(),
+	bu_strcmp(previewExport.getLine(0).editIntentRole.getString(),
 	       "preview") != 0)
 	FAIL("edit preview export should preserve edit-intent metadata");
 
@@ -3247,7 +3284,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("edit preview replacement pick should return a current BRL-CAD detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "preview::drag-box/replacement-outline") != 0)
+    if (bu_strcmp(pickDetail->getPath().getString(), "preview::drag-box/replacement-outline") != 0)
 	FAIL("edit preview replacement pick should preserve current preview identity");
 
     SoBRLSnapAction replacementSnap;
@@ -3255,10 +3292,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     replacementSnap.setTolerance(0.3f);
     replacementSnap.apply(root);
     if (!replacementSnap.hasCandidate() ||
-	strcmp(replacementSnap.getPath().getString(), "preview::drag-box/replacement-outline") != 0)
+	bu_strcmp(replacementSnap.getPath().getString(), "preview::drag-box/replacement-outline") != 0)
 	FAIL("edit preview replacement snap should use only current preview identity");
-    if (strcmp(replacementSnap.getEditIntentId().getString(), "preview::drag-box") != 0 ||
-	strcmp(replacementSnap.getEditIntentRole().getString(), "preview") != 0)
+    if (bu_strcmp(replacementSnap.getEditIntentId().getString(), "preview::drag-box") != 0 ||
+	bu_strcmp(replacementSnap.getEditIntentRole().getString(), "preview") != 0)
 	FAIL("edit preview replacement snap should keep edit-intent metadata current");
     if (!nearly_equal(replacementSnap.getPoint()[0], 47.0f) ||
 	!nearly_equal(replacementSnap.getPoint()[1], 0.25f))
@@ -3273,10 +3310,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(replacementMeasure.getTotalLength(), 10.0f))
 	FAIL("edit preview replacement measure should not include stale segments");
     if (!replacementMeasure.hasNearestSegment() ||
-	strcmp(replacementMeasure.getNearestPath().getString(), "preview::drag-box/replacement-outline") != 0)
+	bu_strcmp(replacementMeasure.getNearestPath().getString(), "preview::drag-box/replacement-outline") != 0)
 	FAIL("edit preview replacement measure should report current preview identity");
-    if (strcmp(replacementMeasure.getNearestEditIntentId().getString(), "preview::drag-box") != 0 ||
-	strcmp(replacementMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
+    if (bu_strcmp(replacementMeasure.getNearestEditIntentId().getString(), "preview::drag-box") != 0 ||
+	bu_strcmp(replacementMeasure.getNearestEditIntentRole().getString(), "preview") != 0)
 	FAIL("edit preview replacement measure should keep edit-intent metadata current");
 
     preview->setEditIntent("edit::box.s/scale-corner", "scale-handle");
@@ -3285,14 +3322,14 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    previewPoints, previewCommands, 5);
     if (!customIntentShape ||
 	preview->needsRealization() ||
-	strcmp(preview->editIntentId.getValue().getString(),
+	bu_strcmp(preview->editIntentId.getValue().getString(),
 	       "edit::box.s/scale-corner") != 0 ||
-	strcmp(preview->editIntentRole.getValue().getString(),
+	bu_strcmp(preview->editIntentRole.getValue().getString(),
 	       "scale-handle") != 0)
 	FAIL("edit preview should publish explicit live edit intent fields");
-    if (strcmp(customIntentShape->editIntentId.getValue().getString(),
+    if (bu_strcmp(customIntentShape->editIntentId.getValue().getString(),
 	       "edit::box.s/scale-corner") != 0 ||
-	strcmp(customIntentShape->editIntentRole.getValue().getString(),
+	bu_strcmp(customIntentShape->editIntentRole.getValue().getString(),
 	       "scale-handle") != 0)
 	FAIL("edit preview geometry should use explicit edit intent instead of preview id fallback");
 
@@ -3301,11 +3338,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     customIntentSnap.setTolerance(0.3f);
     customIntentSnap.apply(root);
     if (!customIntentSnap.hasCandidate() ||
-	strcmp(customIntentSnap.getPath().getString(),
+	bu_strcmp(customIntentSnap.getPath().getString(),
 	       "preview::drag-box/custom-intent-outline") != 0 ||
-	strcmp(customIntentSnap.getEditIntentId().getString(),
+	bu_strcmp(customIntentSnap.getEditIntentId().getString(),
 	       "edit::box.s/scale-corner") != 0 ||
-	strcmp(customIntentSnap.getEditIntentRole().getString(),
+	bu_strcmp(customIntentSnap.getEditIntentRole().getString(),
 	       "scale-handle") != 0)
 	FAIL("edit preview snap should expose explicit live edit intent");
 
@@ -3313,20 +3350,20 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     customIntentMeasure.setQueryPoint(SbVec3f(1.0f, 0.2f, 0.0f));
     customIntentMeasure.apply(root);
     if (!customIntentMeasure.hasNearestSegment() ||
-	strcmp(customIntentMeasure.getNearestPath().getString(),
+	bu_strcmp(customIntentMeasure.getNearestPath().getString(),
 	       "preview::drag-box/custom-intent-outline") != 0 ||
-	strcmp(customIntentMeasure.getNearestEditIntentId().getString(),
+	bu_strcmp(customIntentMeasure.getNearestEditIntentId().getString(),
 	       "edit::box.s/scale-corner") != 0 ||
-	strcmp(customIntentMeasure.getNearestEditIntentRole().getString(),
+	bu_strcmp(customIntentMeasure.getNearestEditIntentRole().getString(),
 	       "scale-handle") != 0)
 	FAIL("edit preview measure should expose explicit live edit intent");
 
     SoBRLExportAction customIntentExport;
     customIntentExport.apply(root);
     if (customIntentExport.getLineCount() != 4 ||
-	strcmp(customIntentExport.getLine(0).editIntentId.getString(),
+	bu_strcmp(customIntentExport.getLine(0).editIntentId.getString(),
 	       "edit::box.s/scale-corner") != 0 ||
-	strcmp(customIntentExport.getLine(0).editIntentRole.getString(),
+	bu_strcmp(customIntentExport.getLine(0).editIntentRole.getString(),
 	       "scale-handle") != 0)
 	FAIL("edit preview export should expose explicit live edit intent");
 
@@ -3403,7 +3440,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("mesh pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "mesh::tri-test") != 0 ||
+    if (bu_strcmp(pickDetail->getPath().getString(), "mesh::tri-test") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE ||
 	pickDetail->getSourceId() != 77)
 	FAIL("mesh pick should preserve face identity");
@@ -3430,7 +3467,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	meshExport.getTriangleCount() != 2)
 	FAIL("mesh export should collect triangle records without wire records");
     const SoBRLExportAction::TriangleRecord &tri = meshExport.getTriangle(0);
-    if (strcmp(tri.path.getString(), "mesh::tri-test") != 0 ||
+    if (bu_strcmp(tri.path.getString(), "mesh::tri-test") != 0 ||
 	tri.sourceId != 77 ||
 	tri.primitiveIndex != 0 ||
 	tri.vertexIndexA != 0 ||
@@ -3476,9 +3513,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!mesh->lodStagedAvailable.getValue() ||
 	mesh->lodResultKind.getValue() != BRLOBOL_LOD_RESULT_DIRECTORY ||
 	mesh->lodDependencyPath.getNum() != 1 ||
-	strcmp(mesh->lodDependencyPath[0].getString(),
+	bu_strcmp(mesh->lodDependencyPath[0].getString(),
 	       "mesh::tri-test/child") != 0 ||
-	strcmp(mesh->lodDependencySourceRevision[0].getString(),
+	bu_strcmp(mesh->lodDependencySourceRevision[0].getString(),
 	       "123") != 0 ||
 	!mesh->lodDependencyOptional[0])
 	FAIL("mesh shape should consume staged LoD dependency results");
@@ -3493,9 +3530,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!mesh->applyStagedLodResult(stagedResult, &meshLodRequest) ||
 	mesh->lodDependencyPath.getNum() != 0 ||
 	mesh->lodAttributeName.getNum() != 1 ||
-	strcmp(mesh->lodAttributeName[0].getString(),
+	bu_strcmp(mesh->lodAttributeName[0].getString(),
 	       "display.color") != 0 ||
-	strcmp(mesh->lodAttributeValue[0].getString(), "255 0 0") != 0)
+	bu_strcmp(mesh->lodAttributeValue[0].getString(), "255 0 0") != 0)
 	FAIL("mesh shape should consume staged LoD attribute results");
 
     BRLObolLodProxy meshProxy;
@@ -3550,7 +3587,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("mesh measure should report transformed mesh bounds");
     if (!meshMeasure.hasNearestPrimitive() ||
 	meshMeasure.getNearestPrimitiveKind() != SoBRLMeasureAction::FACE ||
-	strcmp(meshMeasure.getNearestPath().getString(), "mesh::tri-test") != 0 ||
+	bu_strcmp(meshMeasure.getNearestPath().getString(), "mesh::tri-test") != 0 ||
 	meshMeasure.getNearestPrimitiveIndex() != 0 ||
 	meshMeasure.getNearestFaceVertexIndexA() != 0 ||
 	meshMeasure.getNearestFaceVertexIndexB() != 1 ||
@@ -3570,7 +3607,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     meshFaceSnap.apply(root);
     if (!meshFaceSnap.hasCandidate() ||
 	meshFaceSnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
-	strcmp(meshFaceSnap.getPath().getString(), "mesh::tri-test") != 0 ||
+	bu_strcmp(meshFaceSnap.getPath().getString(), "mesh::tri-test") != 0 ||
 	!nearly_equal(meshFaceSnap.getPoint()[0], 61.0f) ||
 	!nearly_equal(meshFaceSnap.getPoint()[1], 1.0f) ||
 	!nearly_equal(meshFaceSnap.getPoint()[2], 0.0f))
@@ -3586,7 +3623,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	meshVertexSnap.getPrimitiveIndex() != 0 ||
 	meshVertexSnap.getVertexIndex() != 0 ||
 	meshVertexSnap.getEdgeSlot() != -1 ||
-	strcmp(meshVertexSnap.getPath().getString(), "mesh::tri-test") != 0 ||
+	bu_strcmp(meshVertexSnap.getPath().getString(), "mesh::tri-test") != 0 ||
 	!nearly_equal(meshVertexSnap.getPoint()[0], 60.0f) ||
 	!nearly_equal(meshVertexSnap.getPoint()[1], 0.0f) ||
 	!nearly_equal(meshVertexSnap.getPoint()[2], 0.0f))
@@ -3604,7 +3641,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	meshEdgeSnap.getEdgeVertexIndexA() != 0 ||
 	meshEdgeSnap.getEdgeVertexIndexB() != 1 ||
 	meshEdgeSnap.getVertexIndex() != -1 ||
-	strcmp(meshEdgeSnap.getPath().getString(), "mesh::tri-test") != 0 ||
+	bu_strcmp(meshEdgeSnap.getPath().getString(), "mesh::tri-test") != 0 ||
 	!nearly_equal(meshEdgeSnap.getPoint()[0], 61.0f) ||
 	!nearly_equal(meshEdgeSnap.getPoint()[1], 0.0f) ||
 	!nearly_equal(meshEdgeSnap.getPoint()[2], 0.0f))
@@ -3633,7 +3670,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     localMeshSnap.apply(root);
     if (!localMeshSnap.hasCandidate() ||
 	localMeshSnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
-	strcmp(localMeshSnap.getPath().getString(), "mesh::tri-test") != 0 ||
+	bu_strcmp(localMeshSnap.getPath().getString(), "mesh::tri-test") != 0 ||
 	!nearly_equal(localMeshSnap.getPoint()[0], 1.0f) ||
 	!nearly_equal(localMeshSnap.getPoint()[1], 1.0f) ||
 	!nearly_equal(localMeshSnap.getPoint()[2], 0.0f))
@@ -3659,7 +3696,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!selectedOnlySnap.hasCandidate() ||
 	selectedOnlySnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
 	selectedOnlySnap.getPrimitiveIndex() != 1 ||
-	strcmp(selectedOnlySnap.getPath().getString(), "mesh::tri-test") != 0)
+	bu_strcmp(selectedOnlySnap.getPath().getString(), "mesh::tri-test") != 0)
 	FAIL("selected-only snap policy should accept selected mesh face geometry");
 
     SoBRLMeasureAction selectedOnlyMeshMeasure;
@@ -3807,7 +3844,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     gridSnap.apply(root);
     if (!gridSnap.hasCandidate() ||
 	gridSnap.getKind() != SoBRLSnapAction::GRID ||
-	strcmp(gridSnap.getPath().getString(), "overlay::work-grid") != 0 ||
+	bu_strcmp(gridSnap.getPath().getString(), "overlay::work-grid") != 0 ||
 	!nearly_equal(gridSnap.getPoint()[0], 1.0f) ||
 	!nearly_equal(gridSnap.getPoint()[1], 0.0f))
 	FAIL("grid snap should use semantic grid state rather than HUD line picking");
@@ -3869,8 +3906,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLVListShape *adcShape = adc->rebuildGeometry();
     if (!adcShape)
 	FAIL("ADC overlay should build Obol line geometry");
-    if (adcShape->getSegmentCount() != 4)
-	FAIL("ADC overlay should build crosshair, angle, and distance segments");
+    SoBRLVListShape *adcTickShape = adc->getTickGeometryShape();
+    if (!adcTickShape || adcShape->getSegmentCount() != 3 ||
+	adcTickShape->getSegmentCount() != 1)
+	FAIL("ADC overlay should build separately styled crosshair and tick segments");
     root->addChild(adc);
 
     SoGetBoundingBoxAction overlayBBoxAction(viewport);
@@ -3889,7 +3928,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("overlay pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "overlay::model-axes") != 0)
+    if (bu_strcmp(pickDetail->getPath().getString(), "overlay::model-axes") != 0)
 	FAIL("overlay pick should preserve axes identity");
 
     SoRayPickAction adcPick(viewport);
@@ -3902,7 +3941,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("ADC pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "overlay::adc") != 0)
+    if (bu_strcmp(pickDetail->getPath().getString(), "overlay::adc") != 0)
 	FAIL("ADC pick should preserve overlay identity");
 
     SoBRLSnapAction adcSnap;
@@ -3911,7 +3950,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     adcSnap.apply(root);
     if (!adcSnap.hasCandidate())
 	FAIL("ADC snap should find angle-distance geometry");
-    if (strcmp(adcSnap.getPath().getString(), "overlay::adc") != 0)
+    if (bu_strcmp(adcSnap.getPath().getString(), "overlay::adc") != 0)
 	FAIL("ADC snap should preserve overlay identity");
     if (adcSnap.getKind() != SoBRLSnapAction::LINE_NEAREST ||
 	!nearly_equal(adcSnap.getPoint()[0], 22.0f) ||
@@ -3922,15 +3961,15 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     overlayMeasure.setQueryPoint(SbVec3f(11.2f, 0.0f, 0.0f));
     overlayMeasure.apply(root);
     if (!overlayMeasure.hasSegments() ||
-	overlayMeasure.getShapeCount() != 2 ||
+	overlayMeasure.getShapeCount() != 3 ||
 	overlayMeasure.getSegmentCount() != 7)
-	FAIL("overlay measure should count axes and ADC segments");
+	FAIL("overlay measure should count separately styled ADC segments");
     bbox = overlayMeasure.getBounds();
     if (bbox.isEmpty() || bbox.getMin()[0] < 8.0f ||
 	bbox.getMax()[0] < 24.0f)
 	FAIL("overlay measure should report axes and ADC bounds");
     if (!overlayMeasure.hasNearestSegment() ||
-	strcmp(overlayMeasure.getNearestPath().getString(), "overlay::model-axes") != 0 ||
+	bu_strcmp(overlayMeasure.getNearestPath().getString(), "overlay::model-axes") != 0 ||
 	!nearly_equal(overlayMeasure.getNearestPoint()[0], 11.2f) ||
 	!nearly_equal(overlayMeasure.getNearestPoint()[1], 0.0f))
 	FAIL("overlay measure should report nearest overlay segment identity");
@@ -3939,11 +3978,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     adcMeasure.setQueryPoint(SbVec3f(22.0f, 0.3f, 0.0f));
     adcMeasure.apply(adc);
     if (!adcMeasure.hasSegments() ||
-	adcMeasure.getShapeCount() != 1 ||
+	adcMeasure.getShapeCount() != 2 ||
 	adcMeasure.getSegmentCount() != 4)
-	FAIL("ADC measure should count its own field-derived segments");
+	FAIL("ADC measure should count its separately styled field-derived segments");
     if (!adcMeasure.hasNearestSegment() ||
-	strcmp(adcMeasure.getNearestPath().getString(), "overlay::adc") != 0 ||
+	bu_strcmp(adcMeasure.getNearestPath().getString(), "overlay::adc") != 0 ||
 	!nearly_equal(adcMeasure.getNearestPoint()[0], 22.0f) ||
 	!nearly_equal(adcMeasure.getNearestPoint()[1], 0.0f))
 	FAIL("ADC measure should report nearest angle-distance segment identity");
@@ -4011,11 +4050,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLVListShape *cyanDiagnostic = lineOverlay->getLayerShape(1);
     if (!redDiagnostic || !cyanDiagnostic)
 	FAIL("line-layer overlay should expose realized color-layer shapes");
-    if (strcmp(redDiagnostic->sourcePath.getValue().getString(),
+    if (bu_strcmp(redDiagnostic->sourcePath.getValue().getString(),
 	       "overlay::diagnostic/rgb_255_000_000") != 0 ||
-	strcmp(redDiagnostic->sourceName.getValue().getString(),
+	bu_strcmp(redDiagnostic->sourceName.getValue().getString(),
 	       "rgb_255_000_000") != 0 ||
-	strcmp(redDiagnostic->sourceType.getValue().getString(), "line-layer") != 0 ||
+	bu_strcmp(redDiagnostic->sourceType.getValue().getString(), "line-layer") != 0 ||
 	redDiagnostic->sourceId.getValue() != 55 ||
 	redDiagnostic->getSegmentCount() != 2 ||
 	!redDiagnostic->colorOverride.getValue() ||
@@ -4023,11 +4062,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(redDiagnostic->color.getValue()[1], 0.0f) ||
 	!nearly_equal(redDiagnostic->color.getValue()[2], 0.0f))
 	FAIL("line-layer overlay should preserve red layer identity, color, and geometry");
-    if (strcmp(cyanDiagnostic->sourcePath.getValue().getString(),
+    if (bu_strcmp(cyanDiagnostic->sourcePath.getValue().getString(),
 	       "overlay::diagnostic/rgb_000_255_255") != 0 ||
-	strcmp(cyanDiagnostic->sourceName.getValue().getString(),
+	bu_strcmp(cyanDiagnostic->sourceName.getValue().getString(),
 	       "rgb_000_255_255") != 0 ||
-	strcmp(cyanDiagnostic->sourceType.getValue().getString(), "line-layer") != 0 ||
+	bu_strcmp(cyanDiagnostic->sourceType.getValue().getString(), "line-layer") != 0 ||
 	cyanDiagnostic->sourceId.getValue() != 55 ||
 	cyanDiagnostic->getSegmentCount() != 1 ||
 	!cyanDiagnostic->colorOverride.getValue() ||
@@ -4057,9 +4096,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("line-layer overlay pick should return BRL-CAD Obol detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(),
+    if (bu_strcmp(pickDetail->getPath().getString(),
 	       "overlay::diagnostic/rgb_255_000_000") != 0 ||
-	strcmp(pickDetail->getSourceType().getString(), "line-layer") != 0 ||
+	bu_strcmp(pickDetail->getSourceType().getString(), "line-layer") != 0 ||
 	pickDetail->getSourceId() != 55 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT)
 	FAIL("line-layer overlay pick should preserve layer and primitive identity");
@@ -4069,7 +4108,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     lineLayerSnap.setTolerance(0.3f);
     lineLayerSnap.apply(root);
     if (!lineLayerSnap.hasCandidate() ||
-	strcmp(lineLayerSnap.getPath().getString(),
+	bu_strcmp(lineLayerSnap.getPath().getString(),
 	       "overlay::diagnostic/rgb_000_255_255") != 0 ||
 	!nearly_equal(lineLayerSnap.getPoint()[0], 104.5f) ||
 	!nearly_equal(lineLayerSnap.getPoint()[1], 0.0f))
@@ -4082,7 +4121,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	lineLayerMeasure.getShapeCount() != 2 ||
 	lineLayerMeasure.getSegmentCount() != 3 ||
 	!nearly_equal(lineLayerMeasure.getTotalLength(), 6.0f) ||
-	strcmp(lineLayerMeasure.getNearestPath().getString(),
+	bu_strcmp(lineLayerMeasure.getNearestPath().getString(),
 	       "overlay::diagnostic/rgb_000_255_255") != 0)
 	FAIL("line-layer overlay measure should traverse realized layer geometry");
 
@@ -4095,7 +4134,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     const SoBRLExportAction::LineRecord *redLine =
 	export_line_with_path(lineLayerExport, "overlay::diagnostic/rgb_255_000_000");
     if (!redLine ||
-	strcmp(redLine->sourceType.getString(), "line-layer") != 0 ||
+	bu_strcmp(redLine->sourceType.getString(), "line-layer") != 0 ||
 	redLine->sourceId != 55 ||
 	!redLine->colorOverride ||
 	!nearly_equal(redLine->color[0], 1.0f) ||
@@ -4136,7 +4175,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 		diagnosticBuilder, 88, FALSE) != 2 ||
 	    controllerOverlayRoot->getNumChildren() != 1 ||
 	    !overlayController.isRenderRequested() ||
-	    strcmp(overlayController.getRenderReason().getString(),
+	    bu_strcmp(overlayController.getRenderReason().getString(),
 		   "line-layer-overlay") != 0)
 	    FAIL("view controller should publish a line-layer overlay into the Obol scene");
 
@@ -4146,7 +4185,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    FAIL("view controller line-layer publication should create an Obol overlay node");
 	SoBRLLineLayerOverlay *controllerOverlay =
 	    static_cast<SoBRLLineLayerOverlay *>(overlayNode);
-	if (strcmp(controllerOverlay->overlayId.getValue().getString(),
+	if (bu_strcmp(controllerOverlay->overlayId.getValue().getString(),
 		   "gqa::overlaps") != 0 ||
 	    controllerOverlay->sourceId.getValue() != 88 ||
 	    controllerOverlay->getLayerShapeCount() != 2 ||
@@ -4155,7 +4194,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	SoBRLVListShape *controllerLayer = controllerOverlay->getLayerShape(0);
 	if (!controllerLayer ||
 	    controllerLayer->selectable.getValue() ||
-	    strcmp(controllerLayer->sourcePath.getValue().getString(),
+	    bu_strcmp(controllerLayer->sourcePath.getValue().getString(),
 		   "gqa::overlaps/rgb_255_000_000") != 0)
 	    FAIL("view controller line-layer publication should apply selectable state and layer paths");
 
@@ -4191,10 +4230,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!labelOverlay->getHUDKit() ||
 	labelOverlay->getHUDLabel() != hudLabel)
 	FAIL("HUD label overlay should rebuild direct Obol HUD nodes");
-    if (strcmp(labelOverlay->labelId.getValue().getString(),
+    if (bu_strcmp(labelOverlay->labelId.getValue().getString(),
 	       "diagnostic::label") != 0 ||
 	labelOverlay->sourceId.getValue() != 77 ||
-	strcmp(hudLabel->string[0].getString(), "overlap candidate") != 0 ||
+	bu_strcmp(hudLabel->string[0].getString(), "overlap candidate") != 0 ||
 	!nearly_equal(hudLabel->position.getValue()[0], 12.0f) ||
 	!nearly_equal(hudLabel->position.getValue()[1], 34.0f) ||
 	!nearly_equal(hudLabel->color.getValue()[0], 0.25f) ||
@@ -4219,7 +4258,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 		SbColor(1.0f, 0.25f, 0.0f), 10.0f, 101) != 1 ||
 	    controllerLabelRoot->getNumChildren() != 1 ||
 	    !labelController.isRenderRequested() ||
-	    strcmp(labelController.getRenderReason().getString(),
+	    bu_strcmp(labelController.getRenderReason().getString(),
 		   "hud-label-overlay") != 0)
 	    FAIL("view controller should publish a HUD label overlay into the Obol scene");
 
@@ -4232,9 +4271,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	hudLabel = controllerLabel->getHUDLabel();
 	if (!hudLabel ||
 	    controllerLabel->sourceId.getValue() != 101 ||
-	    strcmp(controllerLabel->labelId.getValue().getString(),
+	    bu_strcmp(controllerLabel->labelId.getValue().getString(),
 		   "gqa::label") != 0 ||
-	    strcmp(hudLabel->string[0].getString(), "overlap 1") != 0 ||
+	    bu_strcmp(hudLabel->string[0].getString(), "overlap 1") != 0 ||
 	    !nearly_equal(hudLabel->position.getValue()[0], 20.0f) ||
 	    !nearly_equal(hudLabel->fontSize.getValue(), 10.0f))
 	    FAIL("view controller HUD label should preserve identity, text, and placement");
@@ -4249,7 +4288,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	hudLabel = controllerLabel->getHUDLabel();
 	if (!hudLabel ||
 	    controllerLabel->sourceId.getValue() != 102 ||
-	    strcmp(hudLabel->string[0].getString(), "overlap 2") != 0 ||
+	    bu_strcmp(hudLabel->string[0].getString(), "overlap 2") != 0 ||
 	    !nearly_equal(hudLabel->position.getValue()[0], 22.0f) ||
 	    !nearly_equal(hudLabel->fontSize.getValue(), 14.0f))
 	    FAIL("view controller HUD label replacement should refresh fields");
@@ -4341,10 +4380,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (directWireSummary.segmentCount <= 4)
 	FAIL("database-backed source should not fall back to the synthetic square");
 
-    if (strcmp(directWireSummary.path.getString(), "/box.s") != 0)
+    if (bu_strcmp(directWireSummary.path.getString(), "/box.s") != 0)
 	FAIL("direct primitive shape should preserve its full database path");
-    if (strcmp(directWireSummary.sourceName.getString(), "box.s") != 0 ||
-	strcmp(directWireSummary.sourceType.getString(), "arb8") != 0 ||
+    if (bu_strcmp(directWireSummary.sourceName.getString(), "box.s") != 0 ||
+	bu_strcmp(directWireSummary.sourceType.getString(), "arb8") != 0 ||
 	directWireSummary.sourceId != 7 ||
 	directWireSummary.materialColorValid ||
 	directWireSummary.regionId != 0)
@@ -4381,14 +4420,14 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    dbController.getDatabaseSourceCount() != 1 ||
 	    controllerDbRoot->getNumChildren() != 2 ||
 	    !dbController.isRenderRequested() ||
-	    strcmp(dbController.getRenderReason().getString(),
+	    bu_strcmp(dbController.getRenderReason().getString(),
 		   "database-source") != 0)
 	    FAIL("view controller should publish database sources into the Obol scene");
 
 	SoBRLDatabaseSource *controllerSource = dbController.getDatabaseSource(0);
 	if (!controllerSource ||
 	    controllerSource->getDatabase() != dbip ||
-	    strcmp(controllerSource->path.getValue().getString(), "box.s") != 0 ||
+	    bu_strcmp(controllerSource->path.getValue().getString(), "box.s") != 0 ||
 	    controllerSource->drawMode.getValue() != SoBRLDatabaseSource::WIREFRAME ||
 	    controllerSource->sourceRevision.getValue() != 71 ||
 	    !controllerSource->needsRealization())
@@ -4415,9 +4454,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 					SbVec3f(0.0f, 0.0f, -1.0f), TRUE) != 1 ||
 	    controllerRtPicks.size() != 1 ||
 	    !controllerRtPicks[0].hit ||
-	    strcmp(controllerRtPicks[0].detail.getSourceName().getString(),
+	    bu_strcmp(controllerRtPicks[0].detail.getSourceName().getString(),
 		   "box.s") != 0 ||
-	    strcmp(controllerRtPicks[0].detail.getSourceType().getString(),
+	    bu_strcmp(controllerRtPicks[0].detail.getSourceType().getString(),
 		   "arb8") != 0 ||
 	    !strstr(controllerRtPicks[0].detail.getPath().getString(),
 		    "box.s"))
@@ -4487,10 +4526,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed shaded realization should produce one carrier-free mesh occurrence");
     if (directMeshSummary.triangleCount != 12)
 	FAIL("database-backed ARB mesh should contain triangulated faces");
-    if (strcmp(directMeshSummary.path.getString(), "/box.s") != 0)
+    if (bu_strcmp(directMeshSummary.path.getString(), "/box.s") != 0)
 	FAIL("database-backed mesh should preserve its full database path");
-    if (strcmp(directMeshSummary.sourceName.getString(), "box.s") != 0 ||
-	strcmp(directMeshSummary.sourceType.getString(), "arb8") != 0 ||
+    if (bu_strcmp(directMeshSummary.sourceName.getString(), "box.s") != 0 ||
+	bu_strcmp(directMeshSummary.sourceType.getString(), "arb8") != 0 ||
 	directMeshSummary.sourceId != 7 || directMeshSummary.materialColorValid ||
 	directMeshSummary.regionId != 0)
 	FAIL("database-backed mesh should preserve primitive identity fields");
@@ -4522,11 +4561,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("database-backed mesh pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "/box.s") != 0 ||
+    if (bu_strcmp(pickDetail->getPath().getString(), "/box.s") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
 	FAIL("database-backed mesh pick detail should preserve face identity");
-    if (strcmp(pickDetail->getSourceName().getString(), "box.s") != 0 ||
-	strcmp(pickDetail->getSourceType().getString(), "arb8") != 0 ||
+    if (bu_strcmp(pickDetail->getSourceName().getString(), "box.s") != 0 ||
+	bu_strcmp(pickDetail->getSourceType().getString(), "arb8") != 0 ||
 	pickDetail->getSourceId() != 7 ||
 	pickDetail->hasMaterialColor() ||
 	pickDetail->getRegionId() != 0)
@@ -4542,8 +4581,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     const SoBRLExportAction::TriangleRecord *boxTriangle =
 	export_triangle_with_path(dbMeshExport, "/box.s");
     if (!boxTriangle ||
-	strcmp(boxTriangle->sourceName.getString(), "box.s") != 0 ||
-	strcmp(boxTriangle->sourceType.getString(), "arb8") != 0 ||
+	bu_strcmp(boxTriangle->sourceName.getString(), "box.s") != 0 ||
+	bu_strcmp(boxTriangle->sourceType.getString(), "arb8") != 0 ||
 	boxTriangle->sourceId != 7 ||
 	boxTriangle->materialColorValid ||
 	boxTriangle->regionId != 0)
@@ -4575,7 +4614,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed shaded measure should report mesh field bounds");
     if (!dbMeshMeasure.hasNearestPrimitive() ||
 	dbMeshMeasure.getNearestPrimitiveKind() != SoBRLMeasureAction::FACE ||
-	strcmp(dbMeshMeasure.getNearestPath().getString(), "/box.s") != 0 ||
+	bu_strcmp(dbMeshMeasure.getNearestPath().getString(), "/box.s") != 0 ||
 	!nearly_equal(dbMeshMeasure.getNearestPoint()[0], 0.0f) ||
 	!nearly_equal(dbMeshMeasure.getNearestPoint()[1], 0.0f) ||
 	!nearly_equal(dbMeshMeasure.getNearestPoint()[2], 5.0f))
@@ -4623,7 +4662,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("database-backed tessellated sphere pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "/ball.s") != 0 ||
+    if (bu_strcmp(pickDetail->getPath().getString(), "/ball.s") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
 	FAIL("database-backed tessellated sphere pick detail should preserve face identity");
 
@@ -4645,7 +4684,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed tessellated sphere measure should report mesh face metrics");
     if (!sphereMeasure.hasNearestPrimitive() ||
 	sphereMeasure.getNearestPrimitiveKind() != SoBRLMeasureAction::FACE ||
-	strcmp(sphereMeasure.getNearestPath().getString(), "/ball.s") != 0 ||
+	bu_strcmp(sphereMeasure.getNearestPath().getString(), "/ball.s") != 0 ||
 	sphereMeasure.getNearestPoint()[2] < 1.8f ||
 	sphereMeasure.getNearestPoint()[2] > 2.1f)
 	FAIL("database-backed tessellated sphere measure should report nearest mesh face identity");
@@ -4657,7 +4696,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     sphereSnap.apply(root);
     if (!sphereSnap.hasCandidate() ||
 	sphereSnap.getKind() != SoBRLSnapAction::FACE_NEAREST ||
-	strcmp(sphereSnap.getPath().getString(), "/ball.s") != 0 ||
+	bu_strcmp(sphereSnap.getPath().getString(), "/ball.s") != 0 ||
 	sphereSnap.getPoint()[2] < 1.8f ||
 	sphereSnap.getPoint()[2] > 2.1f)
 	FAIL("database-backed tessellated sphere snap should report nearest mesh face identity");
@@ -4998,6 +5037,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!source->getCompactInstanceSummary(botBelowHandle, botBelowInstance) ||
 	botBelowInstance.lodBacked)
 	FAIL("database-backed BoT below LoD threshold should keep full mesh geometry");
+    BRLObolCompactOccurrence botBelowOccurrence;
+    if (!source->getCompactOccurrence(0, botBelowOccurrence) ||
+	!botBelowOccurrence.geometry || !botBelowOccurrence.geometry->shaded ||
+	botBelowOccurrence.geometry->shaded->normals.size() !=
+	botBelowOccurrence.geometry->shaded->positions.size())
+	FAIL("database-backed BoT shaded geometry should publish indexed normals");
 
     root->unref();
     timing.checkpoint("BoT LoD source");
@@ -5158,6 +5203,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    "/assembly.c/left.c/box.s", FALSE, 0, FALSE, 1, TRUE,
 	    0, FALSE) != 1)
 	FAIL("compact assembly summaries and path-addressed selection should be available");
+    if (source->getCompactInstanceCountForPath("box.s", FALSE) != 2 ||
+	source->getCompactInstanceCountForPath("/assembly.c/left.c", TRUE) != 1 ||
+	source->getCompactInstanceCountForPath("/assembly.c/left.c", FALSE) != 0)
+	FAIL("compact path index should preserve leaf and descendant query semantics");
 
     BRLObolCompactInstanceHandle compactHandle0;
     BRLObolCompactInstanceHandle compactHandle1;
@@ -5222,7 +5271,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("compact assembly pick should return a BRL-CAD Obol pick detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(),
+    if (bu_strcmp(pickDetail->getPath().getString(),
 	       "/assembly.c/right.c/box.s") != 0 ||
 	pickDetail->getRegionId() != 102 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT)
@@ -5233,7 +5282,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     compactAssemblySnap.setTolerance(0.1f);
     compactAssemblySnap.apply(root);
     if (!compactAssemblySnap.hasCandidate() ||
-	strcmp(compactAssemblySnap.getPath().getString(),
+	bu_strcmp(compactAssemblySnap.getPath().getString(),
 	       "/assembly.c/left.c/box.s") != 0)
 	FAIL("compact assembly snap should preserve source path identity");
 
@@ -5254,7 +5303,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     compactSelectedAngleMeasure.setQueryPoint(SbVec3f(13.0f, 4.0f, 5.0f));
     compactSelectedAngleMeasure.apply(root);
     if (!compactSelectedAngleMeasure.hasAngle() ||
-	strcmp(compactSelectedAngleMeasure.getAnglePath().getString(),
+	bu_strcmp(compactSelectedAngleMeasure.getAnglePath().getString(),
 	       "/assembly.c/left.c/box.s") != 0 ||
 	!nearly_equal(compactSelectedAngleMeasure.getAngleDegrees(), 90.0f) ||
 	!nearly_equal(compactSelectedAngleMeasure.getAnglePoint()[0], 13.0f) ||
@@ -5334,6 +5383,50 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	static_cast<const SoBRLPickDetail *>(rawDetail)->getMaterialId() != 29 ||
 	static_cast<const SoBRLPickDetail *>(rawDetail)->getLos() != 43)
 	FAIL("compiled compact assembly should refresh incremental semantic pick detail");
+
+    BRLObolCompactInstanceSummary wireRefreshBefore0;
+    BRLObolCompactInstanceSummary wireRefreshBefore1;
+    if (!source->getCompactInstanceSummary(compactHandle0, wireRefreshBefore0) ||
+	!source->getCompactInstanceSummary(compactHandle1, wireRefreshBefore1) ||
+	source->refreshCompactObjectGeometry("box.s", 30) != 2 ||
+	source->getRealizedShapeCount() != 0)
+	FAIL("compact wire primitive refresh should replace both occurrences without carriers");
+    BRLObolCompactInstanceSummary wireRefreshAfter0;
+    BRLObolCompactInstanceSummary wireRefreshAfter1;
+    if (!source->isCompactInstanceHandleValid(compactHandle0) ||
+	!source->isCompactInstanceHandleValid(compactHandle1) ||
+	!source->getCompactInstanceSummary(compactHandle0, wireRefreshAfter0) ||
+	!source->getCompactInstanceSummary(compactHandle1, wireRefreshAfter1))
+	FAIL("compact wire primitive refresh should preserve stable occurrence handles");
+    if (source->getCompactPartCount() != 1 ||
+	source->prepareCompiledAssembly() != 1 ||
+	source->getCompiledAssemblyPartCount() != 1 ||
+	source->getCompiledAssemblyInstanceCount() != 2)
+	FAIL("unchanged compact primitive refresh should retain one shared immutable part");
+    SbBox3f refreshedCompactBounds;
+    if (!source->getSourceBounds(refreshedCompactBounds) ||
+	refreshedCompactBounds.isEmpty() ||
+	!nearly_equal(refreshedCompactBounds.getMin()[0], 8.0f) ||
+	!nearly_equal(refreshedCompactBounds.getMax()[0], 33.0f))
+	FAIL("compact primitive refresh should maintain aggregate source bounds");
+    if (wireRefreshAfter0.geometryIdentity != wireRefreshBefore0.geometryIdentity ||
+	wireRefreshAfter1.geometryIdentity != wireRefreshBefore1.geometryIdentity)
+	FAIL("compact wire primitive refresh should preserve unchanged geometry identity");
+    if (wireRefreshAfter0.geometryRevision <= wireRefreshBefore0.geometryRevision ||
+	wireRefreshAfter1.geometryRevision <= wireRefreshBefore1.geometryRevision)
+	FAIL("compact wire primitive refresh should advance only geometry revisions");
+    if (wireRefreshAfter0.appearanceRevision != wireRefreshBefore0.appearanceRevision ||
+	wireRefreshAfter1.appearanceRevision != wireRefreshBefore1.appearanceRevision ||
+	wireRefreshAfter0.placementRevision != wireRefreshBefore0.placementRevision ||
+	wireRefreshAfter1.placementRevision != wireRefreshBefore1.placementRevision ||
+	wireRefreshAfter0.visibilityRevision != wireRefreshBefore0.visibilityRevision ||
+	wireRefreshAfter1.visibilityRevision != wireRefreshBefore1.visibilityRevision ||
+	wireRefreshAfter0.selectionRevision != wireRefreshBefore0.selectionRevision ||
+	wireRefreshAfter1.selectionRevision != wireRefreshBefore1.selectionRevision)
+	FAIL("compact wire primitive refresh should preserve nongeometry state");
+    if (source->getCompactInstanceCountForPath("box.s", FALSE) != 2 ||
+	source->getCompactInstanceCountForPath("/assembly.c/right.c", TRUE) != 1)
+	FAIL("compact path index should rebuild after primitive geometry refresh");
 
     source->clearRealizedGeometry(FALSE);
     if (source->isCompactInstanceHandleValid(compactHandle0) ||
@@ -5488,7 +5581,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("compact view-local CAD proxy pick should return a BRL-CAD detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "box.s") != 0 ||
+    if (bu_strcmp(pickDetail->getPath().getString(), "box.s") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::LINE_SEGMENT)
 	FAIL("compact view-local CAD proxy pick should preserve source identity");
 
@@ -5514,6 +5607,22 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!source->hasCompactInstanceIndex() ||
 	source->getRealizedMeshCount() != 0)
 	FAIL("compact view-LoD mesh setup should realize a compact shaded source");
+
+    BRLObolCompactInstanceHandle compactMeshLodHandle;
+    BRLObolCompactInstanceSummary compactMeshLodSummary;
+    if (!source->getCompactInstanceHandle(0, compactMeshLodHandle) ||
+	!source->getCompactInstanceSummary(compactMeshLodHandle,
+	    compactMeshLodSummary) || !compactMeshLodSummary.lodBacked)
+	FAIL("thresholded indexed-face compact source should retain LoD metadata");
+
+    SoBRLExportAction compactMeshLodExactExport;
+    compactMeshLodExactExport.setGeometryPolicy(
+	SoBRLExportAction::FULL_DETAIL);
+    compactMeshLodExactExport.apply(lodRoot);
+    if (compactMeshLodExactExport.getSourceBackedFullDetailRequestCount() != 1 ||
+	!BU_STR_EQUAL(compactMeshLodExactExport.getSourceBackedFullDetailRequest(0).
+		path.getString(), "/box.s"))
+	FAIL("thresholded indexed-face compact source should retain full-detail export request");
 
     BRLObolLodRequest meshRequest;
     meshRequest.objectPath = "box.s";
@@ -5573,7 +5682,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("compact view-local CAD mesh pick should return a BRL-CAD detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (strcmp(pickDetail->getPath().getString(), "box.s") != 0 ||
+    if (bu_strcmp(pickDetail->getPath().getString(), "box.s") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
 	FAIL("compact view-local CAD mesh pick should preserve source face identity");
 
@@ -5588,6 +5697,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->path = "assembly.c";
     source->sourceRevision = 11;
     source->drawMode = SoBRLDatabaseSource::SHADED;
+    source->lodBotThreshold = 1;
     root->addChild(source);
 
     SoBRLRealizeAction assemblyMeshRealize;
@@ -5621,13 +5731,63 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("shaded assembly bounding box should reflect per-instance member matrices");
 
     SoBRLExportAction assemblyMeshExport;
+    assemblyMeshExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
     assemblyMeshExport.apply(root);
     if (assemblyMeshExport.getTriangleCount() != small_source_triangle_count(source) ||
 	export_triangle_path_count(assemblyMeshExport,
-				   "/assembly.c/left.c/box.s") <= 0 ||
+		   "/assembly.c/left.c/box.s") <= 0 ||
 	export_triangle_path_count(assemblyMeshExport,
-				   "/assembly.c/right.c/box.s") <= 0)
+		   "/assembly.c/right.c/box.s") <= 0)
 	FAIL("shaded assembly export should preserve transformed mesh instance identity");
+
+    SoBRLExportAction assemblyMeshExactExport;
+    assemblyMeshExactExport.setGeometryPolicy(SoBRLExportAction::FULL_DETAIL);
+    assemblyMeshExactExport.apply(root);
+    if (assemblyMeshExactExport.getSourceBackedFullDetailRequestCount() != 2 ||
+	!BU_STR_EQUAL(assemblyMeshExactExport.getSourceBackedFullDetailRequest(0).
+		path.getString(), "/assembly.c/left.c/box.s") ||
+	!BU_STR_EQUAL(assemblyMeshExactExport.getSourceBackedFullDetailRequest(1).
+		path.getString(), "/assembly.c/right.c/box.s"))
+	FAIL("thresholded shaded assembly exact export should retain per-occurrence source requests");
+
+    BRLObolCompactInstanceHandle refreshHandle0;
+    BRLObolCompactInstanceHandle refreshHandle1;
+    BRLObolCompactInstanceSummary refreshBefore0;
+    BRLObolCompactInstanceSummary refreshBefore1;
+    if (!source->getCompactInstanceHandle(0, refreshHandle0) ||
+	!source->getCompactInstanceHandle(1, refreshHandle1) ||
+	!source->getCompactInstanceSummary(refreshHandle0, refreshBefore0) ||
+	!source->getCompactInstanceSummary(refreshHandle1, refreshBefore1) ||
+	source->refreshCompactObjectGeometry("box.s", 31) != 2 ||
+	source->getRealizedShapeCount() != 0 ||
+	source->getRealizedMeshCount() != 0)
+	FAIL("compact shaded primitive refresh should replace both occurrences without carriers");
+    BRLObolCompactInstanceSummary refreshAfter0;
+    BRLObolCompactInstanceSummary refreshAfter1;
+    if (!source->isCompactInstanceHandleValid(refreshHandle0) ||
+	!source->isCompactInstanceHandleValid(refreshHandle1) ||
+	!source->getCompactInstanceSummary(refreshHandle0, refreshAfter0) ||
+	!source->getCompactInstanceSummary(refreshHandle1, refreshAfter1) ||
+	refreshAfter0.geometryIdentity != refreshBefore0.geometryIdentity ||
+	refreshAfter1.geometryIdentity != refreshBefore1.geometryIdentity ||
+	refreshAfter0.geometryRevision <= refreshBefore0.geometryRevision ||
+	refreshAfter1.geometryRevision <= refreshBefore1.geometryRevision ||
+	refreshAfter0.appearanceRevision != refreshBefore0.appearanceRevision ||
+	refreshAfter1.appearanceRevision != refreshBefore1.appearanceRevision ||
+	refreshAfter0.placementRevision != refreshBefore0.placementRevision ||
+	refreshAfter1.placementRevision != refreshBefore1.placementRevision)
+	FAIL("compact shaded primitive refresh should preserve handles and nongeometry state");
+
+    source->lodBotThreshold = 0;
+    if (source->refreshCompactObjectGeometry("box.s", 32) != 2)
+	FAIL("compact shaded refresh should accept an updated LoD policy");
+    SoBRLExportAction refreshedMeshExactExport;
+    refreshedMeshExactExport.setGeometryPolicy(SoBRLExportAction::FULL_DETAIL);
+    refreshedMeshExactExport.apply(root);
+    if (refreshedMeshExactExport.getSourceBackedFullDetailRequestCount() != 0 ||
+	refreshedMeshExactExport.getTriangleCount() !=
+	small_source_triangle_count(source))
+	FAIL("compact shaded refresh should clear obsolete source-backed LoD export state");
 
     if (source->setCompactInstanceDisplayStateForPath(
 	    "/assembly.c/right.c/box.s", FALSE, 1, FALSE,
@@ -5642,6 +5802,132 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("shaded assembly mesh visibility should remain per-instance");
 
     root->unref();
+
+    /* The aggregate registry is the normal presentation for repeated
+     * occurrences.  Exercise independent views and a source-local update at
+     * a scale that exposes occurrence-path and source-indexing mistakes. */
+    root = new SoSeparator;
+    root->ref();
+    const int largeOccurrenceCount = 32 * 32;
+    SoBRLDatabaseSource *largeViews[3] = {NULL, NULL, NULL};
+    for (int viewIndex = 0; viewIndex < 3; viewIndex++) {
+	largeViews[viewIndex] = new SoBRLDatabaseSource;
+	largeViews[viewIndex]->setDatabase(dbip);
+	largeViews[viewIndex]->path = "large_assembly.c";
+	largeViews[viewIndex]->sourceRevision = 100 + viewIndex;
+	root->addChild(largeViews[viewIndex]);
+    }
+    SoBRLRealizeAction largeAssemblyRealize;
+    largeAssemblyRealize.apply(root);
+    if (largeAssemblyRealize.getRealizedSourceCount() != 3)
+	FAIL("large compact assembly should realize independently in three views");
+    for (int viewIndex = 0; viewIndex < 3; viewIndex++) {
+	SoBRLDatabaseSource *viewSource = largeViews[viewIndex];
+	if (viewSource->realizationStatus.getValue() !=
+		SoBRLDatabaseSource::REALIZED ||
+	    !viewSource->isCompactOccurrenceRegistry() ||
+	    viewSource->getCompactInstanceCount() != largeOccurrenceCount ||
+	    viewSource->getCompactPartCount() != 2 ||
+	    viewSource->getRealizedShapeCount() != 0 ||
+	    viewSource->prepareCompiledAssembly() != 1 ||
+	    viewSource->getCompiledAssemblyPartCount() != 2 ||
+	    viewSource->getCompiledAssemblyInstanceCount() !=
+		largeOccurrenceCount)
+	    FAIL("large compact assembly should retain shared geometry parts per view");
+	SbBox3f viewBounds;
+	if (!viewSource->getSourceBounds(viewBounds) || viewBounds.isEmpty() ||
+	    !nearly_equal(viewBounds.getMin()[0], -2.0f) ||
+	    !nearly_equal(viewBounds.getMax()[0], 313.0f) ||
+	    !nearly_equal(viewBounds.getMin()[1], -3.0f) ||
+	    !nearly_equal(viewBounds.getMax()[1], 314.0f))
+	    FAIL("large compact assembly should retain aggregate transformed bounds");
+    }
+
+    BRLObolCompactInstanceHandle largeEditHandle;
+    BRLObolCompactInstanceHandle largeOtherHandle;
+    BRLObolCompactInstanceHandle largeMarkerHandle;
+    BRLObolCompactInstanceSummary largeEditBefore;
+    BRLObolCompactInstanceSummary largeOtherBefore;
+    BRLObolCompactInstanceSummary largeMarkerBefore;
+    for (int occurrence = 0; occurrence < largeOccurrenceCount; occurrence++) {
+	BRLObolCompactInstanceHandle candidateHandle;
+	BRLObolCompactInstanceSummary candidate;
+	if (!largeViews[0]->getCompactInstanceHandle(occurrence,
+		candidateHandle) || !largeViews[0]->getCompactInstanceSummary(
+		candidateHandle, candidate))
+	    FAIL("large compact assembly should expose every occurrence handle");
+	const char *sourceName = candidate.sourceName.getString();
+	const char *path = candidate.path.getString();
+	if (BU_STR_EQUAL(sourceName, "ball.s")) {
+	    largeMarkerHandle = candidateHandle;
+	    largeMarkerBefore = candidate;
+	} else if (BU_STR_EQUAL(sourceName, "box.s") && path &&
+	    strchr(path, '@') && !largeEditHandle.isValid()) {
+	    largeEditHandle = candidateHandle;
+	    largeEditBefore = candidate;
+	} else if (BU_STR_EQUAL(sourceName, "box.s") &&
+	    !largeOtherHandle.isValid()) {
+	    largeOtherHandle = candidateHandle;
+	    largeOtherBefore = candidate;
+	}
+    }
+    if (!largeEditHandle.isValid() || !largeOtherHandle.isValid() ||
+	!largeMarkerHandle.isValid() || largeEditBefore.path.getLength() == 0)
+	FAIL("large compact assembly should provide distinct occurrence paths");
+    const int largeEditVisibilityChanged =
+	largeViews[0]->setCompactInstanceDisplayStateForPath(
+	    largeEditBefore.path.getString(), FALSE, 1, FALSE, 0, FALSE,
+	    0, FALSE);
+    const int largeEditSelectionChanged =
+	largeViews[0]->setCompactInstanceDisplayStateForPath(
+	    largeEditBefore.path.getString(), FALSE, 0, FALSE, 1, TRUE,
+	    0, FALSE);
+    if (largeEditVisibilityChanged != 1 || largeEditSelectionChanged != 1)
+	FAIL("large compact assembly exact-path edit should affect one occurrence per field");
+    if (largeViews[1]->getCompactInstanceCountForPath(
+	largeEditBefore.path.getString(), FALSE) != 1)
+	FAIL("large compact occurrence paths should remain consistent between views");
+
+    BRLObolCompactInstanceSummary largeEditState;
+    BRLObolCompactInstanceSummary largeOtherState;
+    if (!largeViews[0]->getCompactInstanceSummary(largeEditHandle,
+	    largeEditState) ||
+	!largeViews[0]->getCompactInstanceSummary(largeOtherHandle,
+	    largeOtherState) ||
+	largeEditState.visible || !largeEditState.selected ||
+	largeOtherState.visible != largeOtherBefore.visible ||
+	largeOtherState.selected != largeOtherBefore.selected)
+	FAIL("large compact display edits should preserve unrelated occurrence state");
+    if (largeViews[0]->refreshCompactObjectGeometry("ball.s", 200) != 1 ||
+	!largeViews[0]->isCompactInstanceHandleValid(largeEditHandle) ||
+	!largeViews[0]->isCompactInstanceHandleValid(largeOtherHandle) ||
+	!largeViews[0]->isCompactInstanceHandleValid(largeMarkerHandle) ||
+	largeViews[0]->getCompactPartCount() != 2 ||
+	largeViews[0]->getCompactInstanceCount() != largeOccurrenceCount ||
+	largeViews[1]->getCompactInstanceCount() != largeOccurrenceCount ||
+	largeViews[2]->getCompactInstanceCount() != largeOccurrenceCount ||
+	largeViews[1]->sourceRevision.getValue() != 101 ||
+	largeViews[2]->sourceRevision.getValue() != 102)
+	FAIL("large compact primitive refresh should remain source-local and retain handles");
+
+    BRLObolCompactInstanceSummary largeEditAfter;
+    BRLObolCompactInstanceSummary largeOtherAfter;
+    BRLObolCompactInstanceSummary largeMarkerAfter;
+    if (!largeViews[0]->getCompactInstanceSummary(largeEditHandle,
+	largeEditAfter) ||
+	!largeViews[0]->getCompactInstanceSummary(largeOtherHandle,
+	largeOtherAfter) || !largeViews[0]->getCompactInstanceSummary(
+	largeMarkerHandle, largeMarkerAfter) ||
+	largeEditAfter.geometryRevision != largeEditState.geometryRevision ||
+	largeOtherAfter.geometryRevision != largeOtherState.geometryRevision ||
+	largeMarkerAfter.geometryRevision <= largeMarkerBefore.geometryRevision ||
+	largeEditAfter.visible != largeEditState.visible ||
+	largeEditAfter.selected != largeEditState.selected ||
+	largeOtherAfter.visible != largeOtherState.visible ||
+	largeOtherAfter.selected != largeOtherState.selected)
+	FAIL("large compact primitive refresh should change only geometry state");
+    root->unref();
+
     db_close(dbip);
     bu_file_delete(dbpath);
     bu_dirclear(lodCacheDir);

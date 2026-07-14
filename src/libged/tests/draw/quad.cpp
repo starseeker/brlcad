@@ -82,6 +82,9 @@ dm_refresh(struct ged *gedp, int vnum)
     void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	return;
+    if (!draw_test_obol_progressive_drain(gedp, v, 2000, 1))
+	bu_exit(EXIT_FAILURE,
+	    "Obol progressive realization did not settle before baseline capture\n");
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
@@ -435,9 +438,14 @@ main(int ac, char *av[]) {
 
     /* We want a local working dir cache */
     char lcache[MAXPATHLEN] = {0};
+    char runtime_cache[MAXPATHLEN] = {0};
     bu_dir(lcache, MAXPATHLEN, BU_DIR_CURR, "ged_draw_test_quad_cache", NULL);
     bu_mkdir(lcache);
-    bu_setenv("BU_DIR_CACHE", lcache, 1);
+    bu_dir(runtime_cache, MAXPATHLEN, BU_DIR_CURR,
+	   "ged_draw_test_quad_cache", "cache", NULL);
+    bu_mkdir(runtime_cache);
+    /* Runtime cache resets must not delete extracted controls. */
+    bu_setenv("BU_DIR_CACHE", runtime_cache, 1);
 
     unpack_apng(ctrl_dir, "quad_00.apng", lcache, "quad_00_");
     unpack_apng(ctrl_dir, "quad_01.apng", lcache, "quad_01_");

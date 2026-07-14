@@ -29,7 +29,6 @@
 
 #include "bu/opt.h"
 #include "bv.h"
-#include "dm.h"
 #include "ged/draw.h"
 #include "../ged_private.h"
 
@@ -169,6 +168,12 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 		bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
 			factor, min, max);
 	}
+	/* A deferred Obol root starts with a proxy and gains its full bounds as
+	 * realization completes.  Continue fitting this command's view until
+	 * that work settles, unless a later view change supersedes it. */
+	if (!all_view_objs)
+	    (void)ged_draw_obol_progressive_autoview_follow(gedp, view_ctx,
+		    factor);
     }
 
     return BRLCAD_OK;

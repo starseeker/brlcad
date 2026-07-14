@@ -40,22 +40,11 @@
 #include "../ged_private.h"
 
 
-static const char *
-ged_rt_framebuffer_device(struct ged *gedp)
+static int
+ged_rt_is_image_renderer(const char *command)
 {
-    if (!gedp)
-	return NULL;
-
-    ged_rt_fb_refresh(gedp);
-    const char *fbdev = ged_rt_fb_get(gedp);
-    if (fbdev && fbdev[0])
-	return fbdev;
-
-    void *view_ctx = ged_view_active_ctx(gedp);
-    if (ged_view_context_display_manager_get(view_ctx))
-	return "/dev/ogl";
-
-    return NULL;
+    return command && (BU_STR_EQUAL(command, "rt") ||
+	BU_STR_EQUAL(command, "rtedge") || BU_STR_EQUAL(command, "art"));
 }
 
 
@@ -89,14 +78,13 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     void *view_ctx = ged_view_active_ctx(gedp);
-    const char *fbdev = ged_rt_framebuffer_device(gedp);
+    if (ged_rt_is_image_renderer(argv[0]) &&
+	ged_view_context_display_endpoint_get(view_ctx))
+	return _ged_external_rt_to_endpoint(gedp, argc, argv, argv[0], NULL);
+
     perspective = bv_perspective_get(
 		      bv_context_view_const((const struct bv_context *)view_ctx));
-    if (fbdev) {
-	args = argc + 9 + 2 + (int)ged_who_argc(gedp);
-    } else {
-	args = argc + 7 + 2 + (int)ged_who_argc(gedp);
-    }
+    args = argc + 7 + 2 + (int)ged_who_argc(gedp);
     gd_rt_cmd = (char **)bu_calloc(args, sizeof(char *), "alloc gd_rt_cmd");
 
     // rtweight puts its output on stdout as well as stderr - let _ged_run_rt
@@ -113,11 +101,6 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 
     vp = &gd_rt_cmd[0];
     *vp++ = rt;
-
-    if (fbdev) {
-	*vp++ = "-F";
-	*vp++ = (char *)fbdev;
-    }
 
     *vp++ = "-M";
 

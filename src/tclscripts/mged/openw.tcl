@@ -122,7 +122,7 @@ if {![info exists mged_default(gdisplay)]} {
 }
 
 if {![info exists mged_default(dm_type)]} {
-    set mged_default(dm_type) [dm_bestXType $mged_default(gdisplay)]
+    set mged_default(dm_type) tkobol
 }
 
 if {![info exists mged_default(comb)]} {
@@ -364,7 +364,7 @@ proc gui { args } {
 		set gscreen $screen
 
 		if {!$dtype_set} {
-		    set dtype [dm_bestXType $gscreen]
+		    set dtype tkobol
 		}
 	    }
 	} elseif {$arg == "-gd" || $arg == "-gdisplay"} {
@@ -382,7 +382,7 @@ proc gui { args } {
 	    }
 
 	    if {!$dtype_set} {
-		set dtype [dm_bestXType $gscreen]
+		set dtype tkobol
 	    }
 	} elseif {$arg == "-dt"} {
 	    incr i
@@ -448,8 +448,8 @@ proc gui { args } {
     set mged_gui($id,lastButtonPress) 0
     set mged_gui($id,lastItem) ""
 
-    if {![dm_validXType $gscreen $dtype]} {
-	set dtype [dm_bestXType $gscreen]
+    if {$dtype ne "tkobol"} {
+	return "gui: unsupported Obol host type \"$dtype\" (expected tkobol)"
     }
 
     if { [info exists tk_strictMotif] == 0 } {
@@ -1715,23 +1715,6 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	the X axis, the view continues to rotate about the
 	X axis until the rate rotation is stopped." }
 	    { see_also "knob" } }
-    .$id.menubar.modes add checkbutton -offvalue 0 -onvalue 1 -variable mged_gui($id,cache)\
-	-label "Backend Cache" -underline 8\
-	-command "mged_apply $id \"set cache \$mged_gui($id,cache)\""
-    hoc_register_menu_data "Modes" "Backend Cache" "Backend Cache"\
-	{ { summary "Toggle the use of backend caches. This currently affects
-	only Ogl display managers. When using backend caches the
-	screen update time is significantly faster. This is especially
-	noticeable when running MGED remotely. Use of backend caches
-	is encouraged unless the geometry being viewed is bigger
-	than the Ogl server can handle (i.e. the server runs out
-	of available memory for storing backend caches). When this
-	happens the machine will begin to swap (and little else).
-	If huge pieces of geometry need to be viewed, consider
-	toggling off backend caches. Note that using backend caches
-	while viewing geometry of any significant size will incur
-	noticeable compute time up front to create the backend caches."} }
-
     menu .$id.menubar.modes.axes -title "Axes" -tearoff $mged_default(tearoff_menus)
     .$id.menubar.modes.axes add checkbutton -offvalue 0 -onvalue 1\
 	-variable mged_gui($id,view_draw) -label "View" -underline 0\
@@ -2388,7 +2371,6 @@ proc update_mged_vars { id } {
     global fb
     global fb_all
     global fb_overlay
-    global cache
     global mouse_behavior
     global coords
     global rotate_about
@@ -2406,7 +2388,6 @@ proc update_mged_vars { id } {
     set mged_gui($id,view_draw) [rset ax view_draw]
     set mged_gui($id,edit_draw) [rset ax edit_draw]
     set mged($id,use_air) $use_air
-    set mged_gui($id,cache) $cache
     set mged_gui($id,rubber_band) [rset rb draw]
     set mged_gui($id,mouse_behavior) $mouse_behavior
     set mged_gui($id,coords) $coords

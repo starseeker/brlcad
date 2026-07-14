@@ -128,7 +128,7 @@ struct cmdtab {
 };
 
 #include "./menu.h"
-#include "./mged_dm.h" /* _view_state */
+#include "./mged_display.h" /* _view_state */
 
 struct mged_edit_state {
 
@@ -136,15 +136,13 @@ struct mged_edit_state {
     // a few additional MGED-only slots, hence mged_edit_state
     struct rt_edit *e;
 
-    // DM pointers - used by the editing code to stash current dm pointers for
-    // later restoration when editing.  Not 100% sure yet what the purpose is -
-    // seems to be allowing for the possibility of a change of mged_curr_dm
-    // mid-edit?
-    struct mged_dm *edit_rate_mr_dm;
-    struct mged_dm *edit_rate_or_dm;
-    struct mged_dm *edit_rate_vr_dm;
-    struct mged_dm *edit_rate_mt_dm;
-    struct mged_dm *edit_rate_vt_dm;
+    // Display records used by editing to restore the active view after a
+    // temporary rate operation.
+    struct mged_display *edit_rate_mr_display;
+    struct mged_display *edit_rate_or_display;
+    struct mged_display *edit_rate_vr_display;
+    struct mged_display *edit_rate_mt_display;
+    struct mged_display *edit_rate_vt_display;
 
     int es_edclass;            /* type of editing class for this solid */
 };
@@ -208,8 +206,7 @@ struct mged_state {
     struct mged_tol tol;
     Tcl_Interp *interp;
 
-    /* >0 means interactive. Gets set to 0 if there's libdm graphics support,
-     * and forced with -c option. */
+    /* >0 means interactive. A graphical endpoint or -c forces command mode. */
     int classic_mged;
     int interactive; /* for pr_prompt */
 
@@ -221,7 +218,7 @@ struct mged_state {
     struct bu_vls mged_prompt;
 
     /* Display related */
-    struct mged_dm *mged_curr_dm;
+    struct mged_display *mged_curr_display;
     char *dpy_string;
     struct bu_list *vlfree;
 
@@ -313,7 +310,7 @@ extern void moveHinstance(struct mged_state *s, struct directory *cdp, struct di
 extern void moveHobj(struct mged_state *s, struct directory *dp, matp_t xlate);
 extern void quit(struct mged_state *s);
 extern void refresh(struct mged_state *s);
-extern void mged_obol_display_detach(struct mged_state *s, struct mged_dm *mdmp);
+extern void mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp);
 extern void setview(struct mged_state *s, double a1, double a2, double a3);
 extern void adcursor(struct mged_state *s);
 extern void get_attached(struct mged_state *s);
@@ -410,7 +407,7 @@ struct mged_hist {
 /* internal variables related to the command window(s) */
 struct cmd_list {
     struct bu_list l;
-    struct mged_dm *cl_tie;        /* the drawing window that we're tied to */
+    struct mged_display *cl_tie;        /* the drawing window that we're tied to */
     struct mged_hist *cl_cur_hist;
     struct bu_vls cl_more_default;
     struct bu_vls cl_name;
@@ -442,8 +439,8 @@ extern struct run_rt head_run_rt;
 
 /* attach.c */
 int mged_attach(struct mged_state *s, const char *wp_name, int argc, const char *argv[]);
-void mged_link_vars(struct mged_dm *p);
-void mged_slider_free_vls(struct mged_dm *p);
+void mged_link_vars(struct mged_display *p);
+void mged_slider_free_vls(struct mged_display *p);
 int gui_setup(struct mged_state *s, const char *dstr);
 
 
@@ -456,7 +453,7 @@ void size_reset(struct mged_state *s);
 void solid_list_callback(struct mged_state *s);
 
 extern void view_ring_init(struct _view_state *vsp1, struct _view_state *vsp2); /* defined in chgview.c */
-extern void view_ring_destroy(struct mged_dm *dlp);
+extern void view_ring_destroy(struct mged_display *dlp);
 
 /* cmd.c / cmd.cpp */
 int cmdline(struct mged_state *s, struct bu_vls *vp, int record);
@@ -576,7 +573,7 @@ void set_e_axes_pos(struct mged_state *s, int both);
 int set_e_axes_pos_clbk(int, const char **, void *, void *);
 
 /* share.c */
-void usurp_all_resources(struct mged_dm *dlp1, struct mged_dm *dlp2);
+void usurp_all_resources(struct mged_display *dlp1, struct mged_display *dlp2);
 
 /* set.c */
 extern void set_absolute_tran(struct mged_state *);

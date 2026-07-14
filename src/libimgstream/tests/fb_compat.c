@@ -21,6 +21,8 @@
 
 #include "common.h"
 
+#include "bu/str.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -299,8 +301,8 @@ test_spec_classification(void)
     CHECK(imgstream_fb_spec_supported("/dev/qtgl") == 0, "display spec is not core-stream supported");
     CHECK(imgstream_fb_open("/dev/qtgl", 4, 4) == NULL, "display spec open fails explicitly for now");
 
-    CHECK(strcmp(imgstream_fb_spec_kind_name(IMGSTREAM_FB_SPEC_MEMORY), "memory") == 0, "memory kind name");
-    CHECK(strcmp(imgstream_fb_spec_kind_name(IMGSTREAM_FB_SPEC_DISPLAY), "display") == 0, "display kind name");
+    CHECK(bu_strcmp(imgstream_fb_spec_kind_name(IMGSTREAM_FB_SPEC_MEMORY), "memory") == 0, "memory kind name");
+    CHECK(bu_strcmp(imgstream_fb_spec_kind_name(IMGSTREAM_FB_SPEC_DISPLAY), "display") == 0, "display kind name");
 
     return 0;
 }
@@ -408,6 +410,37 @@ test_display_host_compat_stream(void)
 
 
 static int
+test_display_host_detach(void)
+{
+    struct display_host_test_state state;
+    struct imgstream_fb_display_host host;
+    memset(&state, 0, sizeof(state));
+    memset(&host, 0, sizeof(host));
+    host.open = display_host_open;
+    host.close = display_host_close;
+    host.flush = display_host_flush;
+    host.view = display_host_view;
+
+    imgstream_fb_t *fb = imgstream_fb_open_display("/dev/qtgl", 3, 2,
+	&host, &state);
+    CHECK(fb != NULL && state.open_count == 1,
+	"display host opens before detachment");
+    CHECK(imgstream_fb_detach_display_host(fb) == 0,
+	"display host detaches without closing the pixel stream");
+    CHECK(imgstream_fb_flush(fb) == 0 && state.flush_count == 0,
+	"detached display flush does not access the former host");
+    CHECK(imgstream_fb_view(fb, 1, 1, 2, 2) == 0 && state.view_count == 0,
+	"detached display view does not access the former host");
+    imgstream_fb_close(fb);
+    CHECK(state.close_count == 1,
+	"display host closes exactly once during detachment");
+    CHECK(imgstream_fb_detach_display_host(NULL) == -1,
+	"null display host detachment is rejected");
+    return 0;
+}
+
+
+static int
 test_memory_compat_stream(void)
 {
     imgstream_fb_t *fb = imgstream_fb_open("/dev/mem", 4, 3);
@@ -415,7 +448,7 @@ test_memory_compat_stream(void)
     CHECK(imgstream_fb_width(fb) == 4 && imgstream_fb_height(fb) == 3, "compat stream dimensions recorded");
     CHECK(imgstream_fb_stream(fb) != NULL, "compat stream exposes mutable stream");
     CHECK(imgstream_fb_cstream(fb) != NULL, "compat stream exposes const stream");
-    CHECK(strcmp(imgstream_fb_name(fb), "/dev/mem") == 0, "compat stream name recorded");
+    CHECK(bu_strcmp(imgstream_fb_name(fb), "/dev/mem") == 0, "compat stream name recorded");
 
     int xcenter = 0;
     int ycenter = 0;
@@ -609,7 +642,7 @@ test_file_compat_stream(void)
     imgstream_fb_t *fb = imgstream_fb_open(path, 3, 2);
     CHECK(fb != NULL, "opened file compatibility stream");
     CHECK(imgstream_fb_width(fb) == 3 && imgstream_fb_height(fb) == 2, "file stream dimensions recorded");
-    CHECK(strcmp(imgstream_fb_name(fb), path) == 0, "file stream name recorded");
+    CHECK(bu_strcmp(imgstream_fb_name(fb), path) == 0, "file stream name recorded");
     CHECK(imgstream_fb_write(fb, 0, 0, frame, 6) == 6, "file stream linear write accepted");
     CHECK(imgstream_fb_flush(fb) == 0, "file stream flush accepted");
 
@@ -675,7 +708,7 @@ test_fanout_compat_stream(void)
     CHECK(fb != NULL, "opened fanout compatibility stream");
     CHECK(imgstream_fb_width(fb) == 3 && imgstream_fb_height(fb) == 2, "fanout stream dimensions recorded");
     CHECK(imgstream_fb_stream(fb) != NULL, "fanout exposes first child stream");
-    CHECK(strcmp(imgstream_fb_name(fb), spec) == 0, "fanout stream name recorded");
+    CHECK(bu_strcmp(imgstream_fb_name(fb), spec) == 0, "fanout stream name recorded");
     CHECK(imgstream_fb_writerect(fb, 0, 0, 3, 2, frame) == 6, "fanout rect write accepted");
 
     unsigned char readback[sizeof(frame)];
@@ -757,7 +790,7 @@ test_diagnostic_compat_stream(void)
     CHECK(fb != NULL, "opened null diagnostic compatibility stream");
     CHECK(imgstream_fb_width(fb) == 4 && imgstream_fb_height(fb) == 3, "null diagnostic dimensions recorded");
     CHECK(imgstream_fb_stream(fb) != NULL, "null diagnostic exposes compatibility stream");
-    CHECK(strcmp(imgstream_fb_name(fb), "/dev/null") == 0, "null diagnostic name recorded");
+    CHECK(bu_strcmp(imgstream_fb_name(fb), "/dev/null") == 0, "null diagnostic name recorded");
 
     unsigned char pixel[3] = {200, 201, 202};
     CHECK(imgstream_fb_write(fb, -10, -20, pixel, 1) == 1, "null diagnostic write discards out-of-range pixels");
@@ -932,6 +965,8 @@ main(int ac, char **av)
     if (test_spec_classification())
 	return 1;
     if (test_display_host_compat_stream())
+	return 1;
+    if (test_display_host_detach())
 	return 1;
     if (test_memory_compat_stream())
 	return 1;

@@ -33,7 +33,6 @@
 #include "rt/db_io.h"
 #include "rt/directory.h"
 #include "qtcad/QgGedEventBatch.h"
-#include "qtcad/QgLegacyView.h"
 #include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
 #include "../qged_edit_preview_util.h"

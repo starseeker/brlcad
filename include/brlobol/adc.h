@@ -12,7 +12,9 @@
 #include "brlobol/defines.h"
 
 #include <Inventor/fields/SoSFBool.h>
+#include <Inventor/fields/SoSFColor.h>
 #include <Inventor/fields/SoSFFloat.h>
+#include <Inventor/fields/SoSFInt32.h>
 #include <Inventor/fields/SoSFString.h>
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoSeparator.h>
@@ -31,6 +33,9 @@ public:
     SoSFFloat distance;
     SoSFFloat crosshairSize;
     SoSFFloat tickSize;
+    SoSFColor lineColor;
+    SoSFColor tickColor;
+    SoSFInt32 lineWidth;
     SoSFBool visible;
 
     SoBRLADC(void);
@@ -38,6 +43,7 @@ public:
 
     SoBRLVListShape *rebuildGeometry(void);
     SoBRLVListShape *getGeometryShape(void) const;
+    SoBRLVListShape *getTickGeometryShape(void) const;
 
 protected:
     virtual ~SoBRLADC(void);

@@ -17,7 +17,7 @@
  * License along with this file; see the file named COPYING for more
  * information.
  */
-/** @addtogroup libstruct fb */
+/** @addtogroup libtclcad */
 /** @{ */
 /**
  *
@@ -36,7 +36,7 @@
 #include <tcl.h>
 #include "bio.h"
 #include "bnetwork.h"
-#include "dm.h"
+#include "pkg.h"
 #include "tclcad.h"
 
 /* We need to use different Tcl I/O mechanisms on different

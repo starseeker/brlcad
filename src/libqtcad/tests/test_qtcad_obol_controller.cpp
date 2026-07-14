@@ -7,6 +7,12 @@
 
 #include "common.h"
 
+#include "bu/app.h"
+
+#include "bu/str.h"
+
+#include "bv.h"
+
 #include "brlobol/display_endpoint.h"
 #include "brlobol/view_controller.h"
 #ifdef BRLCAD_OPENGL
@@ -14,7 +20,6 @@
 #endif
 #include "qtcad/QgSW.h"
 #include "qtcad/QgView.h"
-#include "QgLegacyViewContext.h"
 
 #include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
@@ -128,9 +133,10 @@ camera_state_changed(SoCamera *camera, const SbVec3f &beforePosition,
 int
 main(int argc, char **argv)
 {
+    bu_setprogname(argv[0]);
     QApplication app(argc, argv);
 
-    QgView view(NULL, QgView_SW);
+    QgView view(NULL, QgViewType::SW);
     view.resize(160, 120);
     if (!SoDB::getContextManager())
 	FAIL("QgView should install an Obol context manager");
@@ -142,7 +148,7 @@ main(int argc, char **argv)
 	brlobol_display_endpoint_controller(view.displayEndpoint()) != controller)
 	FAIL("QgView should expose its endpoint-owned Obol controller");
     if (!brlobol_display_endpoint_host(view.displayEndpoint()) ||
-	strcmp(brlobol_display_endpoint_host_factory_name(view.displayEndpoint()),
+	bu_strcmp(brlobol_display_endpoint_host_factory_name(view.displayEndpoint()),
 	    "qt-sw") != 0)
 	FAIL("QgView should host its software canvas through the Qt endpoint factory");
 
@@ -179,7 +185,7 @@ main(int argc, char **argv)
 	FAIL("Obol view controller should render the full window viewport");
     struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
     if (!bv_background_state_get(&background,
-	    qg_legacy_view_bv_const(view.view())) ||
+	    bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext()))) ||
 	background.bottom[0] != 110 || background.bottom[1] != 110 ||
 	background.bottom[2] != 110 || background.top[0] != 0 ||
 	background.top[1] != 0 || background.top[2] != 50)
@@ -191,24 +197,48 @@ main(int argc, char **argv)
 	    SbColor(0.0f, 0.0f, 50.0f / 255.0f))
 	FAIL("qtcad should synchronize its default gradient to Obol");
 
-    background = BV_BACKGROUND_STATE_INIT;
-    VSET(background.bottom, 16, 32, 48);
-    VSET(background.top, 64, 80, 96);
-    (void)bv_background_state_set(qg_legacy_view_bv(view.view()),
-	&background);
+    struct brlobol_endpoint_property_value background_property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    background_property.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    VSET(background_property.color3, 16.0 / 255.0, 32.0 / 255.0,
+	48.0 / 255.0);
+    if (brlobol_display_endpoint_property_set(view.displayEndpoint(),
+	"controller.background.bottom", &background_property) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	FAIL("qtcad background bottom should use the endpoint property");
+    VSET(background_property.color3, 64.0 / 255.0, 80.0 / 255.0,
+	96.0 / 255.0);
+    if (brlobol_display_endpoint_property_set(view.displayEndpoint(),
+	"controller.background.top", &background_property) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	FAIL("qtcad background top should use the endpoint property");
     view.need_update(QG_VIEW_DRAWN);
     if (controller->getBackgroundBottomColor() !=
 	    SbColor(16.0f / 255.0f, 32.0f / 255.0f, 48.0f / 255.0f) ||
 	controller->getBackgroundTopColor() !=
 	    SbColor(64.0f / 255.0f, 80.0f / 255.0f, 96.0f / 255.0f))
-	FAIL("qtcad should synchronize neutral view gradient colors to Obol");
+	FAIL("qtcad should preserve endpoint-owned gradient colors");
+
+    /* A stale passive view value must not overwrite an endpoint policy during
+     * a normal canvas refresh. */
+    background = BV_BACKGROUND_STATE_INIT;
+    VSET(background.bottom, 1, 2, 3);
+    VSET(background.top, 4, 5, 6);
+    (void)bv_background_state_set(bv_context_view(
+	static_cast<struct bv_context *>(view.viewContext())), &background);
+    view.need_update(QG_VIEW_DRAWN);
+    if (controller->getBackgroundBottomColor() !=
+	    SbColor(16.0f / 255.0f, 32.0f / 255.0f, 48.0f / 255.0f) ||
+	controller->getBackgroundTopColor() !=
+	    SbColor(64.0f / 255.0f, 80.0f / 255.0f, 96.0f / 255.0f))
+	FAIL("qtcad refresh should not overwrite endpoint background policy");
 
     controller->clearRenderRequest();
     if (controller->isRenderRequested())
 	FAIL("Obol view controller should clear render requests");
     controller->requestRender("qtcad-test");
     if (!controller->isRenderRequested() ||
-	    strcmp(controller->getRenderReason().getString(), "qtcad-test") != 0)
+	    bu_strcmp(controller->getRenderReason().getString(), "qtcad-test") != 0)
 	FAIL("Obol view controller should retain render requests");
 
     SbVec3f beforeAET = camera->position.getValue();
@@ -220,11 +250,11 @@ main(int argc, char **argv)
 	    fabsf(beforeAET[2] - afterAET[2]) < 0.001f)
 	FAIL("QgView AET updates should synchronize the Obol camera");
     if (!controller->isRenderRequested() ||
-	    strcmp(controller->getRenderReason().getString(), "rt-view-camera") != 0)
+	    bu_strcmp(controller->getRenderReason().getString(), "rt-view-camera") != 0)
 	FAIL("Obol camera synchronization should request a render");
     SbString renderReason;
     if (!controller->consumeRenderRequest(&renderReason) ||
-	    strcmp(renderReason.getString(), "rt-view-camera") != 0 ||
+	    bu_strcmp(renderReason.getString(), "rt-view-camera") != 0 ||
 	    controller->isRenderRequested())
 	FAIL("Obol render requests should be consumable by render managers");
     if (controller->consumeRenderRequest(NULL))
@@ -240,7 +270,7 @@ main(int argc, char **argv)
     if (controller->isRenderRequested())
 	FAIL("unchanged viewport size should not request another render");
 
-    void *viewCtx = qg_legacy_view_to_context(view.view());
+    void *viewCtx = view.viewContext();
     (void)controller->syncCameraFromViewContext(viewCtx);
     controller->clearRenderRequest();
     (void)controller->syncCameraFromViewContext(viewCtx);
@@ -293,10 +323,8 @@ main(int argc, char **argv)
 	FAIL("QgView visible SW capture should use populated Obol scenes");
     if (controller->isRenderRequested())
 	FAIL("QgView visible SW capture should consume Obol render requests");
-    if (view.legacyBackendInitialized())
-	FAIL("QgView visible SW capture should not initialize the legacy display manager for Obol content");
 
-    struct bv *fpsView = qg_legacy_view_bv(view.view());
+    struct bv *fpsView = bv_context_view(static_cast<struct bv_context *>(view.viewContext()));
     struct bv_params_state fpsParams = BV_PARAMS_STATE_INIT;
     (void)bv_params_state_get(&fpsParams, fpsView);
     fpsParams.draw = 1;
@@ -311,8 +339,6 @@ main(int argc, char **argv)
     painter.end();
     if (controller->isRenderRequested())
 	FAIL("QgView visible SW paint should consume Obol render requests");
-    if (view.legacyBackendInitialized())
-	FAIL("QgView visible SW paint should bypass the legacy display manager for Obol content");
     if (lit_pixel_count(paintTarget) < 10)
 	FAIL("QgView visible SW paint should draw populated Obol scenes");
     if (controller->getLastRenderTimeNanoseconds() == 0 ||
@@ -324,7 +350,7 @@ main(int argc, char **argv)
     BRLObolViewController *swController = swCanvas.obolViewController();
     if (!swController ||
 	    !swController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
-	FAIL("QgSW input test should expose an Obol scene before legacy initialization");
+	FAIL("QgSW input test should expose an Obol scene before first paint");
     SoSeparator *swRoot = static_cast<SoSeparator *>(swController->getSceneRoot());
     swRoot->addChild(new SoDirectionalLight);
     SoMaterial *swMaterial = new SoMaterial;
@@ -338,16 +364,47 @@ main(int argc, char **argv)
     swRoot->addChild(swCube);
     swController->getViewport()->viewAll();
     SoCamera *swCamera = swController->getCamera();
+
+    /* Exercise the canvas through an endpoint rather than its local fallback
+     * context.  These bindings own view-local faceplate state, so they must
+     * not quietly fall back to an application-global input path. */
+    brlobol_display_endpoint_t *swEndpoint =
+	brlobol_display_endpoint_create(swController, 0);
+    if (!swEndpoint)
+	FAIL("QgSW input test should create an endpoint");
+    swCanvas.setObolInputEndpoint(swEndpoint);
+    struct bv *swView = bv_context_view(swCanvas.viewContext());
+    struct bv_adc_state swAdc = BV_ADC_STATE_INIT;
+    struct bv_axes_state swModelAxes = BV_AXES_STATE_INIT;
+    struct bv_axes_state swViewAxes = BV_AXES_STATE_INIT;
+    (void)bv_adc_state_get(&swAdc, swView);
+    (void)bv_model_axes_state_get(&swModelAxes, swView);
+    (void)bv_view_axes_state_get(&swViewAxes, swView);
+    const int beforeAdc = swAdc.draw;
+    const int beforeModelAxes = swModelAxes.draw;
+    const int beforeViewAxes = swViewAxes.draw;
+    QKeyEvent adcKey(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier, "A");
+    QKeyEvent modelAxesKey(QEvent::KeyPress, Qt::Key_M, Qt::NoModifier, "M");
+    QKeyEvent viewAxesKey(QEvent::KeyPress, Qt::Key_V, Qt::NoModifier, "V");
+    swCanvas.runKeyPressForTest(&adcKey);
+    swCanvas.runKeyPressForTest(&modelAxesKey);
+    swCanvas.runKeyPressForTest(&viewAxesKey);
+    (void)bv_adc_state_get(&swAdc, swView);
+    (void)bv_model_axes_state_get(&swModelAxes, swView);
+    (void)bv_view_axes_state_get(&swViewAxes, swView);
+    if (swAdc.draw == beforeAdc ||
+	swModelAxes.draw == beforeModelAxes ||
+	swViewAxes.draw == beforeViewAxes)
+	FAIL("QgSW endpoint input should toggle local faceplate state");
+
     SbVec3f beforeKey = swCamera->position.getValue();
     swController->clearRenderRequest();
     QKeyEvent keyEvent(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier, "T");
     swCanvas.runKeyPressForTest(&keyEvent);
     if (!camera_moved(swCamera, beforeKey))
-	FAIL("QgSW default key navigation should update the Obol camera without legacy DM");
+	FAIL("QgSW default key navigation should update the Obol camera");
     if (!swController->isRenderRequested())
-	FAIL("QgSW default key navigation should request an Obol render without legacy DM");
-    if (swCanvas.legacyBackendInitialized())
-	FAIL("QgSW default key navigation should not initialize the legacy display manager");
+	FAIL("QgSW default key navigation should request an Obol render");
 
     SbVec3f beforeWheel = swCamera->position.getValue();
     float beforeWheelFocal = swCamera->focalDistance.getValue();
@@ -355,11 +412,9 @@ main(int argc, char **argv)
     QWheelEvent swWheel = wheel_event(80, 60, 120);
     swCanvas.runWheelForTest(&swWheel);
     if (!camera_state_changed(swCamera, beforeWheel, beforeWheelFocal))
-	FAIL("QgSW wheel navigation should update the Obol camera without legacy DM");
+	FAIL("QgSW wheel navigation should update the Obol camera");
     if (!swController->isRenderRequested())
-	FAIL("QgSW wheel navigation should request an Obol render without legacy DM");
-    if (swCanvas.legacyBackendInitialized())
-	FAIL("QgSW wheel navigation should not initialize the legacy display manager");
+	FAIL("QgSW wheel navigation should request an Obol render");
 
     SbVec3f beforeDrag = swCamera->position.getValue();
     float beforeDragFocal = swCamera->focalDistance.getValue();
@@ -369,19 +424,20 @@ main(int argc, char **argv)
     swCanvas.runMouseMoveForTest(&swMoveStart);
     swCanvas.runMouseMoveForTest(&swMoveDrag);
     if (!camera_state_changed(swCamera, beforeDrag, beforeDragFocal))
-	FAIL("QgSW drag navigation should update the Obol camera without legacy DM");
+	FAIL("QgSW drag navigation should update the Obol camera");
     if (!swController->isRenderRequested())
-	FAIL("QgSW drag navigation should request an Obol render without legacy DM");
-    if (swCanvas.legacyBackendInitialized())
-	FAIL("QgSW drag navigation should not initialize the legacy display manager");
+	FAIL("QgSW drag navigation should request an Obol render");
 
-    QgView glView(NULL, QgView_GL);
+    swCanvas.setObolInputEndpoint(NULL);
+    brlobol_display_endpoint_destroy(swEndpoint);
+
+    QgView glView(NULL, QgViewType::GL);
     glView.resize(128, 96);
-    if (glView.view_type() == QgView_GL) {
+    if (glView.view_type() == QgViewType::GL) {
 	BRLObolViewController *glController = glView.obolViewController();
 	if (!glController ||
 		!glController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
-	    FAIL("QgGL should expose an Obol scene before legacy GL initialization");
+	    FAIL("QgGL should expose an Obol scene before first paint");
 
 	SoSeparator *glRoot = static_cast<SoSeparator *>(glController->getSceneRoot());
 	glRoot->addChild(new SoDirectionalLight);
@@ -400,11 +456,9 @@ main(int argc, char **argv)
 	QImage glVisibleImage;
 	glView.get_viewport_image(glVisibleImage);
 	if (glVisibleImage.isNull() || lit_pixel_count(glVisibleImage) < 10)
-	    FAIL("QgGL visible capture should use Obol readback before legacy GL initialization");
+	    FAIL("QgGL visible capture should use Obol readback before first paint");
 	if (glController->isRenderRequested())
 	    FAIL("QgGL visible capture should consume Obol render requests");
-	if (glView.legacyBackendInitialized())
-	    FAIL("QgGL visible capture should not initialize the legacy display manager for Obol content");
 
 #ifdef BRLCAD_OPENGL
 	TestQgGL glCanvas(NULL);
@@ -439,11 +493,9 @@ main(int argc, char **argv)
 	    QKeyEvent glKeyEvent(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier, "T");
 	    glCanvas.runKeyPressForTest(&glKeyEvent);
 	    if (!camera_moved(paintCamera, beforeGLKey))
-		FAIL("QgGL default key navigation should update the Obol camera without legacy DM");
+		FAIL("QgGL default key navigation should update the Obol camera");
 	    if (!paintController->isRenderRequested())
-		FAIL("QgGL default key navigation should request an Obol render without legacy DM");
-	    if (glCanvas.legacyBackendInitialized())
-		FAIL("QgGL default key navigation should not initialize the legacy display manager");
+		FAIL("QgGL default key navigation should request an Obol render");
 
 	    SbVec3f beforeGLWheel = paintCamera->position.getValue();
 	    float beforeGLWheelFocal = paintCamera->focalDistance.getValue();
@@ -451,11 +503,9 @@ main(int argc, char **argv)
 	    QWheelEvent glWheel = wheel_event(64, 48, 120);
 	    glCanvas.runWheelForTest(&glWheel);
 	    if (!camera_state_changed(paintCamera, beforeGLWheel, beforeGLWheelFocal))
-		FAIL("QgGL wheel navigation should update the Obol camera without legacy DM");
+		FAIL("QgGL wheel navigation should update the Obol camera");
 	    if (!paintController->isRenderRequested())
-		FAIL("QgGL wheel navigation should request an Obol render without legacy DM");
-	    if (glCanvas.legacyBackendInitialized())
-		FAIL("QgGL wheel navigation should not initialize the legacy display manager");
+		FAIL("QgGL wheel navigation should request an Obol render");
 
 	    SbVec3f beforeGLDrag = paintCamera->position.getValue();
 	    float beforeGLDragFocal = paintCamera->focalDistance.getValue();
@@ -465,11 +515,9 @@ main(int argc, char **argv)
 	    glCanvas.runMouseMoveForTest(&glMoveStart);
 	    glCanvas.runMouseMoveForTest(&glMoveDrag);
 	    if (!camera_state_changed(paintCamera, beforeGLDrag, beforeGLDragFocal))
-		FAIL("QgGL drag navigation should update the Obol camera without legacy DM");
+		FAIL("QgGL drag navigation should update the Obol camera");
 	    if (!paintController->isRenderRequested())
-		FAIL("QgGL drag navigation should request an Obol render without legacy DM");
-	    if (glCanvas.legacyBackendInitialized())
-		FAIL("QgGL drag navigation should not initialize the legacy display manager");
+		FAIL("QgGL drag navigation should request an Obol render");
 	    paintController->requestRender("gl-visible-paint");
 
 	    glCanvas.makeCurrent();
@@ -477,8 +525,6 @@ main(int argc, char **argv)
 	    glCanvas.doneCurrent();
 	    if (paintController->isRenderRequested())
 		FAIL("QgGL visible paint should consume Obol render requests");
-	    if (glCanvas.legacyBackendInitialized())
-		FAIL("QgGL visible paint should bypass the legacy display manager for Obol content");
 	}
 #endif
     }

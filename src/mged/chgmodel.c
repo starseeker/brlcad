@@ -42,7 +42,7 @@
 #include "wdb.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./sedit.h"
 #include "./cmd.h"
 #include "./f_cmd.h"
@@ -130,7 +130,7 @@ mged_rot_obj(struct mged_state *s, int iflag, fastf_t *argvect)
     vect_t v_work;
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     if (movedir != ROTARROW) {
 	/* NOT in object rotate mode - put it in obj rot */
@@ -265,7 +265,7 @@ f_sc_obj(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
     }
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     MAT_IDN(incr);
 
@@ -348,7 +348,7 @@ f_tr_obj(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[]
     /* Remainder of code concerns object edit case */
 
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
-    mged_dm_repaint_request(s->mged_curr_dm, MGED_REPAINT_INTERACTION);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     MAT_IDN(incr);
     MAT_IDN(old);
