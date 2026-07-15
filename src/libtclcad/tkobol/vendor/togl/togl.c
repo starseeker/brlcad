@@ -1428,8 +1428,6 @@ Togl_ObjWidget(ClientData clientData, Tcl_Interp *interp, int objc,
                         option = Tcl_GetString(objv[2]);
                         if (strcmp (option, "-gl") == 0) {
                             extensions = (const char *) glGetString(GL_EXTENSIONS);
-                        } else if (strcmp (option, "-glu") == 0) {
-                            extensions = (const char *) gluGetString(GLU_EXTENSIONS);
                         } else if (strcmp (option, "-platform") == 0) {
 #ifdef TOGL_WGL
                             typedef const char *(WINAPI *StrFuncHDC)(HDC);

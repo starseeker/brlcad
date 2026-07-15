@@ -620,7 +620,7 @@ view_2init(struct application *UNUSED(ap), char *UNUSED(framename))
     /*
      * Determine if the framebuffer is readable.
      */
-	if (rt_fb_output_enabled && (overlay || blend))
+    if (rt_fb_output_enabled && (overlay || blend))
 	if (imgstream_fb_read(fbp, 0, 0, fb_bg_color, 1) < 0)
 	    bu_exit(EXIT_FAILURE, "rt_edge: specified framebuffer is not readable, cannot merge.\n");
 

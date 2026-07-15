@@ -103,6 +103,8 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
     char service[32] = {0};
     char response[5 * FBSERV_NET_LONG_LEN] = {0};
     char *request = NULL;
+    const char *token = options ? options->auth_token : NULL;
+    struct imgstream_fb_remote *remote = NULL;
     size_t request_size = 0;
     int ret = 0;
 
@@ -153,7 +155,6 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
 	goto cleanup;
 #endif
 
-    const char *token = options ? options->auth_token : NULL;
     if (token && token[0] &&
 	pkg_send(FBSERV_MSG_FBAUTH, token, strlen(token), connection) !=
 	    (int)strlen(token))
@@ -182,7 +183,6 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
     if (!*width || !*height)
 	goto cleanup;
 
-    struct imgstream_fb_remote *remote = NULL;
     BU_ALLOC(remote, struct imgstream_fb_remote);
     remote->connection = connection;
     *remote_out = remote;
