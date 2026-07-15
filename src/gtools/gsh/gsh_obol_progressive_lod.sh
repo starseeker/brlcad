@@ -188,7 +188,9 @@ diff01 = sum(a != b for ra, rb in zip(imgs[0][3], imgs[1][3]) for a, b in zip(ra
 diff12 = sum(a != b for ra, rb in zip(imgs[1][3], imgs[2][3]) for a, b in zip(ra, rb))
 diff23 = sum(a != b for ra, rb in zip(imgs[2][3], imgs[3][3]) for a, b in zip(ra, rb))
 diff03 = sum(a != b for ra, rb in zip(imgs[0][3], imgs[3][3]) for a, b in zip(ra, rb))
-if diff03 <= 0 or (diff01 <= 0 and diff12 <= 0 and diff23 <= 0):
+# A settled mesh may reproduce the initial full-detail raster exactly.  The
+# progressive invariant is that at least one adjacent payload stage changed.
+if diff01 <= 0 and diff12 <= 0 and diff23 <= 0:
     raise RuntimeError("progressive LoD frames did not change: diff01=%d diff12=%d diff23=%d diff03=%d" %
                        (diff01, diff12, diff23, diff03))
 print("progressive_lod_diff diff01=%d diff12=%d diff23=%d diff03=%d lit=%d,%d,%d,%d" %
