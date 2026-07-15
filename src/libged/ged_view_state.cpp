@@ -1089,6 +1089,32 @@ ged_endpoint_property_get(void *user_data, const char *name,
 	}
 	return BRLOBOL_ENDPOINT_PROPERTY_OK;
     }
+    if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible") ||
+	BU_STR_EQUAL(name, "view.interactive.rectangle.line_width") ||
+	BU_STR_EQUAL(name, "view.interactive.rectangle.line_style") ||
+	BU_STR_EQUAL(name, "view.interactive.rectangle.color")) {
+	struct bv_interactive_rect_state state = BV_INTERACTIVE_RECT_STATE_INIT;
+	if (!view || !bv_interactive_rect_state_get(&state, view))
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible"))
+	    out->bool_value = state.draw ? 1 : 0;
+	else if (BU_STR_EQUAL(name, "view.interactive.rectangle.line_width")) {
+	    if (state.line_width < 0)
+		return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	    out->uint_value = static_cast<uint64_t>(state.line_width);
+	} else if (BU_STR_EQUAL(name, "view.interactive.rectangle.line_style")) {
+	    if (state.line_style < 0 || state.line_style > 1)
+		return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	    out->uint_value = static_cast<uint64_t>(state.line_style);
+	} else {
+	    for (int i = 0; i < 3; i++) {
+		if (state.color[i] < 0 || state.color[i] > 255)
+		    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+		out->color3[i] = state.color[i] / 255.0;
+	    }
+	}
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
     if (BU_STR_EQUAL(name, "view.faceplate.scale.visible")) {
 	struct bv_other_state state = {};
 	if (!view || !bv_scale_overlay_state_get(&state, view))
@@ -1421,6 +1447,33 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	(void)ged_view_context_update(view_ctx);
 	return BRLOBOL_ENDPOINT_PROPERTY_OK;
     }
+    if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible") ||
+	BU_STR_EQUAL(name, "view.interactive.rectangle.line_width") ||
+	BU_STR_EQUAL(name, "view.interactive.rectangle.line_style") ||
+	BU_STR_EQUAL(name, "view.interactive.rectangle.color")) {
+	struct bv_interactive_rect_state state = BV_INTERACTIVE_RECT_STATE_INIT;
+	if (!view || !bv_interactive_rect_state_get(&state, view))
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	if (BU_STR_EQUAL(name, "view.interactive.rectangle.visible")) {
+	    state.draw = enabled;
+	} else if (BU_STR_EQUAL(name,
+		"view.interactive.rectangle.line_width")) {
+	    state.line_width = static_cast<int>(value->uint_value);
+	} else if (BU_STR_EQUAL(name,
+		"view.interactive.rectangle.line_style")) {
+	    if (value->uint_value > 1)
+		return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	    state.line_style = static_cast<int>(value->uint_value);
+	} else {
+	    for (int i = 0; i < 3; i++)
+		state.color[i] = static_cast<int>(std::lround(
+		    value->color3[i] * 255.0));
+	}
+	if (!bv_interactive_rect_state_set(view, &state))
+	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	(void)ged_view_context_update(view_ctx);
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
     if (BU_STR_EQUAL(name, "view.faceplate.scale.visible")) {
 	struct bv_other_state state = {};
 	if (!view || !bv_scale_overlay_state_get(&state, view))
@@ -1528,6 +1581,9 @@ ged_view_context_display_endpoint_set(
 	return 1;
     }
 
+    brlobol_display_endpoint_t *old_endpoint = record->display_endpoint;
+    const int owned_old_endpoint = record->owns_display_endpoint;
+
     if (endpoint) {
 	void *controller = brlobol_display_endpoint_controller(endpoint);
 	if (!controller || !record->gedp)
@@ -1546,12 +1602,15 @@ ged_view_context_display_endpoint_set(
 	    }
 	    return 0;
 	}
-    } else if (record->gedp) {
+	} else if (record->gedp) {
+	if (old_endpoint)
+	    ged_draw_obol_framebuffer_endpoint_detach(record->gedp,
+		old_endpoint);
 	ged_draw_obol_controller_detach_for_view(record->gedp, view_ctx);
     }
 
-    brlobol_display_endpoint_t *old_endpoint = record->display_endpoint;
-    const int owned_old_endpoint = record->owns_display_endpoint;
+    if (endpoint && old_endpoint)
+	ged_draw_obol_framebuffer_endpoint_detach(record->gedp, old_endpoint);
     if (old_endpoint)
 	(void)brlobol_display_endpoint_property_provider_set(old_endpoint,
 	    NULL, NULL, NULL);

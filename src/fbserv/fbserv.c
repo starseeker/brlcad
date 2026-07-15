@@ -28,12 +28,40 @@
 #include "bu/exit.h"
 #include "bu/getopt.h"
 #include "bu/log.h"
+#include "brlobol/display_session.h"
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
+#  include "qtcad/display_provider.h"
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+#  include "tclcad/setup.h"
+#endif
 #include "imgstream/fb_compat.h"
 #include "imgstream/fbserv.h"
 #include "pkg.h"
 
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER) || \
+    defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+#  define HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER 1
+#endif
+
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+static int
+fbserv_obol_display_provider_register(void)
+{
+#ifdef HAVE_QTCAD_OBOL_DISPLAY_PROVIDER
+    return qtcad_obol_display_provider_register();
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+    return tclcad_obol_display_provider_register();
+#else
+    return 0;
+#endif
+}
+#endif
+
 static struct fbserv_obj server;
 static imgstream_fb_t *framebuffer = NULL;
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+static brlobol_display_session_t *display_session = NULL;
+#endif
 static const char *framebuffer_name = NULL;
 static const char *ipc_address = NULL;
 static int framebuffer_width = 0;
@@ -263,9 +291,23 @@ main(int argc, char **argv)
 	    bu_exit(1, "fbserv: TLS is unavailable or failed to initialize\n");
     }
 
-    framebuffer = imgstream_fb_open(framebuffer_name,
-	framebuffer_width > 0 ? (size_t)framebuffer_width : 0,
-	framebuffer_height > 0 ? (size_t)framebuffer_height : 0);
+    const size_t fb_width = framebuffer_width > 0 ?
+	(size_t)framebuffer_width : 0;
+    const size_t fb_height = framebuffer_height > 0 ?
+	(size_t)framebuffer_height : 0;
+    if (imgstream_fb_spec_kind(framebuffer_name) == IMGSTREAM_FB_SPEC_DISPLAY) {
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+	if (!fbserv_obol_display_provider_register())
+	    bu_exit(1, "fbserv: selected UI toolkit has no usable Obol display provider\n");
+	display_session = brlobol_display_session_open(framebuffer_name,
+	    fb_width, fb_height, "BRL-CAD fbserv");
+	framebuffer = brlobol_display_session_framebuffer(display_session);
+#else
+	bu_exit(1, "fbserv: display targets require a Qt or Tcl/Tk Obol provider; use an imgstream target\n");
+#endif
+    } else {
+	framebuffer = imgstream_fb_open(framebuffer_name, fb_width, fb_height);
+    }
     if (!framebuffer)
 	bu_exit(1, "fbserv: unsupported or invalid image-stream framebuffer '%s'\n",
 	    framebuffer_name ? framebuffer_name : "/dev/mem");
@@ -296,6 +338,13 @@ main(int argc, char **argv)
     ret = service_loop(listener);
     (void)fbs_close(&server);
     (void)imgstream_fbserv_set_framebuffer(&server, NULL);
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+    if (display_session) {
+	brlobol_display_session_close(display_session);
+	display_session = NULL;
+	framebuffer = NULL;
+    } else
+#endif
     imgstream_fb_close(framebuffer);
 
     if (server.fbs_tls_ctx)

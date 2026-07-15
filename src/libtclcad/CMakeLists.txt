@@ -22,7 +22,7 @@ set(
   command_io.cpp
   commands.c
   cmdhist.c
-  dm.c
+  tkobol_init.c
   eval.c
   fb.c
   fbserv.c
@@ -68,6 +68,7 @@ if(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
     set(TCLCAD_TKOBOL_HOST ON)
     list(APPEND LIBTCLCAD_SRCS
       tkobol/tk-obol-host.cpp
+      tkobol/display-provider.cpp
       tkobol/vendor/togl/togl.c
     )
     set_property(
@@ -108,7 +109,7 @@ if(BRLCAD_ENABLE_TCL)
   set(TCLCAD_PUBLIC_LIBS ${libtclcad_deps} ${TCL_LIBRARY})
   set(TCLCAD_PRIVATE_LIBS ${TCLCAD_XLIBS} PNG::PNG)
   if(TCLCAD_TKOBOL_HOST)
-    list(APPEND TCLCAD_PRIVATE_LIBS ${OPENGL_LIBRARIES})
+    list(APPEND TCLCAD_PRIVATE_LIBS libbrlobol ${OPENGL_LIBRARIES})
   endif()
   if(TK_LIBRARY)
     set(TCLCAD_PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS} ${TK_LIBRARY})
@@ -117,11 +118,8 @@ if(BRLCAD_ENABLE_TCL)
   brlcad_addlib(libtclcad "${LIBTCLCAD_SRCS}" "${TCLCAD_INCLUDE_DIRS}" "${TCLCAD_LOCAL_INCLUDE_DIRS}"
     PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS}
     PRIVATE_LIBS ${TCLCAD_PRIVATE_LIBS}
-    # refresh.c defines DM_WITH_RT before including dm/view.h to expose
-    # dm_draw_viewobjs; when batched after draw.c the DM_VIEW_H guard fires
-    # without DM_WITH_RT set and the declaration is lost.
-    # bu.c and dm.c both define a non-static register_cmds function.
-    UNITY_BUILD_SKIP view/refresh.c bu.c dm.c
+    # refresh.c has an incompatible Unity include-order requirement.
+    UNITY_BUILD_SKIP view/refresh.c
     # The full static library link is too large for some testing environments -
     # disable this test
     NO_STATIC_LINK_TEST
@@ -143,6 +141,12 @@ if(BRLCAD_ENABLE_TCL)
   endforeach(pt ${ptargets})
 
   set_target_properties(libtclcad PROPERTIES VERSION 20.0.1 SOVERSION 20)
+  if(TCLCAD_TKOBOL_HOST)
+    # The public libtclcad provider API is the explicit, minimal toolkit edge
+    # for standalone callers.  It is not a separate provider library.
+    set_property(TARGET libtclcad PROPERTY
+      TCLCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE TRUE)
+  endif(TCLCAD_TKOBOL_HOST)
   if(TARGET itcl_pkgIndex)
     add_dependencies(libtclcad itcl_pkgIndex)
   endif(TARGET itcl_pkgIndex)
@@ -162,6 +166,7 @@ cmakefiles(
   tclcad_private.h
   view/view.h
   tkobol/tk-obol-host.cpp
+  tkobol/display-provider.cpp
   tkobol/vendor/togl/LICENSE
   tkobol/vendor/togl/README.brlcad
   tkobol/vendor/togl/Tcl3D_License.txt

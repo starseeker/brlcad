@@ -46,16 +46,16 @@ proc init_Raytrace { id } {
 	return
     }
 
-    if ![info exists mged_gui($id,active_dm)] {
+    if ![info exists mged_gui($id,active_pane)] {
 	return
     }
 
-    if ![winfo exists $mged_gui($id,active_dm)] {
+    if ![winfo exists $mged_gui($id,active_pane)] {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
-    rt_init_vars $id $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
+    rt_init_vars $id $mged_gui($id,active_pane)
 
     toplevel $top -screen $mged_gui($id,screen) -menu $top.menubar
 
@@ -164,7 +164,7 @@ of the object list editor if it exists." } }
 Enter the desired source. The source is used to obtain
 the view information (i.e. size, position and orientation)
 that is passed to the raytracer and must be one of the internal
-panes (display manager windows). The source can be specified
+panes (graphics windows). The source can be specified
 using the pathname of any pane. The panes associated with this
 instance of the GUI may also be specified with keywords. For
 example, ul, \"upper left\" and \"Upper Left\" all specify the
@@ -180,7 +180,7 @@ upper left pane." } }
 	    { { summary "Pop up a menu of likely sources." } }
     menu $top.srcMB.menu -title "Source" -tearoff 0
     $top.srcMB.menu add command -label "Active Pane"\
-	    -command "rt_force_cook_src $id \$mged_gui($id,active_dm)"
+	    -command "rt_force_cook_src $id \$mged_gui($id,active_pane)"
     hoc_register_menu_data "Source" "Active Pane" "Source - Active Pane"\
 	    { { summary "Set the source to the active pane. The
 active pane is the pane currently tied
@@ -216,7 +216,7 @@ objects, check the fixed button." } }
     set hoc_data { { summary "
 Enter the desired destination. This is the place where
 the pixels will be sent and can be the pathname of any internal
-pane (display manager window). The panes associated with this
+pane (graphics window). The panes associated with this
 instance of the GUI can also be specified with keywords. For
 example, ul, \"upper left\" and \"Upper Left\" all specify the
 upper left pane. The destination can also be a file or an external
@@ -234,7 +234,7 @@ the machine fbhost and listening on port 0." } }
 	    { { summary "Pop up a menu of likely destinations." } }
     menu $top.destMB.menu -title "Destination" -tearoff 0
     $top.destMB.menu add command -label "Active Pane"\
-	    -command "rt_force_cook_dest $id \$mged_gui($id,active_dm)" \
+	    -command "rt_force_cook_dest $id \$mged_gui($id,active_pane)" \
 	    -state $dest_state
     hoc_register_menu_data "Destination" "Active Pane" "Destination - Active Pane"\
 	    { { summary "Set the destination to the active pane.
@@ -836,7 +836,7 @@ proc rt_update_dest { id } {
 	return
     }
 
-    if {$rt_control($id,half_baked_dest) != $mged_gui($id,active_dm)} {
+    if {$rt_control($id,half_baked_dest) != $mged_gui($id,active_pane)} {
 	return
     }
 
@@ -869,7 +869,7 @@ proc rt_update_src { id } {
 	return
     }
 
-    if {$rt_control($id,cooked_src) != $mged_gui($id,active_dm)} {
+    if {$rt_control($id,cooked_src) != $mged_gui($id,active_pane)} {
 	return
     }
 
@@ -1100,7 +1100,7 @@ proc rt_set_mouse_behavior { id } {
 	    set mouse_behavior o
 
 	    # update the GUI specified by $id
-	    if {$rt_control($id,cooked_src) == $mged_gui($id,active_dm)} {
+	    if {$rt_control($id,cooked_src) == $mged_gui($id,active_pane)} {
 		set mged_gui($id,mouse_behavior) o
 	    }
 
@@ -1114,7 +1114,7 @@ proc rt_set_mouse_behavior { id } {
 	    set mouse_behavior d
 
 	    # update the GUI specified by $id
-	    if {$rt_control($id,cooked_src) == $mged_gui($id,active_dm)} {
+	    if {$rt_control($id,cooked_src) == $mged_gui($id,active_pane)} {
 		set mged_gui($id,mouse_behavior) d
 	    }
 
@@ -1191,7 +1191,7 @@ proc rt_cook_dest { id raw_dest } {
     set rt_control($id,color) [rset cs bg]
     color_entry_update $rt_control($id,top) color rt_control($id,color) $rt_control($id,color)
 
-    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_dm)} {
+    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_pane)} {
 	set mged_gui($id,fb) $fb
 	set mged_gui($id,listen) $listen
     }
@@ -1249,7 +1249,7 @@ proc rt_set_fb { id } {
 	set listen 1
     }
 
-    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_dm)} {
+    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_pane)} {
 	set mged_gui($id,fb) $rt_control($id,fb)
 	set mged_gui($id,listen) $listen
     }
@@ -1267,7 +1267,7 @@ proc rt_set_fb_all { id } {
     winset $rt_control($id,half_baked_dest)
     set fb_all $rt_control($id,fb_all)
 
-    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_dm)} {
+    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_pane)} {
 	set mged_gui($id,fb_all) $rt_control($id,fb_all)
     }
 
@@ -1285,14 +1285,14 @@ proc rt_set_fb_overlay { id } {
     winset $rt_control($id,half_baked_dest)
     set fb_overlay $rt_control($id,fb_overlay)
 
-    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_dm)} {
+    if {$rt_control($id,half_baked_dest) == $mged_gui($id,active_pane)} {
 	set mged_gui($id,fb_overlay) $rt_control($id,fb_overlay)
     }
 }
 
 ## - rt_half_bake
 #
-# If possible, returns a valid display manager window.
+# If possible, returns a valid graphics window.
 # Otherwise, returns $raw.
 #
 proc rt_half_bake { id raw } {
@@ -1302,7 +1302,7 @@ proc rt_half_bake { id raw } {
 	"active"
 	-
 	"Active" {
-	    return $mged_gui($id,active_dm)
+	    return $mged_gui($id,active_pane)
 	}
 	"ul"
 	-

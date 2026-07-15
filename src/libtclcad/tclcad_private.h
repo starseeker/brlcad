@@ -204,7 +204,7 @@ extern void tclcad_view_data_unbind_view_ctx(void *view_ctx);
 /* Tcl initialization routines */
 TCLCAD_EXPORT extern int Bu_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Bn_Init(Tcl_Interp *interp);
-TCLCAD_EXPORT extern int Dm_Init(Tcl_Interp *interp);
+TCLCAD_EXPORT extern int tclcad_tkobol_init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Ged_Init(Tcl_Interp *interp);
 
 /* Fb functions */
@@ -571,7 +571,7 @@ extern int to_view_func_plus(struct ged *gedp,
 			     ged_func_ptr func,
 			     const char *usage,
 			     int maxargs);
-extern int to_dm_func(struct ged *gedp,
+extern int to_view_context_func(struct ged *gedp,
 		      int argc,
 		      const char *argv[],
 		      ged_func_ptr func,

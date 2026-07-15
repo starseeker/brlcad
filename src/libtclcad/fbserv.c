@@ -36,6 +36,7 @@
 #include <tcl.h>
 #include "bio.h"
 #include "bnetwork.h"
+#include "imgstream/fbserv.h"
 #include "pkg.h"
 #include "tclcad.h"
 
@@ -354,7 +355,11 @@ tclcad_fbserv_set_transport(struct fbserv_obj *fbsp)
 TCLCAD_EXPORT int
 tclcad_listen_ipc(struct fbserv_obj *fbsp, Tcl_Interp *interp)
 {
-    tclcad_fbserv_set_transport(fbsp);
+    /* Endpoint-backed Obol streams provide a worker transport so synchronous
+     * renderer processes do not depend on Tcl servicing their socket.  The
+     * Tcl notifier remains the fallback for callers without one. */
+    if (!fbs_can_open_ipc(fbsp))
+	tclcad_fbserv_set_transport(fbsp);
 
     if (fbs_open_ipc(fbsp) != BRLCAD_OK) {
 	bu_log("tclcad_listen_ipc: fbs_open_ipc failed\n");

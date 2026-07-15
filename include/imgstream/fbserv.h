@@ -25,9 +25,9 @@
  *
  * These types describe the framebuffer operation table and transitional
  * server object consumed by the fbserv packet transport.  They intentionally
- * live with libimgstream instead of libdm so Obol/libged/qtcad hosts can
- * publish image-stream backed framebuffer behavior without depending on
- * display manager framebuffer internals.
+ * live with libimgstream so Obol/libged/qtcad hosts can publish image-stream
+ * backed framebuffer behavior without depending on a scene-rendering
+ * subsystem.
  */
 #ifndef IMGSTREAM_FBSERV_H
 #define IMGSTREAM_FBSERV_H
@@ -195,7 +195,7 @@ IMGSTREAM_EXPORT int fbserv_verify_token(const char *provided, const char *expec
  * Protocol/server state constants.
  *
  * The FBSERV_* names are authoritative.  The historical generic aliases remain
- * for callers that still include dm/fbserv.h or dm.h and use the old spellings.
+ * for protocol-source compatibility.
  */
 #define FBSERV_NET_LONG_LEN 4
 #define FBSERV_MAX_CLIENTS 32
@@ -217,7 +217,6 @@ IMGSTREAM_EXPORT int fbserv_verify_token(const char *provided, const char *expec
 #define FBSERV_FRAMEBUFFER_UNHANDLED (-2)
 
 struct bu_vls;
-struct fb;
 struct imgstream_fb;
 typedef struct imgstream_fb imgstream_fb_t;
 struct pkg_conn;
@@ -319,8 +318,7 @@ struct fbserv_client {
 };
 
 struct fbserv_obj {
-    struct fb *fbs_fbp;                            /**< @brief legacy framebuffer fallback */
-    const struct fbserv_fb_ops *fbs_fb_ops;        /**< @brief optional non-libdm framebuffer implementation */
+    const struct fbserv_fb_ops *fbs_fb_ops;        /**< @brief framebuffer implementation */
     void *fbs_fb_ctx;                              /**< @brief user data for fbs_fb_ops */
     void *fbs_interp;                              /**< @brief interpreter */
     struct fbserv_listener fbs_listener;           /**< @brief data for listening */
@@ -446,9 +444,6 @@ IMGSTREAM_EXPORT void *fbserv_client_handler_data(struct fbserv_obj *fbsp,
 	int sub);
 IMGSTREAM_EXPORT void fbserv_set_client_data_channel(void *client_data,
 	void *chan);
-IMGSTREAM_EXPORT void fbserv_set_legacy_framebuffer(struct fbserv_obj *fbsp,
-	struct fb *fbp);
-IMGSTREAM_EXPORT struct fb *fbserv_legacy_framebuffer(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbserv_framebuffer_backend_installed(
 	const struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbserv_backend_op_installed(
@@ -584,9 +579,6 @@ IMGSTREAM_EXPORT void *fbs_client_handler_data(struct fbserv_obj *fbsp,
 	int sub);
 IMGSTREAM_EXPORT void fbs_set_client_data_channel(void *client_data,
 	void *chan);
-IMGSTREAM_EXPORT void fbs_set_legacy_framebuffer(struct fbserv_obj *fbsp,
-	struct fb *fbp);
-IMGSTREAM_EXPORT struct fb *fbs_legacy_framebuffer(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbs_framebuffer_backend_installed(
 	const struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbs_framebuffer_info(struct fbserv_obj *fbsp,

@@ -105,6 +105,7 @@ extern fastf_t gift_grid_rounding;
 
 /***** variables from main.c *****/
 extern imgstream_fb_t *fbp;		/* framebuffer handle */
+extern int rt_fb_output_enabled;	/* zero only for the /dev/null sink */
 extern FILE *outfp;			/* optional output file */
 extern int output_is_binary;		/* !0 means output is binary */
 extern int report_progress;		/* !0 = user wants progress report */

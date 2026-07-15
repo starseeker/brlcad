@@ -375,10 +375,9 @@ to_view_func_plus(struct ged *gedp,
     return to_view_func_common(gedp, argc, argv, func, usage, maxargs, 1, 1);
 }
 
-/* For functions that need the gedp display manager pointer to be that of
- * the current view before they are run. */
+/* Select an explicit GED view context before dispatching the command. */
 int
-to_dm_func(struct ged *gedp,
+to_view_context_func(struct ged *gedp,
 	   int argc,
 	   const char *argv[],
 	   ged_func_ptr func,

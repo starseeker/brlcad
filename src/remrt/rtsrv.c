@@ -82,6 +82,7 @@ struct pkg_queue {
 
 /***** Variables shared with viewing model *** */
 imgstream_fb_t *fbp = NULL;	/* Framebuffer handle */
+int rt_fb_output_enabled = 1;	/* rtsrv retains its framebuffer output */
 FILE *outfp = NULL;	/* optional pixel output file */
 
 int srv_startpix = 0;	/* offset for view_pixel */

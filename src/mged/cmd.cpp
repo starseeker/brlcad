@@ -1264,7 +1264,7 @@ cmd_ged_view_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
 
 
 int
-cmd_ged_dm_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
+cmd_ged_display_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
 {
     int ret;
     struct cmdtab *ctp = (struct cmdtab *)clientData;
@@ -1299,7 +1299,7 @@ cmd_ged_dm_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, con
 
 /**
  * Screengrab wrapper: forces a render via refresh(s) so that the
- * display manager has current pixel data before we call the GED
+ * graphics endpoint has current pixel data before we call the GED
  * screengrab function.  This is necessary in -c (batch) mode where
  * the Tcl event loop never fires and refresh() would otherwise not
  * be called before getDisplayImage().
@@ -1959,21 +1959,21 @@ f_quit(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *arg
 
 /**
  * SYNOPSIS
- * tie [cw [dm]]
+ * tie [cw [view]]
  * tie -u cw
  *
  * DESCRIPTION
- * This command ties/associates a command window (cw) to a display
- * manager window (dm).  When a command window is tied to a display
- * manager window, all commands issued from this window will be
- * directed at a particular display manager. Otherwise, the commands
- * issued will be directed at the current display manager window.
+ * This command ties/associates a command window (cw) to a graphics
+ * view. When a command window is tied to a graphics view, all commands
+ * issued from this window will be
+ * directed at a particular graphics view. Otherwise, the commands
+ * issued will be directed at the current graphics window.
  *
  * EXAMPLES
- * tie ---> returns a list of the command_window/display_manager associations
- * tie cw1 ---> returns the display_manager, if it exists, associated with cw1
- * tie cw1 dm1 ---> associated cw1 with dm1
- * tie -u cw1 ---> removes the association, if it exists, cw1 has with a display manager
+ * tie ---> returns a list of command-window/graphics-view associations
+ * tie cw1 ---> returns the graphics view, if it exists, associated with cw1
+ * tie cw1 view1 ---> associates cw1 with view1
+ * tie -u cw1 ---> removes the association, if it exists, cw1 has with a graphics view
  */
 int
 f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const char *argv[])
@@ -2056,7 +2056,7 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 	return TCL_OK;
     }
 
-    /* print out the display manager that we're tied to */
+    /* Print the graphics view associated with this command window. */
     if (argc == 2) {
 	if (clp->cl_tie) {
 	    struct bu_vls *pn = mged_display_pathname_vls(clp->cl_tie);

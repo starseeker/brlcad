@@ -88,8 +88,8 @@ Display-Host Migration Boundary
 
 Headless rendering uses a libbrlobol display endpoint and registered headless
 host directly; the former `dm-obol` adapter is deleted.  If MGED, GSH,
-RTWizard, TclCAD, or qged code reaches for callbacks such as `dm_draw_objs`,
-treat that as one of two migration signals:
+RTWizard, TclCAD, or qged code reaches for a direct libdm view-renderer
+callback, treat that as one of two migration signals:
 the caller should be retargeted to a high-level GED/Obol operation, or the
 Obol path is missing a high-level capability that should be implemented there.
 `dm open --host headless` creates an endpoint-owned controller for the target
@@ -100,8 +100,7 @@ plus their local root.  Independent views render only their local root, where
 independent database display and view-local objects live.
 Classic/batch MGED now honors `-c -a obol`, registers the borrowed controller
 with GED, and refreshes the Obol `dozoom` path through
-`GED_DRAW_TXN_REDRAW`; the remaining MGED raw draw callback is only non-Obol
-fallback until that display path is retired.
+`GED_DRAW_TXN_REDRAW`; drawing has no non-Obol fallback.
 
 The supported refresh shape is:
 

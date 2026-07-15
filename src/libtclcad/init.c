@@ -219,10 +219,11 @@ tclcad_init(Tcl_Interp *interp, int init_gui, struct bu_vls *tlog)
 	return TCL_ERROR;
     }
 
-    /* Initialize libdm */
-    if (Dm_Init(interp) == TCL_ERROR) {
+    /* Initialize the Tk Obol host and image command interface. */
+    if (tclcad_tkobol_init(interp) == TCL_ERROR) {
 	if (tlog)
-	    bu_vls_printf(tlog, "Dm_Init ERROR:\n%s\n", Tcl_GetStringResult(interp));
+	    bu_vls_printf(tlog, "tclcad_tkobol_init ERROR:\n%s\n",
+		  Tcl_GetStringResult(interp));
 	return TCL_ERROR;
     }
 

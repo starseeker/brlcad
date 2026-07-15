@@ -28,13 +28,15 @@
 int
 ISSTApp::load_g(const char *filename, int argc, const char *argv[])
 {
+    // GFile owns the TIE scene.  Stop the worker before load_g can replace it.
+    w.canvas->clear_tie();
     if (g.load_g(filename, argc, argv)) {
 	w.statusBar()->showMessage("open failed");
 	return -1;
     }
 
-    // The OpenGL widget manages the rendering, so let it know about the
-    // TIE data structure associated with the current model
+    // The image presenter owns the renderer, so hand it the TIE data
+    // associated with the current model.
     w.canvas->set_tie(g.tie);
 
     return 0;
@@ -51,4 +53,3 @@ ISSTApp::load_g(const char *filename, int argc, const char *argv[])
  * End:
  * ex: shiftwidth=4 tabstop=8
  */
-

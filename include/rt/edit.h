@@ -368,15 +368,18 @@ struct rt_edit {
      * whether and how to reuse any existing wireframe information when drawing
      * editing objects.
      *
-     * To use model_changes to generate appropriate matrices for this purpose,
-     * the pattern looks like the following:
+     * To derive an edit-preview transform from model_changes, applications
+     * can use the following pattern:
      *
      * mat_t model2objview;
      * struct rt_edit_view *vp = <current edit view snapshot>;
      * bn_mat_mul(model2objview, vp->gv_model2view, s->model_changes);
      * ## A second bn_mat_mul might be needed if a perspective matrix is in use
-     * dm_loadmatrix(DMP, model2objview, which_eye);
-     * ## Do the drawing
+     * ## Publish model2objview with the view-local retained edit preview.
+     *
+     * The endpoint controller applies this transform as part of its Obol
+     * scene; edit code must not load a renderer-specific matrix or draw the
+     * preview directly.
      */
     mat_t model_changes;        /* full changes this edit */
 

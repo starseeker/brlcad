@@ -3559,7 +3559,7 @@ mged> garbage_collect
 **
 
 
-gui [_-config b|c|g_] [__-d display_string__] [__-gd graphics_display_string__] [__-dt graphics_type__] [_-id name_] [_-c -h -j -s_]::
+gui [_-config b|c|g_] [__-d display_string__] [__-gd graphics_display_string__] [__-host host_type__] [_-id name_] [_-c -h -j -s_]::
 This command is used to create an instance of MGED s default Tcl/Tk graphical user interface (GUI). The following options are allowed:
 
 
@@ -3580,9 +3580,8 @@ This command is used to create an instance of MGED s default Tcl/Tk graphical us
                                the display_string. Note that this string format is the same
                                as the X DISPLAY environment variable.
 
-       -dt graphics_type       Indicates the type of graphics windows to use. The possible
-                               choices are X and ogl (for machines that support OpenGL).
-                               Defaults to ogl, if supported; otherwise X.
+       -host host_type         Selects the Obol host used for graphics windows.
+                               tkobol is the supported host.
 
        -id name                Specify the id to use when referring to this instance of the
                                GUI.
@@ -6775,9 +6774,9 @@ __mged_default(display)__ indicates where to display the command window and othe
 
 __mged_default(gdisplay)__ indicates where to display the geometry window if not combined with the command window. See the <<mged_default,mged_default(comb)>> variable.
 
-*mged_default(dm_type)*
+*mged_default(host_type)*
 
-__mged_default(dm_type)__ indicates the default display manager type.
+__mged_default(host_type)__ indicates the default Obol GUI host type.
 
 *mged_default(comb)*
 

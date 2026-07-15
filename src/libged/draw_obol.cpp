@@ -28,6 +28,7 @@
 #include "brlobol/vlist_shape.h"
 #include "brlobol/view_attachment.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_query.h"
 #include "brlobol/view_store.h"
 #include "bg/line_layer.h"
 #include "bg/plane.h"
@@ -56,15 +57,7 @@
 #include "./ged_private.h"
 
 #include <algorithm>
-#include <Inventor/SbLine.h>
-#include <Inventor/SbViewVolume.h>
-#include <Inventor/SoPath.h>
-#include <Inventor/SoPickedPoint.h>
-#include <Inventor/SoViewport.h>
-#include <Inventor/actions/SoRayPickAction.h>
-#include <Inventor/details/SoDetail.h>
-#include <Inventor/lists/SoPickedPointList.h>
-#include <Inventor/nodes/SoCamera.h>
+#include <Inventor/SbVec2f.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 #include <Inventor/nodes/SoSeparator.h>
@@ -4387,32 +4380,6 @@ ged_obol_pick_candidate_key(const ged_obol_pick_candidate &candidate)
     return ged_obol_normalized_pick_path(candidate.path) + buffer;
 }
 
-static const SoBRLPickDetail *
-ged_obol_brl_pick_detail(const SoPickedPoint *picked_point)
-{
-    if (!picked_point)
-	return NULL;
-
-    const SoDetail *detail = picked_point->getDetail();
-    if (detail && detail->isOfType(SoBRLPickDetail::getClassTypeId()))
-	return static_cast<const SoBRLPickDetail *>(detail);
-
-    SoPath *path = picked_point->getPath();
-    if (!path)
-	return NULL;
-
-    for (int i = path->getLength() - 1; i >= 0; i--) {
-	SoNode *node = path->getNode(i);
-	if (!node)
-	    continue;
-	detail = picked_point->getDetail(node);
-	if (detail && detail->isOfType(SoBRLPickDetail::getClassTypeId()))
-	    return static_cast<const SoBRLPickDetail *>(detail);
-    }
-
-    return NULL;
-}
-
 static BRLObolFeatureOwner
 ged_obol_pick_view_owner(void *view_ctx)
 {
@@ -4490,22 +4457,12 @@ ged_obol_pick_candidate_from_detail(BRLObolViewController *controller,
 }
 
 static ged_obol_pick_candidate
-ged_obol_pick_candidate_from_point(BRLObolViewController *controller,
-				   const BRLObolFeatureOwner *owner,
-				   const SoPickedPoint *picked_point,
-				   const SoBRLPickDetail *detail,
-				   const SbVec3f *ray_origin)
+ged_obol_pick_candidate_from_record(BRLObolViewController *controller,
+				    const BRLObolFeatureOwner *owner,
+				    const BRLObolViewPickRecord &record)
 {
-    SbVec3f point(0.0f, 0.0f, 0.0f);
-    float distance = FLT_MAX;
-    if (picked_point) {
-	point = picked_point->getPoint();
-	if (ray_origin)
-	    distance = (point - *ray_origin).length();
-    }
-
-    return ged_obol_pick_candidate_from_detail(controller, owner, detail,
-	    point, distance);
+    return ged_obol_pick_candidate_from_detail(controller, owner,
+	&record.detail, record.point, record.distance);
 }
 
 static void
@@ -4526,24 +4483,6 @@ ged_obol_pick_insert(std::vector<ged_obol_pick_candidate> &candidates,
 }
 
 static bool
-ged_obol_pick_path_already_recorded(
-	const std::vector<ged_obol_pick_candidate> &candidates,
-	const ged_obol_pick_candidate &candidate)
-{
-    const std::string candidate_path =
-	ged_obol_normalized_pick_path(candidate.path);
-    if (candidate_path.empty())
-	return false;
-
-    for (const ged_obol_pick_candidate &existing : candidates) {
-	if (ged_obol_normalized_pick_path(existing.path) == candidate_path)
-	    return true;
-    }
-
-    return false;
-}
-
-static bool
 ged_obol_pick_candidate_nearer(const ged_obol_pick_candidate &a,
 			       const ged_obol_pick_candidate &b)
 {
@@ -4556,86 +4495,6 @@ ged_obol_pick_sort(std::vector<ged_obol_pick_candidate> &candidates)
     if (candidates.size() > 1)
 	std::stable_sort(candidates.begin(), candidates.end(),
 		ged_obol_pick_candidate_nearer);
-}
-
-static SbBool
-ged_obol_pick_camera_line(BRLObolViewController *controller,
-			  int vx,
-			  int vy,
-			  SbLine &line)
-{
-    if (!controller || !controller->getCamera())
-	return FALSE;
-
-    const SbViewportRegion &region = controller->getViewportRegion();
-    SbVec2s size = region.getViewportSizePixels();
-    if (size[0] <= 0 || size[1] <= 0)
-	return FALSE;
-
-    const float nx = std::max(0.0f, std::min(1.0f,
-	    static_cast<float>(vx) / static_cast<float>(size[0])));
-    const float ny = std::max(0.0f, std::min(1.0f,
-	    static_cast<float>(vy + 1) / static_cast<float>(size[1])));
-    const float aspect = static_cast<float>(size[0]) /
-	static_cast<float>(size[1]);
-
-    SbViewVolume view_volume = controller->getCamera()->getViewVolume(aspect);
-    view_volume.projectPointToLine(SbVec2f(nx, ny), line);
-    return TRUE;
-}
-
-static int
-ged_obol_pick_source_full_detail(
-	BRLObolViewController *controller,
-	const BRLObolFeatureOwner *owner,
-	const SbLine &line,
-	bool pick_all,
-	std::vector<ged_obol_pick_candidate> &candidates)
-{
-    if (!controller)
-	return 0;
-
-    BRLObolSourceMeshPickResult source_pick;
-    int added = (controller->pickSourceMeshExactRay(source_pick,
-	    line.getPosition(), line.getDirection(), 0, NULL) > 0 &&
-	    source_pick.hit) ? 1 : 0;
-    if (!added)
-	return 0;
-
-    ged_obol_pick_candidate candidate =
-	ged_obol_pick_candidate_from_detail(controller, owner,
-		&source_pick.detail, source_pick.point, source_pick.distance);
-    ged_obol_pick_insert(candidates, candidate, pick_all);
-    return 1;
-}
-
-static int
-ged_obol_pick_rt_exact(BRLObolViewController *controller,
-		       const BRLObolFeatureOwner *owner,
-		       const SbLine &line,
-		       bool pick_all,
-		       std::vector<ged_obol_pick_candidate> &candidates)
-{
-    if (!controller)
-	return 0;
-
-    int added = 0;
-    std::vector<BRLObolRtPickResult> rt_picks;
-    controller->pickRtExactRay(rt_picks, line.getPosition(),
-	    line.getDirection(), pick_all ? TRUE : FALSE);
-    for (size_t i = 0; i < rt_picks.size(); i++) {
-	const BRLObolRtPickResult &rt_pick = rt_picks[i];
-	ged_obol_pick_candidate candidate =
-	    ged_obol_pick_candidate_from_detail(controller, owner,
-		    &rt_pick.detail, rt_pick.point, rt_pick.distance);
-	if (ged_obol_pick_path_already_recorded(candidates, candidate))
-	    continue;
-
-	ged_obol_pick_insert(candidates, candidate, pick_all);
-	added++;
-    }
-
-    return added;
 }
 
 static struct ged_draw_pick_result *
@@ -4698,65 +4557,19 @@ ged_obol_pick_point_candidates(
     candidates.clear();
     BRLObolViewController *controller =
 	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !controller->getViewport() ||
-	    !controller->getViewport()->getRoot())
+    if (!controller)
 	return 0;
     ged_obol_pick_sync_view_controller(controller, view_ctx);
 
-    const SbViewportRegion &region = controller->getViewportRegion();
-    SbVec2s size = region.getViewportSizePixels();
-    if (size[0] <= 0 || size[1] <= 0)
-	return 0;
-
-    int vx = std::max(0, std::min(x, static_cast<int>(size[0]) - 1));
-    int vy = static_cast<int>(size[1]) - 1 - y;
-    vy = std::max(0, std::min(vy, static_cast<int>(size[1]) - 1));
-
-    SoRayPickAction pick_action(region);
-    pick_action.setPoint(SbVec2s(static_cast<short>(vx),
-	    static_cast<short>(vy)));
-    pick_action.setRadius(radius_pixels > 0.0f ? radius_pixels : 1.0f);
-    pick_action.setPickAll(pick_all ? TRUE : FALSE);
-    pick_action.apply(controller->getViewport()->getRoot());
-
-    const SbLine &line = pick_action.getLine();
-    const SbVec3f &ray_origin = line.getPosition();
+    std::vector<BRLObolViewPickRecord> records;
+    (void)brlobol_view_pick_point(controller, x, y, radius_pixels,
+	pick_all, records, NULL);
     BRLObolFeatureOwner owner = ged_obol_pick_view_owner(view_ctx);
-
-    if (pick_all) {
-	const SoPickedPointList &picked_points =
-	    pick_action.getPickedPointList();
-	candidates.reserve(static_cast<size_t>(picked_points.getLength()));
-	for (int i = 0; i < picked_points.getLength(); i++) {
-	    const SoPickedPoint *picked_point = picked_points[i];
-	    const SoBRLPickDetail *detail =
-		ged_obol_brl_pick_detail(picked_point);
-	    if (!detail)
-		continue;
-	    ged_obol_pick_insert(candidates,
-		    ged_obol_pick_candidate_from_point(controller, &owner,
-			picked_point, detail, &ray_origin),
-		    pick_all);
-	}
-    } else {
-	const SoPickedPoint *picked_point = pick_action.getPickedPoint();
-	const SoBRLPickDetail *detail = ged_obol_brl_pick_detail(picked_point);
-	if (detail) {
-	    ged_obol_pick_insert(candidates,
-		    ged_obol_pick_candidate_from_point(controller, &owner,
-			picked_point, detail, &ray_origin),
-		    pick_all);
-	}
-    }
-
-    ged_obol_pick_source_full_detail(controller, &owner, line, pick_all,
-	    candidates);
-
-    SbLine rt_line = line;
-    if (candidates.empty())
-	(void)ged_obol_pick_camera_line(controller, vx, vy, rt_line);
-    ged_obol_pick_rt_exact(controller, &owner, rt_line, pick_all,
-	    candidates);
+    candidates.reserve(records.size());
+    for (const BRLObolViewPickRecord &record : records)
+	ged_obol_pick_insert(candidates,
+	    ged_obol_pick_candidate_from_record(controller, &owner, record),
+	    pick_all);
 
     if (pick_all)
 	ged_obol_pick_sort(candidates);
@@ -4860,8 +4673,7 @@ ged_draw_obol_view_context_snap_first_candidate(
 
     BRLObolViewController *controller =
 	ged_obol_view_controller_for_context(view_ctx);
-    if (!controller || !controller->getViewport() ||
-	    !controller->getViewport()->getRoot())
+    if (!controller)
 	return 0;
     if (!ged_obol_pick_sync_view_controller(controller, view_ctx))
 	return 0;
@@ -4870,18 +4682,14 @@ ged_draw_obol_view_context_snap_first_candidate(
     if (!enabled_kinds)
 	return 0;
 
-    SoBRLSnapAction snap_action;
-    snap_action.setEnabledKinds(enabled_kinds);
-    snap_action.setQueryPoint(SbVec3f(static_cast<float>(sample[X]),
-	    static_cast<float>(sample[Y]),
-	    static_cast<float>(sample[Z])));
-    snap_action.setTolerance(FLT_MAX);
-    snap_action.apply(controller->getViewport()->getRoot());
-
-    if (!snap_action.hasCandidate())
+    BRLObolViewSnapRecord snap;
+    if (!brlobol_view_snap_point(controller,
+	SbVec3f(static_cast<float>(sample[X]), static_cast<float>(sample[Y]),
+	    static_cast<float>(sample[Z])), FLT_MAX, enabled_kinds,
+	SoBRLSnapAction::FULL_DETAIL, false, snap))
 	return 0;
 
-    const SbVec3f &point = snap_action.getPoint();
+    const SbVec3f &point = snap.point;
     VSET(candidate, point[0], point[1], point[2]);
     return 1;
 }
@@ -5779,6 +5587,42 @@ ged_obol_faceplate_sync_center_dot(BRLObolViewController *controller,
 				   0.0, -0.01, 0.0, 0.01);
     BRLObolFeatureStyle style = ged_obol_faceplate_style(
 				    state.gos_line_color, 255, 255, 0, 1);
+	(void)ged_obol_faceplate_publish_lines(controller, view_ctx, name,
+					   points, commands, style);
+}
+
+static void
+ged_obol_faceplate_sync_interactive_rect(BRLObolViewController *controller,
+					 void *view_ctx)
+{
+    static const char name[] = "_faceplate/interactive_rect";
+    struct bv_interactive_rect_state state = BV_INTERACTIVE_RECT_STATE_INIT;
+    if (!bv_interactive_rect_state_get(&state, ged_obol_bv_const(view_ctx)) ||
+	!state.draw || (ZERO(state.width) && ZERO(state.height))) {
+	ged_obol_faceplate_remove(controller, view_ctx, name);
+	return;
+    }
+
+    const int width = bv_width_get(ged_obol_bv_const(view_ctx));
+    const int height = bv_height_get(ged_obol_bv_const(view_ctx));
+    const fastf_t aspect = width > 0 && height > 0 ?
+	(fastf_t)width / (fastf_t)height : 1.0;
+    const fastf_t x0 = state.x;
+    const fastf_t x1 = state.x + state.width;
+    const fastf_t y0 = state.y * aspect;
+    const fastf_t y1 = (state.y + state.height) * aspect;
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    points.reserve(8);
+    commands.reserve(8);
+    ged_obol_faceplate_append_line(points, commands, view_ctx, x0, y0, x0, y1);
+    ged_obol_faceplate_append_line(points, commands, view_ctx, x0, y1, x1, y1);
+    ged_obol_faceplate_append_line(points, commands, view_ctx, x1, y1, x1, y0);
+    ged_obol_faceplate_append_line(points, commands, view_ctx, x1, y0, x0, y0);
+
+    BRLObolFeatureStyle style = ged_obol_faceplate_style(state.color,
+	255, 255, 255, state.line_width > 0 ? state.line_width : 1);
+    style.lineStyle = state.line_style;
     (void)ged_obol_faceplate_publish_lines(controller, view_ctx, name,
 					   points, commands, style);
 }
@@ -6616,6 +6460,7 @@ ged_obol_view_context_faceplate_sync(struct ged *gedp, void *view_ctx,
 	return BRLCAD_OK;
 
     ged_obol_faceplate_sync_center_dot(controller, view_ctx);
+	ged_obol_faceplate_sync_interactive_rect(controller, view_ctx);
     ged_obol_faceplate_sync_grid(controller, view_ctx);
     ged_obol_faceplate_sync_adc(controller, view_ctx);
     const uint64_t render_time =
@@ -18337,6 +18182,10 @@ ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max)
     }
     wire.bounds = SbBox3f(corners[0], corners[7]);
     geometry->wire = std::move(wire);
+    /* Structural bounds are conservative LoD proxies, not authored wire.
+     * SoCADAssembly may render a depth-tested point when every AABB corner
+     * projects into one pixel, while retaining the box for bounds and picks. */
+    geometry->subpixelProxyEligible = true;
     return geometry;
 }
 

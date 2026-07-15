@@ -104,7 +104,7 @@ class QgEdMainWindow : public QMainWindow
 
     public slots:
 	//void save_image();
-	void do_dm_init();
+	void do_endpoint_init();
         void close();
 	// Put central display into Quad mode
 	void QuadDisplay();

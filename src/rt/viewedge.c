@@ -620,7 +620,7 @@ view_2init(struct application *UNUSED(ap), char *UNUSED(framename))
     /*
      * Determine if the framebuffer is readable.
      */
-    if (overlay || blend)
+	if (rt_fb_output_enabled && (overlay || blend))
 	if (imgstream_fb_read(fbp, 0, 0, fb_bg_color, 1) < 0)
 	    bu_exit(EXIT_FAILURE, "rt_edge: specified framebuffer is not readable, cannot merge.\n");
 
@@ -652,7 +652,8 @@ view_2init(struct application *UNUSED(ap), char *UNUSED(framename))
      * isn't 0 0 1!).
      *
      */
-    if (overlay && bgcolor[RED] == 0 && bgcolor[GRN] == 0 && bgcolor[BLU] == 1) {
+    if (rt_fb_output_enabled && overlay && bgcolor[RED] == 0 &&
+	bgcolor[GRN] == 0 && bgcolor[BLU] == 1) {
 	bgcolor[RED] = fb_bg_color[RED];
 	bgcolor[GRN] = fb_bg_color[GRN];
 	bgcolor[BLU] = fb_bg_color[BLU];
@@ -683,7 +684,7 @@ view_eol(struct application *ap)
     else
 	cpu = ap->a_resource->re_cpu;
 
-    if (overlay) {
+    if (rt_fb_output_enabled && overlay) {
 	/*
 	 * Overlay mode. Check if the pixel is an edge.  If so, write
 	 * it to the framebuffer.
@@ -698,7 +699,7 @@ view_eol(struct application *ap)
 		bu_semaphore_release(BU_SEM_SYSCALL);
 	    }
 	}
-    } else if (blend) {
+    } else if (rt_fb_output_enabled && blend) {
 	/*
 	 * Blend mode.
 	 *
@@ -825,7 +826,7 @@ view_eol(struct application *ap)
 	bu_semaphore_release(BU_SEM_SYSCALL);
     } /* end blend */
 
-    else if (fbp != NULL) {
+    else if (fbp != NULL && rt_fb_output_enabled) {
 	/*
 	 * Simple whole scanline write to a framebuffer.
 	 */
@@ -869,7 +870,7 @@ view_cleanup(struct rt_i *UNUSED(rtip))
  */
 void draw_pixel(const double x, const double y, const rt_pixel_t pixel)
 {
-    if (fbp != NULL) {
+	if (fbp != NULL && rt_fb_output_enabled) {
         (void)imgstream_fb_write(fbp, (int)x, (int)y, pixel, 1);
     }
     else if (bif) {
@@ -932,7 +933,7 @@ void draw_z_label(const double x, const double y, const unsigned int lineLength,
 void
 view_end(struct application* UNUSED(ap))
 {
-    if (!draw_axes || (fbp == NULL && bif == NULL)) {
+    if (!draw_axes || ((!fbp || !rt_fb_output_enabled) && bif == NULL)) {
         return;
     }
 

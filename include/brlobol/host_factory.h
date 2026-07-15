@@ -90,6 +90,9 @@ struct brlobol_host_factory {
     int (*set_title)(void *instance, const char *title, void *user_data);
     int (*set_visible)(void *instance, int visible, void *user_data);
     int (*set_vsync)(void *instance, int enabled, void *user_data);
+    /** Optional.  Return a borrowed BRLObolWindowHost suitable for retained
+     * framebuffer attachment, or NULL when the factory host is opaque. */
+    void *(*framebuffer_window_host)(void *instance, void *user_data);
 };
 
 __BEGIN_DECLS
@@ -150,6 +153,9 @@ BRLOBOL_EXPORT int brlobol_host_factory_instance_set_visible(
 	brlobol_host_factory_token_t *token, void *instance, int visible);
 BRLOBOL_EXPORT int brlobol_host_factory_instance_set_vsync(
 	brlobol_host_factory_token_t *token, void *instance, int enabled);
+/** Return a factory-provided borrowed BRLObolWindowHost, if supported. */
+BRLOBOL_EXPORT void *brlobol_host_factory_instance_framebuffer_window_host(
+	brlobol_host_factory_token_t *token, void *instance);
 
 __END_DECLS
 

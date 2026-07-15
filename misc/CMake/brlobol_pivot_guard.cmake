@@ -126,7 +126,6 @@ function(_brlobol_guard_check_dependency_inventory)
   _brlobol_guard_read_rel(_inventory
     "doc/notes/obol_legacy_dependency_inventory.txt")
   _brlobol_guard_read_rel(_source_dirs "src/source_dirs.cmake")
-  _brlobol_guard_read_rel(_libdm_cmake "src/libdm/CMakeLists.txt")
 
   set(_expected_deps_libbrlobol [[libwdb;librt;libimgstream;libbg;libbu]])
   set(_expected_deps_libbv [[libbg;libbn;libbu]])
@@ -135,13 +134,13 @@ function(_brlobol_guard_check_dependency_inventory)
   set(_expected_deps_librt [[libbrep;libnmg;libbv;libbg;libbn;libbu]])
   set(_expected_deps_libanalyze [[librt;libbg;libbn;libbu]])
   set(_expected_deps_libimgstream [[libicv;libbn;libpkg;libbu]])
-  set(_expected_deps_libdm [[librt;libicv;libbn;libpkg;libbu]])
   set(_expected_deps_libged [[libbrlobol;libimgstream;libicv;libanalyze;libwdb;liboptical;libbu]])
   set(_expected_deps_libqtcad [[libbrlobol;libged;libbg;libbn;libbu]])
   set(_expected_deps_libtclcad [[libged;libimgstream;libpkg;libbn;libbu]])
   set(_expected_deps_qged [[libqtcad]])
   set(_expected_deps_mged [[libtclcad]])
-  set(_expected_deps_fbserv [[libimgstream;libpkg;libbu]])
+  set(_expected_deps_fbserv [[libimgstream;libpkg;libbu;libqtcad;libtclcad]])
+  set(_expected_deps_rt [[librt;liboptical;libimgstream;libicv;libqtcad;libtclcad]])
 
   foreach(_target
       libbrlobol
@@ -151,13 +150,13 @@ function(_brlobol_guard_check_dependency_inventory)
       librt
       libanalyze
       libimgstream
-      libdm
       libged
       libqtcad
       libtclcad
       qged
       mged
-      fbserv)
+      fbserv
+      rt)
     set(_expected "${_expected_deps_${_target}}")
     string(REGEX MATCH "set_deps\\(${_target}[ \t]+\"([^\"]*)\"\\)"
       _row "${_source_dirs}")
@@ -176,22 +175,15 @@ function(_brlobol_guard_check_dependency_inventory)
   endforeach()
 
   _brlobol_guard_read_rel(_qged_cmake "src/qged/CMakeLists.txt")
-  string(REGEX MATCH [[dm_plugins]] _qged_dm_plugins "${_qged_cmake}")
-  if(_qged_dm_plugins)
-    _brlobol_guard_fail("qged reintroduced dm_plugins as a build prerequisite")
-  endif()
-
-  string(REGEX MATCH [[PRIVATE_LIBS[^\n]*libimgstream]] _libdm_imgstream_private
-    "${_libdm_cmake}")
-  if(NOT _libdm_imgstream_private)
-    _brlobol_guard_fail(
-      "src/libdm/CMakeLists.txt no longer links libimgstream privately for display-host framebuffer compatibility")
-  endif()
-  string(FIND "${_inventory}" [[libdm retains only the narrow `struct fb` fbserv backend adapter]] _libdm_adapter_inventory_idx)
-  if(_libdm_adapter_inventory_idx EQUAL -1)
-    _brlobol_guard_fail(
-      "doc/notes/obol_legacy_dependency_inventory.txt no longer documents the narrow libdm fbserv compatibility adapter")
-  endif()
+  foreach(_retired
+      include/dm.h
+      include/dm/CMakeLists.txt
+      src/libdm/CMakeLists.txt
+      misc/pkgconfig/libdm.pc.in)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired}")
+      _brlobol_guard_fail("${_retired} restored the retired libdm compatibility layer")
+    endif()
+  endforeach()
 endfunction()
 
 function(_brlobol_guard_check_libbsg_retired)
@@ -231,10 +223,42 @@ function(_brlobol_guard_check_legacy_graphical_dm_retired)
       _brlobol_guard_fail("${_rel} reintroduced a retired graphical display-manager path")
     endif()
   endforeach()
-  _brlobol_guard_read_rel(_libdm_cmake "src/libdm/CMakeLists.txt")
-  _brlobol_guard_forbid_regexes("src/libdm/CMakeLists.txt" "${_libdm_cmake}"
-    [[add_subdirectory\((X|glx|qtgl|swrast|tkswrast|wgl)\)]]
-    [[(^|[^A-Za-z0-9_])libdmgl([^A-Za-z0-9_]|$)]])
+  # ISST is an ADRT image producer.  Its Tk photo presenter is intentionally
+  # pixel-only; restoring a private OpenGL/display-manager window would create
+  # a second graphical path outside the endpoint architecture.
+  _brlobol_guard_read_rel(_isst_source "src/adrt/isst.c")
+  _brlobol_guard_forbid_regexes("src/adrt/isst.c" "${_isst_source}"
+    [[#[ \t]*include[ \t]*[<\"]GL/]]
+    [[#[ \t]*include[ \t]*[<\"]dm\.h]]
+    [[(^|[^A-Za-z0-9_])dm_(open|make_current|draw_end|set_bg)[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])gl[A-Z][A-Za-z0-9_]*[ \t\r\n]*\(]])
+  _brlobol_guard_read_rel(_isst_cmake "src/adrt/CMakeLists.txt")
+  _brlobol_guard_forbid_regexes("src/adrt/CMakeLists.txt" "${_isst_cmake}"
+    [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]]
+    [[(^|[^A-Za-z0-9_])dm_plugins([^A-Za-z0-9_]|$)]]
+    [[BRLCAD_ENABLE_OPENGL[ \t]*AND[ \t]*BRLCAD_ENABLE_TK]])
+
+  # QISST is also a CPU image producer.  Its renderer runs in a worker thread
+  # and publishes RGB QImage frames to a QWidget; it must not recover the
+  # former OpenGL context-transfer and texture-presenter path.
+  foreach(_rel src/isst/isstgl.h src/isst/isstgl.cpp src/isst/main_window.h)
+    _brlobol_guard_read_rel(_qisst_source "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_qisst_source}"
+      [[QOpenGL]]
+      [[QGLWidget]]
+      [[(^|[^A-Za-z0-9_])gl[A-Z][A-Za-z0-9_]*[ \t\r\n]*\(]])
+  endforeach()
+  _brlobol_guard_read_rel(_qisst_cmake "src/isst/CMakeLists.txt")
+  _brlobol_guard_forbid_regexes("src/isst/CMakeLists.txt" "${_qisst_cmake}"
+    [[BRLCAD_ENABLE_QT[ \t]*AND[ \t]*BRLCAD_ENABLE_OPENGL]]
+    [[Qt[56]::OpenGL]]
+    [[OPENGL_(opengl|gl)_LIBRARY]])
+
+  foreach(_rel src/liboptical/sh_points.c src/liboptical/sh_spm.c)
+    _brlobol_guard_read_rel(_optical_source "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_optical_source}"
+      [[#[ \t]*include[ \t]*[<\"]dm\.h]])
+  endforeach()
 endfunction()
 
 function(_brlobol_guard_check_retired_tests)
@@ -710,20 +734,42 @@ function(_brlobol_guard_check_display_endpoint_boundary)
   _brlobol_guard_read_rel(_qged_fbserv "src/qged/fbserv.cpp")
   foreach(_needle
       [[displayEndpoint()]]
-      [[brlobol_display_endpoint_host]])
+      [[ged_view_context_display_endpoint_set]]
+      [[ged_draw_obol_framebuffer_backend_ensure_for_view]]
+      [[qged_fbserv_release_ged_handlers]])
     string(FIND "${_qged_fbserv}" "${_needle}" _qged_fb_endpoint_idx)
     if(_qged_fb_endpoint_idx EQUAL -1)
       _brlobol_guard_fail(
-	"qged fbserv no longer reuses the visible view endpoint host (${_needle})")
+	"qged fbserv no longer binds its visible endpoint through libged (${_needle})")
     endif()
   endforeach()
   _brlobol_guard_forbid_regexes("src/qged/fbserv.cpp" "${_qged_fbserv}"
-    [[QgObolWindowHost[ \t\r\n]+host]])
+    [[(^|[^A-Za-z0-9_])qdm_]]
+    [[QgObolWindowHost[ \t\r\n]+host]]
+    [[brlobol_display_endpoint_host]]
+    [[ged_draw_obol_framebuffer_backend_install_for_view]])
+
+  _brlobol_guard_read_rel(_ged_fbserv "src/libged/obol_fbserv.cpp")
+  foreach(_needle
+      [[ged_view_context_display_endpoint_get]]
+      [[present_on_flush = 1]])
+    string(FIND "${_ged_fbserv}" "${_needle}" _ged_fb_endpoint_host_idx)
+    if(_ged_fb_endpoint_host_idx EQUAL -1)
+      _brlobol_guard_fail(
+	"libged no longer binds framebuffer publication to its active endpoint (${_needle})")
+    endif()
+  endforeach()
 
   _brlobol_guard_read_rel(_qged_app "src/qged/QgEdApp.cpp")
   string(FIND "${_qged_app}" [[qtcad_obol_host_factories_register]] _qged_factory_idx)
   if(_qged_factory_idx EQUAL -1)
     _brlobol_guard_fail("qged no longer registers libqtcad Obol host factories")
+  endif()
+  string(FIND "${_qged_app}" [[qged_fbserv_release_ged_handlers]]
+    _qged_fbserv_release_idx)
+  if(_qged_fbserv_release_idx EQUAL -1)
+    _brlobol_guard_fail(
+      "qged no longer clears its Qt fbserv transport target before GED teardown")
   endif()
 
   _brlobol_guard_read_rel(_draw_obol "src/libged/draw_obol.cpp")
@@ -988,6 +1034,84 @@ function(_brlobol_guard_check_rt_imgstream_ownership)
   endif()
 endfunction()
 
+function(_brlobol_guard_check_standalone_display_provider_boundary)
+  _brlobol_guard_read_rel(_rt_main "src/rt/main.c")
+  _brlobol_guard_read_rel(_rt_cmake "src/rt/CMakeLists.txt")
+  _brlobol_guard_read_rel(_fbserv_main "src/fbserv/fbserv.c")
+  _brlobol_guard_read_rel(_fbserv_cmake "src/fbserv/CMakeLists.txt")
+
+  foreach(_source_name "src/rt/main.c" "src/fbserv/fbserv.c")
+    if(_source_name STREQUAL "src/rt/main.c")
+      set(_source_contents "${_rt_main}")
+    else()
+      set(_source_contents "${_fbserv_main}")
+    endif()
+    _brlobol_guard_forbid_regexes("${_source_name}" "${_source_contents}"
+      [[#[ \t]*include[ \t]*[<"](tcl|tk)(\.h|/)]]
+      [[(^|[^A-Za-z0-9_])(Tcl|Tk)_[A-Za-z0-9_]+]])
+    string(FIND "${_source_contents}" [[brlobol/display_session.h]]
+      _header_idx)
+    string(FIND "${_source_contents}" [[qtcad/display_provider.h]]
+      _qtcad_header_idx)
+    string(FIND "${_source_contents}" [[tclcad/setup.h]] _tclcad_header_idx)
+    string(FIND "${_source_contents}" [[qtcad_obol_display_provider_register]]
+      _qtcad_register_idx)
+    string(FIND "${_source_contents}" [[tclcad_obol_display_provider_register]]
+      _provider_register_idx)
+    string(FIND "${_source_contents}" [[brlobol_display_session_open]]
+      _open_idx)
+    if(_header_idx EQUAL -1 OR _qtcad_header_idx EQUAL -1 OR
+       _tclcad_header_idx EQUAL -1 OR _qtcad_register_idx EQUAL -1 OR
+       _provider_register_idx EQUAL -1 OR _open_idx EQUAL -1)
+      _brlobol_guard_fail(
+        "${_source_name} no longer selects the Qt-first/TclCAD-fallback Obol provider boundary")
+    endif()
+  endforeach()
+
+  foreach(_cmake_name "src/rt/CMakeLists.txt" "src/fbserv/CMakeLists.txt")
+    if(_cmake_name STREQUAL "src/rt/CMakeLists.txt")
+      set(_cmake_contents "${_rt_cmake}")
+    else()
+      set(_cmake_contents "${_fbserv_cmake}")
+    endif()
+    _brlobol_guard_forbid_regexes("${_cmake_name}" "${_cmake_contents}"
+      [[(^|[^A-Za-z0-9_])libtkobolprovider([^A-Za-z0-9_]|$)]])
+    string(FIND "${_cmake_contents}" [[libqtcad]] _qtcad_target_idx)
+    string(FIND "${_cmake_contents}" [[libtclcad]] _tclcad_target_idx)
+    string(FIND "${_cmake_contents}" [[HAVE_QTCAD_OBOL_DISPLAY_PROVIDER]]
+      _qtcad_definition_idx)
+    string(FIND "${_cmake_contents}" [[HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER]]
+      _tclcad_definition_idx)
+    if(_qtcad_target_idx EQUAL -1 OR _tclcad_target_idx EQUAL -1 OR
+       _qtcad_definition_idx EQUAL -1 OR _tclcad_definition_idx EQUAL -1)
+      _brlobol_guard_fail(
+        "${_cmake_name} bypasses the Qt-first/TclCAD-fallback Obol provider targets")
+    endif()
+  endforeach()
+endfunction()
+
+function(_brlobol_guard_check_rtwizard_host_boundary)
+  _brlobol_guard_read_rel(_rtwizard_cmake "src/rtwizard/CMakeLists.txt")
+  _brlobol_guard_forbid_regexes("src/rtwizard/CMakeLists.txt"
+    "${_rtwizard_cmake}"
+    [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]]
+    [[(^|[^A-Za-z0-9_])dm_plugins([^A-Za-z0-9_]|$)]])
+
+  _brlobol_guard_read_rel(_rtwizard_fb_page
+    "src/tclscripts/rtwizard/lib/FbPage.itk")
+  _brlobol_guard_forbid_regexes("src/tclscripts/rtwizard/lib/FbPage.itk"
+    "${_rtwizard_fb_page}"
+    [[/dev/(oglsp|wglsp)]])
+  string(REGEX MATCH [[gedCmd[ \t]+set_fb_mode[ \t]+3]]
+    _rtwizard_overlay "${_rtwizard_fb_page}")
+  string(REGEX MATCH [[gedCmd[ \t]+listen[ \t]+ipc]]
+    _rtwizard_ipc "${_rtwizard_fb_page}")
+  if(NOT _rtwizard_overlay OR NOT _rtwizard_ipc)
+    _brlobol_guard_fail(
+      "rtwizard GUI preview must use its ArcherCore Obol framebuffer IPC endpoint")
+  endif()
+endfunction()
+
 function(_brlobol_guard_check_ged_framebuffer_image_ownership)
   foreach(_dir fb2pix pix2fb png2fb fbclear overlay)
     _brlobol_guard_read_rel(_cmake "src/libged/${_dir}/CMakeLists.txt")
@@ -1114,7 +1238,7 @@ function(_brlobol_guard_check_tclcad_obol_readback_bridge)
     [[shoot_ray[ \t]+obj_ray]])
 endfunction()
 
-function(_brlobol_guard_check_fbserv_legacy_framebuffer_quarantine)
+function(_brlobol_guard_check_fbserv_legacy_framebuffer_retired)
   _brlobol_guard_collect(_files
     src/libged
     src/qged
@@ -1125,11 +1249,12 @@ function(_brlobol_guard_check_fbserv_legacy_framebuffer_quarantine)
       continue()
     endif()
     file(READ "${_file}" _contents)
-    string(REGEX MATCH [[(^|[^A-Za-z0-9_])fbs_fbp([^A-Za-z0-9_]|$)]]
+    string(REGEX MATCH
+      [[(^|[^A-Za-z0-9_])(fbs_fbp|fbs_set_legacy_framebuffer|fbs_legacy_framebuffer|fbserv_set_legacy_framebuffer|fbserv_legacy_framebuffer)([^A-Za-z0-9_]|$)]]
       _hit "${_contents}")
     if(_hit)
       _brlobol_guard_fail(
-	"${_rel} reaches into fbserv_obj::fbs_fbp; use fbs_set_legacy_framebuffer/fbs_legacy_framebuffer instead")
+	"${_rel} restored the retired legacy framebuffer pointer path")
     endif()
   endforeach()
 endfunction()
@@ -1207,13 +1332,11 @@ function(_brlobol_guard_check_fbserv_transport_setup_helpers)
       "src/qged/fbserv.cpp no longer installs fbserv transport callbacks through fbs_set_transport")
   endif()
 
-  _brlobol_guard_read_rel(_tcl_fb "src/libtclcad/fb.c")
   _brlobol_guard_read_rel(_tcl_fbserv "src/libtclcad/fbserv.c")
-  string(FIND "${_tcl_fb}" [[tclcad_fbserv_set_transport]] _tcl_fb_transport_idx)
   string(FIND "${_tcl_fbserv}" [[tclcad_fbserv_set_transport]] _tcl_fbserv_transport_idx)
-  if(_tcl_fb_transport_idx EQUAL -1 OR _tcl_fbserv_transport_idx EQUAL -1)
+  if(_tcl_fbserv_transport_idx EQUAL -1)
     _brlobol_guard_fail(
-      "libtclcad no longer centralizes fbserv transport callback setup through tclcad_fbserv_set_transport")
+      "src/libtclcad/fbserv.c no longer centralizes the fallback fbserv transport through tclcad_fbserv_set_transport")
   endif()
 endfunction()
 
@@ -1242,11 +1365,8 @@ function(_brlobol_guard_check_fbserv_backend_contract)
   _brlobol_guard_read_rel(_imgstream_pkg "src/libimgstream/fbserv_pkg.c")
   _brlobol_guard_read_rel(_imgstream_server "src/libimgstream/fbserv_server.c")
   _brlobol_guard_read_rel(_imgstream_state "src/libimgstream/fbserv_state.c")
-  _brlobol_guard_read_rel(_libdm_cmake "src/libdm/CMakeLists.txt")
   _brlobol_guard_read_rel(_standalone_fbserv "src/fbserv/fbserv.c")
   _brlobol_guard_read_rel(_standalone_fbserv_cmake "src/fbserv/CMakeLists.txt")
-  _brlobol_guard_read_rel(_dm_h "include/dm.h")
-  _brlobol_guard_read_rel(_dm_fbserv "include/dm/fbserv.h")
   _brlobol_guard_read_rel(_protocol_note
     "doc/notes/obol_framebuffer_protocol.txt")
 
@@ -1316,10 +1436,16 @@ function(_brlobol_guard_check_fbserv_backend_contract)
 	"src/libimgstream/fbserv_server.c no longer owns required lifecycle entry ${_entry}")
     endif()
   endforeach()
-  if(EXISTS "${BRLCAD_SOURCE_DIR}/src/libdm/fbserv.c")
-    _brlobol_guard_fail(
-      "src/libdm/fbserv.c reintroduced libdm ownership of the framebuffer protocol server")
-  endif()
+  foreach(_retired
+      include/dm.h
+      include/dm/fbserv.h
+      src/libdm/CMakeLists.txt
+      src/libdm/fbserv.c
+      src/libdm/fbserv_legacy.c)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired}")
+      _brlobol_guard_fail("${_retired} restored retired framebuffer compatibility ownership")
+    endif()
+  endforeach()
   if(EXISTS "${BRLCAD_SOURCE_DIR}/src/fbserv/server.c")
     _brlobol_guard_fail(
       "src/fbserv/server.c reintroduced a duplicate standalone framebuffer protocol server")
@@ -1332,11 +1458,6 @@ function(_brlobol_guard_check_fbserv_backend_contract)
 	"src/mged/fbserv.c reintroduced private framebuffer protocol processing (${_token})")
     endif()
   endforeach()
-  string(FIND "${_libdm_cmake}" "  fbserv.c" _libdm_fbserv_source_idx)
-  if(NOT _libdm_fbserv_source_idx EQUAL -1)
-    _brlobol_guard_fail(
-      "src/libdm/CMakeLists.txt reintroduced the framebuffer protocol server core")
-  endif()
   string(FIND "${_imgstream_fbserv}" [[fbserv_generate_token]] _auth_decl_idx)
   string(FIND "${_imgstream_auth}" [[fbserv_verify_token]] _auth_impl_idx)
   if(_auth_decl_idx EQUAL -1 OR _auth_impl_idx EQUAL -1)
@@ -1346,29 +1467,6 @@ function(_brlobol_guard_check_fbserv_backend_contract)
   if(EXISTS "${BRLCAD_SOURCE_DIR}/src/fbserv/auth.h")
     _brlobol_guard_fail(
       "src/fbserv/auth.h reintroduced header-local fbserv auth helpers; use include/imgstream/fbserv.h")
-  endif()
-  string(REGEX MATCH [[#[ \t]*define[ \t]+MSG_FB[A-Z0-9_]*]]
-    _dm_msg_def "${_dm_h}")
-  if(_dm_msg_def)
-    _brlobol_guard_fail(
-      "include/dm.h redefined fbserv wire-protocol message IDs instead of using include/imgstream/fbserv.h")
-  endif()
-  string(FIND "${_dm_fbserv}" [[#include "imgstream/fbserv.h"]] _include_idx)
-  if(_include_idx EQUAL -1)
-    _brlobol_guard_fail(
-      "include/dm/fbserv.h no longer imports the imgstream-owned fbserv backend contract")
-  endif()
-  string(REGEX MATCH [[struct[ \t\r\n]+fbserv_fb_ops[ \t\r\n]*\{]]
-    _dm_ops_def "${_dm_fbserv}")
-  if(_dm_ops_def)
-    _brlobol_guard_fail(
-      "include/dm/fbserv.h redefined struct fbserv_fb_ops instead of using include/imgstream/fbserv.h")
-  endif()
-  string(REGEX MATCH [[struct[ \t\r\n]+fbserv_(obj|listener|client|transport_ops)[ \t\r\n]*\{]]
-    _dm_obj_def "${_dm_fbserv}")
-  if(_dm_obj_def)
-    _brlobol_guard_fail(
-      "include/dm/fbserv.h redefined fbserv object/transport types instead of using include/imgstream/fbserv.h")
   endif()
   string(FIND "${_protocol_note}" [[include/imgstream/fbserv.h]] _note_idx)
   if(_note_idx EQUAL -1)
@@ -1382,9 +1480,8 @@ function(_brlobol_guard_check_tkobol_host_ownership)
   _brlobol_guard_read_rel(_mged_cmake "src/mged/CMakeLists.txt")
   _brlobol_guard_read_rel(_mged_main "src/mged/mged.c")
   _brlobol_guard_read_rel(_mged_attach "src/mged/attach.c")
-  _brlobol_guard_read_rel(_tclcad_dm "src/libtclcad/dm.c")
+  _brlobol_guard_read_rel(_tclcad_tkobol_init "src/libtclcad/tkobol_init.c")
   _brlobol_guard_read_rel(_tkobol_host "src/libtclcad/tkobol/tk-obol-host.cpp")
-  _brlobol_guard_read_rel(_dm_plugins "src/libdm/dm_plugins.cpp")
   foreach(_needle
       [[tkobol/tk-obol-host.cpp]]
       [[tkobol/vendor/togl/togl.c]])
@@ -1397,17 +1494,17 @@ function(_brlobol_guard_check_tkobol_host_ownership)
   foreach(_needle
       [[BrlcadTkObolHost_Init]]
       [[tclcad_obol_host_factories_register]])
-    string(FIND "${_tclcad_dm}" "${_needle}" _host_init_idx)
+    string(FIND "${_tclcad_tkobol_init}" "${_needle}" _host_init_idx)
     if(_host_init_idx EQUAL -1)
       _brlobol_guard_fail(
-	"src/libtclcad/dm.c no longer initializes the built-in Tk Obol host (${_needle})")
+	"src/libtclcad/tkobol_init.c no longer initializes the built-in Tk Obol host (${_needle})")
     endif()
   endforeach()
   _brlobol_guard_forbid_regexes("src/libtclcad/CMakeLists.txt" "${_tclcad_cmake}"
     [[add_subdirectory\(tkobol\)]]
     [[tkobol/dm-tkobol\.cpp]]
     [[dm_plugin_library\(dm-tkobol]])
-  _brlobol_guard_forbid_regexes("src/libtclcad/dm.c" "${_tclcad_dm}"
+  _brlobol_guard_forbid_regexes("src/libtclcad/tkobol_init.c" "${_tclcad_tkobol_init}"
     [[(^|[^A-Za-z0-9_])dm_register_backend[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])dm_bestXType_tcl([^A-Za-z0-9_]|$)]]
     [[(^|[^A-Za-z0-9_])dm_validXType_tcl([^A-Za-z0-9_]|$)]])
@@ -1485,10 +1582,6 @@ function(_brlobol_guard_check_tkobol_host_ownership)
 	"src/libtclcad/commands.c reintroduced direct controller attachment (${_retired})")
     endif()
   endforeach()
-  _brlobol_guard_forbid_regexes("src/libdm/dm_plugins.cpp" "${_dm_plugins}"
-    [[DM_SWRAST]]
-    [[(^|[^A-Za-z0-9_])(ogl|wgl|swrast|qtgl|tkswrast)([^A-Za-z0-9_]|$)]])
-
   _brlobol_guard_read_rel(_gsh_cmake "src/gtools/gsh/CMakeLists.txt")
   _brlobol_guard_forbid_regexes("src/gtools/gsh/CMakeLists.txt" "${_gsh_cmake}"
     [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]])
@@ -1512,7 +1605,6 @@ function(_brlobol_guard_check_tkobol_host_ownership)
 endfunction()
 
 function(_brlobol_guard_check_retained_export_ownership)
-  _brlobol_guard_read_rel(_libdm_cmake "src/libdm/CMakeLists.txt")
   _brlobol_guard_read_rel(_mged_cmd "src/mged/cmd.cpp")
   foreach(_retired
       src/libdm/plot/CMakeLists.txt
@@ -1523,13 +1615,6 @@ function(_brlobol_guard_check_retained_export_ownership)
       src/libdm/postscript/dm-ps.h)
     if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired}")
       _brlobol_guard_fail("${_retired} restored a retired export display manager")
-    endif()
-  endforeach()
-  foreach(_needle [[dm-plot]] [[dm-ps]])
-    string(FIND "${_libdm_cmake}" "${_needle}" _retired_output_idx)
-    if(_retired_output_idx EQUAL -1)
-      _brlobol_guard_fail(
-	"src/libdm/CMakeLists.txt no longer removes stale ${_needle} plugin output")
     endif()
   endforeach()
   _brlobol_guard_forbid_regexes("src/mged/cmd.cpp" "${_mged_cmd}"
@@ -1544,26 +1629,11 @@ function(_brlobol_guard_check_retained_export_ownership)
 endfunction()
 
 function(_brlobol_guard_check_retired_text_dm)
-  _brlobol_guard_read_rel(_libdm_cmake "src/libdm/CMakeLists.txt")
   foreach(_retired
       src/libdm/txt/CMakeLists.txt
       src/libdm/txt/dm-txt.c)
     if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired}")
       _brlobol_guard_fail("${_retired} restored the unreachable text display manager")
-    endif()
-  endforeach()
-  string(FIND "${_libdm_cmake}" [[dm-txt]] _retired_txt_output_idx)
-  if(_retired_txt_output_idx EQUAL -1)
-    _brlobol_guard_fail(
-      "src/libdm/CMakeLists.txt no longer removes stale dm-txt plugin output")
-  endif()
-  foreach(_needle [[txt/if_debug.c]] [[add_subdirectory(txt)]])
-    string(FIND "${_libdm_cmake}" "${_needle}" _txt_idx)
-    if(_needle STREQUAL [[txt/if_debug.c]] AND _txt_idx EQUAL -1)
-      _brlobol_guard_fail("libdm lost the independent /dev/debug framebuffer")
-    endif()
-    if(_needle STREQUAL [[add_subdirectory(txt)]] AND NOT _txt_idx EQUAL -1)
-      _brlobol_guard_fail("libdm restored the retired text DM subdirectory")
     endif()
   endforeach()
 endfunction()
@@ -1734,6 +1804,29 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
     [[(^|[^A-Za-z0-9_])dm_draw_line_2d[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])dm_set_(fg|line_attr)[ \t\r\n]*\(]]
     [[(^|[^A-Za-z0-9_])dm_(Xx2Normal|Xy2Normal|Normal2Xx|Normal2Xy|get_width|get_height|get_aspect)[ \t\r\n]*\(]])
+  foreach(_retired_renderer
+      src/libdm/adc.c
+      src/libdm/axes.c
+      src/libdm/clip.c
+      src/libdm/grid.c
+      src/libdm/labels.c
+      src/libdm/rect.c
+      src/libdm/scale.c)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired_renderer}")
+      _brlobol_guard_fail(
+	"${_retired_renderer} restored a retired direct faceplate renderer")
+    endif()
+  endforeach()
+  foreach(_retired_surface
+      include/dm/view.h
+      include/dm/vlist.h
+      src/libdm/view.c
+      src/libdm/null/dm-Null.h)
+    if(EXISTS "${BRLCAD_SOURCE_DIR}/${_retired_surface}")
+      _brlobol_guard_fail(
+	"${_retired_surface} restored a retired libdm drawing compatibility surface")
+    endif()
+  endforeach()
   _brlobol_guard_read_rel(_mged_events "src/mged/doevent.c")
   _brlobol_guard_forbid_regexes("src/mged/doevent.c" "${_mged_events}"
     [[(^|[^A-Za-z0-9_])dm_(Xx2Normal|Xy2Normal|get_width|get_height|get_aspect|configure_win|doevent)[ \t\r\n]*\(]])
@@ -1752,7 +1845,14 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
     [[(^|[^A-Za-z0-9_])dm_get_(width|height)[ \t\r\n]*\(]])
   _brlobol_guard_read_rel(_mged_settings "src/mged/set.c")
   _brlobol_guard_forbid_regexes("src/mged/set.c" "${_mged_settings}"
-    [[(^|[^A-Za-z0-9_])dm_set_perspective[ \t\r\n]*\(]])
+    [[(^|[^A-Za-z0-9_])dm_set_perspective[ \t\r\n]*\(]]
+    [[(^|[^A-Za-z0-9_])bv_perspective_set[ \t\r\n]*\(]])
+  string(FIND "${_mged_settings}" [[ged_view_context_display_property_set]]
+    _mged_perspective_policy_idx)
+  if(_mged_perspective_policy_idx EQUAL -1)
+    _brlobol_guard_fail(
+      "src/mged/set.c no longer routes perspective settings through endpoint policy")
+  endif()
   _brlobol_guard_read_rel(_mged_fbserv "src/mged/fbserv.c")
   _brlobol_guard_forbid_regexes("src/mged/fbserv.c" "${_mged_fbserv}"
     [[#[ \t]*include[ \t]*[<"]dm/fbserv_legacy\.h]]
@@ -1848,14 +1948,87 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
   _brlobol_guard_read_rel(_mged_bindings "src/tclscripts/mged/bindings.tcl")
   _brlobol_guard_forbid_regexes("src/tclscripts/mged/bindings.tcl"
     "${_mged_bindings}"
-    [[(^|[^A-Za-z0-9_])tkswrast([^A-Za-z0-9_]|$)]])
+    [[(^|[^A-Za-z0-9_])tkswrast([^A-Za-z0-9_]|$)]]
+    [[(^|[^A-Za-z0-9_])mged_bind_dm([^A-Za-z0-9_]|$)]])
+  foreach(_rel
+      src/mged/attach.c
+      src/mged/f_cmd.h
+      src/mged/cmd.h
+      src/mged/cmd.cpp
+      src/mged/setup.c
+      src/mged/mged.c
+      src/qged/QgEdMainWindow.cpp
+      src/qged/QgEdMainWindow.h
+      src/libged/dm/dm.c
+      src/tclscripts/mged/apply.tcl
+      src/tclscripts/mged/helpdevel.tcl)
+    _brlobol_guard_read_rel(_mged_stale_endpoint_names "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_mged_stale_endpoint_names}"
+      [[(^|[^A-Za-z0-9_])get_dm_list([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])f_get_dm_list([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])cmd_ged_dm_wrapper([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])attach_display_manager([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])qged_dm_during_clbk([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])do_dm_init([^A-Za-z0-9_]|$)]]
+      [[\.dm_tkobol]]
+      [[GED_DM_DURING_DEBUG]])
+  endforeach()
+  foreach(_rel
+      src/tclscripts/mged/adc.tcl
+      src/tclscripts/mged/apply.tcl
+      src/tclscripts/mged/bindings.tcl
+      src/tclscripts/mged/collaborate.tcl
+      src/tclscripts/mged/color_scheme.tcl
+      src/tclscripts/mged/comb.tcl
+      src/tclscripts/mged/grid.tcl
+      src/tclscripts/mged/grouper.tcl
+      src/tclscripts/mged/mged.tcl
+      src/tclscripts/mged/mgedrc.tcl
+      src/tclscripts/mged/mouse.tcl
+      src/tclscripts/mged/mview.tcl
+      src/tclscripts/mged/openw.tcl
+      src/tclscripts/mged/qray.tcl
+      src/tclscripts/mged/rt.tcl)
+    _brlobol_guard_read_rel(_mged_stale_pane_state "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_mged_stale_pane_state}"
+      [[(^|[^A-Za-z0-9_])active_dm([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])show_dm([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])set_dm_win([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_win_hide([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_loc([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_key_bindings([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])dm_id([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])new_dm([^A-Za-z0-9_]|$)]]
+      [[(^|[^A-Za-z0-9_])set_active_dm([^A-Za-z0-9_]|$)]])
+  endforeach()
+  foreach(_rel
+      src/mged/mged.c
+      src/tclscripts/mged/openw.tcl
+      src/tclscripts/mged/mview.tcl
+      src/tclscripts/mged/mgedrc.tcl
+      src/tclscripts/mged/help.tcl
+      doc/asciidoc/system/man1/mged.adoc
+      doc/asciidoc/system/mann/gui.adoc
+      doc/asciidoc/articles/mged.adoc)
+    _brlobol_guard_read_rel(_mged_host_term "${_rel}")
+    _brlobol_guard_forbid_regexes("${_rel}" "${_mged_host_term}"
+      [[--dm-type]]
+      [[mged_default\(dm_type\)]]
+      [[gui[ \t]+-dt]]
+      [[(^|[^A-Za-z0-9_])-dt([^A-Za-z0-9_]|$)]])
+  endforeach()
   foreach(_rel include/tclcad/misc.h include/tclcad/setup.h)
     _brlobol_guard_read_rel(_tclcad_public_header "${_rel}")
     _brlobol_guard_forbid_regexes("${_rel}" "${_tclcad_public_header}"
       [[#[ \t]*include[ \t]*[<"]dm\.h]])
   endforeach()
+  _brlobol_guard_read_rel(_tclcad_wrapper "src/libtclcad/wrapper.c")
+  _brlobol_guard_forbid_regexes("src/libtclcad/wrapper.c" "${_tclcad_wrapper}"
+    [[(^|[^A-Za-z0-9_])to_dm_func([^A-Za-z0-9_]|$)]])
+  _brlobol_guard_read_rel(_rt_edit_header "include/rt/edit.h")
+  _brlobol_guard_forbid_regexes("include/rt/edit.h" "${_rt_edit_header}"
+    [[(^|[^A-Za-z0-9_])dm_loadmatrix([^A-Za-z0-9_]|$)]])
   foreach(_rel
-      include/dm/view.h
       src/libtclcad/commands.c
       src/tclscripts/lib/Ged.tcl
       src/tclscripts/archer/Archer.tcl
@@ -1902,7 +2075,7 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
   foreach(_rel
       include/tclcad/setup.h
       src/libtclcad/tclcad_private.h
-      src/libtclcad/dm.c
+      src/libtclcad/tkobol_init.c
       src/libtclcad/fb.c)
     _brlobol_guard_read_rel(_contents "${_rel}")
     _brlobol_guard_forbid_regexes("${_rel}" "${_contents}"
@@ -1910,16 +2083,6 @@ function(_brlobol_guard_check_unreachable_drawing_shims)
       [[Tcl_CreateCommand\([^\n]*"fb_open"]])
   endforeach()
 
-  _brlobol_guard_read_rel(_dm_plugins "src/libdm/dm_plugins.cpp")
-  foreach(_needle
-      [[dm_is_obol_backend(d_it->first)]]
-      [[dm_is_obol_backend(key)]])
-    string(FIND "${_dm_plugins}" "${_needle}" _selection_idx)
-    if(_selection_idx EQUAL -1)
-      _brlobol_guard_fail(
-        "src/libdm/dm_plugins.cpp no longer limits generic DM discovery/validation to Obol backends (${_needle})")
-    endif()
-  endforeach()
 endfunction()
 
 function(_brlobol_guard_collect_active_scan_files _outvar)
@@ -1948,10 +2111,12 @@ _brlobol_guard_check_imgstream_display_host_ownership()
 _brlobol_guard_check_imgstream_remote_client_ownership()
 _brlobol_guard_check_standalone_fb_ownership()
 _brlobol_guard_check_rt_imgstream_ownership()
+_brlobol_guard_check_standalone_display_provider_boundary()
+_brlobol_guard_check_rtwizard_host_boundary()
 _brlobol_guard_check_ged_framebuffer_image_ownership()
 _brlobol_guard_check_qged_edit_preview_policy()
 _brlobol_guard_check_tclcad_obol_readback_bridge()
-_brlobol_guard_check_fbserv_legacy_framebuffer_quarantine()
+_brlobol_guard_check_fbserv_legacy_framebuffer_retired()
 _brlobol_guard_check_fbserv_transport_quarantine()
 _brlobol_guard_check_fbserv_transport_setup_helpers()
 _brlobol_guard_check_qged_fbserv_backend_access()

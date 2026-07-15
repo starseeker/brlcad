@@ -37,6 +37,7 @@ struct QgObolWindowHostPrivate {
     QgObolWindowHostPrivate(void) :
 	canvas(NULL),
 	ownsCanvas(FALSE),
+	preserveCanvasOnBind(FALSE),
 	pollRate(0),
 	renderCount(0),
 	lastRenderReason("")
@@ -45,6 +46,7 @@ struct QgObolWindowHostPrivate {
 
     QgCanvasBase *canvas;
     SbBool ownsCanvas;
+    SbBool preserveCanvasOnBind;
     long pollRate;
     QImage lastFrame;
     int renderCount;
@@ -191,7 +193,14 @@ QgObolWindowHost::bindController(BRLObolViewController *controller)
 {
     if (this->qp->canvas)
 	this->qp->canvas->setObolViewController(controller);
+
+    /* BRLObolWindowHost::attachController closes the current host before it
+     * swaps controller ownership.  A factory bind is not a terminal close:
+     * retain the already-created Qt canvas so a qt-gl factory cannot reopen
+     * as a software QgSW canvas. */
+    this->qp->preserveCanvasOnBind = TRUE;
     this->attachController(controller, FALSE);
+    this->qp->preserveCanvasOnBind = FALSE;
 }
 
 int
@@ -242,7 +251,7 @@ QgObolWindowHost::close(void)
     BRLObolWindowHost::close();
     this->qp->lastFrame = QImage();
     this->qp->lastRenderReason = "";
-    if (this->qp->ownsCanvas) {
+    if (this->qp->ownsCanvas && !this->qp->preserveCanvasOnBind) {
 	qg_obol_window_host_destroy_owned_canvas(this->qp);
 	this->attachController(NULL, FALSE);
     }
@@ -561,6 +570,12 @@ qg_factory_capture(void *instance, unsigned char **pixels, size_t *size,
     return 1;
 }
 
+static void *
+qg_factory_framebuffer_window_host(void *instance, void *UNUSED(user_data))
+{
+    return static_cast<QgObolWindowHost *>(instance);
+}
+
 static brlobol_host_factory_token_t *
 qg_factory_register(const char *name, int priority, uint64_t capabilities,
 	QgObolFactoryKind *kind)
@@ -585,6 +600,7 @@ qg_factory_register(const char *name, int priority, uint64_t capabilities,
     factory.set_title = qg_factory_set_title;
     factory.set_visible = qg_factory_set_visible;
     factory.set_vsync = qg_factory_set_vsync;
+    factory.framebuffer_window_host = qg_factory_framebuffer_window_host;
     return brlobol_host_factory_register(&factory);
 }
 
@@ -609,6 +625,7 @@ qtcad_obol_host_factories_register(void)
     static brlobol_host_factory_token_t *gl_token = qg_factory_register(
 	"qt-gl", 60, BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_EMBEDDED |
 	BRLOBOL_HOST_CAP_SYSTEM_GL |
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT |
 	BRLOBOL_HOST_CAP_PRESENT_VSYNC |
 	BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
 	BRLOBOL_HOST_CAP_INPUT | BRLOBOL_HOST_CAP_READBACK |

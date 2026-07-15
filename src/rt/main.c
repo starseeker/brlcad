@@ -58,6 +58,17 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "pkg.h"
+#include "brlobol/display_session.h"
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
+#  include "qtcad/display_provider.h"
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+#  include "tclcad/setup.h"
+#endif
+
+#if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER) || \
+    defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+#  define HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER 1
+#endif
 
 /* private */
 #include "./rtuif.h"
@@ -73,10 +84,82 @@ extern const char title[];
 
 /***** Variables shared with viewing model *** */
 imgstream_fb_t *fbp = NULL;	/* Framebuffer handle */
+int rt_fb_output_enabled = 1;	/* /dev/null keeps setup metadata but no pixels */
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+static brlobol_display_session_t *fb_display_session = NULL;
+#endif
 FILE		*outfp = NULL;		/* optional pixel output file */
 struct icv_image *bif = NULL;
 
 /***** end of sharing with viewing model *****/
+
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+static int
+rt_obol_display_provider_register(void)
+{
+#ifdef HAVE_QTCAD_OBOL_DISPLAY_PROVIDER
+    return qtcad_obol_display_provider_register();
+#elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+    return tclcad_obol_display_provider_register();
+#else
+    return 0;
+#endif
+}
+#endif
+
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+struct rt_display_frame_task {
+    rt_frame_execute_callback execute;
+    int framenumber;
+    void *data;
+};
+
+static int
+rt_display_frame_task_run(void *data)
+{
+    struct rt_display_frame_task *task =
+	(struct rt_display_frame_task *)data;
+    return task && task->execute ? task->execute(task->framenumber,
+	task->data) : -1;
+}
+
+static int
+rt_display_frame_runner(rt_frame_execute_callback execute, int framenumber,
+	void *data)
+{
+    if (!fb_display_session)
+	return execute ? execute(framenumber, data) : -1;
+    struct rt_display_frame_task task = {execute, framenumber, data};
+    return brlobol_display_session_run(fb_display_session,
+	rt_display_frame_task_run, &task);
+}
+
+static void
+rt_display_progressive_flush(void *UNUSED(data))
+{
+    if (fb_display_session && fbp)
+	(void)imgstream_fb_flush(fbp);
+}
+#endif
+
+static void
+rt_fb_close(void)
+{
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+    if (fb_display_session) {
+	rt_frame_runner_set(NULL, NULL);
+	rt_framebuffer_flush_callback_set(NULL, NULL);
+	brlobol_display_session_close(fb_display_session);
+	fb_display_session = NULL;
+	fbp = NULL;
+	return;
+    }
+#endif
+    if (fbp) {
+	imgstream_fb_close(fbp);
+	fbp = NULL;
+    }
+}
 
 
 /***** variables shared with worker() ******/
@@ -143,9 +226,33 @@ int fb_setup(void) {
 	yy = height;
     }
 
-    bu_semaphore_acquire(BU_SEM_SYSCALL);
-    fbp = imgstream_fb_open(framebuffer, (size_t)xx, (size_t)yy);
-    bu_semaphore_release(BU_SEM_SYSCALL);
+    imgstream_fb_spec_info_t framebuffer_info;
+    rt_fb_output_enabled = imgstream_fb_spec_info(framebuffer,
+	&framebuffer_info) != 0 ||
+	framebuffer_info.diagnostic != IMGSTREAM_FB_DIAGNOSTIC_NULL;
+
+    if (imgstream_fb_spec_kind(framebuffer) == IMGSTREAM_FB_SPEC_DISPLAY) {
+#ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
+	if (!rt_obol_display_provider_register()) {
+	    fprintf(stderr, "rt:  selected UI toolkit has no usable Obol display provider\n");
+	    return 12;
+	}
+	fb_display_session = brlobol_display_session_open(framebuffer, xx, yy,
+	    "BRL-CAD rt");
+	fbp = brlobol_display_session_framebuffer(fb_display_session);
+	if (fbp) {
+	    rt_frame_runner_set(rt_display_frame_runner, NULL);
+	    rt_framebuffer_flush_callback_set(rt_display_progressive_flush, NULL);
+	}
+#else
+	fprintf(stderr, "rt: display targets require a Qt or Tcl/Tk Obol provider; use file or memory output\n");
+	return 12;
+#endif
+    } else {
+	bu_semaphore_acquire(BU_SEM_SYSCALL);
+	fbp = imgstream_fb_open(framebuffer, (size_t)xx, (size_t)yy);
+	bu_semaphore_release(BU_SEM_SYSCALL);
+    }
     if (fbp == NULL) {
 	fprintf(stderr, "rt:  can't open frame buffer\n");
 	return 12;
@@ -616,7 +723,7 @@ int main(int argc, char *argv[])
 	if (frame_retval != 0) {
 	    /* Release the framebuffer, if any */
 	    if (fbp != NULL) {
-		imgstream_fb_close(fbp);
+		rt_fb_close();
 	    }
 	    ret = 1;
 	    goto rt_cleanup;
@@ -718,7 +825,7 @@ int main(int argc, char *argv[])
 
     /* Release the framebuffer, if any */
     if (fbp != NULL) {
-	imgstream_fb_close(fbp);
+	rt_fb_close();
     }
 
 rt_cleanup:

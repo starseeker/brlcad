@@ -895,6 +895,135 @@ test_result_ready_self_unsubscribe(void)
     return 0;
 }
 
+struct CrossUnsubscribeContext {
+    std::mutex mutex;
+    std::condition_variable cv;
+    BRLObolLodSubscriberId targetSubscriber;
+    int removerCalls;
+    int targetCalls;
+    int observerCalls;
+
+    CrossUnsubscribeContext(void) : targetSubscriber(0), removerCalls(0),
+	targetCalls(0), observerCalls(0)
+    {
+    }
+};
+
+static void
+cross_unsubscribe_remover(BRLObolLodService *service, void *userData)
+{
+    CrossUnsubscribeContext *context =
+	static_cast<CrossUnsubscribeContext *>(userData);
+    if (!context || !service)
+	return;
+
+    service->unsubscribeResultReady(context->targetSubscriber);
+    {
+	std::lock_guard<std::mutex> lock(context->mutex);
+	context->removerCalls++;
+	context->cv.notify_all();
+    }
+}
+
+static void
+cross_unsubscribe_target(BRLObolLodService *UNUSED(service), void *userData)
+{
+    CrossUnsubscribeContext *context =
+	static_cast<CrossUnsubscribeContext *>(userData);
+    if (!context)
+	return;
+
+    std::lock_guard<std::mutex> lock(context->mutex);
+    context->targetCalls++;
+    context->cv.notify_all();
+}
+
+static void
+cross_unsubscribe_observer(BRLObolLodService *UNUSED(service), void *userData)
+{
+    CrossUnsubscribeContext *context =
+	static_cast<CrossUnsubscribeContext *>(userData);
+    if (!context)
+	return;
+
+    std::lock_guard<std::mutex> lock(context->mutex);
+    context->observerCalls++;
+    context->cv.notify_all();
+}
+
+static int
+test_result_ready_cross_unsubscribe(void)
+{
+    BRLObolLodService service;
+    ServiceTestContext serviceContext;
+    CrossUnsubscribeContext callbackContext;
+    TaskData firstData{&serviceContext, 123};
+    TaskData secondData{&serviceContext, 124};
+
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD service did not start for cross-unsubscribe test\n");
+	return 1;
+    }
+
+    if (service.subscribeResultReady(cross_unsubscribe_remover,
+				     &callbackContext) == 0 ||
+	(callbackContext.targetSubscriber = service.subscribeResultReady(
+	    cross_unsubscribe_target, &callbackContext)) == 0 ||
+	service.subscribeResultReady(cross_unsubscribe_observer,
+				     &callbackContext) == 0) {
+	printf("FAIL: LoD service did not create cross-unsubscribe subscriptions\n");
+	service.stop();
+	return 1;
+    }
+
+    const uint64_t generation = service.beginGeneration();
+    BRLObolLodTask first;
+    first.generation = generation;
+    first.request = make_request("/ready-cross-unsubscribe-first.bot");
+    first.realize = ready_task;
+    first.realizeData = &firstData;
+    if (service.submit(first) == 0 || wait_for_settled(service, 1)) {
+	printf("FAIL: LoD service did not deliver cross-unsubscribe result\n");
+	service.stop();
+	return 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(callbackContext.mutex);
+	if (callbackContext.removerCalls != 1 || callbackContext.targetCalls != 0 ||
+	    callbackContext.observerCalls != 1) {
+	    printf("FAIL: LoD cross-unsubscribe did not suppress the reserved callback\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    std::vector<BRLObolLodResult> results;
+    service.drainResults(results);
+    BRLObolLodTask second;
+    second.generation = generation;
+    second.request = make_request("/ready-cross-unsubscribe-second.bot");
+    second.realize = ready_task;
+    second.realizeData = &secondData;
+    if (service.submit(second) == 0 || wait_for_settled(service, 1)) {
+	printf("FAIL: LoD service did not continue after cross-unsubscribe\n");
+	service.stop();
+	return 1;
+    }
+    {
+	std::lock_guard<std::mutex> lock(callbackContext.mutex);
+	if (callbackContext.removerCalls != 2 || callbackContext.targetCalls != 0 ||
+	    callbackContext.observerCalls != 2) {
+	    printf("FAIL: LoD cross-unsubscribe changed surviving callback delivery\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    service.stop();
+    return 0;
+}
+
 struct CleanupMarker {
     std::atomic<int> *calls;
     std::atomic<int> *cleanups;
@@ -2675,6 +2804,8 @@ main(int argc, char **argv)
     if (test_result_ready_subscription())
 	return 1;
     if (test_result_ready_self_unsubscribe())
+	return 1;
+    if (test_result_ready_cross_unsubscribe())
 	return 1;
     if (test_task_realize_data_cleanup())
 	return 1;

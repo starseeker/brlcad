@@ -13,6 +13,8 @@ if(BRLCAD_ENABLE_TCL)
   if(TCLCAD_TKOBOL_HOST AND UNIX)
     find_program(XVFB_RUN_EXECUTABLE xvfb-run)
     if(XVFB_RUN_EXECUTABLE)
+      set(TCLCAD_XVFB_TEST_WRAPPER
+        ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh)
       brlcad_addexec(tclcad_tkobol_thread_affinity
         tkobol_thread_affinity.cpp "libtclcad;libbrlobol;Threads::Threads" TEST)
       if(TARGET tclcad_tkobol_thread_affinity)
@@ -20,24 +22,30 @@ if(BRLCAD_ENABLE_TCL)
       endif(TARGET tclcad_tkobol_thread_affinity)
       add_test(
         NAME tclcad_test_tkobol_thread_affinity
-        COMMAND ${XVFB_RUN_EXECUTABLE} -a $<TARGET_FILE:tclcad_tkobol_thread_affinity>
+        COMMAND ${SH_EXEC} ${TCLCAD_XVFB_TEST_WRAPPER} ${XVFB_RUN_EXECUTABLE}
+                $<TARGET_FILE:tclcad_tkobol_thread_affinity>
       )
       set_property(TEST tclcad_test_tkobol_thread_affinity APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+      set_property(TEST tclcad_test_tkobol_thread_affinity PROPERTY SKIP_RETURN_CODE 125)
       add_test(
         NAME tclcad_test_tkobol_widget_smoke
-        COMMAND ${XVFB_RUN_EXECUTABLE} -a $<TARGET_FILE:btclsh>
+        COMMAND ${SH_EXEC} ${TCLCAD_XVFB_TEST_WRAPPER} ${XVFB_RUN_EXECUTABLE}
+                $<TARGET_FILE:btclsh>
                 ${CMAKE_CURRENT_SOURCE_DIR}/tkobol_widget_smoke.tcl
                 ${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/moss.g
                 ${CMAKE_CURRENT_BINARY_DIR}/tkobol_widget_smoke.png
       )
       set_property(TEST tclcad_test_tkobol_widget_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+      set_property(TEST tclcad_test_tkobol_widget_smoke PROPERTY SKIP_RETURN_CODE 125)
       add_test(
         NAME tclcad_test_archer_obol_smoke
-        COMMAND ${XVFB_RUN_EXECUTABLE} -a $<TARGET_FILE:btclsh>
+        COMMAND ${SH_EXEC} ${TCLCAD_XVFB_TEST_WRAPPER} ${XVFB_RUN_EXECUTABLE}
+                $<TARGET_FILE:btclsh>
                 ${CMAKE_CURRENT_SOURCE_DIR}/archer_obol_smoke.tcl
                 ${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/moss.g
       )
       set_property(TEST tclcad_test_archer_obol_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+      set_property(TEST tclcad_test_archer_obol_smoke PROPERTY SKIP_RETURN_CODE 125)
     endif(XVFB_RUN_EXECUTABLE)
   endif(TCLCAD_TKOBOL_HOST AND UNIX)
 endif(BRLCAD_ENABLE_TCL)

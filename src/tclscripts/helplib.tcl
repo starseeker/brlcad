@@ -24,37 +24,6 @@
 #
 #==============================================================================
 
-set helplib_data(dm_bg)			{{[r g b]} {Get/set background color}}
-set helplib_data(dm_close)		{{} {close/destroy this display manager object}}
-set helplib_data(dm_configure)		{{} {configure window parameters}}
-set helplib_data(dm_debug)		{{[level]} {Set/get debug level}}
-set helplib_data(dm_loadmat)		{{mat} {load viewing matrix}}
-set helplib_data(dm_drawString)		{{str x y size use_aspect} {draw string at (x,y)}}
-set helplib_data(dm_drawPoint)		{{x y} {draw point at (x,y)}}
-set helplib_data(dm_drawLine)		{{x1 y1 x2 y2} {draw line from (x1,y1) to (x2,y2)}}
-set helplib_data(dm_drawVList)		{{vlp} {draw vlist represented by the given vlist pointer string}}
-set helplib_data(dm_drawSList)		{{slp} {draw solid list represented by the given solid list pointer string}}
-set helplib_data(dm_drawDataAxes)	{{vsize rmat v2m_mat pos size color lw} {draw data axes}}
-set helplib_data(dm_drawModelAxes)	{{vsize rmat apos asize acolor lcolor lw v2m_mat doticks tlen ti tcolor} {draw model axes with labels}}
-set helplib_data(dm_drawViewAxes)	{{vsize rmat apos asize acolor lcolor lw} {draw view axes with labels}}
-set helplib_data(dm_drawCenterDot)	{{color} {draw center dot using specified color}}
-set helplib_data(dm_drawGeom)		{{obj(s)} {draw the specified geometry object(s)}}
-set helplib_data(dm_fg)			{{[r g b]} {Get/set foreground color}}
-set helplib_data(dm_linewidth)		{{[width]} {Set/get line width}}
-set helplib_data(dm_linestyle)		{{[0|1]} {Set/get line style}}
-set helplib_data(dm_zclip)		{{[flag]} {Set/get zclip flag}}
-set helplib_data(dm_zbuffer)		{{[flag]} {Set/get zbuffer flag}}
-set helplib_data(dm_light)		{{[flag]} {Set/get light flag}}
-set helplib_data(dm_transparency)	{{[val]} {Set/get transparency value}}
-set helplib_data(dm_depthMask)		{{[flag]} {Set/get depth mask flag}}
-set helplib_data(dm_perspective)	{{[flag]} {Set/get perspective flag}}
-set helplib_data(dm_png)		{{file} {Dump contents of window to a png file}}
-set helplib_data(dm_listen)		{{[port]} {Set/get the port used to listen for framebuffer clients}}
-set helplib_data(dm_size)		{{[width [height]]} {Set/get the window size}}
-set helplib_data(dm_getaspect)		{{} {Get window's aspect ratio }}
-set helplib_data(dm_observer)		{{cmd [args]} {Attach/detach observer to/from list}}
-set helplib_data(dm_clearBufferAfter)	{{[flag]} {Get/set the clearBufferAfter flag}}
-
 set helplib_data(wdb_adjust)		{{object param value ?attr value?} {adjust a solid's parameters(s)}}
 set helplib_data(wdb_attr)        {{ {set|get|show|rm|append|copy} object [args]}
     {set, get, show, remove or append to attribute values for the specified object.
@@ -206,12 +175,6 @@ set helplib_data(dgo_zap)		{{} {erase all objects from the display}}
 set helplib_data(cho_close)		{{} {close/destroy this command history object}}
 set helplib_data(cho_open)		{{name} {open/create a new command history object}}
 
-set helplib_data(dm_best_type)          {{} {return the best available display manager type}}
-set helplib_data(dm_best_name)          {{} {return the best available display manager name}}
-set helplib_data(dm_name2type)          {{name} {return the display manager type that corresponds to name}}
-set helplib_data(dm_names)              {{} {return a list of available display manager names}}
-set helplib_data(dm_type2name)          {{type} {return the display manager name that corresponds to type}}
-set helplib_data(dm_types)              {{} {return a list of available display manager types}}
 set helplib_data(wdb_open)		{{widget_command file filename}	{}}
 set helplib_data(rt_wdb_inmem_rgb)	{{$wdbp comb r g b}	{}}
 set helplib_data(rt_wdb_inmem_shader)	{{$wdbp comb shader [params]}	{}}

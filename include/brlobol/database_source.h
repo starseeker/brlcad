@@ -936,8 +936,9 @@ private:
 	SbBool occurrenceRegistry);
     int syncCompiledAssembly(void);
     uint64_t cadBatchStructureSignature(void) const;
+    uint64_t cadBatchSemanticSignature(void) const;
     int appendCadRenderBatch(struct BRLObolCadBatchBuildState *state,
-	SbBool includeGeometry);
+	SbBool includeGeometry, SbBool includeSemantics);
     const struct BRLObolCompactInstanceEntry *findCompactInstanceEntry(
 	const BRLObolCompactInstanceHandle &handle) const;
     int exportCompactInstances(SoBRLExportAction *action,
@@ -958,6 +959,7 @@ private:
     SbBool compiledAssemblyActive;
     SbUniqueId compiledAssemblyNodeId;
     uint64_t compiledCompactStructureSignature;
+    uint64_t compiledCompactSemanticSignature;
     uint64_t compiledCompactHiddenSignature;
     uint64_t compiledCompactUnpickableSignature;
     SbBool compactIndexActive;

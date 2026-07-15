@@ -51,8 +51,6 @@ main(int ac, char *av[]) {
 
     gedp = ged_open("db", av[1], 1);
 
-    bu_setenv("DM_SWRAST", "1", 1);
-
     const char *s_av[5] = {NULL, NULL, NULL, NULL, NULL};
 
     s_av[0] = "select";

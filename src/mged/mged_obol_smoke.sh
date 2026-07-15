@@ -18,7 +18,23 @@ PNG_PIX="`dirname "$MGED"`/png-pix"
 
 rm -f "$OUT" "$PIX_OUT" "$PS_OUT" "$PLOT_OUT" "$LOG"
 
-printf 'regdebug\nset\ndm open --host headless --renderer sw\ndm host\ndm size 512 512\ndm size\ndm bg 0 0 32 64 0 0\ndraw all.g\nautoview\nrefresh\nadc draw 1\nputs OBOL_ADC_ON\ndm get view.faceplate.adc.visible\nadc draw 0\nputs OBOL_ADC_OFF\ndm get view.faceplate.adc.visible\ndm set view.faceplate.center_dot.color 0/1/0\nrefresh\nputs OBOL_CENTER_GREEN\ndm get view.faceplate.center_dot.color\nrset cs center_dot 255 0 0\nputs OBOL_CENTER_RED\ndm get view.faceplate.center_dot.color\nrefresh\nputs OBOL_CENTER_AFTER_REFRESH\ndm get view.faceplate.center_dot.color\ndm set view.faceplate.model_axes.color 0/1/0\nrefresh\nputs OBOL_AXES_GREEN\ndm get view.faceplate.model_axes.color\nrset cs model_axes 255 0 0\nputs OBOL_AXES_RED\ndm get view.faceplate.model_axes.color\nrefresh\nputs OBOL_AXES_AFTER_REFRESH\ndm get view.faceplate.model_axes.color\ndm set view.faceplate.adc.line_color 0/1/0\ndm set view.faceplate.adc.tick_color 0/1/0\nrefresh\nputs OBOL_ADC_STYLE_GREEN\ndm get view.faceplate.adc.line_color\ndm get view.faceplate.adc.tick_color\nrset cs adc_line 255 0 0\nrset cs adc_tick 0 0 255\nputs OBOL_ADC_STYLE_SCHEME\ndm get view.faceplate.adc.line_color\ndm get view.faceplate.adc.tick_color\npostscript -c ObolSmoke -l 3 -z %s\nplot %s\nscreengrab %s\nquit\n' "$PS_OUT" "$PLOT_OUT" "$OUT" \
+HELP_OUTPUT=$("$MGED" --help 2>&1 || true)
+if ! printf '%s\n' "$HELP_OUTPUT" | grep -q -- '--host'; then
+    echo "MGED help does not advertise the Obol host option" 1>&2
+    printf '%s\n' "$HELP_OUTPUT" 1>&2
+    exit 1
+fi
+if printf '%s\n' "$HELP_OUTPUT" | grep -q -- '--dm-type'; then
+    echo "MGED help still advertises the retired display-manager type option" 1>&2
+    printf '%s\n' "$HELP_OUTPUT" 1>&2
+    exit 1
+fi
+if "$MGED" --dm-type tkobol --help >/dev/null 2>&1; then
+    echo "MGED still accepts the retired display-manager type option" 1>&2
+    exit 1
+fi
+
+printf 'regdebug\nset\ndm open --host headless --renderer sw\ndm host\ndm size 512 512\ndm size\ndm bg 0 0 32 64 0 0\ndraw all.g\nautoview\nrefresh\nset perspective 45\nputs OBOL_PERSPECTIVE_ON\ndm get view.perspective\nset perspective -1\nputs OBOL_PERSPECTIVE_OFF\ndm get view.perspective\nadc draw 1\nputs OBOL_ADC_ON\ndm get view.faceplate.adc.visible\nadc draw 0\nputs OBOL_ADC_OFF\ndm get view.faceplate.adc.visible\ndm set view.faceplate.center_dot.color 0/1/0\nrefresh\nputs OBOL_CENTER_GREEN\ndm get view.faceplate.center_dot.color\nrset cs center_dot 255 0 0\nputs OBOL_CENTER_RED\ndm get view.faceplate.center_dot.color\nrefresh\nputs OBOL_CENTER_AFTER_REFRESH\ndm get view.faceplate.center_dot.color\ndm set view.faceplate.model_axes.color 0/1/0\nrefresh\nputs OBOL_AXES_GREEN\ndm get view.faceplate.model_axes.color\nrset cs model_axes 255 0 0\nputs OBOL_AXES_RED\ndm get view.faceplate.model_axes.color\nrefresh\nputs OBOL_AXES_AFTER_REFRESH\ndm get view.faceplate.model_axes.color\ndm set view.faceplate.adc.line_color 0/1/0\ndm set view.faceplate.adc.tick_color 0/1/0\nrefresh\nputs OBOL_ADC_STYLE_GREEN\ndm get view.faceplate.adc.line_color\ndm get view.faceplate.adc.tick_color\nrset cs adc_line 255 0 0\nrset cs adc_tick 0 0 255\nputs OBOL_ADC_STYLE_SCHEME\ndm get view.faceplate.adc.line_color\ndm get view.faceplate.adc.tick_color\npostscript -c ObolSmoke -l 3 -z %s\nplot %s\nscreengrab %s\nquit\n' "$PS_OUT" "$PLOT_OUT" "$OUT" \
     | "$MGED" -c -a nu -r "$DB" > "$LOG" 2>&1
 
 if ! grep -qx "headless" "$LOG"; then
@@ -41,6 +57,13 @@ fi
 
 if ! grep -Fq 'invalid command name "regdebug"' "$LOG"; then
     echo "MGED still accepts retired display-manager debug control" 1>&2
+    cat "$LOG" 1>&2
+    exit 1
+fi
+
+if ! grep -A1 -Fx 'OBOL_PERSPECTIVE_ON' "$LOG" | grep -Fx '45' >/dev/null ||
+    ! grep -A1 -Fx 'OBOL_PERSPECTIVE_OFF' "$LOG" | grep -Fx '0' >/dev/null; then
+    echo "MGED perspective settings did not use the endpoint policy" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

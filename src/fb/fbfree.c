@@ -20,8 +20,7 @@
  */
 /** @file fbfree.c
  *
- * Free any resources associated with a frame buffer.
- * Just calls fb_free().
+ * Open and release an image-stream framebuffer target.
  *
  */
 

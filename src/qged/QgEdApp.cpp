@@ -396,7 +396,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 
     /* Layout must finish before the framebuffer adopts the canvas dimensions. */
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    qdm_configure_ged_fbserv_handlers(gedp, w->CurrentDisplay());
+    qged_fbserv_configure_ged_handlers(gedp, w->CurrentDisplay());
 
     // If the 3D view didn't set up appropriately, let the user know they
     // should try the offscreen rendering mode.  We must do this after the
@@ -474,6 +474,7 @@ QgEdApp::~QgEdApp() {
 	}
 	ged_diagnostic_line_layer_handler_set(mdl->ged(), NULL, NULL);
 	ged_diagnostic_hud_label_handler_set(mdl->ged(), NULL, NULL);
+	qged_fbserv_release_ged_handlers(mdl->ged());
     }
     delete mdl;
     // TODO - free rt_vlfree?
@@ -488,7 +489,7 @@ QgEdApp::do_quad_view_change(QgView *cv)
     if (w)
 	w->setActiveView(cv);
     if (mdl && mdl->ged() && cv)
-	qdm_configure_ged_fbserv_handlers(mdl->ged(), cv);
+	qged_fbserv_configure_ged_handlers(mdl->ged(), cv);
     if (m_plugin_notifier)
 	emit m_plugin_notifier->viewChanged();
     emit view_update(QG_VIEW_REFRESH);
@@ -613,7 +614,7 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
 	// a command, set it up
 	if (BU_STR_EQUAL(argv[0], "ert")) {
 	    /* Refresh the framebuffer after any window or splitter resize. */
-	    qdm_configure_ged_fbserv_handlers(gedp, w->CurrentDisplay());
+	    qged_fbserv_configure_ged_handlers(gedp, w->CurrentDisplay());
 	    ged_clbk_set(gedp, "ert", BU_CLBK_DURING, &raytrace_start, (void *)this);
 	    ged_clbk_set(gedp, "ert", BU_CLBK_LINGER, &raytrace_done, (void *)this);
 	}

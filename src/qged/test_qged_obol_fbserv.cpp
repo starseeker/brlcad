@@ -25,6 +25,7 @@
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "qtcad/QgCanvasBase.h"
+#include "qtcad/QgObolWindowHost.h"
 #include "qtcad/QgView.h"
 
 #include <Inventor/nodes/SoGroup.h>
@@ -123,6 +124,7 @@ test_qged_obol_fbserv_backend(void)
     do { \
 	if (!(_expr)) { \
 	    bu_log("FAIL: %s\n", _msg); \
+	    qged_fbserv_release_ged_handlers(gedp); \
 	    ged_close(gedp); \
 	    return 1; \
 	} \
@@ -132,7 +134,7 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(ged_view_context_host_attach(gedp, view.viewContext()),
 	"qged framebuffer GED view must attach its endpoint context");
 
-    qdm_configure_ged_fbserv_handlers(gedp, &view);
+    qged_fbserv_configure_ged_handlers(gedp, &view);
     void *view_ctx = ged_view_active_ctx(gedp);
     GED_CHECK(ged_draw_obol_controller_opaque_for_view(view_ctx) == controller,
 	"qged framebuffer GED view must share the visible endpoint controller");
@@ -143,8 +145,6 @@ test_qged_obol_fbserv_backend(void)
 	"qged visible endpoint retains its Qt host");
     struct fbserv_obj *fbs = gedp->ged_fbs;
     GED_CHECK(fbs != NULL, "GED must own an fbserv object");
-    GED_CHECK(fbs_legacy_framebuffer(fbs) == NULL,
-	      "qged Obol backend must not install a legacy struct fb");
     GED_CHECK(fbs_framebuffer_backend_installed(fbs),
 	      "qged must install an Obol fbserv backend");
     GED_CHECK(fbs_can_open_ipc(fbs),
@@ -158,7 +158,7 @@ test_qged_obol_fbserv_backend(void)
 
     view.resize(300, 220);
     QApplication::processEvents();
-    qdm_configure_ged_fbserv_handlers(gedp, &view);
+    qged_fbserv_configure_ged_handlers(gedp, &view);
     GED_CHECK(fbs_framebuffer_info(fbs, &info) == 0,
 	      "qged must report resized framebuffer dimensions");
     QWidget *canvasWidget = view.canvasBase()->canvasWidget();
@@ -268,6 +268,82 @@ test_qged_obol_fbserv_backend(void)
 	      image.width() * image.height() * 8 / 10,
 	      "qged Obol framebuffer content must fill the view");
 
+    /* A GED session has one framebuffer stream, but QGED may move it to a
+     * different endpoint when the active quad pane changes.  Libged must move
+     * the retained image node with the stream rather than leave it attached to
+     * the old controller. */
+    QgView secondView(NULL, QgViewType::SW);
+    secondView.resize(120, 90);
+    secondView.show();
+    QApplication::processEvents();
+    BRLObolViewController *secondController = secondView.obolViewController();
+    GED_CHECK(secondController != NULL,
+	"qged secondary view must expose an Obol controller");
+    ged_view_active_ctx_set(gedp, secondView.viewContext());
+    GED_CHECK(ged_view_context_host_attach(gedp, secondView.viewContext()),
+	"qged secondary framebuffer view must attach its endpoint context");
+    qged_fbserv_configure_ged_handlers(gedp, &secondView);
+    GED_CHECK(ged_draw_obol_controller_opaque_for_view(
+	secondView.viewContext()) == secondController,
+	"qged framebuffer stream must adopt the secondary endpoint controller");
+    GED_CHECK(fbs_framebuffer_info(fbs, &info) == 0,
+	"qged framebuffer stream must remain valid after an active-view switch");
+    QWidget *secondCanvasWidget = secondView.canvasBase()->canvasWidget();
+    int secondExpectedWidth = (int)std::ceil(secondCanvasWidget->width() *
+	secondCanvasWidget->devicePixelRatioF());
+    int secondExpectedHeight = (int)std::ceil(secondCanvasWidget->height() *
+	secondCanvasWidget->devicePixelRatioF());
+    GED_CHECK(info.width == secondExpectedWidth &&
+	info.height == secondExpectedHeight,
+	"qged framebuffer stream must adopt the secondary physical canvas size");
+
+    composition.string_value = "overlay";
+    GED_CHECK(brlobol_display_endpoint_property_set(
+	secondView.displayEndpoint(), "composition.framebuffer.mode",
+	&composition) == BRLOBOL_ENDPOINT_PROPERTY_OK,
+	"qged framebuffer switch must enable composition on the new endpoint");
+    QgObolWindowHost *secondHost = static_cast<QgObolWindowHost *>(
+	brlobol_display_endpoint_host(secondView.displayEndpoint()));
+    GED_CHECK(secondHost && secondHost->getFramebufferCount() == 1,
+	"qged framebuffer switch must bind the stream to the new endpoint host");
+    GED_CHECK(secondHost->getController() == secondController &&
+	secondController->getFramebufferOverlayRoot()->getNumChildren() == 1,
+	"qged framebuffer switch must retain its image in the new controller overlay");
+
+    SoBRLImageSource *firstSource = NULL;
+    SoBRLViewportImage *firstViewport = NULL;
+    find_framebuffer_nodes(controller->getRenderRoot(), &firstSource,
+	&firstViewport);
+    GED_CHECK(firstSource == NULL && firstViewport == NULL,
+	"qged framebuffer switch must detach retained nodes from the old endpoint");
+    SoBRLImageSource *secondSource = NULL;
+    SoBRLViewportImage *secondViewport = NULL;
+    find_framebuffer_nodes(secondController->getRenderRoot(), NULL,
+	&secondViewport);
+    if (secondViewport)
+	secondSource = secondViewport->getImageSource();
+    GED_CHECK(secondSource != NULL && secondViewport != NULL,
+	"qged framebuffer switch must attach retained nodes to the new endpoint");
+
+    std::vector<unsigned char> secondPixels((size_t)info.width *
+	(size_t)info.height * 3);
+    for (size_t i = 0; i < secondPixels.size(); i += 3) {
+	secondPixels[i] = 255;
+	secondPixels[i + 1] = 64;
+	secondPixels[i + 2] = 32;
+    }
+    GED_CHECK(fbs_framebuffer_writerect(fbs, 0, 0, info.width, info.height,
+		secondPixels.data()) == info.width * info.height &&
+	fbs_framebuffer_flush(fbs) == 0 && fbs_framebuffer_poll(fbs) == 1,
+	"qged framebuffer switch must publish new pixels through the new endpoint");
+    QImage switchedImage;
+    secondView.get_obol_viewport_image(switchedImage);
+    GED_CHECK(!switchedImage.isNull() &&
+	orange_pixel_count(switchedImage) >
+	switchedImage.width() * switchedImage.height() * 8 / 10,
+	"qged framebuffer switch must visibly present the new endpoint frame");
+
+    qged_fbserv_release_ged_handlers(gedp);
     ged_close(gedp);
 #undef GED_CHECK
     return 0;

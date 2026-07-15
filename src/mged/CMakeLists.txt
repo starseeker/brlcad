@@ -109,6 +109,13 @@ if(BRLCAD_ENABLE_TCL)
 	  add_dependencies(mged TclIndexBld)
 
 	  if(SH_EXEC)
+	    if(TCL_TCLSH)
+	      brlcad_add_test(NAME mged_obol_host_config
+		COMMAND ${TCL_TCLSH}
+		"${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_host_config.tcl"
+		"${CMAKE_SOURCE_DIR}/src/tclscripts/mged/openw.tcl")
+	    endif(TCL_TCLSH)
+
 	    brlcad_add_test(NAME mged_obol_smoke
 	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_smoke.sh"
 	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
@@ -119,11 +126,13 @@ if(BRLCAD_ENABLE_TCL)
 	      find_program(MGED_XVFB_RUN_EXECUTABLE xvfb-run)
 	      if(MGED_XVFB_RUN_EXECUTABLE)
 		brlcad_add_test(NAME mged_tkobol_attach_smoke
-		  COMMAND ${MGED_XVFB_RUN_EXECUTABLE} -a ${SH_EXEC}
+		  COMMAND ${SH_EXEC} ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh
+		  ${MGED_XVFB_RUN_EXECUTABLE} ${SH_EXEC}
 		  "${CMAKE_CURRENT_SOURCE_DIR}/mged_tkobol_attach_smoke.sh"
 		  "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
 		  "${CMAKE_CURRENT_BINARY_DIR}")
 		set_property(TEST mged_tkobol_attach_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+		set_property(TEST mged_tkobol_attach_smoke PROPERTY SKIP_RETURN_CODE 125)
 	      endif(MGED_XVFB_RUN_EXECUTABLE)
 	    endif(UNIX)
 
@@ -163,6 +172,7 @@ set(
   f_cmd.h
   menu.h
   mged_obol_ert_smoke.sh
+  mged_obol_host_config.tcl
   mged_obol_progressive_lod.sh
   mged_obol_smoke.sh
   mged_tkobol_attach_smoke.sh

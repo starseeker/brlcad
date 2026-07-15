@@ -79,6 +79,26 @@ extern void worker(int cpu, void *arg);
 extern struct icv_image *bif;
 unsigned char *pixmap = NULL; /**< Pixel Map for rerendering of black pixels */
 
+static rt_frame_runner_callback frame_runner = NULL;
+static void *frame_runner_data = NULL;
+
+void
+rt_frame_runner_set(rt_frame_runner_callback callback, void *data)
+{
+    frame_runner = callback;
+    frame_runner_data = callback ? data : NULL;
+}
+
+static int do_frame_execute(int framenumber, void *data);
+
+int
+do_frame(int framenumber)
+{
+    if (frame_runner)
+	return frame_runner(do_frame_execute, framenumber, frame_runner_data);
+    return do_frame_execute(framenumber, NULL);
+}
+
 
 /**
  * Acquire particulars about a frame, in the old format.  Returns -1
@@ -773,7 +793,7 @@ clt_run(int cur_pixel, int last_pixel)
 
     pixelp = pixels + cur_pixel*clt_o[1];
 
-    if (clt_fbp != NULL) {
+    if (clt_fbp != NULL && rt_fb_output_enabled) {
         bu_semaphore_acquire(BU_SEM_SYSCALL);
         count = (int)imgstream_fb_write(clt_fbp, a_x, a_y, pixelp,
 		(size_t)npix);
@@ -891,8 +911,8 @@ validate_raytrace(struct rt_i *rtip)
  *
  * Returns -1 on error, 0 if OK.
  */
-int
-do_frame(int framenumber)
+static int
+do_frame_execute(int framenumber, void *UNUSED(data))
 {
     struct bu_vls times = BU_VLS_INIT_ZERO;
     char framename[256] = {0};		/* File name to hold current frame */

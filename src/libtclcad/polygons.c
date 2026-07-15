@@ -121,8 +121,7 @@ tclcad_polygon_export_state_from_tcl(struct ged_polygon_export_state *export_sta
 }
 
 /* Keep a draw-view feature in sync with the TclCAD data-polygons state so the
- * current renderer picks up polygon outlines without the legacy dm_draw_polys
- * path.
+ * current renderer picks up polygon outlines through retained features.
  *
  * One scene feature per polygon-group (data or sdata) is created under the
  * local view scope.  All polygon contours are packed into a single typed line

@@ -45,6 +45,7 @@ set(
   QgColorRGB.cpp
   QgConsole.cpp
   QgConsoleListener.cpp
+  QgObolDisplayProvider.cpp
   QgDockWidget.cpp
   QgFlowLayout.cpp
   QgGeomImport.cpp
@@ -112,7 +113,11 @@ if(BRLCAD_ENABLE_QT)
     PUBLIC_LIBS ${QTCAD_PUBLIC_LIBS}
   )
   set_target_properties(libqtcad PROPERTIES VERSION 20.0.1 SOVERSION 20 AUTOMOC ON)
+  set_property(TARGET libqtcad PROPERTY
+    QTCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE TRUE)
   if(OPENGL_LIBS)
+    set_property(TARGET libqtcad PROPERTY
+      QTCAD_OBOL_SYSTEM_GL_PROVIDER_AVAILABLE TRUE)
     set_property(TARGET libqtcad APPEND PROPERTY COMPILE_DEFINITIONS "QT_SYSTEM_OPENGL")
     if(TARGET libqtcad-obj)
       set_property(TARGET libqtcad-obj APPEND PROPERTY COMPILE_DEFINITIONS "QT_SYSTEM_OPENGL")

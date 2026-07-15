@@ -1,7 +1,7 @@
 Obol Hosted Application Ownership Matrix
 ========================================
 
-Last reviewed: 2026-07-13
+Last reviewed: 2026-07-15
 
 Purpose
 -------
@@ -21,11 +21,19 @@ QGED
 * Endpoint/controller/host: `QgView` creates one embedded endpoint, selects
   its HW or SW Obol engine, and opens the matching `qt-gl` or `qt-sw` host.
   `QgQuadView` associates each visible endpoint with its GED view context.
-* Input/framebuffer/close: Qt canvases dispatch endpoint input; qged fbserv
-  reuses the visible endpoint.  `QgView` detaches that endpoint from GED
-  before destruction.
+* Input/framebuffer/close: Qt canvases dispatch endpoint input.  QGED binds
+  the visible endpoint to the active GED context, then libged selects that
+  endpoint's host for the one session Obol/imgstream stream.  QGED owns only
+  TCP/IPC notifier delivery and repaint scheduling through its
+  `qged_fbserv_*` adapter, not a framebuffer host or controller.  An active-pane
+  switch moves the retained image layer to the new host; QGED clears its
+  non-owning notifier target before GED destroys fbserv.
+  `QgView` detaches that endpoint from GED before destruction.
 * Evidence: `test_qtcad_obol_window_host`, controller, draw synchronization,
-  real-model, framebuffer, and progressive-LoD tests.  `regress-qged-ert`
+  real-model, framebuffer, and progressive-LoD tests.  The framebuffer test
+  moves a live stream between two Qt software endpoints, verifies old retained
+  image removal, new-host physical sizing, and new-pixel presentation.
+  `regress-qged-ert`
   owns an isolated Xvfb server and verifies the software endpoint launches
   ERT through IPC at the laid-out canvas size, completes, and leaves QGED
   alive; unavailable X infrastructure is an explicit skip.  The window-host
@@ -43,11 +51,18 @@ MGED
   or SW explicitly, attaches it to that context, and opens `tk-gl` or
   `tk-photo`.  The `mged_display` application record is an input/view shell;
   MGED retains no `struct dm` or graphical renderer.
-* Input/framebuffer/close: semantic input is installed on the endpoint;
-  framebuffer composition is endpoint-based.  detach clears the endpoint
-  association before the host is released.
-* Evidence: headless MGED smoke, ERT, and progressive-LoD tests.  Native Tk
-  lifecycle still needs the usable-X11 coverage listed below.
+* Input/framebuffer/close: the Tk host prepends one host-unique bindtag to the
+  canvas and containing toplevel.  It normalizes native Tk input and dispatches
+  endpoint actions before application bindings; the bridge is shared by X11
+  and WGL rather than relying on an Xlib-only callback.  Framebuffer
+  composition is endpoint-based.  detach clears the endpoint association
+  before the host is released.
+* Evidence: headless MGED smoke, ERT, and progressive-LoD tests.  The
+  isolated-X `mged_tkobol_attach_smoke` opens a direct hardware Tk endpoint,
+  verifies its physical resize, drives a shifted primary-pan gesture at the
+  child widget, captures a frame, and releases the host.  This is usable-X11
+  lifecycle coverage.  The same Tk bridge is compiled for WGL but still needs
+  native Windows validation; macOS needs a supported Tk host and validation.
 
 GSH
 ---
@@ -58,6 +73,31 @@ GSH
 * Input/framebuffer/close: not applicable to the headless shell; framebuffer
   and ERT publication use the endpoint composition path.
 * Evidence: GSH basic, ERT, and progressive-LoD smoke tests.
+
+Standalone rt and fbserv
+------------------------
+
+* Endpoint/controller/host: a visible legacy display specification opens one
+  `brlobol_display_session`.  The session owns one endpoint and controller,
+  one provider-created native host, and its one imgstream framebuffer.  The
+  registered QtCAD-first/TclCAD-fallback provider owns only toolkit state.
+* rt: its display-session runner executes ray work on a worker while the
+  opening thread polls the native host.  Framebuffer writes request
+  presentation; only the owner thread performs retained-image and toolkit
+  work.
+* fbserv: its existing service loop polls the same session while transport
+  writes request presentation.  It has no second window, controller, or
+  framebuffer host.
+* Headless diagnostics: `/dev/null` is not a display session.  It allocates
+  no imgstream image or pixel buffer, initializes no provider, and discards
+  framebuffer writes while retaining dimensions and compatibility metadata.
+  `rt` also gates its framebuffer I/O for this sink.
+* Close: visible sessions close the imgstream framebuffer, endpoint, then
+  provider host.  Non-display targets close their imgstream framebuffer
+  directly.
+* Evidence: `rt_null_sink` runs `rt -F /dev/null` with display variables
+  unset.  `rt_display_swrast`, `rt_display_ogl`, `fbserv_display_swrast`, and
+  `fbserv_display_ogl` cover the visible Qt provider paths under Xvfb.
 
 Tcl Ged, Archer, and rtwizard
 -----------------------------

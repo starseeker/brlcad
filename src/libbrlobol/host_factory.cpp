@@ -344,3 +344,13 @@ brlobol_host_factory_instance_set_vsync(brlobol_host_factory_token_t *token,
     return token->factory.set_vsync(instance, enabled ? 1 : 0,
 	token->factory.user_data);
 }
+
+extern "C" void *
+brlobol_host_factory_instance_framebuffer_window_host(
+	brlobol_host_factory_token_t *token, void *instance)
+{
+    if (!token || !instance || !token->factory.framebuffer_window_host)
+	return NULL;
+    return token->factory.framebuffer_window_host(instance,
+	token->factory.user_data);
+}

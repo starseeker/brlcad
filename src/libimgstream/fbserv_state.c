@@ -338,23 +338,6 @@ fbserv_set_client_data_channel(void *client_data, void *chan)
 }
 
 
-void
-fbserv_set_legacy_framebuffer(struct fbserv_obj *fbsp, struct fb *fbp)
-{
-    if (!fbsp)
-	return;
-
-    fbsp->fbs_fbp = fbp;
-}
-
-
-struct fb *
-fbserv_legacy_framebuffer(struct fbserv_obj *fbsp)
-{
-    return fbsp ? fbsp->fbs_fbp : NULL;
-}
-
-
 int
 fbserv_framebuffer_backend_installed(const struct fbserv_obj *fbsp)
 {

@@ -114,6 +114,12 @@ typedef int (*BRLObolProgressiveAdvanceCallback)(
 typedef void (*BRLObolFrameRequestCallback)(void *userData,
     const char *reason);
 
+/* Runs on the controller/host owner thread immediately before a scene is
+ * rendered.  Producers may use it to apply thread-safe image-stream updates
+ * to retained Coin presentation nodes without letting worker threads touch
+ * Coin or an OpenGL context. */
+typedef void (*BRLObolPresentationSyncCallback)(void *userData);
+
 struct BRLOBOL_EXPORT BRLObolProgressiveProviderRecord {
     BRLObolProgressiveProviderRecord(void);
 
@@ -201,6 +207,10 @@ public:
     void setFrameRequestCallback(BRLObolFrameRequestCallback callback,
 	void *userData);
     void clearFrameRequestCallback(void *userData);
+    void setPresentationSyncCallback(BRLObolPresentationSyncCallback callback,
+	void *userData);
+    void clearPresentationSyncCallback(void *userData);
+    void synchronizePresentation(void);
     void clearRenderRequest(void);
     SbBool consumeRenderRequest(SbString *reason = NULL);
     SbBool renderPending(SbBool clearWindow = TRUE,
@@ -546,6 +556,9 @@ private:
     std::mutex frameRequestMutex;
     BRLObolFrameRequestCallback frameRequestCallback;
     void *frameRequestUserData;
+    mutable std::mutex presentationSyncMutex;
+    BRLObolPresentationSyncCallback presentationSyncCallback;
+    void *presentationSyncUserData;
     uint64_t lastRenderTimeNanoseconds;
     uint64_t smoothedRenderTimeNanoseconds;
     std::vector<BRLObolProgressiveProviderRecord> progressiveProviders;

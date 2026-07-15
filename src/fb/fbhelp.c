@@ -20,8 +20,7 @@
  */
 /** @file fbhelp.c
  *
- * Print out info about the selected frame buffer.
- * Just calls dm.help().
+ * Print out info about the selected image-stream target.
  *
  */
 
@@ -67,7 +66,7 @@ main(int argc, char **argv)
 	"Memory, file, remote, and diagnostic streams are GUI-independent.\n"
 	"Toolkit display targets require an application-owned host.\n");
 
-    fprintf(stderr, "=============== Available Devices ================\n");
+    fprintf(stderr, "=============== Available Targets ================\n");
     fprintf(stderr, "memory: /dev/mem\nfile: path or /dev/disk:path\n");
     fprintf(stderr, "remote: host:port, tcp:host:port, or ipc:address\n");
     fprintf(stderr, "diagnostic: /dev/null, /dev/debug, or /dev/txt\n");

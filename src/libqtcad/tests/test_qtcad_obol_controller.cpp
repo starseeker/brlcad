@@ -151,6 +151,10 @@ main(int argc, char **argv)
 	bu_strcmp(brlobol_display_endpoint_host_factory_name(view.displayEndpoint()),
 	    "qt-sw") != 0)
 	FAIL("QgView should host its software canvas through the Qt endpoint factory");
+    QWidget *swWidget = view.canvasBase() ? view.canvasBase()->canvasWidget() : NULL;
+    if (!swWidget || !swWidget->testAttribute(Qt::WA_OpaquePaintEvent) ||
+	swWidget->autoFillBackground())
+	FAIL("QgSW should own opaque Obol presentation without parent background painting");
 
     if (controller != view.obolViewController())
 	FAIL("QgView should return a stable Obol view controller");
@@ -434,6 +438,11 @@ main(int argc, char **argv)
     QgView glView(NULL, QgViewType::GL);
     glView.resize(128, 96);
     if (glView.view_type() == QgViewType::GL) {
+	QgGL *glPresentationCanvas = glView.canvasBase() ?
+	    dynamic_cast<QgGL *>(glView.canvasBase()) : NULL;
+	if (!glPresentationCanvas || glPresentationCanvas->updateBehavior() !=
+		QOpenGLWidget::NoPartialUpdate)
+	    FAIL("QgGL should use full Obol redraws without preserving old frames");
 	BRLObolViewController *glController = glView.obolViewController();
 	if (!glController ||
 		!glController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))

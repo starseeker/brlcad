@@ -5,6 +5,7 @@ set(
   cad_assembly.cpp
   database_source.cpp
   display_endpoint.cpp
+  display_session.cpp
   draw_cache.cpp
   edit_preview.cpp
   evaluated_points.cpp
@@ -31,16 +32,17 @@ set(
   mesh_lod_submit_action.cpp
   mesh_residency_action.cpp
   mesh_shape.cpp
-  osmesa_runtime.cpp
   pick_detail.cpp
   performance.cpp
   realize_action.cpp
+  rt_render.cpp
   scene_controller.cpp
   scene_group.cpp
   snap_action.cpp
   view_attachment.cpp
   view_controller.cpp
   view_lod.cpp
+  view_query.cpp
   view_store.cpp
   viewport_image.cpp
   vlist_shape.cpp
@@ -57,8 +59,6 @@ endif()
 if(NOT TARGET Obol::Obol)
   message(FATAL_ERROR "libbrlobol requires the Obol::Obol CMake package target")
 endif()
-brlcad_find_package(OSMESA REQUIRED)
-
 set(BRLOBOL_OPENGL_INCLUDE_DIRS)
 if(OPENGL_INCLUDE_DIR_GL)
   list(APPEND BRLOBOL_OPENGL_INCLUDE_DIRS ${OPENGL_INCLUDE_DIR_GL})
@@ -68,7 +68,7 @@ endif()
 set(BRLOBOL_LOCAL_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
 
 brlcad_addlib(libbrlobol "${LIBBRLOBOL_SRCS}" "" "${BRLOBOL_LOCAL_INCLUDE_DIRS}"
-  PUBLIC_LIBS "librt;libimgstream;libbv;libbg;libbu;Obol::Obol;OSMESA::OSMESA;Threads::Threads"
+  PUBLIC_LIBS "librt;libimgstream;libbv;libbg;libbu;Obol::Obol;Threads::Threads"
   ALL_CXX
 )
 if(BRLOBOL_OPENGL_INCLUDE_DIRS)
@@ -96,6 +96,7 @@ cmakefiles(
   database_source.cpp
   database_source_realization.h
   display_endpoint.cpp
+  display_session.cpp
   draw_cache.cpp
   edit_preview.cpp
   evaluated_points.cpp
@@ -133,6 +134,7 @@ cmakefiles(
   view_attachment.cpp
   view_controller.cpp
   view_lod.cpp
+  view_query.cpp
   view_store.cpp
   viewport_image.cpp
   vlist_shape.cpp

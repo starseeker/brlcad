@@ -330,18 +330,18 @@ void _set_invalid_parameter_handler(void (*callback)(const wchar_t*, const wchar
 
 
 /*
- * attaches the specified display manager
+ * attaches the specified Obol endpoint host
  */
 static void
-attach_display_manager(Tcl_Interp *interpreter, const char *manager, const char *display)
+attach_endpoint_host(Tcl_Interp *interpreter, const char *host_type, const char *display)
 {
     struct bu_vls tcl_cmd = BU_VLS_INIT_ZERO;
     bu_vls_printf(&tcl_cmd, "attach ");
     if (display && strlen(display) > 0)
 	bu_vls_printf(&tcl_cmd, "-d %s ", display);
-    if (!manager)
-	manager = "nu";
-    bu_vls_printf(&tcl_cmd, "%s", manager);
+    if (!host_type)
+	host_type = "nu";
+    bu_vls_printf(&tcl_cmd, "%s", host_type);
     Tcl_Eval(interpreter, bu_vls_cstr(&tcl_cmd));
     bu_vls_free(&tcl_cmd);
     bu_log("%s\n", Tcl_GetStringResult(interpreter));
@@ -465,9 +465,9 @@ mged_display_during_clbk(int ac, const char **av, void *UNUSED(u1), void *u2)
     if (!s || ac < 2 || !av)
         return BRLCAD_OK;
 
-    const char *dbg = getenv("GED_DM_DURING_DEBUG");
+    const char *dbg = getenv("GED_DISPLAY_DURING_DEBUG");
     if (dbg && BU_STR_EQUAL(dbg, "1")) {
-        bu_log("mged dm during callback: ");
+        bu_log("mged display during callback: ");
         for (int i = 0; i < ac; i++) {
             bu_log("%s%s", av[i], (i + 1 < ac) ? " " : "\n");
         }
@@ -518,7 +518,7 @@ struct mged_color_opt {
  *
  * Two usage phases:
  *   (a) Early options (attach, classic_mged, …) are applied immediately
- *       after bu_opt_parse returns, before Tcl/DM initialisation.
+ *       after bu_opt_parse returns, before Tcl/Obol host initialisation.
  *   (b) Deferred options (mged_variables, grid, colours, …) are applied by
  *       apply_cli_overrides() after do_rc() so that CLI flags always win
  *       over any .mgedrc settings.
@@ -581,7 +581,7 @@ struct mged_cli_overrides {
     double eye_sep_dist;        /* --eye-sep-dist # (mm, 0 = mono) */
 
     /* Tcl mged_default array entries */
-    const char *dm_type;    /* --dm-type type */
+    const char *host_type;  /* --host type */
     const char *geom;       /* --geom WxH+X+Y (command window) */
     const char *ggeom;      /* --ggeom WxH+X+Y (graphics window) */
 
@@ -2131,7 +2131,7 @@ refresh(struct mged_state *s)
      * this call catches anything produced between timer ticks. */
     mged_pr_output(s->interp);
 
-    /* Display Manager / Views */
+    /* Graphics Views */
     for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
 	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	if (!p->display_view_state || !p->display_view_state->vs_gvp)
@@ -2432,8 +2432,8 @@ apply_cli_overrides(struct mged_state *s, struct mged_cli_overrides *cl)
     if (cli_dbl_is_set(cl->eye_sep_dist))        CLI_SETVAR_DBL("eye_sep_dist",   cl->eye_sep_dist);
 
     /* --- Tcl mged_default array entries ---------------------------------- */
-    if (cl->dm_type)
-	Tcl_SetVar2(s->interp, "mged_default", "dm_type", cl->dm_type,  TCL_GLOBAL_ONLY);
+    if (cl->host_type)
+	Tcl_SetVar2(s->interp, "mged_default", "host_type", cl->host_type, TCL_GLOBAL_ONLY);
     if (cl->geom)
 	Tcl_SetVar2(s->interp, "mged_default", "geom",    cl->geom,     TCL_GLOBAL_ONLY);
     if (cl->ggeom)
@@ -2667,7 +2667,7 @@ main(int argc, char *argv[])
      * shortopt.  No-argument options use "" for arghelp and NULL for argprocess. */
     struct bu_opt_desc opt_defs[50];
     /* ---- Existing short options, now with long aliases ---- */
-    BU_OPT(opt_defs[0],  "a", "attach",           "type",    bu_opt_str,      &cl.attach,           "display manager attach target");
+    BU_OPT(opt_defs[0],  "a", "attach",           "host",    bu_opt_str,      &cl.attach,           "Obol endpoint host attachment target");
     BU_OPT(opt_defs[1],  "d", "display",           "string",  bu_opt_str,      &cl.dpy_string,       "X display string");
     BU_OPT(opt_defs[2],  "r", "read-only",         "",        NULL,            &cl.read_only,        "open database read-only");
     BU_OPT(opt_defs[3],  "p", "pipe",              "",        NULL,            &cl.pipe_mode,        "pipe mode (emit CMD_DONE sentinels)");
@@ -2711,7 +2711,7 @@ main(int argc, char *argv[])
     BU_OPT(opt_defs[34], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
     BU_OPT(opt_defs[35], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
     /* ---- window/display (Tcl mged_default array) ---- */
-    BU_OPT(opt_defs[36], NULL, "dm-type",          "type",    bu_opt_str,      &cl.dm_type,          "display host type (tkobol or headless obol)");
+    BU_OPT(opt_defs[36], NULL, "host",             "type",    bu_opt_str,      &cl.host_type,        "Obol GUI host type (tkobol)");
     BU_OPT(opt_defs[37], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
     BU_OPT(opt_defs[38], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
     /* ---- grid (rset g …) ---- */
@@ -2790,12 +2790,12 @@ main(int argc, char *argv[])
 
     /*
      * In classic mode, -a directly controls the attach target.
-     * In GUI mode, the startup scripts choose the DM from
-     * mged_default(dm_type), so mirror -a into dm_type unless the
-     * user explicitly supplied --dm-type.
+     * In GUI mode, the startup scripts choose the Obol host from
+     * mged_default(host_type).  Only the graphical tkobol attach target is
+     * also a GUI host; nu remains a no-window startup mode.
      */
-    if (cl.attach && !cl.dm_type)
-	cl.dm_type = cl.attach;
+    if (cl.attach && BU_STR_EQUAL(cl.attach, "tkobol") && !cl.host_type)
+	cl.host_type = cl.attach;
 
     /* -d / --display */
     if (cl.dpy_string)
@@ -2917,7 +2917,7 @@ main(int argc, char *argv[])
     curr_cmd_list = &head_cmd_list;
 
     /* The initial no-window state still needs the command dispatcher, but
-     * no longer opens a null display manager. */
+     * no longer opens a null graphical backend. */
     s->mged_curr_display->display_command_hook = mged_display_command;
 
     BU_ALLOC(rubber_band, struct _rubber_band);
@@ -3125,8 +3125,8 @@ main(int argc, char *argv[])
 
 	    if (old_mged_gui) {
 		if (attach && strlen(attach) > 0) {
-		    Tcl_SetVar2(s->interp, "mged_default", "dm_type", attach, TCL_GLOBAL_ONLY);
-		    bu_vls_printf(&vls, "gui -dt %s", attach);
+		    Tcl_SetVar2(s->interp, "mged_default", "host_type", attach, TCL_GLOBAL_ONLY);
+		    bu_vls_printf(&vls, "gui -host %s", attach);
 		} else {
 		    bu_vls_strcpy(&vls, "gui");
 		}
@@ -3199,14 +3199,14 @@ main(int argc, char *argv[])
 
     } /* interactive */
 
-    /* initialize a display manager.  Interactive classic MGED prompts when no
-     * target is specified; batch/classic MGED only attaches when the user
-     * explicitly requests a non-nu display manager. */
+    /* Initialize an Obol endpoint host. Interactive classic MGED prompts when
+     * no target is specified; batch/classic MGED only attaches when the user
+     * explicitly requests a non-nu host. */
     if ((s->interactive && s->classic_mged) || (!s->interactive && attach)) {
 	if (!attach) {
 	    get_attached(s);
 	} else {
-	    attach_display_manager(s->interp, attach, s->dpy_string);
+	    attach_endpoint_host(s->interp, attach, s->dpy_string);
 	}
 
 	/* In GUI mode, openw.tcl's init_mged_gui applies mged_default(ggeom)

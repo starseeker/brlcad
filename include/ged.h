@@ -22,7 +22,7 @@
  * Functions provided by the LIBGED geometry editing library.  These routines
  * are a procedural basis for the geometric editing capabilities available in
  * BRL-CAD.  The library is tightly coupled to the LIBRT library for geometric
- * representation and analysis.  The libdm API is assumed for commands that
+ * representation and analysis.  Obol-backed view endpoints own commands that
  * manipulate geometric views.
  *
  * A note to C/C++ developers - calling libged's commands programmatically has

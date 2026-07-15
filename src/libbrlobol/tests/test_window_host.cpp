@@ -85,6 +85,9 @@ struct TestPropertyProvider {
     int zclip;
     double perspective;
     int framebufferMode;
+    int adcVisible;
+    int modelAxesVisible;
+    int viewAxesVisible;
 };
 
 static int
@@ -114,6 +117,18 @@ test_property_provider_get(void *data, const char *name,
 	    value->string_value = "interlay";
 	else
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.faceplate.adc.visible") == 0) {
+	value->bool_value = provider->adcVisible;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.faceplate.model_axes.visible") == 0) {
+	value->bool_value = provider->modelAxesVisible;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.faceplate.view_axes.visible") == 0) {
+	value->bool_value = provider->viewAxesVisible;
 	return BRLOBOL_ENDPOINT_PROPERTY_OK;
     }
     return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
@@ -148,6 +163,18 @@ test_property_provider_set(void *data, const char *name,
 	    provider->framebufferMode = 3;
 	else
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.faceplate.adc.visible") == 0) {
+	provider->adcVisible = value->bool_value ? 1 : 0;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.faceplate.model_axes.visible") == 0) {
+	provider->modelAxesVisible = value->bool_value ? 1 : 0;
+	return BRLOBOL_ENDPOINT_PROPERTY_OK;
+    }
+    if (bu_strcmp(name, "view.faceplate.view_axes.visible") == 0) {
+	provider->viewAxesVisible = value->bool_value ? 1 : 0;
 	return BRLOBOL_ENDPOINT_PROPERTY_OK;
     }
     return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
@@ -269,6 +296,54 @@ test_input_context(void)
     event.type = BRLOBOL_INPUT_WHEEL;
     CHECK(keyboard.dispatch(&event) == 0,
 	  "keyboard profile leaves application pointer gestures unhandled");
+
+    struct bv_context *orientation_context = bv_context_create();
+    vect_t aet = VINIT_ZERO;
+    CHECK(orientation_context &&
+	  brlobol_input_view_orientation_apply(orientation_context,
+	      BRLOBOL_ACTION_VIEW_TOP) &&
+	  bv_aet_get(aet, bv_context_view(orientation_context)) &&
+	  float_equal((float)aet[0], 270.0f) &&
+	  float_equal((float)aet[1], 90.0f) &&
+	  float_equal((float)aet[2], 0.0f),
+	  "shared orientation helper applies the canonical top view");
+    CHECK(!brlobol_input_view_orientation_apply(orientation_context,
+	      BRLOBOL_ACTION_VIEW_ZOOM),
+	  "shared orientation helper leaves non-orientation actions unhandled");
+
+    struct bv_adc_state adc = {};
+    int visible = -1;
+    CHECK(bv_adc_state_get(&adc, bv_context_view(orientation_context)) &&
+	  brlobol_display_endpoint_input_faceplate_toggle_apply(NULL,
+	      orientation_context, BRLOBOL_ACTION_TOGGLE_ADC, &visible) &&
+	  visible == !adc.draw &&
+	  bv_adc_state_get(&adc, bv_context_view(orientation_context)) &&
+	  adc.draw == visible,
+	  "shared faceplate action toggles standalone ADC state");
+    struct bv_axes_state model_axes = {};
+    visible = -1;
+    CHECK(bv_model_axes_state_get(&model_axes,
+	  bv_context_view(orientation_context)) &&
+	  brlobol_display_endpoint_input_faceplate_toggle_apply(NULL,
+	      orientation_context, BRLOBOL_ACTION_TOGGLE_MODEL_AXES, &visible) &&
+	  visible == !model_axes.draw &&
+	  bv_model_axes_state_get(&model_axes,
+	      bv_context_view(orientation_context)) && model_axes.draw == visible,
+	  "shared faceplate action toggles standalone model axes");
+    struct bv_axes_state view_axes = {};
+    visible = -1;
+    CHECK(bv_view_axes_state_get(&view_axes,
+	  bv_context_view(orientation_context)) &&
+	  brlobol_display_endpoint_input_faceplate_toggle_apply(NULL,
+	      orientation_context, BRLOBOL_ACTION_TOGGLE_VIEW_AXES, &visible) &&
+	  visible == !view_axes.draw &&
+	  bv_view_axes_state_get(&view_axes,
+	      bv_context_view(orientation_context)) && view_axes.draw == visible,
+	  "shared faceplate action toggles standalone view axes");
+    CHECK(!brlobol_display_endpoint_input_faceplate_toggle_apply(NULL,
+	orientation_context, BRLOBOL_ACTION_VIEW_TOP, NULL),
+	"shared faceplate action rejects non-faceplate input");
+    bv_context_destroy(orientation_context);
     return 0;
 }
 
@@ -394,6 +469,7 @@ struct FactoryTestInstance {
     void *controller;
     BRLObolInputEventHandler input_dispatch;
     void *input_dispatch_data;
+    BRLObolWindowHost framebuffer_host;
 };
 
 static int
@@ -433,11 +509,22 @@ factory_test_bind(void *instance_ptr, void *controller, void *data)
     FactoryTestInstance *instance =
 	static_cast<FactoryTestInstance *>(instance_ptr);
     instance->controller = controller;
+    instance->framebuffer_host.attachController(
+	static_cast<BRLObolViewController *>(controller), FALSE);
     if (controller)
 	state->binds++;
     else
 	state->detaches++;
     return 1;
+}
+
+static void *
+factory_test_framebuffer_window_host(void *instance_ptr,
+	void *UNUSED(data))
+{
+    FactoryTestInstance *instance =
+	static_cast<FactoryTestInstance *>(instance_ptr);
+    return instance ? &instance->framebuffer_host : NULL;
 }
 
 static int
@@ -609,6 +696,7 @@ test_host_factory_contract(void)
 	BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_PIXEL_PRESENT |
 	BRLOBOL_HOST_CAP_READBACK | BRLOBOL_HOST_CAP_PRESENT_VSYNC,
 	&high_state);
+    high.framebuffer_window_host = factory_test_framebuffer_window_host;
     struct brlobol_host_factory failed = factory_test_desc(
 	"endpoint-test-failed", 30, BRLOBOL_HOST_CAP_PIXEL_PRESENT,
 	&failed_state);
@@ -662,11 +750,19 @@ test_host_factory_contract(void)
 	  (BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_PIXEL_PRESENT |
 	   BRLOBOL_HOST_CAP_READBACK | BRLOBOL_HOST_CAP_PRESENT_VSYNC),
 	  "endpoint exposes its active host capabilities");
+    CHECK(!brlobol_display_endpoint_render_engine_set(endpoint,
+	  BRLOBOL_RENDER_ENGINE_RT),
+	  "retained rt rejects a host without progressive presentation");
     FactoryTestInstance *instance = static_cast<FactoryTestInstance *>(
 	brlobol_display_endpoint_host(endpoint));
     CHECK(instance && instance->controller ==
 	  brlobol_display_endpoint_controller(endpoint),
 	  "factory host instance binds the endpoint controller");
+    CHECK(brlobol_display_endpoint_framebuffer_window_host(endpoint) ==
+	  &instance->framebuffer_host &&
+	  instance->framebuffer_host.getController() ==
+	  brlobol_display_endpoint_controller(endpoint),
+	  "factory exposes its retained framebuffer host through the endpoint");
     InputActionState input_state;
     BRLObolInputEvent input_event;
     input_event.type = BRLOBOL_INPUT_KEY_PRESS;
@@ -1377,6 +1473,19 @@ test_display_endpoint_contract(void)
     CHECK(brlobol_display_endpoint_property_provider_set(endpoint,
 	  test_property_provider_get, test_property_provider_set, &provider),
 	  "endpoint accepts an external property owner");
+    int faceplate_visible = -1;
+    CHECK(brlobol_display_endpoint_input_faceplate_toggle_apply(endpoint,
+	  NULL, BRLOBOL_ACTION_TOGGLE_ADC, &faceplate_visible) &&
+	  faceplate_visible == 1 && provider.adcVisible == 1,
+	  "shared faceplate action uses the endpoint ADC property owner");
+    CHECK(brlobol_display_endpoint_input_faceplate_toggle_apply(endpoint,
+	  NULL, BRLOBOL_ACTION_TOGGLE_MODEL_AXES, &faceplate_visible) &&
+	  faceplate_visible == 1 && provider.modelAxesVisible == 1,
+	  "shared faceplate action uses the endpoint model-axes property owner");
+    CHECK(brlobol_display_endpoint_input_faceplate_toggle_apply(endpoint,
+	  NULL, BRLOBOL_ACTION_TOGGLE_VIEW_AXES, &faceplate_visible) &&
+	  faceplate_visible == 1 && provider.viewAxesVisible == 1,
+	  "shared faceplate action uses the endpoint view-axes property owner");
     property_value_init(&property_value);
     property_value.bool_value = 1;
     CHECK(brlobol_display_endpoint_property_set(endpoint, "view.zclip",
@@ -1472,8 +1581,13 @@ test_display_endpoint_contract(void)
     property_value.string_value = "rt";
     CHECK(brlobol_display_endpoint_property_set(endpoint,
 	  "endpoint.renderer", &property_value) ==
-	  BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
-	  "typed renderer property rejects the unavailable rt engine");
+	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  brlobol_display_endpoint_render_engine_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_RT,
+	  "typed renderer property selects retained librt rendering");
+    CHECK(brlobol_display_endpoint_render_engine_set(endpoint,
+	  BRLOBOL_RENDER_ENGINE_SW),
+	  "software renderer policy remains selectable after retained librt");
 
     BRLObolWindowHost borrowed_host;
     CHECK(!brlobol_display_endpoint_host_bind(endpoint, &borrowed_host, 0),
@@ -1485,6 +1599,9 @@ test_display_endpoint_contract(void)
 	  "display endpoint binds a borrowed host");
     CHECK(brlobol_display_endpoint_host(endpoint) == &borrowed_host,
 	  "display endpoint reports its host");
+    CHECK(brlobol_display_endpoint_framebuffer_window_host(endpoint) ==
+	  &borrowed_host,
+	  "direct endpoint host remains available for framebuffer attachment");
     CHECK(borrowed_host.getController() ==
 	  brlobol_display_endpoint_controller(endpoint),
 	  "bound host borrows the endpoint controller");
@@ -1782,6 +1899,107 @@ test_framebuffer_host_teardown(void)
     return 0;
 }
 
+struct DisplaySessionTestProvider {
+    BRLObolWindowHost host;
+};
+
+static int display_session_test_polls = 0;
+
+static int
+display_session_test_open(brlobol_display_endpoint_t *endpoint,
+	const imgstream_fb_spec_info_t *spec, size_t UNUSED(width),
+	size_t UNUSED(height), const char *UNUSED(title), void **instance,
+	void *UNUSED(data))
+{
+    if (!endpoint || !spec || spec->display != IMGSTREAM_FB_DISPLAY_SWRAST ||
+	!instance)
+	return 0;
+    DisplaySessionTestProvider *provider = new DisplaySessionTestProvider;
+    if (!brlobol_display_endpoint_host_bind(endpoint, &provider->host, 0)) {
+	delete provider;
+	return 0;
+    }
+    *instance = provider;
+    return 1;
+}
+
+static void
+display_session_test_close(void *instance, void *UNUSED(data))
+{
+    delete static_cast<DisplaySessionTestProvider *>(instance);
+}
+
+static int
+display_session_test_poll(void *UNUSED(instance), void *UNUSED(data))
+{
+    display_session_test_polls++;
+    return 0;
+}
+
+struct DisplaySessionTask {
+    imgstream_fb_t *framebuffer = NULL;
+    std::thread::id worker_thread;
+};
+
+static int
+display_session_test_task(void *data)
+{
+    DisplaySessionTask *task = static_cast<DisplaySessionTask *>(data);
+    if (!task || !task->framebuffer)
+	return -1;
+    task->worker_thread = std::this_thread::get_id();
+    const unsigned char pixel[3] = {51, 34, 17};
+    if (imgstream_fb_write(task->framebuffer, 1, 1, pixel, 1) != 1 ||
+	imgstream_fb_flush(task->framebuffer) != 0)
+	return -1;
+    std::this_thread::sleep_for(std::chrono::milliseconds(35));
+    return 37;
+}
+
+static int
+test_display_session_contract(void)
+{
+    static const brlobol_display_provider_t provider = {
+	BRLOBOL_DISPLAY_PROVIDER_ABI_VERSION,
+	sizeof(brlobol_display_provider_t),
+	"display-session-test",
+	1,
+	NULL,
+	display_session_test_open,
+	display_session_test_close,
+	display_session_test_poll,
+	NULL
+    };
+    CHECK(brlobol_display_provider_register(&provider),
+	  "display session accepts a toolkit-neutral provider");
+    CHECK(brlobol_display_provider_register(&provider),
+	  "display session provider registration is idempotent");
+
+    brlobol_display_session_t *session = brlobol_display_session_open(
+	"/dev/swrast", 4, 3, "display session test");
+    CHECK(session != NULL, "display session opens a legacy software target");
+    imgstream_fb_t *fb = brlobol_display_session_framebuffer(session);
+    CHECK(fb != NULL && imgstream_fb_width(fb) == 4 &&
+	imgstream_fb_height(fb) == 3,
+	"display session returns its image-stream framebuffer");
+    const unsigned char pixel[3] = {17, 34, 51};
+    CHECK(imgstream_fb_write(fb, 0, 0, pixel, 1) == 1 &&
+	imgstream_fb_flush(fb) == 0,
+	"display session publishes framebuffer writes through Obol");
+    CHECK(imgstream_fb_poll(fb) == 0 && display_session_test_polls > 0,
+	"display session polling delegates native event processing to the provider");
+    DisplaySessionTask task;
+    task.framebuffer = fb;
+    display_session_test_polls = 0;
+    const std::thread::id owner_thread = std::this_thread::get_id();
+    CHECK(brlobol_display_session_run(session, display_session_test_task,
+	  &task) == 37 && task.worker_thread != owner_thread &&
+	  display_session_test_polls > 0,
+	"display session keeps its owner thread polling while a worker publishes pixels");
+    brlobol_display_session_close(session);
+    return 0;
+}
+
 int
 main(int ac, char **av)
 {
@@ -1816,6 +2034,8 @@ main(int ac, char **av)
     if (test_framebuffer_stream_helper())
 	return 1;
     if (test_framebuffer_host_teardown())
+	return 1;
+    if (test_display_session_contract())
 	return 1;
 
     return 0;

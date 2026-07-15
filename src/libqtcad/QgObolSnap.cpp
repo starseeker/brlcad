@@ -10,13 +10,9 @@
 
 #include "qtcad/QgObolSnap.h"
 
-#include "brlobol/snap_action.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/view_query.h"
 #include "qtcad/QgView.h"
-
-#include <Inventor/SoViewport.h>
-
-#include <cmath>
 
 QgObolSnapRecord::QgObolSnapRecord(void) :
     point(0.0f, 0.0f, 0.0f),
@@ -35,146 +31,66 @@ QgObolSnapRecord::QgObolSnapRecord(void) :
 {
 }
 
-static int
-qg_obol_snap_kind_priority(int kind)
-{
-    switch (kind) {
-	case QgObolSnapRecord::VERTEX:
-	    return 0;
-	case QgObolSnapRecord::ENDPOINT:
-	    return 1;
-	case QgObolSnapRecord::MIDPOINT:
-	    return 2;
-	case QgObolSnapRecord::EDGE_NEAREST:
-	    return 3;
-	case QgObolSnapRecord::FACE_NEAREST:
-	    return 4;
-	case QgObolSnapRecord::CENTER:
-	    return 5;
-	case QgObolSnapRecord::LINE_NEAREST:
-	    return 6;
-	case QgObolSnapRecord::CONSTRUCTION_PLANE:
-	    return 7;
-	case QgObolSnapRecord::GRID:
-	    return 8;
-	case QgObolSnapRecord::NONE:
-	default:
-	    return 9;
-    }
-}
-
-static int
-qg_obol_snap_record_is_better(const QgObolSnapRecord &candidate,
-			      const QgObolSnapRecord &current)
-{
-    const float tieTolerance = 1.0e-6f;
-
-    if (candidate.kind == QgObolSnapRecord::NONE)
-	return 0;
-    if (current.kind == QgObolSnapRecord::NONE)
-	return 1;
-    if (candidate.distance < current.distance - tieTolerance)
-	return 1;
-    if (candidate.distance > current.distance + tieTolerance)
-	return 0;
-
-    return qg_obol_snap_kind_priority(candidate.kind) <
-	   qg_obol_snap_kind_priority(current.kind);
-}
-
 static void
-qg_obol_snap_record_from_action(const SoBRLSnapAction &snapAction,
-				QgObolSnapRecord &record)
+qg_obol_snap_record(const BRLObolViewSnapRecord &source,
+	QgObolSnapRecord &record)
 {
-    record.point = snapAction.getPoint();
-    record.path = snapAction.getPath().getString();
-    record.editIntentId = snapAction.getEditIntentId().getString();
-    record.editIntentRole = snapAction.getEditIntentRole().getString();
-    record.kind = static_cast<int>(snapAction.getKind());
-    record.primitiveIndex = snapAction.getPrimitiveIndex();
-    record.vertexIndex = snapAction.getVertexIndex();
-    record.edgeSlot = snapAction.getEdgeSlot();
-    record.edgeVertexIndexA = snapAction.getEdgeVertexIndexA();
-    record.edgeVertexIndexB = snapAction.getEdgeVertexIndexB();
-    record.distance = snapAction.getDistance();
-}
-
-static int
-qg_obol_snap_consume_source_full_detail(BRLObolViewController *controller,
-					SoBRLSnapAction &snapAction)
-{
-    if (!controller)
-	return 0;
-
-    int submitted = 0;
-    (void)controller->consumeSnapSourceFullDetail(snapAction, 0,
-	    &submitted);
-    return submitted;
+    record.point = source.point;
+    record.path = source.path.getString();
+    record.editIntentId = source.editIntentId.getString();
+    record.editIntentRole = source.editIntentRole.getString();
+    record.kind = static_cast<int>(source.kind);
+    record.primitiveIndex = source.primitiveIndex;
+    record.vertexIndex = source.vertexIndex;
+    record.edgeSlot = source.edgeSlot;
+    record.edgeVertexIndexA = source.edgeVertexIndexA;
+    record.edgeVertexIndexB = source.edgeVertexIndexB;
+    record.submittedSourceRequestCount = source.submittedSourceRequestCount;
+    record.distance = source.distance;
+    record.sourceFullDetailPending = source.sourceFullDetailPending ? true : false;
 }
 
 static int
 qg_obol_snap_point_with_policy(QgView *display,
-			       const SbVec3f &query,
-			       float tolerance,
-			       uint32_t enabledKinds,
-			       SoBRLSnapAction::GeometryPolicy geometryPolicy,
-			       QgObolSnapRecord &record)
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	SoBRLSnapAction::GeometryPolicy geometryPolicy,
+	QgObolSnapRecord &record)
 {
     record = QgObolSnapRecord();
     if (!display)
 	return 0;
 
     BRLObolViewController *controller = display->obolViewController();
-    if (!controller || !controller->getViewport() ||
-	!controller->getViewport()->getRoot())
-	return 0;
-
-    SoBRLSnapAction snapAction;
-    snapAction.setQueryPoint(query);
-    snapAction.setTolerance(tolerance > 0.0f ? tolerance : 1.0f);
-    snapAction.setEnabledKinds(enabledKinds ? enabledKinds :
-			       static_cast<uint32_t>(QgObolSnapRecord::ALL_KINDS));
-    snapAction.setPriorityPolicy(SoBRLSnapAction::FEATURE_PRIORITY);
-    snapAction.setGeometryPolicy(geometryPolicy);
-    snapAction.apply(controller->getViewport()->getRoot());
-
-    if (geometryPolicy == SoBRLSnapAction::FULL_DETAIL) {
-	record.submittedSourceRequestCount =
-	    qg_obol_snap_consume_source_full_detail(controller, snapAction);
-	record.sourceFullDetailPending =
-	    record.submittedSourceRequestCount > 0;
-    }
-
-    if (!snapAction.hasCandidate())
-	return 0;
-
-    QgObolSnapRecord candidate;
-    qg_obol_snap_record_from_action(snapAction, candidate);
-    if (qg_obol_snap_record_is_better(candidate, record))
-	record = candidate;
-    return 1;
+    BRLObolViewSnapRecord snap;
+    const int found = brlobol_view_snap_point(controller, query, tolerance,
+	enabledKinds, geometryPolicy,
+	geometryPolicy == SoBRLSnapAction::FULL_DETAIL, snap);
+    qg_obol_snap_record(snap, record);
+    return found;
 }
 
 int
 qg_obol_snap_point(QgView *display,
-		   const SbVec3f &query,
-		   float tolerance,
-		   uint32_t enabledKinds,
-		   QgObolSnapRecord &record)
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	QgObolSnapRecord &record)
 {
     return qg_obol_snap_point_with_policy(display, query, tolerance,
-					  enabledKinds, SoBRLSnapAction::DISPLAY_LEVEL, record);
+	enabledKinds, SoBRLSnapAction::DISPLAY_LEVEL, record);
 }
 
 int
 qg_obol_snap_point_full_detail(QgView *display,
-			       const SbVec3f &query,
-			       float tolerance,
-			       uint32_t enabledKinds,
-			       QgObolSnapRecord &record)
+	const SbVec3f &query,
+	float tolerance,
+	uint32_t enabledKinds,
+	QgObolSnapRecord &record)
 {
     return qg_obol_snap_point_with_policy(display, query, tolerance,
-					  enabledKinds, SoBRLSnapAction::FULL_DETAIL, record);
+	enabledKinds, SoBRLSnapAction::FULL_DETAIL, record);
 }
 
 // Local Variables:

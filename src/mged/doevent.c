@@ -122,9 +122,8 @@ doEvent(ClientData clientData, XEvent *eventPtr)
     }
 
     /* The only graphical host is Tk Obol, which owns its native context and
-     * event dispatch.  MGED's retained dm object is the nu no-op shell, so
-     * forwarding X events through dm_doevent would only preserve a dead
-     * renderer callback. */
+     * event dispatch.  The no-window startup shell has no event callback to
+     * invoke here. */
 
     /* Continuing to process the event */
 

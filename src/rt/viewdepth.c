@@ -136,7 +136,7 @@ view_eol(struct application *ap)
 			bu_semaphore_release(BU_SEM_SYSCALL);
 		}
 	}
-	if (fbp != NULL)
+	if (fbp != NULL && rt_fb_output_enabled)
 	{
 		if (rtg_parallel)
 		{
@@ -149,7 +149,7 @@ view_eol(struct application *ap)
 		}
 	}
 
-	if (bif == NULL && fbp == NULL && outfp == NULL)
+	if (bif == NULL && (!fbp || !rt_fb_output_enabled) && outfp == NULL)
 		bu_log("rtdepth: strange, no end of line actions taken.\n");
 }
 

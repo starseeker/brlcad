@@ -43,6 +43,7 @@ static void establish_perspective(const struct bu_structparse *, const char *, v
 static void nmg_eu_dist_set(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_coords(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
+static void set_perspective_policy(void *, double);
 static void set_rotate_about(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void toggle_perspective(const struct bu_structparse *, const char *, void *, const char *, void *);
 
@@ -416,6 +417,24 @@ set_absolute_model_tran(struct mged_state *s)
 }
 
 
+/* The endpoint property also maintains the projection matrix and refreshes a
+ * live Obol controller.  MGED's historical -1 sentinel maps to the canonical
+ * orthographic value, zero. */
+static void
+set_perspective_policy(void *view_ctx, double perspective)
+{
+    if (!view_ctx)
+	return;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    value.double_value = perspective > 0.0 ? perspective : 0.0;
+    (void)ged_view_context_display_property_set(view_ctx,
+	"view.perspective", &value);
+}
+
+
 extern void
 set_perspective(const struct bu_structparse *sdp,
 		const char *name,
@@ -433,8 +452,7 @@ set_perspective(const struct bu_structparse *sdp,
 
     /* keep view feature in sync */
     void *view_ctx = view_state->vs_gvp;
-    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    bv_perspective_set(view, mged_variables->mv_perspective);
+    set_perspective_policy(view_ctx, mged_variables->mv_perspective);
 
     set_dirty_flag(sdp, name, base, value, data);
 }
@@ -454,8 +472,7 @@ establish_perspective(const struct bu_structparse *sdp,
 
     /* keep view feature in sync */
     void *view_ctx = view_state->vs_gvp;
-    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    bv_perspective_set(view, mged_variables->mv_perspective);
+    set_perspective_policy(view_ctx, mged_variables->mv_perspective);
 
     set_dirty_flag(sdp, name, base, value, data);
 }
@@ -495,8 +512,7 @@ toggle_perspective(const struct bu_structparse *sdp,
 
     /* keep view feature in sync */
     void *view_ctx = view_state->vs_gvp;
-    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
-    bv_perspective_set(view, mged_variables->mv_perspective);
+    set_perspective_policy(view_ctx, mged_variables->mv_perspective);
 
     set_dirty_flag(sdp, name, base, value, data);
 }

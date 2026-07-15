@@ -8,7 +8,7 @@
  *
  * Shared libged bridge from the fbserv protocol backend table to an
  * Obol/image-stream framebuffer.  This is intentionally a libged helper rather
- * than libdm behavior: fbserv remains a protocol transport for now, while Obol
+ * than a renderer behavior: fbserv remains a protocol transport for now, while Obol
  * owns presentation of the resulting image stream.
  */
 
@@ -30,6 +30,7 @@
 #endif
 
 #include "brlobol/framebuffer.h"
+#include "brlobol/display_endpoint.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/viewport_image.h"
 #include "brlobol/window_host.h"
@@ -118,6 +119,7 @@ class GedObolFbservBridge {
 public:
     explicit GedObolFbservBridge(struct fbserv_obj *fbs_obj) :
 	fbs(fbs_obj),
+	capture_endpoint(NULL),
 	framebuffer(&default_host)
     {
     }
@@ -143,8 +145,10 @@ public:
 	/* A GED session has one fbserv stream.  Its capture provider belongs to
 	 * exactly one endpoint, so remove the previous provider before moving the
 	 * stream to another view. */
-	if (view_ctx != new_view_ctx)
-	    clearCaptureProviderLocked(view_ctx);
+	if (view_ctx != new_view_ctx) {
+	    clearCaptureProviderLocked();
+	    framebuffer.close();
+	}
 	gedp = new_gedp;
 	view_ctx = new_view_ctx;
 	bindCaptureProviderLocked();
@@ -464,6 +468,19 @@ public:
 	return 0;
     }
 
+    void detachEndpoint(brlobol_display_endpoint_t *endpoint)
+    {
+	std::lock_guard<std::mutex> guard(lock);
+	if (!endpoint || capture_endpoint != endpoint)
+	    return;
+
+	/* The stream image belongs to the host behind this endpoint.  Close it
+	 * before the endpoint/controller changes, then let a later ensure bind a
+	 * fresh retained image to the replacement host. */
+	clearCaptureProviderLocked();
+	framebuffer.close();
+    }
+
     void openClient(int slot)
     {
 #ifdef _WIN32
@@ -537,24 +554,28 @@ private:
     {
 	brlobol_display_endpoint_t *endpoint = view_ctx ?
 	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
-	if (endpoint)
-	    (void)brlobol_display_endpoint_framebuffer_capture_provider_set(
-		endpoint, ged_obol_capture_framebuffer, this);
+	if (capture_endpoint == endpoint)
+	    return;
+
+	clearCaptureProviderLocked();
+	if (endpoint &&
+	    brlobol_display_endpoint_framebuffer_capture_provider_set(
+		endpoint, ged_obol_capture_framebuffer, this))
+	    capture_endpoint = endpoint;
     }
 
-    void clearCaptureProviderLocked(void *context)
+    void clearCaptureProviderLocked()
     {
-	brlobol_display_endpoint_t *endpoint = context ?
-	    ged_view_context_display_endpoint_get(context) : NULL;
-	if (endpoint)
+	if (capture_endpoint)
 	    (void)brlobol_display_endpoint_framebuffer_capture_provider_set(
-		endpoint, NULL, this);
+		capture_endpoint, NULL, this);
+	capture_endpoint = NULL;
     }
 
     void clearCaptureProvider()
     {
 	std::lock_guard<std::mutex> guard(lock);
-	clearCaptureProviderLocked(view_ctx);
+	clearCaptureProviderLocked();
     }
 
     void notifyUpdatedLocked()
@@ -609,6 +630,7 @@ private:
     struct ged *gedp = NULL;
     void *view_ctx = NULL;
     struct fbserv_obj *fbs = NULL;
+    brlobol_display_endpoint_t *capture_endpoint;
     int present_on_flush = 0;
     BRLObolWindowHost default_host;
     BRLObolFramebufferStream framebuffer;
@@ -719,6 +741,21 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
 {
     if (!gedp || !gedp->ged_fbs || !view_ctx)
 	return BRLCAD_ERROR;
+
+    /* Most toolkit factories keep their instance opaque.  A factory that owns
+     * a BRLObolWindowHost may explicitly expose it for retained framebuffer
+     * attachment; otherwise the bridge uses its controller-owned host. */
+    if (!window_host) {
+	brlobol_display_endpoint_t *endpoint =
+	    ged_view_context_display_endpoint_get(view_ctx);
+	if (endpoint) {
+	    window_host = static_cast<BRLObolWindowHost *>(
+		brlobol_display_endpoint_framebuffer_window_host(endpoint));
+	    /* A live endpoint must publish flushes to its retained image source.
+	     * Headless/direct callers retain the requested deferred behavior. */
+	    present_on_flush = 1;
+	}
+    }
 
     void *controller =
 	ged_draw_obol_controller_ensure_opaque_for_view(view_ctx, 1);
@@ -903,6 +940,18 @@ extern "C" void
 ged_draw_obol_framebuffer_release(struct ged *gedp)
 {
     ged_obol_fbserv_release(gedp);
+}
+
+extern "C" GED_EXPORT void
+ged_draw_obol_framebuffer_endpoint_detach(struct ged *gedp,
+	brlobol_display_endpoint_t *endpoint)
+{
+    if (!gedp || !gedp->ged_fbs || !endpoint)
+	return;
+
+    GedObolFbservBridge *bridge = bridge_from_fbs(gedp->ged_fbs);
+    if (bridge)
+	bridge->detachEndpoint(endpoint);
 }
 
 /*

@@ -62,6 +62,7 @@
 #include "ged/event_txn.h"
 #include "tclcad.h"
 #include "brlobol/display_endpoint.h"
+#include "brlobol/host_factory.h"
 
 // tclcad.h pulls in OpenNURBS in C++ compilation mode, which defines None,
 // which will conflict with Tk.h's Xlib None if we include tk.h before tclcad.h
@@ -96,6 +97,18 @@ static brlobol_display_endpoint_t *
 tclcad_commands_endpoint(const void *view_ctx)
 {
     return ged_view_context_display_endpoint_get(view_ctx);
+}
+
+/* Only replace Tcl bindings when the selected native host can actually
+ * normalize and deliver events.  In particular, the WGL host intentionally
+ * does not claim INPUT until its native adapter exists. */
+static int
+tclcad_commands_endpoint_input_enabled(const void *view_ctx)
+{
+    brlobol_display_endpoint_t *endpoint =
+	tclcad_commands_endpoint(view_ctx);
+    return endpoint && (brlobol_display_endpoint_host_capabilities(endpoint) &
+	BRLOBOL_HOST_CAP_INPUT);
 }
 
 static int
@@ -173,37 +186,6 @@ tclcad_commands_endpoint_bool_set(void *view_ctx, const char *name, int value)
 }
 
 static int
-tclcad_obol_input_toggle(void *view_ctx, const char *property_name)
-{
-    struct brlobol_endpoint_property_value property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    if (!view_ctx || !property_name ||
-	ged_view_context_display_property_get(view_ctx, property_name, &property) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK ||
-	property.type != BRLOBOL_ENDPOINT_PROPERTY_BOOL)
-	return 0;
-    property.bool_value = !property.bool_value;
-    return ged_view_context_display_property_set(view_ctx, property_name,
-	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK;
-}
-
-static int
-tclcad_obol_input_set_aet(void *view_ctx, fastf_t azimuth,
-	fastf_t elevation, fastf_t twist)
-{
-    struct bv *view = view_ctx ? bv_context_view((struct bv_context *)view_ctx) :
-	NULL;
-    if (!view)
-	return 0;
-    vect_t aet;
-    VSET(aet, azimuth, elevation, twist);
-    if (!bv_aet_set(view, aet))
-	return 0;
-    (void)ged_view_context_update(view_ctx);
-    return 1;
-}
-
-static int
 tclcad_obol_input_action(void *user_data, BRLObolInputAction action,
 	const BRLObolInputEvent *event)
 {
@@ -214,52 +196,24 @@ tclcad_obol_input_action(void *user_data, BRLObolInputAction action,
     int handled = 0;
     switch (action) {
 	case BRLOBOL_ACTION_TOGGLE_ADC:
-	    handled = tclcad_obol_input_toggle(view_ctx,
-		"view.faceplate.adc.visible");
-	    break;
 	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES:
-	    handled = tclcad_obol_input_toggle(view_ctx,
-		"view.faceplate.model_axes.visible");
-	    break;
 	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES:
-	    handled = tclcad_obol_input_toggle(view_ctx,
-		"view.faceplate.view_axes.visible");
+	    handled = brlobol_display_endpoint_input_faceplate_toggle_apply(
+		tclcad_commands_endpoint(view_ctx), view_ctx, action, NULL);
 	    break;
 	case BRLOBOL_ACTION_VIEW_2:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 35.0, -25.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_3:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 35.0, 25.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_4:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 45.0, 45.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_5:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 145.0, 25.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_6:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 215.0, 25.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_7:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 325.0, 25.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_FRONT:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 0.0, 0.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_TOP:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 270.0, 90.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_BOTTOM:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 270.0, -90.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_LEFT:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 90.0, 0.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_REAR:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 180.0, 0.0, 0.0);
-	    break;
 	case BRLOBOL_ACTION_VIEW_RIGHT:
-	    handled = tclcad_obol_input_set_aet(view_ctx, 270.0, 0.0, 0.0);
+	    handled = brlobol_input_view_orientation_apply(view_ctx, action);
 	    break;
 	default:
 	    return 0;
@@ -944,7 +898,7 @@ static struct to_cmdtab ged_cmds[] = {
     {"prcolor",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_prcolor},
     {"prefix",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_prefix},
     {"pipe_prepend_pnt",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_pipe_prepend_pnt},
-    {"preview",	"[options] script", TO_UNLIMITED, to_dm_func, ged_exec_preview},
+    {"preview",	"[options] script", TO_UNLIMITED, to_view_context_func, ged_exec_preview},
     {"protate",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_protate},
     {"postscript", "[options] file.ps", 16, to_view_func, ged_exec_postscript},
     {"pscale",	(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_pscale},
@@ -985,7 +939,7 @@ static struct to_cmdtab ged_cmds[] = {
     {"savekey",	"filename", 3, to_view_func, ged_exec_savekey},
     {"saveview", (char *)0, TO_UNLIMITED, to_view_func, ged_exec_saveview},
     {"sca",	"sf", 3, to_view_func_plus, ged_exec_sca},
-    {"screengrab",	"imagename.ext", TO_UNLIMITED, to_dm_func, ged_exec_screengrab},
+    {"screengrab",	"imagename.ext", TO_UNLIMITED, to_view_context_func, ged_exec_screengrab},
     {"search",		(char *)0, TO_UNLIMITED, to_pass_through_func, ged_exec_search},
     {"select",		(char *)0, TO_UNLIMITED, to_view_func, ged_exec_select},
     {"set_output_script",	"[script]", TO_UNLIMITED, to_pass_through_func, ged_exec_set_output_script},
@@ -3017,7 +2971,7 @@ to_init_default_bindings(void *gdvp)
 {
     struct bu_vls bindings = BU_VLS_INIT_ZERO;
     const int endpoint_keyboard_input =
-	tclcad_commands_endpoint(gdvp) != NULL;
+	tclcad_commands_endpoint_input_enabled(gdvp);
 
     if (tclcad_view_pathname_vls(gdvp)) {
 	struct bu_vls *pathvls = tclcad_view_pathname_vls(gdvp);
@@ -4719,13 +4673,16 @@ tclcad_view_host_open(void *view_ctx, struct tclcad_view_data *tvd,
 	    software ? "TkPhoto" : "Tk OpenGL");
 	return 0;
     }
-    if (!brlobol_display_endpoint_input_profile_set(endpoint,
-	    brlobol_input_keyboard_view_profile()) ||
-	!brlobol_display_endpoint_input_action_handler_set(endpoint,
-	    tclcad_obol_input_action, view_ctx)) {
-	(void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
-	bu_vls_printf(result, "Tk Obol input endpoint setup failed\n");
-	return 0;
+    if (brlobol_display_endpoint_host_capabilities(endpoint) &
+	BRLOBOL_HOST_CAP_INPUT) {
+	if (!brlobol_display_endpoint_input_profile_set(endpoint,
+		brlobol_input_keyboard_view_profile()) ||
+	    !brlobol_display_endpoint_input_action_handler_set(endpoint,
+		tclcad_obol_input_action, view_ctx)) {
+	    (void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
+	    bu_vls_printf(result, "Tk Obol input endpoint setup failed\n");
+	    return 0;
+	}
     }
     return 1;
 #endif

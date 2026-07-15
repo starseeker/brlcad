@@ -372,6 +372,75 @@ main(int ac, char *av[]) {
 	ged_draw_view_context_feature_exists(v, "_test/hud_line_layers"))
 	bu_exit(EXIT_FAILURE, "retained HUD line-layer removal failed\n");
 
+    /***** Interactive rectangle *****/
+    bu_log("Testing interactive rectangle drawing...\n");
+    struct bv_interactive_rect_state interactive_rect =
+	BV_INTERACTIVE_RECT_STATE_INIT;
+    interactive_rect.x = -0.50;
+    interactive_rect.y = -0.25;
+    interactive_rect.width = 1.00;
+    interactive_rect.height = 0.50;
+    interactive_rect.line_width = 1;
+    interactive_rect.line_style = 0;
+    VSET(interactive_rect.color, 32, 192, 255);
+    if (!bv_interactive_rect_state_set(DRAW_TEST_BV(v), &interactive_rect))
+	bu_exit(EXIT_FAILURE, "failed to configure interactive rectangle\n");
+
+    struct brlobol_endpoint_property_value interactive_value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    interactive_value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+    interactive_value.uint_value = 3;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.line_width", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle line width\n");
+    interactive_value.uint_value = 1;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.line_style", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle line style\n");
+    struct brlobol_endpoint_property_value interactive_readback =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (ged_view_context_display_property_get(v,
+	    "view.interactive.rectangle.line_style", &interactive_readback) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK || interactive_readback.uint_value != 1)
+	bu_exit(EXIT_FAILURE, "interactive rectangle line-style readback failed\n");
+    interactive_value.uint_value = 2;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.line_style", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_INVALID)
+	bu_exit(EXIT_FAILURE, "invalid interactive rectangle line style was accepted\n");
+    interactive_value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    interactive_value.color3[0] = 1.0;
+    interactive_value.color3[1] = 0.25;
+    interactive_value.color3[2] = 0.0;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.color", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle color\n");
+    interactive_value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    interactive_value.bool_value = 1;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.visible", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to show interactive rectangle\n");
+    if (ged_draw_obol_view_context_faceplate_sync(gedp, v) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to synchronize interactive rectangle\n");
+    if (!ged_draw_view_context_feature_exists(v,
+	    "_faceplate/interactive_rect"))
+	bu_exit(EXIT_FAILURE, "interactive rectangle was not retained\n");
+    ret += img_not_empty(10, gedp, lcache, false, clear_images, soft_fail,
+	"faceplate_clear", "fp");
+
+    interactive_value.bool_value = 0;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.visible", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to hide interactive rectangle\n");
+    ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0,
+	"faceplate_clear", "fp");
+    bu_log("Done.\n");
+
     /***** Framebuffer *****/
     bu_log("Testing framebuffer...\n");
     struct bu_vls fb_img = BU_VLS_INIT_ZERO;

@@ -7605,6 +7605,17 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 	geometry.points = std::move(points);
     if (!wire.segmentPoints.empty())
 	geometry.wire = std::move(wire);
+    const char *source_type = shape->sourceType.getValue().getString();
+    const char *geometry_kind = shape->geometryKind.getValue().getString();
+    if (source_type && geometry_kind &&
+	BU_STR_EQUAL(source_type, "proxy") &&
+	(BU_STR_EQUAL(geometry_kind, "aabb") ||
+	 BU_STR_EQUAL(geometry_kind, "obb"))) {
+	/* The source remains a full conservative proxy for bounds and picks.
+	 * SoCADAssembly alone decides whether its projected extent can be
+	 * represented by one depth-tested pixel in this view. */
+	geometry.subpixelProxyEligible = true;
+    }
     return 1;
 }
 
@@ -9172,6 +9183,75 @@ compact_structure_signature(const BRLObolCompactInstanceIndex *index)
     return signature ? signature : 1;
 }
 
+static void
+compact_signature_mix(uint64_t &signature, uint64_t value)
+{
+    signature ^= value;
+    signature *= 1099511628211ULL;
+}
+
+static void
+compact_signature_mix_string(uint64_t &signature, const SbString &value)
+{
+    const char *string = value.getString();
+    const size_t length = string ? strlen(string) : 0;
+    compact_signature_mix(signature, length);
+    for (size_t i = 0; i < length; i++)
+	compact_signature_mix(signature, static_cast<unsigned char>(string[i]));
+}
+
+static void
+compact_signature_mix_float(uint64_t &signature, float value)
+{
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    compact_signature_mix(signature, bits);
+}
+
+/* Pick metadata is independent of the retained geometry and visual state.
+ * Updating the semantic map rewrites a sorted map and copies several strings
+ * for every occurrence, so keep it out of style/visibility-only updates. */
+static uint64_t
+compact_semantic_signature(const BRLObolCompactInstanceIndex *index)
+{
+    if (!index)
+	return 0;
+
+    uint64_t signature = 1469598103934665603ULL;
+    compact_signature_mix(signature, index->entries.size());
+    for (const BRLObolCompactInstanceEntry &entry : index->entries) {
+	const SoBRLCadAssembly::InstanceSemantic &semantic = entry.semantic;
+	compact_signature_mix(signature, entry.instance.w0);
+	compact_signature_mix(signature, entry.instance.w1);
+	/* setInstanceSemantic publishes this entry value, not the semantic's
+	 * stale construction-time value. */
+	compact_signature_mix_string(signature, entry.instanceKey);
+	compact_signature_mix_string(signature, semantic.path);
+	compact_signature_mix_string(signature, semantic.sourceName);
+	compact_signature_mix_string(signature, semantic.sourceType);
+	compact_signature_mix_string(signature, semantic.materialShader);
+	compact_signature_mix_string(signature, semantic.editIntentId);
+	compact_signature_mix_string(signature, semantic.editIntentRole);
+	compact_signature_mix(signature, semantic.sourceId);
+	compact_signature_mix(signature,
+	    static_cast<uint32_t>(semantic.regionId));
+	compact_signature_mix(signature,
+	    static_cast<uint32_t>(semantic.airCode));
+	compact_signature_mix(signature,
+	    static_cast<uint32_t>(semantic.materialId));
+	compact_signature_mix(signature, static_cast<uint32_t>(semantic.los));
+	compact_signature_mix(signature, semantic.materialColorValid ? 1 : 0);
+	if (semantic.materialColorValid) {
+	    compact_signature_mix_float(signature, semantic.materialColor[0]);
+	    compact_signature_mix_float(signature, semantic.materialColor[1]);
+	    compact_signature_mix_float(signature, semantic.materialColor[2]);
+	}
+	compact_signature_mix(signature,
+	    static_cast<uint32_t>(semantic.primitiveKind));
+    }
+    return signature ? signature : 1;
+}
+
 static uint64_t
 compact_state_signature(const std::vector<obol::InstanceId> &instances)
 {
@@ -9213,6 +9293,13 @@ SoBRLDatabaseSource::cadBatchStructureSignature(void) const
     return signature ? signature : 1;
 }
 
+uint64_t
+SoBRLDatabaseSource::cadBatchSemanticSignature(void) const
+{
+    return this->compactIndexActive && this->compactIndex ?
+	compact_semantic_signature(this->compactIndex) : 0;
+}
+
 int
 SoBRLDatabaseSource::syncCompiledAssembly(void)
 {
@@ -9231,6 +9318,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	  this->needsRealization())) ||
 	source_has_auxiliary_children(this)) {
 	this->compiledCompactStructureSignature = 0;
+	this->compiledCompactSemanticSignature = 0;
 	this->compiledCompactHiddenSignature = 0;
 	this->compiledCompactUnpickableSignature = 0;
 	this->compiledAssemblyNodeId = sourceNodeId;
@@ -9245,6 +9333,8 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 
     const uint64_t structureSignature = hasCompactPayload ?
 	compact_structure_signature(this->compactIndex) : 0;
+    const uint64_t semanticSignature = hasCompactPayload ?
+	compact_semantic_signature(this->compactIndex) : 0;
     if (hasCompactPayload && this->compiledCompactStructureSignature != 0 &&
 	this->compiledCompactStructureSignature == structureSignature &&
 	this->compiledAssembly->instanceCount() ==
@@ -9276,11 +9366,14 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 		this->compactIndex->unpickableInstances);
 	    this->compiledCompactUnpickableSignature = unpickableSignature;
 	}
-	for (const BRLObolCompactInstanceEntry &entry :
-	     this->compactIndex->entries) {
-	    SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
-	    semantic.sourceInstanceKey = compact_instance_identity(entry);
-	    this->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
+	if (this->compiledCompactSemanticSignature != semanticSignature) {
+	    for (const BRLObolCompactInstanceEntry &entry :
+		 this->compactIndex->entries) {
+		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
+		semantic.sourceInstanceKey = compact_instance_identity(entry);
+		this->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
+	    }
+	    this->compiledCompactSemanticSignature = semanticSignature;
 	}
 	compact_assembly_draw_mode(this->compiledAssembly, this,
 	    this->compactIndex);
@@ -9331,6 +9424,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	    this->compactIndex);
 	this->compiledAssemblyActive = TRUE;
 	this->compiledCompactStructureSignature = structureSignature;
+	this->compiledCompactSemanticSignature = semanticSignature;
 	this->compiledAssembly->endUpdate();
 	this->ensureCompiledAssemblyChild();
 	this->compiledAssemblyNodeId = sourceNodeId;
@@ -9340,6 +9434,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 
     /* The retained compact signature has no meaning for a child-graph build. */
     this->compiledCompactStructureSignature = 0;
+    this->compiledCompactSemanticSignature = 0;
     this->compiledCompactHiddenSignature = 0;
     this->compiledCompactUnpickableSignature = 0;
     cad_build_data data;
@@ -9381,7 +9476,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 
 int
 SoBRLDatabaseSource::appendCadRenderBatch(BRLObolCadBatchBuildState *state,
-	SbBool includeGeometry)
+	SbBool includeGeometry, SbBool includeSemantics)
 {
     const SbBool hasCompactPayload = this->compactIndexActive &&
 	this->compactIndex && !this->compactIndex->instances.empty();
@@ -9419,11 +9514,13 @@ SoBRLDatabaseSource::appendCadRenderBatch(BRLObolCadBatchBuildState *state,
 	state->unpickableInstances.insert(state->unpickableInstances.end(),
 	    this->compactIndex->unpickableInstances.begin(),
 	    this->compactIndex->unpickableInstances.end());
-	for (const BRLObolCompactInstanceEntry &entry :
-	     this->compactIndex->entries) {
-	    SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
-	    semantic.sourceInstanceKey = compact_instance_identity(entry);
-	    state->assembly->setInstanceSemantic(entry.instance, semantic);
+	if (includeSemantics) {
+	    for (const BRLObolCompactInstanceEntry &entry :
+		 this->compactIndex->entries) {
+		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
+		semantic.sourceInstanceKey = compact_instance_identity(entry);
+		state->assembly->setInstanceSemantic(entry.instance, semantic);
+	    }
 	}
 	state->wireCount += this->compactIndex->wireCount;
 	state->shadedCount += this->compactIndex->shadedCount;
@@ -9479,6 +9576,7 @@ SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
     compiledAssemblyActive(FALSE),
     compiledAssemblyNodeId(0),
     compiledCompactStructureSignature(0),
+    compiledCompactSemanticSignature(0),
     compiledCompactHiddenSignature(0),
     compiledCompactUnpickableSignature(0),
     compactIndexActive(FALSE),
@@ -9745,6 +9843,7 @@ SoBRLDatabaseSource::clearCompiledAssembly(void)
     this->compiledAssemblyActive = FALSE;
     this->compiledAssemblyNodeId = 0;
     this->compiledCompactStructureSignature = 0;
+    this->compiledCompactSemanticSignature = 0;
     this->compiledCompactHiddenSignature = 0;
     this->compiledCompactUnpickableSignature = 0;
     this->markCadBatchDirty();

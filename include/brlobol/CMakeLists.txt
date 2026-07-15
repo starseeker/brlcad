@@ -3,6 +3,7 @@ set(
   adc.h
   axes.h
   database_source.h
+  display_session.h
   defines.h
   display_endpoint.h
   draw_cache.h
@@ -32,6 +33,7 @@ set(
   pick_detail.h
   performance.h
   realize_action.h
+  rt_render.h
   scene_controller.h
   scene_group.h
   snap_action.h
@@ -39,6 +41,7 @@ set(
   view_attachment.h
   view_controller.h
   view_lod.h
+  view_query.h
   view_store.h
   viewport_image.h
   vlist_shape.h

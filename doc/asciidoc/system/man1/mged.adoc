@@ -33,18 +33,18 @@ Options that affect per-session appearance (variables, grid, colour) are applied
 
 === Display and Mode
 
-*-a* _type_, *--attach* _type_::
-Specifies a display manager to automatically attach to when starting _MGED_.
+*-a* _host_, *--attach* _host_::
+Specifies an Obol endpoint host to attach when starting _MGED_.
 +
-Without specifying this option, _MGED_ will prompt which display manager to attach during startup: `attach (nu|X|ogl)[nu]?`
+Without specifying this option, _MGED_ starts with the `nu` no-window shell.
 +
-The list of available display managers varies from platform to platform and across releases. Commonly available options include the _nu_ (NULL) display manager (starts without any graphical display), the _X_ display manager (X11 wireframe display), and the _ogl_ display manager (OpenGL wireframe display).
+The graphical host is `tkobol`; `nu` starts without a graphical endpoint.
 
 *-d* _display_, *--display* _display_::
 Specifies which X server to connect to on platforms that have a running X11 server available. This option is an alternative to setting the `DISPLAY` environment variable. You can specify a local or remote display in X11 HOST:PORT format (e.g., `-d :0` or `-d host:0`).
 
-*--dm-type* _type_::
-Sets the display manager type to use (e.g., `ogl`, `X`, `swrast`). This corresponds to the `mged_default(dm_type)` Tcl variable used during GUI initialisation.
+*--host* _host_::
+Sets the Obol GUI host used during GUI initialisation. `tkobol` is the supported GUI host. This corresponds to the `mged_default(host_type)` Tcl variable.
 
 *--geom* _WxH+X+Y_::
 Sets the command window geometry (position and size) in standard X geometry format (e.g., `--geom 800x600+0+0`).

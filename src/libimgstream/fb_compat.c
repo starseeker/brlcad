@@ -44,6 +44,8 @@ struct imgstream_fb {
     char *name;
     char *file_path;
     imgstream_t *stream;
+    size_t width;
+    size_t height;
     int owns_stream;
     int file_backed;
     int display_backed;
@@ -768,6 +770,8 @@ fb_wrap_stream(const char *name, imgstream_t *stream, const char *file_path)
 	fb->file_backed = 1;
     }
     fb->stream = stream;
+    fb->width = width;
+    fb->height = height;
     fb->owns_stream = 1;
     fb->view.xcenter = (int)(width / 2);
     fb->view.ycenter = (int)(height / 2);
@@ -778,6 +782,30 @@ fb_wrap_stream(const char *name, imgstream_t *stream, const char *file_path)
     fb->cursor.y = 0;
     imgstream_fb_colormap_linear(&fb->colormap);
 
+    return fb;
+}
+
+
+/* /dev/null is a diagnostic raytrace sink, not an image target.  Keep only
+ * compatibility metadata so callers can retain their framebuffer contract
+ * without allocating or updating a full RGB image. */
+static imgstream_fb_t *
+fb_open_null_diagnostic(const char *name, size_t width, size_t height)
+{
+    imgstream_fb_t *fb = NULL;
+    BU_ALLOC(fb, struct imgstream_fb);
+    fb->name = bu_strdup((name && name[0]) ? name : "/dev/null");
+    fb->width = width;
+    fb->height = height;
+    fb->diagnostic_kind = IMGSTREAM_FB_DIAGNOSTIC_NULL;
+    fb->view.xcenter = (int)(width / 2);
+    fb->view.ycenter = (int)(height / 2);
+    fb->view.xzoom = 1;
+    fb->view.yzoom = 1;
+    fb->cursor.mode = 0;
+    fb->cursor.x = 0;
+    fb->cursor.y = 0;
+    imgstream_fb_colormap_linear(&fb->colormap);
     return fb;
 }
 
@@ -816,6 +844,8 @@ fb_open_fanout(const char *spec, size_t width, size_t height)
     fb->children = children;
     fb->child_count = child_count;
     fb->stream = children[0]->stream;
+    fb->width = imgstream_fb_width(children[0]);
+    fb->height = imgstream_fb_height(children[0]);
     fb->owns_stream = 0;
     fb->view.xcenter = (int)(imgstream_fb_width(children[0]) / 2);
     fb->view.ycenter = (int)(imgstream_fb_height(children[0]) / 2);
@@ -847,6 +877,9 @@ fb_open_single(const char *spec, size_t width, size_t height,
     if (kind == IMGSTREAM_FB_SPEC_FILE)
 	file_path = fb_file_path_from_spec(spec);
     enum imgstream_fb_diagnostic_kind diagnostic_kind = fb_diagnostic_kind_from_spec(spec);
+
+    if (diagnostic_kind == IMGSTREAM_FB_DIAGNOSTIC_NULL)
+	return fb_open_null_diagnostic(spec, width, height);
 
     if (kind == IMGSTREAM_FB_SPEC_REMOTE) {
 	imgstream_fb_spec_info_t info;
@@ -1025,21 +1058,21 @@ imgstream_fb_name(const imgstream_fb_t *fb)
 size_t
 imgstream_fb_width(const imgstream_fb_t *fb)
 {
-    return fb ? imgstream_width(fb->stream) : 0;
+    return fb ? fb->width : 0;
 }
 
 
 size_t
 imgstream_fb_height(const imgstream_fb_t *fb)
 {
-    return fb ? imgstream_height(fb->stream) : 0;
+    return fb ? fb->height : 0;
 }
 
 
 int
 imgstream_fb_clear(imgstream_fb_t *fb, const unsigned char *rgb)
 {
-    if (!fb || !fb->stream)
+    if (!fb)
 	return -1;
 
     if (fb->child_count) {
@@ -1054,6 +1087,9 @@ imgstream_fb_clear(imgstream_fb_t *fb, const unsigned char *rgb)
 	fb_diagnostic_log(fb, "clear");
 	return 0;
     }
+
+    if (!fb->stream)
+	return -1;
 
     if (fb->remote && imgstream_fb_remote_clear(fb->remote, rgb) != 0)
 	return -1;

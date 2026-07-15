@@ -479,7 +479,8 @@ BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
 			    const SbVec3f &rayOrigin,
 			    const SbVec3f &rayDirection,
 			    const SbPlane *clipPlanes,
-			    size_t clipPlaneCount) const
+			    size_t clipPlaneCount,
+			    struct resource *resource) const
 {
     pick.clear();
     if (!this->isReady())
@@ -504,6 +505,7 @@ BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
     ap.a_overlap = NULL;
     ap.a_onehit = 0;
     ap.a_rt_i = this->rtip;
+	    ap.a_resource = resource;
     ap.a_uptr = &state;
     ap.a_purpose = "BRLObolRtPickCache::pickRay";
     VSET(ap.a_ray.r_pt, rayOrigin[0], rayOrigin[1], rayOrigin[2]);
@@ -512,6 +514,15 @@ BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
 
     pick = state.pick;
     return pick.hit;
+}
+
+SbBool
+BRLObolRtPickCache::initializeResource(struct resource *resource, int cpu) const
+{
+    if (!resource || !this->isReady() || cpu < 0)
+	return FALSE;
+    rt_init_resource(resource, cpu, this->rtip);
+    return TRUE;
 }
 
 SbBool

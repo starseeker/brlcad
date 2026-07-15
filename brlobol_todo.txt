@@ -51,6 +51,20 @@ Its GUI script names `tkobol` directly; the fake Tcl `dm_bestXType` and
 `dm_validXType` selectors are deleted rather than preserving a one-option
 display-manager discovery surface.
 
+rtwizard no longer links libdm or requires DM plugins.  Its embedded ArcherCore
+view uses the TclCAD/GED `tkobol` endpoint path, and GUI raytrace previews now
+use that view's session-owned Obol/imgstream IPC stream with overlay
+composition rather than a separate OGL/WGL framebuffer window.  Headless/file
+output remains an independent in-memory imgstream workflow.
+
+QGED's framebuffer adapter no longer owns a parallel Qt/Obol bridge.  Libged
+selects the active display endpoint's existing host when it installs the
+session framebuffer stream and publishes retained image updates there; QGED
+only maps TCP/IPC readiness to its Qt event loop and requests a repaint.  The
+generic path retains capture-provider cleanup when a stream moves between
+views, and QGED clears its non-owning adapter target before GED destroys the
+fbserv session.
+
 The unused Qt namespace-alias and global-namespace compatibility headers are
 deleted.  Qt callers use the direct public API, and the pivot guard prevents
 those compatibility surfaces from returning.
@@ -63,16 +77,40 @@ TclCAD no longer directly links libdm, owns a `struct fb`, or keeps a per-view
 fbserv shell.  Its Tk factories retain opaque factory-host instances, while
 libged owns the one session Obol/imgstream bridge.  The bridge binds its
 capture provider to the active or explicitly selected output endpoint and
-clears it before moving to another view.  TclCAD owns only Tcl notifier
-callbacks.  The Tk widget, Archer four-pane, and MGED framebuffer lifecycle
-tests cover this boundary.
+clears it before moving to another view.  TclCAD supplies a notifier fallback
+only when the bridge has no endpoint-owned worker transport.  The Tk widget,
+Archer four-pane, and MGED framebuffer lifecycle tests cover this boundary.
+
+Standalone `rt` and `fbserv` use the toolkit-neutral libbrlobol display-session
+API for visible legacy device names.  At CMake configuration they directly
+link one toolkit provider: QtCAD is preferred, with TclCAD as the fallback.
+Their small `#ifdef` selector includes only that library's C-compatible
+registration header; neither application calls raw Qt, Tcl, or Tk APIs.
+`fbserv` polls the session from its existing service loop.  `rt` runs each
+visible-display frame through the display-session runner: ray work executes on
+a worker while the opening thread polls the native session.  Pixel callbacks
+only coalesce a frame request; retained image synchronization and toolkit
+dispatch remain on the owner thread.  If neither Qt nor Tcl/Tk is built,
+visible device specifications fail explicitly and non-window imgstream targets
+are the supported headless choice.  `/dev/null` remains the explicit
+no-presentation diagnostic sink for raytrace benchmarks; it retains only
+framebuffer compatibility metadata, allocates no imgstream image or pixel
+buffer, does not initialize a provider, and causes rt to skip framebuffer
+I/O.  Both software and System-GL Qt provider selections have Xvfb smoke
+coverage, and the toolkit-neutral session contract verifies the same
+owner/worker split without either toolkit.
 
 Verified Baseline
 -----------------
 
 The following was verified locally from the current checkout and .build:
 
-* libbrlobol unit coverage passes 14/14 tests.  This includes endpoint and
+* Legacy ISST CPU image presenters are independent of graphical display
+  managers.  Tcl/Tk `isst` presents RGB frames through a Tk photo, while Qt
+  `qisst` uses a worker-produced `QImage` and QWidget.  Both have Xvfb smoke
+  coverage; neither target requests libdm or a Qt OpenGL module.
+
+* libbrlobol unit coverage passes 15/15 tests.  This includes endpoint and
   host lifetime, headless host, render, LoD realization/service/cache,
   view-store, image source/display, and NanoRT renderer coverage.
   Factory-owned headless presentation realizes pending sources, advances
@@ -95,13 +133,25 @@ The following was verified locally from the current checkout and .build:
 * TclCAD's command, cleanup, Tk thread-affinity, widget, and Archer four-pane
   lifecycle tests pass under Xvfb.  The session framebuffer bridge is checked
   across top-level, embedded, and software Tk hosts; creating an auxiliary
-  pane does not retarget the active stream.
+  pane does not retarget the active stream.  Their shared Xvfb preflight marks
+  only an unavailable display server as infrastructure-skipped; once it starts,
+  product failures remain test failures.
+* MGED's isolated-X attachment smoke opens and resizes a direct hardware
+  `tkobol` endpoint, delivers a shifted primary-pan gesture to its child
+  widget, captures a frame, and releases the host.  Tk input now uses a
+  host-unique bindtag bridge rather than an X11-only raw-event callback, so
+  Windows WGL uses the same normalized endpoint path.  Native Windows and
+  macOS runtime validation remains supported-matrix work.
 * QGED's framebuffer test shares the visible endpoint/controller with GED and
-  verifies retained overlay attachment, resize, and detach.  The generic host
-  test verifies retained underlay, interlay, and overlay placement.  GED's
-  per-view render root is ordered shared geometry, interlay, then local
-  faceplate/interactive features; the controller keeps the same interlay root
-  valid for direct hosts and GED rebinding.
+  verifies that libged's generic ensure path selects that host, retained overlay
+  attachment, physical resize, packet-driven presentation, active-pane host
+  handoff, and detach.  A handoff removes the retained image nodes from the old
+  controller and recreates them at the new endpoint's physical size.  QGED
+  retains only its Qt socket/notifier adapter.  The generic host test verifies
+  retained underlay, interlay, and overlay placement.  GED's per-view render
+  root is ordered shared geometry, interlay, then local faceplate/interactive
+  features; the controller keeps the same interlay root valid for direct hosts
+  and GED rebinding.
 * Background policy is endpoint-owned after attachment.  A passive `bv`
   background seeds a newly attached GED endpoint or a newly created standalone
   Qt canvas exactly once; normal Qt refresh, framebuffer capture, and endpoint
@@ -119,6 +169,10 @@ The following was verified locally from the current checkout and .build:
   capture, input isolation, simultaneous endpoint teardown, and a blocking
   in-flight frame callback.  Endpoint destruction waits for that callback
   before closing, detaching, destroying, and releasing its factory host.
+  The Qt host regression also runs its `qt-gl` endpoint under an isolated Xvfb
+  display: it requires a valid current QOpenGLWidget context, direct Obol
+  widget presentation, framebuffer readback, and endpoint capture.  The
+  ordinary offscreen Qt suite cannot establish that system-GL contract.
 * LoD service cancellation removes queued cache writes as well as queued
   result publication.  Its cache-writer boundary rechecks cancellation after
   dequeue, and a deterministic blocked-writer test proves a cancelled
@@ -144,11 +198,11 @@ Immediate Test and Validation Gaps
 
 2. Broad application ownership remains unproven.
 
-   The source matrix covers QGED, MGED, GSH, Qt, and Tk.  Direct Tk and
-   embedded ArcherCore lifecycle coverage now exists, but auxiliary views,
-   multiple simultaneous views, host detach/reattach, and full supported
-   application workflows still need explicit evidence before their remaining
-   compatibility shells are deleted.
+   The source matrix covers QGED, MGED, GSH, standalone rt/fbserv, Qt, and Tk.
+   Direct Tk and embedded ArcherCore lifecycle coverage now exists, but
+   auxiliary views, multiple simultaneous views, host detach/reattach, and
+   full supported application workflows still need explicit evidence before
+   their remaining compatibility shells are deleted.
 
 Priority 0: Endpoint Completion
 -------------------------------
@@ -156,21 +210,25 @@ Priority 0: Endpoint Completion
 1. Complete the hosted-application ownership audit.
 
    Make a small source-and-test matrix for QGED, MGED, GSH, rtwizard, Archer,
-   and auxiliary windows.  For every hosted view, identify its GED context,
-   endpoint, controller, host factory, input endpoint, framebuffer stream,
-   close path, and tests.  Move remaining application-owned controller/host
-   lifetimes into endpoint factories; delete a duplicate only after the matrix
-   proves it is unreachable.
+   standalone rt/fbserv, and auxiliary windows.  For every hosted view,
+   identify its GED context where applicable, endpoint, controller, host
+   factory, input endpoint, framebuffer stream, close path, and tests.  Move
+   remaining application-owned controller/host lifetimes into endpoint
+   factories; delete a duplicate only after the matrix proves it is
+   unreachable.
 
    Exit condition: each supported hosted view has exactly one of each required
    identity and no graphical command creates a parallel scene or host.
 
    Source audit: `doc/notes/obol_hosted_application_ownership.txt` records
-   QGED, MGED, GSH, Tcl Ged, Archer, and rtwizard ownership.  Archer and the
-   historical rtwizard GUI share Tcl Ged's endpoint path; they do not own a
-   second renderer.  The fake `dm_list` Tcl discovery command and Ged's
-   ineffective `-type` option are deleted, so those callers name `tkobol`
-   directly.  `tclcad_test_archer_obol_smoke` passes under `xvfb-run` using
+   QGED, MGED, GSH, standalone rt/fbserv, Tcl Ged, Archer, and rtwizard
+   ownership.  `rt_null_sink` proves `/dev/null` needs neither a provider nor
+   retained image storage; visible rt/fbserv display smoke tests cover the
+   one-session host path.  Archer and the historical rtwizard GUI share Tcl
+   Ged's endpoint path; they do not own a second renderer.  The fake `dm_list`
+   Tcl discovery command and Ged's ineffective `-type` option are deleted, so
+   those callers name `tkobol` directly.  `tclcad_test_archer_obol_smoke`
+   passes under `xvfb-run` using
    the view-only embedded `ArcherCore` configuration used by the historical
    rtwizard GUI; it proves four hosted endpoint and GED teardown.  `RtControl`
    is now GED-only and has no unreachable `Mged` branches.  QGED ERT GUI
@@ -187,7 +245,11 @@ Priority 0: Endpoint Completion
    remain stable while the native host is replaced.  An explicit endpoint
    background property also survives that swap: host-local passive Qt state
    seeds only a locally owned controller, never a retained endpoint
-   controller.
+   controller.  QGED framebuffer setup follows the same rule: it associates
+   the visible endpoint with the active GED context, then asks libged to
+   ensure the session stream.  Libged obtains the host from that endpoint, so
+   Qt retains only event-loop delivery and repaint scheduling rather than a
+   second framebuffer/controller lifetime.
    Continue the matrix audit for auxiliary views and complete application
    workflows before deleting their remaining compatibility shells.
 
@@ -224,8 +286,16 @@ Priority 0: Endpoint Completion
    factories use a per-host nonblocking pipe registered with the Tcl event
    loop, rather than Tcl thread events, so TkPhoto also renders a
    worker-requested frame on its owner thread when Tcl itself is non-threaded.
-   Retain platform-host coverage for real system-GL context ownership and the
-   Windows Tk worker path before considering this complete.
+   The isolated-X Qt regression now opens a visible `qt-gl` endpoint with an
+   explicit hardware engine and both system-GL and pixel-presentation
+   requirements.  It proves the factory retains a `QOpenGLWidget` through
+   controller binding, makes its native context current, consumes an Obol frame
+   through direct widget rendering, and supports both framebuffer readback and
+   endpoint capture.  The regression caught and prevents a lifecycle defect
+   where controller binding closed the just-created `QgGL` canvas and silently
+   recreated a `QgSW` canvas under the `qt-gl` factory name.  Retain supported
+   Windows/macOS host coverage, including the Windows Tk worker path, before
+   considering this complete.
 
 3. Finish typed policy migration.
 
@@ -259,9 +329,28 @@ Priority 0: Endpoint Completion
    proves a typed background mutation survives stale passive state.  The dead
    public GED software-wire integer bridge is removed; all production
    software-wire policy uses `controller.software_wire`, and the pivot guard
-   forbids restoring the duplicate API.  Continue with the remaining
-   camera/navigation and retained-feature policies rather than adding
-   per-application setters.  `renderer.antialiasing` now maps to Obol's
+   forbids restoring the duplicate API.  MGED's `set perspective`,
+   `perspective_mode`, and toggle hooks use the same `view.perspective`
+   property; its historical disabled `-1` sentinel maps to canonical
+   orthographic `0`, so the endpoint also rebuilds the projection matrix and
+   refreshes the controller.  The MGED smoke verifies the attached `45` then
+   `0` policy transition.  Non-framebuffer composition now has a concrete
+   endpoint owner: `composition.rt.layer` persists its `underlay`, `interlay`,
+   or `overlay` choice before the retained RT image exists and safely reparents
+   that image when changed live.  The retained-RT regression proves both the
+   pre-render policy and live reparenting, rather than leaving the renderer's
+   image layer hardcoded.  Obol already implements two-eye rendering for
+   anaglyph, interleaved-row/column, and separate/quad-buffer modes, with a
+   configurable eye offset.  Do not expose `renderer.stereo.*` yet: first
+   prove an end-to-end hardware endpoint with a stereo-capable surface,
+   capability reporting, mode-specific output, capture semantics, and clean
+   mono restoration.  Qt can request stereo buffers, but the currently
+   vendored Togl source has no public stereo-widget option despite stale
+   internal masks; neither host currently requests stereo buffers.  OSMesa
+   support remains unproven and must report unsupported rather than silently
+   falling back.  This keeps stereo an Obol-backed endpoint policy when it is
+   ready, rather than adding per-application setters.
+   `renderer.antialiasing` now maps to Obol's
    portable single-pass line/point smoothing in system GL and every
    offscreen presentation path; it deliberately leaves accumulation-buffer
    multipass rendering disabled so an ordinary policy change cannot create an
@@ -295,17 +384,20 @@ Priority 0: Endpoint Completion
    publish their visibility property.  `mged_obol_smoke` covers the MGED
    override/republication transition for center dot, axes, and ADC styling,
    while endpoint, image-baseline, and Tk widget tests cover the full property
-   schemas, staged grid/axes updates, and Boolean validation.  Continue with
-   camera/navigation, interactive retained-feature, image-composition, and
-   future stereo policy rather than adding per-application renderer setters.
+   schemas, staged grid/axes updates, and Boolean validation.  The interactive
+   selection rectangle is likewise a retained local Obol feature: its geometry
+   remains passive per-gesture view data, while visibility, color, line width,
+   and line style are typed endpoint policy.  Continue with remaining
+   image-composition requirements and the defined stereo-host validation
+   before adding any per-application renderer setters.
 
 4. Complete semantic input migration.
 
    Define endpoint actions and result routing for MGED editing, ADC, snapping,
    rate controls, selection, framebuffer gestures, and faceplate actions.
    Retire native handling only after equivalent endpoint behavior is tested.
-   Add native Windows and macOS Tk adapters before claiming cross-platform
-   semantic equivalence.
+   Validate the portable Tk event bridge on Windows and provide a supported
+   macOS Tk host before claiming cross-platform semantic equivalence.
 
    Current slice: Qt canvases and the Tk/MGED host normalize input and dispatch
    through each endpoint's independent profile and action handler.  They cover
@@ -328,18 +420,54 @@ Priority 0: Endpoint Completion
    common libbv adjustment path, while TclCAD's retained edit commands use the
    same clamp and per-view policy values.  Wheel and click behavior remain
    explicit host policy rather than being misclassified as pointer deltas.
-   TclCAD's TkObol views now install the shared keyboard-only profile and a
-   per-view endpoint action handler for canonical A/M/V faceplate toggles and
-   view orientations.  Their existing pointer/edit/selection bindings remain
-   TclCAD-owned until equivalent semantic actions exist.  The generic Tcl
-   bindings omit only the now endpoint-owned keys, and the Tk host observes
-   both its child widget and top-level container because Tk delivers keyboard
-   focus at the latter.  The libbrlobol input test covers the keyboard profile;
-   the Tk widget smoke verifies that the overlapping Tcl bindings are absent.
-   Continue with explicit endpoint actions and tests for editing, snapping
-   beyond view-only panning, rate controls,
-   selection, framebuffer gestures, and faceplate actions, then validate native
-   Windows and macOS Tk event adapters.
+   TkObol views whose host advertises input install the shared keyboard-only
+   profile and a per-view endpoint action handler for canonical A/M/V
+   faceplate toggles and view orientations.  Their existing
+   pointer/edit/selection bindings remain TclCAD-owned until equivalent
+   semantic actions exist.  A host without input capability retains TclCAD's
+   established keyboard bindings rather than claiming actions it cannot
+   receive.  The generic Tcl bindings omit only the endpoint-owned keys, and
+   the X11 Tk host observes both its child widget and top-level container
+   because Tk delivers keyboard focus at the latter.  The libbrlobol input test
+   covers the keyboard profile; the Tk widget smoke verifies that the
+   overlapping Tcl bindings are absent on an input-capable host.
+   Canonical fixed-orientation actions now have one libbrlobol implementation
+   shared by Qt, TclCAD, and MGED.  It updates only the caller-owned bv view
+   context; each application remains responsible for its own repaint and
+   application state.  Obol display traversal, source-backed exact mesh
+   refinement, and librt exact refinement now likewise have one libbrlobol
+   picker.  GED adapts its typed result to selection state and QtCAD adapts it
+   to feature-overlay state; both retain their application selection policy
+   without independently traversing the scene.  Deferred source requests are
+   reported by that common picker so a client does not incorrectly take a
+   coarse fallback while exact data is pending.  The same view-query API now
+   owns typed snap traversal and optional source-backed full-detail refinement:
+   GED's first-candidate helper remains nonblocking, while QtCAD's exact-snap
+   helper may consume a ready result or enqueue a bounded request.  QtCAD maps
+   the typed result into its public record and retains its gesture/edit policy.
+   The common A/M/V faceplate actions now share one endpoint helper: it toggles
+   the typed ADC/model-axis/view-axis visibility property when an owner exists,
+   or the equivalent passive `bv` state for a standalone controller.  QtCAD
+   and TclCAD no longer duplicate that property mutation; MGED retains only its
+   menu/default-producer synchronization after the common action succeeds.
+   The common helpers intentionally leave editing, snap gesture policy, rate
+   controls, and broader faceplate policy outside this narrow boundary.
+   The libbrlobol window-host test verifies both a recognized orientation and
+   explicit rejection of a non-orientation action; GED and QtCAD selection,
+   pick, and snap regressions cover the shared queries.
+   Continue with explicit endpoint actions and tests for editing, snap gesture
+   routing beyond view-only panning, rate controls, selection gesture routing,
+   framebuffer gestures, and faceplate actions, then validate native Windows
+   and macOS Tk event adapters.
+   Tk hosts now install a host-unique bindtag before their native widget and
+   containing toplevel bindings.  It normalizes key, button, motion, wheel,
+   resize, focus, and expose input through Tcl substitutions and dispatches to
+   the endpoint, replacing the former X11-only raw-event handler.  The same
+   bridge is used by WGL without importing Xlib behavior.  The MGED attachment
+   smoke drives a real generated pointer gesture through this bridge, while the
+   Tk widget smoke verifies the installed endpoint key callback and avoids
+   overlapping Tcl key bindings.  Validate it on native Windows; macOS still
+   needs a supported Tk host.
 
 Priority 1: Rendering and Progressive Behavior
 -----------------------------------------------
@@ -378,10 +506,12 @@ Priority 1: Rendering and Progressive Behavior
    runs prove applied payload state and presentable output while allowing final
    data to win before first capture.
 
-   Result-ready callbacks may unsubscribe themselves during dispatch.  The
-   service recognizes that callback-local teardown instead of waiting for its
-   own in-flight callback, and a regression proves it removes the subscription
-   without deadlock while subsequent results still run normally.
+   Result-ready callbacks may remove themselves or another callback reserved by
+   the same dispatch.  The service distinguishes that local reservation from
+   a genuinely concurrent callback, suppresses the removed callback before
+   invocation, and still waits for any external in-flight invocation.  The
+   regressions prove both removal forms avoid deadlock while surviving
+   subscriptions and subsequent results continue normally.
 
    Command-driven LoD tests now make their runtime facetization dependency
    explicit: MGED and GSH build the GED plugin set, subprocess set, and
@@ -396,6 +526,18 @@ Priority 1: Rendering and Progressive Behavior
    Do not re-enable generic deferred expansion for either mode.  A future
    provider-specific detached-root handoff can revisit that boundary when
    evaluated rendering returns to active development.
+
+   Lifecycle and bounded-work audit: `libbrlobol_lod_service` covers pending
+   and in-flight cancellation, stale-result rejection, callback removal,
+   bounded queues, delayed task cancellation, and cancelled cache writes.
+   `ged_test_obol_draw_sync` covers proxy-to-final adoption, active database
+   rename/erase, and automatic-autoview settlement/cancellation.  Qt's
+   `test_qtcad_obol_selection_sync` checks that camera-only updates perform no
+   source replacement, source traversal, realization, compact publication, or
+   plotting; it also exercises bounded compact LoD churn.  These three tests
+   passed from the current `.build`.  Remaining work under this item is stress
+   validation against substantially larger production databases and supported
+   host/platform lifecycles, rather than restoring GED redraw layers.
 
 6. Continue normal wireframe and shaded performance work.
 
@@ -412,13 +554,29 @@ Priority 1: Rendering and Progressive Behavior
    Exit condition: whole-path large-model gains preserve deterministic output
    and do not regress small-model interaction.
 
+   Completed tiny-proxy slice: structural AABB/OBB geometry is marked as a
+   conservative subpixel candidate while retaining its full bounds and pick
+   representation.  Obol replaces it with a depth-tested point only when all
+   corners project below the hysteresis threshold.  A tagged shared part is
+   validated once as the canonical twelve-segment/eight-corner proxy and its
+   compact corner array is cached with the part; malformed or authored wire
+   data stays wire geometry.  The presentation cache is keyed by the frame
+   plan, view-projection matrix, and viewport, so unrelated redraws do not
+   repeat per-proxy projection work.  A real camera change transforms only
+   the cached corners and updates the selected front-most point even when the
+   collapsed-instance mask remains the same.  The upstream CAD regression
+   covers malformed-proxy rejection, unchanged-frame, camera-change,
+   hysteresis, and expansion cases; GED verifies deferred AABB draw sources
+   opt in without treating authored wireframes as proxies.
+
 7. Finalize the render-engine contract.
 
    Keep auto, hw, sw, none, and diagnostic deterministic and
-   capability-reported in headless and hosted endpoints.  The retained
-   interactive rt engine remains future work, not an alias for ERT or a legacy
-   display manager.  Verify explicit rejection of unavailable engines and both
-   FAST/QUALITY software wire policies.
+   capability-reported in headless and hosted endpoints.  Retained interactive
+   rt is a distinct endpoint engine, not an alias for ERT or a legacy display
+   manager; its host requirement is progressive presentation rather than an
+   implicit GL or software fallback.  Verify explicit rejection of unavailable
+   engines and both FAST/QUALITY software-wire policies.
 
    Completed external-renderer bridge: with an attached endpoint, the normal
    external `rt`, `rtedge`, enabled `art`, and ERT commands all target its
@@ -427,6 +585,21 @@ Priority 1: Rendering and Progressive Behavior
    display-manager view slot, framebuffer-device cache, and `/dev/ogl`
    selection are deleted.  MGED's endpoint smoke captures both direct `rt` and
    ERT output.  Do not treat this as the retained interactive librt engine.
+   The retained RT renderer is now selectable through the endpoint and `dm`
+   policy surfaces, uses only Obol image composition, and rejects a host that
+   lacks progressive-presentation capability.  Its dedicated retained-renderer
+   test covers deterministic final RGB, tiled publication, source/camera style
+   separation, clipping, placement, cancellation, output planes, and direct
+   controller redraw; the MGED view-state regression exercises `dm renderer
+   rt`.  Continue visual and live-host validation under item 10 rather than
+   restoring a renderer-specific path.
+
+   RT's shared UI sources expose progressive framebuffer flush as an optional
+   callback with a no-op default.  Only a visible Obol display session installs
+   the host-owned callback, leaving `rtsrv` a headless distributed worker with
+   no display dependency.  The focused RT regression covers default, install,
+   and clear behavior; Xvfb software and system-GL smokes cover the visible
+   provider path.
 
 Priority 1: Framebuffer and Legacy Retirement
 ----------------------------------------------
@@ -438,12 +611,27 @@ Priority 1: Framebuffer and Legacy Retirement
    and host-detach behavior.  Streams must remain GUI-independent and require
    no struct dm or display-manager plugin.
 
-   Completed composition slice: retained framebuffer image nodes now have
+   Completed transport and composition slice: libimgstream owns explicit
+   per-open authentication tokens, TCP/local-IPC policy, TLS state, bounded
+   byte-stream dispatch, and deterministic client/server cleanup.  Its auth
+   and lifecycle tests cover token rejection, backend capability dispatch,
+   fragmented authenticated messages, EOF cleanup, cancellation, and native
+   in-memory pixel readback.  The concurrent TCP/IPC stress regressions cover
+   independent client tokens and exact pixel/view/cursor state when the host
+   permits listener sockets.  Retained framebuffer image nodes now have
    explicit underlay, interlay, and overlay parents.  Underlay renders before
    CAD, interlay renders after shared CAD but before local faceplates and
    interactive features, and overlay renders last.  This is verified by the
-   generic host and GED multi-view tests.  Remaining work is transport and
-   exact-pixel behavior, not another renderer-specific composition path.
+   generic host and GED multi-view tests.  Remaining work is hosted endpoint
+   detach/reattach validation and supported-platform coverage, not another
+   renderer-specific composition or legacy transport path.  The bridge now
+   tracks its capture endpoint directly instead of rediscovering it through a
+   mutable view context.  Replacing an endpoint for the same view clears that
+   provider and closes its retained image before the old controller can be
+   detached or destroyed; an explicit ensure then binds the existing session
+   transport to the replacement host.  The MGED lifecycle regression covers
+   this same-view handoff as well as separate-view movement, and QGED covers
+   its active-pane host handoff.
 
 9. Delete residual graphical compatibility code.
 
@@ -462,14 +650,20 @@ Priority 1: Framebuffer and Legacy Retirement
    null display manager, or owns a legacy framebuffer object.  The pivot guard
    forbids restoring those calls, and the headless plus Xvfb Tk Obol lifecycle
    smokes pass.  TclCAD now uses the GED session bridge rather than a local
-   legacy framebuffer shell, so finish renaming and rationalizing the
-   remaining application view-state shell and named compatibility command
-   surfaces.
+   legacy framebuffer shell.
 
    Completed stale Tk-motion slice: the automatic `tkswrast` motion binding is
    deleted.  Native input reaches the Tk Obol endpoint directly; `dm motion`
    remains only as an explicit script command.  The pivot guard rejects
    restoration of the retired automatic binding.
+
+   Completed ISST image-presentation slice: the legacy Tcl/Tk ADRT viewer no
+   longer opens a graphical display manager or owns an OpenGL texture/context.
+   ADRT remains its CPU image producer; a Tk photo widget presents the RGB
+   pixels directly and preserves the existing reduced-resolution scaling
+   policy.  Its build no longer links libdm or requires DM plugins, and an
+   Xvfb smoke proves the photo-only window path starts without retired Tcl
+   commands.  The pivot guard rejects restoration of ISST GL/DM setup.
 
    Completed TclCAD cache-state slice: the no-op `cache_on` command, Archer
    backend-cache preference, and `dm_view_data` container are deleted.  The
@@ -512,6 +706,15 @@ Priority 1: Framebuffer and Legacy Retirement
    or invokes generic DM option/name APIs before creating the Tk Obol host.
    The Xvfb attachment smoke exercises the explicit display path.
 
+   Completed MGED host-terminology slice: the GUI option is `--host`, the GUI
+   command option is `-host`, and saved Tcl state is
+   `mged_default(host_type)`.  `tkobol` is the only GUI host and `nu` remains
+   only the no-window startup mode; no `--dm-type`, `gui -dt`, or
+   `mged_default(dm_type)` compatibility alias remains.  Headless MGED checks
+   the public CLI accepts the new option and rejects the retired spelling; a
+   plain-Tcl GUI configuration regression validates the default and parser,
+   while the Xvfb lifecycle smoke retains actual Tk attachment coverage.
+
    Completed libged include retirement: the remaining `dm.h` includes in
    autoview, snapping, `how`, and BoT export were unused compatibility debris.
    They are deleted, and the pivot guard now prohibits direct `dm.h` inclusion
@@ -521,23 +724,99 @@ Priority 1: Framebuffer and Legacy Retirement
    likewise no longer links libdm: it only calculates bounds through GED and
    libbu, and the pivot guard rejects restoring that stale dependency.
 
+   Completed liboptical include retirement: the `points` and `spm` shaders
+   never used display-manager APIs; their stale `dm.h` includes are deleted
+   and guarded rather than naming shaders as a false graphical compatibility
+   owner.
+
+   Completed interactive-rectangle slice: the passive `bv` rectangle remains
+   gesture data, while its visible line loop is a local retained Obol
+   faceplate feature.  Visibility, color, line width, and line style are
+   typed endpoint policies; the old uncalled `dm_draw_rect` API and source are
+   deleted and guarded.  The faceplate regression verifies publication,
+   endpoint-policy mutation, capture, and removal.
+
+   Completed direct-faceplate API slice: the unreferenced libdm ADC, axes,
+   grid, primitive-label, scale, rectangle, arrow, faceplate, and view-object
+   renderers are deleted with their public declarations.  The unused clipping,
+   `dm/view.h` forwarding, and immediate-vlist helpers are removed as well.
+   Live faceplates use retained Obol features, and the pivot guard prevents the
+   old direct-renderer source files and APIs from returning.
+
+   Completed stale naming/help slice: TclCAD initializes its Tk Obol provider
+   through `tclcad_tkobol_init` and provides `BrlcadTkObol`, not the retired
+   `Dm` Tcl package.  Orphaned `dm_*` Tcl help records are deleted.  QGED's
+   framebuffer notifier is explicitly `qged_fbserv_*`; it remains a Qt
+   event-loop adapter over the libged endpoint/imgstream stream, not a display
+   manager.  The pivot guard rejects restoration of the old internal name.
+
+   Completed endpoint-command ownership slice: `preview` and `screengrab`
+   select a GED view context, not a display manager, through
+   `to_view_context_func`.  Retired edit-preview documentation and TclCAD/MGED
+   comments no longer describe removed renderer callbacks.  A production
+   source inventory finds no live renderer API, plugin loader, or `libdm`
+   dependency; the remaining `dm` spelling denotes only the supported public
+   command that controls an Obol endpoint.  The pivot guard rejects restoration
+   of the retired wrapper and edit-matrix names.
+
 Priority 2: Interactive librt Engine
 -------------------------------------
 
 10. Implement retained interactive rt.
 
-    Adapt authoritative Obol scene, camera, visibility, and style state to a
-    revision-keyed librt acceleration structure.  Camera-only frames must not
-    rebuild database geometry.  Render progressively, cancel stale work, and
-    publish partial/final frames through the endpoint.
+    Partially landed: BRLObolRtRenderer snapshots visible database sources,
+    camera, clipping, source placement, and source appearance into retained
+    librt acceleration.  Geometry revisions are independent of camera,
+    selection, highlight, color, and placement revisions.  Endpoint rt is
+    selectable without a non-Obol fallback, runs librt only on worker threads,
+    presents through an Obol image node on the owning thread, cancels stale
+    jobs, and produces a deterministic fixed-final capture.  It currently
+    publishes a low-resolution one-sample preview followed by a full-resolution
+    final image; QGED/MGED-style direct controller redraw requests restart it.
+    The full image is an adaptive row scheduler: `render.rt.frame_budget_ms`
+    targets its publication interval and adjusts the next row batch from
+    measured cost.  `render.rt.quality=interactive` enables the coarse preview
+    while `final` skips it; both retain the same deterministic final image.
+    `render.rt.workers`, `render.rt.samples`, and
+    `render.rt.preview_scale` are also typed endpoint policies.  The retained
+    renderer regression proves tiled output is byte-identical to the monolithic
+    final image and the endpoint property values persist.  Camera matrices,
+    background, clip planes, lighting, and transparency are also retained
+    presentation state: changes advance presentation revision without preparing
+    geometry again.  Lighting/transparency affect RT shading directly, and a
+    direct controller lighting mutation restarts the endpoint worker before
+    capture observes the frame.
 
-    Define render.rt.* policies for frame budget, workers, samples, and
-    quality.  Optional depth and identity planes may support composition and
-    precise interaction without coupling picking to display quality.
+    Optional final-frame depth and source-identity planes are now available
+    without coupling interaction data to RGB sample count.  Depth is normalized
+    camera depth with `1` for background; source identity is a retained-frame
+    source token with `0` for background.  `renderWithPlanes` and its tiled
+    form expose the C++ renderer data, while endpoint RT capture exposes typed
+    depth and source-ID buffers only after the matching RGB frame is accepted
+    on the owner thread.  The output-plane regression verifies both direct
+    retained rendering and endpoint capture.
 
-    Exit condition: QGED and MGED can select rt; camera motion cancels stale
-    work; unchanged geometry is retained; fixed-final-quality headless images
-    are deterministic.
+    Semi-transparent source composition now traces the nearest hit from each
+    source and composites those hits back-to-front.  Fully opaque frames retain
+    the direct nearest-hit fast path; source sorting is enabled only when a
+    partially transparent source is present.  This preserves geometry behind a
+    translucent source instead of blending it only against the background.
+    `libbrlobol_rt_render` constructs overlapping red and green sources and
+    verifies their deterministic blended result and that disabled transparency
+    keeps the front source opaque, alongside the tiled, output-plane,
+    cancellation, and endpoint cases.
+
+    Next: expand the simple final material/shading treatment and validate
+    visual parity, cancellation, and interactive cadence in live QGED and
+    MGED sessions.  Introduce region/primitive identity only when a concrete
+    interaction consumer requires it; source identity must remain sufficient
+    for display composition and source-level selection without growing every
+    RT frame's memory footprint.
+
+    Exit condition: QGED and MGED use the time-budgeted rt path interactively;
+    camera motion cancels stale work; unchanged geometry is retained; output
+    planes support composition where needed; and fixed-final-quality headless
+    images remain deterministic.
 
 Priority 2: Supported-Matrix Validation
 ----------------------------------------
@@ -553,9 +832,67 @@ Priority 2: Supported-Matrix Validation
 
 Other
 -----------------
-QGED still has meaningful scaling headroom. The next structural targets are
-caching the Obol frame plan/compiled-instance state across pure camera changes
-and avoiding full Qt parent-background painting around the GL canvas.
+Completed camera-local subpixel-cache slice: `SoCADAssembly` bypasses proxy
+presentation work when its frame plan, view-projection matrix, and viewport
+are unchanged.  On a camera change it retains hysteresis by the plan-stable
+visible-instance index rather than hashing every eligible instance, and
+reuses mask/point scratch storage rather than allocating frame-local proxy
+vectors.  Eligible shared proxy parts also cache their validated eight local
+corners at publication, avoiding repeated de-duplication of their 24 line
+endpoints on every camera update.  The camera-change point position,
+hysteresis, and malformed-proxy rejection remain covered by the upstream CAD
+regression; BRL-CAD draw-sync, prototype, LoD-update, and host tests also pass
+when loaded against that rebuilt Obol.
+
+Completed compact-semantic publication slice: direct and cross-source compact
+assemblies track pick-detail metadata independently from geometry and
+presentation state.  Style, visibility, selection, and placement changes do
+not rewrite their sorted semantic map or copy per-occurrence strings unless a
+published semantic field actually changed.  The prototype regression covers
+incremental region, material, and pick-detail refresh; the full libbrlobol
+suite and GED drawing gates pass.  A settled 512x512 Havoc headless probe
+completed eight aggregate style updates, confirming this remains on the
+incremental presentation path.
+
+Completed local dependency-integration slice: Obol commit
+`5935b3b459591c686ba5ea0202f6f6ffdf9c8997` installs its NanoRT diagnostic
+headers, can consume an externally supplied name-mangled OSMesa, keeps that
+runtime dependency private for shared package consumers, and can omit examples
+in package builds.  BEXT commit
+`fda636481d174154534e393c035af8bec3182085` pins that source, maps OSMesa to
+`libbrlobol` as well as the retired `libdm` component, builds OSMesa before
+Obol, and configures a shared dual-GL Obol with
+`OBOL_BUILD_BUNDLED_OSMESA=OFF`.  BRL-CAD now pins that BEXT revision.  A fresh
+BEXT install verified one `libosmesa.so`, an Obol export with no private OSMesa
+target, installed NanoRT headers, and a separate `find_package(Obol)` consumer
+that links and runs.  The normal full BEXT staging was also rebuilt through
+OSMesa and Obol and exposes the same package contract.  No BRL-CAD CMake file
+references the developer convenience `obol` symlink or a source checkout.
+BRL-CAD now removes stale external CMake package fragments before package
+discovery; this prevents a former configuration-specific Obol export from
+polluting a current release-only package.  Reconfiguring the active build tree
+after that cleanup found the staged package successfully and completed.
+
+Before publishing this branch, push/land those two external commits so the
+BRL-CAD pin is cloneable by a clean checkout.  A fresh BRL-CAD configuration
+against the full staged package now completes with Qt, Tcl/Tk, OpenGL, and X11
+disabled; `rt` and `fbserv` build without UI-library linkage, `/dev/null`
+renders headlessly, and display targets reject explicitly without a provider.
+Repeat this clean configuration after the external commits are available
+remotely.  Do not replace the package pin with a developer-local source path
+to bypass this release integrity check.
+
+QGED still has meaningful scaling headroom.  `SoCADAssembly` already retains
+its frame plan and compiled instance state across pure camera changes; camera
+motion only updates view-local work such as frustum and subpixel-proxy state.
+Qt software canvases are explicitly opaque and no longer invoke the base-widget
+paint path after copying an Obol frame, avoiding parent-background work for
+normal OSMesa presentation.  Qt GL canvases use `NoPartialUpdate` because Obol
+clears and redraws every frame.  `QOpenGLWidget` does not retain an opaque-paint
+attribute on the supported platform, so do not claim that the GL compositor
+cost is gone: capture a representative profile before changing embedding or
+widget architecture.  The next structural target is reducing camera-local
+frustum/subpixel work and submission overhead in large retained CAD scenes.
 
 
 Verification Gates
@@ -565,6 +902,7 @@ Run focused checks before broad suites:
 
 * ninja -C .build test_brlobol_prototype test_brlobol_window_host
 * ctest --test-dir .build --output-on-failure -R '^libbrlobol_'
+* ctest --test-dir .build --output-on-failure -R '^(rt_null_sink|(rt|fbserv)_display_)'
 * ctest --test-dir .build --output-on-failure -R '^(ged_test_obol_draw_sync|ged_test_mged_view_state|ged_test_drawing_basic)$'
 * ctest --test-dir .build --output-on-failure -R '^(tclcad_test_(tkobol_widget_smoke|archer_obol_smoke)|test_qged_obol_fbserv|regress-qged-ert|gsh_obol_(smoke|ert_smoke|progressive_lod)|mged_obol_(smoke|ert_smoke|progressive_lod))$'
 * ctest --test-dir .build --output-on-failure -R '^test_qtcad_obol_'

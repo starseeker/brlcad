@@ -51,11 +51,15 @@ TCLCAD_EXPORT extern void tclcad_bn_setup(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Rt_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Bu_Init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Bn_Init(Tcl_Interp *interp);
-TCLCAD_EXPORT extern int Dm_Init(Tcl_Interp *interp);
+TCLCAD_EXPORT extern int tclcad_tkobol_init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Ged_Init(Tcl_Interp *interp);
 
 /** Register the Tk OpenGL and TkPhoto Obol display-host factories. */
 TCLCAD_EXPORT extern int tclcad_obol_host_factories_register(void);
+
+/** Register libtclcad's top-level Tk Obol display-session provider.  Clients
+ * use libbrlobol's toolkit-neutral display-session API after this selection. */
+TCLCAD_EXPORT extern int tclcad_obol_display_provider_register(void);
 
 
 /* defined in cmdhist_obj.c */

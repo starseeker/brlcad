@@ -37,16 +37,16 @@
 #include "QgEdApp.h"
 
 static int
-qged_dm_during_clbk(int ac, const char **av, void *u1, void *u2)
+qged_display_during_clbk(int ac, const char **av, void *u1, void *u2)
 {
     (void)u1;
     (void)u2;
     if (ac < 2 || !av)
         return BRLCAD_OK;
 
-    const char *dbg = getenv("GED_DM_DURING_DEBUG");
+    const char *dbg = getenv("GED_DISPLAY_DURING_DEBUG");
     if (dbg && BU_STR_EQUAL(dbg, "1")) {
-        bu_log("qged dm during callback: ");
+        bu_log("qged display during callback: ");
         for (int i = 0; i < ac; i++) {
             bu_log("%s%s", av[i], (i + 1 < ac) ? " " : "\n");
         }
@@ -267,7 +267,7 @@ QgEdMainWindow::ConnectWidgets()
     QObject::connect(c4, &QgQuadView::changed, ap, &QgEdApp::do_quad_view_change);
     // Some of the dm initialization has to be delayed - make the connections so we can
     // do the work after widget initialization is complete.
-    QObject::connect(c4, &QgQuadView::init_done, this, &QgEdMainWindow::do_dm_init);
+    QObject::connect(c4, &QgQuadView::init_done, this, &QgEdMainWindow::do_endpoint_init);
 
 
     // Graphical toolbar
@@ -533,22 +533,20 @@ QgEdMainWindow::launchPluginDialog(const QString &id)
 // initialization is *fully* complete.  Consequently, these steps are separated
 // out from the main constructor.
 void
-QgEdMainWindow::do_dm_init()
+QgEdMainWindow::do_endpoint_init()
 {
-    QTCAD_SLOT("QgEdMainWindow::do_dm_init", 1);
+    QTCAD_SLOT("QgEdMainWindow::do_endpoint_init", 1);
     QgEdApp *ap = (QgEdApp *)qApp;
     QgModel *m = ap->mdl;
     struct ged *gedp = m->ged();
 
-    (void)ged_clbk_set(gedp, "dm", BU_CLBK_DURING, qged_dm_during_clbk, NULL);
-
-    (void)ged_clbk_set(gedp, "dm", BU_CLBK_DURING, qged_dm_during_clbk, NULL);
+    (void)ged_clbk_set(gedp, "dm", BU_CLBK_DURING, qged_display_during_clbk, NULL);
 
     ///////////////////////////////////////////////////////////////////////////
     // DEBUG - turn on some of the bells and whistles by default, since they
     // won't normally be tested in other ways.  We need fully set up views and
-    // dm contexts for these commands to work, and that setup (especially for
-    // dm) can be delayed, so we put these invocations in a slot that is
+    // endpoint contexts for these commands to work, and that setup can be
+    // delayed, so we put these invocations in a slot that is
     // specifically triggered once the underlying widgets have informed us that
     // they're ready to go.
     const char *av[5] = {NULL};

@@ -23,8 +23,8 @@
  *
  */
 
-#ifndef QDM_FBSERV_H
-#define QDM_FBSERV_H
+#ifndef QGED_FBSERV_H
+#define QGED_FBSERV_H
 
 #include "common.h"
 
@@ -96,9 +96,13 @@ class QFBServer : public QTcpServer
 
 
 extern void
-qdm_configure_ged_fbserv_handlers(struct ged *gedp, QgView *display);
+qged_fbserv_configure_ged_handlers(struct ged *gedp, QgView *display);
 
-#endif /* QDM_FBSERV_H */
+/** Clear QGED's non-owning Qt transport target before GED tears down fbserv. */
+extern void
+qged_fbserv_release_ged_handlers(struct ged *gedp);
+
+#endif /* QGED_FBSERV_H */
 
 /** @} */
 /*

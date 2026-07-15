@@ -98,7 +98,7 @@ int doMotion = 0;
 
 
 struct buttons {
-    int bu_code;	/* dm_values.dv_button */
+    int bu_code;	/* Legacy UI button binding code. */
     char *bu_name;	/* keyboard string */
     int (*bu_func)(ClientData, Tcl_Interp *, int, char **);	/* function to call */
 }  button_table[] = {

@@ -164,6 +164,7 @@ IMGSTREAM_EXPORT imgstream_fb_t *imgstream_fb_open_display(const char *spec, siz
  */
 IMGSTREAM_EXPORT int imgstream_fb_detach_display_host(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT void imgstream_fb_close(imgstream_fb_t *fb);
+/* /dev/null is a zero-storage diagnostic sink and returns NULL here. */
 IMGSTREAM_EXPORT imgstream_t *imgstream_fb_stream(imgstream_fb_t *fb);
 IMGSTREAM_EXPORT const imgstream_t *imgstream_fb_cstream(const imgstream_fb_t *fb);
 IMGSTREAM_EXPORT const char *imgstream_fb_name(const imgstream_fb_t *fb);

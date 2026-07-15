@@ -148,6 +148,7 @@ SoBRLCadRenderBatch::SoBRLCadRenderBatch(void) :
     sourceRoot(NULL),
     cachedSourceSignature(0),
     cachedStructureSignature(0),
+    cachedSemanticSignature(0),
     cachedHiddenSignature(0),
     cachedSelectedSignature(0),
     cachedUnpickableSignature(0),
@@ -183,6 +184,7 @@ SoBRLCadRenderBatch::setBatchSourceRoot(SoNode *root)
     this->sourceRoot = root;
     this->cachedSourceSignature = 0;
     this->cachedStructureSignature = 0;
+    this->cachedSemanticSignature = 0;
     this->cachedHiddenSignature = 0;
     this->cachedSelectedSignature = 0;
     this->cachedUnpickableSignature = 0;
@@ -215,6 +217,7 @@ SoBRLCadRenderBatch::syncBatch(const BRLObolViewLodState *viewState)
     if (sources.size() < 32) {
 	this->cachedSourceSignature = 0;
 	this->cachedStructureSignature = 0;
+	this->cachedSemanticSignature = 0;
 	this->cachedHiddenSignature = 0;
 	this->cachedSelectedSignature = 0;
 	this->cachedUnpickableSignature = 0;
@@ -224,6 +227,7 @@ SoBRLCadRenderBatch::syncBatch(const BRLObolViewLodState *viewState)
     }
     uint64_t signature = 1469598103934665603ULL;
     uint64_t structureSignature = signature;
+    uint64_t semanticSignature = signature;
     for (SoBRLDatabaseSource *source : sources) {
 	signature ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(source));
 	signature *= 1099511628211ULL;
@@ -232,20 +236,29 @@ SoBRLCadRenderBatch::syncBatch(const BRLObolViewLodState *viewState)
 	structureSignature ^=
 	    source ? source->cadBatchStructureSignature() : 0;
 	structureSignature *= 1099511628211ULL;
+	semanticSignature ^=
+	    source ? source->cadBatchSemanticSignature() : 0;
+	semanticSignature *= 1099511628211ULL;
 	const BRLObolViewLodState::CadPayload *payload =
 	    viewState ? viewState->findCad(source) : NULL;
 	signature ^= payload ? 1ULL : 0ULL;
 	signature *= 1099511628211ULL;
 	structureSignature ^= payload ? 1ULL : 0ULL;
 	structureSignature *= 1099511628211ULL;
+	semanticSignature ^= payload ? 1ULL : 0ULL;
+	semanticSignature *= 1099511628211ULL;
     }
     signature ^= static_cast<uint64_t>(sources.size());
     structureSignature ^= static_cast<uint64_t>(sources.size());
+    semanticSignature ^= static_cast<uint64_t>(sources.size());
     if (signature == this->cachedSourceSignature)
 	return this->batchValid;
 
     const SbBool structureChanged = !this->batchValid ||
 	structureSignature != this->cachedStructureSignature;
+    const SbBool semanticChanged = !this->batchValid ||
+	semanticSignature != this->cachedSemanticSignature;
+    const SbBool includeSemantics = structureChanged || semanticChanged;
 
     BRLObolCadBatchBuildState state;
     state.assembly = this->assembly;
@@ -261,7 +274,8 @@ SoBRLCadRenderBatch::syncBatch(const BRLObolViewLodState *viewState)
     for (SoBRLDatabaseSource *source : sources) {
 	if (viewState && viewState->findCad(source))
 	    continue;
-	if (source && source->appendCadRenderBatch(&state, structureChanged))
+	if (source && source->appendCadRenderBatch(&state, structureChanged,
+		includeSemantics))
 	    this->batchedSources.insert(source);
     }
     if (structureChanged) {
@@ -302,6 +316,7 @@ SoBRLCadRenderBatch::syncBatch(const BRLObolViewLodState *viewState)
 
     this->cachedSourceSignature = signature;
     this->cachedStructureSignature = structureSignature;
+    this->cachedSemanticSignature = semanticSignature;
     this->cachedHiddenSignature = hiddenSignature;
     this->cachedSelectedSignature = selectedSignature;
     this->cachedUnpickableSignature = unpickableSignature;

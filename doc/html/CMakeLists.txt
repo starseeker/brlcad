@@ -19,17 +19,6 @@ set(libbu_HTML manuals/libbu/cmdhist_obj.html manuals/libbu/contents.html manual
 add_doc(libbu_HTML html/manuals/libbu REQUIRED "libbu")
 
 set(
-  libdm_HTML
-  manuals/libdm/api.html
-  manuals/libdm/contents.html
-  manuals/libdm/dm_obj.html
-  manuals/libdm/index.html
-  manuals/libdm/preface.html
-  manuals/libdm/tcl.html
-)
-add_doc(libdm_HTML html/manuals/libdm REQUIRED "libdm")
-
-set(
   librt_HTML
   manuals/librt/contents.html
   manuals/librt/dg_obj.html

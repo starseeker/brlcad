@@ -71,7 +71,7 @@ _dm_cmd_during_clbk(struct _ged_dm_info *gd, int argc, const char **argv)
     if (ged_clbk_get(&clbk, &u2, gd->gedp, "dm", BU_CLBK_DURING) != BRLCAD_OK || !clbk)
         return;
 
-    const char *dbg = getenv("GED_DM_DURING_DEBUG");
+    const char *dbg = getenv("GED_DISPLAY_DURING_DEBUG");
     if (dbg && BU_STR_EQUAL(dbg, "1")) {
         bu_log("ged dm during callback: ");
         for (int i = 0; i < argc; i++) {
@@ -636,15 +636,6 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	bu_vls_free(&renderer_name);
 	return BRLCAD_ERROR;
     }
-    if (requested_engine == BRLOBOL_RENDER_ENGINE_RT) {
-	bu_vls_printf(gd->gedp->ged_result_str,
-		"renderer 'rt' is not implemented\n");
-	bu_vls_free(&view_name);
-	bu_vls_free(&host_name);
-	bu_vls_free(&renderer_name);
-	return BRLCAD_ERROR;
-    }
-
     struct brlobol_endpoint_property_value dpr_value =
 	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     (void)brlobol_display_endpoint_property_get(endpoint,
@@ -676,6 +667,8 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	desc.required_capabilities |= BRLOBOL_HOST_CAP_SYSTEM_GL;
     else if (requested_engine == BRLOBOL_RENDER_ENGINE_SW)
 	desc.required_capabilities |= BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+    else if (requested_engine == BRLOBOL_RENDER_ENGINE_RT)
+	desc.required_capabilities |= BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT;
 
     /* Host creation is staged by display_endpoint_host_open.  AUTO avoids
      * rejecting the old host before its replacement is ready; the descriptor

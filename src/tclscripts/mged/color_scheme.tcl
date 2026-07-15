@@ -20,7 +20,7 @@
 ###
 #
 # Description -
-#	GUI for setting the color scheme for display manager windows.
+#	GUI for setting the color scheme for graphics windows.
 #
 
 proc color_scheme_init {} {
@@ -185,7 +185,7 @@ proc color_scheme_build { id primary_title primary_map secondary_title secondary
 	set mged_color_scheme($id,smflag) 0
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     toplevel $top -screen $mged_gui($id,screen)
     set entry_width 12
@@ -198,7 +198,7 @@ proc color_scheme_build { id primary_title primary_map secondary_title secondary
     frame $top.csF$row
     label $top.activeL -text "Active Pane"
     hoc_register_data $top.activeL "Active Pane"\
-	    {{summary "The active pane is the pane (display manager) that is
+	    {{summary "The active pane is the pane (graphics view) that is
 tied to the GUI, effectively becoming the target of
 GUI interactions that affect panes."}}
     label $top.inactiveL -text "Inactive Pane"
@@ -404,7 +404,7 @@ proc color_scheme_apply { id } {
 	mged_apply_local $id "rset cs $key_a $color_a; rset cs $key_ia $color_ia"
     }
 
-    # force display manager windows to update their respective color schemes
+    # Force graphics windows to update their respective color schemes.
     mged_apply_local $id "rset cs mode \[rset cs mode\]"
 }
 
@@ -412,7 +412,7 @@ proc color_scheme_reset { id top } {
     global mged_gui
     global mged_color_scheme
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     foreach key_name_pair $mged_color_scheme(primary_map) {
 	set key [lindex $key_name_pair 0]

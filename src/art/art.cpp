@@ -176,6 +176,7 @@ imgstream_fb_t *fbp = NULL;
 
 extern "C" {
     FILE* outfp = NULL;
+    int rt_fb_output_enabled = 1;
     extern char* framebuffer;
     extern char* outputfile;
     extern char** objv;

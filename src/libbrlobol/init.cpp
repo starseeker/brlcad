@@ -37,12 +37,9 @@
 
 #include <Inventor/SoDB.h>
 
-extern void brlobol_osmesa_runtime_link(void);
-
 void
 brlobol_init(SoDB::ContextManager *contextManager)
 {
-    brlobol_osmesa_runtime_link();
     static bool initialized = false;
     if (initialized) {
 	if (contextManager)

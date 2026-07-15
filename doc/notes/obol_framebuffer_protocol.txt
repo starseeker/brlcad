@@ -15,9 +15,10 @@ is `include/imgstream/fbserv.h`; its implementation is in the
 * backend-neutral framebuffer operation dispatch; and
 * disconnect, cancellation, and cleanup state.
 
-Neither libdm nor an application host may implement a second packet switch or
-packet-handler loop.  The old `src/libdm/fbserv.c`, `src/fbserv/server.c`, and
-MGED-private protocol implementation are retired.
+Neither a compatibility framebuffer layer nor an application host may
+implement a second packet switch or packet-handler loop.  The old
+`src/libdm/fbserv.c`, `src/fbserv/server.c`, and MGED-private protocol
+implementation are retired.
 
 Ownership
 ---------
@@ -45,16 +46,16 @@ backend used by qged, GSH, and MGED.  qged supplies its borrowed
 Legacy Compatibility
 --------------------
 
-The only retained libdm protocol role is `src/libdm/fbserv_legacy.c`, a narrow
-backend adapter from `struct fb` operations to `struct fbserv_fb_ops`.  It does
-not parse messages, own clients, or run transports.  Standalone `fbserv` and
-the remaining Tcl/MGED framebuffer-object compatibility paths may install this
-adapter when they intentionally expose a legacy framebuffer.
+The `struct fb` compatibility API and its fbserv adapter are removed.  Every
+server installs an imgstream-native backend through `fbserv_set_backend`; no
+legacy framebuffer pointer or adapter remains in the protocol state.
 
-The removed `/dev/ogl`, `/dev/wgl`, `/dev/qtgl`, `/dev/swrast`, and
-`/dev/tkswrast` graphical framebuffer/display-manager paths must not be used as
-embedded image presentation fallbacks.  Supported visible presentation is an
-Obol window host over imgstream data.
+Legacy display names are accepted only by libbrlobol's explicit display-session
+provider boundary.  The current provider maps `/dev/X` and `/dev/swrast` to a
+software Obol host, and `/dev/ogl`, `/dev/wgl`, and `/dev/qtgl` to a System-GL
+Obol host.  These are top-level provider selections, never embedded image
+presentation fallbacks or restored display-manager drivers.  If no compatible
+provider is linked, opening the display fails explicitly.
 
 When a GED view has an endpoint, the external `rt`, `rtedge`, enabled `art`,
 and ERT commands launch their child renderer against that endpoint's imgstream
@@ -74,6 +75,18 @@ application update owner calls `BRLObolFramebufferStream::present` (or the
 equivalent source synchronization method) before requesting a render.  qged
 does this on its UI thread.  GSH and MGED do it in their command/refresh owner.
 Render traversal remains read-only with respect to stream publication.
+
+Standalone visible `rt` uses `brlobol_display_session_run`: tracing executes
+on a worker while the opening thread polls the provider.  Its pixel callbacks
+only coalesce a display-session frame request; the owner poll performs retained
+image synchronization and toolkit dispatch.  `fbserv` uses the same session
+contract from its service loop.  The standalone executables select one direct
+provider with a small compile-time branch: QtCAD is preferred and TclCAD is
+the fallback.  Those libraries own their respective application/event-loop
+setup; neither executable calls raw toolkit APIs.  With neither toolkit built,
+display targets fail explicitly and only non-window imgstream targets remain.
+`/dev/null` is a supported explicit diagnostic sink for measurement-only
+raytraces: it retains no image data and does not initialize a provider.
 
 Lifecycle Contract
 ------------------
@@ -95,12 +108,12 @@ and final scan bands, resize, flush/present, and readback through the Qt host.
 `gsh_obol_ert_smoke` runs a real single-threaded ERT and verifies that a
 meaningful partial image advances to a substantially different complete
 frame.  MGED smoke tests cover the Tcl host adapter and final ERT presentation.
+`libbrlobol_window_host` verifies a worker-backed display-session task while
+the owner polls, and `rt_display_swrast` plus `rt_display_ogl` run a real RT
+frame through the software and System-GL provider selections under Xvfb.
 
 Future Work
 -----------
 
-The legacy `struct fb` backend adapter may be removed once standalone fbserv
-and Tcl framebuffer-object compatibility can use an imgstream-native backend.
-That deletion must not move protocol behavior into libbrlobol or application
-code.  Platform event-loop tests remain necessary for Windows and macOS, but
-the ownership contract is platform-independent.
+Platform event-loop tests remain necessary for Windows and macOS, but the
+ownership contract is platform-independent.

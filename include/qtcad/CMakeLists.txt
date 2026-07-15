@@ -7,6 +7,7 @@ set(
   QgColorRGB.h
   QgConsole.h
   QgConsoleListener.h
+  display_provider.h
   QgDockWidget.h
   QgFlowLayout.h
   QgGedEventBatch.h

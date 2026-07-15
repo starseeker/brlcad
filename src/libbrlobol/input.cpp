@@ -8,6 +8,8 @@
 #include "common.h"
 
 #include "brlobol/input.h"
+#include "brlobol/display_endpoint.h"
+#include "bv.h"
 
 #include <limits.h>
 
@@ -306,6 +308,153 @@ brlobol_input_keyboard_view_profile(void)
 	sizeof(bindings) / sizeof(bindings[0])
     };
     return &profile;
+}
+
+extern "C" int
+brlobol_input_view_orientation_apply(void *view_ctx,
+	BRLObolInputAction action)
+{
+    struct bv_context *context = static_cast<struct bv_context *>(view_ctx);
+    struct bv *view = bv_context_view(context);
+    if (!view)
+	return 0;
+
+    fastf_t azimuth = 0.0;
+    fastf_t elevation = 0.0;
+    switch (action) {
+	case BRLOBOL_ACTION_VIEW_2:
+	    azimuth = 35.0;
+	    elevation = -25.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_3:
+	    azimuth = 35.0;
+	    elevation = 25.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_4:
+	    azimuth = 45.0;
+	    elevation = 45.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_5:
+	    azimuth = 145.0;
+	    elevation = 25.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_6:
+	    azimuth = 215.0;
+	    elevation = 25.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_7:
+	    azimuth = 325.0;
+	    elevation = 25.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_TOP:
+	    azimuth = 270.0;
+	    elevation = 90.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_BOTTOM:
+	    azimuth = 270.0;
+	    elevation = -90.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_LEFT:
+	    azimuth = 90.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_REAR:
+	    azimuth = 180.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_RIGHT:
+	    azimuth = 270.0;
+	    break;
+	case BRLOBOL_ACTION_VIEW_FRONT:
+	    break;
+	default:
+	    return 0;
+    }
+
+    vect_t aet;
+    VSET(aet, azimuth, elevation, 0.0);
+    if (!bv_aet_set(view, aet))
+	return 0;
+    return bv_context_update(context, BV_CONTEXT_CHANGED_VIEW) ? 1 : 0;
+}
+
+static const char *
+brlobol_input_faceplate_visibility_property(BRLObolInputAction action)
+{
+    switch (action) {
+	case BRLOBOL_ACTION_TOGGLE_ADC:
+	    return "view.faceplate.adc.visible";
+	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES:
+	    return "view.faceplate.model_axes.visible";
+	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES:
+	    return "view.faceplate.view_axes.visible";
+	default:
+	    return NULL;
+    }
+}
+
+extern "C" int
+brlobol_display_endpoint_input_faceplate_toggle_apply(
+	brlobol_display_endpoint_t *endpoint, void *view_ctx,
+	BRLObolInputAction action, int *visible)
+{
+    const char *property_name =
+	brlobol_input_faceplate_visibility_property(action);
+    if (!property_name)
+	return 0;
+
+    if (endpoint) {
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	const int get_result = brlobol_display_endpoint_property_get(endpoint,
+	    property_name, &value);
+	if (get_result == BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    if (value.type != BRLOBOL_ENDPOINT_PROPERTY_BOOL)
+		return 0;
+	    value.bool_value = value.bool_value ? 0 : 1;
+	    const int set_result = brlobol_display_endpoint_property_set(endpoint,
+		property_name, &value);
+	    if (set_result != BRLOBOL_ENDPOINT_PROPERTY_OK)
+		return 0;
+	    if (visible)
+		*visible = value.bool_value;
+	    return 1;
+	}
+	/* A standalone controller has no GED property owner.  It retains the
+	 * same state locally rather than inventing an application renderer path. */
+	if (get_result != BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
+	    return 0;
+    }
+
+    if (!view_ctx)
+	return 0;
+    struct bv_context *context = static_cast<struct bv_context *>(view_ctx);
+    struct bv *view = bv_context_view(context);
+    if (!view)
+	return 0;
+
+    if (action == BRLOBOL_ACTION_TOGGLE_ADC) {
+	struct bv_adc_state state = {};
+	if (!bv_adc_state_get(&state, view))
+	    return 0;
+	state.draw = state.draw ? 0 : 1;
+	if (!bv_adc_state_set(view, &state))
+	    return 0;
+	if (visible)
+	    *visible = state.draw ? 1 : 0;
+	return 1;
+    }
+
+    struct bv_axes_state state = {};
+    const int model_axes = action == BRLOBOL_ACTION_TOGGLE_MODEL_AXES;
+    if (!(model_axes ? bv_model_axes_state_get(&state, view) :
+	bv_view_axes_state_get(&state, view)))
+	return 0;
+    state.draw = state.draw ? 0 : 1;
+    if (!(model_axes ? bv_model_axes_state_set(view, &state) :
+	bv_view_axes_state_set(view, &state)))
+	return 0;
+    if (visible)
+	*visible = state.draw ? 1 : 0;
+    return 1;
 }
 
 const BRLObolInputProfile &

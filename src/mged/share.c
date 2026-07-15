@@ -171,7 +171,7 @@ f_share(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *ar
 	    return TCL_ERROR;
 	}
 
-	/* same display manager */
+	/* same graphics view */
 	if (dlp1 == dlp2) {
 	    bu_vls_free(&vls);
 	    return TCL_OK;

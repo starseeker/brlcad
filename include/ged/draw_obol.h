@@ -40,6 +40,7 @@ struct rt_db_internal;
 struct bg_tess_tol;
 struct bn_tol;
 struct imgstream_fb;
+struct brlobol_display_endpoint;
 
 typedef int (*ged_draw_obol_framebuffer_operation_t)(
 	struct imgstream_fb *fb,
@@ -107,8 +108,8 @@ struct ged_draw_obol_source_prewarm_status {
  * C-compatible form of ged_draw_obol_controller_attach.
  *
  * @p controller is a borrowed BRLObolViewController pointer passed as opaque
- * storage so C callers such as the GED dm command can attach a libdm-owned
- * Obol backend without exposing C++ types.
+ * storage so C callers such as the GED dm command can attach an Obol backend
+ * without exposing C++ types.
  */
 GED_EXPORT int
 ged_draw_obol_controller_attach_opaque(struct ged *gedp,
@@ -119,8 +120,8 @@ ged_draw_obol_controller_attach_opaque(struct ged *gedp,
  * Attach a borrowed Obol view controller for one GED view.
  *
  * Unlike ged_draw_obol_controller_attach_opaque, this does not replace other
- * attached Obol controllers.  It is intended for libdm-owned Obol display
- * managers, where each view has its own renderer/controller.
+ * attached Obol controllers.  It is intended for application-owned Obol display
+ * hosts, where each view has its own renderer/controller.
  */
 GED_EXPORT int
 ged_draw_obol_controller_attach_opaque_for_view(struct ged *gedp,
@@ -205,11 +206,12 @@ ged_draw_obol_framebuffer_present(struct ged *gedp);
  * toolkit-specific socket/notifier integration may replace it afterward.
  *
  * @p window_host is a borrowed BRLObolWindowHost pointer passed as opaque
- * storage so C callers do not depend on C++ types.  Passing NULL uses
+ * storage so C callers do not depend on C++ types.  Passing NULL first uses
+ * the host bound to the view's display endpoint and otherwise falls back to
  * libged's generic window host.  Non-positive dimensions are derived from the
  * view context or attached display manager.  @p present_on_flush should only
- * be set by app-host integrations whose fbserv packet handlers run on the
- * host's scene/update thread.
+ * be set by callers that manage presentation on the configured host's
+ * scene/update thread.
  */
 GED_EXPORT int
 ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
@@ -220,9 +222,10 @@ ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
 	int present_on_flush);
 
 /**
- * Install the Obol framebuffer backend with libged's generic image host and
- * libimgstream's default descriptor transport.  Toolkit factory instances are
- * opaque; toolkit shells use this form and may replace the transport afterward.
+ * Install the Obol framebuffer backend using the active endpoint's existing
+ * host, falling back to libged's generic image host when none is attached.
+ * Libimgstream provides the default descriptor transport; toolkit shells use
+ * this form and may replace only that transport afterward.
  */
 GED_EXPORT int
 ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
@@ -266,6 +269,16 @@ ged_draw_obol_view_display_image(struct ged *gedp,
  */
 GED_EXPORT void
 ged_draw_obol_framebuffer_release(struct ged *gedp);
+
+/**
+ * Detach the session framebuffer stream from an endpoint before that endpoint
+ * is replaced or destroyed.  This clears the endpoint capture provider and
+ * closes the retained image at its owning host; the session transport remains
+ * available for explicit rebinding to a replacement endpoint.
+ */
+GED_EXPORT void
+ged_draw_obol_framebuffer_endpoint_detach(struct ged *gedp,
+	struct brlobol_display_endpoint *endpoint);
 
 /**
  * Synchronize faceplate/HUD state from a GED view context into that view's

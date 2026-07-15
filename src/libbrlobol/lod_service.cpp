@@ -1517,17 +1517,27 @@ struct BRLObolLodSubscriberCall {
     void *userData;
 };
 
-/* Result-ready callbacks run on a worker thread.  Record the active callback
- * there so an owner can safely unsubscribe itself during its final dispatch. */
+/* Result-ready callbacks run on a worker thread.  Track the entire collected
+ * dispatch so a callback can also remove a later callback without waiting on
+ * the reservation held by this same dispatch. */
 static thread_local BRLObolLodServicePrivate *lod_callback_service = NULL;
-static thread_local BRLObolLodSubscriberId lod_callback_subscriber = 0;
+static thread_local const std::vector<BRLObolLodSubscriberCall> *
+    lod_callback_dispatch = NULL;
 
-static SbBool
-lod_callback_is_current(const BRLObolLodServicePrivate *p,
-	BRLObolLodSubscriberId id)
+static size_t
+lod_callback_dispatch_reservations(const BRLObolLodServicePrivate *p,
+				   BRLObolLodSubscriberId id)
 {
-    return lod_callback_service == p && lod_callback_subscriber == id ?
-	TRUE : FALSE;
+    if (lod_callback_service != p || !lod_callback_dispatch)
+	return 0;
+
+    size_t reservations = 0;
+    for (size_t i = 0; i < lod_callback_dispatch->size(); i++) {
+	if ((*lod_callback_dispatch)[i].id == id)
+	    reservations++;
+    }
+
+    return reservations;
 }
 
 static std::vector<BRLObolLodSubscriberCall>
@@ -1554,7 +1564,7 @@ lod_collect_result_ready_callbacks(BRLObolLodServicePrivate *p)
 
 static void
 lod_complete_result_ready_callback(BRLObolLodServicePrivate *p,
-				   BRLObolLodSubscriberId id)
+					   BRLObolLodSubscriberId id)
 {
     std::lock_guard<std::mutex> lock(p->mutex);
 
@@ -1569,6 +1579,20 @@ lod_complete_result_ready_callback(BRLObolLodServicePrivate *p,
     p->subscriberCv.notify_all();
 }
 
+static SbBool
+lod_result_ready_callback_active(BRLObolLodServicePrivate *p,
+				 BRLObolLodSubscriberId id)
+{
+    std::lock_guard<std::mutex> lock(p->mutex);
+
+    for (size_t i = 0; i < p->subscribers.size(); i++) {
+	if (p->subscribers[i].id == id)
+	    return p->subscribers[i].active;
+    }
+
+    return FALSE;
+}
+
 static void
 lod_notify_result_ready(BRLObolLodServicePrivate *p)
 {
@@ -1577,14 +1601,15 @@ lod_notify_result_ready(BRLObolLodServicePrivate *p)
 
     for (size_t i = 0; i < calls.size(); i++) {
 	BRLObolLodServicePrivate *previous_service = lod_callback_service;
-	const BRLObolLodSubscriberId previous_subscriber =
-	    lod_callback_subscriber;
+	const std::vector<BRLObolLodSubscriberCall> *previous_dispatch =
+	    lod_callback_dispatch;
 	lod_callback_service = p;
-	lod_callback_subscriber = calls[i].id;
-	if (calls[i].callback)
+	lod_callback_dispatch = &calls;
+	if (calls[i].callback &&
+	    lod_result_ready_callback_active(p, calls[i].id))
 	    (*calls[i].callback)(p->owner, calls[i].userData);
 	lod_callback_service = previous_service;
-	lod_callback_subscriber = previous_subscriber;
+	lod_callback_dispatch = previous_dispatch;
 	lod_complete_result_ready_callback(p, calls[i].id);
     }
 }
@@ -2192,15 +2217,16 @@ BRLObolLodService::unsubscribeResultReady(BRLObolLodSubscriberId id)
 	    continue;
 
 	this->p->subscribers[i].active = FALSE;
-	if (!lod_callback_is_current(this->p, id)) {
-	    this->p->subscriberCv.wait(lock, [this, id] {
+	const size_t localReservations =
+	    lod_callback_dispatch_reservations(this->p, id);
+	this->p->subscriberCv.wait(lock, [this, id, localReservations] {
 		for (size_t j = 0; j < this->p->subscribers.size(); j++) {
 		    if (this->p->subscribers[j].id == id)
-			return this->p->subscribers[j].inFlight == 0;
+			return this->p->subscribers[j].inFlight <=
+			    localReservations;
 		}
 		return true;
-	    });
-	}
+	});
 	for (size_t j = 0; j < this->p->subscribers.size(); j++) {
 	    if (this->p->subscribers[j].id == id) {
 		this->p->subscribers.erase(

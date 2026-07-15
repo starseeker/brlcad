@@ -52,6 +52,10 @@ QgGL::QgGL(QWidget *parent, BRLObolViewController *controller,
     qgcanvas_sync_obol_camera(*d);
     qgcanvas_initialize_obol_background(*d);
 
+    /* Obol clears and redraws every pixel in paintGL, so preserving the
+     * previous QOpenGLWidget framebuffer only adds presentation work. */
+    setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
+
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
     // resolution scaling, rotation, etc.

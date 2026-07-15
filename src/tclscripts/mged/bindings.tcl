@@ -22,7 +22,7 @@ if ![info exists mged_players] {
     set mged_players {}
 }
 
-proc mged_bind_dm { w } {
+proc mged_bind_endpoint { w } {
     global hot_key
     global forwarding_key
     global tcl_platform
@@ -30,7 +30,7 @@ proc mged_bind_dm { w } {
     # KeySym for <F9> --> 0xffc6 --> 65478
     set hot_key 65478
 
-    #make this the current display manager
+    # Make this the current graphics endpoint.
     if { $::tcl_platform(platform) != "windows" && $::tcl_platform(os) != "Darwin" } {
 	bind $w <Enter> "winset $w; focus $w;"
     } else {
@@ -57,8 +57,8 @@ proc print_return_val str {
     }
 }
 
-if ![info exists mged_default(dm_key_bindings)] {
-    set mged_default(dm_key_bindings) "\tKey Sequence\t\tBehavior
+if ![info exists mged_default(pane_key_bindings)] {
+    set mged_default(pane_key_bindings) "\tKey Sequence\t\tBehavior
 \ta\t\t\ttoggle angle distance cursor (ADC)
 \te\t\t\ttoggle edit axes
 \tm\t\t\ttoggle model axes
@@ -494,7 +494,7 @@ proc update_gui { w vname val } {
     global mged_gui
 
     foreach id $mged_players {
-	if {$mged_gui($id,active_dm) == $w} {
+	if {$mged_gui($id,active_pane) == $w} {
 	    set mged_gui($id,$vname) $val
 	    return
 	}

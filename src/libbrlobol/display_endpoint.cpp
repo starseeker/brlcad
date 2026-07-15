@@ -7,18 +7,34 @@
 
 #include "common.h"
 
+#include "bu/malloc.h"
 #include "bu/str.h"
 
 #include "brlobol/display_endpoint.h"
+#include "brlobol/image_source.h"
 #include "brlobol/init.h"
+#include "brlobol/rt_render.h"
 #include "brlobol/scene_group.h"
 #include "brlobol/view_controller.h"
+#include "brlobol/viewport_image.h"
 #include "brlobol/window_host.h"
 
+#include "imgstream/stream.h"
+
+#include <Inventor/nodes/SoGroup.h>
+
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+struct EndpointRtState;
 
 struct brlobol_display_endpoint {
     brlobol_display_endpoint(void) :
@@ -40,7 +56,8 @@ struct brlobol_display_endpoint {
 	factory_frame_callback_bound(false),
 	property_get_callback(NULL),
 	property_set_callback(NULL),
-	property_user_data(NULL)
+	property_user_data(NULL),
+	rt(NULL)
     {
 	input.setProfile(brlobol_input_default_view_profile());
     }
@@ -66,9 +83,62 @@ struct brlobol_display_endpoint {
     brlobol_endpoint_property_get_callback property_get_callback;
     brlobol_endpoint_property_set_callback property_set_callback;
     void *property_user_data;
+    EndpointRtState *rt;
+};
+
+/* librt owns no Coin or GUI state.  The worker stores complete RGB frames
+ * here; the controller's presentation hook applies them on the host thread. */
+struct EndpointRtState {
+    EndpointRtState(void) :
+	cancelled(false),
+	generation(0),
+	readyWidth(0),
+	readyHeight(0),
+	ready(false),
+	presentedWidth(0),
+	presentedHeight(0),
+	workers(0),
+	samples(1),
+	previewScale(4),
+	frameBudgetMilliseconds(33),
+	interactiveQuality(true),
+	presentationLayer(SoBRLViewportImage::INTERLAY),
+	stream(NULL),
+	source(NULL),
+	viewport(NULL),
+	presentationRoot(NULL),
+	presentationAttached(false)
+    {
+    }
+
+    BRLObolRtRenderer renderer;
+    std::thread worker;
+    std::mutex readyMutex;
+    std::atomic_bool cancelled;
+    std::atomic<uint64_t> generation;
+    std::vector<unsigned char> readyPixels;
+    BRLObolRtRenderPlanes readyPlanes;
+    unsigned int readyWidth;
+    unsigned int readyHeight;
+    bool ready;
+    BRLObolRtRenderPlanes presentedPlanes;
+    unsigned int presentedWidth;
+    unsigned int presentedHeight;
+    unsigned int workers;
+    unsigned int samples;
+    unsigned int previewScale;
+    unsigned int frameBudgetMilliseconds;
+    bool interactiveQuality;
+    int presentationLayer;
+    imgstream_t *stream;
+    SoBRLImageSource *source;
+    SoBRLViewportImage *viewport;
+    SoGroup *presentationRoot;
+    bool presentationAttached;
 };
 
 static bool valid_engine(enum brlobol_render_engine engine);
+static int endpoint_rt_start(brlobol_display_endpoint_t *endpoint);
 
 static void
 endpoint_frame_requested(void *user_data, const char *reason)
@@ -105,6 +175,483 @@ endpoint_dimensions_refresh(brlobol_display_endpoint_t *endpoint)
 	endpoint->height = height;
     if (device_pixel_ratio > 0.0)
 	endpoint->device_pixel_ratio = device_pixel_ratio;
+}
+
+static void
+endpoint_rt_stop(brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || !endpoint->rt)
+	return;
+    EndpointRtState *state = endpoint->rt;
+    state->cancelled.store(true, std::memory_order_release);
+    if (state->worker.joinable())
+	state->worker.join();
+}
+
+static void
+endpoint_rt_remove_presentation(brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || !endpoint->rt)
+	return;
+    EndpointRtState *state = endpoint->rt;
+    if (state->presentationAttached && state->presentationRoot &&
+	state->viewport) {
+	for (int i = 0; i < state->presentationRoot->getNumChildren(); ++i) {
+	    if (state->presentationRoot->getChild(i) == state->viewport) {
+		state->presentationRoot->removeChild(i);
+		break;
+	    }
+	}
+    }
+    state->presentationAttached = false;
+    state->presentationRoot = NULL;
+    if (state->viewport) {
+	state->viewport->unref();
+	state->viewport = NULL;
+    }
+    if (state->source) {
+	state->source->unref();
+	state->source = NULL;
+    }
+    if (state->stream) {
+	imgstream_destroy(state->stream);
+	state->stream = NULL;
+    }
+}
+
+static SoGroup *
+endpoint_rt_presentation_root(BRLObolViewController *controller, int layer)
+{
+    if (!controller)
+	return NULL;
+    switch (layer) {
+	case SoBRLViewportImage::UNDERLAY:
+	return controller->getFramebufferUnderlayRoot();
+	case SoBRLViewportImage::OVERLAY:
+	return controller->getFramebufferOverlayRoot();
+	case SoBRLViewportImage::INTERLAY:
+	return controller->getFramebufferInterlayRoot();
+	default:
+	return NULL;
+    }
+}
+
+static const char *
+endpoint_rt_presentation_layer_name(int layer)
+{
+    switch (layer) {
+	case SoBRLViewportImage::UNDERLAY:
+	return "underlay";
+	case SoBRLViewportImage::OVERLAY:
+	return "overlay";
+	case SoBRLViewportImage::INTERLAY:
+	return "interlay";
+	default:
+	return NULL;
+    }
+}
+
+static int
+endpoint_rt_presentation_layer_from_name(const char *name, int *layer)
+{
+    if (!name || !layer)
+	return 0;
+    if (bu_strcmp(name, "underlay") == 0)
+	*layer = SoBRLViewportImage::UNDERLAY;
+    else if (bu_strcmp(name, "interlay") == 0)
+	*layer = SoBRLViewportImage::INTERLAY;
+    else if (bu_strcmp(name, "overlay") == 0)
+	*layer = SoBRLViewportImage::OVERLAY;
+    else
+	return 0;
+    return 1;
+}
+
+static int
+endpoint_rt_presentation_layer_apply(brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || !endpoint->controller || !endpoint->rt)
+	return 0;
+    EndpointRtState *state = endpoint->rt;
+    if (!state->viewport)
+	return 1;
+    SoGroup *root = endpoint_rt_presentation_root(endpoint->controller,
+	state->presentationLayer);
+    if (!root)
+	return 0;
+
+    if (state->presentationAttached && state->presentationRoot != root &&
+	state->presentationRoot) {
+	for (int i = 0; i < state->presentationRoot->getNumChildren(); ++i) {
+	    if (state->presentationRoot->getChild(i) == state->viewport) {
+		state->presentationRoot->removeChild(i);
+		break;
+	    }
+	}
+	state->presentationAttached = false;
+    }
+
+    state->viewport->layer = state->presentationLayer;
+    if (!state->presentationAttached) {
+	if (state->viewport->rebuildGeometry() != 0)
+	    return 0;
+	root->addChild(state->viewport);
+	state->presentationRoot = root;
+	state->presentationAttached = true;
+    }
+    return 1;
+}
+
+static int
+endpoint_rt_ensure_presentation(brlobol_display_endpoint_t *endpoint,
+	unsigned int width, unsigned int height)
+{
+    if (!endpoint || !endpoint->controller || !endpoint->rt || !width ||
+	!height)
+	return 0;
+    EndpointRtState *state = endpoint->rt;
+    SoGroup *root = endpoint_rt_presentation_root(endpoint->controller,
+	state->presentationLayer);
+    if (!root)
+	return 0;
+
+    if (!state->stream) {
+	state->stream = imgstream_create(width, height, IMGSTREAM_PIXEL_RGB8);
+	if (!state->stream)
+	    return 0;
+	state->source = new (std::nothrow) SoBRLImageSource;
+	if (state->source)
+	    state->source->ref();
+	state->viewport = new (std::nothrow) SoBRLViewportImage;
+	if (state->viewport)
+	    state->viewport->ref();
+	if (!state->source || !state->viewport) {
+	    endpoint_rt_remove_presentation(endpoint);
+	    return 0;
+	}
+	state->source->imageId = "renderer::rt";
+	state->source->sourceUri = "librt:retained";
+	if (state->source->setStream(state->stream) != 0) {
+	    endpoint_rt_remove_presentation(endpoint);
+	    return 0;
+	}
+	state->viewport->overlayId = "renderer::rt";
+	state->viewport->imageSource.setValue(state->source);
+	state->viewport->layer = state->presentationLayer;
+	state->viewport->anchor = SoBRLViewportImage::LOWER_LEFT;
+	state->viewport->fit = SoBRLViewportImage::STRETCH;
+	state->viewport->preserveAspect = FALSE;
+	state->viewport->position.setValue(0.0f, 0.0f);
+	state->viewport->cursorVisible = FALSE;
+    }
+
+    if (imgstream_width(state->stream) != width ||
+	imgstream_height(state->stream) != height) {
+	if (imgstream_resize(state->stream, width, height) != 0)
+	    return 0;
+    }
+    state->viewport->size.setValue(static_cast<float>(width),
+	static_cast<float>(height));
+    state->viewport->sourceCenter.setValue(static_cast<float>(width) * 0.5f,
+	static_cast<float>(height) * 0.5f);
+    state->viewport->sourceZoom = 1.0f;
+
+    return endpoint_rt_presentation_layer_apply(endpoint);
+}
+
+static bool
+endpoint_rt_scene_request(const char *reason)
+{
+    if (!reason || !reason[0])
+	return false;
+    return bu_strcmp(reason, "rt-view-camera") == 0 ||
+	bu_strcmp(reason, "camera") == 0 ||
+	bu_strcmp(reason, "viewport") == 0 ||
+	bu_strcmp(reason, "viewport-size") == 0 ||
+	bu_strcmp(reason, "background") == 0 ||
+	bu_strcmp(reason, "clip-bounds") == 0 ||
+	bu_strcmp(reason, "lighting") == 0 ||
+	bu_strcmp(reason, "transparency") == 0 ||
+	bu_strcmp(reason, "scene-root") == 0 ||
+	bu_strcmp(reason, "render-scene-root") == 0 ||
+	bu_strcmp(reason, "view-attachment") == 0 ||
+	bu_strcmp(reason, "database-source") == 0 ||
+	bu_strcmp(reason, "external property") == 0;
+}
+
+static void
+endpoint_rt_clear_presentation(brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || !endpoint->controller || !endpoint->rt ||
+	!endpoint->rt->stream || !endpoint->rt->source ||
+	!endpoint->rt->viewport)
+	return;
+    EndpointRtState *state = endpoint->rt;
+    const unsigned int width = static_cast<unsigned int>(
+	imgstream_width(state->stream));
+    const unsigned int height = static_cast<unsigned int>(
+	imgstream_height(state->stream));
+    if (!width || !height)
+	return;
+    const SbColor bottom = endpoint->controller->getBackgroundBottomColor();
+    const SbColor top = endpoint->controller->getBackgroundTopColor();
+    std::vector<unsigned char> pixels(static_cast<size_t>(width) * height * 3u,
+	0u);
+    for (unsigned int y = 0; y < height; ++y) {
+	const float t = height > 1u ? static_cast<float>(y) /
+	    static_cast<float>(height - 1u) : 0.0f;
+	const SbColor background = bottom * (1.0f - t) + top * t;
+	for (unsigned int x = 0; x < width; ++x) {
+	    unsigned char *pixel = &pixels[(static_cast<size_t>(y) * width + x) * 3u];
+	    pixel[0] = static_cast<unsigned char>(std::lround(
+		std::max(0.0f, std::min(1.0f, background[0])) * 255.0f));
+	    pixel[1] = static_cast<unsigned char>(std::lround(
+		std::max(0.0f, std::min(1.0f, background[1])) * 255.0f));
+	    pixel[2] = static_cast<unsigned char>(std::lround(
+		std::max(0.0f, std::min(1.0f, background[2])) * 255.0f));
+	}
+    }
+    if (imgstream_write(state->stream, pixels.data(),
+	static_cast<size_t>(width) * 3u) == 0) {
+	(void)state->source->refreshFromStream();
+	(void)state->viewport->syncFromSource();
+    }
+}
+
+static void
+endpoint_rt_presentation_sync(void *userData)
+{
+    brlobol_display_endpoint_t *endpoint =
+	static_cast<brlobol_display_endpoint_t *>(userData);
+    if (!endpoint || endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
+	!endpoint->rt)
+	return;
+    if (endpoint_rt_scene_request(endpoint->controller->getRenderReason().getString())) {
+	(void)endpoint_rt_start(endpoint);
+	return;
+    }
+    EndpointRtState *state = endpoint->rt;
+    std::vector<unsigned char> pixels;
+    BRLObolRtRenderPlanes planes;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    {
+	std::lock_guard<std::mutex> lock(state->readyMutex);
+	if (!state->ready)
+	    return;
+	pixels.swap(state->readyPixels);
+	planes = std::move(state->readyPlanes);
+	width = state->readyWidth;
+	height = state->readyHeight;
+	state->ready = false;
+    }
+    if (!endpoint_rt_ensure_presentation(endpoint, width, height) ||
+	!state->stream || pixels.size() !=
+	static_cast<size_t>(width) * static_cast<size_t>(height) * 3u)
+	return;
+    if (imgstream_write(state->stream, pixels.data(),
+	static_cast<size_t>(width) * 3u) != 0 ||
+	state->source->refreshFromStream() != 0 ||
+	state->viewport->syncFromSource() != 0)
+	return;
+    {
+	std::lock_guard<std::mutex> lock(state->readyMutex);
+	state->presentedPlanes = std::move(planes);
+	state->presentedWidth = width;
+	state->presentedHeight = height;
+    }
+}
+
+static void
+endpoint_rt_publish(brlobol_display_endpoint_t *endpoint,
+	EndpointRtState *state, uint64_t generation,
+	std::vector<unsigned char> &&pixels, BRLObolRtRenderPlanes &&planes,
+	unsigned int width, unsigned int height)
+{
+    if (!endpoint || !state || state->cancelled.load(std::memory_order_acquire) ||
+	state->generation.load(std::memory_order_acquire) != generation)
+	return;
+    {
+	std::lock_guard<std::mutex> lock(state->readyMutex);
+	if (state->cancelled.load(std::memory_order_acquire) ||
+	    state->generation.load(std::memory_order_acquire) != generation)
+	    return;
+	state->readyPixels = std::move(pixels);
+	state->readyPlanes = std::move(planes);
+	state->readyWidth = width;
+	state->readyHeight = height;
+	state->ready = true;
+    }
+    endpoint->controller->requestRender("rt-frame");
+    endpoint_frame_requested(endpoint, "rt-frame");
+}
+
+static std::vector<unsigned char>
+endpoint_rt_upscale(const std::vector<unsigned char> &pixels,
+	unsigned int sourceWidth, unsigned int sourceHeight, unsigned int width,
+	unsigned int height)
+{
+    std::vector<unsigned char> enlarged(static_cast<size_t>(width) * height * 3u,
+	0u);
+    if (pixels.size() != static_cast<size_t>(sourceWidth) * sourceHeight * 3u ||
+	!sourceWidth || !sourceHeight)
+	return enlarged;
+    for (unsigned int y = 0; y < height; ++y) {
+	const unsigned int sourceY = std::min(sourceHeight - 1u,
+	    static_cast<unsigned int>((static_cast<uint64_t>(y) * sourceHeight) /
+	    height));
+	for (unsigned int x = 0; x < width; ++x) {
+	    const unsigned int sourceX = std::min(sourceWidth - 1u,
+		static_cast<unsigned int>((static_cast<uint64_t>(x) * sourceWidth) /
+		width));
+	    const size_t sourceOffset =
+		(static_cast<size_t>(sourceY) * sourceWidth + sourceX) * 3u;
+	    const size_t offset = (static_cast<size_t>(y) * width + x) * 3u;
+	    enlarged[offset] = pixels[sourceOffset];
+	    enlarged[offset + 1u] = pixels[sourceOffset + 1u];
+	    enlarged[offset + 2u] = pixels[sourceOffset + 2u];
+	}
+    }
+    return enlarged;
+}
+
+static void
+endpoint_rt_worker(brlobol_display_endpoint_t *endpoint, EndpointRtState *state,
+	uint64_t generation, BRLObolRtRenderSettings settings,
+	unsigned int previewScale, unsigned int frameBudgetMilliseconds,
+	bool interactiveQuality)
+{
+    if (!endpoint || !state)
+	return;
+    if (interactiveQuality && previewScale > 1u) {
+	BRLObolRtRenderSettings preview = settings;
+	preview.width = std::max(1u, settings.width / previewScale);
+	preview.height = std::max(1u, settings.height / previewScale);
+	preview.samples = 1u;
+	std::vector<unsigned char> previewPixels;
+	if (state->renderer.render(preview, previewPixels, NULL,
+	    &state->cancelled)) {
+	    endpoint_rt_publish(endpoint, state, generation,
+		endpoint_rt_upscale(previewPixels, preview.width, preview.height,
+		settings.width, settings.height), BRLObolRtRenderPlanes(),
+		settings.width, settings.height);
+	}
+    }
+    if (state->cancelled.load(std::memory_order_acquire))
+	return;
+
+    /* Render complete rows into one retained image.  This keeps every
+     * publication self-contained while allowing a slow final image to make
+     * visible progress at a caller-selected cadence.  The row batch adapts to
+     * its measured cost; a single row remains the lower bound when a scene is
+     * expensive enough that it alone exceeds the requested budget. */
+    std::vector<unsigned char> pixels;
+	BRLObolRtRenderPlanes planes;
+    unsigned int firstRow = 0;
+    unsigned int rowBatch = std::max(1u, std::min(settings.workers, 32u));
+    const unsigned int budget = std::max(1u, frameBudgetMilliseconds);
+    std::chrono::steady_clock::time_point lastPublish =
+	std::chrono::steady_clock::now();
+    while (firstRow < settings.height &&
+	!state->cancelled.load(std::memory_order_acquire)) {
+	const unsigned int rows = std::min(rowBatch, settings.height - firstRow);
+	const std::chrono::steady_clock::time_point batchStart =
+	    std::chrono::steady_clock::now();
+	if (!state->renderer.renderRowsWithPlanes(settings, pixels, planes,
+		firstRow, rows, NULL, &state->cancelled))
+	    return;
+	firstRow += rows;
+	const std::chrono::steady_clock::time_point now =
+	    std::chrono::steady_clock::now();
+	const unsigned int batchMilliseconds = static_cast<unsigned int>(
+	    std::chrono::duration_cast<std::chrono::milliseconds>(
+		now - batchStart).count());
+	if (batchMilliseconds > budget && rowBatch > 1u) {
+	    rowBatch = std::max(1u, rowBatch / 2u);
+	} else if (batchMilliseconds < budget / 2u) {
+	    rowBatch = std::min(128u, rowBatch * 2u);
+	}
+
+	const unsigned int elapsedMilliseconds = static_cast<unsigned int>(
+	    std::chrono::duration_cast<std::chrono::milliseconds>(
+		now - lastPublish).count());
+	if (firstRow < settings.height && elapsedMilliseconds >= budget) {
+	    std::vector<unsigned char> partial(pixels);
+	    BRLObolRtRenderPlanes partialPlanes(planes);
+	    endpoint_rt_publish(endpoint, state, generation, std::move(partial),
+		std::move(partialPlanes), settings.width, settings.height);
+	    lastPublish = now;
+	}
+    }
+    if (!state->cancelled.load(std::memory_order_acquire))
+	endpoint_rt_publish(endpoint, state, generation, std::move(pixels),
+	    std::move(planes), settings.width, settings.height);
+}
+
+static int
+endpoint_rt_start(brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || !endpoint->controller ||
+	endpoint->engine != BRLOBOL_RENDER_ENGINE_RT)
+	return 0;
+    if (!endpoint->rt)
+	endpoint->rt = new (std::nothrow) EndpointRtState;
+    if (!endpoint->rt)
+	return 0;
+    EndpointRtState *state = endpoint->rt;
+    endpoint_rt_stop(endpoint);
+	{
+	std::lock_guard<std::mutex> lock(state->readyMutex);
+	state->readyPixels.clear();
+	state->readyPlanes.clear();
+	state->readyWidth = 0;
+	state->readyHeight = 0;
+	state->ready = false;
+	state->presentedPlanes.clear();
+	state->presentedWidth = 0;
+	state->presentedHeight = 0;
+	}
+    endpoint_dimensions_refresh(endpoint);
+    if (!endpoint_rt_ensure_presentation(endpoint, endpoint->width,
+	endpoint->height)) {
+	return 0;
+	}
+	endpoint_rt_clear_presentation(endpoint);
+	endpoint->controller->requestRender("rt-restart");
+	endpoint_frame_requested(endpoint, "rt-restart");
+	/* Renderer policy is valid before GED has supplied a camera.  Keep the
+	 * opaque presentation surface installed and start work on the next view
+	 * synchronization rather than reporting a supported engine as unavailable. */
+    if (!state->renderer.synchronize(endpoint->controller))
+	return 1;
+    state->cancelled.store(false, std::memory_order_release);
+    const uint64_t generation = state->generation.fetch_add(1,
+	std::memory_order_acq_rel) + 1u;
+    BRLObolRtRenderSettings settings;
+    settings.width = endpoint->width;
+    settings.height = endpoint->height;
+    settings.workers = state->workers ? state->workers :
+	std::max(1u, std::thread::hardware_concurrency());
+    settings.samples = state->samples;
+    settings.backgroundBottom = endpoint->controller->getBackgroundBottomColor();
+    settings.backgroundTop = endpoint->controller->getBackgroundTopColor();
+    state->worker = std::thread(endpoint_rt_worker, endpoint, state,
+	generation, settings, state->previewScale, state->frameBudgetMilliseconds,
+	state->interactiveQuality);
+    return 1;
+}
+
+static void
+endpoint_rt_destroy(brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || !endpoint->rt)
+	return;
+    endpoint_rt_stop(endpoint);
+    if (endpoint->controller)
+	endpoint->controller->clearPresentationSyncCallback(endpoint);
+    endpoint_rt_remove_presentation(endpoint);
+    delete endpoint->rt;
+    endpoint->rt = NULL;
 }
 
 #define FACEPLATE_AXES_STYLE_PROPERTIES(_axis) \
@@ -241,6 +788,30 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "render.rt.workers",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 1.0, 64.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "render.rt.samples",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 1.0, 64.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "render.rt.preview_scale",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 1.0, 16.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "render.rt.frame_budget_ms",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 1.0, 1000.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "render.rt.quality",
+	BRLOBOL_ENDPOINT_PROPERTY_ENUM,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 0.0, "interactive,final"},
+    {sizeof(brlobol_endpoint_property_desc), "composition.rt.layer",
+	BRLOBOL_ENDPOINT_PROPERTY_ENUM,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 0.0, "underlay,interlay,overlay"},
     {sizeof(brlobol_endpoint_property_desc), "renderer.clip.minimum",
 	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -338,6 +909,26 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 2147483647.0, NULL},
     {sizeof(brlobol_endpoint_property_desc), "view.faceplate.grid.color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"view.interactive.rectangle.visible",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"view.interactive.rectangle.line_width",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1048576.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"view.interactive.rectangle.line_style",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"view.interactive.rectangle.color",
 	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
@@ -487,7 +1078,7 @@ engine_host_compatible(enum brlobol_render_engine engine,
 	case BRLOBOL_RENDER_ENGINE_SW:
 	    return (capabilities & BRLOBOL_HOST_CAP_PIXEL_PRESENT) != 0;
 	case BRLOBOL_RENDER_ENGINE_RT:
-	    return false;
+	    return (capabilities & BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT) != 0;
 	default:
 	    return true;
     }
@@ -533,6 +1124,8 @@ brlobol_display_endpoint_host_detach(brlobol_display_endpoint_t *endpoint)
     if (!endpoint)
 	return;
 
+    endpoint_rt_stop(endpoint);
+
 	/* The factory callback is endpoint-owned.  Once it is cleared, a second
 	 * detach must not touch a controller that GED may already have released. */
     if (endpoint->factory_frame_callback_bound && endpoint->controller) {
@@ -572,6 +1165,7 @@ brlobol_display_endpoint_destroy(brlobol_display_endpoint_t *endpoint)
     if (!endpoint)
 	return;
 
+    endpoint_rt_destroy(endpoint);
     brlobol_display_endpoint_host_detach(endpoint);
     if (endpoint->owns_controller)
 	delete endpoint->controller;
@@ -589,8 +1183,11 @@ extern "C" int
 brlobol_display_endpoint_view_sync(brlobol_display_endpoint_t *endpoint,
 	const void *view_ctx)
 {
-    return endpoint && endpoint->controller && view_ctx &&
-	endpoint->controller->syncCameraFromViewContext(view_ctx) ? 1 : 0;
+    if (!endpoint || !endpoint->controller || !view_ctx ||
+	!endpoint->controller->syncCameraFromViewContext(view_ctx))
+	return 0;
+    return endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
+	endpoint_rt_start(endpoint) ? 1 : 0;
 }
 
 extern "C" int
@@ -598,12 +1195,13 @@ brlobol_display_endpoint_host_bind(brlobol_display_endpoint_t *endpoint,
 	void *host_ptr, unsigned int flags)
 {
     BRLObolWindowHost *host = static_cast<BRLObolWindowHost *>(host_ptr);
-    if (!endpoint || !endpoint->controller || !host)
+    if (!endpoint || !endpoint->controller || !host) {
 	return 0;
+    }
     if (endpoint->engine == BRLOBOL_RENDER_ENGINE_HW ||
-	endpoint->engine == BRLOBOL_RENDER_ENGINE_SW ||
-	endpoint->engine == BRLOBOL_RENDER_ENGINE_RT)
+	endpoint->engine == BRLOBOL_RENDER_ENGINE_SW) {
 	return 0;
+    }
 
     if (endpoint->host == host) {
 	endpoint->owns_host = endpoint->owns_host ||
@@ -615,9 +1213,10 @@ brlobol_display_endpoint_host_bind(brlobol_display_endpoint_t *endpoint,
 
     brlobol_display_endpoint_host_detach(endpoint);
     host->attachController(endpoint->controller, FALSE);
-    endpoint->host = host;
-    endpoint->owns_host = (flags & BRLOBOL_ENDPOINT_OWN_HOST) != 0;
-    return 1;
+	endpoint->host = host;
+	endpoint->owns_host = (flags & BRLOBOL_ENDPOINT_OWN_HOST) != 0;
+	return endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
+	    endpoint_rt_start(endpoint);
 }
 
 extern "C" void *
@@ -629,14 +1228,23 @@ brlobol_display_endpoint_host(const brlobol_display_endpoint_t *endpoint)
 	endpoint->host;
 }
 
+extern "C" void *
+brlobol_display_endpoint_framebuffer_window_host(
+	const brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint)
+	return NULL;
+    if (endpoint->factory && endpoint->factory_instance)
+	return brlobol_host_factory_instance_framebuffer_window_host(
+	    endpoint->factory, endpoint->factory_instance);
+    return endpoint->host;
+}
+
 extern "C" int
 brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
 	const char *factory_name, const struct brlobol_host_desc *desc)
 {
     if (!endpoint || !endpoint->controller)
-	return 0;
-
-    if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT)
 	return 0;
 
     struct brlobol_host_desc required_desc = {};
@@ -657,6 +1265,8 @@ brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
 	required_desc.required_capabilities |= BRLOBOL_HOST_CAP_SYSTEM_GL;
     else if (endpoint->engine == BRLOBOL_RENDER_ENGINE_SW)
 	required_desc.required_capabilities |= BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+	else if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT)
+	required_desc.required_capabilities |= BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT;
     if (required_desc.vsync != BRLOBOL_HOST_VSYNC_AUTO)
 	required_desc.required_capabilities |= BRLOBOL_HOST_CAP_PRESENT_VSYNC;
     required_desc.input_dispatch = endpoint_input_dispatch;
@@ -695,7 +1305,10 @@ brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
     endpoint->controller->setFrameRequestCallback(endpoint_frame_requested,
 	endpoint);
 	endpoint->factory_frame_callback_bound = true;
-    if (endpoint->controller->isRenderRequested() ||
+	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT) {
+	    if (!endpoint_rt_start(endpoint))
+		return 0;
+	} else if (endpoint->controller->isRenderRequested() ||
 	endpoint->controller->hasProgressiveWorkPending())
 	endpoint_frame_requested(endpoint, "endpoint-host-open");
     return 1;
@@ -724,6 +1337,9 @@ brlobol_display_endpoint_request_frame(brlobol_display_endpoint_t *endpoint,
     if (!endpoint || !endpoint->controller)
 	return 0;
     endpoint->controller->requestRender(reason);
+	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT &&
+	!endpoint_rt_start(endpoint))
+	return 0;
     if (!endpoint->factory)
 	return 1;
     return brlobol_host_factory_instance_request_frame(endpoint->factory,
@@ -745,7 +1361,8 @@ brlobol_display_endpoint_resize(brlobol_display_endpoint_t *endpoint,
     endpoint->width = width;
     endpoint->height = height;
     endpoint->device_pixel_ratio = device_pixel_ratio;
-    return 1;
+	return endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
+	    endpoint_rt_start(endpoint);
 }
 
 extern "C" int
@@ -824,6 +1441,12 @@ brlobol_display_endpoint_capture_plane(brlobol_display_endpoint_t *endpoint,
     if (plane != BRLOBOL_CAPTURE_COMPOSITE)
 	return 0;
 
+    if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT && endpoint->rt) {
+	if (endpoint->rt->worker.joinable())
+	    endpoint->rt->worker.join();
+	endpoint->controller->synchronizePresentation();
+    }
+
     if (endpoint->factory)
 	return brlobol_host_factory_instance_capture(endpoint->factory,
 	    endpoint->factory_instance, pixels, size, width, height,
@@ -839,6 +1462,94 @@ brlobol_display_endpoint_capture_plane(brlobol_display_endpoint_t *endpoint,
     *components = 3;
     *size = (size_t)(*width) * (size_t)(*height) * (*components);
     return 1;
+}
+
+extern "C" int
+brlobol_display_endpoint_rt_plane_capture(brlobol_display_endpoint_t *endpoint,
+	enum brlobol_rt_output_plane plane, void **samples, size_t *size,
+	unsigned int *width, unsigned int *height)
+{
+    if (samples)
+	*samples = NULL;
+    if (size)
+	*size = 0;
+    if (width)
+	*width = 0;
+    if (height)
+	*height = 0;
+    if (!endpoint || endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
+	!endpoint->rt || !samples || !size || !width || !height)
+	return 0;
+
+    EndpointRtState *state = endpoint->rt;
+    if (state->worker.joinable())
+	state->worker.join();
+    endpoint->controller->synchronizePresentation();
+
+    std::lock_guard<std::mutex> lock(state->readyMutex);
+    const void *source = NULL;
+    size_t bytes = 0;
+    if (plane == BRLOBOL_RT_OUTPUT_DEPTH) {
+	if (state->presentedPlanes.depth.empty())
+	    return 0;
+	source = state->presentedPlanes.depth.data();
+	bytes = state->presentedPlanes.depth.size() * sizeof(float);
+    } else if (plane == BRLOBOL_RT_OUTPUT_SOURCE_ID) {
+	if (state->presentedPlanes.sourceIdentity.empty())
+	    return 0;
+	source = state->presentedPlanes.sourceIdentity.data();
+	bytes = state->presentedPlanes.sourceIdentity.size() * sizeof(uint32_t);
+    } else {
+	return 0;
+    }
+    if (!state->presentedWidth || !state->presentedHeight ||
+	bytes / (plane == BRLOBOL_RT_OUTPUT_DEPTH ? sizeof(float) :
+	    sizeof(uint32_t)) != static_cast<size_t>(state->presentedWidth) *
+	static_cast<size_t>(state->presentedHeight))
+	return 0;
+
+    void *copy = bu_malloc(bytes, "retained rt output plane");
+    std::memcpy(copy, source, bytes);
+    *samples = copy;
+    *size = bytes;
+    *width = state->presentedWidth;
+    *height = state->presentedHeight;
+    return 1;
+}
+
+extern "C" int
+brlobol_display_endpoint_rt_source_identity_get(
+	const brlobol_display_endpoint_t *endpoint, uint32_t identifier,
+	struct brlobol_rt_source_identity *out)
+{
+    if (!endpoint || endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
+	!endpoint->rt || !identifier || !out ||
+	out->struct_size < sizeof(*out) || out->instance_key || out->path)
+	return 0;
+    BRLObolRtSourceIdentity identity;
+    if (!endpoint->rt->renderer.getSourceIdentity(identifier, identity))
+	return 0;
+    out->database = identity.database;
+    out->instance_key = bu_strdup(identity.instanceKey.getString());
+    out->path = bu_strdup(identity.path.getString());
+    out->source_revision = identity.sourceRevision;
+    return 1;
+}
+
+extern "C" void
+brlobol_display_endpoint_rt_source_identity_clear(
+	struct brlobol_rt_source_identity *identity)
+{
+    if (!identity)
+	return;
+    if (identity->instance_key)
+	bu_free(identity->instance_key, "retained rt instance key");
+    if (identity->path)
+	bu_free(identity->path, "retained rt path");
+    identity->database = NULL;
+    identity->instance_key = NULL;
+    identity->path = NULL;
+    identity->source_revision = 0;
 }
 
 extern "C" int
@@ -861,18 +1572,36 @@ brlobol_display_endpoint_render_engine_set(
 	brlobol_display_endpoint_t *endpoint,
 	enum brlobol_render_engine engine)
 {
-    if (!endpoint || !valid_engine(engine))
+    if (!endpoint || !valid_engine(engine)) {
 	return 0;
-    if (engine == BRLOBOL_RENDER_ENGINE_RT)
-	return 0;
+    }
     if (endpoint->factory && !engine_host_compatible(engine,
-	brlobol_host_factory_capabilities(endpoint->factory)))
+	brlobol_host_factory_capabilities(endpoint->factory))) {
 	return 0;
+    }
     if (endpoint->host && !endpoint->factory &&
 	(engine == BRLOBOL_RENDER_ENGINE_HW ||
-	 engine == BRLOBOL_RENDER_ENGINE_SW))
+	 engine == BRLOBOL_RENDER_ENGINE_SW)) {
 	return 0;
+    }
+	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT &&
+	engine != BRLOBOL_RENDER_ENGINE_RT)
+	endpoint_rt_destroy(endpoint);
     endpoint->engine = engine;
+	if (engine == BRLOBOL_RENDER_ENGINE_RT) {
+	if (!endpoint->rt)
+	    endpoint->rt = new (std::nothrow) EndpointRtState;
+	if (!endpoint->rt)
+	    return 0;
+	endpoint->controller->setPresentationSyncCallback(
+	    endpoint_rt_presentation_sync, endpoint);
+	if (!endpoint_rt_start(endpoint)) {
+	    endpoint->controller->clearPresentationSyncCallback(endpoint);
+	    endpoint_rt_destroy(endpoint);
+	    endpoint->engine = BRLOBOL_RENDER_ENGINE_AUTO;
+	    return 0;
+	}
+    }
     return 1;
 }
 
@@ -979,6 +1708,21 @@ brlobol_display_endpoint_property_get(
 	out->bool_value = endpoint->controller->isTransparencyEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.antialiasing") == 0) {
 	out->bool_value = endpoint->controller->isAntialiasingEnabled() ? 1 : 0;
+    } else if (bu_strcmp(name, "render.rt.workers") == 0) {
+	out->uint_value = endpoint->rt && endpoint->rt->workers ?
+	    endpoint->rt->workers : std::max(1u, std::thread::hardware_concurrency());
+    } else if (bu_strcmp(name, "render.rt.samples") == 0) {
+	out->uint_value = endpoint->rt ? endpoint->rt->samples : 1;
+    } else if (bu_strcmp(name, "render.rt.preview_scale") == 0) {
+	out->uint_value = endpoint->rt ? endpoint->rt->previewScale : 4;
+	    } else if (bu_strcmp(name, "render.rt.frame_budget_ms") == 0) {
+	out->uint_value = endpoint->rt ? endpoint->rt->frameBudgetMilliseconds : 33;
+    } else if (bu_strcmp(name, "render.rt.quality") == 0) {
+	out->string_value = endpoint->rt && !endpoint->rt->interactiveQuality ?
+	    "final" : "interactive";
+    } else if (bu_strcmp(name, "composition.rt.layer") == 0) {
+	out->string_value = endpoint->rt ? endpoint_rt_presentation_layer_name(
+	    endpoint->rt->presentationLayer) : "interlay";
     } else if (bu_strcmp(name, "renderer.clip.minimum") == 0 ||
 	bu_strcmp(name, "renderer.clip.maximum") == 0) {
 	double minimum = 0.0;
@@ -1045,8 +1789,6 @@ brlobol_display_endpoint_property_set(
 	enum brlobol_render_engine engine = BRLOBOL_RENDER_ENGINE_AUTO;
 	if (!render_engine_from_name(value->string_value, &engine))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
-	if (engine == BRLOBOL_RENDER_ENGINE_RT)
-	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
 	if (!brlobol_display_endpoint_render_engine_set(endpoint, engine))
 	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
     } else if (bu_strcmp(name, "endpoint.width") == 0) {
@@ -1122,6 +1864,41 @@ brlobol_display_endpoint_property_set(
     } else if (bu_strcmp(name, "renderer.antialiasing") == 0) {
 	endpoint->controller->setAntialiasingEnabled(
 	    value->bool_value ? TRUE : FALSE);
+    } else if (bu_strcmp(name, "render.rt.workers") == 0 ||
+	bu_strcmp(name, "render.rt.samples") == 0 ||
+	bu_strcmp(name, "render.rt.preview_scale") == 0 ||
+	bu_strcmp(name, "render.rt.frame_budget_ms") == 0 ||
+	bu_strcmp(name, "render.rt.quality") == 0 ||
+	bu_strcmp(name, "composition.rt.layer") == 0) {
+	if (!endpoint->rt)
+	    endpoint->rt = new (std::nothrow) EndpointRtState;
+	if (!endpoint->rt)
+	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	if (bu_strcmp(name, "render.rt.workers") == 0)
+	    endpoint->rt->workers = static_cast<unsigned int>(value->uint_value);
+	else if (bu_strcmp(name, "render.rt.samples") == 0)
+	    endpoint->rt->samples = static_cast<unsigned int>(value->uint_value);
+	else if (bu_strcmp(name, "render.rt.preview_scale") == 0)
+	    endpoint->rt->previewScale = static_cast<unsigned int>(value->uint_value);
+	else if (bu_strcmp(name, "render.rt.frame_budget_ms") == 0)
+	    endpoint->rt->frameBudgetMilliseconds =
+		static_cast<unsigned int>(value->uint_value);
+	else if (bu_strcmp(name, "render.rt.quality") == 0) {
+	    if (!value->string_value ||
+		(bu_strcmp(value->string_value, "interactive") != 0 &&
+		 bu_strcmp(value->string_value, "final") != 0))
+		return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	    endpoint->rt->interactiveQuality =
+		bu_strcmp(value->string_value, "interactive") == 0;
+	} else {
+	    int layer = SoBRLViewportImage::INTERLAY;
+	    if (!endpoint_rt_presentation_layer_from_name(value->string_value,
+		&layer))
+		return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	    endpoint->rt->presentationLayer = layer;
+	    if (!endpoint_rt_presentation_layer_apply(endpoint))
+		return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	}
     } else if (bu_strcmp(name, "renderer.clip.minimum") == 0 ||
 	bu_strcmp(name, "renderer.clip.maximum") == 0) {
 	if (!std::isfinite(value->double_value) ||
@@ -1149,6 +1926,9 @@ brlobol_display_endpoint_property_set(
 	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
     }
 
+    if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT &&
+	!endpoint_rt_start(endpoint))
+	return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
     return BRLOBOL_ENDPOINT_PROPERTY_OK;
 }
 

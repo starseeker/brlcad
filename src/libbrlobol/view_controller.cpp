@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "bu/str.h"
+#include "bu/time.h"
 
 #include "bv.h"
 #include "brlobol/edit_preview.h"
@@ -1004,6 +1005,8 @@ BRLObolViewController::BRLObolViewController(void) :
     renderRequestSerial(0),
     frameRequestCallback(NULL),
     frameRequestUserData(NULL),
+    presentationSyncCallback(NULL),
+    presentationSyncUserData(NULL),
     lastRenderTimeNanoseconds(0),
     smoothedRenderTimeNanoseconds(0),
     progressiveProviders(),
@@ -1101,6 +1104,8 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     renderRequestSerial(0),
     frameRequestCallback(NULL),
     frameRequestUserData(NULL),
+    presentationSyncCallback(NULL),
+    presentationSyncUserData(NULL),
     lastRenderTimeNanoseconds(0),
     smoothedRenderTimeNanoseconds(0),
     progressiveProviders(),
@@ -1175,6 +1180,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
 
 BRLObolViewController::~BRLObolViewController(void)
 {
+	this->setPresentationSyncCallback(NULL, NULL);
     ControllerFrameRequestState *frameRequestState = NULL;
     {
 	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
@@ -2011,6 +2017,39 @@ BRLObolViewController::clearFrameRequestCallback(void *userData)
 }
 
 void
+BRLObolViewController::setPresentationSyncCallback(
+    BRLObolPresentationSyncCallback callback, void *userData)
+{
+    std::lock_guard<std::mutex> lock(this->presentationSyncMutex);
+    this->presentationSyncCallback = callback;
+    this->presentationSyncUserData = callback ? userData : NULL;
+}
+
+void
+BRLObolViewController::clearPresentationSyncCallback(void *userData)
+{
+    std::lock_guard<std::mutex> lock(this->presentationSyncMutex);
+    if (this->presentationSyncUserData != userData)
+	return;
+    this->presentationSyncCallback = NULL;
+    this->presentationSyncUserData = NULL;
+}
+
+void
+BRLObolViewController::synchronizePresentation(void)
+{
+    BRLObolPresentationSyncCallback callback = NULL;
+    void *userData = NULL;
+    {
+	std::lock_guard<std::mutex> lock(this->presentationSyncMutex);
+	callback = this->presentationSyncCallback;
+	userData = this->presentationSyncUserData;
+    }
+    if (callback)
+	(*callback)(userData);
+}
+
+void
 BRLObolViewController::notifyFrameRequest(const char *reason)
 {
     BRLObolFrameRequestCallback callback = NULL;
@@ -2078,6 +2117,7 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 				     SbString *reason)
 {
     (void)this->advanceProgressiveWork(NULL, NULL);
+	this->synchronizePresentation();
 
 
     if (!this->renderManager || !this->activeCamera || !this->getRenderRoot())
@@ -2155,9 +2195,11 @@ BRLObolViewController::renderToImage(unsigned char **image,
 	return BRLCAD_ERROR;
     }
 
+    this->synchronizePresentation();
     (void)this->realizePending();
     BRLObolProgressiveStatus localProgressiveStatus;
     (void)this->advanceProgressiveWork(NULL, &localProgressiveStatus);
+    this->synchronizePresentation();
     if (progressiveStatus) {
 	*progressiveStatus = localProgressiveStatus;
     }

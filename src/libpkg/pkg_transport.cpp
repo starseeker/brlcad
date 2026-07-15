@@ -34,6 +34,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <ctime>
+#include <atomic>
 #include <vector>
 
 #ifdef HAVE_SYS_TYPES_H
@@ -429,8 +430,9 @@ pkg_addr_is_ipc_listener(const char *addr)
 int
 pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 {
-    static unsigned long counter = 0;
+    static std::atomic<unsigned long> counter(0);
     const char *hint = (name_hint && name_hint[0]) ? name_hint : "brlcad-pkg";
+    const unsigned long sequence = counter.fetch_add(1, std::memory_order_relaxed);
 #ifndef _WIN32
     const char *tmpdir = getenv("TMPDIR");
     time_t now = time(NULL);
@@ -443,14 +445,14 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 	tmpdir = "/tmp";
 
     need = snprintf(addr, len, "fifo:%s/%s-%ld-%lld-%lu",
-		    tmpdir, hint, (long)getpid(), (long long)now, counter++);
+		    tmpdir, hint, (long)getpid(), (long long)now, sequence);
     if (need >= 0 && (size_t)need < len)
 	return 0;
 
 #  if defined(HAVE_SYS_UN_H)
 #  if defined(__linux__)
     need = snprintf(addr, len, "unix-abstract:%s-%ld-%lld-%lu",
-		    hint, (long)getpid(), (long long)now, counter++);
+		    hint, (long)getpid(), (long long)now, sequence);
     if (need >= 0 && (size_t)need < len &&
 	    strlen(addr + 14) < sizeof(((struct sockaddr_un *)0)->sun_path) - 1)
 	return 0;
@@ -466,7 +468,7 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
     if (strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 	if (strcmp(tmpdir, "/tmp") != 0) {
 	    need = snprintf(addr, len, "unix:/tmp/%s-%ld-%lld-%lu.sock",
-			    hint, (long)getpid(), (long long)now, counter++);
+			    hint, (long)getpid(), (long long)now, sequence);
 	    if (need < 0 || (size_t)need >= len ||
 		    strlen(addr + 5) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
 		addr[0] = '\0';
@@ -504,7 +506,7 @@ pkg_ipc_addr(char *addr, size_t len, const char *name_hint)
 
     need = snprintf(addr, len, "npipe:\\\\.\\pipe\\%s-%lu-%lld-%lu",
 		    safe_hint, (unsigned long)GetCurrentProcessId(),
-		    (long long)now, counter++);
+		    (long long)now, sequence);
     if (need < 0 || (size_t)need >= len) {
 	addr[0] = '\0';
 	return -1;
@@ -628,9 +630,10 @@ pkg_connect_addr(const char *addr, const struct pkg_switch *switchp, pkg_errlog 
 
 #ifndef _WIN32
     if (strncmp(addr, "fifo:", 5) == 0) {
-	static unsigned long counter = 0;
+	static std::atomic<unsigned long> counter(0);
 	const char *base = addr + 5;
 	time_t now = time(NULL);
+	const unsigned long sequence = counter.fetch_add(1, std::memory_order_relaxed);
 	char c2s[MAXPATHLEN] = {0};
 	char s2c[MAXPATHLEN] = {0};
 	char msg[MAXPATHLEN * 2 + 8] = {0};
@@ -643,11 +646,11 @@ pkg_connect_addr(const char *addr, const struct pkg_switch *switchp, pkg_errlog 
 	    return PKC_ERROR;
 
 	need = snprintf(c2s, sizeof(c2s), "%s.%ld.%lld.%lu.c2s",
-			base, (long)getpid(), (long long)now, counter);
+			base, (long)getpid(), (long long)now, sequence);
 	if (need < 0 || (size_t)need >= sizeof(c2s))
 	    return PKC_ERROR;
 	need = snprintf(s2c, sizeof(s2c), "%s.%ld.%lld.%lu.s2c",
-			base, (long)getpid(), (long long)now, counter++);
+			base, (long)getpid(), (long long)now, sequence);
 	if (need < 0 || (size_t)need >= sizeof(s2c))
 	    return PKC_ERROR;
 

@@ -65,6 +65,7 @@
  * ----------------------------------------------------------------------- */
 
 imgstream_fb_t *fbp = NULL;		/* framebuffer handle */
+int rt_fb_output_enabled = 1;	/* normal test framebuffer behavior */
 struct icv_image *bif = NULL;		/* ICV image buffer */
 struct application APP;			/* global application structure */
 FILE		*outfp = NULL;		/* optional output file */
@@ -90,6 +91,14 @@ static int g_total_tests  = 0;
 static int g_failed_tests = 0;
 static int g_short_only   = 0;
 static int g_skip_current_checks = 0;
+
+static void
+count_progressive_flush(void *data)
+{
+    int *count = (int *)data;
+    if (count)
+	(*count)++;
+}
 
 /* -----------------------------------------------------------------------
  * Helpers
@@ -1394,6 +1403,26 @@ test_multiple_opts(void)
     CHECK_INT("multi benchmark", 1, benchmark);
 }
 
+/* The common view path must link and remain inert in headless consumers such
+ * as rtsrv, while a visible rt session can install its presentation callback. */
+static void
+test_progressive_flush(void)
+{
+    int count = 0;
+
+    rt_framebuffer_flush_callback_set(NULL, NULL);
+    rt_fb_progressive_flush();
+    CHECK_INT("progressive flush default", 0, count);
+
+    rt_framebuffer_flush_callback_set(count_progressive_flush, &count);
+    rt_fb_progressive_flush();
+    CHECK_INT("progressive flush callback", 1, count);
+
+    rt_framebuffer_flush_callback_set(NULL, NULL);
+    rt_fb_progressive_flush();
+    CHECK_INT("progressive flush clear", 1, count);
+}
+
 
 /* -----------------------------------------------------------------------
  * Test table
@@ -1457,6 +1486,7 @@ static struct rt_opt_test_entry all_tests[] = {
     { "unknown_opt",     test_opt_unknown         },
     { "optind_boundary", test_optind_boundary     },
     { "multiple_opts",   test_multiple_opts       },
+    { "progressive_flush", test_progressive_flush },
     { NULL, NULL }
 };
 

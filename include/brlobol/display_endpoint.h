@@ -30,6 +30,27 @@ enum brlobol_capture_plane {
     BRLOBOL_CAPTURE_FRAMEBUFFER = 1
 };
 
+/** Typed retained-RT planes.  DEPTH captures float samples in [0, 1];
+ * SOURCE_ID captures uint32_t samples where zero denotes background. */
+enum brlobol_rt_output_plane {
+    BRLOBOL_RT_OUTPUT_DEPTH = 0,
+    BRLOBOL_RT_OUTPUT_SOURCE_ID = 1
+};
+
+/** Source metadata addressed by BRLOBOL_RT_OUTPUT_SOURCE_ID.  The caller owns
+ * instance_key and path after a successful query and releases them with
+ * brlobol_display_endpoint_rt_source_identity_clear(). */
+struct brlobol_rt_source_identity {
+    uint32_t struct_size;
+    void *database;
+    char *instance_key;
+    char *path;
+    uint32_t source_revision;
+};
+
+#define BRLOBOL_RT_SOURCE_IDENTITY_INIT { \
+    sizeof(struct brlobol_rt_source_identity), NULL, NULL, NULL, 0u }
+
 typedef int (*brlobol_endpoint_framebuffer_capture_callback)(void *user_data,
 	unsigned char **pixels, size_t *size, unsigned int *width,
 	unsigned int *height, unsigned int *components);
@@ -128,6 +149,16 @@ brlobol_display_endpoint_host_detach(brlobol_display_endpoint_t *endpoint);
 BRLOBOL_EXPORT void *
 brlobol_display_endpoint_host(const brlobol_display_endpoint_t *endpoint);
 
+/**
+ * Return a borrowed BRLObolWindowHost offered by the active factory for
+ * retained framebuffer attachment.  Toolkit hosts without a compatible
+ * retained attachment return NULL; callers must then use controller-owned
+ * presentation instead.  The result remains opaque to C callers.
+ */
+BRLOBOL_EXPORT void *
+brlobol_display_endpoint_framebuffer_window_host(
+	const brlobol_display_endpoint_t *endpoint);
+
 /** Select a compatible registered factory and create its host instance. */
 BRLOBOL_EXPORT int
 brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
@@ -175,6 +206,21 @@ BRLOBOL_EXPORT int
 brlobol_display_endpoint_input_dispatch(brlobol_display_endpoint_t *endpoint,
 	const BRLObolInputEvent *event);
 
+/**
+ * Apply one common faceplate-toggle action to an endpoint-backed view.  The
+ * action may be BRLOBOL_ACTION_TOGGLE_ADC,
+ * BRLOBOL_ACTION_TOGGLE_MODEL_AXES, or BRLOBOL_ACTION_TOGGLE_VIEW_AXES.
+ *
+ * An endpoint property owner is preferred.  If that property is explicitly
+ * unsupported, the supplied bv_context receives the equivalent passive state
+ * update for a standalone view.  Other actions and property failures are
+ * left unhandled.  @p visible receives the resulting visibility when non-NULL.
+ */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_input_faceplate_toggle_apply(
+	brlobol_display_endpoint_t *endpoint, void *view_ctx,
+	BRLObolInputAction action, int *visible);
+
 /** Capture RGB/RGBA pixels in bottom-left row order.  A successful call
  * returns storage freed with bu_free. */
 BRLOBOL_EXPORT int
@@ -187,6 +233,26 @@ BRLOBOL_EXPORT int
 brlobol_display_endpoint_capture_plane(brlobol_display_endpoint_t *endpoint,
 	enum brlobol_capture_plane plane, unsigned char **pixels, size_t *size,
 	unsigned int *width, unsigned int *height, unsigned int *components);
+
+/** Capture the final retained-RT output plane.  The returned storage is
+ * released with bu_free.  It is unavailable unless the endpoint is using the
+ * retained RT engine and has produced a final frame. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_rt_plane_capture(brlobol_display_endpoint_t *endpoint,
+	enum brlobol_rt_output_plane plane, void **samples, size_t *size,
+	unsigned int *width, unsigned int *height);
+
+/** Resolve a nonzero RT source-ID sample from the currently displayed RT
+ * snapshot.  Initialize @p out with BRLOBOL_RT_SOURCE_IDENTITY_INIT or clear
+ * a prior result before reuse. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_rt_source_identity_get(
+	const brlobol_display_endpoint_t *endpoint, uint32_t identifier,
+	struct brlobol_rt_source_identity *out);
+
+BRLOBOL_EXPORT void
+brlobol_display_endpoint_rt_source_identity_clear(
+	struct brlobol_rt_source_identity *identity);
 
 /** Bind or conditionally clear the endpoint's framebuffer-plane provider.
  * A NULL callback clears only a provider whose data pointer matches user_data. */

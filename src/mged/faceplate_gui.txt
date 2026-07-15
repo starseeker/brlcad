@@ -37,7 +37,7 @@ retained feature per visible faceplate element:
 
 Each Obol feature carries coordinate-space, overlay-role, lifecycle, and sort
 metadata.  The application host synchronizes view state and renders the Obol
-scene; libdm is not a second HUD renderer.
+scene; there is no second HUD renderer.
 
 libged exposes command access through "view faceplate ..." subcommands.  The
 TclCAD wrapper in src/libtclcad/view/faceplate.c is now mostly a compatibility
@@ -82,8 +82,9 @@ MGED supports three active menu slots:
 
 The menu layout is hard-coded in normalized display coordinates using constants
 such as MENUX, MENUY, MENUXLIM, MENU_DY, SCROLLY, and SCROLL_DY.  The menu
-system draws strings, separator lines, and highlights directly through libdm 2D
-drawing calls.  It is immediate-mode display logic, not a retained widget tree.
+system historically drew strings, separator lines, and highlights through
+immediate-mode 2D calls.  The current implementation must publish retained
+Obol HUD features instead.
 
 buttons.c defines top-level faceplate GUI menus, including:
 
@@ -183,8 +184,8 @@ Generalized design proposal
    only need to render text, highlight bands, separators, sliders, and simple
    indicators.
 
-   This would let libdm, Qt/Obol, and future viewers present the same model
-   without embedding MGED drawing code.
+   This lets Tk, Qt, and future Obol hosts present the same model without
+   embedding MGED drawing code.
 
 3. Centralize hit testing.
 
@@ -268,7 +269,7 @@ Suggested migration path
    Initially, activation can still call old callbacks.  This isolates layout,
    drawing, and hit testing from MGED-specific edit functions.
 
-4. Move drawing and hit testing to bsg/libdm HUD code.
+4. Move drawing and hit testing to retained Obol HUD code.
 
    Replace mmenu_display and scroll_display with retained or semi-retained HUD
    menu render items.  Replace MGED-local coordinate hit testing with a generic

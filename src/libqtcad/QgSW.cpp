@@ -54,6 +54,11 @@ QgSW::QgSW(QWidget *parent, BRLObolViewController *controller,
     qgcanvas_sync_obol_camera(*d);
     qgcanvas_initialize_obol_background(*d);
 
+    /* Obol always supplies a complete RGB frame.  Mark the canvas opaque so
+     * Qt does not repaint the parent behind every software readback blit. */
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+    setAutoFillBackground(false);
+
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
     // resolution scaling, rotation, etc.
@@ -142,7 +147,9 @@ return;
     QImage image;
     qgcanvas_get_obol_viewport_image(*d, this, image, true, true);
     if (image.isNull()) {
-	QWidget::paintEvent(e);
+	/* Preserve the opaque-widget contract if an offscreen render fails. */
+	QPainter painter(this);
+	painter.fillRect(e->rect(), Qt::black);
 	return;
     }
     QPainter painter(this);
@@ -157,7 +164,6 @@ return;
 	d->obol_paint_initialized = true;
 	emit init_done();
     }
-    QWidget::paintEvent(e);
 }
 
 void QgSW::resizeEvent(QResizeEvent *e)

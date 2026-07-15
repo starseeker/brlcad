@@ -159,7 +159,6 @@ TCLCAD_EXPORT extern int go_poly_cont_build_end(Tcl_Interp *UNUSED(interp),
 						const char *argv[],
 						const char *usage);
 
-/* dm_tcl.c */
 /* The presence of Tcl_Interp as an arg prevents giving arg list */
 TCLCAD_EXPORT extern void fb_tcl_setup(void);
 

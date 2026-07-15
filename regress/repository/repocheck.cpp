@@ -956,7 +956,7 @@ main(int argc, const char *argv[])
 	    ".git",".log","/detria.hpp","/doc/","/fontstash/","/json.hpp",
 	    "/linenoise.hpp","/shapelib/","/spsr/","/whereami.c","/xxhash.h",
 	    "misc/CMake/Find","misc/debian","misc/opencl-raytracer-tests",
-	    "misc/tools","pkg.h","src/libdm/wgl/wintk/","src/libpkg","subprocess.h","~",nullptr
+	    "misc/tools","pkg.h","src/libpkg","subprocess.h","~",nullptr
 	};
 
 	std::regex codefile_regex(".*[.](c|cpp|cxx|cc|h|hpp|hxx|y|yy|l)([.]in)?$");

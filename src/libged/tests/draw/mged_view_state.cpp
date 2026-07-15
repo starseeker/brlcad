@@ -678,8 +678,11 @@ test_owned_render_endpoint(const char *datadir)
 	fail = 1;
     }
     renderer_none_av[2] = "rt";
-    if (!fail && ged_exec_dm(gedp, 3, renderer_none_av) != BRLCAD_ERROR) {
-	bu_log("FAIL: dm renderer accepted the unimplemented rt engine\n");
+	if (!fail && (ged_exec_dm(gedp, 3, renderer_none_av) != BRLCAD_OK ||
+	    ged_exec_dm(gedp, 2, renderer_query_av) != BRLCAD_OK ||
+	    !BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "rt"))) {
+	bu_log("FAIL: dm renderer could not select retained rt: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
     }
     renderer_none_av[2] = "auto";
@@ -1000,6 +1003,16 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	fail = 1;
     if (!fail && ged_exec_dm(gedp, 2, close_av) != BRLCAD_OK)
 	fail = 1;
+    open_av[5] = "rt";
+    if (!fail && (ged_exec_dm(gedp, 6, open_av) != BRLCAD_OK ||
+	    ged_exec_dm(gedp, 2, diagnostics_av) != BRLCAD_OK ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "renderer=rt"))) {
+	bu_log("FAIL: dm open did not select retained rt on headless host: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    if (!fail && ged_exec_dm(gedp, 2, close_av) != BRLCAD_OK)
+	fail = 1;
 
     if (!fail)
 	bu_log("PASS: dm open/close/host/diagnostics use retained endpoints\n");
@@ -1108,9 +1121,59 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     if (pixels)
 	bu_free(pixels, "second framebuffer capture");
 
+    /* Endpoint replacement can also happen for one existing view.  Keep the
+     * original endpoint alive for this assertion: the replacement must clear
+     * its provider before the record stops owning it. */
+    if (!fail && ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+	first_view) != BRLCAD_OK) {
+	bu_log("FAIL: could not return the framebuffer bridge to the first view\n");
+	fail = 1;
+    }
+    if (!fail && !ged_view_context_display_endpoint_set(first_view,
+	first_endpoint, 0)) {
+	bu_log("FAIL: could not preserve the first endpoint for same-view handoff\n");
+	fail = 1;
+    }
+    brlobol_display_endpoint_t *replacement_endpoint = NULL;
+    if (!fail) {
+	replacement_endpoint = brlobol_display_endpoint_create(NULL, 0);
+	if (!replacement_endpoint || !ged_view_context_display_endpoint_set(
+		first_view, replacement_endpoint, 1) ||
+	    ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
+		first_view) != BRLCAD_OK) {
+	    bu_log("FAIL: could not rebind framebuffer after same-view endpoint replacement\n");
+	    if (replacement_endpoint &&
+		ged_view_context_display_endpoint_get(first_view) !=
+		replacement_endpoint)
+		brlobol_display_endpoint_destroy(replacement_endpoint);
+	    replacement_endpoint = NULL;
+	    fail = 1;
+	}
+    }
+    pixels = NULL;
+    if (!fail && brlobol_display_endpoint_capture_plane(first_endpoint,
+	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	&components)) {
+	bu_log("FAIL: same-view endpoint replacement retained the old capture provider\n");
+	if (pixels)
+	    bu_free(pixels, "same-view stale framebuffer capture");
+	fail = 1;
+    }
+    pixels = NULL;
+    if (!fail && (!replacement_endpoint ||
+	!brlobol_display_endpoint_capture_plane(replacement_endpoint,
+	    BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	    &components))) {
+	bu_log("FAIL: same-view endpoint replacement did not bind its capture provider\n");
+	fail = 1;
+    }
+    if (pixels)
+	bu_free(pixels, "same-view framebuffer capture");
+
     ged_draw_obol_framebuffer_release(gedp);
     pixels = NULL;
-    if (!fail && brlobol_display_endpoint_capture_plane(second_endpoint,
+	if (!fail && replacement_endpoint &&
+	brlobol_display_endpoint_capture_plane(replacement_endpoint,
 	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
 	&components)) {
 	bu_log("FAIL: framebuffer release left a capture provider behind\n");
@@ -1122,6 +1185,7 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     if (!fail)
 	bu_log("PASS: framebuffer capture provider moves between endpoints\n");
     ged_close(gedp);
+    brlobol_display_endpoint_destroy(first_endpoint);
     bu_file_delete("mged_view_state_t7.g");
     return fail;
 }

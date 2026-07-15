@@ -18,6 +18,7 @@ brlcad_add_test(NAME libbrlobol_lod_realization COMMAND test_brlobol_lod_realiza
 
 brlcad_addexec(test_brlobol_lod_service test_lod_service.cpp "libbrlobol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_lod_service COMMAND test_brlobol_lod_service)
+set_tests_properties(libbrlobol_lod_service PROPERTIES TIMEOUT 10)
 
 brlcad_addexec(test_brlobol_lod_update_action test_lod_update_action.cpp "libbrlobol;libwdb;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_lod_update_action COMMAND test_brlobol_lod_update_action)
@@ -34,23 +35,21 @@ brlcad_add_test(NAME libbrlobol_mesh_lod_cache COMMAND test_brlobol_mesh_lod_cac
 brlcad_addexec(test_brlobol_view_store test_view_store.cpp "libbrlobol;libwdb;librt;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_view_store COMMAND test_brlobol_view_store)
 
+brlcad_addexec(test_brlobol_rt_render test_rt_render.cpp "libbrlobol;libwdb;librt;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
+brlcad_add_test(NAME libbrlobol_rt_render COMMAND test_brlobol_rt_render)
+
 brlcad_addexec(test_brlobol_window_host test_window_host.cpp "libbrlobol;libimgstream;libbu;Obol::Obol;Threads::Threads" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_window_host COMMAND test_brlobol_window_host)
 
 brlcad_addexec(test_brlobol_headless_window_host test_headless_window_host.cpp "libbrlobol;libimgstream;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libbrlobol_headless_window_host COMMAND test_brlobol_headless_window_host)
 
-set(OBOL_SOURCE_DIR "${CMAKE_SOURCE_DIR}/obol")
-set(OBOL_NANORT_CONTEXT_MANAGER "${OBOL_SOURCE_DIR}/tests/utils/nanort_context_manager.h")
-set(OBOL_NANORT_HEADER "${OBOL_SOURCE_DIR}/external/nanort/nanort.h")
-if(EXISTS "${OBOL_NANORT_CONTEXT_MANAGER}" AND EXISTS "${OBOL_NANORT_HEADER}")
+if(Obol_NanoRTContextManager_FOUND)
   brlcad_addexec(test_brlobol_nanort_render test_nanort_render.cpp "libbrlobol;libwdb;libbu;Obol::Obol;Threads::Threads;${OSMESA_LIBRARY}" TEST ALL_CXX)
   target_include_directories(test_brlobol_nanort_render SYSTEM PRIVATE
     ${OSMESA_INCLUDE_DIR}
     ${BRLOBOL_OPENGL_INCLUDE_DIRS}
-    "${OBOL_SOURCE_DIR}/tests/utils"
-    "${OBOL_SOURCE_DIR}/external/nanort"
-    "${OBOL_SOURCE_DIR}/external/nanort/examples/common"
+    ${Obol_NanoRTContextManager_INCLUDE_DIR}
   )
   brlcad_add_test(NAME libbrlobol_nanort_render COMMAND test_brlobol_nanort_render)
 endif()
@@ -68,6 +67,7 @@ cmakefiles(
   test_mesh_lod_cache.cpp
   test_nanort_render.cpp
   test_prototype.cpp
+  test_rt_render.cpp
   test_render.cpp
   test_view_store.cpp
   test_window_host.cpp

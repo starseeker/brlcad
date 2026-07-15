@@ -2806,7 +2806,7 @@ _ged_rt_finalize(struct ged_subprocess *rrtp)
      * close of the rt-side IPC pipe is only observed asynchronously
      * (next QSocketNotifier::activated edge), which can leave
      * if_active_clients > 0 across this ert boundary — defeating the
-     * deferred-resize finalization in libdm's drop_client and
+     * deferred-resize finalization in imgstream's drop_client and
      * potentially racing with the next ert's fbs_open_ipc.  In qged,
      * IPC fbserv clients are created exclusively by libged/dm/ert.cpp
      * via fbs_open_ipc(), so it is safe to drop every IPC slot here.

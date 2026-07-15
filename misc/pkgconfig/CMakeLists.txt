@@ -48,7 +48,6 @@ if("${BRLCAD_ENABLE_TARGETS}" GREATER 1 OR "${BRLCAD_ENABLE_TARGETS}" STREQUAL "
     ${pkgconfig_DATA}
     libanalyze.pc.in
     libbrlcad.pc.in
-    libdm.pc.in
     libfft.pc.in
     libgcv.pc.in
     libged.pc.in

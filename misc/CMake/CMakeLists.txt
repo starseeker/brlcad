@@ -109,6 +109,7 @@ set(
   scripts/printtime.cmake
   scripts/tcl_mkindex.cmake
   scripts/timestamp.cmake
+  scripts/xvfb_test.sh
 )
 cmakefiles(${cmake_ignore_files})
 

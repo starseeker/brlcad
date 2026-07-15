@@ -36,18 +36,6 @@ struct QgCanvasInput::Impl {
     int mouse_mode = BV_ADJUST_SCALE;
 };
 
-static int
-qgcanvasinput_set_aet(struct bv_context *view_ctx, const char *aet_string)
-{
-	if (!view_ctx || !aet_string)
-	return 0;
-    vect_t aet_vec;
-    bn_decode_vect(aet_vec, aet_string);
-	(void)bv_aet_set(bv_context_view(view_ctx), aet_vec);
-	(void)bv_context_update(view_ctx, BV_CONTEXT_CHANGED_VIEW);
-    return 1;
-}
-
 static unsigned int
 qgcanvasinput_modifiers(Qt::KeyboardModifiers modifiers)
 {
@@ -157,94 +145,24 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
     const struct bv *cview = bv_context_view_const(view_ctx);
 
     switch (action) {
-	case BRLOBOL_ACTION_TOGGLE_ADC: {
-	    struct bv_adc_state adc;
-	    if (!bv_adc_state_get(&adc, cview))
-		return 0;
-	    if (m->endpoint) {
-		struct brlobol_endpoint_property_value value =
-		    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-		value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
-		value.bool_value = !adc.draw;
-		const int result = brlobol_display_endpoint_property_set(m->endpoint,
-		    "view.faceplate.adc.visible", &value);
-		if (result == BRLOBOL_ENDPOINT_PROPERTY_OK)
-		    return 1;
-		/* A standalone Qt canvas has no GED property owner yet.  It still
-		 * uses the same Obol controller, with local passive setup only. */
-		if (result != BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
-		    return 0;
-	    }
-	    adc.draw = !adc.draw;
-	    bv_adc_state_set(view, &adc);
-	    return 1;
-	}
-	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES: {
-	    struct bv_axes_state axes;
-	    if (!bv_model_axes_state_get(&axes,
-		cview))
-		return 0;
-	    if (m->endpoint) {
-		struct brlobol_endpoint_property_value value =
-		    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-		value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
-		value.bool_value = !axes.draw;
-		const int result = brlobol_display_endpoint_property_set(m->endpoint,
-		    "view.faceplate.model_axes.visible", &value);
-		if (result == BRLOBOL_ENDPOINT_PROPERTY_OK)
-		    return 1;
-		if (result != BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
-		    return 0;
-	    }
-	    axes.draw = !axes.draw;
-	    bv_model_axes_state_set(view, &axes);
-	    return 1;
-	}
-	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES: {
-	    struct bv_axes_state axes;
-	    if (!bv_view_axes_state_get(&axes,
-		cview))
-		return 0;
-	    if (m->endpoint) {
-		struct brlobol_endpoint_property_value value =
-		    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-		value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
-		value.bool_value = !axes.draw;
-		const int result = brlobol_display_endpoint_property_set(m->endpoint,
-		    "view.faceplate.view_axes.visible", &value);
-		if (result == BRLOBOL_ENDPOINT_PROPERTY_OK)
-		    return 1;
-		if (result != BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED)
-		    return 0;
-	    }
-	    axes.draw = !axes.draw;
-	    bv_view_axes_state_set(view, &axes);
-	    return 1;
-	}
+	case BRLOBOL_ACTION_TOGGLE_ADC:
+	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES:
+	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES:
+	    return brlobol_display_endpoint_input_faceplate_toggle_apply(
+		m->endpoint, view_ctx, action, NULL);
 	case BRLOBOL_ACTION_VIEW_2:
-	    return qgcanvasinput_set_aet(view_ctx, "35 -25 0");
 	case BRLOBOL_ACTION_VIEW_3:
-	    return qgcanvasinput_set_aet(view_ctx, "35 25 0");
 	case BRLOBOL_ACTION_VIEW_4:
-	    return qgcanvasinput_set_aet(view_ctx, "45 45 0");
 	case BRLOBOL_ACTION_VIEW_5:
-	    return qgcanvasinput_set_aet(view_ctx, "145 25 0");
 	case BRLOBOL_ACTION_VIEW_6:
-	    return qgcanvasinput_set_aet(view_ctx, "215 25 0");
 	case BRLOBOL_ACTION_VIEW_7:
-	    return qgcanvasinput_set_aet(view_ctx, "325 25 0");
 	case BRLOBOL_ACTION_VIEW_FRONT:
-	    return qgcanvasinput_set_aet(view_ctx, "0 0 0");
 	case BRLOBOL_ACTION_VIEW_TOP:
-	    return qgcanvasinput_set_aet(view_ctx, "270 90 0");
 	case BRLOBOL_ACTION_VIEW_BOTTOM:
-	    return qgcanvasinput_set_aet(view_ctx, "270 -90 0");
 	case BRLOBOL_ACTION_VIEW_LEFT:
-	    return qgcanvasinput_set_aet(view_ctx, "90 0 0");
 	case BRLOBOL_ACTION_VIEW_REAR:
-	    return qgcanvasinput_set_aet(view_ctx, "180 0 0");
 	case BRLOBOL_ACTION_VIEW_RIGHT:
-	    return qgcanvasinput_set_aet(view_ctx, "270 0 0");
+	    return brlobol_input_view_orientation_apply(view_ctx, action);
 	case BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE:
 	case BRLOBOL_ACTION_VIEW_SECONDARY_RELEASE:
 	case BRLOBOL_ACTION_VIEW_CENTER_RELEASE: {

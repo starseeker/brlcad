@@ -30,6 +30,18 @@ if {[g dm host] ne "unbound"} {
 g new_view v1 tkobol
 g draw all.g
 g autoview v1
+update
+
+set dm_diagnostics [g dm diagnostics -V v1]
+if {![regexp {host\.capabilities=0x([0-9a-fA-F]+)} $dm_diagnostics -> host_caps]} {
+    puts stderr "Tk Obol diagnostics omitted host input capabilities"
+    exit 1
+}
+if {[scan $host_caps %x host_cap_value] != 1 ||
+        ($host_cap_value & 0x20) == 0} {
+    puts stderr "Tk Obol X11 host did not advertise endpoint input capability"
+    exit 1
+}
 
 # TkObol owns the shared view-key profile.  The generic Tcl bindings must not
 # also apply those actions through the containing toplevel.
@@ -38,6 +50,15 @@ foreach key {3 4 f F R r l L t T b B} {
 	puts stderr "TclCAD retained an overlapping Tk view binding for $key"
 	exit 1
     }
+}
+g adc v1 draw 0
+set input_tag [lindex [bindtags .v1] 0]
+set input_command [lindex [bind $input_tag <KeyPress>] 0]
+$input_command key press A A 0 0 0
+update
+if {[g dm get -V v1 view.faceplate.adc.visible] ne "true"} {
+    puts stderr "Tk Obol endpoint key callback did not apply a semantic action"
+    exit 1
 }
 
 g dm set -V v1 endpoint.title "Tk typed endpoint title"
@@ -278,6 +299,48 @@ if {[lindex $reported_size 0] != [winfo width .v1] ||
     puts stderr "TclCAD view dimensions did not follow the Tk Obol host"
     exit 1
 }
+
+# External renderers use the view-owned Obol/imgstream endpoint.  A uniform
+# IPC framebuffer write must compose into the visible view without opening a
+# second graphical framebuffer window.
+g set_fb_mode v1 3
+if {[g set_fb_mode v1] ne "3"} {
+    puts stderr "TclCAD did not enable the Obol framebuffer overlay"
+    exit 1
+}
+set framebuffer_ipc [g listen v1 ipc]
+if {$framebuffer_ipc eq ""} {
+    puts stderr "TclCAD did not provide an Obol framebuffer IPC endpoint"
+    exit 1
+}
+if {[catch {
+    exec [file join [bu_dir bin] fbclear] -F "ipc:$framebuffer_ipc" 23 45 67
+} framebuffer_error]} {
+    puts stderr "TclCAD Obol framebuffer IPC write failed: $framebuffer_error"
+    exit 1
+}
+after 100
+g refresh v1
+update
+set framebuffer_output "[file rootname [lindex $argv 1]]_framebuffer.png"
+g png v1 $framebuffer_output
+if {![file exists $framebuffer_output] || [file size $framebuffer_output] < 1000} {
+    puts stderr "TclCAD Obol framebuffer overlay did not produce a non-empty image"
+    exit 1
+}
+image create photo framebuffer_image
+framebuffer_image read $framebuffer_output -format png
+set framebuffer_pixel [framebuffer_image get 32 32]
+image delete framebuffer_image
+foreach actual $framebuffer_pixel expected {23 45 67} {
+    if {abs($actual - $expected) > 1} {
+        puts stderr "TclCAD Obol framebuffer overlay was not present in capture"
+        exit 1
+    }
+}
+g set_fb_mode v1 0
+g refresh v1
+update
 
 set output [lindex $argv 1]
 g png v1 $output

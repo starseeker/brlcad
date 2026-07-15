@@ -104,7 +104,7 @@ clients are still accepted.
 ====
 [source,bash]
 ----
-fbserv -s 1024 0 /dev/wgl &
+fbserv -s 1024 0 /dev/mem &
 rt -F 0 -s 1024 model.g component
 ----
 Open a persistent 1024x1024 framebuffer on the local display and bind it
@@ -118,7 +118,7 @@ the same framebuffer and the image survives between client connections.
 [source,bash]
 ----
 export FBSERV_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-fbserv -T -A -p 0 -F /dev/wgl &
+fbserv -T -A -p 0 -F /dev/mem &
 rt -F 0 model.g object
 ----
 Run *fbserv* in encrypted, strictly authenticated mode. Both the server

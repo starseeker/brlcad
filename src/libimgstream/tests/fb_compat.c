@@ -789,7 +789,8 @@ test_diagnostic_compat_stream(void)
     imgstream_fb_t *fb = imgstream_fb_open("/dev/null", 4, 3);
     CHECK(fb != NULL, "opened null diagnostic compatibility stream");
     CHECK(imgstream_fb_width(fb) == 4 && imgstream_fb_height(fb) == 3, "null diagnostic dimensions recorded");
-    CHECK(imgstream_fb_stream(fb) != NULL, "null diagnostic exposes compatibility stream");
+    CHECK(imgstream_fb_stream(fb) == NULL, "null diagnostic retains no image stream");
+    CHECK(imgstream_fb_cstream(fb) == NULL, "null diagnostic has no const image stream");
     CHECK(bu_strcmp(imgstream_fb_name(fb), "/dev/null") == 0, "null diagnostic name recorded");
 
     unsigned char pixel[3] = {200, 201, 202};
@@ -840,9 +841,6 @@ test_diagnostic_compat_stream(void)
     CHECK(imgstream_fb_viewport(fb, -20, -30, 20, 30) == 0, "null diagnostic viewport accepted");
     CHECK(imgstream_fb_poll_rate(fb) == 0, "null diagnostic poll rate is zero");
 
-    struct imgstream_info info;
-    CHECK(imgstream_get_info(imgstream_fb_stream(fb), &info) == 0, "null diagnostic stream info query accepted");
-    CHECK(info.generation == 0, "null diagnostic writes do not mutate the compatibility stream");
     CHECK(imgstream_fb_flush(fb) == 0, "null diagnostic flush accepted");
     imgstream_fb_close(fb);
 

@@ -30,6 +30,7 @@
 class BRLObolLodService;
 class SoBRLMeshShape;
 struct db_i;
+struct resource;
 struct rt_i;
 
 class BRLOBOL_EXPORT SoBRLPickDetail : public SoDetail {
@@ -175,7 +176,15 @@ public:
 	    const SbVec3f &rayOrigin,
 	    const SbVec3f &rayDirection,
 	    const SbPlane *clipPlanes = NULL,
-	    size_t clipPlaneCount = 0) const;
+	    size_t clipPlaneCount = 0,
+	    struct resource *resource = NULL) const;
+
+    /**
+     * Initialize one librt resource for this retained acceleration structure.
+     * The caller owns @p resource and must keep it alive until this cache is
+     * cleared, because librt records the resource pointer in the rt_i.
+     */
+    SbBool initializeResource(struct resource *resource, int cpu) const;
 
 private:
     BRLObolRtPickCache(const BRLObolRtPickCache &);

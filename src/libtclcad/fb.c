@@ -100,7 +100,10 @@ tclcad_obol_framebuffer_bind(void *view_ctx, Tcl_Interp *interp)
     fbsp->fbs_callback = to_fbs_callback;
     fbsp->fbs_clientData = view_ctx;
     fbsp->fbs_interp = interp;
-    tclcad_fbserv_set_transport(fbsp);
+
+    /* The libged Obol bridge owns its IPC transport.  In particular, its
+     * worker keeps a synchronous external renderer from blocking the Tcl
+     * event loop that will later present the updated image. */
     return TCL_OK;
 }
 

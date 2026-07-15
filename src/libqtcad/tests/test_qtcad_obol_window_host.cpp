@@ -44,6 +44,10 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QImage>
+#ifdef BRLCAD_OPENGL
+#  include <QOpenGLContext>
+#  include <QOpenGLWidget>
+#endif
 #include <QThread>
 #include <QWidget>
 
@@ -464,6 +468,89 @@ test_qtcad_factory_frame_thread_affinity(void)
 
 #ifdef BRLCAD_OPENGL
 static int
+test_qtcad_system_gl_factory_endpoint(void)
+{
+    const QString platform_name = QGuiApplication::platformName();
+    if (platform_name == QStringLiteral("offscreen") ||
+	platform_name == QStringLiteral("minimal"))
+	return 0;
+
+    CHECK(qtcad_obol_host_factories_register(),
+	"Qt system-GL test registers Obol host factories");
+
+    struct brlobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BRLOBOL_HOST_MODE_TOPLEVEL;
+    desc.width = 96;
+    desc.height = 72;
+    desc.device_pixel_ratio = 1.0;
+    desc.visible = 1;
+    desc.required_capabilities = BRLOBOL_HOST_CAP_SYSTEM_GL |
+	BRLOBOL_HOST_CAP_PIXEL_PRESENT | BRLOBOL_HOST_CAP_READBACK;
+
+    brlobol_display_endpoint_t *endpoint =
+	brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint && brlobol_display_endpoint_render_engine_set(endpoint,
+	BRLOBOL_RENDER_ENGINE_HW) &&
+	brlobol_display_endpoint_host_open(endpoint, "qt-gl", &desc),
+	"Qt system-GL endpoint opens an explicit hardware host");
+
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
+	brlobol_display_endpoint_host(endpoint));
+    CHECK(host, "Qt system-GL endpoint exposes its Qt host");
+    CHECK(host->canvas(), "Qt system-GL endpoint creates a canvas");
+    QOpenGLWidget *canvas = qobject_cast<QOpenGLWidget *>(
+	host->canvas()->asQObject());
+    CHECK(canvas, "Qt system-GL endpoint owns a QOpenGLWidget");
+
+    QElapsedTimer timer;
+    timer.start();
+	while ((!canvas->isVisible() || !canvas->isValid()) && timer.elapsed() < 2000) {
+	QApplication::processEvents();
+	QThread::msleep(1);
+    }
+    CHECK(canvas->isVisible() && canvas->isValid() && canvas->context(),
+	"Qt system-GL endpoint creates a visible widget with a valid context");
+
+    canvas->makeCurrent();
+    CHECK(QOpenGLContext::currentContext() == canvas->context(),
+	"Qt system-GL endpoint makes its widget context current");
+    canvas->doneCurrent();
+
+    BRLObolViewController *controller = static_cast<BRLObolViewController *>(
+	brlobol_display_endpoint_controller(endpoint));
+    add_visible_obol_content(controller);
+    CHECK(brlobol_display_endpoint_request_frame(endpoint, "qt-system-gl"),
+	"Qt system-GL endpoint queues an Obol frame");
+
+    timer.restart();
+    while (controller->isRenderRequested() && timer.elapsed() < 2000) {
+	QApplication::processEvents();
+	QThread::msleep(1);
+    }
+    CHECK(!controller->isRenderRequested(),
+	"Qt system-GL widget consumes the queued Obol frame");
+
+    QImage presented = canvas->grabFramebuffer();
+    CHECK(!presented.isNull() && lit_pixel_count(presented) > 0,
+	"Qt system-GL widget presents visible Obol pixels");
+
+    unsigned char *pixels = NULL;
+    size_t size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    CHECK(brlobol_display_endpoint_capture(endpoint, &pixels, &size, &width,
+	&height, &components) && pixels && width == 96 && height == 72 &&
+	components == 4 && size == 96u * 72u * 4u,
+	"Qt system-GL endpoint captures through its active host");
+    bu_free(pixels, "Qt system-GL endpoint capture");
+
+    brlobol_display_endpoint_destroy(endpoint);
+    return 0;
+}
+
+static int
 test_qtcad_gl_vsync_policy(void)
 {
     const QString platform_name = QGuiApplication::platformName();
@@ -660,6 +747,11 @@ main(int argc, char **argv)
     QApplication app(argc, argv);
     (void)app;
 
+#ifdef BRLCAD_OPENGL
+    if (argc == 2 && strcmp(argv[1], "--system-gl") == 0)
+	return test_qtcad_system_gl_factory_endpoint();
+#endif
+
     if (test_qtcad_window_host_contract())
 	return 1;
     if (test_qtcad_owned_window_host())
@@ -675,6 +767,8 @@ main(int argc, char **argv)
     if (test_qtcad_factory_frame_thread_affinity())
 	return 1;
 #ifdef BRLCAD_OPENGL
+    if (test_qtcad_system_gl_factory_endpoint())
+	return 1;
     if (test_qtcad_gl_vsync_policy())
 	return 1;
 #endif

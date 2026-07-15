@@ -191,6 +191,22 @@ if(TARGET test_qtcad_obol_window_host)
     APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
   set_property(TEST test_qtcad_obol_window_host
     APPEND PROPERTY LABELS drawing_baseline)
+  if(BRLCAD_ENABLE_OPENGL AND UNIX)
+    find_program(XVFB_RUN_EXECUTABLE xvfb-run)
+    if(XVFB_RUN_EXECUTABLE)
+      add_test(
+        NAME test_qtcad_obol_window_host_x11_gl
+        COMMAND ${SH_EXEC} ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh
+                ${XVFB_RUN_EXECUTABLE} ${CMAKE_COMMAND} -E env QT_QPA_PLATFORM=xcb
+                $<TARGET_FILE:test_qtcad_obol_window_host> --system-gl)
+      set_property(TEST test_qtcad_obol_window_host_x11_gl
+        APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+      set_property(TEST test_qtcad_obol_window_host_x11_gl
+        PROPERTY SKIP_RETURN_CODE 125)
+      set_property(TEST test_qtcad_obol_window_host_x11_gl
+        APPEND PROPERTY LABELS drawing_baseline)
+    endif(XVFB_RUN_EXECUTABLE)
+  endif(BRLCAD_ENABLE_OPENGL AND UNIX)
 endif(TARGET test_qtcad_obol_window_host)
 
 if(TARGET Qt6::Widgets)

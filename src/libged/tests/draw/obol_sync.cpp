@@ -51,6 +51,8 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 
+#include <obol/cad/SoCADAssembly.h>
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -1510,6 +1512,17 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
     if (duplicate_count != 2 || !saw_first || !saw_duplicate ||
 	!saw_subtract || !saw_intersect || !saw_inherited_material)
 	FAIL("compact proxy occurrences should preserve transforms, boolean identity, and inherited material");
+
+    /* Structural AABBs remain conservative for bounds and picking, but the
+     * compiled CAD renderer may replace a fully subpixel box with one
+     * depth-tested point.  Verify this draw path opts into that view-local
+     * presentation optimization rather than baking a camera-dependent point
+     * into the persistent proxy data. */
+    BRLObolCompactOccurrence proxy_occurrence;
+    if (!root_source->getCompactOccurrence(0, proxy_occurrence) ||
+	!proxy_occurrence.geometry ||
+	!proxy_occurrence.geometry->subpixelProxyEligible)
+	FAIL("deferred structural AABB proxies should permit subpixel point presentation");
 
     if (apply_path_transaction(gedp, GED_DRAW_TXN_ERASE,
 	    "progressive_root.c", NULL, -1, "progressive identity cleanup"))

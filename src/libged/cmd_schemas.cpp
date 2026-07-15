@@ -417,22 +417,22 @@ static const struct bu_opt_desc_meta dm_meta[] = {
 };
 
 static const struct bu_opt_cmd_desc dm_subcommands[] = {
-    {"attach", "Attach a display manager", NULL, NULL, raw_args_operands, NULL},
-    {"bg", "Get or set the display manager background", NULL, NULL, raw_args_operands, NULL},
-    {"debug", "Get or set display manager debugging", NULL, NULL, raw_args_operands, NULL},
-    {"get", "Query display manager settings", NULL, NULL, raw_args_operands, NULL},
-    {"height", "Get display manager height", NULL, NULL, raw_args_operands, NULL},
-    {"initmsg", "Show display manager initialization messages", NULL, NULL, raw_args_operands, NULL},
-    {"list", "List display managers", NULL, NULL, raw_args_operands, NULL},
-    {"set", "Set display manager parameters", NULL, NULL, raw_args_operands, NULL},
-    {"type", "Report display manager type", NULL, NULL, raw_args_operands, NULL},
-    {"types", "List available display manager types", NULL, NULL, raw_args_operands, NULL},
-    {"width", "Get display manager width", NULL, NULL, raw_args_operands, NULL},
+    {"attach", "Attach an Obol display endpoint", NULL, NULL, raw_args_operands, NULL},
+    {"bg", "Get or set the endpoint background", NULL, NULL, raw_args_operands, NULL},
+    {"debug", "Get or set endpoint debugging", NULL, NULL, raw_args_operands, NULL},
+    {"get", "Query endpoint settings", NULL, NULL, raw_args_operands, NULL},
+    {"height", "Get endpoint height", NULL, NULL, raw_args_operands, NULL},
+    {"initmsg", "Show endpoint initialization messages", NULL, NULL, raw_args_operands, NULL},
+    {"list", "List Obol display endpoints", NULL, NULL, raw_args_operands, NULL},
+    {"set", "Set endpoint parameters", NULL, NULL, raw_args_operands, NULL},
+    {"type", "Report endpoint type", NULL, NULL, raw_args_operands, NULL},
+    {"types", "List available endpoint types", NULL, NULL, raw_args_operands, NULL},
+    {"width", "Get endpoint width", NULL, NULL, raw_args_operands, NULL},
     BU_OPT_CMD_DESC_NULL
 };
 
 static const struct bu_opt_cmd_desc dm_cmd = {
-    "dm", "Manage display managers", dm_opts, dm_meta, NULL, dm_subcommands
+    "dm", "Manage Obol display endpoints", dm_opts, dm_meta, NULL, dm_subcommands
 };
 
 static const struct bu_opt_cmd_desc *

@@ -181,9 +181,11 @@ view_pixel(struct application *ap)
 
     rt_pixel_t white = {255, 255, 255};
 
-    bu_semaphore_acquire(BU_SEM_SYSCALL);
-    (void)imgstream_fb_write(fbp, ap->a_x, ap->a_y, white, 1);
-    bu_semaphore_release(BU_SEM_SYSCALL);
+    if (rt_fb_output_enabled) {
+	bu_semaphore_acquire(BU_SEM_SYSCALL);
+	(void)imgstream_fb_write(fbp, ap->a_x, ap->a_y, white, 1);
+	bu_semaphore_release(BU_SEM_SYSCALL);
+    }
 #endif
 
     if (ap->a_user == 0) {
@@ -312,7 +314,7 @@ view_pixel(struct application *ap)
 		    bu_semaphore_release(BU_SEM_SYSCALL);
 		}
 
-		if (fbp != NULL) {
+		if (fbp != NULL && rt_fb_output_enabled) {
 		    /* Framebuffer output */
 		    bu_semaphore_acquire(BU_SEM_SYSCALL);
 		    npix = (int)imgstream_fb_write(fbp, ap->a_x, ap->a_y,
@@ -320,6 +322,7 @@ view_pixel(struct application *ap)
 		    bu_semaphore_release(BU_SEM_SYSCALL);
 		    if (npix < 1)
 			bu_exit(EXIT_FAILURE, "pixel fb_write error");
+		    rt_fb_progressive_flush();
 		}
 	    }
 	    return;
@@ -458,6 +461,8 @@ view_pixel(struct application *ap)
 
 		if (fbp == NULL)
 		    bu_exit(EXIT_FAILURE, "Incremental rendering with no framebuffer?");
+		if (!rt_fb_output_enabled)
+		    break;
 
 		spread = (1<<(incr_nlevel-incr_level))-1;
 		bu_semaphore_acquire(BU_SEM_SYSCALL);
@@ -479,13 +484,14 @@ view_pixel(struct application *ap)
 		}
 		bu_semaphore_release(BU_SEM_SYSCALL);
 		if (npix != width) bu_exit(EXIT_FAILURE, "fb_write error (incremental res)");
+		rt_fb_progressive_flush();
 	    }
 	    break;
 
 	case BUFMODE_ACC:
 	case BUFMODE_SCANLINE:
 	case BUFMODE_DYNAMIC:
-	    if (fbp != NULL) {
+	    if (fbp != NULL && rt_fb_output_enabled) {
 		size_t npix;
 		bu_semaphore_acquire(BU_SEM_SYSCALL);
 		if (sub_grid_mode) {
@@ -502,6 +508,7 @@ view_pixel(struct application *ap)
 			bu_log("WARNING: scanline error (wrote %zu of %zu pixels)", npix, (size_t)sub_xmax-sub_xmin-1);
 		    }
 		}
+		rt_fb_progressive_flush();
 	    }
 	    if (bif != NULL) {
 		/* TODO : Add double type data to maintain resolution */
@@ -542,7 +549,7 @@ void
 view_end(struct application *ap)
 {
     /* If the heat graph is on, render it after all pixels completed */
-    if (lightmodel == 8) {
+	if (lightmodel == 8 && rt_fb_output_enabled) {
 	fastf_t **timeTable;
 	timeTable = timeTable_init(0, 0);
 	bu_log("Building Heat-Graph!\n");
@@ -561,6 +568,9 @@ view_end(struct application *ap)
 	    prev_float_frame = curr_float_frame;
 	    curr_float_frame = tmp;
 	}
+	/* The display-session flush is a thread-safe frame request.  Its owner
+	 * thread applies the retained image update while pumping the native host. */
+	rt_fb_progressive_flush();
     }
 
     if (scanline) {

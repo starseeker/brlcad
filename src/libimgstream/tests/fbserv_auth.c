@@ -248,12 +248,6 @@ main(void)
 	return 1;
     }
 
-    fbserv_set_legacy_framebuffer(&fbs, (struct fb *)(void *)&legacy_marker);
-    if (fbserv_legacy_framebuffer(&fbs) != (struct fb *)(void *)&legacy_marker) {
-	fprintf(stderr, "fbserv legacy framebuffer accessor failed\n");
-	return 1;
-    }
-
     return 0;
 }
 

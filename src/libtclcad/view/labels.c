@@ -35,8 +35,7 @@
 #include "../view/view.h"
 
 /* Keep draw-view label features in sync with the TclCAD per-view data-labels
- * state so the current renderer draws
- * labels without the legacy dm_draw_labels path.
+ * state so the current renderer draws labels through retained features.
  *
  * The draw, color and labels getters in to_data_labels_func recover values
  * through typed GED data-label facades instead of TclCAD per-view data

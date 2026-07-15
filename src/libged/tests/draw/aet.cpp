@@ -192,8 +192,6 @@ main(int ac, char *av[]) {
     const char *s_av[15] = {NULL};
     gedp = ged_open("db", "moss_aet_tmp.g", 1);
 
-    bu_setenv("DM_SWRAST", "1", 1);
-
     // We don't want the default GED views for this test
     void *view_set_ctx = ged_view_set_ctx(gedp);
     ged_view_set_context_remove(view_set_ctx, NULL);

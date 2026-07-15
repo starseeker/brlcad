@@ -146,6 +146,17 @@ brlobol_input_default_view_profile(void);
 BRLOBOL_EXPORT const BRLObolInputProfile *
 brlobol_input_keyboard_view_profile(void);
 
+/**
+ * Apply a canonical view-orientation action to a caller-owned bv_context.
+ *
+ * This handles only the fixed orientation actions shared by Qt, Tk, and
+ * MGED.  Editing, selection, snapping, and application-specific faceplate
+ * state intentionally remain with their owning application.
+ */
+BRLOBOL_EXPORT int
+brlobol_input_view_orientation_apply(void *view_ctx,
+	BRLObolInputAction action);
+
 __END_DECLS
 
 /**
