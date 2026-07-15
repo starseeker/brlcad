@@ -318,7 +318,7 @@ mged_post_closedb_clbk(int UNUSED(ac), const char **UNUSED(argv), void *UNUSED(g
 
 /**
  * Close the current database, if open, and then open a new database.  May also
- * open a display manager, if interactive and none selected yet.
+ * open a graphics endpoint, if interactive and none selected yet.
  *
  * Syntax is that of opendb from libged, with one addition - the last argument
  * can be an optional 'y' or 'n' indicating whether to create the database if

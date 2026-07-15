@@ -33,7 +33,8 @@
 
 #include "bu/app.h"
 #include "bu/getopt.h"
-#include "dm.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
 
 #include "pkg.h"
 #include "ged.h"
@@ -94,7 +95,6 @@ fb2pix_get_args(struct fb2pix_state *s, int argc, char **argv)
 			  s->file_name);
 	    return 0;
 	}
-	(void)bu_fchmod(fileno(s->outfp), 0444);
     }
 
     if (argc > ++bu_optind)
@@ -103,6 +103,15 @@ fb2pix_get_args(struct fb2pix_state *s, int argc, char **argv)
     return 1;		/* OK */
 }
 
+
+static int
+fb2pix_apply(struct imgstream_fb *fb, void *userdata)
+{
+    struct fb2pix_state *state = (struct fb2pix_state *)userdata;
+    return state && imgstream_fb_export_pix_fp(fb, state->outfp,
+	(size_t)state->screen_width, (size_t)state->screen_height,
+	state->crunch, state->inverse) == 0 ? BRLCAD_OK : BRLCAD_ERROR;
+}
 
 int
 ged_fb2pix_core(struct ged *gedp, int argc, const char *argv[])
@@ -113,21 +122,9 @@ ged_fb2pix_core(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    if (!gedp->ged_gvp) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set\n");
-	return BRLCAD_ERROR;
-    }
-
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, ": no current display manager set\n");
-	return BRLCAD_ERROR;
-    }
-
-    struct fb *fbp = dm_get_fb(dmp);
-
-    if (!fbp) {
-	bu_vls_printf(gedp->ged_result_str, "display manager does not have a framebuffer");
 	return BRLCAD_ERROR;
     }
 
@@ -149,19 +146,17 @@ ged_fb2pix_core(struct ged *gedp, int argc, const char *argv[])
 
     setmode(fileno(stdout), O_BINARY);
 
-    ret = fb_write_fp(fbp, f2ps.outfp,
-		      f2ps.screen_width, f2ps.screen_height,
-		      f2ps.crunch, f2ps.inverse, gedp->ged_result_str);
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	fb2pix_apply, &f2ps, 0);
 
     if (f2ps.outfp != stdout)
 	fclose(f2ps.outfp);
 
-    if (ret == BRLCAD_OK) {
-	(void)dm_draw_begin(dmp);
-	fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-	(void)dm_draw_end(dmp);
+    if (ret == BRLCAD_OK)
 	return BRLCAD_OK;
-    }
+
+    bu_vls_printf(gedp->ged_result_str,
+	"unable to export the active Obol framebuffer");
 
     return BRLCAD_ERROR;
 }

@@ -1,0 +1,119 @@
+Obol Framebuffer Protocol Boundary
+==================================
+
+Status
+------
+
+The framebuffer wire protocol is owned by libimgstream.  Its public contract
+is `include/imgstream/fbserv.h`; its implementation is in the
+`src/libimgstream/fbserv_*.c` modules.  This includes:
+
+* wire message identifiers and PKG dispatch;
+* session authentication and TLS server contexts;
+* server, listener, and client lifecycle;
+* bounded byte processing and client draining;
+* backend-neutral framebuffer operation dispatch; and
+* disconnect, cancellation, and cleanup state.
+
+Neither a compatibility framebuffer layer nor an application host may
+implement a second packet switch or packet-handler loop.  The old
+`src/libdm/fbserv.c`, `src/fbserv/server.c`, and MGED-private protocol
+implementation are retired.
+
+Ownership
+---------
+
+libimgstream owns protocol semantics and transport-neutral processing.
+Toolkit and executable hosts own only their event-loop integration:
+
+* qged adapts Qt sockets and notifiers;
+* libtclcad adapts Tcl channels and file handlers;
+* standalone `fbserv` owns its TCP or IPC listener loop; and
+* libged's generic Obol bridge owns its watcher integration for headless hosts.
+
+Hosts feed bytes through `fbs_process_client_bytes` or let the common bounded
+dispatcher `fbs_drain_client` read a ready connection.  Hosts install transport
+callbacks through `fbs_set_transport` or a narrow toolkit wrapper.  They do not
+call `pkg_process` for framebuffer traffic and do not inspect the backend table
+or listener/client arrays directly.
+
+libbrlobol owns presentation, not protocol parsing.  Its
+`BRLObolFramebufferStream` maps framebuffer state onto imgstream storage and
+Obol scene content.  libged supplies the neutral GED-to-Obol framebuffer
+backend used by qged, GSH, and MGED.  qged supplies its borrowed
+`QgObolWindowHost`; headless and Tk hosts use their own Obol controller.
+
+Legacy Compatibility
+--------------------
+
+The `struct fb` compatibility API and its fbserv adapter are removed.  Every
+server installs an imgstream-native backend through `fbserv_set_backend`; no
+legacy framebuffer pointer or adapter remains in the protocol state.
+
+Legacy display names are accepted only by libbrlobol's explicit display-session
+provider boundary.  The current provider maps `/dev/X` and `/dev/swrast` to a
+software Obol host, and `/dev/ogl`, `/dev/wgl`, and `/dev/qtgl` to a System-GL
+Obol host.  These are top-level provider selections, never embedded image
+presentation fallbacks or restored display-manager drivers.  If no compatible
+provider is linked, opening the display fails explicitly.
+
+When a GED view has an endpoint, the external `rt`, `rtedge`, enabled `art`,
+and ERT commands launch their child renderer against that endpoint's imgstream
+listener.  They do not query a display manager or select a graphical device
+name.  This process bridge is distinct from the future retained interactive
+librt renderer.
+
+Threading Contract
+------------------
+
+Framebuffer producers and socket watchers may update imgstream pixels,
+fb-compatible cursor/view state, dirty metadata, and generation counters.
+They must not mutate Coin/Obol nodes or render from a transport thread.
+
+`SoBRLImageSource` notifications only record pending generations.  The
+application update owner calls `BRLObolFramebufferStream::present` (or the
+equivalent source synchronization method) before requesting a render.  qged
+does this on its UI thread.  GSH and MGED do it in their command/refresh owner.
+Render traversal remains read-only with respect to stream publication.
+
+Standalone visible `rt` uses `brlobol_display_session_run`: tracing executes
+on a worker while the opening thread polls the provider.  Its pixel callbacks
+only coalesce a display-session frame request; the owner poll performs retained
+image synchronization and toolkit dispatch.  `fbserv` uses the same session
+contract from its service loop.  The standalone executables select one direct
+provider with a small compile-time branch: QtCAD is preferred and TclCAD is
+the fallback.  Those libraries own their respective application/event-loop
+setup; neither executable calls raw toolkit APIs.  With neither toolkit built,
+display targets fail explicitly and only non-window imgstream targets remain.
+`/dev/null` is a supported explicit diagnostic sink for measurement-only
+raytraces: it retains no image data and does not initialize a provider.
+
+Lifecycle Contract
+------------------
+
+Authentication precedes framebuffer operations when strict authentication is
+enabled.  EOF, protocol failure, and host cancellation all pass through the
+same common disconnect cleanup.  A host must not close a PKG client from
+inside its active PKG callback; the common server records a pending drop and
+performs it after dispatch returns.  `fbs_close` cancels all clients and
+releases listener, TLS, and backend state owned by the server object.
+
+Verification
+------------
+
+`imgstream_fbserv_lifecycle_test` constructs real wire frames, delivers them
+one byte at a time, verifies strict authentication and rectangle dispatch, and
+checks EOF and host-cancel cleanup.  `test_qged_obol_fbserv` verifies partial
+and final scan bands, resize, flush/present, and readback through the Qt host.
+`gsh_obol_ert_smoke` runs a real single-threaded ERT and verifies that a
+meaningful partial image advances to a substantially different complete
+frame.  MGED smoke tests cover the Tcl host adapter and final ERT presentation.
+`libbrlobol_window_host` verifies a worker-backed display-session task while
+the owner polls, and `rt_display_swrast` plus `rt_display_ogl` run a real RT
+frame through the software and System-GL provider selections under Xvfb.
+
+Future Work
+-----------
+
+Platform event-loop tests remain necessary for Windows and macOS, but the
+ownership contract is platform-independent.

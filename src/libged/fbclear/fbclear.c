@@ -37,44 +37,61 @@
 #  include <winsock.h>
 #endif
 
-#include "dm.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
+#include "bv.h"
+#include "bu/str.h"
 
 
 #define FB_CONSTRAIN(_v, _a, _b) \
     (((_v) > (_a)) ? ((_v) < (_b) ? (_v) : (_b)) : (_a))
 
+static int
+fbclear_apply(struct imgstream_fb *fb, void *userdata)
+{
+    return imgstream_fb_clear(fb, (const unsigned char *)userdata) == 0 ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
+
 int
 ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 {
-    static const char usage[] = "\nUsage: fbclear [rgb]";
+    static const char usage[] = "\nUsage: fbclear [-m] [rgb]\n  -m   also reset gv_fb_mode to 0 (turn the framebuffer underlay off)";
 
     int ret;
+    int reset_mode = 0;
     unsigned char clearColor[3] = {0.0, 0.0 ,0.0};
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    if (!gedp->ged_gvp || !gedp->ged_gvp->dmp) {
-	bu_vls_printf(gedp->ged_result_str, "no display manager currently active");
-	return BRLCAD_ERROR;
-    }
-
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
-    struct fb *fbp = dm_get_fb(dmp);
-
-    if (!fbp) {
-	bu_vls_printf(gedp->ged_result_str, "display manager does not have a framebuffer");
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
+	bu_vls_printf(gedp->ged_result_str, "no current view set");
 	return BRLCAD_ERROR;
     }
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (argc == 2) {
+    /* Phase B2 (ert reliability): optional "-m" flag that also resets
+     * gv_fb_mode to 0 so the user can wipe the framebuffer image *and*
+     * restore the plain 3D view in a single command.  Without this the
+     * faceplate-driven underlay pasted on top of the 3D scene by ert's
+     * implicit `gv_fb_mode = 2` would persist (showing a black canvas
+     * after `fbclear`) until the user separately runs the `view fb`
+     * faceplate command. */
+    int arg_start = 1;
+    if (argc >= 2 && BU_STR_EQUAL(argv[1], "-m")) {
+	reset_mode = 1;
+	arg_start = 2;
+    }
+
+    if (argc - arg_start == 1) {
 	int r, g, b;
 
-	if (sscanf(argv[1], "%d %d %d", &r, &g, &b) != 3) {
-	    bu_log("fb_clear: bad color spec - %s", argv[1]);
+	if (sscanf(argv[arg_start], "%d %d %d", &r, &g, &b) != 3) {
+	    bu_log("fb_clear: bad color spec - %s", argv[arg_start]);
 	    return BRLCAD_ERROR;
 	}
 
@@ -82,21 +99,32 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	clearColor[GRN] = FB_CONSTRAIN(g, 0, 255);
 	clearColor[BLU] = FB_CONSTRAIN(b, 0, 255);
 
-    } else if (argc > 2) {
+    } else if (argc - arg_start > 1) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
 	return BRLCAD_ERROR;
     }
 
-    ret = fb_clear(fbp, clearColor);
-
-    if (ret)
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	fbclear_apply, clearColor, 1);
+    if (ret != BRLCAD_OK) {
+	bu_vls_printf(gedp->ged_result_str,
+	    "unable to clear the active Obol framebuffer");
 	return BRLCAD_ERROR;
+    }
 
-    (void)dm_draw_begin(dmp);
-    fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-    (void)dm_draw_end(dmp);
-
-    dm_set_dirty(dmp, 1);
+    if (reset_mode) {
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+	value.string_value = "off";
+	if (ged_view_context_display_property_set(view_ctx,
+		"composition.framebuffer.mode", &value) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"unable to disable the Obol framebuffer composition");
+	    return BRLCAD_ERROR;
+	}
+    }
 
     return BRLCAD_OK;
 }

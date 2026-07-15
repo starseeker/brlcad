@@ -231,7 +231,7 @@ set(CMAKE_FIND_USE_PACKAGE_REGISTRY FALSE)
 # Prepare to manage and build BRL-CAD's external dependencies. Specifies a
 # specific commit hash to use in the 'bext' repository.
 include(BRLCAD_ExternalDeps)
-brlcad_bext_init(fa85fcbe8ea7392f09995e406904d07f39202499)
+brlcad_bext_init(fda636481d174154534e393c035af8bec3182085)
 
 #---------------------------------------------------------------------
 # Define various utilities.
@@ -1728,12 +1728,14 @@ brlcad_check_dirname()
 # OpenGL headers
 if(BRLCAD_ENABLE_OPENGL)
   find_package(OpenGL)
-  if(OPENGL_INCLUDE_DIR_GL)
+  # Modern CMake FindOpenGL sets OPENGL_INCLUDE_DIR; older versions used
+  # OPENGL_INCLUDE_DIR_GL.  Accept either form so the build works with both.
+  if(OPENGL_INCLUDE_DIR_GL OR OPENGL_INCLUDE_DIR)
     config_h_append(BRLCAD "#define HAVE_GL_GL_H 1\n")
-  endif(OPENGL_INCLUDE_DIR_GL)
-  if(OPENGL_INCLUDE_DIR_GLX)
+  endif()
+  if(OPENGL_INCLUDE_DIR_GLX OR OPENGL_GLX_INCLUDE_DIR)
     config_h_append(BRLCAD "#define HAVE_GL_GLX_H 1\n")
-  endif(OPENGL_INCLUDE_DIR_GLX)
+  endif()
   if(OPENGL_USING_FRAMEWORK)
     config_h_append(BRLCAD "#define HAVE_OPENGL_GL_H 1\n")
   endif(OPENGL_USING_FRAMEWORK)
@@ -2303,6 +2305,13 @@ endif(BRLCAD_EXTRADOCS)
 # variable.)
 include(CTest)
 mark_as_advanced(BUILD_TESTING)
+brlcad_add_test(
+  NAME brlobol_pivot_guard
+  COMMAND ${CMAKE_COMMAND}
+  -DBRLCAD_SOURCE_DIR=${BRLCAD_SOURCE_DIR}
+  -DBRLOBOL_PIVOT_GUARD_MODE=transitional
+  -P ${BRLCAD_CMAKE_DIR}/brlobol_pivot_guard.cmake
+)
 
 # Set up the BRL-CAD wrapper around find_package
 include(BRLCAD_Find_Package)

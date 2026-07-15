@@ -28,141 +28,207 @@
 #include "rt/geom.h"		/* for ID_POLY special support */
 #include "raytrace.h"
 #include "rt/db4.h"
+#include "ged/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 
-#define GET_BV_SCENE_OBJ(p, fp) { \
-          if (BU_LIST_IS_EMPTY(fp)) { \
-              BU_ALLOC((p), struct bv_scene_obj); \
-              struct ged_bv_data *bdata; \
-              BU_GET(bdata, struct ged_bv_data); \
-              db_full_path_init(&bdata->s_fullpath); \
-              (p)->s_u_data = (void *)bdata; \
-          } else { \
-              p = BU_LIST_NEXT(bv_scene_obj, fp); \
-              BU_LIST_DEQUEUE(&((p)->l)); \
-              if ((p)->s_u_data) { \
-                  struct ged_bv_data *bdata = (struct ged_bv_data *)(p)->s_u_data; \
-                  bdata->s_fullpath.fp_len = 0; \
-              } \
-          } \
-          BU_LIST_INIT( &((p)->s_vlist) ); }
+#define MGED_EDIT_PREVIEW_PREFIX "_mged_edit_preview::"
+
+static int
+mged_check_shape_ref(struct mged_state *s, ged_draw_shape_ref ref, const char *caller)
+{
+    if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref)) {
+	if (s && s->interp && caller)
+	    Tcl_AppendResult(s->interp, caller, "() ref is NULL\n", (char *)NULL);
+	return 0;
+    }
+
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(s->gedp, ref, &rec)) {
+	if (s->interp && caller)
+	    Tcl_AppendResult(s->interp, caller, "() stale draw ref\n", (char *)NULL);
+	return 0;
+    }
+    return 1;
+}
 
 
-/*
- * Compute the min, max, and center points of the solid.
- * Also finds s_vlen;
- */
 static void
-mged_bound_solid(struct mged_state *s, struct bv_scene_obj *sp)
+mged_edit_preview_name(struct bu_vls *name, const char *source_path)
 {
-    point_t bmin, bmax;
-    size_t length = 0;
-    int cmd;
-    int dispmode;
-    VSET(bmin, INFINITY, INFINITY, INFINITY);
-    VSET(bmax, -INFINITY, -INFINITY, -INFINITY);
-
-    cmd = bv_vlist_bbox(&sp->s_vlist, &bmin, &bmax, &length, &dispmode);
-    if (cmd) {
-	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
-	bu_vls_printf(&tmp_vls, "unknown vlist op %d\n", cmd);
-	Tcl_AppendResult(s->interp, bu_vls_addr(&tmp_vls), (char *)NULL);
-	bu_vls_free(&tmp_vls);
-    }
-
-    sp->s_vlen = (int)length;
-    sp->s_center[X] = (bmin[X] + bmax[X]) * 0.5;
-    sp->s_center[Y] = (bmin[Y] + bmax[Y]) * 0.5;
-    sp->s_center[Z] = (bmin[Z] + bmax[Z]) * 0.5;
-
-    sp->s_size = bmax[X] - bmin[X];
-    V_MAX(sp->s_size, bmax[Y] - bmin[Y]);
-    V_MAX(sp->s_size, bmax[Z] - bmin[Z]);
-    sp->s_displayobj = dispmode;
+    if (!name)
+	return;
+    bu_vls_sprintf(name, "%s%s", MGED_EDIT_PREVIEW_PREFIX,
+	    source_path ? source_path : "");
 }
 
 
-/*
- * Once the vlist has been created, perform the common tasks
- * in handling the drawn solid.
- *
- * This routine must be prepared to run in parallel.
- */
-void
-drawH_part2(struct mged_state *s, int dashflag, struct bu_list *vhead, const struct db_full_path *pathp, struct db_tree_state *tsp, struct bv_scene_obj *existing_sp)
+static int
+mged_edit_preview_view_exists(void *view_ctx, const char *name)
 {
-    struct display_list *gdlp;
-    struct bv_scene_obj *sp;
-
-    if (!existing_sp) {
-	/* Handling a new solid */
-	struct bv_scene_obj *free_scene_obj = bv_set_fsos(&s->gedp->ged_views);
-	GET_BV_SCENE_OBJ(sp, &free_scene_obj->l);
-	BU_LIST_APPEND(&free_scene_obj->l, &((sp)->l) );
-	sp->s_dlist = 0;
-    } else {
-	/* Just updating an existing solid.
-	 * 'tsp' and 'pathpos' will not be used
-	 */
-	sp = existing_sp;
-    }
-
-    /*
-     * Compute the min, max, and center points.
-     */
-    BU_LIST_APPEND_LIST(&(sp->s_vlist), vhead);
-    mged_bound_solid(s, sp);
-
-    /*
-     * If this solid is new, fill in its information.
-     * Otherwise, don't touch what is already there.
-     */
-    if (!existing_sp) {
-	/* Take note of the base color */
-	sp->s_old.s_uflag = 0;
-	if (tsp) {
-	    if (tsp->ts_mater.ma_color_valid) {
-		sp->s_old.s_dflag = 0;	/* color specified in db */
-	    } else {
-		sp->s_old.s_dflag = 1;	/* default color */
-	    }
-	    /* Copy into basecolor anyway, to prevent black */
-	    sp->s_old.s_basecolor[0] = tsp->ts_mater.ma_color[0] * 255.0;
-	    sp->s_old.s_basecolor[1] = tsp->ts_mater.ma_color[1] * 255.0;
-	    sp->s_old.s_basecolor[2] = tsp->ts_mater.ma_color[2] * 255.0;
-	}
-	sp->s_old.s_cflag = 0;
-	sp->s_iflag = DOWN;
-	sp->s_soldash = dashflag;
-	sp->s_old.s_Eflag = 0;	/* This is a solid */
-	if (sp->s_u_data) {
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-	    db_dup_full_path(&bdata->s_fullpath, pathp);
-	}
-	if (tsp)
-	    sp->s_old.s_regionid = tsp->ts_regionid;
-    }
-
-    createDListSolid(s, sp);
-
-    /* Solid is successfully drawn */
-    if (!existing_sp) {
-	/* Add to linked list of solid structs */
-	bu_semaphore_acquire(RT_SEM_MODEL);
-
-	/* Grab the last display list */
-	gdlp = BU_LIST_PREV(display_list, (struct bu_list *)ged_dl(s->gedp));
-	BU_LIST_APPEND(gdlp->dl_head_scene_obj.back, &sp->l);
-
-	bu_semaphore_release(RT_SEM_MODEL);
-    } else {
-	/* replacing existing solid -- struct already linked in */
-	sp->s_iflag = UP;
-    }
+    return (view_ctx && name && name[0] &&
+	    ged_draw_view_context_feature_exists(view_ctx, name)) ? 1 : 0;
 }
+
+
+static int
+mged_edit_preview_exists_any(struct mged_state *s, const char *name)
+{
+    int checked = 0;
+
+    if (!s || !name || !name[0])
+	return 0;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	void *view_ctx = (m_dmp && m_dmp->display_view_state) ?
+	    m_dmp->display_view_state->vs_gvp : NULL;
+	if (!view_ctx)
+	    continue;
+	checked = 1;
+	if (mged_edit_preview_view_exists(view_ctx, name))
+	    return 1;
+    }
+
+    if (!checked && view_state && view_state->vs_gvp)
+	return mged_edit_preview_view_exists(view_state->vs_gvp, name);
+
+    return 0;
+}
+
+
+static int
+mged_edit_preview_publish_view(
+    struct mged_state *s,
+    struct _view_state *vsp,
+    const char *name,
+    const char *source_path,
+    struct rt_db_internal *ip,
+    const mat_t mat)
+{
+    void *view_ctx = vsp ? vsp->vs_gvp : NULL;
+    if (!s || !view_ctx || !name || !name[0] || !ip)
+	return 0;
+
+    struct ged_draw_view_edit_transaction transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE;
+    transaction.feature_name = name;
+    transaction.owner = (const void *)s;
+    transaction.source_path = source_path;
+    transaction.edit_intent_id = source_path;
+    transaction.edit_intent_role = "primitive-edit";
+    transaction.dbip = s->dbip;
+    transaction.internal = ip;
+    transaction.matrix = mat;
+    transaction.ttol = &s->tol.ttol;
+    transaction.tol = &s->tol.tol;
+    if (color_scheme) {
+	transaction.color_valid = 1;
+	transaction.color[0] = color_scheme->cs_edit_info[0];
+	transaction.color[1] = color_scheme->cs_edit_info[1];
+	transaction.color[2] = color_scheme->cs_edit_info[2];
+    }
+
+    if (!ged_draw_view_context_edit_transaction_apply(view_ctx,
+	    &transaction, NULL))
+	return -1;
+
+    mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
+    return 1;
+}
+
+
+static int
+mged_edit_preview_publish_all(
+    struct mged_state *s,
+    const char *name,
+    const char *source_path,
+    struct rt_db_internal *ip,
+    const mat_t mat)
+{
+    int published = 0;
+    int attempted = 0;
+    int failed = 0;
+
+    if (!s || !name || !name[0] || !ip)
+	return 0;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!m_dmp || !m_dmp->display_view_state || !m_dmp->display_view_state->vs_gvp)
+	    continue;
+	attempted = 1;
+	int ret = mged_edit_preview_publish_view(s, m_dmp->display_view_state,
+	    name, source_path, ip, mat);
+	if (ret > 0)
+	    published = 1;
+	else if (ret < 0)
+	    failed = 1;
+    }
+
+    if (!attempted && view_state && view_state->vs_gvp) {
+	int ret = mged_edit_preview_publish_view(s, view_state, name,
+	    source_path, ip, mat);
+	if (ret > 0)
+	    published = 1;
+	else if (ret < 0)
+	    failed = 1;
+    }
+
+    return failed ? -1 : published;
+}
+
+
+static int
+mged_edit_preview_clear_view(struct mged_state *s,
+			     struct _view_state *vsp,
+			     const char *name)
+{
+    void *view_ctx = vsp ? vsp->vs_gvp : NULL;
+    int removed = 0;
+
+    if (!view_ctx || !name || !name[0])
+	return 0;
+
+    struct ged_draw_view_edit_transaction transaction =
+	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
+    transaction.feature_name = name;
+    removed = ged_draw_view_context_edit_transaction_apply(view_ctx,
+	    &transaction, NULL);
+    if (removed)
+	mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);
+    return removed;
+}
+
+
+static int
+mged_edit_preview_clear_all(struct mged_state *s, const char *name)
+{
+    int removed = 0;
+    int attempted = 0;
+
+    if (!s || !name || !name[0])
+	return 0;
+
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!m_dmp || !m_dmp->display_view_state || !m_dmp->display_view_state->vs_gvp)
+	    continue;
+	attempted = 1;
+	if (mged_edit_preview_clear_view(s, m_dmp->display_view_state, name))
+	    removed = 1;
+    }
+
+    if (!attempted && view_state && view_state->vs_gvp)
+	removed = mged_edit_preview_clear_view(s, view_state, name);
+
+    return removed;
+}
+
 
 /*
  * Given an existing solid structure that may have been subjected to
@@ -174,37 +240,27 @@ drawH_part2(struct mged_state *s, int dashflag, struct bu_list *vhead, const str
  * 0 OK
  */
 int
-replot_original_solid(struct mged_state *s, struct bv_scene_obj *sp)
+replot_original_solid(struct mged_state *s, ged_draw_shape_ref ref)
 {
-    struct rt_db_internal intern;
-    struct directory *dp;
-    mat_t mat;
-
     if (s->dbip == DBI_NULL)
 	return 0;
 
-    if (!sp->s_u_data)
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(s->gedp, ref, &rec))
 	return 0;
-    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-    dp = LAST_SOLID(bdata);
-    if (sp->s_old.s_Eflag) {
-	Tcl_AppendResult(s->interp, "replot_original_solid(", dp->d_namep,
-			 "): Unable to plot evaluated regions, skipping\n", (char *)NULL);
+    if (!rec.fullpath || rec.fullpath->fp_len <= 0)
+	return 0;
+    char *source_path = db_path_to_string(rec.fullpath);
+    if (!source_path)
 	return -1;
-    }
-    (void)db_path_to_mat(s->dbip, &bdata->s_fullpath, mat, bdata->s_fullpath.fp_len-1);
 
-    if (rt_db_get_internal(&intern, dp, s->dbip, mat) < 0) {
-	Tcl_AppendResult(s->interp, dp->d_namep, ":  solid import failure\n", (char *)NULL);
-	return -1;		/* ERROR */
-    }
-    RT_CK_DB_INTERNAL(&intern);
+    struct bu_vls feature_name = BU_VLS_INIT_ZERO;
+    mged_edit_preview_name(&feature_name, source_path);
+    if (mged_edit_preview_clear_all(s, bu_vls_cstr(&feature_name)))
+	(void)ged_draw_shape_ref_set_visible(s->gedp, ref, 1);
 
-    if (replot_modified_solid(s, sp, &intern, bn_mat_identity) < 0) {
-	rt_db_free_internal(&intern);
-	return -1;
-    }
-    rt_db_free_internal(&intern);
+    bu_vls_free(&feature_name);
+    bu_free(source_path, "MGED edit-preview source path");
     return 0;
 }
 
@@ -222,26 +278,37 @@ replot_original_solid(struct mged_state *s, struct bv_scene_obj *sp)
 int
 replot_modified_solid(
 	struct mged_state *s,
-	struct bv_scene_obj *sp,
+	ged_draw_shape_ref ref,
 	struct rt_db_internal *ip,
 	const mat_t mat)
 {
-    struct rt_db_internal intern;
-    struct bu_list vhead;
-
-    RT_DB_INTERNAL_INIT(&intern);
-
-    BU_LIST_INIT(&vhead);
-
-    if (sp == NULL) {
+    if (!mged_check_shape_ref(s, ref, "replot_modified_solid")) {
 	Tcl_AppendResult(s->interp, "replot_modified_solid() sp==NULL?\n", (char *)NULL);
 	return -1;
     }
 
-    /* Release existing vlist of this solid */
-    BV_FREE_VLIST(s->vlfree, &(sp->s_vlist));
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(s->gedp, ref, &rec) ||
+	    !rec.fullpath || rec.fullpath->fp_len <= 0) {
+	Tcl_AppendResult(s->interp, "replot_modified_solid() stale draw path\n", (char *)NULL);
+	return -1;
+    }
+    char *source_path = db_path_to_string(rec.fullpath);
+    if (!source_path) {
+	Tcl_AppendResult(s->interp, "replot_modified_solid() unable to resolve draw path\n", (char *)NULL);
+	return -1;
+    }
 
-    /* Draw (plot) a normal solid */
+    struct bu_vls feature_name = BU_VLS_INIT_ZERO;
+    mged_edit_preview_name(&feature_name, source_path);
+    const int existing_preview =
+	mged_edit_preview_exists_any(s, bu_vls_cstr(&feature_name));
+    if (!rec.visible && !existing_preview) {
+	bu_vls_free(&feature_name);
+	bu_free(source_path, "MGED edit-preview source path");
+	return 0;
+    }
+
     RT_CK_DB_INTERNAL(ip);
 
     s->tol.ttol.magic = BG_TESS_TOL_MAGIC;
@@ -249,38 +316,36 @@ replot_modified_solid(
     s->tol.ttol.rel = s->tol.rel_tol;
     s->tol.ttol.norm = s->tol.nrm_tol;
 
-    transform_editing_solid(s, &intern, mat, ip, 0);
-
-    if (OBJ[ip->idb_type].ft_plot(&vhead, &intern, &s->tol.ttol, &s->tol.tol, NULL) < 0) {
-	if (!sp->s_u_data)
-	    return -1;
-	struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-	if (bdata->s_fullpath.fp_len > 0)
-	    Tcl_AppendResult(s->interp, LAST_SOLID(bdata)->d_namep,
-		    ": re-plot failure\n", (char *)NULL);
+    int preview_status = mged_edit_preview_publish_all(s,
+	bu_vls_cstr(&feature_name), source_path, ip, mat);
+    if (preview_status < 0) {
+	if (rec.leaf_name)
+	    Tcl_AppendResult(s->interp, rec.leaf_name, ": edit-preview plot failure\n",
+		    (char *)NULL);
+	bu_vls_free(&feature_name);
+	bu_free(source_path, "MGED edit-preview source path");
 	return -1;
     }
-    rt_db_free_internal(&intern);
 
-    /* Write new displaylist */
-    drawH_part2(s, sp->s_soldash, &vhead,
-		(struct db_full_path *)0,
-		(struct db_tree_state *)0, sp);
+    if (preview_status > 0 && rec.visible)
+	(void)ged_draw_shape_ref_set_visible(s->gedp, ref, 0);
+    if (preview_status > 0)
+	ged_draw_shape_set_highlighted(s->gedp, ref, 1);
 
-    view_state->vs_flag = 1;
+    bu_vls_free(&feature_name);
+    bu_free(source_path, "MGED edit-preview source path");
     return 0;
 }
 
 void
-add_solid_path_to_result(
+add_solid_record_path_to_result(
     Tcl_Interp *interp,
-    struct bv_scene_obj *sp)
+    const struct ged_draw_shape_record *rec)
 {
     struct bu_vls str = BU_VLS_INIT_ZERO;
-    if (!sp || !sp->s_u_data)
+    if (!rec || !rec->fullpath)
 	return;
-    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-    db_path_to_vls(&str, &bdata->s_fullpath);
+    db_path_to_vls(&str, rec->fullpath);
     Tcl_AppendResult(interp, bu_vls_addr(&str), " ", NULL);
     bu_vls_free(&str);
 }

@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -42,12 +44,21 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    void *view_ctx = ged_view_active_ctx(gedp);
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get the perspective angle */
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "%g", gedp->ged_gvp->gv_perspective);
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (ged_view_context_display_property_get(view_ctx, "view.perspective",
+		&value) != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"active view has no Obol perspective policy");
+	    return BRLCAD_ERROR;
+	}
+	bu_vls_printf(gedp->ged_result_str, "%g", value.double_value);
 	return BRLCAD_OK;
     }
 
@@ -58,16 +69,16 @@ ged_perspective_core(struct ged *gedp, int argc, const char *argv[])
 	    return BRLCAD_ERROR;
 	}
 
-	gedp->ged_gvp->gv_perspective = perspective;
-
-	if (SMALL_FASTF < gedp->ged_gvp->gv_perspective) {
-	    persp_mat(gedp->ged_gvp->gv_pmat, gedp->ged_gvp->gv_perspective,
-			  (fastf_t)1.0f, (fastf_t)0.01f, (fastf_t)1.0e10f, (fastf_t)1.0f);
-	} else {
-	    MAT_COPY(gedp->ged_gvp->gv_pmat, bn_mat_identity);
+	struct brlobol_endpoint_property_value value =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	value.double_value = perspective;
+	if (ged_view_context_display_property_set(view_ctx, "view.perspective",
+		&value) != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"bad perspective angle - %s", argv[1]);
+	    return BRLCAD_ERROR;
 	}
-
-	bv_update(gedp->ged_gvp);
 
 	return BRLCAD_OK;
     }

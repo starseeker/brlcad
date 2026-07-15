@@ -35,8 +35,17 @@
 
 #include "bu/app.h"
 #include "bu/process.h"
+#include "bv.h"
 
 #include "../ged_private.h"
+
+
+static int
+ged_rt_is_image_renderer(const char *command)
+{
+    return command && (BU_STR_EQUAL(command, "rt") ||
+	BU_STR_EQUAL(command, "rtedge") || BU_STR_EQUAL(command, "art"));
+}
 
 
 int
@@ -46,6 +55,7 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
     int i;
     int units_supplied = 0;
     char pstring[32];
+    fastf_t perspective;
     int args;
     char **gd_rt_cmd = NULL;
     int gd_rt_cmd_len = 0;
@@ -67,11 +77,14 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    if (gedp->new_cmd_forms) {
-	args = argc + 9 + 2 + (int)ged_who_argc(gedp);
-    } else {
-	args = argc + 7 + 2 + (int)ged_who_argc(gedp);
-    }
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (ged_rt_is_image_renderer(argv[0]) &&
+	ged_view_context_display_endpoint_get(view_ctx))
+	return _ged_external_rt_to_endpoint(gedp, argc, argv, argv[0], NULL);
+
+    perspective = bv_perspective_get(
+		      bv_context_view_const((const struct bv_context *)view_ctx));
+    args = argc + 7 + 2 + (int)ged_who_argc(gedp);
     gd_rt_cmd = (char **)bu_calloc(args, sizeof(char *), "alloc gd_rt_cmd");
 
     // rtweight puts its output on stdout as well as stderr - let _ged_run_rt
@@ -89,16 +102,10 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
     vp = &gd_rt_cmd[0];
     *vp++ = rt;
 
-    if (gedp->new_cmd_forms) {
-	*vp++ = "-F";
-	// TODO - look up dm type for this...
-	*vp++ = "/dev/qtgl";
-    }
-
     *vp++ = "-M";
 
-    if (gedp->ged_gvp->gv_perspective > 0) {
-	(void)sprintf(pstring, "-p%g", gedp->ged_gvp->gv_perspective);
+    if (perspective > 0) {
+	(void)sprintf(pstring, "-p%g", perspective);
 	*vp++ = pstring;
     }
 

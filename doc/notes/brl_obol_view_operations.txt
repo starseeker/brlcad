@@ -1,0 +1,249 @@
+BRL-CAD / Obol View Operation Semantics
+=======================================
+
+Purpose
+-------
+
+This note records BRL-CAD managed view-feature behavior that is command semantics, not
+generic Obol rendering preference.  Obol can support richer visualization and
+interaction than legacy display-manager code, but command behavior should flow
+through typed feature operations with explicit ownership and capabilities.
+
+Current Command Model
+---------------------
+
+The old GED `view obj`, `view objs`, and `view gobjs` spellings are retired,
+not compatibility aliases.  They mixed annotations, database instances,
+transient edit proxies, command-result visuals, type-specific editors, and
+style mutation behind one resolver.
+
+The Obol-oriented command split is:
+
+* `view feature` for lifecycle, info, visibility, style, and realization.
+* `view annotation` for user-authored line, arrow, label, and axes objects.
+* `view polygon` for polygon creation/editing.
+* `view db` for database display/edit-proxy insertion.
+* Future `view result` and `view tool` families should manage command-owned
+  scene results and interactive Coin tools rather than overloading
+  `view feature` with type-specific creation verbs.
+
+`view feature` command code should resolve one typed feature handle and dispatch
+through feature/capability APIs.  It must not independently branch on "feature
+exists" versus "shape ref exists" and then perform separate mutations.
+Lifecycle, visibility, style, and realization dispatch belongs in managed-feature
+GED draw facades and the Obol draw bridge.
+
+`view annotation` command code should follow the same rule at the annotation
+class level.  Syntax parsing stays in the command file, but line, label, and
+axes creation/editing should dispatch through annotation-level GED draw
+facades so feature-store lifecycle, overlay classification, and retained
+fallback remain inside the draw bridge.
+
+Legacy TclCAD `data_*` / `sdata_*` overlay syntax remains a compatibility
+surface for old callers.  Lines, arrows, axes, labels, and polygons should
+route creation, style, movement, scaling, and pick/readback through typed
+data-overlay facades, not direct feature-store helpers; new workflows should
+prefer `view annotation` or `view polygon` for user-authored geometry and
+command-result publication for command-owned visualizations.
+
+Common View Mechanics Boundary
+------------------------------
+
+Generic view mechanics should live in the new clean libbv, not in librt and
+not as preserved historical bview-era API compatibility.  The clean API uses
+the short `bv_*` prefix because `bv` already means BRL-CAD view.  The old
+mainline libbv is useful as reference material for formulas and behavior, but
+the replacement defines a smaller explicit contract:
+
+* camera/view state and derived matrices
+* autoview-bounds math and screen/model coordinate transforms
+* input/knob state and command processing
+* view-set bookkeeping for shared view state
+
+Current production view mechanics are libbv-backed.  GED owns application
+view registration and command policy, while libbrlobol owns Obol attachment
+state such as scene-root tokens, independent-view scope flags, and realized
+view-local LoD payloads through `BRLObolViewAttachment`.  GED view contexts
+and attached Obol controllers share one ref-counted attachment while attached;
+controller replacement and detach explicitly unbind it and leave the GED view
+context with an attachment copy carrying passive host state.  Missing scene or
+feature-store cases should return explicit empty/no-op results rather than
+implicitly creating retained BSG storage.
+
+Edit visualization should use librt edit state plus libbrlobol/Obol preview or
+manipulator objects.  The old display-path edit-matrix handoff has been
+removed: GED view contexts no longer expose edit-matrix setters, MGED does not
+stage `vs_model2objview` through view state during `dozoom`, and libbsg no
+longer carries a `gv_edit_mat` view field.
+
+The new libbv must not own Obol scene graph objects, command-result objects,
+database draw state, display lists, Tcl/display-manager state, polygon stores,
+snap/selection resolution, LoD caches, or retained BSG compatibility.  Those
+belong in Obol/libbrlobol, GED command facades, display-host code, librt
+RT-facing state/adapters, or explicit legacy adapters depending on the
+feature.
+
+Display-Host Migration Boundary
+-------------------------------
+
+Headless rendering uses a libbrlobol display endpoint and registered headless
+host directly; the former `dm-obol` adapter is deleted.  If MGED, GSH,
+RTWizard, TclCAD, or qged code reaches for a direct libdm view-renderer
+callback, treat that as one of two migration signals:
+the caller should be retargeted to a high-level GED/Obol operation, or the
+Obol path is missing a high-level capability that should be implemented there.
+`dm open --host headless` creates an endpoint-owned controller for the target
+GED view, so multi-view applications should create one endpoint per view.  The
+GED owns one authoritative shared Obol scene; view controllers are render
+endpoints with their own local roots.  Shared views render the shared scene
+plus their local root.  Independent views render only their local root, where
+independent database display and view-local objects live.
+Classic/batch MGED now honors `-c -a obol`, registers the borrowed controller
+with GED, and refreshes the Obol `dozoom` path through
+`GED_DRAW_TXN_REDRAW`; drawing has no non-Obol fallback.
+
+The supported refresh shape is:
+
+* update view state through libbv-backed view contexts
+* mutate scene/annotation/command-result state through GED draw facades or
+  libbrlobol/Obol APIs
+* apply a draw transaction such as `GED_DRAW_TXN_REDRAW` when scene refresh is
+  needed
+* let the display host render/capture the retained Obol scene
+
+Shared operations must mutate the GED-owned scene controller.  View-local and
+independent-view operations must mutate the attached view endpoint.  Avoid
+mirroring shared scene contents into each DM controller; doing so makes LoD,
+selection, database edit invalidation, and command-result ownership harder to
+reason about.
+
+Do not add a compatibility stream that reconstructs Obol state from legacy
+immediate draw callbacks.  That would preserve the BSG-era dual ownership we
+are trying to delete.
+
+Current user-facing shape:
+
+* `view feature list [--all|--annotations|--database] [-L] [glob]`
+* `view feature info <id> [field]`
+  Field set today: `mode`, `color`, `visible`, `lcnt`, `type`, `kind`,
+  `scope`, `overlay_class`, `lifecycle`, `owner`, `owner_role`,
+  `owner_generation`, `transient_preview`, and `command_result`.
+* `view feature show|hide|delete|realize <id>`
+* `view feature style get <id> <field>`
+* `view feature style set <id> <field> <value> ...`
+* `view annotation line create <id> x y z [x y z ...]`
+* `view annotation line append <id> x y z [x y z ...]`
+* `view annotation line remove <id> <zero-based-index> [count]`
+* `view annotation line clear <id>`
+* `view annotation arrow create <id> x y z`
+* `view annotation label create <id> text x y [z] [px py pz]`
+* `view annotation axes create <id> x y z`
+* `view annotation axes pos|size|line_width|axes_color <id> ...`
+* `view polygon create <id> x y [rect|circle|ellipse|square]`
+* `view polygon append|select|move|update|close|open|fill|fill_color|csg|import|export ...`
+* `view db add <path> [--as <id>]`
+* `view db delete <id|path>`
+
+Typed Object Contract
+---------------------
+
+Every managed view feature should expose enough metadata for command-line and UI
+callers to reason about it without parsing human strings:
+
+* stable id/name and optional display label
+* class: annotation, database-instance, command-result, edit-proxy, tool, or
+  custom-node
+  Current CLI fields map this into `type` and lower-level `kind`.
+* scope: shared scene by default, view-local only when explicitly requested
+  CLI reports this as `scope`.
+* owner id, owner role, and optional generation for command/plugin results
+  CLI reports these as `owner`, `owner_role`, and `owner_generation`.
+* database path and draw mode for database-backed objects
+* lifecycle policy: persistent user object, command-result replacement group,
+  edit-preview proxy, or view-local tool state
+  CLI reports this as `lifecycle`, and also exposes the shortcut booleans
+  `transient_preview` and `command_result`.
+* capabilities: visible, selectable, pickable, style, arrow, label, axes,
+  polygon, database-instance, command-result, manipulator, editable,
+  exportable
+* style fields: color, line width, point size, opacity, selectable, pickable,
+  arrow enabled, arrow width, arrow length, label text, polygon fill mode, and
+  command-result highlight policy
+* result metadata, per-primitive metadata, primitive selected/highlighted
+  state, and pick identity when available
+
+Unsupported style or lifecycle operations should fail through capability
+checks that identify the object type.  For example, arrows are valid for line
+annotation features but should be rejected for database-source or overlay
+group aliases unless those object classes grow a real arrow capability.
+
+Structured output should be available for new consumers.  `--json` is the
+preferred compatibility-neutral form for feature info/list results once the
+typed resolver/registry is in place.
+
+Richer Behavior Policy
+----------------------
+
+Do not try to fully specify every future Coin manipulator, sensor, callback, or
+detail-panel behavior before the remaining old drawing paths are gone.  The
+stable contract needed now is narrower:
+
+* object owner, scope, lifecycle, replacement/removal, and teardown
+* capability discovery and typed style mutation
+* pick identity, primitive metadata, and selected/highlighted primitive state
+* custom Coin provider ownership and callback lifetime rules
+* database-edit invalidation semantics for command/tool-owned objects
+
+Typed Obol records are the preferred path for common line/HUD/point/face
+visualizations.  Custom Coin providers are for complex command/plugin-authored
+scene objects and must remain inside an owner-scoped Obol scene-object boundary
+with explicit teardown and invalidation rules.  They are not a back door for
+anonymous scene mutation.
+
+Edit-preview geometry follows the same rule.  qged and other applications
+publish preview line/label data through GED feature refs; GED resolves those
+refs to libbrlobol/Obol feature records owned by the active view context.
+Application widgets should not maintain a second direct Obol preview mutation
+path, because that bypasses shared lifecycle, owner, selection, and teardown
+semantics.
+
+Image readback follows the same ownership boundary.  For Obol-backed views,
+screenshots and visible-canvas captures should ask the active
+`BRLObolViewController` to render the view to a caller-owned image buffer.
+Display-manager readback is only a fallback for non-Obol backends, not the
+source of truth for Obol scene capture.  C app-host callers should use the
+`ged_draw_obol_view_display_image` bridge in `ged/draw_obol.h`; TclCAD's
+legacy `to_pix` and `to_png` exporters use that path before falling back to
+raw GL display-manager readback.
+
+Polygon Fill
+------------
+
+BRL-CAD's GED `view polygon fill ...` command means hatch fill: compute line
+segments clipped to the polygon interior, draw those segments using the polygon
+fill color, and keep the polygon edge as a separate outline.  It does not mean
+"draw a translucent triangulated surface" in the legacy command contract.
+
+Obol supports both fill interpretations:
+
+* `BRLOBOL_POLYGON_FILL_HATCH` preserves GED/BRL-CAD hatch semantics.
+* `BRLOBOL_POLYGON_FILL_MESH` draws a triangulated mesh fill.
+* Both flags may be enabled when a caller wants shaded fill plus historical
+  hatch overlay.
+
+The existing `BRLObolPolygonStore::setFill` method remains a legacy hatch-fill
+operation.  Obol-native callers that want surface fill should use
+`setFillFlags` or set `BRLObolPolygonVisual::fillFlags` explicitly.
+
+Hatch Slope Stability
+---------------------
+
+Hatch slopes define unoriented line families: `(dx, dy)` and `(-dx, -dy)` are
+the same hatch.  The Obol hatch path canonicalizes the normalized slope to a
+single half-plane before generating perpendicular offsets.  This avoids abrupt
+family-order flips when the slope passes through equivalent orientations.
+
+The hatch generator still works in the polygon's stored view plane.  Callers
+that need screen-locked hatching should update the polygon's view plane
+explicitly rather than relying on later camera rotations to reinterpret the
+same stored polygon geometry.

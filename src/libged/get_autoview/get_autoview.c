@@ -24,7 +24,6 @@
  */
 
 #include "bu/getopt.h"
-#include "dm.h"
 #include "ged.h"
 
 
@@ -75,7 +74,7 @@ ged_get_autoview_core(struct ged *gedp, int argc, const char *argv[])
 	}
     }
 
-    is_empty = dl_bounding_sph(gedp->i->ged_gdp->gd_headDisplay, &min, &max, pflag);
+    is_empty = ged_draw_bounds(gedp, &min, &max, pflag);
 
     if (is_empty) {
 	/* Nothing is in view */

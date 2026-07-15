@@ -1,6 +1,7 @@
-set(PLUGIN_LIBS libged libdm libbu)
+set(PLUGIN_LIBS libged libimgstream libbu)
 
 ged_plugin_library(ged-pix2fb
+  PLUGIN_ONLY
   pix2fb.c
   LIBS ${PLUGIN_LIBS}
 )

@@ -35,8 +35,7 @@
 #include "bu/color.h"
 #include "bu/getopt.h"
 #include "bu/exit.h"
-#include "dm.h"
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 #ifdef HAVE_WINSOCK_H
 #  include <winsock.h>
@@ -44,7 +43,7 @@
 
 
 static char *framebuffer = NULL;
-static struct fb *fbp;
+static imgstream_fb_t *fbp;
 static int scr_width = 0;		/* use default size */
 static int scr_height = 0;
 static int clear_and_reset = 0;
@@ -142,7 +141,7 @@ get_args(int argc, char **argv)
 int
 main(int argc, char **argv)
 {
-    static RGBpixel pixel;
+    static unsigned char pixel[3];
     int remaining = 0;
     int use_custom_pixel = 0;
 
@@ -174,38 +173,39 @@ main(int argc, char **argv)
 	bu_exit(1, NULL);
     }
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL) {
 	bu_exit(2, NULL);
     }
 
     /* Get the screen size we were given */
-    scr_width = fb_getwidth(fbp);
-    scr_height = fb_getheight(fbp);
+    scr_width = (int)imgstream_fb_width(fbp);
+    scr_height = (int)imgstream_fb_height(fbp);
 
     if (clear_and_reset) {
-	if (fb_wmap(fbp, COLORMAP_NULL) < 0)
+	if (imgstream_fb_wmap(fbp, NULL) < 0)
 	    bu_exit(3, NULL);
-	(void)fb_view(fbp, scr_width/2, scr_height/2, 1, 1);
+	(void)imgstream_fb_view(fbp, scr_width/2, scr_height/2, 1, 1);
     } else {
-	ColorMap cmap;
+	struct imgstream_fb_colormap cmap;
 	int xcent, ycent, xzoom, yzoom;
-	if (fb_rmap(fbp, &cmap) >= 0) {
-	    if (!fb_is_linear_cmap(&cmap)) {
+	if (imgstream_fb_rmap(fbp, &cmap) >= 0) {
+	    if (!imgstream_fb_colormap_is_linear(&cmap)) {
 		fprintf(stderr, "fbclear: NOTE: non-linear colormap in effect.  -c flag loads linear colormap.\n");
 	    }
 	}
-	(void)fb_getview(fbp, &xcent, &ycent, &xzoom, &yzoom);
+	(void)imgstream_fb_getview(fbp, &xcent, &ycent, &xzoom, &yzoom);
 	if (xzoom != 1 || yzoom != 1) {
 	    fprintf(stderr, "fbclear:  NOTE: framebuffer is zoomed.  -c will un-zoom.\n");
 	}
     }
 
     if (use_custom_pixel) {
-	fb_clear(fbp, pixel);
+	imgstream_fb_clear(fbp, pixel);
     } else {
-	fb_clear(fbp, PIXEL_NULL);
+	imgstream_fb_clear(fbp, NULL);
     }
-    (void)fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

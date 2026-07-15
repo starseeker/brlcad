@@ -35,7 +35,7 @@
 #include "bu/getopt.h"
 #include "bu/exit.h"
 #include "bu/vfont.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "pkg.h"
 
 
@@ -44,7 +44,7 @@
 static char *framebuffer = NULL;
 static char *font1 = NULL;
 
-struct fb *fbp;
+imgstream_fb_t *fbp;
 
 static char usage[] = "\
 Usage: fblabel [-c -a] [-F framebuffer] [-C r/g/b]\n\
@@ -62,7 +62,7 @@ static int scr_width = 0;	/* default input width */
 static int scr_height = 0;	/* default input height */
 static int clear = 0;
 
-static RGBpixel pixcolor;
+static unsigned char pixcolor[3];
 static int xpos;
 static int ypos;
 static char *textstring;
@@ -169,7 +169,7 @@ do_char(struct vfont *vfp, struct vfont_dispatch *vdp, int x, int y)
     int totwid = width;
     int ln;
     static float resbuf[FONTBUFSZ];
-    static RGBpixel fbline[FONTBUFSZ];
+    static unsigned char fbline[FONTBUFSZ][3];
     int bytes_wide;	/* # bytes/row in bitmap */
 
     bytes_wide = (width+7)>>3;
@@ -201,7 +201,8 @@ do_char(struct vfont *vfp, struct vfont_dispatch *vdp, int x, int y)
 	       resbuf,
 	       totwid + 4
 	    );
-	fb_read(fbp, x, y - vdp->vd_down + i, (unsigned char *)fbline, totwid+3);
+	imgstream_fb_read(fbp, x, y - vdp->vd_down + i,
+			  (unsigned char *)fbline, (size_t)(totwid+3));
 	for (j = 0; j < (totwid + 3) - 1; j++) {
 	    int tmp;
 	    /* EDITOR'S NOTE : do not rearrange this code, the SUN
@@ -221,7 +222,8 @@ do_char(struct vfont *vfp, struct vfont_dispatch *vdp, int x, int y)
 		(int)(pixcolor[BLU]*resbuf[j]+(1-resbuf[j])*tmp);
 	    fbline[j][BLU] &= 0377;
 	}
-	if (fb_write(fbp, x, y-vdp->vd_down+i, (unsigned char *)fbline, totwid+3) < totwid+3) {
+	if (imgstream_fb_write(fbp, x, y-vdp->vd_down+i,
+			       (unsigned char *)fbline, (size_t)(totwid+3)) < totwid+3) {
 	    fprintf(stderr, "fblabel: pixel write error\n");
 	    bu_exit(1, NULL);
 	}
@@ -271,7 +273,7 @@ do_line(struct vfont *vfp, char *line)
 	    continue;
 	}
 
-	if (currx + width > fb_getwidth(fbp) - 1) {
+	if (currx + width > (int)imgstream_fb_width(fbp) - 1) {
 	    fprintf(stderr, "fblabel:  Ran off screen\n");
 	    break;
 	}
@@ -376,13 +378,14 @@ main(int argc, char **argv)
 	bu_exit(1, NULL);
     }
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+				 (size_t)scr_height)) == NULL) {
 	fprintf(stderr, "fblabel:  Unable to open framebuffer %s\n", framebuffer);
 	bu_exit(12, NULL);
     }
 
     if (clear) {
-	fb_clear(fbp, PIXEL_NULL);
+	imgstream_fb_clear(fbp, NULL);
     }
 
     if ((vfp = vfont_get(font1)) == VFONT_NULL) {
@@ -393,7 +396,7 @@ main(int argc, char **argv)
 
     do_line(vfp, textstring);
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     vfont_free(vfp);
 
     return 0;

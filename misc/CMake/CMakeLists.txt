@@ -71,6 +71,7 @@ set(
   RPath_Setup.cmake
   ResetCache.cmake
   TrackFiles.cmake
+  brlobol_pivot_guard.cmake
   static_link_test_main.cpp
   compat/README
   compat/README.compat
@@ -107,6 +108,7 @@ set(
   scripts/printtime.cmake
   scripts/tcl_mkindex.cmake
   scripts/timestamp.cmake
+  scripts/xvfb_test.sh
 )
 cmakefiles(${cmake_ignore_files})
 

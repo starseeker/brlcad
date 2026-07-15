@@ -277,7 +277,6 @@
                 <li class="menu"><a href="#red">red</a></li>
                 <li class="menu"><a href="#refresh">refresh</a></li>
 
-                <li class="menu"><a href="#regdebug">regdebug</a></li>
                 <li class="menu"><a href="#regdef">regdef</a></li>
                 <li class="menu"><a href="#regions">regions</a></li>
                 <li class="menu"><a href="#release">release</a></li>
@@ -2948,7 +2947,7 @@
       <dt class="c8"><span class="c6"><b><a name="gui" id=
                                             "gui"></a>gui</b> [<i>-config b|c|g</i>] [<i>-d
             display_string</i>] [<i>-gd graphics_display_string</i>]
-          [<i>-dt graphics_type</i>] [<i>-id name</i>] [<i>-c -h -j
+          [<i>-host host_type</i>] [<i>-id name</i>] [<i>-c -h -j
             -s</i>]</span></dt>
       <dd class="c9"><span class="c6">This command is used to create
           an instance of MGED�s default Tcl/Tk graphical user interface
@@ -2990,13 +2989,11 @@
       </tr>
       <tr>
         <td width="24%" valign="middle">
-          <p><span class="c2">-dt graphics_type</span></p>
+          <p><span class="c2">-host host_type</span></p>
         </td>
         <td width="76%" valign="middle">
-          <p><span class="c2">Indicates the type of graphics windows
-              to use. The possible choices are X and ogl (for machines
-              that support OpenGL). Defaults to ogl, if supported;
-              otherwise X.</span></p>
+          <p><span class="c2">Selects the Obol host used for graphics
+              windows. tkobol is the supported host.</span></p>
         </td>
       </tr>
       <tr>
@@ -5382,23 +5379,6 @@
 
     <hr class="c3">
     <dl>
-      <dt class="c8"><span class="c6"><b><a name="regdebug" id=
-                                            "regdebug"></a>regdebug</b> [<i>debug_level</i>]</span></dt>
-      <dd class="c9"><span class="c6">The "regdebug" command with no
-          options toggles the display manager debug flag. If a
-          <i>debug_level</i> is supplied, then the display manager debug
-          flag is set to that value.</span></dd>
-      <dd></dd>
-      <dt class="c8"><span class="c6">Examples:</span></dt>
-      <dd></dd>
-      <dd class="c9"><span class="c6"><tt>mged&gt; </tt>
-          <b>regdebug</b></span></dd>
-    </dl>
-    <p><span class="c6">-- Toggle the display manager debug
-        flag.</span></p>
-
-    <hr class="c3">
-    <dl>
       <dt class="c8"><span class="c6"><b><a name="regdef" id=
                                             "regdef"></a>regdef</b> <i>item</i> [<i>air</i> [<i>los</i>
           [<i>material_code</i>]]]</span></dt>
@@ -6664,8 +6644,6 @@
             <i>combination</i> tree above it). Note that this only
             affects primitive edit operations that use the <i>p</i>
             command.</span></span></li>
-      <li><span class="c6">dlist -- if nonzero, use display
-          lists.</span></li>
       <li><span class="c6">use_air -- if nonzero, use air while
           raytracing.</span></li>
       <li><span class="c6">listen -- if nonzero, listen for
@@ -7878,7 +7856,7 @@
           between two or more display managers, any change to that
           resource is seen only in the sharing display managers. The
           supported resource types are: ad (ADC), ax (Axes), c (Color
-          Schemes), d (Display Lists), g (Grid), m (Menu), r (Rubber
+          Schemes), g (Grid), m (Menu), r (Rubber
           Band), vi (View), and var (MGED Variables).</span></dd>
       <dd></dd>
       <dt class="c8"><span class="c16">Examples:</span></dt>

@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -36,10 +38,14 @@ int
 ged_grid2view_lu_core(struct ged *gedp, int argc, const char *argv[])
 {
     fastf_t f;
+    fastf_t view_scale;
+    mat_t model2view;
     point_t view_pt;
     point_t model_pt = VINIT_ZERO;
     point_t mo_view_pt;           /* model origin in view space */
     double scan[3];
+    void *view_ctx = NULL;
+    const struct bv *view = NULL;
     static const char *usage = "u v";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -57,8 +63,12 @@ ged_grid2view_lu_core(struct ged *gedp, int argc, const char *argv[])
 	goto bad;
     scan[Z] = 0.0;
 
-    MAT4X3PNT(mo_view_pt, gedp->ged_gvp->gv_model2view, model_pt);
-    f = gedp->ged_gvp->gv_scale * gedp->dbip->dbi_base2local;
+    view_ctx = ged_view_active_ctx(gedp);
+    view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    view_scale = bv_scale_get(view);
+    MAT4X3PNT(mo_view_pt, model2view, model_pt);
+    f = view_scale * gedp->dbip->dbi_base2local;
     VSCALE(mo_view_pt, mo_view_pt, f);
     VADD2(view_pt, mo_view_pt, scan);
     bn_encode_vect(gedp->ged_result_str, view_pt, 1);

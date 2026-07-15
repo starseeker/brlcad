@@ -33,11 +33,7 @@
 #include "bu/list.h"
 #include "bu/process.h"
 #include "bu/vls.h"
-#include "bv/defines.h"
 #include "rt/search.h"
-#include "bv/defines.h"
-#include "bv/lod.h"
-#include "dm/fbserv.h" // for fbserv_obj
 #include "rt/wdb.h" // for struct rt_wdb
 
 
@@ -54,9 +50,10 @@
 #endif
 
 #define GED_NULL ((struct ged *)0)
+/* GED_DISPLAY_LIST_NULL is deprecated — use NULL directly */
 #define GED_DISPLAY_LIST_NULL ((struct display_list *)0)
 #define GED_DRAWABLE_NULL ((struct ged_drawable *)0)
-#define GED_VIEW_NULL ((struct bview *)0)
+#define GED_VIEW_NULL ((void *)0)
 
 #define GED_RESULT_NULL ((void *)0)
 
@@ -75,6 +72,19 @@
 /* Forward declaration */
 struct ged;
 struct ged_selection_set;
+struct bg_line_layer_builder;
+struct fbserv_obj;
+
+struct ged_diagnostic_hud_label {
+    const char *label_id;
+    const char *text;
+    double position[2];
+    int color[3];
+    double font_size;
+    uint32_t source_id;
+};
+
+#define GED_DIAGNOSTIC_HUD_LABEL_INIT {NULL, NULL, {0.0, 0.0}, {255, 255, 255}, 12.0, 0}
 
 typedef int (*ged_func_ptr)(struct ged *, int, const char *[]);
 #define GED_FUNC_PTR_NULL ((ged_func_ptr)0)
@@ -82,9 +92,13 @@ typedef int (*ged_func_ptr)(struct ged *, int, const char *[]);
 /* Callback related definitions */
 typedef void (*ged_io_func_t)(void *, int);
 typedef void (*ged_refresh_func_t)(void *);
-typedef void (*ged_create_vlist_solid_func_t)(void *, struct bv_scene_obj *);
-typedef void (*ged_create_vlist_display_list_func_t)(void *, struct display_list *);
-typedef void (*ged_destroy_vlist_func_t)(void *, unsigned int, int);
+typedef int (*ged_diagnostic_line_layer_func_t)(struct ged *,
+					       const char *,
+					       const struct bg_line_layer_builder *,
+					       void *);
+typedef int (*ged_diagnostic_hud_label_func_t)(struct ged *,
+					       const struct ged_diagnostic_hud_label *,
+					       void *);
 struct ged_callback_state;
 
 /**
@@ -159,25 +173,6 @@ struct ged {
     struct ged_impl             *i;
     struct bu_vls               go_name;
     struct db_i                 *dbip;
-    void			*dbi_state; // for experimental state work
-
-    /*************************************************************/
-    /* Information pertaining to views and view objects .        */
-    /*************************************************************/
-    /* The current view */
-    struct bview		*ged_gvp;
-    /* The full set of views associated with this ged object */
-    struct bview_set            ged_views;
-    /* Sometimes applications will supply GED views, and sometimes GED commands
-     * may create views.  In the latter case, ged_close will also need to free
-     * the views.  We define a container to hold those views that libged is
-     * managing, since ged_views views may belong to the application rather
-     * than GED. */
-    struct bu_ptbl              ged_free_views;
-
-    /* Drawing data associated with this .g file */
-    struct bv_mesh_lod_context  *ged_lod;
-
 
     void                        *u_data; /**< @brief User data associated with this ged instance */
 
@@ -197,8 +192,6 @@ struct ged {
      */
     struct bu_vls		*ged_result_str;
     struct ged_results          *ged_results;
-
-    struct bu_ptbl              free_solids;
 
     char			*ged_output_script;		/**< @brief  script for use by the outputHandler */
 
@@ -236,10 +229,6 @@ struct ged {
     void (*ged_refresh_handler)(void *);	/**< @brief  function for handling refresh requests */
     void *ged_refresh_clientdata;	/**< @brief  client data passed to refresh handler */
     void (*ged_output_handler)(struct ged *, char *);	/**< @brief  function for handling output */
-    void (*ged_create_vlist_scene_obj_callback)(void *, struct bv_scene_obj *);	/**< @brief  function to call after creating a vlist to create display list for solid */
-    void (*ged_create_vlist_display_list_callback)(void *, struct display_list *);	/**< @brief  function to call after all vlist created that loops through creating display list for each solid  */
-    void (*ged_destroy_vlist_callback)(void *, unsigned int, int);	/**< @brief  function to call after freeing a vlist */
-    void *vlist_ctx;
 
     /* Handler functions for I/O communication with asynchronous subprocess commands.  There
      * are two opaque data structures at play here, with different scopes.  One is the "data"
@@ -256,6 +245,11 @@ struct ged {
     void (*ged_create_io_handler)(struct ged_subprocess *gp, bu_process_io_t d, ged_io_func_t callback, void *data);
     void (*ged_delete_io_handler)(struct ged_subprocess *gp, bu_process_io_t fd);
     void *ged_io_data;  /**< brief caller supplied data */
+
+    ged_diagnostic_line_layer_func_t ged_line_layer_overlay_handler;
+    void *ged_line_layer_overlay_data;
+    ged_diagnostic_hud_label_func_t ged_hud_label_overlay_handler;
+    void *ged_hud_label_overlay_data;
 
     /* fbserv server and I/O callbacks.  These must hook into the application's event
      * loop, and so cannot be effectively supplied by low-level libraries - the
@@ -280,11 +274,6 @@ struct ged {
     char terminal[MAXPATHLEN];
     struct bu_ptbl terminal_opts;
 
-    // The following is used instead of environment variables to select old or new
-    // command paths.  Primarily relates to the next generation drawing setup with
-    // view objects and the new BoT LoD logic.
-    int new_cmd_forms;
-
     // Container allowing calling apps to store pointers to their own data.
     // Ged init and free routines will set up and free the table, but the
     // contents are the apps responsibility.
@@ -301,6 +290,13 @@ GED_EXPORT void ged_destroy(struct ged *);
 // done with it.
 GED_EXPORT extern void ged_init(struct ged *gedp);
 GED_EXPORT extern void ged_free(struct ged *gedp);
+
+GED_EXPORT extern void *ged_view_active_ctx(const struct ged *gedp);
+GED_EXPORT extern void ged_view_active_ctx_set(struct ged *gedp, void *view_ctx);
+GED_EXPORT extern void *ged_view_set_ctx(struct ged *gedp);
+GED_EXPORT extern struct bu_ptbl *ged_view_set_views_ctx(struct ged *gedp);
+GED_EXPORT extern void *ged_view_find_ctx(struct ged *gedp, const char *name);
+GED_EXPORT extern int ged_view_context_owned_add(struct ged *gedp, void *view_ctx);
 
 // Associate a callback function pointer for a command.  If mode is less than
 // zero, function will be registered to run BEFORE actual cmd logic is run, and
@@ -352,14 +348,30 @@ GED_EXPORT extern int ged_clbk_exec(
 	void *u1,
 	void *u2);
 
-// Functions for associating and retrieving application context information for
-// specific dm types.  Not really using this yet, but we will eventually need
-// some way to provide application contents for the dm attach command to work.
-//
-// NOTE - this API is still experimental
-GED_EXPORT extern void ged_dm_ctx_set(struct ged *gedp, const char *dm_type, void *ctx);
-GED_EXPORT extern void *ged_dm_ctx_get(struct ged *gedp, const char *dm_type);
+GED_EXPORT extern void ged_diagnostic_line_layer_handler_set(
+	struct ged *gedp,
+	ged_diagnostic_line_layer_func_t handler,
+	void *data);
 
+GED_EXPORT extern int ged_diagnostic_line_layer_handler_available(
+	const struct ged *gedp);
+
+GED_EXPORT extern int ged_diagnostic_line_layer_publish(
+	struct ged *gedp,
+	const char *name,
+	const struct bg_line_layer_builder *builder);
+
+GED_EXPORT extern void ged_diagnostic_hud_label_handler_set(
+	struct ged *gedp,
+	ged_diagnostic_hud_label_func_t handler,
+	void *data);
+
+GED_EXPORT extern int ged_diagnostic_hud_label_handler_available(
+	const struct ged *gedp);
+
+GED_EXPORT extern int ged_diagnostic_hud_label_publish(
+	struct ged *gedp,
+	const struct ged_diagnostic_hud_label *label);
 
 /* accessor functions for ged_results - calling
  * applications should not work directly with the

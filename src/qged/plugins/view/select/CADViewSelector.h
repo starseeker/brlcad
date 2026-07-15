@@ -33,8 +33,16 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QRadioButton>
-#include "ged.h"
-#include "qtcad/QgSelectFilter.h"
+#include "brlobol/input.h"
+#include "qtcad/QgTypes.h"
+
+class QgPluginContext;
+class QgSelectBoxFilter;
+class QgSelectFilter;
+class QgSelectPntFilter;
+class QgSelectRayFilter;
+class QgView;
+struct brlobol_display_endpoint;
 
 class CADViewSelector : public QWidget
 {
@@ -43,6 +51,10 @@ class CADViewSelector : public QWidget
     public:
 	CADViewSelector(QWidget *p = 0);
 	~CADViewSelector();
+
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
+	void attachToView(QgView *view);
+	void detachFromView(QgView *view);
 
 	QRadioButton *use_pnt_select_button;
 	QRadioButton *use_rect_select_button;
@@ -63,7 +75,7 @@ class CADViewSelector : public QWidget
 
 
 signals:
-	void view_changed(unsigned long long);
+	void view_changed(QgViewUpdateFlags);
 
     public slots:
 	void enable_groups(bool);
@@ -72,14 +84,15 @@ signals:
     	void disable_raytrace_opt(bool);
 	void enable_useall_opt(bool);
     	void disable_useall_opt(bool);
-	void do_view_update(unsigned long long);
+	void do_view_update(QgViewUpdateFlags);
 	void do_draw_selections();
 	void do_erase_selections();
 
-    protected:
-	bool eventFilter(QObject *, QEvent *);
-
     private:
+	static int inputActionDispatch(void *user_data,
+		BRLObolInputAction action, const BRLObolInputEvent *event);
+	int applyInputAction(BRLObolInputAction action,
+		const BRLObolInputEvent *event);
 	void select_objs();
 	void deselect_objs();
 	void erase_objs();
@@ -89,7 +102,9 @@ signals:
 	QgSelectBoxFilter *bf;
 	QgSelectRayFilter *rf;
 
-	struct ged *gedp = NULL;
+	QgPluginContext *m_ctx = nullptr;
+	QgView *m_input_view = nullptr;
+	struct brlobol_display_endpoint *m_input_endpoint = nullptr;
 	unsigned long long ohash = 0;
 	unsigned long long omhash = 0;
 };

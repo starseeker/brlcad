@@ -62,6 +62,7 @@ endif(BRLCAD_ENABLE_OPENVDB)
 
 set(
   BOT_LOCAL_INCLUDE_DIRS
+  ${BRLCAD_SOURCE_DIR}/src/libbu
   ${EIGEN3_INCLUDE_DIR}
   ${BOT_LOCAL_INCLUDE_DIRS}
 )
@@ -88,7 +89,6 @@ cmakefiles(
   bot_flood_exterior.cpp
   bot_openvdb.cpp
   bot_openvdb.h
-  concurrentqueue.h
   dump/ged_bot_dump.h
   ged_bot.h
 )

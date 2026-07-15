@@ -30,8 +30,10 @@
 
 #include "bio.h"
 #include "bu/getopt.h"
-#include "dm.h"
+#include "icv.h"
 #include "ged.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
 
 struct png2fb_state {
     double def_screen_gamma;	/* Don't add more gamma, default = 1.0*/
@@ -39,7 +41,7 @@ struct png2fb_state {
      * so programs like this one don't have to.
      */
     char *file_name;
-    FILE *fp_in;
+    icv_image_t *image;
     int multiple_lines;	/* Streamlined operation */
     int file_xoff;
     int file_yoff;
@@ -117,18 +119,18 @@ png2fb_get_args(struct png2fb_state *s, int argc, char **argv)
 	if (isatty(fileno(stdin)))
 	    return 0;
 	s->file_name = "-";
-	s->fp_in = stdin;
-	setmode(fileno(s->fp_in), O_BINARY);
+	setmode(fileno(stdin), O_BINARY);
     } else {
 	s->file_name = argv[bu_optind];
-	s->fp_in = fopen(s->file_name, "rb");
-	if (s->fp_in == NULL) {
+	FILE *probe = fopen(s->file_name, "rb");
+	if (!probe) {
 	    perror(s->file_name);
 	    fprintf(stderr,
 		    "png-fb: cannot open \"%s\" for reading\n",
 		    s->file_name);
 	    return 0;
 	}
+	fclose(probe);
     }
 
     if (argc > ++bu_optind)
@@ -137,6 +139,25 @@ png2fb_get_args(struct png2fb_state *s, int argc, char **argv)
     return 1;		/* OK */
 }
 
+
+static int
+png2fb_apply(struct imgstream_fb *fb, void *userdata)
+{
+    struct png2fb_state *state = (struct png2fb_state *)userdata;
+    if (!state || !state->image)
+	return BRLCAD_ERROR;
+    struct imgstream_fb_import_options options =
+	IMGSTREAM_FB_IMPORT_OPTIONS_INIT;
+    options.file_xoff = state->file_xoff;
+    options.file_yoff = state->file_yoff;
+    options.screen_xoff = state->scr_xoff;
+    options.screen_yoff = state->scr_yoff;
+    options.clear = state->clear;
+    options.zoom = state->zoom;
+    options.inverse = state->inverse;
+    return imgstream_fb_import_icv(fb, state->image, &options) == 0 ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
 
 int
 ged_png2fb_core(struct ged *gedp, int argc, const char *argv[])
@@ -147,21 +168,9 @@ ged_png2fb_core(struct ged *gedp, int argc, const char *argv[])
 
     struct png2fb_state p2fbs = PNG2FB_STATE_INIT_ZERO;
 
-    if (!gedp->ged_gvp) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "no current view set\n");
-	return BRLCAD_ERROR;
-    }
-
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, "no display manager currently active");
-	return BRLCAD_ERROR;
-    }
-
-    struct fb *fbp = dm_get_fb(dmp);
-
-    if (!fbp) {
-	bu_vls_printf(gedp->ged_result_str, "display manager does not have a framebuffer");
 	return BRLCAD_ERROR;
     }
 
@@ -179,25 +188,33 @@ ged_png2fb_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    ret = fb_read_png(fbp, p2fbs.fp_in,
-		      p2fbs.file_xoff, p2fbs.file_yoff,
-		      p2fbs.scr_xoff, p2fbs.scr_yoff,
-		      p2fbs.clear, p2fbs.zoom, p2fbs.inverse,
-		      p2fbs.one_line_only, p2fbs.multiple_lines,
-		      p2fbs.verbose, p2fbs.header_only,
-		      p2fbs.def_screen_gamma,
-		      gedp->ged_result_str);
-
-    if (p2fbs.fp_in != stdin)
-	fclose(p2fbs.fp_in);
-
-    (void)dm_draw_begin(dmp);
-    fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-    (void)dm_draw_end(dmp);
+    p2fbs.image = icv_read(BU_STR_EQUAL(p2fbs.file_name, "-") ? NULL :
+	p2fbs.file_name, BU_MIME_IMAGE_PNG, 0, 0);
+    if (!p2fbs.image) {
+	bu_vls_printf(gedp->ged_result_str, "unable to decode PNG input");
+	return BRLCAD_ERROR;
+    }
+    if (p2fbs.verbose)
+	bu_vls_printf(gedp->ged_result_str, "Image size: %zu X %zu\n",
+	    p2fbs.image->width, p2fbs.image->height);
+    if (p2fbs.header_only) {
+	bu_vls_printf(gedp->ged_result_str, "WIDTH=%zu HEIGHT=%zu\n",
+	    p2fbs.image->width, p2fbs.image->height);
+	icv_destroy(p2fbs.image);
+	return BRLCAD_OK;
+    }
+    /* libpng historically used 0.5 when an input did not provide gAMA.
+     * Preserve png2fb's display conversion while libicv supplies decoding. */
+    p2fbs.image->gamma_corr = (float)(0.5 * p2fbs.def_screen_gamma);
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	png2fb_apply, &p2fbs, 1);
+    icv_destroy(p2fbs.image);
 
     if (ret == BRLCAD_OK)
 	return BRLCAD_OK;
 
+    bu_vls_printf(gedp->ged_result_str,
+	"unable to import PNG data into the active Obol framebuffer");
     return BRLCAD_ERROR;
 }
 

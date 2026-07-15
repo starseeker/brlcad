@@ -38,7 +38,7 @@
 #include "bu/getopt.h"
 #include "bu/exit.h"
 #include "bu/malloc.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 const char *Usage="[-F framebuffer] [-s|S squareframesize] [-w|W frame_width] [-n|N frame_height]\n";
 
@@ -75,15 +75,15 @@ main(int argc, char **argv)
 {
     int c;
     int x;
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     int xsize, ysize;
     int len;
     char *framebuffer = (char *)NULL;
     unsigned char *line;
-    static RGBpixel white = { 255, 255, 255 };
-    static RGBpixel red = { 255, 0, 0 };
-    static RGBpixel green = { 0, 255, 0 };
-    static RGBpixel blue = { 0, 0, 255 };
+    static unsigned char white[3] = { 255, 255, 255 };
+    static unsigned char red[3] = { 255, 0, 0 };
+    static unsigned char green[3] = { 0, 255, 0 };
+    static unsigned char blue[3] = { 0, 0, 255 };
 
     bu_setprogname(argv[0]);
 
@@ -128,23 +128,26 @@ main(int argc, char **argv)
 	USAGE_EXIT(*argv);
     }
 
-    if ((fbp = fb_open(framebuffer, xsize, ysize)) == FB_NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)xsize,
+	    (size_t)ysize)) == NULL)
 	bu_exit(1, NULL);
 
     if (xsize <= 0)
-	xsize = fb_getwidth(fbp);
+	xsize = (int)imgstream_fb_width(fbp);
     if (ysize <= 0)
-	ysize = fb_getheight(fbp);
+	ysize = (int)imgstream_fb_height(fbp);
 
     /* malloc buffer for pixel lines */
     len = (xsize > ysize) ? xsize : ysize;
-    line = (unsigned char *)bu_calloc(len, sizeof(RGBpixel), "line");
-    if (line == RGBPIXEL_NULL) {
+    line = (unsigned char *)bu_calloc((size_t)len, 3, "line");
+    if (!line) {
 	fprintf(stderr, "fbframe:  malloc failure\n");
 	return 1;
     }
 
-#define FLOOD(col) { for (x=len-1; x >= 0; x--) {COPYRGB(&line[3*x], col);} }
+#define FLOOD(col) { for (x=len-1; x >= 0; x--) { \
+    line[3*x+RED] = (col)[RED]; line[3*x+GRN] = (col)[GRN]; \
+    line[3*x+BLU] = (col)[BLU]; } }
 
     /*
      * Red:	(0->510,      0)
@@ -153,15 +156,15 @@ main(int argc, char **argv)
      * White:	(0, 511->1)
      */
     FLOOD(red);
-    fb_writerect(fbp, 0, 0, xsize-1, 1, line);
+    imgstream_fb_writerect(fbp, 0, 0, xsize-1, 1, line);
     FLOOD(green);
-    fb_writerect(fbp, xsize-1, 0, 1, ysize-1, line);
+    imgstream_fb_writerect(fbp, xsize-1, 0, 1, ysize-1, line);
     FLOOD(blue);
-    fb_writerect(fbp, 1, ysize-1, xsize-1, 1, line);
+    imgstream_fb_writerect(fbp, 1, ysize-1, xsize-1, 1, line);
     FLOOD(white);
-    fb_writerect(fbp, 0, 1, 1, ysize-1, line);
+    imgstream_fb_writerect(fbp, 0, 1, 1, ysize-1, line);
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
 
     bu_free(line, "line");
 

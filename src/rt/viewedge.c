@@ -91,7 +91,6 @@
 
 #include "vmath.h"
 #include "raytrace.h"
-#include "dm.h"
 #include "bu/parse.h"
 #include "bu/parallel.h"
 #include "bu/log.h"
@@ -165,7 +164,7 @@ int detect_distance = 1;
 int detect_normals = 1;
 int detect_attributes = 0; /* unsupported yet */
 
-RGBpixel fb_bg_color;
+rt_pixel_t fb_bg_color;
 
 /*
  * Overlay Mode
@@ -275,7 +274,7 @@ EXTERNCPP const char title[] = "RT Hidden-Line Renderer";
 
 
 int handle_main_ray(struct application *ap, register struct partition *PartHeadp, struct seg *segp);
-int diffpixel(RGBpixel a, RGBpixel b);
+int diffpixel(rt_pixel_t a, rt_pixel_t b);
 
 static int occlusion_hit(struct application *ap, struct partition *pt, struct seg *UNUSED(segp))
 {
@@ -357,7 +356,7 @@ int raymiss(struct application *ap)
 }
 
 
-void choose_color(RGBpixel col, double intensity, struct cell *me,
+void choose_color(rt_pixel_t col, double intensity, struct cell *me,
 		  struct cell *left, struct cell *below, struct cell *right, struct cell *above)
 {
     col[RED] = fgcolor[RED];
@@ -621,8 +620,8 @@ view_2init(struct application *UNUSED(ap), char *UNUSED(framename))
     /*
      * Determine if the framebuffer is readable.
      */
-    if (overlay || blend)
-	if (fb_read(fbp, 0, 0, fb_bg_color, 1) < 0)
+	if (rt_fb_output_enabled && (overlay || blend))
+	if (imgstream_fb_read(fbp, 0, 0, fb_bg_color, 1) < 0)
 	    bu_exit(EXIT_FAILURE, "rt_edge: specified framebuffer is not readable, cannot merge.\n");
 
     /*
@@ -653,7 +652,8 @@ view_2init(struct application *UNUSED(ap), char *UNUSED(framename))
      * isn't 0 0 1!).
      *
      */
-    if (overlay && bgcolor[RED] == 0 && bgcolor[GRN] == 0 && bgcolor[BLU] == 1) {
+    if (rt_fb_output_enabled && overlay && bgcolor[RED] == 0 &&
+	bgcolor[GRN] == 0 && bgcolor[BLU] == 1) {
 	bgcolor[RED] = fb_bg_color[RED];
 	bgcolor[GRN] = fb_bg_color[GRN];
 	bgcolor[BLU] = fb_bg_color[BLU];
@@ -684,7 +684,7 @@ view_eol(struct application *ap)
     else
 	cpu = ap->a_resource->re_cpu;
 
-    if (overlay) {
+    if (rt_fb_output_enabled && overlay) {
 	/*
 	 * Overlay mode. Check if the pixel is an edge.  If so, write
 	 * it to the framebuffer.
@@ -695,11 +695,11 @@ view_eol(struct application *ap)
 		 * Write this pixel
 		 */
 		bu_semaphore_acquire(BU_SEM_SYSCALL);
-		fb_write(fbp, i, ap->a_y, &scanline[cpu][i*3], 1);
+		imgstream_fb_write(fbp, i, ap->a_y, &scanline[cpu][i*3], 1);
 		bu_semaphore_release(BU_SEM_SYSCALL);
 	    }
 	}
-    } else if (blend) {
+    } else if (rt_fb_output_enabled && blend) {
 	/*
 	 * Blend mode.
 	 *
@@ -709,11 +709,12 @@ view_eol(struct application *ap)
 	int replace_down = 0; /* flag that specifies if the pixel in the
 			       * scanline below must be replaced.
 			       */
-	RGBpixel rgb;
+	rt_pixel_t rgb;
 	fastf_t hsv[3];
 
 	bu_semaphore_acquire(BU_SEM_SYSCALL);
-	if (fb_read(fbp, 0, ap->a_y, blendline[cpu], per_processor_chunk) < 0)
+	if (imgstream_fb_read(fbp, 0, ap->a_y, blendline[cpu],
+		(size_t)per_processor_chunk) < 0)
 	    bu_exit(EXIT_FAILURE, "rtedge: error reading from framebuffer.\n");
 	bu_semaphore_release(BU_SEM_SYSCALL);
 
@@ -739,15 +740,15 @@ view_eol(struct application *ap)
 		 * leftmost column (x=y=0)
 		 */
 		if (i != 0 && ap->a_y != 0 && !diffpixel(rgb, fb_bg_color)) {
-		    RGBpixel left;
-		    RGBpixel down;
+		    rt_pixel_t left;
+		    rt_pixel_t down;
 
 		    left[RED] = blendline[cpu][(i-1)*3+RED];
 		    left[GRN] = blendline[cpu][(i-1)*3+GRN];
 		    left[BLU] = blendline[cpu][(i-1)*3+BLU];
 
 		    bu_semaphore_acquire(BU_SEM_SYSCALL);
-		    fb_read(fbp, i, ap->a_y - 1, down, 1);
+		    imgstream_fb_read(fbp, i, ap->a_y - 1, down, 1);
 		    bu_semaphore_release(BU_SEM_SYSCALL);
 
 		    if (diffpixel(left, fb_bg_color)) {
@@ -799,7 +800,7 @@ view_eol(struct application *ap)
 		     * wrong scanline.
 		     */
 		    bu_semaphore_acquire(BU_SEM_SYSCALL);
-		    fb_write(fbp, i, ap->a_y, rgb, 1);
+		    imgstream_fb_write(fbp, i, ap->a_y, rgb, 1);
 		    bu_semaphore_release(BU_SEM_SYSCALL);
 
 		    replace_down = 0;
@@ -820,16 +821,18 @@ view_eol(struct application *ap)
 	 * Write the blendline to the framebuffer.
 	 */
 	bu_semaphore_acquire(BU_SEM_SYSCALL);
-	fb_write(fbp, 0, ap->a_y, blendline[cpu], per_processor_chunk);
+	imgstream_fb_write(fbp, 0, ap->a_y, blendline[cpu],
+		(size_t)per_processor_chunk);
 	bu_semaphore_release(BU_SEM_SYSCALL);
     } /* end blend */
 
-    else if (fbp != FB_NULL) {
+    else if (fbp != NULL && rt_fb_output_enabled) {
 	/*
 	 * Simple whole scanline write to a framebuffer.
 	 */
 	bu_semaphore_acquire(BU_SEM_SYSCALL);
-	fb_write(fbp, 0, ap->a_y, scanline[cpu], per_processor_chunk);
+	imgstream_fb_write(fbp, 0, ap->a_y, scanline[cpu],
+		(size_t)per_processor_chunk);
 	bu_semaphore_release(BU_SEM_SYSCALL);
     }
 
@@ -865,13 +868,13 @@ view_cleanup(struct rt_i *UNUSED(rtip))
 /**
  * draws a pixel depending on whether we're writing to a file or a window
  */
-void draw_pixel(const double x, const double y, const RGBpixel pixel)
+void draw_pixel(const double x, const double y, const rt_pixel_t pixel)
 {
-    if (fbp != FB_NULL) {
-        (void)fb_write(fbp, x, y, pixel, 1);
+	if (fbp != NULL && rt_fb_output_enabled) {
+        (void)imgstream_fb_write(fbp, (int)x, (int)y, pixel, 1);
     }
     else if (bif) {
-	RGBpixel ptmp;
+	rt_pixel_t ptmp;
 	for (int i = 0; i < 3; i++)
 	    ptmp[i] = pixel[i];
 	double *pdata = icv_uchar2double(ptmp, 3);
@@ -883,7 +886,7 @@ void draw_pixel(const double x, const double y, const RGBpixel pixel)
 /**
  * draws a 'X' with bottom left pixel location denoted by (X, Y).
  */
-void draw_x_label(const double x, const double y, const unsigned int lineLength, const RGBpixel pixel)
+void draw_x_label(const double x, const double y, const unsigned int lineLength, const rt_pixel_t pixel)
 {
     if (!draw_axes) {
         return;
@@ -897,7 +900,7 @@ void draw_x_label(const double x, const double y, const unsigned int lineLength,
 /**
  * draws a 'Y' with bottom left pixel location denoted by (X, Y).
  */
-void draw_y_label(const double x, const double y, const unsigned int lineLength, const RGBpixel pixel)
+void draw_y_label(const double x, const double y, const unsigned int lineLength, const rt_pixel_t pixel)
 {
     if (!draw_axes) {
         return;
@@ -912,7 +915,7 @@ void draw_y_label(const double x, const double y, const unsigned int lineLength,
 /**
  * Draws a 'Z' with bottom left pixel location denoted by(X, Y).
  */
-void draw_z_label(const double x, const double y, const unsigned int lineLength, const RGBpixel pixel)
+void draw_z_label(const double x, const double y, const unsigned int lineLength, const rt_pixel_t pixel)
 {
     if (!draw_axes) {
         return;
@@ -930,12 +933,12 @@ void draw_z_label(const double x, const double y, const unsigned int lineLength,
 void
 view_end(struct application* UNUSED(ap))
 {
-    if (!draw_axes || (fbp == NULL && bif == NULL)) {
+    if (!draw_axes || ((!fbp || !rt_fb_output_enabled) && bif == NULL)) {
         return;
     }
 
     // TODO: axis color should be configurable, e.g., draw_axes=red or draw_axes=10/23/255
-    const RGBpixel pixel = { 31, 73, 133 };
+    const rt_pixel_t pixel = { 31, 73, 133 };
 
     // model center in pixel coordinates
     const double modelCenter[2] = { (width + 0.5) / 2.0 + (model2view[MDX] / cell_width), (height + 0.5) / 2.0 + (model2view[MDY] / cell_height) };
@@ -1358,7 +1361,7 @@ handle_main_ray(struct application *ap, register struct partition *PartHeadp,
     int cpu;
     int oc = 1;
 
-    RGBpixel col;
+    rt_pixel_t col;
 
     RT_APPLICATION_INIT(&a2);
     memset(&me, 0, sizeof(struct cell));
@@ -1572,7 +1575,7 @@ application_init(void) {
 }
 
 
-int diffpixel(RGBpixel a, RGBpixel b)
+int diffpixel(rt_pixel_t a, rt_pixel_t b)
 {
     if (a[RED] != b[RED]) return 1;
     if (a[GRN] != b[GRN]) return 1;

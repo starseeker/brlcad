@@ -40,6 +40,8 @@
 #include "raytrace.h"
 #include "rt/func.h"
 
+#include "bg/line_layer.h"
+#include "../ged_draw_private.h"
 #include "../ged_private.h"
 #include "./ged_draw.h"
 
@@ -103,6 +105,74 @@ union E_tree {
 
 #define E_TREE_MAGIC 0x45545245
 #define CK_ETREE(_p) BU_CKMAG(_p, E_TREE_MAGIC, "struct E_tree")
+
+
+struct bigE_line_set {
+    point_t *points;
+    int *commands;
+    size_t count;
+    size_t capacity;
+};
+
+#if defined(__GNUC__) || defined(__clang__)
+#  define BIGE_LEGACY_UNUSED __attribute__((unused))
+#else
+#  define BIGE_LEGACY_UNUSED
+#endif
+
+static void bigE_line_set_free(struct bigE_line_set *lines) BIGE_LEGACY_UNUSED;
+static void Eplot(union E_tree *eptr,
+		  struct bigE_line_set *lines,
+		  struct _ged_client_data *dgcdp) BIGE_LEGACY_UNUSED;
+static void free_etree(union E_tree *eptr,
+		       struct _ged_client_data *dgcdp) BIGE_LEGACY_UNUSED;
+static void fix_halfs(struct _ged_client_data *dgcdp) BIGE_LEGACY_UNUSED;
+
+
+static void
+bigE_line_set_init(struct bigE_line_set *lines)
+{
+    if (!lines)
+	return;
+    lines->points = NULL;
+    lines->commands = NULL;
+    lines->count = 0;
+    lines->capacity = 0;
+}
+
+
+static void
+bigE_line_set_free(struct bigE_line_set *lines)
+{
+    if (!lines)
+	return;
+    if (lines->points)
+	bu_free(lines->points, "bigE typed line points");
+    if (lines->commands)
+	bu_free(lines->commands, "bigE typed line commands");
+    bigE_line_set_init(lines);
+}
+
+
+static void
+bigE_line_set_append(struct bigE_line_set *lines, const point_t point, int command)
+{
+    if (!lines || !point)
+	return;
+
+    if (lines->count >= lines->capacity) {
+	size_t ncap = lines->capacity ? lines->capacity * 2 : 256;
+	lines->points = (point_t *)bu_realloc(lines->points,
+		ncap * sizeof(point_t), "bigE typed line points");
+	lines->commands = (int *)bu_realloc(lines->commands,
+		ncap * sizeof(int), "bigE typed line commands");
+	lines->capacity = ncap;
+    }
+
+    VMOVE(lines->points[lines->count], point);
+    lines->commands[lines->count] = command;
+    lines->count++;
+}
 
 
 static union E_tree *
@@ -1096,13 +1166,12 @@ classify_seg(struct seg *segp, struct soltab *shoot, struct xray *rp, struct _ge
 static void
 shoot_and_plot(point_t start_pt,
 	       vect_t dir,
-	       struct bu_list *vlfree,
-	       struct bu_list *vhead,
 	       fastf_t edge_len,
 	       int skip_leaf1,
 	       int skip_leaf2,
 	       union E_tree *eptr,
 	       struct soltab *type,
+	       struct bigE_line_set *lines,
 	       struct _ged_client_data *dgcdp)
 {
     struct xray rp;
@@ -1266,7 +1335,6 @@ shoot_and_plot(point_t start_pt,
     if (final_segs) {
 	struct seg *seg;
 
-	/* add the segments to the VLIST */
 	for (BU_LIST_FOR (seg, seg, final_segs)) {
 	    point_t pt;
 
@@ -1283,14 +1351,14 @@ shoot_and_plot(point_t start_pt,
 	    bu_log("\t\tDRAW (%g %g %g)", V3ARGS(pt));
 #endif
 
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_MOVE);
+	    bigE_line_set_append(lines, pt, BG_GEOMETRY_LINE_MOVE);
 	    VJOIN1(pt, rp.r_pt, seg->seg_out.hit_dist, rp.r_dir);
 
 #ifdef debug
 	    bu_log("<->(%g %g %g)\n", V3ARGS(pt));
 #endif
 
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+	    bigE_line_set_append(lines, pt, BG_GEOMETRY_LINE_DRAW);
 	}
 
     }
@@ -1305,7 +1373,7 @@ shoot_and_plot(point_t start_pt,
 
 static void
 Eplot(union E_tree *eptr,
-      struct bu_list *vhead,
+      struct bigE_line_set *lines,
       struct _ged_client_data *dgcdp)
 {
     point_t start_pt;
@@ -1373,7 +1441,8 @@ Eplot(union E_tree *eptr,
 		continue;
 	    inv_len = 1.0/edge_len;
 	    VSCALE(dir, dir, inv_len);
-	    shoot_and_plot(vg->coord, dir, vlfree, vhead, edge_len, leaf_no, -1, eptr, ON_SURF, dgcdp);
+	    shoot_and_plot(vg->coord, dir, edge_len, leaf_no, -1, eptr,
+		    ON_SURF, lines, dgcdp);
 
 	}
     }
@@ -1644,9 +1713,10 @@ Eplot(union E_tree *eptr,
 			point_t ray_start;
 
 			VJOIN1(ray_start, start_pt, aseg->seg_in.hit_dist, dir);
-			shoot_and_plot(ray_start, dir, vlfree, vhead,
+			shoot_and_plot(ray_start, dir,
 				       aseg->seg_out.hit_dist - aseg->seg_in.hit_dist,
-				       leaf_no, leaf2, eptr, ON_INT, dgcdp);
+				       leaf_no, leaf2, eptr, ON_INT, lines,
+				       dgcdp);
 		    }
 		    MY_FREE_SEG_LIST(result, dgcdp->ap->a_resource);
 
@@ -1980,17 +2050,20 @@ fix_halfs(struct _ged_client_data *dgcdp)
 
 
 int
-ged_E_core(struct ged *gedp, int argc, const char *argv[])
+ged_eval_wire_display_core(struct ged *gedp, int argc, const char *argv[], int ev_compat)
 {
-    int i;
     int c;
-    int ac = 1;
-    char *av[2];
-    struct _ged_client_data *dgcdp;
-    static const char *usage = "[-C#/#/# -s] objects(s)";
+    int no_autoview = 0;
+    struct ged_draw_appearance_settings settings =
+	GED_DRAW_APPEARANCE_SETTINGS_INIT;
+    const char *cmd_name = (argv && argc > 0 && argv[0]) ? argv[0] : "E";
+    const char *usage = ev_compat ?
+	"[-C#/#/# -w -T] object(s)" :
+	"[-C#/#/# -s] object(s)";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
+    GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
     /* initialize result */
@@ -1998,23 +2071,16 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
 
     /* must be wanting help */
     if (argc == 1) {
-	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", cmd_name, usage);
 	return GED_HELP;
     }
 
-    /* XXX: where is this released? */
-    BU_ALLOC(dgcdp, struct _ged_client_data);
-    dgcdp->gedp = gedp;
-    dgcdp->v = gedp->ged_gvp;
-    dgcdp->wdbp = wdb_dbopen(dgcdp->gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-    dgcdp->do_polysolids = 0;
-    dgcdp->vs.color_override = 0;
-    dgcdp->vs.transparency = 0;
-    dgcdp->vs.s_dmode = _GED_BOOL_EVAL;
+    settings.draw_mode = GED_DRAW_MODE_EVAL_WIRE;
 
     /* Parse options. */
     bu_optind = 1;          /* re-init bu_getopt() */
-    while ((c=bu_getopt(argc, (char * const *)argv, "sC:")) != -1) {
+    while ((c = bu_getopt(argc, (char * const *)argv,
+		    ev_compat ? "dfnqrstuvwSTP:C:R" : "sC:R")) != -1) {
 	switch (c) {
 	    case 'C':
 		{
@@ -2033,18 +2099,42 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
 		    if (g < 0 || g > 255) g = 255;
 		    if (b < 0 || b > 255) b = 255;
 
-		    dgcdp->vs.color_override = 1;
-		    dgcdp->vs.color[0] = r;
-		    dgcdp->vs.color[1] = g;
-		    dgcdp->vs.color[2] = b;
+		    settings.color_override = 1;
+		    settings.color[0] = r;
+		    settings.color[1] = g;
+		    settings.color[2] = b;
 		}
 		break;
 	    case 's':
-		dgcdp->do_polysolids = 1;
+		settings.draw_solid_lines_only = 1;
+		break;
+	    case 'S':
+		settings.draw_non_subtract_only = 1;
+		break;
+	    case 'R':
+		no_autoview = 1;
+		break;
+	    case 'P':
+		/* Parallelism is managed inside the librt evaluator. */
+		break;
+	    case 'd':
+	    case 'f':
+	    case 'n':
+	    case 'q':
+	    case 'r':
+	    case 't':
+	    case 'u':
+	    case 'v':
+	    case 'w':
+	    case 'T':
+		/* Legacy ev display-shaping flags have no direct Obol
+		 * draw-state equivalent.  The modern command semantics are:
+		 * request evaluated wire display and let libbrlobol/librt
+		 * choose the appropriate realization. */
 		break;
 	    default:
 		{
-		    bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+		    bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", cmd_name, usage);
 		    return BRLCAD_ERROR;
 		}
 	}
@@ -2052,75 +2142,29 @@ ged_E_core(struct ged *gedp, int argc, const char *argv[])
     argc -= bu_optind;
     argv += bu_optind;
 
-    av[1] = (char *)0;
-    for (i = 0; i < argc; ++i) {
-	dl_erasePathFromDisplay(gedp, argv[i], 0);
-	dgcdp->gdlp = dl_addToDisplay(gedp->i->ged_gdp->gd_headDisplay, gedp->dbip, argv[i]);
-
-	BU_ALLOC(dgcdp->ap, struct application);
-	RT_APPLICATION_INIT(dgcdp->ap);
-	dgcdp->ap->a_resource = &rt_uniresource;
-	rt_uniresource.re_magic = RESOURCE_MAGIC;
-	if (!BU_LIST_IS_INITIALIZED(&rt_uniresource.re_nmgfree))
-	    BU_LIST_INIT(&rt_uniresource.re_nmgfree);
-
-	bu_ptbl_init(&dgcdp->leaf_list, 8, "leaf_list");
-
-	dgcdp->rtip = rt_i_create(gedp->dbip);
-	dgcdp->rtip->rti_tol = dgcdp->wdbp->wdb_tol;	/* struct copy */
-	dgcdp->rtip->useair = 1;
-	dgcdp->ap->a_rt_i = dgcdp->rtip;
-
-	dgcdp->nvectors = 0;
-	(void)time(&dgcdp->start_time);
-
-	av[0] = (char *)argv[i];
-	if (rt_gettrees(dgcdp->rtip, ac, (const char **)av, 1)) {
-	    bu_ptbl_free(&dgcdp->leaf_list);
-
-	    rt_i_destroy(dgcdp->rtip);
-	    bu_free(dgcdp, "dgcdp");
-
-	    bu_vls_printf(gedp->ged_result_str, "Failed to get objects\n");
-	    return BRLCAD_ERROR;
-	}
-	{
-	    struct region *rp;
-	    union E_tree *eptr;
-	    struct bu_list vhead;
-	    struct db_tree_state ts;
-	    struct db_full_path path;
-
-	    BU_LIST_INIT(&vhead);
-
-	    for (BU_LIST_FOR (rp, region, &(dgcdp->rtip->HeadRegion))) {
-		dgcdp->num_halfs = 0;
-		eptr = e_build_etree(rp->reg_treetop, dgcdp);
-
-		if (dgcdp->num_halfs)
-		    fix_halfs(dgcdp);
-
-		Eplot(eptr, &vhead, dgcdp);
-		free_etree(eptr, dgcdp);
-		bu_ptbl_reset(&dgcdp->leaf_list);
-		ts.ts_mater = rp->reg_mater;
-		db_string_to_path(&path, gedp->dbip, rp->reg_name);
-		_ged_drawH_part2(0, &vhead, &path, &ts, dgcdp);
-		db_free_full_path(&path);
-	    }
-	    rt_i_destroy(dgcdp->rtip);
-	}
+    if (!argc) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", cmd_name, usage);
+	return BRLCAD_ERROR;
     }
 
-    (void)time(&dgcdp->etime);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, NULL);
+    txn.view = view_ctx;
+    txn.paths = argv;
+    txn.path_count = argc;
+    txn.appearance = &settings;
+    txn.autoview = !no_autoview && !ged_draw_has_paths(gedp, view_ctx, -1);
 
-    /* free leaf_list */
-    bu_ptbl_free(&dgcdp->leaf_list);
+    return (ged_draw_apply_transaction(gedp, &txn, NULL) < 0) ?
+	BRLCAD_ERROR : BRLCAD_OK;
+}
 
-    bu_vls_printf(gedp->ged_result_str, "E: %ld vectors in %ld sec\n",
-		  dgcdp->nvectors, (long)(dgcdp->etime - dgcdp->start_time));
 
-    return BRLCAD_OK;
+int
+ged_E_core(struct ged *gedp, int argc, const char *argv[])
+{
+    return ged_eval_wire_display_core(gedp, argc, argv, 0);
 }
 
 /*

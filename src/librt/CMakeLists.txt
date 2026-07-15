@@ -101,7 +101,6 @@ set(
   bool_tess.c
   bundle.c
   cache.c
-  cache_lod.c
   cache_lz4.c
   cmd.c
   cyclic.c
@@ -144,6 +143,7 @@ set(
   dir.c
   dspline.c
   edit.cpp
+  eval_wireframe.cpp
   fortray.c
   globals.c
   htbl.c
@@ -315,7 +315,6 @@ set(
   uv.c
   vds/vds.c
   vers.c
-  view.c
   vlist.c
   vshoot.c
   wdb.c
@@ -500,7 +499,7 @@ brlcad_addlib(librt "${LIBRT_SOURCES}" "${RT_INCLUDE_DIRS}" "${RT_LOCAL_INCLUDE_
 )
 
 # set(MATERIALX_LIBS ${CMAKE_CURRENT_SOURCE_DIR}/../../../MaterialXSource/lib/MaterialXCore.lib;${CMAKE_CURRENT_SOURCE_DIR}/../../../MaterialXSource/lib/MaterialXFormat.lib;${CMAKE_CURRENT_SOURCE_DIR}/../../../MaterialXSource/lib/MaterialXGenOsl.lib;${CMAKE_CURRENT_SOURCE_DIR}/../../../MaterialXSource/lib/MaterialXGenShader.lib)
-# BRLCAD_ADDLIB(librt "${LIBRT_SOURCES}" "${RT_INCLUDE_DIRS}" "${RT_LOCAL_INCLUDE_DIRS}" PUBLIC_LIBS libbrep libnmg libbg libbv libbn libbu PRIVATE_LIBS ${MATERIALX_LIBS} ${OPENCL_LIBS} ${OPENNURBS_LIBRARIES} ${REGEX_LIBRARIES} ${WINSOCK_LIB} ${RPCRT_LIB} ${STDCXX_LIBRARIES})
+# BRLCAD_ADDLIB(librt "${LIBRT_SOURCES}" "${RT_INCLUDE_DIRS}" "${RT_LOCAL_INCLUDE_DIRS}" PUBLIC_LIBS libbrep libnmg libbg libbn libbu PRIVATE_LIBS ${MATERIALX_LIBS} ${OPENCL_LIBS} ${OPENNURBS_LIBRARIES} ${REGEX_LIBRARIES} ${WINSOCK_LIB} ${RPCRT_LIB} ${STDCXX_LIBRARIES})
 
 set_target_properties(librt PROPERTIES VERSION 20.0.1 SOVERSION 20)
 if(HIDE_INTERNAL_SYMBOLS)

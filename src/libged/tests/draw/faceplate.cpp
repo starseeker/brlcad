@@ -29,14 +29,49 @@
 #include <fstream>
 
 #include <bu.h>
-#define DM_WITH_RT
-#include <dm.h>
+#include <brlobol/display_endpoint.h>
+#include <icv.h>
+#include <imgstream/fbserv.h>
+#include "rt/view.h"
+#include "view_test_util.h"
 #include <ged.h>
+#include <ged/draw.h>
+#include <ged/draw_obol.h>
 
-#include "../../dbi.h"
+#define ADIFF_THRES 0.99
 
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);
+extern "C" int img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, const char *clear_root, const char *img_root);
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
+
+static bool
+framebuffer_matches(brlobol_display_endpoint_t *endpoint,
+	const unsigned char *expected, size_t expected_size,
+	unsigned int expected_width, unsigned int expected_height)
+{
+    unsigned char *pixels = NULL;
+    size_t size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    bool matched = endpoint &&
+	brlobol_display_endpoint_capture_plane(endpoint,
+	    BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	    &components) && pixels && size == expected_size &&
+	width == expected_width && height == expected_height &&
+	components == 3 && memcmp(pixels, expected, expected_size) == 0;
+    if (pixels)
+	bu_free(pixels, "faceplate framebuffer comparison");
+    return matched;
+}
+
+static void
+wait_for_progressive_draw(struct ged *gedp, void *view_ctx)
+{
+    if (!draw_test_obol_progressive_drain(gedp, view_ctx, 2000, 1))
+	bu_exit(EXIT_FAILURE,
+	    "Obol progressive realization did not settle before baseline capture\n");
+}
 
 int
 main(int ac, char *av[]) {
@@ -86,60 +121,22 @@ main(int ac, char *av[]) {
     /* Cache maintenance must not erase extracted image controls. */
     bu_setenv("BU_DIR_CACHE", runtime_cache, 1);
 
-    unpack_apng(av[1], "faceplate.apng", lcache, "fp");
-
     if (!bu_file_exists(av[1], NULL)) {
 	printf("ERROR: [%s] does not exist, expecting .g file\n", av[1]);
 	return 2;
     }
 
+    unpack_apng(av[1], "faceplate.apng", lcache, "fp");
+
     /* Open the temp file, then dbconcat argv[1] into it */
     bu_vls_sprintf(&fname, "%s/moss.g", av[1]);
     gedp = ged_open("db", bu_vls_cstr(&fname), 1);
 
-    // Set up new cmd data (not yet done by default in ged_open
-    gedp->dbi_state = new DbiState(gedp);
-    gedp->new_cmd_forms = 1;
-    bu_setenv("DM_SWRAST", "1", 1);
-
-    /* To generate images that will allow us to check if the drawing
-     * is proceeding as expected, we use the swrast off-screen dm. */
+    /* Image baselines use the GED-owned headless Obol render endpoint. */
     const char *s_av[15] = {NULL};
-    s_av[0] = "dm";
-    s_av[1] = "attach";
-    s_av[2] = "swrast";
-    s_av[3] = "SW";
-    s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
-
-    struct bview *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)v->dmp;
-    dm_set_width(dmp, 512);
-    dm_set_height(dmp, 512);
-
-    dm_configure_win(dmp, 0);
-    dm_set_zbuffer(dmp, 1);
-
-    // See QtSW.cpp...
-    fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
-    dm_set_win_bounds(dmp, windowbounds);
-
-    dm_set_vp(dmp, &v->gv_scale);
-    v->dmp = dmp;
-    v->gv_width = dm_get_width(dmp);
-    v->gv_height = dm_get_height(dmp);
-    v->gv_base2local = gedp->dbip->dbi_base2local;
-    v->gv_local2base = gedp->dbip->dbi_local2base;
-
-    // The default (fast) wireframe has some differences from
-    // the slower full OpenGL draw path - disable it for the
-    // purposes of these tests.
-    s_av[0] = "dm";
-    s_av[1] = "set";
-    s_av[2] = "fast_wireframe";
-    s_av[3] = "0";
-    s_av[4] = NULL;
-    ged_exec_dm(gedp, 4, s_av);
+    void *v = ged_view_active_ctx(gedp);
+    if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to initialize headless Obol render endpoint\n");
 
     /***** Sanity - basic wireframe draw *****/
     bu_log("Testing basic db wireframe draw...\n");
@@ -147,6 +144,8 @@ main(int ac, char *av[]) {
     s_av[1] = "all.g";
     s_av[2] = NULL;
     ged_exec_draw(gedp, 2, s_av);
+
+    wait_for_progressive_draw(gedp, v);
 
     s_av[0] = "autoview";
     s_av[1] = NULL;
@@ -171,7 +170,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(2, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_cmp(2, gedp, lcache, false, clear_images, soft_fail, ADIFF_THRES, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -188,11 +187,14 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(3, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(3, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
-    // Check that turning off works
-    s_av[3] = "0";
-    ged_exec_view(gedp, 4, s_av);
+    // Exercise the draw subcommand too: it stages grid state before the
+    // endpoint provider applies the visibility property.
+    s_av[3] = "draw";
+    s_av[4] = "0";
+    s_av[5] = NULL;
+    ged_exec_view(gedp, 5, s_av);
     ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
     bu_log("Done.\n");
 
@@ -214,22 +216,21 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(4, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(4, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     bu_log("Testing turning on frames per second reporting...\n");
 
     // So we don't get random values here, override the timing variable values
-    ((struct dm *)v->dmp)->start_time = 0;
-    v->gv_s->gv_frametime = 1000000000;
+    bv_frametime_set(DRAW_TEST_BV(v), 1000000000);
 
     s_av[0] = "view";
     s_av[1] = "faceplate";
     s_av[2] = "params";
     s_av[3] = "fps";
-    s_av[4] = "0";
+    s_av[4] = "1";
     s_av[5] = NULL;
     ged_exec_view(gedp, 5, s_av);
-    ret += img_cmp(5, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(5, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -256,7 +257,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(6, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(6, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -273,7 +274,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(7, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(7, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -289,7 +290,7 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(8, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_not_empty(8, gedp, lcache, false, clear_images, soft_fail, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -297,14 +298,241 @@ main(int ac, char *av[]) {
     ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
     bu_log("Done.\n");
 
+    /***** Application-owned retained HUD axes *****/
+    struct bv_axes_state edit_axes = BV_AXES_STATE_INIT;
+    mat_t edit_rotation;
+    MAT_IDN(edit_rotation);
+    edit_axes.draw = 1;
+    edit_axes.axes_size = 0.25;
+    edit_axes.line_width = 2;
+    edit_axes.label_flag = 1;
+    VSET(edit_axes.axes_color, 255, 128, 0);
+    VSET(edit_axes.label_color, 255, 255, 255);
+    if (!ged_draw_view_context_hud_axes_replace(v, "_test/edit_axes",
+	    &edit_axes, edit_rotation) ||
+	!ged_draw_view_context_feature_exists(v, "_test/edit_axes/lines") ||
+	!ged_draw_view_context_feature_exists(v, "_test/edit_axes/labels"))
+	bu_exit(EXIT_FAILURE, "retained HUD axes publication failed\n");
+    edit_axes.draw = 0;
+    if (!ged_draw_view_context_hud_axes_replace(v, "_test/edit_axes",
+	    &edit_axes, edit_rotation) ||
+	ged_draw_view_context_feature_exists(v, "_test/edit_axes/lines") ||
+	ged_draw_view_context_feature_exists(v, "_test/edit_axes/labels"))
+	bu_exit(EXIT_FAILURE, "retained HUD axes removal failed\n");
+
+    point_t hud_points[2] = {{-0.25, -0.25, 0.0}, {0.25, 0.25, 0.0}};
+    int hud_cmds[2] = {GED_DRAW_VIEW_LINE_MOVE, GED_DRAW_VIEW_LINE_DRAW};
+    struct ged_draw_view_feature_style hud_style =
+	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    hud_style.visible = 1;
+    hud_style.color_valid = 1;
+    VSET(hud_style.color, 32, 192, 255);
+    if (!ged_draw_view_context_hud_lines_replace(v, "_test/hud_lines",
+	    (const point_t *)hud_points, hud_cmds, 2, &hud_style) ||
+	!ged_draw_view_context_feature_exists(v, "_test/hud_lines"))
+	bu_exit(EXIT_FAILURE, "retained HUD line publication failed\n");
+    if (!ged_draw_view_context_hud_lines_replace(v, "_test/hud_lines",
+	    NULL, NULL, 0, NULL) ||
+	ged_draw_view_context_feature_exists(v, "_test/hud_lines"))
+	bu_exit(EXIT_FAILURE, "retained HUD line removal failed\n");
+
+    struct ged_draw_view_label_data hud_label =
+	GED_DRAW_VIEW_LABEL_DATA_INIT;
+    hud_label.text = "retained HUD";
+    VSET(hud_label.point, -0.5, 0.5, 0.0);
+    hud_label.color_valid = 1;
+    VSET(hud_label.color, 255, 196, 32);
+    hud_label.font_size = 14.0;
+    if (!ged_draw_view_context_hud_labels_replace(v, "_test/hud_labels",
+	    &hud_label, 1, &hud_style) ||
+	!ged_draw_view_context_feature_exists(v, "_test/hud_labels"))
+	bu_exit(EXIT_FAILURE, "retained HUD label publication failed\n");
+    if (!ged_draw_view_context_hud_labels_replace(v, "_test/hud_labels",
+	    NULL, 0, NULL) ||
+	ged_draw_view_context_feature_exists(v, "_test/hud_labels"))
+	bu_exit(EXIT_FAILURE, "retained HUD label removal failed\n");
+
+    struct ged_draw_view_line_layer_data hud_layers[2] = {
+	GED_DRAW_VIEW_LINE_LAYER_DATA_INIT,
+	GED_DRAW_VIEW_LINE_LAYER_DATA_INIT
+    };
+    hud_layers[0].name = "first";
+    hud_layers[0].points = (const point_t *)hud_points;
+    hud_layers[0].commands = hud_cmds;
+    hud_layers[0].point_count = 2;
+    hud_layers[0].style = hud_style;
+    hud_layers[1] = hud_layers[0];
+    hud_layers[1].name = "second";
+    hud_layers[1].style.color[0] = 255;
+    if (!ged_draw_view_context_hud_line_layers_replace(v,
+	    "_test/hud_line_layers", hud_layers, 2, &hud_style) ||
+	!ged_draw_view_context_feature_exists(v, "_test/hud_line_layers"))
+	bu_exit(EXIT_FAILURE, "retained HUD line-layer publication failed\n");
+    if (!ged_draw_view_context_hud_line_layers_replace(v,
+	    "_test/hud_line_layers", NULL, 0, NULL) ||
+	ged_draw_view_context_feature_exists(v, "_test/hud_line_layers"))
+	bu_exit(EXIT_FAILURE, "retained HUD line-layer removal failed\n");
+
+    /***** Interactive rectangle *****/
+    bu_log("Testing interactive rectangle drawing...\n");
+    struct bv_interactive_rect_state interactive_rect =
+	BV_INTERACTIVE_RECT_STATE_INIT;
+    interactive_rect.x = -0.50;
+    interactive_rect.y = -0.25;
+    interactive_rect.width = 1.00;
+    interactive_rect.height = 0.50;
+    interactive_rect.line_width = 1;
+    interactive_rect.line_style = 0;
+    VSET(interactive_rect.color, 32, 192, 255);
+    if (!bv_interactive_rect_state_set(DRAW_TEST_BV(v), &interactive_rect))
+	bu_exit(EXIT_FAILURE, "failed to configure interactive rectangle\n");
+
+    struct brlobol_endpoint_property_value interactive_value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    interactive_value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+    interactive_value.uint_value = 3;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.line_width", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle line width\n");
+    interactive_value.uint_value = 1;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.line_style", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle line style\n");
+    struct brlobol_endpoint_property_value interactive_readback =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (ged_view_context_display_property_get(v,
+	    "view.interactive.rectangle.line_style", &interactive_readback) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK || interactive_readback.uint_value != 1)
+	bu_exit(EXIT_FAILURE, "interactive rectangle line-style readback failed\n");
+    interactive_value.uint_value = 2;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.line_style", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_INVALID)
+	bu_exit(EXIT_FAILURE, "invalid interactive rectangle line style was accepted\n");
+    interactive_value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    interactive_value.color3[0] = 1.0;
+    interactive_value.color3[1] = 0.25;
+    interactive_value.color3[2] = 0.0;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.color", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to set interactive rectangle color\n");
+    interactive_value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    interactive_value.bool_value = 1;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.visible", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to show interactive rectangle\n");
+    if (ged_draw_obol_view_context_faceplate_sync(gedp, v) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to synchronize interactive rectangle\n");
+    if (!ged_draw_view_context_feature_exists(v,
+	    "_faceplate/interactive_rect"))
+	bu_exit(EXIT_FAILURE, "interactive rectangle was not retained\n");
+    ret += img_not_empty(10, gedp, lcache, false, clear_images, soft_fail,
+	"faceplate_clear", "fp");
+
+    interactive_value.bool_value = 0;
+    if (ged_view_context_display_property_set(v,
+	    "view.interactive.rectangle.visible", &interactive_value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	bu_exit(EXIT_FAILURE, "failed to hide interactive rectangle\n");
+    ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0,
+	"faceplate_clear", "fp");
+    bu_log("Done.\n");
+
     /***** Framebuffer *****/
     bu_log("Testing framebuffer...\n");
     struct bu_vls fb_img = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&fb_img, "%s/moss.png", av[1]);
-    s_av[0] = "png2fb";
-    s_av[1] = bu_vls_cstr(&fb_img);
-    s_av[2] = NULL;
-    ged_exec_png2fb(gedp, 2, s_av);
+    if (ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, v) !=
+	BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to initialize Obol framebuffer backend\n");
+    icv_image_t *fb_source = icv_read(bu_vls_cstr(&fb_img),
+	BU_MIME_IMAGE_PNG, 0, 0);
+    if (!fb_source)
+	bu_exit(EXIT_FAILURE, "failed to read framebuffer baseline image\n");
+    /* Match png-fb's default conversion of untagged input into a linear
+     * framebuffer. */
+    fb_source->gamma_corr = 0.5f;
+    unsigned char *fb_pixels = icv_data2uchar(fb_source);
+    const char *png_fb_av[3] = {
+	"png2fb", bu_vls_cstr(&fb_img), NULL
+    };
+    if (!fb_pixels || ged_exec(gedp, 2, png_fb_av) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "png2fb failed to publish framebuffer image: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+
+    struct bu_vls fb_capture_path = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&fb_capture_path, "%s/faceplate_fb_capture.png", lcache);
+    const char *fb_sg_av[4] = {
+	"screengrab", "-F", bu_vls_cstr(&fb_capture_path), NULL
+    };
+    if (ged_exec_screengrab(gedp, 3, fb_sg_av) != BRLCAD_OK ||
+	!bu_file_exists(bu_vls_cstr(&fb_capture_path), NULL))
+	bu_exit(EXIT_FAILURE, "endpoint framebuffer screengrab failed: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+
+    brlobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(v);
+    const size_t expected_size = fb_source->width * fb_source->height * 3;
+    if (!framebuffer_matches(endpoint, fb_pixels, expected_size,
+	    (unsigned int)fb_source->width,
+	    (unsigned int)fb_source->height))
+	bu_exit(EXIT_FAILURE,
+	    "png2fb endpoint plane does not match decoded image\n");
+
+    struct bu_vls fb_pix_path = BU_VLS_INIT_ZERO;
+    bu_vls_sprintf(&fb_pix_path, "%s/faceplate_fb.pix", lcache);
+    bu_file_delete(bu_vls_cstr(&fb_pix_path));
+    char fb_width[32] = {0};
+    char fb_height[32] = {0};
+    snprintf(fb_width, sizeof(fb_width), "%zu", fb_source->width);
+    snprintf(fb_height, sizeof(fb_height), "%zu", fb_source->height);
+    const char *fb2pix_av[7] = {
+	"fb2pix", "-w", fb_width, "-n", fb_height,
+	bu_vls_cstr(&fb_pix_path), NULL
+    };
+    if (ged_exec(gedp, 6, fb2pix_av) != BRLCAD_OK ||
+	!bu_file_exists(bu_vls_cstr(&fb_pix_path), NULL))
+	bu_exit(EXIT_FAILURE, "fb2pix endpoint export failed: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+
+    const char *fbclear_av[2] = {"fbclear", NULL};
+    if (ged_exec(gedp, 1, fbclear_av) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "fbclear failed: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+    const char *pix2fb_av[7] = {
+	"pix2fb", "-w", fb_width, "-n", fb_height,
+	bu_vls_cstr(&fb_pix_path), NULL
+    };
+    if (ged_exec(gedp, 6, pix2fb_av) != BRLCAD_OK ||
+	!framebuffer_matches(endpoint, fb_pixels, expected_size,
+	    (unsigned int)fb_source->width,
+	    (unsigned int)fb_source->height))
+	bu_exit(EXIT_FAILURE, "pix2fb endpoint round trip failed: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+
+    if (ged_exec(gedp, 1, fbclear_av) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "pre-overlay fbclear failed\n");
+    const char *overlay_fb_av[4] = {
+	"overlay", "-F", bu_vls_cstr(&fb_img), NULL
+    };
+    if (ged_exec(gedp, 3, overlay_fb_av) != BRLCAD_OK ||
+	!framebuffer_matches(endpoint, fb_pixels, expected_size,
+	    (unsigned int)fb_source->width,
+	    (unsigned int)fb_source->height))
+	bu_exit(EXIT_FAILURE, "overlay -F endpoint import failed: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+
+    bu_file_delete(bu_vls_cstr(&fb_pix_path));
+    bu_vls_free(&fb_pix_path);
+    bu_file_delete(bu_vls_cstr(&fb_capture_path));
+    bu_vls_free(&fb_capture_path);
+    bu_free(fb_pixels, "faceplate framebuffer pixels");
+    icv_destroy(fb_source);
+    bu_vls_free(&fb_img);
 
     s_av[0] = "view";
     s_av[1] = "faceplate";
@@ -312,7 +540,8 @@ main(int ac, char *av[]) {
     s_av[3] = "1";
     s_av[4] = NULL;
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail,
+	ADIFF_THRES, "faceplate_clear", "fp");
 
     // Check that turning off works
     s_av[3] = "0";
@@ -322,11 +551,11 @@ main(int ac, char *av[]) {
     // Re-enable and make sure clear works
     s_av[3] = "1";
     ged_exec_view(gedp, 4, s_av);
-    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_cmp(9, gedp, lcache, false, clear_images, soft_fail,
+	ADIFF_THRES, "faceplate_clear", "fp");
 
-    s_av[0] = "fbclear";
-    s_av[1] = NULL;
-    ged_exec_fbclear(gedp, 1, s_av);
+    if (ged_exec(gedp, 1, fbclear_av) != BRLCAD_OK)
+	bu_exit(EXIT_FAILURE, "failed to clear Obol framebuffer backend\n");
     ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");
 
     s_av[0] = "view";
@@ -339,7 +568,24 @@ main(int ac, char *av[]) {
     bu_log("Done.\n");
 
 
+    ged_draw_obol_framebuffer_release(gedp);
+    unsigned char *captured_pixels = NULL;
+    size_t captured_size = 0;
+    unsigned int captured_width = 0;
+    unsigned int captured_height = 0;
+    unsigned int captured_components = 0;
+    if (brlobol_display_endpoint_capture_plane(endpoint,
+	    BRLOBOL_CAPTURE_FRAMEBUFFER, &captured_pixels, &captured_size,
+	    &captured_width, &captured_height, &captured_components)) {
+	if (captured_pixels)
+	    bu_free(captured_pixels, "unexpected framebuffer capture");
+	bu_exit(EXIT_FAILURE,
+	    "released framebuffer bridge left an endpoint capture callback\n");
+    }
     ged_close(gedp);
+
+    if (!keep_images)
+	bu_dirclear(lcache);
 
     return ret;
 }

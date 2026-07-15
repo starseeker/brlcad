@@ -27,11 +27,17 @@
 #include <QGroupBox>
 #include <QPushButton>
 #include <QRadioButton>
+#include "ged/draw.h"
 #include "qtcad/QgColorRGB.h"
-#include "qtcad/QgPolyFilter.h"
-#include "qtcad/QgView.h"
 #include "qtcad/QgSignalFlags.h"
 #include "QPolySettings.h"
+
+class QgPluginContext;
+class QgPolyFilter;
+class QgPolyMoveFilter;
+class QgPolyPointFilter;
+class QgPolySelectFilter;
+class QgPolyUpdateFilter;
 
 class QPolyMod : public QWidget
 {
@@ -40,6 +46,8 @@ class QPolyMod : public QWidget
     public:
 	QPolyMod();
 	~QPolyMod();
+
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
 
 	// Modify polygon settings
 	QPolySettings *ps;
@@ -69,15 +77,15 @@ class QPolyMod : public QWidget
 	QPushButton *remove_poly;
 
     signals:
-	void settings_changed(unsigned long long);
-	void view_updated(unsigned long long);
+	void settings_changed(QgViewUpdateFlags);
+	void view_updated(QgViewUpdateFlags);
 
     public slots:
 	void app_mod_names_reset(void *);
 	void checkbox_refresh(unsigned long long);
 	void mod_names_reset();
 	void polygon_update_props();
-	void propagate_update(int);
+	void propagate_update(QgViewUpdateFlags);
 
     private slots:
 	void toplevel_config(bool);
@@ -103,16 +111,19 @@ class QPolyMod : public QWidget
 	bool eventFilter(QObject *, QEvent *);
 
     private:
-	void poly_type_settings(struct bv_polygon *ip);
+	void poly_type_settings(const struct ged_draw_view_polygon_record *ip);
 	int poly_cnt = 0;
-	struct bv_scene_obj *p = NULL;
+	ged_draw_view_polygon_ref p = GED_DRAW_VIEW_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;
-	QPolyUpdateFilter *puf;
-	QPolySelectFilter *psf;
-	QPolyPointFilter *ppf;
-	QPolyMoveFilter *pmf;
+	QgPolyUpdateFilter *puf;
+	QgPolySelectFilter *psf;
+	QgPolyPointFilter *ppf;
+	QgPolyMoveFilter *pmf;
+	QgPluginContext *m_ctx = nullptr;
+
+	struct ged *getGed() const;
 };
 
 

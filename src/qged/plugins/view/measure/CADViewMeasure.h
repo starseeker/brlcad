@@ -26,11 +26,13 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QLineEdit>
-#include <QLineEdit>
-#include "bv.h"
-#include "ged.h"
-#include "qtcad/QgColorRGB.h"
-#include "qtcad/QgMeasureFilter.h"
+#include "qtcad/QgSignalFlags.h"
+
+class QgPluginContext;
+class QgColorRGB;
+class QgMeasureFilter;
+class QMeasure2DFilter;
+class QMeasure3DFilter;
 
 class CADViewMeasure : public QWidget
 {
@@ -39,6 +41,8 @@ class CADViewMeasure : public QWidget
     public:
 	CADViewMeasure(QWidget *p = 0);
 	~CADViewMeasure();
+
+	void setContext(QgPluginContext *ctx) { m_ctx = ctx; }
 
 	QCheckBox *measure_3d;
 
@@ -53,7 +57,7 @@ class CADViewMeasure : public QWidget
 	QgColorRGB *color_3d;
 
     signals:
-	void view_updated(unsigned long long);
+	void view_updated(QgViewUpdateFlags);
 
     public slots:
         void adjust_text();
@@ -67,10 +71,10 @@ class CADViewMeasure : public QWidget
 	bool eventFilter(QObject *, QEvent *);
 
     private:
-	struct bv_scene_obj *s = NULL;
 	QgMeasureFilter *mf = NULL;
 	QMeasure2DFilter *f2d = NULL;
 	QMeasure3DFilter *f3d = NULL;
+	QgPluginContext *m_ctx = nullptr;
 };
 
 // Local Variables:

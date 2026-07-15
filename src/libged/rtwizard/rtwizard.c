@@ -35,6 +35,7 @@
 #include "bu/app.h"
 #include "bu/process.h"
 
+#include "bv.h"
 
 #include "../ged_private.h"
 
@@ -81,15 +82,16 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     int i;
     char pstring[32];
     int args;
+    fastf_t perspective;
     quat_t quat;
     vect_t eye_model;
-    struct bu_vls perspective_vls = BU_VLS_INIT_ZERO;
     struct bu_vls size_vls = BU_VLS_INIT_ZERO;
     struct bu_vls orient_vls = BU_VLS_INIT_ZERO;
     struct bu_vls eye_vls = BU_VLS_INIT_ZERO;
     char **gd_rt_cmd = NULL;
     int gd_rt_cmd_len = 0;
     int ret = BRLCAD_OK;
+    void *view_ctx;
 
     const char *bin;
     char rtscript[256] = {0};
@@ -102,7 +104,10 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (gedp->ged_gvp->gv_perspective > 0)
+    view_ctx = ged_view_active_ctx(gedp);
+    perspective = bv_perspective_get(
+		      bv_context_view_const((const struct bv_context *)view_ctx));
+    if (perspective > 0)
 	/* rtwizard --no_gui -perspective p -i db.g --viewsize size --orientation "A B C D" --eye_pt "X Y Z" */
 	args = argc + 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2;
     else
@@ -119,9 +124,11 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     _ged_rt_set_eye_model(gedp, eye_model);
-    quat_mat2quat(quat, gedp->ged_gvp->gv_rotation);
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_orientation_quat_get(quat, view);
 
-    bu_vls_printf(&size_vls, "%.15e", gedp->ged_gvp->gv_size);
+    bu_vls_printf(&size_vls, "%.15e", bv_size_get(view));
     bu_vls_printf(&orient_vls, "%.15e %.15e %.15e %.15e", V4ARGS(quat));
     bu_vls_printf(&eye_vls, "%.15e %.15e %.15e", V3ARGS(eye_model));
 
@@ -135,9 +142,9 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     *vp++ = "--eye_pt";
     *vp++ = bu_vls_addr(&eye_vls);
 
-    if (gedp->ged_gvp->gv_perspective > 0) {
+    if (perspective > 0) {
 	*vp++ = "--perspective";
-	(void)sprintf(pstring, "%g", gedp->ged_gvp->gv_perspective);
+	(void)sprintf(pstring, "%g", perspective);
 	*vp++ = pstring;
     }
 
@@ -163,7 +170,6 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
 
     bu_free(gd_rt_cmd, "free gd_rt_cmd");
 
-    bu_vls_free(&perspective_vls);
     bu_vls_free(&size_vls);
     bu_vls_free(&orient_vls);
     bu_vls_free(&eye_vls);

@@ -1,4 +1,4 @@
-set(PLUGIN_LIBS libged libdm libbu)
+set(PLUGIN_LIBS libged libbu)
 
 ged_plugin_library(ged-get_autoview
   get_autoview.c

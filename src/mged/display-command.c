@@ -1,0 +1,656 @@
+/*              D I S P L A Y - C O M M A N D . C
+ * BRL-CAD
+ *
+ * Copyright (c) 2004-2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * version 2.1 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this file; see the file named COPYING for more
+ * information.
+ */
+/** @file mged/display-command.c
+ *
+ * Endpoint-native implementation of MGED's retained `dm` command surface.
+ *
+ */
+
+#include "common.h"
+
+#include <stdlib.h>
+#include <math.h>
+#include <ctype.h>
+#include <string.h>
+
+#ifdef HAVE_SYS_TYPES_H
+#  include <sys/types.h>
+#endif
+
+#include "tcl.h"
+#ifdef HAVE_TK
+#  include "tk.h"
+#endif
+
+#include "bv.h"
+#include "vmath.h"
+#include "raytrace.h"
+#include "ged.h"
+#include "ged/view.h"
+#include "brlobol/display_endpoint.h"
+#include "rt/view.h"
+
+#include "./mged.h"
+#include "./sedit.h"
+#include "./mged_display.h"
+#include "./menu.h"
+
+int
+mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
+{
+    int status;
+    struct bv_adc_state adc_record = {0};
+    struct bv_adc_state *adc = &adc_record;
+    struct bv_grid_state grid_record = BV_GRID_STATE_INIT;
+    struct bv_grid_state *grid = &grid_record;
+    struct bu_vls vls = BU_VLS_INIT_ZERO;
+
+    if (s->dbip == DBI_NULL)
+	return TCL_OK;
+
+    (void)mged_display_adc_state_get(s->mged_curr_display, adc);
+    (void)mged_display_grid_state_get(s->mged_curr_display, grid);
+
+    if (BU_STR_EQUAL(argv[0], "idle")) {
+
+	/* redraw after scaling */
+	ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	void *active_view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
+	if (active_view_ctx &&
+	    ged_draw_view_context_lod_policy_get(&lod_policy, active_view_ctx) &&
+	    lod_policy.csg_enabled &&
+	    lod_policy.zoom_refresh &&
+	    (am_mode == AMM_SCALE ||
+	     am_mode == AMM_CON_SCALE_X ||
+	     am_mode == AMM_CON_SCALE_Y ||
+	     am_mode == AMM_CON_SCALE_Z))
+	{
+	    if (redraw_visible_objects(s) == TCL_ERROR) {
+		return TCL_ERROR;
+	    }
+	}
+
+	am_mode = AMM_IDLE;
+	mged_obol_input_semantic_mode_sync(s);
+	scroll_active = 0;
+	if (rubber_band->rb_active) {
+	    rubber_band->rb_active = 0;
+
+	    if (mged_variables->mv_mouse_behavior == 'p') {
+		/* need dummy values for func signature--they are unused in the func */
+		const struct bu_structparse *sdp = 0;
+		const char name[] = "name";
+		void *base = 0;
+		const char value[] = "value";
+		rb_set_dirty_flag(sdp, name, base, value, NULL);
+	    }
+	    else if (mged_variables->mv_mouse_behavior == 'r')
+		rt_rect_area(s);
+	    else if (mged_variables->mv_mouse_behavior == 'z')
+		zoom_rect_area(s);
+	}
+
+	return TCL_OK;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "m")) {
+	int x;
+	int y;
+	int old_orig_gui;
+	int stolen = 0;
+	fastf_t fx, fy;
+	mat_t view_center;
+	mat_t model2view;
+	mat_t view2model;
+	void *view_ctx = view_state->vs_gvp;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+
+	if (argc < 3) {
+	    Tcl_AppendResult(s->interp, "dm m: need more parameters\n",
+			     "dm m xpos ypos\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+
+	old_orig_gui = mged_variables->mv_orig_gui;
+
+	if (!bv_screen_to_view(&fx, &fy, view, atoi(argv[1]), atoi(argv[2]))) {
+	    Tcl_AppendResult(s->interp, "dm m: view has no usable dimensions\n",
+		    (char *)NULL);
+	    return TCL_ERROR;
+	}
+	const int view_width = bv_width_get(view);
+	const int view_height = bv_height_get(view);
+	const fastf_t aspect = (fastf_t)view_width / (fastf_t)view_height;
+	x = fx * RT_VIEW_MAX;
+	y = fy * aspect * RT_VIEW_MAX;
+	bv_center_mat_get(view_center, view);
+	bv_model2view_get(model2view, view);
+	bv_view2model_get(view2model, view);
+
+	if (mged_variables->mv_faceplate &&
+	    mged_variables->mv_orig_gui) {
+#define MENUXLIM (-1250)
+
+	    if (x >= MENUXLIM && scroll_select(s, x, y, 0)) {
+		stolen = 1;
+		goto end;
+	    }
+
+	    if (x < MENUXLIM && mmenu_select(s, y, 0)) {
+		stolen = 1;
+		goto end;
+	    }
+	}
+
+	mged_variables->mv_orig_gui = 0;
+	y = fy * RT_VIEW_MAX;
+
+    end:
+	if (mged_variables->mv_mouse_behavior == 'q' && !stolen) {
+	    point_t view_pt;
+	    point_t model_pt;
+
+	    if (grid->snap)
+		snap_to_grid(s, &fx, &fy);
+
+	    if (mged_variables->mv_perspective_mode)
+		VSET(view_pt, fx, fy, 0.0);
+	    else
+		VSET(view_pt, fx, fy, 1.0);
+
+	    MAT4X3PNT(model_pt, view2model, view_pt);
+	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
+	    if (bv_zclip_get(view))
+		bu_vls_printf(&vls, "nirt -c --xyz %lf %lf %lf",
+			      model_pt[X], model_pt[Y], model_pt[Z]);
+	    else
+		bu_vls_printf(&vls, "nirt --xyz %lf %lf %lf",
+			      model_pt[X], model_pt[Y], model_pt[Z]);
+	} else if ((mged_variables->mv_mouse_behavior == 'p' ||
+		    mged_variables->mv_mouse_behavior == 'r' ||
+		    mged_variables->mv_mouse_behavior == 'z') && !stolen) {
+
+	    if (grid->snap)
+		snap_to_grid(s, &fx, &fy);
+
+	    rubber_band->rb_active = 1;
+	    rubber_band->rb_x = fx;
+	    rubber_band->rb_y = fy;
+	    rubber_band->rb_width = 0.0;
+	    rubber_band->rb_height = 0.0;
+	    rect_view2image(s);
+	    {
+		/* need dummy values for func signature--they are unused in the func */
+		const struct bu_structparse *sdp = 0;
+		const char name[] = "name";
+		void *base = 0;
+		const char value[] = "value";
+		rb_set_dirty_flag(sdp, name, base, value, NULL);
+	    }
+	} else if (mged_variables->mv_mouse_behavior == 's' && !stolen) {
+	    bu_vls_printf(&vls, "mouse_solid_edit_select %d %d", x, y);
+	} else if (mged_variables->mv_mouse_behavior == 'm' && !stolen) {
+	    bu_vls_printf(&vls, "mouse_matrix_edit_select %d %d", x, y);
+	} else if (mged_variables->mv_mouse_behavior == 'c' && !stolen) {
+	    bu_vls_printf(&vls, "mouse_comb_edit_select %d %d", x, y);
+	} else if (mged_variables->mv_mouse_behavior == 'o' && !stolen) {
+	    bu_vls_printf(&vls, "mouse_rt_obj_select %d %d", x, y);
+	} else if (adc->draw && mged_variables->mv_transform == 'a' && !stolen) {
+	    point_t model_pt;
+	    point_t view_pt;
+
+	    if (grid->snap)
+		snap_to_grid(s, &fx, &fy);
+
+	    VSET(view_pt, fx, fy, 1.0);
+	    MAT4X3PNT(model_pt, view2model, view_pt);
+	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
+	    bu_vls_printf(&vls, "adc xyz %lf %lf %lf\n", model_pt[X], model_pt[Y], model_pt[Z]);
+	} else if (grid->snap && !stolen &&
+		   SEDIT_TRAN && mged_variables->mv_transform == 'e') {
+	    point_t view_pt;
+	    point_t model_pt;
+
+	    snap_to_grid(s, &fx, &fy);
+	    MAT4X3PNT(view_pt, model2view, MEDIT(s)->curr_e_axes_pos);
+	    view_pt[X] = fx;
+	    view_pt[Y] = fy;
+	    MAT4X3PNT(model_pt, view2model, view_pt);
+	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
+	    bu_vls_printf(&vls, "p %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
+	} else if (grid->snap && !stolen &&
+		   OEDIT_TRAN && mged_variables->mv_transform == 'e') {
+	    point_t view_pt;
+	    point_t model_pt;
+
+	    snap_to_grid(s, &fx, &fy);
+	    MAT4X3PNT(view_pt, model2view, MEDIT(s)->curr_e_axes_pos);
+	    view_pt[X] = fx;
+	    view_pt[Y] = fy;
+	    MAT4X3PNT(model_pt, view2model, view_pt);
+	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
+	    bu_vls_printf(&vls, "translate %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
+	} else if (grid->snap && !stolen &&
+		   s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK &&
+		   s->global_editing_state != ST_O_PATH && !SEDIT_PICK && !EDIT_SCALE) {
+	    point_t view_pt;
+	    point_t model_pt;
+	    point_t vcenter;
+
+	    snap_to_grid(s, &fx, &fy);
+	    MAT_DELTAS_GET_NEG(vcenter, view_center);
+	    MAT4X3PNT(view_pt, model2view, vcenter);
+	    view_pt[X] = fx;
+	    view_pt[Y] = fy;
+	    MAT4X3PNT(model_pt, view2model, view_pt);
+	    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
+	    bu_vls_printf(&vls, "center %lf %lf %lf", model_pt[X], model_pt[Y], model_pt[Z]);
+	} else
+	    bu_vls_printf(&vls, "M 1 %d %d\n", x, y);
+
+	status = Tcl_Eval(s->interp, bu_vls_addr(&vls));
+	mged_variables->mv_orig_gui = old_orig_gui;
+	bu_vls_free(&vls);
+
+	return status;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "motion")) {
+	if (argc < 3) {
+	    Tcl_AppendResult(s->interp, "dm motion: need more parameters\n",
+			     "dm motion xpos ypos\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+
+	return mged_display_motion(s, atoi(argv[1]), atoi(argv[2]));
+    }
+
+    if (BU_STR_EQUAL(argv[0], "am")) {
+	if (argc < 4) {
+	    Tcl_AppendResult(s->interp, "dm am: need more parameters\n",
+			     "dm am <r|t|s> xpos ypos\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+
+	pointer_x = atoi(argv[2]);
+	pointer_y = atoi(argv[3]);
+
+	switch (*argv[1]) {
+	    case 'r':
+		am_mode = AMM_ROT;
+		break;
+	    case 't':
+		am_mode = AMM_TRAN;
+
+		if (grid->snap) {
+		    int save_edflag;
+
+		    if ((s->global_editing_state == ST_S_EDIT || s->global_editing_state == ST_O_EDIT) &&
+			mged_variables->mv_transform == 'e') {
+			if (s->global_editing_state == ST_S_EDIT) {
+			    save_edflag = MEDIT(s)->edit_flag;
+			    if (!SEDIT_TRAN)
+				MEDIT(s)->edit_flag = RT_PARAMS_EDIT_TRANS;
+			} else {
+			    save_edflag = edobj;
+			    edobj = BE_O_XY;
+			}
+
+			snap_keypoint_to_grid(s);
+
+			if (s->global_editing_state == ST_S_EDIT)
+			    MEDIT(s)->edit_flag = save_edflag;
+			else
+			    edobj = save_edflag;
+		    } else
+			snap_view_center_to_grid(s);
+		}
+
+		break;
+	    case 's':
+		if (s->global_editing_state == ST_S_EDIT && mged_variables->mv_transform == 'e' &&
+		    ZERO(MEDIT(s)->acc_sc_sol))
+		    MEDIT(s)->acc_sc_sol = 1.0;
+		else if (s->global_editing_state == ST_O_EDIT && mged_variables->mv_transform == 'e') {
+		    MEDIT(s)->k.sca_abs = MEDIT(s)->acc_sc_obj - 1.0;
+		    if (MEDIT(s)->k.sca_abs > 0.0)
+			MEDIT(s)->k.sca_abs /= 3.0;
+		}
+
+		am_mode = AMM_SCALE;
+		break;
+	    default:
+		Tcl_AppendResult(s->interp, "dm am: need more parameters\n",
+				 "dm am <r|t|s> xpos ypos\n", (char *)NULL);
+		return TCL_ERROR;
+	}
+
+	mged_obol_input_semantic_mode_sync(s);
+	return TCL_OK;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "adc")) {
+	fastf_t fx, fy;
+	fastf_t td; /* tick distance */
+	fastf_t view_local_scale;
+	mat_t view2model;
+	void *view_ctx = view_state->vs_gvp;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+
+	if (argc < 4) {
+	    Tcl_AppendResult(s->interp, "dm adc: need more parameters\n",
+			     "dm adc 1|2|t|d xpos ypos\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+
+	pointer_x = atoi(argv[2]);
+	pointer_y = atoi(argv[3]);
+	fastf_t mouse_view_x = 0.0;
+	fastf_t mouse_view_y = 0.0;
+	if (!bv_screen_to_view(&mouse_view_x, &mouse_view_y, view,
+		pointer_x, pointer_y)) {
+	    Tcl_AppendResult(s->interp,
+		    "dm adc: view has no usable dimensions\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+	view_local_scale = bv_scale_get(view) * s->dbip->dbi_base2local;
+	bv_view2model_get(view2model, view);
+
+	switch (*argv[1]) {
+	    case '1':
+		fx = mouse_view_x * RT_VIEW_MAX - adc->dv_x;
+		fy = mouse_view_y * RT_VIEW_MAX - adc->dv_y;
+
+		bu_vls_printf(&vls, "adc a1 %lf\n", RAD2DEG*atan2(fy, fx));
+		Tcl_Eval(s->interp, bu_vls_addr(&vls));
+		bu_vls_free(&vls);
+
+		am_mode = AMM_ADC_ANG1;
+		break;
+	    case '2':
+		fx = mouse_view_x * RT_VIEW_MAX - adc->dv_x;
+		fy = mouse_view_y * RT_VIEW_MAX - adc->dv_y;
+
+		bu_vls_printf(&vls, "adc a2 %lf\n", RAD2DEG*atan2(fy, fx));
+		Tcl_Eval(s->interp, bu_vls_addr(&vls));
+		bu_vls_free(&vls);
+
+		am_mode = AMM_ADC_ANG2;
+		break;
+	    case 't':
+		{
+		    point_t model_pt;
+		    point_t view_pt;
+
+		    VSET(view_pt, mouse_view_x, mouse_view_y, 0.0);
+
+		    if (grid->snap)
+			snap_to_grid(s, &view_pt[X], &view_pt[Y]);
+
+		    MAT4X3PNT(model_pt, view2model, view_pt);
+		    VSCALE(model_pt, model_pt, s->dbip->dbi_base2local);
+
+		    bu_vls_printf(&vls, "adc xyz %lf %lf %lf\n", model_pt[X], model_pt[Y], model_pt[Z]);
+		    Tcl_Eval(s->interp, bu_vls_addr(&vls));
+
+		    bu_vls_free(&vls);
+		    am_mode = AMM_ADC_TRAN;
+		}
+
+		break;
+	    case 'd':
+		fx = (mouse_view_x * RT_VIEW_MAX -
+		      adc->dv_x) * view_local_scale * RT_INV_VIEW;
+		fy = (mouse_view_y * RT_VIEW_MAX -
+		      adc->dv_y) * view_local_scale * RT_INV_VIEW;
+
+		td = sqrt(fx * fx + fy * fy);
+
+		bu_vls_printf(&vls, "adc dst %lf\n", td);
+		Tcl_Eval(s->interp, bu_vls_addr(&vls));
+		bu_vls_free(&vls);
+
+		am_mode = AMM_ADC_DIST;
+		break;
+	    default:
+		Tcl_AppendResult(s->interp, "dm adc: unrecognized parameter - ", argv[1],
+				 "\ndm adc 1|2|t|d xpos ypos\n", (char *)NULL);
+		return TCL_ERROR;
+	}
+
+	mged_obol_input_semantic_mode_sync(s);
+	return TCL_OK;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "con")) {
+	if (argc < 5) {
+	    Tcl_AppendResult(s->interp, "dm con: need more parameters\n",
+			     "dm con r|t|s x|y|z xpos ypos\n",
+			     "dm con a x|y|1|2|d xpos ypos\n", (char *)NULL);
+	    return TCL_ERROR;
+	}
+
+	pointer_x = atoi(argv[3]);
+	pointer_y = atoi(argv[4]);
+
+	switch (*argv[1]) {
+	    case 'a':
+		switch (*argv[2]) {
+		    case 'x':
+			am_mode = AMM_CON_XADC;
+			break;
+		    case 'y':
+			am_mode = AMM_CON_YADC;
+			break;
+		    case '1':
+			am_mode = AMM_CON_ANG1;
+			break;
+		    case '2':
+			am_mode = AMM_CON_ANG2;
+			break;
+		    case 'd':
+			am_mode = AMM_CON_DIST;
+			break;
+		    default:
+			Tcl_AppendResult(s->interp, "dm con: unrecognized parameter - ", argv[2],
+					 "\ndm con a x|y|1|2|d xpos ypos\n", (char *)NULL);
+		}
+		break;
+	    case 'r':
+		switch (*argv[2]) {
+		    case 'x':
+			am_mode = AMM_CON_ROT_X;
+			break;
+		    case 'y':
+			am_mode = AMM_CON_ROT_Y;
+			break;
+		    case 'z':
+			am_mode = AMM_CON_ROT_Z;
+			break;
+		    default:
+			Tcl_AppendResult(s->interp, "dm con: unrecognized parameter - ", argv[2],
+					 "\ndm con r|t|s x|y|z xpos ypos\n", (char *)NULL);
+			return TCL_ERROR;
+		}
+		break;
+	    case 't':
+		switch (*argv[2]) {
+		    case 'x':
+			am_mode = AMM_CON_TRAN_X;
+			break;
+		    case 'y':
+			am_mode = AMM_CON_TRAN_Y;
+			break;
+		    case 'z':
+			am_mode = AMM_CON_TRAN_Z;
+			break;
+		    default:
+			Tcl_AppendResult(s->interp, "dm con: unrecognized parameter - ", argv[2],
+					 "\ndm con r|t|s x|y|z xpos ypos\n", (char *)NULL);
+			return TCL_ERROR;
+		}
+		break;
+	    case 's':
+		switch (*argv[2]) {
+		    case 'x':
+			if (s->global_editing_state == ST_S_EDIT && mged_variables->mv_transform == 'e' &&
+			    ZERO(MEDIT(s)->acc_sc_sol))
+			    MEDIT(s)->acc_sc_sol = 1.0;
+			else if (s->global_editing_state == ST_O_EDIT && mged_variables->mv_transform == 'e') {
+			    MEDIT(s)->k.sca_abs = MEDIT(s)->acc_sc[0] - 1.0;
+			    if (MEDIT(s)->k.sca_abs > 0.0)
+				MEDIT(s)->k.sca_abs /= 3.0;
+			}
+
+			am_mode = AMM_CON_SCALE_X;
+			break;
+		    case 'y':
+			if (s->global_editing_state == ST_S_EDIT && mged_variables->mv_transform == 'e' &&
+			    ZERO(MEDIT(s)->acc_sc_sol))
+			    MEDIT(s)->acc_sc_sol = 1.0;
+			else if (s->global_editing_state == ST_O_EDIT && mged_variables->mv_transform == 'e') {
+			    MEDIT(s)->k.sca_abs = MEDIT(s)->acc_sc[1] - 1.0;
+			    if (MEDIT(s)->k.sca_abs > 0.0)
+				MEDIT(s)->k.sca_abs /= 3.0;
+			}
+
+			am_mode = AMM_CON_SCALE_Y;
+			break;
+		    case 'z':
+			if (s->global_editing_state == ST_S_EDIT && mged_variables->mv_transform == 'e' &&
+			    ZERO(MEDIT(s)->acc_sc_sol))
+			    MEDIT(s)->acc_sc_sol = 1.0;
+			else if (s->global_editing_state == ST_O_EDIT && mged_variables->mv_transform == 'e') {
+			    MEDIT(s)->k.sca_abs = MEDIT(s)->acc_sc[2] - 1.0;
+			    if (MEDIT(s)->k.sca_abs > 0.0)
+				MEDIT(s)->k.sca_abs /= 3.0;
+			}
+
+			am_mode = AMM_CON_SCALE_Z;
+			break;
+		    default:
+			Tcl_AppendResult(s->interp, "dm con: unrecognized parameter - ", argv[2],
+					 "\ndm con r|t|s x|y|z xpos ypos\n", (char *)NULL);
+			return TCL_ERROR;
+		}
+		break;
+	    default:
+		Tcl_AppendResult(s->interp, "dm con: unrecognized parameter - ", argv[1],
+				 "\ndm con r|t|s x|y|z xpos ypos\n", (char *)NULL);
+		return TCL_ERROR;
+	}
+
+	mged_obol_input_semantic_mode_sync(s);
+	return TCL_OK;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "size")) {
+	int width, height;
+	void *view_ctx = view_state->vs_gvp;
+	struct bv *view = mged_view_context_view(view_ctx);
+
+	/* get the window size */
+	if (argc == 1) {
+	    bu_vls_printf(&vls, "%d %d", bv_width_get(view),
+		    bv_height_get(view));
+	    Tcl_AppendResult(s->interp, bu_vls_addr(&vls), (char *)NULL);
+	    bu_vls_free(&vls);
+
+	    return TCL_OK;
+	}
+
+	/* set the window size */
+	if (argc == 3) {
+	    width = atoi(argv[1]);
+	    height = atoi(argv[2]);
+	    if (width <= 0 || height <= 0) {
+		Tcl_AppendResult(s->interp,
+			"dm size: width and height must be positive\n",
+			(char *)NULL);
+		return TCL_ERROR;
+	    }
+
+	    brlobol_display_endpoint_t *endpoint =
+		ged_view_context_display_endpoint_get(view_ctx);
+	    if (endpoint && !brlobol_display_endpoint_resize(endpoint,
+		    (unsigned int)width, (unsigned int)height, 1.0)) {
+		Tcl_AppendResult(s->interp,
+			"dm size: endpoint resize failed\n", (char *)NULL);
+		return TCL_ERROR;
+	    }
+	    (void)bv_dimensions_set(view, width, height);
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
+	    return TCL_OK;
+	}
+
+	Tcl_AppendResult(s->interp, "Usage: dm size [width height]\n", (char *)NULL);
+	return TCL_ERROR;
+    }
+
+    Tcl_AppendResult(s->interp, "dm: bad command - ", argv[0], "\n", (char *)NULL);
+    return TCL_ERROR;
+}
+
+int
+mged_display_command(int argc, const char *argv[], void *data)
+{
+    struct mged_state *s = (struct mged_state *)data;
+    MGED_CK_STATE(s);
+    if (BU_STR_EQUAL(argv[0], "bg") ||
+	BU_STR_EQUAL(argv[0], "close") ||
+	BU_STR_EQUAL(argv[0], "diagnostics") ||
+	BU_STR_EQUAL(argv[0], "get") ||
+	BU_STR_EQUAL(argv[0], "host") ||
+	BU_STR_EQUAL(argv[0], "list") ||
+	BU_STR_EQUAL(argv[0], "open") ||
+	BU_STR_EQUAL(argv[0], "renderer") ||
+	BU_STR_EQUAL(argv[0], "set") ||
+	BU_STR_EQUAL(argv[0], "status")) {
+	void *active_view_ctx = ged_view_active_ctx(s->gedp);
+        if (!active_view_ctx) {
+            ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+	    active_view_ctx = ged_view_active_ctx(s->gedp);
+	}
+	const char **av = (const char **)bu_calloc((size_t)argc + 2, sizeof(char *), "dm forward argv");
+        av[0] = "dm";
+        for (int i = 0; i < argc; i++)
+            av[i + 1] = argv[i];
+        int ret = ged_exec(s->gedp, argc + 1, av);
+        bu_free((void *)av, "dm forward argv");
+
+        if (bu_vls_strlen(s->gedp->ged_result_str)) {
+            Tcl_AppendResult(s->interp, bu_vls_addr(s->gedp->ged_result_str), (char *)NULL);
+            bu_vls_trunc(s->gedp->ged_result_str, 0);
+        }
+        return (ret == BRLCAD_OK || (ret & GED_HELP)) ? TCL_OK : TCL_ERROR;
+    }
+
+    return mged_display_command_common(s, argc, argv);
+}
+
+/*
+ * Local Variables:
+ * mode: C
+ * tab-width: 8
+ * indent-tabs-mode: t
+ * c-file-style: "stroustrup"
+ * End:
+ * ex: shiftwidth=4 tabstop=8
+ */

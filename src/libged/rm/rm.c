@@ -53,6 +53,7 @@
 #include "bu/malloc.h"
 #include "bu/opt.h"
 #include "bu/vls.h"
+#include "ged/event_txn.h"
 #include "raytrace.h"
 
 #include "../ged_private.h"
@@ -447,13 +448,16 @@ _rm_object_has_children(struct db_i *dbip, struct rm_ref_graph *graph, struct di
 static int
 _rm_delete_object(struct ged *gedp, struct directory *dp)
 {
-    _dl_eraseAllNamesFromDisplay(gedp, dp->d_namep, 0);
+    char *name = bu_strdup(dp->d_namep);
 
     if (db_delete(gedp->dbip, dp) != 0 || db_dirdelete(gedp->dbip, dp) != 0) {
 	bu_vls_printf(gedp->ged_result_str,
-		"rm: error deleting '%s'\n", dp->d_namep);
+		"rm: error deleting '%s'\n", name);
+	bu_free(name, "deleted object event name");
 	return BRLCAD_ERROR;
     }
+    ged_event_notify_object_removed(gedp, name, NULL);
+    bu_free(name, "deleted object event name");
     return BRLCAD_OK;
 }
 
@@ -788,6 +792,7 @@ _rm_remove_from_comb(struct ged *gedp, struct directory *parent_dp,
     struct rt_db_internal intern;
     struct rt_comb_internal *comb;
     struct bu_vls child_name = BU_VLS_INIT_ZERO;
+    struct bu_vls path = BU_VLS_INIT_ZERO;
     size_t matches;
     long instance;
     int ret = BRLCAD_OK;
@@ -862,15 +867,24 @@ _rm_remove_from_comb(struct ged *gedp, struct directory *parent_dp,
 	return BRLCAD_ERROR;
     }
 
-    if (path_expr)
-	_dl_eraseAllPathsFromDisplay(gedp, path_expr, 0);
-    bu_vls_free(&child_name);
-
     if (rt_db_put_internal(parent_dp, gedp->dbip, &intern) < 0) {
 	bu_vls_printf(gedp->ged_result_str,
 		"rm: database write error for '%s'\n", parent_dp->d_namep);
+	bu_vls_free(&child_name);
 	return BRLCAD_ERROR;
     }
+
+    if (path_expr) {
+	struct ged_draw_transaction txn =
+	    ged_draw_transaction_make(GED_DRAW_TXN_ERASE_PREFIX, path_expr);
+	(void)ged_draw_apply_transaction(gedp, &txn, NULL);
+    }
+    bu_vls_printf(&path, "%s/%s", parent_dp->d_namep,
+	bu_vls_cstr(&child_name));
+    ged_event_notify_comb_instance_removed(gedp, parent_dp->d_namep,
+	bu_vls_cstr(&child_name), bu_vls_cstr(&path), NULL);
+    bu_vls_free(&path);
+    bu_vls_free(&child_name);
 
     return BRLCAD_OK;
 }
@@ -1203,6 +1217,9 @@ ged_rm_core(struct ged *gedp, int argc, const char *argv[])
 	_rm_expand_operand(argv[i], gedp->dbip, &operands);
     }
 
+    if (!nflag)
+	ged_event_batch_begin(gedp);
+
     for (i = 0; i < BU_PTBL_LEN(&operands); i++) {
 	struct bu_vls *vop = (struct bu_vls *)BU_PTBL_GET(&operands, i);
 	int handled = 0;
@@ -1215,12 +1232,16 @@ ged_rm_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (!has_object_operands) {
+	if (!nflag)
+	    ged_event_batch_end(gedp, NULL);
 	_rm_free_operands(&operands);
 	return ret;
     }
 
     graph.refs = NULL;
     if (_rm_ref_graph_build(&graph, gedp->dbip) != BRLCAD_OK) {
+	if (!nflag)
+	    ged_event_batch_end(gedp, NULL);
 	_rm_free_operands(&operands);
 	bu_vls_printf(gedp->ged_result_str, "rm: failed to build reference graph\n");
 	return BRLCAD_ERROR;
@@ -1244,6 +1265,8 @@ ged_rm_core(struct ged *gedp, int argc, const char *argv[])
 	ret = BRLCAD_ERROR;
 
     db_update_nref(gedp->dbip);
+    if (!nflag)
+	ged_event_batch_end(gedp, NULL);
 
     _rm_obj_set_free(&delete_set);
     _rm_ref_graph_free(&graph);

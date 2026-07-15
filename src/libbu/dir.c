@@ -683,6 +683,9 @@ bu_dir(char *result, size_t len, .../*, NULL */)
 void
 bu_mkdir(const char *path)
 {
+    if (!path || !path[0])
+	return;
+
     // If there's already something there, we can't proceed.
     if (bu_file_exists(path, NULL) || bu_file_directory(path))
 	return;

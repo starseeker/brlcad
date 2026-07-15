@@ -41,7 +41,8 @@
 
 #include "bu/getopt.h"
 #include "bu/snooze.h"
-#include "dm.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
 
 #include "pkg.h"
 #include "ged.h"
@@ -176,6 +177,26 @@ pix2fb_get_args(struct pix2fb_state *s, int argc, char **argv)
 }
 
 
+static int
+pix2fb_apply(struct imgstream_fb *fb, void *userdata)
+{
+    struct pix2fb_state *state = (struct pix2fb_state *)userdata;
+    if (!state)
+	return BRLCAD_ERROR;
+    struct imgstream_fb_import_options options =
+	IMGSTREAM_FB_IMPORT_OPTIONS_INIT;
+    options.file_xoff = state->file_xoff;
+    options.file_yoff = state->file_yoff;
+    options.screen_xoff = state->scr_xoff;
+    options.screen_yoff = state->scr_yoff;
+    options.clear = state->clear;
+    options.zoom = state->zoom;
+    options.inverse = state->inverse;
+    return imgstream_fb_import_pix_fd(fb, state->infd, state->file_name,
+	state->file_width, state->file_height, state->autosize,
+	&options) == 0 ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
 int
 ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
 {
@@ -185,24 +206,11 @@ ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    if (!gedp->ged_gvp) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set\n");
 	return BRLCAD_ERROR;
     }
-
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, ": no current display manager set\n");
-	return BRLCAD_ERROR;
-    }
-
-    struct fb *fbp = dm_get_fb(dmp);
-
-    if (!fbp) {
-	bu_vls_printf(gedp->ged_result_str, "display manager does not have a framebuffer");
-	return BRLCAD_ERROR;
-    }
-
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -218,14 +226,8 @@ ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    ret = fb_read_fd(fbp, p2fbs.infd,
-		     p2fbs.file_width, p2fbs.file_height,
-		     p2fbs.file_xoff, p2fbs.file_yoff,
-		     p2fbs.scr_width, p2fbs.scr_height,
-		     p2fbs.scr_xoff, p2fbs.scr_yoff,
-		     p2fbs.fileinput, p2fbs.file_name, p2fbs.one_line_only, p2fbs.multiple_lines,
-		     p2fbs.autosize, p2fbs.inverse, p2fbs.clear, p2fbs.zoom,
-		     gedp->ged_result_str);
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	pix2fb_apply, &p2fbs, 1);
 
     if (p2fbs.infd != 0)
 	close(p2fbs.infd);
@@ -233,12 +235,11 @@ ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
     bu_snooze(BU_SEC2USEC(p2fbs.pause_sec));
 
 
-    if (ret == BRLCAD_OK) {
-	(void)dm_draw_begin(dmp);
-	fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-	(void)dm_draw_end(dmp);
+    if (ret == BRLCAD_OK)
 	return BRLCAD_OK;
-    }
+
+    bu_vls_printf(gedp->ged_result_str,
+	"unable to import PIX data into the active Obol framebuffer");
 
     return BRLCAD_ERROR;
 }

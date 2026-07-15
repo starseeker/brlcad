@@ -143,7 +143,6 @@ package provide Archer 1.0
 	method bot_sync_all {}
 	method bot_sync_all_wrapper {}
 	method fbclear {}
-	method getZClipState {}
 	method launchPatternTool {}
 	method raytracePlus {{_batch_list {}}}
 
@@ -513,10 +512,8 @@ package provide Archer 1.0
 
     if {!$mViewOnly} {
 	pushPerspectiveSettings
-	updateZClipPlanesFromSettings
     }
 
-    gedCmd dlist_on $mDisplayListMode
     gedCmd configure -hideSubtractions $mHideSubtractions
 
     if {$mWireframeMode} {
@@ -790,7 +787,7 @@ package provide Archer 1.0
     # This deselects the selected mouse mode in the primary toolbar
     #set mDefaultBindingMode FIRST_FREE_BINDING_MODE
 
-    $itk_component(ged) init_find_arb_face $_obj $_button [expr {$mZClipFrontMax * $mZClipFront}] $_callback
+    $itk_component(ged) init_find_arb_face $_obj $_button 1.0 $_callback
 }
 
 
@@ -814,7 +811,7 @@ package provide Archer 1.0
     # This deselects the selected mouse mode in the primary toolbar
     set mDefaultBindingMode FIRST_FREE_BINDING_MODE
 
-    $itk_component(ged) init_find_bot_face $_obj $_button [expr {$mZClipFrontMax * $mZClipFront}] $_callback
+    $itk_component(ged) init_find_bot_face $_obj $_button 1.0 $_callback
 }
 
 
@@ -1039,10 +1036,6 @@ package provide Archer 1.0
 }
 
 
-::itcl::body Archer::getZClipState {} {
-    return [list [expr {$mZClipFrontMax * $mZClipFront}] [expr {$mZClipBackMax * $mZClipBack}]]
-}
-
 ::itcl::body Archer::launchPatternTool {} {
     set ::cadwidgets::mgedFlag 0
     set ::cadwidgets::ged $this
@@ -1200,7 +1193,6 @@ package provide Archer 1.0
 
 
 ::itcl::body Archer::bot_find_face {_bot _mx _my} {
-#    set view [lreplace $view 2 2 [expr {$mZClipFrontMax * $mZClipFront}]]
 }
 
 
@@ -2679,88 +2671,6 @@ proc title_node_handler {node} {
 	    -command [::itcl::code $this updatePerspective]
     }
 
-    itk_component add zclipFrontL {
-	::ttk::label $parent.zclipFrontL \
-	    -anchor se \
-	    -text "ZClip Percent (Front):"
-    } {}
-    itk_component add zclipFrontS {
-	::scale $parent.zclipFrontS \
-	    -showvalue 1 \
-	    -orient horizontal \
-	    -from 1.0 \
-	    -to 100.0 \
-	    -resolution 0.01 \
-	    -variable [::itcl::scope mZClipFrontPref] \
-	    -command [::itcl::code $this updateZClipPlanesFromPreferences]
-    }
-
-    itk_component add zclipBackL {
-	::ttk::label $parent.zclipBackL \
-	    -anchor se \
-	    -text "ZClip Percent (Back):"
-    } {}
-    itk_component add zclipBackS {
-	::scale $parent.zclipBackS \
-	    -showvalue 1 \
-	    -orient horizontal \
-	    -from 1.0 \
-	    -to 100.0 \
-	    -resolution 0.01 \
-	    -variable [::itcl::scope mZClipBackPref] \
-	    -command [::itcl::code $this updateZClipPlanesFromPreferences]
-    }
-
-    itk_component add zclipBackMaxL {
-	::ttk::label $parent.zclipBackMaxL \
-	    -anchor e \
-	    -text "ZClip Max (Back):"
-    } {}
-    itk_component add zclipBackMaxF {
-	::ttk::frame $parent.zclipBackMaxF
-    } {}
-    itk_component add zclipBackMaxE {
-	::ttk::entry $itk_component(zclipBackMaxF).zclipBackMaxE \
-	    -width 12 \
-	    -textvariable [::itcl::scope mZClipBackMaxPref] \
-	    -validate key \
-	    -validatecommand [::itcl::code $this validateZClipMax %P]
-    } {}
-    itk_component add zclipBackMaxB {
-	::ttk::button $itk_component(zclipBackMaxF).zclipBackMaxB \
-	    -width -1 \
-	    -text "Compute" \
-	    -command [::itcl::code $this calculateZClipBackMax]
-    } {}
-    grid $itk_component(zclipBackMaxE) -column 0 -row 0 -sticky nsew
-    grid $itk_component(zclipBackMaxB) -column 1 -row 0 -sticky nse
-    grid columnconfigure $itk_component(zclipBackMaxF) 0 -weight 1
-
-    itk_component add zclipFrontMaxL {
-	::ttk::label $parent.zclipFrontMaxL \
-	    -anchor e \
-	    -text "ZClip Max (Front):"
-    } {}
-    itk_component add zclipFrontMaxF {
-	::ttk::frame $parent.zclipFrontMaxF
-    } {}
-    itk_component add zclipFrontMaxE {
-	::ttk::entry $itk_component(zclipFrontMaxF).zclipFrontMaxE \
-	    -width 12 \
-	    -textvariable [::itcl::scope mZClipFrontMaxPref] \
-	    -validate key \
-	    -validatecommand [::itcl::code $this validateZClipMax %P]
-    } {}
-    itk_component add zclipFrontMaxB {
-	::ttk::button $itk_component(zclipFrontMaxF).zclipFrontMaxB \
-	    -width -1 \
-	    -text "Compute" \
-	    -command [::itcl::code $this calculateZClipFrontMax]
-    } {}
-    grid $itk_component(zclipFrontMaxE) -column 0 -row 0 -sticky nsew
-    grid $itk_component(zclipFrontMaxB) -column 1 -row 0 -sticky nse
-    grid columnconfigure $itk_component(zclipFrontMaxF) 0 -weight 1
-
     itk_component add lightModeL {
 	::ttk::label $parent.lightModeL \
 	    -anchor e \
@@ -2835,11 +2745,6 @@ proc title_node_handler {node} {
 	    -variable [::itcl::scope mDefaultDisplayModePref]
     } {}
 
-    itk_component add dlistModeCB {
-	::ttk::checkbutton $parent.dlistModeCB \
-	    -text "Use Display Lists" \
-	    -variable [::itcl::scope mDisplayListModePref]
-    } {}
     itk_component add hideSubCB {
 	::ttk::checkbutton $parent.hideSubCB \
 	    -text "Hide Subtractions" \
@@ -2874,29 +2779,15 @@ proc title_node_handler {node} {
     grid $itk_component(perspectiveL) -column 0 -row $i -sticky se
     grid $itk_component(perspectiveS) -column 1 -row $i -sticky ew
     incr i
-    grid $itk_component(zclipBackL) -column 0 -row $i -sticky se
-    grid $itk_component(zclipBackS) -column 1 -row $i -sticky ew
-    incr i
-    grid $itk_component(zclipBackMaxL) -column 0 -row $i -sticky e
-    grid $itk_component(zclipBackMaxF) -column 1 -row $i -sticky ew
-    incr i
-    grid $itk_component(zclipFrontL) -column 0 -row $i -sticky se
-    grid $itk_component(zclipFrontS) -column 1 -row $i -sticky ew
-    incr i
-    grid $itk_component(zclipFrontMaxL) -column 0 -row $i -sticky e
-    grid $itk_component(zclipFrontMaxF) -column 1 -row $i -sticky ew
-    incr i
     grid $itk_component(lightModeL) -column 0 -row $i -sticky ne
     grid $itk_component(lightModeF) -column 1 -row $i -sticky ew
     incr i
     grid $itk_component(displayModeL) -column 0 -row $i -sticky ne
     grid $itk_component(displayModeF) -column 1 -row $i -sticky ew
     incr i
-    grid $itk_component(dlistModeCB) -columnspan 2 -column 0 -row $i -sticky sw
+    grid $itk_component(hideSubCB) -columnspan 2 -column 0 -row $i -sticky sw
     grid rowconfigure $parent $i -weight 1
     grid columnconfigure $parent 1 -weight 1
-    incr i
-    grid $itk_component(hideSubCB) -columnspan 2 -column 0 -row $i -sticky sw
     incr i
     grid $itk_component(wireframeModeCB) -columnspan 2 -column 0 -row $i -sticky sw
 
@@ -8568,29 +8459,6 @@ proc title_node_handler {node} {
     set wflag 0
     $itk_component(ged) refresh_off
 
-    if {$mZClipBackMaxPref == "" ||
-	$mZClipBackMaxPref == "." ||
-	$mZClipFrontMaxPref == "" ||
-	$mZClipFrontMaxPref == "."} {
-
-	# Set things back the way they were before
-	# calling the preferences dialog.
-	updateZClipPlanesFromSettings
-	set rflag 1
-    } elseif {$mZClipBackMaxPref != $mZClipBackMax ||
-	$mZClipFrontMaxPref != $mZClipFrontMax ||
-	$mZClipBackPref != $mZClipBack ||
-	$mZClipFrontPref != $mZClipFront} {
-
-	set mZClipBackMax $mZClipBackMaxPref
-	set mZClipFrontMax $mZClipFrontMaxPref
-	set mZClipBack $mZClipBackPref
-	set mZClipFront $mZClipFrontPref
-
-	updateZClipPlanesFromSettings
-	set rflag 1
-    }
-
     if {$mPerspectivePref != $mPerspective} {
 	set mPerspective $mPerspectivePref
 	updatePerspective 0
@@ -8605,12 +8473,6 @@ proc title_node_handler {node} {
 
     if {$mDefaultDisplayModePref != $mDefaultDisplayMode} {
 	set mDefaultDisplayMode $mDefaultDisplayModePref
-    }
-
-    if {$mDisplayListModePref != $mDisplayListMode} {
-	set mDisplayListMode $mDisplayListModePref
-	gedCmd dlist_on $mDisplayListMode
-	set rflag 1
     }
 
     if {$mHideSubtractionsPref != $mHideSubtractions} {
@@ -9070,16 +8932,6 @@ proc title_node_handler {node} {
     set rflag 0
     $itk_component(ged) refresh_off
 
-    # Handling special case for zclip preferences (i.e. put zclip planes back where they were)
-    if {$mZClipBackMaxPref != $mZClipBackMax ||
-	$mZClipFrontMaxPref != $mZClipFrontMax ||
-	$mZClipBackPref != $mZClipBack ||
-	$mZClipFrontPref != $mZClipFront} {
-
-       updateZClipPlanesFromSettings
-       set rflag 1
-    }
-
     if {$mLightingModePref != $mLightingMode} {
 	gedCmd light_all $mLightingMode
 	set rflag 1
@@ -9162,13 +9014,8 @@ proc title_node_handler {node} {
 
     set mPerspectivePref $mPerspective
 
-    set mZClipBackMaxPref $mZClipBackMax
-    set mZClipFrontMaxPref $mZClipFrontMax
-    set mZClipBackPref $mZClipBack
-    set mZClipFrontPref $mZClipFront
     set mLightingModePref $mLightingMode
     set mDefaultDisplayModePref $mDefaultDisplayMode
-    set mDisplayListModePref $mDisplayListMode
     set mHideSubtractionsPref $mHideSubtractions
     set mWireframeModePref $mWireframeMode
 
@@ -9327,13 +9174,8 @@ proc title_node_handler {node} {
     puts $_pfile "set mModelAxesTickMajorColor \"$mModelAxesTickMajorColor\""
 
     puts $_pfile "set mPerspective $mPerspective"
-    puts $_pfile "set mZClipBackMax $mZClipBackMax"
-    puts $_pfile "set mZClipFrontMax $mZClipFrontMax"
-    puts $_pfile "set mZClipBack $mZClipBack"
-    puts $_pfile "set mZClipFront $mZClipFront"
     puts $_pfile "set mLightingMode $mLightingMode"
     puts $_pfile "set mDefaultDisplayMode $mDefaultDisplayMode"
-    puts $_pfile "set mDisplayListMode $mDisplayListMode"
     puts $_pfile "set mHideSubtractions $mHideSubtractions"
     puts $_pfile "set mWireframeMode $mWireframeMode"
 

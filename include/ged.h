@@ -22,7 +22,7 @@
  * Functions provided by the LIBGED geometry editing library.  These routines
  * are a procedural basis for the geometric editing capabilities available in
  * BRL-CAD.  The library is tightly coupled to the LIBRT library for geometric
- * representation and analysis.  The libdm API is assumed for commands that
+ * representation and analysis.  Obol-backed view endpoints own commands that
  * manipulate geometric views.
  *
  * A note to C/C++ developers - calling libged's commands programmatically has
@@ -46,14 +46,16 @@
 
 #include "common.h"
 
-#include "bv/defines.h"
 #include "raytrace.h"
 #include "analyze.h"
 #include "ged/defines.h"
 #include "ged/version.h"
 #include "ged/database.h"
+#include "ged/db_index.h"
+#include "ged/event_txn.h"
 #include "ged/commands.h"
 #include "ged/objects.h"
+#include "ged/selection_state.h"
 #include "ged/view.h"
 #include "ged/debug.h"
 
@@ -111,7 +113,7 @@ GED_EXPORT extern int ged_help(struct ged *gedp, int argc, const char *argv[]);
  * }                   |
  *                     |
  * struct geometry { <-'
- *   display lists
+ *   drawn scene records
  *   directory *
  *   update()
  * }

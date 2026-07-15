@@ -19,8 +19,7 @@
  */
 /** @file CADViewSettings.cpp
  *
- * Widget implementation for viewing and controlling faceplate settings,
- * reflecting the current state of bview_settings and bv_params_state.
+ * Widget implementation for viewing and controlling faceplate settings.
  *
  */
 
@@ -31,10 +30,94 @@
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
+#include "brlobol/display_endpoint.h"
+#include "ged/draw.h"
+#include "ged/view.h"
+#include "qtcad/QgPluginContext.h"
 #include "qtcad/QgSignalFlags.h"
-#include "QgEdApp.h"
 
 #include "CADViewSettings.h"
+
+static struct bv_context *
+qged_settings_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeViewContext() : nullptr;
+}
+
+static int
+qged_framebuffer_mode_get(const void *view_ctx, int *mode)
+{
+    if (!view_ctx || !mode)
+	return 0;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (ged_view_context_display_property_get(view_ctx,
+	    "composition.framebuffer.mode", &value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK || !value.string_value)
+	return 0;
+
+    if (BU_STR_EQUAL(value.string_value, "off"))
+	*mode = 0;
+    else if (BU_STR_EQUAL(value.string_value, "overlay"))
+	*mode = 1;
+    else if (BU_STR_EQUAL(value.string_value, "underlay"))
+	*mode = 2;
+	else if (BU_STR_EQUAL(value.string_value, "interlay"))
+	*mode = 3;
+    else
+	return 0;
+    return 1;
+}
+
+static int
+qged_framebuffer_mode_set(void *view_ctx, int mode)
+{
+    static const char *const modes[] = {
+	"off", "overlay", "underlay", "interlay"
+    };
+    if (!view_ctx || mode < 0 ||
+	mode >= static_cast<int>(sizeof(modes) / sizeof(modes[0])))
+	return 0;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    value.string_value = modes[mode];
+    return ged_view_context_display_property_set(view_ctx,
+	"composition.framebuffer.mode", &value) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK;
+}
+
+static int
+qged_faceplate_property_get(const void *view_ctx, const char *name,
+	int *enabled)
+{
+    if (!view_ctx || !name || !enabled)
+	return 0;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (ged_view_context_display_property_get(view_ctx, name, &value) !=
+	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	return 0;
+    *enabled = value.bool_value ? 1 : 0;
+    return 1;
+}
+
+static int
+qged_faceplate_property_set(void *view_ctx, const char *name, int enabled)
+{
+    if (!view_ctx || !name)
+	return 0;
+
+    struct brlobol_endpoint_property_value value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    value.bool_value = enabled ? 1 : 0;
+    return ged_view_context_display_property_set(view_ctx, name, &value) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK;
+}
 
 /* Helper: update a checkbox to reflect an integer flag, blocking signals
  * to prevent triggering a spurious view_refresh round-trip. */
@@ -53,6 +136,17 @@ ckbx_val(QCheckBox *cb)
     return (cb->checkState() == Qt::Checked) ? 1 : 0;
 }
 
+static void
+qged_faceplate_checkbox_refresh(const void *view_ctx, QCheckBox *checkbox,
+	const char *property)
+{
+    int enabled = 0;
+    const int supported = qged_faceplate_property_get(view_ctx, property,
+	&enabled);
+    set_ckbx(checkbox, enabled);
+    checkbox->setEnabled(supported ? true : false);
+}
+
 CADViewSettings::CADViewSettings(QWidget *)
 {
     QVBoxLayout *wl = new QVBoxLayout;
@@ -68,13 +162,14 @@ CADViewSettings::CADViewSettings(QWidget *)
     scale_ckbx = new QCheckBox("Scale");
     viewaxes_ckbx = new QCheckBox("View Axes");
 
-    /* Framebuffer mode selector: Off / Overlay / Underlay */
+    /* Framebuffer mode selector: Off / Overlay / Underlay / Interlay */
     QHBoxLayout *fbl = new QHBoxLayout;
     fbl->addWidget(new QLabel("Framebuffer:"));
     fb_mode_combo = new QComboBox;
     fb_mode_combo->addItem("Off");      /* index 0 -> gv_fb_mode = 0 */
     fb_mode_combo->addItem("Overlay");  /* index 1 -> gv_fb_mode = 1 */
     fb_mode_combo->addItem("Underlay"); /* index 2 -> gv_fb_mode = 2 */
+    fb_mode_combo->addItem("Interlay"); /* index 3 -> Obol interlay */
     fbl->addWidget(fb_mode_combo);
     fbl->addStretch();
 
@@ -181,44 +276,52 @@ CADViewSettings::view_update_int(int)
 void
 CADViewSettings::checkbox_refresh(unsigned long long)
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct bview *v = gedp->ged_gvp;
-    if (!v)
+    struct bv_context *view_ctx = qged_settings_view(m_ctx);
+    if (!view_ctx)
 	return;
 
-    /* Top-level faceplate elements */
-    set_ckbx(acsg_ckbx,     v->gv_s->adaptive_plot_csg);
-    set_ckbx(amesh_ckbx,    v->gv_s->adaptive_plot_mesh);
-    set_ckbx(adc_ckbx,      v->gv_s->gv_adc.draw);
-    set_ckbx(cdot_ckbx,     v->gv_s->gv_center_dot.gos_draw);
-    set_ckbx(grid_ckbx,     v->gv_s->gv_grid.draw);
-    set_ckbx(mdlaxes_ckbx,  v->gv_s->gv_model_axes.draw);
-    set_ckbx(scale_ckbx,    v->gv_s->gv_view_scale.gos_draw);
-    set_ckbx(viewaxes_ckbx, v->gv_s->gv_view_axes.draw);
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
 
-    /* Framebuffer mode (0=off, 1=overlay, 2=underlay) maps directly to
-     * combo index. Clamp to a valid range in case of unexpected values. */
-    int fb_mode = v->gv_s->gv_fb_mode;
-    if (fb_mode < 0 || fb_mode > 2)
-	fb_mode = 0;
+    set_ckbx(acsg_ckbx,     lod_policy.csg_enabled);
+    set_ckbx(amesh_ckbx,    lod_policy.mesh_enabled);
+    qged_faceplate_checkbox_refresh(view_ctx, adc_ckbx,
+	"view.faceplate.adc.visible");
+    qged_faceplate_checkbox_refresh(view_ctx, cdot_ckbx,
+	"view.faceplate.center_dot.visible");
+    qged_faceplate_checkbox_refresh(view_ctx, grid_ckbx,
+	"view.faceplate.grid.visible");
+    qged_faceplate_checkbox_refresh(view_ctx, mdlaxes_ckbx,
+	"view.faceplate.model_axes.visible");
+    qged_faceplate_checkbox_refresh(view_ctx, scale_ckbx,
+	"view.faceplate.scale.visible");
+    qged_faceplate_checkbox_refresh(view_ctx, viewaxes_ckbx,
+	"view.faceplate.view_axes.visible");
+
+    /* Framebuffer composition is rendered by Obol, while GED retains the
+     * requested mode for endpoint-less views awaiting presentation. */
+    int fb_mode = 0;
+    const int framebuffer_supported =
+	qged_framebuffer_mode_get(view_ctx, &fb_mode);
     fb_mode_combo->blockSignals(true);
     fb_mode_combo->setCurrentIndex(fb_mode);
+    fb_mode_combo->setEnabled(framebuffer_supported ? true : false);
     fb_mode_combo->blockSignals(false);
 
-    /* Parameters group: master draw toggle + per-element sub-flags */
-    struct bv_params_state *pst = &v->gv_s->gv_view_params;
-    set_ckbx(params_ckbx,        pst->draw);
-    set_ckbx(params_size_ckbx,   pst->draw_size);
-    set_ckbx(params_center_ckbx, pst->draw_center);
-    set_ckbx(params_az_ckbx,     pst->draw_az);
-    set_ckbx(params_el_ckbx,     pst->draw_el);
-    set_ckbx(params_tw_ckbx,     pst->draw_tw);
-    set_ckbx(params_fps_ckbx,    pst->draw_fps);
+    qged_faceplate_checkbox_refresh(view_ctx, params_ckbx,
+	"view.faceplate.params.visible");
+    qged_faceplate_checkbox_refresh(view_ctx, params_size_ckbx,
+	"view.faceplate.params.size");
+    qged_faceplate_checkbox_refresh(view_ctx, params_center_ckbx,
+	"view.faceplate.params.center");
+    qged_faceplate_checkbox_refresh(view_ctx, params_az_ckbx,
+	"view.faceplate.params.azimuth");
+    qged_faceplate_checkbox_refresh(view_ctx, params_el_ckbx,
+	"view.faceplate.params.elevation");
+    qged_faceplate_checkbox_refresh(view_ctx, params_tw_ckbx,
+	"view.faceplate.params.twist");
+    qged_faceplate_checkbox_refresh(view_ctx, params_fps_ckbx,
+	"view.faceplate.params.fps");
 }
 
 /* Read all widget states and write them back to the view, then signal
@@ -226,38 +329,46 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 void
 CADViewSettings::view_refresh(unsigned long long)
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp)
-	return;
-    struct bview *v = gedp->ged_gvp;
-    if (!v)
+    struct bv_context *view_ctx = qged_settings_view(m_ctx);
+    if (!view_ctx)
 	return;
 
-    /* Top-level faceplate elements */
-    v->gv_s->adaptive_plot_csg     = ckbx_val(acsg_ckbx);
-    v->gv_s->adaptive_plot_mesh    = ckbx_val(amesh_ckbx);
-    v->gv_s->gv_adc.draw           = ckbx_val(adc_ckbx);
-    v->gv_s->gv_center_dot.gos_draw = ckbx_val(cdot_ckbx);
-    v->gv_s->gv_grid.draw          = ckbx_val(grid_ckbx);
-    v->gv_s->gv_model_axes.draw    = ckbx_val(mdlaxes_ckbx);
-    v->gv_s->gv_view_scale.gos_draw = ckbx_val(scale_ckbx);
-    v->gv_s->gv_view_axes.draw     = ckbx_val(viewaxes_ckbx);
-
-    /* Framebuffer mode: combo index maps directly to gv_fb_mode (0/1/2) */
-    v->gv_s->gv_fb_mode = fb_mode_combo->currentIndex();
-
-    /* Parameters: master draw flag + per-element sub-flags */
-    struct bv_params_state *pst = &v->gv_s->gv_view_params;
-    pst->draw        = ckbx_val(params_ckbx);
-    pst->draw_size   = ckbx_val(params_size_ckbx);
-    pst->draw_center = ckbx_val(params_center_ckbx);
-    pst->draw_az     = ckbx_val(params_az_ckbx);
-    pst->draw_el     = ckbx_val(params_el_ckbx);
-    pst->draw_tw     = ckbx_val(params_tw_ckbx);
-    pst->draw_fps    = ckbx_val(params_fps_ckbx);
+    /* Preserve non-widget LoD policy fields and update only the settings
+     * owned by this widget. */
+    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
+    lod_policy.csg_enabled = ckbx_val(acsg_ckbx);
+    lod_policy.mesh_enabled = ckbx_val(amesh_ckbx);
+    lod_policy.zoom_refresh =
+	lod_policy.csg_enabled || lod_policy.mesh_enabled;
+    (void)ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
+    (void)qged_framebuffer_mode_set(view_ctx, fb_mode_combo->currentIndex());
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.adc.visible", ckbx_val(adc_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.center_dot.visible", ckbx_val(cdot_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.grid.visible", ckbx_val(grid_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.model_axes.visible", ckbx_val(mdlaxes_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.scale.visible", ckbx_val(scale_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.view_axes.visible", ckbx_val(viewaxes_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.params.visible", ckbx_val(params_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.params.size", ckbx_val(params_size_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.params.center", ckbx_val(params_center_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.params.azimuth", ckbx_val(params_az_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.params.elevation", ckbx_val(params_el_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.params.twist", ckbx_val(params_tw_ckbx));
+    (void)qged_faceplate_property_set(view_ctx,
+	"view.faceplate.params.fps", ckbx_val(params_fps_ckbx));
 
     emit settings_changed(QG_VIEW_DRAWN);
 }

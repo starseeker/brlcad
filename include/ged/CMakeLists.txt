@@ -2,9 +2,15 @@ set(
   ged_headers
   commands.h
   database.h
+  db_index.h
   debug.h
   defines.h
+  draw.h
+  draw_scene.h
+  draw_obol.h
+  event_txn.h
   objects.h
+  selection_state.h
   version.h
   view.h
 )

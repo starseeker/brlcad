@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -40,6 +42,9 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     point_t tmp;
     point_t new_center;
     vect_t dir;
+    vect_t view_aet;
+    mat_t view2model;
+    fastf_t view_scale;
     fastf_t new_az, new_el;
     double scan[3];
     static const char *usage = "x y z";
@@ -47,6 +52,9 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    void *view_ctx = ged_view_active_ctx(gedp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -90,19 +98,22 @@ ged_lookat_core(struct ged *gedp, int argc, const char *argv[])
     VSCALE(look, look, lbval);
 
     VSET(tmp, 0.0, 0.0, 1.0);
-    MAT4X3PNT(eye, gedp->ged_gvp->gv_view2model, tmp);
+    bv_view2model_get(view2model, view);
+    MAT4X3PNT(eye, view2model, tmp);
 
     VSUB2(dir, eye, look);
     VUNITIZE(dir);
     bn_ae_vec(&new_az, &new_el, dir);
 
-    VSET(gedp->ged_gvp->gv_aet, new_az, new_el, gedp->ged_gvp->gv_aet[Z]);
-    bv_mat_aet(gedp->ged_gvp);
+    bv_aet_get(view_aet, view);
+    VSET(view_aet, new_az, new_el, view_aet[Z]);
+    bv_aet_set(view, view_aet);
 
-    VJOIN1(new_center, eye, -gedp->ged_gvp->gv_scale, dir);
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, new_center);
+    view_scale = bv_scale_get(view);
+    VJOIN1(new_center, eye, -view_scale, dir);
+    bv_center_set(view, new_center);
 
-    bv_update(gedp->ged_gvp);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

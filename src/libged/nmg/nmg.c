@@ -33,9 +33,9 @@
 #include "rt/geom.h"
 #include "wdb.h"
 
-#include "dm.h"  // For labelface - see if the dm_set_dirty is really needed
-
+#include "bv.h"
 #include "ged.h"
+#include "ged/draw.h"
 #include "../ged_private.h"
 
 
@@ -96,17 +96,100 @@ get_face_list( const struct model* m, struct bu_list* f_list )
 }
 
 /* Usage:  labelface solid(s) */
+/* Callback data for nmg labelface solid lookup */
+struct labelface_data {
+    struct directory *dp;
+    struct model *m;
+    struct db_i *dbip;
+    struct bu_list *f_list;
+    struct ged_draw_view_label_data *labels;
+    size_t label_count;
+    size_t label_capacity;
+};
+
+#define LABELFACE_FEATURE_NAME "_LABELFACE_ffffff"
+
+static int
+labelface_record_matches(struct db_i *dbip,
+			 const struct ged_draw_view_db_object_record *rec,
+			 struct directory *dp)
+{
+    if (!dbip || !rec || !dp || !rec->is_database_source || !rec->path)
+	return 0;
+
+    struct db_full_path fp;
+    db_full_path_init(&fp);
+    if (db_string_to_path(&fp, dbip, rec->path) < 0)
+	return 0;
+    int ret = db_full_path_search(&fp, dp);
+    db_free_full_path(&fp);
+    return ret;
+}
+
+static int
+labelface_export_record(const struct ged_draw_view_db_object_record *rec,
+			void *data)
+{
+    struct labelface_data *lfd = (struct labelface_data *)data;
+    if (!lfd || !labelface_record_matches(lfd->dbip, rec, lfd->dp))
+	return 1;
+
+    get_face_list(lfd->m, lfd->f_list);
+    struct face *curr_f;
+    for (BU_LIST_FOR(curr_f, face, lfd->f_list)) {
+	char label[256];
+	point_t avg_pt;
+
+	if (lfd->label_count + 1 > lfd->label_capacity) {
+	    size_t ncap = lfd->label_capacity ? lfd->label_capacity * 2 : 64;
+	    lfd->labels = (struct ged_draw_view_label_data *)bu_realloc(lfd->labels,
+		    ncap * sizeof(struct ged_draw_view_label_data), "labelface label data");
+	    for (size_t i = lfd->label_capacity; i < ncap; i++) {
+		struct ged_draw_view_label_data init = GED_DRAW_VIEW_LABEL_DATA_INIT;
+		lfd->labels[i] = init;
+	    }
+	    lfd->label_capacity = ncap;
+	}
+
+	avg_pt[0] = (curr_f->min_pt[0] + curr_f->max_pt[0]) / 2;
+	avg_pt[1] = (curr_f->min_pt[1] + curr_f->max_pt[1]) / 2;
+	avg_pt[2] = (curr_f->min_pt[2] + curr_f->max_pt[2]) / 2;
+	snprintf(label, sizeof(label), " %d", (int)curr_f->index);
+
+	struct ged_draw_view_label_data init = GED_DRAW_VIEW_LABEL_DATA_INIT;
+	lfd->labels[lfd->label_count] = init;
+	lfd->labels[lfd->label_count].text = bu_strdup(label);
+	VMOVE(lfd->labels[lfd->label_count].point, avg_pt);
+	lfd->labels[lfd->label_count].color_valid = 1;
+	VSET(lfd->labels[lfd->label_count].color, 255, 255, 255);
+	lfd->label_count++;
+    }
+    return 1;
+}
+
+static void
+labelface_data_free(struct labelface_data *lfd)
+{
+    if (!lfd)
+	return;
+
+    for (size_t i = 0; i < lfd->label_count; i++) {
+	if (lfd->labels[i].text)
+	    bu_free((char *)lfd->labels[i].text, "labelface label text");
+    }
+    if (lfd->labels)
+	bu_free(lfd->labels, "labelface label data");
+    lfd->labels = NULL;
+    lfd->label_count = 0;
+    lfd->label_capacity = 0;
+}
+
 int
 ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
 {
     struct rt_db_internal internal;
     struct directory *dp;
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
     int i;
-    struct bv_vlblock *vbp;
-    mat_t mat;
-    fastf_t scale;
     struct model* m;
     const char* name;
     struct bu_list f_list;
@@ -143,43 +226,42 @@ ged_labelface_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
+	rt_db_free_internal(&internal);
+	bu_vls_printf(gedp->ged_result_str, ": no current view set");
+	return BRLCAD_ERROR;
+    }
+
     m = (struct model *)internal.idb_ptr;
     NMG_CK_MODEL(m);
 
-    vbp = rt_vlblock_init();
-    MAT_IDN(mat);
-    bn_mat_inv(mat, gedp->ged_gvp->gv_rotation);
-    scale = gedp->ged_gvp->gv_size / 100;      /* divide by # chars/screen */
+    struct labelface_data lfd;
+    memset(&lfd, 0, sizeof(lfd));
+    lfd.m = m;
+    lfd.dbip = gedp->dbip;
+    lfd.f_list = &f_list;
+
     for (i=1; i<argc; i++) {
-	struct bv_scene_obj *s;
 	if ((dp = db_lookup(gedp->dbip, argv[i], LOOKUP_NOISY)) == RT_DIR_NULL)
 	    continue;
 
-	/* Find uses of this solid in the solid table */
-	gdlp = BU_LIST_NEXT(display_list, gedp->i->ged_gdp->gd_headDisplay);
-	while (BU_LIST_NOT_HEAD(gdlp, gedp->i->ged_gdp->gd_headDisplay)) {
-	    next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-	    for (BU_LIST_FOR(s, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-		if (!s->s_u_data)
-		    continue;
-		struct ged_bv_data *bdata = (struct ged_bv_data *)s->s_u_data;
-		if (db_full_path_search(&bdata->s_fullpath, dp)) {
-		    get_face_list(m, &f_list);
-		    rt_label_vlist_faces(vbp, &f_list, mat, scale, gedp->dbip->dbi_base2local);
-		}
-	    }
-
-	    gdlp = next_gdlp;
-	}
+	/* Find displayed uses of this database object. */
+	lfd.dp = dp;
+	ged_draw_foreach_visible_view_db_object_record(view_ctx,
+		labelface_export_record, &lfd);
     }
 
-    _ged_cvt_vlblock_to_solids(gedp, vbp, "_LABELFACE_", 0);
+    if (!ged_draw_view_context_labels_replace(view_ctx, LABELFACE_FEATURE_NAME,
+		0, lfd.labels, lfd.label_count)) {
+	labelface_data_free(&lfd);
+	bu_vls_printf(gedp->ged_result_str, "failed to create labelface feature\n");
+	return BRLCAD_ERROR;
+    }
 
-    bv_vlblock_free(vbp);
-
-    struct dm *dmp = (struct dm *)gedp->ged_gvp->dmp;
-    if (dmp)
-	dm_set_dirty(dmp, 1);
+    labelface_data_free(&lfd);
+    (void)bv_context_refresh_request((struct bv_context *)view_ctx,
+	GED_VIEW_REFRESH_DRAW);
     return BRLCAD_OK;
 }
 
@@ -242,43 +324,63 @@ ged_nmg_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    /* advance CLI arguments for subcommands */
+    /* advance past the command name */
     --argc;
     ++argv;
 
-    const char *subcmd = argv[0];
-    if( BU_STR_EQUAL( "mm", subcmd ) ) {
-	ged_nmg_mm_core(gedp, argc, argv);
-    }
-    else if( BU_STR_EQUAL( "cmface", subcmd ) ) {
-	ged_nmg_cmface_core(gedp, argc, argv);
-    }
-    else if( BU_STR_EQUAL( "kill", subcmd ) ) {
-	const char* opt = argv[2];
-	if ( BU_STR_EQUAL( "V", opt ) ) {
-	    ged_nmg_kill_v_core(gedp, argc, argv);
-	} else if ( BU_STR_EQUAL( "F", opt ) ) {
-	    ged_nmg_kill_f_core(gedp, argc, argv);
-	}
-    }
-    else if( BU_STR_EQUAL( "move", subcmd ) ) {
-	const char* opt = argv[2];
-	if ( BU_STR_EQUAL( "V", opt ) ) {
-	    ged_nmg_move_v_core(gedp, argc, argv);
-	}
-    }
-    else if( BU_STR_EQUAL( "make", subcmd ) ) {
-	const char* opt = argv[2];
-	if ( BU_STR_EQUAL( "V", opt ) ) {
-	    ged_nmg_make_v_core(gedp, argc, argv);
-	}
-    }
-    else {
-	bu_vls_printf(gedp->ged_result_str, "%s is not a subcommand.", subcmd );
+    if (argc < 1) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: nmg %s", usage);
 	return BRLCAD_ERROR;
     }
 
-    return BRLCAD_OK;
+    if (BU_STR_EQUAL("mm", argv[0])) {
+	return ged_nmg_mm_core(gedp, argc, argv);
+    }
+
+    if (argc < 2) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: nmg %s", usage);
+	return BRLCAD_ERROR;
+    }
+
+    const char *subcmd = argv[1];
+    if( BU_STR_EQUAL( "cmface", subcmd ) ) {
+	return ged_nmg_cmface_core(gedp, argc, argv);
+    }
+    if( BU_STR_EQUAL( "kill", subcmd ) ) {
+	if (argc < 3) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: nmg %s", usage);
+	    return BRLCAD_ERROR;
+	}
+	const char* opt = argv[2];
+	if ( BU_STR_EQUAL( "V", opt ) ) {
+	    return ged_nmg_kill_v_core(gedp, argc, argv);
+	} else if ( BU_STR_EQUAL( "F", opt ) ) {
+	    return ged_nmg_kill_f_core(gedp, argc, argv);
+	}
+    }
+    else if( BU_STR_EQUAL( "move", subcmd ) ) {
+	if (argc < 3) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: nmg %s", usage);
+	    return BRLCAD_ERROR;
+	}
+	const char* opt = argv[2];
+	if ( BU_STR_EQUAL( "V", opt ) ) {
+	    return ged_nmg_move_v_core(gedp, argc, argv);
+	}
+    }
+    else if( BU_STR_EQUAL( "make", subcmd ) ) {
+	if (argc < 3) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage: nmg %s", usage);
+	    return BRLCAD_ERROR;
+	}
+	const char* opt = argv[2];
+	if ( BU_STR_EQUAL( "V", opt ) ) {
+	    return ged_nmg_make_v_core(gedp, argc, argv);
+	}
+    }
+
+    bu_vls_printf(gedp->ged_result_str, "%s is not a subcommand.", subcmd);
+    return BRLCAD_ERROR;
 }
 
 

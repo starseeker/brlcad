@@ -43,7 +43,7 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 {
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
-    const char *usage_string = "view obj <objname> label create text x y [z] [px py pz]";
+    const char *usage_string = "view annotation label create <name> text x y [z] [px py pz]";
     const char *purpose_string = "start a label at point x,y,[z], possibly targeting point px,py,pz";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -52,12 +52,6 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
-
-    struct bv_scene_obj *s = gd->s;
-    if (s) {
-        bu_vls_printf(gedp->ged_result_str, "View object named %s already exists\n", gd->vobj);
-        return BRLCAD_ERROR;
-    }
 
     if (argc != 3 && argc != 4 && argc != 6 && argc != 7) {
 	bu_vls_printf(gedp->ged_result_str, "Usage: %s\n", usage_string);
@@ -80,7 +74,9 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     } else {
 	fastf_t fx, fy;
-	if (bv_screen_to_view(gd->cv, &fx, &fy, (int)p[0], (int)p[1]) < 0) {
+	const struct bv *view = bv_context_view_const((const struct bv_context *)gd->cv);
+	if (!bv_screen_to_view(&fx, &fy, view,
+		(int)p[0], (int)p[1])) {
 	    return BRLCAD_ERROR;
 	}
 	p[0] = fx;
@@ -88,7 +84,9 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	p[2] = 0;
 	point_t tp;
 	VMOVE(tp, p);
-	MAT4X3PNT(p, gd->cv->gv_view2model, tp);
+	mat_t view2model;
+	bv_view2model_get(view2model, view);
+	MAT4X3PNT(p, view2model, tp);
     }
     point_t target;
     if (argc == 6) {
@@ -121,33 +119,9 @@ _label_cmd_create(void *bs, int argc, const char **argv)
 	}
     }
 
-    int flags = BV_VIEW_OBJS;
-    if (gd->local_obj)
-	flags |= BV_LOCAL_OBJS;
-    s = bv_obj_get(gd->cv, flags);
-    s->s_v = gd->cv;
-    BU_LIST_INIT(&(s->s_vlist));
-    BV_ADD_VLIST(s->vlfree, &s->s_vlist, p, BV_VLIST_LINE_MOVE);
-    VSET(s->s_color, 255, 255, 0);
-
-    struct bv_label *l;
-    BU_GET(l, struct bv_label);
-    BU_VLS_INIT(&l->label);
-    bu_vls_sprintf(&l->label, "%s", argv[0]);
-    VMOVE(l->p, p);
-    if (argc == 6 || argc == 7) {
-	VMOVE(l->target, target);
-	l->line_flag = 1;
-    }
-    s->s_i_data = (void *)l;
-
-    s->s_type_flags |= BV_VIEWONLY;
-    s->s_type_flags |= BV_LABELS;
-
-    bu_vls_init(&s->s_name);
-    bu_vls_printf(&s->s_name, "%s", gd->vobj);
-
-    return BRLCAD_OK;
+    return ged_draw_view_context_annotation_label_create(gd->cv, gd->vobj,
+	    gd->local_obj, argv[0], p, target, (argc == 6 || argc == 7),
+	    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 const struct bu_cmdtab _label_cmds[] = {
@@ -163,7 +137,7 @@ _view_cmd_labels(void *bs, int argc, const char **argv)
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
 
-    const char *usage_string = "view obj [options] label [options] [args]";
+    const char *usage_string = "view annotation label [options] [args]";
     const char *purpose_string = "create/manipulate view labels";
     if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
 	return BRLCAD_OK;
@@ -197,7 +171,7 @@ _view_cmd_labels(void *bs, int argc, const char **argv)
     int acnt = (cmd_pos >= 0) ? cmd_pos : argc;
     (void)bu_opt_parse(NULL, acnt, argv, d);
 
-    return _ged_subcmd_exec(gedp, d, _label_cmds, "view obj label", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
+    return _ged_subcmd_exec(gedp, d, _label_cmds, "view annotation label", "[options] subcommand [args]", gd, argc, argv, help, cmd_pos);
 }
 
 /*

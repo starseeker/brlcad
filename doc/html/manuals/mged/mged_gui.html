@@ -2074,23 +2074,7 @@
                 becomes rate based. For example, if the user
                 rotates the view about the X axis, the view
                 continues to rotate about the X axis until the rate
-                rotation is stopped. <a name=
-                "Display Lists"></a></li>
-                <li><b>Display Lists</b> - toggle the use of
-                display lists. This currently affects only Ogl
-                display managers. When using display lists the
-                screen update time is significantly faster. This is
-                especially noticeable when running MGED remotely.
-                Use of display lists is encouraged unless the
-                geometry being viewed is bigger than the Ogl server
-                can handle (i.e. the server runs out of available
-                memory for storing display lists). When this
-                happens the machine will begin to swap (and little
-                else). If huge pieces of geometry need to be
-                viewed, consider toggling off display lists. Note
-                that using display lists while viewing geometry of
-                any significant size will incur noticeable compute
-                time up front to create the display lists.</li>
+                rotation is stopped.</li>
               </ul><a name="Misc" id="Misc"></a>
             </li>
             <li>

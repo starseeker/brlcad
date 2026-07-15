@@ -27,68 +27,191 @@
 #include <math.h>
 #include <string.h>
 
+#include "bv.h"
 #include "vmath.h"
 #include "bn.h"
+#include "ged/view.h"
+#include "rt/view.h"
 
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 
 #include "./sedit.h"
 #include "./menu.h"
 
 
-struct display_list *illum_gdlp = GED_DISPLAY_LIST_NULL;
-struct bv_scene_obj *illump = NULL;	/* == 0 if none, else points to ill. solid */
-int ipathpos = 0;	/* path index of illuminated element */
+struct mged_highlight_state mged_highlight = {GED_DRAW_SHAPE_REF_NULL_INIT, 0};
 
+struct mged_pen_pick_cache {
+    struct ged *gedp;
+    struct mged_pen_pick_candidate *candidates;
+    size_t count;
+    size_t capacity;
+    uint64_t scene_revision;
+    int valid;
+};
 
-/*
- * All solids except for the illuminated one have s_iflag set to DOWN.
- * The illuminated one has s_iflag set to UP, and also has the global
- * variable "illump" pointing at it.
- */
+struct mged_pen_pick_candidate {
+    char *path;
+    char *instance_key;
+    int draw_mode;
+    ged_draw_shape_ref ref;
+};
+
+static struct mged_pen_pick_cache pen_pick_cache = {0};
+
 static void
-illuminate(struct mged_state *s, int y) {
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    int count;
-    struct bv_scene_obj *sp;
-
-    /*
-     * Divide the mouse into 's->mged_curr_dm->dm_ndrawn' VERTICAL
-     * zones, and use the zone number as a sequential position among
-     * solids which are drawn.
-     */
-    count = ((fastf_t)y + BV_MAX) * s->mged_curr_dm->dm_ndrawn / BV_RANGE;
-
-    gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-    while (BU_LIST_NOT_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp))) {
-	next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    /* Only consider solids which are presently in view */
-	    if (sp->s_flag == UP) {
-		if (count-- == 0) {
-		    sp->s_iflag = UP;
-		    illump = sp;
-		    illum_gdlp = gdlp;
-		} else {
-		    /* All other solids have s_iflag set DOWN */
-		    sp->s_iflag = DOWN;
-		}
-	    }
-	}
-
-	gdlp = next_gdlp;
+mged_pen_pick_cache_clear(void)
+{
+    for (size_t i = 0; i < pen_pick_cache.count; i++) {
+	bu_free(pen_pick_cache.candidates[i].path, "MGED pen-pick path");
+	bu_free(pen_pick_cache.candidates[i].instance_key,
+		"MGED pen-pick instance key");
     }
+    if (pen_pick_cache.candidates)
+	bu_free(pen_pick_cache.candidates, "MGED pen-pick candidates");
+    memset(&pen_pick_cache, 0, sizeof(pen_pick_cache));
+}
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+static int
+mged_pen_pick_cache_append(const struct ged_draw_shape_candidate *candidate,
+	void *userdata)
+{
+    struct mged_pen_pick_cache *cache =
+	(struct mged_pen_pick_cache *)userdata;
+    if (!cache || !candidate || !candidate->path || !candidate->path[0])
+	return 1;
+    if (cache->count == cache->capacity) {
+	size_t capacity = cache->capacity ? cache->capacity * 2 : 64;
+	cache->candidates = (struct mged_pen_pick_candidate *)bu_realloc(
+		cache->candidates,
+		capacity * sizeof(struct mged_pen_pick_candidate),
+		"MGED pen-pick candidates");
+	cache->capacity = capacity;
+    }
+    struct mged_pen_pick_candidate *out =
+	&cache->candidates[cache->count++];
+    out->path = bu_strdup(candidate->path);
+    out->instance_key = bu_strdup(candidate->instance_key ?
+	    candidate->instance_key : candidate->path);
+    out->draw_mode = candidate->draw_mode;
+    out->ref = GED_DRAW_SHAPE_REF_NULL;
+    return 1;
+}
+
+static void
+mged_pen_pick_cache_ensure(struct mged_state *s)
+{
+    if (!s || !s->gedp)
+	return;
+    uint64_t revision = ged_draw_scene_revision(s->gedp);
+    if (pen_pick_cache.valid && pen_pick_cache.gedp == s->gedp &&
+	pen_pick_cache.scene_revision == revision)
+	return;
+
+    mged_pen_pick_cache_clear();
+    pen_pick_cache.gedp = s->gedp;
+    pen_pick_cache.scene_revision = revision;
+    ged_draw_foreach_visible_shape_candidate(s->gedp,
+	    mged_pen_pick_cache_append, &pen_pick_cache);
+    pen_pick_cache.valid = 1;
+}
+
+static ged_draw_shape_ref
+mged_pen_pick_ref(struct mged_state *s, size_t index)
+{
+    mged_pen_pick_cache_ensure(s);
+    if (index >= pen_pick_cache.count)
+	return GED_DRAW_SHAPE_REF_NULL;
+
+    struct mged_pen_pick_candidate *candidate =
+	&pen_pick_cache.candidates[index];
+    if (ged_draw_shape_ref_is_null(candidate->ref)) {
+	struct ged_draw_shape_candidate lookup;
+	lookup.path = candidate->path;
+	lookup.instance_key = candidate->instance_key;
+	lookup.draw_mode = candidate->draw_mode;
+	candidate->ref = ged_draw_shape_ref_for_candidate(s->gedp, &lookup);
+    }
+    return candidate->ref;
+}
+
+ged_draw_shape_ref
+mged_pen_pick_first(struct mged_state *s)
+{
+    return mged_pen_pick_ref(s, 0);
+}
+
+ged_draw_shape_ref
+mged_highlight_shape_ref(struct mged_state *s)
+{
+    if (!s || !s->gedp || ged_draw_shape_ref_is_null(mged_highlight.shape))
+	return GED_DRAW_SHAPE_REF_NULL;
+    struct ged_draw_shape_record rec;
+    if (!ged_draw_shape_record_get(s->gedp, mged_highlight.shape, &rec))
+	return GED_DRAW_SHAPE_REF_NULL;
+    return mged_highlight.shape;
+}
+
+int
+mged_highlight_shape_record(struct mged_state *s, struct ged_draw_shape_record *out)
+{
+    if (!s || !s->gedp || !out || ged_draw_shape_ref_is_null(mged_highlight.shape))
+	return 0;
+    return ged_draw_shape_record_get(s->gedp, mged_highlight.shape, out);
+}
+
+void
+mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref)
+{
+    /* The visual highlight is scene-wide, while interaction selection belongs
+     * to the active view that initiated the illuminate action. */
+    void *view_ctx = view_state ? view_state->vs_gvp : NULL;
+    if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref)) {
+	mged_highlight.shape = GED_DRAW_SHAPE_REF_NULL;
+	if (s && s->gedp) {
+	    ged_draw_set_highlighted_shape_ref(s->gedp, GED_DRAW_SHAPE_REF_NULL);
+	    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+		    view_ctx, GED_DRAW_SHAPE_REF_NULL);
+	}
+	return;
+    }
+    mged_highlight.shape = ref;
+    ged_draw_set_highlighted_shape_ref(s->gedp, ref);
+    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+	    view_ctx, mged_highlight.shape);
+}
+
+void
+mged_highlight_clear(struct mged_state *s)
+{
+    mged_pen_pick_cache_clear();
+    mged_highlight_set_shape_ref(s, GED_DRAW_SHAPE_REF_NULL);
+}
+
+/* Preserve MGED's tablet-style vertical illuminate selection, but build its
+ * visible-source snapshot only while that interaction mode is active. */
+static void
+highlight_from_y(struct mged_state *s, int y)
+{
+    ged_draw_shape_ref ref = GED_DRAW_SHAPE_REF_NULL;
+    mged_pen_pick_cache_ensure(s);
+    if (pen_pick_cache.count) {
+	fastf_t pos = ((fastf_t)y + RT_VIEW_MAX) / RT_VIEW_RANGE;
+	size_t index = (size_t)(pos * pen_pick_cache.count);
+	if (index >= pen_pick_cache.count)
+	    index = pen_pick_cache.count - 1;
+	ref = mged_pen_pick_ref(s, index);
+    }
+    mged_highlight_set_shape_ref(s, ref);
+
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 }
 
 
 /*
- * advance illump or ipathpos
+ * advance highlighted_shape or highlight_path_pos
  */
 int
 f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
@@ -97,9 +220,8 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    struct display_list *gdlp;
-    struct bv_scene_obj *sp;
-    struct ged_bv_data *bdata = NULL;
+    struct ged_draw_shape_record hrec;
+    int have_highlight = mged_highlight_shape_record(s, &hrec);
 
     if (argc < 1 || 2 < argc) {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
@@ -110,69 +232,46 @@ f_aip(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    if (!(s->mged_curr_dm->dm_ndrawn)) {
-	return TCL_OK;
-    } else if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
+    if (s->global_editing_state != ST_S_PICK && s->global_editing_state != ST_O_PICK  && s->global_editing_state != ST_O_PATH) {
 	return TCL_OK;
     }
 
-    if (illump != NULL && illump->s_u_data != NULL)
-	bdata = (struct ged_bv_data *)illump->s_u_data;
-
-    if (s->global_editing_state == ST_O_PATH && bdata) {
+    if (s->global_editing_state == ST_O_PATH && have_highlight && hrec.fullpath) {
 	if (argc == 1 || *argv[1] == 'f') {
-	    ++ipathpos;
-	    if ((size_t)ipathpos >= bdata->s_fullpath.fp_len)
-		ipathpos = 0;
+	    ++highlight_path_pos;
+	    if ((size_t)highlight_path_pos >= hrec.fullpath->fp_len)
+		highlight_path_pos = 0;
 	} else if (*argv[1] == 'b') {
-	    --ipathpos;
-	    if (ipathpos < 0)
-		ipathpos = bdata->s_fullpath.fp_len-1;
+	    --highlight_path_pos;
+	    if (highlight_path_pos < 0)
+		highlight_path_pos = hrec.fullpath->fp_len-1;
 	} else {
 	    Tcl_AppendResult(interp, "aip: bad parameter - ", argv[1], "\n", (char *)NULL);
 	    return TCL_ERROR;
 	}
     } else {
-	if (illump == NULL)
+	if (ged_draw_shape_ref_is_null(mged_highlight_shape_ref(s)))
 	    return TCL_ERROR;
-	gdlp = illum_gdlp;
-	sp = illump;
-	sp->s_iflag = DOWN;
-	if (argc == 1 || *argv[1] == 'f') {
-	    if (BU_LIST_NEXT_IS_HEAD(sp, &gdlp->dl_head_scene_obj)) {
-		/* Advance the gdlp (i.e. display list) */
-		if (BU_LIST_NEXT_IS_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp)))
-		    gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-		else
-		    gdlp = BU_LIST_PNEXT(display_list, gdlp);
 
-
-		sp = BU_LIST_NEXT(bv_scene_obj, &gdlp->dl_head_scene_obj);
-	    } else
-		sp = BU_LIST_PNEXT(bv_scene_obj, sp);
-	} else if (*argv[1] == 'b') {
-	    if (BU_LIST_PREV_IS_HEAD(sp, &gdlp->dl_head_scene_obj)) {
-		/* Advance the gdlp (i.e. display list) */
-		if (BU_LIST_PREV_IS_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp)))
-		    gdlp = BU_LIST_PREV(display_list, (struct bu_list *)ged_dl(s->gedp));
-		else
-		    gdlp = BU_LIST_PLAST(display_list, gdlp);
-
-		sp = BU_LIST_PREV(bv_scene_obj, &gdlp->dl_head_scene_obj);
-	    } else
-		sp = BU_LIST_PLAST(bv_scene_obj, sp);
-	} else {
+	/* Advance using snapshotted DFS integer index — single snapshot
+	 * build, O(N) total.  ged_draw_advance_shape_ref wraps circularly. */
+	int delta = (argc == 1 || *argv[1] == 'f') ? +1
+	            : (*argv[1] == 'b')             ? -1
+	            : 0;
+	if (delta == 0) {
 	    Tcl_AppendResult(interp, "aip: bad parameter - ", argv[1], "\n", (char *)NULL);
 	    return TCL_ERROR;
 	}
-
-	sp->s_iflag = UP;
-	illump = sp;
-	illum_gdlp = gdlp;
+	ged_draw_shape_ref next_ref = ged_draw_advance_shape_ref(s->gedp, mged_highlight.shape, delta);
+	if (ged_draw_shape_ref_is_null(next_ref)) {
+	    /* No shapes drawn — nothing to advance to */
+	    return TCL_OK;
+	}
+	mged_highlight_set_shape_ref(s, next_ref);
     }
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
 
@@ -185,13 +284,17 @@ void
 wrt_view(struct mged_state *s, mat_t out, const mat_t change, const mat_t in)
 {
     static mat_t t1, t2;
+    mat_t view_center;
+    void *view_ctx = view_state->vs_gvp;
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
-    bn_mat_mul(t1, view_state->vs_gvp->gv_center, in);
+    bv_center_mat_get(view_center, view);
+    bn_mat_mul(t1, view_center, in);
     bn_mat_mul(t2, change, t1);
 
     /* Build "fromViewcenter" matrix */
     MAT_IDN(t1);
-    MAT_DELTAS(t1, -view_state->vs_gvp->gv_center[MDX], -view_state->vs_gvp->gv_center[MDY], -view_state->vs_gvp->gv_center[MDZ]);
+    MAT_DELTAS(t1, -view_center[MDX], -view_center[MDY], -view_center[MDZ]);
     bn_mat_mul(out, t1, t2);
 }
 
@@ -217,7 +320,7 @@ wrt_point(mat_t out, const mat_t change, const mat_t in, const point_t point)
 /*
  * When in O_PATH state, select the arc which contains the matrix
  * which is going to be "object edited".  The choice is recorded in
- * variable "ipathpos".
+ * variable "highlight_path_pos".
  *
  * There are two syntaxes:
  * matpick a/b Pick arc between a and b.
@@ -232,14 +335,11 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    struct bv_scene_obj *sp;
     char *cp;
     size_t j;
     int illum_only = 0;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
-    struct ged_bv_data *bdata = NULL;
+    struct ged_draw_shape_record hrec;
 
     CHECK_DBI_NULL;
 
@@ -266,10 +366,8 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
     if (not_state(s, ST_O_PATH, "Object Edit matrix pick"))
 	return TCL_ERROR;
 
-    if (!illump->s_u_data)
+    if (!mged_highlight_shape_record(s, &hrec) || !hrec.fullpath)
 	return TCL_ERROR;
-
-    bdata = (struct ged_bv_data *)illump->s_u_data;
 
     if ((cp = strchr(argv[1], '/')) != NULL) {
 	struct directory *d0, *d1;
@@ -278,11 +376,11 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 	*cp = '\0';		/* modifies argv[1] */
 	if ((d0 = db_lookup(s->dbip, argv[1], LOOKUP_NOISY)) == RT_DIR_NULL)
 	    return TCL_ERROR;
-	/* Find arc on illump path which runs from d0 to d1 */
-	for (j=1; j < bdata->s_fullpath.fp_len; j++) {
-	    if (DB_FULL_PATH_GET(&bdata->s_fullpath, j-1) != d0) continue;
-	    if (DB_FULL_PATH_GET(&bdata->s_fullpath, j-0) != d1) continue;
-	    ipathpos = j;
+	/* Find arc on highlighted_shape path which runs from d0 to d1 */
+	for (j=1; j < hrec.fullpath->fp_len; j++) {
+	    if (DB_FULL_PATH_GET(hrec.fullpath, j-1) != d0) continue;
+	    if (DB_FULL_PATH_GET(hrec.fullpath, j-0) != d1) continue;
+	    highlight_path_pos = j;
 	    goto got;
 	}
 	Tcl_AppendResult(interp, "matpick: unable to find arc ", d0->d_namep,
@@ -290,34 +388,16 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 			 (char *)NULL);
 	return TCL_ERROR;
     } else {
-	ipathpos = atoi(argv[1]);
-	if (ipathpos < 0) ipathpos = 0;
-	else if ((size_t)ipathpos >= bdata->s_fullpath.fp_len)
-	    ipathpos = bdata->s_fullpath.fp_len-1;
+	highlight_path_pos = atoi(argv[1]);
+	if (highlight_path_pos < 0) highlight_path_pos = 0;
+	else if ((size_t)highlight_path_pos >= hrec.fullpath->fp_len)
+	    highlight_path_pos = hrec.fullpath->fp_len-1;
     }
  got:
     /* Include all solids with same tree top */
-    gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-    while (BU_LIST_NOT_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp))) {
-	next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdatas = (struct ged_bv_data *)sp->s_u_data;
-	    for (j = 0; j <= (size_t)ipathpos; j++) {
-		if (DB_FULL_PATH_GET(&bdatas->s_fullpath, j) !=
-		    DB_FULL_PATH_GET(&bdata->s_fullpath, j))
-		    break;
-	    }
-	    /* Only accept if top of tree is identical */
-	    if (j == (size_t)ipathpos+1)
-		sp->s_iflag = UP;
-	    else
-		sp->s_iflag = DOWN;
-	}
-
-	gdlp = next_gdlp;
+    {
+	(void)ged_draw_set_highlighted_path_prefix(s->gedp, hrec.fullpath,
+		(size_t)highlight_path_pos, 1);
     }
 
     if (!illum_only) {
@@ -328,8 +408,8 @@ f_matpick(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 	init_oedit(s);
     }
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
     return TCL_OK;
 }
 
@@ -374,7 +454,6 @@ f_mouse(
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
 
-    struct ged_bv_data *bdata = NULL;
     vect_t mousevec;		/* float pt -1..+1 mouse pos vect */
     int isave;
     int up;
@@ -391,16 +470,13 @@ f_mouse(
 	return TCL_ERROR;
     }
 
-    if (illump && illump->s_u_data)
-	bdata = (struct ged_bv_data *)illump->s_u_data;
-
     up = atoi(argv[1]);
     xpos = atoi(argv[2]);
     ypos = atoi(argv[3]);
 
     /* Build floating point mouse vector, -1 to +1 */
-    mousevec[X] =  xpos * INV_BV;
-    mousevec[Y] =  ypos * INV_BV;
+    mousevec[X] =  xpos * RT_INV_VIEW;
+    mousevec[Y] =  ypos * RT_INV_VIEW;
     mousevec[Z] = 0;
 
     if (mged_variables->mv_faceplate && mged_variables->mv_orig_gui && up) {
@@ -472,20 +548,23 @@ f_mouse(
 	    /*
 	     * Use the mouse for illuminating a solid
 	     */
-	    illuminate(s, ypos);
+	    highlight_from_y(s, ypos);
 	    return TCL_OK;
 
 	case ST_O_PATH:
-	    /*
-	     * Convert DT position to path element select
-	     */
-	    isave = ipathpos;
-	    if (bdata)
-		ipathpos = bdata->s_fullpath.fp_len-1 - (
-			(ypos+(int)BV_MAX) * (bdata->s_fullpath.fp_len) / (int)BV_RANGE);
-	    if (ipathpos != isave)
-		view_state->vs_flag = 1;
-	    return TCL_OK;
+	    {
+		/* Convert DT position to path element select. */
+		struct ged_draw_shape_record hrec;
+		int have_highlight = mged_highlight_shape_record(s, &hrec);
+		isave = highlight_path_pos;
+		if (have_highlight && hrec.fullpath)
+		    highlight_path_pos = hrec.fullpath->fp_len-1 - (
+			    (ypos+(int)RT_VIEW_MAX) * (hrec.fullpath->fp_len) / (int)RT_VIEW_RANGE);
+		if (highlight_path_pos != isave)
+		    mged_refresh_request_view(s, view_state,
+			    GED_VIEW_REFRESH_VIEW);
+		return TCL_OK;
+	    }
 
     } else switch (s->global_editing_state) {
 
@@ -498,15 +577,15 @@ f_mouse(
 	    return TCL_OK;
 
 	case ST_O_PICK:
-	    ipathpos = 0;
+	    highlight_path_pos = 0;
 	    (void)chg_state(s, ST_O_PICK, ST_O_PATH, "mouse press");
-	    view_state->vs_flag = 1;
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	    return TCL_OK;
 
 	case ST_S_PICK:
 	    /* Check details, Init menu, set state */
 	    init_sedit(s);		/* does chg_state */
-	    view_state->vs_flag = 1;
+	    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 	    return TCL_OK;
 
 	case ST_S_EDIT:
@@ -521,14 +600,14 @@ f_mouse(
 	     * Set combination "illuminate" mode.  This code assumes
 	     * that the user has already illuminated a single solid,
 	     * and wishes to move a collection of objects of which the
-	     * illuminated solid is a part.  The whole combination
+	     * highlighted shape is a part.  The whole combination
 	     * will not illuminate (to save vector drawing time), but
 	     * all the objects should move/scale in unison.
 	     */
 	    {
 		const char *av[3];
 		char num[8];
-		(void)sprintf(num, "%d", ipathpos);
+		(void)sprintf(num, "%d", highlight_path_pos);
 		av[0] = "matpick";
 		av[1] = num;
 		av[2] = (char *)NULL;
@@ -537,9 +616,14 @@ f_mouse(
 		return TCL_OK;
 	    }
 
-	case ST_S_VPICK:
-	    sedit_vpick(s, mousevec);
-	    return TCL_OK;
+	/* ST_S_VPICK was a separate state in vanilla MGED for NURBS vertex
+	 * picking.  In the reworked architecture, VPICK is handled entirely
+	 * within the ft_edit_xy callback (ECMD_SPLINE_VPICK case in
+	 * rt_edit_bspline_edit_xy): it stores the cursor position in b->v_pos
+	 * and then ft_edit calls sedit_vpick() internally.  The ST_S_VPICK
+	 * state is no longer needed and the code below is retained only for
+	 * historical reference. */
+	/* case ST_S_VPICK:  sedit_vpick(MEDIT(s)); return TCL_OK; */
 
 	case ST_O_EDIT:
 	    if ((OEDIT_TRAN || OEDIT_SCALE) && mged_variables->mv_transform == 'e')

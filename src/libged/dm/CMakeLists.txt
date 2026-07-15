@@ -1,4 +1,4 @@
-set(PLUGIN_LIBS libged libdm libbu)
+set(PLUGIN_LIBS libged libbrlobol libbu)
 
 set(DM_SRCS
   dm.c
@@ -7,6 +7,7 @@ set(DM_SRCS
 )
 
 ged_plugin_library(ged-dm
+  PLUGIN_ONLY
   ${DM_SRCS}
   LIBS ${PLUGIN_LIBS}
 )

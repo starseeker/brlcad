@@ -412,12 +412,12 @@ proc mouse_comb_edit_select { x y } {
 ##
 #
 # Hack to use new mouse utilities with an arbitrary
-# display manager window.
+# graphics window.
 #
 proc mouse_init_mged_gui {} {
     global mged_gui
 
-    set mged_gui(mged,active_dm) ""
+    set mged_gui(mged,active_pane) ""
 }
 
 # Local Variables:

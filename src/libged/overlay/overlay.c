@@ -28,11 +28,27 @@
 
 #include "bu/path.h"
 #include "bu/mime.h"
-#include "bv/vlist.h"
+#include "bv.h"
 #include "icv.h"
-#include "dm.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
 
 #include "../ged_private.h"
+
+struct overlay_image_apply_state {
+    icv_image_t *image;
+    struct imgstream_fb_import_options options;
+};
+
+static int
+overlay_image_apply(struct imgstream_fb *fb, void *userdata)
+{
+    struct overlay_image_apply_state *state =
+	(struct overlay_image_apply_state *)userdata;
+    return state && state->image &&
+	imgstream_fb_import_icv(fb, state->image, &state->options) == 0 ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
 
 static int
 overlay_image_mime(struct bu_vls *msg, size_t argc, const char **argv, void *set_mime)
@@ -74,10 +90,7 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     int width = 0; /* may need to specify for some formats (such as PIX) */
     int write_fb = 0;
     int zoom = 0;
-    struct dm *dmp = NULL;
-    struct fb *fbp = NULL;
     struct bu_vls vname = BU_VLS_INIT_ZERO;
-    struct bu_list *vlfree = &rt_vlfree;
 
     static char usage[] = "Usage: overlay [options] file\n";
 
@@ -85,7 +98,7 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     BU_OPT(d[0],  "h", "help",           "",     NULL,            &print_help,       "Print help and exit");
     BU_OPT(d[1],  "F", "fb",             "",     NULL,            &write_fb,         "Overlay image on framebuffer");
     BU_OPT(d[2],  "s", "size",           "#",    &bu_opt_fastf_t, &size,             "[Plot] Character size for plot drawing");
-    BU_OPT(d[3],  "N", "view-obj",       "name", &bu_opt_vls,     &vname,            "[Plot] Name of view object");
+    BU_OPT(d[3],  "N", "view-obj",       "name", &bu_opt_vls,     &vname,            "[Plot] Name of view feature");
     BU_OPT(d[4],  "i", "inverse",        "",     NULL,            &inverse,          "[Fb]   Draw upside-down");
     BU_OPT(d[5],  "c", "clear",          "",     NULL,            &clear,            "[Fb]   Clear framebuffer before drawing");
     BU_OPT(d[6],  "v", "verbose",        "",     NULL,            &verbose,          "[Fb]   Verbose reporting");
@@ -105,15 +118,9 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    if (!gedp->ged_gvp) {
+    void *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, ": no current view set\n");
-	bu_vls_free(&vname);
-	return BRLCAD_ERROR;
-    }
-
-    dmp = (struct dm *)gedp->ged_gvp->dmp;
-    if (!dmp) {
-	bu_vls_printf(gedp->ged_result_str, ": no display manager currently active");
 	bu_vls_free(&vname);
 	return BRLCAD_ERROR;
     }
@@ -136,24 +143,15 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (!write_fb && NEAR_ZERO(size, VUNITIZE_TOL)) {
-	if (!gedp->ged_gvp) {
+	if (!view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, ": no character size specified, and could not determine default value");
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
-	size = gedp->ged_gvp->gv_scale * 0.01;
+	size = bv_scale_get(bv_context_view_const((const struct bv_context *)view_ctx)) * 0.01;
     }
 
     argc = opt_ret;
-
-    if (write_fb) {
-	fbp = dm_get_fb(dmp);
-	if (!fbp) {
-	    bu_vls_printf(gedp->ged_result_str, ": display manager does not have a framebuffer");
-	    bu_vls_free(&vname);
-	    return BRLCAD_ERROR;
-	}
-    }
 
     /* must be wanting help */
     if (!argc) {
@@ -177,8 +175,6 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     if (!write_fb) {
-	struct bv_vlblock*vbp;
-
 	struct bu_vls nroot = BU_VLS_INIT_ZERO;
 	if (!BU_STR_EQUAL(bu_vls_cstr(&vname), "_PLOT_OVERLAY_")) {
 	    bu_vls_sprintf(&nroot, "overlay::%s", bu_vls_cstr(&vname));
@@ -197,51 +193,33 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 	    char **files = NULL;
 	    size_t count = bu_file_list(".", argv[0], &files);
 	    if (count <= 0) {
-		bu_vls_printf(gedp->ged_result_str, "ged_overlay_core: failed to open file - %s\n", argv[1]);
+		bu_vls_printf(gedp->ged_result_str, "ged_overlay_core: failed to open file - %s\n", argv[0]);
 		bu_vls_free(&nroot);
 		bu_vls_free(&vname);
 		return BRLCAD_ERROR;
 	    }
-	    vbp = bv_vlblock_init(vlfree, 32);
-	    for (size_t i = 0; i < count; i++) {
-		if ((fp = fopen(files[i], "rb")) == NULL) {
-		    bu_vls_printf(gedp->ged_result_str, "ged_overlay_core: failed to open file - %s\n", files[i]);
-		    bu_argv_free(count, files);
-		    bu_vls_free(&nroot);
-		    bu_vls_free(&vname);
-		    return BRLCAD_ERROR;
-		}
-		ret = rt_uplot_to_vlist(vbp, fp, size, gedp->i->ged_gdp->gd_uplotOutputMode);
-		fclose(fp);
-		if (ret < 0) {
-		    bv_vlblock_free(vbp);
-		    bu_argv_free(count, files);
-		    bu_vls_free(&nroot);
-		    bu_vls_free(&vname);
-		    return BRLCAD_ERROR;
-		}
-	    }
+	    ret = _ged_draw_uplot_files_to_command_scene_feature(gedp,
+		    (const char * const *)files, count, bu_vls_cstr(&nroot),
+		    size, gedp->i->ged_gdp->gd_uplotOutputMode, "overlay",
+		    "command-result", bu_vls_cstr(&nroot),
+		    "uplot-overlay", 0);
 	    bu_argv_free(count, files);
 	} else {
-	    vbp = bv_vlblock_init(vlfree, 32);
-	    ret = rt_uplot_to_vlist(vbp, fp, size, gedp->i->ged_gdp->gd_uplotOutputMode);
+	    ret = _ged_draw_uplot_to_command_scene_feature(gedp, fp,
+		    bu_vls_cstr(&nroot), size,
+		    gedp->i->ged_gdp->gd_uplotOutputMode, "overlay",
+		    "command-result", bu_vls_cstr(&nroot),
+		    "uplot-overlay", 0);
 	    fclose(fp);
-	    if (ret < 0) {
-		bv_vlblock_free(vbp);
-		bu_vls_free(&nroot);
-		bu_vls_free(&vname);
-		return BRLCAD_ERROR;
-	    }
 	}
 
-	if (gedp->new_cmd_forms) {
-	    struct bview *v = gedp->ged_gvp;
-	    bv_vlblock_obj(vbp, v, bu_vls_cstr(&nroot));
-	} else {
-	    _ged_cvt_vlblock_to_solids(gedp, vbp, bu_vls_cstr(&vname), 0);
+	if (ret != BRLCAD_OK) {
+	    bu_vls_printf(gedp->ged_result_str, "ged_overlay_core: failed to load plot data - %s\n", argv[0]);
+	    bu_vls_free(&nroot);
+	    bu_vls_free(&vname);
+	    return BRLCAD_ERROR;
 	}
 
-	bv_vlblock_free(vbp);
 	bu_vls_free(&nroot);
 	bu_vls_free(&vname);
 
@@ -310,12 +288,22 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 	    bu_vls_free(&vname);
 	    return BRLCAD_ERROR;
 	}
+	/* Keep PNG framebuffer placement consistent with png2fb's historical
+	 * default display conversion for untagged images. */
+	if (type == BU_MIME_IMAGE_PNG)
+	    img->gamma_corr = 0.5f;
 
-	ret = fb_read_icv(fbp, img, 0, 0, 0, 0,	scr_xoff, scr_yoff, clear, zoom, inverse, 0, 0, gedp->ged_result_str);
-
-	(void)dm_draw_begin(dmp);
-	fb_refresh(fbp, 0, 0, fb_getwidth(fbp), fb_getheight(fbp));
-	(void)dm_draw_end(dmp);
+	struct overlay_image_apply_state apply_state;
+	apply_state.image = img;
+	apply_state.options = (struct imgstream_fb_import_options)
+	    IMGSTREAM_FB_IMPORT_OPTIONS_INIT;
+	apply_state.options.screen_xoff = scr_xoff;
+	apply_state.options.screen_yoff = scr_yoff;
+	apply_state.options.clear = clear;
+	apply_state.options.zoom = zoom;
+	apply_state.options.inverse = inverse;
+	ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	    overlay_image_apply, &apply_state, 1);
 
 	icv_destroy(img);
 	bu_vls_free(&vname);

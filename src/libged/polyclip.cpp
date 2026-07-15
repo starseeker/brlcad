@@ -30,11 +30,12 @@
 
 #include "bu/sort.h"
 #include "bg/polygon.h"
-#include "bv/util.h"
+#include "bv.h"
 #include "ged.h"
+#include "ged/event_txn.h"
 
 int
-ged_export_polygon(struct ged *gedp, bv_data_polygon_state *gdpsp, size_t polygon_i, const char *sname)
+ged_export_polygon(struct ged *gedp, const struct ged_polygon_export_state *polygon_state, size_t polygon_i, const char *sname)
 {
     size_t j, k, n;
     size_t num_verts = 0;
@@ -45,16 +46,20 @@ ged_export_polygon(struct ged *gedp, bv_data_polygon_state *gdpsp, size_t polygo
     vect_t view;
     point_t vorigin;
     mat_t invRot;
+    int event_batch_opened = 0;
 
     GED_CHECK_EXISTS(gedp, sname, LOOKUP_QUIET, BRLCAD_ERROR);
     RT_DB_INTERNAL_INIT(&internal);
 
-    if (polygon_i >= gdpsp->gdps_polygons.num_polygons ||
-	gdpsp->gdps_polygons.polygon[polygon_i].num_contours < 1)
+    if (!polygon_state)
 	return BRLCAD_ERROR;
 
-    for (j = 0; j < gdpsp->gdps_polygons.polygon[polygon_i].num_contours; ++j)
-	num_verts += gdpsp->gdps_polygons.polygon[polygon_i].contour[j].num_points;
+    if (polygon_i >= polygon_state->polygons.num_polygons ||
+	polygon_state->polygons.polygon[polygon_i].num_contours < 1)
+	return BRLCAD_ERROR;
+
+    for (j = 0; j < polygon_state->polygons.polygon[polygon_i].num_contours; ++j)
+	num_verts += polygon_state->polygons.polygon[polygon_i].contour[j].num_points;
 
     if (num_verts < 3)
 	return BRLCAD_ERROR;
@@ -72,7 +77,7 @@ ged_export_polygon(struct ged *gedp, bv_data_polygon_state *gdpsp, size_t polygo
     sketch_ip->curve.reverse = (int *)bu_calloc(sketch_ip->curve.count, sizeof(int), "sketch_ip->curve.reverse");
     sketch_ip->curve.segment = (void **)bu_calloc(sketch_ip->curve.count, sizeof(void *), "sketch_ip->curve.segment");
 
-    bn_mat_inv(invRot, gdpsp->gdps_rotation);
+    bn_mat_inv(invRot, polygon_state->rotation);
     VSET(view, 1.0, 0.0, 0.0);
     MAT4X3PNT(sketch_ip->u_vec, invRot, view);
 
@@ -84,23 +89,23 @@ ged_export_polygon(struct ged *gedp, bv_data_polygon_state *gdpsp, size_t polygo
     VUNITIZE(sketch_ip->v_vec);
 
     /* Project the origin onto the front of the viewing cube */
-    MAT4X3PNT(vorigin, gdpsp->gdps_model2view, gdpsp->gdps_origin);
-    vorigin[Z] = gdpsp->gdps_data_vZ;
+    MAT4X3PNT(vorigin, polygon_state->model2view, polygon_state->origin);
+    vorigin[Z] = polygon_state->data_vZ;
 
     /* Convert back to model coordinates for storage */
-    MAT4X3PNT(sketch_ip->V, gdpsp->gdps_view2model, vorigin);
+    MAT4X3PNT(sketch_ip->V, polygon_state->view2model, vorigin);
 
     n = 0;
-    for (j = 0; j < gdpsp->gdps_polygons.polygon[polygon_i].num_contours; ++j) {
+    for (j = 0; j < polygon_state->polygons.polygon[polygon_i].num_contours; ++j) {
 	size_t cstart = n;
 
-	for (k = 0; k < gdpsp->gdps_polygons.polygon[polygon_i].contour[j].num_points; ++k) {
+	for (k = 0; k < polygon_state->polygons.polygon[polygon_i].contour[j].num_points; ++k) {
 	    point_t vpt;
 	    vect_t vdiff;
 
-	    MAT4X3PNT(vpt, gdpsp->gdps_model2view, gdpsp->gdps_polygons.polygon[polygon_i].contour[j].point[k]);
+	    MAT4X3PNT(vpt, polygon_state->model2view, polygon_state->polygons.polygon[polygon_i].contour[j].point[k]);
 	    VSUB2(vdiff, vpt, vorigin);
-	    VSCALE(vdiff, vdiff, gdpsp->gdps_scale);
+	    VSCALE(vdiff, vdiff, polygon_state->scale);
 	    V2MOVE(sketch_ip->verts[n], vdiff);
 
 	    if (k) {
@@ -124,8 +129,28 @@ ged_export_polygon(struct ged *gedp, bv_data_polygon_state *gdpsp, size_t polygo
     }
 
 
-    GED_DB_DIRADD(gedp, dp, sname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID, (void *)&internal.idb_type, BRLCAD_ERROR);
-    GED_DB_PUT_INTERN(gedp, dp, &internal, BRLCAD_ERROR);
+    event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+
+    dp = db_diradd(gedp->dbip, sname, RT_DIR_PHONY_ADDR, 0, RT_DIR_SOLID,
+	    (void *)&internal.idb_type);
+    if (dp == RT_DIR_NULL) {
+	if (event_batch_opened)
+	    ged_event_batch_end(gedp, NULL);
+	rt_db_free_internal(&internal);
+	bu_vls_printf(gedp->ged_result_str,
+		"An error has occurred while adding a new object to the database.");
+	return BRLCAD_ERROR;
+    }
+
+    if (rt_db_put_internal(dp, gedp->dbip, &internal) < 0) {
+	if (event_batch_opened)
+	    ged_event_batch_end(gedp, NULL);
+	bu_vls_printf(gedp->ged_result_str, "Database write failure.");
+	return BRLCAD_ERROR;
+    }
+    (void)ged_event_notify_object_added(gedp, sname, NULL);
+    if (event_batch_opened)
+	ged_event_batch_end(gedp, NULL);
 
     return BRLCAD_OK;
 }
@@ -293,11 +318,14 @@ ged_polygons_overlap(struct ged *gedp, struct bg_polygon *polyA, struct bg_polyg
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     plane_t pl;
-    bv_view_plane(&pl, gedp->ged_gvp);
+    bv_plane_get(&pl, bv_context_view_const((const struct bv_context *)view_ctx));
 
-    return bg_polygons_overlap(polyA, polyB, &pl, &wdbp->wdb_tol, gedp->ged_gvp->gv_scale);
+    fastf_t view_scale = bv_scale_get(
+			     bv_context_view_const((const struct bv_context *)view_ctx));
+    return bg_polygons_overlap(polyA, polyB, &pl, &wdbp->wdb_tol, view_scale);
 }
 
 static int
@@ -338,6 +366,13 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
     static size_t isectSize = 8;
     static int maxTweaks = 10;
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
+    mat_t model2view;
+    mat_t view2model;
+    void *view_ctx = ged_view_active_ctx(gedp);
+
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -364,7 +399,7 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
 	for (j = 0; j < poly->contour[i].num_points; ++j) {
 	    point_t vpoint;
 
-	    MAT4X3PNT(vpoint, gedp->ged_gvp->gv_model2view, poly->contour[i].point[j]);
+	    MAT4X3PNT(vpoint, model2view, poly->contour[i].point[j]);
 	    V2MOVE(poly_2d.p_contour[i].pc_point[j], vpoint);
 	    vZ = vpoint[Z];
 	}
@@ -447,7 +482,7 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
 		for (i = 0; i < final_icount; ++i) {
 		    V2MOVE(pt, final_isect2[i]);
 		    pt[Z] = vZ;
-		    MAT4X3PNT(hit_pt, gedp->ged_gvp->gv_view2model, pt);
+		    MAT4X3PNT(hit_pt, view2model, pt);
 		    bu_vls_printf(&result_vls, "{%lf %lf %lf} ", V3ARGS(hit_pt));
 		}
 	    } else if (tweakCount < maxTweaks) {
@@ -536,7 +571,7 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
 		for (i = 0; i < final_icount; ++i) {
 		    V2MOVE(pt, final_isect2[i]);
 		    pt[Z] = vZ;
-		    MAT4X3PNT(hit_pt, gedp->ged_gvp->gv_view2model, pt);
+		    MAT4X3PNT(hit_pt, view2model, pt);
 		    bu_vls_printf(&result_vls, "{%lf %lf %lf} ", V3ARGS(hit_pt));
 		}
 	    } else if (tweakCount < maxTweaks) {
@@ -560,4 +595,3 @@ ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vf
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

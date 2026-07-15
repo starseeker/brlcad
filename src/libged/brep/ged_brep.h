@@ -33,7 +33,8 @@
 #include <time.h>
 
 #include "bu/opt.h"
-#include "bv/plot3.h"
+#include "bg/line_layer.h"
+#include "bg/plot3.h"
 #include "bu/color.h"
 #include "rt/db4.h"
 #include "raytrace.h"
@@ -77,12 +78,14 @@ __BEGIN_DECLS
 #define HELPFLAG "--print-help"
 #define PURPOSEFLAG "--print-purpose"
 
+struct bg_line_layer_builder;
+
 struct _ged_brep_info {
     struct ged *gedp = NULL;
     struct rt_wdb *wdbp = NULL;
     struct rt_db_internal intern;
     struct directory *dp = NULL;
-    struct bv_vlblock *vbp = NULL;
+    struct bg_line_layer_builder *plot = NULL;
     struct bu_color *color = NULL;
     int verbosity;
     int plotres;
@@ -98,11 +101,14 @@ extern int _ged_brep_to_csg(struct ged *gedp, const char *obj_name, int verify);
 
 extern int brep_geo(struct _ged_brep_info *gb, int argc, const char **argv);
 extern int brep_topo(struct _ged_brep_info *gb, int argc, const char **argv);
+extern int brep_write_object(struct ged *gedp, const char *name, ON_Brep *brep, int added);
+extern int brep_write_modified(struct _ged_brep_info *gb, ON_Brep *brep);
 
 extern int brep_info(struct bu_vls *vls, const ON_Brep *brep, int argc, const char **argv);
 extern int brep_repair(struct ged *gedp, const ON_Brep *brep, const char *oname, int argc, const char **argv);
 extern int brep_pick(struct _ged_brep_info *gb, int argc, const char **argv);
 extern int brep_plot(struct _ged_brep_info *gb, int argc, const char **argv);
+extern void _brep_plot_publish(struct ged *gedp, struct bg_line_layer_builder *plot, const char *sname);
 extern int brep_tikz(struct _ged_brep_info *gb, const char *outfile);
 extern int brep_valid(struct bu_vls *vls, struct rt_db_internal *intern, int argc, const char **argv);
 
@@ -114,21 +120,21 @@ extern int brep_intersect_point_curve(struct rt_db_internal *intern1, struct rt_
 extern int brep_intersect_point_surface(struct rt_db_internal *intern1, struct rt_db_internal *intern2, int i, int j);
 extern int brep_intersect_curve_curve(struct rt_db_internal *intern1, struct rt_db_internal *intern2, int i, int j);
 extern int brep_intersect_curve_surface(struct rt_db_internal *intern1, struct rt_db_internal *intern2, int i, int j);
-extern int brep_intersect_surface_surface(struct rt_db_internal *intern1, struct rt_db_internal *intern2, int i, int j, struct bv_vlblock *vbp);
+extern int brep_intersect_surface_surface(struct rt_db_internal *intern1, struct rt_db_internal *intern2, int i, int j, struct bg_line_layer_builder *plot);
 
 extern int ged_dplot_core(struct ged *gedp, int argc, const char *argv[]);
 
 using namespace brlcad;
 void
-plotface(const ON_BrepFace &face, struct bu_list *vlfree, struct bv_vlblock *vbp, int plotres, bool dim3d, const int red, const int green, const int blue);
+plotface(const ON_BrepFace &face, struct bg_line_layer_builder *plot, int plotres, bool dim3d, const int red, const int green, const int blue);
 void
-plotsurface(const ON_Surface &surf, struct bu_list *vlfree, struct bv_vlblock *vbp, int isocurveres, int gridres, const int red, const int green, const int blue);
+plotsurface(const ON_Surface &surf, struct bg_line_layer_builder *plot, int isocurveres, int gridres, const int red, const int green, const int blue);
 void
-plotcurve(const ON_Curve &curve, struct bu_list *vlfree, struct bv_vlblock *vbp, int plotres, const int red, const int green, const int blue);
+plotcurve(const ON_Curve &curve, struct bg_line_layer_builder *plot, int plotres, const int red, const int green, const int blue);
 void
-plotcurveonsurface(const ON_Curve *curve, const ON_Surface *surface, struct bu_list *vlfree, struct bv_vlblock *vbp, int plotres, const int red, const int green, const int blue);
+plotcurveonsurface(const ON_Curve *curve, const ON_Surface *surface, struct bg_line_layer_builder *plot, int plotres, const int red, const int green, const int blue);
 void
-plotpoint(const ON_3dPoint &point, struct bu_list *vlfree, struct bv_vlblock *vbp, const int red, const int green, const int blue);
+plotpoint(const ON_3dPoint &point, struct bg_line_layer_builder *plot, const int red, const int green, const int blue);
 
 __END_DECLS
 

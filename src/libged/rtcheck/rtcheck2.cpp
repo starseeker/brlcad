@@ -35,53 +35,38 @@
 #include "bio.h"
 #include "bresource.h"
 
-#include <set>
-
 #include "bu/app.h"
+#include "bv.h"
+#include "ged/draw.h"
+#include "ged/view.h"
 
 #include "../ged_private.h"
 
 struct ged_rtcheck {
     struct ged_subprocess *rrtp;
     FILE *fp;
-    struct bv_vlblock *vbp;
-    struct bu_list *vhead;
+    struct ged_uplot_stream *uplot;
     double csize;
+    uint64_t generation;
     void *chan;
     int read_failed;
     int draw_read_failed;
 };
 
+static uint64_t rtcheck_command_generation = 0;
+
+/* Finalize an rtcheck subprocess: wait, free the uplot stream, free the
+ * ged_subprocess and ged_rtcheck.  This MUST be called on the GUI
+ * (main) thread for asynchronous hosts (qged) — see _ged_rt_finalize
+ * for the rationale.
+ */
 static void
-rtcheck_handler_cleanup(struct ged_rtcheck *rtcp, int type)
+_ged_rtcheck_finalize(struct ged_rtcheck *rtcp)
 {
     struct ged_subprocess *p = rtcp->rrtp;
     struct ged *gedp = p->gedp;
-    bu_log("handler cleanup: %d\n", type);
 
-    /* Done watching for output, undo subprocess I/O hooks. */
-    if (type != -1 && gedp->ged_delete_io_handler) {
-
-	if (p->stdin_active || p->stdout_active || p->stderr_active) {
-	    // If anyone else is still listening, we're not done yet.
-	    if (p->stdin_active) {
-		(*gedp->ged_delete_io_handler)(p, BU_PROCESS_STDIN);
-		return;
-	    }
-	    if (p->stdout_active) {
-		(*gedp->ged_delete_io_handler)(p, BU_PROCESS_STDOUT);
-		return;
-	    }
-	    if (p->stderr_active) {
-		(*gedp->ged_delete_io_handler)(p, BU_PROCESS_STDERR);
-		return;
-	    }
-	}
-
-	return;
-    }
-
-    bu_log("doing cleanup: %d\n", type);
+    bu_log("doing cleanup\n");
 
     bu_process_file_close(p->p, BU_PROCESS_STDOUT);
     /* wait for the forked process */
@@ -91,8 +76,54 @@ rtcheck_handler_cleanup(struct ged_rtcheck *rtcp, int type)
     }
     bu_ptbl_rm(&gedp->ged_subp, (long *)p);
     BU_PUT(p, struct ged_subprocess);
-    bv_vlblock_free(rtcp->vbp);
+    _ged_uplot_stream_free(rtcp->uplot);
     BU_PUT(rtcp, struct ged_rtcheck);
+}
+
+static void
+rtcheck_handler_cleanup(struct ged_rtcheck *rtcp, int type)
+{
+    struct ged_subprocess *p = rtcp->rrtp;
+    struct ged *gedp = p->gedp;
+    bu_log("handler cleanup: %d\n", type);
+
+    /* type == -1 is the canonical "all stream listeners gone, finalize
+     * on the GUI thread" entry, dispatched by qged's QgConsole::detach.
+     */
+    if (type == -1) {
+	_ged_rtcheck_finalize(rtcp);
+	return;
+    }
+
+    /* Done watching for output on this stream — detach this stream's
+     * listener.  Do not try to drive the other streams' listeners from
+     * here; each stream's worker-thread invocation will reach this
+     * function for its own EOF.
+     *
+     * For synchronous hosts (tclcad/gsh) ged_delete_io_handler clears
+     * the corresponding stdXXX_active flag inline, so by the time we
+     * return all streams may already be inactive and we can finalize
+     * synchronously on the main thread.  For asynchronous hosts (qged)
+     * ged_delete_io_handler only disconnects the QSocketNotifier; the
+     * stream-active flag is cleared later, on the GUI thread, by
+     * QgConsole::detach, which then re-enters us with type == -1.
+     */
+    if (gedp->ged_delete_io_handler) {
+	(*gedp->ged_delete_io_handler)(p, (bu_process_io_t)type);
+    } else {
+	switch (type) {
+	    case BU_PROCESS_STDIN:  p->stdin_active  = 0; break;
+	    case BU_PROCESS_STDOUT: p->stdout_active = 0; break;
+	    case BU_PROCESS_STDERR: p->stderr_active = 0; break;
+	}
+    }
+
+    /* If all streams are now inactive synchronously (no async
+     * delete_io_handler in effect), finalize here.  Otherwise the
+     * type == -1 re-entry will finalize on the GUI thread.
+     */
+    if (!p->stdin_active && !p->stdout_active && !p->stderr_active)
+	_ged_rtcheck_finalize(rtcp);
 }
 
 static void
@@ -106,44 +137,16 @@ rtcheck_vector_handler(void *clientData, int type)
 
     /* Get vector output from rtcheck */
     if (!rtcp->draw_read_failed && (feof(rtcp->fp) || (value = getc(rtcp->fp)) == EOF)) {
-	size_t i;
 	rtcp->draw_read_failed = 1;
 
-	// Clear any prior rtcheck outputs - whether or not we have new
-	// overlaps to draw, we're eliminating all the old objects
+	// Clear any prior rtcheck outputs and publish this run as a command-owned
+	// scene result.  The helper preserves legacy fallback internally for
+	// unowned views, but Obol-owned views get CommandResult metadata and owner
+	// scoped cleanup.
 	const char *sname = "rtcheck::";
-	struct bview *v = gedp->ged_gvp;
-	struct bu_ptbl *vobjs = bv_view_objs(v, BV_VIEW_OBJS);
-	std::set<struct bv_scene_obj *> robjs;
-	if (vobjs) {
-	    for (i = 0; i < BU_PTBL_LEN(vobjs); i++) {
-		struct bv_scene_obj *s = (struct bv_scene_obj *)BU_PTBL_GET(vobjs, i);
-		if (!bu_strncmp(sname, bu_vls_cstr(&s->s_name), strlen(sname))) {
-		    robjs.insert(s);
-		}
-	    }
-	}
-	std::set<struct bv_scene_obj *>::iterator r_it;
-	for (r_it = robjs.begin(); r_it != robjs.end(); r_it++) {
-	    struct bv_scene_obj *s = *r_it;
-	    bv_obj_put(s);
-	}
-
-	/* Add any visual output generated by rtcheck */
-	if (rtcp->vbp) {
-	    int have_visual = 0;
-	    for (i = 0; i < rtcp->vbp->nused; i++) {
-		if (!BU_LIST_IS_EMPTY(&(rtcp->vbp->head[i]))) {
-		    have_visual = 1;
-		    break;
-		}
-	    }
-
-	    if (have_visual) {
-		bu_log("final nused: %zu\n", rtcp->vbp->nused);
-		bv_vlblock_obj(rtcp->vbp, gedp->ged_gvp, sname);
-	    }
-	}
+	(void)_ged_uplot_stream_publish_command_scene_feature(gedp,
+		rtcp->uplot, sname, "rtcheck", "command-result", sname,
+		"overlap", rtcp->generation);
     }
 
     if (rtcp->read_failed && rtcp->draw_read_failed) {
@@ -152,12 +155,7 @@ rtcheck_vector_handler(void *clientData, int type)
     }
 
     if (!rtcp->draw_read_failed) {
-	(void)rt_process_uplot_value(&rtcp->vhead,
-				     rtcp->vbp,
-				     rtcp->fp,
-				     value,
-				     rtcp->csize,
-				     gedp->i->ged_gdp->gd_uplotOutputMode);
+	(void)_ged_uplot_stream_process(rtcp->uplot, rtcp->fp, value);
     }
 }
 
@@ -209,8 +207,6 @@ ged_rtcheck2_core(struct ged *gedp, int argc, const char *argv[])
     struct bu_process *p = NULL;
     char ** gd_rt_cmd = NULL;
     int gd_rt_cmd_len = 0;
-    struct bu_list *vlfree = &rt_vlfree;
-
     vect_t eye_model;
 
     const char *bin;
@@ -289,13 +285,17 @@ ged_rtcheck2_core(struct ged *gedp, int argc, const char *argv[])
     bu_process_file_close(p, BU_PROCESS_STDIN);
 
     /* create the rtcheck struct */
+    void *view_ctx = ged_view_active_ctx(gedp);
     BU_GET(rtcp, struct ged_rtcheck);
     rtcp->fp = bu_process_file_open(p, BU_PROCESS_STDOUT);
     /* Needed on Windows for successful rtcheck drawing data communication */
     setmode(fileno(rtcp->fp), O_BINARY);
-    rtcp->vbp = bv_vlblock_init(vlfree, 32);
-    rtcp->vhead = bv_vlblock_find(rtcp->vbp, 0xFF, 0xFF, 0x00);
-    rtcp->csize = gedp->ged_gvp->gv_scale * 0.01;
+    rtcp->csize = bv_scale_get(
+		      bv_context_view_const((const struct bv_context *)view_ctx)) * 0.01;
+    rtcp->uplot = _ged_uplot_stream_create(rtcp->csize, gedp->i->ged_gdp->gd_uplotOutputMode);
+    rtcp->generation = ++rtcheck_command_generation;
+    if (rtcp->generation == 0)
+	rtcp->generation = ++rtcheck_command_generation;
     rtcp->read_failed = 0;
     rtcp->draw_read_failed = 0;
 
@@ -331,4 +331,3 @@ ged_rtcheck2_core(struct ged *gedp, int argc, const char *argv[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

@@ -21,12 +21,61 @@
  *
  */
 
+#include <climits>
+
 #include <QLabel>
 #include <QString>
 #include <QMessageBox>
 #include "bu/malloc.h"
-#include "bg/polygon.h"
+#include "bu/str.h"
+#include "bu/vls.h"
+#include "bu/color.h"
+#include "ged/draw.h"
+#include "qtcad/QgPluginContext.h"
+#include "qtcad/QgView.h"
 #include "QPolySettings.h"
+
+static void *
+qpolysettings_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeViewContext() : nullptr;
+}
+
+static int
+qpolysettings_unique_polygon_name(struct bu_vls *oname,
+	const char *seed,
+	void *view)
+{
+    if (!oname || !view)
+	return 0;
+
+    struct bu_vls vseed = BU_VLS_INIT_ZERO;
+    if (seed && seed[0]) {
+	bu_vls_sprintf(&vseed, "%s", seed);
+    } else {
+	const char *view_name = bv_name_get(bv_context_view_const(static_cast<const struct bv_context *>(view)));
+	bu_vls_sprintf(&vseed, "%s:obj_0", view_name ? view_name : "view");
+    }
+
+    const char *npattern = "([-_:]*[0-9]+[-_:]*)[^0-9]*$";
+    long int loop_guard = 0;
+    while (!ged_draw_view_polygon_ref_is_null(
+	    ged_draw_view_context_polygon_find(view,
+		    bu_vls_cstr(&vseed))) &&
+	    loop_guard < LONG_MAX) {
+	(void)bu_vls_incr(&vseed, npattern, NULL, NULL, NULL);
+	loop_guard++;
+    }
+
+    if (loop_guard >= LONG_MAX) {
+	bu_vls_free(&vseed);
+	return 0;
+    }
+
+    bu_vls_sprintf(oname, "%s", bu_vls_cstr(&vseed));
+    bu_vls_free(&vseed);
+    return 1;
+}
 
 QPolySettings::QPolySettings()
     : QWidget()
@@ -36,7 +85,7 @@ QPolySettings::QPolySettings()
     l->setSpacing(1);
     l->setContentsMargins(1,1,1,1);
 
-    QLabel *vn_label = new QLabel("Polygon view obj name:");
+    QLabel *vn_label = new QLabel("Polygon object name:");
     view_name = new QLineEdit();
     l->addWidget(vn_label);
     l->addWidget(view_name);
@@ -145,9 +194,10 @@ QPolySettings::~QPolySettings()
 }
 
 bool
-QPolySettings::uniq_obj_name(struct bu_vls *oname, struct bview *v)
+QPolySettings::uniq_obj_name(struct bu_vls *oname, const QgPluginContext *ctx)
 {
-    if (!v || !oname)
+    void *v = qpolysettings_view(ctx);
+    if (!v)
 	return false;
 
     char *vname = NULL;
@@ -163,22 +213,31 @@ QPolySettings::uniq_obj_name(struct bu_vls *oname, struct bview *v)
     // See if the supplied name will collide.  If it will, then reject.  If we want
     // an output name, fail with a message box
     struct bu_vls ovname = BU_VLS_INIT_ZERO;
-    bv_uniq_obj_name(&ovname, vname, v);
-    if (!BU_STR_EQUAL(bu_vls_cstr(&ovname), vname)) {
-	if (!oname)
-	    return false;
+    if (!qpolysettings_unique_polygon_name(&ovname, vname, v)) {
+	if (vname)
+	    bu_free(vname, "vname");
+	return false;
+    }
+    const char *candidate = vname ? vname : bu_vls_cstr(&ovname);
+    if (!BU_STR_EQUAL(bu_vls_cstr(&ovname), candidate)) {
 	QMessageBox msgBox;
-	msgBox.setText("Proposed object name already exists in view.");
-	msgBox.exec();
+	if (oname) {
+	    msgBox.setText("Proposed object name already exists in view.");
+	    msgBox.exec();
+	}
 	bu_vls_free(&ovname);
-	bu_free(vname, "vname");
+	if (vname)
+	    bu_free(vname, "vname");
 	return false;
     }
 
     // Unique.  If we want it returned, do the printing
     if (oname)
-	bu_vls_sprintf(oname, "%s", vname);
+	bu_vls_sprintf(oname, "%s", candidate);
 
+    bu_vls_free(&ovname);
+    if (vname)
+	bu_free(vname, "vname");
     return true;
 }
 
@@ -218,38 +277,36 @@ QPolySettings::do_grid_snapping_changed()
 
 
 void
-QPolySettings::settings_sync(struct bv_scene_obj *p)
+QPolySettings::settings_sync(const struct ged_draw_view_polygon_record *p)
 {
     if (!p)
 	return;
 
 
-    struct bv_polygon *ip = (struct bv_polygon *)p->s_i_data;
-
     edge_color->blockSignals(true);
-    edge_color->rgbtext->setText(QString("%1/%2/%3").arg(p->s_color[0]).arg(p->s_color[1]).arg(p->s_color[2]));
+    edge_color->rgbtext->setText(QString("%1/%2/%3").arg(p->edge_color[0]).arg(p->edge_color[1]).arg(p->edge_color[2]));
     edge_color->blockSignals(false);
 
     unsigned char frgb[3];
-    bu_color_to_rgb_chars(&ip->fill_color, frgb);
+    bu_color_to_rgb_chars(&p->fill_color, frgb);
     fill_color->blockSignals(true);
     fill_color->rgbtext->setText(QString("%1/%2/%3").arg(frgb[0]).arg(frgb[1]).arg(frgb[2]));
     fill_color->blockSignals(false);
 
     fill_slope_x->blockSignals(true);
-    fill_slope_x->setText(QString("%1").arg(ip->fill_dir[0]));
+    fill_slope_x->setText(QString("%1").arg(p->fill_dir[0]));
     fill_slope_x->blockSignals(false);
 
     fill_slope_y->blockSignals(true);
-    fill_slope_y->setText(QString("%1").arg(ip->fill_dir[1]));
+    fill_slope_y->setText(QString("%1").arg(p->fill_dir[1]));
     fill_slope_y->blockSignals(false);
 
     fill_density->blockSignals(true);
-    fill_density->setText(QString("%1").arg(ip->fill_delta));
+    fill_density->setText(QString("%1").arg(p->fill_delta));
     fill_density->blockSignals(false);
 
     fill_poly->blockSignals(true);
-    if (ip->fill_flag) {
+    if (p->fill_flag) {
 	fill_poly->setChecked(true);
     } else {
 	fill_poly->setChecked(false);
@@ -257,7 +314,7 @@ QPolySettings::settings_sync(struct bv_scene_obj *p)
     fill_poly->blockSignals(false);
 
     vZ->blockSignals(true);
-    vZ->setText(QVariant(ip->vZ).toString());
+    vZ->setText(QVariant(p->vZ).toString());
     vZ->blockSignals(false);
 
     // Values set, now update the button colors

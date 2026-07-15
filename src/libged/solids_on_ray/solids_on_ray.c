@@ -31,6 +31,7 @@
 
 #include "bn.h"
 #include "bu/cmd.h"
+#include "bv.h"
 
 
 #include "../ged_private.h"
@@ -189,6 +190,10 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
     vect_t ray_dir;
     point_t extremum[2];
     vect_t unit_H, unit_V;
+    mat_t view_center;
+    mat_t view_rotation;
+    mat_t model2view;
+    fastf_t view_scale;
     static const char *usage = "[h v]";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -218,13 +223,19 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    if ((int)BV_MIN > h || h > (int)BV_MAX || (int)BV_MIN > v || v > (int)BV_MAX) {
+    if ((int)BV_VIEW_MIN > h || h > (int)BV_VIEW_MAX || (int)BV_VIEW_MIN > v || v > (int)BV_VIEW_MAX) {
 	bu_vls_printf(gedp->ged_result_str, "Screen coordinates out of range\nMust be between +/-2048");
 	return BRLCAD_ERROR;
     }
 
-    VSET(ray_orig, -gedp->ged_gvp->gv_center[MDX],
-	 -gedp->ged_gvp->gv_center[MDY], -gedp->ged_gvp->gv_center[MDZ]);
+    void *view_ctx = ged_view_active_ctx(gedp);
+    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+    bv_center_mat_get(view_center, view);
+    bv_rotation_get(view_rotation, view);
+    bv_model2view_get(model2view, view);
+    view_scale = bv_scale_get(view);
+
+    MAT_DELTAS_GET_NEG(ray_orig, view_center);
     /*
      * Compute bounding box of all objects displayed.
      * Borrowed from size_reset() in chgview.c
@@ -234,7 +245,7 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 	extremum[1][i] = -INFINITY;
     }
 
-    VMOVEN(ray_dir, gedp->ged_gvp->gv_rotation + 8, 3);
+    VMOVEN(ray_dir, view_rotation + 8, 3);
     VSCALE(ray_dir, ray_dir, -1.0);
     for (i = 0; i < 3; ++i)
 	if (NEAR_ZERO(ray_dir[i], 1e-10))
@@ -258,10 +269,10 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 	VJOIN1(ray_orig, ray_orig, t_in, ray_dir);
     }
 
-    VMOVEN(unit_H, gedp->ged_gvp->gv_model2view, 3);
-    VMOVEN(unit_V, gedp->ged_gvp->gv_model2view + 4, 3);
-    VJOIN1(ray_orig, ray_orig, h * gedp->ged_gvp->gv_scale * INV_BV, unit_H);
-    VJOIN1(ray_orig, ray_orig, v * gedp->ged_gvp->gv_scale * INV_BV, unit_V);
+    VMOVEN(unit_H, model2view, 3);
+    VMOVEN(unit_V, model2view + 4, 3);
+    VJOIN1(ray_orig, ray_orig, h * view_scale * RT_INV_VIEW, unit_H);
+    VJOIN1(ray_orig, ray_orig, v * view_scale * RT_INV_VIEW, unit_V);
 
     /* allocate space for display top-levels */
     args = 2 + ged_who_argc(gedp);

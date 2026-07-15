@@ -30,7 +30,7 @@
 #include <functional>
 #include <thread>
 
-extern "C" {
+#include "./mged.h"
 
 #include <stdlib.h>
 #include <math.h>
@@ -52,7 +52,8 @@ extern "C" {
 #include "bu/time.h"
 #include "bu/snooze.h"
 #include "bn.h"
-#include "bv/util.h"
+#include "ged/draw.h"
+#include "ged/view.h"
 #include "rt/edit.h"
 #include "rt/geom.h"
 #include "ged.h"
@@ -64,29 +65,27 @@ extern "C" {
 
 #include "tclcad.h"
 
-#include "./mged.h"
 #include "./cmd.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./sedit.h"
 
-void mged_finish(struct mged_state *s, int exitcode); /* in mged.c */
-void update_grids(struct mged_state *s, fastf_t sf);		/* in grid.c */
-void set_localunit_TclVar(struct mged_state *s);		/* in chgmodel.c */
-extern void init_qray(void);			/* in qray.c */
+extern "C" void mged_finish(struct mged_state *s, int exitcode); /* in mged.c */
+extern "C" void update_grids(struct mged_state *s, fastf_t sf);		/* in grid.c */
+extern "C" void set_localunit_TclVar(struct mged_state *s);		/* in chgmodel.c */
+extern "C" void init_qray(void);			/* in qray.c */
 
 /* in tclsync.c */
-Tcl_Obj *BuildInterpSnapshot(Tcl_Interp *interp);
-int ReplayInterpSnapshot(Tcl_Interp *interp, Tcl_Obj *snapshot);
+extern "C" Tcl_Obj *BuildInterpSnapshot(Tcl_Interp *interp);
+extern "C" int ReplayInterpSnapshot(Tcl_Interp *interp, Tcl_Obj *snapshot);
 
 
+extern "C" {
 // FIXME: Globals
-extern int mged_default_dlist;			/* in attach.c */
 struct cmd_list head_cmd_list;
 struct cmd_list *curr_cmd_list;
 static int glob_compat_mode = 1;
 static int output_as_return = 1;
 Tk_Window tkwin = NULL;
-
 
 /* GUI output hooks use these variables to track the Tcl command which receives
  * output and whether MGED's process-global bu_log hook is installed. */
@@ -104,7 +103,6 @@ static struct bu_vls tcl_log_str = BU_VLS_INIT_ZERO;
  * deadlocks that would occur if Tcl callbacks triggered by mged_pr_output
  * themselves called bu_log (which also acquires BU_SEM_SYSCALL). */
 static int MGED_SEM_LOG = -1;
-
 }
 
 /* Internal C++ async helper.
@@ -163,8 +161,8 @@ run_ged_async(struct mged_state *s, std::function<int()> func)
     return result.load();
 }
 
-
 extern "C" {
+
 
 /**
  * Initialise the dedicated MGED log-buffer semaphore.
@@ -308,7 +306,7 @@ mged_ged_exec_async(struct mged_state *s, int argc, const char *argv[])
     });
 }
 
-} /* extern "C" */
+
 
 #define GED_OUTPUT do { \
     mged_pr_output(interpreter);\
@@ -319,9 +317,6 @@ mged_ged_exec_async(struct mged_state *s, int argc, const char *argv[])
 /* All remaining MGED command functions require C linkage because they are
  * called through Tcl command dispatch (function pointers stored with
  * Tcl_CreateCommand) and directly by name from other .c translation units. */
-extern "C" {
-
-
 /* Tcl command "_mged_ged_exec" registered inside search_interp.
  * Bridges Tcl scripts running in the search interpreter to the GED command
  * system so that GED commands (draw, ls, attr, ...) are reachable from
@@ -691,7 +686,6 @@ cmd_ged_edit_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
     return TCL_OK;
 }
 
-
 /**
  * Wrapper for the Mged simulate command : draws argv[argc-1] after execution.
  * When an output file is specified (--output/-o) and no explicit view
@@ -739,23 +733,29 @@ cmd_ged_simulate_wrapper(ClientData clientData, Tcl_Interp *interpreter, int arg
 	    has_view = 1;
     }
 
-    if (has_output && !has_view && s->gedp && s->gedp->ged_gvp) {
-	struct bview *bv = s->gedp->ged_gvp;
+    void *view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
+    if (has_output && !has_view && view_ctx) {
 	quat_t quat;
-	quat_mat2quat(quat, bv->gv_rotation);
+	point_t eye_pos;
+	fastf_t view_size;
+
+	struct bv *view = mged_view_context_view(view_ctx);
+	bv_orientation_quat_get(quat, view);
+	bv_eye_pos_get(eye_pos, view);
+	view_size = bv_size_get(view);
 
 	/* Build "--view-quat=x,y,z,w" argument */
 	snprintf(quat_buf, sizeof(quat_buf),
 		 "--view-quat=%.10g,%.10g,%.10g,%.10g",
 		 quat[0], quat[1], quat[2], quat[3]);
 
-	/* Build "--view-eye=x,y,z" argument from gv_eye_pos */
+	/* Build "--view-eye=x,y,z" argument */
 	snprintf(eye_buf, sizeof(eye_buf),
 		 "--view-eye=%.6g,%.6g,%.6g",
-		 bv->gv_eye_pos[0], bv->gv_eye_pos[1], bv->gv_eye_pos[2]);
+		 eye_pos[0], eye_pos[1], eye_pos[2]);
 
 	/* Build "--view-size=S" argument */
-	snprintf(size_buf, sizeof(size_buf), "--view-size=%.6g", bv->gv_size);
+	snprintf(size_buf, sizeof(size_buf), "--view-size=%.6g", view_size);
 
 	new_argc = argc + 3; /* three extra arguments */
 	injected_argv = (char **)bu_calloc((size_t)(new_argc + 1),
@@ -804,7 +804,8 @@ cmd_ged_info_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-    struct ged_bv_data *bdata = NULL;
+    struct ged_draw_shape_record hrec;
+    int have_highlight = mged_highlight_shape_record(s, &hrec);
 
     if (s->gedp == GED_NULL)
 	return TCL_OK;
@@ -817,10 +818,10 @@ cmd_ged_info_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
 	    argc = 2;
 	    av = (const char **)bu_malloc(sizeof(char *)*(argc + 1), "f_list: av");
 	    av[0] = (const char *)argv[0];
-	    if (illump && illump->s_u_data) {
-		bdata = (struct ged_bv_data *)illump->s_u_data;
-		if (bdata->s_fullpath.fp_len > 0) {
-		    av[1] = (const char *)LAST_SOLID(bdata)->d_namep;
+	    if (have_highlight && hrec.fullpath && hrec.fullpath->fp_len > 0) {
+		struct directory *ldp = DB_FULL_PATH_GET(hrec.fullpath, hrec.fullpath->fp_len - 1);
+		if (ldp && ldp->d_namep) {
+		    av[1] = (const char *)ldp->d_namep;
 		    av[argc] = (const char *)NULL;
 		    (void)run_ged_async(s, [&]() -> int { return (*ctp->ged_func)(s->gedp, argc, (const char **)av); });
 		    GED_OUTPUT;
@@ -855,8 +856,8 @@ cmd_ged_erase_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, 
 	return TCL_ERROR;
 
     solid_list_callback(s);
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     return TCL_OK;
 }
@@ -929,8 +930,8 @@ cmd_ged_gqa(ClientData clientData, Tcl_Interp *interpreter, int argc, const char
     if (ret)
 	return TCL_ERROR;
 
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     return TCL_OK;
 }
@@ -1039,7 +1040,8 @@ cmd_ged_inside(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
     struct mged_state *s = ctp->s;
     const char *new_cmd[3];
     struct rt_db_internal intern;
-    struct ged_bv_data *bdata = NULL;
+    struct ged_draw_shape_record hrec;
+    int have_highlight = mged_highlight_shape_record(s, &hrec);
 
     if (s->gedp == GED_NULL)
 	return TCL_OK;
@@ -1056,14 +1058,13 @@ cmd_ged_inside(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
 	/* apply MEDIT(s)->e_mat editing to parameters */
 	struct directory *outdp = RT_DIR_NULL;
 	transform_editing_solid(s, &intern, MEDIT(s)->e_mat, &MEDIT(s)->es_int, 0);
-	if (illump && illump->s_u_data) {
-	    bdata = (struct ged_bv_data *)illump->s_u_data;
-	    outdp = LAST_SOLID(bdata);
+	if (have_highlight && hrec.fullpath && hrec.fullpath->fp_len > 0) {
+	    outdp = DB_FULL_PATH_GET(hrec.fullpath, hrec.fullpath->fp_len - 1);
 	}
 
 	if (argc < 2) {
 	    Tcl_AppendResult(interpreter, "You are in Primitive Edit mode, using edited primitive as outside primitive: ", (char *)NULL);
-	    add_solid_path_to_result(interpreter, illump);
+	    add_solid_record_path_to_result(interpreter, have_highlight ? &hrec : NULL);
 	    Tcl_AppendResult(interpreter, "\n", (char *)NULL);
 	}
 
@@ -1078,7 +1079,7 @@ cmd_ged_inside(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
 	struct directory *outdp = RT_DIR_NULL;
 
 	/* object edit mode */
-	if (illump->s_old.s_Eflag) {
+	if (have_highlight && hrec.evaluated_region) {
 	    Tcl_AppendResult(interpreter, "Cannot find inside of a processed (E'd) region\n",
 			     (char *)NULL);
 	    (void)signal(SIGINT, SIG_IGN);
@@ -1088,14 +1089,13 @@ cmd_ged_inside(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
 	/* apply MEDIT(s)->e_mat and MEDIT(s)->model_changes editing to parameters */
 	bn_mat_mul(newmat, MEDIT(s)->model_changes, MEDIT(s)->e_mat);
 	transform_editing_solid(s, &intern, newmat, &MEDIT(s)->es_int, 0);
-	if (illump && illump->s_u_data) {
-	    bdata = (struct ged_bv_data *)illump->s_u_data;
-	    outdp = LAST_SOLID(bdata);
+	if (have_highlight && hrec.fullpath && hrec.fullpath->fp_len > 0) {
+	    outdp = DB_FULL_PATH_GET(hrec.fullpath, hrec.fullpath->fp_len - 1);
 	}
 
-	if (illump && argc < 2) {
+	if (have_highlight && argc < 2) {
 	    Tcl_AppendResult(interpreter, "You are in Object Edit mode, using key solid as outside solid: ", (char *)NULL);
-	    add_solid_path_to_result(interpreter, illump);
+	    add_solid_record_path_to_result(interpreter, &hrec);
 	    Tcl_AppendResult(interpreter, "\n", (char *)NULL);
 	}
 
@@ -1292,8 +1292,8 @@ cmd_ged_view_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
     if (s->gedp == GED_NULL)
 	return TCL_OK;
 
-    if (!s->gedp->ged_gvp)
-	s->gedp->ged_gvp = view_state->vs_gvp;
+    if (!ged_view_active_ctx(s->gedp))
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     ret = run_ged_async(s, [&]() -> int { return (*ctp->ged_func)(s->gedp, argc, (const char **)argv); });
     GED_OUTPUT;
@@ -1305,14 +1305,14 @@ cmd_ged_view_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, c
 	return TCL_ERROR;
 
     (void)mged_svbase(s);
-    view_state->vs_flag = 1;
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 
     return TCL_OK;
 }
 
 
 int
-cmd_ged_dm_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
+cmd_ged_display_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
 {
     int ret;
     struct cmdtab *ctp = (struct cmdtab *)clientData;
@@ -1327,9 +1327,11 @@ cmd_ged_dm_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, con
     else
 	return TCL_OK;
 
-    if (!s->gedp->ged_gvp)
-	s->gedp->ged_gvp = view_state->vs_gvp;
-    s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+    void *active_view_ctx = ged_view_active_ctx(s->gedp);
+    if (!active_view_ctx) {
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+	active_view_ctx = ged_view_active_ctx(s->gedp);
+    }
 
     ret = (*ctp->ged_func)(s->gedp, argc, (const char **)argv);
     GED_OUTPUT;
@@ -1345,7 +1347,7 @@ cmd_ged_dm_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc, con
 
 /**
  * Screengrab wrapper: forces a render via refresh(s) so that the
- * display manager has current pixel data before we call the GED
+ * graphics endpoint has current pixel data before we call the GED
  * screengrab function.  This is necessary in -c (batch) mode where
  * the Tcl event loop never fires and refresh() would otherwise not
  * be called before getDisplayImage().
@@ -1367,13 +1369,14 @@ cmd_screengrab(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
 	return TCL_OK;
 
     /* Force the scene to be rendered before reading pixels. */
-    DMP_dirty = 1;
-    dm_set_dirty(DMP, 1);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
     refresh(s);
 
-    if (!s->gedp->ged_gvp)
-	s->gedp->ged_gvp = view_state->vs_gvp;
-    s->gedp->ged_gvp->dmp = (void *)s->mged_curr_dm->dm_dmp;
+    void *active_view_ctx = ged_view_active_ctx(s->gedp);
+    if (!active_view_ctx) {
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
+	active_view_ctx = ged_view_active_ctx(s->gedp);
+    }
 
     ret = (*ctp->ged_func)(s->gedp, argc, (const char **)argv);
     GED_OUTPUT;
@@ -1576,7 +1579,7 @@ cmd_cmd_win(ClientData clientData, Tcl_Interp *interpreter, int argc, const char
 
 	BU_LIST_DEQUEUE(&clp->l);
 	if (clp->cl_tie != NULL)
-	    clp->cl_tie->dm_tie = CMD_LIST_NULL;
+	    clp->cl_tie->display_tie = CMD_LIST_NULL;
 	bu_vls_free(&clp->cl_more_default);
 	bu_vls_free(&clp->cl_name);
 	bu_free((void *)clp, "cmd_close: clp");
@@ -1616,10 +1619,10 @@ cmd_cmd_win(ClientData clientData, Tcl_Interp *interpreter, int argc, const char
 	}
 
 	if (curr_cmd_list->cl_tie) {
-	    set_curr_dm(s, curr_cmd_list->cl_tie);
+	    mged_current_display_set(s, curr_cmd_list->cl_tie);
 
 	    if (s->gedp != GED_NULL)
-		s->gedp->ged_gvp = view_state->vs_gvp;
+		ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	}
 
 	bu_vls_trunc(&curr_cmd_list->cl_more_default, 0);
@@ -1832,9 +1835,10 @@ end:
 }
 
 
-void
-mged_print_result(struct mged_state *s, int UNUSED(status))
+int
+mged_print_result(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUSED(ud))
 {
+    struct mged_state *s = (struct mged_state *)d;
     size_t len;
     const char *result = Tcl_GetStringResult(s->interp);
 
@@ -1847,6 +1851,94 @@ mged_print_result(struct mged_state *s, int UNUSED(status))
     }
 
     Tcl_ResetResult(s->interp);
+
+    return TCL_OK;
+}
+
+
+int
+mged_print_str(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUSED(ud))
+{
+    struct mged_state *s = (struct mged_state *)d;
+
+    Tcl_AppendResult(s->interp, bu_vls_cstr(MEDIT(s)->log_str), (char *)NULL);
+
+    return TCL_OK;
+}
+
+int
+mged_view_update(int UNUSED(ac), const char **UNUSED(av), void *d, void *UNUSED(ud))
+{
+    struct mged_state *s = (struct mged_state *)d;
+
+    mged_refresh_request_current(s, GED_VIEW_REFRESH_VIEW);
+    (void)Tcl_Eval(s->interp, "active_edit_callback");
+
+    return TCL_OK;
+}
+
+int
+mged_view_set_flag(int UNUSED(ac), const char **UNUSED(av), void *d, void *flagp)
+{
+    struct mged_state *s = (struct mged_state *)d;
+    int *flag = (int *)flagp;
+
+    if (flag && *flag)
+	mged_refresh_request_current(s, GED_VIEW_REFRESH_VIEW);
+
+    return TCL_OK;
+}
+
+int
+mged_get_filename(int ac, const char **av, void *d, void *sret)
+{
+    if (!ac || !av || !d || !sret)
+	return BRLCAD_ERROR;
+
+    char *str = bu_strdup(av[0]);
+    char **ret = (char **)sret;
+
+    struct mged_state *s = (struct mged_state *)d;
+    struct bu_vls cmd = BU_VLS_INIT_ZERO;
+    struct bu_vls varname_vls = BU_VLS_INIT_ZERO;
+    char *dir;
+    char *fptr;
+    char *ptr1;
+    char *ptr2;
+
+    bu_vls_strcpy(&varname_vls, "mged_gui(getFileDir)");
+
+    if ((fptr=strrchr(str, '/'))) {
+	dir = (char *)bu_malloc((strlen(str)+1)*sizeof(char), "get_file_name: dir");
+	ptr1 = str;
+	ptr2 = dir;
+	while (ptr1 != fptr)
+	    *ptr2++ = *ptr1++;
+	*ptr2 = '\0';
+	Tcl_SetVar(s->interp, bu_vls_addr(&varname_vls), dir, TCL_GLOBAL_ONLY);
+	bu_free((void *)dir, "get_file_name: directory string");
+    }
+
+    if (mged_display_pathname(s->mged_curr_display)) {
+	bu_vls_printf(&cmd,
+		"getFile %s %s {{{All Files} {*}}} {Get File}",
+		mged_display_pathname(s->mged_curr_display),
+		bu_vls_addr(&varname_vls));
+    }
+    bu_vls_free(&varname_vls);
+
+    if (Tcl_Eval(s->interp, bu_vls_addr(&cmd))) {
+	(*ret) = NULL;
+	goto str_ret;
+    }
+    if (Tcl_GetStringResult(s->interp)[0] != '\0') {
+	(*ret) = bu_strdup(Tcl_GetStringResult(s->interp));
+	goto str_ret;
+    }
+str_ret:
+    bu_vls_free(&cmd);
+    bu_free(str, "str");
+    return BRLCAD_OK;
 }
 
 /**
@@ -1922,28 +2014,28 @@ f_quit(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *arg
 
 /**
  * SYNOPSIS
- * tie [cw [dm]]
+ * tie [cw [view]]
  * tie -u cw
  *
  * DESCRIPTION
- * This command ties/associates a command window (cw) to a display
- * manager window (dm).  When a command window is tied to a display
- * manager window, all commands issued from this window will be
- * directed at a particular display manager. Otherwise, the commands
- * issued will be directed at the current display manager window.
+ * This command ties/associates a command window (cw) to a graphics
+ * view. When a command window is tied to a graphics view, all commands
+ * issued from this window will be
+ * directed at a particular graphics view. Otherwise, the commands
+ * issued will be directed at the current graphics window.
  *
  * EXAMPLES
- * tie ---> returns a list of the command_window/display_manager associations
- * tie cw1 ---> returns the display_manager, if it exists, associated with cw1
- * tie cw1 dm1 ---> associated cw1 with dm1
- * tie -u cw1 ---> removes the association, if it exists, cw1 has with a display manager
+ * tie ---> returns a list of command-window/graphics-view associations
+ * tie cw1 ---> returns the graphics view, if it exists, associated with cw1
+ * tie cw1 view1 ---> associates cw1 with view1
+ * tie -u cw1 ---> removes the association, if it exists, cw1 has with a graphics view
  */
 int
 f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const char *argv[])
 {
     int uflag = 0;		/* untie flag */
     struct cmd_list *clp;
-    struct mged_dm *dlp = MGED_DM_NULL;
+    struct mged_display *dlp = MGED_DISPLAY_NULL;
     struct bu_vls vls = BU_VLS_INIT_ZERO;
 
     if (argc < 1 || 3 < argc) {
@@ -1957,7 +2049,7 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 	for (BU_LIST_FOR (clp, cmd_list, &head_cmd_list.l)) {
 	    bu_vls_trunc(&vls, 0);
 	    if (clp->cl_tie) {
-		struct bu_vls *pn = dm_get_pathname(clp->cl_tie->dm_dmp);
+		struct bu_vls *pn = mged_display_pathname_vls(clp->cl_tie);
 		if (pn && bu_vls_strlen(pn)) {
 		    bu_vls_printf(&vls, "%s %s", bu_vls_cstr(&clp->cl_name), bu_vls_cstr(pn));
 		    Tcl_AppendElement(interpreter, bu_vls_cstr(&vls));
@@ -1970,7 +2062,7 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 
 	bu_vls_trunc(&vls, 0);
 	if (clp->cl_tie) {
-	    struct bu_vls *pn = dm_get_pathname(clp->cl_tie->dm_dmp);
+	    struct bu_vls *pn = mged_display_pathname_vls(clp->cl_tie);
 	    if (pn && bu_vls_strlen(pn)) {
 		bu_vls_printf(&vls, "%s %s", bu_vls_cstr(&clp->cl_name), bu_vls_cstr(pn));
 		Tcl_AppendElement(interpreter, bu_vls_cstr(&vls));
@@ -2011,18 +2103,18 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 
     if (uflag) {
 	if (clp->cl_tie)
-	    clp->cl_tie->dm_tie = (struct cmd_list *)NULL;
+	    clp->cl_tie->display_tie = (struct cmd_list *)NULL;
 
-	clp->cl_tie = (struct mged_dm *)NULL;
+	clp->cl_tie = (struct mged_display *)NULL;
 
 	bu_vls_free(&vls);
 	return TCL_OK;
     }
 
-    /* print out the display manager that we're tied to */
+    /* Print the graphics view associated with this command window. */
     if (argc == 2) {
 	if (clp->cl_tie) {
-	    struct bu_vls *pn = dm_get_pathname(clp->cl_tie->dm_dmp);
+	    struct bu_vls *pn = mged_display_pathname_vls(clp->cl_tie);
 	    if (pn && bu_vls_strlen(pn)) {
 		Tcl_AppendElement(interpreter, bu_vls_cstr(pn));
 	    }
@@ -2038,16 +2130,16 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
     else
 	bu_vls_strcpy(&vls, argv[2]);
 
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	struct bu_vls *pn = dm_get_pathname(m_dmp->dm_dmp);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	struct bu_vls *pn = mged_display_pathname_vls(m_dmp);
 	if (pn && !bu_vls_strcmp(&vls, pn)) {
 	    dlp = m_dmp;
 	    break;
 	}
     }
 
-    if (dlp == MGED_DM_NULL) {
+    if (dlp == MGED_DISPLAY_NULL) {
 	Tcl_AppendResult(interpreter, "f_tie: unrecognized path name - ",
 			 bu_vls_addr(&vls), "\n", (char *)NULL);
 	bu_vls_free(&vls);
@@ -2056,15 +2148,15 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 
     /* already tied */
     if (clp->cl_tie)
-	clp->cl_tie->dm_tie = (struct cmd_list *)NULL;
+	clp->cl_tie->display_tie = (struct cmd_list *)NULL;
 
     clp->cl_tie = dlp;
 
     /* already tied */
-    if (dlp->dm_tie)
-	dlp->dm_tie->cl_tie = (struct mged_dm *)NULL;
+    if (dlp->display_tie)
+	dlp->display_tie->cl_tie = (struct mged_display *)NULL;
 
-    dlp->dm_tie = clp;
+    dlp->display_tie = clp;
 
     bu_vls_free(&vls);
     return TCL_OK;
@@ -2074,9 +2166,6 @@ f_tie(ClientData UNUSED(clientData), Tcl_Interp *interpreter, int argc, const ch
 int
 f_postscript(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
 {
-    int status;
-    struct mged_dm *dml;
-    struct _view_state *vsp;
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
@@ -2092,32 +2181,21 @@ f_postscript(ClientData clientData, Tcl_Interp *interpreter, int argc, const cha
     if (s->gedp == GED_NULL)
 	return TCL_OK;
 
-    dml = s->mged_curr_dm;
-    s->gedp->ged_gvp = view_state->vs_gvp;
-    status = mged_attach(s, "postscript", argc, argv);
-    if (status == TCL_ERROR)
-	return TCL_ERROR;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
-    vsp = view_state;  /* save state info pointer */
+    /* The historical MGED command uses -c for creator, while the GED
+     * exporter uses -a so -c remains available for border color. */
+    char **ged_argv = bu_argv_dup((size_t)argc, argv);
+    for (int i = 1; i < argc; i++) {
+	if (ged_argv[i][0] == '-' && ged_argv[i][1] == 'c')
+	    ged_argv[i][1] = 'a';
+    }
 
-    bu_free((void *)menu_state, "f_postscript: menu_state");
-    menu_state = dml->dm_menu_state;
+    int status = ged_exec(s->gedp, argc, (const char **)ged_argv);
+    bu_argv_free((size_t)argc, ged_argv);
+    GED_OUTPUT;
 
-    scroll_top = dml->dm_scroll_top;
-    scroll_active = dml->dm_scroll_active;
-    scroll_y = dml->dm_scroll_y;
-    memmove((void *)scroll_array, (void *)dml->dm_scroll_array, sizeof(struct scroll_item *) * 6);
-
-    DMP_dirty = 1;
-    dm_set_dirty(DMP, 1);
-    refresh(s);
-
-    view_state = vsp;  /* restore state info pointer */
-    status = Tcl_Eval(interpreter, "release");
-    set_curr_dm(s, dml);
-    s->gedp->ged_gvp = view_state->vs_gvp;
-
-    return status;
+    return (status == BRLCAD_OK || (status & GED_HELP)) ? TCL_OK : TCL_ERROR;
 }
 
 
@@ -2139,7 +2217,7 @@ f_winset(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 
     /* print pathname of drawing window with primary focus */
     if (argc == 1) {
-	struct bu_vls *pn = dm_get_pathname(DMP);
+	struct bu_vls *pn = mged_display_pathname_vls(s->mged_curr_display);
 	if (pn && bu_vls_strlen(pn)) {
 	    Tcl_AppendResult(interpreter, bu_vls_cstr(pn), (char *)NULL);
 	}
@@ -2147,19 +2225,19 @@ f_winset(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     }
 
     /* change primary focus to window argv[1] */
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *p = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
-	struct bu_vls *pn = dm_get_pathname(p->dm_dmp);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *p = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	struct bu_vls *pn = mged_display_pathname_vls(p);
 	if (pn && BU_STR_EQUAL(argv[1], bu_vls_cstr(pn))) {
-	    set_curr_dm(s, p);
+	    mged_current_display_set(s, p);
 
-	    if (s->mged_curr_dm->dm_tie)
-		curr_cmd_list = s->mged_curr_dm->dm_tie;
+	    if (s->mged_curr_display->display_tie)
+		curr_cmd_list = s->mged_curr_display->display_tie;
 	    else
 		curr_cmd_list = &head_cmd_list;
 
 	    if (s->gedp != GED_NULL)
-		s->gedp->ged_gvp = view_state->vs_gvp;
+		ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
 	    return TCL_OK;
 	}
@@ -2174,7 +2252,6 @@ f_winset(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 void
 mged_global_variable_setup(struct mged_state *s)
 {
-    Tcl_LinkVar(s->interp, "mged_default(dlist)", (char *)&mged_default_dlist, TCL_LINK_INT);
     Tcl_LinkVar(s->interp, "mged_default(db_warn)", (char *)&mged_global_db_ctx.db_warn, TCL_LINK_INT);
     Tcl_LinkVar(s->interp, "mged_default(db_upgrade)", (char *)&mged_global_db_ctx.db_upgrade, TCL_LINK_INT);
     Tcl_LinkVar(s->interp, "mged_default(db_version)", (char *)&mged_global_db_ctx.db_version, TCL_LINK_INT);
@@ -2192,7 +2269,6 @@ mged_global_variable_setup(struct mged_state *s)
 void
 mged_global_variable_teardown(struct mged_state *s)
 {
-    Tcl_UnlinkVar(s->interp, "mged_default(dlist)");
     Tcl_UnlinkVar(s->interp, "mged_default(db_warn)");
     Tcl_UnlinkVar(s->interp, "mged_default(db_upgrade)");
     Tcl_UnlinkVar(s->interp, "mged_default(db_version)");
@@ -2408,8 +2484,8 @@ cmd_units(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *
     set_localunit_TclVar(s);
     sf = s->dbip->dbi_base2local / sf;
     update_grids(s,sf);
-    s->update_views = 1;
-    dm_set_dirty(DMP, 1);
+    mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_INTERACTION);
 
     return TCL_OK;
 }
@@ -2484,7 +2560,7 @@ cmd_tol(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *ar
 
 
 /* defined in chgview.c */
-extern int edit_com(struct mged_state *s, int argc, const char *argv[]);
+extern "C" int edit_com(struct mged_state *s, int argc, const char *argv[]);
 
 /**
  * Run ged_blast, then update the views
@@ -2507,36 +2583,23 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
 	return TCL_ERROR;
 
     /* update and resize the views */
-    struct mged_dm *save_m_dmp = s->mged_curr_dm;
+    struct mged_display *save_m_dmp = s->mged_curr_display;
     struct cmd_list *save_cmd_list = curr_cmd_list;
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    for (size_t di = 0; di < BU_PTBL_LEN(&active_dm_set); di++) {
-	struct mged_dm *m_dmp = (struct mged_dm *)BU_PTBL_GET(&active_dm_set, di);
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	int non_empty = 0; /* start out empty */
 
-	set_curr_dm(s, m_dmp);
+	mged_current_display_set(s, m_dmp);
 
-	if (s->mged_curr_dm->dm_tie) {
-	    curr_cmd_list = s->mged_curr_dm->dm_tie;
+	if (s->mged_curr_display->display_tie) {
+	    curr_cmd_list = s->mged_curr_display->display_tie;
 	} else {
 	    curr_cmd_list = &head_cmd_list;
 	}
 
-	s->gedp->ged_gvp = view_state->vs_gvp;
+	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
-	gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-
-	while (BU_LIST_NOT_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp))) {
-	    next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	    if (BU_LIST_NON_EMPTY(&gdlp->dl_head_scene_obj)) {
-		non_empty = 1;
-		break;
-	    }
-
-	    gdlp = next_gdlp;
-	}
+	non_empty = ged_draw_has_shapes(s->gedp);
 
 	if (mged_variables->mv_autosize && non_empty) {
 	    struct view_ring *vrp;
@@ -2546,14 +2609,14 @@ cmd_blast(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, cons
 	    (void)mged_svbase(s);
 
 	    for (BU_LIST_FOR(vrp, view_ring, &view_state->vs_headView.l)) {
-		vrp->vr_scale = view_state->vs_gvp->gv_scale;
+		vrp->vr_scale = bv_scale_get(mged_view_state_view(view_state));
 	    }
 	}
     }
 
-    set_curr_dm(s, save_m_dmp);
+    mged_current_display_set(s, save_m_dmp);
     curr_cmd_list = save_cmd_list;
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     return TCL_OK;
 }
@@ -2568,16 +2631,6 @@ cmd_draw(ClientData clientData, Tcl_Interp *UNUSED(interpreter), int argc, const
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-
-    struct bview *gvp = NULL;
-
-    if (s->gedp)
-	gvp = s->gedp->ged_gvp;
-
-    if (gvp && DMP) {
-	gvp->gv_width = dm_get_width(DMP);
-	gvp->gv_height = dm_get_height(DMP);
-    }
 
     return edit_com(s, argc, argv);
 }
@@ -2778,162 +2831,198 @@ struct _view_cache {
     int   valid;
 
     /* Scalars */
-    fastf_t gv_scale;
-    fastf_t gv_i_scale;
-    fastf_t gv_a_scale;
-    fastf_t gv_size;
-    fastf_t gv_isize;
-    fastf_t gv_perspective;
-    fastf_t gv_local2base;
-    fastf_t gv_base2local;
-    char    gv_coord;
-    char    gv_rotate_about;
+    fastf_t scale;
+    fastf_t initial_scale;
+    fastf_t absolute_scale;
+    fastf_t size;
+    fastf_t inverse_size;
+    fastf_t perspective;
+    fastf_t local2base;
+    fastf_t base2local;
+    char    coord;
+    char    rotate_about;
 
     /* Vectors */
-    vect_t gv_eye_pos;
-    vect_t gv_keypoint;
-    vect_t gv_aet;
+    vect_t eye_pos;
+    vect_t keypoint;
+    vect_t aet;
 
     /* Matrices */
-    mat_t gv_rotation;
-    mat_t gv_center;
-    mat_t gv_model2view;
-    mat_t gv_view2model;
-    mat_t gv_pmodel2view;
-    mat_t gv_pmat;
+    mat_t rotation;
+    mat_t center;
+    mat_t model2view;
+    mat_t view2model;
+    mat_t pmodel2view;
+    mat_t pmat;
 
     /* Knob state (optional) */
     int have_knobs;
-    struct bview_knobs k;
+    struct bv_knobs k;
 };
 
 static void
-_view_cache_save(struct _view_cache *c, struct bview *v, int include_knobs)
+_view_cache_save(struct _view_cache *c, void *v, int include_knobs)
 {
     if (!c || !v) return;
+    struct bv *view = mged_view_context_view(v);
+    if (!view) return;
     c->valid = 1;
 
-    c->gv_scale       = v->gv_scale;
-    c->gv_i_scale     = v->gv_i_scale;
-    c->gv_a_scale     = v->gv_a_scale;
-    c->gv_size        = v->gv_size;
-    c->gv_isize       = v->gv_isize;
-    c->gv_perspective = v->gv_perspective;
-    c->gv_local2base  = v->gv_local2base;
-    c->gv_base2local  = v->gv_base2local;
-    c->gv_coord       = v->gv_coord;
-    c->gv_rotate_about= v->gv_rotate_about;
+    c->scale       = bv_scale_get(view);
+    c->initial_scale = bv_initial_scale_get(view);
+    c->absolute_scale = bv_absolute_scale_get(view);
+    c->size        = bv_size_get(view);
+    c->inverse_size = bv_inverse_size_get(view);
+    c->perspective = bv_perspective_get(view);
+    c->local2base  = bv_local2base_get(view);
+    c->base2local  = bv_base2local_get(view);
+    c->coord       = bv_coord_get(view);
+    c->rotate_about= bv_rotate_about_get(view);
 
-    VMOVE(c->gv_eye_pos,  v->gv_eye_pos);
-    VMOVE(c->gv_keypoint, v->gv_keypoint);
-    VMOVE(c->gv_aet,      v->gv_aet);
+    bv_eye_pos_get(c->eye_pos, view);
+    bv_keypoint_get(c->keypoint, view);
+    bv_aet_get(c->aet, view);
 
-    MAT_COPY(c->gv_rotation,    v->gv_rotation);
-    MAT_COPY(c->gv_center,      v->gv_center);
-    MAT_COPY(c->gv_model2view,  v->gv_model2view);
-    MAT_COPY(c->gv_view2model,  v->gv_view2model);
-    MAT_COPY(c->gv_pmodel2view, v->gv_pmodel2view);
-    MAT_COPY(c->gv_pmat,        v->gv_pmat);
+    bv_rotation_get(c->rotation, view);
+    bv_center_mat_get(c->center, view);
+    bv_model2view_get(c->model2view, view);
+    bv_view2model_get(c->view2model, view);
+    bv_pmodel2view_get(c->pmodel2view, view);
+    bv_pmat_get(c->pmat, view);
 
     c->have_knobs = include_knobs;
     if (include_knobs) {
-	c->k = v->k;
+	c->k = view->knobs;
     }
 }
 
 static void
-_view_cache_restore(const struct _view_cache *c, struct bview *v)
+_view_cache_restore(const struct _view_cache *c, void *v)
 {
     if (!c || !v || !c->valid) return;
+    struct bv *view = mged_view_context_view(v);
+    if (!view) return;
 
-    v->gv_scale       = c->gv_scale;
-    v->gv_i_scale     = c->gv_i_scale;
-    v->gv_a_scale     = c->gv_a_scale;
-    v->gv_size        = c->gv_size;
-    v->gv_isize       = c->gv_isize;
-    v->gv_perspective = c->gv_perspective;
-    v->gv_local2base  = c->gv_local2base;
-    v->gv_base2local  = c->gv_base2local;
-    v->gv_coord       = c->gv_coord;
-    v->gv_rotate_about= c->gv_rotate_about;
+    bv_scale_state_set(view,
+	    c->scale, c->initial_scale, c->absolute_scale,
+	    c->size, c->inverse_size);
+    bv_unit_conversion_set(view, c->local2base, c->base2local);
+    bv_perspective_set(view, c->perspective);
+    bv_coord_set(view, c->coord);
+    bv_rotate_about_set(view, c->rotate_about);
 
-    VMOVE(v->gv_eye_pos,  c->gv_eye_pos);
-    VMOVE(v->gv_keypoint, c->gv_keypoint);
-    VMOVE(v->gv_aet,      c->gv_aet);
+    bv_eye_pos_set(view, c->eye_pos);
+    bv_keypoint_set(view, c->keypoint);
+    bv_aet_state_set(view, c->aet);
 
-    MAT_COPY(v->gv_rotation,    c->gv_rotation);
-    MAT_COPY(v->gv_center,      c->gv_center);
-    MAT_COPY(v->gv_model2view,  c->gv_model2view);
-    MAT_COPY(v->gv_view2model,  c->gv_view2model);
-    MAT_COPY(v->gv_pmodel2view, c->gv_pmodel2view);
-    MAT_COPY(v->gv_pmat,        c->gv_pmat);
+    bv_rotation_set(view, c->rotation);
+    point_t view_center;
+    MAT_DELTAS_GET_NEG(view_center, c->center);
+    bv_center_set(view, view_center);
+    bv_model2view_set(view, c->model2view);
+    bv_view2model_set(view, c->view2model);
+    bv_pmodel2view_set(view, c->pmodel2view);
+    bv_pmat_set(view, c->pmat);
 
     if (c->have_knobs) {
-	v->k = c->k;
+	view->knobs = c->k;
     }
 }
 
 static void
-_view_copy_to_staging(struct bview *dst, struct bview *src, struct mged_state *s, int include_knobs)
+_view_copy_to_staging(void *dst, void *src, struct mged_state *s, int include_knobs)
 {
     if (!dst || !src) return;
+    struct bv *dst_view = mged_view_context_view(dst);
+    struct bv *src_view = mged_view_context_view(src);
+    if (!dst_view || !src_view) return;
 
-    dst->gv_scale       = src->gv_scale;
-    dst->gv_i_scale     = src->gv_i_scale;
-    dst->gv_a_scale     = src->gv_a_scale;
-    dst->gv_size        = src->gv_size;
-    dst->gv_isize       = src->gv_isize;
-    dst->gv_coord       = src->gv_coord;
-    dst->gv_rotate_about= src->gv_rotate_about;
-    dst->gv_perspective = src->gv_perspective;
+    bv_scale_state_set(dst_view,
+	    bv_scale_get(src_view),
+	    bv_initial_scale_get(src_view),
+	    bv_absolute_scale_get(src_view),
+	    bv_size_get(src_view),
+	    bv_inverse_size_get(src_view));
+    bv_coord_set(dst_view, bv_coord_get(src_view));
+    bv_rotate_about_set(dst_view, bv_rotate_about_get(src_view));
+    bv_perspective_set(dst_view, bv_perspective_get(src_view));
 
     /* Update db unit conversions */
-    dst->gv_local2base = (s->dbip) ? s->dbip->dbi_local2base : 1.0;
-    dst->gv_base2local = (s->dbip) ? s->dbip->dbi_base2local : 1.0;
+    bv_unit_conversion_set(dst_view,
+	    (s->dbip) ? s->dbip->dbi_local2base : 1.0,
+	    (s->dbip) ? s->dbip->dbi_base2local : 1.0);
 
-    VMOVE(dst->gv_eye_pos,  src->gv_eye_pos);
-    VMOVE(dst->gv_keypoint, src->gv_keypoint);
-    VMOVE(dst->gv_aet,      src->gv_aet);
+    point_t view_point;
+    bv_eye_pos_get(view_point, src_view);
+    bv_eye_pos_set(dst_view, view_point);
+    bv_keypoint_get(view_point, src_view);
+    bv_keypoint_set(dst_view, view_point);
+    bv_aet_get(view_point, src_view);
+    bv_aet_state_set(dst_view, view_point);
 
-    MAT_COPY(dst->gv_rotation,    src->gv_rotation);
-    MAT_COPY(dst->gv_center,      src->gv_center);
-    MAT_COPY(dst->gv_model2view,  src->gv_model2view);
-    MAT_COPY(dst->gv_view2model,  src->gv_view2model);
-    MAT_COPY(dst->gv_pmodel2view, src->gv_pmodel2view);
-    MAT_COPY(dst->gv_pmat,        src->gv_pmat);
+    mat_t view_mat;
+    bv_rotation_get(view_mat, src_view);
+    bv_rotation_set(dst_view, view_mat);
+    bv_center_mat_get(view_mat, src_view);
+    MAT_DELTAS_GET_NEG(view_point, view_mat);
+    bv_center_set(dst_view, view_point);
+    bv_model2view_get(view_mat, src_view);
+    bv_model2view_set(dst_view, view_mat);
+    bv_view2model_get(view_mat, src_view);
+    bv_view2model_set(dst_view, view_mat);
+    bv_pmodel2view_get(view_mat, src_view);
+    bv_pmodel2view_set(dst_view, view_mat);
+    bv_pmat_get(view_mat, src_view);
+    bv_pmat_set(dst_view, view_mat);
 
     if (include_knobs) {
-	dst->k = src->k;
+	dst_view->knobs = src_view->knobs;
     }
 }
 
 static void
-_view_copy_from_staging(struct bview *dst, struct bview *src, int include_knobs)
+_view_copy_from_staging(void *dst, void *src, int include_knobs)
 {
     if (!dst || !src) return;
+    struct bv *dst_view = mged_view_context_view(dst);
+    struct bv *src_view = mged_view_context_view(src);
+    if (!dst_view || !src_view) return;
 
-    dst->gv_scale       = src->gv_scale;
-    dst->gv_i_scale     = src->gv_i_scale;
-    dst->gv_a_scale     = src->gv_a_scale;
-    dst->gv_size        = src->gv_size;
-    dst->gv_isize       = src->gv_isize;
-    dst->gv_coord       = src->gv_coord;
-    dst->gv_rotate_about= src->gv_rotate_about;
-    dst->gv_perspective = src->gv_perspective;
+    bv_scale_state_set(dst_view,
+	    bv_scale_get(src_view),
+	    bv_initial_scale_get(src_view),
+	    bv_absolute_scale_get(src_view),
+	    bv_size_get(src_view),
+	    bv_inverse_size_get(src_view));
+    bv_coord_set(dst_view, bv_coord_get(src_view));
+    bv_rotate_about_set(dst_view, bv_rotate_about_get(src_view));
+    bv_perspective_set(dst_view, bv_perspective_get(src_view));
 
-    VMOVE(dst->gv_eye_pos,  src->gv_eye_pos);
-    VMOVE(dst->gv_keypoint, src->gv_keypoint);
-    VMOVE(dst->gv_aet,      src->gv_aet);
+    point_t view_point;
+    bv_eye_pos_get(view_point, src_view);
+    bv_eye_pos_set(dst_view, view_point);
+    bv_keypoint_get(view_point, src_view);
+    bv_keypoint_set(dst_view, view_point);
+    bv_aet_get(view_point, src_view);
+    bv_aet_state_set(dst_view, view_point);
 
-    MAT_COPY(dst->gv_rotation,    src->gv_rotation);
-    MAT_COPY(dst->gv_center,      src->gv_center);
-    MAT_COPY(dst->gv_model2view,  src->gv_model2view);
-    MAT_COPY(dst->gv_view2model,  src->gv_view2model);
-    MAT_COPY(dst->gv_pmodel2view, src->gv_pmodel2view);
-    MAT_COPY(dst->gv_pmat,        src->gv_pmat);
+    mat_t view_mat;
+    bv_rotation_get(view_mat, src_view);
+    bv_rotation_set(dst_view, view_mat);
+    bv_center_mat_get(view_mat, src_view);
+    MAT_DELTAS_GET_NEG(view_point, view_mat);
+    bv_center_set(dst_view, view_point);
+    bv_model2view_get(view_mat, src_view);
+    bv_model2view_set(dst_view, view_mat);
+    bv_view2model_get(view_mat, src_view);
+    bv_view2model_set(dst_view, view_mat);
+    bv_pmodel2view_get(view_mat, src_view);
+    bv_pmodel2view_set(dst_view, view_mat);
+    bv_pmat_get(view_mat, src_view);
+    bv_pmat_set(dst_view, view_mat);
 
     if (include_knobs) {
-	dst->k = src->k;
+	dst_view->knobs = src_view->knobs;
     }
 }
 
@@ -2941,23 +3030,22 @@ static void
 _view_update_rate_flags_viewonly(struct mged_state *s)
 {
     /* Mirror legacy flag semantics (view path) */
-    /* NOTE: Assumes view_state->k already contains the up-to-date knob
-     * values copied from vs_gvp->k (done in cmd_view after a knob
-     * subcommand succeeds.) */
-    view_state->k.rot_v_flag = (!ZERO(view_state->k.rot_v[X]) ||
-				!ZERO(view_state->k.rot_v[Y]) ||
-				!ZERO(view_state->k.rot_v[Z])) ? 1 : 0;
-    view_state->k.tra_v_flag = (!ZERO(view_state->k.tra_v[X]) ||
-				!ZERO(view_state->k.tra_v[Y]) ||
-				!ZERO(view_state->k.tra_v[Z])) ? 1 : 0;
-    view_state->k.rot_m_flag = (!ZERO(view_state->k.rot_m[X]) ||
-				!ZERO(view_state->k.rot_m[Y]) ||
-				!ZERO(view_state->k.rot_m[Z])) ? 1 : 0;
-    view_state->k.tra_m_flag = (!ZERO(view_state->k.tra_m[X]) ||
-				!ZERO(view_state->k.tra_m[Y]) ||
-				!ZERO(view_state->k.tra_m[Z])) ? 1 : 0;
-    view_state->k.sca_flag = (!ZERO(view_state->k.sca)) ? 1 : 0;
-    view_state->vs_flag = 1;
+    /* NOTE: Assumes view_state->k already contains the up-to-date retained
+     * view knob values (done in cmd_view after a knob subcommand succeeds.) */
+    view_state->k.rot_view_active = (!ZERO(view_state->k.rot_view[X]) ||
+				!ZERO(view_state->k.rot_view[Y]) ||
+				!ZERO(view_state->k.rot_view[Z])) ? 1 : 0;
+    view_state->k.trans_view_active = (!ZERO(view_state->k.trans_view[X]) ||
+				!ZERO(view_state->k.trans_view[Y]) ||
+				!ZERO(view_state->k.trans_view[Z])) ? 1 : 0;
+    view_state->k.rot_model_active = (!ZERO(view_state->k.rot_model[X]) ||
+				!ZERO(view_state->k.rot_model[Y]) ||
+				!ZERO(view_state->k.rot_model[Z])) ? 1 : 0;
+    view_state->k.trans_model_active = (!ZERO(view_state->k.trans_model[X]) ||
+				!ZERO(view_state->k.trans_model[Y]) ||
+				!ZERO(view_state->k.trans_model[Z])) ? 1 : 0;
+    view_state->k.scale_rate_active = (!ZERO(view_state->k.scale_rate)) ? 1 : 0;
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
 }
 
 static void
@@ -2966,50 +3054,80 @@ _view_maybe_baseline_reset(struct mged_state *s, int do_reset)
     if (!s || !do_reset) return;
     (void)mged_svbase(s);
     /* After mged_svbase the canonical (legacy) source of truth is
-     * view_state->k. Keep vs_gvp->k in sync so a subsequent
-     * "view knob" sees the reset values. */
+     * view_state->k. Keep the retained view knob record in sync so a
+     * subsequent "view knob" sees the reset values. */
     if (view_state && view_state->vs_gvp)
-	view_state->vs_gvp->k = view_state->k;
+	mged_view_state_view(view_state)->knobs = view_state->k;
 }
 
 /* Calculate focused hash of a subset of the view to detect mutation of view
- * transform & knob state.  This deliberately ignores display list contents,
+ * transform & knob state.  This deliberately ignores draw-scene contents,
  * settings pointers, and unrelated UI fields to minimize false positives. */
 static unsigned long long
-_view_mutation_hash(struct mged_state *ms, struct bview *v)
+_view_mutation_hash(struct mged_state *ms, void *v)
 {
     if (!v) return 0ULL;
+    struct bv *view = mged_view_context_view(v);
+    if (!view) return 0ULL;
 
     struct bu_data_hash_state *state = bu_data_hash_create();
     if (!state) return 0ULL;
 
+    fastf_t view_scale = bv_scale_get(view);
+    fastf_t view_initial_scale = bv_initial_scale_get(view);
+    fastf_t view_absolute_scale = bv_absolute_scale_get(view);
+    fastf_t view_size = bv_size_get(view);
+    fastf_t view_isize = bv_inverse_size_get(view);
+    fastf_t view_perspective = bv_perspective_get(view);
+    mat_t view_center;
+    mat_t view_rotation;
+    mat_t model2view;
+    mat_t view2model;
+    mat_t pmodel2view;
+    mat_t pmat;
+    vect_t eye_pos;
+    vect_t keypoint;
+    vect_t aet;
+    char coord = bv_coord_get(view);
+    char rotate_about = bv_rotate_about_get(view);
+
+    bv_center_mat_get(view_center, view);
+    bv_rotation_get(view_rotation, view);
+    bv_model2view_get(model2view, view);
+    bv_view2model_get(view2model, view);
+    bv_pmodel2view_get(pmodel2view, view);
+    bv_pmat_get(pmat, view);
+    bv_eye_pos_get(eye_pos, view);
+    bv_keypoint_get(keypoint, view);
+    bv_aet_get(aet, view);
+
     /* Core scalar transforms */
-    bu_data_hash_update(state, &v->gv_scale, sizeof(v->gv_scale));
-    bu_data_hash_update(state, &v->gv_i_scale, sizeof(v->gv_i_scale));
-    bu_data_hash_update(state, &v->gv_a_scale, sizeof(v->gv_a_scale));
-    bu_data_hash_update(state, &v->gv_size, sizeof(v->gv_size));
-    bu_data_hash_update(state, &v->gv_isize, sizeof(v->gv_isize));
-    bu_data_hash_update(state, &v->gv_perspective, sizeof(v->gv_perspective));
+    bu_data_hash_update(state, &view_scale, sizeof(view_scale));
+    bu_data_hash_update(state, &view_initial_scale, sizeof(view_initial_scale));
+    bu_data_hash_update(state, &view_absolute_scale, sizeof(view_absolute_scale));
+    bu_data_hash_update(state, &view_size, sizeof(view_size));
+    bu_data_hash_update(state, &view_isize, sizeof(view_isize));
+    bu_data_hash_update(state, &view_perspective, sizeof(view_perspective));
 
     /* Orientation / position / projection related */
-    bu_data_hash_update(state, &v->gv_center, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_rotation, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_model2view, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_view2model, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_pmodel2view, sizeof(mat_t));
-    bu_data_hash_update(state, &v->gv_pmat, sizeof(mat_t));
+    bu_data_hash_update(state, &view_center, sizeof(mat_t));
+    bu_data_hash_update(state, &view_rotation, sizeof(mat_t));
+    bu_data_hash_update(state, &model2view, sizeof(mat_t));
+    bu_data_hash_update(state, &view2model, sizeof(mat_t));
+    bu_data_hash_update(state, &pmodel2view, sizeof(mat_t));
+    bu_data_hash_update(state, &pmat, sizeof(mat_t));
 
     /* Camera descriptive vectors */
-    bu_data_hash_update(state, &v->gv_eye_pos, sizeof(vect_t));
-    bu_data_hash_update(state, &v->gv_keypoint, sizeof(vect_t));
-    bu_data_hash_update(state, &v->gv_aet, sizeof(vect_t));
+    bu_data_hash_update(state, &eye_pos, sizeof(vect_t));
+    bu_data_hash_update(state, &keypoint, sizeof(vect_t));
+    bu_data_hash_update(state, &aet, sizeof(vect_t));
 
     /* Coordinate & rotate about modes */
-    bu_data_hash_update(state, &v->gv_coord, sizeof(char));
-    bu_data_hash_update(state, &v->gv_rotate_about, sizeof(char));
+    bu_data_hash_update(state, &coord, sizeof(char));
+    bu_data_hash_update(state, &rotate_about, sizeof(char));
 
     /* Knob state (rates + absolute values + flags + origins) */
-    bv_knobs_hash(&v->k, state);
+    bv_knobs_hash(&view->knobs, state);
 
     /*
      * If we are in an edit mode (solid or object) include the active edit
@@ -3032,7 +3150,7 @@ _view_mutation_hash(struct mged_state *ms, struct bview *v)
 	bu_data_hash_update(state, &e->acc_sc_obj, sizeof(e->acc_sc_obj));
 	bu_data_hash_update(state, &e->acc_sc, sizeof(e->acc_sc));
 	/* Edit knob state */
-	bv_knobs_hash(&e->k, state);
+	rt_edit_knobs_hash(&e->k, state);
     }
 
     unsigned long long hv = bu_data_hash_val(state);
@@ -3052,8 +3170,8 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     }
 
     if (argc < 2) {
-	if (!s->gedp->ged_gvp)
-	    s->gedp->ged_gvp = view_state->vs_gvp;
+	if (!ged_view_active_ctx(s->gedp))
+	    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	int ret = run_ged_async(s, [&]() -> int { return ged_exec_view(s->gedp, argc, (const char **)argv); });
 	GED_OUTPUT;
 	return (ret == BRLCAD_OK || (ret & GED_HELP)) ? TCL_OK : TCL_ERROR;
@@ -3062,29 +3180,30 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     const int is_knob = _view_is_knob(argc, argv);
     const int baseline_reset = _view_is_baseline_reset(argc, argv);
 
-    struct bview *mged_view = view_state->vs_gvp;
+    void *mged_view = view_state->vs_gvp;
 
     /* Determine staging context */
     int shared_view = 0;
     int created_temp = 0;
-    struct bview *staging = NULL;
+    void *staging = NULL;
 
-    if (s->gedp->ged_gvp) {
-	if (s->gedp->ged_gvp == mged_view) {
+    void *active_view = ged_view_active_ctx(s->gedp);
+    if (active_view) {
+	if (active_view == mged_view) {
 	    shared_view = 1;
-	    staging = s->gedp->ged_gvp;
+	    staging = active_view;
 	} else {
-	    staging = s->gedp->ged_gvp;
+	    staging = active_view;
 	}
     } else {
 	/* No existing ged_gvp: create ephemeral staging view */
-	staging = (struct bview *)bu_calloc(1, sizeof(struct bview), "temporary staging bview");
-	bv_init(staging, NULL);
+	staging = ged_view_context_create();
 	created_temp = 1;
 	/* Carry over dimensions for screen-dependent ops */
 	if (mged_view) {
-	    staging->gv_width  = mged_view->gv_width;
-	    staging->gv_height = mged_view->gv_height;
+	    struct bv *staging_view = mged_view_context_view(staging);
+	    struct bv *mged_bv = mged_view_context_view(mged_view);
+	    bv_dimensions_set(staging_view, bv_width_get(mged_bv), bv_height_get(mged_bv));
 	}
     }
 
@@ -3095,33 +3214,37 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     }
 
     /* Snapshot knob state for rollback on error (shared or distinct) */
-    struct bview_knobs pre_knob;
+    struct bv_knobs pre_knob;
     int have_pre_knob = 0;
     if (is_knob && mged_view) {
-	pre_knob = (shared_view ? mged_view->k : staging->k);
-	have_pre_knob = 1;
+	struct bv *knob_view = mged_view_context_view(shared_view ? mged_view : staging);
+	if (knob_view) {
+	    pre_knob = knob_view->knobs;
+	    have_pre_knob = 1;
+	}
     }
 
     if (!shared_view) {
 	_view_copy_to_staging(staging, mged_view, s, is_knob);
     } else {
 	/* Shared path: ensure conversions up to date */
-	staging->gv_local2base = (s->dbip) ? s->dbip->dbi_local2base : 1.0;
-	staging->gv_base2local = (s->dbip) ? s->dbip->dbi_base2local : 1.0;
+	bv_unit_conversion_set(mged_view_context_view(staging),
+		(s->dbip) ? s->dbip->dbi_local2base : 1.0,
+		(s->dbip) ? s->dbip->dbi_base2local : 1.0);
     }
 
-    /* For knob operations, ensure the staging (or shared) bview's knob struct
+    /* For knob operations, ensure the staging (or shared) retained view knob state
      * reflects the current MGED knob state (view_state->k).  This preserves
      * prior "knob ..." (MGED) adjustments when switching to "view knob ...".
      * (We already sync view knob results back into view_state->k after each
      * libged invocation, so this merge is one-way authoritative.) */
     if (is_knob && view_state && view_state->vs_gvp) {
-	staging->k = view_state->k;
+	mged_view_context_view(staging)->knobs = view_state->k;
     }
 
     /* Point ged at staging (if we created a temp or if distinct) */
     if (created_temp || !shared_view)
-	s->gedp->ged_gvp = staging;
+	ged_view_active_ctx_set(s->gedp, staging);
 
     /* Compute pre-mutation hash */
     unsigned long long pre_hash = _view_mutation_hash(s, staging);
@@ -3136,9 +3259,8 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    if (!created_temp)
 		_view_cache_restore(&prev, staging);
 	    else {
-		bv_free(staging);
-		bu_free(staging, "free staging bview");
-		s->gedp->ged_gvp = NULL;
+		ged_view_context_free(staging);
+		ged_view_active_ctx_set(s->gedp, NULL);
 	    }
 	}
 	return TCL_OK;
@@ -3148,20 +3270,19 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	/* Roll back knob state on error */
 	if (is_knob && have_pre_knob) {
 	    if (shared_view) {
-		mged_view->k = pre_knob;
-		view_state->k = mged_view->k;
+		mged_view_context_view(mged_view)->knobs = pre_knob;
+		view_state->k = pre_knob;
 		_view_update_rate_flags_viewonly(s);
 	    } else {
-		staging->k = pre_knob;
+		mged_view_context_view(staging)->knobs = pre_knob;
 	    }
 	}
 	if (!shared_view) {
 	    if (!created_temp) {
 		_view_cache_restore(&prev, staging);
 	    } else {
-		bv_free(staging);
-		bu_free(staging, "free staging bview");
-		s->gedp->ged_gvp = NULL;
+		ged_view_context_free(staging);
+		ged_view_active_ctx_set(s->gedp, NULL);
 	    }
 	}
 	return TCL_ERROR;
@@ -3170,13 +3291,13 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     /* Success: propagate staging->MGED if distinct */
     if (!shared_view) {
 	_view_copy_from_staging(mged_view, staging, is_knob);
-	view_state->vs_flag = 1;
+	mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     }
 
-    /* Copy updated vs_gvp->k into view_state->k immediately after a confirmed
-     * successful knob mutation, before any later operations that might exit. */
+    /* Copy updated retained-view knobs into view_state->k immediately after a
+     * confirmed successful knob mutation, before later operations can exit. */
     if (is_knob) {
-	view_state->k = view_state->vs_gvp->k;
+	view_state->k = mged_view_state_view(view_state)->knobs;
 	_view_update_rate_flags_viewonly(s);
     }
 
@@ -3198,9 +3319,8 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 	    }
 	} else {
 	    /* Ephemeral staging freed; detach from ged */
-	    bv_free(staging);
-	    bu_free(staging, "free staging bview");
-	    s->gedp->ged_gvp = NULL;
+	    ged_view_context_free(staging);
+	    ged_view_active_ctx_set(s->gedp, NULL);
 	}
     }
 
@@ -3208,7 +3328,10 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
 }
 
 
-} /* extern "C" -- all MGED C-linkage command functions */
+} /* extern "C" */
+
+
+
 
 
 /*

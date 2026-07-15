@@ -1,0 +1,303 @@
+Faceplate GUI notes
+===================
+
+Scope
+-----
+
+This note focuses on MGED's "Faceplate GUI" concept: the in-display menu and
+slider system used by MGED when faceplate and orig_gui are enabled.
+
+There are two related but distinct systems:
+
+* modern faceplate/HUD overlays: center dot, axes, scale, ADC, grid, interactive
+  rectangle, view parameters, framebuffer, and related display state;
+* MGED's older orig_gui layer: text menus, sliders, highlights, and hit testing
+  drawn inside the 3D display.
+
+The modern faceplate/HUD path is already moving toward toolkit-neutral state.
+The orig_gui system is the design candidate for a general toolkit-agnostic
+in-display menu/control layer.
+
+
+Modern faceplate/HUD state
+--------------------------
+
+Passive faceplate settings live in libbv view state.  libbrlobol realizes one
+retained feature per visible faceplate element:
+
+* center dot;
+* model axes;
+* view axes;
+* view scale;
+* ADC;
+* grid;
+* rubber-band/interactive rectangle;
+* view parameters;
+* framebuffer.
+
+Each Obol feature carries coordinate-space, overlay-role, lifecycle, and sort
+metadata.  The application host synchronizes view state and renders the Obol
+scene; there is no second HUD renderer.
+
+libged exposes command access through "view faceplate ..." subcommands.  The
+TclCAD wrapper in src/libtclcad/view/faceplate.c is now mostly a compatibility
+surface for Tcl-facing view state.
+
+libqtcad synchronizes faceplate features through
+qgcanvas_sync_obol_faceplate.  Current Obol coverage includes grid, model axes,
+view axes, ADC, labels, framebuffer presentation, and command overlays, with
+tests verifying node creation and removal.
+
+
+Current MGED Faceplate GUI / orig_gui model
+-------------------------------------------
+
+Relevant files:
+
+* src/mged/mged.h
+* src/mged/menu.h
+* src/mged/menu.c
+* src/mged/buttons.c
+* src/mged/titles.c
+* src/mged/scroll.c
+* src/mged/usepen.c
+* src/mged/display-command.c
+* src/mged/set.c
+* src/tclscripts/mged/openw.tcl
+* src/tclscripts/mged/color_scheme.tcl
+
+The core data structure is:
+
+    struct menu_item {
+        char *menu_string;
+        void (*menu_func)(struct mged_state *, int, int, int);
+        int menu_arg;
+    };
+
+MGED supports three active menu slots:
+
+* MENU_L1;
+* MENU_L2;
+* MENU_GEN.
+
+The menu layout is hard-coded in normalized display coordinates using constants
+such as MENUX, MENUY, MENUXLIM, MENU_DY, SCROLLY, and SCROLL_DY.  The menu
+system historically drew strings, separator lines, and highlights through
+immediate-mode 2D calls.  The current implementation must publish retained
+Obol HUD features instead.
+
+buttons.c defines top-level faceplate GUI menus, including:
+
+* "BUTTON MENU";
+* view preset actions;
+* accept/reject edit actions;
+* ADC toggle;
+* reset view size;
+* save/restore view;
+* sliders;
+* rate/absolute mode;
+* zoom;
+* primitive and matrix illuminate actions.
+
+menu.c defines many primitive and edit-specific menus, including ARB, TGC, TOR,
+ETO, ELL, spline, NMG, pipe, BoT, and other edit menus.  Menu callbacks mutate
+MGED edit state, such as MEDIT(s)->edit_flag and es_menu, and then call edit
+machinery such as sedit(s) or set_e_axes_pos(s, 1).
+
+scroll.c implements the parallel slider display and hit-testing logic.  titles.c
+draws faceplate framing, scroll areas, menu boundaries, state text, unit text,
+and selected path text.  usepen.c and display-command.c divert mouse input into menu
+or scroll hit-testing when both mv_faceplate and mv_orig_gui are enabled.
+
+src/tclscripts/mged/openw.tcl exposes checkbuttons for "Faceplate" and
+"Faceplate GUI".  It also defaults those settings off for Tk GUI display
+managers if they have not otherwise been set.  In C defaults, both mv_faceplate
+and mv_orig_gui are initially on.
+
+There is also a command-facing aspect: the MGED "press" command searches active
+menus by label and invokes the corresponding callback.  That means the menu is
+not purely mouse-only; it already has the seed of an action model, but the
+action identity is currently the visible string plus a C callback pointer.
+
+
+Current limitations
+-------------------
+
+The existing MGED Faceplate GUI is useful, but it is tightly bound to MGED:
+
+* menu entries are C function pointers taking struct mged_state;
+* menu identity is string-oriented rather than action-id-oriented;
+* layout is hard-coded to MGED's historical display coordinate conventions;
+* rendering is immediate-mode strings and lines rather than HUD scene nodes;
+* hit testing is embedded in MGED mouse input paths;
+* style, scaling, font behavior, and spacing are fixed and minimal;
+* there is little explicit representation of enabled, disabled, checked,
+  grouped, radio, destructive, or unavailable states;
+* accessibility, keyboard navigation, touch behavior, and high-DPI layout are
+  not modeled;
+* primitive edit menus are mixed with MGED-specific edit implementation details;
+* the system is not directly consumable by libqtcad or another viewer.
+
+
+Why the idea is worth keeping
+-----------------------------
+
+The basic idea is valuable: a display can expose a minimal graphical control
+surface even when the host application has no menus, panels, or full GUI.  That
+is useful for bare display-manager tests, embedded viewers, remote or minimal
+frontends, debugging, and workflows where a user wants view/edit controls
+without application chrome.
+
+The goal should not be to port MGED's exact menu layout into Qt.  The goal
+should be to preserve the capability as a small toolkit-neutral HUD
+menu/action/control system.
+
+
+Generalized design proposal
+---------------------------
+
+1. Define a HUD menu model.
+
+   A candidate home is bsg if this is considered display/HUD state, or libged if
+   the action model is strongly tied to GED commands.  A split may be best:
+   bsg owns visual menu/control nodes and hit testing; libged owns BRL-CAD
+   action descriptors.
+
+   The model should represent:
+
+   * menu/panel id;
+   * item id;
+   * stable action id;
+   * visible label;
+   * optional status/help text;
+   * item kind: command, toggle, radio, submenu, separator, heading, slider;
+   * enabled/disabled state;
+   * checked/unchecked state;
+   * grouping/radio group;
+   * optional accelerator or command alias;
+   * layout hints, but not fixed MGED coordinates.
+
+2. Render through the existing HUD path.
+
+   The visual menu should be expressed as HUD nodes or render requests, using
+   the same HUD pass that already draws faceplate features.  Backends should
+   only need to render text, highlight bands, separators, sliders, and simple
+   indicators.
+
+   This lets Tk, Qt, and future Obol hosts present the same model without
+   embedding MGED drawing code.
+
+3. Centralize hit testing.
+
+   A generic function should take a view plus screen/display coordinates and
+   return a menu hit result:
+
+   * no hit;
+   * item hover;
+   * item activate;
+   * slider drag;
+   * submenu request.
+
+   Applications can then decide whether to consume the event or pass it through
+   to normal view interaction.
+
+4. Decouple actions from C callbacks.
+
+   Instead of storing raw callbacks, menu items should resolve to action ids.
+   Those action ids can map to:
+
+   * libged commands;
+   * primitive edit operations;
+   * display-state operations;
+   * application-provided actions.
+
+   MGED can keep a compatibility adapter that maps existing menu_item arrays to
+   action descriptors while the old edit internals are being untangled.
+
+5. Integrate primitive editing with rt_edit descriptors.
+
+   The old primitive edit menus should eventually be generated from the same
+   rt_edit/libged edit descriptors used by Tcl/Tk and qged property panels.
+   That would keep in-HUD edit menus, native GUI panels, and command-line edit
+   help aligned.
+
+6. Improve layout and interaction.
+
+   Improvements that would make the feature feel less crude while preserving
+   its small footprint:
+
+   * DPI-aware sizing and font metrics;
+   * left, right, top, bottom, and radial placement modes;
+   * paging or scrolling for long edit menus;
+   * pointer hover and active-row highlighting;
+   * keyboard navigation;
+   * touch-friendly row sizing;
+   * checked/radio indicators for modes;
+   * disabled-state rendering for unavailable operations;
+   * optional compact icons where a backend can supply them;
+   * command/search palette behavior for large action sets;
+   * style hooks that can use existing BRL-CAD color schemes.
+
+7. Keep a bare-viewer mode.
+
+   The main value of the Faceplate GUI is that it can work when there is no
+   surrounding application chrome.  A generalized version should preserve that:
+   a display manager or viewer should be able to request a minimal built-in HUD
+   menu for view controls, edit controls, and diagnostics without linking a GUI
+   toolkit.
+
+
+Suggested migration path
+------------------------
+
+1. Document the current MGED menu arrays as data.
+
+   Generate or hand-maintain an inventory of first_menu, second_menu, sed_menu,
+   oed_menu, and primitive edit menus.  Identify which items correspond to
+   stable libged commands, which correspond to rt_edit operations, and which
+   still require MGED-only callbacks.
+
+2. Introduce a generic HUD menu data structure.
+
+   Start with labels, action ids, item kinds, enabled state, checked state, and
+   a simple vertical panel layout.  Do not attempt to replicate every historical
+   coordinate detail.
+
+3. Add a compatibility adapter for MGED.
+
+   Convert existing menu_item arrays into the generic menu model at runtime.
+   Initially, activation can still call old callbacks.  This isolates layout,
+   drawing, and hit testing from MGED-specific edit functions.
+
+4. Move drawing and hit testing to retained Obol HUD code.
+
+   Replace mmenu_display and scroll_display with retained or semi-retained HUD
+   menu render items.  Replace MGED-local coordinate hit testing with a generic
+   HUD hit-test result.
+
+5. Replace callbacks with action descriptors over time.
+
+   For display and view controls, map actions directly to libged commands or
+   bsg state changes.  For primitive editing, expose the edit operation through
+   rt_edit/libged descriptors, then map menu entries to those descriptors.
+
+6. Let libqtcad consume the same model.
+
+   Once the model is independent from MGED, Qt can decide whether to render it
+   as an in-canvas HUD menu, native menus, context menus, toolbars, or some
+   combination.  This is how the feature becomes toolkit-agnostic without
+   forcing every toolkit to mimic MGED's display exactly.
+
+
+Open design questions
+---------------------
+
+* Should the model live primarily in bsg, libged, or split between them?
+* Should HUD menu state be persisted per view, per application, or generated
+  fresh from current command/edit context?
+* How should action availability be computed for selected geometry and edit
+  modes?
+* Should sliders remain part of the same menu model or become a separate HUD
+  control model?
+* How much styling should be centralized versus left to each backend?
+* What compatibility promise is needed for the MGED press command?

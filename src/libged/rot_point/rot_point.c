@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 
 
@@ -42,6 +44,8 @@ ged_rot_point_core(struct ged *gedp, int argc, const char *argv[])
 
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+
+    void *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -85,7 +89,10 @@ ged_rot_point_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     /* Rotate the incoming point */
-    bn_mat_inv(invRot, gedp->ged_gvp->gv_rotation);
+    mat_t rotation;
+    bv_rotation_get(rotation,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
+    bn_mat_inv(invRot, rotation);
     MAT4X3PNT(rpoint, invRot, point);
     bn_encode_vect(gedp->ged_result_str, rpoint, 1);
 

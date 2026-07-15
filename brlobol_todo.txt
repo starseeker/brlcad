@@ -1,0 +1,280 @@
+BRL-CAD Obol Drawing: Remaining Work
+====================================
+
+Purpose
+-------
+
+This is the active backlog for completing the Obol/libbrlobol drawing
+migration.  It records only current architecture, verified baseline, open
+work, and release gates.  Detailed rationale belongs in `doc/notes/`; profile
+captures belong in `.build_perf/`; completed implementation history belongs in
+the source history.
+
+Architecture Invariants
+-----------------------
+
+* Obol is the only graphical scene and rendering path.  Do not add a libdm,
+  libbsg, OGL, WGL, or application-local scene fallback.
+* Each hosted GED view has one GED view context, display endpoint, Obol
+  controller, and factory-owned host identity.  Applications own native
+  windows and event loops, never parallel renderer or scene lifetimes.
+* libbrlobol owns BRL-CAD realization, retained drawing features, picking,
+  selection representation, edit previews, compact occurrences, view-local
+  LoD, and retained interactive rendering.  libbv is passive view state.
+* Qt and Tk hosts own native widgets/contexts and presentation only.  Endpoint
+  and host-factory code owns lifecycle, DPI/resize propagation, engine policy,
+  capture, framebuffer composition, progressive presentation, and shutdown.
+* The endpoint property registry is the only production renderer-policy
+  surface.  `dm get/set` may expose it while retained, but may not recreate
+  backend option tables or direct renderer state.
+* Explicit engine requests fail when unsupported; they never silently choose a
+  different engine.  FAST and QUALITY are software-wire policies, not engines.
+* Remove a compatibility adapter when its final caller moves.  Update the
+  caller inventory and its regression in the same change.
+
+Verified Baseline
+-----------------
+
+* MGED, TclCAD, QGED, GSH, rtwizard/Archer, standalone `rt`, and `fbserv` use
+  endpoint/host-factory and Obol/imgstream paths.  Production drawing no
+  longer creates a libdm scene, display-manager plugin, OGL/WGL context, or
+  application-owned duplicate controller.
+* Qt direct-GL and software hosts, Tk hardware and software hosts, headless
+  hosts, endpoint host replacement, framebuffer composition, capture, and
+  owner-thread presentation have targeted regression coverage.  Tk input uses
+  a host-unique bindtag bridge rather than an X11-only raw-event callback.
+* Obol owns normal drawing, faceplates, background, selection/picking, edit
+  preview, compact occurrence presentation, deferred LoD, ERT composition,
+  and framebuffer image placement.  GED selection APIs and Qt selection tools
+  use the common Obol query/pick path; they are not graphical fallbacks.
+* Deferred realization is bounded and cancellable.  Camera-only updates avoid
+  source realization/publication, ready final data can win before first draw,
+  and autoview remains active while dynamic scene bounds settle.
+* Software and system-GL endpoint policies are explicit.  `/dev/null` is the
+  raytrace-only performance sink: it allocates no imgstream image or pixel
+  buffer, initializes no presentation provider, and skips framebuffer I/O.
+* The retained librt engine snapshots geometry separately from camera and
+  appearance, runs only on workers, presents through an Obol image node, and
+  supports cancellation, deterministic final output, progressive rows, depth,
+  source identity, clipping, lighting, and transparent-source composition.
+* `libpkg` send state is per-call and IPC naming is atomic.  Parallel TCP/IPC
+  fbserv workers no longer race shared packet headers or close caller-owned
+  receive storage.
+
+Priority 0: Endpoint Completion
+-------------------------------
+
+1. Finish the hosted-application ownership matrix.
+
+   Audit QGED, MGED, GSH, rtwizard, Archer, standalone `rt`/`fbserv`, and
+   auxiliary windows.  For each hosted view, record its GED context, endpoint,
+   controller, host factory, input route, framebuffer stream, close path, and
+   regression in `doc/notes/obol_hosted_application_ownership.txt`.
+
+   Exit condition: every supported hosted view has exactly one identity at
+   each layer, and no graphical command can create a parallel scene or host.
+
+   Remaining evidence: auxiliary-view/reattach cases and complete application
+   workflows, especially where a tool opens or destroys a secondary view.
+
+2. Complete host-factory lifecycle and platform validation.
+
+   Exercise simultaneous hosts, resize/DPI, host replacement, capability
+   discovery, system-GL current-context ownership, OSMesa pixel presentation,
+   close during active render, framebuffer detach/reattach, and callback
+   thread affinity on every supported toolkit/platform combination.
+
+   Exit condition: close drains callbacks before endpoint/image-stream release;
+   two endpoints cannot exchange host, framebuffer, or input state; a failed
+   replacement leaves the live endpoint unchanged.
+
+   Remaining evidence: native Windows Tk/WGL worker delivery and a supported
+   macOS Tk host.  Xvfb coverage is necessary but not a platform substitute.
+
+3. Complete semantic input routing.
+
+   Endpoint profiles already handle canonical camera motion, wheel zoom,
+   fixed orientations, ADC/model/view-axis toggles, and shifted primary-pan
+   lifecycle.  The endpoint also supports a guarded, endpoint-local semantic
+   binding overlay with explicit handled/deferred/cancelled results.  QGED's
+   point, rectangle, and ray selection gestures use that route: the tool owns
+   its unmodified left-button policy while keyboard and modified navigation
+   remain on the default view profile.  The common Obol picker and snap query
+   provide typed results; applications retain selection/edit policy.
+
+   MGED active-mode motion now uses the same overlay for `dm am`, `dm adc`,
+   and `dm con`.  Its real Tk/X smoke proves the action is applied once and
+   legacy dispatch consumes that exact native event.  Remaining application
+   semantics include mode-specific press/release work, snap gestures beyond
+   view-only panning, framebuffer gestures, and broader faceplate actions.
+   Do not route a raw toolkit event through libbrlobol merely to rename it:
+   the contract must carry the semantic action and typed result while the
+   application retains policy.
+
+   Migrate one complete gesture at a time through Tcl/Tk and MGED, with a
+   real-host test proving handling, cancellation, repaint, and no duplicate
+   native binding.  Preserve keyboard-only profiles where an application still
+   owns pointer policy until that migration is complete.
+
+   Exit condition: every supported common gesture has one normalized endpoint
+   route and explicit application result handling; native code is only toolkit
+   adaptation or genuinely application-specific policy.
+
+4. Finish typed endpoint policy migration.
+
+   Inventory remaining drawing state and either make it a typed endpoint
+   property or classify it as passive view/application state.  Properties need
+   a stable name, type, range/enum, owner, mutability, capability predicate,
+   getter, setter, and explicit unsupported result.
+
+   Remaining policy work: image-composition edge cases, renderer-specific
+   diagnostics, and stereo.  Obol supports stereo rendering modes, but do not
+   expose `renderer.stereo.*` until a host requests a stereo-capable surface,
+   reports capability, proves mode-specific output/capture, and restores mono.
+   OSMesa must report unsupported stereo rather than silently fall back.
+
+   Exit condition: no production drawing option mutates backend state directly
+   and unknown, invalid, or unsupported properties fail explicitly.
+
+Priority 1: Rendering and Progressive Behavior
+-----------------------------------------------
+
+5. Stress and harden deferred/LoD realization.
+
+   Stress camera churn, edits, erase, database replacement/close, view
+   replacement, endpoint teardown, and substantially larger production
+   databases.  Workers must not touch attached Coin, GED, or toolkit state;
+   stale generations must not publish; queues, cache memory, application time,
+   and interactive-frame work must remain bounded.
+
+   Preserve the current semantics: final data wins if ready before first draw;
+   diagnostic runs may expose staged AABB/OBB/final progression; autoview
+   updates until dynamic bounds settle and stops after stabilization or a user
+   camera operation.
+
+   Exit condition: useful pixels precede outstanding full detail, camera-only
+   frames avoid source work, and interaction remains bounded throughout
+   refinement.
+
+6. Continue normal wireframe and shaded performance work.
+
+   Measure cold draw, first useful pixels, settled rotation/zoom, selection,
+   illumination, source updates, traversal, submission, OSMesa raster/readback,
+   and presentation for Havoc, Generic Twin, and a larger model.  Compare
+   system GL with both FAST and QUALITY OSMesa wire policies.
+
+   Prioritize retained buffers, batching/instancing, source deltas,
+   memory bounds, frustum/subpixel work, and unsupported-primitive handling.
+   Do not restore per-occurrence Coin carriers, synchronous per-part LoD,
+   mutable shared scene state, or GED redraw layers for a benchmark-only win.
+
+   Exit condition: whole-path large-model gains preserve deterministic output,
+   correct colors/materials, small-model interaction, and bounded memory.
+
+7. Finalize the render-engine contract.
+
+   Keep `auto`, `hw`, `sw`, `rt`, `none`, and diagnostic deterministic and
+   capability-reported for hosted and headless endpoints.  Retained interactive
+   RT is a distinct endpoint engine, not an ERT/libdm alias.  Verify explicit
+   rejection of unavailable engines and both FAST/QUALITY software policies.
+
+   Exit condition: all engines share the same endpoint, scene, capture,
+   framebuffer, and policy model without a renderer-specific scene path.
+
+8. Complete framebuffer separation.
+
+   Keep GUI presentation and fbserv endpoint/imgstream-backed.  Finish remote
+   authentication/TLS policy, exact pixel/view/cursor/capture/teardown cases,
+   detach/reattach behavior, and supported-platform tests.  Streams must be
+   GUI-independent and require no `struct dm` or display-manager plugin.
+
+   Exit condition: a stream can move between valid endpoint hosts without
+   stale capture providers, image nodes, listeners, or application-owned
+   rendering state.
+
+9. Finish residual graphical-compatibility retirement.
+
+   Re-run the production inventory for libdm calls, plugin loaders, callback
+   tables, direct faceplate renderers, and direct context setup in libtclcad,
+   MGED, QGED, rtwizard, Archer, RT tools, ART/ADRT, framebuffer utilities,
+   and image commands.  Keep an unrelated libdm API only with a named owner
+   and retirement plan.
+
+   Exit condition: production graphical code has one Obol-backed owner or is
+   deleted; compatibility shells are removed only after their final supported
+   caller and test have moved.
+
+Priority 2: Retained Interactive librt
+--------------------------------------
+
+10. Mature the retained RT engine.
+
+    Extend the current diffuse presentation model into a deliberate material
+    and lighting model using retained source/primitive metadata.  Preserve the
+    opaque fast path, deterministic final images, worker-only librt access,
+    camera/appearance versus geometry revision separation, typed output planes,
+    and front-to-back transparent composition.
+
+    Validate live QGED and MGED interaction: camera motion must cancel stale
+    work, frame-budgeted preview/final cadence must remain usable, unchanged
+    geometry must stay retained, and RT composition must match endpoint
+    background/faceplate/framebuffer semantics.
+
+    Exit condition: QGED and MGED use the time-budgeted RT path interactively;
+    retained final images are deterministic; required material, picking, and
+    composition data is available without a legacy renderer path.
+
+Priority 2: Supported-Matrix Validation
+----------------------------------------
+
+11. Validate applications and platforms.
+
+    Exercise QGED, MGED, GSH, rtwizard, and Archer with hardware and software
+    endpoints, then retained RT.  Cover multiple views, resize/DPI,
+    background/faceplate composition, input, selection, editing, screengrab,
+    framebuffer placement, ERT, close, and database replacement on native
+    X11, Windows, and macOS.
+
+    Exit condition: each supported application/platform combination has a
+    documented runnable matrix and failures are fixed in Obol/libbrlobol hosts,
+    not by reviving a legacy drawing path.
+
+Release Prerequisites
+---------------------
+
+* Publish the local Obol and BEXT commits pinned by BRL-CAD before publishing
+  this branch.  The BRL-CAD pin must remain cloneable without a developer-local
+  source path.
+* Reconfigure a clean headless BRL-CAD tree against the staged package after
+  those commits are available remotely.  `rt` and `fbserv` must build without
+  UI-library linkage; visible targets must reject explicitly when no provider
+  exists; `/dev/null` must render without presentation.
+* Re-run the caller inventory and pivot guard after every compatibility
+  deletion.  Do not classify a skipped display test as a product pass.
+
+Verification Gates
+------------------
+
+Run focused checks before a broad suite:
+
+* `ninja -C .build test_brlobol_prototype test_brlobol_window_host`
+* `ctest --test-dir .build --output-on-failure -R '^libbrlobol_'`
+* `ctest --test-dir .build --output-on-failure -R '^(rt_null_sink|(rt|fbserv)_display_)'`
+* `ctest --test-dir .build --output-on-failure -R '^(ged_test_obol_draw_sync|ged_test_mged_view_state|ged_test_drawing_basic)$'`
+* `ctest --test-dir .build --output-on-failure -R '^(tclcad_test_(tkobol_widget_smoke|archer_obol_smoke)|test_qged_obol_fbserv|regress-qged-ert|gsh_obol_(smoke|ert_smoke|progressive_lod)|mged_obol_(smoke|ert_smoke|progressive_lod))$'`
+* `ctest --test-dir .build --output-on-failure -R '^test_qtcad_obol_'`
+
+Run TCP/IPC fbserv and pkg tests outside a network-restricted sandbox.  Slow
+progressive-LoD and large-database tests are opt-in or resource-gated; record
+their hardware and memory requirements instead of treating an unavailable
+resource as a drawing regression.  Large-model profiling belongs in
+`.build_perf/`, outside routine correctness gates.
+
+Completion Standard
+-------------------
+
+The migration is complete only when every supported hosted view uses the one
+Obol scene/endpoint model; normal drawing, interaction, LoD, editing, capture,
+and framebuffer streaming need neither libbsg nor libdm; explicit hardware,
+software, and RT engines share one scene and policy model; and no fallback
+creates legacy scene or display state.

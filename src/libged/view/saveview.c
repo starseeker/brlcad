@@ -33,8 +33,10 @@
 #include "bu/file.h"
 #include "bu/getopt.h"
 
+#include "bv.h"
 
 #include "../ged_private.h"
+#include "ged/draw.h"
 
 
 /**
@@ -69,20 +71,41 @@ basename_without_suffix(const char *p1, const char *suff)
 }
 
 
+static void
+saveview_write_draw_paths(struct ged *gedp, void *view_ctx, FILE *fp)
+{
+    struct bu_vls paths = BU_VLS_INIT_ZERO;
+    ged_draw_list_paths(gedp, view_ctx, -1, 0, &paths);
+
+    const char *path = bu_vls_cstr(&paths);
+    while (path && *path) {
+	const char *nl = strchr(path, '\n');
+	size_t len = nl ? (size_t)(nl - path) : strlen(path);
+	if (len > 0)
+	    fprintf(fp, "'%.*s' ", (int)len, path);
+	if (!nl)
+	    break;
+	path = nl + 1;
+    }
+
+    bu_vls_free(&paths);
+}
+
+
 int
 ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
 {
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
     int i;
     FILE *fp;
     char *base;
     int c;
+    fastf_t perspective;
     char rtcmd[255] = {'r', 't', 0};
     char outlog[255] = {0};
     char outpix[255] = {0};
     char inputg[255] = {0};
     const char *cmdname = argv[0];
+    void *view_ctx;
     static const char *usage = "[-e] [-i] [-l] [-o] filename [args]";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
@@ -154,11 +177,13 @@ ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
     if (outlog[0] == '\0') {
 	snprintf(outlog, 255, "%s.log", base);
     }
+    view_ctx = ged_view_active_ctx(gedp);
+    perspective = bv_perspective_get(bv_context_view_const((const struct bv_context *)view_ctx));
 
     /* Do not specify -v option to rt; batch jobs must print everything. -Mike */
     fprintf(fp, "#!/bin/sh\n%s -M ", rtcmd);
-    if (gedp->ged_gvp->gv_perspective > 0)
-	fprintf(fp, "-p%g ", gedp->ged_gvp->gv_perspective);
+    if (perspective > 0)
+	fprintf(fp, "-p%g ", perspective);
     for (i = 2; i < argc; i++)
 	fprintf(fp, "%s ", argv[i]);
 
@@ -170,12 +195,8 @@ ged_saveview_core(struct ged *gedp, int argc, const char *argv[])
     }
     fprintf(fp, " '%s'\\\n ", inputg);
 
-    gdlp = BU_LIST_NEXT(display_list, gedp->i->ged_gdp->gd_headDisplay);
-    while (BU_LIST_NOT_HEAD(gdlp, gedp->i->ged_gdp->gd_headDisplay)) {
-	next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-	fprintf(fp, "'%s' ", bu_vls_addr(&gdlp->dl_path));
-	gdlp = next_gdlp;
-    }
+    /* Write out exportable draw source paths. */
+    saveview_write_draw_paths(gedp, view_ctx, fp);
 
     fprintf(fp, "\\\n 2>> %s\\\n", outlog);
     fprintf(fp, " <<EOF\n");

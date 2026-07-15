@@ -52,7 +52,6 @@ INPUT += \"${CMAKE_SOURCE_DIR}/include/bsocket.h\""
     libbu
     libbn
     libbg
-    libbv
     libnmg
     libbrep
     libfft
@@ -64,7 +63,6 @@ INPUT += \"${CMAKE_SOURCE_DIR}/include/bsocket.h\""
     libgcv
     libanalyze
     libged
-    libdm
     libtclcad
     libpkg
   )
@@ -235,9 +233,6 @@ set(
   libbn.dox
   libbrep.dox
   libbu.dox
-  libbv.dox
-  libdm.dox
-  libdm.dox
   libfft.dox
   libgcv.dox
   libged.dox

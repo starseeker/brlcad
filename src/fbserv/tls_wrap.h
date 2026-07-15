@@ -40,14 +40,15 @@
  * Client programs (if_remote.c) act as TLS *clients*: they connect to
  * fbserv and perform the client-side handshake.  Certificate verification
  * is disabled on the client because there is no shared CA — the session
- * token (see auth.h) provides application-level authentication instead.
+ * token (see imgstream/fbserv.h) provides application-level authentication
+ * instead.
  *
  * SECURITY MODEL
  * --------------
  *  - All framebuffer data, pixel writes, and protocol commands are
  *    encrypted in transit (TLS 1.2 or TLS 1.3, negotiated by OpenSSL).
- *  - The session token (from auth.h) prevents a rogue client from
- *    joining a session, even if it can establish a TLS connection.
+ *  - The session token (from imgstream/fbserv.h) prevents a rogue client
+ *    from joining a session, even if it can establish a TLS connection.
  *  - The cert/key can be overridden via FBSERV_TLS_CERT / FBSERV_TLS_KEY
  *    environment variables.
  *
@@ -316,7 +317,7 @@ fbserv_tls_accept(SSL_CTX *ctx, struct pkg_conn *pc)
  * Create an SSL_CTX for the fbserv *client* side.  Certificate
  * verification is disabled because the server uses a self-signed cert;
  * application-level authentication is provided by the session token
- * (auth.h).
+ * (see imgstream/fbserv.h).
  *
  * Returns a new SSL_CTX on success, NULL on failure.
  */
