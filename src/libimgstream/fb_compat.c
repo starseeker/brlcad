@@ -22,6 +22,7 @@
 #include "common.h"
 
 #include <limits.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -960,6 +961,9 @@ imgstream_fb_open(const char *spec, size_t width, size_t height)
 	IMGSTREAM_FB_REMOTE_OPTIONS_INIT;
     remote_options.auth_token = getenv(FBSERV_AUTH_TOKEN_ENVVAR);
     remote_options.use_tls = getenv("FBSERV_TLS") ? 1 : 0;
+    remote_options.tls_server_sha256 =
+	getenv(FBSERV_TLS_SERVER_SHA256_ENVVAR);
+    remote_options.allow_insecure = getenv(FBSERV_INSECURE_ENVVAR) ? 1 : 0;
     return fb_open_single(spec, width, height, NULL, NULL, &remote_options);
 }
 
@@ -969,7 +973,9 @@ imgstream_fb_open_remote(const char *spec, size_t width, size_t height,
 	const struct imgstream_fb_remote_options *options)
 {
     if (imgstream_fb_spec_kind(spec) != IMGSTREAM_FB_SPEC_REMOTE ||
-	!options || options->struct_size < sizeof(*options))
+	!options || options->struct_size <
+	offsetof(struct imgstream_fb_remote_options, use_tls) +
+	sizeof(options->use_tls))
 	return NULL;
     return fb_open_single(spec, width, height, NULL, NULL, options);
 }

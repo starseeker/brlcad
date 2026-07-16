@@ -27,7 +27,8 @@ struct BRLObolFramebufferStreamPrivate {
 	fb(NULL),
 	width(0),
 	height(0),
-	spec("/dev/mem")
+	spec("/dev/mem"),
+	composition(BRLOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY)
     {
     }
 
@@ -36,6 +37,7 @@ struct BRLObolFramebufferStreamPrivate {
     int width;
     int height;
     std::string spec;
+    BRLObolFramebufferComposition composition;
 };
 
 BRLObolFramebufferStream::BRLObolFramebufferStream(BRLObolWindowHost *host) :
@@ -54,23 +56,74 @@ BRLObolFramebufferStream::~BRLObolFramebufferStream(void)
     this->p = NULL;
 }
 
-void
+int
 BRLObolFramebufferStream::setHost(BRLObolWindowHost *host)
 {
+    return this->setHost(host, this->p->composition);
+}
+
+int
+BRLObolFramebufferStream::setHost(BRLObolWindowHost *host,
+	BRLObolFramebufferComposition composition)
+{
+    if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	return -1;
     if (this->p->host == host)
-	return;
-    this->close();
-    if (this->p->host)
-	this->p->host->unregisterFramebufferStream(this);
+	return this->setComposition(composition);
+
+    BRLObolWindowHost *old_host = this->p->host;
+    if (this->p->fb && host) {
+	imgstream_fb_spec_info_t info;
+	imgstream_fb_spec_info_t *ip = NULL;
+	if (imgstream_fb_spec_info(this->p->spec.c_str(), &info) == 0)
+	    ip = &info;
+	/* Attach first: a failed replacement must leave the live host and its
+	 * retained image nodes untouched. */
+	if (host->openFramebuffer(this->p->fb, ip) != 0)
+	    return -1;
+	if (host->setFramebufferComposition(this->p->fb, composition) != 0) {
+	    host->closeFramebuffer(this->p->fb);
+	    return -1;
+	}
+    }
+
+    if (old_host && this->p->fb)
+	old_host->closeFramebuffer(this->p->fb);
+    if (old_host)
+	old_host->unregisterFramebufferStream(this);
     this->p->host = host;
+    this->p->composition = composition;
     if (host)
 	host->registerFramebufferStream(this);
+    return 0;
 }
 
 BRLObolWindowHost *
 BRLObolFramebufferStream::host(void) const
 {
     return this->p->host;
+}
+
+int
+BRLObolFramebufferStream::setComposition(
+	BRLObolFramebufferComposition composition)
+{
+    if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	return -1;
+    if (this->p->fb && this->p->host &&
+	this->p->host->setFramebufferComposition(this->p->fb,
+	    composition) != 0)
+	return -1;
+    this->p->composition = composition;
+    return 0;
+}
+
+BRLObolFramebufferComposition
+BRLObolFramebufferStream::composition(void) const
+{
+    return this->p->composition;
 }
 
 void
@@ -117,6 +170,13 @@ BRLObolFramebufferStream::ensure(void)
 	ip = &info;
 
     if (this->p->host->openFramebuffer(fb, ip) != 0) {
+	imgstream_fb_close(fb);
+	return -1;
+    }
+
+    if (this->p->host->setFramebufferComposition(fb,
+	    this->p->composition) != 0) {
+	this->p->host->closeFramebuffer(fb);
 	imgstream_fb_close(fb);
 	return -1;
     }

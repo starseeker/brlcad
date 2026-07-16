@@ -5735,8 +5735,6 @@ toggle_perspective – used to toggle among the four canned perspective angles (
 
 nmg_eu_dist – when the _-u_ option to the <<ev,ev>> command is used, the NMG edgeuses are drawn this distance (mm) away from the actual edge.
 
-eye_sep_dist – if greater than zero, this is the eye separation distance (mm) for stereo viewing; otherwise, stereo is off.
-
 union_op – not currently used.
 
 intersection_op – not currently used.

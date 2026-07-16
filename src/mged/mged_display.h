@@ -125,7 +125,6 @@ struct _mged_variables {
     int		mv_perspective_mode;		/* used to toggle perspective viewing on/off */
     int		mv_toggle_perspective;		/* used to toggle through values in perspective_table[] */
     double	mv_nmg_eu_dist;
-    double	mv_eye_sep_dist;		/* >0 implies stereo.  units = "room" mm */
     char	mv_union_lexeme[1024];
     char	mv_intersection_lexeme[1024];
     char	mv_difference_lexeme[1024];
@@ -305,7 +304,6 @@ struct mged_display {
     unsigned long	display_input_motion_timestamp;
     int			display_input_motion_x;
     int			display_input_motion_y;
-    int			display_input_snap_pan_active;
 
     int			repaint_pending;		/* true if this display needs another paint */
     unsigned int	repaint_reasons;		/* audit-only mged_repaint_reason flags */
@@ -608,7 +606,9 @@ extern int doEvent(ClientData, void *);
 /* defined in attach.c */
 extern void mged_display_var_init(struct mged_state *s,
 	struct mged_display *target_display);
-extern void mged_obol_input_semantic_mode_sync(struct mged_state *s);
+extern void mged_obol_input_action_layer_sync(struct mged_state *s);
+extern void mged_obol_input_action_layers_sync(struct mged_state *s,
+	struct _mged_variables *variables);
 
 /* defined in display-command.c */
 extern int mged_display_command_common(struct mged_state *s, int argc, const char *argv[]);

@@ -26,13 +26,29 @@ QGED
   endpoint's host for the one session Obol/imgstream stream.  QGED owns only
   TCP/IPC notifier delivery and repaint scheduling through its
   `qged_fbserv_*` adapter, not a framebuffer host or controller.  An active-pane
-  switch moves the retained image layer to the new host; QGED clears its
-  non-owning notifier target before GED destroys fbserv.
+  switch transactionally attaches the same imgstream framebuffer to the new
+  host and applies its requested composition before detaching the old retained
+  image layer; pixels, view, cursor, composition, and stream identity survive
+  the move.  A rejected attachment or composition leaves the old image and
+  capture owner live.  QGED clears its non-owning notifier target before
+  GED destroys fbserv.
   `QgView` detaches that endpoint from GED before destruction.
+  Its optional TCP notifier is constrained to IPv4 loopback; external service
+  is intentionally delegated to standalone fbserv's authenticated TLS path.
+  Selection tools install one guarded endpoint action layer containing their
+  local bindings and handler; libbrlobol routes by layer provenance and does
+  not define or interpret QGED action identifiers.  An explicit unhandled
+  result falls through to the matching standard view action.
 * Evidence: `test_qtcad_obol_window_host`, controller, draw synchronization,
   real-model, framebuffer, and progressive-LoD tests.  The framebuffer test
   moves a live stream between two Qt software endpoints, verifies old retained
-  image removal, new-host physical sizing, and new-pixel presentation.
+  image removal, new-host physical sizing, and new-pixel presentation.  The
+  libbrlobol window-host regression independently verifies same-identity
+  rehost, pixel/view/cursor/composition preservation, attachment- and
+  composition-rejected target rollback, explicit detach/reattach, and recovery
+  after host destruction.  The QGED framebuffer regression also verifies that
+  a live composition-property rejection reports unsupported and restores both
+  its passive BV value and retained image layer.
   `regress-qged-ert`
   owns an isolated Xvfb server and verifies the software endpoint launches
   ERT through IPC at the laid-out canvas size, completes, and leaves QGED
@@ -56,13 +72,42 @@ MGED
   endpoint actions before application bindings; the bridge is shared by X11
   and WGL rather than relying on an Xlib-only callback.  Framebuffer
   composition is endpoint-based.  detach clears the endpoint association
-  before the host is released.
+  before the host is released.  MGED/TclCAD TCP listeners are likewise
+  loopback-only, and libpkg now honors that requested bind interface rather
+  than exposing the embedded listener on all interfaces.  Child renderers
+  normally use the locally trusted IPC route.
 * Evidence: headless MGED smoke, ERT, and progressive-LoD tests.  The
   isolated-X `mged_tkobol_attach_smoke` opens a direct hardware Tk endpoint,
   verifies its physical resize, drives a shifted primary-pan gesture at the
-  child widget, captures a frame, and releases the host.  This is usable-X11
-  lifecycle coverage.  The same Tk bridge is compiled for WGL but still needs
-  native Windows validation; macOS needs a supported Tk host and validation.
+  child widget through MGED's application-owned shift-primary action layer,
+  including snapped
+  view motion, and drives control-primary rotation and shift-control-primary
+  scale through the same typed begin/motion/cancel contract.  MGED defines
+  these action tokens locally; libbrlobol owns only normalization, matching,
+  and typed-result transport.  The smoke verifies that
+  exact native bindings no longer duplicate these gestures, then exercises
+  representative axis-constrained translate, rotate, and scale lifecycles.
+  ADC transform mode uses a separate MGED-owned action layer selected from
+  authoritative visibility and transform state; the smoke exercises direct
+  translation, angle, and distance plus their constrained variants, including
+  cancellation and duplicate-binding checks.  The same application layer owns
+  MGED's edit-axes, perspective-mode/cycle, whole-faceplate visibility, and
+  faceplate-GUI policy shortcuts and keeps those application-only tokens out
+  of libbrlobol.  The Tk and Qt adapters normalize F3/F6/F7/F8 to the same
+  toolkit-neutral key values; MGED removes the raw Tcl bindings so one
+  physical key press applies each policy exactly once.  The same layer now
+  owns the unmodified middle-button `dm m` lifecycle, including snapped
+  center/edit and mode-specific pick/query/rectangle policy, rubber-band
+  motion, and release.  Unmodified left/right zoom are MGED-local one-shot
+  actions.  Toolkit-neutral modifier identities and focus events cancel an
+  active gesture without retaining the raw Tcl key-release commands.  The
+  isolated-X smoke checks zoom-rectangle completion, post-release,
+  modifier-release, and focus-loss cancellation, and verifies the migrated
+  native bindings are inert.
+  It captures a frame and releases the host.
+  This is usable-X11 lifecycle coverage.  The same Tk bridge is compiled for
+  WGL but still needs native Windows validation; macOS needs a supported Tk
+  host and validation.
 
 GSH
 ---
@@ -87,17 +132,35 @@ Standalone rt and fbserv
   work.
 * fbserv: its existing service loop polls the same session while transport
   writes request presentation.  It has no second window, controller, or
-  framebuffer host.
+  framebuffer host.  TCP is loopback-only by default.  Explicit `-R` remote
+  access requires strict session-token authentication and TLS; clients pin
+  the printed SHA-256 certificate fingerprint before sending the token.
+  `-R -u`/`FBSERV_INSECURE` are named compatibility opt-outs rather than an
+  accidental public listener.
 * Headless diagnostics: `/dev/null` is not a display session.  It allocates
   no imgstream image or pixel buffer, initializes no provider, and discards
   framebuffer writes while retaining dimensions and compatibility metadata.
   `rt` also gates its framebuffer I/O for this sink.
+  This image-stream sink is separate from the endpoint `diagnostic` engine.
+  An endpoint in diagnostic mode retains and traverses its existing scene but
+  disables its controller's graphical root, host frame notifications, and
+  composite capture.  Its typed diagnostic properties report traversal
+  revision, source realization counts, progressive state, and scene bounds.
+  The `none` engine uses the same graphical suppression without traversal;
+  both leave the independent framebuffer capture plane available.
 * Close: visible sessions close the imgstream framebuffer, endpoint, then
   provider host.  Non-display targets close their imgstream framebuffer
   directly.
 * Evidence: `rt_null_sink` runs `rt -F /dev/null` with display variables
   unset.  `rt_display_swrast`, `rt_display_ogl`, `fbserv_display_swrast`, and
   `fbserv_display_ogl` cover the visible Qt provider paths under Xvfb.
+  `imgstream_fbserv_auth_test` verifies loopback listener binding,
+  fail-closed secure-remote state, token format, and TLS fingerprint creation;
+  `imgstream_fbserv_tls_test` verifies wrong-pin rejection and a correct-pin,
+  authenticated pixel exchange through the production TLS server and remote
+  client.  The lifecycle and parallel TCP/IPC regressions verify strict
+  authentication, packet fragmentation, shutdown, and concurrent local
+  sessions.
 
 Tcl Ged, Archer, and rtwizard
 -----------------------------

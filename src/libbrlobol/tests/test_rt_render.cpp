@@ -9,9 +9,11 @@
 
 #include "brlobol/init.h"
 #include "brlobol/display_endpoint.h"
+#include "brlobol/framebuffer.h"
 #include "brlobol/rt_render.h"
 #include "brlobol/view_controller.h"
 #include "brlobol/viewport_image.h"
+#include "brlobol/window_host.h"
 
 #include "bu/app.h"
 #include "bu/file.h"
@@ -21,7 +23,11 @@
 #include "wdb.h"
 
 #include <Inventor/nodes/SoOrthographicCamera.h>
+#include <Inventor/nodes/SoDirectionalLight.h>
+#include <Inventor/nodes/SoPointLight.h>
 #include <Inventor/nodes/SoSeparator.h>
+#include <Inventor/nodes/SoSpotLight.h>
+#include <Inventor/nodes/SoTranslation.h>
 #include <Inventor/SbMatrix.h>
 
 #include <algorithm>
@@ -43,9 +49,21 @@ make_fixture(const char *path)
 	return 0;
     point_t center = VINIT_ZERO;
     point_t back_center = VINIT_ZERO;
+    point_t target_center = VINIT_ZERO;
     back_center[Z] = -3.0;
-    const int ret = mk_sph(wdbp, "ball.s", center, 2.0) == 0 &&
-	mk_sph(wdbp, "back.s", back_center, 2.0) == 0 ? 0 : -1;
+    target_center[Z] = -5.0;
+    int ret = mk_sph(wdbp, "ball.s", center, 2.0) == 0 &&
+	mk_sph(wdbp, "back.s", back_center, 2.0) == 0 &&
+	mk_sph(wdbp, "target.s", target_center, 1.25) == 0 ? 0 : -1;
+    if (ret == 0) {
+	struct wmember region;
+	BU_LIST_INIT(&region.l);
+	unsigned char red[3] = {255, 0, 0};
+	if (!mk_addmember("ball.s", &region.l, NULL, WMOP_UNION) ||
+	    mk_lrcomb(wdbp, "ball.r", &region, 1, "plastic",
+		"di=0 sp=1 sh=4", red, 1, 0, 0, 0, 0) != 0)
+	    ret = -1;
+    }
     wdb_close(wdbp);
     return ret == 0;
 }
@@ -83,11 +101,68 @@ has_green_surface(const std::vector<unsigned char> &pixels)
 }
 
 static int
+has_blue_surface(const std::vector<unsigned char> &pixels)
+{
+    for (size_t i = 0; i + 2 < pixels.size(); i += 3) {
+	if (pixels[i + 2u] > pixels[i] + 16u &&
+	    pixels[i + 2u] > pixels[i + 1u] + 16u)
+	    return 1;
+    }
+    return 0;
+}
+
+static int
+mostly_green(const std::vector<unsigned char> &pixels)
+{
+    size_t green = 0;
+    size_t count = 0;
+    for (size_t i = 0; i + 2 < pixels.size(); i += 3) {
+	count++;
+	if (pixels[i] < 32u && pixels[i + 1u] > 224u && pixels[i + 2u] < 32u)
+	    green++;
+    }
+    return count && green * 10u >= count * 9u;
+}
+
+static int
+capture_composite(brlobol_display_endpoint_t *endpoint,
+	std::vector<unsigned char> &pixels)
+{
+    unsigned char *capture = NULL;
+    size_t size = 0;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    unsigned int components = 0;
+    pixels.clear();
+    if (!brlobol_display_endpoint_capture(endpoint, &capture, &size, &width,
+	    &height, &components) || !capture || width != 64u || height != 64u ||
+	components != 3u || size != 64u * 64u * 3u) {
+	if (capture)
+	    bu_free(capture, "mixed RT/framebuffer capture");
+	return 0;
+    }
+    pixels.assign(capture, capture + size);
+    bu_free(capture, "mixed RT/framebuffer capture");
+    return 1;
+}
+
+static int
 has_unlit_red_surface(const std::vector<unsigned char> &pixels)
 {
     for (size_t i = 0; i + 2 < pixels.size(); i += 3) {
 	if (pixels[i] == 255u && pixels[i + 1u] == 0u &&
 	    pixels[i + 2u] == 0u)
+	    return 1;
+    }
+    return 0;
+}
+
+static int
+has_neutral_highlight(const std::vector<unsigned char> &pixels)
+{
+    for (size_t i = 0; i + 2 < pixels.size(); i += 3) {
+	if (pixels[i] > 192u && pixels[i + 1u] > 192u &&
+	    pixels[i + 2u] > 192u)
 	    return 1;
     }
     return 0;
@@ -105,6 +180,45 @@ has_transparent_red_green_surface(const std::vector<unsigned char> &pixels)
     return 0;
 }
 
+static int
+center_pixel_green_dominant(const std::vector<unsigned char> &pixels,
+	unsigned int width, unsigned int height)
+{
+    if (!width || !height ||
+	pixels.size() != static_cast<size_t>(width) * height * 3u)
+	return 0;
+    const size_t offset =
+	(static_cast<size_t>(height / 2u) * width + width / 2u) * 3u;
+    return pixels[offset + 1u] > pixels[offset] + 32u &&
+	pixels[offset + 1u] > pixels[offset + 2u] + 32u;
+}
+
+static int
+center_pixel_red_dominant(const std::vector<unsigned char> &pixels,
+	unsigned int width, unsigned int height)
+{
+    if (!width || !height ||
+	pixels.size() != static_cast<size_t>(width) * height * 3u)
+	return 0;
+    const size_t offset =
+	(static_cast<size_t>(height / 2u) * width + width / 2u) * 3u;
+    return pixels[offset] > pixels[offset + 1u] + 32u &&
+	pixels[offset] > pixels[offset + 2u] + 32u;
+}
+
+static int
+center_pixel_blue_dominant(const std::vector<unsigned char> &pixels,
+	unsigned int width, unsigned int height)
+{
+    if (!width || !height ||
+	pixels.size() != static_cast<size_t>(width) * height * 3u)
+	return 0;
+    const size_t offset =
+	(static_cast<size_t>(height / 2u) * width + width / 2u) * 3u;
+    return pixels[offset + 2u] > pixels[offset] + 32u &&
+	pixels[offset + 2u] > pixels[offset + 1u] + 32u;
+}
+
 static SoBRLViewportImage *
 viewport_image(SoGroup *root)
 {
@@ -116,6 +230,375 @@ viewport_image(SoGroup *root)
 	    return static_cast<SoBRLViewportImage *>(node);
     }
     return NULL;
+}
+
+static int
+test_reflective_refractive_materials(struct db_i *dbip)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->position.setValue(0.0f, 0.0f, 10.0f);
+    camera->orientation = SbRotation::identity();
+    camera->focalDistance = 10.0f;
+    camera->nearDistance = 0.1f;
+    camera->farDistance = 100.0f;
+    camera->height = 8.0f;
+    root->addChild(camera);
+
+    int ret = 0;
+    {
+	BRLObolViewController controller(root, camera);
+	controller.setViewportSize(64, 64);
+	controller.setLightingEnabled(FALSE);
+	if (controller.replaceDatabaseSource("ball.s", dbip,
+		SoBRLDatabaseSource::SHADED, 1) != 1) {
+	    std::fprintf(stderr, "FAIL: retained rt secondary-ray fixture did not attach\n");
+	    ret = 1;
+	}
+
+	SoBRLDatabaseSource *front = ret ? NULL : controller.getDatabaseSource(0);
+	BRLObolRtRenderer renderer;
+	BRLObolRtRenderSettings settings;
+	settings.width = 64;
+	settings.height = 64;
+	settings.workers = 2;
+	settings.samples = 1;
+	settings.backgroundBottom = SbColor(0.0f, 1.0f, 0.0f);
+	settings.backgroundTop = settings.backgroundBottom;
+	if (!ret && front) {
+	    front->colorOverride = TRUE;
+	    front->color = SbColor(1.0f, 0.0f, 0.0f);
+	    front->databaseMaterialShader =
+		"plastic {diffuse 1 specular 0 reflect 0 transmit 0}";
+	}
+	if (!ret && (!front || !renderer.synchronize(&controller))) {
+	    std::fprintf(stderr, "FAIL: retained rt secondary-ray fixture did not synchronize\n");
+	    ret = 1;
+	}
+
+	const uint64_t geometryRevision = renderer.getGeometryRevision();
+	const uint64_t plasticRevision = renderer.getPresentationRevision();
+	std::vector<unsigned char> plastic;
+	if (!ret && (!renderer.render(settings, plastic, NULL) ||
+		!center_pixel_red_dominant(plastic, settings.width,
+		    settings.height))) {
+	    std::fprintf(stderr, "FAIL: retained rt secondary-ray plastic baseline is invalid\n");
+	    ret = 1;
+	}
+
+	if (!ret) {
+	    front->databaseMaterialShader =
+		"mirror {diffuse 0.4 specular 0.6 reflect 0.75}";
+	}
+	std::vector<unsigned char> mirror;
+	BRLObolRtRenderStatus mirrorStatus;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != geometryRevision ||
+		renderer.getPresentationRevision() <= plasticRevision ||
+		!renderer.render(settings, mirror, &mirrorStatus) ||
+		mirror == plastic ||
+		!center_pixel_green_dominant(mirror, settings.width,
+		    settings.height) ||
+		mirrorStatus.raysShot <= 64u * 64u ||
+		mirrorStatus.raysShot > 64u * 64u * 2u)) {
+	    std::fprintf(stderr, "FAIL: retained rt mirror did not reflect the bounded environment\n");
+	    ret = 1;
+	}
+
+	if (!ret && controller.replaceDatabaseSource("target.s", dbip,
+		SoBRLDatabaseSource::SHADED, 1) != 1) {
+	    std::fprintf(stderr, "FAIL: retained rt refraction target did not attach\n");
+	    ret = 1;
+	}
+	SoBRLDatabaseSource *target = ret ? NULL : controller.getDatabaseSource(1);
+	if (!ret && target) {
+	    target->colorOverride = TRUE;
+	    target->color = SbColor(0.0f, 1.0f, 0.0f);
+	    target->databaseMaterialShader =
+		"plastic {diffuse 1 specular 0 reflect 0 transmit 0}";
+	    front->databaseMaterialShader =
+		"glass {diffuse 0.3 specular 0.7 reflect 0.1 transmit 0.8 ri 1.0}";
+	    settings.backgroundBottom = SbColor(0.0f, 0.0f, 1.0f);
+	    settings.backgroundTop = settings.backgroundBottom;
+	}
+	if (!ret && (!target || !renderer.synchronize(&controller))) {
+	    std::fprintf(stderr, "FAIL: retained rt refraction fixture did not synchronize\n");
+	    ret = 1;
+	}
+	const uint64_t glassGeometryRevision = renderer.getGeometryRevision();
+	const uint64_t unitIndexRevision = renderer.getPresentationRevision();
+	std::vector<unsigned char> unitIndexGlass;
+	if (!ret && (!renderer.render(settings, unitIndexGlass, NULL) ||
+		!center_pixel_green_dominant(unitIndexGlass, settings.width,
+		    settings.height))) {
+	    std::fprintf(stderr, "FAIL: retained rt glass did not transmit geometry behind the solid\n");
+	    ret = 1;
+	}
+
+	if (!ret)
+	    front->databaseMaterialShader =
+		"glass {diffuse 0.3 specular 0.7 reflect 0.1 transmit 0.8 ri 1.65}";
+	std::vector<unsigned char> refracted;
+	BRLObolRtRenderStatus refractedStatus;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != glassGeometryRevision ||
+		renderer.getPresentationRevision() <= unitIndexRevision ||
+		!renderer.render(settings, refracted, &refractedStatus) ||
+		refracted == unitIndexGlass ||
+		!center_pixel_green_dominant(refracted, settings.width,
+		    settings.height) ||
+		refractedStatus.raysShot <= 64u * 64u * 2u ||
+		refractedStatus.raysShot > 64u * 64u * 30u)) {
+	    std::fprintf(stderr, "FAIL: retained rt glass did not apply bounded refraction\n");
+	    ret = 1;
+	}
+
+	settings.workers = 1;
+	std::vector<unsigned char> serialRefracted;
+	if (!ret && (!renderer.render(settings, serialRefracted, NULL) ||
+		serialRefracted != refracted)) {
+	    std::fprintf(stderr, "FAIL: retained rt secondary rays depend on worker layout\n");
+	    ret = 1;
+	}
+
+	if (!ret)
+	    front->databaseMaterialShader =
+		"glass {diffuse 1 specular 0 reflect 0 transmit 0 ri 1.65}";
+	std::vector<unsigned char> opaqueGlass;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != glassGeometryRevision ||
+		!renderer.render(settings, opaqueGlass, NULL) ||
+		!center_pixel_red_dominant(opaqueGlass, settings.width,
+		    settings.height) || opaqueGlass == refracted)) {
+	    std::fprintf(stderr, "FAIL: retained rt glass parameter update did not remain presentation-only\n");
+	    ret = 1;
+	}
+    }
+
+    root->unref();
+    return ret;
+}
+
+static int
+test_authored_retained_lights(struct db_i *dbip)
+{
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->position.setValue(0.0f, 0.0f, 10.0f);
+    camera->orientation = SbRotation::identity();
+    camera->focalDistance = 10.0f;
+    camera->nearDistance = 0.1f;
+    camera->farDistance = 100.0f;
+    camera->height = 8.0f;
+    root->addChild(camera);
+
+    SoDirectionalLight *directional = new SoDirectionalLight;
+    directional->on = FALSE;
+    directional->direction = SbVec3f(0.0f, 0.0f, -1.0f);
+    directional->color = SbColor(0.0f, 0.0f, 1.0f);
+    root->addChild(directional);
+
+    SoSeparator *pointGroup = new SoSeparator;
+    SoTranslation *pointTransform = new SoTranslation;
+    pointTransform->translation = SbVec3f(0.0f, 0.0f, 10.0f);
+    SoPointLight *point = new SoPointLight;
+    point->on = FALSE;
+    point->location = SbVec3f(0.0f, 0.0f, 0.0f);
+    point->color = SbColor(0.0f, 1.0f, 0.0f);
+    pointGroup->addChild(pointTransform);
+    pointGroup->addChild(point);
+    root->addChild(pointGroup);
+
+    SoSeparator *spotGroup = new SoSeparator;
+    SoTranslation *spotTransform = new SoTranslation;
+    spotTransform->translation = SbVec3f(0.0f, 0.0f, 10.0f);
+    SoSpotLight *spot = new SoSpotLight;
+    spot->on = FALSE;
+    spot->location = SbVec3f(0.0f, 0.0f, 0.0f);
+    spot->direction = SbVec3f(0.0f, 0.0f, -1.0f);
+    spot->cutOffAngle = 0.4f;
+    spot->dropOffRate = 0.25f;
+    spot->color = SbColor(1.0f, 0.0f, 0.0f);
+    spotGroup->addChild(spotTransform);
+    spotGroup->addChild(spot);
+    root->addChild(spotGroup);
+
+    int ret = 0;
+    {
+	BRLObolViewController controller(root, camera);
+	controller.setViewportSize(64, 64);
+	controller.setHeadlightIntensity(0.0f);
+	if (controller.replaceDatabaseSource("ball.s", dbip,
+		SoBRLDatabaseSource::SHADED, 1) != 1) {
+	    std::fprintf(stderr, "FAIL: retained authored-light fixture did not attach\n");
+	    ret = 1;
+	}
+	SoBRLDatabaseSource *source = ret ? NULL : controller.getDatabaseSource(0);
+	if (!ret && source) {
+	    source->colorOverride = TRUE;
+	    source->color = SbColor(1.0f, 1.0f, 1.0f);
+	    source->databaseMaterialShader =
+		"plastic {diffuse 1 specular 0 reflect 0 transmit 0}";
+	}
+
+	BRLObolRtRenderer renderer;
+	BRLObolRtRenderSettings settings;
+	settings.width = 64;
+	settings.height = 64;
+	settings.workers = 2;
+	settings.samples = 1;
+	if (!ret && (!source || !renderer.synchronize(&controller))) {
+	    std::fprintf(stderr, "FAIL: retained authored-light fixture did not synchronize\n");
+	    ret = 1;
+	}
+	const uint64_t geometryRevision = renderer.getGeometryRevision();
+	uint64_t presentationRevision = renderer.getPresentationRevision();
+	std::vector<unsigned char> unlit;
+	if (!ret && !renderer.render(settings, unlit, NULL)) {
+	    std::fprintf(stderr, "FAIL: retained authored-light baseline did not render\n");
+	    ret = 1;
+	}
+
+	directional->on = TRUE;
+	std::vector<unsigned char> directionalImage;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != geometryRevision ||
+		renderer.getPresentationRevision() <= presentationRevision ||
+		!renderer.render(settings, directionalImage, NULL) ||
+		directionalImage == unlit ||
+		!center_pixel_blue_dominant(directionalImage, settings.width,
+		    settings.height))) {
+	    std::fprintf(stderr, "FAIL: retained rt did not snapshot directional scene light\n");
+	    ret = 1;
+	}
+	presentationRevision = renderer.getPresentationRevision();
+	directional->direction = SbVec3f(0.0f, 0.0f, 1.0f);
+	std::vector<unsigned char> reversedDirectional;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != geometryRevision ||
+		renderer.getPresentationRevision() <= presentationRevision ||
+		!renderer.render(settings, reversedDirectional, NULL) ||
+		reversedDirectional == directionalImage ||
+		center_pixel_blue_dominant(reversedDirectional, settings.width,
+		    settings.height))) {
+	    std::fprintf(stderr, "FAIL: retained rt directional light edit was not presentation-only\n");
+	    ret = 1;
+	}
+
+	presentationRevision = renderer.getPresentationRevision();
+	directional->on = FALSE;
+	point->on = TRUE;
+	std::vector<unsigned char> pointImage;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != geometryRevision ||
+		renderer.getPresentationRevision() <= presentationRevision ||
+		!renderer.render(settings, pointImage, NULL) ||
+		!center_pixel_green_dominant(pointImage, settings.width,
+		    settings.height))) {
+	    std::fprintf(stderr, "FAIL: retained rt did not transform point scene light\n");
+	    ret = 1;
+	}
+	settings.workers = 1;
+	std::vector<unsigned char> serialPoint;
+	if (!ret && (!renderer.render(settings, serialPoint, NULL) ||
+		serialPoint != pointImage)) {
+	    std::fprintf(stderr, "FAIL: retained authored light depends on worker layout\n");
+	    ret = 1;
+	}
+
+	presentationRevision = renderer.getPresentationRevision();
+	point->on = FALSE;
+	spot->on = TRUE;
+	std::vector<unsigned char> spotImage;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != geometryRevision ||
+		renderer.getPresentationRevision() <= presentationRevision ||
+		!renderer.render(settings, spotImage, NULL) ||
+		!center_pixel_red_dominant(spotImage, settings.width,
+		    settings.height))) {
+	    std::fprintf(stderr, "FAIL: retained rt did not transform spot scene light\n");
+	    ret = 1;
+	}
+	presentationRevision = renderer.getPresentationRevision();
+	spot->direction = SbVec3f(0.0f, 0.0f, 1.0f);
+	std::vector<unsigned char> reversedSpot;
+	if (!ret && (!renderer.synchronize(&controller) ||
+		renderer.getGeometryRevision() != geometryRevision ||
+		renderer.getPresentationRevision() <= presentationRevision ||
+		!renderer.render(settings, reversedSpot, NULL) ||
+		reversedSpot == spotImage ||
+		center_pixel_red_dominant(reversedSpot, settings.width,
+		    settings.height))) {
+	    std::fprintf(stderr, "FAIL: retained rt spot cone edit was not applied\n");
+	    ret = 1;
+	}
+    }
+
+    root->unref();
+    return ret;
+}
+
+/* Hosted applications such as MGED keep their authoritative database sources
+ * in a shared render root rather than in each endpoint controller's local
+ * scene.  Retained RT must discover that same generic scene contract. */
+static int
+test_shared_render_root(struct db_i *dbip)
+{
+    SoSeparator *localRoot = new SoSeparator;
+    localRoot->ref();
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->position.setValue(0.0f, 0.0f, 10.0f);
+    camera->orientation = SbRotation::identity();
+    camera->focalDistance = 10.0f;
+    camera->nearDistance = 0.1f;
+    camera->farDistance = 100.0f;
+    camera->height = 8.0f;
+    localRoot->addChild(camera);
+
+    SoSeparator *sharedRoot = new SoSeparator;
+    sharedRoot->ref();
+    SoBRLDatabaseSource *sharedSource = new SoBRLDatabaseSource;
+    sharedSource->configureDatabaseSourceInstance("shared-retained-rt",
+	"ball.r", dbip, SoBRLDatabaseSource::SHADED, 1);
+    sharedRoot->addChild(sharedSource);
+
+    int ret = 0;
+    {
+	BRLObolViewController controller(localRoot, camera);
+	controller.setViewportSize(64, 64);
+	controller.setBackgroundColors(SbColor(0.0f, 0.0f, 0.0f),
+	    SbColor(0.0f, 0.0f, 0.0f));
+	controller.setRenderSceneRoot(sharedRoot);
+
+	const std::vector<SoBRLDatabaseSource *> sources =
+	    controller.getRenderDatabaseSources();
+	if (controller.getDatabaseSourceCount() != 0 || sources.size() != 1u ||
+	    sources[0] != sharedSource) {
+	    std::fprintf(stderr, "FAIL: shared render-root source discovery disagrees with rendered scene\n");
+	    ret = 1;
+	} else {
+	    BRLObolRtRenderer renderer;
+	    BRLObolRtRenderSettings settings;
+	    settings.width = 64;
+	    settings.height = 64;
+	    settings.workers = 2;
+	    settings.samples = 1;
+	    std::vector<unsigned char> pixels;
+	    if (!renderer.synchronize(&controller) ||
+		renderer.getPreparedSourceCount() != 1u ||
+		!renderer.getGeometryRevision() ||
+		!renderer.render(settings, pixels, NULL) || count_lit(pixels) == 0) {
+		std::fprintf(stderr, "FAIL: retained rt ignored authoritative shared render root\n");
+		ret = 1;
+	    }
+	}
+    }
+
+    sharedRoot->unref();
+    localRoot->unref();
+    return ret;
 }
 
 int
@@ -252,16 +735,74 @@ main(int argc, char **argv)
 		SoBRLDatabaseSource *source = controller.getDatabaseSource(0);
 		source->colorOverride = TRUE;
 		source->color = SbColor(1.0f, 0.0f, 0.0f);
+		source->databaseMaterialShader = "plastic {di 0 sp 1 sh 4}";
 		if (!ret && (!renderer.synchronize(&controller) ||
 		    renderer.getGeometryRevision() != geometryRevision ||
 		    renderer.getPresentationRevision() == presentationRevision)) {
 		    std::fprintf(stderr, "FAIL: appearance update rebuilt retained rt geometry\n");
 		    ret = 1;
 		}
+		std::vector<unsigned char> specularRed;
+		if (!ret && (!renderer.render(settings, specularRed, NULL) ||
+		    !has_red_surface(specularRed) ||
+		    !has_neutral_highlight(specularRed))) {
+		    std::fprintf(stderr, "FAIL: retained rt did not apply plastic specular metadata\n");
+		    ret = 1;
+		}
+		const uint64_t specularRevision = renderer.getPresentationRevision();
+		source->databaseMaterialShader =
+		    "plastic {diffuse 1 specular 0 shine 4}";
 		std::vector<unsigned char> red;
-		if (!ret && (!renderer.render(settings, red, NULL) ||
-		    !has_red_surface(red))) {
-		    std::fprintf(stderr, "FAIL: retained rt appearance update did not affect frame\n");
+		if (!ret && (!renderer.synchronize(&controller) ||
+		    renderer.getGeometryRevision() != geometryRevision ||
+		    renderer.getPresentationRevision() <= specularRevision ||
+		    !renderer.render(settings, red, NULL) || red == specularRed ||
+		    !has_red_surface(red) || has_neutral_highlight(red))) {
+		    std::fprintf(stderr, "FAIL: retained rt material update did not reuse geometry and change lighting\n");
+		    ret = 1;
+		}
+
+		/* Region shader metadata wins over the source fallback without
+		 * introducing a renderer-specific scene representation. */
+		if (!ret && (controller.removeDatabaseSource("ball.s") != 1 ||
+		    controller.replaceDatabaseSource("ball.r", dbip,
+			SoBRLDatabaseSource::SHADED, 1) != 1)) {
+		    std::fprintf(stderr, "FAIL: retained rt primitive material fixture did not replace source\n");
+		    ret = 1;
+		}
+		if (!ret) {
+		    source = controller.getDatabaseSource(0);
+		    source->colorOverride = TRUE;
+		    source->color = SbColor(1.0f, 0.0f, 0.0f);
+		    source->databaseMaterialShader =
+			"plastic {diffuse 1 specular 0 shine 4}";
+		    if (!renderer.synchronize(&controller)) {
+			std::fprintf(stderr, "FAIL: retained rt primitive material fixture did not synchronize\n");
+			ret = 1;
+		    } else {
+			geometryRevision = renderer.getGeometryRevision();
+		    }
+		}
+		std::vector<unsigned char> primitiveSpecular;
+		if (!ret && (!renderer.render(settings, primitiveSpecular, NULL) ||
+		    !has_neutral_highlight(primitiveSpecular))) {
+		    std::fprintf(stderr, "FAIL: retained rt did not prioritize primitive shader metadata\n");
+		    ret = 1;
+		}
+		const uint64_t whiteLightRevision = renderer.getPresentationRevision();
+		controller.setHeadlightColor(SbColor(0.0f, 0.0f, 1.0f));
+		std::vector<unsigned char> blueLight;
+		if (!ret && (!renderer.synchronize(&controller) ||
+		    renderer.getGeometryRevision() != geometryRevision ||
+		    renderer.getPresentationRevision() <= whiteLightRevision ||
+		    !renderer.render(settings, blueLight, NULL) ||
+		    !has_blue_surface(blueLight) || blueLight == primitiveSpecular)) {
+		    std::fprintf(stderr, "FAIL: retained rt headlight update did not reuse geometry and change lighting\n");
+		    ret = 1;
+		}
+		controller.setHeadlightColor(SbColor(1.0f, 1.0f, 1.0f));
+		if (!ret && !renderer.synchronize(&controller)) {
+		    std::fprintf(stderr, "FAIL: retained rt did not restore white headlight\n");
 		    ret = 1;
 		}
 		const uint64_t litRevision = renderer.getPresentationRevision();
@@ -404,6 +945,86 @@ main(int argc, char **argv)
 		    std::fprintf(stderr, "FAIL: retained rt endpoint did not present ray image\n");
 	    ret = 1;
 	}
+	struct brlobol_endpoint_property_value rtGeometryRevision =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct brlobol_endpoint_property_value rtPresentationRevision =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (!ret && (brlobol_display_endpoint_property_get(endpoint,
+	    "render.rt.geometry_revision", &rtGeometryRevision) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK ||
+	    brlobol_display_endpoint_property_get(endpoint,
+	    "render.rt.presentation_revision", &rtPresentationRevision) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK || !rtGeometryRevision.uint_value ||
+	    !rtPresentationRevision.uint_value)) {
+	    std::fprintf(stderr, "FAIL: retained rt endpoint did not expose renderer revisions\n");
+	    ret = 1;
+	}
+
+	/* A view change arriving during an expensive frame must cancel that
+	 * generation, clear its presentation, and publish only the replacement
+	 * camera.  This is the controller-owned path used by QGED and MGED. */
+	rtPolicy = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	rtPolicy.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	rtPolicy.uint_value = 64;
+	if (!ret && brlobol_display_endpoint_property_set(endpoint,
+	    "render.rt.samples", &rtPolicy) != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    std::fprintf(stderr, "FAIL: retained rt cancellation fixture did not start expensive frame\n");
+	    ret = 1;
+	}
+	camera->position.setValue(20.0f, 0.0f, 10.0f);
+	controller.requestRender("camera");
+	unsigned char *cameraOwnerImage = NULL;
+	if (!ret && controller.renderToImage(&cameraOwnerImage, 0, 0, NULL,
+	    NULL, NULL) != BRLCAD_OK) {
+	    std::fprintf(stderr, "FAIL: retained rt camera cancellation redraw failed\n");
+	    ret = 1;
+	}
+	if (cameraOwnerImage)
+	    bu_free(cameraOwnerImage, "retained rt camera cancellation redraw");
+	std::vector<unsigned char> movedCameraPixels;
+	if (!ret && (!capture_composite(endpoint, movedCameraPixels) ||
+	    count_lit(movedCameraPixels) != 0 ||
+	    has_red_surface(movedCameraPixels))) {
+	    std::fprintf(stderr, "FAIL: retained rt published stale pixels after camera cancellation\n");
+	    ret = 1;
+	}
+	struct brlobol_endpoint_property_value movedGeometryRevision =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct brlobol_endpoint_property_value movedPresentationRevision =
+	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (!ret && (brlobol_display_endpoint_property_get(endpoint,
+	    "render.rt.geometry_revision", &movedGeometryRevision) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK ||
+	    brlobol_display_endpoint_property_get(endpoint,
+	    "render.rt.presentation_revision", &movedPresentationRevision) !=
+	    BRLOBOL_ENDPOINT_PROPERTY_OK ||
+	    movedGeometryRevision.uint_value != rtGeometryRevision.uint_value ||
+	    movedPresentationRevision.uint_value <=
+		rtPresentationRevision.uint_value)) {
+	    std::fprintf(stderr, "FAIL: retained rt camera cancellation rebuilt geometry or missed presentation revision\n");
+	    ret = 1;
+	}
+	rtPolicy.uint_value = 1;
+	if (!ret && brlobol_display_endpoint_property_set(endpoint,
+	    "render.rt.samples", &rtPolicy) != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    std::fprintf(stderr, "FAIL: retained rt cancellation fixture did not restore sample policy\n");
+	    ret = 1;
+	}
+	camera->position.setValue(2.0f, 0.0f, 10.0f);
+	controller.requestRender("camera");
+	cameraOwnerImage = NULL;
+	if (!ret && controller.renderToImage(&cameraOwnerImage, 0, 0, NULL,
+	    NULL, NULL) != BRLCAD_OK) {
+	    std::fprintf(stderr, "FAIL: retained rt camera restore redraw failed\n");
+	    ret = 1;
+	}
+	if (cameraOwnerImage)
+	    bu_free(cameraOwnerImage, "retained rt camera restore redraw");
+	if (!ret && (!capture_composite(endpoint, endpointPixels) ||
+	    !has_red_surface(endpointPixels))) {
+	    std::fprintf(stderr, "FAIL: retained rt did not publish replacement camera frame\n");
+	    ret = 1;
+	}
 	SoBRLViewportImage *rtViewport = viewport_image(
 	    controller.getFramebufferOverlayRoot());
 	if (!ret && (!rtViewport ||
@@ -426,6 +1047,68 @@ main(int argc, char **argv)
 	    viewport_image(controller.getFramebufferOverlayRoot()) != NULL)) {
 	    std::fprintf(stderr, "FAIL: retained RT live layer update did not reparent image\n");
 	    ret = 1;
+	}
+	/* Renderer and host images may intentionally select the same named
+	 * composition layer.  The renderer image must remain first in that layer,
+	 * so host framebuffer pixels composite after it regardless of which image
+	 * was attached or reparented most recently. */
+	{
+	    BRLObolWindowHost framebufferHost;
+	    framebufferHost.attachController(&controller, FALSE);
+	    BRLObolFramebufferStream framebuffer(&framebufferHost);
+	    std::vector<unsigned char> greenPixels(64u * 64u * 3u, 0u);
+	    for (size_t i = 0; i < greenPixels.size(); i += 3u)
+		greenPixels[i + 1u] = 255u;
+	    if (!ret && (framebuffer.configure(64, 64) != 0 ||
+		framebuffer.ensure() != 0 ||
+		framebuffer.writerect(0, 0, 64, 64, greenPixels.data()) !=
+		    64 * 64 || framebuffer.present() != 0)) {
+		std::fprintf(stderr, "FAIL: mixed-composition framebuffer did not initialize\n");
+		ret = 1;
+	    }
+
+	    std::vector<unsigned char> composite;
+	    if (!ret && (!capture_composite(endpoint, composite) ||
+		!mostly_green(composite))) {
+		std::fprintf(stderr, "FAIL: framebuffer overlay did not cover RT underlay\n");
+		ret = 1;
+	    }
+
+	    rtPolicy.string_value = "overlay";
+	    if (!ret && (brlobol_display_endpoint_property_set(endpoint,
+		    "composition.rt.layer", &rtPolicy) !=
+		    BRLOBOL_ENDPOINT_PROPERTY_OK ||
+		!capture_composite(endpoint, composite) ||
+		!mostly_green(composite))) {
+		std::fprintf(stderr, "FAIL: same-layer RT reparent changed framebuffer precedence\n");
+		ret = 1;
+	    }
+
+	    if (!ret && (framebuffer.setComposition(
+		    BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY) != 0 ||
+		!capture_composite(endpoint, composite) ||
+		!has_red_surface(composite) || mostly_green(composite))) {
+		std::fprintf(stderr, "FAIL: RT overlay did not cover framebuffer underlay\n");
+		ret = 1;
+	    }
+
+	    rtPolicy.string_value = "underlay";
+	    if (!ret && (brlobol_display_endpoint_property_set(endpoint,
+		    "composition.rt.layer", &rtPolicy) !=
+		    BRLOBOL_ENDPOINT_PROPERTY_OK ||
+		!capture_composite(endpoint, composite) ||
+		!has_green_surface(composite))) {
+		std::fprintf(stderr, "FAIL: same-layer framebuffer did not follow renderer image\n");
+		ret = 1;
+	    }
+
+	    if (!ret && (framebuffer.setComposition(
+		    BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF) != 0 ||
+		!capture_composite(endpoint, composite) ||
+		!has_red_surface(composite))) {
+		std::fprintf(stderr, "FAIL: disabled framebuffer remained in composite capture\n");
+		ret = 1;
+	    }
 	}
 		void *planeSamples = NULL;
 		size_t planeSize = 0;
@@ -476,7 +1159,7 @@ main(int argc, char **argv)
 		if (!ret && (!brlobol_display_endpoint_rt_source_identity_get(endpoint,
 		    endpointIdentity, &endpointSource) || endpointSource.database != dbip ||
 		    !endpointSource.path ||
-		    bu_strcmp(endpointSource.path, "ball.s") != 0)) {
+		    bu_strcmp(endpointSource.path, "ball.r") != 0)) {
 		    std::fprintf(stderr, "FAIL: retained rt endpoint identity did not resolve source\n");
 		    ret = 1;
 		}
@@ -597,6 +1280,13 @@ main(int argc, char **argv)
 	    }
 	}
     }
+
+    if (!ret)
+	ret = test_reflective_refractive_materials(dbip);
+    if (!ret)
+	ret = test_authored_retained_lights(dbip);
+    if (!ret)
+	ret = test_shared_render_root(dbip);
 
     root->unref();
     db_close(dbip);

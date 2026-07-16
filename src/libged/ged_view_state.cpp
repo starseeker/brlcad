@@ -1525,13 +1525,18 @@ ged_endpoint_property_set(void *user_data, const char *name,
 	    mode = BV_FRAMEBUFFER_MODE_INTERLAY;
 	else if (!BU_STR_EQUAL(value->string_value, "off"))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
-	if (!bv_framebuffer_mode_set(
-		bv_context_view((struct bv_context *)view_ctx), mode))
+	struct bv *mutable_view = bv_context_view(
+	    (struct bv_context *)view_ctx);
+	const int previous_mode = bv_framebuffer_mode_get(mutable_view);
+	if (!bv_framebuffer_mode_set(mutable_view, mode))
 	    return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
 	struct ged_view_host_record *record =
 	    ged_view_host_record_find_global(view_ctx);
-	if (record && record->gedp)
-	    (void)ged_obol_fbserv_composition_set(record->gedp, mode);
+	if (record && record->gedp &&
+	    ged_obol_fbserv_composition_set(record->gedp, mode) != BRLCAD_OK) {
+	    (void)bv_framebuffer_mode_set(mutable_view, previous_mode);
+	    return BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED;
+	}
 	(void)ged_view_context_update(view_ctx);
 	return BRLOBOL_ENDPOINT_PROPERTY_OK;
     }

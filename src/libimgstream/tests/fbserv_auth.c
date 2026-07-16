@@ -27,7 +27,9 @@
 #include <string.h>
 
 #include "bu/defines.h"
+#include "bnetwork.h"
 #include "imgstream/fbserv.h"
+#include "pkg.h"
 
 
 static int dummy_is_listening(struct fbserv_obj *UNUSED(fbsp)) { return 0; }
@@ -110,6 +112,10 @@ main(void)
     char token[FBSERV_AUTH_TOKEN_LEN + 1] = {0};
     char mismatch[FBSERV_AUTH_TOKEN_LEN + 1] = {0};
     struct fbserv_obj fbs;
+    struct fbserv_obj secure_fbs;
+    void *tls_context = NULL;
+    char tls_fingerprint[FBSERV_AUTH_TOKEN_LEN + 1] = {0};
+    pkg_listener_t *listener = NULL;
     int legacy_marker = 0;
     int backend_marker = 0;
     struct fbserv_fb_info info;
@@ -164,6 +170,74 @@ main(void)
     if (fbserv_obj_init(&fbs) != BRLCAD_OK) {
 	fprintf(stderr, "fbserv object init failed\n");
 	return 1;
+    }
+    listener = pkg_listen("0", "127.0.0.1", 1, NULL);
+    if (!listener || pkg_get_listener_port(listener) <= 0) {
+	fprintf(stderr, "unable to create an ephemeral loopback listener\n");
+	return 1;
+    }
+    {
+	struct sockaddr_in bound;
+#ifdef HAVE_WINSOCK_H
+	int bound_size = (int)sizeof(bound);
+#else
+	socklen_t bound_size = (socklen_t)sizeof(bound);
+#endif
+	memset(&bound, 0, sizeof(bound));
+	if (getsockname(pkg_get_listener_fd(listener),
+		(struct sockaddr *)&bound, &bound_size) != 0 ||
+	    ntohl(bound.sin_addr.s_addr) != 0x7f000001UL) {
+	    fprintf(stderr, "listener interface was not bound to loopback\n");
+	    pkg_listener_close(listener);
+	    return 1;
+	}
+    }
+    pkg_listener_close(listener);
+    listener = pkg_listen("0", "not-an-ip-address", 1, NULL);
+    if (listener) {
+	fprintf(stderr, "listener accepted an invalid interface\n");
+	pkg_listener_close(listener);
+	return 1;
+    }
+    if (fbserv_obj_network_policy(&fbs) != FBSERV_NETWORK_LOOPBACK ||
+	!fbserv_obj_listener_interface(&fbs) ||
+	strcmp(fbserv_obj_listener_interface(&fbs), "127.0.0.1") != 0 ||
+	!fbserv_obj_network_ready(&fbs)) {
+	fprintf(stderr, "fbserv default network policy is not loopback-only\n");
+	return 1;
+    }
+    if (fbserv_obj_set_network_policy(&fbs,
+	    (enum fbserv_network_policy)99) != BRLCAD_ERROR) {
+	fprintf(stderr, "fbserv accepted an invalid network policy\n");
+	return 1;
+    }
+
+    if (fbserv_obj_init(&secure_fbs) != BRLCAD_OK ||
+	fbserv_obj_set_network_policy(&secure_fbs,
+	    FBSERV_NETWORK_SECURE_REMOTE) != BRLCAD_OK ||
+	fbserv_obj_listener_interface(&secure_fbs) != NULL ||
+	fbserv_obj_network_ready(&secure_fbs)) {
+	fprintf(stderr, "secure remote policy did not begin fail-closed\n");
+	return 1;
+    }
+    secure_fbs.fbs_require_auth = 1;
+    memcpy(secure_fbs.fbs_auth_token, token, sizeof(token));
+    if (fbserv_obj_network_ready(&secure_fbs)) {
+	fprintf(stderr, "secure remote policy accepted missing TLS\n");
+	return 1;
+    }
+    tls_context = fbs_tls_server_context_create(NULL, NULL);
+    if (tls_context) {
+	secure_fbs.fbs_tls_ctx = tls_context;
+	if (!fbserv_obj_network_ready(&secure_fbs) ||
+	    fbs_tls_server_sha256(tls_context, tls_fingerprint) != BRLCAD_OK ||
+	    !is_hex_token(tls_fingerprint)) {
+	    fprintf(stderr, "secure remote TLS policy/fingerprint failed\n");
+	    fbs_tls_server_context_destroy(tls_context);
+	    return 1;
+	}
+	fbs_tls_server_context_destroy(tls_context);
+	secure_fbs.fbs_tls_ctx = NULL;
     }
     if (fbserv_listener_fd(&fbs) != -1 || fbserv_listener_port(&fbs) != -1 ||
 	fbserv_listener_owner(fbserv_listener_handler_data(&fbs)) != &fbs) {

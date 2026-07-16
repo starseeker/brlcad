@@ -69,10 +69,12 @@ static int framebuffer_height = 0;
 static int port = -1;
 static int require_auth = 0;
 static int use_tls = 0;
+static int remote_access = 0;
+static int allow_insecure_remote = 0;
 static int verbose = 0;
 
 static const char usage[] =
-    "Usage: fbserv [-v] [-T] [-A] [-F framebuffer] [-s size]\n"
+    "Usage: fbserv [-v] [-T] [-A] [-R [-u]] [-F framebuffer] [-s size]\n"
     "              [-w width] [-n height] (-p port | -I ipc_address)\n"
     "       fbserv port [framebuffer]\n"
     "\n"
@@ -80,6 +82,8 @@ static const char usage[] =
     "If -F is omitted, a memory framebuffer is used.\n"
     "  -T  enable TLS (requires an OpenSSL build)\n"
     "  -A  require FBSERV_TOKEN authentication\n"
+    "  -R  accept remote TCP clients (requires authenticated, pinned TLS)\n"
+    "  -u  permit legacy insecure remote TCP (only with -R)\n"
     "  -I  listen on a libpkg IPC address\n";
 
 static void
@@ -104,7 +108,8 @@ transport_listen_on_port(struct fbserv_obj *fbsp, int listen_port)
     if (!fbsp)
 	return 0;
     snprintf(service, sizeof(service), "%d", listen_port);
-    listener = pkg_listen(service, NULL, 16, communications_error);
+    listener = pkg_listen(service, fbs_listener_interface(fbsp), 16,
+	communications_error);
     if (!listener)
 	return 0;
     fbs_set_listener_pkg_listener(fbsp, listener);
@@ -136,11 +141,13 @@ parse_args(int argc, char **argv)
     int c;
     int port_set = 0;
 
-    while ((c = bu_getopt(argc, argv, "vTAI:F:s:w:n:S:W:N:p:h?")) != -1) {
+    while ((c = bu_getopt(argc, argv, "vTARuI:F:s:w:n:S:W:N:p:h?")) != -1) {
 	switch (c) {
 	    case 'v': verbose = 1; break;
 	    case 'T': use_tls = 1; break;
 	    case 'A': require_auth = 1; break;
+	    case 'R': remote_access = 1; break;
+	    case 'u': allow_insecure_remote = 1; break;
 	    case 'I': ipc_address = bu_optarg; break;
 	    case 'F': framebuffer_name = bu_optarg; break;
 	    case 's':
@@ -161,7 +168,9 @@ parse_args(int argc, char **argv)
     if (bu_optind < argc && !framebuffer_name)
 	framebuffer_name = argv[bu_optind++];
 
-    return bu_optind == argc && (port_set || ipc_address);
+    return bu_optind == argc && (port_set || ipc_address) &&
+	!(ipc_address && remote_access) &&
+	!(!remote_access && allow_insecure_remote);
 }
 
 static int
@@ -266,6 +275,7 @@ int
 main(int argc, char **argv)
 {
     struct pkg_listener *listener = NULL;
+    char tls_fingerprint[FBSERV_AUTH_TOKEN_LEN + 1] = {0};
     int ret = BRLCAD_ERROR;
 
     bu_setprogname(argv[0]);
@@ -281,14 +291,36 @@ main(int argc, char **argv)
     if (fbs_init(&server) != BRLCAD_OK)
 	return 1;
     fbs_set_transport(&server, &transport_ops);
+
+    if (!ipc_address && remote_access) {
+	if (allow_insecure_remote || getenv(FBSERV_INSECURE_ENVVAR)) {
+	    if (fbs_set_network_policy(&server,
+		    FBSERV_NETWORK_INSECURE_REMOTE) != BRLCAD_OK)
+		return 1;
+	} else {
+	    if (fbs_set_network_policy(&server,
+		    FBSERV_NETWORK_SECURE_REMOTE) != BRLCAD_OK)
+		return 1;
+	    require_auth = 1;
+	    use_tls = 1;
+	}
+    }
     server.fbs_require_auth = require_auth;
-    fprintf(stderr, "fbserv: Session token: %s\n", fbs_generate_token(&server));
+    if (!fbs_generate_token(&server))
+	return 1;
+    if (require_auth || verbose)
+	fprintf(stderr, "fbserv: Session token: %s\n", server.fbs_auth_token);
 
     if (use_tls || getenv("FBSERV_TLS")) {
 	server.fbs_tls_ctx = fbs_tls_server_context_create(getenv("FBSERV_TLS_CERT"),
 		getenv("FBSERV_TLS_KEY"));
 	if (!server.fbs_tls_ctx)
 	    bu_exit(1, "fbserv: TLS is unavailable or failed to initialize\n");
+	if (fbs_tls_server_sha256(server.fbs_tls_ctx, tls_fingerprint) !=
+		BRLCAD_OK)
+	    bu_exit(1, "fbserv: unable to fingerprint the TLS certificate\n");
+	fprintf(stderr, "fbserv: TLS certificate SHA-256: %s\n",
+	    tls_fingerprint);
     }
 
     const size_t fb_width = framebuffer_width > 0 ?
@@ -332,7 +364,9 @@ main(int argc, char **argv)
 	if (fbs_open(&server, port) != BRLCAD_OK)
 	    bu_exit(1, "fbserv: unable to open a network listener\n");
 	listener = fbs_listener_data_pkg_listener(fbs_listener_handler_data(&server));
-	fprintf(stderr, "fbserv: Listening on port %d\n", fbs_listener_port(&server));
+	fprintf(stderr, "fbserv: Listening on %sport %d\n",
+	    fbs_network_policy(&server) == FBSERV_NETWORK_LOOPBACK ?
+	    "loopback " : "remote ", fbs_listener_port(&server));
     }
 
     ret = service_loop(listener);

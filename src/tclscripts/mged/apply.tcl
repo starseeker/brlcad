@@ -124,7 +124,7 @@ proc mged_shaded_mode_helper {val} {
 	set mged_gui($id,zclip) $val
 	set mged_gui($id,lighting) $val
 
-	mged_apply_local $id "dm set zbuffer $val; dm set zclip $val; dm set lighting $val"
+	mged_apply_local $id "dm set renderer.depth_test $val; dm set view.zclip $val; dm set renderer.lighting $val"
     }
 
     return ""

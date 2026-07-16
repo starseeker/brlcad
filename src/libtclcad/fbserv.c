@@ -121,6 +121,11 @@ tclcad_is_listening(struct fbserv_obj *fbsp)
 C_DECL int
 tclcad_listen_on_port(struct fbserv_obj *fbsp, int available_port)
 {
+    if (fbs_network_policy(fbsp) != FBSERV_NETWORK_LOOPBACK) {
+	bu_log("tclcad framebuffer listeners support loopback TCP or IPC only\n");
+	return 0;
+    }
+
     char hostname[32] = {0};
     /* XXX hardwired for now */
     sprintf(hostname, "localhost");
@@ -141,7 +146,8 @@ tclcad_listen_on_port(struct fbserv_obj *fbsp, int available_port)
 #else
     char portname[32] = {0};
     sprintf(portname, "%d", available_port);
-    struct pkg_listener *listener = pkg_listen(portname, NULL, 0, comm_error);
+    struct pkg_listener *listener = pkg_listen(portname,
+	fbs_listener_interface(fbsp), 0, comm_error);
     fbs_set_listener_pkg_listener(fbsp, listener);
     if (listener) {
 	fbs_set_listener_fd(fbsp, pkg_get_listener_fd(listener));

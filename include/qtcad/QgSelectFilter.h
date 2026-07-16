@@ -39,6 +39,14 @@
 struct db_i;
 struct ged_draw_pick_result;
 
+/* Application-local action IDs used only by QgSelectFilter handlers. */
+enum QgSelectInputAction {
+    QG_SELECT_INPUT_BEGIN = 1,
+    QG_SELECT_INPUT_UPDATE,
+    QG_SELECT_INPUT_COMMIT,
+    QG_SELECT_INPUT_CANCEL
+};
+
 // Filters designed for specific editing modes
 class QTCAD_EXPORT QgSelectFilter : public QgViewFilter {
 	Q_OBJECT
@@ -59,9 +67,10 @@ class QTCAD_EXPORT QgSelectFilter : public QgViewFilter {
 	const std::vector<std::string> &selected_paths() const;
 
 	/**
-	 * Apply one endpoint-routed semantic selection gesture.  Qt event filters
-	 * may use the same implementation, but application tools should route
-	 * through their display endpoint rather than installing raw-event paths.
+	 * Apply one endpoint-routed application selection gesture.  Qt event
+	 * filters may use the same implementation, but application tools should
+	 * route through their display endpoint rather than installing raw-event
+	 * paths.
 	 */
 	bool semanticInput(BRLObolInputAction action,
 		const BRLObolInputEvent *event);

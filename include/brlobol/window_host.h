@@ -10,6 +10,7 @@
 #define BRLOBOL_WINDOW_HOST_H
 
 #include "brlobol/defines.h"
+#include "brlobol/framebuffer.h"
 #include "brlobol/input.h"
 
 #include <Inventor/SbBasic.h>
@@ -46,14 +47,6 @@ enum BRLObolWindowBackend {
     BRLOBOL_WINDOW_BACKEND_OPENGL = 3,
     BRLOBOL_WINDOW_BACKEND_OFFSCREEN = 4,
     BRLOBOL_WINDOW_BACKEND_DIAGNOSTIC = 5
-};
-
-enum BRLObolFramebufferComposition {
-    BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF = 0,
-    BRLOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY = 1,
-    BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY = 2,
-    /* Between the CAD scene and view-local screen features. */
-    BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY = 3
 };
 
 struct BRLOBOL_EXPORT BRLObolWindowDesc {

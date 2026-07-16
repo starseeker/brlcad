@@ -503,6 +503,11 @@ PKG_EXPORT extern int pkg_move_high_fd(struct pkg_conn *pc, int min_fd);
 struct pkg_listener;
 typedef struct pkg_listener pkg_listener_t;
 
+/**
+ * Open a listener.  For TCP, iface_or_null is NULL for all IPv4 interfaces
+ * or an IPv4 address/"localhost" to constrain the bind.  Local IPC address
+ * forms ignore the interface argument.
+ */
 PKG_EXPORT extern pkg_listener_t *pkg_listen(const char *service,
 					     const char *iface_or_null,
 					     int backlog,

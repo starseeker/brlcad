@@ -89,6 +89,7 @@ signals:
 	void do_erase_selections();
 
     private:
+	static const BRLObolInputActionLayer *inputActionLayer();
 	static int inputActionDispatch(void *user_data,
 		BRLObolInputAction action, const BRLObolInputEvent *event);
 	int applyInputAction(BRLObolInputAction action,

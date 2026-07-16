@@ -39,9 +39,9 @@ proc openmv { id w wc dpy host_type } {
 
     foreach pane {ul ur ll lr} {
 	attach -d $dpy -t 0 -n $w.$pane $host_type
-	dm set zclip $mged_default(zclip)
-	dm set zbuffer $mged_default(zbuffer)
-	dm set lighting $mged_default(lighting)
+	dm set view.zclip $mged_default(zclip)
+	dm set renderer.depth_test $mged_default(zbuffer)
+	dm set renderer.lighting $mged_default(lighting)
 	set faceplate $mged_default(faceplate)
 	set orig_gui $mged_default(orig_gui)
 	set perspective_mode $mged_default(perspective_mode)

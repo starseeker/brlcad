@@ -20,6 +20,14 @@ struct imgstream_fb;
 typedef struct imgstream_fb imgstream_fb_t;
 struct imgstream_fb_colormap;
 
+enum BRLObolFramebufferComposition {
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF = 0,
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY = 1,
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY = 2,
+    /* Between the CAD scene and view-local screen features. */
+    BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY = 3
+};
+
 struct BRLOBOL_EXPORT BRLObolFramebufferInfo {
     int max_width;
     int max_height;
@@ -34,8 +42,26 @@ public:
     explicit BRLObolFramebufferStream(BRLObolWindowHost *host = NULL);
     ~BRLObolFramebufferStream(void);
 
-    void setHost(BRLObolWindowHost *host);
+    /**
+     * Move this stream's live framebuffer attachment to another host.
+     *
+     * The imgstream framebuffer and its pixel/view/cursor state are preserved.
+     * When the target rejects the attachment, the old host remains active.
+     * A NULL target detaches presentation without closing the stream.
+     *
+     * @return 0 on success, -1 when the target host rejects the attachment.
+     */
+    int setHost(BRLObolWindowHost *host);
+    int setHost(BRLObolWindowHost *host,
+	BRLObolFramebufferComposition composition);
     BRLObolWindowHost *host(void) const;
+
+    /**
+     * Set the retained image layer.  A live update is transactional: failure
+     * leaves both the previous host attachment and policy unchanged.
+     */
+    int setComposition(BRLObolFramebufferComposition composition);
+    BRLObolFramebufferComposition composition(void) const;
 
     int configure(int width, int height, const char *spec = NULL);
     int ensure(void);

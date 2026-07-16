@@ -31,6 +31,7 @@
 #include <Inventor/nodes/SoShape.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <obol/cad/SoCADAssembly.h>
+#include <obol/cad/SoCADViewState.h>
 #include <OSMesa/osmesa.h>
 
 #include <algorithm>
@@ -123,6 +124,12 @@ public:
 class BRLOBOLRenderContextManager : public SoDB::ContextManager
 {
 public:
+    BRLOBOLRenderContextManager(void) :
+	currentContext(NULL),
+	softwareFramebufferQueries(0)
+    {
+    }
+
     virtual void *createOffscreenContext(unsigned int width, unsigned int height)
     {
 	BRLOBOLRenderContext *ctx = new BRLOBOLRenderContext(width, height);
@@ -139,27 +146,57 @@ public:
 
     virtual SbBool makeContextCurrent(void *context)
     {
-	return context ? static_cast<BRLOBOLRenderContext *>(context)->makeCurrent() : FALSE;
+	BRLOBOLRenderContext *renderContext =
+	    static_cast<BRLOBOLRenderContext *>(context);
+	if (!renderContext || !renderContext->makeCurrent())
+	    return FALSE;
+	this->currentContext = renderContext;
+	return TRUE;
     }
 
     virtual void restorePreviousContext(void *context)
     {
-	if (context)
-	    static_cast<BRLOBOLRenderContext *>(context)->restorePrevious();
+	BRLOBOLRenderContext *renderContext =
+	    static_cast<BRLOBOLRenderContext *>(context);
+	if (renderContext)
+	    renderContext->restorePrevious();
+	if (this->currentContext == renderContext)
+	    this->currentContext = NULL;
     }
 
     virtual void destroyContext(void *context)
     {
 	BRLOBOLRenderContext *ctx = static_cast<BRLOBOLRenderContext *>(context);
+	if (this->currentContext == ctx)
+	    this->currentContext = NULL;
 	if (ctx && ctx->context && OSMesaGetCurrentContext() == ctx->context)
 	    OSMesaMakeCurrent(NULL, NULL, 0, 0, 0);
 	delete ctx;
+    }
+
+    virtual SbBool getCurrentSoftwareFramebuffer(unsigned char *&pixels,
+	unsigned int &width, unsigned int &height, unsigned int &components)
+    {
+	this->softwareFramebufferQueries++;
+	if (!this->currentContext || !this->currentContext->buffer) {
+	    pixels = NULL;
+	    width = height = components = 0;
+	    return FALSE;
+	}
+	pixels = this->currentContext->buffer.get();
+	width = this->currentContext->width;
+	height = this->currentContext->height;
+	components = 4;
+	return TRUE;
     }
 
     virtual void *getProcAddress(const char *funcName)
     {
 	return reinterpret_cast<void *>(OSMesaGetProcAddress(funcName));
     }
+
+    BRLOBOLRenderContext *currentContext;
+    int softwareFramebufferQueries;
 };
 
 struct BRLOBOLSoftwareLineState {
@@ -450,6 +487,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     style->lineWidth = 4.0f;
     root->addChild(style);
 
+    SoCADViewState *cadViewState = new SoCADViewState;
+    cadViewState->softwareWireMode = SoCADViewState::SOFTWARE_WIRE_QUALITY;
+    root->addChild(cadViewState);
+
     SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
     source->path = "/prototype/render-square";
     source->sourceRevision = 1;
@@ -507,7 +548,9 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     renderer.setComponents(SoOffscreenRenderer::RGB);
     renderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
     if (!renderer.render(root))
-	FAIL("SoOffscreenRenderer should render BRL-CAD Obol geometry through OSMesa");
+	FAIL("QUALITY software-wire policy should render BRL-CAD Obol geometry through OSMesa GL");
+    const int qualityFramebufferQueries =
+	contextManager.softwareFramebufferQueries;
 
     const unsigned char *buffer = renderer.getBuffer();
     if (!buffer)
@@ -530,6 +573,22 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	if (!secondRenderer.render(root) || !secondRenderer.getBuffer())
 	    FAIL("retained CAD scene should render in a second GL context");
     }
+
+    cadViewState->softwareWireMode = SoCADViewState::SOFTWARE_WIRE_FAST;
+    contextManager.softwareFramebufferQueries = 0;
+    SoOffscreenRenderer fastRenderer(&contextManager, viewport);
+    fastRenderer.setComponents(SoOffscreenRenderer::RGB);
+    fastRenderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    if (!fastRenderer.render(root) || !fastRenderer.getBuffer())
+	FAIL("FAST software-wire policy should render through the OSMesa framebuffer");
+    if (contextManager.softwareFramebufferQueries <=
+	qualityFramebufferQueries)
+	FAIL("FAST software-wire policy should add a direct writable-framebuffer raster pass");
+    if (count_blue_pixels(fastRenderer.getBuffer(), width, height) < 20)
+	FAIL("FAST software-wire policy should preserve visible database wire color");
+    if (count_green_pixels(fastRenderer.getBuffer(), width, height) < 20)
+	FAIL("FAST software-wire policy should preserve retained HUD composition");
+    cadViewState->softwareWireMode = SoCADViewState::SOFTWARE_WIRE_QUALITY;
 
     SoSeparator *pointRoot = new SoSeparator;
     pointRoot->ref();

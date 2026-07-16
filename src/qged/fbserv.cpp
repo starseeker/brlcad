@@ -221,6 +221,10 @@ static int
 qged_fbserv_listen_on_port(struct fbserv_obj *fbsp, int available_port)
 {
     bu_log("listen on port\n");
+    if (fbs_network_policy(fbsp) != FBSERV_NETWORK_LOOPBACK) {
+	bu_log("qged framebuffer listeners support loopback TCP or IPC only\n");
+	return 0;
+    }
     QFBServer *nl = new QFBServer(fbsp);
     nl->port = available_port;
     if (!nl->listen(QHostAddress::LocalHost, available_port)) {

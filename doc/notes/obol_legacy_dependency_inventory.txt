@@ -61,8 +61,16 @@ Current Clean Boundaries
   dispatch, packet handlers, bounded processing, listener/client lifecycle,
   backend dispatch, cleanup, and the standalone server's configured
   framebuffer.  Its remote framebuffer client supports TCP and reusable local
-  IPC addresses with explicit per-open authentication and TLS policy; it does
-  not depend on a legacy framebuffer API or process-global client credentials.
+  IPC addresses with explicit per-open authentication and TLS policy.  TCP
+  servers default to an enforced loopback bind; external listeners require an
+  explicit secure-remote policy with strict token authentication and TLS.
+  Clients pin the server certificate's SHA-256 fingerprint before disclosing
+  the token and reject non-loopback plaintext or unpinned TLS unless the caller
+  explicitly selects the insecure compatibility policy.  It does not depend
+  on a legacy framebuffer API or hidden process-global client credentials.
+  The OpenSSL-gated loopback regression exercises the production server and
+  remote client together, proving wrong-pin rejection and an authenticated
+  correct-pin framebuffer exchange.
 * Standalone `fbserv` and `rt` use the toolkit-neutral libbrlobol display
   session for legacy display specifications.  At CMake configuration they link
   one direct provider library: libqtcad is preferred, with libtclcad selected
@@ -106,6 +114,14 @@ Remaining Compatibility Owners
 
 libtclcad has no direct libdm dependency.  Its Tk Obol host shell and active
 framebuffer composition use libged's session-owned Obol/imgstream bridge.
+Composition is typed state owned by `BRLObolFramebufferStream`: a target host
+must accept both the existing framebuffer and requested layer before the old
+host detaches.  A live endpoint-property rejection preserves the prior BV mode
+and retained layer rather than silently diverging passive and rendered state.
+When retained RT and a host framebuffer share a layer, the RT renderer image
+is ordered first and the host image composites after it; this ordering is
+stable across image attachment and live layer changes and is covered by
+composite capture.
 The bridge clears an old endpoint capture provider before binding the active
 or explicitly selected output endpoint; factory instances remain opaque and
 are never cast to `BRLObolWindowHost`.  TclCAD provides an event-loop
@@ -161,6 +177,29 @@ its retained window, editing, and semantic-input state after that boundary.
 Attachment neither makes a DM context current nor pushes DM window bounds.
 The former `regdebug` command, which only wrote a graphical-DM hardware-debug
 field, is removed rather than retained as an Obol no-op.
+Endpoint renderer selection no longer accepts non-graphical names as aliases
+for normal drawing.  `none` retains the authoritative scene while suppressing
+the controller root, host frame delivery, and composite capture.  `diagnostic`
+performs explicit retained realization/progressive/bounds traversal and reports
+typed revision, source counts, pending state, and summary values without
+creating a graphical backend.  `endpoint.renderer.supported` and the matching
+capability bits are derived from the active host binding; explicit HW, SW, and
+RT mismatches remain rejected.  Framebuffer-plane capture is intentionally
+independent of these renderer modes.  Unit and GED lifecycle tests cover
+hosted suppression, diagnostic refresh, capability reporting, and restoration
+of the exact retained root when graphical rendering resumes.
+Automatic policy resolution is separate from the requested policy and is
+reported by `endpoint.renderer.resolved`: System GL wins over pixel
+presentation for a factory that advertises both, pixel presentation resolves
+to software otherwise, and RT remains explicit.  An unbound endpoint or the
+transitional direct-host API stays unresolved as `auto` because it has no
+factory capability record.  GED status/diagnostics expose both values.
+FAST and QUALITY remain controller policy rather than renderer names.  The
+OSMesa rendering regression drives the same database-intent VList through
+both modes: QUALITY retains the GL wire path, while FAST performs an
+additional direct writable-framebuffer raster pass without losing wire color
+or HUD composition.  Property tests separately verify typed, view-local mode
+selection.
 Obol's `SoRenderManager` implements two-eye anaglyph, interleaved, and
 separate/quad-buffer rendering modes plus an eye offset, but BRL-CAD does not
 yet expose that capability.  Initial validation found an interleaved render
@@ -172,7 +211,10 @@ requests stereo buffers today.  Treat the root cause as unresolved until a
 hardware endpoint validates advertised capability, mode-specific output,
 capture semantics, and restoration to mono.  Software/OSMesa stereo must
 explicitly report unsupported until separately proven.  MGED remains mono and
-must not restore its former per-eye scene replay.
+must not restore its former per-eye scene replay.  Its unused `eye_sep_dist`
+variable and `--eye-sep-dist` option are removed rather than presenting a
+nonfunctional stereo policy surface; no replacement endpoint property is
+appropriate until a stereo-capable host passes the validation above.
 
 TclCAD `pix` and `png` capture use the selected view's display endpoint for
 size, rendering, and readback.  Hardware Togl and software TkPhoto hosts share
@@ -245,8 +287,26 @@ Removal Conditions
 
 | Area | Retained edge | Removal condition |
 | --- | --- | --- |
-| libtclcad/MGED | Named DM-selection commands | Replace names with Obol host selection and remove the remaining public compatibility commands |
 | utilities | Drawing utilities and GED framebuffer image commands are DM-independent; the uncalled `plot3-dm` sample was retired in favor of retained Obol `overlay` import. ART, remrt/rtsrv, and the RT family use imgstream framebuffer state | Runtime-verify ART tile publication in an Appleseed-enabled build |
+
+The public `dm` command is the supported endpoint-native policy surface, not a
+retained graphical backend edge.  MGED scripts and regressions now use the
+canonical `controller.software_wire`, `view.zclip`, `renderer.depth_test`,
+`renderer.lighting`, and `renderer.depth_cue` properties.  Libged no longer
+maps the former `software_wire`, `zclip`, `zbuffer`, `lighting`, or `depthcue`
+option-table names, and lifecycle coverage verifies that every retired alias
+fails as an unknown property.
+
+The current production inventory finds no graphical libdm call, DM backend
+plugin loader, direct faceplate renderer, or application-owned graphical
+context setup.  The `libged_dm` manifest is a GED command plugin containing
+the endpoint-native `dm`, `ert`, and screengrab commands; it is not a display
+backend.  Native GL current-context calls are confined to the registered Qt
+and Tk host factories, where toolkit presentation ownership belongs.  TclCAD
+`new_view` now rejects unsupported presentation names as `tkobol`/`nu` view
+types and no longer suggests recompiling a display manager or consulting
+`fbhelp`.  Its Tk build switch likewise uses platform-host terminology rather
+than a stale DM-definition name.
 
 Cross-platform validation of the built-in Tk host is still required on
 Windows and macOS.  That work may change Togl platform code, but must not

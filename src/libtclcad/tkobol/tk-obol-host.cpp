@@ -42,6 +42,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 #include <new>
@@ -847,6 +848,26 @@ private:
 		key -= 'a' - 'A';
 	    return key;
 	}
+	if (name && name[0] == 'F') {
+	    char *end = NULL;
+	    const long function_key = strtol(name + 1, &end, 10);
+	    if (end && !end[0] && function_key >= 1 && function_key <= 12)
+		return BRLOBOL_INPUT_KEY_F1 + static_cast<int>(function_key - 1);
+	}
+	if (name && (bu_strcmp(name, "Shift_L") == 0 ||
+		bu_strcmp(name, "Shift_R") == 0))
+	    return BRLOBOL_INPUT_KEY_SHIFT;
+	if (name && (bu_strcmp(name, "Control_L") == 0 ||
+		bu_strcmp(name, "Control_R") == 0))
+	    return BRLOBOL_INPUT_KEY_CONTROL;
+	if (name && (bu_strcmp(name, "Alt_L") == 0 ||
+		bu_strcmp(name, "Alt_R") == 0))
+	    return BRLOBOL_INPUT_KEY_ALT;
+	if (name && (bu_strcmp(name, "Meta_L") == 0 ||
+		bu_strcmp(name, "Meta_R") == 0 ||
+		bu_strcmp(name, "Super_L") == 0 ||
+		bu_strcmp(name, "Super_R") == 0))
+	    return BRLOBOL_INPUT_KEY_META;
 	return BRLOBOL_INPUT_ANY;
     }
 

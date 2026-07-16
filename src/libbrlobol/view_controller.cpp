@@ -996,6 +996,7 @@ BRLObolViewController::BRLObolViewController(void) :
     backgroundBottom(0.0f, 0.0f, 0.0f),
     backgroundTop(0.0f, 0.0f, 0.0f),
     softwareWireMode(SOFTWARE_WIRE_AUTO),
+    endpointGraphicalRenderingEnabled(1),
     transparencyEnabled(TRUE),
     antialiasingEnabled(FALSE),
     clipMinimum(BV_VIEW_MIN),
@@ -1095,6 +1096,7 @@ BRLObolViewController::BRLObolViewController(SoNode *root, SoCamera *camera) :
     backgroundBottom(0.0f, 0.0f, 0.0f),
     backgroundTop(0.0f, 0.0f, 0.0f),
     softwareWireMode(SOFTWARE_WIRE_AUTO),
+    endpointGraphicalRenderingEnabled(1),
     transparencyEnabled(TRUE),
     antialiasingEnabled(FALSE),
     clipMinimum(BV_VIEW_MIN),
@@ -1309,6 +1311,9 @@ BRLObolViewController::getRenderSceneRoot(void) const
 SoNode *
 BRLObolViewController::getRenderRoot(void) const
 {
+	if (!this->endpointGraphicalRenderingEnabled.load(
+		std::memory_order_acquire))
+	    return NULL;
 	return this->renderPresentationRoot ? this->renderPresentationRoot :
 	this->renderBatchRoot ? this->renderBatchRoot :
 	this->viewport->getRoot();
@@ -1602,6 +1607,49 @@ BRLObolViewController::isLightingEnabled(void) const
 {
     SoLightModel *model = controller_light_model(this->viewport);
     return model && model->model.getValue() == SoLightModel::PHONG;
+}
+
+void
+BRLObolViewController::setHeadlightColor(const SbColor &color)
+{
+    SoDirectionalLight *light = controller_headlight(this->viewport);
+    if (!light)
+	return;
+    const SbColor clamped(
+	std::max(0.0f, std::min(1.0f, color[0])),
+	std::max(0.0f, std::min(1.0f, color[1])),
+	std::max(0.0f, std::min(1.0f, color[2])));
+    if (light->color.getValue() == clamped)
+	return;
+    light->color = clamped;
+    this->requestRender("lighting");
+}
+
+SbColor
+BRLObolViewController::getHeadlightColor(void) const
+{
+    SoDirectionalLight *light = controller_headlight(this->viewport);
+    return light ? light->color.getValue() : SbColor(1.0f, 1.0f, 1.0f);
+}
+
+void
+BRLObolViewController::setHeadlightIntensity(float intensity)
+{
+    SoDirectionalLight *light = controller_headlight(this->viewport);
+    if (!light || !std::isfinite(intensity))
+	return;
+    const float clamped = std::max(0.0f, std::min(1.0f, intensity));
+    if (std::fabs(light->intensity.getValue() - clamped) <= 1.0e-6f)
+	return;
+    light->intensity = clamped;
+    this->requestRender("lighting");
+}
+
+float
+BRLObolViewController::getHeadlightIntensity(void) const
+{
+    SoDirectionalLight *light = controller_headlight(this->viewport);
+    return light ? light->intensity.getValue() : 1.0f;
 }
 
 void
@@ -1968,6 +2016,20 @@ BRLObolViewController::getLastDiagnostics(void) const
 }
 
 void
+BRLObolViewController::setEndpointGraphicalRenderingEnabled(SbBool enabled)
+{
+    const int requested = enabled ? 1 : 0;
+    if (this->endpointGraphicalRenderingEnabled.exchange(requested,
+	    std::memory_order_acq_rel) == requested)
+	return;
+    this->syncRenderManager();
+    if (requested)
+	this->requestRender("render-engine");
+    else
+	this->clearRenderRequest();
+}
+
+void
 BRLObolViewController::requestRender(const char *reason)
 {
     std::lock_guard<std::mutex> lock(this->renderRequestMutex);
@@ -2052,6 +2114,9 @@ BRLObolViewController::synchronizePresentation(void)
 void
 BRLObolViewController::notifyFrameRequest(const char *reason)
 {
+    if (!this->endpointGraphicalRenderingEnabled.load(
+	    std::memory_order_acquire))
+	return;
     BRLObolFrameRequestCallback callback = NULL;
     void *userData = NULL;
     ControllerFrameRequestState *state = NULL;
@@ -2285,6 +2350,9 @@ BRLObolViewController::renderToImage(unsigned char **image,
 SbBool
 BRLObolViewController::isRenderRequested(void) const
 {
+    if (!this->endpointGraphicalRenderingEnabled.load(
+	    std::memory_order_acquire))
+	return FALSE;
 
     std::lock_guard<std::mutex> lock(this->renderRequestMutex);
     return (this->renderRequested || this->hasPendingLodResults() ||
@@ -2616,6 +2684,14 @@ BRLObolViewController::cancelActiveLodGeneration(void)
     this->lodLastSubmittedViewRevision = 0;
     this->lodLastSubmittedPolicyRevision = 0;
     this->lodLastSubmittedSourceSignature = "";
+}
+
+void
+BRLObolViewController::invalidateDatabaseSourceLodState(void)
+{
+    this->cancelActiveLodGeneration();
+    if (this->viewAttachment)
+	this->viewAttachment->clearViewLodState();
 }
 
 BRLObolLodService *
@@ -4150,6 +4226,7 @@ BRLObolViewController::replaceDatabaseSource(const char *sourcePath,
     int changed = this->sceneController.replaceDatabaseSource(sourcePath,
 		  dbip, drawMode, sourceRevision);
     if (changed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4167,6 +4244,7 @@ BRLObolViewController::replaceDatabaseSourceInstance(
     int changed = this->sceneController.replaceDatabaseSourceInstance(
 		      sourceInstanceKey, sourcePath, dbip, drawMode, sourceRevision);
     if (changed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4190,12 +4268,28 @@ BRLObolViewController::setDatabaseSourceState(const char *sourcePath,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
 {
+    SoBRLDatabaseSource *source =
+	this->sceneController.findDatabaseSource(sourcePath);
+    const uint32_t previousSourceRevision = source ?
+	source->sourceRevision.getValue() : 0;
+    const uint32_t previousInputsRevision = source ?
+	source->inputsRevision.getValue() : 0;
+    const SbBool previousStale = source ? source->stale.getValue() : FALSE;
+    const uint32_t previousStaleReason = source ?
+	source->staleReason.getValue() : 0;
     const int changed = this->sceneController.setDatabaseSourceState(
 			    sourcePath, sourceRevisionValid, sourceRevision, inputsRevision,
 			    visible, selected, highlighted, lineStyle, lineWidth, transparency,
 			    colorOverride, color, materialColorValid, materialColor,
 			    materialRevision);
     if (changed > 0) {
+	source = this->sceneController.findDatabaseSource(sourcePath);
+	if (!source ||
+	    source->sourceRevision.getValue() != previousSourceRevision ||
+	    source->inputsRevision.getValue() != previousInputsRevision ||
+	    source->stale.getValue() != previousStale ||
+	    source->staleReason.getValue() != previousStaleReason)
+	    this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4220,12 +4314,29 @@ BRLObolViewController::setDatabaseSourceInstanceState(
     const SbColor &materialColor,
     uint32_t materialRevision)
 {
+    SoBRLDatabaseSource *source =
+	this->sceneController.findDatabaseSourceInstance(sourceInstanceKey);
+    const uint32_t previousSourceRevision = source ?
+	source->sourceRevision.getValue() : 0;
+    const uint32_t previousInputsRevision = source ?
+	source->inputsRevision.getValue() : 0;
+    const SbBool previousStale = source ? source->stale.getValue() : FALSE;
+    const uint32_t previousStaleReason = source ?
+	source->staleReason.getValue() : 0;
     const int changed = this->sceneController.setDatabaseSourceInstanceState(
 			    sourceInstanceKey, sourceRevisionValid, sourceRevision,
 			    inputsRevision, visible, selected, highlighted, lineStyle, lineWidth,
 			    transparency, colorOverride, color, materialColorValid,
 			    materialColor, materialRevision);
     if (changed > 0) {
+	source = this->sceneController.findDatabaseSourceInstance(
+		 sourceInstanceKey);
+	if (!source ||
+	    source->sourceRevision.getValue() != previousSourceRevision ||
+	    source->inputsRevision.getValue() != previousInputsRevision ||
+	    source->stale.getValue() != previousStale ||
+	    source->staleReason.getValue() != previousStaleReason)
+	    this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4297,6 +4408,7 @@ BRLObolViewController::setDatabaseSourceBoundsState(const char *sourcePath,
     const int changed = this->sceneController.setDatabaseSourceBoundsState(
 			    sourcePath, boundsValid, boundsMin, boundsMax);
     if (changed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4314,6 +4426,7 @@ BRLObolViewController::setDatabaseSourceInstanceBoundsState(
 	this->sceneController.setDatabaseSourceInstanceBoundsState(
 	    sourceInstanceKey, boundsValid, boundsMin, boundsMax);
     if (changed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4356,6 +4469,7 @@ BRLObolViewController::markDatabaseSourceStale(const char *sourcePath,
     const int changed = this->sceneController.markDatabaseSourceStale(
 			    sourcePath, staleReason);
     if (changed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4370,6 +4484,7 @@ BRLObolViewController::markDatabaseSourceInstanceStale(
     const int changed = this->sceneController.markDatabaseSourceInstanceStale(
 			    sourceInstanceKey, staleReason);
     if (changed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4381,6 +4496,7 @@ BRLObolViewController::removeDatabaseSource(const char *sourcePath)
 {
     int removed = this->sceneController.removeDatabaseSource(sourcePath);
     if (removed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4394,6 +4510,7 @@ BRLObolViewController::removeDatabaseSourceInstance(
     int removed = this->sceneController.removeDatabaseSourceInstance(
 		      sourceInstanceKey);
     if (removed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4432,6 +4549,7 @@ BRLObolViewController::clearDatabaseSources(void)
 {
     int removed = this->sceneController.clearDatabaseSources();
     if (removed > 0) {
+	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
 	this->requestRender("database-source");
     }
@@ -4448,6 +4566,12 @@ int
 BRLObolViewController::getDatabaseSourceCount(void) const
 {
     return this->sceneController.getDatabaseSourceCount();
+}
+
+std::vector<SoBRLDatabaseSource *>
+BRLObolViewController::getRenderDatabaseSources(void) const
+{
+    return controller_render_database_sources(this);
 }
 
 SoBRLDatabaseSource *

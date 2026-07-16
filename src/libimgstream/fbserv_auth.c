@@ -119,8 +119,17 @@ fbserv_verify_token(const char *provided, const char *expected)
 	|| strlen(expected) != FBSERV_AUTH_TOKEN_LEN)
 	return 0;
 
-    for (i = 0; i < FBSERV_AUTH_TOKEN_LEN; i++)
+
+    for (i = 0; i < FBSERV_AUTH_TOKEN_LEN; i++) {
+	if (!((provided[i] >= '0' && provided[i] <= '9') ||
+		(provided[i] >= 'a' && provided[i] <= 'f') ||
+		(provided[i] >= 'A' && provided[i] <= 'F')) ||
+	    !((expected[i] >= '0' && expected[i] <= '9') ||
+		(expected[i] >= 'a' && expected[i] <= 'f') ||
+		(expected[i] >= 'A' && expected[i] <= 'F')))
+	    diff |= 1;
 	diff |= (unsigned char)provided[i] ^ (unsigned char)expected[i];
+    }
 
     return (diff == 0) ? 1 : 0;
 }

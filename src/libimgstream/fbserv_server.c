@@ -73,6 +73,22 @@ fbs_tls_server_context_destroy(void *ctx)
 #endif
 }
 
+
+int
+fbs_tls_server_sha256(void *ctx,
+	char fingerprint[FBSERV_AUTH_TOKEN_LEN + 1])
+{
+#ifdef HAVE_OPENSSL_SSL_H
+    return fbserv_tls_server_fingerprint((SSL_CTX *)ctx, fingerprint) ==
+	FBSERV_TLS_OK ? BRLCAD_OK : BRLCAD_ERROR;
+#else
+    (void)ctx;
+    if (fingerprint)
+	fingerprint[0] = '\0';
+    return BRLCAD_ERROR;
+#endif
+}
+
 static struct fbserv_obj *
 _fbs_conn_obj(struct pkg_conn *pcp)
 {
@@ -326,14 +342,18 @@ fbs_rfbauth(struct pkg_conn *pcp, char *buf)
     fbsp = fbscp->fbsc_fbsp;
 
     if (!fbsp || fbsp->fbs_auth_token[0] == '\0') {
-	/* No token configured — mark auth as satisfied */
-	fbscp->fbsc_auth_ok = 1;
+	/* A strict server without a configured token must fail closed. */
+	if (fbsp && fbsp->fbs_require_auth)
+	    fbscp->fbsc_pending_drop = 1;
+	else
+	    fbscp->fbsc_auth_ok = 1;
 	if (buf) (void)free(buf);
 	return;
     }
 
-    if (buf && pcp->pkc_len >= FBSERV_AUTH_TOKEN_LEN) {
-	bu_strlcpy(provided, buf, sizeof(provided));
+    if (buf && pcp->pkc_len == FBSERV_AUTH_TOKEN_LEN) {
+	memcpy(provided, buf, FBSERV_AUTH_TOKEN_LEN);
+	provided[FBSERV_AUTH_TOKEN_LEN] = '\0';
     }
 
     if (fbserv_verify_token(provided, fbsp->fbs_auth_token)) {
@@ -1103,6 +1123,35 @@ fbs_clear_transport(struct fbserv_obj *fbsp)
 
 
 int
+fbs_set_network_policy(struct fbserv_obj *fbsp,
+	enum fbserv_network_policy policy)
+{
+    return fbserv_obj_set_network_policy(fbsp, policy);
+}
+
+
+enum fbserv_network_policy
+fbs_network_policy(const struct fbserv_obj *fbsp)
+{
+    return fbserv_obj_network_policy(fbsp);
+}
+
+
+const char *
+fbs_listener_interface(const struct fbserv_obj *fbsp)
+{
+    return fbserv_obj_listener_interface(fbsp);
+}
+
+
+int
+fbs_network_ready(const struct fbserv_obj *fbsp)
+{
+    return fbserv_obj_network_ready(fbsp);
+}
+
+
+int
 fbs_can_open_ipc(const struct fbserv_obj *fbsp)
 {
     return fbserv_can_open_ipc(fbsp);
@@ -1337,6 +1386,18 @@ fbs_open(struct fbserv_obj *fbsp, int port)
     int i;
     int available_port = port;
 
+    if (!fbsp || !fbsp->fbs_is_listening || !fbsp->fbs_listen_on_port ||
+	!fbsp->fbs_open_server_handler)
+	return BRLCAD_ERROR;
+
+    if (!fbs_network_ready(fbsp)) {
+	if (fbsp->msgs)
+	    bu_vls_printf(fbsp->msgs,
+		"fbs_open: secure remote listeners require a valid token, strict authentication, and TLS\n");
+	bu_log("fbs_open: refusing an insecure remote framebuffer listener\n");
+	return BRLCAD_ERROR;
+    }
+
     /* Already listening; nothing more to do. */
     if ((*fbsp->fbs_is_listening)(fbsp)) {
 	return BRLCAD_OK;
@@ -1559,6 +1620,7 @@ fbs_new_client(struct fbserv_obj *fbsp, struct pkg_conn *pcp, void *data)
 	fbsp->fbs_clients[i].fbsc_fbsp = fbsp;
 	fbsp->fbs_clients[i].fbsc_auth_ok = 0;
 	fbsp->fbs_clients[i].fbsc_pending_drop = 0;
+	fbsp->fbs_clients[i].fbsc_is_ipc = 0;
 	fbs_setup_socket(pkg_get_read_fd(pcp));
 	/* Point pkc_server_data at the fbserv_client so handlers can
 	 * reach back to the fbserv_obj (needed for auth checks). */

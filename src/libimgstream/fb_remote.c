@@ -9,6 +9,7 @@
 #include "common.h"
 
 #include <limits.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,22 @@ span_copy(const char *value, size_t length)
 }
 
 static int
+span_equal(const char *value, size_t length, const char *literal)
+{
+    return value && literal && strlen(literal) == length &&
+	memcmp(value, literal, length) == 0;
+}
+
+static int
+remote_host_is_loopback(const imgstream_fb_spec_info_t *info)
+{
+    return info && info->host &&
+	(span_equal(info->host, info->host_len, "localhost") ||
+	 span_equal(info->host, info->host_len, "127.0.0.1") ||
+	 span_equal(info->host, info->host_len, "::1"));
+}
+
+static int
 remote_command(struct imgstream_fb_remote *remote, int type,
 	const void *payload, size_t payload_size)
 {
@@ -103,9 +120,13 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
     char service[32] = {0};
     char response[5 * FBSERV_NET_LONG_LEN] = {0};
     char *request = NULL;
-    const char *token = options ? options->auth_token : NULL;
+    const char *token = NULL;
+    const char *tls_server_sha256 = NULL;
     struct imgstream_fb_remote *remote = NULL;
     size_t request_size = 0;
+    int allow_insecure = 0;
+    int local_transport = 0;
+    int use_tls = 0;
     int ret = 0;
 
     if (!info || info->kind != IMGSTREAM_FB_SPEC_REMOTE || !remote_out ||
@@ -116,15 +137,39 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
     *width = 0;
     *height = 0;
 
+    if (options && options->struct_size >=
+	offsetof(struct imgstream_fb_remote_options, use_tls) +
+	sizeof(options->use_tls)) {
+	token = options->auth_token;
+	use_tls = options->use_tls;
+    }
+    if (options && options->struct_size >=
+	offsetof(struct imgstream_fb_remote_options, tls_server_sha256) +
+	sizeof(options->tls_server_sha256))
+	tls_server_sha256 = options->tls_server_sha256;
+    if (options && options->struct_size >=
+	offsetof(struct imgstream_fb_remote_options, allow_insecure) +
+	sizeof(options->allow_insecure))
+	allow_insecure = options->allow_insecure;
+
+    if (token && token[0] && !fbserv_verify_token(token, token)) {
+	remote_log("remote framebuffer: refusing an invalid authentication token\n");
+	return 0;
+    }
+
     if (info->remote == IMGSTREAM_FB_REMOTE_IPC) {
 	if (!info->target || !info->target_len)
 	    return 0;
 	target = span_copy(info->target, info->target_len);
 	connection = pkg_connect_addr(target, remote_switch, remote_log);
+	local_transport = 1;
     } else if (info->remote == IMGSTREAM_FB_REMOTE_TCP) {
 	const char *inherited = getenv(PKG_ADDR_ENVVAR);
-	if (inherited && inherited[0])
+	if (inherited && inherited[0]) {
 	    connection = pkg_connect_addr(inherited, remote_switch, remote_log);
+	    if (connection != PKC_NULL && connection != PKC_ERROR)
+		local_transport = 1;
+	}
 	if (connection == PKC_NULL || connection == PKC_ERROR) {
 	    if (!info->host || !info->host_len || info->port < 0)
 		goto cleanup;
@@ -132,6 +177,7 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
 	    snprintf(service, sizeof(service), "%d", info->port);
 	    connection = pkg_open(host, service, NULL, NULL, NULL,
 		remote_switch, remote_log);
+	    local_transport = remote_host_is_loopback(info);
 	}
     } else {
 	goto cleanup;
@@ -139,11 +185,23 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
     if (connection == PKC_NULL || connection == PKC_ERROR)
 	goto cleanup;
 
+    if (info->remote == IMGSTREAM_FB_REMOTE_TCP && !local_transport &&
+	!use_tls && !allow_insecure) {
+	remote_log("remote framebuffer: non-loopback TCP requires pinned TLS; set FBSERV_INSECURE only for explicit legacy access\n");
+	goto cleanup;
+    }
+    if (info->remote == IMGSTREAM_FB_REMOTE_TCP && use_tls &&
+	(!tls_server_sha256 || !tls_server_sha256[0]) && !allow_insecure) {
+	remote_log("remote framebuffer: TLS requires the server fingerprint in FBSERV_TLS_SHA256\n");
+	goto cleanup;
+    }
+
 #ifdef HAVE_OPENSSL_SSL_H
-    if (options && options->use_tls) {
+    if (info->remote == IMGSTREAM_FB_REMOTE_TCP && use_tls) {
 	SSL_CTX *tls_context = fbserv_tls_client_ctx();
 	if (!tls_context ||
-	    fbserv_tls_connect(tls_context, connection) != FBSERV_TLS_OK) {
+	    fbserv_tls_connect(tls_context, connection, tls_server_sha256,
+		allow_insecure) != FBSERV_TLS_OK) {
 	    if (tls_context)
 		SSL_CTX_free(tls_context);
 	    goto cleanup;
@@ -151,7 +209,7 @@ imgstream_fb_remote_open(const imgstream_fb_spec_info_t *info,
 	SSL_CTX_free(tls_context);
     }
 #else
-    if (options && options->use_tls)
+    if (info->remote == IMGSTREAM_FB_REMOTE_TCP && use_tls)
 	goto cleanup;
 #endif
 

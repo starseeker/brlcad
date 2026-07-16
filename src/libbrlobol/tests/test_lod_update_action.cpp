@@ -383,6 +383,37 @@ wait_for_service_queued(BRLObolLodService &service,
 }
 
 static int
+wait_for_service_delayed(BRLObolLodService &service)
+{
+    for (int i = 0; i < 400; i++) {
+	if (service.delayedTaskCountForDiagnostics() > 0)
+	    return 0;
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    printf("FAIL: LoD service did not start delayed source work\n");
+    return 1;
+}
+
+static int
+wait_for_service_idle(BRLObolLodService &service)
+{
+    for (int i = 0; i < 400; i++) {
+	if (service.inFlightCount() == 0 &&
+	    service.pendingTaskCountForDiagnostics() == 0 &&
+	    service.queuedResultCountForDiagnostics() == 0 &&
+	    service.queuedCacheWriteCountForDiagnostics() == 0 &&
+	    service.delayedTaskCountForDiagnostics() == 0 &&
+	    service.activeRequestCountForDiagnostics() == 0)
+	    return 0;
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    printf("FAIL: LoD service did not drain cancelled source work\n");
+    return 1;
+}
+
+static int
 submit_source_full_detail_task(BRLObolLodService &service,
 			       const BRLObolLodRequest &request)
 {
@@ -561,6 +592,8 @@ test_rt_exact_pick_provider(void)
 	fabsf(pick.distance - 3.0f) > 1.0e-5f ||
 	fabsf(pick.point[2] - 2.0f) > 1.0e-5f ||
 	pick.normal[2] < 0.9f ||
+	!pick.uvValid || pick.uv[0] < 0.0f || pick.uv[0] > 1.0f ||
+	pick.uv[1] < 0.0f || pick.uv[1] > 1.0f ||
 	pick.detail.getPrimitiveKind() != SoBRLPickDetail::IMPLICIT_SOLID ||
 	pick.detail.getRegionId() != 77 ||
 	pick.detail.getAirCode() != 2 ||
@@ -575,6 +608,23 @@ test_rt_exact_pick_provider(void)
 	return 1;
     }
 
+    BRLObolRtPickResult exitPick;
+    if (!pickCache.pickRay(exitPick,
+	    SbVec3f(0.0f, 0.0f, 1.9999f),
+	    SbVec3f(0.0f, 0.0f, -1.0f), NULL, 0, NULL, 1.0e-4f) ||
+	!exitPick.hit || fabsf(exitPick.distance - 3.9999f) > 1.0e-4f ||
+	fabsf(exitPick.point[2] + 2.0f) > 1.0e-4f ||
+	exitPick.normal[2] > -0.9f ||
+	!exitPick.uvValid || exitPick.uv[0] < 0.0f ||
+	exitPick.uv[0] > 1.0f || exitPick.uv[1] < 0.0f ||
+	exitPick.uv[1] > 1.0f ||
+	exitPick.detail.getPrimitiveKind() != SoBRLPickDetail::IMPLICIT_SOLID) {
+	printf("FAIL: RT exact pick minimum distance did not select solid exit boundary\n");
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
     const SbPlane sectionPlane(SbVec3f(0.0f, 0.0f, -1.0f),
 	SbVec3f(0.0f, 0.0f, 0.0f));
     BRLObolRtPickResult sectionPick;
@@ -584,6 +634,7 @@ test_rt_exact_pick_provider(void)
 	!sectionPick.hit || fabsf(sectionPick.distance - 5.0f) > 1.0e-5f ||
 	fabsf(sectionPick.point[2]) > 1.0e-5f ||
 	sectionPick.normal[2] > -0.9f ||
+	sectionPick.uvValid ||
 	sectionPick.detail.getPrimitiveIndex() != -1) {
 	printf("FAIL: RT exact pick did not realize a cut-plane section hit\n");
 	db_close(dbip);
@@ -5576,6 +5627,259 @@ test_view_controller_lod_submit_and_apply(void)
 }
 
 static int
+test_view_controller_lod_source_churn(void)
+{
+    static const int churnCount = 64;
+    static const uint32_t firstRevision = 1000;
+    static const uint32_t finalRevision = 9000;
+    char cache_dir[MAXPATHLEN] = {0};
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+
+    bu_dir(cache_dir, MAXPATHLEN, BU_DIR_CURR,
+	   "brlobol_lod_source_churn_cache", NULL);
+    bu_dirclear(cache_dir);
+    bu_mkdir(cache_dir);
+    bu_setenv("BU_DIR_CACHE", cache_dir, 1);
+
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip)) {
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->height = 80.0f;
+
+    BRLObolLodService service;
+    if (!service.start(1, TRUE)) {
+	printf("FAIL: LoD source-churn service did not start\n");
+	root->unref();
+	brlobol_mesh_lod_cache_clear_database(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	return 1;
+    }
+    service.setQueueLimits(4, 4, 4);
+
+    bu_setenv("BRLOBOL_LOD_AABB_TASK_DELAY_MS", "40", 1);
+    bu_setenv("BRLOBOL_LOD_OBB_TASK_DELAY_MS", "40", 1);
+    bu_setenv("BRLOBOL_LOD_TASK_DELAY_MS", "40", 1);
+
+    int ret = 0;
+    {
+	BRLObolViewController controller(root, camera);
+	controller.setLodService(&service);
+	controller.setViewportSize(800, 600);
+	controller.setLodPolicyRevision(404);
+
+	for (int i = 0; !ret && i < churnCount; i++) {
+	    const uint32_t revision = firstRevision +
+		static_cast<uint32_t>(i);
+	    if (controller.replaceDatabaseSource("lod-submit.bot", dbip,
+		    SoBRLDatabaseSource::SHADED, revision) != 1) {
+		printf("FAIL: LoD source churn did not publish cycle %d\n", i);
+		ret = 1;
+		break;
+	    }
+
+	    SoBRLDatabaseSource *source = controller.getDatabaseSource(0);
+	    SoBRLLodMeshShape *mesh =
+		make_lod_mesh("/lod-submit.bot", "lod-submit.bot");
+	    if (!source) {
+		printf("FAIL: LoD source churn lost published cycle %d\n", i);
+		ret = 1;
+		break;
+	    }
+	    source->lodBotThreshold = 1;
+	    source->realizedSourceRevision = revision;
+	    source->realizedInputsRevision = source->inputsRevision.getValue();
+	    source->realizationStatus = SoBRLDatabaseSource::REALIZED;
+	    source->stale = FALSE;
+	    source->staleReason = SoBRLDatabaseSource::STALE_NONE;
+	    mesh->sourceId = revision;
+	    mesh->lodPolicy = 6;
+	    source->addChild(mesh);
+
+	    BRLObolLodRequest residentRequest =
+		make_request("/lod-submit.bot", "lod-submit.bot");
+	    residentRequest.sourceRevision = revision;
+	    BRLObolLodResult residentMesh =
+		mesh_payload_result(residentRequest);
+	    BRLObolLodCounts proxyCounts;
+	    proxyCounts.faceCount = 1;
+	    proxyCounts.pointCount = 3;
+	    BRLObolLodResult residentProxy = brlobol_lod_aabb_result(
+		residentRequest, residentRequest.bounds, &proxyCounts);
+	    if (!controller.getViewLodState()->applyMeshResult(mesh,
+		    residentMesh) ||
+		!controller.getViewLodState()->applyProxyResult(mesh,
+		    residentProxy) ||
+		controller.getActiveLodMeshPayloadCount() != 1 ||
+		controller.getActiveLodProxyPayloadCount(
+		    BRLOBOL_LOD_PROXY_AABB) != 1) {
+		printf("FAIL: LoD source churn did not seed cycle %d view state\n",
+		       i);
+		ret = 1;
+		break;
+	    }
+
+	    controller.clearRenderRequest();
+	    if (controller.submitLodRequestsIfNeeded(TRUE, 1) != 3 ||
+		controller.getLastLodSubmittedTaskCount() != 3 ||
+		wait_for_service_delayed(service)) {
+		printf("FAIL: LoD source churn did not start cycle %d work\n", i);
+		ret = 1;
+		break;
+	    }
+	    const uint64_t generation = service.currentGeneration();
+	    if (generation == 0 ||
+		controller.setDatabaseSourceState(
+		    "lod-submit.bot", FALSE, revision,
+		    source->inputsRevision.getValue(),
+		    source->visible.getValue(), !source->selected.getValue(),
+		    source->highlighted.getValue(), source->lineStyle.getValue(),
+		    source->lineWidth.getValue(), source->transparency.getValue(),
+		    source->colorOverride.getValue(), source->color.getValue(),
+		    source->materialColorValid.getValue(),
+		    source->materialColor.getValue(),
+		    source->materialRevision.getValue()) != 1 ||
+		service.isGenerationCancelled(generation) ||
+		controller.getActiveLodMeshPayloadCount() != 1 ||
+		controller.getActiveLodProxyPayloadCount(
+		    BRLOBOL_LOD_PROXY_AABB) != 1 ||
+		service.inFlightCount() > 4 ||
+		service.pendingTaskCountForDiagnostics() > 4 ||
+		service.queuedResultCountForDiagnostics() > 4 ||
+		service.queuedCacheWriteCountForDiagnostics() > 4) {
+		printf("FAIL: LoD source churn exceeded bounded cycle %d work\n", i);
+		ret = 1;
+		break;
+	    }
+
+	    int changed = 0;
+	    switch (i % 4) {
+		case 0:
+		    changed = controller.markDatabaseSourceStale(
+			"lod-submit.bot", SoBRLDatabaseSource::STALE_SOURCE);
+		    break;
+		case 1:
+		    changed = controller.setDatabaseSourceState(
+			"lod-submit.bot", TRUE, revision + 1,
+			source->inputsRevision.getValue(),
+			source->visible.getValue(), source->selected.getValue(),
+			source->highlighted.getValue(), source->lineStyle.getValue(),
+			source->lineWidth.getValue(), source->transparency.getValue(),
+			source->colorOverride.getValue(), source->color.getValue(),
+			source->materialColorValid.getValue(),
+			source->materialColor.getValue(),
+			source->materialRevision.getValue());
+		    break;
+		case 2:
+		    changed = controller.setDatabaseSourceBoundsState(
+			"lod-submit.bot", TRUE,
+			SbVec3f(0.0f, 0.0f, 0.0f),
+			SbVec3f(static_cast<float>(i + 2), 2.0f, 2.0f));
+		    break;
+		default:
+		    changed = controller.removeDatabaseSource("lod-submit.bot");
+		    break;
+	    }
+
+	    if (changed != 1 || !service.isGenerationCancelled(generation) ||
+		controller.getActiveLodMeshPayloadCount() != 0 ||
+		controller.getActiveLodProxyPayloadCount(
+		    BRLOBOL_LOD_PROXY_NONE) != 0 ||
+		controller.getActiveLodCadPayloadCount() != 0 ||
+		wait_for_service_idle(service) ||
+		controller.processPendingLodResults() != 0) {
+		printf("FAIL: LoD source churn did not cancel and clear cycle %d\n",
+		       i);
+		ret = 1;
+		break;
+	    }
+
+	    if (controller.getDatabaseSourceCount() > 0 &&
+		controller.removeDatabaseSource("lod-submit.bot") != 1) {
+		printf("FAIL: LoD source churn did not erase cycle %d source\n", i);
+		ret = 1;
+		break;
+	    }
+	    if (controller.getDatabaseSourceCount() != 0) {
+		printf("FAIL: LoD source churn retained cycle %d source\n", i);
+		ret = 1;
+	    }
+	}
+
+	bu_setenv("BRLOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);
+	bu_setenv("BRLOBOL_LOD_OBB_TASK_DELAY_MS", "0", 1);
+	bu_setenv("BRLOBOL_LOD_TASK_DELAY_MS", "0", 1);
+
+	if (!ret) {
+	    if (controller.replaceDatabaseSource("lod-submit.bot", dbip,
+		    SoBRLDatabaseSource::SHADED, finalRevision) != 1) {
+		printf("FAIL: LoD source churn did not publish final source\n");
+		ret = 1;
+	    }
+	}
+
+	SoBRLDatabaseSource *finalSource = ret ? NULL :
+	    controller.getDatabaseSource(0);
+	SoBRLLodMeshShape *finalMesh = NULL;
+	if (!ret && finalSource) {
+	    finalSource->lodBotThreshold = 1;
+	    finalSource->realizedSourceRevision = finalRevision;
+	    finalSource->realizedInputsRevision =
+		finalSource->inputsRevision.getValue();
+	    finalSource->realizationStatus = SoBRLDatabaseSource::REALIZED;
+	    finalSource->stale = FALSE;
+	    finalSource->staleReason = SoBRLDatabaseSource::STALE_NONE;
+	    finalMesh = make_lod_mesh("/lod-submit.bot", "lod-submit.bot");
+	    finalMesh->sourceId = finalRevision;
+	    finalMesh->lodPolicy = 6;
+	    finalSource->addChild(finalMesh);
+
+	    if (controller.submitLodRequestsIfNeeded(TRUE, 1) != 3 ||
+		wait_for_service(service) ||
+		controller.processPendingLodResults() != 3 ||
+		controller.getLastLodMatchedResultCount() != 3 ||
+		controller.getLastLodAppliedResultCount() != 3 ||
+		controller.getLastLodRejectedResultCount() != 0 ||
+		controller.getLastLodUnmatchedResultCount() != 0 ||
+		controller.getActiveLodMeshPayloadCount() != 1 ||
+		controller.getActiveLodProxyPayloadCount(
+		    BRLOBOL_LOD_PROXY_AABB) != 0 ||
+		controller.getActiveLodProxyPayloadCount(
+		    BRLOBOL_LOD_PROXY_OBB) != 1 ||
+		controller.getActiveLodCadPayloadCount() != 0 ||
+		!controller.getViewLodState()->findMesh(finalMesh) ||
+		controller.getDatabaseSourceCount() != 1 ||
+		bu_strcmp(finalSource->path.getValue().getString(),
+		    "lod-submit.bot") != 0 ||
+		finalSource->sourceRevision.getValue() != finalRevision) {
+		printf("FAIL: LoD source churn final generation was not authoritative\n");
+		ret = 1;
+	    }
+	}
+	if (!ret && (!finalSource || !finalMesh || wait_for_service_idle(service)))
+	    ret = 1;
+    }
+
+    bu_setenv("BRLOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);
+    bu_setenv("BRLOBOL_LOD_OBB_TASK_DELAY_MS", "0", 1);
+    bu_setenv("BRLOBOL_LOD_TASK_DELAY_MS", "0", 1);
+    service.stop();
+    root->unref();
+    brlobol_mesh_lod_cache_clear_database(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    bu_dirclear(cache_dir);
+    return ret;
+}
+
+static int
 test_view_controller_shared_lod_is_view_local(void)
 {
     SoSeparator *shared = new SoSeparator;
@@ -6165,6 +6469,8 @@ main(int argc, char **argv)
     if (test_compact_occurrence_lod_identity())
 	return 1;
     if (test_view_controller_lod_submit_and_apply())
+	return 1;
+    if (test_view_controller_lod_source_churn())
 	return 1;
 
     return 0;

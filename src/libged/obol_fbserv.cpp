@@ -142,17 +142,16 @@ public:
 	if (!new_gedp || !new_view_ctx || !controller)
 	    return BRLCAD_ERROR;
 
-	/* A GED session has one fbserv stream.  Its capture provider belongs to
-	 * exactly one endpoint, so remove the previous provider before moving the
-	 * stream to another view. */
-	if (view_ctx != new_view_ctx) {
-	    clearCaptureProviderLocked();
-	    framebuffer.close();
-	}
-	gedp = new_gedp;
-	view_ctx = new_view_ctx;
-	bindCaptureProviderLocked();
-	present_on_flush = requested_present_on_flush ? 1 : 0;
+	/* Keep the old capture provider bound until the target host has accepted
+	 * the live stream.  This makes a rejected replacement transactional across
+	 * both retained image nodes and capture ownership. */
+	const bool view_changed = view_ctx != new_view_ctx;
+	const struct bv *view = bv_context_view_const(
+	    (const struct bv_context *)new_view_ctx);
+	int composition = view ? bv_framebuffer_mode_get(view) : 0;
+	if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	    composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	    composition = BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF;
 	BRLObolWindowHost *active_host = window_host ? window_host :
 	    &default_host;
 	if (active_host->getController() != controller) {
@@ -162,9 +161,10 @@ public:
 	    framebuffer.close();
 	    active_host->attachController(controller, FALSE);
 	}
-	framebuffer.setHost(active_host);
+	if (framebuffer.setHost(active_host,
+		static_cast<BRLObolFramebufferComposition>(composition)) != 0)
+	    return BRLCAD_ERROR;
 
-	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 	int width = requested_width;
 	int height = requested_height;
 	if (view) {
@@ -182,11 +182,16 @@ public:
 	    return BRLCAD_ERROR;
 	if (framebuffer.ensure() != 0)
 	    return BRLCAD_ERROR;
-	int composition = view ? bv_framebuffer_mode_get(view) : 0;
-	if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
-	    composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
-	    composition = BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF;
-	return setCompositionLocked(composition);
+	if (setCompositionLocked(composition) != BRLCAD_OK)
+	    return BRLCAD_ERROR;
+
+	if (view_changed)
+	    clearCaptureProviderLocked();
+	gedp = new_gedp;
+	view_ctx = new_view_ctx;
+	present_on_flush = requested_present_on_flush ? 1 : 0;
+	bindCaptureProviderLocked();
+	return BRLCAD_OK;
     }
 
     int info(struct fbserv_fb_info *fbinfo)
@@ -448,11 +453,7 @@ public:
 	if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
 	    composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
 	    return BRLCAD_ERROR;
-	BRLObolWindowHost *host = framebuffer.host();
-	imgstream_fb_t *fb = framebuffer.framebuffer();
-	if (!host || !fb)
-	    return BRLCAD_ERROR;
-	return host->setFramebufferComposition(fb,
+	return framebuffer.setComposition(
 	    static_cast<BRLObolFramebufferComposition>(composition)) == 0 ?
 	    BRLCAD_OK : BRLCAD_ERROR;
     }
@@ -859,7 +860,9 @@ ged_obol_fbserv_composition_set(struct ged *gedp, int mode)
     if (!gedp || !gedp->ged_fbs)
 	return BRLCAD_ERROR;
     GedObolFbservBridge *bridge = bridge_from_fbs(gedp->ged_fbs);
-    return bridge ? bridge->setComposition(mode) : BRLCAD_ERROR;
+    /* Without a live Obol framebuffer bridge this remains passive desired
+     * view state.  Once a bridge exists its host must accept the update. */
+    return bridge ? bridge->setComposition(mode) : BRLCAD_OK;
 }
 
 extern "C" GED_EXPORT int

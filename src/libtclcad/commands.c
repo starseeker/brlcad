@@ -4725,7 +4725,9 @@ to_new_view(struct ged *gedp,
 	type = argv[2];
 
     if (!type) {
-	bu_vls_printf(gedp->ged_result_str, "ERROR:  Requisite display manager is not available.\nBRL-CAD may need to be recompiled with support for:  %s\nRun 'fbhelp' for a list of available display managers.\n", argv[2]);
+	bu_vls_printf(gedp->ged_result_str,
+		"Unsupported view presentation type '%s'; expected tkobol or nu.\n",
+		argv[2]);
 	return BRLCAD_ERROR;
     }
 

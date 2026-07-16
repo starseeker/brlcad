@@ -160,11 +160,11 @@ proc default_key_bindings { w } {
     bind $w <Shift-Up> "winset $w; knob -i aZ \$mged_default(tran_factor); break"
 
     # function keys (settings)
-    bind $w <F1> "winset $w; dm set depthcue !; update_gui $w depthcue \[dm set depthcue\]; break"
-    bind $w <F2> "winset $w; dm set zclip !; update_gui $w zclip \[dm set zclip\]; break"
+    bind $w <F1> "winset $w; dm set renderer.depth_cue !; update_gui $w depthcue \[expr {\[dm get renderer.depth_cue\] ? 1 : 0}\]; break"
+    bind $w <F2> "winset $w; dm set view.zclip !; update_gui $w zclip \[expr {\[dm get view.zclip\] ? 1 : 0}\]; break"
     bind $w <F3> "winset $w; set perspective_mode !; update_gui $w perspective_mode \$perspective_mode; break"
-    bind $w <F4> "winset $w; dm set zbuffer !; update_gui $w zbuffer \[dm set zbuffer\]; break"
-    bind $w <F5> "winset $w; dm set lighting !; update_gui $w lighting \[dm set lighting\]; break"
+    bind $w <F4> "winset $w; dm set renderer.depth_test !; update_gui $w zbuffer \[expr {\[dm get renderer.depth_test\] ? 1 : 0}\]; break"
+    bind $w <F5> "winset $w; dm set renderer.lighting !; update_gui $w lighting \[expr {\[dm get renderer.lighting\] ? 1 : 0}\]; break"
     bind $w <F6> "winset $w; set toggle_perspective !; break"
     bind $w <F7> "winset $w; set faceplate !; update_gui $w faceplate \$faceplate; break"
     bind $w <F8> "winset $w; set orig_gui !; update_gui $w orig_gui \$orig_gui; break"
@@ -185,9 +185,15 @@ proc obol_semantic_key_bindings { w } {
 
     # The endpoint owns these unmodified semantic view actions.  Shift-A
     # remains MGED's accept binding, so only lower-case a is removed.
-    foreach key {2 3 4 5 6 7 a b f l m r t v} {
+    foreach key {2 3 4 5 6 7 a b e f l m r t v} {
 	bind $w $key {}
     }
+    # Perspective and faceplate policy are MGED-owned endpoint actions.  Native
+    # bindings must be absent or one physical key press applies policy twice.
+    bind $w <F3> {}
+    bind $w <F6> {}
+    bind $w <F7> {}
+    bind $w <F8> {}
 
     # The Tk Obol X11 host turns physical wheel buttons into the same
     # endpoint action used by Qt.  Do not generate a second Tcl zoom event.
@@ -465,6 +471,29 @@ proc default_mouse_bindings { w } {
 		scale_shift_grip_hints $w Y; break"
 	bind $w <Alt-Shift-Control-ButtonPress-3> "winset $w; dm con s z %x %y; \
 		scale_shift_grip_hints $w Z; break"
+
+    }
+
+    # The endpoint bindtag precedes this application tag and owns these MGED
+    # action lifecycles in both standard and ADC transform modes.  Exact Tcl
+    # breaks prevent the generic bindings from applying an action twice.
+    if {[info exists ::mged_obol_semantic_input($w)]} {
+	# The endpoint action layer owns MGED's complete middle-button
+	# mouse-behavior lifecycle, including rubber-band completion, plus the
+	# one-shot unmodified left/right zoom actions.
+	bind $w <ButtonPress-1> {break}
+	bind $w <ButtonPress-2> {break}
+	bind $w <ButtonRelease-2> {break}
+	bind $w <ButtonPress-3> {break}
+	foreach modifier_key {Control_L Control_R Shift_L Shift_R Alt_L Alt_R} {
+	    bind $w <KeyRelease-$modifier_key> {break}
+	}
+	foreach modifiers {Shift Control Shift-Control Alt-Shift Alt-Control Alt-Shift-Control} {
+	    foreach button {1 2 3} {
+		bind $w <$modifiers-ButtonPress-$button> {break}
+		bind $w <$modifiers-ButtonRelease-$button> {break}
+	    }
+	}
     }
 }
 

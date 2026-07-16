@@ -39,8 +39,15 @@ or listener/client arrays directly.
 
 libbrlobol owns presentation, not protocol parsing.  Its
 `BRLObolFramebufferStream` maps framebuffer state onto imgstream storage and
-Obol scene content.  libged supplies the neutral GED-to-Obol framebuffer
-backend used by qged, GSH, and MGED.  qged supplies its borrowed
+Obol scene content.  Its typed composition layer travels with the stream; a
+target host must accept both the existing framebuffer and requested layer
+before the previous retained attachment is removed.  A rejection leaves the
+old host, image nodes, and policy live.  Retained RT is renderer output within
+the same composition model: it is inserted first inside a shared named layer,
+so host framebuffer images composite after it regardless of attachment or
+reparent timing; distinct underlay/interlay/overlay roots retain their normal
+ordering.  libged supplies the neutral GED-to-Obol framebuffer backend used by
+qged, GSH, and MGED.  qged supplies its borrowed
 `QgObolWindowHost`; headless and Tk hosts use their own Obol controller.
 
 Legacy Compatibility
@@ -103,8 +110,19 @@ Verification
 
 `imgstream_fbserv_lifecycle_test` constructs real wire frames, delivers them
 one byte at a time, verifies strict authentication and rectangle dispatch, and
-checks EOF and host-cancel cleanup.  `test_qged_obol_fbserv` verifies partial
-and final scan bands, resize, flush/present, and readback through the Qt host.
+checks EOF and host-cancel cleanup.  When OpenSSL is available,
+`imgstream_fbserv_tls_test` connects the production remote client to a real
+loopback TLS server, rejects a wrong certificate pin, then verifies the correct
+pin and token with a pixel write/read round trip.  `test_qged_obol_fbserv`
+verifies partial and final scan bands, resize, flush/present, and readback
+through the Qt host.  It also forces live composition and rehost rejection to
+prove the typed property, BV state, old host, and retained image layer roll
+back together.  `libbrlobol_window_host` independently verifies that accepted
+rehosts preserve composition and rejected target layers leave the old stream
+attachment live.
+`libbrlobol_rt_render` captures mixed retained-RT/framebuffer compositions and
+verifies both cross-layer orders, same-layer reparent stability, underlay/CAD
+interaction, and removal of a disabled framebuffer.
 `gsh_obol_ert_smoke` runs a real single-threaded ERT and verifies that a
 meaningful partial image advances to a substantially different complete
 frame.  MGED smoke tests cover the Tcl host adapter and final ERT presentation.

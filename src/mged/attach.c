@@ -64,6 +64,43 @@ struct mged_display *mged_initial_display = NULL;
 extern struct _color_scheme default_color_scheme;
 static unsigned long mged_tkobol_count = 0;
 
+/* MGED owns this action vocabulary; libbrlobol treats these as opaque tokens. */
+enum mged_obol_input_action {
+    MGED_OBOL_INPUT_ACTIVE_MODE_MOTION = 1,
+    MGED_OBOL_INPUT_ROTATE_BEGIN,
+    MGED_OBOL_INPUT_ROTATE_CANCEL,
+    MGED_OBOL_INPUT_TRANSLATE_BEGIN,
+    MGED_OBOL_INPUT_TRANSLATE_CANCEL,
+    MGED_OBOL_INPUT_SCALE_BEGIN,
+    MGED_OBOL_INPUT_SCALE_CANCEL,
+    MGED_OBOL_INPUT_CONSTRAINED_TRANSLATE_BEGIN,
+    MGED_OBOL_INPUT_CONSTRAINED_TRANSLATE_CANCEL,
+    MGED_OBOL_INPUT_CONSTRAINED_ROTATE_BEGIN,
+    MGED_OBOL_INPUT_CONSTRAINED_ROTATE_CANCEL,
+    MGED_OBOL_INPUT_CONSTRAINED_SCALE_BEGIN,
+    MGED_OBOL_INPUT_CONSTRAINED_SCALE_CANCEL,
+    MGED_OBOL_INPUT_ADC_TRANSLATE_BEGIN,
+    MGED_OBOL_INPUT_ADC_ANGLE_BEGIN,
+    MGED_OBOL_INPUT_ADC_DISTANCE_BEGIN,
+    MGED_OBOL_INPUT_ADC_CONSTRAINED_TRANSLATE_BEGIN,
+    MGED_OBOL_INPUT_ADC_CONSTRAINED_ANGLE_BEGIN,
+    MGED_OBOL_INPUT_ADC_CONSTRAINED_DISTANCE_BEGIN,
+    MGED_OBOL_INPUT_ADC_CANCEL,
+    MGED_OBOL_INPUT_TOGGLE_EDIT_AXES,
+    MGED_OBOL_INPUT_TOGGLE_PERSPECTIVE_MODE,
+    MGED_OBOL_INPUT_CYCLE_PERSPECTIVE,
+    MGED_OBOL_INPUT_TOGGLE_FACEPLATE,
+    MGED_OBOL_INPUT_TOGGLE_FACEPLATE_GUI,
+    MGED_OBOL_INPUT_MOUSE_BEHAVIOR_BEGIN,
+    MGED_OBOL_INPUT_MOUSE_BEHAVIOR_END,
+    MGED_OBOL_INPUT_ZOOM_OUT,
+    MGED_OBOL_INPUT_ZOOM_IN,
+    MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE
+};
+
+static int mged_obol_input_layer_action(void *, BRLObolInputAction,
+	const BRLObolInputEvent *);
+
 /* attach accepts only the built-in Tk Obol host.  Its only pre-Tk option is
  * the target X display, so do not instantiate a generic DM just to parse it. */
 static const char *
@@ -127,29 +164,167 @@ mged_obol_input_forwarding(const struct mged_state *s)
 }
 
 static int
-mged_obol_input_pan_begin(struct mged_state *s,
-	const BRLObolInputEvent *event)
+mged_obol_input_edit_axes_toggle(struct mged_state *s)
 {
-    if (!s || !event || event->type != BRLOBOL_INPUT_POINTER_PRESS ||
-	event->button != 0 || s->mged_curr_display == MGED_DISPLAY_NULL ||
-	s->global_editing_state != ST_VIEW ||
-	mged_variables->mv_transform != 'v' || mged_variables->mv_rateknobs ||
-	!s->dbip)
-	return 0;
+    if (!s || !s->interp || s->mged_curr_display == MGED_DISPLAY_NULL)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
 
-    struct bv_grid_state grid = BV_GRID_STATE_INIT;
-    if (!mged_display_grid_state_get(s->mged_curr_display, &grid) || !grid.snap)
-	return 0;
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    const int ret = Tcl_EvalEx(s->interp, "rset ax edit_draw !", -1,
+	TCL_EVAL_GLOBAL);
+    if (ret != TCL_OK) {
+	Tcl_DecrRefCount(saved_result);
+	return BRLOBOL_INPUT_RESULT_ERROR;
+    }
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
 
-    /* This is the same baseline the historical "dm am t" path establishes
-     * before applying snapped view translations. */
-    snap_view_center_to_grid(s);
-    mouse_dx = 0;
-    mouse_dy = 0;
-    s->mged_curr_display->display_input_snap_pan_active = 1;
-    (void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+    mged_obol_input_update_gui(s, "edit_draw", axes_state->ax_edit_draw);
     mged_obol_input_refresh(s);
-    return 1;
+    return BRLOBOL_INPUT_RESULT_HANDLED;
+}
+
+static int
+mged_obol_input_faceplate_toggle(struct mged_state *s)
+{
+    if (!s || !s->interp || s->mged_curr_display == MGED_DISPLAY_NULL)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    const int ret = Tcl_EvalEx(s->interp, "set faceplate !", -1,
+	TCL_EVAL_GLOBAL);
+    if (ret != TCL_OK) {
+	Tcl_DecrRefCount(saved_result);
+	return BRLOBOL_INPUT_RESULT_ERROR;
+    }
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
+
+    mged_obol_input_update_gui(s, "faceplate",
+	mged_variables->mv_faceplate);
+    mged_obol_input_refresh(s);
+    return BRLOBOL_INPUT_RESULT_HANDLED;
+}
+
+static int
+mged_obol_input_perspective_mode_toggle(struct mged_state *s)
+{
+    if (!s || !s->interp || s->mged_curr_display == MGED_DISPLAY_NULL)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    const int ret = Tcl_EvalEx(s->interp, "set perspective_mode !", -1,
+	TCL_EVAL_GLOBAL);
+    if (ret != TCL_OK) {
+	Tcl_DecrRefCount(saved_result);
+	return BRLOBOL_INPUT_RESULT_ERROR;
+    }
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
+
+    mged_obol_input_update_gui(s, "perspective_mode",
+	mged_variables->mv_perspective_mode);
+    mged_obol_input_refresh(s);
+    return BRLOBOL_INPUT_RESULT_HANDLED;
+}
+
+static int
+mged_obol_input_perspective_cycle(struct mged_state *s)
+{
+    if (!s || !s->interp || s->mged_curr_display == MGED_DISPLAY_NULL)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    const int ret = Tcl_EvalEx(s->interp, "set toggle_perspective !", -1,
+	TCL_EVAL_GLOBAL);
+    if (ret != TCL_OK) {
+	Tcl_DecrRefCount(saved_result);
+	return BRLOBOL_INPUT_RESULT_ERROR;
+    }
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
+
+    mged_obol_input_refresh(s);
+    return BRLOBOL_INPUT_RESULT_HANDLED;
+}
+
+static int
+mged_obol_input_faceplate_gui_toggle(struct mged_state *s)
+{
+    if (!s || !s->interp || s->mged_curr_display == MGED_DISPLAY_NULL)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    const int ret = Tcl_EvalEx(s->interp, "set orig_gui !", -1,
+	TCL_EVAL_GLOBAL);
+    if (ret != TCL_OK) {
+	Tcl_DecrRefCount(saved_result);
+	return BRLOBOL_INPUT_RESULT_ERROR;
+    }
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
+
+    mged_obol_input_update_gui(s, "orig_gui",
+	mged_variables->mv_orig_gui);
+    mged_obol_input_refresh(s);
+    return BRLOBOL_INPUT_RESULT_HANDLED;
+}
+
+static void
+mged_obol_input_pointer_focus(struct mged_state *s)
+{
+    const char *pathname = s ? mged_display_pathname(s->mged_curr_display) : NULL;
+    if (!s || !s->interp || !pathname)
+	return;
+    const char *no_focus_hack = Tcl_GetVar(s->interp, "no_focus_hack",
+	TCL_GLOBAL_ONLY);
+    if (no_focus_hack && atoi(no_focus_hack) != 0)
+	return;
+
+    Tcl_DString command;
+    Tcl_DStringInit(&command);
+    Tcl_DStringAppendElement(&command, "focus");
+    Tcl_DStringAppendElement(&command, pathname);
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    (void)Tcl_EvalEx(s->interp, Tcl_DStringValue(&command), -1,
+	TCL_EVAL_GLOBAL);
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
+    Tcl_DStringFree(&command);
+}
+
+static int
+mged_obol_input_zoom(struct mged_state *s, const char *factor)
+{
+    if (!s || !s->interp || !factor ||
+	s->mged_curr_display == MGED_DISPLAY_NULL)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    mged_obol_input_pointer_focus(s);
+    Tcl_DString command;
+    Tcl_DStringInit(&command);
+    Tcl_DStringAppendElement(&command, "zoom");
+    Tcl_DStringAppendElement(&command, factor);
+    Tcl_Obj *saved_result = Tcl_GetObjResult(s->interp);
+    Tcl_IncrRefCount(saved_result);
+    const int ret = Tcl_EvalEx(s->interp, Tcl_DStringValue(&command), -1,
+	TCL_EVAL_GLOBAL);
+    Tcl_DStringFree(&command);
+    if (ret != TCL_OK) {
+	Tcl_DecrRefCount(saved_result);
+	return BRLOBOL_INPUT_RESULT_ERROR;
+    }
+    Tcl_SetObjResult(s->interp, saved_result);
+    Tcl_DecrRefCount(saved_result);
+
+    mged_obol_input_refresh(s);
+    return BRLOBOL_INPUT_RESULT_HANDLED;
 }
 
 static int
@@ -168,27 +343,14 @@ mged_obol_input_camera_adjust(struct mged_state *s,
 	return 0;
 
     struct bv_grid_state grid = BV_GRID_STATE_INIT;
-	if (!mged_display_grid_state_get(s->mged_curr_display, &grid))
+    if (!mged_display_grid_state_get(s->mged_curr_display, &grid))
 	return 0;
 
-    if (grid.snap) {
-	if (action != BRLOBOL_ACTION_VIEW_PAN ||
-	    !s->mged_curr_display->display_input_snap_pan_active)
-	    return 0;
-	const int width = bv_width_get(mged_view_state_view(view_state));
-	const int height = bv_height_get(mged_view_state_view(view_state));
-	if (width <= 0 || height <= 0)
-	    return 0;
-	s->mged_curr_display->display_mouse_dx += event->dx;
-	s->mged_curr_display->display_mouse_dy += event->dy;
-	const fastf_t aspect = (fastf_t)width / (fastf_t)height;
-	snap_view_to_grid(s,
-	    s->mged_curr_display->display_mouse_dx / (fastf_t)width * 2.0,
-	    -s->mged_curr_display->display_mouse_dy / (fastf_t)height / aspect * 2.0);
-	(void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
-	mged_obol_input_refresh(s);
-	return 1;
-    }
+    /* Snapped pointer translation is an MGED application gesture and runs
+     * through its typed active-mode route.  Wheel zoom remains independent
+     * of grid policy. */
+    if (grid.snap && !wheel_zoom)
+	return 0;
 
     unsigned long long flags = BV_ADJUST_IDLE;
     if (action == BRLOBOL_ACTION_VIEW_ROTATE)
@@ -291,12 +453,6 @@ mged_obol_input_action_apply(struct mged_state *s,
 		return 0;
 	    mged_obol_input_refresh(s);
 	    return 1;
-	case BRLOBOL_ACTION_VIEW_PAN_BEGIN:
-	    return mged_obol_input_pan_begin(s, event);
-	case BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE:
-	case BRLOBOL_ACTION_VIEW_PAN_END:
-	    s->mged_curr_display->display_input_snap_pan_active = 0;
-	    return 0;
 	default:
 	    return 0;
     }
@@ -326,53 +482,548 @@ mged_obol_input_action(void *data, BRLObolInputAction action,
     return ret;
 }
 
-static const BRLObolInputProfile *
-mged_obol_active_mode_profile(void)
+static const BRLObolInputActionLayer *
+mged_obol_active_mode_layer(int adc_mode)
 {
-    static const BRLObolInputBinding bindings[] = {
+    static const BRLObolInputBinding standard_bindings[] = {
+	{BRLOBOL_INPUT_KEY_PRESS, 'E', BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_EDIT_AXES},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F3, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_PERSPECTIVE_MODE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F6, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CYCLE_PERSPECTIVE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F7, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_FACEPLATE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F8, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_FACEPLATE_GUI},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ROTATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ROTATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TRANSLATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_SCALE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_SCALE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CONSTRAINED_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CONSTRAINED_TRANSLATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CONSTRAINED_ROTATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CONSTRAINED_ROTATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CONSTRAINED_SCALE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CONSTRAINED_SCALE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 1, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_MOUSE_BEHAVIOR_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, 1, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_MOUSE_BEHAVIOR_END},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ZOOM_OUT},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 2, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ZOOM_IN},
+	{BRLOBOL_INPUT_KEY_RELEASE, BRLOBOL_INPUT_KEY_SHIFT, BRLOBOL_INPUT_ANY,
+	 0, 0, 10, MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
+	{BRLOBOL_INPUT_KEY_RELEASE, BRLOBOL_INPUT_KEY_CONTROL, BRLOBOL_INPUT_ANY,
+	 0, 0, 10, MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
+	{BRLOBOL_INPUT_KEY_RELEASE, BRLOBOL_INPUT_KEY_ALT, BRLOBOL_INPUT_ANY,
+	 0, 0, 10, MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
+	{BRLOBOL_INPUT_FOCUS, 0, BRLOBOL_INPUT_ANY, 0, 0, 10,
+	 MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
 	{BRLOBOL_INPUT_POINTER_MOTION, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
-	 0, 0, 10, BRLOBOL_ACTION_APP_MGED_ACTIVE_MODE_MOTION}
+	 0, 0, 10, MGED_OBOL_INPUT_ACTIVE_MODE_MOTION}
     };
-    static const BRLObolInputProfile profile = {
-	"mged-active-mode", bindings, sizeof(bindings) / sizeof(bindings[0])
+    static const BRLObolInputBinding adc_bindings[] = {
+	{BRLOBOL_INPUT_KEY_PRESS, 'E', BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_EDIT_AXES},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F3, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_PERSPECTIVE_MODE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F6, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_CYCLE_PERSPECTIVE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F7, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_FACEPLATE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F8, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_TOGGLE_FACEPLATE_GUI},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 1,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 2,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_DISTANCE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_ANGLE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 1,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_ANGLE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 2,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_DISTANCE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_DISTANCE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CONSTRAINED_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 1,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CONSTRAINED_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 2,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CONSTRAINED_DISTANCE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CONSTRAINED_ANGLE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 1,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CONSTRAINED_ANGLE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 2,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CONSTRAINED_DISTANCE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CONSTRAINED_DISTANCE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ADC_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 1, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_MOUSE_BEHAVIOR_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, 1, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_MOUSE_BEHAVIOR_END},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ZOOM_OUT},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 2, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 MGED_OBOL_INPUT_ZOOM_IN},
+	{BRLOBOL_INPUT_KEY_RELEASE, BRLOBOL_INPUT_KEY_SHIFT, BRLOBOL_INPUT_ANY,
+	 0, 0, 10, MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
+	{BRLOBOL_INPUT_KEY_RELEASE, BRLOBOL_INPUT_KEY_CONTROL, BRLOBOL_INPUT_ANY,
+	 0, 0, 10, MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
+	{BRLOBOL_INPUT_KEY_RELEASE, BRLOBOL_INPUT_KEY_ALT, BRLOBOL_INPUT_ANY,
+	 0, 0, 10, MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
+	{BRLOBOL_INPUT_FOCUS, 0, BRLOBOL_INPUT_ANY, 0, 0, 10,
+	 MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE},
+	{BRLOBOL_INPUT_POINTER_MOTION, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 0, 0, 10, MGED_OBOL_INPUT_ACTIVE_MODE_MOTION}
     };
-    return &profile;
+    static const BRLObolInputActionLayer standard_layer = {
+	"mged-active-mode", standard_bindings,
+	sizeof(standard_bindings) / sizeof(standard_bindings[0]),
+	mged_obol_input_layer_action
+    };
+    static const BRLObolInputActionLayer adc_layer = {
+	"mged-adc-active-mode", adc_bindings,
+	sizeof(adc_bindings) / sizeof(adc_bindings[0]),
+	mged_obol_input_layer_action
+    };
+    return adc_mode ? &adc_layer : &standard_layer;
 }
 
 static int
-mged_obol_input_semantic_action(void *data, BRLObolInputAction action,
+mged_obol_adc_transform_mode(struct mged_state *s, struct mged_display *mdmp)
+{
+    struct bv_adc_state adc = {0};
+    return s && mdmp && mged_display_adc_state_get(mdmp, &adc) && adc.draw &&
+	mged_variables->mv_transform == 'a';
+}
+
+static int
+mged_obol_active_mode_begin(struct mged_state *s, struct mged_display *mdmp,
+	const BRLObolInputEvent *event, const char *mode)
+{
+    if (!s || !mdmp || !event || !mode || !s->dbip)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    /* In ADC-transform mode these physical chords mean ADC operations, not
+     * view/edit rotate, translate, or scale.  Reject a stale standard-layer
+     * event if the authoritative transform policy changed during dispatch. */
+    if (mged_obol_adc_transform_mode(s, mdmp))
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    char x[32] = {0};
+    char y[32] = {0};
+    snprintf(x, sizeof(x), "%d", event->x);
+    snprintf(y, sizeof(y), "%d", event->y);
+    const char *argv[] = {"am", mode, x, y};
+    return mged_display_command_common(s, 4, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_HANDLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_active_mode_cancel(struct mged_state *s, int expected_mode)
+{
+    if (!s || am_mode != expected_mode)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+    const char *argv[] = {"idle"};
+    return mged_display_command_common(s, 1, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_CANCELLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_constrained_mode_begin(struct mged_state *s,
+	struct mged_display *mdmp, const BRLObolInputEvent *event,
+	const char *mode)
+{
+    if (!s || !mdmp || !event || !mode || !s->dbip ||
+	event->button < 0 || event->button > 2)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    if (mged_obol_adc_transform_mode(s, mdmp))
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    static const char *axes[] = {"x", "y", "z"};
+    char x[32] = {0};
+    char y[32] = {0};
+    snprintf(x, sizeof(x), "%d", event->x);
+    snprintf(y, sizeof(y), "%d", event->y);
+    const char *argv[] = {"con", mode, axes[event->button], x, y};
+    return mged_display_command_common(s, 5, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_HANDLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_adc_mode_begin(struct mged_state *s, struct mged_display *mdmp,
+	const BRLObolInputEvent *event, const char *mode)
+{
+    if (!s || !mdmp || !event || !mode || !s->dbip ||
+	!mged_obol_adc_transform_mode(s, mdmp))
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    char x[32] = {0};
+    char y[32] = {0};
+    snprintf(x, sizeof(x), "%d", event->x);
+    snprintf(y, sizeof(y), "%d", event->y);
+    const char *argv[] = {"adc", mode, x, y};
+    return mged_display_command_common(s, 4, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_HANDLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_adc_constrained_mode_begin(struct mged_state *s,
+	struct mged_display *mdmp, const BRLObolInputEvent *event,
+	const char *mode)
+{
+    if (!s || !mdmp || !event || !mode || !s->dbip ||
+	!mged_obol_adc_transform_mode(s, mdmp))
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    char x[32] = {0};
+    char y[32] = {0};
+    snprintf(x, sizeof(x), "%d", event->x);
+    snprintf(y, sizeof(y), "%d", event->y);
+    const char *argv[] = {"con", "a", mode, x, y};
+    return mged_display_command_common(s, 5, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_HANDLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_modes_cancel(struct mged_state *s,
+	const int *modes, size_t mode_count)
+{
+    if (!s || !modes)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+    for (size_t i = 0; i < mode_count; i++) {
+	if (am_mode == modes[i]) {
+	    const char *argv[] = {"idle"};
+	    return mged_display_command_common(s, 1, argv) == TCL_OK ?
+		BRLOBOL_INPUT_RESULT_CANCELLED : BRLOBOL_INPUT_RESULT_ERROR;
+	}
+    }
+    return BRLOBOL_INPUT_RESULT_UNHANDLED;
+}
+
+static int
+mged_obol_mouse_behavior_begin(struct mged_state *s,
+	struct mged_display *mdmp, const BRLObolInputEvent *event)
+{
+    if (!s || !mdmp || !event || !s->dbip || event->button != 1)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    mged_obol_input_pointer_focus(s);
+    char x[32] = {0};
+    char y[32] = {0};
+    snprintf(x, sizeof(x), "%d", event->x);
+    snprintf(y, sizeof(y), "%d", event->y);
+    const char *argv[] = {"m", x, y};
+    return mged_display_command_common(s, 3, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_HANDLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_mouse_behavior_end(struct mged_state *s,
+	const BRLObolInputEvent *event)
+{
+    if (!s || !event || event->button != 1)
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    const char *argv[] = {"idle"};
+    return mged_display_command_common(s, 1, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_CANCELLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_active_gesture_cancel(struct mged_state *s)
+{
+    if (!s || (am_mode == AMM_IDLE && !rubber_band->rb_active))
+	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    const char *argv[] = {"idle"};
+    return mged_display_command_common(s, 1, argv) == TCL_OK ?
+	BRLOBOL_INPUT_RESULT_CANCELLED : BRLOBOL_INPUT_RESULT_ERROR;
+}
+
+static int
+mged_obol_input_layer_action(void *data, BRLObolInputAction action,
 	const BRLObolInputEvent *event)
 {
     struct mged_display *mdmp = (struct mged_display *)data;
     struct mged_state *s = mdmp ? mdmp->display_input_state : NULL;
-    if (!s || !mdmp || !event ||
-	action != BRLOBOL_ACTION_APP_MGED_ACTIVE_MODE_MOTION ||
-	event->type != BRLOBOL_INPUT_POINTER_MOTION)
+    if (!s || !mdmp || !event)
 	return BRLOBOL_INPUT_RESULT_UNHANDLED;
 
     struct mged_display *saved = s->mged_curr_display;
     if (saved != mdmp)
 	mged_current_display_set(s, mdmp);
-    if (am_mode == AMM_IDLE) {
-	if (saved != mdmp)
-	    mged_current_display_set(s, saved);
-	return BRLOBOL_INPUT_RESULT_UNHANDLED;
+
+    int result = BRLOBOL_INPUT_RESULT_UNHANDLED;
+    if (action == MGED_OBOL_INPUT_TOGGLE_EDIT_AXES &&
+	    event->type == BRLOBOL_INPUT_KEY_PRESS) {
+	    if (!mged_obol_input_forwarding(s))
+		result = mged_obol_input_edit_axes_toggle(s);
+    } else if (action == MGED_OBOL_INPUT_TOGGLE_PERSPECTIVE_MODE &&
+	    event->type == BRLOBOL_INPUT_KEY_PRESS) {
+	    if (!mged_obol_input_forwarding(s))
+		result = mged_obol_input_perspective_mode_toggle(s);
+    } else if (action == MGED_OBOL_INPUT_CYCLE_PERSPECTIVE &&
+	    event->type == BRLOBOL_INPUT_KEY_PRESS) {
+	    if (!mged_obol_input_forwarding(s))
+		result = mged_obol_input_perspective_cycle(s);
+    } else if (action == MGED_OBOL_INPUT_TOGGLE_FACEPLATE &&
+	    event->type == BRLOBOL_INPUT_KEY_PRESS) {
+	    if (!mged_obol_input_forwarding(s))
+		result = mged_obol_input_faceplate_toggle(s);
+    } else if (action == MGED_OBOL_INPUT_TOGGLE_FACEPLATE_GUI &&
+	    event->type == BRLOBOL_INPUT_KEY_PRESS) {
+	    if (!mged_obol_input_forwarding(s))
+		result = mged_obol_input_faceplate_gui_toggle(s);
+    } else if (action == MGED_OBOL_INPUT_ROTATE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS &&
+	    event->button >= 0 && event->button <= 2) {
+	    result = mged_obol_active_mode_begin(s, mdmp, event, "r");
+    } else if (action == MGED_OBOL_INPUT_ROTATE_CANCEL &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    result = mged_obol_active_mode_cancel(s, AMM_ROT);
+    } else if (action == MGED_OBOL_INPUT_TRANSLATE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS &&
+	    event->button >= 0 && event->button <= 2) {
+	    result = mged_obol_active_mode_begin(s, mdmp, event, "t");
+    } else if (action == MGED_OBOL_INPUT_TRANSLATE_CANCEL &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    result = mged_obol_active_mode_cancel(s, AMM_TRAN);
+    } else if (action == MGED_OBOL_INPUT_SCALE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS &&
+	    event->button >= 0 && event->button <= 2) {
+	    result = mged_obol_active_mode_begin(s, mdmp, event, "s");
+    } else if (action == MGED_OBOL_INPUT_SCALE_CANCEL &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    result = mged_obol_active_mode_cancel(s, AMM_SCALE);
+	} else if (action == MGED_OBOL_INPUT_CONSTRAINED_TRANSLATE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_constrained_mode_begin(s, mdmp, event, "t");
+	} else if (action == MGED_OBOL_INPUT_CONSTRAINED_TRANSLATE_CANCEL &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    const int modes[] = {AMM_CON_TRAN_X, AMM_CON_TRAN_Y, AMM_CON_TRAN_Z};
+	    result = mged_obol_modes_cancel(s, modes, 3);
+	} else if (action == MGED_OBOL_INPUT_CONSTRAINED_ROTATE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_constrained_mode_begin(s, mdmp, event, "r");
+	} else if (action == MGED_OBOL_INPUT_CONSTRAINED_ROTATE_CANCEL &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    const int modes[] = {AMM_CON_ROT_X, AMM_CON_ROT_Y, AMM_CON_ROT_Z};
+	    result = mged_obol_modes_cancel(s, modes, 3);
+	} else if (action == MGED_OBOL_INPUT_CONSTRAINED_SCALE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_constrained_mode_begin(s, mdmp, event, "s");
+	} else if (action == MGED_OBOL_INPUT_CONSTRAINED_SCALE_CANCEL &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    const int modes[] = {AMM_CON_SCALE_X, AMM_CON_SCALE_Y, AMM_CON_SCALE_Z};
+	    result = mged_obol_modes_cancel(s, modes, 3);
+	} else if (action == MGED_OBOL_INPUT_ADC_TRANSLATE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS &&
+	    event->button >= 0 && event->button <= 1) {
+	    result = mged_obol_adc_mode_begin(s, mdmp, event, "t");
+	} else if (action == MGED_OBOL_INPUT_ADC_ANGLE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS &&
+	    event->button >= 0 && event->button <= 1) {
+	    result = mged_obol_adc_mode_begin(s, mdmp, event,
+		event->button == 0 ? "1" : "2");
+	} else if (action == MGED_OBOL_INPUT_ADC_DISTANCE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_adc_mode_begin(s, mdmp, event, "d");
+	} else if (action == MGED_OBOL_INPUT_ADC_CONSTRAINED_TRANSLATE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS &&
+	    event->button >= 0 && event->button <= 1) {
+	    result = mged_obol_adc_constrained_mode_begin(s, mdmp, event,
+		event->button == 0 ? "x" : "y");
+	} else if (action == MGED_OBOL_INPUT_ADC_CONSTRAINED_ANGLE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS &&
+	    event->button >= 0 && event->button <= 1) {
+	    result = mged_obol_adc_constrained_mode_begin(s, mdmp, event,
+		event->button == 0 ? "1" : "2");
+	} else if (action == MGED_OBOL_INPUT_ADC_CONSTRAINED_DISTANCE_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_adc_constrained_mode_begin(s, mdmp, event, "d");
+	} else if (action == MGED_OBOL_INPUT_ADC_CANCEL &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    const int modes[] = {AMM_ADC_ANG1, AMM_ADC_ANG2, AMM_ADC_TRAN,
+		AMM_ADC_DIST, AMM_CON_XADC, AMM_CON_YADC, AMM_CON_ANG1,
+		AMM_CON_ANG2, AMM_CON_DIST};
+	    result = mged_obol_modes_cancel(s, modes,
+		sizeof(modes) / sizeof(modes[0]));
+	} else if (action == MGED_OBOL_INPUT_MOUSE_BEHAVIOR_BEGIN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_mouse_behavior_begin(s, mdmp, event);
+	} else if (action == MGED_OBOL_INPUT_MOUSE_BEHAVIOR_END &&
+	    event->type == BRLOBOL_INPUT_POINTER_RELEASE) {
+	    result = mged_obol_mouse_behavior_end(s, event);
+	} else if (action == MGED_OBOL_INPUT_ZOOM_OUT &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_input_zoom(s, "0.5");
+	} else if (action == MGED_OBOL_INPUT_ZOOM_IN &&
+	    event->type == BRLOBOL_INPUT_POINTER_PRESS) {
+	    result = mged_obol_input_zoom(s, "2.0");
+	} else if (action == MGED_OBOL_INPUT_CANCEL_ACTIVE_GESTURE &&
+	    ((event->type == BRLOBOL_INPUT_KEY_RELEASE &&
+	      (event->key == BRLOBOL_INPUT_KEY_SHIFT ||
+	       event->key == BRLOBOL_INPUT_KEY_CONTROL ||
+	       event->key == BRLOBOL_INPUT_KEY_ALT)) ||
+	     (event->type == BRLOBOL_INPUT_FOCUS && event->key == 0))) {
+	    result = mged_obol_active_gesture_cancel(s);
+	} else if (action == MGED_OBOL_INPUT_ACTIVE_MODE_MOTION &&
+	    event->type == BRLOBOL_INPUT_POINTER_MOTION &&
+	    (am_mode != AMM_IDLE || rubber_band->rb_active)) {
+	    const int handled = mged_display_motion(s, event->x, event->y) > 0;
+	    if (handled) {
+		mdmp->display_input_motion_pending = 1;
+		mdmp->display_input_motion_timestamp =
+		    (unsigned long)event->timestamp;
+		mdmp->display_input_motion_x = event->x;
+		mdmp->display_input_motion_y = event->y;
+	    }
+	    result = handled ? BRLOBOL_INPUT_RESULT_HANDLED :
+		BRLOBOL_INPUT_RESULT_UNHANDLED;
     }
-    const int handled = mged_display_motion(s, event->x, event->y) > 0;
-    if (handled) {
-	mdmp->display_input_motion_pending = 1;
-	mdmp->display_input_motion_timestamp = (unsigned long)event->timestamp;
-	mdmp->display_input_motion_x = event->x;
-	mdmp->display_input_motion_y = event->y;
-    }
+
     if (saved != mdmp)
 	mged_current_display_set(s, saved);
-    return handled ? BRLOBOL_INPUT_RESULT_HANDLED :
-	BRLOBOL_INPUT_RESULT_UNHANDLED;
+    return result;
 }
 
 void
-mged_obol_input_semantic_mode_sync(struct mged_state *s)
+mged_obol_input_action_layer_sync(struct mged_state *s)
 {
     if (!s || s->mged_curr_display == MGED_DISPLAY_NULL ||
 	!s->mged_curr_display->display_view_state)
@@ -384,22 +1035,50 @@ mged_obol_input_semantic_mode_sync(struct mged_state *s)
 	BRLOBOL_HOST_CAP_INPUT))
 	return;
 
-    if (am_mode == AMM_IDLE) {
-	(void)brlobol_display_endpoint_input_semantic_action_handler_clear_if(
-	    endpoint, mged_obol_input_semantic_action, mdmp);
-	(void)brlobol_display_endpoint_input_semantic_profile_clear_if(endpoint,
-	    mdmp);
-	return;
+    int adc_mode = mged_obol_adc_transform_mode(s, mdmp);
+    if (am_mode != AMM_IDLE) {
+	adc_mode = am_mode == AMM_ADC_ANG1 || am_mode == AMM_ADC_ANG2 ||
+	    am_mode == AMM_ADC_TRAN || am_mode == AMM_ADC_DIST ||
+	    am_mode == AMM_CON_XADC || am_mode == AMM_CON_YADC ||
+	    am_mode == AMM_CON_ANG1 || am_mode == AMM_CON_ANG2 ||
+	    am_mode == AMM_CON_DIST;
     }
+    (void)brlobol_display_endpoint_input_action_layer_set(endpoint,
+	mged_obol_active_mode_layer(adc_mode), mdmp, mdmp);
+}
 
-    if (!brlobol_display_endpoint_input_semantic_profile_set(endpoint,
-	mged_obol_active_mode_profile(), mdmp))
+void
+mged_obol_input_action_layers_sync(struct mged_state *s,
+	struct _mged_variables *variables)
+{
+    if (!s)
 	return;
-    if (!brlobol_display_endpoint_input_semantic_action_handler_set(endpoint,
-	mged_obol_input_semantic_action, mdmp)) {
-	(void)brlobol_display_endpoint_input_semantic_profile_clear_if(endpoint,
-	    mdmp);
+
+    struct mged_display *saved = s->mged_curr_display;
+    for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
+	struct mged_display *mdmp =
+	    (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
+	if (!mdmp || (variables && mdmp->display_variables != variables))
+	    continue;
+	mged_current_display_set(s, mdmp);
+	mged_obol_input_action_layer_sync(s);
     }
+    if (s->mged_curr_display != saved)
+	mged_current_display_set(s, saved);
+}
+
+static void
+mged_obol_input_action_layer_sync_display(struct mged_display *mdmp)
+{
+    struct mged_state *s = mdmp ? mdmp->display_input_state : NULL;
+    if (!s)
+	return;
+    struct mged_display *saved = s->mged_curr_display;
+    if (saved != mdmp)
+	mged_current_display_set(s, mdmp);
+    mged_obol_input_action_layer_sync(s);
+    if (saved != mdmp)
+	mged_current_display_set(s, saved);
 }
 
 int
@@ -449,10 +1128,16 @@ mged_display_adc_state_set(struct mged_display *dm, const struct bv_adc_state *a
 {
     struct bv_adc_state bv_adc;
 
-    if (!dm || !dm->display_view_state || !dm->display_view_state->vs_gvp)
+    if (!dm || !adc || !dm->display_view_state ||
+	!dm->display_view_state->vs_gvp)
 	return;
+    struct bv_adc_state previous = {0};
+    const int visibility_changed = mged_display_adc_state_get(dm, &previous) &&
+	previous.draw != adc->draw;
     memcpy(&bv_adc, adc, sizeof(bv_adc));
     bv_adc_state_set(mged_view_state_view(dm->display_view_state), &bv_adc);
+    if (visibility_changed)
+	mged_obol_input_action_layer_sync_display(dm);
 }
 
 int
@@ -467,9 +1152,12 @@ mged_display_adc_visibility_set(struct mged_display *dm, int enabled)
 	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
 	value.bool_value = enabled ? 1 : 0;
-	return ged_view_context_display_property_set(view_ctx,
+	const int ret = ged_view_context_display_property_set(view_ctx,
 	    "view.faceplate.adc.visible", &value) ==
 	    BRLOBOL_ENDPOINT_PROPERTY_OK;
+	if (ret)
+	    mged_obol_input_action_layer_sync_display(dm);
+	return ret;
     }
 
     struct bv_adc_state adc = {0};
@@ -612,13 +1300,12 @@ mged_display_init(
     s->mged_curr_display->display_hosted = 1;
     s->mged_curr_display->display_input_state = s;
     s->mged_curr_display->display_input_motion_pending = 0;
-    s->mged_curr_display->display_input_snap_pan_active = 0;
     (void)brlobol_display_endpoint_input_profile_set(endpoint,
 	brlobol_input_default_view_profile());
     (void)brlobol_display_endpoint_input_action_handler_set(endpoint,
 	mged_obol_input_action, s->mged_curr_display);
 	/* A mode may have been selected before this view was attached. */
-	mged_obol_input_semantic_mode_sync(s);
+	mged_obol_input_action_layer_sync(s);
 
 #ifdef HAVE_TK
     if (tkwin != NULL) {
@@ -697,17 +1384,14 @@ mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp)
     if (endpoint) {
 	(void)brlobol_display_endpoint_input_action_handler_clear_if(endpoint,
 	    mged_obol_input_action, mdmp);
-	    (void)brlobol_display_endpoint_input_semantic_action_handler_clear_if(
-		endpoint, mged_obol_input_semantic_action, mdmp);
-	    (void)brlobol_display_endpoint_input_semantic_profile_clear_if(endpoint,
-		mdmp);
-	}
+	(void)brlobol_display_endpoint_input_action_layer_clear_if(endpoint,
+	    mdmp);
+    }
     if (s->interp && logical_path)
 	(void)Tcl_UnsetVar2(s->interp, "mged_obol_semantic_input", logical_path,
 	    TCL_GLOBAL_ONLY);
     mdmp->display_input_state = NULL;
     mdmp->display_input_motion_pending = 0;
-    mdmp->display_input_snap_pan_active = 0;
     (void)ged_view_context_display_endpoint_set(mdmp->display_view_state->vs_gvp,
 	    NULL, 0);
 }
@@ -1121,7 +1805,6 @@ mged_display_var_init(struct mged_state *s, struct mged_display *target_display)
 {
     s->mged_curr_display->display_input_state = NULL;
     s->mged_curr_display->display_input_motion_pending = 0;
-    s->mged_curr_display->display_input_snap_pan_active = 0;
     bu_vls_init(&s->mged_curr_display->display_pathname);
     BU_ALLOC(menu_state, struct _menu_state);
     *menu_state = *target_display->display_menu_state;		/* struct copy */

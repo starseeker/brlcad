@@ -45,6 +45,7 @@ static void set_coords(const struct bu_structparse *, const char *, void *, cons
 static void set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_perspective_policy(void *, double);
 static void set_rotate_about(const struct bu_structparse *, const char *, void *, const char *, void *);
+static void set_transform_policy(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void toggle_perspective(const struct bu_structparse *, const char *, void *, const char *, void *);
 
 static char *read_var(ClientData clientData, Tcl_Interp *interp, const char *name1, const char *name2, int flags);
@@ -78,7 +79,6 @@ struct _mged_variables default_mged_variables = {
     /* mv_perspective_mode */	0,
     /* mv_toggle_perspective */	1,
     /* mv_nmg_eu_dist */	0.05,
-    /* mv_eye_sep_dist */	0.0,
     /* mv_union lexeme */	"u",
     /* mv_intersection lexeme */"n",
     /* mv_difference lexeme */	"-",
@@ -107,12 +107,11 @@ struct bu_structparse mged_vparse[] = {
     {"%c", 1, "mouse_behavior",		MV_O(mv_mouse_behavior),	BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%c", 1, "coords",			MV_O(mv_coords),		set_coords, NULL, NULL },
     {"%c", 1, "rotate_about",		MV_O(mv_rotate_about),		set_rotate_about, NULL, NULL },
-    {"%c", 1, "transform",		MV_O(mv_transform),		BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
+    {"%c", 1, "transform",		MV_O(mv_transform),		set_transform_policy, NULL, NULL },
     {"%g", 1, "perspective",		MV_O(mv_perspective),		set_perspective, NULL, NULL },
     {"%d", 1, "perspective_mode",	MV_O(mv_perspective_mode),	establish_perspective, NULL, NULL },
     {"%d", 1, "toggle_perspective",	MV_O(mv_toggle_perspective),	toggle_perspective, NULL, NULL },
     {"%g", 1, "nmg_eu_dist",		MV_O(mv_nmg_eu_dist),		nmg_eu_dist_set, NULL, NULL },
-    {"%g", 1, "eye_sep_dist",		MV_O(mv_eye_sep_dist),		set_dirty_flag, NULL, NULL },
     {"%s", LINE, "union_op",		MV_O(mv_union_lexeme),	        BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%s", LINE, "intersection_op",	MV_O(mv_intersection_lexeme),   BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
     {"%s", LINE, "difference_op",	MV_O(mv_difference_lexeme),	BU_STRUCTPARSE_FUNC_NULL, NULL, NULL },
@@ -134,6 +133,17 @@ set_dirty_flag(const struct bu_structparse *UNUSED(sdp),
 	    mged_display_repaint_request(m_dmp, MGED_REPAINT_DEVICE_SETTING);
 	}
     }
+}
+
+static void
+set_transform_policy(const struct bu_structparse *UNUSED(sdp),
+	const char *UNUSED(name), void *base,
+	const char *UNUSED(value), void *data)
+{
+    struct mged_state *s = (struct mged_state *)data;
+    MGED_CK_STATE(s);
+    struct _mged_variables *variables = (struct _mged_variables *)base;
+    mged_obol_input_action_layers_sync(s, variables);
 }
 
 

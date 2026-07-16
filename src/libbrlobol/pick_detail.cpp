@@ -56,6 +56,8 @@ BRLObolRtPickResult::clear(void)
     normal = SbVec3f(0.0f, 0.0f, 0.0f);
     distance = FLT_MAX;
     hit = FALSE;
+    uv = SbVec2f(0.0f, 0.0f);
+    uvValid = FALSE;
 }
 
 static float
@@ -214,6 +216,7 @@ struct brlobol_rt_pick_state {
     BRLObolRtPickResult pick;
     SbPlane clipPlanes[2];
     size_t clipPlaneCount = 0;
+    double minimumDistance = 0.0;
 };
 
 static SbBool
@@ -235,7 +238,7 @@ pick_clip_ray_interval(const struct application *ap,
 {
     if (!ap || !state || !outputMinimum || inputMinimum > inputMaximum)
 	return FALSE;
-    double minimum = std::max(0.0, inputMinimum);
+    double minimum = std::max(state->minimumDistance, inputMinimum);
     double maximum = inputMaximum;
     SbVec3f syntheticNormal(0.0f, 0.0f, 0.0f);
     const SbVec3f origin(
@@ -296,7 +299,23 @@ brlobol_pick_rt_hit(struct application *ap,
 	    visibleDistance >= state->pick.distance)
 	    continue;
 
-	struct soltab *stp = pp->pt_inseg ? pp->pt_inseg->seg_stp : NULL;
+	/* A secondary ray beginning just inside a solid must see the exit
+	 * boundary, not a zero-distance repeat of the entry boundary.  Clip-plane
+	 * entry remains a synthetic surface when it lies beyond the requested
+	 * minimum. */
+	const double distanceTolerance = 1.0e-9;
+	const SbBool useExit =
+	    pp->pt_inhit->hit_dist <= state->minimumDistance &&
+	    visibleDistance <= state->minimumDistance + distanceTolerance &&
+	    pp->pt_outhit->hit_dist > state->minimumDistance;
+	if (useExit)
+	    visibleDistance = pp->pt_outhit->hit_dist;
+	if (visibleDistance >= state->pick.distance)
+	    continue;
+
+	struct hit *surfaceHit = useExit ? pp->pt_outhit : pp->pt_inhit;
+	struct seg *surfaceSegment = useExit ? pp->pt_outseg : pp->pt_inseg;
+	struct soltab *stp = surfaceSegment ? surfaceSegment->seg_stp : NULL;
 	point_t hitPoint = VINIT_ZERO;
 	vect_t hitNormal = VINIT_ZERO;
 	VJOIN1(hitPoint, ap->a_ray.r_pt, visibleDistance,
@@ -305,12 +324,15 @@ brlobol_pick_rt_hit(struct application *ap,
 	    static_cast<float>(hitPoint[X]),
 	    static_cast<float>(hitPoint[Y]),
 	    static_cast<float>(hitPoint[Z]));
-	const SbBool synthetic = clipNormal.length() > 0.0f;
+	if (!pick_point_inside_clip_planes(candidatePoint, state->clipPlanes,
+		state->clipPlaneCount))
+	    continue;
+	const SbBool synthetic = !useExit && clipNormal.length() > 0.0f;
 	if (synthetic) {
 	    VSET(hitNormal, clipNormal[0], clipNormal[1], clipNormal[2]);
 	} else if (stp) {
-	    RT_HIT_NORMAL(hitNormal, pp->pt_inhit, stp, &(ap->a_ray),
-			  pp->pt_inflip);
+	    RT_HIT_NORMAL(hitNormal, surfaceHit, stp, &(ap->a_ray),
+			  useExit ? pp->pt_outflip : pp->pt_inflip);
 	}
 
 	state->pick.clear();
@@ -320,6 +342,15 @@ brlobol_pick_rt_hit(struct application *ap,
 	state->pick.normal = SbVec3f(static_cast<float>(hitNormal[X]),
 				     static_cast<float>(hitNormal[Y]),
 				     static_cast<float>(hitNormal[Z]));
+	if (!synthetic && stp && stp->st_meth && stp->st_meth->ft_uv) {
+	    struct uvcoord uv = {0.0, 0.0, 0.0, 0.0};
+	    RT_HIT_UVCOORD(ap, stp, surfaceHit, &uv);
+	    if (std::isfinite(uv.uv_u) && std::isfinite(uv.uv_v)) {
+		state->pick.uv = SbVec2f(static_cast<float>(uv.uv_u),
+		    static_cast<float>(uv.uv_v));
+		state->pick.uvValid = TRUE;
+	    }
+	}
 
 	const char *regionName = pp->pt_regionp ?
 				 pp->pt_regionp->reg_name : NULL;
@@ -482,6 +513,19 @@ BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
 			    size_t clipPlaneCount,
 			    struct resource *resource) const
 {
+    return this->pickRay(pick, rayOrigin, rayDirection, clipPlanes,
+	clipPlaneCount, resource, 0.0f);
+}
+
+SbBool
+BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
+			    const SbVec3f &rayOrigin,
+			    const SbVec3f &rayDirection,
+			    const SbPlane *clipPlanes,
+			    size_t clipPlaneCount,
+			    struct resource *resource,
+			    float minimumDistance) const
+{
     pick.clear();
     if (!this->isReady())
 	return FALSE;
@@ -492,6 +536,8 @@ BRLObolRtPickCache::pickRay(BRLObolRtPickResult &pick,
     direction.normalize();
 
     brlobol_rt_pick_state state;
+    state.minimumDistance = std::isfinite(minimumDistance) ?
+	std::max(0.0, static_cast<double>(minimumDistance)) : 0.0;
     state.clipPlaneCount = std::min(clipPlaneCount,
 	static_cast<size_t>(2));
     for (size_t i = 0; clipPlanes && i < state.clipPlaneCount; i++)

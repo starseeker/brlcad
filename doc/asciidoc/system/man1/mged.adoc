@@ -101,9 +101,6 @@ Shows or hides the faceplate overlay.
 *--perspective* _#_::
 Sets the perspective angle in degrees. Use `-1` to disable perspective (orthographic view).
 
-*--eye-sep-dist* _#_::
-Sets the stereo eye separation distance in millimeters. Use `0` for monoscopic (non-stereo) rendering.
-
 *--coords* _m|v_::
 Sets the constraint coordinate system: `m` for model space, `v` for view space.
 
@@ -332,7 +329,7 @@ user:~**mged --no-rc --bg 0 0 64 --use-air -c model.g**
 .Setting an MGED variable not exposed as a dedicated option.
 [example]
 ====
-user:~**mged --set eye_sep_dist=65 model.g**
+user:~**mged --set orig_gui=0 model.g**
 ====
 
 .Setting a grid resource via the rset escape hatch.

@@ -578,7 +578,6 @@ struct mged_cli_overrides {
     char transform;         /* --transform v|a|e */
     double perspective;     /* --perspective #  (degrees, MGED_CLI_UNSET_DBL = not set) */
     double nmg_eu_dist;         /* --nmg-eu-dist # */
-    double eye_sep_dist;        /* --eye-sep-dist # (mm, 0 = mono) */
 
     /* Tcl mged_default array entries */
     const char *host_type;  /* --host type */
@@ -2430,7 +2429,6 @@ apply_cli_overrides(struct mged_state *s, struct mged_cli_overrides *cl)
     if (cl->transform      != '\0')               CLI_SETVAR_CHAR("transform",     cl->transform);
     if (cli_dbl_is_set(cl->perspective))         CLI_SETVAR_DBL("perspective",    cl->perspective);
     if (cli_dbl_is_set(cl->nmg_eu_dist))         CLI_SETVAR_DBL("nmg_eu_dist",    cl->nmg_eu_dist);
-    if (cli_dbl_is_set(cl->eye_sep_dist))        CLI_SETVAR_DBL("eye_sep_dist",   cl->eye_sep_dist);
 
     /* --- Tcl mged_default array entries ---------------------------------- */
     if (cl->host_type)
@@ -2648,7 +2646,6 @@ main(int argc, char *argv[])
     /* Initialise double fields to MGED_CLI_UNSET_DBL ("not given") */
     cl.perspective        = MGED_CLI_UNSET_DBL;
     cl.nmg_eu_dist        = MGED_CLI_UNSET_DBL;
-    cl.eye_sep_dist       = MGED_CLI_UNSET_DBL;
     cl.grid_rh            = MGED_CLI_UNSET_DBL;
     cl.grid_rv            = MGED_CLI_UNSET_DBL;
 
@@ -2699,33 +2696,32 @@ main(int argc, char *argv[])
     BU_OPT(opt_defs[21], NULL, "linewidth",        "#",       bu_opt_int,      &cl.linewidth,        "wireframe line width (pixels, >=1)");
     BU_OPT(opt_defs[22], NULL, "linestyle",        "s|d",     bu_opt_char,     &cl.linestyle,        "line style: s=solid, d=dashed");
     BU_OPT(opt_defs[23], NULL, "perspective",      "#",       bu_opt_fastf_t,  &cl.perspective,      "perspective angle in degrees (-1=off)");
-    BU_OPT(opt_defs[24], NULL, "eye-sep-dist",     "#",       bu_opt_fastf_t,  &cl.eye_sep_dist,     "stereo eye separation (mm, 0=mono)");
-    BU_OPT(opt_defs[25], NULL, "port",             "#",       bu_opt_int,      &cl.port,             "framebuffer server listen port (0-65535)");
-    BU_OPT(opt_defs[26], NULL, "coords",           "m|v",     bu_opt_char,     &cl.coords,           "constraint coords: m=model v=view");
-    BU_OPT(opt_defs[27], NULL, "rotate-about",     "m|v|e",   bu_opt_char,     &cl.rotate_about,     "rotate center: m=model v=view e=eye");
-    BU_OPT(opt_defs[28], NULL, "transform",        "v|a|e",   bu_opt_char,     &cl.transform,        "mouse transform: v=view a=adc e=edit");
-    BU_OPT(opt_defs[29], NULL, "nmg-eu-dist",      "#",       bu_opt_fastf_t,  &cl.nmg_eu_dist,      "NMG edge-use distance tolerance");
-    BU_OPT(opt_defs[30], NULL, "mouse-behavior",   "v|a|e",   bu_opt_char,     &cl.mouse_behavior,   "mouse behavior mode");
-    BU_OPT(opt_defs[31], NULL, "perspective-mode", "0|1",     bu_opt_int,      &cl.perspective_mode, "enable/disable perspective mode");
-    BU_OPT(opt_defs[32], NULL, "context",          "0|1",     bu_opt_int,      &cl.context,          "context mode (0=off)");
-    BU_OPT(opt_defs[33], NULL, "sliders",          "0|1",     bu_opt_int,      &cl.sliders,          "show sliders");
-    BU_OPT(opt_defs[34], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
-    BU_OPT(opt_defs[35], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
+    BU_OPT(opt_defs[24], NULL, "port",             "#",       bu_opt_int,      &cl.port,             "framebuffer server listen port (0-65535)");
+    BU_OPT(opt_defs[25], NULL, "coords",           "m|v",     bu_opt_char,     &cl.coords,           "constraint coords: m=model v=view");
+    BU_OPT(opt_defs[26], NULL, "rotate-about",     "m|v|e",   bu_opt_char,     &cl.rotate_about,     "rotate center: m=model v=view e=eye");
+    BU_OPT(opt_defs[27], NULL, "transform",        "v|a|e",   bu_opt_char,     &cl.transform,        "mouse transform: v=view a=adc e=edit");
+    BU_OPT(opt_defs[28], NULL, "nmg-eu-dist",      "#",       bu_opt_fastf_t,  &cl.nmg_eu_dist,      "NMG edge-use distance tolerance");
+    BU_OPT(opt_defs[29], NULL, "mouse-behavior",   "v|a|e",   bu_opt_char,     &cl.mouse_behavior,   "mouse behavior mode");
+    BU_OPT(opt_defs[30], NULL, "perspective-mode", "0|1",     bu_opt_int,      &cl.perspective_mode, "enable/disable perspective mode");
+    BU_OPT(opt_defs[31], NULL, "context",          "0|1",     bu_opt_int,      &cl.context,          "context mode (0=off)");
+    BU_OPT(opt_defs[32], NULL, "sliders",          "0|1",     bu_opt_int,      &cl.sliders,          "show sliders");
+    BU_OPT(opt_defs[33], NULL, "hot-key",          "#",       bu_opt_int,      &cl.hot_key,          "hot key character code");
+    BU_OPT(opt_defs[34], NULL, "fb-overlay",       "0|1|2",   bu_opt_int,      &cl.fb_overlay,       "framebuffer overlay: 0=under 1=inter 2=over");
     /* ---- window/display (Tcl mged_default array) ---- */
-    BU_OPT(opt_defs[36], NULL, "host",             "type",    bu_opt_str,      &cl.host_type,        "Obol GUI host type (tkobol)");
-    BU_OPT(opt_defs[37], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
-    BU_OPT(opt_defs[38], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
+    BU_OPT(opt_defs[35], NULL, "host",             "type",    bu_opt_str,      &cl.host_type,        "Obol GUI host type (tkobol)");
+    BU_OPT(opt_defs[36], NULL, "geom",             "WxH+X+Y", bu_opt_str,      &cl.geom,             "command window geometry");
+    BU_OPT(opt_defs[37], NULL, "ggeom",            "WxH+X+Y", bu_opt_str,      &cl.ggeom,            "graphics window geometry");
     /* ---- grid (rset g …) ---- */
-    BU_OPT(opt_defs[39], NULL, "grid-draw",        "0|1",     bu_opt_int,      &cl.grid_draw,        "show/hide grid");
-    BU_OPT(opt_defs[40], NULL, "grid-snap",        "0|1",     bu_opt_int,      &cl.grid_snap,        "enable/disable grid snap");
-    BU_OPT(opt_defs[41], NULL, "grid-rh",          "#",       bu_opt_fastf_t,  &cl.grid_rh,          "horizontal grid resolution");
-    BU_OPT(opt_defs[42], NULL, "grid-rv",          "#",       bu_opt_fastf_t,  &cl.grid_rv,          "vertical grid resolution");
-    BU_OPT(opt_defs[43], NULL, "grid-mrh",         "#",       bu_opt_int,      &cl.grid_mrh,         "horizontal major grid interval");
-    BU_OPT(opt_defs[44], NULL, "grid-mrv",         "#",       bu_opt_int,      &cl.grid_mrv,         "vertical major grid interval");
+    BU_OPT(opt_defs[38], NULL, "grid-draw",        "0|1",     bu_opt_int,      &cl.grid_draw,        "show/hide grid");
+    BU_OPT(opt_defs[39], NULL, "grid-snap",        "0|1",     bu_opt_int,      &cl.grid_snap,        "enable/disable grid snap");
+    BU_OPT(opt_defs[40], NULL, "grid-rh",          "#",       bu_opt_fastf_t,  &cl.grid_rh,          "horizontal grid resolution");
+    BU_OPT(opt_defs[41], NULL, "grid-rv",          "#",       bu_opt_fastf_t,  &cl.grid_rv,          "vertical grid resolution");
+    BU_OPT(opt_defs[42], NULL, "grid-mrh",         "#",       bu_opt_int,      &cl.grid_mrh,         "horizontal major grid interval");
+    BU_OPT(opt_defs[43], NULL, "grid-mrv",         "#",       bu_opt_int,      &cl.grid_mrv,         "vertical major grid interval");
     /* ---- colour scheme subset (rset cs …) ---- */
-    BU_OPT(opt_defs[45], NULL, "bg",               "R G B",   parse_opt_color, &cl.bg_color,         "background colour (0-255 per component, or #RRGGBB)");
-    BU_OPT(opt_defs[46], NULL, "geo-color",        "R G B",   parse_opt_color, &cl.geo_def_color,    "default geometry wireframe colour");
-    BU_OPT_NULL(opt_defs[47]);
+    BU_OPT(opt_defs[44], NULL, "bg",               "R G B",   parse_opt_color, &cl.bg_color,         "background colour (0-255 per component, or #RRGGBB)");
+    BU_OPT(opt_defs[45], NULL, "geo-color",        "R G B",   parse_opt_color, &cl.geo_def_color,    "default geometry wireframe colour");
+    BU_OPT_NULL(opt_defs[46]);
 
     /* bu_opt_parse does not consume argv[0] (the program name).
      * Skip it manually so that the remaining args match what the

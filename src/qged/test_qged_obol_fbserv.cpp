@@ -20,6 +20,7 @@
 #include "brlobol/viewport_image.h"
 #include "bu/app.h"
 #include "bu/log.h"
+#include "bu/str.h"
 #include "imgstream/fbserv.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
@@ -105,6 +106,20 @@ find_framebuffer_nodes(SoNode *node, SoBRLImageSource **source,
     for (int i = 0; i < group->getNumChildren(); i++)
 	find_framebuffer_nodes(group->getChild(i), source, viewport);
 }
+
+class ConditionalCompositionHost : public BRLObolWindowHost {
+public:
+    ConditionalCompositionHost() : reject(false) { }
+
+    int setFramebufferComposition(imgstream_fb_t *fb,
+	BRLObolFramebufferComposition composition) override
+    {
+	return reject ? -1 :
+	    BRLObolWindowHost::setFramebufferComposition(fb, composition);
+    }
+
+    bool reject;
+};
 
 static int
 test_qged_obol_fbserv_backend(void)
@@ -342,6 +357,65 @@ test_qged_obol_fbserv_backend(void)
 	orange_pixel_count(switchedImage) >
 	switchedImage.width() * switchedImage.height() * 8 / 10,
 	"qged framebuffer switch must visibly present the new endpoint frame");
+
+    /* Composition is part of the stream's transactional host policy.  A live
+     * host rejection must neither change the typed endpoint property nor
+     * detach the previously valid image. */
+    ConditionalCompositionHost policyHost;
+    policyHost.attachController(secondController, FALSE);
+    GED_CHECK(ged_draw_obol_framebuffer_backend_install_for_view(gedp,
+	secondView.viewContext(), &policyHost, info.width, info.height, 1) ==
+	BRLCAD_OK && policyHost.getFramebufferCount() == 1 &&
+	secondHost->getFramebufferCount() == 0,
+	"framebuffer bridge must move to a composition-aware target host");
+    SoBRLViewportImage *policyViewport = NULL;
+    find_framebuffer_nodes(secondController->getRenderRoot(), NULL,
+	&policyViewport);
+    GED_CHECK(policyViewport != NULL &&
+	secondController->getFramebufferOverlayRoot()->findChild(
+	    policyViewport) >= 0,
+	"composition-aware target must begin in the requested overlay layer");
+
+    policyHost.reject = true;
+    composition.string_value = "underlay";
+    GED_CHECK(brlobol_display_endpoint_property_set(
+	secondView.displayEndpoint(), "composition.framebuffer.mode",
+	&composition) == BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	"live framebuffer composition rejection must be explicit");
+    struct brlobol_endpoint_property_value rejectedComposition =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    GED_CHECK(brlobol_display_endpoint_property_get(
+	secondView.displayEndpoint(), "composition.framebuffer.mode",
+	&rejectedComposition) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	rejectedComposition.string_value &&
+	bu_strcmp(rejectedComposition.string_value, "overlay") == 0 &&
+	policyHost.getFramebufferCount() == 1 &&
+	secondController->getFramebufferOverlayRoot()->findChild(
+	    policyViewport) >= 0 &&
+	secondController->getFramebufferUnderlayRoot()->findChild(
+	    policyViewport) < 0,
+	"rejected composition must preserve passive and retained live state");
+
+    policyHost.reject = false;
+    GED_CHECK(brlobol_display_endpoint_property_set(
+	secondView.displayEndpoint(), "composition.framebuffer.mode",
+	&composition) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	secondController->getFramebufferUnderlayRoot()->findChild(
+	    policyViewport) >= 0 &&
+	secondController->getFramebufferOverlayRoot()->findChild(
+	    policyViewport) < 0,
+	"accepted composition must atomically update passive and retained state");
+
+    ConditionalCompositionHost rejectedHost;
+    rejectedHost.attachController(secondController, FALSE);
+    rejectedHost.reject = true;
+    GED_CHECK(ged_draw_obol_framebuffer_backend_install_for_view(gedp,
+	secondView.viewContext(), &rejectedHost, info.width, info.height, 1) ==
+	BRLCAD_ERROR && rejectedHost.getFramebufferCount() == 0 &&
+	policyHost.getFramebufferCount() == 1 &&
+	secondController->getFramebufferUnderlayRoot()->findChild(
+	    policyViewport) >= 0,
+	"composition-rejected rehost must leave the previous host live");
 
     qged_fbserv_release_ged_handlers(gedp);
     ged_close(gedp);

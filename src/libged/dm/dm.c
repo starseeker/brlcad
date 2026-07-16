@@ -167,24 +167,6 @@ _dm_endpoint(struct _ged_dm_info *gd, const struct bu_vls *view_name,
     return endpoint;
 }
 
-static const char *
-_dm_property_alias(const char *name)
-{
-    if (!name)
-	return NULL;
-    if (BU_STR_EQUAL(name, "software_wire"))
-	return "controller.software_wire";
-    if (BU_STR_EQUAL(name, "zclip"))
-	return "view.zclip";
-    if (BU_STR_EQUAL(name, "zbuffer"))
-	return "renderer.depth_test";
-    if (BU_STR_EQUAL(name, "lighting"))
-	return "renderer.lighting";
-    if (BU_STR_EQUAL(name, "depthcue"))
-	return "renderer.depth_cue";
-    return name;
-}
-
 static void
 _dm_property_print(struct bu_vls *out,
 	const struct brlobol_endpoint_property_value *value)
@@ -505,11 +487,13 @@ _dm_cmd_status(void *ds, int argc, const char **argv)
 	    "endpoint.device_pixel_ratio", &dpr);
     const char *host = brlobol_display_endpoint_host_factory_name(endpoint);
     bu_vls_printf(gd->gedp->ged_result_str,
-	    "view=%s host=%s renderer=%s width=%" PRIu64
+	    "view=%s host=%s renderer=%s resolved=%s width=%" PRIu64
 	    " height=%" PRIu64 " device_pixel_ratio=%.17g\n",
 	    _dm_view_name(view), host ? host : "unbound",
 	    _dm_render_engine_name(
 		brlobol_display_endpoint_render_engine_get(endpoint)),
+	    _dm_render_engine_name(
+		brlobol_display_endpoint_render_engine_resolved_get(endpoint)),
 	    width.uint_value, height.uint_value, dpr.double_value);
     return BRLCAD_OK;
 }
@@ -804,14 +788,22 @@ _dm_cmd_diagnostics(void *ds, int argc, const char **argv)
     if (!endpoint)
 	return BRLCAD_ERROR;
 
+    if (brlobol_display_endpoint_render_engine_get(endpoint) ==
+	BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	(void)brlobol_display_endpoint_diagnostic_refresh(endpoint);
+
     const char *host = brlobol_display_endpoint_host_factory_name(endpoint);
     bu_vls_printf(gd->gedp->ged_result_str,
 	    "view=%s\nhost=%s\nhost.capabilities=0x%016" PRIx64
-	    "\nrenderer=%s\ncontroller=%s\n",
+	    "\nrenderer=%s\nrenderer.capabilities=0x%016" PRIx64
+	    "\nrenderer.resolved=%s\ncontroller=%s\n",
 	    _dm_view_name(view), host ? host : "unbound",
 	    brlobol_display_endpoint_host_capabilities(endpoint),
 	    _dm_render_engine_name(
 		brlobol_display_endpoint_render_engine_get(endpoint)),
+	    brlobol_display_endpoint_render_engine_capabilities(endpoint),
+	    _dm_render_engine_name(
+		brlobol_display_endpoint_render_engine_resolved_get(endpoint)),
 	    brlobol_display_endpoint_controller(endpoint) ? "available" :
 	    "missing");
     const size_t count = brlobol_display_endpoint_property_count();
@@ -890,7 +882,7 @@ _dm_cmd_get(void *ds, int argc, const char **argv)
 	    return BRLCAD_OK;
 	}
 	for (int i = 0; i < ac; i++) {
-	    const char *name = _dm_property_alias(argv[i]);
+	    const char *name = argv[i];
 	    struct brlobol_endpoint_property_value value =
 		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	    int ret = brlobol_display_endpoint_property_get(endpoint, name,
@@ -940,7 +932,7 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
 
     struct _ged_dm_info *gd = (struct _ged_dm_info *)ds;
     {
-	const char *name = ac > 0 ? _dm_property_alias(argv[0]) : NULL;
+	const char *name = ac > 0 ? argv[0] : NULL;
 	brlobol_display_endpoint_t *endpoint =
 	    _dm_endpoint(gd, &view_name, NULL);
 	if (!endpoint) {

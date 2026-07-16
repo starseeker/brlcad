@@ -187,9 +187,21 @@ __BEGIN_DECLS
  */
 #define FBSERV_AUTH_TOKEN_LEN 64
 #define FBSERV_AUTH_TOKEN_ENVVAR "FBSERV_TOKEN"
+#define FBSERV_TLS_SERVER_SHA256_ENVVAR "FBSERV_TLS_SHA256"
+#define FBSERV_INSECURE_ENVVAR "FBSERV_INSECURE"
 
 IMGSTREAM_EXPORT void fbserv_generate_token(char *buf);
 IMGSTREAM_EXPORT int fbserv_verify_token(const char *provided, const char *expected);
+
+/** Network exposure policy for a framebuffer protocol listener. */
+enum fbserv_network_policy {
+    /** Bind TCP to loopback.  Local IPC is also implicitly trusted. */
+    FBSERV_NETWORK_LOOPBACK = 0,
+    /** Bind TCP externally and require token-authenticated, pinned TLS. */
+    FBSERV_NETWORK_SECURE_REMOTE = 1,
+    /** Explicit compatibility escape hatch for externally visible plain TCP. */
+    FBSERV_NETWORK_INSECURE_REMOTE = 2
+};
 
 /*
  * Protocol/server state constants.
@@ -341,6 +353,7 @@ struct fbserv_obj {
     char fbs_auth_token[FBSERV_AUTH_TOKEN_LEN + 1]; /**< @brief session token; empty = no auth required */
     int fbs_require_auth;     /**< @brief !0 = reject clients that don't send MSG_FBAUTH */
     void *fbs_tls_ctx;        /**< @brief opaque SSL_CTX* for TLS; NULL = no TLS */
+    int fbs_network_policy;   /**< @brief enum fbserv_network_policy */
 };
 
 struct fbserv_pkg_handlers {
@@ -396,6 +409,15 @@ IMGSTREAM_EXPORT void fbserv_process_existing_client(
 	int mask,
 	fbserv_drop_client_fn drop_client);
 IMGSTREAM_EXPORT const char *fbserv_obj_generate_token(struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbserv_obj_set_network_policy(struct fbserv_obj *fbsp,
+	enum fbserv_network_policy policy);
+IMGSTREAM_EXPORT enum fbserv_network_policy fbserv_obj_network_policy(
+	const struct fbserv_obj *fbsp);
+/** NULL means all interfaces; a non-NULL result must be honored by transports. */
+IMGSTREAM_EXPORT const char *fbserv_obj_listener_interface(
+	const struct fbserv_obj *fbsp);
+/** Validate the security state required before opening the configured TCP listener. */
+IMGSTREAM_EXPORT int fbserv_obj_network_ready(const struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbserv_obj_init(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbserv_set_backend(struct fbserv_obj *fbsp,
 	const struct fbserv_fb_ops *ops,
@@ -536,6 +558,16 @@ IMGSTREAM_EXPORT int fbs_close(struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT void *fbs_tls_server_context_create(const char *certfile,
 	const char *keyfile);
 IMGSTREAM_EXPORT void fbs_tls_server_context_destroy(void *ctx);
+/** Write the server certificate's lowercase SHA-256 fingerprint. */
+IMGSTREAM_EXPORT int fbs_tls_server_sha256(void *ctx,
+	char fingerprint[FBSERV_AUTH_TOKEN_LEN + 1]);
+IMGSTREAM_EXPORT int fbs_set_network_policy(struct fbserv_obj *fbsp,
+	enum fbserv_network_policy policy);
+IMGSTREAM_EXPORT enum fbserv_network_policy fbs_network_policy(
+	const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT const char *fbs_listener_interface(
+	const struct fbserv_obj *fbsp);
+IMGSTREAM_EXPORT int fbs_network_ready(const struct fbserv_obj *fbsp);
 IMGSTREAM_EXPORT int fbs_set_backend(struct fbserv_obj *fbsp,
 	const struct fbserv_fb_ops *ops,
 	void *ctx);

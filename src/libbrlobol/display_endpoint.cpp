@@ -21,6 +21,7 @@
 
 #include "imgstream/stream.h"
 
+#include <Inventor/actions/SoGetBoundingBoxAction.h>
 #include <Inventor/nodes/SoGroup.h>
 
 #include <atomic>
@@ -29,6 +30,7 @@
 #include <cstring>
 #include <mutex>
 #include <new>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -57,6 +59,11 @@ struct brlobol_display_endpoint {
 	property_get_callback(NULL),
 	property_set_callback(NULL),
 	property_user_data(NULL),
+	diagnostic_revision(0),
+	diagnostic_visited_sources(0),
+	diagnostic_realized_sources(0),
+	diagnostic_failed_sources(0),
+	diagnostic_progressive_pending(false),
 	rt(NULL)
     {
 	input.setProfile(brlobol_input_default_view_profile());
@@ -83,7 +90,21 @@ struct brlobol_display_endpoint {
     brlobol_endpoint_property_get_callback property_get_callback;
     brlobol_endpoint_property_set_callback property_set_callback;
     void *property_user_data;
+    mutable std::string supported_engines;
+    std::string diagnostic_summary;
+    uint64_t diagnostic_revision;
+    uint64_t diagnostic_visited_sources;
+    uint64_t diagnostic_realized_sources;
+    uint64_t diagnostic_failed_sources;
+    bool diagnostic_progressive_pending;
     EndpointRtState *rt;
+
+    void graphicalRenderingSet(bool enabled)
+    {
+	if (this->controller)
+	    this->controller->setEndpointGraphicalRenderingEnabled(
+		enabled ? TRUE : FALSE);
+    }
 };
 
 /* librt owns no Coin or GUI state.  The worker stores complete RGB frames
@@ -139,6 +160,7 @@ struct EndpointRtState {
 
 static bool valid_engine(enum brlobol_render_engine engine);
 static int endpoint_rt_start(brlobol_display_endpoint_t *endpoint);
+static int endpoint_diagnostic_refresh(brlobol_display_endpoint_t *endpoint);
 
 static void
 endpoint_frame_requested(void *user_data, const char *reason)
@@ -295,7 +317,10 @@ endpoint_rt_presentation_layer_apply(brlobol_display_endpoint_t *endpoint)
     if (!state->presentationAttached) {
 	if (state->viewport->rebuildGeometry() != 0)
 	    return 0;
-	root->addChild(state->viewport);
+	/* The retained RT image is renderer output.  Host framebuffer images in
+	 * the same named layer composite after it, independent of attachment or
+	 * reparent timing.  Cross-layer root ordering still takes precedence. */
+	root->insertChild(state->viewport, 0);
 	state->presentationRoot = root;
 	state->presentationAttached = true;
     }
@@ -733,6 +758,12 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_ENUM,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 0.0, "auto,hw,sw,rt,none,diagnostic"},
+    {sizeof(brlobol_endpoint_property_desc), "endpoint.renderer.resolved",
+	BRLOBOL_ENDPOINT_PROPERTY_ENUM, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, "auto,hw,sw,rt,none,diagnostic"},
+    {sizeof(brlobol_endpoint_property_desc), "endpoint.renderer.supported",
+	BRLOBOL_ENDPOINT_PROPERTY_STRING, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
     {sizeof(brlobol_endpoint_property_desc), "endpoint.width",
 	BRLOBOL_ENDPOINT_PROPERTY_UINT,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -780,6 +811,14 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "renderer.headlight.color",
+	BRLOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "renderer.headlight.intensity",
+	BRLOBOL_ENDPOINT_PROPERTY_DOUBLE,
+	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
     {sizeof(brlobol_endpoint_property_desc), "renderer.transparency",
 	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -788,6 +827,28 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_BOOL,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "renderer.diagnostic.revision",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"renderer.diagnostic.visited_sources",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"renderer.diagnostic.realized_sources",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"renderer.diagnostic.failed_sources",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc),
+	"renderer.diagnostic.progressive_pending",
+	BRLOBOL_ENDPOINT_PROPERTY_BOOL, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 1.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "renderer.diagnostic.summary",
+	BRLOBOL_ENDPOINT_PROPERTY_STRING, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
     {sizeof(brlobol_endpoint_property_desc), "render.rt.workers",
 	BRLOBOL_ENDPOINT_PROPERTY_UINT,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -808,6 +869,12 @@ static const brlobol_endpoint_property_desc endpoint_properties[] = {
 	BRLOBOL_ENDPOINT_PROPERTY_ENUM,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 0.0, "interactive,final"},
+    {sizeof(brlobol_endpoint_property_desc), "render.rt.geometry_revision",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
+    {sizeof(brlobol_endpoint_property_desc), "render.rt.presentation_revision",
+	BRLOBOL_ENDPOINT_PROPERTY_UINT, BRLOBOL_ENDPOINT_PROPERTY_READ,
+	0, 0.0, 0.0, NULL},
     {sizeof(brlobol_endpoint_property_desc), "composition.rt.layer",
 	BRLOBOL_ENDPOINT_PROPERTY_ENUM,
 	BRLOBOL_ENDPOINT_PROPERTY_READ | BRLOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -1029,6 +1096,9 @@ endpoint_property_host_supported(const brlobol_display_endpoint_t *endpoint,
 	 property->required_host_capabilities) !=
 	 property->required_host_capabilities)
 	return 0;
+    if (bu_strncmp(property->name, "renderer.diagnostic.", 20) == 0 &&
+	endpoint->engine != BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	return 0;
     if ((bu_strcmp(property->name, "endpoint.title") == 0 ||
 	 bu_strcmp(property->name, "endpoint.visible") == 0) &&
 	endpoint->host_mode != BRLOBOL_HOST_MODE_TOPLEVEL)
@@ -1082,6 +1152,142 @@ engine_host_compatible(enum brlobol_render_engine engine,
 	default:
 	    return true;
     }
+}
+
+static uint64_t
+render_engine_capability(enum brlobol_render_engine engine)
+{
+    switch (engine) {
+	case BRLOBOL_RENDER_ENGINE_AUTO:
+	    return BRLOBOL_RENDER_ENGINE_CAP_AUTO;
+	case BRLOBOL_RENDER_ENGINE_HW:
+	    return BRLOBOL_RENDER_ENGINE_CAP_HW;
+	case BRLOBOL_RENDER_ENGINE_SW:
+	    return BRLOBOL_RENDER_ENGINE_CAP_SW;
+	case BRLOBOL_RENDER_ENGINE_RT:
+	    return BRLOBOL_RENDER_ENGINE_CAP_RT;
+	case BRLOBOL_RENDER_ENGINE_NONE:
+	    return BRLOBOL_RENDER_ENGINE_CAP_NONE;
+	case BRLOBOL_RENDER_ENGINE_DIAGNOSTIC:
+	    return BRLOBOL_RENDER_ENGINE_CAP_DIAGNOSTIC;
+	default:
+	    return 0;
+    }
+}
+
+extern "C" int
+brlobol_display_endpoint_render_engine_supported(
+	const brlobol_display_endpoint_t *endpoint,
+	enum brlobol_render_engine engine)
+{
+    if (!endpoint || !valid_engine(engine))
+	return 0;
+    if (endpoint->factory)
+	return engine_host_compatible(engine,
+	    brlobol_host_factory_capabilities(endpoint->factory)) ? 1 : 0;
+    if (endpoint->host && (engine == BRLOBOL_RENDER_ENGINE_HW ||
+	engine == BRLOBOL_RENDER_ENGINE_SW))
+	return 0;
+    return 1;
+}
+
+extern "C" uint64_t
+brlobol_display_endpoint_render_engine_capabilities(
+	const brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint)
+	return 0;
+    uint64_t capabilities = 0;
+    for (int i = BRLOBOL_RENDER_ENGINE_AUTO;
+	i <= BRLOBOL_RENDER_ENGINE_DIAGNOSTIC; ++i) {
+	const enum brlobol_render_engine engine =
+	    static_cast<enum brlobol_render_engine>(i);
+	if (brlobol_display_endpoint_render_engine_supported(endpoint, engine))
+	    capabilities |= render_engine_capability(engine);
+    }
+    return capabilities;
+}
+
+static const char *
+endpoint_supported_engines(const brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint)
+	return "";
+    endpoint->supported_engines.clear();
+    for (int i = BRLOBOL_RENDER_ENGINE_AUTO;
+	i <= BRLOBOL_RENDER_ENGINE_DIAGNOSTIC; ++i) {
+	const enum brlobol_render_engine engine =
+	    static_cast<enum brlobol_render_engine>(i);
+	if (!brlobol_display_endpoint_render_engine_supported(endpoint, engine))
+	    continue;
+	if (!endpoint->supported_engines.empty())
+	    endpoint->supported_engines += ",";
+	endpoint->supported_engines += render_engine_name(engine);
+    }
+    return endpoint->supported_engines.c_str();
+}
+
+static int
+endpoint_diagnostic_refresh(brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || !endpoint->controller ||
+	endpoint->engine != BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	return 0;
+
+    BRLObolViewController *controller = endpoint->controller;
+    (void)controller->realizePending();
+    BRLObolProgressiveStatus progressive;
+    (void)controller->advanceProgressiveWork(NULL, &progressive);
+
+    SoNode *root = controller->getSceneRoot();
+    if (!root)
+	root = controller->getRenderSceneRoot();
+    std::ostringstream summary;
+    if (!root) {
+	summary << "scene=missing bounds=unavailable";
+    } else {
+	SoGetBoundingBoxAction bounds(controller->getViewportRegion());
+	bounds.apply(root);
+	const SbBox3f box = bounds.getBoundingBox();
+	summary << "scene=available";
+	if (box.isEmpty()) {
+	    summary << " bounds=empty";
+	} else {
+	    const SbVec3f minimum = box.getMin();
+	    const SbVec3f maximum = box.getMax();
+	    summary << " bounds=" << minimum[0] << "," << minimum[1] << ","
+		<< minimum[2] << ":" << maximum[0] << "," << maximum[1]
+		<< "," << maximum[2];
+	}
+    }
+    endpoint->diagnostic_visited_sources =
+	controller->getLastVisitedSourceCount();
+    endpoint->diagnostic_realized_sources =
+	controller->getLastRealizedSourceCount();
+    endpoint->diagnostic_failed_sources =
+	controller->getLastFailedSourceCount();
+    endpoint->diagnostic_progressive_pending = progressive.hasMore != 0 ||
+	controller->hasProgressiveWorkPending();
+    summary << " visited_sources=" << endpoint->diagnostic_visited_sources
+	<< " realized_sources=" << endpoint->diagnostic_realized_sources
+	<< " failed_sources=" << endpoint->diagnostic_failed_sources
+	<< " progressive=" <<
+	(endpoint->diagnostic_progressive_pending ? "pending" : "idle");
+    const SbString &detail = controller->getLastDiagnostics();
+    if (detail.getLength() > 0)
+	summary << " detail=" << detail.getString();
+    endpoint->diagnostic_summary = summary.str();
+    if (++endpoint->diagnostic_revision == 0)
+	++endpoint->diagnostic_revision;
+    controller->clearRenderRequest();
+    return 1;
+}
+
+extern "C" int
+brlobol_display_endpoint_diagnostic_refresh(
+	brlobol_display_endpoint_t *endpoint)
+{
+    return endpoint_diagnostic_refresh(endpoint);
 }
 
 extern "C" brlobol_display_endpoint_t *
@@ -1167,6 +1373,9 @@ brlobol_display_endpoint_destroy(brlobol_display_endpoint_t *endpoint)
 
     endpoint_rt_destroy(endpoint);
     brlobol_display_endpoint_host_detach(endpoint);
+    /* A borrowed controller must not retain an endpoint-only NONE or
+     * DIAGNOSTIC render suppression after its endpoint is gone. */
+    endpoint->graphicalRenderingSet(true);
     if (endpoint->owns_controller)
 	delete endpoint->controller;
     endpoint->controller = NULL;
@@ -1186,6 +1395,8 @@ brlobol_display_endpoint_view_sync(brlobol_display_endpoint_t *endpoint,
     if (!endpoint || !endpoint->controller || !view_ctx ||
 	!endpoint->controller->syncCameraFromViewContext(view_ctx))
 	return 0;
+    if (endpoint->engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	return endpoint_diagnostic_refresh(endpoint);
     return endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
 	endpoint_rt_start(endpoint) ? 1 : 0;
 }
@@ -1302,12 +1513,16 @@ brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
     endpoint->title = required_desc.title ? required_desc.title : "";
     endpoint->visible = required_desc.visible != 0;
     endpoint->vsync = required_desc.vsync != BRLOBOL_HOST_VSYNC_OFF;
-    endpoint->controller->setFrameRequestCallback(endpoint_frame_requested,
+	endpoint->controller->setFrameRequestCallback(endpoint_frame_requested,
 	endpoint);
 	endpoint->factory_frame_callback_bound = true;
 	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT) {
 	    if (!endpoint_rt_start(endpoint))
 		return 0;
+	} else if (endpoint->engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC) {
+	    (void)endpoint_diagnostic_refresh(endpoint);
+	} else if (endpoint->engine == BRLOBOL_RENDER_ENGINE_NONE) {
+	    endpoint->controller->clearRenderRequest();
 	} else if (endpoint->controller->isRenderRequested() ||
 	endpoint->controller->hasProgressiveWorkPending())
 	endpoint_frame_requested(endpoint, "endpoint-host-open");
@@ -1336,6 +1551,12 @@ brlobol_display_endpoint_request_frame(brlobol_display_endpoint_t *endpoint,
 {
     if (!endpoint || !endpoint->controller)
 	return 0;
+    if (endpoint->engine == BRLOBOL_RENDER_ENGINE_NONE) {
+	endpoint->controller->clearRenderRequest();
+	return 1;
+    }
+    if (endpoint->engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	return endpoint_diagnostic_refresh(endpoint);
     endpoint->controller->requestRender(reason);
 	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT &&
 	!endpoint_rt_start(endpoint))
@@ -1361,6 +1582,12 @@ brlobol_display_endpoint_resize(brlobol_display_endpoint_t *endpoint,
     endpoint->width = width;
     endpoint->height = height;
     endpoint->device_pixel_ratio = device_pixel_ratio;
+	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_NONE) {
+	    endpoint->controller->clearRenderRequest();
+	    return 1;
+	}
+	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	    return endpoint_diagnostic_refresh(endpoint);
 	return endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
 	    endpoint_rt_start(endpoint);
 }
@@ -1398,37 +1625,19 @@ brlobol_display_endpoint_input_action_handler_clear_if(
 }
 
 extern "C" int
-brlobol_display_endpoint_input_semantic_profile_set(
+brlobol_display_endpoint_input_action_layer_set(
 	brlobol_display_endpoint_t *endpoint,
-	const BRLObolInputProfile *profile, void *owner)
+	const BRLObolInputActionLayer *layer, void *owner, void *user_data)
 {
-    return endpoint ? endpoint->input.setSemanticProfile(profile, owner) : 0;
+    return endpoint ? endpoint->input.setActionLayer(layer, owner, user_data) :
+	0;
 }
 
 extern "C" int
-brlobol_display_endpoint_input_semantic_profile_clear_if(
+brlobol_display_endpoint_input_action_layer_clear_if(
 	brlobol_display_endpoint_t *endpoint, void *owner)
 {
-    return endpoint ? endpoint->input.clearSemanticProfileIf(owner) : 0;
-}
-
-extern "C" int
-brlobol_display_endpoint_input_semantic_action_handler_set(
-	brlobol_display_endpoint_t *endpoint, BRLObolInputActionHandler handler,
-	void *user_data)
-{
-    if (!endpoint)
-	return 0;
-    return endpoint->input.setSemanticActionHandler(handler, user_data);
-}
-
-extern "C" int
-brlobol_display_endpoint_input_semantic_action_handler_clear_if(
-	brlobol_display_endpoint_t *endpoint, BRLObolInputActionHandler handler,
-	void *user_data)
-{
-    return endpoint ? endpoint->input.clearSemanticActionHandlerIf(handler,
-	user_data) : 0;
+    return endpoint ? endpoint->input.clearActionLayerIf(owner) : 0;
 }
 
 extern "C" int
@@ -1473,6 +1682,13 @@ brlobol_display_endpoint_capture_plane(brlobol_display_endpoint_t *endpoint,
 		height, components) > 0 ? 1 : 0 : 0;
     }
     if (plane != BRLOBOL_CAPTURE_COMPOSITE)
+	return 0;
+
+    /* NONE retains state without rendering.  DIAGNOSTIC traverses and
+     * reports; neither is a graphical backend or a source of composite
+     * pixels.  The independent framebuffer plane remains capturable above. */
+    if (endpoint->engine == BRLOBOL_RENDER_ENGINE_NONE ||
+	endpoint->engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
 	return 0;
 
     if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT && endpoint->rt) {
@@ -1609,32 +1825,46 @@ brlobol_display_endpoint_render_engine_set(
     if (!endpoint || !valid_engine(engine)) {
 	return 0;
     }
-    if (endpoint->factory && !engine_host_compatible(engine,
-	brlobol_host_factory_capabilities(endpoint->factory))) {
+    if (!brlobol_display_endpoint_render_engine_supported(endpoint, engine))
 	return 0;
+
+    const enum brlobol_render_engine previous = endpoint->engine;
+    if (previous == engine) {
+	if (engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	    return endpoint_diagnostic_refresh(endpoint);
+	return 1;
     }
-    if (endpoint->host && !endpoint->factory &&
-	(engine == BRLOBOL_RENDER_ENGINE_HW ||
-	 engine == BRLOBOL_RENDER_ENGINE_SW)) {
-	return 0;
-    }
-	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT &&
-	engine != BRLOBOL_RENDER_ENGINE_RT)
+    if (previous == BRLOBOL_RENDER_ENGINE_RT)
 	endpoint_rt_destroy(endpoint);
+
     endpoint->engine = engine;
-	if (engine == BRLOBOL_RENDER_ENGINE_RT) {
+	endpoint->graphicalRenderingSet(
+	    engine != BRLOBOL_RENDER_ENGINE_NONE &&
+	    engine != BRLOBOL_RENDER_ENGINE_DIAGNOSTIC);
+    if (engine == BRLOBOL_RENDER_ENGINE_RT) {
 	if (!endpoint->rt)
 	    endpoint->rt = new (std::nothrow) EndpointRtState;
-	if (!endpoint->rt)
-	    return 0;
-	endpoint->controller->setPresentationSyncCallback(
-	    endpoint_rt_presentation_sync, endpoint);
-	if (!endpoint_rt_start(endpoint)) {
-	    endpoint->controller->clearPresentationSyncCallback(endpoint);
+	if (endpoint->rt) {
+	    endpoint->controller->setPresentationSyncCallback(
+		endpoint_rt_presentation_sync, endpoint);
+	}
+	if (!endpoint->rt || !endpoint_rt_start(endpoint)) {
 	    endpoint_rt_destroy(endpoint);
-	    endpoint->engine = BRLOBOL_RENDER_ENGINE_AUTO;
+	    endpoint->engine = previous;
+	    endpoint->graphicalRenderingSet(
+		previous != BRLOBOL_RENDER_ENGINE_NONE &&
+		previous != BRLOBOL_RENDER_ENGINE_DIAGNOSTIC);
+	    if (previous == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
+		(void)endpoint_diagnostic_refresh(endpoint);
 	    return 0;
 	}
+    } else if (engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC) {
+	return endpoint_diagnostic_refresh(endpoint);
+    } else if (engine == BRLOBOL_RENDER_ENGINE_NONE) {
+	endpoint->controller->clearRenderRequest();
+    } else {
+	endpoint->controller->requestRender("render-engine");
+	endpoint_frame_requested(endpoint, "render-engine");
     }
     return 1;
 }
@@ -1644,6 +1874,24 @@ brlobol_display_endpoint_render_engine_get(
 	const brlobol_display_endpoint_t *endpoint)
 {
     return endpoint ? endpoint->engine : BRLOBOL_RENDER_ENGINE_AUTO;
+}
+
+extern "C" enum brlobol_render_engine
+brlobol_display_endpoint_render_engine_resolved_get(
+	const brlobol_display_endpoint_t *endpoint)
+{
+    if (!endpoint || endpoint->engine != BRLOBOL_RENDER_ENGINE_AUTO)
+	return endpoint ? endpoint->engine : BRLOBOL_RENDER_ENGINE_AUTO;
+    if (!endpoint->factory)
+	return BRLOBOL_RENDER_ENGINE_AUTO;
+
+    const uint64_t capabilities =
+	brlobol_host_factory_capabilities(endpoint->factory);
+    if (capabilities & BRLOBOL_HOST_CAP_SYSTEM_GL)
+	return BRLOBOL_RENDER_ENGINE_HW;
+    if (capabilities & BRLOBOL_HOST_CAP_PIXEL_PRESENT)
+	return BRLOBOL_RENDER_ENGINE_SW;
+    return BRLOBOL_RENDER_ENGINE_AUTO;
 }
 
 extern "C" size_t
@@ -1696,6 +1944,11 @@ brlobol_display_endpoint_property_get(
 
     if (bu_strcmp(name, "endpoint.renderer") == 0) {
 	out->string_value = render_engine_name(endpoint->engine);
+    } else if (bu_strcmp(name, "endpoint.renderer.resolved") == 0) {
+	out->string_value = render_engine_name(
+	    brlobol_display_endpoint_render_engine_resolved_get(endpoint));
+    } else if (bu_strcmp(name, "endpoint.renderer.supported") == 0) {
+	out->string_value = endpoint_supported_engines(endpoint);
     } else if (bu_strcmp(name, "endpoint.width") == 0) {
 	out->uint_value = endpoint->width;
     } else if (bu_strcmp(name, "endpoint.height") == 0) {
@@ -1738,10 +1991,33 @@ brlobol_display_endpoint_property_get(
 	out->bool_value = endpoint->controller->isDepthTestEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	out->bool_value = endpoint->controller->isLightingEnabled() ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.headlight.color") == 0) {
+	const SbColor color = endpoint->controller->getHeadlightColor();
+	out->color3[0] = color[0];
+	out->color3[1] = color[1];
+	out->color3[2] = color[2];
+    } else if (bu_strcmp(name, "renderer.headlight.intensity") == 0) {
+	out->double_value = endpoint->controller->getHeadlightIntensity();
     } else if (bu_strcmp(name, "renderer.transparency") == 0) {
 	out->bool_value = endpoint->controller->isTransparencyEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.antialiasing") == 0) {
 	out->bool_value = endpoint->controller->isAntialiasingEnabled() ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.diagnostic.revision") == 0) {
+	out->uint_value = endpoint->diagnostic_revision;
+    } else if (bu_strcmp(name,
+	"renderer.diagnostic.visited_sources") == 0) {
+	out->uint_value = endpoint->diagnostic_visited_sources;
+    } else if (bu_strcmp(name,
+	"renderer.diagnostic.realized_sources") == 0) {
+	out->uint_value = endpoint->diagnostic_realized_sources;
+    } else if (bu_strcmp(name,
+	"renderer.diagnostic.failed_sources") == 0) {
+	out->uint_value = endpoint->diagnostic_failed_sources;
+    } else if (bu_strcmp(name,
+	"renderer.diagnostic.progressive_pending") == 0) {
+	out->bool_value = endpoint->diagnostic_progressive_pending ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.diagnostic.summary") == 0) {
+	out->string_value = endpoint->diagnostic_summary.c_str();
     } else if (bu_strcmp(name, "render.rt.workers") == 0) {
 	out->uint_value = endpoint->rt && endpoint->rt->workers ?
 	    endpoint->rt->workers : std::max(1u, std::thread::hardware_concurrency());
@@ -1754,6 +2030,12 @@ brlobol_display_endpoint_property_get(
     } else if (bu_strcmp(name, "render.rt.quality") == 0) {
 	out->string_value = endpoint->rt && !endpoint->rt->interactiveQuality ?
 	    "final" : "interactive";
+    } else if (bu_strcmp(name, "render.rt.geometry_revision") == 0) {
+	out->uint_value = endpoint->rt ?
+	    endpoint->rt->renderer.getGeometryRevision() : 0u;
+    } else if (bu_strcmp(name, "render.rt.presentation_revision") == 0) {
+	out->uint_value = endpoint->rt ?
+	    endpoint->rt->renderer.getPresentationRevision() : 0u;
     } else if (bu_strcmp(name, "composition.rt.layer") == 0) {
 	out->string_value = endpoint->rt ? endpoint_rt_presentation_layer_name(
 	    endpoint->rt->presentationLayer) : "interlay";
@@ -1892,6 +2174,14 @@ brlobol_display_endpoint_property_set(
     } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	endpoint->controller->setLightingEnabled(
 	    value->bool_value ? TRUE : FALSE);
+    } else if (bu_strcmp(name, "renderer.headlight.color") == 0) {
+	endpoint->controller->setHeadlightColor(SbColor(
+	    static_cast<float>(value->color3[0]),
+	    static_cast<float>(value->color3[1]),
+	    static_cast<float>(value->color3[2])));
+    } else if (bu_strcmp(name, "renderer.headlight.intensity") == 0) {
+	endpoint->controller->setHeadlightIntensity(
+	    static_cast<float>(value->double_value));
     } else if (bu_strcmp(name, "renderer.transparency") == 0) {
 	endpoint->controller->setTransparencyEnabled(
 	    value->bool_value ? TRUE : FALSE);
@@ -2033,10 +2323,36 @@ BRLObolDisplayEndpoint::setRenderEngine(enum brlobol_render_engine engine)
     return brlobol_display_endpoint_render_engine_set(this->endpoint, engine);
 }
 
+int
+BRLObolDisplayEndpoint::supportsRenderEngine(
+	enum brlobol_render_engine engine) const
+{
+    return brlobol_display_endpoint_render_engine_supported(this->endpoint,
+	engine);
+}
+
+uint64_t
+BRLObolDisplayEndpoint::renderEngineCapabilities(void) const
+{
+    return brlobol_display_endpoint_render_engine_capabilities(this->endpoint);
+}
+
+int
+BRLObolDisplayEndpoint::refreshDiagnostics(void)
+{
+    return brlobol_display_endpoint_diagnostic_refresh(this->endpoint);
+}
+
 enum brlobol_render_engine
 BRLObolDisplayEndpoint::renderEngine(void) const
 {
     return brlobol_display_endpoint_render_engine_get(this->endpoint);
+}
+
+enum brlobol_render_engine
+BRLObolDisplayEndpoint::resolvedRenderEngine(void) const
+{
+    return brlobol_display_endpoint_render_engine_resolved_get(this->endpoint);
 }
 
 int

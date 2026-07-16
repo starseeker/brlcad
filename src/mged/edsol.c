@@ -182,6 +182,7 @@ set_e_axes_pos_clbk(int UNUSED(ac), const char **UNUSED(av), void *d, void *id)
 	    struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
 	    m_dmp->display_variables->mv_transform = 'e';
 	}
+	mged_obol_input_action_layers_sync(s, NULL);
     }
 
     return BRLCAD_OK;

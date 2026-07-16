@@ -25,7 +25,7 @@
  * --------
  * This module adds optional TLS encryption to the libpkg-based
  * transport used between fbserv (the framebuffer server) and remote
- * framebuffer clients (e.g. rt via if_remote.c).  Both ends communicate
+ * framebuffer clients.  Both ends communicate
  * over a plain TCP connection managed by libpkg.  When OpenSSL is
  * available at build time, we:
  *
@@ -39,16 +39,16 @@
  * certificate at startup (no external PKI infrastructure needed).
  * Client programs (if_remote.c) act as TLS *clients*: they connect to
  * fbserv and perform the client-side handshake.  Certificate verification
- * is disabled on the client because there is no shared CA — the session
- * token (see imgstream/fbserv.h) provides application-level authentication
- * instead.
+ * uses the SHA-256 certificate fingerprint supplied out of band by fbserv.
+ * This pins an in-memory self-signed certificate without requiring a CA.
  *
  * SECURITY MODEL
  * --------------
  *  - All framebuffer data, pixel writes, and protocol commands are
  *    encrypted in transit (TLS 1.2 or TLS 1.3, negotiated by OpenSSL).
- *  - The session token (from imgstream/fbserv.h) prevents a rogue client
- *    from joining a session, even if it can establish a TLS connection.
+ *  - The pinned certificate authenticates the server before the session
+ *    token is sent, preventing an active intermediary from stealing it.
+ *  - The session token prevents an unauthorized client from joining.
  *  - The cert/key can be overridden via FBSERV_TLS_CERT / FBSERV_TLS_KEY
  *    environment variables.
  *
@@ -150,6 +150,63 @@ _fbserv_tls_log_errors(const char *prefix)
 }
 
 
+static int
+_fbserv_tls_hex_sha256(const unsigned char digest[32],
+	char fingerprint[FBSERV_AUTH_TOKEN_LEN + 1])
+{
+    static const char hex[] = "0123456789abcdef";
+    size_t i;
+
+    if (!digest || !fingerprint)
+	return FBSERV_TLS_ERR;
+    for (i = 0; i < 32; i++) {
+	fingerprint[2 * i] = hex[digest[i] >> 4];
+	fingerprint[2 * i + 1] = hex[digest[i] & 0x0f];
+    }
+    fingerprint[FBSERV_AUTH_TOKEN_LEN] = '\0';
+    return FBSERV_TLS_OK;
+}
+
+
+static int
+_fbserv_tls_fingerprint(X509 *certificate,
+	char fingerprint[FBSERV_AUTH_TOKEN_LEN + 1])
+{
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_size = 0;
+
+    if (!certificate || !fingerprint ||
+	X509_digest(certificate, EVP_sha256(), digest, &digest_size) != 1 ||
+	digest_size != 32)
+	return FBSERV_TLS_ERR;
+    return _fbserv_tls_hex_sha256(digest, fingerprint);
+}
+
+
+#ifdef FBSERV_TLS_CLIENT
+static int
+_fbserv_tls_fingerprint_matches(X509 *certificate, const char *expected)
+{
+    char actual[FBSERV_AUTH_TOKEN_LEN + 1] = {0};
+    int diff = 0;
+    size_t i;
+
+    if (!expected || strlen(expected) != FBSERV_AUTH_TOKEN_LEN ||
+	_fbserv_tls_fingerprint(certificate, actual) != FBSERV_TLS_OK)
+	return 0;
+    for (i = 0; i < FBSERV_AUTH_TOKEN_LEN; i++) {
+	char c = expected[i];
+	if (c >= 'A' && c <= 'F')
+	    c = (char)(c - 'A' + 'a');
+	if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+	    diff |= 1;
+	diff |= (unsigned char)c ^ (unsigned char)actual[i];
+    }
+    return diff == 0;
+}
+#endif
+
+
 /* -----------------------------------------------------------------------
  * Server-side functions (not compiled when FBSERV_TLS_CLIENT is set)
  * --------------------------------------------------------------------- */
@@ -240,6 +297,11 @@ fbserv_tls_server_ctx(const char *certfile, const char *keyfile)
 {
     SSL_CTX *ctx;
 
+    if ((certfile && !keyfile) || (!certfile && keyfile)) {
+	bu_log("fbserv TLS: certificate and key must be supplied together\n");
+	return NULL;
+    }
+
     ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) {
 	_fbserv_tls_log_errors("SSL_CTX_new (fbserv server)");
@@ -264,6 +326,19 @@ fbserv_tls_server_ctx(const char *certfile, const char *keyfile)
     }
 
     return ctx;
+}
+
+
+static int
+fbserv_tls_server_fingerprint(SSL_CTX *ctx,
+	char fingerprint[FBSERV_AUTH_TOKEN_LEN + 1])
+{
+    X509 *certificate;
+
+    if (!ctx || !fingerprint)
+	return FBSERV_TLS_ERR;
+    certificate = SSL_CTX_get0_certificate(ctx);
+    return _fbserv_tls_fingerprint(certificate, fingerprint);
 }
 
 #endif /* FBSERV_TLS_SERVER_CTX */
@@ -314,10 +389,9 @@ fbserv_tls_accept(SSL_CTX *ctx, struct pkg_conn *pc)
 #else  /* FBSERV_TLS_CLIENT — compile only the client-side functions */
 
 /**
- * Create an SSL_CTX for the fbserv *client* side.  Certificate
- * verification is disabled because the server uses a self-signed cert;
- * application-level authentication is provided by the session token
- * (see imgstream/fbserv.h).
+ * Create an SSL_CTX for the fbserv *client* side.  CA verification is not
+ * used because the default server certificate is self-signed; the connection
+ * routine verifies the caller-supplied SHA-256 certificate fingerprint.
  *
  * Returns a new SSL_CTX on success, NULL on failure.
  */
@@ -346,9 +420,11 @@ fbserv_tls_client_ctx(void)
  * Returns FBSERV_TLS_OK on success, FBSERV_TLS_ERR on failure.
  */
 static int
-fbserv_tls_connect(SSL_CTX *ctx, struct pkg_conn *pc)
+fbserv_tls_connect(SSL_CTX *ctx, struct pkg_conn *pc,
+	const char *expected_fingerprint, int allow_unverified)
 {
     SSL *ssl;
+    X509 *certificate = NULL;
     int ret;
 
     if (!ctx || !pc)
@@ -372,6 +448,19 @@ fbserv_tls_connect(SSL_CTX *ctx, struct pkg_conn *pc)
 	SSL_free(ssl);
 	return FBSERV_TLS_ERR;
     }
+
+    certificate = SSL_get_peer_certificate(ssl);
+    if (!allow_unverified &&
+	!_fbserv_tls_fingerprint_matches(certificate, expected_fingerprint)) {
+	bu_log("fbserv TLS: server certificate fingerprint mismatch or missing pin\n");
+	if (certificate)
+	    X509_free(certificate);
+	SSL_shutdown(ssl);
+	SSL_free(ssl);
+	return FBSERV_TLS_ERR;
+    }
+    if (certificate)
+	X509_free(certificate);
 
     pkg_set_tls(pc, (void *)ssl,
 		_fbserv_ssl_read, _fbserv_ssl_write, _fbserv_ssl_free);

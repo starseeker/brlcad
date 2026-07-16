@@ -26,7 +26,7 @@
  *
  *   Test 1 — endpoint renderer-policy and view-state round-trip
  *             Exercises what mged_shaded_mode_helper does:
- *               dm set zbuffer $val; dm set zclip $val; dm set lighting $val
+ *               typed endpoint depth, clipping, and lighting properties
  *             Verifies the GED command updates Obol renderer and libbv state.
  *
  *   Test 2 — shaded draw-mode pipeline (draw -m1, draw -m2) produces expected
@@ -131,7 +131,7 @@ open_gedp(const char *gfile, int width, int height)
 /* ========================================================================== */
 /* Test 1: dm_set/get_light, dm_set/get_zbuffer, dm_set/get_zclip round-trip  */
 /* Simulates the state flips that mged_shaded_mode_helper issues:              */
-/*   dm set zbuffer $val; dm set zclip $val; dm set lighting $val             */
+/*   Canonical typed endpoint properties used by MGED shaded-mode scripts.   */
 /* ========================================================================== */
 static int
 test_dm_lighting_flags(const char *datadir)
@@ -163,46 +163,48 @@ test_dm_lighting_flags(const char *datadir)
 	bu_log("FAIL: Obol DM did not publish a view endpoint\n");
 	fail++;
     } else {
-	const char *s_av[5] = {"dm", "set", "lighting", "1", NULL};
+	const char *s_av[5] = {
+	    "dm", "set", "renderer.lighting", "1", NULL
+	};
 	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
 	    !controller->isLightingEnabled()) {
-	    bu_log("FAIL: dm set lighting 1 did not enable Obol lighting\n");
+	    bu_log("FAIL: typed lighting property did not enable Obol lighting\n");
 	    fail++;
 	}
-	s_av[2] = "zbuffer";
+	s_av[2] = "renderer.depth_test";
 	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
 	    !controller->isDepthTestEnabled()) {
-	    bu_log("FAIL: dm set zbuffer 1 did not enable Obol depth testing\n");
+	    bu_log("FAIL: typed depth property did not enable Obol depth testing\n");
 	    fail++;
 	}
-	s_av[2] = "zclip";
+	s_av[2] = "view.zclip";
 	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
 	    !bv_zclip_get(DRAW_TEST_BV(v))) {
-	    bu_log("FAIL: dm set zclip 1 did not enable libbv clipping\n");
+	    bu_log("FAIL: typed zclip property did not enable libbv clipping\n");
 	    fail++;
 	}
 
 	s_av[3] = "0";
-	s_av[2] = "lighting";
+	s_av[2] = "renderer.lighting";
 	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
 	    controller->isLightingEnabled()) {
-	    bu_log("FAIL: dm set lighting 0 did not disable Obol lighting\n");
+	    bu_log("FAIL: typed lighting property did not disable Obol lighting\n");
 	    fail++;
 	}
-	s_av[2] = "zbuffer";
+	s_av[2] = "renderer.depth_test";
 	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
 	    controller->isDepthTestEnabled()) {
-	    bu_log("FAIL: dm set zbuffer 0 did not disable Obol depth testing\n");
+	    bu_log("FAIL: typed depth property did not disable Obol depth testing\n");
 	    fail++;
 	}
-	s_av[2] = "zclip";
+	s_av[2] = "view.zclip";
 	if (ged_exec_dm(gedp, 4, s_av) != BRLCAD_OK ||
 	    bv_zclip_get(DRAW_TEST_BV(v))) {
-	    bu_log("FAIL: dm set zclip 0 did not disable libbv clipping\n");
+	    bu_log("FAIL: typed zclip property did not disable libbv clipping\n");
 	    fail++;
 	}
 	if (!fail)
-	    bu_log("PASS: GED dm policy aliases update typed owners\n");
+	    bu_log("PASS: GED dm canonical properties update typed owners\n");
     }
 
     ged_close(gedp);

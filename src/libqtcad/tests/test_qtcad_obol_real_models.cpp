@@ -192,6 +192,30 @@ system_gl_enabled()
     return BU_STR_EQUAL(getenv("BRLOBOL_QTCAD_REAL_MODEL_GL"), "1");
 }
 
+static BRLObolViewController::SoftwareWireMode
+software_wire_mode()
+{
+    const char *value = getenv("BRLOBOL_QTCAD_SOFTWARE_WIRE");
+    if (BU_STR_EQUAL(value, "fast"))
+	return BRLObolViewController::SOFTWARE_WIRE_FAST;
+    if (BU_STR_EQUAL(value, "quality"))
+	return BRLObolViewController::SOFTWARE_WIRE_QUALITY;
+    return BRLObolViewController::SOFTWARE_WIRE_AUTO;
+}
+
+static const char *
+software_wire_mode_name(BRLObolViewController::SoftwareWireMode mode)
+{
+    switch (mode) {
+	case BRLObolViewController::SOFTWARE_WIRE_FAST:
+	    return "fast";
+	case BRLObolViewController::SOFTWARE_WIRE_QUALITY:
+	    return "quality";
+	default:
+	    return "auto";
+    }
+}
+
 static void
 print_timing(const struct model_case &testCase, const char *phase, int64_t start)
 {
@@ -704,6 +728,14 @@ sync_draw_case(const struct model_case &testCase)
     if (!controller) {
 	ged_close(gedp);
 	return 0;
+    }
+    const BRLObolViewController::SoftwareWireMode wireMode =
+	software_wire_mode();
+    controller->setSoftwareWireMode(wireMode);
+    if (timing_enabled()) {
+	fprintf(stderr, "CONFIG %s renderer=%s software_wire=%s size=220x170\n",
+	    testCase.name, system_gl_enabled() ? "system-gl" : "osmesa",
+	    software_wire_mode_name(wireMode));
     }
     controller->setViewportSize(220, 170);
     controller->clearDatabaseSources();

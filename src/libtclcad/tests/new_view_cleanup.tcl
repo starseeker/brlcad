@@ -19,6 +19,16 @@ foreach command {dm_bestXType dm_validXType} {
 }
 
 go_open g db [lindex $argv 0]
+if {![catch {g new_view rejected legacy_dm} message]} {
+    puts stderr "new_view accepted an unsupported presentation type"
+    exit 1
+}
+if {[string first "Unsupported view presentation type 'legacy_dm'" $message] < 0 ||
+        [string first "display manager" [string tolower $message]] >= 0 ||
+        [string first "fbhelp" $message] >= 0} {
+    puts stderr "new_view reported stale presentation diagnostics: $message"
+    exit 1
+}
 g new_view v1 nu
 rename g {}
 

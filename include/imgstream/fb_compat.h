@@ -128,10 +128,14 @@ struct imgstream_fb_remote_options {
     uint32_t struct_size;
     const char *auth_token;
     int use_tls;
+    /** Lowercase/uppercase SHA-256 fingerprint of the expected TLS certificate. */
+    const char *tls_server_sha256;
+    /** Explicitly permit unpinned TLS or non-loopback plaintext TCP. */
+    int allow_insecure;
 };
 
 #define IMGSTREAM_FB_REMOTE_OPTIONS_INIT { \
-    sizeof(struct imgstream_fb_remote_options), NULL, 0 }
+	sizeof(struct imgstream_fb_remote_options), NULL, 0, NULL, 0 }
 
 struct imgstream_fb_colormap {
     uint16_t red[256];

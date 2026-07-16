@@ -10,7 +10,7 @@ fbserv - serve a BRL-CAD framebuffer to remote or local clients
 
 [source]
 ----
-fbserv [-v] [-T] [-A] [-{sS} _squaresize_] [-{wW} _width_] [-{nN} _height_] [-p _port_] [-F _framebuffer_] [_port_] [_framebuffer_]
+fbserv [-v] [-T] [-A] [-R [-u]] [-{sS} _squaresize_] [-{wW} _width_] [-{nN} _height_] [-p _port_] [-F _framebuffer_] [_port_] [_framebuffer_]
 fbserv [-v] [-A] [-F _framebuffer_] -I _ipc_addr_
 ----
 
@@ -26,7 +26,8 @@ single-framebuffer server that opens one device and holds it open across
 many interleaved connections, or as an *inetd*(8) remote framebuffer
 server.
 
-By default *fbserv* listens for TCP connections. The *-p* option sets the
+By default *fbserv* listens for TCP connections on the IPv4 loopback
+interface only. The *-p* option sets the
 TCP port and the *-F* option names the framebuffer device. Either may
 instead be given positionally: the first non-option argument is taken as
 the port and the second as the framebuffer device. A port below 1024 has
@@ -62,6 +63,16 @@ Clients reach an IPC server using a framebuffer name of the form
   Strict authentication: reject any client that does not present a valid
   token via the protocol authentication message.
 
+*-R*::
+  Bind TCP to all IPv4 interfaces for remote access. Unless *-u* is also
+  supplied, this automatically enables strict token authentication and TLS.
+  Startup fails if TLS support or a valid token is unavailable.
+
+*-u*::
+  With *-R*, explicitly permit legacy insecure remote TCP. This option is
+  required to expose a listener without the secure-remote policy. It has no
+  effect by itself and cannot be combined with *-I*.
+
 *-s* _squaresize_, *-S* _squaresize_::
   Request a square framebuffer of _squaresize_ by _squaresize_ pixels.
 
@@ -89,13 +100,24 @@ Clients reach an IPC server using a framebuffer name of the form
 [[security]]
 == SECURITY
 
-Token authentication works with or without TLS. If *FBSERV_TOKEN* is set
+TCP listeners are loopback-only by default. Externally reachable service must
+be requested with *-R*; it then requires both TLS and token authentication.
+After creating or loading its certificate, *fbserv* prints the certificate's
+SHA-256 fingerprint. Remote clients set *FBSERV_TLS=1*, *FBSERV_TOKEN*, and
+*FBSERV_TLS_SHA256* to the values printed by the server. The fingerprint pins
+the self-signed certificate before the token is sent, so an active intermediary
+cannot capture the token. *FBSERV_TLS_CERT* and *FBSERV_TLS_KEY* may name a
+persistent PEM certificate/key pair; both must be supplied together.
+
+Token authentication also works on loopback TCP without TLS. If *FBSERV_TOKEN* is set
 in the environment (to 64 hex characters) before *fbserv* starts, that
 value is used as the required shared token; clients must set the same
 *FBSERV_TOKEN* value. If *FBSERV_TOKEN* is not set, *fbserv* generates a
 fresh token at startup and prints it to standard error. With *-A*,
 clients that do not authenticate are rejected; without it, unauthenticated
-clients are still accepted.
+clients are still accepted. Local IPC endpoints do not require TLS. Setting
+*FBSERV_INSECURE* on a client explicitly permits non-loopback plaintext or
+unpinned TLS for compatibility; *-R -u* is the corresponding server opt-out.
 
 [[examples]]
 == EXAMPLES
@@ -113,18 +135,21 @@ to port 0 (which maps to default port 5559), then ray trace into it with
 the same framebuffer and the image survives between client connections.
 ====
 
-.Authenticated TLS server
+.Authenticated, peer-pinned remote TLS server
 ====
 [source,bash]
 ----
 export FBSERV_TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-fbserv -T -A -p 0 -F /dev/mem &
+fbserv -R -p 0 -F /dev/mem 2>fbserv.log &
+# Copy the "TLS certificate SHA-256" value from fbserv.log:
+export FBSERV_TLS_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+export FBSERV_TLS=1
 rt -F 0 model.g object
 ----
-Run *fbserv* in encrypted, strictly authenticated mode. Both the server
-and every client must share the same *FBSERV_TOKEN*; the *-T* flag enables
-TLS (in an OpenSSL-enabled build) and *-A* rejects any client that fails
-to authenticate.
+Run *fbserv* with externally reachable, encrypted, strictly authenticated
+service. Every client must share *FBSERV_TOKEN* and pin the fingerprint printed
+by this server instance. The example fingerprint is a placeholder, not a value
+to reuse.
 ====
 
 [[see_also]]

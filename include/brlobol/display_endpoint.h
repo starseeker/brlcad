@@ -25,6 +25,13 @@ enum brlobol_render_engine {
     BRLOBOL_RENDER_ENGINE_DIAGNOSTIC = 5
 };
 
+#define BRLOBOL_RENDER_ENGINE_CAP_AUTO       UINT64_C(0x00000001)
+#define BRLOBOL_RENDER_ENGINE_CAP_HW         UINT64_C(0x00000002)
+#define BRLOBOL_RENDER_ENGINE_CAP_SW         UINT64_C(0x00000004)
+#define BRLOBOL_RENDER_ENGINE_CAP_RT         UINT64_C(0x00000008)
+#define BRLOBOL_RENDER_ENGINE_CAP_NONE       UINT64_C(0x00000010)
+#define BRLOBOL_RENDER_ENGINE_CAP_DIAGNOSTIC UINT64_C(0x00000020)
+
 enum brlobol_capture_plane {
     BRLOBOL_CAPTURE_COMPOSITE = 0,
     BRLOBOL_CAPTURE_FRAMEBUFFER = 1
@@ -202,33 +209,21 @@ brlobol_display_endpoint_input_action_handler_clear_if(
 	BRLObolInputActionHandler handler, void *user_data);
 
 /**
- * Install a scoped application semantic-gesture overlay.  The overlay takes
- * precedence over equal-score default bindings but does not replace default
- * view navigation.  Only its owner may clear or replace it.
+ * Atomically install a scoped, application-defined action layer.  Its
+ * bindings take precedence over equal-score default bindings, and winning
+ * actions dispatch only to the handler stored in the layer.  Action IDs are
+ * opaque to libbrlobol and local to that handler.  An UNHANDLED result falls
+ * through to the matching default action.  Only the owner token may replace
+ * or clear an installed layer.
  */
 BRLOBOL_EXPORT int
-brlobol_display_endpoint_input_semantic_profile_set(
+brlobol_display_endpoint_input_action_layer_set(
 	brlobol_display_endpoint_t *endpoint,
-	const BRLObolInputProfile *profile, void *owner);
+	const BRLObolInputActionLayer *layer, void *owner, void *user_data);
 
 BRLOBOL_EXPORT int
-brlobol_display_endpoint_input_semantic_profile_clear_if(
+brlobol_display_endpoint_input_action_layer_clear_if(
 	brlobol_display_endpoint_t *endpoint, void *owner);
-
-/**
- * Set the endpoint-local application semantic-action handler.  Semantic
- * actions return BRLOBOL_INPUT_RESULT_*; view navigation remains owned by
- * brlobol_display_endpoint_input_action_handler_set.
- */
-BRLOBOL_EXPORT int
-brlobol_display_endpoint_input_semantic_action_handler_set(
-	brlobol_display_endpoint_t *endpoint,
-	BRLObolInputActionHandler handler, void *user_data);
-
-BRLOBOL_EXPORT int
-brlobol_display_endpoint_input_semantic_action_handler_clear_if(
-	brlobol_display_endpoint_t *endpoint,
-	BRLObolInputActionHandler handler, void *user_data);
 
 /** Match and deliver a normalized event using this endpoint's profile. */
 BRLOBOL_EXPORT int
@@ -296,8 +291,36 @@ brlobol_display_endpoint_render_engine_set(
 	brlobol_display_endpoint_t *endpoint,
 	enum brlobol_render_engine engine);
 
+/** Report whether the current endpoint/host binding can honor an engine.
+ * An unbound endpoint reports policies that may be selected before opening a
+ * compatible host. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_render_engine_supported(
+	const brlobol_display_endpoint_t *endpoint,
+	enum brlobol_render_engine engine);
+
+/** Return BRLOBOL_RENDER_ENGINE_CAP_* bits for the current binding. */
+BRLOBOL_EXPORT uint64_t
+brlobol_display_endpoint_render_engine_capabilities(
+	const brlobol_display_endpoint_t *endpoint);
+
+/** Perform one non-graphical diagnostic traversal.  This is available only
+ * while the diagnostic engine is selected; typed diagnostic properties retain
+ * the resulting counts and summary. */
+BRLOBOL_EXPORT int
+brlobol_display_endpoint_diagnostic_refresh(
+	brlobol_display_endpoint_t *endpoint);
+
 BRLOBOL_EXPORT enum brlobol_render_engine
 brlobol_display_endpoint_render_engine_get(
+	const brlobol_display_endpoint_t *endpoint);
+
+/** Return the renderer selected by the endpoint policy and active factory.
+ * AUTO resolves to HW before SW for a capable factory host.  It remains AUTO
+ * while unbound or when a transitional direct host has no capability record.
+ * Retained RT is never selected implicitly. */
+BRLOBOL_EXPORT enum brlobol_render_engine
+brlobol_display_endpoint_render_engine_resolved_get(
 	const brlobol_display_endpoint_t *endpoint);
 
 /** Enumerate the stable typed endpoint property registry. */
@@ -340,7 +363,11 @@ public:
     void detachHost(void);
     BRLObolWindowHost *host(void) const;
     int setRenderEngine(enum brlobol_render_engine engine);
+    int supportsRenderEngine(enum brlobol_render_engine engine) const;
+    uint64_t renderEngineCapabilities(void) const;
+    int refreshDiagnostics(void);
     enum brlobol_render_engine renderEngine(void) const;
+    enum brlobol_render_engine resolvedRenderEngine(void) const;
     int propertyGet(const char *name,
 	struct brlobol_endpoint_property_value *value) const;
     int propertySet(const char *name,

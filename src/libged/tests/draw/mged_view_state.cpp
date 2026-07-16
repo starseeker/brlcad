@@ -39,6 +39,7 @@
 
 #include "common.h"
 
+#include <cmath>
 #include <fstream>
 #include <string>
 #include <cstring>
@@ -391,45 +392,51 @@ test_multi_obol_dm_attachment(const char *datadir)
 	fail = 1;
     }
     if (!fail) {
-	const char *fast_av[5] = {"dm", "set", "software_wire", "fast", NULL};
+	const char *fast_av[5] = {
+	    "dm", "set", "controller.software_wire", "fast", NULL
+	};
 	const int fast_ret = ged_exec_dm(gedp, 4, fast_av);
 	if (fast_ret != BRLCAD_OK ||
 		v0_controller->getSoftwareWireMode() !=
 		    BRLObolViewController::SOFTWARE_WIRE_FAST ||
 		v1_controller->getSoftwareWireMode() !=
 		    BRLObolViewController::SOFTWARE_WIRE_AUTO) {
-	    bu_log("FAIL: dm set software_wire fast did not update only the active "
+	    bu_log("FAIL: dm set controller.software_wire fast did not update only the active "
 		    "view (ret=%d v0=%d v1=%d result=%s)\n", fast_ret,
 		    (int)v0_controller->getSoftwareWireMode(),
 		    (int)v1_controller->getSoftwareWireMode(),
 		    bu_vls_cstr(gedp->ged_result_str));
 	    fail = 1;
 	}
-	const char *query_av[4] = {"dm", "set", "software_wire", NULL};
+	const char *query_av[4] = {
+	    "dm", "get", "controller.software_wire", NULL
+	};
 	if (!fail && (ged_exec_dm(gedp, 3, query_av) != BRLCAD_OK ||
 		!BU_STR_EQUAL(bu_vls_cstr(gedp->ged_result_str), "fast"))) {
-	    bu_log("FAIL: dm set software_wire did not report fast: %s\n",
+	    bu_log("FAIL: dm get controller.software_wire did not report fast: %s\n",
 		    bu_vls_cstr(gedp->ged_result_str));
 	    fail = 1;
 	}
 	const char *named_av[7] = {
-	    "dm", "set", "-V", "V1", "software_wire", "quality", NULL
+	    "dm", "set", "-V", "V1", "controller.software_wire", "quality", NULL
 	};
 	if (!fail && (ged_exec_dm(gedp, 6, named_av) != BRLCAD_OK ||
 		v0_controller->getSoftwareWireMode() !=
 		    BRLObolViewController::SOFTWARE_WIRE_FAST ||
 		v1_controller->getSoftwareWireMode() !=
 		    BRLObolViewController::SOFTWARE_WIRE_QUALITY)) {
-	    bu_log("FAIL: named dm software_wire setting was not view-local\n");
+	    bu_log("FAIL: named dm controller.software_wire setting was not view-local\n");
 	    fail = 1;
 	}
-	const char *bad_av[5] = {"dm", "set", "software_wire", "turbo", NULL};
+	const char *bad_av[5] = {
+	    "dm", "set", "controller.software_wire", "turbo", NULL
+	};
 	if (!fail && ged_exec_dm(gedp, 4, bad_av) != BRLCAD_ERROR) {
-	    bu_log("FAIL: dm set software_wire accepted an invalid mode\n");
+	    bu_log("FAIL: dm set controller.software_wire accepted an invalid mode\n");
 	    fail = 1;
 	}
 	if (!fail)
-	    bu_log("PASS: dm software_wire modes are queryable and view-local\n");
+	    bu_log("PASS: typed software-wire modes are queryable and view-local\n");
     }
     if (!fail) {
 	BRLObolViewAttachment *v0_attachment =
@@ -579,6 +586,7 @@ test_owned_render_endpoint(const char *datadir)
     const char *status_av[3] = {"dm", "status", NULL};
     if (!fail && (ged_exec_dm(gedp, 2, status_av) != BRLCAD_OK ||
 	    !strstr(bu_vls_cstr(gedp->ged_result_str), "renderer=auto") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "resolved=auto") ||
 	    !strstr(bu_vls_cstr(gedp->ged_result_str), "width="))) {
 	bu_log("FAIL: dm status could not report a DM-less endpoint: %s\n",
 	    bu_vls_cstr(gedp->ged_result_str));
@@ -609,6 +617,36 @@ test_owned_render_endpoint(const char *datadir)
     if (!fail && (ged_exec_dm(gedp, 3, get_bg_av) != BRLCAD_OK ||
 	    !strstr(bu_vls_cstr(gedp->ged_result_str), "0.1"))) {
 	bu_log("FAIL: typed background property did not round trip: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+
+    const char *set_headlight_color_av[5] = {
+	"dm", "set", "renderer.headlight.color", "0.25/0.5/0.75", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 4, set_headlight_color_av) !=
+	BRLCAD_OK || controller->getHeadlightColor() !=
+	SbColor(0.25f, 0.5f, 0.75f))) {
+	bu_log("FAIL: dm set did not update typed headlight color: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *set_headlight_intensity_av[5] = {
+	"dm", "set", "renderer.headlight.intensity", "0.4", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 4, set_headlight_intensity_av) !=
+	BRLCAD_OK || std::fabs(controller->getHeadlightIntensity() - 0.4f) >
+	1.0e-6f)) {
+	bu_log("FAIL: dm set did not update typed headlight intensity: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *get_headlight_color_av[4] = {
+	"dm", "get", "renderer.headlight.color", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 3, get_headlight_color_av) !=
+	BRLCAD_OK || !strstr(bu_vls_cstr(gedp->ged_result_str), "0.25"))) {
+	bu_log("FAIL: typed headlight color did not round trip: %s\n",
 	    bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
     }
@@ -691,15 +729,17 @@ test_owned_render_endpoint(const char *datadir)
     if (!fail)
 	bu_log("PASS: dm endpoint status, typed properties, and renderer selection\n");
 
-    const char *wire_av[5] = {"dm", "set", "software_wire", "fast", NULL};
+    const char *wire_av[5] = {
+	"dm", "set", "controller.software_wire", "fast", NULL
+    };
     if (!fail && (ged_exec_dm(gedp, 4, wire_av) != BRLCAD_OK ||
 	    controller->getSoftwareWireMode() !=
 		BRLObolViewController::SOFTWARE_WIRE_FAST)) {
-	bu_log("FAIL: dm software_wire could not configure a DM-less Obol view: %s\n",
+	bu_log("FAIL: typed software-wire property could not configure an Obol view: %s\n",
 		bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
     } else if (!fail) {
-	bu_log("PASS: dm software_wire configures a DM-less Obol view\n");
+	bu_log("PASS: typed software-wire property configures an Obol view\n");
     }
     wire_av[3] = "auto";
     if (!fail && ged_exec_dm(gedp, 4, wire_av) != BRLCAD_OK)
@@ -887,7 +927,11 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	    !strstr(bu_vls_cstr(gedp->ged_result_str), "host=headless") ||
 	    !strstr(bu_vls_cstr(gedp->ged_result_str), "renderer=sw") ||
 	    !strstr(bu_vls_cstr(gedp->ged_result_str),
-		"property.endpoint.renderer type=enum access=rw"))) {
+		"renderer.resolved=sw") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		"property.endpoint.renderer type=enum access=rw") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		"property.endpoint.renderer.resolved type=enum access=r"))) {
 	bu_log("FAIL: dm diagnostics omitted endpoint state: %s\n",
 		bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
@@ -910,38 +954,81 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	fail = 1;
     }
 
-    const char *policy_av[5] = {"dm", "set", "zclip", "1", NULL};
+    const char *policy_av[5] = {"dm", "set", "view.zclip", "1", NULL};
     if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
 	    !bv_zclip_get(DRAW_TEST_BV(view_ctx)))) {
-	bu_log("FAIL: dm set zclip did not update the owning bv view\n");
+	bu_log("FAIL: dm set view.zclip did not update the owning bv view\n");
 	fail = 1;
     }
     BRLObolViewController *view_controller =
 	static_cast<BRLObolViewController *>(controller);
-    policy_av[2] = "zbuffer";
+    policy_av[2] = "renderer.depth_test";
     policy_av[3] = "0";
     if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
 	    view_controller->isDepthTestEnabled())) {
-	bu_log("FAIL: dm set zbuffer did not update Obol depth state\n");
+	bu_log("FAIL: dm set renderer.depth_test did not update Obol depth state\n");
 	fail = 1;
     }
-    policy_av[2] = "lighting";
+    policy_av[2] = "renderer.lighting";
     if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
 	    view_controller->isLightingEnabled())) {
-	bu_log("FAIL: dm set lighting did not update Obol lighting state\n");
+	bu_log("FAIL: dm set renderer.lighting did not update Obol lighting state\n");
 	fail = 1;
     }
     policy_av[3] = "!";
     if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
 	    !view_controller->isLightingEnabled())) {
-	bu_log("FAIL: dm set lighting ! did not toggle typed lighting state\n");
+	bu_log("FAIL: dm set renderer.lighting ! did not toggle typed lighting state\n");
 	fail = 1;
     }
-    policy_av[2] = "depthcue";
+    policy_av[2] = "renderer.depth_cue";
     policy_av[3] = "1";
     if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
 	    !view_controller->isDepthCueEnabled())) {
-	bu_log("FAIL: dm set depthcue did not update Obol fog state\n");
+	bu_log("FAIL: dm set renderer.depth_cue did not update Obol fog state\n");
+	fail = 1;
+    }
+    const char *retired_aliases[] = {
+	"software_wire", "zclip", "zbuffer", "lighting", "depthcue"
+    };
+    for (size_t i = 0; !fail && i < sizeof(retired_aliases) /
+	    sizeof(retired_aliases[0]); i++) {
+	const char *retired_av[5] = {
+	    "dm", "set", retired_aliases[i], "1", NULL
+	};
+	if (ged_exec_dm(gedp, 4, retired_av) != BRLCAD_ERROR) {
+	    bu_log("FAIL: dm retained legacy property alias %s\n",
+		retired_aliases[i]);
+	    fail = 1;
+	}
+    }
+
+    const char *renderer_none_av[4] = {"dm", "renderer", "none", NULL};
+    if (!fail && (ged_exec_dm(gedp, 3, renderer_none_av) != BRLCAD_OK ||
+	    view_controller->getRenderRoot())) {
+	bu_log("FAIL: dm renderer none did not retain and suppress the graphical scene\n");
+	fail = 1;
+    }
+    const char *renderer_diagnostic_av[4] = {
+	"dm", "renderer", "diagnostic", NULL
+    };
+    if (!fail && (ged_exec_dm(gedp, 3, renderer_diagnostic_av) != BRLCAD_OK ||
+	    view_controller->getRenderRoot() ||
+	    ged_exec_dm(gedp, 2, diagnostics_av) != BRLCAD_OK ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "renderer=diagnostic") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		"property.endpoint.renderer.supported type=string access=r") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		"property.renderer.diagnostic.summary type=string access=r") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str), "scene=available"))) {
+	bu_log("FAIL: diagnostic renderer did not traverse and report typed state: %s\n",
+		bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
+    const char *renderer_sw_av[4] = {"dm", "renderer", "sw", NULL};
+    if (!fail && (ged_exec_dm(gedp, 3, renderer_sw_av) != BRLCAD_OK ||
+	    !view_controller->getRenderRoot())) {
+	bu_log("FAIL: leaving diagnostic renderer did not restore graphical presentation\n");
 	fail = 1;
     }
 
@@ -1001,6 +1088,23 @@ test_endpoint_dm_lifecycle(const char *datadir)
     open_av[5] = "sw";
     if (!fail && ged_exec_dm(gedp, 6, open_av) != BRLCAD_OK)
 	fail = 1;
+    if (!fail && ged_exec_dm(gedp, 2, close_av) != BRLCAD_OK)
+	fail = 1;
+    open_av[5] = "auto";
+    if (!fail && (ged_exec_dm(gedp, 6, open_av) != BRLCAD_OK ||
+	    brlobol_display_endpoint_render_engine_get(endpoint) !=
+		BRLOBOL_RENDER_ENGINE_AUTO ||
+	    brlobol_display_endpoint_render_engine_resolved_get(endpoint) !=
+		BRLOBOL_RENDER_ENGINE_SW ||
+	    ged_exec_dm(gedp, 2, diagnostics_av) != BRLCAD_OK ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		"renderer=auto\n") ||
+	    !strstr(bu_vls_cstr(gedp->ged_result_str),
+		"renderer.resolved=sw"))) {
+	bu_log("FAIL: dm auto did not resolve headless presentation to software: %s\n",
+	    bu_vls_cstr(gedp->ged_result_str));
+	fail = 1;
+    }
     if (!fail && ged_exec_dm(gedp, 2, close_av) != BRLCAD_OK)
 	fail = 1;
     open_av[5] = "rt";

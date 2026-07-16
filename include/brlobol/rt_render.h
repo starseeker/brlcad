@@ -79,9 +79,18 @@ struct BRLOBOL_EXPORT BRLObolRtSourceIdentity {
  *
  * synchronize() is called on the controller/Obol owner thread.  It copies
  * source visibility and presentation state and prepares only newly changed
- * database sources.  render() subsequently touches no Coin nodes, so an
- * endpoint may execute it on a worker and discard the result when cancellation
- * is requested.  The renderer does not own an image stream or native host.
+ * database sources.  Retained region/primitive material metadata takes
+ * precedence over source fallback metadata.  The interactive material model
+ * recognizes bounded plastic-family diffuse, specular, shine, reflection,
+ * transmission, and refractive-index parameters.  Mirror and glass use a
+ * fixed-depth secondary-ray path.  A bounded set of active directional,
+ * point, and spot lights authored under the
+ * active render scene is copied with its world transforms during
+ * synchronize(); unknown shader names retain the default diffuse presentation
+ * rather than invoking a legacy optical renderer.
+ * render() subsequently touches no Coin nodes, so an endpoint may execute it
+ * on a worker and discard the result when cancellation is requested.  The
+ * renderer does not own an image stream or native host.
  */
 class BRLOBOL_EXPORT BRLObolRtRenderer {
 public:

@@ -79,7 +79,7 @@ ViewSelectTool::refresh()
 	m_selector->do_view_update(QgViewUpdateFlags{});
 }
 
-/* The selector installs a scoped semantic gesture profile on the endpoint.
+/* The selector installs a scoped application action layer on the endpoint.
  * Qt only normalizes events at the canvas boundary; the tool never owns a
  * competing raw-event filter. */
 void

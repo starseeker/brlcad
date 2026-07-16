@@ -45,7 +45,7 @@ fbserv_obj_generate_token(struct fbserv_obj *fbsp)
 	return NULL;
 
     env_token = getenv(FBSERV_AUTH_TOKEN_ENVVAR);
-    if (env_token && strlen(env_token) == FBSERV_AUTH_TOKEN_LEN) {
+    if (env_token && fbserv_verify_token(env_token, env_token)) {
 	bu_strlcpy(fbsp->fbs_auth_token, env_token,
 	    sizeof(fbsp->fbs_auth_token));
     } else {
@@ -53,6 +53,49 @@ fbserv_obj_generate_token(struct fbserv_obj *fbsp)
     }
 
     return fbsp->fbs_auth_token;
+}
+
+
+int
+fbserv_obj_set_network_policy(struct fbserv_obj *fbsp,
+	enum fbserv_network_policy policy)
+{
+    if (!fbsp || (policy != FBSERV_NETWORK_LOOPBACK &&
+	policy != FBSERV_NETWORK_SECURE_REMOTE &&
+	policy != FBSERV_NETWORK_INSECURE_REMOTE))
+	return BRLCAD_ERROR;
+
+    fbsp->fbs_network_policy = (int)policy;
+    return BRLCAD_OK;
+}
+
+
+enum fbserv_network_policy
+fbserv_obj_network_policy(const struct fbserv_obj *fbsp)
+{
+    if (!fbsp)
+	return FBSERV_NETWORK_LOOPBACK;
+    return (enum fbserv_network_policy)fbsp->fbs_network_policy;
+}
+
+
+const char *
+fbserv_obj_listener_interface(const struct fbserv_obj *fbsp)
+{
+    return fbserv_obj_network_policy(fbsp) == FBSERV_NETWORK_LOOPBACK ?
+	"127.0.0.1" : NULL;
+}
+
+
+int
+fbserv_obj_network_ready(const struct fbserv_obj *fbsp)
+{
+    if (!fbsp)
+	return 0;
+    if (fbserv_obj_network_policy(fbsp) != FBSERV_NETWORK_SECURE_REMOTE)
+	return 1;
+    return fbsp->fbs_require_auth && fbsp->fbs_tls_ctx &&
+	fbserv_verify_token(fbsp->fbs_auth_token, fbsp->fbs_auth_token);
 }
 
 
@@ -66,6 +109,7 @@ fbserv_obj_init(struct fbserv_obj *fbsp)
     fbsp->fbs_listener.fbsl_fd = -1;
     fbsp->fbs_listener.fbsl_port = -1;
     fbsp->fbs_listener.fbsl_fbsp = fbsp;
+    fbsp->fbs_network_policy = FBSERV_NETWORK_LOOPBACK;
     return BRLCAD_OK;
 }
 

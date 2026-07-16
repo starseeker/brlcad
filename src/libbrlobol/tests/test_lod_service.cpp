@@ -482,6 +482,72 @@ test_generation_cancellation(void)
 }
 
 static int
+test_destruction_waits_for_in_flight_task(void)
+{
+    BRLObolLodService *service = new BRLObolLodService;
+    BlockingTaskData blockingData;
+    std::atomic<bool> destroyStarted(false);
+    std::atomic<bool> destroyReturned(false);
+
+    if (!service->start(1, FALSE)) {
+	printf("FAIL: LoD service did not start for in-flight destruction test\n");
+	delete service;
+	return 1;
+    }
+
+    BRLObolLodTask task;
+    task.generation = service->beginGeneration();
+    task.request = make_request("/destroy-in-flight.bot");
+    task.realize = blocking_task;
+    task.realizeData = &blockingData;
+    if (service->submit(task) == 0) {
+	printf("FAIL: LoD service rejected in-flight destruction task\n");
+	delete service;
+	return 1;
+    }
+
+    if (wait_for_blocking_task_started(blockingData)) {
+	{
+	    std::lock_guard<std::mutex> lock(blockingData.mutex);
+	    blockingData.release = true;
+	    blockingData.cv.notify_all();
+	}
+	delete service;
+	return 1;
+    }
+
+    std::thread destroyer([&]() {
+	destroyStarted.store(true, std::memory_order_release);
+	delete service;
+	destroyReturned.store(true, std::memory_order_release);
+    });
+    while (!destroyStarted.load(std::memory_order_acquire))
+	std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+
+    int ret = 0;
+    if (destroyReturned.load(std::memory_order_acquire)) {
+	printf("FAIL: LoD service destruction returned while a worker callback was active\n");
+	ret = 1;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(blockingData.mutex);
+	blockingData.release = true;
+	blockingData.cv.notify_all();
+    }
+    destroyer.join();
+
+    if (!destroyReturned.load(std::memory_order_acquire) ||
+	blockingData.calls != 1) {
+	printf("FAIL: LoD service destruction did not drain the active worker callback\n");
+	ret = 1;
+    }
+
+    return ret;
+}
+
+static int
 test_stop_discards_undrained_state(void)
 {
     BRLObolLodService service;
@@ -2647,14 +2713,18 @@ test_detached_database_snapshot_version(int databaseVersion)
     char dbpath[MAXPATHLEN] = {0};
     struct db_i *dbip = NULL;
     struct db_i *snapshotDb = NULL;
+    struct db_i *postCloseSnapshotDb = NULL;
     SoBRLDatabaseSource *source = NULL;
     SoBRLDatabaseSource *detached = NULL;
+    SoBRLDatabaseSource *postCloseDetached = NULL;
     SbString snapshotPath;
+    SbString postCloseSnapshotPath;
     struct directory *dp = NULL;
     struct rt_db_internal intern;
     struct rt_bot_internal *bot = NULL;
     SbBox3f bounds;
     int workerRealized = 0;
+    int postCloseWorkerRealized = 0;
     int mutationResult = 0;
     int ret = 1;
 
@@ -2729,8 +2799,48 @@ test_detached_database_snapshot_version(int databaseVersion)
 	goto cleanup;
     }
 
+    postCloseDetached = source->createDetachedRealizationSource(
+	&postCloseSnapshotDb, &postCloseSnapshotPath);
+    if (!postCloseDetached || !postCloseSnapshotDb ||
+	postCloseSnapshotDb == dbip) {
+	printf("FAIL: detached database source did not snapshot for close test\n");
+	goto cleanup;
+    }
+
+    source->unref();
+    source = NULL;
+    db_close(dbip);
+    dbip = NULL;
+    bu_file_delete(dbpath);
+    dbpath[0] = '\0';
+
+    {
+	std::atomic<int> workerResult(0);
+	std::thread worker([&]() {
+	    workerResult.store(
+		postCloseDetached->realizeDatabaseWireframe() ? 1 : -1,
+		std::memory_order_release);
+	});
+	worker.join();
+	postCloseWorkerRealized = workerResult.load(std::memory_order_acquire);
+    }
+    bounds.makeEmpty();
+    if (postCloseWorkerRealized != 1 ||
+	!postCloseDetached->getSourceBounds(bounds) || bounds.isEmpty() ||
+	bounds.getMin()[0] < 99.99f || bounds.getMin()[0] > 100.01f ||
+	bounds.getMax()[0] < 100.99f || bounds.getMax()[0] > 101.01f) {
+	printf("FAIL: detached database snapshot did not survive live database close\n");
+	goto cleanup;
+    }
+
     ret = 0;
 cleanup:
+    if (postCloseDetached)
+	postCloseDetached->unref();
+    if (postCloseSnapshotDb)
+	db_close(postCloseSnapshotDb);
+    if (postCloseSnapshotPath.getLength() > 0)
+	bu_file_delete(postCloseSnapshotPath.getString());
     if (detached)
 	detached->unref();
     if (snapshotDb)
@@ -2794,6 +2904,8 @@ main(int argc, char **argv)
     if (test_occurrence_result_coalescing())
 	return 1;
     if (test_generation_cancellation())
+	return 1;
+    if (test_destruction_waits_for_in_flight_task())
 	return 1;
     if (test_stop_discards_undrained_state())
 	return 1;

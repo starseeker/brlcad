@@ -770,6 +770,7 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	if (m_dmp->display_variables->mv_transform == 'e')
 	    m_dmp->display_variables->mv_transform = 'v';
     }
+    mged_obol_input_action_layers_sync(s, NULL);
 
     {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
@@ -838,6 +839,7 @@ be_reject(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	if (m_dmp->display_variables->mv_transform == 'e')
 	    m_dmp->display_variables->mv_transform = 'v';
     }
+    mged_obol_input_action_layers_sync(s, NULL);
 
     {
 	struct bu_vls vls = BU_VLS_INIT_ZERO;

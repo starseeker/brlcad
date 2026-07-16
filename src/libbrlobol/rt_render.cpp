@@ -23,10 +23,20 @@
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbPlane.h>
 #include <Inventor/SbViewVolume.h>
+#include <Inventor/actions/SoGetMatrixAction.h>
+#include <Inventor/actions/SoSearchAction.h>
 #include <Inventor/nodes/SoCamera.h>
+#include <Inventor/nodes/SoDirectionalLight.h>
+#include <Inventor/nodes/SoLight.h>
+#include <Inventor/nodes/SoPointLight.h>
+#include <Inventor/nodes/SoSpotLight.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <thread>
@@ -60,6 +70,7 @@ struct RtSourceSnapshot {
     SbColor materialColor = SbColor(0.8f, 0.8f, 0.8f);
     SbBool databaseMaterialColorValid = FALSE;
     SbColor databaseMaterialColor = SbColor(0.8f, 0.8f, 0.8f);
+    SbString databaseMaterialShader;
     float transparency = 0.0f;
     SbBool drawMatrixValid = FALSE;
     SbMatrix localToWorld = SbMatrix::identity();
@@ -78,6 +89,110 @@ struct RtTraceHit {
     size_t sourceIndex = 0;
 };
 
+struct RtLightSnapshot {
+    enum Kind {
+	DIRECTIONAL = 0,
+	POINT = 1,
+	SPOT = 2
+    };
+
+    Kind kind = DIRECTIONAL;
+    SbColor color = SbColor(1.0f, 1.0f, 1.0f);
+    float intensity = 1.0f;
+    SbVec3f position = SbVec3f(0.0f, 0.0f, 0.0f);
+    SbVec3f direction = SbVec3f(0.0f, 0.0f, -1.0f);
+    float dropOffRate = 0.0f;
+    float cutOffAngle = static_cast<float>(M_PI) * 0.25f;
+};
+
+static bool
+sameLight(const RtLightSnapshot &a, const RtLightSnapshot &b)
+{
+    return a.kind == b.kind && a.color == b.color &&
+	std::fabs(a.intensity - b.intensity) <= 1.0e-6f &&
+	(a.position - b.position).sqrLength() <= 1.0e-12f &&
+	(a.direction - b.direction).sqrLength() <= 1.0e-12f &&
+	std::fabs(a.dropOffRate - b.dropOffRate) <= 1.0e-6f &&
+	std::fabs(a.cutOffAngle - b.cutOffAngle) <= 1.0e-6f;
+}
+
+static bool
+sameLights(const std::vector<RtLightSnapshot> &a,
+	const std::vector<RtLightSnapshot> &b)
+{
+    if (a.size() != b.size())
+	return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+	if (!sameLight(a[i], b[i]))
+	    return false;
+    }
+    return true;
+}
+
+static std::vector<RtLightSnapshot>
+controllerAuthoredLights(BRLObolViewController *controller,
+	const SbViewportRegion &viewportRegion)
+{
+    static const size_t maximumAuthoredLights = 8u;
+    std::vector<RtLightSnapshot> lights;
+    SoNode *root = controller ? controller->getRenderSceneRoot() : NULL;
+    if (!root)
+	return lights;
+
+    SoSearchAction search;
+    search.setType(SoLight::getClassTypeId(), TRUE);
+    search.setInterest(SoSearchAction::ALL);
+    search.apply(root);
+    SoPathList &paths = search.getPaths();
+    lights.reserve(std::min(maximumAuthoredLights,
+	static_cast<size_t>(std::max(0, paths.getLength()))));
+    for (int i = 0; i < paths.getLength() &&
+	lights.size() < maximumAuthoredLights; ++i) {
+	SoPath *path = paths[i];
+	SoNode *tail = path ? path->getTail() : NULL;
+	if (!tail || !tail->isOfType(SoLight::getClassTypeId()))
+	    continue;
+	SoLight *light = static_cast<SoLight *>(tail);
+	if (!light->on.getValue() || light->intensity.getValue() <= 0.0f)
+	    continue;
+
+	SoGetMatrixAction matrixAction(viewportRegion);
+	matrixAction.apply(path);
+	const SbMatrix &matrix = matrixAction.getMatrix();
+	RtLightSnapshot snapshot;
+	snapshot.color = light->color.getValue();
+	snapshot.intensity = std::max(0.0f,
+	    std::min(1.0f, light->intensity.getValue()));
+	if (tail->isOfType(SoSpotLight::getClassTypeId())) {
+	    SoSpotLight *spot = static_cast<SoSpotLight *>(tail);
+	    snapshot.kind = RtLightSnapshot::SPOT;
+	    matrix.multVecMatrix(spot->location.getValue(), snapshot.position);
+	    matrix.multDirMatrix(spot->direction.getValue(), snapshot.direction);
+	    snapshot.dropOffRate = std::max(0.0f,
+		std::min(1.0f, spot->dropOffRate.getValue()));
+	    snapshot.cutOffAngle = std::max(0.0f,
+		std::min(static_cast<float>(M_PI) * 0.5f,
+		    spot->cutOffAngle.getValue()));
+	} else if (tail->isOfType(SoPointLight::getClassTypeId())) {
+	    SoPointLight *point = static_cast<SoPointLight *>(tail);
+	    snapshot.kind = RtLightSnapshot::POINT;
+	    matrix.multVecMatrix(point->location.getValue(), snapshot.position);
+	} else if (tail->isOfType(SoDirectionalLight::getClassTypeId())) {
+	    SoDirectionalLight *directional =
+		static_cast<SoDirectionalLight *>(tail);
+	    snapshot.kind = RtLightSnapshot::DIRECTIONAL;
+	    matrix.multDirMatrix(directional->direction.getValue(),
+		snapshot.direction);
+	} else {
+	    continue;
+	}
+	if (snapshot.direction.length() > 0.0f)
+	    snapshot.direction.normalize();
+	lights.push_back(snapshot);
+    }
+    return lights;
+}
+
 static bool
 samePresentation(const RtSourceSnapshot &a, const RtSourceSnapshot &b)
 {
@@ -90,6 +205,7 @@ samePresentation(const RtSourceSnapshot &a, const RtSourceSnapshot &b)
 	a.materialColor == b.materialColor &&
 	a.databaseMaterialColorValid == b.databaseMaterialColorValid &&
 	a.databaseMaterialColor == b.databaseMaterialColor &&
+	a.databaseMaterialShader == b.databaseMaterialShader &&
 	std::fabs(a.transparency - b.transparency) <= 1.0e-6f &&
 	a.drawMatrixValid == b.drawMatrixValid &&
 	a.localToWorld.equals(b.localToWorld, 1.0e-6f);
@@ -106,6 +222,166 @@ sameClipPlanes(const SbPlane *a, size_t aCount, const SbPlane *b,
 	    return false;
     }
     return true;
+}
+
+struct RtMaterialModel {
+    float ambient = 0.20f;
+    float diffuse = 0.80f;
+    float specular = 0.0f;
+    float shine = 10.0f;
+    float reflectance = 0.0f;
+    float transmission = 0.0f;
+    float refractiveIndex = 1.0f;
+};
+
+static bool
+shaderTokenEqual(const char *token, size_t length, const char *expected)
+{
+    if (!token || !expected || std::strlen(expected) != length)
+	return false;
+    for (size_t i = 0; i < length; ++i) {
+	if (std::tolower(static_cast<unsigned char>(token[i])) !=
+	    std::tolower(static_cast<unsigned char>(expected[i])))
+	    return false;
+    }
+    return true;
+}
+
+static const char *
+shaderStage(const char *shader, const char *expected)
+{
+    if (!shader || !expected)
+	return NULL;
+    const char *cursor = shader;
+    while (*cursor) {
+	while (*cursor &&
+	    !std::isalnum(static_cast<unsigned char>(*cursor)) &&
+	    *cursor != '_')
+	    ++cursor;
+	const char *token = cursor;
+	while (*cursor &&
+	    (std::isalnum(static_cast<unsigned char>(*cursor)) ||
+	     *cursor == '_'))
+	    ++cursor;
+	if (token == cursor)
+	    break;
+	if (shaderTokenEqual(token, static_cast<size_t>(cursor - token),
+		expected))
+	    return token;
+    }
+    return NULL;
+}
+
+static bool
+shaderParameter(const char *shader, const char *name, float &value)
+{
+    if (!shader || !name)
+	return false;
+
+    const char *cursor = shader;
+    while (*cursor) {
+	while (*cursor &&
+	    !std::isalnum(static_cast<unsigned char>(*cursor)) &&
+	    *cursor != '_')
+	    ++cursor;
+	const char *token = cursor;
+	while (*cursor &&
+	    (std::isalnum(static_cast<unsigned char>(*cursor)) ||
+	     *cursor == '_'))
+	    ++cursor;
+	if (token == cursor)
+	    break;
+	if (!shaderTokenEqual(token, static_cast<size_t>(cursor - token), name))
+	    continue;
+
+	while (*cursor && std::isspace(static_cast<unsigned char>(*cursor)))
+	    ++cursor;
+	if (*cursor == '=') {
+	    ++cursor;
+	    while (*cursor && std::isspace(static_cast<unsigned char>(*cursor)))
+		++cursor;
+	}
+	char *end = NULL;
+	const double parsed = std::strtod(cursor, &end);
+	if (end != cursor && std::isfinite(parsed)) {
+	    value = static_cast<float>(parsed);
+	    return true;
+	}
+    }
+
+    return false;
+}
+
+static const char *
+effectiveShader(const RtSourceSnapshot &source,
+	const BRLObolRtPickResult &hit)
+{
+    const SbString &primitiveShader = hit.detail.getMaterialShader();
+    return primitiveShader.getLength() > 0 ? primitiveShader.getString() :
+	source.databaseMaterialShader.getString();
+}
+
+static RtMaterialModel
+materialModel(const RtSourceSnapshot &source, const BRLObolRtPickResult &hit)
+{
+    const char *shader = effectiveShader(source, hit);
+    RtMaterialModel model;
+    const char *plasticStage = shaderStage(shader, "plastic");
+    const char *mirrorStage = shaderStage(shader, "mirror");
+    const char *glassStage = shaderStage(shader, "glass");
+    const bool plastic = plasticStage != NULL;
+    const bool mirror = mirrorStage != NULL;
+    const bool glass = glassStage != NULL;
+    if (!plastic && !mirror && !glass)
+	return model;
+    const char *materialStage = glass ? glassStage :
+	(mirror ? mirrorStage : plasticStage);
+
+    /* Match the established BRL-CAD plastic-family vocabulary while keeping
+     * this retained interactive model deliberately bounded. */
+    model.ambient = 0.10f;
+    if (mirror) {
+	model.diffuse = 0.40f;
+	model.specular = 0.60f;
+	model.shine = 4.0f;
+	model.reflectance = 0.75f;
+	model.refractiveIndex = 1.65f;
+    } else if (glass) {
+	model.diffuse = 0.30f;
+	model.specular = 0.70f;
+	model.shine = 4.0f;
+	model.reflectance = 0.10f;
+	model.transmission = 0.80f;
+	model.refractiveIndex = 1.65f;
+    } else {
+	model.diffuse = 0.30f;
+	model.specular = 0.70f;
+    }
+    float parsed = 0.0f;
+    if (shaderParameter(materialStage, "diffuse", parsed) ||
+	shaderParameter(materialStage, "di", parsed))
+	model.diffuse = std::max(0.0f, std::min(1.0f, parsed));
+    if (shaderParameter(materialStage, "specular", parsed) ||
+	shaderParameter(materialStage, "sp", parsed))
+	model.specular = std::max(0.0f, std::min(1.0f, parsed));
+    if (shaderParameter(materialStage, "shine", parsed) ||
+	shaderParameter(materialStage, "sh", parsed))
+	model.shine = std::max(1.0f, std::min(256.0f, parsed));
+    if (shaderParameter(materialStage, "reflect", parsed) ||
+	shaderParameter(materialStage, "re", parsed))
+	model.reflectance = std::max(0.0f, std::min(1.0f, parsed));
+    if (shaderParameter(materialStage, "transmit", parsed) ||
+	shaderParameter(materialStage, "tr", parsed))
+	model.transmission = std::max(0.0f, std::min(1.0f, parsed));
+    if (shaderParameter(materialStage, "ri", parsed))
+	model.refractiveIndex = std::max(1.0f, std::min(4.0f, parsed));
+
+    const float secondaryEnergy = model.reflectance + model.transmission;
+    if (secondaryEnergy > 1.0f) {
+	model.reflectance /= secondaryEnergy;
+	model.transmission /= secondaryEnergy;
+    }
+    return model;
 }
 
 static SbColor
@@ -164,6 +440,7 @@ struct BRLObolRtRenderer::Private {
     };
 
     std::vector<Source> sources;
+    std::vector<RtLightSnapshot> authoredLights;
     SbViewVolume viewVolume;
     SbPlane clipPlanes[2];
     size_t clipPlaneCount = 0;
@@ -174,6 +451,8 @@ struct BRLObolRtRenderer::Private {
     SbMatrix viewAffine = SbMatrix::identity();
     SbMatrix viewProjection = SbMatrix::identity();
     SbBool lightingEnabled = TRUE;
+    SbColor headlightColor = SbColor(1.0f, 1.0f, 1.0f);
+    float headlightIntensity = 1.0f;
     SbBool transparencyEnabled = TRUE;
     SbBool cameraReady = FALSE;
     SbBool presentationStateReady = FALSE;
@@ -250,6 +529,7 @@ BRLObolRtRenderer::clear(void)
     if (!p)
 	return;
     p->sources.clear();
+    p->authoredLights.clear();
     p->cameraReady = FALSE;
     p->presentationStateReady = FALSE;
     p->geometryRevision = 0;
@@ -280,8 +560,12 @@ BRLObolRtRenderer::synchronize(BRLObolViewController *controller)
     const size_t nextClipPlaneCount =
 	controller->getActiveClipPlanes(nextClipPlanes);
     const SbBool nextLightingEnabled = controller->isLightingEnabled();
+    const SbColor nextHeadlightColor = controller->getHeadlightColor();
+    const float nextHeadlightIntensity = controller->getHeadlightIntensity();
     const SbBool nextTransparencyEnabled =
 	controller->isTransparencyEnabled();
+    const std::vector<RtLightSnapshot> nextAuthoredLights =
+	controllerAuthoredLights(controller, region);
     const bool controllerPresentationChanged = !p->presentationStateReady ||
 	!p->viewAffine.equals(nextViewAffine, 1.0e-6f) ||
 	!p->viewProjection.equals(nextViewProjection, 1.0e-6f) ||
@@ -290,12 +574,16 @@ BRLObolRtRenderer::synchronize(BRLObolViewController *controller)
 	!sameClipPlanes(p->clipPlanes, p->clipPlaneCount, nextClipPlanes,
 	    nextClipPlaneCount) ||
 	p->lightingEnabled != nextLightingEnabled ||
-	p->transparencyEnabled != nextTransparencyEnabled;
+	p->headlightColor != nextHeadlightColor ||
+	std::fabs(p->headlightIntensity - nextHeadlightIntensity) > 1.0e-6f ||
+	p->transparencyEnabled != nextTransparencyEnabled ||
+	!sameLights(p->authoredLights, nextAuthoredLights);
     std::vector<RtSourceSnapshot> snapshots;
-    const int sourceCount = controller->getDatabaseSourceCount();
-    snapshots.reserve(sourceCount > 0 ? static_cast<size_t>(sourceCount) : 0);
-    for (int i = 0; i < sourceCount; ++i) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+    const std::vector<SoBRLDatabaseSource *> renderSources =
+	controller->getRenderDatabaseSources();
+    snapshots.reserve(renderSources.size());
+    for (size_t i = 0; i < renderSources.size(); ++i) {
+	SoBRLDatabaseSource *source = renderSources[i];
 	if (!source || !source->getDatabase() ||
 	    source->path.getValue().getLength() == 0)
 	    continue;
@@ -318,6 +606,8 @@ BRLObolRtRenderer::synchronize(BRLObolViewController *controller)
 	snapshot.databaseMaterialColorValid =
 	    source->databaseMaterialColorValid.getValue();
 	snapshot.databaseMaterialColor = source->databaseMaterialColor.getValue();
+	snapshot.databaseMaterialShader =
+	    source->databaseMaterialShader.getValue();
 	snapshot.transparency = source->transparency.getValue();
 	snapshot.drawMatrixValid = source->drawMatrixValid.getValue();
 	if (snapshot.drawMatrixValid) {
@@ -404,7 +694,10 @@ BRLObolRtRenderer::synchronize(BRLObolViewController *controller)
 	++planeIndex)
 	p->clipPlanes[planeIndex] = nextClipPlanes[planeIndex];
     p->lightingEnabled = nextLightingEnabled;
+    p->headlightColor = nextHeadlightColor;
+    p->headlightIntensity = nextHeadlightIntensity;
     p->transparencyEnabled = nextTransparencyEnabled;
+    p->authoredLights = nextAuthoredLights;
     p->cameraReady = TRUE;
     p->presentationStateReady = TRUE;
     if (geometryChanged)
@@ -527,7 +820,7 @@ BRLObolRtRenderer::renderRowsInternal(
     std::atomic_bool stop(false);
     const auto traceLine = [&](const SbLine &line, unsigned int workerIndex,
 	BRLObolRtPickResult &nearest, size_t &nearestSourceIndex,
-	std::vector<RtTraceHit> *allHits = NULL) {
+	std::vector<RtTraceHit> *allHits, float minimumDistance) {
 	nearest.clear();
 	nearestSourceIndex = p->sources.size();
 	if (allHits)
@@ -542,9 +835,11 @@ BRLObolRtRenderer::renderRowsInternal(
 		continue;
 	    SbVec3f rayOrigin = line.getPosition();
 	    SbVec3f rayDirection = line.getDirection();
+	    float localMinimumDistance = minimumDistance;
 	    if (source.snapshot.drawMatrixValid) {
 		source.snapshot.worldToLocal.multVecMatrix(rayOrigin, rayOrigin);
 		source.snapshot.worldToLocal.multDirMatrix(rayDirection, rayDirection);
+		localMinimumDistance *= rayDirection.length();
 	    }
 	    if (rayDirection.length() <= 0.0f)
 		continue;
@@ -553,7 +848,8 @@ BRLObolRtRenderer::renderRowsInternal(
 	    if (source.cache->pickRay(candidate, rayOrigin, rayDirection,
 		source.snapshot.localClipPlanes,
 		source.snapshot.localClipPlaneCount,
-		source.resources[workerIndex].get()) && candidate.hit) {
+		source.resources[workerIndex].get(), localMinimumDistance) &&
+		candidate.hit) {
 		if (source.snapshot.drawMatrixValid) {
 		    SbVec3f worldPoint;
 		    SbVec3f worldNormal;
@@ -593,20 +889,184 @@ BRLObolRtRenderer::renderRowsInternal(
 	}
 	return nearestSourceIndex < p->sources.size();
     };
-    const auto shadeHit = [&](const SbLine &line,
-	const BRLObolRtPickResult &hit, const RtSourceSnapshot &source) {
+    const auto shadeLocalHit = [&](const SbLine &line,
+	const BRLObolRtPickResult &hit,
+	const RtSourceSnapshot &source) -> SbColor {
 	SbVec3f normal = hit.normal;
+	SbVec3f toEye = -line.getDirection();
+	if (toEye.length() > 0.0f)
+	    toEye.normalize();
 	if (normal.length() > 0.0f) {
 	    normal.normalize();
-	    const SbVec3f toEye = -line.getDirection();
 	    if (normal.dot(toEye) < 0.0f)
 		normal = -normal;
 	}
-	const float diffuse = normal.length() > 0.0f ?
-	    std::max(0.0f, normal.dot(-line.getDirection())) : 1.0f;
-	const float illumination = p->lightingEnabled ?
-	    0.20f + 0.80f * diffuse : 1.0f;
-	return sourceColor(source, hit) * illumination;
+	const SbColor base = sourceColor(source, hit);
+	if (!p->lightingEnabled)
+	    return base;
+	const RtMaterialModel material = materialModel(source, hit);
+	SbVec3f shaded = base * material.ambient;
+	const auto addLight = [&](SbVec3f toLight, const SbColor &lightColor,
+		float intensity) {
+	    if (intensity <= 0.0f || toLight.length() <= 0.0f)
+		return;
+	    toLight.normalize();
+	    const float diffuse = normal.length() > 0.0f ?
+		std::max(0.0f, normal.dot(toLight)) : 1.0f;
+	    if (diffuse <= 0.0f)
+		return;
+	    SbVec3f halfVector = toLight + toEye;
+	    float specularCosine = diffuse;
+	    if (halfVector.length() > 0.0f && normal.length() > 0.0f) {
+		halfVector.normalize();
+		specularCosine = std::max(0.0f, normal.dot(halfVector));
+	    }
+	    const float diffuseIllumination = material.diffuse * diffuse *
+		intensity;
+	    const float specular = material.specular *
+		std::pow(specularCosine, material.shine) * intensity;
+	    const SbColor litBase(base[0] * lightColor[0],
+		base[1] * lightColor[1], base[2] * lightColor[2]);
+	    shaded += litBase * diffuseIllumination + lightColor * specular;
+	};
+
+	addLight(toEye, p->headlightColor, p->headlightIntensity);
+	for (const RtLightSnapshot &light : p->authoredLights) {
+	    SbVec3f toLight;
+	    float intensity = light.intensity;
+	    if (light.kind == RtLightSnapshot::DIRECTIONAL) {
+		toLight = -light.direction;
+	    } else {
+		toLight = light.position - hit.point;
+		if (light.kind == RtLightSnapshot::SPOT) {
+		    SbVec3f fromLight = hit.point - light.position;
+		    if (fromLight.length() <= 0.0f ||
+			light.direction.length() <= 0.0f)
+			continue;
+		    fromLight.normalize();
+		    const float coneCosine = light.direction.dot(fromLight);
+		    const float cutoffCosine = std::cos(light.cutOffAngle);
+		    if (coneCosine < cutoffCosine)
+			continue;
+		    if (light.dropOffRate > 0.0f)
+			intensity *= std::pow(std::max(0.0f, coneCosine),
+			    light.dropOffRate * 128.0f);
+		}
+	    }
+	    addLight(toLight, light.color, intensity);
+	}
+	return SbColor(shaded[0], shaded[1], shaded[2]);
+    };
+
+    /* Secondary rays stay deliberately bounded for interactive use.  Three
+     * levels are enough to enter and leave a transmissive solid and then
+     * shade geometry behind it, while limiting a two-way branch to fifteen
+     * total traces per primary sample. */
+    static const unsigned int maximumSecondaryDepth = 3u;
+    static const float secondaryRayBias = 1.0e-4f;
+    const auto rayBackground = [&settings](const SbVec3f &direction) {
+	const float t = std::max(0.0f, std::min(1.0f,
+	    0.5f * (direction[1] + 1.0f)));
+	return settings.backgroundBottom * (1.0f - t) +
+	    settings.backgroundTop * t;
+    };
+    std::function<SbColor(const SbLine &, unsigned int, unsigned int,
+	const SbColor &)> traceRadiance;
+    std::function<SbColor(const SbLine &, const BRLObolRtPickResult &,
+	size_t, unsigned int, unsigned int)> shadeMaterial;
+
+    shadeMaterial = [&](const SbLine &line,
+	const BRLObolRtPickResult &hit, size_t sourceIndex,
+	unsigned int workerIndex, unsigned int depth) -> SbColor {
+	if (sourceIndex >= p->sources.size())
+	    return SbColor(0.0f, 0.0f, 0.0f);
+	const RtSourceSnapshot &source = p->sources[sourceIndex].snapshot;
+	const SbColor local = shadeLocalHit(line, hit, source);
+	const RtMaterialModel material = materialModel(source, hit);
+	if (depth >= maximumSecondaryDepth ||
+	    (material.reflectance <= 0.0f && material.transmission <= 0.0f))
+	    return local;
+
+	SbVec3f incoming = line.getDirection();
+	SbVec3f geometricNormal = hit.normal;
+	if (incoming.length() <= 0.0f || geometricNormal.length() <= 0.0f)
+	    return local;
+	incoming.normalize();
+	geometricNormal.normalize();
+	const bool entering = incoming.dot(geometricNormal) < 0.0f;
+	SbVec3f orientedNormal = entering ? geometricNormal : -geometricNormal;
+	const float cosine = std::max(0.0f,
+	    std::min(1.0f, -incoming.dot(orientedNormal)));
+
+	float reflectionWeight = material.reflectance;
+	float transmissionWeight = material.transmission;
+	SbVec3f transmissionDirection(0.0f, 0.0f, 0.0f);
+	if (transmissionWeight > 0.0f) {
+	    const float eta = entering ? 1.0f / material.refractiveIndex :
+		material.refractiveIndex;
+	    const float discriminant = 1.0f - eta * eta *
+		(1.0f - cosine * cosine);
+	    if (discriminant < 0.0f) {
+		/* Total internal reflection retains the transmitted energy. */
+		reflectionWeight += transmissionWeight;
+		transmissionWeight = 0.0f;
+	    } else {
+		transmissionDirection = incoming * eta + orientedNormal *
+		    (eta * cosine - std::sqrt(discriminant));
+		if (transmissionDirection.length() > 0.0f)
+		    transmissionDirection.normalize();
+		else
+		    transmissionWeight = 0.0f;
+	    }
+	}
+	reflectionWeight = std::max(0.0f, std::min(1.0f, reflectionWeight));
+	transmissionWeight = std::max(0.0f, std::min(1.0f,
+	    transmissionWeight));
+	const float secondaryWeight = reflectionWeight + transmissionWeight;
+	if (secondaryWeight > 1.0f) {
+	    reflectionWeight /= secondaryWeight;
+	    transmissionWeight /= secondaryWeight;
+	}
+	const float localWeight = std::max(0.0f,
+	    1.0f - reflectionWeight - transmissionWeight);
+	SbColor result = local * localWeight;
+
+	if (reflectionWeight > 0.0f && !shouldCancel(cancelled)) {
+	    SbVec3f reflectionDirection = incoming - orientedNormal *
+		(2.0f * incoming.dot(orientedNormal));
+	    if (reflectionDirection.length() > 0.0f) {
+		reflectionDirection.normalize();
+		SbLine reflectionRay;
+		reflectionRay.setPosDir(hit.point +
+		    reflectionDirection * secondaryRayBias,
+		    reflectionDirection);
+		result += traceRadiance(reflectionRay, workerIndex, depth + 1u,
+		    rayBackground(reflectionDirection)) * reflectionWeight;
+	    }
+	}
+	if (transmissionWeight > 0.0f && !shouldCancel(cancelled)) {
+	    SbLine transmissionRay;
+	    transmissionRay.setPosDir(hit.point +
+		transmissionDirection * secondaryRayBias,
+		transmissionDirection);
+	    result += traceRadiance(transmissionRay, workerIndex, depth + 1u,
+		rayBackground(transmissionDirection)) * transmissionWeight;
+	}
+	return result;
+    };
+
+    traceRadiance = [&](const SbLine &line, unsigned int workerIndex,
+	unsigned int depth, const SbColor &background) -> SbColor {
+	if (shouldCancel(cancelled)) {
+	    stop.store(true, std::memory_order_release);
+	    return background;
+	}
+	BRLObolRtPickResult hit;
+	size_t sourceIndex = p->sources.size();
+	if (!traceLine(line, workerIndex, hit, sourceIndex, NULL,
+		depth > 0u ? secondaryRayBias : 0.0f))
+	    return background;
+	return shadeMaterial(line, hit, sourceIndex, workerIndex, depth);
     };
     const auto renderWorker = [&](unsigned int workerIndex) {
 	std::vector<RtTraceHit> transparentHits;
@@ -644,7 +1104,7 @@ BRLObolRtRenderer::renderRowsInternal(
 		    size_t nearestSourceIndex = p->sources.size();
 		    const SbBool hasNearest = traceLine(line, workerIndex, nearest,
 			nearestSourceIndex, transparentCompositionRequired ?
-			&transparentHits : NULL) ? TRUE : FALSE;
+			&transparentHits : NULL, 0.0f) ? TRUE : FALSE;
 		    const RtSourceSnapshot *nearestSource = hasNearest ?
 			&p->sources[nearestSourceIndex].snapshot : NULL;
 
@@ -660,11 +1120,13 @@ BRLObolRtRenderer::renderRowsInternal(
 				p->sources[hit->sourceIndex].snapshot;
 			    const float alpha = std::max(0.0f, std::min(1.0f,
 				1.0f - source.transparency));
-			    const SbColor lit = shadeHit(line, hit->pick, source);
+			    const SbColor lit = shadeMaterial(line, hit->pick,
+				hit->sourceIndex, workerIndex, 0u);
 			    shaded = lit * alpha + shaded * (1.0f - alpha);
 			}
 		    } else if (nearestSource) {
-			shaded = shadeHit(line, nearest, *nearestSource);
+			shaded = shadeMaterial(line, nearest,
+			    nearestSourceIndex, workerIndex, 0u);
 		    }
 		    accumulated[0] += shaded[0];
 		    accumulated[1] += shaded[1];
@@ -687,7 +1149,7 @@ BRLObolRtRenderer::renderRowsInternal(
 			BRLObolRtPickResult centerHit;
 			size_t centerSourceIndex = p->sources.size();
 			if (traceLine(centerLine, workerIndex, centerHit,
-				centerSourceIndex)) {
+				centerSourceIndex, NULL, 0.0f)) {
 			    SbVec3f screenPoint;
 			    p->viewVolume.projectToScreen(centerHit.point, screenPoint);
 			    const size_t planeIndex =

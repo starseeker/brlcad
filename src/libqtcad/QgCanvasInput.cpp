@@ -52,6 +52,26 @@ qgcanvasinput_modifiers(Qt::KeyboardModifiers modifiers)
 }
 
 static int
+qgcanvasinput_key(int key)
+{
+    const int first_function_key = static_cast<int>(Qt::Key_F1);
+    const int last_function_key = static_cast<int>(Qt::Key_F12);
+    if (key >= first_function_key && key <= last_function_key)
+	return BRLOBOL_INPUT_KEY_F1 + (key - first_function_key);
+    if (key == static_cast<int>(Qt::Key_Shift))
+	return BRLOBOL_INPUT_KEY_SHIFT;
+    if (key == static_cast<int>(Qt::Key_Control))
+	return BRLOBOL_INPUT_KEY_CONTROL;
+    if (key == static_cast<int>(Qt::Key_Alt))
+	return BRLOBOL_INPUT_KEY_ALT;
+    if (key == static_cast<int>(Qt::Key_Meta) ||
+	key == static_cast<int>(Qt::Key_Super_L) ||
+	key == static_cast<int>(Qt::Key_Super_R))
+	return BRLOBOL_INPUT_KEY_META;
+    return key;
+}
+
+static int
 qgcanvasinput_button(Qt::MouseButton button)
 {
     switch (button) {
@@ -239,7 +259,7 @@ QgCanvasInput::keyPressEvent(struct bv_context *view_ctx, int UNUSED(x_prev),
 	return 0;
     BRLObolInputEvent input;
     input.type = BRLOBOL_INPUT_KEY_PRESS;
-    input.key = event->key();
+    input.key = qgcanvasinput_key(event->key());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
     m->dispatch_view = view_ctx;
     const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
@@ -302,8 +322,9 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
 	if (!view_ctx || !event || !event->buttons().testFlag(Qt::LeftButton))
 	return 0;
 
-    /* A semantic gesture must see its first drag event.  View navigation can
-     * still use a zero delta until the canvas has established a baseline. */
+    /* An application-layer gesture must see its first drag event.  View
+     * navigation can still use a zero delta until the canvas has established
+     * a baseline. */
     const bool first_motion = x_prev == -INT_MAX || y_prev == -INT_MAX;
     if (!first_motion) {
 	const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -18,6 +18,7 @@
 #include <Inventor/SbPlane.h>
 #include <Inventor/SbMatrix.h>
 #include <Inventor/SbString.h>
+#include <Inventor/SbVec2f.h>
 #include <Inventor/SbVec3f.h>
 #include <Inventor/actions/SoAction.h>
 #include <Inventor/actions/SoSubAction.h>
@@ -157,6 +158,9 @@ struct BRLOBOL_EXPORT BRLObolRtPickResult {
     SbVec3f normal;
     float distance;
     SbBool hit;
+    /** Parametric surface coordinates; synthetic clip hits have no UV. */
+    SbVec2f uv;
+    SbBool uvValid;
 
     BRLObolRtPickResult(void);
     void clear(void);
@@ -178,6 +182,16 @@ public:
 	    const SbPlane *clipPlanes = NULL,
 	    size_t clipPlaneCount = 0,
 	    struct resource *resource = NULL) const;
+    /** Return the nearest ray boundary at or beyond @p minimumDistance.
+     * A positive minimum lets worker-side secondary rays starting just inside
+     * a solid select its exit boundary instead of repeating the entry point. */
+    SbBool pickRay(BRLObolRtPickResult &pick,
+	    const SbVec3f &rayOrigin,
+	    const SbVec3f &rayDirection,
+	    const SbPlane *clipPlanes,
+	    size_t clipPlaneCount,
+	    struct resource *resource,
+	    float minimumDistance) const;
 
     /**
      * Initialize one librt resource for this retained acceleration structure.

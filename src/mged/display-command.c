@@ -88,7 +88,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 	}
 
 	am_mode = AMM_IDLE;
-	mged_obol_input_semantic_mode_sync(s);
+	mged_obol_input_action_layer_sync(s);
 	scroll_active = 0;
 	if (rubber_band->rb_active) {
 	    rubber_band->rb_active = 0;
@@ -342,7 +342,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 		return TCL_ERROR;
 	}
 
-	mged_obol_input_semantic_mode_sync(s);
+	mged_obol_input_action_layer_sync(s);
 	return TCL_OK;
     }
 
@@ -435,7 +435,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 		return TCL_ERROR;
 	}
 
-	mged_obol_input_semantic_mode_sync(s);
+	mged_obol_input_action_layer_sync(s);
 	return TCL_OK;
     }
 
@@ -557,7 +557,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 		return TCL_ERROR;
 	}
 
-	mged_obol_input_semantic_mode_sync(s);
+	mged_obol_input_action_layer_sync(s);
 	return TCL_OK;
     }
 

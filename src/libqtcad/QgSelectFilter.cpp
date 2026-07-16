@@ -119,19 +119,19 @@ qg_select_semantic_event(QEvent *event, BRLObolInputAction *action,
     switch (event->type()) {
 	case QEvent::MouseButtonPress:
 	    input->type = BRLOBOL_INPUT_POINTER_PRESS;
-	    *action = BRLOBOL_ACTION_APP_SELECT_BEGIN;
+	    *action = QG_SELECT_INPUT_BEGIN;
 	    break;
 	case QEvent::MouseMove:
 	    input->type = BRLOBOL_INPUT_POINTER_MOTION;
-	    *action = BRLOBOL_ACTION_APP_SELECT_UPDATE;
+	    *action = QG_SELECT_INPUT_UPDATE;
 	    break;
 	case QEvent::MouseButtonRelease:
 	    input->type = BRLOBOL_INPUT_POINTER_RELEASE;
-	    *action = BRLOBOL_ACTION_APP_SELECT_COMMIT;
+	    *action = QG_SELECT_INPUT_COMMIT;
 	    break;
 	case QEvent::MouseButtonDblClick:
 	    input->type = BRLOBOL_INPUT_POINTER_PRESS;
-	    *action = BRLOBOL_ACTION_APP_SELECT_CANCEL;
+	    *action = QG_SELECT_INPUT_CANCEL;
 	    break;
 	default:
 	    return 0;
@@ -305,7 +305,7 @@ QgSelectPntFilter::applySemanticInput(BRLObolInputAction action,
 {
     if (!event)
 	return false;
-    if (action != BRLOBOL_ACTION_APP_SELECT_COMMIT)
+    if (action != QG_SELECT_INPUT_COMMIT)
 	return true;
     if (event->button != 0)
 	return true;
@@ -371,18 +371,18 @@ QgSelectBoxFilter::applySemanticInput(BRLObolInputAction action,
 	return false;
     }
 
-	if (action == BRLOBOL_ACTION_APP_SELECT_CANCEL) {
+	if (action == QG_SELECT_INPUT_CANCEL) {
 	active = false;
 	return true;
 	}
-	if (action != BRLOBOL_ACTION_APP_SELECT_UPDATE && event->button != 0) {
+	if (action != QG_SELECT_INPUT_UPDATE && event->button != 0) {
 	return true;
 	}
 
     const int sx = event->x;
     const int sy = event->y;
 
-	if (action == BRLOBOL_ACTION_APP_SELECT_BEGIN) {
+	if (action == QG_SELECT_INPUT_BEGIN) {
 	px = sx;
 	py = sy;
 	active = true;
@@ -406,7 +406,7 @@ QgSelectBoxFilter::applySemanticInput(BRLObolInputAction action,
 	return true;
     }
 
-	if (action == BRLOBOL_ACTION_APP_SELECT_UPDATE) {
+	if (action == QG_SELECT_INPUT_UPDATE) {
 	if (!active)
 	    return true;
 	struct bv_interactive_rect_state rect;
@@ -425,7 +425,7 @@ QgSelectBoxFilter::applySemanticInput(BRLObolInputAction action,
 	return true;
     }
 
-	if (action == BRLOBOL_ACTION_APP_SELECT_COMMIT) {
+	if (action == QG_SELECT_INPUT_COMMIT) {
 	if (!active)
 	    return true;
 	active = false;
@@ -647,7 +647,7 @@ QgSelectRayFilter::applySemanticInput(BRLObolInputAction action,
 	if (!v) {
 	return false;
 	}
-	if (action != BRLOBOL_ACTION_APP_SELECT_COMMIT) {
+	if (action != QG_SELECT_INPUT_COMMIT) {
 	return true;
 	}
 	if (event->button != 0) {

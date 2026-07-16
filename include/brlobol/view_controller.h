@@ -48,6 +48,7 @@ class SoOffscreenRenderer;
 class SoRenderManager;
 class SoViewport;
 struct bg_line_layer_builder;
+struct brlobol_display_endpoint;
 struct db_i;
 struct bv_view_info;
 
@@ -178,6 +179,10 @@ public:
     SbBool isDepthTestEnabled(void) const;
     void setLightingEnabled(SbBool enabled);
     SbBool isLightingEnabled(void) const;
+    void setHeadlightColor(const SbColor &color);
+    SbColor getHeadlightColor(void) const;
+    void setHeadlightIntensity(float intensity);
+    float getHeadlightIntensity(void) const;
     void setTransparencyEnabled(SbBool enabled);
     SbBool isTransparencyEnabled(void) const;
     /** Enable Obol's single-pass line and point smoothing.  This deliberately
@@ -510,17 +515,30 @@ public:
     int clearDatabaseSources(void);
     SoBRLDatabaseSource *getDatabaseSource(int index) const;
     int getDatabaseSourceCount(void) const;
+    /** Return the authoritative sources under the active render scene.  This
+     * includes a shared GED render root when it differs from the controller's
+     * locally managed scene, without transferring source ownership.  Call only
+     * on the Coin/controller owner thread. */
+    std::vector<SoBRLDatabaseSource *> getRenderDatabaseSources(void) const;
     SoBRLDatabaseSource *findDatabaseSourceInstance(
 	const char *sourceInstanceKey) const;
     SbBool getDatabaseSourceSummary(int index,
 				    BRLObolDatabaseSourceSummary &summary) const;
 
 private:
+    friend struct brlobol_display_endpoint;
+
+    /* Display endpoints own renderer selection.  These private hooks let an
+     * endpoint retain this controller's scene while preventing every host
+     * path (including direct toolkit repaints) from treating NONE or
+     * DIAGNOSTIC as a graphical renderer. */
+    void setEndpointGraphicalRenderingEnabled(SbBool enabled);
     void notifyFrameRequest(const char *reason);
     void clearRenderRequestIfUnchanged(uint64_t serial);
     uint64_t renderRequestSerialGet(void) const;
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
+    void invalidateDatabaseSourceLodState(void);
     void syncRenderManager(void);
     void advanceLodViewRevision(void);
     void advanceLodPolicyRevision(void);
@@ -545,6 +563,7 @@ private:
     SbColor backgroundBottom;
     SbColor backgroundTop;
     SoftwareWireMode softwareWireMode;
+    std::atomic<int> endpointGraphicalRenderingEnabled;
     SbBool transparencyEnabled;
     SbBool antialiasingEnabled;
     double clipMinimum;

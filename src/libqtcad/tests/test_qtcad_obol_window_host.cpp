@@ -294,6 +294,11 @@ test_qtcad_factory_endpoint(void)
     CHECK(strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
 	"qt-sw") == 0,
 	"endpoint reports Qt software factory identity");
+    CHECK(brlobol_display_endpoint_render_engine_get(endpoint) ==
+	BRLOBOL_RENDER_ENGINE_AUTO &&
+	brlobol_display_endpoint_render_engine_resolved_get(endpoint) ==
+	BRLOBOL_RENDER_ENGINE_SW,
+	"Qt software factory resolves automatic presentation to software");
 
     QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
 	brlobol_display_endpoint_host(endpoint));
@@ -490,10 +495,14 @@ test_qtcad_system_gl_factory_endpoint(void)
 
     brlobol_display_endpoint_t *endpoint =
 	brlobol_display_endpoint_create(NULL, 0);
-    CHECK(endpoint && brlobol_display_endpoint_render_engine_set(endpoint,
-	BRLOBOL_RENDER_ENGINE_HW) &&
-	brlobol_display_endpoint_host_open(endpoint, "qt-gl", &desc),
-	"Qt system-GL endpoint opens an explicit hardware host");
+    CHECK(endpoint && brlobol_display_endpoint_host_open(endpoint, "qt-gl",
+	&desc),
+	"Qt system-GL endpoint opens an automatic hardware-capable host");
+    CHECK(brlobol_display_endpoint_render_engine_get(endpoint) ==
+	BRLOBOL_RENDER_ENGINE_AUTO &&
+	brlobol_display_endpoint_render_engine_resolved_get(endpoint) ==
+	BRLOBOL_RENDER_ENGINE_HW,
+	"Qt system-GL factory deterministically resolves auto to hardware");
 
     QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
 	brlobol_display_endpoint_host(endpoint));

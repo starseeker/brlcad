@@ -186,6 +186,28 @@ struct InputActionState {
     int result = BRLOBOL_INPUT_RESULT_HANDLED;
 };
 
+/* Test-only action vocabulary.  These values intentionally overlap standard
+ * view actions to prove dispatch is selected by binding-layer provenance. */
+enum TestLayerAction {
+    TEST_LAYER_SELECT_COMMIT = BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE,
+    TEST_LAYER_ROTATE_BEGIN = BRLOBOL_ACTION_VIEW_ROTATE,
+    TEST_LAYER_ROTATE_CANCEL = BRLOBOL_ACTION_VIEW_PAN,
+    TEST_LAYER_TRANSLATE_BEGIN = BRLOBOL_ACTION_VIEW_ZOOM,
+    TEST_LAYER_TRANSLATE_CANCEL = BRLOBOL_ACTION_VIEW_CENTER,
+    TEST_LAYER_SCALE_BEGIN = BRLOBOL_ACTION_VIEW_FRONT,
+    TEST_LAYER_SCALE_CANCEL = BRLOBOL_ACTION_VIEW_TOP,
+    TEST_LAYER_CONSTRAINED_TRANSLATE_BEGIN = BRLOBOL_ACTION_VIEW_BOTTOM,
+    TEST_LAYER_CONSTRAINED_TRANSLATE_CANCEL = BRLOBOL_ACTION_VIEW_LEFT,
+    TEST_LAYER_CONSTRAINED_ROTATE_BEGIN = BRLOBOL_ACTION_VIEW_REAR,
+    TEST_LAYER_CONSTRAINED_ROTATE_CANCEL = BRLOBOL_ACTION_VIEW_RIGHT,
+    TEST_LAYER_CONSTRAINED_SCALE_BEGIN = BRLOBOL_ACTION_VIEW_2,
+    TEST_LAYER_CONSTRAINED_SCALE_CANCEL = BRLOBOL_ACTION_VIEW_3,
+    TEST_LAYER_PERSPECTIVE_MODE_TOGGLE = BRLOBOL_ACTION_VIEW_4,
+    TEST_LAYER_PERSPECTIVE_CYCLE = BRLOBOL_ACTION_VIEW_5,
+    TEST_LAYER_FACEPLATE_TOGGLE = BRLOBOL_ACTION_TOGGLE_ADC,
+    TEST_LAYER_FACEPLATE_GUI_TOGGLE = BRLOBOL_ACTION_TOGGLE_MODEL_AXES
+};
+
 static int
 test_input_action(void *data, BRLObolInputAction action,
 	const BRLObolInputEvent *event)
@@ -294,30 +316,204 @@ test_input_context(void)
 	BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_ALT |
 	BRLOBOL_INPUT_MOD_META;
     semantic_binding.priority = 0;
-    semantic_binding.action = BRLOBOL_ACTION_APP_SELECT_COMMIT;
-    BRLObolInputProfile semantic_profile = {"test-selection",
-	&semantic_binding, 1};
+    semantic_binding.action = TEST_LAYER_SELECT_COMMIT;
     InputActionState semantic_state;
     semantic_state.result = BRLOBOL_INPUT_RESULT_DEFERRED;
-    CHECK(first.setSemanticProfile(&semantic_profile, &semantic_state) &&
-	  first.setSemanticActionHandler(test_input_action, &semantic_state) &&
-	  !first.setSemanticProfile(&semantic_profile, &secondState),
-	  "semantic input overlays have one guarded owner");
+    const BRLObolInputActionLayer semantic_layer = {"test-selection",
+	&semantic_binding, 1, test_input_action};
+    CHECK(first.setActionLayer(&semantic_layer, &semantic_state,
+	  &semantic_state) &&
+	  !first.setActionLayer(&semantic_layer, &secondState, &secondState),
+	  "application action layers have one guarded owner");
     event.type = BRLOBOL_INPUT_POINTER_RELEASE;
     event.button = 0;
     event.modifiers = BRLOBOL_INPUT_MOD_NONE;
-    const int view_calls_before_semantic = firstState.calls;
+    const int view_calls_before_layer = firstState.calls;
     CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_DEFERRED &&
 	  semantic_state.calls == 1 &&
-	  semantic_state.action == BRLOBOL_ACTION_APP_SELECT_COMMIT &&
-	  firstState.calls == view_calls_before_semantic,
-	  "semantic overlays win equal-score view bindings and preserve deferred results");
-    CHECK(!first.clearSemanticProfileIf(&secondState) &&
-	  first.clearSemanticProfileIf(&semantic_state) &&
-	  first.clearSemanticActionHandlerIf(test_input_action, &semantic_state) &&
+	  semantic_state.action == TEST_LAYER_SELECT_COMMIT &&
+	  firstState.calls == view_calls_before_layer,
+	  "application layers win equal-score view bindings even when action IDs overlap");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_UNHANDLED;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.calls == 2 &&
+	  firstState.calls == view_calls_before_layer + 1 &&
+	  firstState.action == BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE,
+	  "unhandled application actions fall through to the matching view action");
+    CHECK(!first.clearActionLayerIf(&secondState) &&
+	  first.clearActionLayerIf(&semantic_state) &&
 	  first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
 	  firstState.action == BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE,
-	  "semantic overlay teardown is owner-conditional and restores view input");
+	  "action-layer teardown is owner-conditional and restores view input");
+
+    BRLObolInputBinding mged_bindings[] = {
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_ROTATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_ROTATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT, BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_TRANSLATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_SCALE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_SCALE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_CONSTRAINED_TRANSLATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT,
+	 BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_CONSTRAINED_TRANSLATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_CONSTRAINED_ROTATE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_CONSTRAINED_ROTATE_CANCEL},
+	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_CONSTRAINED_SCALE_BEGIN},
+	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, BRLOBOL_INPUT_ANY,
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT |
+	 BRLOBOL_INPUT_MOD_CONTROL, BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_CONSTRAINED_SCALE_CANCEL},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F3, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_PERSPECTIVE_MODE_TOGGLE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F6, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_PERSPECTIVE_CYCLE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F7, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_FACEPLATE_TOGGLE},
+	{BRLOBOL_INPUT_KEY_PRESS, BRLOBOL_INPUT_KEY_F8, BRLOBOL_INPUT_ANY, 0,
+	 BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL |
+	 BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_META, 10,
+	 TEST_LAYER_FACEPLATE_GUI_TOGGLE}
+    };
+    const BRLObolInputActionLayer mged_layer = {"test-mged-active-mode",
+	mged_bindings, sizeof(mged_bindings) / sizeof(mged_bindings[0]),
+	test_input_action};
+    semantic_state = InputActionState();
+    CHECK(first.setActionLayer(&mged_layer, &semantic_state, &semantic_state),
+	  "application lifecycles install as an opaque action layer");
+    event.type = BRLOBOL_INPUT_POINTER_PRESS;
+    event.button = 0;
+    event.modifiers = BRLOBOL_INPUT_MOD_CONTROL;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action == TEST_LAYER_ROTATE_BEGIN,
+	  "MGED rotate begin preserves a typed handled result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_CANCELLED;
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_CANCELLED &&
+	  semantic_state.action == TEST_LAYER_ROTATE_CANCEL,
+	  "MGED rotate release preserves a typed cancellation result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_HANDLED;
+    event.type = BRLOBOL_INPUT_POINTER_PRESS;
+    event.modifiers = BRLOBOL_INPUT_MOD_SHIFT;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action == TEST_LAYER_TRANSLATE_BEGIN,
+	  "MGED translation begin preserves a typed handled result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_CANCELLED;
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_CANCELLED &&
+	  semantic_state.action == TEST_LAYER_TRANSLATE_CANCEL,
+	  "MGED translation release preserves a typed cancellation result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_HANDLED;
+    event.type = BRLOBOL_INPUT_POINTER_PRESS;
+    event.modifiers = BRLOBOL_INPUT_MOD_SHIFT | BRLOBOL_INPUT_MOD_CONTROL;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action == TEST_LAYER_SCALE_BEGIN,
+	  "MGED scale begin preserves a typed handled result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_CANCELLED;
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_CANCELLED &&
+	  semantic_state.action == TEST_LAYER_SCALE_CANCEL,
+	  "MGED scale release preserves a typed cancellation result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_HANDLED;
+    event.type = BRLOBOL_INPUT_POINTER_PRESS;
+    event.button = 1;
+    event.modifiers = BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action ==
+	  TEST_LAYER_CONSTRAINED_TRANSLATE_BEGIN,
+	  "MGED constrained translation begin is a typed action");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_CANCELLED;
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_CANCELLED &&
+	  semantic_state.action ==
+	  TEST_LAYER_CONSTRAINED_TRANSLATE_CANCEL,
+	  "MGED constrained translation cancel is a typed result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_HANDLED;
+    event.type = BRLOBOL_INPUT_POINTER_PRESS;
+    event.modifiers = BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_CONTROL;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action ==
+	  TEST_LAYER_CONSTRAINED_ROTATE_BEGIN,
+	  "MGED constrained rotation begin is a typed action");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_CANCELLED;
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_CANCELLED &&
+	  semantic_state.action ==
+	  TEST_LAYER_CONSTRAINED_ROTATE_CANCEL,
+	  "MGED constrained rotation cancel is a typed result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_HANDLED;
+    event.type = BRLOBOL_INPUT_POINTER_PRESS;
+    event.modifiers = BRLOBOL_INPUT_MOD_ALT | BRLOBOL_INPUT_MOD_SHIFT |
+	BRLOBOL_INPUT_MOD_CONTROL;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action ==
+	  TEST_LAYER_CONSTRAINED_SCALE_BEGIN,
+	  "MGED constrained scale begin is a typed action");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_CANCELLED;
+    event.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_CANCELLED &&
+	  semantic_state.action ==
+	  TEST_LAYER_CONSTRAINED_SCALE_CANCEL,
+	  "MGED constrained scale cancel is a typed result");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_HANDLED;
+    event.type = BRLOBOL_INPUT_KEY_PRESS;
+    event.key = BRLOBOL_INPUT_KEY_F3;
+    event.button = BRLOBOL_INPUT_ANY;
+    event.modifiers = BRLOBOL_INPUT_MOD_NONE;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action == TEST_LAYER_PERSPECTIVE_MODE_TOGGLE,
+	  "application projection-mode policy uses an opaque local action");
+    event.key = BRLOBOL_INPUT_KEY_F6;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action == TEST_LAYER_PERSPECTIVE_CYCLE,
+	  "application projection-cycle policy uses an opaque local action");
+    event.key = BRLOBOL_INPUT_KEY_F7;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action == TEST_LAYER_FACEPLATE_TOGGLE,
+	  "toolkit-neutral function keys dispatch application-local faceplate actions");
+    event.key = BRLOBOL_INPUT_KEY_F8;
+    CHECK(first.dispatch(&event) == BRLOBOL_INPUT_RESULT_HANDLED &&
+	  semantic_state.action == TEST_LAYER_FACEPLATE_GUI_TOGGLE,
+	  "adjacent application faceplate policy remains outside the standard action vocabulary");
+    CHECK(first.clearActionLayerIf(&semantic_state),
+	  "application lifecycles tear down by owner");
 
     BRLObolInputContext keyboard;
     keyboard.setProfile(brlobol_input_keyboard_view_profile());
@@ -725,7 +921,9 @@ test_host_factory_contract(void)
 	  "host factory rejects an unsupported ABI");
 
     struct brlobol_host_factory low = factory_test_desc(
-	"endpoint-test-low", 10, BRLOBOL_HOST_CAP_PIXEL_PRESENT, &low_state);
+	"endpoint-test-low", 10,
+	BRLOBOL_HOST_CAP_SYSTEM_GL | BRLOBOL_HOST_CAP_PIXEL_PRESENT,
+	&low_state);
     struct brlobol_host_factory high = factory_test_desc(
 	"endpoint-test-high", 20,
 	BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_PIXEL_PRESENT |
@@ -785,6 +983,27 @@ test_host_factory_contract(void)
 	  (BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_PIXEL_PRESENT |
 	   BRLOBOL_HOST_CAP_READBACK | BRLOBOL_HOST_CAP_PRESENT_VSYNC),
 	  "endpoint exposes its active host capabilities");
+    CHECK(brlobol_display_endpoint_render_engine_capabilities(endpoint) ==
+	  (BRLOBOL_RENDER_ENGINE_CAP_AUTO | BRLOBOL_RENDER_ENGINE_CAP_SW |
+	   BRLOBOL_RENDER_ENGINE_CAP_NONE |
+	   BRLOBOL_RENDER_ENGINE_CAP_DIAGNOSTIC) &&
+	  brlobol_display_endpoint_render_engine_supported(endpoint,
+	      BRLOBOL_RENDER_ENGINE_SW) &&
+	  !brlobol_display_endpoint_render_engine_supported(endpoint,
+	      BRLOBOL_RENDER_ENGINE_HW),
+	  "endpoint reports renderer support from its active host capabilities");
+    struct brlobol_endpoint_property_value resolved_property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    CHECK(brlobol_display_endpoint_render_engine_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_AUTO &&
+	  brlobol_display_endpoint_render_engine_resolved_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_SW &&
+	  brlobol_display_endpoint_property_get(endpoint,
+	      "endpoint.renderer.resolved", &resolved_property) ==
+	      BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  resolved_property.string_value &&
+	  bu_strcmp(resolved_property.string_value, "sw") == 0,
+	  "automatic renderer resolves a pixel-presentation factory to software");
     CHECK(!brlobol_display_endpoint_render_engine_set(endpoint,
 	  BRLOBOL_RENDER_ENGINE_RT),
 	  "retained rt rejects a host without progressive presentation");
@@ -886,6 +1105,68 @@ test_host_factory_contract(void)
 	  capture[2] == 51 && high_state.framebuffer_captures == 1,
 	  "endpoint dispatches framebuffer-plane capture to its provider");
     bu_free(capture, "factory framebuffer capture");
+
+    BRLObolViewController *host_controller =
+	static_cast<BRLObolViewController *>(
+	    brlobol_display_endpoint_controller(endpoint));
+    SoNode *graphical_root = host_controller->getRenderRoot();
+    const int frames_before_none = high_state.frames;
+    const int captures_before_none = high_state.captures;
+    CHECK(graphical_root && brlobol_display_endpoint_render_engine_set(
+	  endpoint, BRLOBOL_RENDER_ENGINE_NONE) &&
+	  host_controller->getSceneRoot() && !host_controller->getRenderRoot() &&
+	  brlobol_display_endpoint_request_frame(endpoint, "none-test") &&
+	  high_state.frames == frames_before_none &&
+	  !brlobol_display_endpoint_capture(endpoint, &capture, &capture_size,
+	      &capture_width, &capture_height, &capture_components) &&
+	  high_state.captures == captures_before_none,
+	  "none retains the scene while suppressing hosted frame and capture paths");
+    CHECK(brlobol_display_endpoint_capture_plane(endpoint,
+	  BRLOBOL_CAPTURE_FRAMEBUFFER, &capture, &capture_size,
+	  &capture_width, &capture_height, &capture_components) && capture &&
+	  capture[0] == 17 && capture[1] == 34 && capture[2] == 51,
+	  "none preserves the independent framebuffer capture plane");
+    bu_free(capture, "none framebuffer capture");
+
+    CHECK(brlobol_display_endpoint_render_engine_set(endpoint,
+	  BRLOBOL_RENDER_ENGINE_DIAGNOSTIC) &&
+	  !host_controller->getRenderRoot(),
+	  "diagnostic disables graphical presentation on a hosted endpoint");
+    struct brlobol_endpoint_property_value diagnostic_value =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "renderer.diagnostic.revision", &diagnostic_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK && diagnostic_value.uint_value > 0,
+	  "diagnostic selection performs a typed non-graphical traversal");
+    const uint64_t diagnostic_revision = diagnostic_value.uint_value;
+    property_value_init(&diagnostic_value);
+    CHECK(brlobol_display_endpoint_request_frame(endpoint, "diagnostic-test") &&
+	  high_state.frames == frames_before_none &&
+	  brlobol_display_endpoint_property_get(endpoint,
+	      "renderer.diagnostic.revision", &diagnostic_value) ==
+	      BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  diagnostic_value.uint_value > diagnostic_revision &&
+	  !brlobol_display_endpoint_capture(endpoint, &capture, &capture_size,
+	      &capture_width, &capture_height, &capture_components) &&
+	  high_state.captures == captures_before_none,
+	  "diagnostic refreshes reports without posing as a graphical backend");
+    property_value_init(&diagnostic_value);
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "renderer.diagnostic.summary", &diagnostic_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK && diagnostic_value.string_value &&
+	  strstr(diagnostic_value.string_value, "scene=available") &&
+	  strstr(diagnostic_value.string_value, "visited_sources="),
+	  "diagnostic exposes its traversal result through a typed summary");
+    CHECK(brlobol_display_endpoint_render_engine_set(endpoint,
+	  BRLOBOL_RENDER_ENGINE_SW) &&
+	  brlobol_display_endpoint_render_engine_resolved_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_SW &&
+	  host_controller->getRenderRoot() == graphical_root &&
+	  brlobol_display_endpoint_property_get(endpoint,
+	      "renderer.diagnostic.summary", &diagnostic_value) ==
+	      BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	  "leaving diagnostic restores the retained graphical root and hides mode-only state");
+
     CHECK(!brlobol_display_endpoint_framebuffer_capture_provider_set(endpoint,
 	  NULL, &low_state),
 	  "unrelated owner cannot clear an endpoint framebuffer provider");
@@ -909,6 +1190,23 @@ test_host_factory_contract(void)
 	  failed_state.detaches == 1 && failed_state.destroys == 1 &&
 	  failed_state.closes == 0,
 	  "failed factory open detaches and destroys without close");
+    brlobol_display_endpoint_destroy(endpoint);
+
+    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    endpoint = brlobol_display_endpoint_create(NULL, 0);
+    CHECK(endpoint && brlobol_display_endpoint_host_open(endpoint,
+	  "endpoint-test-low", &desc) &&
+	  brlobol_display_endpoint_render_engine_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_AUTO &&
+	  brlobol_display_endpoint_render_engine_resolved_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_HW,
+	  "automatic renderer deterministically prefers System GL on a hybrid host");
+    property_value_init(&resolved_property);
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "endpoint.renderer.resolved", &resolved_property) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK && resolved_property.string_value &&
+	  bu_strcmp(resolved_property.string_value, "hw") == 0,
+	  "typed resolved-renderer property reports automatic hardware selection");
     brlobol_display_endpoint_destroy(endpoint);
 
     CHECK(brlobol_host_factory_unregister(failed_token) &&
@@ -1266,12 +1564,21 @@ test_display_endpoint_contract(void)
     CHECK(brlobol_display_endpoint_render_engine_get(endpoint) ==
 	  BRLOBOL_RENDER_ENGINE_AUTO,
 	  "display endpoint defaults to automatic renderer selection");
+    CHECK(brlobol_display_endpoint_render_engine_resolved_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_AUTO,
+	  "unbound automatic renderer remains explicitly unresolved");
     CHECK(brlobol_display_endpoint_render_engine_set(endpoint,
 	  BRLOBOL_RENDER_ENGINE_SW),
 	  "display endpoint accepts a typed renderer policy");
     CHECK(brlobol_display_endpoint_render_engine_get(endpoint) ==
 	  BRLOBOL_RENDER_ENGINE_SW,
 	  "display endpoint retains renderer policy");
+    CHECK(brlobol_display_endpoint_render_engine_capabilities(endpoint) ==
+	  (BRLOBOL_RENDER_ENGINE_CAP_AUTO | BRLOBOL_RENDER_ENGINE_CAP_HW |
+	   BRLOBOL_RENDER_ENGINE_CAP_SW | BRLOBOL_RENDER_ENGINE_CAP_RT |
+	   BRLOBOL_RENDER_ENGINE_CAP_NONE |
+	   BRLOBOL_RENDER_ENGINE_CAP_DIAGNOSTIC),
+	  "unbound endpoint reports all selectable pre-host renderer policies");
     CHECK(!brlobol_display_endpoint_render_engine_set(endpoint,
 	  (enum brlobol_render_engine)99),
 	  "display endpoint rejects an invalid renderer policy");
@@ -1279,6 +1586,7 @@ test_display_endpoint_contract(void)
     CHECK(brlobol_display_endpoint_property_count() >= 34,
 	  "display endpoint exposes the typed property registry");
     int found_renderer_property = 0;
+    int found_resolved_renderer_property = 0;
     int found_title_property = 0;
     int found_visibility_property = 0;
     int found_vsync_property = 0;
@@ -1298,6 +1606,14 @@ test_display_endpoint_contract(void)
 	    found_renderer_property = property.type ==
 		BRLOBOL_ENDPOINT_PROPERTY_ENUM &&
 		(property.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE) &&
+		property.allowed_values &&
+		bu_strcmp(property.allowed_values,
+		    "auto,hw,sw,rt,none,diagnostic") == 0;
+	}
+	if (bu_strcmp(property.name, "endpoint.renderer.resolved") == 0) {
+	    found_resolved_renderer_property = property.type ==
+		BRLOBOL_ENDPOINT_PROPERTY_ENUM &&
+		property.access == BRLOBOL_ENDPOINT_PROPERTY_READ &&
 		property.allowed_values &&
 		bu_strcmp(property.allowed_values,
 		    "auto,hw,sw,rt,none,diagnostic") == 0;
@@ -1355,6 +1671,8 @@ test_display_endpoint_contract(void)
     }
     CHECK(found_renderer_property,
 	  "renderer property declares its type, access, and allowed values");
+    CHECK(found_resolved_renderer_property,
+	  "resolved renderer is a read-only typed endpoint property");
     CHECK(found_title_property && found_visibility_property,
 	  "toplevel host properties declare typed capability predicates");
     CHECK(found_vsync_property,
@@ -1387,6 +1705,13 @@ test_display_endpoint_contract(void)
 	  bu_strcmp(property_value.string_value, "sw") == 0,
 	  "typed renderer property reads endpoint policy");
     property_value_init(&property_value);
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "endpoint.renderer.supported", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK && property_value.string_value &&
+	  bu_strcmp(property_value.string_value,
+	      "auto,hw,sw,rt,none,diagnostic") == 0,
+	  "typed renderer support property reports the current binding");
+    property_value_init(&property_value);
     property_value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
     property_value.string_value = "quality";
     CHECK(brlobol_display_endpoint_property_set(endpoint,
@@ -1417,6 +1742,39 @@ test_display_endpoint_contract(void)
 	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
 	  !endpoint_controller->isLightingEnabled(),
 	  "typed lighting property updates the Obol render environment");
+    property_value_init(&property_value);
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    property_value.color3[0] = 0.25;
+    property_value.color3[1] = 0.50;
+    property_value.color3[2] = 0.75;
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	  "renderer.headlight.color", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  endpoint_controller->getHeadlightColor() ==
+	      SbColor(0.25f, 0.50f, 0.75f),
+	  "typed headlight color updates the common render environment");
+    property_value_init(&property_value);
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    property_value.double_value = 0.4;
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	  "renderer.headlight.intensity", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  std::fabs(endpoint_controller->getHeadlightIntensity() - 0.4f) <
+	      1.0e-6f,
+	  "typed headlight intensity updates the common render environment");
+    property_value_init(&property_value);
+    CHECK(brlobol_display_endpoint_property_get(endpoint,
+	  "renderer.headlight.color", &property_value) ==
+	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	  std::fabs(property_value.color3[0] - 0.25) < 1.0e-9 &&
+	  std::fabs(property_value.color3[1] - 0.50) < 1.0e-9 &&
+	  std::fabs(property_value.color3[2] - 0.75) < 1.0e-9,
+	  "typed headlight color round trips render policy");
+    endpoint_controller->setHeadlightColor(SbColor(1.0f, 1.0f, 1.0f));
+    endpoint_controller->setHeadlightIntensity(1.0f);
+    property_value_init(&property_value);
+    property_value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    property_value.bool_value = 0;
     CHECK(brlobol_display_endpoint_property_set(endpoint,
 	  "renderer.transparency", &property_value) ==
 	  BRLOBOL_ENDPOINT_PROPERTY_OK &&
@@ -1632,6 +1990,9 @@ test_display_endpoint_contract(void)
 	  "automatic renderer policy permits transitional direct host binding");
     CHECK(brlobol_display_endpoint_host_bind(endpoint, &borrowed_host, 0),
 	  "display endpoint binds a borrowed host");
+    CHECK(brlobol_display_endpoint_render_engine_resolved_get(endpoint) ==
+	  BRLOBOL_RENDER_ENGINE_AUTO,
+	  "transitional direct host does not invent renderer capabilities");
     CHECK(brlobol_display_endpoint_host(endpoint) == &borrowed_host,
 	  "display endpoint reports its host");
     CHECK(brlobol_display_endpoint_framebuffer_window_host(endpoint) ==
@@ -1666,12 +2027,19 @@ test_display_endpoint_contract(void)
 	      "C++ endpoint wrapper binds a typed host");
 	CHECK(!wrapper.setRenderEngine(BRLOBOL_RENDER_ENGINE_HW),
 	      "explicit hardware policy rejects an untyped direct host");
+	CHECK(!wrapper.supportsRenderEngine(BRLOBOL_RENDER_ENGINE_HW) &&
+	      wrapper.supportsRenderEngine(BRLOBOL_RENDER_ENGINE_NONE) &&
+	      (wrapper.renderEngineCapabilities() &
+	       BRLOBOL_RENDER_ENGINE_CAP_DIAGNOSTIC),
+	      "C++ endpoint wrapper exposes binding-specific renderer capabilities");
 	CHECK(wrapper.setRenderEngine(BRLOBOL_RENDER_ENGINE_NONE) &&
-	      wrapper.renderEngine() == BRLOBOL_RENDER_ENGINE_NONE,
+	      wrapper.renderEngine() == BRLOBOL_RENDER_ENGINE_NONE &&
+	      wrapper.resolvedRenderEngine() == BRLOBOL_RENDER_ENGINE_NONE,
 	      "C++ endpoint wrapper exposes renderer policy");
     }
-    CHECK(wrapper_host.getController() == NULL,
-	  "C++ endpoint wrapper detaches its borrowed host on destruction");
+    CHECK(wrapper_host.getController() == NULL &&
+	  borrowed_controller.getRenderRoot() != NULL,
+	  "endpoint destruction detaches its host and restores a borrowed controller after none");
     return 0;
 }
 
@@ -1705,31 +2073,33 @@ test_display_endpoint_input(void)
 	BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_ALT |
 	BRLOBOL_INPUT_MOD_META;
     semantic_binding.priority = 0;
-    semantic_binding.action = BRLOBOL_ACTION_APP_SELECT_COMMIT;
-    BRLObolInputProfile semantic_profile = {"endpoint-selection",
-	&semantic_binding, 1};
+    semantic_binding.action = TEST_LAYER_SELECT_COMMIT;
     InputActionState semantic_state;
     semantic_state.result = BRLOBOL_INPUT_RESULT_DEFERRED;
-    CHECK(brlobol_display_endpoint_input_semantic_profile_set(first,
-	  &semantic_profile, &semantic_state) &&
-	  brlobol_display_endpoint_input_semantic_action_handler_set(first,
-	  test_input_action, &semantic_state),
-	  "display endpoint installs a scoped semantic input route");
+    const BRLObolInputActionLayer semantic_layer = {"endpoint-selection",
+	&semantic_binding, 1, test_input_action};
+    CHECK(brlobol_display_endpoint_input_action_layer_set(first,
+	  &semantic_layer, &semantic_state, &semantic_state),
+	  "display endpoint installs a scoped application action layer");
     event.type = BRLOBOL_INPUT_POINTER_RELEASE;
     event.key = BRLOBOL_INPUT_ANY;
     event.button = 0;
     event.modifiers = BRLOBOL_INPUT_MOD_NONE;
-    const int view_calls_before_semantic = state.calls;
+    const int view_calls_before_layer = state.calls;
     CHECK(brlobol_display_endpoint_input_dispatch(first, &event) ==
 	  BRLOBOL_INPUT_RESULT_DEFERRED && semantic_state.calls == 1 &&
-	  semantic_state.action == BRLOBOL_ACTION_APP_SELECT_COMMIT &&
-	  state.calls == view_calls_before_semantic,
-	  "display endpoint preserves semantic results without replacing view handling");
-    CHECK(brlobol_display_endpoint_input_semantic_action_handler_clear_if(
-	  first, test_input_action, &semantic_state) &&
-	  brlobol_display_endpoint_input_semantic_profile_clear_if(first,
+	  semantic_state.action == TEST_LAYER_SELECT_COMMIT &&
+	  state.calls == view_calls_before_layer,
+	  "display endpoint preserves layer results without replacing view handling");
+    semantic_state.result = BRLOBOL_INPUT_RESULT_UNHANDLED;
+    CHECK(brlobol_display_endpoint_input_dispatch(first, &event) ==
+	  BRLOBOL_INPUT_RESULT_HANDLED && semantic_state.calls == 2 &&
+	  state.calls == view_calls_before_layer + 1 &&
+	  state.action == BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE,
+	  "display endpoint falls through an unhandled application action");
+    CHECK(brlobol_display_endpoint_input_action_layer_clear_if(first,
 	  &semantic_state),
-	  "display endpoint conditionally clears its semantic route");
+	  "display endpoint conditionally clears its application layer");
 
     BRLObolInputBinding binding;
     binding.eventType = BRLOBOL_INPUT_KEY_PRESS;
@@ -1870,7 +2240,32 @@ test_imgstream_display_host_bridge(void)
 static int
 test_framebuffer_stream_helper(void)
 {
+    class RejectingFramebufferHost : public BRLObolWindowHost {
+    public:
+	int openFramebuffer(imgstream_fb_t *UNUSED(fb),
+	    const imgstream_fb_spec_info_t *UNUSED(info)) override
+	{
+	    return -1;
+	}
+    };
+    class ConditionalCompositionHost : public BRLObolWindowHost {
+    public:
+	ConditionalCompositionHost() : reject(false) { }
+
+	int setFramebufferComposition(imgstream_fb_t *fb,
+	    BRLObolFramebufferComposition composition) override
+	{
+	    return reject ? -1 :
+		BRLObolWindowHost::setFramebufferComposition(fb, composition);
+	}
+
+	bool reject;
+    };
+
     BRLObolWindowHost host;
+    BRLObolWindowHost second_host;
+    RejectingFramebufferHost rejecting_host;
+    ConditionalCompositionHost composition_host;
     BRLObolFramebufferStream stream(&host);
 
     CHECK(stream.configure(4, 3) == 0, "framebuffer stream accepts size");
@@ -1921,6 +2316,62 @@ test_framebuffer_stream_helper(void)
 	  float_equal(viewport->cursorImagePosition.getValue()[1], 2.0f),
 	  "framebuffer stream maps cursor state to viewport image");
 
+    CHECK(stream.setComposition(BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY) == 0 &&
+	  stream.composition() == BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY &&
+	  host.getController()->getFramebufferUnderlayRoot()->findChild(viewport) >= 0 &&
+	  host.getController()->getFramebufferOverlayRoot()->findChild(viewport) < 0,
+	  "framebuffer stream owns and applies typed composition state");
+
+    composition_host.reject = true;
+    CHECK(stream.setHost(&composition_host,
+	      BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY) == -1 &&
+	  stream.host() == &host &&
+	  stream.composition() == BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY &&
+	  stream.framebuffer() == fb && host.getFramebufferCount() == 1 &&
+	  composition_host.getFramebufferCount() == 0 &&
+	  host.getController()->getFramebufferUnderlayRoot()->findChild(viewport) >= 0,
+	  "composition rejection leaves the old framebuffer host and policy live");
+
+    CHECK(stream.setHost(&rejecting_host) == -1 && stream.host() == &host &&
+	  stream.framebuffer() == fb && host.getFramebufferCount() == 1 &&
+	  rejecting_host.getFramebufferCount() == 0,
+	  "failed framebuffer rehost leaves the live attachment unchanged");
+
+    CHECK(stream.setHost(&second_host) == 0 &&
+	  stream.host() == &second_host && stream.framebuffer() == fb &&
+	  host.getFramebufferCount() == 0 &&
+	  second_host.getFramebufferCount() == 1,
+	  "live framebuffer stream moves to a second host without reopening");
+    SoBRLImageSource *second_source =
+	second_host.getFramebufferImageSource(fb);
+    SoBRLViewportImage *second_viewport =
+	second_host.getFramebufferViewportImage(fb);
+    unsigned char moved_pixel[3] = {0, 0, 0};
+    CHECK(second_source != NULL && second_source != source &&
+	  second_viewport != NULL && second_viewport != viewport &&
+	  stream.read(1, 1, moved_pixel, 1) == 1 &&
+	  moved_pixel[0] == blue[0] && moved_pixel[1] == blue[1] &&
+	  moved_pixel[2] == blue[2],
+	  "framebuffer rehost preserves pixels and replaces only retained host nodes");
+    CHECK(stream.composition() == BRLOBOL_FRAMEBUFFER_COMPOSITION_UNDERLAY &&
+	  second_host.getController()->getFramebufferUnderlayRoot()->findChild(
+	      second_viewport) >= 0 &&
+	  second_host.getController()->getFramebufferOverlayRoot()->findChild(
+	      second_viewport) < 0,
+	  "framebuffer rehost preserves its typed composition layer");
+    CHECK(stream.present() == 0 &&
+	  float_equal(second_viewport->sourceCenter.getValue()[0], 2.0f) &&
+	  float_equal(second_viewport->sourceCenter.getValue()[1], 1.0f) &&
+	  float_equal(second_viewport->sourceZoom.getValue(), 3.0f) &&
+	  second_viewport->cursorVisible.getValue() == TRUE &&
+	  float_equal(second_viewport->cursorImagePosition.getValue()[0], 3.0f) &&
+	  float_equal(second_viewport->cursorImagePosition.getValue()[1], 2.0f),
+	  "moved framebuffer republishes preserved view and cursor state");
+    CHECK(stream.setHost(&host) == 0 && stream.framebuffer() == fb &&
+	  host.getFramebufferCount() == 1 &&
+	  second_host.getFramebufferCount() == 0,
+	  "framebuffer stream moves back without leaving stale retained nodes");
+
     stream.close();
     CHECK(host.getFramebufferCount() == 0,
 	  "framebuffer stream close detaches host image nodes");
@@ -1929,9 +2380,17 @@ test_framebuffer_stream_helper(void)
 	  "framebuffer stream reopens after close");
     CHECK(host.getFramebufferCount() == 1,
 	  "framebuffer stream reattaches after close");
-    stream.setHost(NULL);
-    CHECK(host.getFramebufferCount() == 0,
-	  "framebuffer stream host change closes attachment");
+    imgstream_fb_t *detached_fb = stream.framebuffer();
+    CHECK(stream.setHost(NULL) == 0 && stream.host() == NULL &&
+	  stream.framebuffer() == detached_fb && host.getFramebufferCount() == 0,
+	  "framebuffer stream detaches presentation without closing storage");
+    CHECK(stream.setHost(&second_host) == 0 &&
+	  stream.framebuffer() == detached_fb &&
+	  second_host.getFramebufferCount() == 1,
+	  "detached framebuffer stream reattaches with the same identity");
+    stream.close();
+    CHECK(second_host.getFramebufferCount() == 0,
+	  "reattached framebuffer closes without stale host nodes");
     return 0;
 }
 
@@ -1950,6 +2409,7 @@ test_framebuffer_host_teardown(void)
 	unsigned char pixel[3] = {0, 127, 255};
 	CHECK(stream->write(0, 0, pixel, 1) == 1 && stream->present() == 0,
 	      "stream presents an active image before host teardown");
+	imgstream_fb_t *stream_fb = stream->framebuffer();
 	CHECK(imgstream_fb_write(display, 0, 0, pixel, 1) == 1 &&
 	      imgstream_fb_flush(display) == 0,
 	      "display framebuffer presents an active image before host teardown");
@@ -1959,7 +2419,20 @@ test_framebuffer_host_teardown(void)
 	      "host teardown invalidates registered framebuffer stream host");
 	CHECK(stream->present() == -1,
 	      "detached framebuffer stream refuses presentation without a host");
+	BRLObolWindowHost replacement;
+	CHECK(stream->setHost(&replacement) == 0 &&
+	      stream->framebuffer() == stream_fb &&
+	      replacement.getFramebufferCount() == 1 &&
+	      stream->present() == 0,
+	      "stream reattaches after host teardown without reopening storage");
+	unsigned char preserved[3] = {0, 0, 0};
+	CHECK(stream->read(0, 0, preserved, 1) == 1 &&
+	      preserved[0] == pixel[0] && preserved[1] == pixel[1] &&
+	      preserved[2] == pixel[2],
+	      "host teardown and reattach preserve framebuffer pixels");
 	stream->close();
+	CHECK(replacement.getFramebufferCount() == 0,
+	      "reattached stream close removes replacement-host nodes");
 	CHECK(imgstream_fb_flush(display) == 0,
 	      "display framebuffer remains usable after host teardown");
 	CHECK(imgstream_fb_view(display, 1, 1, 2, 2) == 0,

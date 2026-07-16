@@ -58,9 +58,9 @@ BRLObolInputBinding::BRLObolInputBinding(
 BRLObolInputContext::BRLObolInputContext(void) :
     handler(NULL),
     handlerData(NULL),
-    semanticHandler(NULL),
-    semanticHandlerData(NULL),
-    semanticOwner(NULL)
+    layerHandler(NULL),
+    layerHandlerData(NULL),
+    layerOwner(NULL)
 {
 }
 
@@ -72,12 +72,12 @@ void
 BRLObolInputContext::clear(void)
 {
     this->bindings.clear();
-    this->semanticBindings.clear();
+    this->layerBindings.clear();
     this->handler = NULL;
     this->handlerData = NULL;
-    this->semanticHandler = NULL;
-    this->semanticHandlerData = NULL;
-    this->semanticOwner = NULL;
+    this->layerHandler = NULL;
+    this->layerHandlerData = NULL;
+    this->layerOwner = NULL;
 }
 
 void
@@ -117,49 +117,31 @@ BRLObolInputContext::clearActionHandlerIf(
 }
 
 int
-BRLObolInputContext::setSemanticProfile(const BRLObolInputProfile *profile,
-	void *owner)
+BRLObolInputContext::setActionLayer(const BRLObolInputActionLayer *layer,
+	void *owner, void *userData)
 {
-    if (!owner || (this->semanticOwner && this->semanticOwner != owner))
+    if (!layer || !layer->handler || !layer->bindings ||
+	!layer->bindingCount || !owner ||
+	(this->layerOwner && this->layerOwner != owner))
 	return 0;
-    this->semanticBindings.clear();
-    if (profile && profile->bindings && profile->bindingCount)
-	this->semanticBindings.assign(profile->bindings,
-	    profile->bindings + profile->bindingCount);
-    this->semanticOwner = profile ? owner : NULL;
+
+    this->layerBindings.assign(layer->bindings,
+	layer->bindings + layer->bindingCount);
+    this->layerHandler = layer->handler;
+    this->layerHandlerData = userData;
+    this->layerOwner = owner;
     return 1;
 }
 
 int
-BRLObolInputContext::clearSemanticProfileIf(void *owner)
+BRLObolInputContext::clearActionLayerIf(void *owner)
 {
-    if (!owner || this->semanticOwner != owner)
+    if (!owner || this->layerOwner != owner)
 	return 0;
-    this->semanticBindings.clear();
-    this->semanticOwner = NULL;
-    return 1;
-}
-
-int
-BRLObolInputContext::setSemanticActionHandler(
-	BRLObolInputActionHandler nextHandler, void *userData)
-{
-    if (this->semanticHandler && this->semanticHandlerData != userData)
-	return 0;
-    this->semanticHandler = nextHandler;
-    this->semanticHandlerData = userData;
-    return 1;
-}
-
-int
-BRLObolInputContext::clearSemanticActionHandlerIf(
-	BRLObolInputActionHandler expectedHandler, void *expectedUserData)
-{
-    if (this->semanticHandler != expectedHandler ||
-	this->semanticHandlerData != expectedUserData)
-	return 0;
-    this->semanticHandler = NULL;
-    this->semanticHandlerData = NULL;
+    this->layerBindings.clear();
+    this->layerHandler = NULL;
+    this->layerHandlerData = NULL;
+    this->layerOwner = NULL;
     return 1;
 }
 
@@ -191,55 +173,57 @@ binding_matches(const BRLObolInputBinding &binding,
     return (event.modifiers & binding.forbiddenModifiers) == 0 ? 1 : 0;
 }
 
-static int
-semantic_action(BRLObolInputAction action)
-{
-    switch (action) {
-	case BRLOBOL_ACTION_APP_CANCEL:
-	case BRLOBOL_ACTION_APP_ACCEPT:
-	case BRLOBOL_ACTION_APP_SELECT_BEGIN:
-	case BRLOBOL_ACTION_APP_SELECT_UPDATE:
-	case BRLOBOL_ACTION_APP_SELECT_COMMIT:
-	case BRLOBOL_ACTION_APP_SELECT_CANCEL:
-	case BRLOBOL_ACTION_APP_MGED_ACTIVE_MODE_MOTION:
-	    return 1;
-	default:
-	    return 0;
-    }
-}
-
 int
 BRLObolInputContext::dispatch(const BRLObolInputEvent *event) const
 {
     if (!event)
 	return -1;
 
-    const BRLObolInputBinding *winner = NULL;
-    int winnerScore = INT_MIN;
+    const BRLObolInputBinding *baseWinner = NULL;
+    const BRLObolInputBinding *layerWinner = NULL;
+    int baseScore = INT_MIN;
+    int layerScore = INT_MIN;
 
-    const auto consider = [&winner, &winnerScore, event](
-	const BRLObolInputBinding &binding, int overlay) {
+    const auto consider = [event](const BRLObolInputBinding &binding,
+	const BRLObolInputBinding **winner, int *winnerScore) {
 	if (!binding_matches(binding, *event))
 	    return;
 	const int score = binding.priority * 32 +
 	    static_cast<int>(modifier_count(binding.requiredModifiers));
-	if (!winner || score > winnerScore ||
-	    (overlay && score == winnerScore)) {
-	    winner = &binding;
-	    winnerScore = score;
+	if (!*winner || score > *winnerScore) {
+	    *winner = &binding;
+	    *winnerScore = score;
 	}
     };
     for (const BRLObolInputBinding &binding : this->bindings)
-	consider(binding, 0);
-    for (const BRLObolInputBinding &binding : this->semanticBindings)
-	consider(binding, 1);
-    if (!winner || winner->action == BRLOBOL_ACTION_NONE)
+	consider(binding, &baseWinner, &baseScore);
+    for (const BRLObolInputBinding &binding : this->layerBindings)
+	consider(binding, &layerWinner, &layerScore);
+    if (!baseWinner && !layerWinner)
 	return 0;
-    if (semantic_action(winner->action))
-	return this->semanticHandler ? this->semanticHandler(
-	    this->semanticHandlerData, winner->action, event) : 0;
-    return this->handler ? this->handler(this->handlerData, winner->action,
-	event) : 0;
+
+    /* A handler may replace its owner-scoped layer while beginning or ending
+     * a gesture.  Copy both candidate actions and handlers before invoking it
+     * so replacement cannot invalidate a binding needed for fallthrough. */
+    const BRLObolInputAction baseAction = baseWinner ? baseWinner->action :
+	BRLOBOL_ACTION_NONE;
+    const BRLObolInputAction layerAction = layerWinner ?
+	layerWinner->action : BRLOBOL_ACTION_NONE;
+    BRLObolInputActionHandler baseHandler = this->handler;
+    void *baseHandlerData = this->handlerData;
+    BRLObolInputActionHandler appHandler = this->layerHandler;
+    void *appHandlerData = this->layerHandlerData;
+
+    if (layerWinner && layerScore >= baseScore &&
+	layerAction != BRLOBOL_ACTION_NONE) {
+	const int result = appHandler ? appHandler(appHandlerData, layerAction,
+	    event) : BRLOBOL_INPUT_RESULT_UNHANDLED;
+	if (result != BRLOBOL_INPUT_RESULT_UNHANDLED)
+	    return result;
+    }
+    return baseWinner && baseAction != BRLOBOL_ACTION_NONE && baseHandler ?
+	baseHandler(baseHandlerData, baseAction, event) :
+	BRLOBOL_INPUT_RESULT_UNHANDLED;
 }
 
 int
@@ -249,7 +233,7 @@ BRLObolInputContext::hasAction(BRLObolInputAction action) const
 	if (binding.action == action)
 	    return 1;
     }
-    for (const BRLObolInputBinding &binding : this->semanticBindings) {
+    for (const BRLObolInputBinding &binding : this->layerBindings) {
 	if (binding.action == action)
 	    return 1;
     }
@@ -259,7 +243,7 @@ BRLObolInputContext::hasAction(BRLObolInputAction action) const
 size_t
 BRLObolInputContext::bindingCount(void) const
 {
-    return this->bindings.size() + this->semanticBindings.size();
+    return this->bindings.size() + this->layerBindings.size();
 }
 
 extern "C" const BRLObolInputProfile *

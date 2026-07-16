@@ -50,24 +50,25 @@ qged_selector_view(const QgPluginContext *ctx)
     return ctx ? ctx->activeViewContext() : nullptr;
 }
 
-static const BRLObolInputProfile *
-qged_selection_input_profile()
+const BRLObolInputActionLayer *
+CADViewSelector::inputActionLayer()
 {
     static const unsigned int modifier_mask = BRLOBOL_INPUT_MOD_SHIFT |
 	BRLOBOL_INPUT_MOD_CONTROL | BRLOBOL_INPUT_MOD_ALT |
 	BRLOBOL_INPUT_MOD_META;
     static const BRLObolInputBinding bindings[] = {
 	{BRLOBOL_INPUT_POINTER_PRESS, BRLOBOL_INPUT_ANY, 0, 0, modifier_mask,
-	 10, BRLOBOL_ACTION_APP_SELECT_BEGIN},
+	 10, QG_SELECT_INPUT_BEGIN},
 	{BRLOBOL_INPUT_POINTER_MOTION, BRLOBOL_INPUT_ANY, 0, 0, modifier_mask,
-	 10, BRLOBOL_ACTION_APP_SELECT_UPDATE},
+	 10, QG_SELECT_INPUT_UPDATE},
 	{BRLOBOL_INPUT_POINTER_RELEASE, BRLOBOL_INPUT_ANY, 0, 0, modifier_mask,
-	 10, BRLOBOL_ACTION_APP_SELECT_COMMIT}
+	 10, QG_SELECT_INPUT_COMMIT}
     };
-    static const BRLObolInputProfile profile = {
-	"qged-selection", bindings, sizeof(bindings) / sizeof(bindings[0])
+    static const BRLObolInputActionLayer layer = {
+	"qged-selection", bindings, sizeof(bindings) / sizeof(bindings[0]),
+	CADViewSelector::inputActionDispatch
     };
-    return &profile;
+    return &layer;
 }
 
 static std::vector<std::string>
@@ -223,15 +224,9 @@ CADViewSelector::attachToView(QgView *view)
 	detachFromView(m_input_view);
 
     struct brlobol_display_endpoint *endpoint = view->displayEndpoint();
-    if (!endpoint || !brlobol_display_endpoint_input_semantic_profile_set(
-	endpoint, qged_selection_input_profile(), this))
+    if (!endpoint || !brlobol_display_endpoint_input_action_layer_set(
+	endpoint, CADViewSelector::inputActionLayer(), this, this))
 	return;
-    if (!brlobol_display_endpoint_input_semantic_action_handler_set(endpoint,
-	CADViewSelector::inputActionDispatch, this)) {
-	(void)brlobol_display_endpoint_input_semantic_profile_clear_if(endpoint,
-	    this);
-	return;
-    }
     m_input_view = view;
     m_input_endpoint = endpoint;
     QObject::connect(view, &QObject::destroyed, this, [this, view]() {
@@ -253,9 +248,7 @@ CADViewSelector::detachFromView(QgView *view)
 {
     if (!m_input_endpoint || (view && view != m_input_view))
 	return;
-    (void)brlobol_display_endpoint_input_semantic_action_handler_clear_if(
-	m_input_endpoint, CADViewSelector::inputActionDispatch, this);
-    (void)brlobol_display_endpoint_input_semantic_profile_clear_if(
+    (void)brlobol_display_endpoint_input_action_layer_clear_if(
 	m_input_endpoint, this);
     if (pf)
 	pf->set_view_widget(nullptr);
@@ -463,10 +456,10 @@ CADViewSelector::applyInputAction(BRLObolInputAction action,
 	const BRLObolInputEvent *event)
 {
     if (!event || !m_input_view ||
-	(action != BRLOBOL_ACTION_APP_SELECT_BEGIN &&
-	 action != BRLOBOL_ACTION_APP_SELECT_UPDATE &&
-	 action != BRLOBOL_ACTION_APP_SELECT_COMMIT &&
-	 action != BRLOBOL_ACTION_APP_SELECT_CANCEL))
+	(action != QG_SELECT_INPUT_BEGIN &&
+	 action != QG_SELECT_INPUT_UPDATE &&
+	 action != QG_SELECT_INPUT_COMMIT &&
+	 action != QG_SELECT_INPUT_CANCEL))
 	return BRLOBOL_INPUT_RESULT_UNHANDLED;
 
     struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
@@ -488,8 +481,8 @@ CADViewSelector::applyInputAction(BRLObolInputAction action,
     /* Gesture updates only draw the selection affordance.  Applying an
      * operation before commit can act on a stale result from an earlier
      * gesture. */
-    if (action != BRLOBOL_ACTION_APP_SELECT_COMMIT)
-	return action == BRLOBOL_ACTION_APP_SELECT_CANCEL ?
+    if (action != QG_SELECT_INPUT_COMMIT)
+	return action == QG_SELECT_INPUT_CANCEL ?
 	    BRLOBOL_INPUT_RESULT_CANCELLED : BRLOBOL_INPUT_RESULT_HANDLED;
 
     if (erase_from_scene_button->isChecked()) {

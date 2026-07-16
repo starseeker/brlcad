@@ -117,6 +117,29 @@ main(void)
     fbs.fbs_auth_token[FBSERV_AUTH_TOKEN_LEN] = '\0';
     fbs.fbs_callback = update_callback;
 
+    /* Authentication packets must contain exactly one complete token. */
+    if (pkg_pair(&server_end, &client_end, fbs_pkg_switch(), comm_error) != 0)
+	return 1;
+    slot = fbs_new_client(&fbs, server_end, NULL);
+    if (slot < 0)
+	return 1;
+    wire_size = append_packet(wire, 0, FBSERV_MSG_FBAUTH,
+	(const unsigned char *)fbs.fbs_auth_token, FBSERV_AUTH_TOKEN_LEN - 1);
+    struct fbserv_process_result rejected_result;
+    if (fbs_process_client_bytes(&fbs, slot, wire, wire_size,
+	    &remaining, &remaining_size, &rejected_result) != BRLCAD_OK ||
+	!rejected_result.disconnected || fbs_client_active(&fbs, slot) ||
+	close_count != 1) {
+	bu_log("short authentication token was not rejected\n");
+	return 1;
+    }
+    free(remaining);
+    remaining = NULL;
+    remaining_size = 0;
+    pkg_close(client_end);
+    client_end = PKC_NULL;
+    wire_size = 0;
+
     if (pkg_pair(&server_end, &client_end, fbs_pkg_switch(), comm_error) != 0)
 	return 1;
     slot = fbs_new_client(&fbs, server_end, NULL);
@@ -170,7 +193,7 @@ main(void)
     struct fbserv_process_result drain_result;
     if (fbs_drain_client(&fbs, slot, 4096, 1, 10000,
 	    &drain_result) != BRLCAD_OK || !drain_result.disconnected ||
-	fbs_client_active(&fbs, slot) || close_count != 1) {
+	fbs_client_active(&fbs, slot) || close_count != 2) {
 	bu_log("EOF did not deterministically close the framebuffer client\n");
 	return 1;
     }
@@ -180,7 +203,7 @@ main(void)
 	return 1;
     slot = fbs_new_client(&fbs, server_end, NULL);
     if (slot < 0 || fbs_close(&fbs) != BRLCAD_OK ||
-	fbs_client_active(&fbs, slot) || close_count != 2) {
+	fbs_client_active(&fbs, slot) || close_count != 3) {
 	bu_log("server cancellation did not close the active client\n");
 	return 1;
     }

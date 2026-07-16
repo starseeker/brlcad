@@ -45,7 +45,42 @@ typedef enum BRLObolInputModifier {
     BRLOBOL_INPUT_MOD_META = 1u << 3
 } BRLObolInputModifier;
 
-typedef enum BRLObolInputAction {
+/**
+ * Toolkit-neutral key values outside the Unicode scalar range.
+ *
+ * Printable keys continue to use their uppercase Unicode value.  Native
+ * adapters translate non-text keys to this range so application action layers
+ * do not depend on Qt, Tk, X11, or Win32 key constants.
+ */
+typedef enum BRLObolInputKey {
+    BRLOBOL_INPUT_KEY_F1 = 0x110001,
+    BRLOBOL_INPUT_KEY_F2 = 0x110002,
+    BRLOBOL_INPUT_KEY_F3 = 0x110003,
+    BRLOBOL_INPUT_KEY_F4 = 0x110004,
+    BRLOBOL_INPUT_KEY_F5 = 0x110005,
+    BRLOBOL_INPUT_KEY_F6 = 0x110006,
+    BRLOBOL_INPUT_KEY_F7 = 0x110007,
+    BRLOBOL_INPUT_KEY_F8 = 0x110008,
+    BRLOBOL_INPUT_KEY_F9 = 0x110009,
+    BRLOBOL_INPUT_KEY_F10 = 0x11000a,
+    BRLOBOL_INPUT_KEY_F11 = 0x11000b,
+    BRLOBOL_INPUT_KEY_F12 = 0x11000c,
+    BRLOBOL_INPUT_KEY_SHIFT = 0x110010,
+    BRLOBOL_INPUT_KEY_CONTROL = 0x110011,
+    BRLOBOL_INPUT_KEY_ALT = 0x110012,
+    BRLOBOL_INPUT_KEY_META = 0x110013
+} BRLObolInputKey;
+
+/**
+ * An action token interpreted by the handler that owns its binding layer.
+ *
+ * Zero is always BRLOBOL_ACTION_NONE.  The remaining values are deliberately
+ * opaque to dispatch: application-owned layers may define any nonzero local
+ * identifiers, including values that overlap the standard actions below.
+ */
+typedef uint32_t BRLObolInputAction;
+
+enum BRLObolStandardInputAction {
     BRLOBOL_ACTION_NONE = 0,
     BRLOBOL_ACTION_VIEW_ROTATE = 1,
     BRLOBOL_ACTION_VIEW_PAN = 2,
@@ -53,8 +88,7 @@ typedef enum BRLObolInputAction {
     BRLOBOL_ACTION_VIEW_CENTER = 4,
     BRLOBOL_ACTION_VIEW_FRONT = 5,
     BRLOBOL_ACTION_VIEW_TOP = 6,
-    BRLOBOL_ACTION_APP_CANCEL = 7,
-    BRLOBOL_ACTION_APP_ACCEPT = 8,
+    /* Values 7 and 8 remain unused to preserve existing standard IDs. */
     BRLOBOL_ACTION_VIEW_BOTTOM = 9,
     BRLOBOL_ACTION_VIEW_LEFT = 10,
     BRLOBOL_ACTION_VIEW_REAR = 11,
@@ -75,15 +109,8 @@ typedef enum BRLObolInputAction {
     /* Marks the start of a semantic primary-button pan gesture. */
     BRLOBOL_ACTION_VIEW_PAN_BEGIN = 26,
     /* Marks the end of a semantic primary-button pan gesture. */
-    BRLOBOL_ACTION_VIEW_PAN_END = 27,
-    /* Application-owned object-selection gesture phases. */
-    BRLOBOL_ACTION_APP_SELECT_BEGIN = 28,
-    BRLOBOL_ACTION_APP_SELECT_UPDATE = 29,
-    BRLOBOL_ACTION_APP_SELECT_COMMIT = 30,
-    BRLOBOL_ACTION_APP_SELECT_CANCEL = 31,
-    /* MGED's current edit/ADC/rate-control motion mode owns this gesture. */
-    BRLOBOL_ACTION_APP_MGED_ACTIVE_MODE_MOTION = 32
-} BRLObolInputAction;
+    BRLOBOL_ACTION_VIEW_PAN_END = 27
+};
 
 enum {
     BRLOBOL_INPUT_ANY = -1,
@@ -144,6 +171,20 @@ typedef struct BRLOBOL_INPUT_TYPE_EXPORT BRLObolInputProfile {
 typedef int (*BRLObolInputActionHandler)(void *userData,
 	BRLObolInputAction action, const BRLObolInputEvent *event);
 
+/**
+ * One immutable application-defined action vocabulary and its handler.
+ *
+ * The context copies the bindings when the layer is installed.  Action IDs
+ * are local to this handler and are never classified or interpreted by
+ * libbrlobol.
+ */
+typedef struct BRLOBOL_INPUT_TYPE_EXPORT BRLObolInputActionLayer {
+    const char *name;
+    const BRLObolInputBinding *bindings;
+    size_t bindingCount;
+    BRLObolInputActionHandler handler;
+} BRLObolInputActionLayer;
+
 /** Deliver a fully normalized toolkit event to an endpoint-owned context. */
 typedef int (*BRLObolInputEventHandler)(void *userData,
 	const BRLObolInputEvent *event);
@@ -193,17 +234,14 @@ public:
 	void *userData);
 
     /**
-     * Install one application-owned semantic gesture overlay.  Bindings in
-     * this overlay win score ties with the base profile, but they neither
-     * replace view bindings nor alter the endpoint's view-action handler.
-     * The owner token makes tool teardown safe when views are reused.
+     * Atomically install one application-owned action layer.  Its bindings
+     * win score ties with the base profile and dispatch only to the handler
+     * stored in the layer.  An UNHANDLED result falls through to the matching
+     * base action.  The owner token guards replacement and teardown.
      */
-    int setSemanticProfile(const BRLObolInputProfile *profile, void *owner);
-    int clearSemanticProfileIf(void *owner);
-    int setSemanticActionHandler(BRLObolInputActionHandler handler,
+    int setActionLayer(const BRLObolInputActionLayer *layer, void *owner,
 	void *userData);
-    int clearSemanticActionHandlerIf(BRLObolInputActionHandler handler,
-	void *userData);
+    int clearActionLayerIf(void *owner);
 
     int dispatch(const BRLObolInputEvent *event) const;
     int hasAction(BRLObolInputAction action) const;
@@ -213,12 +251,12 @@ public:
 
 private:
     std::vector<BRLObolInputBinding> bindings;
-    std::vector<BRLObolInputBinding> semanticBindings;
+    std::vector<BRLObolInputBinding> layerBindings;
     BRLObolInputActionHandler handler;
     void *handlerData;
-    BRLObolInputActionHandler semanticHandler;
-    void *semanticHandlerData;
-    void *semanticOwner;
+    BRLObolInputActionHandler layerHandler;
+    void *layerHandlerData;
+    void *layerOwner;
 };
 #endif
 
