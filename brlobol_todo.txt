@@ -8,7 +8,8 @@ This is the active backlog for completing the Obol/libbrlobol drawing
 migration.  It records only unresolved BRL-CAD feature-parity work, important
 scalability or lifecycle limitations, and release gates.  Completed work
 belongs in source history and tests; detailed coverage inventories belong in
-`doc/notes/`; performance captures belong in `.build_perf/`.
+`doc/notes/`; performance captures belong in `.build_perf/`.  Normal build
+directory is in ./.build/ and uses ninja.
 
 Architecture Invariants
 -----------------------
