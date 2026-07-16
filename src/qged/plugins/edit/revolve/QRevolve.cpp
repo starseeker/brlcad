@@ -87,6 +87,9 @@ QRevolve::QRevolve()
 
 QRevolve::~QRevolve()
 {
+    if (!qged_edit_feature_ref_is_null(p))
+	qged_edit_preview_publish_event(m_ctx, p, "_revolve_edit",
+	    QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
     qged_edit_feature_clear_geometry(p);
     if (!qged_edit_feature_ref_is_null(p) && m_ctx) {
 	qged_edit_feature_remove(m_ctx, "_revolve_edit");
@@ -113,6 +116,11 @@ QRevolve::read_from_db()
     struct directory *ldp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
     if (!ldp || ldp->d_minor_type != DB5_MINORTYPE_BRLCAD_REVOLVE)
 	return;
+
+    if (!qged_edit_feature_ref_is_null(p))
+	qged_edit_preview_publish_event(m_ctx, p, "_revolve_edit",
+	    QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
+    p = QGED_EDIT_FEATURE_REF_NULL;
 
     struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
     if (rt_db_get_internal(&intern, ldp, gedp->dbip, NULL) < 0)
@@ -156,6 +164,7 @@ QRevolve::write_to_db()
     qged_edit_preview_publish_event(m_ctx, p, "_revolve_edit",
 	    QGED_EDIT_PREVIEW_COMMIT,
 	    bu_vls_cstr(&oname));
+    p = QGED_EDIT_FEATURE_REF_NULL;
     emit view_updated(QG_VIEW_DB);
 }
 

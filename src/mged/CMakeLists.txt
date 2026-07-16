@@ -176,6 +176,7 @@ set(
   mged_obol_progressive_lod.sh
   mged_obol_smoke.sh
   mged_tkobol_attach_smoke.sh
+  mged_tkobol_attach_smoke.tcl
   mged.h
   mged.ico
   mged.rc

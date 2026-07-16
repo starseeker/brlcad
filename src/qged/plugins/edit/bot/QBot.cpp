@@ -92,6 +92,9 @@ QBot::QBot()
 
 QBot::~QBot()
 {
+    if (!qged_edit_feature_ref_is_null(p))
+	qged_edit_preview_publish_event(m_ctx, p, "_bot_edit",
+	    QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
     qged_edit_feature_clear_geometry(p);
     if (!qged_edit_feature_ref_is_null(p) && m_ctx) {
 	qged_edit_feature_remove(m_ctx, "_bot_edit");

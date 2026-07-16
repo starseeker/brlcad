@@ -26,6 +26,7 @@ public:
     virtual ~BRLObolHeadlessWindowHost(void);
 
     virtual int open(const BRLObolWindowDesc *desc = NULL);
+    virtual void close(void);
     virtual int poll(const BRLObolInputProfile *profile = NULL);
     virtual long pollRate(void) const;
 

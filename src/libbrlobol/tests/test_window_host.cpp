@@ -739,14 +739,37 @@ factory_test_bind(void *instance_ptr, void *controller, void *data)
     FactoryTestState *state = static_cast<FactoryTestState *>(data);
     FactoryTestInstance *instance =
 	static_cast<FactoryTestInstance *>(instance_ptr);
-    instance->controller = controller;
-    instance->framebuffer_host.attachController(
-	static_cast<BRLObolViewController *>(controller), FALSE);
-    if (controller)
-	state->binds++;
-    else
-	state->detaches++;
+    BRLObolViewController *oldController =
+	static_cast<BRLObolViewController *>(instance->controller);
+    BRLObolViewController *newController =
+	static_cast<BRLObolViewController *>(controller);
+    SoDB::ContextManager *provider = brlobol_headless_context_manager();
+    if (oldController && oldController != newController &&
+	oldController->getRenderContextManager() == provider)
+	oldController->setRenderContextManager(NULL);
+    if (oldController != newController) {
+	instance->controller = controller;
+	instance->framebuffer_host.attachController(newController, FALSE);
+	if (controller)
+	    state->binds++;
+	else
+	    state->detaches++;
+    }
+    if (newController)
+	newController->setRenderContextManager(provider);
     return 1;
+}
+
+static int
+factory_test_bind_without_provider(void *instance_ptr, void *controller,
+	void *data)
+{
+    const int ret = factory_test_bind(instance_ptr, controller, data);
+    BRLObolViewController *bound =
+	static_cast<BRLObolViewController *>(controller);
+    if (bound)
+	bound->setRenderContextManager(NULL);
+    return ret;
 }
 
 static void *
@@ -912,6 +935,7 @@ test_host_factory_contract(void)
     FactoryTestState low_state;
     FactoryTestState high_state;
     FactoryTestState failed_state;
+    FactoryTestState missing_provider_state;
     failed_state.open_result = 0;
 
     struct brlobol_host_factory invalid =
@@ -933,6 +957,10 @@ test_host_factory_contract(void)
     struct brlobol_host_factory failed = factory_test_desc(
 	"endpoint-test-failed", 30, BRLOBOL_HOST_CAP_PIXEL_PRESENT,
 	&failed_state);
+    struct brlobol_host_factory missing_provider = factory_test_desc(
+	"endpoint-test-missing-provider", 30, BRLOBOL_HOST_CAP_PIXEL_PRESENT,
+	&missing_provider_state);
+    missing_provider.bind_controller = factory_test_bind_without_provider;
 
     brlobol_host_factory_token_t *low_token =
 	brlobol_host_factory_register(&low);
@@ -940,11 +968,13 @@ test_host_factory_contract(void)
 	brlobol_host_factory_register(&high);
     brlobol_host_factory_token_t *failed_token =
 	brlobol_host_factory_register(&failed);
-    CHECK(low_token && high_token && failed_token,
+    brlobol_host_factory_token_t *missing_provider_token =
+	brlobol_host_factory_register(&missing_provider);
+    CHECK(low_token && high_token && failed_token && missing_provider_token,
 	  "host factories register copied descriptors");
     CHECK(brlobol_host_factory_register(&high) == NULL,
 	  "host factory rejects duplicate stable names");
-    CHECK(brlobol_host_factory_registry_count() == initial_count + 3,
+    CHECK(brlobol_host_factory_registry_count() == initial_count + 4,
 	  "host factory registry reports registrations");
     int found_high_capabilities = 0;
     for (size_t i = 0; i < brlobol_host_factory_registry_count(); i++) {
@@ -973,6 +1003,21 @@ test_host_factory_contract(void)
 
     brlobol_display_endpoint_t *endpoint =
 	brlobol_display_endpoint_create(NULL, 0);
+    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT;
+    desc.vsync = BRLOBOL_HOST_VSYNC_AUTO;
+    CHECK(endpoint && !brlobol_display_endpoint_host_open(endpoint,
+	  "endpoint-test-missing-provider", &desc) &&
+	  missing_provider_state.opens == 1 &&
+	  missing_provider_state.closes == 1 &&
+	  missing_provider_state.detaches == 1 &&
+	  missing_provider_state.destroys == 1,
+	  "endpoint rejects a rendering factory that binds no provider");
+    brlobol_display_endpoint_destroy(endpoint);
+
+    desc.required_capabilities = BRLOBOL_HOST_CAP_READBACK;
+    desc.vsync = BRLOBOL_HOST_VSYNC_OFF;
+
+    endpoint = brlobol_display_endpoint_create(NULL, 0);
     CHECK(endpoint != NULL, "factory test creates display endpoint");
     CHECK(brlobol_display_endpoint_host_open(endpoint, NULL, &desc),
 	  "endpoint selects a compatible registered factory");
@@ -1209,7 +1254,8 @@ test_host_factory_contract(void)
 	  "typed resolved-renderer property reports automatic hardware selection");
     brlobol_display_endpoint_destroy(endpoint);
 
-    CHECK(brlobol_host_factory_unregister(failed_token) &&
+    CHECK(brlobol_host_factory_unregister(missing_provider_token) &&
+	  brlobol_host_factory_unregister(failed_token) &&
 	  brlobol_host_factory_unregister(high_token) &&
 	  brlobol_host_factory_unregister(low_token),
 	  "unused host factories unregister");
@@ -1358,6 +1404,8 @@ test_host_factory_reattach(void)
     CHECK(brlobol_display_endpoint_host(endpoint) == first_instance &&
 	  bu_strcmp(brlobol_display_endpoint_host_factory_name(endpoint),
 	  "endpoint-test-reattach-first") == 0 &&
+	  static_cast<BRLObolViewController *>(controller)->
+	      getRenderContextManager() == brlobol_headless_context_manager() &&
 	  first_state.closes == 0 && first_state.detaches == 0 &&
 	  first_state.destroys == 0 && second_state.creates == 1 &&
 	  second_state.binds == 1 && second_state.opens == 1 &&

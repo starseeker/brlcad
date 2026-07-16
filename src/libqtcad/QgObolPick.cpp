@@ -12,8 +12,8 @@
 
 #include "brlobol/view_controller.h"
 #include "brlobol/view_query.h"
-#include "brlobol/view_store.h"
-#include "bv.h"
+#include "bu/vls.h"
+#include "ged/draw.h"
 #include "qtcad/QgView.h"
 
 #include <algorithm>
@@ -53,6 +53,7 @@ QgObolPickRecord::QgObolPickRecord(void) :
     nearestFaceVertexIndex(-1),
     materialColorValid(false),
     featurePickResolved(false),
+    featureMetadata(),
     featurePrimitiveMetadata()
 {
 }
@@ -61,34 +62,6 @@ static void *
 qg_obol_pick_view_context(QgView *display)
 {
     return display ? display->viewContext() : NULL;
-}
-
-static std::string
-qg_obol_pick_view_scope_name(QgView *display)
-{
-    void *view_ctx = qg_obol_pick_view_context(display);
-    if (!view_ctx)
-	return std::string("shared");
-
-    const struct bv *view = bv_context_view_const(
-	reinterpret_cast<const struct bv_context *>(view_ctx));
-    const char *name = bv_name_get(view);
-    if (name && name[0])
-	return std::string(name);
-
-    char fallback[64] = {0};
-    std::snprintf(fallback, sizeof(fallback), "%p", view_ctx);
-    return std::string(fallback);
-}
-
-static BRLObolFeatureOwner
-qg_obol_pick_view_owner(QgView *display)
-{
-    BRLObolFeatureOwner owner;
-    owner.ownerToken = qg_obol_pick_view_context(display);
-    owner.ownerId = qg_obol_pick_view_scope_name(display).c_str();
-    owner.ownerRole = "view";
-    return owner;
 }
 
 static int
@@ -106,12 +79,14 @@ qg_obol_display_extent(QgView *display, int &width, int &height)
 }
 
 static bool
-qg_obol_feature_pick_from_record(BRLObolViewController *controller,
-	const BRLObolFeatureOwner *owner,
+qg_obol_feature_pick_from_record(void *view_ctx,
 	const QgObolPickRecord &record,
-	BRLObolFeaturePrimitivePick &pick)
+	std::string &feature_name,
+	int &feature_primitive)
 {
-    if (!controller || record.primitiveIndex < 0)
+    feature_name.clear();
+    feature_primitive = -1;
+    if (!view_ctx || record.primitiveIndex < 0)
 	return false;
 
     const std::string pickedName = record.path.empty() ?
@@ -119,35 +94,61 @@ qg_obol_feature_pick_from_record(BRLObolViewController *controller,
     if (pickedName.empty())
 	return false;
 
-    return (owner && controller->features().resolvePrimitivePick(
-	pickedName.c_str(), static_cast<int32_t>(record.primitiveIndex), pick,
-	BRLOBOL_FEATURE_SCOPE_LOCAL, owner)) ||
-	controller->features().resolvePrimitivePick(pickedName.c_str(),
-	static_cast<int32_t>(record.primitiveIndex), pick,
-	BRLOBOL_FEATURE_SCOPE_SHARED, NULL);
+    struct bu_vls resolved_name = BU_VLS_INIT_ZERO;
+    const int resolved = ged_draw_view_context_feature_pick_primitive_resolve(
+	view_ctx, pickedName.c_str(), record.primitiveIndex, 0, 0,
+	&resolved_name, &feature_primitive);
+    if (resolved)
+	feature_name = bu_vls_cstr(&resolved_name);
+    bu_vls_free(&resolved_name);
+    return resolved ? true : false;
 }
 
 static void
-qg_obol_resolve_feature_pick(BRLObolViewController *controller,
-	const BRLObolFeatureOwner *owner,
+qg_obol_resolve_feature_pick(void *view_ctx,
 	QgObolPickRecord &record)
 {
     record.featurePickResolved = false;
     record.featureName.clear();
     record.featurePrimitiveIndex = -1;
+    record.featureMetadata.clear();
     record.featurePrimitiveMetadata.clear();
 
-    BRLObolFeaturePrimitivePick pick;
-    if (!qg_obol_feature_pick_from_record(controller, owner, record, pick))
+    if (!qg_obol_feature_pick_from_record(view_ctx, record,
+	record.featureName, record.featurePrimitiveIndex))
 	return;
 
     record.featurePickResolved = true;
-    record.featureName = pick.featureName.getString();
-    record.featurePrimitiveIndex = static_cast<int>(pick.primitiveIndex);
-    for (size_t i = 0; i < pick.metadata.size(); i++) {
-	record.featurePrimitiveMetadata.push_back(std::make_pair(
-		std::string(pick.metadata[i].key.getString()),
-		std::string(pick.metadata[i].value.getString())));
+    const size_t feature_metadata_count =
+	ged_draw_view_context_feature_metadata_count(view_ctx,
+	    record.featureName.c_str());
+    for (size_t i = 0; i < feature_metadata_count; i++) {
+	struct bu_vls key = BU_VLS_INIT_ZERO;
+	struct bu_vls value = BU_VLS_INIT_ZERO;
+	if (ged_draw_view_context_feature_metadata_copy(view_ctx,
+	    record.featureName.c_str(), i, &key, &value)) {
+	    record.featureMetadata.push_back(std::make_pair(
+		std::string(bu_vls_cstr(&key)),
+		std::string(bu_vls_cstr(&value))));
+	}
+	bu_vls_free(&key);
+	bu_vls_free(&value);
+    }
+    const size_t metadata_count =
+	ged_draw_view_context_feature_primitive_metadata_count(view_ctx,
+	    record.featureName.c_str(), record.featurePrimitiveIndex);
+    for (size_t i = 0; i < metadata_count; i++) {
+	struct bu_vls key = BU_VLS_INIT_ZERO;
+	struct bu_vls value = BU_VLS_INIT_ZERO;
+	if (ged_draw_view_context_feature_primitive_metadata_copy(view_ctx,
+	    record.featureName.c_str(), record.featurePrimitiveIndex, i,
+	    &key, &value)) {
+	    record.featurePrimitiveMetadata.push_back(std::make_pair(
+		std::string(bu_vls_cstr(&key)),
+		std::string(bu_vls_cstr(&value))));
+	}
+	bu_vls_free(&key);
+	bu_vls_free(&value);
     }
 }
 
@@ -189,29 +190,30 @@ qg_obol_pick_record(const BRLObolViewPickRecord &hit)
 }
 
 static int
-qg_obol_apply_feature_states(BRLObolViewController *controller,
-	const BRLObolFeatureOwner *owner,
+qg_obol_apply_feature_states(void *view_ctx,
 	const std::vector<QgObolPickRecord> &records,
 	bool select,
 	bool highlight)
 {
-    if (!controller || records.empty() || (!select && !highlight))
+    if (!view_ctx || records.empty() || (!select && !highlight))
 	return 0;
 
     struct FeaturePrimitiveGroup {
-	BRLObolFeatureHandle handle;
-	std::vector<int32_t> primitives;
+	std::string name;
+	std::vector<int> primitives;
     };
     std::vector<FeaturePrimitiveGroup> groups;
 
     for (const QgObolPickRecord &record : records) {
-	BRLObolFeaturePrimitivePick pick;
-	if (!qg_obol_feature_pick_from_record(controller, owner, record, pick))
+	std::string feature_name;
+	int feature_primitive = -1;
+	if (!qg_obol_feature_pick_from_record(view_ctx, record, feature_name,
+		feature_primitive))
 	    continue;
 
 	FeaturePrimitiveGroup *group = NULL;
 	for (FeaturePrimitiveGroup &candidate : groups) {
-	    if (candidate.handle.id == pick.handle.id) {
+	    if (candidate.name == feature_name) {
 		group = &candidate;
 		break;
 	    }
@@ -219,22 +221,25 @@ qg_obol_apply_feature_states(BRLObolViewController *controller,
 	if (!group) {
 	    groups.push_back(FeaturePrimitiveGroup());
 	    group = &groups.back();
-	    group->handle = pick.handle;
+	    group->name = feature_name;
 	}
 	if (std::find(group->primitives.begin(), group->primitives.end(),
-		pick.primitiveIndex) == group->primitives.end())
-	    group->primitives.push_back(pick.primitiveIndex);
+		feature_primitive) == group->primitives.end())
+	    group->primitives.push_back(feature_primitive);
     }
 
     int applied = 0;
     for (const FeaturePrimitiveGroup &group : groups) {
 	if (group.primitives.empty())
 	    continue;
-	if (select && !controller->features().replaceSelectedPrimitives(
-		group.handle, group.primitives))
+	if (select && !ged_draw_view_context_feature_selected_primitives_replace(
+		view_ctx, group.name.c_str(), group.primitives.data(),
+		group.primitives.size()))
 	    continue;
-	if (highlight && !controller->features().replaceHighlightedPrimitives(
-		group.handle, group.primitives))
+	if (highlight &&
+	    !ged_draw_view_context_feature_highlighted_primitives_replace(
+		view_ctx, group.name.c_str(), group.primitives.data(),
+		group.primitives.size()))
 	    continue;
 	applied++;
     }
@@ -242,8 +247,7 @@ qg_obol_apply_feature_states(BRLObolViewController *controller,
 }
 
 static void
-qg_obol_pick_records(BRLObolViewController *controller,
-	const BRLObolFeatureOwner *owner,
+qg_obol_pick_records(void *view_ctx,
 	const std::vector<BRLObolViewPickRecord> &hits,
 	std::vector<QgObolPickRecord> &records)
 {
@@ -251,7 +255,7 @@ qg_obol_pick_records(BRLObolViewController *controller,
     records.reserve(hits.size());
     for (const BRLObolViewPickRecord &hit : hits) {
 	QgObolPickRecord record = qg_obol_pick_record(hit);
-	qg_obol_resolve_feature_pick(controller, owner, record);
+	qg_obol_resolve_feature_pick(view_ctx, record);
 	records.push_back(record);
     }
 }
@@ -283,8 +287,7 @@ qg_obol_pick_point_internal(QgView *display,
     std::vector<BRLObolViewPickRecord> hits;
     const int count = brlobol_view_pick_point(controller, x, y,
 	radiusPixels, pickAll, hits, submittedSourceRequestCount);
-    BRLObolFeatureOwner owner = qg_obol_pick_view_owner(display);
-    qg_obol_pick_records(controller, &owner, hits, records);
+    qg_obol_pick_records(qg_obol_pick_view_context(display), hits, records);
     return count;
 }
 
@@ -327,8 +330,7 @@ qg_obol_pick_ray(QgView *display,
     std::vector<BRLObolViewPickRecord> hits;
     const int count = brlobol_view_pick_ray(controller, rayOrigin,
 	rayDirection, pickAll, hits, submittedSourceRequestCount);
-    BRLObolFeatureOwner owner = qg_obol_pick_view_owner(display);
-    qg_obol_pick_records(controller, &owner, hits, records);
+    qg_obol_pick_records(qg_obol_pick_view_context(display), hits, records);
     return count;
 }
 
@@ -422,10 +424,8 @@ qg_obol_pick_apply_feature_states(QgView *display,
 {
     if (!display)
 	return 0;
-    BRLObolViewController *controller = display->obolViewController();
-    BRLObolFeatureOwner owner = qg_obol_pick_view_owner(display);
-    return qg_obol_apply_feature_states(controller, &owner, records, select,
-	highlight);
+    return qg_obol_apply_feature_states(qg_obol_pick_view_context(display),
+	records, select, highlight);
 }
 
 // Local Variables:

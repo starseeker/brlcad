@@ -177,12 +177,10 @@ qgcanvas_obol_context_manager(bool software = false)
 static inline void
 qgcanvas_bind_obol_render_context(QgCanvasState &s)
 {
-    if (!s.obol || s.software_backend)
+    if (!s.obol)
 	return;
-    SoRenderManager *manager = s.obol->getRenderManager();
-    SoGLRenderAction *action = manager ? manager->getGLRenderAction() : NULL;
-    if (action)
-	action->setContextManager(qgcanvas_obol_context_manager(false));
+    s.obol->setRenderContextManager(
+	qgcanvas_obol_context_manager(s.software_backend));
 }
 
 static inline void
@@ -255,6 +253,12 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 
     qgcanvas_sync_obol_viewport(s, w);
     qgcanvas_advance_obol_progressive(s);
+    /* Endpoint-owned image producers, including the retained librt engine,
+     * publish completed worker frames through this host-thread hook.  The Qt
+     * canvases render directly instead of using
+     * BRLObolViewController::renderToImage(), so they must perform the same
+     * presentation synchronization explicitly before traversing the scene. */
+    s.obol->synchronizePresentation();
 
     const SbViewportRegion &region = s.obol->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();
@@ -343,6 +347,9 @@ qgcanvas_destroy_obol(QgCanvasState &s)
 {
     delete s.offscreen_renderer;
     s.offscreen_renderer = nullptr;
+    if (s.obol && s.obol->getRenderContextManager() ==
+	    qgcanvas_obol_context_manager(s.software_backend))
+	s.obol->setRenderContextManager(NULL);
     if (s.owns_obol)
 	delete s.obol;
     s.obol = nullptr;
@@ -354,9 +361,13 @@ static inline void
 qgcanvas_bind_obol_controller(QgCanvasState &s, const QWidget *w,
 	BRLObolViewController *controller)
 {
-    if (s.obol == controller)
+    if (s.obol == controller) {
+	qgcanvas_bind_obol_render_context(s);
 	return;
+    }
 
+    if (s.obol)
+	s.obol->setRenderContextManager(NULL);
     delete s.offscreen_renderer;
     s.offscreen_renderer = nullptr;
     if (s.owns_obol)

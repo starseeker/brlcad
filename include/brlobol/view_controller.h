@@ -198,7 +198,8 @@ public:
     void setSoftwareWireMode(SoftwareWireMode mode);
     SoftwareWireMode getSoftwareWireMode(void) const;
     SbBool syncCameraFromViewContext(const void *viewCtx,
-				     SbBool createCamera = TRUE);
+				     SbBool createCamera = TRUE,
+				     SbBool *changedOut = NULL);
     SbBool getViewInfo(struct bv_view_info *info) const;
 
     SbBool realizePending(void);
@@ -225,6 +226,8 @@ public:
     void completeRenderTiming(uint64_t startedNanoseconds);
     uint64_t getLastRenderTimeNanoseconds(void) const;
     uint64_t getSmoothedRenderTimeNanoseconds(void) const;
+    /** Capture with the controller-bound provider, or with a transient
+     * explicit override whose lifetime needs to extend only through this call. */
     int renderToImage(unsigned char **image,
 		      int flip = 0,
 		      int alpha = 0,
@@ -337,6 +340,12 @@ public:
     const BRLObolSelectionStore &selection(void) const;
     SoViewport *getViewport(void);
     const SoViewport *getViewport(void) const;
+    /** Bind the concrete rendering provider used by direct drawing and by
+     * renderToImage() when it has no explicit per-call override.  A NULL
+     * provider leaves scene/action services available but disables rendering;
+     * BRL-CAD never consults SoDB's process-global provider as a fallback. */
+    void setRenderContextManager(SoDB::ContextManager *manager);
+    SoDB::ContextManager *getRenderContextManager(void) const;
     SoRenderManager *getRenderManager(void);
     const SoRenderManager *getRenderManager(void) const;
 

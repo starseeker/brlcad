@@ -130,3 +130,44 @@ need, should target render batching or retained GPU buffers for VList sources.
 Do not reintroduce source aggregation into GED: the current profile shows that
 publication and redraw overhead have been removed and the remaining hot path is
 inside Obol/backend rendering.
+
+2026-07-15 Release Workflow Gate
+--------------------------------
+
+The Release probe was rerun after the final controller/presentation changes.
+Each case used a fresh cache, `--profile --autoview --render --redraw`, at
+least five rendered frames, enough progressive polling to settle, four
+aggregate appearance mutations, and `/usr/bin/time -v`.  `twin8.g fleet` is a
+generated eight-import Generic Twin assembly with 17,984 shapes and 7,709,088
+retained points; it supplies the production-scale case without relying on the
+broken external-resource examples in `primitives.g`.  Logs, peak-RSS records,
+and the generated database are under `.build_perf/obol_perf_20260715/`.
+
+| Model/policy | cold draw | first useful frame | steady frame | redraw | appearance update/render | peak RSS | final hash |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Havoc QUALITY | 581 ms | 31.4 ms | 2.77 ms | 0.016 ms | 7.18 / 27.9 ms | 99.9 MB | `bef2396b76a1d6ce` |
+| Havoc FAST | 600 ms | 14.5 ms | 2.30 ms | 0.020 ms | 5.32 / 13.9 ms | 80.7 MB | `1f3bd77d90056624` |
+| Generic Twin QUALITY | 1.012 s | 177.9 ms | 4.33 ms | 0.048 ms | 2.37 / 57.2 ms | 126.2 MB | `dc4c5cf73a52b116` |
+| Generic Twin FAST | 1.099 s | 185.0 ms | 3.12 ms | 0.031 ms | 1.99 / 23.6 ms | 89.0 MB | `f1ee22ea31ef3b5b` |
+| 8x Generic Twin QUALITY | 7.523 s | 59.6 ms | 2.60 ms | 0.020 ms | 17.4 / 443 ms | 620.1 MB | `b589a2a8fc71570e` |
+| 8x Generic Twin FAST | 7.429 s | 22.6 ms | 2.28 ms | 0.021 ms | 17.7 / 167 ms | 351.0 MB | `f1ee22ea31ef3b5b` |
+
+The progressive `render_ms` field is deliberately not a single interaction
+latency: the probe polls until detached realization settles.  First-frame and
+steady-frame values are the useful-pixel and settled interaction measures;
+draw, source counters, and the existing stage profile identify realization
+and submission cost.  Style churn exercises retained source deltas and the
+same rendering path used by selection, line style/color, and lighting policy.
+All six cases settled with no remaining work, bounded RSS, one retained source,
+and stable hashes across repeated captures.  Eightfold geometry raises memory
+approximately linearly but leaves redraw at 0.02 ms, confirming that retained
+redraw does not replay publication.
+
+System-GL comparison remains a hosted measurement, not a hidden mode in the
+OSMesa probe.  Native QGED/MGED X runs exercised the same HW endpoint and
+produced nonblank wire, shaded RT, camera-motion, capture, and faceplate
+frames.  The existing native QGED sampling profile places the remaining hot
+cost in Obol traversal/VList submission and Mesa rasterization; it finds no GED
+redraw or path-state work.  FAST/QUALITY therefore remain explicit OSMesa wire
+policies, while native GL is selected and measured through its real toolkit
+host rather than simulated by the neutral probe.

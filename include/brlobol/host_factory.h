@@ -75,6 +75,9 @@ struct brlobol_host_factory {
     int (*probe)(const struct brlobol_host_desc *desc, void *user_data);
     void *(*create)(const struct brlobol_host_desc *desc, void *user_data);
     void (*destroy)(void *instance, void *user_data);
+    /** Bind the controller and its concrete rendering provider.  Factories
+     * advertising GL, pixel, or progressive presentation must install a
+     * non-NULL provider before open succeeds. */
     int (*bind_controller)(void *instance, void *controller, void *user_data);
     int (*open)(void *instance, const struct brlobol_host_desc *desc,
 	void *user_data);
@@ -131,6 +134,9 @@ BRLOBOL_EXPORT int brlobol_host_factory_instance_create(
 	brlobol_host_factory_token_t *token,
 	const struct brlobol_host_desc *desc,
 	void *controller, void **instance);
+/** Explicitly replace or reassert an instance's controller binding. */
+BRLOBOL_EXPORT int brlobol_host_factory_instance_bind_controller(
+	brlobol_host_factory_token_t *token, void *instance, void *controller);
 BRLOBOL_EXPORT void brlobol_host_factory_instance_destroy(
 	brlobol_host_factory_token_t *token, void *instance);
 

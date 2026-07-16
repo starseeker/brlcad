@@ -91,10 +91,17 @@ QEll::QEll()
 
 
     QObject::connect(ell_name, &QLineEdit::textEdited, this, &QEll::update_viewobj_name);
+    QObject::connect(write_edit, &QPushButton::clicked,
+	this, &QEll::write_to_db);
+    QObject::connect(reset_values, &QPushButton::clicked,
+	this, &QEll::read_from_db);
 }
 
 QEll::~QEll()
 {
+    if (!qged_edit_feature_ref_is_null(p))
+	qged_edit_preview_publish_event(m_ctx, p, "_ell_edit",
+	    QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
     qged_edit_feature_clear_geometry(p);
     if (m_ctx) {
 	qged_edit_feature_remove(m_ctx, "_ell_edit");
@@ -123,6 +130,11 @@ QEll::read_from_db()
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_ELL) {
 	return;
     }
+
+    if (!qged_edit_feature_ref_is_null(p))
+	qged_edit_preview_publish_event(m_ctx, p, "_ell_edit",
+	    QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
+    p = QGED_EDIT_FEATURE_REF_NULL;
 
     struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
     if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
@@ -185,6 +197,10 @@ QEll::write_to_db()
 
     rt_db_free_internal(&intern);
 
+    qged_edit_preview_publish_event(m_ctx, p, "_ell_edit",
+	QGED_EDIT_PREVIEW_COMMIT, bu_vls_cstr(&oname));
+    p = QGED_EDIT_FEATURE_REF_NULL;
+
     emit view_updated(QG_VIEW_DB);
 }
 
@@ -234,9 +250,11 @@ QEll::update_obj_wireframe()
     if (!wdbp)
 	return;
     struct bn_tol *tol = &wdbp->wdb_tol;
-    qged_edit_feature_replace_ell_wireframe(p,
+    if (qged_edit_feature_replace_ell_wireframe(p,
 	    QGED_EDIT_FEATURE_TRANSIENT_PREVIEW,
-	    (const struct rt_ell_internal *)intern.idb_ptr);
+	    (const struct rt_ell_internal *)intern.idb_ptr))
+	qged_edit_preview_publish_event(m_ctx, p, "_ell_edit",
+	    QGED_EDIT_PREVIEW_UPDATE, bu_vls_cstr(&oname));
 
     // At least for now, mimic the MGED behavior and make editing wireframes white
     const char *wcolor = "255/255/255";

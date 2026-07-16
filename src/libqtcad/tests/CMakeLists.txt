@@ -10,7 +10,6 @@ set(TEST_QTCAD_OBOL_EDIT_PREVIEW_SRCS test_qtcad_obol_edit_preview.cpp)
 set(TEST_QTCAD_OBOL_EXPORT_SRCS test_qtcad_obol_export.cpp)
 set(TEST_QTCAD_OBOL_FACEPLATE_SYNC_SRCS test_qtcad_obol_faceplate_sync.cpp)
 set(TEST_QTCAD_OBOL_MEASURE_SRCS test_qtcad_obol_measure.cpp)
-set(TEST_QTCAD_OBOL_OVERLAY_SYNC_SRCS test_qtcad_obol_overlay_sync.cpp)
 set(TEST_QTCAD_OBOL_PICK_SRCS test_qtcad_obol_pick.cpp)
 set(TEST_QTCAD_OBOL_PROGRESSIVE_LOD_SRCS test_qtcad_obol_progressive_lod.cpp)
 set(TEST_QTCAD_OBOL_REAL_MODELS_SRCS test_qtcad_obol_real_models.cpp)
@@ -486,44 +485,6 @@ if(TARGET test_qtcad_obol_measure)
 endif(TARGET test_qtcad_obol_measure)
 
 if(TARGET Qt6::Widgets)
-  add_executable(test_qtcad_obol_overlay_sync ${TEST_QTCAD_OBOL_OVERLAY_SYNC_SRCS})
-  target_link_libraries(
-    test_qtcad_obol_overlay_sync
-    libqtcad
-    libged
-    libwdb
-    librt
-    libbg
-    libbu
-    Qt6::Widgets
-    )
-endif(TARGET Qt6::Widgets)
-if(NOT TARGET test_qtcad_obol_overlay_sync AND TARGET Qt5::Widgets)
-  add_executable(test_qtcad_obol_overlay_sync ${TEST_QTCAD_OBOL_OVERLAY_SYNC_SRCS})
-  target_link_libraries(
-    test_qtcad_obol_overlay_sync
-    libqtcad
-    libged
-    libwdb
-    librt
-    libbg
-    libbu
-    Qt5::Widgets
-    )
-endif(NOT TARGET test_qtcad_obol_overlay_sync AND TARGET Qt5::Widgets)
-if(TARGET test_qtcad_obol_overlay_sync)
-  target_compile_definitions(test_qtcad_obol_overlay_sync PRIVATE BRLCADBUILD HAVE_CONFIG_H)
-  brlcad_add_test(NAME test_qtcad_obol_overlay_sync COMMAND test_qtcad_obol_overlay_sync)
-  set_property(TEST test_qtcad_obol_overlay_sync
-    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
-  set_property(TEST test_qtcad_obol_overlay_sync
-    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
-  set_property(TEST test_qtcad_obol_overlay_sync
-    APPEND PROPERTY LABELS drawing_baseline)
-  distclean(${CMAKE_CURRENT_BINARY_DIR}/qtcad_obol_overlay_sync_tmp.g)
-endif(TARGET test_qtcad_obol_overlay_sync)
-
-if(TARGET Qt6::Widgets)
   add_executable(test_qtcad_obol_real_models ${TEST_QTCAD_OBOL_REAL_MODELS_SRCS})
   target_link_libraries(
     test_qtcad_obol_real_models
@@ -736,7 +697,6 @@ foreach(_qtcad_obol_offscreen_test
     test_qtcad_obol_export
     test_qtcad_obol_snap
     test_qtcad_obol_measure
-    test_qtcad_obol_overlay_sync
     test_qtcad_obol_progressive_lod
     test_qtcad_obol_progressive_lod_startup_refine
     test_qtcad_obol_progressive_lod_generic_twin_startup
@@ -867,7 +827,6 @@ cmakefiles(
   ${TEST_QTCAD_OBOL_EDIT_PREVIEW_SRCS}
   ${TEST_QTCAD_OBOL_FACEPLATE_SYNC_SRCS}
   ${TEST_QTCAD_OBOL_MEASURE_SRCS}
-  ${TEST_QTCAD_OBOL_OVERLAY_SYNC_SRCS}
   ${TEST_QTCAD_OBOL_PICK_SRCS}
   ${TEST_QTCAD_OBOL_PROGRESSIVE_LOD_SRCS}
   ${TEST_QTCAD_OBOL_REAL_MODELS_SRCS}

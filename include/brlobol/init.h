@@ -16,14 +16,14 @@
 /**
  * Initialize Obol and register the BRL-CAD Obol node/action/detail classes.
  *
- * Rendering applications should pass the application-owned Obol context
- * manager that will service GL or renderScene() backend requests.  The caller
- * owns the manager and must keep it alive for the life of any Obol renderer
- * that can use the global SoDB context manager.
+ * The optional manager initializes Coin/Obol's compatibility process-global
+ * context manager.  BRL-CAD view controllers and hosts do not select their
+ * rendering provider from that global state: hosts must bind a concrete
+ * provider with BRLObolViewController::setRenderContextManager().
  *
- * Passing NULL installs libbrlobol's no-op fallback manager.  That is useful
- * for non-rendering scene/action tests, but any renderer that relies on the
- * global context manager will fail unless a real manager is supplied.
+ * Passing NULL initializes Coin with libbrlobol's process-lifetime OSMesa
+ * manager for compatibility.  It does not implicitly enable controller
+ * rendering.
  *
  * If libbrlobol is already initialized, passing a non-NULL manager updates
  * Obol's active context manager without re-registering classes.

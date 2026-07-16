@@ -282,9 +282,18 @@ Standalone material-object identity, first mesh edge/vertex action identity,
 and typed edit-preview intent identity across pick/snap/measure/export are now
 covered.  SoBRLEditPreview can publish explicit edit-intent id/role metadata
 separate from preview-node identity, while preserving the old preview-id
-fallback.  Broader live edit-tool lifecycle/state semantics and stable
-face/edge/vertex IDs for tessellated curved primitives are still migration
-work.
+fallback.  The supported edit lifecycle is now covered from begin/motion and
+snap through authoritative preview replacement, accept/reject, selection
+change, database mutation, modifier/focus cancellation, plugin reuse, and
+active-edit teardown.  MGED and QGED application policy invokes one endpoint
+action and QGED editors explicitly commit, reset, or cancel their retained
+preview during lifecycle transitions.  BOT face and vertex interaction uses
+stable database indices and forces exact indexed detail when required.  The
+currently supported ellipsoid, extrusion, and revolve editors expose
+primitive parameters rather than tessellated face/edge/vertex selection, so
+there is no curved tessellation sub-identity to preserve today.  Any future
+curved sub-object tool must either define persistent IDs or request exact
+full-detail representation before it becomes supported.
 
 Librt Import Lifetime Guard
 ---------------------------
@@ -431,36 +440,29 @@ while the database source keeps the placement matrix.  This protects the direct
 publisher contract; transformed legacy producers are covered by the draw-mode
 image gates.
 
-Near-Term Gates
----------------
+Further Representation Work
+---------------------------
 
 1. Preserve the `GED_DRAW_MODE_EVAL_WIRE`, `GED_DRAW_MODE_HIDDEN_LINE`, and
    `GED_DRAW_MODE_EVAL_POINTS` representation paths in qged/qtcad integration
    work, including source bounds updates from external geometry publication.
-2. Add repeated-solid, repeated-comb, bounds, autoview, and selection/edit
-   identity regressions for multiple instances with different transforms.
-3. Define persistent shared-geometry cache keys, reference counts, invalidation
-   rules, and database-edit behavior before adding cross-refresh reuse.
+2. Keep the existing repeated-solid/comb, bounds, autoview, selection/edit,
+   duplicate-occurrence, and CSG identity regressions when adding new instance
+   representations.
+3. Keep persistent draw/LoD cache keys, object/path invalidation, database
+   replacement, and cross-refresh lifetime rules centralized in libbrlobol.
 4. Promote BREP and BSpline/NURB shaded rows from diagnostics to stable native
    or tessellated representation when the underlying converters are reliable.
 5. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and
    point-clouds to native Obol representations where that adds stable user
    value.
-6. Complete broader live edit-tool lifecycle/state semantics and extend stable
-   edge/vertex identity beyond the current indexed-mesh action coverage where
-   native or tessellated curved nodes need to report those sub-entities.
-7. Extend the bounded Generic_Twin startup gates into a full default
-   large-root refinement gate after automatic recursive/background
-   cache-backed expansion can publish AABB/OBB/mesh updates, including
-   view-local compact CAD payload updates, preserve mixed implicit/mesh
-   identity, report invalid large-BoT diagnostics, and avoid blocking routine
-   qtcad developer tests.
-8. Continue large-draw optimization from the measured bottlenecks: reduce
-   tree-walk/path-state cost, batch source replacement/publication, and replace
-   compact off-scene shape handles with tighter geometry/metadata records.
-   Obol flat segment-pair wire storage has already reduced CAD compact setup
-   for normal wire draws.  Prototype publication-time multi-instance compact
-   sources only where repeated part geometry is actually present, and do not
-   use render-time group/root CAD aggregation as the default; profiling showed
-   it does not reduce replacement/realization setup costs and can make
-   Generic_Twin render much slower than flat source-local compact assemblies.
+6. Extend stable edge/vertex identity only when a future native or tessellated
+   curved editor actually exposes those sub-entities; do not invent identity
+   for parameter-only tools.
+7. Keep the bounded Generic-Twin metadata-only startup, automatic background
+   expansion, mixed implicit/mesh identity, proxy-to-compact handoff, and
+   repeated-scene stress gates as the production scheduler evolves.
+8. Continue optional large-draw optimization at the measured rendering
+   bottleneck: retained GPU buffers or batching may improve VList submission.
+   Do not restore GED publication replay or render-time root aggregation; the
+   current retained source/index path already makes redraw effectively free.

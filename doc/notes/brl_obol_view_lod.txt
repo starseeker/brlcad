@@ -540,8 +540,8 @@ The same test keeps the large DB-index fanout stress fixture isolated from
 later event/draw service coverage by reopening a fresh fixture after the index
 section.
 
-Follow-up Coverage Needed
--------------------------
+Production Exit Status
+----------------------
 
 Current application-level progressive coverage exercises staged AABB -> OBB ->
 mesh startup using delayed cache generation, checks scene-state payload
@@ -557,9 +557,11 @@ direct comb roots can start as metadata-only source structure, consume
 worker-populated leaf proxy records through bounded visible-frontier passes,
 and render without full leaf realization; the manual startup-expand case still
 refreshes autoview from Obol source bounds after proxy publication.
-Direct startup-refine still times out after proxy-visible expansion because
-full-detail promotion expands the whole root synchronously.  The
-qtcad harness timing line separates copy/open/view setup, cache clear,
+The older direct startup-refine harness can still time out if it explicitly
+requests synchronous promotion of an entire root after proxy-visible
+expansion.  That path is not the production scheduler: production uses the
+provider-based detached final realization and bounded controller ticks
+described below.  The qtcad harness timing line separates copy/open/view setup, cache clear,
 tolerance setup, facetize, repeated-target construction, LoD policy setup, GED
 draw transaction, Obol sync, autoview, first framebuffer readback, service
 startup, submit, and AABB/OBB/mesh settlement.  Use those fields to distinguish
@@ -593,3 +595,17 @@ region/material/shader fields are present on the deferred proxy scene shape.
 Removal/rename path cleanup is covered by cache-side object-name invalidation;
 remaining coverage should focus on future non-startup callers that begin
 consuming path metadata as long-lived truth.
+
+On 2026-07-15 the production exit matrix passed nine of nine focused cases:
+the LoD update action, qtcad progressive controller, startup-refine,
+Generic-Twin startup, manual expansion, automatic expansion, wire and shaded
+LoD, and the opt-in repeated-Moss stress case.  The service and realization
+tests plus GSH and MGED progressive-LoD smokes also passed.  These runs prove
+metadata-only large-root startup, useful proxy pixels before full detail,
+bounded visible-frontier work, worker-only population, automatic pending
+autoview, identity-preserving proxy-to-compact handoff, stale/cancelled result
+rejection, camera-only frames without source publication, and teardown after
+repeated transitions.  Native QGED and MGED host runs separately exercised
+live canvas replacement/resize and retained camera changes.  The remaining
+items in this section are optional representation enhancements or future-
+caller coverage, not blockers for the production LoD workflow.

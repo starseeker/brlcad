@@ -238,7 +238,7 @@ motion_event_handler(struct mged_state *s, int mx, int my)
 		    const char name[] = "name";
 		    void *base = 0;
 		    const char value[] = "value";
-		    rb_set_dirty_flag(sdp, name, base, value, NULL);
+		    rb_set_dirty_flag(sdp, name, base, value, s);
 		}
 
 		goto handled;

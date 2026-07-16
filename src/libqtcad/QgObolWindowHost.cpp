@@ -65,6 +65,16 @@ qg_obol_window_host_render_size(const QWidget *widget)
     return QSize(width > 0 ? width : 1, height > 0 ? height : 1);
 }
 
+static QSize
+qg_obol_window_host_logical_size(const QWidget *widget, unsigned int width,
+	unsigned int height)
+{
+    const qreal dpr = widget && widget->devicePixelRatioF() > 0.0 ?
+	widget->devicePixelRatioF() : 1.0;
+    return QSize(qMax(1, static_cast<int>(std::ceil(width / dpr))),
+	qMax(1, static_cast<int>(std::ceil(height / dpr))));
+}
+
 static BRLObolWindowDesc
 qg_obol_window_host_desc(const BRLObolWindowDesc *input, const QWidget *widget)
 {
@@ -121,9 +131,11 @@ qg_obol_window_host_create_canvas(const BRLObolWindowDesc *desc)
     QgSW *canvas = new QgSW(NULL);
     QWidget *widget = canvas->canvasWidget();
     if (desc->width || desc->height) {
-	int width = desc->width ? (int)desc->width : widget->width();
-	int height = desc->height ? (int)desc->height : widget->height();
-	widget->resize(width > 0 ? width : 1, height > 0 ? height : 1);
+	const QSize renderSize = qg_obol_window_host_render_size(widget);
+	const QSize logicalSize = qg_obol_window_host_logical_size(widget,
+	    desc->width ? desc->width : (unsigned int)renderSize.width(),
+	    desc->height ? desc->height : (unsigned int)renderSize.height());
+	widget->resize(logicalSize);
     }
     if (desc->title.getLength() > 0)
 	widget->setWindowTitle(QString::fromUtf8(desc->title.getString()));
@@ -222,14 +234,19 @@ QgObolWindowHost::open(const BRLObolWindowDesc *desc)
 	this->qp->canvas->setObolViewController(controller);
     if (!controller)
 	this->attachController(this->qp->canvas->obolViewController(), FALSE);
+    controller = this->getController();
+    if (!controller || !controller->getRenderContextManager())
+	return -1;
 
     QWidget *widget = this->qp->canvas->canvasWidget();
     /* Embedded canvases are sized and shown by their owning application.
      * Re-entering QWidget::show/resize from endpoint or framebuffer setup can
      * synchronously recurse through view and fbserv callbacks. */
     if (widget && desc && this->qp->ownsCanvas) {
-	widget->resize(desc->width ? (int)desc->width : 1,
-	    desc->height ? (int)desc->height : 1);
+	const QSize logicalSize = qg_obol_window_host_logical_size(widget,
+	    desc->width ? desc->width : 1,
+	    desc->height ? desc->height : 1);
+	widget->resize(logicalSize);
 	if (desc->title.getLength())
 	    widget->setWindowTitle(QString::fromUtf8(desc->title.getString()));
 	if (desc->visible)
@@ -428,7 +445,9 @@ qg_factory_bind(void *instance, void *controller, void *UNUSED(user_data))
     if (!host)
 	return 0;
     host->bindController(static_cast<BRLObolViewController *>(controller));
-    return 1;
+    BRLObolViewController *bound = host->getController();
+    return !controller || (bound == controller &&
+	bound->getRenderContextManager() != NULL);
 }
 
 static BRLObolWindowDesc
@@ -487,6 +506,25 @@ qg_factory_resize(void *instance, unsigned int width, unsigned int height,
     QWidget *widget = host->canvas()->canvasWidget();
     widget->resize((int)std::ceil(width / device_pixel_ratio),
 	(int)std::ceil(height / device_pixel_ratio));
+    return 1;
+}
+
+static int
+qg_factory_dimensions(void *instance, unsigned int *width,
+	unsigned int *height, double *device_pixel_ratio,
+	void *UNUSED(user_data))
+{
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(instance);
+    QWidget *widget = host && host->canvas() ?
+	host->canvas()->canvasWidget() : NULL;
+    if (!widget || !width || !height || !device_pixel_ratio)
+	return 0;
+
+    const QSize render_size = qg_obol_window_host_render_size(widget);
+    *width = static_cast<unsigned int>(render_size.width());
+    *height = static_cast<unsigned int>(render_size.height());
+    const qreal dpr = widget->devicePixelRatioF();
+    *device_pixel_ratio = dpr > 0.0 ? static_cast<double>(dpr) : 1.0;
     return 1;
 }
 
@@ -596,6 +634,7 @@ qg_factory_register(const char *name, int priority, uint64_t capabilities,
     factory.close = qg_factory_close;
     factory.request_frame = qg_factory_request_frame;
     factory.resize = qg_factory_resize;
+    factory.dimensions = qg_factory_dimensions;
     factory.capture = qg_factory_capture;
     factory.set_title = qg_factory_set_title;
     factory.set_visible = qg_factory_set_visible;

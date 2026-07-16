@@ -36,7 +36,6 @@
 
 #include <Inventor/SoDB.h>
 #include <Inventor/SoRenderManager.h>
-#include <Inventor/actions/SoGLRenderAction.h>
 
 #include "vendor/togl/togl.h"
 
@@ -131,7 +130,7 @@ public:
 		return reinterpret_cast<void *>(proc);
 	}
 #endif
-	return this->offscreen ? this->offscreen->getProcAddress(name) : NULL;
+	return NULL;
     }
 
 private:
@@ -183,13 +182,14 @@ public:
 
     int bind(BRLObolViewController *new_controller)
     {
+	if (this->controller && this->controller != new_controller)
+	    this->controller->setRenderContextManager(NULL);
 	this->controller = new_controller;
-	SoRenderManager *manager = this->controller ?
-	    this->controller->getRenderManager() : NULL;
-	SoGLRenderAction *action = manager ? manager->getGLRenderAction() : NULL;
-	if (action)
-	    action->setContextManager(tk_endpoint_context_manager());
-	return 1;
+	if (!this->controller)
+	    return 1;
+	this->controller->setRenderContextManager(tk_endpoint_context_manager());
+	return this->controller->getRenderContextManager() ==
+	    tk_endpoint_context_manager();
     }
 
     int open(const struct brlobol_host_desc *desc)
@@ -200,7 +200,9 @@ public:
 	if (BrlcadTkObolHost_Init(this->interp) != TCL_OK)
 	    return 0;
 
-	brlobol_init(tk_endpoint_context_manager());
+	/* Obol class registration is process-global, but rendering policy is not.
+	 * bind() installs this host's concrete provider on the controller. */
+	brlobol_init(NULL);
 	this->width = desc->width ? desc->width : 1;
 	this->height = desc->height ? desc->height : 1;
 	this->input_dispatch = desc->input_dispatch;
@@ -299,6 +301,12 @@ public:
 	if (is_toplevel && !this->eval({"pack", this->widget_path.c_str(),
 	    "-expand", "true", "-fill", "both"}))
 	    return this->open_failed();
+	if (is_toplevel) {
+	    const std::string geometry = swidth + "x" + sheight;
+	    if (!this->eval({"wm", "geometry", this->container_path.c_str(),
+		geometry.c_str()}))
+		return this->open_failed();
+	}
 
 	Tk_MapWindow(this->tkwin);
 	if (is_toplevel) {
@@ -347,6 +355,9 @@ public:
 	this->opened = false;
 	this->toplevel = false;
 	this->visible = false;
+	if (this->controller && this->controller->getRenderContextManager() ==
+		tk_endpoint_context_manager())
+	    this->controller->setRenderContextManager(NULL);
 	this->controller = NULL;
     }
 
@@ -453,18 +464,40 @@ public:
 
     int resize(unsigned int new_width, unsigned int new_height,
 	double device_pixel_ratio)
-	{
+    {
 	if (!this->opened || !this->tkwin || !new_width || !new_height ||
 	    device_pixel_ratio <= 0.0)
 	    return 0;
 	this->width = new_width;
 	this->height = new_height;
+	const std::string swidth = std::to_string(new_width);
+	const std::string sheight = std::to_string(new_height);
+	if (this->software) {
+#if TK_MAJOR_VERSION < 9
+	    if (this->photo && Tk_PhotoSetSize(this->interp, this->photo,
+		(int)new_width, (int)new_height) != TCL_OK)
+		return 0;
+#else
+	    if (this->photo && Tk_PhotoSetSize(this->photo, (int)new_width,
+		(int)new_height) != TCL_OK)
+		return 0;
+#endif
+	} else if (!this->eval({this->widget_command_name.c_str(), "configure",
+	    "-width", swidth.c_str(), "-height", sheight.c_str()})) {
+	    return 0;
+	}
 	Tk_GeometryRequest(this->tkwin,
 	    std::max(1, (int)(new_width / device_pixel_ratio)),
 	    std::max(1, (int)(new_height / device_pixel_ratio)));
+	if (this->toplevel) {
+	    const std::string geometry = swidth + "x" + sheight;
+	    if (!this->eval({"wm", "geometry", this->container_path.c_str(),
+		geometry.c_str()}))
+		return 0;
+	}
 	this->controller->setViewportSize(new_width, new_height);
 	return this->request("Tk endpoint resize");
-	}
+    }
 
     int capture(unsigned char **pixels, size_t *size, unsigned int *out_width,
 	unsigned int *out_height, unsigned int *components)
@@ -475,7 +508,7 @@ public:
 	*pixels = NULL;
 	if (this->software) {
 	    if (this->controller->renderToImage(pixels, 0, 1, NULL,
-		brlobol_headless_context_manager(), NULL) != BRLCAD_OK || !*pixels)
+		tk_endpoint_context_manager(), NULL) != BRLCAD_OK || !*pixels)
 		return 0;
 	} else {
 	    if (!this->render_hardware(false) ||
@@ -695,7 +728,7 @@ private:
 	unsigned char *pixels = NULL;
 	BRLObolProgressiveStatus progressive;
 	if (this->controller->renderToImage(&pixels, 1, 0, NULL,
-		brlobol_headless_context_manager(), &progressive) != BRLCAD_OK ||
+		tk_endpoint_context_manager(), &progressive) != BRLCAD_OK ||
 	    !pixels)
 	    return false;
 
@@ -726,6 +759,9 @@ private:
 
     bool render_hardware(bool present)
     {
+	if (!this->controller || this->controller->getRenderContextManager() !=
+		tk_endpoint_context_manager())
+	    return false;
 	if (!this->widget_command("makecurrent"))
 	    return false;
 	this->sync_size();

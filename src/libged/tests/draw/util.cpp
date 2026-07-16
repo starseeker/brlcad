@@ -480,7 +480,7 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 	bu_log("Obol draw-test capture requested, but OSMesa context manager is unavailable\n");
 	return -1;
     }
-    brlobol_init(manager);
+    brlobol_init(NULL);
 
     void *v = view_ctx ? view_ctx : draw_test_active_view_ctx(gedp);
     if (!v)

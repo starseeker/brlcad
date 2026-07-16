@@ -1417,6 +1417,24 @@ ged_draw_view_context_feature_realize(void *view_ctx,
 				      const char *name,
 				      int recursive);
 
+/**
+ * Command-result metadata is an ordered key/value collection.  Diagnostic
+ * producers use `result.schema` to identify a versioned schema and
+ * `result.severity` values `info`, `warning`, `error`, or `mixed`.  The
+ * currently defined command schemas are:
+ *
+ * * `brlcad.rtcheck.overlap.v1`
+ * * `brlcad.nirt.query-ray.v1`
+ * * `brlcad.check.overlap.v1`
+ * * `brlcad.gqa.{overlap,gap,adjacent-air,exposed-air,volume-sample}.v1`
+ *
+ * Per-primitive diagnostic records use `result.primitive.kind`,
+ * `segment.start_mm`, and `segment.end_mm`.  Ray results additionally use
+ * `hit.entry_mm` and `hit.exit_mm`; check overlap records add
+ * `overlap.region_a`, `overlap.region_b`, and `overlap.depth_mm`; NIRT
+ * partition records may add `nirt.partition.parity`.  Consumers must use the
+ * neutral copy APIs below rather than libbrlobol feature-store records.
+ */
 GED_EXPORT extern size_t
 ged_draw_view_context_feature_metadata_count(void *view_ctx,
 	const char *name);

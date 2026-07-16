@@ -55,6 +55,7 @@
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "brlobol/display_endpoint.h"
+#include "brlobol/init.h"
 #include "brlobol/view_attachment.h"
 #include "brlobol/scene_controller.h"
 #include "brlobol/view_controller.h"
@@ -582,6 +583,8 @@ test_owned_render_endpoint(const char *datadir)
 	bu_log("FAIL: owned endpoint did not bind a per-view render root\n");
 	fail = 1;
     }
+    if (!fail)
+	controller->setRenderContextManager(brlobol_headless_context_manager());
 
     const char *status_av[3] = {"dm", "status", NULL};
     if (!fail && (ged_exec_dm(gedp, 2, status_av) != BRLCAD_OK ||

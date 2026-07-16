@@ -431,6 +431,7 @@ initialize_endpoint(struct ged *gedp, const struct options &opts)
 	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
     if (!controller)
 	return NULL;
+    controller->setRenderContextManager(performance_context_manager());
     controller->setViewportSize((unsigned int)opts.width,
 	(unsigned int)opts.height);
     controller->setSoftwareWireMode(opts.software_wire);
@@ -880,7 +881,7 @@ main(int argc, const char **argv)
 	std::fprintf(stderr, "ged_draw_perf: OSMesa context manager unavailable\n");
 	return 1;
     }
-    brlobol_init(manager);
+    brlobol_init(NULL);
 
     std::printf("ged_draw_perf db=%s endpoint=obol draw_args=",
 	opts.db_path.c_str());

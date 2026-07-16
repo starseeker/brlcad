@@ -206,9 +206,10 @@ BRLObolInputContext::dispatch(const BRLObolInputEvent *event) const
      * a gesture.  Copy both candidate actions and handlers before invoking it
      * so replacement cannot invalidate a binding needed for fallthrough. */
     const BRLObolInputAction baseAction = baseWinner ? baseWinner->action :
-	BRLOBOL_ACTION_NONE;
+	static_cast<BRLObolInputAction>(BRLOBOL_ACTION_NONE);
     const BRLObolInputAction layerAction = layerWinner ?
-	layerWinner->action : BRLOBOL_ACTION_NONE;
+	layerWinner->action :
+	static_cast<BRLObolInputAction>(BRLOBOL_ACTION_NONE);
     BRLObolInputActionHandler baseHandler = this->handler;
     void *baseHandlerData = this->handlerData;
     BRLObolInputActionHandler appHandler = this->layerHandler;

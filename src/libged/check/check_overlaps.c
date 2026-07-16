@@ -31,12 +31,28 @@
 #include "../ged_private.h"
 #include "./check_private.h"
 
+struct ged_check_plot_segment {
+    char *region_a;
+    char *region_b;
+    double depth_mm;
+    point_t entry_mm;
+    point_t exit_mm;
+};
+
 struct ged_check_plot {
     struct bg_line_layer_builder *builder;
+    struct ged_check_plot_segment *segments;
+    size_t segment_count;
+    size_t segment_capacity;
 };
 
 static int
-ged_check_plot_append(struct ged_check_plot *plot, const point_t a, const point_t b)
+ged_check_plot_append(struct ged_check_plot *plot,
+    const char *region_a,
+    const char *region_b,
+    double depth_mm,
+    const point_t a,
+    const point_t b)
 {
     if (!plot)
 	return 0;
@@ -46,7 +62,29 @@ ged_check_plot_append(struct ged_check_plot *plot, const point_t a, const point_
 
     if (!bg_line_layer_builder_add(plot->builder, 255, 255, 0, a, BG_GEOMETRY_LINE_MOVE))
 	return 0;
-    return bg_line_layer_builder_add(plot->builder, 255, 255, 0, b, BG_GEOMETRY_LINE_DRAW);
+    if (!bg_line_layer_builder_add(plot->builder, 255, 255, 0, b, BG_GEOMETRY_LINE_DRAW))
+	return 0;
+
+    if (plot->segment_count >= plot->segment_capacity) {
+	size_t capacity = plot->segment_capacity ?
+	    plot->segment_capacity * 2 : 64;
+	plot->segments = (struct ged_check_plot_segment *)bu_realloc(
+	    plot->segments, capacity * sizeof(struct ged_check_plot_segment),
+	    "check overlap plot segments");
+	memset(plot->segments + plot->segment_capacity, 0,
+	    (capacity - plot->segment_capacity) *
+	    sizeof(struct ged_check_plot_segment));
+	plot->segment_capacity = capacity;
+    }
+
+    struct ged_check_plot_segment *segment =
+	&plot->segments[plot->segment_count++];
+    segment->region_a = bu_strdup(region_a ? region_a : "");
+    segment->region_b = bu_strdup(region_b ? region_b : "");
+    segment->depth_mm = depth_mm;
+    VMOVE(segment->entry_mm, a);
+    VMOVE(segment->exit_mm, b);
+    return 1;
 }
 
 static void
@@ -57,6 +95,12 @@ ged_check_plot_free(struct ged_check_plot *plot)
 
     if (plot->builder)
 	bg_line_layer_builder_free(plot->builder);
+    for (size_t i = 0; i < plot->segment_count; i++) {
+	bu_free(plot->segments[i].region_a, "check overlap region a");
+	bu_free(plot->segments[i].region_b, "check overlap region b");
+    }
+    if (plot->segments)
+	bu_free(plot->segments, "check overlap plot segments");
     memset(plot, 0, sizeof(*plot));
 }
 
@@ -122,16 +166,18 @@ check_publish_overlap_label(struct ged *gedp, void *view_ctx,
 	    snprintf(total, sizeof(total), "%zu", context->noverlaps);
 	    snprintf(unique, sizeof(unique), "%zu",
 		    context->unique_overlap_count);
-	    struct ged_draw_command_scene_metadata metadata[5] = {
+	    struct ged_draw_command_scene_metadata metadata[7] = {
 		{"result.feature", label.label_id},
 		{"result.owner", "check"},
 		{"result.kind", "overlap-summary"},
 		{"result.overlap_count", total},
-		{"result.unique_overlap_count", unique}
+		{"result.unique_overlap_count", unique},
+		{"result.schema", "brlcad.check.overlap-summary.v1"},
+		{"result.severity", context->noverlaps ? "error" : "info"}
 	    };
 	    int metadata_published = published ?
 		ged_draw_command_scene_feature_metadata_replace(scene,
-			label.label_id, metadata, 5) : 0;
+			label.label_id, metadata, 7) : 0;
 	    if (published && metadata_published &&
 		    ged_draw_command_scene_commit(scene)) {
 		bu_vls_free(&text);
@@ -152,8 +198,9 @@ check_publish_overlap_label(struct ged *gedp, void *view_ctx,
 
 static int
 check_publish_overlap_lines(struct ged *gedp, void *view_ctx,
-	const struct bg_line_layer_builder *builder)
+	const struct ged_check_plot *plot)
 {
+    const struct bg_line_layer_builder *builder = plot ? plot->builder : NULL;
     if (!gedp || !builder)
 	return 0;
 
@@ -176,21 +223,59 @@ check_publish_overlap_lines(struct ged *gedp, void *view_ctx,
 			"check::overlaps", builder, &style);
 	    char layer_count[64] = {0};
 	    char point_count[64] = {0};
+	    char primitive_count[64] = {0};
 	    snprintf(layer_count, sizeof(layer_count), "%zu",
 		    bg_line_layer_builder_layer_count(builder));
 	    snprintf(point_count, sizeof(point_count), "%zu",
 		    bg_line_layer_builder_point_count(builder));
-	    struct ged_draw_command_scene_metadata metadata[6] = {
+	    snprintf(primitive_count, sizeof(primitive_count), "%zu",
+		    plot->segment_count);
+	    struct ged_draw_command_scene_metadata metadata[10] = {
 		{"result.feature", "check::overlaps"},
 		{"result.format", "line-layer-builder"},
 		{"result.layer_count", layer_count},
 		{"result.point_count", point_count},
 		{"result.owner", "check"},
-		{"result.kind", "overlap"}
+		{"result.kind", "overlap"},
+		{"result.schema", "brlcad.check.overlap.v1"},
+		{"result.severity", "error"},
+		{"result.primitive_count", primitive_count},
+		{"result.units", "mm"}
 	    };
 	    int metadata_published = published ?
 		ged_draw_command_scene_feature_metadata_replace(scene,
-			"check::overlaps", metadata, 6) : 0;
+			"check::overlaps", metadata, 10) : 0;
+	    for (size_t i = 0; metadata_published &&
+		    i < plot->segment_count; i++) {
+		const struct ged_check_plot_segment *segment =
+		    &plot->segments[i];
+		char primitive[64] = {0};
+		char depth[64] = {0};
+		char entry[192] = {0};
+		char exit[192] = {0};
+		snprintf(primitive, sizeof(primitive), "%zu", i);
+		snprintf(depth, sizeof(depth), "%.17g", segment->depth_mm);
+		snprintf(entry, sizeof(entry), "%.17g %.17g %.17g",
+		    V3ARGS(segment->entry_mm));
+		snprintf(exit, sizeof(exit), "%.17g %.17g %.17g",
+		    V3ARGS(segment->exit_mm));
+		struct ged_draw_command_scene_metadata primitive_metadata[10] = {
+		    {"result.schema", "brlcad.check.overlap.v1"},
+		    {"result.primitive", primitive},
+		    {"result.primitive.kind", "overlap"},
+		    {"result.severity", "error"},
+		    {"overlap.region_a", segment->region_a},
+		    {"overlap.region_b", segment->region_b},
+		    {"overlap.depth_mm", depth},
+		    {"hit.entry_mm", entry},
+		    {"hit.exit_mm", exit},
+		    {"result.units", "mm"}
+		};
+		metadata_published =
+		    ged_draw_command_scene_feature_primitive_metadata_replace(
+			scene, "check::overlaps", (int)i,
+			primitive_metadata, 10);
+	    }
 	    if (published && metadata_published &&
 		    ged_draw_command_scene_commit(scene))
 		return 1;
@@ -409,7 +494,8 @@ overlap(const struct xray *ray,
 
     if (context->overlaps_overlay_flag) {
 	bu_semaphore_acquire(context->sem_stats);
-	(void)ged_check_plot_append(context->overlaps_overlay_plot, ihit, ohit);
+	(void)ged_check_plot_append(context->overlaps_overlay_plot,
+	    reg1->reg_name, reg2->reg_name, depth, ihit, ohit);
 	bu_semaphore_release(context->sem_stats);
     }
 
@@ -499,8 +585,7 @@ int check_overlaps(struct ged *gedp, struct current_state *state,
     printOverlaps(gedp, &callbackdata, options);
 
     if (overlay_enabled) {
-	(void)check_publish_overlap_lines(gedp, view_ctx,
-		check_plot.builder);
+	(void)check_publish_overlap_lines(gedp, view_ctx, &check_plot);
 	ged_check_plot_free(&check_plot);
     }
     if (options->overlaps_overlay_flag)

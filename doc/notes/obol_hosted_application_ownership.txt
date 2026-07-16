@@ -58,6 +58,14 @@ QGED
   display endpoint, and controller.  It also proves that an explicit
   endpoint-owned background survives replacement; a newly created canvas may
   not seed the retained controller from its own passive view defaults.
+  On 2026-07-15 the hardware QGED host was also exercised on a native X
+  server with the retained RT engine.  The Qt factory now reports the live
+  canvas dimensions (including device-pixel ratio) after layout, and viewport
+  image polling synchronizes worker presentation before traversing the scene.
+  A 912x678 Moss capture consequently contains the shaded RT frame across the
+  complete canvas rather than a stale startup-sized layer or only the cleared
+  gradient.  `test_qtcad_obol_window_host` independently resizes a live canvas
+  and proves both endpoint dimension refresh and presentation synchronization.
 
 MGED
 ----
@@ -104,7 +112,15 @@ MGED
   isolated-X smoke checks zoom-rectangle completion, post-release,
   modifier-release, and focus-loss cancellation, and verifies the migrated
   native bindings are inert.
-  It captures a frame and releases the host.
+  It captures a nonblank System-GL frame and releases the host.  The native
+  toplevel and its Togl child now both follow endpoint resize; the smoke
+  verifies their physical 320x240 dimensions instead of trusting only passive
+  BV size.  The same native-X run switches that retained endpoint to RT,
+  captures a shaded frame, changes the camera, captures a distinct second
+  frame, and switches back to HW.  Geometry revision remains 1 while
+  presentation revision advances from 1 to 2, proving camera-only interaction
+  does not rebuild the retained raytrace scene.  Both RT captures are nonblank
+  320x240 images and include the endpoint background/faceplate composition.
   This is usable-X11 lifecycle coverage.  The same Tk bridge is compiled for
   WGL but still needs native Windows validation; macOS needs a supported Tk
   host and validation.
@@ -198,17 +214,20 @@ Tcl Ged, Archer, and rtwizard
   is then released.  `tclcad_test_archer_obol_smoke` instantiates the view-only
   embedded `ArcherCore` configuration used by the historical rtwizard GUI,
   verifies its four `tkobol` endpoints, draws, and verifies that all four
-  widgets and the native GED command are removed.
+  widgets and the native GED command are removed.  The
+  `rtwizard_gui_obol_smoke` regression starts the production historical GUI,
+  selects its rendering page, verifies the embedded four-pane `ArcherCore`,
+  draws through the active Tk Obol endpoint, writes the live framebuffer over
+  IPC, captures the composed pixel, and verifies teardown leaves no GED views
+  or endpoints.  It passes both under its isolated Xvfb harness and against a
+  usable native X display.
   `RtControl` is now a `cadwidgets::Ged`-only component; its unreachable
   `Mged` branches have been deleted.
 
 Required Follow-up
 ------------------
 
-1. Add a full historical-rwizard workflow smoke only if that GUI is restored
-   as a supported application.  Its hosted drawing ownership is already
-   covered by the embedded `ArcherCore` lifecycle test.
-2. Treat a hidden quad pane as an intentional inactive hosted view, not an
+1. Treat a hidden quad pane as an intentional inactive hosted view, not an
    excuse to share controllers or native hosts.  If lazy pane creation is
    introduced for resource use, preserve the same one-context/one-endpoint
    ownership and add lifecycle coverage before deleting the eager path.

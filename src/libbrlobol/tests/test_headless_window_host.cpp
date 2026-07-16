@@ -137,11 +137,15 @@ visible_desc(unsigned int width, unsigned int height)
 }
 
 static int
-test_headless_contract(void)
+test_headless_contract(HeadlessTestContextManager *manager)
 {
     BRLObolHeadlessWindowHost host;
     BRLObolWindowDesc desc = visible_desc(7, 5);
 
+    host.setContextManager(NULL);
+    CHECK(host.open(&desc) != 0,
+	  "headless host rejects an ambiguous rendering provider");
+    host.setContextManager(manager);
     CHECK(host.open(&desc) == 0, "headless host opens");
     CHECK(host.isOpen(), "headless host records open state");
     CHECK(host.getDesc().mode == BRLOBOL_WINDOW_HEADLESS,
@@ -178,6 +182,7 @@ static int
 test_headless_render_pending(HeadlessTestContextManager *manager)
 {
     BRLObolHeadlessWindowHost host;
+    host.setContextManager(manager);
     BRLObolWindowDesc desc = visible_desc(6, 4);
     CHECK(host.open(&desc) == 0, "headless host opens for render");
 
@@ -222,9 +227,10 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
 }
 
 static int
-test_imgstream_headless_poll(HeadlessTestContextManager *UNUSED(manager))
+test_imgstream_headless_poll(HeadlessTestContextManager *manager)
 {
     BRLObolHeadlessWindowHost host;
+    host.setContextManager(manager);
     host.setOutputComponents(4);
 
     imgstream_fb_t *fb = brlobol_window_host_open_display_framebuffer(&host, "/dev/swrast", 3, 2);
@@ -248,6 +254,53 @@ test_imgstream_headless_poll(HeadlessTestContextManager *UNUSED(manager))
 	  "swrast poll records framebuffer render reason");
 
     imgstream_fb_close(fb);
+    return 0;
+}
+
+static int
+test_controller_provider_switch(void)
+{
+    HeadlessTestContextManager first;
+    HeadlessTestContextManager second;
+    HeadlessTestContextManager oneShot;
+    BRLObolHeadlessWindowHost host;
+    BRLObolWindowDesc desc = visible_desc(4, 3);
+    host.setContextManager(&first);
+    CHECK(host.open(&desc) == 0, "provider-switch host opens");
+    SoGroup *root = static_cast<SoGroup *>(host.getController()->getSceneRoot());
+    root->addChild(new SoCube);
+
+    unsigned char *image = NULL;
+    CHECK(host.getController()->renderToImage(&image, 0, 0) == BRLCAD_OK &&
+	image && first.renderCount == 1 && second.renderCount == 0,
+	"implicit controller capture uses its explicitly bound provider");
+    bu_free(image, "first explicit-provider image");
+
+    host.setContextManager(&second);
+    image = NULL;
+    CHECK(host.getController()->renderToImage(&image, 0, 0) == BRLCAD_OK &&
+	image && first.renderCount == 1 && second.renderCount == 1,
+	"provider switch invalidates the cached offscreen renderer");
+    bu_free(image, "second explicit-provider image");
+
+    image = NULL;
+    CHECK(host.getController()->renderToImage(&image, 0, 0, NULL,
+	&oneShot) == BRLCAD_OK && image && oneShot.renderCount == 1 &&
+	second.renderCount == 1,
+	"per-call provider override is explicit and isolated");
+    bu_free(image, "one-shot provider image");
+    image = NULL;
+    CHECK(host.getController()->renderToImage(&image, 0, 0) == BRLCAD_OK &&
+	image && second.renderCount == 2 && oneShot.renderCount == 1,
+	"one-shot override does not replace the controller provider");
+    bu_free(image, "post-override provider image");
+
+    host.close();
+    image = NULL;
+    CHECK(host.getController()->getRenderContextManager() == NULL &&
+	host.getController()->renderToImage(&image, 0, 0) == BRLCAD_ERROR &&
+	!image,
+	"controller capture fails after its host releases the provider");
     return 0;
 }
 
@@ -324,11 +377,13 @@ main(int ac, char **av)
     CHECK(SoDB::getContextManager() == &manager,
 	  "brlobol_init installs test context manager");
 
-    if (test_headless_contract())
+    if (test_headless_contract(&manager))
 	return 1;
     if (test_headless_render_pending(&manager))
 	return 1;
     if (test_imgstream_headless_poll(&manager))
+	return 1;
+    if (test_controller_provider_switch())
 	return 1;
     if (test_headless_factory_endpoint())
 	return 1;

@@ -1342,6 +1342,10 @@ brlobol_display_endpoint_host_detach(brlobol_display_endpoint_t *endpoint)
     if (endpoint->factory) {
 	brlobol_host_factory_instance_destroy(endpoint->factory,
 	    endpoint->factory_instance);
+	/* Do not let a defective factory leave its provider installed after the
+	 * instance (and possibly the provider itself) has been destroyed. */
+	if (endpoint->controller)
+	    endpoint->controller->setRenderContextManager(NULL);
 	brlobol_host_factory_release(endpoint->factory);
 	endpoint->factory = NULL;
 	endpoint->factory_instance = NULL;
@@ -1392,13 +1396,24 @@ extern "C" int
 brlobol_display_endpoint_view_sync(brlobol_display_endpoint_t *endpoint,
 	const void *view_ctx)
 {
-    if (!endpoint || !endpoint->controller || !view_ctx ||
-	!endpoint->controller->syncCameraFromViewContext(view_ctx))
+    if (!endpoint || !endpoint->controller || !view_ctx)
+	return 0;
+    const SbString pending_reason = endpoint->controller->getRenderReason();
+    SbBool camera_changed = FALSE;
+    if (!endpoint->controller->syncCameraFromViewContext(view_ctx, TRUE,
+	&camera_changed))
 	return 0;
     if (endpoint->engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
 	return endpoint_diagnostic_refresh(endpoint);
-    return endpoint->engine != BRLOBOL_RENDER_ENGINE_RT ||
-	endpoint_rt_start(endpoint) ? 1 : 0;
+    if (endpoint->engine != BRLOBOL_RENDER_ENGINE_RT)
+	return 1;
+
+    /* MGED and TclCAD synchronize passive view state before every native
+     * refresh.  An unchanged sync must not cancel and restart an in-flight RT
+     * frame; only a newly changed camera or pre-existing scene request needs
+     * a new generation. */
+    return (!camera_changed && !endpoint_rt_scene_request(
+	pending_reason.getString())) || endpoint_rt_start(endpoint) ? 1 : 0;
 }
 
 extern "C" int
@@ -1493,14 +1508,51 @@ brlobol_display_endpoint_host_open(brlobol_display_endpoint_t *endpoint,
 	return 0;
     }
 
+    const uint64_t factoryCapabilities =
+	brlobol_host_factory_capabilities(factory);
+    const bool providerRequired =
+	endpoint->engine == BRLOBOL_RENDER_ENGINE_HW ||
+	endpoint->engine == BRLOBOL_RENDER_ENGINE_SW ||
+	endpoint->engine == BRLOBOL_RENDER_ENGINE_RT ||
+	(endpoint->engine == BRLOBOL_RENDER_ENGINE_AUTO &&
+	 (factoryCapabilities & (BRLOBOL_HOST_CAP_SYSTEM_GL |
+	 BRLOBOL_HOST_CAP_PIXEL_PRESENT |
+	 BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT)) != 0);
+
+    SoDB::ContextManager *previousProvider =
+	endpoint->controller->getRenderContextManager();
     void *instance = NULL;
 	if (!brlobol_host_factory_instance_create(factory, &required_desc,
 	endpoint->controller, &instance)) {
+	/* Provisional binding is allowed to change controller policy while the
+	 * candidate opens.  A rejected candidate must not disturb the live host. */
+	endpoint->controller->setRenderContextManager(previousProvider);
+	brlobol_host_factory_release(factory);
+	return 0;
+    }
+    if (providerRequired &&
+	!endpoint->controller->getRenderContextManager()) {
+	brlobol_host_factory_instance_destroy(factory, instance);
+	endpoint->controller->setRenderContextManager(previousProvider);
 	brlobol_host_factory_release(factory);
 	return 0;
     }
 
+    /* Keep the old host authoritative until its transactional detach.  The
+     * candidate is reasserted immediately after that detach below. */
+    endpoint->controller->setRenderContextManager(previousProvider);
     brlobol_display_endpoint_host_detach(endpoint);
+    /* The old host's teardown clears its provider from the shared controller.
+     * Reassert the new host after that transactional replacement step. */
+    if (!brlobol_host_factory_instance_bind_controller(factory, instance,
+	    endpoint->controller) ||
+	(providerRequired &&
+	 !endpoint->controller->getRenderContextManager())) {
+	brlobol_host_factory_instance_destroy(factory, instance);
+	endpoint->controller->setRenderContextManager(NULL);
+	brlobol_host_factory_release(factory);
+	return 0;
+    }
     endpoint->factory = factory;
     endpoint->factory_instance = instance;
     endpoint->host_mode = required_desc.mode;
@@ -1557,9 +1609,11 @@ brlobol_display_endpoint_request_frame(brlobol_display_endpoint_t *endpoint,
     }
     if (endpoint->engine == BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
 	return endpoint_diagnostic_refresh(endpoint);
+    const SbString pending_reason = endpoint->controller->getRenderReason();
     endpoint->controller->requestRender(reason);
 	if (endpoint->engine == BRLOBOL_RENDER_ENGINE_RT &&
-	!endpoint_rt_start(endpoint))
+	(endpoint_rt_scene_request(pending_reason.getString()) ||
+	 endpoint_rt_scene_request(reason)) && !endpoint_rt_start(endpoint))
 	return 0;
     if (!endpoint->factory)
 	return 1;

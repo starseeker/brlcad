@@ -28,7 +28,7 @@
 struct BRLObolHeadlessWindowHostPrivate {
     BRLObolHeadlessWindowHostPrivate(void) :
 	pollRate(0),
-	contextManager(NULL),
+	contextManager(brlobol_headless_context_manager()),
 	backgroundColor(0.0f, 0.0f, 0.0f),
 	outputComponents(3),
 	frameWidth(0),
@@ -156,6 +156,7 @@ BRLObolHeadlessWindowHost::BRLObolHeadlessWindowHost(void) :
 
 BRLObolHeadlessWindowHost::~BRLObolHeadlessWindowHost(void)
 {
+    this->close();
     delete this->hp;
     this->hp = NULL;
 }
@@ -163,10 +164,27 @@ BRLObolHeadlessWindowHost::~BRLObolHeadlessWindowHost(void)
 int
 BRLObolHeadlessWindowHost::open(const BRLObolWindowDesc *desc)
 {
+    BRLObolViewController *controller = this->getController();
+    if (!controller || !this->hp->contextManager)
+	return -1;
+    controller->setRenderContextManager(this->hp->contextManager);
+    if (controller->getRenderContextManager() != this->hp->contextManager)
+	return -1;
+
     BRLObolWindowDesc actual = headless_desc(desc);
     if (BRLObolWindowHost::open(&actual) != 0)
 	return -1;
-    return ensure_headless_camera(this->getController());
+    return ensure_headless_camera(controller);
+}
+
+void
+BRLObolHeadlessWindowHost::close(void)
+{
+    BRLObolViewController *controller = this->getController();
+    if (controller && controller->getRenderContextManager() ==
+	    this->hp->contextManager)
+	controller->setRenderContextManager(NULL);
+    BRLObolWindowHost::close();
 }
 
 int
@@ -190,7 +208,12 @@ BRLObolHeadlessWindowHost::setPollRate(long rate)
 void
 BRLObolHeadlessWindowHost::setContextManager(SoDB::ContextManager *manager)
 {
+    SoDB::ContextManager *oldManager = this->hp->contextManager;
     this->hp->contextManager = manager;
+    BRLObolViewController *controller = this->getController();
+    if (controller && (this->isOpen() ||
+	    controller->getRenderContextManager() == oldManager))
+	controller->setRenderContextManager(manager);
 }
 
 SoDB::ContextManager *
@@ -228,9 +251,10 @@ BRLObolHeadlessWindowHost::renderPending(void)
     if (windowSize[0] <= 0 || windowSize[1] <= 0)
 	return -1;
 
-    SoDB::ContextManager *manager = this->hp->contextManager ?
-	this->hp->contextManager : SoDB::getContextManager();
+    SoDB::ContextManager *manager = this->hp->contextManager;
     if (!manager)
+	return -1;
+    if (controller->getRenderContextManager() != manager)
 	return -1;
 
     SoOffscreenRenderer renderer(manager, region);
@@ -393,9 +417,19 @@ headless_factory_bind(void *instance, void *controller,
 	static_cast<BRLObolHeadlessWindowHost *>(instance);
     if (!host)
 	return 0;
-    host->attachController(static_cast<BRLObolViewController *>(controller),
-	FALSE);
-    return 1;
+    BRLObolViewController *newController =
+	static_cast<BRLObolViewController *>(controller);
+    BRLObolViewController *oldController = host->getController();
+    if (oldController && oldController != newController &&
+	oldController->getRenderContextManager() == host->getContextManager())
+	oldController->setRenderContextManager(NULL);
+    if (oldController != newController)
+	host->attachController(newController, FALSE);
+    if (!newController)
+	return 1;
+    newController->setRenderContextManager(host->getContextManager());
+    return host->getContextManager() &&
+	newController->getRenderContextManager() == host->getContextManager();
 }
 
 static int

@@ -223,6 +223,42 @@ ged_gqa_result_kind(enum ged_gqa_result_family family)
     }
 }
 
+static const char *
+ged_gqa_result_schema(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return "brlcad.gqa.overlap.v1";
+	case GQA_RESULT_GAPS:
+	    return "brlcad.gqa.gap.v1";
+	case GQA_RESULT_ADJ_AIR:
+	    return "brlcad.gqa.adjacent-air.v1";
+	case GQA_RESULT_EXP_AIR:
+	    return "brlcad.gqa.exposed-air.v1";
+	case GQA_RESULT_VOLUME:
+	    return "brlcad.gqa.volume-sample.v1";
+	default:
+	    return NULL;
+    }
+}
+
+static const char *
+ged_gqa_result_severity(enum ged_gqa_result_family family)
+{
+    switch (family) {
+	case GQA_RESULT_OVERLAPS:
+	    return "error";
+	case GQA_RESULT_GAPS:
+	case GQA_RESULT_ADJ_AIR:
+	case GQA_RESULT_EXP_AIR:
+	    return "warning";
+	case GQA_RESULT_VOLUME:
+	    return "info";
+	default:
+	    return "unknown";
+    }
+}
+
 static int *
 ged_gqa_result_color(enum ged_gqa_result_family family)
 {
@@ -363,16 +399,76 @@ gqa_publish_result_metadata(struct ged_draw_command_scene *scene,
 	    bg_line_layer_builder_layer_count(builder));
     snprintf(point_count, sizeof(point_count), "%zu",
 	    bg_line_layer_builder_point_count(builder));
-    struct ged_draw_command_scene_metadata metadata[6] = {
+    struct ged_draw_command_scene_metadata metadata[8] = {
 	{"result.feature", name},
 	{"result.format", "line-layer-builder"},
 	{"result.layer_count", layer_count},
 	{"result.point_count", point_count},
 	{"result.owner", "gqa"},
-	{"result.kind", ged_gqa_result_kind(family)}
+	{"result.kind", ged_gqa_result_kind(family)},
+	{"result.schema", ged_gqa_result_schema(family)},
+	{"result.severity", ged_gqa_result_severity(family)}
     };
     return ged_draw_command_scene_feature_metadata_replace(scene, name,
-	    metadata, 6);
+	    metadata, 8);
+}
+
+static int
+gqa_publish_result_primitive_metadata(struct ged_draw_command_scene *scene,
+	const char *name,
+	enum ged_gqa_result_family family,
+	const struct bg_line_layer_builder *builder)
+{
+    if (!scene || !name || !builder)
+	return 0;
+
+    int primitive = 0;
+    const size_t layer_count = bg_line_layer_builder_layer_count(builder);
+    for (size_t i = 0; i < layer_count; i++) {
+	const struct bg_line_layer *layer =
+	    bg_line_layer_builder_layer_at(builder, i);
+	if (!layer)
+	    continue;
+	const point_t *points = bg_line_layer_points(layer);
+	const int *commands = bg_line_layer_commands(layer);
+	const size_t point_count = bg_line_layer_point_count(layer);
+	if (!points || !commands)
+	    continue;
+	point_t previous = VINIT_ZERO;
+	int have_previous = 0;
+	for (size_t j = 0; j < point_count; j++) {
+	    if (commands[j] == BG_GEOMETRY_LINE_DRAW && have_previous) {
+		char primitive_buf[64] = {0};
+		char start[192] = {0};
+		char end[192] = {0};
+		snprintf(primitive_buf, sizeof(primitive_buf), "%d", primitive);
+		snprintf(start, sizeof(start), "%.17g %.17g %.17g",
+		    V3ARGS(previous));
+		snprintf(end, sizeof(end), "%.17g %.17g %.17g",
+		    V3ARGS(points[j]));
+		struct ged_draw_command_scene_metadata metadata[7] = {
+		    {"result.schema", ged_gqa_result_schema(family)},
+		    {"result.primitive", primitive_buf},
+		    {"result.primitive.kind", ged_gqa_result_kind(family)},
+		    {"result.severity", ged_gqa_result_severity(family)},
+		    {"segment.start_mm", start},
+		    {"segment.end_mm", end},
+		    {"result.units", "mm"}
+		};
+		if (!ged_draw_command_scene_feature_primitive_metadata_replace(
+			scene, name, primitive, metadata, 7))
+		    return 0;
+		primitive++;
+	    }
+	    if (commands[j] == BG_GEOMETRY_LINE_MOVE ||
+		commands[j] == BG_GEOMETRY_LINE_DRAW) {
+		VMOVE(previous, points[j]);
+		have_previous = 1;
+	    }
+	}
+    }
+
+    return 1;
 }
 
 static int
@@ -420,6 +516,9 @@ gqa_publish_result_visuals(struct ged *gedp, void *active_view)
 		if (!ged_draw_command_scene_line_layer_builder_replace(
 			scene, name, ged_gqa_plot.builder[i], &style) ||
 			!gqa_publish_result_metadata(scene, name,
+			    (enum ged_gqa_result_family)i,
+			    ged_gqa_plot.builder[i]) ||
+			!gqa_publish_result_primitive_metadata(scene, name,
 			    (enum ged_gqa_result_family)i,
 			    ged_gqa_plot.builder[i])) {
 		    ged_draw_command_scene_abort(scene);
@@ -582,16 +681,18 @@ gqa_publish_overlap_label(struct ged *gedp, void *active_view)
 	    char samples[64] = {0};
 	    snprintf(pairs, sizeof(pairs), "%zu", pair_count);
 	    snprintf(samples, sizeof(samples), "%lu", sample_count);
-	    struct ged_draw_command_scene_metadata metadata[5] = {
+	    struct ged_draw_command_scene_metadata metadata[7] = {
 		{"result.feature", label.label_id},
 		{"result.owner", "gqa"},
 		{"result.kind", "overlap-summary"},
 		{"result.pair_count", pairs},
-		{"result.sample_count", samples}
+		{"result.sample_count", samples},
+		{"result.schema", "brlcad.gqa.overlap-summary.v1"},
+		{"result.severity", sample_count ? "error" : "info"}
 	    };
 	    const int metadata_published = published ?
 		ged_draw_command_scene_feature_metadata_replace(scene,
-			label.label_id, metadata, 5) : 0;
+			label.label_id, metadata, 7) : 0;
 	    if (published && metadata_published &&
 		    ged_draw_command_scene_commit(scene)) {
 		bu_vls_free(&text);

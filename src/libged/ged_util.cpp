@@ -1759,6 +1759,160 @@ ged_command_metadata_add(struct ged_draw_command_scene_metadata *metadata,
     (*metadata_count)++;
 }
 
+static const char *
+ged_uplot_result_schema(const char *owner_id, const char *result_kind)
+{
+    if (owner_id && result_kind && BU_STR_EQUAL(owner_id, "rtcheck") &&
+	BU_STR_EQUAL(result_kind, "overlap"))
+	return "brlcad.rtcheck.overlap.v1";
+    if (owner_id && result_kind && BU_STR_EQUAL(owner_id, "nirt") &&
+	BU_STR_EQUAL(result_kind, "query-ray"))
+	return "brlcad.nirt.query-ray.v1";
+    return NULL;
+}
+
+static long
+ged_uplot_qray_rgb(const struct ged_qray_color *color)
+{
+    if (!color)
+	return -1;
+    return ((long)(unsigned char)color->r << 16) |
+	((long)(unsigned char)color->g << 8) |
+	(long)(unsigned char)color->b;
+}
+
+static void
+ged_uplot_primitive_semantics(struct ged *gedp,
+	const char *owner_id,
+	const char *result_kind,
+	long rgb,
+	const char **kind,
+	const char **severity,
+	const char **parity)
+{
+    if (kind)
+	*kind = "segment";
+    if (severity)
+	*severity = "info";
+    if (parity)
+	*parity = NULL;
+
+    if (owner_id && result_kind && BU_STR_EQUAL(owner_id, "rtcheck") &&
+	BU_STR_EQUAL(result_kind, "overlap")) {
+	if (kind)
+	    *kind = "overlap";
+	if (severity)
+	    *severity = "error";
+	return;
+    }
+
+    if (!gedp || !gedp->i || !gedp->i->ged_gdp || !owner_id ||
+	!result_kind || !BU_STR_EQUAL(owner_id, "nirt") ||
+	!BU_STR_EQUAL(result_kind, "query-ray"))
+	return;
+
+    const struct ged_drawable *gdp = gedp->i->ged_gdp;
+    if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_overlap_color)) {
+	if (kind)
+	    *kind = "overlap";
+	if (severity)
+	    *severity = "error";
+    } else if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_void_color)) {
+	if (kind)
+	    *kind = "gap";
+	if (severity)
+	    *severity = "warning";
+    } else if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_odd_color)) {
+	if (kind)
+	    *kind = "partition";
+	if (parity)
+	    *parity = "odd";
+    } else if (rgb == ged_uplot_qray_rgb(&gdp->gd_qray_even_color)) {
+	if (kind)
+	    *kind = "partition";
+	if (parity)
+	    *parity = "even";
+    }
+}
+
+static int
+ged_uplot_publish_primitive_metadata(struct ged *gedp,
+	struct ged_draw_command_scene *scene,
+	const char *name,
+	const struct ged_uplot_stream *stream,
+	const char *owner_id,
+	const char *result_kind,
+	const char *schema)
+{
+    if (!scene || !name || !stream || !schema)
+	return 1;
+
+    int primitive = 0;
+    for (size_t i = 0; i < stream->layer_count; i++) {
+	const struct ged_uplot_layer *layer = &stream->layers[i];
+	if (!layer->count)
+	    continue;
+
+	const char *kind = NULL;
+	const char *severity = NULL;
+	const char *parity = NULL;
+	ged_uplot_primitive_semantics(gedp, owner_id, result_kind,
+		layer->rgb, &kind, &severity, &parity);
+
+	char color[16] = {0};
+	snprintf(color, sizeof(color), "#%06lx", layer->rgb & 0xFFFFFF);
+	point_t previous = VINIT_ZERO;
+	int have_previous = 0;
+	for (size_t j = 0; j < layer->count; j++) {
+	    const int command = layer->commands[j];
+	    if (command == BG_GEOMETRY_LINE_DRAW && have_previous) {
+		char primitive_buf[64] = {0};
+		char start[192] = {0};
+		char end[192] = {0};
+		snprintf(primitive_buf, sizeof(primitive_buf), "%d", primitive);
+		snprintf(start, sizeof(start), "%.17g %.17g %.17g",
+		    V3ARGS(previous));
+		snprintf(end, sizeof(end), "%.17g %.17g %.17g",
+		    V3ARGS(layer->points[j]));
+		struct ged_draw_command_scene_metadata metadata[10];
+		size_t metadata_count = 0;
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.schema", schema);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.primitive", primitive_buf);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.primitive.kind", kind);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.severity", severity);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "result.color", color);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "segment.start_mm", start);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "segment.end_mm", end);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "hit.entry_mm", start);
+		ged_command_metadata_add(metadata, &metadata_count,
+		    "hit.exit_mm", end);
+		if (parity)
+		    ged_command_metadata_add(metadata, &metadata_count,
+			"nirt.partition.parity", parity);
+		if (!ged_draw_command_scene_feature_primitive_metadata_replace(
+			scene, name, primitive, metadata, metadata_count))
+		    return 0;
+		primitive++;
+	    }
+	    if (command == BG_GEOMETRY_LINE_MOVE ||
+		command == BG_GEOMETRY_LINE_DRAW) {
+		VMOVE(previous, layer->points[j]);
+		have_previous = 1;
+	    }
+	}
+    }
+
+    return 1;
+}
+
 static int
 ged_uplot_publish_command_scene_feature(struct ged *gedp,
 	struct ged_uplot_stream *stream,
@@ -1820,7 +1974,8 @@ ged_uplot_publish_command_scene_feature(struct ged *gedp,
 	if (generation)
 	    snprintf(generation_buf, sizeof(generation_buf), "%llu",
 		    (unsigned long long)generation);
-	struct ged_draw_command_scene_metadata metadata[7];
+	const char *schema = ged_uplot_result_schema(owner_id, result_kind);
+	struct ged_draw_command_scene_metadata metadata[10];
 	size_t metadata_count = 0;
 	ged_command_metadata_add(metadata, &metadata_count,
 		"result.feature", name);
@@ -1839,8 +1994,20 @@ ged_uplot_publish_command_scene_feature(struct ged *gedp,
 	if (generation_buf[0])
 	    ged_command_metadata_add(metadata, &metadata_count,
 		    "result.generation", generation_buf);
+	if (schema) {
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.schema", schema);
+	    ged_command_metadata_add(metadata, &metadata_count,
+		    "result.severity",
+		    (owner_id && BU_STR_EQUAL(owner_id, "rtcheck")) ?
+		    "error" : "mixed");
+	}
 	ret = ged_draw_command_scene_feature_metadata_replace(scene, name,
 		metadata, metadata_count) ? BRLCAD_OK : BRLCAD_ERROR;
+	if (ret == BRLCAD_OK && schema &&
+	    !ged_uplot_publish_primitive_metadata(gedp, scene, name, stream,
+		owner_id, result_kind, schema))
+	    ret = BRLCAD_ERROR;
     }
     ged_uplot_feature_layers_free(layers, names, live_layers);
     if (ret == BRLCAD_OK)

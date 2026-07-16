@@ -60,9 +60,10 @@ The work grid is not modeled as transformed database-line geometry.  It is a
 view aid owned by `SoBRLGrid`: visual lines are HUD overlay layers and grid
 snap is semantic model/view state.  See `doc/notes/obol_grid_snap.txt`.
 
-Fallback direct diagnostic callbacks remain only for non-command-scene
-consumers that have not yet been migrated; they must not be used to preserve
-parallel retained Obol/BSG ownership for migrated overlay producers.
+The public direct diagnostic callback API remains as an external compatibility
+surface for consumers without a command scene.  No in-tree graphical
+application registers it.  QGED's former private line-layer/HUD adapter was
+removed after the supported producers moved to command-scene ownership.
 
 Command-Result Contract
 -----------------------
@@ -99,11 +100,32 @@ selected/highlighted primitive lists, and line-layer child-to-parent primitive
 resolution.  Neutral GED APIs expose that data without requiring callers to
 include libbrlobol-private record types.
 
-qtcad consumes the bridge for real Obol/Coin pick details.  It keeps raw child
-`SoBRLPickDetail` identity, adds resolved parent feature/primitive identity,
-copies primitive metadata, and routes resolved command-result or overlay picks
-into Obol primitive selected/highlighted state instead of database path
-selection.
+qtcad consumes only the neutral GED bridge for command-result details.  It
+keeps raw child `SoBRLPickDetail` identity, resolves parent feature/primitive
+identity through GED, copies feature and primitive metadata through the neutral
+readback APIs, and applies selected/highlighted primitive state through those
+same APIs instead of querying the libbrlobol feature store.  TclCAD's
+`mouse_pick_detail` returns the identical resolved feature name, primitive
+index, feature metadata, and primitive metadata as Tcl lists.
+
+Diagnostic Schemas
+------------------
+
+All current schemas use model-space millimeters and publish stable flattened
+line-layer primitive indices:
+
+| Producer | `result.schema` | Severity and primitive detail |
+| --- | --- | --- |
+| rtcheck | `brlcad.rtcheck.overlap.v1` | error; overlap segment plus entry/exit hits |
+| NIRT/qray | `brlcad.nirt.query-ray.v1` | mixed feature; partition/info, gap/warning, overlap/error segments, entry/exit hits, and partition parity when known |
+| check overlaps | `brlcad.check.overlap.v1` | error; region pair, depth, and entry/exit hits |
+| GQA overlap/gap/air/volume | `brlcad.gqa.<kind>.v1` | error, warning, or info on both feature and every plotted primitive, with segment endpoints |
+
+The schema names and common keys are documented beside the neutral APIs in
+`include/ged/draw.h`.  Focused GED tests exercise the schemas, lifecycle,
+generation fencing, primitive identity, selection/highlighting, and readback;
+the qtcad pick regression verifies that a child layer hit reaches the same
+neutral feature and primitive metadata.
 
 Custom Coin Provider Policy
 ---------------------------
@@ -125,12 +147,11 @@ opaque provider-returned `SoNode` as a `CustomNode` feature, interpreted only by
 the C++ Obol adapter.  The remaining design work is richer persistent
 interaction behavior, not basic node ownership.
 
-Next Work
----------
+Extension Rules
+---------------
 
-* Add command-specific schemas for rtcheck/check overlap, NIRT segments/hits,
-  and GQA result severities using feature and per-primitive metadata.
-* Route detail panels through neutral readback APIs.
-* Add generation tokens to any newly asynchronous producers.
-* Prefer converting remaining old-style drawing producers to command-scene
-  features before expanding the custom Coin behavior surface.
+* Add generation tokens to any newly asynchronous producer.
+* Publish new interactive drawing producers as command-scene features before
+  expanding the custom Coin behavior surface.
+* Extend a versioned schema, or introduce a new version, rather than exposing
+  application-private records to a detail panel.

@@ -55,7 +55,6 @@ set(
   QgObolDrawSync.cpp
   QgObolExport.cpp
   QgObolMeasure.cpp
-  QgObolOverlaySync.cpp
   QgObolPick.cpp
   QgObolSnap.cpp
   QgObolSelectionSync.cpp
@@ -145,7 +144,6 @@ set(
   QgCanvasInput.h
   QgCanvasState.h
   QgObolDrawSyncPrivate.h
-  QgObolOverlaySyncPrivate.h
   QgObolSelectionSyncPrivate.h
   QgObolViewSyncPrivate.h
   qtcad_resources.qrc

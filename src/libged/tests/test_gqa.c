@@ -109,6 +109,34 @@ require_command_result_metadata(void *view_ctx, const char *feature_name,
 }
 
 static void
+require_command_result_primitive_metadata(void *view_ctx,
+	const char *feature_name,
+	int primitive,
+	const char *key,
+	const char *value)
+{
+    size_t count = ged_draw_view_context_feature_primitive_metadata_count(
+	view_ctx, feature_name, primitive);
+    size_t i;
+    for (i = 0; i < count; i++) {
+	struct bu_vls found_key = BU_VLS_INIT_ZERO;
+	struct bu_vls found_value = BU_VLS_INIT_ZERO;
+	int copied = ged_draw_view_context_feature_primitive_metadata_copy(
+	    view_ctx, feature_name, primitive, i, &found_key, &found_value);
+	int matched = copied &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_key), key) &&
+	    BU_STR_EQUAL(bu_vls_cstr(&found_value), value);
+	bu_vls_free(&found_key);
+	bu_vls_free(&found_value);
+	if (matched)
+	    return;
+    }
+    bu_exit(EXIT_FAILURE,
+	"%s primitive %d metadata %s=%s was not published.\n",
+	feature_name, primitive, key, value);
+}
+
+static void
 require_command_result_label(void *view_ctx, const char *feature_name,
 	const char *text_fragment)
 {
@@ -290,7 +318,7 @@ open_gqa_result_fixture(void)
 static void
 run_gqa_result_case(struct ged *gedp, const char *analysis_flag,
 	const char *object_name, const char *feature_name,
-	const char *result_kind)
+	const char *result_kind, const char *schema, const char *severity)
 {
     char grid_arg[] = "250mm-50mm";
     const char *gqa[] = {
@@ -310,9 +338,17 @@ run_gqa_result_case(struct ged *gedp, const char *analysis_flag,
 	    "gqa");
     require_command_result_metadata(view_ctx, feature_name, "result.kind",
 	    result_kind);
+    require_command_result_metadata(view_ctx, feature_name, "result.schema",
+	    schema);
+    require_command_result_metadata(view_ctx, feature_name,
+	    "result.severity", severity);
     if (!count_gqa_feature_segments(view_ctx, feature_name, NULL, NULL, 0))
 	bu_exit(EXIT_FAILURE, "No GQA segments exported for %s.\n",
 		feature_name);
+    require_command_result_primitive_metadata(view_ctx, feature_name, 0,
+	"result.schema", schema);
+    require_command_result_primitive_metadata(view_ctx, feature_name, 0,
+	"result.severity", severity);
 }
 
 static void
@@ -344,10 +380,16 @@ run_gqa_volume_result_case(struct ged *gedp)
 	    "result.owner", "gqa");
     require_command_result_metadata(view_ctx, "gqa::volume-samples",
 	    "result.kind", "volume-sample");
+    require_command_result_metadata(view_ctx, "gqa::volume-samples",
+	    "result.schema", "brlcad.gqa.volume-sample.v1");
+    require_command_result_metadata(view_ctx, "gqa::volume-samples",
+	    "result.severity", "info");
     if (!count_gqa_feature_segments(view_ctx, "gqa::volume-samples", NULL,
 	    NULL, 0))
 	bu_exit(EXIT_FAILURE,
 		"No GQA volume sample segments exported.\n");
+    require_command_result_primitive_metadata(view_ctx,
+	"gqa::volume-samples", 0, "result.severity", "info");
 
     struct bu_vls plot_file = BU_VLS_INIT_ZERO;
     bu_vls_printf(&plot_file, "%svolume.plot3", prefix);
@@ -392,6 +434,10 @@ main(int ac, char *av[]) {
 	    "result.owner", "gqa");
     require_command_result_metadata(view_ctx, "gqa::overlaps",
 	    "result.kind", "overlap");
+    require_command_result_metadata(view_ctx, "gqa::overlaps",
+	    "result.schema", "brlcad.gqa.overlap.v1");
+    require_command_result_metadata(view_ctx, "gqa::overlaps",
+	    "result.severity", "error");
     require_command_result_label(view_ctx, "gqa::overlaps::summary",
 	    "gqa overlaps:");
     require_command_result_metadata(view_ctx, "gqa::overlaps::summary",
@@ -404,6 +450,8 @@ main(int ac, char *av[]) {
     } else {
 	bu_exit(EXIT_FAILURE, "No GQA plotting data found.\n");
     }
+    require_command_result_primitive_metadata(view_ctx, "gqa::overlaps", 0,
+	"result.severity", "error");
 
     bu_vls_trunc(gedp->ged_result_str, 0);
     if (ged_exec(gedp, 8, check) != BRLCAD_OK)
@@ -414,6 +462,10 @@ main(int ac, char *av[]) {
 	    "result.owner", "check");
     require_command_result_metadata(view_ctx, "check::overlaps",
 	    "result.kind", "overlap");
+    require_command_result_metadata(view_ctx, "check::overlaps",
+	    "result.schema", "brlcad.check.overlap.v1");
+    require_command_result_metadata(view_ctx, "check::overlaps",
+	    "result.severity", "error");
     require_command_result_label(view_ctx, "check::overlaps::summary",
 	    "check overlaps:");
     require_command_result_metadata(view_ctx, "check::overlaps::summary",
@@ -421,6 +473,10 @@ main(int ac, char *av[]) {
     if (!count_gqa_feature_segments(view_ctx, "check::overlaps", NULL,
 	    NULL, 0))
 	bu_exit(EXIT_FAILURE, "No check overlap segments exported.\n");
+    require_command_result_primitive_metadata(view_ctx, "check::overlaps", 0,
+	"result.schema", "brlcad.check.overlap.v1");
+    require_command_result_primitive_metadata(view_ctx, "check::overlaps", 0,
+	"result.severity", "error");
 
     ged_close(gedp);
 
@@ -430,11 +486,12 @@ main(int ac, char *av[]) {
     if (!ged_draw_obol_scene_controller_ensure_owned(gedp, 1))
 	bu_exit(EXIT_FAILURE, "Could not initialize owned Obol scene controller for GQA result fixture.\n");
 
-    run_gqa_result_case(gedp, "-Ag", "gap.g", "gqa::gaps", "gap");
+    run_gqa_result_case(gedp, "-Ag", "gap.g", "gqa::gaps", "gap",
+	"brlcad.gqa.gap.v1", "warning");
     run_gqa_result_case(gedp, "-Aa", "adj_air.g", "gqa::adjacent-air",
-	    "adjacent-air");
+	    "adjacent-air", "brlcad.gqa.adjacent-air.v1", "warning");
     run_gqa_result_case(gedp, "-Ae", "exposed_air.g", "gqa::exposed-air",
-	    "exposed-air");
+	    "exposed-air", "brlcad.gqa.exposed-air.v1", "warning");
     run_gqa_volume_result_case(gedp);
 
     ged_close(gedp);

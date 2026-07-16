@@ -249,6 +249,7 @@ test_reflective_refractive_materials(struct db_i *dbip)
     int ret = 0;
     {
 	BRLObolViewController controller(root, camera);
+	controller.setRenderContextManager(brlobol_headless_context_manager());
 	controller.setViewportSize(64, 64);
 	controller.setLightingEnabled(FALSE);
 	if (controller.replaceDatabaseSource("ball.s", dbip,
@@ -640,6 +641,7 @@ main(int argc, char **argv)
 
     {
 	BRLObolViewController controller(root, camera);
+	controller.setRenderContextManager(brlobol_headless_context_manager());
 	controller.setViewportSize(64, 64);
 	controller.setBackgroundColors(SbColor(0.0f, 0.0f, 0.0f),
 	    SbColor(0.0f, 0.0f, 0.0f));

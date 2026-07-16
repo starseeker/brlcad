@@ -109,6 +109,24 @@ Current Clean Boundaries
   and GSH, plus focused native-test and removed-API checks.  There is no
   transitional mode or legacy BSG include allowlist.
 
+2026-07-15 Producer Revalidation
+--------------------------------
+
+The final production pass re-audited remrt/rtsrv, the RT-family programs,
+fbserv, framebuffer utilities, and image commands after the endpoint changes.
+`brlobol_pivot_guard`, `imgstream_test`, `imgstream_fb_compat_test`,
+`regress-remrt`, and `regress-rtedge` passed.  Standalone `rt` and `fbserv`
+were then run against both `/dev/swrast` and `/dev/ogl` on a usable native X
+server; all four visible-provider smokes passed.  These paths either publish
+through imgstream and a registered Obol host or reject an unavailable provider
+explicitly.  No supported producer opened a legacy graphical backend or
+application-owned framebuffer.
+
+ART/ADRT runtime tile validation remains deliberately outside this migration
+gate because the Appleseed/ADRT work is owned by another active workstream.
+Their source/build inventory still observes the external image-producer
+boundary described above; this deferral is not a retained libdm exception.
+
 Remaining Compatibility Owners
 ------------------------------
 

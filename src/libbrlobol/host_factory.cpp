@@ -239,21 +239,31 @@ brlobol_host_factory_instance_create(brlobol_host_factory_token_t *token,
     void *created = token->factory.create(&actual, token->factory.user_data);
     if (!created)
 	return 0;
-    if (token->factory.bind_controller(created, controller,
-	    token->factory.user_data) <= 0) {
+    if (!brlobol_host_factory_instance_bind_controller(token, created,
+	    controller)) {
 	token->factory.destroy(created, token->factory.user_data);
 	return 0;
     }
     if (token->factory.open &&
 	token->factory.open(created, &actual, token->factory.user_data) <= 0) {
-	(void)token->factory.bind_controller(created, NULL,
-	    token->factory.user_data);
+	(void)brlobol_host_factory_instance_bind_controller(token, created,
+	    NULL);
 	token->factory.destroy(created, token->factory.user_data);
 	return 0;
     }
 
     *instance = created;
     return 1;
+}
+
+extern "C" int
+brlobol_host_factory_instance_bind_controller(
+	brlobol_host_factory_token_t *token, void *instance, void *controller)
+{
+    if (!token || !instance || !token->factory.bind_controller)
+	return 0;
+    return token->factory.bind_controller(instance, controller,
+	token->factory.user_data) > 0 ? 1 : 0;
 }
 
 extern "C" void
@@ -264,8 +274,8 @@ brlobol_host_factory_instance_destroy(brlobol_host_factory_token_t *token,
 	return;
     if (token->factory.close)
 	token->factory.close(instance, token->factory.user_data);
-    (void)token->factory.bind_controller(instance, NULL,
-	token->factory.user_data);
+    (void)brlobol_host_factory_instance_bind_controller(token, instance,
+	NULL);
     token->factory.destroy(instance, token->factory.user_data);
 }
 

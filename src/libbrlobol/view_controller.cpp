@@ -122,14 +122,13 @@ controller_initialize_render_action(SoRenderManager *manager)
     SoGLRenderAction *action = manager ? manager->getGLRenderAction() : NULL;
     if (!action)
 	return;
-    SoDB::ContextManager *contextManager = SoDB::getContextManager();
-    if (contextManager)
-	action->setContextManager(contextManager);
+    /* Rendering providers are host/controller policy, never process-global
+     * fallback.  A host binds its concrete manager before it can render. */
+    action->setContextManager(NULL);
     action->setCacheContext(SoGLCacheContextElement::getUniqueCacheContext());
 }
 
 struct ControllerGLFunctions {
-    SoDB::ContextManager *manager = NULL;
     void (*clearColor)(GLclampf, GLclampf, GLclampf, GLclampf) = NULL;
     void (*clear)(GLbitfield) = NULL;
     void (*getIntegerv)(GLenum, GLint *) = NULL;
@@ -149,7 +148,6 @@ struct ControllerGLFunctions {
 
     void load(SoDB::ContextManager *m)
     {
-	manager = m;
 #define CONTROLLER_GL_LOAD(member, name) \
 	member = reinterpret_cast<decltype(member)>(m->getProcAddress(name))
 	CONTROLLER_GL_LOAD(clearColor, "glClearColor");
@@ -178,18 +176,6 @@ struct ControllerGLFunctions {
 	    popMatrix && loadIdentity && begin && end && color3f && vertex2f;
     }
 };
-
-static ControllerGLFunctions *
-controller_system_gl_functions(void)
-{
-    SoDB::ContextManager *manager = SoDB::getContextManager();
-    if (!manager)
-	return NULL;
-    static thread_local ControllerGLFunctions functions;
-    if (functions.manager != manager)
-	functions.load(manager);
-    return functions.complete() ? &functions : NULL;
-}
 
 BRLObolProgressiveOptions::BRLObolProgressiveOptions(void) :
     maxLodResults(8),
@@ -1703,9 +1689,18 @@ BRLObolViewController::getSoftwareWireMode(void) const
 void
 BRLObolViewController::renderBackground(void) const
 {
-    ControllerGLFunctions *gl = controller_system_gl_functions();
-    if (!gl)
+    SoDB::ContextManager *contextManager = this->getRenderContextManager();
+    if (!contextManager)
 	return;
+    /* Wrapper managers such as the Qt and Tk providers can dispatch to live
+     * system GL or an offscreen fallback on the same thread.  Resolve the
+     * function table for the currently active context instead of caching it
+     * solely by wrapper address. */
+    ControllerGLFunctions functions;
+    functions.load(contextManager);
+    if (!functions.complete())
+	return;
+    ControllerGLFunctions *gl = &functions;
     const SbColor &bottom = this->backgroundBottom;
     const SbColor &top = this->backgroundTop;
     if (bottom == top) {
@@ -1746,8 +1741,10 @@ BRLObolViewController::renderBackground(void) const
 
 SbBool
 BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
-	SbBool createCamera)
+	SbBool createCamera, SbBool *changedOut)
 {
+    if (changedOut)
+	*changedOut = FALSE;
     const struct bv *view =
 	bv_context_view_const((const struct bv_context *)viewCtx);
     if (!view)
@@ -1758,6 +1755,7 @@ BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
     const SbBool wantPerspective = perspectiveDegrees > SMALL_FASTF ?
 				   TRUE : FALSE;
 
+    SbBool cameraReplaced = FALSE;
     SoCamera *camera = this->activeCamera;
     if (!camera ||
 	(wantPerspective &&
@@ -1771,6 +1769,7 @@ BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
 		 static_cast<SoCamera *>(new SoPerspectiveCamera) :
 		 static_cast<SoCamera *>(new SoOrthographicCamera);
 	this->setCamera(camera);
+	cameraReplaced = TRUE;
     }
 
     int viewWidth = bv_width_get(view);
@@ -1877,7 +1876,7 @@ BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
 	return std::fabs(current - desired) > 1.0e-6f * scale;
     };
 
-    SbBool changed = FALSE;
+    SbBool changed = cameraReplaced;
     if (camera->viewportMapping.getValue() != SoCamera::LEAVE_ALONE) {
 	camera->viewportMapping = SoCamera::LEAVE_ALONE;
 	changed = TRUE;
@@ -1931,6 +1930,8 @@ BRLObolViewController::syncCameraFromViewContext(const void *viewCtx,
 	this->syncLodViewSignature(TRUE);
 	this->requestRender("rt-view-camera");
     }
+    if (changedOut)
+	*changedOut = changed;
     return TRUE;
 }
 
@@ -2185,7 +2186,8 @@ BRLObolViewController::renderPending(SbBool clearWindow,
 	this->synchronizePresentation();
 
 
-    if (!this->renderManager || !this->activeCamera || !this->getRenderRoot())
+    if (!this->renderManager || !this->getRenderContextManager() ||
+	!this->activeCamera || !this->getRenderRoot())
 	return FALSE;
 
     SbString renderReasonCopy;
@@ -2275,23 +2277,39 @@ BRLObolViewController::renderToImage(unsigned char **image,
 	return BRLCAD_ERROR;
     }
 
-    if (!this->imageRenderer ||
-	this->imageRendererManager != contextManager) {
+    SoDB::ContextManager *resolvedManager = contextManager ?
+	contextManager : this->getRenderContextManager();
+    if (!resolvedManager)
+	return BRLCAD_ERROR;
+
+    const bool cacheRenderer =
+	resolvedManager == this->getRenderContextManager();
+    std::unique_ptr<SoOffscreenRenderer> overrideRenderer;
+    SoOffscreenRenderer *renderer = NULL;
+    bool configureRenderer = false;
+    if (!cacheRenderer) {
+	overrideRenderer.reset(new SoOffscreenRenderer(resolvedManager, region));
+	renderer = overrideRenderer.get();
+	configureRenderer = true;
+    } else if (!this->imageRenderer ||
+	this->imageRendererManager != resolvedManager) {
 	delete this->imageRenderer;
-	this->imageRenderer = contextManager ?
-	    new SoOffscreenRenderer(contextManager, region) :
-	    new SoOffscreenRenderer(region);
-	this->imageRendererManager = contextManager;
-	this->imageRenderer->getGLRenderAction()->setTransparencyType(
-	    this->transparencyEnabled ? SoGLRenderAction::BLEND :
-	    SoGLRenderAction::NONE);
-	this->imageRenderer->getGLRenderAction()->setSmoothing(
-	    this->antialiasingEnabled);
-	this->imageRenderer->getGLRenderAction()->setNumPasses(1);
+	this->imageRenderer = new SoOffscreenRenderer(resolvedManager, region);
+	this->imageRendererManager = resolvedManager;
+	renderer = this->imageRenderer;
+	configureRenderer = true;
     } else {
 	this->imageRenderer->setViewportRegion(region);
+	renderer = this->imageRenderer;
     }
-    SoOffscreenRenderer *renderer = this->imageRenderer;
+    if (configureRenderer) {
+	renderer->getGLRenderAction()->setTransparencyType(
+	    this->transparencyEnabled ? SoGLRenderAction::BLEND :
+	    SoGLRenderAction::NONE);
+	renderer->getGLRenderAction()->setSmoothing(
+	    this->antialiasingEnabled);
+	renderer->getGLRenderAction()->setNumPasses(1);
+    }
     const SbColor imageBottom = background ? *background :
 	this->backgroundBottom;
     const SbColor imageTop =
@@ -3725,6 +3743,30 @@ const SoViewport *
 BRLObolViewController::getViewport(void) const
 {
     return this->viewport;
+}
+
+void
+BRLObolViewController::setRenderContextManager(SoDB::ContextManager *manager)
+{
+    SoGLRenderAction *action = this->renderManager ?
+	this->renderManager->getGLRenderAction() : NULL;
+    if (!action || action->getContextManager() == manager)
+	return;
+    /* The cached image renderer owns provider-specific context state.  Drop
+     * it while the old provider is still alive rather than retaining a stale
+     * provider through a host switch. */
+    delete this->imageRenderer;
+    this->imageRenderer = NULL;
+    this->imageRendererManager = NULL;
+    action->setContextManager(manager);
+}
+
+SoDB::ContextManager *
+BRLObolViewController::getRenderContextManager(void) const
+{
+    SoGLRenderAction *action = this->renderManager ?
+	this->renderManager->getGLRenderAction() : NULL;
+    return action ? action->getContextManager() : NULL;
 }
 
 SoRenderManager *

@@ -2888,6 +2888,41 @@ tclcad_pick_path_matches(const char *path, const char *target)
 	BU_STR_EQUAL(path + path_len - target_len, target);
 }
 
+static void
+tclcad_pick_append_metadata_list(struct bu_vls *out,
+	void *view_ctx,
+	const char *feature_name,
+	int primitive,
+	int primitive_metadata)
+{
+    const size_t count = primitive_metadata ?
+	ged_draw_view_context_feature_primitive_metadata_count(view_ctx,
+	    feature_name, primitive) :
+	ged_draw_view_context_feature_metadata_count(view_ctx, feature_name);
+    bu_vls_putc(out, '{');
+    for (size_t i = 0; i < count; i++) {
+	struct bu_vls key = BU_VLS_INIT_ZERO;
+	struct bu_vls value = BU_VLS_INIT_ZERO;
+	const int copied = primitive_metadata ?
+	    ged_draw_view_context_feature_primitive_metadata_copy(view_ctx,
+		feature_name, primitive, i, &key, &value) :
+	    ged_draw_view_context_feature_metadata_copy(view_ctx,
+		feature_name, i, &key, &value);
+	if (copied) {
+	    if (i)
+		bu_vls_putc(out, ' ');
+	    bu_vls_putc(out, '{');
+	    (void)bu_vls_encode(out, bu_vls_cstr(&key));
+	    bu_vls_putc(out, ' ');
+	    (void)bu_vls_encode(out, bu_vls_cstr(&value));
+	    bu_vls_putc(out, '}');
+	}
+	bu_vls_free(&key);
+	bu_vls_free(&value);
+    }
+    bu_vls_putc(out, '}');
+}
+
 int
 to_mouse_pick_detail(struct ged *gedp,
 	int argc,
@@ -2938,6 +2973,25 @@ to_mouse_pick_detail(struct ged *gedp,
 	if (detail.model_point_valid)
 	    bu_vls_printf(gedp->ged_result_str, " model_point {%0.17g %0.17g %0.17g}",
 		V3ARGS(detail.model_point));
+	struct bu_vls feature_name = BU_VLS_INIT_ZERO;
+	int feature_primitive = -1;
+	if (ged_draw_view_context_feature_pick_primitive_resolve(view_ctx,
+		bu_vls_cstr(&path), detail.primitive_index, 0, 0,
+		&feature_name, &feature_primitive)) {
+	    bu_vls_strcat(gedp->ged_result_str, " feature_name ");
+	    (void)bu_vls_encode(gedp->ged_result_str,
+		bu_vls_cstr(&feature_name));
+	    bu_vls_printf(gedp->ged_result_str,
+		" feature_primitive_index %d feature_metadata ",
+		feature_primitive);
+	    tclcad_pick_append_metadata_list(gedp->ged_result_str, view_ctx,
+		bu_vls_cstr(&feature_name), feature_primitive, 0);
+	    bu_vls_strcat(gedp->ged_result_str,
+		" feature_primitive_metadata ");
+	    tclcad_pick_append_metadata_list(gedp->ged_result_str, view_ctx,
+		bu_vls_cstr(&feature_name), feature_primitive, 1);
+	}
+	bu_vls_free(&feature_name);
 	bu_vls_free(&path);
 	break;
     }

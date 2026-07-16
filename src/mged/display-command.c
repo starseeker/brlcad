@@ -99,7 +99,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 		const char name[] = "name";
 		void *base = 0;
 		const char value[] = "value";
-		rb_set_dirty_flag(sdp, name, base, value, NULL);
+		rb_set_dirty_flag(sdp, name, base, value, s);
 	    }
 	    else if (mged_variables->mv_mouse_behavior == 'r')
 		rt_rect_area(s);
@@ -202,7 +202,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 		const char name[] = "name";
 		void *base = 0;
 		const char value[] = "value";
-		rb_set_dirty_flag(sdp, name, base, value, NULL);
+		rb_set_dirty_flag(sdp, name, base, value, s);
 	    }
 	} else if (mged_variables->mv_mouse_behavior == 's' && !stolen) {
 	    bu_vls_printf(&vls, "mouse_solid_edit_select %d %d", x, y);

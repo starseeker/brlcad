@@ -2664,7 +2664,7 @@ main(int argc, char **argv)
     pl_setOutputMode(PL_OUTPUT_MODE_BINARY);
     point_t nirt_a = VINIT_ZERO;
     point_t nirt_b = {1.0, 0.0, 0.0};
-    pl_color(nirt_plot, 0, 255, 0);
+    pl_color(nirt_plot, 0, 255, 255);
     pdv_3line(nirt_plot, nirt_a, nirt_b);
     pl_setOutputMode(old_plot_mode);
     rewind(nirt_plot);
@@ -2688,7 +2688,7 @@ main(int argc, char **argv)
 		"command-result") ||
 	    nirt_record.layers.size() != 1 ||
 	    nirt_record.points.size() != 2 ||
-	    nirt_record.metadata.size() < 6 ||
+	    nirt_record.metadata.size() < 8 ||
 	    !BU_STR_EQUAL(nirt_record.metadata[0].key.getString(),
 		"result.feature") ||
 	    !BU_STR_EQUAL(nirt_record.metadata[0].value.getString(),
@@ -2701,6 +2701,32 @@ main(int argc, char **argv)
 		"result.kind") ||
 	    !BU_STR_EQUAL(nirt_record.metadata[5].value.getString(),
 		"query-ray") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[6].key.getString(),
+		"result.schema") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[6].value.getString(),
+		"brlcad.nirt.query-ray.v1") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[7].key.getString(),
+		"result.severity") ||
+	    !BU_STR_EQUAL(nirt_record.metadata[7].value.getString(), "mixed") ||
+	    nirt_record.primitiveMetadata.size() != 1 ||
+	    nirt_record.primitiveMetadata[0].primitiveIndex != 0 ||
+	    nirt_record.primitiveMetadata[0].metadata.size() != 10 ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[0].key.getString(),
+		"result.schema") ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[0].value.getString(),
+		"brlcad.nirt.query-ray.v1") ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[2].value.getString(),
+		"partition") ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[3].value.getString(),
+		"info") ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[5].key.getString(),
+		"segment.start_mm") ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[7].key.getString(),
+		"hit.entry_mm") ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[9].key.getString(),
+		"nirt.partition.parity") ||
+	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[9].value.getString(),
+		"odd") ||
 	    !feature_overlay_matches(owned_controller, "query_ray",
 		BRLObolOverlayClass::CommandResult,
 		BRLObolOverlayLifecycle::PerCommand,
@@ -2715,6 +2741,54 @@ main(int argc, char **argv)
 	    !ged_draw_command_scene_commit(command_scene) ||
 	    owned_controller->features().exists("query_ray"))
 	FAIL("NIRT/qray command-scene cleanup should remove owned shared command results");
+
+    FILE *rtcheck_plot = tmpfile();
+    if (!rtcheck_plot)
+	FAIL("rtcheck command-scene schema test should create a temporary plot stream");
+    old_plot_mode = pl_getOutputMode();
+    pl_setOutputMode(PL_OUTPUT_MODE_BINARY);
+    pl_color(rtcheck_plot, 255, 255, 0);
+    pdv_3line(rtcheck_plot, nirt_a, nirt_b);
+    pl_setOutputMode(old_plot_mode);
+    rewind(rtcheck_plot);
+    if (_ged_draw_uplot_to_command_scene_feature(gedp, rtcheck_plot,
+	    "rtcheck::schema", 1.0, PL_OUTPUT_MODE_BINARY, "rtcheck",
+	    "command-result", "rtcheck::schema", "overlap", 17) != BRLCAD_OK) {
+	fclose(rtcheck_plot);
+	FAIL("rtcheck uplot import should publish versioned overlap metadata");
+    }
+    fclose(rtcheck_plot);
+    BRLObolFeatureHandle rtcheck_schema_handle =
+	owned_controller->features().find("rtcheck::schema",
+		BRLOBOL_FEATURE_SCOPE_SHARED);
+    BRLObolFeatureRecord rtcheck_schema_record;
+    if (!rtcheck_schema_handle.isValid() ||
+	!owned_controller->features().record(rtcheck_schema_handle,
+	    rtcheck_schema_record) ||
+	rtcheck_schema_record.owner.generation != 17 ||
+	rtcheck_schema_record.metadata.size() < 9 ||
+	!BU_STR_EQUAL(rtcheck_schema_record.metadata[7].value.getString(),
+	    "brlcad.rtcheck.overlap.v1") ||
+	!BU_STR_EQUAL(rtcheck_schema_record.metadata[8].value.getString(),
+	    "error") ||
+	rtcheck_schema_record.primitiveMetadata.size() != 1 ||
+	!BU_STR_EQUAL(rtcheck_schema_record.primitiveMetadata[0].metadata[2].value.getString(),
+	    "overlap") ||
+	!BU_STR_EQUAL(rtcheck_schema_record.primitiveMetadata[0].metadata[3].value.getString(),
+	    "error") ||
+	!BU_STR_EQUAL(rtcheck_schema_record.primitiveMetadata[0].metadata[7].key.getString(),
+	    "hit.entry_mm"))
+	FAIL("rtcheck result should retain overlap schema, generation, severity, and hit metadata");
+    command_scene_desc.owner_id = "rtcheck";
+    command_scene_desc.generation = 17;
+    command_scene = ged_draw_command_scene_begin(feature_view_ctx,
+	&command_scene_desc);
+    if (!command_scene ||
+	ged_draw_command_scene_features_remove_prefix(command_scene,
+	    "rtcheck::schema") != 1 ||
+	!ged_draw_command_scene_commit(command_scene))
+	FAIL("rtcheck schema result should use owner-scoped cleanup");
+    command_scene_desc.generation = 0;
 
     struct bg_line_layer_builder *builder_publish =
 	bg_line_layer_builder_create();

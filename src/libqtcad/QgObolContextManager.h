@@ -111,10 +111,20 @@ public:
     virtual SbBool makeContextCurrent(void *context)
     {
 	QgObolContext *ctx = static_cast<QgObolContext *>(context);
-	if (ctx && ctx->kind == QgObolContext::FALLBACK_CONTEXT)
-	    return this->fallbackManager ?
-		this->fallbackManager->makeContextCurrent(ctx->fallbackContext) : FALSE;
+	if (ctx && ctx->kind == QgObolContext::FALLBACK_CONTEXT) {
+	    if (this->fallbackContextDepth &&
+		this->activeFallbackManager != this)
+		return FALSE;
+	    if (!this->fallbackManager ||
+		!this->fallbackManager->makeContextCurrent(ctx->fallbackContext))
+		return FALSE;
+	    this->activeFallbackManager = this;
+	    this->fallbackContextDepth++;
+	    return TRUE;
+	}
 	if (!ctx || !ctx->context || !ctx->surface)
+	    return FALSE;
+	if (this->fallbackContextDepth)
 	    return FALSE;
 
 	ctx->previousContext = QOpenGLContext::currentContext();
@@ -126,8 +136,13 @@ public:
     {
 	QgObolContext *ctx = static_cast<QgObolContext *>(context);
 	if (ctx && ctx->kind == QgObolContext::FALLBACK_CONTEXT) {
-	    if (this->fallbackManager)
+	    if (this->fallbackContextDepth &&
+		this->activeFallbackManager == this && this->fallbackManager) {
 		this->fallbackManager->restorePreviousContext(ctx->fallbackContext);
+		this->fallbackContextDepth--;
+		if (!this->fallbackContextDepth)
+		    this->activeFallbackManager = NULL;
+	    }
 	    return;
 	}
 	if (!ctx || !ctx->context)
@@ -197,10 +212,15 @@ public:
 
     virtual void *getProcAddress(const char *funcName)
     {
+	/* Qt can continue to report the widget context while an OSMesa fallback
+	 * is current.  The explicit nesting record is the provider authority. */
+	if (this->fallbackContextDepth)
+	    return this->activeFallbackManager == this && this->fallbackManager ?
+		this->fallbackManager->getProcAddress(funcName) : NULL;
 	QOpenGLContext *ctx = QOpenGLContext::currentContext();
 	if (ctx && funcName)
 	    return reinterpret_cast<void *>(ctx->getProcAddress(funcName));
-	return this->fallbackManager ? this->fallbackManager->getProcAddress(funcName) : NULL;
+	return NULL;
     }
 
     virtual SbBool getCurrentSoftwareFramebuffer(unsigned char *&pixels,
@@ -208,7 +228,8 @@ public:
 	    unsigned int &height,
 	    unsigned int &components)
     {
-	if (this->fallbackManager)
+	if (this->fallbackContextDepth && this->activeFallbackManager == this &&
+	    this->fallbackManager)
 	    return this->fallbackManager->getCurrentSoftwareFramebuffer(
 		pixels, width, height, components);
 	pixels = NULL;
@@ -238,6 +259,8 @@ private:
 
     bool forceSoftware = false;
     SoDB::ContextManager *fallbackManager = NULL;
+    inline static thread_local QgObolContextManager *activeFallbackManager = NULL;
+    inline static thread_local unsigned int fallbackContextDepth = 0;
 };
 
 #endif /* QGOBOLCONTEXTMANAGER_H */

@@ -455,7 +455,7 @@ Gsh_ClearScreen(int UNUSED(ac), const char **UNUSED(av), void *UNUSED(gedp), voi
 
 GshState::GshState()
 {
-    brlobol_init(brlobol_headless_context_manager());
+    brlobol_init(NULL);
     BU_GET(gedp, struct ged);
     ged_init(gedp);
 

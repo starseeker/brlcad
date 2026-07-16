@@ -389,7 +389,7 @@ zoom_rect_area(struct mged_state *s)
 	const char name[] = "name";
 	void *base = 0;
 	const char value[] = "value";
-	rb_set_dirty_flag(sdp, name, base, value, NULL);
+	rb_set_dirty_flag(sdp, name, base, value, s);
     }
 }
 

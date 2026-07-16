@@ -51,50 +51,10 @@
 #include "QgEdCategories.h"
 #include "QgEdFilter.h"
 #include "QgObolDrawSyncPrivate.h"
-#include "QgObolOverlaySyncPrivate.h"
 #include "QgObolSelectionSyncPrivate.h"
 #include "QgObolViewSyncPrivate.h"
 
 #include <QEventLoop>
-
-static int
-qged_line_layer_overlay_handler(struct ged *gedp,
-	const char *name,
-	const struct bg_line_layer_builder *builder,
-	void *ctx)
-{
-    QgEdApp *a = static_cast<QgEdApp *>(ctx);
-    if (!a || !a->w || !name || !builder)
-	return 0;
-
-    QgView *display = a->w->CurrentDisplay();
-    if (!display)
-	return 0;
-
-    if (!qg_obol_display_accepts_ged_active_view(gedp, display))
-	return 0;
-
-    return qg_obol_sync_line_layer_overlay(gedp, name, builder, display);
-}
-
-static int
-qged_hud_label_overlay_handler(struct ged *gedp,
-	const struct ged_diagnostic_hud_label *label,
-	void *ctx)
-{
-    QgEdApp *a = static_cast<QgEdApp *>(ctx);
-    if (!a || !a->w || !label)
-	return 0;
-
-    QgView *display = a->w->CurrentDisplay();
-    if (!display)
-	return 0;
-
-    if (!qg_obol_display_accepts_ged_active_view(gedp, display))
-	return 0;
-
-    return qg_obol_sync_hud_label_overlay(gedp, label, display);
-}
 
 static void
 qged_obol_draw_observer(struct ged *gedp,
@@ -367,10 +327,6 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 
     // Let GED know to use the QgQuadView view as its current view
     mdl->session()->setActiveViewContext(qged_current_view_context(w));
-    ged_diagnostic_line_layer_handler_set(gedp,
-	    &qged_line_layer_overlay_handler, (void *)this);
-    ged_diagnostic_hud_label_handler_set(gedp,
-	    &qged_hud_label_overlay_handler, (void *)this);
     m_obol_draw_observer_token = ged_draw_observer_add(gedp,
 	    &qged_obol_draw_observer, (void *)this);
 
@@ -472,8 +428,6 @@ QgEdApp::~QgEdApp() {
 	    ged_draw_observer_remove(mdl->ged(), m_obol_draw_observer_token);
 	    m_obol_draw_observer_token = 0;
 	}
-	ged_diagnostic_line_layer_handler_set(mdl->ged(), NULL, NULL);
-	ged_diagnostic_hud_label_handler_set(mdl->ged(), NULL, NULL);
 	qged_fbserv_release_ged_handlers(mdl->ged());
     }
     delete mdl;

@@ -51,6 +51,7 @@
 #include <QThread>
 #include <QWidget>
 
+#include <cmath>
 #include <string.h>
 #include <thread>
 
@@ -114,6 +115,20 @@ lit_pixel_count(const QImage &image)
     return count;
 }
 
+static bool
+pixel_near_rgb(const QImage &image, int x, int y,
+	unsigned char red, unsigned char green, unsigned char blue,
+	unsigned char tolerance = 24)
+{
+    if (image.isNull() || x < 0 || y < 0 ||
+	x >= image.width() || y >= image.height())
+	return false;
+    const QColor pixel = image.pixelColor(x, y);
+    return std::abs(pixel.red() - static_cast<int>(red)) <= tolerance &&
+	std::abs(pixel.green() - static_cast<int>(green)) <= tolerance &&
+	std::abs(pixel.blue() - static_cast<int>(blue)) <= tolerance;
+}
+
 static BRLObolWindowDesc
 qt_toplevel_desc(unsigned int width, unsigned int height, SbBool visible)
 {
@@ -153,8 +168,19 @@ test_qtcad_window_host_contract(void)
     host.setPollRate(-1);
     CHECK(host.pollRate() == 0, "qtcad window host clamps negative poll rate");
 
+    int presentation_syncs = 0;
+    canvas.obolViewController()->setPresentationSyncCallback(
+	[](void *data) {
+	    int *count = static_cast<int *>(data);
+	    if (count)
+		++(*count);
+	}, &presentation_syncs);
     canvas.obolViewController()->requestRender("qtcad-window-host-render");
     CHECK(host.poll(NULL) == 1, "qtcad window host drains pending render");
+    CHECK(presentation_syncs > 0,
+	"qtcad canvas synchronizes endpoint presentation before readback");
+    canvas.obolViewController()->clearPresentationSyncCallback(
+	&presentation_syncs);
     CHECK(!canvas.obolViewController()->isRenderRequested(),
 	"qtcad window host consumes render request after readback");
     CHECK(host.renderCount() == 1, "qtcad window host records render count");
@@ -337,11 +363,16 @@ test_qtcad_factory_endpoint(void)
     unsigned int width = 0;
     unsigned int height = 0;
     unsigned int components = 0;
+    QWidget *factory_widget = host->canvas()->canvasWidget();
+    const unsigned int factory_width = static_cast<unsigned int>(std::ceil(
+	factory_widget->width() * factory_widget->devicePixelRatioF()));
+    const unsigned int factory_height = static_cast<unsigned int>(std::ceil(
+	factory_widget->height() * factory_widget->devicePixelRatioF()));
     CHECK(brlobol_display_endpoint_capture(endpoint, &pixels, &size, &width,
 	&height, &components),
 	"Qt software factory captures through endpoint API");
-    CHECK(pixels && width == 80 && height == 60 && components == 4 &&
-	size == 80u * 60u * 4u,
+    CHECK(pixels && width == factory_width && height == factory_height &&
+	components == 4 && size == (size_t)factory_width * factory_height * 4u,
 	"Qt software factory capture reports packed endpoint dimensions");
     bu_free(pixels, "Qt software factory capture");
 
@@ -402,12 +433,35 @@ test_qtcad_embedded_factory_endpoint(void)
     unsigned int width = 0;
     unsigned int height = 0;
     unsigned int components = 0;
+    unsigned int expected_width = static_cast<unsigned int>(std::ceil(
+	canvas.width() * canvas.devicePixelRatioF()));
+    unsigned int expected_height = static_cast<unsigned int>(std::ceil(
+	canvas.height() * canvas.devicePixelRatioF()));
     CHECK(brlobol_display_endpoint_capture(endpoint, &pixels, &size, &width,
 	&height, &components),
 	"embedded Qt software host captures through endpoint");
-    CHECK(pixels && width == 72 && height == 54 && components == 4,
+    CHECK(pixels && width == expected_width && height == expected_height &&
+	components == 4,
 	"embedded Qt capture follows the application-owned canvas dimensions");
     bu_free(pixels, "embedded Qt factory capture");
+
+    canvas.resize(104, 68);
+    QApplication::processEvents();
+    expected_width = static_cast<unsigned int>(std::ceil(
+	canvas.width() * canvas.devicePixelRatioF()));
+    expected_height = static_cast<unsigned int>(std::ceil(
+	canvas.height() * canvas.devicePixelRatioF()));
+    struct brlobol_endpoint_property_value property =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    CHECK(brlobol_display_endpoint_property_get(endpoint, "endpoint.width",
+	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	property.uint_value == expected_width,
+	"embedded Qt endpoint reports the resized canvas width");
+    property = BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    CHECK(brlobol_display_endpoint_property_get(endpoint, "endpoint.height",
+	&property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	property.uint_value == expected_height,
+	"embedded Qt endpoint reports the resized canvas height");
 
     brlobol_display_endpoint_destroy(endpoint);
     CHECK(canvas.obolViewController() == NULL,
@@ -528,6 +582,19 @@ test_qtcad_system_gl_factory_endpoint(void)
 
     BRLObolViewController *controller = static_cast<BRLObolViewController *>(
 	brlobol_display_endpoint_controller(endpoint));
+    struct brlobol_endpoint_property_value background =
+	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    background.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    VSET(background.color3, 0.70, 0.20, 0.10);
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	"controller.background.bottom", &background) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK,
+	"Qt system-GL endpoint accepts its lower background property");
+    VSET(background.color3, 0.10, 0.20, 0.70);
+    CHECK(brlobol_display_endpoint_property_set(endpoint,
+	"controller.background.top", &background) ==
+	BRLOBOL_ENDPOINT_PROPERTY_OK,
+	"Qt system-GL endpoint accepts its upper background property");
     add_visible_obol_content(controller);
     CHECK(brlobol_display_endpoint_request_frame(endpoint, "qt-system-gl"),
 	"Qt system-GL endpoint queues an Obol frame");
@@ -543,14 +610,23 @@ test_qtcad_system_gl_factory_endpoint(void)
     QImage presented = canvas->grabFramebuffer();
     CHECK(!presented.isNull() && lit_pixel_count(presented) > 0,
 	"Qt system-GL widget presents visible Obol pixels");
+    CHECK(pixel_near_rgb(presented, 4, 4, 26, 51, 179) &&
+	pixel_near_rgb(presented, 4, presented.height() - 5, 179, 51, 26),
+	"Qt system-GL widget presents the endpoint gradient across the canvas");
 
     unsigned char *pixels = NULL;
     size_t size = 0;
     unsigned int width = 0;
     unsigned int height = 0;
     unsigned int components = 0;
-    CHECK(brlobol_display_endpoint_capture(endpoint, &pixels, &size, &width,
-	&height, &components) && pixels && width == 96 && height == 72 &&
+    const int capture_ok = brlobol_display_endpoint_capture(endpoint, &pixels,
+	&size, &width, &height, &components);
+    if (!capture_ok || !pixels || width != 96 || height != 72 ||
+	components != 4 || size != 96u * 72u * 4u)
+	bu_log("Qt system-GL capture: ok=%d pixels=%p size=%zu dimensions=%ux%u components=%u widget=%dx%d dpr=%g\n",
+	    capture_ok, (void *)pixels, size, width, height, components,
+	    canvas->width(), canvas->height(), canvas->devicePixelRatioF());
+    CHECK(capture_ok && pixels && width == 96 && height == 72 &&
 	components == 4 && size == 96u * 72u * 4u,
 	"Qt system-GL endpoint captures through its active host");
     bu_free(pixels, "Qt system-GL endpoint capture");

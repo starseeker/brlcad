@@ -253,12 +253,19 @@ main(int argc, char **argv)
     BRLObolFeatureHandle command_handle =
 	controller->features().publishLineLayers("rtcheck::overlaps",
 		BRLObolFeatureScope::Shared, command_layers, &command_style);
+    std::vector<BRLObolFeatureMetadata> command_feature_metadata;
+    BRLObolFeatureMetadata command_schema_metadata;
+    command_schema_metadata.key = "result.schema";
+    command_schema_metadata.value = "brlcad.rtcheck.overlap.v1";
+    command_feature_metadata.push_back(command_schema_metadata);
     std::vector<BRLObolFeatureMetadata> command_primitive_metadata;
     BRLObolFeatureMetadata command_metadata;
     command_metadata.key = "overlap.objects";
     command_metadata.value = "box.s cone.s";
     command_primitive_metadata.push_back(command_metadata);
-    if (!command_handle.isValid() ||
+	if (!command_handle.isValid() ||
+	    !controller->features().replaceMetadata(command_handle,
+		command_feature_metadata) ||
 	    !controller->features().replacePrimitiveMetadata(command_handle,
 		0, command_primitive_metadata))
 	FAIL("qtcad command-result pick fixture should publish primitive metadata");
@@ -276,6 +283,10 @@ main(int argc, char **argv)
 	    !commandRayPicks[0].featurePickResolved ||
 	    commandRayPicks[0].featureName != "rtcheck::overlaps" ||
 	    commandRayPicks[0].featurePrimitiveIndex != 0 ||
+	    commandRayPicks[0].featureMetadata.size() != 1 ||
+	    commandRayPicks[0].featureMetadata[0].first != "result.schema" ||
+	    commandRayPicks[0].featureMetadata[0].second !=
+		"brlcad.rtcheck.overlap.v1" ||
 	    commandRayPicks[0].featurePrimitiveMetadata.size() != 1 ||
 	    commandRayPicks[0].featurePrimitiveMetadata[0].first !=
 		"overlap.objects" ||

@@ -62,6 +62,7 @@ struct QTCAD_EXPORT QgObolPickRecord {
     int nearestFaceVertexIndex;
     bool materialColorValid;
     bool featurePickResolved;
+    std::vector<std::pair<std::string, std::string> > featureMetadata;
     std::vector<std::pair<std::string, std::string> > featurePrimitiveMetadata;
 };
 
