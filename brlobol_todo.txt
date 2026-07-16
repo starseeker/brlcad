@@ -10,29 +10,6 @@ scalability or lifecycle limitations, and release gates.  Completed work
 belongs in source history and tests; detailed coverage inventories belong in
 `doc/notes/`; performance captures belong in `.build_perf/`.
 
-Scope
------
-
-Feature parity means preserving the drawing, interaction, editing, capture,
-framebuffer, and application workflows that supported BRL-CAD programs expose
-today.  It does not require adding rendering features that current BRL-CAD
-does not expose.
-
-The following are deliberately not migration blockers:
-
-* translating librt/liboptical material shaders or textures into OpenGL scene
-  materials;
-* stereo rendering until a supported application and native host request and
-  validate a stereo-capable surface;
-* replacing correct VList fallbacks with native Obol curve, point, text, or
-  surface nodes solely for representational purity;
-* adding shaded tessellation for primitives whose current librt tessellator is
-  itself unimplemented, provided existing wire behavior and diagnostics remain
-  available; and
-* restoring the historical rtwizard GUI unless it again becomes a supported
-  application.  The current `rtwizard` command and Archer-hosted view remain in
-  scope.
-
 Architecture Invariants
 -----------------------
 
@@ -89,25 +66,11 @@ Verified Baseline
 Priority 0: Existing Feature Parity
 -----------------------------------
 
-1. Complete the native application and host matrix.
+1. rtwizard GUI - if not migrated or has been removed, restore and make Obol native.
 
-   Run supported QGED, MGED, TclCAD/Archer, GSH, the current `rtwizard`
-   command, `rt`, and `fbserv` workflows on native X11, Windows, and macOS
-   hosts.  Cover every toolkit/engine combination actually shipped on that
-   platform, including simultaneous views, resize/DPI, active-view changes,
-   host replacement, system-GL context ownership, OSMesa presentation,
-   capture, ERT, framebuffer detach/reattach, database replacement, and close
-   while rendering or delivering callbacks.  Run the TCP/IPC/TLS lifecycle
-   and pinned-handshake cases on each platform that ships those transports.
-
-   The known gaps are native Windows Tk/WGL worker delivery and defining and
-   validating a supported macOS Tk host.  Xvfb is useful Linux coverage but is
-   not evidence for either native platform.
-
-   Exit condition: the supported-platform matrix is recorded with runnable
-   tests; close drains callbacks before endpoint and stream release; failed
-   replacement is transactional; and endpoints cannot exchange native host,
-   input, framebuffer, or capture state.
+   We do want to keep the original rtwizard GUI interface working more or less
+   like it does in main (improving it is fine, but we at least want to preserve
+   it's existing main-style behavior where correct.)
 
 2. Complete command-result and diagnostic interaction semantics.
 
@@ -144,9 +107,12 @@ Priority 0: Existing Feature Parity
 
 4. Close the final graphical producer inventory edge.
 
-   Runtime-validate ART tile publication in an Appleseed-enabled build.  Re-run
-   the production inventory for ART/ADRT, remrt/rtsrv, RT-family tools,
+   Re-run the production inventory for remrt/rtsrv, RT-family tools,
    framebuffer utilities, and image commands after any related change.
+
+   Defer runtime-validate ART/ADRT tile publication for now - there
+   is ongoing work elsewhere on the appleseed stack, and art validation will need
+   to wait for that..  ADRT is also being worked elsewhere.
 
    Exit condition: each supported graphical producer publishes through Obol or
    imgstream, or fails explicitly when no provider exists; none opens a legacy
@@ -155,40 +121,7 @@ Priority 0: Existing Feature Parity
 Priority 1: Key Scalability and Robustness Limits
 -------------------------------------------------
 
-5. Stress deferred realization and LoD on production-scale scenes.
-
-   Extend the current cancellation/queue tests to substantially larger models
-   and native hosted view replacement.  Stress camera churn, edits, erase,
-   source revision changes, database replacement/close, endpoint teardown, and
-   repeated proxy-to-final transitions while measuring queue depth, owner-thread
-   work, cache growth, peak memory, and time to useful pixels.
-
-   Workers must not touch attached Coin, GED, or toolkit state.  Stale results
-   and cancelled cache writes must never publish.  Autoview may follow dynamic
-   bounds only until they stabilize or the user changes the camera.
-
-   Exit condition: useful pixels precede outstanding full detail, camera-only
-   frames avoid source work, queues and memory remain bounded, and final scene
-   identity is correct after sustained churn and teardown.
-
-6. Make evaluated-wire drawing practical for thin-shell large models.
-
-   Preserve the symbolic boolweave semantics and deterministic region order of
-   draw mode 3 while redesigning candidate generation and ray/classification
-   work for thin-shell cases such as `havoc.g havoc`.  Parallelize queued ray
-   jobs with per-thread librt resources and deterministic merge rather than
-   changing visible region ordering or restoring historical Big-E as the
-   default.
-
-   Compare representative subtraction-heavy results against current BRL-CAD
-   behavior and retain the diagnostic comparison harness until correctness and
-   scalability are both established.
-
-   Exit condition: evaluated wire is correct and interactively usable on
-   Generic Twin, Havoc, and a larger production model without unbounded
-   candidate memory or nondeterministic output.
-
-7. Improve normal wireframe and shaded whole-path performance.
+5. Improve normal wireframe and shaded whole-path performance.
 
    Measure cold draw, first useful pixels, settled rotation/zoom, selection,
    lighting, source updates, traversal, submission, raster/readback,
@@ -204,7 +137,23 @@ Priority 1: Key Scalability and Robustness Limits
    transparency, lighting, interaction correctness, small-model latency, and
    bounded memory.
 
-8. Validate retained RT as an interactive production engine.
+6. Stress deferred realization and LoD on production-scale scenes.
+
+   Extend the current cancellation/queue tests to substantially larger models
+   and native hosted view replacement.  Stress camera churn, edits, erase,
+   source revision changes, database replacement/close, endpoint teardown, and
+   repeated proxy-to-final transitions while measuring queue depth, owner-thread
+   work, cache growth, peak memory, and time to useful pixels.
+
+   Workers must not touch attached Coin, GED, or toolkit state.  Stale results
+   and cancelled cache writes must never publish.  Autoview may follow dynamic
+   bounds only until they stabilize or the user changes the camera.
+
+   Exit condition: useful pixels precede outstanding full detail, camera-only
+   frames avoid source work, queues and memory remain bounded, and final scene
+   identity is correct after sustained churn and teardown.
+
+7. Validate retained RT as an interactive production engine.
 
    Exercise live QGED and native hosted MGED camera interaction, cancellation,
    preview/final cadence, source edits, clipping, output planes, capture, and
