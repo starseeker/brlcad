@@ -1,0 +1,559 @@
+BRL-CAD/Obol code survey and prioritized cleanup TODO
+====================================================
+
+Survey scope and baseline
+-------------------------
+
+This survey covers the BRL-CAD branch delta from its merge base with `main` through
+commit `795689f144` and the Obol implementation reached through the source-root
+`obol` symlink.  At the time of review the BRL-CAD branch was eight commits ahead of
+`main` and not behind it.  The emphasis is the new drawing/view stack and its public
+boundaries, not unrelated inherited Coin code in Obol.
+
+The branch has successfully removed the libdm/libbsg rendering dependency and has a
+working Obol path.  The next cleanup should therefore simplify and harden the path
+that now exists, rather than reopen the completed renderer migration.
+
+The size and API counts below are review indicators, not goals by themselves:
+
+* `src/libged/draw_obol.cpp` is about 22,500 lines.
+* `src/libBObol/database_source.cpp` is about 16,000 lines.
+* `src/libBObol/scene_controller.cpp`, `view_controller.cpp`, and
+  `view_store.cpp` are each roughly 4,000-5,100 lines.
+* `include/ged/draw.h` is about 2,600 lines and has roughly 305 exported
+  declarations.
+* Across the new/expanded public libged draw, Obol, transaction, selection, index,
+  and view headers there are roughly 539 distinct `ged_*` names.  About 152 are 40
+  or more characters long, and the mean is about 34 characters.
+* About 205 public declarations in `ged/draw.h`, `ged/draw_obol.h`, and `ged/view.h`
+  accept a view as `void *` or `const void *`.
+* Several new tests are 5,800-6,500 lines, which makes ownership and capability
+  regressions harder to isolate than necessary.
+
+Priority definitions
+--------------------
+
+P0 items should be completed before the new API is treated as stable or the branch
+is proposed for integration.  P1 items are the next maintainability and integration
+work.  P2 items may follow once the architecture and API are settled.
+
+
+P0 - correctness, ownership, and API-freeze work
+------------------------------------------------
+
+1. Replace process-global reference-token registries with owned, validated handles.
+
+   Evidence:
+
+   * `src/libged/draw_obol.cpp` stores feature and polygon reference tokens in the
+     process-global `ged_obol_feature_ref_tokens` and
+     `ged_obol_polygon_ref_tokens` vectors.
+   * Tokens are allocated with `new`, linearly searched, and returned to C callers
+     as pointer-valued integers.  There is no matching deletion or registry clear.
+   * A token retains a raw `BObolViewController *`, so controller destruction can
+     leave a token that passes the magic-number check but refers to dead storage.
+   * The registries are also unsynchronized, despite the broader design having
+     worker-thread and host-lifetime concerns.
+
+   Action:
+
+   * Put feature and polygon handle state in the owning view context/store, not in
+     process-global vectors.
+   * Represent public references as opaque value handles containing an owner or
+     context identity, object id, and generation/revision.  Resolve all three
+     before use; never rely on a recoverable raw pointer value as identity.
+   * Invalidate handles deterministically when their context, store, or object is
+     destroyed.  Make stale-reference behavior part of the C API contract.
+   * Audit the GED scene-context token registry in `ged_draw_source.c` at the same
+     time.  Keep it only if it has a distinct purpose; otherwise use the same owned
+     handle table rather than a second token system.
+
+   Success/exit criteria:
+
+   * No process-global owning collection of feature, polygon, view, or scene tokens
+     remains in the bridge.
+   * Repeated create/destroy cycles have bounded memory use under ASan/LSan.
+   * A handle used after object removal, view teardown, controller replacement, or
+     id reuse is rejected without dereferencing freed memory.
+   * Concurrent read/resolve operations either have a documented owner-thread
+     requirement enforced by assertions, or pass TSan with explicit synchronization.
+
+
+2. Establish one public attachment/lifetime boundary: the display endpoint.
+
+   Evidence:
+
+   * `include/ged/draw_obol.h` exposes overlapping controller attach/ensure/detach,
+     per-view attach, scene-controller attach/ensure/detach/owned, and C++ typed
+     variants.
+   * `include/ged/view.h` separately exposes
+     `ged_view_context_display_endpoint_get/set`, which is already the boundary most
+     application code uses.
+   * `struct ged_drawable` carries parallel controller pointers, ownership flags, a
+     full-sync flag, an attached-controller registry, preserved sources, and scene
+     context tokens.  This makes teardown and replacement correctness depend on
+     several coupled state machines.
+
+   Action:
+
+   * Make a typed view context plus its display endpoint the sole public way to
+     attach, replace, query, and detach rendering state.
+   * Keep direct `BObolViewController` and scene-controller adapters private to
+     libged/libBObol.  Model shared per-GED scene ownership separately from the
+     per-view endpoint, with one explicit owner for each object.
+   * Move source preservation/replay into the scene/source owner if it is genuinely
+     needed during endpoint replacement.  Do not retain it as an independent
+     libged side channel.
+   * Update Qg/Qtcad and test consumers atomically.  Since this branch is not on
+     `main`, do not add another compatibility API merely to preserve branch-local
+     names.  There will be no deprecation periods - we are moving to a final,
+     clean design and code state immediately.
+
+   Success/exit criteria:
+
+   * Application code does not call direct Obol controller or scene-controller
+     attach/ensure functions.
+   * There is one documented ownership diagram and one lifecycle path for endpoint
+     attach, replacement, detach, view destruction, and GED destruction.
+   * Tests cover one scene shared by multiple views, endpoint replacement while a
+     scene is populated, hidden/visible view transitions, and teardown in every
+     ownership order.
+   * The parallel `gd_obol_*_owned` flags and attached-controller registry are gone,
+     or each remaining field has a unique invariant that cannot be represented by
+     the endpoint/scene owners.
+
+
+3. Redesign and split the libged draw/view API before freezing it.
+
+   Evidence:
+
+   * The current names repeatedly encode every layer involved.  Examples include
+     `ged_draw_obol_database_source_publish_lod_indexed_face_set_for_path`,
+     `ged_draw_obol_database_source_publish_primitive_wireframe_for_path`, and
+     `ged_draw_view_context_feature_highlighted_primitives_replace`.
+   * `void *view_ctx` discards type information, forces names to restate “view
+     context,” and permits accidental cross-context calls.
+   * `include/ged/draw.h` combines scene records, database-draw sources, command
+     result scenes, managed features, annotations, polygons, selection, and picking.
+
+   Action:
+
+   * Introduce opaque C types such as `struct ged_view_context` and, where needed,
+     `struct ged_view_set`.  Do not expose a concrete C++ implementation type.
+   * Partition the API by domain and header: scene/transaction records, draw
+     sources, view features and annotations, polygons, selection/picking, and
+     command-result scenes.
+   * Define a short vocabulary and let the type and header provide context.  A
+     reasonable direction is `ged_scene_*`, `ged_draw_source_*`,
+     `ged_view_feature_*`, `ged_annotation_*`, `ged_polygon_*`, and
+     `ged_result_*`.  Avoid opaque abbreviations.
+   * As illustrative outcomes, not mandatory spellings:
+
+       `ged_draw_view_context_feature_highlighted_primitives_replace`
+         -> `ged_view_feature_set_highlights`
+
+       `ged_draw_view_context_annotation_line_remove_points`
+         -> `ged_annotation_line_erase`
+
+       `ged_draw_command_scene_feature_primitive_metadata_replace`
+         -> `ged_result_set_primitive_metadata`
+
+   * Database-source publication and LoD realization functions should normally be
+     private implementation calls on a source/service, not hundreds of public libged
+     entry points with shorter names.
+   * Write the vocabulary, ownership rules, threading rules, return conventions,
+     and error behavior before doing the mechanical rename.  Update every in-tree
+     caller in the same change.
+
+   Success/exit criteria:
+
+   * No public view operation accepts an untyped `void *` view context.
+   * Each installed header has one coherent responsibility and can be included by
+     itself from both C and C++ where applicable.
+   * The public API inventory has no duplicate operation exposed through both an
+     Obol-specific and renderer-neutral route.
+   * A reviewer can determine an operation's owner, lifetime, thread, and result
+     semantics from its declaration and documentation without reading its body.
+   * An API/symbol manifest records the deliberately stable surface and prevents
+     accidental new exports.
+
+
+4. Resolve the librt import-lifetime workaround and remove private cross-library use.
+
+   Evidence:
+
+   * `doc/notes/obol_realization_coverage.txt` records an unresolved
+     `db_walk_tree` import/lifetime alias and a defensive primitive re-fetch with an
+     identity matrix in libBObol.
+   * Multiple new libged sources include `../librt/librt_private.h`, including
+     `draw_obol.cpp`, `ged_draw_source.c`, and transaction/BRep drawing code.
+   * A private libged header contains declarations marked `GED_EXPORT`, blurring the
+     installed ABI boundary.
+
+   Action:
+
+   * Reproduce and fix the import ownership/lifetime issue at the librt traversal
+     boundary, or add a narrow public traversal/evaluation API whose ownership is
+     explicit.  Remove the identity-matrix re-fetch once the source object has a
+     safe lifetime.
+   * Promote only the librt operations libged truly needs to supported librt APIs;
+     otherwise hide them behind a local adapter.  Stop including another library's
+     private header.
+   * Remove export annotations from private helpers and audit the resulting shared
+     library symbols with hidden visibility enabled.
+
+   Success/exit criteria:
+
+   * The new drawing/view stack has no `librt_private.h` includes, and the branch
+     introduces no new cross-library private-header dependency relative to `main`.
+   * The defensive second primitive import is gone and instance transforms remain
+     correct for nested combinations and repeated instances.
+   * Ownership tests pass under ASan with allocator reuse forced between traversal
+     and realization.
+   * Private libged/Obol adapter helpers are absent from the installed symbol/API
+     manifest.
+
+
+P1 - simplify implementations and complete integration
+-------------------------------------------------------
+
+5. Break up the libged Obol bridge and eliminate implicit publication state.
+
+   Evidence:
+
+   * `draw_obol.cpp` mixes attachment/lifetime, source publication, LoD/frontier
+     handling, features, polygons, command-result scenes, framebuffer state,
+     picking/snap, synchronization, and teardown in one translation unit.
+   * Eleven `thread_local` variables near the top of the file act as an implicit
+     parameter channel for source publication (view, mode, scene, group path,
+     appearance, line width, transparency, and color).
+
+   Action:
+
+   * Replace the thread-local publication channel with an explicit publication
+     context object passed through the traversal/realization path.
+   * After the public API redesign, split the bridge by responsibility.  Candidate
+     units are attachment, draw sources, LoD, managed features, polygons,
+     command-result scenes, and framebuffer/query support.
+   * Move renderer-neutral scene/source behavior into libBObol services when doing
+     so removes translation code; leave libged as a thin GED-to-service adapter.
+   * Keep shared data in an explicit owner and pass references, rather than adding
+     more file-static or GED side tables.
+
+   Success/exit criteria:
+
+   * No thread-local state is needed to communicate publication parameters.
+   * Each bridge unit has a single documented responsibility and focused tests.
+   * Source publication can be nested or run for two independent contexts without
+     state bleed.
+   * A full sync, incremental transaction replay, endpoint replacement, and LoD
+     update produce equivalent scene state in the existing integration tests.
+
+
+6. Replace name scans and dual feature identity with one typed resolver.
+
+   Evidence:
+
+   * `src/libged/view/objs.cpp` first resolves a view-object record and then scans
+     shape records by display, leaf, or full-path strings.
+   * Commands consequently carry both a string name and a `ged_draw_shape_ref` into
+     managed-feature operations.
+   * `doc/notes/brl_obol_view_operations.txt` already identifies the desired end
+     state: resolve one typed handle rather than branch between feature and shape
+     references.
+
+   Action:
+
+   * Define one managed-feature reference/resolver that can identify a local/shared
+     annotation, a database-backed source, or a command-result feature.
+   * Resolve names once at the CLI boundary, report ambiguity, and pass only the
+     typed reference below it.  Indexed lookup should replace whole-scene scans.
+   * Centralize feature description and enum-to-string conversion.  Add structured
+     output (`--json`) instead of making callers parse display text.
+
+   Success/exit criteria:
+
+   * `_view_obj_shape_ref_find` and name-plus-shape-ref operation signatures are
+     gone.
+   * Duplicate leaf/display names never select an arbitrary object.
+   * Tests cover local and shared features, database instances, command results,
+     ambiguous and missing names, and stale handles.
+   * Text and JSON output are generated from the same structured record.
+
+
+7. Decompose oversized libBObol services while preserving a small facade.
+
+   Evidence:
+
+   * `BObolViewController` currently owns rendering, camera and presentation state,
+     LoD scheduling/cache/residency, picking, scene-controller integration,
+     feature/polygon/selection stores, and framebuffer layers.
+   * Its implementation has roughly 210 methods; `SoBRLSceneController` has about
+     134 and `SoBRLDatabaseSource` about 131.
+   * The corresponding installed headers expose large concrete layouts and many
+     implementation dependencies.
+
+   Action:
+
+   * Keep one convenient host-facing view facade, but implement it with private
+     services for presentation/render state, LoD/residency, interaction/query, and
+     scene/store coordination.
+   * Use pImpl/private service objects for exported C++ classes whose concrete
+     layout does not need to be public.  This will reduce rebuild fan-out and make
+     future ABI policy possible.
+   * Split `SoBRLDatabaseSource` by source inventory, evaluation/publication,
+     caching/LoD, and scene-node mutation.  Keep Coin graph mutation on the owner
+     thread.
+   * Rename `SoBRLSceneController` to `BObolSceneController`: it is a service, not an
+     `SoNode`, element, or action.  Reserve `SoBRL*` for actual Inventor types and
+     use `BObol*` for services/value types and `bobol_*` for any C ABI.
+
+   Success/exit criteria:
+
+   * Each extracted service has one owner, one threading rule, and unit tests that
+     do not require constructing the entire host stack.
+   * Public facade headers no longer include private cache/scheduler/store details.
+   * `SoBRL*` names all denote Inventor nodes, actions, elements, or closely related
+     Inventor runtime types.
+   * Existing host code uses the facade and endpoint, not the extracted internals.
+
+
+8. Remove the remaining migration adapters and transitional compact-record state.
+
+   Evidence:
+
+   * `doc/notes/obol_realization_coverage.txt` says GED still uses a libBObol
+     evaluated-wire compatibility adapter even though the supported correctness
+     boundary is `rt_eval_wireframe`.
+   * `doc/notes/brl_obol_view_lod.txt` describes off-scene shape handles retained in
+     the compact index as transitional record sources.
+
+   Action:
+
+   * Make one layer own evaluated-wire conversion.  Prefer direct consumption of
+     `rt_eval_wireframe` output by the database source, then remove the compatibility
+     adapter and duplicate conversion path.
+   * Replace off-scene shape handles in the normal compact-index path with compact
+     metadata/geometry-source records.  Make promotion to editable/selected scene
+     state and demotion back to compact state explicit operations.
+   * Inventory every symbol/file containing “compat”, “legacy”, “preserved”, or an
+     old renderer name in the branch delta.  Classify it as required, removable, or
+     intentionally deferred; remove rather than rename the removable cases.
+
+   Success/exit criteria:
+
+   * There is one evaluated-wire implementation and one conversion owner.
+   * Normal compact LoD operation retains no off-scene render-shape handle solely as
+     a metadata source.
+   * Selection/edit promotion and demotion retain identity, appearance, transform,
+     and LoD state in focused tests.
+   * Every surviving compatibility path has a named external consumer, removal
+     condition, and test; no indefinite branch-local shim remains.
+
+
+9. Integrate libBObol and Obol CAD APIs into Doxygen as first-class modules.
+
+   Evidence:
+
+   * `misc/doxygen/CMakeLists.txt` does not include libBObol.  Its lowercase module
+     derivation also needs an explicit mapping for the capitalized library name.
+   * Obol's `docs/Doxyfile.in` includes `include/Inventor` and `src`, but not the new
+     public `include/Obol` CAD/render headers.
+   * The new headers have sparse API comments.  For example, the large view
+     controller and database-source headers have only a few Doxygen blocks.
+   * Both projects use `EXTRACT_ALL`; in that mode `WARN_IF_UNDOCUMENTED` does not
+     provide the intended missing-documentation gate.
+
+   Action:
+
+   * Add libBObol to the BRL-CAD Doxygen modules with explicit input and display
+     naming.  Add `include/Obol` to Obol's inputs.
+   * Define groups for display/hosting, scene and sources, LoD, features/selection,
+     query/interaction, and C integration.  Add cross-links between the BRL-CAD
+     adapter and the Obol contract it implements.
+   * Document ownership, valid lifetime, owner thread, callback reentrancy, return
+     values, units/coordinate spaces, and stale-handle behavior on every stable
+     declaration.
+   * Fix file-level comment syntax and duplicated forward declarations while
+     splitting `ged/draw.h`.
+   * Add a documentation CI target that treats warnings in the new modules as
+     errors; allowlist unrelated legacy documentation debt rather than hiding new
+     warnings with `EXTRACT_ALL`.
+
+   Success/exit criteria:
+
+   * Generated documentation contains navigable libBObol and Obol CAD modules and
+     links every public stable type/function to its owning module.
+   * The new modules build with zero undocumented-member, unresolved-reference, and
+     duplicate-anchor warnings.
+   * All stable endpoint, source, LoD, feature, selection, and query APIs state
+     ownership and threading semantics.
+   * A clean documentation build is exercised by CI.
+
+
+10. Define the installed API/ABI tier and make packaging test it.
+
+    Evidence:
+
+    * Forty-seven BObol headers are installed, while `include/BObol.h` omits several
+      of them, including draw-cache, mesh-LoD-cache, performance, attachment, and
+      view-query headers.  It is unclear whether these are stable, advanced, or
+      accidentally installed internals.
+    * Exported C++ classes expose STL members and complete layouts while the library
+      already has an SOVERSION, creating an implied ABI promise the current design
+      cannot comfortably keep.
+
+    Action:
+
+    * Classify every header and exported symbol as stable public, advanced public,
+      or private.  Install only the first two tiers and document the stability of
+      each.
+    * Make `BObol.h` include the complete stable tier.  Move cache/scheduler/internal
+      helpers to private headers unless external consumers are deliberately
+      supported.
+    * Choose and document an ABI policy.  Use pImpl/opaque C handles at stable
+      boundaries, or explicitly mark the C++ surface experimental until a freeze.
+    * Add header self-containment, umbrella-header, installed-package consumer, and
+      exported-symbol checks.
+
+    Success/exit criteria:
+
+    * Every installed header appears in the API-tier manifest and compiles alone.
+    * A small out-of-tree CMake consumer builds and links using only installed files.
+    * SOVERSION and compatibility documentation agree with the actual ABI policy.
+    * Private cache, store, adapter, and scheduler symbols are not installed or
+      exported accidentally.
+
+
+11. Reorganize tests around contracts and make the headless suite truthful.
+
+    Evidence:
+
+    * Several individual test sources exceed 5,800 lines and cover many unrelated
+      behaviors in one executable.
+    * Obol describes a headless-first design, but display/GLX-dependent tests are
+      not cleanly separated from core tests in a no-`DISPLAY` environment.
+    * The most important newly found risks are ownership order, stale handles,
+      implicit state, and installed API boundaries; these need targeted tests.
+
+    Action:
+
+    * Split giant tests by contract with shared fixture/builders: attachment
+      lifetime, transactions, source publication, LoD/residency, feature handles,
+      selection/query, and framebuffer/display hosting.
+    * Label core/headless, X/GLX integration, image-baseline, performance, and
+      sanitizer tests.  A core/headless label must not initialize a display backend.
+    * Add ASan/LSan/UBSan coverage for ownership and handle tests and TSan coverage
+      for worker/publication boundaries where supported.
+    * Add API contract tests from items 3 and 10, and retain representative visual
+      baselines for wireframe, transparency, selection, and LoD transitions.
+
+    Success/exit criteria:
+
+    * The documented headless command passes with `DISPLAY` unset.
+    * Display-required tests skip with an explicit reason or run only under their
+      display label; they do not appear as unexplained core failures.
+    * A failing capability maps to a focused CTest name/source rather than a
+      multi-thousand-line omnibus test.
+    * Sanitizer jobs exercise every endpoint ownership order and stale-handle case.
+
+
+P2 - consistency, tooling, and release completion
+-------------------------------------------------
+
+12. Normalize naming, result, and error conventions after the API split.
+
+    Action:
+
+    * Use the naming rule from item 7 consistently.  Rename variables by role
+      (`endpoint`, `scene`, `source`, `feature`, `handle`) rather than by historical
+      layer.  Avoid “controller” for passive stores or value records.
+    * Define per-layer result conventions.  Current APIs mix `int`, `SbBool`,
+      `size_t`, BRL-CAD success codes, changed/no-op/error triples, and count-or-error
+      returns.  Prefer typed status enums plus explicit out values where ambiguity
+      exists.
+    * Normalize public struct/type suffixes and remove inconsistent `_s`/`_t`
+      spellings as part of the single atomic API rename.
+
+    Success/exit criteria:
+
+    * The API guide contains one naming glossary and one result/error table.
+    * No public function uses one integer for an undocumented mixture of boolean,
+      count, and error meanings.
+    * Static checks or API review scripts reject obsolete prefixes and newly
+      exported symbols that violate the vocabulary.
+
+
+14. Make the pivot guard and historical notes maintainable.
+
+    Action:
+
+    * Keep the architectural guard, but turn its large hard-coded CMake rule body
+      into documented, data-driven categories: forbidden dependencies, forbidden
+      ownership paths, required files/APIs, and temporary tombstones.
+    * Separate permanent invariants from migration-only checks with an owner and
+      removal condition for each temporary rule.
+    * Consolidate the many completed-work and realization notes into an architecture
+      overview, an active-debt list, and archived milestone records.  Move active
+      facts referenced by code into Doxygen or developer documentation.
+
+    Success/exit criteria:
+
+    * A guard failure names the violated invariant and remediation, not only a regex
+      or source filename.
+    * Every temporary rule and active documentation TODO has an owner/removal
+      condition; completed migration steps are archival and cannot be mistaken for
+      current design requirements.
+    * Renaming/splitting a source file does not require editing unrelated guard
+      rules.
+
+
+15. Close the documented platform and threading matrix deliberately.
+
+    Action:
+
+    * Publish a matrix for Linux/X11, headless operation, and the currently deferred
+      Windows/macOS hosts.  Do not make deferred platforms a blocker for the API
+      cleanup, but do not imply validation that has not occurred.
+    * In Obol, document the owner-thread boundary for all new CAD/render APIs and
+      ensure LoD workers return plain data without touching the Coin scene graph.
+      Track inherited global thread-safety limitations separately from the new
+      BRL-CAD contract.
+    * Preserve the current “one hidden quad pane, one context/endpoint” host rule;
+      add a lazy-pane test if pane destruction/recreation is introduced later.
+
+    Success/exit criteria:
+
+    * Supported and deferred configurations are explicit in release and developer
+      documentation.
+    * Tests/assertions prove worker code does not mutate Coin nodes or global type
+      state off the owner thread.
+    * Each supported host mode has a lifecycle test; deferred hosts have named
+      enabling work rather than implicit assumptions.
+
+
+Recommended execution order
+---------------------------
+
+1. Write the ownership/threading/API vocabulary, then implement P0 items 1-4
+   together.  They share the same typed-context and handle decisions and should not
+   accumulate compatibility wrappers between intermediate designs.
+2. Split the bridge and libBObol services (items 5-8) while migrating all in-tree
+   callers to the final API.  Add focused lifetime and equivalence tests with each
+   extraction.
+3. Freeze the deliberate API only after Doxygen, installed-header/package tests,
+   and the public/private manifest pass (items 9-11).
+4. Apply the consistency/tooling/release work in items 12-15 without reopening the
+   completed libdm/libbsg migration.
+
+
+Explicitly deferred or out of scope for this cleanup
+----------------------------------------------------
+
+* Wholesale cleanup of inherited Coin/Obol internals that are untouched by the new
+  CAD/render contract.
+* Reintroducing ART/ADRT or old libdm/libbsg compatibility paths.
+* Optional future representation types not required by current BRL-CAD drawing.
+* Claiming Windows/macOS release support before those hosts are validated.  Their
+  work belongs in the explicit platform matrix, not in compatibility code embedded
+  in the core architecture.
