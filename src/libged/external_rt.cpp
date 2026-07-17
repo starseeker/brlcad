@@ -84,21 +84,21 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	return BRLCAD_ERROR;
     }
 
-    struct brlobol_endpoint_property_value framebuffer_mode =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value framebuffer_mode =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx,
 		"composition.framebuffer.mode", &framebuffer_mode) !=
-	BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	BOBOL_ENDPOINT_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol framebuffer composition policy\n");
 	return BRLCAD_ERROR;
     }
     if (BU_STR_EQUAL(framebuffer_mode.string_value, "off")) {
-	framebuffer_mode.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+	framebuffer_mode.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
 	framebuffer_mode.string_value = "underlay";
 	if (ged_view_context_display_property_set(view_ctx,
 		    "composition.framebuffer.mode", &framebuffer_mode) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    BOBOL_ENDPOINT_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		    "unable to enable the Obol framebuffer underlay\n");
 	    return BRLCAD_ERROR;

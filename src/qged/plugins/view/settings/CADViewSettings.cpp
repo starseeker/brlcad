@@ -30,7 +30,7 @@
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "ged/draw.h"
 #include "ged/view.h"
 #include "qtcad/QgPluginContext.h"
@@ -50,11 +50,11 @@ qged_framebuffer_mode_get(const void *view_ctx, int *mode)
     if (!view_ctx || !mode)
 	return 0;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx,
 	    "composition.framebuffer.mode", &value) !=
-	BRLOBOL_ENDPOINT_PROPERTY_OK || !value.string_value)
+	BOBOL_ENDPOINT_PROPERTY_OK || !value.string_value)
 	return 0;
 
     if (BU_STR_EQUAL(value.string_value, "off"))
@@ -80,13 +80,13 @@ qged_framebuffer_mode_set(void *view_ctx, int mode)
 	mode >= static_cast<int>(sizeof(modes) / sizeof(modes[0])))
 	return 0;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
     value.string_value = modes[mode];
     return ged_view_context_display_property_set(view_ctx,
 	"composition.framebuffer.mode", &value) ==
-	BRLOBOL_ENDPOINT_PROPERTY_OK;
+	BOBOL_ENDPOINT_PROPERTY_OK;
 }
 
 static int
@@ -96,10 +96,10 @@ qged_faceplate_property_get(const void *view_ctx, const char *name,
     if (!view_ctx || !name || !enabled)
 	return 0;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx, name, &value) !=
-	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	BOBOL_ENDPOINT_PROPERTY_OK)
 	return 0;
     *enabled = value.bool_value ? 1 : 0;
     return 1;
@@ -111,12 +111,12 @@ qged_faceplate_property_set(void *view_ctx, const char *name, int enabled)
     if (!view_ctx || !name)
 	return 0;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
     value.bool_value = enabled ? 1 : 0;
     return ged_view_context_display_property_set(view_ctx, name, &value) ==
-	BRLOBOL_ENDPOINT_PROPERTY_OK;
+	BOBOL_ENDPOINT_PROPERTY_OK;
 }
 
 /* Helper: update a checkbox to reflect an integer flag, blocking signals

@@ -25,7 +25,7 @@
 /** @} */
 
 #include "common.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "bv.h"
 #include "ged.h"
 #include "ged/draw_obol.h"
@@ -42,16 +42,16 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int UNUSED(restore_zbuffe
     if (!gedp || !draw_view_ctx)
 	return;
 
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(draw_view_ctx);
     if (!endpoint)
 	return;
 
     go_draw(draw_view_ctx);
     (void)ged_draw_obol_framebuffer_present(gedp);
-    if (!brlobol_display_endpoint_view_sync(endpoint, draw_view_ctx))
+    if (!bobol_display_endpoint_view_sync(endpoint, draw_view_ctx))
 	return;
-    (void)brlobol_display_endpoint_request_frame(endpoint, "TclCAD refresh");
+    (void)bobol_display_endpoint_request_frame(endpoint, "TclCAD refresh");
 }
 
 void

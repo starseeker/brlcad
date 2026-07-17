@@ -76,7 +76,7 @@ endif(TARGET ged_test_select)
 
 # Public GED state-service coverage.  This deliberately avoids removed
 # migration-internal APIs.
-brlcad_addexec(ged_test_state_services test_state_services.cpp "libged;libbrlobol" TEST)
+brlcad_addexec(ged_test_state_services test_state_services.cpp "libged;libBObol" TEST)
 if(TARGET ged_test_state_services)
   add_dependencies(ged_test_state_services ged_plugins)
 endif(TARGET ged_test_state_services)

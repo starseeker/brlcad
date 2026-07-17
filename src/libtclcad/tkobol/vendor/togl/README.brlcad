@@ -12,7 +12,7 @@ license is in `Tcl3D_License.txt`.
 BRL-CAD changes:
 
 * Rename the package initializer and widget constructor to the private
-  `BrlcadTkObolHost` / `::brlcad::tkobol::host` names.
+  `BrlcadTkObolHost` / `::brlcad::tkObol::host` names.
 * Remove Tcl3D build metadata registration.
 * Remove the GLEW dependency.  The host uses platform OpenGL declarations and
   loads optional context-creation entry points through GLX/WGL directly.

@@ -1240,22 +1240,22 @@ bigE_context_prepare(struct bigE_data *dgcdp,
     dgcdp->candidate_index = 0;
     dgcdp->eval_flags = eval_flags;
 
-    const char *bw_diag = getenv("BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG");
+    const char *bw_diag = getenv("BOBOL_EVAL_WIRE_BOOLWEAVE_DIAG");
     dgcdp->boolweave_diag_enabled = (bw_diag && bw_diag[0] && bu_strcmp(bw_diag, "0"));
-    const char *bige_stats = getenv("BRLOBOL_EVAL_WIRE_BIGE_STATS");
+    const char *bige_stats = getenv("BOBOL_EVAL_WIRE_BIGE_STATS");
     dgcdp->bige_stats_enabled = (bige_stats && bige_stats[0] && bu_strcmp(bige_stats, "0"));
     const uint32_t method = eval_flags & RT_EVAL_WIREFRAME_F_METHOD_MASK;
     dgcdp->boolweave_eval_enabled =
 	(method != RT_EVAL_WIREFRAME_F_BIGE);
     dgcdp->boolweave_eval_filter_enabled =
-	bigE_env_enabled("BRLOBOL_EVAL_WIRE_BOOLWEAVE_FILTER");
+	bigE_env_enabled("BOBOL_EVAL_WIRE_BOOLWEAVE_FILTER");
     dgcdp->profile_enabled =
 	((eval_flags & RT_EVAL_WIREFRAME_F_PROFILE) ||
 	 bigE_env_enabled("RT_EVAL_WIREFRAME_PROFILE") ||
-	 bigE_env_enabled("BRLOBOL_EVAL_WIRE_PROFILE"));
+	 bigE_env_enabled("BOBOL_EVAL_WIRE_PROFILE"));
     dgcdp->profile_region_report_enabled =
 	bigE_env_enabled("RT_EVAL_WIREFRAME_PROFILE_REGIONS") ||
-	bigE_env_enabled("BRLOBOL_EVAL_WIRE_PROFILE_REGIONS");
+	bigE_env_enabled("BOBOL_EVAL_WIRE_PROFILE_REGIONS");
     dgcdp->profile_progress_enabled =
 	dgcdp->profile_enabled &&
 	bigE_env_enabled("RT_EVAL_WIREFRAME_PROFILE_PROGRESS");
@@ -1263,7 +1263,7 @@ bigE_context_prepare(struct bigE_data *dgcdp,
 	bigE_env_size("RT_EVAL_WIREFRAME_PROFILE_TOP", dgcdp->profile_top_limit);
     dgcdp->boolweave_diag_limit = 64;
     if (dgcdp->boolweave_diag_enabled) {
-	const char *bw_limit = getenv("BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG_LIMIT");
+	const char *bw_limit = getenv("BOBOL_EVAL_WIRE_BOOLWEAVE_DIAG_LIMIT");
 	if (bw_limit && bw_limit[0])
 	    dgcdp->boolweave_diag_limit = (size_t)strtoull(bw_limit, NULL, 10);
     }

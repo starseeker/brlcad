@@ -9,9 +9,9 @@
 
 #include "bv.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/lod_realization.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BLodRealization.h"
+#include "BObol/BViewController.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -202,7 +202,7 @@ test_shape_record_by_path(struct ged *gedp,
 }
 
 static SoBRLDatabaseSource *
-render_source(BRLObolViewController *controller, int index);
+render_source(BObolViewController *controller, int index);
 
 static void
 collect_render_sources(SoNode *node,
@@ -225,7 +225,7 @@ collect_render_sources(SoNode *node,
 }
 
 static std::vector<SoBRLDatabaseSource *>
-render_sources(BRLObolViewController *controller)
+render_sources(BObolViewController *controller)
 {
     std::vector<SoBRLDatabaseSource *> sources;
     if (controller)
@@ -236,13 +236,13 @@ render_sources(BRLObolViewController *controller)
 }
 
 static int
-render_source_count(BRLObolViewController *controller)
+render_source_count(BObolViewController *controller)
 {
     return static_cast<int>(render_sources(controller).size());
 }
 
 static SoBRLDatabaseSource *
-render_source(BRLObolViewController *controller, int index)
+render_source(BObolViewController *controller, int index)
 {
     std::vector<SoBRLDatabaseSource *> sources = render_sources(controller);
     return index >= 0 && static_cast<size_t>(index) < sources.size() ?
@@ -250,7 +250,7 @@ render_source(BRLObolViewController *controller, int index)
 }
 
 static SoBRLDatabaseSource *
-source_for_path(BRLObolViewController *controller, const char *path)
+source_for_path(BObolViewController *controller, const char *path)
 {
     if (!controller || !path)
 	return NULL;
@@ -263,7 +263,7 @@ source_for_path(BRLObolViewController *controller, const char *path)
 }
 
 static SoBRLDatabaseSource *
-source_for_path_mode(BRLObolViewController *controller,
+source_for_path_mode(BObolViewController *controller,
 	const char *path,
 	int draw_mode)
 {
@@ -278,17 +278,17 @@ source_for_path_mode(BRLObolViewController *controller,
 }
 
 static int
-scene_display_summary_by_path(BRLObolViewController *controller,
+scene_display_summary_by_path(BObolViewController *controller,
 	const char *path,
 	int nodeKind,
-	BRLObolSceneDisplaySummary *out)
+	BObolSceneDisplaySummary *out)
 {
     if (!controller || !controller->getSceneController() || !path)
 	return 0;
 
     const SoBRLSceneController *scene = controller->getSceneController();
     for (int i = 0; i < scene->getSceneDisplaySummaryCount(); i++) {
-	BRLObolSceneDisplaySummary summary;
+	BObolSceneDisplaySummary summary;
 	if (!scene->getSceneDisplaySummary(i, summary) || !summary.valid)
 	    continue;
 	if (summary.nodeKind == nodeKind &&
@@ -360,7 +360,7 @@ main(int argc, char **argv)
 	ged_view_active_ctx_set(gedp, view.viewContext());
 	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
@@ -534,7 +534,7 @@ main(int argc, char **argv)
 	    source->stale.getValue() ||
 	    source->staleReason.getValue() != SoBRLDatabaseSource::STALE_NONE)
 	FAIL("Obol stale-source sync should realize current GED source revisions");
-    BRLObolRealizedShapeSummary shape_summary;
+    BObolRealizedShapeSummary shape_summary;
     if (source->getRealizedShapeSummaryCount() <= 0 ||
 	    !source->getRealizedShapeSummary(0, shape_summary) ||
 	    shape_summary.ownerSourceRevision != expectedSourceRevision ||
@@ -550,7 +550,7 @@ main(int argc, char **argv)
     if (render_source_count(controller) != 0)
 	FAIL("Obol draw sync should remove erased database sources");
     if (scene_display_summary_by_path(controller, "box.s",
-	    BRLObolSceneTreeSummary::NODE_GROUP, NULL))
+	    BObolSceneTreeSummary::NODE_GROUP, NULL))
 	FAIL("Obol draw sync should prune empty GED draw groups after erase");
 
     struct ged_draw_appearance_settings shaded_appearance =
@@ -642,9 +642,9 @@ main(int argc, char **argv)
 	FAIL("nested GED erase should remove an Obol database source");
     if (render_source_count(controller) != 0 ||
 	    scene_display_summary_by_path(controller, "pair.c/box.s",
-		BRLObolSceneTreeSummary::NODE_GROUP, NULL) ||
+		BObolSceneTreeSummary::NODE_GROUP, NULL) ||
 	    scene_display_summary_by_path(controller, "pair.c",
-		BRLObolSceneTreeSummary::NODE_GROUP, NULL))
+		BObolSceneTreeSummary::NODE_GROUP, NULL))
 	FAIL("nested Obol erase should leave no synthetic GED group ancestors");
 
     ged_close(gedp);

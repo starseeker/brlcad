@@ -436,9 +436,9 @@ set_perspective_policy(void *view_ctx, double perspective)
     if (!view_ctx)
 	return;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
     value.double_value = perspective > 0.0 ? perspective : 0.0;
     (void)ged_view_context_display_property_set(view_ctx,
 	"view.perspective", &value);

@@ -85,9 +85,9 @@
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bn/tol.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/view_store.h"
-#include "brlobol/vlist_shape.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewStore.h"
+#include "BObol/BVListShape.h"
 #include "raytrace.h"
 #include "rt/edit.h"
 #include "rt/functab.h"
@@ -177,7 +177,7 @@ sketch_create_empty(struct db_i *dbip, const char *name)
 struct qsketch_line_set {
     QgView *view = NULL;
     std::string name;
-    BRLObolFeatureHandle handle;
+    BObolFeatureHandle handle;
     SbColor color;
 };
 
@@ -216,11 +216,11 @@ qsketch_line_set_points_set(qsketch_line_set *lines,
     if (qsketch_line_set_is_null(lines))
 	return 0;
 
-    BRLObolViewController *controller = lines->view->obolViewController();
+    BObolViewController *controller = lines->view->obolViewController();
     if (!points || !point_count) {
 	if (lines->handle.isValid()) {
 	    (void)controller->features().remove(lines->handle);
-	    lines->handle = BRLObolFeatureHandle();
+	    lines->handle = BObolFeatureHandle();
 	} else {
 	    (void)controller->features().remove(lines->name.c_str());
 	}
@@ -246,14 +246,14 @@ qsketch_line_set_points_set(qsketch_line_set *lines,
 	obol_commands.push_back(static_cast<int32_t>(cmd));
     }
 
-    BRLObolFeatureStyle style;
+    BObolFeatureStyle style;
     style.hasColor = TRUE;
     style.color = lines->color;
     style.hasSelectable = TRUE;
     style.selectable = TRUE;
 
     lines->handle = controller->features().publishLineSet(lines->name.c_str(),
-	    BRLObolFeatureScope::Local, obol_points, obol_commands, &style);
+	    BObolFeatureScope::Local, obol_points, obol_commands, &style);
     if (!lines->handle.isValid())
 	return 0;
 
@@ -268,7 +268,7 @@ qsketch_line_set_destroy(qsketch_line_set *lines)
     if (!lines)
 	return;
     if (!qsketch_line_set_is_null(lines)) {
-	BRLObolViewController *controller = lines->view->obolViewController();
+	BObolViewController *controller = lines->view->obolViewController();
 	if (lines->handle.isValid())
 	    (void)controller->features().remove(lines->handle);
 	else

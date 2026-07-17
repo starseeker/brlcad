@@ -11,8 +11,8 @@
 #include "qtcad/QgObolMeasure.h"
 
 #include "bg/line_layer.h"
-#include "brlobol/measure_action.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BMeasureAction.h"
+#include "BObol/BViewController.h"
 #include "bu/color.h"
 #include "qtcad/QgObolPick.h"
 #include "qtcad/QgSignalFlags.h"
@@ -53,7 +53,7 @@ QgObolMeasureGeometryRecord::QgObolMeasureGeometryRecord(void) :
 }
 
 static int
-qg_obol_measure_consume_source_full_detail(BRLObolViewController *controller,
+qg_obol_measure_consume_source_full_detail(BObolViewController *controller,
 	SoBRLMeasureAction &measureAction)
 {
     if (!controller)
@@ -140,7 +140,7 @@ qg_obol_measure_geometry_full_detail(QgView *display,
     if (!display)
 	return 0;
 
-    BRLObolViewController *controller = display->obolViewController();
+    BObolViewController *controller = display->obolViewController();
     if (!controller || !controller->getViewport() ||
 	    !controller->getViewport()->getRoot())
 	return 0;
@@ -198,7 +198,7 @@ qg_obol_measure_update_overlay(QgView *display,
     if (!display || !overlayId || !overlayId[0] || !points || pointCount <= 0)
 	return 0;
 
-    BRLObolViewController *obol = display->obolViewController();
+    BObolViewController *obol = display->obolViewController();
     if (!obol)
 	return 0;
 
@@ -250,7 +250,7 @@ qg_obol_measure_clear_overlay(QgView *display, const char *overlayId)
     if (!display || !overlayId || !overlayId[0])
 	return 0;
 
-    BRLObolViewController *obol = display->obolViewController();
+    BObolViewController *obol = display->obolViewController();
     if (!obol)
 	return 0;
 

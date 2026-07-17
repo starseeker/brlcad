@@ -9,12 +9,12 @@
 
 #include "bu/str.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/mesh_shape.h"
-#include "brlobol/lod_service.h"
-#include "brlobol/performance.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/vlist_shape.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BLodService.h"
+#include "BObol/BPerformance.h"
+#include "BObol/BViewController.h"
+#include "BObol/BVListShape.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -31,7 +31,7 @@
 #include <Inventor/nodes/SoOrthographicCamera.h>
 #include <Inventor/nodes/SoSeparator.h>
 
-#include <obol/cad/SoCADAssembly.h>
+#include <Obol/cad/SoCADAssembly.h>
 
 #include <QApplication>
 
@@ -139,14 +139,14 @@ find_source_in_node(SoNode *node, const char *path)
 
 static int
 compact_summary_for_path(SoBRLDatabaseSource *source, const char *path,
-	BRLObolCompactInstanceHandle &handle,
-	BRLObolCompactInstanceSummary &summary)
+	BObolCompactInstanceHandle &handle,
+	BObolCompactInstanceSummary &summary)
 {
     if (!source || !path)
 	return 0;
     for (int i = 0; i < source->getCompactInstanceCount(); i++) {
-	BRLObolCompactInstanceHandle candidate;
-	BRLObolCompactInstanceSummary candidateSummary;
+	BObolCompactInstanceHandle candidate;
+	BObolCompactInstanceSummary candidateSummary;
 	if (!source->getCompactInstanceHandle(i, candidate) ||
 	    !source->getCompactInstanceSummary(candidate, candidateSummary))
 	    continue;
@@ -195,7 +195,7 @@ find_nth_combination_leaf(union tree *tp, const char *name, int target,
 }
 
 static SoBRLDatabaseSource *
-find_source(BRLObolViewController *controller, const char *path)
+find_source(BObolViewController *controller, const char *path)
 {
     if (!controller)
 	return NULL;
@@ -212,8 +212,8 @@ source_has_selected_shapes(SoBRLDatabaseSource *source)
 
     if (source->hasCompactInstanceIndex()) {
 	for (int i = 0; i < source->getCompactInstanceCount(); i++) {
-	    BRLObolCompactInstanceHandle handle;
-	    BRLObolCompactInstanceSummary summary;
+	    BObolCompactInstanceHandle handle;
+	    BObolCompactInstanceSummary summary;
 	    if (source->getCompactInstanceHandle(i, handle) &&
 		source->getCompactInstanceSummary(handle, summary) &&
 		summary.selected)
@@ -242,8 +242,8 @@ compact_selected_count(SoBRLDatabaseSource *source)
 	return 0;
     int count = 0;
     for (int i = 0; i < source->getCompactInstanceCount(); i++) {
-	BRLObolCompactInstanceHandle handle;
-	BRLObolCompactInstanceSummary summary;
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
 	if (source->getCompactInstanceHandle(i, handle) &&
 	    source->getCompactInstanceSummary(handle, summary) &&
 	    summary.selected)
@@ -259,8 +259,8 @@ compact_hidden_count(SoBRLDatabaseSource *source)
 	return 0;
     int count = 0;
     for (int i = 0; i < source->getCompactInstanceCount(); i++) {
-	BRLObolCompactInstanceHandle handle;
-	BRLObolCompactInstanceSummary summary;
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
 	if (source->getCompactInstanceHandle(i, handle) &&
 	    source->getCompactInstanceSummary(handle, summary) &&
 	    !summary.visible)
@@ -276,7 +276,7 @@ test_compact_lod_submission_batches(SoBRLDatabaseSource *source)
 	source->getCompactInstanceCount() != 3)
 	return 0;
 
-    BRLObolLodService service;
+    BObolLodService service;
     service.setQueueLimits(3, 3, 1);
     if (!service.start(2, FALSE))
 	return 0;
@@ -285,7 +285,7 @@ test_compact_lod_submission_batches(SoBRLDatabaseSource *source)
     root->ref();
     root->addChild(source);
     SoOrthographicCamera *camera = new SoOrthographicCamera;
-    BRLObolViewController batchingController(root, camera);
+    BObolViewController batchingController(root, camera);
     batchingController.setLodService(&service);
     const uint64_t generation = service.beginGeneration();
     int totalSubmitted = 0;
@@ -301,7 +301,7 @@ test_compact_lod_submission_batches(SoBRLDatabaseSource *source)
 	if (service.inFlightCount() != 0 ||
 	    service.queuedResultCountForDiagnostics() == 0)
 	    break;
-	std::vector<BRLObolLodResult> drained;
+	std::vector<BObolLodResult> drained;
 	service.drainResults(drained);
 	if (!batchingController.hasPendingLodSubmissions()) {
 	    batchCount++;
@@ -312,12 +312,12 @@ test_compact_lod_submission_batches(SoBRLDatabaseSource *source)
     }
     batchingController.setLodService(NULL);
     service.stop();
-    BRLObolLodService undersizedService;
+    BObolLodService undersizedService;
     undersizedService.setQueueLimits(2, 2, 1);
     int undersizedRejected = 0;
     if (undersizedService.start(1, FALSE)) {
 	SoOrthographicCamera *undersizedCamera = new SoOrthographicCamera;
-	BRLObolViewController undersizedController(root, undersizedCamera);
+	BObolViewController undersizedController(root, undersizedCamera);
 	undersizedController.setLodService(&undersizedService);
 	undersizedRejected =
 	    undersizedController.submitLodRequests(&undersizedService,
@@ -339,7 +339,7 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 	!source->hasRealizedMeshGeometry())
 	return 0;
 
-    BRLObolLodService service;
+    BObolLodService service;
     service.setQueueLimits(96, 96, 96);
     if (!service.start(2, FALSE))
 	return 0;
@@ -354,11 +354,11 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 	source->realizedSourceRevision.getValue();
     int passed = 0;
     {
-	BRLObolViewController controller(root, camera);
+	BObolViewController controller(root, camera);
 	controller.setViewportSize(800, 600);
 	controller.setLodService(&service);
-	bu_setenv("BRLOBOL_LOD_AABB_TASK_DELAY_MS", "20", 1);
-	bu_setenv("BRLOBOL_LOD_OBB_TASK_DELAY_MS", "20", 1);
+	bu_setenv("BOBOL_LOD_AABB_TASK_DELAY_MS", "20", 1);
+	bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS", "20", 1);
 
 	const int initialSubmitted = controller.submitLodRequestsIfNeeded();
 	const int initialVisited = controller.getLastLodVisitedMeshCount();
@@ -406,8 +406,8 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 		rejected, inFlight, queued);
 	controller.setLodService(NULL);
     }
-    bu_setenv("BRLOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);
-    bu_setenv("BRLOBOL_LOD_OBB_TASK_DELAY_MS", "0", 1);
+    bu_setenv("BOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);
+    bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS", "0", 1);
     source->sourceRevision = originalSourceRevision;
     source->realizedSourceRevision = originalRealizedRevision;
     service.stop();
@@ -431,8 +431,8 @@ test_compact_lod_scale(struct db_i *dbip)
     source->representationMode = SoBRLDatabaseSource::REPRESENTATION_SHADED;
     source->sourceRevision = 1;
 
-    std::shared_ptr<obol::PartGeometry> geometry =
-	std::make_shared<obol::PartGeometry>();
+    std::shared_ptr<Obol::PartGeometry> geometry =
+	std::make_shared<Obol::PartGeometry>();
     geometry->shaded.emplace();
     geometry->shaded->positions = {
 	SbVec3f(-1.0f, -1.0f, 0.0f),
@@ -443,10 +443,10 @@ test_compact_lod_scale(struct db_i *dbip)
     geometry->shaded->bounds = SbBox3f(SbVec3f(-1.0f, -1.0f, 0.0f),
 	SbVec3f(1.0f, 1.0f, 0.0f));
 
-    std::vector<BRLObolCompactOccurrence> occurrences;
+    std::vector<BObolCompactOccurrence> occurrences;
     occurrences.reserve(candidateCount);
     for (int i = 0; i < candidateCount; i++) {
-	BRLObolCompactOccurrence occurrence;
+	BObolCompactOccurrence occurrence;
 	occurrence.geometry = geometry;
 	occurrence.summary.valid = TRUE;
 	occurrence.summary.path.sprintf("stress.c/tile.s@%d", i);
@@ -454,7 +454,7 @@ test_compact_lod_scale(struct db_i *dbip)
 	occurrence.summary.sourceType = "rpp";
 	occurrence.summary.geometryKind = "mesh";
 	occurrence.summary.shapeKind =
-	    BRLObolRealizedShapeSummary::SHAPE_MESH;
+	    BObolRealizedShapeSummary::SHAPE_MESH;
 	occurrence.summary.visible = TRUE;
 	occurrence.summary.selectable = TRUE;
 	occurrence.occurrenceIndex = static_cast<uint32_t>(i);
@@ -500,7 +500,7 @@ main(int argc, char **argv)
 	ged_view_active_ctx_set(gedp, view.viewContext());
 	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
@@ -574,10 +574,10 @@ main(int argc, char **argv)
 	pair->getRealizedMeshCount() != 0 ||
 	pair->getRealizedShapeSummaryCount() != 2)
 	FAIL("aggregate occurrences should expose summaries without Coin shape carriers");
-    BRLObolCompactInstanceHandle box_handle;
-    BRLObolCompactInstanceHandle ball_handle;
-    BRLObolCompactInstanceSummary box_initial;
-    BRLObolCompactInstanceSummary ball_initial;
+    BObolCompactInstanceHandle box_handle;
+    BObolCompactInstanceHandle ball_handle;
+    BObolCompactInstanceSummary box_initial;
+    BObolCompactInstanceSummary ball_initial;
     if (!compact_summary_for_path(pair, "box.s", box_handle, box_initial) ||
 	!compact_summary_for_path(pair, "ball.s", ball_handle, ball_initial))
 	FAIL("aggregate revision test should resolve initial occurrences");
@@ -587,8 +587,8 @@ main(int argc, char **argv)
     if (pair->setCompactInstanceMetadataForPath("box.s", FALSE,
 	17, 3, 9, 75, TRUE, compact_metadata_color, SbString("plastic")) != 1)
 	FAIL("leaf-addressed compact metadata should update one occurrence");
-    BRLObolCompactInstanceSummary box_metadata;
-    BRLObolCompactInstanceSummary ball_metadata;
+    BObolCompactInstanceSummary box_metadata;
+    BObolCompactInstanceSummary ball_metadata;
     if (!pair->getCompactInstanceSummary(box_handle, box_metadata) ||
 	!pair->getCompactInstanceSummary(ball_handle, ball_metadata) ||
 	box_metadata.regionId != 17 || box_metadata.airCode != 3 ||
@@ -613,7 +613,7 @@ main(int argc, char **argv)
     SoBRLSceneController independent_scene(independent_root);
     independent_scene.shareRealizationRepository(
 	controller->getSceneController());
-    BRLObolDatabaseSourceSummary pair_source_summary;
+    BObolDatabaseSourceSummary pair_source_summary;
     if (!pair->getSummary(pair_source_summary) ||
 	independent_scene.replaceDatabaseSourceInstanceRepresentation(
 	    pair_source_summary.instanceKey.getString(),
@@ -623,19 +623,19 @@ main(int argc, char **argv)
 	    pair_source_summary.drawMode,
 	    pair_source_summary.sourceRevision) < 0)
 	FAIL("independent view should publish the shared aggregate source");
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     independent_scene.realizePending();
-    struct BRLObolPerformanceCounters independent_counters;
-    brlobol_performance_counters_get(&independent_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters independent_counters;
+    bobol_performance_counters_get(&independent_counters);
+    bobol_performance_counters_set_enabled(0);
     SoBRLDatabaseSource *independent_pair =
 	independent_scene.findDatabaseSourceInstance(
 	    pair_source_summary.instanceKey.getString());
-    BRLObolCompactInstanceHandle independent_box_handle;
-    BRLObolCompactInstanceHandle independent_ball_handle;
-    BRLObolCompactInstanceSummary independent_box;
-    BRLObolCompactInstanceSummary independent_ball;
+    BObolCompactInstanceHandle independent_box_handle;
+    BObolCompactInstanceHandle independent_ball_handle;
+    BObolCompactInstanceSummary independent_box;
+    BObolCompactInstanceSummary independent_ball;
     if (!independent_pair || !independent_pair->isCompactOccurrenceRegistry() ||
 	!compact_summary_for_path(independent_pair, "box.s",
 	    independent_box_handle, independent_box) ||
@@ -652,8 +652,8 @@ main(int argc, char **argv)
 	    2.0f, 0.5f, 320, 240, 0, 1.0f, 1.0f) <= 0)
 	FAIL("independent view should accept a distinct realization policy");
     independent_scene.realizePending();
-    BRLObolCompactInstanceSummary primary_box_after_policy;
-    BRLObolCompactInstanceSummary independent_box_after_policy;
+    BObolCompactInstanceSummary primary_box_after_policy;
+    BObolCompactInstanceSummary independent_box_after_policy;
     if (!pair->getCompactInstanceSummary(box_handle,
 	    primary_box_after_policy) ||
 	!independent_pair->getCompactInstanceSummary(independent_box_handle,
@@ -676,14 +676,14 @@ main(int argc, char **argv)
 	repeated->getRealizedMeshCount() != 0)
 	FAIL("large repeated draw should remain carrier-free and addressable");
 
-    std::vector<BRLObolCompactInstanceHandle> repeated_handles;
-    std::vector<BRLObolCompactInstanceSummary> repeated_before;
+    std::vector<BObolCompactInstanceHandle> repeated_handles;
+    std::vector<BObolCompactInstanceSummary> repeated_before;
     repeated_handles.reserve(repeated_occurrence_count);
     repeated_before.reserve(repeated_occurrence_count);
     uint64_t repeated_geometry_identity = 0;
     for (int i = 0; i < repeated_occurrence_count; i++) {
-	BRLObolCompactInstanceHandle handle;
-	BRLObolCompactInstanceSummary summary;
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
 	if (!repeated->getCompactInstanceHandle(i, handle) ||
 	    !repeated->getCompactInstanceSummary(handle, summary) ||
 	    !summary.wireGeometry || summary.meshGeometry ||
@@ -695,7 +695,7 @@ main(int argc, char **argv)
 	repeated_before.push_back(summary);
     }
 
-    BRLObolDatabaseSourceSummary repeated_source_summary;
+    BObolDatabaseSourceSummary repeated_source_summary;
     if (!repeated->getSummary(repeated_source_summary))
 	FAIL("large repeated source should expose publication metadata");
     SoSeparator *third_root = new SoSeparator;
@@ -723,13 +723,13 @@ main(int argc, char **argv)
 	    repeated_source_summary.instanceKey.getString(), TRUE, FALSE, FALSE,
 	    0.75f, 1.0f, 1024, 768, 0, 1.0f, 1.0f) <= 0)
 	FAIL("three views should accept independent realization policies");
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     independent_scene.realizePending();
     third_scene.realizePending();
-    struct BRLObolPerformanceCounters repeated_view_counters;
-    brlobol_performance_counters_get(&repeated_view_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters repeated_view_counters;
+    bobol_performance_counters_get(&repeated_view_counters);
+    bobol_performance_counters_set_enabled(0);
     SoBRLDatabaseSource *independent_repeated =
 	independent_scene.findDatabaseSourceInstance(
 	    repeated_source_summary.instanceKey.getString());
@@ -753,16 +753,16 @@ main(int argc, char **argv)
 	    repeated_view_counters.plot_calls);
 	FAIL("additional view policies should reuse the repeated geometry repository");
     }
-    std::vector<BRLObolCompactInstanceHandle> repeated_view_handles[2];
-    std::vector<BRLObolCompactInstanceSummary> repeated_view_before[2];
+    std::vector<BObolCompactInstanceHandle> repeated_view_handles[2];
+    std::vector<BObolCompactInstanceSummary> repeated_view_before[2];
     for (int scene_index = 0; scene_index < 2; scene_index++) {
 	SoBRLDatabaseSource *scene_source = scene_index ? third_repeated :
 	    independent_repeated;
 	repeated_view_handles[scene_index].reserve(repeated_occurrence_count);
 	repeated_view_before[scene_index].reserve(repeated_occurrence_count);
 	for (int i = 0; i < repeated_occurrence_count; i++) {
-	    BRLObolCompactInstanceHandle handle;
-	    BRLObolCompactInstanceSummary summary;
+	    BObolCompactInstanceHandle handle;
+	    BObolCompactInstanceSummary summary;
 	    if (!scene_source->getCompactInstanceHandle(i, handle) ||
 		!scene_source->getCompactInstanceSummary(handle, summary) ||
 		summary.geometryIdentity != repeated_geometry_identity)
@@ -798,20 +798,20 @@ main(int argc, char **argv)
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "repeated.c");
     transform_repeated.view = view.viewContext();
     transform_repeated.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &transform_repeated))
 	FAIL("repeated transform edit should reconcile the retained aggregate");
-    struct BRLObolPerformanceCounters repeated_edit_counters;
-    brlobol_performance_counters_get(&repeated_edit_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters repeated_edit_counters;
+    bobol_performance_counters_get(&repeated_edit_counters);
+    bobol_performance_counters_set_enabled(0);
     repeated = find_source(controller, "repeated.c");
     int changed_placements = 0;
     if (!repeated ||
 	repeated->getCompactInstanceCount() != repeated_occurrence_count)
 	FAIL("repeated transform edit should preserve the occurrence count");
     for (int i = 0; i < repeated_occurrence_count; i++) {
-	BRLObolCompactInstanceSummary summary;
+	BObolCompactInstanceSummary summary;
 	if (!repeated->isCompactInstanceHandleValid(repeated_handles[i]) ||
 	    !repeated->getCompactInstanceSummary(repeated_handles[i], summary) ||
 	    summary.geometryIdentity != repeated_before[i].geometryIdentity ||
@@ -835,7 +835,7 @@ main(int argc, char **argv)
 	repeated_edit_counters.cad_compact_sources != 1)
 	FAIL("localized repeated transform should change one placement without geometry work");
 
-    BRLObolDatabaseSourceSummary repeated_after_summary;
+    BObolDatabaseSourceSummary repeated_after_summary;
     if (!repeated->getSummary(repeated_after_summary) ||
 	independent_scene.replaceDatabaseSourceInstanceRepresentation(
 	    repeated_after_summary.instanceKey.getString(),
@@ -852,13 +852,13 @@ main(int argc, char **argv)
 	    repeated_after_summary.drawMode,
 	    repeated_after_summary.sourceRevision) < 0)
 	FAIL("database edit should republish the repeated source to all views");
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     independent_scene.realizePending();
     third_scene.realizePending();
-    struct BRLObolPerformanceCounters repeated_republish_counters;
-    brlobol_performance_counters_get(&repeated_republish_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters repeated_republish_counters;
+    bobol_performance_counters_get(&repeated_republish_counters);
+    bobol_performance_counters_set_enabled(0);
     independent_repeated = independent_scene.findDatabaseSourceInstance(
 	repeated_after_summary.instanceKey.getString());
     third_repeated = third_scene.findDatabaseSourceInstance(
@@ -872,7 +872,7 @@ main(int argc, char **argv)
 	    independent_repeated;
 	int scene_changed_placements = 0;
 	for (int i = 0; i < repeated_occurrence_count; i++) {
-	    BRLObolCompactInstanceSummary summary;
+	    BObolCompactInstanceSummary summary;
 	    if (!scene_source->isCompactInstanceHandleValid(
 		    repeated_view_handles[scene_index][i]) ||
 		!scene_source->getCompactInstanceSummary(
@@ -904,13 +904,13 @@ main(int argc, char **argv)
     struct ged_draw_transaction redraw_shared_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
     redraw_shared_repeated.view = view.viewContext();
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &redraw_shared_repeated))
 	FAIL("shared-resident repeated source should redraw");
-    struct BRLObolPerformanceCounters shared_residency_counters;
-    brlobol_performance_counters_get(&shared_residency_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters shared_residency_counters;
+    bobol_performance_counters_get(&shared_residency_counters);
+    bobol_performance_counters_set_enabled(0);
     if (shared_residency_counters.plot_calls != 0 ||
 	shared_residency_counters.wire_cache_misses != 0)
 	FAIL("remaining view owners should retain shared repository geometry");
@@ -927,23 +927,23 @@ main(int argc, char **argv)
     struct ged_draw_transaction redraw_evicted_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
     redraw_evicted_repeated.view = view.viewContext();
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &redraw_evicted_repeated))
 	FAIL("last-owner-evicted repeated source should redraw");
-    struct BRLObolPerformanceCounters evicted_residency_counters;
-    brlobol_performance_counters_get(&evicted_residency_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters evicted_residency_counters;
+    bobol_performance_counters_get(&evicted_residency_counters);
+    bobol_performance_counters_set_enabled(0);
     if (evicted_residency_counters.plot_calls != 1 ||
 	evicted_residency_counters.wire_cache_misses != 1)
 	FAIL("last owner release should evict one shared repeated geometry payload");
 
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     view.aet(35.0, 20.0, 5.0);
-    struct BRLObolPerformanceCounters camera_only_counters;
-    brlobol_performance_counters_get(&camera_only_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters camera_only_counters;
+    bobol_performance_counters_get(&camera_only_counters);
+    bobol_performance_counters_set_enabled(0);
     if (camera_only_counters.source_replace_calls != 0 ||
 	camera_only_counters.sources_visited != 0 ||
 	camera_only_counters.sources_realized != 0 ||
@@ -977,8 +977,8 @@ main(int argc, char **argv)
     int selected_count = compact_selected_count(pair);
     if (selected_count != 1)
 	FAIL("nested selection should select exactly one aggregate occurrence");
-    BRLObolCompactInstanceSummary box_selected;
-    BRLObolCompactInstanceSummary ball_unselected;
+    BObolCompactInstanceSummary box_selected;
+    BObolCompactInstanceSummary ball_unselected;
     if (!pair->getCompactInstanceSummary(box_handle, box_selected) ||
 	!pair->getCompactInstanceSummary(ball_handle, ball_unselected) ||
 	box_selected.selectionRevision <= box_initial.selectionRevision ||
@@ -998,7 +998,7 @@ main(int argc, char **argv)
     int hidden_count = compact_hidden_count(pair);
     if (hidden_count != 1)
 	FAIL("nested visibility should hide exactly one aggregate occurrence");
-    BRLObolCompactInstanceSummary box_hidden;
+    BObolCompactInstanceSummary box_hidden;
 	if (!pair->getCompactInstanceSummary(box_handle, box_hidden))
 	FAIL("nested visibility should retain the occurrence handle");
     if (box_hidden.visibilityRevision <= box_selected.visibilityRevision ||
@@ -1045,8 +1045,8 @@ main(int argc, char **argv)
     if (hidden_count != 0)
 	FAIL("nested redraw should restore the erased aggregate occurrence");
 
-    BRLObolCompactInstanceSummary box_before;
-    BRLObolCompactInstanceSummary ball_before;
+    BObolCompactInstanceSummary box_before;
+    BObolCompactInstanceSummary ball_before;
     if (!compact_summary_for_path(pair, "box.s", box_handle, box_before) ||
 	!compact_summary_for_path(pair, "ball.s", ball_handle, ball_before))
 	FAIL("aggregate refresh test should resolve stable occurrence handles");
@@ -1054,16 +1054,16 @@ main(int argc, char **argv)
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
     stale_pair_style.view = view.viewContext();
     stale_pair_style.stale_reason = GED_DRAW_STALE_SETTINGS_CHANGED;
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &stale_pair_style))
 	FAIL("style revision should republish aggregate instance state");
-    struct BRLObolPerformanceCounters style_counters;
-    brlobol_performance_counters_get(&style_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters style_counters;
+    bobol_performance_counters_get(&style_counters);
+    bobol_performance_counters_set_enabled(0);
     pair = find_source(controller, "pair.c");
-    BRLObolCompactInstanceSummary box_style_after;
-    BRLObolCompactInstanceSummary ball_style_after;
+    BObolCompactInstanceSummary box_style_after;
+    BObolCompactInstanceSummary ball_style_after;
     bool style_state_valid = pair &&
 	pair->isCompactInstanceHandleValid(box_handle) &&
 	pair->isCompactInstanceHandleValid(ball_handle) &&
@@ -1109,8 +1109,8 @@ main(int argc, char **argv)
     stale_box.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
     if (!apply_and_sync(gedp, &view, &stale_box))
 	FAIL("primitive edit should refresh the matching compact part");
-    BRLObolCompactInstanceSummary box_after;
-    BRLObolCompactInstanceSummary ball_after;
+    BObolCompactInstanceSummary box_after;
+    BObolCompactInstanceSummary ball_after;
     if (!pair->isCompactInstanceHandleValid(box_handle) ||
 	!pair->isCompactInstanceHandleValid(ball_handle) ||
 	!pair->getCompactInstanceSummary(box_handle, box_after) ||
@@ -1186,13 +1186,13 @@ main(int argc, char **argv)
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
     stale_pair.view = view.viewContext();
     stale_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &stale_pair))
 	FAIL("combination edit should rebuild the compact occurrence diff");
-    struct BRLObolPerformanceCounters structural_counters;
-    brlobol_performance_counters_get(&structural_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters structural_counters;
+    bobol_performance_counters_get(&structural_counters);
+    bobol_performance_counters_set_enabled(0);
     if (structural_counters.wire_cache_hits < 2 ||
 	structural_counters.plot_calls > 1) {
 	fprintf(stderr, "structural cache counters: wire_hits=%" PRIu64
@@ -1202,8 +1202,8 @@ main(int argc, char **argv)
 	FAIL("structural diff should reuse unchanged retained wire parts");
     }
     pair = find_source(controller, "pair.c");
-    BRLObolCompactInstanceHandle extra_handle;
-    BRLObolCompactInstanceSummary extra_summary;
+    BObolCompactInstanceHandle extra_handle;
+    BObolCompactInstanceSummary extra_summary;
     if (!pair || !pair->isCompactOccurrenceRegistry() ||
 	pair->getCompactInstanceCount() != 3 ||
 	!pair->isCompactInstanceHandleValid(box_handle) ||
@@ -1211,9 +1211,9 @@ main(int argc, char **argv)
 	!compact_summary_for_path(pair, "extra.s", extra_handle, extra_summary))
 	FAIL("structural diff should preserve existing handles and add one occurrence");
 
-    BRLObolCompactInstanceSummary box_structure_before;
-    BRLObolCompactInstanceSummary ball_structure_before;
-    BRLObolCompactInstanceSummary extra_structure_before;
+    BObolCompactInstanceSummary box_structure_before;
+    BObolCompactInstanceSummary ball_structure_before;
+    BObolCompactInstanceSummary extra_structure_before;
     if (!pair->getCompactInstanceSummary(box_handle, box_structure_before) ||
 	!pair->getCompactInstanceSummary(ball_handle, ball_structure_before) ||
 	!pair->getCompactInstanceSummary(extra_handle, extra_structure_before))
@@ -1242,9 +1242,9 @@ main(int argc, char **argv)
     if (!apply_and_sync(gedp, &view, &transform_pair))
 	FAIL("combination transform should reconcile retained occurrences");
     pair = find_source(controller, "pair.c");
-    BRLObolCompactInstanceSummary box_structure_after;
-    BRLObolCompactInstanceSummary ball_structure_after;
-    BRLObolCompactInstanceSummary extra_structure_after;
+    BObolCompactInstanceSummary box_structure_after;
+    BObolCompactInstanceSummary ball_structure_after;
+    BObolCompactInstanceSummary extra_structure_after;
     if (!pair || pair->getCompactInstanceCount() != 3 ||
 	!pair->getCompactInstanceSummary(box_handle, box_structure_after) ||
 	!pair->getCompactInstanceSummary(ball_handle, ball_structure_after) ||
@@ -1295,8 +1295,8 @@ main(int argc, char **argv)
 	pair->getCompactInstanceCountForPath("pair.c", TRUE) != 3)
 	FAIL("shaded pair should retain three addressable mesh occurrences");
     for (int i = 0; i < pair->getCompactInstanceCount(); i++) {
-	BRLObolCompactInstanceHandle shaded_handle;
-	BRLObolCompactInstanceSummary shaded_summary;
+	BObolCompactInstanceHandle shaded_handle;
+	BObolCompactInstanceSummary shaded_summary;
 	if (!pair->getCompactInstanceHandle(i, shaded_handle) ||
 	    !pair->getCompactInstanceSummary(shaded_handle, shaded_summary) ||
 	    !shaded_summary.meshGeometry || shaded_summary.wireGeometry)
@@ -1311,10 +1311,10 @@ main(int argc, char **argv)
     if (selected_count != 1)
 	FAIL("nested shaded selection should select exactly one mesh occurrence");
 
-    BRLObolCompactInstanceHandle shaded_extra_handle;
-    BRLObolCompactInstanceSummary shaded_box_before;
-    BRLObolCompactInstanceSummary shaded_ball_before;
-    BRLObolCompactInstanceSummary shaded_extra_before;
+    BObolCompactInstanceHandle shaded_extra_handle;
+    BObolCompactInstanceSummary shaded_box_before;
+    BObolCompactInstanceSummary shaded_ball_before;
+    BObolCompactInstanceSummary shaded_extra_before;
     if (!compact_summary_for_path(pair, "box.s", box_handle,
 	    shaded_box_before) ||
 	!compact_summary_for_path(pair, "ball.s", ball_handle,
@@ -1341,21 +1341,21 @@ main(int argc, char **argv)
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
     transform_shaded_pair.view = view.viewContext();
     transform_shaded_pair.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &transform_shaded_pair))
 	FAIL("shaded transform should reconcile retained mesh occurrences");
-    struct BRLObolPerformanceCounters shaded_structural_counters;
-    brlobol_performance_counters_get(&shaded_structural_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters shaded_structural_counters;
+    bobol_performance_counters_get(&shaded_structural_counters);
+    bobol_performance_counters_set_enabled(0);
     if (shaded_structural_counters.mesh_cache_hits < 3 ||
 	shaded_structural_counters.mesh_cache_misses != 0 ||
 	shaded_structural_counters.plot_calls != 0)
 	FAIL("shaded transform should reuse every retained mesh part");
     pair = find_source(controller, "pair.c");
-    BRLObolCompactInstanceSummary shaded_box_after;
-    BRLObolCompactInstanceSummary shaded_ball_after;
-    BRLObolCompactInstanceSummary shaded_extra_after;
+    BObolCompactInstanceSummary shaded_box_after;
+    BObolCompactInstanceSummary shaded_ball_after;
+    BObolCompactInstanceSummary shaded_extra_after;
     if (!pair || pair->getCompactInstanceCount() != 3 ||
 	!pair->getCompactInstanceSummary(box_handle, shaded_box_after) ||
 	!pair->getCompactInstanceSummary(ball_handle, shaded_ball_after) ||
@@ -1431,12 +1431,12 @@ main(int argc, char **argv)
     if (selected_count != 1)
 	FAIL("nested hidden-line selection should select exactly one mesh occurrence");
 
-    BRLObolCompactInstanceHandle hidden_box_handle;
-    BRLObolCompactInstanceHandle hidden_ball_handle;
-    BRLObolCompactInstanceHandle hidden_extra_handle;
-    BRLObolCompactInstanceSummary hidden_box_before;
-    BRLObolCompactInstanceSummary hidden_ball_before;
-    BRLObolCompactInstanceSummary hidden_extra_before;
+    BObolCompactInstanceHandle hidden_box_handle;
+    BObolCompactInstanceHandle hidden_ball_handle;
+    BObolCompactInstanceHandle hidden_extra_handle;
+    BObolCompactInstanceSummary hidden_box_before;
+    BObolCompactInstanceSummary hidden_ball_before;
+    BObolCompactInstanceSummary hidden_extra_before;
     if (!compact_summary_for_path(pair, "box.s", hidden_box_handle,
 	    hidden_box_before) ||
 	!compact_summary_for_path(pair, "ball.s", hidden_ball_handle,
@@ -1457,16 +1457,16 @@ main(int argc, char **argv)
 	ged_draw_transaction_make(GED_DRAW_TXN_STALE_SOURCE, "pair.c");
     remove_hidden_member.view = view.viewContext();
     remove_hidden_member.stale_reason = GED_DRAW_STALE_SOURCE_CHANGED;
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &remove_hidden_member))
 	FAIL("hidden-line member removal should reconcile retained occurrences");
-    struct BRLObolPerformanceCounters hidden_remove_counters;
-    brlobol_performance_counters_get(&hidden_remove_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters hidden_remove_counters;
+    bobol_performance_counters_get(&hidden_remove_counters);
+    bobol_performance_counters_set_enabled(0);
     pair = find_source(controller, "pair.c");
-    BRLObolCompactInstanceSummary hidden_box_after;
-    BRLObolCompactInstanceSummary hidden_ball_after;
+    BObolCompactInstanceSummary hidden_box_after;
+    BObolCompactInstanceSummary hidden_ball_after;
     if (!pair || pair->getCompactInstanceCount() != 2 ||
 	!pair->getCompactInstanceSummary(hidden_box_handle, hidden_box_after) ||
 	!pair->getCompactInstanceSummary(hidden_ball_handle, hidden_ball_after) ||
@@ -1496,15 +1496,15 @@ main(int argc, char **argv)
 	ged_draw_transaction_make(GED_DRAW_TXN_SOURCE_RENAMED, "ball.s");
     rename_hidden_member.new_path = "orb.s";
     rename_hidden_member.view = view.viewContext();
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &rename_hidden_member))
 	FAIL("hidden-line member rename should reconcile retained occurrences");
-    struct BRLObolPerformanceCounters hidden_rename_counters;
-    brlobol_performance_counters_get(&hidden_rename_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters hidden_rename_counters;
+    bobol_performance_counters_get(&hidden_rename_counters);
+    bobol_performance_counters_set_enabled(0);
     pair = find_source(controller, "pair.c");
-    BRLObolCompactInstanceSummary hidden_orb_after;
+    BObolCompactInstanceSummary hidden_orb_after;
     if (!pair || pair->getCompactInstanceCount() != 2 ||
 	!pair->getCompactInstanceSummary(hidden_box_handle, hidden_box_after) ||
 	!pair->getCompactInstanceSummary(hidden_ball_handle, hidden_orb_after) ||
@@ -1515,8 +1515,8 @@ main(int argc, char **argv)
 	hidden_rename_counters.mesh_cache_misses > 1)
 	FAIL("hidden-line rename should preserve aggregate parts, handles, and display state without rebuilding aggregate meshes");
 
-    BRLObolCompactInstanceSummary material_box_before;
-    BRLObolCompactInstanceSummary material_orb_before;
+    BObolCompactInstanceSummary material_box_before;
+    BObolCompactInstanceSummary material_orb_before;
     if (!pair->getCompactInstanceSummary(hidden_box_handle,
 	    material_box_before) ||
 	!pair->getCompactInstanceSummary(hidden_ball_handle,
@@ -1536,8 +1536,8 @@ main(int argc, char **argv)
     struct ged_draw_transaction material_pair =
 	ged_draw_transaction_make(GED_DRAW_TXN_MATERIAL_CHANGED, "pair.c");
     material_pair.view = view.viewContext();
-    brlobol_performance_counters_set_enabled(1);
-    brlobol_performance_counters_reset();
+    bobol_performance_counters_set_enabled(1);
+    bobol_performance_counters_reset();
     if (!apply_and_sync(gedp, &view, &material_pair))
 	FAIL("aggregate material transaction should advance retained material state");
     struct ged_draw_transaction refresh_pair_material =
@@ -1546,13 +1546,13 @@ main(int argc, char **argv)
     refresh_pair_material.view = view.viewContext();
     if (!apply_and_sync(gedp, &view, &refresh_pair_material))
 	FAIL("aggregate material refresh should update retained style");
-    struct BRLObolPerformanceCounters material_counters;
-    brlobol_performance_counters_get(&material_counters);
-    brlobol_performance_counters_set_enabled(0);
+    struct BObolPerformanceCounters material_counters;
+    bobol_performance_counters_get(&material_counters);
+    bobol_performance_counters_set_enabled(0);
     pair = find_source(controller, "pair.c");
-    BRLObolCompactInstanceSummary material_box_after;
-    BRLObolCompactInstanceSummary material_orb_after;
-    BRLObolDatabaseSourceSummary material_source_after;
+    BObolCompactInstanceSummary material_box_after;
+    BObolCompactInstanceSummary material_orb_after;
+    BObolDatabaseSourceSummary material_source_after;
     if (!pair ||
 	!pair->getCompactInstanceSummary(hidden_box_handle,
 	    material_box_after) ||

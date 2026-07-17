@@ -5,10 +5,10 @@ Scope
 -----
 
 This table tracks the production database object coverage expected from the
-Obol realization path.  The current libbrlobol path realizes BRL-CAD .g
+Obol realization path.  The current libBObol path realizes BRL-CAD .g
 hierarchies through SoBRLDatabaseSource and SoBRLSceneController, preserving
 database path identity on Obol shape nodes.  Realized database leaf instances
-are local-space Obol geometry plus OpenInventor transforms: libbrlobol uses
+are local-space Obol geometry plus OpenInventor transforms: libBObol uses
 `db_walk_tree` for path/material/transform state, refetches each unique
 primitive with an identity matrix on geometry-cache misses, builds one shared
 local `SoBRLVListShape` or `SoBRLMeshShape`, and gives each visible leaf a
@@ -32,8 +32,8 @@ not a default gate because synchronous full-detail promotion can block too
 long; it should be promoted only after full-detail refinement can stay within
 the same bounded provider model.
 
-The focused CTest gates are libbrlobol_prototype and
-test_qtcad_obol_draw_sync.  libbrlobol_prototype requires both staged models
+The focused CTest gates are libBObol_prototype and
+test_qtcad_obol_draw_sync.  libBObol_prototype requires both staged models
 to load through Obol hierarchy realization, gates shaded mesh export and
 measure traversal on pinewood.g, and keeps havoc.g as the larger required
 wire hierarchy traversal.  This avoids duplicating havoc.g's expensive shaded
@@ -51,7 +51,7 @@ Obol database sources instead of relying on aggregate BSG draw-tree
 publication.  This is required for shaded modes because aggregate root mesh
 sources collapse per-leaf material/color state unless they explicitly retain a
 sub-instance partition.
-Evaluated-points draw mode is also covered as an Obol/libbrlobol external
+Evaluated-points draw mode is also covered as an Obol/libBObol external
 representation.  Its librt sampled-point helper now treats degenerate CLINE
 sample normals as recoverable: the CLINE normal routine falls back to a radial
 axis normal and otherwise returns an empty normal for the sampler to discard,
@@ -68,7 +68,7 @@ publishing an empty handled Obol mesh result rather than falling back to
 retained `_ged_drawtrees`.  This keeps failure-mode tests tied to the direct
 provider contract and prevents legacy indexed-face geometry from silently
 reappearing.
-Database-source realization cache ownership is internal to libbrlobol.  A
+Database-source realization cache ownership is internal to libBObol.  A
 `SoBRLRealizeAction` clears its temporary cache, seeds it from already-current
 realized shared geometry in the traversed scene, and then realizes stale
 database sources.  This preserves local geometry reuse when GED or another
@@ -86,7 +86,7 @@ explicit primary child shapes, and use the CAD assembly plus compact action
 adapters as the aggregate representation.  The scene controller can also opt
 into direct compact realization for stable simple leaf sources, which avoids
 building transient explicit primary children before creating the compact
-assembly.  `libbrlobol_prototype` gates direct wire, direct shaded, repeated
+assembly.  `libBObol_prototype` gates direct wire, direct shaded, repeated
 comb-instance preparation, scene-controller compact policy, compact selected
 vs. unselected grouping, compact hidden/unpickable filtering, compact
 BRL-aware picks, and per-primitive draw-intent fallback.  Direct leaves prepare
@@ -94,13 +94,13 @@ one part/instance, repeated transformed instances share one part with multiple
 instances, whole-instance state can remain compact, and per-primitive draw
 intent keeps explicit traversal.  Progressive AABB/OBB/mesh-LoD cache
 promotion is now covered through view-local compact CAD payloads: source-level
-LoD results bind to `BRLObolViewLodState`, compact database sources render the
+LoD results bind to `BObolViewLodState`, compact database sources render the
 view payload through traversal state, and the shared source is not mutated.
-`libbrlobol_prototype` gates compact source AABB proxy and mesh payloads for
+`libBObol_prototype` gates compact source AABB proxy and mesh payloads for
 bounds and BRL-aware picking without materializing child nodes.  qtcad
 progressive LoD gates the background-service path through AABB, OBB, and mesh
 payload stages with rendered image checks.  The Generic_Twin
-startup-auto-expand gate verifies that `BRLObolViewController` automatic
+startup-auto-expand gate verifies that `BObolViewController` automatic
 progressive providers can advance visible database-source frontiers during
 normal qtcad rendering without explicit test-side prewarm/expand calls.
 LoD-on wire realization also has a source-local optimized startup path for
@@ -109,12 +109,12 @@ avoids full mesh realization, and lets view-local LoD payloads replace that
 proxy as cache/service results arrive.
 Staged mesh LoD payload copying also owns optional active normals as a
 provider-neutral triangle-corner array, so normal payloads do not leak the
-underlying cache container into libbrlobol consumers.  The mesh-LoD provider
-now loads from the libbrlobol-owned `.DbDrawCache/mesh_lod.format` store, and
+underlying cache container into libBObol consumers.  The mesh-LoD provider
+now loads from the libBObol-owned `.DbDrawCache/mesh_lod.format` store, and
 its gate seeds a normal-bearing cached mesh and verifies that the copied Obol
-payload receives the normals through the libbrlobol cache API.  Generated mesh
+payload receives the normals through the libBObol cache API.  Generated mesh
 LoD stores use the same triangle-corner normal contract.  Mesh-LoD cache
-behavior is covered by `libbrlobol_mesh_lod_cache`; `rt_view_info` is now
+behavior is covered by `libBObol_mesh_lod_cache`; `rt_view_info` is now
 limited to librt view snapshot policy.
 test_qtcad_obol_draw_sync
 also verifies the real GED draw-observer path used by qged/qtcad: a
@@ -123,7 +123,7 @@ scene is visible through qtcad capture without requiring the test to construct
 synthetic transactions by hand.  The same gate runs a real ged_exec_autoview,
 pushes the resulting qtcad view refresh through the canvas, and verifies the
 Obol camera/readback path follows the updated view.
-libbrlobol_prototype also rebuilds a view controller over an existing realized
+libBObol_prototype also rebuilds a view controller over an existing realized
 Obol scene, verifies that source and draw-intent state remain authoritative on
 the scene nodes, and exercises partial refresh through the rebuilt controller.
 test_qtcad_obol_real_models gates qtcad Obol draw/readback workflows against
@@ -134,7 +134,7 @@ candidate rather than a default CTest case until the large-model path can
 handle mixed valid/invalid BoTs, implicit solids, and staged LoD behavior
 without making routine developer tests too expensive.  Developers can run the
 current controlled Generic_Twin.g opt-in workflow gate by setting
-BRLOBOL_QTCAD_GENERIC_TWIN=1 for test_qtcad_obol_real_models; the default
+BOBOL_QTCAD_GENERIC_TWIN=1 for test_qtcad_obol_real_models; the default
 test remains limited to the smaller routine models.
 test_qtcad_obol_controller verifies the qtcad GL/SW visible-content capture
 path uses Obol readback for migrated scene content, consumes the Obol render
@@ -142,7 +142,7 @@ request, and leaves the legacy display manager unopened for that capture case.
 It also verifies SW visible paint follows the same direct Obol readback path.
 When an offscreen Qt GL context is available, the same controller gate calls
 QgGL paint with its GL context current and verifies migrated Obol content
-drains the paint-time Obol render request through BRLObolViewController
+drains the paint-time Obol render request through BObolViewController
 without opening the legacy display manager.
 test_qtcad_obol_real_models applies the capture request-drain and legacy-DM
 bypass checks to the required real `.g` model workflow cases.
@@ -155,10 +155,10 @@ selecting migrated content.  The qtcad selection filter API exposes the
 resulting normalized paths directly for qged consumption instead of requiring
 callers to inspect BSG pick or interaction records, and the qtcad pick record
 preserves source instance, source-backed mesh face, vertex, nearest edge, and
-edit-intent identity for exact picks through the shared BRLObolViewController
+edit-intent identity for exact picks through the shared BObolViewController
 source-backed mesh exact-ray helper.  The same gate verifies qtcad explicit
 ray picks reuse the controller-owned librt exact-pick cache through the shared
-BRLObolViewController RT exact-ray helper, merge display/RT hits in
+BObolViewController RT exact-ray helper, merge display/RT hits in
 ray-distance order, and that QgSelectRayFilter tries the Obol ray helper
 before its legacy BSG/RT fallback even when the filter's legacy `dbip` field
 is unset.
@@ -166,7 +166,7 @@ test_qtcad_obol_measure and test_qtcad_obol_snap verify migrated-content
 measurement overlays and database snap refinement run through Obol without
 opening the legacy display manager.  The snap gate also verifies source-backed
 exact snaps preserve face, vertex, and edge-nearest identity through the shared
-BRLObolViewController source-backed snap helper.  The measurement gate also
+BObolViewController source-backed snap helper.  The measurement gate also
 verifies source-backed exact measurement preserves nearest face, vertex, edge,
 and edit-intent identity through the shared controller measurement helper, and
 asserts that the qtcad measurement filter publishes its guide/final segment as
@@ -194,7 +194,7 @@ hints remain whole-object until a bounded measurement provider exists.  The
 same LoD gate also verifies source-backed request conversion replaces stale template
 `source_query.*` params with current request metadata, and that non-forced
 mesh LoD submissions use the same view-policy active level as a direct
-`brlobol_mesh_lod_load_view` selection for the submitted `rt_view_info` while
+`bobol_mesh_lod_load_view` selection for the submitted `rt_view_info` while
 rejecting duplicate queued/running view-policy requests through LoD service
 active-request tracking.
 
@@ -244,7 +244,7 @@ publisher is source-local-only and no longer uses draw mode to infer point
 space.
 
 Primitive shaded realization should prefer librt-owned topology over
-duplicated libbrlobol face tables.  ARB/RPP shaded meshes now use the generic
+duplicated libBObol face tables.  ARB/RPP shaded meshes now use the generic
 librt tessellation path; the removed hand-coded ARB shortcut produced inward
 normals for `mk_rpp` boxes and failed the GED mode 2 drawing baseline under
 lighting.
@@ -256,7 +256,7 @@ entry point, `rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol, opts)`,
 which accepts full path/name style input and emits RT vlist line commands.
 Options flags can force the historical Big-E path for comparison/fallback or
 explicitly select the symbolic boolweave default.
-GED still calls the libbrlobol compatibility adapter today because existing
+GED still calls the libBObol compatibility adapter today because existing
 Obol/GED publication consumes source-local BG line-command arrays, but
 correctness work belongs behind the librt vlist API.  The default evaluator is
 now the symbolic boolweave path.  It owns per-call librt resource/vlist state
@@ -268,7 +268,7 @@ prepared contexts are image-equivalent when evaluated in serial region order,
 so the next cleanup should preserve region-order semantics while isolating
 candidate generation from ray/classification work and parallelizing queued ray
 jobs with per-thread resources and deterministic merge.  The current proof
-harness can be enabled with `BRLOBOL_EVAL_WIRE_BOOLWEAVE_DIAG=1`.  The
+harness can be enabled with `BOBOL_EVAL_WIRE_BOOLWEAVE_DIAG=1`.  The
 boolweave evaluator injects known source-surface intervals, uses boolweave
 interval splitting plus ternary CSG state, matches the simple evaluated-wire
 baseline, and changes rook in subtraction-heavy bands that appear to be better
@@ -298,7 +298,7 @@ full-detail representation before it becomes supported.
 Librt Import Lifetime Guard
 ---------------------------
 
-As of 2026-07-03, libbrlobol no longer builds drawable geometry from
+As of 2026-07-03, libBObol no longer builds drawable geometry from
 transformed `db_walk_tree` callback internals.  The callback remains the source
 of instance path, inherited material/region state, and accumulated member
 matrix, but geometry-cache misses call `rt_db_get_internal` with an identity
@@ -327,7 +327,7 @@ alias is with the full external object allocation, not merely with the
 `raw.body.ext_buf` view into that external record.  If the alias is
 reproducible outside Obol, the next root-cause pass should trace allocator
 ownership/free history for that external allocation and should not assume the
-libbrlobol callback held an internal past its valid lifetime.  Vanilla draw
+libBObol callback held an internal past its valid lifetime.  Vanilla draw
 does not expose the same crash pattern because it consumes callback internals
 immediately into legacy bv objects instead of repeatedly synchronizing
 database-source Obol nodes, but the low-level import alias would still be
@@ -383,14 +383,14 @@ Draw-Test Realization Findings
 
 After separating polygon, text, and axes raster tolerances, the draw-mode
 realization failures in `ged_test_drawing_basic` have been brought onto
-first-class Obol/libbrlobol paths:
+first-class Obol/libBObol paths:
 
 * v022, `draw -m3 all.g`: passes through direct evaluated-wire publication.
   GED draw mode 3 is represented as a mode-specific Obol database source
   (`REPRESENTATION_EVAL_WIRE`) and realizes via `draw_m3`/bigE output instead
   of falling back to ordinary primitive wireframe.
 * v023, `draw -m4 all.bot`: passes through hidden-line mesh rendering.
-  GED draw mode 4 is represented as `REPRESENTATION_HIDDEN_LINE`; libbrlobol
+  GED draw mode 4 is represented as `REPRESENTATION_HIDDEN_LINE`; libBObol
   realizes the database source as mesh and renders an invisible depth-fill pass
   followed by a polygon-offset line overlay so coplanar mesh edges survive
   without exposing occluded back edges.
@@ -413,11 +413,11 @@ changes should preserve the representation-mode split rather than collapsing
 non-shaded database sources back to generic wireframe realization.
 The evaluated-mode regression case to guard against is applying generic
 display settings after creating a mode-specific source: the underlying
-libbrlobol draw mode is still wireframe for evaluated wire and point modes,
+libBObol draw mode is still wireframe for evaluated wire and point modes,
 but the exact `REPRESENTATION_EVAL_WIRE` or `REPRESENTATION_EVAL_POINTS`
 state must remain authoritative.  GED display mutations that know an exact
 GED draw mode must update the source representation explicitly, and
-libbrlobol draw-mode-only mutations must not demote existing non-simple
+libBObol draw-mode-only mutations must not demote existing non-simple
 representations.  Summary reads also need to use the selected database source
 instance, not the first source sharing the same logical database path, because
 wire/shaded/evaluated mode sources can coexist during a transaction.
@@ -429,7 +429,7 @@ External GED primary geometry publication has an additional hardening contract:
 line, annotation, point, and indexed-face publishers clear existing primary
 realized children on the target `SoBRLDatabaseSource` before installing the new
 external payload, while preserving auxiliary VLIST/source children.  This is
-covered by `SoBRLDatabaseSource::clearRealizedGeometry` in libbrlobol and by the
+covered by `SoBRLDatabaseSource::clearRealizedGeometry` in libBObol and by the
 current `ged_test_draw` Obol image gate.
 
 Transform-specific hardening added a focused `ged_test_obol_draw_sync`
@@ -450,7 +450,7 @@ Further Representation Work
    duplicate-occurrence, and CSG identity regressions when adding new instance
    representations.
 3. Keep persistent draw/LoD cache keys, object/path invalidation, database
-   replacement, and cross-refresh lifetime rules centralized in libbrlobol.
+   replacement, and cross-refresh lifetime rules centralized in libBObol.
 4. Promote BREP and BSpline/NURB shaded rows from diagnostics to stable native
    or tessellated representation when the underlying converters are reliable.
 5. Promote diagnostic/fallback rows such as BREP, legacy HF, annotation, and

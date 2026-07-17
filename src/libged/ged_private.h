@@ -110,7 +110,7 @@ struct ged_drawable {
     int                          gd_draw_observers_init;
     int                          gd_draw_observer_dispatch_depth;
     void                        *gd_obol_scene_controller; /**< @brief active SoBRLSceneController mirrored from GED draw transactions */
-    void                        *gd_obol_controller;    /**< @brief optional BRLObolViewController wrapper for command/view feature state */
+    void                        *gd_obol_controller;    /**< @brief optional BObolViewController wrapper for command/view feature state */
     ged_draw_observer_token       gd_obol_observer_token;
     int                          gd_obol_scene_controller_owned; /**< @brief non-zero when libged owns gd_obol_scene_controller */
     int                          gd_obol_controller_owned; /**< @brief non-zero when libged owns gd_obol_controller */

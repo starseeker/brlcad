@@ -19,7 +19,7 @@
  */
 /** @file ged_draw_perf.cpp
  *
- * Minimal libged/libbrlobol draw-stack timing probe.  This executable is
+ * Minimal libged/libBObol draw-stack timing probe.  This executable is
  * intentionally not a user shell: it opens a database, creates a GED-owned
  * Obol endpoint, runs one draw command, optionally autoviews/renders, reports
  * stage timings and a stable image hash, and exits.
@@ -44,8 +44,8 @@
 
 #include "bv.h"
 #include <ged.h>
-#include "brlobol.h"
-#include "brlobol/performance.h"
+#include "BObol.h"
+#include "BObol/BPerformance.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 
@@ -70,8 +70,8 @@ struct options {
     int lod_mesh = -1;
     int lod_csg = -1;
     int lod_bot_threshold = -1;
-    BRLObolViewController::SoftwareWireMode software_wire =
-	BRLObolViewController::SOFTWARE_WIRE_AUTO;
+    BObolViewController::SoftwareWireMode software_wire =
+	BObolViewController::SOFTWARE_WIRE_AUTO;
 };
 
 struct timings {
@@ -207,16 +207,16 @@ parse_size(const char *str, int *width, int *height)
 
 static bool
 parse_software_wire_mode(const char *str,
-	BRLObolViewController::SoftwareWireMode *mode)
+	BObolViewController::SoftwareWireMode *mode)
 {
     if (!str || !mode)
 	return false;
     if (BU_STR_EQUAL(str, "auto"))
-	*mode = BRLObolViewController::SOFTWARE_WIRE_AUTO;
+	*mode = BObolViewController::SOFTWARE_WIRE_AUTO;
     else if (BU_STR_EQUAL(str, "quality"))
-	*mode = BRLObolViewController::SOFTWARE_WIRE_QUALITY;
+	*mode = BObolViewController::SOFTWARE_WIRE_QUALITY;
     else if (BU_STR_EQUAL(str, "fast"))
-	*mode = BRLObolViewController::SOFTWARE_WIRE_FAST;
+	*mode = BObolViewController::SOFTWARE_WIRE_FAST;
     else
 	return false;
     return true;
@@ -411,7 +411,7 @@ performance_context_manager(void)
     return manager;
 }
 
-static BRLObolViewController *
+static BObolViewController *
 initialize_endpoint(struct ged *gedp, const struct options &opts)
 {
     if (!gedp || !gedp->dbip)
@@ -427,8 +427,8 @@ initialize_endpoint(struct ged *gedp, const struct options &opts)
 	gedp->dbip->dbi_base2local);
     if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1))
 	return NULL;
-    BRLObolViewController *controller =
-	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
+    BObolViewController *controller =
+	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
     if (!controller)
 	return NULL;
     controller->setRenderContextManager(performance_context_manager());
@@ -459,8 +459,8 @@ run_autoview(struct ged *gedp)
 }
 
 static int
-run_render(struct ged *gedp, BRLObolViewController *controller,
-	   unsigned char **image, BRLObolProgressiveStatus *status)
+run_render(struct ged *gedp, BObolViewController *controller,
+	   unsigned char **image, BObolProgressiveStatus *status)
 {
     void *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx || !controller || !image)
@@ -502,8 +502,8 @@ static int
 run_once(const struct options &opts, int iter)
 {
     struct timings t;
-    struct BRLObolPerformanceCounters perf;
-    brlobol_performance_counters_init(&perf);
+    struct BObolPerformanceCounters perf;
+    bobol_performance_counters_init(&perf);
     int endpoint_ret = BRLCAD_OK;
     int lod_ret = BRLCAD_OK;
     int draw_ret = BRLCAD_OK;
@@ -536,7 +536,7 @@ run_once(const struct options &opts, int iter)
     size_t profile_point_commands = 0;
     size_t profile_styled_shapes = 0;
     size_t profile_emphasis_shapes = 0;
-    BRLObolViewController *controller = NULL;
+    BObolViewController *controller = NULL;
 
     auto start = std::chrono::steady_clock::now();
     struct ged *gedp = ged_open("db", opts.db_path.c_str(), 1);
@@ -558,8 +558,8 @@ run_once(const struct options &opts, int iter)
 
     if (endpoint_ret == BRLCAD_OK && lod_ret == BRLCAD_OK) {
 	if (opts.profile) {
-	    brlobol_performance_counters_reset();
-	    brlobol_performance_counters_set_enabled(1);
+	    bobol_performance_counters_reset();
+	    bobol_performance_counters_set_enabled(1);
 	    profile_started = 1;
 	}
 	start = std::chrono::steady_clock::now();
@@ -600,7 +600,7 @@ run_once(const struct options &opts, int iter)
 		bu_free(image, "ged_draw_perf intermediate image");
 		image = NULL;
 	    }
-	    BRLObolProgressiveStatus status;
+	    BObolProgressiveStatus status;
 	    const auto frameStart = std::chrono::steady_clock::now();
 	    render_ret = run_render(gedp, controller, &image, &status);
 	    const double frameMs = elapsed_ms(frameStart);
@@ -631,14 +631,14 @@ run_once(const struct options &opts, int iter)
 	    style_ret = BRLCAD_ERROR;
 	} else {
 	    if (profile_started)
-		brlobol_performance_counters_reset();
+		bobol_performance_counters_reset();
 	    for (int update = 0; update < opts.style_updates; update++) {
 		const bool alternate = (update & 1) != 0;
 		const auto updateStart = std::chrono::steady_clock::now();
 		for (SoBRLDatabaseSource *source : sources) {
 		    if (!source)
 			continue;
-		    BRLObolDatabaseSourceDisplayPatch patch;
+		    BObolDatabaseSourceDisplayPatch patch;
 		    patch.colorOverrideValid = TRUE;
 		    patch.colorOverride = TRUE;
 		    patch.colorValid = TRUE;
@@ -659,7 +659,7 @@ run_once(const struct options &opts, int iter)
 		    bu_free(image, "ged_draw_perf style image");
 		    image = NULL;
 		}
-		BRLObolProgressiveStatus styleStatus;
+		BObolProgressiveStatus styleStatus;
 		const auto renderStart = std::chrono::steady_clock::now();
 		style_ret = run_render(gedp, controller, &image, &styleStatus);
 		t.style_render_ms += elapsed_ms(renderStart);
@@ -690,8 +690,8 @@ run_once(const struct options &opts, int iter)
     }
 
     if (profile_started) {
-	brlobol_performance_counters_set_enabled(0);
-	brlobol_performance_counters_get(&perf);
+	bobol_performance_counters_set_enabled(0);
+	bobol_performance_counters_get(&perf);
         if (controller) {
 	    std::vector<SoBRLDatabaseSource *> sources;
 	    collect_database_sources(controller->getRenderSceneRoot(), sources);
@@ -708,7 +708,7 @@ run_once(const struct options &opts, int iter)
 		profile_sources_compiled += source->hasCompiledAssembly() ? 1 : 0;
 		for (int j = 0; j < source->getRealizedShapeSummaryCount(); j++) {
 		    SoBRLVListShape *shape = source->getRealizedShape(j);
-		    BRLObolRealizedShapeSummary summary;
+		    BObolRealizedShapeSummary summary;
 		    if (!source->getRealizedShapeSummary(j, summary))
 			continue;
 		    const bool auxiliary = BU_STR_EQUAL(
@@ -881,7 +881,7 @@ main(int argc, const char **argv)
 	std::fprintf(stderr, "ged_draw_perf: OSMesa context manager unavailable\n");
 	return 1;
     }
-    brlobol_init(NULL);
+    bobol_init(NULL);
 
     std::printf("ged_draw_perf db=%s endpoint=obol draw_args=",
 	opts.db_path.c_str());

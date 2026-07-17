@@ -61,16 +61,16 @@ the replacement defines a smaller explicit contract:
 * view-set bookkeeping for shared view state
 
 Current production view mechanics are libbv-backed.  GED owns application
-view registration and command policy, while libbrlobol owns Obol attachment
+view registration and command policy, while libBObol owns Obol attachment
 state such as scene-root tokens, independent-view scope flags, and realized
-view-local LoD payloads through `BRLObolViewAttachment`.  GED view contexts
+view-local LoD payloads through `BObolViewAttachment`.  GED view contexts
 and attached Obol controllers share one ref-counted attachment while attached;
 controller replacement and detach explicitly unbind it and leave the GED view
 context with an attachment copy carrying passive host state.  Missing scene or
 feature-store cases should return explicit empty/no-op results rather than
 implicitly creating retained BSG storage.
 
-Edit visualization should use librt edit state plus libbrlobol/Obol preview or
+Edit visualization should use librt edit state plus libBObol/Obol preview or
 manipulator objects.  The old display-path edit-matrix handoff has been
 removed: GED view contexts no longer expose edit-matrix setters, MGED does not
 stage `vs_model2objview` through view state during `dozoom`, and libbsg no
@@ -79,14 +79,14 @@ longer carries a `gv_edit_mat` view field.
 The new libbv must not own Obol scene graph objects, command-result objects,
 database draw state, display lists, Tcl/display-manager state, polygon stores,
 snap/selection resolution, LoD caches, or retained BSG compatibility.  Those
-belong in Obol/libbrlobol, GED command facades, display-host code, librt
+belong in Obol/libBObol, GED command facades, display-host code, librt
 RT-facing state/adapters, or explicit legacy adapters depending on the
 feature.
 
 Display-Host Migration Boundary
 -------------------------------
 
-Headless rendering uses a libbrlobol display endpoint and registered headless
+Headless rendering uses a libBObol display endpoint and registered headless
 host directly; the former `dm-obol` adapter is deleted.  If MGED, GSH,
 RTWizard, TclCAD, or qged code reaches for a direct libdm view-renderer
 callback, treat that as one of two migration signals:
@@ -106,7 +106,7 @@ The supported refresh shape is:
 
 * update view state through libbv-backed view contexts
 * mutate scene/annotation/command-result state through GED draw facades or
-  libbrlobol/Obol APIs
+  libBObol/Obol APIs
 * apply a draw transaction such as `GED_DRAW_TXN_REDRAW` when scene refresh is
   needed
 * let the display host render/capture the retained Obol scene
@@ -202,14 +202,14 @@ anonymous scene mutation.
 
 Edit-preview geometry follows the same rule.  qged and other applications
 publish preview line/label data through GED feature refs; GED resolves those
-refs to libbrlobol/Obol feature records owned by the active view context.
+refs to libBObol/Obol feature records owned by the active view context.
 Application widgets should not maintain a second direct Obol preview mutation
 path, because that bypasses shared lifecycle, owner, selection, and teardown
 semantics.
 
 Image readback follows the same ownership boundary.  For Obol-backed views,
 screenshots and visible-canvas captures should ask the active
-`BRLObolViewController` to render the view to a caller-owned image buffer.
+`BObolViewController` to render the view to a caller-owned image buffer.
 Display-manager readback is only a fallback for non-Obol backends, not the
 source of truth for Obol scene capture.  C app-host callers should use the
 `ged_draw_obol_view_display_image` bridge in `ged/draw_obol.h`; TclCAD's
@@ -226,14 +226,14 @@ fill color, and keep the polygon edge as a separate outline.  It does not mean
 
 Obol supports both fill interpretations:
 
-* `BRLOBOL_POLYGON_FILL_HATCH` preserves GED/BRL-CAD hatch semantics.
-* `BRLOBOL_POLYGON_FILL_MESH` draws a triangulated mesh fill.
+* `BOBOL_POLYGON_FILL_HATCH` preserves GED/BRL-CAD hatch semantics.
+* `BOBOL_POLYGON_FILL_MESH` draws a triangulated mesh fill.
 * Both flags may be enabled when a caller wants shaded fill plus historical
   hatch overlay.
 
-The existing `BRLObolPolygonStore::setFill` method remains a legacy hatch-fill
+The existing `BObolPolygonStore::setFill` method remains a legacy hatch-fill
 operation.  Obol-native callers that want surface fill should use
-`setFillFlags` or set `BRLObolPolygonVisual::fillFlags` explicitly.
+`setFillFlags` or set `BObolPolygonVisual::fillFlags` explicitly.
 
 Hatch Slope Stability
 ---------------------

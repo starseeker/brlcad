@@ -36,9 +36,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include "brlobol/draw_cache.h"
-#include "brlobol/lod_realization.h"
-#include "brlobol/mesh_lod_cache.h"
+#include "BObol/BDrawCache.h"
+#include "BObol/BLodRealization.h"
+#include "BObol/BMeshLodCache.h"
 #include "bu/hash.h"
 #include "raytrace.h"
 #include "rt/view.h"
@@ -512,15 +512,15 @@ ged_db_index_note_lod_name_change(struct ged *gedp,
     if (!gedp || !gedp->dbip || name.empty())
 	return;
 
-    (void)brlobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
-	    BRLOBOL_LOD_PROXY_AABB, NULL);
-    (void)brlobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
-	    BRLOBOL_LOD_PROXY_OBB, NULL);
-    (void)brlobol_draw_metadata_cache_invalidate(gedp->dbip, name.c_str(), NULL);
-    (void)brlobol_draw_path_metadata_cache_invalidate(gedp->dbip,
+    (void)bobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
+	    BOBOL_LOD_PROXY_AABB, NULL);
+    (void)bobol_draw_proxy_cache_invalidate(gedp->dbip, name.c_str(),
+	    BOBOL_LOD_PROXY_OBB, NULL);
+    (void)bobol_draw_metadata_cache_invalidate(gedp->dbip, name.c_str(), NULL);
+    (void)bobol_draw_path_metadata_cache_invalidate(gedp->dbip,
 	    name.c_str(), NULL);
     if (invalidate_mesh_lod)
-	(void)brlobol_mesh_lod_cache_invalidate(gedp->dbip, name.c_str(), NULL);
+	(void)bobol_mesh_lod_cache_invalidate(gedp->dbip, name.c_str(), NULL);
 }
 
 
@@ -532,12 +532,12 @@ ged_db_index_note_lod_change(struct ged *gedp, const char *name)
 
     /* Structural manifests are draw-root snapshots.  An edit anywhere in
      * this database can change one, so retain no stale hierarchy records. */
-    (void)brlobol_draw_manifest_cache_invalidate_database(gedp->dbip);
+    (void)bobol_draw_manifest_cache_invalidate_database(gedp->dbip);
 
     std::unordered_set<std::string> affected_names;
     affected_names.insert(std::string(name));
 
-    (void)brlobol_draw_path_metadata_cache_invalidate_object(gedp->dbip,
+    (void)bobol_draw_path_metadata_cache_invalidate_object(gedp->dbip,
 	    name, NULL);
 
     struct ged_db_index *index = ged_db_index_state(gedp);
@@ -558,7 +558,7 @@ ged_db_index_note_lod_change(struct ged *gedp, const char *name)
 	    }
 	}
 	for (const std::string &affected_path_key : affected_path_keys)
-	    (void)brlobol_draw_path_metadata_cache_invalidate(gedp->dbip,
+	    (void)bobol_draw_path_metadata_cache_invalidate(gedp->dbip,
 		affected_path_key.c_str(), NULL);
     }
 

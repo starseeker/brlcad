@@ -48,18 +48,18 @@ struct _ged_fp_grid_info {
 
 static int
 _fp_grid_endpoint_property_set(void *view_ctx, const char *name,
-	const struct brlobol_endpoint_property_value *value)
+	const struct bobol_endpoint_property_value *value)
 {
     return ged_view_context_display_property_set(view_ctx, name, value) ==
-	BRLOBOL_ENDPOINT_PROPERTY_OK;
+	BOBOL_ENDPOINT_PROPERTY_OK;
 }
 
 static int
 _fp_grid_endpoint_bool_set(void *view_ctx, const char *name, int enabled)
 {
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
     value.bool_value = enabled ? 1 : 0;
     return _fp_grid_endpoint_property_set(view_ctx, name, &value);
 }
@@ -67,9 +67,9 @@ _fp_grid_endpoint_bool_set(void *view_ctx, const char *name, int enabled)
 static int
 _fp_grid_endpoint_double_set(void *view_ctx, const char *name, double number)
 {
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
     value.double_value = number;
     return _fp_grid_endpoint_property_set(view_ctx, name, &value);
 }
@@ -79,9 +79,9 @@ _fp_grid_endpoint_uint_set(void *view_ctx, const char *name, int number)
 {
     if (number < 0)
 	return 0;
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
     value.uint_value = (uint64_t)number;
     return _fp_grid_endpoint_property_set(view_ctx, name, &value);
 }
@@ -133,9 +133,9 @@ _fp_grid_endpoint_state_apply(void *view_ctx,
 	    "view.faceplate.grid.major.vertical", after->res_major_v))
 	return 0;
     if (memcmp(before->color, after->color, sizeof(after->color)) != 0) {
-	struct brlobol_endpoint_property_value value =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+	struct bobol_endpoint_property_value value =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
 	for (int axis = 0; axis < 3; axis++)
 	    value.color3[axis] = after->color[axis] / 255.0;
 	if (!_fp_grid_endpoint_property_set(view_ctx,

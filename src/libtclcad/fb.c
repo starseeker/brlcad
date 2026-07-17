@@ -42,7 +42,7 @@
 #include "bu/getopt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "imgstream/fbserv.h"
@@ -72,7 +72,7 @@ tclcad_fbs_error(Tcl_Interp *interp, const char *message)
 
 /* Bind the one GED session stream to the requested view's Obol endpoint.  Factory
  * instances such as TkObolEndpointHost are intentionally opaque and are not
- * BRLObolWindowHost instances.  The libged bridge owns its generic image
+ * BObolWindowHost instances.  The libged bridge owns its generic image
  * host and publishes that stream through the endpoint capture provider.
  * TclCAD owns only notifier callbacks. */
 static int
@@ -82,7 +82,7 @@ tclcad_obol_framebuffer_bind(void *view_ctx, Tcl_Interp *interp)
     if (!tvd || !tvd->gedp)
 	return TCL_ERROR;
 
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
     if (!endpoint)
 	return TCL_OK;
@@ -176,11 +176,11 @@ to_set_fb_mode(struct ged *gedp,
      * ordering: 0=off, 1=underlay, 2=interlay, 3=overlay.  Keep the
      * endpoint as the rendering authority and translate only at this API. */
     if (argc == 2) {
-	struct brlobol_endpoint_property_value value =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bobol_endpoint_property_value value =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(view_ctx,
 		"composition.framebuffer.mode", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK || !value.string_value) {
+	    BOBOL_ENDPOINT_PROPERTY_OK || !value.string_value) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"View has no Obol framebuffer composition policy");
 	    return BRLCAD_ERROR;
@@ -216,13 +216,13 @@ to_set_fb_mode(struct ged *gedp,
     const char *composition = mode == TCLCAD_OBJ_FB_MODE_UNDERLAY ?
 	"underlay" : mode == TCLCAD_OBJ_FB_MODE_INTERLAY ? "interlay" :
 	mode == TCLCAD_OBJ_FB_MODE_OVERLAY ? "overlay" : "off";
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
     value.string_value = composition;
     if (ged_view_context_display_property_set(view_ctx,
 	    "composition.framebuffer.mode", &value) !=
-	BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	BOBOL_ENDPOINT_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "Unable to set Obol framebuffer composition policy");
 	return BRLCAD_ERROR;

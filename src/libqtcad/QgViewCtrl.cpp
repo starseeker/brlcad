@@ -25,7 +25,7 @@
 
 #include "common.h"
 
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "bv.h"
 #include "bu/env.h"
 #include "ged.h"
@@ -139,13 +139,13 @@ QgViewCtrl::fb_mode_cmd()
 	struct bv_context *view_ctx = qgviewctrl_active_view(this);
 	if (!view_ctx)
 		return;
-	struct brlobol_endpoint_property_value value =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bobol_endpoint_property_value value =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(view_ctx,
 		"composition.framebuffer.mode", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+	    BOBOL_ENDPOINT_PROPERTY_OK)
 		return;
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+	value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
 	if (BU_STR_EQUAL(value.string_value, "off"))
 		value.string_value = "underlay";
 	else if (BU_STR_EQUAL(value.string_value, "underlay"))
@@ -158,7 +158,7 @@ QgViewCtrl::fb_mode_cmd()
 		return;
 	if (ged_view_context_display_property_set(view_ctx,
 		"composition.framebuffer.mode", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+	    BOBOL_ENDPOINT_PROPERTY_OK)
 		return;
 	emit view_changed(QG_VIEW_REFRESH);
 }
@@ -170,11 +170,11 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 	struct bv_context *view_ctx = qgviewctrl_active_view(this);
 	if (!view_ctx || !flags)
 		return;
-	struct brlobol_endpoint_property_value value =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bobol_endpoint_property_value value =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(view_ctx,
 		"composition.framebuffer.mode", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+	    BOBOL_ENDPOINT_PROPERTY_OK)
 		return;
 	if (BU_STR_EQUAL(value.string_value, "off")) {
 		fb_mode->setIcon(QIcon(QPixmap(":images/view/framebuffer_off.png")));

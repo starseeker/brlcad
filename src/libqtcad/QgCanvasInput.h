@@ -34,7 +34,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 
-#include "brlobol/input.h"
+#include "BObol/BInput.h"
 #include "bv.h"
 
 /**
@@ -46,7 +46,7 @@ class QgCanvasInput {
 public:
 	QgCanvasInput();
 	~QgCanvasInput();
-	void setEndpoint(struct brlobol_display_endpoint *endpoint);
+	void setEndpoint(struct bobol_display_endpoint *endpoint);
 
 	int keyPressEvent(struct bv_context *view_ctx, int x_prev, int y_prev,
 	                  QKeyEvent *k);
@@ -64,10 +64,10 @@ public:
 
 private:
 	struct Impl;
-	static int actionDispatch(void *userData, BRLObolInputAction action,
-		const BRLObolInputEvent *event);
-	int applyAction(BRLObolInputAction action,
-		const BRLObolInputEvent *event);
+	static int actionDispatch(void *userData, BObolInputAction action,
+		const BObolInputEvent *event);
+	int applyAction(BObolInputAction action,
+		const BObolInputEvent *event);
 
 	Impl *m = nullptr;
 	static const long long s_drag_update_interval_ms = 16;

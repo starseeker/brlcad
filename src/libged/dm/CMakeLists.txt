@@ -1,4 +1,4 @@
-set(PLUGIN_LIBS libged libbrlobol libbu)
+set(PLUGIN_LIBS libged libBObol libbu)
 
 set(DM_SRCS
   dm.c

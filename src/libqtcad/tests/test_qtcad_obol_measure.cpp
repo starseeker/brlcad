@@ -7,13 +7,13 @@
 
 #include "common.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/line_layer_overlay.h"
-#include "brlobol/lod_mesh_shape.h"
-#include "brlobol/lod_service.h"
-#include "brlobol/measure_action.h"
-#include "brlobol/mesh_shape.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BLineLayerOverlay.h"
+#include "BObol/BLodMeshShape.h"
+#include "BObol/BLodService.h"
+#include "BObol/BMeasureAction.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BViewController.h"
 #include "bu/app.h"
 #include "bu/color.h"
 #include "bu/env.h"
@@ -90,28 +90,28 @@ near_point(const SbVec3f &p, float x, float y, float z)
 	nearly_equal(p[2], z);
 }
 
-static BRLObolLodResult
-qtcad_measure_source_result(const BRLObolLodRequest &request,
+static BObolLodResult
+qtcad_measure_source_result(const BObolLodRequest &request,
 	int resultKind,
 	int qualityTier)
 {
-    BRLObolLodResult result;
+    BObolLodResult result;
 
     result.request = request;
-    result.cacheKey = brlobol_lod_cache_key(request);
+    result.cacheKey = bobol_lod_cache_key(request);
     result.resultKind = resultKind;
     result.qualityTier = qualityTier;
-    result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
     result.counts.faceCount = 1;
     result.counts.pointCount = 3;
     result.terminal = TRUE;
 
-    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_OBOL_MESH;
+    result.geometry.kind = BOBOL_LOD_GEOMETRY_OBOL_MESH;
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
     result.geometry.activeLevel =
-	resultKind == BRLOBOL_LOD_RESULT_MESH ? 1 : -1;
+	resultKind == BOBOL_LOD_RESULT_MESH ? 1 : -1;
     result.geometry.borrowed = FALSE;
 
     result.mesh.points.push_back(SbVec3f(-1.0f, -1.0f, 0.0f));
@@ -130,17 +130,17 @@ qtcad_measure_source_result(const BRLObolLodRequest &request,
     return result;
 }
 
-static BRLObolLodResult
-qtcad_measure_source_task(const BRLObolLodRequest &request,
+static BObolLodResult
+qtcad_measure_source_task(const BObolLodRequest &request,
 	void *UNUSED(userData))
 {
     return qtcad_measure_source_result(request,
-	    BRLOBOL_LOD_RESULT_FULL_DETAIL,
-	    BRLOBOL_LOD_QUALITY_FULL_DETAIL);
+	    BOBOL_LOD_RESULT_FULL_DETAIL,
+	    BOBOL_LOD_QUALITY_FULL_DETAIL);
 }
 
 static int
-wait_for_qtcad_measure_source_result(BRLObolLodService &service)
+wait_for_qtcad_measure_source_result(BObolLodService &service)
 {
     for (int i = 0; i < 400; i++) {
 	if (service.inFlightCount() == 0 &&
@@ -168,7 +168,7 @@ mouse_event(QEvent::Type type,
 }
 
 static SoBRLLineLayerOverlay *
-find_measure_overlay(BRLObolViewController *controller,
+find_measure_overlay(BObolViewController *controller,
 	const char *overlayId)
 {
     if (!controller || !controller->getSceneRoot() ||
@@ -209,7 +209,7 @@ main(int argc, char **argv)
 	ged_view_active_ctx_set(gedp, view.viewContext());
 	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
@@ -310,19 +310,19 @@ main(int argc, char **argv)
     lodMesh->editIntentRole = "exact-measure";
     lodMesh->setIndexedTriangles(lodPoints, 3, lodIndices, 3);
 
-    BRLObolLodRequest displayRequest;
+    BObolLodRequest displayRequest;
     lodMesh->makeLodRequest(displayRequest,
 	    "db://qtcad-obol-measure-test",
 	    1,
 	    1,
 	    1,
-	    BRLOBOL_LOD_DRAW_SHADED,
-	    "brlobol_mesh_lod",
-	    "brlobol-cache-v1",
-	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
-    BRLObolLodResult displayResult = qtcad_measure_source_result(
-	    displayRequest, BRLOBOL_LOD_RESULT_MESH,
-	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
+	    BOBOL_LOD_DRAW_SHADED,
+	    "bobol_mesh_lod",
+	    "bobol-cache-v1",
+	    BOBOL_LOD_QUALITY_FAST_DISPLAY);
+    BObolLodResult displayResult = qtcad_measure_source_result(
+	    displayRequest, BOBOL_LOD_RESULT_MESH,
+	    BOBOL_LOD_QUALITY_FAST_DISPLAY);
     if (!lodMesh->applyStagedLodResult(displayResult, &displayRequest) ||
 	    !lodMesh->isLodDisplayActive() ||
 	    lodMesh->hasFullDetailMesh())
@@ -338,18 +338,18 @@ main(int argc, char **argv)
     sourceRequestMeasure.setGeometryPolicy(SoBRLMeasureAction::FULL_DETAIL);
     sourceRequestMeasure.setQueryPoint(query);
     sourceRequestMeasure.apply(lodRoot);
-    BRLObolLodRequest sourceLodRequest;
+    BObolLodRequest sourceLodRequest;
     if (sourceRequestMeasure.getSourceBackedFullDetailRequestCount() != 1 ||
 	    !sourceRequestMeasure.makeSourceBackedFullDetailLodRequest(0,
 		sourceLodRequest))
 	FAIL("qtcad LoD measure fixture should build a query-scoped source full-detail request");
 
-    BRLObolLodService sourceService;
+    BObolLodService sourceService;
     if (!sourceService.start(1, TRUE))
 	FAIL("qtcad LoD measure source service should start");
     controller->setLodService(&sourceService);
 
-    BRLObolLodTask sourceTask;
+    BObolLodTask sourceTask;
     sourceTask.request = sourceLodRequest;
     sourceTask.realize = qtcad_measure_source_task;
     if (sourceService.submit(sourceTask) == 0) {
@@ -438,10 +438,10 @@ main(int argc, char **argv)
 	sourceService.stop();
 	FAIL("qtcad exact Obol measure over-budget source result should become ready");
     }
-    std::vector<BRLObolLodResult> overBudgetResults;
+    std::vector<BObolLodResult> overBudgetResults;
     sourceService.drainResults(overBudgetResults);
     if (overBudgetResults.size() != 1 ||
-	    overBudgetResults[0].providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    overBudgetResults[0].providerStatus != BOBOL_LOD_PROVIDER_FALLBACK ||
 	    bu_strcmp(overBudgetResults[0].diagnostic.getString(),
 		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	    overBudgetResults[0].mesh.isValid()) {

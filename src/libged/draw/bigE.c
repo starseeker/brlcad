@@ -2129,7 +2129,7 @@ ged_eval_wire_display_core(struct ged *gedp, int argc, const char *argv[], int e
 	    case 'T':
 		/* Legacy ev display-shaping flags have no direct Obol
 		 * draw-state equivalent.  The modern command semantics are:
-		 * request evaluated wire display and let libbrlobol/librt
+		 * request evaluated wire display and let libBObol/librt
 		 * choose the appropriate realization. */
 		break;
 	    default:

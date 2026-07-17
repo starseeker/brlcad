@@ -32,7 +32,7 @@
 #include "bv.h"
 #include "ged.h"
 #include "ged/view.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 
 void ged_calc_adc_pos(const void *view_ctx, struct bv_adc_state *adc);
 void ged_calc_adc_a1(const void *view_ctx, struct bv_adc_state *adc);
@@ -51,13 +51,13 @@ adc_draw_set(struct ged *gedp, void *view_ctx, struct bv_adc_state *adc,
 	return BRLCAD_ERROR;
 
     if (ged_view_context_display_endpoint_get(view_ctx)) {
-	struct brlobol_endpoint_property_value value =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	struct bobol_endpoint_property_value value =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
 	value.bool_value = enabled ? 1 : 0;
 	if (ged_view_context_display_property_set(view_ctx,
 		"view.faceplate.adc.visible", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    BOBOL_ENDPOINT_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol ADC visibility policy\n");
 	    return BRLCAD_ERROR;

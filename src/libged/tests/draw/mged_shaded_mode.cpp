@@ -59,8 +59,8 @@
 #include "view_test_util.h"
 #include <ged.h>
 #include "ged/draw.h"
-#include "brlobol/display_endpoint.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BViewController.h"
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" long draw_test_count_nonblack_pixels(const char *filename);
@@ -154,11 +154,11 @@ test_dm_lighting_flags(const char *datadir)
     int fail = 0;
 
     /* --- endpoint-native ged_exec_dm path used by applications ------------ */
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(v);
-    BRLObolViewController *controller = endpoint ?
-	static_cast<BRLObolViewController *>(
-	    brlobol_display_endpoint_controller(endpoint)) : NULL;
+    BObolViewController *controller = endpoint ?
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
     if (!controller) {
 	bu_log("FAIL: Obol DM did not publish a view endpoint\n");
 	fail++;

@@ -58,7 +58,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "pkg.h"
-#include "brlobol/display_session.h"
+#include "BObol/BDisplaySession.h"
 #if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
 #  include "qtcad/display_provider.h"
 #elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
@@ -86,7 +86,7 @@ extern const char title[];
 imgstream_fb_t *fbp = NULL;	/* Framebuffer handle */
 int rt_fb_output_enabled = 1;	/* /dev/null keeps setup metadata but no pixels */
 #ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
-static brlobol_display_session_t *fb_display_session = NULL;
+static bobol_display_session_t *fb_display_session = NULL;
 #endif
 FILE		*outfp = NULL;		/* optional pixel output file */
 struct icv_image *bif = NULL;
@@ -130,7 +130,7 @@ rt_display_frame_runner(rt_frame_execute_callback execute, int framenumber,
     if (!fb_display_session)
 	return execute ? execute(framenumber, data) : -1;
     struct rt_display_frame_task task = {execute, framenumber, data};
-    return brlobol_display_session_run(fb_display_session,
+    return bobol_display_session_run(fb_display_session,
 	rt_display_frame_task_run, &task);
 }
 
@@ -149,7 +149,7 @@ rt_fb_close(void)
     if (fb_display_session) {
 	rt_frame_runner_set(NULL, NULL);
 	rt_framebuffer_flush_callback_set(NULL, NULL);
-	brlobol_display_session_close(fb_display_session);
+	bobol_display_session_close(fb_display_session);
 	fb_display_session = NULL;
 	fbp = NULL;
 	return;
@@ -237,9 +237,9 @@ int fb_setup(void) {
 	    fprintf(stderr, "rt:  selected UI toolkit has no usable Obol display provider\n");
 	    return 12;
 	}
-	fb_display_session = brlobol_display_session_open(framebuffer, xx, yy,
+	fb_display_session = bobol_display_session_open(framebuffer, xx, yy,
 	    "BRL-CAD rt");
-	fbp = brlobol_display_session_framebuffer(fb_display_session);
+	fbp = bobol_display_session_framebuffer(fb_display_session);
 	if (fbp) {
 	    rt_frame_runner_set(rt_display_frame_runner, NULL);
 	    rt_framebuffer_flush_callback_set(rt_display_progressive_flush, NULL);

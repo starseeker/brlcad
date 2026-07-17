@@ -26,7 +26,7 @@
 #include "ged/view.h"
 #include "rt/view.h"
 #include "tclcad.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 
 /* Private headers */
 #include "./tclcad_private.h"
@@ -35,18 +35,18 @@
 static void
 tclcad_wrapper_sync_dimensions(void *target_ctx, void *source_ctx)
 {
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(source_ctx);
-    struct brlobol_endpoint_property_value width =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct brlobol_endpoint_property_value height =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value width =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value height =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     struct bv *target_view = bv_context_view((struct bv_context *)target_ctx);
     if (endpoint && target_view &&
-	brlobol_display_endpoint_property_get(endpoint, "endpoint.width",
-	    &width) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
-	brlobol_display_endpoint_property_get(endpoint, "endpoint.height",
-	    &height) == BRLOBOL_ENDPOINT_PROPERTY_OK && width.uint_value &&
+	bobol_display_endpoint_property_get(endpoint, "endpoint.width",
+	    &width) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	bobol_display_endpoint_property_get(endpoint, "endpoint.height",
+	    &height) == BOBOL_ENDPOINT_PROPERTY_OK && width.uint_value &&
 	height.uint_value)
 	bv_dimensions_set(target_view, (int)width.uint_value,
 	    (int)height.uint_value);

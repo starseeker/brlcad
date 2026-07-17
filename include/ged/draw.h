@@ -29,7 +29,7 @@
  *     draw source/style, visibility, and highlight state without requiring
  *     callers to inspect the underlying scene-graph implementation.
  *
- * libged owns the semantic draw records and mirrors them into Obol/libbrlobol
+ * libged owns the semantic draw records and mirrors them into Obol/libBObol
  * scene controllers.  Installed GED callers should use this API rather than
  * direct scene-graph node pointers to query or update the draw scene.
  *
@@ -38,7 +38,7 @@
  * structured path form.
  *
  * C++ callers that need to mirror this semantic draw state into an
- * Obol/libbrlobol view controller should use ged/draw_obol.h.
+ * Obol/libBObol view controller should use ged/draw_obol.h.
  */
 /** @{ */
 /* @file ged/draw.h */
@@ -1433,7 +1433,7 @@ ged_draw_view_context_feature_realize(void *view_ctx,
  * `hit.entry_mm` and `hit.exit_mm`; check overlap records add
  * `overlap.region_a`, `overlap.region_b`, and `overlap.depth_mm`; NIRT
  * partition records may add `nirt.partition.parity`.  Consumers must use the
- * neutral copy APIs below rather than libbrlobol feature-store records.
+ * neutral copy APIs below rather than libBObol feature-store records.
  */
 GED_EXPORT extern size_t
 ged_draw_view_context_feature_metadata_count(void *view_ctx,

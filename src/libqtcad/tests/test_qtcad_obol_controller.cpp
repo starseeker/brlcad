@@ -13,8 +13,8 @@
 
 #include "bv.h"
 
-#include "brlobol/display_endpoint.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BViewController.h"
 #ifdef BRLCAD_OPENGL
 #include "qtcad/QgGL.h"
 #endif
@@ -141,14 +141,14 @@ main(int argc, char **argv)
     if (!SoDB::getContextManager())
 	FAIL("QgView should install an Obol context manager");
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol view controller");
     if (!view.displayEndpoint() ||
-	brlobol_display_endpoint_controller(view.displayEndpoint()) != controller)
+	bobol_display_endpoint_controller(view.displayEndpoint()) != controller)
 	FAIL("QgView should expose its endpoint-owned Obol controller");
-    if (!brlobol_display_endpoint_host(view.displayEndpoint()) ||
-	bu_strcmp(brlobol_display_endpoint_host_factory_name(view.displayEndpoint()),
+    if (!bobol_display_endpoint_host(view.displayEndpoint()) ||
+	bu_strcmp(bobol_display_endpoint_host_factory_name(view.displayEndpoint()),
 	    "qt-sw") != 0)
 	FAIL("QgView should host its software canvas through the Qt endpoint factory");
     QWidget *swWidget = view.canvasBase() ? view.canvasBase()->canvasWidget() : NULL;
@@ -201,20 +201,20 @@ main(int argc, char **argv)
 	    SbColor(0.0f, 0.0f, 50.0f / 255.0f))
 	FAIL("qtcad should synchronize its default gradient to Obol");
 
-    struct brlobol_endpoint_property_value background_property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    background_property.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bobol_endpoint_property_value background_property =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    background_property.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
     VSET(background_property.color3, 16.0 / 255.0, 32.0 / 255.0,
 	48.0 / 255.0);
-    if (brlobol_display_endpoint_property_set(view.displayEndpoint(),
+    if (bobol_display_endpoint_property_set(view.displayEndpoint(),
 	"controller.background.bottom", &background_property) !=
-	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	BOBOL_ENDPOINT_PROPERTY_OK)
 	FAIL("qtcad background bottom should use the endpoint property");
     VSET(background_property.color3, 64.0 / 255.0, 80.0 / 255.0,
 	96.0 / 255.0);
-    if (brlobol_display_endpoint_property_set(view.displayEndpoint(),
+    if (bobol_display_endpoint_property_set(view.displayEndpoint(),
 	"controller.background.top", &background_property) !=
-	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	BOBOL_ENDPOINT_PROPERTY_OK)
 	FAIL("qtcad background top should use the endpoint property");
     view.need_update(QG_VIEW_DRAWN);
     if (controller->getBackgroundBottomColor() !=
@@ -351,7 +351,7 @@ main(int argc, char **argv)
 
     TestQgSW swCanvas(NULL);
     swCanvas.resize(160, 120);
-    BRLObolViewController *swController = swCanvas.obolViewController();
+    BObolViewController *swController = swCanvas.obolViewController();
     if (!swController ||
 	    !swController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 	FAIL("QgSW input test should expose an Obol scene before first paint");
@@ -372,8 +372,8 @@ main(int argc, char **argv)
     /* Exercise the canvas through an endpoint rather than its local fallback
      * context.  These bindings own view-local faceplate state, so they must
      * not quietly fall back to an application-global input path. */
-    brlobol_display_endpoint_t *swEndpoint =
-	brlobol_display_endpoint_create(swController, 0);
+    bobol_display_endpoint_t *swEndpoint =
+	bobol_display_endpoint_create(swController, 0);
     if (!swEndpoint)
 	FAIL("QgSW input test should create an endpoint");
     swCanvas.setObolInputEndpoint(swEndpoint);
@@ -433,7 +433,7 @@ main(int argc, char **argv)
 	FAIL("QgSW drag navigation should request an Obol render");
 
     swCanvas.setObolInputEndpoint(NULL);
-    brlobol_display_endpoint_destroy(swEndpoint);
+    bobol_display_endpoint_destroy(swEndpoint);
 
     QgView glView(NULL, QgViewType::GL);
     glView.resize(128, 96);
@@ -443,7 +443,7 @@ main(int argc, char **argv)
 	if (!glPresentationCanvas || glPresentationCanvas->updateBehavior() !=
 		QOpenGLWidget::NoPartialUpdate)
 	    FAIL("QgGL should use full Obol redraws without preserving old frames");
-	BRLObolViewController *glController = glView.obolViewController();
+	BObolViewController *glController = glView.obolViewController();
 	if (!glController ||
 		!glController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 	    FAIL("QgGL should expose an Obol scene before first paint");
@@ -483,7 +483,7 @@ main(int argc, char **argv)
 	glCanvas.show();
 	app.processEvents();
 	if (glCanvas.isValid()) {
-	    BRLObolViewController *paintController = glCanvas.obolViewController();
+	    BObolViewController *paintController = glCanvas.obolViewController();
 	    if (!paintController ||
 		    !paintController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 		FAIL("QgGL paint test should expose an Obol scene");

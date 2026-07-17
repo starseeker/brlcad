@@ -10,8 +10,8 @@
 
 #include "qtcad/QgObolExport.h"
 
-#include "brlobol/export_action.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BViewController.h"
 #include "qtcad/QgView.h"
 
 #include <Inventor/SoViewport.h>
@@ -163,7 +163,7 @@ QgObolExportObjectQueryResult::QgObolExportObjectQueryResult(void) :
 }
 
 static int
-qg_obol_export_consume_source_full_detail(BRLObolViewController *controller,
+qg_obol_export_consume_source_full_detail(BObolViewController *controller,
 	SoBRLExportAction &exportAction)
 {
     if (!controller)
@@ -415,7 +415,7 @@ qg_obol_export_geometry_full_detail(QgView *display,
     if (!display)
 	return 0;
 
-    BRLObolViewController *controller = display->obolViewController();
+    BObolViewController *controller = display->obolViewController();
     if (!controller || !controller->getViewport() ||
 	    !controller->getViewport()->getRoot())
 	return 0;
@@ -446,7 +446,7 @@ qg_obol_export_object_records(QgView *display,
     if (!display)
 	return 0;
 
-    BRLObolViewController *controller = display->obolViewController();
+    BObolViewController *controller = display->obolViewController();
     if (!controller || !controller->getViewport() ||
 	    !controller->getViewport()->getRoot())
 	return 0;

@@ -77,7 +77,7 @@ qg_select_button(Qt::MouseButton button)
 	case Qt::RightButton:
 	    return 2;
 	default:
-	    return BRLOBOL_INPUT_ANY;
+	    return BOBOL_INPUT_ANY;
     }
 }
 
@@ -97,40 +97,40 @@ qg_select_buttons(Qt::MouseButtons buttons)
 static unsigned int
 qg_select_modifiers(Qt::KeyboardModifiers modifiers)
 {
-    unsigned int result = BRLOBOL_INPUT_MOD_NONE;
+    unsigned int result = BOBOL_INPUT_MOD_NONE;
     if (modifiers.testFlag(Qt::ShiftModifier))
-	result |= BRLOBOL_INPUT_MOD_SHIFT;
+	result |= BOBOL_INPUT_MOD_SHIFT;
     if (modifiers.testFlag(Qt::ControlModifier))
-	result |= BRLOBOL_INPUT_MOD_CONTROL;
+	result |= BOBOL_INPUT_MOD_CONTROL;
     if (modifiers.testFlag(Qt::AltModifier))
-	result |= BRLOBOL_INPUT_MOD_ALT;
+	result |= BOBOL_INPUT_MOD_ALT;
     if (modifiers.testFlag(Qt::MetaModifier))
-	result |= BRLOBOL_INPUT_MOD_META;
+	result |= BOBOL_INPUT_MOD_META;
     return result;
 }
 
 static int
-qg_select_semantic_event(QEvent *event, BRLObolInputAction *action,
-	BRLObolInputEvent *input)
+qg_select_semantic_event(QEvent *event, BObolInputAction *action,
+	BObolInputEvent *input)
 {
     if (!event || !action || !input)
 	return 0;
 
     switch (event->type()) {
 	case QEvent::MouseButtonPress:
-	    input->type = BRLOBOL_INPUT_POINTER_PRESS;
+	    input->type = BOBOL_INPUT_POINTER_PRESS;
 	    *action = QG_SELECT_INPUT_BEGIN;
 	    break;
 	case QEvent::MouseMove:
-	    input->type = BRLOBOL_INPUT_POINTER_MOTION;
+	    input->type = BOBOL_INPUT_POINTER_MOTION;
 	    *action = QG_SELECT_INPUT_UPDATE;
 	    break;
 	case QEvent::MouseButtonRelease:
-	    input->type = BRLOBOL_INPUT_POINTER_RELEASE;
+	    input->type = BOBOL_INPUT_POINTER_RELEASE;
 	    *action = QG_SELECT_INPUT_COMMIT;
 	    break;
 	case QEvent::MouseButtonDblClick:
-	    input->type = BRLOBOL_INPUT_POINTER_PRESS;
+	    input->type = BOBOL_INPUT_POINTER_PRESS;
 	    *action = QG_SELECT_INPUT_CANCEL;
 	    break;
 	default:
@@ -232,8 +232,8 @@ QgSelectFilter::selected_paths() const
 }
 
 bool
-QgSelectFilter::semanticInput(BRLObolInputAction action,
-	const BRLObolInputEvent *event)
+QgSelectFilter::semanticInput(BObolInputAction action,
+	const BObolInputEvent *event)
 {
     if (!view_sync(event))
 	return false;
@@ -241,8 +241,8 @@ QgSelectFilter::semanticInput(BRLObolInputAction action,
 }
 
 bool
-QgSelectFilter::applySemanticInput(BRLObolInputAction UNUSED(action),
-	const BRLObolInputEvent *UNUSED(event))
+QgSelectFilter::applySemanticInput(BObolInputAction UNUSED(action),
+	const BObolInputEvent *UNUSED(event))
 {
     return false;
 }
@@ -293,15 +293,15 @@ QgSelectFilter::set_selected_paths(const std::vector<std::string> &paths)
 bool
 QgSelectPntFilter::eventFilter(QObject *, QEvent *e)
 {
-    BRLObolInputAction action = BRLOBOL_ACTION_NONE;
-    BRLObolInputEvent input;
+    BObolInputAction action = BOBOL_ACTION_NONE;
+    BObolInputEvent input;
     return qg_select_semantic_event(e, &action, &input) ?
 	semanticInput(action, &input) : false;
 }
 
 bool
-QgSelectPntFilter::applySemanticInput(BRLObolInputAction action,
-	const BRLObolInputEvent *event)
+QgSelectPntFilter::applySemanticInput(BObolInputAction action,
+	const BObolInputEvent *event)
 {
     if (!event)
 	return false;
@@ -349,15 +349,15 @@ QgSelectPntFilter::applySemanticInput(BRLObolInputAction action,
 bool
 QgSelectBoxFilter::eventFilter(QObject *, QEvent *e)
 {
-    BRLObolInputAction action = BRLOBOL_ACTION_NONE;
-    BRLObolInputEvent input;
+    BObolInputAction action = BOBOL_ACTION_NONE;
+    BObolInputEvent input;
     return qg_select_semantic_event(e, &action, &input) ?
 	semanticInput(action, &input) : false;
 }
 
 bool
-QgSelectBoxFilter::applySemanticInput(BRLObolInputAction action,
-	const BRLObolInputEvent *event)
+QgSelectBoxFilter::applySemanticInput(BObolInputAction action,
+	const BObolInputEvent *event)
 {
     if (!event)
 	return false;
@@ -631,15 +631,15 @@ _qg_select_ray_from_view(void *v, int sx, int sy, point_t origin, vect_t directi
 bool
 QgSelectRayFilter::eventFilter(QObject *, QEvent *e)
 {
-    BRLObolInputAction action = BRLOBOL_ACTION_NONE;
-    BRLObolInputEvent input;
+    BObolInputAction action = BOBOL_ACTION_NONE;
+    BObolInputEvent input;
     return qg_select_semantic_event(e, &action, &input) ?
 	semanticInput(action, &input) : false;
 }
 
 bool
-QgSelectRayFilter::applySemanticInput(BRLObolInputAction action,
-	const BRLObolInputEvent *event)
+QgSelectRayFilter::applySemanticInput(BObolInputAction action,
+	const BObolInputEvent *event)
 {
     if (!event)
 	return false;

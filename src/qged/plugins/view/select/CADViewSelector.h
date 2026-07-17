@@ -33,7 +33,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QRadioButton>
-#include "brlobol/input.h"
+#include "BObol/BInput.h"
 #include "qtcad/QgTypes.h"
 
 class QgPluginContext;
@@ -42,7 +42,7 @@ class QgSelectFilter;
 class QgSelectPntFilter;
 class QgSelectRayFilter;
 class QgView;
-struct brlobol_display_endpoint;
+struct bobol_display_endpoint;
 
 class CADViewSelector : public QWidget
 {
@@ -89,11 +89,11 @@ signals:
 	void do_erase_selections();
 
     private:
-	static const BRLObolInputActionLayer *inputActionLayer();
+	static const BObolInputActionLayer *inputActionLayer();
 	static int inputActionDispatch(void *user_data,
-		BRLObolInputAction action, const BRLObolInputEvent *event);
-	int applyInputAction(BRLObolInputAction action,
-		const BRLObolInputEvent *event);
+		BObolInputAction action, const BObolInputEvent *event);
+	int applyInputAction(BObolInputAction action,
+		const BObolInputEvent *event);
 	void select_objs();
 	void deselect_objs();
 	void erase_objs();
@@ -105,7 +105,7 @@ signals:
 
 	QgPluginContext *m_ctx = nullptr;
 	QgView *m_input_view = nullptr;
-	struct brlobol_display_endpoint *m_input_endpoint = nullptr;
+	struct bobol_display_endpoint *m_input_endpoint = nullptr;
 	unsigned long long ohash = 0;
 	unsigned long long omhash = 0;
 };

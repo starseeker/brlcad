@@ -9,13 +9,13 @@
 
 #include "bu/str.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/lod_mesh_shape.h"
-#include "brlobol/lod_service.h"
-#include "brlobol/mesh_shape.h"
-#include "brlobol/pick_detail.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/view_store.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BLodMeshShape.h"
+#include "BObol/BLodService.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BPickDetail.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewStore.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -101,27 +101,27 @@ apply_and_sync(struct ged *gedp,
     return draw_ret >= 0 && changed != 0;
 }
 
-static BRLObolLodResult
-qtcad_source_pick_result(const BRLObolLodRequest &request,
+static BObolLodResult
+qtcad_source_pick_result(const BObolLodRequest &request,
 	int resultKind,
 	int qualityTier)
 {
-    BRLObolLodResult result;
+    BObolLodResult result;
 
     result.request = request;
-    result.cacheKey = brlobol_lod_cache_key(request);
+    result.cacheKey = bobol_lod_cache_key(request);
     result.resultKind = resultKind;
     result.qualityTier = qualityTier;
-    result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
     result.counts.faceCount = 1;
     result.counts.pointCount = 3;
     result.terminal = TRUE;
 
-    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_OBOL_MESH;
+    result.geometry.kind = BOBOL_LOD_GEOMETRY_OBOL_MESH;
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
-    result.geometry.activeLevel = resultKind == BRLOBOL_LOD_RESULT_MESH ? 1 : -1;
+    result.geometry.activeLevel = resultKind == BOBOL_LOD_RESULT_MESH ? 1 : -1;
     result.geometry.borrowed = FALSE;
 
     result.mesh.points.push_back(SbVec3f(-1.0f, -1.0f, 0.0f));
@@ -140,15 +140,15 @@ qtcad_source_pick_result(const BRLObolLodRequest &request,
     return result;
 }
 
-static BRLObolLodResult
-qtcad_source_pick_task(const BRLObolLodRequest &request, void *UNUSED(userData))
+static BObolLodResult
+qtcad_source_pick_task(const BObolLodRequest &request, void *UNUSED(userData))
 {
-    return qtcad_source_pick_result(request, BRLOBOL_LOD_RESULT_FULL_DETAIL,
-	    BRLOBOL_LOD_QUALITY_FULL_DETAIL);
+    return qtcad_source_pick_result(request, BOBOL_LOD_RESULT_FULL_DETAIL,
+	    BOBOL_LOD_QUALITY_FULL_DETAIL);
 }
 
 static int
-wait_for_qtcad_source_pick_result(BRLObolLodService &service)
+wait_for_qtcad_source_pick_result(BObolLodService &service)
 {
     for (int i = 0; i < 400; i++) {
 	if (service.inFlightCount() == 0 &&
@@ -196,7 +196,7 @@ main(int argc, char **argv)
 	ged_view_active_ctx_set(gedp, view.viewContext());
 	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
@@ -235,31 +235,31 @@ main(int argc, char **argv)
     if (paths.size() != 1 || paths[0] != "box.s")
 	FAIL("qtcad select point filter should expose normalized Obol pick paths");
 
-    BRLObolFeatureStyle command_style;
+    BObolFeatureStyle command_style;
     command_style.hasSelectable = TRUE;
     command_style.selectable = TRUE;
     command_style.hasColor = TRUE;
     command_style.color = SbColor(1.0f, 1.0f, 0.0f);
-    BRLObolLineLayer command_layer;
+    BObolLineLayer command_layer;
     command_layer.name = "rtcheck::overlaps/yellow";
     command_layer.points.push_back(SbVec3f(-0.5f, 0.0f, 2.0f));
     command_layer.commands.push_back(static_cast<int32_t>(
-	    BRLObolLineCommand::Move));
+	    BObolLineCommand::Move));
     command_layer.points.push_back(SbVec3f(0.5f, 0.0f, 2.0f));
     command_layer.commands.push_back(static_cast<int32_t>(
-	    BRLObolLineCommand::Draw));
-    std::vector<BRLObolLineLayer> command_layers;
+	    BObolLineCommand::Draw));
+    std::vector<BObolLineLayer> command_layers;
     command_layers.push_back(command_layer);
-    BRLObolFeatureHandle command_handle =
+    BObolFeatureHandle command_handle =
 	controller->features().publishLineLayers("rtcheck::overlaps",
-		BRLObolFeatureScope::Shared, command_layers, &command_style);
-    std::vector<BRLObolFeatureMetadata> command_feature_metadata;
-    BRLObolFeatureMetadata command_schema_metadata;
+		BObolFeatureScope::Shared, command_layers, &command_style);
+    std::vector<BObolFeatureMetadata> command_feature_metadata;
+    BObolFeatureMetadata command_schema_metadata;
     command_schema_metadata.key = "result.schema";
     command_schema_metadata.value = "brlcad.rtcheck.overlap.v1";
     command_feature_metadata.push_back(command_schema_metadata);
-    std::vector<BRLObolFeatureMetadata> command_primitive_metadata;
-    BRLObolFeatureMetadata command_metadata;
+    std::vector<BObolFeatureMetadata> command_primitive_metadata;
+    BObolFeatureMetadata command_metadata;
     command_metadata.key = "overlap.objects";
     command_metadata.value = "box.s cone.s";
     command_primitive_metadata.push_back(command_metadata);
@@ -296,7 +296,7 @@ main(int argc, char **argv)
     if (qg_obol_pick_apply_feature_state(&view, commandRayPicks[0], true,
 	    true) != 1)
 	FAIL("qtcad command-result pick helper should apply parent primitive state");
-    BRLObolFeatureRecord command_record;
+    BObolFeatureRecord command_record;
     if (!controller->features().record(command_handle, command_record) ||
 	    command_record.selectedPrimitives.size() != 1 ||
 	    command_record.selectedPrimitives[0] != 0 ||
@@ -388,18 +388,18 @@ main(int argc, char **argv)
     lodMesh->setIndexedTriangles(lodPoints, 3, lodIndices, 3);
     lodMesh->setPickGeometryPolicy(SoBRLMeshShape::PICK_FULL_DETAIL);
 
-    BRLObolLodRequest displayRequest;
+    BObolLodRequest displayRequest;
     lodMesh->makeLodRequest(displayRequest,
 	    "db://qtcad-obol-pick-test",
 	    1,
 	    1,
 	    1,
-	    BRLOBOL_LOD_DRAW_SHADED,
-	    "brlobol_mesh_lod",
-	    "brlobol-cache-v1",
-	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
-    BRLObolLodResult displayResult = qtcad_source_pick_result(displayRequest,
-	    BRLOBOL_LOD_RESULT_MESH, BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
+	    BOBOL_LOD_DRAW_SHADED,
+	    "bobol_mesh_lod",
+	    "bobol-cache-v1",
+	    BOBOL_LOD_QUALITY_FAST_DISPLAY);
+    BObolLodResult displayResult = qtcad_source_pick_result(displayRequest,
+	    BOBOL_LOD_RESULT_MESH, BOBOL_LOD_QUALITY_FAST_DISPLAY);
     if (!lodMesh->applyStagedLodResult(displayResult, &displayRequest) ||
 	    !lodMesh->isLodDisplayActive() ||
 	    lodMesh->hasFullDetailMesh())
@@ -411,7 +411,7 @@ main(int argc, char **argv)
     lodRoot->unref();
     controller->getViewport()->viewAll();
 
-    BRLObolLodRequest sourceLodRequest;
+    BObolLodRequest sourceLodRequest;
     const SbViewportRegion &pickRegion = controller->getViewportRegion();
     SbVec2s pickSize = pickRegion.getViewportSizePixels();
     SoRayPickAction seededPickAction(pickRegion);
@@ -429,12 +429,12 @@ main(int argc, char **argv)
 		sourceLodRequest))
 	FAIL("qtcad LoD pick fixture should build a bounded source full-detail request");
 
-    BRLObolLodService sourceService;
+    BObolLodService sourceService;
     if (!sourceService.start(1, TRUE))
 	FAIL("qtcad LoD pick source service should start");
     controller->setLodService(&sourceService);
 
-    BRLObolLodTask sourceTask;
+    BObolLodTask sourceTask;
     sourceTask.request = sourceLodRequest;
     sourceTask.realize = qtcad_source_pick_task;
     if (sourceService.submit(sourceTask) == 0) {
@@ -503,10 +503,10 @@ main(int argc, char **argv)
 	sourceService.stop();
 	FAIL("qtcad source-backed exact Obol pick over-budget result should become ready");
     }
-    std::vector<BRLObolLodResult> overBudgetResults;
+    std::vector<BObolLodResult> overBudgetResults;
     sourceService.drainResults(overBudgetResults);
     if (overBudgetResults.size() != 1 ||
-	    overBudgetResults[0].providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    overBudgetResults[0].providerStatus != BOBOL_LOD_PROVIDER_FALLBACK ||
 	    bu_strcmp(overBudgetResults[0].diagnostic.getString(),
 		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	    overBudgetResults[0].mesh.isValid()) {
@@ -540,11 +540,11 @@ main(int argc, char **argv)
 	FAIL("qtcad point select filter pending source pick result should become ready");
     }
     {
-	std::vector<BRLObolLodResult> pendingFilterResults;
+	std::vector<BObolLodResult> pendingFilterResults;
 	sourceService.drainResults(pendingFilterResults);
 	if (pendingFilterResults.size() != 1 ||
 		pendingFilterResults[0].providerStatus !=
-		    BRLOBOL_LOD_PROVIDER_FALLBACK) {
+		    BOBOL_LOD_PROVIDER_FALLBACK) {
 	    controller->setExactFullDetailBudget(0, 0);
 	    controller->setLodService(NULL);
 	    sourceService.stop();
@@ -584,7 +584,7 @@ main(int argc, char **argv)
 	FAIL("qtcad box select filter pending source pick result should become ready");
     }
     {
-	std::vector<BRLObolLodResult> pendingBoxResults;
+	std::vector<BObolLodResult> pendingBoxResults;
 	sourceService.drainResults(pendingBoxResults);
 	if (pendingBoxResults.empty()) {
 	    controller->setExactFullDetailBudget(0, 0);
@@ -592,8 +592,8 @@ main(int argc, char **argv)
 	    sourceService.stop();
 	    FAIL("qtcad box select filter should submit pending source-backed exact pick requests");
 	}
-	for (const BRLObolLodResult &result : pendingBoxResults) {
-	    if (result.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK) {
+	for (const BObolLodResult &result : pendingBoxResults) {
+	    if (result.providerStatus != BOBOL_LOD_PROVIDER_FALLBACK) {
 		controller->setExactFullDetailBudget(0, 0);
 		controller->setLodService(NULL);
 		sourceService.stop();
@@ -627,7 +627,7 @@ main(int argc, char **argv)
 	FAIL("qtcad ray select filter pending source pick result should become ready");
     }
     {
-	std::vector<BRLObolLodResult> pendingRayResults;
+	std::vector<BObolLodResult> pendingRayResults;
 	sourceService.drainResults(pendingRayResults);
 	if (pendingRayResults.empty()) {
 	    controller->setExactFullDetailBudget(0, 0);
@@ -635,8 +635,8 @@ main(int argc, char **argv)
 	    sourceService.stop();
 	    FAIL("qtcad ray select filter should submit the pending source-backed exact pick request");
 	}
-	for (const BRLObolLodResult &result : pendingRayResults) {
-	    if (result.providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK) {
+	for (const BObolLodResult &result : pendingRayResults) {
+	    if (result.providerStatus != BOBOL_LOD_PROVIDER_FALLBACK) {
 		controller->setExactFullDetailBudget(0, 0);
 		controller->setLodService(NULL);
 		sourceService.stop();
@@ -681,7 +681,7 @@ main(int argc, char **argv)
 	    !controller->getRtPickCache(0) ||
 	    !controller->getRtPickCache(0)->isReady())
 	FAIL("qtcad Obol librt exact implicit pick should retain a controller RT pick cache");
-    BRLObolRtPickCache *implicitRtPickCache = controller->getRtPickCache(0);
+    BObolRtPickCache *implicitRtPickCache = controller->getRtPickCache(0);
 
     std::vector<QgObolPickRecord> implicitRectPicks;
     if (qg_obol_pick_rect(&view, 80, 60, 100, 80, 8.0f, false,

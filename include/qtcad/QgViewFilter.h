@@ -30,7 +30,7 @@
 #include <QEvent>
 #include <QMouseEvent>
 #include <QObject>
-#include "brlobol/input.h"
+#include "BObol/BInput.h"
 #include "qtcad/defines.h"
 #include "qtcad/QgTypes.h"
 
@@ -64,7 +64,7 @@ protected:
 	QMouseEvent *view_sync(QEvent *e);
 	/* Normalize endpoint-routed pointer input into the same passive view
 	 * state used by direct Qt filters. */
-	bool view_sync(const BRLObolInputEvent *event);
+	bool view_sync(const BObolInputEvent *event);
 
 private:
 	class QgViewFilterPrivate;

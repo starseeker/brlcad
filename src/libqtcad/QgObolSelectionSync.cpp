@@ -10,10 +10,10 @@
 
 #include "QgObolSelectionSyncPrivate.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/mesh_shape.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/vlist_shape.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BViewController.h"
+#include "BObol/BVListShape.h"
 #include "bu/vls.h"
 #include "ged/selection_state.h"
 #include "QgObolViewSyncPrivate.h"
@@ -172,7 +172,7 @@ qg_obol_sync_selection_state_impl(struct ged *gedp,
     if (!qg_obol_display_accepts_ged_active_view(gedp, display))
 	return 0;
 
-    BRLObolViewController *obol = display->obolViewController();
+    BObolViewController *obol = display->obolViewController();
     if (!obol)
 	return 0;
 
@@ -195,8 +195,8 @@ qg_obol_sync_selection_state_impl(struct ged *gedp,
 	    qg_obol_source_selected(source, selectedPaths);
 	if (source->hasCompactInstanceIndex()) {
 	    for (int j = 0; j < source->getCompactInstanceCount(); j++) {
-		BRLObolCompactInstanceHandle handle;
-		BRLObolCompactInstanceSummary summary;
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary summary;
 		if (!source->getCompactInstanceHandle(j, handle) ||
 		    !source->getCompactInstanceSummary(handle, summary))
 		    continue;

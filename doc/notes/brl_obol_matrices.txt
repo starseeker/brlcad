@@ -6,7 +6,7 @@ Purpose
 
 This note records the matrix, coordinate, and view-size rules that the
 BRL-CAD-to-Obol migration must preserve.  It is intended to be a durable
-resource for libbrlobol, qtcad/qged, GED drawing tests, and future Obol camera
+resource for libBObol, qtcad/qged, GED drawing tests, and future Obol camera
 work.  The immediate goal is to replace measured view corrections with a
 defensible conversion contract.
 
@@ -50,7 +50,7 @@ and is applied explicitly by traversal, bounds, autoview, and export/pick/snap
 code that needs scene coordinates.
 
 Database realization follows the same rule.  `db_walk_tree` supplies path,
-material/region state, and member transforms; libbrlobol refetches drawable
+material/region state, and member transforms; libBObol refetches drawable
 primitive geometry with an identity matrix for cache misses, builds shared
 local geometry, and gives each visible leaf an explicit instance transform.
 The visible leaf shape keeps path identity and draw/edit state, while the
@@ -78,7 +78,7 @@ GED draw transactions follow the same leaf-instance boundary for normal
 database draw modes.  Obol-owned wire, shaded-BoT, shaded, and hidden-line
 draw requests are expanded with `db_walk_tree_leaf_instances`; each resulting
 full leaf path becomes an explicit Obol database source and is realized by
-libbrlobol.  Do not replace this with aggregate root mesh sources unless the
+libBObol.  Do not replace this with aggregate root mesh sources unless the
 aggregate representation can preserve per-leaf material, region, identity, and
 transform semantics explicitly.
 
@@ -89,7 +89,7 @@ as source metadata.  Evaluated wire now has a librt core API,
 `rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol, opts)`, which accepts
 full path/name style input and emits an RT vlist.  The options flags can force
 the historical Big-E path or the symbolic boolweave path for comparison and
-fallback if the default changes.  libbrlobol adapts that vlist
+fallback if the default changes.  libBObol adapts that vlist
 to the BG line-command arrays currently used by Obol/GED publication.  The
 default evaluator still uses the old Big-E algorithm internally, but it owns
 local librt resource/vlist state, records typed output internally, and
@@ -107,7 +107,7 @@ inspection before replacing the default baseline.  Avoid globally
 scaling/bumping an alternate database as the primary correctness strategy.
 
 External primary geometry publication also follows this rule.  Producers must
-emit source-local geometry before calling the libbrlobol publish APIs.  Legacy
+emit source-local geometry before calling the libBObol publish APIs.  Legacy
 draw-tree paths that still obtain transformed mesh arrays localize those arrays
 explicitly at the producer boundary before publication; the generic
 database-source publisher does not infer coordinate space from draw mode.
@@ -252,7 +252,7 @@ polygon image tests, Hamming/perceptual thresholds are appropriate for
 raster-sensitive edge and fill cases, while raw pixel diffs remain useful
 diagnostics.  Do not rebaseline polygon images solely for this class of
 boundary shift.  If exact pixel parity is ever required, the fix should be a
-documented libbrlobol camera/view projection policy, such as exact
+documented libBObol camera/view projection policy, such as exact
 viewport-centered mapping or a deliberate snap rule, not a measured per-shape
 offset.
 
@@ -344,7 +344,7 @@ Canonical Orthographic Bridge
 
 The production bridge should be a direct model-space Obol camera.  BRL-CAD is
 moving to Obol as the canonical interaction and rendering stack, so qtcad,
-qged, and GED tests should use one shared libbrlobol direct-camera adapter
+qged, and GED tests should use one shared libBObol direct-camera adapter
 instead of preserving a normalized legacy-view transform as the active path.
 
 * Use `SoOrthographicCamera`.
@@ -398,7 +398,7 @@ symmetric case.
 
 For migration correctness, perspective should not be fitted with measured
 camera distances or scale factors.  The proper boundary is an explicit matrix
-view path in libbrlobol/Obol that can install the BRL-CAD view and projection
+view path in libBObol/Obol that can install the BRL-CAD view and projection
 matrices directly.  Obol already has projection-matrix state elements; if the
 public node/action API is not sufficient, adding an Obol explicit-matrix
 camera/view node is cleaner than carrying ad-hoc perspective conversions in
@@ -418,15 +418,15 @@ The migration previously had multiple local camera/matrix bridges:
   conversion helper.
 
 The qtcad and GED draw-test camera sync paths should remain thin callers of
-the shared libbrlobol direct-camera adapter.  Other BRL-CAD-to-Obol matrix
-conversion sites should use, or be reduced to, the shared libbrlobol matrix
+the shared libBObol direct-camera adapter.  Other BRL-CAD-to-Obol matrix
+conversion sites should use, or be reduced to, the shared libBObol matrix
 conversion helper as they are touched.
 
 
-Shared libbrlobol Target
+Shared libBObol Target
 ------------------------
 
-libbrlobol should own the BRL-CAD view import/export boundary.  The intended
+libBObol should own the BRL-CAD view import/export boundary.  The intended
 shared API shape is:
 
 * general BRL-CAD `mat_t` to Obol `SbMatrix` conversion:
@@ -443,7 +443,7 @@ shared API shape is:
   route through an explicit matrix path or mark unsupported until that path is
   present.
 
-qtcad, qged, and GED tests should call this shared libbrlobol adapter instead
+qtcad, qged, and GED tests should call this shared libBObol adapter instead
 of maintaining local camera math.  qtcad/qged interactive orbit should use
 Obol camera operations, especially `SoCamera::orbitCamera`, and then sync
 through the same view boundary as needed.
@@ -464,4 +464,4 @@ The view-math migration is complete when:
 * perspective either uses an explicit matrix path or is explicitly excluded
   from the orthographic bridge tests; and
 * qtcad visible Qt/system-OpenGL presentation and OSMesa/offscreen readback use
-  the same libbrlobol view adapter.
+  the same libBObol view adapter.

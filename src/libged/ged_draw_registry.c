@@ -22,7 +22,7 @@
  * GED draw registry and draw-shape state indexing.
  *
  * This file owns typed draw refs, fast lookup indexes, and source-local state
- * used by the Obol/libbrlobol draw pipeline.
+ * used by the Obol/libBObol draw pipeline.
  */
 
 #include "common.h"

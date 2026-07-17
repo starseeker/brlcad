@@ -1,4 +1,4 @@
-brlcad_addexec(gsh "gsh.cpp" "libged;libbrlobol;libimgstream;libbu;Threads::Threads")
+brlcad_addexec(gsh "gsh.cpp" "libged;libBObol;libimgstream;libbu;Threads::Threads")
 target_include_directories(gsh BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../libtermio)
 add_dependencies(gsh ged_plugins)
 add_dependencies(gsh ged_subprocesses ged_exec)

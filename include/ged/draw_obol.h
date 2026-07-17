@@ -20,7 +20,7 @@
 /** @file ged/draw_obol.h
  *
  * C++ bridge between libged's neutral draw transaction API and an
- * Obol/libbrlobol view controller.
+ * Obol/libBObol view controller.
  */
 
 #ifndef GED_DRAW_OBOL_H
@@ -40,7 +40,7 @@ struct rt_db_internal;
 struct bg_tess_tol;
 struct bn_tol;
 struct imgstream_fb;
-struct brlobol_display_endpoint;
+struct bobol_display_endpoint;
 
 typedef int (*ged_draw_obol_framebuffer_operation_t)(
 	struct imgstream_fb *fb,
@@ -107,7 +107,7 @@ struct ged_draw_obol_source_prewarm_status {
 /**
  * C-compatible form of ged_draw_obol_controller_attach.
  *
- * @p controller is a borrowed BRLObolViewController pointer passed as opaque
+ * @p controller is a borrowed BObolViewController pointer passed as opaque
  * storage so C callers such as the GED dm command can attach an Obol backend
  * without exposing C++ types.
  */
@@ -152,7 +152,7 @@ ged_draw_obol_progressive_available(struct ged *gedp, void *view_ctx);
 /**
  * Return the Obol view controller currently associated with @p view_ctx.
  *
- * The returned pointer is a borrowed BRLObolViewController pointer exposed as
+ * The returned pointer is a borrowed BObolViewController pointer exposed as
  * opaque storage for C callers.  It may be a per-view controller or the shared
  * GED Obol controller.
  */
@@ -163,7 +163,7 @@ ged_draw_obol_controller_opaque_for_view(void *view_ctx);
  * Return or create the Obol view controller associated with @p view_ctx.
  *
  * This is the C-compatible form of libged's internal view-controller ensure
- * path.  It lets app-host support code use the GED/libbrlobol controller
+ * path.  It lets app-host support code use the GED/libBObol controller
  * association rather than probing display-manager implementation details.
  */
 GED_EXPORT void *
@@ -205,7 +205,7 @@ ged_draw_obol_framebuffer_present(struct ged *gedp);
  * transport so the backend is safe to close.  Application hosts that own
  * toolkit-specific socket/notifier integration may replace it afterward.
  *
- * @p window_host is a borrowed BRLObolWindowHost pointer passed as opaque
+ * @p window_host is a borrowed BObolWindowHost pointer passed as opaque
  * storage so C callers do not depend on C++ types.  Passing NULL first uses
  * the host bound to the view's display endpoint and otherwise falls back to
  * libged's generic window host.  Non-positive dimensions are derived from the
@@ -278,7 +278,7 @@ ged_draw_obol_framebuffer_release(struct ged *gedp);
  */
 GED_EXPORT void
 ged_draw_obol_framebuffer_endpoint_detach(struct ged *gedp,
-	struct brlobol_display_endpoint *endpoint);
+	struct bobol_display_endpoint *endpoint);
 
 /**
  * Synchronize faceplate/HUD state from a GED view context into that view's
@@ -442,7 +442,7 @@ __END_DECLS
 
 #ifdef __cplusplus
 
-class BRLObolViewController;
+class BObolViewController;
 class SoBRLSceneController;
 struct ged_draw_transaction;
 struct ged_draw_transaction_result;
@@ -456,7 +456,7 @@ struct ged_draw_transaction_result;
  * also synchronized immediately.
  *
  * This is the preferred Capability 1 boundary: libged mutates the
- * libbrlobol/Obol scene model without depending on GUI view policy.
+ * libBObol/Obol scene model without depending on GUI view policy.
  *
  * Returns 1 on successful attachment, 0 on invalid input or observer
  * registration failure.
@@ -534,13 +534,13 @@ ged_draw_obol_scene_sync_full_scene(struct ged *gedp,
  */
 GED_EXPORT int
 ged_draw_obol_controller_attach(struct ged *gedp,
-				BRLObolViewController *controller,
+				BObolViewController *controller,
 				int sync_current_scene = 1);
 
 GED_EXPORT int
 ged_draw_obol_controller_attach_for_view(struct ged *gedp,
 	void *view_ctx,
-	BRLObolViewController *controller,
+	BObolViewController *controller,
 	int sync_current_scene = 1);
 
 /**
@@ -552,7 +552,7 @@ ged_draw_obol_controller_detach(struct ged *gedp);
 /**
  * Return the borrowed controller currently attached to @p gedp, or NULL.
  */
-GED_EXPORT BRLObolViewController *
+GED_EXPORT BObolViewController *
 ged_draw_obol_controller(struct ged *gedp);
 
 /**
@@ -566,7 +566,7 @@ ged_draw_obol_sync_transaction(
     struct ged *gedp,
     const struct ged_draw_transaction *txn,
     const struct ged_draw_transaction_result *result,
-    BRLObolViewController *controller = NULL);
+    BObolViewController *controller = NULL);
 
 /**
  * Rebuild @p controller's database-source scene from the current GED draw set.
@@ -579,7 +579,7 @@ GED_EXPORT int
 ged_draw_obol_sync_full_scene(struct ged *gedp,
 			      void *view_ctx,
 			      uint32_t source_revision = 0,
-			      BRLObolViewController *controller = NULL);
+			      BObolViewController *controller = NULL);
 
 #endif /* __cplusplus */
 

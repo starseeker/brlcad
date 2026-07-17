@@ -29,11 +29,11 @@
 #  include <unistd.h>
 #endif
 
-#include "brlobol/framebuffer.h"
-#include "brlobol/display_endpoint.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/viewport_image.h"
-#include "brlobol/window_host.h"
+#include "BObol/BFramebuffer.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewportImage.h"
+#include "BObol/BWindowHost.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bv.h"
@@ -44,7 +44,7 @@
 
 #include "./ged_private.h"
 
-class BRLObolViewController;
+class BObolViewController;
 
 namespace {
 
@@ -132,8 +132,8 @@ public:
     }
 
     int configure(struct ged *new_gedp, void *new_view_ctx,
-	    BRLObolViewController *controller,
-	    BRLObolWindowHost *window_host,
+	    BObolViewController *controller,
+	    BObolWindowHost *window_host,
 	    int requested_width,
 	    int requested_height,
 	    int requested_present_on_flush)
@@ -149,10 +149,10 @@ public:
 	const struct bv *view = bv_context_view_const(
 	    (const struct bv_context *)new_view_ctx);
 	int composition = view ? bv_framebuffer_mode_get(view) : 0;
-	if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
-	    composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
-	    composition = BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF;
-	BRLObolWindowHost *active_host = window_host ? window_host :
+	if (composition < BOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	    composition > BOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	    composition = BOBOL_FRAMEBUFFER_COMPOSITION_OFF;
+	BObolWindowHost *active_host = window_host ? window_host :
 	    &default_host;
 	if (active_host->getController() != controller) {
 	    /* Changing a host controller closes its retained framebuffer nodes.
@@ -162,7 +162,7 @@ public:
 	    active_host->attachController(controller, FALSE);
 	}
 	if (framebuffer.setHost(active_host,
-		static_cast<BRLObolFramebufferComposition>(composition)) != 0)
+		static_cast<BObolFramebufferComposition>(composition)) != 0)
 	    return BRLCAD_ERROR;
 
 	int width = requested_width;
@@ -200,7 +200,7 @@ public:
 	if (!fbinfo || framebuffer.ensure() != 0)
 	    return -1;
 
-	BRLObolFramebufferInfo info;
+	BObolFramebufferInfo info;
 	if (framebuffer.info(&info) != 0)
 	    return -1;
 	fbinfo->max_width = info.max_width;
@@ -421,7 +421,7 @@ public:
 	*components = 0;
 
 	std::lock_guard<std::mutex> guard(lock);
-	BRLObolFramebufferInfo info;
+	BObolFramebufferInfo info;
 	if (framebuffer.info(&info) != 0 || info.width <= 0 ||
 	    info.height <= 0 || info.width > INT_MAX / info.height)
 	    return 0;
@@ -450,11 +450,11 @@ public:
 
     int setCompositionLocked(int composition)
     {
-	if (composition < BRLOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
-	    composition > BRLOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
+	if (composition < BOBOL_FRAMEBUFFER_COMPOSITION_OFF ||
+	    composition > BOBOL_FRAMEBUFFER_COMPOSITION_INTERLAY)
 	    return BRLCAD_ERROR;
 	return framebuffer.setComposition(
-	    static_cast<BRLObolFramebufferComposition>(composition)) == 0 ?
+	    static_cast<BObolFramebufferComposition>(composition)) == 0 ?
 	    BRLCAD_OK : BRLCAD_ERROR;
     }
 
@@ -469,7 +469,7 @@ public:
 	return 0;
     }
 
-    void detachEndpoint(brlobol_display_endpoint_t *endpoint)
+    void detachEndpoint(bobol_display_endpoint_t *endpoint)
     {
 	std::lock_guard<std::mutex> guard(lock);
 	if (!endpoint || capture_endpoint != endpoint)
@@ -553,14 +553,14 @@ public:
 private:
     void bindCaptureProviderLocked()
     {
-	brlobol_display_endpoint_t *endpoint = view_ctx ?
+	bobol_display_endpoint_t *endpoint = view_ctx ?
 	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
 	if (capture_endpoint == endpoint)
 	    return;
 
 	clearCaptureProviderLocked();
 	if (endpoint &&
-	    brlobol_display_endpoint_framebuffer_capture_provider_set(
+	    bobol_display_endpoint_framebuffer_capture_provider_set(
 		endpoint, ged_obol_capture_framebuffer, this))
 	    capture_endpoint = endpoint;
     }
@@ -568,7 +568,7 @@ private:
     void clearCaptureProviderLocked()
     {
 	if (capture_endpoint)
-	    (void)brlobol_display_endpoint_framebuffer_capture_provider_set(
+	    (void)bobol_display_endpoint_framebuffer_capture_provider_set(
 		capture_endpoint, NULL, this);
 	capture_endpoint = NULL;
     }
@@ -631,10 +631,10 @@ private:
     struct ged *gedp = NULL;
     void *view_ctx = NULL;
     struct fbserv_obj *fbs = NULL;
-    brlobol_display_endpoint_t *capture_endpoint;
+    bobol_display_endpoint_t *capture_endpoint;
     int present_on_flush = 0;
-    BRLObolWindowHost default_host;
-    BRLObolFramebufferStream framebuffer;
+    BObolWindowHost default_host;
+    BObolFramebufferStream framebuffer;
     std::mutex lock;
     std::mutex watcher_lock;
     std::map<int, std::shared_ptr<GedObolFbservWatcher>> watchers;
@@ -734,7 +734,7 @@ ged_obol_capture_framebuffer(void *ctx, unsigned char **pixels, size_t *size,
 static int
 ged_obol_fbserv_configure_for_view(struct ged *gedp,
 	void *view_ctx,
-	BRLObolWindowHost *window_host,
+	BObolWindowHost *window_host,
 	int width,
 	int height,
 	int present_on_flush,
@@ -744,14 +744,14 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
 	return BRLCAD_ERROR;
 
     /* Most toolkit factories keep their instance opaque.  A factory that owns
-     * a BRLObolWindowHost may explicitly expose it for retained framebuffer
+     * a BObolWindowHost may explicitly expose it for retained framebuffer
      * attachment; otherwise the bridge uses its controller-owned host. */
     if (!window_host) {
-	brlobol_display_endpoint_t *endpoint =
+	bobol_display_endpoint_t *endpoint =
 	    ged_view_context_display_endpoint_get(view_ctx);
 	if (endpoint) {
-	    window_host = static_cast<BRLObolWindowHost *>(
-		brlobol_display_endpoint_framebuffer_window_host(endpoint));
+	    window_host = static_cast<BObolWindowHost *>(
+		bobol_display_endpoint_framebuffer_window_host(endpoint));
 	    /* A live endpoint must publish flushes to its retained image source.
 	     * Headless/direct callers retain the requested deferred behavior. */
 	    present_on_flush = 1;
@@ -784,7 +784,7 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
 	fbs_set_transport(fbs, &ged_obol_transport_ops);
 
     return bridge->configure(gedp, view_ctx,
-	    static_cast<BRLObolViewController *>(controller),
+	    static_cast<BObolViewController *>(controller),
 	    window_host, width, height, present_on_flush);
 }
 
@@ -832,7 +832,7 @@ ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
 	int present_on_flush)
 {
     return ged_obol_fbserv_configure_for_view(gedp, view_ctx,
-	    static_cast<BRLObolWindowHost *>(window_host), width, height,
+	    static_cast<BObolWindowHost *>(window_host), width, height,
 	    present_on_flush, 0);
 }
 
@@ -883,8 +883,8 @@ ged_draw_obol_view_display_image(struct ged *gedp,
     if (!view_ctx)
 	return -1;
 
-    BRLObolViewController *controller =
-	static_cast<BRLObolViewController *>(
+    BObolViewController *controller =
+	static_cast<BObolViewController *>(
 	    ged_draw_obol_controller_opaque_for_view(view_ctx));
     if (!controller)
 	return 0;
@@ -911,7 +911,7 @@ ged_draw_obol_view_display_image(struct ged *gedp,
     if (!controller->syncCameraFromViewContext(view_ctx))
 	return -1;
 
-    BRLObolProgressiveStatus progressiveStatus;
+    BObolProgressiveStatus progressiveStatus;
     int ret = controller->renderToImage(image, flip, alpha, NULL,
 	NULL, &progressiveStatus);
     if (progressiveStatus.hasMore && view)
@@ -947,7 +947,7 @@ ged_draw_obol_framebuffer_release(struct ged *gedp)
 
 extern "C" GED_EXPORT void
 ged_draw_obol_framebuffer_endpoint_detach(struct ged *gedp,
-	brlobol_display_endpoint_t *endpoint)
+	bobol_display_endpoint_t *endpoint)
 {
     if (!gedp || !gedp->ged_fbs || !endpoint)
 	return;

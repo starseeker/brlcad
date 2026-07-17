@@ -887,7 +887,7 @@ BrlcadTkObolHost_Init(Tcl_Interp *interp)
     SetClassProcsPtr = Tk_SetClassProcs;
 #endif
 
-    if (Tcl_FindCommand(interp, "::brlcad::tkobol::host", NULL,
+    if (Tcl_FindCommand(interp, "::brlcad::tkObol::host", NULL,
             TCL_GLOBAL_ONLY)) {
         return TCL_OK;
     }
@@ -902,7 +902,7 @@ BrlcadTkObolHost_Init(Tcl_Interp *interp)
         return TCL_ERROR;
     }
 
-    if (Tcl_CreateObjCommand(interp, "::brlcad::tkobol::host", Togl_ObjCmd, NULL,
+    if (Tcl_CreateObjCommand(interp, "::brlcad::tkObol::host", Togl_ObjCmd, NULL,
                     Togl_ObjCmdDelete) == NULL) {
         return TCL_ERROR;
     }

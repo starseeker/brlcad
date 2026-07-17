@@ -10,8 +10,8 @@
 
 #include "qtcad/QgObolSnap.h"
 
-#include "brlobol/view_controller.h"
-#include "brlobol/view_query.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewQuery.h"
 #include "qtcad/QgView.h"
 
 QgObolSnapRecord::QgObolSnapRecord(void) :
@@ -32,7 +32,7 @@ QgObolSnapRecord::QgObolSnapRecord(void) :
 }
 
 static void
-qg_obol_snap_record(const BRLObolViewSnapRecord &source,
+qg_obol_snap_record(const BObolViewSnapRecord &source,
 	QgObolSnapRecord &record)
 {
     record.point = source.point;
@@ -62,9 +62,9 @@ qg_obol_snap_point_with_policy(QgView *display,
     if (!display)
 	return 0;
 
-    BRLObolViewController *controller = display->obolViewController();
-    BRLObolViewSnapRecord snap;
-    const int found = brlobol_view_snap_point(controller, query, tolerance,
+    BObolViewController *controller = display->obolViewController();
+    BObolViewSnapRecord snap;
+    const int found = bobol_view_snap_point(controller, query, tolerance,
 	enabledKinds, geometryPolicy,
 	geometryPolicy == SoBRLSnapAction::FULL_DETAIL, snap);
     qg_obol_snap_record(snap, record);

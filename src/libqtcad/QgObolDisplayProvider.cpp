@@ -9,8 +9,8 @@
 
 #include "qtcad/display_provider.h"
 
-#include "brlobol/display_endpoint.h"
-#include "brlobol/display_session.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BDisplaySession.h"
 #include "bu/app.h"
 #include "qtcad/QgObolWindowHost.h"
 
@@ -51,7 +51,7 @@ qg_obol_display_application(QgObolDisplayProvider *provider)
 }
 
 static int
-qg_obol_display_provider_open(brlobol_display_endpoint_t *endpoint,
+qg_obol_display_provider_open(bobol_display_endpoint_t *endpoint,
 	const imgstream_fb_spec_info_t *spec, size_t width, size_t height,
 	const char *title, void **instance, void *UNUSED(user_data))
 {
@@ -60,18 +60,18 @@ qg_obol_display_provider_open(brlobol_display_endpoint_t *endpoint,
 	return 0;
 
     const char *factory_name = NULL;
-    enum brlobol_render_engine engine = BRLOBOL_RENDER_ENGINE_AUTO;
+    enum bobol_render_engine engine = BOBOL_RENDER_ENGINE_AUTO;
     switch (spec->display) {
 	case IMGSTREAM_FB_DISPLAY_X:
 	case IMGSTREAM_FB_DISPLAY_SWRAST:
 	    factory_name = "qt-sw";
-	    engine = BRLOBOL_RENDER_ENGINE_SW;
+	    engine = BOBOL_RENDER_ENGINE_SW;
 	    break;
 	case IMGSTREAM_FB_DISPLAY_QTGL:
 	case IMGSTREAM_FB_DISPLAY_OGL:
 	case IMGSTREAM_FB_DISPLAY_WGL:
 	    factory_name = "qt-gl";
-	    engine = BRLOBOL_RENDER_ENGINE_HW;
+	    engine = BOBOL_RENDER_ENGINE_HW;
 	    break;
 	case IMGSTREAM_FB_DISPLAY_NONE:
 	default:
@@ -84,23 +84,23 @@ qg_obol_display_provider_open(brlobol_display_endpoint_t *endpoint,
     QApplication *application = qg_obol_display_application(provider);
     if (!application || QThread::currentThread() != application->thread() ||
 	!qtcad_obol_host_factories_register() ||
-	!brlobol_display_endpoint_render_engine_set(endpoint, engine)) {
+	!bobol_display_endpoint_render_engine_set(endpoint, engine)) {
 	if (provider->owns_application)
 	    delete provider->application;
 	delete provider;
 	return 0;
     }
 
-    struct brlobol_host_desc desc = {};
+    struct bobol_host_desc desc = {};
     desc.struct_size = sizeof(desc);
-    desc.mode = BRLOBOL_HOST_MODE_TOPLEVEL;
+    desc.mode = BOBOL_HOST_MODE_TOPLEVEL;
     desc.width = static_cast<unsigned int>(width);
     desc.height = static_cast<unsigned int>(height);
     desc.device_pixel_ratio = 1.0;
     desc.visible = 1;
     desc.title = title ? title : "BRL-CAD framebuffer";
-    desc.vsync = BRLOBOL_HOST_VSYNC_AUTO;
-    if (!brlobol_display_endpoint_host_open(endpoint, factory_name, &desc)) {
+    desc.vsync = BOBOL_HOST_VSYNC_AUTO;
+    if (!bobol_display_endpoint_host_open(endpoint, factory_name, &desc)) {
 	if (provider->owns_application)
 	    delete provider->application;
 	delete provider;
@@ -146,9 +146,9 @@ qg_obol_display_provider_poll_rate(const void *UNUSED(instance),
 extern "C" QTCAD_EXPORT int
 qtcad_obol_display_provider_register(void)
 {
-    static const brlobol_display_provider_t provider = {
-	BRLOBOL_DISPLAY_PROVIDER_ABI_VERSION,
-	sizeof(brlobol_display_provider_t),
+    static const bobol_display_provider_t provider = {
+	BOBOL_DISPLAY_PROVIDER_ABI_VERSION,
+	sizeof(bobol_display_provider_t),
 	"qt-obol",
 	100,
 	NULL,
@@ -157,5 +157,5 @@ qtcad_obol_display_provider_register(void)
 	qg_obol_display_provider_poll,
 	qg_obol_display_provider_poll_rate
     };
-    return brlobol_display_provider_register(&provider);
+    return bobol_display_provider_register(&provider);
 }

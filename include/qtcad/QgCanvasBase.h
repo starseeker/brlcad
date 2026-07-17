@@ -51,9 +51,9 @@ class QImage;
 class QObject;
 class QString;
 class QWidget;
-class BRLObolViewController;
+class BObolViewController;
 struct bv_context;
-struct brlobol_display_endpoint;
+struct bobol_display_endpoint;
 
 class QTCAD_EXPORT QgCanvasBase {
 public:
@@ -76,13 +76,13 @@ public:
     virtual struct bv_context *viewContext() const = 0;
 
     /** Obol-canonical view controller for migrated drawing code. */
-    virtual BRLObolViewController *obolViewController() const = 0;
+    virtual BObolViewController *obolViewController() const = 0;
 
     /** Bind a borrowed endpoint-owned controller. */
-    virtual void setObolViewController(BRLObolViewController *) = 0;
+    virtual void setObolViewController(BObolViewController *) = 0;
 
     /** Route normalized canvas input through a borrowed display endpoint. */
-    virtual void setObolInputEndpoint(struct brlobol_display_endpoint *) = 0;
+    virtual void setObolInputEndpoint(struct bobol_display_endpoint *) = 0;
 
     /** Store current view hash values for later comparison. */
     virtual void stash_hashes() = 0;

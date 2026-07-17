@@ -7,12 +7,12 @@
 
 #include "common.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/export_action.h"
-#include "brlobol/lod_mesh_shape.h"
-#include "brlobol/lod_service.h"
-#include "brlobol/vlist_shape.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BLodMeshShape.h"
+#include "BObol/BLodService.h"
+#include "BObol/BVListShape.h"
+#include "BObol/BViewController.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -66,28 +66,28 @@ near_point(const SbVec3f &p, float x, float y, float z)
 	nearly_equal(p[2], z);
 }
 
-static BRLObolLodResult
-qtcad_export_source_result(const BRLObolLodRequest &request,
+static BObolLodResult
+qtcad_export_source_result(const BObolLodRequest &request,
 	int resultKind,
 	int qualityTier)
 {
-    BRLObolLodResult result;
+    BObolLodResult result;
 
     result.request = request;
-    result.cacheKey = brlobol_lod_cache_key(request);
+    result.cacheKey = bobol_lod_cache_key(request);
     result.resultKind = resultKind;
     result.qualityTier = qualityTier;
-    result.providerStatus = BRLOBOL_LOD_PROVIDER_READY;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
     result.counts.faceCount = 1;
     result.counts.pointCount = 3;
     result.terminal = TRUE;
 
-    result.geometry.kind = BRLOBOL_LOD_GEOMETRY_OBOL_MESH;
+    result.geometry.kind = BOBOL_LOD_GEOMETRY_OBOL_MESH;
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
     result.geometry.cacheKey = result.cacheKey;
     result.geometry.activeLevel =
-	resultKind == BRLOBOL_LOD_RESULT_MESH ? 1 : -1;
+	resultKind == BOBOL_LOD_RESULT_MESH ? 1 : -1;
     result.geometry.borrowed = FALSE;
 
     result.mesh.points.push_back(SbVec3f(-1.0f, -1.0f, 0.0f));
@@ -106,17 +106,17 @@ qtcad_export_source_result(const BRLObolLodRequest &request,
     return result;
 }
 
-static BRLObolLodResult
-qtcad_export_source_task(const BRLObolLodRequest &request,
+static BObolLodResult
+qtcad_export_source_task(const BObolLodRequest &request,
 	void *UNUSED(userData))
 {
     return qtcad_export_source_result(request,
-	    BRLOBOL_LOD_RESULT_FULL_DETAIL,
-	    BRLOBOL_LOD_QUALITY_FULL_DETAIL);
+	    BOBOL_LOD_RESULT_FULL_DETAIL,
+	    BOBOL_LOD_QUALITY_FULL_DETAIL);
 }
 
 static int
-wait_for_qtcad_export_source_result(BRLObolLodService &service)
+wait_for_qtcad_export_source_result(BObolLodService &service)
 {
     for (int i = 0; i < 400; i++) {
 	if (service.inFlightCount() == 0 &&
@@ -148,7 +148,7 @@ main(int argc, char **argv)
 	ged_view_active_ctx_set(gedp, view.viewContext());
 	(void)ged_view_context_host_attach(gedp, view.viewContext());
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
     controller->clearDatabaseSources();
@@ -176,7 +176,7 @@ main(int argc, char **argv)
     lodMesh->sourceIdentity = "db://qtcad/lod-export.bot";
     lodMesh->databaseIntent = TRUE;
     lodMesh->sharedSource = FALSE;
-    lodMesh->drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    lodMesh->drawMode = BOBOL_LOD_DRAW_SHADED;
     lodMesh->recordRole = "database";
     lodMesh->geometryKind = "surface";
     lodMesh->editIntentId = "edit::lod-export/face";
@@ -205,24 +205,24 @@ main(int argc, char **argv)
     viewOverlay->overlayIntent = TRUE;
     viewOverlay->localSource = TRUE;
     viewOverlay->nonDatabaseSource = TRUE;
-    viewOverlay->drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    viewOverlay->drawMode = BOBOL_LOD_DRAW_WIRE;
     viewOverlay->recordRole = "overlay";
     viewOverlay->visible = FALSE;
     viewOverlay->setLineSet(overlayPoints, overlayCommands, 3);
 
-    BRLObolLodRequest displayRequest;
+    BObolLodRequest displayRequest;
     lodMesh->makeLodRequest(displayRequest,
 	    "db://qtcad-obol-export-test",
 	    1,
 	    1,
 	    1,
-	    BRLOBOL_LOD_DRAW_SHADED,
-	    "brlobol_mesh_lod",
-	    "brlobol-cache-v1",
-	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
-    BRLObolLodResult displayResult = qtcad_export_source_result(
-	    displayRequest, BRLOBOL_LOD_RESULT_MESH,
-	    BRLOBOL_LOD_QUALITY_FAST_DISPLAY);
+	    BOBOL_LOD_DRAW_SHADED,
+	    "bobol_mesh_lod",
+	    "bobol-cache-v1",
+	    BOBOL_LOD_QUALITY_FAST_DISPLAY);
+    BObolLodResult displayResult = qtcad_export_source_result(
+	    displayRequest, BOBOL_LOD_RESULT_MESH,
+	    BOBOL_LOD_QUALITY_FAST_DISPLAY);
     if (!lodMesh->applyStagedLodResult(displayResult, &displayRequest) ||
 	    !lodMesh->isLodDisplayActive() ||
 	    lodMesh->hasFullDetailMesh())
@@ -237,18 +237,18 @@ main(int argc, char **argv)
     SoBRLExportAction sourceRequestExport;
     sourceRequestExport.setGeometryPolicy(SoBRLExportAction::FULL_DETAIL);
     sourceRequestExport.apply(controller->getViewport()->getRoot());
-    BRLObolLodRequest sourceLodRequest;
+    BObolLodRequest sourceLodRequest;
     if (sourceRequestExport.getSourceBackedFullDetailRequestCount() != 1 ||
 	    !sourceRequestExport.makeSourceBackedFullDetailLodRequest(0,
 		sourceLodRequest))
 	FAIL("qtcad LoD export fixture should build a source full-detail request");
 
-    BRLObolLodService sourceService;
+    BObolLodService sourceService;
     if (!sourceService.start(1, TRUE))
 	FAIL("qtcad LoD export source service should start");
     controller->setLodService(&sourceService);
 
-    BRLObolLodTask sourceTask;
+    BObolLodTask sourceTask;
     sourceTask.request = sourceLodRequest;
     sourceTask.realize = qtcad_export_source_task;
     if (sourceService.submit(sourceTask) == 0) {
@@ -306,7 +306,7 @@ main(int argc, char **argv)
 	    triangle.localSource ||
 	    triangle.sharedSource ||
 	    triangle.nonDatabaseSource ||
-	    triangle.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    triangle.drawMode != BOBOL_LOD_DRAW_SHADED ||
 	    triangle.recordRole != "database" ||
 	    triangle.geometryKind != "surface" ||
 	    triangle.primitiveIndex != 42 ||
@@ -336,7 +336,7 @@ main(int argc, char **argv)
     objectQuery.flags = QG_OBOL_EXPORT_QUERY_VISIBLE_ONLY |
 	QG_OBOL_EXPORT_QUERY_DATABASE_OBJECTS;
     objectQuery.glob = "*lod-export.bot";
-    objectQuery.drawMode = BRLOBOL_LOD_DRAW_SHADED;
+    objectQuery.drawMode = BOBOL_LOD_DRAW_SHADED;
     objectQuery.geometryPolicy = QG_OBOL_EXPORT_DISPLAY_LEVEL;
     QgObolExportObjectQueryResult objectExport;
     if (!qg_obol_export_object_records(&view, objectQuery, objectExport) ||
@@ -363,7 +363,7 @@ main(int argc, char **argv)
 	    object.localSource ||
 	    object.sharedSource ||
 	    object.nonDatabaseSource ||
-	    object.drawMode != BRLOBOL_LOD_DRAW_SHADED ||
+	    object.drawMode != BOBOL_LOD_DRAW_SHADED ||
 	    object.recordRole != "database" ||
 	    object.geometryKind != "surface" ||
 	    object.lineCount != 0 ||
@@ -406,7 +406,7 @@ main(int argc, char **argv)
 	QG_OBOL_EXPORT_QUERY_VIEW_OBJECTS |
 	QG_OBOL_EXPORT_QUERY_LOCAL_ONLY;
     viewObjectQuery.glob = "overlay::*";
-    viewObjectQuery.drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    viewObjectQuery.drawMode = BOBOL_LOD_DRAW_WIRE;
     viewObjectQuery.geometryPolicy = QG_OBOL_EXPORT_DISPLAY_LEVEL;
     QgObolExportObjectQueryResult viewObjectExport;
     const uint64_t overlayCacheIdentity =
@@ -436,7 +436,7 @@ main(int argc, char **argv)
 	    !viewObject.localSource ||
 	    viewObject.sharedSource ||
 	    !viewObject.nonDatabaseSource ||
-	    viewObject.drawMode != BRLOBOL_LOD_DRAW_WIRE ||
+	    viewObject.drawMode != BOBOL_LOD_DRAW_WIRE ||
 	    viewObject.recordRole != "overlay" ||
 	    viewObject.geometryKind != "mixed" ||
 	    viewObject.lineCount != 1 ||
@@ -489,10 +489,10 @@ main(int argc, char **argv)
 	sourceService.stop();
 	FAIL("qtcad exact Obol export over-budget source result should become ready");
     }
-    std::vector<BRLObolLodResult> overBudgetResults;
+    std::vector<BObolLodResult> overBudgetResults;
     sourceService.drainResults(overBudgetResults);
     if (overBudgetResults.size() != 1 ||
-	    overBudgetResults[0].providerStatus != BRLOBOL_LOD_PROVIDER_FALLBACK ||
+	    overBudgetResults[0].providerStatus != BOBOL_LOD_PROVIDER_FALLBACK ||
 	    strcmp(overBudgetResults[0].diagnostic.getString(),
 		"RT source full-detail provider request exceeds full-detail limits") != 0 ||
 	    overBudgetResults[0].mesh.isValid()) {

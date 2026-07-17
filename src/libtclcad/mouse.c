@@ -24,7 +24,7 @@
 #include "bu/path.h"
 #include "ged/view.h"
 #include "tclcad.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 
 /* Private headers */
 #include "ged/draw.h"
@@ -55,13 +55,13 @@ tclcad_mouse_bv_const(const void *view_ctx)
 static int
 tclcad_mouse_display_width(const void *view_ctx)
 {
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
-    struct brlobol_endpoint_property_value property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    if (endpoint && brlobol_display_endpoint_property_get(endpoint,
-	    "endpoint.width", &property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
-	property.type == BRLOBOL_ENDPOINT_PROPERTY_UINT && property.uint_value)
+    struct bobol_endpoint_property_value property =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (endpoint && bobol_display_endpoint_property_get(endpoint,
+	    "endpoint.width", &property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	property.type == BOBOL_ENDPOINT_PROPERTY_UINT && property.uint_value)
 	return (int)property.uint_value;
     return bv_context_width_get((const struct bv_context *)view_ctx);
 }
@@ -69,13 +69,13 @@ tclcad_mouse_display_width(const void *view_ctx)
 static int
 tclcad_mouse_display_height(const void *view_ctx)
 {
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
-    struct brlobol_endpoint_property_value property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    if (endpoint && brlobol_display_endpoint_property_get(endpoint,
-	    "endpoint.height", &property) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
-	property.type == BRLOBOL_ENDPOINT_PROPERTY_UINT && property.uint_value)
+    struct bobol_endpoint_property_value property =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (endpoint && bobol_display_endpoint_property_get(endpoint,
+	    "endpoint.height", &property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+	property.type == BOBOL_ENDPOINT_PROPERTY_UINT && property.uint_value)
 	return (int)property.uint_value;
     return bv_context_height_get((const struct bv_context *)view_ctx);
 }

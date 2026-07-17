@@ -14,10 +14,10 @@
 
 #include "fbserv.h"
 
-#include "brlobol/display_endpoint.h"
-#include "brlobol/image_source.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/viewport_image.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BImageSource.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewportImage.h"
 #include "bu/app.h"
 #include "bu/log.h"
 #include "bu/str.h"
@@ -107,15 +107,15 @@ find_framebuffer_nodes(SoNode *node, SoBRLImageSource **source,
 	find_framebuffer_nodes(group->getChild(i), source, viewport);
 }
 
-class ConditionalCompositionHost : public BRLObolWindowHost {
+class ConditionalCompositionHost : public BObolWindowHost {
 public:
     ConditionalCompositionHost() : reject(false) { }
 
     int setFramebufferComposition(imgstream_fb_t *fb,
-	BRLObolFramebufferComposition composition) override
+	BObolFramebufferComposition composition) override
     {
 	return reject ? -1 :
-	    BRLObolWindowHost::setFramebufferComposition(fb, composition);
+	    BObolWindowHost::setFramebufferComposition(fb, composition);
     }
 
     bool reject;
@@ -129,7 +129,7 @@ test_qged_obol_fbserv_backend(void)
     view.show();
     QApplication::processEvents();
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     CHECK(controller != NULL, "qged test view must expose an Obol controller");
 
     struct ged *gedp = ged_open("inmem", "0x0", 0);
@@ -156,7 +156,7 @@ test_qged_obol_fbserv_backend(void)
     GED_CHECK(view.displayEndpoint() != NULL &&
 	ged_view_context_display_endpoint_get(view_ctx) == view.displayEndpoint(),
 	"qged framebuffer uses the visible view display endpoint");
-    GED_CHECK(brlobol_display_endpoint_host(view.displayEndpoint()) != NULL,
+    GED_CHECK(bobol_display_endpoint_host(view.displayEndpoint()) != NULL,
 	"qged visible endpoint retains its Qt host");
     struct fbserv_obj *fbs = gedp->ged_fbs;
     GED_CHECK(fbs != NULL, "GED must own an fbserv object");
@@ -188,13 +188,13 @@ test_qged_obol_fbserv_backend(void)
 	      viewportSize[1] == expectedHeight,
 	      "qged Obol controller must track the physical canvas size");
 
-    struct brlobol_endpoint_property_value composition =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    composition.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    struct bobol_endpoint_property_value composition =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    composition.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
     composition.string_value = "overlay";
-    GED_CHECK(brlobol_display_endpoint_property_set(view.displayEndpoint(),
+    GED_CHECK(bobol_display_endpoint_property_set(view.displayEndpoint(),
 	      "composition.framebuffer.mode", &composition) ==
-	      BRLOBOL_ENDPOINT_PROPERTY_OK,
+	      BOBOL_ENDPOINT_PROPERTY_OK,
 	      "qged framebuffer endpoint must enable overlay composition");
 
     SoBRLImageSource *source = NULL;
@@ -291,7 +291,7 @@ test_qged_obol_fbserv_backend(void)
     secondView.resize(120, 90);
     secondView.show();
     QApplication::processEvents();
-    BRLObolViewController *secondController = secondView.obolViewController();
+    BObolViewController *secondController = secondView.obolViewController();
     GED_CHECK(secondController != NULL,
 	"qged secondary view must expose an Obol controller");
     ged_view_active_ctx_set(gedp, secondView.viewContext());
@@ -313,12 +313,12 @@ test_qged_obol_fbserv_backend(void)
 	"qged framebuffer stream must adopt the secondary physical canvas size");
 
     composition.string_value = "overlay";
-    GED_CHECK(brlobol_display_endpoint_property_set(
+    GED_CHECK(bobol_display_endpoint_property_set(
 	secondView.displayEndpoint(), "composition.framebuffer.mode",
-	&composition) == BRLOBOL_ENDPOINT_PROPERTY_OK,
+	&composition) == BOBOL_ENDPOINT_PROPERTY_OK,
 	"qged framebuffer switch must enable composition on the new endpoint");
     QgObolWindowHost *secondHost = static_cast<QgObolWindowHost *>(
-	brlobol_display_endpoint_host(secondView.displayEndpoint()));
+	bobol_display_endpoint_host(secondView.displayEndpoint()));
     GED_CHECK(secondHost && secondHost->getFramebufferCount() == 1,
 	"qged framebuffer switch must bind the stream to the new endpoint host");
     GED_CHECK(secondHost->getController() == secondController &&
@@ -378,15 +378,15 @@ test_qged_obol_fbserv_backend(void)
 
     policyHost.reject = true;
     composition.string_value = "underlay";
-    GED_CHECK(brlobol_display_endpoint_property_set(
+    GED_CHECK(bobol_display_endpoint_property_set(
 	secondView.displayEndpoint(), "composition.framebuffer.mode",
-	&composition) == BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
+	&composition) == BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED,
 	"live framebuffer composition rejection must be explicit");
-    struct brlobol_endpoint_property_value rejectedComposition =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    GED_CHECK(brlobol_display_endpoint_property_get(
+    struct bobol_endpoint_property_value rejectedComposition =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    GED_CHECK(bobol_display_endpoint_property_get(
 	secondView.displayEndpoint(), "composition.framebuffer.mode",
-	&rejectedComposition) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	&rejectedComposition) == BOBOL_ENDPOINT_PROPERTY_OK &&
 	rejectedComposition.string_value &&
 	bu_strcmp(rejectedComposition.string_value, "overlay") == 0 &&
 	policyHost.getFramebufferCount() == 1 &&
@@ -397,9 +397,9 @@ test_qged_obol_fbserv_backend(void)
 	"rejected composition must preserve passive and retained live state");
 
     policyHost.reject = false;
-    GED_CHECK(brlobol_display_endpoint_property_set(
+    GED_CHECK(bobol_display_endpoint_property_set(
 	secondView.displayEndpoint(), "composition.framebuffer.mode",
-	&composition) == BRLOBOL_ENDPOINT_PROPERTY_OK &&
+	&composition) == BOBOL_ENDPOINT_PROPERTY_OK &&
 	secondController->getFramebufferUnderlayRoot()->findChild(
 	    policyViewport) >= 0 &&
 	secondController->getFramebufferOverlayRoot()->findChild(

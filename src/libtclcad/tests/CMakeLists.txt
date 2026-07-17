@@ -16,7 +16,7 @@ if(BRLCAD_ENABLE_TCL)
       set(TCLCAD_XVFB_TEST_WRAPPER
         ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh)
       brlcad_addexec(tclcad_tkobol_thread_affinity
-        tkobol_thread_affinity.cpp "libtclcad;libbrlobol;Threads::Threads" TEST)
+        tkobol_thread_affinity.cpp "libtclcad;libBObol;Threads::Threads" TEST)
       if(TARGET tclcad_tkobol_thread_affinity)
         add_dependencies(tclcad_tkobol_thread_affinity libtclcad)
       endif(TARGET tclcad_tkobol_thread_affinity)

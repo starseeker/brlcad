@@ -13,13 +13,13 @@
 
 #include "bv.h"
 
-#include "brlobol/edit_preview.h"
-#include "brlobol/export_action.h"
-#include "brlobol/measure_action.h"
-#include "brlobol/snap_action.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/view_store.h"
-#include "brlobol/vlist_shape.h"
+#include "BObol/BEditPreview.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BMeasureAction.h"
+#include "BObol/BSnapAction.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewStore.h"
+#include "BObol/BVListShape.h"
 #include "bu/file.h"
 #include "bu/malloc.h"
 #include "ged.h"
@@ -46,7 +46,7 @@
     } while (0)
 
 static SoBRLEditPreview *
-find_preview(BRLObolViewController *controller, const char *previewId)
+find_preview(BObolViewController *controller, const char *previewId)
 {
     if (!controller || !previewId)
 	return NULL;
@@ -184,7 +184,7 @@ main(int argc, char **argv)
     if (context.activeViewContext() != view.viewContext())
 	FAIL("plugin context should expose the active view context");
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller)
 	FAIL("QgView should expose an Obol controller");
 
@@ -209,7 +209,7 @@ main(int argc, char **argv)
     QgView secondView(NULL, QgViewType::SW);
     secondView.resize(160, 120);
     void *second_view_ctx = secondView.viewContext();
-    BRLObolViewController *second_controller =
+    BObolViewController *second_controller =
 	secondView.obolViewController();
     if (!second_controller ||
 	!ged_view_context_host_attach(gedp, second_view_ctx) ||
@@ -497,18 +497,18 @@ main(int argc, char **argv)
 	    !gedSummary.owner_id[0])
 	FAIL("GED-routed qtcad edit preview should be a local transient feature with owner metadata");
 
-    BRLObolFeatureHandle gedHandle =
+    BObolFeatureHandle gedHandle =
 	controller->features().find(gedPreviewId);
-    BRLObolFeatureRecord gedRecord;
+    BObolFeatureRecord gedRecord;
     if (!gedHandle.isValid() ||
 	    !controller->features().record(gedHandle, gedRecord) ||
-	    gedRecord.kind != BRLObolFeatureKind::EditPreview ||
+	    gedRecord.kind != BObolFeatureKind::EditPreview ||
 	    gedRecord.identity != gedIdentity ||
 	    gedRecord.editIntentId != gedIntentId ||
 	    gedRecord.editIntentRole != gedIntentRole ||
 	    gedRecord.sourceRevision != 41 ||
 	    gedRecord.inputsRevision != 42 ||
-	    gedRecord.scope != BRLObolFeatureScope::Local)
+	    gedRecord.scope != BObolFeatureScope::Local)
 	FAIL("GED-routed qtcad edit preview should preserve identity, intent, revisions, and local scope");
 
     controller->clearRenderRequest();

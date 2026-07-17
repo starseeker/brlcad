@@ -196,20 +196,20 @@ QgViewFilter::view_sync(QEvent *e)
 }
 
 bool
-QgViewFilter::view_sync(const BRLObolInputEvent *event)
+QgViewFilter::view_sync(const BObolInputEvent *event)
 {
     void *view_ctx = m->display ? m->display->viewContext() : nullptr;
     if (!view_ctx || !event)
 	return false;
-    if (event->type != BRLOBOL_INPUT_POINTER_PRESS &&
-	event->type != BRLOBOL_INPUT_POINTER_RELEASE &&
-	event->type != BRLOBOL_INPUT_POINTER_MOTION)
+    if (event->type != BOBOL_INPUT_POINTER_PRESS &&
+	event->type != BOBOL_INPUT_POINTER_RELEASE &&
+	event->type != BOBOL_INPUT_POINTER_MOTION)
 	return false;
 
     bv_mouse_state_set(qg_obol_snap_bv(view_ctx), event->x, event->y);
     qg_obol_refine_db_snap(m->display, view_ctx);
 
-    return event->modifiers == BRLOBOL_INPUT_MOD_NONE;
+    return event->modifiers == BOBOL_INPUT_MOD_NONE;
 }
 
 // Local Variables:

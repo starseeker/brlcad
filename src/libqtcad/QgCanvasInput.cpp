@@ -23,13 +23,13 @@ extern "C" {
 
 #include "qtcad/defines.h"
 #include "QgCanvasInput.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "bv.h"
 
 struct QgCanvasInput::Impl {
     std::unordered_map<struct bv_context *, long long> drag_update_ts;
-    BRLObolInputContext context;
-    brlobol_display_endpoint_t *endpoint = NULL;
+    BObolInputContext context;
+    bobol_display_endpoint_t *endpoint = NULL;
     struct bv_context *dispatch_view = NULL;
     double press_x = 0.0;
     double press_y = 0.0;
@@ -39,15 +39,15 @@ struct QgCanvasInput::Impl {
 static unsigned int
 qgcanvasinput_modifiers(Qt::KeyboardModifiers modifiers)
 {
-    unsigned int result = BRLOBOL_INPUT_MOD_NONE;
+    unsigned int result = BOBOL_INPUT_MOD_NONE;
     if (modifiers.testFlag(Qt::ShiftModifier))
-	result |= BRLOBOL_INPUT_MOD_SHIFT;
+	result |= BOBOL_INPUT_MOD_SHIFT;
     if (modifiers.testFlag(Qt::ControlModifier))
-	result |= BRLOBOL_INPUT_MOD_CONTROL;
+	result |= BOBOL_INPUT_MOD_CONTROL;
     if (modifiers.testFlag(Qt::AltModifier))
-	result |= BRLOBOL_INPUT_MOD_ALT;
+	result |= BOBOL_INPUT_MOD_ALT;
     if (modifiers.testFlag(Qt::MetaModifier))
-	result |= BRLOBOL_INPUT_MOD_META;
+	result |= BOBOL_INPUT_MOD_META;
     return result;
 }
 
@@ -57,17 +57,17 @@ qgcanvasinput_key(int key)
     const int first_function_key = static_cast<int>(Qt::Key_F1);
     const int last_function_key = static_cast<int>(Qt::Key_F12);
     if (key >= first_function_key && key <= last_function_key)
-	return BRLOBOL_INPUT_KEY_F1 + (key - first_function_key);
+	return BOBOL_INPUT_KEY_F1 + (key - first_function_key);
     if (key == static_cast<int>(Qt::Key_Shift))
-	return BRLOBOL_INPUT_KEY_SHIFT;
+	return BOBOL_INPUT_KEY_SHIFT;
     if (key == static_cast<int>(Qt::Key_Control))
-	return BRLOBOL_INPUT_KEY_CONTROL;
+	return BOBOL_INPUT_KEY_CONTROL;
     if (key == static_cast<int>(Qt::Key_Alt))
-	return BRLOBOL_INPUT_KEY_ALT;
+	return BOBOL_INPUT_KEY_ALT;
     if (key == static_cast<int>(Qt::Key_Meta) ||
 	key == static_cast<int>(Qt::Key_Super_L) ||
 	key == static_cast<int>(Qt::Key_Super_R))
-	return BRLOBOL_INPUT_KEY_META;
+	return BOBOL_INPUT_KEY_META;
     return key;
 }
 
@@ -82,7 +82,7 @@ qgcanvasinput_button(Qt::MouseButton button)
 	case Qt::RightButton:
 	    return 2;
 	default:
-	    return BRLOBOL_INPUT_ANY;
+	    return BOBOL_INPUT_ANY;
     }
 }
 
@@ -119,7 +119,7 @@ qgcanvasinput_position(const QMouseEvent *event, int &x, int &y)
 QgCanvasInput::QgCanvasInput() :
     m(new Impl)
 {
-    m->context.setProfile(&BRLObolInputContext::defaultViewProfile());
+    m->context.setProfile(&BObolInputContext::defaultViewProfile());
     m->context.setActionHandler(QgCanvasInput::actionDispatch, this);
 }
 
@@ -130,33 +130,33 @@ QgCanvasInput::~QgCanvasInput()
 }
 
 void
-QgCanvasInput::setEndpoint(brlobol_display_endpoint_t *endpoint)
+QgCanvasInput::setEndpoint(bobol_display_endpoint_t *endpoint)
 {
     if (!m || m->endpoint == endpoint)
 	return;
     if (m->endpoint)
-	(void)brlobol_display_endpoint_input_action_handler_clear_if(
+	(void)bobol_display_endpoint_input_action_handler_clear_if(
 	    m->endpoint, QgCanvasInput::actionDispatch, this);
     m->endpoint = endpoint;
     if (!m->endpoint)
 	return;
-    (void)brlobol_display_endpoint_input_profile_set(m->endpoint,
-	brlobol_input_default_view_profile());
-    (void)brlobol_display_endpoint_input_action_handler_set(m->endpoint,
+    (void)bobol_display_endpoint_input_profile_set(m->endpoint,
+	bobol_input_default_view_profile());
+    (void)bobol_display_endpoint_input_action_handler_set(m->endpoint,
 	QgCanvasInput::actionDispatch, this);
 }
 
 int
-QgCanvasInput::actionDispatch(void *userData, BRLObolInputAction action,
-	const BRLObolInputEvent *event)
+QgCanvasInput::actionDispatch(void *userData, BObolInputAction action,
+	const BObolInputEvent *event)
 {
     QgCanvasInput *input = static_cast<QgCanvasInput *>(userData);
     return input ? input->applyAction(action, event) : -1;
 }
 
 int
-QgCanvasInput::applyAction(BRLObolInputAction action,
-	const BRLObolInputEvent *event)
+QgCanvasInput::applyAction(BObolInputAction action,
+	const BObolInputEvent *event)
 {
     if (!m || !m->dispatch_view || !event)
 	return 0;
@@ -165,27 +165,27 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
     const struct bv *cview = bv_context_view_const(view_ctx);
 
     switch (action) {
-	case BRLOBOL_ACTION_TOGGLE_ADC:
-	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES:
-	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES:
-	    return brlobol_display_endpoint_input_faceplate_toggle_apply(
+	case BOBOL_ACTION_TOGGLE_ADC:
+	case BOBOL_ACTION_TOGGLE_MODEL_AXES:
+	case BOBOL_ACTION_TOGGLE_VIEW_AXES:
+	    return bobol_display_endpoint_input_faceplate_toggle_apply(
 		m->endpoint, view_ctx, action, NULL);
-	case BRLOBOL_ACTION_VIEW_2:
-	case BRLOBOL_ACTION_VIEW_3:
-	case BRLOBOL_ACTION_VIEW_4:
-	case BRLOBOL_ACTION_VIEW_5:
-	case BRLOBOL_ACTION_VIEW_6:
-	case BRLOBOL_ACTION_VIEW_7:
-	case BRLOBOL_ACTION_VIEW_FRONT:
-	case BRLOBOL_ACTION_VIEW_TOP:
-	case BRLOBOL_ACTION_VIEW_BOTTOM:
-	case BRLOBOL_ACTION_VIEW_LEFT:
-	case BRLOBOL_ACTION_VIEW_REAR:
-	case BRLOBOL_ACTION_VIEW_RIGHT:
-	    return brlobol_input_view_orientation_apply(view_ctx, action);
-	case BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE:
-	case BRLOBOL_ACTION_VIEW_SECONDARY_RELEASE:
-	case BRLOBOL_ACTION_VIEW_CENTER_RELEASE: {
+	case BOBOL_ACTION_VIEW_2:
+	case BOBOL_ACTION_VIEW_3:
+	case BOBOL_ACTION_VIEW_4:
+	case BOBOL_ACTION_VIEW_5:
+	case BOBOL_ACTION_VIEW_6:
+	case BOBOL_ACTION_VIEW_7:
+	case BOBOL_ACTION_VIEW_FRONT:
+	case BOBOL_ACTION_VIEW_TOP:
+	case BOBOL_ACTION_VIEW_BOTTOM:
+	case BOBOL_ACTION_VIEW_LEFT:
+	case BOBOL_ACTION_VIEW_REAR:
+	case BOBOL_ACTION_VIEW_RIGHT:
+	    return bobol_input_view_orientation_apply(view_ctx, action);
+	case BOBOL_ACTION_VIEW_PRIMARY_RELEASE:
+	case BOBOL_ACTION_VIEW_SECONDARY_RELEASE:
+	case BOBOL_ACTION_VIEW_CENTER_RELEASE: {
 	    if (event->buttons ||
 	std::fabs(static_cast<double>(event->x) - m->press_x) > 10.0 ||
 	std::fabs(static_cast<double>(event->y) - m->press_y) > 10.0)
@@ -193,7 +193,7 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 	    int dx = 1;
 	    int dy = 1;
 	    unsigned long long viewFlags = BV_ADJUST_IDLE;
-	    if (action == BRLOBOL_ACTION_VIEW_PRIMARY_RELEASE) {
+	    if (action == BOBOL_ACTION_VIEW_PRIMARY_RELEASE) {
 		if (m->mouse_mode == BV_ADJUST_CENTER) {
 		    viewFlags = BV_ADJUST_CENTER;
 		    dx = event->x;
@@ -203,7 +203,7 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 		    dx = 10;
 		    dy = 5;
 		}
-	    } else if (action == BRLOBOL_ACTION_VIEW_SECONDARY_RELEASE) {
+	    } else if (action == BOBOL_ACTION_VIEW_SECONDARY_RELEASE) {
 		if (m->mouse_mode == BV_ADJUST_CENTER)
 		    return 0;
 		viewFlags = BV_ADJUST_SCALE;
@@ -218,22 +218,22 @@ QgCanvasInput::applyAction(BRLObolInputAction action,
 	    return bv_adjust(view, dx, dy, keypt, 0,
 		viewFlags);
 	}
-	case BRLOBOL_ACTION_VIEW_ROTATE:
-	case BRLOBOL_ACTION_VIEW_PAN:
-	case BRLOBOL_ACTION_VIEW_ZOOM:
-	case BRLOBOL_ACTION_VIEW_ADJUST: {
-	    if (event->type == BRLOBOL_INPUT_WHEEL) {
+	case BOBOL_ACTION_VIEW_ROTATE:
+	case BOBOL_ACTION_VIEW_PAN:
+	case BOBOL_ACTION_VIEW_ZOOM:
+	case BOBOL_ACTION_VIEW_ADJUST: {
+	    if (event->type == BOBOL_INPUT_WHEEL) {
 		const int dx = 100 + event->wheelDelta;
 		point_t origin = VINIT_ZERO;
 		return bv_adjust(view, dx, 100, origin, 0,
 		    BV_ADJUST_SCALE);
 	    }
 	    unsigned long long viewFlags = BV_ADJUST_SCALE;
-	    if (action == BRLOBOL_ACTION_VIEW_ROTATE)
+	    if (action == BOBOL_ACTION_VIEW_ROTATE)
 		viewFlags = BV_ADJUST_ROT;
-	    else if (action == BRLOBOL_ACTION_VIEW_PAN)
+	    else if (action == BOBOL_ACTION_VIEW_PAN)
 		viewFlags = BV_ADJUST_TRANS;
-	    else if (action == BRLOBOL_ACTION_VIEW_ADJUST) {
+	    else if (action == BOBOL_ACTION_VIEW_ADJUST) {
 		viewFlags = m->mouse_mode;
 		if (viewFlags == BV_ADJUST_CENTER)
 		    viewFlags = BV_ADJUST_SCALE;
@@ -257,12 +257,12 @@ QgCanvasInput::keyPressEvent(struct bv_context *view_ctx, int UNUSED(x_prev),
     QTCAD_EVENT("keyPress", 1);
 	if (!view_ctx || !event)
 	return 0;
-    BRLObolInputEvent input;
-    input.type = BRLOBOL_INPUT_KEY_PRESS;
+    BObolInputEvent input;
+    input.type = BOBOL_INPUT_KEY_PRESS;
     input.key = qgcanvasinput_key(event->key());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
     m->dispatch_view = view_ctx;
-    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+    const int ret = m->endpoint ? bobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;
     return ret;
@@ -275,14 +275,14 @@ QgCanvasInput::mousePressEvent(struct bv_context *view_ctx, int UNUSED(x_prev),
     QTCAD_EVENT("mousePress", 1);
 	if (!view_ctx || !event)
 	return 0;
-    BRLObolInputEvent input;
-    input.type = BRLOBOL_INPUT_POINTER_PRESS;
+    BObolInputEvent input;
+    input.type = BOBOL_INPUT_POINTER_PRESS;
     qgcanvasinput_position(event, input.x, input.y);
     input.button = qgcanvasinput_button(event->button());
     input.buttons = qgcanvasinput_buttons(event->buttons());
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
     m->dispatch_view = view_ctx;
-    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+    const int ret = m->endpoint ? bobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;
     return ret;
@@ -298,8 +298,8 @@ QgCanvasInput::mouseReleaseEvent(struct bv_context *view_ctx, double x_press,
 	return 0;
 	m->drag_update_ts.erase(view_ctx);
 
-    BRLObolInputEvent input;
-    input.type = BRLOBOL_INPUT_POINTER_RELEASE;
+    BObolInputEvent input;
+    input.type = BOBOL_INPUT_POINTER_RELEASE;
     qgcanvasinput_position(event, input.x, input.y);
     input.button = qgcanvasinput_button(event->button());
     input.buttons = qgcanvasinput_buttons(event->buttons());
@@ -308,7 +308,7 @@ QgCanvasInput::mouseReleaseEvent(struct bv_context *view_ctx, double x_press,
     m->press_x = x_press;
     m->press_y = y_press;
     m->mouse_mode = mode;
-    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+    const int ret = m->endpoint ? bobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;
     return ret;
@@ -337,8 +337,8 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
 	m->drag_update_ts[view_ctx] = now;
     }
 
-    BRLObolInputEvent input;
-    input.type = BRLOBOL_INPUT_POINTER_MOTION;
+    BObolInputEvent input;
+    input.type = BOBOL_INPUT_POINTER_MOTION;
     qgcanvasinput_position(event, input.x, input.y);
     input.dx = first_motion ? 0 : input.x - x_prev;
     input.dy = first_motion ? 0 : input.y - y_prev;
@@ -347,7 +347,7 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
     m->dispatch_view = view_ctx;
     m->mouse_mode = mode;
-    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+    const int ret = m->endpoint ? bobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;
     return ret;
@@ -359,12 +359,12 @@ QgCanvasInput::wheelEvent(struct bv_context *view_ctx, QWheelEvent *event)
     QTCAD_EVENT("mouseWheel", 1);
 	if (!view_ctx || !event)
 	return 0;
-    BRLObolInputEvent input;
-    input.type = BRLOBOL_INPUT_WHEEL;
+    BObolInputEvent input;
+    input.type = BOBOL_INPUT_WHEEL;
     input.wheelDelta = -event->angleDelta().y() / 8;
     input.modifiers = qgcanvasinput_modifiers(event->modifiers());
     m->dispatch_view = view_ctx;
-    const int ret = m->endpoint ? brlobol_display_endpoint_input_dispatch(
+    const int ret = m->endpoint ? bobol_display_endpoint_input_dispatch(
 	m->endpoint, &input) : m->context.dispatch(&input);
     m->dispatch_view = NULL;
     return ret;

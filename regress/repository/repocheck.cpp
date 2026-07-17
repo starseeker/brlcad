@@ -527,9 +527,9 @@ init_repo_config(RepoConfig &cfg)
 	    std::regex(".*/src/libtclcad/tkobol/vendor/togl/toglFont[.]c$"),
 	    std::string("")));
 
-	/* These are BRLObol public member names, not C remove(3) calls. */
-	add_func_ex(".*/include/brlobol/view_store[.]h$", "remove");
-	add_func_ex(".*/src/libbrlobol/view_store[.]cpp$", "remove");
+	/* These are BObol public member names, not C remove(3) calls. */
+	add_func_ex(".*/include/BObol/BViewStore[.]h$", "remove");
+	add_func_ex(".*/src/libBObol/view_store[.]cpp$", "remove");
     }
 
     /* DNU usage test (similar behavior to API) */

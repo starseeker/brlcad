@@ -13,11 +13,11 @@
 
 #include "bv.h"
 
-#include "brlobol/adc.h"
-#include "brlobol/axes.h"
-#include "brlobol/grid.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/vlist_shape.h"
+#include "BObol/BADC.h"
+#include "BObol/BAxes.h"
+#include "BObol/BGrid.h"
+#include "BObol/BViewController.h"
+#include "BObol/BVListShape.h"
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 #include "vmath.h"
@@ -37,7 +37,7 @@
     } while (0)
 
 static SoGroup *
-scene_group(BRLObolViewController *controller)
+scene_group(BObolViewController *controller)
 {
     if (!controller)
 	return NULL;
@@ -93,7 +93,7 @@ main(int argc, char **argv)
     if (!view.viewContext())
 	FAIL("QgView should expose its GED view context");
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     SoGroup *root = scene_group(controller);
     if (!root)
 	FAIL("QgView should expose an Obol scene root");

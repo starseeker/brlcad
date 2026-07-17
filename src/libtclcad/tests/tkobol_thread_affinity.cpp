@@ -9,8 +9,8 @@
 
 #include "bu/app.h"
 
-#include "brlobol/display_endpoint.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BViewController.h"
 #include "bu/log.h"
 #include "bu/vls.h"
 #include "tclcad/setup.h"
@@ -58,26 +58,26 @@ main(int argc, char **argv)
     CHECK(tclcad_obol_host_factories_register(),
 	"Tk affinity test registers Obol host factories");
 
-    struct brlobol_host_desc desc = {};
+    struct bobol_host_desc desc = {};
     desc.struct_size = sizeof(desc);
-    desc.mode = BRLOBOL_HOST_MODE_TOPLEVEL;
+    desc.mode = BOBOL_HOST_MODE_TOPLEVEL;
     desc.width = 64;
     desc.height = 48;
     desc.device_pixel_ratio = 1.0;
     desc.visible = 1;
-    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT |
-	BRLOBOL_HOST_CAP_THREAD_AFFINE;
+    desc.required_capabilities = BOBOL_HOST_CAP_PIXEL_PRESENT |
+	BOBOL_HOST_CAP_THREAD_AFFINE;
     desc.application_context = interp;
 
-    brlobol_display_endpoint_t *endpoint =
-	brlobol_display_endpoint_create(NULL, 0);
+    bobol_display_endpoint_t *endpoint =
+	bobol_display_endpoint_create(NULL, 0);
     CHECK(endpoint != NULL, "Tk affinity test creates endpoint");
-    CHECK(brlobol_display_endpoint_host_open(endpoint, "tk-photo", &desc),
+    CHECK(bobol_display_endpoint_host_open(endpoint, "tk-photo", &desc),
 	"Tk affinity test opens TkPhoto host");
 
-    BRLObolViewController *controller =
-	static_cast<BRLObolViewController *>(
-	    brlobol_display_endpoint_controller(endpoint));
+    BObolViewController *controller =
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint));
     CHECK(controller != NULL, "Tk affinity test obtains endpoint controller");
     SoPerspectiveCamera *camera = new SoPerspectiveCamera;
     camera->position = SbVec3f(0.0f, 0.0f, 1.0f);
@@ -93,7 +93,7 @@ main(int argc, char **argv)
 
     int request_ok = 0;
     std::thread worker([endpoint, &request_ok]() {
-	request_ok = brlobol_display_endpoint_request_frame(endpoint,
+	request_ok = bobol_display_endpoint_request_frame(endpoint,
 	    "worker-thread-frame");
     });
     worker.join();
@@ -115,7 +115,7 @@ main(int argc, char **argv)
 	"TkPhoto host renders a worker-requested frame on the Tcl event loop");
 
     controller->clearProgressiveWorkPending();
-    brlobol_display_endpoint_destroy(endpoint);
+    bobol_display_endpoint_destroy(endpoint);
     (void)update_tk_events(interp);
     Tcl_DeleteInterp(interp);
     return 0;

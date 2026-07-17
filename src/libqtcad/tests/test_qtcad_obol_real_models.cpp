@@ -7,10 +7,10 @@
 
 #include "common.h"
 
-#include "brlobol/export_action.h"
-#include "brlobol/mesh_shape.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/vlist_shape.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BViewController.h"
+#include "BObol/BVListShape.h"
 #include "bu/color.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -183,33 +183,33 @@ case_was_requested(int argc, char **argv, const char *name)
 static int
 timing_enabled()
 {
-    return BU_STR_EQUAL(getenv("BRLOBOL_QTCAD_REAL_MODEL_TIMING"), "1");
+    return BU_STR_EQUAL(getenv("BOBOL_QTCAD_REAL_MODEL_TIMING"), "1");
 }
 
 static int
 system_gl_enabled()
 {
-    return BU_STR_EQUAL(getenv("BRLOBOL_QTCAD_REAL_MODEL_GL"), "1");
+    return BU_STR_EQUAL(getenv("BOBOL_QTCAD_REAL_MODEL_GL"), "1");
 }
 
-static BRLObolViewController::SoftwareWireMode
+static BObolViewController::SoftwareWireMode
 software_wire_mode()
 {
-    const char *value = getenv("BRLOBOL_QTCAD_SOFTWARE_WIRE");
+    const char *value = getenv("BOBOL_QTCAD_SOFTWARE_WIRE");
     if (BU_STR_EQUAL(value, "fast"))
-	return BRLObolViewController::SOFTWARE_WIRE_FAST;
+	return BObolViewController::SOFTWARE_WIRE_FAST;
     if (BU_STR_EQUAL(value, "quality"))
-	return BRLObolViewController::SOFTWARE_WIRE_QUALITY;
-    return BRLObolViewController::SOFTWARE_WIRE_AUTO;
+	return BObolViewController::SOFTWARE_WIRE_QUALITY;
+    return BObolViewController::SOFTWARE_WIRE_AUTO;
 }
 
 static const char *
-software_wire_mode_name(BRLObolViewController::SoftwareWireMode mode)
+software_wire_mode_name(BObolViewController::SoftwareWireMode mode)
 {
     switch (mode) {
-	case BRLObolViewController::SOFTWARE_WIRE_FAST:
+	case BObolViewController::SOFTWARE_WIRE_FAST:
 	    return "fast";
-	case BRLObolViewController::SOFTWARE_WIRE_QUALITY:
+	case BObolViewController::SOFTWARE_WIRE_QUALITY:
 	    return "quality";
 	default:
 	    return "auto";
@@ -294,8 +294,8 @@ path_has_component_suffix(const char *path, const char *suffix)
 
 static int
 summary_from_compact_instance(SoBRLDatabaseSource *source,
-	const BRLObolCompactInstanceSummary &instance,
-	BRLObolDatabaseSourceSummary &summary)
+	const BObolCompactInstanceSummary &instance,
+	BObolDatabaseSourceSummary &summary)
 {
     if (!source || !instance.valid || !source->getSummary(summary) ||
 	!summary.valid)
@@ -315,7 +315,7 @@ summary_from_compact_instance(SoBRLDatabaseSource *source,
 }
 
 static int
-source_material_matches_rgb(const BRLObolDatabaseSourceSummary &summary,
+source_material_matches_rgb(const BObolDatabaseSourceSummary &summary,
 	const unsigned char rgb[3])
 {
     if (!summary.valid || !summary.materialColorValid)
@@ -328,7 +328,7 @@ source_material_matches_rgb(const BRLObolDatabaseSourceSummary &summary,
 
 static int
 source_material_matches_db_color(struct ged *gedp,
-	const BRLObolDatabaseSourceSummary &summary,
+	const BObolDatabaseSourceSummary &summary,
 	unsigned char expectedRgb[3])
 {
     if (expectedRgb) {
@@ -378,20 +378,20 @@ all_source_materials_match_db_colors(struct ged *gedp,
     int materialCount = 0;
     for (int i = 0; i < sourceCount; i++) {
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
-	BRLObolDatabaseSourceSummary summary;
+	BObolDatabaseSourceSummary summary;
 	if (!source || !source->getSummary(summary) || !summary.valid)
 	    return 0;
 	if (source->hasCompactInstanceIndex()) {
 	    const int instanceCount = source->getCompactInstanceCount();
 	    for (int j = 0; j < instanceCount; j++) {
-		BRLObolCompactInstanceHandle handle;
-		BRLObolCompactInstanceSummary instance;
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary instance;
 		if (!source->getCompactInstanceHandle(j, handle) ||
 		    !source->getCompactInstanceSummary(handle, instance) ||
 		    !summary_from_compact_instance(source, instance, summary))
 		    return 0;
 		SbColor expected;
-		if (!brlobol_database_source_path_material_color(gedp->dbip,
+		if (!bobol_database_source_path_material_color(gedp->dbip,
 			summary.path.getString(), expected) ||
 		    !summary.materialColorValid ||
 		    fabsf(summary.materialColor[0] - expected[0]) >= 1.0e-5f ||
@@ -412,7 +412,7 @@ all_source_materials_match_db_colors(struct ged *gedp,
 	}
 
 	SbColor expected;
-	if (!brlobol_database_source_path_material_color(gedp->dbip,
+	if (!bobol_database_source_path_material_color(gedp->dbip,
 		summary.path.getString(), expected) ||
 	    !summary.materialColorValid ||
 	    fabsf(summary.materialColor[0] - expected[0]) >= 1.0e-5f ||
@@ -435,9 +435,9 @@ all_source_materials_match_db_colors(struct ged *gedp,
 static SoBRLDatabaseSource *
 find_source_by_path_suffix(SoBRLSceneController *controller,
 	const char *suffix,
-	BRLObolDatabaseSourceSummary &summary)
+	BObolDatabaseSourceSummary &summary)
 {
-    summary = BRLObolDatabaseSourceSummary();
+    summary = BObolDatabaseSourceSummary();
     if (!controller || !suffix)
 	return NULL;
 
@@ -449,8 +449,8 @@ find_source_by_path_suffix(SoBRLSceneController *controller,
 	if (source->hasCompactInstanceIndex()) {
 	    const int instanceCount = source->getCompactInstanceCount();
 	    for (int j = 0; j < instanceCount; j++) {
-		BRLObolCompactInstanceHandle handle;
-		BRLObolCompactInstanceSummary instance;
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary instance;
 		if (!source->getCompactInstanceHandle(j, handle) ||
 		    !source->getCompactInstanceSummary(handle, instance) ||
 		    !summary_from_compact_instance(source, instance, summary))
@@ -464,7 +464,7 @@ find_source_by_path_suffix(SoBRLSceneController *controller,
 	    return source;
     }
 
-    summary = BRLObolDatabaseSourceSummary();
+    summary = BObolDatabaseSourceSummary();
     return NULL;
 }
 
@@ -508,7 +508,7 @@ realized_geometry_counts(SoBRLDatabaseSource *source)
 }
 
 static struct geometry_counts
-realized_geometry_counts(BRLObolViewController *controller,
+realized_geometry_counts(BObolViewController *controller,
 			 int expectedDrawMode,
 			 int *realizedSources,
 			 int *modeMismatches)
@@ -598,7 +598,7 @@ longest_export_line(const SoBRLExportAction &exportAction,
 static int
 exercise_real_model_interactions(const struct model_case &testCase,
 	QgView &view,
-	BRLObolViewController *controller)
+	BObolViewController *controller)
 {
     int64_t phaseStart = bu_gettime();
     std::vector<QgObolPickRecord> picks;
@@ -724,12 +724,12 @@ sync_draw_case(const struct model_case &testCase)
 	return 0;
     }
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller) {
 	ged_close(gedp);
 	return 0;
     }
-    const BRLObolViewController::SoftwareWireMode wireMode =
+    const BObolViewController::SoftwareWireMode wireMode =
 	software_wire_mode();
     controller->setSoftwareWireMode(wireMode);
     if (timing_enabled()) {
@@ -774,7 +774,7 @@ sync_draw_case(const struct model_case &testCase)
     /* QgView endpoints use the same deferred publication boundary as the
      * interactive canvas.  Drain it explicitly before inspecting geometry. */
     (void)controller->realizePending();
-    BRLObolViewController *geometryController =
+    BObolViewController *geometryController =
 	ged_draw_obol_controller(gedp);
     if (!geometryController)
 	geometryController = controller;
@@ -1015,7 +1015,7 @@ exercise_m35_color_table_mutation(void)
 	return 0;
     }
 
-    BRLObolViewController *controller = view.obolViewController();
+    BObolViewController *controller = view.obolViewController();
     if (!controller) {
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
@@ -1053,7 +1053,7 @@ exercise_m35_color_table_mutation(void)
     SoBRLSceneController *source_controller =
 	ged_draw_obol_scene_controller(gedp);
 
-    BRLObolDatabaseSourceSummary canary_summary;
+    BObolDatabaseSourceSummary canary_summary;
     SoBRLDatabaseSource *canary = find_source_by_path_suffix(source_controller,
 	    "r850/s850", canary_summary);
     unsigned char expectedRgb[3] = {0, 0, 0};
@@ -1263,7 +1263,7 @@ main(int argc, char **argv)
 	    FAIL("qtcad Obol m35 color-table mutation workflow should pass");
     }
 
-    if (BU_STR_EQUAL(getenv("BRLOBOL_QTCAD_GENERIC_TWIN"), "1")) {
+    if (BU_STR_EQUAL(getenv("BOBOL_QTCAD_GENERIC_TWIN"), "1")) {
 	const struct model_case genericTwinCase = {
 	    "generic_twin_wire", "faa/Generic_Twin.g", "all", GED_DRAW_MODE_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0

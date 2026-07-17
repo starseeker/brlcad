@@ -26,7 +26,7 @@
 
 #include "common.h"
 
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgGL.h"
 #include "qtcad/QgSW.h"
@@ -97,7 +97,7 @@ return new QgSW(parent, nullptr, false);
  * endpoint from its passive GED state.  A host may be replaced while the
  * endpoint survives, so it must never own this policy transfer. */
 static bool
-qg_endpoint_background_seed(brlobol_display_endpoint_t *endpoint,
+qg_endpoint_background_seed(bobol_display_endpoint_t *endpoint,
 	struct bv_context *view_ctx)
 {
     if (!endpoint || !view_ctx)
@@ -108,20 +108,20 @@ qg_endpoint_background_seed(brlobol_display_endpoint_t *endpoint,
 	    bv_context_view_const(view_ctx)))
 	return false;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = background.bottom[i] / 255.0;
-    if (brlobol_display_endpoint_property_set(endpoint,
+    if (bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.bottom", &value) !=
-	BRLOBOL_ENDPOINT_PROPERTY_OK)
+	BOBOL_ENDPOINT_PROPERTY_OK)
 	return false;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = background.top[i] / 255.0;
-    return brlobol_display_endpoint_property_set(endpoint,
+    return bobol_display_endpoint_property_set(endpoint,
 	"controller.background.top", &value) ==
-	BRLOBOL_ENDPOINT_PROPERTY_OK;
+	BOBOL_ENDPOINT_PROPERTY_OK;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -144,10 +144,10 @@ return;
     l->addWidget(w);
 
     if (qtcad_obol_host_factories_register()) {
-	struct brlobol_host_desc desc;
+	struct bobol_host_desc desc;
 	std::memset(&desc, 0, sizeof(desc));
 	desc.struct_size = sizeof(desc);
-	desc.mode = BRLOBOL_HOST_MODE_EMBEDDED;
+	desc.mode = BOBOL_HOST_MODE_EMBEDDED;
 	const qreal dpr = w->devicePixelRatioF();
 	desc.width = static_cast<unsigned int>(std::max(1,
 	    static_cast<int>(std::ceil(w->width() * dpr))));
@@ -161,17 +161,17 @@ return;
 #else
 	const bool use_gl = false;
 #endif
-	desc.required_capabilities = BRLOBOL_HOST_CAP_EMBEDDED |
-	    BRLOBOL_HOST_CAP_READBACK | (use_gl ?
-	    BRLOBOL_HOST_CAP_SYSTEM_GL : BRLOBOL_HOST_CAP_PIXEL_PRESENT);
-	endpoint = brlobol_display_endpoint_create(NULL, 0);
-	if (!endpoint || !brlobol_display_endpoint_render_engine_set(endpoint,
-		use_gl ? BRLOBOL_RENDER_ENGINE_HW : BRLOBOL_RENDER_ENGINE_SW) ||
-	    !brlobol_display_endpoint_host_open(endpoint,
+	desc.required_capabilities = BOBOL_HOST_CAP_EMBEDDED |
+	    BOBOL_HOST_CAP_READBACK | (use_gl ?
+	    BOBOL_HOST_CAP_SYSTEM_GL : BOBOL_HOST_CAP_PIXEL_PRESENT);
+	endpoint = bobol_display_endpoint_create(NULL, 0);
+	if (!endpoint || !bobol_display_endpoint_render_engine_set(endpoint,
+		use_gl ? BOBOL_RENDER_ENGINE_HW : BOBOL_RENDER_ENGINE_SW) ||
+	    !bobol_display_endpoint_host_open(endpoint,
 		use_gl ? "qt-gl" : "qt-sw", &desc) ||
 	    !qg_endpoint_background_seed(endpoint, viewContext())) {
 	    canvas->setObolViewController(nullptr);
-	    brlobol_display_endpoint_destroy(endpoint);
+	    bobol_display_endpoint_destroy(endpoint);
 	    endpoint = nullptr;
 	}
     } else {
@@ -196,7 +196,7 @@ QgView::~QgView()
 	canvas->setObolInputEndpoint(nullptr);
 	canvas->setObolViewController(nullptr);
     }
-    brlobol_display_endpoint_destroy(endpoint);
+    bobol_display_endpoint_destroy(endpoint);
     endpoint = nullptr;
     delete canvas;
 }
@@ -282,13 +282,13 @@ QgView::viewContext() const
 	return canvas ? canvas->viewContext() : nullptr;
 }
 
-BRLObolViewController *
+BObolViewController *
 QgView::obolViewController()
 {
     return canvas ? canvas->obolViewController() : nullptr;
 }
 
-struct brlobol_display_endpoint *
+struct bobol_display_endpoint *
 QgView::displayEndpoint()
 {
     return endpoint;

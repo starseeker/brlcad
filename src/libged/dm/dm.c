@@ -31,8 +31,8 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
-#include "brlobol/display_endpoint.h"
-#include "brlobol/host_factory.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BHostFactory.h"
 #include "bu/cmd.h"
 #include "bu/log.h"
 #include "bu/opt.h"
@@ -101,35 +101,35 @@ _dm_cmd_msgs(void *bs, int argc, const char **argv, const char *us, const char *
 }
 
 static const char *
-_dm_render_engine_name(enum brlobol_render_engine engine)
+_dm_render_engine_name(enum bobol_render_engine engine)
 {
     switch (engine) {
-	case BRLOBOL_RENDER_ENGINE_HW: return "hw";
-	case BRLOBOL_RENDER_ENGINE_SW: return "sw";
-	case BRLOBOL_RENDER_ENGINE_RT: return "rt";
-	case BRLOBOL_RENDER_ENGINE_NONE: return "none";
-	case BRLOBOL_RENDER_ENGINE_DIAGNOSTIC: return "diagnostic";
+	case BOBOL_RENDER_ENGINE_HW: return "hw";
+	case BOBOL_RENDER_ENGINE_SW: return "sw";
+	case BOBOL_RENDER_ENGINE_RT: return "rt";
+	case BOBOL_RENDER_ENGINE_NONE: return "none";
+	case BOBOL_RENDER_ENGINE_DIAGNOSTIC: return "diagnostic";
 	default: return "auto";
     }
 }
 
 static int
-_dm_render_engine_parse(const char *name, enum brlobol_render_engine *engine)
+_dm_render_engine_parse(const char *name, enum bobol_render_engine *engine)
 {
     if (!name || !engine)
 	return 0;
     if (BU_STR_EQUAL(name, "auto"))
-	*engine = BRLOBOL_RENDER_ENGINE_AUTO;
+	*engine = BOBOL_RENDER_ENGINE_AUTO;
     else if (BU_STR_EQUAL(name, "hw"))
-	*engine = BRLOBOL_RENDER_ENGINE_HW;
+	*engine = BOBOL_RENDER_ENGINE_HW;
     else if (BU_STR_EQUAL(name, "sw"))
-	*engine = BRLOBOL_RENDER_ENGINE_SW;
+	*engine = BOBOL_RENDER_ENGINE_SW;
     else if (BU_STR_EQUAL(name, "rt"))
-	*engine = BRLOBOL_RENDER_ENGINE_RT;
+	*engine = BOBOL_RENDER_ENGINE_RT;
     else if (BU_STR_EQUAL(name, "none"))
-	*engine = BRLOBOL_RENDER_ENGINE_NONE;
+	*engine = BOBOL_RENDER_ENGINE_NONE;
     else if (BU_STR_EQUAL(name, "diagnostic"))
-	*engine = BRLOBOL_RENDER_ENGINE_DIAGNOSTIC;
+	*engine = BOBOL_RENDER_ENGINE_DIAGNOSTIC;
     else
 	return 0;
     return 1;
@@ -145,7 +145,7 @@ _dm_endpoint_view(struct _ged_dm_info *gd, const struct bu_vls *view_name)
     return ged_view_active_ctx(gd->gedp);
 }
 
-static brlobol_display_endpoint_t *
+static bobol_display_endpoint_t *
 _dm_endpoint(struct _ged_dm_info *gd, const struct bu_vls *view_name,
 	void **view_ctx)
 {
@@ -157,7 +157,7 @@ _dm_endpoint(struct _ged_dm_info *gd, const struct bu_vls *view_name,
 		"target view does not exist\n");
 	return NULL;
     }
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view);
     if (!endpoint) {
 	bu_vls_printf(gd->gedp->ged_result_str,
@@ -169,27 +169,27 @@ _dm_endpoint(struct _ged_dm_info *gd, const struct bu_vls *view_name,
 
 static void
 _dm_property_print(struct bu_vls *out,
-	const struct brlobol_endpoint_property_value *value)
+	const struct bobol_endpoint_property_value *value)
 {
     switch (value->type) {
-	case BRLOBOL_ENDPOINT_PROPERTY_BOOL:
+	case BOBOL_ENDPOINT_PROPERTY_BOOL:
 	    bu_vls_printf(out, "%s", value->bool_value ? "true" : "false");
 	    break;
-	case BRLOBOL_ENDPOINT_PROPERTY_INT:
+	case BOBOL_ENDPOINT_PROPERTY_INT:
 	    bu_vls_printf(out, "%" PRId64 "", value->int_value);
 	    break;
-	case BRLOBOL_ENDPOINT_PROPERTY_UINT:
+	case BOBOL_ENDPOINT_PROPERTY_UINT:
 	    bu_vls_printf(out, "%" PRIu64 "", value->uint_value);
 	    break;
-	case BRLOBOL_ENDPOINT_PROPERTY_DOUBLE:
+	case BOBOL_ENDPOINT_PROPERTY_DOUBLE:
 	    bu_vls_printf(out, "%.17g", value->double_value);
 	    break;
-	case BRLOBOL_ENDPOINT_PROPERTY_COLOR3:
+	case BOBOL_ENDPOINT_PROPERTY_COLOR3:
 	    bu_vls_printf(out, "%.17g/%.17g/%.17g", value->color3[0],
 		    value->color3[1], value->color3[2]);
 	    break;
-	case BRLOBOL_ENDPOINT_PROPERTY_STRING:
-	case BRLOBOL_ENDPOINT_PROPERTY_ENUM:
+	case BOBOL_ENDPOINT_PROPERTY_STRING:
+	case BOBOL_ENDPOINT_PROPERTY_ENUM:
 	    bu_vls_printf(out, "%s", value->string_value ? value->string_value : "");
 	    break;
 	default:
@@ -198,7 +198,7 @@ _dm_property_print(struct bu_vls *out,
 }
 
 static int
-_dm_property_value_parse(struct brlobol_endpoint_property_value *value,
+_dm_property_value_parse(struct bobol_endpoint_property_value *value,
 	const char *str)
 {
     char *end = NULL;
@@ -206,7 +206,7 @@ _dm_property_value_parse(struct brlobol_endpoint_property_value *value,
 	return 0;
     errno = 0;
     switch (value->type) {
-	case BRLOBOL_ENDPOINT_PROPERTY_BOOL:
+	case BOBOL_ENDPOINT_PROPERTY_BOOL:
 	    if (BU_STR_EQUAL(str, "!"))
 		value->bool_value = value->bool_value ? 0 : 1;
 	    else if (BU_STR_EQUAL(str, "true") || BU_STR_EQUAL(str, "1") ||
@@ -218,18 +218,18 @@ _dm_property_value_parse(struct brlobol_endpoint_property_value *value,
 	    else
 		return 0;
 	    return 1;
-	case BRLOBOL_ENDPOINT_PROPERTY_INT:
+	case BOBOL_ENDPOINT_PROPERTY_INT:
 	    value->int_value = strtoimax(str, &end, 0);
 	    return !errno && end && !*end;
-	case BRLOBOL_ENDPOINT_PROPERTY_UINT:
+	case BOBOL_ENDPOINT_PROPERTY_UINT:
 	    if (*str == '-')
 		return 0;
 	    value->uint_value = strtoumax(str, &end, 0);
 	    return !errno && end && !*end;
-	case BRLOBOL_ENDPOINT_PROPERTY_DOUBLE:
+	case BOBOL_ENDPOINT_PROPERTY_DOUBLE:
 	    value->double_value = strtod(str, &end);
 	    return !errno && end && !*end && isfinite(value->double_value);
-	case BRLOBOL_ENDPOINT_PROPERTY_COLOR3: {
+	case BOBOL_ENDPOINT_PROPERTY_COLOR3: {
 	    double r = 0.0, g = 0.0, b = 0.0;
 	    char trailing = '\0';
 	    if (sscanf(str, "%lf/%lf/%lf%c", &r, &g, &b, &trailing) != 3 &&
@@ -242,8 +242,8 @@ _dm_property_value_parse(struct brlobol_endpoint_property_value *value,
 	    value->color3[2] = b;
 	    return 1;
 	}
-	case BRLOBOL_ENDPOINT_PROPERTY_STRING:
-	case BRLOBOL_ENDPOINT_PROPERTY_ENUM:
+	case BOBOL_ENDPOINT_PROPERTY_STRING:
+	case BOBOL_ENDPOINT_PROPERTY_ENUM:
 	    value->string_value = str;
 	    return 1;
 	default:
@@ -255,25 +255,25 @@ static const char *
 _dm_property_error(int ret)
 {
     switch (ret) {
-	case BRLOBOL_ENDPOINT_PROPERTY_UNKNOWN: return "unknown property";
-	case BRLOBOL_ENDPOINT_PROPERTY_INVALID: return "invalid value";
-	case BRLOBOL_ENDPOINT_PROPERTY_READ_ONLY: return "read-only property";
-	case BRLOBOL_ENDPOINT_PROPERTY_UNSUPPORTED: return "unsupported by this endpoint";
+	case BOBOL_ENDPOINT_PROPERTY_UNKNOWN: return "unknown property";
+	case BOBOL_ENDPOINT_PROPERTY_INVALID: return "invalid value";
+	case BOBOL_ENDPOINT_PROPERTY_READ_ONLY: return "read-only property";
+	case BOBOL_ENDPOINT_PROPERTY_UNSUPPORTED: return "unsupported by this endpoint";
 	default: return "property operation failed";
     }
 }
 
 static const char *
-_dm_property_type_name(enum brlobol_endpoint_property_type type)
+_dm_property_type_name(enum bobol_endpoint_property_type type)
 {
     switch (type) {
-	case BRLOBOL_ENDPOINT_PROPERTY_BOOL: return "bool";
-	case BRLOBOL_ENDPOINT_PROPERTY_INT: return "int";
-	case BRLOBOL_ENDPOINT_PROPERTY_UINT: return "uint";
-	case BRLOBOL_ENDPOINT_PROPERTY_DOUBLE: return "double";
-	case BRLOBOL_ENDPOINT_PROPERTY_STRING: return "string";
-	case BRLOBOL_ENDPOINT_PROPERTY_COLOR3: return "color3";
-	case BRLOBOL_ENDPOINT_PROPERTY_ENUM: return "enum";
+	case BOBOL_ENDPOINT_PROPERTY_BOOL: return "bool";
+	case BOBOL_ENDPOINT_PROPERTY_INT: return "int";
+	case BOBOL_ENDPOINT_PROPERTY_UINT: return "uint";
+	case BOBOL_ENDPOINT_PROPERTY_DOUBLE: return "double";
+	case BOBOL_ENDPOINT_PROPERTY_STRING: return "string";
+	case BOBOL_ENDPOINT_PROPERTY_COLOR3: return "color3";
+	case BOBOL_ENDPOINT_PROPERTY_ENUM: return "enum";
 	default: return "unknown";
     }
 }
@@ -297,23 +297,23 @@ _dm_cmd_bg(void *ds, int argc, const char **argv)
 	    "view endpoint to inspect or modify");
     BU_OPT_NULL(d[1]);
     int ac = bu_opt_parse(NULL, argc, argv, d);
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	_dm_endpoint(gd, &view_name, NULL);
     bu_vls_free(&view_name);
     if (!endpoint)
 	return BRLCAD_ERROR;
 
     if (!ac) {
-	struct brlobol_endpoint_property_value bottom =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	struct brlobol_endpoint_property_value top =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	if (brlobol_display_endpoint_property_get(endpoint,
+	struct bobol_endpoint_property_value bottom =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bobol_endpoint_property_value top =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (bobol_display_endpoint_property_get(endpoint,
 		"controller.background.bottom", &bottom) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK ||
-	    brlobol_display_endpoint_property_get(endpoint,
+		BOBOL_ENDPOINT_PROPERTY_OK ||
+	    bobol_display_endpoint_property_get(endpoint,
 		"controller.background.top", &top) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK)
+		BOBOL_ENDPOINT_PROPERTY_OK)
 	    return BRLCAD_ERROR;
 	unsigned char b[3] = {
 	    (unsigned char)lrint(bottom.color3[0] * 255.0),
@@ -358,25 +358,25 @@ _dm_cmd_bg(void *ds, int argc, const char **argv)
     if (!bu_color_to_rgb_floats(&bottom_color, bottom_rgb) ||
 	!bu_color_to_rgb_floats(&top_color, top_rgb))
 	return BRLCAD_ERROR;
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = bottom_rgb[i];
-    if (brlobol_display_endpoint_property_set(endpoint,
+    if (bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.bottom", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+	    BOBOL_ENDPOINT_PROPERTY_OK)
 	return BRLCAD_ERROR;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = top_rgb[i];
-    if (brlobol_display_endpoint_property_set(endpoint,
+    if (bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.top", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+	    BOBOL_ENDPOINT_PROPERTY_OK)
 	return BRLCAD_ERROR;
 
     const char *cbav[2] = {"dm", "bg"};
     _dm_cmd_during_clbk(gd, 2, cbav);
-    (void)brlobol_display_endpoint_request_frame(endpoint,
+    (void)bobol_display_endpoint_request_frame(endpoint,
 	    "dm background changed");
 
     return BRLCAD_OK;
@@ -406,15 +406,15 @@ _dm_cmd_list(void *ds, int argc, const char **argv)
 	return BRLCAD_OK;
     }
     if (argc == 1 && BU_STR_EQUAL(argv[0], "hosts")) {
-	const size_t count = brlobol_host_factory_registry_count();
+	const size_t count = bobol_host_factory_registry_count();
 	for (size_t i = 0; i < count; i++) {
 	    char name[256] = {0};
-	    if (!brlobol_host_factory_registry_name(i, name, sizeof(name)))
+	    if (!bobol_host_factory_registry_name(i, name, sizeof(name)))
 		continue;
 	    if (gd->verbosity)
 		bu_vls_printf(gedp->ged_result_str, "%s capabilities=0x%016"
 			PRIx64 "\n", name,
-			brlobol_host_factory_registry_capabilities(i));
+			bobol_host_factory_registry_capabilities(i));
 	    else
 		bu_vls_printf(gedp->ged_result_str, "%s\n", name);
 	}
@@ -425,7 +425,7 @@ _dm_cmd_list(void *ds, int argc, const char **argv)
 	const size_t count = views ? BU_PTBL_LEN(views) : 0;
 	for (size_t i = 0; i < count; i++) {
 	    void *view = (void *)BU_PTBL_GET(views, i);
-	    brlobol_display_endpoint_t *endpoint =
+	    bobol_display_endpoint_t *endpoint =
 		ged_view_context_display_endpoint_get(view);
 	    if (!endpoint)
 		continue;
@@ -467,33 +467,33 @@ _dm_cmd_status(void *ds, int argc, const char **argv)
     }
 
     void *view = NULL;
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	_dm_endpoint(gd, &view_name, &view);
     bu_vls_free(&view_name);
     if (!endpoint)
 	return BRLCAD_ERROR;
 
-    struct brlobol_endpoint_property_value width =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct brlobol_endpoint_property_value height =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct brlobol_endpoint_property_value dpr =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    (void)brlobol_display_endpoint_property_get(endpoint, "endpoint.width",
+    struct bobol_endpoint_property_value width =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value height =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value dpr =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    (void)bobol_display_endpoint_property_get(endpoint, "endpoint.width",
 	    &width);
-    (void)brlobol_display_endpoint_property_get(endpoint, "endpoint.height",
+    (void)bobol_display_endpoint_property_get(endpoint, "endpoint.height",
 	    &height);
-    (void)brlobol_display_endpoint_property_get(endpoint,
+    (void)bobol_display_endpoint_property_get(endpoint,
 	    "endpoint.device_pixel_ratio", &dpr);
-    const char *host = brlobol_display_endpoint_host_factory_name(endpoint);
+    const char *host = bobol_display_endpoint_host_factory_name(endpoint);
     bu_vls_printf(gd->gedp->ged_result_str,
 	    "view=%s host=%s renderer=%s resolved=%s width=%" PRIu64
 	    " height=%" PRIu64 " device_pixel_ratio=%.17g\n",
 	    _dm_view_name(view), host ? host : "unbound",
 	    _dm_render_engine_name(
-		brlobol_display_endpoint_render_engine_get(endpoint)),
+		bobol_display_endpoint_render_engine_get(endpoint)),
 	    _dm_render_engine_name(
-		brlobol_display_endpoint_render_engine_resolved_get(endpoint)),
+		bobol_display_endpoint_render_engine_resolved_get(endpoint)),
 	    width.uint_value, height.uint_value, dpr.double_value);
     return BRLCAD_OK;
 }
@@ -521,7 +521,7 @@ _dm_cmd_renderer(void *ds, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	_dm_endpoint(gd, &view_name, NULL);
     bu_vls_free(&view_name);
     if (!endpoint)
@@ -529,18 +529,18 @@ _dm_cmd_renderer(void *ds, int argc, const char **argv)
     if (!ac) {
 	bu_vls_printf(gd->gedp->ged_result_str, "%s",
 		_dm_render_engine_name(
-		    brlobol_display_endpoint_render_engine_get(endpoint)));
+		    bobol_display_endpoint_render_engine_get(endpoint)));
 	return BRLCAD_OK;
     }
 
-    enum brlobol_render_engine engine = BRLOBOL_RENDER_ENGINE_AUTO;
+    enum bobol_render_engine engine = BOBOL_RENDER_ENGINE_AUTO;
     if (!_dm_render_engine_parse(argv[0], &engine)) {
 	bu_vls_printf(gd->gedp->ged_result_str,
 		"unknown renderer '%s'; expected auto, hw, sw, rt, none, or diagnostic\n",
 		argv[0]);
 	return BRLCAD_ERROR;
     }
-    if (!brlobol_display_endpoint_render_engine_set(endpoint, engine)) {
+    if (!bobol_display_endpoint_render_engine_set(endpoint, engine)) {
 	bu_vls_printf(gd->gedp->ged_result_str,
 		"renderer '%s' is unsupported by this endpoint host\n", argv[0]);
 	return BRLCAD_ERROR;
@@ -592,7 +592,7 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	bu_vls_free(&renderer_name);
 	return BRLCAD_ERROR;
     }
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view);
     if (!endpoint &&
 	ged_draw_obol_render_endpoint_ensure_for_view(gd->gedp, view, 1))
@@ -606,9 +606,9 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    const enum brlobol_render_engine old_engine =
-	brlobol_display_endpoint_render_engine_get(endpoint);
-    enum brlobol_render_engine requested_engine = old_engine;
+    const enum bobol_render_engine old_engine =
+	bobol_display_endpoint_render_engine_get(endpoint);
+    enum bobol_render_engine requested_engine = old_engine;
     if (bu_vls_strlen(&renderer_name) &&
 	!_dm_render_engine_parse(bu_vls_cstr(&renderer_name),
 	    &requested_engine)) {
@@ -620,9 +620,9 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	bu_vls_free(&renderer_name);
 	return BRLCAD_ERROR;
     }
-    struct brlobol_endpoint_property_value dpr_value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    (void)brlobol_display_endpoint_property_get(endpoint,
+    struct bobol_endpoint_property_value dpr_value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    (void)bobol_display_endpoint_property_get(endpoint,
 	    "endpoint.device_pixel_ratio", &dpr_value);
     struct bv *bview = bv_context_view((struct bv_context *)view);
     unsigned int host_width = bview && bv_width_get(bview) > 0 ?
@@ -631,37 +631,37 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	(unsigned int)bv_height_get(bview) : 512u;
     if (bview && (bv_width_get(bview) <= 0 || bv_height_get(bview) <= 0))
 	(void)bv_dimensions_set(bview, (int)host_width, (int)host_height);
-    struct brlobol_host_desc desc = {0};
+    struct bobol_host_desc desc = {0};
     desc.struct_size = sizeof(desc);
     desc.mode = BU_STR_EQUAL(bu_vls_cstr(&host_name), "headless") ?
-	BRLOBOL_HOST_MODE_HEADLESS : BRLOBOL_HOST_MODE_TOPLEVEL;
+	BOBOL_HOST_MODE_HEADLESS : BOBOL_HOST_MODE_TOPLEVEL;
     desc.width = host_width;
     desc.height = host_height;
     desc.device_pixel_ratio =
-	dpr_value.type == BRLOBOL_ENDPOINT_PROPERTY_DOUBLE ?
+	dpr_value.type == BOBOL_ENDPOINT_PROPERTY_DOUBLE ?
 	dpr_value.double_value : 1.0;
-    desc.visible = desc.mode == BRLOBOL_HOST_MODE_TOPLEVEL ? 1 : 0;
+    desc.visible = desc.mode == BOBOL_HOST_MODE_TOPLEVEL ? 1 : 0;
     desc.title = _dm_view_name(view);
     /* Tk is the only current host needing a toolkit context.  The old
      * DM-type map had no writers, so its lookup could never contribute. */
     if (BU_STR_EQUIV(bu_vls_cstr(&host_name), "tk-gl") ||
 	BU_STR_EQUIV(bu_vls_cstr(&host_name), "tk-photo"))
 	desc.application_context = gd->gedp->ged_interp;
-    if (requested_engine == BRLOBOL_RENDER_ENGINE_HW)
-	desc.required_capabilities |= BRLOBOL_HOST_CAP_SYSTEM_GL;
-    else if (requested_engine == BRLOBOL_RENDER_ENGINE_SW)
-	desc.required_capabilities |= BRLOBOL_HOST_CAP_PIXEL_PRESENT;
-    else if (requested_engine == BRLOBOL_RENDER_ENGINE_RT)
-	desc.required_capabilities |= BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT;
+    if (requested_engine == BOBOL_RENDER_ENGINE_HW)
+	desc.required_capabilities |= BOBOL_HOST_CAP_SYSTEM_GL;
+    else if (requested_engine == BOBOL_RENDER_ENGINE_SW)
+	desc.required_capabilities |= BOBOL_HOST_CAP_PIXEL_PRESENT;
+    else if (requested_engine == BOBOL_RENDER_ENGINE_RT)
+	desc.required_capabilities |= BOBOL_HOST_CAP_PROGRESSIVE_PRESENT;
 
     /* Host creation is staged by display_endpoint_host_open.  AUTO avoids
      * rejecting the old host before its replacement is ready; the descriptor
      * still constrains selection for an explicit requested engine. */
-    if (!brlobol_display_endpoint_render_engine_set(endpoint,
-	    BRLOBOL_RENDER_ENGINE_AUTO) ||
-	!brlobol_display_endpoint_host_open(endpoint,
+    if (!bobol_display_endpoint_render_engine_set(endpoint,
+	    BOBOL_RENDER_ENGINE_AUTO) ||
+	!bobol_display_endpoint_host_open(endpoint,
 	    bu_vls_cstr(&host_name), &desc)) {
-	(void)brlobol_display_endpoint_render_engine_set(endpoint, old_engine);
+	(void)bobol_display_endpoint_render_engine_set(endpoint, old_engine);
 	bu_vls_printf(gd->gedp->ged_result_str,
 		"host '%s' is unavailable or incompatible with renderer '%s'\n",
 		bu_vls_cstr(&host_name),
@@ -671,10 +671,10 @@ _dm_cmd_open(void *ds, int argc, const char **argv)
 	bu_vls_free(&renderer_name);
 	return BRLCAD_ERROR;
     }
-    if (!brlobol_display_endpoint_render_engine_set(endpoint,
+    if (!bobol_display_endpoint_render_engine_set(endpoint,
 	    requested_engine)) {
-	brlobol_display_endpoint_host_detach(endpoint);
-	(void)brlobol_display_endpoint_render_engine_set(endpoint, old_engine);
+	bobol_display_endpoint_host_detach(endpoint);
+	(void)bobol_display_endpoint_render_engine_set(endpoint, old_engine);
 	bu_vls_printf(gd->gedp->ged_result_str,
 		"host '%s' does not support renderer '%s'\n",
 		bu_vls_cstr(&host_name),
@@ -717,12 +717,12 @@ _dm_cmd_close(void *ds, int argc, const char **argv)
 	bu_vls_free(&view_name);
 	return BRLCAD_ERROR;
     }
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	_dm_endpoint(gd, &view_name, NULL);
     bu_vls_free(&view_name);
     if (!endpoint)
 	return BRLCAD_ERROR;
-    brlobol_display_endpoint_host_detach(endpoint);
+    bobol_display_endpoint_host_detach(endpoint);
     const char *cbav[2] = {"dm", "close"};
     _dm_cmd_during_clbk(gd, 2, cbav);
     return BRLCAD_OK;
@@ -749,12 +749,12 @@ _dm_cmd_host(void *ds, int argc, const char **argv)
 	bu_vls_free(&view_name);
 	return BRLCAD_ERROR;
     }
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	_dm_endpoint(gd, &view_name, NULL);
     bu_vls_free(&view_name);
     if (!endpoint)
 	return BRLCAD_ERROR;
-    const char *host = brlobol_display_endpoint_host_factory_name(endpoint);
+    const char *host = bobol_display_endpoint_host_factory_name(endpoint);
     bu_vls_printf(gd->gedp->ged_result_str, "%s", host ? host : "unbound");
     return BRLCAD_OK;
 }
@@ -782,48 +782,48 @@ _dm_cmd_diagnostics(void *ds, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
     void *view = NULL;
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	_dm_endpoint(gd, &view_name, &view);
     bu_vls_free(&view_name);
     if (!endpoint)
 	return BRLCAD_ERROR;
 
-    if (brlobol_display_endpoint_render_engine_get(endpoint) ==
-	BRLOBOL_RENDER_ENGINE_DIAGNOSTIC)
-	(void)brlobol_display_endpoint_diagnostic_refresh(endpoint);
+    if (bobol_display_endpoint_render_engine_get(endpoint) ==
+	BOBOL_RENDER_ENGINE_DIAGNOSTIC)
+	(void)bobol_display_endpoint_diagnostic_refresh(endpoint);
 
-    const char *host = brlobol_display_endpoint_host_factory_name(endpoint);
+    const char *host = bobol_display_endpoint_host_factory_name(endpoint);
     bu_vls_printf(gd->gedp->ged_result_str,
 	    "view=%s\nhost=%s\nhost.capabilities=0x%016" PRIx64
 	    "\nrenderer=%s\nrenderer.capabilities=0x%016" PRIx64
 	    "\nrenderer.resolved=%s\ncontroller=%s\n",
 	    _dm_view_name(view), host ? host : "unbound",
-	    brlobol_display_endpoint_host_capabilities(endpoint),
+	    bobol_display_endpoint_host_capabilities(endpoint),
 	    _dm_render_engine_name(
-		brlobol_display_endpoint_render_engine_get(endpoint)),
-	    brlobol_display_endpoint_render_engine_capabilities(endpoint),
+		bobol_display_endpoint_render_engine_get(endpoint)),
+	    bobol_display_endpoint_render_engine_capabilities(endpoint),
 	    _dm_render_engine_name(
-		brlobol_display_endpoint_render_engine_resolved_get(endpoint)),
-	    brlobol_display_endpoint_controller(endpoint) ? "available" :
+		bobol_display_endpoint_render_engine_resolved_get(endpoint)),
+	    bobol_display_endpoint_controller(endpoint) ? "available" :
 	    "missing");
-    const size_t count = brlobol_display_endpoint_property_count();
+    const size_t count = bobol_display_endpoint_property_count();
     for (size_t i = 0; i < count; i++) {
-	struct brlobol_endpoint_property_desc desc = {0};
+	struct bobol_endpoint_property_desc desc = {0};
 	desc.struct_size = sizeof(desc);
-	if (brlobol_display_endpoint_property_descriptor(i, &desc) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK)
+	if (bobol_display_endpoint_property_descriptor(i, &desc) !=
+		BOBOL_ENDPOINT_PROPERTY_OK)
 	    continue;
 	bu_vls_printf(gd->gedp->ged_result_str,
 		"property.%s type=%s access=%s%s required=0x%016" PRIx64,
 		desc.name, _dm_property_type_name(desc.type),
-		(desc.access & BRLOBOL_ENDPOINT_PROPERTY_READ) ? "r" : "",
-		(desc.access & BRLOBOL_ENDPOINT_PROPERTY_WRITE) ? "w" : "",
+		(desc.access & BOBOL_ENDPOINT_PROPERTY_READ) ? "r" : "",
+		(desc.access & BOBOL_ENDPOINT_PROPERTY_WRITE) ? "w" : "",
 		desc.required_host_capabilities);
-	if (desc.access & BRLOBOL_ENDPOINT_PROPERTY_READ) {
-	    struct brlobol_endpoint_property_value value =
-		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    if (brlobol_display_endpoint_property_get(endpoint, desc.name,
-		    &value) == BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	if (desc.access & BOBOL_ENDPOINT_PROPERTY_READ) {
+	    struct bobol_endpoint_property_value value =
+		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    if (bobol_display_endpoint_property_get(endpoint, desc.name,
+		    &value) == BOBOL_ENDPOINT_PROPERTY_OK) {
 		bu_vls_printf(gd->gedp->ged_result_str, " value=");
 		_dm_property_print(gd->gedp->ged_result_str, &value);
 	    }
@@ -857,22 +857,22 @@ _dm_cmd_get(void *ds, int argc, const char **argv)
 
     struct _ged_dm_info *gd = (struct _ged_dm_info *)ds;
     void *view = _dm_endpoint_view(gd, &view_name);
-    brlobol_display_endpoint_t *endpoint = view ?
+    bobol_display_endpoint_t *endpoint = view ?
 	ged_view_context_display_endpoint_get(view) : NULL;
     if (endpoint) {
 	if (!ac) {
-	    const size_t count = brlobol_display_endpoint_property_count();
+	    const size_t count = bobol_display_endpoint_property_count();
 	    for (size_t i = 0; i < count; i++) {
-		struct brlobol_endpoint_property_desc desc = {0};
+		struct bobol_endpoint_property_desc desc = {0};
 		desc.struct_size = sizeof(desc);
-		if (brlobol_display_endpoint_property_descriptor(i, &desc) !=
-			BRLOBOL_ENDPOINT_PROPERTY_OK ||
-			!(desc.access & BRLOBOL_ENDPOINT_PROPERTY_READ))
+		if (bobol_display_endpoint_property_descriptor(i, &desc) !=
+			BOBOL_ENDPOINT_PROPERTY_OK ||
+			!(desc.access & BOBOL_ENDPOINT_PROPERTY_READ))
 		    continue;
-		struct brlobol_endpoint_property_value value =
-		    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-		if (brlobol_display_endpoint_property_get(endpoint, desc.name,
-			    &value) != BRLOBOL_ENDPOINT_PROPERTY_OK)
+		struct bobol_endpoint_property_value value =
+		    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+		if (bobol_display_endpoint_property_get(endpoint, desc.name,
+			    &value) != BOBOL_ENDPOINT_PROPERTY_OK)
 		    continue;
 		bu_vls_printf(gd->gedp->ged_result_str, "%s=", desc.name);
 		_dm_property_print(gd->gedp->ged_result_str, &value);
@@ -883,11 +883,11 @@ _dm_cmd_get(void *ds, int argc, const char **argv)
 	}
 	for (int i = 0; i < ac; i++) {
 	    const char *name = argv[i];
-	    struct brlobol_endpoint_property_value value =
-		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    int ret = brlobol_display_endpoint_property_get(endpoint, name,
+	    struct bobol_endpoint_property_value value =
+		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    int ret = bobol_display_endpoint_property_get(endpoint, name,
 		    &value);
-	    if (ret != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    if (ret != BOBOL_ENDPOINT_PROPERTY_OK) {
 		bu_vls_printf(gd->gedp->ged_result_str, "%s: %s\n", name,
 			_dm_property_error(ret));
 		bu_vls_free(&view_name);
@@ -895,7 +895,7 @@ _dm_cmd_get(void *ds, int argc, const char **argv)
 	    }
 	    if (gd->verbosity || ac > 1)
 		bu_vls_printf(gd->gedp->ged_result_str, "%s=", name);
-	    if (value.type == BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
+	    if (value.type == BOBOL_ENDPOINT_PROPERTY_BOOL &&
 		    !strchr(argv[i], '.'))
 		bu_vls_printf(gd->gedp->ged_result_str, "%d", value.bool_value);
 	    else
@@ -933,7 +933,7 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
     struct _ged_dm_info *gd = (struct _ged_dm_info *)ds;
     {
 	const char *name = ac > 0 ? argv[0] : NULL;
-	brlobol_display_endpoint_t *endpoint =
+	bobol_display_endpoint_t *endpoint =
 	    _dm_endpoint(gd, &view_name, NULL);
 	if (!endpoint) {
 	    bu_vls_free(&view_name);
@@ -944,17 +944,17 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
 	    bu_vls_free(&view_name);
 	    return BRLCAD_ERROR;
 	}
-	struct brlobol_endpoint_property_value value =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	int ret = brlobol_display_endpoint_property_get(endpoint, name, &value);
-	if (ret != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	struct bobol_endpoint_property_value value =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	int ret = bobol_display_endpoint_property_get(endpoint, name, &value);
+	if (ret != BOBOL_ENDPOINT_PROPERTY_OK) {
 	    bu_vls_printf(gd->gedp->ged_result_str, "%s: %s\n", name,
 		    _dm_property_error(ret));
 	    bu_vls_free(&view_name);
 	    return BRLCAD_ERROR;
 	}
 	if (ac == 1) {
-	    if (value.type == BRLOBOL_ENDPOINT_PROPERTY_BOOL &&
+	    if (value.type == BOBOL_ENDPOINT_PROPERTY_BOOL &&
 		    !strchr(argv[0], '.'))
 		bu_vls_printf(gd->gedp->ged_result_str, "%d", value.bool_value);
 	    else
@@ -968,8 +968,8 @@ _dm_cmd_set(void *ds, int argc, const char **argv)
 	    bu_vls_free(&view_name);
 	    return BRLCAD_ERROR;
 	}
-	ret = brlobol_display_endpoint_property_set(endpoint, name, &value);
-	if (ret != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	ret = bobol_display_endpoint_property_set(endpoint, name, &value);
+	if (ret != BOBOL_ENDPOINT_PROPERTY_OK) {
 	    bu_vls_printf(gd->gedp->ged_result_str, "%s: %s\n", name,
 		    _dm_property_error(ret));
 	    bu_vls_free(&view_name);

@@ -15,7 +15,7 @@
 __BEGIN_DECLS
 
 /** Register libqtcad's top-level Qt Obol display-session provider.  Clients
- * use libbrlobol's toolkit-neutral display-session API after this selection. */
+ * use libBObol's toolkit-neutral display-session API after this selection. */
 QTCAD_EXPORT int qtcad_obol_display_provider_register(void);
 
 __END_DECLS

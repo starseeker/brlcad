@@ -119,7 +119,7 @@ _ged_draw_brep_lod_bounds_prepare(point_t bmin,
 
 
 extern "C" int
-ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod **lod,
+ged_draw_brep_mesh_lod_cache_prepare(struct BObolMeshLod **lod,
 				     point_t bmin,
 				     point_t bmax,
 				     int *bounds_valid,
@@ -135,14 +135,14 @@ ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod **lod,
     if (!lod || !bounds_valid || !dbip || !dp)
 	return 0;
 
-    struct BRLObolMeshLod *mesh_lod = NULL;
-    struct BRLObolMeshLodCacheStatus status = BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    struct BObolMeshLod *mesh_lod = NULL;
+    struct BObolMeshLodCacheStatus status = BOBOL_MESH_LOD_CACHE_STATUS_INIT;
 
-    if (brlobol_mesh_lod_cache_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
+    if (bobol_mesh_lod_cache_status(dbip, dp->d_namep, &status) != BRLCAD_OK)
 	return 0;
     if (status.has_cache_key && status.has_cached_payload &&
 	    !status.stale_cache_entry)
-	mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
+	mesh_lod = bobol_mesh_lod_get(dbip, dp->d_namep);
 
     if (!mesh_lod) {
 	struct bu_external ext = BU_EXTERNAL_INIT_ZERO;
@@ -187,7 +187,7 @@ ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod **lod,
 		(const point_t *)pnts, pnt_cnt))
 	    *bounds_valid = 1;
 
-	ret = brlobol_mesh_lod_cache_store_mesh(dbip, dp->d_namep, (const point_t *)pnts,
+	ret = bobol_mesh_lod_cache_store_mesh(dbip, dp->d_namep, (const point_t *)pnts,
 		(size_t)pnt_cnt, normals, faces, (size_t)face_cnt, key, 1.0,
 		&status);
 
@@ -198,7 +198,7 @@ ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod **lod,
 	if (ret != BRLCAD_OK)
 	    return 0;
 
-	mesh_lod = brlobol_mesh_lod_get(dbip, dp->d_namep);
+	mesh_lod = bobol_mesh_lod_get(dbip, dp->d_namep);
     }
     if (!mesh_lod)
 	return 0;
@@ -207,8 +207,8 @@ ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod **lod,
 	if (_ged_draw_brep_lod_bounds_prepare(bmin, bmax, dbip, dp, ttol, tol)) {
 	    *bounds_valid = 1;
 	} else {
-	    struct BRLObolMeshLodInfo info = BRLOBOL_MESH_LOD_INFO_INIT;
-	    if (brlobol_mesh_lod_info_get(mesh_lod, &info)) {
+	    struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
+	    if (bobol_mesh_lod_info_get(mesh_lod, &info)) {
 		VMOVE(bmin, info.bmin);
 		VMOVE(bmax, info.bmax);
 		*bounds_valid = 1;
@@ -222,7 +222,7 @@ ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod **lod,
 
 
 static int
-_ged_draw_brep_mesh_info_clbk(struct BRLObolMeshLodDetail *detail, void *cb_data)
+_ged_draw_brep_mesh_info_clbk(struct BObolMeshLodDetail *detail, void *cb_data)
 {
     if (!detail || !cb_data)
 	return -1;
@@ -317,7 +317,7 @@ _ged_draw_brep_mesh_info_free_clbk(void *cb_data)
 
 
 extern "C" int
-ged_draw_brep_mesh_lod_detail_setup(struct BRLObolMeshLod *lod,
+ged_draw_brep_mesh_lod_detail_setup(struct BObolMeshLod *lod,
 				    struct db_i *dbip,
 				    struct directory *dp,
 				    const struct bg_tess_tol *ttol,
@@ -339,7 +339,7 @@ ged_draw_brep_mesh_lod_detail_setup(struct BRLObolMeshLod *lod,
 	cbd->tol_storage = *tol;
 	cbd->tol = &cbd->tol_storage;
     }
-    if (!brlobol_mesh_lod_detail_callbacks_set(lod,
+    if (!bobol_mesh_lod_detail_callbacks_set(lod,
 	    &_ged_draw_brep_mesh_info_clbk,
 	    &_ged_draw_brep_mesh_info_clear_clbk,
 	    &_ged_draw_brep_mesh_info_free_clbk,

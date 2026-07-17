@@ -49,8 +49,8 @@
 #include <QMouseEvent>
 #include <QtGlobal>
 
-#include "brlobol/export_action.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BViewController.h"
 #include "bu/str.h"
 #include "ged.h"
 #include "ged/defines.h"
@@ -155,7 +155,7 @@ qg_quad_obol_visible_paths(QgView *view)
 	if (!view)
 		return paths;
 
-	BRLObolViewController *controller = view->obolViewController();
+	BObolViewController *controller = view->obolViewController();
 	if (!controller || !controller->getViewport() ||
 			!controller->getViewport()->getRoot())
 		return paths;

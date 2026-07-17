@@ -2306,11 +2306,11 @@ endif(BRLCAD_EXTRADOCS)
 include(CTest)
 mark_as_advanced(BUILD_TESTING)
 brlcad_add_test(
-  NAME brlobol_pivot_guard
+  NAME BObol_pivot_guard
   COMMAND ${CMAKE_COMMAND}
   -DBRLCAD_SOURCE_DIR=${BRLCAD_SOURCE_DIR}
-  -DBRLOBOL_PIVOT_GUARD_MODE=transitional
-  -P ${BRLCAD_CMAKE_DIR}/brlobol_pivot_guard.cmake
+  -DBOBOL_PIVOT_GUARD_MODE=transitional
+  -P ${BRLCAD_CMAKE_DIR}/BObol_pivot_guard.cmake
 )
 
 # Set up the BRL-CAD wrapper around find_package

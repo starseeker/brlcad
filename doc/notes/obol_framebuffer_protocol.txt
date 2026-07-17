@@ -37,8 +37,8 @@ callbacks through `fbs_set_transport` or a narrow toolkit wrapper.  They do not
 call `pkg_process` for framebuffer traffic and do not inspect the backend table
 or listener/client arrays directly.
 
-libbrlobol owns presentation, not protocol parsing.  Its
-`BRLObolFramebufferStream` maps framebuffer state onto imgstream storage and
+libBObol owns presentation, not protocol parsing.  Its
+`BObolFramebufferStream` maps framebuffer state onto imgstream storage and
 Obol scene content.  Its typed composition layer travels with the stream; a
 target host must accept both the existing framebuffer and requested layer
 before the previous retained attachment is removed.  A rejection leaves the
@@ -57,7 +57,7 @@ The `struct fb` compatibility API and its fbserv adapter are removed.  Every
 server installs an imgstream-native backend through `fbserv_set_backend`; no
 legacy framebuffer pointer or adapter remains in the protocol state.
 
-Legacy display names are accepted only by libbrlobol's explicit display-session
+Legacy display names are accepted only by libBObol's explicit display-session
 provider boundary.  The current provider maps `/dev/X` and `/dev/swrast` to a
 software Obol host, and `/dev/ogl`, `/dev/wgl`, and `/dev/qtgl` to a System-GL
 Obol host.  These are top-level provider selections, never embedded image
@@ -78,12 +78,12 @@ fb-compatible cursor/view state, dirty metadata, and generation counters.
 They must not mutate Coin/Obol nodes or render from a transport thread.
 
 `SoBRLImageSource` notifications only record pending generations.  The
-application update owner calls `BRLObolFramebufferStream::present` (or the
+application update owner calls `BObolFramebufferStream::present` (or the
 equivalent source synchronization method) before requesting a render.  qged
 does this on its UI thread.  GSH and MGED do it in their command/refresh owner.
 Render traversal remains read-only with respect to stream publication.
 
-Standalone visible `rt` uses `brlobol_display_session_run`: tracing executes
+Standalone visible `rt` uses `bobol_display_session_run`: tracing executes
 on a worker while the opening thread polls the provider.  Its pixel callbacks
 only coalesce a display-session frame request; the owner poll performs retained
 image synchronization and toolkit dispatch.  `fbserv` uses the same session
@@ -117,16 +117,16 @@ pin and token with a pixel write/read round trip.  `test_qged_obol_fbserv`
 verifies partial and final scan bands, resize, flush/present, and readback
 through the Qt host.  It also forces live composition and rehost rejection to
 prove the typed property, BV state, old host, and retained image layer roll
-back together.  `libbrlobol_window_host` independently verifies that accepted
+back together.  `libBObol_window_host` independently verifies that accepted
 rehosts preserve composition and rejected target layers leave the old stream
 attachment live.
-`libbrlobol_rt_render` captures mixed retained-RT/framebuffer compositions and
+`libBObol_rt_render` captures mixed retained-RT/framebuffer compositions and
 verifies both cross-layer orders, same-layer reparent stability, underlay/CAD
 interaction, and removal of a disabled framebuffer.
 `gsh_obol_ert_smoke` runs a real single-threaded ERT and verifies that a
 meaningful partial image advances to a substantially different complete
 frame.  MGED smoke tests cover the Tcl host adapter and final ERT presentation.
-`libbrlobol_window_host` verifies a worker-backed display-session task while
+`libBObol_window_host` verifies a worker-backed display-session task while
 the owner polls, and `rt_display_swrast` plus `rt_display_ogl` run a real RT
 frame through the software and System-GL provider selections under Xvfb.
 

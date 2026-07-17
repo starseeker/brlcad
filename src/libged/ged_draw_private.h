@@ -36,7 +36,7 @@
 #include "bu/vls.h"
 #include "vmath.h"
 
-#include "brlobol/mesh_lod_cache.h"
+#include "BObol/BMeshLodCache.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "rt/db_fullpath.h"
@@ -57,7 +57,7 @@ struct rt_pg_internal;
 struct db_tree_state;
 struct model;
 struct nmgregion;
-struct BRLObolDrawMetadataRecord;
+struct BObolDrawMetadataRecord;
 struct ged_draw_obol_database_source_record;
 
 typedef int (*ged_draw_group_ref_index_cb)(ged_draw_group_ref ref,
@@ -145,7 +145,7 @@ struct ged_draw_obol_database_source_runtime {
     uint64_t lod_bot_threshold;
     int draw_size_valid;
     fastf_t draw_size;
-    struct BRLObolMeshLod *mesh_lod;
+    struct BObolMeshLod *mesh_lod;
     int mesh_lod_bounds_valid;
     point_t mesh_lod_bmin;
     point_t mesh_lod_bmax;
@@ -475,12 +475,12 @@ struct ged_draw_view_export_detail {
     } annotation;
 };
 
-GED_EXPORT extern int ged_draw_brep_mesh_lod_detail_setup(struct BRLObolMeshLod *lod,
+GED_EXPORT extern int ged_draw_brep_mesh_lod_detail_setup(struct BObolMeshLod *lod,
 							  struct db_i *dbip,
 							  struct directory *dp,
 							  const struct bg_tess_tol *ttol,
 							  const struct bn_tol *tol);
-GED_EXPORT extern int ged_draw_brep_mesh_lod_cache_prepare(struct BRLObolMeshLod **lod,
+GED_EXPORT extern int ged_draw_brep_mesh_lod_cache_prepare(struct BObolMeshLod **lod,
 							   point_t bmin,
 							   point_t bmax,
 							   int *bounds_valid,
@@ -1464,7 +1464,7 @@ GED_EXPORT extern int ged_draw_obol_database_source_set_region_metadata_for_path
 GED_EXPORT extern int ged_draw_obol_database_source_apply_draw_metadata_for_path(
 	struct ged *gedp,
 	const char *path,
-	const struct BRLObolDrawMetadataRecord *record);
+	const struct BObolDrawMetadataRecord *record);
 GED_EXPORT extern int ged_draw_obol_database_source_update_display_for_path(
 	struct ged *gedp,
 	const char *path,
@@ -1545,7 +1545,7 @@ GED_EXPORT extern int ged_draw_obol_database_source_runtime_for_path(
 GED_EXPORT extern int ged_draw_obol_database_source_set_mesh_lod_for_path(
 	struct ged *gedp,
 	const char *path,
-	struct BRLObolMeshLod *lod);
+	struct BObolMeshLod *lod);
 GED_EXPORT extern int ged_draw_obol_database_source_set_mesh_lod_bounds_for_path(
 	struct ged *gedp,
 	const char *path,

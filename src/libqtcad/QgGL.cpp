@@ -38,7 +38,7 @@
 #include "QgCanvasState.h"   /* pimpl definition + shared helpers */
 #include "qtcad/QgGL.h"
 
-QgGL::QgGL(QWidget *parent, BRLObolViewController *controller,
+QgGL::QgGL(QWidget *parent, BObolViewController *controller,
     bool create_controller)
     : QOpenGLWidget(parent)
 {
@@ -78,20 +78,20 @@ QgGL::viewContext() const
     return d ? d->v : nullptr;
 }
 
-BRLObolViewController *
+BObolViewController *
 QgGL::obolViewController() const
 {
     return d->obol;
 }
 
 void
-QgGL::setObolViewController(BRLObolViewController *controller)
+QgGL::setObolViewController(BObolViewController *controller)
 {
     qgcanvas_bind_obol_controller(*d, this, controller);
 }
 
 void
-QgGL::setObolInputEndpoint(struct brlobol_display_endpoint *endpoint)
+QgGL::setObolInputEndpoint(struct bobol_display_endpoint *endpoint)
 {
 	d->input.setEndpoint(endpoint);
 }

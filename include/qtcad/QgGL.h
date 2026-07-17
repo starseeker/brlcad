@@ -37,7 +37,7 @@ class QKeyEvent;
 class QMouseEvent;
 class QResizeEvent;
 class QWheelEvent;
-class BRLObolViewController;
+class BObolViewController;
 struct QgCanvasState;  /* private implementation — defined in QgCanvasState.h */
 
 // Use QOpenGLFunctions so we don't have to prefix all OpenGL calls with "f->"
@@ -49,7 +49,7 @@ Q_PROPERTY(int defaultMouseMode READ lmouseMoveDefault WRITE set_lmouse_move_def
 
 public:
 explicit QgGL(QWidget *parent = nullptr,
-    BRLObolViewController *controller = nullptr,
+    BObolViewController *controller = nullptr,
     bool create_controller = true);
 ~QgGL() override;
 
@@ -59,9 +59,9 @@ QObject *asQObject()    override { return this; }
 bool isValid() const    override { return QOpenGLWidget::isValid(); }
 
 struct bv_context *viewContext() const override;
-BRLObolViewController *obolViewController() const override;
-void setObolViewController(BRLObolViewController *) override;
-void setObolInputEndpoint(struct brlobol_display_endpoint *) override;
+BObolViewController *obolViewController() const override;
+void setObolViewController(BObolViewController *) override;
+void setObolInputEndpoint(struct bobol_display_endpoint *) override;
 
 
 void stash_hashes() override;

@@ -34,12 +34,12 @@
 #include <thread>
 
 #include <bu.h>
-#include <brlobol/init.h>
-#include <brlobol/database_source.h>
-#include <brlobol/mesh_lod_cache.h>
-#include <brlobol/scene_controller.h>
-#include <brlobol/vlist_shape.h>
-#include <brlobol/view_controller.h>
+#include <BObol/BInit.h>
+#include <BObol/BDatabaseSource.h>
+#include <BObol/BMeshLodCache.h>
+#include <BObol/BSceneController.h>
+#include <BObol/BVListShape.h>
+#include <BObol/BViewController.h>
 #include <icv.h>
 #include <Inventor/SbColor.h>
 #include <Inventor/SbViewportRegion.h>
@@ -69,7 +69,7 @@ ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_
 
     // Need to invalidate any LoD caches associated with this dp
     if (dbip && dp && dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
-	(void)brlobol_mesh_lod_cache_invalidate(dbip, dp->d_namep, NULL);
+	(void)bobol_mesh_lod_cache_invalidate(dbip, dp->d_namep, NULL);
 
     switch (mode) {
 	case 0:
@@ -128,7 +128,7 @@ draw_test_obol_context_manager(void)
 }
 
 static int
-draw_test_sync_obol_camera(BRLObolViewController *controller, void *view_ctx)
+draw_test_sync_obol_camera(BObolViewController *controller, void *view_ctx)
 {
     if (!controller || !view_ctx)
 	return 0;
@@ -149,8 +149,8 @@ draw_test_obol_view_init(struct ged *gedp, void *view_ctx, int width, int height
     }
     if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1))
 	return BRLCAD_ERROR;
-    BRLObolViewController *controller =
-	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
+    BObolViewController *controller =
+	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
     if (!controller)
 	return BRLCAD_ERROR;
 
@@ -166,14 +166,14 @@ draw_test_obol_progressive_drain(struct ged *gedp, void *view_ctx,
     if (!gedp || !view_ctx || !max_attempts)
 	return 0;
 
-    BRLObolViewController *controller =
-	static_cast<BRLObolViewController *>(
+    BObolViewController *controller =
+	static_cast<BObolViewController *>(
 	    ged_draw_obol_controller_opaque_for_view(view_ctx));
     if (!controller)
 	return 0;
 
     for (unsigned int attempt = 0; attempt < max_attempts; attempt++) {
-	BRLObolProgressiveStatus status;
+	BObolProgressiveStatus status;
 	(void)controller->advanceProgressiveWork(NULL, &status);
 	if (!status.hasMore)
 	    return 1;
@@ -252,7 +252,7 @@ draw_test_write_rgb_png(const char *filename, const unsigned char *buffer,
 
 static void
 draw_test_obol_debug_dump(struct ged *gedp, int id,
-			  BRLObolViewController *controller, void *view_ctx)
+			  BObolViewController *controller, void *view_ctx)
 {
     if (!draw_test_obol_debug_enabled() || !gedp || !controller || !view_ctx)
 	return;
@@ -312,7 +312,7 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
     if (!scene)
 	return;
 
-    BRLObolSceneSummary scene_summary;
+    BObolSceneSummary scene_summary;
     if (scene->getSceneSummary(scene_summary) && scene_summary.valid) {
 	bu_log("draw-obol-debug[%03d]: scene rootChildren=%d dbSources=%d nonDbRootChildren=%d visited=%u realized=%u failed=%u structural=%" PRIu64 " frame=%" PRIu64 "\n",
 	       id,
@@ -342,7 +342,7 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 
     const int source_count = scene->getDatabaseSourceCount();
     for (int i = 0; i < source_count; i++) {
-	BRLObolDatabaseSourceSummary source;
+	BObolDatabaseSourceSummary source;
 	if (!scene->getDatabaseSourceSummary(i, source) || !source.valid)
 	    continue;
 	SoBRLDatabaseSource *source_node = scene->getDatabaseSource(i);
@@ -434,7 +434,7 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
     bu_log("draw-obol-debug[%03d]: realized-shape-count=%d\n",
 	   id, shape_count);
     for (int i = 0; i < shape_limit; i++) {
-	BRLObolRealizedShapeSummary shape;
+	BObolRealizedShapeSummary shape;
 	if (!scene->getRealizedShapeSummary(i, shape) || !shape.valid)
 	    continue;
 
@@ -480,14 +480,14 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 	bu_log("Obol draw-test capture requested, but OSMesa context manager is unavailable\n");
 	return -1;
     }
-    brlobol_init(NULL);
+    bobol_init(NULL);
 
     void *v = view_ctx ? view_ctx : draw_test_active_view_ctx(gedp);
     if (!v)
 	return -1;
 
-    BRLObolViewController *controller =
-	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
+    BObolViewController *controller =
+	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
     if (!controller) {
 	(void)ged_draw_obol_scene_controller_ensure(gedp, 1);
 	controller = ged_draw_obol_controller(gedp);
@@ -612,8 +612,8 @@ dm_refresh(struct ged *gedp)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    BRLObolViewController *controller =
-	(BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
+    BObolViewController *controller =
+	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
     if (controller)
 	(void)controller->realizePending();
 }

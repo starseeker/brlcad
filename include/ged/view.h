@@ -34,7 +34,7 @@
 #include "rt/db_fullpath.h"
 #include "rt/db_instance.h"
 #include "rt/view.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "ged/defines.h"
 #include "ged/draw_scene.h"
 
@@ -151,11 +151,11 @@ GED_EXPORT extern int ged_view_context_update(void *view_ctx);
  * synchronization.  When @p take_ownership is non-zero, GED destroys the
  * endpoint after detaching its controller during replacement or view teardown.
  */
-struct brlobol_display_endpoint;
-GED_EXPORT extern struct brlobol_display_endpoint *
+struct bobol_display_endpoint;
+GED_EXPORT extern struct bobol_display_endpoint *
 ged_view_context_display_endpoint_get(const void *view_ctx);
 GED_EXPORT extern int ged_view_context_display_endpoint_set(
-    void *view_ctx, struct brlobol_display_endpoint *endpoint,
+    void *view_ctx, struct bobol_display_endpoint *endpoint,
     int take_ownership);
 
 /**
@@ -166,10 +166,10 @@ GED_EXPORT extern int ged_view_context_display_endpoint_set(
  */
 GED_EXPORT extern int ged_view_context_display_property_get(
     const void *view_ctx, const char *name,
-    struct brlobol_endpoint_property_value *value);
+    struct bobol_endpoint_property_value *value);
 GED_EXPORT extern int ged_view_context_display_property_set(
     void *view_ctx, const char *name,
-    const struct brlobol_endpoint_property_value *value);
+    const struct bobol_endpoint_property_value *value);
 
 /**
  * Translate the view.

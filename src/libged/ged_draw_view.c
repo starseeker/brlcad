@@ -19,7 +19,7 @@
  */
 /** @file ged_draw_view.c
  *
- * GED view-feature wrappers backed exclusively by Obol/libbrlobol.
+ * GED view-feature wrappers backed exclusively by Obol/libBObol.
  *
  * Absent Obol view state is treated as a no-op/failure condition, not as
  * permission to synthesize alternate retained records.

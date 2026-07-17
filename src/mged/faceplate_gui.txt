@@ -22,7 +22,7 @@ in-display menu/control layer.
 Modern faceplate/HUD state
 --------------------------
 
-Passive faceplate settings live in libbv view state.  libbrlobol realizes one
+Passive faceplate settings live in libbv view state.  libBObol realizes one
 retained feature per visible faceplate element:
 
 * center dot;

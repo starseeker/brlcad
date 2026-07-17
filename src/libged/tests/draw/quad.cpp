@@ -30,7 +30,7 @@
 #include <fstream>
 
 #include <bu.h>
-#include <brlobol/mesh_lod_cache.h>
+#include <BObol/BMeshLodCache.h>
 #include <icv.h>
 #include <rt/view.h>
 #include "view_test_util.h"
@@ -58,7 +58,7 @@ quad_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u
 
     // Need to invalidate any LoD caches associated with this dp
     if (dbip && dp && dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
-	(void)brlobol_mesh_lod_cache_invalidate(dbip, dp->d_namep, NULL);
+	(void)bobol_mesh_lod_cache_invalidate(dbip, dp->d_namep, NULL);
 
     switch(mode) {
 	case 0:

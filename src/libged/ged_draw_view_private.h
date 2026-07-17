@@ -34,15 +34,15 @@
 #include "ged/draw.h"
 
 #ifdef __cplusplus
-class BRLObolViewAttachment;
-GED_EXPORT extern BRLObolViewAttachment *ged_view_context_obol_attachment(
+class BObolViewAttachment;
+GED_EXPORT extern BObolViewAttachment *ged_view_context_obol_attachment(
 	const void *view_ctx);
 GED_EXPORT extern int ged_view_context_obol_attachment_bind(
 	void *view_ctx,
-	BRLObolViewAttachment *attachment);
+	BObolViewAttachment *attachment);
 GED_EXPORT extern int ged_view_context_obol_attachment_unbind(
 	void *view_ctx,
-	BRLObolViewAttachment *attachment);
+	BObolViewAttachment *attachment);
 #endif
 
 __BEGIN_DECLS

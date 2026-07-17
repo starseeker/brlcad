@@ -26,9 +26,9 @@
 #  include <GL/gl.h>
 #endif
 
-#include "brlobol/host_factory.h"
-#include "brlobol/init.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BHostFactory.h"
+#include "BObol/BInit.h"
+#include "BObol/BViewController.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
@@ -180,7 +180,7 @@ public:
 	this->close();
     }
 
-    int bind(BRLObolViewController *new_controller)
+    int bind(BObolViewController *new_controller)
     {
 	if (this->controller && this->controller != new_controller)
 	    this->controller->setRenderContextManager(NULL);
@@ -192,7 +192,7 @@ public:
 	    tk_endpoint_context_manager();
     }
 
-    int open(const struct brlobol_host_desc *desc)
+    int open(const struct bobol_host_desc *desc)
     {
 	if (this->opened || !this->interp || !Tk_MainWindow(this->interp) ||
 	    !this->controller || !desc)
@@ -202,7 +202,7 @@ public:
 
 	/* Obol class registration is process-global, but rendering policy is not.
 	 * bind() installs this host's concrete provider on the controller. */
-	brlobol_init(NULL);
+	bobol_init(NULL);
 	this->width = desc->width ? desc->width : 1;
 	this->height = desc->height ? desc->height : 1;
 	this->input_dispatch = desc->input_dispatch;
@@ -212,10 +212,10 @@ public:
 	static std::atomic<unsigned long> next_id(0);
 	const unsigned long id = ++next_id;
 	this->container_path = desc->native_id_hint && desc->native_id_hint[0] ?
-	    desc->native_id_hint : ".brlobol_tk" + std::to_string(id);
-	this->container_command_name = "::brlcad::tkobol::endpoint_container_" +
+	    desc->native_id_hint : ".bobol_tk" + std::to_string(id);
+	this->container_command_name = "::brlcad::tkObol::endpoint_container_" +
 	    std::to_string(id);
-	this->toplevel = desc->mode == BRLOBOL_HOST_MODE_TOPLEVEL;
+	this->toplevel = desc->mode == BOBOL_HOST_MODE_TOPLEVEL;
 	const bool is_toplevel = this->toplevel;
 	if (!is_toplevel && (!desc->native_id_hint || !desc->native_id_hint[0]))
 	    return 0;
@@ -223,17 +223,17 @@ public:
 	    return this->open_failed();
 	this->widget_path = is_toplevel ? this->container_path + ".__obol" :
 	    this->container_path;
-	this->display_command = "::brlcad::tkobol::endpoint_display_" +
+	this->display_command = "::brlcad::tkObol::endpoint_display_" +
 	    std::to_string(id);
-	this->reshape_command = "::brlcad::tkobol::endpoint_reshape_" +
+	this->reshape_command = "::brlcad::tkObol::endpoint_reshape_" +
 	    std::to_string(id);
-	this->widget_command_name = "::brlcad::tkobol::endpoint_widget_" +
+	this->widget_command_name = "::brlcad::tkObol::endpoint_widget_" +
 	    std::to_string(id);
-	this->photo_name = "::brlcad::tkobol::endpoint_photo_" +
+	this->photo_name = "::brlcad::tkObol::endpoint_photo_" +
 	    std::to_string(id);
-	this->input_command_name = "::brlcad::tkobol::endpoint_input_" +
+	this->input_command_name = "::brlcad::tkObol::endpoint_input_" +
 	    std::to_string(id);
-	this->input_bindtag = "::brlcad::tkobol::endpoint_input_tag_" +
+	this->input_bindtag = "::brlcad::tkObol::endpoint_input_tag_" +
 	    std::to_string(id);
 
 	Tcl_CreateObjCommand(this->interp, this->display_command.c_str(),
@@ -257,7 +257,7 @@ public:
 
 	const std::string swidth = std::to_string(this->width);
 	const std::string sheight = std::to_string(this->height);
-	const char *swap_interval = desc->vsync == BRLOBOL_HOST_VSYNC_OFF ?
+	const char *swap_interval = desc->vsync == BOBOL_HOST_VSYNC_OFF ?
 	    "0" : "1";
 	if (this->software) {
 	    if (!this->eval({"image", "create", "photo", this->photo_name.c_str(),
@@ -270,7 +270,7 @@ public:
 	    if (!this->photo)
 		return this->open_failed();
 	} else {
-	    if (!this->eval({"::brlcad::tkobol::host", this->widget_path.c_str(),
+	    if (!this->eval({"::brlcad::tkObol::host", this->widget_path.c_str(),
 		"-width", swidth.c_str(), "-height", sheight.c_str(),
 		"-rgba", "true", "-double", "true", "-depth", "true",
 		"-depthsize", "24", "-major", "2", "-minor", "1",
@@ -293,10 +293,10 @@ public:
 	    this->container = this->tkwin;
 	if (this->input_dispatch && !this->install_input_bindings())
 	    return this->open_failed();
-	if (!this->software && desc->vsync != BRLOBOL_HOST_VSYNC_AUTO &&
+	if (!this->software && desc->vsync != BOBOL_HOST_VSYNC_AUTO &&
 	    !BrlcadTkObolHost_SetSwapInterval(this->interp,
 		this->widget_command_name.c_str(),
-		desc->vsync == BRLOBOL_HOST_VSYNC_OFF ? 0 : 1))
+		desc->vsync == BOBOL_HOST_VSYNC_OFF ? 0 : 1))
 	    return this->open_failed();
 	if (is_toplevel && !this->eval({"pack", this->widget_path.c_str(),
 	    "-expand", "true", "-fill", "both"}))
@@ -726,7 +726,7 @@ private:
     {
 	this->sync_size();
 	unsigned char *pixels = NULL;
-	BRLObolProgressiveStatus progressive;
+	BObolProgressiveStatus progressive;
 	if (this->controller->renderToImage(&pixels, 1, 0, NULL,
 		tk_endpoint_context_manager(), &progressive) != BRLCAD_OK ||
 	    !pixels)
@@ -827,15 +827,15 @@ private:
 
     static unsigned int input_modifiers(unsigned int state)
     {
-	unsigned int modifiers = BRLOBOL_INPUT_MOD_NONE;
+	unsigned int modifiers = BOBOL_INPUT_MOD_NONE;
 	if (state & ShiftMask)
-	    modifiers |= BRLOBOL_INPUT_MOD_SHIFT;
+	    modifiers |= BOBOL_INPUT_MOD_SHIFT;
 	if (state & ControlMask)
-	    modifiers |= BRLOBOL_INPUT_MOD_CONTROL;
+	    modifiers |= BOBOL_INPUT_MOD_CONTROL;
 	if (state & Mod1Mask)
-	    modifiers |= BRLOBOL_INPUT_MOD_ALT;
+	    modifiers |= BOBOL_INPUT_MOD_ALT;
 	if (state & Mod4Mask)
-	    modifiers |= BRLOBOL_INPUT_MOD_META;
+	    modifiers |= BOBOL_INPUT_MOD_META;
 	return modifiers;
     }
 
@@ -859,12 +859,12 @@ private:
 	    return 1;
 	if (state & Button3Mask)
 	    return 2;
-	return BRLOBOL_INPUT_ANY;
+	return BOBOL_INPUT_ANY;
     }
 
     static int input_button_number(int button)
     {
-	return button >= 1 && button <= 3 ? button - 1 : BRLOBOL_INPUT_ANY;
+	return button >= 1 && button <= 3 ? button - 1 : BOBOL_INPUT_ANY;
     }
 
     static int input_key(Tcl_Obj *character, Tcl_Obj *keysym)
@@ -888,26 +888,26 @@ private:
 	    char *end = NULL;
 	    const long function_key = strtol(name + 1, &end, 10);
 	    if (end && !end[0] && function_key >= 1 && function_key <= 12)
-		return BRLOBOL_INPUT_KEY_F1 + static_cast<int>(function_key - 1);
+		return BOBOL_INPUT_KEY_F1 + static_cast<int>(function_key - 1);
 	}
 	if (name && (bu_strcmp(name, "Shift_L") == 0 ||
 		bu_strcmp(name, "Shift_R") == 0))
-	    return BRLOBOL_INPUT_KEY_SHIFT;
+	    return BOBOL_INPUT_KEY_SHIFT;
 	if (name && (bu_strcmp(name, "Control_L") == 0 ||
 		bu_strcmp(name, "Control_R") == 0))
-	    return BRLOBOL_INPUT_KEY_CONTROL;
+	    return BOBOL_INPUT_KEY_CONTROL;
 	if (name && (bu_strcmp(name, "Alt_L") == 0 ||
 		bu_strcmp(name, "Alt_R") == 0))
-	    return BRLOBOL_INPUT_KEY_ALT;
+	    return BOBOL_INPUT_KEY_ALT;
 	if (name && (bu_strcmp(name, "Meta_L") == 0 ||
 		bu_strcmp(name, "Meta_R") == 0 ||
 		bu_strcmp(name, "Super_L") == 0 ||
 		bu_strcmp(name, "Super_R") == 0))
-	    return BRLOBOL_INPUT_KEY_META;
-	return BRLOBOL_INPUT_ANY;
+	    return BOBOL_INPUT_KEY_META;
+	return BOBOL_INPUT_ANY;
     }
 
-    void dispatch_input(const BRLObolInputEvent &event)
+    void dispatch_input(const BObolInputEvent &event)
     {
 	if (!this->input_dispatch || this->closing)
 	    return;
@@ -922,7 +922,7 @@ private:
 	if (!host || !host->input_dispatch || host->closing || objc < 2)
 	    return TCL_OK;
 	const char *kind = Tcl_GetString(objv[1]);
-	BRLObolInputEvent event;
+	BObolInputEvent event;
 	int value = 0;
 	if (bu_strcmp(kind, "key") == 0) {
 	    if (objc != 8 || Tcl_GetIntFromObj(interp, objv[5], &event.x) != TCL_OK ||
@@ -930,7 +930,7 @@ private:
 		Tcl_GetIntFromObj(interp, objv[7], &value) != TCL_OK)
 		goto input_usage;
 	    event.type = bu_strcmp(Tcl_GetString(objv[2]), "press") == 0 ?
-		BRLOBOL_INPUT_KEY_PRESS : BRLOBOL_INPUT_KEY_RELEASE;
+		BOBOL_INPUT_KEY_PRESS : BOBOL_INPUT_KEY_RELEASE;
 	    event.key = input_key(objv[3], objv[4]);
 	    event.modifiers = input_modifiers(static_cast<unsigned int>(value));
 	} else if (bu_strcmp(kind, "button") == 0) {
@@ -942,9 +942,9 @@ private:
 	    event.button = input_button_number(value);
 	    event.buttons = input_buttons(static_cast<unsigned int>(event.key));
 	    const int pressed = bu_strcmp(Tcl_GetString(objv[2]), "press") == 0;
-	    event.type = pressed ? BRLOBOL_INPUT_POINTER_PRESS :
-		BRLOBOL_INPUT_POINTER_RELEASE;
-	    if (event.button != BRLOBOL_INPUT_ANY) {
+	    event.type = pressed ? BOBOL_INPUT_POINTER_PRESS :
+		BOBOL_INPUT_POINTER_RELEASE;
+	    if (event.button != BOBOL_INPUT_ANY) {
 		if (pressed)
 		    event.buttons |= 1u << event.button;
 		else
@@ -965,7 +965,7 @@ private:
 		Tcl_GetIntFromObj(interp, objv[4], &value) != TCL_OK ||
 		Tcl_GetWideIntFromObj(interp, objv[5], &timestamp) != TCL_OK)
 		goto input_usage;
-	    event.type = BRLOBOL_INPUT_POINTER_MOTION;
+	    event.type = BOBOL_INPUT_POINTER_MOTION;
 	    event.timestamp = static_cast<uint64_t>(timestamp);
 	    event.buttons = input_buttons(static_cast<unsigned int>(value));
 	    event.button = input_button(static_cast<unsigned int>(value));
@@ -986,7 +986,7 @@ private:
 		goto input_usage;
 	    if (bu_strcmp(kind, "wheel") == 0)
 		event.wheelDelta = -event.wheelDelta / 8;
-	    event.type = BRLOBOL_INPUT_WHEEL;
+	    event.type = BOBOL_INPUT_WHEEL;
 	    event.modifiers = input_modifiers(static_cast<unsigned int>(value));
 	} else if (bu_strcmp(kind, "resize") == 0) {
 	    if (objc != 4 || Tcl_GetIntFromObj(interp, objv[2], &value) != TCL_OK)
@@ -994,14 +994,14 @@ private:
 	    event.width = static_cast<unsigned int>(std::max(1, value));
 	    if (Tcl_GetIntFromObj(interp, objv[3], &value) != TCL_OK)
 		goto input_usage;
-	    event.type = BRLOBOL_INPUT_RESIZE;
+	    event.type = BOBOL_INPUT_RESIZE;
 	    event.height = static_cast<unsigned int>(std::max(1, value));
 	} else if (bu_strcmp(kind, "focus") == 0) {
 	    if (objc != 3 || Tcl_GetIntFromObj(interp, objv[2], &event.key) != TCL_OK)
 		goto input_usage;
-	    event.type = BRLOBOL_INPUT_FOCUS;
+	    event.type = BOBOL_INPUT_FOCUS;
 	} else if (bu_strcmp(kind, "expose") == 0 && objc == 2) {
-	    event.type = BRLOBOL_INPUT_EXPOSE;
+	    event.type = BOBOL_INPUT_EXPOSE;
 	} else {
 	    goto input_usage;
 	}
@@ -1046,7 +1046,7 @@ input_usage:
     Tcl_Interp *interp;
     Tcl_ThreadId owner_thread;
     bool software;
-    BRLObolViewController *controller;
+    BObolViewController *controller;
     Tk_Window tkwin;
     Tk_Window container;
     Tk_PhotoHandle photo;
@@ -1055,7 +1055,7 @@ input_usage:
     bool toplevel;
     bool visible;
     std::atomic<bool> event_queued;
-	BRLObolInputEventHandler input_dispatch;
+	BObolInputEventHandler input_dispatch;
     void *input_dispatch_data;
     int last_motion_x;
     int last_motion_y;
@@ -1082,20 +1082,20 @@ struct TkFactoryKind {
 };
 
 static int
-tk_factory_probe(const struct brlobol_host_desc *desc, void *UNUSED(data))
+tk_factory_probe(const struct bobol_host_desc *desc, void *UNUSED(data))
 {
     Tcl_Interp *interp = desc ?
 	static_cast<Tcl_Interp *>(desc->application_context) : NULL;
     if (!interp || !Tk_MainWindow(interp) ||
-	(desc->mode != BRLOBOL_HOST_MODE_TOPLEVEL &&
-	 desc->mode != BRLOBOL_HOST_MODE_EMBEDDED))
+	(desc->mode != BOBOL_HOST_MODE_TOPLEVEL &&
+	 desc->mode != BOBOL_HOST_MODE_EMBEDDED))
 	return 0;
-    return desc->mode != BRLOBOL_HOST_MODE_EMBEDDED ||
+    return desc->mode != BOBOL_HOST_MODE_EMBEDDED ||
 	(desc->native_id_hint && desc->native_id_hint[0]);
 }
 
 static void *
-tk_factory_create(const struct brlobol_host_desc *desc, void *data)
+tk_factory_create(const struct bobol_host_desc *desc, void *data)
 {
     TkFactoryKind *kind = static_cast<TkFactoryKind *>(data);
     Tcl_Interp *interp = desc ?
@@ -1114,11 +1114,11 @@ static int
 tk_factory_bind(void *instance, void *controller, void *UNUSED(data))
 {
     TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(instance);
-    return host ? host->bind(static_cast<BRLObolViewController *>(controller)) : 0;
+    return host ? host->bind(static_cast<BObolViewController *>(controller)) : 0;
 }
 
 static int
-tk_factory_open(void *instance, const struct brlobol_host_desc *desc,
+tk_factory_open(void *instance, const struct bobol_host_desc *desc,
 	void *UNUSED(data))
 {
     TkObolEndpointHost *host = static_cast<TkObolEndpointHost *>(instance);
@@ -1186,13 +1186,13 @@ tk_factory_set_vsync(void *instance, int enabled, void *UNUSED(data))
     return host ? host->set_vsync(enabled) : 0;
 }
 
-static brlobol_host_factory_token_t *
+static bobol_host_factory_token_t *
 tk_factory_register(const char *name, int priority, uint64_t capabilities,
 	TkFactoryKind *kind)
 {
-    struct brlobol_host_factory factory;
+    struct bobol_host_factory factory;
     std::memset(&factory, 0, sizeof(factory));
-    factory.abi_version = BRLOBOL_HOST_FACTORY_ABI_VERSION;
+    factory.abi_version = BOBOL_HOST_FACTORY_ABI_VERSION;
     factory.struct_size = sizeof(factory);
     factory.name = name;
     factory.priority = priority;
@@ -1211,7 +1211,7 @@ tk_factory_register(const char *name, int priority, uint64_t capabilities,
     factory.set_title = tk_factory_set_title;
     factory.set_visible = tk_factory_set_visible;
     factory.set_vsync = tk_factory_set_vsync;
-    return brlobol_host_factory_register(&factory);
+    return bobol_host_factory_register(&factory);
 }
 
 extern "C" TCLCAD_EXPORT int
@@ -1219,18 +1219,18 @@ tclcad_obol_host_factories_register(void)
 {
     static TkFactoryKind gl_kind = {false};
     static TkFactoryKind photo_kind = {true};
-    uint64_t common = BRLOBOL_HOST_CAP_TOPLEVEL |
-	BRLOBOL_HOST_CAP_EMBEDDED | BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
-	BRLOBOL_HOST_CAP_READBACK |
-	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT | BRLOBOL_HOST_CAP_MULTI_VIEW |
-	BRLOBOL_HOST_CAP_INPUT;
+    uint64_t common = BOBOL_HOST_CAP_TOPLEVEL |
+	BOBOL_HOST_CAP_EMBEDDED | BOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
+	BOBOL_HOST_CAP_READBACK |
+	BOBOL_HOST_CAP_FRAMEBUFFER_PRESENT | BOBOL_HOST_CAP_MULTI_VIEW |
+	BOBOL_HOST_CAP_INPUT;
 #if defined(TKOBOL_X11) || defined(TCL_THREADS)
-    common |= BRLOBOL_HOST_CAP_THREAD_AFFINE;
+    common |= BOBOL_HOST_CAP_THREAD_AFFINE;
 #endif
-    static brlobol_host_factory_token_t *gl_token = tk_factory_register(
-	"tk-gl", 40, common | BRLOBOL_HOST_CAP_SYSTEM_GL |
-	BRLOBOL_HOST_CAP_PRESENT_VSYNC, &gl_kind);
-    static brlobol_host_factory_token_t *photo_token = tk_factory_register(
-	"tk-photo", 30, common | BRLOBOL_HOST_CAP_PIXEL_PRESENT, &photo_kind);
+    static bobol_host_factory_token_t *gl_token = tk_factory_register(
+	"tk-gl", 40, common | BOBOL_HOST_CAP_SYSTEM_GL |
+	BOBOL_HOST_CAP_PRESENT_VSYNC, &gl_kind);
+    static bobol_host_factory_token_t *photo_token = tk_factory_register(
+	"tk-photo", 30, common | BOBOL_HOST_CAP_PIXEL_PRESENT, &photo_kind);
     return gl_token && photo_token ? 1 : 0;
 }

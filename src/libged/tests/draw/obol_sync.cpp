@@ -11,18 +11,18 @@
 
 #include "common.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/export_action.h"
-#include "brlobol/init.h"
-#include "brlobol/lod_realization.h"
-#include "brlobol/mesh_shape.h"
-#include "brlobol/pick_detail.h"
-#include "brlobol/scene_controller.h"
-#include "brlobol/scene_group.h"
-#include "brlobol/vlist_shape.h"
-#include "brlobol/view_controller.h"
-#include "brlobol/view_lod.h"
-#include "brlobol/view_store.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BInit.h"
+#include "BObol/BLodRealization.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BPickDetail.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BSceneGroup.h"
+#include "BObol/BVListShape.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewLod.h"
+#include "BObol/BViewStore.h"
 #include "bg/line_layer.h"
 #include "bg/plot3.h"
 #include "bu/app.h"
@@ -51,7 +51,7 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 
-#include <obol/cad/SoCADAssembly.h>
+#include <Obol/cad/SoCADAssembly.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -402,23 +402,23 @@ custom_node_provider_cb(
 }
 
 static int
-feature_overlay_matches(BRLObolViewController *controller,
+feature_overlay_matches(BObolViewController *controller,
 	const char *name,
-	BRLObolOverlayClass overlay_class,
-	BRLObolOverlayLifecycle lifecycle,
-	BRLObolOverlayOrder order)
+	BObolOverlayClass overlay_class,
+	BObolOverlayLifecycle lifecycle,
+	BObolOverlayOrder order)
 {
     if (!controller || !name)
 	return 0;
 
-    BRLObolFeatureHandle handle = controller->features().find(name);
-    BRLObolOverlayInfo overlay;
+    BObolFeatureHandle handle = controller->features().find(name);
+    BObolOverlayInfo overlay;
     if (!handle.isValid() ||
 	    !controller->features().overlayInfo(handle, overlay))
 	return 0;
 
     return overlay.isOverlay &&
-	overlay.role == BRLObolOverlayRole::Model &&
+	overlay.role == BObolOverlayRole::Model &&
 	overlay.overlayClass == overlay_class &&
 	overlay.lifecycle == lifecycle &&
 	overlay.order == order &&
@@ -484,7 +484,7 @@ source_for_path(SoBRLSceneController *controller, const char *path)
 }
 
 static int
-seed_view_lod_probe_payload(BRLObolViewController *controller,
+seed_view_lod_probe_payload(BObolViewController *controller,
 			    const char *path,
 			    const char *name)
 {
@@ -496,7 +496,7 @@ seed_view_lod_probe_payload(BRLObolViewController *controller,
     mesh->sourcePath = path;
     mesh->sourceName = name;
 
-    BRLObolLodRequest request;
+    BObolLodRequest request;
     request.databaseId = "ged-obol-sync";
     request.sourceRevision = 1;
     request.sourceContentHash = 1;
@@ -504,18 +504,18 @@ seed_view_lod_probe_payload(BRLObolViewController *controller,
     request.objectName = name;
     request.viewRevision = 1;
     request.policyRevision = 1;
-    request.drawMode = BRLOBOL_LOD_DRAW_WIRE;
+    request.drawMode = BOBOL_LOD_DRAW_WIRE;
     request.providerId = "ged-obol-sync-probe";
     request.providerVersion = "1";
-    request.qualityTier = BRLOBOL_LOD_QUALITY_PROXY;
+    request.qualityTier = BOBOL_LOD_QUALITY_PROXY;
     request.bounds = SbBox3f(SbVec3f(-1.0f, -1.0f, -1.0f),
 	    SbVec3f(1.0f, 1.0f, 1.0f));
 
-    BRLObolLodCounts counts;
+    BObolLodCounts counts;
     counts.faceCount = 1;
     counts.pointCount = 2;
-    BRLObolLodResult result =
-	brlobol_lod_aabb_result(request, request.bounds, &counts);
+    BObolLodResult result =
+	bobol_lod_aabb_result(request, request.bounds, &counts);
 
     const int seeded = controller->getViewLodState()->applyProxyResult(
 	    mesh, result) &&
@@ -526,7 +526,7 @@ seed_view_lod_probe_payload(BRLObolViewController *controller,
 
 static int
 apply_attached_view_lod_invalidation_probe(struct ged *gedp,
-	BRLObolViewController *controller,
+	BObolViewController *controller,
 	struct ged_draw_transaction *txn,
 	const char *label)
 {
@@ -624,7 +624,7 @@ source_for_representation(SoBRLSceneController *controller,
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
 	if (!source)
 	    continue;
-	BRLObolDatabaseSourceSummary summary;
+	BObolDatabaseSourceSummary summary;
 	if (!source->getSummary(summary) || !summary.valid)
 	    continue;
 	if (path_equal(summary.path.getString(), path) &&
@@ -648,7 +648,7 @@ source_representation_count(SoBRLSceneController *controller,
 	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
 	if (!source)
 	    continue;
-	BRLObolDatabaseSourceSummary summary;
+	BObolDatabaseSourceSummary summary;
 	if (!source->getSummary(summary) || !summary.valid)
 	    continue;
 	if (path_equal(summary.path.getString(), path) &&
@@ -691,7 +691,7 @@ verify_mode_source(SoBRLSceneController *controller,
     if (!source)
 	FAIL("mode-specific source should exist");
 
-    BRLObolDatabaseSourceSummary summary;
+    BObolDatabaseSourceSummary summary;
     if (!source->getSummary(summary) || !summary.valid)
 	FAIL("mode-specific source summary should be readable");
 
@@ -950,7 +950,7 @@ exercise_mesh_source_local_publication(struct ged *gedp,
 
     SoBRLDatabaseSource *source =
 	source_for_representation(controller, path, representation);
-    BRLObolDatabaseSourceSummary summary;
+    BObolDatabaseSourceSummary summary;
     if (!source || !source->getSummary(summary) || !summary.valid ||
 	    summary.instanceKey.getLength() == 0) {
 	ged_draw_obol_database_source_publication_end(gedp);
@@ -1048,13 +1048,13 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	FAIL("GED multi-instance transform root draw should succeed");
 
     auto compact_for_path = [](SoBRLDatabaseSource *source,
-	    const char *path, BRLObolCompactInstanceHandle &handle,
-	    BRLObolCompactInstanceSummary &summary) {
+	    const char *path, BObolCompactInstanceHandle &handle,
+	    BObolCompactInstanceSummary &summary) {
 	if (!source || !path)
 	    return false;
 	for (int i = 0; i < source->getCompactInstanceCount(); i++) {
-	    BRLObolCompactInstanceHandle candidate;
-	    BRLObolCompactInstanceSummary candidateSummary;
+	    BObolCompactInstanceHandle candidate;
+	    BObolCompactInstanceSummary candidateSummary;
 	    if (!source->getCompactInstanceHandle(i, candidate) ||
 		!source->getCompactInstanceSummary(candidate, candidateSummary))
 		continue;
@@ -1066,7 +1066,7 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	}
 	return false;
     };
-    auto transformed_bounds = [](const BRLObolCompactInstanceSummary &summary) {
+    auto transformed_bounds = [](const BObolCompactInstanceSummary &summary) {
 	SbBox3f bounds = summary.localBounds;
 	bounds.transform(summary.localToSource);
 	return bounds;
@@ -1074,10 +1074,10 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 
     SoBRLDatabaseSource *wire_source = source_for_representation(controller,
 	"reuse_root.c", SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    BRLObolCompactInstanceHandle handle_a;
-    BRLObolCompactInstanceHandle handle_b;
-    BRLObolCompactInstanceSummary compact_a;
-    BRLObolCompactInstanceSummary compact_b;
+    BObolCompactInstanceHandle handle_a;
+    BObolCompactInstanceHandle handle_b;
+    BObolCompactInstanceSummary compact_a;
+    BObolCompactInstanceSummary compact_b;
     if (!wire_source || !wire_source->hasCompactInstanceIndex() ||
 	    wire_source->getCompactInstanceCountForPath(path_a, FALSE) != 1 ||
 	    wire_source->getCompactInstanceCountForPath(path_b, FALSE) != 1 ||
@@ -1170,10 +1170,10 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	FAIL("GED multi-instance logical redraw should avoid registry/index slow-path scans");
     wire_source = source_for_representation(controller, "reuse_root.c",
 	    SoBRLDatabaseSource::REPRESENTATION_WIRE);
-    BRLObolCompactInstanceHandle redraw_handle_a;
-    BRLObolCompactInstanceHandle redraw_handle_b;
-    BRLObolCompactInstanceSummary redraw_a;
-    BRLObolCompactInstanceSummary redraw_b;
+    BObolCompactInstanceHandle redraw_handle_a;
+    BObolCompactInstanceHandle redraw_handle_b;
+    BObolCompactInstanceSummary redraw_a;
+    BObolCompactInstanceSummary redraw_b;
     if (!compact_for_path(wire_source, path_a, redraw_handle_a, redraw_a) ||
 	    !compact_for_path(wire_source, path_b, redraw_handle_b, redraw_b) ||
 	    redraw_handle_a.instanceWord0 != handle_a.instanceWord0 ||
@@ -1191,10 +1191,10 @@ exercise_multi_instance_transform_reuse(struct ged *gedp,
 	FAIL("GED multi-instance shaded root draw should succeed");
     SoBRLDatabaseSource *mesh_source = source_for_representation(controller,
 	"reuse_root.c", SoBRLDatabaseSource::REPRESENTATION_SHADED);
-    BRLObolCompactInstanceHandle mesh_handle_a;
-    BRLObolCompactInstanceHandle mesh_handle_b;
-    BRLObolCompactInstanceSummary mesh_a;
-    BRLObolCompactInstanceSummary mesh_b;
+    BObolCompactInstanceHandle mesh_handle_a;
+    BObolCompactInstanceHandle mesh_handle_b;
+    BObolCompactInstanceSummary mesh_a;
+    BObolCompactInstanceSummary mesh_b;
     if (!mesh_source || !mesh_source->hasCompactInstanceIndex() ||
 	    !compact_for_path(mesh_source, path_a, mesh_handle_a, mesh_a) ||
 	    !compact_for_path(mesh_source, path_b, mesh_handle_b, mesh_b) ||
@@ -1251,15 +1251,15 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
 	if (aggregate->getCompactInstanceCountForPath(path_a, FALSE) != 1 ||
 	    aggregate->getCompactInstanceCountForPath(path_b, FALSE) != 1)
 	    FAIL("GED duplicate occurrences should have distinct registry paths");
-	BRLObolCompactInstanceHandle handle_a;
-	BRLObolCompactInstanceHandle handle_b;
-	BRLObolCompactInstanceSummary summary_a;
-	BRLObolCompactInstanceSummary summary_b;
+	BObolCompactInstanceHandle handle_a;
+	BObolCompactInstanceHandle handle_b;
+	BObolCompactInstanceSummary summary_a;
+	BObolCompactInstanceSummary summary_b;
 	SbString key_a;
 	SbString key_b;
 	for (int i = 0; i < aggregate->getCompactInstanceCount(); i++) {
-	    BRLObolCompactInstanceHandle handle;
-	    BRLObolCompactInstanceSummary summary;
+	    BObolCompactInstanceHandle handle;
+	    BObolCompactInstanceSummary summary;
 	    if (!aggregate->getCompactInstanceHandle(i, handle) ||
 		!aggregate->getCompactInstanceSummary(handle, summary))
 		FAIL("GED duplicate registry should expose valid handles");
@@ -1332,8 +1332,8 @@ exercise_duplicate_occurrence_pick_identity(struct ged *gedp,
     if (!source_a || !source_b)
 	FAIL("GED duplicate occurrence draw should preserve both source instances");
 
-    BRLObolDatabaseSourceSummary summary_a;
-    BRLObolDatabaseSourceSummary summary_b;
+    BObolDatabaseSourceSummary summary_a;
+    BObolDatabaseSourceSummary summary_b;
     if (!source_a->getSummary(summary_a) || !summary_a.valid ||
 	    !source_b->getSummary(summary_b) || !summary_b.valid ||
 	    BU_STR_EQUAL(summary_a.instanceKey.getString(),
@@ -1454,7 +1454,7 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
 
     SoBRLDatabaseSource *root_source =
 	source_for_path(controller, "progressive_root.c");
-    BRLObolDatabaseSourceSummary root_summary;
+    BObolDatabaseSourceSummary root_summary;
     if (!root_source || !root_source->getSummary(root_summary) ||
 	!root_summary.valid ||
 	!root_source->isCompactOccurrenceRegistry() ||
@@ -1470,8 +1470,8 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
     int saw_inherited_material = 0;
     SbString first_key;
 	for (int i = 0; i < root_source->getCompactInstanceCount(); i++) {
-	BRLObolCompactInstanceHandle handle;
-	BRLObolCompactInstanceSummary summary;
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
 	if (!root_source->getCompactInstanceHandle(i, handle) ||
 	    !root_source->getCompactInstanceSummary(handle, summary) ||
 	    !summary.valid)
@@ -1518,7 +1518,7 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
      * depth-tested point.  Verify this draw path opts into that view-local
      * presentation optimization rather than baking a camera-dependent point
      * into the persistent proxy data. */
-    BRLObolCompactOccurrence proxy_occurrence;
+    BObolCompactOccurrence proxy_occurrence;
     if (!root_source->getCompactOccurrence(0, proxy_occurrence) ||
 	!proxy_occurrence.geometry ||
 	!proxy_occurrence.geometry->subpixelProxyEligible)
@@ -1534,7 +1534,7 @@ exercise_progressive_occurrence_and_boolean_identity(struct ged *gedp,
 
 static int
 exercise_progressive_autoview_lifecycle(struct ged *gedp,
-	BRLObolViewController *controller, void *view_ctx)
+	BObolViewController *controller, void *view_ctx)
 {
     if (!gedp || !controller || !view_ctx)
 	FAIL("progressive autoview test needs an attached view");
@@ -1561,9 +1561,9 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     if (draw_ret <= 0)
 	FAIL("progressive autoview deferred draw should succeed");
     if (!(controller->getDefaultProgressiveOptions().flags &
-		BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER) ||
+		BOBOL_PROGRESSIVE_VISIBLE_FRONTIER) ||
 	!(controller->getDefaultProgressiveOptions().flags &
-		BRLOBOL_PROGRESSIVE_FULL_DETAIL))
+		BOBOL_PROGRESSIVE_FULL_DETAIL))
 	FAIL("default progressive policy should combine proxy and full-detail refinement");
 
     /* An explicit autoview while the root is still realizing must replace
@@ -1596,8 +1596,8 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	ged_draw_scene_revision(gedp) <= revision_before_redraw)
 	FAIL("progressive redraw should advance scene bookkeeping without cancelling refinement");
 
-    BRLObolProgressiveOptions options;
-    BRLObolProgressiveStatus status;
+    BObolProgressiveOptions options;
+    BObolProgressiveStatus status;
     int initial_progress = 0;
     int settled = 0;
     SoBRLDatabaseSource *settled_source = NULL;
@@ -1637,7 +1637,7 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	    settled_source ? settled_source->getCompactInstanceCount() : -1);
 	if (scene) {
 	    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
-		BRLObolDatabaseSourceSummary summary;
+		BObolDatabaseSourceSummary summary;
 		SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
 		if (scene->getDatabaseSourceSummary(i, summary) && summary.valid)
 		    fprintf(stderr, "  source[%d] key=%s path=%s rep=%d compact=%d count=%d\n",
@@ -1878,7 +1878,7 @@ exercise_evaluated_wire_shape_ref_realize_context(struct ged *gedp,
 
     SoBRLDatabaseSource *source =
 	source_for_representation(controller, path, representation);
-    BRLObolDatabaseSourceSummary summary;
+    BObolDatabaseSourceSummary summary;
     if (!source || !source->getSummary(summary) || !summary.valid ||
 	    summary.realizationStatus != SoBRLDatabaseSource::REALIZED ||
 	    summary.realizedShapeCount <= 0 ||
@@ -1999,7 +1999,7 @@ main(int argc, char **argv)
     bu_dirclear(lcache);
     bu_mkdir(lcache);
     bu_setenv("BU_DIR_CACHE", lcache, 1);
-    brlobol_init(NULL);
+    bobol_init(NULL);
 
     const char *dbpath = "ged_obol_draw_sync_tmp.g";
     bu_file_delete(dbpath);
@@ -2054,7 +2054,7 @@ main(int argc, char **argv)
 
     SoBRLSceneController *owned_scene =
 	ged_draw_obol_scene_controller_ensure(gedp, 1);
-    BRLObolViewController *owned_controller = ged_draw_obol_controller(gedp);
+    BObolViewController *owned_controller = ged_draw_obol_controller(gedp);
     if (!owned_scene || ged_draw_obol_scene_controller(gedp) != owned_scene ||
 	    !ged_draw_obol_scene_controller_owned(gedp) ||
 	    !owned_controller ||
@@ -2163,9 +2163,9 @@ main(int argc, char **argv)
     if (!ged_draw_view_context_tcl_lines_replace(feature_view_ctx,
 	    "cap2::tcl-line", tcl_line_points, 2, &tcl_line_style) ||
 	    !feature_overlay_matches(owned_controller, "cap2::tcl-line",
-		BRLObolOverlayClass::TclOverlay,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::TclOverlay,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("GED Tcl line replacement should publish typed Obol overlay metadata");
     struct ged_draw_view_feature_summary tcl_line_summary =
 	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
@@ -2180,9 +2180,9 @@ main(int argc, char **argv)
     if (!ged_draw_view_context_lines_create_model_annotation(
 	    feature_view_ctx, "cap2::annotation", 1, annotation_point) ||
 	    !feature_overlay_matches(owned_controller, "cap2::annotation",
-		BRLObolOverlayClass::UserAnnotation,
-		BRLObolOverlayLifecycle::Persistent,
-		BRLObolOverlayOrder::Model))
+		BObolOverlayClass::UserAnnotation,
+		BObolOverlayLifecycle::Persistent,
+		BObolOverlayOrder::Model))
 	FAIL("GED model annotation creation should publish typed Obol overlay metadata");
 
     point_t polygon_points[2] = {{1.0, 0.0, 0.0}, {1.0, 2.0, 0.0}};
@@ -2195,9 +2195,9 @@ main(int argc, char **argv)
 	    &feature_style) ||
 	    !feature_overlay_matches(owned_controller,
 		"cap2::polygon-overlay",
-		BRLObolOverlayClass::PolygonEdit,
-		BRLObolOverlayLifecycle::PerTool,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::PolygonEdit,
+		BObolOverlayLifecycle::PerTool,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("GED Tcl polygon replacement should publish typed Obol overlay metadata");
 
     struct ged_draw_view_label_data label = GED_DRAW_VIEW_LABEL_DATA_INIT;
@@ -2214,9 +2214,9 @@ main(int argc, char **argv)
 	    ged_draw_view_context_label_count(feature_view_ctx,
 		"cap2::label") != 1)
 	FAIL("GED label replacement should publish into the owned Obol feature store");
-    BRLObolFeatureHandle label_handle =
+    BObolFeatureHandle label_handle =
 	owned_controller->features().find("cap2::label");
-    BRLObolFeatureRecord label_record;
+    BObolFeatureRecord label_record;
     if (!label_handle.isValid() ||
 	    !owned_controller->features().record(label_handle,
 		label_record) ||
@@ -2264,9 +2264,9 @@ main(int argc, char **argv)
 	    "cap2::arrow", arrow_points, 2, &feature_style) ||
 	    !owned_controller->features().exists("cap2::arrow") ||
 	    !feature_overlay_matches(owned_controller, "cap2::arrow",
-		BRLObolOverlayClass::TclOverlay,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent) ||
+		BObolOverlayClass::TclOverlay,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent) ||
 	    !ged_draw_view_context_arrow_tip_set(feature_view_ctx,
 		"cap2::arrow", 0.25, 0.5))
 	FAIL("GED arrow replacement should publish into the owned Obol feature store");
@@ -2314,9 +2314,9 @@ main(int argc, char **argv)
     if (!ged_draw_view_context_tcl_axes_replace(feature_view_ctx,
 	    "cap2::tcl-axes", tcl_axes_centers, 1, 2.5, &feature_style) ||
 	    !feature_overlay_matches(owned_controller, "cap2::tcl-axes",
-		BRLObolOverlayClass::TclOverlay,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::TclOverlay,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("GED Tcl axes replacement should publish typed Obol overlay metadata");
 
     point_t face_points[4] = {
@@ -2351,17 +2351,17 @@ main(int argc, char **argv)
 	FAIL("GED diagnostic line-layer replacement should publish into the owned Obol feature store");
     }
     bg_line_layer_builder_free(diagnostic_builder);
-    BRLObolFeatureRecord diagnostic_record;
-    BRLObolFeatureHandle diagnostic_handle =
+    BObolFeatureRecord diagnostic_record;
+    BObolFeatureHandle diagnostic_handle =
 	owned_controller->features().find("cap2::diagnostic");
     if (!diagnostic_handle.isValid() ||
 	    !owned_controller->features().record(diagnostic_handle,
 		diagnostic_record) ||
-	    diagnostic_record.kind != BRLObolFeatureKind::LineLayer ||
+	    diagnostic_record.kind != BObolFeatureKind::LineLayer ||
 	    !feature_overlay_matches(owned_controller, "cap2::diagnostic",
-		BRLObolOverlayClass::Diagnostic,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::Diagnostic,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("GED diagnostic line-layer replacement should stamp typed Obol diagnostic metadata");
 
     struct command_result_callback_state command_callback_state = {};
@@ -2402,14 +2402,14 @@ main(int argc, char **argv)
 		command_primitive_metadata, 2) ||
 	    !ged_draw_command_scene_commit(command_scene))
 	FAIL("GED command-scene line-layer replacement should commit");
-    BRLObolFeatureHandle command_handle =
+    BObolFeatureHandle command_handle =
 	owned_controller->features().find("rtcheck::overlaps",
-		BRLOBOL_FEATURE_SCOPE_SHARED);
-    BRLObolFeatureRecord command_record;
+		BOBOL_FEATURE_SCOPE_SHARED);
+    BObolFeatureRecord command_record;
     if (!command_handle.isValid() ||
 	    !owned_controller->features().record(command_handle,
 		command_record) ||
-	    command_record.scope != BRLObolFeatureScope::Shared ||
+	    command_record.scope != BObolFeatureScope::Shared ||
 	    !BU_STR_EQUAL(command_record.owner.ownerId.getString(),
 		"rtcheck") ||
 	    !BU_STR_EQUAL(command_record.owner.ownerRole.getString(),
@@ -2428,9 +2428,9 @@ main(int argc, char **argv)
 		"result.count") ||
 	    !BU_STR_EQUAL(command_record.metadata[1].value.getString(), "1") ||
 	    !feature_overlay_matches(owned_controller, "rtcheck::overlaps",
-		BRLObolOverlayClass::CommandResult,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::CommandResult,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("GED command-scene result should be shared, owned, selectable-aware command content");
     if (command_callback_state.accepted_count < 2 ||
 	    command_callback_state.updated_count < 2 ||
@@ -2564,7 +2564,7 @@ main(int argc, char **argv)
 	FAIL("GED command-scene result callback should report stale generation rejection");
 
     command_handle = owned_controller->features().find("rtcheck::generation",
-	    BRLOBOL_FEATURE_SCOPE_SHARED);
+	    BOBOL_FEATURE_SCOPE_SHARED);
     if (!command_handle.isValid() ||
 	    !owned_controller->features().record(command_handle,
 		command_record) ||
@@ -2607,15 +2607,15 @@ main(int argc, char **argv)
 	    custom_provider_state.generation != 33 ||
 	    custom_provider_state.local)
 	FAIL("GED command-scene custom Coin provider should receive owner/scope request metadata");
-    BRLObolFeatureHandle custom_handle =
+    BObolFeatureHandle custom_handle =
 	owned_controller->features().find("custom::node",
-		BRLOBOL_FEATURE_SCOPE_SHARED);
-    BRLObolFeatureRecord custom_record;
+		BOBOL_FEATURE_SCOPE_SHARED);
+    BObolFeatureRecord custom_record;
     if (!custom_handle.isValid() ||
 	    !owned_controller->features().record(custom_handle,
 		custom_record) ||
-	    custom_record.kind != BRLObolFeatureKind::CustomNode ||
-	    custom_record.scope != BRLObolFeatureScope::Shared ||
+	    custom_record.kind != BObolFeatureKind::CustomNode ||
+	    custom_record.scope != BObolFeatureScope::Shared ||
 	    custom_record.owner.generation != 33 ||
 	    custom_record.metadata.size() != 1 ||
 	    !BU_STR_EQUAL(custom_record.metadata[0].value.getString(),
@@ -2623,9 +2623,9 @@ main(int argc, char **argv)
 	    owned_controller->features().node(custom_handle) !=
 		custom_provider_state.node ||
 	    !feature_overlay_matches(owned_controller, "custom::node",
-		BRLObolOverlayClass::CommandResult,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::CommandResult,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("GED command-scene custom Coin node should be an owned shared command-result feature");
     int custom_primitive = 7;
     if (!ged_draw_view_context_feature_selected_primitives_replace(
@@ -2675,14 +2675,14 @@ main(int argc, char **argv)
 	FAIL("NIRT/qray uplot import should publish through command-scene ownership");
     }
     fclose(nirt_plot);
-    BRLObolFeatureHandle nirt_handle =
+    BObolFeatureHandle nirt_handle =
 	owned_controller->features().find("query_ray",
-		BRLOBOL_FEATURE_SCOPE_SHARED);
-    BRLObolFeatureRecord nirt_record;
+		BOBOL_FEATURE_SCOPE_SHARED);
+    BObolFeatureRecord nirt_record;
     if (!nirt_handle.isValid() ||
 	    !owned_controller->features().record(nirt_handle, nirt_record) ||
-	    nirt_record.kind != BRLObolFeatureKind::LineLayer ||
-	    nirt_record.scope != BRLObolFeatureScope::Shared ||
+	    nirt_record.kind != BObolFeatureKind::LineLayer ||
+	    nirt_record.scope != BObolFeatureScope::Shared ||
 	    !BU_STR_EQUAL(nirt_record.owner.ownerId.getString(), "nirt") ||
 	    !BU_STR_EQUAL(nirt_record.owner.ownerRole.getString(),
 		"command-result") ||
@@ -2728,9 +2728,9 @@ main(int argc, char **argv)
 	    !BU_STR_EQUAL(nirt_record.primitiveMetadata[0].metadata[9].value.getString(),
 		"odd") ||
 	    !feature_overlay_matches(owned_controller, "query_ray",
-		BRLObolOverlayClass::CommandResult,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::CommandResult,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("NIRT/qray command-scene uplot result should be shared owned command content");
     command_scene_desc.owner_id = "nirt";
     command_scene = ged_draw_command_scene_begin(feature_view_ctx,
@@ -2758,10 +2758,10 @@ main(int argc, char **argv)
 	FAIL("rtcheck uplot import should publish versioned overlap metadata");
     }
     fclose(rtcheck_plot);
-    BRLObolFeatureHandle rtcheck_schema_handle =
+    BObolFeatureHandle rtcheck_schema_handle =
 	owned_controller->features().find("rtcheck::schema",
-		BRLOBOL_FEATURE_SCOPE_SHARED);
-    BRLObolFeatureRecord rtcheck_schema_record;
+		BOBOL_FEATURE_SCOPE_SHARED);
+    BObolFeatureRecord rtcheck_schema_record;
     if (!rtcheck_schema_handle.isValid() ||
 	!owned_controller->features().record(rtcheck_schema_handle,
 	    rtcheck_schema_record) ||
@@ -2810,15 +2810,15 @@ main(int argc, char **argv)
 	FAIL("line-layer builder helper should publish through command-scene ownership");
     }
     bg_line_layer_builder_free(builder_publish);
-    BRLObolFeatureHandle builder_handle =
+    BObolFeatureHandle builder_handle =
 	owned_controller->features().find("nmg::_helper_test",
-		BRLOBOL_FEATURE_SCOPE_SHARED);
-    BRLObolFeatureRecord builder_record;
+		BOBOL_FEATURE_SCOPE_SHARED);
+    BObolFeatureRecord builder_record;
     if (!builder_handle.isValid() ||
 	    !owned_controller->features().record(builder_handle,
 		builder_record) ||
-	    builder_record.kind != BRLObolFeatureKind::LineLayer ||
-	    builder_record.scope != BRLObolFeatureScope::Shared ||
+	    builder_record.kind != BObolFeatureKind::LineLayer ||
+	    builder_record.scope != BObolFeatureScope::Shared ||
 	    !BU_STR_EQUAL(builder_record.owner.ownerId.getString(), "nmg") ||
 	    !BU_STR_EQUAL(builder_record.owner.ownerRole.getString(),
 		"command-result") ||
@@ -2833,9 +2833,9 @@ main(int argc, char **argv)
 	    !BU_STR_EQUAL(builder_record.metadata[5].value.getString(),
 		"nmg-test") ||
 	    !feature_overlay_matches(owned_controller, "nmg::_helper_test",
-		BRLObolOverlayClass::CommandResult,
-		BRLObolOverlayLifecycle::PerCommand,
-		BRLObolOverlayOrder::PostTransparent))
+		BObolOverlayClass::CommandResult,
+		BObolOverlayLifecycle::PerCommand,
+		BObolOverlayOrder::PostTransparent))
 	FAIL("line-layer builder helper should preserve shared owned command-result metadata");
     command_scene_desc.owner_id = "nmg";
     command_scene = ged_draw_command_scene_begin(feature_view_ctx,
@@ -2889,7 +2889,7 @@ main(int argc, char **argv)
     bg_line_layer_builder_free(builder_generation);
 
     builder_handle = owned_controller->features().find(
-	    "nmg::_helper_generation", BRLOBOL_FEATURE_SCOPE_SHARED);
+	    "nmg::_helper_generation", BOBOL_FEATURE_SCOPE_SHARED);
     if (!builder_handle.isValid() ||
 	    !owned_controller->features().record(builder_handle,
 		builder_record) ||
@@ -2922,21 +2922,21 @@ main(int argc, char **argv)
 		"cap2::ged-source.s");
     if (ged_draw_view_feature_ref_is_null(ged_preview_ref))
 	FAIL("GED feature overlay ensure should return an Obol feature ref");
-    BRLObolFeatureHandle ged_preview_handle =
+    BObolFeatureHandle ged_preview_handle =
 	owned_controller->features().find("cap2::ged-preview");
-    BRLObolFeatureSummary ged_preview_summary;
+    BObolFeatureSummary ged_preview_summary;
     if (!ged_preview_handle.isValid() ||
 	    !owned_controller->features().summary("cap2::ged-preview",
 		ged_preview_summary) ||
 	    !ged_preview_summary.exists ||
-	    ged_preview_summary.kind != BRLObolFeatureKind::EditPreview ||
+	    ged_preview_summary.kind != BObolFeatureKind::EditPreview ||
 	    !ged_preview_summary.overlay.isOverlay ||
 	    ged_preview_summary.overlay.overlayClass !=
-		BRLObolOverlayClass::EditHandle ||
+		BObolOverlayClass::EditHandle ||
 	    ged_preview_summary.overlay.lifecycle !=
-		BRLObolOverlayLifecycle::PerTool ||
+		BObolOverlayLifecycle::PerTool ||
 	    ged_preview_summary.overlay.order !=
-		BRLObolOverlayOrder::PostTransparent ||
+		BObolOverlayOrder::PostTransparent ||
 	    ged_preview_summary.overlay.ownerToken != &ged_preview_owner ||
 	    !BU_STR_EQUAL(ged_preview_summary.overlay.sourcePath.getString(),
 		"cap2::ged-source.s"))
@@ -2955,10 +2955,10 @@ main(int argc, char **argv)
 		GED_DRAW_VIEW_FEATURE_TRANSIENT_PREVIEW, ged_preview_points,
 		ged_preview_cmds, 3))
 	FAIL("GED feature points replacement should update Obol edit-preview geometry");
-    BRLObolFeatureRecord ged_preview_record;
+    BObolFeatureRecord ged_preview_record;
     if (!owned_controller->features().record(ged_preview_handle,
 		ged_preview_record) ||
-	    ged_preview_record.kind != BRLObolFeatureKind::EditPreview ||
+	    ged_preview_record.kind != BObolFeatureKind::EditPreview ||
 	    ged_preview_record.points.size() != 3 ||
 	    ged_preview_record.commands.size() != 3)
 	FAIL("GED feature points replacement should preserve Obol edit-preview records");
@@ -2980,7 +2980,7 @@ main(int argc, char **argv)
     rt_db_free_internal(&preview_box_intern);
     if (!owned_controller->features().record(ged_preview_handle,
 		ged_preview_record) ||
-	    ged_preview_record.kind != BRLObolFeatureKind::EditPreview ||
+	    ged_preview_record.kind != BObolFeatureKind::EditPreview ||
 	    ged_preview_record.points.size() <= 3 ||
 	    ged_preview_record.commands.size() != ged_preview_record.points.size())
 	FAIL("GED feature primitive wireframe helper should replace edit-preview geometry");
@@ -3004,7 +3004,7 @@ main(int argc, char **argv)
 		32) ||
 	    !owned_controller->features().record(ged_preview_handle,
 		ged_preview_record) ||
-	    ged_preview_record.kind != BRLObolFeatureKind::EditPreview ||
+	    ged_preview_record.kind != BObolFeatureKind::EditPreview ||
 	    ged_preview_record.identity != "cap2::ged-preview-explicit.s" ||
 	    ged_preview_record.editIntentId != "edit::cap2::ged-preview" ||
 	    ged_preview_record.editIntentRole != "move-handle" ||
@@ -3027,7 +3027,7 @@ main(int argc, char **argv)
 	FAIL("GED feature edit preview replace should advance preview revisions when explicit values are omitted");
     ged_draw_view_feature_set_visible(ged_preview_ref, 0);
     ged_draw_view_feature_set_color(ged_preview_ref, 12, 34, 56);
-    BRLObolFeatureStyle ged_preview_style;
+    BObolFeatureStyle ged_preview_style;
     if (!owned_controller->features().style(ged_preview_handle,
 		ged_preview_style) ||
 	    !ged_preview_style.hasVisible ||
@@ -3079,13 +3079,13 @@ main(int argc, char **argv)
     if (ged_draw_view_feature_ref_is_null(ged_label_ref) ||
 	    !ged_draw_view_feature_labels_replace(ged_label_ref, &ged_label, 1))
 	FAIL("GED feature label replacement should route into Obol labels");
-    BRLObolFeatureHandle ged_label_handle =
+    BObolFeatureHandle ged_label_handle =
 	owned_controller->features().find("cap2::ged-label");
-    BRLObolFeatureRecord ged_label_record;
+    BObolFeatureRecord ged_label_record;
     if (!ged_label_handle.isValid() ||
 	    !owned_controller->features().record(ged_label_handle,
 		ged_label_record) ||
-	    ged_label_record.kind != BRLObolFeatureKind::Labels ||
+	    ged_label_record.kind != BObolFeatureKind::Labels ||
 	    ged_label_record.labels.size() != 1 ||
 	    !BU_STR_EQUAL(ged_label_record.labels[0].text.getString(),
 		"ged label") ||
@@ -3157,7 +3157,7 @@ main(int argc, char **argv)
     if (!root_presence_group ||
 	    !root_presence_group->isOfType(SoBRLSceneGroup::getClassTypeId()) ||
 	    static_cast<SoBRLSceneGroup *>(root_presence_group)->
-		drawMode.getValue() != BRLOBOL_LOD_DRAW_SHADED)
+		drawMode.getValue() != BOBOL_LOD_DRAW_SHADED)
 	FAIL("GED source-root group traversal ref should mutate the owned Obol group");
     if (owned_scene->removeGroup("__obol_root_group_presence.s") <= 0)
 	FAIL("GED Obol root group-presence sentinel should be removable");
@@ -3214,7 +3214,7 @@ main(int argc, char **argv)
     if (!root_shape_group ||
 	    !root_shape_group->isOfType(SoBRLSceneGroup::getClassTypeId()) ||
 	    static_cast<SoBRLSceneGroup *>(root_shape_group)->
-		drawMode.getValue() != BRLOBOL_LOD_DRAW_SHADED)
+		drawMode.getValue() != BOBOL_LOD_DRAW_SHADED)
 	FAIL("GED source-root shape group ref should mutate the owned Obol group");
     if (!ged_draw_group_ref_set_mode(gedp, root_shape_record.group,
 	    GED_DRAW_MODE_WIRE))
@@ -3278,7 +3278,7 @@ main(int argc, char **argv)
 	FAIL("GED annotation geometry summary should read owned Obol annotation VLIST");
     SoBRLDatabaseSource *annot_source =
 	source_for_path(owned_scene, "annot_line.s");
-    BRLObolRealizedShapeSummary annot_summary;
+    BObolRealizedShapeSummary annot_summary;
     SoBRLExportAction annot_export;
     if (annot_source)
 	annot_export.apply(annot_source);
@@ -3305,7 +3305,7 @@ main(int argc, char **argv)
 	source_for_path(owned_scene, "submodel_owner.s");
     if (!submodel_source || owned_scene->getDatabaseSourceCount() != 3)
 	FAIL("GED submodel draw should create an owned Obol source");
-    BRLObolRealizedShapeSummary submodel_summary;
+    BObolRealizedShapeSummary submodel_summary;
     if (submodel_source->getRealizedShapeCount() != 0 ||
 	    !submodel_source->getRealizedShapeSummary(0, submodel_summary) ||
 	    submodel_summary.pointCount == 0 ||
@@ -3330,7 +3330,7 @@ main(int argc, char **argv)
     if (!submodel_temp_source || owned_scene->getDatabaseSourceCount() != 3 ||
 	    source_for_path(owned_scene, "nested_leaf.s"))
 	FAIL("GED submodel temp-source draw should not leak a temporary owned Obol leaf source");
-    BRLObolRealizedShapeSummary submodel_temp_summary;
+    BObolRealizedShapeSummary submodel_temp_summary;
     if (submodel_temp_source->getRealizedShapeCount() != 0 ||
 	    !submodel_temp_source->getRealizedShapeSummary(0,
 		submodel_temp_summary) ||
@@ -3508,7 +3508,7 @@ main(int argc, char **argv)
 	FAIL("GED move command should rename the drawn source");
     SoBRLDatabaseSource *renamed_source =
 	owned_scene->findDatabaseSource("renamed_source.s");
-    BRLObolDatabaseSourceSummary renamed_summary;
+    BObolDatabaseSourceSummary renamed_summary;
     if (source_for_path(owned_scene, "rename_source.s") ||
 	    !renamed_source ||
 	    owned_scene->getDatabaseSourceCount() != 3 ||
@@ -3518,7 +3518,7 @@ main(int argc, char **argv)
 	    renamed_summary.inputsRevision != 7 ||
 	    renamed_summary.sourceRevision == 9191)
 	FAIL("GED rename transaction should rename the owned Obol source in place");
-    BRLObolRealizedShapeSummary renamed_shape_summary;
+    BObolRealizedShapeSummary renamed_shape_summary;
     if (renamed_source->getRealizedShapeCount() != 0 ||
 	    !renamed_source->getRealizedShapeSummary(0,
 		renamed_shape_summary) ||
@@ -3619,20 +3619,20 @@ main(int argc, char **argv)
 		group_only_ctx)
 	FAIL("GED scene-context child traversal should return owned Obol child contexts");
     if (owned_scene->setGroupDrawIntent("group_only.s",
-	    "ged-draw-group:group_only.s", BRLOBOL_LOD_DRAW_WIRE,
-	    BRLOBOL_LOD_DRAW_WIRE, TRUE, 0) < 0 ||
+	    "ged-draw-group:group_only.s", BOBOL_LOD_DRAW_WIRE,
+	    BOBOL_LOD_DRAW_WIRE, TRUE, 0) < 0 ||
 	    !ged_draw_group_context_is_overlay(group_only_ctx))
 	FAIL("GED group contexts should read owned Obol overlay state");
     if (owned_scene->setGroupDrawIntent("group_only.s",
-	    "ged-draw-group:group_only.s", BRLOBOL_LOD_DRAW_WIRE,
-	    BRLOBOL_LOD_DRAW_WIRE, FALSE, 0) < 0 ||
+	    "ged-draw-group:group_only.s", BOBOL_LOD_DRAW_WIRE,
+	    BOBOL_LOD_DRAW_WIRE, FALSE, 0) < 0 ||
 	    ged_draw_group_context_is_overlay(group_only_ctx))
 	FAIL("GED group contexts should clear owned Obol overlay state");
     if (owned_scene->removeGroup("group_only.s/obol_child.s") <= 0)
 	FAIL("owned Obol group child-count sentinel should be removable");
     if (owned_scene->setGroupDrawIntent("group_only.s",
-	    "ged-draw-group:group_only.s", BRLOBOL_LOD_DRAW_WIRE,
-	    BRLOBOL_LOD_DRAW_WIRE, TRUE, 0) < 0)
+	    "ged-draw-group:group_only.s", BOBOL_LOD_DRAW_WIRE,
+	    BOBOL_LOD_DRAW_WIRE, TRUE, 0) < 0)
 	FAIL("owned Obol group overlay erase sentinel update should succeed");
     ged_draw_erase_name(gedp, "group_only.s");
     memset(&group_only_tree, 0, sizeof(group_only_tree));
@@ -3642,8 +3642,8 @@ main(int argc, char **argv)
 	    !group_only_tree.is_group)
 	FAIL("GED public name erase should preserve overlay groups from owned Obol state");
     if (owned_scene->setGroupDrawIntent("group_only.s",
-	    "ged-draw-group:group_only.s", BRLOBOL_LOD_DRAW_WIRE,
-	    BRLOBOL_LOD_DRAW_WIRE, FALSE, 0) < 0)
+	    "ged-draw-group:group_only.s", BOBOL_LOD_DRAW_WIRE,
+	    BOBOL_LOD_DRAW_WIRE, FALSE, 0) < 0)
 	FAIL("owned Obol group overlay erase sentinel restore should succeed");
     struct ged_draw_scene_tree_summary original_root_count_tree;
     memset(&original_root_count_tree, 0, sizeof(original_root_count_tree));
@@ -3807,7 +3807,7 @@ main(int argc, char **argv)
 	SoBRLVListShape::MOVE,
 	SoBRLVListShape::DRAW
     };
-    BRLObolExternalLineSet external_line;
+    BObolExternalLineSet external_line;
     external_line.points = sentinel_points;
     external_line.commands = sentinel_commands;
     external_line.count = 2;
@@ -3922,16 +3922,16 @@ main(int argc, char **argv)
 		    "group_only.s") != 1)
 		FAIL("owned Obol source should move to the sentinel group for context bounds");
 	    if (owned_scene->setGroupDrawIntent("group_only.s",
-		    "ged-draw-group:group_only.s", BRLOBOL_LOD_DRAW_WIRE,
-		    BRLOBOL_LOD_DRAW_WIRE, TRUE, 0) < 0 ||
+		    "ged-draw-group:group_only.s", BOBOL_LOD_DRAW_WIRE,
+		    BOBOL_LOD_DRAW_WIRE, TRUE, 0) < 0 ||
 		    !ged_draw_group_context_is_overlay(group_only_ctx))
 		FAIL("owned Obol group overlay state should remain authoritative before bounds");
 	    if (!ged_draw_scene_context_subtree_bounds(group_only_ctx,
 		    &context_bounds_min, &context_bounds_max, 0))
 		FAIL("GED group context bounds should skip owned Obol overlay groups");
 	    if (owned_scene->setGroupDrawIntent("group_only.s",
-		    "ged-draw-group:group_only.s", BRLOBOL_LOD_DRAW_WIRE,
-		    BRLOBOL_LOD_DRAW_WIRE, FALSE, 0) < 0 ||
+		    "ged-draw-group:group_only.s", BOBOL_LOD_DRAW_WIRE,
+		    BOBOL_LOD_DRAW_WIRE, FALSE, 0) < 0 ||
 		    ged_draw_group_context_is_overlay(group_only_ctx))
 		FAIL("owned Obol group overlay state should clear before bounds");
 	    if (ged_draw_scene_context_subtree_bounds(group_only_ctx,
@@ -3997,7 +3997,7 @@ main(int argc, char **argv)
 		    fabs(obol_center[1] - 31.0f) > 0.001f ||
 		    fabs(obol_center[2] - 32.0f) > 0.001f)
 		FAIL("GED shape center setter should mutate owned Obol VLIST center");
-	    BRLObolDatabaseSourceSummary box_placement_summary;
+	    BObolDatabaseSourceSummary box_placement_summary;
 	    if (!box_source->getSummary(box_placement_summary) ||
 		    !box_placement_summary.valid ||
 		    !box_placement_summary.drawCenterValid ||
@@ -4085,7 +4085,7 @@ main(int argc, char **argv)
 		    bu_strcmp(aux_shape->recordRole.getValue().getString(),
 			"auxiliary") != 0 ||
 		    aux_shape->drawMode.getValue() !=
-			BRLOBOL_LOD_DRAW_SHADED ||
+			BOBOL_LOD_DRAW_SHADED ||
 		    aux_shape->visible.getValue() ||
 		    !aux_shape->highlighted.getValue() ||
 		    aux_shape->lineStyle.getValue() != 9 ||
@@ -4242,15 +4242,15 @@ main(int argc, char **argv)
 	    }
 	    if (!box_source)
 		FAIL("owned Obol source should remain available after shaded draw source realization");
-	    BRLObolRealizedShapeSummary box_mesh_summary;
+	    BObolRealizedShapeSummary box_mesh_summary;
 	    if (box_source->getRealizedMeshCount() != 0 ||
 		!box_source->getRealizedShapeSummary(0, box_mesh_summary) ||
 		box_mesh_summary.shapeKind !=
-		    BRLObolRealizedShapeSummary::SHAPE_MESH ||
+		    BObolRealizedShapeSummary::SHAPE_MESH ||
 		box_mesh_summary.pointCount == 0 ||
 		box_mesh_summary.indexCount == 0)
 		FAIL("GED shaded source realization should publish carrier-free Obol mesh geometry");
-	    BRLObolDatabaseSourceSummary box_realized_summary;
+	    BObolDatabaseSourceSummary box_realized_summary;
 	    if (!box_source->getSummary(box_realized_summary) ||
 		    box_realized_summary.stale ||
 		    box_realized_summary.staleReason !=
@@ -4460,7 +4460,7 @@ main(int argc, char **argv)
     if (!ged_draw_shape_ref_set_color(gedp, box_record.ref, override_color))
 	FAIL("GED color setter should succeed");
     box_source = source_for_path(owned_scene, "box.s");
-    BRLObolDatabaseSourceSummary box_source_summary;
+    BObolDatabaseSourceSummary box_source_summary;
     if (!box_source ||
 	    !box_source->getSummary(box_source_summary) ||
 	    !box_source_summary.visible ||
@@ -4651,7 +4651,7 @@ main(int argc, char **argv)
 	    !static_cast<SoBRLSceneGroup *>(box_group)->
 		drawIntentValid.getValue() ||
 	    static_cast<SoBRLSceneGroup *>(box_group)->drawMode.getValue() !=
-		BRLOBOL_LOD_DRAW_SHADED)
+		BOBOL_LOD_DRAW_SHADED)
 	FAIL("GED group mode setter should mutate the owned Obol group draw intent");
     if (!ged_draw_group_ref_set_mode(gedp, group_state.ref,
 	    GED_DRAW_MODE_WIRE))
@@ -4659,8 +4659,8 @@ main(int argc, char **argv)
     std::string obol_group_intent_path =
 	std::string("ged-draw-group:") + group_path + "_intent";
     if (owned_scene->setGroupDrawIntent(group_path.c_str(),
-	    obol_group_intent_path.c_str(), BRLOBOL_LOD_DRAW_SHADED,
-	    BRLOBOL_LOD_DRAW_WIRE, TRUE, 501) <= 0)
+	    obol_group_intent_path.c_str(), BOBOL_LOD_DRAW_SHADED,
+	    BOBOL_LOD_DRAW_WIRE, TRUE, 501) <= 0)
 	FAIL("owned Obol group draw-intent sentinel update should succeed");
     struct ged_draw_group_record intent_record;
     memset(&intent_record, 0, sizeof(intent_record));
@@ -4675,8 +4675,8 @@ main(int argc, char **argv)
     std::string original_obol_group_intent_path =
 	std::string("ged-draw-group:") + group_path;
     if (owned_scene->setGroupDrawIntent(group_path.c_str(),
-	    original_obol_group_intent_path.c_str(), BRLOBOL_LOD_DRAW_WIRE,
-	    BRLOBOL_LOD_DRAW_WIRE, FALSE, 0) <= 0)
+	    original_obol_group_intent_path.c_str(), BOBOL_LOD_DRAW_WIRE,
+	    BOBOL_LOD_DRAW_WIRE, FALSE, 0) <= 0)
 	FAIL("owned Obol group draw-intent sentinel restore should succeed");
     struct ged_draw_appearance_settings group_appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
@@ -4865,7 +4865,7 @@ main(int argc, char **argv)
 	FAIL("GED Obol component indexes should avoid registry/index slow-path scans");
     SoBRLDatabaseSource *draft_move_source =
 	source_for_path(owned_scene, "draft_move.s");
-    BRLObolDatabaseSourceSummary draft_move_summary;
+    BObolDatabaseSourceSummary draft_move_summary;
     if (!draft_move_source ||
 	    !draft_move_source->getSummary(draft_move_summary) ||
 	    !draft_move_summary.stale)
@@ -5080,8 +5080,8 @@ main(int argc, char **argv)
     if (!nested_leaf_source || !nested_sibling_source ||
 	    owned_scene->getDatabaseSourceCount() != 4)
 	FAIL("GED nested path draws should create owned Obol child sources");
-    BRLObolDatabaseSourceSummary nested_sibling_initial_summary;
-    BRLObolDatabaseSourceSummary nested_sibling_summary;
+    BObolDatabaseSourceSummary nested_sibling_initial_summary;
+    BObolDatabaseSourceSummary nested_sibling_summary;
     if (!nested_sibling_source->getSummary(nested_sibling_initial_summary))
 	FAIL("GED nested sibling source should expose a state summary");
     if (nested_sibling_initial_summary.realizationStatus !=
@@ -5221,7 +5221,7 @@ main(int argc, char **argv)
 	    &nested_result) <= 0)
 	FAIL("GED nested leaf stale transaction should succeed");
     ged_draw_transaction_result_free(&nested_result);
-    BRLObolDatabaseSourceSummary nested_leaf_summary;
+    BObolDatabaseSourceSummary nested_leaf_summary;
     nested_leaf_source = source_for_path(owned_scene,
 	    nested_leaf_source_path);
     nested_sibling_source = source_for_path(owned_scene,
@@ -5329,7 +5329,7 @@ main(int argc, char **argv)
 	    !nested_sibling_source->getSummary(nested_sibling_summary) ||
 	    nested_sibling_summary.lineWidth != 23)
 	FAIL("GED scoped component mode-filter erase should remove only matching-mode owned Obol sources");
-    BRLObolDatabaseSourceSummary component_mode_summary;
+    BObolDatabaseSourceSummary component_mode_summary;
     if (!nested_leaf_source->getSummary(component_mode_summary) ||
 	    component_mode_summary.drawMode != SoBRLDatabaseSource::SHADED)
 	FAIL("GED scoped component mode-filter erase should preserve nonmatching owner draw mode");
@@ -5511,7 +5511,7 @@ main(int argc, char **argv)
 	    ged_draw_obol_scene_controller_owned(gedp))
 	FAIL("owned Obol scene controller detach should clear ownership state");
 
-    BRLObolViewController view_controller(root);
+    BObolViewController view_controller(root);
     if (!ged_draw_obol_controller_attach(gedp, &view_controller, 1))
 	FAIL("GED Obol view-controller attachment should succeed");
     if (ged_draw_obol_controller(gedp) != &view_controller ||
@@ -5525,7 +5525,7 @@ main(int argc, char **argv)
 	FAIL("view-wrapper reattach full sync should rebuild current GED draw state");
 
     void *attached_view_ctx = ged_draw_active_view_ctx(gedp);
-    BRLObolViewController progressive_controller(new SoBRLSceneGroup);
+    BObolViewController progressive_controller(new SoBRLSceneGroup);
     if (!attached_view_ctx ||
 	!ged_draw_obol_controller_attach_for_view(gedp, attached_view_ctx,
 	    &progressive_controller, 1))

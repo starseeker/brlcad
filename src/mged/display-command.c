@@ -44,7 +44,7 @@
 #include "raytrace.h"
 #include "ged.h"
 #include "ged/view.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "rt/view.h"
 
 #include "./mged.h"
@@ -587,9 +587,9 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 		return TCL_ERROR;
 	    }
 
-	    brlobol_display_endpoint_t *endpoint =
+	    bobol_display_endpoint_t *endpoint =
 		ged_view_context_display_endpoint_get(view_ctx);
-	    if (endpoint && !brlobol_display_endpoint_resize(endpoint,
+	    if (endpoint && !bobol_display_endpoint_resize(endpoint,
 		    (unsigned int)width, (unsigned int)height, 1.0)) {
 		Tcl_AppendResult(s->interp,
 			"dm size: endpoint resize failed\n", (char *)NULL);

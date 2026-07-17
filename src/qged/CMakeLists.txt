@@ -79,7 +79,7 @@ if(BRLCAD_ENABLE_QT)
   target_compile_definitions(qged PRIVATE BRLCADBUILD HAVE_CONFIG_H)
   install(TARGETS qged RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
 
-  # qged's view and embedded framebuffer paths are Obol/libbrlobol based.
+  # qged's view and embedded framebuffer paths are Obol/libBObol based.
   # GED plugins are still loaded at runtime; legacy display-manager plugins are
   # not a qged build prerequisite.  qged's own Qt plugins are added below and
   # wired in after src/qged/plugins defines the aggregate target.

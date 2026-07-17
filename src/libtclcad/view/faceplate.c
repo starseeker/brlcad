@@ -27,7 +27,7 @@
 #include "common.h"
 #include "bv.h"
 #include "bu/units.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "ged.h"
 #include "ged/view.h"
 #include "rt/view.h"
@@ -43,11 +43,11 @@ tclcad_faceplate_color_endpoint_set(void *view_ctx, const char *property_name,
 {
     if (!view_ctx || !property_name || r < 0 || r > 255 || b < 0 ||
 	b > 255 || g < 0 || g > 255)
-	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BOBOL_ENDPOINT_PROPERTY_INVALID;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
     value.color3[0] = r / 255.0;
     value.color3[1] = g / 255.0;
     value.color3[2] = b / 255.0;
@@ -60,11 +60,11 @@ tclcad_faceplate_bool_endpoint_set(void *view_ctx, const char *property_name,
 	int enabled)
 {
     if (!view_ctx || !property_name || enabled < 0 || enabled > 1)
-	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BOBOL_ENDPOINT_PROPERTY_INVALID;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
     value.bool_value = enabled;
     return ged_view_context_display_property_set(view_ctx, property_name,
 	&value);
@@ -118,7 +118,7 @@ to_faceplate(struct ged *gedp,
 		if (ged_view_context_display_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_bool_endpoint_set(view_ctx,
 			"view.faceplate.center_dot.visible", i) !=
-			BRLOBOL_ENDPOINT_PROPERTY_OK)
+			BOBOL_ENDPOINT_PROPERTY_OK)
 			goto bad;
 		} else {
 		    center_dot.gos_draw = i ? 1 : 0;
@@ -144,7 +144,7 @@ to_faceplate(struct ged *gedp,
 		if (ged_view_context_display_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_color_endpoint_set(view_ctx,
 			"view.faceplate.center_dot.color", r, g, b) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK)
+		BOBOL_ENDPOINT_PROPERTY_OK)
 			goto bad;
 		} else {
 		    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)
@@ -223,7 +223,7 @@ to_faceplate(struct ged *gedp,
 		if (ged_view_context_display_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_bool_endpoint_set(view_ctx,
 			"view.faceplate.params.visible", i) !=
-			BRLOBOL_ENDPOINT_PROPERTY_OK)
+			BOBOL_ENDPOINT_PROPERTY_OK)
 			goto bad;
 		} else {
 		    params.draw = i ? 1 : 0;
@@ -249,7 +249,7 @@ to_faceplate(struct ged *gedp,
 		if (ged_view_context_display_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_color_endpoint_set(view_ctx,
 			"view.faceplate.params.color", r, g, b) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK)
+		BOBOL_ENDPOINT_PROPERTY_OK)
 			goto bad;
 		} else {
 		    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)
@@ -280,7 +280,7 @@ to_faceplate(struct ged *gedp,
 		if (ged_view_context_display_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_bool_endpoint_set(view_ctx,
 			"view.faceplate.scale.visible", i) !=
-			BRLOBOL_ENDPOINT_PROPERTY_OK)
+			BOBOL_ENDPOINT_PROPERTY_OK)
 			goto bad;
 		} else {
 		    scale_state.gos_draw = i ? 1 : 0;
@@ -306,7 +306,7 @@ to_faceplate(struct ged *gedp,
 		if (ged_view_context_display_endpoint_get(view_ctx)) {
 		    if (tclcad_faceplate_color_endpoint_set(view_ctx,
 			"view.faceplate.scale.color", r, g, b) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK)
+		BOBOL_ENDPOINT_PROPERTY_OK)
 			goto bad;
 		} else {
 		    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255)

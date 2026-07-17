@@ -83,7 +83,7 @@ brlcad_manage_files(vds.txt                    ${DOC_DIR}/legal/embedded TRIGGER
 brlcad_manage_files(vtk.txt                    ${DOC_DIR}/legal/embedded TRIGGER libbg)
 brlcad_manage_files(whereami.txt               ${DOC_DIR}/legal/embedded TRIGGER libbu)
 brlcad_manage_files(winmmap.txt                ${DOC_DIR}/legal/embedded TRIGGER libbu)
-brlcad_manage_files(pop_buffer.txt             ${DOC_DIR}/legal/embedded TRIGGER libbrlobol)
+brlcad_manage_files(pop_buffer.txt             ${DOC_DIR}/legal/embedded TRIGGER libBObol)
 brlcad_manage_files(xxhash.txt                 ${DOC_DIR}/legal/embedded TRIGGER libbu)
 
 cmakefiles(CMakeLists.txt)

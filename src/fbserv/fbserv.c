@@ -28,7 +28,7 @@
 #include "bu/exit.h"
 #include "bu/getopt.h"
 #include "bu/log.h"
-#include "brlobol/display_session.h"
+#include "BObol/BDisplaySession.h"
 #if defined(HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
 #  include "qtcad/display_provider.h"
 #elif defined(HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
@@ -60,7 +60,7 @@ fbserv_obol_display_provider_register(void)
 static struct fbserv_obj server;
 static imgstream_fb_t *framebuffer = NULL;
 #ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
-static brlobol_display_session_t *display_session = NULL;
+static bobol_display_session_t *display_session = NULL;
 #endif
 static const char *framebuffer_name = NULL;
 static const char *ipc_address = NULL;
@@ -331,9 +331,9 @@ main(int argc, char **argv)
 #ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
 	if (!fbserv_obol_display_provider_register())
 	    bu_exit(1, "fbserv: selected UI toolkit has no usable Obol display provider\n");
-	display_session = brlobol_display_session_open(framebuffer_name,
+	display_session = bobol_display_session_open(framebuffer_name,
 	    fb_width, fb_height, "BRL-CAD fbserv");
-	framebuffer = brlobol_display_session_framebuffer(display_session);
+	framebuffer = bobol_display_session_framebuffer(display_session);
 #else
 	bu_exit(1, "fbserv: display targets require a Qt or Tcl/Tk Obol provider; use an imgstream target\n");
 #endif
@@ -374,7 +374,7 @@ main(int argc, char **argv)
     (void)imgstream_fbserv_set_framebuffer(&server, NULL);
 #ifdef HAVE_BRLCAD_OBOL_DISPLAY_PROVIDER
     if (display_session) {
-	brlobol_display_session_close(display_session);
+	bobol_display_session_close(display_session);
 	display_session = NULL;
 	framebuffer = NULL;
     } else

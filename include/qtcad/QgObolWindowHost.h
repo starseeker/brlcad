@@ -11,15 +11,15 @@
 
 #include "common.h"
 
-#include "brlobol/window_host.h"
-#include "brlobol/host_factory.h"
+#include "BObol/BWindowHost.h"
+#include "BObol/BHostFactory.h"
 #include "qtcad/defines.h"
 
 class QImage;
 class QgCanvasBase;
 struct QgObolWindowHostPrivate;
 
-class QTCAD_EXPORT QgObolWindowHost : public BRLObolWindowHost {
+class QTCAD_EXPORT QgObolWindowHost : public BObolWindowHost {
 public:
     explicit QgObolWindowHost(QgCanvasBase *canvas = NULL,
 	bool takeCanvasOwnership = false);
@@ -27,11 +27,11 @@ public:
 
     void setCanvas(QgCanvasBase *canvas);
     QgCanvasBase *canvas(void) const;
-    void bindController(BRLObolViewController *controller);
+    void bindController(BObolViewController *controller);
 
-    virtual int open(const BRLObolWindowDesc *desc = NULL);
+    virtual int open(const BObolWindowDesc *desc = NULL);
     virtual void close(void);
-    virtual int poll(const BRLObolInputProfile *profile = NULL);
+    virtual int poll(const BObolInputProfile *profile = NULL);
     virtual long pollRate(void) const;
 
     void setPollRate(long rate);
@@ -49,7 +49,7 @@ private:
 /**
  * Register Qt software and, when available, system-GL host factories.
  *
- * For BRLOBOL_HOST_MODE_EMBEDDED, brlobol_host_desc::application_context
+ * For BOBOL_HOST_MODE_EMBEDDED, bobol_host_desc::application_context
  * must point to the QgCanvasBase the factory will borrow.  The canvas type
  * must match the selected qt-sw or qt-gl factory.
  */

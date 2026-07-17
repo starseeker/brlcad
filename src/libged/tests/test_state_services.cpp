@@ -38,8 +38,8 @@
 #include <string>
 #include <vector>
 
-#include "brlobol/draw_cache.h"
-#include "brlobol/lod_realization.h"
+#include "BObol/BDrawCache.h"
+#include "BObol/BLodRealization.h"
 #include "bu/app.h"
 #include "bu/avs.h"
 #include "bu/env.h"
@@ -499,38 +499,38 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 	"_ged_index_root_b.c/_ged_index_parent.c/_ged_index_child.s"
     };
     for (const char *cache_name : parent_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+	CHECK(bobol_draw_path_metadata_cache_refresh(gedp->dbip,
 		cache_name, NULL) == BRLCAD_OK,
 	      "draw path metadata cache fixture must store affected parent paths");
     }
     for (const char *cache_name : child_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+	CHECK(bobol_draw_path_metadata_cache_refresh(gedp->dbip,
 		cache_name, NULL) == BRLCAD_OK,
 	      "draw path metadata cache fixture must store affected child paths");
     }
-    CHECK(brlobol_draw_path_metadata_cache_refresh(gedp->dbip, "all.g",
+    CHECK(bobol_draw_path_metadata_cache_refresh(gedp->dbip, "all.g",
 	    NULL) == BRLCAD_OK,
 	  "draw path metadata cache fixture must store unrelated path entry");
     if (idx_parent_dp)
 	CHECK(ged_db_index_note_object_change(gedp, idx_parent_dp,
 					      GED_DB_INDEX_OBJECT_CHANGED) == 1,
 	      "parent change must be queued for path metadata invalidation coverage");
-    struct BRLObolDrawMetadataRecord cache_metadata;
+    struct BObolDrawMetadataRecord cache_metadata;
     for (const char *cache_name : parent_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
+	CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
 		&cache_metadata) == BRLCAD_ERROR,
 	      "parent change must invalidate cached draw metadata for affected parent paths");
     }
     for (const char *cache_name : child_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
+	CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
 		&cache_metadata) == BRLCAD_ERROR,
 	      "parent change must invalidate cached draw metadata for descendant child paths");
     }
-    CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, "all.g",
+    CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip, "all.g",
 	    &cache_metadata) == BRLCAD_OK,
 	  "parent change must not invalidate unrelated cached path metadata");
     for (const char *cache_name : child_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+	CHECK(bobol_draw_path_metadata_cache_refresh(gedp->dbip,
 		cache_name, NULL) == BRLCAD_OK,
 	      "draw path metadata cache fixture must reseed child paths");
     }
@@ -539,32 +539,32 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
     };
     const char *unrelated_proxy_name = "cone.s";
     for (const char *cache_name : affected_proxy_names) {
-	CHECK(brlobol_draw_proxy_cache_store(gedp->dbip, cache_name,
-					     BRLOBOL_LOD_PROXY_AABB, cache_points, 2, NULL) == BRLCAD_OK,
+	CHECK(bobol_draw_proxy_cache_store(gedp->dbip, cache_name,
+					     BOBOL_LOD_PROXY_AABB, cache_points, 2, NULL) == BRLCAD_OK,
 	      "draw proxy cache fixture must store affected leaf entry");
     }
-    CHECK(brlobol_draw_proxy_cache_store(gedp->dbip, unrelated_proxy_name,
-					 BRLOBOL_LOD_PROXY_AABB, cache_points, 2, NULL) == BRLCAD_OK,
+    CHECK(bobol_draw_proxy_cache_store(gedp->dbip, unrelated_proxy_name,
+					 BOBOL_LOD_PROXY_AABB, cache_points, 2, NULL) == BRLCAD_OK,
 	  "draw proxy cache fixture must store unrelated leaf entry");
     if (idx_child_dp)
 	CHECK(ged_db_index_note_object_change(gedp, idx_child_dp,
 					      GED_DB_INDEX_OBJECT_CHANGED) == 1,
 	      "child change must be queued for cache invalidation coverage");
-    struct BRLObolDrawProxyRecord cache_proxy;
+    struct BObolDrawProxyRecord cache_proxy;
     for (const char *cache_name : affected_proxy_names) {
-	CHECK(brlobol_draw_proxy_cache_get(gedp->dbip, cache_name,
-					   BRLOBOL_LOD_PROXY_AABB, &cache_proxy) == BRLCAD_ERROR,
+	CHECK(bobol_draw_proxy_cache_get(gedp->dbip, cache_name,
+					   BOBOL_LOD_PROXY_AABB, &cache_proxy) == BRLCAD_ERROR,
 	      "child change must invalidate cached draw proxy for affected leaf");
     }
     for (const char *cache_name : child_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
+	CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
 		&cache_metadata) == BRLCAD_ERROR,
 	      "child change must invalidate cached draw metadata for affected child paths");
     }
-    CHECK(brlobol_draw_proxy_cache_get(gedp->dbip, unrelated_proxy_name,
-				       BRLOBOL_LOD_PROXY_AABB, &cache_proxy) == BRLCAD_OK,
+    CHECK(bobol_draw_proxy_cache_get(gedp->dbip, unrelated_proxy_name,
+				       BOBOL_LOD_PROXY_AABB, &cache_proxy) == BRLCAD_OK,
 	  "child change must not invalidate unrelated cached leaf draw proxy");
-    CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, "all.g",
+    CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip, "all.g",
 	    &cache_metadata) == BRLCAD_OK,
 	  "child change must not invalidate unrelated cached path metadata");
     CHECK((ged_db_index_refresh_flags(gedp) &
@@ -714,7 +714,7 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 	  "full refresh must preserve incremental removal reverse-use count");
 
     for (const char *cache_name : child_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+	CHECK(bobol_draw_path_metadata_cache_refresh(gedp->dbip,
 		cache_name, NULL) == BRLCAD_OK,
 	      "rename fixture must reseed old child path metadata");
     }
@@ -755,11 +755,11 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 				    "_ged_index_parent.c/_ged_index_child.s", NULL, 0) == 2,
 	  "incremental rename must keep old-name child path resolvable");
     for (const char *cache_name : child_path_cache_names) {
-	CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
+	CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip, cache_name,
 		&cache_metadata) == BRLCAD_ERROR,
 	      "object rename must invalidate cached draw metadata for stale old child paths");
     }
-    CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip, "all.g",
+    CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip, "all.g",
 	    &cache_metadata) == BRLCAD_OK,
 	  "object rename must not invalidate unrelated cached path metadata");
     CHECK(ged_db_index_refresh(gedp) > 0,
@@ -771,7 +771,7 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 	  renamed_old_use_count,
 	  "full refresh must preserve incremental rename old-use count");
 
-    CHECK(brlobol_draw_path_metadata_cache_refresh(gedp->dbip,
+    CHECK(bobol_draw_path_metadata_cache_refresh(gedp->dbip,
 	    idx_child_renamed, NULL) == BRLCAD_OK,
 	  "removal fixture must seed renamed child object path metadata");
     const char *kill_child_av[2] = {"kill", idx_child_renamed};
@@ -791,7 +791,7 @@ test_db_index(struct ged *gedp, size_t idx_scale_fanout)
 	ged_db_index_object_use_count(gedp, idx_child_renamed_id);
     CHECK(killed_use_count == 0,
 	  "incremental removal must keep removed unreferenced object unused");
-    CHECK(brlobol_draw_path_metadata_cache_get(gedp->dbip,
+    CHECK(bobol_draw_path_metadata_cache_get(gedp->dbip,
 	    idx_child_renamed, &cache_metadata) == BRLCAD_ERROR,
 	  "object removal must invalidate cached draw metadata for removed object path");
     CHECK(ged_db_index_refresh(gedp) > 0,
@@ -6268,7 +6268,7 @@ main(int ac, char *av[])
 
     ged_close(gedp);
     gedp = NULL;
-    brlobol_draw_cache_clear_all();
+    bobol_draw_cache_clear_all();
     bu_file_delete(tmp_g.c_str());
 
     if (!copy_fixture(av[1], tmp_g.c_str()))

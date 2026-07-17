@@ -26,7 +26,7 @@
 
 #include "common.h"
 #include "bv.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "bu/units.h"
 #include "ged.h"
 #include "ged/view.h"
@@ -58,11 +58,11 @@ tclcad_axes_visibility_endpoint_set(void *view_ctx,
 	const char *property_name, int enabled)
 {
     if (!view_ctx || !property_name || enabled < 0 || enabled > 1)
-	return BRLOBOL_ENDPOINT_PROPERTY_INVALID;
+	return BOBOL_ENDPOINT_PROPERTY_INVALID;
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
     value.bool_value = enabled;
     return ged_view_context_display_property_set(view_ctx, property_name,
 	&value);
@@ -70,10 +70,10 @@ tclcad_axes_visibility_endpoint_set(void *view_ctx,
 
 static int
 tclcad_axes_endpoint_property_set(void *view_ctx, const char *name,
-	const struct brlobol_endpoint_property_value *value)
+	const struct bobol_endpoint_property_value *value)
 {
     return ged_view_context_display_property_set(view_ctx, name, value) ==
-	BRLOBOL_ENDPOINT_PROPERTY_OK;
+	BOBOL_ENDPOINT_PROPERTY_OK;
 }
 
 static int
@@ -88,18 +88,18 @@ tclcad_axes_endpoint_style_set(void *view_ctx,
 	"view.faceplate.model_axes." :
 	"view.faceplate.view_axes.";
     char property[128] = {0};
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 
     if (BU_STR_EQUAL(field, "axes_size")) {
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
 	value.double_value = axes->axes_size;
 	snprintf(property, sizeof(property), "%ssize", prefix);
 	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
     }
     if (BU_STR_EQUAL(field, "axes_pos")) {
 	const char *coordinates[] = {"position.x", "position.y", "position.z"};
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
 	for (int axis = 0; axis < 3; axis++) {
 	    value.double_value = axes->axes_pos[axis];
 	    snprintf(property, sizeof(property), "%s%s", prefix,
@@ -121,7 +121,7 @@ tclcad_axes_endpoint_style_set(void *view_ctx,
 	    BU_STR_EQUAL(field, "label_color") ? "labels.color" :
 	    BU_STR_EQUAL(field, "tick_color") ? "ticks.color" :
 	    "ticks.major_color";
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+	value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
 	for (int axis = 0; axis < 3; axis++)
 	    value.color3[axis] = color[axis] / 255.0;
 	snprintf(property, sizeof(property), "%s%s", prefix, suffix);
@@ -138,7 +138,7 @@ tclcad_axes_endpoint_style_set(void *view_ctx,
 	const char *suffix = BU_STR_EQUAL(field, "pos_only") ?
 	    "position_only" : BU_STR_EQUAL(field, "tick_enable") ?
 	    "ticks.visible" : "triple_color";
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+	value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
 	value.bool_value = enabled ? 1 : 0;
 	snprintf(property, sizeof(property), "%s%s", prefix, suffix);
 	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
@@ -156,13 +156,13 @@ tclcad_axes_endpoint_style_set(void *view_ctx,
 	    "ticks.length" : BU_STR_EQUAL(field, "tick_major_length") ?
 	    "ticks.major_length" : BU_STR_EQUAL(field, "ticks_per_major") ?
 	    "ticks.per_major" : "ticks.threshold";
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
 	value.uint_value = (uint64_t)number;
 	snprintf(property, sizeof(property), "%s%s", prefix, suffix);
 	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
     }
     if (BU_STR_EQUAL(field, "tick_interval")) {
-	value.type = BRLOBOL_ENDPOINT_PROPERTY_DOUBLE;
+	value.type = BOBOL_ENDPOINT_PROPERTY_DOUBLE;
 	value.double_value = axes->tick_interval;
 	snprintf(property, sizeof(property), "%sticks.interval", prefix);
 	return tclcad_axes_endpoint_property_set(view_ctx, property, &value);
@@ -194,7 +194,7 @@ to_axes(struct ged *gedp,
 
 	    if (ged_view_context_display_endpoint_get(view_ctx)) {
 		if (tclcad_axes_visibility_endpoint_set(view_ctx,
-			visibility_property, i) != BRLOBOL_ENDPOINT_PROPERTY_OK)
+			visibility_property, i) != BOBOL_ENDPOINT_PROPERTY_OK)
 		    goto bad;
 	    } else {
 		gasp->draw = i ? 1 : 0;

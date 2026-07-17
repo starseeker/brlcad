@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "icv.h"
 #include "ged/draw_obol.h"
 
@@ -108,7 +108,7 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
 	bu_vls_printf(gedp->ged_result_str, "view endpoint not found\n");
 	return BRLCAD_ERROR;
     }
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
     if (!endpoint) {
 	bu_vls_printf(gedp->ged_result_str,
@@ -119,7 +119,7 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     (void)ged_draw_obol_framebuffer_present(gedp);
-    if (!grab_fb && !brlobol_display_endpoint_view_sync(endpoint, view_ctx)) {
+    if (!grab_fb && !bobol_display_endpoint_view_sync(endpoint, view_ctx)) {
 	bu_vls_printf(gedp->ged_result_str,
 		"%s: could not synchronize the endpoint camera.", argv[0]);
 	return BRLCAD_ERROR;
@@ -128,9 +128,9 @@ ged_screen_grab_core(struct ged *gedp, int argc, const char *argv[])
     unsigned int width = 0;
     unsigned int height = 0;
     unsigned int components = 0;
-    enum brlobol_capture_plane capture_plane = grab_fb ?
-	BRLOBOL_CAPTURE_FRAMEBUFFER : BRLOBOL_CAPTURE_COMPOSITE;
-    if (!brlobol_display_endpoint_capture_plane(endpoint, capture_plane,
+    enum bobol_capture_plane capture_plane = grab_fb ?
+	BOBOL_CAPTURE_FRAMEBUFFER : BOBOL_CAPTURE_COMPOSITE;
+    if (!bobol_display_endpoint_capture_plane(endpoint, capture_plane,
 	    &idata, &image_size, &width, &height, &components) || !idata ||
 	    !width || !height ||
 	    (components != 3 && components != 4) ||

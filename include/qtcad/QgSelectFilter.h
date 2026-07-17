@@ -72,8 +72,8 @@ class QTCAD_EXPORT QgSelectFilter : public QgViewFilter {
 	 * route through their display endpoint rather than installing raw-event
 	 * paths.
 	 */
-	bool semanticInput(BRLObolInputAction action,
-		const BRLObolInputEvent *event);
+	bool semanticInput(BObolInputAction action,
+		const BObolInputEvent *event);
 
 	// Whenever we're doing selections, we may want either all the objects
 	// that match the selection criteria, or just the "closest" object.
@@ -85,8 +85,8 @@ class QTCAD_EXPORT QgSelectFilter : public QgViewFilter {
 	void clear_selected_result();
 	void set_selected_result(struct ged_draw_pick_result *res);
 	void set_selected_paths(const std::vector<std::string> &paths);
-	virtual bool applySemanticInput(BRLObolInputAction action,
-		const BRLObolInputEvent *event);
+	virtual bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event);
 
     private:
 	class QgSelectFilterPrivate;
@@ -103,8 +103,8 @@ public:
 	bool eventFilter(QObject *, QEvent *e) override;
 
     protected:
-	bool applySemanticInput(BRLObolInputAction action,
-		const BRLObolInputEvent *event) override;
+	bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event) override;
 };
 
 class QTCAD_EXPORT QgSelectBoxFilter: public QgSelectFilter {
@@ -117,8 +117,8 @@ public:
 	bool eventFilter(QObject *, QEvent *e) override;
 
 private:
-	bool applySemanticInput(BRLObolInputAction action,
-		const BRLObolInputEvent *event) override;
+	bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event) override;
 	fastf_t px = -FLT_MAX;
 	fastf_t py = -FLT_MAX;
 	bool active = false;
@@ -136,8 +136,8 @@ public:
 	struct db_i *dbip = nullptr;
 
     protected:
-	bool applySemanticInput(BRLObolInputAction action,
-		const BRLObolInputEvent *event) override;
+	bool applySemanticInput(BObolInputAction action,
+		const BObolInputEvent *event) override;
 };
 
 #endif /* QGSELECTFILTER_H */

@@ -44,14 +44,14 @@
 #include <QTimer>
 #include <QWidget>
 
-#include "brlobol/init.h"
-#include "brlobol/adc.h"
-#include "brlobol/axes.h"
-#include "brlobol/database_source.h"
-#include "brlobol/grid.h"
-#include "brlobol/hud_label_overlay.h"
-#include "brlobol/line_layer_overlay.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BInit.h"
+#include "BObol/BADC.h"
+#include "BObol/BAxes.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BGrid.h"
+#include "BObol/BHUDLabelOverlay.h"
+#include "BObol/BLineLayerOverlay.h"
+#include "BObol/BViewController.h"
 #include "bv.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
@@ -84,7 +84,7 @@
 struct QgCanvasState {
     /* ---- view plumbing ---- */
     struct bv_context *v = nullptr;         /* widget-owned view context */
-    BRLObolViewController *obol = nullptr; /* Obol-canonical view controller */
+    BObolViewController *obol = nullptr; /* Obol-canonical view controller */
     bool owns_obol = false;
 
     /* ---- hash tracking for incremental updates ---- */
@@ -256,7 +256,7 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     /* Endpoint-owned image producers, including the retained librt engine,
      * publish completed worker frames through this host-thread hook.  The Qt
      * canvases render directly instead of using
-     * BRLObolViewController::renderToImage(), so they must perform the same
+     * BObolViewController::renderToImage(), so they must perform the same
      * presentation synchronization explicitly before traversing the scene. */
     s.obol->synchronizePresentation();
 
@@ -312,7 +312,7 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 /** Create the Obol view state every qtcad canvas exposes. */
 static inline void
 qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
-	bool software_backend, BRLObolViewController *controller = nullptr,
+	bool software_backend, BObolViewController *controller = nullptr,
 	bool create_controller = true)
 {
     s.software_backend = software_backend;
@@ -321,11 +321,11 @@ qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
     * manager to its render action, while QgSW supplies its private OSMesa manager to
      * every SoOffscreenRenderer.  Replacing the global manager as canvases
      * are constructed can otherwise cross-contaminate those backends. */
-    brlobol_init(NULL);
+    bobol_init(NULL);
     s.obol = controller;
     s.owns_obol = false;
     if (!s.obol && create_controller) {
-	s.obol = new BRLObolViewController();
+	s.obol = new BObolViewController();
 	s.owns_obol = true;
     }
     if (!s.obol)
@@ -359,7 +359,7 @@ qgcanvas_destroy_obol(QgCanvasState &s)
 /** Replace the canvas-owned controller with a borrowed endpoint controller. */
 static inline void
 qgcanvas_bind_obol_controller(QgCanvasState &s, const QWidget *w,
-	BRLObolViewController *controller)
+	BObolViewController *controller)
 {
     if (s.obol == controller) {
 	qgcanvas_bind_obol_render_context(s);
@@ -527,7 +527,7 @@ qgcanvas_sync_obol_grid(QgCanvasState &s,
 		      static_cast<SoBRLGrid *>(group->getChild(childIndex)) :
 		      new SoBRLGrid;
     grid->overlayId = overlayId;
-    (void)brlobol_grid_configure_from_view_context(grid, &state, view_ctx);
+    (void)bobol_grid_configure_from_view_context(grid, &state, view_ctx);
     if (childIndex < 0)
 	group->addChild(grid);
     qgcanvas_request_obol_render_if_idle(s, "faceplate");

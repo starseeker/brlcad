@@ -9,8 +9,8 @@
 
 #include "qtcad/QgObolWindowHost.h"
 
-#include "brlobol/display_endpoint.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BViewController.h"
 #include "bu/malloc.h"
 #include "qtcad/QgCanvasBase.h"
 #ifdef BRLCAD_OPENGL
@@ -75,15 +75,15 @@ qg_obol_window_host_logical_size(const QWidget *widget, unsigned int width,
 	qMax(1, static_cast<int>(std::ceil(height / dpr))));
 }
 
-static BRLObolWindowDesc
-qg_obol_window_host_desc(const BRLObolWindowDesc *input, const QWidget *widget)
+static BObolWindowDesc
+qg_obol_window_host_desc(const BObolWindowDesc *input, const QWidget *widget)
 {
-    BRLObolWindowDesc desc;
+    BObolWindowDesc desc;
     if (input) {
 	desc = *input;
     } else {
-	desc.mode = BRLOBOL_WINDOW_EMBEDDED;
-	desc.backend = BRLOBOL_WINDOW_BACKEND_QT;
+	desc.mode = BOBOL_WINDOW_EMBEDDED;
+	desc.backend = BOBOL_WINDOW_BACKEND_QT;
 	desc.width = 0;
 	desc.height = 0;
 	desc.title = "BRL-CAD Obol Qt";
@@ -98,9 +98,9 @@ qg_obol_window_host_desc(const BRLObolWindowDesc *input, const QWidget *widget)
     if (desc.height == 0)
 	desc.height = static_cast<unsigned int>(renderSize.height());
 
-    desc.backend = BRLOBOL_WINDOW_BACKEND_QT;
+    desc.backend = BOBOL_WINDOW_BACKEND_QT;
     if (!input)
-	desc.mode = BRLOBOL_WINDOW_EMBEDDED;
+	desc.mode = BOBOL_WINDOW_EMBEDDED;
     if (widget) {
 	desc.visible = widget->isVisible() ? TRUE : FALSE;
 	if (desc.title.getLength() == 0) {
@@ -112,18 +112,18 @@ qg_obol_window_host_desc(const BRLObolWindowDesc *input, const QWidget *widget)
 }
 
 static int
-qg_obol_window_host_can_create_canvas(const BRLObolWindowDesc *desc)
+qg_obol_window_host_can_create_canvas(const BObolWindowDesc *desc)
 {
     if (!desc)
 	return 0;
-    if (desc->mode != BRLOBOL_WINDOW_TOPLEVEL)
+    if (desc->mode != BOBOL_WINDOW_TOPLEVEL)
 	return 0;
-    return desc->backend == BRLOBOL_WINDOW_BACKEND_QT ||
-	desc->backend == BRLOBOL_WINDOW_BACKEND_AUTO;
+    return desc->backend == BOBOL_WINDOW_BACKEND_QT ||
+	desc->backend == BOBOL_WINDOW_BACKEND_AUTO;
 }
 
 static QgCanvasBase *
-qg_obol_window_host_create_canvas(const BRLObolWindowDesc *desc)
+qg_obol_window_host_create_canvas(const BObolWindowDesc *desc)
 {
     if (!qg_obol_window_host_can_create_canvas(desc))
 	return NULL;
@@ -163,7 +163,7 @@ qg_obol_window_host_destroy_owned_canvas(QgObolWindowHostPrivate *qp)
 
 QgObolWindowHost::QgObolWindowHost(QgCanvasBase *canvas,
 	bool takeCanvasOwnership) :
-    BRLObolWindowHost(),
+    BObolWindowHost(),
     qp(new QgObolWindowHostPrivate)
 {
     this->setCanvas(canvas);
@@ -201,12 +201,12 @@ QgObolWindowHost::canvas(void) const
 }
 
 void
-QgObolWindowHost::bindController(BRLObolViewController *controller)
+QgObolWindowHost::bindController(BObolViewController *controller)
 {
     if (this->qp->canvas)
 	this->qp->canvas->setObolViewController(controller);
 
-    /* BRLObolWindowHost::attachController closes the current host before it
+    /* BObolWindowHost::attachController closes the current host before it
      * swaps controller ownership.  A factory bind is not a terminal close:
      * retain the already-created Qt canvas so a qt-gl factory cannot reopen
      * as a software QgSW canvas. */
@@ -216,7 +216,7 @@ QgObolWindowHost::bindController(BRLObolViewController *controller)
 }
 
 int
-QgObolWindowHost::open(const BRLObolWindowDesc *desc)
+QgObolWindowHost::open(const BObolWindowDesc *desc)
 {
     if (!this->qp->canvas) {
 	QgCanvasBase *ownedCanvas = qg_obol_window_host_create_canvas(desc);
@@ -229,7 +229,7 @@ QgObolWindowHost::open(const BRLObolWindowDesc *desc)
     if (!this->qp->canvas || !this->qp->canvas->obolViewController())
 	return -1;
 
-    BRLObolViewController *controller = this->getController();
+    BObolViewController *controller = this->getController();
     if (controller && this->qp->canvas->obolViewController() != controller)
 	this->qp->canvas->setObolViewController(controller);
     if (!controller)
@@ -252,9 +252,9 @@ QgObolWindowHost::open(const BRLObolWindowDesc *desc)
 	if (desc->visible)
 	    widget->show();
     }
-    BRLObolWindowDesc actual =
+    BObolWindowDesc actual =
 	qg_obol_window_host_desc(desc, widget);
-    int ret = BRLObolWindowHost::open(&actual);
+    int ret = BObolWindowHost::open(&actual);
     if (ret != 0 && this->qp->ownsCanvas) {
 	qg_obol_window_host_destroy_owned_canvas(this->qp);
 	this->attachController(NULL, FALSE);
@@ -265,7 +265,7 @@ QgObolWindowHost::open(const BRLObolWindowDesc *desc)
 void
 QgObolWindowHost::close(void)
 {
-    BRLObolWindowHost::close();
+    BObolWindowHost::close();
     this->qp->lastFrame = QImage();
     this->qp->lastRenderReason = "";
     if (this->qp->ownsCanvas && !this->qp->preserveCanvasOnBind) {
@@ -275,12 +275,12 @@ QgObolWindowHost::close(void)
 }
 
 int
-QgObolWindowHost::poll(const BRLObolInputProfile *UNUSED(profile))
+QgObolWindowHost::poll(const BObolInputProfile *UNUSED(profile))
 {
     if (!this->qp->canvas || !this->isOpen())
 	return -1;
 
-    BRLObolViewController *controller = this->getController();
+    BObolViewController *controller = this->getController();
     if (!controller)
 	return -1;
     if (!controller->isRenderRequested())
@@ -350,7 +350,7 @@ struct QgObolFactoryKind {
 };
 
 static int
-qg_factory_probe(const struct brlobol_host_desc *desc,
+qg_factory_probe(const struct bobol_host_desc *desc,
 	void *UNUSED(user_data))
 {
     QCoreApplication *app = QCoreApplication::instance();
@@ -358,14 +358,14 @@ qg_factory_probe(const struct brlobol_host_desc *desc,
 	return 0;
     if (!desc)
 	return 0;
-    if (desc->mode == BRLOBOL_HOST_MODE_TOPLEVEL)
+    if (desc->mode == BOBOL_HOST_MODE_TOPLEVEL)
 	return 1;
-    return desc->mode == BRLOBOL_HOST_MODE_EMBEDDED &&
+    return desc->mode == BOBOL_HOST_MODE_EMBEDDED &&
 	desc->application_context;
 }
 
 static void *
-qg_factory_create(const struct brlobol_host_desc *desc, void *data)
+qg_factory_create(const struct bobol_host_desc *desc, void *data)
 {
     QgObolFactoryKind *kind = static_cast<QgObolFactoryKind *>(data);
     if (!kind || !desc)
@@ -373,7 +373,7 @@ qg_factory_create(const struct brlobol_host_desc *desc, void *data)
 
     QgCanvasBase *canvas = NULL;
     bool owns_canvas = true;
-    if (desc->mode == BRLOBOL_HOST_MODE_EMBEDDED) {
+    if (desc->mode == BOBOL_HOST_MODE_EMBEDDED) {
 	canvas = static_cast<QgCanvasBase *>(desc->application_context);
 	owns_canvas = false;
 	if (!canvas || !canvas->canvasWidget())
@@ -391,12 +391,12 @@ qg_factory_create(const struct brlobol_host_desc *desc, void *data)
 
     if (canvas) {
 #ifdef BRLCAD_OPENGL
-	if (!kind->software && desc->vsync != BRLOBOL_HOST_VSYNC_AUTO) {
+	if (!kind->software && desc->vsync != BOBOL_HOST_VSYNC_AUTO) {
 	    QgGL *gl_canvas = dynamic_cast<QgGL *>(canvas);
 	    if (!gl_canvas)
 		return NULL;
 	    QOpenGLContext *context = gl_canvas->context();
-	    const bool enabled = desc->vsync != BRLOBOL_HOST_VSYNC_OFF;
+	    const bool enabled = desc->vsync != BOBOL_HOST_VSYNC_OFF;
 	    if (context &&
 		((context->format().swapInterval() != 0) != enabled))
 		return NULL;
@@ -408,7 +408,7 @@ qg_factory_create(const struct brlobol_host_desc *desc, void *data)
 	}
 #endif
 	canvas->setObolInputEndpoint(
-	    static_cast<brlobol_display_endpoint_t *>(desc->input_dispatch_data));
+	    static_cast<bobol_display_endpoint_t *>(desc->input_dispatch_data));
 	return new QgObolWindowHost(canvas, owns_canvas);
     }
     if (kind->software) {
@@ -416,9 +416,9 @@ qg_factory_create(const struct brlobol_host_desc *desc, void *data)
     } else {
 #ifdef BRLCAD_OPENGL
 	QgGL *gl_canvas = new QgGL(NULL, nullptr, false);
-	if (desc->vsync != BRLOBOL_HOST_VSYNC_AUTO) {
+	if (desc->vsync != BOBOL_HOST_VSYNC_AUTO) {
 	    QSurfaceFormat format = gl_canvas->format();
-	    format.setSwapInterval(desc->vsync == BRLOBOL_HOST_VSYNC_OFF ?
+	    format.setSwapInterval(desc->vsync == BOBOL_HOST_VSYNC_OFF ?
 		0 : 1);
 	    gl_canvas->setFormat(format);
 	}
@@ -428,7 +428,7 @@ qg_factory_create(const struct brlobol_host_desc *desc, void *data)
 #endif
     }
 	canvas->setObolInputEndpoint(
-	static_cast<brlobol_display_endpoint_t *>(desc->input_dispatch_data));
+	static_cast<bobol_display_endpoint_t *>(desc->input_dispatch_data));
     return new QgObolWindowHost(canvas, owns_canvas);
 }
 
@@ -444,19 +444,19 @@ qg_factory_bind(void *instance, void *controller, void *UNUSED(user_data))
     QgObolWindowHost *host = static_cast<QgObolWindowHost *>(instance);
     if (!host)
 	return 0;
-    host->bindController(static_cast<BRLObolViewController *>(controller));
-    BRLObolViewController *bound = host->getController();
+    host->bindController(static_cast<BObolViewController *>(controller));
+    BObolViewController *bound = host->getController();
     return !controller || (bound == controller &&
 	bound->getRenderContextManager() != NULL);
 }
 
-static BRLObolWindowDesc
-qg_factory_desc(const struct brlobol_host_desc *desc)
+static BObolWindowDesc
+qg_factory_desc(const struct bobol_host_desc *desc)
 {
-    BRLObolWindowDesc actual;
-    actual.mode = desc && desc->mode == BRLOBOL_HOST_MODE_EMBEDDED ?
-	BRLOBOL_WINDOW_EMBEDDED : BRLOBOL_WINDOW_TOPLEVEL;
-    actual.backend = BRLOBOL_WINDOW_BACKEND_QT;
+    BObolWindowDesc actual;
+    actual.mode = desc && desc->mode == BOBOL_HOST_MODE_EMBEDDED ?
+	BOBOL_WINDOW_EMBEDDED : BOBOL_WINDOW_TOPLEVEL;
+    actual.backend = BOBOL_WINDOW_BACKEND_QT;
     actual.width = desc && desc->width ? desc->width : 1;
     actual.height = desc && desc->height ? desc->height : 1;
     actual.title = desc && desc->title ? desc->title : "BRL-CAD Obol Qt";
@@ -468,11 +468,11 @@ qg_factory_desc(const struct brlobol_host_desc *desc)
 }
 
 static int
-qg_factory_open(void *instance, const struct brlobol_host_desc *desc,
+qg_factory_open(void *instance, const struct bobol_host_desc *desc,
 	void *UNUSED(user_data))
 {
     QgObolWindowHost *host = static_cast<QgObolWindowHost *>(instance);
-    BRLObolWindowDesc actual = qg_factory_desc(desc);
+    BObolWindowDesc actual = qg_factory_desc(desc);
     return host && host->open(&actual) == 0 ? 1 : 0;
 }
 
@@ -614,13 +614,13 @@ qg_factory_framebuffer_window_host(void *instance, void *UNUSED(user_data))
     return static_cast<QgObolWindowHost *>(instance);
 }
 
-static brlobol_host_factory_token_t *
+static bobol_host_factory_token_t *
 qg_factory_register(const char *name, int priority, uint64_t capabilities,
 	QgObolFactoryKind *kind)
 {
-    struct brlobol_host_factory factory;
+    struct bobol_host_factory factory;
     memset(&factory, 0, sizeof(factory));
-    factory.abi_version = BRLOBOL_HOST_FACTORY_ABI_VERSION;
+    factory.abi_version = BOBOL_HOST_FACTORY_ABI_VERSION;
     factory.struct_size = sizeof(factory);
     factory.name = name;
     factory.priority = priority;
@@ -640,7 +640,7 @@ qg_factory_register(const char *name, int priority, uint64_t capabilities,
     factory.set_visible = qg_factory_set_visible;
     factory.set_vsync = qg_factory_set_vsync;
     factory.framebuffer_window_host = qg_factory_framebuffer_window_host;
-    return brlobol_host_factory_register(&factory);
+    return bobol_host_factory_register(&factory);
 }
 
 int
@@ -650,26 +650,26 @@ qtcad_obol_host_factories_register(void)
 	return 0;
 
     static QgObolFactoryKind sw_kind = {true};
-    static brlobol_host_factory_token_t *sw_token = qg_factory_register(
-	"qt-sw", 50, BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_EMBEDDED |
-	BRLOBOL_HOST_CAP_PIXEL_PRESENT |
-	BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
-	BRLOBOL_HOST_CAP_INPUT | BRLOBOL_HOST_CAP_READBACK |
-	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT |
-	BRLOBOL_HOST_CAP_MULTI_VIEW | BRLOBOL_HOST_CAP_THREAD_AFFINE,
+    static bobol_host_factory_token_t *sw_token = qg_factory_register(
+	"qt-sw", 50, BOBOL_HOST_CAP_TOPLEVEL | BOBOL_HOST_CAP_EMBEDDED |
+	BOBOL_HOST_CAP_PIXEL_PRESENT |
+	BOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
+	BOBOL_HOST_CAP_INPUT | BOBOL_HOST_CAP_READBACK |
+	BOBOL_HOST_CAP_FRAMEBUFFER_PRESENT |
+	BOBOL_HOST_CAP_MULTI_VIEW | BOBOL_HOST_CAP_THREAD_AFFINE,
 	&sw_kind);
 
 #ifdef BRLCAD_OPENGL
     static QgObolFactoryKind gl_kind = {false};
-    static brlobol_host_factory_token_t *gl_token = qg_factory_register(
-	"qt-gl", 60, BRLOBOL_HOST_CAP_TOPLEVEL | BRLOBOL_HOST_CAP_EMBEDDED |
-	BRLOBOL_HOST_CAP_SYSTEM_GL |
-	BRLOBOL_HOST_CAP_PIXEL_PRESENT |
-	BRLOBOL_HOST_CAP_PRESENT_VSYNC |
-	BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
-	BRLOBOL_HOST_CAP_INPUT | BRLOBOL_HOST_CAP_READBACK |
-	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT |
-	BRLOBOL_HOST_CAP_MULTI_VIEW | BRLOBOL_HOST_CAP_THREAD_AFFINE,
+    static bobol_host_factory_token_t *gl_token = qg_factory_register(
+	"qt-gl", 60, BOBOL_HOST_CAP_TOPLEVEL | BOBOL_HOST_CAP_EMBEDDED |
+	BOBOL_HOST_CAP_SYSTEM_GL |
+	BOBOL_HOST_CAP_PIXEL_PRESENT |
+	BOBOL_HOST_CAP_PRESENT_VSYNC |
+	BOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
+	BOBOL_HOST_CAP_INPUT | BOBOL_HOST_CAP_READBACK |
+	BOBOL_HOST_CAP_FRAMEBUFFER_PRESENT |
+	BOBOL_HOST_CAP_MULTI_VIEW | BOBOL_HOST_CAP_THREAD_AFFINE,
 	&gl_kind);
     return sw_token && gl_token ? 1 : 0;
 #else

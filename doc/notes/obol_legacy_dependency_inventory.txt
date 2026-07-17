@@ -14,15 +14,15 @@ Guarded Direct Dependency Rows
 
 These rows match `src/source_dirs.cmake`:
 
-* libbrlobol: libwdb;librt;libimgstream;libbg;libbu
+* libBObol: libwdb;librt;libimgstream;libbg;libbu
 * libbv: libbg;libbn;libbu
 * libnmg: libbg;libbn;libbu
 * libbrep: libbg;libbu
 * librt: libbrep;libnmg;libbv;libbg;libbn;libbu
 * libanalyze: librt;libbg;libbn;libbu
 * libimgstream: libicv;libbn;libpkg;libbu
-* libged: libbrlobol;libimgstream;libicv;libanalyze;libwdb;liboptical;libbu
-* libqtcad: libbrlobol;libged;libbg;libbn;libbu
+* libged: libBObol;libimgstream;libicv;libanalyze;libwdb;liboptical;libbu
+* libqtcad: libBObol;libged;libbg;libbn;libbu
 * libtclcad: libged;libimgstream;libpkg;libbn;libbu
 * qged: libqtcad
 * mged: libtclcad
@@ -34,7 +34,7 @@ Current Clean Boundaries
 
 * libbv owns passive view and camera mechanics.  It has no scene, database,
   BSG, display-manager, draw-cache, or rendering ownership.
-* libbrlobol owns retained scene sources, instances, materials, realized LoD,
+* libBObol owns retained scene sources, instances, materials, realized LoD,
   interaction features, edit previews, draw caches, and framebuffer image
   presentation.  It has no direct compatibility-renderer dependency.
 * libged owns command policy and neutral Obol controller attachment.  Its core,
@@ -71,7 +71,7 @@ Current Clean Boundaries
   The OpenSSL-gated loopback regression exercises the production server and
   remote client together, proving wrong-pin rejection and an authenticated
   correct-pin framebuffer exchange.
-* Standalone `fbserv` and `rt` use the toolkit-neutral libbrlobol display
+* Standalone `fbserv` and `rt` use the toolkit-neutral libBObol display
   session for legacy display specifications.  At CMake configuration they link
   one direct provider library: libqtcad is preferred, with libtclcad selected
   only when Qt is unavailable.  Their narrow compile-time selector includes
@@ -105,7 +105,7 @@ Current Clean Boundaries
 * The native basic, faceplate, LoD, selection, and quad image baselines own
   GED/Obol render endpoints directly and have no direct libdm dependency.
   DM-specific MGED compatibility tests remain separate and explicit.
-* The pivot guard uses one canonical scope over libbrlobol, libqtcad, qged,
+* The pivot guard uses one canonical scope over libBObol, libqtcad, qged,
   and GSH, plus focused native-test and removed-API checks.  There is no
   transitional mode or legacy BSG include allowlist.
 
@@ -114,7 +114,7 @@ Current Clean Boundaries
 
 The final production pass re-audited remrt/rtsrv, the RT-family programs,
 fbserv, framebuffer utilities, and image commands after the endpoint changes.
-`brlobol_pivot_guard`, `imgstream_test`, `imgstream_fb_compat_test`,
+`BObol_pivot_guard`, `imgstream_test`, `imgstream_fb_compat_test`,
 `regress-remrt`, and `regress-rtedge` passed.  Standalone `rt` and `fbserv`
 were then run against both `/dev/swrast` and `/dev/ogl` on a usable native X
 server; all four visible-provider smokes passed.  These paths either publish
@@ -132,7 +132,7 @@ Remaining Compatibility Owners
 
 libtclcad has no direct libdm dependency.  Its Tk Obol host shell and active
 framebuffer composition use libged's session-owned Obol/imgstream bridge.
-Composition is typed state owned by `BRLObolFramebufferStream`: a target host
+Composition is typed state owned by `BObolFramebufferStream`: a target host
 must accept both the existing framebuffer and requested layer before the old
 host detaches.  A live endpoint-property rejection preserves the prior BV mode
 and retained layer rather than silently diverging passive and rendered state.
@@ -142,7 +142,7 @@ stable across image attachment and live layer changes and is covered by
 composite capture.
 The bridge clears an old endpoint capture provider before binding the active
 or explicitly selected output endpoint; factory instances remain opaque and
-are never cast to `BRLObolWindowHost`.  TclCAD provides an event-loop
+are never cast to `BObolWindowHost`.  TclCAD provides an event-loop
 transport fallback; endpoint-backed bridges retain their worker transport so
 synchronous renderer clients never depend on the Tcl event loop.  Raw PIX
 image dimensions use libimgstream's image-size helpers, and TclCAD owns its
@@ -237,7 +237,7 @@ appropriate until a stereo-capable host passes the validation above.
 TclCAD `pix` and `png` capture use the selected view's display endpoint for
 size, rendering, and readback.  Hardware Togl and software TkPhoto hosts share
 the endpoint capture contract; neither command uses DM context or display-image
-callbacks.  `libbrlobol` depends only on `Obol::Obol` for renderer runtime
+callbacks.  `libBObol` depends only on `Obol::Obol` for renderer runtime
 libraries.  Obol's exported target carries its OSMesa interface dependency, so
 BRL-CAD has no separate OSMesa link anchor or `--as-needed` workaround.
 
@@ -259,7 +259,7 @@ scale, and center-dot HUD state instead of a DM font field.
 TclCAD display-policy commands use typed endpoint properties and libbv view
 state for background, lighting, transparency, depth testing, and zclip enable.
 The retired `bounds` command no longer stores an OGL projection workaround in
-DM or libbv.  libbrlobol realizes clipping as two retained, view-aligned Obol
+DM or libbv.  libBObol realizes clipping as two retained, view-aligned Obol
 clip planes; normal camera near/far planes remain scene-derived.  Mouse and
 face rays are independent of DM state, while candidate visibility is not:
 Obol traversal and exact source-mesh/librt refinement apply the same retained
@@ -292,7 +292,7 @@ Migration Invariants
 * Geometry is source-local and instances retain path, transform, material,
   visibility, selection, and edit identity.
 * Realized LoD is per-view.  Persistent draw and mesh-LoD caches are owned by
-  libbrlobol under `BU_DIR_CACHE/.DbDrawCache`.
+  libBObol under `BU_DIR_CACHE/.DbDrawCache`.
 * Embedded framebuffer pixels are imgstream data presented as Obol scene
   content.  No nested display-manager window or legacy framebuffer fallback is
   supported.

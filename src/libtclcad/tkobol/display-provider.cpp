@@ -7,8 +7,8 @@
 
 #include "common.h"
 
-#include "brlobol/display_session.h"
-#include "brlobol/host_factory.h"
+#include "BObol/BDisplaySession.h"
+#include "BObol/BHostFactory.h"
 #include "bu/app.h"
 #include "bu/log.h"
 #include "bu/vls.h"
@@ -22,7 +22,7 @@ struct TkObolDisplayProvider {
 };
 
 static int
-tk_obol_display_provider_open(brlobol_display_endpoint_t *endpoint,
+tk_obol_display_provider_open(bobol_display_endpoint_t *endpoint,
 	const imgstream_fb_spec_info_t *spec, size_t width, size_t height,
 	const char *title, void **instance, void *UNUSED(user_data))
 {
@@ -31,18 +31,18 @@ tk_obol_display_provider_open(brlobol_display_endpoint_t *endpoint,
 	return 0;
 
     const char *factory_name = NULL;
-    enum brlobol_render_engine engine = BRLOBOL_RENDER_ENGINE_AUTO;
+    enum bobol_render_engine engine = BOBOL_RENDER_ENGINE_AUTO;
     switch (spec->display) {
 	case IMGSTREAM_FB_DISPLAY_X:
 	case IMGSTREAM_FB_DISPLAY_SWRAST:
 	    factory_name = "tk-photo";
-	    engine = BRLOBOL_RENDER_ENGINE_SW;
+	    engine = BOBOL_RENDER_ENGINE_SW;
 	    break;
 	case IMGSTREAM_FB_DISPLAY_QTGL:
 	case IMGSTREAM_FB_DISPLAY_OGL:
 	case IMGSTREAM_FB_DISPLAY_WGL:
 	    factory_name = "tk-gl";
-	    engine = BRLOBOL_RENDER_ENGINE_HW;
+	    engine = BOBOL_RENDER_ENGINE_HW;
 	    break;
 	case IMGSTREAM_FB_DISPLAY_NONE:
 	default:
@@ -65,19 +65,19 @@ tk_obol_display_provider_open(brlobol_display_endpoint_t *endpoint,
 	((stage = "registering Tk Obol host factories"),
 	 tclcad_obol_host_factories_register()) &&
 	((stage = "selecting the requested Obol renderer"),
-	 brlobol_display_endpoint_render_engine_set(endpoint, engine))) {
-	struct brlobol_host_desc desc = {};
+	 bobol_display_endpoint_render_engine_set(endpoint, engine))) {
+	struct bobol_host_desc desc = {};
 	desc.struct_size = sizeof(desc);
-	desc.mode = BRLOBOL_HOST_MODE_TOPLEVEL;
+	desc.mode = BOBOL_HOST_MODE_TOPLEVEL;
 	desc.width = static_cast<unsigned int>(width);
 	desc.height = static_cast<unsigned int>(height);
 	desc.device_pixel_ratio = 1.0;
 	desc.visible = 1;
 	desc.title = title ? title : "BRL-CAD framebuffer";
 	desc.application_context = provider->interp;
-	desc.vsync = BRLOBOL_HOST_VSYNC_AUTO;
+	desc.vsync = BOBOL_HOST_VSYNC_AUTO;
 	stage = "opening the Tk Obol host";
-	opened = brlobol_display_endpoint_host_open(endpoint, factory_name, &desc);
+	opened = bobol_display_endpoint_host_open(endpoint, factory_name, &desc);
     }
     if (opened) {
 	bu_vls_free(&log);
@@ -128,9 +128,9 @@ tk_obol_display_provider_poll_rate(const void *UNUSED(instance),
 extern "C" TCLCAD_EXPORT int
 tclcad_obol_display_provider_register(void)
 {
-    static const brlobol_display_provider_t provider = {
-	BRLOBOL_DISPLAY_PROVIDER_ABI_VERSION,
-	sizeof(brlobol_display_provider_t),
+    static const bobol_display_provider_t provider = {
+	BOBOL_DISPLAY_PROVIDER_ABI_VERSION,
+	sizeof(bobol_display_provider_t),
 	"tk-obol",
 	100,
 	NULL,
@@ -139,5 +139,5 @@ tclcad_obol_display_provider_register(void)
 	tk_obol_display_provider_poll,
 	tk_obol_display_provider_poll_rate
     };
-    return brlobol_display_provider_register(&provider);
+    return bobol_display_provider_register(&provider);
 }

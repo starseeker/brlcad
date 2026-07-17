@@ -35,7 +35,7 @@
 #include "bu/hash.h"
 #include "bu/malloc.h"
 #include "bg/clip.h"
-#include "brlobol/draw_cache.h"
+#include "BObol/BDrawCache.h"
 #include "bv.h"
 
 #include "ged.h"

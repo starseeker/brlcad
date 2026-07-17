@@ -61,8 +61,8 @@
 #include "ged/view.h"
 #include "ged/event_txn.h"
 #include "tclcad.h"
-#include "brlobol/display_endpoint.h"
-#include "brlobol/host_factory.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BHostFactory.h"
 
 // tclcad.h pulls in OpenNURBS in C++ compilation mode, which defines None,
 // which will conflict with Tk.h's Xlib None if we include tk.h before tclcad.h
@@ -93,7 +93,7 @@
 #include "./view/view.h"
 #include "./draw_view_move_helpers.h"
 
-static brlobol_display_endpoint_t *
+static bobol_display_endpoint_t *
 tclcad_commands_endpoint(const void *view_ctx)
 {
     return ged_view_context_display_endpoint_get(view_ctx);
@@ -105,22 +105,22 @@ tclcad_commands_endpoint(const void *view_ctx)
 static int
 tclcad_commands_endpoint_input_enabled(const void *view_ctx)
 {
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	tclcad_commands_endpoint(view_ctx);
-    return endpoint && (brlobol_display_endpoint_host_capabilities(endpoint) &
-	BRLOBOL_HOST_CAP_INPUT);
+    return endpoint && (bobol_display_endpoint_host_capabilities(endpoint) &
+	BOBOL_HOST_CAP_INPUT);
 }
 
 static int
 tclcad_commands_endpoint_dimension_get(const void *view_ctx,
 	const char *name)
 {
-    brlobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(view_ctx);
-    struct brlobol_endpoint_property_value property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    if (!endpoint || brlobol_display_endpoint_property_get(endpoint, name,
-	    &property) != BRLOBOL_ENDPOINT_PROPERTY_OK ||
-	property.type != BRLOBOL_ENDPOINT_PROPERTY_UINT || !property.uint_value)
+    bobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(view_ctx);
+    struct bobol_endpoint_property_value property =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    if (!endpoint || bobol_display_endpoint_property_get(endpoint, name,
+	    &property) != BOBOL_ENDPOINT_PROPERTY_OK ||
+	property.type != BOBOL_ENDPOINT_PROPERTY_UINT || !property.uint_value)
 	return 0;
     return (int)property.uint_value;
 }
@@ -158,14 +158,14 @@ static int
 tclcad_commands_endpoint_bool_get(const void *view_ctx, const char *name,
 	int *value)
 {
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	tclcad_commands_endpoint(view_ctx);
-    struct brlobol_endpoint_property_value property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value property =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     if (!endpoint || !value ||
-	brlobol_display_endpoint_property_get(endpoint, name, &property) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK ||
-	property.type != BRLOBOL_ENDPOINT_PROPERTY_BOOL)
+	bobol_display_endpoint_property_get(endpoint, name, &property) !=
+	    BOBOL_ENDPOINT_PROPERTY_OK ||
+	property.type != BOBOL_ENDPOINT_PROPERTY_BOOL)
 	return 0;
     *value = property.bool_value ? 1 : 0;
     return 1;
@@ -174,46 +174,46 @@ tclcad_commands_endpoint_bool_get(const void *view_ctx, const char *name,
 static int
 tclcad_commands_endpoint_bool_set(void *view_ctx, const char *name, int value)
 {
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	tclcad_commands_endpoint(view_ctx);
-    struct brlobol_endpoint_property_value property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bobol_endpoint_property_value property =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
     property.bool_value = value ? 1 : 0;
     return endpoint &&
-	brlobol_display_endpoint_property_set(endpoint, name, &property) ==
-	    BRLOBOL_ENDPOINT_PROPERTY_OK;
+	bobol_display_endpoint_property_set(endpoint, name, &property) ==
+	    BOBOL_ENDPOINT_PROPERTY_OK;
 }
 
 static int
-tclcad_obol_input_action(void *user_data, BRLObolInputAction action,
-	const BRLObolInputEvent *event)
+tclcad_obol_input_action(void *user_data, BObolInputAction action,
+	const BObolInputEvent *event)
 {
     void *view_ctx = user_data;
-    if (!view_ctx || !event || event->type != BRLOBOL_INPUT_KEY_PRESS)
+    if (!view_ctx || !event || event->type != BOBOL_INPUT_KEY_PRESS)
 	return 0;
 
     int handled = 0;
     switch (action) {
-	case BRLOBOL_ACTION_TOGGLE_ADC:
-	case BRLOBOL_ACTION_TOGGLE_MODEL_AXES:
-	case BRLOBOL_ACTION_TOGGLE_VIEW_AXES:
-	    handled = brlobol_display_endpoint_input_faceplate_toggle_apply(
+	case BOBOL_ACTION_TOGGLE_ADC:
+	case BOBOL_ACTION_TOGGLE_MODEL_AXES:
+	case BOBOL_ACTION_TOGGLE_VIEW_AXES:
+	    handled = bobol_display_endpoint_input_faceplate_toggle_apply(
 		tclcad_commands_endpoint(view_ctx), view_ctx, action, NULL);
 	    break;
-	case BRLOBOL_ACTION_VIEW_2:
-	case BRLOBOL_ACTION_VIEW_3:
-	case BRLOBOL_ACTION_VIEW_4:
-	case BRLOBOL_ACTION_VIEW_5:
-	case BRLOBOL_ACTION_VIEW_6:
-	case BRLOBOL_ACTION_VIEW_7:
-	case BRLOBOL_ACTION_VIEW_FRONT:
-	case BRLOBOL_ACTION_VIEW_TOP:
-	case BRLOBOL_ACTION_VIEW_BOTTOM:
-	case BRLOBOL_ACTION_VIEW_LEFT:
-	case BRLOBOL_ACTION_VIEW_REAR:
-	case BRLOBOL_ACTION_VIEW_RIGHT:
-	    handled = brlobol_input_view_orientation_apply(view_ctx, action);
+	case BOBOL_ACTION_VIEW_2:
+	case BOBOL_ACTION_VIEW_3:
+	case BOBOL_ACTION_VIEW_4:
+	case BOBOL_ACTION_VIEW_5:
+	case BOBOL_ACTION_VIEW_6:
+	case BOBOL_ACTION_VIEW_7:
+	case BOBOL_ACTION_VIEW_FRONT:
+	case BOBOL_ACTION_VIEW_TOP:
+	case BOBOL_ACTION_VIEW_BOTTOM:
+	case BOBOL_ACTION_VIEW_LEFT:
+	case BOBOL_ACTION_VIEW_REAR:
+	case BOBOL_ACTION_VIEW_RIGHT:
+	    handled = bobol_input_view_orientation_apply(view_ctx, action);
 	    break;
 	default:
 	    return 0;
@@ -1266,10 +1266,10 @@ tclcad_view_host_destroy(struct tclcad_obj *top, void *view_ctx)
     struct bu_vls *view_command = tclcad_view_pathname_vls(view_ctx);
     if (view_command && bu_vls_strlen(view_command))
 	Tcl_DeleteCommand(top->to_interp, bu_vls_cstr(view_command));
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
     if (endpoint)
-	(void)brlobol_display_endpoint_input_action_handler_clear_if(endpoint,
+	(void)bobol_display_endpoint_input_action_handler_clear_if(endpoint,
 	    tclcad_obol_input_action, view_ctx);
     (void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
 
@@ -1536,17 +1536,17 @@ to_bg(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    brlobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(gdvp);
+    bobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(gdvp);
     if (!endpoint)
 	return BRLCAD_ERROR;
 
     /* The endpoint controller is the rendering authority. */
     if (argc == 2) {
-	struct brlobol_endpoint_property_value property =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	if (brlobol_display_endpoint_property_get(endpoint,
+	struct bobol_endpoint_property_value property =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	if (bobol_display_endpoint_property_get(endpoint,
 		"controller.background.bottom", &property) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK)
+	    BOBOL_ENDPOINT_PROPERTY_OK)
 	    return BRLCAD_ERROR;
 	bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 		(int)lrint(property.color3[0] * 255.0),
@@ -1567,16 +1567,16 @@ to_bg(struct ged *gedp,
 	    b < 0 || 255 < b)
 	goto bad_color;
 
-    struct brlobol_endpoint_property_value property =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    property.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bobol_endpoint_property_value property =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    property.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
     VSET(property.color3, r / 255.0, g / 255.0, b / 255.0);
-    if (brlobol_display_endpoint_property_set(endpoint,
+    if (bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.bottom", &property) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK ||
-	brlobol_display_endpoint_property_set(endpoint,
+		BOBOL_ENDPOINT_PROPERTY_OK ||
+	bobol_display_endpoint_property_set(endpoint,
 	    "controller.background.top", &property) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK)
+		BOBOL_ENDPOINT_PROPERTY_OK)
 	return BRLCAD_ERROR;
 
     to_refresh_view(gdvp);
@@ -3430,20 +3430,20 @@ to_fontsize(struct ged *gedp,
     if (fontsize < 5 || fontsize > 96)
 	goto bad_fontsize;
 
-    brlobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(gdvp);
+    bobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(gdvp);
     if (endpoint) {
 	const char *font_properties[] = {
 	    "view.faceplate.params.font_size",
 	    "view.faceplate.center_dot.font_size",
 	    "view.faceplate.scale.font_size"
 	};
-	struct brlobol_endpoint_property_value property =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	property.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	struct bobol_endpoint_property_value property =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	property.type = BOBOL_ENDPOINT_PROPERTY_UINT;
 	property.uint_value = (uint64_t)fontsize;
 	for (size_t i = 0; i < sizeof(font_properties) / sizeof(font_properties[0]); i++) {
-	    if (brlobol_display_endpoint_property_set(endpoint,
-		font_properties[i], &property) != BRLOBOL_ENDPOINT_PROPERTY_OK)
+	    if (bobol_display_endpoint_property_set(endpoint,
+		font_properties[i], &property) != BOBOL_ENDPOINT_PROPERTY_OK)
 		return BRLCAD_ERROR;
 	}
     } else {
@@ -4639,45 +4639,45 @@ tclcad_view_host_open(void *view_ctx, struct tclcad_view_data *tvd,
 	bu_vls_printf(result, "Tk Obol host factory registration failed\n");
 	return 0;
     }
-    brlobol_display_endpoint_t *endpoint =
-	brlobol_display_endpoint_create(NULL, 0);
+    bobol_display_endpoint_t *endpoint =
+	bobol_display_endpoint_create(NULL, 0);
     if (!endpoint) {
 	bu_vls_printf(result, "Obol display endpoint creation failed\n");
 	return 0;
     }
-    if (!brlobol_display_endpoint_render_engine_set(endpoint,
-	    software ? BRLOBOL_RENDER_ENGINE_SW : BRLOBOL_RENDER_ENGINE_HW) ||
+    if (!bobol_display_endpoint_render_engine_set(endpoint,
+	    software ? BOBOL_RENDER_ENGINE_SW : BOBOL_RENDER_ENGINE_HW) ||
 	!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
-	brlobol_display_endpoint_destroy(endpoint);
+	bobol_display_endpoint_destroy(endpoint);
 	bu_vls_printf(result, "Obol view endpoint attachment failed\n");
 	return 0;
     }
 
-    struct brlobol_host_desc desc = {0};
+    struct bobol_host_desc desc = {0};
     desc.struct_size = sizeof(desc);
-    desc.mode = toplevel ? BRLOBOL_HOST_MODE_TOPLEVEL :
-	BRLOBOL_HOST_MODE_EMBEDDED;
+    desc.mode = toplevel ? BOBOL_HOST_MODE_TOPLEVEL :
+	BOBOL_HOST_MODE_EMBEDDED;
     desc.width = (unsigned int)width;
     desc.height = (unsigned int)height;
     desc.device_pixel_ratio = 1.0;
     desc.visible = 1;
     desc.required_capabilities = software ?
-	BRLOBOL_HOST_CAP_PIXEL_PRESENT : BRLOBOL_HOST_CAP_SYSTEM_GL;
+	BOBOL_HOST_CAP_PIXEL_PRESENT : BOBOL_HOST_CAP_SYSTEM_GL;
     desc.title = bu_vls_cstr(&tvd->gdv_pathname);
     desc.native_id_hint = bu_vls_cstr(&tvd->gdv_pathname);
     desc.application_context = interp;
-    if (!brlobol_display_endpoint_host_open(endpoint,
+    if (!bobol_display_endpoint_host_open(endpoint,
 	    software ? "tk-photo" : "tk-gl", &desc)) {
 	(void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
 	bu_vls_printf(result, "%s host open failed\n",
 	    software ? "TkPhoto" : "Tk OpenGL");
 	return 0;
     }
-    if (brlobol_display_endpoint_host_capabilities(endpoint) &
-	BRLOBOL_HOST_CAP_INPUT) {
-	if (!brlobol_display_endpoint_input_profile_set(endpoint,
-		brlobol_input_keyboard_view_profile()) ||
-	    !brlobol_display_endpoint_input_action_handler_set(endpoint,
+    if (bobol_display_endpoint_host_capabilities(endpoint) &
+	BOBOL_HOST_CAP_INPUT) {
+	if (!bobol_display_endpoint_input_profile_set(endpoint,
+		bobol_input_keyboard_view_profile()) ||
+	    !bobol_display_endpoint_input_action_handler_set(endpoint,
 		tclcad_obol_input_action, view_ctx)) {
 	    (void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
 	    bu_vls_printf(result, "Tk Obol input endpoint setup failed\n");
@@ -5047,19 +5047,19 @@ tclcad_commands_capture_rgb(struct ged *gedp, void *view_ctx,
     *width = 0;
     *height = 0;
 
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
     if (!endpoint)
 	return 0;
 
     (void)ged_draw_obol_framebuffer_present(gedp);
-    if (!brlobol_display_endpoint_view_sync(endpoint, view_ctx))
+    if (!bobol_display_endpoint_view_sync(endpoint, view_ctx))
 	return 0;
 
     unsigned char *source = NULL;
     size_t source_size = 0;
     unsigned int components = 0;
-    if (!brlobol_display_endpoint_capture(endpoint, &source, &source_size,
+    if (!bobol_display_endpoint_capture(endpoint, &source, &source_size,
 	    width, height, &components) || !source || !*width || !*height ||
 	    (components != 3 && components != 4) ||
 	    source_size < (size_t)(*width) * (*height) * components) {
@@ -6326,7 +6326,7 @@ to_view_win_size(struct ged *gedp,
     }
 
     if (width <= 0 || height <= 0 ||
-	!brlobol_display_endpoint_resize(tclcad_commands_endpoint(gdvp),
+	!bobol_display_endpoint_resize(tclcad_commands_endpoint(gdvp),
 	    (unsigned int)width, (unsigned int)height, 1.0))
 	return BRLCAD_ERROR;
     bv_context_dimensions_set((struct bv_context *)gdvp, width, height);

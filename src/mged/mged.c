@@ -72,7 +72,7 @@
 #include "ged.h"
 #include "ged/view.h"
 #include "ged/draw_obol.h"
-#include "brlobol/display_endpoint.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "tclcad.h"
 
 /* private */
@@ -2066,17 +2066,17 @@ mged_obol_framebuffer_composition_sync(const struct mged_display *display,
 	       variables->mv_fb_overlay == 1 ? "interlay" : "overlay";
     }
 
-    struct brlobol_endpoint_property_value current =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value current =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     if (ged_view_context_display_property_get(view_ctx,
 	    "composition.framebuffer.mode", &current) ==
-	BRLOBOL_ENDPOINT_PROPERTY_OK && current.string_value &&
+	BOBOL_ENDPOINT_PROPERTY_OK && current.string_value &&
 	BU_STR_EQUAL(current.string_value, mode))
 	return;
 
-    struct brlobol_endpoint_property_value next =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    next.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+    struct bobol_endpoint_property_value next =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    next.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
     next.string_value = mode;
     (void)ged_view_context_display_property_set(view_ctx,
 	"composition.framebuffer.mode", &next);
@@ -2149,7 +2149,7 @@ refresh(struct mged_state *s)
 
 	void *view_ctx = p->display_view_state ? p->display_view_state->vs_gvp : NULL;
 	struct bv *view = view_ctx ? mged_view_state_view(p->display_view_state) : NULL;
-	brlobol_display_endpoint_t *endpoint = view_ctx ?
+	bobol_display_endpoint_t *endpoint = view_ctx ?
 	    ged_view_context_display_endpoint_get(view_ctx) : NULL;
 	mged_display_repaint_consume(p);
 	if (!view || !endpoint)
@@ -2179,8 +2179,8 @@ refresh(struct mged_state *s)
 	    }
 	}
 
-	if (brlobol_display_endpoint_view_sync(endpoint, view_ctx))
-	    (void)brlobol_display_endpoint_request_frame(endpoint,
+	if (bobol_display_endpoint_view_sync(endpoint, view_ctx))
+	    (void)bobol_display_endpoint_request_frame(endpoint,
 		"MGED refresh");
 	bv_refresh_complete(view);
     }

@@ -10,8 +10,8 @@
 
 #include "qtcad/QgObolPick.h"
 
-#include "brlobol/view_controller.h"
-#include "brlobol/view_query.h"
+#include "BObol/BViewController.h"
+#include "BObol/BViewQuery.h"
 #include "bu/vls.h"
 #include "ged/draw.h"
 #include "qtcad/QgView.h"
@@ -153,7 +153,7 @@ qg_obol_resolve_feature_pick(void *view_ctx,
 }
 
 static QgObolPickRecord
-qg_obol_pick_record(const BRLObolViewPickRecord &hit)
+qg_obol_pick_record(const BObolViewPickRecord &hit)
 {
     QgObolPickRecord record;
     const SoBRLPickDetail &detail = hit.detail;
@@ -248,12 +248,12 @@ qg_obol_apply_feature_states(void *view_ctx,
 
 static void
 qg_obol_pick_records(void *view_ctx,
-	const std::vector<BRLObolViewPickRecord> &hits,
+	const std::vector<BObolViewPickRecord> &hits,
 	std::vector<QgObolPickRecord> &records)
 {
     records.clear();
     records.reserve(hits.size());
-    for (const BRLObolViewPickRecord &hit : hits) {
+    for (const BObolViewPickRecord &hit : hits) {
 	QgObolPickRecord record = qg_obol_pick_record(hit);
 	qg_obol_resolve_feature_pick(view_ctx, record);
 	records.push_back(record);
@@ -275,7 +275,7 @@ qg_obol_pick_point_internal(QgView *display,
     if (!display)
 	return 0;
 
-    BRLObolViewController *controller = display->obolViewController();
+    BObolViewController *controller = display->obolViewController();
     if (!controller)
 	return 0;
     int width = 0;
@@ -284,8 +284,8 @@ qg_obol_pick_point_internal(QgView *display,
 	controller->setViewportSize(static_cast<unsigned int>(width),
 	    static_cast<unsigned int>(height));
 
-    std::vector<BRLObolViewPickRecord> hits;
-    const int count = brlobol_view_pick_point(controller, x, y,
+    std::vector<BObolViewPickRecord> hits;
+    const int count = bobol_view_pick_point(controller, x, y,
 	radiusPixels, pickAll, hits, submittedSourceRequestCount);
     qg_obol_pick_records(qg_obol_pick_view_context(display), hits, records);
     return count;
@@ -318,7 +318,7 @@ qg_obol_pick_ray(QgView *display,
     if (!display)
 	return 0;
 
-    BRLObolViewController *controller = display->obolViewController();
+    BObolViewController *controller = display->obolViewController();
     if (!controller)
 	return 0;
     int width = 0;
@@ -327,8 +327,8 @@ qg_obol_pick_ray(QgView *display,
 	controller->setViewportSize(static_cast<unsigned int>(width),
 	    static_cast<unsigned int>(height));
 
-    std::vector<BRLObolViewPickRecord> hits;
-    const int count = brlobol_view_pick_ray(controller, rayOrigin,
+    std::vector<BObolViewPickRecord> hits;
+    const int count = bobol_view_pick_ray(controller, rayOrigin,
 	rayDirection, pickAll, hits, submittedSourceRequestCount);
     qg_obol_pick_records(qg_obol_pick_view_context(display), hits, records);
     return count;

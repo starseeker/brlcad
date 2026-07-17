@@ -43,7 +43,7 @@ _color_shape_record_cb(const struct ged_draw_shape_record *rec, void *ud)
     if (!ctx || !rec)
 	return 1;
 
-    /* Color-table interpretation lives in libbrlobol.  GED only requests
+    /* Color-table interpretation lives in libBObol.  GED only requests
      * refresh for drawn Obol database sources at the current material
      * revision. */
     (void)ged_draw_shape_ref_refresh_material_color(ctx->gedp, rec->ref,

@@ -9,14 +9,14 @@
 
 #include "bv.h"
 
-#include "brlobol/database_source.h"
-#include "brlobol/draw_cache.h"
-#include "brlobol/lod_service.h"
-#include "brlobol/mesh_shape.h"
-#include "brlobol/scene_controller.h"
-#include "brlobol/vlist_shape.h"
-#include "brlobol/view_lod.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BDrawCache.h"
+#include "BObol/BLodService.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BVListShape.h"
+#include "BObol/BViewLod.h"
+#include "BObol/BViewController.h"
 #include "bu/app.h"
 #include "bu/env.h"
 #include "bu/file.h"
@@ -214,7 +214,7 @@ print_progressive_lod_timings(FILE *fp,
 
 static int
 qtcad_obol_render_database_source_count(struct ged *gedp,
-					BRLObolViewController *controller)
+					BObolViewController *controller)
 {
     int count = controller ? controller->getDatabaseSourceCount() : 0;
     SoBRLSceneController *sharedScene = ged_draw_obol_scene_controller(gedp);
@@ -262,7 +262,7 @@ qtcad_obol_scene_database_source_max_depth(
 
     const int source_count = scene->getDatabaseSourceCount();
     for (int i = 0; i < source_count; i++) {
-	BRLObolDatabaseSourceSummary summary;
+	BObolDatabaseSourceSummary summary;
 	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
 	    continue;
 	const char *path = summary.path.getString();
@@ -282,7 +282,7 @@ qtcad_obol_scene_database_source_max_depth(
 static int
 qtcad_obol_render_database_source_max_depth(
     struct ged *gedp,
-    BRLObolViewController *controller,
+    BObolViewController *controller,
     const char *root_path)
 {
     int max_depth = controller ?
@@ -325,7 +325,7 @@ qtcad_obol_scene_realized_database_geometry_count(SoBRLSceneController *scene)
 static int
 qtcad_obol_render_realized_database_geometry_count(
     struct ged *gedp,
-    BRLObolViewController *controller)
+    BObolViewController *controller)
 {
     int count = controller ?
 		qtcad_obol_scene_realized_database_geometry_count(
@@ -356,7 +356,7 @@ template <typename ShapeT>
 static int
 qtcad_obol_shape_matches_draw_metadata(
     ShapeT *shape,
-    const struct BRLObolDrawMetadataRecord *record)
+    const struct BObolDrawMetadataRecord *record)
 {
     if (!shape || !record)
 	return 0;
@@ -389,12 +389,12 @@ qtcad_obol_shape_matches_draw_metadata(
 static int
 qtcad_obol_source_matches_draw_metadata(
     SoBRLDatabaseSource *source,
-    const struct BRLObolDrawMetadataRecord *record)
+    const struct BObolDrawMetadataRecord *record)
 {
     if (!source || !record)
 	return 0;
 
-    BRLObolDatabaseSourceSummary summary;
+    BObolDatabaseSourceSummary summary;
     if (!source->getSummary(summary) || !summary.valid ||
 	!summary.databaseMetadataValid)
 	return 0;
@@ -427,7 +427,7 @@ qtcad_obol_source_matches_draw_metadata(
 static int
 qtcad_obol_scene_has_draw_metadata(
     SoBRLSceneController *scene,
-    const struct BRLObolDrawMetadataRecord *record)
+    const struct BObolDrawMetadataRecord *record)
 {
     if (!scene || !record)
 	return 0;
@@ -460,8 +460,8 @@ qtcad_obol_scene_has_draw_metadata(
 static int
 qtcad_obol_render_has_draw_metadata(
     struct ged *gedp,
-    BRLObolViewController *controller,
-    const struct BRLObolDrawMetadataRecord *record)
+    BObolViewController *controller,
+    const struct BObolDrawMetadataRecord *record)
 {
     if (controller &&
 	qtcad_obol_scene_has_draw_metadata(controller->getSceneController(),
@@ -481,7 +481,7 @@ qtcad_obol_render_has_draw_metadata(
 static int
 qtcad_obol_autoview_refresh(struct ged *gedp,
 			    QgView &view,
-			    BRLObolViewController *controller,
+			    BObolViewController *controller,
 			    const char *render_reason)
 {
     const char *autoview_cmd[1] = {"autoview"};
@@ -498,7 +498,7 @@ qtcad_obol_autoview_refresh(struct ged *gedp,
 
 static void
 qtcad_obol_request_view_frame(QgView &view,
-	BRLObolViewController *controller, const char *render_reason)
+	BObolViewController *controller, const char *render_reason)
 {
     view.need_update(QG_VIEW_REFRESH);
     if (controller)
@@ -509,7 +509,7 @@ qtcad_obol_request_view_frame(QgView &view,
 
 static int
 qtcad_obol_scene_autoview_refresh(QgView &view,
-	BRLObolViewController *controller, const char *render_reason)
+	BObolViewController *controller, const char *render_reason)
 {
     void *view_ctx = view.viewContext();
     SoNode *root = controller ? controller->getRenderSceneRoot() : NULL;
@@ -606,7 +606,7 @@ qtcad_obol_print_scene_source_diagnostics(const char *label,
 static void
 qtcad_obol_print_render_diagnostics(struct ged *gedp,
 				    const struct progressive_lod_case &testCase,
-				    BRLObolViewController *controller,
+				    BObolViewController *controller,
 				    const char *stage)
 {
     const char *env = getenv("QTCAD_OBOL_PROGRESSIVE_LOD_DIAGNOSTICS");
@@ -820,8 +820,8 @@ accumulate_realized_mesh_count(SoNode *node)
 	if (source->isCompactOccurrenceRegistry()) {
 	    int compactCount = 0;
 	    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
-		BRLObolCompactInstanceHandle handle;
-		BRLObolCompactInstanceSummary summary;
+		BObolCompactInstanceHandle handle;
+		BObolCompactInstanceSummary summary;
 		if (source->getCompactInstanceHandle(i, handle) &&
 		    source->getCompactInstanceSummary(handle, summary) &&
 		    summary.valid && summary.meshGeometry)
@@ -842,7 +842,7 @@ accumulate_realized_mesh_count(SoNode *node)
 }
 
 static int
-realized_mesh_count(BRLObolViewController *controller)
+realized_mesh_count(BObolViewController *controller)
 {
     return controller ?
 	accumulate_realized_mesh_count(controller->getRenderSceneRoot()) : 0;
@@ -917,8 +917,8 @@ qtcad_obol_expansion_status_accumulate(
 }
 
 static int
-process_until_proxy_kind(BRLObolViewController *controller,
-			 BRLObolLodService &service,
+process_until_proxy_kind(BObolViewController *controller,
+			 BObolLodService &service,
 			 int expected_kind,
 			 size_t min_active_payload_count,
 			 size_t &applied_total,
@@ -955,8 +955,8 @@ process_until_proxy_kind(BRLObolViewController *controller,
 }
 
 static int
-process_until_mesh(BRLObolViewController *controller,
-		   BRLObolLodService &service,
+process_until_mesh(BObolViewController *controller,
+		   BObolLodService &service,
 		   size_t min_active_payload_count,
 		   size_t &applied_total,
 		   int timeout_ms)
@@ -1062,9 +1062,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     char cache_dir[MAXPATHLEN] = {0};
     char active_draw_target[MAXPATHLEN] = {0};
     struct ged *gedp = NULL;
-    BRLObolViewController *controller = NULL;
+    BObolViewController *controller = NULL;
     QgView view(NULL, QgViewType::SW);
-    BRLObolLodService service;
+    BObolLodService service;
     int service_started = 0;
     int controller_attached = 0;
     struct ged_draw_transaction_result draw_result;
@@ -1074,8 +1074,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	testCase.startupOnly || testCase.startupRefine ||
 	testCase.startupExpand || testCase.startupAutoExpand ||
 	testCase.startupWireLod;
-    struct BRLObolDrawMetadataRecord startup_metadata;
-    brlobol_draw_metadata_record_init(&startup_metadata);
+    struct BObolDrawMetadataRecord startup_metadata;
+    bobol_draw_metadata_record_init(&startup_metadata);
 
     auto cleanup = [&]() {
 	if (controller) {
@@ -1118,13 +1118,13 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
      */
     if (testCase.diagnosticStages) {
 	/* An explicit diagnostic request must be independent of its caller. */
-	bu_setenv("BRLOBOL_LOD_OBB_TASK_DELAY_MS",
+	bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS",
 		  testCase.slowLodDelays ? "350" : "75", 1);
-	bu_setenv("BRLOBOL_LOD_TASK_DELAY_MS",
+	bu_setenv("BOBOL_LOD_TASK_DELAY_MS",
 		  testCase.slowLodDelays ? "700" : "150", 1);
     } else {
-	set_default_env("BRLOBOL_LOD_OBB_TASK_DELAY_MS", "0");
-	set_default_env("BRLOBOL_LOD_TASK_DELAY_MS", "0");
+	set_default_env("BOBOL_LOD_OBB_TASK_DELAY_MS", "0");
+	set_default_env("BOBOL_LOD_TASK_DELAY_MS", "0");
     }
 
     phase_start = bu_gettime();
@@ -1241,7 +1241,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	startup_metadata.hasShader = 1;
 	bu_strlcpy(startup_metadata.shader, "cache-startup-shader",
 		   sizeof(startup_metadata.shader));
-	if (brlobol_draw_path_metadata_cache_store(gedp->dbip,
+	if (bobol_draw_path_metadata_cache_store(gedp->dbip,
 		active_draw_target, &startup_metadata, NULL) != BRLCAD_OK) {
 	    fprintf(stderr,
 		    "qtcad progressive LoD startup metadata seed failed for %s\n",
@@ -1266,9 +1266,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     }
     controller_attached = startup_deferred ? 1 : 0;
     if (testCase.startupAutoExpand) {
-	BRLObolProgressiveOptions options;
-	options.flags = BRLOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
-	    BRLOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES;
+	BObolProgressiveOptions options;
+	options.flags = BOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
+	    BOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES;
 	options.maxLodResults = 8;
 	options.maxSources = 4;
 	options.maxChildrenPerSource = 64;
@@ -1469,7 +1469,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    int lit_auto = 0;
 	    int diff_auto = 0;
 	    QImage frame_auto;
-	    BRLObolProgressiveStatus progressive_status;
+	    BObolProgressiveStatus progressive_status;
 	    ged_draw_obol_lod_service_status_t service_status;
 	    memset(&service_status, 0, sizeof(service_status));
 	    for (int frame = 0; frame < 120; frame++) {
@@ -1907,7 +1907,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     QImage frame2;
     if (testCase.diagnosticStages) {
 	if (!process_until_proxy_kind(controller, service,
-			      BRLOBOL_LOD_PROXY_AABB,
+			      BOBOL_LOD_PROXY_AABB,
 			      testCase.minActivePayloadCount, applied_total,
 			      testCase.aabbTimeoutMs, "AABB")) {
 	    cleanup();
@@ -1916,13 +1916,13 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	record_progressive_lod_phase(timings.aabbSeconds, submit_start,
 				     total_start, testCase, "aabb");
 	active_aabb_payload_count =
-	    controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_AABB);
+	    controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_AABB);
 	qtcad_obol_request_view_frame(view, controller,
 	    "progressive-lod-aabb-frame");
 	view.get_viewport_image(frame1);
 
 	if (!process_until_proxy_kind(controller, service,
-			      BRLOBOL_LOD_PROXY_OBB,
+			      BOBOL_LOD_PROXY_OBB,
 			      testCase.minActivePayloadCount, applied_total,
 			      testCase.obbTimeoutMs, "OBB")) {
 	    cleanup();
@@ -1931,7 +1931,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	record_progressive_lod_phase(timings.obbSeconds, submit_start,
 				     total_start, testCase, "obb");
 	active_obb_payload_count =
-	    controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_OBB);
+	    controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_OBB);
 	qtcad_obol_request_view_frame(view, controller,
 	    "progressive-lod-obb-frame");
 	view.get_viewport_image(frame2);
@@ -2064,9 +2064,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	lod_off_diff = image_byte_diff(frame3, frame4);
 	lod_off_active_mesh = controller->getActiveLodMeshPayloadCount();
 	lod_off_active_aabb =
-	    controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_AABB);
+	    controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_AABB);
 	lod_off_active_obb =
-	    controller->getActiveLodProxyPayloadCount(BRLOBOL_LOD_PROXY_OBB);
+	    controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_OBB);
 	struct lit_pixel_bounds full_detail_bounds;
 	memset(&full_detail_bounds, 0, sizeof(full_detail_bounds));
 	if (frame4.isNull() || lod_off_lit < 20 ||

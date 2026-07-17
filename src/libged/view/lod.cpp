@@ -29,8 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "brlobol/draw_cache.h"
-#include "brlobol/mesh_lod_cache.h"
+#include "BObol/BDrawCache.h"
+#include "BObol/BMeshLodCache.h"
 #include "bu/cmd.h"
 #include "bu/hash.h"
 #include "bu/snooze.h"
@@ -224,7 +224,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	    struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
 
 	    // Clear any old cache in memory
-	    brlobol_mesh_lod_cache_clear_database(gedp->dbip);
+	    bobol_mesh_lod_cache_clear_database(gedp->dbip);
 
 	    int done = 0;
 	    int total = 0;
@@ -246,9 +246,9 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) {
 		done++;
 		bu_log("Caching BoT %s (%d of %d)\n", dp->d_namep, done, total);
-		struct BRLObolMeshLodCacheStatus status =
-			BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
-		if (brlobol_mesh_lod_cache_refresh(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
+		struct BObolMeshLodCacheStatus status =
+			BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+		if (bobol_mesh_lod_cache_refresh(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
 		    !status.has_cache_key)
 		    continue;
 	    }
@@ -302,9 +302,9 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 
 		// Because BRep LoD uses generated mesh data rather than a database
 		// full-detail mesh payload, store it with a fidelity ratio of 1.
-		struct BRLObolMeshLodCacheStatus status =
-			BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
-		(void)brlobol_mesh_lod_cache_store_mesh(gedp->dbip, dp->d_namep,
+		struct BObolMeshLodCacheStatus status =
+			BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+		(void)bobol_mesh_lod_cache_store_mesh(gedp->dbip, dp->d_namep,
 							(const point_t *)pnts, (size_t)pnt_cnt, normals,
 							faces, (size_t)face_cnt, key, 1.0, &status);
 
@@ -329,8 +329,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	}
 	if (argc == 2) {
 	    if (BU_STR_EQUAL(argv[1], "clear")) {
-		brlobol_mesh_lod_cache_clear_database(gedp->dbip);
-		(void)brlobol_draw_cache_clear_database(gedp->dbip);
+		bobol_mesh_lod_cache_clear_database(gedp->dbip);
+		(void)bobol_draw_cache_clear_database(gedp->dbip);
 		return BRLCAD_OK;
 	    } else if (BU_STR_EQUAL(argv[1], "exists")) {
 		struct directory *dp;
@@ -340,9 +340,9 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		// checking both BoTs and BREPs
 		if ((dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT) ||
 		    (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BREP)) {
-		    struct BRLObolMeshLodCacheStatus status =
-			    BRLOBOL_MESH_LOD_CACHE_STATUS_INIT;
-		    if (brlobol_mesh_lod_cache_status(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
+		    struct BObolMeshLodCacheStatus status =
+			    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+		    if (bobol_mesh_lod_cache_status(gedp->dbip, dp->d_namep, &status) != BRLCAD_OK ||
 			!status.has_cache_key) {
 			return BRLCAD_ERROR;
 		    }
@@ -353,8 +353,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	}
 	if (argc == 3) {
 	    if (BU_STR_EQUAL(argv[1], "clear") && BU_STR_EQUAL(argv[2], "all_files")) {
-		brlobol_mesh_lod_cache_clear_all();
-		brlobol_draw_cache_clear_all();
+		bobol_mesh_lod_cache_clear_all();
+		bobol_draw_cache_clear_all();
 		return BRLCAD_OK;
 	    }
 	}

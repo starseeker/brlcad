@@ -54,11 +54,11 @@
 #include <ged.h>
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
-#include "brlobol/display_endpoint.h"
-#include "brlobol/init.h"
-#include "brlobol/view_attachment.h"
-#include "brlobol/scene_controller.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BInit.h"
+#include "BObol/BViewAttachment.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
 #include <Inventor/nodes/SoGroup.h>
 #include "../../ged_private.h"
 #include "../../ged_draw_view_private.h"
@@ -101,16 +101,16 @@ capture_screengrab_nonempty(struct ged *gedp, const char *filename,
     return 0;
 }
 
-static BRLObolViewController *
+static BObolViewController *
 obol_controller_for_view(void *view_ctx)
 {
-    return (BRLObolViewController *)ged_draw_obol_controller_opaque_for_view(
+    return (BObolViewController *)ged_draw_obol_controller_opaque_for_view(
 	    view_ctx);
 }
 
 static int
 obol_interlay_is_between_scene_and_local_root(
-	BRLObolViewController *controller, SoNode *shared_root)
+	BObolViewController *controller, SoNode *shared_root)
 {
     if (!controller || !shared_root)
 	return 0;
@@ -134,14 +134,14 @@ obol_interlay_is_between_scene_and_local_root(
 static int
 configure_obol_view(struct ged *gedp, void *view_ctx, int width, int height)
 {
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
     if (!endpoint)
 	return 0;
 
     bv_dimensions_set(DRAW_TEST_BV(view_ctx), width, height);
     bv_unit_conversion_set(DRAW_TEST_BV(view_ctx), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
-    return brlobol_display_endpoint_resize(endpoint, (unsigned int)width,
+    return bobol_display_endpoint_resize(endpoint, (unsigned int)width,
 	    (unsigned int)height, 1.0);
 }
 
@@ -385,8 +385,8 @@ test_multi_obol_dm_attachment(const char *datadir)
 	}
     }
 
-    BRLObolViewController *v0_controller = obol_controller_for_view(v0);
-    BRLObolViewController *v1_controller = obol_controller_for_view(v1);
+    BObolViewController *v0_controller = obol_controller_for_view(v0);
+    BObolViewController *v1_controller = obol_controller_for_view(v1);
     if (!v0_controller || !v1_controller ||
 	v0_controller == v1_controller) {
 	bu_log("FAIL: views should have distinct Obol controllers\n");
@@ -399,9 +399,9 @@ test_multi_obol_dm_attachment(const char *datadir)
 	const int fast_ret = ged_exec_dm(gedp, 4, fast_av);
 	if (fast_ret != BRLCAD_OK ||
 		v0_controller->getSoftwareWireMode() !=
-		    BRLObolViewController::SOFTWARE_WIRE_FAST ||
+		    BObolViewController::SOFTWARE_WIRE_FAST ||
 		v1_controller->getSoftwareWireMode() !=
-		    BRLObolViewController::SOFTWARE_WIRE_AUTO) {
+		    BObolViewController::SOFTWARE_WIRE_AUTO) {
 	    bu_log("FAIL: dm set controller.software_wire fast did not update only the active "
 		    "view (ret=%d v0=%d v1=%d result=%s)\n", fast_ret,
 		    (int)v0_controller->getSoftwareWireMode(),
@@ -423,9 +423,9 @@ test_multi_obol_dm_attachment(const char *datadir)
 	};
 	if (!fail && (ged_exec_dm(gedp, 6, named_av) != BRLCAD_OK ||
 		v0_controller->getSoftwareWireMode() !=
-		    BRLObolViewController::SOFTWARE_WIRE_FAST ||
+		    BObolViewController::SOFTWARE_WIRE_FAST ||
 		v1_controller->getSoftwareWireMode() !=
-		    BRLObolViewController::SOFTWARE_WIRE_QUALITY)) {
+		    BObolViewController::SOFTWARE_WIRE_QUALITY)) {
 	    bu_log("FAIL: named dm controller.software_wire setting was not view-local\n");
 	    fail = 1;
 	}
@@ -440,9 +440,9 @@ test_multi_obol_dm_attachment(const char *datadir)
 	    bu_log("PASS: typed software-wire modes are queryable and view-local\n");
     }
     if (!fail) {
-	BRLObolViewAttachment *v0_attachment =
+	BObolViewAttachment *v0_attachment =
 	    ged_view_context_obol_attachment(v0);
-	BRLObolViewAttachment *v1_attachment =
+	BObolViewAttachment *v1_attachment =
 	    ged_view_context_obol_attachment(v1);
 	if (!v0_attachment || !v1_attachment ||
 		v0_attachment != v0_controller->getViewAttachment() ||
@@ -578,13 +578,13 @@ test_owned_render_endpoint(const char *datadir)
 	fail = 1;
     }
 
-    BRLObolViewController *controller = obol_controller_for_view(view_ctx);
+    BObolViewController *controller = obol_controller_for_view(view_ctx);
     if (!fail && (!controller || !controller->getRenderSceneRoot())) {
 	bu_log("FAIL: owned endpoint did not bind a per-view render root\n");
 	fail = 1;
     }
     if (!fail)
-	controller->setRenderContextManager(brlobol_headless_context_manager());
+	controller->setRenderContextManager(bobol_headless_context_manager());
 
     const char *status_av[3] = {"dm", "status", NULL};
     if (!fail && (ged_exec_dm(gedp, 2, status_av) != BRLCAD_OK ||
@@ -737,7 +737,7 @@ test_owned_render_endpoint(const char *datadir)
     };
     if (!fail && (ged_exec_dm(gedp, 4, wire_av) != BRLCAD_OK ||
 	    controller->getSoftwareWireMode() !=
-		BRLObolViewController::SOFTWARE_WIRE_FAST)) {
+		BObolViewController::SOFTWARE_WIRE_FAST)) {
 	bu_log("FAIL: typed software-wire property could not configure an Obol view: %s\n",
 		bu_vls_cstr(gedp->ged_result_str));
 	fail = 1;
@@ -803,7 +803,7 @@ test_owned_render_endpoint(const char *datadir)
 	}
     }
 
-    BRLObolProgressiveStatus root_status;
+    BObolProgressiveStatus root_status;
     if (!fail &&
 	(controller->renderToImage(&deferred_root_image, 1, 0, NULL, NULL,
 	    &root_status) != BRLCAD_OK || !deferred_root_image)) {
@@ -811,7 +811,7 @@ test_owned_render_endpoint(const char *datadir)
 	fail = 1;
     }
 
-    BRLObolProgressiveStatus full_status;
+    BObolProgressiveStatus full_status;
     if (!fail && root_status.hasMore) {
 	if (!draw_test_obol_progressive_drain(gedp, view_ctx, 500, 1) ||
 	    controller->renderToImage(&deferred_full_image, 1, 0, NULL, NULL,
@@ -889,29 +889,29 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	fail = 1;
     }
 
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
     void *controller = endpoint ?
-	brlobol_display_endpoint_controller(endpoint) : NULL;
+	bobol_display_endpoint_controller(endpoint) : NULL;
     if (!fail && (!endpoint || !controller ||
-	    brlobol_display_endpoint_render_engine_get(endpoint) !=
-		BRLOBOL_RENDER_ENGINE_SW ||
-	    !brlobol_display_endpoint_host_factory_name(endpoint) ||
-	    !BU_STR_EQUAL(brlobol_display_endpoint_host_factory_name(endpoint),
+	    bobol_display_endpoint_render_engine_get(endpoint) !=
+		BOBOL_RENDER_ENGINE_SW ||
+	    !bobol_display_endpoint_host_factory_name(endpoint) ||
+	    !BU_STR_EQUAL(bobol_display_endpoint_host_factory_name(endpoint),
 		"headless"))) {
 	bu_log("FAIL: dm open did not establish the requested endpoint state\n");
 	fail = 1;
     }
-    struct brlobol_endpoint_property_value endpoint_width =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct brlobol_endpoint_property_value endpoint_height =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value endpoint_width =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    struct bobol_endpoint_property_value endpoint_height =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     if (!fail && (bv_width_get(DRAW_TEST_BV(view_ctx)) != 512 ||
 	bv_height_get(DRAW_TEST_BV(view_ctx)) != 512 ||
-	brlobol_display_endpoint_property_get(endpoint, "endpoint.width",
-	    &endpoint_width) != BRLOBOL_ENDPOINT_PROPERTY_OK ||
-	brlobol_display_endpoint_property_get(endpoint, "endpoint.height",
-	    &endpoint_height) != BRLOBOL_ENDPOINT_PROPERTY_OK ||
+	bobol_display_endpoint_property_get(endpoint, "endpoint.width",
+	    &endpoint_width) != BOBOL_ENDPOINT_PROPERTY_OK ||
+	bobol_display_endpoint_property_get(endpoint, "endpoint.height",
+	    &endpoint_height) != BOBOL_ENDPOINT_PROPERTY_OK ||
 	endpoint_width.uint_value != 512 || endpoint_height.uint_value != 512)) {
 	bu_log("FAIL: dm open did not seed a usable canonical viewport\n");
 	fail = 1;
@@ -963,8 +963,8 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	bu_log("FAIL: dm set view.zclip did not update the owning bv view\n");
 	fail = 1;
     }
-    BRLObolViewController *view_controller =
-	static_cast<BRLObolViewController *>(controller);
+    BObolViewController *view_controller =
+	static_cast<BObolViewController *>(controller);
     policy_av[2] = "renderer.depth_test";
     policy_av[3] = "0";
     if (!fail && (ged_exec_dm(gedp, 4, policy_av) != BRLCAD_OK ||
@@ -1042,8 +1042,8 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	fail = 1;
     }
     if (!fail && (ged_view_context_display_endpoint_get(view_ctx) != endpoint ||
-	    brlobol_display_endpoint_controller(endpoint) != controller ||
-	    brlobol_display_endpoint_host_factory_name(endpoint))) {
+	    bobol_display_endpoint_controller(endpoint) != controller ||
+	    bobol_display_endpoint_host_factory_name(endpoint))) {
 	bu_log("FAIL: dm close did not retain endpoint scene identity\n");
 	fail = 1;
     }
@@ -1058,7 +1058,7 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	bu_log("FAIL: GED dm still exposes the compatibility attach command\n");
 	fail = 1;
     }
-    if (!fail && brlobol_display_endpoint_host_factory_name(endpoint)) {
+    if (!fail && bobol_display_endpoint_host_factory_name(endpoint)) {
 	bu_log("FAIL: rejected dm attach changed the endpoint host\n");
 	fail = 1;
     }
@@ -1076,8 +1076,8 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	fail = 1;
     }
     if (!fail && (ged_view_context_display_endpoint_get(view_ctx) != endpoint ||
-	    brlobol_display_endpoint_controller(endpoint) != controller ||
-	    brlobol_display_endpoint_host_factory_name(endpoint))) {
+	    bobol_display_endpoint_controller(endpoint) != controller ||
+	    bobol_display_endpoint_host_factory_name(endpoint))) {
 	bu_log("FAIL: failed dm open changed retained endpoint identity\n");
 	fail = 1;
     }
@@ -1095,10 +1095,10 @@ test_endpoint_dm_lifecycle(const char *datadir)
 	fail = 1;
     open_av[5] = "auto";
     if (!fail && (ged_exec_dm(gedp, 6, open_av) != BRLCAD_OK ||
-	    brlobol_display_endpoint_render_engine_get(endpoint) !=
-		BRLOBOL_RENDER_ENGINE_AUTO ||
-	    brlobol_display_endpoint_render_engine_resolved_get(endpoint) !=
-		BRLOBOL_RENDER_ENGINE_SW ||
+	    bobol_display_endpoint_render_engine_get(endpoint) !=
+		BOBOL_RENDER_ENGINE_AUTO ||
+	    bobol_display_endpoint_render_engine_resolved_get(endpoint) !=
+		BOBOL_RENDER_ENGINE_SW ||
 	    ged_exec_dm(gedp, 2, diagnostics_av) != BRLCAD_OK ||
 	    !strstr(bu_vls_cstr(gedp->ged_result_str),
 		"renderer=auto\n") ||
@@ -1152,7 +1152,7 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
 
     int fail = 0;
     void *first_view = ged_view_active_ctx(gedp);
-    brlobol_display_endpoint_t *first_endpoint =
+    bobol_display_endpoint_t *first_endpoint =
 	ged_view_context_display_endpoint_get(first_view);
     if (!first_endpoint ||
 	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
@@ -1166,8 +1166,8 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     unsigned int width = 0;
     unsigned int height = 0;
     unsigned int components = 0;
-    if (!fail && !brlobol_display_endpoint_capture_plane(first_endpoint,
-	    BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+    if (!fail && !bobol_display_endpoint_capture_plane(first_endpoint,
+	    BOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
 	    &components)) {
 	bu_log("FAIL: first endpoint did not expose the framebuffer provider\n");
 	fail = 1;
@@ -1202,15 +1202,15 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
 	}
     }
 
-    brlobol_display_endpoint_t *second_endpoint = second_view ?
+    bobol_display_endpoint_t *second_endpoint = second_view ?
 	ged_view_context_display_endpoint_get(second_view) : NULL;
     pixels = NULL;
     size = 0;
     width = 0;
     height = 0;
     components = 0;
-    if (!fail && brlobol_display_endpoint_capture_plane(first_endpoint,
-	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+    if (!fail && bobol_display_endpoint_capture_plane(first_endpoint,
+	BOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
 	&components)) {
 	bu_log("FAIL: previous endpoint retained the session framebuffer provider\n");
 	if (pixels) {
@@ -1219,8 +1219,8 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
 	}
 	fail = 1;
     }
-    if (!fail && !brlobol_display_endpoint_capture_plane(second_endpoint,
-	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+    if (!fail && !bobol_display_endpoint_capture_plane(second_endpoint,
+	BOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
 	&components)) {
 	bu_log("FAIL: second endpoint did not receive the framebuffer provider\n");
 	fail = 1;
@@ -1241,9 +1241,9 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
 	bu_log("FAIL: could not preserve the first endpoint for same-view handoff\n");
 	fail = 1;
     }
-    brlobol_display_endpoint_t *replacement_endpoint = NULL;
+    bobol_display_endpoint_t *replacement_endpoint = NULL;
     if (!fail) {
-	replacement_endpoint = brlobol_display_endpoint_create(NULL, 0);
+	replacement_endpoint = bobol_display_endpoint_create(NULL, 0);
 	if (!replacement_endpoint || !ged_view_context_display_endpoint_set(
 		first_view, replacement_endpoint, 1) ||
 	    ged_draw_obol_framebuffer_backend_ensure_for_view(gedp,
@@ -1252,14 +1252,14 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
 	    if (replacement_endpoint &&
 		ged_view_context_display_endpoint_get(first_view) !=
 		replacement_endpoint)
-		brlobol_display_endpoint_destroy(replacement_endpoint);
+		bobol_display_endpoint_destroy(replacement_endpoint);
 	    replacement_endpoint = NULL;
 	    fail = 1;
 	}
     }
     pixels = NULL;
-    if (!fail && brlobol_display_endpoint_capture_plane(first_endpoint,
-	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+    if (!fail && bobol_display_endpoint_capture_plane(first_endpoint,
+	BOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
 	&components)) {
 	bu_log("FAIL: same-view endpoint replacement retained the old capture provider\n");
 	if (pixels)
@@ -1268,8 +1268,8 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     }
     pixels = NULL;
     if (!fail && (!replacement_endpoint ||
-	!brlobol_display_endpoint_capture_plane(replacement_endpoint,
-	    BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	!bobol_display_endpoint_capture_plane(replacement_endpoint,
+	    BOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
 	    &components))) {
 	bu_log("FAIL: same-view endpoint replacement did not bind its capture provider\n");
 	fail = 1;
@@ -1280,8 +1280,8 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     ged_draw_obol_framebuffer_release(gedp);
     pixels = NULL;
 	if (!fail && replacement_endpoint &&
-	brlobol_display_endpoint_capture_plane(replacement_endpoint,
-	BRLOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
+	bobol_display_endpoint_capture_plane(replacement_endpoint,
+	BOBOL_CAPTURE_FRAMEBUFFER, &pixels, &size, &width, &height,
 	&components)) {
 	bu_log("FAIL: framebuffer release left a capture provider behind\n");
 	if (pixels)
@@ -1292,7 +1292,7 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     if (!fail)
 	bu_log("PASS: framebuffer capture provider moves between endpoints\n");
     ged_close(gedp);
-    brlobol_display_endpoint_destroy(first_endpoint);
+    bobol_display_endpoint_destroy(first_endpoint);
     bu_file_delete("mged_view_state_t7.g");
     return fail;
 }

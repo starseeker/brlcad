@@ -37,10 +37,10 @@
 #include "linenoise.hpp"
 
 #include "brlcad_ident.h"
-#include "brlobol/display_endpoint.h"
-#include "brlobol/host_factory.h"
-#include "brlobol/init.h"
-#include "brlobol/window_host.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BHostFactory.h"
+#include "BObol/BInit.h"
+#include "BObol/BWindowHost.h"
 #include "bv.h"
 #include "bu.h"
 #include "imgstream/fbserv.h"
@@ -266,7 +266,7 @@ gsh_headless_endpoint_ensure(struct ged *gedp, void *view_ctx,
 	    sync_current_scene))
 	return 0;
 
-    brlobol_display_endpoint_t *endpoint =
+    bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
     if (!endpoint)
 	return 0;
@@ -279,53 +279,53 @@ gsh_headless_endpoint_ensure(struct ged *gedp, void *view_ctx,
 	(unsigned int)bv_height_get(view) : 512u;
 
 
-    const char *factory = brlobol_display_endpoint_host_factory_name(endpoint);
+    const char *factory = bobol_display_endpoint_host_factory_name(endpoint);
     if (factory) {
 	if (!BU_STR_EQUAL(factory, "headless"))
 	    return 0;
-	return brlobol_display_endpoint_resize(endpoint, width, height, 1.0);
+	return bobol_display_endpoint_resize(endpoint, width, height, 1.0);
     }
 
-    struct brlobol_host_desc desc = {};
+    struct bobol_host_desc desc = {};
     desc.struct_size = sizeof(desc);
-    desc.mode = BRLOBOL_HOST_MODE_HEADLESS;
+    desc.mode = BOBOL_HOST_MODE_HEADLESS;
     desc.width = width;
     desc.height = height;
     desc.device_pixel_ratio = 1.0;
-    desc.required_capabilities = BRLOBOL_HOST_CAP_PIXEL_PRESENT |
-	BRLOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
-	BRLOBOL_HOST_CAP_READBACK |
-	BRLOBOL_HOST_CAP_FRAMEBUFFER_PRESENT;
+    desc.required_capabilities = BOBOL_HOST_CAP_PIXEL_PRESENT |
+	BOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
+	BOBOL_HOST_CAP_READBACK |
+	BOBOL_HOST_CAP_FRAMEBUFFER_PRESENT;
     desc.visible = 0;
     desc.title = "GSH Obol";
-    desc.vsync = BRLOBOL_HOST_VSYNC_AUTO;
+    desc.vsync = BOBOL_HOST_VSYNC_AUTO;
 
-    const enum brlobol_render_engine old_engine =
-	brlobol_display_endpoint_render_engine_get(endpoint);
-    if (!brlobol_display_endpoint_render_engine_set(endpoint,
-	BRLOBOL_RENDER_ENGINE_AUTO) ||
-	!brlobol_display_endpoint_host_open(endpoint, "headless", &desc) ||
-	!brlobol_display_endpoint_render_engine_set(endpoint,
-	    BRLOBOL_RENDER_ENGINE_SW)) {
-	brlobol_display_endpoint_host_detach(endpoint);
-	(void)brlobol_display_endpoint_render_engine_set(endpoint, old_engine);
+    const enum bobol_render_engine old_engine =
+	bobol_display_endpoint_render_engine_get(endpoint);
+    if (!bobol_display_endpoint_render_engine_set(endpoint,
+	BOBOL_RENDER_ENGINE_AUTO) ||
+	!bobol_display_endpoint_host_open(endpoint, "headless", &desc) ||
+	!bobol_display_endpoint_render_engine_set(endpoint,
+	    BOBOL_RENDER_ENGINE_SW)) {
+	bobol_display_endpoint_host_detach(endpoint);
+	(void)bobol_display_endpoint_render_engine_set(endpoint, old_engine);
 	return 0;
     }
 
     return 1;
 }
 
-static BRLObolWindowHost *
+static BObolWindowHost *
 gsh_headless_endpoint_host(void *view_ctx)
 {
-    brlobol_display_endpoint_t *endpoint = view_ctx ?
+    bobol_display_endpoint_t *endpoint = view_ctx ?
 	ged_view_context_display_endpoint_get(view_ctx) : NULL;
     const char *factory = endpoint ?
-	brlobol_display_endpoint_host_factory_name(endpoint) : NULL;
+	bobol_display_endpoint_host_factory_name(endpoint) : NULL;
     if (!endpoint || !factory || !BU_STR_EQUAL(factory, "headless"))
 	return NULL;
-    return static_cast<BRLObolWindowHost *>(
-	brlobol_display_endpoint_host(endpoint));
+    return static_cast<BObolWindowHost *>(
+	bobol_display_endpoint_host(endpoint));
 }
 
 /* For gsh these are mostly no-op, but define placeholder functions in case we
@@ -348,7 +348,7 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
     void *view_ctx = ged_view_active_ctx(s->gedp);
     if (!view_ctx || !gsh_headless_endpoint_ensure(s->gedp, view_ctx, 0))
 	return BRLCAD_ERROR;
-    BRLObolWindowHost *host = gsh_headless_endpoint_host(view_ctx);
+    BObolWindowHost *host = gsh_headless_endpoint_host(view_ctx);
     if (!host || ged_draw_obol_framebuffer_backend_install_for_view(s->gedp,
 	view_ctx, host, 0, 0, 0) != BRLCAD_OK)
 	return BRLCAD_ERROR;
@@ -455,7 +455,7 @@ Gsh_ClearScreen(int UNUSED(ac), const char **UNUSED(av), void *UNUSED(gedp), voi
 
 GshState::GshState()
 {
-    brlobol_init(NULL);
+    bobol_init(NULL);
     BU_GET(gedp, struct ged);
     ged_init(gedp);
 

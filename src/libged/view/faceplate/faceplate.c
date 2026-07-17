@@ -84,13 +84,13 @@ _fp_color_property_set(struct ged *gedp, void *view_ctx,
     }
     bu_color_to_rgb_ints(&color, &rgb[0], &rgb[1], &rgb[2]);
 
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_COLOR3;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_COLOR3;
     for (int i = 0; i < 3; i++)
 	value.color3[i] = rgb[i] / 255.0;
     if (ged_view_context_display_property_set(view_ctx, property_name,
-	&value) != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	&value) != BOBOL_ENDPOINT_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "active view has no Obol faceplate color policy\n");
 	return BRLCAD_ERROR;
@@ -102,12 +102,12 @@ int
 _fp_bool_property_set(struct ged *gedp, void *view_ctx,
 	const char *property_name, int enabled)
 {
-    struct brlobol_endpoint_property_value value =
-	BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    value.type = BRLOBOL_ENDPOINT_PROPERTY_BOOL;
+    struct bobol_endpoint_property_value value =
+	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+    value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
     value.bool_value = enabled;
     if (ged_view_context_display_property_set(view_ctx, property_name,
-	&value) != BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	&value) != BOBOL_ENDPOINT_PROPERTY_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "active view has no Obol faceplate visibility policy\n");
 	return BRLCAD_ERROR;
@@ -204,11 +204,11 @@ _fp_cmd_fb(void *ds, int argc, const char **argv)
     struct ged *gedp = gd->gedp;
     void *view_ctx = ged_view_active_ctx(gedp);
     if (!argc) {
-	struct brlobol_endpoint_property_value value =
-	    BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct bobol_endpoint_property_value value =
+	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	if (ged_view_context_display_property_get(view_ctx,
 		"composition.framebuffer.mode", &value) !=
-	    BRLOBOL_ENDPOINT_PROPERTY_OK) {
+	    BOBOL_ENDPOINT_PROPERTY_OK) {
 	    bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol framebuffer composition policy\n");
 	    return BRLCAD_ERROR;
@@ -235,13 +235,13 @@ _fp_cmd_fb(void *ds, int argc, const char **argv)
 	else if (BU_STR_EQUAL("0", argv[0]))
 	    mode = "off";
 	if (mode) {
-	    struct brlobol_endpoint_property_value value =
-		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BRLOBOL_ENDPOINT_PROPERTY_ENUM;
+	    struct bobol_endpoint_property_value value =
+		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
 	    value.string_value = mode;
 	    if (ged_view_context_display_property_set(view_ctx,
 		"composition.framebuffer.mode", &value) ==
-		BRLOBOL_ENDPOINT_PROPERTY_OK)
+		BOBOL_ENDPOINT_PROPERTY_OK)
 		return BRLCAD_OK;
 	    bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol framebuffer composition policy\n");
@@ -443,13 +443,13 @@ _fp_cmd_params(void *ds, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    bu_vls_free(&msg);
-	    struct brlobol_endpoint_property_value value =
-		BRLOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	    value.type = BRLOBOL_ENDPOINT_PROPERTY_UINT;
+	    struct bobol_endpoint_property_value value =
+		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    value.type = BOBOL_ENDPOINT_PROPERTY_UINT;
 	    value.uint_value = (uint64_t)fsize;
 	    if (ged_view_context_display_property_set(view_ctx,
 		"view.faceplate.params.font_size", &value) !=
-		BRLOBOL_ENDPOINT_PROPERTY_OK) {
+		BOBOL_ENDPOINT_PROPERTY_OK) {
 		bu_vls_printf(gedp->ged_result_str,
 		    "active view has no Obol faceplate font policy\n");
 		return BRLCAD_ERROR;

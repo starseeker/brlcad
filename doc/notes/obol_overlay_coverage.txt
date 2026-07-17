@@ -5,7 +5,7 @@ Scope
 -----
 
 This note tracks Obol-side overlay and command-result representation.  The
-neutral low-level diagnostic container is still `bg_line_layer`; libbrlobol
+neutral low-level diagnostic container is still `bg_line_layer`; libBObol
 converts it to Obol/Coin scene objects only at publication boundaries.
 
 Current Obol Representations
@@ -26,9 +26,9 @@ Current Obol Representations
 | legacy TclCAD data axes | `_tcl_data_axes` / `_tcl_sdata_axes` axes feature | Managed by typed GED data-axes facades, including movement and pick/readback |
 | legacy TclCAD data labels | `_tcl_data_labels` / `_tcl_sdata_labels` label feature | Managed by typed GED data-label facades, including movement, scaling, and pick/readback |
 | legacy TclCAD data polygons | `_tcl_data_polygons` / `_tcl_sdata_polygons` polygon outline feature | Managed by typed GED data-polygon facades |
-| model axes | `SoBRLAxes` | Covered by libbrlobol overlay tests |
-| work grid | `SoBRLGrid` adaptive HUD overlay with semantic grid snap state | Covered by libbrlobol overlay tests, GED faceplate image tests, and snap semantics tests |
-| ADC | `SoBRLADC` | Covered by libbrlobol overlay tests |
+| model axes | `SoBRLAxes` | Covered by libBObol overlay tests |
+| work grid | `SoBRLGrid` adaptive HUD overlay with semantic grid snap state | Covered by libBObol overlay tests, GED faceplate image tests, and snap semantics tests |
+| ADC | `SoBRLADC` | Covered by libBObol overlay tests |
 | edit previews | `SoBRLEditPreview` | Covered by edit-preview tests |
 | complex command/plugin objects | command-scene `CustomNode` feature | Initial owner-scoped provider hook exists |
 
@@ -98,13 +98,13 @@ Current Interaction State
 The feature store can preserve command-result metadata, per-primitive metadata,
 selected/highlighted primitive lists, and line-layer child-to-parent primitive
 resolution.  Neutral GED APIs expose that data without requiring callers to
-include libbrlobol-private record types.
+include libBObol-private record types.
 
 qtcad consumes only the neutral GED bridge for command-result details.  It
 keeps raw child `SoBRLPickDetail` identity, resolves parent feature/primitive
 identity through GED, copies feature and primitive metadata through the neutral
 readback APIs, and applies selected/highlighted primitive state through those
-same APIs instead of querying the libbrlobol feature store.  TclCAD's
+same APIs instead of querying the libBObol feature store.  TclCAD's
 `mouse_pick_detail` returns the identical resolved feature name, primitive
 index, feature metadata, and primitive metadata as Tcl lists.
 

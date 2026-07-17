@@ -11,8 +11,8 @@
 #include "QgObolDrawSyncPrivate.h"
 #include "QgObolSelectionSyncPrivate.h"
 
-#include "brlobol/scene_controller.h"
-#include "brlobol/view_controller.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "ged/view.h"
@@ -47,7 +47,7 @@ qg_obol_sync_ged_draw_transaction(struct ged *gedp,
     if (!gedp || !txn || (result && result->status < 0) || !display)
 	return 0;
 
-    BRLObolViewController *obol = display->obolViewController();
+    BObolViewController *obol = display->obolViewController();
     if (!obol)
 	return 0;
 
