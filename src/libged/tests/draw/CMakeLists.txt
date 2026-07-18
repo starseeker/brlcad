@@ -205,24 +205,23 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 # GED draw transaction to Obol controller bridge regression.  Supply the core
 # implementation objects directly so the test can exercise private seams
 # without exporting them from the shared ABI.  Public command/plugin entry
-# points continue to come from libged.
-brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp"
-  "libged;libBObol;libwdb" TEST)
-if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
-  set(_ged_obol_private_object_regex
-    "/(draw|draw_obol|draw_obol_result|ged_draw_brep|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
-  target_sources(ged_test_obol_draw_sync PRIVATE
-    "$<FILTER:$<TARGET_OBJECTS:libged-obj>,INCLUDE,${_ged_obol_private_object_regex}>")
-endif()
-if(TARGET ged_test_obol_draw_sync)
+# points continue to come from libged.  MSVC builds do not currently provide
+# the source-granular libged object target this white-box test requires.
+if(NOT MSVC)
+  brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp"
+    "libged;libBObol;libwdb" TEST)
+  if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
+    set(_ged_obol_private_object_regex
+      "/(draw|draw_obol|draw_obol_result|ged_draw_brep|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
+    target_sources(ged_test_obol_draw_sync PRIVATE
+      "$<FILTER:$<TARGET_OBJECTS:libged-obj>,INCLUDE,${_ged_obol_private_object_regex}>")
+  endif()
   foreach(tdp ${test_deps})
-    if (TARGET ${tdp})
+    if(TARGET ${tdp})
       add_dependencies(ged_test_obol_draw_sync ${tdp})
-    endif ()
+    endif()
   endforeach()
-endif(TARGET ged_test_obol_draw_sync)
-brlcad_add_test(NAME ged_test_obol_draw_sync COMMAND ged_test_obol_draw_sync)
-if(TARGET ged_test_obol_draw_sync)
+  brlcad_add_test(NAME ged_test_obol_draw_sync COMMAND ged_test_obol_draw_sync)
   set_property(TEST ged_test_obol_draw_sync APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_obol_draw_sync_tmp.g)

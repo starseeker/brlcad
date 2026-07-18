@@ -49,6 +49,7 @@ set(
   QgDockWidget.cpp
   QgFlowLayout.cpp
   QgGeomImport.cpp
+  QgGedEventBatch.cpp
   QgKeyVal.cpp
   QgMeasureFilter.cpp
   QgModel.cpp

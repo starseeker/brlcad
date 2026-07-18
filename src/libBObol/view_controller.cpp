@@ -2154,7 +2154,7 @@ BObolViewController::renderPending(SbBool clearWindow,
 	this->renderBackground();
     else if (clearZBuffer)
 	glClear(GL_DEPTH_BUFFER_BIT);
-    this->d->renderManager->render(FALSE, FALSE);
+    this->d->renderManager->render(static_cast<SbBool>(FALSE), static_cast<SbBool>(FALSE));
     this->completeRenderTiming(started);
     return TRUE;
 }

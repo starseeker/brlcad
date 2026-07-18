@@ -161,7 +161,7 @@ wait_for_qtcad_source_pick_result(BObolLodService &service)
 }
 
 static QMouseEvent
-mouse_event(QEvent::Type type,
+make_mouse_event(QEvent::Type type,
 	int x,
 	int y,
 	Qt::MouseButton button,
@@ -229,7 +229,7 @@ main(int argc, char **argv)
 
     QgSelectPntFilter filter;
     filter.set_view_widget(&view);
-    QMouseEvent release = mouse_event(QEvent::MouseButtonRelease, 90, 70,
+    QMouseEvent release = make_mouse_event(QEvent::MouseButtonRelease, 90, 70,
 	    Qt::LeftButton, Qt::LeftButton);
     if (!filter.eventFilter(NULL, &release))
 	FAIL("qtcad select point filter should accept the release event");
@@ -315,7 +315,7 @@ main(int argc, char **argv)
     QgSelectPntFilter commandFilter;
     commandFilter.first_only = true;
     commandFilter.set_view_widget(&view);
-    QMouseEvent commandRelease = mouse_event(QEvent::MouseButtonRelease, 90,
+    QMouseEvent commandRelease = make_mouse_event(QEvent::MouseButtonRelease, 90,
 	    70, Qt::LeftButton, Qt::LeftButton);
     if (!commandFilter.eventFilter(NULL, &commandRelease))
 	FAIL("qtcad select point filter should accept command-result picks");
@@ -344,11 +344,11 @@ main(int argc, char **argv)
 
     QgSelectBoxFilter boxFilter;
     boxFilter.set_view_widget(&view);
-    QMouseEvent boxPress = mouse_event(QEvent::MouseButtonPress, 70, 50,
+    QMouseEvent boxPress = make_mouse_event(QEvent::MouseButtonPress, 70, 50,
 	    Qt::LeftButton, Qt::LeftButton);
-    QMouseEvent boxMove = mouse_event(QEvent::MouseMove, 110, 90,
+    QMouseEvent boxMove = make_mouse_event(QEvent::MouseMove, 110, 90,
 	    Qt::NoButton, Qt::LeftButton);
-    QMouseEvent boxRelease = mouse_event(QEvent::MouseButtonRelease, 110, 90,
+    QMouseEvent boxRelease = make_mouse_event(QEvent::MouseButtonRelease, 110, 90,
 	    Qt::LeftButton, Qt::LeftButton);
     if (!boxFilter.eventFilter(NULL, &boxPress) ||
 	    !boxFilter.eventFilter(NULL, &boxMove) ||
@@ -361,7 +361,7 @@ main(int argc, char **argv)
     QgSelectRayFilter rayFilter;
     rayFilter.dbip = gedp->dbip;
     rayFilter.set_view_widget(&view);
-    QMouseEvent rayRelease = mouse_event(QEvent::MouseButtonRelease, 90, 70,
+    QMouseEvent rayRelease = make_mouse_event(QEvent::MouseButtonRelease, 90, 70,
 	    Qt::LeftButton, Qt::LeftButton);
     if (!rayFilter.eventFilter(NULL, &rayRelease))
 	FAIL("qtcad select ray filter should accept the Obol-backed release event");
@@ -520,7 +520,7 @@ main(int argc, char **argv)
 
     QgSelectPntFilter pendingSourcePickFilter;
     pendingSourcePickFilter.set_view_widget(&view);
-    QMouseEvent pendingSourcePickRelease = mouse_event(
+    QMouseEvent pendingSourcePickRelease = make_mouse_event(
 	    QEvent::MouseButtonRelease, 90, 70, Qt::LeftButton,
 	    Qt::LeftButton);
     if (!pendingSourcePickFilter.eventFilter(NULL, &pendingSourcePickRelease)) {
@@ -556,13 +556,13 @@ main(int argc, char **argv)
 
     QgSelectBoxFilter pendingSourceBoxFilter;
     pendingSourceBoxFilter.set_view_widget(&view);
-    QMouseEvent pendingSourceBoxPress = mouse_event(
+    QMouseEvent pendingSourceBoxPress = make_mouse_event(
 	    QEvent::MouseButtonPress, 70, 50, Qt::LeftButton,
 	    Qt::LeftButton);
-    QMouseEvent pendingSourceBoxMove = mouse_event(
+    QMouseEvent pendingSourceBoxMove = make_mouse_event(
 	    QEvent::MouseMove, 110, 90, Qt::NoButton,
 	    Qt::LeftButton);
-    QMouseEvent pendingSourceBoxRelease = mouse_event(
+    QMouseEvent pendingSourceBoxRelease = make_mouse_event(
 	    QEvent::MouseButtonRelease, 110, 90, Qt::LeftButton,
 	    Qt::LeftButton);
     if (!pendingSourceBoxFilter.eventFilter(NULL, &pendingSourceBoxPress) ||
@@ -607,7 +607,7 @@ main(int argc, char **argv)
     QgSelectRayFilter pendingSourceRayFilter;
     pendingSourceRayFilter.dbip = gedp->dbip;
     pendingSourceRayFilter.set_view_widget(&view);
-    QMouseEvent pendingSourceRayRelease = mouse_event(
+    QMouseEvent pendingSourceRayRelease = make_mouse_event(
 	    QEvent::MouseButtonRelease, 90, 70, Qt::LeftButton,
 	    Qt::LeftButton);
     if (!pendingSourceRayFilter.eventFilter(NULL, &pendingSourceRayRelease)) {
@@ -723,7 +723,7 @@ main(int argc, char **argv)
     QgSelectRayFilter implicitRayFilter;
     implicitRayFilter.dbip = gedp->dbip;
     implicitRayFilter.set_view_widget(&view);
-    QMouseEvent implicitRayRelease = mouse_event(QEvent::MouseButtonRelease,
+    QMouseEvent implicitRayRelease = make_mouse_event(QEvent::MouseButtonRelease,
 	    90, 70, Qt::LeftButton, Qt::LeftButton);
     if (!implicitRayFilter.eventFilter(NULL, &implicitRayRelease))
 	FAIL("qtcad select ray filter should accept the Obol explicit-ray implicit workflow");
@@ -738,7 +738,7 @@ main(int argc, char **argv)
 
     QgSelectRayFilter noLegacyDbRayFilter;
     noLegacyDbRayFilter.set_view_widget(&view);
-    QMouseEvent noLegacyDbRayRelease = mouse_event(QEvent::MouseButtonRelease,
+    QMouseEvent noLegacyDbRayRelease = make_mouse_event(QEvent::MouseButtonRelease,
 	    90, 70, Qt::LeftButton, Qt::LeftButton);
     if (!noLegacyDbRayFilter.eventFilter(NULL, &noLegacyDbRayRelease))
 	FAIL("qtcad select ray filter should run Obol explicit-ray selection without legacy dbip");

@@ -13,7 +13,7 @@ set(
 )
 
 find_package(OpenSSL QUIET)
-set(LIBIMGSTREAM_PRIVATE_LIBS ${libimgstream_deps})
+set(LIBIMGSTREAM_PRIVATE_LIBS ${libimgstream_deps} ${WINSOCK_LIB})
 if(OpenSSL_FOUND OR OPENSSL_FOUND)
   list(APPEND LIBIMGSTREAM_PRIVATE_LIBS OpenSSL::SSL OpenSSL::Crypto)
 endif()

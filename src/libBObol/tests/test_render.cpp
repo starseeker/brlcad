@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include <OSMesa/osmesa.h>
+
 #include "bu/app.h"
 
 #include "BObol.h"
@@ -35,8 +37,6 @@
 #include <Inventor/nodes/SoSeparator.h>
 #include <Obol/cad/SoCADAssembly.h>
 #include <Obol/cad/SoCADViewState.h>
-#include <OSMesa/osmesa.h>
-
 #include <algorithm>
 #include <math.h>
 #include <memory>

@@ -30,10 +30,9 @@
 #include "bu/mime.h"
 #include "bv.h"
 #include "icv.h"
-#include "BObol/BFramebuffer.h"
+#include "ged/draw_obol.h"
 #include "imgstream/fb_compat.h"
 
-#include "../ged_bobol_private.hpp"
 #include "../ged_private.h"
 
 struct overlay_image_apply_state {
@@ -42,12 +41,12 @@ struct overlay_image_apply_state {
 };
 
 static int
-overlay_image_apply(BObolFramebufferStream &stream, void *userdata)
+overlay_image_apply(struct imgstream_fb *fb, void *userdata)
 {
     struct overlay_image_apply_state *state =
 	(struct overlay_image_apply_state *)userdata;
     return state && state->image &&
-	imgstream_fb_import_icv(stream.framebuffer(), state->image,
+	imgstream_fb_import_icv(fb, state->image,
 	    &state->options) == 0 ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
@@ -303,8 +302,8 @@ ged_overlay_core(struct ged *gedp, int argc, const char *argv[])
 	apply_state.options.clear = clear;
 	apply_state.options.zoom = zoom;
 	apply_state.options.inverse = inverse;
-	ret = ged_bobol_framebuffer_apply(gedp, view_ctx,
-	    overlay_image_apply, &apply_state, true);
+	ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	    overlay_image_apply, &apply_state, 1);
 
 	icv_destroy(img);
 	bu_vls_free(&vname);

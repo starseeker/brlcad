@@ -595,6 +595,8 @@ mged_display_view_settings_shared(struct mged_display *a, struct mged_display *b
     \
 }
 
+__BEGIN_DECLS
+
 extern double frametime;		/* defined in mged.c */
 extern struct bu_ptbl active_display_set;	/* defined in attach.c */
 extern struct mged_display *mged_initial_display;
@@ -625,6 +627,7 @@ extern void mged_rtCmdNotify(int);
 
 int mged_display_command(int argc, const char *argv[], void *data);
 
+__END_DECLS
 
 #endif /* MGED_MGED_DISPLAY_H */
 

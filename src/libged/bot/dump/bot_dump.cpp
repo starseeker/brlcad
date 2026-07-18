@@ -52,10 +52,10 @@
 #include "raytrace.h"
 
 #include "ged/draw.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "BObol/BExportAction.h"
 #include "BObol/BViewController.h"
 #include <Inventor/SoViewport.h>
-#include "../../ged_bobol_private.hpp"
 #include "../../ged_private.h"
 #include "../ged_bot.h"
 #include "./ged_bot_dump.h"
@@ -601,7 +601,11 @@ dl_botdump(struct _ged_bot_dump_client_data *d)
     if (!d || !d->gedp)
 	return;
     struct ged_view_context *view_ctx = ged_view_active_ctx(d->gedp);
-    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    BObolViewController *controller = endpoint ?
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
     if (!view_ctx || !controller || !controller->getViewport() ||
 	!controller->getViewport()->getRoot())
 	return;

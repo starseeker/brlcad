@@ -992,7 +992,7 @@ ged_draw_obol_framebuffer_release(struct ged *gedp)
     ged_obol_fbserv_release(gedp);
 }
 
-extern "C" GED_EXPORT void
+extern "C" void
 ged_draw_obol_framebuffer_endpoint_detach(struct ged *gedp,
 	bobol_display_endpoint_t *endpoint)
 {

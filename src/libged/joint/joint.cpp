@@ -3408,7 +3408,7 @@ joint_hold(struct ged *gedp, int argc, const char *argv[])
 
 
 static int
-joint_list(struct ged *gedp, int UNUSED(argc), const char *UNUSED(argv[]))
+joint_list(struct ged *gedp, int UNUSED(argc), const char **UNUSED(argv))
 {
     struct joint *jp;
 

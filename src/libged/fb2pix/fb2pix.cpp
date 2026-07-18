@@ -33,12 +33,11 @@
 
 #include "bu/app.h"
 #include "bu/getopt.h"
-#include "BObol/BFramebuffer.h"
 #include "imgstream/fb_compat.h"
 
 #include "pkg.h"
 #include "ged.h"
-#include "../ged_bobol_private.hpp"
+#include "ged/draw_obol.h"
 
 
 struct fb2pix_state {
@@ -106,10 +105,10 @@ fb2pix_get_args(struct fb2pix_state *s, int argc, char **argv)
 
 
 static int
-fb2pix_apply(BObolFramebufferStream &stream, void *userdata)
+fb2pix_apply(struct imgstream_fb *fb, void *userdata)
 {
     struct fb2pix_state *state = (struct fb2pix_state *)userdata;
-    return state && imgstream_fb_export_pix_fp(stream.framebuffer(), state->outfp,
+    return state && imgstream_fb_export_pix_fp(fb, state->outfp,
 	(size_t)state->screen_width, (size_t)state->screen_height,
 	state->crunch, state->inverse) == 0 ? BRLCAD_OK : BRLCAD_ERROR;
 }
@@ -147,8 +146,8 @@ ged_fb2pix_core(struct ged *gedp, int argc, const char *argv[])
 
     setmode(fileno(stdout), O_BINARY);
 
-    ret = ged_bobol_framebuffer_apply(gedp, view_ctx,
-	fb2pix_apply, &f2ps, false);
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	fb2pix_apply, &f2ps, 0);
 
     if (f2ps.outfp != stdout)
 	fclose(f2ps.outfp);

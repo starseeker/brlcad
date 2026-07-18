@@ -32,9 +32,8 @@
 #include "bu/getopt.h"
 #include "icv.h"
 #include "ged.h"
-#include "BObol/BFramebuffer.h"
 #include "imgstream/fb_compat.h"
-#include "../ged_bobol_private.hpp"
+#include "ged/draw_obol.h"
 
 struct png2fb_state {
     double def_screen_gamma;	/* Don't add more gamma, default = 1.0*/
@@ -142,7 +141,7 @@ png2fb_get_args(struct png2fb_state *s, int argc, char **argv)
 
 
 static int
-png2fb_apply(BObolFramebufferStream &stream, void *userdata)
+png2fb_apply(struct imgstream_fb *fb, void *userdata)
 {
     struct png2fb_state *state = (struct png2fb_state *)userdata;
     if (!state || !state->image)
@@ -156,7 +155,7 @@ png2fb_apply(BObolFramebufferStream &stream, void *userdata)
     options.clear = state->clear;
     options.zoom = state->zoom;
     options.inverse = state->inverse;
-    return imgstream_fb_import_icv(stream.framebuffer(), state->image, &options) == 0 ?
+    return imgstream_fb_import_icv(fb, state->image, &options) == 0 ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
 
@@ -207,8 +206,8 @@ ged_png2fb_core(struct ged *gedp, int argc, const char *argv[])
     /* libpng historically used 0.5 when an input did not provide gAMA.
      * Preserve png2fb's display conversion while libicv supplies decoding. */
     p2fbs.image->gamma_corr = (float)(0.5 * p2fbs.def_screen_gamma);
-    ret = ged_bobol_framebuffer_apply(gedp, view_ctx,
-	png2fb_apply, &p2fbs, true);
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	png2fb_apply, &p2fbs, 1);
     icv_destroy(p2fbs.image);
 
     if (ret == BRLCAD_OK)

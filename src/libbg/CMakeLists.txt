@@ -126,7 +126,7 @@ set(
 
 # Note - libbg_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
 set(BG_PUBLIC_LIBS ${libbg_deps})
-set(BG_PRIVATE_LIBS)
+set(BG_PRIVATE_LIBS ${WINSOCK_LIB})
 if(UNIX)
   list(APPEND BG_PRIVATE_LIBS pthread dl)
 endif()

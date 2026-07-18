@@ -487,8 +487,8 @@ public:
 	    return 0;
 	}
 	Tk_GeometryRequest(this->tkwin,
-	    std::max(1, (int)(new_width / device_pixel_ratio)),
-	    std::max(1, (int)(new_height / device_pixel_ratio)));
+	(std::max)(1, (int)(new_width / device_pixel_ratio)),
+	(std::max)(1, (int)(new_height / device_pixel_ratio)));
 	if (this->toplevel) {
 	    const std::string geometry = swidth + "x" + sheight;
 	    if (!this->eval({"wm", "geometry", this->container_path.c_str(),
@@ -777,7 +777,7 @@ private:
 	this->controller->renderBackground();
 	const uint64_t started = this->controller->beginRenderTiming();
 	if (this->controller->getCamera() && this->controller->getRenderRoot())
-	    this->controller->getRenderManager()->render(FALSE, FALSE);
+	this->controller->getRenderManager()->render(static_cast<SbBool>(FALSE), static_cast<SbBool>(FALSE));
 	this->controller->completeRenderTiming(started);
 	this->controller->clearRenderRequest();
 	if (present && double_buffered && !this->widget_command("swapbuffers"))
@@ -991,11 +991,11 @@ private:
 	} else if (bu_strcmp(kind, "resize") == 0) {
 	    if (objc != 4 || Tcl_GetIntFromObj(interp, objv[2], &value) != TCL_OK)
 		goto input_usage;
-	    event.width = static_cast<unsigned int>(std::max(1, value));
+	event.width = static_cast<unsigned int>((std::max)(1, value));
 	    if (Tcl_GetIntFromObj(interp, objv[3], &value) != TCL_OK)
 		goto input_usage;
 	    event.type = BOBOL_INPUT_RESIZE;
-	    event.height = static_cast<unsigned int>(std::max(1, value));
+	event.height = static_cast<unsigned int>((std::max)(1, value));
 	} else if (bu_strcmp(kind, "focus") == 0) {
 	    if (objc != 3 || Tcl_GetIntFromObj(interp, objv[2], &event.key) != TCL_OK)
 		goto input_usage;

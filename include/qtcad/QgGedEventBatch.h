@@ -34,34 +34,18 @@ struct ged;
 
 class QTCAD_EXPORT QgGedEventBatch {
 public:
-    explicit QgGedEventBatch(struct ged *gedp) :
-	m_gedp(gedp),
-	m_started(gedp && ged_event_batch_begin(gedp) > 0)
-    {
-    }
+    explicit QgGedEventBatch(struct ged *gedp);
 
-    ~QgGedEventBatch()
-    {
-	end();
-    }
+    ~QgGedEventBatch();
 
     QgGedEventBatch(const QgGedEventBatch &) = delete;
     QgGedEventBatch &operator=(const QgGedEventBatch &) = delete;
     QgGedEventBatch(QgGedEventBatch &&) = delete;
     QgGedEventBatch &operator=(QgGedEventBatch &&) = delete;
 
-    bool started() const
-    {
-	return m_started;
-    }
+    bool started() const;
 
-    int end(struct ged_event_txn_result *result = nullptr)
-    {
-	if (!m_started)
-	    return 0;
-	m_started = false;
-	return ged_event_batch_end(m_gedp, result);
-    }
+    int end(struct ged_event_txn_result *result = nullptr);
 
 private:
     struct ged *m_gedp = nullptr;

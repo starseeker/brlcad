@@ -153,7 +153,7 @@ wait_for_qtcad_measure_source_result(BObolLodService &service)
 }
 
 static QMouseEvent
-mouse_event(QEvent::Type type,
+make_mouse_event(QEvent::Type type,
 	int x,
 	int y,
 	Qt::MouseButton button,
@@ -262,7 +262,7 @@ main(int argc, char **argv)
     filter.set_view_widget(&view);
     filter.update_color(&green);
 
-    QMouseEvent press = mouse_event(QEvent::MouseButtonPress, 90, 70,
+    QMouseEvent press = make_mouse_event(QEvent::MouseButtonPress, 90, 70,
 	    Qt::LeftButton, Qt::LeftButton);
     if (!filter.eventFilter(NULL, &press) || filter.mode != 1)
 	FAIL("qtcad 3D measure filter should start with an Obol hit point");
@@ -270,12 +270,12 @@ main(int argc, char **argv)
     if (!overlay || overlay->getPointCount() != 1)
 	FAIL("qtcad 3D measure filter should start with a single-point Obol overlay");
 
-    QMouseEvent move = mouse_event(QEvent::MouseMove, 115, 70,
+    QMouseEvent move = make_mouse_event(QEvent::MouseMove, 115, 70,
 	    Qt::NoButton, Qt::LeftButton);
     if (!filter.eventFilter(NULL, &move))
 	FAIL("qtcad 3D measure filter should update the Obol guide line");
 
-    QMouseEvent release = mouse_event(QEvent::MouseButtonRelease, 115, 70,
+    QMouseEvent release = make_mouse_event(QEvent::MouseButtonRelease, 115, 70,
 	    Qt::LeftButton, Qt::LeftButton);
     if (!filter.eventFilter(NULL, &release) || filter.mode != 2)
 	FAIL("qtcad 3D measure filter should finalize the first Obol measure segment");
@@ -286,7 +286,7 @@ main(int argc, char **argv)
     if (!overlay || overlay->getPointCount() != 2)
 	FAIL("qtcad 3D measure filter should publish the finalized segment as an Obol overlay");
 
-    QMouseEvent rightPress = mouse_event(QEvent::MouseButtonPress, 90, 70,
+    QMouseEvent rightPress = make_mouse_event(QEvent::MouseButtonPress, 90, 70,
 	    Qt::RightButton, Qt::RightButton);
     if (!filter.eventFilter(NULL, &rightPress) ||
 	    find_measure_overlay(controller, "tool:measurement"))

@@ -25,6 +25,7 @@
 #include "common.h"
 
 #include "bv.h"
+#include "ged/view_types.h"
 #include "qtcad/QgObolSnap.h"
 #include "qtcad/QgView.h"
 #include "qtcad/QgViewFilter.h"

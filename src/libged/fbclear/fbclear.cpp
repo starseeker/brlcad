@@ -38,19 +38,19 @@
 #endif
 
 #include "ged.h"
-#include "BObol/BFramebuffer.h"
+#include "ged/draw_obol.h"
+#include "imgstream/fb_compat.h"
 #include "bv.h"
 #include "bu/str.h"
-#include "../ged_bobol_private.hpp"
 
 
 #define FB_CONSTRAIN(_v, _a, _b) \
     (((_v) > (_a)) ? ((_v) < (_b) ? (_v) : (_b)) : (_a))
 
 static int
-fbclear_apply(BObolFramebufferStream &stream, void *userdata)
+fbclear_apply(struct imgstream_fb *fb, void *userdata)
 {
-    return stream.clear((const unsigned char *)userdata) == 0 ?
+    return imgstream_fb_clear(fb, (const unsigned char *)userdata) == 0 ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
 
@@ -104,8 +104,8 @@ ged_fbclear_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    ret = ged_bobol_framebuffer_apply(gedp, view_ctx,
-	fbclear_apply, clearColor, true);
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	fbclear_apply, clearColor, 1);
     if (ret != BRLCAD_OK) {
 	bu_vls_printf(gedp->ged_result_str,
 	    "unable to clear the active Obol framebuffer");

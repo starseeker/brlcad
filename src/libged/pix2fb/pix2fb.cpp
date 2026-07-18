@@ -41,12 +41,11 @@
 
 #include "bu/getopt.h"
 #include "bu/snooze.h"
-#include "BObol/BFramebuffer.h"
 #include "imgstream/fb_compat.h"
 
 #include "pkg.h"
 #include "ged.h"
-#include "../ged_bobol_private.hpp"
+#include "ged/draw_obol.h"
 
 struct pix2fb_state {
     size_t file_width;	/* default input width */
@@ -179,7 +178,7 @@ pix2fb_get_args(struct pix2fb_state *s, int argc, char **argv)
 
 
 static int
-pix2fb_apply(BObolFramebufferStream &stream, void *userdata)
+pix2fb_apply(struct imgstream_fb *fb, void *userdata)
 {
     struct pix2fb_state *state = (struct pix2fb_state *)userdata;
     if (!state)
@@ -193,7 +192,7 @@ pix2fb_apply(BObolFramebufferStream &stream, void *userdata)
     options.clear = state->clear;
     options.zoom = state->zoom;
     options.inverse = state->inverse;
-    return imgstream_fb_import_pix_fd(stream.framebuffer(), state->infd, state->file_name,
+    return imgstream_fb_import_pix_fd(fb, state->infd, state->file_name,
 	state->file_width, state->file_height, state->autosize,
 	&options) == 0 ? BRLCAD_OK : BRLCAD_ERROR;
 }
@@ -227,8 +226,8 @@ ged_pix2fb_core(struct ged *gedp, int argc, const char *argv[])
 	return GED_HELP;
     }
 
-    ret = ged_bobol_framebuffer_apply(gedp, view_ctx,
-	pix2fb_apply, &p2fbs, true);
+    ret = ged_draw_obol_framebuffer_apply_for_view(gedp, view_ctx,
+	pix2fb_apply, &p2fbs, 1);
 
     if (p2fbs.infd != 0)
 	close(p2fbs.infd);
