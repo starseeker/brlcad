@@ -128,77 +128,64 @@ class BOBOLRenderContextManager : public SoDB::ContextManager
 {
 public:
     BOBOLRenderContextManager(void) :
-	currentContext(NULL),
+	manager(SoDB::createOSMesaContextManager()),
 	softwareFramebufferQueries(0)
     {
     }
 
-    virtual void *createOffscreenContext(unsigned int width, unsigned int height)
+    ~BOBOLRenderContextManager(void)
     {
-	BOBOLRenderContext *ctx = new BOBOLRenderContext(width, height);
-	if (ctx->isValid())
-	    return ctx;
-	delete ctx;
-	return NULL;
+	delete manager;
     }
 
-    virtual SbBool isOSMesaContext(void *UNUSED(context))
+    virtual void *createOffscreenContext(unsigned int width, unsigned int height)
     {
-	return TRUE;
+	return manager ? manager->createOffscreenContext(width, height) : NULL;
+    }
+
+    virtual SbBool isOSMesaContext(void *context)
+    {
+	return manager ? manager->isOSMesaContext(context) : FALSE;
+    }
+
+    virtual void maxOffscreenDimensions(unsigned int &width,
+	unsigned int &height) const
+    {
+	if (manager)
+	    manager->maxOffscreenDimensions(width, height);
     }
 
     virtual SbBool makeContextCurrent(void *context)
     {
-	BOBOLRenderContext *renderContext =
-	    static_cast<BOBOLRenderContext *>(context);
-	if (!renderContext || !renderContext->makeCurrent())
-	    return FALSE;
-	this->currentContext = renderContext;
-	return TRUE;
+	return manager ? manager->makeContextCurrent(context) : FALSE;
     }
 
     virtual void restorePreviousContext(void *context)
     {
-	BOBOLRenderContext *renderContext =
-	    static_cast<BOBOLRenderContext *>(context);
-	if (renderContext)
-	    renderContext->restorePrevious();
-	if (this->currentContext == renderContext)
-	    this->currentContext = NULL;
+	if (manager)
+	    manager->restorePreviousContext(context);
     }
 
     virtual void destroyContext(void *context)
     {
-	BOBOLRenderContext *ctx = static_cast<BOBOLRenderContext *>(context);
-	if (this->currentContext == ctx)
-	    this->currentContext = NULL;
-	if (ctx && ctx->context && OSMesaGetCurrentContext() == ctx->context)
-	    OSMesaMakeCurrent(NULL, NULL, 0, 0, 0);
-	delete ctx;
+	if (manager)
+	    manager->destroyContext(context);
     }
 
     virtual SbBool getCurrentSoftwareFramebuffer(unsigned char *&pixels,
 	unsigned int &width, unsigned int &height, unsigned int &components)
     {
 	this->softwareFramebufferQueries++;
-	if (!this->currentContext || !this->currentContext->buffer) {
-	    pixels = NULL;
-	    width = height = components = 0;
-	    return FALSE;
-	}
-	pixels = this->currentContext->buffer.get();
-	width = this->currentContext->width;
-	height = this->currentContext->height;
-	components = 4;
-	return TRUE;
+	return manager ? manager->getCurrentSoftwareFramebuffer(
+	    pixels, width, height, components) : FALSE;
     }
 
     virtual void *getProcAddress(const char *funcName)
     {
-	return reinterpret_cast<void *>(OSMesaGetProcAddress(funcName));
+	return manager ? manager->getProcAddress(funcName) : NULL;
     }
 
-    BOBOLRenderContext *currentContext;
+    SoDB::ContextManager *manager;
     int softwareFramebufferQueries;
 };
 

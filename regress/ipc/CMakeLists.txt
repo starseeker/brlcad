@@ -88,9 +88,11 @@ endif(HAVE_QT_IPC_DEPS)
 # The launcher maps absent/broken X infrastructure to CTest's standard skip
 # code.  A QGED or ERT failure after the display probe remains a failure.
 # -------------------------------------------------------------------
-find_program(XVFB_RUN xvfb-run)
+if(UNIX)
+  find_program(XVFB_RUN xvfb-run)
+endif()
 
-if(TARGET qged)
+if(UNIX AND TARGET qged)
   configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/test_qged_ert.sh
     ${CMAKE_CURRENT_BINARY_DIR}/test_qged_ert.sh

@@ -2662,6 +2662,7 @@ struct BObolPolygonStoreRecord {
     SbString name;
     BObolFeatureScope scope;
     BObolPolygonType type;
+    SbBool visible;
     BObolPolygonVisual visual;
     long currentContour;
     long currentPoint;
@@ -2677,6 +2678,7 @@ struct BObolPolygonStoreRecord {
 	name(""),
 	scope(BObolFeatureScope::Shared),
 	type(BObolPolygonType::General),
+	visible(TRUE),
 	visual(),
 	currentContour(-1),
 	currentPoint(-1),
@@ -3280,6 +3282,9 @@ store_polygon_hatch_fill_node(const BObolPolygonStoreRecord &rec)
 static SoNode *
 store_polygon_node(const BObolPolygonStoreRecord &rec)
 {
+    if (!rec.visible)
+	return new SoSeparator;
+
     std::vector<SbVec3f> points;
     std::vector<double> precisePoints;
     std::vector<int32_t> commands;
@@ -3891,6 +3896,29 @@ BObolPolygonStore::clearAllPointSelections(void)
 	    it->second->revision++;
 	}
     }
+    return TRUE;
+}
+
+SbBool
+BObolPolygonStore::setVisible(BObolPolygonHandle handle, SbBool visible)
+{
+    BObolPolygonStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+    rec->visible = visible;
+    rec->revision++;
+    this->impl->realize(rec);
+    return TRUE;
+}
+
+SbBool
+BObolPolygonStore::isVisible(BObolPolygonHandle handle,
+			       SbBool &visibleOut) const
+{
+    BObolPolygonStoreRecord *rec = this->impl->record(handle);
+    if (!rec)
+	return FALSE;
+    visibleOut = rec->visible;
     return TRUE;
 }
 

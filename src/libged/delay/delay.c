@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "bsocket.h"
+#include "bu/snooze.h"
 
 #include "../ged_private.h"
 
@@ -37,7 +37,6 @@
 int
 ged_delay_core(struct ged *gedp, int argc, const char *argv[])
 {
-    struct timeval tv;
     static const char *usage = "sec usec";
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
@@ -56,9 +55,13 @@ ged_delay_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    tv.tv_sec = atoi(argv[1]);
-    tv.tv_usec = atoi(argv[2]);
-    select(0, NULL, NULL, NULL, &tv);
+    int64_t sec = (int64_t)atoi(argv[1]);
+    int64_t usec = (int64_t)atoi(argv[2]);
+    if (sec < 0 || usec < 0 || usec >= 1000000) {
+	bu_vls_printf(gedp->ged_result_str, "Usage: %s %s", argv[0], usage);
+	return BRLCAD_ERROR;
+    }
+    (void)bu_snooze(sec * 1000000 + usec);
 
     return BRLCAD_OK;
 }

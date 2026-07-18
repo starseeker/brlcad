@@ -918,16 +918,6 @@ qtcad_obol_lod_service_status_get(
     return 1;
 }
 
-static int
-qtcad_obol_lod_service_start_command(struct ged *gedp, size_t workers)
-{
-    char worker_count[32] = {0};
-    snprintf(worker_count, sizeof(worker_count), "%zu", workers);
-    const char *av[6] = {"view", "lod", "service", "start",
-	worker_count, NULL};
-    return ged_exec_view(gedp, 5, av) == BRLCAD_OK;
-}
-
 static size_t
 qtcad_obol_frontier_prewarm(
     struct ged *gedp,
@@ -1715,7 +1705,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		/* This fixture exercises cache-backed source expansion, not mesh
 		 * LoD submission.  Bound its worker pool and leave auto-submit off
 		 * so its completion condition is solely the requested prewarm. */
-		if (!qtcad_obol_lod_service_start_command(gedp, 4)) {
+		if (!controller->ensureManagedLodService(4)) {
 		    fprintf(stderr,
 			    "qtcad Obol progressive LoD startup-expand could not start its prewarm service: case=%s\n",
 			    testCase.name);

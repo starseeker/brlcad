@@ -15,6 +15,7 @@
 #include "common.h"
 
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <cerrno>
 #include <cstring>
@@ -23,7 +24,10 @@
 #include <mutex>
 #include <thread>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#  include <io.h>
+#  include <windows.h>
+#else
 #  include <sys/select.h>
 #  include <sys/time.h>
 #  include <unistd.h>
@@ -504,9 +508,6 @@ public:
 
     void openClient(int slot)
     {
-#ifdef _WIN32
-	(void)slot;
-#else
 	if (fbs_client_fd(fbs, slot) <= 0)
 	    return;
 
@@ -522,7 +523,6 @@ public:
 	watcher->thread = std::thread([this, watcher]() {
 	    runWatcher(watcher);
 	});
-#endif
     }
 
     void closeClient(int slot)
@@ -606,7 +606,6 @@ private:
 		    GED_VIEW_REFRESH_FRAMEBUFFER);
     }
 
-#ifndef _WIN32
     void runWatcher(std::shared_ptr<GedObolFbservWatcher> watcher)
     {
 	while (!watcher->stop) {
@@ -614,6 +613,17 @@ private:
 	    if (fd <= 0)
 		break;
 
+#ifdef _WIN32
+	    HANDLE pipe = (HANDLE)_get_osfhandle(fd);
+	    DWORD available = 0;
+	    if (pipe == INVALID_HANDLE_VALUE ||
+		!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL))
+		break;
+	    if (!available) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		continue;
+	    }
+#else
 	    fd_set read_set;
 	    FD_ZERO(&read_set);
 	    FD_SET(fd, &read_set);
@@ -630,7 +640,10 @@ private:
 	    }
 	    if (ret == 0)
 		continue;
-	    if (FD_ISSET(fd, &read_set)) {
+	    if (!FD_ISSET(fd, &read_set))
+		continue;
+#endif
+	    {
 		void *client_data =
 		    fbs_client_handler_data(fbs, watcher->slot);
 		if (!client_data)
@@ -640,7 +653,6 @@ private:
 	    }
 	}
     }
-#endif
 
     void notifyUpdated()
     {

@@ -117,43 +117,56 @@ public:
 class BOBOLRenderContextManager : public SoDB::ContextManager
 {
 public:
-    virtual void *createOffscreenContext(unsigned int width, unsigned int height)
+    BOBOLRenderContextManager(void) :
+	manager(SoDB::createOSMesaContextManager())
     {
-	BOBOLRenderContext *ctx = new BOBOLRenderContext(width, height);
-	if (ctx->isValid())
-	    return ctx;
-	delete ctx;
-	return NULL;
     }
 
-    virtual SbBool isOSMesaContext(void *UNUSED(context))
+    ~BOBOLRenderContextManager(void)
     {
-	return TRUE;
+	delete manager;
+    }
+
+    virtual void *createOffscreenContext(unsigned int width, unsigned int height)
+    {
+	return manager ? manager->createOffscreenContext(width, height) : NULL;
+    }
+
+    virtual SbBool isOSMesaContext(void *context)
+    {
+	return manager ? manager->isOSMesaContext(context) : FALSE;
+    }
+
+    virtual void maxOffscreenDimensions(unsigned int &width,
+	unsigned int &height) const
+    {
+	if (manager)
+	    manager->maxOffscreenDimensions(width, height);
     }
 
     virtual SbBool makeContextCurrent(void *context)
     {
-	return context ? static_cast<BOBOLRenderContext *>(context)->makeCurrent() : FALSE;
+	return manager ? manager->makeContextCurrent(context) : FALSE;
     }
 
     virtual void restorePreviousContext(void *context)
     {
-	if (context)
-	    static_cast<BOBOLRenderContext *>(context)->restorePrevious();
+	if (manager)
+	    manager->restorePreviousContext(context);
     }
 
     virtual void destroyContext(void *context)
     {
-	BOBOLRenderContext *ctx = static_cast<BOBOLRenderContext *>(context);
-	if (ctx && ctx->context && OSMesaGetCurrentContext() == ctx->context)
-	    OSMesaMakeCurrent(NULL, NULL, 0, 0, 0);
-	delete ctx;
+	if (manager)
+	    manager->destroyContext(context);
     }
 
     virtual void *getProcAddress(const char *funcName)
     {
-	return reinterpret_cast<void *>(OSMesaGetProcAddress(funcName));
+	return manager ? manager->getProcAddress(funcName) : NULL;
     }
+
+    SoDB::ContextManager *manager;
 };
 
 static int

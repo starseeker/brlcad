@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "bu/defines.h"
+#include "bu/str.h"
 #include "bnetwork.h"
 #include "imgstream/fbserv.h"
 #include "pkg.h"
@@ -201,7 +202,7 @@ main(void)
     }
     if (fbserv_obj_network_policy(&fbs) != FBSERV_NETWORK_LOOPBACK ||
 	!fbserv_obj_listener_interface(&fbs) ||
-	strcmp(fbserv_obj_listener_interface(&fbs), "127.0.0.1") != 0 ||
+	!BU_STR_EQUAL(fbserv_obj_listener_interface(&fbs), "127.0.0.1") ||
 	!fbserv_obj_network_ready(&fbs)) {
 	fprintf(stderr, "fbserv default network policy is not loopback-only\n");
 	return 1;

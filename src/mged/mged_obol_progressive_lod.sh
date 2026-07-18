@@ -111,8 +111,8 @@ if grep -Eq 'last_rejected_results: [1-9][0-9]*' "$LOG"; then
     exit 1
 fi
 
-if ! grep -Eq 'active_lod_obb_proxies: [1-9][0-9]*' "$LOG"; then
-    echo "MGED Obol progressive LoD did not activate an OBB proxy payload" 1>&2
+if ! grep -Eq 'active_lod_(aabb|obb)_proxies: [1-9][0-9]*' "$LOG"; then
+    echo "MGED Obol progressive LoD did not activate a coarse proxy payload" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

@@ -20,6 +20,7 @@
 
 #include "common.h"
 
+#include <QByteArray>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -28,6 +29,7 @@
 #include <QLibrary>
 #include <QPluginLoader>
 #include <QSettings>
+#include <QVariant>
 #include <algorithm>
 
 #include "qtcad/QgPluginInterfaces.h"
@@ -326,6 +328,11 @@ QgPluginManager::isEnabled(const QString &id) const
 {
     if (!m_byId.contains(id))
 	return false;
+    const QByteArray overrideName = QByteArrayLiteral("qtcad.plugin.enabled.") +
+	id.toUtf8();
+    const QVariant enabledOverride = property(overrideName.constData());
+    if (enabledOverride.isValid())
+	return enabledOverride.toBool();
     QSettings settings;
     settings.beginGroup(m_settingsGroup);
     bool en = settings.value(QStringLiteral("enabled/%1").arg(id), true).toBool();
@@ -340,6 +347,11 @@ QgPluginManager::persistEnabled(const QString &id, bool enabled)
     settings.beginGroup(m_settingsGroup);
     settings.setValue(QStringLiteral("enabled/%1").arg(id), enabled);
     settings.endGroup();
+    // QSettings' Windows registry backend may defer the write beyond the
+    // lifetime of this object.  isEnabled() deliberately uses a fresh
+    // QSettings instance, so make the enable/disable operation immediately
+    // observable on every backend.
+    settings.sync();
 }
 
 bool
@@ -347,6 +359,9 @@ QgPluginManager::enable(const QString &id)
 {
     if (!m_byId.contains(id))
 	return false;
+    const QByteArray overrideName = QByteArrayLiteral("qtcad.plugin.enabled.") +
+	id.toUtf8();
+    setProperty(overrideName.constData(), true);
     persistEnabled(id, true);
     return true;
 }
@@ -356,6 +371,9 @@ QgPluginManager::disable(const QString &id)
 {
     if (!m_byId.contains(id))
 	return false;
+    const QByteArray overrideName = QByteArrayLiteral("qtcad.plugin.enabled.") +
+	id.toUtf8();
+    setProperty(overrideName.constData(), false);
     persistEnabled(id, false);
     return true;
 }

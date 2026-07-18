@@ -48,6 +48,11 @@
 
 #include <cstring>
 
+#ifdef _WIN32
+#  include <io.h>
+#  include <windows.h>
+#endif
+
 namespace {
 static const qint64 DRAIN_TIME_BUDGET_MS = 4;
 static const size_t DRAIN_BYTES_BUDGET = 512 * 1024;
@@ -350,8 +355,33 @@ QFBIPCSocket::ipc_handler()
     struct pkg_conn *pkc = fbs_client_pkg(fbs, ind);
     if (!pkc) {
 	if (notifier) notifier->setEnabled(false);
+	if (timer) timer->stop();
 	return;
     }
+
+#ifdef _WIN32
+    /* QSocketNotifier only supports Winsock sockets on Windows.  IPC uses
+     * anonymous pipes, so poll their HANDLE without consuming bytes and let
+     * the regular fbserv handler perform one bounded blocking read. */
+    int fd = fbs_client_fd(fbs, ind);
+    HANDLE pipe = fd >= 0 ? (HANDLE)_get_osfhandle(fd) : INVALID_HANDLE_VALUE;
+    DWORD available = 0;
+    if (pipe == INVALID_HANDLE_VALUE ||
+	!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) {
+	if (timer) timer->stop();
+	return;
+    }
+    if (!available)
+	return;
+
+    void *client_data = fbs_client_handler_data(fbs, ind);
+    if (!client_data)
+	return;
+    fbs_existing_client_handler(client_data, 0);
+    if (fbs_client_active(fbs, ind))
+	emit updated();
+    return;
+#endif
 
     /* Phase H2 (ert reliability): pkc_server_data is set once at slot
      * registration time in fbs_open_ipc(); rewriting it on every event
@@ -393,12 +423,19 @@ qged_fbserv_open_ipc_client_handler(struct fbserv_obj *fbsp, int i, void *UNUSED
     QFBIPCSocket *s = new QFBIPCSocket;
     s->ind  = i;
     s->fbsp = fbsp;
+#ifdef _WIN32
+    s->timer = new QTimer(s);
+    s->timer->setInterval(10);
+    QObject::connect(s->timer, &QTimer::timeout,
+		     s, &QFBIPCSocket::ipc_handler);
+    s->timer->start();
+#else
     s->notifier = new QSocketNotifier(fbs_client_fd(fbsp, i),
 				      QSocketNotifier::Read, s);
-    fbs_set_client_channel(fbsp, i, (void *)s);
-
     QObject::connect(s->notifier, &QSocketNotifier::activated,
 		     s, &QFBIPCSocket::ipc_handler, Qt::DirectConnection);
+#endif
+    fbs_set_client_channel(fbsp, i, (void *)s);
 
     QObject::connect(s, &QFBIPCSocket::updated, s,
 	[fbsp]() { qged_fbserv_notify_framebuffer_updated(fbsp); },
@@ -418,6 +455,8 @@ qged_fbserv_close_ipc_client_handler(struct fbserv_obj *fbsp, int i)
 	 * after the QObject pointer is otherwise considered dead. */
 	if (s->notifier)
 	    s->notifier->setEnabled(false);
+	if (s->timer)
+	    s->timer->stop();
 	s->deleteLater();
     }
     fbs_set_client_channel(fbsp, i, NULL);

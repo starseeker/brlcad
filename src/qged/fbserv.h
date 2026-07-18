@@ -34,6 +34,7 @@
 #include <QSocketNotifier>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTimer>
 #include <iostream>
 
 struct ged;
@@ -67,6 +68,7 @@ class QFBIPCSocket : public QObject
 
     public:
 	QSocketNotifier *notifier = nullptr;
+	QTimer *timer = nullptr;
 	int ind = -1;
 	void *fbsp = nullptr;
 

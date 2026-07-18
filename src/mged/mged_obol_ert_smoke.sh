@@ -36,13 +36,15 @@ dm host
 draw all.g
 autoview
 rt
-delay 1 0
+after 5000
 refresh
 screengrab %s
 ert
-delay 1 0
+after 5000
 refresh
 screengrab %s
+ert -P 1 -H 16
+after 100
 quit
 ' "$RT_OUT" "$ERT_OUT" | "$MGED" -c -a nu -r "$DB" > "$LOG" 2>&1
 

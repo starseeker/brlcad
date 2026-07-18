@@ -78,9 +78,18 @@ brlcad_add_test(NAME libBObol_public_umbrella
   COMMAND test_bobol_public_umbrella)
 set_property(TEST libBObol_public_umbrella APPEND PROPERTY LABELS bobol_api)
 
+set(_bobol_dumpbin "${DUMPBIN_EXEC}")
+if(MSVC AND NOT EXISTS "${_bobol_dumpbin}" AND CMAKE_LINKER)
+  get_filename_component(_bobol_msvc_tool_dir "${CMAKE_LINKER}" DIRECTORY)
+  unset(_bobol_dumpbin)
+  find_program(_bobol_dumpbin NAMES dumpbin.exe dumpbin
+    HINTS "${_bobol_msvc_tool_dir}" NO_DEFAULT_PATH)
+endif()
+
 brlcad_add_test(NAME libBObol_public_symbol_contract
   COMMAND "${CMAKE_COMMAND}"
     "-DNM=${CMAKE_NM}"
+    "-DDUMPBIN=${_bobol_dumpbin}"
     "-DLIBRARY=$<TARGET_FILE:libBObol>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/../check_public_symbols.cmake")
 set_tests_properties(libBObol_public_symbol_contract PROPERTIES
@@ -96,9 +105,13 @@ brlcad_add_test(NAME libBObol_installed_package_consumer
     "-DSTAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/installed-package"
     "-DCONFIG=$<CONFIG>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/check_installed_package.cmake")
+set(_bobol_package_consumer_timeout 300)
+if(WIN32)
+  set(_bobol_package_consumer_timeout 900)
+endif()
 set_tests_properties(libBObol_installed_package_consumer PROPERTIES
   LABELS "bobol_api;bobol_package"
-  TIMEOUT 300)
+  TIMEOUT "${_bobol_package_consumer_timeout}")
 
 if(Obol_NanoRTContextManager_FOUND)
   brlcad_addexec(test_bobol_nanort_render test_nanort_render.cpp "libBObol;libwdb;libbu;Obol::Obol;Threads::Threads;${OSMESA_LIBRARY}" TEST ALL_CXX)

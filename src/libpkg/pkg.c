@@ -1285,6 +1285,22 @@ _pkg_checkin(struct pkg_conn *pc, int nodelay)
     ssize_t i;
     unsigned int j;
 
+#ifdef HAVE_WINSOCK_H
+    if (pc->pkc_tx_kind == 1) {
+	/* Winsock select() accepts sockets only.  Pipe-pair transports use CRT
+	 * descriptors backed by anonymous-pipe HANDLEs, so check them without
+	 * consuming bytes before allowing pkg_suckin() to perform its read. */
+	HANDLE pipe = (HANDLE)_get_osfhandle(pc->pkc_in_fd);
+	DWORD available = 0;
+	if (!nodelay)
+	    Sleep(20);
+	if (pipe != INVALID_HANDLE_VALUE &&
+	    PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL) && available)
+	    (void)pkg_suckin(pc);
+	return;
+    }
+#endif
+
     /* Check socket for unexpected input */
     tv.tv_sec = 0;
     if (nodelay)
@@ -1299,9 +1315,8 @@ _pkg_checkin(struct pkg_conn *pc, int nodelay)
     } else {
 	FD_SET(pc->pkc_fd, &bits);
     }
+
     if (pc->pkc_tx_kind == 1) {
-	// TODO - select doesn't work on non-socket file descriptors on Windows,
-	// so this isn't going to fly there.
 	i = select(pc->pkc_in_fd+1, &bits, (fd_set *)0, (fd_set *)0, &tv);
     } else {
 	i = select(pc->pkc_fd+1, &bits, (fd_set *)0, (fd_set *)0, &tv);

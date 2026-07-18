@@ -497,6 +497,9 @@ GshState::GshState()
 GshState::~GshState()
 {
     if (gedp)
+	ged_subprocesses_terminate(gedp);
+
+    if (gedp)
 	ged_draw_obol_framebuffer_release(gedp);
 
     if (gedp && gedp->ged_fbs && fbs_can_close(gedp->ged_fbs))

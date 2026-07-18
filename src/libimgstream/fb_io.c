@@ -136,6 +136,10 @@ imgstream_fb_import_pix_fd(imgstream_fb_t *fb, int fd,
     if (!fb || fd < 0 || fb_dimensions(fb, &screen_width, &screen_height) != 0)
 	return -1;
 
+    /* PIX is byte-oriented.  In particular, Windows text descriptors treat
+     * 0x1a as end-of-file and would truncate otherwise valid pixel data. */
+    (void)setmode(fd, O_BINARY);
+
     if (autosize && filename && filename[0] && bu_strcmp(filename, "-") != 0) {
 	size_t width = 0;
 	size_t height = 0;

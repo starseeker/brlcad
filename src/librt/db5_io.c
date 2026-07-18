@@ -434,7 +434,7 @@ db5_export_object3(
     long namelen = 0;
     size_t need;
     int h_width, n_width, a_width, b_width;
-    long togo;
+    size_t togo;
 
     /*
      * First, compute an upper bound on the size buffer needed.

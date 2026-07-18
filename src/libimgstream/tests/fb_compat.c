@@ -217,6 +217,8 @@ test_spec_classification(void)
     CHECK(imgstream_fb_spec_kind("/dev/disk") == IMGSTREAM_FB_SPEC_FILE, "disk spec maps to file");
     CHECK(imgstream_fb_spec_supported("/dev/disk") == 0, "bare disk spec needs an explicit file path");
     CHECK(imgstream_fb_spec_kind("out.pix") == IMGSTREAM_FB_SPEC_FILE, "plain path maps to file");
+    CHECK(imgstream_fb_spec_kind("C:/tmp/out.pix") == IMGSTREAM_FB_SPEC_FILE,
+	    "Windows drive path maps to file");
     CHECK(imgstream_fb_spec_supported("out.pix") == 1, "plain path file spec is supported");
     CHECK(imgstream_fb_spec_kind("/dev/disk:out.pix") == IMGSTREAM_FB_SPEC_FILE, "explicit disk path maps to file");
     CHECK(imgstream_fb_spec_supported("/dev/disk:out.pix") == 1, "explicit disk path file spec is supported");

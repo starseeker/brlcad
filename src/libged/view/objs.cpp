@@ -878,6 +878,11 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
 	    if (!ref.view->features().style(ref.feature, style))
 		return BRLCAD_ERROR;
 	    visible = !style.hasVisible || style.visible ? 1 : 0;
+	} else if (ref.kind == GedViewManagedFeatureKind::Polygon) {
+	    SbBool polygon_visible = FALSE;
+	    if (!ref.view->polygons().isVisible(ref.polygon, polygon_visible))
+		return BRLCAD_ERROR;
+	    visible = polygon_visible ? 1 : 0;
 	} else {
 	    struct ged_view_feature_style style =
 		GED_VIEW_FEATURE_STYLE_INIT;
@@ -893,6 +898,9 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
 	if (ref.kind == GedViewManagedFeatureKind::Feature)
 	    return ref.view->features().setVisible(ref.feature,
 		FALSE) ? BRLCAD_OK : BRLCAD_ERROR;
+	if (ref.kind == GedViewManagedFeatureKind::Polygon)
+	    return ref.view->polygons().setVisible(ref.polygon,
+		FALSE) ? BRLCAD_OK : BRLCAD_ERROR;
 	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
 	style.visible = 0;
 	return _view_obj_database_style_apply(ref, &style, false) ?
@@ -901,6 +909,9 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
     if (BU_STR_EQUAL(argv[0], "UP")) {
 	if (ref.kind == GedViewManagedFeatureKind::Feature)
 	    return ref.view->features().setVisible(ref.feature,
+		TRUE) ? BRLCAD_OK : BRLCAD_ERROR;
+	if (ref.kind == GedViewManagedFeatureKind::Polygon)
+	    return ref.view->polygons().setVisible(ref.polygon,
 		TRUE) ? BRLCAD_OK : BRLCAD_ERROR;
 	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
 	style.visible = 1;

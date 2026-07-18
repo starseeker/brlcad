@@ -689,6 +689,8 @@ public:
     SbBool clearSelectedPoint(BObolPolygonHandle handle);
     SbBool clearAllPointSelections(void);
 
+    SbBool setVisible(BObolPolygonHandle handle, SbBool visible);
+    SbBool isVisible(BObolPolygonHandle handle, SbBool &visibleOut) const;
     SbBool setVisual(BObolPolygonHandle handle,
 	const BObolPolygonVisual &visual);
     SbBool visual(BObolPolygonHandle handle,

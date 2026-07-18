@@ -285,6 +285,11 @@ bu_temp_file(char *filepath, size_t len)
 	return NULL;
     }
 
+    /* mkstemp uses the CRT default descriptor mode on Windows.  fdopen's
+     * "b" flag does not reliably retag an existing descriptor, so make the
+     * temporary file binary before either stdio or descriptor I/O uses it. */
+    (void)setmode(fd, O_BINARY);
+
     if (filepath) {
 	if (UNLIKELY(len < strlen(tempfile))) {
 	    bu_log("INTERNAL ERROR: bu_temp_file filepath buffer size is insufficient (%zu < %zu)\n", len, strlen(tempfile));

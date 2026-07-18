@@ -18,6 +18,11 @@ if(NOT _install_result EQUAL 0)
     "libBObol install staging failed:\n${_install_output}\n${_install_error}")
 endif()
 
+set(_consumer_config Release)
+if(DEFINED CONFIG AND NOT "${CONFIG}" STREQUAL "")
+  set(_consumer_config "${CONFIG}")
+endif()
+
 set(_consumer_build "${STAGE_DIR}/consumer-build")
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -S "${SOURCE_DIR}" -B "${_consumer_build}"
@@ -33,6 +38,7 @@ endif()
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --build "${_consumer_build}"
+    --config "${_consumer_config}"
   RESULT_VARIABLE _build_result
   OUTPUT_VARIABLE _build_output
   ERROR_VARIABLE _build_error)

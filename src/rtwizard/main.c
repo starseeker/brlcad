@@ -1194,7 +1194,11 @@ main(int argc, char **argv)
 	bu_vls_free(&tlog);
 
 	/* Normalize .g and output image file paths, since they're to be used
-	 * in Tcl scripts */
+	 * in Tcl scripts.  Tcl 8.6's Windows normalizer may replace a valid
+	 * long-name directory component with an empty string when resolving its
+	 * 8.3 alias.  Native absolute paths
+	 * already work in Tcl on Windows, so preserve them verbatim there. */
+#if !defined(_WIN32) || defined(__CYGWIN__)
 	if (bu_vls_strlen(s->input_file) > 0) {
 	    Tcl_Obj *initPath, *normalPath;
 	    initPath = Tcl_NewStringObj(bu_vls_addr(s->input_file), (int)bu_vls_strlen(s->input_file));
@@ -1211,6 +1215,7 @@ main(int argc, char **argv)
 	    bu_vls_sprintf(s->output_file, "%s", Tcl_GetString(normalPath));
 	    Tcl_DecrRefCount(initPath);
 	}
+#endif
 
 	/* Set a single argv so the Tcl scripts will run the main proc.  Not passing more args
 	 * because they can apparently cause problems with Tcl script execution. */

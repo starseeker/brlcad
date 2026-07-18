@@ -141,6 +141,13 @@ fb_spec_has_remote_shape(const char *spec)
     if (!spec || !spec[0])
 	return 0;
 
+    /* A native Windows absolute path contains a colon, but it is a file
+     * target rather than the legacy host:port remote syntax. */
+    if (((spec[0] >= 'A' && spec[0] <= 'Z') ||
+	 (spec[0] >= 'a' && spec[0] <= 'z')) &&
+	spec[1] == ':' && (spec[2] == '/' || spec[2] == '\\'))
+	return 0;
+
     if (bu_strncmp(spec, "ipc:", 4) == 0)
 	return 1;
 

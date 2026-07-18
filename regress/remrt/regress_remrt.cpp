@@ -161,6 +161,11 @@ read_remrt_stderr(struct bu_process *proc, RemrtDetected *det, std::string *log_
     while (bu_fgets(buf, sizeof(buf), ferr)) {
 	if (log_out)
 	    log_out->append(buf);
+	/* Keep startup and worker-handshake diagnostics visible while the
+	 * orchestrator waits.  Otherwise a stalled child hides the useful log
+	 * until the several-minute process timeout has already expired. */
+	fputs(buf, stderr);
+	fflush(stderr);
 
 	/* "Listening at TCP port NNNNN" */
 	const char *p = strstr(buf, "Listening at TCP port ");

@@ -17,13 +17,13 @@
 #define LIBGED_GED_BOBOL_PRIVATE_HPP
 
 #include <cstdio>
-#include <cstring>
 #include <string>
 
 #include "BObol/BViewStore.h"
 #include "BObol/BViewController.h"
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BFramebuffer.h"
+#include "bu/str.h"
 #include "bv.h"
 #include "ged/draw_types.h"
 #include "ged/view.h"
@@ -91,7 +91,7 @@ ged_bobol_source_in_view(struct ged_view_context *view_ctx,
 	const char *instance_path = key.c_str();
 	while (*instance_path == '/')
 	    instance_path++;
-	return std::strcmp(instance_path, source_path) == 0;
+	return BU_STR_EQUAL(instance_path, source_path);
     }
 
     const char *view_name = bv_name_get(

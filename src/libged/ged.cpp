@@ -129,27 +129,10 @@ ged_old_selections_free(struct ged *gedp)
 
 
 void
-ged_close(struct ged *gedp)
+ged_subprocesses_terminate(struct ged *gedp)
 {
     if (gedp == GED_NULL)
 	return;
-
-    /* Clear all displayed geometry BEFORE closing the database.
-     * Scene objects hold directory pointers that are only valid while dbip is
-     * open; closing dbip first causes use-after-free during draw-scene
-     * teardown.  ged_close_core() in close/close.cpp already
-     * follows this order — this function must match it. */
-    if (gedp->dbip) {
-	const char *av[1] = {"zap"};
-	ged_exec_zap(gedp, 1, (const char **)av);
-    }
-
-    ged_event_librt_callbacks_disable(gedp);
-
-    if (gedp->dbip) {
-	db_close(gedp->dbip);
-	gedp->dbip = NULL;
-    }
 
     /* Detach application event-loop handlers before freeing their ClientData,
      * then terminate every subprocess.  Removing from the end avoids skipping
@@ -171,6 +154,41 @@ ged_close(struct ged *gedp)
 	BU_PUT(rrp, struct ged_subprocess);
     }
     bu_ptbl_reset(&gedp->ged_subp);
+
+    /* A renderer may have installed one or more local framebuffer clients.
+     * Closing them here joins toolkit/bridge watchers before their display
+     * targets can be released by an application-level staged shutdown. */
+    if (gedp->ged_fbs)
+	(void)fbs_drop_ipc_clients(gedp->ged_fbs);
+}
+
+
+void
+ged_close(struct ged *gedp)
+{
+    if (gedp == GED_NULL)
+	return;
+
+    /* Children and their callbacks must quiesce before either displayed
+     * resources or the database they reference are dismantled. */
+    ged_subprocesses_terminate(gedp);
+
+    /* Clear all displayed geometry BEFORE closing the database.
+     * Scene objects hold directory pointers that are only valid while dbip is
+     * open; closing dbip first causes use-after-free during draw-scene
+     * teardown.  ged_close_core() in close/close.cpp already
+     * follows this order — this function must match it. */
+    if (gedp->dbip) {
+	const char *av[1] = {"zap"};
+	ged_exec_zap(gedp, 1, (const char **)av);
+    }
+
+    ged_event_librt_callbacks_disable(gedp);
+
+    if (gedp->dbip) {
+	db_close(gedp->dbip);
+	gedp->dbip = NULL;
+    }
 
     ged_destroy(gedp);
     gedp = NULL;

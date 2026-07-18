@@ -48,23 +48,21 @@ draw -m1 all.bot
 autoview
 screengrab %s
 view lod service status
-delay 0 150000
-view lod service poll 1
-autoview
+view lod service poll 64
+delay 4 0
+view lod service poll 64
 screengrab %s
 view lod service status
-delay 0 500000
-view lod service poll 1
-autoview
+delay 4 0
+view lod service poll 64
 screengrab %s
 view lod service status
-view lod service wait 5000 8
-autoview
+view lod service wait 25000 64
 screengrab %s
 view lod service status
 quit
 ' "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3" \
-    | BU_DIR_CACHE="$CACHE" BOBOL_LOD_OBB_TASK_DELAY_MS="${BOBOL_LOD_OBB_TASK_DELAY_MS:-350}" BOBOL_LOD_TASK_DELAY_MS="${BOBOL_LOD_TASK_DELAY_MS:-700}" \
+    | BU_DIR_CACHE="$CACHE" BOBOL_LOD_OBB_TASK_DELAY_MS="${BOBOL_LOD_OBB_TASK_DELAY_MS:-250}" BOBOL_LOD_TASK_DELAY_MS="${BOBOL_LOD_TASK_DELAY_MS:-6000}" \
     "$GSH" --new-cmds "$TMPDB" > "$LOG" 2>&1
 
 for img in "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3"; do

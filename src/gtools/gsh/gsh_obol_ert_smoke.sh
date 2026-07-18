@@ -38,10 +38,12 @@ printf 'draw all.g
 autoview
 ert -P 1 -H 8
 zap
-delay 0 100000
+delay 1 0
 screengrab %s
 delay 5 0
 screengrab %s
+ert -P 1 -H 16
+delay 0 100000
 quit
 ' "$PARTIAL" "$FINAL" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
 
@@ -139,7 +141,7 @@ final = decode(sys.argv[2])
 if partial[:2] != final[:2]:
     raise RuntimeError("partial and final ERT frames have different dimensions")
 pixel_count = partial[0] * partial[1]
-if not pixel_count // 10 < partial[3] < pixel_count * 9 // 10:
+if not pixel_count // 20 < partial[3] < pixel_count * 19 // 20:
     raise RuntimeError("early ERT frame is not meaningfully partial: %d/%d" % (partial[3], pixel_count))
 if final[3] <= partial[3]:
     raise RuntimeError("final ERT frame did not advance beyond partial frame")

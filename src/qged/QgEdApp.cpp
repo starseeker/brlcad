@@ -388,6 +388,7 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
 
 QgEdApp::~QgEdApp() {
     if (mdl && mdl->ged()) {
+	ged_subprocesses_terminate(mdl->ged());
 	if (m_obol_draw_observer_token) {
 	    ged_draw_observer_remove(mdl->ged(), m_obol_draw_observer_token);
 	    m_obol_draw_observer_token = 0;
