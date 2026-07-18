@@ -1,7 +1,8 @@
-set(PLUGIN_LIBS libged libdm libbu)
+set(PLUGIN_LIBS libged libimgstream libbu)
 
 ged_plugin_library(ged-fb2pix
-  fb2pix.c
+  PLUGIN_ONLY
+  fb2pix.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

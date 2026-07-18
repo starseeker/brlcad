@@ -39,6 +39,7 @@
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "raytrace.h"
+#include "rt/edit.h"
 
 
 /* Check that the JSON output for prim_type_id:

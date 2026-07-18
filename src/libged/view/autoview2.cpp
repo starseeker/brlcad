@@ -26,9 +26,17 @@
 #include "common.h"
 
 #include <cstdlib>
+#include <algorithm>
 
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BMeasureAction.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
+#include <Inventor/SoViewport.h>
 #include "bu/opt.h"
-#include "dm.h"
+#include "bv.h"
+#include "ged/draw.h"
+#include "../ged_bobol_private.hpp"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -47,6 +55,107 @@ _autoview_arg_is_num(const char *s, double *v)
 
     if (v)
 	*v = d;
+    return 1;
+}
+
+static int
+_autoview_bobol_database_bounds(struct ged *gedp, vect_t min, vect_t max)
+{
+    BObolSceneController *scene = ged_bobol_scene(gedp);
+    if (!scene)
+	return 0;
+
+    VSETALL(min, INFINITY);
+    VSETALL(max, -INFINITY);
+    int have_bounds = 0;
+    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+	BObolDatabaseSourceSummary source;
+	if (!scene->getDatabaseSourceSummary(i, source) || !source.valid ||
+	    !source.visible || !source.sourceBoundsValid ||
+	    source.sourceBounds.isEmpty())
+	    continue;
+
+	const SbVec3f source_min = source.sourceBounds.getMin();
+	const SbVec3f source_max = source.sourceBounds.getMax();
+	point_t center;
+	VSET(center,
+	    (source_min[X] + source_max[X]) * 0.5,
+	    (source_min[Y] + source_max[Y]) * 0.5,
+	    (source_min[Z] + source_max[Z]) * 0.5);
+	fastf_t extent = source_max[X] - source_min[X];
+	extent = std::max(extent,
+	    static_cast<fastf_t>(source_max[Y] - source_min[Y]));
+	extent = std::max(extent,
+	    static_cast<fastf_t>(source_max[Z] - source_min[Z]));
+	if (extent < SQRT_SMALL_FASTF)
+	    extent = SQRT_SMALL_FASTF;
+
+	point_t source_bounds_min;
+	point_t source_bounds_max;
+	VSET(source_bounds_min, center[X] - extent, center[Y] - extent,
+	    center[Z] - extent);
+	VSET(source_bounds_max, center[X] + extent, center[Y] + extent,
+	    center[Z] + extent);
+	VMIN(min, source_bounds_min);
+	VMAX(max, source_bounds_max);
+	have_bounds = 1;
+    }
+
+    if (have_bounds)
+	return 1;
+
+    SbBox3f bounds;
+    if (!scene->getDatabaseSourceBounds(bounds, TRUE) || bounds.isEmpty())
+	return 0;
+    const SbVec3f source_min = bounds.getMin();
+    const SbVec3f source_max = bounds.getMax();
+    VSET(min, source_min[X], source_min[Y], source_min[Z]);
+    VSET(max, source_max[X], source_max[Y], source_max[Z]);
+    return 1;
+}
+
+static int
+_autoview_obol_database_scene(
+	struct ged *gedp,
+	struct ged_view_context *view_ctx,
+	fastf_t factor,
+	int all_view_objs)
+{
+    if (all_view_objs)
+	return 0;
+
+    vect_t min, max;
+    if (!_autoview_bobol_database_bounds(gedp, min, max))
+	return 0;
+
+    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+	    factor, min, max);
+    return 1;
+}
+
+static int
+_autoview_bobol_view_scene(struct ged_view_context *view_ctx,
+	fastf_t factor)
+{
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return 0;
+
+    SoBRLMeasureAction measure;
+    measure.setGeometryPolicy(SoBRLMeasureAction::DISPLAY_LEVEL);
+    measure.apply(controller->getViewport()->getRoot());
+    const SbBox3f &bounds = measure.getBounds();
+    if (bounds.isEmpty())
+	return 0;
+
+    const SbVec3f bmin = bounds.getMin();
+    const SbVec3f bmax = bounds.getMax();
+    vect_t min, max;
+    VSET(min, bmin[0], bmin[1], bmin[2]);
+    VSET(max, bmax[0], bmax[1], bmax[2]);
+    bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+	factor, min, max);
     return 1;
 }
 
@@ -83,11 +192,11 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     int all_view_objs = 0;
     int print_help = 0;
     fastf_t scale = -1.0;
-    struct bview *v = gedp->ged_gvp;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 
     struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",      "",        NULL,     &print_help, "Print help and exit");
-    BU_OPT(d[1], "",   "all-objs", "",        NULL,  &all_view_objs, "Bound all non-faceplate view objects");
+    BU_OPT(d[1], "",   "all-objs", "",        NULL,  &all_view_objs, "Bound all non-faceplate view features");
     BU_OPT(d[2], "s", "scale",  "#", &bu_opt_fastf_t,         &scale, "Set view scale (model scale relative to view size)");
     BU_OPT(d[3], "V", "view",  "name", &bu_opt_vls,           &cvls, "Specify view to adjust");
     BU_OPT_NULL(d[4]);
@@ -104,8 +213,8 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     argc = opt_ret;
 
     if (bu_vls_strlen(&cvls)) {
-	v = bv_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
-	if (!v) {
+	view_ctx = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
+	if (!view_ctx) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
 	    return BRLCAD_ERROR;
@@ -137,10 +246,19 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 	point_t min, max;
 	if (rt_obj_bounds(gedp->ged_result_str, gedp->dbip, argc, argv, 0, min, max) != BRLCAD_OK)
 	    return BRLCAD_ERROR;
-	bv_autoview_bounds(v, factor, min, max);
+	bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),
+		factor, min, max);
     } else {
-	// libbv has the nuts and bolts
-	bv_autoview(v, factor, all_view_objs);
+	if (all_view_objs)
+	    (void)_autoview_bobol_view_scene(view_ctx, factor);
+	else
+	    (void)_autoview_obol_database_scene(gedp, view_ctx, factor, 0);
+	/* A deferred Obol root starts with a proxy and gains its full bounds as
+	 * realization completes.  Continue fitting this command's view until
+	 * that work settles, unless a later view change supersedes it. */
+	if (!all_view_objs)
+	    (void)ged_draw_obol_progressive_autoview_follow(gedp, view_ctx,
+		    factor);
     }
 
     return BRLCAD_OK;
@@ -154,4 +272,3 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

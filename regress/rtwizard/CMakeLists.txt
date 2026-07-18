@@ -24,7 +24,9 @@ if(TARGET rtwizard)
   # necessary inputs for the CTest tests
   add_dependencies(regress-rtwizard rtwizard pixcmp m35.g)
 
-  # All rtwizard tests used the same script
+  # All rtwizard tests use the same script.  The controls were regenerated
+  # after Obol made autoview use the actual combined scene bounds rather than
+  # the legacy per-leaf safety cubes, which displaced otherwise correct views.
   set(TSCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/regress-rtwiz.cmake.in")
 
   set(INPUT_FILE "${DATA_DIR}/db/m35.g")
@@ -93,6 +95,36 @@ if(TARGET rtwizard)
   brlcad_regression_test(regress-rtwiz_m35_edge_only_color "rtwizard;pixcmp;m35.g" TEST_SCRIPT "${TSCRIPT}" EXEC rtwizard)
   distclean(${LOG_FILE} ${TARGET_IMAGE})
 
+  # Exercise the historical GUI itself, including the embedded ArcherCore
+  # view, production Tk hosts, and the framebuffer-preview IPC path.  The
+  # rcfile schedules assertions from inside the wizard event loop so this
+  # starts the real rtwizard executable rather than reconstructing its pages
+  # in a test harness.
+  if(UNIX)
+    find_program(RTWIZARD_XVFB_RUN_EXECUTABLE xvfb-run)
+    if(RTWIZARD_XVFB_RUN_EXECUTABLE)
+      set(RTWIZARD_GUI_SMOKE_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/rtwizard_gui_smoke.png")
+      add_test(
+        NAME rtwizard_gui_obol_smoke
+        COMMAND
+          ${SH_EXEC} ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh
+          ${RTWIZARD_XVFB_RUN_EXECUTABLE} $<TARGET_FILE:rtwizard> --gui -i
+          ${BRLCAD_SOURCE_DIR}/src/libged/tests/draw/moss.g -c all.g
+      )
+      set_property(
+        TEST rtwizard_gui_obol_smoke APPEND
+        PROPERTY
+          ENVIRONMENT
+            BRLCAD_ROOT=${CMAKE_BINARY_DIR}
+            RTWIZARD_RCFILE=${CMAKE_CURRENT_SOURCE_DIR}/rtwizard_gui_smoke.tcl
+            RTWIZARD_GUI_SMOKE_OUTPUT=${RTWIZARD_GUI_SMOKE_OUTPUT}
+      )
+      set_property(TEST rtwizard_gui_obol_smoke PROPERTY SKIP_RETURN_CODE 125)
+      set_property(TEST rtwizard_gui_obol_smoke PROPERTY TIMEOUT 120)
+      distclean(${RTWIZARD_GUI_SMOKE_OUTPUT})
+    endif(RTWIZARD_XVFB_RUN_EXECUTABLE)
+  endif(UNIX)
+
   distclean(${CMAKE_CURRENT_BINARY_DIR}/rtedge.log)
 endif()
 
@@ -107,6 +139,7 @@ cmakefiles(
   m35_edge_only_color_ref.pix
   m35_edge_only_ref.pix
   regress-rtwiz.cmake.in
+  rtwizard_gui_smoke.tcl
 )
 
 # Local Variables:

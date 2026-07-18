@@ -1,0 +1,153 @@
+/*                   B R T R E N D E R . H
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ */
+/** @file BObol/BRtRender.h */
+
+#ifndef BOBOL_BRTRENDER_H
+#define BOBOL_BRTRENDER_H
+
+#include "BObol/BDefines.h"
+
+#include <Inventor/SbColor.h>
+#include <Inventor/SbString.h>
+
+#include <atomic>
+#include <stddef.h>
+#include <stdint.h>
+#include <vector>
+
+class BObolViewController;
+struct db_i;
+
+/** Policy for one retained librt frame.  Values are deliberately bounded by
+ * the endpoint property layer; this standalone type also validates them so
+ * direct library callers fail rather than silently selecting another mode. */
+struct BOBOL_EXPORT BObolRtRenderSettings {
+    BObolRtRenderSettings(void);
+
+    unsigned int width;
+    unsigned int height;
+    unsigned int workers;
+    unsigned int samples;
+    SbColor backgroundBottom;
+    SbColor backgroundTop;
+};
+
+struct BOBOL_EXPORT BObolRtRenderStatus {
+    BObolRtRenderStatus(void);
+    void clear(void);
+
+    uint64_t geometryRevision;
+    uint64_t presentationRevision;
+    uint64_t raysShot;
+    unsigned int preparedSources;
+    unsigned int width;
+    unsigned int height;
+    int complete;
+    int cancelled;
+};
+
+/** Optional retained-ray outputs.  Depth is normalized camera depth in
+ * [0, 1], where 1 denotes no hit.  sourceIdentity is zero for background and
+ * otherwise resolves through BObolRtRenderer::getSourceIdentity(). */
+struct BOBOL_EXPORT BObolRtRenderPlanes {
+    BObolRtRenderPlanes(void);
+    void clear(void);
+
+    std::vector<float> depth;
+    std::vector<uint32_t> sourceIdentity;
+};
+
+/** One source referenced by an RT identity plane.  Identifiers are scoped to
+ * the renderer's current retained snapshot and must be resolved before its
+ * next synchronize() call that changes source membership. */
+struct BOBOL_EXPORT BObolRtSourceIdentity {
+    BObolRtSourceIdentity(void);
+    void clear(void);
+
+    struct db_i *database;
+    SbString instanceKey;
+    SbString path;
+    uint32_t sourceRevision;
+};
+
+/**
+ * Retained librt scene adapter for an Obol view.
+ *
+ * synchronize() is called on the controller/Obol owner thread.  It copies
+ * source visibility and presentation state and prepares only newly changed
+ * database sources.  Retained region/primitive material metadata takes
+ * precedence over source fallback metadata.  The interactive material model
+ * recognizes bounded plastic-family diffuse, specular, shine, reflection,
+ * transmission, and refractive-index parameters.  Mirror and glass use a
+ * fixed-depth secondary-ray path.  A bounded set of active directional,
+ * point, and spot lights authored under the
+ * active render scene is copied with its world transforms during
+ * synchronize(); unknown shader names retain the default diffuse presentation
+ * rather than invoking a legacy optical renderer.
+ * render() subsequently touches no Coin nodes, so an endpoint may execute it
+ * on a worker and discard the result when cancellation is requested.  The
+ * renderer does not own an image stream or native host.
+ */
+class BOBOL_EXPORT BObolRtRenderer {
+public:
+    BObolRtRenderer(void);
+    ~BObolRtRenderer(void);
+
+    BObolRtRenderer(const BObolRtRenderer &) = delete;
+    BObolRtRenderer &operator=(const BObolRtRenderer &) = delete;
+
+    SbBool synchronize(BObolViewController *controller);
+    SbBool render(const BObolRtRenderSettings &settings,
+	std::vector<unsigned char> &rgb,
+	BObolRtRenderStatus *status = NULL,
+	const std::atomic_bool *cancelled = NULL);
+
+    /** Render RGB together with optional depth and source-identity planes.
+     * Plane samples use a pixel-center ray, independently of RGB sampling. */
+    SbBool renderWithPlanes(const BObolRtRenderSettings &settings,
+	std::vector<unsigned char> &rgb, BObolRtRenderPlanes &planes,
+	BObolRtRenderStatus *status = NULL,
+	const std::atomic_bool *cancelled = NULL);
+
+    /** Render a contiguous range of rows into a retained RGB image.  The
+     * first call for a frame initializes @p rgb to the configured background;
+     * subsequent ranges preserve already completed rows.  A completed range
+     * is byte-identical to the same rows from render(), which lets an endpoint
+     * publish bounded progressive passes without touching Coin on its worker.
+     */
+    SbBool renderRows(const BObolRtRenderSettings &settings,
+	std::vector<unsigned char> &rgb, unsigned int firstRow,
+	unsigned int rowCount, BObolRtRenderStatus *status = NULL,
+	const std::atomic_bool *cancelled = NULL);
+
+    /** Range form of renderWithPlanes().  The first range of a frame must
+     * start at row zero so RGB and plane backgrounds are initialized. */
+    SbBool renderRowsWithPlanes(const BObolRtRenderSettings &settings,
+	std::vector<unsigned char> &rgb, BObolRtRenderPlanes &planes,
+	unsigned int firstRow, unsigned int rowCount,
+	BObolRtRenderStatus *status = NULL,
+	const std::atomic_bool *cancelled = NULL);
+
+    SbBool getSourceIdentity(uint32_t identifier,
+	BObolRtSourceIdentity &identity) const;
+    void clear(void);
+
+    unsigned int getPreparedSourceCount(void) const;
+    uint64_t getGeometryRevision(void) const;
+    uint64_t getPresentationRevision(void) const;
+
+private:
+    SbBool renderRowsInternal(const BObolRtRenderSettings &settings,
+	std::vector<unsigned char> &rgb, BObolRtRenderPlanes *planes,
+	unsigned int firstRow, unsigned int rowCount,
+	BObolRtRenderStatus *status, const std::atomic_bool *cancelled);
+
+    struct Private;
+    Private *p;
+};
+
+#endif /* BOBOL_BRTRENDER_H */

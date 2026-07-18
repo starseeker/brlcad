@@ -34,11 +34,11 @@
 #include "bu/app.h"
 #include "bu/exit.h"
 #include "bu/getopt.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 #include "bn/spm.h"
 
 
-static struct fb *fbp;
+static imgstream_fb_t *fbp;
 
 static char *framebuffer = NULL;
 static int scr_width = 0;
@@ -142,15 +142,7 @@ spm_fb(bn_spm_map_t *mapp)
     int j;
 
     for (j = 0; j < mapp->ny; j++) {
-	fb_write(fbp, 0, j, mapp->xbin[j], mapp->nx[j]);
-#ifdef NEVER
-	for (i = 0; i < mapp->nx[j]; i++) {
-	    rgb[RED] = mapp->xbin[j][i*3];
-	    rgb[GRN] = mapp->xbin[j][i*3+1];
-	    rgb[BLU] = mapp->xbin[j][i*3+2];
-	    fb_write(fbp, i, j, (unsigned char *)rgb, 1);
-	}
-#endif
+	imgstream_fb_write(fbp, 0, j, mapp->xbin[j], (size_t)mapp->nx[j]);
     }
 }
 
@@ -164,15 +156,16 @@ spm_square(bn_spm_map_t *mapp)
     int x, y;
     unsigned char *scanline;
 
-    scanline = (unsigned char *)malloc(scr_width * sizeof(RGBpixel));
+    scanline = (unsigned char *)malloc((size_t)scr_width * 3);
 
     for (y = 0; y < scr_height; y++) {
 	for (x = 0; x < scr_width; x++) {
-	    bn_spm_read(mapp, &scanline[x],
+	    bn_spm_read(mapp, &scanline[x*3],
 			(double)x/(double)scr_width,
 			(double)y/(double)scr_height);
 	}
-	if (fb_write(fbp, 0, y, scanline, scr_width) != scr_width) break;
+	if (imgstream_fb_write(fbp, 0, y, scanline,
+		(size_t)scr_width) != scr_width) break;
     }
     free(scanline);
 }
@@ -190,13 +183,14 @@ main(int argc, char **argv)
 	bu_exit(1, NULL);
     }
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == FB_NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL)
 	bu_exit(12, NULL);
-    scr_width = fb_getwidth(fbp);
-    scr_height = fb_getheight(fbp);
+    scr_width = (int)imgstream_fb_width(fbp);
+    scr_height = (int)imgstream_fb_height(fbp);
 
-    mp = bn_spm_init(vsize, sizeof(RGBpixel));
-    if (mp == BN_SPM_MAP_NULL || fbp == FB_NULL)
+    mp = bn_spm_init(vsize, 3);
+    if (mp == BN_SPM_MAP_NULL || !fbp)
 	bu_exit(1, NULL);
 
     bn_spm_load(mp, file_name);
@@ -207,7 +201,7 @@ main(int argc, char **argv)
 	spm_fb(mp);
 
     bn_spm_free(mp);
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

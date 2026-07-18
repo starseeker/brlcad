@@ -62,7 +62,6 @@ set(
   ddisp.adoc
   decimate.adoc
   dfft.adoc
-  dm_ogl_probe.adoc
   dmod.adoc
   double-asc.adoc
   dpeak.adoc
@@ -203,7 +202,6 @@ set(
   pixtile.adoc
   pixuntile.adoc
   plot3-asc.adoc
-  plot3-dm.adoc
   plot3-fb.adoc
   plot3-plot3.adoc
   plot3-ps.adoc

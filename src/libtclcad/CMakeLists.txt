@@ -22,7 +22,7 @@ set(
   command_io.cpp
   commands.c
   cmdhist.c
-  dm.c
+  tkobol_init.c
   eval.c
   fb.c
   fbserv.c
@@ -41,8 +41,56 @@ set(
   view/lines.c
   view/refresh.c
   view/util.c
+  view_data.c
   wrapper.c
 )
+
+set(TCLCAD_TKOBOL_HOST OFF)
+set(TCLCAD_TKOBOL_DEFINITIONS)
+set(TCLCAD_TKOBOL_PLATFORM_DEFINITION)
+if(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
+  find_package(OpenGL)
+  if("${TK_WINDOWING_SYSTEM}" STREQUAL "x11")
+    find_package(X11)
+    if(OPENGL_FOUND AND X11_FOUND)
+      set(TCLCAD_TKOBOL_HOST ON)
+      set(TCLCAD_TKOBOL_DEFINITIONS TOGL_X11 TOGL_USE_OVERLAY=0)
+      set(TCLCAD_TKOBOL_PLATFORM_DEFINITION TKOBOL_X11)
+    endif()
+  elseif(WIN32)
+    if(OPENGL_FOUND)
+      set(TCLCAD_TKOBOL_HOST ON)
+      set(TCLCAD_TKOBOL_DEFINITIONS TOGL_WGL TOGL_USE_OVERLAY=0)
+      set(TCLCAD_TKOBOL_PLATFORM_DEFINITION TKOBOL_WGL)
+    endif()
+  endif()
+  if(TCLCAD_TKOBOL_HOST)
+    set(TCLCAD_TKOBOL_HOST ON)
+    list(APPEND LIBTCLCAD_SRCS
+      tkobol/tk-obol-host.cpp
+      tkobol/display-provider.cpp
+      tkobol/vendor/togl/togl.c
+    )
+    set_property(
+      SOURCE tkobol/tk-obol-host.cpp
+      APPEND
+      PROPERTY COMPILE_DEFINITIONS ${TCLCAD_TKOBOL_PLATFORM_DEFINITION}
+    )
+    if(WIN32)
+      list(APPEND LIBTCLCAD_SRCS tkobol/vendor/togl/toglFont.c)
+      set_property(
+        SOURCE tkobol/vendor/togl/toglFont.c
+        APPEND
+        PROPERTY COMPILE_DEFINITIONS TOGL_WGL
+      )
+    endif()
+    set_property(
+      SOURCE tkobol/vendor/togl/togl.c
+      APPEND
+      PROPERTY COMPILE_DEFINITIONS ${TCLCAD_TKOBOL_DEFINITIONS}
+    )
+  endif(TCLCAD_TKOBOL_HOST)
+endif(BRLCAD_ENABLE_TK AND BRLCAD_ENABLE_OPENGL)
 
 if(BRLCAD_ENABLE_TCL)
   # Include directories needed by libtclcad users
@@ -60,6 +108,9 @@ if(BRLCAD_ENABLE_TCL)
   # Note - libtclcad_deps is defined by ${BRLCAD_SOURCE_DIR}/src/source_dirs.cmake
   set(TCLCAD_PUBLIC_LIBS ${libtclcad_deps} ${TCL_LIBRARY})
   set(TCLCAD_PRIVATE_LIBS ${TCLCAD_XLIBS} PNG::PNG)
+  if(TCLCAD_TKOBOL_HOST)
+    list(APPEND TCLCAD_PRIVATE_LIBS libBObol ${OPENGL_LIBRARIES})
+  endif()
   if(TK_LIBRARY)
     set(TCLCAD_PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS} ${TK_LIBRARY})
   endif(TK_LIBRARY)
@@ -67,11 +118,8 @@ if(BRLCAD_ENABLE_TCL)
   brlcad_addlib(libtclcad "${LIBTCLCAD_SRCS}" "${TCLCAD_INCLUDE_DIRS}" "${TCLCAD_LOCAL_INCLUDE_DIRS}"
     PUBLIC_LIBS ${TCLCAD_PUBLIC_LIBS}
     PRIVATE_LIBS ${TCLCAD_PRIVATE_LIBS}
-    # refresh.c defines DM_WITH_RT before including dm/view.h to expose
-    # dm_draw_viewobjs; when batched after draw.c the DM_VIEW_H guard fires
-    # without DM_WITH_RT set and the declaration is lost.
-    # bu.c and dm.c both define a non-static register_cmds function.
-    UNITY_BUILD_SKIP view/refresh.c bu.c dm.c
+    # refresh.c has an incompatible Unity include-order requirement.
+    UNITY_BUILD_SKIP view/refresh.c
     # The full static library link is too large for some testing environments -
     # disable this test
     NO_STATIC_LINK_TEST
@@ -87,9 +135,18 @@ if(BRLCAD_ENABLE_TCL)
     if(TK_LIBRARY)
       target_compile_definitions(${pt} PRIVATE HAVE_TK)
     endif(TK_LIBRARY)
+    if(TCLCAD_TKOBOL_HOST)
+      target_compile_definitions(${pt} PRIVATE HAVE_TKOBOL_HOST)
+    endif()
   endforeach(pt ${ptargets})
 
   set_target_properties(libtclcad PROPERTIES VERSION 20.0.1 SOVERSION 20)
+  if(TCLCAD_TKOBOL_HOST)
+    # The public libtclcad provider API is the explicit, minimal toolkit edge
+    # for standalone callers.  It is not a separate provider library.
+    set_property(TARGET libtclcad PROPERTY
+      TCLCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE TRUE)
+  endif(TCLCAD_TKOBOL_HOST)
   if(TARGET itcl_pkgIndex)
     add_dependencies(libtclcad itcl_pkgIndex)
   endif(TARGET itcl_pkgIndex)
@@ -105,8 +162,18 @@ add_subdirectory(tests)
 
 cmakefiles(
   ${LIBTCLCAD_SRCS}
+  draw_view_move_helpers.h
   tclcad_private.h
   view/view.h
+  tkobol/tk-obol-host.cpp
+  tkobol/display-provider.cpp
+  tkobol/vendor/togl/LICENSE
+  tkobol/vendor/togl/README.brlcad
+  tkobol/vendor/togl/Tcl3D_License.txt
+  tkobol/vendor/togl/togl.c
+  tkobol/vendor/togl/togl.h
+  tkobol/vendor/togl/toglFont.c
+  tkobol/vendor/togl/toglFont.h
   CMakeLists.txt
 )
 

@@ -42,9 +42,30 @@
 #include "rt/db4.h"
 #include "nmg.h"
 #include "rt/geom.h"
+#include "bg/vlist.h"
 #include "raytrace.h"
+#include "rt/vlist.h"
 
 #include "../../librt_private.h"
+
+
+static uint32_t
+annot_ntoh_u32(const void *buf)
+{
+    uint32_t network_value;
+
+    memcpy(&network_value, buf, sizeof(network_value));
+    return ntohl(network_value);
+}
+
+
+static void
+annot_hton_u32(void *buf, uint32_t value)
+{
+    uint32_t network_value = htonl(value);
+
+    memcpy(buf, &network_value, sizeof(network_value));
+}
 
 
 int
@@ -105,7 +126,7 @@ rt_txt_pos_flag(int *pos_flag, int p_hor, int p_ver)
 
 
 static int
-ant_check_pos(const struct txt_seg *tsg, const char **rel_pos)
+ant_check_pos(const struct txt_seg *tsg, char **rel_pos)
 {
     switch (tsg->rel_pos) {
 	case RT_TXT_POS_BL:
@@ -151,8 +172,8 @@ ant_label_dimensions(struct txt_seg* tsg, hpoint_t ref_pt, fastf_t* length, fast
     VSET(bmin, INFINITY, INFINITY, INFINITY);
     VSET(bmax, -INFINITY, -INFINITY, -INFINITY);
 
-    bv_vlist_2string(&vhead, vlfree, tsg->label.vls_str, ref_pt[0], ref_pt[1], tsg->txt_size, tsg->txt_rot_angle);
-    bv_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL);
+    rt_vlist_2string(&vhead, vlfree, tsg->label.vls_str, ref_pt[0], ref_pt[1], tsg->txt_size, tsg->txt_rot_angle);
+    bg_vlist_bbox(&vhead, &bmin, &bmax, NULL, NULL);
 
     *length = bmax[0] - ref_pt[0];
     *height = bmax[1] - ref_pt[1];
@@ -303,7 +324,7 @@ ant_check(const struct rt_ant *ant, const struct rt_annot_internal *annot_ip, in
  * !0 Error in description
  *
  */
-C_DECL int
+int
 rt_annot_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 {
     if (!stp)
@@ -317,7 +338,7 @@ rt_annot_prep(struct soltab *stp, struct rt_db_internal *ip, struct rt_i *rtip)
 }
 
 
-C_DECL void
+void
 rt_annot_print(const struct soltab *stp)
 {
     if (stp) RT_CK_SOLTAB(stp);
@@ -332,7 +353,7 @@ rt_annot_print(const struct soltab *stp)
  * 0 MISS
  * >0 HIT
  */
-C_DECL int
+int
 rt_annot_shot(struct soltab *stp, struct xray *rp, struct application *ap, struct seg *seghead)
 {
     if (!stp || !rp || !ap || !seghead)
@@ -352,7 +373,7 @@ rt_annot_shot(struct soltab *stp, struct xray *rp, struct application *ap, struc
 /**
  * Given ONE ray distance, return the normal and entry/exit point.
  */
-C_DECL void
+void
 rt_annot_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 {
     if (!hitp || !rp)
@@ -369,7 +390,7 @@ rt_annot_norm(struct hit *hitp, struct soltab *stp, struct xray *rp)
 /**
  * Return the curvature of the annotation.
  */
-C_DECL void
+void
 rt_annot_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 {
     if (!cvp || !hitp)
@@ -384,7 +405,7 @@ rt_annot_curve(struct curvature *cvp, struct hit *hitp, struct soltab *stp)
 }
 
 
-C_DECL void
+void
 rt_annot_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct uvcoord *uvp)
 {
     if (ap) RT_CK_APPLICATION(ap);
@@ -395,7 +416,7 @@ rt_annot_uv(struct application *ap, struct soltab *stp, struct hit *hitp, struct
 }
 
 
-C_DECL void
+void
 rt_annot_free(struct soltab *stp)
 {
     if (stp) RT_CK_SOLTAB(stp);
@@ -437,9 +458,9 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		break;
 	    }
 	    V2ADD2(pt, V, annot_ip->verts[lsg->start]);
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_MOVE);
+	    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_MOVE);
 	    V2ADD2(pt, V, annot_ip->verts[lsg->end]);
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+	    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 	    break;
 	case ANN_TSEG_MAGIC:
 	    tsg = (struct txt_seg *)lng;
@@ -453,7 +474,7 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 	    }
 	    ant_pos_adjs(tsg, annot_ip, vlfree);
 	    V2ADD2(pt, V, annot_ip->verts[tsg->ref_pt]);
-	    bv_vlist_2string(vhead, vlfree, tsg->label.vls_str, pt[0], pt[1], tsg->txt_size, tsg->txt_rot_angle);
+	    rt_vlist_2string(vhead, vlfree, tsg->label.vls_str, pt[0], pt[1], tsg->txt_size, tsg->txt_rot_angle);
 	    break;
 	case CURVE_CARC_MAGIC:
 	    {
@@ -520,16 +541,16 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		    oldu = 1.0;
 		    oldv = 0.0;
 		    VJOIN2(start_pt, center, oldu, semi_a, oldv, semi_b);
-		    BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		    RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		    for (i=1; i<nsegs; i++) {
 			newu = oldu * cosdel - oldv * sindel;
 			newv = oldu * sindel + oldv * cosdel;
 			VJOIN2(pt, center, newu, semi_a, newv, semi_b);
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 			oldu = newu;
 			oldv = newv;
 		    }
-		    BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_DRAW);
 		    break;
 		}
 
@@ -587,13 +608,13 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 		V2ADD2(start_pt, V, start2d);
 		oldu = (start2d[0] - center2d[0]);
 		oldv = (start2d[1] - center2d[1]);
-		BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		for (i=0; i<nsegs; i++) {
 		    newu = oldu * cosdel - oldv * sindel;
 		    newv = oldu * sindel + oldv * cosdel;
 		    V2SET(new_uv, newu, newv);
 		    V2ADD2(pt, center, new_uv);
-		    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		    oldu = newu;
 		    oldv = newv;
 		}
@@ -622,14 +643,14 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 			inv_weight = 1.0/nsg->weights[0];
 			VSCALE(start_pt, start_pt, inv_weight);
 		    }
-		    BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		    RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		    for (i=1; i<nsg->c_size; i++) {
 			V2ADD2(pt, V, annot_ip->verts[nsg->ctl_points[i]]);
 			if (RT_NURB_IS_PT_RATIONAL(nsg->pt_type)) {
 			    inv_weight = 1.0/nsg->weights[i];
 			    VSCALE(pt, pt, inv_weight);
 			}
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		    }
 		    break;
 		}
@@ -702,9 +723,9 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 			    pt[j] /= pt[coords-1];
 		    }
 		    if (i == 0)
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_MOVE);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_MOVE);
 		    else
-			BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+			RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		}
 		bu_free((char *)eg.ctl_points, "eg.ctl_points");
 		break;
@@ -732,10 +753,10 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 	    if (bsg->degree == 1) {
 		/* straight line */
 		V2ADD2(start_pt, V, annot_ip->verts[bsg->ctl_points[0]]);
-		BV_ADD_VLIST(vlfree, vhead, start_pt, BV_VLIST_LINE_MOVE);
+		RT_ADD_VLIST(vlfree, vhead, start_pt, RT_VLIST_LINE_MOVE);
 		for (i=1; i<=bsg->degree; i++) {
 		    V2ADD2(pt, V, annot_ip->verts[bsg->ctl_points[i]]);
-		    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		}
 		break;
 	    }
@@ -790,13 +811,13 @@ seg_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 	    /* plot the results */
 	    bz = BU_LIST_FIRST(bezier_2d_list, &bezier_hd->l);
 	    V2ADD2(pt, V, bz->ctl[0]);
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_MOVE);
+	    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_MOVE);
 
 	    while (BU_LIST_WHILE(bz, bezier_2d_list, &(bezier_hd->l))) {
 		BU_LIST_DEQUEUE(&bz->l);
 		for (i=1; i<=bsg->degree; i++) {
 		    V2ADD2(pt, V, bz->ctl[i]);
-		    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_LINE_DRAW);
+		    RT_ADD_VLIST(vlfree, vhead, pt, RT_VLIST_LINE_DRAW);
 		}
 		bu_free((char *)bz->ctl, "g_annot.c: bz->ctl");
 		bu_free((char *)bz, "g_annot.c: bz");
@@ -821,20 +842,20 @@ ant_to_vlist(struct bu_list *vlfree, struct bu_list *vhead, const struct bg_tess
 
     BU_CK_LIST_HEAD(vhead);
 
-    BV_VLIST_SET_DISP_MAT(vlfree, vhead, annot_ip->V);
+    RT_VLIST_SET_DISP_MAT(vlfree, vhead, annot_ip->V);
 
     for (seg_no=0; seg_no < ant->count; seg_no++) {
 	ret += seg_to_vlist(vlfree, vhead, ttol, V, annot_ip, ant->segments[seg_no]);
     }
 
-    BV_VLIST_SET_MODEL_MAT(vlfree, vhead);
+    RT_VLIST_SET_MODEL_MAT(vlfree, vhead);
 
     return ret;
 }
 
 
 C_DECL int
-rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bview *UNUSED(info))
+rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_tess_tol *ttol, const struct bn_tol *UNUSED(tol), const struct bv_view_info *UNUSED(info))
 {
     struct rt_annot_internal *annot_ip;
     int ret;
@@ -856,7 +877,7 @@ rt_annot_plot(struct bu_list *vhead, struct rt_db_internal *ip, const struct bg_
     return myret;
 }
 
-C_DECL int
+int
 rt_annot_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_internal *ip)
 {
     if (!rop || !ip || !mat)
@@ -878,7 +899,7 @@ rt_annot_mat(struct rt_db_internal *rop, const mat_t mat, const struct rt_db_int
  * Import an annotation from the database format to the internal format.
  * Apply modeling transformations as well.
  */
-C_DECL int
+int
 rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fastf_t *mat, const struct db_i *dbip)
 {
     struct rt_annot_internal *annot_ip;
@@ -908,9 +929,9 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
     VMOVE(annot_ip->V, v);
 
     ptr += SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_VECT;
-    annot_ip->vert_count = ntohl(*(uint32_t *)ptr);
+    annot_ip->vert_count = annot_ntoh_u32(ptr);
     ptr += SIZEOF_NETWORK_LONG;
-    annot_ip->ant.count = ntohl(*(uint32_t *)ptr);
+    annot_ip->ant.count = annot_ntoh_u32(ptr);
     ptr += SIZEOF_NETWORK_LONG;
 
     if (annot_ip->vert_count) {
@@ -945,24 +966,24 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	double scan;
 	double *scanp;
 
-	magic = ntohl(*(uint32_t *)ptr);
+	magic = annot_ntoh_u32(ptr);
 	ptr += SIZEOF_NETWORK_LONG;
 	switch (magic) {
 	    case CURVE_LSEG_MAGIC:
 		BU_ALLOC(lsg, struct line_seg);
 		lsg->magic = magic;
-		lsg->start = ntohl(*(uint32_t *)ptr);
+		lsg->start = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		lsg->end = ntohl(*(uint32_t *)ptr);
+		lsg->end = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		annot_ip->ant.segments[seg_no] = (void *)lsg;
 		break;
 	    case ANN_TSEG_MAGIC:
 		BU_ALLOC(tsg, struct txt_seg);
 		tsg->magic = magic;
-		tsg->ref_pt = ntohl(*(uint32_t *)ptr);
+		tsg->ref_pt = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		tsg->rel_pos = ntohl(*(uint32_t *)ptr);
+		tsg->rel_pos = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		bu_vls_init(&tsg->label);
 		bu_vls_strcpy(&tsg->label, (const char*)ptr);
@@ -978,13 +999,13 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	    case CURVE_CARC_MAGIC:
 		BU_ALLOC(csg, struct carc_seg);
 		csg->magic = magic;
-		csg->start = ntohl(*(uint32_t *)ptr);
+		csg->start = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		csg->end = ntohl(*(uint32_t *)ptr);
+		csg->end = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		csg->orientation = ntohl(*(uint32_t *)ptr);
+		csg->orientation = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		csg->center_is_left = ntohl(*(uint32_t *)ptr);
+		csg->center_is_left = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		bu_cv_ntohd((unsigned char *)&scan, ptr, 1);
 		csg->radius = scan; /* double to fastf_t */
@@ -994,11 +1015,11 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	    case CURVE_NURB_MAGIC:
 		BU_ALLOC(nsg, struct nurb_seg);
 		nsg->magic = magic;
-		nsg->order = ntohl(*(uint32_t *)ptr);
+		nsg->order = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		nsg->pt_type = ntohl(*(uint32_t *)ptr);
+		nsg->pt_type = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		nsg->k.k_size = ntohl(*(uint32_t *)ptr);
+		nsg->k.k_size = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 
 		nsg->k.knots = (fastf_t *)bu_malloc(nsg->k.k_size * sizeof(fastf_t), "nsg->k.knots");
@@ -1012,11 +1033,11 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 		bu_free(scanp, "scanp");
 
 		ptr += SIZEOF_NETWORK_DOUBLE * nsg->k.k_size;
-		nsg->c_size = ntohl(*(uint32_t *)ptr);
+		nsg->c_size = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		nsg->ctl_points = (int *)bu_malloc(nsg->c_size * sizeof(int), "nsg->ctl_points");
 		for (i=0; i<(size_t)nsg->c_size; i++) {
-		    nsg->ctl_points[i] = ntohl(*(uint32_t *)ptr);
+		    nsg->ctl_points[i] = annot_ntoh_u32(ptr);
 		    ptr += SIZEOF_NETWORK_LONG;
 		}
 		if (RT_NURB_IS_PT_RATIONAL(nsg->pt_type)) {
@@ -1038,11 +1059,11 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	    case CURVE_BEZIER_MAGIC:
 		BU_ALLOC(bsg, struct bezier_seg);
 		bsg->magic = magic;
-		bsg->degree = ntohl(*(uint32_t *)ptr);
+		bsg->degree = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		bsg->ctl_points = (int *)bu_calloc(bsg->degree+1, sizeof(int), "bsg->ctl_points");
 		for (i=0; i<=(size_t)bsg->degree; i++) {
-		    bsg->ctl_points[i] = ntohl(*(uint32_t *)ptr);
+		    bsg->ctl_points[i] = annot_ntoh_u32(ptr);
 		    ptr += SIZEOF_NETWORK_LONG;
 		}
 		annot_ip->ant.segments[seg_no] = (void *)bsg;
@@ -1060,7 +1081,7 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
     }
 
     for (i=0; i<ant->count; i++) {
-	ant->reverse[i] = ntohl(*(uint32_t *)ptr);
+	ant->reverse[i] = annot_ntoh_u32(ptr);
 	ptr += SIZEOF_NETWORK_LONG;
     }
 
@@ -1073,7 +1094,7 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 /**
  * The name is added by the caller, in the usual place.
  */
-C_DECL int
+int
 rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double local2mm, const struct db_i *dbip)
 {
     struct rt_annot_internal *annot_ip;
@@ -1154,9 +1175,9 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
     cp += ELEMENTS_PER_VECT * SIZEOF_NETWORK_DOUBLE;
 
 
-    *(uint32_t *)cp = htonl(annot_ip->vert_count);
+    annot_hton_u32(cp, annot_ip->vert_count);
     cp += SIZEOF_NETWORK_LONG;
-    *(uint32_t *)cp = htonl(annot_ip->ant.count);
+    annot_hton_u32(cp, annot_ip->ant.count);
     cp += SIZEOF_NETWORK_LONG;
 
     /* convert 2D points to mm */
@@ -1186,20 +1207,20 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 	switch (*lng) {
 	    case CURVE_LSEG_MAGIC:
 		lseg = (struct line_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_LSEG_MAGIC);
+		annot_hton_u32(cp, CURVE_LSEG_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(lseg->start);
+		annot_hton_u32(cp, lseg->start);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(lseg->end);
+		annot_hton_u32(cp, lseg->end);
 		cp += SIZEOF_NETWORK_LONG;
 		break;
 	    case ANN_TSEG_MAGIC:
 		tseg = (struct txt_seg *)lng;
-		*(uint32_t *)cp = htonl(ANN_TSEG_MAGIC);
+		annot_hton_u32(cp, ANN_TSEG_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(tseg->ref_pt);
+		annot_hton_u32(cp, tseg->ref_pt);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(tseg->rel_pos);
+		annot_hton_u32(cp, tseg->rel_pos);
 		cp += SIZEOF_NETWORK_LONG;
 
 		bu_strlcpy((char *)cp, bu_vls_addr(&tseg->label), bu_vls_strlen(&tseg->label) + 1);
@@ -1214,15 +1235,15 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		break;
 	    case CURVE_CARC_MAGIC:
 		cseg = (struct carc_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_CARC_MAGIC);
+		annot_hton_u32(cp, CURVE_CARC_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->start);
+		annot_hton_u32(cp, cseg->start);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->end);
+		annot_hton_u32(cp, cseg->end);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->orientation);
+		annot_hton_u32(cp, cseg->orientation);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->center_is_left);
+		annot_hton_u32(cp, cseg->center_is_left);
 		cp += SIZEOF_NETWORK_LONG;
 		scan = cseg->radius * local2mm;
 		bu_cv_htond(cp, (unsigned char *)&scan, 1);
@@ -1230,13 +1251,13 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		break;
 	    case CURVE_NURB_MAGIC:
 		nseg = (struct nurb_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_NURB_MAGIC);
+		annot_hton_u32(cp, CURVE_NURB_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(nseg->order);
+		annot_hton_u32(cp, nseg->order);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(nseg->pt_type);
+		annot_hton_u32(cp, nseg->pt_type);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(nseg->k.k_size);
+		annot_hton_u32(cp, nseg->k.k_size);
 		cp += SIZEOF_NETWORK_LONG;
 		scanp = (double *)bu_malloc(nseg->k.k_size * sizeof(double), "scanp");
 		/* convert fastf_t to double */
@@ -1246,10 +1267,10 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		bu_cv_htond(cp, (const unsigned char *)nseg->k.knots, nseg->k.k_size);
 		bu_free(scanp, "scanp");
 		cp += nseg->k.k_size * SIZEOF_NETWORK_DOUBLE;
-		*(uint32_t *)cp = htonl(nseg->c_size);
+		annot_hton_u32(cp, nseg->c_size);
 		cp += SIZEOF_NETWORK_LONG;
 		for (i=0; i<(size_t)nseg->c_size; i++) {
-		    *(uint32_t *)cp = htonl(nseg->ctl_points[i]);
+		    annot_hton_u32(cp, nseg->ctl_points[i]);
 		    cp += SIZEOF_NETWORK_LONG;
 		}
 		if (RT_NURB_IS_PT_RATIONAL(nseg->pt_type)) {
@@ -1265,12 +1286,12 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		break;
 	    case CURVE_BEZIER_MAGIC:
 		bseg = (struct bezier_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_BEZIER_MAGIC);
+		annot_hton_u32(cp, CURVE_BEZIER_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(bseg->degree);
+		annot_hton_u32(cp, bseg->degree);
 		cp += SIZEOF_NETWORK_LONG;
 		for (i=0; i<=(size_t)bseg->degree; i++) {
-		    *(uint32_t *)cp = htonl(bseg->ctl_points[i]);
+		    annot_hton_u32(cp, bseg->ctl_points[i]);
 		    cp += SIZEOF_NETWORK_LONG;
 		}
 		break;
@@ -1282,7 +1303,7 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
     }
 
     for (seg_no=0; seg_no < annot_ip->ant.count; seg_no++) {
-	*(uint32_t *)cp = htonl(annot_ip->ant.reverse[seg_no]);
+	annot_hton_u32(cp, annot_ip->ant.reverse[seg_no]);
 	cp += SIZEOF_NETWORK_LONG;
     }
 
@@ -1295,7 +1316,7 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
  * line describes type of solid.  Additional lines are indented one
  * tab, and give parameter values.
  */
-C_DECL int
+int
 rt_annot_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbose, double mm2local)
 {
     struct rt_annot_internal *annot_ip =
@@ -1372,7 +1393,7 @@ rt_annot_describe(struct bu_vls *str, const struct rt_db_internal *ip, int verbo
 			    V2INTCLAMPARGS(annot_ip->verts[tsg->ref_pt]));
 		}
 		bu_vls_strcat(str, buf);
-		ant_check_pos(tsg, (const char **)&rel_pos);
+		ant_check_pos(tsg, &rel_pos);
 		sprintf(buf, "\t\tRelative position: %s\n", rel_pos);
 		bu_vls_strcat(str, buf);
 		sprintf(buf, "\tLabel text: %s\n", bu_vls_addr(&tsg->label));
@@ -1564,7 +1585,7 @@ rt_ant_free(struct rt_ant *ant)
  * Free the storage associated with the rt_db_internal version of this
  * solid.
  */
-C_DECL void
+void
 rt_annot_ifree(struct rt_db_internal *ip)
 {
     struct rt_annot_internal *annot_ip;
@@ -1715,7 +1736,7 @@ ant_to_tcl_list(struct bu_vls *vls, struct rt_ant *ant)
 	    case ANN_TSEG_MAGIC:
 		{
 		    struct txt_seg *tsg = (struct txt_seg *)ant->segments[j];
-		    ant_check_pos(tsg, (const char **)&rel_pos);
+		    ant_check_pos(tsg, &rel_pos);
 		    bu_vls_printf(vls, " { label %s ref_pt %d position %s txt_size %.25g txt_rot_angle %.25g }", bu_vls_addr(&tsg->label), tsg->ref_pt, rel_pos, tsg->txt_size, tsg->txt_rot_angle);
 		}
 		break;
@@ -1763,7 +1784,7 @@ ant_to_tcl_list(struct bu_vls *vls, struct rt_ant *ant)
 }
 
 
-C_DECL int
+int
 rt_annot_form(struct bu_vls *logstr, const struct rt_functab *ftp)
 {
     BU_CK_VLS(logstr);
@@ -1775,7 +1796,7 @@ rt_annot_form(struct bu_vls *logstr, const struct rt_functab *ftp)
 }
 
 
-C_DECL int
+int
 rt_annot_get(struct bu_vls *logstr, const struct rt_db_internal *intern, const char *attr)
 {
     struct rt_annot_internal *ann=(struct rt_annot_internal *)intern->idb_ptr;
@@ -1991,7 +2012,7 @@ ant_get_tcl(struct bu_vls *logstr, struct rt_ant *ant, const char *argv1)
 }
 
 
-C_DECL int
+int
 rt_annot_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, const char **argv)
 {
     struct rt_annot_internal *annot_ip;
@@ -2080,7 +2101,7 @@ rt_annot_adjust(struct bu_vls *logstr, struct rt_db_internal *intern, int argc, 
 }
 
 
-C_DECL int
+int
 rt_annot_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
 {
     if (ip) RT_CK_DB_INTERNAL(ip);
@@ -2088,7 +2109,7 @@ rt_annot_params(struct pc_pc_set *UNUSED(ps), const struct rt_db_internal *ip)
     return 0;			/* OK */
 }
 
-C_DECL const char *
+const char *
 rt_annot_keypoint(point_t *pt, const char *keystr, const mat_t mat, const struct rt_db_internal *ip, const struct bn_tol *UNUSED(tol))
 {
     if (!pt || !ip)

@@ -124,15 +124,7 @@ make_solid_rgb(size_t w, size_t h, double r, double g, double b)
 static icv_image_t *
 make_rgba(size_t w, size_t h)
 {
-    icv_image_t *img;
-    BU_ALLOC(img, struct icv_image);
-    ICV_IMAGE_INIT(img);
-    img->width = w;
-    img->height = h;
-    img->color_space = ICV_COLOR_SPACE_RGB;
-    img->channels = 4;
-    img->alpha_channel = 1;
-    img->data = (double *)bu_calloc(w * h * img->channels, sizeof(double), "rgba test data");
+    icv_image_t *img = icv_create_with_channels(w, h, ICV_COLOR_SPACE_RGB, 4);
     for (size_t y = 0; y < h; y++) {
 	for (size_t x = 0; x < w; x++) {
 	    size_t off = (y * w + x) * img->channels;
@@ -176,6 +168,7 @@ static void
 test_create_zero_and_pixel_io(void)
 {
     icv_image_t *rgb = icv_create(2, 3, ICV_COLOR_SPACE_RGB);
+    icv_image_t *rgba = NULL;
     double px[3] = {0.25, 0.50, 0.75};
     unsigned char row_uc[6] = {0, 64, 128, 255, 127, 1};
     double row_d[6] = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
@@ -191,6 +184,12 @@ test_create_zero_and_pixel_io(void)
     CHECK(icv_create(1, 1, (ICV_COLOR_SPACE)999) == NULL, "icv_create rejects invalid color space without terminating");
     CHECK(icv_create(0, 1, ICV_COLOR_SPACE_RGB) == NULL, "icv_create rejects zero width without terminating");
     CHECK(icv_create(1, 0, ICV_COLOR_SPACE_RGB) == NULL, "icv_create rejects zero height without terminating");
+    rgba = icv_create_with_channels(2, 3, ICV_COLOR_SPACE_RGB, 4);
+    CHECK(rgba != NULL && rgba->channels == 4 && rgba->alpha_channel == 1,
+	  "icv_create_with_channels creates an RGBA image");
+    CHECK(icv_create_with_channels(1, 1, ICV_COLOR_SPACE_RGB, 2) == NULL,
+	  "icv_create_with_channels rejects an invalid RGB layout");
+    icv_destroy(rgba);
 
     CHECK(icv_writepixel(rgb, 1, 2, px) == 0, "icv_writepixel accepts valid coordinates");
     CHECK(near_equal(rgb->data[(2 * 2 + 1) * 3 + 0], 0.25), "icv_writepixel writes red channel");

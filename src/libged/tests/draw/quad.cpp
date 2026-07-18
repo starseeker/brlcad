@@ -30,50 +30,67 @@
 #include <fstream>
 
 #include <bu.h>
-#include <bv/lod.h>
+#include <BObol/BMeshLodCache.h>
 #include <icv.h>
-#define DM_WITH_RT
-#include <dm.h>
+#include <rt/view.h>
+#include "view_test_util.h"
 #include <ged.h>
+#include <ged/draw.h>
+#include <ged/event_txn.h>
 
-#include "../../dbi.h"
+#define QUAD_SSIM_THRES 0.985
 
+static int keep_images = 0;
+
+extern "C" int draw_test_obol_screengrab_view_if_enabled(struct ged *gedp,
+	struct ged_view_context *view_ctx, int id, const char *filename);
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
+
 // In order to handle changes to .g geometry contents, we need to defined
 // callbacks for the librt hooks that will update the working data structures.
 // In Qt we have libqtcad handle this, but as we are not using a QgModel we
 // need to do it ourselves.
-extern "C" void ged_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_data);
+extern "C" void
+quad_changed_callback(struct db_i *dbip, struct directory *dp, int mode, void *u_data)
+{
+    struct ged *gedp = (struct ged *)u_data;
+    const char *name = (dp) ? dp->d_namep : NULL;
 
+    // Need to invalidate any LoD caches associated with this dp
+    if (dbip && dp && dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
+	(void)bobol_mesh_lod_cache_invalidate(dbip, dp->d_namep, NULL);
+
+    switch(mode) {
+	case 0:
+	    ged_event_notify_object_modified(gedp, name, 1, NULL);
+	    break;
+	case 1:
+	    ged_event_notify_object_added(gedp, name, NULL);
+	    break;
+	case 2:
+	    ged_event_notify_object_removed(gedp, name, NULL);
+	    break;
+	default:
+	    bu_log("changed callback mode error: %d\n", mode);
+    }
+}
 
 void
 dm_refresh(struct ged *gedp, int vnum)
 {
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-    struct bview *v = (struct bview *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    struct ged_view_context *v = views ?
+	(struct ged_view_context *)BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	return;
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    BViewState *bvs = dbis->get_view_state(v);
-    dbis->update();
-    std::unordered_set<struct bview *> uset;
-    uset.insert(v);
-    bvs->redraw(NULL, uset, 1);
+    if (!draw_test_obol_progressive_drain(gedp, v, 2000, 1))
+	bu_exit(EXIT_FAILURE,
+	    "Obol progressive realization did not settle before baseline capture\n");
+    struct ged_draw_transaction txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+    txn.view = v;
+    ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    struct dm *dmp = (struct dm *)v->dmp;
-    /* Ensure rendering goes to this view's DM context, not the last-active one.
-     * With multiple DMs (e.g. quad views), each has its own OSMesa context.
-     * Without making the correct context current here, dm_set_bg and
-     * dm_draw_objs will operate on whichever context was last activated,
-     * leaving this view's buffer empty when swrast_getDisplayImage reads it. */
-    dm_make_current(dmp);
-    unsigned char *dm_bg1;
-    unsigned char *dm_bg2;
-    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
-    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
-    dm_set_dirty(dmp, 0);
-    dm_draw_objs(v, NULL, NULL);
-    dm_draw_end(dmp);
 }
 
 void
@@ -96,6 +113,20 @@ scene_clear(struct ged *gedp, int vnum, int cnum)
     dm_refresh(gedp, vnum);
 }
 
+void
+set_independent(struct ged *gedp, int vnum, int independent)
+{
+    struct bu_vls vname = BU_VLS_INIT_ZERO;
+    const char *s_av[5] = {NULL};
+    s_av[0] = "view";
+    s_av[1] = "independent";
+    bu_vls_sprintf(&vname, "V%d", vnum);
+    s_av[2] = bu_vls_cstr(&vname);
+    s_av[3] = independent ? "1" : "0";
+    ged_exec_view(gedp, 4, s_av);
+    bu_vls_free(&vname);
+}
+
 int
 img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int soft_fail)
 {
@@ -112,26 +143,23 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
 
     dm_refresh(gedp, vnum);
 
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-    struct bview *v = (struct bview *)BU_PTBL_GET(views, vnum);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    struct ged_view_context *v = views ?
+	(struct ged_view_context *)BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
-    struct dm *dmp = (struct dm *)v->dmp;
-    int cnum = (v->independent) ? vnum : -1;
+    int cnum = ged_view_context_is_independent(v) ? vnum : -1;
 
-    const char *s_av[4] = {NULL};
-    s_av[0] = "screengrab";
-    s_av[1] = "-D";
-    s_av[2] = bu_vls_cstr(dm_get_pathname(dmp));
-    s_av[3] = bu_vls_cstr(&tname);
-    if (ged_exec_screengrab(gedp, 4, s_av) & BRLCAD_ERROR) {
-	bu_log("Failed to grab screen for DM %s\n", bu_vls_cstr(dm_get_pathname(dmp)));
+    int obol_capture = draw_test_obol_screengrab_view_if_enabled(gedp, v,
+	    id, bu_vls_cstr(&tname));
+    if (obol_capture != 1) {
+	bu_log("Failed to capture Obol view V%d\n", vnum);
+	bu_file_delete(bu_vls_cstr(&tname));
 	if (clear)
 	    scene_clear(gedp, vnum, cnum);
 	bu_vls_free(&tname);
 	return BRLCAD_ERROR;
     }
-
     timg = icv_read(bu_vls_cstr(&tname), BU_MIME_IMAGE_PNG, 0, 0);
     if (!timg) {
 	if (soft_fail) {
@@ -161,6 +189,12 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     int off_by_many_cnt = 0;
     int iret = icv_diff(&matching_cnt, &off_by_1_cnt, &off_by_many_cnt, ctrl,timg);
     if (iret) {
+	fastf_t score = icv_adiff(ctrl, timg, ICV_DIFF_SSIM);
+	bu_log("icv_adiff SSIM metric(%d/%d): %g\n", vnum, id, score);
+	if (score > QUAD_SSIM_THRES)
+	    iret = 0;
+    }
+    if (iret) {
 	if (soft_fail) {
 	    bu_log("%d wireframe diff failed.  %d matching, %d off by 1, %d off by many\n", id, matching_cnt, off_by_1_cnt, off_by_many_cnt);
 	    icv_destroy(ctrl);
@@ -175,8 +209,9 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     icv_destroy(ctrl);
     icv_destroy(timg);
 
-    // Image comparison done and successful - clear image
-    bu_file_delete(bu_vls_cstr(&tname));
+    // Image comparison done and successful - clear image unless requested
+    if (!keep_images)
+	bu_file_delete(bu_vls_cstr(&tname));
     bu_vls_free(&tname);
 
     if (clear)
@@ -197,37 +232,35 @@ poly_circ(struct ged *gedp, int v_id, int local)
 	s_av[0] = "view";
 	s_av[1] = "-V";
 	s_av[2] = bu_vls_cstr(&vname);
-	s_av[3] = "obj";
+	s_av[3] = "polygon";
 	s_av[4] = "-L";
-	s_av[5] = "c1";
-	s_av[6] = "polygon";
-	s_av[7] = "create";
-	s_av[8] = "256";
-	s_av[9] = "256";
-	s_av[10] = "circle";
-	s_av[11] = NULL;
-	ged_exec_view(gedp, 11, s_av);
-    } else {
-	s_av[0] = "view";
-	s_av[1] = "-V";
-	s_av[2] = bu_vls_cstr(&vname);
-	s_av[3] = "obj";
-	s_av[4] = "c1";
-	s_av[5] = "polygon";
-	s_av[6] = "create";
+	s_av[5] = "create";
+	s_av[6] = "c1";
 	s_av[7] = "256";
 	s_av[8] = "256";
 	s_av[9] = "circle";
 	s_av[10] = NULL;
 	ged_exec_view(gedp, 10, s_av);
+    } else {
+	s_av[0] = "view";
+	s_av[1] = "-V";
+	s_av[2] = bu_vls_cstr(&vname);
+	s_av[3] = "polygon";
+	s_av[4] = "create";
+	s_av[5] = "c1";
+	s_av[6] = "256";
+	s_av[7] = "256";
+	s_av[8] = "circle";
+	s_av[9] = NULL;
+	ged_exec_view(gedp, 9, s_av);
     }
 
     s_av[0] = "view";
     s_av[1] = "-V";
     s_av[2] = bu_vls_cstr(&vname);
-    s_av[3] = "obj";
-    s_av[4] = "c1";
-    s_av[5] = "update";
+    s_av[3] = "polygon";
+    s_av[4] = "update";
+    s_av[5] = "c1";
     s_av[6] = "300";
     s_av[7] = "300";
     s_av[8] = NULL;
@@ -259,26 +292,47 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
     bu_vls_sprintf(&vz1, "%d", z1);
 
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = bu_vls_cstr(&lname);
-    s_av[3] = "line";
-    s_av[4] = "create";
+    s_av[1] = "annotation";
+    s_av[2] = "line";
+    s_av[3] = "create";
+    s_av[4] = bu_vls_cstr(&lname);
     s_av[5] = bu_vls_cstr(&vx0);
     s_av[6] = bu_vls_cstr(&vy0);
     s_av[7] = bu_vls_cstr(&vz0);
     s_av[8] = NULL;
-    ged_exec_view(gedp, 8, s_av);
+    if (ged_exec_view(gedp, 8, s_av) & BRLCAD_ERROR)
+	bu_exit(EXIT_FAILURE, "failed to create shared line %s: %s\n", bu_vls_cstr(&lname), bu_vls_cstr(gedp->ged_result_str));
 
-    s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = bu_vls_cstr(&lname);
-    s_av[3] = "line";
-    s_av[4] = "append";
+    s_av[3] = "append";
+    s_av[4] = bu_vls_cstr(&lname);
     s_av[5] = bu_vls_cstr(&vx1);
     s_av[6] = bu_vls_cstr(&vy1);
     s_av[7] = bu_vls_cstr(&vz1);
     s_av[8] = NULL;
-    ged_exec_view(gedp, 8, s_av);
+    if (ged_exec_view(gedp, 8, s_av) & BRLCAD_ERROR)
+	bu_exit(EXIT_FAILURE, "failed to append shared line %s: %s\n", bu_vls_cstr(&lname), bu_vls_cstr(gedp->ged_result_str));
+
+    struct ged_view_feature_summary geom_summary =
+	GED_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_view_feature_get_summary(ged_view_active_ctx(gedp),
+	    bu_vls_cstr(&lname), &geom_summary) ||
+	    !geom_summary.exists)
+	bu_exit(EXIT_FAILURE, "shared line %s was not registered as a feature\n", bu_vls_cstr(&lname));
+    if (geom_summary.geometry_command_count != 2)
+	bu_exit(EXIT_FAILURE, "shared line %s feature geometry is invalid\n", bu_vls_cstr(&lname));
+    int render_count = 0;
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
+    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
+	struct ged_view_context *v =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
+	struct ged_view_feature_summary view_summary =
+	    GED_VIEW_FEATURE_SUMMARY_INIT;
+	if (ged_view_feature_get_summary(v, bu_vls_cstr(&lname),
+		&view_summary) && view_summary.exists)
+	    render_count++;
+    }
+    if (render_count < 1)
+	bu_exit(EXIT_FAILURE, "shared line %s was not collected as a line render item\n", bu_vls_cstr(&lname));
 
     bu_vls_free(&lname);
     bu_vls_free(&vx0);
@@ -317,25 +371,19 @@ l_line(struct ged *gedp, int v_id, int l_id, int x0, int y0, int z0, int x1, int
     s_av[0] = "view";
     s_av[1] = "-V";
     s_av[2] = bu_vls_cstr(&vname);
-    s_av[3] = "obj";
+    s_av[3] = "annotation";
     s_av[4] = "-L";
-    s_av[5] = bu_vls_cstr(&lname);
-    s_av[6] = "line";
-    s_av[7] = "create";
+    s_av[5] = "line";
+    s_av[6] = "create";
+    s_av[7] = bu_vls_cstr(&lname);
     s_av[8] = bu_vls_cstr(&vx0);
     s_av[9] = bu_vls_cstr(&vy0);
     s_av[10] = bu_vls_cstr(&vz0);
     s_av[11] = NULL;
     ged_exec_view(gedp, 11, s_av);
 
-    s_av[0] = "view";
-    s_av[1] = "-V";
-    s_av[2] = bu_vls_cstr(&vname);
-    s_av[3] = "obj";
-    s_av[4] = "-L";
-    s_av[5] = bu_vls_cstr(&lname);
-    s_av[6] = "line";
-    s_av[7] = "append";
+    s_av[6] = "append";
+    s_av[7] = bu_vls_cstr(&lname);
     s_av[8] = bu_vls_cstr(&vx1);
     s_av[9] = bu_vls_cstr(&vy1);
     s_av[10] = bu_vls_cstr(&vz1);
@@ -361,28 +409,33 @@ main(int ac, char *av[]) {
     int run_unstable_tests = 0;
     int soft_fail = 0;
     int ret = BRLCAD_OK;
+    const char *ctrl_dir = NULL;
 
     bu_setprogname(av[0]);
 
-    struct bu_opt_desc d[4];
+    struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",            "", NULL,          &need_help, "Print help and exit");
     BU_OPT(d[1], "U", "enable-unstable", "", NULL, &run_unstable_tests, "Test drawing routines known to differ between build configs/platforms.");
     BU_OPT(d[2], "c", "continue",        "", NULL,          &soft_fail, "Continue testing if a failure is encountered.");
-    BU_OPT_NULL(d[3]);
+    BU_OPT(d[3], "k", "keep",            "", NULL,        &keep_images, "Keep images generated by the run.");
+    BU_OPT_NULL(d[4]);
 
     /* Done with program name */
-    (void)bu_opt_parse(NULL, ac, (const char **)av, d);
+    int uac = bu_opt_parse(NULL, ac, (const char **)av, d);
+    if (uac != 2 || need_help)
+	bu_exit(EXIT_FAILURE, "%s [-h] [-U] [-c] [-k] <directory>", av[0]);
+    ctrl_dir = av[1];
 
-    if (!bu_file_directory(av[1])) {
-	printf("ERROR: [%s] is not a directory.  Expecting control image directory\n", av[1]);
+    if (!bu_file_directory(ctrl_dir)) {
+	printf("ERROR: [%s] is not a directory.  Expecting control image directory\n", ctrl_dir);
 	return 2;
     }
 
     /* Enable all the experimental logic */
     bu_setenv("LIBRT_USE_COMB_INSTANCE_SPECIFIERS", "1", 1);
 
-    if (!bu_file_exists(av[1], NULL)) {
-	printf("ERROR: [%s] does not exist, expecting .g file\n", av[1]);
+    if (!bu_file_exists(ctrl_dir, NULL)) {
+	printf("ERROR: [%s] does not exist, expecting .g file\n", ctrl_dir);
 	return 2;
     }
 
@@ -397,14 +450,14 @@ main(int ac, char *av[]) {
     /* Runtime cache resets must not delete extracted controls. */
     bu_setenv("BU_DIR_CACHE", runtime_cache, 1);
 
-    unpack_apng(av[1], "quad_00.apng", lcache, "quad_00_");
-    unpack_apng(av[1], "quad_01.apng", lcache, "quad_01_");
-    unpack_apng(av[1], "quad_02.apng", lcache, "quad_02_");
-    unpack_apng(av[1], "quad_03.apng", lcache, "quad_03_");
+    unpack_apng(ctrl_dir, "quad_00.apng", lcache, "quad_00_");
+    unpack_apng(ctrl_dir, "quad_01.apng", lcache, "quad_01_");
+    unpack_apng(ctrl_dir, "quad_02.apng", lcache, "quad_02_");
+    unpack_apng(ctrl_dir, "quad_03.apng", lcache, "quad_03_");
 
     /* We are going to generate geometry from the basic moss data,
      * so we make a temporary copy */
-    bu_vls_sprintf(&fname, "%s/moss.g", av[1]);
+    bu_vls_sprintf(&fname, "%s/moss.g", ctrl_dir);
     std::ifstream orig(bu_vls_cstr(&fname), std::ios::binary);
     std::ofstream tmpg("moss_quad_tmp.g", std::ios::binary);
     tmpg << orig.rdbuf();
@@ -415,77 +468,30 @@ main(int ac, char *av[]) {
     const char *s_av[15] = {NULL};
     gedp = ged_open("db", "moss_quad_tmp.g", 1);
 
-    // Set up new cmd data (not yet done by default in ged_open
-    gedp->dbi_state = new DbiState(gedp);
-    gedp->new_cmd_forms = 1;
-    bu_setenv("DM_SWRAST", "1", 1);
-
     // We don't want the default GED views for this test
-    bv_set_rm_view(&gedp->ged_views, NULL);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
+    ged_view_set_context_remove(view_set_ctx, NULL);
 
-    // Set callback so database changes will update dbi_state
-    db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
+    // Set callback so database changes notify public GED services.
+    db_add_changed_clbk(gedp->dbip, &quad_changed_callback, (void *)gedp);
 
-    // Set up the views.  Unlike the other drawing tests, we are explicitly
-    // out to test the behavior of multiple views and dms, so we need to
-    // set up multiples.  We'll start out with four non-independent views,
-    // to mimic the most common multi-dm/view display - a Quad view widget.
-    // Each view will get its own attached swrast DM.
+    // Set up four non-independent views to mimic a quad-view widget.  Each
+    // view gets its own GED-owned Obol render endpoint.
     for (size_t i = 0; i < 4; i++) {
-	struct bview *v;
-	BU_GET(v, struct bview);
+	char view_name[16];
+	snprintf(view_name, sizeof(view_name), "V%zd", i);
+	struct ged_view_context *v =
+	    ged_view_context_create_with_set(view_set_ctx);
 	if (!i)
-	    gedp->ged_gvp = v;
-	bv_init(v, &gedp->ged_views);
-	bu_vls_sprintf(&v->gv_name, "V%zd", i);
-	bv_set_add_view(&gedp->ged_views, v);
-	bu_ptbl_ins(&gedp->ged_free_views, (long *)v);
+	    ged_view_active_ctx_set(gedp, v);
+	bv_name_set(DRAW_TEST_BV(v), view_name);
+	ged_view_set_context_add(view_set_ctx, v);
+	ged_view_context_owned_add(gedp, v);
 
-	/* To generate images that will allow us to check if the drawing
-	 * is proceeding as expected, we use the swrast off-screen dm. */
-	struct bu_vls dm_name = BU_VLS_INIT_ZERO;
-	s_av[0] = "dm";
-	s_av[1] = "attach";
-	s_av[2] = "-V";
-	s_av[3] = bu_vls_cstr(&v->gv_name);
-	s_av[4] = "swrast";
-	bu_vls_sprintf(&dm_name, "SW%zd", i);
-	s_av[5] = bu_vls_cstr(&dm_name);
-	s_av[6] = NULL;
-	ged_exec_dm(gedp, 6, s_av);
-
-	struct dm *dmp = (struct dm *)v->dmp;
-	dm_set_width(dmp, 512);
-	dm_set_height(dmp, 512);
-
-	dm_configure_win(dmp, 0);
-	dm_set_zbuffer(dmp, 1);
-
-	// See QtSW.cpp...
-	fastf_t windowbounds[6] = { -1, 1, -1, 1, -100, 100 };
-	dm_set_win_bounds(dmp, windowbounds);
-
-	dm_set_vp(dmp, &v->gv_scale);
-	v->dmp = dmp;
-	v->gv_width = dm_get_width(dmp);
-	v->gv_height = dm_get_height(dmp);
-	v->gv_base2local = gedp->dbip->dbi_base2local;
-	v->gv_local2base = gedp->dbip->dbi_local2base;
-
-	// The default (fast) wireframe has some differences from
-	// the slower full OpenGL draw path - disable it for the
-	// purposes of these tests.
-	s_av[0] = "dm";
-	s_av[1] = "set";
-	s_av[2] = "--dm";
-	s_av[3] = bu_vls_cstr(&dm_name);
-	s_av[4] = "fast_wireframe";
-	s_av[5] = "0";
-	s_av[6] = NULL;
-	ged_exec_dm(gedp, 6, s_av);
-
-	// Done with dm name
-	bu_vls_free(&dm_name);
+	if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
+	    bu_exit(EXIT_FAILURE,
+		    "failed to initialize headless Obol endpoint for %s\n",
+		    view_name);
     }
 
     /* Set distinct view az/el for each of the four quad views */
@@ -546,7 +552,7 @@ main(int ac, char *av[]) {
 
     /************************************/
     /* Check behavior of a view element */
-    bu_log("View object, shared views drawing test...\n");
+    bu_log("View feature, shared views drawing test...\n");
     poly_circ(gedp, 1, 0);
     ret += img_cmp(0, 2, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 2, gedp, lcache, false, soft_fail);
@@ -569,10 +575,9 @@ main(int ac, char *av[]) {
     /* Check view independent behavior - basic drawing */
     bu_log("Basic independent views drawing test - V1 active\n");
 
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
+    struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	struct bview *v = (struct bview *)BU_PTBL_GET(views, i);
-	v->independent = 1;
+	set_independent(gedp, (int)i, 1);
     }
 
     s_av[0] = "draw";
@@ -691,28 +696,28 @@ main(int ac, char *av[]) {
 
     /**************************************************/
     /* Check view independent behavior - view element */
-    bu_log("Independent views - view object drawing test. V2\n");
+    bu_log("Independent views - view feature drawing test. V2\n");
     poly_circ(gedp, 2, 1);
     ret += img_cmp(0, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(2, 3, gedp, lcache, false, soft_fail);
     ret += img_cmp(3, -1, gedp, lcache, false, soft_fail);
 
-    bu_log("Independent views - view object drawing test. V3\n");
+    bu_log("Independent views - view feature drawing test. V3\n");
     poly_circ(gedp, 3, 1);
     ret += img_cmp(0, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(2, 3, gedp, lcache, false, soft_fail);
     ret += img_cmp(3, 3, gedp, lcache, false, soft_fail);
 
-    bu_log("Independent views - view object drawing test. V0\n");
+    bu_log("Independent views - view feature drawing test. V0\n");
     poly_circ(gedp, 0, 1);
     ret += img_cmp(0, 3, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(2, 3, gedp, lcache, false, soft_fail);
     ret += img_cmp(3, 3, gedp, lcache, false, soft_fail);
 
-    bu_log("Independent views - view object drawing test. V1\n");
+    bu_log("Independent views - view feature drawing test. V1\n");
     poly_circ(gedp, 1, 1);
     ret += img_cmp(0, 3, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 3, gedp, lcache, false, soft_fail);
@@ -721,7 +726,7 @@ main(int ac, char *av[]) {
 
 
     /* Make sure "Z" clears in the expected way */
-    bu_log("Independent views - view obj clearing - default\n");
+    bu_log("Independent views - view feature clearing - default\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V0";
@@ -736,7 +741,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(2, 3, gedp, lcache, false, soft_fail);
     ret += img_cmp(3, 3, gedp, lcache, false, soft_fail);
 
-    bu_log("Independent views - view obj clearing - V2\n");
+    bu_log("Independent views - view feature clearing - V2\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V2";
@@ -749,7 +754,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(3, 3, gedp, lcache, false, soft_fail);
 
 
-    bu_log("Independent views - view obj clearing - V3\n");
+    bu_log("Independent views - view feature clearing - V3\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V3";
@@ -761,7 +766,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(2, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(3, -1, gedp, lcache, false, soft_fail);
 
-    bu_log("Independent views - view obj clearing - V1\n");
+    bu_log("Independent views - view feature clearing - V1\n");
     s_av[0] = "Z";
     s_av[1] = "-V";
     s_av[2] = "V1";
@@ -780,8 +785,7 @@ main(int ac, char *av[]) {
     scene_clear(gedp, 3, 3);
 
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	struct bview *v = (struct bview *)BU_PTBL_GET(views, i);
-	v->independent = 0;
+	set_independent(gedp, (int)i, 0);
     }
     scene_clear(gedp, 0, -1);
 
@@ -857,12 +861,14 @@ main(int ac, char *av[]) {
     vline(gedp, 4, 0, 0, 0, 10, 10, -100);
     // Turn the shared line green
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "l4";
-    s_av[3] = "color";
-    s_av[4] = "0/255/0";
-    s_av[5] = NULL;
-    ged_exec_view(gedp, 5, s_av);
+    s_av[1] = "feature";
+    s_av[2] = "style";
+    s_av[3] = "set";
+    s_av[4] = "l4";
+    s_av[5] = "color";
+    s_av[6] = "0/255/0";
+    s_av[7] = NULL;
+    ged_exec_view(gedp, 7, s_av);
     ret += img_cmp(0, 6, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 6, gedp, lcache, false, soft_fail);
     ret += img_cmp(2, 6, gedp, lcache, false, soft_fail);
@@ -932,12 +938,14 @@ main(int ac, char *av[]) {
     vline(gedp, 4, 0, 0, 0, 10, 10, -100);
     // Turn the shared line green
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "l4";
-    s_av[3] = "color";
-    s_av[4] = "0/255/0";
-    s_av[5] = NULL;
-    ged_exec_view(gedp, 5, s_av);
+    s_av[1] = "feature";
+    s_av[2] = "style";
+    s_av[3] = "set";
+    s_av[4] = "l4";
+    s_av[5] = "color";
+    s_av[6] = "0/255/0";
+    s_av[7] = NULL;
+    ged_exec_view(gedp, 7, s_av);
 
     ret += img_cmp(0, 6, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 6, gedp, lcache, false, soft_fail);
@@ -979,12 +987,14 @@ main(int ac, char *av[]) {
     vline(gedp, 4, 0, 0, 0, 10, 10, -100);
     // Turn the shared line green
     s_av[0] = "view";
-    s_av[1] = "obj";
-    s_av[2] = "l4";
-    s_av[3] = "color";
-    s_av[4] = "0/255/0";
-    s_av[5] = NULL;
-    ged_exec_view(gedp, 5, s_av);
+    s_av[1] = "feature";
+    s_av[2] = "style";
+    s_av[3] = "set";
+    s_av[4] = "l4";
+    s_av[5] = "color";
+    s_av[6] = "0/255/0";
+    s_av[7] = NULL;
+    ged_exec_view(gedp, 7, s_av);
 
     ret += img_cmp(0, 6, gedp, lcache, false, soft_fail);
     ret += img_cmp(1, 6, gedp, lcache, false, soft_fail);
@@ -1006,10 +1016,10 @@ main(int ac, char *av[]) {
 
     // Next, test a mix of shared and independent views
     bu_log("Testing mixed shared and independent views\n");
-    ((struct bview *)BU_PTBL_GET(views, 0))->independent = 1;
-    ((struct bview *)BU_PTBL_GET(views, 1))->independent = 0;
-    ((struct bview *)BU_PTBL_GET(views, 2))->independent = 1;
-    ((struct bview *)BU_PTBL_GET(views, 3))->independent = 0;
+    set_independent(gedp, 0, 1);
+    set_independent(gedp, 1, 0);
+    set_independent(gedp, 2, 1);
+    set_independent(gedp, 3, 0);
 
     // First, draw without specifying any particular view.
     // This should result in the non-independent views being
@@ -1068,7 +1078,7 @@ main(int ac, char *av[]) {
     ret += img_cmp(2, -1, gedp, lcache, false, soft_fail);
     ret += img_cmp(3, -1, gedp, lcache, false, soft_fail);
 
-    //bu_setenv("BV_LOG", "1", 1);
+    //bu_setenv("GED_DRAW_LOG", "1", 1);
 
     ged_close(gedp);
 

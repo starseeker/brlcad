@@ -94,7 +94,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
 
 	// Ensure the necessary top level dirs are present
 	bu_dir(cdb, MAXPATHLEN, BU_DIR_CACHE, NULL);
-	if (!bu_file_exists(cdb, NULL))
+	if (cdb[0] && !bu_file_exists(cdb, NULL))
 	    bu_mkdir(cdb);
 
 	// Break cache_db up into component directories with bu_path_component,
@@ -111,7 +111,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
 	    bu_path_component(&cdbd, bu_vls_cstr(&cdbd), BU_PATH_DIRNAME);
 	}
 	bu_dir(cdb, MAXPATHLEN, BU_DIR_CACHE, NULL);
-	bu_vls_sprintf(&ctmp, "%s", cdb);
+	bu_vls_sprintf(&ctmp, "%s", cdb[0] ? cdb : ".");
 	for (long long i = dirs.size() - 1; i >= 0; i--) {
 	    bu_vls_printf(&ctmp, "%c%s", BU_DIR_SEPARATOR, dirs[i].c_str());
 	    if (!bu_file_exists(bu_vls_cstr(&ctmp), NULL))
@@ -153,7 +153,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
 	goto bu_context_close_fail;
 
     // Need to call mdb_env_sync() at appropriate points.
-    if (mdb_env_open(c->i->env, cdb, MDB_NOSYNC, 0664))
+    if (mdb_env_open(c->i->env, cdb, MDB_NOSYNC | MDB_NOTLS, 0664))
 	goto bu_context_close_fail;
 
     // Do the initial dbi setup.  Opening with a write transaction
@@ -162,8 +162,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
     MDB_txn *txn;
     if (mdb_txn_begin(c->i->env, NULL, 0, &txn) != 0) // begin write txn
 	goto bu_context_close_fail;
-    if (mdb_dbi_open(txn, NULL, 0, &c->i->dbi) != 0) // open unnamed db
-    {
+    if (mdb_dbi_open(txn, NULL, 0, &c->i->dbi) != 0) { // open unnamed db
 	mdb_txn_abort(txn);
 	goto bu_context_close_fail;
     }
@@ -205,7 +204,7 @@ bu_cache_close(struct bu_cache *c)
     mdb_env_close(c->i->env);
     bu_vls_free(c->i->fname);
     BU_PUT(c->i->fname, struct bu_vls);
-    BU_PUT(c->i, struct bu_cache_impl);
+    delete c->i;
     BU_PUT(c, struct bu_cache);
 
     return BRLCAD_OK;
@@ -356,8 +355,8 @@ cache_get_write_txn(struct bu_cache *c, struct bu_cache_txn **t)
     // If we already have a write txn and we're trying to start another
     // one, that's a no-no
     if ((!t || !*t) && c->i->write_txn_active) {
-        bu_log("Error: Attempt to start a second write transaction on the same cache.\n");
-        return NULL;
+	bu_log("Error: Attempt to start a second write transaction on the same cache.\n");
+	return NULL;
     }
 
     MDB_txn *txn = (t && *t) ? (*t)->txn : NULL;

@@ -33,14 +33,47 @@
 #include "bg/polygon.h"
 #include "rt/db_fullpath.h"
 #include "rt/db_instance.h"
+#include "rt/view.h"
+#include "BObol/BDisplayEndpoint.h"
 #include "ged/defines.h"
+#include "ged/draw_scene.h"
 
 __BEGIN_DECLS
+
+struct bu_ptbl;
+
+typedef void (*ged_view_context_update_callback_t)(struct ged_view_context *view, void *data);
+
+typedef enum ged_view_clear_flags {
+    GED_VIEW_CLEAR_DB = 0x01,
+    GED_VIEW_CLEAR_VIEW = 0x02,
+    GED_VIEW_CLEAR_LOCAL = 0x04
+} ged_view_clear_flags;
+
+#define GED_VIEW_REFRESH_VIEW        0x00000001u
+#define GED_VIEW_REFRESH_DRAW        0x00000002u
+#define GED_VIEW_REFRESH_EDIT        0x00000004u
+#define GED_VIEW_REFRESH_FRAMEBUFFER 0x00000008u
+#define GED_VIEW_REFRESH_OVERLAY     0x00000010u
+#define GED_VIEW_REFRESH_FORCE       0x80000000u
+#define GED_VIEW_REFRESH_ALL         0xffffffffu
+
+GED_EXPORT extern int ged_draw_scene_available(struct ged *gedp);
+
+struct ged_polygon_export_state {
+    fastf_t scale;
+    point_t origin;
+    mat_t rotation;
+    mat_t view2model;
+    mat_t model2view;
+    struct bg_polygons polygons;
+    fastf_t data_vZ;
+};
 
 
 /** Check if a drawable exists */
 #define GED_CHECK_DRAWABLE(_gedp, _flags) \
-    if (!ged_dl(_gedp)) { \
+    if (!ged_draw_scene_available(_gedp)) { \
 	int ged_check_drawable_quiet = (_flags) & GED_QUIET; \
 	if (!ged_check_drawable_quiet) { \
 	    bu_vls_trunc((_gedp)->ged_result_str, 0); \
@@ -51,7 +84,7 @@ __BEGIN_DECLS
 
 /** Check if a view exists */
 #define GED_CHECK_VIEW(_gedp, _flags) \
-    if (_gedp->ged_gvp == GED_VIEW_NULL) { \
+    if (ged_view_active_ctx(_gedp) == GED_VIEW_NULL) { \
 	int ged_check_view_quiet = (_flags) & GED_QUIET; \
 	if (!ged_check_view_quiet) { \
 	    bu_vls_trunc((_gedp)->ged_result_str, 0); \
@@ -60,22 +93,7 @@ __BEGIN_DECLS
 	return (_flags); \
     }
 
-struct ged_bv_data {
-    struct db_full_path s_fullpath;
-    void *u_data;
-};
-
-/* defined in display_list.c */
-GED_EXPORT void dl_set_iflag(struct bu_list *hdlp, int iflag);
-GED_EXPORT extern void dl_color_soltab(struct bu_list *hdlp, struct db_i *dbip);
-GED_EXPORT extern void dl_erasePathFromDisplay(struct ged *gedp, const char *path, int allow_split);
-GED_EXPORT extern struct display_list *dl_addToDisplay(struct bu_list *hdlp, struct db_i *dbip, const char *name);
-
-/* Check ged_bv data associated with a display list */
-GED_EXPORT extern unsigned long long ged_dl_hash(struct display_list *dl);
-
-
-GED_EXPORT extern int ged_export_polygon(struct ged *gedp, bv_data_polygon_state *gdpsp, size_t polygon_i, const char *sname);
+GED_EXPORT extern int ged_export_polygon(struct ged *gedp, const struct ged_polygon_export_state *polygon_state, size_t polygon_i, const char *sname);
 GED_EXPORT extern struct bg_polygon *ged_import_polygon(struct ged *gedp, const char *sname);
 GED_EXPORT extern int ged_polygons_overlap(struct ged *gedp, struct bg_polygon *polyA, struct bg_polygon *polyB);
 GED_EXPORT extern void ged_polygon_fill_segments(struct ged *gedp, struct bg_polygon *poly, vect2d_t vfilldir, fastf_t vfilldelta);
@@ -95,6 +113,67 @@ GED_EXPORT extern int ged_rot_args(struct ged *gedp, int argc, const char *argv[
  * Scale the view.
  */
 GED_EXPORT extern int ged_scale_args(struct ged *gedp, int argc, const char *argv[], fastf_t *sf1, fastf_t *sf2, fastf_t *sf3);
+
+/**
+ * GED-owned view-context host and policy helpers.
+ *
+ * Generic view mechanics are intentionally not mirrored here.  Callers that
+ * need scale, matrices, mouse state, knobs, passive faceplate records, or
+ * other display-independent view data should use the lower-level view API
+ * directly until those records complete their libbv migration.
+ */
+GED_EXPORT extern int ged_view_context_is_independent(const struct ged_view_context *view);
+GED_EXPORT extern int ged_view_context_independent_scope_is_null(struct ged_view_context *view, int create);
+GED_EXPORT extern void ged_view_context_independent_scope_destroy(struct ged_view_context *view);
+GED_EXPORT extern ged_draw_scene_handle ged_view_context_scene_root_ref(const struct ged_view_context *view);
+GED_EXPORT extern int ged_view_context_scene_root_ref_attach(struct ged_view_context *view, ged_draw_scene_handle root_ref);
+GED_EXPORT extern int ged_view_context_scene_attached(const struct ged_view_context *view);
+GED_EXPORT extern size_t ged_view_context_clear(struct ged_view_context *view, int flags);
+GED_EXPORT extern void *ged_view_context_user_data_get(const struct ged_view_context *view);
+GED_EXPORT extern int ged_view_context_user_data_set(struct ged_view_context *view, void *user_data);
+GED_EXPORT extern void *ged_view_context_tclcad_data_get(const struct ged_view_context *view);
+GED_EXPORT extern int ged_view_context_tclcad_data_set(struct ged_view_context *view, void *tcl_data);
+GED_EXPORT extern int ged_view_context_callbacks_set(struct ged_view_context *view, struct bu_ptbl *callbacks);
+GED_EXPORT extern struct ged_view_context *ged_view_context_create(void);
+GED_EXPORT extern struct ged_view_context *ged_view_context_create_with_set(struct ged_view_set *set);
+GED_EXPORT extern struct ged_view_context *ged_view_context_create_copy_with_set(const struct ged_view_context *source, struct ged_view_set *set);
+GED_EXPORT extern void ged_view_context_free(struct ged_view_context *view);
+GED_EXPORT extern int ged_view_context_host_attach(struct ged *gedp, struct ged_view_context *view);
+GED_EXPORT extern int ged_view_set_context_add(struct ged_view_set *set, struct ged_view_context *view);
+GED_EXPORT extern int ged_view_set_context_remove(struct ged_view_set *set, struct ged_view_context *view);
+GED_EXPORT extern int ged_view_context_view_set_attach(struct ged_view_context *view, struct ged_view_set *set);
+GED_EXPORT extern int ged_view_context_update_callback_set(struct ged_view_context *view, ged_view_context_update_callback_t callback, void *data);
+GED_EXPORT extern int ged_view_context_update(struct ged_view_context *view);
+/**
+ * Get or replace the Obol display endpoint associated with a GED view.
+ *
+ * Setting an endpoint also binds its controller to the view's Obol draw
+ * synchronization.  When @p take_ownership is non-zero, GED destroys the
+ * endpoint after detaching its controller during replacement or view teardown.
+ */
+struct bobol_display_endpoint;
+GED_EXPORT extern struct bobol_display_endpoint *
+ged_view_context_display_endpoint_get(const struct ged_view_context *view);
+/** Ensure the hosted view has a GED-owned display endpoint.  Existing
+ * endpoints are preserved. */
+GED_EXPORT extern int ged_view_context_display_endpoint_ensure(
+    struct ged_view_context *view);
+GED_EXPORT extern int ged_view_context_display_endpoint_set(
+    struct ged_view_context *view, struct bobol_display_endpoint *endpoint,
+    int take_ownership);
+
+/**
+ * Access a render-affecting view policy through the view's Obol endpoint.
+ * GED retains the policy in the view context while an endpoint is absent, so
+ * headless clients can configure a view before it is presented.  This is
+ * policy storage, not a fallback rendering path.
+ */
+GED_EXPORT extern int ged_view_context_display_property_get(
+    const struct ged_view_context *view, const char *name,
+    struct bobol_endpoint_property_value *value);
+GED_EXPORT extern int ged_view_context_display_property_set(
+    struct ged_view_context *view, const char *name,
+    const struct bobol_endpoint_property_value *value);
 
 /**
  * Translate the view.
@@ -205,19 +284,6 @@ GED_EXPORT extern int ged_tra_args(struct ged *gedp, int argc, const char *argv[
  * case, that may simplify some things.
  */
  
-// TODO - once this settles down, give it a magic number so we can type
-// check it after a void cast
-struct draw_update_data_t {
-    struct db_i *dbip;
-    struct db_full_path *fp;
-    const struct bn_tol *tol;
-    const struct bg_tess_tol *ttol;
-    struct bv_mesh_lod_context *mesh_c;
-};
-
-GED_EXPORT extern unsigned long long dl_name_hash(struct ged *gedp);
-
-
 /**
  * Return ged selections for specified object. Created if it doesn't
  * exist.
@@ -235,14 +301,8 @@ GED_EXPORT struct rt_selection_set *ged_get_selection_set(struct ged *gedp,
 
 
 
-/* Accessors for display list based drawing info.  Eventually we want to migrate
- * off of direct usage of these containers completely, but for now the older
- * drawing path (which MGED and Archer use) needs them.
- */
 typedef void (*ged_drawable_notify_func_t)(int);
 
-GED_EXPORT struct display_list *
-ged_dl(struct ged *gedp);
 GED_EXPORT void
 ged_dl_notify_func_set(struct ged *gedp, ged_drawable_notify_func_t f);
 GED_EXPORT ged_drawable_notify_func_t
@@ -256,7 +316,7 @@ ged_dl_notify_func_get(struct ged *gedp);
  * This will almost certainly move elsewhere - its presence here should be
  * considered temporary and not relied on from an API design perspective.
  */
-GED_EXPORT extern void nmg_plot_eu(struct ged *gedp, struct edgeuse *es_eu, const struct bn_tol *tol, struct bu_list *vlfree);
+GED_EXPORT extern void nmg_plot_eu(struct ged *gedp, struct edgeuse *es_eu, const struct bn_tol *tol);
 
 
 __END_DECLS

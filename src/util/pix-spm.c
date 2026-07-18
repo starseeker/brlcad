@@ -34,7 +34,6 @@
 #include "bu/exit.h"
 #include "bu/log.h"
 #include "bn/spm.h"
-#include "dm.h"
 
 
 static int
@@ -70,7 +69,7 @@ main(int argc, char **argv)
     if (!parse_positive_int_arg(argv[2], &size, "size")) {
 	return 1;
     }
-    mp = bn_spm_init(size, sizeof(RGBpixel));
+    mp = bn_spm_init(size, 3);
     bn_spm_pix_load(mp, argv[1], size, size);
     bn_spm_save(mp, "-");
 

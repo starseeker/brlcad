@@ -1252,12 +1252,26 @@ if(NOT MSVC)
     check_cxx_flag(qstackprotect)
   endif(${BRLCAD_OPTIMIZED} MATCHES "OFF" AND BRLCAD_DEBUGGING)
 
+  if(BRLCAD_SANITIZE_THREAD AND BRLCAD_ENABLE_ADDRESS_SANITIZER)
+    message(FATAL_ERROR
+      "BRLCAD_SANITIZE_THREAD and BRLCAD_ENABLE_ADDRESS_SANITIZER require separate build trees")
+  endif()
   # Differently, enable the ThreadSanitizer race condition detector
   # only as requested since it can incur a 5x-15x slowdown.  See
   # https://code.google.com/p/thread-sanitizer/ for more info.
   if(BRLCAD_SANITIZE_THREAD)
-    check_c_flag(fsanitize=thread)
-    check_cxx_flag(fsanitize=thread)
+    set(_brlcad_required_link_options_save "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=thread")
+    check_compiler_flag(C "-fsanitize=thread" FSANITIZE_THREAD_C_FLAG_FOUND)
+    check_compiler_flag(CXX "-fsanitize=thread" FSANITIZE_THREAD_CXX_FLAG_FOUND)
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${_brlcad_required_link_options_save}")
+    unset(_brlcad_required_link_options_save)
+
+    if(NOT FSANITIZE_THREAD_C_FLAG_FOUND OR NOT FSANITIZE_THREAD_CXX_FLAG_FOUND)
+      message(FATAL_ERROR "BRLCAD_SANITIZE_THREAD requires ThreadSanitizer support from both C and C++ compilers")
+    endif()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=thread>")
+    add_link_options("-fsanitize=thread")
   endif(BRLCAD_SANITIZE_THREAD)
 
   # verbose warning flags.  we intentionally try to turn on as many as
@@ -1713,12 +1727,14 @@ brlcad_check_dirname()
 # OpenGL headers
 if(BRLCAD_ENABLE_OPENGL)
   find_package(OpenGL)
-  if(OPENGL_INCLUDE_DIR_GL)
+  # Modern CMake FindOpenGL sets OPENGL_INCLUDE_DIR; older versions used
+  # OPENGL_INCLUDE_DIR_GL.  Accept either form so the build works with both.
+  if(OPENGL_INCLUDE_DIR_GL OR OPENGL_INCLUDE_DIR)
     config_h_append(BRLCAD "#define HAVE_GL_GL_H 1\n")
-  endif(OPENGL_INCLUDE_DIR_GL)
-  if(OPENGL_INCLUDE_DIR_GLX)
+  endif()
+  if(OPENGL_INCLUDE_DIR_GLX OR OPENGL_GLX_INCLUDE_DIR)
     config_h_append(BRLCAD "#define HAVE_GL_GLX_H 1\n")
-  endif(OPENGL_INCLUDE_DIR_GLX)
+  endif()
   if(OPENGL_USING_FRAMEWORK)
     config_h_append(BRLCAD "#define HAVE_OPENGL_GL_H 1\n")
   endif(OPENGL_USING_FRAMEWORK)
@@ -2271,6 +2287,39 @@ if(BRLCAD_ENABLE_ADDRESS_SANITIZER)
   endif()
 endif()
 
+# Enable UndefinedBehaviorSanitizer after the configure-time platform tests,
+# matching the ASan placement above so instrumentation cannot perturb probes.
+if(BRLCAD_ENABLE_UNDEFINED_SANITIZER)
+  if(MSVC)
+    message(FATAL_ERROR "BRLCAD_ENABLE_UNDEFINED_SANITIZER is not yet supported with MSVC")
+  endif()
+  if(BRLCAD_OPTIMIZED OR NOT BRLCAD_DEBUGGING)
+    message(FATAL_ERROR "BRLCAD_ENABLE_UNDEFINED_SANITIZER requires BRLCAD_OPTIMIZED=OFF and BRLCAD_DEBUGGING=ON")
+  endif()
+
+  cmake_push_check_state()
+  set(CMAKE_REQUIRED_FLAGS "-fsanitize=undefined")
+  list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=undefined")
+  check_c_compiler_flag("-fsanitize=undefined" BRLCAD_UBSAN_C_SUPPORTED)
+  check_cxx_compiler_flag("-fsanitize=undefined" BRLCAD_UBSAN_CXX_SUPPORTED)
+  check_c_compiler_flag("-fno-sanitize-recover=undefined" BRLCAD_UBSAN_C_NORECOVER_SUPPORTED)
+  check_cxx_compiler_flag("-fno-sanitize-recover=undefined" BRLCAD_UBSAN_CXX_NORECOVER_SUPPORTED)
+  cmake_pop_check_state()
+
+  if(NOT BRLCAD_UBSAN_C_SUPPORTED OR NOT BRLCAD_UBSAN_CXX_SUPPORTED)
+    message(FATAL_ERROR "BRLCAD_ENABLE_UNDEFINED_SANITIZER was requested, but the C/C++ compiler and linker do not support -fsanitize=undefined")
+  endif()
+
+  add_compile_options(-fsanitize=undefined)
+  add_link_options(-fsanitize=undefined)
+  if(BRLCAD_UBSAN_C_NORECOVER_SUPPORTED)
+    add_compile_options($<$<COMPILE_LANGUAGE:C>:-fno-sanitize-recover=undefined>)
+  endif()
+  if(BRLCAD_UBSAN_CXX_NORECOVER_SUPPORTED)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-sanitize-recover=undefined>)
+  endif()
+endif()
+
 #-----------------------------------------------------------------------------
 # Add misc/tools for tools that are used in BRL-CAD's build process or for
 # maintenance activities.
@@ -2344,6 +2393,12 @@ endif(BRLCAD_EXTRADOCS)
 # variable.)
 include(CTest)
 mark_as_advanced(BUILD_TESTING)
+brlcad_add_test(
+  NAME BObol_pivot_guard
+  COMMAND ${CMAKE_COMMAND}
+  -DBRLCAD_SOURCE_DIR=${BRLCAD_SOURCE_DIR}
+  -P ${BRLCAD_CMAKE_DIR}/BObol_pivot_guard.cmake
+)
 
 # Set up the BRL-CAD wrapper around find_package
 include(BRLCAD_Find_Package)
@@ -2450,6 +2505,11 @@ endif()
 set(BRLCAD_HAVE_OSMESA FALSE)
 if(BRLCAD_ENABLE_OSMESA)
   set(BRLCAD_HAVE_OSMESA TRUE)
+endif()
+
+set(BRLCAD_HAVE_BOBOL FALSE)
+if(TARGET libBObol)
+  set(BRLCAD_HAVE_BOBOL TRUE)
 endif()
 
 # Build-tree package files support BRLCAD_DIR=<build_dir> consumers.

@@ -20,8 +20,7 @@
  */
 /** @file fbhelp.c
  *
- * Print out info about the selected frame buffer.
- * Just calls dm.help().
+ * Print out info about the selected image-stream target.
  *
  */
 
@@ -31,7 +30,7 @@
 
 #include "bu/app.h"
 #include "bu/getopt.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 static char *framebuffer = NULL;
@@ -43,7 +42,7 @@ int
 main(int argc, char **argv)
 {
     int c;
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
 
     bu_setprogname(argv[0]);
 
@@ -63,24 +62,27 @@ main(int argc, char **argv)
 	return 1;
     }
 
-    fprintf(stderr, "\
-A Frame Buffer display device is selected by\n\
-setting the environment variable FB_FILE:\n\
-(/bin/sh) FB_FILE=/dev/device; export FB_FILE\n\
-(/bin/csh) setenv FB_FILE /dev/device\n\
-Many programs also accept a \"-F framebuffer\" flag.\n\
-Type \"man brlcad\" for more information.\n");
+    fprintf(stderr, "Image-stream targets are selected with -F.\n"
+	"Memory, file, remote, and diagnostic streams are GUI-independent.\n"
+	"Toolkit display targets require an application-owned host.\n");
 
-    fprintf(stderr, "=============== Available Devices ================\n");
-    fb_genhelp();
+    fprintf(stderr, "=============== Available Targets ================\n");
+    fprintf(stderr, "memory: /dev/mem\nfile: path or /dev/disk:path\n");
+    fprintf(stderr, "remote: host:port, tcp:host:port, or ipc:address\n");
+    fprintf(stderr, "diagnostic: /dev/null, /dev/debug, or /dev/txt\n");
 
     fprintf(stderr, "=============== Current Selection ================\n");
-    if ((fbp = fb_open(framebuffer, 0, 0)) == FB_NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, 0, 0)) == NULL) {
 	fprintf(stderr, "fbhelp: Can't open frame buffer\n");
 	return 1;
     }
-    fb_help(fbp);
-    return fb_close(fbp);
+    fprintf(stderr, "target: %s\nkind: %s\nsize: %lux%lu\n",
+	imgstream_fb_name(fbp),
+	imgstream_fb_spec_kind_name(imgstream_fb_spec_kind(imgstream_fb_name(fbp))),
+	(unsigned long)imgstream_fb_width(fbp),
+	(unsigned long)imgstream_fb_height(fbp));
+    imgstream_fb_close(fbp);
+    return 0;
 }
 
 

@@ -1,7 +1,9 @@
 set(PLUGIN_LIBS libged libbu)
+set_source_files_properties(unhide.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 ged_plugin_library(ged-unhide
-  unhide.c
+  unhide.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

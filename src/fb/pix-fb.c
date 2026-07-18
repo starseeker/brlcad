@@ -49,9 +49,7 @@
 #include "bu/log.h"
 #include "bu/snooze.h"
 #include "vmath.h"
-#include "dm.h"
-
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 
 static unsigned char *scanline;	/* 1 scanline pixel buffer */
@@ -278,7 +276,7 @@ int
 main(int argc, char **argv)
 {
     int y;
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     int xout, yout, n, m, xstart, xskip;
 
     bu_setprogname(argv[0]);
@@ -291,7 +289,7 @@ main(int argc, char **argv)
     /* autosize input? */
     if (fileinput && autosize) {
 	size_t w, h;
-	if (fb_common_file_size(&w, &h, file_name, 3)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 3)) {
 	    file_width = w;
 	    file_height = h;
 	} else {
@@ -305,13 +303,14 @@ main(int argc, char **argv)
     if (scr_height == 0)
 	scr_height = file_height;
 
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL) {
 	bu_exit(12, NULL);
     }
 
     /* Get the screen size we were given */
-    scr_width = fb_getwidth(fbp);
-    scr_height = fb_getheight(fbp);
+    scr_width = (int)imgstream_fb_width(fbp);
+    scr_height = (int)imgstream_fb_height(fbp);
 
     /* compute number of pixels to be output to screen */
     if (scr_xoff < 0) {
@@ -350,8 +349,8 @@ main(int argc, char **argv)
 	scanpix *= multiple_lines;
     }
 
-    scanbytes = scanpix * sizeof(RGBpixel);
-    if ((scanline = (unsigned char *)malloc(scanbytes)) == RGBPIXEL_NULL) {
+    scanbytes = scanpix * 3;
+    if ((scanline = (unsigned char *)malloc(scanbytes)) == NULL) {
 	fprintf(stderr,
 		"pix-fb:  malloc(%d) failure for scanline buffer\n",
 		scanbytes);
@@ -359,7 +358,7 @@ main(int argc, char **argv)
     }
 
     if (clear) {
-	fb_clear(fbp, PIXEL_NULL);
+	imgstream_fb_clear(fbp, NULL);
     }
     if (zoom) {
 	/* Zoom in, and center the display.  Use square zoom. */
@@ -368,17 +367,18 @@ main(int argc, char **argv)
 	V_MIN(zoomit, scr_height/yout);
 
 	if (inverse) {
-	    fb_view(fbp,
+	    imgstream_fb_view(fbp,
 		    scr_xoff+xout/2, scr_height-1-(scr_yoff+yout/2),
 		    zoomit, zoomit);
 	} else {
-	    fb_view(fbp,
+	    imgstream_fb_view(fbp,
 		    scr_xoff+xout/2, scr_yoff+yout/2,
 		    zoomit, zoomit);
 	}
     }
 
-    if (file_yoff != 0) skipbytes(infd, (b_off_t)file_yoff*(b_off_t)file_width*sizeof(RGBpixel));
+    if (file_yoff != 0)
+	skipbytes(infd, (b_off_t)file_yoff*(b_off_t)file_width*3);
 
     if (multiple_lines) {
 	/* Bottom to top with multi-line reads & writes */
@@ -388,14 +388,14 @@ main(int argc, char **argv)
 	    if (n <= 0) break;
 	    height = multiple_lines;
 	    if (n != scanbytes) {
-		height = (n/sizeof(RGBpixel)+xout-1)/xout;
+		height = (n/3+xout-1)/xout;
 		if (height <= 0) break;
 	    }
 	    /* Don't over-write */
 	    if ((size_t)(y + height) > (size_t)(scr_yoff + yout))
 		height = scr_yoff + yout - y;
 	    if (height <= 0) break;
-	    m = fb_writerect(fbp, scr_xoff, y,
+	    m = imgstream_fb_writerect(fbp, scr_xoff, y,
 			     file_width, height,
 			     scanline);
 	    if ((size_t)m != file_width*height) {
@@ -409,14 +409,15 @@ main(int argc, char **argv)
 	/* Normal way -- bottom to top */
 	for (y = scr_yoff; y < scr_yoff + yout; y++) {
 	    if (y < 0 || y > scr_height) {
-		skipbytes(infd, (b_off_t)file_width*sizeof(RGBpixel));
+		skipbytes(infd, (b_off_t)file_width*3);
 		continue;
 	    }
 	    if (file_xoff+xskip != 0)
-		skipbytes(infd, (b_off_t)(file_xoff+xskip)*sizeof(RGBpixel));
+		skipbytes(infd, (b_off_t)(file_xoff+xskip)*3);
 	    n = bu_mread(infd, (char *)scanline, scanbytes);
 	    if (n <= 0) break;
-	    m = fb_write(fbp, xstart, y, scanline, xout);
+	    m = (int)imgstream_fb_write(fbp, xstart, y, scanline,
+		(size_t)xout);
 	    if (m != xout) {
 		fprintf(stderr,
 			"pix-fb: fb_write(x=%d, y=%d, npix=%d) ret=%d, s/b=%d\n",
@@ -425,20 +426,22 @@ main(int argc, char **argv)
 	    }
 	    /* slop at the end of the line? */
 	    if ((size_t)file_xoff+xskip+scanpix < file_width)
-		skipbytes(infd, (b_off_t)(file_width-file_xoff-xskip-scanpix)*sizeof(RGBpixel));
+		skipbytes(infd,
+		    (b_off_t)(file_width-file_xoff-xskip-scanpix)*3);
 	}
     } else {
 	/* Inverse -- top to bottom */
 	for (y = scr_height-1-scr_yoff; y >= scr_height-scr_yoff-yout; y--) {
 	    if (y < 0 || y >= scr_height) {
-		skipbytes(infd, (b_off_t)file_width*sizeof(RGBpixel));
+		skipbytes(infd, (b_off_t)file_width*3);
 		continue;
 	    }
 	    if (file_xoff+xskip != 0)
-		skipbytes(infd, (b_off_t)(file_xoff+xskip)*sizeof(RGBpixel));
+		skipbytes(infd, (b_off_t)(file_xoff+xskip)*3);
 	    n = bu_mread(infd, (char *)scanline, scanbytes);
 	    if (n <= 0) break;
-	    m = fb_write(fbp, xstart, y, scanline, xout);
+	    m = (int)imgstream_fb_write(fbp, xstart, y, scanline,
+		(size_t)xout);
 	    if (m != xout) {
 		fprintf(stderr,
 			"pix-fb: fb_write(x=%d, y=%d, npix=%d) ret=%d, s/b=%d\n",
@@ -447,13 +450,12 @@ main(int argc, char **argv)
 	    }
 	    /* slop at the end of the line? */
 	    if ((size_t)file_xoff+xskip+scanpix < file_width)
-		skipbytes(infd, (b_off_t)(file_width-file_xoff-xskip-scanpix)*sizeof(RGBpixel));
+		skipbytes(infd,
+		    (b_off_t)(file_width-file_xoff-xskip-scanpix)*3);
 	}
     }
     bu_snooze(BU_SEC2USEC(pause_sec));
-    if (fb_close(fbp) < 0) {
-	fprintf(stderr, "pix-fb: Warning: fb_close() error\n");
-    }
+    imgstream_fb_close(fbp);
 
     return 0;
 }

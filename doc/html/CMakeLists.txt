@@ -6,11 +6,7 @@ set(
   manuals/cadwidgets/Command.html
   manuals/cadwidgets/Database.html
   manuals/cadwidgets/Db.html
-  manuals/cadwidgets/Display.html
-  manuals/cadwidgets/Dm.html
   manuals/cadwidgets/Drawable.html
-  manuals/cadwidgets/Mged.html
-  manuals/cadwidgets/QuadDisplay.html
   manuals/cadwidgets/Splash.html
   manuals/cadwidgets/View.html
   manuals/cadwidgets/contents.html
@@ -21,17 +17,6 @@ add_doc(cadwidgets_HTML html/manuals/cadwidgets REQUIRED "mged")
 
 set(libbu_HTML manuals/libbu/cmdhist_obj.html manuals/libbu/contents.html manuals/libbu/index.html)
 add_doc(libbu_HTML html/manuals/libbu REQUIRED "libbu")
-
-set(
-  libdm_HTML
-  manuals/libdm/api.html
-  manuals/libdm/contents.html
-  manuals/libdm/dm_obj.html
-  manuals/libdm/index.html
-  manuals/libdm/preface.html
-  manuals/libdm/tcl.html
-)
-add_doc(libdm_HTML html/manuals/libdm REQUIRED "libdm")
 
 set(
   librt_HTML

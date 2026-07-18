@@ -38,9 +38,10 @@
 #include "rt/edit.h"
 #include "wdb.h"
 #include "ged.h"
+#include "ged/event_txn.h"
 #include "brep/util.h"
+#include "ged/selection_state.h"
 
-#include "../../dbi.h"
 #include "../../ged_private.h"
 #include "../../edit/uri.hh"
 
@@ -64,6 +65,36 @@ static int failed_tests = 0;
             bu_log("PASS: %s\n", msg);                               \
         }                                                            \
     } while (0)
+
+
+struct edit_event_observer {
+    int calls = 0;
+    int tor_modified = 0;
+    int sph_modified = 0;
+};
+
+
+static void
+edit_event_cb(struct ged *UNUSED(gedp),
+	      const struct ged_event *events,
+	      size_t event_count,
+	      const struct ged_event_txn_result *UNUSED(result),
+	      void *client_data)
+{
+    struct edit_event_observer *obs = (struct edit_event_observer *)client_data;
+    if (!obs)
+	return;
+
+    obs->calls++;
+    for (size_t i = 0; i < event_count; i++) {
+	if (events[i].kind != GED_EVENT_OBJECT_MODIFIED || !events[i].name)
+	    continue;
+	if (BU_STR_EQUAL(events[i].name, "tor.s"))
+	    obs->tor_modified++;
+	if (BU_STR_EQUAL(events[i].name, "sph.s"))
+	    obs->sph_modified++;
+    }
+}
 
 
 /* ------------------------------------------------------------------ *
@@ -117,22 +148,19 @@ read_hrt(struct ged *gedp, const char *name, struct rt_hrt_internal *out)
 
 
 /* ------------------------------------------------------------------ *
- * Shared helper: open a fixture database with a freshly constructed
- * DbiState.
+ * Shared helper: open a fixture database on the public service path.
  * ------------------------------------------------------------------ */
 static struct ged *
 open_fixture(const char *path)
 {
     struct ged *gedp = ged_open("db", path, 1);
-    if (!gedp)
-        return NULL;
-    gedp->dbi_state = new DbiState(gedp);
     return gedp;
 }
 
 
 /* ------------------------------------------------------------------ *
- * Shared helper: open a fixture database WITHOUT DbiState.
+ * Shared helper: open a fixture database without enabling the compatibility
+ * backend.
  * ------------------------------------------------------------------ */
 static struct ged *
 open_fixture_no_dbistate(const char *path)
@@ -140,7 +168,7 @@ open_fixture_no_dbistate(const char *path)
     struct ged *gedp = ged_open("db", path, 1);
     if (!gedp)
         return NULL;
-    /* Deliberately leave gedp->dbi_state = NULL */
+    /* Deliberately avoid enabling the compatibility backend. */
     return gedp;
 }
 
@@ -678,25 +706,25 @@ test_p1_batch_marker(struct ged *gedp)
 static void
 test_p1_selection_fallback(struct ged *gedp)
 {
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    std::vector<BSelectState *> ss = dbis->get_selected_states("default");
-    if (ss.empty()) { CHECK(0, "Could not get default selection state"); return; }
-    ss[0]->select_path("tor.s", false);
+    ged_selection_clear(gedp, NULL);
+    if (!ged_selection_state_available(gedp) ||
+	    !ged_selection_select_path(gedp, NULL, "tor.s", 0)) {
+	CHECK(0, "Could not select tor.s in default selection state");
+	return;
+    }
 
     const char *av[] = { "edit", "perturb", "0.0", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
     int ret = ged_exec(gedp, 3, av);
     CHECK(ret == BRLCAD_OK,
           "edit perturb 0.0 (via selection fallback) returns OK");
-    ss[0]->deselect_path("tor.s", false);
+    ged_selection_deselect_path(gedp, NULL, "tor.s", 0);
 }
 
 static void
 test_p1_no_geom_no_sel(struct ged *gedp)
 {
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    std::vector<BSelectState *> ss = dbis->get_selected_states("default");
-    if (!ss.empty()) ss[0]->deselect_path("tor.s", false);
+    ged_selection_clear(gedp, NULL);
 
     const char *av[] = { "edit", "perturb", "0.1", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -708,10 +736,12 @@ test_p1_no_geom_no_sel(struct ged *gedp)
 static void
 test_p1_conflict_arbiter(struct ged *gedp)
 {
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    std::vector<BSelectState *> ss = dbis->get_selected_states("default");
-    if (ss.empty()) { CHECK(0, "Could not get default selection state"); return; }
-    ss[0]->select_path("tor.s", false);
+    ged_selection_clear(gedp, NULL);
+    if (!ged_selection_state_available(gedp) ||
+	    !ged_selection_select_path(gedp, NULL, "tor.s", 0)) {
+	CHECK(0, "Could not select tor.s in default selection state");
+	return;
+    }
 
     const char *av[] = { "edit", "tor.s", "perturb", "0.1", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -724,39 +754,43 @@ test_p1_conflict_arbiter(struct ged *gedp)
          strstr(bu_vls_cstr(gedp->ged_result_str), "conflict") != NULL);
     CHECK(has_conflict_msg,
           "edit tor.s perturb (selection conflict) prints conflict message");
-    ss[0]->deselect_path("tor.s", false);
+    ged_selection_deselect_path(gedp, NULL, "tor.s", 0);
 }
 
 static void
 test_p1_flag_S(struct ged *gedp)
 {
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    std::vector<BSelectState *> ss = dbis->get_selected_states("default");
-    if (ss.empty()) { CHECK(0, "Could not get default selection state"); return; }
-    ss[0]->select_path("tor.s", false);
+    ged_selection_clear(gedp, NULL);
+    if (!ged_selection_state_available(gedp) ||
+	    !ged_selection_select_path(gedp, NULL, "tor.s", 0)) {
+	CHECK(0, "Could not select tor.s in default selection state");
+	return;
+    }
 
     const char *av[] = { "edit", "-S", "sph.s", "perturb", "0.0", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
     int ret = ged_exec(gedp, 5, av);
     CHECK(ret == BRLCAD_OK,
           "edit -S sph.s perturb 0.0 (uses selection tor.s, not sph.s) returns OK");
-    ss[0]->deselect_path("tor.s", false);
+    ged_selection_deselect_path(gedp, NULL, "tor.s", 0);
 }
 
 static void
 test_p1_flag_f(struct ged *gedp)
 {
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    std::vector<BSelectState *> ss = dbis->get_selected_states("default");
-    if (ss.empty()) { CHECK(0, "Could not get default selection state"); return; }
-    ss[0]->select_path("tor.s", false);
+    ged_selection_clear(gedp, NULL);
+    if (!ged_selection_state_available(gedp) ||
+	    !ged_selection_select_path(gedp, NULL, "tor.s", 0)) {
+	CHECK(0, "Could not select tor.s in default selection state");
+	return;
+    }
 
     const char *av[] = { "edit", "-f", "tor.s", "perturb", "0.0", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
     int ret = ged_exec(gedp, 5, av);
     CHECK(ret == BRLCAD_OK,
           "edit -f tor.s perturb 0.0 (force, bypasses conflict) returns OK");
-    ss[0]->deselect_path("tor.s", false);
+    ged_selection_deselect_path(gedp, NULL, "tor.s", 0);
 }
 
 static void
@@ -838,11 +872,21 @@ test_p1_buf_flush(struct ged *gedp)
 
     ged_edit_buf_set(gedp, &dfp1, s1);
     ged_edit_buf_set(gedp, &dfp2, s2);
+    struct edit_event_observer obs;
+    ged_event_observer_token token =
+	ged_event_observer_add(gedp, GED_EVENT_OBSERVER_POST_RECONCILE,
+		edit_event_cb, &obs);
+    CHECK(token != 0, "ged_edit_buf_flush event observer registers");
     ged_edit_buf_flush(gedp);
 
     struct rt_edit *g1 = ged_edit_buf_get(gedp, &dfp1);
     struct rt_edit *g2 = ged_edit_buf_get(gedp, &dfp2);
     CHECK(g1 == NULL && g2 == NULL, "ged_edit_buf_flush removes all entries");
+    CHECK(obs.calls == 1, "ged_edit_buf_flush publishes one event transaction");
+    CHECK(obs.tor_modified == 1 && obs.sph_modified == 1,
+	"ged_edit_buf_flush emits object-modified events for flushed entries");
+    CHECK(ged_event_observer_remove(gedp, token) == 1,
+	"ged_edit_buf_flush event observer removal succeeds");
 
     db_free_full_path(&dfp1);
     db_free_full_path(&dfp2);
@@ -1241,7 +1285,7 @@ test_p2_mat_missing_values(struct ged *gedp)
 
 
 /* ================================================================== *
- * Section A — DbiState null-safety
+ * Section A - edit operations without compatibility draw state
  * ================================================================== */
 
 static int
@@ -1273,12 +1317,12 @@ test_pa_translate_abs(struct ged *gedp)
 {
     const char *av[] = { "edit", "pa_sph.s", "translate", "-a", "15", "0", "0", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
-    CHECK(ged_exec(gedp, 7, av) == BRLCAD_OK, "no-DbiState translate -a returns OK");
+    CHECK(ged_exec(gedp, 7, av) == BRLCAD_OK, "no-compat translate -a returns OK");
     struct rt_ell_internal ell;
     if (read_ell(gedp, "pa_sph.s", &ell) == BRLCAD_OK)
         CHECK(NEAR_EQUAL(ell.v[X], 15.0, NEAR_ENOUGH),
-              "no-DbiState translate -a: pa_sph.s V.x == 15");
-    else CHECK(0, "no-DbiState translate -a: read_ell succeeded");
+              "no-compat translate -a: pa_sph.s V.x == 15");
+    else CHECK(0, "no-compat translate -a: read_ell succeeded");
 }
 
 static void
@@ -1286,12 +1330,12 @@ test_pa_translate_rel(struct ged *gedp)
 {
     const char *av[] = { "edit", "pa_sph.s", "translate", "-r", "-5", "0", "0", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
-    CHECK(ged_exec(gedp, 7, av) == BRLCAD_OK, "no-DbiState translate -r returns OK");
+    CHECK(ged_exec(gedp, 7, av) == BRLCAD_OK, "no-compat translate -r returns OK");
     struct rt_ell_internal ell;
     if (read_ell(gedp, "pa_sph.s", &ell) == BRLCAD_OK)
         CHECK(NEAR_EQUAL(ell.v[X], 10.0, NEAR_ENOUGH),
-              "no-DbiState translate -r: pa_sph.s V.x == 10 (restored)");
-    else CHECK(0, "no-DbiState translate -r: read_ell succeeded");
+              "no-compat translate -r: pa_sph.s V.x == 10 (restored)");
+    else CHECK(0, "no-compat translate -r: read_ell succeeded");
 }
 
 static void
@@ -1299,12 +1343,12 @@ test_pa_rotate(struct ged *gedp)
 {
     const char *av[] = { "edit", "pa_ell.s", "rotate", "0", "0", "90", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
-    CHECK(ged_exec(gedp, 6, av) == BRLCAD_OK, "no-DbiState rotate 0 0 90 returns OK");
+    CHECK(ged_exec(gedp, 6, av) == BRLCAD_OK, "no-compat rotate 0 0 90 returns OK");
     struct rt_ell_internal ell;
     if (read_ell(gedp, "pa_ell.s", &ell) == BRLCAD_OK) {
-        CHECK(NEAR_EQUAL(ell.a[X], 0.0, NEAR_ENOUGH), "no-DbiState rotate: pa_ell.s A.x ≈ 0");
-        CHECK(NEAR_EQUAL(ell.a[Y], 5.0, NEAR_ENOUGH), "no-DbiState rotate: pa_ell.s A.y ≈ 5");
-    } else CHECK(0, "no-DbiState rotate: read_ell succeeded");
+        CHECK(NEAR_EQUAL(ell.a[X], 0.0, NEAR_ENOUGH), "no-compat rotate: pa_ell.s A.x ≈ 0");
+        CHECK(NEAR_EQUAL(ell.a[Y], 5.0, NEAR_ENOUGH), "no-compat rotate: pa_ell.s A.y ≈ 5");
+    } else CHECK(0, "no-compat rotate: read_ell succeeded");
 }
 
 static void
@@ -1312,12 +1356,12 @@ test_pa_scale(struct ged *gedp)
 {
     const char *av[] = { "edit", "pa_sca.s", "scale", "2", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
-    CHECK(ged_exec(gedp, 4, av) == BRLCAD_OK, "no-DbiState scale 2 returns OK");
+    CHECK(ged_exec(gedp, 4, av) == BRLCAD_OK, "no-compat scale 2 returns OK");
     struct rt_ell_internal ell;
     if (read_ell(gedp, "pa_sca.s", &ell) == BRLCAD_OK)
         CHECK(NEAR_EQUAL(MAGNITUDE(ell.a), 6.0, NEAR_ENOUGH),
-              "no-DbiState scale 2: pa_sca.s |A| == 6");
-    else CHECK(0, "no-DbiState scale 2: read_ell succeeded");
+              "no-compat scale 2: pa_sca.s |A| == 6");
+    else CHECK(0, "no-compat scale 2: read_ell succeeded");
 }
 
 static void
@@ -1326,7 +1370,7 @@ test_pa_S_flag_no_crash(struct ged *gedp)
     const char *av[] = { "edit", "-S", "translate", "-r", "1", "0", "0", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
     ged_exec(gedp, 7, av);
-    CHECK(1, "no-DbiState -S flag does not crash");
+    CHECK(1, "no-compat -S flag does not crash");
 }
 
 static void
@@ -1335,7 +1379,7 @@ test_pa_unknown_obj(struct ged *gedp)
     const char *av[] = { "edit", "nonexistent.s", "translate", "-r", "1", "0", "0", NULL };
     bu_vls_trunc(gedp->ged_result_str, 0);
     CHECK(ged_exec(gedp, 7, av) == BRLCAD_ERROR,
-          "no-DbiState unknown object returns error");
+          "no-compat unknown object returns error");
 }
 
 
@@ -3197,7 +3241,7 @@ main(int ac, char *av[])
     bu_vls_free(&p2_path);
 
     /* ---------------------------------------------------------------- *
-     * Section A — DbiState null-safety
+     * Section A - edit operations without compatibility draw state
      * ---------------------------------------------------------------- */
     struct bu_vls pa_path = BU_VLS_INIT_ZERO;
     if (make_temp_path(&pa_path) != BRLCAD_OK) {
@@ -3210,8 +3254,7 @@ main(int ac, char *av[])
     {
         struct ged *gedp = open_fixture_no_dbistate(bu_vls_cstr(&pa_path));
         if (!gedp) { bu_log("ERROR: ged_open failed (section A)\n"); bu_vls_free(&pa_path); return 1; }
-        CHECK(gedp->dbi_state == NULL, "fixture opened without DbiState (dbi_state == NULL)");
-        bu_log("\n--- Section A: DbiState null-safety ---\n");
+        bu_log("\n--- Section A: edit operations without compatibility draw state ---\n");
         test_pa_translate_abs(gedp);
         test_pa_translate_rel(gedp);
         test_pa_rotate(gedp);

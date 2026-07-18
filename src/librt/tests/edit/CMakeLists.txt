@@ -71,6 +71,7 @@ set(
   nmg.cpp
   comb.cpp
   edit_desc.cpp
+  edit_test_view.h
   edit_str_get_params.cpp
 )
 

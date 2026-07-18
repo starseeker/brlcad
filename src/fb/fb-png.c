@@ -40,13 +40,12 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "vmath.h"
-#include "dm.h"
-
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 
 /* in cmap-crunch.c */
-extern void cmap_crunch(RGBpixel (*scan_buf), int pixel_ct, ColorMap *colormap);
+extern void cmap_crunch(unsigned char (*scan_buf)[3], int pixel_ct,
+	struct imgstream_fb_colormap *colormap);
 
 
 static int crunch = 0;		/* Color map crunch? */
@@ -171,9 +170,9 @@ main(int argc, char **argv)
     static unsigned char *scanline;	/* scanline pixel buffers */
     static int scanbytes;		/* # of bytes of scanline */
     static int scanpix;			/* # of pixels of scanline */
-    static ColorMap cmap;		/* libfb color map */
+    static struct imgstream_fb_colormap cmap;
 
-    struct fb *fbp;
+    imgstream_fb_t *fbp;
     int y;
     int got;
     png_structp png_p;
@@ -202,22 +201,23 @@ Usage: fb-png [-i -c] [-# nbytes/pixel] [-F framebuffer] [-g gamma]\n\
 	bu_exit(EXIT_FAILURE, "Could not create PNG info structure\n");
     }
 
-    if ((fbp = fb_open(framebuffer, screen_width, screen_height)) == NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)screen_width,
+	    (size_t)screen_height)) == NULL) {
 	bu_exit(12, NULL);
     }
 
     /* If actual screen is smaller than requested size, trim down */
-    V_MIN(screen_height, fb_getheight(fbp));
-    V_MIN(screen_width, fb_getwidth(fbp));
+    V_MIN(screen_height, (int)imgstream_fb_height(fbp));
+    V_MIN(screen_width, (int)imgstream_fb_width(fbp));
 
     scanpix = screen_width;
-    scanbytes = scanpix * sizeof(RGBpixel);
+    scanbytes = scanpix * 3;
     scanline = (unsigned char *)bu_malloc(scanbytes, "scanline");
 
     if (crunch) {
-	if (fb_rmap(fbp, &cmap) == -1) {
+	if (imgstream_fb_rmap(fbp, &cmap) == -1) {
 	    crunch = 0;
-	} else if (fb_is_linear_cmap(&cmap)) {
+	} else if (imgstream_fb_colormap_is_linear(&cmap)) {
 	    crunch = 0;
 	}
     }
@@ -242,9 +242,11 @@ Usage: fb-png [-i -c] [-# nbytes/pixel] [-F framebuffer] [-g gamma]\n\
 	/* Read bottom to top */
 	for (y=0; y < screen_height; y++) {
 	    if (pixbytes == 3)
-		got = fb_read(fbp, 0, y, scanline, screen_width);
+		got = (int)imgstream_fb_read(fbp, 0, y, scanline,
+		    (size_t)screen_width);
 	    else
-		got = fb_bwreadrect(fbp, 0, y, screen_width, 1, scanline);
+		got = imgstream_fb_bwreadrect(fbp, 0, y, screen_width, 1,
+		    scanline);
 
 	    if (got != screen_width) {
 		bu_log("fb-png: Read of scanline %d returned %d, expected %d, aborting.\n",
@@ -252,16 +254,18 @@ Usage: fb-png [-i -c] [-# nbytes/pixel] [-F framebuffer] [-g gamma]\n\
 		break;
 	    }
 	    if (crunch)
-		cmap_crunch((RGBpixel *)scanline, scanpix, &cmap);
+		cmap_crunch((unsigned char (*)[3])scanline, scanpix, &cmap);
 	    png_write_row(png_p, scanline);
 	}
     } else {
 	/* Read top to bottom */
 	for (y = screen_height-1; y >= 0; y--) {
 	    if (pixbytes == 3)
-		got = fb_read(fbp, 0, y, scanline, screen_width);
+		got = (int)imgstream_fb_read(fbp, 0, y, scanline,
+		    (size_t)screen_width);
 	    else
-		got = fb_bwreadrect(fbp, 0, y, screen_width, 1, scanline);
+		got = imgstream_fb_bwreadrect(fbp, 0, y, screen_width, 1,
+		    scanline);
 
 	    if (got != screen_width) {
 		bu_log("fb-png: Read of scanline %d returned %d, expected %d, aborting.\n",
@@ -269,11 +273,11 @@ Usage: fb-png [-i -c] [-# nbytes/pixel] [-F framebuffer] [-g gamma]\n\
 		break;
 	    }
 	    if (crunch)
-		cmap_crunch((RGBpixel *)scanline, scanpix, &cmap);
+		cmap_crunch((unsigned char (*)[3])scanline, scanpix, &cmap);
 	    png_write_row(png_p, scanline);
 	}
     }
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     png_write_end(png_p, NULL);
     return 0;
 }

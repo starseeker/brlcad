@@ -8,6 +8,7 @@ set(
   grid.c
   heatgraph.c
   opt.c
+  progressive.c
   scanline.c
   usage.cpp
   worker.c
@@ -15,7 +16,7 @@ set(
 
 brlcad_addlib(librtuif "${LIBRTUIF_SOURCES}" "" "${CMAKE_CURRENT_SOURCE_DIR}"
   STATIC NO_INSTALL NO_STATIC_LINK_TEST
-  PRIVATE_LIBS librt ${M_LIBRARY}
+  PRIVATE_LIBS librt libimgstream ${M_LIBRARY}
 )
 
 list(APPEND LIBRTUIF_SOURCES main.c)
@@ -33,7 +34,7 @@ set(
   ${RT_STD_LIBS}
   librt
   libnmg
-  libdm
+  libimgstream
   liboptical
   libicv
   ${M_LIBRARY}
@@ -41,22 +42,83 @@ set(
 
 brlcad_adddata(rtexample.c sample_applications)
 
-brlcad_addexec(rtexample "rtexample.c" "librt;libdm;liboptical;libicv" NO_INSTALL)
+brlcad_addexec(rtexample "rtexample.c" "librt;liboptical;libicv" NO_INSTALL)
 
-brlcad_addexec(reshoot "reshoot.c" "Threads::Threads;librt;libdm;liboptical;libicv" FOLDER Rt)
+brlcad_addexec(reshoot "reshoot.c" "Threads::Threads;librt;liboptical;libicv" FOLDER Rt)
 target_include_directories(reshoot BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 brlcad_addexec(rtshot "rtshot.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtshot BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtshot dm_plugins)
 
-brlcad_addexec(rtscale "read-rtlog.c;rtscale.c" "Threads::Threads;librt;libdm;liboptical;libicv;${M_LIBRARY}" FOLDER Rt)
+brlcad_addexec(rtscale "read-rtlog.c;rtscale.c" "Threads::Threads;librt;liboptical;libicv;${M_LIBRARY}" FOLDER Rt)
 target_include_directories(rtscale BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtscale dm_plugins)
 
 brlcad_addexec(rt "${LIBRTUIF_SOURCES};view.c" "${OPENCL_LIBS};${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rt BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rt dm_plugins dm-txt)
+# /dev/null is the no-presentation raytrace benchmark sink.  It must remain
+# usable without any toolkit display or registered Obol provider.
+if(UNIX)
+  add_test(
+    NAME rt_null_sink
+    COMMAND ${SH_EXEC} ${CMAKE_CURRENT_SOURCE_DIR}/rt_null_sink_smoke.sh
+            $<TARGET_FILE:rt> ${CMAKE_BINARY_DIR}/share/db/moss.g
+  )
+  set_property(TEST rt_null_sink APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+endif(UNIX)
+set(RT_OBOL_DISPLAY_PROVIDER FALSE)
+set(RT_OBOL_SYSTEM_GL_PROVIDER FALSE)
+# Prefer Qt when it is enabled.  TclCAD supplies the same small provider API
+# when Qt is unavailable; neither branch changes rt's session code.
+if(TARGET libqtcad)
+  get_property(RT_QTCAD_OBOL_PROVIDER TARGET libqtcad
+    PROPERTY QTCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE)
+  if(RT_QTCAD_OBOL_PROVIDER)
+    target_link_libraries(rt libqtcad)
+    target_compile_definitions(rt PRIVATE HAVE_QTCAD_OBOL_DISPLAY_PROVIDER)
+    set(RT_OBOL_DISPLAY_PROVIDER TRUE)
+    get_property(RT_QTCAD_OBOL_SYSTEM_GL_PROVIDER TARGET libqtcad
+      PROPERTY QTCAD_OBOL_SYSTEM_GL_PROVIDER_AVAILABLE)
+    if(RT_QTCAD_OBOL_SYSTEM_GL_PROVIDER)
+      set(RT_OBOL_SYSTEM_GL_PROVIDER TRUE)
+    endif(RT_QTCAD_OBOL_SYSTEM_GL_PROVIDER)
+  endif(RT_QTCAD_OBOL_PROVIDER)
+endif(TARGET libqtcad)
+if(NOT RT_OBOL_DISPLAY_PROVIDER AND TARGET libtclcad)
+  get_property(RT_TCLCAD_OBOL_PROVIDER TARGET libtclcad
+    PROPERTY TCLCAD_OBOL_DISPLAY_PROVIDER_AVAILABLE)
+  if(RT_TCLCAD_OBOL_PROVIDER)
+    target_link_libraries(rt libtclcad)
+    target_compile_definitions(rt PRIVATE HAVE_TCLCAD_OBOL_DISPLAY_PROVIDER)
+    set(RT_OBOL_DISPLAY_PROVIDER TRUE)
+    set(RT_OBOL_SYSTEM_GL_PROVIDER TRUE)
+  endif(RT_TCLCAD_OBOL_PROVIDER)
+endif(NOT RT_OBOL_DISPLAY_PROVIDER AND TARGET libtclcad)
+if(RT_OBOL_DISPLAY_PROVIDER AND UNIX)
+  find_program(XVFB_RUN_EXECUTABLE xvfb-run)
+  if(XVFB_RUN_EXECUTABLE)
+    set(RT_XVFB_TEST_WRAPPER
+      ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh)
+    set(RT_DISPLAY_TARGETS /dev/swrast)
+    if(RT_OBOL_SYSTEM_GL_PROVIDER)
+      list(APPEND RT_DISPLAY_TARGETS /dev/ogl)
+    endif(RT_OBOL_SYSTEM_GL_PROVIDER)
+    foreach(RT_DISPLAY_TARGET ${RT_DISPLAY_TARGETS})
+      string(REPLACE "/dev/" "" RT_DISPLAY_NAME ${RT_DISPLAY_TARGET})
+      add_test(
+        NAME rt_display_${RT_DISPLAY_NAME}
+        COMMAND ${SH_EXEC} ${RT_XVFB_TEST_WRAPPER} ${XVFB_RUN_EXECUTABLE}
+                ${SH_EXEC} ${CMAKE_CURRENT_SOURCE_DIR}/rt_display_smoke.sh
+                $<TARGET_FILE:rt> ${CMAKE_BINARY_DIR}/share/db/moss.g
+                ${RT_DISPLAY_TARGET}
+      )
+      set_property(TEST rt_display_${RT_DISPLAY_NAME}
+        APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+      set_property(TEST rt_display_${RT_DISPLAY_NAME}
+        PROPERTY SKIP_RETURN_CODE 125)
+    endforeach(RT_DISPLAY_TARGET)
+  endif(XVFB_RUN_EXECUTABLE)
+endif(RT_OBOL_DISPLAY_PROVIDER AND UNIX)
 
 brlcad_addexec(rtarea "${LIBRTUIF_SOURCES};viewarea.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtarea BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -68,7 +130,6 @@ set_property(TARGET rtcheck APPEND PROPERTY COMPILE_DEFINITIONS "RT_TXT_OUTPUT")
 
 brlcad_addexec(rtedge "${LIBRTUIF_SOURCES};viewedge.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtedge BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtedge dm_plugins)
 
 brlcad_addexec(rtg3 "${LIBRTUIF_SOURCES};viewg3.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtg3 BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -80,9 +141,8 @@ set_property(TARGET rthide APPEND PROPERTY COMPILE_DEFINITIONS "RT_TXT_OUTPUT")
 
 brlcad_addexec(rtsil "${LIBRTUIF_SOURCES};viewsil.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtsil BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtxray dm_plugins)
 
-brlcad_addexec(rtsurf "rtsurf.c;rtsurf_hits.cpp" "libanalyze;librt;libdm;liboptical;libicv")
+brlcad_addexec(rtsurf "rtsurf.c;rtsurf_hits.cpp" "libanalyze;librt;liboptical;libicv")
 target_include_directories(rtsurf BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 brlcad_addexec(rtweight "${LIBRTUIF_SOURCES};viewweight.c" "libanalyze;${RT_STD_LIBS}" FOLDER Rt)
@@ -91,18 +151,17 @@ set_property(TARGET rtweight APPEND PROPERTY COMPILE_DEFINITIONS "RT_TXT_OUTPUT"
 
 brlcad_addexec(rtxray "${LIBRTUIF_SOURCES};viewxray.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtxray BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtxray dm_plugins)
 
 brlcad_addexec(rtdepth "${LIBRTUIF_SOURCES};viewdepth.c" "${RT_STD_LIBS}" FOLDER Rt)
 target_include_directories(rtdepth BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_target_deps(rtdepth dm_plugins)
 
 set(
   rt_ignore_files
   CMakeLists.txt
   ext.h
-  libfb-dummy.c
   main.c
+  rt_display_smoke.sh
+  rt_null_sink_smoke.sh
   rtuif.h
   rtsurf_hits.h
   scanline.h
@@ -126,6 +185,7 @@ set(
   grid.c
   heatgraph.c
   opt.c
+  progressive.c
   scanline.c
   usage.cpp
   worker.c

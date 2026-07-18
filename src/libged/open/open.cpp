@@ -29,12 +29,11 @@
 
 #include "bu/cmd.h"
 #include "bu/opt.h"
-#include "bv/lod.h"
+#include "bv.h"
 #include "../../librt/librt_private.h"
 
+#include "ged/event_txn.h"
 #include "../ged_private.h"
-
-#include "../dbi.h"
 
 extern "C" int
 ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
@@ -135,20 +134,14 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
 
     /* Set up the new database info in gedp */
     gedp->dbip = new_dbip;
-
-    // LoD context creation (DbiState initialization can use info
-    // stored here, so do this first)
-    if (gedp->new_cmd_forms)
-	gedp->ged_lod = bv_mesh_lod_context_create(argv[0]);
-
-    // If enabled, set up the DbiState container for fast structure access
-    if (gedp->new_cmd_forms)
-	gedp->dbi_state = new DbiState(gedp);
+    ged_event_librt_callbacks_enable(gedp);
 
     // Set the view units, if we have a view
-    if (gedp->ged_gvp) {
-	gedp->ged_gvp->gv_base2local = gedp->dbip->dbi_base2local;
-	gedp->ged_gvp->gv_local2base = gedp->dbip->dbi_local2base;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (view_ctx) {
+	bv_unit_conversion_set(bv_context_view((struct bv_context *)view_ctx),
+	    gedp->dbip->dbi_local2base,
+	    gedp->dbip->dbi_base2local);
     }
 
     return BRLCAD_OK;

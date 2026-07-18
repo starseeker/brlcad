@@ -352,7 +352,6 @@ namespace eval ArcherCore {
 	variable mTarget ""
 	variable mTargetCopy ""
 	variable mTargetOldCopy ""
-	variable mDisplayType
 	variable mLighting 1
 	variable mRenderMode -1
 	variable mActivePane
@@ -488,19 +487,8 @@ namespace eval ArcherCore {
 	variable mMaxCombMembersShownPref ""
 	variable mCombWarningList ""
 
-	variable mZClipBack 100.0
-	variable mZClipBackPref 100.0
-	variable mZClipFront 100.0
-	variable mZClipFrontPref 100.0
-	variable mZClipBackMax 1000
-	variable mZClipBackMaxPref 1000
-	variable mZClipFrontMax 1000
-	variable mZClipFrontMaxPref 1000
-
 	variable mLightingMode 1
 	variable mLightingModePref ""
-	variable mDisplayListMode 1
-	variable mDisplayListModePref ""
 	variable mWireframeMode 0
 	variable mWireframeModePref ""
 	variable mHideSubtractions 0
@@ -666,14 +654,7 @@ namespace eval ArcherCore {
 	method updateDisplaySettings {}
 	method updateLightingMode {}
 	method updatePerspective {_unused}
-	method updateZClipPlanes {_front _front_max _back _back_max}
-	method updateZClipPlanesFromSettings {}
-	method updateZClipPlanesFromPreferences {{_unused 0.0}}
-	method calculateZClipMax {}
-	method calculateZClipBackMax {}
-	method calculateZClipFrontMax {}
 	method pushPerspectiveSettings {}
-	method validateZClipMax {_d}
 
 	method shootRay_doit {_start _op _target _prep _no_bool _onehit _bot_dflag _objects}
 
@@ -1097,9 +1078,6 @@ namespace eval ArcherCore {
     if {[llength $args] == 1} {
 	set args [lindex $args 0]
     }
-
-    set dm_list [split [dm_list] ',']
-    set mDisplayType [lindex $dm_list 0]
 
     # horizontal panes
     itk_component add hpane {
@@ -2020,7 +1998,6 @@ namespace eval ArcherCore {
 	}
 
 	cadwidgets::Ged $itk_component(canvasF).mged $_target \
-	    -type $mDisplayType \
 	    -showhandle 0 \
 	    -sashcursor sb_v_double_arrow \
 	    -hsashcursor sb_h_double_arrow \
@@ -2044,14 +2021,13 @@ namespace eval ArcherCore {
 	$itk_component(ged) set_outputHandler "$itk_component(cmd) putstring"
     }
     $itk_component(ged) transparency_all 1
-    $itk_component(ged) bounds_all "-4096 4095 -4096 4095 -4096 4095"
     $itk_component(ged) more_args_callback [::itcl::code $this handleMoreArgs]
     $itk_component(ged) history_callback [::itcl::code $this addHistory]
 
 
     # RT Control Panel
     itk_component add rtcntrl {
-	RtControl $itk_interior.rtcp -mged $itk_component(ged)
+	RtControl $itk_interior.rtcp -ged $itk_component(ged)
     } {
 	usual
     }
@@ -2815,11 +2791,11 @@ namespace eval ArcherCore {
 	if {$mEnableListView} {
 	    set ditem [regsub {^/} $ditem {}]
 	    set dlist [split $ditem /]
-	    set dlen [llength $dlist]
+	    set dlen [llength $cache]
 	    if {$dlen == 1} {
 		eval lappend mNodeDrawList [lindex [lindex $mText2Node($ditem) 0] 0]
 	    } else {
-		eval lappend mNodePDrawList [lindex [lindex $mText2Node([lindex $dlist 0]) 0] 0]
+		eval lappend mNodePDrawList [lindex [lindex $mText2Node([lindex $cache 0]) 0] 0]
 	    }
 	} else {
 	    set nodesList [getTreeNodes $ditem $_cflag]
@@ -4124,7 +4100,7 @@ namespace eval ArcherCore {
 ::itcl::body ArcherCore::doMultiPane {} {
     gedCmd configure -multi_pane $mMultiPane
 
-    if {$mMultiPane && $mDisplayListMode} {
+    if {$mMultiPane} {
 	::update
 	redrawWho
     }
@@ -4530,7 +4506,7 @@ namespace eval ArcherCore {
     $color add command -label "Select..." \
 	-command [::itcl::code $this selectDisplayColor $_node]
 
-    if {($mDisplayType == "wgl" || $mDisplayType == "ogl") && ($_nodeType != "leaf" || 0 < $mRenderMode)} {
+    if {$_nodeType != "leaf" || 0 < $mRenderMode} {
 	# Build transparency menu
 	$_menu add cascade -label "Transparency" \
 	    -menu $_menu.trans
@@ -5937,19 +5913,14 @@ namespace eval ArcherCore {
 	set size [winfo width $itk_component(ged)]
     }
 
-    set dm_list [split [dm_list] ',']
-    set devtype "/dev/"
-    append devtype [lindex $dm_list 0]
-    $itk_component(ged) $app -s $size -F $devtype
+    $itk_component(ged) $app -s $size -F /dev/tkobol
 }
 
 ::itcl::body ArcherCore::updateDisplaySettings {} {
     $itk_component(ged) refresh_off
 
-    updateZClipPlanesFromSettings
     updatePerspective 0
     doLighting
-    gedCmd dlist_on $mDisplayListMode
     gedCmd configure -hideSubtractions $mHideSubtractions
 
     if {$mWireframeMode} {
@@ -5972,64 +5943,6 @@ namespace eval ArcherCore {
 
 ::itcl::body ArcherCore::updatePerspective {_unused} {
     $itk_component(ged) perspective_all $mPerspectivePref
-}
-
-::itcl::body ArcherCore::updateZClipPlanes {_front _front_max _back _back_max} {
-    set near [expr {0.01 * $_front * $_front_max}]
-    set far [expr {0.01 * $_back * $_back_max}]
-    $itk_component(ged) bounds_all "-1.0 1.0 -1.0 1.0 -$near $far"
-    $itk_component(ged) refresh_all
-}
-
-::itcl::body ArcherCore::updateZClipPlanesFromSettings {} {
-    updateZClipPlanes $mZClipFront $mZClipFrontMax $mZClipBack $mZClipBackMax
-}
-
-# Note: This method is used by scale widgets in the Archer Preferences
-# dialog, which is why it has an unused parameter.
-::itcl::body ArcherCore::updateZClipPlanesFromPreferences {{_unused 0.0}} {
-    updateZClipPlanes $mZClipFrontPref $mZClipFrontMaxPref $mZClipBackPref \
-	$mZClipBackMaxPref
-}
-
-::itcl::body ArcherCore::calculateZClipMax {} {
-    set size [$itk_component(ged) size]
-    set autoview_l [$itk_component(ged) get_autoview]
-    set asize [lindex $autoview_l end]
-
-    set max [expr {($asize / $size) * 0.5}]
-    set maxSq [expr {$max * $max}]
-
-    # return the length of the diagonal
-    return [expr {sqrt($maxSq + $maxSq)}]
-}
-
-::itcl::body ArcherCore::calculateZClipBackMax {} {
-    set mZClipBackMaxPref [calculateZClipMax]
-    updateZClipPlanesFromPreferences
-}
-
-::itcl::body ArcherCore::calculateZClipFrontMax {} {
-    set mZClipFrontMaxPref [calculateZClipMax]
-    updateZClipPlanesFromPreferences
-}
-
-::itcl::body ArcherCore::validateZClipMax {_d} {
-    if {[::cadwidgets::Ged::validateDouble $_d]} {
-
-	if {$_d == "" || $_d == "."} {
-	    return 1
-	}
-
-	if {$_d < 0} {
-	    return 0
-	}
-
-	after idle [::itcl::code $this updateZClipPlanesFromPreferences]
-	return 1
-    }
-
-    return 0
 }
 
 ::itcl::body ArcherCore::pushPerspectiveSettings {} {

@@ -37,4 +37,5 @@ CMakeLists.txt.user
 # Misc
 .clang-format
 
-
+# Convenience Obol link
+/obol

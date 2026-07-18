@@ -45,7 +45,7 @@
 #include "bu/log.h"
 #include "bu/malloc.h"
 #include "bn.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define BYTESPERPIXEL 3
@@ -262,7 +262,7 @@ main(int argc, char *argv[])
 
     /* autosize input? */
     if (fileinput && autosize) {
-	if (fb_common_file_size(&w, &h, file_name, 3)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 3)) {
 	    file_width = w;
 	    file_height = h;
 	} else {
@@ -290,7 +290,7 @@ main(int argc, char *argv[])
     if (SIZE * sizeof(unsigned char) < (size_t)sb.st_size) {
 	bu_log("WARNING: Output PNG image dimensions are smaller than the PIX input image\n");
 	bu_log("Input image is %lu pixels, output image is %zu pixels\n", (unsigned long)sb.st_size / 3, SIZE * sizeof(unsigned char) / 3);
-	if (fb_common_file_size(&w, &h, file_name, 3)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 3)) {
 	    bu_log("Input PIX dimensions appear to be %zux%zu pixels.  ", w, h);
 	    if (w == h) {
 		bu_log("Try using the -s%zu option.\n", w);

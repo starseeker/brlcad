@@ -35,7 +35,6 @@
 #include "bu/app.h"
 #include "bu/getopt.h"
 #include "bu/exit.h"
-#include "dm.h"
 
 
 char options[] = "d:h?";

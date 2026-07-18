@@ -32,18 +32,19 @@
 #include "bu/str.h"
 #include "bu/getopt.h"
 #include "rt/geom.h"
+#include "ged/event_txn.h"
 
 #include "../ged_private.h"
 
 static int
 move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new_name)
 {
-    struct display_list *gdlp;
     struct directory *dp;
     struct rt_db_internal intern;
     struct rt_comb_internal *comb;
     struct bu_ptbl stack;
     size_t moved = 0;
+    int batch_open = 0;
 
     /* check the old_name source and new_name target */
 
@@ -61,6 +62,11 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
     if (dp && db_lookup(gedp->dbip, new_name, LOOKUP_QUIET) != RT_DIR_NULL) {
 	bu_vls_printf(gedp->ged_result_str, "%s: already exists", new_name);
 	return BRLCAD_ERROR;
+    }
+
+    if (!nflag) {
+	ged_event_batch_begin(gedp);
+	batch_open = 1;
     }
 
     /* if this was a sketch, we need to look for all the extrude
@@ -119,17 +125,23 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
 	/* Change object name in the directory. */
 	if (db_rename(gedp->dbip, dp, new_name) < 0) {
 	    bu_vls_printf(gedp->ged_result_str, "error in rename to %s, aborting", new_name);
+	    if (batch_open)
+		ged_event_batch_end(gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
 
 	/* Change object name on disk */
 	if (rt_db_get_internal(&intern, dp, gedp->dbip, (fastf_t *)NULL) < 0) {
 	    bu_vls_printf(gedp->ged_result_str, "Database read error, aborting");
+	    if (batch_open)
+		ged_event_batch_end(gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
 
 	if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
 	    bu_vls_printf(gedp->ged_result_str, "Database write error, aborting");
+	    if (batch_open)
+		ged_event_batch_end(gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
 	moved++;
@@ -181,6 +193,8 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
 		if (comb_mvall_status == 2) {
 		    bu_ptbl_free(&stack);
 		    bu_vls_printf(gedp->ged_result_str, "Database write error, aborting");
+		    if (batch_open)
+			ged_event_batch_end(gedp, NULL);
 		    return BRLCAD_ERROR;
 		}
 	    }
@@ -190,42 +204,8 @@ move_all_func(struct ged *gedp, int nflag, const char *old_name, const char *new
     bu_ptbl_free(&stack);
 
     if (!nflag) {
-	/* Change object name anywhere in the display list path. */
-	for (BU_LIST_FOR(gdlp, display_list, gedp->i->ged_gdp->gd_headDisplay)) {
-	    int first = 1;
-	    int found = 0;
-	    struct bu_vls new_path = BU_VLS_INIT_ZERO;
-	    char *dupstr = bu_strdup(bu_vls_addr(&gdlp->dl_path));
-	    char *tok = strtok(dupstr, "/");
-
-	    while (tok) {
-		if (BU_STR_EQUAL(tok, old_name)) {
-		    found = 1;
-
-		    if (first) {
-			first = 0;
-			bu_vls_printf(&new_path, "%s", new_name);
-		    } else
-			bu_vls_printf(&new_path, "/%s", new_name);
-		} else {
-		    if (first) {
-			first = 0;
-			bu_vls_printf(&new_path, "%s", tok);
-		    } else
-			bu_vls_printf(&new_path, "/%s", tok);
-		}
-
-		tok = strtok((char *)NULL, "/");
-	    }
-
-	    if (found) {
-		bu_vls_free(&gdlp->dl_path);
-		bu_vls_printf(&gdlp->dl_path, "%s", bu_vls_addr(&new_path));
-	    }
-
-	    free((void *)dupstr);
-	    bu_vls_free(&new_path);
-	}
+	ged_event_notify_object_renamed(gedp, old_name, new_name, NULL);
+	ged_event_batch_end(gedp, NULL);
     }
 
     if (!moved) {
@@ -242,12 +222,17 @@ move_all_file(struct ged *gedp, int nflag, const char *file)
 {
     FILE *fp = NULL;
     char line[512];
+    int event_depth = 0;
+    int status = BRLCAD_OK;
 
     fp = fopen(file, "r");
     if (fp == NULL) {
 	bu_vls_printf(gedp->ged_result_str, "cannot open %s\n", file);
 	return BRLCAD_ERROR;
     }
+
+    if (!nflag)
+	event_depth = ged_event_batch_begin(gedp);
 
     while (bu_fgets(line, sizeof(line), fp) != NULL) {
 	char *cp = NULL;
@@ -260,12 +245,17 @@ move_all_file(struct ged *gedp, int nflag, const char *file)
 	if (bu_argv_from_string(new_av, 2, line) != 2)
 	    continue;
 
-	move_all_func(gedp, nflag, (const char *)new_av[0], (const char *)new_av[1]);
+	if (move_all_func(gedp, nflag, (const char *)new_av[0],
+		(const char *)new_av[1]) != BRLCAD_OK)
+	    status = BRLCAD_ERROR;
     }
 
     fclose(fp);
 
-    return BRLCAD_OK;
+    if (event_depth > 0)
+	ged_event_batch_end(gedp, NULL);
+
+    return status;
 }
 
 

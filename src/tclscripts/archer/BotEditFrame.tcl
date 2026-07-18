@@ -355,8 +355,7 @@
     $itk_option(-mged) clear_bot_callbacks
 
     if {$mFrontPointsOnly} {
-	set zlist [ $::ArcherCore::application getZClipState]
-	set viewz [lindex $zlist 0]
+	set viewz 1.0
     } else {
 	set viewz -1.0
     }
@@ -376,8 +375,7 @@
 
 ::itcl::body BotEditFrame::moveBotFaceMode {_dname _obj _x _y} {
     $itk_option(-mged) clear_bot_callbacks
-    set zlist [ $::ArcherCore::application getZClipState]
-    set viewz [lindex $zlist 0]
+    set viewz 1.0
 
     set face [$itk_option(-mged) pane_mouse_find_bot_face $_dname $_obj $viewz $_x $_y]
     if {$face == ""} {
@@ -441,8 +439,7 @@
     set plist [$itk_component(vertTab) getSelectedRows]
     if {[llength $plist] < 2} {
 	if {$mFrontPointsOnly} {
-	    set zlist [ $::ArcherCore::application getZClipState]
-	    set viewz [lindex $zlist 0]
+	    set viewz 1.0
 	} else {
 	    set viewz -1.0
 	}
@@ -677,8 +674,7 @@
 	    set mEditCommand ""
 	    set mEditClass ""
 	    if {$mFrontPointsOnly} {
-		set zlist [ $::ArcherCore::application getZClipState]
-		set viewz [lindex $zlist 0]
+		set viewz 1.0
 	    } else {
 		set viewz -1.0
 	    }
@@ -688,8 +684,7 @@
 	    set mEditCommand ""
 	    set mEditClass ""
 	    if {$mFrontPointsOnly} {
-		set zlist [ $::ArcherCore::application getZClipState]
-		set viewz [lindex $zlist 0]
+		set viewz 1.0
 	    } else {
 		set viewz -1.0
 	    }
@@ -704,8 +699,7 @@
 	    set mEditCommand ""
 	    set mEditClass ""
 	    if {$mFrontPointsOnly} {
-		set zlist [ $::ArcherCore::application getZClipState]
-		set viewz [lindex $zlist 0]
+		set viewz 1.0
 	    } else {
 		set viewz -1.0
 	    }

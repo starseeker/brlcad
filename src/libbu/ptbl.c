@@ -55,7 +55,8 @@ bu_ptbl_reset(struct bu_ptbl *b)
     if (UNLIKELY(bu_debug & BU_DEBUG_PTBL))
 	bu_log("bu_ptbl_reset(%p)\n", (void *)b);
     b->end = 0;
-    memset((char *)b->buffer, 0, b->blen*sizeof(long *));	/* no peeking */
+    if (b->buffer && b->blen)
+	memset((char *)b->buffer, 0, b->blen*sizeof(long *)); /* no peeking */
 }
 
 

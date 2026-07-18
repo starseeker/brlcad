@@ -34,11 +34,11 @@
 #include "bu/color.h"
 #include "bu/getopt.h"
 #include "bu/exit.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 static unsigned char *white_line, *grey_line, *dark_line;
-static struct fb *fbp;
+static imgstream_fb_t *fbp;
 static char *framebuffer = NULL;
 
 #define OLD 0
@@ -50,7 +50,7 @@ static int fbheight = 0;
 static int flavor = DECIMAL;
 static int clear = 0;
 
-void grid(struct fb *fbiop, unsigned char *line, int spacing), oldflavor(void);
+void grid(imgstream_fb_t *fbiop, unsigned char *line, int spacing), oldflavor(void);
 
 static char usage[] = "\
 Usage: fbgrid [-c] [-b | -d | -o] [-F framebuffer]\n\
@@ -147,16 +147,17 @@ main(int argc, char **argv)
     if (flavor == OLD)
 	oldflavor();	/* exits */
 
-    if ((fbp = fb_open(framebuffer, fbwidth, fbheight)) == NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)fbwidth,
+				 (size_t)fbheight)) == NULL)
 	bu_exit(2, NULL);
 
-    fbwidth = fb_getwidth(fbp);
-    fbheight = fb_getheight(fbp);
+    fbwidth = (int)imgstream_fb_width(fbp);
+    fbheight = (int)imgstream_fb_height(fbp);
 
     /* Initialize the color lines */
-    white_line = (unsigned char *)malloc(fbwidth * sizeof(RGBpixel));
-    grey_line  = (unsigned char *)malloc(fbwidth * sizeof(RGBpixel));
-    dark_line  = (unsigned char *)malloc(fbwidth * sizeof(RGBpixel));
+    white_line = (unsigned char *)malloc((size_t)fbwidth * 3);
+    grey_line  = (unsigned char *)malloc((size_t)fbwidth * 3);
+    dark_line  = (unsigned char *)malloc((size_t)fbwidth * 3);
     for (i = 0; i < fbwidth; i++) {
 	white_line[3*i+RED] = white_line[3*i+GRN] = white_line[3*i+BLU] = 255;
 	grey_line[3*i+RED] = grey_line[3*i+GRN] = grey_line[3*i+BLU] = 128;
@@ -164,7 +165,7 @@ main(int argc, char **argv)
     }
 
     if (clear)
-	fb_clear(fbp, PIXEL_NULL);
+	imgstream_fb_clear(fbp, NULL);
 
     if (flavor == BINARY) {
 	/* Dark lines every 8 */
@@ -183,20 +184,20 @@ main(int argc, char **argv)
 	grid(fbp, white_line, 100);
     }
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 
 
 void
-grid(struct fb *fbiop, unsigned char *line, int spacing)
+grid(imgstream_fb_t *fbiop, unsigned char *line, int spacing)
 {
     int x, y;
 
     for (y = 0; y < fbheight; y += spacing)
-	fb_write(fbiop, 0, y, line, fbwidth);
+	imgstream_fb_write(fbiop, 0, y, line, (size_t)fbwidth);
     for (x = 0; x < fbwidth; x += spacing) {
-	fb_writerect(fbiop, x, 0, 1, fbheight, line);
+	imgstream_fb_writerect(fbiop, x, 0, 1, fbheight, line);
     }
 }
 
@@ -204,24 +205,27 @@ grid(struct fb *fbiop, unsigned char *line, int spacing)
 void
 oldflavor(void)
 {
-    struct fb *fbiop;
+    imgstream_fb_t *fbiop;
     int x, y;
     int middle;
     int mask;
     int fb_sz;
-    static RGBpixel black, white, red;
+    unsigned char *line;
+    static unsigned char black[3] = {0, 0, 0};
+    static unsigned char white[3] = {255, 255, 255};
+    static unsigned char red[3] = {255, 0, 0};
 
-    fbiop = fb_open(framebuffer, fbwidth, fbheight);
+    fbiop = imgstream_fb_open(framebuffer, (size_t)fbwidth,
+			     (size_t)fbheight);
     if (fbiop == NULL) {
 	bu_exit(1, NULL);
     }
 
-    fb_sz = fb_getwidth(fbiop);
-    white[RED] = white[GRN] = white[BLU] = 255;
-    black[RED] = black[GRN] = black[BLU] = 0;
-    red[RED] = 255;
+    fb_sz = (int)imgstream_fb_width(fbiop);
     middle = fb_sz/2;
-    fb_ioinit(fbiop);
+    line = (unsigned char *)malloc((size_t)fb_sz * 3);
+    if (line == NULL)
+	bu_exit(1, "fbgrid: unable to allocate scanline\n");
     if (fb_sz <= 512)
 	mask = 0x7;
     else
@@ -229,20 +233,27 @@ oldflavor(void)
 
     for (y = fb_sz-1; y >= 0; y--) {
 	for (x = 0; x < fb_sz; x++) {
+	    const unsigned char *pixel;
 	    if (x == y || x == fb_sz - y) {
-		fb_wpixel(fbiop, white);
+		pixel = white;
 	    } else
 		if (x == middle || y == middle) {
-		    fb_wpixel(fbiop, red);
+		    pixel = red;
 		} else
 		    if ((x & mask) && (y & mask)) {
-			fb_wpixel(fbiop, black);
+			pixel = black;
 		    } else {
-			fb_wpixel(fbiop, white);
+			pixel = white;
 		    }
+	    line[3*x+RED] = pixel[RED];
+	    line[3*x+GRN] = pixel[GRN];
+	    line[3*x+BLU] = pixel[BLU];
 	}
+	if (imgstream_fb_write(fbiop, 0, y, line, (size_t)fb_sz) != fb_sz)
+	    bu_exit(1, "fbgrid: framebuffer write failed\n");
     }
-    fb_close(fbiop);
+    free(line);
+    imgstream_fb_close(fbiop);
     bu_exit(0, NULL);
 }
 

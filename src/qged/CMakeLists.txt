@@ -5,6 +5,7 @@ endif(BRLCAD_ENABLE_QT)
 # TODO - need this now for code in lower level directories,
 # need to do some cleanup.
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${BRLCAD_SOURCE_DIR}/src/libqtcad)
 
 # NOTE: We can't use the CMake global values for automoc et. al.
 # because most of BRL-CAD's targets are not Qt targets.  We don't
@@ -32,19 +33,12 @@ foreach(qh ${qth_names})
 endforeach(qh ${qth_names})
 
 if(BRLCAD_ENABLE_QT)
-  # Let the plugin lookup know what the platform's extension is so it knows
-  # what plugin filenames to look for
-  set_property(
-    SOURCE QgEdPalette.cpp
-    APPEND
-    PROPERTY COMPILE_DEFINITIONS "QGED_PLUGIN_SUFFIX=\"${CMAKE_SHARED_LIBRARY_SUFFIX}\""
-  )
-
   if(Qt6Widgets_FOUND)
     qt6_wrap_cpp(moc_srcs ${moc_headers})
   else()
     qt5_wrap_cpp(moc_srcs ${moc_headers})
   endif(Qt6Widgets_FOUND)
+  set(fbserv_moc_src "${CMAKE_CURRENT_BINARY_DIR}/moc_fbserv.cpp")
 
   # https://github.com/Alexhuszagh/BreezeStyleSheets
   if(Qt6Widgets_FOUND)
@@ -60,16 +54,22 @@ if(BRLCAD_ENABLE_QT)
       qged
       libqtcad
       libged
+      libimgstream
+      libpkg
       librt
       libbu
       Qt6::Widgets
       Qt6::Network
+      Qt6::OpenGL
+      Qt6::OpenGLWidgets
     )
   else()
     target_link_libraries(
       qged
       libqtcad
       libged
+      libimgstream
+      libpkg
       librt
       libbu
       Qt5::Widgets
@@ -79,8 +79,48 @@ if(BRLCAD_ENABLE_QT)
   target_compile_definitions(qged PRIVATE BRLCADBUILD HAVE_CONFIG_H)
   install(TARGETS qged RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
 
-  # Make sure all dm and ged plugins are accounted for when we build qged
-  add_dependencies(qged dm_plugins ged_plugins)
+  # qged's view and embedded framebuffer paths are Obol/libBObol based.
+  # GED plugins are still loaded at runtime; legacy display-manager plugins are
+  # not a qged build prerequisite.  qged's own Qt plugins are added below and
+  # wired in after src/qged/plugins defines the aggregate target.
+  add_dependencies(qged ged_plugins)
+
+  add_executable(test_qged_obol_fbserv test_qged_obol_fbserv.cpp fbserv.cpp ${fbserv_moc_src})
+  if(Qt6Widgets_FOUND)
+    target_link_libraries(
+      test_qged_obol_fbserv
+      libqtcad
+      libged
+      libimgstream
+      libpkg
+      librt
+      libbu
+      Qt6::Widgets
+      Qt6::Network
+      Qt6::OpenGL
+      Qt6::OpenGLWidgets
+    )
+  else()
+    target_link_libraries(
+      test_qged_obol_fbserv
+      libqtcad
+      libged
+      libimgstream
+      libpkg
+      librt
+      libbu
+      Qt5::Widgets
+      Qt5::Network
+    )
+  endif(Qt6Widgets_FOUND)
+  target_compile_definitions(test_qged_obol_fbserv PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(NAME test_qged_obol_fbserv COMMAND test_qged_obol_fbserv)
+  set_property(TEST test_qged_obol_fbserv
+    APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+  set_property(TEST test_qged_obol_fbserv
+    APPEND PROPERTY ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qged_obol_fbserv
+    APPEND PROPERTY LABELS drawing_baseline)
 
   foreach(qh ${qth_names})
     distclean(moc_${qh}.cpp_parameters)
@@ -91,6 +131,10 @@ endif(BRLCAD_ENABLE_QT)
 # Core application is defined, now handle plugins
 add_subdirectory(plugins)
 
+if(BRLCAD_ENABLE_QT AND TARGET qged AND TARGET qged_plugins)
+  add_dependencies(qged qged_plugins)
+endif()
+
 # Theme subdirectory handles file bookkeeping for CMake
 add_subdirectory(theme)
 
@@ -100,10 +144,12 @@ set(
   ${moc_headers}
   BUILDING_QT
   CMakeLists.txt
+  QgEdCategories.h
   TODO
   fonts/Inconsolata-LICENSE.txt
   fonts/Inconsolata.otf
   main.cpp
+  test_qged_obol_fbserv.cpp
   qged_signals.eps
   qged_signals.dia
   view_update_cycle.odg

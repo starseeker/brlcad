@@ -121,8 +121,8 @@ if {![info exists mged_default(gdisplay)]} {
     set mged_default(gdisplay) $mged_default(display)
 }
 
-if {![info exists mged_default(dm_type)]} {
-    set mged_default(dm_type) [dm_bestXType $mged_default(gdisplay)]
+if {![info exists mged_default(host_type)]} {
+    set mged_default(host_type) tkobol
 }
 
 if {![info exists mged_default(comb)]} {
@@ -298,7 +298,7 @@ proc gui { args } {
     set save_id [cmd_win get]
     set comb $mged_default(comb)
     set join_c 0
-    set dtype $mged_default(dm_type)
+    set host_type $mged_default(host_type)
     set id ""
     set scw 0
     set sgw 0
@@ -322,7 +322,7 @@ proc gui { args } {
     # PHASE 0: Process options
     #==============================================================================
     set argc [llength $args]
-    set dtype_set 0
+    set host_type_set 0
     set screen_set 0
     set gscreen_set 0
 
@@ -344,7 +344,7 @@ proc gui { args } {
 		set scw 1
 		set sgw 0
 	    } elseif {$arg == "g"} {
-		# show display manager window
+		# show graphics pane
 		set scw 0
 		set sgw 1
 	    } else {
@@ -363,8 +363,8 @@ proc gui { args } {
 	    if {!$gscreen_set} {
 		set gscreen $screen
 
-		if {!$dtype_set} {
-		    set dtype [dm_bestXType $gscreen]
+		if {!$host_type_set} {
+		    set host_type tkobol
 		}
 	    }
 	} elseif {$arg == "-gd" || $arg == "-gdisplay"} {
@@ -381,18 +381,18 @@ proc gui { args } {
 		set screen $gscreen
 	    }
 
-	    if {!$dtype_set} {
-		set dtype [dm_bestXType $gscreen]
+	    if {!$host_type_set} {
+		set host_type tkobol
 	    }
-	} elseif {$arg == "-dt"} {
+	} elseif {$arg == "-host"} {
 	    incr i
 
 	    if {$i >= $argc} {
 		return [help gui]
 	    }
 
-	    set dtype [lindex $args $i]
-	    set dtype_set 1
+	    set host_type [lindex $args $i]
+	    set host_type_set 1
 	} elseif {$arg == "-id"} {
 	    incr i
 
@@ -437,19 +437,19 @@ proc gui { args } {
 
     set mged_gui($id,comb) $comb
     set mged_gui($id,show_cmd) $scw
-    set mged_gui($id,show_dm) $sgw
+    set mged_gui($id,show_graphics) $sgw
     set mged_gui($id,show_status) $mged_default(status_bar)
     set mged_gui($id,apply_to) 0
     set mged_gui($id,edit_info_pos) "+0+0"
     set mged_gui($id,num_lines) $mged_default(num_lines)
     set mged_gui($id,multi_pane) $mged_default(multi_pane)
-    set mged_gui($id,dm_loc) $mged_default(pane)
-    set mged_gui($id,dtype) $dtype
+    set mged_gui($id,pane_loc) $mged_default(pane)
+    set mged_gui($id,host_type) $host_type
     set mged_gui($id,lastButtonPress) 0
     set mged_gui($id,lastItem) ""
 
-    if {![dm_validXType $gscreen $dtype]} {
-	set dtype [dm_bestXType $gscreen]
+    if {$host_type ne "tkobol"} {
+	return "gui: unsupported Obol host type \"$host_type\" (expected tkobol)"
     }
 
     if { [info exists tk_strictMotif] == 0 } {
@@ -469,7 +469,7 @@ proc gui { args } {
     set mged_gui($id,screen) $screen
 
     #==============================================================================
-    # Create display manager window and menu
+    # Create graphics pane and menu
     #==============================================================================
     if {$comb} {
 	set mged_gui($id,top) .$id
@@ -477,7 +477,7 @@ proc gui { args } {
 
 	frame $mged_gui($id,dmc) -relief sunken -borderwidth 2
 
-	if {[catch { openmv $id $mged_gui($id,top) $mged_gui($id,dmc) $screen $dtype } result]} {
+	if {[catch { openmv $id $mged_gui($id,top) $mged_gui($id,dmc) $screen $host_type } result]} {
 	    gui_destroy $id
 	    return $result
 	}
@@ -487,14 +487,14 @@ proc gui { args } {
 
 	toplevel $mged_gui($id,dmc) -screen $gscreen -relief sunken -borderwidth 2
 
-	if {[catch { openmv $id $mged_gui($id,top) $mged_gui($id,dmc) $gscreen $dtype } result]} {
+	if {[catch { openmv $id $mged_gui($id,top) $mged_gui($id,dmc) $gscreen $host_type } result]} {
 	    gui_destroy $id
 	    return $result
 	}
     }
 
-    set mged_gui($id,active_dm) $mged_gui($id,top).$mged_default(pane)
-    set mged_gui($id,apply_list) $mged_gui($id,active_dm)
+    set mged_gui($id,active_pane) $mged_gui($id,top).$mged_default(pane)
+    set mged_gui($id,apply_list) $mged_gui($id,active_pane)
 
     #==============================================================================
     # PHASE 2: Construction of menu bar
@@ -757,11 +757,11 @@ against MGED database objects."\
 
     menu .$id.menubar.edit -title "Edit" -tearoff $mged_default(tearoff_menus)
     .$id.menubar.edit add command -label "Primitive Selection..." -underline 0 \
-	-command "winset \$mged_gui($id,active_dm); build_edit_menu_all s1"
+	-command "winset \$mged_gui($id,active_pane); build_edit_menu_all s1"
     hoc_register_menu_data "Edit" "Primitive Selection..." "Primitive Selection"\
 	{ { summary "A tool for selecting a primitive to edit." } }
     .$id.menubar.edit add command -label "Matrix Selection..." -underline 0 \
-	-command "winset \$mged_gui($id,active_dm); build_edit_menu_all o"
+	-command "winset \$mged_gui($id,active_pane); build_edit_menu_all o"
     hoc_register_menu_data "Edit" "Matrix Selection..." "Matrix Selection"\
 	{ { summary "A tool for selecting a matrix to edit." } }
     .$id.menubar.edit add separator
@@ -964,7 +964,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     hoc_register_menu_data "ViewRing" "Add View" "Add View"\
 	{ { synopsis "Add a view to the view ring." }
 	    { description "A view ring is a mechanism for managing multiple
-	views within a single pane or display manager. Each pane
+	views within a single pane or graphics window. Each pane
 	has its own view ring where any number of views can be stored.
 	The stored views can be removed or traversed." } }
     .$id.menubar.viewring add cascade -label "Select View" -underline 0 -menu .$id.menubar.viewring.select
@@ -1223,52 +1223,52 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	    { see_also "qray" } }
 
     set tmp_summary "Set the active pane to be the upper left pane. Any interaction with the GUI that affects a pane
-	(display manager) will be directed at the upper left pane.
+	(graphics view) will be directed at the upper left pane.
 
 	The following is a list of default key bindings for panes:
 
-	$mged_default(dm_key_bindings)"
+	$mged_default(pane_key_bindings)"
     set tmp_hoc [list [list summary $tmp_summary]]
     menu .$id.menubar.settings.mpane -title "Active Pane" -tearoff $mged_default(tearoff_menus)
-    .$id.menubar.settings.mpane add radiobutton -value ul -variable mged_gui($id,dm_loc)\
+    .$id.menubar.settings.mpane add radiobutton -value ul -variable mged_gui($id,pane_loc)\
 	-label "Upper Left" -underline 6\
-	-command "set_active_dm $id"
+	-command "set_active_pane $id"
     hoc_register_menu_data "Active Pane" "Upper Left" "Active Pane - Upper Left" $tmp_hoc
 
     set tmp_summary "Set the active pane to be the upper right pane. Any interaction with the GUI that affects a pane
-	(display manager) will be directed at the upper right pane.
+	(graphics view) will be directed at the upper right pane.
 
 	The following is a list of default key bindings for panes:
 
-	$mged_default(dm_key_bindings)"
+	$mged_default(pane_key_bindings)"
     set tmp_hoc [list [list summary $tmp_summary]]
-    .$id.menubar.settings.mpane add radiobutton -value ur -variable mged_gui($id,dm_loc)\
+    .$id.menubar.settings.mpane add radiobutton -value ur -variable mged_gui($id,pane_loc)\
 	-label "Upper Right" -underline 6\
-	-command "set_active_dm $id"
+	-command "set_active_pane $id"
     hoc_register_menu_data "Active Pane" "Upper Right" "Active Pane - Upper Right" $tmp_hoc
 
     set tmp_summary "Set the active pane to be the lower left pane. Any interaction with the GUI that affects a pane
-	(display manager) will be directed at the lower left pane.
+	(graphics view) will be directed at the lower left pane.
 
 	The following is a list of default key bindings for panes:
 
-	$mged_default(dm_key_bindings)"
+	$mged_default(pane_key_bindings)"
     set tmp_hoc [list [list summary $tmp_summary]]
-    .$id.menubar.settings.mpane add radiobutton -value ll -variable mged_gui($id,dm_loc)\
+    .$id.menubar.settings.mpane add radiobutton -value ll -variable mged_gui($id,pane_loc)\
 	-label "Lower Left" -underline 2\
-	-command "set_active_dm $id"
+	-command "set_active_pane $id"
     hoc_register_menu_data "Active Pane" "Lower Left" "Active Pane - Lower Left" $tmp_hoc
 
     set tmp_summary "Set the active pane to be the lower right pane. Any interaction with the GUI that affects a pane
-	(display manager) will be directed at the lower right pane.
+	(graphics view) will be directed at the lower right pane.
 
 	The following is a list of default key bindings for panes:
 
-	$mged_default(dm_key_bindings)"
+	$mged_default(pane_key_bindings)"
     set tmp_hoc [list [list summary $tmp_summary]]
-    .$id.menubar.settings.mpane add radiobutton -value lr -variable mged_gui($id,dm_loc)\
+    .$id.menubar.settings.mpane add radiobutton -value lr -variable mged_gui($id,pane_loc)\
 	-label "Lower Right" -underline 3\
-	-command "set_active_dm $id"
+	-command "set_active_pane $id"
     hoc_register_menu_data "Active Pane" "Lower Right" "Active Pane - Lower Right" $tmp_hoc
 
     menu .$id.menubar.settings.fb -title "Framebuffer" -tearoff $mged_default(tearoff_menus)
@@ -1690,9 +1690,9 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	    -command "set_cmd_win $id"
 	hoc_register_menu_data "Modes" "Command Window" "Command Window"\
 	    { { summary "Toggle display of the command window." } }
-	.$id.menubar.modes add checkbutton -offvalue 0 -onvalue 1 -variable mged_gui($id,show_dm)\
+	.$id.menubar.modes add checkbutton -offvalue 0 -onvalue 1 -variable mged_gui($id,show_graphics)\
 	    -label "Graphics Window" -underline 0\
-	    -command "set_dm_win $id"
+	    -command "set_graphics_win $id"
 	hoc_register_menu_data "Modes" "Graphics Window" "Graphics Window"\
 	    { { summary "Toggle display of the graphics window." } }
     }
@@ -1715,23 +1715,6 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	the X axis, the view continues to rotate about the
 	X axis until the rate rotation is stopped." }
 	    { see_also "knob" } }
-    .$id.menubar.modes add checkbutton -offvalue 0 -onvalue 1 -variable mged_gui($id,dlist)\
-	-label "Display Lists" -underline 8\
-	-command "mged_apply $id \"set dlist \$mged_gui($id,dlist)\""
-    hoc_register_menu_data "Modes" "Display Lists" "Display Lists"\
-	{ { summary "Toggle the use of display lists. This currently affects
-	only Ogl display managers. When using display lists the
-	screen update time is significantly faster. This is especially
-	noticeable when running MGED remotely. Use of display lists
-	is encouraged unless the geometry being viewed is bigger
-	than the Ogl server can handle (i.e. the server runs out
-	of available memory for storing display lists). When this
-	happens the machine will begin to swap (and little else).
-	If huge pieces of geometry need to be viewed, consider
-	toggling off display lists. Note that using display lists
-	while viewing geometry of any significant size will incur
-	noticeable compute time up front to create the display lists."} }
-
     menu .$id.menubar.modes.axes -title "Axes" -tearoff $mged_default(tearoff_menus)
     .$id.menubar.modes.axes add checkbutton -offvalue 0 -onvalue 1\
 	-variable mged_gui($id,view_draw) -label "View" -underline 0\
@@ -1772,7 +1755,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     menu .$id.menubar.misc -title "Misc" -tearoff $mged_default(tearoff_menus)
     .$id.menubar.misc add checkbutton -offvalue 0 -onvalue 1\
 	-variable mged_gui($id,zclip) -label "Z Clipping" -underline 0\
-	-command "mged_apply $id \"dm set zclip \$mged_gui($id,zclip)\""
+	-command "mged_apply $id \"dm set view.zclip \$mged_gui($id,zclip)\""
     hoc_register_menu_data "Misc" "Z Clipping" "Z Clipping"\
 	{ { summary "Toggle zclipping. When zclipping is active, the Z value
 	of each point is checked against the min and max Z values
@@ -1810,23 +1793,27 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	modify the state of the drawing window) will apply only to the
 	drawing window wherein the user typed. This feature is provided
 	to lessen the need to use the mouse." } }
-    if {$mged_gui($id,dtype) == "ogl" || $mged_gui($id,dtype) == "wgl"} {
+    if {![catch {dm get renderer.depth_cue}]} {
 	.$id.menubar.misc add checkbutton -offvalue 0 -onvalue 1\
 	    -variable mged_gui($id,depthcue) -label "Depth Cueing" -underline 0\
-	    -command "mged_apply $id \"dm set depthcue \$mged_gui($id,depthcue)\""
+	    -command "mged_apply $id \"dm set renderer.depth_cue \$mged_gui($id,depthcue)\""
 	hoc_register_menu_data "Misc" "Depth Cueing" "Depth Cueing"\
 	    { { summary "Toggle depth cueing. When depth cueing is active,
 		lines that are farther away appear more faint." }
 		{ see_also "dm" } }
+    }
+    if {![catch {dm get renderer.depth_test}]} {
 	.$id.menubar.misc add checkbutton -offvalue 0 -onvalue 1\
 	    -variable mged_gui($id,zbuffer) -label "Z Buffer" -underline 2\
-	    -command "mged_apply $id \"dm set zbuffer \$mged_gui($id,zbuffer)\""
+	    -command "mged_apply $id \"dm set renderer.depth_test \$mged_gui($id,zbuffer)\""
 	hoc_register_menu_data "Misc" "Z Buffer" "Z Buffer"\
 	    { { summary "Toggle Z buffer." }
 		{ see_also "dm" } }
+    }
+    if {![catch {dm get renderer.lighting}]} {
 	.$id.menubar.misc add checkbutton -offvalue 0 -onvalue 1\
 	    -variable mged_gui($id,lighting) -label "Lighting" -underline 0\
-	    -command "mged_apply $id \"dm set lighting \$mged_gui($id,lighting)\""
+	    -command "mged_apply $id \"dm set renderer.lighting \$mged_gui($id,lighting)\""
 	hoc_register_menu_data "Misc" "Lighting" "Lighting"\
 	    { { summary "Toggle lighting." }
 		{ see_also "dm" } }
@@ -1916,7 +1903,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     hoc_register_menu_data "Tools" "Command Window" "Command Window"\
 	{ { summary "Raise the command window." } }
     .$id.menubar.tools add command -label "Graphics Window" -underline 7\
-	-command "set mged_gui($id,show_dm) 1; wm deiconify $mged_gui($id,top); raise $mged_gui($id,top)"
+	-command "set mged_gui($id,show_graphics) 1; wm deiconify $mged_gui($id,top); raise $mged_gui($id,top)"
     hoc_register_menu_data "Tools" "Graphics Window" "Graphics Window"\
 	{ { summary "Raise the geometry window." } }
 
@@ -2050,11 +2037,11 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     frame .$id.status.dpy
     frame .$id.status.illum
 
-    label .$id.status.cent -textvar mged_display($mged_gui($id,active_dm),center) -anchor w
+    label .$id.status.cent -textvar mged_display($mged_gui($id,active_pane),center) -anchor w
     hoc_register_data .$id.status.cent "View Center"\
 	{ { summary "These numbers indicate the view center in\nmodel coordinates (local units)." }
 	    { see_also "center, view" } }
-    label .$id.status.size -textvar mged_display($mged_gui($id,active_dm),size) -anchor w
+    label .$id.status.size -textvar mged_display($mged_gui($id,active_pane),size) -anchor w
     hoc_register_data .$id.status.size "View Size"\
 	{ { summary "This number indicates the view size (local units)." }
 	    { see_also size} }
@@ -2062,11 +2049,11 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     hoc_register_data .$id.status.units "Units"\
 	{ { summary "This indicates the local units.		 " }
 	    { see_also units} }
-    label .$id.status.aet -textvar mged_display($mged_gui($id,active_dm),aet) -anchor w
+    label .$id.status.aet -textvar mged_display($mged_gui($id,active_pane),aet) -anchor w
     hoc_register_data .$id.status.aet "View Orientation"\
 	{ { summary "These numbers indicate the view orientation using azimuth,\nelevation and twist." }
 	    { see_also "ae, view" } }
-    label .$id.status.ang -textvar mged_display($mged_gui($id,active_dm),ang) -anchor w -padx 4
+    label .$id.status.ang -textvar mged_display($mged_gui($id,active_pane),ang) -anchor w -padx 4
     hoc_register_data .$id.status.ang "Rateknobs"\
 	{ { summary "These numbers give some indication of\nrate of rotation about the x,y,z axes." }
 	    { see_also knob} }
@@ -2188,7 +2175,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     setmv $id
 
     if { $comb } {
-	if { $mged_gui($id,show_dm) } {
+	if { $mged_gui($id,show_graphics) } {
 	    grid $mged_gui($id,dmc) -sticky nsew -row 0 -column 0
 	}
     }
@@ -2216,7 +2203,7 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 
     grid columnconfigure .$id 0 -weight 1
     if { $comb } {
-	# let only the display manager window grow
+	# Let only the graphics window grow.
 	grid rowconfigure .$id 0 -weight 1
     } else {
 	# let only the text window (i.e. enter commands here) grow
@@ -2237,10 +2224,10 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     }
 
     cmd_win open $id
-    _mged_tie $id $mged_gui($id,active_dm)
+    _mged_tie $id $mged_gui($id,active_pane)
     reconfig_gui_default $id
 
-    # Force display manager windows to update their respective color schemes
+    # Force graphics windows to update their respective color schemes.
     mged_apply_local $id "rset cs mode 0"
     rset cs mode 1
 
@@ -2248,13 +2235,11 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
 	collaborate join $id
     }
 
-    trace variable mged_display($mged_gui($id,active_dm),fps) w "ia_changestate $id"
+    trace variable mged_display($mged_gui($id,active_pane),fps) w "ia_changestate $id"
     update_mged_vars $id
     set mged_gui($id,qray_effects) [qray effects]
 
-    if {$mged_gui($id,dtype) == "ogl" || $mged_gui($id,dtype) == "wgl"} {
-	mged_apply_local $id "dm set zbuffer $mged_default(zbuffer)"
-    }
+    catch {mged_apply_local $id "dm set renderer.depth_test $mged_default(zbuffer)"}
 
     # reset current_cmd_list so that its cur_hist gets updated
     cmd_win set $save_id
@@ -2276,18 +2261,19 @@ hoc_register_menu_data "Create" "$ptype..." "Make a $ptype" $ksl
     # set the size here in case the user didn't specify it in mged_default(ggeom)
     set height [expr [winfo screenheight $mged_gui($id,top)] - 70]
     set width $height
-    wm geometry $mged_gui($id,top) $width\x$height
+    set ggeom $mged_default(ggeom)
+    if {[regexp {^[+-]} $ggeom]} {
+	set ggeom $width\x$height$ggeom
+    }
+    wm geometry $mged_gui($id,top) $ggeom
 
-    # set geometry (i.e. size and position) according to mged_default(ggeom)
-    wm geometry $mged_gui($id,top) $mged_default(ggeom)
-
-    wm protocol $mged_gui($id,top) WM_DELETE_WINDOW "dm_win_hide $id"
+    wm protocol $mged_gui($id,top) WM_DELETE_WINDOW "graphics_win_hide $id"
     wm protocol .$id WM_DELETE_WINDOW "cmd_win_hide $id"
 
     if { $comb } {
-	if { !$mged_gui($id,show_dm) } {
+	if { !$mged_gui($id,show_graphics) } {
 	    update
-	    set_dm_win $id
+	    set_graphics_win $id
 	}
     } else {
 	wm geometry .$id $mged_default(geom)
@@ -2309,11 +2295,11 @@ proc cmd_win_hide args {
     gui_destroy $id
 }
 
-proc dm_win_hide args {
+proc graphics_win_hide args {
     global mged_gui
 
     set id [lindex $args 0]
-    set mged_gui($id,show_dm) 0
+    set mged_gui($id,show_graphics) 0
     wm state $mged_gui($id,dmc) withdrawn
 
     gui_destroy $id
@@ -2330,7 +2316,7 @@ proc gui_destroy args {
 
     set id [lindex $args 0]
 
-    if { $mged_gui($id,show_dm) == 0 && $mged_gui($id,show_cmd) == 0 } {
+    if { $mged_gui($id,show_graphics) == 0 && $mged_gui($id,show_cmd) == 0 } {
 
         set i [lsearch -exact $mged_players $id]
         if { $i == -1 } {
@@ -2358,17 +2344,17 @@ proc reconfig_gui_default { id } {
     global mged_display
 
     cmd_win set $id
-    set dm_id [_mged_tie $id]
-    if { [llength $dm_id] != 1 } {
+    set display_id [_mged_tie $id]
+    if { [llength $display_id] != 1 } {
 	return
     }
 
-    .$id.status.cent configure -textvar mged_display($dm_id,center)
-    .$id.status.size configure -textvar mged_display($dm_id,size)
+    .$id.status.cent configure -textvar mged_display($display_id,center)
+    .$id.status.size configure -textvar mged_display($display_id,size)
     .$id.status.units configure -textvar mged_display(units)
 
-    .$id.status.aet configure -textvar mged_display($dm_id,aet)
-    .$id.status.ang configure -textvar mged_display($dm_id,ang)
+    .$id.status.aet configure -textvar mged_display($display_id,aet)
+    .$id.status.ang configure -textvar mged_display($display_id,ang)
 
     #		 update_view_ring_entries $id s
     #		 update_view_ring_entries $id d
@@ -2392,7 +2378,6 @@ proc update_mged_vars { id } {
     global fb
     global fb_all
     global fb_overlay
-    global dlist
     global mouse_behavior
     global coords
     global rotate_about
@@ -2401,7 +2386,7 @@ proc update_mged_vars { id } {
     global perspective_mode
     global orig_gui
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set mged_gui($id,rateknobs) $rateknobs
     if {![catch {adc draw} result]} {
 	set mged_gui($id,adc_draw) $result
@@ -2410,7 +2395,6 @@ proc update_mged_vars { id } {
     set mged_gui($id,view_draw) [rset ax view_draw]
     set mged_gui($id,edit_draw) [rset ax edit_draw]
     set mged($id,use_air) $use_air
-    set mged_gui($id,dlist) $dlist
     set mged_gui($id,rubber_band) [rset rb draw]
     set mged_gui($id,mouse_behavior) $mouse_behavior
     set mged_gui($id,coords) $coords
@@ -2419,16 +2403,14 @@ proc update_mged_vars { id } {
     set mged_gui($id,grid_draw) [rset grid draw]
     set mged_gui($id,draw_snap) [rset grid snap]
     set mged_gui($id,faceplate) $faceplate
-    set mged_gui($id,zclip) [dm set zclip]
+    set mged_gui($id,zclip) [expr {[dm get view.zclip] ? 1 : 0}]
     set mged_gui($id,perspective_mode) $perspective_mode
     set mged_gui($id,orig_gui) $orig_gui
-    set mged_gui($id,forward_keys) $forwarding_key($mged_gui($id,active_dm))
+    set mged_gui($id,forward_keys) $forwarding_key($mged_gui($id,active_pane))
 
-    if {$mged_gui($id,dtype) == "ogl" || $mged_gui($id,dtype) == "ogl"} {
-	set mged_gui($id,depthcue) [dm set depthcue]
-	set mged_gui($id,zbuffer) [dm set zbuffer]
-	set mged_gui($id,lighting) [dm set lighting]
-    }
+    catch {set mged_gui($id,depthcue) [expr {[dm get renderer.depth_cue] ? 1 : 0}]}
+    catch {set mged_gui($id,zbuffer) [expr {[dm get renderer.depth_test] ? 1 : 0}]}
+    catch {set mged_gui($id,lighting) [expr {[dm get renderer.lighting] ? 1 : 0}]}
 
     set_mged_v_axes_pos $id
 
@@ -2527,36 +2509,36 @@ proc pmp {} {
     return $mged_players
 }
 
-proc set_active_dm { id } {
+proc set_active_pane { id } {
     global mged_gui
     global mged_display
     global view_ring
 
-    set new_dm $mged_gui($id,top).$mged_gui($id,dm_loc)
+    set new_pane $mged_gui($id,top).$mged_gui($id,pane_loc)
 
     # Nothing to do
-    if { $new_dm == $mged_gui($id,active_dm) } {
+    if { $new_pane == $mged_gui($id,active_pane) } {
 	return
     }
 
-    trace vdelete mged_display($mged_gui($id,active_dm),fps) w "ia_changestate $id"
+    trace vdelete mged_display($mged_gui($id,active_pane),fps) w "ia_changestate $id"
 
     # make inactive
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     rset cs mode 0
 
-    set mged_gui($id,active_dm) $new_dm
+    set mged_gui($id,active_pane) $new_pane
 
     # make active
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     rset cs mode 1
 
-    trace variable mged_display($mged_gui($id,active_dm),fps) w "ia_changestate $id"
+    trace variable mged_display($mged_gui($id,active_pane),fps) w "ia_changestate $id"
 
     update_mged_vars $id
     #		 set view_ring($id) [view_ring get]
 
-    _mged_tie $id $mged_gui($id,active_dm)
+    _mged_tie $id $mged_gui($id,active_pane)
     reconfig_gui_default $id
 
     if {!$mged_gui($id,multi_pane)} {
@@ -2588,27 +2570,27 @@ proc set_wm_title { id dbname } {
     set ver [lindex $version 2]
 
     if {$mged_gui($id,top) == $mged_gui($id,dmc)} {
-	if {$mged_gui($id,dm_loc) == "ul"} {
+	if {$mged_gui($id,pane_loc) == "ul"} {
 	    wm title $mged_gui($id,top) "MGED $ver Graphics Window ($id) - $dbname - Upper Left"
 	    wm title .$id "MGED $ver Command Window ($id) - $dbname - Upper Left"
-	} elseif {$mged_gui($id,dm_loc) == "ur"} {
+	} elseif {$mged_gui($id,pane_loc) == "ur"} {
 	    wm title $mged_gui($id,top) "MGED $ver Graphics Window ($id) - $dbname - Upper Right"
 	    wm title .$id "MGED $ver Command Window ($id) - $dbname - Upper Right"
-	} elseif {$mged_gui($id,dm_loc) == "ll"} {
+	} elseif {$mged_gui($id,pane_loc) == "ll"} {
 	    wm title $mged_gui($id,top) "MGED $ver Graphics Window ($id) - $dbname - Lower Left"
 	    wm title .$id "MGED $ver Command Window ($id) - $dbname - Lower Left"
-	} elseif {$mged_gui($id,dm_loc) == "lr"} {
+	} elseif {$mged_gui($id,pane_loc) == "lr"} {
 	    wm title $mged_gui($id,top) "MGED $ver Graphics Window ($id) - $dbname - Lower Right"
 	    wm title .$id "MGED $ver Command Window ($id) - $dbname - Lower Right"
 	}
     } else {
-	if {$mged_gui($id,dm_loc) == "ul"} {
+	if {$mged_gui($id,pane_loc) == "ul"} {
 	    wm title $mged_gui($id,top) "MGED $ver Command Window ($id) - $dbname - Upper Left"
-	} elseif {$mged_gui($id,dm_loc) == "ur"} {
+	} elseif {$mged_gui($id,pane_loc) == "ur"} {
 	    wm title $mged_gui($id,top) "MGED $ver Command Window ($id) - $dbname - Upper Right"
-	} elseif {$mged_gui($id,dm_loc) == "ll"} {
+	} elseif {$mged_gui($id,pane_loc) == "ll"} {
 	    wm title $mged_gui($id,top) "MGED $ver Command Window ($id) - $dbname - Lower Left"
-	} elseif {$mged_gui($id,dm_loc) == "lr"} {
+	} elseif {$mged_gui($id,pane_loc) == "lr"} {
 	    wm title $mged_gui($id,top) "MGED $ver Command Window ($id) - $dbname - Lower Right"
 	}
     }
@@ -2618,7 +2600,7 @@ proc set_cmd_win { id } {
     global mged_gui
 
     if { $mged_gui($id,show_cmd) } {
-	if { $mged_gui($id,show_dm) } {
+	if { $mged_gui($id,show_graphics) } {
 	    .$id.t configure -height $mged_gui($id,num_lines)
 	    grid .$id.tf -sticky nsew -row 1 -column 0
 	} else {
@@ -2627,8 +2609,8 @@ proc set_cmd_win { id } {
     } else {
 	grid forget .$id.tf
 
-	if { !$mged_gui($id,show_dm) } {
-	    set mged_gui($id,show_dm) 1
+	if { !$mged_gui($id,show_graphics) } {
+	    set mged_gui($id,show_graphics) 1
 	    grid $mged_gui($id,dmc) -sticky nsew -row 0 -column 0
 	    update
 	    setmv $id
@@ -2644,10 +2626,10 @@ proc open_cmd_win {id} {
     raise .$id
 }
 
-proc set_dm_win { id } {
+proc set_graphics_win { id } {
     global mged_gui
 
-    if { $mged_gui($id,show_dm) } {
+    if { $mged_gui($id,show_graphics) } {
 	if { $mged_gui($id,show_cmd) } {
 	    grid forget .$id.tf
 	    .$id.t configure -height $mged_gui($id,num_lines)
@@ -2686,7 +2668,7 @@ proc view_ring_add {id} {
     global view_ring
     global mged_collaborators
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     # already have 10 views in the view ring, ignore add
     if {$mged_default(max_views) <= [llength $mged_gui($id,views)]} {
@@ -2776,19 +2758,19 @@ proc view_ring_set_view {id vid vi} {
 
     # we're collaborating, so update collaborators
     if {[lsearch -exact $mged_collaborators $id] != -1 && \
-	    "$mged_gui($id,top).ur" == "$mged_gui($id,active_dm)"} {
+	    "$mged_gui($id,top).ur" == "$mged_gui($id,active_pane)"} {
 	foreach cid $mged_collaborators {
-	    if {"$mged_gui($cid,top).ur" == "$mged_gui($cid,active_dm)"} {
+	    if {"$mged_gui($cid,top).ur" == "$mged_gui($cid,active_pane)"} {
 		set view_ring($cid,prev) $view_ring($cid)
 		set view_ring($cid) $vid
-		winset $mged_gui($cid,active_dm)
+		winset $mged_gui($cid,active_pane)
 		eval [lindex $mged_gui($cid,views) $vi]
 	    }
 	}
     } else {
 	set view_ring($id,prev) $view_ring($id)
 	set view_ring($id) $vid
-	winset $mged_gui($id,active_dm)
+	winset $mged_gui($id,active_pane)
 	eval [lindex $mged_gui($id,views) $vi]
     }
 }
@@ -2799,7 +2781,7 @@ proc view_ring_delete {id vid} {
     global view_ring
     global mged_collaborators
 
-    #		 winset $mged_gui($id,active_dm)
+    #		 winset $mged_gui($id,active_pane)
 
     if {![find_view_index $vid vi .$id.menubar.viewring.select]} {
 	return
@@ -2841,7 +2823,7 @@ proc view_ring_goto {id vid} {
     global view_ring
     global mged_collaborators
 
-    #		 winset $mged_gui($id,active_dm)
+    #		 winset $mged_gui($id,active_pane)
 
     if {![find_view_index $vid vi .$id.menubar.viewring.select]} {
 	return
@@ -2858,7 +2840,7 @@ proc view_ring_next {id} {
     global mged_gui
     global view_ring
 
-    #		 winset $mged_gui($id,active_dm)
+    #		 winset $mged_gui($id,active_pane)
 
     # find view index of menu entry whose value is $view_ring($id)
     if {![find_view_index $view_ring($id) vi .$id.menubar.viewring.select]} {
@@ -2881,7 +2863,7 @@ proc view_ring_prev {id} {
     global mged_gui
     global view_ring
 
-    #		 winset $mged_gui($id,active_dm)
+    #		 winset $mged_gui($id,active_pane)
 
     # find view index of menu entry whose value is $view_ring($id)
     if {![find_view_index $view_ring($id) vi .$id.menubar.viewring.select]} {
@@ -2981,7 +2963,7 @@ proc update_view_ring_labels { id } {
 	    error "No database has been opened!"
 	}
 
-	winset $mged_gui($id,active_dm)
+	winset $mged_gui($id,active_pane)
 	set view_ring($id) [view_ring get]
 	set views [view_ring get -a]
 	set llen [llength $views]
@@ -3042,7 +3024,7 @@ proc set_transform { id } {
     set transform $mged_gui($id,transform)
     default_mouse_bindings $mged_gui($id,top).lr
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 }
 
 proc do_rebind_keys { id } {
@@ -3072,13 +3054,13 @@ proc adc { args } {
 
     # toggling ADC on/off
     if { ![llength $args] } {
-	set dm_id [winset]
+	set display_id [winset]
 	set tie_list [_mged_tie]
 	set id mged
 
-	# see if dm_id is tied to a command window
+	# see if display_id is tied to a command window
 	foreach pair $tie_list {
-	    if { [lindex $pair 1] == $dm_id } {
+	    if { [lindex $pair 1] == $display_id } {
 		set id [lindex $pair 0]
 		break
 	    }
@@ -3174,7 +3156,7 @@ proc mged_handle_configure { id } {
 proc mged_draw_grid {id} {
     global mged_gui
 
-    catch { winset $mged_gui($id,active_dm) } msg
+    catch { winset $mged_gui($id,active_pane) } msg
     mged_apply $id "rset grid draw $mged_gui($id,grid_draw)"
 
     # Reconcile the Tcl grid_draw with the internal grid_draw.

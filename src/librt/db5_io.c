@@ -173,15 +173,21 @@ db5_encode_length(
 	case DB5HDR_WIDTHCODE_8BIT:
 	    *cp = (unsigned char)val & 0xFF;
 	    return cp + sizeof(unsigned char);
-	case DB5HDR_WIDTHCODE_16BIT:
-	    *(uint16_t *)&cp[0] = htons((uint16_t)val);
+	case DB5HDR_WIDTHCODE_16BIT: {
+	    uint16_t network_value = htons((uint16_t)val);
+	    memcpy(cp, &network_value, sizeof(network_value));
 	    return cp + sizeof(uint16_t);
-	case DB5HDR_WIDTHCODE_32BIT:
-	    *(uint32_t *)&cp[0] = htonl((uint32_t)val);
+	}
+	case DB5HDR_WIDTHCODE_32BIT: {
+	    uint32_t network_value = htonl((uint32_t)val);
+	    memcpy(cp, &network_value, sizeof(network_value));
 	    return cp + sizeof(uint32_t);
-	case DB5HDR_WIDTHCODE_64BIT:
-	    *(uint64_t *)&cp[0] = htonll((uint64_t)val);
+	}
+	case DB5HDR_WIDTHCODE_64BIT: {
+	    uint64_t network_value = htonll((uint64_t)val);
+	    memcpy(cp, &network_value, sizeof(network_value));
 	    return cp + sizeof(uint64_t);
+	}
     }
     bu_bomb("db5_encode_length(): unknown width code\n");
     return NULL;

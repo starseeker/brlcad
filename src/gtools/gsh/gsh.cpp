@@ -31,23 +31,25 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #include "linenoise.hpp"
 
 #include "brlcad_ident.h"
-#include "bu.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BHostFactory.h"
+#include "BObol/BInit.h"
+#include "BObol/BWindowHost.h"
 #include "bv.h"
-
-#define USE_DM 1
-#ifdef USE_DM
-#  define DM_WITH_RT
-#  include "dm.h"
-#endif
+#include "bu.h"
+#include "imgstream/fbserv.h"
 
 #include "ged.h"
-
-#include "../../libged/dbi.h"
+#include "ged/draw.h"
+#include "ged/draw_obol.h"
+#include "ged/db_index.h"
+#include "ged/view.h"
 
 #define DEFAULT_GSH_PROMPT "g> "
 
@@ -67,11 +69,11 @@
 #define GSH_READ_SIZE 1024
 void
 p_watch(
-	std::shared_ptr<std::string> obuf,
-	std::atomic<bool> &thread_done,
-	int fd,
-	std::mutex &buf_mutex
-       )
+    std::shared_ptr<std::string> obuf,
+    std::atomic<bool> &thread_done,
+    int fd,
+    std::mutex &buf_mutex
+)
 {
     // If we don't have a sane file descriptor, don't proceed
     if (fd < 0) {
@@ -102,20 +104,21 @@ p_watch(
     thread_done = true;
 }
 
-class ProcessIOHandler {
-    public:
-	ProcessIOHandler(int, ged_io_func_t, void *);
-	~ProcessIOHandler();
+class ProcessIOHandler
+{
+public:
+    ProcessIOHandler(int, ged_io_func_t, void *);
+    ~ProcessIOHandler();
 
-	std::string read();
-	std::atomic<bool> thread_done = false;
+    std::string read();
+    std::atomic<bool> thread_done = false;
 
-    private:
-	int fd = -1;
+private:
+    int fd = -1;
 
-	std::shared_ptr<std::string> curr_buf;
-	std::mutex buf_mutex;
-	std::thread watch_thread;
+    std::shared_ptr<std::string> curr_buf;
+    std::mutex buf_mutex;
+    std::thread watch_thread;
 };
 
 ProcessIOHandler::ProcessIOHandler(int f, ged_io_func_t, void *)
@@ -149,48 +152,49 @@ ProcessIOHandler::read()
     return lcpy;
 }
 
-class DisplayHash {
-    public:
-	bool hash(struct ged *, bool, bool);
-	void dirty(struct ged *, const DisplayHash &);
-	unsigned long long d = 0;
-	unsigned long long v = 0;
-	unsigned long long l = 0;
-	unsigned long long g = 0;
+class DisplayHash
+{
+public:
+    bool hash(struct ged *, bool, bool);
+    void dirty(struct ged *, const DisplayHash &);
+    unsigned long long v = 0;
+    unsigned long long l = 0;
+    unsigned long long g = 0;
+    unsigned long long r = 0;
 };
 
 bool
-DisplayHash::hash(struct ged *gedp, bool dbi_state_check, bool new_cmd_forms)
+DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 {
-    d = 0; v = 0; l = 0; g = 0;
-    struct bview *bv = gedp->ged_gvp;
-    if (!bv)
+    v = 0;
+    l = 0;
+    g = 0;
+    r = 0;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
 	return false;
 
-    struct dm *dmp = (struct dm *)bv->dmp;
-    if (!dmp)
-	return false;
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    v = bv_hash(view);
 
-    d = dm_hash(dmp);
-    v = bv_hash(bv);
-
-    if (new_cmd_forms && gedp->dbi_state) {
-	if (dbi_state_check) {
-	    DbiState *dbis = (DbiState *)gedp->dbi_state;
-	    unsigned long long updated = dbis->update();
+    if (qged_display_mode) {
+	if (db_index_check) {
+	    unsigned long long updated = ged_db_index_refresh_flags(gedp);
 	    l = (updated) ? l + 1 : 0;
-	    if (bv->gv_s->gv_cleared) {
+	    if (bv_cleared_get(view)) {
 		l = 1;
-		bv->gv_s->gv_cleared = 0;
+		bv_cleared_set(view, 0);
 	    }
 	} else {
 	    l = 0;
 	}
     } else {
-	l = dl_name_hash(gedp);
+	l = ged_draw_scene_hash(gedp);
     }
 
-    g = ged_dl_hash(ged_dl(gedp));
+    g = ged_draw_scene_hash(gedp);
+    if (db_index_check && bv_refresh_dirty_get(view))
+	r = 1;
 
     return true;
 }
@@ -198,67 +202,139 @@ DisplayHash::hash(struct ged *gedp, bool dbi_state_check, bool new_cmd_forms)
 void
 DisplayHash::dirty(struct ged *gedp, const DisplayHash &o)
 {
-    struct bview *bv = gedp->ged_gvp;
-    if (!bv)
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
 	return;
 
-    struct dm *dmp = (struct dm *)bv->dmp;
-    if (!dmp)
-	return;
-
-    if (d != o.d) {
-	dm_set_dirty(dmp, 1);
-    }
-    if (v != o.v) {
-	dm_set_dirty(dmp, 1);
-    }
-    if (l != o.l) {
-	dm_set_dirty(dmp, 1);
-    }
-    if (g != o.g) {
-	dm_set_dirty(dmp, 1);
-    }
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (v != o.v || l != o.l || g != o.g || r != o.r || r)
+	(void)bv_refresh_request(view, 1);
 }
 
 /* The overall state of the gsh application is encapsulated by a state class
  * called GshState.  It defines the method for executing libged commands and
  * manages the linenoise interactive thread, as well as the necessary state
  * tracking for triggering view updating. */
-class GshState {
-    public:
-	GshState();
-	~GshState();
+class GshState
+{
+public:
+    GshState();
+    ~GshState();
 
-	// Run GED commands
-	int eval(int argc, const char **argv);
+    // Run GED commands
+    int eval(int argc, const char **argv);
 
-	// Command line interactive prompt
-	std::shared_ptr<linenoise::linenoiseState> l;
-	std::atomic<bool> linenoise_done = false;
-	std::atomic<bool> io_working = false;
-	std::mutex print_mutex;
+    // Command line interactive prompt
+    std::shared_ptr<linenoise::linenoiseState> l;
+    std::atomic<bool> linenoise_done = false;
+    std::atomic<bool> io_working = false;
+    std::mutex print_mutex;
 
-	// Create a listener for a subprocess
-	void listen(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d);
-	void disconnect(struct ged_subprocess *p, bu_process_io_t t);
-	// Print subprocesses outputs (if any)
-	void subprocess_output();
-	size_t listeners_cnt();
+    // Create a listener for a subprocess
+    void listen(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d);
+    void disconnect(struct ged_subprocess *p, bu_process_io_t t);
+    // Print subprocesses outputs (if any)
+    void subprocess_output();
+    size_t listeners_cnt();
 
-	// Display management
-	void view_checkpoint();
-	void view_update();
-	DisplayHash prev_hash;
+    // Display management
+    void view_checkpoint();
+    void view_update();
+    DisplayHash prev_hash;
 
-	struct ged *gedp;
-	std::string gfile;  // Mostly used to test the post_opendb callback
-	bool new_cmd_forms = false;  // Set if we're testing QGED style commands
-    private:
-	// Active listeners
-	std::map<std::pair<struct ged_subprocess *, bu_process_io_t>, ProcessIOHandler *> listeners;
-	std::mutex listeners_lock;
+    struct ged *gedp;
+    std::string gfile;  // Mostly used to test the post_opendb callback
+    bool qged_display_mode = false;  // Set if we're testing QGED style commands
+private:
+    std::mutex view_update_mutex;
+
+    // Active listeners
+    std::map<std::pair<struct ged_subprocess *, bu_process_io_t>, ProcessIOHandler *> listeners;
+    std::mutex listeners_lock;
 
 };
+
+/* GSH has no native canvas.  Its endpoint must nevertheless use the standard
+ * headless host factory so capture and progressive presentation have an
+ * endpoint-owned rendering/context lifecycle. */
+static int
+gsh_headless_endpoint_ensure(struct ged *gedp, struct ged_view_context *view_ctx,
+	int sync_current_scene)
+{
+    if (!gedp || !view_ctx)
+	return 0;
+
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    if (!endpoint) {
+	endpoint = bobol_display_endpoint_create(NULL, 0);
+	if (!endpoint)
+	    return 0;
+	if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	    bobol_display_endpoint_destroy(endpoint);
+	    return 0;
+	}
+    }
+    (void)sync_current_scene;
+    if (!endpoint)
+	return 0;
+
+    const struct bv *view = bv_context_view_const(
+	(const struct bv_context *)view_ctx);
+    const unsigned int width = view && bv_width_get(view) > 0 ?
+	(unsigned int)bv_width_get(view) : 512u;
+    const unsigned int height = view && bv_height_get(view) > 0 ?
+	(unsigned int)bv_height_get(view) : 512u;
+
+
+    const char *factory = bobol_display_endpoint_host_factory_name(endpoint);
+    if (factory) {
+	if (!BU_STR_EQUAL(factory, "headless"))
+	    return 0;
+	return bobol_display_endpoint_resize(endpoint, width, height, 1.0);
+    }
+
+    struct bobol_host_desc desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BOBOL_HOST_MODE_HEADLESS;
+    desc.width = width;
+    desc.height = height;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BOBOL_HOST_CAP_PIXEL_PRESENT |
+	BOBOL_HOST_CAP_PROGRESSIVE_PRESENT |
+	BOBOL_HOST_CAP_READBACK |
+	BOBOL_HOST_CAP_FRAMEBUFFER_PRESENT;
+    desc.visible = 0;
+    desc.title = "GSH Obol";
+    desc.vsync = BOBOL_HOST_VSYNC_AUTO;
+
+    const enum bobol_render_engine old_engine =
+	bobol_display_endpoint_render_engine_get(endpoint);
+    if (!bobol_display_endpoint_render_engine_set(endpoint,
+	BOBOL_RENDER_ENGINE_AUTO) ||
+	!bobol_display_endpoint_host_open(endpoint, "headless", &desc) ||
+	!bobol_display_endpoint_render_engine_set(endpoint,
+	    BOBOL_RENDER_ENGINE_SW)) {
+	bobol_display_endpoint_host_detach(endpoint);
+	(void)bobol_display_endpoint_render_engine_set(endpoint, old_engine);
+	return 0;
+    }
+
+    return 1;
+}
+
+static BObolWindowHost *
+gsh_headless_endpoint_host(struct ged_view_context *view_ctx)
+{
+    bobol_display_endpoint_t *endpoint = view_ctx ?
+	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+    const char *factory = endpoint ?
+	bobol_display_endpoint_host_factory_name(endpoint) : NULL;
+    if (!endpoint || !factory || !BU_STR_EQUAL(factory, "headless"))
+	return NULL;
+    return static_cast<BObolWindowHost *>(
+	bobol_display_endpoint_host(endpoint));
+}
 
 /* For gsh these are mostly no-op, but define placeholder functions in case we
  * need pre or post actions for database ops in the future. */
@@ -275,6 +351,16 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
     if (!s->gedp->dbip)
 	return BRLCAD_OK;
     s->gfile = std::string(s->gedp->dbip->dbi_filename);
+
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(s->gedp);
+    if (!view_ctx || !gsh_headless_endpoint_ensure(s->gedp, view_ctx, 0))
+	return BRLCAD_ERROR;
+    BObolWindowHost *host = gsh_headless_endpoint_host(view_ctx);
+    if (!host || ged_draw_obol_framebuffer_backend_install_for_view(s->gedp,
+	view_ctx, host, 0, 0, 0) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+
     return BRLCAD_OK;
 }
 
@@ -321,7 +407,7 @@ gsh_db_search_callback(int argc, const char *argv[], void *UNUSED(u1), void *u2)
 	std::string rstr(bu_vls_cstr(gedp->ged_result_str));
 	if (rstr.length() && rstr.c_str()[rstr.length() - 1] != '\n')
 	    rstr.append("\n");
-        bu_log("%s", rstr.c_str());
+	bu_log("%s", rstr.c_str());
     }
 
     /* Restore any non-exec output */
@@ -377,8 +463,13 @@ Gsh_ClearScreen(int UNUSED(ac), const char **UNUSED(av), void *UNUSED(gedp), voi
 
 GshState::GshState()
 {
+    bobol_init(NULL);
     BU_GET(gedp, struct ged);
     ged_init(gedp);
+
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx || !gsh_headless_endpoint_ensure(gedp, view_ctx, 0))
+	bu_log("gsh: unable to create the headless Obol display endpoint\n");
 
     view_checkpoint();
 
@@ -405,16 +496,11 @@ GshState::GshState()
 
 GshState::~GshState()
 {
-#ifdef USE_DM
-    struct bu_ptbl *views = bv_set_views(&gedp->ged_views);
-    for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	struct bview *v = (struct bview *)BU_PTBL_GET(views, i);
-	if (v->dmp) {
-	    dm_close((struct dm *)v->dmp);
-	    v->dmp = NULL;
-	}
-    }
-#endif
+    if (gedp)
+	ged_draw_obol_framebuffer_release(gedp);
+
+    if (gedp && gedp->ged_fbs && fbs_can_close(gedp->ged_fbs))
+	(void)fbs_close(gedp->ged_fbs);
 
     ged_close(gedp);
 }
@@ -504,9 +590,7 @@ GshState::disconnect(struct ged_subprocess *p, bu_process_io_t t)
 void
 GshState::view_checkpoint()
 {
-#ifdef USE_DM
-    prev_hash.hash(gedp, false, new_cmd_forms);
-#endif
+    prev_hash.hash(gedp, false, qged_display_mode);
 }
 
 void
@@ -571,46 +655,81 @@ GshState::listeners_cnt()
 void
 GshState::view_update()
 {
-#ifdef USE_DM
+    std::lock_guard<std::mutex> update_guard(view_update_mutex);
+
     DisplayHash hashes;
-    if (!hashes.hash(gedp, true, new_cmd_forms))
+    if (!hashes.hash(gedp, true, qged_display_mode))
 	return;
 
     hashes.dirty(gedp, prev_hash);
 
-    struct bview *v = gedp->ged_gvp;
-    struct dm *dmp = (struct dm *)v->dmp;
-    if (dm_get_dirty(dmp)) {
-	if (new_cmd_forms) {
-	    unsigned char *dm_bg1;
-	    unsigned char *dm_bg2;
-	    dm_get_bg(&dm_bg1, &dm_bg2, dmp);
-	    dm_set_bg(dmp, dm_bg1[0], dm_bg1[1], dm_bg1[2], dm_bg2[0], dm_bg2[1], dm_bg2[2]);
-	    dm_set_dirty(dmp, 0);
-	    dm_draw_objs(v, NULL, NULL);
-	    dm_draw_end(dmp);
-	} else {
-	    matp_t mat = gedp->ged_gvp->gv_model2view;
-	    dm_loadmatrix(dmp, mat, 0);
-	    unsigned char geometry_default_color[] = { 255, 0, 0 };
-	    dm_draw_begin(dmp);
-	    dm_draw_head_dl(dmp, (struct bu_list *)ged_dl(gedp),
-		    1.0, gedp->ged_gvp->gv_isize, -1, -1, -1, 1,
-		    0, 0, geometry_default_color, 1, 0);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return;
 
-	    // Faceplate drawing
-	    if (gedp->dbip) {
-		struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
-		v->gv_base2local = gedp->dbip->dbi_base2local;
-		v->gv_local2base = gedp->dbip->dbi_local2base;
-		dm_draw_viewobjs(wdbp, v, NULL);
-	    } else {
-		dm_draw_viewobjs(NULL, v, NULL);
-	    }
-	    dm_draw_end(dmp);
-	}
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    if (!bv_refresh_dirty_get(view))
+	return;
+
+    if (qged_display_mode &&
+	!ged_view_context_display_endpoint_get(view_ctx)) {
+	(void)gsh_headless_endpoint_ensure(gedp, view_ctx, 1);
+	struct ged_draw_transaction txn =
+	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
+	txn.view = view_ctx;
+	(void)ged_draw_apply_transaction(gedp, &txn, NULL);
     }
-#endif
+
+    /* Keep view-owned composition and faceplate state in the same controller
+     * used by headless capture.  In particular, ert enables framebuffer
+     * underlay in bv; publishing stream pixels alone cannot make that image
+     * part of the Obol render root. */
+    (void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
+
+    /* ERT/fbserv traffic updates the shared view refresh state in every GSH
+     * mode.  Publish it here so headless delay pumping can expose in-flight
+     * frames, rather than waiting for a final screengrab. */
+    (void)ged_draw_obol_framebuffer_present(gedp);
+    bv_context_refresh_complete((struct bv_context *)view_ctx);
+}
+
+// The primary interaction thread managing the command line
+// input from the user.  Must not be the main thread of the
+// application, since linenoise I/O is blocking.
+static int
+gsh_delay_pump(GshState *gs, int argc, const char **argv)
+{
+    static const char *usage = "Usage: delay sec usec";
+    if (!gs || !gs->gedp || argc != 3) {
+	if (gs && gs->gedp)
+	    bu_vls_sprintf(gs->gedp->ged_result_str, "%s", usage);
+	return argc == 1 ? GED_HELP : BRLCAD_ERROR;
+    }
+
+    bu_vls_trunc(gs->gedp->ged_result_str, 0);
+    long sec = atol(argv[1]);
+    long usec = atol(argv[2]);
+    if (sec < 0)
+	sec = 0;
+    if (usec < 0)
+	usec = 0;
+
+    std::chrono::microseconds requested(sec * 1000000LL + usec);
+    std::chrono::steady_clock::time_point deadline =
+	std::chrono::steady_clock::now() + requested;
+    const std::chrono::microseconds step(200000);
+    while (std::chrono::steady_clock::now() < deadline) {
+	std::chrono::microseconds remaining =
+	    std::chrono::duration_cast<std::chrono::microseconds>(
+		deadline - std::chrono::steady_clock::now());
+	std::chrono::microseconds chunk = remaining < step ? remaining : step;
+	if (chunk.count() > 0)
+	    std::this_thread::sleep_for(chunk);
+	gs->subprocess_output();
+	gs->view_update();
+    }
+
+    return BRLCAD_OK;
 }
 
 // The primary interaction thread managing the command line
@@ -618,12 +737,12 @@ GshState::view_update()
 // application, since linenoise I/O is blocking.
 void
 g_cmdline(
-	std::shared_ptr<GshState> gs,
-	std::shared_ptr<linenoise::linenoiseState> l,
-	std::atomic<bool> &thread_done,
-	std::atomic<bool> &io_working,
-	std::mutex &print_mutex
-	)
+    std::shared_ptr<GshState> gs,
+    std::shared_ptr<linenoise::linenoiseState> l,
+    std::atomic<bool> &thread_done,
+    std::atomic<bool> &io_working,
+    std::mutex &print_mutex
+)
 {
     // Reusable working containers for linenoise input processing
     struct bu_vls iline = BU_VLS_INIT_ZERO;
@@ -668,7 +787,9 @@ g_cmdline(
 	    ac = (int)tmp_av.size();
 	}
 
-	int gret = gs.get()->eval(ac, (const char **)av);
+	int gret = BU_STR_EQUAL(av[0], "delay") ?
+	    gsh_delay_pump(gs.get(), ac, (const char **)av) :
+	    gs.get()->eval(ac, (const char **)av);
 
 	/* If the eval tells us it's time to quite, clean up and break the loop */
 	if (gret == GED_EXIT) {
@@ -752,17 +873,18 @@ main(int argc, const char **argv)
     bu_setprogname(argv[0]);
 
     /* Done with program name */
-    argv++; argc--;
+    argv++;
+    argc--;
 
     /* Options */
     int print_help = 0;
     int report_versions = 0;
-    int new_cmd_forms = 0;
+    int new_cmds = 0;
     struct bu_opt_desc d[5];
     BU_OPT(d[0], "h", "help",      "",  NULL, &print_help,        "print help and exit");
     BU_OPT(d[1], "?", "",          "",  NULL, &print_help,        "");
     BU_OPT(d[2], "v", "version",   "",  NULL, &report_versions,   "Report BRL-CAD and library versions, then exit");
-    BU_OPT(d[3], "",  "new-cmds",  "",  NULL, &new_cmd_forms,     "use new (qged style) commands");
+    BU_OPT(d[3], "",  "new-cmds",  "",  NULL, &new_cmds,           "use new (qged style) commands");
     BU_OPT_NULL(d[4]);
 
     /* Parse options, fail if anything goes wrong */
@@ -789,14 +911,11 @@ main(int argc, const char **argv)
     if (report_versions) {
 	struct bu_vls msg = BU_VLS_INIT_ZERO;
 	bu_vls_sprintf(&msg, "%s%s%s%s%s",
-		brlcad_ident("Geometry Shell (gsh)"),
-		bu_version(),
-		bn_version(),
-		rt_version(),
-		ged_version());
-#ifdef USE_DM
-	bu_vls_printf(&msg, "%s", dm_version());
-#endif
+		       brlcad_ident("Geometry Shell (gsh)"),
+		       bu_version(),
+		       bn_version(),
+		       rt_version(),
+		       ged_version());
 	bu_vls_printf(&msg, "\n");
 	std::cout << bu_vls_cstr(&msg);
 	bu_vls_free(&msg);
@@ -812,32 +931,26 @@ main(int argc, const char **argv)
     // Use a C++ class to manage info we will need
     std::shared_ptr<GshState> gs = std::make_shared<GshState>();
 
-    // If we're using the new command forms, there's a little bit
-    // of setup to do at the moment (eventually, once this cmd
-    // behavior is the default, ged setup will do this automatically)
-    gs->new_cmd_forms = (new_cmd_forms) ? true : false;
-    if (gs->new_cmd_forms) {
-	gs->gedp->dbi_state = new DbiState(gs->gedp);
-	gs->gedp->new_cmd_forms = 1;
-	bu_setenv("DM_SWRAST", "1", 1);
-    }
+    // If we're using the new command forms, use qged-style display refresh.
+    gs->qged_display_mode = (new_cmds) ? true : false;
 
     // If we're non-interactive, just evaluate and exit without getting into
     // linenoise and threading.  First, see if we've got a viable .g file.
     if (argc && bu_file_exists(argv[0], NULL)) {
-          int ac = 2;
-          const char *av[3];
-	  av[0] = "open";
-	  av[1] = argv[0];
-	  av[2] = NULL;
-	  int ret = gs.get()->eval(ac, (const char **)av);
-	  if (ret != BRLCAD_OK)
-	      return EXIT_FAILURE;
+	int ac = 2;
+	const char *av[3];
+	av[0] = "open";
+	av[1] = argv[0];
+	av[2] = NULL;
+	int ret = gs.get()->eval(ac, (const char **)av);
+	if (ret != BRLCAD_OK)
+	    return EXIT_FAILURE;
 
-	  /* If we reach this part of the code, argv[0] is a .g file and
-	   * has been handled - skip ahead to the commands. */
-	  argv++; argc--;
-      }
+	/* If we reach this part of the code, argv[0] is a .g file and
+	 * has been handled - skip ahead to the commands. */
+	argv++;
+	argc--;
+    }
 
     /* If we have been given more than a .g filename execute the provided argv
      * commands and exit. Deliberately making this case a very simple execution
@@ -877,11 +990,11 @@ main(int argc, const char **argv)
     // us to integrate input from async commands into terminal output while
     // remaining interactive.
     std::thread g_cmdline_thread(
-	    g_cmdline, gs, gs.get()->l,
-	    std::ref(gs.get()->linenoise_done),
-	    std::ref(gs.get()->io_working),
-	    std::ref(gs.get()->print_mutex)
-	    );
+	g_cmdline, gs, gs.get()->l,
+	std::ref(gs.get()->linenoise_done),
+	std::ref(gs.get()->io_working),
+	std::ref(gs.get()->print_mutex)
+    );
 
     // Give the linenoise thread a little time to set up - it's cleaner
     // when we enter the main loop if the prompt is already set.
@@ -910,4 +1023,3 @@ main(int argc, const char **argv)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

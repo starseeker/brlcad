@@ -28,6 +28,8 @@
 #include <string.h>
 
 #include "bu/cmd.h"
+#include "bv.h"
+#include "ged/event_txn.h"
 #include "rt/geom.h"
 #include "rt/primitives/arb8.h"
 #include "raytrace.h"
@@ -227,7 +229,17 @@ bad_edge:
 	    VMOVE(arb->pt[i], arb_pt);
 	}
 
-	GED_DB_PUT_INTERN(gedp, dp, &intern, BRLCAD_ERROR);
+	int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
+	if (rt_db_put_internal(dp, gedp->dbip, &intern) < 0) {
+	    bu_vls_printf(gedp->ged_result_str, "Database write failure.");
+	    if (event_batch_opened)
+		ged_event_batch_end(gedp, NULL);
+	    rt_db_free_internal(&intern);
+	    return BRLCAD_ERROR;
+	}
+	(void)ged_event_notify_object_modified(gedp, dp->d_namep, 1, NULL);
+	if (event_batch_opened)
+	    ged_event_batch_end(gedp, NULL);
     }
 
     return BRLCAD_OK;
@@ -292,7 +304,11 @@ ged_find_arb_edge_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
 	return BRLCAD_ERROR;
     }
 
-    (void)rt_arb_find_e_nearest_pt2(&edge, &vi1, &vi2, &intern, view, gedp->ged_gvp->gv_model2view, ptol);
+    mat_t model2view;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    bv_model2view_get(model2view,
+	    bv_context_view_const((const struct bv_context *)view_ctx));
+    (void)rt_arb_find_e_nearest_pt2(&edge, &vi1, &vi2, &intern, view, model2view, ptol);
     bu_vls_printf(gedp->ged_result_str, "%d %d %d", edge, vi1, vi2);
 
     rt_db_free_internal(&intern);

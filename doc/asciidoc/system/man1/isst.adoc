@@ -17,10 +17,11 @@ isst [file.g [object]]
 [[description]]
 == DESCRIPTION
 
-*isst* is an interactive, Tcl/Tk and OpenGL based viewer built on the
-Advanced Distributed Ray Tracer (ADRT) and its *tie* ray-tracing engine.
-It renders BRL-CAD geometry in real time so that a model can be inspected
-and navigated as it is ray traced.
+*isst* is an interactive Tcl/Tk viewer built on the Advanced Distributed Ray
+Tracer (ADRT) and its *tie* ray-tracing engine.  ADRT renders RGB images and
+the Tk photo widget presents those pixels directly; *isst* does not require an
+OpenGL display manager.  It renders BRL-CAD geometry in real time so that a
+model can be inspected and navigated as it is ray traced.
 
 If a geometry database _file.g_ is given together with an _object_, that
 object is loaded and rendered immediately. If only _file.g_ is given, a

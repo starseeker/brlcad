@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -42,12 +44,16 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get aet */
     if (argc == 1) {
-	bn_encode_vect(gedp->ged_result_str, gedp->ged_gvp->gv_aet, 1);
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	bv_aet_get(aet, view);
+	bn_encode_vect(gedp->ged_result_str, aet, 1);
 	return BRLCAD_OK;
     }
 
@@ -70,12 +76,14 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 	}
 
 	if (iflag) {
-	    VADD2(gedp->ged_gvp->gv_aet, gedp->ged_gvp->gv_aet, aet);
-	} else {
-	    VMOVE(gedp->ged_gvp->gv_aet, aet);
+	    vect_t view_aet;
+	    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	    bv_aet_get(view_aet, view);
+	    VADD2(aet, view_aet, aet);
 	}
-	bv_mat_aet(gedp->ged_gvp);
-	bv_update(gedp->ged_gvp);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_aet_set(view, aet);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }
@@ -105,12 +113,14 @@ ged_aet_core(struct ged *gedp, int argc, const char *argv[])
 	VMOVE(aet, scan);
 
 	if (iflag) {
-	    VADD2(gedp->ged_gvp->gv_aet, gedp->ged_gvp->gv_aet, aet);
-	} else {
-	    VMOVE(gedp->ged_gvp->gv_aet, aet);
+	    vect_t view_aet;
+	    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
+	    bv_aet_get(view_aet, view);
+	    VADD2(aet, view_aet, aet);
 	}
-	bv_mat_aet(gedp->ged_gvp);
-	bv_update(gedp->ged_gvp);
+	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+	bv_aet_set(view, aet);
+	ged_view_context_update(view_ctx);
 
 	return BRLCAD_OK;
     }

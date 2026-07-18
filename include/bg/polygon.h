@@ -34,7 +34,6 @@
 #include "vmath.h"
 #include "bu/color.h"
 #include "bn/tol.h"
-#include "bv/defines.h"
 #include "bg/defines.h"
 #include "bg/polygon_types.h"
 

@@ -1,0 +1,72 @@
+BRL-CAD Obol Grid and Snap Design
+=================================
+
+Scope
+-----
+
+The work grid is an interactive view aid.  It must be visible when requested,
+must not affect model bounds or database geometry, and must remain usable for
+grid snapping even when the visual grid is hidden.
+
+Design
+------
+
+`SoBRLGrid` is the canonical Obol node for the work grid.  It owns both:
+
+* visual HUD state: adaptive minor, major, and axis line layers rendered in
+  normalized view coordinates;
+* semantic snap state: model-to-view matrix, view scale, base-to-local scale,
+  center, horizontal/vertical spacing, and snap enable state.
+
+The visual grid is built as a HUD overlay using separate
+`SoBRLVListShape` children for minor, major, and axis layers.  The scene
+controller recognizes the grid as overlay intent and excludes it from
+bounds/autoview, export-as-model-geometry, and database object accounting.
+
+Snapping does not inspect the drawn line segments.  `SoBRLSnapAction` has a
+`GRID` snap kind that reads `SoBRLGrid` fields, transforms the query point into
+view space, rounds to the configured grid interval, and transforms the result
+back to model space.  Real geometry and explicit command overlays keep
+priority over an equal-distance grid candidate.
+
+View State
+----------
+
+`bobol_grid_configure_from_view` and
+`bobol_grid_configure_from_view_context` are the publication helpers used by
+GED and qtcad.  They copy the current view-grid state into `SoBRLGrid` and set:
+
+* `visible` from the view's draw-grid flag;
+* `snapEnabled` from the view's snap-grid flag;
+* matrix/scale fields from the owning view.
+
+The helpers return success when either drawing or snapping is enabled.  This
+allows a view to keep a non-rendering grid node alive solely for snapping.
+
+Native View Snap
+----------------
+
+The native libbv grid snap path uses the same model/view math as `SoBRLGrid`
+instead of delegating to legacy BSG grid behavior.  The calculation is
+scene-graph-free view mechanics and belongs in libbv; scene/database snap
+refinement remains a libBObol/application concern.
+
+Testing
+-------
+
+Current focused coverage:
+
+* `ged_test_faceplate` verifies grid image publication is non-empty and
+  faceplate overlays do not depend on legacy transformed-point grids;
+* `ged_test_snap_semantics` verifies semantic snap records, including grid
+  snap kind routing;
+* `test_bobol_prototype` verifies layered adaptive grid construction,
+  bounds exclusion, visible-grid snapping, and hidden-but-snap-enabled grid
+  behavior.
+
+Open Follow-Up
+--------------
+
+The visual style is intentionally simple.  Future UX work can improve grid
+fade, axis emphasis, screen-density policy, and construction-plane coupling
+without changing the snap contract.
