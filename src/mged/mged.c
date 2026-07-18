@@ -428,7 +428,7 @@ new_edit_mats(struct mged_state *s)
 
 
 void
-mged_view_callback(void *view_ctx,
+mged_view_callback(struct ged_view_context *view_ctx,
 		   void *clientData)
 {
     struct mged_state *s = MGED_STATE;
@@ -2003,7 +2003,7 @@ mged_obol_faceplate_color_scheme_sync(struct mged_state *s, struct mged_display 
     if (!s || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
 	return;
 
-    (void)ged_draw_obol_view_context_faceplate_sync(s->gedp,
+    (void)ged_draw_obol_faceplate_sync(s->gedp,
 	p->display_view_state->vs_gvp);
 }
 
@@ -2046,13 +2046,13 @@ mged_obol_faceplate_sync(struct mged_state *s, struct mged_display *p)
     if (!s || !p || !p->display_view_state || !p->display_view_state->vs_gvp || !s->gedp)
 	return;
 
-    (void)ged_draw_obol_view_context_faceplate_sync(s->gedp,
+    (void)ged_draw_obol_faceplate_sync(s->gedp,
 	p->display_view_state->vs_gvp);
 }
 
 static void
 mged_obol_framebuffer_composition_sync(const struct mged_display *display,
-	void *view_ctx)
+	struct ged_view_context *view_ctx)
 {
 	if (!view_ctx || !display || !display->display_variables)
 	    return;
@@ -2147,7 +2147,7 @@ refresh(struct mged_state *s)
 	if (!mapped || !mged_display_repaint_pending(p))
 	    continue;
 
-	void *view_ctx = p->display_view_state ? p->display_view_state->vs_gvp : NULL;
+	struct ged_view_context *view_ctx = p->display_view_state ? p->display_view_state->vs_gvp : NULL;
 	struct bv *view = view_ctx ? mged_view_state_view(p->display_view_state) : NULL;
 	bobol_display_endpoint_t *endpoint = view_ctx ?
 	    ged_view_context_display_endpoint_get(view_ctx) : NULL;

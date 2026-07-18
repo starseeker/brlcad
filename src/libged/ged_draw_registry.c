@@ -50,13 +50,10 @@ struct ged_draw_registry_entry {
 
 #define GED_DRAW_REGISTRY_ENTRY_MAGIC 0x67647265U /* gdre */
 
-static struct bu_ptbl ged_draw_registry_entries = BU_PTBL_INIT_ZERO;
-
 typedef int (*ged_draw_registry_source_ref_index_cb)(
 	ged_draw_scene_handle scene_ref,
 	void *userdata);
 
-static struct ged_drawable *_ged_drawable_for_scene_handle(ged_draw_scene_handle scene_ref);
 static struct ged_drawable *_ged_draw_registry_entry_gdp(struct ged_draw_registry_entry *entry);
 static struct ged_draw_registry_entry *_ged_draw_registry_entry_ensure(
 	struct ged *gedp,
@@ -71,65 +68,10 @@ static void _ged_draw_registry_entry_index(struct ged_drawable *gdp,
 static void _ged_draw_registry_entry_unindex(struct ged_drawable *gdp,
 					     struct ged_draw_registry_entry *entry);
 static void _ged_draw_registry_index_tables_free(struct ged_drawable *gdp);
-static void ged_draw_shape_state_release_scene_handle(ged_draw_scene_handle scene_ref);
 static ged_draw_shape_ref _ged_draw_registry_shape_ref_from_source_ref_local(struct ged *gedp,
 									    ged_draw_scene_handle scene_ref);
 static ged_draw_group_ref _ged_draw_registry_group_ref_from_source_ref_local(struct ged *gedp,
 									    ged_draw_scene_handle scene_ref);
-
-
-static void
-_ged_draw_registry_global_insert(struct ged_draw_registry_entry *entry)
-{
-    if (!entry)
-	return;
-    if (!BU_PTBL_IS_INITIALIZED(&ged_draw_registry_entries))
-	BU_PTBL_INIT(&ged_draw_registry_entries);
-    bu_ptbl_ins(&ged_draw_registry_entries, (long *)entry);
-}
-
-
-static void
-_ged_draw_registry_global_remove_gdp(struct ged_drawable *gdp)
-{
-    if (!gdp || !BU_PTBL_IS_INITIALIZED(&ged_draw_registry_entries))
-	return;
-
-    size_t write = 0;
-    for (size_t read = 0; read < BU_PTBL_LEN(&ged_draw_registry_entries); read++) {
-	struct ged_draw_registry_entry *entry =
-	    (struct ged_draw_registry_entry *)BU_PTBL_GET(&ged_draw_registry_entries, read);
-	if (_ged_draw_registry_entry_gdp(entry) == gdp)
-	    continue;
-	BU_PTBL_SET(&ged_draw_registry_entries, write, entry);
-	write++;
-    }
-
-    for (size_t i = write; i < BU_PTBL_LEN(&ged_draw_registry_entries); i++)
-	BU_PTBL_SET(&ged_draw_registry_entries, i, NULL);
-    ged_draw_registry_entries.end = write;
-
-    if (BU_PTBL_LEN(&ged_draw_registry_entries) == 0) {
-	bu_ptbl_free(&ged_draw_registry_entries);
-	ged_draw_registry_entries = (struct bu_ptbl)BU_PTBL_INIT_ZERO;
-    }
-}
-
-
-static struct ged_draw_registry_entry *
-_ged_draw_registry_entry_for_scene_handle_global(ged_draw_scene_handle scene_ref)
-{
-    if (ged_draw_scene_handle_is_null(scene_ref) ||
-	    !BU_PTBL_IS_INITIALIZED(&ged_draw_registry_entries))
-	return NULL;
-    for (size_t i = 0; i < BU_PTBL_LEN(&ged_draw_registry_entries); i++) {
-	struct ged_draw_registry_entry *entry =
-	    (struct ged_draw_registry_entry *)BU_PTBL_GET(&ged_draw_registry_entries, i);
-	if (entry && ged_draw_scene_handle_equal(entry->scene_ref, scene_ref))
-	    return entry;
-    }
-    return NULL;
-}
 
 
 static void
@@ -194,7 +136,6 @@ _ged_draw_registry_entries_free(struct ged_drawable *gdp)
 {
     if (!gdp || !gdp->gd_draw_registry_init)
 	return;
-    _ged_draw_registry_global_remove_gdp(gdp);
     for (size_t i = 0; i < BU_PTBL_LEN(&gdp->gd_draw_registry); i++) {
 	struct ged_draw_registry_entry *entry =
 	    (struct ged_draw_registry_entry *)BU_PTBL_GET(&gdp->gd_draw_registry, i);
@@ -235,17 +176,6 @@ _ged_draw_registry_init_if_needed(struct ged_drawable *gdp)
 
 
 static struct ged_drawable *
-_ged_drawable_for_scene_handle(ged_draw_scene_handle scene_ref)
-{
-    struct ged_draw_registry_entry *entry =
-	_ged_draw_registry_entry_for_scene_handle_global(scene_ref);
-    if (!entry || !entry->data.gedp || !entry->data.gedp->i)
-	return NULL;
-    return entry->data.gedp->i->ged_gdp;
-}
-
-
-static struct ged_drawable *
 _ged_draw_registry_entry_gdp(struct ged_draw_registry_entry *entry)
 {
     if (!entry)
@@ -253,7 +183,7 @@ _ged_draw_registry_entry_gdp(struct ged_draw_registry_entry *entry)
     if (entry->data.gedp && entry->data.gedp->i &&
 	    entry->data.gedp->i->ged_gdp)
 	return entry->data.gedp->i->ged_gdp;
-    return _ged_drawable_for_scene_handle(entry->scene_ref);
+    return NULL;
 }
 
 
@@ -584,15 +514,10 @@ static struct ged_draw_registry_entry *
 _ged_draw_registry_entry_for_scene_handle(struct ged *gedp,
 					  ged_draw_scene_handle scene_ref)
 {
-    struct ged_drawable *gdp = NULL;
-    if (gedp && gedp->i)
-	gdp = gedp->i->ged_gdp;
-    if (!gdp)
-	gdp = _ged_drawable_for_scene_handle(scene_ref);
-    struct ged_draw_registry_entry *entry =
-	_ged_draw_registry_entry_for_scene_handle_in_gdp(gdp, scene_ref);
-    return entry ? entry :
-	_ged_draw_registry_entry_for_scene_handle_global(scene_ref);
+    if (!gedp || !gedp->i)
+	return NULL;
+    return _ged_draw_registry_entry_for_scene_handle_in_gdp(
+	gedp->i->ged_gdp, scene_ref);
 }
 
 
@@ -1084,55 +1009,7 @@ _ged_draw_registry_entry_ensure(struct ged *gedp, ged_draw_scene_handle scene_re
     entry->scene_ref = scene_ref;
     _ged_draw_shape_state_init(&entry->data, gedp);
     bu_ptbl_ins(&gdp->gd_draw_registry, (long *)entry);
-    _ged_draw_registry_global_insert(entry);
     return entry;
-}
-
-
-void
-ged_draw_registry_source_ref_highlight_free(ged_draw_scene_handle scene_ref)
-{
-    if (ged_draw_scene_handle_is_null(scene_ref))
-	return;
-    struct ged_drawable *gdp = _ged_drawable_for_scene_handle(scene_ref);
-    struct ged_draw_registry_entry *entry =
-	_ged_draw_registry_entry_for_scene_handle_in_gdp(gdp, scene_ref);
-    if (!entry)
-	return;
-    if (gdp && gdp->gd_highlight_token == entry->token) {
-	gdp->gd_highlight_token = 0;
-	gdp->gd_highlight_scene_rev = 0;
-	gdp->gd_highlight_rev++;
-    }
-    ged_draw_shape_state_release_scene_handle(scene_ref);
-}
-
-
-ged_draw_shape_state *
-ged_draw_shape_state_get_scene_handle(ged_draw_scene_handle scene_ref)
-{
-    if (ged_draw_scene_handle_is_null(scene_ref))
-	return NULL;
-    struct ged_draw_registry_entry *entry =
-	_ged_draw_registry_entry_for_scene_handle(NULL, scene_ref);
-    return entry ? &entry->data : NULL;
-}
-
-
-static void
-ged_draw_shape_state_release_scene_handle(ged_draw_scene_handle scene_ref)
-{
-    if (ged_draw_scene_handle_is_null(scene_ref))
-	return;
-    struct ged_draw_registry_entry *entry =
-	_ged_draw_registry_entry_for_scene_handle(NULL, scene_ref);
-    if (!entry)
-	return;
-    _ged_draw_registry_entry_unindex(_ged_draw_registry_entry_gdp(entry),
-	    entry);
-    _ged_draw_shape_state_free_contents(&entry->data);
-    if (entry)
-	entry->scene_ref = ged_draw_scene_handle_null();
 }
 
 

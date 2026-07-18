@@ -40,7 +40,13 @@ extern "C" {
 #include "rt/tree.h"
 }
 
+#include "BObol/BExportAction.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BSceneController.h"
+#include "BObol/BViewController.h"
+#include <Inventor/SoViewport.h>
 #include "../alphanum.h"
+#include "../ged_bobol_private.hpp"
 #include "../ged_private.h"
 
 struct who_solids_record {
@@ -214,60 +220,183 @@ who_solids_print_record(const struct who_solids_record &rec,
 		  rec.vlist_point_count);
 }
 
-struct who_solids_collect_ctx {
-    std::vector<struct who_solids_record> objs;
-    int lvl;
-};
-
-static int
-who_solids_collect_record(const struct ged_draw_view_db_object_record *rec,
-			  void *data)
+static unsigned char
+who_solids_color_channel(float value)
 {
-    struct who_solids_collect_ctx *ctx =
-	(struct who_solids_collect_ctx *)data;
-    if (!ctx || !rec || rec->non_database_source || !rec->path)
-	return 1;
-
-    struct who_solids_record out;
-    out.path = rec->path;
-    out.highlighted = rec->highlighted;
-    out.color[0] = rec->color[0];
-    out.color[1] = rec->color[1];
-    out.color[2] = rec->color[2];
-    VMOVE(out.bounds_center, rec->bounds_center);
-    out.bounds_radius = rec->bounds_radius;
-    out.vlist_structure_count = rec->vlist_structure_count;
-    out.vlist_point_count = rec->vlist_point_count;
-    if (ctx->lvl > 2) {
-	struct bu_vls report = BU_VLS_INIT_ZERO;
-	ged_draw_view_db_object_record_geometry_report(rec, &report);
-	out.geometry_report = bu_vls_cstr(&report);
-	bu_vls_free(&report);
-    }
-    ctx->objs.push_back(out);
-    return 1;
+    if (value <= 0.0f)
+	return 0;
+    if (value >= 1.0f)
+	return 255;
+    return static_cast<unsigned char>(value * 255.0f + 0.5f);
 }
 
 static void
-who_solids_print_view(void *v, struct db_i *dbip, int mode, int lvl, struct bu_vls *vls)
+who_solids_collect_record(const SoBRLExportAction::ObjectRecord &rec,
+	const SoBRLExportAction &export_action, int lvl,
+	std::vector<struct who_solids_record> &objects)
 {
-    struct who_solids_collect_ctx ctx;
-    ctx.lvl = lvl;
+    if (rec.path.getLength() == 0 || rec.nonDatabaseSource ||
+	rec.overlayIntent || rec.hudIntent || rec.localSource || rec.sharedSource)
+	return;
 
+    struct who_solids_record out;
+    out.path = rec.path.getString();
+    out.highlighted = rec.highlighted;
+    SbColor color = rec.color;
+    if (!rec.lineIndices.empty()) {
+	const SoBRLExportAction::LineRecord &line =
+	    export_action.getLine(rec.lineIndices.front());
+	color = line.colorOverride ? line.color :
+	    (line.materialColorValid ? line.materialColor : line.color);
+    } else if (!rec.pointIndices.empty()) {
+	const SoBRLExportAction::PointRecord &point =
+	    export_action.getPoint(rec.pointIndices.front());
+	color = point.colorOverride ? point.color :
+	    (point.materialColorValid ? point.materialColor : point.color);
+    } else if (!rec.triangleIndices.empty()) {
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    export_action.getTriangle(rec.triangleIndices.front());
+	color = triangle.colorOverride ? triangle.color :
+	    (triangle.materialColorValid ? triangle.materialColor :
+	     triangle.color);
+    }
+    out.color[0] = who_solids_color_channel(color[0]);
+    out.color[1] = who_solids_color_channel(color[1]);
+    out.color[2] = who_solids_color_channel(color[2]);
+    VSETALL(out.bounds_center, 0.0);
+    out.bounds_radius = 0.0;
+    if (!rec.bounds.isEmpty()) {
+	const SbVec3f center = rec.bounds.getCenter();
+	const SbVec3f diagonal = rec.bounds.getMax() - rec.bounds.getMin();
+	VSET(out.bounds_center, center[0], center[1], center[2]);
+	out.bounds_radius = 0.5 * diagonal.length();
+    }
+    out.vlist_structure_count = rec.lineIndices.size() +
+	rec.pointIndices.size() + rec.triangleIndices.size();
+    out.vlist_point_count = rec.lineIndices.size() * 2 +
+	rec.pointIndices.size() + rec.triangleIndices.size() * 3;
+
+    if (lvl > 2) {
+	struct bu_vls report = BU_VLS_INIT_ZERO;
+	for (int index : rec.lineIndices) {
+	    const SoBRLExportAction::LineRecord &line =
+		export_action.getLine(index);
+	    bu_vls_printf(&report,
+		"  line move (%g, %g, %g)\n  line draw (%g, %g, %g)\n",
+		line.a[0], line.a[1], line.a[2],
+		line.b[0], line.b[1], line.b[2]);
+	}
+	for (int index : rec.pointIndices) {
+	    const SbVec3f &point = export_action.getPoint(index).point;
+	    bu_vls_printf(&report, "  point draw (%g, %g, %g)\n",
+		point[0], point[1], point[2]);
+	}
+	for (int index : rec.triangleIndices) {
+	    const SoBRLExportAction::TriangleRecord &triangle =
+		export_action.getTriangle(index);
+	    const SbVec3f points[3] = {triangle.a, triangle.b, triangle.c};
+	    for (size_t i = 0; i < 3; i++)
+		bu_vls_printf(&report,
+		    "  indexed face %zu (%g, %g, %g)\n", i,
+		    points[i][0], points[i][1], points[i][2]);
+	}
+	out.geometry_report = bu_vls_cstr(&report);
+	bu_vls_free(&report);
+    }
+    objects.push_back(out);
+}
+
+static void
+who_solids_print_view(struct ged *gedp, struct ged_view_context *v,
+	struct db_i *dbip,
+	int mode, int lvl, struct bu_vls *vls)
+{
     if (!v)
 	return;
 
-    ged_draw_foreach_visible_view_db_object_record_mode(v, mode,
-	    who_solids_collect_record, &ctx);
+    BObolViewController *controller = ged_bobol_view_controller(v);
+    SoBRLExportAction export_action;
+    std::vector<SoBRLExportAction::ObjectRecord> objects;
+    if (controller && controller->getViewport() &&
+	controller->getViewport()->getRoot()) {
+	(void)controller->realizePending();
+	export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+	export_action.apply(controller->getViewport()->getRoot());
+	export_action.collectObjectRecords(objects,
+	    SoBRLExportAction::QUERY_VISIBLE_ONLY, nullptr, mode);
+    }
+    std::vector<struct who_solids_record> records;
+    std::set<std::string> recorded_instances;
+    for (const SoBRLExportAction::ObjectRecord &object : objects)
+	if (!object.ownerSourceInstanceKey.getLength() ||
+	    recorded_instances.insert(
+		object.ownerSourceInstanceKey.getString()).second)
+	    who_solids_collect_record(object, export_action, lvl, records);
 
-    std::sort(ctx.objs.begin(), ctx.objs.end(),
+    /* A source may be valid and visible before it has published display-level
+     * geometry.  Source inventory is the authoritative database-object list;
+     * the semantic exporter above supplements it with realized detail. */
+    std::vector<SoBRLDatabaseSource *> sources = controller ?
+	controller->getRenderDatabaseSources() :
+	std::vector<SoBRLDatabaseSource *>();
+    if (sources.empty()) {
+	BObolSceneController *scene = ged_bobol_scene(gedp);
+	if (scene) {
+	    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+		SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
+		if (source)
+		    sources.push_back(source);
+	    }
+	}
+    }
+    for (SoBRLDatabaseSource *source : sources) {
+	BObolDatabaseSourceSummary summary;
+	if (!source || !source->getSummary(summary) || !summary.valid ||
+	    !summary.visible || (mode >= 0 && summary.drawMode != mode) ||
+	    (summary.instanceKey.getLength() &&
+	     recorded_instances.find(summary.instanceKey.getString()) !=
+		recorded_instances.end()))
+	    continue;
+
+	struct who_solids_record out;
+	out.path = summary.path.getString();
+	out.highlighted = summary.highlighted ? 1 : 0;
+	const SbColor color = summary.colorOverride ? summary.color :
+	    (summary.materialColorValid ? summary.materialColor : summary.color);
+	out.color[0] = who_solids_color_channel(color[0]);
+	out.color[1] = who_solids_color_channel(color[1]);
+	out.color[2] = who_solids_color_channel(color[2]);
+	VSETALL(out.bounds_center, 0.0);
+	out.bounds_radius = 0.0;
+	if (summary.sourceBoundsValid && !summary.sourceBounds.isEmpty()) {
+	    const SbVec3f center = summary.sourceBounds.getCenter();
+	    const SbVec3f diagonal = summary.sourceBounds.getMax() -
+		summary.sourceBounds.getMin();
+	    VSET(out.bounds_center, center[0], center[1], center[2]);
+	    out.bounds_radius = 0.5 * diagonal.length();
+	}
+	out.vlist_structure_count = 0;
+	out.vlist_point_count = 0;
+	for (int i = 0; i < source->getRealizedShapeSummaryCount(); i++) {
+	    BObolRealizedShapeSummary shape;
+	    if (!source->getRealizedShapeSummary(i, shape) || !shape.valid)
+		continue;
+	    out.vlist_structure_count += static_cast<size_t>(
+		shape.segmentCount + shape.pointPrimitiveCount +
+		shape.triangleCount);
+	    out.vlist_point_count += static_cast<size_t>(shape.pointCount);
+	}
+	records.push_back(out);
+    }
+
+    std::sort(records.begin(), records.end(),
 	      [](const struct who_solids_record &a,
 		 const struct who_solids_record &b) {
 		  return alphanum_impl(a.path.c_str(), b.path.c_str(), NULL) < 0;
 	      });
 
-    for (size_t i = 0; i < ctx.objs.size(); i++)
-	who_solids_print_record(ctx.objs[i], dbip, lvl, vls);
+    for (size_t i = 0; i < records.size(); i++)
+	who_solids_print_record(records[i], dbip, lvl, vls);
 }
 
 
@@ -329,7 +458,7 @@ who_solids_impl(struct ged *gedp, int argc, const char *argv[], int subcmd_usage
 	return BRLCAD_ERROR;
     }
 
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     if (bu_vls_strlen(&cvls)) {
 	v = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
@@ -345,7 +474,8 @@ who_solids_impl(struct ged *gedp, int argc, const char *argv[], int subcmd_usage
 	return BRLCAD_ERROR;
     }
 
-    who_solids_print_view(v, gedp->dbip, mode, lvl, gedp->ged_result_str);
+    who_solids_print_view(gedp, v, gedp->dbip, mode, lvl,
+	gedp->ged_result_str);
     return BRLCAD_OK;
 }
 

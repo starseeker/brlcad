@@ -211,7 +211,7 @@ ged_mirror_core(struct ged *gedp, int argc, const char *argv[])
 	/* draw the new object */
 	const char *object = (const char *)argv[bu_optind+1];
 	const char *e_argv[2] = {"draw", NULL};
-	void *view_ctx = NULL;
+	struct ged_view_context *view_ctx = NULL;
 	e_argv[1] = object;
 	(void)ged_exec_draw(gedp, 2, e_argv);
 	view_ctx = ged_view_active_ctx(gedp);

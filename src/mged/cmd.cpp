@@ -733,7 +733,7 @@ cmd_ged_simulate_wrapper(ClientData clientData, Tcl_Interp *interpreter, int arg
 	    has_view = 1;
     }
 
-    void *view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
+    struct ged_view_context *view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
     if (has_output && !has_view && view_ctx) {
 	quat_t quat;
 	point_t eye_pos;
@@ -1327,7 +1327,7 @@ cmd_ged_display_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc
     else
 	return TCL_OK;
 
-    void *active_view_ctx = ged_view_active_ctx(s->gedp);
+    struct ged_view_context *active_view_ctx = ged_view_active_ctx(s->gedp);
     if (!active_view_ctx) {
 	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	active_view_ctx = ged_view_active_ctx(s->gedp);
@@ -1372,7 +1372,7 @@ cmd_screengrab(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
     mged_display_repaint_request(s->mged_curr_display, MGED_REPAINT_DEVICE_SETTING);
     refresh(s);
 
-    void *active_view_ctx = ged_view_active_ctx(s->gedp);
+    struct ged_view_context *active_view_ctx = ged_view_active_ctx(s->gedp);
     if (!active_view_ctx) {
 	ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	active_view_ctx = ged_view_active_ctx(s->gedp);
@@ -2861,7 +2861,8 @@ struct _view_cache {
 };
 
 static void
-_view_cache_save(struct _view_cache *c, void *v, int include_knobs)
+_view_cache_save(struct _view_cache *c, struct ged_view_context *v,
+    int include_knobs)
 {
     if (!c || !v) return;
     struct bv *view = mged_view_context_view(v);
@@ -2897,7 +2898,7 @@ _view_cache_save(struct _view_cache *c, void *v, int include_knobs)
 }
 
 static void
-_view_cache_restore(const struct _view_cache *c, void *v)
+_view_cache_restore(const struct _view_cache *c, struct ged_view_context *v)
 {
     if (!c || !v || !c->valid) return;
     struct bv *view = mged_view_context_view(v);
@@ -2930,7 +2931,8 @@ _view_cache_restore(const struct _view_cache *c, void *v)
 }
 
 static void
-_view_copy_to_staging(void *dst, void *src, struct mged_state *s, int include_knobs)
+_view_copy_to_staging(struct ged_view_context *dst,
+    struct ged_view_context *src, struct mged_state *s, int include_knobs)
 {
     if (!dst || !src) return;
     struct bv *dst_view = mged_view_context_view(dst);
@@ -2981,7 +2983,8 @@ _view_copy_to_staging(void *dst, void *src, struct mged_state *s, int include_kn
 }
 
 static void
-_view_copy_from_staging(void *dst, void *src, int include_knobs)
+_view_copy_from_staging(struct ged_view_context *dst,
+    struct ged_view_context *src, int include_knobs)
 {
     if (!dst || !src) return;
     struct bv *dst_view = mged_view_context_view(dst);
@@ -3064,7 +3067,7 @@ _view_maybe_baseline_reset(struct mged_state *s, int do_reset)
  * transform & knob state.  This deliberately ignores draw-scene contents,
  * settings pointers, and unrelated UI fields to minimize false positives. */
 static unsigned long long
-_view_mutation_hash(struct mged_state *ms, void *v)
+_view_mutation_hash(struct mged_state *ms, struct ged_view_context *v)
 {
     if (!v) return 0ULL;
     struct bv *view = mged_view_context_view(v);
@@ -3180,14 +3183,14 @@ cmd_view(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *a
     const int is_knob = _view_is_knob(argc, argv);
     const int baseline_reset = _view_is_baseline_reset(argc, argv);
 
-    void *mged_view = view_state->vs_gvp;
+    struct ged_view_context *mged_view = view_state->vs_gvp;
 
     /* Determine staging context */
     int shared_view = 0;
     int created_temp = 0;
-    void *staging = NULL;
+    struct ged_view_context *staging = NULL;
 
-    void *active_view = ged_view_active_ctx(s->gedp);
+    struct ged_view_context *active_view = ged_view_active_ctx(s->gedp);
     if (active_view) {
 	if (active_view == mged_view) {
 	    shared_view = 1;

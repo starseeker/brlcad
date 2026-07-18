@@ -72,16 +72,15 @@ tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp)
 }
 
 struct bu_vls *
-tclcad_view_pathname_vls(const void *view_ctx)
+tclcad_view_pathname_vls(const struct ged_view_context *view_ctx)
 {
-    struct tclcad_view_data *tvd =
-	tclcad_view_data_from_view_ctx((void *)view_ctx);
+    struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
     return tvd && BU_VLS_IS_INITIALIZED(&tvd->gdv_pathname) ?
 	&tvd->gdv_pathname : NULL;
 }
 
 struct tclcad_view_data *
-tclcad_view_data_from_view_ctx(void *view_ctx)
+tclcad_view_data_from_view_ctx(const struct ged_view_context *view_ctx)
 {
     void *tcl_data = ged_view_context_tclcad_data_get(view_ctx);
     return tcl_data ? (struct tclcad_view_data *)((char *)tcl_data -
@@ -89,14 +88,14 @@ tclcad_view_data_from_view_ctx(void *view_ctx)
 }
 
 tclcad_view_state *
-tclcad_view_tcl_data_from_view_ctx(void *view_ctx)
+tclcad_view_tcl_data_from_view_ctx(struct ged_view_context *view_ctx)
 {
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
     return tvd ? &tvd->tcl_data : NULL;
 }
 
 tclcad_polygon_state *
-tclcad_view_polygon_state_from_view_ctx(void *view_ctx, int staged)
+tclcad_view_polygon_state_from_view_ctx(struct ged_view_context *view_ctx, int staged)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!tcl_data)
@@ -106,14 +105,14 @@ tclcad_view_polygon_state_from_view_ctx(void *view_ctx, int staged)
 }
 
 int
-tclcad_view_polygon_mode_from_view_ctx(void *view_ctx)
+tclcad_view_polygon_mode_from_view_ctx(struct ged_view_context *view_ctx)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     return tcl_data ? tcl_data->gv_polygon_mode : TCLCAD_IDLE_MODE;
 }
 
 int
-tclcad_view_polygon_mode_set(void *view_ctx, int mode)
+tclcad_view_polygon_mode_set(struct ged_view_context *view_ctx, int mode)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!tcl_data)
@@ -124,14 +123,14 @@ tclcad_view_polygon_mode_set(void *view_ctx, int mode)
 }
 
 fastf_t
-tclcad_view_data_vZ_from_view_ctx(void *view_ctx)
+tclcad_view_data_vZ_from_view_ctx(struct ged_view_context *view_ctx)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     return tcl_data ? tcl_data->gv_data_vZ : 0.0;
 }
 
 int
-tclcad_view_data_vZ_set(void *view_ctx, fastf_t vZ)
+tclcad_view_data_vZ_set(struct ged_view_context *view_ctx, fastf_t vZ)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!tcl_data)
@@ -142,14 +141,14 @@ tclcad_view_data_vZ_set(void *view_ctx, fastf_t vZ)
 }
 
 int
-tclcad_view_hide_from_view_ctx(void *view_ctx)
+tclcad_view_hide_from_view_ctx(struct ged_view_context *view_ctx)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     return tcl_data ? tcl_data->gv_hide : 0;
 }
 
 int
-tclcad_view_polygon_cflag_from_view_ctx(void *view_ctx, int staged)
+tclcad_view_polygon_cflag_from_view_ctx(struct ged_view_context *view_ctx, int staged)
 {
     tclcad_polygon_state *polygon_state =
 	tclcad_view_polygon_state_from_view_ctx(view_ctx, staged);
@@ -157,7 +156,7 @@ tclcad_view_polygon_cflag_from_view_ctx(void *view_ctx, int staged)
 }
 
 int
-tclcad_view_polygon_cflag_clear(void *view_ctx, int staged)
+tclcad_view_polygon_cflag_clear(struct ged_view_context *view_ctx, int staged)
 {
     tclcad_polygon_state *polygon_state =
 	tclcad_view_polygon_state_from_view_ctx(view_ctx, staged);
@@ -169,7 +168,7 @@ tclcad_view_polygon_cflag_clear(void *view_ctx, int staged)
 }
 
 tclcad_label_state *
-tclcad_view_label_state_from_view_ctx(void *view_ctx, int staged)
+tclcad_view_label_state_from_view_ctx(struct ged_view_context *view_ctx, int staged)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!tcl_data)
@@ -179,7 +178,7 @@ tclcad_view_label_state_from_view_ctx(void *view_ctx, int staged)
 }
 
 int
-tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, void *view_ctx)
+tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, struct ged_view_context *view_ctx)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!state || !tcl_data)
@@ -195,7 +194,7 @@ tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, void *
 }
 
 int
-tclcad_view_prim_labels_state_set(void *view_ctx, const struct bv_other_state *state)
+tclcad_view_prim_labels_state_set(struct ged_view_context *view_ctx, const struct bv_other_state *state)
 {
     tclcad_view_state *tcl_data = tclcad_view_tcl_data_from_view_ctx(view_ctx);
     if (!state || !tcl_data)
@@ -211,14 +210,14 @@ tclcad_view_prim_labels_state_set(void *view_ctx, const struct bv_other_state *s
 }
 
 int
-tclcad_view_data_bind_view_ctx(void *view_ctx, struct tclcad_view_data *tvd)
+tclcad_view_data_bind_view_ctx(struct ged_view_context *view_ctx, struct tclcad_view_data *tvd)
 {
     return ged_view_context_tclcad_data_set(view_ctx,
 	tvd ? (void *)&tvd->tcl_data : NULL);
 }
 
 void
-tclcad_view_data_unbind_view_ctx(void *view_ctx)
+tclcad_view_data_unbind_view_ctx(struct ged_view_context *view_ctx)
 {
     (void)ged_view_context_tclcad_data_set(view_ctx, NULL);
 }

@@ -59,8 +59,9 @@ qpolysettings_unique_polygon_name(struct bu_vls *oname,
 
     const char *npattern = "([-_:]*[0-9]+[-_:]*)[^0-9]*$";
     long int loop_guard = 0;
-    while (!ged_draw_view_polygon_ref_is_null(
-	    ged_draw_view_context_polygon_find(view,
+    while (!ged_polygon_ref_is_null(
+	    ged_polygon_find(ged_view_context_from_bv(
+		    static_cast<struct bv_context *>(view)),
 		    bu_vls_cstr(&vseed))) &&
 	    loop_guard < LONG_MAX) {
 	(void)bu_vls_incr(&vseed, npattern, NULL, NULL, NULL);
@@ -277,7 +278,7 @@ QPolySettings::do_grid_snapping_changed()
 
 
 void
-QPolySettings::settings_sync(const struct ged_draw_view_polygon_record *p)
+QPolySettings::settings_sync(const struct ged_polygon_record *p)
 {
     if (!p)
 	return;

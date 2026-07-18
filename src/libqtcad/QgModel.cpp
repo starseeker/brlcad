@@ -150,11 +150,11 @@ static std::unordered_map<const QgModel *, QgModel::DrawTimingStats>
 qgmodel_draw_timing_stats;
 static std::unordered_set<const QgModel *> qgmodel_draw_timing_enabled;
 
-static void *
+static struct ged_view_context *
 qgmodel_active_view_context(const QgModel *model)
 {
 	QgSession *session = model ? model->session() : nullptr;
-	return session ? session->activeViewContext() : nullptr;
+	return session ? ged_view_context_from_bv(session->activeViewContext()) : nullptr;
 }
 
 static int
@@ -1891,7 +1891,7 @@ QgModel::data(const QModelIndex &index, int role) const
 	if (role == DirectoryInternalRole)
 		return QVariant::fromValue((void *)(qi->dp));
 	if (role == DrawnDisplayRole) {
-		void *view_ctx = qgmodel_active_view_context(this);
+		struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
 		if (qi->draw_state_valid && qi->draw_state_view_ctx == view_ctx)
 			return QVariant(qi->draw_state);
 		std::string path = item_path(qi);
@@ -2581,7 +2581,7 @@ QgModel::drawnPathState(const char *path) const
 		return 0;
 
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	void *view_ctx = qgmodel_active_view_context(this);
+	struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
 	return (gedp && view_ctx) ? ged_draw_path_state(gedp, view_ctx, path,
 		-1) : 0;
 }
@@ -2608,7 +2608,7 @@ QgModel::drawPaths(const std::vector<std::string> &paths)
 {
 	QTCAD_SLOT("QgModel::drawPaths", 1);
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	void *view_ctx = qgmodel_active_view_context(this);
+	struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
 	if (!gedp || !view_ctx || paths.empty())
 		return BRLCAD_ERROR;
 
@@ -2712,7 +2712,7 @@ QgModel::erase(const char *inst_path)
 {
 	QTCAD_SLOT("QgModel::erase", 1);
 	struct ged *gedp = m_session ? m_session->ged() : NULL;
-	void *view_ctx = qgmodel_active_view_context(this);
+	struct ged_view_context *view_ctx = qgmodel_active_view_context(this);
 	if (!gedp || !view_ctx || !inst_path || !inst_path[0])
 		return BRLCAD_ERROR;
 

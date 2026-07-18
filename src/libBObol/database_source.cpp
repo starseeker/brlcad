@@ -9,12 +9,12 @@
 
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BEvaluatedPoints.h"
-#include "BObol/BEvaluatedWire.h"
 #include "BObol/BExportAction.h"
 #include "BObol/BLodMeshShape.h"
 #include "BObol/BLodRealization.h"
 #include "BObol/BMaterialObject.h"
 #include "BObol/BMeasureAction.h"
+#include "BObol/BMeshLodCache.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BPickDetail.h"
 #include "BObol/BSnapAction.h"
@@ -27,6 +27,7 @@
 #include "bg/line_layer.h"
 #include "bg/pca.h"
 #include "bg/trimesh.h"
+#include "bg/vlist.h"
 #include "bu/app.h"
 #include "bu/color.h"
 #include "bu/file.h"
@@ -39,6 +40,7 @@
 #include "rt/global.h"
 #include "rt/nongeom.h"
 #include "rt/db_fullpath.h"
+#include "rt/eval_wireframe.h"
 #include "rt/primitives/annot.h"
 #include "rt/primitives/brep.h"
 #include "rt/primitives/bspline.h"
@@ -134,6 +136,8 @@ struct BObolCompactInstanceEntry {
     int booleanOperation;
 };
 
+static uint64_t database_source_handle_id(void);
+
 struct BObolCompactPartReference {
     Obol::PartId part;
     std::shared_ptr<const Obol::PartGeometry> geometry;
@@ -167,6 +171,40 @@ struct BObolCompactInstanceIndex {
     std::array<std::multiset<float>, 3> sourceBoundsMaximum;
     int wireCount;
     int shadedCount;
+};
+
+struct SoBRLDatabaseSource::Impl {
+    struct db_i *dbip = NULL;
+    struct BObolMeshLod *meshLod = NULL;
+    SoBRLCadAssembly *compiledAssembly = NULL;
+    struct BObolCompactInstanceIndex *compactIndex = NULL;
+    struct BObolCompactInstanceIndex *previousCompactIndex = NULL;
+    uint64_t compactHandleSourceId = database_source_handle_id();
+    uint64_t cadBatchRevision = 1;
+    SbBool compiledAssemblyDirty = TRUE;
+    SbBool compiledAssemblyActive = FALSE;
+    SbUniqueId compiledAssemblyNodeId = 0;
+    uint64_t compiledCompactStructureSignature = 0;
+    uint64_t compiledCompactSemanticSignature = 0;
+    uint64_t compiledCompactHiddenSignature = 0;
+    uint64_t compiledCompactUnpickableSignature = 0;
+    SbBool compactIndexActive = FALSE;
+    SbBool compactOccurrenceRegistry = FALSE;
+    SbBool meshLodBoundsValid = FALSE;
+    SbVec3f meshLodBoundsMin = SbVec3f(0.0f, 0.0f, 0.0f);
+    SbVec3f meshLodBoundsMax = SbVec3f(0.0f, 0.0f, 0.0f);
+    SoFieldSensor *pathSensor = NULL;
+    SoFieldSensor *instanceKeySensor = NULL;
+    SoFieldSensor *representationKeySensor = NULL;
+    SoFieldSensor *representationModeSensor = NULL;
+    SoFieldSensor *drawModeSensor = NULL;
+    SoFieldSensor *tessellationAbsTolSensor = NULL;
+    SoFieldSensor *tessellationRelTolSensor = NULL;
+    SoFieldSensor *tessellationNormTolSensor = NULL;
+    SoFieldSensor *lodBotThresholdSensor = NULL;
+    SoFieldSensor *sourceRevisionSensor = NULL;
+    SoFieldSensor *inputsRevisionSensor = NULL;
+    SoFieldSensor *viewRevisionSensor = NULL;
 };
 
 static void realized_vlist_shape_summary(const SoBRLVListShape *shape,
@@ -763,6 +801,11 @@ BObolCompactInstanceSummary::BObolCompactInstanceSummary(void) :
     materialColorValid(FALSE),
     materialColor(1.0f, 1.0f, 1.0f),
     materialShader(""),
+    appearanceColorValid(FALSE),
+    appearanceColor(1.0f, 1.0f, 1.0f),
+    lineStyle(0),
+    lineWidth(0),
+    transparency(0.0f),
     wireGeometry(FALSE),
     pointGeometry(FALSE),
     meshGeometry(FALSE),
@@ -906,6 +949,9 @@ BObolRealizedShapeSummary::BObolRealizedShapeSummary(void) :
     ghosted(FALSE),
     hiddenLine(FALSE),
     editEmphasis(FALSE),
+    lineStyle(0),
+    lineWidth(0),
+    transparency(0.0f),
     editIntentId(""),
     editIntentRole(""),
     lodPolicy(0),
@@ -2357,13 +2403,13 @@ void
 SoBRLDatabaseSource::seedCompactRealizationCache(
     BObolDatabaseSourceRealizationCache *cache) const
 {
-    if (!cache || !this->compactIndex)
+    if (!cache || !this->d->compactIndex)
 	return;
 
     const bool meshRealization = source_uses_mesh_realization(this);
 
     for (const BObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries) {
+	 this->d->compactIndex->entries) {
 	const char *name = entry.semantic.sourceName.getString();
 	if (!name || !name[0])
 	    continue;
@@ -2655,18 +2701,17 @@ internal_payload_magic_valid(const struct rt_db_internal *intern)
     return internal_payload_magic(intern) == expected;
 }
 
-struct valid_walk_internal {
+struct owned_leaf_internal {
     struct rt_db_internal local;
     struct rt_db_internal *intern;
     bool ownsLocal;
-    bool refetched;
 
-    valid_walk_internal(void) : intern(NULL), ownsLocal(false), refetched(false)
+    owned_leaf_internal(void) : intern(NULL), ownsLocal(false)
     {
 	RT_DB_INTERNAL_INIT(&local);
     }
 
-    ~valid_walk_internal(void)
+    ~owned_leaf_internal(void)
     {
 	if (ownsLocal)
 	    rt_db_free_internal(&local);
@@ -2674,33 +2719,31 @@ struct valid_walk_internal {
 };
 
 static struct rt_db_internal *
-fetch_local_walk_internal(struct db_tree_state *tsp,
-			  const struct db_full_path *pathp,
-			  struct valid_walk_internal *handle)
+import_walk_leaf_internal(struct db_tree_state *tsp,
+			  struct directory *dp,
+			  struct owned_leaf_internal *handle)
 {
-    if (!handle || !tsp || !tsp->ts_dbip || !pathp)
+    if (!handle || !tsp || !tsp->ts_dbip || !dp)
 	return NULL;
 
-    struct directory *dp = DB_FULL_PATH_CUR_DIR(pathp);
-    if (!dp)
+    if (rt_db_get_internal(&handle->local, dp, tsp->ts_dbip, NULL) < 0)
 	return NULL;
 
-    handle->refetched = true;
-    if (rt_db_get_internal(&handle->local, dp, tsp->ts_dbip, NULL) >= 0 &&
-	internal_payload_magic_valid(&handle->local)) {
-	handle->intern = &handle->local;
-	handle->ownsLocal = true;
-	return handle->intern;
-    }
+    /* db_walk_tree_leaf_instances deliberately has not imported this leaf.
+     * This is the one owned primitive import for the occurrence.  Record
+     * ownership before validation so even a malformed payload is released. */
+    handle->ownsLocal = true;
+    if (!internal_payload_magic_valid(&handle->local))
+	return NULL;
 
-    return NULL;
+    handle->intern = &handle->local;
+    return handle->intern;
 }
 
 static void
-set_invalid_internal_diagnostic(struct realize_walk_data *data,
-				const struct db_full_path *pathp,
-				const struct rt_db_internal *intern,
-				bool refetched)
+set_leaf_import_diagnostic(struct realize_walk_data *data,
+			   const struct db_full_path *pathp,
+			   const struct rt_db_internal *intern)
 {
     if (!data)
 	return;
@@ -2710,16 +2753,14 @@ set_invalid_internal_diagnostic(struct realize_walk_data *data,
     if (intern && intern->idb_ptr && intern->idb_meth &&
 	intern->idb_meth->ft_internal_magic) {
 	snprintf(reason, sizeof(reason),
-		 "invalid primitive payload for type '%s' (magic 0x%08x, expected 0x%08x)%s",
+		 "invalid primitive payload for type '%s' (magic 0x%08x, expected 0x%08x)",
 		 typeLabel,
 		 (unsigned int)internal_payload_magic(intern),
-		 (unsigned int)intern->idb_meth->ft_internal_magic,
-		 refetched ? "; refetch failed validation" : "");
+		 (unsigned int)intern->idb_meth->ft_internal_magic);
     } else {
 	snprintf(reason, sizeof(reason),
-		 "invalid primitive payload for type '%s'%s",
-		 typeLabel,
-		 refetched ? "; refetch failed validation" : "");
+		 "primitive import failed or returned an invalid payload for type '%s'",
+		 typeLabel);
     }
     set_walk_diagnostic(data, pathp, reason);
 }
@@ -3002,6 +3043,9 @@ compact_occurrence_summary(const SoBRLDatabaseSource *source,
     summary.selected = source ? source->selected.getValue() : FALSE;
     summary.highlighted = source ? source->highlighted.getValue() : FALSE;
     summary.hiddenLine = summary.drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    summary.lineStyle = source ? source->lineStyle.getValue() : 0;
+    summary.lineWidth = source ? source->lineWidth.getValue() : 0;
+    summary.transparency = source ? source->transparency.getValue() : 0.0f;
     summary.colorOverride = source ? source->colorOverride.getValue() : FALSE;
     summary.color = source ? source->color.getValue() :
 	SbColor(1.0f, 1.0f, 1.0f);
@@ -3114,6 +3158,7 @@ compact_source_mesh_request_sync(BObolSourceMeshRequest &request,
     request.lodPolicy = summary.lodPolicy;
     request.colorOverride = summary.colorOverride;
     request.color = summary.color;
+    request.transparency = summary.transparency;
 }
 
 static void
@@ -3620,13 +3665,13 @@ static union tree *
 	const char *geometryKind = cachedCad && !cachedCad->geometryKind.empty() ?
 	    cachedCad->geometryKind.c_str() : "line";
 	if (!cadGeometry) {
-	    valid_walk_internal validInternal;
+	    owned_leaf_internal validInternal;
 	    struct rt_db_internal *localIntern =
-		fetch_local_walk_internal(tsp, pathp, &validInternal);
+		import_walk_leaf_internal(tsp, dp, &validInternal);
 	    if (!localIntern) {
 		data->failed_shapes++;
-		set_invalid_internal_diagnostic(data, pathp, NULL,
-			validInternal.refetched);
+		set_leaf_import_diagnostic(data, pathp,
+			validInternal.ownsLocal ? &validInternal.local : NULL);
 		return TREE_NULL;
 	    }
 
@@ -3741,13 +3786,13 @@ static union tree *
 			     cachedCad->sourceType.c_str() :
 			     (cachedCadGeometry ? "wire" : NULL));
     if (!sharedShape && !cachedCadGeometry) {
-	valid_walk_internal validInternal;
+	owned_leaf_internal validInternal;
 	struct rt_db_internal *localIntern =
-	    fetch_local_walk_internal(tsp, pathp, &validInternal);
+	    import_walk_leaf_internal(tsp, dp, &validInternal);
 	if (!localIntern) {
 	    data->failed_shapes++;
-	    set_invalid_internal_diagnostic(data, pathp, NULL,
-					    validInternal.refetched);
+	    set_leaf_import_diagnostic(data, pathp,
+		validInternal.ownsLocal ? &validInternal.local : NULL);
 	    return TREE_NULL;
 	}
 
@@ -4081,7 +4126,7 @@ realize_direct_leaf_wireframe(SoBRLDatabaseSource *source,
 			    sharedShape->sourceType.getValue().getString() : NULL;
     int usedLodProxy = 0;
     if (!sharedShape) {
-	valid_walk_internal validInternal;
+	owned_leaf_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip,
 		NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
@@ -4246,7 +4291,7 @@ realize_direct_leaf_wireframe_compact(
 	localBoundsValid = TRUE;
     }
     if (!cadGeometry) {
-	valid_walk_internal validInternal;
+	owned_leaf_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
 	    SbString msg;
@@ -5871,20 +5916,6 @@ database_source_evaluated_path_string(const SoBRLDatabaseSource *source)
 			   source->path.getValue().getString()));
 }
 
-static int32_t
-evaluated_wire_command_to_vlist_command(int command, size_t index)
-{
-    if (command == BG_GEOMETRY_LINE_MOVE)
-	return SoBRLVListShape::MOVE;
-    if (command == BG_GEOMETRY_LINE_DRAW)
-	return SoBRLVListShape::DRAW;
-    if (command < 0 && (index % 2) == 0)
-	return SoBRLVListShape::MOVE;
-    if (command < 0)
-	return SoBRLVListShape::DRAW;
-    return -1;
-}
-
 static SoBRLVListShape *
 vlist_from_evaluated_wire_path(SoBRLDatabaseSource *source)
 {
@@ -5898,36 +5929,28 @@ vlist_from_evaluated_wire_path(SoBRLDatabaseSource *source)
 
     struct bn_tol tol = BN_TOL_INIT_TOL;
     struct bg_tess_tol ttol = source_tess_tol(source);
-    point_t *linePoints = NULL;
-    int *lineCommands = NULL;
-    size_t lineCount = 0;
-    const int ret = bobol_evaluated_wire_evaluate_path_line_set(
-			dbip, path.c_str(), &tol, &ttol,
-			&linePoints, &lineCommands, &lineCount);
-    if (ret != BRLCAD_OK)
-	return NULL;
-    if (!lineCount || lineCount > static_cast<size_t>(INT_MAX)) {
-	bobol_evaluated_wire_line_set_free(linePoints, lineCommands);
+    struct bu_list vhead;
+    struct bu_list vlfree;
+    BU_LIST_INIT(&vhead);
+    BU_LIST_INIT(&vlfree);
+
+    struct rt_eval_wireframe_opts opts = RT_EVAL_WIREFRAME_OPTS_INIT;
+    const int ret = rt_eval_wireframe(&vhead, &vlfree, dbip, path.c_str(),
+				      &tol, &ttol, &opts);
+    if (ret != BRLCAD_OK) {
+	RT_FREE_VLIST(&vlfree, &vhead);
+	bg_vlist_cleanup(&vlfree);
 	return NULL;
     }
 
     std::vector<SbVec3f> points;
     std::vector<int32_t> commands;
-    points.reserve(lineCount);
-    commands.reserve(lineCount);
-    for (size_t i = 0; i < lineCount; i++) {
-	const int32_t command = evaluated_wire_command_to_vlist_command(
-				    lineCommands ? lineCommands[i] : -1, i);
-	if (command < 0) {
-	    bobol_evaluated_wire_line_set_free(linePoints, lineCommands);
-	    return NULL;
-	}
-	points.push_back(SbVec3f(static_cast<float>(linePoints[i][X]),
-				 static_cast<float>(linePoints[i][Y]),
-				 static_cast<float>(linePoints[i][Z])));
-	commands.push_back(command);
-    }
-    bobol_evaluated_wire_line_set_free(linePoints, lineCommands);
+	convert_vlist(points, commands, &vhead);
+    RT_FREE_VLIST(&vlfree, &vhead);
+    bg_vlist_cleanup(&vlfree);
+    if (points.empty() || points.size() != commands.size() ||
+	points.size() > static_cast<size_t>(INT_MAX))
+	return NULL;
 
     SoBRLVListShape *shape = new SoBRLVListShape;
     shape->setLineSet(points.data(), commands.data(),
@@ -6079,7 +6102,7 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 			     sharedMeshShape->sourceType.getValue().getString() :
 			     NULL);
     if (!sharedVListShape && !sharedMeshShape) {
-	valid_walk_internal validInternal;
+	owned_leaf_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
 	    SbString msg;
@@ -6259,7 +6282,7 @@ realize_direct_leaf_mesh_compact(
      */
     const bool hadCachedCad = cachedWire || cachedMesh;
     if (!sharedVListShape && !sharedMeshShape && !hadCachedCad) {
-	valid_walk_internal validInternal;
+	owned_leaf_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
 	    SbString msg;
@@ -6372,7 +6395,7 @@ realize_direct_leaf_mesh_compact(
 			      (cachedMesh && !cachedMesh->sourceType.empty() ?
 			       cachedMesh->sourceType.c_str() : NULL)));
     if (!sharedVListShape && !sharedMeshShape && !cachedWire && !cachedMesh) {
-	valid_walk_internal validInternal;
+	owned_leaf_internal validInternal;
 	if (rt_db_get_internal(&validInternal.local, dp, dbip, NULL) < 0 ||
 	    !internal_payload_magic_valid(&validInternal.local)) {
 	    SbString msg;
@@ -6598,13 +6621,13 @@ static union tree *
 	    data->cache->findMeshCadGeometry(cacheKey);
 	const bool hadCachedWire = cachedWire != NULL;
 	if (!cachedWire && !cachedMesh) {
-	    valid_walk_internal validInternal;
+	    owned_leaf_internal validInternal;
 	    struct rt_db_internal *localIntern =
-		fetch_local_walk_internal(tsp, pathp, &validInternal);
+		import_walk_leaf_internal(tsp, dp, &validInternal);
 	    if (!localIntern) {
 		data->failed_shapes++;
-		set_invalid_internal_diagnostic(data, pathp, NULL,
-			validInternal.refetched);
+		set_leaf_import_diagnostic(data, pathp,
+			validInternal.ownsLocal ? &validInternal.local : NULL);
 		return TREE_NULL;
 	    }
 
@@ -6749,13 +6772,13 @@ static union tree *
 			      (cachedMesh && !cachedMesh->sourceType.empty() ?
 			       cachedMesh->sourceType.c_str() : NULL)));
     if (!sharedVListShape && !sharedMeshShape && !cachedWire && !cachedMesh) {
-	valid_walk_internal validInternal;
+	owned_leaf_internal validInternal;
 	struct rt_db_internal *localIntern =
-	    fetch_local_walk_internal(tsp, pathp, &validInternal);
+	    import_walk_leaf_internal(tsp, dp, &validInternal);
 	if (!localIntern) {
 	    data->failed_shapes++;
-	    set_invalid_internal_diagnostic(data, pathp, NULL,
-					    validInternal.refetched);
+	    set_leaf_import_diagnostic(data, pathp,
+		validInternal.ownsLocal ? &validInternal.local : NULL);
 	    return TREE_NULL;
 	}
 
@@ -8389,7 +8412,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     const std::vector<const BObolViewLodState::CadPayload *> &payloads)
     const
 {
-    if (!this->compactIndex || payloads.empty())
+    if (!this->d->compactIndex || payloads.empty())
 	return NULL;
 
     const BObolViewLodState::CadPayload *owner = payloads.front();
@@ -8401,10 +8424,10 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	bu_strcmp(owner->assemblyKey.getString(), assemblyKey.c_str()) == 0) {
 	SoBRLCadAssembly *assembly =
 	    static_cast<SoBRLCadAssembly *>(owner->assembly);
-	assembly->setHiddenInstances(this->compactIndex->hiddenInstances);
-	assembly->setSelectedInstances(this->compactIndex->selectedInstances);
+	assembly->setHiddenInstances(this->d->compactIndex->hiddenInstances);
+	assembly->setSelectedInstances(this->d->compactIndex->selectedInstances);
 	assembly->setUnpickableInstances(
-	    this->compactIndex->unpickableInstances);
+	    this->d->compactIndex->unpickableInstances);
 	return assembly;
     }
 
@@ -8418,9 +8441,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     std::vector<Obol::PartUpdate> parts;
     std::unordered_map<Obol::PartId, uint8_t, std::hash<Obol::PartId>>
 	partChannels;
-    parts.reserve(this->compactIndex->parts.size() + payloads.size());
+    parts.reserve(this->d->compactIndex->parts.size() + payloads.size());
     for (const BObolCompactPartReference &partRef :
-	 this->compactIndex->parts) {
+	 this->d->compactIndex->parts) {
 	if (!partRef.geometry)
 	    continue;
 	Obol::PartUpdate part;
@@ -8434,14 +8457,14 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     }
 
     std::vector<Obol::InstanceUpdate> instances =
-	this->compactIndex->instances;
+	this->d->compactIndex->instances;
     int wireCount = 0;
     int shadedCount = 0;
     const int sourceDrawMode = source_record_draw_mode(this);
     const bool hiddenLine = sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
-    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+    for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
 	const BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[i];
+	    this->d->compactIndex->entries[i];
 	const BObolViewLodState::CadPayload *payload =
 	    cad_compact_payload_for_entry(payloads, entry);
 	if (payload && payload->isValid()) {
@@ -8497,9 +8520,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 
     assembly->upsertParts(parts);
     assembly->upsertInstances(instances);
-    assembly->setHiddenInstances(this->compactIndex->hiddenInstances);
-    assembly->setSelectedInstances(this->compactIndex->selectedInstances);
-    assembly->setUnpickableInstances(this->compactIndex->unpickableInstances);
+    assembly->setHiddenInstances(this->d->compactIndex->hiddenInstances);
+    assembly->setSelectedInstances(this->d->compactIndex->selectedInstances);
+    assembly->setUnpickableInstances(this->d->compactIndex->unpickableInstances);
     if (hiddenLine)
 	assembly->drawMode = SoCADAssembly::HIDDEN_LINE;
     else if (shadedCount > 0 && wireCount > 0)
@@ -9101,8 +9124,8 @@ SoBRLDatabaseSource::setCompactOccurrence(
 
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(this->compactIndex->entries.size()));
-    return static_cast<int>(this->compactIndex->entries.size());
+	static_cast<uint64_t>(this->d->compactIndex->entries.size()));
+    return static_cast<int>(this->d->compactIndex->entries.size());
 }
 
 int
@@ -9154,10 +9177,10 @@ SoBRLDatabaseSource::setCompactOccurrenceRegistry(
 
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(this->compactIndex->entries.size()));
-    return this->compactIndex->entries.size() >
+	static_cast<uint64_t>(this->d->compactIndex->entries.size()));
+    return this->d->compactIndex->entries.size() >
 	static_cast<size_t>(INT_MAX) ? INT_MAX :
-	static_cast<int>(this->compactIndex->entries.size());
+	static_cast<int>(this->d->compactIndex->entries.size());
 }
 
 static uint64_t
@@ -9285,8 +9308,8 @@ compact_assembly_draw_mode(SoBRLCadAssembly *assembly,
 uint64_t
 SoBRLDatabaseSource::cadBatchStructureSignature(void) const
 {
-    uint64_t signature = this->compactIndexActive && this->compactIndex ?
-	compact_structure_signature(this->compactIndex) : this->cadBatchRevision;
+    uint64_t signature = this->d->compactIndexActive && this->d->compactIndex ?
+	compact_structure_signature(this->d->compactIndex) : this->d->cadBatchRevision;
     signature ^= static_cast<uint64_t>(source_record_draw_mode(this));
     signature *= 1099511628211ULL;
     signature ^= static_cast<uint64_t>(this->visible.getValue());
@@ -9296,104 +9319,104 @@ SoBRLDatabaseSource::cadBatchStructureSignature(void) const
 uint64_t
 SoBRLDatabaseSource::cadBatchSemanticSignature(void) const
 {
-    return this->compactIndexActive && this->compactIndex ?
-	compact_semantic_signature(this->compactIndex) : 0;
+    return this->d->compactIndexActive && this->d->compactIndex ?
+	compact_semantic_signature(this->d->compactIndex) : 0;
 }
 
 int
 SoBRLDatabaseSource::syncCompiledAssembly(void)
 {
     const SbUniqueId sourceNodeId = this->getNodeId();
-    if (!this->compiledAssemblyDirty &&
-	this->compiledAssemblyNodeId == sourceNodeId)
-	return this->compiledAssemblyActive ? 1 : 0;
-    this->compiledAssemblyActive = FALSE;
+    if (!this->d->compiledAssemblyDirty &&
+	this->d->compiledAssemblyNodeId == sourceNodeId)
+	return this->d->compiledAssemblyActive ? 1 : 0;
+    this->d->compiledAssemblyActive = FALSE;
 
-    const SbBool hasCompactPayload = this->compactIndexActive &&
-	this->compactIndex && !this->compactIndex->instances.empty();
+    const SbBool hasCompactPayload = this->d->compactIndexActive &&
+	this->d->compactIndex && !this->d->compactIndex->instances.empty();
     if (!this->visible.getValue() ||
 	this->auxiliarySource.getValue() ||
 	(!hasCompactPayload &&
 	 (this->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	  this->needsRealization())) ||
 	source_has_auxiliary_children(this)) {
-	this->compiledCompactStructureSignature = 0;
-	this->compiledCompactSemanticSignature = 0;
-	this->compiledCompactHiddenSignature = 0;
-	this->compiledCompactUnpickableSignature = 0;
-	this->compiledAssemblyNodeId = sourceNodeId;
-	this->compiledAssemblyDirty = FALSE;
+	this->d->compiledCompactStructureSignature = 0;
+	this->d->compiledCompactSemanticSignature = 0;
+	this->d->compiledCompactHiddenSignature = 0;
+	this->d->compiledCompactUnpickableSignature = 0;
+	this->d->compiledAssemblyNodeId = sourceNodeId;
+	this->d->compiledAssemblyDirty = FALSE;
 	return 0;
     }
 
-    if (!this->compiledAssembly) {
-	this->compiledAssembly = new SoBRLCadAssembly;
-	this->compiledAssembly->ref();
+    if (!this->d->compiledAssembly) {
+	this->d->compiledAssembly = new SoBRLCadAssembly;
+	this->d->compiledAssembly->ref();
     }
 
     const uint64_t structureSignature = hasCompactPayload ?
-	compact_structure_signature(this->compactIndex) : 0;
+	compact_structure_signature(this->d->compactIndex) : 0;
     const uint64_t semanticSignature = hasCompactPayload ?
-	compact_semantic_signature(this->compactIndex) : 0;
-    if (hasCompactPayload && this->compiledCompactStructureSignature != 0 &&
-	this->compiledCompactStructureSignature == structureSignature &&
-	this->compiledAssembly->instanceCount() ==
-	    this->compactIndex->instances.size() &&
-	this->compiledAssembly->partCount() == this->compactIndex->parts.size()) {
+	compact_semantic_signature(this->d->compactIndex) : 0;
+    if (hasCompactPayload && this->d->compiledCompactStructureSignature != 0 &&
+	this->d->compiledCompactStructureSignature == structureSignature &&
+	this->d->compiledAssembly->instanceCount() ==
+	    this->d->compactIndex->instances.size() &&
+	this->d->compiledAssembly->partCount() == this->d->compactIndex->parts.size()) {
 	std::vector<Obol::InstanceStyleUpdate> styles;
-	styles.reserve(this->compactIndex->instances.size());
+	styles.reserve(this->d->compactIndex->instances.size());
 	for (const Obol::InstanceUpdate &instance :
-	     this->compactIndex->instances) {
+	     this->d->compactIndex->instances) {
 	    Obol::InstanceStyleUpdate style;
 	    style.instance = instance.instance;
 	    style.style = instance.record.style;
 	    styles.push_back(style);
 	}
-	this->compiledAssembly->updateInstanceStyles(styles);
+	this->d->compiledAssembly->updateInstanceStyles(styles);
 	const uint64_t hiddenSignature = compact_state_signature(
-	    this->compactIndex->hiddenInstances);
-	if (this->compiledCompactHiddenSignature != hiddenSignature) {
-	    this->compiledAssembly->setHiddenInstances(
-		this->compactIndex->hiddenInstances);
-	    this->compiledCompactHiddenSignature = hiddenSignature;
+	    this->d->compactIndex->hiddenInstances);
+	if (this->d->compiledCompactHiddenSignature != hiddenSignature) {
+	    this->d->compiledAssembly->setHiddenInstances(
+		this->d->compactIndex->hiddenInstances);
+	    this->d->compiledCompactHiddenSignature = hiddenSignature;
 	}
-	this->compiledAssembly->setSelectedInstances(
-	    this->compactIndex->selectedInstances);
+	this->d->compiledAssembly->setSelectedInstances(
+	    this->d->compactIndex->selectedInstances);
 	const uint64_t unpickableSignature = compact_state_signature(
-	    this->compactIndex->unpickableInstances);
-	if (this->compiledCompactUnpickableSignature != unpickableSignature) {
-	    this->compiledAssembly->setUnpickableInstances(
-		this->compactIndex->unpickableInstances);
-	    this->compiledCompactUnpickableSignature = unpickableSignature;
+	    this->d->compactIndex->unpickableInstances);
+	if (this->d->compiledCompactUnpickableSignature != unpickableSignature) {
+	    this->d->compiledAssembly->setUnpickableInstances(
+		this->d->compactIndex->unpickableInstances);
+	    this->d->compiledCompactUnpickableSignature = unpickableSignature;
 	}
-	if (this->compiledCompactSemanticSignature != semanticSignature) {
+	if (this->d->compiledCompactSemanticSignature != semanticSignature) {
 	    for (const BObolCompactInstanceEntry &entry :
-		 this->compactIndex->entries) {
+		 this->d->compactIndex->entries) {
 		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
 		semantic.sourceInstanceKey = compact_instance_identity(entry);
-		this->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
+		this->d->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
 	    }
-	    this->compiledCompactSemanticSignature = semanticSignature;
+	    this->d->compiledCompactSemanticSignature = semanticSignature;
 	}
-	compact_assembly_draw_mode(this->compiledAssembly, this,
-	    this->compactIndex);
-	this->compiledAssemblyActive = TRUE;
+	compact_assembly_draw_mode(this->d->compiledAssembly, this,
+	    this->d->compactIndex);
+	this->d->compiledAssemblyActive = TRUE;
 	this->ensureCompiledAssemblyChild();
-	this->compiledAssemblyNodeId = sourceNodeId;
-	this->compiledAssemblyDirty = FALSE;
+	this->d->compiledAssemblyNodeId = sourceNodeId;
+	this->d->compiledAssemblyDirty = FALSE;
 	return 1;
     }
 
-    this->compiledAssembly->beginUpdate();
-    this->compiledAssembly->clear();
-    this->compiledAssembly->clearSemanticMap();
+    this->d->compiledAssembly->beginUpdate();
+    this->d->compiledAssembly->clear();
+    this->d->compiledAssembly->clearSemanticMap();
 
-    if (this->compactIndexActive && this->compactIndex &&
-	!this->compactIndex->instances.empty()) {
+    if (this->d->compactIndexActive && this->d->compactIndex &&
+	!this->d->compactIndex->instances.empty()) {
 	std::vector<Obol::SharedPartUpdate> parts;
-	parts.reserve(this->compactIndex->parts.size());
+	parts.reserve(this->d->compactIndex->parts.size());
 	for (const BObolCompactPartReference &partRef :
-	     this->compactIndex->parts) {
+	     this->d->compactIndex->parts) {
 	    if (!partRef.geometry)
 		continue;
 	    Obol::SharedPartUpdate part;
@@ -9401,45 +9424,45 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	    part.geometry = partRef.geometry;
 	    parts.push_back(part);
 	}
-	this->compiledAssembly->upsertSharedParts(parts);
-	this->compiledAssembly->upsertInstances(this->compactIndex->instances);
-	this->compiledAssembly->setHiddenInstances(
-	    this->compactIndex->hiddenInstances);
-	this->compiledAssembly->setSelectedInstances(
-	    this->compactIndex->selectedInstances);
-	this->compiledAssembly->setUnpickableInstances(
-	    this->compactIndex->unpickableInstances);
-	this->compiledCompactHiddenSignature = compact_state_signature(
-	    this->compactIndex->hiddenInstances);
-	this->compiledCompactUnpickableSignature = compact_state_signature(
-	    this->compactIndex->unpickableInstances);
-	for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+	this->d->compiledAssembly->upsertSharedParts(parts);
+	this->d->compiledAssembly->upsertInstances(this->d->compactIndex->instances);
+	this->d->compiledAssembly->setHiddenInstances(
+	    this->d->compactIndex->hiddenInstances);
+	this->d->compiledAssembly->setSelectedInstances(
+	    this->d->compactIndex->selectedInstances);
+	this->d->compiledAssembly->setUnpickableInstances(
+	    this->d->compactIndex->unpickableInstances);
+	this->d->compiledCompactHiddenSignature = compact_state_signature(
+	    this->d->compactIndex->hiddenInstances);
+	this->d->compiledCompactUnpickableSignature = compact_state_signature(
+	    this->d->compactIndex->unpickableInstances);
+	for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
 	    const BObolCompactInstanceEntry &entry =
-		this->compactIndex->entries[i];
+		this->d->compactIndex->entries[i];
 	    SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
 	    semantic.sourceInstanceKey = compact_instance_identity(entry);
-	    this->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
+	    this->d->compiledAssembly->setInstanceSemantic(entry.instance, semantic);
 	}
-	compact_assembly_draw_mode(this->compiledAssembly, this,
-	    this->compactIndex);
-	this->compiledAssemblyActive = TRUE;
-	this->compiledCompactStructureSignature = structureSignature;
-	this->compiledCompactSemanticSignature = semanticSignature;
-	this->compiledAssembly->endUpdate();
+	compact_assembly_draw_mode(this->d->compiledAssembly, this,
+	    this->d->compactIndex);
+	this->d->compiledAssemblyActive = TRUE;
+	this->d->compiledCompactStructureSignature = structureSignature;
+	this->d->compiledCompactSemanticSignature = semanticSignature;
+	this->d->compiledAssembly->endUpdate();
 	this->ensureCompiledAssemblyChild();
-	this->compiledAssemblyNodeId = sourceNodeId;
-	this->compiledAssemblyDirty = FALSE;
+	this->d->compiledAssemblyNodeId = sourceNodeId;
+	this->d->compiledAssemblyDirty = FALSE;
 	return 1;
     }
 
     /* The retained compact signature has no meaning for a child-graph build. */
-    this->compiledCompactStructureSignature = 0;
-    this->compiledCompactSemanticSignature = 0;
-    this->compiledCompactHiddenSignature = 0;
-    this->compiledCompactUnpickableSignature = 0;
+    this->d->compiledCompactStructureSignature = 0;
+    this->d->compiledCompactSemanticSignature = 0;
+    this->d->compiledCompactHiddenSignature = 0;
+    this->d->compiledCompactUnpickableSignature = 0;
     cad_build_data data;
     data.source = this;
-    data.assembly = this->compiledAssembly;
+    data.assembly = this->d->compiledAssembly;
     data.ordinal = 0;
     data.unsupported = 0;
     data.wireCount = 0;
@@ -9451,35 +9474,35 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	cad_collect_realized_node(data, this->getChild(i), identity);
 
     if (!data.unsupported && !data.instances.empty()) {
-	this->compiledAssembly->upsertParts(data.parts);
-	this->compiledAssembly->upsertInstances(data.instances);
-	this->compiledAssembly->setHiddenInstances(data.hiddenInstances);
-	this->compiledAssembly->setSelectedInstances(data.selectedInstances);
-	this->compiledAssembly->setUnpickableInstances(
+	this->d->compiledAssembly->upsertParts(data.parts);
+	this->d->compiledAssembly->upsertInstances(data.instances);
+	this->d->compiledAssembly->setHiddenInstances(data.hiddenInstances);
+	this->d->compiledAssembly->setSelectedInstances(data.selectedInstances);
+	this->d->compiledAssembly->setUnpickableInstances(
 	    data.unpickableInstances);
 	if (source_record_draw_mode(this) == BOBOL_LOD_DRAW_HIDDEN_LINE)
-	    this->compiledAssembly->drawMode = SoCADAssembly::HIDDEN_LINE;
+	    this->d->compiledAssembly->drawMode = SoCADAssembly::HIDDEN_LINE;
 	else if (data.shadedCount > 0 && data.wireCount > 0)
-	    this->compiledAssembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
+	    this->d->compiledAssembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
 	else if (data.shadedCount > 0)
-	    this->compiledAssembly->drawMode = SoCADAssembly::SHADED;
+	    this->d->compiledAssembly->drawMode = SoCADAssembly::SHADED;
 	else
-	    this->compiledAssembly->drawMode = SoCADAssembly::WIREFRAME;
-	this->compiledAssemblyActive = TRUE;
+	    this->d->compiledAssembly->drawMode = SoCADAssembly::WIREFRAME;
+	this->d->compiledAssemblyActive = TRUE;
     }
 
-    this->compiledAssembly->endUpdate();
-    this->compiledAssemblyNodeId = sourceNodeId;
-    this->compiledAssemblyDirty = FALSE;
-    return this->compiledAssemblyActive ? 1 : 0;
+    this->d->compiledAssembly->endUpdate();
+    this->d->compiledAssemblyNodeId = sourceNodeId;
+    this->d->compiledAssemblyDirty = FALSE;
+    return this->d->compiledAssemblyActive ? 1 : 0;
 }
 
 int
 SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 	SbBool includeGeometry, SbBool includeSemantics)
 {
-    const SbBool hasCompactPayload = this->compactIndexActive &&
-	this->compactIndex && !this->compactIndex->instances.empty();
+    const SbBool hasCompactPayload = this->d->compactIndexActive &&
+	this->d->compactIndex && !this->d->compactIndex->instances.empty();
     if (!state || !state->assembly || !this->visible.getValue() ||
 	this->auxiliarySource.getValue() ||
 	source_record_draw_mode(this) == BOBOL_LOD_DRAW_HIDDEN_LINE ||
@@ -9488,11 +9511,11 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 	  this->needsRealization())) || source_has_auxiliary_children(this))
 	return 0;
 
-    if (this->compactIndexActive && this->compactIndex &&
-	!this->compactIndex->instances.empty()) {
+    if (this->d->compactIndexActive && this->d->compactIndex &&
+	!this->d->compactIndex->instances.empty()) {
 	if (includeGeometry) {
 	    for (const BObolCompactPartReference &partRef :
-		 this->compactIndex->parts) {
+		 this->d->compactIndex->parts) {
 		if (!partRef.geometry ||
 		    !state->partIds.insert(partRef.part).second)
 		    continue;
@@ -9503,27 +9526,27 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 	    }
 	}
 	state->instances.insert(state->instances.end(),
-	    this->compactIndex->instances.begin(),
-	    this->compactIndex->instances.end());
+	    this->d->compactIndex->instances.begin(),
+	    this->d->compactIndex->instances.end());
 	state->hiddenInstances.insert(state->hiddenInstances.end(),
-	    this->compactIndex->hiddenInstances.begin(),
-	    this->compactIndex->hiddenInstances.end());
+	    this->d->compactIndex->hiddenInstances.begin(),
+	    this->d->compactIndex->hiddenInstances.end());
 	state->selectedInstances.insert(state->selectedInstances.end(),
-	    this->compactIndex->selectedInstances.begin(),
-	    this->compactIndex->selectedInstances.end());
+	    this->d->compactIndex->selectedInstances.begin(),
+	    this->d->compactIndex->selectedInstances.end());
 	state->unpickableInstances.insert(state->unpickableInstances.end(),
-	    this->compactIndex->unpickableInstances.begin(),
-	    this->compactIndex->unpickableInstances.end());
+	    this->d->compactIndex->unpickableInstances.begin(),
+	    this->d->compactIndex->unpickableInstances.end());
 	if (includeSemantics) {
 	    for (const BObolCompactInstanceEntry &entry :
-		 this->compactIndex->entries) {
+		 this->d->compactIndex->entries) {
 		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
 		semantic.sourceInstanceKey = compact_instance_identity(entry);
 		state->assembly->setInstanceSemantic(entry.instance, semantic);
 	    }
 	}
-	state->wireCount += this->compactIndex->wireCount;
-	state->shadedCount += this->compactIndex->shadedCount;
+	state->wireCount += this->d->compactIndex->wireCount;
+	state->shadedCount += this->d->compactIndex->shadedCount;
 	return 1;
     }
 
@@ -9565,37 +9588,7 @@ SoBRLDatabaseSource::appendCadRenderBatch(BObolCadBatchBuildState *state,
 }
 
 SoBRLDatabaseSource::SoBRLDatabaseSource(void) :
-    dbip(NULL),
-    meshLod(NULL),
-    compiledAssembly(NULL),
-    compactIndex(NULL),
-    previousCompactIndex(NULL),
-    compactHandleSourceId(database_source_handle_id()),
-    cadBatchRevision(1),
-    compiledAssemblyDirty(TRUE),
-    compiledAssemblyActive(FALSE),
-    compiledAssemblyNodeId(0),
-    compiledCompactStructureSignature(0),
-    compiledCompactSemanticSignature(0),
-    compiledCompactHiddenSignature(0),
-    compiledCompactUnpickableSignature(0),
-    compactIndexActive(FALSE),
-    compactOccurrenceRegistry(FALSE),
-    meshLodBoundsValid(FALSE),
-    meshLodBoundsMin(0.0f, 0.0f, 0.0f),
-    meshLodBoundsMax(0.0f, 0.0f, 0.0f),
-    pathSensor(NULL),
-    instanceKeySensor(NULL),
-    representationKeySensor(NULL),
-    representationModeSensor(NULL),
-    drawModeSensor(NULL),
-    tessellationAbsTolSensor(NULL),
-    tessellationRelTolSensor(NULL),
-    tessellationNormTolSensor(NULL),
-    lodBotThresholdSensor(NULL),
-    sourceRevisionSensor(NULL),
-    inputsRevisionSensor(NULL),
-    viewRevisionSensor(NULL)
+    d(new Impl)
 {
     SO_NODE_CONSTRUCTOR(SoBRLDatabaseSource);
 
@@ -9708,17 +9701,17 @@ SoBRLDatabaseSource::fieldSensorCB(void *data, SoSensor *sensor)
     if (!source)
 	return;
 
-    if (sensor == source->inputsRevisionSensor)
+    if (sensor == source->d->inputsRevisionSensor)
 	source->markStale(STALE_INPUTS);
-    else if (sensor == source->viewRevisionSensor ||
-	     sensor == source->lodBotThresholdSensor)
+    else if (sensor == source->d->viewRevisionSensor ||
+	     sensor == source->d->lodBotThresholdSensor)
 	source->markStale(STALE_VIEW);
-    else if (sensor == source->drawModeSensor ||
-	     sensor == source->representationModeSensor)
+    else if (sensor == source->d->drawModeSensor ||
+	     sensor == source->d->representationModeSensor)
 	source->markStale(STALE_DRAW);
-    else if (sensor == source->tessellationAbsTolSensor ||
-	     sensor == source->tessellationRelTolSensor ||
-	     sensor == source->tessellationNormTolSensor)
+    else if (sensor == source->d->tessellationAbsTolSensor ||
+	     sensor == source->d->tessellationRelTolSensor ||
+	     sensor == source->d->tessellationNormTolSensor)
 	source->markStale(STALE_TESSELLATION);
     else
 	source->markStale(STALE_SOURCE);
@@ -9727,160 +9720,166 @@ SoBRLDatabaseSource::fieldSensorCB(void *data, SoSensor *sensor)
 void
 SoBRLDatabaseSource::attachFieldSensors(void)
 {
-    this->pathSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->pathSensor->setPriority(0);
-    this->pathSensor->attach(&this->path);
+    this->d->pathSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->pathSensor->setPriority(0);
+    this->d->pathSensor->attach(&this->path);
 
-    this->instanceKeySensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->instanceKeySensor->setPriority(0);
-    this->instanceKeySensor->attach(&this->instanceKey);
+    this->d->instanceKeySensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->instanceKeySensor->setPriority(0);
+    this->d->instanceKeySensor->attach(&this->instanceKey);
 
-    this->representationKeySensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->representationKeySensor->setPriority(0);
-    this->representationKeySensor->attach(&this->representationKey);
+    this->d->representationKeySensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->representationKeySensor->setPriority(0);
+    this->d->representationKeySensor->attach(&this->representationKey);
 
-    this->representationModeSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->representationModeSensor->setPriority(0);
-    this->representationModeSensor->attach(&this->representationMode);
+    this->d->representationModeSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->representationModeSensor->setPriority(0);
+    this->d->representationModeSensor->attach(&this->representationMode);
 
-    this->drawModeSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->drawModeSensor->setPriority(0);
-    this->drawModeSensor->attach(&this->drawMode);
+    this->d->drawModeSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->drawModeSensor->setPriority(0);
+    this->d->drawModeSensor->attach(&this->drawMode);
 
-    this->tessellationAbsTolSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->tessellationAbsTolSensor->setPriority(0);
-    this->tessellationAbsTolSensor->attach(&this->tessellationAbsTol);
+    this->d->tessellationAbsTolSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->tessellationAbsTolSensor->setPriority(0);
+    this->d->tessellationAbsTolSensor->attach(&this->tessellationAbsTol);
 
-    this->tessellationRelTolSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->tessellationRelTolSensor->setPriority(0);
-    this->tessellationRelTolSensor->attach(&this->tessellationRelTol);
+    this->d->tessellationRelTolSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->tessellationRelTolSensor->setPriority(0);
+    this->d->tessellationRelTolSensor->attach(&this->tessellationRelTol);
 
-    this->tessellationNormTolSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->tessellationNormTolSensor->setPriority(0);
-    this->tessellationNormTolSensor->attach(&this->tessellationNormTol);
+    this->d->tessellationNormTolSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->tessellationNormTolSensor->setPriority(0);
+    this->d->tessellationNormTolSensor->attach(&this->tessellationNormTol);
 
-    this->lodBotThresholdSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->lodBotThresholdSensor->setPriority(0);
-    this->lodBotThresholdSensor->attach(&this->lodBotThreshold);
+    this->d->lodBotThresholdSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->lodBotThresholdSensor->setPriority(0);
+    this->d->lodBotThresholdSensor->attach(&this->lodBotThreshold);
 
-    this->sourceRevisionSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->sourceRevisionSensor->setPriority(0);
-    this->sourceRevisionSensor->attach(&this->sourceRevision);
+    this->d->sourceRevisionSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->sourceRevisionSensor->setPriority(0);
+    this->d->sourceRevisionSensor->attach(&this->sourceRevision);
 
-    this->inputsRevisionSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->inputsRevisionSensor->setPriority(0);
-    this->inputsRevisionSensor->attach(&this->inputsRevision);
+    this->d->inputsRevisionSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->inputsRevisionSensor->setPriority(0);
+    this->d->inputsRevisionSensor->attach(&this->inputsRevision);
 
-    this->viewRevisionSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
-    this->viewRevisionSensor->setPriority(0);
-    this->viewRevisionSensor->attach(&this->viewRevision);
+    this->d->viewRevisionSensor = new SoFieldSensor(SoBRLDatabaseSource::fieldSensorCB, this);
+    this->d->viewRevisionSensor->setPriority(0);
+    this->d->viewRevisionSensor->attach(&this->viewRevision);
 }
 
 void
 SoBRLDatabaseSource::detachFieldSensors(void)
 {
-    if (this->pathSensor)
-	this->pathSensor->detach();
-    delete this->pathSensor;
-    this->pathSensor = NULL;
-    if (this->instanceKeySensor)
-	this->instanceKeySensor->detach();
-    delete this->instanceKeySensor;
-    this->instanceKeySensor = NULL;
-    if (this->representationKeySensor)
-	this->representationKeySensor->detach();
-    delete this->representationKeySensor;
-    this->representationKeySensor = NULL;
-    if (this->representationModeSensor)
-	this->representationModeSensor->detach();
-    delete this->representationModeSensor;
-    this->representationModeSensor = NULL;
-    if (this->drawModeSensor)
-	this->drawModeSensor->detach();
-    delete this->drawModeSensor;
-    this->drawModeSensor = NULL;
-    if (this->tessellationAbsTolSensor)
-	this->tessellationAbsTolSensor->detach();
-    delete this->tessellationAbsTolSensor;
-    this->tessellationAbsTolSensor = NULL;
-    if (this->tessellationRelTolSensor)
-	this->tessellationRelTolSensor->detach();
-    delete this->tessellationRelTolSensor;
-    this->tessellationRelTolSensor = NULL;
-    if (this->tessellationNormTolSensor)
-	this->tessellationNormTolSensor->detach();
-    delete this->tessellationNormTolSensor;
-    this->tessellationNormTolSensor = NULL;
-    if (this->lodBotThresholdSensor)
-	this->lodBotThresholdSensor->detach();
-    delete this->lodBotThresholdSensor;
-    this->lodBotThresholdSensor = NULL;
-    if (this->sourceRevisionSensor)
-	this->sourceRevisionSensor->detach();
-    delete this->sourceRevisionSensor;
-    this->sourceRevisionSensor = NULL;
-    if (this->inputsRevisionSensor)
-	this->inputsRevisionSensor->detach();
-    delete this->inputsRevisionSensor;
-    this->inputsRevisionSensor = NULL;
-    if (this->viewRevisionSensor)
-	this->viewRevisionSensor->detach();
-    delete this->viewRevisionSensor;
-    this->viewRevisionSensor = NULL;
+    if (this->d->pathSensor)
+	this->d->pathSensor->detach();
+    delete this->d->pathSensor;
+    this->d->pathSensor = NULL;
+    if (this->d->instanceKeySensor)
+	this->d->instanceKeySensor->detach();
+    delete this->d->instanceKeySensor;
+    this->d->instanceKeySensor = NULL;
+    if (this->d->representationKeySensor)
+	this->d->representationKeySensor->detach();
+    delete this->d->representationKeySensor;
+    this->d->representationKeySensor = NULL;
+    if (this->d->representationModeSensor)
+	this->d->representationModeSensor->detach();
+    delete this->d->representationModeSensor;
+    this->d->representationModeSensor = NULL;
+    if (this->d->drawModeSensor)
+	this->d->drawModeSensor->detach();
+    delete this->d->drawModeSensor;
+    this->d->drawModeSensor = NULL;
+    if (this->d->tessellationAbsTolSensor)
+	this->d->tessellationAbsTolSensor->detach();
+    delete this->d->tessellationAbsTolSensor;
+    this->d->tessellationAbsTolSensor = NULL;
+    if (this->d->tessellationRelTolSensor)
+	this->d->tessellationRelTolSensor->detach();
+    delete this->d->tessellationRelTolSensor;
+    this->d->tessellationRelTolSensor = NULL;
+    if (this->d->tessellationNormTolSensor)
+	this->d->tessellationNormTolSensor->detach();
+    delete this->d->tessellationNormTolSensor;
+    this->d->tessellationNormTolSensor = NULL;
+    if (this->d->lodBotThresholdSensor)
+	this->d->lodBotThresholdSensor->detach();
+    delete this->d->lodBotThresholdSensor;
+    this->d->lodBotThresholdSensor = NULL;
+    if (this->d->sourceRevisionSensor)
+	this->d->sourceRevisionSensor->detach();
+    delete this->d->sourceRevisionSensor;
+    this->d->sourceRevisionSensor = NULL;
+    if (this->d->inputsRevisionSensor)
+	this->d->inputsRevisionSensor->detach();
+    delete this->d->inputsRevisionSensor;
+    this->d->inputsRevisionSensor = NULL;
+    if (this->d->viewRevisionSensor)
+	this->d->viewRevisionSensor->detach();
+    delete this->d->viewRevisionSensor;
+    this->d->viewRevisionSensor = NULL;
 }
 
 void
 SoBRLDatabaseSource::clearCompiledAssembly(void)
 {
-    if (this->compiledAssembly) {
-	const int childIndex = this->findChild(this->compiledAssembly);
+    if (this->d->compiledAssembly) {
+	const int childIndex = this->findChild(this->d->compiledAssembly);
 	if (childIndex >= 0)
 	    this->removeChild(childIndex);
-	this->compiledAssembly->unref();
-	this->compiledAssembly = NULL;
+	this->d->compiledAssembly->unref();
+	this->d->compiledAssembly = NULL;
     }
-    this->compiledAssemblyDirty = TRUE;
-    this->compiledAssemblyActive = FALSE;
-    this->compiledAssemblyNodeId = 0;
-    this->compiledCompactStructureSignature = 0;
-    this->compiledCompactSemanticSignature = 0;
-    this->compiledCompactHiddenSignature = 0;
-    this->compiledCompactUnpickableSignature = 0;
+    this->d->compiledAssemblyDirty = TRUE;
+    this->d->compiledAssemblyActive = FALSE;
+    this->d->compiledAssemblyNodeId = 0;
+    this->d->compiledCompactStructureSignature = 0;
+    this->d->compiledCompactSemanticSignature = 0;
+    this->d->compiledCompactHiddenSignature = 0;
+    this->d->compiledCompactUnpickableSignature = 0;
     this->markCadBatchDirty();
 }
 
 void
 SoBRLDatabaseSource::ensureCompiledAssemblyChild(void)
 {
-    if (this->compiledAssembly && this->findChild(this->compiledAssembly) < 0)
-	this->addChild(this->compiledAssembly);
+    if (this->d->compiledAssembly && this->findChild(this->d->compiledAssembly) < 0)
+	this->addChild(this->d->compiledAssembly);
 }
 
 void
 SoBRLDatabaseSource::markCompiledAssemblyDirty(void)
 {
-    this->compiledAssemblyDirty = TRUE;
-    this->compiledAssemblyActive = FALSE;
-    this->compiledAssemblyNodeId = 0;
+    this->d->compiledAssemblyDirty = TRUE;
+    this->d->compiledAssemblyActive = FALSE;
+    this->d->compiledAssemblyNodeId = 0;
 }
 
 void
 SoBRLDatabaseSource::markCadBatchDirty(void)
 {
-    if (++this->cadBatchRevision == 0)
-	this->cadBatchRevision = 1;
+    if (++this->d->cadBatchRevision == 0)
+	this->d->cadBatchRevision = 1;
+}
+
+uint64_t
+SoBRLDatabaseSource::cadBatchRevisionGet(void) const
+{
+    return this->d->cadBatchRevision;
 }
 
 void
 SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 {
-    if (this->compactIndex) {
-	delete this->previousCompactIndex;
-	this->previousCompactIndex = this->compactIndex;
+    if (this->d->compactIndex) {
+	delete this->d->previousCompactIndex;
+	this->d->previousCompactIndex = this->d->compactIndex;
     }
-    this->compactIndex = NULL;
-    this->compactIndexActive = FALSE;
-    this->compactOccurrenceRegistry = FALSE;
+    this->d->compactIndex = NULL;
+    this->d->compactIndexActive = FALSE;
+    this->d->compactOccurrenceRegistry = FALSE;
     this->markCompiledAssemblyDirty();
     this->markCadBatchDirty();
 }
@@ -9888,12 +9887,12 @@ SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 void
 SoBRLDatabaseSource::discardCompactInstanceHistory(void)
 {
-    delete this->compactIndex;
-    this->compactIndex = NULL;
-    delete this->previousCompactIndex;
-    this->previousCompactIndex = NULL;
-    this->compactIndexActive = FALSE;
-    this->compactOccurrenceRegistry = FALSE;
+    delete this->d->compactIndex;
+    this->d->compactIndex = NULL;
+    delete this->d->previousCompactIndex;
+    this->d->previousCompactIndex = NULL;
+    this->d->compactIndexActive = FALSE;
+    this->d->compactOccurrenceRegistry = FALSE;
     this->markCompiledAssemblyDirty();
     this->markCadBatchDirty();
 }
@@ -9904,16 +9903,16 @@ SoBRLDatabaseSource::installCompactInstanceIndex(
 {
     if (!index)
 	return;
-    const BObolCompactInstanceIndex *previous = this->compactIndex ?
-	this->compactIndex : this->previousCompactIndex;
+    const BObolCompactInstanceIndex *previous = this->d->compactIndex ?
+	this->d->compactIndex : this->d->previousCompactIndex;
     compact_merge_runtime_state(previous, index);
     this->clearCompactInstanceIndex();
-    this->compactIndex = index;
-    this->compactIndexActive = TRUE;
-    this->compactOccurrenceRegistry = occurrenceRegistry;
+    this->d->compactIndex = index;
+    this->d->compactIndexActive = TRUE;
+    this->d->compactOccurrenceRegistry = occurrenceRegistry;
 
-    delete this->previousCompactIndex;
-    this->previousCompactIndex = NULL;
+    delete this->d->previousCompactIndex;
+    this->d->previousCompactIndex = NULL;
 }
 
 void
@@ -9953,11 +9952,11 @@ SoBRLDatabaseSource::setDrawModeState(int nextDrawMode)
 	((nextDrawMode == SHADED && this->hasRealizedMeshGeometry()) ||
 	 (nextDrawMode == WIREFRAME && this->hasRealizedWireGeometry()));
 
-    if (this->drawModeSensor)
-	this->drawModeSensor->detach();
+    if (this->d->drawModeSensor)
+	this->d->drawModeSensor->detach();
     this->drawMode = nextDrawMode;
-    if (this->drawModeSensor)
-	this->drawModeSensor->attach(&this->drawMode);
+    if (this->d->drawModeSensor)
+	this->d->drawModeSensor->attach(&this->drawMode);
     if (!preserveExternalRealization)
 	this->markStale(STALE_DRAW);
     this->syncRealizedShapeOwnerState();
@@ -9988,16 +9987,16 @@ SoBRLDatabaseSource::setRepresentationState(
 				     nextKey) && this->representationMode.getValue() == nextMode)
 	return 0;
 
-    if (this->representationKeySensor)
-	this->representationKeySensor->detach();
-    if (this->representationModeSensor)
-	this->representationModeSensor->detach();
+    if (this->d->representationKeySensor)
+	this->d->representationKeySensor->detach();
+    if (this->d->representationModeSensor)
+	this->d->representationModeSensor->detach();
     this->representationKey = nextKey;
     this->representationMode = nextMode;
-    if (this->representationKeySensor)
-	this->representationKeySensor->attach(&this->representationKey);
-    if (this->representationModeSensor)
-	this->representationModeSensor->attach(&this->representationMode);
+    if (this->d->representationKeySensor)
+	this->d->representationKeySensor->attach(&this->representationKey);
+    if (this->d->representationModeSensor)
+	this->d->representationModeSensor->attach(&this->representationMode);
 
     this->markStale(STALE_DRAW);
     const char *sourcePath = this->path.getValue().getString();
@@ -10200,11 +10199,11 @@ SoBRLDatabaseSource::setRealizationViewPolicy(SbBool viewDependent,
 	changed = 1;
     }
     if (this->lodBotThreshold.getValue() != botThreshold) {
-	if (this->lodBotThresholdSensor)
-	    this->lodBotThresholdSensor->detach();
+	if (this->d->lodBotThresholdSensor)
+	    this->d->lodBotThresholdSensor->detach();
 	this->lodBotThreshold = botThreshold;
-	if (this->lodBotThresholdSensor)
-	    this->lodBotThresholdSensor->attach(&this->lodBotThreshold);
+	if (this->d->lodBotThresholdSensor)
+	    this->d->lodBotThresholdSensor->attach(&this->lodBotThreshold);
 	activePolicyChanged = 1;
 	changed = 1;
     }
@@ -10300,8 +10299,8 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
     if (this->materialRevision.getValue() == nextMaterialRevision)
 	return 0;
 
-    struct db_i *colorDbip = overrideDbip ? overrideDbip : this->dbip;
-    if (this->compactIndex) {
+    struct db_i *colorDbip = overrideDbip ? overrideDbip : this->d->dbip;
+    if (this->d->compactIndex) {
 	if (!colorDbip)
 	    return 0;
 	BObolMaterialColorSweep sweep(colorDbip);
@@ -10317,7 +10316,7 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
 	    this->materialColor = sourceResolved.color;
 	    changed = 1;
 	}
-	for (BObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+	for (BObolCompactInstanceEntry &entry : this->d->compactIndex->entries) {
 	    BObolMaterialPathState resolved;
 	    if (!sweep.resolve(entry.semantic.path.getString(), resolved))
 		continue;
@@ -10476,7 +10475,7 @@ SoBRLDatabaseSource::setDisplayState(SbBool sourceRevisionValid,
 	    nextSelected,
 	    highlightedChanged && !this->isCompactOccurrenceRegistry(),
 	    nextHighlighted);
-	if (appearanceChanged && this->compactIndex) {
+	if (appearanceChanged && this->d->compactIndex) {
 	    this->rebuildCompactInstanceDisplayState(TRUE);
 	    this->markCompiledAssemblyDirty();
 	    this->touch();
@@ -10571,7 +10570,7 @@ SoBRLDatabaseSource::applyDisplayPatch(
 	    patch.selected,
 	    highlightedChanged && !this->isCompactOccurrenceRegistry(),
 	    patch.highlighted);
-	if (appearanceChanged && this->compactIndex) {
+	if (appearanceChanged && this->d->compactIndex) {
 	    this->rebuildCompactInstanceDisplayState(TRUE);
 	    this->markCompiledAssemblyDirty();
 	    this->touch();
@@ -10708,44 +10707,44 @@ SoBRLDatabaseSource::getEffectiveSourceBounds(SbBox3f &bounds) const
 void
 SoBRLDatabaseSource::setDatabase(struct db_i *database)
 {
-    if (this->dbip != database) {
-	this->dbip = database;
+    if (this->d->dbip != database) {
+	this->d->dbip = database;
 	this->markStale(STALE_DATABASE);
     }
 }
 
 struct db_i *
 SoBRLDatabaseSource::getDatabase(void) const {
-    return this->dbip;
+    return this->d->dbip;
 }
 
 void
 SoBRLDatabaseSource::setMeshLod(struct BObolMeshLod *lod)
 {
-    if (this->meshLod == lod) {
+    if (this->d->meshLod == lod) {
 	if (!lod)
 	    this->clearMeshLodBounds();
 	return;
     }
 
-    if (this->meshLod)
-	bobol_mesh_lod_destroy(this->meshLod);
+    if (this->d->meshLod)
+	bobol_mesh_lod_destroy(this->d->meshLod);
 
-    this->meshLod = lod;
+    this->d->meshLod = lod;
     this->clearMeshLodBounds();
 }
 
 struct BObolMeshLod *
 SoBRLDatabaseSource::getMeshLod(void) const {
-    return this->meshLod;
+    return this->d->meshLod;
 }
 
 void
 SoBRLDatabaseSource::clearMeshLod(void)
 {
-    if (this->meshLod)
-	bobol_mesh_lod_destroy(this->meshLod);
-    this->meshLod = NULL;
+    if (this->d->meshLod)
+	bobol_mesh_lod_destroy(this->d->meshLod);
+    this->d->meshLod = NULL;
     this->clearMeshLodBounds();
 }
 
@@ -10756,9 +10755,9 @@ SoBRLDatabaseSource::setMeshLodBounds(const SbVec3f &bmin,
     if (bmin[0] > bmax[0] || bmin[1] > bmax[1] || bmin[2] > bmax[2])
 	return 0;
 
-    this->meshLodBoundsMin = bmin;
-    this->meshLodBoundsMax = bmax;
-    this->meshLodBoundsValid = TRUE;
+    this->d->meshLodBoundsMin = bmin;
+    this->d->meshLodBoundsMax = bmax;
+    this->d->meshLodBoundsValid = TRUE;
     return 1;
 }
 
@@ -10766,20 +10765,20 @@ SbBool
 SoBRLDatabaseSource::getMeshLodBounds(SbVec3f &bmin,
 				      SbVec3f &bmax) const
 {
-    if (!this->meshLodBoundsValid)
+    if (!this->d->meshLodBoundsValid)
 	return FALSE;
 
-    bmin = this->meshLodBoundsMin;
-    bmax = this->meshLodBoundsMax;
+    bmin = this->d->meshLodBoundsMin;
+    bmax = this->d->meshLodBoundsMax;
     return TRUE;
 }
 
 void
 SoBRLDatabaseSource::clearMeshLodBounds(void)
 {
-    this->meshLodBoundsValid = FALSE;
-    this->meshLodBoundsMin.setValue(0.0f, 0.0f, 0.0f);
-    this->meshLodBoundsMax.setValue(0.0f, 0.0f, 0.0f);
+    this->d->meshLodBoundsValid = FALSE;
+    this->d->meshLodBoundsMin.setValue(0.0f, 0.0f, 0.0f);
+    this->d->meshLodBoundsMax.setValue(0.0f, 0.0f, 0.0f);
 }
 
 void
@@ -10816,7 +10815,7 @@ SoBRLDatabaseSource::configureDatabaseSourceInstanceRepresentation(
 {
     int sanitizedMode = mode == SHADED ? SHADED : WIREFRAME;
     uint32_t reason = STALE_NONE;
-    if (this->dbip != database)
+    if (this->d->dbip != database)
 	reason |= STALE_DATABASE;
     if (this->drawMode.getValue() != sanitizedMode)
 	reason |= STALE_DRAW;
@@ -10844,7 +10843,7 @@ SoBRLDatabaseSource::configureDatabaseSourceInstanceRepresentation(
 	reason |= STALE_SOURCE;
 
     this->detachFieldSensors();
-    this->dbip = database;
+    this->d->dbip = database;
     this->instanceKey = effectiveInstanceKey;
     this->path = stableSourcePath.c_str();
     this->representationKey = effectiveRepresentationKey;
@@ -11079,10 +11078,10 @@ SoBRLDatabaseSource::createDetachedRealizationSource(
 	*databaseOut = NULL;
     if (snapshotPathOut)
 	*snapshotPathOut = "";
-    if (!databaseOut || !this->dbip)
+    if (!databaseOut || !this->d->dbip)
 	return NULL;
 
-    struct db_i *database = database_snapshot_create(this->dbip,
+    struct db_i *database = database_snapshot_create(this->d->dbip,
 	this->path.getValue(), snapshotPathOut);
     if (!database)
 	return NULL;
@@ -11091,7 +11090,7 @@ SoBRLDatabaseSource::createDetachedRealizationSource(
     detached->ref();
     detached->detachFieldSensors();
     detached->copyFieldValues(this, FALSE);
-    detached->dbip = database;
+    detached->d->dbip = database;
     detached->stale = TRUE;
     detached->staleReason = STALE_SOURCE;
     detached->realizationStatus = UNREALIZED;
@@ -11105,8 +11104,8 @@ int
 SoBRLDatabaseSource::adoptDetachedCompactRealization(
     SoBRLDatabaseSource *detached)
 {
-    if (!detached || !detached->compactIndex ||
-	detached->compactIndex->entries.empty() ||
+    if (!detached || !detached->d->compactIndex ||
+	detached->d->compactIndex->entries.empty() ||
 	bu_strcmp(this->instanceKey.getValue().getString(),
 	    detached->instanceKey.getValue().getString()) != 0 ||
 	bu_strcmp(this->path.getValue().getString(),
@@ -11121,9 +11120,9 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
 	    detached->representationMode.getValue())
 	return 0;
 
-    BObolCompactInstanceIndex *next = detached->compactIndex;
-    detached->compactIndex = NULL;
-    this->compactHandleSourceId = detached->compactHandleSourceId;
+    BObolCompactInstanceIndex *next = detached->d->compactIndex;
+    detached->d->compactIndex = NULL;
+    this->d->compactHandleSourceId = detached->d->compactHandleSourceId;
     this->installCompactInstanceIndex(next, TRUE);
     remove_non_auxiliary_children(this);
     this->markCompiledAssemblyDirty();
@@ -11144,7 +11143,7 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
     this->realizationIdentity = source_realization_identity(this);
     this->stale = FALSE;
     this->staleReason = STALE_NONE;
-    return static_cast<int>(this->compactIndex->entries.size());
+    return static_cast<int>(this->d->compactIndex->entries.size());
 }
 
 template <typename ShapeT>
@@ -11385,8 +11384,8 @@ SoBRLDatabaseSource::GLRender(SoGLRenderAction *action)
 	return;
     }
 
-    if (this->syncCompiledAssembly() && this->compiledAssembly) {
-	this->compiledAssembly->render(action);
+    if (this->syncCompiledAssembly() && this->d->compiledAssembly) {
+	this->d->compiledAssembly->render(action);
 	return;
     }
 
@@ -11409,8 +11408,8 @@ SoBRLDatabaseSource::GLRenderBelowPath(SoGLRenderAction *action)
 	return;
     }
 
-    if (this->syncCompiledAssembly() && this->compiledAssembly) {
-	this->compiledAssembly->render(action);
+    if (this->syncCompiledAssembly() && this->d->compiledAssembly) {
+	this->d->compiledAssembly->render(action);
 	return;
     }
 
@@ -11440,7 +11439,7 @@ SoBRLDatabaseSource::getBoundingBox(SoGetBoundingBoxAction *action)
 	bounds.makeEmpty();
 	if (this->visible.getValue()) {
 	    for (const BObolCompactInstanceEntry &entry :
-		 this->compactIndex->entries) {
+		 this->d->compactIndex->entries) {
 		if (!entry.visible || !entry.geometry)
 		    continue;
 		bounds.extendBy(database_source_transform_bounds(
@@ -11468,8 +11467,8 @@ SoBRLDatabaseSource::rayPick(SoRayPickAction *action)
     }
 
     if (this->hasCompactInstanceIndex() &&
-	this->syncCompiledAssembly() && this->compiledAssembly) {
-	this->compiledAssembly->pickRay(action);
+	this->syncCompiledAssembly() && this->d->compiledAssembly) {
+	this->d->compiledAssembly->pickRay(action);
 	return;
     }
 
@@ -11522,10 +11521,10 @@ bobol_database_source_realize_wireframe_compact_with_cache(
     if (source_uses_evaluated_path_realization(source))
 	return 0;
 
-    source->compactHandleSourceId = source_stable_compact_handle_id(source);
+    source->d->compactHandleSourceId = source_stable_compact_handle_id(source);
 
     source->realizationDiagnostic = "";
-    if (!source->dbip) {
+    if (!source->d->dbip) {
 	source->realizationDiagnostic = "database source has no database";
 	return -1;
     }
@@ -11575,7 +11574,7 @@ bobol_database_source_realize_wireframe_compact_with_cache(
     }
 
     struct db_tree_state init_state;
-    db_init_db_tree_state(&init_state, source->dbip);
+    db_init_db_tree_state(&init_state, source->d->dbip);
     init_state.ts_stop_at_regions = 0;
 
     realize_walk_data data;
@@ -11585,7 +11584,7 @@ bobol_database_source_realize_wireframe_compact_with_cache(
     data.compact_index = new BObolCompactInstanceIndex;
 
     const char *av[1] = {treeName};
-    const int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1,
+    const int ret = db_walk_tree_leaf_instances(source->d->dbip, 1, av, 1,
 	&init_state, NULL, NULL, realize_leaf, &data);
     db_free_db_tree_state(&init_state);
 
@@ -11619,7 +11618,7 @@ bobol_database_source_realize_wireframe_compact_with_cache(
     mark_source_realized_current(source);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(source->compactIndex->entries.size()));
+	static_cast<uint64_t>(source->d->compactIndex->entries.size()));
     return 1;
 }
 
@@ -11640,7 +11639,7 @@ bobol_database_source_realize_wireframe_with_cache(
 	return FALSE;
 
     source->realizationDiagnostic = "";
-    if (!source->dbip) {
+    if (!source->d->dbip) {
 	source->realizationDiagnostic = "database source has no database";
 	return FALSE;
     }
@@ -11712,7 +11711,7 @@ bobol_database_source_realize_wireframe_with_cache(
     }
 
     struct db_tree_state init_state;
-    db_init_db_tree_state(&init_state, source->dbip);
+    db_init_db_tree_state(&init_state, source->d->dbip);
     init_state.ts_stop_at_regions = 0;
 
     struct realize_walk_data data;
@@ -11723,7 +11722,7 @@ bobol_database_source_realize_wireframe_with_cache(
     data.failed_shapes = 0;
 
     const char *av[1] = { treeName };
-    int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1, &init_state,
+    int ret = db_walk_tree_leaf_instances(source->d->dbip, 1, av, 1, &init_state,
 					  NULL, NULL, realize_leaf, &data);
     db_free_db_tree_state(&init_state);
 
@@ -11787,10 +11786,10 @@ bobol_database_source_realize_mesh_compact_with_cache(
     if (source_uses_evaluated_path_realization(source))
 	return 0;
 
-    source->compactHandleSourceId = source_stable_compact_handle_id(source);
+    source->d->compactHandleSourceId = source_stable_compact_handle_id(source);
 
     source->realizationDiagnostic = "";
-    if (!source->dbip) {
+    if (!source->d->dbip) {
 	source->realizationDiagnostic = "database source has no database";
 	return -1;
     }
@@ -11849,7 +11848,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
     }
 
     struct db_tree_state init_state;
-    db_init_db_tree_state(&init_state, source->dbip);
+    db_init_db_tree_state(&init_state, source->d->dbip);
     init_state.ts_stop_at_regions = 0;
 
     realize_walk_data data;
@@ -11859,7 +11858,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
     data.compact_index = new BObolCompactInstanceIndex;
 
     const char *av[1] = {treeName};
-    const int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1,
+    const int ret = db_walk_tree_leaf_instances(source->d->dbip, 1, av, 1,
 	&init_state, NULL, NULL, realize_mesh_leaf, &data);
     db_free_db_tree_state(&init_state);
 
@@ -11893,7 +11892,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
     mark_source_realized_current(source);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_SOURCES, 1);
     bobol_performance_counter_add(BOBOL_PERF_CAD_COMPACT_INSTANCES,
-	static_cast<uint64_t>(source->compactIndex->entries.size()));
+	static_cast<uint64_t>(source->d->compactIndex->entries.size()));
     return 1;
 }
 
@@ -11914,7 +11913,7 @@ bobol_database_source_realize_mesh_with_cache(
 	return FALSE;
 
     source->realizationDiagnostic = "";
-    if (!source->dbip) {
+    if (!source->d->dbip) {
 	source->realizationDiagnostic = "database source has no database";
 	return FALSE;
     }
@@ -11984,7 +11983,7 @@ bobol_database_source_realize_mesh_with_cache(
     }
 
     struct db_tree_state init_state;
-    db_init_db_tree_state(&init_state, source->dbip);
+    db_init_db_tree_state(&init_state, source->d->dbip);
     init_state.ts_stop_at_regions = 0;
 
     struct realize_walk_data data;
@@ -11995,7 +11994,7 @@ bobol_database_source_realize_mesh_with_cache(
     data.failed_shapes = 0;
 
     const char *av[1] = { treeName };
-    int ret = db_walk_tree_leaf_instances(source->dbip, 1, av, 1, &init_state,
+    int ret = db_walk_tree_leaf_instances(source->d->dbip, 1, av, 1, &init_state,
 					  NULL, NULL, realize_mesh_leaf, &data);
     db_free_db_tree_state(&init_state);
 
@@ -12949,15 +12948,15 @@ void
 SoBRLDatabaseSource::rebuildCompactInstanceDisplayState(
     SbBool syncSourceState)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return;
 
-    this->compactIndex->hiddenInstances.clear();
-    this->compactIndex->selectedInstances.clear();
-    this->compactIndex->unpickableInstances.clear();
+    this->d->compactIndex->hiddenInstances.clear();
+    this->d->compactIndex->selectedInstances.clear();
+    this->d->compactIndex->unpickableInstances.clear();
 
-    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
-	BObolCompactInstanceEntry &entry = this->compactIndex->entries[i];
+    for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
+	BObolCompactInstanceEntry &entry = this->d->compactIndex->entries[i];
 	const SbBool previousVisible = entry.visible;
 	const SbBool previousSelectable = entry.selectable;
 	const SbBool previousSelected = entry.selected;
@@ -12987,22 +12986,22 @@ SoBRLDatabaseSource::rebuildCompactInstanceDisplayState(
 	entry.style = compact_effective_style(entry);
 	compact_sync_shape_summary_state(entry);
 	if (!entry.visible)
-	    this->compactIndex->hiddenInstances.push_back(entry.instance);
+	    this->d->compactIndex->hiddenInstances.push_back(entry.instance);
 	if (entry.selected)
-	    this->compactIndex->selectedInstances.push_back(entry.instance);
+	    this->d->compactIndex->selectedInstances.push_back(entry.instance);
 	if (!entry.selectable)
-	    this->compactIndex->unpickableInstances.push_back(entry.instance);
+	    this->d->compactIndex->unpickableInstances.push_back(entry.instance);
 
-	if (i < this->compactIndex->instances.size() &&
-	    this->compactIndex->instances[i].instance == entry.instance) {
-	    this->compactIndex->instances[i].record.style = entry.style;
+	if (i < this->d->compactIndex->instances.size() &&
+	    this->d->compactIndex->instances[i].instance == entry.instance) {
+	    this->d->compactIndex->instances[i].record.style = entry.style;
 	} else {
-	    auto found = std::find_if(this->compactIndex->instances.begin(),
-		this->compactIndex->instances.end(),
+	    auto found = std::find_if(this->d->compactIndex->instances.begin(),
+		this->d->compactIndex->instances.end(),
 		[&entry](const Obol::InstanceUpdate &update) {
 		    return update.instance == entry.instance;
 		});
-	    if (found != this->compactIndex->instances.end())
+	    if (found != this->d->compactIndex->instances.end())
 		found->record.style = entry.style;
 	}
     }
@@ -13011,11 +13010,11 @@ SoBRLDatabaseSource::rebuildCompactInstanceDisplayState(
 void
 SoBRLDatabaseSource::syncCompactInstancePlacementState(void)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return;
 
     for (BObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries) {
+	 this->d->compactIndex->entries) {
 	const SbMatrix nextMatrix = cad_instance_matrix(this,
 	    entry.localTransform);
 	if (!entry.localToSource.equals(nextMatrix, 0.000001f)) {
@@ -13023,7 +13022,7 @@ SoBRLDatabaseSource::syncCompactInstancePlacementState(void)
 	    entry.placementRevision = compact_next_revision(
 		entry.placementRevision);
 	}
-	for (Obol::InstanceUpdate &update : this->compactIndex->instances) {
+	for (Obol::InstanceUpdate &update : this->d->compactIndex->instances) {
 	    if (update.instance == entry.instance) {
 		update.record.localToRoot = entry.localToSource;
 		break;
@@ -13263,7 +13262,7 @@ SoBRLDatabaseSource::setAuxiliarySourceLineSet(const char *sourcePath,
 
     const uint32_t revision = this->sourceRevision.getValue();
     source->configureDatabaseSourceInstance(sourcePath, sourcePath,
-					    this->dbip, this->drawMode.getValue(), revision);
+					    this->d->dbip, this->drawMode.getValue(), revision);
     source->auxiliarySource = TRUE;
     source->displayName = (auxDisplayName && auxDisplayName[0]) ?
 			  auxDisplayName : sourceName;
@@ -13468,9 +13467,9 @@ SoBRLDatabaseSource::getRealizedShapeCount(void) const
 SbBool
 SoBRLDatabaseSource::hasRealizedWireGeometry(void) const
 {
-    if (this->compactIndexActive && this->compactIndex) {
+    if (this->d->compactIndexActive && this->d->compactIndex) {
 	for (const BObolCompactInstanceEntry &entry :
-	     this->compactIndex->entries) {
+	     this->d->compactIndex->entries) {
 	    if (entry.wireGeometry || entry.pointGeometry)
 		return TRUE;
 	}
@@ -13509,9 +13508,9 @@ SoBRLDatabaseSource::getRealizedMeshCount(void) const
 SbBool
 SoBRLDatabaseSource::hasRealizedMeshGeometry(void) const
 {
-    if (this->compactIndexActive && this->compactIndex) {
+    if (this->d->compactIndexActive && this->d->compactIndex) {
 	for (const BObolCompactInstanceEntry &entry :
-	     this->compactIndex->entries) {
+	     this->d->compactIndex->entries) {
 	    if (entry.meshGeometry)
 		return TRUE;
 	}
@@ -13522,14 +13521,14 @@ SoBRLDatabaseSource::hasRealizedMeshGeometry(void) const
 SbBool
 SoBRLDatabaseSource::hasCompactInstanceIndex(void) const
 {
-    return (this->compactIndexActive && this->compactIndex &&
-	    !this->compactIndex->entries.empty()) ? TRUE : FALSE;
+    return (this->d->compactIndexActive && this->d->compactIndex &&
+	    !this->d->compactIndex->entries.empty()) ? TRUE : FALSE;
 }
 
 SbBool
 SoBRLDatabaseSource::isCompactOccurrenceRegistry(void) const
 {
-    return this->compactIndexActive && this->compactOccurrenceRegistry;
+    return this->d->compactIndexActive && this->d->compactOccurrenceRegistry;
 }
 
 int
@@ -13537,7 +13536,7 @@ SoBRLDatabaseSource::getCompactInstanceCount(void) const
 {
     if (!this->hasCompactInstanceIndex())
 	return 0;
-    return static_cast<int>(this->compactIndex->entries.size());
+    return static_cast<int>(this->d->compactIndex->entries.size());
 }
 
 int
@@ -13545,7 +13544,7 @@ SoBRLDatabaseSource::getCompactPartCount(void) const
 {
     if (!this->hasCompactInstanceIndex())
 	return 0;
-    return static_cast<int>(this->compactIndex->parts.size());
+    return static_cast<int>(this->d->compactIndex->parts.size());
 }
 
 SbBool
@@ -13553,13 +13552,13 @@ SoBRLDatabaseSource::getCompactInstanceHandle(
     int index, BObolCompactInstanceHandle &handle) const
 {
     handle = BObolCompactInstanceHandle();
-    if (!this->compactIndex || index < 0 ||
-	static_cast<size_t>(index) >= this->compactIndex->entries.size())
+    if (!this->d->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
 	return FALSE;
 
     const BObolCompactInstanceEntry &entry =
-	this->compactIndex->entries[static_cast<size_t>(index)];
-    handle.sourceNodeId = this->compactHandleSourceId;
+	this->d->compactIndex->entries[static_cast<size_t>(index)];
+    handle.sourceNodeId = this->d->compactHandleSourceId;
     handle.instanceWord0 = entry.instance.w0;
     handle.instanceWord1 = entry.instance.w1;
     return handle.isValid();
@@ -13570,12 +13569,12 @@ SoBRLDatabaseSource::getCompactOccurrence(
     int index, BObolCompactOccurrence &occurrence) const
 {
     occurrence = BObolCompactOccurrence();
-    if (!this->compactIndex || index < 0 ||
-	static_cast<size_t>(index) >= this->compactIndex->entries.size())
+    if (!this->d->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
 	return FALSE;
 
     const BObolCompactInstanceEntry &entry =
-	this->compactIndex->entries[static_cast<size_t>(index)];
+	this->d->compactIndex->entries[static_cast<size_t>(index)];
     occurrence.geometry = entry.geometry;
     occurrence.summary = entry.shapeSummary;
     occurrence.localTransform = entry.localTransform;
@@ -13593,11 +13592,11 @@ SoBRLDatabaseSource::copyCompactWireGeometry(
 {
     points.clear();
     commands.clear();
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return FALSE;
 
     for (const BObolCompactInstanceEntry &entry :
-	 this->compactIndex->entries) {
+	 this->d->compactIndex->entries) {
 	if (!entry.visible || !entry.geometry || !entry.geometry->wire)
 	    continue;
 
@@ -13628,17 +13627,17 @@ SoBRLDatabaseSource::findCompactInstanceEntry(
 	const BObolCompactInstanceHandle &handle)
     const
 {
-    if (!this->compactIndex || !handle.isValid() ||
-	handle.sourceNodeId != this->compactHandleSourceId)
+    if (!this->d->compactIndex || !handle.isValid() ||
+	handle.sourceNodeId != this->d->compactHandleSourceId)
 	return NULL;
     Obol::InstanceId instance;
     instance.w0 = handle.instanceWord0;
     instance.w1 = handle.instanceWord1;
-    const auto found = this->compactIndex->entryIndex.find(instance);
-    if (found == this->compactIndex->entryIndex.end() ||
-	found->second >= this->compactIndex->entries.size())
+    const auto found = this->d->compactIndex->entryIndex.find(instance);
+    if (found == this->d->compactIndex->entryIndex.end() ||
+	found->second >= this->d->compactIndex->entries.size())
 	return NULL;
-    return &this->compactIndex->entries[found->second];
+    return &this->d->compactIndex->entries[found->second];
 }
 
 SbBool
@@ -13664,7 +13663,7 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
     summary.path = entry->semantic.path;
     summary.sourceName = entry->semantic.sourceName;
     summary.sourceInstanceKey = compact_instance_identity(*entry);
-    summary.localToSource = entry->localTransform;
+    summary.localToSource = entry->localToSource;
     summary.geometryIdentity = entry->part.w0 ^
 	(entry->part.w1 + 0x9e3779b97f4a7c15ULL +
 	 (entry->part.w0 << 6) + (entry->part.w0 >> 2));
@@ -13682,6 +13681,17 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
     summary.materialColorValid = entry->semantic.materialColorValid;
     summary.materialColor = entry->semantic.materialColor;
     summary.materialShader = entry->semantic.materialShader;
+    summary.appearanceColorValid = entry->style.hasColorOverride ? TRUE : FALSE;
+    summary.appearanceColor = SbColor(entry->style.color[0],
+	entry->style.color[1], entry->style.color[2]);
+    summary.lineStyle = entry->style.linePattern == 0xffffu ? 0 : 1;
+    summary.lineWidth = entry->style.lineWidth > 0.0f ?
+	static_cast<int>(entry->style.lineWidth + 0.5f) : 0;
+    summary.transparency = 1.0f - entry->style.color[3];
+    if (summary.transparency < 0.0f)
+	summary.transparency = 0.0f;
+    else if (summary.transparency > 1.0f)
+	summary.transparency = 1.0f;
     summary.wireGeometry = entry->wireGeometry;
     summary.pointGeometry = entry->pointGeometry;
     summary.meshGeometry = entry->meshGeometry;
@@ -13691,6 +13701,75 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
     summary.selectable = entry->selectable;
     summary.selected = entry->selected;
     summary.highlighted = entry->highlighted;
+    return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::copyCompactInstanceEditGeometry(
+    const BObolCompactInstanceHandle &handle,
+    std::vector<SbVec3f> &points,
+    std::vector<int32_t> &commands,
+    BObolCompactInstanceSummary &summary) const
+{
+    points.clear();
+    commands.clear();
+    summary = BObolCompactInstanceSummary();
+
+    const BObolCompactInstanceEntry *entry =
+	this->findCompactInstanceEntry(handle);
+    if (!entry || !entry->geometry ||
+	!this->getCompactInstanceSummary(handle, summary))
+	return FALSE;
+
+    const auto appendPoint = [&entry, &points, &commands](
+	const SbVec3f &point, int32_t command) {
+	SbVec3f transformed;
+	entry->localToSource.multVecMatrix(point, transformed);
+	points.push_back(transformed);
+	commands.push_back(command);
+    };
+
+    if (entry->geometry->wire) {
+	const Obol::WireRep &wire = *entry->geometry->wire;
+	for (size_t i = 1; i < wire.segmentPoints.size(); i += 2) {
+	    appendPoint(wire.segmentPoints[i - 1], 0);
+	    appendPoint(wire.segmentPoints[i], 1);
+	}
+	for (const Obol::WirePolyline &polyline : wire.polylines) {
+	    for (size_t i = 0; i < polyline.points.size(); i++)
+		appendPoint(polyline.points[i], i == 0 ? 0 : 1);
+	}
+    }
+
+    if (entry->geometry->points) {
+	const Obol::PointRep &pointRep = *entry->geometry->points;
+	for (const SbVec3f &point : pointRep.positions)
+	    appendPoint(point, 2);
+    }
+
+    /* Mesh-only compact occurrences still need an editable visual.  Build a
+     * transient triangle-edge preview without adding a persistent mesh shape
+     * to the compact index. */
+    if (points.empty() && entry->geometry->shaded) {
+	const Obol::TriMesh &mesh = *entry->geometry->shaded;
+	for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+	    const uint32_t a = mesh.indices[i];
+	    const uint32_t b = mesh.indices[i + 1];
+	    const uint32_t c = mesh.indices[i + 2];
+	    if (a >= mesh.positions.size() || b >= mesh.positions.size() ||
+		c >= mesh.positions.size())
+		continue;
+	    appendPoint(mesh.positions[a], 0);
+	    appendPoint(mesh.positions[b], 1);
+	    appendPoint(mesh.positions[c], 1);
+	    appendPoint(mesh.positions[a], 1);
+	}
+    }
+
+    if (points.empty()) {
+	summary = BObolCompactInstanceSummary();
+	return FALSE;
+    }
     return TRUE;
 }
 
@@ -13756,10 +13835,10 @@ int
 SoBRLDatabaseSource::getCompactInstanceCountForPath(const char *queryPath,
     SbBool includeDescendants) const
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return 0;
     int count = 0;
-    compact_visit_entries_for_path(this->compactIndex, queryPath,
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [&count](size_t UNUSED(entryIndex)) {
 	    count++;
 	});
@@ -13771,13 +13850,13 @@ SoBRLDatabaseSource::getCompactInstanceBoundsForPath(const char *queryPath,
     SbBool includeDescendants, SbBox3f &bounds) const
 {
     bounds.makeEmpty();
-    if (!this->compactIndex || !this->visible.getValue())
+    if (!this->d->compactIndex || !this->visible.getValue())
 	return FALSE;
 
-    compact_visit_entries_for_path(this->compactIndex, queryPath,
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [this, &bounds](size_t entryIndex) {
 	const BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[entryIndex];
+	    this->d->compactIndex->entries[entryIndex];
 	if (!entry.visible)
 	    return;
 	const SbBox3f localBounds = compact_part_geometry_bounds(entry.geometry);
@@ -13795,15 +13874,15 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
     int selectedValid, SbBool nextSelected,
     int highlightedValid, SbBool nextHighlighted)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return 0;
     int changed = 0;
 
-    compact_visit_entries_for_path(this->compactIndex, queryPath,
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [this, visibleValid, nextVisible, selectedValid,
 	nextSelected, highlightedValid, nextHighlighted, &changed](size_t entryIndex) {
 	BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[entryIndex];
+	    this->d->compactIndex->entries[entryIndex];
 	bool visibilityChanged = false;
 	bool selectionChanged = false;
 	if (visibleValid && entry.visible != nextVisible) {
@@ -13843,14 +13922,14 @@ int
 SoBRLDatabaseSource::setCompactInstanceSelectableForPath(
     const char *queryPath, SbBool includeDescendants, SbBool nextSelectable)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return 0;
     int changed = 0;
 
-    compact_visit_entries_for_path(this->compactIndex, queryPath,
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [this, nextSelectable, &changed](size_t entryIndex) {
 	BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[entryIndex];
+	    this->d->compactIndex->entries[entryIndex];
 	if (entry.selectable == nextSelectable)
 	    return;
 	entry.selectable = nextSelectable;
@@ -13871,14 +13950,14 @@ int
 SoBRLDatabaseSource::setCompactInstanceRegionIdForPath(const char *queryPath,
     SbBool includeDescendants, int regionId)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return 0;
     int changed = 0;
 
-    compact_visit_entries_for_path(this->compactIndex, queryPath,
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [this, regionId, &changed](size_t entryIndex) {
 	BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[entryIndex];
+	    this->d->compactIndex->entries[entryIndex];
 	if (entry.semantic.regionId == regionId)
 	    return;
 	entry.semantic.regionId = regionId;
@@ -13899,15 +13978,15 @@ SoBRLDatabaseSource::setCompactInstanceRegionMetadataForPath(
     const char *queryPath, SbBool includeDescendants, int regionId,
     int airCode, int materialId, int los)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return 0;
     int changed = 0;
 
-    compact_visit_entries_for_path(this->compactIndex, queryPath,
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [this, regionId, airCode, materialId, los,
 	&changed](size_t entryIndex) {
 	BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[entryIndex];
+	    this->d->compactIndex->entries[entryIndex];
 	if (entry.semantic.regionId == regionId &&
 	     entry.semantic.airCode == airCode &&
 	     entry.semantic.materialId == materialId &&
@@ -13935,16 +14014,16 @@ SoBRLDatabaseSource::setCompactInstanceMetadataForPath(const char *queryPath,
     int los, SbBool nextMaterialColorValid, const SbColor &nextMaterialColor,
     const SbString &materialShader)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return 0;
     int changed = 0;
 
-    compact_visit_entries_for_path(this->compactIndex, queryPath,
+    compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [this, regionId, airCode, materialId, los,
 	nextMaterialColorValid, &nextMaterialColor, &materialShader,
 	&changed](size_t entryIndex) {
 	BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[entryIndex];
+	    this->d->compactIndex->entries[entryIndex];
 	const bool same = entry.semantic.regionId == regionId &&
 	    entry.semantic.airCode == airCode &&
 	    entry.semantic.materialId == materialId &&
@@ -13987,11 +14066,11 @@ SoBRLDatabaseSource::setCompactInstanceMetadataForPath(const char *queryPath,
 int
 SoBRLDatabaseSource::setCompactSubtractLineStyle(int nextLineStyle)
 {
-    if (!this->compactIndex)
+    if (!this->d->compactIndex)
 	return 0;
     int changed = 0;
     const uint16_t pattern = nextLineStyle != 0 ? 0xcf33u : 0xffffu;
-    for (BObolCompactInstanceEntry &entry : this->compactIndex->entries) {
+    for (BObolCompactInstanceEntry &entry : this->d->compactIndex->entries) {
 	if (entry.booleanOperation != BOOLEAN_SUBTRACT || !entry.wireGeometry ||
 	    entry.normalStyle.linePattern == pattern)
 	    continue;
@@ -14015,8 +14094,8 @@ int
 SoBRLDatabaseSource::refreshCompactObjectGeometry(
     const char *objectPath, uint32_t nextSourceRevision)
 {
-    if (!this->isCompactOccurrenceRegistry() || !this->compactIndex ||
-	!this->dbip || !objectPath || !objectPath[0])
+    if (!this->isCompactOccurrenceRegistry() || !this->d->compactIndex ||
+	!this->d->dbip || !objectPath || !objectPath[0])
 	return 0;
 
     const char *objectName = strrchr(objectPath, '/');
@@ -14024,7 +14103,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     if (!objectName[0])
 	return 0;
 
-    struct directory *dp = db_lookup(this->dbip, objectName, LOOKUP_QUIET);
+    struct directory *dp = db_lookup(this->d->dbip, objectName, LOOKUP_QUIET);
     if (!dp)
 	return -1;
     if (dp->d_flags & RT_DIR_COMB) {
@@ -14057,13 +14136,13 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 
     std::vector<size_t> matching;
     const std::unordered_map<std::string, std::vector<size_t>>::const_iterator
-	bySourceName = this->compactIndex->entryIndicesBySourceName.find(objectName);
-    if (bySourceName != this->compactIndex->entryIndicesBySourceName.end())
+	bySourceName = this->d->compactIndex->entryIndicesBySourceName.find(objectName);
+    if (bySourceName != this->d->compactIndex->entryIndicesBySourceName.end())
 	matching.insert(matching.end(), bySourceName->second.begin(),
 	    bySourceName->second.end());
     const std::unordered_map<std::string, std::vector<size_t>>::const_iterator
-	byLeaf = this->compactIndex->entryIndicesByLeaf.find(objectName);
-    if (byLeaf != this->compactIndex->entryIndicesByLeaf.end())
+	byLeaf = this->d->compactIndex->entryIndicesByLeaf.find(objectName);
+    if (byLeaf != this->d->compactIndex->entryIndicesByLeaf.end())
 	matching.insert(matching.end(), byLeaf->second.begin(), byLeaf->second.end());
     std::sort(matching.begin(), matching.end());
     matching.erase(std::unique(matching.begin(), matching.end()),
@@ -14071,8 +14150,8 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     if (matching.empty())
 	return 0;
 
-    valid_walk_internal validInternal;
-    if (rt_db_get_internal(&validInternal.local, dp, this->dbip, NULL) < 0 ||
+    owned_leaf_internal validInternal;
+    if (rt_db_get_internal(&validInternal.local, dp, this->d->dbip, NULL) < 0 ||
 	!internal_payload_magic_valid(&validInternal.local)) {
 	if (validInternal.local.idb_ptr)
 	    rt_db_free_internal(&validInternal.local);
@@ -14130,7 +14209,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    replacementLodBacked = true;
 	    replacementSourceMeshRequestValid = true;
 	    (void)cad_mesh_lod_display_geometry_from_cache(generated,
-		replacementSourceMeshRequest, this, this->dbip, objectName);
+		replacementSourceMeshRequest, this, this->d->dbip, objectName);
 	}
 	directMesh = geometryValid;
 	if (!geometryValid)
@@ -14160,7 +14239,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 
     for (size_t index : matching) {
 	const BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[index];
+	    this->d->compactIndex->entries[index];
 	if (((sharedWire || directWire) && !entry.wireGeometry &&
 	     !entry.pointGeometry) ||
 	    ((sharedMesh || directMesh) && !entry.meshGeometry)) {
@@ -14208,11 +14287,11 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	Obol::PartId partId;
 	std::shared_ptr<const Obol::PartGeometry> geometry;
 	const std::map<std::string, Obol::PartId>::const_iterator existingPart =
-	this->compactIndex->partIdByKey.find(partKey);
-	if (existingPart != this->compactIndex->partIdByKey.end()) {
+	this->d->compactIndex->partIdByKey.find(partKey);
+	if (existingPart != this->d->compactIndex->partIdByKey.end()) {
 	    partId = existingPart->second;
 	    for (const BObolCompactPartReference &partRef :
-		 this->compactIndex->parts) {
+		 this->d->compactIndex->parts) {
 		if (partRef.part == partId) {
 		    geometry = partRef.geometry;
 		    break;
@@ -14226,20 +14305,20 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    BObolCompactPartReference partRef;
 	    partRef.part = partId;
 	    partRef.geometry = geometry;
-	    this->compactIndex->parts.push_back(partRef);
+	    this->d->compactIndex->parts.push_back(partRef);
 	}
-	this->compactIndex->partIdByKey[partKey] = partId;
-	this->compactIndex->partIdByGeometry[geometry.get()] = partId;
+	this->d->compactIndex->partIdByKey[partKey] = partId;
+	this->d->compactIndex->partIdByGeometry[geometry.get()] = partId;
 
     std::unordered_set<Obol::PartId, std::hash<Obol::PartId>> oldParts;
     for (size_t index : matching) {
 	BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[index];
+	    this->d->compactIndex->entries[index];
 	oldParts.insert(entry.part);
-	compact_index_bounds_remove(*this->compactIndex, entry);
+	compact_index_bounds_remove(*this->d->compactIndex, entry);
 	std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>::iterator
-	    oldPartCount = this->compactIndex->partReferenceCounts.find(entry.part);
-	if (oldPartCount != this->compactIndex->partReferenceCounts.end() &&
+	    oldPartCount = this->d->compactIndex->partReferenceCounts.find(entry.part);
+	if (oldPartCount != this->d->compactIndex->partReferenceCounts.end() &&
 	    oldPartCount->second > 0)
 	    oldPartCount->second--;
 	/* The replacement is native object-local geometry.  Preserve the tree
@@ -14271,14 +14350,14 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    compact_summary_lod_from_source_mesh_request(entry.shapeSummary,
 		entry.sourceMeshRequest);
 	}
-	compact_index_bounds_add(*this->compactIndex, entry);
-	if (index < this->compactIndex->instances.size()) {
-	    this->compactIndex->instances[index].record.part = partId;
-	    this->compactIndex->instances[index].record.localToRoot =
+	compact_index_bounds_add(*this->d->compactIndex, entry);
+	if (index < this->d->compactIndex->instances.size()) {
+	    this->d->compactIndex->instances[index].record.part = partId;
+	    this->d->compactIndex->instances[index].record.localToRoot =
 		entry.localToSource;
 	}
     }
-    this->compactIndex->partReferenceCounts[partId] += matching.size();
+    this->d->compactIndex->partReferenceCounts[partId] += matching.size();
     if (sharedWire)
 	sharedWire->unref();
     if (sharedMesh)
@@ -14288,36 +14367,36 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
     for (const Obol::PartId &oldPart : oldParts) {
 	const std::unordered_map<Obol::PartId, size_t,
 	    std::hash<Obol::PartId>>::iterator count =
-	    this->compactIndex->partReferenceCounts.find(oldPart);
-	if (count != this->compactIndex->partReferenceCounts.end() &&
+	    this->d->compactIndex->partReferenceCounts.find(oldPart);
+	if (count != this->d->compactIndex->partReferenceCounts.end() &&
 	    count->second == 0) {
 	    releasedParts.insert(oldPart);
-	    this->compactIndex->partReferenceCounts.erase(count);
+	    this->d->compactIndex->partReferenceCounts.erase(count);
 	}
     }
-    this->compactIndex->parts.erase(
-	std::remove_if(this->compactIndex->parts.begin(),
-	    this->compactIndex->parts.end(),
+    this->d->compactIndex->parts.erase(
+	std::remove_if(this->d->compactIndex->parts.begin(),
+	    this->d->compactIndex->parts.end(),
 	    [&](const BObolCompactPartReference &part) {
 		return releasedParts.find(part.part) != releasedParts.end();
-	    }), this->compactIndex->parts.end());
-    for (auto it = this->compactIndex->partIdByKey.begin();
-	 it != this->compactIndex->partIdByKey.end();) {
+	    }), this->d->compactIndex->parts.end());
+    for (auto it = this->d->compactIndex->partIdByKey.begin();
+	 it != this->d->compactIndex->partIdByKey.end();) {
 	if (releasedParts.find(it->second) != releasedParts.end())
-	    it = this->compactIndex->partIdByKey.erase(it);
+	    it = this->d->compactIndex->partIdByKey.erase(it);
 	else
 	    ++it;
     }
-    for (auto it = this->compactIndex->partIdByGeometry.begin();
-	 it != this->compactIndex->partIdByGeometry.end();) {
+    for (auto it = this->d->compactIndex->partIdByGeometry.begin();
+	 it != this->d->compactIndex->partIdByGeometry.end();) {
 	if (releasedParts.find(it->second) != releasedParts.end())
-	    it = this->compactIndex->partIdByGeometry.erase(it);
+	    it = this->d->compactIndex->partIdByGeometry.erase(it);
 	else
 	    ++it;
     }
 
     SbBox3f bounds;
-    if (compact_index_source_bounds(*this->compactIndex, bounds))
+    if (compact_index_source_bounds(*this->d->compactIndex, bounds))
 	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
     else
 	this->clearSourceBounds();
@@ -14719,9 +14798,9 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
     if (!this->visible.getValue())
 	return 1;
 
-    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+    for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
 	const BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[i];
+	    this->d->compactIndex->entries[i];
 	if (!entry.visible)
 	    continue;
 
@@ -14752,7 +14831,7 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 			normalMatrix.multDirMatrix(pointNormal, worldNormal);
 			worldNormal.normalize();
 		    }
-		    action->appendPoint(summary.path, summary.sourceName,
+		action->appendPoint(summary.path, summary.sourceName,
 			summary.sourceType, summary.sourceId, summary.regionId,
 			summary.airCode, summary.materialId, summary.los,
 			summary.materialColorValid, summary.materialColor,
@@ -14764,7 +14843,8 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 			pointColor, pointScaleValid,
 			pointScaleValid ? compact_transform_point_scale(
 			    localToWorld, pointScale) : 0.0f,
-			pointNormalValid, worldNormal, worldPoint);
+		    pointNormalValid, worldNormal, worldPoint);
+		action->applyLastPointMetadata(summary);
 		});
 	}
 	if (entry.wireGeometry) {
@@ -14781,10 +14861,12 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 		    summary.materialColorValid, summary.materialColor,
 		    summary.materialShader, segmentIndex, entry.selected,
 		    entry.highlighted, summary.ghosted, summary.hiddenLine,
-		    summary.editEmphasis, summary.editIntentId,
+		    summary.editEmphasis, summary.lineStyle,
+		    summary.lineWidth, summary.editIntentId,
 		    summary.editIntentRole, summary.lodPolicy,
 		    summary.colorOverride, summary.color,
 		    worldA, worldB);
+		action->applyLastLineMetadata(summary);
 	    });
 	    continue;
 	}
@@ -14814,6 +14896,7 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 		    summary.lodHasNormals, summary.lodBoundsMin,
 		    summary.lodBoundsMax, summary.colorOverride, summary.color,
 		    worldA, worldB, worldC);
+		action->applyLastTriangleMetadata(summary);
 	    });
 	}
     }
@@ -14829,9 +14912,9 @@ SoBRLDatabaseSource::measureCompactInstances(SoBRLMeasureAction *action,
     if (!this->visible.getValue())
 	return 1;
 
-    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+    for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
 	const BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[i];
+	    this->d->compactIndex->entries[i];
 	if (!entry.visible ||
 	    !action->selectionAllows(entry.selected) ||
 	    !action->highlightAllows(entry.highlighted))
@@ -14914,9 +14997,9 @@ SoBRLDatabaseSource::snapCompactInstances(SoBRLSnapAction *action,
 	return 1;
 
     const SbVec3f query = action->queryPoint;
-    for (size_t i = 0; i < this->compactIndex->entries.size(); i++) {
+    for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
 	const BObolCompactInstanceEntry &entry =
-	    this->compactIndex->entries[i];
+	    this->d->compactIndex->entries[i];
 	if (!entry.visible || !entry.selectable ||
 	    !action->selectionAllows(entry.selected))
 	    continue;
@@ -15030,24 +15113,24 @@ SoBRLDatabaseSource::prepareCompiledAssembly(void)
 SbBool
 SoBRLDatabaseSource::hasCompiledAssembly(void) const
 {
-    return (this->compiledAssembly && this->compiledAssemblyActive) ?
+    return (this->d->compiledAssembly && this->d->compiledAssemblyActive) ?
 	   TRUE : FALSE;
 }
 
 int
 SoBRLDatabaseSource::getCompiledAssemblyPartCount(void) const
 {
-    if (!this->compiledAssembly || !this->compiledAssemblyActive)
+    if (!this->d->compiledAssembly || !this->d->compiledAssemblyActive)
 	return 0;
-    return static_cast<int>(this->compiledAssembly->partCount());
+    return static_cast<int>(this->d->compiledAssembly->partCount());
 }
 
 int
 SoBRLDatabaseSource::getCompiledAssemblyInstanceCount(void) const
 {
-    if (!this->compiledAssembly || !this->compiledAssemblyActive)
+    if (!this->d->compiledAssembly || !this->d->compiledAssemblyActive)
 	return 0;
-    return static_cast<int>(this->compiledAssembly->instanceCount());
+    return static_cast<int>(this->d->compiledAssembly->instanceCount());
 }
 
 static int
@@ -15738,6 +15821,9 @@ realized_shape_summary_common(const ShapeT *shape,
     summary.ghosted = shape->ghosted.getValue();
     summary.hiddenLine = shape->hiddenLine.getValue();
     summary.editEmphasis = shape->editEmphasis.getValue();
+    summary.lineStyle = shape->lineStyle.getValue();
+    summary.lineWidth = shape->lineWidth.getValue();
+    summary.transparency = shape->transparency.getValue();
     summary.editIntentId = shape->editIntentId.getValue();
     summary.editIntentRole = shape->editIntentRole.getValue();
     summary.lodPolicy = shape->lodPolicy.getValue();
@@ -15906,8 +15992,8 @@ find_realized_shape_summary_in_node(SoNode *node, int &index,
 int
 SoBRLDatabaseSource::getRealizedShapeSummaryCount(void) const
 {
-    int count = this->compactIndexActive && this->compactIndex ?
-	static_cast<int>(this->compactIndex->entries.size()) : 0;
+    int count = this->d->compactIndexActive && this->d->compactIndex ?
+	static_cast<int>(this->d->compactIndex->entries.size()) : 0;
     for (int i = 0; i < this->getNumChildren(); i++) {
 	count += count_shapes_in_node(this->getChild(i));
 	count += count_meshes_in_node(this->getChild(i));
@@ -15923,10 +16009,10 @@ SoBRLDatabaseSource::getRealizedShapeSummary(int index,
     if (index < 0)
 	return FALSE;
 
-    if (this->compactIndexActive && this->compactIndex) {
-	const size_t compactCount = this->compactIndex->entries.size();
+    if (this->d->compactIndexActive && this->d->compactIndex) {
+	const size_t compactCount = this->d->compactIndex->entries.size();
 	if (static_cast<size_t>(index) < compactCount) {
-	    summary = this->compactIndex->entries[
+	    summary = this->d->compactIndex->entries[
 		static_cast<size_t>(index)].shapeSummary;
 	    realized_shape_summary_owner(this, -1, summary);
 	    return summary.valid;

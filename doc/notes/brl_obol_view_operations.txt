@@ -30,14 +30,14 @@ The Obol-oriented command split is:
 `view feature` command code should resolve one typed feature handle and dispatch
 through feature/capability APIs.  It must not independently branch on "feature
 exists" versus "shape ref exists" and then perform separate mutations.
-Lifecycle, visibility, style, and realization dispatch belongs in managed-feature
-GED draw facades and the Obol draw bridge.
+Drawing-aware libged commands are C++ and use the borrowed libBObol controller,
+feature store, and typed handle directly.  Renderer-neutral GED C entry points
+remain for C hosts; they are not a second command-side state owner.
 
 `view annotation` command code should follow the same rule at the annotation
-class level.  Syntax parsing stays in the command file, but line, label, and
-axes creation/editing should dispatch through annotation-level GED draw
-facades so feature-store lifecycle, overlay classification, and retained
-fallback remain inside the draw bridge.
+class level.  Syntax parsing stays in the command file, while line, label, and
+axes creation/editing use the controller-owned annotation/feature stores so
+feature lifecycle, overlay classification, and retained state have one owner.
 
 Legacy TclCAD `data_*` / `sdata_*` overlay syntax remains a compatibility
 surface for old callers.  Lines, arrows, axes, labels, and polygons should

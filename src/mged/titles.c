@@ -243,7 +243,7 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     if (s->dbip == DBI_NULL)
 	return;
 
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
     struct bv_params_state params = BV_PARAMS_STATE_INIT;
     (void)bv_params_state_get(&params, view);

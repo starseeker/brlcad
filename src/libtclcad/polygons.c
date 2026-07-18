@@ -45,7 +45,7 @@
 #include "./view/view.h"
 
 static void
-tclcad_polygons_sync_dimensions(void *view_ctx)
+tclcad_polygons_sync_dimensions(struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
@@ -65,7 +65,7 @@ tclcad_polygons_sync_dimensions(void *view_ctx)
 }
 
 static const char *
-tclcad_polygons_view_name(const void *view_ctx)
+tclcad_polygons_view_name(const struct ged_view_context *view_ctx)
 {
     const char *name = bv_context_name_get(
 	    (const struct bv_context *)view_ctx);
@@ -73,19 +73,19 @@ tclcad_polygons_view_name(const void *view_ctx)
 }
 
 static struct bv *
-tclcad_polygons_bv(void *view_ctx)
+tclcad_polygons_bv(struct ged_view_context *view_ctx)
 {
     return bv_context_view((struct bv_context *)view_ctx);
 }
 
 static const struct bv *
-tclcad_polygons_bv_const(const void *view_ctx)
+tclcad_polygons_bv_const(const struct ged_view_context *view_ctx)
 {
     return bv_context_view_const((const struct bv_context *)view_ctx);
 }
 
 static unsigned long long
-tclcad_polygons_prepare_snap(void *view_ctx)
+tclcad_polygons_prepare_snap(struct ged_view_context *view_ctx)
 {
     struct bv *view = tclcad_polygons_bv(view_ctx);
     int flags;
@@ -99,7 +99,7 @@ tclcad_polygons_prepare_snap(void *view_ctx)
 }
 
 static int
-tclcad_polygons_snap_point_2d(void *view_ctx, fastf_t *vx, fastf_t *vy,
+tclcad_polygons_snap_point_2d(struct ged_view_context *view_ctx, fastf_t *vx, fastf_t *vy,
 	unsigned long long kinds)
 {
     return (kinds & BV_SNAP_KIND_GRID) ?
@@ -132,13 +132,13 @@ tclcad_polygon_export_state_from_tcl(struct ged_polygon_export_state *export_sta
  * The closing segment of the active contour is omitted when a contour-mode
  * build is in progress (gdps_cflag != 0). */
 static void
-_sync_tcl_polygons_to_draw_view(void *view_ctx, tclcad_polygon_state *gdpsp, const char *feature_name)
+_sync_tcl_polygons_to_draw_view(struct ged_view_context *view_ctx, tclcad_polygon_state *gdpsp, const char *feature_name)
 {
     if (!view_ctx || !gdpsp || !feature_name)
 	return;
 
     if (!gdpsp->gdps_draw || gdpsp->gdps_polygons.num_polygons < 1) {
-	(void)ged_draw_view_context_data_polygons_replace(view_ctx, feature_name,
+	(void)ged_annotation_data_polygons_replace(view_ctx, feature_name,
 		0, NULL, NULL, 0, NULL);
 	return;
     }
@@ -159,7 +159,7 @@ _sync_tcl_polygons_to_draw_view(void *view_ctx, tclcad_polygon_state *gdpsp, con
 	}
     }
     if (!point_count) {
-	(void)ged_draw_view_context_data_polygons_replace(view_ctx, feature_name,
+	(void)ged_annotation_data_polygons_replace(view_ctx, feature_name,
 		0, NULL, NULL, 0, NULL);
 	return;
     }
@@ -190,7 +190,7 @@ _sync_tcl_polygons_to_draw_view(void *view_ctx, tclcad_polygon_state *gdpsp, con
 	}
     }
 
-    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
     style.visible = 1;
     style.color_valid = 1;
     style.color[0] = (unsigned char)gdpsp->gdps_color[0];
@@ -199,14 +199,14 @@ _sync_tcl_polygons_to_draw_view(void *view_ctx, tclcad_polygon_state *gdpsp, con
     style.line_width = gdpsp->gdps_line_width;
     style.line_style = gdpsp->gdps_line_style;
 
-    (void)ged_draw_view_context_data_polygons_replace(view_ctx, feature_name,
+    (void)ged_annotation_data_polygons_replace(view_ctx, feature_name,
 	    1, (const point_t *)points, cmds, point_count, &style);
     bu_free(points, "tcl polygon feature points");
     bu_free(cmds, "tcl polygon feature cmds");
 }
 
 static void
-_sync_tcl_polygon_view_snapshot(void *view_ctx, tclcad_polygon_state *gdpsp)
+_sync_tcl_polygon_view_snapshot(struct ged_view_context *view_ctx, tclcad_polygon_state *gdpsp)
 {
     mat_t view_center;
 
@@ -222,7 +222,7 @@ _sync_tcl_polygon_view_snapshot(void *view_ctx, tclcad_polygon_state *gdpsp)
 }
 
 static int
-to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, void *view_ctx, struct bg_polygon *gpp, size_t contour_ac, const char **contour_av, int mode, int vflag)
+to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, struct ged_view_context *view_ctx, struct bg_polygon *gpp, size_t contour_ac, const char **contour_av, int mode, int vflag)
 {
     register size_t j = 0, k = 0;
     mat_t view2model;
@@ -297,7 +297,7 @@ to_extract_contours_av(Tcl_Interp *interp, struct ged *gedp, void *view_ctx, str
 
 
 static int
-to_extract_polygons_av(Tcl_Interp *interp, struct ged *gedp, void *view_ctx, tclcad_polygon_state *gdpsp, size_t polygon_ac, const char **polygon_av, int mode, int vflag)
+to_extract_polygons_av(Tcl_Interp *interp, struct ged *gedp, struct ged_view_context *view_ctx, tclcad_polygon_state *gdpsp, size_t polygon_ac, const char **polygon_av, int mode, int vflag)
 {
     register size_t i;
     int ac;
@@ -337,7 +337,7 @@ to_extract_polygons_av(Tcl_Interp *interp, struct ged *gedp, void *view_ctx, tcl
 int
 to_data_polygons_func(Tcl_Interp *interp,
 		      struct ged *gedp,
-		      void *gdvp,
+		      struct ged_view_context *gdvp,
 		      int argc,
 		      const char *argv[])
 {
@@ -1203,7 +1203,7 @@ bad:
 int
 go_data_polygons(Tcl_Interp *interp,
 		 struct ged *gedp,
-		 void *draw_view_ctx,
+		 struct ged_view_context *draw_view_ctx,
 		 int argc,
 		 const char *argv[],
 		 const char *usage)
@@ -1281,7 +1281,7 @@ to_data_polygons(struct ged *gedp,
 int
 go_poly_circ_mode(Tcl_Interp *interp,
 		  struct ged *gedp,
-		  void *draw_view_ctx,
+		  struct ged_view_context *draw_view_ctx,
 		  int argc,
 		  const char *argv[],
 		  const char *usage)
@@ -1363,7 +1363,7 @@ to_poly_circ_mode(struct ged *gedp,
 int
 to_poly_circ_mode_func(Tcl_Interp *interp,
 		       struct ged *gedp,
-		       void *gdvp,
+		       struct ged_view_context *gdvp,
 		       int UNUSED(argc),
 		       const char *argv[],
 		       const char *usage)
@@ -1536,7 +1536,7 @@ to_poly_cont_build_func(Tcl_Interp *interp,
 int
 go_poly_cont_build(Tcl_Interp *interp,
 		   struct ged *gedp,
-		   void *draw_view_ctx,
+		   struct ged_view_context *draw_view_ctx,
 		   int argc,
 		   const char *argv[],
 		   const char *usage)
@@ -1608,7 +1608,7 @@ to_poly_cont_build(struct ged *gedp,
 int
 go_poly_cont_build_end(Tcl_Interp *UNUSED(interp),
 		       struct ged *gedp,
-		       void *draw_view_ctx,
+		       struct ged_view_context *draw_view_ctx,
 		       int argc,
 		       const char *argv[],
 		       const char *usage)
@@ -1687,7 +1687,7 @@ to_poly_cont_build_end(struct ged *gedp,
 
 
 int
-to_poly_cont_build_end_func(void *gdvp,
+to_poly_cont_build_end_func(struct ged_view_context *gdvp,
     int UNUSED(argc),
     const char *argv[])
 {
@@ -1706,7 +1706,7 @@ to_poly_cont_build_end_func(void *gdvp,
 int
 go_poly_ell_mode(Tcl_Interp *interp,
 		 struct ged *gedp,
-		 void *draw_view_ctx,
+		 struct ged_view_context *draw_view_ctx,
 		 int argc,
 		 const char *argv[],
 		 const char *usage)
@@ -1788,7 +1788,7 @@ to_poly_ell_mode(struct ged *gedp,
 int
 to_poly_ell_mode_func(Tcl_Interp *interp,
 		      struct ged *gedp,
-		      void *gdvp,
+		      struct ged_view_context *gdvp,
 		      int UNUSED(argc),
 		      const char *argv[],
 		      const char *usage)
@@ -1853,7 +1853,7 @@ to_poly_ell_mode_func(Tcl_Interp *interp,
 int
 go_poly_rect_mode(Tcl_Interp *interp,
 		  struct ged *gedp,
-		  void *draw_view_ctx,
+		  struct ged_view_context *draw_view_ctx,
 		  int argc,
 		  const char *argv[],
 		  const char *usage)
@@ -1935,7 +1935,7 @@ to_poly_rect_mode(struct ged *gedp,
 int
 to_poly_rect_mode_func(Tcl_Interp *interp,
 		       struct ged *gedp,
-		       void *gdvp,
+		       struct ged_view_context *gdvp,
 		       int argc,
 		       const char *argv[],
 		       const char *usage)

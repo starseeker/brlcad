@@ -13,61 +13,16 @@ if(NOT DEFINED BRLCAD_SOURCE_DIR)
   message(FATAL_ERROR "BRLCAD_SOURCE_DIR is required")
 endif()
 
-set(_bobol_guard_extensions
-  [[(CMakeLists\.txt|\.(c|cc|cpp|cxx|h|hh|hpp|cmake)$)]])
+include("${CMAKE_CURRENT_LIST_DIR}/BObol_pivot_guard_rules.cmake")
 
+set(_bobol_guard_extensions "${BOBOL_GUARD_SOURCE_EXTENSIONS}")
 set(_bobol_guard_active_boundary_patterns
-  [[#[ \t]*include[ \t]*[<"]bsg]]
-  [[#[ \t]*include[ \t]*[<"]dm]]
-  [[(^|[^A-Za-z0-9_])bsg_view([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])bsg_render_item([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])bsg_backend_scene([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])bsg_vlist([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])bsg_vlblock([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])BSG_[A-Za-z0-9_]*VLIST[A-Za-z0-9_]*([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])dm_draw_]]
-  [[(^|[^A-Za-z0-9_])dm_plugins([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])libbsg([^A-Za-z0-9_]|$)]]
-  [[(^|[^A-Za-z0-9_])libdm([^A-Za-z0-9_]|$)]]
-)
-
+  ${BOBOL_GUARD_FORBIDDEN_DEPENDENCY_PATTERNS}
+  ${BOBOL_GUARD_FORBIDDEN_OWNERSHIP_PATTERNS})
 set(_bobol_guard_retired_ged_draw_symbols
-  [[(^|[^A-Za-z0-9_])ged_draw_shape_draft_[A-Za-z0-9_]*[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_create_evaluated_path_shape_ref[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_scene_ref_create_draft_pair[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_group_ref_append_scene_ref[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_scene_ref_append_source_owner_to_group[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_scene_ref_attach_source_state_record[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_source_data_free[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_scene_ref_apply_display_settings[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_obol_database_source_publish_primitive_wireframe_for_path_internal[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_obol_database_source_publish_annotation_record_from_internal_for_path[ \t\r\n]*\(]]
-  [[(^|[^A-Za-z0-9_])ged_draw_bsg_appearance_from_neutral[ \t\r\n]*\(]]
-)
-
-set(_bobol_guard_retired_test_files
-  src/libged/tests/draw/bsg_quad_stability.cpp
-  src/libged/tests/draw/bsg_render_stability.cpp
-  src/libged/tests/draw/mged_bsg.cpp
-  src/libged/tests/draw/mged_shaded_mode_bsg.cpp
-  src/libged/tests/draw/rtwizard_bsg.cpp
-  src/libged/tests/draw/tcl_overlay_bsg.cpp
-)
-
-set(_bobol_guard_retired_test_tokens
-  [[ged_test_bsg_quad_stability]]
-  [[ged_test_bsg_render_stability]]
-  [[ged_test_mged_bsg]]
-  [[ged_test_mged_shaded_mode_bsg]]
-  [[ged_test_rtwizard_bsg]]
-  [[ged_test_tcl_overlay_bsg]]
-  [[bsg_quad_stability\.cpp]]
-  [[bsg_render_stability\.cpp]]
-  [[mged_bsg\.cpp]]
-  [[mged_shaded_mode_bsg\.cpp]]
-  [[rtwizard_bsg\.cpp]]
-  [[tcl_overlay_bsg\.cpp]]
-)
+  ${BOBOL_GUARD_RETIRED_GED_SYMBOL_PATTERNS})
+set(_bobol_guard_retired_test_files ${BOBOL_GUARD_TEMPORARY_TEST_FILES})
+set(_bobol_guard_retired_test_tokens ${BOBOL_GUARD_TEMPORARY_TEST_TOKENS})
 
 function(_bobol_guard_fail _msg)
   set_property(GLOBAL APPEND PROPERTY BOBOL_PIVOT_GUARD_FAILURES "${_msg}")
@@ -103,14 +58,16 @@ function(_bobol_guard_forbid_regexes _rel _contents)
   foreach(_pat IN LISTS ARGN)
     string(REGEX MATCH "${_pat}" _hit "${_contents}")
     if(_hit)
-      _bobol_guard_fail("${_rel}: ${_hit}")
+      _bobol_guard_fail(
+        "${_rel}: forbidden dependency/ownership invariant matched '${_hit}'; route drawing through the typed display endpoint and direct libBObol service boundary")
     endif()
   endforeach()
 endfunction()
 
 function(_bobol_guard_check_file _file)
   file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
-  if("${_rel}" STREQUAL "misc/CMake/BObol_pivot_guard.cmake")
+  if("${_rel}" STREQUAL "misc/CMake/BObol_pivot_guard.cmake" OR
+     "${_rel}" STREQUAL "misc/CMake/BObol_pivot_guard_rules.cmake")
     return()
   endif()
   if(NOT "${_rel}" MATCHES "${_bobol_guard_extensions}")
@@ -197,6 +154,7 @@ function(_bobol_guard_check_libbsg_retired)
   foreach(_file IN LISTS _files)
     file(RELATIVE_PATH _rel "${BRLCAD_SOURCE_DIR}" "${_file}")
     if("${_rel}" STREQUAL "misc/CMake/BObol_pivot_guard.cmake" OR
+       "${_rel}" STREQUAL "misc/CMake/BObol_pivot_guard_rules.cmake" OR
        NOT "${_rel}" MATCHES "${_bobol_guard_extensions}")
       continue()
     endif()
@@ -325,7 +283,7 @@ endfunction()
 
 function(_bobol_guard_check_retired_ged_draw_symbols)
   foreach(_rel
-      src/libged/ged_draw_source.c
+      src/libged/ged_draw_source.cpp
       src/libged/ged_draw_transactions.c
       src/libged/draw_obol.cpp
       include/ged/draw.h)
@@ -502,7 +460,7 @@ function(_bobol_guard_check_display_endpoint_boundary)
   foreach(_rel
       src/libged/ged.cpp
       src/libged/ged_private.h
-      src/libged/dm/dm.c
+      src/libged/dm/dm.cpp
       src/libged/rt/rt.c)
     _bobol_guard_read_rel(_contents "${_rel}")
     _bobol_guard_forbid_regexes("${_rel}" "${_contents}"
@@ -513,7 +471,7 @@ function(_bobol_guard_check_display_endpoint_boundary)
       include/ged/defines.h
       src/libged/ged.cpp
       src/libged/ged_private.h
-      src/libged/dm/dm.c)
+      src/libged/dm/dm.cpp)
     _bobol_guard_read_rel(_contents "${_rel}")
     _bobol_guard_forbid_regexes("${_rel}" "${_contents}"
       [[ged_dm_ctx_]]
@@ -523,8 +481,8 @@ function(_bobol_guard_check_display_endpoint_boundary)
   _bobol_guard_forbid_regexes("src/libged/rt/rt.c" "${_ged_rt}"
     [[/dev/ogl]])
 
-  _bobol_guard_read_rel(_ged_dm "src/libged/dm/dm.c")
-  _bobol_guard_forbid_regexes("src/libged/dm/dm.c" "${_ged_dm}"
+  _bobol_guard_read_rel(_ged_dm "src/libged/dm/dm.cpp")
+  _bobol_guard_forbid_regexes("src/libged/dm/dm.cpp" "${_ged_dm}"
     [[dm_get_bg]]
     [[dm_set_bg]]
     [[dm_get_zclip]]
@@ -566,14 +524,14 @@ function(_bobol_guard_check_display_endpoint_boundary)
     endif()
   endforeach()
 
-  _bobol_guard_read_rel(_ged_screengrab "src/libged/dm/screengrab.c")
+  _bobol_guard_read_rel(_ged_screengrab "src/libged/dm/screengrab.cpp")
   string(FIND "${_ged_screengrab}"
     [[bobol_display_endpoint_capture]] _endpoint_capture_idx)
   if(_endpoint_capture_idx EQUAL -1)
     _bobol_guard_fail(
       "GED screengrab no longer captures through the display endpoint")
   endif()
-  _bobol_guard_forbid_regexes("src/libged/dm/screengrab.c"
+  _bobol_guard_forbid_regexes("src/libged/dm/screengrab.cpp"
     "${_ged_screengrab}"
     [[#[ \t]*include[ \t]*[<"]dm\.h]]
     [[struct[ \t]+dm]]
@@ -782,7 +740,7 @@ function(_bobol_guard_check_display_endpoint_boundary)
   endif()
 
   foreach(_rel
-      src/libged/ged_draw_source.c
+      src/libged/ged_draw_source.cpp
       src/libged/ged_draw_transactions.c)
     _bobol_guard_read_rel(_draw_c "${_rel}")
     string(FIND "${_draw_c}" [[ged_draw_obol_scene_controller_ensure_owned(gedp, 1)]]
@@ -1593,7 +1551,7 @@ function(_bobol_guard_check_tkobol_host_ownership)
     endif()
   endforeach()
   _bobol_guard_read_rel(_gsh "src/gtools/gsh/gsh.cpp")
-  string(FIND "${_gsh}" [[ged_draw_obol_render_endpoint_ensure_for_view]]
+  string(FIND "${_gsh}" [[gsh_headless_endpoint_ensure]]
     _gsh_endpoint_idx)
   if(_gsh_endpoint_idx EQUAL -1)
     _bobol_guard_fail(
@@ -1734,7 +1692,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
       [[mged_obol_framebuffer_composition_sync]]
       [[composition.framebuffer.mode]]
       [[mged_obol_faceplate_state_sync]]
-      [[ged_draw_obol_view_context_faceplate_sync]]
+      [[ged_draw_obol_faceplate_sync]]
       [[bobol_display_endpoint_view_sync]]
       [[bobol_display_endpoint_request_frame]])
     string(FIND "${_mged_refresh}" "${_needle}" _mged_refresh_idx)
@@ -1761,7 +1719,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
       [[(^|[^A-Za-z0-9_])mged_curr_dm([^A-Za-z0-9_]|$)]]
       [[(^|[^A-Za-z0-9_])active_dm_set([^A-Za-z0-9_]|$)]])
   endforeach()
-  _bobol_guard_read_rel(_ged_dm_endpoint "src/libged/dm/dm.c")
+  _bobol_guard_read_rel(_ged_dm_endpoint "src/libged/dm/dm.cpp")
   foreach(_needle
       [[host_width = bview && bv_width_get(bview) > 0]]
       [[host_height = bview && bv_height_get(bview) > 0]]
@@ -1790,7 +1748,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
   _bobol_guard_forbid_regexes("src/mged/axes.c" "${_mged_axes}"
     [[(^|[^A-Za-z0-9_])dm_draw_hud_axes[ \t\r\n]*\(]])
   foreach(_needle
-      [[ged_draw_view_context_hud_axes_replace]]
+      [[ged_annotation_hud_axes_replace]]
       [[_faceplate/edit_axes/initial]]
       [[_faceplate/edit_axes/current]])
     string(FIND "${_mged_axes}" "${_needle}" _retained_edit_axes_idx)
@@ -1959,7 +1917,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
       src/mged/mged.c
       src/qged/QgEdMainWindow.cpp
       src/qged/QgEdMainWindow.h
-      src/libged/dm/dm.c
+      src/libged/dm/dm.cpp
       src/tclscripts/mged/apply.tcl
       src/tclscripts/mged/helpdevel.tcl)
     _bobol_guard_read_rel(_mged_stale_endpoint_names "${_rel}")
@@ -2042,7 +2000,7 @@ function(_bobol_guard_check_unreachable_drawing_shims)
     [[(^|[^A-Za-z0-9_])dm_get_dname[ \t\r\n]*\(]])
   foreach(_needle
       [[mged_rubber_band_state_sync]]
-      [[ged_draw_view_context_hud_lines_replace]]
+      [[ged_annotation_hud_lines_replace]]
       [[_faceplate/rubber_band]])
     string(FIND "${_mged_rect}" "${_needle}" _retained_rubber_band_idx)
     if(_retained_rubber_band_idx EQUAL -1)

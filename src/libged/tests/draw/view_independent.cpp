@@ -49,7 +49,7 @@ static int nchecks = 0;
 static int nfails = 0;
 
 static std::vector<std::string>
-drawn_paths(struct ged *gedp, void *v)
+drawn_paths(struct ged *gedp, struct ged_view_context *v)
 {
     std::vector<std::string> ret;
     struct bu_vls paths = BU_VLS_INIT_ZERO;
@@ -179,9 +179,9 @@ main(int argc, const char **argv)
     if (!gedp)
 	return EXIT_FAILURE;
 
-    void *view_set_ctx = ged_view_set_ctx(gedp);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
     ASSERT(ged_view_set_context_remove(view_set_ctx, NULL));
-    void *views[2] = {NULL, NULL};
+    struct ged_view_context *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%d", i);
@@ -198,8 +198,8 @@ main(int argc, const char **argv)
 	ASSERT(bv_scale_state_set(DRAW_TEST_BV(views[i]), 1.0e9, 1.0, 0.0, 1.0e9, 1.0 / 1.0e9));
     }
     ASSERT(draw_shared_autoview(gedp, "all.g") == BRLCAD_OK);
-    ASSERT(ged_draw_view_context_lod_bounds_callback_is(views[0]));
-    ASSERT(ged_draw_view_context_lod_bounds_callback_is(views[1]));
+    ASSERT(ged_draw_source_lod_bounds_callback_is(views[0]));
+    ASSERT(ged_draw_source_lod_bounds_callback_is(views[1]));
     ASSERT(bv_size_get(DRAW_TEST_BV_CONST(views[0])) < 1.0e8);
     ASSERT(bv_size_get(DRAW_TEST_BV_CONST(views[1])) < 1.0e8);
     ASSERT(zap_current(gedp) == BRLCAD_OK);

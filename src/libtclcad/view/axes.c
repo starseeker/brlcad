@@ -43,7 +43,7 @@
 #define BVDAS_DEFAULT_VIEW_WIDTH 512
 
 static fastf_t
-_tclcad_data_axes_display_scale(void *view_ctx)
+_tclcad_data_axes_display_scale(struct ged_view_context *view_ctx)
 {
     const struct bv *view =
 	bv_context_view_const((const struct bv_context *)view_ctx);
@@ -54,7 +54,7 @@ _tclcad_data_axes_display_scale(void *view_ctx)
 }
 
 static int
-tclcad_axes_visibility_endpoint_set(void *view_ctx,
+tclcad_axes_visibility_endpoint_set(struct ged_view_context *view_ctx,
 	const char *property_name, int enabled)
 {
     if (!view_ctx || !property_name || enabled < 0 || enabled > 1)
@@ -69,7 +69,7 @@ tclcad_axes_visibility_endpoint_set(void *view_ctx,
 }
 
 static int
-tclcad_axes_endpoint_property_set(void *view_ctx, const char *name,
+tclcad_axes_endpoint_property_set(struct ged_view_context *view_ctx, const char *name,
 	const struct bobol_endpoint_property_value *value)
 {
     return ged_view_context_display_property_set(view_ctx, name, value) ==
@@ -77,7 +77,7 @@ tclcad_axes_endpoint_property_set(void *view_ctx, const char *name,
 }
 
 static int
-tclcad_axes_endpoint_style_set(void *view_ctx,
+tclcad_axes_endpoint_style_set(struct ged_view_context *view_ctx,
 	const char *visibility_property, const char *field,
 	const struct bv_axes_state *axes)
 {
@@ -172,7 +172,7 @@ tclcad_axes_endpoint_style_set(void *view_ctx,
 
 int
 to_axes(struct ged *gedp,
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	struct bv_axes_state *gasp,
 	const char *visibility_property,
 	int argc,
@@ -585,7 +585,7 @@ bad:
 int
 go_data_axes(Tcl_Interp *interp,
 	     struct ged *gedp,
-	     void *draw_view_ctx,
+	     struct ged_view_context *draw_view_ctx,
 	     int argc,
 	     const char *argv[],
 	     const char *usage)
@@ -623,7 +623,7 @@ to_data_axes(struct ged *gedp,
 	     const char *usage,
 	     int UNUSED(maxargs))
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     int ret;
 
     /* initialize result */
@@ -658,7 +658,7 @@ to_data_axes(struct ged *gedp,
 int
 to_data_axes_func(Tcl_Interp *interp,
 		  struct ged *gedp,
-		  void *view_ctx,
+		  struct ged_view_context *view_ctx,
 		  int argc,
 		  const char *argv[])
 {
@@ -668,7 +668,7 @@ to_data_axes_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
 	    bu_vls_printf(gedp->ged_result_str, "%d",
-			  ged_draw_view_context_data_axes_draw_get(view_ctx, feature_name) ? 1 : 0);
+			  ged_annotation_data_axes_draw_get(view_ctx, feature_name) ? 1 : 0);
 	    return BRLCAD_OK;
 	}
 
@@ -678,7 +678,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &i) != 1)
 		goto bad;
 
-	    ged_draw_view_context_data_axes_draw_set(view_ctx, feature_name, i ? 1 : 0);
+	    ged_annotation_data_axes_draw_set(view_ctx, feature_name, i ? 1 : 0);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -689,8 +689,8 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
-	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_draw_view_context_data_axes_style_get(view_ctx, feature_name, &style) && style.color_valid) {
+	    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+	    if (ged_annotation_data_axes_style_get(view_ctx, feature_name, &style) && style.color_valid) {
 		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			      (int)style.color[0], (int)style.color[1], (int)style.color[2]);
 	    } else {
@@ -714,7 +714,7 @@ to_data_axes_func(Tcl_Interp *interp,
 		b < 0 || 255 < b)
 		goto bad;
 
-	    ged_draw_view_context_data_axes_color_set(view_ctx, feature_name, r, g, b);
+	    ged_annotation_data_axes_color_set(view_ctx, feature_name, r, g, b);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -725,8 +725,8 @@ to_data_axes_func(Tcl_Interp *interp,
 
     if (BU_STR_EQUAL(argv[1], "line_width")) {
 	if (argc == 2) {
-	    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    if (ged_draw_view_context_data_axes_style_get(view_ctx, feature_name, &style))
+	    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+	    if (ged_annotation_data_axes_style_get(view_ctx, feature_name, &style))
 		bu_vls_printf(gedp->ged_result_str, "%d", style.line_width);
 	    else
 		bu_vls_printf(gedp->ged_result_str, "0");
@@ -739,7 +739,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    if (bu_sscanf(argv[2], "%d", &line_width) != 1)
 		goto bad;
 
-	    ged_draw_view_context_data_axes_line_width_set(view_ctx, feature_name, line_width);
+	    ged_annotation_data_axes_line_width_set(view_ctx, feature_name, line_width);
 
 	    to_refresh_view(view_ctx);
 	    return BRLCAD_OK;
@@ -752,7 +752,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	if (argc == 2) {
 	    fastf_t size = 0.0;
 	    fastf_t sf = _tclcad_data_axes_display_scale(view_ctx);
-	    ged_draw_view_context_data_axes_size_get(view_ctx, feature_name, sf,
+	    ged_annotation_data_axes_size_get(view_ctx, feature_name, sf,
 		    &size);
 	    bu_vls_printf(gedp->ged_result_str, "%lf", size);
 	    return BRLCAD_OK;
@@ -765,20 +765,20 @@ to_data_axes_func(Tcl_Interp *interp,
 		goto bad;
 
 	    /* Extract current centers and rebuild with new halfAxesSize. */
-	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    ged_draw_view_context_data_axes_style_get(view_ctx, feature_name,
+	    struct ged_view_feature_style saved_style = GED_VIEW_FEATURE_STYLE_INIT;
+	    ged_annotation_data_axes_style_get(view_ctx, feature_name,
 		    &saved_style);
 
 	    point_t *cpts = NULL;
 	    size_t ncpts = 0;
-	    (void)ged_draw_view_context_data_axes_centers_copy(view_ctx,
+	    (void)ged_annotation_data_axes_centers_copy(view_ctx,
 		    feature_name, &cpts, &ncpts);
 
 	    fastf_t sf = _tclcad_data_axes_display_scale(view_ctx);
 	    fastf_t half = (fastf_t)size * 0.5f * sf;
 
 	    if (cpts && ncpts)
-		(void)ged_draw_view_context_data_axes_centers_replace(view_ctx, feature_name, cpts, ncpts,
+		(void)ged_annotation_data_axes_centers_replace(view_ctx, feature_name, cpts, ncpts,
 			half, &saved_style);
 	    if (cpts)
 		bu_free(cpts, "GED draw view axes centers copy");
@@ -796,7 +796,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	if (argc == 2) {
 	    point_t *cpts = NULL;
 	    size_t ncpts = 0;
-	    if (ged_draw_view_context_data_axes_centers_copy(view_ctx, feature_name, &cpts, &ncpts)) {
+	    if (ged_annotation_data_axes_centers_copy(view_ctx, feature_name, &cpts, &ncpts)) {
 		for (size_t j = 0; j < ncpts; ++j)
 		    bu_vls_printf(gedp->ged_result_str, " {%lf %lf %lf} ", V3ARGS(cpts[j]));
 		if (cpts)
@@ -815,18 +815,18 @@ to_data_axes_func(Tcl_Interp *interp,
 	    }
 
 	    /* Save style and size from existing object before replacing it. */
-	    struct ged_draw_view_feature_style saved_style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-	    ged_draw_view_context_data_axes_style_get(view_ctx, feature_name,
+	    struct ged_view_feature_style saved_style = GED_VIEW_FEATURE_STYLE_INIT;
+	    ged_annotation_data_axes_style_get(view_ctx, feature_name,
 		    &saved_style);
 
 	    /* Recover halfAxesSize from existing object (use default 1.0 if none). */
 	    fastf_t half = 1.0;
-	    ged_draw_view_context_data_axes_half_size_get(view_ctx, feature_name,
+	    ged_annotation_data_axes_half_size_get(view_ctx, feature_name,
 		    &half);
 
 	    /* Clear out: remove old GED draw-view feature. */
 	    if (ac < 1) {
-		ged_draw_view_context_data_axes_centers_replace(view_ctx,
+		ged_annotation_data_axes_centers_replace(view_ctx,
 			feature_name, NULL, 0, half, &saved_style);
 		to_refresh_view(view_ctx);
 		Tcl_Free((char *)av);
@@ -848,7 +848,7 @@ to_data_axes_func(Tcl_Interp *interp,
 	    }
 
 	    /* Rebuild draw-view data axes from new centers, preserving style. */
-	    (void)ged_draw_view_context_data_axes_centers_replace(view_ctx, feature_name, pts, (size_t)ac,
+	    (void)ged_annotation_data_axes_centers_replace(view_ctx, feature_name, pts, (size_t)ac,
 		    half, &saved_style);
 	    bu_free(pts, "axes points");
 	    Tcl_Free((char *)av);
@@ -869,7 +869,7 @@ to_model_axes(struct ged *gedp,
 	      const char *usage,
 	      int UNUSED(maxargs))
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -915,7 +915,7 @@ to_model_axes(struct ged *gedp,
 
 int
 go_view_axes(struct ged *gedp,
-	     void *draw_view_ctx,
+	     struct ged_view_context *draw_view_ctx,
 	     int argc,
 	     const char *argv[],
 	     const char *usage)
@@ -965,7 +965,7 @@ to_view_axes(struct ged *gedp,
 	     const char *usage,
 	     int UNUSED(maxargs))
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);

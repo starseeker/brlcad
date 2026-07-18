@@ -80,12 +80,27 @@ as one compact wire or mesh instance.  In that state:
   non-default line styles, and future custom manipulator/edit state must keep
   or materialize explicit Coin nodes.
 
-The compact index currently retains off-scene shape handles as transitional
-record sources.  The next cleanup is to replace those handles with tighter
-metadata/geometry records and explicit promote/demote APIs for selected,
-edited, or inspected subsets.  The design boundary is deliberate: aggregate
-source-local CAD assemblies are for scalable whole-instance state, while
+The normal compact index retains value-only occurrence metadata and shared,
+immutable `Obol::PartGeometry` payloads.  It retains no off-scene Coin render
+shape solely as a metadata source.  Selection, highlight, visibility,
+appearance, transform, and LoD changes are explicit indexed state transitions;
+an editing tool that needs a per-primitive Coin node materializes it in its
+owned feature/edit-preview store and removes that node when the edit ends.
+The compact occurrence handle and source revisions remain the identity across
+that promote/demote lifecycle.  Aggregate source-local CAD assemblies are for
+scalable whole-instance state, while
 first-class Coin nodes are for per-object/per-primitive interaction semantics.
+
+The explicit operation is
+`BObolFeatureStore::promoteCompactInstanceForEdit`: it asks the database source
+to copy only the selected handle's immutable geometry into source coordinates,
+publishes a transient local `SoBRLEditPreview`, and records a typed compact
+binding containing the original handle, effective appearance, placement and
+state revisions, and LoD provenance.  `compactEditBinding` exposes that value
+state to the edit tool.  `demoteCompactInstanceFromEdit` validates the handle
+against the binding and removes only the preview; it does not rebuild or mutate
+the compact source.  `libBObol_compact_edit` covers the complete lifecycle and
+also asserts that the compact source contains no retained vlist or mesh shape.
 
 Direct compact realization is not the whole progressive-cache design.  It is a
 fast path for synchronous, stable source realization.  Progressive display LoD
@@ -190,11 +205,11 @@ policy changes advance view/policy revisions and submit new LoD requests; stale
 results are rejected by revision checks.
 
 For Obol-attached views, `view lod` policy changes are applied through the
-GED/Obol bridge rather than by forcing a legacy redraw.  The bridge clears the
+GED/Obol bridge without forcing a second redraw path.  The bridge clears the
 attached controller's `BObolViewLodState`, advances its LoD policy revision,
 refreshes realization view policy on source instances in the affected view
-scope, and requests an Obol render.  Non-Obol views still use legacy redraw as
-the fallback update mechanism.
+scope, and requests an Obol render.  A view without an endpoint updates only
+its passive LoD policy; realization begins when an endpoint is attached.
 
 Memory Policy
 -------------
@@ -300,7 +315,7 @@ Published proxy geometry is source-local fallback content, not a view-local
 decoration and not a failed final-mode realization.  For example, a shaded or
 wire startup draw may temporarily display leaf AABB line sets while detailed
 shaded/LoD data is still unavailable.  Source replacement,
-attached-controller sync, draw-state updates, and `realizePending` must
+display-endpoint sync, draw-state updates, and `realizePending` must
 preserve and revalidate that external primary until explicit erase/clear,
 provider replacement, or database-edit invalidation removes it.  When a proxy
 is published, the GED/Obol bridge also applies any cached full-path draw
@@ -472,7 +487,7 @@ progressive view LoD:
   shared scene;
 * source-stale/redraw re-realization for evaluated-wire and evaluated-point
   external representations;
-* attached-controller draw, erase, stale-source, erase-prefix, source-update,
+* display-endpoint draw, erase, stale-source, erase-prefix, source-update,
   source-reference removal, source-rename, clear, clear-scope, and teardown
   transactions clearing view-local attachment LoD payloads while keeping
   shared scene source sync correct;
@@ -586,8 +601,8 @@ identity-preserving; it must never be mistaken for the exact final Boolean
 surface.
 
 Also keep adding scene-state coverage for no-owned-scene/no-feature-store
-no-op behavior so the view-local LoD invalidation contract is proven outside
-the primary attached-controller flow without recreating fallback scene state.
+no-op behavior so the view-local LoD invalidation contract is proven without a
+display endpoint and without recreating fallback scene state.
 
 Startup proxy publication now consumes cached full-path metadata and
 `test_qtcad_obol_progressive_lod_startup_refine` asserts that seeded cached

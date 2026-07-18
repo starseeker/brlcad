@@ -285,7 +285,7 @@ ged_rtcheck2_core(struct ged *gedp, int argc, const char *argv[])
     bu_process_file_close(p, BU_PROCESS_STDIN);
 
     /* create the rtcheck struct */
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     BU_GET(rtcp, struct ged_rtcheck);
     rtcp->fp = bu_process_file_open(p, BU_PROCESS_STDOUT);
     /* Needed on Windows for successful rtcheck drawing data communication */

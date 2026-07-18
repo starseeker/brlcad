@@ -66,10 +66,10 @@ mged_edit_preview_name(struct bu_vls *name, const char *source_path)
 
 
 static int
-mged_edit_preview_view_exists(void *view_ctx, const char *name)
+mged_edit_preview_view_exists(struct ged_view_context *view_ctx, const char *name)
 {
     return (view_ctx && name && name[0] &&
-	    ged_draw_view_context_feature_exists(view_ctx, name)) ? 1 : 0;
+	    ged_view_feature_exists(view_ctx, name)) ? 1 : 0;
 }
 
 
@@ -83,7 +83,7 @@ mged_edit_preview_exists_any(struct mged_state *s, const char *name)
 
     for (size_t di = 0; di < BU_PTBL_LEN(&active_display_set); di++) {
 	struct mged_display *m_dmp = (struct mged_display *)BU_PTBL_GET(&active_display_set, di);
-	void *view_ctx = (m_dmp && m_dmp->display_view_state) ?
+	struct ged_view_context *view_ctx = (m_dmp && m_dmp->display_view_state) ?
 	    m_dmp->display_view_state->vs_gvp : NULL;
 	if (!view_ctx)
 	    continue;
@@ -108,13 +108,13 @@ mged_edit_preview_publish_view(
     struct rt_db_internal *ip,
     const mat_t mat)
 {
-    void *view_ctx = vsp ? vsp->vs_gvp : NULL;
+    struct ged_view_context *view_ctx = vsp ? vsp->vs_gvp : NULL;
     if (!s || !view_ctx || !name || !name[0] || !ip)
 	return 0;
 
-    struct ged_draw_view_edit_transaction transaction =
-	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
-    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE;
+    struct ged_view_edit_transaction transaction =
+	GED_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_VIEW_EDIT_PREVIEW_UPDATE;
     transaction.feature_name = name;
     transaction.owner = (const void *)s;
     transaction.source_path = source_path;
@@ -132,7 +132,7 @@ mged_edit_preview_publish_view(
 	transaction.color[2] = color_scheme->cs_edit_info[2];
     }
 
-    if (!ged_draw_view_context_edit_transaction_apply(view_ctx,
+    if (!ged_view_feature_edit_transaction_apply(view_ctx,
 	    &transaction, NULL))
 	return -1;
 
@@ -187,17 +187,17 @@ mged_edit_preview_clear_view(struct mged_state *s,
 			     struct _view_state *vsp,
 			     const char *name)
 {
-    void *view_ctx = vsp ? vsp->vs_gvp : NULL;
+    struct ged_view_context *view_ctx = vsp ? vsp->vs_gvp : NULL;
     int removed = 0;
 
     if (!view_ctx || !name || !name[0])
 	return 0;
 
-    struct ged_draw_view_edit_transaction transaction =
-	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
-    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
+    struct ged_view_edit_transaction transaction =
+	GED_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
     transaction.feature_name = name;
-    removed = ged_draw_view_context_edit_transaction_apply(view_ctx,
+    removed = ged_view_feature_edit_transaction_apply(view_ctx,
 	    &transaction, NULL);
     if (removed)
 	mged_refresh_request_view(s, vsp, GED_VIEW_REFRESH_VIEW);

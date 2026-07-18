@@ -10,6 +10,7 @@
 #include "bu/app.h"
 
 #include "BObol.h"
+#include "BObol/BImageSource.h"
 
 #include "bu/log.h"
 #include "bu/str.h"

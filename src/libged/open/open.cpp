@@ -137,7 +137,7 @@ ged_opendb_core(struct ged *gedp, int argc, const char *argv[])
     ged_event_librt_callbacks_enable(gedp);
 
     // Set the view units, if we have a view
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (view_ctx) {
 	bv_unit_conversion_set(bv_context_view((struct bv_context *)view_ctx),
 	    gedp->dbip->dbi_local2base,

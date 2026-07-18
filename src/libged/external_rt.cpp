@@ -48,7 +48,7 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx || !ged_view_context_display_endpoint_get(view_ctx)) {
 	bu_vls_printf(gedp->ged_result_str,
 		"active view has no Obol display endpoint\n");

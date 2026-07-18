@@ -190,8 +190,10 @@ QgView::~QgView()
 {
     struct bv_context *view_ctx = viewContext();
     if (endpoint && view_ctx &&
-	ged_view_context_display_endpoint_get(view_ctx) == endpoint)
-	(void)ged_view_context_display_endpoint_set(view_ctx, nullptr, 0);
+	ged_view_context_display_endpoint_get(
+	    ged_view_context_from_bv(view_ctx)) == endpoint)
+	(void)ged_view_context_display_endpoint_set(
+	    ged_view_context_from_bv(view_ctx), nullptr, 0);
     if (canvas) {
 	canvas->setObolInputEndpoint(nullptr);
 	canvas->setObolViewController(nullptr);

@@ -45,7 +45,7 @@ ged_model2grid_lu_core(struct ged *gedp, int argc, const char *argv[])
     point_t mo_view_pt;           /* model origin in view space */
     point_t diff;
     double scan[3];
-    void *view_ctx = NULL;
+    struct ged_view_context *view_ctx = NULL;
     const struct bv *view = NULL;
     static const char *usage = "x y z";
     double l2bval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;

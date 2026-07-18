@@ -216,12 +216,11 @@ static int
 qtcad_obol_render_database_source_count(struct ged *gedp,
 					BObolViewController *controller)
 {
-    int count = controller ? controller->getDatabaseSourceCount() : 0;
-    SoBRLSceneController *sharedScene = ged_draw_obol_scene_controller(gedp);
-    if (sharedScene && (!controller ||
-			sharedScene != controller->getSceneController()))
-	count += sharedScene->getDatabaseSourceCount();
-    return count;
+    (void)gedp;
+    if (!controller)
+	return 0;
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    return renderScene.getDatabaseSourceCount();
 }
 
 static int
@@ -248,7 +247,7 @@ qtcad_obol_path_depth(const char *path)
 
 static int
 qtcad_obol_scene_database_source_max_depth(
-    SoBRLSceneController *scene,
+    BObolSceneController *scene,
     const char *root_path)
 {
     int max_depth = 0;
@@ -285,23 +284,17 @@ qtcad_obol_render_database_source_max_depth(
     BObolViewController *controller,
     const char *root_path)
 {
-    int max_depth = controller ?
-		    qtcad_obol_scene_database_source_max_depth(
-			controller->getSceneController(), root_path) : 0;
-    SoBRLSceneController *sharedScene = ged_draw_obol_scene_controller(gedp);
-    if (sharedScene && (!controller ||
-			sharedScene != controller->getSceneController())) {
-	int shared_depth =
-	    qtcad_obol_scene_database_source_max_depth(sharedScene, root_path);
-	if (shared_depth > max_depth)
-	    max_depth = shared_depth;
-    }
-    return max_depth;
+    (void)gedp;
+    if (!controller)
+	return 0;
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    return qtcad_obol_scene_database_source_max_depth(&renderScene,
+	root_path);
 }
 
 
 static int
-qtcad_obol_scene_realized_database_geometry_count(SoBRLSceneController *scene)
+qtcad_obol_scene_realized_database_geometry_count(BObolSceneController *scene)
 {
     int count = 0;
     if (!scene)
@@ -327,15 +320,11 @@ qtcad_obol_render_realized_database_geometry_count(
     struct ged *gedp,
     BObolViewController *controller)
 {
-    int count = controller ?
-		qtcad_obol_scene_realized_database_geometry_count(
-		    controller->getSceneController()) : 0;
-    SoBRLSceneController *sharedScene = ged_draw_obol_scene_controller(gedp);
-    if (sharedScene && (!controller ||
-			sharedScene != controller->getSceneController()))
-	count += qtcad_obol_scene_realized_database_geometry_count(
-		     sharedScene);
-    return count;
+    (void)gedp;
+    if (!controller)
+	return 0;
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    return qtcad_obol_scene_realized_database_geometry_count(&renderScene);
 }
 
 
@@ -426,7 +415,7 @@ qtcad_obol_source_matches_draw_metadata(
 
 static int
 qtcad_obol_scene_has_draw_metadata(
-    SoBRLSceneController *scene,
+    BObolSceneController *scene,
     const struct BObolDrawMetadataRecord *record)
 {
     if (!scene || !record)
@@ -463,18 +452,11 @@ qtcad_obol_render_has_draw_metadata(
     BObolViewController *controller,
     const struct BObolDrawMetadataRecord *record)
 {
-    if (controller &&
-	qtcad_obol_scene_has_draw_metadata(controller->getSceneController(),
-					   record))
-	return 1;
-
-    SoBRLSceneController *sharedScene = ged_draw_obol_scene_controller(gedp);
-    if (sharedScene && (!controller ||
-			sharedScene != controller->getSceneController()) &&
-	qtcad_obol_scene_has_draw_metadata(sharedScene, record))
-	return 1;
-
-    return 0;
+    (void)gedp;
+    if (!controller)
+	return 0;
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    return qtcad_obol_scene_has_draw_metadata(&renderScene, record);
 }
 
 
@@ -511,7 +493,8 @@ static int
 qtcad_obol_scene_autoview_refresh(QgView &view,
 	BObolViewController *controller, const char *render_reason)
 {
-    void *view_ctx = view.viewContext();
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
     SoNode *root = controller ? controller->getRenderSceneRoot() : NULL;
     if (!root && controller)
 	root = controller->getSceneRoot();
@@ -530,10 +513,10 @@ qtcad_obol_scene_autoview_refresh(QgView &view,
     const SbVec3f max = bounds.getMax();
     VSET(bmin, min[0], min[1], min[2]);
     VSET(bmax, max[0], max[1], max[2]);
-	if (!bv_autoview_bounds(bv_context_view(static_cast<struct bv_context *>(view_ctx)),
+	if (!bv_autoview_bounds(bv_context_view(ged_view_context_bv(view_ctx)),
 	BV_AUTOVIEW_SCALE_DEFAULT, bmin, bmax))
 	return 0;
-	bv_context_update(static_cast<struct bv_context *>(view_ctx),
+	bv_context_update(ged_view_context_bv(view_ctx),
 	BV_CONTEXT_CHANGED_VIEW);
     qtcad_obol_request_view_frame(view, controller, render_reason);
     return controller->syncCameraFromViewContext(
@@ -543,7 +526,7 @@ qtcad_obol_scene_autoview_refresh(QgView &view,
 
 static void
 qtcad_obol_print_scene_source_diagnostics(const char *label,
-	SoBRLSceneController *scene)
+	BObolSceneController *scene)
 {
     if (!label || !scene)
 	return;
@@ -609,6 +592,7 @@ qtcad_obol_print_render_diagnostics(struct ged *gedp,
 				    BObolViewController *controller,
 				    const char *stage)
 {
+    (void)gedp;
     const char *env = getenv("QTCAD_OBOL_PROGRESSIVE_LOD_DIAGNOSTICS");
     if (!env || !BU_STR_EQUAL(env, "1") || !controller)
 	return;
@@ -657,10 +641,8 @@ qtcad_obol_print_render_diagnostics(struct ged *gedp,
 		bbox.getMin()[0], bbox.getMin()[1], bbox.getMin()[2],
 		bbox.getMax()[0], bbox.getMax()[1], bbox.getMax()[2]);
     }
-    qtcad_obol_print_scene_source_diagnostics("view",
-	    controller->getSceneController());
-    qtcad_obol_print_scene_source_diagnostics("shared",
-	    gedp ? ged_draw_obol_scene_controller(gedp) : NULL);
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    qtcad_obol_print_scene_source_diagnostics("render", &renderScene);
     fflush(stderr);
 }
 
@@ -848,14 +830,193 @@ realized_mesh_count(BObolViewController *controller)
 	accumulate_realized_mesh_count(controller->getRenderSceneRoot()) : 0;
 }
 
+/* The renderer's service/frontier records are private to libged.  This
+ * integration test consumes the supported `view lod` key/value contract and
+ * keeps only the fields needed for its diagnostics. */
+struct qtcad_obol_lod_service_status {
+    size_t in_flight;
+    size_t pending_tasks;
+    size_t queued_cache_writes;
+    size_t delayed_tasks;
+    unsigned int last_submitted_task_count;
+    size_t active_aabb_proxy_payloads;
+};
+
+struct qtcad_obol_source_prewarm_status {
+    size_t child_count;
+    size_t considered;
+    size_t submitted;
+    size_t already_cached;
+    size_t skipped_non_union;
+    size_t skipped_duplicate_instance;
+    size_t shared_request;
+    size_t non_union_children;
+    size_t duplicate_instances;
+    size_t skipped_invalid;
+    size_t remaining;
+    size_t comb_sources;
+    size_t leaf_sources;
+};
+
+struct qtcad_obol_source_expansion_status {
+    size_t child_count;
+    size_t considered;
+    size_t expanded;
+    size_t existing;
+    size_t skipped_non_union;
+    size_t skipped_duplicate_instance;
+    size_t expanded_non_union;
+    size_t expanded_duplicate_instance;
+    size_t skipped_invalid;
+    size_t remaining;
+    size_t proxy_published;
+    size_t metadata_applied;
+    size_t comb_sources;
+    size_t leaf_sources;
+};
+
+static size_t
+qtcad_obol_result_value(const char *result, const char *key)
+{
+    if (!result || !key)
+	return 0;
+    const char *value = strstr(result, key);
+    if (!value)
+	return 0;
+    value += strlen(key);
+    if (*value != '=' && *value != ':')
+	return 0;
+    value++;
+    while (*value == ' ')
+	value++;
+    return (size_t)strtoull(value, NULL, 10);
+}
+
+static int
+qtcad_obol_lod_service_status_get(
+    struct ged *gedp,
+    struct ged_view_context *view_ctx,
+    struct qtcad_obol_lod_service_status *status)
+{
+    (void)view_ctx;
+    if (!gedp || !status)
+	return 0;
+    const char *av[5] = {"view", "lod", "service", "status", NULL};
+    if (ged_exec_view(gedp, 4, av) != BRLCAD_OK)
+	return 0;
+    const char *result = bu_vls_addr(gedp->ged_result_str);
+    memset(status, 0, sizeof(*status));
+    status->in_flight = qtcad_obol_result_value(result, "in_flight");
+    status->pending_tasks = qtcad_obol_result_value(result, "pending_tasks");
+    status->queued_cache_writes =
+	qtcad_obol_result_value(result, "queued_cache_writes");
+    status->delayed_tasks = qtcad_obol_result_value(result, "delayed_tasks");
+    status->last_submitted_task_count = (unsigned int)
+	qtcad_obol_result_value(result, "last_submitted_tasks");
+    status->active_aabb_proxy_payloads =
+	qtcad_obol_result_value(result, "active_lod_aabb_proxies");
+    return 1;
+}
+
+static int
+qtcad_obol_lod_service_start_command(struct ged *gedp, size_t workers)
+{
+    char worker_count[32] = {0};
+    snprintf(worker_count, sizeof(worker_count), "%zu", workers);
+    const char *av[6] = {"view", "lod", "service", "start",
+	worker_count, NULL};
+    return ged_exec_view(gedp, 5, av) == BRLCAD_OK;
+}
+
+static size_t
+qtcad_obol_frontier_prewarm(
+    struct ged *gedp,
+    const char *path,
+    int draw_mode,
+    size_t max_sources,
+    size_t max_children,
+    struct qtcad_obol_source_prewarm_status *status)
+{
+    char mode[32] = {0};
+    char sources[32] = {0};
+    char children[32] = {0};
+    snprintf(mode, sizeof(mode), "%d", draw_mode);
+    snprintf(sources, sizeof(sources), "%zu", max_sources);
+    snprintf(children, sizeof(children), "%zu", max_children);
+    const char *av[9] = {"view", "lod", "frontier", "prewarm", path,
+	mode, sources, children, NULL};
+    if (!status || ged_exec_view(gedp, 8, av) != BRLCAD_OK)
+	return 0;
+    const char *result = bu_vls_addr(gedp->ged_result_str);
+    memset(status, 0, sizeof(*status));
+#define QTCAD_PREWARM_VALUE(_field) \
+    status->_field = qtcad_obol_result_value(result, #_field)
+    QTCAD_PREWARM_VALUE(child_count);
+    QTCAD_PREWARM_VALUE(considered);
+    QTCAD_PREWARM_VALUE(submitted);
+    QTCAD_PREWARM_VALUE(already_cached);
+    QTCAD_PREWARM_VALUE(skipped_non_union);
+    QTCAD_PREWARM_VALUE(skipped_duplicate_instance);
+    QTCAD_PREWARM_VALUE(shared_request);
+    QTCAD_PREWARM_VALUE(non_union_children);
+    QTCAD_PREWARM_VALUE(duplicate_instances);
+    QTCAD_PREWARM_VALUE(skipped_invalid);
+    QTCAD_PREWARM_VALUE(remaining);
+    QTCAD_PREWARM_VALUE(comb_sources);
+    QTCAD_PREWARM_VALUE(leaf_sources);
+#undef QTCAD_PREWARM_VALUE
+    return qtcad_obol_result_value(result, "result");
+}
+
+static int
+qtcad_obol_frontier_expand(
+    struct ged *gedp,
+    const char *path,
+    int draw_mode,
+    size_t max_sources,
+    size_t max_children,
+    struct qtcad_obol_source_expansion_status *status)
+{
+    char mode[32] = {0};
+    char sources[32] = {0};
+    char children[32] = {0};
+    snprintf(mode, sizeof(mode), "%d", draw_mode);
+    snprintf(sources, sizeof(sources), "%zu", max_sources);
+    snprintf(children, sizeof(children), "%zu", max_children);
+    const char *av[9] = {"view", "lod", "frontier", "expand", path,
+	mode, sources, children, NULL};
+    if (!status || ged_exec_view(gedp, 8, av) != BRLCAD_OK)
+	return 0;
+    const char *result = bu_vls_addr(gedp->ged_result_str);
+    memset(status, 0, sizeof(*status));
+#define QTCAD_EXPAND_VALUE(_field) \
+    status->_field = qtcad_obol_result_value(result, #_field)
+    QTCAD_EXPAND_VALUE(child_count);
+    QTCAD_EXPAND_VALUE(considered);
+    QTCAD_EXPAND_VALUE(expanded);
+    QTCAD_EXPAND_VALUE(existing);
+    QTCAD_EXPAND_VALUE(skipped_non_union);
+    QTCAD_EXPAND_VALUE(skipped_duplicate_instance);
+    QTCAD_EXPAND_VALUE(expanded_non_union);
+    QTCAD_EXPAND_VALUE(expanded_duplicate_instance);
+    QTCAD_EXPAND_VALUE(skipped_invalid);
+    QTCAD_EXPAND_VALUE(remaining);
+    QTCAD_EXPAND_VALUE(proxy_published);
+    QTCAD_EXPAND_VALUE(metadata_applied);
+    QTCAD_EXPAND_VALUE(comb_sources);
+    QTCAD_EXPAND_VALUE(leaf_sources);
+#undef QTCAD_EXPAND_VALUE
+    return (int)qtcad_obol_result_value(result, "result");
+}
+
 static int
 qtcad_obol_wait_for_lod_service_idle(
     struct ged *gedp,
-    void *view_ctx,
+    struct ged_view_context *view_ctx,
     int timeout_ms,
-    ged_draw_obol_lod_service_status_t *status)
+    qtcad_obol_lod_service_status *status)
 {
-    ged_draw_obol_lod_service_status_t local_status;
+    qtcad_obol_lod_service_status local_status;
     if (!status)
 	status = &local_status;
 
@@ -863,7 +1024,7 @@ qtcad_obol_wait_for_lod_service_idle(
 	/* Cache prewarm runs entirely in the service; pumping the view here can
 	 * re-enter rendering before the bounded cache request has settled. */
 	memset(status, 0, sizeof(*status));
-	if (!ged_draw_obol_lod_service_status(gedp, view_ctx, status))
+	if (!qtcad_obol_lod_service_status_get(gedp, view_ctx, status))
 	    return 0;
 	if (status->in_flight == 0 &&
 	    status->pending_tasks == 0 &&
@@ -878,8 +1039,8 @@ qtcad_obol_wait_for_lod_service_idle(
 
 static void
 qtcad_obol_prewarm_status_accumulate(
-    struct ged_draw_obol_source_prewarm_status *dst,
-    const struct ged_draw_obol_source_prewarm_status *src)
+    struct qtcad_obol_source_prewarm_status *dst,
+    const struct qtcad_obol_source_prewarm_status *src)
 {
     if (!dst || !src)
 	return;
@@ -897,8 +1058,8 @@ qtcad_obol_prewarm_status_accumulate(
 
 static void
 qtcad_obol_expansion_status_accumulate(
-    struct ged_draw_obol_source_expansion_status *dst,
-    const struct ged_draw_obol_source_expansion_status *src)
+    struct qtcad_obol_source_expansion_status *dst,
+    const struct qtcad_obol_source_expansion_status *src)
 {
     if (!dst || !src)
 	return;
@@ -1066,7 +1227,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     QgView view(NULL, QgViewType::SW);
     BObolLodService service;
     int service_started = 0;
-    int controller_attached = 0;
+    int endpoint_attached = 0;
     struct ged_draw_transaction_result draw_result;
     int draw_result_initialized = 0;
     struct progressive_lod_timings timings = {};
@@ -1087,8 +1248,10 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    service.stop();
 	if (draw_result_initialized)
 	    ged_draw_transaction_result_free(&draw_result);
-	if (controller_attached)
-	    ged_draw_obol_controller_detach_opaque(gedp, controller);
+	if (endpoint_attached)
+	    (void)ged_view_context_display_endpoint_set(
+		ged_view_context_from_bv(view.viewContext()),
+		NULL, 0);
 	if (gedp)
 	    ged_close(gedp);
 	bu_file_delete(tmp_db.c_str());
@@ -1149,15 +1312,17 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 
     phase_start = bu_gettime();
     view.resize(512, 512);
-	ged_view_active_ctx_set(gedp, view.viewContext());
-	if (!ged_view_set_context_add(ged_view_set_ctx(gedp), view.viewContext()) ||
-	    !ged_view_context_host_attach(gedp, view.viewContext())) {
+	struct ged_view_context *ged_view_ctx =
+	    ged_view_context_from_bv(view.viewContext());
+	ged_view_active_ctx_set(gedp, ged_view_ctx);
+	if (!ged_view_set_context_add(ged_view_set_ctx(gedp), ged_view_ctx) ||
+	    !ged_view_context_host_attach(gedp, ged_view_ctx)) {
 	    fprintf(stderr, "failed to register progressive LoD view context\n");
 	    cleanup();
 	    return 0;
 	}
 	(void)bv_unit_conversion_set(bv_context_view(
-	    static_cast<struct bv_context *>(view.viewContext())),
+	    view.viewContext()),
 	    gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
     record_progressive_lod_phase(timings.viewSetupSeconds, phase_start,
 				 total_start, testCase, "view_setup");
@@ -1258,13 +1423,14 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	return 0;
     }
     controller->clearDatabaseSources();
-    if (startup_deferred && !ged_draw_obol_controller_attach_for_view(gedp,
-	    view.viewContext(), controller, 0)) {
-	fprintf(stderr, "failed to attach qtcad Obol controller for GED draw\n");
+    if (!ged_view_context_display_endpoint_set(
+	    ged_view_context_from_bv(view.viewContext()),
+	    view.displayEndpoint(), 0)) {
+	fprintf(stderr, "failed to attach qtcad display endpoint for GED draw\n");
 	cleanup();
 	return 0;
     }
-    controller_attached = startup_deferred ? 1 : 0;
+    endpoint_attached = 1;
     if (testCase.startupAutoExpand) {
 	BObolProgressiveOptions options;
 	options.flags = BOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
@@ -1286,7 +1452,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, active_draw_target);
-    txn.view = view.viewContext();
+    txn.view = ged_view_context_from_bv(view.viewContext());
     txn.appearance = &appearance;
     txn.autoview = testCase.startupAutoExpand ? 1 : 0;
 
@@ -1294,7 +1460,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     int render_source_count = 0;
     int draw_ret = 0;
     if (testCase.shadedLod) {
-	SoBRLSceneController *scene = controller->getSceneController();
+	BObolSceneController *scene = controller->getSceneController();
 	if (!scene) {
 	    fprintf(stderr,
 		    "qtcad Obol progressive LoD shaded-lod has no scene controller\n");
@@ -1372,10 +1538,10 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		&startup_metadata)) {
 	    fprintf(stderr,
 		    "qtcad progressive LoD startup proxy did not publish cached path metadata\n");
-	    qtcad_obol_print_scene_source_diagnostics("view",
-		    controller->getSceneController());
-	    qtcad_obol_print_scene_source_diagnostics("shared",
-		    ged_draw_obol_scene_controller(gedp));
+	    BObolSceneController renderScene(
+		controller->getRenderSceneRoot());
+	    qtcad_obol_print_scene_source_diagnostics("render",
+		&renderScene);
 	    cleanup();
 	    return 0;
 	}
@@ -1470,7 +1636,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    int diff_auto = 0;
 	    QImage frame_auto;
 	    BObolProgressiveStatus progressive_status;
-	    ged_draw_obol_lod_service_status_t service_status;
+	    qtcad_obol_lod_service_status service_status;
 	    memset(&service_status, 0, sizeof(service_status));
 	    for (int frame = 0; frame < 120; frame++) {
 		QCoreApplication::processEvents();
@@ -1498,8 +1664,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		    break;
 		std::this_thread::sleep_for(std::chrono::milliseconds(25));
 	    }
-	    (void)ged_draw_obol_lod_service_status(gedp,
-		view.viewContext(), &service_status);
+	    (void)qtcad_obol_lod_service_status_get(gedp,
+		ged_view_context_from_bv(view.viewContext()), &service_status);
 	    if (source_count_after <= source_count_before ||
 		max_depth_after <= max_depth_before ||
 		realized_after < geometry_before ||
@@ -1549,7 +1715,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		/* This fixture exercises cache-backed source expansion, not mesh
 		 * LoD submission.  Bound its worker pool and leave auto-submit off
 		 * so its completion condition is solely the requested prewarm. */
-		if (!ged_draw_obol_lod_service_start(gedp, view.viewContext(), 4)) {
+		if (!qtcad_obol_lod_service_start_command(gedp, 4)) {
 		    fprintf(stderr,
 			    "qtcad Obol progressive LoD startup-expand could not start its prewarm service: case=%s\n",
 			    testCase.name);
@@ -1558,9 +1724,9 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		}
 		controller->setLodAutoSubmit(FALSE);
 	    }
-	    struct ged_draw_obol_source_expansion_status expansion_status;
-	    struct ged_draw_obol_source_prewarm_status prewarm_status;
-	    ged_draw_obol_lod_service_status_t service_status;
+	    struct qtcad_obol_source_expansion_status expansion_status;
+	    struct qtcad_obol_source_prewarm_status prewarm_status;
+	    qtcad_obol_lod_service_status service_status;
 	    memset(&expansion_status, 0, sizeof(expansion_status));
 	    memset(&prewarm_status, 0, sizeof(prewarm_status));
 	    memset(&service_status, 0, sizeof(service_status));
@@ -1574,21 +1740,20 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    size_t total_prewarm_submitted = 0;
 	    int expanded = 0;
 	    for (int pass = 0; pass < testCase.startupExpandPasses; pass++) {
-		struct ged_draw_obol_source_prewarm_status pass_prewarm_status;
-		struct ged_draw_obol_source_expansion_status pass_expansion_status;
+		struct qtcad_obol_source_prewarm_status pass_prewarm_status;
+		struct qtcad_obol_source_expansion_status pass_expansion_status;
 		memset(&pass_prewarm_status, 0, sizeof(pass_prewarm_status));
 		memset(&pass_expansion_status, 0, sizeof(pass_expansion_status));
 
 		double pass_prewarm_seconds = 0.0;
 		phase_start = bu_gettime();
 		size_t prewarm_submitted =
-		    ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
-			gedp, view.viewContext(),
-			active_draw_target, appearance.draw_mode, 1,
+		    qtcad_obol_frontier_prewarm(
+			gedp, active_draw_target, appearance.draw_mode, 1,
 			testCase.minVisitedMeshCount, &pass_prewarm_status);
 		total_prewarm_submitted += prewarm_submitted;
 		if (!qtcad_obol_wait_for_lod_service_idle(gedp,
-			view.viewContext(), 10000,
+			ged_view_context_from_bv(view.viewContext()), 10000,
 			&service_status)) {
 		    record_progressive_lod_phase(pass_prewarm_seconds,
 						 phase_start, total_start,
@@ -1639,9 +1804,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		double pass_expand_seconds = 0.0;
 		phase_start = bu_gettime();
 		int pass_expanded =
-		    ged_draw_obol_database_source_expand_visible_children(
-			gedp, view.viewContext(),
-			active_draw_target, appearance.draw_mode, 1,
+		    qtcad_obol_frontier_expand(
+			gedp, active_draw_target, appearance.draw_mode, 1,
 			testCase.minVisitedMeshCount, &pass_expansion_status);
 		record_progressive_lod_phase(pass_expand_seconds, phase_start,
 					     total_start, testCase,
@@ -1726,17 +1890,27 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	}
 
 	if (testCase.startupWireLod) {
-	    SoBRLSceneController *scene = controller->getSceneController();
-	    SoBRLSceneController *sharedScene =
-		ged_draw_obol_scene_controller(gedp);
+	    BObolSceneController *scene = controller->getSceneController();
 	    if (!scene) {
 		fprintf(stderr,
 			"qtcad Obol progressive LoD startup-wire-lod has no scene controller\n");
 		cleanup();
 		return 0;
 	    }
-	    if (sharedScene && sharedScene != scene)
-		sharedScene->clearDatabaseSources();
+	    struct ged_draw_transaction clear_txn =
+		ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
+	    clear_txn.view = ged_view_context_from_bv(view.viewContext());
+	    struct ged_draw_transaction_result clear_result;
+	    ged_draw_transaction_result_init(&clear_result);
+	    if (ged_draw_apply_transaction(gedp, &clear_txn,
+		    &clear_result) < 0) {
+		ged_draw_transaction_result_free(&clear_result);
+		fprintf(stderr,
+			"qtcad Obol progressive LoD startup-wire-lod could not clear the shared scene\n");
+		cleanup();
+		return 0;
+	    }
+	    ged_draw_transaction_result_free(&clear_result);
 	    controller->clearDatabaseSources();
 	    controller->clearViewLodState();
 	    const uint32_t source_revision = 1;
@@ -1805,7 +1979,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    appearance.defer_leaf_expansion = 0;
 	    struct ged_draw_transaction refine_txn =
 		ged_draw_transaction_make(GED_DRAW_TXN_DRAW, active_draw_target);
-	    refine_txn.view = view.viewContext();
+	    refine_txn.view = ged_view_context_from_bv(view.viewContext());
 	    refine_txn.appearance = &appearance;
 
 	    ged_draw_transaction_result_init(&draw_result);

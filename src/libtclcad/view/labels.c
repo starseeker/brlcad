@@ -47,7 +47,7 @@
  * internal state used solely for feature sync. */
 
 static int
-_tclcad_data_labels_sync_draw_view(void *view_ctx,
+_tclcad_data_labels_sync_draw_view(struct ged_view_context *view_ctx,
 				   tclcad_label_state *gdlsp,
 				   const char *name)
 {
@@ -55,16 +55,16 @@ _tclcad_data_labels_sync_draw_view(void *view_ctx,
 	return 0;
 
     if (!gdlsp->gdls_draw || gdlsp->gdls_num_labels < 1)
-	return ged_draw_view_context_data_labels_replace(view_ctx, name, 0,
+	return ged_annotation_data_labels_replace(view_ctx, name, 0,
 		NULL, 0);
 
     size_t label_count = (size_t)gdlsp->gdls_num_labels;
-    struct ged_draw_view_label_data *labels =
-	(struct ged_draw_view_label_data *)bu_calloc(label_count,
-		sizeof(struct ged_draw_view_label_data), "TclCAD data labels");
+    struct ged_annotation_label *labels =
+	(struct ged_annotation_label *)bu_calloc(label_count,
+		sizeof(struct ged_annotation_label), "TclCAD data labels");
 
     for (size_t i = 0; i < label_count; i++) {
-	struct ged_draw_view_label_data init = GED_DRAW_VIEW_LABEL_DATA_INIT;
+	struct ged_annotation_label init = GED_ANNOTATION_LABEL_INIT;
 	labels[i] = init;
 	labels[i].text = gdlsp->gdls_labels[i];
 	VMOVE(labels[i].point, gdlsp->gdls_points[i]);
@@ -75,7 +75,7 @@ _tclcad_data_labels_sync_draw_view(void *view_ctx,
 	labels[i].font_size = gdlsp->gdls_size;
     }
 
-    int ret = ged_draw_view_context_data_labels_replace(view_ctx, name, 1,
+    int ret = ged_annotation_data_labels_replace(view_ctx, name, 1,
 	    labels, label_count);
     bu_free(labels, "TclCAD data labels");
     return ret;
@@ -84,7 +84,7 @@ _tclcad_data_labels_sync_draw_view(void *view_ctx,
 int
 go_data_labels(Tcl_Interp *interp,
 	       struct ged *gedp,
-	       void *draw_view_ctx,
+	       struct ged_view_context *draw_view_ctx,
 	       int argc,
 	       const char *argv[],
 	       const char *usage)
@@ -123,7 +123,7 @@ to_data_labels(struct ged *gedp,
 	       const char *usage,
 	       int UNUSED(maxargs))
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     int ret;
 
     /* initialize result */
@@ -159,7 +159,7 @@ to_data_labels(struct ged *gedp,
 int
 to_data_labels_func(Tcl_Interp *interp,
 		    struct ged *gedp,
-		    void *view_ctx,
+		    struct ged_view_context *view_ctx,
 		    int argc,
 		    const char *argv[])
 {
@@ -173,7 +173,7 @@ to_data_labels_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "draw")) {
 	if (argc == 2) {
 	    bu_vls_printf(gedp->ged_result_str, "%d",
-			  ged_draw_view_context_data_labels_draw_get(view_ctx, feature_name));
+			  ged_annotation_data_labels_draw_get(view_ctx, feature_name));
 	    return BRLCAD_OK;
 	}
 
@@ -199,7 +199,7 @@ to_data_labels_func(Tcl_Interp *interp,
     if (BU_STR_EQUAL(argv[1], "color")) {
 	if (argc == 2) {
 	    unsigned char rgb[3] = {0, 0, 0};
-	    if (ged_draw_view_context_data_labels_color_get(view_ctx, feature_name, rgb)) {
+	    if (ged_annotation_data_labels_color_get(view_ctx, feature_name, rgb)) {
 		bu_vls_printf(gedp->ged_result_str, "%d %d %d",
 			      (int)rgb[0], (int)rgb[1], (int)rgb[2]);
 	    } else {
@@ -239,12 +239,12 @@ to_data_labels_func(Tcl_Interp *interp,
 	/* { {{label this} {0 0 0}} {{label that} {100 100 100}} }*/
 
 	if (argc == 2) {
-	    size_t _child_cnt = ged_draw_view_context_data_labels_count(view_ctx, feature_name);
+	    size_t _child_cnt = ged_annotation_data_labels_count(view_ctx, feature_name);
 	    if (_child_cnt > 0) {
 		for (size_t _k = 0; _k < _child_cnt; _k++) {
 		    struct bu_vls text = BU_VLS_INIT_ZERO;
 		    point_t pt;
-		    if (!ged_draw_view_context_data_labels_copy(view_ctx, feature_name, _k, &text, pt, NULL)) {
+		    if (!ged_annotation_data_labels_copy(view_ctx, feature_name, _k, &text, pt, NULL)) {
 			bu_vls_free(&text);
 			continue;
 		    }

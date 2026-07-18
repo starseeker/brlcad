@@ -29,9 +29,9 @@ struct mged_hud_line_layer {
 };
 
 struct mged_hud_builder {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     char *prefix;
-    struct ged_draw_view_label_data *labels;
+    struct ged_annotation_label *labels;
     char **label_text;
     size_t label_count;
     size_t label_capacity;
@@ -45,7 +45,7 @@ struct mged_hud_builder {
 };
 
 void mged_hud_builder_init(struct mged_hud_builder *builder,
-	void *view_ctx, const char *prefix);
+	struct ged_view_context *view_ctx, const char *prefix);
 void mged_hud_builder_free(struct mged_hud_builder *builder);
 void mged_hud_color_set(struct mged_hud_builder *builder,
 	const int color[3]);

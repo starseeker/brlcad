@@ -42,7 +42,7 @@ ged_model2view_lu_core(struct ged *gedp, int argc, const char *argv[])
     mat_t model2view;
     point_t view_pt;
     double model_pt[3]; /* intentionally double for scan */
-    void *view_ctx = NULL;
+    struct ged_view_context *view_ctx = NULL;
     const struct bv *view = NULL;
     static const char *usage = "x y z";
     double l2bval = (gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0;

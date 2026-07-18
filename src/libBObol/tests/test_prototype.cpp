@@ -10,6 +10,32 @@
 #include "bu/str.h"
 
 #include "BObol.h"
+#include "BObol/BADC.h"
+#include "BObol/BAxes.h"
+#include "BObol/BDrawCache.h"
+#include "BObol/BEditPreview.h"
+#include "BObol/BEvaluatedPoints.h"
+#include "BObol/BGrid.h"
+#include "BObol/BHUDLabelOverlay.h"
+#include "BObol/BImagePlane.h"
+#include "BObol/BImageSource.h"
+#include "BObol/BInput.h"
+#include "BObol/BLineLayerOverlay.h"
+#include "BObol/BLodMeshShape.h"
+#include "BObol/BLodRealization.h"
+#include "BObol/BLodService.h"
+#include "BObol/BLodUpdateAction.h"
+#include "BObol/BMaterialObject.h"
+#include "BObol/BMeshLodCache.h"
+#include "BObol/BMeshLodSubmitAction.h"
+#include "BObol/BMeshResidencyAction.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BPerformance.h"
+#include "BObol/BRealizeAction.h"
+#include "BObol/BViewAttachment.h"
+#include "BObol/BVListShape.h"
+#include "BObol/BViewLod.h"
+#include "BObol/BViewportImage.h"
 
 #include <Obol/cad/SoCADAssembly.h>
 
@@ -2771,7 +2797,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     {
 	SoSeparator *publicationRoot = new SoSeparator;
 	publicationRoot->ref();
-	SoBRLSceneController publicationScene(publicationRoot);
+	BObolSceneController publicationScene(publicationRoot);
 	SoBRLDatabaseSource *publicationSource = new SoBRLDatabaseSource;
 	publicationSource->configureDatabaseSourceInstance(
 	    "external-primary-key", "/prototype/external-primary",
@@ -3013,7 +3039,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->sourceRevision = 1;
     root->addChild(source);
 
-    SoBRLSceneController sensorController(root);
+    BObolSceneController sensorController(root);
     if (!sensorController.realizePending())
 	FAIL("scene controller should realize sensor test source");
     if (source->needsRealization() ||
@@ -3069,7 +3095,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     root->addChild(rightSource);
 
     {
-	SoBRLSceneController controller(root);
+	BObolSceneController controller(root);
 	if (!controller.realizePending())
 	    FAIL("scene controller should realize a valid scene");
 	if (controller.getLastVisitedSourceCount() != 2 ||
@@ -3107,7 +3133,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     rightSource->viewRevision = 7;
     {
-	SoBRLSceneController rebuiltController(root);
+	BObolSceneController rebuiltController(root);
 	if (!rebuiltController.realizePending())
 	    FAIL("rebuilt scene controller should realize from the existing Obol scene");
 	if (rebuiltController.getLastVisitedSourceCount() != 2 ||
@@ -3908,7 +3934,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	(void)bobol_grid_configure_from_view(boundsGrid, &gridState,
 					       gridModel2View, 20.0, 1.0, 400, 200);
 	gridOnlyRoot->addChild(boundsGrid);
-	SoBRLSceneController gridScene(gridOnlyRoot);
+	BObolSceneController gridScene(gridOnlyRoot);
 	SbBox3f gridSceneBounds;
 	if (gridScene.getSceneSubtreeBounds("/", FALSE, gridSceneBounds))
 	    FAIL("faceplate grid overlay should not contribute scene bounds");
@@ -4372,7 +4398,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!strstr(failedRealize.getDiagnostics().getString(), "missing.s"))
 	FAIL("database realization failure should report source and action diagnostics");
 
-    SoBRLSceneController failedController(root);
+    BObolSceneController failedController(root);
     if (failedController.realizePending() ||
 	failedController.getLastFailedSourceCount() != 1 ||
 	failedController.getLastDiagnostics().getLength() == 0 ||
@@ -5249,7 +5275,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!source->getCompactInstanceSummary(compactHandle0, compactSummary0) ||
 	!source->getCompactInstanceSummary(compactHandle1, compactSummary1) ||
 	compactSummary0.path == compactSummary1.path)
-	FAIL("compact assembly should expose distinct stable off-scene handles");
+	FAIL("compact assembly should expose distinct stable value handles");
 
     SbMatrix compactPlacement = SbMatrix::identity();
     compactPlacement.setTranslate(SbVec3f(100.0f, 0.0f, 0.0f));
@@ -5535,7 +5561,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->sourceRevision = 15;
     root->addChild(source);
 
-    SoBRLSceneController compactPolicyController(root);
+    BObolSceneController compactPolicyController(root);
     if (!compactPolicyController.realizePending() ||
 	compactPolicyController.getLastVisitedSourceCount() != 1 ||
 	compactPolicyController.getLastRealizedSourceCount() != 1 ||
@@ -5558,7 +5584,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->sourceRevision = 16;
     lodRoot->addChild(source);
 
-    SoBRLSceneController compactProxyController(lodRoot);
+    BObolSceneController compactProxyController(lodRoot);
     if (!compactProxyController.realizePending() ||
 	!source->hasCompactInstanceIndex() ||
 	source->getRealizedShapeCount() != 0)
@@ -5632,7 +5658,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     source->lodBotThreshold = 1;
     lodRoot->addChild(source);
 
-    SoBRLSceneController compactMeshLodController(lodRoot);
+    BObolSceneController compactMeshLodController(lodRoot);
     if (!compactMeshLodController.realizePending() ||
 	!source->hasCompactInstanceIndex() ||
 	source->getRealizedMeshCount() != 0)

@@ -37,7 +37,7 @@
 #include "../view/view.h"
 
 void
-go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int UNUSED(restore_zbuffer))
+go_refresh_draw(struct ged *gedp, struct ged_view_context *draw_view_ctx, int UNUSED(restore_zbuffer))
 {
     if (!gedp || !draw_view_ctx)
 	return;
@@ -55,13 +55,13 @@ go_refresh_draw(struct ged *gedp, void *draw_view_ctx, int UNUSED(restore_zbuffe
 }
 
 void
-go_refresh(struct ged *gedp, void *draw_view_ctx)
+go_refresh(struct ged *gedp, struct ged_view_context *draw_view_ctx)
 {
     go_refresh_draw(gedp, draw_view_ctx, 0);
 }
 
 void
-to_refresh_view(void *view_ctx)
+to_refresh_view(struct ged_view_context *view_ctx)
 {
 
     if (current_top == NULL || view_ctx == NULL)
@@ -83,11 +83,11 @@ to_refresh_view(void *view_ctx)
 void
 to_refresh_all_views(struct tclcad_obj *top)
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	view_ctx = BU_PTBL_GET(views, i);
+ view_ctx = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	to_refresh_view(view_ctx);
     }
 }
@@ -95,16 +95,16 @@ to_refresh_all_views(struct tclcad_obj *top)
 int
 to_refresh_all_enabled(struct tclcad_obj *top)
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     if (!top)
 	return 1;
 
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	view_ctx = BU_PTBL_GET(views, i);
+ view_ctx = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	const struct bv *view =
-	    bv_context_view_const((const struct bv_context *)view_ctx);
+	    bv_context_view_const(ged_view_context_bv_const(view_ctx));
 	if (!bv_refresh_enabled_get(view))
 	    return 0;
     }
@@ -115,15 +115,15 @@ to_refresh_all_enabled(struct tclcad_obj *top)
 void
 to_refresh_all_set_enabled(struct tclcad_obj *top, int enabled)
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     if (!top)
 	return;
 
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	view_ctx = BU_PTBL_GET(views, i);
-	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+ view_ctx = (struct ged_view_context *)BU_PTBL_GET(views, i);
+	struct bv *view = bv_context_view(ged_view_context_bv(view_ctx));
 	bv_refresh_enabled_set(view, enabled);
     }
 }
@@ -131,15 +131,15 @@ to_refresh_all_set_enabled(struct tclcad_obj *top, int enabled)
 void
 to_refresh_suppress_all_begin(struct tclcad_obj *top)
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     if (!top)
 	return;
 
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	view_ctx = BU_PTBL_GET(views, i);
-	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+ view_ctx = (struct ged_view_context *)BU_PTBL_GET(views, i);
+	struct bv *view = bv_context_view(ged_view_context_bv(view_ctx));
 	bv_refresh_suppress_begin(view);
     }
 }
@@ -147,15 +147,15 @@ to_refresh_suppress_all_begin(struct tclcad_obj *top)
 void
 to_refresh_suppress_all_end(struct tclcad_obj *top)
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     if (!top)
 	return;
 
     struct bu_ptbl *views = ged_view_set_views_ctx(top->to_gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	view_ctx = BU_PTBL_GET(views, i);
-	struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+ view_ctx = (struct ged_view_context *)BU_PTBL_GET(views, i);
+	struct bv *view = bv_context_view(ged_view_context_bv(view_ctx));
 	bv_refresh_suppress_end(view);
     }
 }
@@ -243,7 +243,7 @@ int
 to_handle_refresh(struct ged *gedp,
 		  const char *name)
 {
-    void *view_ctx = ged_view_find_ctx(gedp, name);
+    struct ged_view_context *view_ctx = ged_view_find_ctx(gedp, name);
     if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", name);
 	return BRLCAD_ERROR;
@@ -260,7 +260,7 @@ to_refresh_handler(void *clientdata)
 {
     /* Possibly do more here */
 
-    to_refresh_view(clientdata);
+    to_refresh_view((struct ged_view_context *)clientdata);
 }
 
 

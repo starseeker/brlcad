@@ -646,7 +646,7 @@ int ged_check_core(struct ged *gedp, int argc, const char *argv[])
 	if (options.getfromview) {
 	    point_t eye_model;
 	    quat_t quat;
-	    void *view_ctx = ged_view_active_ctx(gedp);
+	    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 	    const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 	    if (!view_ctx) {
 		error = 1;

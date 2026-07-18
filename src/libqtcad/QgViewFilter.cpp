@@ -53,21 +53,21 @@ qg_obol_snap_kinds_from_bv_mask(unsigned long long kinds, int source_flags)
 }
 
 static const struct bv *
-qg_obol_snap_bv_const(const void *view_ctx)
+qg_obol_snap_bv_const(const struct ged_view_context *view_ctx)
 {
     return view_ctx ? bv_context_view_const(
-	static_cast<const struct bv_context *>(view_ctx)) : nullptr;
+	ged_view_context_bv_const(view_ctx)) : nullptr;
 }
 
 static struct bv *
-qg_obol_snap_bv(void *view_ctx)
+qg_obol_snap_bv(struct ged_view_context *view_ctx)
 {
     return view_ctx ? bv_context_view(
-	static_cast<struct bv_context *>(view_ctx)) : nullptr;
+	ged_view_context_bv(view_ctx)) : nullptr;
 }
 
 static int
-qg_obol_snap_enabled(const void *view_ctx)
+qg_obol_snap_enabled(const struct ged_view_context *view_ctx)
 {
     const struct bv *view = qg_obol_snap_bv_const(view_ctx);
     if (!view || !bv_snap_lines_get(view))
@@ -82,7 +82,7 @@ qg_obol_snap_enabled(const void *view_ctx)
 }
 
 static float
-qg_obol_snap_tolerance(const void *view_ctx)
+qg_obol_snap_tolerance(const struct ged_view_context *view_ctx)
 {
 	if (!view_ctx)
 	return 0.0f;
@@ -102,7 +102,7 @@ qg_obol_snap_tolerance(const void *view_ctx)
 }
 
 static void
-qg_obol_refine_db_snap(QgView *display, void *view_ctx)
+qg_obol_refine_db_snap(QgView *display, struct ged_view_context *view_ctx)
 {
 	if (!display || !qg_obol_snap_enabled(view_ctx))
 	return;
@@ -163,7 +163,8 @@ QgViewFilter::view_widget() const
 QMouseEvent *
 QgViewFilter::view_sync(QEvent *e)
 {
-	void *view_ctx = m->display ? m->display->viewContext() : nullptr;
+	struct ged_view_context *view_ctx = m->display ?
+	    ged_view_context_from_bv(m->display->viewContext()) : nullptr;
 	if (!view_ctx)
 	return nullptr;
 
@@ -198,7 +199,8 @@ QgViewFilter::view_sync(QEvent *e)
 bool
 QgViewFilter::view_sync(const BObolInputEvent *event)
 {
-    void *view_ctx = m->display ? m->display->viewContext() : nullptr;
+    struct ged_view_context *view_ctx = m->display ?
+	ged_view_context_from_bv(m->display->viewContext()) : nullptr;
     if (!view_ctx || !event)
 	return false;
     if (event->type != BOBOL_INPUT_POINTER_PRESS &&

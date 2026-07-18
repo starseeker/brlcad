@@ -57,7 +57,7 @@ struct analyze_densities *_gd_densities;
 char *_gd_densities_source;
 
 /* bu_getopt() options */
-const char *options = "A:a:de:f:g:Gn:N:p:P:qrS:s:t:U:u:vV:W:h?";
+const char *gqa_options = "A:a:de:f:g:Gn:N:p:P:qrS:s:t:U:u:vV:W:h?";
 const char *options_str = "[-A A|a|b|c|e|g|m|o|p|v|w] [-a az] [-d] [-e el] [-f densityFile] [-g spacing|upper,lower|upper-lower] [-G] [-n nhits] [-N nviews] [-p plotPrefix] [-P ncpus] [-q] [-r] [-S nsamples] [-t overlap_tol] [-U useair] [-u len_units vol_units wt_units] [-v] [-V volume_tol] [-W weight_tol]";
 
 #define ANALYSIS_VOLUMES          1
@@ -365,7 +365,8 @@ ged_gqa_plot_free(void)
 }
 
 static int
-gqa_publish_result_fallback(struct ged *gedp, void *active_view,
+gqa_publish_result_fallback(struct ged *gedp,
+	struct ged_view_context *active_view,
 	enum ged_gqa_result_family family)
 {
     const char *name = ged_gqa_result_name(family);
@@ -378,14 +379,14 @@ gqa_publish_result_fallback(struct ged *gedp, void *active_view,
 
     int handled = ged_diagnostic_line_layer_publish(gedp, name, builder);
     if (!handled && active_view) {
-	handled = ged_draw_view_context_diagnostic_line_layer_builder_replace(
+	handled = ged_annotation_diagnostic_line_layer_builder_replace(
 		active_view, name, builder);
     }
     return handled;
 }
 
 static int
-gqa_publish_result_metadata(struct ged_draw_command_scene *scene,
+gqa_publish_result_metadata(struct ged_result_scene *scene,
 	const char *name,
 	enum ged_gqa_result_family family,
 	const struct bg_line_layer_builder *builder)
@@ -399,7 +400,7 @@ gqa_publish_result_metadata(struct ged_draw_command_scene *scene,
 	    bg_line_layer_builder_layer_count(builder));
     snprintf(point_count, sizeof(point_count), "%zu",
 	    bg_line_layer_builder_point_count(builder));
-    struct ged_draw_command_scene_metadata metadata[8] = {
+    struct ged_result_metadata metadata[8] = {
 	{"result.feature", name},
 	{"result.format", "line-layer-builder"},
 	{"result.layer_count", layer_count},
@@ -409,12 +410,12 @@ gqa_publish_result_metadata(struct ged_draw_command_scene *scene,
 	{"result.schema", ged_gqa_result_schema(family)},
 	{"result.severity", ged_gqa_result_severity(family)}
     };
-    return ged_draw_command_scene_feature_metadata_replace(scene, name,
+    return ged_result_feature_metadata_replace(scene, name,
 	    metadata, 8);
 }
 
 static int
-gqa_publish_result_primitive_metadata(struct ged_draw_command_scene *scene,
+gqa_publish_result_primitive_metadata(struct ged_result_scene *scene,
 	const char *name,
 	enum ged_gqa_result_family family,
 	const struct bg_line_layer_builder *builder)
@@ -446,7 +447,7 @@ gqa_publish_result_primitive_metadata(struct ged_draw_command_scene *scene,
 		    V3ARGS(previous));
 		snprintf(end, sizeof(end), "%.17g %.17g %.17g",
 		    V3ARGS(points[j]));
-		struct ged_draw_command_scene_metadata metadata[7] = {
+		struct ged_result_metadata metadata[7] = {
 		    {"result.schema", ged_gqa_result_schema(family)},
 		    {"result.primitive", primitive_buf},
 		    {"result.primitive.kind", ged_gqa_result_kind(family)},
@@ -455,7 +456,7 @@ gqa_publish_result_primitive_metadata(struct ged_draw_command_scene *scene,
 		    {"segment.end_mm", end},
 		    {"result.units", "mm"}
 		};
-		if (!ged_draw_command_scene_feature_primitive_metadata_replace(
+		if (!ged_result_feature_primitive_metadata_replace(
 			scene, name, primitive, metadata, 7))
 		    return 0;
 		primitive++;
@@ -472,7 +473,8 @@ gqa_publish_result_primitive_metadata(struct ged_draw_command_scene *scene,
 }
 
 static int
-gqa_publish_result_visuals(struct ged *gedp, void *active_view)
+gqa_publish_result_visuals(struct ged *gedp,
+	struct ged_view_context *active_view)
 {
     int i;
     int have_builder = 0;
@@ -490,22 +492,22 @@ gqa_publish_result_visuals(struct ged *gedp, void *active_view)
 	return 0;
 
     if (active_view) {
-	struct ged_draw_command_scene_desc desc =
-	    GED_DRAW_COMMAND_SCENE_DESC_INIT;
+	struct ged_result_desc desc =
+	    GED_RESULT_SCENE_DESC_INIT;
 	desc.owner_id = "gqa";
 	desc.owner_role = "command-result";
-	struct ged_draw_command_scene *scene =
-	    ged_draw_command_scene_begin(active_view, &desc);
+	struct ged_result_scene *scene =
+	    ged_result_begin(active_view, &desc);
 	if (scene) {
-	    struct ged_draw_view_feature_style style =
-		GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	    struct ged_view_feature_style style =
+		GED_VIEW_FEATURE_STYLE_INIT;
 	    style.visible = 1;
 	    style.selectable = 1;
 	    for (i = 0; i < GQA_RESULT_COUNT; i++) {
 		const char *name =
 		    ged_gqa_result_name((enum ged_gqa_result_family)i);
 		if (name)
-		    (void)ged_draw_command_scene_features_remove_prefix(
+		    (void)ged_result_features_remove_prefix(
 			    scene, name);
 	    }
 	    for (i = 0; i < GQA_RESULT_COUNT; i++) {
@@ -513,7 +515,7 @@ gqa_publish_result_visuals(struct ged *gedp, void *active_view)
 		    ged_gqa_result_name((enum ged_gqa_result_family)i);
 		if (!name || !ged_gqa_plot.builder[i])
 		    continue;
-		if (!ged_draw_command_scene_line_layer_builder_replace(
+		if (!ged_result_line_layer_builder_replace(
 			scene, name, ged_gqa_plot.builder[i], &style) ||
 			!gqa_publish_result_metadata(scene, name,
 			    (enum ged_gqa_result_family)i,
@@ -521,11 +523,11 @@ gqa_publish_result_visuals(struct ged *gedp, void *active_view)
 			!gqa_publish_result_primitive_metadata(scene, name,
 			    (enum ged_gqa_result_family)i,
 			    ged_gqa_plot.builder[i])) {
-		    ged_draw_command_scene_abort(scene);
+		    ged_result_abort(scene);
 		    return 0;
 		}
 	    }
-	    int ret = ged_draw_command_scene_commit(scene);
+	    int ret = ged_result_commit(scene);
 	    return ret ? 1 : 0;
 	}
     }
@@ -638,7 +640,8 @@ static struct region_pair overlapList = {
 };
 
 static int
-gqa_publish_overlap_label(struct ged *gedp, void *active_view)
+gqa_publish_overlap_label(struct ged *gedp,
+	struct ged_view_context *active_view)
 {
     if (!gedp)
 	return 0;
@@ -667,21 +670,21 @@ gqa_publish_overlap_label(struct ged *gedp, void *active_view)
     label.source_id = (uint32_t)pair_count;
 
     if (active_view) {
-	struct ged_draw_command_scene_desc desc =
-	    GED_DRAW_COMMAND_SCENE_DESC_INIT;
+	struct ged_result_desc desc =
+	    GED_RESULT_SCENE_DESC_INIT;
 	desc.owner_id = "gqa";
 	desc.owner_role = "command-result";
-	struct ged_draw_command_scene *scene =
-	    ged_draw_command_scene_begin(active_view, &desc);
+	struct ged_result_scene *scene =
+	    ged_result_begin(active_view, &desc);
 	if (scene) {
 	    const int published =
-		ged_draw_command_scene_hud_label_replace(scene,
+		ged_result_hud_label_replace(scene,
 			label.label_id, &label);
 	    char pairs[64] = {0};
 	    char samples[64] = {0};
 	    snprintf(pairs, sizeof(pairs), "%zu", pair_count);
 	    snprintf(samples, sizeof(samples), "%lu", sample_count);
-	    struct ged_draw_command_scene_metadata metadata[7] = {
+	    struct ged_result_metadata metadata[7] = {
 		{"result.feature", label.label_id},
 		{"result.owner", "gqa"},
 		{"result.kind", "overlap-summary"},
@@ -691,15 +694,15 @@ gqa_publish_overlap_label(struct ged *gedp, void *active_view)
 		{"result.severity", sample_count ? "error" : "info"}
 	    };
 	    const int metadata_published = published ?
-		ged_draw_command_scene_feature_metadata_replace(scene,
+		ged_result_feature_metadata_replace(scene,
 			label.label_id, metadata, 7) : 0;
 	    if (published && metadata_published &&
-		    ged_draw_command_scene_commit(scene)) {
+		    ged_result_commit(scene)) {
 		bu_vls_free(&text);
 		return 1;
 	    }
 	    if (!published || !metadata_published)
-		ged_draw_command_scene_abort(scene);
+		ged_result_abort(scene);
 	    bu_vls_free(&text);
 	    return 0;
 	}
@@ -913,7 +916,7 @@ parse_args(struct ged *gedp, int ac, char *av[])
     bu_optind = 1;
 
     /* get all the option flags from the command line */
-    while ((c=bu_getopt(ac, av, options)) != -1) {
+    while ((c=bu_getopt(ac, av, gqa_options)) != -1) {
 	switch (c) {
 	    case 'A':
 		{
@@ -3073,7 +3076,7 @@ ged_gqa_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    void *active_view = ged_view_active_ctx(gedp);
+    struct ged_view_context *active_view = ged_view_active_ctx(gedp);
     result_visuals_enabled = ged_gqa_result_visuals_requested() &&
 	(active_view || ged_diagnostic_line_layer_handler_available(gedp));
     if (ged_gqa_result_visuals_requested()) {

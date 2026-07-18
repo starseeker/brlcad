@@ -98,9 +98,9 @@ QBot::~QBot()
     qged_edit_feature_clear_geometry(p);
     if (!qged_edit_feature_ref_is_null(p) && m_ctx) {
 	qged_edit_feature_remove(m_ctx, "_bot_edit");
-	(void)ged_draw_view_context_feature_remove(qged_edit_view_context(m_ctx),
+	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
 	    "_bot_edit_surface");
-	(void)ged_draw_view_context_feature_remove(qged_edit_view_context(m_ctx),
+	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
 	    "_bot_edit_handle");
 	p = QGED_EDIT_FEATURE_REF_NULL;
     }
@@ -233,9 +233,9 @@ QBot::update_obj_wireframe()
     if (!gedp->dbip || !bu_vls_strlen(&oname)) {
 	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
-	(void)ged_draw_view_context_feature_remove(qged_edit_view_context(m_ctx),
+	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
 	    "_bot_edit_surface");
-	(void)ged_draw_view_context_feature_remove(qged_edit_view_context(m_ctx),
+	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
 	    "_bot_edit_handle");
 	return;
     }
@@ -244,9 +244,9 @@ QBot::update_obj_wireframe()
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
 	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
-	(void)ged_draw_view_context_feature_remove(qged_edit_view_context(m_ctx),
+	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
 	    "_bot_edit_surface");
-	(void)ged_draw_view_context_feature_remove(qged_edit_view_context(m_ctx),
+	(void)ged_view_feature_remove(qged_edit_ged_view_context(m_ctx),
 	    "_bot_edit_handle");
 	return;
     }
@@ -266,21 +266,21 @@ QBot::update_obj_wireframe()
 		bu_vls_cstr(&oname));
     }
 
-    void *view_ctx = qged_edit_view_context(m_ctx);
+    struct ged_view_context *view_ctx = qged_edit_ged_view_context(m_ctx);
     if (view_ctx) {
 	point_t *surface_points = (point_t *)bu_calloc(bot->num_vertices,
 		sizeof(point_t), "BOT edit surface points");
 	for (size_t i = 0; i < bot->num_vertices; i++)
 	    VMOVE(surface_points[i], &bot->vertices[i * 3]);
-	struct ged_draw_view_feature_style surface_style =
-	    GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	struct ged_view_feature_style surface_style =
+	    GED_VIEW_FEATURE_STYLE_INIT;
 	surface_style.visible = 1;
 	surface_style.selectable = 1;
 	surface_style.color_valid = 1;
 	surface_style.color[0] = 72;
 	surface_style.color[1] = 126;
 	surface_style.color[2] = 168;
-	(void)ged_draw_view_context_indexed_face_set_replace(view_ctx,
+	(void)ged_view_feature_indexed_face_set_replace(view_ctx,
 	    "_bot_edit_surface", 1, (const point_t *)surface_points,
 	    bot->num_vertices, NULL, 0, bot->faces,
 	    bot->num_faces * 3, &surface_style);
@@ -315,10 +315,10 @@ QBot::update_viewobj_name(const QString &ostr)
 void
 QBot::publish_selection_handle()
 {
-    void *view_ctx = qged_edit_view_context(m_ctx);
+    struct ged_view_context *view_ctx = qged_edit_ged_view_context(m_ctx);
     if (!view_ctx || !bot || selected_vertices.empty()) {
 	if (view_ctx)
-	    (void)ged_draw_view_context_feature_remove(view_ctx,
+	    (void)ged_view_feature_remove(view_ctx,
 		"_bot_edit_handle");
 	return;
     }
@@ -335,15 +335,15 @@ QBot::publish_selection_handle()
 	commands[i] = GED_DRAW_VIEW_LINE_POINT_DRAW;
     }
 
-    struct ged_draw_view_feature_style style =
-	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style =
+	GED_VIEW_FEATURE_STYLE_INIT;
     style.visible = 1;
     style.selectable = 1;
     style.color_valid = 1;
     style.color[0] = 255;
     style.color[1] = 196;
     style.color[2] = 32;
-    (void)ged_draw_view_context_lines_replace(view_ctx, "_bot_edit_handle",
+    (void)ged_annotation_lines_replace(view_ctx, "_bot_edit_handle",
 	1, (const point_t *)points, commands, count, &style);
     bu_free(commands, "BOT edit selection handle commands");
     bu_free(points, "BOT edit selection handles");
@@ -410,32 +410,32 @@ QBot::eventFilter(QObject *, QEvent *event)
 	mouse->button() != Qt::LeftButton)
 	return false;
 
-    void *view_ctx = qged_edit_view_context(m_ctx);
+    struct ged_view_context *view_ctx = qged_edit_ged_view_context(m_ctx);
     if (!view_ctx)
 	return false;
-    struct ged_draw_pick_result *result =
-	ged_draw_view_context_pick_nearest(view_ctx,
+    struct ged_pick_result *result =
+	ged_pick_nearest(view_ctx,
 	    mouse->pos().x(), mouse->pos().y());
-    struct ged_draw_pick_detail detail = GED_DRAW_PICK_DETAIL_INIT;
+    struct ged_pick_detail detail = GED_PICK_DETAIL_INIT;
     struct bu_vls path = BU_VLS_INIT_ZERO;
-    const int picked = result && ged_draw_pick_result_count(result) > 0 &&
-	ged_draw_pick_result_path(result, 0, &path) &&
-	ged_draw_pick_result_detail(result, 0, &detail) &&
+    const int picked = result && ged_pick_result_count(result) > 0 &&
+	ged_pick_result_path(result, 0, &path) &&
+	ged_pick_result_detail(result, 0, &detail) &&
 	BU_STR_EQUAL(bu_vls_cstr(&path), "_bot_edit_surface") &&
 	detail.primitive_kind == 3 && detail.primitive_index >= 0;
     if (!picked) {
 	bu_vls_free(&path);
-	ged_draw_pick_result_free(result);
+	ged_pick_result_free(result);
 	return false;
     }
 
     const int face = detail.primitive_index;
     if (face < 0 || (size_t)face >= bot->num_faces) {
 	bu_vls_free(&path);
-	ged_draw_pick_result_free(result);
+	ged_pick_result_free(result);
 	return false;
     }
-    (void)ged_draw_view_context_feature_selected_primitives_replace(
+    (void)ged_view_feature_set_selection(
 	view_ctx, "_bot_edit_surface", &face, 1);
 
     selected_vertices.clear();
@@ -480,7 +480,7 @@ QBot::eventFilter(QObject *, QEvent *event)
     }
 
     const struct bv *view = bv_context_view_const(
-	static_cast<const struct bv_context *>(view_ctx));
+	qged_edit_view_context(m_ctx));
     if (!view || !bv_screen_to_model(drag_start, view,
 	    mouse->pos().x(), mouse->pos().y())) {
 	const int vertex = selected_vertices.front();
@@ -492,7 +492,7 @@ QBot::eventFilter(QObject *, QEvent *event)
 	QGED_EDIT_PREVIEW_BEGIN, bu_vls_cstr(&oname));
 
     bu_vls_free(&path);
-    ged_draw_pick_result_free(result);
+    ged_pick_result_free(result);
     emit view_updated(QG_VIEW_REFRESH);
     return true;
 }

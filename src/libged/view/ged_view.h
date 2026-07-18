@@ -40,9 +40,7 @@ struct _ged_view_info {
     struct bu_opt_desc *gopts;
     const char *vobj;
     const char *gobj_dbpath;
-    void *cv;
-    ged_draw_view_polygon_ref polygon_ref;
-    ged_draw_shape_ref shape_ref;
+    struct ged_view_context *cv;
     int local_obj;
 };
 extern int _view_cmd_msgs(void *bs, int argc, const char **argv, const char *us, const char *ps);

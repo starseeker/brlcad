@@ -140,7 +140,7 @@ _ged_pipe_append_pnt_common(struct ged *gedp, int argc, const char *argv[], stru
 
     mat_t model2view;
     mat_t view2model;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
     bv_model2view_get(model2view, view);
     bv_view2model_get(view2model, view);
@@ -331,7 +331,7 @@ ged_find_pipe_pnt_nearest_pnt_core(struct ged *gedp, int argc, const char *argv[
     }
 
     mat_t view2model;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     bv_view2model_get(view2model,
 	    bv_context_view_const((const struct bv_context *)view_ctx));
     nearest = rt_pipe_find_pnt_nearest_pnt(&((struct rt_pipe_internal *)intern.idb_ptr)->pipe_segs_head,

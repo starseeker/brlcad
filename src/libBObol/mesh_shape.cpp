@@ -428,6 +428,7 @@ SoBRLMeshShape::makeSourceMeshRequest(BObolSourceMeshRequest &request) const
     request.lodBoundsMax = this->lodBoundsMax.getValue();
     request.colorOverride = this->colorOverride.getValue();
     request.color = this->color.getValue();
+    request.transparency = this->transparency.getValue();
 
     const SoBRLMeshShape *geom = this->getSharedGeometrySource();
     if (!geom->fullDetailPoint.empty() &&

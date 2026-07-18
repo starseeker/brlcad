@@ -102,15 +102,16 @@ QgSession::dbip() const
 struct bv_context *
 QgSession::activeViewContext() const
 {
-	return static_cast<struct bv_context *>(ged_view_active_ctx(gedp));
+	return ged_view_context_bv(ged_view_active_ctx(gedp));
 }
 
 void
 QgSession::setActiveViewContext(struct bv_context *view_ctx)
 {
-    ged_view_active_ctx_set(gedp, view_ctx);
+    struct ged_view_context *ged_view_ctx = ged_view_context_from_bv(view_ctx);
+    ged_view_active_ctx_set(gedp, ged_view_ctx);
     if (view_ctx)
-	(void)ged_view_context_host_attach(gedp, view_ctx);
+	(void)ged_view_context_host_attach(gedp, ged_view_ctx);
 }
 
 void

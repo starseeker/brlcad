@@ -19,7 +19,6 @@
 #include "bu/time.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
 #include "icv.h"
 #include "QgObolDrawSyncPrivate.h"
 #include "qtcad/QgObolMeasure.h"
@@ -369,7 +368,7 @@ source_material_matches_db_color(struct ged *gedp,
 
 static int
 all_source_materials_match_db_colors(struct ged *gedp,
-	SoBRLSceneController *controller)
+	BObolSceneController *controller)
 {
     if (!gedp || !gedp->dbip || !controller)
 	return 0;
@@ -433,7 +432,7 @@ all_source_materials_match_db_colors(struct ged *gedp,
 }
 
 static SoBRLDatabaseSource *
-find_source_by_path_suffix(SoBRLSceneController *controller,
+find_source_by_path_suffix(BObolSceneController *controller,
 	const char *suffix,
 	BObolDatabaseSourceSummary &summary)
 {
@@ -508,7 +507,8 @@ realized_geometry_counts(SoBRLDatabaseSource *source)
 }
 
 static struct geometry_counts
-realized_geometry_counts(BObolViewController *controller,
+realized_geometry_counts(BObolSceneController *scene,
+			 BObolViewController *controller,
 			 int expectedDrawMode,
 			 int *realizedSources,
 			 int *modeMismatches)
@@ -518,12 +518,12 @@ realized_geometry_counts(BObolViewController *controller,
 	*realizedSources = 0;
     if (modeMismatches)
 	*modeMismatches = 0;
-    if (!controller)
+    if (!scene || !controller)
 	return counts;
 
-    const int sourceCount = controller->getDatabaseSourceCount();
+    const int sourceCount = scene->getDatabaseSourceCount();
     for (int i = 0; i < sourceCount; i++) {
-	SoBRLDatabaseSource *source = controller->getDatabaseSource(i);
+	SoBRLDatabaseSource *source = scene->getDatabaseSource(i);
 	if (!source)
 	    continue;
 	if (source->drawMode.getValue() != expectedDrawMode) {
@@ -716,10 +716,12 @@ sync_draw_case(const struct model_case &testCase)
 	view.show();
 	QCoreApplication::processEvents();
     }
-	ged_view_active_ctx_set(gedp, view.viewContext());
-	(void)ged_view_context_host_attach(gedp, view.viewContext());
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    (void)ged_view_context_host_attach(gedp, view_ctx);
     if (!ged_view_context_display_endpoint_set(
-	    view.viewContext(), view.displayEndpoint(), 0)) {
+	    view_ctx, view.displayEndpoint(), 0)) {
 	ged_close(gedp);
 	return 0;
     }
@@ -750,7 +752,7 @@ sync_draw_case(const struct model_case &testCase)
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, testCase.root);
-    txn.view = view.viewContext();
+    txn.view = view_ctx;
     txn.appearance = &appearance;
 
     struct ged_draw_transaction_result result;
@@ -774,12 +776,9 @@ sync_draw_case(const struct model_case &testCase)
     /* QgView endpoints use the same deferred publication boundary as the
      * interactive canvas.  Drain it explicitly before inspecting geometry. */
     (void)controller->realizePending();
-    BObolViewController *geometryController =
-	ged_draw_obol_controller(gedp);
-    if (!geometryController)
-	geometryController = controller;
-    (void)geometryController->realizePending();
-    const int sourceCount = geometryController->getDatabaseSourceCount();
+    BObolSceneController geometryScene(controller->getRenderSceneRoot());
+    (void)geometryScene.realizePending();
+    const int sourceCount = geometryScene.getDatabaseSourceCount();
     if (!changed || sourceCount <= 0) {
 	fprintf(stderr, "%s:%s did not create Obol database sources\n",
 		testCase.file, testCase.root);
@@ -790,8 +789,8 @@ sync_draw_case(const struct model_case &testCase)
     int realizedSources = 0;
     int modeMismatches = 0;
     phaseStart = bu_gettime();
-    struct geometry_counts counts = realized_geometry_counts(geometryController,
-	testCase.obolDrawMode, &realizedSources, &modeMismatches);
+    struct geometry_counts counts = realized_geometry_counts(&geometryScene,
+	controller, testCase.obolDrawMode, &realizedSources, &modeMismatches);
     if (realizedSources <= 0 || modeMismatches > 0) {
 	fprintf(stderr,
 		"%s:%s produced invalid Obol database sources: sources=%d realized=%d mode_mismatches=%d expected_mode=%d\n",
@@ -855,7 +854,7 @@ sync_draw_case(const struct model_case &testCase)
 
     struct ged_draw_transaction redrawTxn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    redrawTxn.view = view.viewContext();
+    redrawTxn.view = view_ctx;
     struct ged_draw_transaction_result redrawResult;
     ged_draw_transaction_result_init(&redrawResult);
     phaseStart = bu_gettime();
@@ -887,11 +886,12 @@ sync_draw_case(const struct model_case &testCase)
     int redrawByteDiff = image_byte_diff(redrawnImage, secondRedrawnImage);
     int redrawLitPixels = lit_pixel_count(secondRedrawnImage);
     int maxRasterDiff = redrawnImage.width() * redrawnImage.height() * 4 / 100;
-    struct geometry_counts redrawCounts = realized_geometry_counts(geometryController,
-	testCase.obolDrawMode, NULL, NULL);
+    BObolSceneController redrawScene(controller->getRenderSceneRoot());
+    struct geometry_counts redrawCounts = realized_geometry_counts(&redrawScene,
+	controller, testCase.obolDrawMode, NULL, NULL);
     if (redrawRet < 0 || secondRedrawRet < 0 ||
 	redrawUs > 10000000 || secondRedrawUs > 10000000 ||
-	geometryController->getDatabaseSourceCount() != sourceCount ||
+	redrawScene.getDatabaseSourceCount() != sourceCount ||
 	redrawByteDiff < 0 || redrawByteDiff > maxRasterDiff ||
 	redrawCounts.shapeCount != counts.shapeCount ||
 	redrawCounts.segmentCount != counts.segmentCount ||
@@ -902,7 +902,7 @@ sync_draw_case(const struct model_case &testCase)
 		testCase.file, testCase.root, redrawRet, secondRedrawRet,
 		(double)redrawUs / 1000000.0,
 		(double)secondRedrawUs / 1000000.0,
-	geometryController->getDatabaseSourceCount(), sourceCount,
+	redrawScene.getDatabaseSourceCount(), sourceCount,
 		redrawByteDiff, maxRasterDiff, redrawSsim,
 		redrawLitPixels, lit_pixel_count(redrawnImage),
 		redrawCounts.shapeCount, redrawCounts.segmentCount,
@@ -930,16 +930,15 @@ sync_material_refresh_to_view(struct ged *gedp, QgView &view)
     /* Direct librt mutations bypass GED's material-change event.  Advance the
      * synchronization stamp explicitly before requesting a recolor sweep. */
     ged_draw_bump_material_revision(gedp);
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REFRESH_MATERIAL_COLORS, NULL);
-    txn.view = view.viewContext();
+    txn.view = view_ctx;
 
     struct ged_draw_transaction_result result;
     ged_draw_transaction_result_init(&result);
-    result.status = 1;
-    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    int changed = scene ? ged_draw_obol_scene_sync_transaction(gedp, &txn,
-	    &result, scene) : 0;
+    int changed = ged_draw_apply_transaction(gedp, &txn, &result) > 0;
     if (changed)
 	view.need_update(QG_VIEW_REFRESH);
     ged_draw_transaction_result_free(&result);
@@ -1006,10 +1005,12 @@ exercise_m35_color_table_mutation(void)
 
     QgView view(NULL, QgViewType::SW);
     view.resize(220, 170);
-	ged_view_active_ctx_set(gedp, view.viewContext());
-	(void)ged_view_context_host_attach(gedp, view.viewContext());
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    (void)ged_view_context_host_attach(gedp, view_ctx);
     if (!ged_view_context_display_endpoint_set(
-	    view.viewContext(), view.displayEndpoint(), 0)) {
+	    view_ctx, view.displayEndpoint(), 0)) {
 	ged_close(gedp);
 	bu_file_delete(tmp_db);
 	return 0;
@@ -1030,7 +1031,7 @@ exercise_m35_color_table_mutation(void)
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "all.g");
-    txn.view = view.viewContext();
+    txn.view = view_ctx;
     txn.appearance = &appearance;
 
     struct ged_draw_transaction_result result;
@@ -1050,8 +1051,8 @@ exercise_m35_color_table_mutation(void)
     ged_draw_transaction_result_free(&result);
     report_phase("initial-draw");
 
-    SoBRLSceneController *source_controller =
-	ged_draw_obol_scene_controller(gedp);
+    BObolSceneController render_scene(controller->getRenderSceneRoot());
+    BObolSceneController *source_controller = &render_scene;
 
     BObolDatabaseSourceSummary canary_summary;
     SoBRLDatabaseSource *canary = find_source_by_path_suffix(source_controller,

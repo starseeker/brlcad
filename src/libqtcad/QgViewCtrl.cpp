@@ -141,7 +141,8 @@ QgViewCtrl::fb_mode_cmd()
 		return;
 	struct bobol_endpoint_property_value value =
 	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	if (ged_view_context_display_property_get(view_ctx,
+	if (ged_view_context_display_property_get(
+		ged_view_context_from_bv(view_ctx),
 		"composition.framebuffer.mode", &value) !=
 	    BOBOL_ENDPOINT_PROPERTY_OK)
 		return;
@@ -156,7 +157,8 @@ QgViewCtrl::fb_mode_cmd()
 		value.string_value = "off";
 	else
 		return;
-	if (ged_view_context_display_property_set(view_ctx,
+	if (ged_view_context_display_property_set(
+		ged_view_context_from_bv(view_ctx),
 		"composition.framebuffer.mode", &value) !=
 	    BOBOL_ENDPOINT_PROPERTY_OK)
 		return;
@@ -172,7 +174,8 @@ QgViewCtrl::do_view_update(QgViewUpdateFlags flags)
 		return;
 	struct bobol_endpoint_property_value value =
 	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	if (ged_view_context_display_property_get(view_ctx,
+	if (ged_view_context_display_property_get(
+		ged_view_context_from_bv(view_ctx),
 		"composition.framebuffer.mode", &value) !=
 	    BOBOL_ENDPOINT_PROPERTY_OK)
 		return;

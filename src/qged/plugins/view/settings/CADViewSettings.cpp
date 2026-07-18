@@ -45,7 +45,7 @@ qged_settings_view(const QgPluginContext *ctx)
 }
 
 static int
-qged_framebuffer_mode_get(const void *view_ctx, int *mode)
+qged_framebuffer_mode_get(const struct ged_view_context *view_ctx, int *mode)
 {
     if (!view_ctx || !mode)
 	return 0;
@@ -71,7 +71,7 @@ qged_framebuffer_mode_get(const void *view_ctx, int *mode)
 }
 
 static int
-qged_framebuffer_mode_set(void *view_ctx, int mode)
+qged_framebuffer_mode_set(struct ged_view_context *view_ctx, int mode)
 {
     static const char *const modes[] = {
 	"off", "overlay", "underlay", "interlay"
@@ -90,7 +90,7 @@ qged_framebuffer_mode_set(void *view_ctx, int mode)
 }
 
 static int
-qged_faceplate_property_get(const void *view_ctx, const char *name,
+qged_faceplate_property_get(const struct ged_view_context *view_ctx, const char *name,
 	int *enabled)
 {
     if (!view_ctx || !name || !enabled)
@@ -106,7 +106,7 @@ qged_faceplate_property_get(const void *view_ctx, const char *name,
 }
 
 static int
-qged_faceplate_property_set(void *view_ctx, const char *name, int enabled)
+qged_faceplate_property_set(struct ged_view_context *view_ctx, const char *name, int enabled)
 {
     if (!view_ctx || !name)
 	return 0;
@@ -137,7 +137,7 @@ ckbx_val(QCheckBox *cb)
 }
 
 static void
-qged_faceplate_checkbox_refresh(const void *view_ctx, QCheckBox *checkbox,
+qged_faceplate_checkbox_refresh(const struct ged_view_context *view_ctx, QCheckBox *checkbox,
 	const char *property)
 {
     int enabled = 0;
@@ -276,12 +276,13 @@ CADViewSettings::view_update_int(int)
 void
 CADViewSettings::checkbox_refresh(unsigned long long)
 {
-    struct bv_context *view_ctx = qged_settings_view(m_ctx);
-    if (!view_ctx)
+    struct bv_context *bv_ctx = qged_settings_view(m_ctx);
+    if (!bv_ctx)
 	return;
+    struct ged_view_context *view_ctx = ged_view_context_from_bv(bv_ctx);
 
-    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
+    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_source_lod_policy_get(&lod_policy, view_ctx);
 
     set_ckbx(acsg_ckbx,     lod_policy.csg_enabled);
     set_ckbx(amesh_ckbx,    lod_policy.mesh_enabled);
@@ -329,19 +330,20 @@ CADViewSettings::checkbox_refresh(unsigned long long)
 void
 CADViewSettings::view_refresh(unsigned long long)
 {
-    struct bv_context *view_ctx = qged_settings_view(m_ctx);
-    if (!view_ctx)
+    struct bv_context *bv_ctx = qged_settings_view(m_ctx);
+    if (!bv_ctx)
 	return;
+    struct ged_view_context *view_ctx = ged_view_context_from_bv(bv_ctx);
 
     /* Preserve non-widget LoD policy fields and update only the settings
      * owned by this widget. */
-    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    (void)ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx);
+    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    (void)ged_draw_source_lod_policy_get(&lod_policy, view_ctx);
     lod_policy.csg_enabled = ckbx_val(acsg_ckbx);
     lod_policy.mesh_enabled = ckbx_val(amesh_ckbx);
     lod_policy.zoom_refresh =
 	lod_policy.csg_enabled || lod_policy.mesh_enabled;
-    (void)ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
+    (void)ged_draw_source_lod_policy_apply(view_ctx, &lod_policy);
     (void)qged_framebuffer_mode_set(view_ctx, fb_mode_combo->currentIndex());
     (void)qged_faceplate_property_set(view_ctx,
 	"view.faceplate.adc.visible", ckbx_val(adc_ckbx));

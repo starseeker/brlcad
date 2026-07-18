@@ -41,7 +41,7 @@ _ged_do_rot(struct ged *gedp,
 	    int (*func)(struct ged *, char, char, mat_t))
 {
     mat_t temp1, temp2;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return BRLCAD_ERROR;
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
@@ -125,7 +125,7 @@ _ged_do_slew(struct ged *gedp, vect_t svec)
 {
     point_t model_center;
     mat_t view2model;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return BRLCAD_ERROR;
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
@@ -148,7 +148,7 @@ _ged_do_tra(struct ged *gedp,
     point_t delta;
     point_t work;
     point_t vc, nvc;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return BRLCAD_ERROR;
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);

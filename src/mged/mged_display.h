@@ -167,7 +167,7 @@ struct _rubber_band {
 struct _view_state {
     int		vs_rc;
 
-    struct bv_context *vs_gvp;
+    struct ged_view_context *vs_gvp;
     mat_t	vs_model2objview;
     mat_t	vs_objview2model;
     mat_t	vs_ModelDelta;		/* changes to Viewrot this frame */
@@ -420,25 +420,27 @@ __END_DECLS
 static inline struct bv *
 mged_view_state_view(struct _view_state *view_state)
 {
-    return view_state ? bv_context_view(view_state->vs_gvp) : NULL;
+    return view_state ?
+	bv_context_view(ged_view_context_bv(view_state->vs_gvp)) : NULL;
 }
 
 static inline const struct bv *
 mged_view_state_view_const(const struct _view_state *view_state)
 {
-    return view_state ? bv_context_view_const(view_state->vs_gvp) : NULL;
+    return view_state ?
+	bv_context_view_const(ged_view_context_bv_const(view_state->vs_gvp)) : NULL;
 }
 
 static inline struct bv *
-mged_view_context_view(void *view_ctx)
+mged_view_context_view(struct ged_view_context *view_ctx)
 {
-    return bv_context_view((struct bv_context *)view_ctx);
+    return bv_context_view(ged_view_context_bv(view_ctx));
 }
 
 static inline const struct bv *
-mged_view_context_view_const(const void *view_ctx)
+mged_view_context_view_const(const struct ged_view_context *view_ctx)
 {
-    return bv_context_view_const((const struct bv_context *)view_ctx);
+    return bv_context_view_const(ged_view_context_bv_const(view_ctx));
 }
 
 static inline int
@@ -486,8 +488,9 @@ mged_display_view_settings_shared(struct mged_display *a, struct mged_display *b
     if (!a || !a->display_view_state || !a->display_view_state->vs_gvp ||
 	    !b || !b->display_view_state || !b->display_view_state->vs_gvp)
 	return 0;
-    return bv_context_settings_shared(a->display_view_state->vs_gvp,
-	    b->display_view_state->vs_gvp);
+    return bv_context_settings_shared(
+	    ged_view_context_bv(a->display_view_state->vs_gvp),
+	    ged_view_context_bv(b->display_view_state->vs_gvp));
 }
 
 #define MGED_DISPLAY_NULL ((struct mged_display *)NULL)

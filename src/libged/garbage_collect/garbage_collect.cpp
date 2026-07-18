@@ -31,13 +31,15 @@
 #include <string>
 #include <vector>
 
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BSceneController.h"
 #include "bu/app.h"
 #include "bu/cmd.h"
 #include "bu/opt.h"
 #include "bu/path.h"
 #include "raytrace.h"
 #include "ged.h"
-#include "ged/draw.h"
+#include "../ged_bobol_private.hpp"
 
 void print_help_msg(struct bu_vls *str)
 {
@@ -59,22 +61,24 @@ void print_help_msg(struct bu_vls *str)
 static void
 gc_collect_paths(struct ged *gedp, std::vector<std::string> &who_objs)
 {
-    struct bu_vls paths = BU_VLS_INIT_ZERO;
-    void *view = ged_view_active_ctx(gedp);
-    ged_draw_list_paths(gedp, view, -1, 1, &paths);
+    struct ged_view_context *view = ged_view_active_ctx(gedp);
+    BObolSceneController *scene = ged_bobol_scene(gedp);
+    if (!scene)
+	return;
 
-    const char *s = bu_vls_cstr(&paths);
-    const char *start = s;
-    for (const char *p = s; p && *p; p++) {
-	if (*p != '\n')
+    std::set<std::string> paths;
+    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+	BObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) ||
+	    !ged_bobol_source_in_view(view, summary) || !summary.visible)
 	    continue;
-	who_objs.push_back(std::string(start, p - start));
-	start = p + 1;
+	const char *path = summary.path.getString();
+	while (path && *path == '/')
+	    path++;
+	if (path && path[0])
+	    paths.insert(path);
     }
-    if (start && *start)
-	who_objs.push_back(std::string(start));
-
-    bu_vls_free(&paths);
+    who_objs.insert(who_objs.end(), paths.begin(), paths.end());
 }
 
 extern "C" int

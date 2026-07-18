@@ -1,6 +1,22 @@
 BRL-CAD/Obol code survey and prioritized cleanup TODO
 ====================================================
 
+Implementation status (2026-07-18)
+----------------------------------
+
+This survey is the archived execution plan for the completed direct
+libged/libBObol drawing pivot.  Its evidence and size/API counts describe the
+pre-pivot baseline and are intentionally retained for review history; they are
+not a current API or debt inventory.
+
+The implemented architecture is defined by
+`doc/notes/libbobol_architecture.md`.  The current GED and libBObol API
+contracts, endpoint lifecycle, platform/threading support, and deliberately
+deferred work are recorded in the documents linked from that overview.
+`doc/notes/libbobol_active_debt.md` is the complete active-debt list.  The
+pivot guard, API/symbol manifests, installed-package consumer, headless label,
+and focused sanitizer label enforce the completion criteria below.
+
 Survey scope and baseline
 -------------------------
 

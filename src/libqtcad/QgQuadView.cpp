@@ -96,7 +96,8 @@ qg_quad_view_context_const(const QgView *view)
 static int
 qg_quad_view_set_add(struct ged *gedp, QgView *view)
 {
-    void *view_ctx = view ? view->viewContext() : NULL;
+    struct ged_view_context *view_ctx = view ?
+	ged_view_context_from_bv(view->viewContext()) : NULL;
     if (!gedp || !view_ctx ||
 	!ged_view_set_context_add(ged_view_set_ctx(gedp), view_ctx))
 	return 0;
@@ -106,7 +107,8 @@ qg_quad_view_set_add(struct ged *gedp, QgView *view)
 static int
 qg_quad_view_set_attach(struct ged *gedp, QgView *view)
 {
-    void *view_ctx = view ? view->viewContext() : NULL;
+    struct ged_view_context *view_ctx = view ?
+	ged_view_context_from_bv(view->viewContext()) : NULL;
     if (!gedp || !view_ctx ||
 	!ged_view_context_view_set_attach(view_ctx, ged_view_set_ctx(gedp)))
 	return 0;
@@ -117,7 +119,7 @@ static int
 qg_quad_view_set_remove(struct ged *gedp, QgView *view)
 {
     return gedp && view ? ged_view_set_context_remove(ged_view_set_ctx(gedp),
-	view->viewContext()) : 0;
+	ged_view_context_from_bv(view->viewContext())) : 0;
 }
 
 static void
@@ -135,7 +137,8 @@ qg_quad_attach_endpoint(struct ged *gedp, QgView *view)
 {
     if (!gedp || !view || !view->displayEndpoint())
 	return 0;
-    void *view_ctx = view->viewContext();
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view->viewContext());
     return ged_view_context_display_endpoint_set(view_ctx,
 	view->displayEndpoint(), 0);
 }
@@ -364,11 +367,12 @@ QgQuadView::changeToQuadFrame()
 		}
 		// Copy the LoD source policy so all quadrants use the same
 		// source-selection behavior.
-		ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-		if (ged_draw_view_context_lod_policy_get(&lod_policy,
-				views[kUpperRightQuadrant]->viewContext())) {
-			ged_draw_view_context_lod_policy_apply(
-				views[i]->viewContext(),
+		ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+		if (ged_draw_source_lod_policy_get(&lod_policy,
+				ged_view_context_from_bv(
+				    views[kUpperRightQuadrant]->viewContext()))) {
+			ged_draw_source_lod_policy_apply(
+				ged_view_context_from_bv(views[i]->viewContext()),
 				&lod_policy);
 		}
 		if (gedp)
@@ -427,8 +431,9 @@ QgQuadView::changeToQuadFrame()
 	// but if we don't do it here we'll start out with blank windows until something notifies
 	// the draw logic it needs to do updates.
 	for (int i = kUpperRightQuadrant + 1; i < kLowerRightQuadrant + 1; i++) {
-		void *view_ctx = views[i]->viewContext();
-		ged_draw_view_context_lod_bounds_update(view_ctx);
+		struct ged_view_context *view_ctx =
+		    ged_view_context_from_bv(views[i]->viewContext());
+		ged_draw_source_lod_bounds_update(view_ctx);
 	}
 	{
 	std::set<std::string> paths =

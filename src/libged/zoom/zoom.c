@@ -26,7 +26,7 @@
 static int
 do_zoom(struct ged *gedp, double sf)
 {
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     fastf_t view_scale = bv_scale_get(view) / sf;
     if (view_scale < BV_MIN_SCALE)

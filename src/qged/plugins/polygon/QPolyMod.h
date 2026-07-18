@@ -111,9 +111,9 @@ class QPolyMod : public QWidget
 	bool eventFilter(QObject *, QEvent *);
 
     private:
-	void poly_type_settings(const struct ged_draw_view_polygon_record *ip);
+	void poly_type_settings(const struct ged_polygon_record *ip);
 	int poly_cnt = 0;
-	ged_draw_view_polygon_ref p = GED_DRAW_VIEW_POLYGON_REF_NULL_INIT;
+	ged_polygon_ref p = GED_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;

@@ -71,7 +71,7 @@ extern "C" int draw_test_images_differ(const char *a, const char *b, int offmany
 static void
 do_refresh(struct ged *gedp)
 {
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
@@ -111,7 +111,7 @@ open_gedp(const char *gfile, int width, int height)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     bv_dimensions_set(DRAW_TEST_BV(v), width, height);
     const char *s_av[16] = {
 	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
@@ -150,7 +150,7 @@ test_dm_lighting_flags(const char *datadir)
     struct ged *gedp = open_gedp("smb_t1.g", 256, 256);
     if (!gedp) { bu_log("FAIL: ged_open failed\n"); bu_file_delete("smb_t1.g"); return 1; }
 
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     int fail = 0;
 
     /* --- endpoint-native ged_exec_dm path used by applications ------------ */

@@ -37,7 +37,10 @@ class BObolFeatureStore;
 class BObolPolygonStore;
 class BObolSelectionStore;
 class BObolViewController;
+class SoBRLDatabaseSource;
 class SoNode;
+struct BObolCompactInstanceHandle;
+struct BObolCompactInstanceSummary;
 struct bg_line_layer_builder;
 struct db_i;
 struct directory;
@@ -150,6 +153,8 @@ struct BOBOL_EXPORT BObolFeatureStyle {
     int lineWidth;
     SbBool hasLineStyle;
     int lineStyle;
+    SbBool hasTransparency;
+    float transparency;
     SbBool hasArrow;
     SbBool arrow;
     SbBool hasArrowTip;
@@ -397,6 +402,15 @@ public:
     void setController(BObolViewController *controller);
     BObolViewController *controller(void) const;
 
+    /**
+     * Stable identity for references issued by this store instance.
+     *
+     * The identity changes when a controller/store is replaced.  Callers
+     * must resolve it on the store owner thread before using an object id;
+     * it is not a pointer and does not retain the store.
+     */
+    uint64_t referenceGeneration(void) const;
+
     void clear(void);
     BObolFeatureHandle find(const SbString &name,
 	unsigned int scopeMask = BOBOL_FEATURE_SCOPE_ALL) const;
@@ -492,6 +506,27 @@ public:
 	uint32_t sourceRevision = 0,
 	uint32_t inputsRevision = 0,
 	const BObolFeatureOwner *owner = NULL);
+    /**
+     * Materialize one compact occurrence as a transient local edit preview.
+     *
+     * Geometry is copied into source coordinates; identity, effective
+     * appearance, placement revisions, and LoD provenance remain available
+     * through compactEditBinding().  Neither operation changes or retains a
+     * render node in the compact database source.
+     */
+    BObolFeatureHandle promoteCompactInstanceForEdit(
+	const SbString &name,
+	const SoBRLDatabaseSource &source,
+	const BObolCompactInstanceHandle &instance,
+	const SbString &editIntentId,
+	const SbString &editIntentRole,
+	const BObolFeatureOwner *owner = NULL);
+    SbBool demoteCompactInstanceFromEdit(
+	BObolFeatureHandle preview,
+	const BObolCompactInstanceHandle &instance);
+    SbBool compactEditBinding(BObolFeatureHandle preview,
+	BObolCompactInstanceHandle &instanceOut,
+	BObolCompactInstanceSummary &summaryOut) const;
     SbBool replaceEditPreviewGeometry(BObolFeatureHandle handle,
 	const SbString &identity,
 	const std::vector<SbVec3f> &points,
@@ -596,6 +631,18 @@ public:
 
     void setController(BObolViewController *controller);
     BObolViewController *controller(void) const;
+
+    /** See BObolFeatureStore::referenceGeneration(). */
+    uint64_t referenceGeneration(void) const;
+
+    /**
+     * Return the store-owned name for a live polygon handle.
+     *
+     * The returned pointer remains valid until the polygon is renamed or
+     * removed, or until the store is destroyed.  The call must be made on
+     * the store owner thread.
+     */
+    const char *name(BObolPolygonHandle handle) const;
 
     void clear(void);
     BObolPolygonHandle create(const SbString &name,

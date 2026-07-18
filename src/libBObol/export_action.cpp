@@ -200,6 +200,8 @@ export_init_record_metadata(Record &record,
     record.sharedSource = 0;
     record.nonDatabaseSource = 0;
     record.drawMode = 0;
+    record.ownerSourceInstanceKey = "";
+    record.transparency = 0.0f;
     record.recordRole = "";
     record.geometryKind = fallbackGeometryKind ? fallbackGeometryKind : "";
 }
@@ -235,6 +237,9 @@ export_apply_shape_metadata(Record &record,
     record.sharedSource = shape->sharedSource.getValue() ? 1 : 0;
     record.nonDatabaseSource = shape->nonDatabaseSource.getValue() ? 1 : 0;
     record.drawMode = shape->drawMode.getValue();
+    record.ownerSourceInstanceKey =
+	shape->ownerSourceInstanceKey.getValue();
+    record.transparency = shape->transparency.getValue();
     record.recordRole = shape->recordRole.getValue();
     record.geometryKind = geometryKind.getLength() > 0 ?
 			  geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
@@ -263,9 +268,39 @@ export_apply_source_request_metadata(Record &record,
     record.sharedSource = request.sharedSource ? 1 : 0;
     record.nonDatabaseSource = request.nonDatabaseSource ? 1 : 0;
     record.drawMode = request.drawMode;
+    record.ownerSourceInstanceKey = request.ownerSourceInstanceKey;
+    record.transparency = request.transparency;
     record.recordRole = request.recordRole;
     record.geometryKind = request.geometryKind.getLength() > 0 ?
 			  request.geometryKind : SbString(fallbackGeometryKind ? fallbackGeometryKind : "");
+}
+
+template <typename Record>
+static void
+export_apply_realized_summary_metadata(
+    Record &record, const BObolRealizedShapeSummary &summary)
+{
+    record.displayName = summary.displayName.getLength() > 0 ?
+	summary.displayName : export_record_display_name(summary.path,
+	    summary.sourceName);
+    record.geometryName = summary.geometryName.getLength() > 0 ?
+	summary.geometryName : summary.sourceName;
+    record.cacheIdentity = summary.cacheIdentity;
+    record.sourceIdentity = summary.sourceIdentity.getLength() > 0 ?
+	summary.sourceIdentity : export_record_identity_fallback(summary.path,
+	    summary.sourceName);
+    export_update_record_identity_values(record);
+    record.ownerSourceInstanceKey = summary.ownerSourceInstanceKey;
+    record.databaseIntent = summary.databaseIntent ? 1 : 0;
+    record.overlayIntent = summary.overlayIntent ? 1 : 0;
+    record.hudIntent = summary.hudIntent ? 1 : 0;
+    record.localSource = summary.localSource ? 1 : 0;
+    record.sharedSource = summary.sharedSource ? 1 : 0;
+    record.nonDatabaseSource = summary.nonDatabaseSource ? 1 : 0;
+    record.drawMode = summary.drawMode;
+    record.transparency = summary.transparency;
+    record.recordRole = summary.recordRole;
+    record.geometryKind = summary.geometryKind;
 }
 
 static void
@@ -290,6 +325,7 @@ export_object_key(const Record &record)
     export_object_key_append_string(key, record.sourceType);
     export_object_key_append_string(key, record.cacheIdentity);
     export_object_key_append_string(key, record.sourceIdentity);
+    export_object_key_append_string(key, record.ownerSourceInstanceKey);
     export_object_key_append_string(key, record.recordRole);
     key += std::to_string(record.sourceId);
     key += ';';
@@ -327,6 +363,8 @@ export_object_init_common(SoBRLExportAction::ObjectRecord &object,
     object.sharedSource = record.sharedSource;
     object.nonDatabaseSource = record.nonDatabaseSource;
     object.drawMode = record.drawMode;
+    object.ownerSourceInstanceKey = record.ownerSourceInstanceKey;
+    object.transparency = record.transparency;
     object.recordRole = record.recordRole;
     object.geometryKind = record.geometryKind;
     object.selected = record.selected ? 1 : 0;
@@ -350,6 +388,9 @@ export_object_update_common(SoBRLExportAction::ObjectRecord &object,
     object.selected = object.selected || record.selected;
     object.highlighted = object.highlighted || record.highlighted;
     object.visible = 1;
+    if (object.ownerSourceInstanceKey.getLength() == 0 &&
+	record.ownerSourceInstanceKey.getLength() > 0)
+	object.ownerSourceInstanceKey = record.ownerSourceInstanceKey;
     if (!object.colorOverride && record.colorOverride) {
 	object.colorOverride = 1;
 	object.color = record.color;
@@ -1113,6 +1154,8 @@ SoBRLExportAction::vlistShapeAction(SoAction *action, SoNode *node)
 					     shape->isPrimitiveHighlighted(segmentIndex),
 					     shape->ghosted.getValue(), shape->hiddenLine.getValue(),
 					     shape->editEmphasis.getValue(),
+					     shape->lineStyle.getValue(),
+					     shape->lineWidth.getValue(),
 					     shape->editIntentId.getValue(),
 					     shape->editIntentRole.getValue(),
 					     shape->lodPolicy.getValue(),
@@ -1483,6 +1526,7 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
 			      const SbString &materialShader, int primitiveIndex,
 			      int selected, int highlighted, int ghosted,
 			      int hiddenLine, int editEmphasis,
+			      int lineStyle, int lineWidth,
 			      const SbString &editIntentId,
 			      const SbString &editIntentRole,
 			      uint32_t lodPolicy,
@@ -1515,6 +1559,8 @@ SoBRLExportAction::appendLine(const SbString &path, const SbString &sourceName,
     record.ghosted = ghosted ? 1 : 0;
     record.hiddenLine = hiddenLine ? 1 : 0;
     record.editEmphasis = editEmphasis ? 1 : 0;
+    record.lineStyle = lineStyle;
+    record.lineWidth = lineWidth;
     record.editIntentId = editIntentId;
     record.editIntentRole = editIntentRole;
     record.lodPolicy = lodPolicy;
@@ -1666,4 +1712,34 @@ SoBRLExportAction::appendTriangle(const SbString &path,
     this->bounds.extendBy(a);
     this->bounds.extendBy(b);
     this->bounds.extendBy(c);
+}
+
+void
+SoBRLExportAction::applyLastLineMetadata(
+    const BObolRealizedShapeSummary &summary)
+{
+    if (!this->recordStorageEnabled || this->lines.empty())
+	return;
+    export_apply_realized_summary_metadata(this->lines.back(), summary);
+    this->invalidateObjectRecords();
+}
+
+void
+SoBRLExportAction::applyLastPointMetadata(
+    const BObolRealizedShapeSummary &summary)
+{
+    if (!this->recordStorageEnabled || this->points.empty())
+	return;
+    export_apply_realized_summary_metadata(this->points.back(), summary);
+    this->invalidateObjectRecords();
+}
+
+void
+SoBRLExportAction::applyLastTriangleMetadata(
+    const BObolRealizedShapeSummary &summary)
+{
+    if (!this->recordStorageEnabled || this->triangles.empty())
+	return;
+    export_apply_realized_summary_metadata(this->triangles.back(), summary);
+    this->invalidateObjectRecords();
 }

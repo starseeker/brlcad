@@ -35,7 +35,7 @@
 void
 ged_draw_overlay_erase_name(struct ged *gedp, const char *name)
 {
-    void *view_ctx = ged_draw_active_view_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_draw_active_view_ctx(gedp);
     ged_draw_overlay_erase_name_context(gedp, view_ctx, name);
 }
 
@@ -50,7 +50,7 @@ ged_draw_overlay_geometry_insert(struct ged *gedp, const char *name,
 	*out = GED_DRAW_SHAPE_REF_NULL;
     if (!gedp || !name || !geometry)
 	return -1;
-    void *view_ctx = ged_draw_active_view_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_draw_active_view_ctx(gedp);
     if (!view_ctx)
 	return 0;
 

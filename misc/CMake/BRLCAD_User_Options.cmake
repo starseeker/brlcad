@@ -47,6 +47,21 @@ mark_as_advanced(BUILD_SHARED_LIBS)
 # Build static libs by default.
 option(BUILD_STATIC_LIBS "Build static libraries" ON)
 
+# Runtime instrumentation used by the focused libBObol ownership and worker
+# contracts.  AddressSanitizer includes LeakSanitizer on supported Unix
+# toolchains.  ThreadSanitizer is configured separately because it cannot be
+# combined with AddressSanitizer.
+option(BRLCAD_ENABLE_ADDRESS_SANITIZER
+  "Instrument unoptimized debug builds with AddressSanitizer/LeakSanitizer" OFF)
+option(BRLCAD_ENABLE_UNDEFINED_SANITIZER
+  "Instrument unoptimized debug builds with UndefinedBehaviorSanitizer" OFF)
+option(BRLCAD_SANITIZE_THREAD
+  "Instrument builds with ThreadSanitizer" OFF)
+mark_as_advanced(
+  BRLCAD_ENABLE_ADDRESS_SANITIZER
+  BRLCAD_ENABLE_UNDEFINED_SANITIZER
+  BRLCAD_SANITIZE_THREAD)
+
 # Build a monolithic BRL-CAD shared library from the normal library target
 # objects.  This requires USE_OBJECT_LIBS so the aggregate stays tied to the
 # current BRL-CAD library definitions rather than a manually maintained list.

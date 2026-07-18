@@ -46,12 +46,12 @@
 #
 # Consumer usage:
 #
-#   find_package(BRLCAD 7.40 REQUIRED COMPONENTS rt wdb ged)
-#   target_link_libraries(myapp PRIVATE BRLCAD::rt BRLCAD::wdb BRLCAD::ged)
+#   find_package(BRLCAD 7.40 REQUIRED COMPONENTS rt wdb ged BObol)
+#   target_link_libraries(myapp PRIVATE BRLCAD::rt BRLCAD::wdb BRLCAD::ged BRLCAD::BObol)
 #
-# Available components (all lowercase, matching the short library name):
+# Available components (matching the exported target name):
 #   bu bn bg bv nmg brep rt wdb ged analyze gcv icv dm fft optical
-#   pkg render tclcad qtcad
+#   pkg render tclcad qtcad BObol
 #
 # Special-purpose components:
 #   static  - request static imported targets (BRLCAD::<name>-static)
@@ -122,6 +122,13 @@ list(INSERT CMAKE_PREFIX_PATH 0 "${_brlcad_prefix}")
 include(CMakeFindDependencyMacro)
 
 find_dependency(Threads)
+
+# libBObol's public target links the separately packaged Obol CAD/runtime
+# target.  Resolve it before importing BRLCADTargets so an installed consumer
+# never depends on build-tree target ordering.
+if(@BRLCAD_HAVE_BOBOL@)
+  find_dependency(Obol CONFIG)
+endif()
 
 # Bundled-or-system deps that are always used
 @BRLCAD_FIND_DEP_ZLIB@
@@ -261,7 +268,7 @@ set(_brlcad_have_opencl   @BRLCAD_HAVE_OPENCL@)
 
 # All mandatory (non-optional) public library components
 set(_brlcad_mandatory_components
-  bu bn bg bv nmg brep rt wdb ged analyze gcv icv dm fft optical pkg render)
+  bu bn bg bv nmg brep rt wdb ged analyze gcv icv dm fft optical pkg render BObol)
 
 foreach(_comp ${BRLCAD_FIND_COMPONENTS})
   if("${_comp}" STREQUAL "static")
@@ -317,7 +324,7 @@ set(BRLCAD_LIBRARIES BRLCAD::brlcad)
 
 foreach(_lib
     bu bn bg bv nmg brep rt wdb ged analyze gcv icv dm fft optical pkg render
-    tclcad qtcad)
+    tclcad qtcad BObol)
   string(TOUPPER "${_lib}" _LIB)
   set(_brlcad_compat_target)
   if(_brlcad_want_static AND TARGET BRLCAD::${_lib}-static)

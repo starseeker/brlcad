@@ -1,7 +1,9 @@
 set(PLUGIN_LIBS libged libbu)
+set_source_files_properties(get_autoview.cpp TARGET_DIRECTORY libged
+  PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 ged_plugin_library(ged-get_autoview
-  get_autoview.c
+  get_autoview.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

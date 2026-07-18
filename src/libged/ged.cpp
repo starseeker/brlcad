@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <atomic>
 
 
 #include "bu/sort.h"
@@ -51,6 +52,7 @@
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
 #include "ged/event_txn.h"
+#include "./ged_draw_private.h"
 #include "./ged_private.h"
 #include "./include/plugin.h"
 
@@ -58,6 +60,18 @@ extern "C" void libged_init(void);
 
 extern "C" {
 #include "./qray.h"
+}
+
+static std::atomic<uint64_t> ged_scene_owner_counter(1);
+
+static uint64_t
+ged_scene_owner_next(void)
+{
+    uint64_t owner = ged_scene_owner_counter.fetch_add(1,
+	std::memory_order_relaxed);
+    if (!owner)
+	owner = ged_scene_owner_counter.fetch_add(1, std::memory_order_relaxed);
+    return owner;
 }
 
 static void
@@ -202,16 +216,10 @@ ged_init(struct ged *gedp)
     gedp->i->ged_gdp->gd_draw_observers_init = 1;
     gedp->i->ged_gdp->gd_draw_next_observer_token = 1;
     gedp->i->ged_gdp->gd_draw_observer_dispatch_depth = 0;
-    gedp->i->ged_gdp->gd_obol_scene_controller = NULL;
-    gedp->i->ged_gdp->gd_obol_controller = NULL;
-    gedp->i->ged_gdp->gd_obol_observer_token = 0;
-    gedp->i->ged_gdp->gd_obol_scene_controller_owned = 0;
-    gedp->i->ged_gdp->gd_obol_controller_owned = 0;
-    gedp->i->ged_gdp->gd_obol_scene_controller_full_sync = 0;
-    gedp->i->ged_gdp->gd_obol_attached_controllers = NULL;
-    gedp->i->ged_gdp->gd_obol_preserved_sources = NULL;
+    gedp->i->ged_gdp->gd_obol_state = NULL;
     BU_PTBL_INIT(&gedp->i->ged_gdp->gd_obol_context_tokens);
     gedp->i->ged_gdp->gd_obol_context_tokens_init = 1;
+    gedp->i->ged_gdp->gd_obol_context_owner = ged_scene_owner_next();
     gedp->i->ged_gdp->gd_obol_next_context_token = 1;
     /* Start at 1 so that freshly-drawn shapes (s_color_rev=0 from calloc)
      * are always stale on the first color_from_soltab call (B4). */
@@ -344,7 +352,7 @@ ged_free(struct ged *gedp)
     bu_vls_free(&gedp->go_name);
 
 	/* Framebuffer bridge teardown can remove retained nodes and request a
-	 * frame, so release it before the endpoint/controller registry. */
+	 * frame, so release it before the endpoint-backed view state. */
 	if (gedp->ged_fbs) {
 	    ged_obol_fbserv_release(gedp);
 	    BU_PUT(gedp->ged_fbs, struct fbserv_obj);
@@ -370,7 +378,6 @@ ged_free(struct ged *gedp)
 		qray_free(gedp->i->ged_gdp);
 		ged_draw_obol_context_tokens_free(gedp);
 		ged_draw_obol_scene_controller_detach(gedp);
-		ged_draw_obol_preserved_sources_free(gedp);
 		ged_draw_observers_free(gedp);
 		ged_draw_registry_free(gedp);
 		BU_PUT(gedp->i->ged_gdp, struct ged_drawable);

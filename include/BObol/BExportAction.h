@@ -29,6 +29,7 @@ class BObolLodService;
 class SoBRLDatabaseSource;
 class SoBRLMeshShape;
 struct db_i;
+struct BObolRealizedShapeSummary;
 
 class BOBOL_EXPORT SoBRLExportAction : public SoAction {
     typedef SoAction inherited;
@@ -67,6 +68,8 @@ public:
 	int sharedSource;
 	int nonDatabaseSource;
 	int drawMode;
+	SbString ownerSourceInstanceKey;
+	float transparency;
 	SbString recordRole;
 	SbString geometryKind;
 	int regionId;
@@ -82,6 +85,8 @@ public:
 	int ghosted;
 	int hiddenLine;
 	int editEmphasis;
+	int lineStyle;
+	int lineWidth;
 	SbString editIntentId;
 	SbString editIntentRole;
 	uint32_t lodPolicy;
@@ -110,6 +115,8 @@ public:
 	int sharedSource;
 	int nonDatabaseSource;
 	int drawMode;
+	SbString ownerSourceInstanceKey;
+	float transparency;
 	SbString recordRole;
 	SbString geometryKind;
 	int regionId;
@@ -158,6 +165,8 @@ public:
 	int sharedSource;
 	int nonDatabaseSource;
 	int drawMode;
+	SbString ownerSourceInstanceKey;
+	float transparency;
 	SbString recordRole;
 	SbString geometryKind;
 	int regionId;
@@ -215,6 +224,8 @@ public:
 	int sharedSource;
 	int nonDatabaseSource;
 	int drawMode;
+	SbString ownerSourceInstanceKey;
+	float transparency;
 	SbString recordRole;
 	SbString geometryKind;
 	int selected;
@@ -355,8 +366,9 @@ private:
 	    int materialColorValid, const SbColor &materialColor,
 	    const SbString &materialShader, int primitiveIndex,
 	    int selected, int highlighted, int ghosted,
-	    int hiddenLine, int editEmphasis,
-	    const SbString &editIntentId,
+	int hiddenLine, int editEmphasis,
+	int lineStyle, int lineWidth,
+	const SbString &editIntentId,
 	    const SbString &editIntentRole,
 	    uint32_t lodPolicy,
 	    int colorOverride, const SbColor &color,
@@ -394,6 +406,9 @@ private:
 	    const SbVec3f &lodBoundsMax,
 	    int colorOverride, const SbColor &color,
 	    const SbVec3f &a, const SbVec3f &b, const SbVec3f &c);
+    void applyLastLineMetadata(const BObolRealizedShapeSummary &summary);
+    void applyLastPointMetadata(const BObolRealizedShapeSummary &summary);
+    void applyLastTriangleMetadata(const BObolRealizedShapeSummary &summary);
 
     std::vector<LineRecord> lines;
     std::vector<PointRecord> points;

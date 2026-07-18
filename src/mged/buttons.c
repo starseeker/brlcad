@@ -407,7 +407,7 @@ mged_button_vrestore(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUS
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
      /* restore to saved view */
     if (vsaved) {
 	point_t saved_center;
@@ -431,7 +431,7 @@ mged_button_vsave(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
      /* save current view */
     sav_vscale = bv_scale_get(mged_view_context_view_const(view_ctx));
     bv_rotation_get(sav_viewrot, mged_view_context_view_const(view_ctx));

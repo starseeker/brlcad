@@ -43,7 +43,7 @@ ged_draw_dbpath_skip_lead_slash(const char *s)
 }
 
 const char *
-ged_draw_stale_reason_name(ged_draw_stale_reason reason)
+ged_draw_source_stale_reason_name(ged_draw_stale_reason reason)
 {
     switch (reason) {
 	case GED_DRAW_STALE_NONE:

@@ -33,7 +33,6 @@
 #include "rt/geom.h"
 #include "rt/primitives/brep.h"
 #include "rt/view.h"
-#include "../librt/librt_private.h"
 #include "./ged_private.h"
 #include "./ged_draw_private.h"
 

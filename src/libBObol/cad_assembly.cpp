@@ -231,7 +231,7 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     for (SoBRLDatabaseSource *source : sources) {
 	signature ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(source));
 	signature *= 1099511628211ULL;
-	signature ^= source->cadBatchRevision;
+	signature ^= source->cadBatchRevisionGet();
 	signature *= 1099511628211ULL;
 	structureSignature ^=
 	    source ? source->cadBatchStructureSignature() : 0;

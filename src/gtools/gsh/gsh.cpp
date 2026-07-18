@@ -170,7 +170,7 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
     l = 0;
     g = 0;
     r = 0;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return false;
 
@@ -202,7 +202,7 @@ DisplayHash::hash(struct ged *gedp, bool db_index_check, bool qged_display_mode)
 void
 DisplayHash::dirty(struct ged *gedp, const DisplayHash &o)
 {
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return;
 
@@ -258,16 +258,24 @@ private:
  * headless host factory so capture and progressive presentation have an
  * endpoint-owned rendering/context lifecycle. */
 static int
-gsh_headless_endpoint_ensure(struct ged *gedp, void *view_ctx,
+gsh_headless_endpoint_ensure(struct ged *gedp, struct ged_view_context *view_ctx,
 	int sync_current_scene)
 {
-    if (!gedp || !view_ctx ||
-	!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx,
-	    sync_current_scene))
+    if (!gedp || !view_ctx)
 	return 0;
 
     bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
+    if (!endpoint) {
+	endpoint = bobol_display_endpoint_create(NULL, 0);
+	if (!endpoint)
+	    return 0;
+	if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	    bobol_display_endpoint_destroy(endpoint);
+	    return 0;
+	}
+    }
+    (void)sync_current_scene;
     if (!endpoint)
 	return 0;
 
@@ -316,7 +324,7 @@ gsh_headless_endpoint_ensure(struct ged *gedp, void *view_ctx,
 }
 
 static BObolWindowHost *
-gsh_headless_endpoint_host(void *view_ctx)
+gsh_headless_endpoint_host(struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint = view_ctx ?
 	ged_view_context_display_endpoint_get(view_ctx) : NULL;
@@ -345,7 +353,7 @@ gsh_post_opendb_clbk(int UNUSED(argc), const char **UNUSED(argv), void *UNUSED(g
     s->gfile = std::string(s->gedp->dbip->dbi_filename);
 
 
-    void *view_ctx = ged_view_active_ctx(s->gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(s->gedp);
     if (!view_ctx || !gsh_headless_endpoint_ensure(s->gedp, view_ctx, 0))
 	return BRLCAD_ERROR;
     BObolWindowHost *host = gsh_headless_endpoint_host(view_ctx);
@@ -459,7 +467,7 @@ GshState::GshState()
     BU_GET(gedp, struct ged);
     ged_init(gedp);
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx || !gsh_headless_endpoint_ensure(gedp, view_ctx, 0))
 	bu_log("gsh: unable to create the headless Obol display endpoint\n");
 
@@ -655,7 +663,7 @@ GshState::view_update()
 
     hashes.dirty(gedp, prev_hash);
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return;
 
@@ -664,7 +672,7 @@ GshState::view_update()
 	return;
 
     if (qged_display_mode &&
-	!ged_draw_obol_controller_opaque_for_view(view_ctx)) {
+	!ged_view_context_display_endpoint_get(view_ctx)) {
 	(void)gsh_headless_endpoint_ensure(gedp, view_ctx, 1);
 	struct ged_draw_transaction txn =
 	    ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
@@ -676,7 +684,7 @@ GshState::view_update()
      * used by headless capture.  In particular, ert enables framebuffer
      * underlay in bv; publishing stream pixels alone cannot make that image
      * part of the Obol render root. */
-    (void)ged_draw_obol_view_context_faceplate_sync(gedp, view_ctx);
+    (void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
 
     /* ERT/fbserv traffic updates the shared view refresh state in every GSH
      * mode.  Publish it here so headless delay pumping can expose in-flight

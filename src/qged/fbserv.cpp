@@ -292,7 +292,7 @@ qged_fbserv_configure_ged_handlers(struct ged *gedp, QgView *display)
     if (!gedp || !gedp->ged_fbs || !display || !display->displayEndpoint())
 	return;
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx || !ged_view_context_display_endpoint_set(view_ctx,
 	display->displayEndpoint(), 0)) {
 	bu_log("qged fbserv: unable to associate the active endpoint\n");

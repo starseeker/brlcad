@@ -249,8 +249,10 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgViewType::SW);
     view.resize(200, 200);
-	ged_view_active_ctx_set(gedp, view.viewContext());
-	(void)ged_view_context_host_attach(gedp, view.viewContext());
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    (void)ged_view_context_host_attach(gedp, view_ctx);
 
     BObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -260,7 +262,7 @@ main(int argc, char **argv)
 
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view.viewContext();
+    draw_box.view = view_ctx;
     if (!apply_and_sync(gedp, &view, &draw_box))
 	FAIL("GED wire draw should sync box source into Obol");
 

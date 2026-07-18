@@ -166,19 +166,19 @@ mged_highlight_set_shape_ref(struct mged_state *s, ged_draw_shape_ref ref)
 {
     /* The visual highlight is scene-wide, while interaction selection belongs
      * to the active view that initiated the illuminate action. */
-    void *view_ctx = view_state ? view_state->vs_gvp : NULL;
+    struct ged_view_context *view_ctx = view_state ? view_state->vs_gvp : NULL;
     if (!s || !s->gedp || ged_draw_shape_ref_is_null(ref)) {
 	mged_highlight.shape = GED_DRAW_SHAPE_REF_NULL;
 	if (s && s->gedp) {
 	    ged_draw_set_highlighted_shape_ref(s->gedp, GED_DRAW_SHAPE_REF_NULL);
-	    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+	    (void)ged_view_selection_set_highlight(s->gedp,
 		    view_ctx, GED_DRAW_SHAPE_REF_NULL);
 	}
 	return;
     }
     mged_highlight.shape = ref;
     ged_draw_set_highlighted_shape_ref(s->gedp, ref);
-    (void)ged_draw_view_selection_set_highlighted_shape_ref(s->gedp,
+    (void)ged_view_selection_set_highlight(s->gedp,
 	    view_ctx, mged_highlight.shape);
 }
 
@@ -285,7 +285,7 @@ wrt_view(struct mged_state *s, mat_t out, const mat_t change, const mat_t in)
 {
     static mat_t t1, t2;
     mat_t view_center;
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
     bv_center_mat_get(view_center, view);

@@ -38,7 +38,7 @@ mged_hud_capacity_grow(void **storage, size_t *capacity, size_t count,
 
 void
 mged_hud_builder_init(struct mged_hud_builder *builder,
-	void *view_ctx, const char *prefix)
+	struct ged_view_context *view_ctx, const char *prefix)
 {
     if (!builder)
 	return;
@@ -150,13 +150,13 @@ mged_hud_label_add(struct mged_hud_builder *builder,
 	return 0;
     if (!mged_hud_capacity_grow((void **)&builder->labels,
 	    &builder->label_capacity, builder->label_count,
-	    sizeof(struct ged_draw_view_label_data), "MGED HUD labels"))
+	    sizeof(struct ged_annotation_label), "MGED HUD labels"))
 	return 0;
     builder->label_text = bu_realloc(builder->label_text,
 	builder->label_capacity * sizeof(char *), "MGED HUD label strings");
     size_t index = builder->label_count++;
     builder->label_text[index] = bu_strdup(text);
-    struct ged_draw_view_label_data label = GED_DRAW_VIEW_LABEL_DATA_INIT;
+    struct ged_annotation_label label = GED_ANNOTATION_LABEL_INIT;
     label.text = builder->label_text[index];
     VSET(label.point, x, y, 0.0);
     label.color_valid = 1;
@@ -175,21 +175,21 @@ mged_hud_builder_publish(struct mged_hud_builder *builder)
 
     struct bu_vls name = BU_VLS_INIT_ZERO;
     bu_vls_printf(&name, "%s/labels", builder->prefix);
-    int labels_ok = ged_draw_view_context_hud_labels_replace(
+    int labels_ok = ged_annotation_hud_labels_replace(
 	builder->view_ctx, bu_vls_cstr(&name), builder->labels,
 	builder->label_count, NULL);
 
-    struct ged_draw_view_line_layer_data *layers = NULL;
+    struct ged_annotation_line_layer *layers = NULL;
     if (builder->layer_count)
-	layers = (struct ged_draw_view_line_layer_data *)bu_calloc(
+	layers = (struct ged_annotation_line_layer *)bu_calloc(
 	    builder->layer_count, sizeof(*layers), "MGED HUD publish layers");
     for (size_t i = 0; i < builder->layer_count; i++) {
 	layers[i].name = builder->layers[i].name;
 	layers[i].points = (const point_t *)builder->layers[i].points;
 	layers[i].commands = builder->layers[i].commands;
 	layers[i].point_count = builder->layers[i].point_count;
-	layers[i].style = (struct ged_draw_view_feature_style)
-	    GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	layers[i].style = (struct ged_view_feature_style)
+	    GED_VIEW_FEATURE_STYLE_INIT;
 	layers[i].style.visible = 1;
 	layers[i].style.selectable = 0;
 	layers[i].style.color_valid = 1;
@@ -198,7 +198,7 @@ mged_hud_builder_publish(struct mged_hud_builder *builder)
 	layers[i].style.line_style = builder->layers[i].line_style;
     }
     bu_vls_sprintf(&name, "%s/lines", builder->prefix);
-    int lines_ok = ged_draw_view_context_hud_line_layers_replace(
+    int lines_ok = ged_annotation_hud_line_layers_replace(
 	builder->view_ctx, bu_vls_cstr(&name), layers,
 	builder->layer_count, NULL);
     bu_free(layers, "MGED HUD publish layers");

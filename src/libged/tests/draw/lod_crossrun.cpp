@@ -53,6 +53,9 @@
 #include <fstream>
 #include <thread>
 
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BLodService.h"
+#include "BObol/BViewController.h"
 #include <bu.h>
 #include "rt/view.h"
 #include "view_test_util.h"
@@ -68,18 +71,25 @@ extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory
 static int
 wait_for_lod_service(struct ged *gedp, int timeout_ms)
 {
-    void *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
-    ged_draw_obol_lod_service_status_t status;
-    if (!view_ctx ||
-	    !ged_draw_obol_lod_service_status(gedp, view_ctx, &status))
+    struct ged_view_context *view_ctx = gedp ? ged_view_active_ctx(gedp) : NULL;
+    bobol_display_endpoint_t *endpoint = view_ctx ?
+	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+    BObolViewController *controller = endpoint ?
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
+    if (!controller)
 	return 1;
 
     for (int elapsed = 0; elapsed <= timeout_ms; elapsed += 25) {
-	memset(&status, 0, sizeof(status));
-	if (!ged_draw_obol_lod_service_poll(gedp, view_ctx, 64, &status))
-	    return 0;
-	if (status.in_flight == 0 && status.pending_tasks == 0 &&
-		status.queued_cache_writes == 0 && status.delayed_tasks == 0)
+	if (controller->hasPendingLodResults())
+	    (void)controller->processPendingLodResults(64);
+	if (controller->isLodAutoSubmitEnabled())
+	    (void)controller->submitLodRequestsIfNeeded();
+	BObolLodService *service = controller->getLodService();
+	if (!service || (service->inFlightCount() == 0 &&
+		service->pendingTaskCountForDiagnostics() == 0 &&
+		service->queuedCacheWriteCountForDiagnostics() == 0 &&
+		service->delayedTaskCountForDiagnostics() == 0))
 	    return 1;
 	std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
@@ -100,7 +110,7 @@ open_and_attach(const char *gfile)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     bv_dimensions_set(DRAW_TEST_BV(v), 512, 512);
     const char *s_av[7] = {
 	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
@@ -124,7 +134,7 @@ open_and_attach(const char *gfile)
 static int
 render_to_file(struct ged *gedp, const char *outfile)
 {
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     ged_db_index_refresh(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);

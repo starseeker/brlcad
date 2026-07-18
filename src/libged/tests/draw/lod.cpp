@@ -44,7 +44,7 @@ extern "C" int img_not_empty(int id, struct ged *gedp, const char *cdir, bool cl
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
 
 static void
-wait_for_progressive_draw(struct ged *gedp, void *view_ctx)
+wait_for_progressive_draw(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     if (!draw_test_obol_progressive_drain(gedp, view_ctx, 2000, 1))
 	bu_exit(EXIT_FAILURE,
@@ -132,7 +132,7 @@ main(int ac, char *av[]) {
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
     /* Image baselines use the GED-owned headless Obol render endpoint. */
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "failed to initialize headless Obol render endpoint\n");
 

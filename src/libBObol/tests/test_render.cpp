@@ -10,6 +10,9 @@
 #include "bu/app.h"
 
 #include "BObol.h"
+#include "BObol/BHUDLabelOverlay.h"
+#include "BObol/BRealizeAction.h"
+#include "BObol/BVListShape.h"
 
 #include <Inventor/SbColor.h>
 #include <Inventor/SbString.h>

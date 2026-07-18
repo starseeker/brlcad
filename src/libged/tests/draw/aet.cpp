@@ -37,12 +37,13 @@
 
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
 extern "C" int draw_test_obol_screengrab_view_if_enabled(struct ged *gedp,
-	void *view_ctx, int id, const char *filename);
+	struct ged_view_context *view_ctx, int id, const char *filename);
 void
 dm_refresh(struct ged *gedp, int vnum)
 {
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
+    struct ged_view_context *v = views ?
+	(struct ged_view_context *)BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	return;
     if (!draw_test_obol_progressive_drain(gedp, v, 2000, 1))
@@ -73,7 +74,8 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, int soft_fail,
     dm_refresh(gedp, vnum);
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
+    struct ged_view_context *v = views ?
+	(struct ged_view_context *)BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
     if (draw_test_obol_screengrab_view_if_enabled(gedp, v, id,
@@ -193,7 +195,7 @@ main(int ac, char *av[]) {
     gedp = ged_open("db", "moss_aet_tmp.g", 1);
 
     // We don't want the default GED views for this test
-    void *view_set_ctx = ged_view_set_ctx(gedp);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
     ged_view_set_context_remove(view_set_ctx, NULL);
 
     // Set up the views.  Unlike the other drawing tests, we are explicitly
@@ -201,7 +203,7 @@ main(int ac, char *av[]) {
     // set up multiples.  We'll start out with four non-independent views,
     // to mimic the most common multi-dm/view display - a Quad view widget.
     // Each view gets its own attached headless Obol display host.
-    void *views[4];
+    struct ged_view_context *views[4];
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);

@@ -104,7 +104,7 @@ class QPolyCreate : public QWidget
     private:
 	bg_clip_t op = bg_Union;
 	int poly_cnt = 0;
-	ged_draw_view_polygon_ref p = GED_DRAW_VIEW_POLYGON_REF_NULL_INIT;
+	ged_polygon_ref p = GED_POLYGON_REF_NULL_INIT;
 	bool do_bool = false;
 
 	QgPolyFilter *cf = NULL;

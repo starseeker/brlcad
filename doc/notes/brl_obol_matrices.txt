@@ -49,12 +49,12 @@ mesh point arrays published to a database source must not have the source
 and is applied explicitly by traversal, bounds, autoview, and export/pick/snap
 code that needs scene coordinates.
 
-Database realization follows the same rule.  `db_walk_tree` supplies path,
-material/region state, and member transforms; libBObol refetches drawable
-primitive geometry with an identity matrix for cache misses, builds shared
-local geometry, and gives each visible leaf an explicit instance transform.
-The visible leaf shape keeps path identity and draw/edit state, while the
-shared node is geometry only.
+Database realization follows the same rule.  `db_walk_tree_leaf_instances`
+supplies path, material/region state, member transforms, and a directory entry
+before importing the leaf.  On cache misses libBObol performs one owned
+local-space primitive import, builds shared local geometry, and gives each
+visible leaf an explicit instance transform.  The visible leaf shape keeps path
+identity and draw/edit state, while the shared node is geometry only.
 
 Repeated instances of the same primitive or comb tree must reuse that local
 geometry when they can.  The current realization action seeds its temporary
@@ -70,7 +70,7 @@ paths, not internal suffixed Obol instance paths.  Visibility and highlight
 updates therefore apply consistently to all matching repeated leaf instances
 for the requested object family.  Narrow refresh of one realized source uses
 the explicit `SoBRLDatabaseSource::instanceKey` path through
-`SoBRLSceneController::markDatabaseSourceInstanceStale`; realization then
+`BObolSceneController::markDatabaseSourceInstanceStale`; realization then
 keeps geometry source-local and can seed rebuilt instances from current
 siblings.
 

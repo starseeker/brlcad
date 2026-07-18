@@ -35,39 +35,46 @@
 
 #ifdef __cplusplus
 class BObolViewAttachment;
+
+/* Value-handle owner identities.  The low bit records local/shared scope;
+ * the remaining bits identify a live GED view host record. */
+GED_EXPORT extern uint64_t ged_view_context_reference_owner(
+	const struct ged_view_context *view_ctx, int local);
+GED_EXPORT extern struct ged_view_context *ged_view_context_from_reference_owner(
+	uint64_t owner, int *local);
 GED_EXPORT extern BObolViewAttachment *ged_view_context_obol_attachment(
-	const void *view_ctx);
+	const struct ged_view_context *view_ctx);
 GED_EXPORT extern int ged_view_context_obol_attachment_bind(
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	BObolViewAttachment *attachment);
 GED_EXPORT extern int ged_view_context_obol_attachment_unbind(
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	BObolViewAttachment *attachment);
 #endif
 
 __BEGIN_DECLS
 
-enum ged_draw_view_selection_kind {
-    GED_DRAW_VIEW_SELECTION_ALL = -1,
-    GED_DRAW_VIEW_SELECTION_SELECTED_PATH = 0,
-    GED_DRAW_VIEW_SELECTION_HIGHLIGHTED_REF = 1
+enum ged_selection_kind {
+    GED_SELECTION_ALL = -1,
+    GED_SELECTION_SELECTED_PATH = 0,
+    GED_SELECTION_HIGHLIGHTED_REF = 1
 };
 
-GED_EXPORT extern int ged_draw_view_context_selection_available(void *view_ctx);
-GED_EXPORT extern int ged_draw_view_context_selection_contains_path(
-	void *view_ctx,
-	enum ged_draw_view_selection_kind kind,
+GED_EXPORT extern int ged_selection_available(struct ged_view_context *view_ctx);
+GED_EXPORT extern int ged_selection_contains_path(
+	struct ged_view_context *view_ctx,
+	enum ged_selection_kind kind,
 	const char *path);
-GED_EXPORT extern int ged_draw_view_context_selection_add_path(
-	void *view_ctx,
-	enum ged_draw_view_selection_kind kind,
+GED_EXPORT extern int ged_selection_add_path(
+	struct ged_view_context *view_ctx,
+	enum ged_selection_kind kind,
 	const char *path);
-GED_EXPORT extern int ged_draw_view_context_selection_set_path(
-	void *view_ctx,
-	enum ged_draw_view_selection_kind kind,
+GED_EXPORT extern int ged_selection_set_path(
+	struct ged_view_context *view_ctx,
+	enum ged_selection_kind kind,
 	const char *path);
-GED_EXPORT extern void ged_draw_view_context_lod_bounds_callback_set(void *view_ctx);
-GED_EXPORT extern int ged_draw_view_context_lod_bounds_callback_is(const void *view_ctx);
+GED_EXPORT extern void ged_draw_source_lod_bounds_callback_set(struct ged_view_context *view_ctx);
+GED_EXPORT extern int ged_draw_source_lod_bounds_callback_is(const struct ged_view_context *view_ctx);
 
 __END_DECLS
 

@@ -283,7 +283,7 @@ draw_edges(struct ged *gedp, struct rt_bot_internal *bot, int num_edges, int edg
 
     struct bu_vls nroot = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&nroot, "bot_check::%s", draw_name);
-    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
     style.color_valid = 1;
     VSET(style.color, draw_color[0], draw_color[1], draw_color[2]);
     (void)_ged_line_set_publish_command_scene_feature(gedp,

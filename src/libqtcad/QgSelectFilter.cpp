@@ -44,11 +44,11 @@ extern "C" {
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 
-static void *
+static struct ged_view_context *
 qg_select_filter_view_context(const QgSelectFilter *filter)
 {
     QgView *display = filter ? filter->view_widget() : nullptr;
-    return display ? display->viewContext() : nullptr;
+    return display ? ged_view_context_from_bv(display->viewContext()) : nullptr;
 }
 
 static void
@@ -148,7 +148,7 @@ qg_select_semantic_event(QEvent *event, BObolInputAction *action,
 
 class QgSelectFilter::QgSelectFilterPrivate {
 public:
-    struct ged_draw_pick_result *selected_result = nullptr;
+    struct ged_pick_result *selected_result = nullptr;
     std::vector<std::string> selected_path_strings;
 };
 
@@ -177,8 +177,8 @@ _qg_pick_result_path(const void *result, size_t index)
 {
     struct bu_vls path = BU_VLS_INIT_ZERO;
     std::string ret;
-    if (ged_draw_pick_result_path(
-	    static_cast<const struct ged_draw_pick_result *>(result), index,
+    if (ged_pick_result_path(
+	    static_cast<const struct ged_pick_result *>(result), index,
 	    &path))
 	ret = bu_vls_cstr(&path);
     bu_vls_free(&path);
@@ -255,22 +255,22 @@ QgSelectFilter::clear_selected_result()
 
     m->selected_path_strings.clear();
     if (m->selected_result) {
-	ged_draw_pick_result_free(m->selected_result);
+	ged_pick_result_free(m->selected_result);
 	m->selected_result = nullptr;
     }
 }
 
 void
-QgSelectFilter::set_selected_result(struct ged_draw_pick_result *res)
+QgSelectFilter::set_selected_result(struct ged_pick_result *res)
 {
     clear_selected_result();
     if (!m)
 	return;
 
     m->selected_result = res;
-    void *v = qg_select_filter_view_context(this);
+    struct ged_view_context *v = qg_select_filter_view_context(this);
     if (v)
-	ged_draw_view_context_selection_set_pick_result(
+	ged_view_selection_set_pick(
 		v, m->selected_result,
 		_qg_append_unique_path_cb, &m->selected_path_strings);
 }
@@ -285,9 +285,9 @@ QgSelectFilter::set_selected_paths(const std::vector<std::string> &paths)
     for (const std::string &path : paths)
 	_qg_append_unique_path(m->selected_path_strings, path.c_str());
 
-    void *v = qg_select_filter_view_context(this);
+    struct ged_view_context *v = qg_select_filter_view_context(this);
     if (v)
-	ged_draw_view_context_selection_clear(v);
+	ged_view_selection_clear(v);
 }
 
 bool
@@ -310,7 +310,7 @@ QgSelectPntFilter::applySemanticInput(BObolInputAction action,
     if (event->button != 0)
 	return true;
 
-    void *v = qg_select_filter_view_context(this);
+    struct ged_view_context *v = qg_select_filter_view_context(this);
     if (!v)
 	return true;
 
@@ -336,10 +336,10 @@ QgSelectPntFilter::applySemanticInput(BObolInputAction action,
 	return true;
     }
 
-    struct ged_draw_pick_result *res = first_only ?
-	ged_draw_view_context_pick_nearest(v,
+    struct ged_pick_result *res = first_only ?
+	ged_pick_nearest(v,
 		sx, sy) :
-	ged_draw_view_context_pick_point(v, sx,
+	ged_pick_point(v, sx,
 		sy, 0);
     set_selected_result(res);
 
@@ -361,12 +361,12 @@ QgSelectBoxFilter::applySemanticInput(BObolInputAction action,
 {
     if (!event)
 	return false;
-    void *v = qg_select_filter_view_context(this);
+    struct ged_view_context *v = qg_select_filter_view_context(this);
     if (!v) {
 	return false;
     }
-    void *view_ctx = v;
-    struct bv *view = bv_context_view(static_cast<struct bv_context *>(v));
+    struct ged_view_context *view_ctx = v;
+    struct bv *view = bv_context_view(ged_view_context_bv(v));
     if (!view) {
 	return false;
     }
@@ -474,12 +474,12 @@ QgSelectBoxFilter::applySemanticInput(BObolInputAction action,
 	    return true;
 	}
 
-	struct ged_draw_pick_result *res =
-	    ged_draw_view_context_pick_rect(view_ctx, ipx, ipy, sx, sy);
-	if (first_only && res && ged_draw_pick_result_count(res) > 1) {
-	    struct ged_draw_pick_result *nearest =
-		ged_draw_pick_result_filter_first(res);
-	    ged_draw_pick_result_free(res);
+	struct ged_pick_result *res =
+	    ged_pick_rect(view_ctx, ipx, ipy, sx, sy);
+	if (first_only && res && ged_pick_result_count(res) > 1) {
+	    struct ged_pick_result *nearest =
+		ged_pick_result_filter_first(res);
+	    ged_pick_result_free(res);
 	    res = nearest;
 	}
 	set_selected_result(res);
@@ -555,17 +555,17 @@ _ovlp_record(struct application *ap, struct partition *pp, struct region *reg1, 
     return 1;
 }
 
-static struct ged_draw_pick_result *
-_qg_pick_result_from_ray_hits(const struct ged_draw_pick_result *candidates,
+static struct ged_pick_result *
+_qg_pick_result_from_ray_hits(const struct ged_pick_result *candidates,
 			      const struct select_rec_state *rc,
 			      int first_only)
 {
-    struct ged_draw_pick_result *res = ged_draw_pick_result_create();
+    struct ged_pick_result *res = ged_pick_result_create();
     if (!res || !candidates || !rc)
 	return res;
 
     std::unordered_set<std::string> seen_paths;
-    for (size_t i = 0; i < ged_draw_pick_result_count(candidates); i++) {
+    for (size_t i = 0; i < ged_pick_result_count(candidates); i++) {
 	std::string key = _qg_normalize_path(_qg_pick_result_path(candidates, i).c_str());
 	if (key.empty())
 	    continue;
@@ -581,12 +581,12 @@ _qg_pick_result_from_ray_hits(const struct ged_draw_pick_result *candidates,
 	if (!seen_paths.insert(key).second)
 	    continue;
 
-	fastf_t hit_dist = ged_draw_pick_result_hit_dist(candidates, i);
+	fastf_t hit_dist = ged_pick_result_hit_dist(candidates, i);
 	std::unordered_map<std::string, fastf_t>::const_iterator h_it = rc->hits.find(key);
 	if (h_it != rc->hits.end())
 	    hit_dist = h_it->second;
 
-	ged_draw_pick_result_append_copy(res, candidates, i, hit_dist);
+	ged_pick_result_append_copy(res, candidates, i, hit_dist);
 
 	if (first_only)
 	    break;
@@ -596,9 +596,9 @@ _qg_pick_result_from_ray_hits(const struct ged_draw_pick_result *candidates,
 }
 
 static bool
-_qg_select_ray_from_view(void *v, int sx, int sy, point_t origin, vect_t direction)
+_qg_select_ray_from_view(struct ged_view_context *v, int sx, int sy, point_t origin, vect_t direction)
 {
-    const struct bv *view = bv_context_view_const(static_cast<const struct bv_context *>(v));
+    const struct bv *view = bv_context_view_const(ged_view_context_bv_const(v));
     if (!view || !origin || !direction)
 	return false;
 
@@ -643,7 +643,7 @@ QgSelectRayFilter::applySemanticInput(BObolInputAction action,
 {
     if (!event)
 	return false;
-    void *v = qg_select_filter_view_context(this);
+    struct ged_view_context *v = qg_select_filter_view_context(this);
 	if (!v) {
 	return false;
 	}
@@ -707,11 +707,11 @@ QgSelectRayFilter::applySemanticInput(BObolInputAction action,
 	return true;
     }
 
-    struct ged_draw_pick_result *candidates =
-	ged_draw_view_context_pick_point(v, sx,
+    struct ged_pick_result *candidates =
+	ged_pick_point(v, sx,
 		sy, 0);
     size_t candidate_count = candidates ?
-	ged_draw_pick_result_count(candidates) : 0;
+	ged_pick_result_count(candidates) : 0;
     if (!candidates || !candidate_count) {
 	set_selected_result(candidates);
 	return true;
@@ -744,7 +744,7 @@ QgSelectRayFilter::applySemanticInput(BObolInputAction action,
 	rt_i_destroy(rtip);
 	BU_PUT(resp, struct resource);
 	BU_PUT(ap, struct application);
-	ged_draw_pick_result_free(candidates);
+	ged_pick_result_free(candidates);
 	return false;
     }
     size_t ncpus = bu_avail_cpus();
@@ -769,9 +769,9 @@ QgSelectRayFilter::applySemanticInput(BObolInputAction action,
     BU_PUT(resp, struct resource);
     BU_PUT(ap, struct application);
 
-    struct ged_draw_pick_result *res =
+    struct ged_pick_result *res =
 	_qg_pick_result_from_ray_hits(candidates, &rc, first_only);
-    ged_draw_pick_result_free(candidates);
+    ged_pick_result_free(candidates);
     set_selected_result(res);
 
     return true;

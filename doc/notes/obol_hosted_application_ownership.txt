@@ -1,7 +1,7 @@
 Obol Hosted Application Ownership Matrix
 ========================================
 
-Last reviewed: 2026-07-15
+Last reviewed: 2026-07-18
 
 Purpose
 -------
@@ -12,6 +12,37 @@ GED view context, display endpoint, Obol controller, and native host.  The
 application owns its window and event loop only.  A row is source-audited when
 the named source establishes that chain; it is runtime-validated only when the
 listed test runs against an appropriate host.
+
+Canonical ownership and attachment
+----------------------------------
+
+::
+
+    application / GED owner
+      |
+      +-- owns struct ged
+      |     |
+      |     +-- owns one BObolSceneController (shared database/result scene)
+      |     |       +-- may be attached to endpoint A, B, ... (borrowed)
+      |     |
+      |     +-- owns each ged_view_context
+      |             |
+      |             +-- owns or borrows exactly one bobol_display_endpoint
+      |                         |
+      |                         +-- owns BObolViewController and local stores
+      |                         +-- owns or borrows one BObolWindowHost
+      |
+      +-- owns native windows and toolkit event loop
+
+The typed view context plus its endpoint is the sole attachment boundary.
+Endpoint replacement first binds the populated shared scene to the new
+endpoint, preserves the view-local camera and presentation contract, then
+detaches and destroys the old endpoint according to its ownership flag.  View
+destruction detaches its endpoint before releasing the view context.  GED
+destruction first tears down all views/endpoints and then its one shared scene.
+Scene ownership is never transferred by attach, replace, or detach.  A hidden
+view remains a complete context/endpoint pair; visibility does not change
+ownership.
 
 QGED
 ----

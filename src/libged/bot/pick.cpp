@@ -119,7 +119,7 @@ _bot_pick_ray(struct _ged_bot_ipick *gib, int argc, const char **argv,
 	VUNITIZE(dir);
     } else {
 	/* Get ray from GED viewport */
-	void *view_ctx = ged_view_active_ctx(gedp);
+	struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 	if (!view_ctx) {
 	    bu_vls_printf(gib->vls, "no viewport available and no ray specified\n");
 	    return BRLCAD_ERROR;

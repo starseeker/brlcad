@@ -109,16 +109,10 @@ struct ged_drawable {
     uintptr_t                    gd_draw_next_observer_token;
     int                          gd_draw_observers_init;
     int                          gd_draw_observer_dispatch_depth;
-    void                        *gd_obol_scene_controller; /**< @brief active SoBRLSceneController mirrored from GED draw transactions */
-    void                        *gd_obol_controller;    /**< @brief optional BObolViewController wrapper for command/view feature state */
-    ged_draw_observer_token       gd_obol_observer_token;
-    int                          gd_obol_scene_controller_owned; /**< @brief non-zero when libged owns gd_obol_scene_controller */
-    int                          gd_obol_controller_owned; /**< @brief non-zero when libged owns gd_obol_controller */
-    int                          gd_obol_scene_controller_full_sync; /**< @brief non-zero when gd_obol_scene_controller has a full draw-scene mirror */
-    void                        *gd_obol_attached_controllers; /**< @brief C++ registry of attached Obol controllers, optionally scoped to GED views */
-    void                        *gd_obol_preserved_sources; /**< @brief libged-owned detached Obol source inventory pending controller handoff */
-    struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-context tokens returned through opaque scene_ctx APIs */
+    void                        *gd_obol_state; /**< @brief C++ owner for the shared Obol scene */
+    struct bu_ptbl               gd_obol_context_tokens; /**< @brief GED-owned Obol scene-node records resolved by value handles */
     int                          gd_obol_context_tokens_init;
+    uint64_t                     gd_obol_context_owner;
     uint64_t                     gd_obol_next_context_token;
     uintptr_t                    gd_highlight_token;     /**< @brief active highlighted draw-shape ref token, or 0 */
     uint64_t                     gd_highlight_scene_rev; /**< @brief draw-scene revision captured with gd_highlight_token */
@@ -149,13 +143,12 @@ struct ged_drawable {
 };
 
 __BEGIN_DECLS
-GED_EXPORT extern void ged_draw_obol_preserved_sources_free(struct ged *gedp);
 ged_draw_group_ref ged_scene_root_group_ref(struct ged *gedp);
 void ged_scene_root_group_ref_set(struct ged *gedp, ged_draw_group_ref root);
 void ged_scene_root_ref_clear(struct ged *gedp);
 void ged_view_state_init(struct ged *gedp);
 void ged_view_state_free(struct ged *gedp);
-int ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx);
+int ged_obol_fbserv_ensure_for_view(struct ged *gedp, struct ged_view_context *view_ctx);
 int ged_obol_fbserv_present(struct ged *gedp);
 int ged_obol_fbserv_composition_set(struct ged *gedp, int mode);
 void ged_obol_fbserv_release(struct ged *gedp);
@@ -297,7 +290,7 @@ GED_EXPORT extern void ged_draw_observers_free(struct ged *gedp);
 struct draw_data_t {
     struct ged *gedp;
     struct db_i *dbip;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     struct ged_draw_appearance_settings *vs;
     const struct bn_tol *tol;
     const struct bg_tess_tol *ttol;
@@ -315,6 +308,7 @@ struct draw_data_t {
     point_t max;
 #ifdef __cplusplus
     std::map<struct directory *, fastf_t> *s_size;
+    struct ged_bobol_publication_context *bobol_publication;
 #endif
 };
 
@@ -400,7 +394,7 @@ GED_EXPORT extern int _ged_line_set_publish_command_scene_feature(
 				       const point_t *points,
 				       const int *cmds,
 				       size_t point_count,
-				       const struct ged_draw_view_feature_style *style,
+				       const struct ged_view_feature_style *style,
 				       const char *owner_id,
 				       const char *owner_role,
 				       const char *remove_prefix,
@@ -415,7 +409,7 @@ GED_EXPORT extern int _ged_indexed_face_set_publish_command_scene_feature(
 				       size_t normal_count,
 				       const int *indices,
 				       size_t index_count,
-				       const struct ged_draw_view_feature_style *style,
+				       const struct ged_view_feature_style *style,
 				       const char *owner_id,
 				       const char *owner_role,
 				       const char *remove_prefix,

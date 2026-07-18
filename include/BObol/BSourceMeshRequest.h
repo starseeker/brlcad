@@ -76,6 +76,7 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
     SbVec3f lodBoundsMax;
     int colorOverride;
     SbColor color;
+    float transparency;
 
     BObolSourceMeshRequest(void)
     {
@@ -140,6 +141,7 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
 	lodBoundsMax = SbVec3f(0.0f, 0.0f, 0.0f);
 	colorOverride = 0;
 	color = SbColor(0.0f, 0.0f, 0.0f);
+	transparency = 0.0f;
     }
 };
 

@@ -141,7 +141,7 @@ brep_tikz(struct _ged_brep_info *gb, const char *outfile)
     bu_vls_printf(&tikz, "\\begin{document}\n\n");
     // Translate view az/el into tikz-3dplot variation
     vect_t view_aet;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx) {
 	bu_vls_free(&tikz);
 	return BRLCAD_ERROR;

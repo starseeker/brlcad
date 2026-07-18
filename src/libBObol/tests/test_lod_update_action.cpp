@@ -10,6 +10,17 @@
 #include "bu/str.h"
 
 #include "BObol.h"
+#include "BObol/BLodMeshShape.h"
+#include "BObol/BLodRealization.h"
+#include "BObol/BLodService.h"
+#include "BObol/BLodUpdateAction.h"
+#include "BObol/BMaterialObject.h"
+#include "BObol/BMeshLodCache.h"
+#include "BObol/BMeshLodSubmitAction.h"
+#include "BObol/BMeshResidencyAction.h"
+#include "BObol/BMeshShape.h"
+#include "BObol/BVListShape.h"
+#include "BObol/BViewLod.h"
 #include "bv.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -97,7 +108,7 @@ make_lod_mesh(const char *path, const char *name)
 }
 
 static int
-find_database_source_summary_by_instance(SoBRLSceneController &scene,
+find_database_source_summary_by_instance(BObolSceneController &scene,
 	const char *instanceKey,
 	BObolDatabaseSourceSummary &summary)
 {
@@ -996,7 +1007,7 @@ test_scene_database_source_summary(void)
     source->materialRevision = 55;
     root->addChild(source);
 
-    SoBRLSceneController scene(root);
+    BObolSceneController scene(root);
     const uint64_t initialStructuralRevision = scene.getStructuralRevision();
     const uint64_t initialFrameRevision = scene.getFrameRevision();
     BObolSceneSummary sceneSummary;
@@ -1832,7 +1843,7 @@ test_scene_database_source_summary(void)
 
     SoSeparator *groupRoot = new SoSeparator;
     groupRoot->ref();
-    SoBRLSceneController groupScene(groupRoot);
+    BObolSceneController groupScene(groupRoot);
     const uint64_t groupInitialStructuralRevision =
 	groupScene.getStructuralRevision();
     const uint64_t groupInitialFrameRevision = groupScene.getFrameRevision();
@@ -2436,7 +2447,7 @@ test_scene_database_source_summary(void)
     ownedRoot->ref();
     SoSeparator *ownedNonSourceChild = new SoSeparator;
     ownedRoot->addChild(ownedNonSourceChild);
-    SoBRLSceneController ownedScene(ownedRoot);
+    BObolSceneController ownedScene(ownedRoot);
     const uint64_t ownedInitialStructuralRevision =
 	ownedScene.getStructuralRevision();
     const uint64_t ownedInitialFrameRevision = ownedScene.getFrameRevision();

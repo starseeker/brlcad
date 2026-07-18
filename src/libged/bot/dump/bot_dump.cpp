@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <ctype.h>
+#include <vector>
 #include "bio.h"
 #include "bnetwork.h"
 
@@ -51,6 +52,10 @@
 #include "raytrace.h"
 
 #include "ged/draw.h"
+#include "BObol/BExportAction.h"
+#include "BObol/BViewController.h"
+#include <Inventor/SoViewport.h>
+#include "../../ged_bobol_private.hpp"
 #include "../../ged_private.h"
 #include "../ged_bot.h"
 #include "./ged_bot_dump.h"
@@ -518,14 +523,13 @@ viewdata_dump(struct _ged_bot_dump_client_data *d, struct ged *gedp, FILE *fp)
     return BRLCAD_OK;
 }
 
-static int
-botdump_export_record(const struct ged_draw_view_db_object_record *rec,
-		      void *data)
+static void
+botdump_export_record(const SoBRLExportAction::ObjectRecord &rec,
+	const SoBRLExportAction &export_action,
+	struct _ged_bot_dump_client_data *d)
 {
-    struct _ged_bot_dump_client_data *d =
-	(struct _ged_bot_dump_client_data *)data;
-    if (!rec || !d || !rec->is_database_source || !rec->path)
-	return 1;
+    if (!d || !rec.databaseIntent || rec.path.getLength() == 0)
+	return;
 
     struct db_i *dbip = d->gedp->dbip;
     struct directory *dp;
@@ -536,42 +540,59 @@ botdump_export_record(const struct ged_draw_view_db_object_record *rec,
 
     MAT_IDN(mat);
 
-    const char *path = rec->path;
+    const char *path = rec.path.getString();
     const char *leaf = path ? strrchr(path, '/') : NULL;
     leaf = leaf ? leaf + 1 : path;
     if (!leaf || !leaf[0])
-	return 1;
+	return;
     dp = db_lookup(dbip, leaf, LOOKUP_QUIET);
     if (!dp)
-	return 1;
+	return;
 
     /* get the internal form */
     ret = rt_db_get_internal(&intern, dp, dbip, mat);
 
     if (ret < 0) {
 	bu_log("rt_get_internal failure %d on %s\n", ret, dp->d_namep);
-	return 1;
+	return;
     }
 
     if (ret != ID_BOT) {
 	bu_log("%s is not a bot (ignored)\n", dp->d_namep);
 	rt_db_free_internal(&intern);
-	return 1;
+	return;
     }
 
     /* Write out object color */
     if (d->output_type == OTYPE_OBJ) {
+	SbColor color = rec.color;
+	if (!rec.lineIndices.empty()) {
+	    const SoBRLExportAction::LineRecord &line =
+		export_action.getLine(rec.lineIndices.front());
+	    color = line.colorOverride ? line.color :
+		(line.materialColorValid ? line.materialColor : line.color);
+	} else if (!rec.pointIndices.empty()) {
+	    const SoBRLExportAction::PointRecord &point =
+		export_action.getPoint(rec.pointIndices.front());
+	    color = point.colorOverride ? point.color :
+		(point.materialColorValid ? point.materialColor : point.color);
+	} else if (!rec.triangleIndices.empty()) {
+	    const SoBRLExportAction::TriangleRecord &triangle =
+		export_action.getTriangle(rec.triangleIndices.front());
+	    color = triangle.colorOverride ? triangle.color :
+		(triangle.materialColorValid ? triangle.materialColor :
+		 triangle.color);
+	}
 	d->curr_obj_color_valid = 1;
-	d->curr_obj_red = rec->color[0];
-	d->curr_obj_green = rec->color[1];
-	d->curr_obj_blue = rec->color[2];
-	d->curr_obj_alpha = rec->transparency;
+	d->curr_obj_red = color[0] * 255.0f;
+	d->curr_obj_green = color[1] * 255.0f;
+	d->curr_obj_blue = color[2] * 255.0f;
+	d->curr_obj_alpha = rec.transparency;
     }
 
     bot = (struct rt_bot_internal *)intern.idb_ptr;
     _ged_bot_dump(d, dp, NULL, bot);
     rt_db_free_internal(&intern);
-    return 1;
 }
 
 static void
@@ -579,11 +600,20 @@ dl_botdump(struct _ged_bot_dump_client_data *d)
 {
     if (!d || !d->gedp)
 	return;
-    void *view_ctx = ged_view_active_ctx(d->gedp);
-    if (!view_ctx)
+    struct ged_view_context *view_ctx = ged_view_active_ctx(d->gedp);
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!view_ctx || !controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
 	return;
-    ged_draw_foreach_visible_view_db_object_record(view_ctx,
-	    botdump_export_record, d);
+    SoBRLExportAction export_action;
+    export_action.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
+    export_action.apply(controller->getViewport()->getRoot());
+    std::vector<SoBRLExportAction::ObjectRecord> records;
+    export_action.collectObjectRecords(records,
+	SoBRLExportAction::QUERY_VISIBLE_ONLY |
+	SoBRLExportAction::QUERY_DATABASE_OBJECTS);
+    for (const SoBRLExportAction::ObjectRecord &record : records)
+	botdump_export_record(record, export_action, d);
 }
 
 void

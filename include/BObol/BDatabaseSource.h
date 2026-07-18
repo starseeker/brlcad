@@ -10,7 +10,6 @@
 #define BOBOL_BDATABASESOURCE_H
 
 #include "BObol/BDefines.h"
-#include "BObol/BMeshLodCache.h"
 #include "BObol/BSourceMeshRequest.h"
 #include "BObol/BViewLod.h"
 
@@ -49,6 +48,7 @@ class SoGLRenderAction;
 class SoRayPickAction;
 class SoSensor;
 struct db_i;
+struct BObolMeshLod;
 struct db_full_path;
 struct rt_db_internal;
 struct bg_tess_tol;
@@ -178,6 +178,13 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbBool materialColorValid;
     SbColor materialColor;
     SbString materialShader;
+    /* Effective compact-instance presentation after selected/highlighted
+     * state has been applied. */
+    SbBool appearanceColorValid;
+    SbColor appearanceColor;
+    int lineStyle;
+    int lineWidth;
+    float transparency;
     SbBool wireGeometry;
     SbBool pointGeometry;
     SbBool meshGeometry;
@@ -361,6 +368,9 @@ struct BOBOL_EXPORT BObolRealizedShapeSummary {
     SbBool ghosted;
     SbBool hiddenLine;
     SbBool editEmphasis;
+    int lineStyle;
+    int lineWidth;
+    float transparency;
     SbString editIntentId;
     SbString editIntentRole;
     uint32_t lodPolicy;
@@ -830,6 +840,14 @@ public:
      * vector export without constructing per-occurrence Coin shape nodes. */
     SbBool copyCompactWireGeometry(std::vector<SbVec3f> &points,
 	std::vector<int32_t> &commands) const;
+    /* Copy one compact occurrence into source coordinates for a transient
+     * selection/edit presentation.  The compact index remains authoritative
+     * and retains no Coin shape for this operation. */
+    SbBool copyCompactInstanceEditGeometry(
+	const BObolCompactInstanceHandle &handle,
+	std::vector<SbVec3f> &points,
+	std::vector<int32_t> &commands,
+	BObolCompactInstanceSummary &summary) const;
     SbBool getCompactInstanceSummary(
 	const BObolCompactInstanceHandle &handle,
 	BObolCompactInstanceSummary &summary) const;
@@ -929,6 +947,7 @@ private:
     void ensureCompiledAssemblyChild(void);
     void markCompiledAssemblyDirty(void);
     void markCadBatchDirty(void);
+    uint64_t cadBatchRevisionGet(void) const;
     void clearCompactInstanceIndex(void);
     void discardCompactInstanceHistory(void);
     void installCompactInstanceIndex(
@@ -948,37 +967,8 @@ private:
     int snapCompactInstances(SoBRLSnapAction *action,
 	const SbMatrix &parentToWorld);
 
-    struct db_i *dbip;
-    struct BObolMeshLod *meshLod;
-    SoBRLCadAssembly *compiledAssembly;
-    struct BObolCompactInstanceIndex *compactIndex;
-    struct BObolCompactInstanceIndex *previousCompactIndex;
-    uint64_t compactHandleSourceId;
-    uint64_t cadBatchRevision;
-    SbBool compiledAssemblyDirty;
-    SbBool compiledAssemblyActive;
-    SbUniqueId compiledAssemblyNodeId;
-    uint64_t compiledCompactStructureSignature;
-    uint64_t compiledCompactSemanticSignature;
-    uint64_t compiledCompactHiddenSignature;
-    uint64_t compiledCompactUnpickableSignature;
-    SbBool compactIndexActive;
-    SbBool compactOccurrenceRegistry;
-    SbBool meshLodBoundsValid;
-    SbVec3f meshLodBoundsMin;
-    SbVec3f meshLodBoundsMax;
-    SoFieldSensor *pathSensor;
-    SoFieldSensor *instanceKeySensor;
-    SoFieldSensor *representationKeySensor;
-    SoFieldSensor *representationModeSensor;
-    SoFieldSensor *drawModeSensor;
-    SoFieldSensor *tessellationAbsTolSensor;
-    SoFieldSensor *tessellationRelTolSensor;
-    SoFieldSensor *tessellationNormTolSensor;
-    SoFieldSensor *lodBotThresholdSensor;
-    SoFieldSensor *sourceRevisionSensor;
-    SoFieldSensor *inputsRevisionSensor;
-    SoFieldSensor *viewRevisionSensor;
+    struct Impl;
+    std::unique_ptr<Impl> d;
 };
 
 /**

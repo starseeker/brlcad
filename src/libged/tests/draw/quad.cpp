@@ -43,7 +43,7 @@
 static int keep_images = 0;
 
 extern "C" int draw_test_obol_screengrab_view_if_enabled(struct ged *gedp,
-	void *view_ctx, int id, const char *filename);
+	struct ged_view_context *view_ctx, int id, const char *filename);
 extern "C" int unpack_apng(const char *src_dir, const char *apng_name, const char *out_dir, const char *prefix);
 
 // In order to handle changes to .g geometry contents, we need to defined
@@ -79,7 +79,8 @@ void
 dm_refresh(struct ged *gedp, int vnum)
 {
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
+    struct ged_view_context *v = views ?
+	(struct ged_view_context *)BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	return;
     if (!draw_test_obol_progressive_drain(gedp, v, 2000, 1))
@@ -143,7 +144,8 @@ img_cmp(int vnum, int id, struct ged *gedp, const char *cdir, bool clear, int so
     dm_refresh(gedp, vnum);
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
-    void *v = views ? BU_PTBL_GET(views, vnum) : NULL;
+    struct ged_view_context *v = views ?
+	(struct ged_view_context *)BU_PTBL_GET(views, vnum) : NULL;
     if (!v)
 	bu_exit(EXIT_FAILURE, "Invalid view specifier: %d\n", vnum);
     int cnum = ged_view_context_is_independent(v) ? vnum : -1;
@@ -310,9 +312,9 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
     if (ged_exec_view(gedp, 8, s_av) & BRLCAD_ERROR)
 	bu_exit(EXIT_FAILURE, "failed to append shared line %s: %s\n", bu_vls_cstr(&lname), bu_vls_cstr(gedp->ged_result_str));
 
-    struct ged_draw_view_feature_summary geom_summary =
-	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
-    if (!ged_draw_view_context_feature_summary(ged_view_active_ctx(gedp),
+    struct ged_view_feature_summary geom_summary =
+	GED_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_view_feature_get_summary(ged_view_active_ctx(gedp),
 	    bu_vls_cstr(&lname), &geom_summary) ||
 	    !geom_summary.exists)
 	bu_exit(EXIT_FAILURE, "shared line %s was not registered as a feature\n", bu_vls_cstr(&lname));
@@ -321,10 +323,11 @@ vline(struct ged *gedp, int l_id, int x0, int y0, int z0, int x1, int y1, int z1
     int render_count = 0;
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	void *v = BU_PTBL_GET(views, i);
-	struct ged_draw_view_feature_summary view_summary =
-	    GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
-	if (ged_draw_view_context_feature_summary(v, bu_vls_cstr(&lname),
+	struct ged_view_context *v =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
+	struct ged_view_feature_summary view_summary =
+	    GED_VIEW_FEATURE_SUMMARY_INIT;
+	if (ged_view_feature_get_summary(v, bu_vls_cstr(&lname),
 		&view_summary) && view_summary.exists)
 	    render_count++;
     }
@@ -466,7 +469,7 @@ main(int ac, char *av[]) {
     gedp = ged_open("db", "moss_quad_tmp.g", 1);
 
     // We don't want the default GED views for this test
-    void *view_set_ctx = ged_view_set_ctx(gedp);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
     ged_view_set_context_remove(view_set_ctx, NULL);
 
     // Set callback so database changes notify public GED services.
@@ -477,7 +480,8 @@ main(int ac, char *av[]) {
     for (size_t i = 0; i < 4; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%zd", i);
-	void *v = ged_view_context_create_with_set(view_set_ctx);
+	struct ged_view_context *v =
+	    ged_view_context_create_with_set(view_set_ctx);
 	if (!i)
 	    ged_view_active_ctx_set(gedp, v);
 	bv_name_set(DRAW_TEST_BV(v), view_name);

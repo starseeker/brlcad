@@ -66,7 +66,7 @@ framebuffer_matches(bobol_display_endpoint_t *endpoint,
 }
 
 static void
-wait_for_progressive_draw(struct ged *gedp, void *view_ctx)
+wait_for_progressive_draw(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     if (!draw_test_obol_progressive_drain(gedp, view_ctx, 2000, 1))
 	bu_exit(EXIT_FAILURE,
@@ -134,7 +134,7 @@ main(int ac, char *av[]) {
 
     /* Image baselines use the GED-owned headless Obol render endpoint. */
     const char *s_av[15] = {NULL};
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "failed to initialize headless Obol render endpoint\n");
 
@@ -308,53 +308,53 @@ main(int ac, char *av[]) {
     edit_axes.label_flag = 1;
     VSET(edit_axes.axes_color, 255, 128, 0);
     VSET(edit_axes.label_color, 255, 255, 255);
-    if (!ged_draw_view_context_hud_axes_replace(v, "_test/edit_axes",
+    if (!ged_annotation_hud_axes_replace(v, "_test/edit_axes",
 	    &edit_axes, edit_rotation) ||
-	!ged_draw_view_context_feature_exists(v, "_test/edit_axes/lines") ||
-	!ged_draw_view_context_feature_exists(v, "_test/edit_axes/labels"))
+	!ged_view_feature_exists(v, "_test/edit_axes/lines") ||
+	!ged_view_feature_exists(v, "_test/edit_axes/labels"))
 	bu_exit(EXIT_FAILURE, "retained HUD axes publication failed\n");
     edit_axes.draw = 0;
-    if (!ged_draw_view_context_hud_axes_replace(v, "_test/edit_axes",
+    if (!ged_annotation_hud_axes_replace(v, "_test/edit_axes",
 	    &edit_axes, edit_rotation) ||
-	ged_draw_view_context_feature_exists(v, "_test/edit_axes/lines") ||
-	ged_draw_view_context_feature_exists(v, "_test/edit_axes/labels"))
+	ged_view_feature_exists(v, "_test/edit_axes/lines") ||
+	ged_view_feature_exists(v, "_test/edit_axes/labels"))
 	bu_exit(EXIT_FAILURE, "retained HUD axes removal failed\n");
 
     point_t hud_points[2] = {{-0.25, -0.25, 0.0}, {0.25, 0.25, 0.0}};
     int hud_cmds[2] = {GED_DRAW_VIEW_LINE_MOVE, GED_DRAW_VIEW_LINE_DRAW};
-    struct ged_draw_view_feature_style hud_style =
-	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style hud_style =
+	GED_VIEW_FEATURE_STYLE_INIT;
     hud_style.visible = 1;
     hud_style.color_valid = 1;
     VSET(hud_style.color, 32, 192, 255);
-    if (!ged_draw_view_context_hud_lines_replace(v, "_test/hud_lines",
+    if (!ged_annotation_hud_lines_replace(v, "_test/hud_lines",
 	    (const point_t *)hud_points, hud_cmds, 2, &hud_style) ||
-	!ged_draw_view_context_feature_exists(v, "_test/hud_lines"))
+	!ged_view_feature_exists(v, "_test/hud_lines"))
 	bu_exit(EXIT_FAILURE, "retained HUD line publication failed\n");
-    if (!ged_draw_view_context_hud_lines_replace(v, "_test/hud_lines",
+    if (!ged_annotation_hud_lines_replace(v, "_test/hud_lines",
 	    NULL, NULL, 0, NULL) ||
-	ged_draw_view_context_feature_exists(v, "_test/hud_lines"))
+	ged_view_feature_exists(v, "_test/hud_lines"))
 	bu_exit(EXIT_FAILURE, "retained HUD line removal failed\n");
 
-    struct ged_draw_view_label_data hud_label =
-	GED_DRAW_VIEW_LABEL_DATA_INIT;
+    struct ged_annotation_label hud_label =
+	GED_ANNOTATION_LABEL_INIT;
     hud_label.text = "retained HUD";
     VSET(hud_label.point, -0.5, 0.5, 0.0);
     hud_label.color_valid = 1;
     VSET(hud_label.color, 255, 196, 32);
     hud_label.font_size = 14.0;
-    if (!ged_draw_view_context_hud_labels_replace(v, "_test/hud_labels",
+    if (!ged_annotation_hud_labels_replace(v, "_test/hud_labels",
 	    &hud_label, 1, &hud_style) ||
-	!ged_draw_view_context_feature_exists(v, "_test/hud_labels"))
+	!ged_view_feature_exists(v, "_test/hud_labels"))
 	bu_exit(EXIT_FAILURE, "retained HUD label publication failed\n");
-    if (!ged_draw_view_context_hud_labels_replace(v, "_test/hud_labels",
+    if (!ged_annotation_hud_labels_replace(v, "_test/hud_labels",
 	    NULL, 0, NULL) ||
-	ged_draw_view_context_feature_exists(v, "_test/hud_labels"))
+	ged_view_feature_exists(v, "_test/hud_labels"))
 	bu_exit(EXIT_FAILURE, "retained HUD label removal failed\n");
 
-    struct ged_draw_view_line_layer_data hud_layers[2] = {
-	GED_DRAW_VIEW_LINE_LAYER_DATA_INIT,
-	GED_DRAW_VIEW_LINE_LAYER_DATA_INIT
+    struct ged_annotation_line_layer hud_layers[2] = {
+	GED_ANNOTATION_LINE_LAYER_INIT,
+	GED_ANNOTATION_LINE_LAYER_INIT
     };
     hud_layers[0].name = "first";
     hud_layers[0].points = (const point_t *)hud_points;
@@ -364,13 +364,13 @@ main(int ac, char *av[]) {
     hud_layers[1] = hud_layers[0];
     hud_layers[1].name = "second";
     hud_layers[1].style.color[0] = 255;
-    if (!ged_draw_view_context_hud_line_layers_replace(v,
+    if (!ged_annotation_hud_line_layers_replace(v,
 	    "_test/hud_line_layers", hud_layers, 2, &hud_style) ||
-	!ged_draw_view_context_feature_exists(v, "_test/hud_line_layers"))
+	!ged_view_feature_exists(v, "_test/hud_line_layers"))
 	bu_exit(EXIT_FAILURE, "retained HUD line-layer publication failed\n");
-    if (!ged_draw_view_context_hud_line_layers_replace(v,
+    if (!ged_annotation_hud_line_layers_replace(v,
 	    "_test/hud_line_layers", NULL, 0, NULL) ||
-	ged_draw_view_context_feature_exists(v, "_test/hud_line_layers"))
+	ged_view_feature_exists(v, "_test/hud_line_layers"))
 	bu_exit(EXIT_FAILURE, "retained HUD line-layer removal failed\n");
 
     /***** Interactive rectangle *****/
@@ -425,9 +425,9 @@ main(int ac, char *av[]) {
 	    "view.interactive.rectangle.visible", &interactive_value) !=
 	BOBOL_ENDPOINT_PROPERTY_OK)
 	bu_exit(EXIT_FAILURE, "failed to show interactive rectangle\n");
-    if (ged_draw_obol_view_context_faceplate_sync(gedp, v) != BRLCAD_OK)
+    if (ged_draw_obol_faceplate_sync(gedp, v) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "failed to synchronize interactive rectangle\n");
-    if (!ged_draw_view_context_feature_exists(v,
+    if (!ged_view_feature_exists(v,
 	    "_faceplate/interactive_rect"))
 	bu_exit(EXIT_FAILURE, "interactive rectangle was not retained\n");
     ret += img_not_empty(10, gedp, lcache, false, clear_images, soft_fail,

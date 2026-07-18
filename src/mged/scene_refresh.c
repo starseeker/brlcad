@@ -37,10 +37,10 @@
 mat_t perspective_mat;
 
 static void
-_mged_obol_refresh(struct mged_state *s, void *view_ctx)
+_mged_obol_refresh(struct mged_state *s, struct ged_view_context *view_ctx)
 {
     if (!s || !s->gedp || !view_ctx ||
-	    !ged_draw_obol_controller_opaque_for_view(view_ctx))
+	    !ged_view_context_display_endpoint_get(view_ctx))
 	return;
 
     struct ged_draw_transaction txn =
@@ -55,7 +55,7 @@ _mged_obol_refresh(struct mged_state *s, void *view_ctx)
 void
 mged_obol_scene_refresh(struct mged_state *s)
 {
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     struct bv *view = mged_view_context_view(view_ctx);
     fastf_t view_perspective;
     point_t view_eye_pos;

@@ -1252,27 +1252,87 @@ if(NOT MSVC)
     check_cxx_flag(qstackprotect)
   endif(${BRLCAD_OPTIMIZED} MATCHES "OFF" AND BRLCAD_DEBUGGING)
 
+  if(BRLCAD_SANITIZE_THREAD AND BRLCAD_ENABLE_ADDRESS_SANITIZER)
+    message(FATAL_ERROR
+      "BRLCAD_SANITIZE_THREAD and BRLCAD_ENABLE_ADDRESS_SANITIZER require separate build trees")
+  endif()
+
   # Similarly, enable the AddressSanitizer memory address sanitizer.
   # See https://code.google.com/p/address-sanitizer/ for more info.
   # This typically is reported to cause a 2x slowdown.
   if(BRLCAD_ENABLE_ADDRESS_SANITIZER AND ${BRLCAD_OPTIMIZED} MATCHES "OFF" AND BRLCAD_DEBUGGING)
-    set(CMAKE_REQUIRED_LINK_OPTIONS "${CMAKE_REQUIRED_LINK_OPTIONS};-lasan")
-    check_c_flag(fsanitize=address)
-    check_c_flag(fsanitize-address-use-after-return=always)
-    check_c_flag(fsanitize-address-use-after-scope)
-    check_c_flag(fno-omit-frame-pointer)
-    check_cxx_flag(fsanitize=address)
-    check_cxx_flag(fsanitize-address-use-after-return=always)
-    check_cxx_flag(fsanitize-address-use-after-scope)
-    check_cxx_flag(fno-omit-frame-pointer)
+    set(_brlcad_required_link_options_save "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    # The compiler driver must select and order the runtime.  A raw -lasan
+    # preceding the try-compile object leaves __asan_init unresolved on GNU.
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=address")
+    check_compiler_flag(C "-fsanitize=address" FSANITIZE_ADDRESS_C_FLAG_FOUND)
+    check_compiler_flag(CXX "-fsanitize=address" FSANITIZE_ADDRESS_CXX_FLAG_FOUND)
+    check_compiler_flag(C "-fsanitize-address-use-after-return=always" FSANITIZE_ADDRESS_USE_AFTER_RETURN_ALWAYS_C_FLAG_FOUND)
+    check_compiler_flag(CXX "-fsanitize-address-use-after-return=always" FSANITIZE_ADDRESS_USE_AFTER_RETURN_ALWAYS_CXX_FLAG_FOUND)
+    check_compiler_flag(C "-fsanitize-address-use-after-scope" FSANITIZE_ADDRESS_USE_AFTER_SCOPE_C_FLAG_FOUND)
+    check_compiler_flag(CXX "-fsanitize-address-use-after-scope" FSANITIZE_ADDRESS_USE_AFTER_SCOPE_CXX_FLAG_FOUND)
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${_brlcad_required_link_options_save}")
+    unset(_brlcad_required_link_options_save)
+
+    if(NOT FSANITIZE_ADDRESS_C_FLAG_FOUND OR NOT FSANITIZE_ADDRESS_CXX_FLAG_FOUND)
+      message(FATAL_ERROR "BRLCAD_ENABLE_ADDRESS_SANITIZER requires AddressSanitizer support from both C and C++ compilers")
+    endif()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=address>")
+    if(FSANITIZE_ADDRESS_USE_AFTER_RETURN_ALWAYS_C_FLAG_FOUND)
+      add_compile_options("$<$<COMPILE_LANGUAGE:C>:-fsanitize-address-use-after-return=always>")
+    endif()
+    if(FSANITIZE_ADDRESS_USE_AFTER_RETURN_ALWAYS_CXX_FLAG_FOUND)
+      add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-fsanitize-address-use-after-return=always>")
+    endif()
+    if(FSANITIZE_ADDRESS_USE_AFTER_SCOPE_C_FLAG_FOUND)
+      add_compile_options("$<$<COMPILE_LANGUAGE:C>:-fsanitize-address-use-after-scope>")
+    endif()
+    if(FSANITIZE_ADDRESS_USE_AFTER_SCOPE_CXX_FLAG_FOUND)
+      add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-fsanitize-address-use-after-scope>")
+    endif()
+    add_link_options("-fsanitize=address")
   endif(BRLCAD_ENABLE_ADDRESS_SANITIZER AND ${BRLCAD_OPTIMIZED} MATCHES "OFF" AND BRLCAD_DEBUGGING)
+
+  # UndefinedBehaviorSanitizer complements ASan/LSan in the same debug build.
+  if(BRLCAD_ENABLE_UNDEFINED_SANITIZER AND ${BRLCAD_OPTIMIZED} MATCHES "OFF" AND BRLCAD_DEBUGGING)
+    set(_brlcad_required_link_options_save "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=undefined")
+    check_compiler_flag(C "-fsanitize=undefined" FSANITIZE_UNDEFINED_C_FLAG_FOUND)
+    check_compiler_flag(CXX "-fsanitize=undefined" FSANITIZE_UNDEFINED_CXX_FLAG_FOUND)
+    check_compiler_flag(C "-fno-sanitize-recover=undefined" FNO_SANITIZE_RECOVER_UNDEFINED_C_FLAG_FOUND)
+    check_compiler_flag(CXX "-fno-sanitize-recover=undefined" FNO_SANITIZE_RECOVER_UNDEFINED_CXX_FLAG_FOUND)
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${_brlcad_required_link_options_save}")
+    unset(_brlcad_required_link_options_save)
+
+    if(NOT FSANITIZE_UNDEFINED_C_FLAG_FOUND OR NOT FSANITIZE_UNDEFINED_CXX_FLAG_FOUND)
+      message(FATAL_ERROR "BRLCAD_ENABLE_UNDEFINED_SANITIZER requires UndefinedBehaviorSanitizer support from both C and C++ compilers")
+    endif()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=undefined>")
+    if(FNO_SANITIZE_RECOVER_UNDEFINED_C_FLAG_FOUND)
+      add_compile_options("$<$<COMPILE_LANGUAGE:C>:-fno-sanitize-recover=undefined>")
+    endif()
+    if(FNO_SANITIZE_RECOVER_UNDEFINED_CXX_FLAG_FOUND)
+      add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-fno-sanitize-recover=undefined>")
+    endif()
+    add_link_options("-fsanitize=undefined")
+  endif()
 
   # Differently, enable the ThreadSanitizer race condition detector
   # only as requested since it can incur a 5x-15x slowdown.  See
   # https://code.google.com/p/thread-sanitizer/ for more info.
   if(BRLCAD_SANITIZE_THREAD)
-    check_c_flag(fsanitize=thread)
-    check_cxx_flag(fsanitize=thread)
+    set(_brlcad_required_link_options_save "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=thread")
+    check_compiler_flag(C "-fsanitize=thread" FSANITIZE_THREAD_C_FLAG_FOUND)
+    check_compiler_flag(CXX "-fsanitize=thread" FSANITIZE_THREAD_CXX_FLAG_FOUND)
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${_brlcad_required_link_options_save}")
+    unset(_brlcad_required_link_options_save)
+
+    if(NOT FSANITIZE_THREAD_C_FLAG_FOUND OR NOT FSANITIZE_THREAD_CXX_FLAG_FOUND)
+      message(FATAL_ERROR "BRLCAD_SANITIZE_THREAD requires ThreadSanitizer support from both C and C++ compilers")
+    endif()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=thread>")
+    add_link_options("-fsanitize=thread")
   endif(BRLCAD_SANITIZE_THREAD)
 
   # verbose warning flags.  we intentionally try to turn on as many as
@@ -2309,7 +2369,6 @@ brlcad_add_test(
   NAME BObol_pivot_guard
   COMMAND ${CMAKE_COMMAND}
   -DBRLCAD_SOURCE_DIR=${BRLCAD_SOURCE_DIR}
-  -DBOBOL_PIVOT_GUARD_MODE=transitional
   -P ${BRLCAD_CMAKE_DIR}/BObol_pivot_guard.cmake
 )
 
@@ -2418,6 +2477,11 @@ endif()
 set(BRLCAD_HAVE_OSMESA FALSE)
 if(BRLCAD_ENABLE_OSMESA)
   set(BRLCAD_HAVE_OSMESA TRUE)
+endif()
+
+set(BRLCAD_HAVE_BOBOL FALSE)
+if(TARGET libBObol)
+  set(BRLCAD_HAVE_BOBOL TRUE)
 endif()
 
 # Build-tree package files support BRLCAD_DIR=<build_dir> consumers.

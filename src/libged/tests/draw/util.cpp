@@ -36,6 +36,7 @@
 #include <bu.h>
 #include <BObol/BInit.h>
 #include <BObol/BDatabaseSource.h>
+#include <BObol/BDisplayEndpoint.h>
 #include <BObol/BMeshLodCache.h>
 #include <BObol/BSceneController.h>
 #include <BObol/BVListShape.h>
@@ -56,6 +57,15 @@
 #include <ged/draw.h>
 #include <ged/draw_obol.h>
 #include <ged/event_txn.h>
+
+static BObolViewController *
+draw_test_endpoint_controller(struct ged_view_context *view_ctx)
+{
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    return endpoint ? static_cast<BObolViewController *>(
+	bobol_display_endpoint_controller(endpoint)) : NULL;
+}
 
 // In order to handle changes to .g geometry contents, we need to defined
 // callbacks for the librt hooks that will update the working data structures.
@@ -107,7 +117,7 @@ draw_test_compare_debug_enabled(void)
     return value ? bu_str_true(value) : 0;
 }
 
-static void *
+static struct ged_view_context *
 draw_test_active_view_ctx(struct ged *gedp)
 {
     if (!gedp)
@@ -115,7 +125,8 @@ draw_test_active_view_ctx(struct ged *gedp)
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     if (views && BU_PTBL_LEN(views) > 0)
-	return BU_PTBL_GET(views, 0);
+	return reinterpret_cast<struct ged_view_context *>(
+	    BU_PTBL_GET(views, 0));
 
     return ged_view_active_ctx(gedp);
 }
@@ -128,7 +139,7 @@ draw_test_obol_context_manager(void)
 }
 
 static int
-draw_test_sync_obol_camera(BObolViewController *controller, void *view_ctx)
+draw_test_sync_obol_camera(BObolViewController *controller, struct ged_view_context *view_ctx)
 {
     if (!controller || !view_ctx)
 	return 0;
@@ -137,7 +148,7 @@ draw_test_sync_obol_camera(BObolViewController *controller, void *view_ctx)
 }
 
 extern "C" int
-draw_test_obol_view_init(struct ged *gedp, void *view_ctx, int width, int height)
+draw_test_obol_view_init(struct ged *gedp, struct ged_view_context *view_ctx, int width, int height)
 {
     if (!gedp || !view_ctx || width <= 0 || height <= 0)
 	return BRLCAD_ERROR;
@@ -147,10 +158,10 @@ draw_test_obol_view_init(struct ged *gedp, void *view_ctx, int width, int height
 	bv_unit_conversion_set(DRAW_TEST_BV(view_ctx), gedp->dbip->dbi_local2base,
 		gedp->dbip->dbi_base2local);
     }
-    if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1))
+    if (!ged_view_context_display_endpoint_ensure(view_ctx))
 	return BRLCAD_ERROR;
     BObolViewController *controller =
-	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
+	draw_test_endpoint_controller(view_ctx);
     if (!controller)
 	return BRLCAD_ERROR;
 
@@ -160,15 +171,14 @@ draw_test_obol_view_init(struct ged *gedp, void *view_ctx, int width, int height
 }
 
 extern "C" int
-draw_test_obol_progressive_drain(struct ged *gedp, void *view_ctx,
+draw_test_obol_progressive_drain(struct ged *gedp, struct ged_view_context *view_ctx,
 	unsigned int max_attempts, unsigned int sleep_milliseconds)
 {
     if (!gedp || !view_ctx || !max_attempts)
 	return 0;
 
     BObolViewController *controller =
-	static_cast<BObolViewController *>(
-	    ged_draw_obol_controller_opaque_for_view(view_ctx));
+	draw_test_endpoint_controller(view_ctx);
     if (!controller)
 	return 0;
 
@@ -252,7 +262,7 @@ draw_test_write_rgb_png(const char *filename, const unsigned char *buffer,
 
 static void
 draw_test_obol_debug_dump(struct ged *gedp, int id,
-			  BObolViewController *controller, void *view_ctx)
+			  BObolViewController *controller, struct ged_view_context *view_ctx)
 {
     if (!draw_test_obol_debug_enabled() || !gedp || !controller || !view_ctx)
 	return;
@@ -306,11 +316,9 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
     /* Endpoint-only controllers render the GED-owned shared root rather than
      * their empty private scene.  Report the scene that supplies autoview
      * bounds and database geometry. */
-    SoBRLSceneController *scene = ged_draw_obol_scene_controller(gedp);
-    if (!scene)
-	scene = controller->getSceneController();
-    if (!scene)
-	return;
+    (void)gedp;
+    BObolSceneController render_scene(controller->getRenderSceneRoot());
+    BObolSceneController *scene = &render_scene;
 
     BObolSceneSummary scene_summary;
     if (scene->getSceneSummary(scene_summary) && scene_summary.valid) {
@@ -472,7 +480,7 @@ draw_test_obol_debug_dump(struct ged *gedp, int id,
 }
 
 static int
-draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
+draw_test_obol_screengrab_impl(struct ged *gedp, struct ged_view_context *view_ctx, int id,
 			       const char *filename)
 {
     SoDB::ContextManager *manager = draw_test_obol_context_manager();
@@ -482,15 +490,15 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
     }
     bobol_init(NULL);
 
-    void *v = view_ctx ? view_ctx : draw_test_active_view_ctx(gedp);
+    struct ged_view_context *v = view_ctx ? view_ctx :
+	draw_test_active_view_ctx(gedp);
     if (!v)
 	return -1;
 
-    BObolViewController *controller =
-	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
+    BObolViewController *controller = draw_test_endpoint_controller(v);
     if (!controller) {
-	(void)ged_draw_obol_scene_controller_ensure(gedp, 1);
-	controller = ged_draw_obol_controller(gedp);
+	(void)ged_view_context_display_endpoint_ensure(v);
+	controller = draw_test_endpoint_controller(v);
     }
     if (!controller)
 	return -1;
@@ -504,7 +512,7 @@ draw_test_obol_screengrab_impl(struct ged *gedp, void *view_ctx, int id,
 				static_cast<unsigned int>(height));
     if (!draw_test_sync_obol_camera(controller, v))
 	return -1;
-    (void)ged_draw_obol_view_context_faceplate_sync(gedp, v);
+    (void)ged_draw_obol_faceplate_sync(gedp, v);
     (void)controller->realizePending();
     (void)ged_selection_draw_sync(gedp, NULL);
     draw_test_obol_debug_dump(gedp, id, controller, v);
@@ -547,7 +555,7 @@ draw_test_obol_screengrab_if_enabled(struct ged *gedp, int id,
 }
 
 extern "C" int
-draw_test_obol_screengrab_view_if_enabled(struct ged *gedp, void *view_ctx,
+draw_test_obol_screengrab_view_if_enabled(struct ged *gedp, struct ged_view_context *view_ctx,
 	int id, const char *filename)
 {
     if (!draw_test_obol_capture_enabled())
@@ -604,7 +612,7 @@ draw_test_images_differ(const char *a, const char *b, int offmany_threshold)
 extern "C" void
 dm_refresh(struct ged *gedp)
 {
-    void *v = draw_test_active_view_ctx(gedp);
+    struct ged_view_context *v = draw_test_active_view_ctx(gedp);
     if (!v)
 	return;
     struct ged_draw_transaction txn =
@@ -612,8 +620,7 @@ dm_refresh(struct ged *gedp)
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
 
-    BObolViewController *controller =
-	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(v);
+    BObolViewController *controller = draw_test_endpoint_controller(v);
     if (controller)
 	(void)controller->realizePending();
 }

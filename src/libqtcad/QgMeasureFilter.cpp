@@ -33,11 +33,11 @@
 #include "qtcad/QgSignalFlags.h"
 #include "qtcad/QgView.h"
 
-static void *
+static struct ged_view_context *
 qg_measure_filter_view(const QgMeasureFilter *filter)
 {
 	QgView *display = filter ? filter->view_widget() : nullptr;
-	return display ? display->viewContext() : nullptr;
+	return display ? ged_view_context_from_bv(display->viewContext()) : nullptr;
 }
 
 void
@@ -146,7 +146,7 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 		return false;
 	update_current_mouse(m_e);
 
-	void *view_ctx = qg_measure_filter_view(this);
+	struct ged_view_context *view_ctx = qg_measure_filter_view(this);
 	if (!view_ctx)
 		return false;
 
@@ -270,14 +270,14 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 bool
 QMeasure2DFilter::get_point()
 {
-	void *view_ctx = qg_measure_filter_view(this);
+	struct ged_view_context *view_ctx = qg_measure_filter_view(this);
 	if (!view_ctx)
 		return false;
 	int sx = 0, sy = 0;
 	if (!current_mouse_xy(&sx, &sy))
 		return false;
 	const struct bv *view = bv_context_view_const(
-	    static_cast<const struct bv_context *>(view_ctx));
+	    ged_view_context_bv_const(view_ctx));
 	fastf_t vx, vy;
 	if (!bv_screen_to_view(&vx, &vy, view, sx, sy))
 		return false;
@@ -307,7 +307,7 @@ QMeasure3DFilter::~QMeasure3DFilter()
 bool
 QMeasure3DFilter::get_point()
 {
-	void *view_ctx = qg_measure_filter_view(this);
+	struct ged_view_context *view_ctx = qg_measure_filter_view(this);
 	if (!view_ctx)
 		return false;
 

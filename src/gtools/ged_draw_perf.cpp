@@ -46,8 +46,12 @@
 #include <ged.h>
 #include "BObol.h"
 #include "BObol/BPerformance.h"
+#include "BObol/BVListShape.h"
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BPerformance.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
+#include "ged/view.h"
 
 #include <Inventor/nodes/SoGroup.h>
 
@@ -416,7 +420,7 @@ initialize_endpoint(struct ged *gedp, const struct options &opts)
 {
     if (!gedp || !gedp->dbip)
 	return NULL;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     struct bv *view = view_ctx ?
 	bv_context_view((struct bv_context *)view_ctx) : NULL;
     if (!view_ctx || !view)
@@ -425,10 +429,19 @@ initialize_endpoint(struct ged *gedp, const struct options &opts)
     bv_unit_conversion_set(view,
 	gedp->dbip->dbi_local2base,
 	gedp->dbip->dbi_base2local);
-    if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1))
-	return NULL;
-    BObolViewController *controller =
-	(BObolViewController *)ged_draw_obol_controller_opaque_for_view(view_ctx);
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    if (!endpoint) {
+	endpoint = bobol_display_endpoint_create(NULL, 0);
+	if (!endpoint)
+	    return NULL;
+	if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	    bobol_display_endpoint_destroy(endpoint);
+	    return NULL;
+	}
+    }
+    BObolViewController *controller = static_cast<BObolViewController *>(
+	bobol_display_endpoint_controller(endpoint));
     if (!controller)
 	return NULL;
     controller->setRenderContextManager(performance_context_manager());
@@ -462,12 +475,12 @@ static int
 run_render(struct ged *gedp, BObolViewController *controller,
 	   unsigned char **image, BObolProgressiveStatus *status)
 {
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx || !controller || !image)
 	return BRLCAD_ERROR;
     if (!controller->syncCameraFromViewContext(view_ctx))
 	return BRLCAD_ERROR;
-    (void)ged_draw_obol_view_context_faceplate_sync(gedp, view_ctx);
+    (void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
     return controller->renderToImage(image, 1, 0, NULL,
 	performance_context_manager(), status);
 }
@@ -580,8 +593,13 @@ run_once(const struct options &opts, int iter)
 	    redraw_ret = txn_ret < 0 ? BRLCAD_ERROR : BRLCAD_OK;
 	}
 
-	source_count_ret = ged_draw_obol_database_source_count(gedp, 0,
-	    &source_count);
+	const int semantic_shape_count = ged_draw_shape_count(gedp);
+	if (semantic_shape_count >= 0) {
+	    source_count = (size_t)semantic_shape_count;
+	    source_count_ret = BRLCAD_OK;
+	} else {
+	    source_count_ret = BRLCAD_ERROR;
+	}
     }
 
     if (draw_ret == BRLCAD_OK && opts.autoview) {

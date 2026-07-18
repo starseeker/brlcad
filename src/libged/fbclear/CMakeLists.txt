@@ -2,7 +2,7 @@ set(PLUGIN_LIBS libged libimgstream libbu)
 
 ged_plugin_library(ged-fbclear
   PLUGIN_ONLY
-  fbclear.c
+  fbclear.cpp
   LIBS ${PLUGIN_LIBS}
 )
 

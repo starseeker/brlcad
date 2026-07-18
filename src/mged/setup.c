@@ -564,8 +564,8 @@ mged_setup(struct mged_state *s)
     mged_global_db_ctx.old_dbip = NULL;
     mged_global_db_ctx.post_open_cnt = 0;
 
-    void *view_set_ctx = ged_view_set_ctx(s->gedp);
-    void *view_ctx = ged_view_context_create_with_set(view_set_ctx);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(s->gedp);
+    struct ged_view_context *view_ctx = ged_view_context_create_with_set(view_set_ctx);
     view_state->vs_gvp = view_ctx;
 
     mat_t view_center;

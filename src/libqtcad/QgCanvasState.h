@@ -121,7 +121,7 @@ struct QgCanvasState {
 static inline struct bv_context *
 qgcanvas_view_context_create(const char *name)
 {
-    struct bv_context *view_ctx = static_cast<struct bv_context *>(
+    struct bv_context *view_ctx = ged_view_context_bv(
 	ged_view_context_create());
     if (!view_ctx)
 	return NULL;
@@ -139,7 +139,7 @@ static inline void
 qgcanvas_view_context_destroy(struct bv_context *view_ctx)
 {
     if (view_ctx)
-	ged_view_context_free(view_ctx);
+	ged_view_context_free(ged_view_context_from_bv(view_ctx));
 }
 
 /** Compute the physical render size of a widget (accounting for DPR). */
@@ -511,7 +511,7 @@ static inline void
 qgcanvas_sync_obol_grid(QgCanvasState &s,
 			SoGroup *group,
 			const struct bv_grid_state &state,
-			void *view_ctx)
+			struct ged_view_context *view_ctx)
 {
     const char *overlayId = "faceplate::grid";
     const int childIndex = qgcanvas_find_obol_grid_child(group, overlayId);
@@ -576,12 +576,11 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     if (!s.obol || !s.v)
 	return;
 
-    void *view_ctx = s.v;
+    struct ged_view_context *view_ctx = ged_view_context_from_bv(s.v);
     struct ged *gedp = static_cast<struct ged *>(
 	ged_view_context_user_data_get(view_ctx));
     if (gedp) {
-	(void)ged_draw_obol_view_context_faceplate_sync_opaque(gedp, view_ctx,
-		s.obol);
+	(void)ged_draw_obol_faceplate_sync(gedp, view_ctx);
 	return;
     }
 
@@ -594,8 +593,7 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     struct bv_axes_state modelAxes = {};
     struct bv_axes_state viewAxes = {};
     struct bv_adc_state adc = {};
-    const struct bv *view = bv_context_view_const(
-	static_cast<const struct bv_context *>(view_ctx));
+    const struct bv *view = bv_context_view_const(s.v);
     (void)bv_grid_state_get(&grid, view);
     (void)bv_model_axes_state_get(&modelAxes, view);
     (void)bv_view_axes_state_get(&viewAxes, view);

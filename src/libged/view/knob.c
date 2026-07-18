@@ -31,7 +31,7 @@
 #include "./ged_view.h"
 
 static void
-print_knob_vals(struct bu_vls *o, void *view_ctx)
+print_knob_vals(struct bu_vls *o, struct ged_view_context *view_ctx)
 {
     struct bv_knob_values values;
 
@@ -68,7 +68,7 @@ ged_knob_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     /* Make sure the view coordinate conversion values match the database */
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     bv_unit_conversion_set(view,
 	(gedp->dbip) ? gedp->dbip->dbi_local2base : 1.0,

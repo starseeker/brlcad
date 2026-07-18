@@ -37,7 +37,7 @@
 #include "qtcad/QgViewFilter.h"
 
 struct db_i;
-struct ged_draw_pick_result;
+struct ged_pick_result;
 
 /* Application-local action IDs used only by QgSelectFilter handlers. */
 enum QgSelectInputAction {
@@ -83,7 +83,7 @@ class QTCAD_EXPORT QgSelectFilter : public QgViewFilter {
 
     protected:
 	void clear_selected_result();
-	void set_selected_result(struct ged_draw_pick_result *res);
+	void set_selected_result(struct ged_pick_result *res);
 	void set_selected_paths(const std::vector<std::string> &paths);
 	virtual bool applySemanticInput(BObolInputAction action,
 		const BObolInputEvent *event);

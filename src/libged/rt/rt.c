@@ -77,7 +77,7 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (ged_rt_is_image_renderer(argv[0]) &&
 	ged_view_context_display_endpoint_get(view_ctx))
 	return _ged_external_rt_to_endpoint(gedp, argc, argv, argv[0], NULL);

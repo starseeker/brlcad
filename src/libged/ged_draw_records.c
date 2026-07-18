@@ -252,7 +252,7 @@ _draw_path_expected_leaf_paths(struct ged *gedp, const char *path,
 static int
 _draw_group_record_summary_in_view(
 	const struct ged_draw_group_record_summary *group_summary,
-	void *view_ctx)
+	struct ged_view_context *view_ctx)
 {
     if (!group_summary)
 	return 0;
@@ -270,7 +270,7 @@ _draw_group_record_summary_in_view(
 
 int
 ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
-			      void *view_ctx)
+			      struct ged_view_context *view_ctx)
 {
     if (!rec)
 	return 0;
@@ -286,7 +286,7 @@ ged_draw_group_record_in_view(const struct ged_draw_group_record *rec,
 
 struct _draw_path_state_ctx {
     struct ged *gedp;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     const char *path;
     int mode;
     bu_hash_tbl *drawn_leaf_paths;
@@ -301,7 +301,7 @@ struct _draw_path_state_ctx {
 static int
 _draw_obol_record_instance_in_view(
 	const struct ged_draw_obol_database_source_record *record,
-	void *view_ctx)
+	struct ged_view_context *view_ctx)
 {
     if (!record || !record->database_path || !record->database_path[0])
 	return 0;
@@ -345,7 +345,7 @@ _draw_obol_record_instance_in_view(
 			       bv_context_view_const((const struct bv_context *)view_ctx));
     char fallback[64] = {0};
     if (!view_name || !view_name[0]) {
-	snprintf(fallback, sizeof(fallback), "%p", view_ctx);
+	snprintf(fallback, sizeof(fallback), "%p", (void *)view_ctx);
 	view_name = fallback;
     }
 
@@ -378,7 +378,7 @@ static int
 _draw_obol_source_record_visible_in_view(
 	struct ged *gedp,
 	const struct ged_draw_obol_database_source_record *record,
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	int mode,
 	struct ged_draw_group_record_summary *group_out)
 {
@@ -579,7 +579,7 @@ _draw_path_state_eval(struct ged *gedp,
 
 int
 ged_draw_path_state(struct ged *gedp,
-		    void *view_ctx,
+		    struct ged_view_context *view_ctx,
 		    const char *path,
 		    int mode)
 {
@@ -639,7 +639,7 @@ ged_draw_path_state(struct ged *gedp,
 
 struct _draw_path_list_ctx {
     struct ged *gedp;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     int mode;
     bu_hash_tbl *seen;
     bu_hash_tbl *state_cache;
@@ -904,7 +904,7 @@ _draw_list_obol_source_record_collapsed_cb(struct ged *gedp,
 
 struct _draw_has_paths_ctx {
     struct ged *gedp;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     int mode;
     int found;
 };
@@ -957,7 +957,7 @@ _draw_has_paths_shape_ref_cb(ged_draw_shape_ref ref, void *ud)
 
 size_t
 ged_draw_list_paths(struct ged *gedp,
-		    void *view_ctx,
+		    struct ged_view_context *view_ctx,
 		    int mode,
 		    int expanded,
 		    struct bu_vls *result)
@@ -1007,7 +1007,7 @@ ged_draw_list_paths(struct ged *gedp,
 
 int
 ged_draw_has_paths(struct ged *gedp,
-		   void *view_ctx,
+		   struct ged_view_context *view_ctx,
 		   int mode)
 {
     if (!gedp)
@@ -1059,18 +1059,18 @@ _ged_draw_fill_shape_record(struct ged *gedp,
     out->highlighted = shape_summary.highlighted;
     out->selected = 0;
     out->evaluated_region = shape_summary.evaluated_region;
-    void *active_view_ctx = ged_draw_active_view_ctx(gedp);
+    struct ged_view_context *active_view_ctx = ged_draw_active_view_ctx(gedp);
     if (active_view_ctx) {
 	struct bu_vls selected_path = BU_VLS_INIT_ZERO;
 	if (_ged_draw_shape_ref_selection_path(gedp, out->ref, &selected_path))
-	    out->selected = ged_draw_view_context_selection_contains_path(
+	    out->selected = ged_selection_contains_path(
 		    active_view_ctx,
-		    GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
+		    GED_SELECTION_SELECTED_PATH,
 		    bu_vls_cstr(&selected_path));
 	bu_vls_free(&selected_path);
     }
     if (!out->stale_reason)
-	out->stale_reason = ged_draw_stale_reason_name(GED_DRAW_STALE_NONE);
+	out->stale_reason = ged_draw_source_stale_reason_name(GED_DRAW_STALE_NONE);
 
     struct ged_draw_database_source_summary source_summary;
     if (ged_draw_shape_ref_database_source_summary(gedp, ref,
@@ -1120,15 +1120,15 @@ ged_draw_shape_record_get(struct ged *gedp,
 
 
 int
-ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
-						  void *view_ctx,
+ged_view_selection_set_highlight(struct ged *gedp,
+						  struct ged_view_context *view_ctx,
 						  ged_draw_shape_ref ref)
 {
     if (!gedp || !view_ctx)
 	return 0;
 
-    if (!ged_draw_view_context_selection_set_path(view_ctx,
-	    GED_DRAW_VIEW_SELECTION_ALL, NULL))
+    if (!ged_selection_set_path(view_ctx,
+	    GED_SELECTION_ALL, NULL))
 	return 0;
     if (ged_draw_shape_ref_is_null(ref))
 	return 1;
@@ -1139,19 +1139,19 @@ ged_draw_view_selection_set_highlighted_shape_ref(struct ged *gedp,
 	return 0;
     }
 
-    int ret = ged_draw_view_context_selection_add_path(view_ctx,
-	    GED_DRAW_VIEW_SELECTION_HIGHLIGHTED_REF,
+    int ret = ged_selection_add_path(view_ctx,
+	    GED_SELECTION_HIGHLIGHTED_REF,
 	    bu_vls_cstr(&highlighted_path));
     bu_vls_free(&highlighted_path);
     return ret;
 }
 
 int
-ged_draw_view_selection_add_shape_ref_context(
+ged_view_selection_add_shape(
 	struct ged *gedp,
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	ged_draw_shape_ref ref,
-	void **selection_view_ctx,
+	struct ged_view_context **selection_view_ctx,
 	struct bu_vls *path)
 {
     if (selection_view_ctx)
@@ -1162,10 +1162,10 @@ ged_draw_view_selection_add_shape_ref_context(
     if (!gedp || ged_draw_shape_ref_is_null(ref))
 	return 0;
 
-    void *target = view_ctx;
-    if (!ged_draw_view_context_selection_available(target))
+    struct ged_view_context *target = view_ctx;
+    if (!ged_selection_available(target))
 	target = ged_draw_active_view_ctx(gedp);
-    if (!ged_draw_view_context_selection_available(target))
+    if (!ged_selection_available(target))
 	return 0;
 
     struct bu_vls selected_path = BU_VLS_INIT_ZERO;
@@ -1177,8 +1177,8 @@ ged_draw_view_selection_add_shape_ref_context(
     if (path && bu_vls_strlen(&selected_path) > 0)
 	bu_vls_strcpy(path, bu_vls_cstr(&selected_path));
 
-    int ret = ged_draw_view_context_selection_add_path(target,
-	    GED_DRAW_VIEW_SELECTION_SELECTED_PATH,
+    int ret = ged_selection_add_path(target,
+	    GED_SELECTION_SELECTED_PATH,
 	    bu_vls_cstr(&selected_path));
     bu_vls_free(&selected_path);
 
@@ -1308,7 +1308,7 @@ _ged_draw_view_line_command_from_detail(
 
 void
 ged_draw_foreach_view_record_query(
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	const struct ged_draw_view_record_query *query,
 	ged_draw_view_db_object_record_cb cb,
 	void *userdata)
@@ -1331,7 +1331,7 @@ ged_draw_foreach_view_record_query(
 
 
 void
-ged_draw_foreach_view_db_object_record(void *view_ctx,
+ged_draw_foreach_view_db_object_record(struct ged_view_context *view_ctx,
 				       ged_draw_view_db_object_record_cb cb,
 				       void *userdata)
 {
@@ -1343,7 +1343,7 @@ ged_draw_foreach_view_db_object_record(void *view_ctx,
 
 
 void
-ged_draw_foreach_visible_view_db_object_record(void *view_ctx,
+ged_draw_foreach_visible_view_db_object_record(struct ged_view_context *view_ctx,
 					      ged_draw_view_db_object_record_cb cb,
 					      void *userdata)
 {
@@ -1358,7 +1358,7 @@ ged_draw_foreach_visible_view_db_object_record(void *view_ctx,
 
 void
 ged_draw_foreach_visible_view_db_object_record_mode(
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	int draw_mode,
 	ged_draw_view_db_object_record_cb cb,
 	void *userdata)
@@ -1373,7 +1373,7 @@ ged_draw_foreach_visible_view_db_object_record_mode(
 
 
 void
-ged_draw_foreach_visible_view_record(void *view_ctx,
+ged_draw_foreach_visible_view_record(struct ged_view_context *view_ctx,
 				     ged_draw_view_db_object_record_cb cb,
 				     void *userdata)
 {
@@ -1868,7 +1868,7 @@ _ged_draw_rendered_object_summary_record_cb(
 
 int
 ged_draw_view_rendered_object_summary(
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	uint64_t cache_identity,
 	ged_draw_view_rendered_object_summary_t *out)
 {

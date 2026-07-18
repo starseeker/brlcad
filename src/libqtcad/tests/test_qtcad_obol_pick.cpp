@@ -193,8 +193,10 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
-	ged_view_active_ctx_set(gedp, view.viewContext());
-	(void)ged_view_context_host_attach(gedp, view.viewContext());
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    (void)ged_view_context_host_attach(gedp, view_ctx);
 
     BObolViewController *controller = view.obolViewController();
     if (!controller)
@@ -207,7 +209,7 @@ main(int argc, char **argv)
     shaded_appearance.draw_mode = GED_DRAW_MODE_SHADED;
     struct ged_draw_transaction draw_box =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "box.s");
-    draw_box.view = view.viewContext();
+    draw_box.view = view_ctx;
     draw_box.appearance = &shaded_appearance;
     int drew_box = apply_and_sync(gedp, &view, &draw_box);
     if (!drew_box)

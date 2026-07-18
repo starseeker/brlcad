@@ -12,7 +12,6 @@
 #include "BObol/BDefines.h"
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BPickDetail.h"
-#include "BObol/BSceneController.h"
 
 #include <Inventor/SbBasic.h>
 #include <Inventor/SbColor.h>
@@ -23,8 +22,7 @@
 #include <Inventor/SbVec3f.h>
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SoDB.h>
-#include <atomic>
-#include <mutex>
+#include <memory>
 #include <stddef.h>
 #include <stdint.h>
 #include <vector>
@@ -32,6 +30,7 @@
 #include "vmath.h"
 
 class BObolLodService;
+class BObolSceneController;
 class BObolViewAttachment;
 class BObolViewLodState;
 class BObolFeatureStore;
@@ -107,6 +106,7 @@ typedef int (*BObolProgressiveAdvanceCallback)(
     void *userData,
     const BObolProgressiveOptions *options,
     BObolProgressiveStatus *status);
+typedef void (*BObolProgressiveUserDataFreeCallback)(void *userData);
 
 /* A positive callback result records provider progress.  Set status->changed
  * only when that progress published a visible scene update; status->hasMore
@@ -127,6 +127,7 @@ struct BOBOL_EXPORT BObolProgressiveProviderRecord {
     uint64_t token;
     BObolProgressiveAdvanceCallback callback;
     void *userData;
+    BObolProgressiveUserDataFreeCallback userDataFree;
 };
 
 /**
@@ -238,9 +239,15 @@ public:
     SbString getRenderReason(void) const;
     uint64_t registerProgressiveProvider(
 	BObolProgressiveAdvanceCallback callback,
-	void *userData);
+	void *userData,
+	BObolProgressiveUserDataFreeCallback userDataFree = NULL);
     void unregisterProgressiveProvider(uint64_t token);
     void clearProgressiveProviders(void);
+    void *findProgressiveProviderData(
+	BObolProgressiveAdvanceCallback callback) const;
+    uint64_t findProgressiveProviderToken(
+	BObolProgressiveAdvanceCallback callback) const;
+    SbBool hasProgressiveProviders(void) const;
     void setDefaultProgressiveOptions(
 	const BObolProgressiveOptions *options);
     const BObolProgressiveOptions &getDefaultProgressiveOptions(void) const;
@@ -253,6 +260,9 @@ public:
 
     void setLodService(BObolLodService *service);
     BObolLodService *getLodService(void) const;
+    BObolLodService *ensureManagedLodService(size_t workerCount);
+    void stopManagedLodService(void);
+    size_t getManagedLodWorkerCount(void) const;
     void setLodAutoSubmit(SbBool enabled);
     SbBool isLodAutoSubmitEnabled(void) const;
     void setLodForcedLevel(int level);
@@ -330,8 +340,8 @@ public:
     size_t getActiveLodProxyPayloadCount(int proxyKind) const;
     size_t getActiveLodCadPayloadCount(void) const;
 
-    SoBRLSceneController *getSceneController(void);
-    const SoBRLSceneController *getSceneController(void) const;
+    BObolSceneController *getSceneController(void);
+    const BObolSceneController *getSceneController(void) const;
     BObolFeatureStore &features(void);
     const BObolFeatureStore &features(void) const;
     BObolPolygonStore &polygons(void);
@@ -555,90 +565,8 @@ private:
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);
 
-    SoBRLSceneController sceneController;
-    SoViewport *viewport;
-    SoBRLViewLodGroup *renderLodRoot;
-    SoNode *renderBatchRoot;
-    SoNode *renderPresentationRoot;
-    SoGroup *framebufferUnderlayRoot;
-    SoGroup *framebufferInterlayRoot;
-    SoGroup *framebufferOverlayRoot;
-    BObolViewAttachment *viewAttachment;
-    SoRenderManager *renderManager;
-    SoOffscreenRenderer *imageRenderer;
-    SoDB::ContextManager *imageRendererManager;
-    SoCamera *activeCamera;
-    SbViewportRegion viewportRegion;
-    SbColor backgroundBottom;
-    SbColor backgroundTop;
-    SoftwareWireMode softwareWireMode;
-    std::atomic<int> endpointGraphicalRenderingEnabled;
-    SbBool transparencyEnabled;
-    SbBool antialiasingEnabled;
-    double clipMinimum;
-    double clipMaximum;
-    mutable std::mutex renderRequestMutex;
-    SbBool renderRequested;
-    SbString renderReason;
-    uint64_t renderRequestSerial;
-    std::mutex frameRequestMutex;
-    BObolFrameRequestCallback frameRequestCallback;
-    void *frameRequestUserData;
-    mutable std::mutex presentationSyncMutex;
-    BObolPresentationSyncCallback presentationSyncCallback;
-    void *presentationSyncUserData;
-    uint64_t lastRenderTimeNanoseconds;
-    uint64_t smoothedRenderTimeNanoseconds;
-    std::vector<BObolProgressiveProviderRecord> progressiveProviders;
-    uint64_t progressiveProviderNextToken;
-    std::atomic<int> progressiveWorkPending;
-    BObolProgressiveOptions defaultProgressiveOptions;
-    BObolLodService *lodService;
-    uint64_t lodResultSubscriberId;
-    std::atomic<int> lodResultsPending;
-    SbBool lodAutoSubmit;
-    uint64_t lodActiveGeneration;
-    size_t lodSubmissionSourceIndex;
-    size_t lodSubmissionEntryOffset;
-    SbBool lodSubmissionPending;
-    SbBool lodSubmissionRefreshMissing;
-    int lodSubmissionReset;
-    uint64_t lodLastSubmittedViewRevision;
-    uint64_t lodLastSubmittedPolicyRevision;
-    SbString lodLastSubmittedSourceSignature;
-    SbString lodViewSignature;
-    uint64_t lodViewRevision;
-    uint64_t lodPolicyRevision;
-    SbBool lodUseForcedLevel;
-    int lodForcedLevel;
-    uint64_t maxExactFullDetailFaceCount;
-    uint64_t maxExactFullDetailPointCount;
-    std::vector<BObolRtPickCache *> rtPickCaches;
-    std::vector<SbString> rtPickCachePaths;
-    std::vector<struct db_i *> rtPickCacheDatabases;
-    std::vector<uint32_t> rtPickCacheSourceRevisions;
-    SbBool meshResidencyBudgetEnabled;
-    size_t maxResidentMeshBytes;
-    SbBool meshResidencyEvictDisplayPayloads;
-    size_t lastMeshBudgetInitialResidentBytes;
-    size_t lastMeshBudgetFinalResidentBytes;
-    size_t lastMeshBudgetFreedFullDetailBytes;
-    size_t lastMeshBudgetFreedDisplayBytes;
-    unsigned int lastMeshBudgetVisitedMeshCount;
-    unsigned int lastMeshBudgetEvictedFullDetailMeshCount;
-    unsigned int lastMeshBudgetEvictedDisplayMeshCount;
-    unsigned int lastLodVisitedMeshCount;
-    unsigned int lastLodSubmittedTaskCount;
-    unsigned int lastLodSkippedMeshCount;
-    size_t lastLodResultCount;
-    unsigned int lastLodMatchedResultCount;
-    unsigned int lastLodAppliedResultCount;
-    unsigned int lastLodRejectedResultCount;
-    unsigned int lastLodUnmatchedResultCount;
-    SbString lastLodDiagnostics;
-    BObolFeatureStore *featureStore;
-    BObolPolygonStore *polygonStore;
-    BObolSelectionStore *selectionStore;
+    struct Impl;
+    std::unique_ptr<Impl> d;
 };
 
 #endif /* BOBOL_BVIEWCONTROLLER_H */

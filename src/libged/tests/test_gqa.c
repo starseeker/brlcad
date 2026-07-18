@@ -85,16 +85,16 @@ capture_gqa_record(const struct ged_draw_view_db_object_record *rec, void *data)
 }
 
 static void
-require_command_result_metadata(void *view_ctx, const char *feature_name,
+require_command_result_metadata(struct ged_view_context *view_ctx, const char *feature_name,
 	const char *key, const char *value)
 {
-    size_t count = ged_draw_view_context_feature_metadata_count(view_ctx,
+    size_t count = ged_view_feature_metadata_count(view_ctx,
 	    feature_name);
     size_t i;
     for (i = 0; i < count; i++) {
 	struct bu_vls found_key = BU_VLS_INIT_ZERO;
 	struct bu_vls found_value = BU_VLS_INIT_ZERO;
-	int copied = ged_draw_view_context_feature_metadata_copy(view_ctx,
+	int copied = ged_view_feature_metadata_copy(view_ctx,
 		feature_name, i, &found_key, &found_value);
 	int matched = copied &&
 	    BU_STR_EQUAL(bu_vls_cstr(&found_key), key) &&
@@ -109,19 +109,19 @@ require_command_result_metadata(void *view_ctx, const char *feature_name,
 }
 
 static void
-require_command_result_primitive_metadata(void *view_ctx,
+require_command_result_primitive_metadata(struct ged_view_context *view_ctx,
 	const char *feature_name,
 	int primitive,
 	const char *key,
 	const char *value)
 {
-    size_t count = ged_draw_view_context_feature_primitive_metadata_count(
+    size_t count = ged_view_feature_primitive_metadata_count(
 	view_ctx, feature_name, primitive);
     size_t i;
     for (i = 0; i < count; i++) {
 	struct bu_vls found_key = BU_VLS_INIT_ZERO;
 	struct bu_vls found_value = BU_VLS_INIT_ZERO;
-	int copied = ged_draw_view_context_feature_primitive_metadata_copy(
+	int copied = ged_view_feature_primitive_metadata_copy(
 	    view_ctx, feature_name, primitive, i, &found_key, &found_value);
 	int matched = copied &&
 	    BU_STR_EQUAL(bu_vls_cstr(&found_key), key) &&
@@ -137,12 +137,12 @@ require_command_result_primitive_metadata(void *view_ctx,
 }
 
 static void
-require_command_result_label(void *view_ctx, const char *feature_name,
+require_command_result_label(struct ged_view_context *view_ctx, const char *feature_name,
 	const char *text_fragment)
 {
-    struct ged_draw_view_feature_summary feature_summary =
-	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
-    if (!ged_draw_view_context_feature_summary(view_ctx, feature_name,
+    struct ged_view_feature_summary feature_summary =
+	GED_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_view_feature_get_summary(view_ctx, feature_name,
 	    &feature_summary) ||
 	    !feature_summary.exists ||
 	    !feature_summary.is_overlay ||
@@ -153,7 +153,7 @@ require_command_result_label(void *view_ctx, const char *feature_name,
 		"%s was not published as a command-result label.\n",
 		feature_name);
 
-    if (ged_draw_view_context_label_count(view_ctx, feature_name) != 1)
+    if (ged_annotation_label_count(view_ctx, feature_name) != 1)
 	bu_exit(EXIT_FAILURE,
 		"%s did not publish exactly one label.\n",
 		feature_name);
@@ -161,7 +161,7 @@ require_command_result_label(void *view_ctx, const char *feature_name,
     struct bu_vls text = BU_VLS_INIT_ZERO;
     point_t point = VINIT_ZERO;
     unsigned char rgb[3] = {0, 0, 0};
-    if (!ged_draw_view_context_label_copy(view_ctx, feature_name, 0,
+    if (!ged_annotation_label_copy(view_ctx, feature_name, 0,
 	    &text, point, rgb)) {
 	bu_vls_free(&text);
 	bu_exit(EXIT_FAILURE,
@@ -179,11 +179,11 @@ require_command_result_label(void *view_ctx, const char *feature_name,
 }
 
 static void
-require_command_result_feature(void *view_ctx, const char *feature_name)
+require_command_result_feature(struct ged_view_context *view_ctx, const char *feature_name)
 {
-    struct ged_draw_view_feature_summary feature_summary =
-	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
-    if (!ged_draw_view_context_feature_summary(view_ctx, feature_name,
+    struct ged_view_feature_summary feature_summary =
+	GED_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_view_feature_get_summary(view_ctx, feature_name,
 	    &feature_summary) ||
 	    !feature_summary.exists ||
 	    !feature_summary.is_overlay ||
@@ -195,7 +195,7 @@ require_command_result_feature(void *view_ctx, const char *feature_name)
 }
 
 static size_t
-count_gqa_feature_segments(void *view_ctx, const char *feature_name,
+count_gqa_feature_segments(struct ged_view_context *view_ctx, const char *feature_name,
 	const char *plot_fname, const int rgb[3], int write_plot)
 {
     struct gqa_segment_writer writer = {NULL, 0};
@@ -330,7 +330,7 @@ run_gqa_result_case(struct ged *gedp, const char *analysis_flag,
 	bu_exit(EXIT_FAILURE, "GQA %s failed: %s\n", feature_name,
 		bu_vls_cstr(gedp->ged_result_str));
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	bu_exit(EXIT_FAILURE, "No active GED view context available.\n");
     require_command_result_feature(view_ctx, feature_name);
@@ -371,7 +371,7 @@ run_gqa_volume_result_case(struct ged *gedp)
 	bu_exit(EXIT_FAILURE, "GQA volume samples failed: %s\n",
 		bu_vls_cstr(gedp->ged_result_str));
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	bu_exit(EXIT_FAILURE, "No active GED view context available.\n");
 
@@ -420,12 +420,14 @@ main(int ac, char *av[]) {
     }
 
     gedp = ged_open("db", av[1], 1);
-    if (!ged_draw_obol_scene_controller_ensure_owned(gedp, 1))
-	bu_exit(EXIT_FAILURE, "Could not initialize owned Obol scene controller for GQA test.\n");
+    struct ged_draw_transaction init_txn =
+	ged_draw_transaction_make(GED_DRAW_TXN_NONE, NULL);
+    if (ged_draw_apply_transaction(gedp, &init_txn, NULL) < 0)
+	bu_exit(EXIT_FAILURE, "Could not initialize draw state for GQA test.\n");
     ged_exec_gqa(gedp, 3, gqa);
     printf("%s\n", bu_vls_cstr(gedp->ged_result_str));
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	bu_exit(EXIT_FAILURE, "No active GED view context available.\n");
 
@@ -483,8 +485,9 @@ main(int ac, char *av[]) {
     gedp = open_gqa_result_fixture();
     if (!gedp)
 	bu_exit(EXIT_FAILURE, "Could not create GQA result fixture database.\n");
-    if (!ged_draw_obol_scene_controller_ensure_owned(gedp, 1))
-	bu_exit(EXIT_FAILURE, "Could not initialize owned Obol scene controller for GQA result fixture.\n");
+    init_txn = ged_draw_transaction_make(GED_DRAW_TXN_NONE, NULL);
+    if (ged_draw_apply_transaction(gedp, &init_txn, NULL) < 0)
+	bu_exit(EXIT_FAILURE, "Could not initialize draw state for the GQA result fixture.\n");
 
     run_gqa_result_case(gedp, "-Ag", "gap.g", "gqa::gaps", "gap",
 	"brlcad.gqa.gap.v1", "warning");

@@ -58,10 +58,10 @@ QgObolPickRecord::QgObolPickRecord(void) :
 {
 }
 
-static void *
+static struct ged_view_context *
 qg_obol_pick_view_context(QgView *display)
 {
-    return display ? display->viewContext() : NULL;
+    return display ? ged_view_context_from_bv(display->viewContext()) : NULL;
 }
 
 static int
@@ -79,7 +79,7 @@ qg_obol_display_extent(QgView *display, int &width, int &height)
 }
 
 static bool
-qg_obol_feature_pick_from_record(void *view_ctx,
+qg_obol_feature_pick_from_record(struct ged_view_context *view_ctx,
 	const QgObolPickRecord &record,
 	std::string &feature_name,
 	int &feature_primitive)
@@ -95,7 +95,7 @@ qg_obol_feature_pick_from_record(void *view_ctx,
 	return false;
 
     struct bu_vls resolved_name = BU_VLS_INIT_ZERO;
-    const int resolved = ged_draw_view_context_feature_pick_primitive_resolve(
+    const int resolved = ged_view_feature_pick_primitive_resolve(
 	view_ctx, pickedName.c_str(), record.primitiveIndex, 0, 0,
 	&resolved_name, &feature_primitive);
     if (resolved)
@@ -105,7 +105,7 @@ qg_obol_feature_pick_from_record(void *view_ctx,
 }
 
 static void
-qg_obol_resolve_feature_pick(void *view_ctx,
+qg_obol_resolve_feature_pick(struct ged_view_context *view_ctx,
 	QgObolPickRecord &record)
 {
     record.featurePickResolved = false;
@@ -120,12 +120,12 @@ qg_obol_resolve_feature_pick(void *view_ctx,
 
     record.featurePickResolved = true;
     const size_t feature_metadata_count =
-	ged_draw_view_context_feature_metadata_count(view_ctx,
+	ged_view_feature_metadata_count(view_ctx,
 	    record.featureName.c_str());
     for (size_t i = 0; i < feature_metadata_count; i++) {
 	struct bu_vls key = BU_VLS_INIT_ZERO;
 	struct bu_vls value = BU_VLS_INIT_ZERO;
-	if (ged_draw_view_context_feature_metadata_copy(view_ctx,
+	if (ged_view_feature_metadata_copy(view_ctx,
 	    record.featureName.c_str(), i, &key, &value)) {
 	    record.featureMetadata.push_back(std::make_pair(
 		std::string(bu_vls_cstr(&key)),
@@ -135,12 +135,12 @@ qg_obol_resolve_feature_pick(void *view_ctx,
 	bu_vls_free(&value);
     }
     const size_t metadata_count =
-	ged_draw_view_context_feature_primitive_metadata_count(view_ctx,
+	ged_view_feature_primitive_metadata_count(view_ctx,
 	    record.featureName.c_str(), record.featurePrimitiveIndex);
     for (size_t i = 0; i < metadata_count; i++) {
 	struct bu_vls key = BU_VLS_INIT_ZERO;
 	struct bu_vls value = BU_VLS_INIT_ZERO;
-	if (ged_draw_view_context_feature_primitive_metadata_copy(view_ctx,
+	if (ged_view_feature_primitive_metadata_copy(view_ctx,
 	    record.featureName.c_str(), record.featurePrimitiveIndex, i,
 	    &key, &value)) {
 	    record.featurePrimitiveMetadata.push_back(std::make_pair(
@@ -190,7 +190,7 @@ qg_obol_pick_record(const BObolViewPickRecord &hit)
 }
 
 static int
-qg_obol_apply_feature_states(void *view_ctx,
+qg_obol_apply_feature_states(struct ged_view_context *view_ctx,
 	const std::vector<QgObolPickRecord> &records,
 	bool select,
 	bool highlight)
@@ -232,12 +232,12 @@ qg_obol_apply_feature_states(void *view_ctx,
     for (const FeaturePrimitiveGroup &group : groups) {
 	if (group.primitives.empty())
 	    continue;
-	if (select && !ged_draw_view_context_feature_selected_primitives_replace(
+	if (select && !ged_view_feature_set_selection(
 		view_ctx, group.name.c_str(), group.primitives.data(),
 		group.primitives.size()))
 	    continue;
 	if (highlight &&
-	    !ged_draw_view_context_feature_highlighted_primitives_replace(
+	    !ged_view_feature_set_highlights(
 		view_ctx, group.name.c_str(), group.primitives.data(),
 		group.primitives.size()))
 	    continue;
@@ -247,7 +247,7 @@ qg_obol_apply_feature_states(void *view_ctx,
 }
 
 static void
-qg_obol_pick_records(void *view_ctx,
+qg_obol_pick_records(struct ged_view_context *view_ctx,
 	const std::vector<BObolViewPickRecord> &hits,
 	std::vector<QgObolPickRecord> &records)
 {

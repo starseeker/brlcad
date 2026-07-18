@@ -40,7 +40,7 @@
 #include "../view/view.h"
 
 int
-to_is_viewable(void *view_ctx)
+to_is_viewable(struct ged_view_context *view_ctx)
 {
     int result_int;
 

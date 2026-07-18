@@ -371,7 +371,8 @@ mged_obol_input_camera_adjust(struct mged_state *s,
 	/* Keep the toolkit-neutral wheel convention identical to QgCanvasInput. */
 	if (bv_adjust(view, 100 + event->wheelDelta, 100,
 		origin, 0, BV_ADJUST_SCALE)) {
-	    (void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+	    (void)bv_context_update(ged_view_context_bv(view_state->vs_gvp),
+		BV_CONTEXT_CHANGED_VIEW);
 	    mged_obol_input_refresh(s);
 	}
 	return 1;
@@ -383,7 +384,8 @@ mged_obol_input_camera_adjust(struct mged_state *s,
     MAT_DELTAS_GET_NEG(center, center_mat);
 
     if (bv_mouse_delta_adjust(view, event->dx, event->dy, center, flags)) {
-	(void)bv_context_update(view_state->vs_gvp, BV_CONTEXT_CHANGED_VIEW);
+	(void)bv_context_update(ged_view_context_bv(view_state->vs_gvp),
+	    BV_CONTEXT_CHANGED_VIEW);
 	mged_obol_input_refresh(s);
     }
 
@@ -1146,7 +1148,7 @@ mged_display_adc_visibility_set(struct mged_display *dm, int enabled)
     if (!dm || !dm->display_view_state || !dm->display_view_state->vs_gvp)
 	return 0;
 
-    void *view_ctx = dm->display_view_state->vs_gvp;
+    struct ged_view_context *view_ctx = dm->display_view_state->vs_gvp;
     if (ged_view_context_display_endpoint_get(view_ctx)) {
 	struct bobol_endpoint_property_value value =
 	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
@@ -1839,22 +1841,22 @@ mged_display_var_init(struct mged_state *s, struct mged_display *target_display)
 
     BU_ALLOC(view_state, struct _view_state);
     *view_state = *target_display->display_view_state;			/* struct copy */
-    void *target_view_ctx = target_display->display_view_state->vs_gvp;
-    void *view_set_ctx = ged_view_set_ctx(s->gedp);
-    void *view_ctx = ged_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
+    struct ged_view_context *target_view_ctx = target_display->display_view_state->vs_gvp;
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(s->gedp);
+    struct ged_view_context *view_ctx = ged_view_context_create_copy_with_set(target_view_ctx, view_set_ctx);
     view_state->vs_gvp = view_ctx;
 
     ged_view_set_context_add(view_set_ctx, view_ctx);
     ged_view_context_owned_add(s->gedp, view_ctx);
     ged_view_context_update_callback_set(view_ctx,
 	    mged_view_callback, (void *)view_state);
-    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx)) {
+    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_source_lod_policy_get(&lod_policy, view_ctx)) {
 	lod_policy.csg_enabled = 0;
 	lod_policy.zoom_refresh = 0;
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
+	ged_draw_source_lod_policy_apply(view_ctx, &lod_policy);
     }
     view_state->vs_rc = 1;
     view_ring_init(s->mged_curr_display->display_view_state, (struct _view_state *)NULL);

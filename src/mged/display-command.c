@@ -71,10 +71,10 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
     if (BU_STR_EQUAL(argv[0], "idle")) {
 
 	/* redraw after scaling */
-	ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-	void *active_view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
+	ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	struct ged_view_context *active_view_ctx = s->gedp ? ged_view_active_ctx(s->gedp) : NULL;
 	if (active_view_ctx &&
-	    ged_draw_view_context_lod_policy_get(&lod_policy, active_view_ctx) &&
+	    ged_draw_source_lod_policy_get(&lod_policy, active_view_ctx) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    (am_mode == AMM_SCALE ||
@@ -119,7 +119,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 	mat_t view_center;
 	mat_t model2view;
 	mat_t view2model;
-	void *view_ctx = view_state->vs_gvp;
+	struct ged_view_context *view_ctx = view_state->vs_gvp;
 	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
 	if (argc < 3) {
@@ -351,7 +351,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 	fastf_t td; /* tick distance */
 	fastf_t view_local_scale;
 	mat_t view2model;
-	void *view_ctx = view_state->vs_gvp;
+	struct ged_view_context *view_ctx = view_state->vs_gvp;
 	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
 	if (argc < 4) {
@@ -563,7 +563,7 @@ mged_display_command_common(struct mged_state *s, int argc, const char *argv[])
 
     if (BU_STR_EQUAL(argv[0], "size")) {
 	int width, height;
-	void *view_ctx = view_state->vs_gvp;
+	struct ged_view_context *view_ctx = view_state->vs_gvp;
 	struct bv *view = mged_view_context_view(view_ctx);
 
 	/* get the window size */
@@ -623,7 +623,7 @@ mged_display_command(int argc, const char *argv[], void *data)
 	BU_STR_EQUAL(argv[0], "renderer") ||
 	BU_STR_EQUAL(argv[0], "set") ||
 	BU_STR_EQUAL(argv[0], "status")) {
-	void *active_view_ctx = ged_view_active_ctx(s->gedp);
+	struct ged_view_context *active_view_ctx = ged_view_active_ctx(s->gedp);
         if (!active_view_ctx) {
             ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 	    active_view_ctx = ged_view_active_ctx(s->gedp);

@@ -36,12 +36,30 @@
 #include <Inventor/nodes/SoTranslation.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <string>
 #include <vector>
+
+static std::atomic<uint64_t> store_reference_generation_counter(1);
+
+static uint64_t
+store_reference_generation_next(void)
+{
+    uint64_t generation =
+	store_reference_generation_counter.fetch_add(1,
+		std::memory_order_relaxed);
+
+    /* Zero is reserved for null references.  Exhaustion is not realistic,
+     * but keeping the invariant here makes malformed/null checks exact. */
+    while (!generation)
+	generation = store_reference_generation_counter.fetch_add(1,
+		std::memory_order_relaxed);
+    return generation;
+}
 
 static std::string
 store_string(const SbString &s)
@@ -290,6 +308,8 @@ store_apply_vlist_style(SoBRLVListShape *shape,
 	shape->lineWidth = style.lineWidth;
     if (style.hasLineStyle)
 	shape->lineStyle = style.lineStyle;
+    if (style.hasTransparency)
+	shape->transparency = style.transparency;
 }
 
 static void
@@ -310,6 +330,8 @@ store_apply_mesh_style(SoBRLMeshShape *shape,
 	shape->lineWidth = style.lineWidth;
     if (style.hasLineStyle)
 	shape->lineStyle = style.lineStyle;
+    if (style.hasTransparency)
+	shape->transparency = style.transparency;
 }
 
 static void
@@ -345,6 +367,10 @@ store_merge_feature_style(const BObolFeatureStyle &base,
     if (overrideStyle.hasLineStyle) {
 	out.hasLineStyle = TRUE;
 	out.lineStyle = overrideStyle.lineStyle;
+    }
+    if (overrideStyle.hasTransparency) {
+	out.hasTransparency = TRUE;
+	out.transparency = overrideStyle.transparency;
     }
     if (overrideStyle.hasArrow) {
 	out.hasArrow = TRUE;
@@ -505,6 +531,8 @@ BObolFeatureStyle::BObolFeatureStyle(void) :
     lineWidth(1),
     hasLineStyle(FALSE),
     lineStyle(0),
+    hasTransparency(FALSE),
+    transparency(0.0f),
     hasArrow(FALSE),
     arrow(FALSE),
     hasArrowTip(FALSE),
@@ -703,6 +731,8 @@ struct BObolFeatureStoreRecord {
     SbString editIntentRole;
     uint32_t sourceRevision;
     uint32_t inputsRevision;
+    SbBool compactEdit;
+    BObolCompactInstanceSummary compactSummary;
     SoNode *node;
 
     BObolFeatureStoreRecord(void) :
@@ -731,6 +761,8 @@ struct BObolFeatureStoreRecord {
 	editIntentRole(""),
 	sourceRevision(0),
 	inputsRevision(0),
+	compactEdit(FALSE),
+	compactSummary(),
 	node(NULL)
     {
     }
@@ -757,13 +789,15 @@ store_primitive_metadata_for_record(const BObolFeatureStoreRecord *rec,
 
 struct BObolFeatureStore::Impl {
     BObolViewController *controller;
+    uint64_t referenceGeneration;
     uint64_t nextId;
     std::map<uint64_t, BObolFeatureStoreRecord *> records;
     std::map<std::string, uint64_t> names;
     std::map<std::string, uint64_t> ownerGenerations;
 
-    Impl(void) : controller(NULL), nextId(1), records(), names(),
-	ownerGenerations()
+    Impl(void) : controller(NULL),
+	referenceGeneration(store_reference_generation_next()), nextId(1),
+	records(), names(), ownerGenerations()
     {
     }
 
@@ -860,6 +894,8 @@ struct BObolFeatureStore::Impl {
 	rec->primitiveMetadata.clear();
 	rec->selectedPrimitives.clear();
 	rec->highlightedPrimitives.clear();
+	rec->compactEdit = FALSE;
+	rec->compactSummary = BObolCompactInstanceSummary();
 	if (style)
 	    rec->style = *style;
 	if (owner)
@@ -1058,11 +1094,12 @@ store_edit_preview_node(const BObolFeatureStoreRecord &rec)
     if (!rec.points.empty()) {
 	std::vector<int32_t> shapeCommands =
 	    store_shape_commands(rec.commands);
-	preview->setLineSet(
+	SoBRLVListShape *shape = preview->setLineSet(
 	    rec.identity.getLength() > 0 ? rec.identity : rec.name,
 	    &rec.points[0],
 	    &shapeCommands[0],
 	    static_cast<int>(rec.points.size()));
+	store_apply_vlist_style(shape, rec.style);
     }
     return preview;
 }
@@ -1085,6 +1122,8 @@ store_feature_group_node(const BObolFeatureStoreRecord &rec)
 	group->lineStyle = rec.style.lineStyle;
     if (rec.style.hasLineWidth)
 	group->lineWidth = rec.style.lineWidth;
+    if (rec.style.hasTransparency)
+	group->transparency = rec.style.transparency;
     if (rec.style.hasColor) {
 	group->colorOverride = TRUE;
 	group->color = rec.style.color;
@@ -1384,6 +1423,12 @@ BObolViewController *
 BObolFeatureStore::controller(void) const
 {
     return this->impl->controller;
+}
+
+uint64_t
+BObolFeatureStore::referenceGeneration(void) const
+{
+    return this->impl->referenceGeneration;
 }
 
 void
@@ -1841,6 +1886,99 @@ BObolFeatureStore::publishEditPreview(const SbString &name,
     return this->impl->handle(rec);
 }
 
+static SbBool
+store_compact_handle_equal(const BObolCompactInstanceHandle &a,
+	const BObolCompactInstanceHandle &b)
+{
+    return a.sourceNodeId == b.sourceNodeId &&
+	a.instanceWord0 == b.instanceWord0 &&
+	a.instanceWord1 == b.instanceWord1 ? TRUE : FALSE;
+}
+
+BObolFeatureHandle
+BObolFeatureStore::promoteCompactInstanceForEdit(
+    const SbString &name,
+    const SoBRLDatabaseSource &source,
+    const BObolCompactInstanceHandle &instance,
+    const SbString &editIntentId,
+    const SbString &editIntentRole,
+    const BObolFeatureOwner *owner)
+{
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    BObolCompactInstanceSummary summary;
+    if (!source.copyCompactInstanceEditGeometry(instance, points, commands,
+	summary))
+	return BObolFeatureHandle();
+
+    BObolFeatureStyle style;
+    style.hasVisible = TRUE;
+    style.visible = summary.visible;
+    style.hasSelectable = TRUE;
+    style.selectable = summary.selectable;
+    style.hasColor = summary.appearanceColorValid;
+    style.color = summary.appearanceColor;
+    style.hasLineWidth = TRUE;
+    style.lineWidth = summary.lineWidth;
+    style.hasLineStyle = TRUE;
+    style.lineStyle = summary.lineStyle;
+    style.hasTransparency = TRUE;
+    style.transparency = summary.transparency;
+
+    BObolFeatureStoreRecord *rec = this->impl->upsert(name,
+	BObolFeatureScope::Local, BObolFeatureKind::EditPreview, &style, owner);
+    if (!rec)
+	return BObolFeatureHandle();
+
+    rec->identity = summary.sourceInstanceKey.getLength() > 0 ?
+	summary.sourceInstanceKey : summary.path;
+    rec->editIntentId = editIntentId.getLength() > 0 ? editIntentId : name;
+    rec->editIntentRole = editIntentRole.getLength() > 0 ?
+	editIntentRole : SbString("compact-instance");
+    rec->points = points;
+    rec->commands = store_normalized_line_commands(points, commands);
+    rec->sourceRevision = source.sourceRevision.getValue();
+    rec->inputsRevision = source.inputsRevision.getValue();
+    rec->compactEdit = TRUE;
+    rec->compactSummary = summary;
+
+    SoNode *node = store_rebuild_node_for_feature(*rec);
+    this->impl->setNode(rec, node);
+    this->impl->notify(rec, BObolCommandResultStatus::Accepted,
+	"promoteCompactInstanceForEdit");
+    return this->impl->handle(rec);
+}
+
+SbBool
+BObolFeatureStore::demoteCompactInstanceFromEdit(
+    BObolFeatureHandle preview,
+    const BObolCompactInstanceHandle &instance)
+{
+    BObolFeatureStoreRecord *rec = this->impl->record(preview);
+    if (!rec || rec->kind != BObolFeatureKind::EditPreview ||
+	!rec->compactEdit ||
+	!store_compact_handle_equal(rec->compactSummary.handle, instance))
+	return FALSE;
+    return this->remove(this->impl->handle(rec));
+}
+
+SbBool
+BObolFeatureStore::compactEditBinding(
+    BObolFeatureHandle preview,
+    BObolCompactInstanceHandle &instanceOut,
+    BObolCompactInstanceSummary &summaryOut) const
+{
+    instanceOut = BObolCompactInstanceHandle();
+    summaryOut = BObolCompactInstanceSummary();
+    BObolFeatureStoreRecord *rec = this->impl->record(preview);
+    if (!rec || rec->kind != BObolFeatureKind::EditPreview ||
+	!rec->compactEdit)
+	return FALSE;
+    instanceOut = rec->compactSummary.handle;
+    summaryOut = rec->compactSummary;
+    return TRUE;
+}
+
 SbBool
 BObolFeatureStore::replaceEditPreviewGeometry(
     BObolFeatureHandle handle,
@@ -2050,6 +2188,10 @@ BObolFeatureStore::applyStyle(BObolFeatureHandle handle,
     if (style.hasLineStyle) {
 	rec->style.hasLineStyle = TRUE;
 	rec->style.lineStyle = style.lineStyle;
+    }
+    if (style.hasTransparency) {
+	rec->style.hasTransparency = TRUE;
+	rec->style.transparency = style.transparency;
     }
     if (style.hasArrow) {
 	rec->style.hasArrow = TRUE;
@@ -2552,12 +2694,15 @@ store_polygon_node(const BObolPolygonStoreRecord &rec);
 
 struct BObolPolygonStore::Impl {
     BObolViewController *controller;
+    uint64_t referenceGeneration;
     uint64_t nextId;
     std::map<uint64_t, BObolPolygonStoreRecord *> records;
     std::map<std::string, uint64_t> names;
     BObolPolygonHandle snapExclude;
 
-    Impl(void) : controller(NULL), nextId(1), records(), names(), snapExclude()
+    Impl(void) : controller(NULL),
+	referenceGeneration(store_reference_generation_next()), nextId(1),
+	records(), names(), snapExclude()
     {
     }
 
@@ -3334,6 +3479,19 @@ BObolViewController *
 BObolPolygonStore::controller(void) const
 {
     return this->impl->controller;
+}
+
+uint64_t
+BObolPolygonStore::referenceGeneration(void) const
+{
+    return this->impl->referenceGeneration;
+}
+
+const char *
+BObolPolygonStore::name(BObolPolygonHandle handle) const
+{
+    BObolPolygonStoreRecord *rec = this->impl->record(handle);
+    return rec ? rec->name.getString() : NULL;
 }
 
 void

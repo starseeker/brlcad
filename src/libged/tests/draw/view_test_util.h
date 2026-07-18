@@ -16,34 +16,35 @@
 #define GED_TEST_DRAW_VIEW_TEST_UTIL_H
 
 #include "bv.h"
+#include "ged/view_types.h"
 
 struct ged;
 
 __BEGIN_DECLS
 
-int draw_test_obol_view_init(struct ged *gedp, void *view_ctx,
+int draw_test_obol_view_init(struct ged *gedp, struct ged_view_context *view_ctx,
 	int width, int height);
 
 /* Advance the endpoint controller until no progressive work remains. */
-int draw_test_obol_progressive_drain(struct ged *gedp, void *view_ctx,
+int draw_test_obol_progressive_drain(struct ged *gedp, struct ged_view_context *view_ctx,
 	unsigned int max_attempts, unsigned int sleep_milliseconds);
 
 __END_DECLS
 
 static inline struct bv *
-draw_test_bv(void *view_ctx)
+draw_test_bv(struct ged_view_context *view_ctx)
 {
-    return bv_context_view((struct bv_context *)view_ctx);
+    return bv_context_view(ged_view_context_bv(view_ctx));
 }
 
 static inline const struct bv *
-draw_test_bv_const(const void *view_ctx)
+draw_test_bv_const(const struct ged_view_context *view_ctx)
 {
-    return bv_context_view_const((const struct bv_context *)view_ctx);
+    return bv_context_view_const(ged_view_context_bv_const(view_ctx));
 }
 
-#define DRAW_TEST_BV(_ctx) draw_test_bv((void *)(_ctx))
-#define DRAW_TEST_BV_CONST(_ctx) draw_test_bv_const((const void *)(_ctx))
+#define DRAW_TEST_BV(_ctx) draw_test_bv((_ctx))
+#define DRAW_TEST_BV_CONST(_ctx) draw_test_bv_const((_ctx))
 
 #endif /* GED_TEST_DRAW_VIEW_TEST_UTIL_H */
 

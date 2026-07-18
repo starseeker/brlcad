@@ -30,9 +30,13 @@
 #include <string.h>
 
 #include "BObol/BDrawCache.h"
+#include "BObol/BLodService.h"
 #include "BObol/BMeshLodCache.h"
+#include "BObol/BViewAttachment.h"
+#include "BObol/BViewController.h"
 #include "bu/cmd.h"
 #include "bu/hash.h"
+#include "bu/parallel.h"
 #include "bu/snooze.h"
 #include "bu/str.h"
 #include "bu/time.h"
@@ -41,21 +45,36 @@
 #include "ged/draw_obol.h"
 #include "rt/view.h"
 
+#include "../ged_bobol_private.hpp"
+#include "../ged_draw_private.h"
+#include "../ged_draw_view_private.h"
 #include "../ged_private.h"
 #include "./ged_view.h"
 
 static int
-lod_service_status_has_work(
-    const ged_draw_obol_lod_service_status_t *status)
+lod_service_has_work(BObolViewController *controller)
 {
-    if (!status)
+    BObolLodService *service = controller ? controller->getLodService() : NULL;
+    if (!service)
 	return 0;
 
-    return status->in_flight > 0 ||
-	   status->pending_tasks > 0 ||
-	   status->queued_results > 0 ||
-	   status->queued_cache_writes > 0 ||
-	   status->delayed_tasks > 0;
+    return service->inFlightCount() > 0 ||
+	service->pendingTaskCountForDiagnostics() > 0 ||
+	service->queuedResultCountForDiagnostics() > 0 ||
+	service->queuedCacheWriteCountForDiagnostics() > 0 ||
+	service->delayedTaskCountForDiagnostics() > 0;
+}
+
+static int
+lod_service_poll(BObolViewController *controller, size_t max_results)
+{
+    if (!controller)
+	return 0;
+    if (controller->hasPendingLodResults())
+	(void)controller->processPendingLodResults(max_results);
+    if (controller->isLodAutoSubmitEnabled())
+	(void)controller->submitLodRequestsIfNeeded();
+    return 1;
 }
 
 int
@@ -69,11 +88,12 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
     }
 
     struct ged *gedp = gd->gedp;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     int print_help = 0;
     static const char *usage = "view lod [csg|mesh] [0|1]\n"
 			       "view lod cache [clear [all_files] | exists] \n"
 			       "view lod service [status|start [workers]|stop|poll [max_results]|wait [timeout_ms] [max_results]|prewarm [all|bot ...]]\n"
+			       "view lod frontier [prewarm|expand] path draw_mode max_sources max_children\n"
 			       "view lod scale [factor]\n"
 			       "view lod point_scale [factor]\n"
 			       "view lod curve_scale [factor]\n"
@@ -100,10 +120,12 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	return GED_HELP;
     }
 
-    if (argc > 4 ||
+    if (argc > 6 ||
+	(argc > 4 && !(argc == 6 && BU_STR_EQUAL(argv[0], "frontier"))) ||
 	(argc > 3 && !(argc >= 2 && BU_STR_EQUAL(argv[0], "service") &&
 		       (BU_STR_EQUAL(argv[1], "prewarm") ||
-			BU_STR_EQUAL(argv[1], "wait"))))) {
+			BU_STR_EQUAL(argv[1], "wait"))) &&
+	 !(argc == 6 && BU_STR_EQUAL(argv[0], "frontier")))) {
 	bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
 	return BRLCAD_ERROR;
     }
@@ -114,13 +136,18 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	return BRLCAD_ERROR;
     }
 
-    ged_draw_view_lod_policy lod_policy;
-    if (!ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx)) {
+    BObolViewAttachment *attachment =
+	ged_view_context_obol_attachment(view_ctx);
+    if (!attachment) {
 	bu_vls_printf(gedp->ged_result_str, "unable to read LoD policy\n");
 	return BRLCAD_ERROR;
     }
+    ged_draw_source_lod_policy lod_policy;
+    attachment->getLodPolicy(&lod_policy);
+    BObolViewController *view_controller =
+	ged_bobol_view_controller(view_ctx);
     auto commit_lod_policy = [&]() {
-	ged_draw_view_context_lod_policy_apply(view_ctx, &lod_policy);
+	attachment->setLodPolicy(&lod_policy);
 	if (!ged_draw_obol_view_lod_policy_changed(gedp, view_ctx)) {
 	    int rac = 1;
 	    const char *rav[1] = {"redraw"};
@@ -364,35 +391,55 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 
     if (BU_STR_EQUAL(argv[0], "service")) {
 	if (argc == 1 || BU_STR_EQUAL(argv[1], "status")) {
-	    ged_draw_obol_lod_service_status_t status = {};
-	    if (!ged_draw_obol_lod_service_status(gedp, view_ctx, &status)) {
+	    if (!view_controller) {
 		bu_vls_printf(gedp->ged_result_str,
 			      "no Obol LoD service is attached to the current view\n");
 		return BRLCAD_ERROR;
 	    }
-	    bu_vls_printf(gedp->ged_result_str, "attached: %d\n", status.attached);
-	    bu_vls_printf(gedp->ged_result_str, "running: %d\n", status.running);
-	    bu_vls_printf(gedp->ged_result_str, "auto_submit: %d\n", status.auto_submit);
-	    bu_vls_printf(gedp->ged_result_str, "workers: %zu\n", status.worker_count);
-	    bu_vls_printf(gedp->ged_result_str, "in_flight: %zu\n", status.in_flight);
-	    bu_vls_printf(gedp->ged_result_str, "pending_tasks: %zu\n", status.pending_tasks);
-	    bu_vls_printf(gedp->ged_result_str, "queued_results: %zu\n", status.queued_results);
-	    bu_vls_printf(gedp->ged_result_str, "queued_cache_writes: %zu\n", status.queued_cache_writes);
-	    bu_vls_printf(gedp->ged_result_str, "delayed_tasks: %zu\n", status.delayed_tasks);
-	    bu_vls_printf(gedp->ged_result_str, "last_visited_meshes: %u\n", status.last_visited_mesh_count);
-	    bu_vls_printf(gedp->ged_result_str, "last_submitted_tasks: %u\n", status.last_submitted_task_count);
-	    bu_vls_printf(gedp->ged_result_str, "last_skipped_meshes: %u\n", status.last_skipped_mesh_count);
-	    bu_vls_printf(gedp->ged_result_str, "last_results: %zu\n", status.last_result_count);
-	    bu_vls_printf(gedp->ged_result_str, "last_matched_results: %u\n", status.last_matched_result_count);
-	    bu_vls_printf(gedp->ged_result_str, "last_applied_results: %u\n", status.last_applied_result_count);
-	    bu_vls_printf(gedp->ged_result_str, "last_rejected_results: %u\n", status.last_rejected_result_count);
-	    bu_vls_printf(gedp->ged_result_str, "last_unmatched_results: %u\n", status.last_unmatched_result_count);
-	    bu_vls_printf(gedp->ged_result_str, "active_lod_mesh_payloads: %zu\n", status.active_mesh_payloads);
-	    bu_vls_printf(gedp->ged_result_str, "active_lod_aabb_proxies: %zu\n", status.active_aabb_proxy_payloads);
-	    bu_vls_printf(gedp->ged_result_str, "active_lod_obb_proxies: %zu\n", status.active_obb_proxy_payloads);
-	    if (status.last_diagnostics[0])
+	    BObolLodService *service = view_controller->getLodService();
+	    const SbString &diagnostics = view_controller->getLastLodDiagnostics();
+	    bu_vls_printf(gedp->ged_result_str, "attached: 1\n");
+	    bu_vls_printf(gedp->ged_result_str, "running: %d\n",
+		service && service->isRunning() ? 1 : 0);
+	    bu_vls_printf(gedp->ged_result_str, "auto_submit: %d\n",
+		view_controller->isLodAutoSubmitEnabled() ? 1 : 0);
+	    bu_vls_printf(gedp->ged_result_str, "workers: %zu\n",
+		view_controller->getManagedLodWorkerCount());
+	    bu_vls_printf(gedp->ged_result_str, "in_flight: %zu\n",
+		service ? service->inFlightCount() : 0);
+	    bu_vls_printf(gedp->ged_result_str, "pending_tasks: %zu\n",
+		service ? service->pendingTaskCountForDiagnostics() : 0);
+	    bu_vls_printf(gedp->ged_result_str, "queued_results: %zu\n",
+		service ? service->queuedResultCountForDiagnostics() : 0);
+	    bu_vls_printf(gedp->ged_result_str, "queued_cache_writes: %zu\n",
+		service ? service->queuedCacheWriteCountForDiagnostics() : 0);
+	    bu_vls_printf(gedp->ged_result_str, "delayed_tasks: %zu\n",
+		service ? service->delayedTaskCountForDiagnostics() : 0);
+	    bu_vls_printf(gedp->ged_result_str, "last_visited_meshes: %u\n",
+		view_controller->getLastLodVisitedMeshCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_submitted_tasks: %u\n",
+		view_controller->getLastLodSubmittedTaskCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_skipped_meshes: %u\n",
+		view_controller->getLastLodSkippedMeshCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_results: %zu\n",
+		view_controller->getLastLodResultCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_matched_results: %u\n",
+		view_controller->getLastLodMatchedResultCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_applied_results: %u\n",
+		view_controller->getLastLodAppliedResultCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_rejected_results: %u\n",
+		view_controller->getLastLodRejectedResultCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_unmatched_results: %u\n",
+		view_controller->getLastLodUnmatchedResultCount());
+	    bu_vls_printf(gedp->ged_result_str, "active_lod_mesh_payloads: %zu\n",
+		view_controller->getActiveLodMeshPayloadCount());
+	    bu_vls_printf(gedp->ged_result_str, "active_lod_aabb_proxies: %zu\n",
+		view_controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_AABB));
+	    bu_vls_printf(gedp->ged_result_str, "active_lod_obb_proxies: %zu\n",
+		view_controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_OBB));
+	    if (diagnostics.getLength() > 0)
 		bu_vls_printf(gedp->ged_result_str, "last_diagnostics:\n%s\n",
-			      status.last_diagnostics);
+			      diagnostics.getString());
 	    return BRLCAD_OK;
 	}
 
@@ -409,12 +456,16 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
 		return BRLCAD_ERROR;
 	    }
-	    if (!ged_draw_obol_lod_service_start(gedp, view_ctx,
-						 (size_t)workers)) {
+	    size_t worker_count = workers > 0 ? (size_t)workers : bu_avail_cpus();
+	    if (!view_controller ||
+		!view_controller->ensureManagedLodService(
+		    worker_count ? worker_count : 1)) {
 		bu_vls_printf(gedp->ged_result_str,
 			      "unable to start Obol LoD service for the current view\n");
 		return BRLCAD_ERROR;
 	    }
+	    view_controller->setLodAutoSubmit(TRUE);
+	    view_controller->requestRender("lod-service-start");
 	    redraw_view();
 	    return BRLCAD_OK;
 	}
@@ -424,11 +475,13 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
 		return BRLCAD_ERROR;
 	    }
-	    if (!ged_draw_obol_lod_service_stop(gedp, view_ctx)) {
+	    if (!view_controller) {
 		bu_vls_printf(gedp->ged_result_str,
 			      "unable to stop Obol LoD service for the current view\n");
 		return BRLCAD_ERROR;
 	    }
+	    view_controller->stopManagedLodService();
+	    view_controller->requestRender("lod-service-stop");
 	    redraw_view();
 	    return BRLCAD_OK;
 	}
@@ -446,24 +499,24 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
 		return BRLCAD_ERROR;
 	    }
-	    ged_draw_obol_lod_service_status_t status = {};
-	    if (!ged_draw_obol_lod_service_poll(gedp, view_ctx,
-						(size_t)max_results, &status)) {
+	    if (!lod_service_poll(view_controller, (size_t)max_results)) {
 		bu_vls_printf(gedp->ged_result_str,
 			      "unable to poll Obol LoD service for the current view\n");
 		return BRLCAD_ERROR;
 	    }
+	    BObolLodService *service = view_controller->getLodService();
+	    const SbString &diagnostics = view_controller->getLastLodDiagnostics();
 	    redraw_view();
 	    bu_vls_printf(gedp->ged_result_str,
 			  "submitted=%u applied=%u queued=%zu in_flight=%zu pending=%zu\n",
-			  status.last_submitted_task_count,
-			  status.last_applied_result_count,
-			  status.queued_results,
-			  status.in_flight,
-			  status.pending_tasks);
-	    if (status.last_diagnostics[0])
+			  view_controller->getLastLodSubmittedTaskCount(),
+			  view_controller->getLastLodAppliedResultCount(),
+			  service ? service->queuedResultCountForDiagnostics() : 0,
+			  service ? service->inFlightCount() : 0,
+			  service ? service->pendingTaskCountForDiagnostics() : 0);
+	    if (diagnostics.getLength() > 0)
 		bu_vls_printf(gedp->ged_result_str, "%s\n",
-			      status.last_diagnostics);
+			      diagnostics.getString());
 	    return BRLCAD_OK;
 	}
 
@@ -489,20 +542,17 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 
-	    ged_draw_obol_lod_service_status_t status = {};
 	    int timed_out = 0;
 	    const int64_t start = bu_gettime();
 	    const int64_t timeout_us = (int64_t)timeout_ms * 1000;
 
 	    while (1) {
-		if (!ged_draw_obol_lod_service_poll(gedp, view_ctx,
-						    (size_t)max_results,
-						    &status)) {
+		if (!lod_service_poll(view_controller, (size_t)max_results)) {
 		    bu_vls_printf(gedp->ged_result_str,
 				  "unable to wait on Obol LoD service for the current view\n");
 		    return BRLCAD_ERROR;
 		}
-		if (!lod_service_status_has_work(&status))
+		if (!lod_service_has_work(view_controller))
 		    break;
 		if (timeout_us >= 0 && bu_gettime() - start >= timeout_us) {
 		    timed_out = 1;
@@ -511,19 +561,23 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		bu_snooze(25000);
 	    }
 
+	    BObolLodService *service = view_controller ?
+		view_controller->getLodService() : NULL;
+	    const SbString diagnostics = view_controller ?
+		view_controller->getLastLodDiagnostics() : SbString();
 	    redraw_view();
 	    bu_vls_printf(gedp->ged_result_str,
 			  "wait_timed_out=%d submitted=%u applied=%u queued=%zu in_flight=%zu pending=%zu delayed=%zu\n",
 			  timed_out,
-			  status.last_submitted_task_count,
-			  status.last_applied_result_count,
-			  status.queued_results,
-			  status.in_flight,
-			  status.pending_tasks,
-			  status.delayed_tasks);
-	    if (status.last_diagnostics[0])
+			  view_controller ? view_controller->getLastLodSubmittedTaskCount() : 0,
+			  view_controller ? view_controller->getLastLodAppliedResultCount() : 0,
+			  service ? service->queuedResultCountForDiagnostics() : 0,
+			  service ? service->inFlightCount() : 0,
+			  service ? service->pendingTaskCountForDiagnostics() : 0,
+			  service ? service->delayedTaskCountForDiagnostics() : 0);
+	    if (diagnostics.getLength() > 0)
 		bu_vls_printf(gedp->ged_result_str, "%s\n",
-			      status.last_diagnostics);
+			      diagnostics.getString());
 	    return timed_out ? BRLCAD_ERROR : BRLCAD_OK;
 	}
 
@@ -552,6 +606,72 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	bu_vls_printf(gedp->ged_result_str,
 		      "unknown argument to service: %s\n", argv[1]);
 	return BRLCAD_ERROR;
+    }
+
+    /* Frontier realization is an adapter detail.  Keep it behind the command
+     * boundary so diagnostics consume semantic paths and stable key/value
+     * results rather than installed Obol records or scene-node operations. */
+    if (BU_STR_EQUAL(argv[0], "frontier")) {
+	if (argc != 6 ||
+	    (!BU_STR_EQUAL(argv[1], "prewarm") &&
+	     !BU_STR_EQUAL(argv[1], "expand"))) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
+	    return BRLCAD_ERROR;
+	}
+
+	int draw_mode = 0;
+	int max_sources = 0;
+	int max_children = 0;
+	if (bu_opt_int(NULL, 1, (const char **)&argv[3], &draw_mode) != 1 ||
+	    bu_opt_int(NULL, 1, (const char **)&argv[4], &max_sources) != 1 ||
+	    bu_opt_int(NULL, 1, (const char **)&argv[5], &max_children) != 1 ||
+	    max_sources < 0 || max_children < 0) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"invalid frontier limits or draw mode\n");
+	    return BRLCAD_ERROR;
+	}
+
+	if (BU_STR_EQUAL(argv[1], "prewarm")) {
+	    struct ged_draw_obol_source_prewarm_status status = {};
+	    const size_t submitted =
+		ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
+		    gedp, view_ctx, argv[2], draw_mode,
+		    (size_t)max_sources, (size_t)max_children, &status);
+	    bu_vls_printf(gedp->ged_result_str,
+		"result=%zu child_count=%zu considered=%zu submitted=%zu "
+		"already_cached=%zu skipped_non_union=%zu "
+		"skipped_duplicate_instance=%zu shared_request=%zu "
+		"non_union_children=%zu duplicate_instances=%zu "
+		"skipped_invalid=%zu remaining=%zu comb_sources=%zu "
+		"leaf_sources=%zu\n",
+		submitted, status.child_count, status.considered,
+		status.submitted, status.already_cached,
+		status.skipped_non_union, status.skipped_duplicate_instance,
+		status.shared_request, status.non_union_children,
+		status.duplicate_instances, status.skipped_invalid,
+		status.remaining, status.comb_sources, status.leaf_sources);
+	    return BRLCAD_OK;
+	}
+
+	struct ged_draw_obol_source_expansion_status status = {};
+	const int changed =
+	    ged_draw_obol_database_source_expand_visible_children(
+		gedp, view_ctx, argv[2], draw_mode, (size_t)max_sources,
+		(size_t)max_children, &status);
+	bu_vls_printf(gedp->ged_result_str,
+	    "result=%d child_count=%zu considered=%zu expanded=%zu "
+	    "existing=%zu skipped_non_union=%zu "
+	    "skipped_duplicate_instance=%zu expanded_non_union=%zu "
+	    "expanded_duplicate_instance=%zu skipped_invalid=%zu "
+	    "remaining=%zu proxy_published=%zu metadata_applied=%zu "
+	    "comb_sources=%zu leaf_sources=%zu\n",
+	    changed, status.child_count, status.considered, status.expanded,
+	    status.existing, status.skipped_non_union,
+	    status.skipped_duplicate_instance, status.expanded_non_union,
+	    status.expanded_duplicate_instance, status.skipped_invalid,
+	    status.remaining, status.proxy_published, status.metadata_applied,
+	    status.comb_sources, status.leaf_sources);
+	return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(argv[0], "scale")) {

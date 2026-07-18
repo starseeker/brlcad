@@ -56,7 +56,7 @@ ged_get_eyemodel_core(struct ged *gedp, int argc, const char *argv[])
     }
 
     _ged_rt_set_eye_model(gedp, eye_model);
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
     bv_orientation_quat_get(quat, view);
 

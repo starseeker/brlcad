@@ -33,7 +33,8 @@
 #include "./view/view.h"
 
 static void
-tclcad_wrapper_sync_dimensions(void *target_ctx, void *source_ctx)
+tclcad_wrapper_sync_dimensions(struct ged_view_context *target_ctx,
+	const struct ged_view_context *source_ctx)
 {
     bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(source_ctx);
@@ -41,7 +42,7 @@ tclcad_wrapper_sync_dimensions(void *target_ctx, void *source_ctx)
 	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     struct bobol_endpoint_property_value height =
 	BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-    struct bv *target_view = bv_context_view((struct bv_context *)target_ctx);
+    struct bv *target_view = bv_context_view(ged_view_context_bv(target_ctx));
     if (endpoint && target_view &&
 	bobol_display_endpoint_property_get(endpoint, "endpoint.width",
 	    &width) == BOBOL_ENDPOINT_PROPERTY_OK &&
@@ -66,7 +67,7 @@ to_autoview_func(struct ged *gedp,
     const char *av[2];
     int aflag = 0;
     int rflag = 0;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     av[0] = "who";
     av[1] = (char *)0;
@@ -88,7 +89,7 @@ to_autoview_func(struct ged *gedp,
 
     struct bu_ptbl *views = ged_view_set_views_ctx(current_top->to_gedp);
     for (i = 0; i < BU_PTBL_LEN(views); i++) {
-	view_ctx = BU_PTBL_GET(views, i);
+ view_ctx = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	if (to_is_viewable(view_ctx)) {
 	    tclcad_wrapper_sync_dimensions(ged_view_active_ctx(gedp), view_ctx);
 	}
@@ -272,7 +273,7 @@ to_view_func_common(struct ged *gedp,
     int ret;
     int ac;
     char **av;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -307,8 +308,8 @@ to_view_func_common(struct ged *gedp,
 
     bu_free(av, "free av copy");
 
-    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_view_context_lod_policy_get(&lod_policy, view_ctx) &&
+    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_source_lod_policy_get(&lod_policy, view_ctx) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh)
     {
 	const char *gr_av[] = {"redraw", NULL};
@@ -388,7 +389,7 @@ to_view_context_func(struct ged *gedp,
     int ret;
     int ac;
     char **av;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);

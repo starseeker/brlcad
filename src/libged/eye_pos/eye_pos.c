@@ -49,7 +49,7 @@ ged_eye_pos_core(struct ged *gedp, int argc, const char *argv[])
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* get eye position */
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     if (argc == 1) {
 	bv_eye_pos_get(eye_pos, view);

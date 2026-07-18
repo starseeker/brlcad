@@ -39,7 +39,7 @@
 #include "bu/sort.h"
 #include "bu/str.h"
 
-#include "../librt/librt_private.h"
+#include "./ged_bobol_private.hpp"
 #include "./ged_private.h"
 
 static void
@@ -152,7 +152,7 @@ draw_walk_tree(struct db_full_path *path, union tree *tp, mat_t *curr_mat,
 	    draw_walk_tree(path, tp->tr_b.tb_right, curr_mat, traverse_func, client_data, comb_inst_map);
 	    break;
 	case OP_DB_LEAF:
-	    if (UNLIKELY(dd->dbip->i->dbi_use_comb_instance_ids && cinst_map))
+	    if (UNLIKELY(db_comb_instance_ids_get(dd->dbip) > 0 && cinst_map))
 		(*cinst_map)[std::string(tp->tr_l.tl_name)]++;
 	    if ((dp=db_lookup(dd->dbip, tp->tr_l.tl_name, LOOKUP_QUIET)) == RT_DIR_NULL) {
 		return;
@@ -184,7 +184,7 @@ draw_walk_tree(struct db_full_path *path, union tree *tp, mat_t *curr_mat,
 		if (!(dp->d_flags & RT_DIR_HIDDEN)) {
 		    db_add_node_to_full_path(path, dp);
 		    DB_FULL_PATH_SET_CUR_BOOL(path, tp->tr_op);
-		    if (UNLIKELY(dd->dbip->i->dbi_use_comb_instance_ids && cinst_map))
+		    if (UNLIKELY(db_comb_instance_ids_get(dd->dbip) > 0 && cinst_map))
 			DB_FULL_PATH_SET_CUR_COMB_INST(path, (*cinst_map)[std::string(tp->tr_l.tl_name)]-1);
 		    if (!db_full_path_cyclic(path, NULL, 0)) {
 			/* Keep going */
@@ -244,7 +244,7 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 	    return;
 
 	comb = (struct rt_comb_internal *)in.idb_ptr;
-	if (UNLIKELY(dd->dbip->i->dbi_use_comb_instance_ids)) {
+	if (UNLIKELY(db_comb_instance_ids_get(dd->dbip) > 0)) {
 	    std::unordered_map<std::string, int> cinst_map;
 	    draw_walk_tree(path, comb->tree, curr_mat, draw_gather_paths, client_data, (void *)&cinst_map);
 	} else {
@@ -274,8 +274,8 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 	    return;
 
 	const int draw_mode = dd->vs ? dd->vs->draw_mode : GED_DRAW_MODE_WIRE;
-	if (ged_draw_obol_database_source_ensure_for_path_with_placement(
-		dd->gedp, name, dd->dbip, draw_mode, 0,
+	if (ged_bobol_database_source_ensure_for_path_with_placement(
+		dd->bobol_publication, name, dd->dbip, draw_mode, 0,
 		1, *curr_mat, 0, NULL, has_draw_size, draw_size)) {
 	    const int solid_lines_only = dd->vs ? dd->vs->draw_solid_lines_only : 0;
 	    const int line_style =
@@ -286,8 +286,8 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 		opacity >= 1.0 ? 0.0 : 1.0 - opacity;
 	    const int color_valid = (dd->vs && dd->vs->color_override) ? 1 : 0;
 	    const unsigned char *color = color_valid ? dd->vs->color : NULL;
-	    (void)ged_draw_obol_database_source_update_display_for_path(
-		    dd->gedp, name,
+	    (void)ged_bobol_database_source_update_display_for_path(
+		    dd->bobol_publication, name,
 		    1, 1,
 		    0, 0,
 		    1, 0,
@@ -306,8 +306,8 @@ draw_gather_paths(struct db_full_path *path, mat_t *curr_mat, void *client_data)
 
 
 extern "C" int
-ged_draw_view_context_gobject_create(struct ged *gedp,
-				     void *view_ctx,
+ged_view_feature_gobject_create(struct ged *gedp,
+				     struct ged_view_context *view_ctx,
 				     const char *db_path,
 				     const char *gobject_name,
 				     struct bu_vls *result)
@@ -316,7 +316,7 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
 	    !gobject_name || !gobject_name[0])
 	return 0;
 
-    if (ged_draw_view_context_feature_exists(view_ctx, gobject_name)) {
+    if (ged_view_feature_exists(view_ctx, gobject_name)) {
 	if (result)
 	    bu_vls_printf(result, "View feature %s already exists\n", gobject_name);
 	return 0;
@@ -362,19 +362,20 @@ ged_draw_view_context_gobject_create(struct ged *gedp,
     bu_color_from_rgb_chars(&dd.c, wcolor);
     dd.vs = &vs;
 
-    int scoped = ged_draw_obol_database_source_publication_begin(gedp,
-	    view_ctx, vs.draw_mode);
-    if (!scoped) {
+    struct ged_bobol_publication_context publication;
+    if (!ged_bobol_publication_begin(&publication, gedp, view_ctx,
+	    vs.draw_mode)) {
 	db_free_full_path(fp);
 	BU_PUT(fp, struct db_full_path);
 	if (result)
 	    bu_vls_printf(result, "Obol database-source publication is not available\n");
 	return 0;
     }
-    ged_draw_obol_database_source_publication_appearance_set(gedp, &vs);
-    ged_draw_obol_database_source_publication_group_set(gedp, gobject_name);
+    ged_bobol_publication_appearance_set(&publication, &vs);
+    ged_bobol_publication_group_set(&publication, gobject_name);
+    dd.bobol_publication = &publication;
     draw_gather_paths(fp, &mat, (void *)&dd);
-    ged_draw_obol_database_source_publication_end(gedp);
+    ged_bobol_publication_end(&publication);
 
     db_free_full_path(fp);
     BU_PUT(fp, struct db_full_path);

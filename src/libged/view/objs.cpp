@@ -42,120 +42,301 @@ extern "C" {
 #include "raytrace.h"
 #include "ged/draw.h"
 }
+#include "../ged_bobol_private.hpp"
+#include "BObol/BSceneController.h"
+#include "BObol/BSceneGroup.h"
+#include "feature_resolver.hpp"
 #include "./ged_view.h"
 #include "../ged_private.h"
 
-static struct ged_draw_view_record_query
-_view_obj_query(int list_view, int list_db, int local_only, const char *glob)
-{
-    struct ged_draw_view_record_query query;
-    query.flags = 0;
-    query.glob = glob;
-    query.draw_mode = -1;
-    if (list_view)
-	query.flags |= GED_DRAW_VIEW_RECORD_QUERY_VIEW_OBJECTS;
-    if (list_db)
-	query.flags |= GED_DRAW_VIEW_RECORD_QUERY_DB_OBJECTS;
-    if (local_only)
-	query.flags |= GED_DRAW_VIEW_RECORD_QUERY_LOCAL_ONLY;
-    return query;
-}
-
 struct view_obj_list_state {
     std::set<std::string> names;
+    const char *glob = nullptr;
 };
 
 static int
-_view_obj_list_cb(const struct ged_draw_view_db_object_record *rec, void *ud)
+_view_obj_list_match(const char *name, const char *glob)
 {
-    struct view_obj_list_state *ctx = (struct view_obj_list_state *)ud;
-    if (!ctx || !rec || !rec->path || !rec->path[0])
-	return 1;
-    ctx->names.insert(std::string(rec->path));
+    return name && name[0] &&
+	(!glob || !glob[0] || bu_path_match(glob, name, 0) == 0);
+}
+
+static int
+_view_obj_list_feature_cb(const BObolFeatureRecord &record, void *ud)
+{
+    struct view_obj_list_state *ctx =
+	static_cast<struct view_obj_list_state *>(ud);
+    if (ctx && _view_obj_list_match(record.name.getString(), ctx->glob))
+	ctx->names.insert(record.name.getString());
+    return 1;
+}
+
+static int
+_view_obj_list_polygon_cb(const BObolPolygonRecord &record, void *ud)
+{
+    struct view_obj_list_state *ctx =
+	static_cast<struct view_obj_list_state *>(ud);
+    if (ctx && _view_obj_list_match(record.name.getString(), ctx->glob))
+	ctx->names.insert(record.name.getString());
     return 1;
 }
 
 static void
-_view_obj_list(struct bu_vls *out, void *view_ctx, int list_view, int list_db, int local_only, const char *glob)
+_view_obj_json_string(struct bu_vls *out, const char *value)
 {
-    if (!out || !view_ctx || !ged_draw_view_context_scene_attached(view_ctx))
+    bu_vls_putc(out, '"');
+    for (const unsigned char *cp =
+	 reinterpret_cast<const unsigned char *>(value ? value : "");
+	 *cp; cp++) {
+	switch (*cp) {
+	    case '"': bu_vls_strcat(out, "\\\""); break;
+	    case '\\': bu_vls_strcat(out, "\\\\"); break;
+	    case '\b': bu_vls_strcat(out, "\\b"); break;
+	    case '\f': bu_vls_strcat(out, "\\f"); break;
+	    case '\n': bu_vls_strcat(out, "\\n"); break;
+	    case '\r': bu_vls_strcat(out, "\\r"); break;
+	    case '\t': bu_vls_strcat(out, "\\t"); break;
+	    default:
+		if (*cp < 0x20)
+		    bu_vls_printf(out, "\\u%04x", static_cast<unsigned int>(*cp));
+		else
+		    bu_vls_putc(out, static_cast<char>(*cp));
+		break;
+	}
+    }
+    bu_vls_putc(out, '"');
+}
+
+static void
+_view_obj_list(struct bu_vls *out, struct ged_view_context *view_ctx,
+    int list_view, int list_db, int local_only, const char *glob, int json)
+{
+    if (!out || !view_ctx)
 	return;
 
-    struct ged_draw_view_record_query query =
-	_view_obj_query(list_view, list_db, local_only, glob);
     struct view_obj_list_state ctx;
-    ged_draw_foreach_view_record_query(view_ctx, &query, _view_obj_list_cb, &ctx);
+    ctx.glob = glob;
+    struct ged *gedp = static_cast<struct ged *>(
+	ged_view_context_user_data_get(view_ctx));
 
-    for (std::set<std::string>::iterator it = ctx.names.begin(); it != ctx.names.end(); ++it)
-	bu_vls_printf(out, "%s\n", it->c_str());
+    if (list_view) {
+	BObolViewController *local = ged_bobol_view_controller(view_ctx);
+	const BObolFeatureOwner owner =
+	    ged_bobol_view_feature_owner(view_ctx);
+	if (local) {
+	    local->features().visitRecords(_view_obj_list_feature_cb, &ctx,
+		BOBOL_FEATURE_SCOPE_LOCAL, &owner);
+	    local->polygons().visitRecords(_view_obj_list_polygon_cb, &ctx);
+	    if (!local_only)
+		local->features().visitRecords(_view_obj_list_feature_cb, &ctx,
+		    BOBOL_FEATURE_SCOPE_SHARED, nullptr);
+	}
+	if (!local_only) {
+	    BObolViewController *shared =
+		ged_bobol_shared_view_controller(gedp);
+	    if (shared && shared != local) {
+		shared->features().visitRecords(_view_obj_list_feature_cb, &ctx,
+		    BOBOL_FEATURE_SCOPE_SHARED, nullptr);
+		shared->polygons().visitRecords(_view_obj_list_polygon_cb, &ctx);
+	    }
+	}
+    }
+
+    if (list_db && !local_only) {
+	BObolSceneController *scene = ged_bobol_scene(gedp);
+	for (int i = 0; scene && i < scene->getDatabaseSourceCount(); i++) {
+	    BObolDatabaseSourceSummary summary;
+	    if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid)
+		continue;
+	    const char *name = summary.path.getString();
+	    if (_view_obj_list_match(name, glob))
+		ctx.names.insert(name);
+	}
+    }
+
+    if (!json) {
+	for (std::set<std::string>::iterator it = ctx.names.begin();
+	     it != ctx.names.end(); ++it)
+	    bu_vls_printf(out, "%s\n", it->c_str());
+	return;
+    }
+    bu_vls_putc(out, '[');
+    bool first = true;
+    for (const std::string &name : ctx.names) {
+	if (!first)
+	    bu_vls_putc(out, ',');
+	_view_obj_json_string(out, name.c_str());
+	first = false;
+    }
+    bu_vls_strcat(out, "]\n");
+}
+
+static const char *
+_view_obj_mode_name(int mode)
+{
+    switch (mode) {
+	case GED_DRAW_MODE_WIRE:
+	    return "wireframe";
+	case GED_DRAW_MODE_SHADED_BOTS:
+	case GED_DRAW_MODE_SHADED:
+	    return "shaded";
+	case GED_DRAW_MODE_EVAL_WIRE:
+	    return "evaluated_wireframe";
+	case GED_DRAW_MODE_HIDDEN_LINE:
+	    return "hidden_line";
+	case GED_DRAW_MODE_EVAL_POINTS:
+	    return "evaluated_points";
+	default:
+	    return "unknown";
+    }
 }
 
 static void
 _view_obj_mode_value_string(struct bu_vls *out, int mode)
 {
-    if (!out) {
-	bu_vls_printf(out, "unknown");
-	return;
-    }
-    switch (mode) {
-	case GED_DRAW_MODE_WIRE:
-	    bu_vls_printf(out, "wireframe");
-	    break;
-	case GED_DRAW_MODE_SHADED_BOTS:
-	case GED_DRAW_MODE_SHADED:
-	    bu_vls_printf(out, "shaded");
-	    break;
-	case GED_DRAW_MODE_EVAL_WIRE:
-	    bu_vls_printf(out, "evaluated_wireframe");
-	    break;
-	case GED_DRAW_MODE_HIDDEN_LINE:
-	    bu_vls_printf(out, "hidden_line");
-	    break;
-	case GED_DRAW_MODE_EVAL_POINTS:
-	    bu_vls_printf(out, "evaluated_points");
-	    break;
-	default:
-	    bu_vls_printf(out, "unknown");
-	    break;
-    }
+    if (out)
+	bu_vls_strcat(out, _view_obj_mode_name(mode));
 }
 
 struct view_obj_record {
     int found;
+    GedViewManagedFeatureRef ref;
+    std::string name;
     std::string type_name;
     int draw_mode;
     int visible;
     unsigned char color[3];
     size_t vlist_structure_count;
+    std::string kind_name;
+    std::string scope_name;
+    std::string overlay_class_name;
+    std::string lifecycle_name;
+    std::string owner;
+    std::string owner_role;
+    uint64_t owner_generation;
+    int transient_preview;
+    int command_result;
 };
 
-struct view_obj_find_state {
-    const char *name;
-    struct view_obj_record *out;
-};
+static unsigned char _view_obj_color_channel(float value);
 
-static int
-_view_obj_find_cb(const struct ged_draw_view_db_object_record *rec, void *ud)
+static const char *
+_view_obj_feature_type_name(BObolFeatureKind kind)
 {
-    struct view_obj_find_state *ctx = (struct view_obj_find_state *)ud;
-    if (!ctx || !ctx->out || !rec || !rec->path || !ctx->name)
-	return 1;
-    if (!BU_STR_EQUAL(rec->path, ctx->name))
-	return 1;
+    switch (kind) {
+	case BObolFeatureKind::Lines: return "line-set";
+	case BObolFeatureKind::IndexedLines: return "indexed-line-set";
+	case BObolFeatureKind::Points: return "point-set";
+	case BObolFeatureKind::Labels: return "labels";
+	case BObolFeatureKind::Arrow: return "arrow";
+	case BObolFeatureKind::Axes: return "axes";
+	case BObolFeatureKind::LineLayer: return "line-layer";
+	case BObolFeatureKind::EditPreview: return "edit-preview";
+	case BObolFeatureKind::IndexedFaceSet: return "indexed-face-set";
+	case BObolFeatureKind::PolygonOverlay: return "polygon-overlay";
+	case BObolFeatureKind::HudLabel: return "hud-label";
+	case BObolFeatureKind::CustomNode: return "custom-node";
+	case BObolFeatureKind::Unknown:
+	default: return "view-feature";
+    }
+}
 
-    ctx->out->found = 1;
-    ctx->out->type_name = rec->type_name ? rec->type_name : "object";
-    ctx->out->draw_mode = rec->draw_mode;
-    ctx->out->visible = rec->visible;
-    ctx->out->color[0] = rec->color[0];
-    ctx->out->color[1] = rec->color[1];
-    ctx->out->color[2] = rec->color[2];
-    ctx->out->vlist_structure_count = rec->vlist_structure_count;
-    return 0;
+static const char *
+_view_obj_feature_kind_name(BObolFeatureKind kind)
+{
+    switch (kind) {
+	case BObolFeatureKind::Lines: return "lines";
+	case BObolFeatureKind::IndexedLines: return "indexed-lines";
+	case BObolFeatureKind::Points: return "points";
+	case BObolFeatureKind::Labels: return "labels";
+	case BObolFeatureKind::Arrow: return "arrow";
+	case BObolFeatureKind::Axes: return "axes";
+	case BObolFeatureKind::LineLayer: return "line-layer";
+	case BObolFeatureKind::EditPreview: return "edit-preview";
+	case BObolFeatureKind::IndexedFaceSet: return "indexed-face-set";
+	case BObolFeatureKind::PolygonOverlay: return "polygon-overlay";
+	case BObolFeatureKind::HudLabel: return "hud-label";
+	case BObolFeatureKind::CustomNode: return "custom-node";
+	case BObolFeatureKind::Unknown:
+	default: return "unknown";
+    }
+}
+
+static const char *
+_view_obj_scope_name(BObolFeatureScope scope)
+{
+    return scope == BObolFeatureScope::Local ? "local" : "shared";
+}
+
+static const char *
+_view_obj_overlay_class_name(BObolOverlayClass overlay_class)
+{
+    switch (overlay_class) {
+	case BObolOverlayClass::None: return "none";
+	case BObolOverlayClass::Faceplate: return "faceplate";
+	case BObolOverlayClass::EditHandle: return "edit-handle";
+	case BObolOverlayClass::Measure: return "measure";
+	case BObolOverlayClass::SelectionRubberBand: return "selection-rubber-band";
+	case BObolOverlayClass::SnapGuide: return "snap-guide";
+	case BObolOverlayClass::CommandResult: return "command-result";
+	case BObolOverlayClass::Diagnostic: return "diagnostic";
+	case BObolOverlayClass::TclOverlay: return "tcl-overlay";
+	case BObolOverlayClass::PolygonEdit: return "polygon-edit";
+	case BObolOverlayClass::SketchEdit: return "sketch-edit";
+	case BObolOverlayClass::UserAnnotation: return "user-annotation";
+	default: return "unknown";
+    }
+}
+
+static const char *
+_view_obj_lifecycle_name(BObolOverlayLifecycle lifecycle)
+{
+    switch (lifecycle) {
+	case BObolOverlayLifecycle::None: return "none";
+	case BObolOverlayLifecycle::Persistent: return "persistent";
+	case BObolOverlayLifecycle::PerFrame: return "per-frame";
+	case BObolOverlayLifecycle::PerCommand: return "per-command";
+	case BObolOverlayLifecycle::PerTool: return "per-tool";
+	case BObolOverlayLifecycle::PerView: return "per-view";
+	case BObolOverlayLifecycle::SharedViewSet: return "shared-view-set";
+	case BObolOverlayLifecycle::AutoRemoveOnSource: return "auto-remove-on-source";
+	default: return "unknown";
+    }
+}
+
+static size_t
+_view_obj_feature_structure_count(const BObolFeatureRecord &record)
+{
+    switch (record.kind) {
+	case BObolFeatureKind::Points:
+	    return record.points.size();
+	case BObolFeatureKind::Labels:
+	case BObolFeatureKind::HudLabel:
+	    return record.labels.size();
+	case BObolFeatureKind::Axes:
+	    return record.axesCenters.size();
+	case BObolFeatureKind::LineLayer: {
+	    size_t count = 0;
+	    for (const BObolLineLayer &layer : record.layers)
+		count += layer.points.size() / 2;
+	    return count;
+	}
+	case BObolFeatureKind::IndexedFaceSet:
+	    return record.indices.size() / 3;
+	default:
+	    if (!record.commands.empty()) {
+		size_t count = 0;
+		for (int32_t command : record.commands)
+		    if (command != static_cast<int32_t>(BObolLineCommand::Move))
+			count++;
+		return count;
+	    }
+	    return record.points.size() / 2;
+    }
 }
 
 static int
-_view_obj_record_find(void *view_ctx,
+_view_obj_record_find(struct ged_view_context *view_ctx,
 		      const char *name,
 		      int list_view,
 		      int list_db,
@@ -163,90 +344,512 @@ _view_obj_record_find(void *view_ctx,
 		      struct view_obj_record *out)
 {
     if (out) {
-	out->found = 0;
-	out->type_name.clear();
-	out->draw_mode = 0;
-	out->visible = 0;
-	out->color[0] = 0;
-	out->color[1] = 0;
-	out->color[2] = 0;
-	out->vlist_structure_count = 0;
+	*out = view_obj_record();
+	out->kind_name = "unknown";
+	out->scope_name = "unknown";
+	out->overlay_class_name = "unknown";
+	out->lifecycle_name = "unknown";
     }
-    if (!view_ctx || !ged_draw_view_context_scene_attached(view_ctx) || !name || !name[0])
+    if (!view_ctx || !name || !name[0] || !out)
 	return 0;
+    struct ged *gedp = static_cast<struct ged *>(
+	ged_view_context_user_data_get(view_ctx));
+    unsigned int domains = 0;
+    if (list_view)
+	domains |= GED_VIEW_MANAGED_FEATURES;
+    if (list_db)
+	domains |= GED_VIEW_MANAGED_DATABASE;
+    const int resolved = ged_view_managed_feature_resolve(gedp, view_ctx,
+	name, domains, local_only != 0, out->ref, gedp->ged_result_str);
+    if (resolved != 1)
+	return resolved;
 
-    struct ged_draw_view_record_query query =
-	_view_obj_query(list_view, list_db, local_only, NULL);
-    struct view_obj_find_state ctx;
-    ctx.name = name;
-    ctx.out = out;
-    ged_draw_foreach_view_record_query(view_ctx, &query, _view_obj_find_cb, &ctx);
-
-    return out ? out->found : 0;
-}
-
-struct view_obj_shape_ref_find_state {
-    struct ged *gedp;
-    const char *name;
-    ged_draw_shape_ref ref;
-};
-
-static int
-_view_obj_name_matches_record(const struct ged_draw_shape_record *rec,
-			      const char *name)
-{
-    if (!rec || !name || !name[0])
-	return 0;
-    if (rec->display_name && BU_STR_EQUAL(rec->display_name, name))
-	return 1;
-    if (rec->leaf_name && BU_STR_EQUAL(rec->leaf_name, name))
-	return 1;
-    if (rec->fullpath) {
-	char *path = db_path_to_string(rec->fullpath);
-	if (path) {
-	    int match = BU_STR_EQUAL(path, name) ||
-		BU_STR_EQUAL(ged_draw_dbpath_skip_lead_slash(path), name);
-	    bu_free(path, "view feature fullpath string");
-	    if (match)
-		return 1;
+    out->found = 1;
+    out->name = name;
+    if (out->ref.kind == GedViewManagedFeatureKind::Feature) {
+	BObolFeatureRecord record;
+	if (!out->ref.view->features().record(out->ref.feature, record))
+	    return 0;
+	out->type_name = _view_obj_feature_type_name(record.kind);
+	out->kind_name = _view_obj_feature_kind_name(record.kind);
+	out->scope_name = _view_obj_scope_name(record.scope);
+	if (record.overlay.isOverlay) {
+	    out->overlay_class_name =
+		_view_obj_overlay_class_name(record.overlay.overlayClass);
+	    out->lifecycle_name =
+		_view_obj_lifecycle_name(record.overlay.lifecycle);
 	}
+	out->owner = record.owner.ownerId.getString();
+	out->owner_role = record.owner.ownerRole.getString();
+	out->owner_generation = record.owner.generation;
+	out->transient_preview = record.kind == BObolFeatureKind::EditPreview;
+	out->command_result = record.overlay.isOverlay &&
+	    record.overlay.overlayClass == BObolOverlayClass::CommandResult;
+	out->draw_mode = record.kind == BObolFeatureKind::IndexedFaceSet ?
+	    GED_DRAW_MODE_SHADED : GED_DRAW_MODE_WIRE;
+	out->visible = !record.style.hasVisible || record.style.visible;
+	const SbColor color = record.style.hasColor ? record.style.color :
+	    SbColor(1.0f, 1.0f, 1.0f);
+	out->color[0] = _view_obj_color_channel(color[0]);
+	out->color[1] = _view_obj_color_channel(color[1]);
+	out->color[2] = _view_obj_color_channel(color[2]);
+	out->vlist_structure_count = _view_obj_feature_structure_count(record);
+	return 1;
+    }
+    if (out->ref.kind == GedViewManagedFeatureKind::Polygon) {
+	BObolPolygonRecord record;
+	if (!out->ref.view->polygons().record(out->ref.polygon, record))
+	    return 0;
+	out->type_name = "polygon";
+	out->kind_name = "polygon";
+	out->scope_name = _view_obj_scope_name(record.scope);
+	out->draw_mode = GED_DRAW_MODE_WIRE;
+	out->visible = 1;
+	out->color[0] = _view_obj_color_channel(record.edgeColor[0]);
+	out->color[1] = _view_obj_color_channel(record.edgeColor[1]);
+	out->color[2] = _view_obj_color_channel(record.edgeColor[2]);
+	out->vlist_structure_count = record.contourCount;
+	return 1;
+    }
+    if (out->ref.kind == GedViewManagedFeatureKind::DatabaseGroup) {
+	SoGroup *group = out->ref.scene->findGroup(out->ref.groupPath.c_str());
+	if (!group || !group->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	    return 0;
+	SoBRLSceneGroup *scene_group = static_cast<SoBRLSceneGroup *>(group);
+	out->type_name = "database-group";
+	out->kind_name = "database-group";
+	out->scope_name = "database";
+	out->draw_mode = scene_group->drawMode.getValue();
+	out->visible = scene_group->visible.getValue();
+	const SbColor color = scene_group->colorOverride.getValue() ?
+	    scene_group->color.getValue() :
+	    (scene_group->materialColorValid.getValue() ?
+	     scene_group->materialColor.getValue() :
+	     scene_group->color.getValue());
+	out->color[0] = _view_obj_color_channel(color[0]);
+	out->color[1] = _view_obj_color_channel(color[1]);
+	out->color[2] = _view_obj_color_channel(color[2]);
+	out->vlist_structure_count = static_cast<size_t>(
+	    out->ref.scene->getGroupDatabaseSourceCount(
+		out->ref.groupPath.c_str()));
+	return 1;
+    }
+    if (out->ref.kind == GedViewManagedFeatureKind::DatabaseSource) {
+	const BObolDatabaseSourceSummary &summary = out->ref.source;
+	out->type_name = "database-source";
+	out->kind_name = "database-source";
+	out->scope_name = "database";
+	out->draw_mode = summary.drawMode;
+	out->visible = summary.visible;
+	const SbColor color = summary.colorOverride ? summary.color :
+	    (summary.materialColorValid ? summary.materialColor : summary.color);
+	out->color[0] = _view_obj_color_channel(color[0]);
+	out->color[1] = _view_obj_color_channel(color[1]);
+	out->color[2] = _view_obj_color_channel(color[2]);
+	out->vlist_structure_count = static_cast<size_t>(
+	    summary.realizedShapeCount);
+	return 1;
     }
     return 0;
 }
 
-static int
-_view_obj_shape_ref_find_cb(const struct ged_draw_shape_record *rec, void *ud)
+static unsigned char
+_view_obj_color_channel(float value)
 {
-    struct view_obj_shape_ref_find_state *ctx =
-	(struct view_obj_shape_ref_find_state *)ud;
-    if (!ctx || !ged_draw_shape_ref_is_null(ctx->ref))
+    if (value <= 0.0f)
 	return 0;
-    if (_view_obj_name_matches_record(rec, ctx->name)) {
-	ctx->ref = rec->ref;
-	return 0;
-    }
-    return 1;
+    if (value >= 1.0f)
+	return 255;
+    return static_cast<unsigned char>(value * 255.0f + 0.5f);
 }
 
-static ged_draw_shape_ref
-_view_obj_shape_ref_find(struct ged *gedp,
-			 void *view_ctx,
-			 const char *name,
-			 int list_view,
-			 int list_db,
-			 int local_only)
+static void
+_view_obj_record_json(struct bu_vls *out, const struct view_obj_record &rec)
 {
-    ged_draw_shape_ref null_ref = GED_DRAW_SHAPE_REF_NULL;
-    struct view_obj_record rec;
-    if (!_view_obj_record_find(view_ctx, name, list_view, list_db, local_only, &rec))
-	return null_ref;
+    bu_vls_putc(out, '{');
+    bu_vls_strcat(out, "\"name\":");
+    _view_obj_json_string(out, rec.name.c_str());
+    bu_vls_strcat(out, ",\"type\":");
+    _view_obj_json_string(out, rec.type_name.c_str());
+    bu_vls_strcat(out, ",\"kind\":");
+    _view_obj_json_string(out, rec.kind_name.c_str());
+    bu_vls_strcat(out, ",\"scope\":");
+    _view_obj_json_string(out, rec.scope_name.c_str());
+    bu_vls_strcat(out, ",\"mode\":");
+    _view_obj_json_string(out, _view_obj_mode_name(rec.draw_mode));
+    bu_vls_printf(out,
+	",\"visible\":%s,\"color\":[%u,%u,%u],\"structure_count\":%zu",
+	rec.visible ? "true" : "false",
+	static_cast<unsigned int>(rec.color[0]),
+	static_cast<unsigned int>(rec.color[1]),
+	static_cast<unsigned int>(rec.color[2]), rec.vlist_structure_count);
+    bu_vls_strcat(out, ",\"overlay_class\":");
+    _view_obj_json_string(out, rec.overlay_class_name.c_str());
+    bu_vls_strcat(out, ",\"lifecycle\":");
+    _view_obj_json_string(out, rec.lifecycle_name.c_str());
+    bu_vls_strcat(out, ",\"owner\":");
+    _view_obj_json_string(out, rec.owner.c_str());
+    bu_vls_strcat(out, ",\"owner_role\":");
+    _view_obj_json_string(out, rec.owner_role.c_str());
+    bu_vls_printf(out,
+	",\"owner_generation\":%llu,\"transient_preview\":%s,"
+	"\"command_result\":%s}\n",
+	static_cast<unsigned long long>(rec.owner_generation),
+	rec.transient_preview ? "true" : "false",
+	rec.command_result ? "true" : "false");
+}
 
-    struct view_obj_shape_ref_find_state ctx;
-    ctx.gedp = gedp;
-    ctx.name = name;
-    ctx.ref = null_ref;
-    ged_draw_foreach_shape_record(gedp, _view_obj_shape_ref_find_cb, &ctx);
-    return ctx.ref;
+static void
+_view_obj_style_to_ged(struct ged_view_feature_style *dst,
+    const BObolFeatureStyle &src)
+{
+    struct ged_view_feature_style init = GED_VIEW_FEATURE_STYLE_INIT;
+    *dst = init;
+    if (src.hasVisible)
+	dst->visible = src.visible ? 1 : 0;
+    if (src.hasSelectable)
+	dst->selectable = src.selectable ? 1 : 0;
+    if (src.hasColor) {
+	dst->color_valid = 1;
+	dst->color[0] = _view_obj_color_channel(src.color[0]);
+	dst->color[1] = _view_obj_color_channel(src.color[1]);
+	dst->color[2] = _view_obj_color_channel(src.color[2]);
+    }
+    if (src.hasLineWidth)
+	dst->line_width = src.lineWidth;
+    if (src.hasLineStyle)
+	dst->line_style = src.lineStyle;
+    if (src.hasArrow)
+	dst->arrow = src.arrow ? 1 : 0;
+    if (src.hasArrowTip) {
+	dst->arrow_tip_length = src.arrowTipLength;
+	dst->arrow_tip_width = src.arrowTipWidth;
+    }
+}
+
+static BObolFeatureStyle
+_view_obj_style_from_ged(const struct ged_view_feature_style *src)
+{
+    BObolFeatureStyle dst;
+    if (!src)
+	return dst;
+    if (src->visible >= 0) {
+	dst.hasVisible = TRUE;
+	dst.visible = src->visible ? TRUE : FALSE;
+    }
+    if (src->selectable >= 0) {
+	dst.hasSelectable = TRUE;
+	dst.selectable = src->selectable ? TRUE : FALSE;
+    }
+    if (src->color_valid) {
+	dst.hasColor = TRUE;
+	dst.color = SbColor(static_cast<float>(src->color[0]) / 255.0f,
+	    static_cast<float>(src->color[1]) / 255.0f,
+	    static_cast<float>(src->color[2]) / 255.0f);
+    }
+    if (src->line_width >= 0) {
+	dst.hasLineWidth = TRUE;
+	dst.lineWidth = src->line_width;
+    }
+    if (src->line_style >= 0) {
+	dst.hasLineStyle = TRUE;
+	dst.lineStyle = src->line_style;
+    }
+    if (src->arrow >= 0) {
+	dst.hasArrow = TRUE;
+	dst.arrow = src->arrow ? TRUE : FALSE;
+    }
+    if (src->arrow_tip_length >= 0.0 || src->arrow_tip_width >= 0.0) {
+	dst.hasArrowTip = TRUE;
+	dst.arrowTipLength = src->arrow_tip_length >= 0.0 ?
+	    static_cast<float>(src->arrow_tip_length) : 0.0f;
+	dst.arrowTipWidth = src->arrow_tip_width >= 0.0 ?
+	    static_cast<float>(src->arrow_tip_width) : 0.0f;
+    }
+    return dst;
+}
+
+static int
+_view_obj_resolve(struct _ged_view_info *gd,
+    GedViewManagedFeatureRef &ref, unsigned int domains = GED_VIEW_MANAGED_ALL)
+{
+    if (!gd || !gd->gedp || !gd->cv || !gd->vobj || !gd->vobj[0])
+	return 0;
+    const int ret = ged_view_managed_feature_resolve(gd->gedp, gd->cv,
+	gd->vobj, domains, gd->local_obj != 0, ref,
+	gd->gedp->ged_result_str);
+    if (ret == 0)
+	bu_vls_printf(gd->gedp->ged_result_str,
+	    "No view feature named %s\n", gd->vobj);
+    return ret;
+}
+
+static const char *
+_view_obj_path_skip_slash(const char *path)
+{
+    if (!path)
+	return "";
+    while (*path == '/')
+	path++;
+    return path;
+}
+
+static bool
+_view_obj_path_contains(const char *parent, const char *child)
+{
+    const char *p = _view_obj_path_skip_slash(parent);
+    const char *c = _view_obj_path_skip_slash(child);
+    const size_t plen = strlen(p);
+    return BU_STR_EQUAL(p, c) || (plen && strlen(c) > plen &&
+	bu_strncmp(p, c, plen) == 0 && c[plen] == '/');
+}
+
+static SoBRLSceneGroup *
+_view_obj_database_group(const GedViewManagedFeatureRef &ref,
+	BObolSceneController **scene_out = nullptr)
+{
+    if (scene_out)
+	*scene_out = nullptr;
+    if (ref.kind != GedViewManagedFeatureKind::DatabaseGroup ||
+	!ref.current())
+	return nullptr;
+
+    BObolSceneController *scene = ref.scene;
+    SoGroup *group = scene ? scene->findGroup(ref.groupPath.c_str()) : nullptr;
+    if (!group || !group->isOfType(SoBRLSceneGroup::getClassTypeId()))
+	return nullptr;
+    if (scene_out)
+	*scene_out = scene;
+    return static_cast<SoBRLSceneGroup *>(group);
+}
+
+static int
+_view_obj_database_patch(BObolSceneController *scene,
+	const BObolDatabaseSourceSummary &summary,
+	const BObolDatabaseSourceDisplayPatch &patch)
+{
+    if (!scene)
+	return 0;
+    if (summary.instanceKey.getLength())
+	return scene->setDatabaseSourceInstanceDisplayPatch(
+	    summary.instanceKey.getString(), patch);
+    return scene->setDatabaseSourceDisplayPatch(summary.path.getString(),
+	patch);
+}
+
+static bool
+_view_obj_database_style_get(const GedViewManagedFeatureRef &ref,
+	struct ged_view_feature_style *style)
+{
+    SoBRLSceneGroup *group = _view_obj_database_group(ref);
+    if (group) {
+	const struct ged_view_feature_style init = GED_VIEW_FEATURE_STYLE_INIT;
+	*style = init;
+	style->visible = group->visible.getValue() ? 1 : 0;
+	style->color_valid = 1;
+	const SbColor color = group->colorOverride.getValue() ?
+	    group->color.getValue() :
+	    (group->materialColorValid.getValue() ?
+	     group->materialColor.getValue() : group->color.getValue());
+	style->color[0] = _view_obj_color_channel(color[0]);
+	style->color[1] = _view_obj_color_channel(color[1]);
+	style->color[2] = _view_obj_color_channel(color[2]);
+	style->line_style = group->lineStyle.getValue();
+	style->line_width = group->lineWidth.getValue();
+	style->arrow = 0;
+	return true;
+    }
+
+    if (!style || ref.kind != GedViewManagedFeatureKind::DatabaseSource ||
+	!ref.current())
+	return false;
+    const BObolDatabaseSourceSummary &summary = ref.source;
+
+    const struct ged_view_feature_style init = GED_VIEW_FEATURE_STYLE_INIT;
+    *style = init;
+    style->visible = summary.visible ? 1 : 0;
+    style->color_valid = 1;
+    const SbColor color = summary.colorOverride ? summary.color :
+	(summary.materialColorValid ? summary.materialColor : summary.color);
+    style->color[0] = _view_obj_color_channel(color[0]);
+    style->color[1] = _view_obj_color_channel(color[1]);
+    style->color[2] = _view_obj_color_channel(color[2]);
+    style->line_style = summary.lineStyle;
+    style->line_width = summary.lineWidth;
+    style->arrow = 0;
+    return true;
+}
+
+static bool
+_view_obj_database_style_apply(const GedViewManagedFeatureRef &ref,
+	const struct ged_view_feature_style *style, bool recursive)
+{
+    if (!style)
+	return false;
+    if (style->arrow >= 0 || style->arrow_tip_length >= 0.0 ||
+	style->arrow_tip_width >= 0.0) {
+	return false;
+    }
+
+    BObolSceneController *group_scene = nullptr;
+    SoBRLSceneGroup *group = _view_obj_database_group(ref, &group_scene);
+    if (group) {
+	const SbBool visible = style->visible >= 0 ?
+	    (style->visible ? TRUE : FALSE) : group->visible.getValue();
+	const int line_style = style->line_style >= 0 ?
+	    style->line_style : group->lineStyle.getValue();
+	const int line_width = style->line_width >= 0 ?
+	    style->line_width : group->lineWidth.getValue();
+	const SbBool color_override = style->color_valid ? TRUE :
+	    group->colorOverride.getValue();
+	const SbColor color = style->color_valid ?
+	    SbColor(static_cast<float>(style->color[0]) / 255.0f,
+		static_cast<float>(style->color[1]) / 255.0f,
+		static_cast<float>(style->color[2]) / 255.0f) :
+	    group->color.getValue();
+	const int changed = group_scene->setGroupDisplayState(
+	    ref.groupPath.c_str(),
+	    visible, group->selected.getValue(), group->highlighted.getValue(),
+	    line_style, line_width, group->transparency.getValue(),
+	    color_override, color, group->materialColorValid.getValue(),
+	    group->materialColor.getValue(), group->materialRevision.getValue());
+	(void)recursive;
+	return changed >= 0;
+    }
+
+    if (ref.kind != GedViewManagedFeatureKind::DatabaseSource ||
+	!ref.current())
+	return false;
+    const BObolDatabaseSourceSummary &target = ref.source;
+    BObolSceneController *scene = ref.scene;
+
+    BObolDatabaseSourceDisplayPatch patch;
+    if (style->visible >= 0) {
+	patch.visibleValid = TRUE;
+	patch.visible = style->visible ? TRUE : FALSE;
+    }
+    if (style->color_valid) {
+	patch.colorOverrideValid = TRUE;
+	patch.colorOverride = TRUE;
+	patch.colorValid = TRUE;
+	patch.color = SbColor(static_cast<float>(style->color[0]) / 255.0f,
+	    static_cast<float>(style->color[1]) / 255.0f,
+	    static_cast<float>(style->color[2]) / 255.0f);
+    }
+    if (style->line_style >= 0) {
+	patch.lineStyleValid = TRUE;
+	patch.lineStyle = style->line_style;
+    }
+    if (style->line_width >= 0) {
+	patch.lineWidthValid = TRUE;
+	patch.lineWidth = style->line_width;
+    }
+
+    if (!recursive)
+	return _view_obj_database_patch(scene, target, patch) >= 0;
+
+    bool changed = false;
+    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+	BObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) || !summary.valid ||
+	    !_view_obj_path_contains(target.path.getString(),
+		summary.path.getString()))
+	    continue;
+	changed = _view_obj_database_patch(scene, summary, patch) >= 0 || changed;
+    }
+    return changed;
+}
+
+static bool
+_view_obj_database_remove(const GedViewManagedFeatureRef &ref)
+{
+    BObolSceneController *group_scene = nullptr;
+    if (_view_obj_database_group(ref, &group_scene))
+	return group_scene->removeGroup(ref.groupPath.c_str()) > 0;
+
+    if (ref.kind != GedViewManagedFeatureKind::DatabaseSource ||
+	!ref.current())
+	return false;
+    const BObolDatabaseSourceSummary &summary = ref.source;
+    BObolSceneController *scene = ref.scene;
+    if (summary.instanceKey.getLength())
+	return scene->removeDatabaseSourceInstance(
+	    summary.instanceKey.getString()) > 0;
+    return scene->removeDatabaseSource(summary.path.getString()) > 0;
+}
+
+static bool
+_view_obj_database_realize(const GedViewManagedFeatureRef &ref)
+{
+    BObolSceneController *group_scene = nullptr;
+    if (_view_obj_database_group(ref, &group_scene)) {
+	bool found = false;
+	bool realized = true;
+	for (int i = 0; i < group_scene->getDatabaseSourceCount(); i++) {
+	    BObolDatabaseSourceSummary summary;
+	    if (!group_scene->getDatabaseSourceSummary(i, summary) ||
+		!summary.valid ||
+		!_view_obj_path_contains(ref.groupPath.c_str(),
+		    summary.parentGroupPath.getString()))
+		continue;
+	    found = true;
+	    SoBRLDatabaseSource *source = summary.instanceKey.getLength() ?
+		group_scene->findDatabaseSourceInstance(
+		    summary.instanceKey.getString()) :
+		group_scene->findDatabaseSource(summary.path.getString());
+	    if (!source) {
+		realized = false;
+		continue;
+	    }
+	    if (source->needsRealization())
+		(void)group_scene->realizePending();
+	    BObolDatabaseSourceSummary updated;
+	    realized = source->getSummary(updated) && updated.valid &&
+		updated.realizationStatus == SoBRLDatabaseSource::REALIZED &&
+		!source->needsRealization() && realized;
+	}
+	return found && realized;
+    }
+
+    if (ref.kind != GedViewManagedFeatureKind::DatabaseSource ||
+	!ref.current())
+	return false;
+    const BObolDatabaseSourceSummary &summary = ref.source;
+    BObolSceneController *scene = ref.scene;
+    SoBRLDatabaseSource *source = summary.instanceKey.getLength() ?
+	scene->findDatabaseSourceInstance(summary.instanceKey.getString()) :
+	scene->findDatabaseSource(summary.path.getString());
+    if (!source)
+	return false;
+    if (source->needsRealization())
+	(void)scene->realizePending();
+    BObolDatabaseSourceSummary updated;
+    return source->getSummary(updated) && updated.valid &&
+	updated.realizationStatus == SoBRLDatabaseSource::REALIZED &&
+	!source->needsRealization();
+}
+
+static bool
+_view_obj_feature_style_get(const GedViewManagedFeatureRef &ref,
+    struct ged_view_feature_style *style)
+{
+    BObolFeatureStyle obol_style;
+    if (ref.kind != GedViewManagedFeatureKind::Feature || !ref.current() ||
+	!style || !ref.view->features().style(ref.feature, obol_style))
+	return false;
+    _view_obj_style_to_ged(style, obol_style);
+    if (style->arrow < 0)
+	style->arrow = 0;
+    return true;
+}
+
+static bool
+_view_obj_feature_style_apply(const GedViewManagedFeatureRef &ref,
+    const struct ged_view_feature_style *style, bool recursive)
+{
+    return ref.kind == GedViewManagedFeatureKind::Feature && ref.current() &&
+	style && ref.view->features().applyStyle(ref.feature,
+	    _view_obj_style_from_ged(style), recursive ? TRUE : FALSE);
 }
 
 int
@@ -264,23 +867,44 @@ _objs_cmd_draw(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
+    GedViewManagedFeatureRef ref;
+    if (_view_obj_resolve(gd, ref) != 1)
+	return BRLCAD_ERROR;
+
     if (argc == 0) {
 	int visible = 0;
-	if (!ged_draw_view_context_managed_feature_visible_get(gedp, gd->cv,
-		gd->vobj, gd->shape_ref, &visible, gedp->ged_result_str))
-	    return BRLCAD_ERROR;
+	if (ref.kind == GedViewManagedFeatureKind::Feature) {
+	    BObolFeatureStyle style;
+	    if (!ref.view->features().style(ref.feature, style))
+		return BRLCAD_ERROR;
+	    visible = !style.hasVisible || style.visible ? 1 : 0;
+	} else {
+	    struct ged_view_feature_style style =
+		GED_VIEW_FEATURE_STYLE_INIT;
+	    if (!_view_obj_database_style_get(ref, &style))
+		return BRLCAD_ERROR;
+	    visible = style.visible > 0 ? 1 : 0;
+	}
 	bu_vls_printf(gedp->ged_result_str, "%s\n", visible ? "UP" : "DOWN");
 	return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(argv[0], "DOWN")) {
-	return ged_draw_view_context_managed_feature_visible_set(gedp, gd->cv,
-		gd->vobj, gd->shape_ref, 0, gedp->ged_result_str) ?
+	if (ref.kind == GedViewManagedFeatureKind::Feature)
+	    return ref.view->features().setVisible(ref.feature,
+		FALSE) ? BRLCAD_OK : BRLCAD_ERROR;
+	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+	style.visible = 0;
+	return _view_obj_database_style_apply(ref, &style, false) ?
 	    BRLCAD_OK : BRLCAD_ERROR;
     }
     if (BU_STR_EQUAL(argv[0], "UP")) {
-	return ged_draw_view_context_managed_feature_visible_set(gedp, gd->cv,
-		gd->vobj, gd->shape_ref, 1, gedp->ged_result_str) ?
+	if (ref.kind == GedViewManagedFeatureKind::Feature)
+	    return ref.view->features().setVisible(ref.feature,
+		TRUE) ? BRLCAD_OK : BRLCAD_ERROR;
+	struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
+	style.visible = 1;
+	return _view_obj_database_style_apply(ref, &style, false) ?
 	    BRLCAD_OK : BRLCAD_ERROR;
     }
 
@@ -303,8 +927,18 @@ _objs_cmd_delete(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    return ged_draw_view_context_managed_feature_remove(gedp, gd->cv, gd->vobj,
-	    gd->shape_ref, gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+    GedViewManagedFeatureRef ref;
+    if (_view_obj_resolve(gd, ref) != 1)
+	return BRLCAD_ERROR;
+    if (ref.kind == GedViewManagedFeatureKind::Feature)
+	return ref.view->features().remove(ref.feature) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
+    if (ref.kind == GedViewManagedFeatureKind::Polygon)
+	return ref.view->polygons().remove(ref.polygon) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
+    if (_view_obj_database_remove(ref))
+	return BRLCAD_OK;
+    return BRLCAD_ERROR;
 }
 
 int
@@ -330,12 +964,16 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct ged_draw_view_feature_style style =
-	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    GedViewManagedFeatureRef ref;
+    if (_view_obj_resolve(gd, ref) != 1)
+	return BRLCAD_ERROR;
+
+    struct ged_view_feature_style style =
+	GED_VIEW_FEATURE_STYLE_INIT;
 
     if (ac == 0) {
-	if (!ged_draw_view_context_managed_feature_style_get(gedp, gd->cv, gd->vobj,
-		gd->shape_ref, &style, gedp->ged_result_str))
+	if (!_view_obj_feature_style_get(ref, &style) &&
+	    !_view_obj_database_style_get(ref, &style))
 	    return BRLCAD_ERROR;
 	bu_vls_printf(gedp->ged_result_str, "%d/%d/%d\n",
 		style.color[0], style.color[1], style.color[2]);
@@ -350,8 +988,10 @@ _objs_cmd_color(void *bs, int argc, const char **argv)
 
     bu_color_to_rgb_chars(&val, style.color);
     style.color_valid = 1;
-    return ged_draw_view_context_managed_feature_style_apply(gedp, gd->cv, gd->vobj,
-	    gd->shape_ref, &style, recurse, gedp->ged_result_str) ?
+    if (ref.kind == GedViewManagedFeatureKind::Feature)
+	return _view_obj_feature_style_apply(ref, &style, recurse != 0) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
+    return _view_obj_database_style_apply(ref, &style, recurse != 0) ?
 	BRLCAD_OK : BRLCAD_ERROR;
 }
 
@@ -370,10 +1010,14 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    struct ged_draw_view_feature_style style =
-	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
-    if (!ged_draw_view_context_managed_feature_style_get(gedp, gd->cv, gd->vobj,
-	    gd->shape_ref, &style, gedp->ged_result_str))
+    GedViewManagedFeatureRef ref;
+    if (_view_obj_resolve(gd, ref) != 1)
+	return BRLCAD_ERROR;
+
+    struct ged_view_feature_style style =
+	GED_VIEW_FEATURE_STYLE_INIT;
+    if (!_view_obj_feature_style_get(ref, &style) &&
+	!_view_obj_database_style_get(ref, &style))
 	return BRLCAD_ERROR;
 
     if (style.arrow < 0 && style.arrow_tip_width < 0.0 &&
@@ -389,9 +1033,11 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
     }
     if (BU_STR_EQUAL(argv[0], "0") || BU_STR_EQUAL(argv[0], "1")) {
 	style.arrow = BU_STR_EQUAL(argv[0], "1") ? 1 : 0;
-	return ged_draw_view_context_managed_feature_style_apply(gedp, gd->cv,
-		gd->vobj, gd->shape_ref, &style, 0,
-		gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+	if (ref.kind == GedViewManagedFeatureKind::Feature)
+	    return _view_obj_feature_style_apply(ref, &style, false) ?
+		BRLCAD_OK : BRLCAD_ERROR;
+	return _view_obj_database_style_apply(ref, &style, false) ?
+	    BRLCAD_OK : BRLCAD_ERROR;
     }
     if (BU_STR_EQUAL(argv[0], "width"))  {
 	if (argc == 2) {
@@ -401,9 +1047,11 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    style.arrow_tip_width = width;
-	    return ged_draw_view_context_managed_feature_style_apply(gedp, gd->cv,
-		    gd->vobj, gd->shape_ref, &style, 0,
-		    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+	    if (ref.kind == GedViewManagedFeatureKind::Feature)
+		return _view_obj_feature_style_apply(ref, &style, false) ?
+		    BRLCAD_OK : BRLCAD_ERROR;
+	    return _view_obj_database_style_apply(ref, &style, false) ?
+		BRLCAD_OK : BRLCAD_ERROR;
 	}
 	bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_width);
 	return BRLCAD_OK;
@@ -416,9 +1064,11 @@ _objs_cmd_arrow(void *bs, int argc, const char **argv)
 		return BRLCAD_ERROR;
 	    }
 	    style.arrow_tip_length = length;
-	    return ged_draw_view_context_managed_feature_style_apply(gedp, gd->cv,
-		    gd->vobj, gd->shape_ref, &style, 0,
-		    gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+	    if (ref.kind == GedViewManagedFeatureKind::Feature)
+		return _view_obj_feature_style_apply(ref, &style, false) ?
+		    BRLCAD_OK : BRLCAD_ERROR;
+	    return _view_obj_database_style_apply(ref, &style, false) ?
+		BRLCAD_OK : BRLCAD_ERROR;
 	}
 	bu_vls_printf(gedp->ged_result_str, "%f\n", style.arrow_tip_length);
 	return BRLCAD_OK;
@@ -444,10 +1094,14 @@ _objs_cmd_lcnt(void *bs, int argc, const char **argv)
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     struct view_obj_record rec;
-    if (_view_obj_record_find(gd->cv, gd->vobj, 1, 1, gd->local_obj, &rec)) {
+    const int found = _view_obj_record_find(gd->cv, gd->vobj, 1, 1,
+	gd->local_obj, &rec);
+    if (found == 1) {
 	bu_vls_printf(gedp->ged_result_str, "%zu\n", rec.vlist_structure_count);
 	return BRLCAD_OK;
     }
+    if (found < 0)
+	return BRLCAD_ERROR;
     bu_vls_printf(gedp->ged_result_str, "0\n");
     return BRLCAD_OK;
 }
@@ -485,32 +1139,40 @@ _objs_cmd_update(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	have_xy = 1;
-	bv_mouse_state_set(bv_context_view((struct bv_context *)gd->cv), x, y);
+	bv_mouse_state_set(bv_context_view(ged_view_context_bv(gd->cv)), x, y);
     }
 
-    ged_draw_view_polygon_ref poly_ref =
-	ged_draw_view_context_polygon_find_scoped(gd->cv, gd->vobj,
-		gd->local_obj);
-    if (ged_draw_view_polygon_ref_is_null(poly_ref) && !gd->local_obj) {
-	poly_ref = ged_draw_view_context_polygon_find_scoped(gd->cv,
-		gd->vobj, 1);
-	if (!ged_draw_view_polygon_ref_is_null(poly_ref))
-	    gd->local_obj = 1;
-    }
-    if (!ged_draw_view_polygon_ref_is_null(poly_ref)) {
+    GedViewManagedFeatureRef ref;
+    if (_view_obj_resolve(gd, ref) != 1)
+	return BRLCAD_ERROR;
+    if (ref.kind == GedViewManagedFeatureKind::Polygon) {
 	if (have_xy) {
-	    if (!ged_draw_view_context_polygon_update_screen_pt(poly_ref,
-		    gd->cv, x, y, GED_DRAW_VIEW_POLYGON_UPDATE_DEFAULT))
+	    point_t model_point = VINIT_ZERO;
+	    if (!bv_screen_to_model(model_point,
+		    bv_context_view_const(ged_view_context_bv_const(gd->cv)),
+		    static_cast<fastf_t>(x), static_cast<fastf_t>(y)) ||
+		!ref.view->polygons().updateModelPoint(
+		    ref.polygon,
+		    SbVec3f(static_cast<float>(model_point[X]),
+			static_cast<float>(model_point[Y]),
+			static_cast<float>(model_point[Z])),
+		    BObolPolygonUpdate::Default))
 		return BRLCAD_ERROR;
-	} else if (!ged_draw_view_context_polygon_update(poly_ref, gd->cv,
-		GED_DRAW_VIEW_POLYGON_UPDATE_DEFAULT)) {
+	} else if (!ref.view->polygons().update(ref.polygon,
+		BObolPolygonUpdate::Default)) {
 	    return BRLCAD_ERROR;
 	}
 	return BRLCAD_OK;
     }
 
-    return ged_draw_view_context_managed_feature_realize(gedp, gd->cv, gd->vobj,
-	    gd->shape_ref, gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
+    if (ref.kind == GedViewManagedFeatureKind::Feature) {
+	(void)ref.view->features().realize(ref.feature, TRUE);
+	return BRLCAD_OK;
+    }
+
+    if (_view_obj_database_realize(ref))
+	return BRLCAD_OK;
+    return BRLCAD_ERROR;
 }
 
 static int
@@ -523,8 +1185,14 @@ _view_object_scene_ready(struct _ged_view_info *gd)
 	bu_vls_printf(gedp->ged_result_str, ": no view current in GED");
 	return 0;
     }
-    if (!ged_draw_view_context_scene_attached(gd->cv)) {
-	void *cv = ged_view_active_ctx(gedp);
+    if (!ged_view_context_display_endpoint_get(gd->cv) &&
+	!ged_view_context_display_endpoint_ensure(gd->cv)) {
+	bu_vls_printf(gedp->ged_result_str,
+	    ": unable to create display endpoint for current view");
+	return 0;
+    }
+    if (!ged_view_context_scene_attached(gd->cv)) {
+	struct ged_view_context *cv = ged_view_active_ctx(gedp);
 	ged_view_active_ctx_set(gedp, gd->cv);
 	ged_draw_ensure_root_attached(gedp);
 	ged_view_active_ctx_set(gedp, cv);
@@ -563,86 +1231,28 @@ _view_object_info(struct _ged_view_info *gd,
 	const char *name,
 	const char *field,
 	int list_view,
-	int list_db)
+	int list_db,
+	int json)
 {
     struct ged *gedp = gd->gedp;
     struct view_obj_record rec;
-    if (!_view_obj_record_find(gd->cv, name, list_view, list_db, gd->local_obj, &rec)) {
+    const int found = _view_obj_record_find(gd->cv, name, list_view, list_db,
+	gd->local_obj, &rec);
+    if (found != 1) {
+	if (found == 0)
 	bu_vls_printf(gedp->ged_result_str, "No view feature named %s\n", name);
 	return BRLCAD_ERROR;
+    }
+
+    if (json) {
+	_view_obj_record_json(gedp->ged_result_str, rec);
+	return BRLCAD_OK;
     }
 
     if (!field) {
 	bu_vls_printf(gedp->ged_result_str, "%s %s\n", name, rec.type_name.c_str());
 	return BRLCAD_OK;
     }
-
-    struct ged_draw_view_feature_summary summary =
-	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
-    int have_summary = ged_draw_view_context_feature_summary(gd->cv, name,
-	    &summary);
-
-    auto kind_name = [](int kind) -> const char * {
-	switch (kind) {
-	    case GED_DRAW_VIEW_FEATURE_KIND_LINES: return "lines";
-	    case GED_DRAW_VIEW_FEATURE_KIND_INDEXED_LINES: return "indexed-lines";
-	    case GED_DRAW_VIEW_FEATURE_KIND_POINTS: return "points";
-	    case GED_DRAW_VIEW_FEATURE_KIND_LABELS: return "labels";
-	    case GED_DRAW_VIEW_FEATURE_KIND_ARROW: return "arrow";
-	    case GED_DRAW_VIEW_FEATURE_KIND_AXES: return "axes";
-	    case GED_DRAW_VIEW_FEATURE_KIND_LINE_LAYER: return "line-layer";
-	    case GED_DRAW_VIEW_FEATURE_KIND_EDIT_PREVIEW: return "edit-preview";
-	    case GED_DRAW_VIEW_FEATURE_KIND_INDEXED_FACE_SET: return "indexed-face-set";
-	    case GED_DRAW_VIEW_FEATURE_KIND_POLYGON_OVERLAY: return "polygon-overlay";
-	    case GED_DRAW_VIEW_FEATURE_KIND_HUD_LABEL: return "hud-label";
-	    case GED_DRAW_VIEW_FEATURE_KIND_CUSTOM_NODE: return "custom-node";
-	    case GED_DRAW_VIEW_FEATURE_KIND_UNKNOWN:
-	    default: return "unknown";
-	}
-    };
-
-    auto scope_name = [](int scope) -> const char * {
-	switch (scope) {
-	    case GED_DRAW_VIEW_FEATURE_SCOPE_SHARED: return "shared";
-	    case GED_DRAW_VIEW_FEATURE_SCOPE_LOCAL: return "local";
-	    case GED_DRAW_VIEW_FEATURE_SCOPE_UNKNOWN:
-	    default: return "unknown";
-	}
-    };
-
-    auto overlay_class_name = [](int overlay_class) -> const char * {
-	switch (overlay_class) {
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_NONE: return "none";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_FACEPLATE: return "faceplate";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE: return "edit-handle";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_MEASURE: return "measure";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SELECTION_RUBBER_BAND: return "selection-rubber-band";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SNAP_GUIDE: return "snap-guide";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_COMMAND_RESULT: return "command-result";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_DIAGNOSTIC: return "diagnostic";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_TCL_OVERLAY: return "tcl-overlay";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_POLYGON_EDIT: return "polygon-edit";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_SKETCH_EDIT: return "sketch-edit";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_USER_ANNOTATION: return "user-annotation";
-	    case GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_UNKNOWN:
-	    default: return "unknown";
-	}
-    };
-
-    auto lifecycle_name = [](int lifecycle) -> const char * {
-	switch (lifecycle) {
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_NONE: return "none";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PERSISTENT: return "persistent";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_FRAME: return "per-frame";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_COMMAND: return "per-command";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_TOOL: return "per-tool";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_VIEW: return "per-view";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_SHARED_VIEW_SET: return "shared-view-set";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_AUTO_REMOVE_ON_SOURCE: return "auto-remove-on-source";
-	    case GED_DRAW_VIEW_FEATURE_LIFECYCLE_UNKNOWN:
-	    default: return "unknown";
-	}
-    };
 
     if (BU_STR_EQUAL(field, "mode")) {
 	_view_obj_mode_value_string(gedp->ged_result_str, rec.draw_mode);
@@ -666,76 +1276,42 @@ _view_object_info(struct _ged_view_info *gd,
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "kind")) {
-	if (!have_summary || !summary.exists) {
-	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
-	    return BRLCAD_OK;
-	}
-	bu_vls_printf(gedp->ged_result_str, "%s\n",
-		kind_name(summary.kind));
+	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.kind_name.c_str());
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "scope")) {
-	if (!have_summary || !summary.exists) {
-	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
-	    return BRLCAD_OK;
-	}
-	bu_vls_printf(gedp->ged_result_str, "%s\n",
-		scope_name(summary.scope));
+	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.scope_name.c_str());
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "overlay_class")) {
-	if (!have_summary || !summary.exists) {
-	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
-	    return BRLCAD_OK;
-	}
 	bu_vls_printf(gedp->ged_result_str, "%s\n",
-		overlay_class_name(summary.overlay_class));
+	    rec.overlay_class_name.c_str());
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "lifecycle")) {
-	if (!have_summary || !summary.exists) {
-	    bu_vls_printf(gedp->ged_result_str, "unknown\n");
-	    return BRLCAD_OK;
-	}
 	bu_vls_printf(gedp->ged_result_str, "%s\n",
-		lifecycle_name(summary.lifecycle));
+	    rec.lifecycle_name.c_str());
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "owner")) {
-	if (!have_summary || !summary.exists || !summary.owner_id[0]) {
-	    bu_vls_printf(gedp->ged_result_str, "\n");
-	    return BRLCAD_OK;
-	}
-	bu_vls_printf(gedp->ged_result_str, "%s\n", summary.owner_id);
+	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.owner.c_str());
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "owner_role")) {
-	if (!have_summary || !summary.exists || !summary.owner_role[0]) {
-	    bu_vls_printf(gedp->ged_result_str, "\n");
-	    return BRLCAD_OK;
-	}
-	bu_vls_printf(gedp->ged_result_str, "%s\n", summary.owner_role);
+	bu_vls_printf(gedp->ged_result_str, "%s\n", rec.owner_role.c_str());
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "owner_generation")) {
-	if (!have_summary || !summary.exists) {
-	    bu_vls_printf(gedp->ged_result_str, "0\n");
-	    return BRLCAD_OK;
-	}
 	bu_vls_printf(gedp->ged_result_str, "%llu\n",
-		(unsigned long long)summary.owner_generation);
+		(unsigned long long)rec.owner_generation);
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "transient_preview")) {
-	bu_vls_printf(gedp->ged_result_str, "%d\n",
-		(have_summary && summary.exists) ?
-		summary.is_transient_preview : 0);
+	bu_vls_printf(gedp->ged_result_str, "%d\n", rec.transient_preview);
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUAL(field, "command_result")) {
-	bu_vls_printf(gedp->ged_result_str, "%d\n",
-		(have_summary && summary.exists) ?
-		summary.is_command_result : 0);
+	bu_vls_printf(gedp->ged_result_str, "%d\n", rec.command_result);
 	return BRLCAD_OK;
     }
 
@@ -833,6 +1409,7 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
     int annotations_requested = 0;
     int db_requested = 0;
     int all_requested = 0;
+    int json = 0;
     struct _ged_view_info *gd = (struct _ged_view_info *)bs;
     struct ged *gedp = gd->gedp;
 
@@ -845,13 +1422,14 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
 
     argc--; argv++;
 
-    struct bu_opt_desc d[6];
+    struct bu_opt_desc d[7];
     BU_OPT(d[0], "h", "help",        "",  NULL,  &help,                  "Print help");
     BU_OPT(d[1], "L", "local",       "",  NULL,  &local_only,            "Restrict feature lookup to current/specified view");
     BU_OPT(d[2], "A", "annotations", "",  NULL,  &annotations_requested, "List or query annotation features");
     BU_OPT(d[3], "D", "database",    "",  NULL,  &db_requested,          "List or query database display features");
     BU_OPT(d[4], "a", "all",         "",  NULL,  &all_requested,         "List or query all feature classes");
-    BU_OPT_NULL(d[5]);
+    BU_OPT(d[5], "j", "json",        "",  NULL,  &json,                  "Write list/info results as JSON");
+    BU_OPT_NULL(d[6]);
     gd->gopts = d;
 
     int first_pos = _view_object_first_pos(argc, argv);
@@ -869,7 +1447,8 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
     }
 
     if (first_pos < 0) {
-	_view_obj_list(gedp->ged_result_str, gd->cv, list_view, list_db, gd->local_obj, NULL);
+	_view_obj_list(gedp->ged_result_str, gd->cv, list_view, list_db,
+	    gd->local_obj, NULL, json);
 	return BRLCAD_OK;
     }
 
@@ -884,7 +1463,8 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	const char *glob = (sub_argc > 1) ? sub_argv[1] : NULL;
-	_view_obj_list(gedp->ged_result_str, gd->cv, list_view, list_db, gd->local_obj, glob);
+	_view_obj_list(gedp->ged_result_str, gd->cv, list_view, list_db,
+	    gd->local_obj, glob, json);
 	return BRLCAD_OK;
     }
 
@@ -897,7 +1477,7 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	return _view_object_info(gd, sub_argv[1], (sub_argc == 3) ? sub_argv[2] : NULL,
-		list_view, list_db);
+		list_view, list_db, json);
     }
 
     if (BU_STR_EQUAL(cmd, "show") || BU_STR_EQUAL(cmd, "hide") ||
@@ -907,7 +1487,6 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	gd->vobj = sub_argv[1];
-	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, list_view, list_db, gd->local_obj);
 	if (BU_STR_EQUAL(cmd, "show")) {
 	    const char *dargv[3] = {"visible", "UP", NULL};
 	    return _objs_cmd_draw(gd, 2, dargv);
@@ -940,7 +1519,6 @@ _view_cmd_feature(void *bs, int argc, const char **argv)
 	}
 	const char *style_cmd = sub_argv[1];
 	gd->vobj = sub_argv[2];
-	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, list_view, list_db, gd->local_obj);
 	if (BU_STR_EQUAL(style_cmd, "get")) {
 	    if (sub_argc != 4) {
 		bu_vls_printf(gedp->ged_result_str,
@@ -1004,7 +1582,6 @@ _view_cmd_annotation(void *bs, int argc, const char **argv)
     const char *type = sub_argv[0];
     const char *verb = sub_argv[1];
     gd->vobj = sub_argv[2];
-    gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 1, 1, gd->local_obj);
 
     std::vector<const char *> cargv;
     if (BU_STR_EQUAL(type, "arrow")) {
@@ -1021,7 +1598,6 @@ _view_cmd_annotation(void *bs, int argc, const char **argv)
 	int ret = _view_cmd_lines(gd, (int)cargv.size() - 1, cargv.data());
 	if (ret != BRLCAD_OK)
 	    return ret;
-	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 1, 1, gd->local_obj);
 	const char *aargv[3] = {"arrow", "1", NULL};
 	return _objs_cmd_arrow(gd, 2, aargv);
     }
@@ -1086,9 +1662,6 @@ _view_cmd_polygon(void *bs, int argc, const char **argv)
     int sub_argc = argc - first_pos;
     const char *verb = sub_argv[0];
     gd->vobj = sub_argv[1];
-    gd->polygon_ref = ged_draw_view_context_polygon_find_scoped(gd->cv,
-	    gd->vobj, gd->local_obj);
-    gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 1, 1, gd->local_obj);
 
     if (BU_STR_EQUAL(verb, "update")) {
 	std::vector<const char *> uargv;
@@ -1126,7 +1699,7 @@ _view_cmd_db_objects(void *bs, int argc, const char **argv)
     argc--; argv++;
 
     if (argc <= 0) {
-	_view_obj_list(gedp->ged_result_str, gd->cv, 0, 1, 0, NULL);
+	_view_obj_list(gedp->ged_result_str, gd->cv, 0, 1, 0, NULL, 0);
 	return BRLCAD_OK;
     }
 
@@ -1136,7 +1709,7 @@ _view_cmd_db_objects(void *bs, int argc, const char **argv)
 	    bu_vls_printf(gedp->ged_result_str, "Usage: view db list [glob_pattern]");
 	    return BRLCAD_ERROR;
 	}
-	_view_obj_list(gedp->ged_result_str, gd->cv, 0, 1, 0, glob);
+	_view_obj_list(gedp->ged_result_str, gd->cv, 0, 1, 0, glob, 0);
 	return BRLCAD_OK;
     }
 
@@ -1164,7 +1737,7 @@ _view_cmd_db_objects(void *bs, int argc, const char **argv)
 	}
 	const char *dbpath = add_argv[0];
 	const char *name = bu_vls_strlen(&as_name) ? bu_vls_cstr(&as_name) : dbpath;
-	int ret = ged_draw_view_context_gobject_create(gedp, gd->cv, dbpath,
+	int ret = ged_view_feature_gobject_create(gedp, gd->cv, dbpath,
 		name, gedp->ged_result_str) ? BRLCAD_OK : BRLCAD_ERROR;
 	bu_vls_free(&as_name);
 	return ret;
@@ -1176,7 +1749,6 @@ _view_cmd_db_objects(void *bs, int argc, const char **argv)
 	    return BRLCAD_ERROR;
 	}
 	gd->vobj = argv[1];
-	gd->shape_ref = _view_obj_shape_ref_find(gedp, gd->cv, gd->vobj, 0, 1, 0);
 	const char *rargv[2] = {"delete", NULL};
 	return _objs_cmd_delete(gd, 1, rargv);
     }

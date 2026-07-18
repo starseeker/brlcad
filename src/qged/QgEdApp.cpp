@@ -549,10 +549,9 @@ QgEdApp::run_cmd(struct bu_vls *msg, int argc, const char **argv)
     select_hash = ged_selection_state_hash(gedp, nullptr);
 
     /* Set the local unit conversions */
-    void *view_ctx = qged_session_active_view_context(mdl);
+    struct bv_context *view_ctx = qged_session_active_view_context(mdl);
     if (gedp->dbip && view_ctx) {
-	bv_unit_conversion_set(bv_context_view(
-	    static_cast<struct bv_context *>(view_ctx)),
+	bv_unit_conversion_set(bv_context_view(view_ctx),
 	    gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
     }
 
@@ -810,9 +809,9 @@ QgEdApp::element_selected(QgToolPaletteElement *el)
 
     if (el->use_event_filter)
 	curr_view->add_event_filter(controls);
-    void *view_ctx = qged_session_active_view_context(mdl);
+    struct bv_context *view_ctx = qged_session_active_view_context(mdl);
     if (view_ctx)
-	bv_context_dimensions_set(static_cast<struct bv_context *>(view_ctx),
+	bv_context_dimensions_set(view_ctx,
 	    curr_view->width(), curr_view->height());
 }
 

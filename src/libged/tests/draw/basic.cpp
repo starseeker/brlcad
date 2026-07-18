@@ -293,7 +293,7 @@ main(int ac, char *av[]) {
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
     /* Image baselines use the GED-owned headless Obol render endpoint. */
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     if (draw_test_obol_view_init(gedp, v, 512, 512) != BRLCAD_OK)
 	bu_exit(EXIT_FAILURE, "failed to initialize headless Obol render endpoint\n");
 

@@ -10,6 +10,9 @@
 #include "bu/str.h"
 
 #include "BObol.h"
+#include "BObol/BLodRealization.h"
+#include "BObol/BLodService.h"
+#include "BObol/BMeshLodCache.h"
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BLodService.h"
 #include "bu/app.h"

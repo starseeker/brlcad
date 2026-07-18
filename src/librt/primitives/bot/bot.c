@@ -47,6 +47,26 @@
 #define HLBVH_STACK_SIZE 256
 #define RT_DEFAULT_MAX_PRIMS_IN_NODE 8
 
+
+static uint32_t
+bot_ntoh_u32(const void *buf)
+{
+    uint32_t network_value;
+
+    memcpy(&network_value, buf, sizeof(network_value));
+    return ntohl(network_value);
+}
+
+
+static void
+bot_hton_u32(void *buf, uint32_t value)
+{
+    uint32_t network_value = htonl(value);
+
+    memcpy(buf, &network_value, sizeof(network_value));
+}
+
+
 #define BOT_UNORIENTED_NORM(_ap, _hitp, _norm, _out) {		    \
 	if (!(_ap)->a_bot_reverse_normal_disabled) {		    \
 	    if (_out) {	/* this is an exit */			    \
@@ -1887,8 +1907,8 @@ rt_bot_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fa
     bot_ip = (struct rt_bot_internal *)ip->idb_ptr;
     bot_ip->magic = RT_BOT_INTERNAL_MAGIC;
 
-    bot_ip->num_vertices = ntohl(*(uint32_t *)&rp->bot.bot_num_verts[0]);
-    bot_ip->num_faces = ntohl(*(uint32_t *)&rp->bot.bot_num_triangles[0]);
+    bot_ip->num_vertices = bot_ntoh_u32(&rp->bot.bot_num_verts[0]);
+    bot_ip->num_faces = bot_ntoh_u32(&rp->bot.bot_num_triangles[0]);
     bot_ip->orientation = rp->bot.bot_orientation;
     bot_ip->mode = rp->bot.bot_mode;
     bot_ip->bot_flags = 0;
@@ -1909,9 +1929,9 @@ rt_bot_import4(struct rt_db_internal *ip, const struct bu_external *ep, const fa
     for (i = 0; i < bot_ip->num_faces; i++) {
 	size_t idx=chars_used + i * 12;
 
-	bot_ip->faces[i*ELEMENTS_PER_POINT + 0] = ntohl(*(uint32_t *)&rp->bot.bot_data[idx + 0]);
-	bot_ip->faces[i*ELEMENTS_PER_POINT + 1] = ntohl(*(uint32_t *)&rp->bot.bot_data[idx + 4]);
-	bot_ip->faces[i*ELEMENTS_PER_POINT + 2] = ntohl(*(uint32_t *)&rp->bot.bot_data[idx + 8]);
+	bot_ip->faces[i*ELEMENTS_PER_POINT + 0] = bot_ntoh_u32(&rp->bot.bot_data[idx + 0]);
+	bot_ip->faces[i*ELEMENTS_PER_POINT + 1] = bot_ntoh_u32(&rp->bot.bot_data[idx + 4]);
+	bot_ip->faces[i*ELEMENTS_PER_POINT + 2] = bot_ntoh_u32(&rp->bot.bot_data[idx + 8]);
     }
 
     if (bot_ip->mode == RT_BOT_PLATE || bot_ip->mode == RT_BOT_PLATE_NOCOS) {
@@ -1986,12 +2006,12 @@ rt_bot_export4(struct bu_external *ep, const struct rt_db_internal *ip, double l
 
     rec->bot.bot_id = DBID_BOT;
 
-    *(uint32_t *)&rec->bot.bot_nrec[0] = htonl((uint32_t)num_recs);
+    bot_hton_u32(&rec->bot.bot_nrec[0], (uint32_t)num_recs);
     rec->bot.bot_orientation = bot_ip->orientation;
     rec->bot.bot_mode = bot_ip->mode;
     rec->bot.bot_err_mode = 0;
-    *(uint32_t *)&rec->bot.bot_num_verts[0] = htonl(bot_ip->num_vertices);
-    *(uint32_t *)&rec->bot.bot_num_triangles[0] = htonl(bot_ip->num_faces);
+    bot_hton_u32(&rec->bot.bot_num_verts[0], bot_ip->num_vertices);
+    bot_hton_u32(&rec->bot.bot_num_triangles[0], bot_ip->num_faces);
 
     /* Since libwdb users may want to operate in units other than mm,
      * we offer the opportunity to scale the solid (to get it into mm)
@@ -2015,9 +2035,9 @@ rt_bot_export4(struct bu_external *ep, const struct rt_db_internal *ip, double l
     for (i = 0; i < bot_ip->num_faces; i++) {
 	size_t idx=chars_used + i * 12;
 
-	*(uint32_t *)&rec->bot.bot_data[idx + 0] = htonl(bot_ip->faces[i*ELEMENTS_PER_POINT+0]);
-	*(uint32_t *)&rec->bot.bot_data[idx + 4] = htonl(bot_ip->faces[i*ELEMENTS_PER_POINT+1]);
-	*(uint32_t *)&rec->bot.bot_data[idx + 8] = htonl(bot_ip->faces[i*ELEMENTS_PER_POINT+2]);
+	bot_hton_u32(&rec->bot.bot_data[idx + 0], bot_ip->faces[i*ELEMENTS_PER_POINT+0]);
+	bot_hton_u32(&rec->bot.bot_data[idx + 4], bot_ip->faces[i*ELEMENTS_PER_POINT+1]);
+	bot_hton_u32(&rec->bot.bot_data[idx + 8], bot_ip->faces[i*ELEMENTS_PER_POINT+2]);
     }
 
     chars_used += bot_ip->num_faces * 12;
@@ -2110,9 +2130,9 @@ rt_bot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
     bip->magic = RT_BOT_INTERNAL_MAGIC;
 
     cp = ep->ext_buf;
-    bip->num_vertices = ntohl(*(uint32_t *)&cp[0]);
+    bip->num_vertices = bot_ntoh_u32(cp);
     cp += SIZEOF_NETWORK_LONG;
-    bip->num_faces = ntohl(*(uint32_t *)&cp[0]);
+    bip->num_faces = bot_ntoh_u32(cp);
     cp += SIZEOF_NETWORK_LONG;
     bip->orientation = *cp++;
     bip->mode = *cp++;
@@ -2148,11 +2168,11 @@ rt_bot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 
     if (bip->faces) {
 	for (i = 0; i < bip->num_faces; i++) {
-	    bip->faces[i*3 + 0] = ntohl(*(uint32_t *)&cp[0]);
+	    bip->faces[i*3 + 0] = bot_ntoh_u32(cp);
 	    cp += SIZEOF_NETWORK_LONG;
-	    bip->faces[i*3 + 1] = ntohl(*(uint32_t *)&cp[0]);
+	    bip->faces[i*3 + 1] = bot_ntoh_u32(cp);
 	    cp += SIZEOF_NETWORK_LONG;
-	    bip->faces[i*3 + 2] = ntohl(*(uint32_t *)&cp[0]);
+	    bip->faces[i*3 + 2] = bot_ntoh_u32(cp);
 	    cp += SIZEOF_NETWORK_LONG;
 	}
     }
@@ -2177,9 +2197,9 @@ rt_bot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 	/* must be double for import and export */
 	double tmp[ELEMENTS_PER_VECT];
 
-	bip->num_normals = ntohl(*(uint32_t *)&cp[0]);
+	bip->num_normals = bot_ntoh_u32(cp);
 	cp += SIZEOF_NETWORK_LONG;
-	bip->num_face_normals = ntohl(*(uint32_t *)&cp[0]);
+	bip->num_face_normals = bot_ntoh_u32(cp);
 	cp += SIZEOF_NETWORK_LONG;
 
 	if (bip->num_normals <= 0) {
@@ -2201,11 +2221,11 @@ rt_bot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 	    bip->face_normals = (int *)bu_calloc(bip->num_face_normals * 3, sizeof(int), "BOT face normals");
 
 	    for (i = 0; i < bip->num_face_normals; i++) {
-		bip->face_normals[i*3 + 0] = ntohl(*(uint32_t *)&cp[0]);
+		bip->face_normals[i*3 + 0] = bot_ntoh_u32(cp);
 		cp += SIZEOF_NETWORK_LONG;
-		bip->face_normals[i*3 + 1] = ntohl(*(uint32_t *)&cp[0]);
+		bip->face_normals[i*3 + 1] = bot_ntoh_u32(cp);
 		cp += SIZEOF_NETWORK_LONG;
-		bip->face_normals[i*3 + 2] = ntohl(*(uint32_t *)&cp[0]);
+		bip->face_normals[i*3 + 2] = bot_ntoh_u32(cp);
 		cp += SIZEOF_NETWORK_LONG;
 	    }
 	}
@@ -2220,9 +2240,9 @@ rt_bot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 	/* must be double for import and export */
 	double tmp[ELEMENTS_PER_VECT];
 
-	bip->num_uvs = ntohl(*(uint32_t *)&cp[0]);
+	bip->num_uvs = bot_ntoh_u32(cp);
 	cp += SIZEOF_NETWORK_LONG;
-	bip->num_face_uvs = ntohl(*(uint32_t *)&cp[0]);
+	bip->num_face_uvs = bot_ntoh_u32(cp);
 	cp += SIZEOF_NETWORK_LONG;
 
 	if (bip->num_uvs <= 0) {
@@ -2244,11 +2264,11 @@ rt_bot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const fa
 	    bip->face_uvs = (int *)bu_calloc(bip->num_face_uvs * 3, sizeof(int), "BOT face UVs");
 
 	    for (i = 0; i < bip->num_face_uvs; i++) {
-		bip->face_uvs[i*3 + 0] = ntohl(*(uint32_t *)&cp[0]);
+		bip->face_uvs[i*3 + 0] = bot_ntoh_u32(cp);
 		cp += SIZEOF_NETWORK_LONG;
-		bip->face_uvs[i*3 + 1] = ntohl(*(uint32_t *)&cp[0]);
+		bip->face_uvs[i*3 + 1] = bot_ntoh_u32(cp);
 		cp += SIZEOF_NETWORK_LONG;
-		bip->face_uvs[i*3 + 2] = ntohl(*(uint32_t *)&cp[0]);
+		bip->face_uvs[i*3 + 2] = bot_ntoh_u32(cp);
 		cp += SIZEOF_NETWORK_LONG;
 	    }
 	}
@@ -2313,11 +2333,11 @@ rt_bot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
     cp = ep->ext_buf;
     rem = ep->ext_nbytes;
 
-    *(uint32_t *)&cp[0] = htonl(bip->num_vertices);
+    bot_hton_u32(cp, bip->num_vertices);
     cp += SIZEOF_NETWORK_LONG;
     rem -= SIZEOF_NETWORK_LONG;
 
-    *(uint32_t *)&cp[0] = htonl(bip->num_faces);
+    bot_hton_u32(cp, bip->num_faces);
     cp += SIZEOF_NETWORK_LONG;
     rem -= SIZEOF_NETWORK_LONG;
 
@@ -2337,15 +2357,15 @@ rt_bot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
     }
 
     for (i = 0; i < bip->num_faces; i++) {
-	*(uint32_t *)&cp[0] = htonl(bip->faces[i*3 + 0]);
+	bot_hton_u32(cp, bip->faces[i*3 + 0]);
 	cp += SIZEOF_NETWORK_LONG;
 	rem -= SIZEOF_NETWORK_LONG;
 
-	*(uint32_t *)&cp[0] = htonl(bip->faces[i*3 + 1]);
+	bot_hton_u32(cp, bip->faces[i*3 + 1]);
 	cp += SIZEOF_NETWORK_LONG;
 	rem -= SIZEOF_NETWORK_LONG;
 
-	*(uint32_t *)&cp[0] = htonl(bip->faces[i*3 + 2]);
+	bot_hton_u32(cp, bip->faces[i*3 + 2]);
 	cp += SIZEOF_NETWORK_LONG;
 	rem -= SIZEOF_NETWORK_LONG;
     }
@@ -2370,11 +2390,11 @@ rt_bot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
     }
 
     if (bip->bot_flags & RT_BOT_HAS_SURFACE_NORMALS) {
-	*(uint32_t *)&cp[0] = htonl(bip->num_normals);
+	bot_hton_u32(cp, bip->num_normals);
 	cp += SIZEOF_NETWORK_LONG;
 	rem -= SIZEOF_NETWORK_LONG;
 
-	*(uint32_t *)&cp[0] = htonl(bip->num_face_normals);
+	bot_hton_u32(cp, bip->num_face_normals);
 	cp += SIZEOF_NETWORK_LONG;
 	rem -= SIZEOF_NETWORK_LONG;
 
@@ -2397,15 +2417,15 @@ rt_bot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
 	}
 	if (bip->num_face_normals > 0) {
 	    for (i = 0; i < bip->num_face_normals; i++) {
-		*(uint32_t *)&cp[0] = htonl(bip->face_normals[i*ELEMENTS_PER_VECT + 0]);
+		bot_hton_u32(cp, bip->face_normals[i*ELEMENTS_PER_VECT + 0]);
 		cp += SIZEOF_NETWORK_LONG;
 		rem -= SIZEOF_NETWORK_LONG;
 
-		*(uint32_t *)&cp[0] = htonl(bip->face_normals[i*ELEMENTS_PER_VECT + 1]);
+		bot_hton_u32(cp, bip->face_normals[i*ELEMENTS_PER_VECT + 1]);
 		cp += SIZEOF_NETWORK_LONG;
 		rem -= SIZEOF_NETWORK_LONG;
 
-		*(uint32_t *)&cp[0] = htonl(bip->face_normals[i*ELEMENTS_PER_VECT + 2]);
+		bot_hton_u32(cp, bip->face_normals[i*ELEMENTS_PER_VECT + 2]);
 		cp += SIZEOF_NETWORK_LONG;
 		rem -= SIZEOF_NETWORK_LONG;
 	    }
@@ -2413,11 +2433,11 @@ rt_bot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
     }
 
     if (bip->bot_flags & RT_BOT_HAS_TEXTURE_UVS) {
-	*(uint32_t *)&cp[0] = htonl(bip->num_uvs);
+	bot_hton_u32(cp, bip->num_uvs);
 	cp += SIZEOF_NETWORK_LONG;
 	rem -= SIZEOF_NETWORK_LONG;
 
-	*(uint32_t *)&cp[0] = htonl(bip->num_face_uvs);
+	bot_hton_u32(cp, bip->num_face_uvs);
 	cp += SIZEOF_NETWORK_LONG;
 	rem -= SIZEOF_NETWORK_LONG;
 
@@ -2440,15 +2460,15 @@ rt_bot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double l
 	}
 	if (bip->num_face_uvs > 0) {
 	    for (i = 0; i < bip->num_face_uvs; i++) {
-		*(uint32_t *)&cp[0] = htonl(bip->face_uvs[i*ELEMENTS_PER_VECT + 0]);
+		bot_hton_u32(cp, bip->face_uvs[i*ELEMENTS_PER_VECT + 0]);
 		cp += SIZEOF_NETWORK_LONG;
 		rem -= SIZEOF_NETWORK_LONG;
 
-		*(uint32_t *)&cp[0] = htonl(bip->face_uvs[i*ELEMENTS_PER_VECT + 1]);
+		bot_hton_u32(cp, bip->face_uvs[i*ELEMENTS_PER_VECT + 1]);
 		cp += SIZEOF_NETWORK_LONG;
 		rem -= SIZEOF_NETWORK_LONG;
 
-		*(uint32_t *)&cp[0] = htonl(bip->face_uvs[i*ELEMENTS_PER_VECT + 2]);
+		bot_hton_u32(cp, bip->face_uvs[i*ELEMENTS_PER_VECT + 2]);
 		cp += SIZEOF_NETWORK_LONG;
 		rem -= SIZEOF_NETWORK_LONG;
 	    }

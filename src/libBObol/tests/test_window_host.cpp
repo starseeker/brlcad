@@ -12,6 +12,8 @@
 #include "bu/str.h"
 
 #include "BObol.h"
+#include "BObol/BImageSource.h"
+#include "BObol/BViewportImage.h"
 
 #include "bu/log.h"
 #include "bu/malloc.h"
@@ -2035,12 +2037,12 @@ test_display_endpoint_contract(void)
 	  "explicit software renderer rejects an untyped direct host");
     CHECK(bobol_display_endpoint_render_engine_set(endpoint,
 	  BOBOL_RENDER_ENGINE_AUTO),
-	  "automatic renderer policy permits transitional direct host binding");
+	  "automatic renderer policy permits custom direct host binding");
     CHECK(bobol_display_endpoint_host_bind(endpoint, &borrowed_host, 0),
 	  "display endpoint binds a borrowed host");
     CHECK(bobol_display_endpoint_render_engine_resolved_get(endpoint) ==
 	  BOBOL_RENDER_ENGINE_AUTO,
-	  "transitional direct host does not invent renderer capabilities");
+	  "custom direct host does not invent renderer capabilities");
     CHECK(bobol_display_endpoint_host(endpoint) == &borrowed_host,
 	  "display endpoint reports its host");
     CHECK(bobol_display_endpoint_framebuffer_window_host(endpoint) ==

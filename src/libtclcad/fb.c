@@ -76,7 +76,7 @@ tclcad_fbs_error(Tcl_Interp *interp, const char *message)
  * host and publishes that stream through the endpoint capture provider.
  * TclCAD owns only notifier callbacks. */
 static int
-tclcad_obol_framebuffer_bind(void *view_ctx, Tcl_Interp *interp)
+tclcad_obol_framebuffer_bind(struct ged_view_context *view_ctx, Tcl_Interp *interp)
 {
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
     if (!tvd || !tvd->gedp)
@@ -109,7 +109,7 @@ tclcad_obol_framebuffer_bind(void *view_ctx, Tcl_Interp *interp)
 
 
 int
-to_close_fbs(void *view_ctx)
+to_close_fbs(struct ged_view_context *view_ctx)
 {
     struct tclcad_view_data *tvd = tclcad_view_data_from_view_ctx(view_ctx);
     if (!tvd || !tvd->gedp)
@@ -132,7 +132,7 @@ to_close_fbs(void *view_ctx)
  * Open or rebind the view's endpoint-owned Obol framebuffer stream.
  */
 int
-to_open_fbs(void *view_ctx, Tcl_Interp *interp)
+to_open_fbs(struct ged_view_context *view_ctx, Tcl_Interp *interp)
 {
     return tclcad_obol_framebuffer_bind(view_ctx, interp);
 }
@@ -163,7 +163,7 @@ to_set_fb_mode(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *view_ctx = ged_view_find_ctx(gedp, argv[1]);
     if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;
@@ -256,7 +256,7 @@ to_listen(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    void *view_ctx = ged_view_find_ctx(gedp, argv[1]);
+    struct ged_view_context *view_ctx = ged_view_find_ctx(gedp, argv[1]);
     if (!view_ctx) {
 	bu_vls_printf(gedp->ged_result_str, "View not found - %s", argv[1]);
 	return BRLCAD_ERROR;

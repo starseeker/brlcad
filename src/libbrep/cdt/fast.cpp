@@ -294,6 +294,27 @@ getEdgePoints(ON_BrepTrim &trim,
     return param_points;
 }
 
+
+static void
+clear_trim_point_samples(ON_BrepTrim *trim)
+{
+    if (!trim || !trim->m_trim_user.p)
+	return;
+
+    std::map<double, BrepTrimPoint *> *points =
+	static_cast<std::map<double, BrepTrimPoint *> *>(trim->m_trim_user.p);
+    for (const auto &entry : *points) {
+	BrepTrimPoint *point = entry.second;
+	if (!point)
+	    continue;
+	delete point->p3d;
+	delete point->n3d;
+	delete point;
+    }
+    delete points;
+    trim->m_trim_user.p = NULL;
+}
+
 static void
 getSurfacePoints(const ON_Surface *s,
 		 fastf_t u1,
@@ -1932,19 +1953,7 @@ detria_CDT(struct bg_line_layer *layer,
 
 	for (int lti = 0; lti < loop->TrimCount(); lti++) {
 	    ON_BrepTrim *trim = loop->Trim(lti);
-
-	    if (trim->m_trim_user.p) {
-		std::map<double, ON_3dPoint *> *points = (std::map < double,
-			ON_3dPoint * > *) trim->m_trim_user.p;
-		std::map<double, ON_3dPoint *>::const_iterator i;
-		for (i = points->begin(); i != points->end(); i++) {
-		    const ON_3dPoint *p = (*i).second;
-		    delete p;
-		}
-		points->clear();
-		delete points;
-		trim->m_trim_user.p = NULL;
-	    }
+	    clear_trim_point_samples(trim);
 	}
     }
     return;
@@ -2026,17 +2035,7 @@ brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
 
     for (int iindex = 0; iindex < brep->m_T.Count(); iindex++) {
 	ON_BrepTrim *trim = brep->Trim(iindex);
-	if (trim->m_trim_user.p != NULL) {
-	    std::map<double, ON_3dPoint *> *points = (std::map<double, ON_3dPoint *> *)trim->m_trim_user.p;
-	    std::map<double, ON_3dPoint *>::const_iterator i;
-	    for (i = points->begin(); i != points->end(); i++) {
-		const ON_3dPoint *p = (*i).second;
-		delete p;
-	    }
-	    points->clear();
-	    delete points;
-	    trim->m_trim_user.p = NULL;
-	}
+	clear_trim_point_samples(trim);
     }
 
     return 0;
@@ -2275,18 +2274,7 @@ bg_CDT(std::vector<int> &faces, std::vector<fastf_t> &pnt_norms, std::vector<fas
 
 	for (int lti = 0; lti < loop->TrimCount(); lti++) {
 	    ON_BrepTrim *trim = loop->Trim(lti);
-
-	    if (trim->m_trim_user.p) {
-		std::map<double, ON_3dPoint *> *points = (std::map < double, ON_3dPoint * > *) trim->m_trim_user.p;
-		std::map<double, ON_3dPoint *>::const_iterator i;
-		for (i = points->begin(); i != points->end(); i++) {
-		    const ON_3dPoint *p = (*i).second;
-		    delete p;
-		}
-		points->clear();
-		delete points;
-		trim->m_trim_user.p = NULL;
-	    }
+	    clear_trim_point_samples(trim);
 	}
     }
 
@@ -2339,17 +2327,7 @@ brep_cdt_fast(int **faces, int *face_cnt, vect_t **pnt_norms, point_t **pnts, in
 
     for (int iindex = 0; iindex < brep->m_T.Count(); iindex++) {
 	ON_BrepTrim *trim = brep->Trim(iindex);
-	if (trim->m_trim_user.p != NULL) {
-	    std::map<double, ON_3dPoint *> *points = (std::map<double, ON_3dPoint *> *)trim->m_trim_user.p;
-	    std::map<double, ON_3dPoint *>::const_iterator i;
-	    for (i = points->begin(); i != points->end(); i++) {
-		const ON_3dPoint *p = (*i).second;
-		delete p;
-	    }
-	    points->clear();
-	    delete points;
-	    trim->m_trim_user.p = NULL;
-	}
+	clear_trim_point_samples(trim);
     }
 
     /* If we got nothing, we're done here */

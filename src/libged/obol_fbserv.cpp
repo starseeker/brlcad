@@ -42,6 +42,7 @@
 #include "ged/view.h"
 #include "imgstream/fb_compat.h"
 
+#include "./ged_bobol_private.hpp"
 #include "./ged_private.h"
 
 class BObolViewController;
@@ -131,7 +132,7 @@ public:
 	framebuffer.close();
     }
 
-    int configure(struct ged *new_gedp, void *new_view_ctx,
+    int configure(struct ged *new_gedp, struct ged_view_context *new_view_ctx,
 	    BObolViewController *controller,
 	    BObolWindowHost *window_host,
 	    int requested_width,
@@ -408,6 +409,25 @@ public:
 	return BRLCAD_OK;
     }
 
+    int applyBobol(ged_bobol_framebuffer_operation_t operation,
+	    void *userdata, bool publish)
+    {
+	if (!operation)
+	    return BRLCAD_ERROR;
+	std::lock_guard<std::mutex> guard(lock);
+	if (framebuffer.ensure() != 0)
+	    return BRLCAD_ERROR;
+	int ret = operation(framebuffer, userdata);
+	if (ret != BRLCAD_OK || !publish)
+	    return ret;
+	bindCaptureProviderLocked();
+	(void)framebuffer.present();
+	if (imgstream_fb_flush(framebuffer.framebuffer()) != 0)
+	    return BRLCAD_ERROR;
+	notifyUpdatedLocked();
+	return BRLCAD_OK;
+    }
+
     int captureFramebuffer(unsigned char **pixels, size_t *size,
 	    unsigned int *width, unsigned int *height,
 	    unsigned int *components)
@@ -629,7 +649,7 @@ private:
     }
 
     struct ged *gedp = NULL;
-    void *view_ctx = NULL;
+    struct ged_view_context *view_ctx = NULL;
     struct fbserv_obj *fbs = NULL;
     bobol_display_endpoint_t *capture_endpoint;
     int present_on_flush = 0;
@@ -733,7 +753,7 @@ ged_obol_capture_framebuffer(void *ctx, unsigned char **pixels, size_t *size,
 
 static int
 ged_obol_fbserv_configure_for_view(struct ged *gedp,
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	BObolWindowHost *window_host,
 	int width,
 	int height,
@@ -758,8 +778,12 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
 	}
     }
 
-    void *controller =
-	ged_draw_obol_controller_ensure_opaque_for_view(view_ctx, 1);
+    if (!ged_view_context_display_endpoint_ensure(view_ctx))
+	return BRLCAD_ERROR;
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    void *controller = endpoint ?
+	bobol_display_endpoint_controller(endpoint) : NULL;
     if (!controller)
 	return BRLCAD_ERROR;
 
@@ -789,14 +813,14 @@ ged_obol_fbserv_configure_for_view(struct ged *gedp,
 }
 
 extern "C" int
-ged_obol_fbserv_ensure_for_view(struct ged *gedp, void *view_ctx)
+ged_obol_fbserv_ensure_for_view(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     return ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx);
 }
 
 extern "C" GED_EXPORT int
 ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
-	void *view_ctx)
+	struct ged_view_context *view_ctx)
 {
     return ged_obol_fbserv_configure_for_view(gedp, view_ctx, NULL, 0, 0,
 	0, 1);
@@ -804,7 +828,7 @@ ged_draw_obol_framebuffer_backend_ensure_for_view(struct ged *gedp,
 
 extern "C" GED_EXPORT int
 ged_draw_obol_framebuffer_apply_for_view(struct ged *gedp,
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	ged_draw_obol_framebuffer_operation_t operation,
 	void *userdata,
 	int publish)
@@ -823,9 +847,30 @@ ged_draw_obol_framebuffer_apply_for_view(struct ged *gedp,
 	BRLCAD_ERROR;
 }
 
+int
+ged_bobol_framebuffer_apply(struct ged *gedp,
+	struct ged_view_context *view_ctx,
+	ged_bobol_framebuffer_operation_t operation,
+	void *userdata,
+	bool publish)
+{
+    if (!gedp || !operation)
+	return BRLCAD_ERROR;
+    if (!view_ctx)
+	view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx ||
+	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) !=
+	    BRLCAD_OK)
+	return BRLCAD_ERROR;
+
+    GedObolFbservBridge *bridge = bridge_from_fbs(gedp->ged_fbs);
+    return bridge ? bridge->applyBobol(operation, userdata, publish) :
+	BRLCAD_ERROR;
+}
+
 extern "C" GED_EXPORT int
 ged_draw_obol_framebuffer_backend_install_for_view(struct ged *gedp,
-	void *view_ctx,
+	struct ged_view_context *view_ctx,
 	void *window_host,
 	int width,
 	int height,
@@ -867,7 +912,7 @@ ged_obol_fbserv_composition_set(struct ged *gedp, int mode)
 
 extern "C" GED_EXPORT int
 ged_draw_obol_view_display_image(struct ged *gedp,
-				 void *view_ctx,
+				 struct ged_view_context *view_ctx,
 				 unsigned char **image,
 				 int flip,
 				 int alpha)
@@ -883,9 +928,11 @@ ged_draw_obol_view_display_image(struct ged *gedp,
     if (!view_ctx)
 	return -1;
 
-    BObolViewController *controller =
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    BObolViewController *controller = endpoint ?
 	static_cast<BObolViewController *>(
-	    ged_draw_obol_controller_opaque_for_view(view_ctx));
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
     if (!controller)
 	return 0;
 

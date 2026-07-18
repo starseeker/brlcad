@@ -20,9 +20,6 @@
 
 #include <stdint.h>
 #include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
 
 class SoNode;
 class SoGroup;
@@ -106,17 +103,17 @@ struct BOBOL_EXPORT BObolSceneSummary {
     SbString lastDiagnostics;
 };
 
-class BOBOL_EXPORT SoBRLSceneController {
+class BOBOL_EXPORT BObolSceneController {
 public:
-    SoBRLSceneController(void);
+    BObolSceneController(void);
     /**
      * Create a controller over an application-owned Obol scene root.
      *
      * The controller retains the root with normal Obol reference counting, but
      * it does not own an authoritative hierarchy separate from Obol.
      */
-    explicit SoBRLSceneController(SoNode *root);
-    ~SoBRLSceneController(void);
+    explicit BObolSceneController(SoNode *root);
+    ~BObolSceneController(void);
 
     /**
      * Replace the retained scene root used by subsequent realization passes.
@@ -128,7 +125,7 @@ public:
     SbBool getSceneSummary(BObolSceneSummary &summary) const;
 
     SbBool realizePending(void);
-    void shareRealizationRepository(SoBRLSceneController *source);
+    void shareRealizationRepository(BObolSceneController *source);
     void clearRealizationRepository(void);
     void invalidateRealizationViewVariants(void);
     void renameRealizationObject(const char *oldName, const char *newName);
@@ -487,6 +484,8 @@ public:
     const SbString &getLastDiagnostics(void) const;
 
 private:
+    struct Impl;
+
     void advanceFrameRevision(void);
     void advanceStructuralRevision(void);
     void clearDatabaseSourceIndex(void) const;
@@ -507,25 +506,7 @@ private:
     SbBool databaseSourceSummaryForSource(SoBRLDatabaseSource *source,
 	BObolDatabaseSourceSummary &summary) const;
 
-    SoNode *root;
-    uint64_t structuralRevision;
-    uint64_t frameRevision;
-    int mutationBatchDepth;
-    SbBool mutationBatchStructuralRevisionPending;
-    SbBool mutationBatchFrameRevisionPending;
-    mutable SbBool databaseSourceIndexValid;
-    mutable std::unordered_map<std::string, SoGroup *> groupPathIndex;
-    mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourcePathIndex;
-    mutable std::unordered_map<std::string, std::vector<SoBRLDatabaseSource *> > databaseSourcePathInstancesIndex;
-    mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourceInstanceIndex;
-    mutable std::unordered_map<std::string, SoGroup *> databaseSourceInstanceParentIndex;
-    mutable std::vector<SoBRLDatabaseSource *> databaseSourceOrder;
-    mutable std::unordered_map<SoBRLDatabaseSource *, size_t> databaseSourceOrderIndex;
-    unsigned int lastVisitedSourceCount;
-    unsigned int lastRealizedSourceCount;
-    unsigned int lastFailedSourceCount;
-    SbString lastDiagnostics;
-    std::shared_ptr<BObolRealizationRepository> realizationRepository;
+    std::unique_ptr<Impl> d;
 };
 
 #endif /* BOBOL_BSCENECONTROLLER_H */

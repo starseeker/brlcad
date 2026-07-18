@@ -106,7 +106,7 @@ preview_draw_mode_to_ged_mode(int mode)
 
 
 static int
-preview_draw_paths(struct ged *gedp, void *view_ctx, int path_count,
+preview_draw_paths(struct ged *gedp, struct ged_view_context *view_ctx, int path_count,
 		   const char **paths)
 {
     if (!gedp || !view_ctx || path_count <= 0 || !paths)
@@ -181,7 +181,7 @@ ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int UNUSED(argc), const 
     /* Only display the frames the user is interested in */
     if (preview_currentframe < preview_desiredframe) return 0;
     if (preview_finalframe && preview_currentframe > preview_finalframe) return 0;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return -1;
 
@@ -391,7 +391,7 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx)
 	return BRLCAD_ERROR;
 
@@ -531,8 +531,8 @@ ged_preview_core(struct ged *gedp, int argc, const char *argv[])
     fp = NULL;
 
     if (draw_eye_path) {
-	struct ged_draw_view_feature_style style =
-	    GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+	struct ged_view_feature_style style =
+	    GED_VIEW_FEATURE_STYLE_INIT;
 	style.color_valid = 1;
 	VSET(style.color, 255, 255, 0);
 	(void)_ged_line_set_publish_command_scene_feature(gedp,

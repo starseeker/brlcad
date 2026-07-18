@@ -202,8 +202,18 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t3.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t4.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/rtw_view_t5.g)
 
-# GED draw transaction to Obol controller bridge regression.
-brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp" "libged;libBObol;libwdb" TEST)
+# GED draw transaction to Obol controller bridge regression.  Supply the core
+# implementation objects directly so the test can exercise private seams
+# without exporting them from the shared ABI.  Public command/plugin entry
+# points continue to come from libged.
+brlcad_addexec(ged_test_obol_draw_sync "obol_sync.cpp"
+  "libged;libBObol;libwdb" TEST)
+if(TARGET ged_test_obol_draw_sync AND TARGET libged-obj)
+  set(_ged_obol_private_object_regex
+    "/(draw|draw_obol|draw_obol_result|ged_draw_brep|ged_draw_source|ged_util|ged_view_state|obol_fbserv|polyclip)\\.cpp\\.o$|/(ged_draw_registry|ged_draw_scene_root|ged_draw_util)\\.c\\.o$")
+  target_sources(ged_test_obol_draw_sync PRIVATE
+    "$<FILTER:$<TARGET_OBJECTS:libged-obj>,INCLUDE,${_ged_obol_private_object_regex}>")
+endif()
 if(TARGET ged_test_obol_draw_sync)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})
@@ -216,6 +226,33 @@ if(TARGET ged_test_obol_draw_sync)
   set_property(TEST ged_test_obol_draw_sync APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
 distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_obol_draw_sync_tmp.g)
+
+if(CMAKE_NM AND UNIX AND NOT APPLE)
+  brlcad_add_test(NAME ged_bobol_private_symbol_contract
+    COMMAND "${CMAKE_COMMAND}"
+      "-DNM=${CMAKE_NM}"
+      "-DLIBRARY=$<TARGET_FILE:libged>"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/../../check_bobol_private_symbols.cmake")
+  set_tests_properties(ged_bobol_private_symbol_contract PROPERTIES
+    LABELS "bobol_api;bobol_contract;bobol_headless")
+endif()
+
+# GED-owned scene nodes are value handles with explicit owner, generation, and
+# scene-revision validation.
+brlcad_addexec(ged_test_scene_node_handles "scene_node_handles.cpp" "libged;libBObol;libwdb" TEST)
+if(TARGET ged_test_scene_node_handles)
+  foreach(tdp ${test_deps})
+    if (TARGET ${tdp})
+      add_dependencies(ged_test_scene_node_handles ${tdp})
+    endif ()
+  endforeach()
+endif(TARGET ged_test_scene_node_handles)
+brlcad_add_test(NAME ged_test_scene_node_handles COMMAND ged_test_scene_node_handles)
+if(TARGET ged_test_scene_node_handles)
+  set_property(TEST ged_test_scene_node_handles APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+endif()
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_scene_node_handles_a.g)
+distclean(${CMAKE_CURRENT_BINARY_DIR}/ged_scene_node_handles_b.g)
 
 # Independent-view state is structural scope, not a mode bit.
 brlcad_addexec(ged_test_view_independent "view_independent.cpp" "libged;libbu" TEST)
@@ -246,6 +283,25 @@ brlcad_add_test(NAME ged_test_view_command
 if(TARGET ged_test_view_command)
   set_property(TEST ged_test_view_command APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 endif()
+
+foreach(_bobol_contract_test
+    ged_test_obol_draw_sync
+    ged_test_scene_node_handles
+    ged_test_view_command)
+  if(TEST ${_bobol_contract_test})
+    set_property(TEST ${_bobol_contract_test} APPEND PROPERTY
+      LABELS "bobol_headless;bobol_contract")
+  endif()
+endforeach()
+
+foreach(_bobol_sanitizer_test
+    ged_test_obol_draw_sync
+    ged_test_scene_node_handles)
+  if(TEST ${_bobol_sanitizer_test})
+    set_property(TEST ${_bobol_sanitizer_test} APPEND PROPERTY
+      LABELS bobol_sanitizer)
+  endif()
+endforeach()
 
 # Lighting/zbuffer/zclip regression test (mged_shaded_mode_helper path)
 brlcad_addexec(ged_test_mged_shaded_mode "mged_shaded_mode.cpp;util.cpp" "libged;libBObol;libicv" TEST)

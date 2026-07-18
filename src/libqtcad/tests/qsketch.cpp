@@ -544,8 +544,8 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
 
     /* QgView owns the one retained context used by editing and rendering. */
     m_view = new QgView(this, QgViewType::SW);
-    void *view_ctx = m_view ? m_view->viewContext() : NULL;
-    if (!view_ctx) {
+    struct bv_context *view_context = m_view ? m_view->viewContext() : NULL;
+    if (!view_context) {
 	bu_log("qsketch: view-context creation failed\n");
 	return;
     }
@@ -555,8 +555,6 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
      * u_vec (1,0,0) and v_vec (0,1,0) defaults. */
     vect_t aet;
     VSET(aet, 0.0, 90.0, 0.0);
-    struct bv_context *view_context =
-	static_cast<struct bv_context *>(view_ctx);
     bv_aet_set(bv_context_view(view_context), aet);
     bv_scale_set(bv_context_view(view_context), 250.0);
     bv_context_update(view_context,
@@ -568,7 +566,7 @@ QSketchEditWindow::QSketchEditWindow(struct db_i *dbip,
     db_full_path_init(&fp);
     db_add_node_to_full_path(&fp, dp);
     m_es = rt_edit_create_context(&fp, dbip, &m_tol,
-	    view_ctx);
+	    view_context);
     db_free_full_path(&fp);
 
     if (!m_es) {

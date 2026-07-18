@@ -228,7 +228,7 @@ ged_solids_on_ray_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
     bv_center_mat_get(view_center, view);
     bv_rotation_get(view_rotation, view);

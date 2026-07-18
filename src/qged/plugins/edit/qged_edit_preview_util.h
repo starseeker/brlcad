@@ -41,19 +41,24 @@
 
 class QgPluginContext;
 
-void *qged_edit_view_context(const QgPluginContext *ctx);
+struct bv_context;
+struct ged_view_context;
+
+struct bv_context *qged_edit_view_context(const QgPluginContext *ctx);
+struct ged_view_context *qged_edit_ged_view_context(const QgPluginContext *ctx);
 
 struct qged_edit_feature_ref {
-    uintptr_t token;
-    uint64_t revision;
+    uint64_t owner;
+    uint64_t id;
+    uint64_t generation;
 };
 
-#define QGED_EDIT_FEATURE_REF_NULL_INIT {0, 0}
+#define QGED_EDIT_FEATURE_REF_NULL_INIT {0, 0, 0}
 
 #ifdef __cplusplus
-#  define QGED_EDIT_FEATURE_REF_NULL qged_edit_feature_ref{0, 0}
+#  define QGED_EDIT_FEATURE_REF_NULL qged_edit_feature_ref{0, 0, 0}
 #else
-#  define QGED_EDIT_FEATURE_REF_NULL ((struct qged_edit_feature_ref){0, 0})
+#  define QGED_EDIT_FEATURE_REF_NULL ((struct qged_edit_feature_ref){0, 0, 0})
 #endif
 
 enum qged_edit_feature_family {

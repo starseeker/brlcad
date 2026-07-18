@@ -145,13 +145,16 @@ test_qged_obol_fbserv_backend(void)
 	} \
     } while (0)
 
-    ged_view_active_ctx_set(gedp, view.viewContext());
-    GED_CHECK(ged_view_context_host_attach(gedp, view.viewContext()),
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    GED_CHECK(ged_view_context_host_attach(gedp, view_ctx),
 	"qged framebuffer GED view must attach its endpoint context");
 
     qged_fbserv_configure_ged_handlers(gedp, &view);
-    void *view_ctx = ged_view_active_ctx(gedp);
-    GED_CHECK(ged_draw_obol_controller_opaque_for_view(view_ctx) == controller,
+    view_ctx = ged_view_active_ctx(gedp);
+    GED_CHECK(bobol_display_endpoint_controller(
+	ged_view_context_display_endpoint_get(view_ctx)) == controller,
 	"qged framebuffer GED view must share the visible endpoint controller");
     GED_CHECK(view.displayEndpoint() != NULL &&
 	ged_view_context_display_endpoint_get(view_ctx) == view.displayEndpoint(),
@@ -294,12 +297,15 @@ test_qged_obol_fbserv_backend(void)
     BObolViewController *secondController = secondView.obolViewController();
     GED_CHECK(secondController != NULL,
 	"qged secondary view must expose an Obol controller");
-    ged_view_active_ctx_set(gedp, secondView.viewContext());
-    GED_CHECK(ged_view_context_host_attach(gedp, secondView.viewContext()),
+    struct ged_view_context *second_view_ctx =
+	ged_view_context_from_bv(secondView.viewContext());
+    ged_view_active_ctx_set(gedp, second_view_ctx);
+    GED_CHECK(ged_view_context_host_attach(gedp, second_view_ctx),
 	"qged secondary framebuffer view must attach its endpoint context");
     qged_fbserv_configure_ged_handlers(gedp, &secondView);
-    GED_CHECK(ged_draw_obol_controller_opaque_for_view(
-	secondView.viewContext()) == secondController,
+    GED_CHECK(bobol_display_endpoint_controller(
+	ged_view_context_display_endpoint_get(
+	    second_view_ctx)) == secondController,
 	"qged framebuffer stream must adopt the secondary endpoint controller");
     GED_CHECK(fbs_framebuffer_info(fbs, &info) == 0,
 	"qged framebuffer stream must remain valid after an active-view switch");
@@ -364,7 +370,7 @@ test_qged_obol_fbserv_backend(void)
     ConditionalCompositionHost policyHost;
     policyHost.attachController(secondController, FALSE);
     GED_CHECK(ged_draw_obol_framebuffer_backend_install_for_view(gedp,
-	secondView.viewContext(), &policyHost, info.width, info.height, 1) ==
+	second_view_ctx, &policyHost, info.width, info.height, 1) ==
 	BRLCAD_OK && policyHost.getFramebufferCount() == 1 &&
 	secondHost->getFramebufferCount() == 0,
 	"framebuffer bridge must move to a composition-aware target host");
@@ -410,7 +416,7 @@ test_qged_obol_fbserv_backend(void)
     rejectedHost.attachController(secondController, FALSE);
     rejectedHost.reject = true;
     GED_CHECK(ged_draw_obol_framebuffer_backend_install_for_view(gedp,
-	secondView.viewContext(), &rejectedHost, info.width, info.height, 1) ==
+	second_view_ctx, &rejectedHost, info.width, info.height, 1) ==
 	BRLCAD_ERROR && rejectedHost.getFramebufferCount() == 0 &&
 	policyHost.getFramebufferCount() == 1 &&
 	secondController->getFramebufferUnderlayRoot()->findChild(

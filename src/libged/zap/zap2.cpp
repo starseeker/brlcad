@@ -33,7 +33,7 @@
 
 
 static int
-zap_draw_db_scope(struct ged *gedp, void *view_ctx)
+zap_draw_db_scope(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR_SCOPE, NULL);
@@ -50,7 +50,8 @@ zap_has_independent_views(struct ged *gedp)
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	struct ged_view_context *view_ctx =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
 	if (view_ctx && ged_view_context_is_independent(view_ctx))
 	    return 1;
     }
@@ -78,7 +79,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
     const char *usage = "zap [options]\n";
-    void *view_ctx = NULL;
+    struct ged_view_context *view_ctx = NULL;
 
     argc-=(argc>0); argv+=(argc>0); /* done with command name argv[0] */
 
@@ -155,7 +156,7 @@ ged_zap2_core(struct ged *gedp, int argc, const char *argv[])
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	view_ctx = (void *)BU_PTBL_GET(views, i);
+	view_ctx = (struct ged_view_context *)BU_PTBL_GET(views, i);
 	if (ged_view_context_is_independent(view_ctx) && !clear_all_views)
 	    continue;
 	int flags = 0;

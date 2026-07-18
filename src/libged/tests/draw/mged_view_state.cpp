@@ -71,7 +71,7 @@ extern "C" int draw_test_images_differ(const char *a, const char *b, int offmany
 static void
 do_full_refresh(struct ged *gedp)
 {
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
@@ -102,10 +102,12 @@ capture_screengrab_nonempty(struct ged *gedp, const char *filename,
 }
 
 static BObolViewController *
-obol_controller_for_view(void *view_ctx)
+obol_controller_for_view(struct ged_view_context *view_ctx)
 {
-    return (BObolViewController *)ged_draw_obol_controller_opaque_for_view(
-	    view_ctx);
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+    return endpoint ? static_cast<BObolViewController *>(
+	bobol_display_endpoint_controller(endpoint)) : NULL;
 }
 
 static int
@@ -132,7 +134,7 @@ obol_interlay_is_between_scene_and_local_root(
 }
 
 static int
-configure_obol_view(struct ged *gedp, void *view_ctx, int width, int height)
+configure_obol_view(struct ged *gedp, struct ged_view_context *view_ctx, int width, int height)
 {
     bobol_display_endpoint_t *endpoint =
 	ged_view_context_display_endpoint_get(view_ctx);
@@ -157,7 +159,7 @@ open_gedp(const char *gfile, int width, int height)
 
     /* Open a headless Obol endpoint without a compatibility DM. */
     const char *s_av[16] = {NULL};
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     bv_dimensions_set(DRAW_TEST_BV(v), width, height);
     s_av[0] = "dm"; s_av[1] = "open"; s_av[2] = "--host";
     s_av[3] = "headless"; s_av[4] = "--renderer"; s_av[5] = "sw";
@@ -166,7 +168,7 @@ open_gedp(const char *gfile, int width, int height)
 	ged_close(gedp);
 	return NULL;
     }
-    if (!ged_draw_obol_controller_opaque_for_view(v)) {
+    if (!obol_controller_for_view(v)) {
 	bu_log("FAIL: Obol endpoint open did not associate a GED view controller\n");
 	ged_close(gedp);
 	return NULL;
@@ -303,7 +305,7 @@ test_edit_context_snapshot(const char *datadir)
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
 
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     bv_scale_set(DRAW_TEST_BV(v), 321.0);
     bv_context_update((struct bv_context *)v, BV_CONTEXT_CHANGED_VIEW);
 
@@ -360,11 +362,12 @@ test_multi_obol_dm_attachment(const char *datadir)
     }
 
     int fail = 0;
-    void *v0 = ged_view_active_ctx(gedp);
+    struct ged_view_context *v0 = ged_view_active_ctx(gedp);
     bv_name_set(DRAW_TEST_BV(v0), "V0");
 
-    void *view_set_ctx = ged_view_set_ctx(gedp);
-    void *v1 = ged_view_context_create_with_set(view_set_ctx);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
+    struct ged_view_context *v1 =
+	ged_view_context_create_with_set(view_set_ctx);
     if (!v1) {
 	bu_log("FAIL: secondary view creation failed\n");
 	fail = 1;
@@ -452,11 +455,11 @@ test_multi_obol_dm_attachment(const char *datadir)
 		    "with their attached Obol controllers\n");
 	    fail = 1;
 	} else {
-	    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+	    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
 	    lod_policy.csg_enabled = 1;
 	    lod_policy.bot_threshold = 42;
 	    lod_policy.scale = 2.5;
-	    if (!ged_draw_view_context_lod_policy_apply(v1, &lod_policy)) {
+	    if (!ged_draw_source_lod_policy_apply(v1, &lod_policy)) {
 		bu_log("FAIL: applying per-view LoD policy should succeed\n");
 		fail = 1;
 	    } else {
@@ -489,9 +492,21 @@ test_multi_obol_dm_attachment(const char *datadir)
 
     do_full_refresh(gedp);
 
-    SoBRLSceneController *shared_scene = ged_draw_obol_scene_controller(gedp);
-    int shared_sources = shared_scene ?
-	shared_scene->getDatabaseSourceCount() : 0;
+    SoNode *shared_root = NULL;
+    SoNode *v0_render_root = v0_controller->getRenderSceneRoot();
+    if (v0_render_root && v0_render_root->isOfType(SoGroup::getClassTypeId())) {
+	SoGroup *render_group = static_cast<SoGroup *>(v0_render_root);
+	SoNode *composition_node = render_group->getNumChildren() == 1 ?
+	    render_group->getChild(0) : NULL;
+	if (composition_node &&
+	    composition_node->isOfType(SoGroup::getClassTypeId())) {
+	    SoGroup *composition = static_cast<SoGroup *>(composition_node);
+	    if (composition->getNumChildren() > 0)
+		shared_root = composition->getChild(0);
+	}
+    }
+    BObolSceneController shared_scene(shared_root);
+    int shared_sources = shared_scene.getDatabaseSourceCount();
     if (shared_sources <= 0) {
 	bu_log("FAIL: GED Obol scene should own shared draw state "
 		"(sources=%d)\n", shared_sources);
@@ -501,9 +516,9 @@ test_multi_obol_dm_attachment(const char *datadir)
 	bu_log("FAIL: Obol DMs should have per-view render scene roots\n");
 	fail = 1;
 	} else if (!obol_interlay_is_between_scene_and_local_root(v0_controller,
-		shared_scene->getSceneRoot()) ||
+		shared_root) ||
 	    !obol_interlay_is_between_scene_and_local_root(v1_controller,
-		shared_scene->getSceneRoot())) {
+		shared_root)) {
 	bu_log("FAIL: Obol framebuffer interlay should separate shared geometry "
 		"from view-local features\n");
 	fail = 1;
@@ -568,12 +583,12 @@ test_owned_render_endpoint(const char *datadir)
     }
 
     int fail = 0;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     bv_dimensions_set(DRAW_TEST_BV(view_ctx), 384, 384);
     bv_unit_conversion_set(DRAW_TEST_BV(view_ctx),
 	gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
-    if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1)) {
+    if (!ged_view_context_display_endpoint_ensure(view_ctx)) {
 	bu_log("FAIL: could not create an owned Obol render endpoint\n");
 	fail = 1;
     }
@@ -873,7 +888,7 @@ test_endpoint_dm_lifecycle(const char *datadir)
     }
 
     int fail = 0;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     bv_dimensions_set(DRAW_TEST_BV(view_ctx), 0, 0);
     if (ged_view_context_display_endpoint_get(view_ctx)) {
 	bu_log("FAIL: lifecycle test unexpectedly started with an endpoint\n");
@@ -1151,7 +1166,7 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     }
 
     int fail = 0;
-    void *first_view = ged_view_active_ctx(gedp);
+    struct ged_view_context *first_view = ged_view_active_ctx(gedp);
     bobol_display_endpoint_t *first_endpoint =
 	ged_view_context_display_endpoint_get(first_view);
     if (!first_endpoint ||
@@ -1175,8 +1190,9 @@ test_framebuffer_capture_provider_rebind(const char *datadir)
     if (pixels)
 	bu_free(pixels, "first framebuffer capture");
 
-    void *view_set_ctx = ged_view_set_ctx(gedp);
-    void *second_view = ged_view_context_create_with_set(view_set_ctx);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
+    struct ged_view_context *second_view =
+	ged_view_context_create_with_set(view_set_ctx);
     if (!second_view) {
 	bu_log("FAIL: secondary framebuffer view creation failed\n");
 	fail = 1;

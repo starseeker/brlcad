@@ -19,12 +19,12 @@
 #include <Inventor/nodes/SoPerspectiveCamera.h>
 #include "bv.h"
 #include "BObol/BDisplayEndpoint.h"
-#include "BObol/BMeasureAction.h"
 #include "BObol/BViewController.h"
 #include <bu.h>
 #include <ged.h>
 #include <ged/draw.h>
 #include <ged/draw_obol.h>
+#include <ged/result.h>
 #include "view_test_util.h"
 
 #define ASSERT(cond) do { \
@@ -69,12 +69,13 @@ assert_view_ok(struct ged *gedp, int argc, const char **argv, int line)
 #define ASSERT_VIEW_OK(gedp, argc, argv) assert_view_ok((gedp), (argc), (argv), __LINE__)
 
 static void
-assert_feature_point_count(void *view, const char *name, size_t expected, int line)
+assert_feature_point_count(struct ged_view_context *view, const char *name,
+    size_t expected, int line)
 {
     nchecks++;
     point_t *points = NULL;
     size_t point_count = 0;
-    int copied = ged_draw_view_context_feature_points_copy(view, name,
+    int copied = ged_view_feature_points_copy(view, name,
 	    &points, &point_count);
     if (!copied || point_count != expected) {
 	bu_log("FAIL [%s:%d] %s point count expected %zu, got %zu\n",
@@ -88,12 +89,13 @@ assert_feature_point_count(void *view, const char *name, size_t expected, int li
 #define ASSERT_FEATURE_POINT_COUNT(view, name, expected) assert_feature_point_count((view), (name), (expected), __LINE__)
 
 static void
-assert_feature_overlay(void *view, const char *name, int expected, int line)
+assert_feature_overlay(struct ged_view_context *view, const char *name,
+    int expected, int line)
 {
     nchecks++;
-    struct ged_draw_view_feature_summary summary =
-	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
-    int copied = ged_draw_view_context_feature_summary(view, name, &summary);
+    struct ged_view_feature_summary summary =
+	GED_VIEW_FEATURE_SUMMARY_INIT;
+    int copied = ged_view_feature_get_summary(view, name, &summary);
     if (!copied || !summary.exists || summary.is_overlay != expected) {
 	bu_log("FAIL [%s:%d] %s overlay expected %d, got exists=%d overlay=%d\n",
 		__FILE__, line, name, expected, summary.exists,
@@ -105,7 +107,7 @@ assert_feature_overlay(void *view, const char *name, int expected, int line)
 #define ASSERT_FEATURE_OVERLAY(view, name, expected) assert_feature_overlay((view), (name), (expected), __LINE__)
 
 static void
-refresh_scene_records(struct ged *gedp, void *v)
+refresh_scene_records(struct ged *gedp, struct ged_view_context *v)
 {
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
@@ -128,13 +130,12 @@ assert_endpoint_background_color(bobol_display_endpoint_t *endpoint,
 }
 
 static void
-test_display_endpoint_slot(struct ged *gedp, void *view)
+test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 {
     struct bv_background_state background = BV_BACKGROUND_STATE_INIT;
     VSET(background.bottom, 12, 34, 56);
     VSET(background.top, 78, 90, 123);
-    ASSERT(bv_background_state_set(bv_context_view(
-	static_cast<struct bv_context *>(view)), &background));
+    ASSERT(bv_background_state_set(DRAW_TEST_BV(view), &background));
 
     bobol_display_endpoint_t *owned =
 	bobol_display_endpoint_create(NULL, 0);
@@ -143,7 +144,8 @@ test_display_endpoint_slot(struct ged *gedp, void *view)
     ASSERT(owned_controller != NULL);
     ASSERT(ged_view_context_display_endpoint_set(view, owned, 1));
     ASSERT(ged_view_context_display_endpoint_get(view) == owned);
-    ASSERT(ged_draw_obol_controller_opaque_for_view(view) == owned_controller);
+    ASSERT(bobol_display_endpoint_controller(
+	ged_view_context_display_endpoint_get(view)) == owned_controller);
     assert_endpoint_background_color(owned, "controller.background.bottom",
 	12.0 / 255.0, 34.0 / 255.0, 56.0 / 255.0);
     assert_endpoint_background_color(owned, "controller.background.top",
@@ -174,8 +176,7 @@ test_display_endpoint_slot(struct ged *gedp, void *view)
     perspective.double_value = 45.0;
     ASSERT(ged_view_context_display_property_set(view, "view.perspective",
 	&perspective) == BOBOL_ENDPOINT_PROPERTY_OK);
-    ASSERT(std::fabs(bv_perspective_get(
-	bv_context_view(static_cast<struct bv_context *>(view))) - 45.0) <
+    ASSERT(std::fabs(bv_perspective_get(DRAW_TEST_BV(view)) - 45.0) <
 	0.0001);
     perspective = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
     ASSERT(ged_view_context_display_property_get(view, "view.perspective",
@@ -193,8 +194,7 @@ test_display_endpoint_slot(struct ged *gedp, void *view)
     ASSERT(ged_view_context_display_property_set(view, "view.perspective",
 	&perspective) == BOBOL_ENDPOINT_PROPERTY_OK);
     mat_t pmat;
-    ASSERT(bv_pmat_get(pmat,
-	bv_context_view(static_cast<struct bv_context *>(view))));
+    ASSERT(bv_pmat_get(pmat, DRAW_TEST_BV(view)));
     ASSERT(std::fabs(pmat[0] - 1.0) < 0.0001 &&
 	std::fabs(pmat[5] - 1.0) < 0.0001 &&
 	std::fabs(pmat[14]) < 0.0001);
@@ -587,14 +587,16 @@ test_display_endpoint_slot(struct ged *gedp, void *view)
     ASSERT(borrowed != NULL);
     ASSERT(ged_view_context_display_endpoint_set(view, borrowed, 0));
     ASSERT(ged_view_context_display_endpoint_get(view) == borrowed);
-    ASSERT(ged_draw_obol_controller_opaque_for_view(view) ==
+    ASSERT(bobol_display_endpoint_controller(
+	ged_view_context_display_endpoint_get(view)) ==
 	bobol_display_endpoint_controller(borrowed));
     ASSERT(ged_view_context_display_endpoint_set(view, NULL, 0));
     bobol_display_endpoint_destroy(borrowed);
 }
 
 static void
-test_command_report_record_consistency(struct ged *gedp, void *v)
+test_command_report_record_consistency(struct ged *gedp,
+    struct ged_view_context *v)
 {
     const char *draw_av[] = {"draw", "all.g", NULL};
     ASSERT(ged_exec_draw(gedp, 2, draw_av) == BRLCAD_OK);
@@ -610,9 +612,9 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
     ASSERT(solids.find("all.g") != std::string::npos);
     ASSERT(solids.find("cent=") != std::string::npos);
 
-    struct ged_draw_render_export_consistency consistency =
-	GED_DRAW_RENDER_EXPORT_CONSISTENCY_INIT;
-    ASSERT(ged_draw_view_context_render_export_consistency(gedp, v, "all.g",
+    struct ged_scene_export_report consistency =
+	GED_SCENE_EXPORT_CONSISTENCY_INIT;
+    ASSERT(ged_scene_check_export(gedp, v, "all.g",
 	    &consistency));
     ASSERT(consistency.export_record_found);
     ASSERT(consistency.render_item_found);
@@ -620,20 +622,20 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
     ASSERT(consistency.backend_node_found);
     ASSERT(consistency.export_backend_consistent);
 
-    struct ged_draw_pick_result *pick =
-	ged_draw_view_context_pick_semantic_path(gedp, v, "all.g");
+    struct ged_pick_result *pick =
+	ged_pick_semantic_path(gedp, v, "all.g");
     struct bu_vls pick_path = BU_VLS_INIT_ZERO;
     ASSERT(pick != NULL);
-    ASSERT(ged_draw_pick_result_count(pick) > 0);
-    if (pick && ged_draw_pick_result_count(pick) > 0) {
-	ASSERT(ged_draw_pick_result_path(pick, 0, &pick_path));
+    ASSERT(ged_pick_result_count(pick) > 0);
+    if (pick && ged_pick_result_count(pick) > 0) {
+	ASSERT(ged_pick_result_path(pick, 0, &pick_path));
 	ASSERT(BU_STR_EQUAL(bu_vls_cstr(&pick_path), "all.g"));
     }
 
     point_t sample = VINIT_ZERO;
     point_t snap_candidate = VINIT_ZERO;
-    int snap_count = ged_draw_view_context_snap_first_candidate(v, sample,
-	    GED_DRAW_VIEW_SNAP_ENDPOINT, snap_candidate);
+    int snap_count = ged_view_selection_snap(v, sample,
+	    GED_SELECTION_SNAP_ENDPOINT, snap_candidate);
     ASSERT(snap_count >= 0);
     if (snap_count > 0) {
 	ASSERT(std::isfinite((double)snap_candidate[X]));
@@ -641,21 +643,8 @@ test_command_report_record_consistency(struct ged *gedp, void *v)
 	ASSERT(std::isfinite((double)snap_candidate[Z]));
     }
 
-    BObolViewController *controller = ged_draw_obol_controller(gedp);
-    ASSERT(controller != NULL);
-    if (controller && controller->getViewport() &&
-	    controller->getViewport()->getRoot()) {
-	SoBRLMeasureAction measure;
-	measure.setGeometryPolicy(SoBRLMeasureAction::DISPLAY_LEVEL);
-	measure.apply(controller->getViewport()->getRoot());
-	ASSERT(measure.hasSegments());
-	ASSERT(measure.getSegmentCount() > 0);
-	ASSERT(measure.getTotalLength() > 0.0f);
-	ASSERT(!measure.getBounds().isEmpty());
-    }
-
     bu_vls_free(&pick_path);
-    ged_draw_pick_result_free(pick);
+    ged_pick_result_free(pick);
 }
 
 int
@@ -673,9 +662,9 @@ main(int argc, const char **argv)
     if (!gedp)
 	return EXIT_FAILURE;
 
-    void *view_set_ctx = ged_view_set_ctx(gedp);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
     ASSERT(ged_view_set_context_remove(view_set_ctx, NULL));
-    void *views[2] = {NULL, NULL};
+    struct ged_view_context *views[2] = {NULL, NULL};
     for (int i = 0; i < 2; i++) {
 	char view_name[16];
 	snprintf(view_name, sizeof(view_name), "V%d", i);
@@ -709,7 +698,7 @@ main(int argc, const char **argv)
     ASSERT_FEATURE_OVERLAY(views[0], "u_line_edit", 1);
     const char *lc3[] = {"view", "annotation", "line", "clear", "u_line_edit", NULL};
     ASSERT_VIEW_OK(gedp, 5, lc3);
-    ASSERT(ged_draw_view_context_feature_exists(views[0], "u_line_edit") == 0);
+    ASSERT(ged_view_feature_exists(views[0], "u_line_edit") == 0);
 
     const char *c1[] = {"view", "feature", "info", "u_line", "type", NULL};
     ASSERT(run_view(gedp, 5, c1) == BRLCAD_OK);
@@ -728,6 +717,35 @@ main(int argc, const char **argv)
     const char *c1e[] = {"view", "feature", "info", "u_line", "command_result", NULL};
     ASSERT(run_view(gedp, 5, c1e) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("0") != std::string::npos);
+
+    const char *c1json[] = {"view", "feature", "--json", "info", "u_line", NULL};
+    ASSERT(run_view(gedp, 5, c1json) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("{\"name\":\"u_line\"") == 0);
+    ASSERT(result_str(gedp).find("\"kind\":\"lines\"") != std::string::npos);
+    ASSERT(result_str(gedp).find("\"scope\":\"shared\"") != std::string::npos);
+
+    const char *c1missing[] = {"view", "feature", "info", "no_such_feature", NULL};
+    ASSERT(run_view(gedp, 4, c1missing) == BRLCAD_ERROR);
+    ASSERT(result_str(gedp).find("No view feature named no_such_feature") !=
+	std::string::npos);
+
+    struct ged_result_desc result_desc = GED_RESULT_SCENE_DESC_INIT;
+    result_desc.owner_id = "view-command-test";
+    result_desc.owner_role = "command";
+    result_desc.run_id = "run-1";
+    result_desc.generation = 1;
+    struct ged_result_scene *result_scene = ged_result_begin(views[0],
+	&result_desc);
+    point_t result_points[2] = {{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}};
+    int result_commands[2] = {0, 1};
+    ASSERT(result_scene != NULL);
+    ASSERT(result_scene && ged_result_line_set_replace(result_scene,
+	"result_line", result_points, result_commands, 2, NULL));
+    ASSERT(result_scene && ged_result_commit(result_scene));
+    const char *c1result[] = {"view", "feature", "--json", "info", "result_line", NULL};
+    ASSERT(run_view(gedp, 5, c1result) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("\"command_result\":true") !=
+	std::string::npos);
 
     const char *c2[] = {"view", "feature", "hide", "u_line", NULL};
     ASSERT(run_view(gedp, 4, c2) == BRLCAD_OK);
@@ -749,6 +767,10 @@ main(int argc, const char **argv)
     const char *c4[] = {"view", "feature", "list", "u_*", NULL};
     ASSERT(run_view(gedp, 4, c4) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("u_line") != std::string::npos);
+    const char *c4json[] = {"view", "feature", "--json", "list", "u_*", NULL};
+    ASSERT(run_view(gedp, 5, c4json) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("[\"") == 0);
+    ASSERT(result_str(gedp).find("u_line") != std::string::npos);
 
     const char *c5[] = {"view", "feature", "style", "set", "u_line", "arrow", "1", NULL};
     ASSERT(run_view(gedp, 7, c5) == BRLCAD_OK);
@@ -760,7 +782,7 @@ main(int argc, const char **argv)
 
     const char *l0[] = {"view", "annotation", "label", "create", "u_label", "note", "1", "2", "3", NULL};
     ASSERT_VIEW_OK(gedp, 9, l0);
-    ASSERT(ged_draw_view_context_label_count(views[0], "u_label") == 1);
+    ASSERT(ged_annotation_label_count(views[0], "u_label") == 1);
     const char *l1[] = {"view", "feature", "info", "u_label", "type", NULL};
     ASSERT_VIEW_OK(gedp, 5, l1);
     ASSERT(!result_str(gedp).empty());
@@ -783,7 +805,7 @@ main(int argc, const char **argv)
     ASSERT(result_str(gedp).find("4") != std::string::npos);
     const char *dl6[] = {"data_lines", "draw", "0", NULL};
     ASSERT_VIEW_OK(gedp, 3, dl6);
-    ASSERT(ged_draw_view_context_feature_exists(views[0], "_tcl_data_lines") == 0);
+    ASSERT(ged_view_feature_exists(views[0], "_tcl_data_lines") == 0);
 
     const char *a0[] = {"view", "annotation", "axes", "create", "u_axes", "1", "2", "3", NULL};
     ASSERT_VIEW_OK(gedp, 8, a0);
@@ -825,12 +847,12 @@ main(int argc, const char **argv)
     const char *p7[] = {"view", "polygon", "area", "u_poly", NULL};
     ASSERT_VIEW_OK(gedp, 4, p7);
     ASSERT(!result_str(gedp).empty());
-    ged_draw_view_polygon_ref poly_ref =
-	ged_draw_view_context_polygon_find(views[0], "u_poly");
-    ASSERT(!ged_draw_view_polygon_ref_is_null(poly_ref));
-    struct ged_draw_view_polygon_record poly_rec = {};
-    ASSERT(ged_draw_view_polygon_record_get(poly_ref, &poly_rec));
-    ASSERT(poly_rec.type == GED_DRAW_VIEW_POLYGON_GENERAL);
+    ged_polygon_ref poly_ref =
+	ged_polygon_find(views[0], "u_poly");
+    ASSERT(!ged_polygon_ref_is_null(poly_ref));
+    struct ged_polygon_record poly_rec = {};
+    ASSERT(ged_polygon_record_get(poly_ref, &poly_rec));
+    ASSERT(poly_rec.type == GED_POLYGON_GENERAL);
     ASSERT(poly_rec.contour_count == 1);
     ASSERT(poly_rec.point_count == 4);
     ASSERT(poly_rec.first_contour_open == 0);
@@ -847,6 +869,20 @@ main(int argc, const char **argv)
     const char *c8[] = {"view", "-V", "V1", "feature", "list", NULL};
     ASSERT(run_view(gedp, 5, c8) == BRLCAD_OK);
     ASSERT(result_str(gedp).find("l_line") == std::string::npos);
+
+    const char *amb_shared[] = {"view", "annotation", "line", "create",
+	"ambiguous_name", "0", "0", "0", "1", "0", "0", NULL};
+    ASSERT_VIEW_OK(gedp, 11, amb_shared);
+    const char *amb_local[] = {"view", "-V", "V0", "polygon", "-L",
+	"create", "ambiguous_name", "10", "10", NULL};
+    ASSERT_VIEW_OK(gedp, 9, amb_local);
+    const char *amb_info[] = {"view", "feature", "info", "ambiguous_name", NULL};
+    ASSERT(run_view(gedp, 4, amb_info) == BRLCAD_ERROR);
+    ASSERT(result_str(gedp).find("ambiguous (2 matches:") != std::string::npos);
+    const char *amb_local_info[] = {"view", "feature", "-L", "info",
+	"ambiguous_name", "scope", NULL};
+    ASSERT(run_view(gedp, 6, amb_local_info) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("local") != std::string::npos);
 
     const char *c11[] = {"view", "db", "add", "all.g", "--as", "g2", NULL};
     ASSERT(run_view(gedp, 6, c11) == BRLCAD_OK);

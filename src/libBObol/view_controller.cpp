@@ -22,6 +22,7 @@
 #include "BObol/BMeshResidencyAction.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BPickDetail.h"
+#include "BObol/BSceneController.h"
 #include "BObol/BSnapAction.h"
 #include "BObol/BViewAttachment.h"
 #include "BObol/BViewController.h"
@@ -32,12 +33,14 @@
 #include "rt/view.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <sstream>
 #include <string.h>
@@ -219,7 +222,8 @@ BObolProgressiveStatus::clear(void)
 BObolProgressiveProviderRecord::BObolProgressiveProviderRecord(void) :
     token(0),
     callback(NULL),
-    userData(NULL)
+    userData(NULL),
+    userDataFree(NULL)
 {
 }
 
@@ -964,204 +968,148 @@ controller_consume_source_full_detail(BObolViewController *controller,
     return consumed;
 }
 
+struct BObolViewController::Impl {
+    explicit Impl(BObolViewController *owner) :
+	featureStore(new BObolFeatureStore(owner)),
+	polygonStore(new BObolPolygonStore(owner)),
+	selectionStore(new BObolSelectionStore)
+    {
+    }
+
+    BObolSceneController sceneController;
+    SoViewport *viewport = new SoViewport;
+    SoBRLViewLodGroup *renderLodRoot = NULL;
+    SoNode *renderBatchRoot = NULL;
+    SoNode *renderPresentationRoot = NULL;
+    SoGroup *framebufferUnderlayRoot = NULL;
+    SoGroup *framebufferInterlayRoot = NULL;
+    SoGroup *framebufferOverlayRoot = NULL;
+    BObolViewAttachment *viewAttachment = new BObolViewAttachment;
+    SoRenderManager *renderManager = new SoRenderManager;
+    SoOffscreenRenderer *imageRenderer = NULL;
+    SoDB::ContextManager *imageRendererManager = NULL;
+    SoCamera *activeCamera = NULL;
+    SbViewportRegion viewportRegion = SbViewportRegion(1, 1);
+    SbColor backgroundBottom = SbColor(0.0f, 0.0f, 0.0f);
+    SbColor backgroundTop = SbColor(0.0f, 0.0f, 0.0f);
+    SoftwareWireMode softwareWireMode = SOFTWARE_WIRE_AUTO;
+    std::atomic<int> endpointGraphicalRenderingEnabled {1};
+    SbBool transparencyEnabled = TRUE;
+    SbBool antialiasingEnabled = FALSE;
+    double clipMinimum = BV_VIEW_MIN;
+    double clipMaximum = BV_VIEW_MAX;
+    mutable std::mutex renderRequestMutex;
+    SbBool renderRequested = FALSE;
+    SbString renderReason = SbString("");
+    uint64_t renderRequestSerial = 0;
+    std::mutex frameRequestMutex;
+    BObolFrameRequestCallback frameRequestCallback = NULL;
+    void *frameRequestUserData = NULL;
+    mutable std::mutex presentationSyncMutex;
+    BObolPresentationSyncCallback presentationSyncCallback = NULL;
+    void *presentationSyncUserData = NULL;
+    uint64_t lastRenderTimeNanoseconds = 0;
+    uint64_t smoothedRenderTimeNanoseconds = 0;
+    std::vector<BObolProgressiveProviderRecord> progressiveProviders;
+    uint64_t progressiveProviderNextToken = 1;
+    std::atomic<int> progressiveWorkPending {0};
+    BObolProgressiveOptions defaultProgressiveOptions;
+    BObolLodService *lodService = NULL;
+    std::unique_ptr<BObolLodService> managedLodService;
+    size_t managedLodWorkerCount = 0;
+    uint64_t lodResultSubscriberId = 0;
+    std::atomic<int> lodResultsPending {0};
+    SbBool lodAutoSubmit = FALSE;
+    uint64_t lodActiveGeneration = 0;
+    size_t lodSubmissionSourceIndex = 0;
+    size_t lodSubmissionEntryOffset = 0;
+    SbBool lodSubmissionPending = FALSE;
+    SbBool lodSubmissionRefreshMissing = TRUE;
+    int lodSubmissionReset = 0;
+    uint64_t lodLastSubmittedViewRevision = 0;
+    uint64_t lodLastSubmittedPolicyRevision = 0;
+    SbString lodLastSubmittedSourceSignature = SbString("");
+    SbString lodViewSignature = SbString("");
+    uint64_t lodViewRevision = 1;
+    uint64_t lodPolicyRevision = 1;
+    SbBool lodUseForcedLevel = FALSE;
+    int lodForcedLevel = 0;
+    uint64_t maxExactFullDetailFaceCount = 0;
+    uint64_t maxExactFullDetailPointCount = 0;
+    std::vector<BObolRtPickCache *> rtPickCaches;
+    std::vector<SbString> rtPickCachePaths;
+    std::vector<struct db_i *> rtPickCacheDatabases;
+    std::vector<uint32_t> rtPickCacheSourceRevisions;
+    SbBool meshResidencyBudgetEnabled = FALSE;
+    size_t maxResidentMeshBytes = 0;
+    SbBool meshResidencyEvictDisplayPayloads = TRUE;
+    size_t lastMeshBudgetInitialResidentBytes = 0;
+    size_t lastMeshBudgetFinalResidentBytes = 0;
+    size_t lastMeshBudgetFreedFullDetailBytes = 0;
+    size_t lastMeshBudgetFreedDisplayBytes = 0;
+    unsigned int lastMeshBudgetVisitedMeshCount = 0;
+    unsigned int lastMeshBudgetEvictedFullDetailMeshCount = 0;
+    unsigned int lastMeshBudgetEvictedDisplayMeshCount = 0;
+    unsigned int lastLodVisitedMeshCount = 0;
+    unsigned int lastLodSubmittedTaskCount = 0;
+    unsigned int lastLodSkippedMeshCount = 0;
+    size_t lastLodResultCount = 0;
+    unsigned int lastLodMatchedResultCount = 0;
+    unsigned int lastLodAppliedResultCount = 0;
+    unsigned int lastLodRejectedResultCount = 0;
+    unsigned int lastLodUnmatchedResultCount = 0;
+    SbString lastLodDiagnostics = SbString("");
+    BObolFeatureStore *featureStore;
+    BObolPolygonStore *polygonStore;
+    BObolSelectionStore *selectionStore;
+};
+
 BObolViewController::BObolViewController(void) :
-    sceneController(),
-    viewport(new SoViewport),
-    renderLodRoot(NULL),
-    renderBatchRoot(NULL),
-    renderPresentationRoot(NULL),
-    framebufferUnderlayRoot(NULL),
-    framebufferInterlayRoot(NULL),
-    framebufferOverlayRoot(NULL),
-    viewAttachment(new BObolViewAttachment),
-    renderManager(new SoRenderManager),
-    imageRenderer(NULL),
-    imageRendererManager(NULL),
-    activeCamera(NULL),
-    viewportRegion(1, 1),
-    backgroundBottom(0.0f, 0.0f, 0.0f),
-    backgroundTop(0.0f, 0.0f, 0.0f),
-    softwareWireMode(SOFTWARE_WIRE_AUTO),
-    endpointGraphicalRenderingEnabled(1),
-    transparencyEnabled(TRUE),
-    antialiasingEnabled(FALSE),
-    clipMinimum(BV_VIEW_MIN),
-    clipMaximum(BV_VIEW_MAX),
-    renderRequested(FALSE),
-    renderReason(""),
-    renderRequestSerial(0),
-    frameRequestCallback(NULL),
-    frameRequestUserData(NULL),
-    presentationSyncCallback(NULL),
-    presentationSyncUserData(NULL),
-    lastRenderTimeNanoseconds(0),
-    smoothedRenderTimeNanoseconds(0),
-    progressiveProviders(),
-    progressiveProviderNextToken(1),
-    progressiveWorkPending(0),
-    defaultProgressiveOptions(),
-    lodService(NULL),
-    lodResultSubscriberId(0),
-    lodResultsPending(0),
-    lodAutoSubmit(FALSE),
-    lodActiveGeneration(0),
-    lodSubmissionSourceIndex(0),
-    lodSubmissionEntryOffset(0),
-    lodSubmissionPending(FALSE),
-    lodSubmissionRefreshMissing(TRUE),
-    lodSubmissionReset(0),
-    lodLastSubmittedViewRevision(0),
-    lodLastSubmittedPolicyRevision(0),
-    lodLastSubmittedSourceSignature(""),
-    lodViewSignature(""),
-    lodViewRevision(1),
-    lodPolicyRevision(1),
-    lodUseForcedLevel(FALSE),
-    lodForcedLevel(0),
-    maxExactFullDetailFaceCount(0),
-    maxExactFullDetailPointCount(0),
-    meshResidencyBudgetEnabled(FALSE),
-    maxResidentMeshBytes(0),
-    meshResidencyEvictDisplayPayloads(TRUE),
-    lastMeshBudgetInitialResidentBytes(0),
-    lastMeshBudgetFinalResidentBytes(0),
-    lastMeshBudgetFreedFullDetailBytes(0),
-    lastMeshBudgetFreedDisplayBytes(0),
-    lastMeshBudgetVisitedMeshCount(0),
-    lastMeshBudgetEvictedFullDetailMeshCount(0),
-    lastMeshBudgetEvictedDisplayMeshCount(0),
-    lastLodVisitedMeshCount(0),
-    lastLodSubmittedTaskCount(0),
-    lastLodSkippedMeshCount(0),
-    lastLodResultCount(0),
-    lastLodMatchedResultCount(0),
-    lastLodAppliedResultCount(0),
-    lastLodRejectedResultCount(0),
-    lastLodUnmatchedResultCount(0),
-    lastLodDiagnostics(""),
-    featureStore(new BObolFeatureStore(this)),
-    polygonStore(new BObolPolygonStore(this)),
-    selectionStore(new BObolSelectionStore)
+    d(new Impl(this))
 {
-    this->viewAttachment->ref();
+    this->d->viewAttachment->ref();
     SoBRLCadRenderBatch *batch = new SoBRLCadRenderBatch;
     batch->ref();
-    batch->addChild(this->viewport->getRoot());
-    this->renderBatchRoot = batch;
+    batch->addChild(this->d->viewport->getRoot());
+    this->d->renderBatchRoot = batch;
     SoSeparator *presentation = new SoSeparator;
     presentation->ref();
-    this->framebufferUnderlayRoot = new SoGroup;
+    this->d->framebufferUnderlayRoot = new SoGroup;
     /* Unlike underlay/overlay this root is parented by GED's per-view render
      * composition, so the controller keeps a reference across rebinds. */
-    this->framebufferInterlayRoot = new SoGroup;
-    this->framebufferInterlayRoot->ref();
-    this->framebufferOverlayRoot = new SoGroup;
-    presentation->addChild(this->framebufferUnderlayRoot);
+    this->d->framebufferInterlayRoot = new SoGroup;
+    this->d->framebufferInterlayRoot->ref();
+    this->d->framebufferOverlayRoot = new SoGroup;
+    presentation->addChild(this->d->framebufferUnderlayRoot);
     presentation->addChild(batch);
-    presentation->addChild(this->framebufferOverlayRoot);
-    this->renderPresentationRoot = presentation;
-    controller_initialize_render_action(this->renderManager);
-    controller_configure_render_environment(this->viewport);
+    presentation->addChild(this->d->framebufferOverlayRoot);
+    this->d->renderPresentationRoot = presentation;
+    controller_initialize_render_action(this->d->renderManager);
+    controller_configure_render_environment(this->d->viewport);
 }
 
 BObolViewController::BObolViewController(SoNode *root, SoCamera *camera) :
-    sceneController(),
-    viewport(new SoViewport),
-    renderLodRoot(NULL),
-    renderBatchRoot(NULL),
-    renderPresentationRoot(NULL),
-    framebufferUnderlayRoot(NULL),
-    framebufferInterlayRoot(NULL),
-    framebufferOverlayRoot(NULL),
-    viewAttachment(new BObolViewAttachment),
-    renderManager(new SoRenderManager),
-    imageRenderer(NULL),
-    imageRendererManager(NULL),
-    activeCamera(NULL),
-    viewportRegion(1, 1),
-    backgroundBottom(0.0f, 0.0f, 0.0f),
-    backgroundTop(0.0f, 0.0f, 0.0f),
-    softwareWireMode(SOFTWARE_WIRE_AUTO),
-    endpointGraphicalRenderingEnabled(1),
-    transparencyEnabled(TRUE),
-    antialiasingEnabled(FALSE),
-    clipMinimum(BV_VIEW_MIN),
-    clipMaximum(BV_VIEW_MAX),
-    renderRequested(FALSE),
-    renderReason(""),
-    renderRequestSerial(0),
-    frameRequestCallback(NULL),
-    frameRequestUserData(NULL),
-    presentationSyncCallback(NULL),
-    presentationSyncUserData(NULL),
-    lastRenderTimeNanoseconds(0),
-    smoothedRenderTimeNanoseconds(0),
-    progressiveProviders(),
-    progressiveProviderNextToken(1),
-    progressiveWorkPending(0),
-    defaultProgressiveOptions(),
-    lodService(NULL),
-    lodResultSubscriberId(0),
-    lodResultsPending(0),
-    lodAutoSubmit(FALSE),
-    lodActiveGeneration(0),
-    lodSubmissionSourceIndex(0),
-    lodSubmissionEntryOffset(0),
-    lodSubmissionPending(FALSE),
-    lodSubmissionRefreshMissing(TRUE),
-    lodSubmissionReset(0),
-    lodLastSubmittedViewRevision(0),
-    lodLastSubmittedPolicyRevision(0),
-    lodLastSubmittedSourceSignature(""),
-    lodViewSignature(""),
-    lodViewRevision(1),
-    lodPolicyRevision(1),
-    lodUseForcedLevel(FALSE),
-    lodForcedLevel(0),
-    maxExactFullDetailFaceCount(0),
-    maxExactFullDetailPointCount(0),
-    meshResidencyBudgetEnabled(FALSE),
-    maxResidentMeshBytes(0),
-    meshResidencyEvictDisplayPayloads(TRUE),
-    lastMeshBudgetInitialResidentBytes(0),
-    lastMeshBudgetFinalResidentBytes(0),
-    lastMeshBudgetFreedFullDetailBytes(0),
-    lastMeshBudgetFreedDisplayBytes(0),
-    lastMeshBudgetVisitedMeshCount(0),
-    lastMeshBudgetEvictedFullDetailMeshCount(0),
-    lastMeshBudgetEvictedDisplayMeshCount(0),
-    lastLodVisitedMeshCount(0),
-    lastLodSubmittedTaskCount(0),
-    lastLodSkippedMeshCount(0),
-    lastLodResultCount(0),
-    lastLodMatchedResultCount(0),
-    lastLodAppliedResultCount(0),
-    lastLodRejectedResultCount(0),
-    lastLodUnmatchedResultCount(0),
-    lastLodDiagnostics(""),
-    featureStore(new BObolFeatureStore(this)),
-    polygonStore(new BObolPolygonStore(this)),
-    selectionStore(new BObolSelectionStore)
+    d(new Impl(this))
 {
-    this->viewAttachment->ref();
+    this->d->viewAttachment->ref();
     SoBRLCadRenderBatch *batch = new SoBRLCadRenderBatch;
     batch->ref();
-    batch->addChild(this->viewport->getRoot());
-    this->renderBatchRoot = batch;
+    batch->addChild(this->d->viewport->getRoot());
+    this->d->renderBatchRoot = batch;
     SoSeparator *presentation = new SoSeparator;
     presentation->ref();
-    this->framebufferUnderlayRoot = new SoGroup;
+    this->d->framebufferUnderlayRoot = new SoGroup;
     /* Unlike underlay/overlay this root is parented by GED's per-view render
      * composition, so the controller keeps a reference across rebinds. */
-    this->framebufferInterlayRoot = new SoGroup;
-    this->framebufferInterlayRoot->ref();
-    this->framebufferOverlayRoot = new SoGroup;
-    presentation->addChild(this->framebufferUnderlayRoot);
+    this->d->framebufferInterlayRoot = new SoGroup;
+    this->d->framebufferInterlayRoot->ref();
+    this->d->framebufferOverlayRoot = new SoGroup;
+    presentation->addChild(this->d->framebufferUnderlayRoot);
     presentation->addChild(batch);
-    presentation->addChild(this->framebufferOverlayRoot);
-    this->renderPresentationRoot = presentation;
-    controller_initialize_render_action(this->renderManager);
-    controller_configure_render_environment(this->viewport);
+    presentation->addChild(this->d->framebufferOverlayRoot);
+    this->d->renderPresentationRoot = presentation;
+    controller_initialize_render_action(this->d->renderManager);
+    controller_configure_render_environment(this->d->viewport);
     this->setSceneRoot(root);
     this->setCamera(camera);
 }
@@ -1171,80 +1119,84 @@ BObolViewController::~BObolViewController(void)
 	this->setPresentationSyncCallback(NULL, NULL);
     ControllerFrameRequestState *frameRequestState = NULL;
     {
-	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	std::lock_guard<std::mutex> lock(this->d->frameRequestMutex);
 	frameRequestState = static_cast<ControllerFrameRequestState *>(
-	    this->frameRequestUserData);
-	this->frameRequestCallback = NULL;
-	this->frameRequestUserData = NULL;
+	    this->d->frameRequestUserData);
+	this->d->frameRequestCallback = NULL;
+	this->d->frameRequestUserData = NULL;
     }
     if (frameRequestState) {
 	frameRequestState->close();
 	delete frameRequestState;
     }
-    delete this->imageRenderer;
-    this->imageRenderer = NULL;
-    this->imageRendererManager = NULL;
+    delete this->d->imageRenderer;
+    this->d->imageRenderer = NULL;
+    this->d->imageRendererManager = NULL;
     this->clearProgressiveProviders();
     this->setLodService(NULL);
+    if (this->d->managedLodService)
+	this->d->managedLodService->stop();
+    this->d->managedLodService.reset();
+    this->d->managedLodWorkerCount = 0;
     this->clearRtPickCaches();
-    delete this->featureStore;
-    this->featureStore = NULL;
-    delete this->polygonStore;
-    this->polygonStore = NULL;
-    delete this->selectionStore;
-    this->selectionStore = NULL;
+    delete this->d->featureStore;
+    this->d->featureStore = NULL;
+    delete this->d->polygonStore;
+    this->d->polygonStore = NULL;
+    delete this->d->selectionStore;
+    this->d->selectionStore = NULL;
     this->setCamera(NULL);
     this->setSceneRoot(NULL);
-    this->viewAttachment->unref();
-    this->viewAttachment = NULL;
-    this->renderManager->setSceneGraph(NULL);
-    delete this->renderManager;
-    this->renderManager = NULL;
-    if (this->renderPresentationRoot) {
-	this->renderPresentationRoot->unref();
-	this->renderPresentationRoot = NULL;
+    this->d->viewAttachment->unref();
+    this->d->viewAttachment = NULL;
+    this->d->renderManager->setSceneGraph(NULL);
+    delete this->d->renderManager;
+    this->d->renderManager = NULL;
+    if (this->d->renderPresentationRoot) {
+	this->d->renderPresentationRoot->unref();
+	this->d->renderPresentationRoot = NULL;
     }
-    this->framebufferUnderlayRoot = NULL;
-    if (this->framebufferInterlayRoot) {
-	this->framebufferInterlayRoot->unref();
-	this->framebufferInterlayRoot = NULL;
+    this->d->framebufferUnderlayRoot = NULL;
+    if (this->d->framebufferInterlayRoot) {
+	this->d->framebufferInterlayRoot->unref();
+	this->d->framebufferInterlayRoot = NULL;
     }
-    this->framebufferOverlayRoot = NULL;
-    if (this->renderBatchRoot) {
-	this->renderBatchRoot->unref();
-	this->renderBatchRoot = NULL;
+    this->d->framebufferOverlayRoot = NULL;
+    if (this->d->renderBatchRoot) {
+	this->d->renderBatchRoot->unref();
+	this->d->renderBatchRoot = NULL;
     }
-    delete this->viewport;
-    this->viewport = NULL;
+    delete this->d->viewport;
+    this->d->viewport = NULL;
 }
 
 void
 BObolViewController::setViewportSceneGraphWithLod(SoNode *root)
 {
     SoBRLCadRenderBatch *batch =
-	dynamic_cast<SoBRLCadRenderBatch *>(this->renderBatchRoot);
+	dynamic_cast<SoBRLCadRenderBatch *>(this->d->renderBatchRoot);
     if (batch)
 	batch->setBatchSourceRoot(NULL);
     if (batch)
-	batch->setSoftwareWireMode(this->softwareWireMode);
-    if (this->renderLodRoot) {
-	this->viewport->setSceneGraph(NULL);
-	this->renderLodRoot->unref();
-	this->renderLodRoot = NULL;
+	batch->setSoftwareWireMode(this->d->softwareWireMode);
+    if (this->d->renderLodRoot) {
+	this->d->viewport->setSceneGraph(NULL);
+	this->d->renderLodRoot->unref();
+	this->d->renderLodRoot = NULL;
     }
 
     if (!root) {
-	this->viewport->setSceneGraph(NULL);
+	this->d->viewport->setSceneGraph(NULL);
 	return;
     }
 
     SoBRLViewLodGroup *wrapper = new SoBRLViewLodGroup;
     wrapper->ref();
-    wrapper->setViewLodState(this->viewAttachment->getViewLodState());
-    wrapper->setSoftwareWireMode(this->softwareWireMode);
+    wrapper->setViewLodState(this->d->viewAttachment->getViewLodState());
+    wrapper->setSoftwareWireMode(this->d->softwareWireMode);
     wrapper->addChild(root);
-    this->renderLodRoot = wrapper;
-    this->viewport->setSceneGraph(wrapper);
+    this->d->renderLodRoot = wrapper;
+    this->d->viewport->setSceneGraph(wrapper);
     if (batch)
 	batch->setBatchSourceRoot(root);
 }
@@ -1254,15 +1206,15 @@ BObolViewController::setSceneRoot(SoNode *root)
 {
     this->cancelActiveLodGeneration();
     this->clearRtPickCaches();
-    this->viewAttachment->setSceneRoot(root);
-    this->sceneController.setSceneRoot(root);
-    if (root && this->framebufferInterlayRoot) {
+    this->d->viewAttachment->setSceneRoot(root);
+    this->d->sceneController.setSceneRoot(root);
+    if (root && this->d->framebufferInterlayRoot) {
 	/* A controller used without GED has no separate local feature root.
 	 * Keep interlay visible after its scene; hosted GED replaces this with
 	 * the more precise shared/interlay/local composition. */
 	SoSeparator *renderRoot = new SoSeparator;
 	renderRoot->addChild(root);
-	renderRoot->addChild(this->framebufferInterlayRoot);
+	renderRoot->addChild(this->d->framebufferInterlayRoot);
 	this->setViewportSceneGraphWithLod(renderRoot);
     } else {
 	this->setViewportSceneGraphWithLod(root);
@@ -1274,7 +1226,7 @@ BObolViewController::setSceneRoot(SoNode *root)
 SoNode *
 BObolViewController::getSceneRoot(void) const
 {
-    return this->viewAttachment->getSceneRoot();
+    return this->d->viewAttachment->getSceneRoot();
 }
 
 void
@@ -1282,7 +1234,7 @@ BObolViewController::setRenderSceneRoot(SoNode *root)
 {
     this->cancelActiveLodGeneration();
     this->clearRtPickCaches();
-    this->viewAttachment->clearViewLodState();
+    this->d->viewAttachment->clearViewLodState();
     this->setViewportSceneGraphWithLod(root);
     this->syncRenderManager();
     this->requestRender("render-scene-root");
@@ -1291,42 +1243,42 @@ BObolViewController::setRenderSceneRoot(SoNode *root)
 SoNode *
 BObolViewController::getRenderSceneRoot(void) const
 {
-    return this->viewport->getSceneGraph();
+    return this->d->viewport->getSceneGraph();
 }
 
 SoNode *
 BObolViewController::getRenderRoot(void) const
 {
-	if (!this->endpointGraphicalRenderingEnabled.load(
+	if (!this->d->endpointGraphicalRenderingEnabled.load(
 		std::memory_order_acquire))
 	    return NULL;
-	return this->renderPresentationRoot ? this->renderPresentationRoot :
-	this->renderBatchRoot ? this->renderBatchRoot :
-	this->viewport->getRoot();
+	return this->d->renderPresentationRoot ? this->d->renderPresentationRoot :
+	this->d->renderBatchRoot ? this->d->renderBatchRoot :
+	this->d->viewport->getRoot();
 }
 
 SoGroup *
 BObolViewController::getFramebufferUnderlayRoot(void) const
 {
-    return this->framebufferUnderlayRoot;
+    return this->d->framebufferUnderlayRoot;
 }
 
 SoGroup *
 BObolViewController::getFramebufferInterlayRoot(void) const
 {
-    return this->framebufferInterlayRoot;
+    return this->d->framebufferInterlayRoot;
 }
 
 SoGroup *
 BObolViewController::getFramebufferOverlayRoot(void) const
 {
-    return this->framebufferOverlayRoot;
+    return this->d->framebufferOverlayRoot;
 }
 
 void
 BObolViewController::setViewAttachment(BObolViewAttachment *attachment)
 {
-    if (!attachment || attachment == this->viewAttachment)
+    if (!attachment || attachment == this->d->viewAttachment)
 	return;
 
     this->cancelActiveLodGeneration();
@@ -1336,19 +1288,19 @@ BObolViewController::setViewAttachment(BObolViewAttachment *attachment)
 	root->ref();
 
     SoNode *renderScene = NULL;
-    if (this->renderLodRoot && this->renderLodRoot->getNumChildren() > 0)
-	renderScene = this->renderLodRoot->getChild(0);
+    if (this->d->renderLodRoot && this->d->renderLodRoot->getNumChildren() > 0)
+	renderScene = this->d->renderLodRoot->getChild(0);
     else
-	renderScene = this->viewport->getSceneGraph();
+	renderScene = this->d->viewport->getSceneGraph();
     if (renderScene)
 	renderScene->ref();
 
     attachment->ref();
-    this->viewAttachment->unref();
-    this->viewAttachment = attachment;
+    this->d->viewAttachment->unref();
+    this->d->viewAttachment = attachment;
 
-    if (root && !this->viewAttachment->hasSceneRoot())
-	this->viewAttachment->setSceneRoot(root);
+    if (root && !this->d->viewAttachment->hasSceneRoot())
+	this->d->viewAttachment->setSceneRoot(root);
     if (root)
 	root->unref();
 
@@ -1363,20 +1315,20 @@ BObolViewController::setViewAttachment(BObolViewAttachment *attachment)
 BObolViewAttachment *
 BObolViewController::getViewAttachment(void) const
 {
-    return this->viewAttachment;
+    return this->d->viewAttachment;
 }
 
 BObolViewLodState *
 BObolViewController::getViewLodState(void) const
 {
-    return this->viewAttachment->getViewLodState();
+    return this->d->viewAttachment->getViewLodState();
 }
 
 void
 BObolViewController::clearViewLodState(void)
 {
     this->cancelActiveLodGeneration();
-    this->viewAttachment->clearViewLodState();
+    this->d->viewAttachment->clearViewLodState();
 }
 
 void
@@ -1384,11 +1336,11 @@ BObolViewController::setCamera(SoCamera *camera)
 {
     if (camera)
 	camera->ref();
-    if (this->activeCamera)
-	this->activeCamera->unref();
-    this->activeCamera = camera;
-    this->viewport->setCamera(camera);
-    controller_configure_render_environment(this->viewport);
+    if (this->d->activeCamera)
+	this->d->activeCamera->unref();
+    this->d->activeCamera = camera;
+    this->d->viewport->setCamera(camera);
+    controller_configure_render_environment(this->d->viewport);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
     this->requestRender("camera");
@@ -1397,14 +1349,14 @@ BObolViewController::setCamera(SoCamera *camera)
 SoCamera *
 BObolViewController::getCamera(void) const
 {
-    return this->activeCamera;
+    return this->d->activeCamera;
 }
 
 void
 BObolViewController::setViewportRegion(const SbViewportRegion &region)
 {
-    this->viewportRegion = region;
-    this->viewport->setViewportRegion(region);
+    this->d->viewportRegion = region;
+    this->d->viewport->setViewportRegion(region);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
     this->requestRender("viewport");
@@ -1413,7 +1365,7 @@ BObolViewController::setViewportRegion(const SbViewportRegion &region)
 const SbViewportRegion &
 BObolViewController::getViewportRegion(void) const
 {
-    return this->viewportRegion;
+    return this->d->viewportRegion;
 }
 
 void
@@ -1427,21 +1379,21 @@ BObolViewController::setViewportSize(unsigned int width, unsigned int height)
 	width = 1;
     if (height == 0)
 	height = 1;
-    const SbVec2s current = this->viewportRegion.getWindowSize();
+    const SbVec2s current = this->d->viewportRegion.getWindowSize();
     const SbVec2s currentOrigin =
-	this->viewportRegion.getViewportOriginPixels();
+	this->d->viewportRegion.getViewportOriginPixels();
     const SbVec2s currentViewport =
-	this->viewportRegion.getViewportSizePixels();
+	this->d->viewportRegion.getViewportSizePixels();
     if (current[0] == static_cast<short>(width) &&
 	current[1] == static_cast<short>(height) &&
 	currentOrigin[0] == 0 && currentOrigin[1] == 0 &&
 	currentViewport[0] == static_cast<short>(width) &&
 	currentViewport[1] == static_cast<short>(height))
 	return;
-    this->viewportRegion.setWindowSize((short)width, (short)height);
-    this->viewportRegion.setViewportPixels(0, 0, (short)width,
+    this->d->viewportRegion.setWindowSize((short)width, (short)height);
+    this->d->viewportRegion.setViewportPixels(0, 0, (short)width,
 	(short)height);
-    this->viewport->setViewportRegion(this->viewportRegion);
+    this->d->viewport->setViewportRegion(this->d->viewportRegion);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
     this->requestRender("viewport-size");
@@ -1451,11 +1403,11 @@ void
 BObolViewController::setBackgroundColors(const SbColor &bottom,
 	const SbColor &top)
 {
-    if (this->backgroundBottom == bottom && this->backgroundTop == top)
+    if (this->d->backgroundBottom == bottom && this->d->backgroundTop == top)
 	return;
-    this->backgroundBottom = bottom;
-    this->backgroundTop = top;
-    SoEnvironment *environment = controller_environment(this->viewport);
+    this->d->backgroundBottom = bottom;
+    this->d->backgroundTop = top;
+    SoEnvironment *environment = controller_environment(this->d->viewport);
     if (environment)
 	environment->fogColor = top;
     this->requestRender("background");
@@ -1464,19 +1416,19 @@ BObolViewController::setBackgroundColors(const SbColor &bottom,
 const SbColor &
 BObolViewController::getBackgroundBottomColor(void) const
 {
-    return this->backgroundBottom;
+    return this->d->backgroundBottom;
 }
 
 const SbColor &
 BObolViewController::getBackgroundTopColor(void) const
 {
-    return this->backgroundTop;
+    return this->d->backgroundTop;
 }
 
 void
 BObolViewController::setDepthTestEnabled(SbBool enabled)
 {
-    SoDepthBuffer *depth = controller_depth_buffer(this->viewport);
+    SoDepthBuffer *depth = controller_depth_buffer(this->d->viewport);
     if (!depth || (depth->test.getValue() == enabled &&
 	depth->write.getValue() == enabled))
 	return;
@@ -1488,7 +1440,7 @@ BObolViewController::setDepthTestEnabled(SbBool enabled)
 SbBool
 BObolViewController::isDepthTestEnabled(void) const
 {
-    SoDepthBuffer *depth = controller_depth_buffer(this->viewport);
+    SoDepthBuffer *depth = controller_depth_buffer(this->d->viewport);
     return depth ? depth->test.getValue() : TRUE;
 }
 
@@ -1496,33 +1448,33 @@ void
 BObolViewController::setTransparencyEnabled(SbBool enabled)
 {
     enabled = enabled ? TRUE : FALSE;
-    if (this->transparencyEnabled == enabled)
+    if (this->d->transparencyEnabled == enabled)
 	return;
-    this->transparencyEnabled = enabled;
+    this->d->transparencyEnabled = enabled;
     const SoGLRenderAction::TransparencyType type = enabled ?
 	SoGLRenderAction::BLEND : SoGLRenderAction::NONE;
-    this->renderManager->getGLRenderAction()->setTransparencyType(type);
-    if (this->imageRenderer)
-	this->imageRenderer->getGLRenderAction()->setTransparencyType(type);
+    this->d->renderManager->getGLRenderAction()->setTransparencyType(type);
+    if (this->d->imageRenderer)
+	this->d->imageRenderer->getGLRenderAction()->setTransparencyType(type);
     this->requestRender("transparency");
 }
 
 SbBool
 BObolViewController::isTransparencyEnabled(void) const
 {
-    return this->transparencyEnabled;
+    return this->d->transparencyEnabled;
 }
 
 void
 BObolViewController::setAntialiasingEnabled(SbBool enabled)
 {
     enabled = enabled ? TRUE : FALSE;
-    if (this->antialiasingEnabled == enabled)
+    if (this->d->antialiasingEnabled == enabled)
 	return;
-    this->antialiasingEnabled = enabled;
-    this->renderManager->setAntialiasing(enabled, 1);
-    if (this->imageRenderer) {
-	SoGLRenderAction *action = this->imageRenderer->getGLRenderAction();
+    this->d->antialiasingEnabled = enabled;
+    this->d->renderManager->setAntialiasing(enabled, 1);
+    if (this->d->imageRenderer) {
+	SoGLRenderAction *action = this->d->imageRenderer->getGLRenderAction();
 	if (action) {
 	    action->setSmoothing(enabled);
 	    action->setNumPasses(1);
@@ -1534,7 +1486,7 @@ BObolViewController::setAntialiasingEnabled(SbBool enabled)
 SbBool
 BObolViewController::isAntialiasingEnabled(void) const
 {
-    return this->antialiasingEnabled;
+    return this->d->antialiasingEnabled;
 }
 
 SbBool
@@ -1543,8 +1495,8 @@ BObolViewController::setClipBounds(double minimum, double maximum)
     if (!std::isfinite(minimum) || !std::isfinite(maximum) ||
 	minimum > maximum)
 	return FALSE;
-    this->clipMinimum = minimum;
-    this->clipMaximum = maximum;
+    this->d->clipMinimum = minimum;
+    this->d->clipMaximum = maximum;
     this->requestRender("clip-bounds");
     return TRUE;
 }
@@ -1552,8 +1504,8 @@ BObolViewController::setClipBounds(double minimum, double maximum)
 void
 BObolViewController::getClipBounds(double &minimum, double &maximum) const
 {
-    minimum = this->clipMinimum;
-    maximum = this->clipMaximum;
+    minimum = this->d->clipMinimum;
+    maximum = this->d->clipMaximum;
 }
 
 size_t
@@ -1562,8 +1514,8 @@ BObolViewController::getActiveClipPlanes(SbPlane planes[2]) const
     if (!planes)
 	return 0;
     size_t count = 0;
-    SoClipPlane *minimum = controller_clip_plane(this->viewport, TRUE);
-    SoClipPlane *maximum = controller_clip_plane(this->viewport, FALSE);
+    SoClipPlane *minimum = controller_clip_plane(this->d->viewport, TRUE);
+    SoClipPlane *maximum = controller_clip_plane(this->d->viewport, FALSE);
     if (minimum && minimum->on.getValue())
 	planes[count++] = minimum->plane.getValue();
     if (maximum && maximum->on.getValue())
@@ -1574,8 +1526,8 @@ BObolViewController::getActiveClipPlanes(SbPlane planes[2]) const
 void
 BObolViewController::setLightingEnabled(SbBool enabled)
 {
-    SoLightModel *model = controller_light_model(this->viewport);
-    SoDirectionalLight *light = controller_headlight(this->viewport);
+    SoLightModel *model = controller_light_model(this->d->viewport);
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
     if (!model || !light)
 	return;
     const int requested = enabled ? SoLightModel::PHONG :
@@ -1591,14 +1543,14 @@ BObolViewController::setLightingEnabled(SbBool enabled)
 SbBool
 BObolViewController::isLightingEnabled(void) const
 {
-    SoLightModel *model = controller_light_model(this->viewport);
+    SoLightModel *model = controller_light_model(this->d->viewport);
     return model && model->model.getValue() == SoLightModel::PHONG;
 }
 
 void
 BObolViewController::setHeadlightColor(const SbColor &color)
 {
-    SoDirectionalLight *light = controller_headlight(this->viewport);
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
     if (!light)
 	return;
     const SbColor clamped(
@@ -1614,14 +1566,14 @@ BObolViewController::setHeadlightColor(const SbColor &color)
 SbColor
 BObolViewController::getHeadlightColor(void) const
 {
-    SoDirectionalLight *light = controller_headlight(this->viewport);
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
     return light ? light->color.getValue() : SbColor(1.0f, 1.0f, 1.0f);
 }
 
 void
 BObolViewController::setHeadlightIntensity(float intensity)
 {
-    SoDirectionalLight *light = controller_headlight(this->viewport);
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
     if (!light || !std::isfinite(intensity))
 	return;
     const float clamped = std::max(0.0f, std::min(1.0f, intensity));
@@ -1634,14 +1586,14 @@ BObolViewController::setHeadlightIntensity(float intensity)
 float
 BObolViewController::getHeadlightIntensity(void) const
 {
-    SoDirectionalLight *light = controller_headlight(this->viewport);
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
     return light ? light->intensity.getValue() : 1.0f;
 }
 
 void
 BObolViewController::setDepthCueEnabled(SbBool enabled)
 {
-    SoEnvironment *environment = controller_environment(this->viewport);
+    SoEnvironment *environment = controller_environment(this->d->viewport);
     if (!environment)
 	return;
     const int requested = enabled ? SoEnvironment::HAZE :
@@ -1649,7 +1601,7 @@ BObolViewController::setDepthCueEnabled(SbBool enabled)
     if (environment->fogType.getValue() == requested)
 	return;
     environment->fogType = requested;
-    environment->fogColor = this->backgroundTop;
+    environment->fogColor = this->d->backgroundTop;
     /* Zero delegates visibility distance to the active camera volume. */
     environment->fogVisibility = 0.0f;
     this->requestRender("depth-cue");
@@ -1658,7 +1610,7 @@ BObolViewController::setDepthCueEnabled(SbBool enabled)
 SbBool
 BObolViewController::isDepthCueEnabled(void) const
 {
-    SoEnvironment *environment = controller_environment(this->viewport);
+    SoEnvironment *environment = controller_environment(this->d->viewport);
     return environment && environment->fogType.getValue() !=
 	SoEnvironment::NONE;
 }
@@ -1668,13 +1620,13 @@ BObolViewController::setSoftwareWireMode(SoftwareWireMode mode)
 {
     if (mode < SOFTWARE_WIRE_AUTO || mode > SOFTWARE_WIRE_FAST)
 	mode = SOFTWARE_WIRE_AUTO;
-    if (this->softwareWireMode == mode)
+    if (this->d->softwareWireMode == mode)
 	return;
-    this->softwareWireMode = mode;
-    if (this->renderLodRoot)
-	this->renderLodRoot->setSoftwareWireMode(mode);
+    this->d->softwareWireMode = mode;
+    if (this->d->renderLodRoot)
+	this->d->renderLodRoot->setSoftwareWireMode(mode);
     SoBRLCadRenderBatch *batch =
-	dynamic_cast<SoBRLCadRenderBatch *>(this->renderBatchRoot);
+	dynamic_cast<SoBRLCadRenderBatch *>(this->d->renderBatchRoot);
     if (batch)
 	batch->setSoftwareWireMode(mode);
     this->requestRender("software-wire-mode");
@@ -1683,7 +1635,7 @@ BObolViewController::setSoftwareWireMode(SoftwareWireMode mode)
 BObolViewController::SoftwareWireMode
 BObolViewController::getSoftwareWireMode(void) const
 {
-    return this->softwareWireMode;
+    return this->d->softwareWireMode;
 }
 
 void
@@ -1701,8 +1653,8 @@ BObolViewController::renderBackground(void) const
     if (!functions.complete())
 	return;
     ControllerGLFunctions *gl = &functions;
-    const SbColor &bottom = this->backgroundBottom;
-    const SbColor &top = this->backgroundTop;
+    const SbColor &bottom = this->d->backgroundBottom;
+    const SbColor &top = this->d->backgroundTop;
     if (bottom == top) {
 	gl->clearColor(bottom[0], bottom[1], bottom[2], 1.0f);
 	gl->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1756,7 +1708,7 @@ BObolViewController::syncCameraFromViewContext(const void *viewCtx,
 				   TRUE : FALSE;
 
     SbBool cameraReplaced = FALSE;
-    SoCamera *camera = this->activeCamera;
+    SoCamera *camera = this->d->activeCamera;
     if (!camera ||
 	(wantPerspective &&
 	 !camera->isOfType(SoPerspectiveCamera::getClassTypeId())) ||
@@ -1774,15 +1726,15 @@ BObolViewController::syncCameraFromViewContext(const void *viewCtx,
 
     int viewWidth = bv_width_get(view);
     int viewHeight = bv_height_get(view);
-    SbVec2s window = this->viewportRegion.getWindowSize();
+    SbVec2s window = this->d->viewportRegion.getWindowSize();
     if (window[0] <= 1 && window[1] <= 1 &&
 	viewWidth > 0 && viewHeight > 0) {
 	this->setViewportSize(static_cast<unsigned int>(viewWidth),
 			      static_cast<unsigned int>(viewHeight));
-	window = this->viewportRegion.getWindowSize();
+	window = this->d->viewportRegion.getWindowSize();
     }
 
-    double aspect = controller_aspect_from_region(this->viewportRegion);
+    double aspect = controller_aspect_from_region(this->d->viewportRegion);
     if (aspect <= SMALL_FASTF && viewWidth > 0 && viewHeight > 0)
 	aspect = static_cast<double>(viewWidth) /
 		 static_cast<double>(viewHeight);
@@ -1830,9 +1782,9 @@ BObolViewController::syncCameraFromViewContext(const void *viewCtx,
     };
 
     SoClipPlane *clipMinimumNode =
-	controller_clip_plane(this->viewport, TRUE);
+	controller_clip_plane(this->d->viewport, TRUE);
     SoClipPlane *clipMaximumNode =
-	controller_clip_plane(this->viewport, FALSE);
+	controller_clip_plane(this->d->viewport, FALSE);
     const SbBool clipping = bv_zclip_get(view) ? TRUE : FALSE;
     if (clipMinimumNode && clipMaximumNode) {
 	const double viewScale = horizontalSize * 0.5;
@@ -1843,18 +1795,18 @@ BObolViewController::syncCameraFromViewContext(const void *viewCtx,
 	const SbVec3f maximumNormal = -minimumNormal;
 	const SbVec3f minimumPoint(
 	    static_cast<float>(center[X] + viewZ[X] *
-		this->clipMinimum * viewScale),
+		this->d->clipMinimum * viewScale),
 	    static_cast<float>(center[Y] + viewZ[Y] *
-		this->clipMinimum * viewScale),
+		this->d->clipMinimum * viewScale),
 	    static_cast<float>(center[Z] + viewZ[Z] *
-		this->clipMinimum * viewScale));
+		this->d->clipMinimum * viewScale));
 	const SbVec3f maximumPoint(
 	    static_cast<float>(center[X] + viewZ[X] *
-		this->clipMaximum * viewScale),
+		this->d->clipMaximum * viewScale),
 	    static_cast<float>(center[Y] + viewZ[Y] *
-		this->clipMaximum * viewScale),
+		this->d->clipMaximum * viewScale),
 	    static_cast<float>(center[Z] + viewZ[Z] *
-		this->clipMaximum * viewScale));
+		this->d->clipMaximum * viewScale));
 	clipMinimumNode->plane = SbPlane(minimumNormal, minimumPoint);
 	clipMaximumNode->plane = SbPlane(maximumNormal, maximumPoint);
 	clipMinimumNode->on = clipping;
@@ -1943,32 +1895,32 @@ BObolViewController::getViewInfo(struct bv_view_info *info) const
 
     bv_view_info_init(info);
 
-    SbVec2s window = this->viewportRegion.getWindowSize();
+    SbVec2s window = this->d->viewportRegion.getWindowSize();
     info->width = window[0] > 0 ? window[0] : 1;
     info->height = window[1] > 0 ? window[1] : 1;
 
-    if (!this->activeCamera) {
+    if (!this->d->activeCamera) {
 	bv_view_info_sanitize(info);
 	return FALSE;
     }
 
-    if (this->activeCamera->isOfType(SoOrthographicCamera::getClassTypeId())) {
+    if (this->d->activeCamera->isOfType(SoOrthographicCamera::getClassTypeId())) {
 	SoOrthographicCamera *camera =
-	    static_cast<SoOrthographicCamera *>(this->activeCamera);
-	double aspect = controller_aspect_from_region(this->viewportRegion);
+	    static_cast<SoOrthographicCamera *>(this->d->activeCamera);
+	double aspect = controller_aspect_from_region(this->d->viewportRegion);
 	if (aspect <= SMALL_FASTF)
 	    aspect = camera->aspectRatio.getValue();
 	if (aspect <= SMALL_FASTF)
 	    aspect = 1.0;
 	info->size = camera->height.getValue() * aspect;
-    } else if (this->activeCamera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
+    } else if (this->d->activeCamera->isOfType(SoPerspectiveCamera::getClassTypeId())) {
 	SoPerspectiveCamera *camera =
-	    static_cast<SoPerspectiveCamera *>(this->activeCamera);
-	double focal = this->activeCamera->focalDistance.getValue();
+	    static_cast<SoPerspectiveCamera *>(this->d->activeCamera);
+	double focal = this->d->activeCamera->focalDistance.getValue();
 	double angle = camera->heightAngle.getValue();
-	double aspect = controller_aspect_from_region(this->viewportRegion);
+	double aspect = controller_aspect_from_region(this->d->viewportRegion);
 	if (aspect <= SMALL_FASTF)
-	    aspect = this->activeCamera->aspectRatio.getValue();
+	    aspect = this->d->activeCamera->aspectRatio.getValue();
 	if (aspect <= SMALL_FASTF)
 	    aspect = 1.0;
 	if (focal <= 0.0)
@@ -1977,7 +1929,7 @@ BObolViewController::getViewInfo(struct bv_view_info *info) const
 	    angle = 2.0 * std::atan(0.1);
 	info->size = 2.0 * focal * std::tan(angle * 0.5) * aspect;
     } else {
-	info->size = this->activeCamera->focalDistance.getValue();
+	info->size = this->d->activeCamera->focalDistance.getValue();
     }
 
     bv_view_info_sanitize(info);
@@ -1987,7 +1939,7 @@ BObolViewController::getViewInfo(struct bv_view_info *info) const
 SbBool
 BObolViewController::realizePending(void)
 {
-    const SbBool ret = this->sceneController.realizePending();
+    const SbBool ret = this->d->sceneController.realizePending();
     this->requestRender(ret ? "realize" : "realize-failed");
     return ret;
 }
@@ -1995,32 +1947,32 @@ BObolViewController::realizePending(void)
 unsigned int
 BObolViewController::getLastVisitedSourceCount(void) const
 {
-    return this->sceneController.getLastVisitedSourceCount();
+    return this->d->sceneController.getLastVisitedSourceCount();
 }
 
 unsigned int
 BObolViewController::getLastRealizedSourceCount(void) const
 {
-    return this->sceneController.getLastRealizedSourceCount();
+    return this->d->sceneController.getLastRealizedSourceCount();
 }
 
 unsigned int
 BObolViewController::getLastFailedSourceCount(void) const
 {
-    return this->sceneController.getLastFailedSourceCount();
+    return this->d->sceneController.getLastFailedSourceCount();
 }
 
 const SbString &
 BObolViewController::getLastDiagnostics(void) const
 {
-    return this->sceneController.getLastDiagnostics();
+    return this->d->sceneController.getLastDiagnostics();
 }
 
 void
 BObolViewController::setEndpointGraphicalRenderingEnabled(SbBool enabled)
 {
     const int requested = enabled ? 1 : 0;
-    if (this->endpointGraphicalRenderingEnabled.exchange(requested,
+    if (this->d->endpointGraphicalRenderingEnabled.exchange(requested,
 	    std::memory_order_acq_rel) == requested)
 	return;
     this->syncRenderManager();
@@ -2033,10 +1985,10 @@ BObolViewController::setEndpointGraphicalRenderingEnabled(SbBool enabled)
 void
 BObolViewController::requestRender(const char *reason)
 {
-    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
-    this->renderRequested = TRUE;
-    this->renderReason = reason ? reason : "";
-    this->renderRequestSerial++;
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    this->d->renderRequested = TRUE;
+    this->d->renderReason = reason ? reason : "";
+    this->d->renderRequestSerial++;
 }
 
 void
@@ -2050,11 +2002,11 @@ BObolViewController::setFrameRequestCallback(
 
     ControllerFrameRequestState *previous = NULL;
     {
-	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	std::lock_guard<std::mutex> lock(this->d->frameRequestMutex);
 	previous = static_cast<ControllerFrameRequestState *>(
-	    this->frameRequestUserData);
-	this->frameRequestCallback = callback;
-	this->frameRequestUserData = replacement;
+	    this->d->frameRequestUserData);
+	this->d->frameRequestCallback = callback;
+	this->d->frameRequestUserData = replacement;
     }
     if (previous) {
 	previous->close();
@@ -2067,13 +2019,13 @@ BObolViewController::clearFrameRequestCallback(void *userData)
 {
     ControllerFrameRequestState *state = NULL;
     {
-	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	std::lock_guard<std::mutex> lock(this->d->frameRequestMutex);
 	state = static_cast<ControllerFrameRequestState *>(
-	    this->frameRequestUserData);
+	    this->d->frameRequestUserData);
 	if (!state || state->userData != userData)
 	    return;
-	this->frameRequestCallback = NULL;
-	this->frameRequestUserData = NULL;
+	this->d->frameRequestCallback = NULL;
+	this->d->frameRequestUserData = NULL;
     }
     state->close();
     delete state;
@@ -2083,19 +2035,19 @@ void
 BObolViewController::setPresentationSyncCallback(
     BObolPresentationSyncCallback callback, void *userData)
 {
-    std::lock_guard<std::mutex> lock(this->presentationSyncMutex);
-    this->presentationSyncCallback = callback;
-    this->presentationSyncUserData = callback ? userData : NULL;
+    std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
+    this->d->presentationSyncCallback = callback;
+    this->d->presentationSyncUserData = callback ? userData : NULL;
 }
 
 void
 BObolViewController::clearPresentationSyncCallback(void *userData)
 {
-    std::lock_guard<std::mutex> lock(this->presentationSyncMutex);
-    if (this->presentationSyncUserData != userData)
+    std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
+    if (this->d->presentationSyncUserData != userData)
 	return;
-    this->presentationSyncCallback = NULL;
-    this->presentationSyncUserData = NULL;
+    this->d->presentationSyncCallback = NULL;
+    this->d->presentationSyncUserData = NULL;
 }
 
 void
@@ -2104,9 +2056,9 @@ BObolViewController::synchronizePresentation(void)
     BObolPresentationSyncCallback callback = NULL;
     void *userData = NULL;
     {
-	std::lock_guard<std::mutex> lock(this->presentationSyncMutex);
-	callback = this->presentationSyncCallback;
-	userData = this->presentationSyncUserData;
+	std::lock_guard<std::mutex> lock(this->d->presentationSyncMutex);
+	callback = this->d->presentationSyncCallback;
+	userData = this->d->presentationSyncUserData;
     }
     if (callback)
 	(*callback)(userData);
@@ -2115,17 +2067,17 @@ BObolViewController::synchronizePresentation(void)
 void
 BObolViewController::notifyFrameRequest(const char *reason)
 {
-    if (!this->endpointGraphicalRenderingEnabled.load(
+    if (!this->d->endpointGraphicalRenderingEnabled.load(
 	    std::memory_order_acquire))
 	return;
     BObolFrameRequestCallback callback = NULL;
     void *userData = NULL;
     ControllerFrameRequestState *state = NULL;
     {
-	std::lock_guard<std::mutex> lock(this->frameRequestMutex);
+	std::lock_guard<std::mutex> lock(this->d->frameRequestMutex);
 	state = static_cast<ControllerFrameRequestState *>(
-	    this->frameRequestUserData);
-	if (this->frameRequestCallback && state && state->beginDispatch()) {
+	    this->d->frameRequestUserData);
+	if (this->d->frameRequestCallback && state && state->beginDispatch()) {
 	    callback = state->callback;
 	    userData = state->userData;
 	}
@@ -2140,41 +2092,41 @@ BObolViewController::notifyFrameRequest(const char *reason)
 void
 BObolViewController::clearRenderRequest(void)
 {
-    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
-    this->renderRequested = FALSE;
-    this->renderReason = "";
-    this->renderRequestSerial++;
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    this->d->renderRequested = FALSE;
+    this->d->renderReason = "";
+    this->d->renderRequestSerial++;
 }
 
 SbBool
 BObolViewController::consumeRenderRequest(SbString *reason)
 {
-    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
-    const SbBool ret = this->renderRequested;
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    const SbBool ret = this->d->renderRequested;
     if (reason)
-	*reason = this->renderReason;
-    this->renderRequested = FALSE;
-    this->renderReason = "";
-    this->renderRequestSerial++;
+	*reason = this->d->renderReason;
+    this->d->renderRequested = FALSE;
+    this->d->renderReason = "";
+    this->d->renderRequestSerial++;
     return ret;
 }
 
 void
 BObolViewController::clearRenderRequestIfUnchanged(uint64_t serial)
 {
-    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
-    if (this->renderRequestSerial != serial)
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    if (this->d->renderRequestSerial != serial)
 	return;
-    this->renderRequested = FALSE;
-    this->renderReason = "";
-    this->renderRequestSerial++;
+    this->d->renderRequested = FALSE;
+    this->d->renderReason = "";
+    this->d->renderRequestSerial++;
 }
 
 uint64_t
 BObolViewController::renderRequestSerialGet(void) const
 {
-    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
-    return this->renderRequestSerial;
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    return this->d->renderRequestSerial;
 }
 
 SbBool
@@ -2186,8 +2138,8 @@ BObolViewController::renderPending(SbBool clearWindow,
 	this->synchronizePresentation();
 
 
-    if (!this->renderManager || !this->getRenderContextManager() ||
-	!this->activeCamera || !this->getRenderRoot())
+    if (!this->d->renderManager || !this->getRenderContextManager() ||
+	!this->d->activeCamera || !this->getRenderRoot())
 	return FALSE;
 
     SbString renderReasonCopy;
@@ -2202,7 +2154,7 @@ BObolViewController::renderPending(SbBool clearWindow,
 	this->renderBackground();
     else if (clearZBuffer)
 	glClear(GL_DEPTH_BUFFER_BIT);
-    this->renderManager->render(FALSE, FALSE);
+    this->d->renderManager->render(FALSE, FALSE);
     this->completeRenderTiming(started);
     return TRUE;
 }
@@ -2226,22 +2178,22 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
     if (elapsed >= 30000000000ULL)
 	return;
 
-    this->lastRenderTimeNanoseconds = elapsed;
-    this->smoothedRenderTimeNanoseconds =
-	this->smoothedRenderTimeNanoseconds ?
-	(this->smoothedRenderTimeNanoseconds * 9 + elapsed) / 10 : elapsed;
+    this->d->lastRenderTimeNanoseconds = elapsed;
+    this->d->smoothedRenderTimeNanoseconds =
+	this->d->smoothedRenderTimeNanoseconds ?
+	(this->d->smoothedRenderTimeNanoseconds * 9 + elapsed) / 10 : elapsed;
 }
 
 uint64_t
 BObolViewController::getLastRenderTimeNanoseconds(void) const
 {
-    return this->lastRenderTimeNanoseconds;
+    return this->d->lastRenderTimeNanoseconds;
 }
 
 uint64_t
 BObolViewController::getSmoothedRenderTimeNanoseconds(void) const
 {
-    return this->smoothedRenderTimeNanoseconds;
+    return this->d->smoothedRenderTimeNanoseconds;
 }
 
 int
@@ -2257,7 +2209,7 @@ BObolViewController::renderToImage(unsigned char **image,
     }
     *image = NULL;
 
-    if (!this->activeCamera || !this->getViewport() ||
+    if (!this->d->activeCamera || !this->getViewport() ||
 	    !this->getRenderRoot()) {
 	return BRLCAD_ERROR;
     }
@@ -2291,30 +2243,30 @@ BObolViewController::renderToImage(unsigned char **image,
 	overrideRenderer.reset(new SoOffscreenRenderer(resolvedManager, region));
 	renderer = overrideRenderer.get();
 	configureRenderer = true;
-    } else if (!this->imageRenderer ||
-	this->imageRendererManager != resolvedManager) {
-	delete this->imageRenderer;
-	this->imageRenderer = new SoOffscreenRenderer(resolvedManager, region);
-	this->imageRendererManager = resolvedManager;
-	renderer = this->imageRenderer;
+    } else if (!this->d->imageRenderer ||
+	this->d->imageRendererManager != resolvedManager) {
+	delete this->d->imageRenderer;
+	this->d->imageRenderer = new SoOffscreenRenderer(resolvedManager, region);
+	this->d->imageRendererManager = resolvedManager;
+	renderer = this->d->imageRenderer;
 	configureRenderer = true;
     } else {
-	this->imageRenderer->setViewportRegion(region);
-	renderer = this->imageRenderer;
+	this->d->imageRenderer->setViewportRegion(region);
+	renderer = this->d->imageRenderer;
     }
     if (configureRenderer) {
 	renderer->getGLRenderAction()->setTransparencyType(
-	    this->transparencyEnabled ? SoGLRenderAction::BLEND :
+	    this->d->transparencyEnabled ? SoGLRenderAction::BLEND :
 	    SoGLRenderAction::NONE);
 	renderer->getGLRenderAction()->setSmoothing(
-	    this->antialiasingEnabled);
+	    this->d->antialiasingEnabled);
 	renderer->getGLRenderAction()->setNumPasses(1);
     }
     const SbColor imageBottom = background ? *background :
-	this->backgroundBottom;
+	this->d->backgroundBottom;
     const SbColor imageTop =
-	(background && *background != this->backgroundBottom) ?
-	*background : this->backgroundTop;
+	(background && *background != this->d->backgroundBottom) ?
+	*background : this->d->backgroundTop;
     const SbBool gradient = imageBottom != imageTop;
     renderer->setComponents(SoOffscreenRenderer::RGB);
     renderer->setBackgroundColor(imageBottom);
@@ -2368,12 +2320,12 @@ BObolViewController::renderToImage(unsigned char **image,
 SbBool
 BObolViewController::isRenderRequested(void) const
 {
-    if (!this->endpointGraphicalRenderingEnabled.load(
+    if (!this->d->endpointGraphicalRenderingEnabled.load(
 	    std::memory_order_acquire))
 	return FALSE;
 
-    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
-    return (this->renderRequested || this->hasPendingLodResults() ||
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    return (this->d->renderRequested || this->hasPendingLodResults() ||
 	    this->hasProgressiveWorkPending()) ?
 	   TRUE : FALSE;
 }
@@ -2381,8 +2333,8 @@ BObolViewController::isRenderRequested(void) const
 SbString
 BObolViewController::getRenderReason(void) const
 {
-    std::lock_guard<std::mutex> lock(this->renderRequestMutex);
-    return this->renderReason;
+    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+    return this->d->renderReason;
 }
 
 static void
@@ -2413,20 +2365,22 @@ controller_accumulate_progressive_status(BObolProgressiveStatus &dst,
 uint64_t
 BObolViewController::registerProgressiveProvider(
     BObolProgressiveAdvanceCallback callback,
-    void *userData)
+    void *userData,
+    BObolProgressiveUserDataFreeCallback userDataFree)
 {
     if (!callback)
 	return 0;
 
-    uint64_t token = this->progressiveProviderNextToken++;
+    uint64_t token = this->d->progressiveProviderNextToken++;
     if (token == 0)
-	token = this->progressiveProviderNextToken++;
+	token = this->d->progressiveProviderNextToken++;
 
     BObolProgressiveProviderRecord record;
     record.token = token;
     record.callback = callback;
     record.userData = userData;
-    this->progressiveProviders.push_back(record);
+    record.userDataFree = userDataFree;
+    this->d->progressiveProviders.push_back(record);
     this->markProgressiveWorkPending();
     this->requestRender("progressive-provider");
     return token;
@@ -2438,22 +2392,61 @@ BObolViewController::unregisterProgressiveProvider(uint64_t token)
     if (!token)
 	return;
 
-    this->progressiveProviders.erase(
-	std::remove_if(this->progressiveProviders.begin(),
-		      this->progressiveProviders.end(),
-    [token](const BObolProgressiveProviderRecord &record) {
-	return record.token == token;
-    }),
-    this->progressiveProviders.end());
-    if (this->progressiveProviders.empty())
+    for (std::vector<BObolProgressiveProviderRecord>::iterator it =
+	 this->d->progressiveProviders.begin();
+	 it != this->d->progressiveProviders.end(); ++it) {
+	if (it->token != token)
+	    continue;
+	if (it->userDataFree)
+	    (*it->userDataFree)(it->userData);
+	this->d->progressiveProviders.erase(it);
+	break;
+    }
+    if (this->d->progressiveProviders.empty())
 	this->clearProgressiveWorkPending();
 }
 
 void
 BObolViewController::clearProgressiveProviders(void)
 {
-    this->progressiveProviders.clear();
+    for (const BObolProgressiveProviderRecord &record :
+	 this->d->progressiveProviders)
+	if (record.userDataFree)
+	    (*record.userDataFree)(record.userData);
+    this->d->progressiveProviders.clear();
     this->clearProgressiveWorkPending();
+}
+
+void *
+BObolViewController::findProgressiveProviderData(
+    BObolProgressiveAdvanceCallback callback) const
+{
+    if (!callback)
+	return NULL;
+    for (const BObolProgressiveProviderRecord &record :
+	 this->d->progressiveProviders)
+	if (record.callback == callback)
+	    return record.userData;
+    return NULL;
+}
+
+uint64_t
+BObolViewController::findProgressiveProviderToken(
+    BObolProgressiveAdvanceCallback callback) const
+{
+    if (!callback)
+	return 0;
+    for (const BObolProgressiveProviderRecord &record :
+	 this->d->progressiveProviders)
+	if (record.callback == callback)
+	    return record.token;
+    return 0;
+}
+
+SbBool
+BObolViewController::hasProgressiveProviders(void) const
+{
+    return this->d->progressiveProviders.empty() ? FALSE : TRUE;
 }
 
 void
@@ -2461,9 +2454,9 @@ BObolViewController::setDefaultProgressiveOptions(
     const BObolProgressiveOptions *options)
 {
     if (options)
-	this->defaultProgressiveOptions = *options;
+	this->d->defaultProgressiveOptions = *options;
     else
-	this->defaultProgressiveOptions = BObolProgressiveOptions();
+	this->d->defaultProgressiveOptions = BObolProgressiveOptions();
     this->markProgressiveWorkPending();
     this->requestRender("progressive-options");
 }
@@ -2471,7 +2464,7 @@ BObolViewController::setDefaultProgressiveOptions(
 const BObolProgressiveOptions &
 BObolViewController::getDefaultProgressiveOptions(void) const
 {
-    return this->defaultProgressiveOptions;
+    return this->d->defaultProgressiveOptions;
 }
 
 int
@@ -2480,28 +2473,28 @@ BObolViewController::advanceProgressiveWork(
     BObolProgressiveStatus *status)
 {
     if (!options)
-	options = &this->defaultProgressiveOptions;
+	options = &this->d->defaultProgressiveOptions;
 
     BObolProgressiveStatus localStatus;
 
     if (this->hasPendingLodResults() ||
-	(this->lodService &&
-	 this->lodService->queuedResultCountForDiagnostics() > 0)) {
+	(this->d->lodService &&
+	 this->d->lodService->queuedResultCountForDiagnostics() > 0)) {
 	(void)this->processPendingLodResults(options->maxLodResults,
 	    options->maxLodApplyMicroseconds);
-	localStatus.lodResultsProcessed = this->lastLodResultCount;
-	localStatus.lodResultsApplied = this->lastLodAppliedResultCount;
-	if (this->lastLodAppliedResultCount > 0)
+	localStatus.lodResultsProcessed = this->d->lastLodResultCount;
+	localStatus.lodResultsApplied = this->d->lastLodAppliedResultCount;
+	if (this->d->lastLodAppliedResultCount > 0)
 	    localStatus.changed = 1;
     }
 
-    if (this->lodAutoSubmit)
+    if (this->d->lodAutoSubmit)
 	(void)this->submitLodRequestsIfNeeded();
 
     size_t providerLimit = options->maxProviders;
     size_t providerIndex = 0;
     for (const BObolProgressiveProviderRecord &record :
-	 this->progressiveProviders) {
+	 this->d->progressiveProviders) {
 	if (!record.callback)
 	    continue;
 	if (providerLimit && providerIndex >= providerLimit) {
@@ -2548,20 +2541,20 @@ BObolViewController::advanceProgressiveWork(
 void
 BObolViewController::markProgressiveWorkPending(void)
 {
-    if (this->progressiveWorkPending.exchange(1) == 0)
+    if (this->d->progressiveWorkPending.exchange(1) == 0)
 	this->notifyFrameRequest("progressive-work");
 }
 
 void
 BObolViewController::clearProgressiveWorkPending(void)
 {
-    this->progressiveWorkPending.store(0);
+    this->d->progressiveWorkPending.store(0);
 }
 
 SbBool
 BObolViewController::hasProgressiveWorkPending(void) const
 {
-    return this->progressiveWorkPending.load() != 0 ? TRUE : FALSE;
+    return this->d->progressiveWorkPending.load() != 0 ? TRUE : FALSE;
 }
 
 static int
@@ -2657,7 +2650,7 @@ BObolViewController::lodResultReadyCB(
     BObolViewController *controller =
 	static_cast<BObolViewController *>(userData);
     if (controller) {
-	controller->lodResultsPending.store(1);
+	controller->d->lodResultsPending.store(1);
 	controller->markProgressiveWorkPending();
     }
 }
@@ -2665,71 +2658,106 @@ BObolViewController::lodResultReadyCB(
 void
 BObolViewController::setLodService(BObolLodService *service)
 {
-    if (this->lodService == service)
+    if (this->d->lodService == service)
 	return;
 
     this->cancelActiveLodGeneration();
-    if (this->lodService && this->lodResultSubscriberId != 0)
-	this->lodService->unsubscribeResultReady(this->lodResultSubscriberId);
+    if (this->d->lodService && this->d->lodResultSubscriberId != 0)
+	this->d->lodService->unsubscribeResultReady(this->d->lodResultSubscriberId);
 
-    this->lodService = service;
-    this->lodResultSubscriberId = 0;
-    this->lodResultsPending.store(0);
-    this->lodActiveGeneration = 0;
-    this->lodSubmissionSourceIndex = 0;
-    this->lodSubmissionEntryOffset = 0;
-    this->lodSubmissionPending = FALSE;
-    this->lodLastSubmittedViewRevision = 0;
-    this->lodLastSubmittedPolicyRevision = 0;
-    this->lodLastSubmittedSourceSignature = "";
+    this->d->lodService = service;
+    this->d->lodResultSubscriberId = 0;
+    this->d->lodResultsPending.store(0);
+    this->d->lodActiveGeneration = 0;
+    this->d->lodSubmissionSourceIndex = 0;
+    this->d->lodSubmissionEntryOffset = 0;
+    this->d->lodSubmissionPending = FALSE;
+    this->d->lodLastSubmittedViewRevision = 0;
+    this->d->lodLastSubmittedPolicyRevision = 0;
+    this->d->lodLastSubmittedSourceSignature = "";
 
-    if (this->lodService)
-	this->lodResultSubscriberId =
-	    this->lodService->subscribeResultReady(
+    if (this->d->lodService)
+	this->d->lodResultSubscriberId =
+	    this->d->lodService->subscribeResultReady(
 		BObolViewController::lodResultReadyCB, this);
 }
 
 void
 BObolViewController::cancelActiveLodGeneration(void)
 {
-    if (this->lodService && this->lodActiveGeneration != 0)
-	this->lodService->cancelGeneration(this->lodActiveGeneration);
-    this->lodActiveGeneration = 0;
-    this->lodSubmissionSourceIndex = 0;
-    this->lodSubmissionEntryOffset = 0;
-    this->lodSubmissionPending = FALSE;
-    this->lodResultsPending.store(0);
-    this->lodLastSubmittedViewRevision = 0;
-    this->lodLastSubmittedPolicyRevision = 0;
-    this->lodLastSubmittedSourceSignature = "";
+    if (this->d->lodService && this->d->lodActiveGeneration != 0)
+	this->d->lodService->cancelGeneration(this->d->lodActiveGeneration);
+    this->d->lodActiveGeneration = 0;
+    this->d->lodSubmissionSourceIndex = 0;
+    this->d->lodSubmissionEntryOffset = 0;
+    this->d->lodSubmissionPending = FALSE;
+    this->d->lodResultsPending.store(0);
+    this->d->lodLastSubmittedViewRevision = 0;
+    this->d->lodLastSubmittedPolicyRevision = 0;
+    this->d->lodLastSubmittedSourceSignature = "";
 }
 
 void
 BObolViewController::invalidateDatabaseSourceLodState(void)
 {
     this->cancelActiveLodGeneration();
-    if (this->viewAttachment)
-	this->viewAttachment->clearViewLodState();
+    if (this->d->viewAttachment)
+	this->d->viewAttachment->clearViewLodState();
 }
 
 BObolLodService *
 BObolViewController::getLodService(void) const
 {
-    return this->lodService;
+    return this->d->lodService;
+}
+
+BObolLodService *
+BObolViewController::ensureManagedLodService(size_t workerCount)
+{
+    if (workerCount == 0)
+	workerCount = 1;
+    if (!this->d->managedLodService)
+	this->d->managedLodService.reset(new BObolLodService);
+    if (this->d->managedLodService->isRunning() &&
+	this->d->managedLodWorkerCount != workerCount)
+	this->d->managedLodService->stop();
+    if (!this->d->managedLodService->isRunning() &&
+	!this->d->managedLodService->start(workerCount, TRUE))
+	return NULL;
+    this->d->managedLodWorkerCount = workerCount;
+    this->setLodService(this->d->managedLodService.get());
+    return this->d->managedLodService.get();
+}
+
+void
+BObolViewController::stopManagedLodService(void)
+{
+    this->setLodAutoSubmit(FALSE);
+    if (this->d->lodService == this->d->managedLodService.get())
+	this->setLodService(NULL);
+    if (this->d->managedLodService)
+	this->d->managedLodService->stop();
+    this->d->managedLodWorkerCount = 0;
+}
+
+size_t
+BObolViewController::getManagedLodWorkerCount(void) const
+{
+    return this->d->managedLodWorkerCount;
 }
 
 void
 BObolViewController::setLodAutoSubmit(SbBool enabled)
 {
-    this->lodAutoSubmit = enabled ? TRUE : FALSE;
-    if (this->lodAutoSubmit)
+    this->d->lodAutoSubmit = enabled ? TRUE : FALSE;
+    if (this->d->lodAutoSubmit)
 	this->requestRender("lod-auto-submit");
 }
 
 SbBool
 BObolViewController::isLodAutoSubmitEnabled(void) const
 {
-    return this->lodAutoSubmit;
+    return this->d->lodAutoSubmit;
 }
 
 void
@@ -2738,11 +2766,11 @@ BObolViewController::setLodForcedLevel(int level)
     if (level < 0)
 	level = 0;
 
-    if (this->lodUseForcedLevel && this->lodForcedLevel == level)
+    if (this->d->lodUseForcedLevel && this->d->lodForcedLevel == level)
 	return;
 
-    this->lodUseForcedLevel = TRUE;
-    this->lodForcedLevel = level;
+    this->d->lodUseForcedLevel = TRUE;
+    this->d->lodForcedLevel = level;
     this->advanceLodPolicyRevision();
     this->requestRender("lod-policy");
 }
@@ -2750,11 +2778,11 @@ BObolViewController::setLodForcedLevel(int level)
 void
 BObolViewController::clearLodForcedLevel(void)
 {
-    if (!this->lodUseForcedLevel)
+    if (!this->d->lodUseForcedLevel)
 	return;
 
-    this->lodUseForcedLevel = FALSE;
-    this->lodForcedLevel = 0;
+    this->d->lodUseForcedLevel = FALSE;
+    this->d->lodForcedLevel = 0;
     this->advanceLodPolicyRevision();
     this->requestRender("lod-policy");
 }
@@ -2762,33 +2790,33 @@ BObolViewController::clearLodForcedLevel(void)
 SbBool
 BObolViewController::hasLodForcedLevel(void) const
 {
-    return this->lodUseForcedLevel;
+    return this->d->lodUseForcedLevel;
 }
 
 int
 BObolViewController::getLodForcedLevel(void) const
 {
-    return this->lodForcedLevel;
+    return this->d->lodForcedLevel;
 }
 
 void
 BObolViewController::setExactFullDetailBudget(uint64_t maxFaceCount,
 						uint64_t maxPointCount)
 {
-    this->maxExactFullDetailFaceCount = maxFaceCount;
-    this->maxExactFullDetailPointCount = maxPointCount;
+    this->d->maxExactFullDetailFaceCount = maxFaceCount;
+    this->d->maxExactFullDetailPointCount = maxPointCount;
 }
 
 uint64_t
 BObolViewController::getMaxExactFullDetailFaceCount(void) const
 {
-    return this->maxExactFullDetailFaceCount;
+    return this->d->maxExactFullDetailFaceCount;
 }
 
 uint64_t
 BObolViewController::getMaxExactFullDetailPointCount(void) const
 {
-    return this->maxExactFullDetailPointCount;
+    return this->d->maxExactFullDetailPointCount;
 }
 
 int
@@ -2824,12 +2852,12 @@ BObolViewController::consumeSnapSourceFullDetail(
 void
 BObolViewController::clearRtPickCaches(void)
 {
-    for (size_t i = 0; i < this->rtPickCaches.size(); i++)
-	delete this->rtPickCaches[i];
-    this->rtPickCaches.clear();
-    this->rtPickCachePaths.clear();
-    this->rtPickCacheDatabases.clear();
-    this->rtPickCacheSourceRevisions.clear();
+    for (size_t i = 0; i < this->d->rtPickCaches.size(); i++)
+	delete this->d->rtPickCaches[i];
+    this->d->rtPickCaches.clear();
+    this->d->rtPickCachePaths.clear();
+    this->d->rtPickCacheDatabases.clear();
+    this->d->rtPickCacheSourceRevisions.clear();
 }
 
 int
@@ -2853,18 +2881,18 @@ BObolViewController::prepareRtPickCaches(void)
     }
 
     SbBool sameSignature =
-	sourcePaths.size() == this->rtPickCachePaths.size() &&
-	sourceDatabases.size() == this->rtPickCacheDatabases.size() &&
-	sourceRevisions.size() == this->rtPickCacheSourceRevisions.size() &&
-	this->rtPickCaches.size() == this->rtPickCachePaths.size();
+	sourcePaths.size() == this->d->rtPickCachePaths.size() &&
+	sourceDatabases.size() == this->d->rtPickCacheDatabases.size() &&
+	sourceRevisions.size() == this->d->rtPickCacheSourceRevisions.size() &&
+	this->d->rtPickCaches.size() == this->d->rtPickCachePaths.size();
     if (sameSignature) {
 	for (size_t i = 0; i < sourcePaths.size(); i++) {
-	    if (sourceDatabases[i] != this->rtPickCacheDatabases[i] ||
-		sourceRevisions[i] != this->rtPickCacheSourceRevisions[i] ||
+	    if (sourceDatabases[i] != this->d->rtPickCacheDatabases[i] ||
+		sourceRevisions[i] != this->d->rtPickCacheSourceRevisions[i] ||
 		bu_strcmp(sourcePaths[i].getString(),
-		       this->rtPickCachePaths[i].getString()) != 0 ||
-		!this->rtPickCaches[i] ||
-		!this->rtPickCaches[i]->isReady()) {
+		       this->d->rtPickCachePaths[i].getString()) != 0 ||
+		!this->d->rtPickCaches[i] ||
+		!this->d->rtPickCaches[i]->isReady()) {
 		sameSignature = FALSE;
 		break;
 	    }
@@ -2872,7 +2900,7 @@ BObolViewController::prepareRtPickCaches(void)
     }
 
     if (sameSignature)
-	return static_cast<int>(this->rtPickCaches.size());
+	return static_cast<int>(this->d->rtPickCaches.size());
 
     this->clearRtPickCaches();
     for (size_t i = 0; i < sourcePaths.size(); i++) {
@@ -2885,27 +2913,27 @@ BObolViewController::prepareRtPickCaches(void)
 	    continue;
 	}
 
-	this->rtPickCaches.push_back(cache);
-	this->rtPickCachePaths.push_back(sourcePaths[i]);
-	this->rtPickCacheDatabases.push_back(sourceDatabases[i]);
-	this->rtPickCacheSourceRevisions.push_back(sourceRevisions[i]);
+	this->d->rtPickCaches.push_back(cache);
+	this->d->rtPickCachePaths.push_back(sourcePaths[i]);
+	this->d->rtPickCacheDatabases.push_back(sourceDatabases[i]);
+	this->d->rtPickCacheSourceRevisions.push_back(sourceRevisions[i]);
     }
 
-    return static_cast<int>(this->rtPickCaches.size());
+    return static_cast<int>(this->d->rtPickCaches.size());
 }
 
 int
 BObolViewController::getRtPickCacheCount(void) const
 {
-    return static_cast<int>(this->rtPickCaches.size());
+    return static_cast<int>(this->d->rtPickCaches.size());
 }
 
 BObolRtPickCache *
 BObolViewController::getRtPickCache(int index) const
 {
-    if (index < 0 || static_cast<size_t>(index) >= this->rtPickCaches.size())
+    if (index < 0 || static_cast<size_t>(index) >= this->d->rtPickCaches.size())
 	return NULL;
-    return this->rtPickCaches[static_cast<size_t>(index)];
+    return this->d->rtPickCaches[static_cast<size_t>(index)];
 }
 
 uint32_t
@@ -2913,9 +2941,9 @@ BObolViewController::getRtPickCacheSourceRevision(int index) const
 {
     if (index < 0 ||
 	static_cast<size_t>(index) >=
-	this->rtPickCacheSourceRevisions.size())
+	this->d->rtPickCacheSourceRevisions.size())
 	return 0;
-    return this->rtPickCacheSourceRevisions[static_cast<size_t>(index)];
+    return this->d->rtPickCacheSourceRevisions[static_cast<size_t>(index)];
 }
 
 int
@@ -2930,7 +2958,7 @@ BObolViewController::pickSourceMeshExactRay(
     if (submittedRequestCount)
 	*submittedRequestCount = 0;
 
-    if (!this->viewport || !this->viewport->getRoot())
+    if (!this->d->viewport || !this->d->viewport->getRoot())
 	return 0;
 
     BObolLodService *service = this->getLodService();
@@ -2939,7 +2967,7 @@ BObolViewController::pickSourceMeshExactRay(
 
     SoBRLSourceMeshPickAction sourcePickAction;
     sourcePickAction.setRay(rayOrigin, rayDirection);
-    sourcePickAction.apply(this->viewport->getRoot());
+    sourcePickAction.apply(this->d->viewport->getRoot());
     SbPlane clipPlanes[2];
     const size_t clipPlaneCount = this->getActiveClipPlanes(clipPlanes);
 
@@ -3098,36 +3126,36 @@ BObolViewController::setMeshResidencyBudget(
     size_t maxBytes,
     SbBool evictDisplayPayloads)
 {
-    this->meshResidencyBudgetEnabled = TRUE;
-    this->maxResidentMeshBytes = maxBytes;
-    this->meshResidencyEvictDisplayPayloads =
+    this->d->meshResidencyBudgetEnabled = TRUE;
+    this->d->maxResidentMeshBytes = maxBytes;
+    this->d->meshResidencyEvictDisplayPayloads =
 	evictDisplayPayloads ? TRUE : FALSE;
 }
 
 void
 BObolViewController::clearMeshResidencyBudget(void)
 {
-    this->meshResidencyBudgetEnabled = FALSE;
-    this->maxResidentMeshBytes = 0;
-    this->meshResidencyEvictDisplayPayloads = TRUE;
+    this->d->meshResidencyBudgetEnabled = FALSE;
+    this->d->maxResidentMeshBytes = 0;
+    this->d->meshResidencyEvictDisplayPayloads = TRUE;
 }
 
 SbBool
 BObolViewController::hasMeshResidencyBudget(void) const
 {
-    return this->meshResidencyBudgetEnabled;
+    return this->d->meshResidencyBudgetEnabled;
 }
 
 size_t
 BObolViewController::getMaxResidentMeshBytes(void) const
 {
-    return this->maxResidentMeshBytes;
+    return this->d->maxResidentMeshBytes;
 }
 
 SbBool
 BObolViewController::isMeshResidencyDisplayEvictionEnabled(void) const
 {
-    return this->meshResidencyEvictDisplayPayloads;
+    return this->d->meshResidencyEvictDisplayPayloads;
 }
 
 size_t
@@ -3135,13 +3163,13 @@ BObolViewController::evictMeshPayloadsToBudget(
     size_t maxBytes,
     SbBool evictDisplayPayloads)
 {
-    this->lastMeshBudgetInitialResidentBytes = 0;
-    this->lastMeshBudgetFinalResidentBytes = 0;
-    this->lastMeshBudgetFreedFullDetailBytes = 0;
-    this->lastMeshBudgetFreedDisplayBytes = 0;
-    this->lastMeshBudgetVisitedMeshCount = 0;
-    this->lastMeshBudgetEvictedFullDetailMeshCount = 0;
-    this->lastMeshBudgetEvictedDisplayMeshCount = 0;
+    this->d->lastMeshBudgetInitialResidentBytes = 0;
+    this->d->lastMeshBudgetFinalResidentBytes = 0;
+    this->d->lastMeshBudgetFreedFullDetailBytes = 0;
+    this->d->lastMeshBudgetFreedDisplayBytes = 0;
+    this->d->lastMeshBudgetVisitedMeshCount = 0;
+    this->d->lastMeshBudgetEvictedFullDetailMeshCount = 0;
+    this->d->lastMeshBudgetEvictedDisplayMeshCount = 0;
 
     SoNode *root = this->getRenderSceneRoot();
     if (!root)
@@ -3154,54 +3182,54 @@ BObolViewController::evictMeshPayloadsToBudget(
     action.setEvictDisplayPayloads(evictDisplayPayloads);
     action.apply(root);
 
-    const size_t viewLodBytes = this->viewAttachment->getViewLodState() ?
-				this->viewAttachment->getViewLodState()->estimateDisplayMeshBytes() : 0;
-    this->lastMeshBudgetInitialResidentBytes =
+    const size_t viewLodBytes = this->d->viewAttachment->getViewLodState() ?
+				this->d->viewAttachment->getViewLodState()->estimateDisplayMeshBytes() : 0;
+    this->d->lastMeshBudgetInitialResidentBytes =
 	action.getInitialResidentMeshBytes() + viewLodBytes;
-    this->lastMeshBudgetFinalResidentBytes =
+    this->d->lastMeshBudgetFinalResidentBytes =
 	action.getFinalResidentMeshBytes() + viewLodBytes;
-    this->lastMeshBudgetFreedFullDetailBytes =
+    this->d->lastMeshBudgetFreedFullDetailBytes =
 	action.getFreedFullDetailBytes();
-    this->lastMeshBudgetFreedDisplayBytes =
+    this->d->lastMeshBudgetFreedDisplayBytes =
 	action.getFreedDisplayBytes();
-    this->lastMeshBudgetVisitedMeshCount = action.getVisitedMeshCount();
-    this->lastMeshBudgetEvictedFullDetailMeshCount =
+    this->d->lastMeshBudgetVisitedMeshCount = action.getVisitedMeshCount();
+    this->d->lastMeshBudgetEvictedFullDetailMeshCount =
 	action.getEvictedFullDetailMeshCount();
-    this->lastMeshBudgetEvictedDisplayMeshCount =
+    this->d->lastMeshBudgetEvictedDisplayMeshCount =
 	action.getEvictedDisplayMeshCount();
 
-    if (this->lastMeshBudgetFinalResidentBytes > maxBytes &&
-	this->viewAttachment->getViewLodState()) {
+    if (this->d->lastMeshBudgetFinalResidentBytes > maxBytes &&
+	this->d->viewAttachment->getViewLodState()) {
 	std::vector<SoBRLMeshShape *> shapes =
 	    controller_render_mesh_shapes(this);
 	for (size_t i = 0; i < shapes.size(); i++) {
-	    if (this->lastMeshBudgetFinalResidentBytes <= maxBytes)
+	    if (this->d->lastMeshBudgetFinalResidentBytes <= maxBytes)
 		break;
-	    if (!this->viewAttachment->getViewLodState()->findMesh(shapes[i]))
+	    if (!this->d->viewAttachment->getViewLodState()->findMesh(shapes[i]))
 		continue;
 	    size_t freed = shapes[i]->evictDisplayMeshPreservingSourceMetrics();
 	    if (freed == 0)
 		continue;
-	    this->lastMeshBudgetFreedFullDetailBytes += freed;
-	    this->lastMeshBudgetEvictedFullDetailMeshCount++;
-	    this->lastMeshBudgetFinalResidentBytes =
-		this->lastMeshBudgetFinalResidentBytes > freed ?
-		this->lastMeshBudgetFinalResidentBytes - freed : 0;
+	    this->d->lastMeshBudgetFreedFullDetailBytes += freed;
+	    this->d->lastMeshBudgetEvictedFullDetailMeshCount++;
+	    this->d->lastMeshBudgetFinalResidentBytes =
+		this->d->lastMeshBudgetFinalResidentBytes > freed ?
+		this->d->lastMeshBudgetFinalResidentBytes - freed : 0;
 	}
     }
 
     if (evictDisplayPayloads &&
-	this->lastMeshBudgetFinalResidentBytes > maxBytes &&
-	this->viewAttachment->getViewLodState()) {
+	this->d->lastMeshBudgetFinalResidentBytes > maxBytes &&
+	this->d->viewAttachment->getViewLodState()) {
 	unsigned int evicted = 0;
-	size_t freed = this->viewAttachment->getViewLodState()->
+	size_t freed = this->d->viewAttachment->getViewLodState()->
 	    evictDisplayMeshPayloads(&evicted);
 	if (freed > 0) {
-	    this->lastMeshBudgetFreedDisplayBytes += freed;
-	    this->lastMeshBudgetEvictedDisplayMeshCount += evicted;
-	    this->lastMeshBudgetFinalResidentBytes =
-		this->lastMeshBudgetFinalResidentBytes > freed ?
-		this->lastMeshBudgetFinalResidentBytes - freed : 0;
+	    this->d->lastMeshBudgetFreedDisplayBytes += freed;
+	    this->d->lastMeshBudgetEvictedDisplayMeshCount += evicted;
+	    this->d->lastMeshBudgetFinalResidentBytes =
+		this->d->lastMeshBudgetFinalResidentBytes > freed ?
+		this->d->lastMeshBudgetFinalResidentBytes - freed : 0;
 	}
     }
 
@@ -3214,111 +3242,111 @@ BObolViewController::evictMeshPayloadsToBudget(
 size_t
 BObolViewController::enforceMeshResidencyBudget(void)
 {
-    if (!this->meshResidencyBudgetEnabled)
+    if (!this->d->meshResidencyBudgetEnabled)
 	return 0;
 
     return this->evictMeshPayloadsToBudget(
-	       this->maxResidentMeshBytes,
-	       this->meshResidencyEvictDisplayPayloads);
+	       this->d->maxResidentMeshBytes,
+	       this->d->meshResidencyEvictDisplayPayloads);
 }
 
 size_t
 BObolViewController::getLastMeshBudgetInitialResidentBytes(void) const
 {
-    return this->lastMeshBudgetInitialResidentBytes;
+    return this->d->lastMeshBudgetInitialResidentBytes;
 }
 
 size_t
 BObolViewController::getLastMeshBudgetFinalResidentBytes(void) const
 {
-    return this->lastMeshBudgetFinalResidentBytes;
+    return this->d->lastMeshBudgetFinalResidentBytes;
 }
 
 size_t
 BObolViewController::getLastMeshBudgetFreedResidentBytes(void) const
 {
-    return this->lastMeshBudgetInitialResidentBytes >
-	   this->lastMeshBudgetFinalResidentBytes ?
-	   this->lastMeshBudgetInitialResidentBytes -
-	   this->lastMeshBudgetFinalResidentBytes : 0;
+    return this->d->lastMeshBudgetInitialResidentBytes >
+	   this->d->lastMeshBudgetFinalResidentBytes ?
+	   this->d->lastMeshBudgetInitialResidentBytes -
+	   this->d->lastMeshBudgetFinalResidentBytes : 0;
 }
 
 size_t
 BObolViewController::getLastMeshBudgetFreedFullDetailBytes(void) const
 {
-    return this->lastMeshBudgetFreedFullDetailBytes;
+    return this->d->lastMeshBudgetFreedFullDetailBytes;
 }
 
 size_t
 BObolViewController::getLastMeshBudgetFreedDisplayBytes(void) const
 {
-    return this->lastMeshBudgetFreedDisplayBytes;
+    return this->d->lastMeshBudgetFreedDisplayBytes;
 }
 
 unsigned int
 BObolViewController::getLastMeshBudgetVisitedMeshCount(void) const
 {
-    return this->lastMeshBudgetVisitedMeshCount;
+    return this->d->lastMeshBudgetVisitedMeshCount;
 }
 
 unsigned int
 BObolViewController::getLastMeshBudgetEvictedFullDetailMeshCount(void) const
 {
-    return this->lastMeshBudgetEvictedFullDetailMeshCount;
+    return this->d->lastMeshBudgetEvictedFullDetailMeshCount;
 }
 
 unsigned int
 BObolViewController::getLastMeshBudgetEvictedDisplayMeshCount(void) const
 {
-    return this->lastMeshBudgetEvictedDisplayMeshCount;
+    return this->d->lastMeshBudgetEvictedDisplayMeshCount;
 }
 
 SbBool
 BObolViewController::hasPendingLodResults(void) const
 {
-    return this->lodResultsPending.load() != 0 ? TRUE : FALSE;
+    return this->d->lodResultsPending.load() != 0 ? TRUE : FALSE;
 }
 
 SbBool
 BObolViewController::hasPendingLodSubmissions(void) const
 {
-    return this->lodSubmissionPending;
+    return this->d->lodSubmissionPending;
 }
 
 size_t
 BObolViewController::processPendingLodResults(size_t maxResults,
 	uint64_t maxMicroseconds)
 {
-    if (!this->lodService)
+    if (!this->d->lodService)
 	return 0;
 
     const auto clear_lod_wakeup_if_idle = [this]() {
-	if (!this->progressiveProviders.empty() ||
-	    this->lodSubmissionPending ||
-	    this->lodResultsPending.load() != 0 ||
-	    (this->lodService &&
-	     this->lodService->queuedResultCountForDiagnostics() > 0))
+	if (!this->d->progressiveProviders.empty() ||
+	    this->d->lodSubmissionPending ||
+	    this->d->lodResultsPending.load() != 0 ||
+	    (this->d->lodService &&
+	     this->d->lodService->queuedResultCountForDiagnostics() > 0))
 	    return;
 
 	/* A result-ready callback may race this drain.  Clear first, then
 	 * recheck so a concurrent callback cannot lose its frame wakeup. */
 	this->clearProgressiveWorkPending();
-	if (this->lodSubmissionPending || this->lodResultsPending.load() != 0 ||
-	    (this->lodService &&
-	     this->lodService->queuedResultCountForDiagnostics() > 0))
+	if (this->d->lodSubmissionPending || this->d->lodResultsPending.load() != 0 ||
+	    (this->d->lodService &&
+	     this->d->lodService->queuedResultCountForDiagnostics() > 0))
 	    this->markProgressiveWorkPending();
     };
 
     if (!this->hasPendingLodResults() &&
-	this->lodService->queuedResultCountForDiagnostics() == 0) {
+	this->d->lodService->queuedResultCountForDiagnostics() == 0) {
 	clear_lod_wakeup_if_idle();
 	return 0;
     }
 
     if (maxMicroseconds == 0) {
-	(void)this->applyLodResults(this->lodService, maxResults);
+	(void)this->applyLodResults(this->d->lodService, maxResults);
 	clear_lod_wakeup_if_idle();
-	return this->lastLodResultCount;
+	return this->d->lastLodResultCount;
     }
 
     const int64_t start = bu_gettime();
@@ -3329,30 +3357,30 @@ BObolViewController::processPendingLodResults(size_t maxResults,
     unsigned int unmatched = 0;
     SbString diagnostics;
     while (maxResults == 0 || processed < maxResults) {
-	(void)this->applyLodResults(this->lodService, 1);
-	if (this->lastLodResultCount == 0)
+	(void)this->applyLodResults(this->d->lodService, 1);
+	if (this->d->lastLodResultCount == 0)
 	    break;
-	processed += this->lastLodResultCount;
-	matched += this->lastLodMatchedResultCount;
-	applied += this->lastLodAppliedResultCount;
-	rejected += this->lastLodRejectedResultCount;
-	unmatched += this->lastLodUnmatchedResultCount;
-	if (this->lastLodDiagnostics.getLength() > 0) {
+	processed += this->d->lastLodResultCount;
+	matched += this->d->lastLodMatchedResultCount;
+	applied += this->d->lastLodAppliedResultCount;
+	rejected += this->d->lastLodRejectedResultCount;
+	unmatched += this->d->lastLodUnmatchedResultCount;
+	if (this->d->lastLodDiagnostics.getLength() > 0) {
 	    if (diagnostics.getLength() > 0)
 		diagnostics += "\n";
-	    diagnostics += this->lastLodDiagnostics;
+	    diagnostics += this->d->lastLodDiagnostics;
 	}
 	const int64_t elapsed = bu_gettime() - start;
 	if (elapsed >= 0 &&
 	    static_cast<uint64_t>(elapsed) >= maxMicroseconds)
 	    break;
     }
-    this->lastLodResultCount = processed;
-    this->lastLodMatchedResultCount = matched;
-    this->lastLodAppliedResultCount = applied;
-    this->lastLodRejectedResultCount = rejected;
-    this->lastLodUnmatchedResultCount = unmatched;
-    this->lastLodDiagnostics = diagnostics;
+    this->d->lastLodResultCount = processed;
+    this->d->lastLodMatchedResultCount = matched;
+    this->d->lastLodAppliedResultCount = applied;
+    this->d->lastLodRejectedResultCount = rejected;
+    this->d->lastLodUnmatchedResultCount = unmatched;
+    this->d->lastLodDiagnostics = diagnostics;
 	clear_lod_wakeup_if_idle();
     return processed;
 }
@@ -3361,9 +3389,9 @@ int
 BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	int reset)
 {
-    if (!this->lodService || !this->lodService->isRunning())
+    if (!this->d->lodService || !this->d->lodService->isRunning())
 	return 0;
-    if (!this->activeCamera ||
+    if (!this->d->activeCamera ||
 	(!this->getSceneRoot() && !this->getRenderSceneRoot()))
 	return 0;
 
@@ -3373,33 +3401,33 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
     if (signature.getLength() == 0)
 	return 0;
 
-    if (this->lodLastSubmittedViewRevision == this->lodViewRevision &&
-	this->lodLastSubmittedPolicyRevision == this->lodPolicyRevision &&
-	bu_strcmp(this->lodLastSubmittedSourceSignature.getString(),
+    if (this->d->lodLastSubmittedViewRevision == this->d->lodViewRevision &&
+	this->d->lodLastSubmittedPolicyRevision == this->d->lodPolicyRevision &&
+	bu_strcmp(this->d->lodLastSubmittedSourceSignature.getString(),
 	       signature.getString()) == 0) {
-	if (this->lodSubmissionPending && this->lodActiveGeneration != 0)
-	    return this->submitLodRequests(this->lodService,
-		this->lodActiveGeneration, this->lodSubmissionRefreshMissing,
-		this->lodSubmissionReset);
+	if (this->d->lodSubmissionPending && this->d->lodActiveGeneration != 0)
+	    return this->submitLodRequests(this->d->lodService,
+		this->d->lodActiveGeneration, this->d->lodSubmissionRefreshMissing,
+		this->d->lodSubmissionReset);
 	return 0;
     }
 
-    if (this->lodActiveGeneration != 0)
+    if (this->d->lodActiveGeneration != 0)
 	this->cancelActiveLodGeneration();
 
-    uint64_t generation = this->lodService->beginGeneration();
-    this->lodSubmissionSourceIndex = 0;
-    this->lodSubmissionEntryOffset = 0;
-    this->lodSubmissionPending = TRUE;
-    this->lodSubmissionRefreshMissing = refreshMissing;
-    this->lodSubmissionReset = reset;
-    int submitted = this->submitLodRequests(this->lodService, generation,
+    uint64_t generation = this->d->lodService->beginGeneration();
+    this->d->lodSubmissionSourceIndex = 0;
+    this->d->lodSubmissionEntryOffset = 0;
+    this->d->lodSubmissionPending = TRUE;
+    this->d->lodSubmissionRefreshMissing = refreshMissing;
+    this->d->lodSubmissionReset = reset;
+    int submitted = this->submitLodRequests(this->d->lodService, generation,
 					    refreshMissing, reset);
     if (submitted >= 0) {
-	this->lodActiveGeneration = generation;
-	this->lodLastSubmittedViewRevision = this->lodViewRevision;
-	this->lodLastSubmittedPolicyRevision = this->lodPolicyRevision;
-	this->lodLastSubmittedSourceSignature = signature;
+	this->d->lodActiveGeneration = generation;
+	this->d->lodLastSubmittedViewRevision = this->d->lodViewRevision;
+	this->d->lodLastSubmittedPolicyRevision = this->d->lodPolicyRevision;
+	this->d->lodLastSubmittedSourceSignature = signature;
     }
 
     return submitted;
@@ -3412,62 +3440,62 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	int reset)
 {
     if (!service)
-	service = this->lodService;
+	service = this->d->lodService;
 
-    this->lastLodVisitedMeshCount = 0;
-    this->lastLodSubmittedTaskCount = 0;
-    this->lastLodSkippedMeshCount = 0;
-    this->lastLodDiagnostics = "";
+    this->d->lastLodVisitedMeshCount = 0;
+    this->d->lastLodSubmittedTaskCount = 0;
+    this->d->lastLodSkippedMeshCount = 0;
+    this->d->lastLodDiagnostics = "";
 
     if (!service || !service->isRunning()) {
-	this->lastLodDiagnostics = "LoD service is not running";
+	this->d->lastLodDiagnostics = "LoD service is not running";
 	return -1;
     }
 
     struct bv_view_info view = BV_VIEW_INFO_INIT;
     if (!this->getViewInfo(&view)) {
-	this->lastLodDiagnostics = "LoD submission requires an active camera";
+	this->d->lastLodDiagnostics = "LoD submission requires an active camera";
 	return -1;
     }
 
     if (!this->getSceneRoot() && !this->getRenderSceneRoot()) {
-	this->lastLodDiagnostics = "LoD submission requires a scene root";
+	this->d->lastLodDiagnostics = "LoD submission requires a scene root";
 	return -1;
     }
 
-    if (!this->lodSubmissionPending) {
-	this->lodSubmissionSourceIndex = 0;
-	this->lodSubmissionEntryOffset = 0;
-	this->lodSubmissionPending = TRUE;
-	this->lodSubmissionRefreshMissing = refreshMissing;
-	this->lodSubmissionReset = reset;
+    if (!this->d->lodSubmissionPending) {
+	this->d->lodSubmissionSourceIndex = 0;
+	this->d->lodSubmissionEntryOffset = 0;
+	this->d->lodSubmissionPending = TRUE;
+	this->d->lodSubmissionRefreshMissing = refreshMissing;
+	this->d->lodSubmissionReset = reset;
     }
 
     std::vector<SoBRLDatabaseSource *> sources =
 	controller_render_database_source_roots(this);
-    for (size_t i = this->lodSubmissionSourceIndex;
+    for (size_t i = this->d->lodSubmissionSourceIndex;
 	 i < sources.size();) {
 	const size_t capacity = service->availableResultTaskCapacity();
 	if (capacity < 3) {
-	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
+	    append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
 		sources[i] ? sources[i]->path.getValue() : SbString("<source>"),
 		"compact LoD submission requires three result slots for atomic AABB, OBB, and mesh stages");
 	    break;
 	}
 	SoBRLDatabaseSource *source = sources[i];
 	if (!source) {
-	    this->lodSubmissionSourceIndex = ++i;
-	    this->lodSubmissionEntryOffset = 0;
+	    this->d->lodSubmissionSourceIndex = ++i;
+	    this->d->lodSubmissionEntryOffset = 0;
 	    continue;
 	}
 
 	struct db_i *dbip = source->getDatabase();
 	if (!dbip) {
-	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
+	    append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
 					     source->path.getValue(),
 					     "database source has no database for LoD submission");
-	    this->lodSubmissionSourceIndex = ++i;
-	    this->lodSubmissionEntryOffset = 0;
+	    this->d->lodSubmissionSourceIndex = ++i;
+	    this->d->lodSubmissionEntryOffset = 0;
 	    continue;
 	}
 
@@ -3477,43 +3505,43 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 			   source->sourceRevision.getValue());
 	action.setViewInfo(&view);
 	action.setGeneration(generation);
-	action.setRevisions(this->lodViewRevision, this->lodPolicyRevision);
+	action.setRevisions(this->d->lodViewRevision, this->d->lodPolicyRevision);
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
-	action.setViewLodState(this->viewAttachment->getViewLodState());
+	action.setViewLodState(this->d->viewAttachment->getViewLodState());
 	action.setProxyStages(TRUE, TRUE);
-	action.setCompactEntryRange(this->lodSubmissionEntryOffset,
+	action.setCompactEntryRange(this->d->lodSubmissionEntryOffset,
 	    std::max(static_cast<size_t>(1), capacity / 3));
-	if (this->lodUseForcedLevel)
-	    action.setForcedLevel(this->lodForcedLevel);
+	if (this->d->lodUseForcedLevel)
+	    action.setForcedLevel(this->d->lodForcedLevel);
 	action.apply(source);
 
-	this->lastLodVisitedMeshCount += action.getVisitedMeshCount();
-	this->lastLodSubmittedTaskCount += action.getSubmittedTaskCount();
-	this->lastLodSkippedMeshCount += action.getSkippedMeshCount();
+	this->d->lastLodVisitedMeshCount += action.getVisitedMeshCount();
+	this->d->lastLodSubmittedTaskCount += action.getSubmittedTaskCount();
+	this->d->lastLodSkippedMeshCount += action.getSkippedMeshCount();
 	if (action.getDiagnostics().getLength() > 0)
-	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
+	    append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
 					     source->path.getValue(),
 					     action.getDiagnostics().getString());
 	if (action.hasDeferredCompactEntries()) {
-	    this->lodSubmissionEntryOffset = action.getCompactEntryNext();
-	    this->lodSubmissionSourceIndex = i;
+	    this->d->lodSubmissionEntryOffset = action.getCompactEntryNext();
+	    this->d->lodSubmissionSourceIndex = i;
 	    break;
 	}
-	this->lodSubmissionSourceIndex = ++i;
-	this->lodSubmissionEntryOffset = 0;
+	this->d->lodSubmissionSourceIndex = ++i;
+	this->d->lodSubmissionEntryOffset = 0;
     }
 
-    this->lodSubmissionPending =
-	this->lodSubmissionSourceIndex < sources.size() ? TRUE : FALSE;
-    if (this->lodSubmissionPending)
+    this->d->lodSubmissionPending =
+	this->d->lodSubmissionSourceIndex < sources.size() ? TRUE : FALSE;
+    if (this->d->lodSubmissionPending)
 	this->markProgressiveWorkPending();
 
-    if (this->lastLodSubmittedTaskCount > 0)
+    if (this->d->lastLodSubmittedTaskCount > 0)
 	this->requestRender("lod-submit");
 
     return size_to_int_saturated(
-	       static_cast<size_t>(this->lastLodSubmittedTaskCount));
+	       static_cast<size_t>(this->d->lastLodSubmittedTaskCount));
 }
 
 int
@@ -3521,17 +3549,17 @@ BObolViewController::applyLodResults(BObolLodService *service,
 				       size_t maxResults)
 {
     if (!service)
-	service = this->lodService;
+	service = this->d->lodService;
 
-    this->lastLodResultCount = 0;
-    this->lastLodMatchedResultCount = 0;
-    this->lastLodAppliedResultCount = 0;
-    this->lastLodRejectedResultCount = 0;
-    this->lastLodUnmatchedResultCount = 0;
-    this->lastLodDiagnostics = "";
+    this->d->lastLodResultCount = 0;
+    this->d->lastLodMatchedResultCount = 0;
+    this->d->lastLodAppliedResultCount = 0;
+    this->d->lastLodRejectedResultCount = 0;
+    this->d->lastLodUnmatchedResultCount = 0;
+    this->d->lastLodDiagnostics = "";
 
     if (!service) {
-	this->lastLodDiagnostics = "LoD service is not configured";
+	this->d->lastLodDiagnostics = "LoD service is not configured";
 	return -1;
     }
 
@@ -3539,24 +3567,24 @@ BObolViewController::applyLodResults(BObolLodService *service,
     if (!root)
 	root = this->getSceneRoot();
     if (!root) {
-	this->lastLodDiagnostics = "LoD result application requires a scene root";
+	this->d->lastLodDiagnostics = "LoD result application requires a scene root";
 	return -1;
     }
 
     std::vector<BObolLodResult> drained;
-    this->lastLodResultCount = service->drainResults(drained, maxResults);
-    this->lodResultsPending.store(
+    this->d->lastLodResultCount = service->drainResults(drained, maxResults);
+    this->d->lodResultsPending.store(
 	service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
-    if (this->lastLodResultCount == 0)
+    if (this->d->lastLodResultCount == 0)
 	return 0;
 
     SoBRLLodUpdateAction update;
-    update.setViewLodState(this->viewAttachment->getViewLodState());
+    update.setViewLodState(this->d->viewAttachment->getViewLodState());
     for (size_t i = 0; i < drained.size(); i++) {
-	if (drained[i].request.viewRevision != this->lodViewRevision ||
-	    drained[i].request.policyRevision != this->lodPolicyRevision) {
-	    this->lastLodRejectedResultCount++;
-	    append_controller_lod_diagnostic(this->lastLodDiagnostics,
+	if (drained[i].request.viewRevision != this->d->lodViewRevision ||
+	    drained[i].request.policyRevision != this->d->lodPolicyRevision) {
+	    this->d->lastLodRejectedResultCount++;
+	    append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
 					     drained[i].request.objectPath,
 					     "stale LoD result revision rejected");
 	    continue;
@@ -3565,108 +3593,108 @@ BObolViewController::applyLodResults(BObolLodService *service,
     }
 
     update.apply(root);
-    this->lastLodMatchedResultCount = update.getMatchedResultCount();
-    this->lastLodAppliedResultCount = update.getAppliedResultCount();
-    this->lastLodRejectedResultCount += update.getRejectedResultCount();
-    this->lastLodUnmatchedResultCount = update.getUnmatchedResultCount();
+    this->d->lastLodMatchedResultCount = update.getMatchedResultCount();
+    this->d->lastLodAppliedResultCount = update.getAppliedResultCount();
+    this->d->lastLodRejectedResultCount += update.getRejectedResultCount();
+    this->d->lastLodUnmatchedResultCount = update.getUnmatchedResultCount();
     if (update.getDiagnostics().getLength() > 0) {
-	if (this->lastLodDiagnostics.getLength() > 0)
-	    this->lastLodDiagnostics += "\n";
-	this->lastLodDiagnostics += update.getDiagnostics();
+	if (this->d->lastLodDiagnostics.getLength() > 0)
+	    this->d->lastLodDiagnostics += "\n";
+	this->d->lastLodDiagnostics += update.getDiagnostics();
     }
-    this->lodResultsPending.store(
+    this->d->lodResultsPending.store(
 	service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
 
-    if (this->lastLodAppliedResultCount > 0) {
+    if (this->d->lastLodAppliedResultCount > 0) {
 	this->requestRender("lod-result");
 	(void)this->enforceMeshResidencyBudget();
     }
 
     return size_to_int_saturated(
-	       static_cast<size_t>(this->lastLodAppliedResultCount));
+	       static_cast<size_t>(this->d->lastLodAppliedResultCount));
 }
 
 uint64_t
 BObolViewController::getLodViewRevision(void) const
 {
-    return this->lodViewRevision;
+    return this->d->lodViewRevision;
 }
 
 void
 BObolViewController::setLodPolicyRevision(uint64_t revision)
 {
     uint64_t newRevision = revision == 0 ? 1 : revision;
-    if (this->lodPolicyRevision == newRevision)
+    if (this->d->lodPolicyRevision == newRevision)
 	return;
-    this->lodPolicyRevision = newRevision;
+    this->d->lodPolicyRevision = newRevision;
     this->requestRender("lod-policy");
 }
 
 uint64_t
 BObolViewController::getLodPolicyRevision(void) const
 {
-    return this->lodPolicyRevision;
+    return this->d->lodPolicyRevision;
 }
 
 unsigned int
 BObolViewController::getLastLodVisitedMeshCount(void) const
 {
-    return this->lastLodVisitedMeshCount;
+    return this->d->lastLodVisitedMeshCount;
 }
 
 unsigned int
 BObolViewController::getLastLodSubmittedTaskCount(void) const
 {
-    return this->lastLodSubmittedTaskCount;
+    return this->d->lastLodSubmittedTaskCount;
 }
 
 unsigned int
 BObolViewController::getLastLodSkippedMeshCount(void) const
 {
-    return this->lastLodSkippedMeshCount;
+    return this->d->lastLodSkippedMeshCount;
 }
 
 size_t
 BObolViewController::getLastLodResultCount(void) const
 {
-    return this->lastLodResultCount;
+    return this->d->lastLodResultCount;
 }
 
 unsigned int
 BObolViewController::getLastLodMatchedResultCount(void) const
 {
-    return this->lastLodMatchedResultCount;
+    return this->d->lastLodMatchedResultCount;
 }
 
 unsigned int
 BObolViewController::getLastLodAppliedResultCount(void) const
 {
-    return this->lastLodAppliedResultCount;
+    return this->d->lastLodAppliedResultCount;
 }
 
 unsigned int
 BObolViewController::getLastLodRejectedResultCount(void) const
 {
-    return this->lastLodRejectedResultCount;
+    return this->d->lastLodRejectedResultCount;
 }
 
 unsigned int
 BObolViewController::getLastLodUnmatchedResultCount(void) const
 {
-    return this->lastLodUnmatchedResultCount;
+    return this->d->lastLodUnmatchedResultCount;
 }
 
 const SbString &
 BObolViewController::getLastLodDiagnostics(void) const
 {
-    return this->lastLodDiagnostics;
+    return this->d->lastLodDiagnostics;
 }
 
 size_t
 BObolViewController::getActiveLodMeshPayloadCount(void) const
 {
     const BObolViewLodState *state =
-	this->viewAttachment->getViewLodState();
+	this->d->viewAttachment->getViewLodState();
     return state ? state->meshPayloadCount() + state->cadMeshPayloadCount() : 0;
 }
 
@@ -3674,7 +3702,7 @@ size_t
 BObolViewController::getActiveLodProxyPayloadCount(int proxyKind) const
 {
     const BObolViewLodState *state =
-	this->viewAttachment->getViewLodState();
+	this->d->viewAttachment->getViewLodState();
     return state ? state->proxyPayloadCount(proxyKind) +
 	   state->cadProxyPayloadCount(proxyKind) : 0;
 }
@@ -3682,103 +3710,103 @@ BObolViewController::getActiveLodProxyPayloadCount(int proxyKind) const
 size_t
 BObolViewController::getActiveLodCadPayloadCount(void) const
 {
-    return this->viewAttachment->getViewLodState() ? this->viewAttachment->getViewLodState()->cadPayloadCount() : 0;
+    return this->d->viewAttachment->getViewLodState() ? this->d->viewAttachment->getViewLodState()->cadPayloadCount() : 0;
 }
 
-SoBRLSceneController *
+BObolSceneController *
 BObolViewController::getSceneController(void)
 {
-    return &this->sceneController;
+    return &this->d->sceneController;
 }
 
-const SoBRLSceneController *
+const BObolSceneController *
 BObolViewController::getSceneController(void) const
 {
-    return &this->sceneController;
+    return &this->d->sceneController;
 }
 
 BObolFeatureStore &
 BObolViewController::features(void)
 {
-    return *this->featureStore;
+    return *this->d->featureStore;
 }
 
 const BObolFeatureStore &
 BObolViewController::features(void) const
 {
-    return *this->featureStore;
+    return *this->d->featureStore;
 }
 
 BObolPolygonStore &
 BObolViewController::polygons(void)
 {
-    return *this->polygonStore;
+    return *this->d->polygonStore;
 }
 
 const BObolPolygonStore &
 BObolViewController::polygons(void) const
 {
-    return *this->polygonStore;
+    return *this->d->polygonStore;
 }
 
 BObolSelectionStore &
 BObolViewController::selection(void)
 {
-    return *this->selectionStore;
+    return *this->d->selectionStore;
 }
 
 const BObolSelectionStore &
 BObolViewController::selection(void) const
 {
-    return *this->selectionStore;
+    return *this->d->selectionStore;
 }
 
 SoViewport *
 BObolViewController::getViewport(void)
 {
-    return this->viewport;
+    return this->d->viewport;
 }
 
 const SoViewport *
 BObolViewController::getViewport(void) const
 {
-    return this->viewport;
+    return this->d->viewport;
 }
 
 void
 BObolViewController::setRenderContextManager(SoDB::ContextManager *manager)
 {
-    SoGLRenderAction *action = this->renderManager ?
-	this->renderManager->getGLRenderAction() : NULL;
+    SoGLRenderAction *action = this->d->renderManager ?
+	this->d->renderManager->getGLRenderAction() : NULL;
     if (!action || action->getContextManager() == manager)
 	return;
     /* The cached image renderer owns provider-specific context state.  Drop
      * it while the old provider is still alive rather than retaining a stale
      * provider through a host switch. */
-    delete this->imageRenderer;
-    this->imageRenderer = NULL;
-    this->imageRendererManager = NULL;
+    delete this->d->imageRenderer;
+    this->d->imageRenderer = NULL;
+    this->d->imageRendererManager = NULL;
     action->setContextManager(manager);
 }
 
 SoDB::ContextManager *
 BObolViewController::getRenderContextManager(void) const
 {
-    SoGLRenderAction *action = this->renderManager ?
-	this->renderManager->getGLRenderAction() : NULL;
+    SoGLRenderAction *action = this->d->renderManager ?
+	this->d->renderManager->getGLRenderAction() : NULL;
     return action ? action->getContextManager() : NULL;
 }
 
 SoRenderManager *
 BObolViewController::getRenderManager(void)
 {
-    return this->renderManager;
+    return this->d->renderManager;
 }
 
 const SoRenderManager *
 BObolViewController::getRenderManager(void) const
 {
-    return this->renderManager;
+    return this->d->renderManager;
 }
 
 static int
@@ -4011,15 +4039,15 @@ BObolViewController::removeHUDLabelOverlay(const char *labelId)
 SoGroup *
 BObolViewController::findGroup(const char *groupPath) const
 {
-    return this->sceneController.findGroup(groupPath);
+    return this->d->sceneController.findGroup(groupPath);
 }
 
 SoGroup *
 BObolViewController::ensureGroup(const char *groupPath)
 {
-    const uint64_t revision = this->sceneController.getStructuralRevision();
-    SoGroup *group = this->sceneController.ensureGroup(groupPath);
-    if (group && this->sceneController.getStructuralRevision() != revision)
+    const uint64_t revision = this->d->sceneController.getStructuralRevision();
+    SoGroup *group = this->d->sceneController.ensureGroup(groupPath);
+    if (group && this->d->sceneController.getStructuralRevision() != revision)
 	this->requestRender("scene-group");
     return group;
 }
@@ -4032,7 +4060,7 @@ BObolViewController::setGroupDrawIntent(const char *groupPath,
 	SbBool overlayIntent,
 	uint32_t revalidationRevision)
 {
-    const int changed = this->sceneController.setGroupDrawIntent(groupPath,
+    const int changed = this->d->sceneController.setGroupDrawIntent(groupPath,
 			intentPath, drawMode, fallbackDrawMode, overlayIntent,
 			revalidationRevision);
     if (changed > 0)
@@ -4054,7 +4082,7 @@ BObolViewController::setGroupDisplayState(const char *groupPath,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
 {
-    const int changed = this->sceneController.setGroupDisplayState(
+    const int changed = this->d->sceneController.setGroupDisplayState(
 			    groupPath, visible, selected, highlighted, lineStyle,
 			    lineWidth, transparency, colorOverride, color,
 			    materialColorValid, materialColor, materialRevision);
@@ -4068,7 +4096,7 @@ BObolViewController::renameGroup(const char *groupPath,
 				   const char *newLeafName)
 {
     const int changed =
-	this->sceneController.renameGroup(groupPath, newLeafName);
+	this->d->sceneController.renameGroup(groupPath, newLeafName);
     if (changed > 0)
 	this->requestRender("scene-group");
     return changed;
@@ -4079,7 +4107,7 @@ BObolViewController::appendChildToGroup(const char *groupPath,
 	SoNode *child)
 {
     const int changed =
-	this->sceneController.appendChildToGroup(groupPath, child);
+	this->d->sceneController.appendChildToGroup(groupPath, child);
     if (changed > 0)
 	this->requestRender("scene-group");
     return changed;
@@ -4090,7 +4118,7 @@ BObolViewController::removeChildFromGroup(const char *groupPath,
 	SoNode *child)
 {
     const int changed =
-	this->sceneController.removeChildFromGroup(groupPath, child);
+	this->d->sceneController.removeChildFromGroup(groupPath, child);
     if (changed > 0)
 	this->requestRender("scene-group");
     return changed;
@@ -4101,7 +4129,7 @@ BObolViewController::eraseGroupSubpath(const char *parentGroupPath,
 	const char *subpath)
 {
     const int changed =
-	this->sceneController.eraseGroupSubpath(parentGroupPath, subpath);
+	this->d->sceneController.eraseGroupSubpath(parentGroupPath, subpath);
     if (changed > 0)
 	this->requestRender("scene-group");
     return changed;
@@ -4110,7 +4138,7 @@ BObolViewController::eraseGroupSubpath(const char *parentGroupPath,
 int
 BObolViewController::removeGroup(const char *groupPath)
 {
-    const int removed = this->sceneController.removeGroup(groupPath);
+    const int removed = this->d->sceneController.removeGroup(groupPath);
     if (removed > 0)
 	this->requestRender("scene-group");
     return removed;
@@ -4119,7 +4147,7 @@ BObolViewController::removeGroup(const char *groupPath)
 int
 BObolViewController::clearGroup(const char *groupPath)
 {
-    const int removed = this->sceneController.clearGroup(groupPath);
+    const int removed = this->d->sceneController.clearGroup(groupPath);
     if (removed > 0)
 	this->requestRender("scene-group");
     return removed;
@@ -4128,33 +4156,33 @@ BObolViewController::clearGroup(const char *groupPath)
 int
 BObolViewController::getGroupChildCount(const char *groupPath) const
 {
-    return this->sceneController.getGroupChildCount(groupPath);
+    return this->d->sceneController.getGroupChildCount(groupPath);
 }
 
 int
 BObolViewController::getGroupDescendantGroupCount(
     const char *groupPath) const
 {
-    return this->sceneController.getGroupDescendantGroupCount(groupPath);
+    return this->d->sceneController.getGroupDescendantGroupCount(groupPath);
 }
 
 int
 BObolViewController::getGroupDatabaseSourceCount(
     const char *groupPath) const
 {
-    return this->sceneController.getGroupDatabaseSourceCount(groupPath);
+    return this->d->sceneController.getGroupDatabaseSourceCount(groupPath);
 }
 
 SoNode *
 BObolViewController::findShape(const char *shapePath) const
 {
-    return this->sceneController.findShape(shapePath);
+    return this->d->sceneController.findShape(shapePath);
 }
 
 SoGroup *
 BObolViewController::findShapeParent(const char *shapePath) const
 {
-    return this->sceneController.findShapeParent(shapePath);
+    return this->d->sceneController.findShapeParent(shapePath);
 }
 
 int
@@ -4162,7 +4190,7 @@ BObolViewController::moveShapeToGroup(const char *shapePath,
 					const char *groupPath)
 {
     const int changed =
-	this->sceneController.moveShapeToGroup(shapePath, groupPath);
+	this->d->sceneController.moveShapeToGroup(shapePath, groupPath);
     if (changed > 0)
 	this->requestRender("scene-shape");
     return changed;
@@ -4171,7 +4199,7 @@ BObolViewController::moveShapeToGroup(const char *shapePath,
 int
 BObolViewController::removeShape(const char *shapePath)
 {
-    const int removed = this->sceneController.removeShape(shapePath);
+    const int removed = this->d->sceneController.removeShape(shapePath);
     if (removed > 0)
 	this->requestRender("scene-shape");
     return removed;
@@ -4184,7 +4212,7 @@ BObolViewController::setShapeDrawState(const char *shapePath,
 	SbBool overlayIntent,
 	SbBool hudIntent)
 {
-    const int changed = this->sceneController.setShapeDrawState(shapePath,
+    const int changed = this->d->sceneController.setShapeDrawState(shapePath,
 			drawMode, databaseIntent, overlayIntent, hudIntent);
     if (changed > 0)
 	this->requestRender("scene-shape");
@@ -4205,7 +4233,7 @@ BObolViewController::setShapeDisplayState(const char *shapePath,
 	const SbColor &materialColor,
 	uint32_t materialRevision)
 {
-    const int changed = this->sceneController.setShapeDisplayState(
+    const int changed = this->d->sceneController.setShapeDisplayState(
 			    shapePath, visible, selected, highlighted, lineStyle, lineWidth,
 			    transparency, colorOverride, color, materialColorValid,
 			    materialColor, materialRevision);
@@ -4223,7 +4251,7 @@ BObolViewController::setShapePlacementState(const char *shapePath,
 	SbBool drawSizeValid,
 	float drawSize)
 {
-    const int changed = this->sceneController.setShapePlacementState(
+    const int changed = this->d->sceneController.setShapePlacementState(
 			    shapePath, drawMatrixValid, drawMatrix, drawCenterValid,
 			    drawCenter, drawSizeValid, drawSize);
     if (changed > 0)
@@ -4247,7 +4275,7 @@ BObolViewController::setShapeSourceState(const char *shapePath,
 	SbBool ownerSourceStale,
 	uint32_t ownerStaleReason)
 {
-    const int changed = this->sceneController.setShapeSourceState(
+    const int changed = this->d->sceneController.setShapeSourceState(
 			    shapePath, ownerSourcePath, ownerSourceRevision,
 			    ownerInputsRevision, ownerViewRevision, ownerRealizedRevision,
 			    ownerRealizedSourceRevision, ownerRealizedInputsRevision,
@@ -4265,7 +4293,7 @@ BObolViewController::replaceDatabaseSource(const char *sourcePath,
 	int drawMode,
 	uint32_t sourceRevision)
 {
-    int changed = this->sceneController.replaceDatabaseSource(sourcePath,
+    int changed = this->d->sceneController.replaceDatabaseSource(sourcePath,
 		  dbip, drawMode, sourceRevision);
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -4283,7 +4311,7 @@ BObolViewController::replaceDatabaseSourceInstance(
     int drawMode,
     uint32_t sourceRevision)
 {
-    int changed = this->sceneController.replaceDatabaseSourceInstance(
+    int changed = this->d->sceneController.replaceDatabaseSourceInstance(
 		      sourceInstanceKey, sourcePath, dbip, drawMode, sourceRevision);
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -4311,7 +4339,7 @@ BObolViewController::setDatabaseSourceState(const char *sourcePath,
 	uint32_t materialRevision)
 {
     SoBRLDatabaseSource *source =
-	this->sceneController.findDatabaseSource(sourcePath);
+	this->d->sceneController.findDatabaseSource(sourcePath);
     const uint32_t previousSourceRevision = source ?
 	source->sourceRevision.getValue() : 0;
     const uint32_t previousInputsRevision = source ?
@@ -4319,13 +4347,13 @@ BObolViewController::setDatabaseSourceState(const char *sourcePath,
     const SbBool previousStale = source ? source->stale.getValue() : FALSE;
     const uint32_t previousStaleReason = source ?
 	source->staleReason.getValue() : 0;
-    const int changed = this->sceneController.setDatabaseSourceState(
+    const int changed = this->d->sceneController.setDatabaseSourceState(
 			    sourcePath, sourceRevisionValid, sourceRevision, inputsRevision,
 			    visible, selected, highlighted, lineStyle, lineWidth, transparency,
 			    colorOverride, color, materialColorValid, materialColor,
 			    materialRevision);
     if (changed > 0) {
-	source = this->sceneController.findDatabaseSource(sourcePath);
+	source = this->d->sceneController.findDatabaseSource(sourcePath);
 	if (!source ||
 	    source->sourceRevision.getValue() != previousSourceRevision ||
 	    source->inputsRevision.getValue() != previousInputsRevision ||
@@ -4357,7 +4385,7 @@ BObolViewController::setDatabaseSourceInstanceState(
     uint32_t materialRevision)
 {
     SoBRLDatabaseSource *source =
-	this->sceneController.findDatabaseSourceInstance(sourceInstanceKey);
+	this->d->sceneController.findDatabaseSourceInstance(sourceInstanceKey);
     const uint32_t previousSourceRevision = source ?
 	source->sourceRevision.getValue() : 0;
     const uint32_t previousInputsRevision = source ?
@@ -4365,13 +4393,13 @@ BObolViewController::setDatabaseSourceInstanceState(
     const SbBool previousStale = source ? source->stale.getValue() : FALSE;
     const uint32_t previousStaleReason = source ?
 	source->staleReason.getValue() : 0;
-    const int changed = this->sceneController.setDatabaseSourceInstanceState(
+    const int changed = this->d->sceneController.setDatabaseSourceInstanceState(
 			    sourceInstanceKey, sourceRevisionValid, sourceRevision,
 			    inputsRevision, visible, selected, highlighted, lineStyle, lineWidth,
 			    transparency, colorOverride, color, materialColorValid,
 			    materialColor, materialRevision);
     if (changed > 0) {
-	source = this->sceneController.findDatabaseSourceInstance(
+	source = this->d->sceneController.findDatabaseSourceInstance(
 		 sourceInstanceKey);
 	if (!source ||
 	    source->sourceRevision.getValue() != previousSourceRevision ||
@@ -4389,7 +4417,7 @@ int
 BObolViewController::setDatabaseSourceDisplayPatch(const char *sourcePath,
 	const BObolDatabaseSourceDisplayPatch &patch)
 {
-    const int changed = this->sceneController.setDatabaseSourceDisplayPatch(
+    const int changed = this->d->sceneController.setDatabaseSourceDisplayPatch(
 			    sourcePath, patch);
     if (changed > 0) {
 	this->clearRtPickCaches();
@@ -4404,7 +4432,7 @@ BObolViewController::setDatabaseSourceInstanceDisplayPatch(
     const BObolDatabaseSourceDisplayPatch &patch)
 {
     const int changed =
-	this->sceneController.setDatabaseSourceInstanceDisplayPatch(
+	this->d->sceneController.setDatabaseSourceInstanceDisplayPatch(
 	    sourceInstanceKey, patch);
     if (changed > 0) {
 	this->clearRtPickCaches();
@@ -4417,7 +4445,7 @@ int
 BObolViewController::setDatabaseSourceDisplayName(const char *sourcePath,
 	const char *displayName)
 {
-    const int changed = this->sceneController.setDatabaseSourceDisplayName(
+    const int changed = this->d->sceneController.setDatabaseSourceDisplayName(
 			    sourcePath, displayName);
     if (changed > 0) {
 	this->clearRtPickCaches();
@@ -4432,7 +4460,7 @@ BObolViewController::setDatabaseSourceInstanceDisplayName(
     const char *displayName)
 {
     const int changed =
-	this->sceneController.setDatabaseSourceInstanceDisplayName(
+	this->d->sceneController.setDatabaseSourceInstanceDisplayName(
 	    sourceInstanceKey, displayName);
     if (changed > 0) {
 	this->clearRtPickCaches();
@@ -4447,7 +4475,7 @@ BObolViewController::setDatabaseSourceBoundsState(const char *sourcePath,
 	const SbVec3f &boundsMin,
 	const SbVec3f &boundsMax)
 {
-    const int changed = this->sceneController.setDatabaseSourceBoundsState(
+    const int changed = this->d->sceneController.setDatabaseSourceBoundsState(
 			    sourcePath, boundsValid, boundsMin, boundsMax);
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -4465,7 +4493,7 @@ BObolViewController::setDatabaseSourceInstanceBoundsState(
     const SbVec3f &boundsMax)
 {
     const int changed =
-	this->sceneController.setDatabaseSourceInstanceBoundsState(
+	this->d->sceneController.setDatabaseSourceInstanceBoundsState(
 	    sourceInstanceKey, boundsValid, boundsMin, boundsMax);
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -4480,7 +4508,7 @@ BObolViewController::setDatabaseSourceMaterialPolicy(
     const char *sourcePath,
     int materialPolicy)
 {
-    const int changed = this->sceneController.setDatabaseSourceMaterialPolicy(
+    const int changed = this->d->sceneController.setDatabaseSourceMaterialPolicy(
 			    sourcePath, materialPolicy);
     if (changed > 0) {
 	this->clearRtPickCaches();
@@ -4495,7 +4523,7 @@ BObolViewController::setDatabaseSourceInstanceMaterialPolicy(
     int materialPolicy)
 {
     const int changed =
-	this->sceneController.setDatabaseSourceInstanceMaterialPolicy(
+	this->d->sceneController.setDatabaseSourceInstanceMaterialPolicy(
 	    sourceInstanceKey, materialPolicy);
     if (changed > 0) {
 	this->clearRtPickCaches();
@@ -4508,7 +4536,7 @@ int
 BObolViewController::markDatabaseSourceStale(const char *sourcePath,
 	uint32_t staleReason)
 {
-    const int changed = this->sceneController.markDatabaseSourceStale(
+    const int changed = this->d->sceneController.markDatabaseSourceStale(
 			    sourcePath, staleReason);
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -4523,7 +4551,7 @@ BObolViewController::markDatabaseSourceInstanceStale(
     const char *sourceInstanceKey,
     uint32_t staleReason)
 {
-    const int changed = this->sceneController.markDatabaseSourceInstanceStale(
+    const int changed = this->d->sceneController.markDatabaseSourceInstanceStale(
 			    sourceInstanceKey, staleReason);
     if (changed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -4536,7 +4564,7 @@ BObolViewController::markDatabaseSourceInstanceStale(
 int
 BObolViewController::removeDatabaseSource(const char *sourcePath)
 {
-    int removed = this->sceneController.removeDatabaseSource(sourcePath);
+    int removed = this->d->sceneController.removeDatabaseSource(sourcePath);
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
@@ -4549,7 +4577,7 @@ int
 BObolViewController::removeDatabaseSourceInstance(
     const char *sourceInstanceKey)
 {
-    int removed = this->sceneController.removeDatabaseSourceInstance(
+    int removed = this->d->sceneController.removeDatabaseSourceInstance(
 		      sourceInstanceKey);
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();
@@ -4563,7 +4591,7 @@ int
 BObolViewController::moveDatabaseSourceToGroup(const char *sourcePath,
 	const char *groupPath)
 {
-    int moved = this->sceneController.moveDatabaseSourceToGroup(sourcePath,
+    int moved = this->d->sceneController.moveDatabaseSourceToGroup(sourcePath,
 		groupPath);
     if (moved > 0) {
 	this->clearRtPickCaches();
@@ -4577,7 +4605,7 @@ BObolViewController::moveDatabaseSourceInstanceToGroup(
     const char *sourceInstanceKey,
     const char *groupPath)
 {
-    int moved = this->sceneController.moveDatabaseSourceInstanceToGroup(
+    int moved = this->d->sceneController.moveDatabaseSourceInstanceToGroup(
 		    sourceInstanceKey, groupPath);
     if (moved > 0) {
 	this->clearRtPickCaches();
@@ -4589,7 +4617,7 @@ BObolViewController::moveDatabaseSourceInstanceToGroup(
 int
 BObolViewController::clearDatabaseSources(void)
 {
-    int removed = this->sceneController.clearDatabaseSources();
+    int removed = this->d->sceneController.clearDatabaseSources();
     if (removed > 0) {
 	this->invalidateDatabaseSourceLodState();
 	this->clearRtPickCaches();
@@ -4601,13 +4629,13 @@ BObolViewController::clearDatabaseSources(void)
 SoBRLDatabaseSource *
 BObolViewController::getDatabaseSource(int index) const
 {
-    return this->sceneController.getDatabaseSource(index);
+    return this->d->sceneController.getDatabaseSource(index);
 }
 
 int
 BObolViewController::getDatabaseSourceCount(void) const
 {
-    return this->sceneController.getDatabaseSourceCount();
+    return this->d->sceneController.getDatabaseSourceCount();
 }
 
 std::vector<SoBRLDatabaseSource *>
@@ -4620,7 +4648,7 @@ SoBRLDatabaseSource *
 BObolViewController::findDatabaseSourceInstance(
     const char *sourceInstanceKey) const
 {
-    return this->sceneController.findDatabaseSourceInstance(
+    return this->d->sceneController.findDatabaseSourceInstance(
 	       sourceInstanceKey);
 }
 
@@ -4628,31 +4656,31 @@ SbBool
 BObolViewController::getDatabaseSourceSummary(int index,
 	BObolDatabaseSourceSummary &summary) const
 {
-    return this->sceneController.getDatabaseSourceSummary(index, summary);
+    return this->d->sceneController.getDatabaseSourceSummary(index, summary);
 }
 
 void
 BObolViewController::syncRenderManager(void)
 {
-    this->renderManager->setSceneGraph(this->getRenderRoot());
-    this->renderManager->setCamera(this->activeCamera);
-    this->renderManager->setViewportRegion(this->viewportRegion);
+    this->d->renderManager->setSceneGraph(this->getRenderRoot());
+    this->d->renderManager->setCamera(this->d->activeCamera);
+    this->d->renderManager->setViewportRegion(this->d->viewportRegion);
 }
 
 void
 BObolViewController::advanceLodViewRevision(void)
 {
-    this->lodViewRevision++;
-    if (this->lodViewRevision == 0)
-	this->lodViewRevision++;
+    this->d->lodViewRevision++;
+    if (this->d->lodViewRevision == 0)
+	this->d->lodViewRevision++;
 }
 
 void
 BObolViewController::advanceLodPolicyRevision(void)
 {
-    this->lodPolicyRevision++;
-    if (this->lodPolicyRevision == 0)
-	this->lodPolicyRevision++;
+    this->d->lodPolicyRevision++;
+    if (this->d->lodPolicyRevision == 0)
+	this->d->lodPolicyRevision++;
 }
 
 void
@@ -4662,10 +4690,10 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
     SbBool haveCamera = this->getViewInfo(&view);
     SbString signature = controller_lod_view_signature(view, haveCamera);
 
-    if (bu_strcmp(this->lodViewSignature.getString(), signature.getString()) == 0)
+    if (bu_strcmp(this->d->lodViewSignature.getString(), signature.getString()) == 0)
 	return;
 
-    this->lodViewSignature = signature;
+    this->d->lodViewSignature = signature;
     if (advanceOnChange) {
 	this->cancelActiveLodGeneration();
 	this->advanceLodViewRevision();

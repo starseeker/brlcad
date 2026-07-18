@@ -91,7 +91,7 @@ ged_rtwizard_core(struct ged *gedp, int argc, const char *argv[])
     char **gd_rt_cmd = NULL;
     int gd_rt_cmd_len = 0;
     int ret = BRLCAD_OK;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
 
     const char *bin;
     char rtscript[256] = {0};

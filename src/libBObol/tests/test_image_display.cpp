@@ -10,6 +10,9 @@
 #include "bu/app.h"
 
 #include "BObol.h"
+#include "BObol/BImagePlane.h"
+#include "BObol/BImageSource.h"
+#include "BObol/BViewportImage.h"
 
 #include "bu/log.h"
 #include "imgstream/stream.h"

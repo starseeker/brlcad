@@ -39,7 +39,7 @@
 
 
 void
-go_draw(void *view_ctx)
+go_draw(struct ged_view_context *view_ctx)
 {
     if (!view_ctx || !current_top || !current_top->to_gedp)
 	return;
@@ -127,7 +127,8 @@ to_edit_redraw(struct ged *gedp,
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     size_t vi;
     for (vi = 0; vi < BU_PTBL_LEN(views); vi++) {
-	void *view_ctx = BU_PTBL_GET(views, vi);
+	struct ged_view_context *view_ctx =
+	    (struct ged_view_context *)BU_PTBL_GET(views, vi);
 	ged_draw_foreach_view_db_object_record(view_ctx, to_edit_redraw_record_cb, &d);
     }
 

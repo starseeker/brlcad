@@ -210,7 +210,7 @@ rect_rt(struct ged *gedp, const struct bv_interactive_rect_state *rect, int port
 
 
 static int
-rect_zoom(struct ged *gedp, void *view_ctx, struct bv_interactive_rect_state *rect)
+rect_zoom(struct ged *gedp, struct ged_view_context *view_ctx, struct bv_interactive_rect_state *rect)
 {
     fastf_t width, height;
     fastf_t sf;
@@ -293,7 +293,7 @@ ged_rect_core(struct ged *gedp,
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* initialize result */

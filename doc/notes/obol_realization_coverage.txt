@@ -6,16 +6,17 @@ Scope
 
 This table tracks the production database object coverage expected from the
 Obol realization path.  The current libBObol path realizes BRL-CAD .g
-hierarchies through SoBRLDatabaseSource and SoBRLSceneController, preserving
+hierarchies through SoBRLDatabaseSource and BObolSceneController, preserving
 database path identity on Obol shape nodes.  Realized database leaf instances
 are local-space Obol geometry plus OpenInventor transforms: libBObol uses
-`db_walk_tree` for path/material/transform state, refetches each unique
-primitive with an identity matrix on geometry-cache misses, builds one shared
-local `SoBRLVListShape` or `SoBRLMeshShape`, and gives each visible leaf a
-per-instance metadata/draw-state shape referencing that shared geometry.  Wire
-output is converted from rt_obj_plot bg/rt_vlist data into SoBRLVListShape only
-at the realization boundary.  Shaded output is represented by SoBRLMeshShape
-using direct mesh importers where available and rt_obj_tess fallback otherwise.
+`db_walk_tree_leaf_instances` for path/material/transform state.  Its callback
+runs before librt imports the leaf, so libBObol performs one owned local-space
+primitive import on a geometry-cache miss, builds one shared local
+`SoBRLVListShape` or `SoBRLMeshShape`, and gives each visible leaf a per-instance
+metadata/draw-state shape referencing that shared geometry.  Wire output is
+converted from rt_obj_plot bg/rt_vlist data into SoBRLVListShape only at the
+realization boundary.  Shaded output is represented by SoBRLMeshShape using
+direct mesh importers where available and rt_obj_tess fallback otherwise.
 
 The required hierarchy smoke models are:
 
@@ -160,8 +161,8 @@ source-backed mesh exact-ray helper.  The same gate verifies qtcad explicit
 ray picks reuse the controller-owned librt exact-pick cache through the shared
 BObolViewController RT exact-ray helper, merge display/RT hits in
 ray-distance order, and that QgSelectRayFilter tries the Obol ray helper
-before its legacy BSG/RT fallback even when the filter's legacy `dbip` field
-is unset.
+as its authoritative retained-scene path.  Its `dbip` field is used only for
+exact librt refinement; it does not select an alternate scene owner.
 test_qtcad_obol_measure and test_qtcad_obol_snap verify migrated-content
 measurement overlays and database snap refinement run through Obol without
 opening the legacy display manager.  The snap gate also verifies source-backed
@@ -176,8 +177,8 @@ records likewise preserve source-backed edit-intent metadata through the shared
 controller export helper, and qtcad exact export/measure/snap/pick tests verify
 pending submitted source-detail work is surfaced separately from immediate
 misses.  The pick gate also verifies the qtcad point, rectangle, and ray
-selection filters skip legacy fallback selection while source-backed exact
-pick detail is pending.
+selection filters report pending source-backed exact detail without selecting
+through a second scene path.
 The LoD service gate verifies controller
 source-backed exact reload submission resolves the matching database source in
 multi-source views and consumes the corresponding database-scoped result.
@@ -256,10 +257,11 @@ entry point, `rt_eval_wireframe(vhead, vlfree, dbip, path, tol, ttol, opts)`,
 which accepts full path/name style input and emits RT vlist line commands.
 Options flags can force the historical Big-E path for comparison/fallback or
 explicitly select the symbolic boolweave default.
-GED still calls the libBObol compatibility adapter today because existing
-Obol/GED publication consumes source-local BG line-command arrays, but
-correctness work belongs behind the librt vlist API.  The default evaluator is
-now the symbolic boolweave path.  It owns per-call librt resource/vlist state
+libBObol database sources now call that librt API directly and convert its RT
+vlist output into the retained Obol line shape.  The former public
+`BEvaluatedWire` array adapter and its duplicate conversion path are gone;
+correctness work remains behind the librt vlist API.  The default evaluator is
+the symbolic boolweave path.  It owns per-call librt resource/vlist state
 rather than using `rt_uniresource`, exports typed line records only at the API
 boundary, and aggregates per-region results in deterministic ordinal order
 with debug names retained for diagnostics.  Dynamic per-region worker
@@ -295,46 +297,24 @@ there is no curved tessellation sub-identity to preserve today.  Any future
 curved sub-object tool must either define persistent IDs or request exact
 full-detail representation before it becomes supported.
 
-Librt Import Lifetime Guard
----------------------------
+Librt Leaf-Import Ownership Boundary
+------------------------------------
 
-As of 2026-07-03, libBObol no longer builds drawable geometry from
-transformed `db_walk_tree` callback internals.  The callback remains the source
-of instance path, inherited material/region state, and accumulated member
-matrix, but geometry-cache misses call `rt_db_get_internal` with an identity
-matrix and validate the refetched primitive payload magic before calling librt
-primitive plot/tessellation/indexed-face-set methods.  If the refetch fails
-validation, the source records an explicit invalid-payload diagnostic and skips
-the leaf.
+The former defensive second primitive import is gone.  Drawing realization
+uses the public `db_walk_tree_leaf_instances` traversal, whose callback receives
+the full path, accumulated tree state, and leaf directory entry before librt
+imports a primitive.  On a cache miss libBObol performs the only primitive
+import, with no instance matrix, owns that `rt_db_internal` until geometry has
+been copied into the cache, and releases it on every exit path.  The accumulated
+`tsp->ts_mat` is retained separately as occurrence placement, including nested
+and repeated instances.
 
-This guard was added for a real `box.s` failure observed while running
-`ged_test_obol_draw_sync`.  The direct failure was an ARB internal whose first
-payload word had been overwritten with the allocator free pattern after
-`rt_db_get_internal5` freed its external object buffer.  A non-invasive lldb
-conditional breakpoint in the passing guarded test confirmed the underlying
-alias still occurs: at `src/librt/db5_io.c:1002`,
-`ext.ext_buf == ip->idb_ptr` for `dp->d_namep == "box.s"` before
-`bu_free_external(&ext)`.  The stack was
-`db_walk_tree -> db_recurse2 -> rt_db_get_internal -> rt_db_get_internal5`,
-with the leaf callback target being
-`SoBRLDatabaseSource::realizeDatabaseWireframe`.
-
-The inspected librt source does not make that alias a valid ARB import
-contract.  `db_get_external` allocates the external object buffer, and
-`rt_arb_import5` allocates a separate `struct rt_arb_internal` with
-`BU_ALLOC` before copying network doubles from the raw body.  The observed
-alias is with the full external object allocation, not merely with the
-`raw.body.ext_buf` view into that external record.  If the alias is
-reproducible outside Obol, the next root-cause pass should trace allocator
-ownership/free history for that external allocation and should not assume the
-libBObol callback held an internal past its valid lifetime.  Vanilla draw
-does not expose the same crash pattern because it consumes callback internals
-immediately into legacy bv objects instead of repeatedly synchronizing
-database-source Obol nodes, but the low-level import alias would still be
-invalid if reached.  The Obol local-geometry boundary sidesteps that poison for
-drawable geometry, but `db_walk_tree` still imports each instance before
-invoking the callback.  A future librt pre-import instance traversal API would
-remove that remaining overhead without changing the Obol scene graph shape.
+This boundary was introduced after a transformed callback internal was observed
+to alias storage released by the traversal import path.  It removes that
+callback-internal lifetime from the contract instead of attempting to validate
+or repair a borrowed internal.  Payload magic is still checked as input
+validation; a successfully imported but invalid payload is owned and freed
+before the leaf is rejected with a diagnostic.
 
 Coverage Table
 --------------

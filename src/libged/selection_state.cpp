@@ -940,7 +940,7 @@ struct ged_selection_native_view_snapshot_ctx {
 
 
 static int
-ged_selection_native_view_snapshot_cb(void *view_ctx,
+ged_selection_native_view_snapshot_cb(struct ged_view_context *view_ctx,
 				      const char *path,
 				      void *data)
 {
@@ -966,8 +966,9 @@ ged_selection_native_view_snapshot(struct ged *gedp,
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
-	void *view_ctx = (void *)BU_PTBL_GET(views, i);
-	ged_draw_view_context_selection_path_foreach(view_ctx,
+	struct ged_view_context *view_ctx =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
+	ged_view_selection_visit(view_ctx,
 		ged_selection_native_view_snapshot_cb, &ctx);
     }
 }
@@ -991,11 +992,12 @@ ged_selection_native_add_path_to_views(
 
     struct bu_ptbl *views = ged_view_set_views_ctx(ctx->gedp);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
-	void *view_ctx = (void *)BU_PTBL_GET(views, i);
+	struct ged_view_context *view_ctx =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
 	if (!view_ctx)
 	    continue;
-	if (ged_draw_view_context_selection_add_path(view_ctx,
-		GED_DRAW_VIEW_SELECTION_SELECTED_PATH, path.c_str()) > 0)
+	if (ged_selection_add_path(view_ctx,
+		GED_SELECTION_SELECTED_PATH, path.c_str()) > 0)
 	    (*ctx->new_selection)[view_ctx].insert(path);
     }
 }
@@ -1014,8 +1016,9 @@ ged_selection_native_draw_sync(struct ged *gedp,
 
     struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
     for (size_t i = 0; views && i < BU_PTBL_LEN(views); i++) {
-	void *view_ctx = (void *)BU_PTBL_GET(views, i);
-	ged_draw_view_context_selection_clear(view_ctx);
+	struct ged_view_context *view_ctx =
+	    (struct ged_view_context *)BU_PTBL_GET(views, i);
+	ged_view_selection_clear(view_ctx);
     }
 
     struct ged_selection_native_draw_sync_ctx ctx;

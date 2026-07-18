@@ -58,9 +58,9 @@ enum qg_polygon_update_mode {
 	QG_POLYGON_UPDATE_PT_APPEND = 5
 };
 
-typedef ged_draw_view_polygon_ref qg_polygon_ref;
-#define QG_POLYGON_REF_NULL_INIT GED_DRAW_VIEW_POLYGON_REF_NULL_INIT
-typedef struct ged_draw_view_polygon_record qg_polygon_record;
+typedef ged_polygon_ref qg_polygon_ref;
+#define QG_POLYGON_REF_NULL_INIT GED_POLYGON_REF_NULL_INIT
+typedef struct ged_polygon_record qg_polygon_record;
 
 // Filters designed for specific editing modes
 class QTCAD_EXPORT QgPolyFilter : public QgViewFilter {

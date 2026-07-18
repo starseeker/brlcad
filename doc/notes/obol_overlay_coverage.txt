@@ -60,10 +60,9 @@ The work grid is not modeled as transformed database-line geometry.  It is a
 view aid owned by `SoBRLGrid`: visual lines are HUD overlay layers and grid
 snap is semantic model/view state.  See `doc/notes/obol_grid_snap.txt`.
 
-The public direct diagnostic callback API remains as an external compatibility
-surface for consumers without a command scene.  No in-tree graphical
-application registers it.  QGED's former private line-layer/HUD adapter was
-removed after the supported producers moved to command-scene ownership.
+QGED's former private line-layer/HUD callback adapter was removed after the
+supported producers moved to command-scene ownership.  There is no retained
+external diagnostic callback surface alongside command-result scenes.
 
 Command-Result Contract
 -----------------------

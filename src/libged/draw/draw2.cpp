@@ -47,6 +47,8 @@
 #include "ged/database.h"
 #include "ged/view.h"
 
+#include "../ged_draw_private.h"
+
 static const int DRAW_MODE_UNSET = -1;
 
 static int
@@ -302,7 +304,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
      * view.  In order to set up the correct default views, we need to know
      * if a specific view has in fact been specified.  We do a preliminary
      * option check to figure this out */
-    void *cv = ged_view_active_ctx(gedp);
+    struct ged_view_context *cv = ged_view_active_ctx(gedp);
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
     struct bu_opt_desc vd[2];
     BU_OPT(vd[0],  "V", "view",    "name",      &bu_opt_vls, &cvls,   "specify view to draw on");
@@ -334,7 +336,8 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     if (!bu_vls_strlen(&cvls) && (!cv || ged_view_context_is_independent(cv))) {
 	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	for (size_t i = 0; i < BU_PTBL_LEN(views); i++) {
-	    void *bv = (void *)BU_PTBL_GET(views, i);
+	    struct ged_view_context *bv =
+		(struct ged_view_context *)BU_PTBL_GET(views, i);
 	    if (!ged_view_context_is_independent(bv)) {
 		cv = bv;
 		break;
@@ -494,7 +497,7 @@ ged_redraw2_core(struct ged *gedp, int argc, const char *argv[])
 
     /* redraw may operate on a specific user specified view, or on
      * all views (default) */
-    void *cv = NULL;
+    struct ged_view_context *cv = NULL;
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
     struct bu_opt_desc vd[2];
     BU_OPT(vd[0],  "V", "view",    "name",      &bu_opt_vls, &cvls,   "specify view to draw on");

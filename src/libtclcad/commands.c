@@ -94,7 +94,7 @@
 #include "./draw_view_move_helpers.h"
 
 static bobol_display_endpoint_t *
-tclcad_commands_endpoint(const void *view_ctx)
+tclcad_commands_endpoint(const struct ged_view_context *view_ctx)
 {
     return ged_view_context_display_endpoint_get(view_ctx);
 }
@@ -103,7 +103,7 @@ tclcad_commands_endpoint(const void *view_ctx)
  * normalize and deliver events.  In particular, the WGL host intentionally
  * does not claim INPUT until its native adapter exists. */
 static int
-tclcad_commands_endpoint_input_enabled(const void *view_ctx)
+tclcad_commands_endpoint_input_enabled(const struct ged_view_context *view_ctx)
 {
     bobol_display_endpoint_t *endpoint =
 	tclcad_commands_endpoint(view_ctx);
@@ -112,7 +112,7 @@ tclcad_commands_endpoint_input_enabled(const void *view_ctx)
 }
 
 static int
-tclcad_commands_endpoint_dimension_get(const void *view_ctx,
+tclcad_commands_endpoint_dimension_get(const struct ged_view_context *view_ctx,
 	const char *name)
 {
     bobol_display_endpoint_t *endpoint = tclcad_commands_endpoint(view_ctx);
@@ -126,7 +126,7 @@ tclcad_commands_endpoint_dimension_get(const void *view_ctx,
 }
 
 static void
-tclcad_commands_dimensions_sync(void *view_ctx)
+tclcad_commands_dimensions_sync(struct ged_view_context *view_ctx)
 {
     int width = tclcad_commands_endpoint_dimension_get(view_ctx,
 	"endpoint.width");
@@ -137,7 +137,7 @@ tclcad_commands_dimensions_sync(void *view_ctx)
 }
 
 static int
-tclcad_commands_width(const void *view_ctx)
+tclcad_commands_width(const struct ged_view_context *view_ctx)
 {
     int width = tclcad_commands_endpoint_dimension_get(view_ctx,
 	"endpoint.width");
@@ -146,7 +146,7 @@ tclcad_commands_width(const void *view_ctx)
 }
 
 static int
-tclcad_commands_height(const void *view_ctx)
+tclcad_commands_height(const struct ged_view_context *view_ctx)
 {
     int height = tclcad_commands_endpoint_dimension_get(view_ctx,
 	"endpoint.height");
@@ -155,7 +155,7 @@ tclcad_commands_height(const void *view_ctx)
 }
 
 static int
-tclcad_commands_endpoint_bool_get(const void *view_ctx, const char *name,
+tclcad_commands_endpoint_bool_get(const struct ged_view_context *view_ctx, const char *name,
 	int *value)
 {
     bobol_display_endpoint_t *endpoint =
@@ -172,7 +172,7 @@ tclcad_commands_endpoint_bool_get(const void *view_ctx, const char *name,
 }
 
 static int
-tclcad_commands_endpoint_bool_set(void *view_ctx, const char *name, int value)
+tclcad_commands_endpoint_bool_set(struct ged_view_context *view_ctx, const char *name, int value)
 {
     bobol_display_endpoint_t *endpoint =
 	tclcad_commands_endpoint(view_ctx);
@@ -189,7 +189,7 @@ static int
 tclcad_obol_input_action(void *user_data, BObolInputAction action,
 	const BObolInputEvent *event)
 {
-    void *view_ctx = user_data;
+    struct ged_view_context *view_ctx = user_data;
     if (!view_ctx || !event || event->type != BOBOL_INPUT_KEY_PRESS)
 	return 0;
 
@@ -224,7 +224,7 @@ tclcad_obol_input_action(void *user_data, BObolInputAction action,
 }
 
 static const char *
-tclcad_commands_view_name(const void *view_ctx)
+tclcad_commands_view_name(const struct ged_view_context *view_ctx)
 {
     const char *name = bv_context_name_get(
 	    (const struct bv_context *)view_ctx);
@@ -241,19 +241,19 @@ tclcad_commands_sync_dimensions(void *target_ctx, void *source_ctx)
 }
 
 static struct bv *
-tclcad_commands_bv(void *view_ctx)
+tclcad_commands_bv(struct ged_view_context *view_ctx)
 {
     return bv_context_view((struct bv_context *)view_ctx);
 }
 
 static const struct bv *
-tclcad_commands_bv_const(const void *view_ctx)
+tclcad_commands_bv_const(const struct ged_view_context *view_ctx)
 {
     return bv_context_view_const((const struct bv_context *)view_ctx);
 }
 
 static unsigned long long
-tclcad_commands_prepare_snap(void *view_ctx)
+tclcad_commands_prepare_snap(struct ged_view_context *view_ctx)
 {
     struct bv *view = tclcad_commands_bv(view_ctx);
     int flags;
@@ -267,7 +267,7 @@ tclcad_commands_prepare_snap(void *view_ctx)
 }
 
 static int
-tclcad_commands_snap_point_2d(void *view_ctx, fastf_t *vx, fastf_t *vy,
+tclcad_commands_snap_point_2d(struct ged_view_context *view_ctx, fastf_t *vx, fastf_t *vy,
 	unsigned long long kinds)
 {
     return (kinds & BV_SNAP_KIND_GRID) ?
@@ -1252,7 +1252,7 @@ free_path_edit_params(struct bu_hash_tbl *t)
 
 
 static void
-tclcad_view_host_destroy(struct tclcad_obj *top, void *view_ctx)
+tclcad_view_host_destroy(struct tclcad_obj *top, struct ged_view_context *view_ctx)
 {
     if (!top || !top->to_gedp || !view_ctx)
 	return;
@@ -1621,7 +1621,7 @@ to_configure(struct ged *gedp,
 	char cdimX[32];
 	char cdimY[32];
 	const char *av[5];
-	void *active_view_ctx = ged_view_active_ctx(gedp);
+	struct ged_view_context *active_view_ctx = ged_view_active_ctx(gedp);
 
 	snprintf(cdimX, 32, "%d", tclcad_commands_width(gdvp));
 	snprintf(cdimY, 32, "%d", tclcad_commands_height(gdvp));
@@ -1907,7 +1907,7 @@ to_copy(struct ged *gedp,
 int
 go_data_move(Tcl_Interp *UNUSED(interp),
 	struct ged *gedp,
-	void *draw_view_ctx,
+	struct ged_view_context *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -2165,7 +2165,7 @@ to_data_move_func(struct ged *gedp,
 	VMOVE(_cpts[dindex], mpoint);
 
 	    fastf_t _half = 1.0;
-	    ged_draw_view_context_data_axes_half_size_get(gdvp, feature_name, &_half);
+	    ged_annotation_data_axes_half_size_get(gdvp, feature_name, &_half);
 
 	    int _color[3]; int _lw, _vis;
 	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
@@ -2190,7 +2190,7 @@ to_data_move_func(struct ged *gedp,
 	VMOVE(_cpts[dindex], mpoint);
 
 	    fastf_t _half = 1.0;
-	    ged_draw_view_context_data_axes_half_size_get(gdvp, feature_name, &_half);
+	    ged_annotation_data_axes_half_size_get(gdvp, feature_name, &_half);
 
 	    int _color[3]; int _lw, _vis;
 	    _tclcad_draw_view_data_axes_style_read(gdvp, feature_name, _color, &_lw, &_vis);
@@ -2322,7 +2322,7 @@ bad:
 int
 go_data_move_object_mode(Tcl_Interp *UNUSED(interp),
 	struct ged *gedp,
-	void *draw_view_ctx,
+	struct ged_view_context *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -2411,7 +2411,7 @@ to_data_move_object_mode_func(struct ged *gedp,
 int
 go_data_move_point_mode(Tcl_Interp *UNUSED(interp),
 	struct ged *gedp,
-	void *draw_view_ctx,
+	struct ged_view_context *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -2499,7 +2499,7 @@ to_data_move_point_mode_func(struct ged *gedp,
 
 int
 go_data_pick(struct ged *gedp,
-	void *draw_view_ctx,
+	struct ged_view_context *draw_view_ctx,
 	int argc,
 	const char *argv[],
 	const char *usage)
@@ -3592,12 +3592,13 @@ to_delete_view(struct ged *gedp,
 	ged_view_active_ctx_set(gedp, NULL);
 	struct bu_ptbl *views = ged_view_set_views_ctx(gedp);
 	if (views && BU_PTBL_LEN(views))
-	    ged_view_active_ctx_set(gedp, BU_PTBL_GET(views, 0));
+	    ged_view_active_ctx_set(gedp,
+		(struct ged_view_context *)BU_PTBL_GET(views, 0));
     }
 
     /* The fbserv bridge is session-owned.  Keep its single capture provider
      * on the active surviving endpoint after any pane is removed. */
-    void *active_view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *active_view_ctx = ged_view_active_ctx(gedp);
     if (active_view_ctx)
 	(void)to_open_fbs(active_view_ctx, current_top->to_interp);
 
@@ -3811,8 +3812,8 @@ to_idle_mode(struct ged *gedp,
 
     mode = tclcad_view_polygon_mode_from_view_ctx(gdvp);
 
-    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_view_context_lod_policy_get(&lod_policy, gdvp) &&
+    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_source_lod_policy_get(&lod_policy, gdvp) &&
 	    lod_policy.csg_enabled &&
 	    lod_policy.zoom_refresh &&
 	    mode == TCLCAD_SCALE_MODE)
@@ -4583,7 +4584,7 @@ to_move_pnt_common(struct ged *gedp,
 }
 
 static int
-tclcad_view_host_open(void *view_ctx, struct tclcad_view_data *tvd,
+tclcad_view_host_open(struct ged_view_context *view_ctx, struct tclcad_view_data *tvd,
 	Tcl_Interp *interp, int argc, const char *argv[], struct bu_vls *result)
 {
     if (!view_ctx || !tvd || !interp || argc < 3 || !argv)
@@ -4697,9 +4698,9 @@ to_new_view(struct ged *gedp,
 	const char *usage,
 	int UNUSED(maxargs))
 {
-    void *view_set_ctx = NULL;
-    void *active_view_ctx = NULL;
-    void *new_view_ctx = NULL;
+    struct ged_view_set *view_set_ctx = NULL;
+    struct ged_view_context *active_view_ctx = NULL;
+    struct ged_view_context *new_view_ctx = NULL;
     int reuse_active_view = 0;
     static const int name_index = 1;
     const char *type = NULL;
@@ -4782,11 +4783,11 @@ to_new_view(struct ged *gedp,
 	return BRLCAD_ERROR;
     }
 
-    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
-    if (ged_draw_view_context_lod_policy_get(&lod_policy, new_view_ctx)) {
+    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    if (ged_draw_source_lod_policy_get(&lod_policy, new_view_ctx)) {
 	lod_policy.point_scale = 1.0;
 	lod_policy.curve_scale = 1.0;
-	ged_draw_view_context_lod_policy_apply(new_view_ctx, &lod_policy);
+	ged_draw_source_lod_policy_apply(new_view_ctx, &lod_policy);
     }
 
     /* Set default bindings */
@@ -5038,7 +5039,7 @@ to_paint_rect_area(struct ged *gedp,
 
 
 static int
-tclcad_commands_capture_rgb(struct ged *gedp, void *view_ctx,
+tclcad_commands_capture_rgb(struct ged *gedp, struct ged_view_context *view_ctx,
 	unsigned char **pixels, unsigned int *width, unsigned int *height)
 {
     if (!gedp || !view_ctx || !pixels || !width || !height)

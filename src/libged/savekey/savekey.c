@@ -68,7 +68,7 @@ ged_savekey_core(struct ged *gedp, int argc, const char *argv[])
     mat_t view2model;
     vect_t eye_model;
     vect_t temp;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     static const char *usage = "file [time]";
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);

@@ -42,16 +42,16 @@
 static int _sg_erase_path(struct ged *gedp, const char *path);
 static int _sg_erase_all_paths(struct ged *gedp, const char *path);
 static int _sg_erase_path_scoped(struct ged *gedp, const char *path,
-				 void *view_ctx, int mode);
+				 struct ged_view_context *view_ctx, int mode);
 static int _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
-				      void *view_ctx, int mode);
+				      struct ged_view_context *view_ctx, int mode);
 static int _sg_erase_nonroot_component_scoped(struct ged *gedp,
 					      const char *name,
-					      void *view_ctx,
+					      struct ged_view_context *view_ctx,
 					      int mode);
 static int _sg_erase_component_scoped(struct ged *gedp,
 				      const char *name,
-				      void *view_ctx,
+				      struct ged_view_context *view_ctx,
 				      int mode);
 
 
@@ -64,7 +64,7 @@ _sg_erase_path(struct ged *gedp, const char *path)
 
 static int
 _sg_erase_path_scoped(struct ged *gedp, const char *path,
-		      void *view_ctx, int mode)
+		      struct ged_view_context *view_ctx, int mode)
 {
     return ged_draw_source_erase_path_in_active_scope(gedp, path, view_ctx,
 	    mode);
@@ -88,7 +88,7 @@ _sg_erase_all_paths(struct ged *gedp, const char *path)
 
 static int
 _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
-			   void *view_ctx, int mode)
+			   struct ged_view_context *view_ctx, int mode)
 {
     return ged_draw_source_erase_path_prefix_in_active_scope(gedp, path,
 	    view_ctx, mode);
@@ -98,7 +98,7 @@ _sg_erase_all_paths_scoped(struct ged *gedp, const char *path,
 static int
 _sg_erase_component_scoped_impl(struct ged *gedp,
 				const char *name,
-				void *view_ctx,
+				struct ged_view_context *view_ctx,
 				int mode,
 				int nonroot_only)
 {
@@ -113,7 +113,7 @@ _sg_erase_component_scoped_impl(struct ged *gedp,
 static int
 _sg_erase_nonroot_component_scoped(struct ged *gedp,
 				   const char *name,
-				   void *view_ctx,
+				   struct ged_view_context *view_ctx,
 				   int mode)
 {
     return _sg_erase_component_scoped_impl(gedp, name, view_ctx, mode, 1);
@@ -123,7 +123,7 @@ _sg_erase_nonroot_component_scoped(struct ged *gedp,
 static int
 _sg_erase_component_scoped(struct ged *gedp,
 			   const char *name,
-			   void *view_ctx,
+			   struct ged_view_context *view_ctx,
 			   int mode)
 {
     return _sg_erase_component_scoped_impl(gedp, name, view_ctx, mode, 0);
@@ -174,7 +174,7 @@ ged_draw_erase_path_prefix_string(struct ged *gedp, const char *path)
 int
 ged_draw_erase_path_string_scoped(struct ged *gedp,
 				  const char *path,
-				  void *view_ctx,
+				  struct ged_view_context *view_ctx,
 				  int mode)
 {
     if (!gedp || !path)
@@ -191,7 +191,7 @@ ged_draw_erase_path_string_scoped(struct ged *gedp,
 int
 ged_draw_erase_path_prefix_string_scoped(struct ged *gedp,
 					 const char *path,
-					 void *view_ctx,
+					 struct ged_view_context *view_ctx,
 					 int mode)
 {
     if (!gedp || !path)
@@ -208,7 +208,7 @@ ged_draw_erase_path_prefix_string_scoped(struct ged *gedp,
 int
 ged_draw_erase_nonroot_component_string_scoped(struct ged *gedp,
 					       const char *name,
-					       void *view_ctx,
+					       struct ged_view_context *view_ctx,
 					       int mode)
 {
     if (!gedp || !name)
@@ -220,7 +220,7 @@ ged_draw_erase_nonroot_component_string_scoped(struct ged *gedp,
 int
 ged_draw_erase_component_string_scoped(struct ged *gedp,
 				       const char *name,
-				       void *view_ctx,
+				       struct ged_view_context *view_ctx,
 				       int mode)
 {
     if (!gedp || !name)
@@ -335,7 +335,7 @@ ged_draw_clear(struct ged *gedp)
 
 
 int
-ged_draw_clear_view(struct ged *gedp, void *view_ctx)
+ged_draw_clear_view(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     if (!gedp)
 	return 0;

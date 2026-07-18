@@ -94,7 +94,7 @@ lint_data::plot_publish(const char *name)
     if (!do_plot || !gedp || !name)
 	return;
 
-    struct ged_draw_view_feature_style style = GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style = GED_VIEW_FEATURE_STYLE_INIT;
     unsigned char rgb[3] = {255, 255, 0};
     if (color)
 	bu_color_to_rgb_chars(color, rgb);

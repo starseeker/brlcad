@@ -10,6 +10,7 @@
 #include "bu/str.h"
 
 #include "BObol.h"
+#include "BObol/BRealizeAction.h"
 
 #include "bu/app.h"
 #include "bu/file.h"

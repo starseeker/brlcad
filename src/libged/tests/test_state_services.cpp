@@ -6155,7 +6155,7 @@ test_draw(struct ged *gedp)
 	  "retained draw state must contain shapes after draw");
     CHECK(ged_draw_scene_revision(gedp) > 0,
 	  "draw scene revision must advance after draw");
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     CHECK(view_ctx != NULL,
 	  "draw test must have an active GED view context");
     CHECK(ged_draw_path_state(gedp, view_ctx, "all.g", -1) == 1,

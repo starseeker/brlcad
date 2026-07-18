@@ -1699,10 +1699,10 @@ mged_zoom(struct mged_state *s, double val)
     }
 
     ret = TCL_OK;
-    ged_draw_view_lod_policy lod_policy = BV_LOD_POLICY_INIT;
+    ged_draw_source_lod_policy lod_policy = BV_LOD_POLICY_INIT;
     void *active_view = ged_view_active_ctx(s->gedp);
     if (active_view &&
-	ged_draw_view_context_lod_policy_get(&lod_policy, active_view) &&
+	ged_draw_source_lod_policy_get(&lod_policy, active_view) &&
 	lod_policy.csg_enabled && lod_policy.zoom_refresh) {
 	ret = redraw_visible_objects(s);
     }

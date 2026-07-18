@@ -43,7 +43,7 @@ static void establish_perspective(const struct bu_structparse *, const char *, v
 static void nmg_eu_dist_set(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_coords(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_dirty_flag(const struct bu_structparse *, const char *, void *, const char *, void *);
-static void set_perspective_policy(void *, double);
+static void set_perspective_policy(struct ged_view_context *, double);
 static void set_rotate_about(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void set_transform_policy(const struct bu_structparse *, const char *, void *, const char *, void *);
 static void toggle_perspective(const struct bu_structparse *, const char *, void *, const char *, void *);
@@ -393,7 +393,7 @@ void
 set_absolute_view_tran(struct mged_state *s)
 {
     mat_t model2view;
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
     bv_model2view_get(model2view, view);
@@ -412,7 +412,7 @@ set_absolute_model_tran(struct mged_state *s)
     point_t diff;
     mat_t view_center;
     fastf_t view_scale;
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
     bv_center_mat_get(view_center, view);
@@ -431,7 +431,7 @@ set_absolute_model_tran(struct mged_state *s)
  * live Obol controller.  MGED's historical -1 sentinel maps to the canonical
  * orthographic value, zero. */
 static void
-set_perspective_policy(void *view_ctx, double perspective)
+set_perspective_policy(struct ged_view_context *view_ctx, double perspective)
 {
     if (!view_ctx)
 	return;
@@ -461,7 +461,7 @@ set_perspective(const struct bu_structparse *sdp,
 	mged_variables->mv_perspective_mode = 0;
 
     /* keep view feature in sync */
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     set_perspective_policy(view_ctx, mged_variables->mv_perspective);
 
     set_dirty_flag(sdp, name, base, value, data);
@@ -481,7 +481,7 @@ establish_perspective(const struct bu_structparse *sdp,
 	perspective_table[perspective_angle] : -1;
 
     /* keep view feature in sync */
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     set_perspective_policy(view_ctx, mged_variables->mv_perspective);
 
     set_dirty_flag(sdp, name, base, value, data);
@@ -521,7 +521,7 @@ toggle_perspective(const struct bu_structparse *sdp,
     mged_variables->mv_perspective = perspective_table[perspective_angle];
 
     /* keep view feature in sync */
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     set_perspective_policy(view_ctx, mged_variables->mv_perspective);
 
     set_dirty_flag(sdp, name, base, value, data);
@@ -537,7 +537,7 @@ set_coords(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     bv_coord_set(view, mged_variables->mv_coords);
 }
@@ -552,7 +552,7 @@ set_rotate_about(const struct bu_structparse *UNUSED(sdp),
 {
     struct mged_state *s = (struct mged_state *)data;
     MGED_CK_STATE(s);
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
     bv_rotate_about_set(view, mged_variables->mv_rotate_about);
 }

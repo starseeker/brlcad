@@ -127,7 +127,7 @@ main(int ac, char *av[])
     ged_exec(gedp, 2, draw_av);
 
     /* Obtain the default view. */
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     ASSERT(v != NULL);
 
     if (!v) {
@@ -138,29 +138,29 @@ main(int ac, char *av[])
     /* ------------------------------------------------------------------
      * Test 1: selection lifecycle round-trip
      * ------------------------------------------------------------------ */
-    ASSERT(ged_draw_view_context_selection_count(v) == 0);
+    ASSERT(ged_view_selection_count(v) == 0);
 
     /* ------------------------------------------------------------------
      * Test 2: pick then add to selection
      * ------------------------------------------------------------------ */
     int cx = bv_width_get(DRAW_TEST_BV_CONST(v)) / 2;
     int cy = bv_height_get(DRAW_TEST_BV_CONST(v)) / 2;
-    struct ged_draw_pick_result *pr =
-	ged_draw_view_context_pick_point(v, cx, cy, 1);
-    if (pr && ged_draw_pick_result_count(pr) > 0) {
+    struct ged_pick_result *pr =
+	ged_pick_point(v, cx, cy, 1);
+    if (pr && ged_pick_result_count(pr) > 0) {
 	struct selected_path_state path_state = {0, std::string()};
-	ASSERT(ged_draw_view_context_selection_set_pick_result(v, pr,
+	ASSERT(ged_view_selection_set_pick(v, pr,
 		    selection_path_callback, &path_state));
 	ASSERT(path_state.count > 0);
 	ASSERT(!path_state.last_path.empty());
-	ASSERT(ged_draw_view_context_selection_count(v) == 1);
+	ASSERT(ged_view_selection_count(v) == 1);
     }
 
     /* Clear and verify */
-    ASSERT(ged_draw_view_context_selection_clear(v));
-    ASSERT(ged_draw_view_context_selection_count(v) == 0);
+    ASSERT(ged_view_selection_clear(v));
+    ASSERT(ged_view_selection_count(v) == 0);
 
-    ged_draw_pick_result_free(pr);
+    ged_pick_result_free(pr);
 
     ged_close(gedp);
 

@@ -49,7 +49,7 @@ ged_model2view_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     bv_model2view_get(model2view,
 	    bv_context_view_const((const struct bv_context *)view_ctx));
 

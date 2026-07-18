@@ -179,11 +179,11 @@ mged_rubber_band_state_sync(struct mged_state *s)
 {
     int line_style;
     static const char name[] = "_faceplate/rubber_band";
-    void *view_ctx = view_state->vs_gvp;
+    struct ged_view_context *view_ctx = view_state->vs_gvp;
 
     if ((!rubber_band->rb_active && !rubber_band->rb_draw) ||
 	(ZERO(rubber_band->rb_width) && ZERO(rubber_band->rb_height))) {
-	(void)ged_draw_view_context_hud_lines_replace(view_ctx, name,
+	(void)ged_annotation_hud_lines_replace(view_ctx, name,
 		NULL, NULL, 0, NULL);
 	return;
     }
@@ -218,8 +218,8 @@ mged_rubber_band_state_sync(struct mged_state *s)
 	GED_DRAW_VIEW_LINE_MOVE, GED_DRAW_VIEW_LINE_DRAW,
 	GED_DRAW_VIEW_LINE_MOVE, GED_DRAW_VIEW_LINE_DRAW
     };
-    struct ged_draw_view_feature_style style =
-	GED_DRAW_VIEW_FEATURE_STYLE_INIT;
+    struct ged_view_feature_style style =
+	GED_VIEW_FEATURE_STYLE_INIT;
     style.visible = 1;
     style.selectable = 0;
     style.color_valid = 1;
@@ -227,7 +227,7 @@ mged_rubber_band_state_sync(struct mged_state *s)
     style.line_width = rubber_band->rb_linewidth > 0 ?
 	rubber_band->rb_linewidth : 1;
     style.line_style = line_style;
-    (void)ged_draw_view_context_hud_lines_replace(view_ctx, name,
+    (void)ged_annotation_hud_lines_replace(view_ctx, name,
 	(const point_t *)points, cmds, 8, &style);
 }
 

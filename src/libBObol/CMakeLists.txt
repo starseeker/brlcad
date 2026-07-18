@@ -9,7 +9,6 @@ set(
   draw_cache.cpp
   edit_preview.cpp
   evaluated_points.cpp
-  evaluated_wire.cpp
   export_action.cpp
   framebuffer.cpp
   grid.cpp
@@ -85,10 +84,12 @@ if(HIDE_INTERNAL_SYMBOLS)
   endif(TARGET libBObol-obj)
 endif(HIDE_INTERNAL_SYMBOLS)
 
+include(${CMAKE_SOURCE_DIR}/include/BObol/api_tiers.cmake)
 add_subdirectory(tests)
 
 cmakefiles(
   CMakeLists.txt
+  check_public_symbols.cmake
   adc.cpp
   axes.cpp
   cad_assembly.cpp
@@ -100,7 +101,6 @@ cmakefiles(
   draw_cache.cpp
   edit_preview.cpp
   evaluated_points.cpp
-  evaluated_wire.cpp
   export_action.cpp
   framebuffer.cpp
   grid.cpp

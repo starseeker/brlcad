@@ -35,6 +35,7 @@
 #include "bu/vls.h"
 #include "rt/search.h"
 #include "rt/wdb.h" // for struct rt_wdb
+#include "ged/view_types.h"
 
 
 #ifndef GED_EXPORT
@@ -53,7 +54,7 @@
 /* GED_DISPLAY_LIST_NULL is deprecated — use NULL directly */
 #define GED_DISPLAY_LIST_NULL ((struct display_list *)0)
 #define GED_DRAWABLE_NULL ((struct ged_drawable *)0)
-#define GED_VIEW_NULL ((void *)0)
+#define GED_VIEW_NULL ((struct ged_view_context *)0)
 
 #define GED_RESULT_NULL ((void *)0)
 
@@ -291,12 +292,12 @@ GED_EXPORT void ged_destroy(struct ged *);
 GED_EXPORT extern void ged_init(struct ged *gedp);
 GED_EXPORT extern void ged_free(struct ged *gedp);
 
-GED_EXPORT extern void *ged_view_active_ctx(const struct ged *gedp);
-GED_EXPORT extern void ged_view_active_ctx_set(struct ged *gedp, void *view_ctx);
-GED_EXPORT extern void *ged_view_set_ctx(struct ged *gedp);
+GED_EXPORT extern struct ged_view_context *ged_view_active_ctx(const struct ged *gedp);
+GED_EXPORT extern void ged_view_active_ctx_set(struct ged *gedp, struct ged_view_context *view);
+GED_EXPORT extern struct ged_view_set *ged_view_set_ctx(struct ged *gedp);
 GED_EXPORT extern struct bu_ptbl *ged_view_set_views_ctx(struct ged *gedp);
-GED_EXPORT extern void *ged_view_find_ctx(struct ged *gedp, const char *name);
-GED_EXPORT extern int ged_view_context_owned_add(struct ged *gedp, void *view_ctx);
+GED_EXPORT extern struct ged_view_context *ged_view_find_ctx(struct ged *gedp, const char *name);
+GED_EXPORT extern int ged_view_context_owned_add(struct ged *gedp, struct ged_view_context *view);
 
 // Associate a callback function pointer for a command.  If mode is less than
 // zero, function will be registered to run BEFORE actual cmd logic is run, and

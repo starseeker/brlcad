@@ -30,7 +30,7 @@
 #include "qtcad/QgColorRGB.h"
 
 struct bu_vls;
-struct ged_draw_view_polygon_record;
+struct ged_polygon_record;
 class QgPluginContext;
 
 class QPolySettings : public QWidget
@@ -68,7 +68,7 @@ class QPolySettings : public QWidget
 	void do_settings_changed();
 	void do_line_snapping_changed();
 	void do_grid_snapping_changed();
-	void settings_sync(const struct ged_draw_view_polygon_record *p);
+	void settings_sync(const struct ged_polygon_record *p);
 
     private slots:
 	void sketch_sync_toggled(bool);

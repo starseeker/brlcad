@@ -45,10 +45,16 @@ include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag(-O3 O3_COMPILER_FLAG)
 
 add_executable(debug2c debug2c.cpp)
-if(O3_COMPILER_FLAG)
+if(BRLCAD_ENABLE_ADDRESS_SANITIZER OR BRLCAD_ENABLE_UNDEFINED_SANITIZER OR BRLCAD_SANITIZE_THREAD)
+  # This executable runs during the build to generate C sources.  Keep host
+  # build tools native; sanitizer coverage belongs on the generated targets.
+  target_compile_options(debug2c PRIVATE "-fno-sanitize=all")
+  target_link_options(debug2c PRIVATE "-fno-sanitize=all")
+endif()
+if(O3_COMPILER_FLAG AND BRLCAD_OPTIMIZED)
   # If we have the O3 flag, use it
   target_compile_options(debug2c PRIVATE "-O3")
-endif(O3_COMPILER_FLAG)
+endif()
 
 if(COMMAND CMAKEFILES)
   cmakefiles(

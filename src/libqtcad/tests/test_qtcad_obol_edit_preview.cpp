@@ -24,7 +24,6 @@
 #include "bu/malloc.h"
 #include "ged.h"
 #include "ged/draw.h"
-#include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "qtcad/QgGedEventBatch.h"
 #include "qtcad/QgPluginContext.h"
@@ -133,9 +132,9 @@ edit_preview_update(QgView *view, const char *name, const char *path,
 	ged_points[i][Y] = points[i][1];
 	ged_points[i][Z] = points[i][2];
     }
-    struct ged_draw_view_edit_transaction transaction =
-	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
-    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_UPDATE;
+    struct ged_view_edit_transaction transaction =
+	GED_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_VIEW_EDIT_PREVIEW_UPDATE;
     transaction.feature_name = name;
     transaction.owner = view;
     transaction.source_path = path;
@@ -146,8 +145,8 @@ edit_preview_update(QgView *view, const char *name, const char *path,
     transaction.point_count = (size_t)count;
     transaction.source_revision = source_revision;
     transaction.inputs_revision = inputs_revision;
-    const int ret = ged_draw_view_context_edit_transaction_apply(
-	view->viewContext(), &transaction, NULL);
+    const int ret = ged_view_feature_edit_transaction_apply(
+	ged_view_context_from_bv(view->viewContext()), &transaction, NULL);
     bu_free(ged_points, "edit transaction test points");
     if (ret)
 	view->need_update(QG_VIEW_DRAWN);
@@ -157,12 +156,12 @@ edit_preview_update(QgView *view, const char *name, const char *path,
 static int
 edit_preview_clear(QgView *view, const char *name)
 {
-    struct ged_draw_view_edit_transaction transaction =
-	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
-    transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
+    struct ged_view_edit_transaction transaction =
+	GED_VIEW_EDIT_TRANSACTION_INIT;
+    transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
     transaction.feature_name = name;
-    const int ret = ged_draw_view_context_edit_transaction_apply(
-	view->viewContext(), &transaction, NULL);
+    const int ret = ged_view_feature_edit_transaction_apply(
+	ged_view_context_from_bv(view->viewContext()), &transaction, NULL);
     if (ret)
 	view->need_update(QG_VIEW_DRAWN);
     return ret;
@@ -194,28 +193,30 @@ main(int argc, char **argv)
     struct ged *gedp = ged_open("db", dbpath, 1);
     if (!gedp)
 	FAIL("failed to open qtcad Obol edit-preview test database");
-    void *view_ctx = view.viewContext();
-	ged_view_active_ctx_set(gedp, view.viewContext());
-	(void)ged_view_context_host_attach(gedp, view.viewContext());
-    if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
-	    controller, 0))
-	FAIL("qtcad test should attach the QgView Obol controller to GED");
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view.viewContext());
+    ged_view_active_ctx_set(gedp, view_ctx);
+    (void)ged_view_context_host_attach(gedp, view_ctx);
+    if (!ged_view_context_display_endpoint_set(view_ctx,
+	    view.displayEndpoint(), 0))
+	FAIL("qtcad test should attach the QgView display endpoint to GED");
     SoNode *attachedRenderRoot = controller->getRenderSceneRoot();
-    if (!ged_draw_obol_controller_attach_for_view(gedp, view_ctx,
-	    controller, 0) ||
+    if (!ged_view_context_display_endpoint_set(view_ctx,
+	    view.displayEndpoint(), 0) ||
 	controller->getRenderSceneRoot() != attachedRenderRoot)
 	FAIL("reaffirming an Obol endpoint should preserve its retained render root");
 
     QgView secondView(NULL, QgViewType::SW);
     secondView.resize(160, 120);
-    void *second_view_ctx = secondView.viewContext();
+    struct ged_view_context *second_view_ctx =
+	ged_view_context_from_bv(secondView.viewContext());
     BObolViewController *second_controller =
 	secondView.obolViewController();
     if (!second_controller ||
 	!ged_view_context_host_attach(gedp, second_view_ctx) ||
 	!ged_view_set_context_add(ged_view_set_ctx(gedp), second_view_ctx) ||
-	!ged_draw_obol_controller_attach_for_view(gedp, second_view_ctx,
-	    second_controller, 0))
+	!ged_view_context_display_endpoint_set(second_view_ctx,
+	    secondView.displayEndpoint(), 0))
 	FAIL("qtcad test should attach a second hosted Obol edit view");
     ged_view_active_ctx_set(gedp, view_ctx);
 
@@ -242,9 +243,9 @@ main(int argc, char **argv)
 	GED_DRAW_VIEW_LINE_MOVE,
 	GED_DRAW_VIEW_LINE_DRAW
     };
-    struct ged_draw_view_edit_transaction multi_transaction =
-	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
-    multi_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_BEGIN;
+    struct ged_view_edit_transaction multi_transaction =
+	GED_VIEW_EDIT_TRANSACTION_INIT;
+    multi_transaction.event = GED_VIEW_EDIT_PREVIEW_BEGIN;
     multi_transaction.feature_name = "_test_multi_edit_preview";
     multi_transaction.owner = &view;
     multi_transaction.source_path = "/box.s::multi-edit";
@@ -257,7 +258,7 @@ main(int argc, char **argv)
 	!controller->features().exists("_test_multi_edit_preview") ||
 	!second_controller->features().exists("_test_multi_edit_preview"))
 	FAIL("neutral edit transactions should publish to every hosted view");
-    multi_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_CANCEL;
+    multi_transaction.event = GED_VIEW_EDIT_PREVIEW_CANCEL;
     multi_transaction.points = NULL;
     multi_transaction.commands = NULL;
     multi_transaction.point_count = 0;
@@ -275,9 +276,9 @@ main(int argc, char **argv)
     mat_t multi_matrix;
     MAT_IDN(multi_matrix);
     MAT_DELTAS(multi_matrix, 3.0, 0.0, 0.0);
-    struct ged_draw_view_edit_transaction primitive_transaction =
-	GED_DRAW_VIEW_EDIT_TRANSACTION_INIT;
-    primitive_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_REPLACE_SOURCE;
+    struct ged_view_edit_transaction primitive_transaction =
+	GED_VIEW_EDIT_TRANSACTION_INIT;
+    primitive_transaction.event = GED_VIEW_EDIT_PREVIEW_REPLACE_SOURCE;
     primitive_transaction.feature_name = "_test_multi_primitive_edit";
     primitive_transaction.owner = &view;
     primitive_transaction.source_path = "box.s";
@@ -292,7 +293,7 @@ main(int argc, char **argv)
 	rt_db_free_internal(&multi_box_intern);
 	FAIL("neutral primitive edits should publish transformed feedback to every hosted view");
     }
-    primitive_transaction.event = GED_DRAW_VIEW_EDIT_PREVIEW_COMMIT;
+    primitive_transaction.event = GED_VIEW_EDIT_PREVIEW_COMMIT;
     primitive_transaction.internal = NULL;
     primitive_transaction.matrix = NULL;
     if (ged_draw_edit_transaction_apply(gedp, &primitive_transaction) < 2 ||
@@ -483,16 +484,16 @@ main(int argc, char **argv)
     if (!bv_refresh_dirty_get(bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext()))))
 	FAIL("GED-routed edit preview updates should request a qtcad view refresh");
 
-    struct ged_draw_view_feature_summary gedSummary =
-	GED_DRAW_VIEW_FEATURE_SUMMARY_INIT;
-    if (!ged_draw_view_context_feature_summary(view_ctx, gedPreviewId,
+    struct ged_view_feature_summary gedSummary =
+	GED_VIEW_FEATURE_SUMMARY_INIT;
+    if (!ged_view_feature_get_summary(view_ctx, gedPreviewId,
 	    &gedSummary) ||
 	    !gedSummary.exists ||
-	    gedSummary.kind != GED_DRAW_VIEW_FEATURE_KIND_EDIT_PREVIEW ||
-	    gedSummary.scope != GED_DRAW_VIEW_FEATURE_SCOPE_LOCAL ||
+	    gedSummary.kind != GED_VIEW_FEATURE_KIND_EDIT_PREVIEW ||
+	    gedSummary.scope != GED_VIEW_FEATURE_SCOPE_LOCAL ||
 	    gedSummary.overlay_class !=
-	    GED_DRAW_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE ||
-	    gedSummary.lifecycle != GED_DRAW_VIEW_FEATURE_LIFECYCLE_PER_TOOL ||
+	    GED_VIEW_FEATURE_OVERLAY_CLASS_EDIT_HANDLE ||
+	    gedSummary.lifecycle != GED_VIEW_FEATURE_LIFECYCLE_PER_TOOL ||
 	    !gedSummary.is_transient_preview ||
 	    !gedSummary.owner_id[0])
 	FAIL("GED-routed qtcad edit preview should be a local transient feature with owner metadata");
@@ -515,14 +516,14 @@ main(int argc, char **argv)
     (void)bv_context_refresh_complete(static_cast<struct bv_context *>(view.viewContext()));
     if (edit_preview_clear(&view, gedPreviewId) != 1)
 	FAIL("qtcad helper should clear GED-routed edit preview geometry");
-    if (ged_draw_view_context_feature_summary(view_ctx, gedPreviewId,
+    if (ged_view_feature_get_summary(view_ctx, gedPreviewId,
 	    &gedSummary) && gedSummary.exists)
 	FAIL("GED-routed edit preview clear should remove the transient feature");
     if (!bv_refresh_dirty_get(bv_context_view_const(static_cast<const struct bv_context *>(view.viewContext()))))
 	FAIL("GED-routed edit preview clears should request a qtcad view refresh");
 
-    ged_draw_obol_controller_detach_for_view(gedp, second_view_ctx);
-    ged_draw_obol_controller_detach_for_view(gedp, view_ctx);
+    (void)ged_view_context_display_endpoint_set(second_view_ctx, NULL, 0);
+    (void)ged_view_context_display_endpoint_set(view_ctx, NULL, 0);
     ged_close(gedp);
     bu_file_delete(dbpath);
 

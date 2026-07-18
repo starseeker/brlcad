@@ -691,11 +691,12 @@ test_qtcad_quad_view_endpoint_association(void)
     QgView *view = quad.curr_view();
     CHECK(view && view->displayEndpoint(),
 	"qtcad quad view creates an endpoint-hosted viewport");
-    void *view_ctx = view->viewContext();
+    struct ged_view_context *view_ctx =
+	ged_view_context_from_bv(view->viewContext());
     CHECK(ged_view_context_display_endpoint_get(view_ctx) ==
 	view->displayEndpoint(),
 	"qtcad quad view associates its endpoint with the GED view record");
-    CHECK(session.activeViewContext() == view_ctx,
+    CHECK(session.activeViewContext() == view->viewContext(),
 	"qtcad session records the active endpoint view context");
     CHECK(bobol_display_endpoint_controller(view->displayEndpoint()) ==
 	view->obolViewController(),
@@ -713,7 +714,8 @@ test_qtcad_quad_view_endpoint_association(void)
 	CHECK(quadrant_view && quadrant_view->displayEndpoint(),
 	    "qtcad lazy quad creation gives every pane an endpoint");
 	CHECK(ged_view_context_display_endpoint_get(
-	    quadrant_view->viewContext()) == quadrant_view->displayEndpoint(),
+	    ged_view_context_from_bv(quadrant_view->viewContext())) ==
+	    quadrant_view->displayEndpoint(),
 	    "qtcad lazy quad pane has one GED-associated endpoint");
 	CHECK(bobol_display_endpoint_controller(
 	    quadrant_view->displayEndpoint()) ==
@@ -740,7 +742,8 @@ test_qtcad_quad_view_endpoint_association(void)
     for (QgQuadrantId quadrant : quadrants) {
 	QgView *quadrant_view = quad.get(quadrant);
 	CHECK(quadrant_view && quadrant_view->displayEndpoint() &&
-	    ged_view_context_display_endpoint_get(quadrant_view->viewContext()) ==
+	    ged_view_context_display_endpoint_get(ged_view_context_from_bv(
+		quadrant_view->viewContext())) ==
 	    quadrant_view->displayEndpoint(),
 	    "qtcad lazy quad recreation restores one endpoint per pane");
     }
@@ -758,8 +761,8 @@ test_qtcad_dm_open_command(void)
 
     struct ged *gedp = ged_open("db", dbpath, 1);
     CHECK(gedp != NULL, "Qt dm open test opens GED");
-    void *view = ged_view_active_ctx(gedp);
-    bv_dimensions_set(bv_context_view((struct bv_context *)view), 96, 72);
+    struct ged_view_context *view = ged_view_active_ctx(gedp);
+    bv_dimensions_set(bv_context_view(ged_view_context_bv(view)), 96, 72);
     CHECK(!ged_view_context_display_endpoint_get(view),
 	"Qt dm open test starts without an endpoint");
 

@@ -221,7 +221,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
     /* Doing work with the database - start setting up */
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 
     // There are two possible sources of settings - the ones we deduce
     // from view state, and the ones we get from the user.  User supplied
@@ -594,7 +594,7 @@ ged_nirt_core(struct ged *gedp, int argc, const char *argv[])
      * still need an endpoint/controller so the result is retained for a host
      * that attaches later; do not fall back to a legacy display path. */
     if (DG_QRAY_GRAPHICS(gedp->i->ged_gdp) && bu_vls_strlen(&nv.plotfile)) {
-	if (!ged_draw_obol_render_endpoint_ensure_for_view(gedp, view_ctx, 1)) {
+	if (!ged_view_context_display_endpoint_ensure(view_ctx)) {
 	    bu_log("Unable to initialize Obol command-result endpoint\n");
 	} else {
 	    FILE *fp = fopen(bu_vls_cstr(&nv.plotfile), "rb");
@@ -643,7 +643,7 @@ ged_vnirt_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);

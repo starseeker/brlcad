@@ -65,7 +65,5 @@ typedef struct ged_draw_shape_state {
     uint64_t geometry_revision;
 } ged_draw_shape_state;
 
-ged_draw_shape_state *ged_draw_shape_state_get_scene_handle(
-	ged_draw_scene_handle scene_ref);
 
 #endif /* LIBGED_GED_DRAW_SHAPE_STATE_PRIVATE_H */

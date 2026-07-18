@@ -38,7 +38,7 @@
 #include "../view/view.h"
 
 static int
-tclcad_faceplate_color_endpoint_set(void *view_ctx, const char *property_name,
+tclcad_faceplate_color_endpoint_set(struct ged_view_context *view_ctx, const char *property_name,
 	int r, int g, int b)
 {
     if (!view_ctx || !property_name || r < 0 || r > 255 || b < 0 ||
@@ -56,7 +56,7 @@ tclcad_faceplate_color_endpoint_set(void *view_ctx, const char *property_name,
 }
 
 static int
-tclcad_faceplate_bool_endpoint_set(void *view_ctx, const char *property_name,
+tclcad_faceplate_bool_endpoint_set(struct ged_view_context *view_ctx, const char *property_name,
 	int enabled)
 {
     if (!view_ctx || !property_name || enabled < 0 || enabled > 1)
@@ -79,7 +79,7 @@ to_faceplate(struct ged *gedp,
 	     int UNUSED(maxargs))
 {
     int i;
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     struct bv *view = NULL;
 
     /* initialize result */

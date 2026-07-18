@@ -210,8 +210,8 @@ Automatic policy resolution is separate from the requested policy and is
 reported by `endpoint.renderer.resolved`: System GL wins over pixel
 presentation for a factory that advertises both, pixel presentation resolves
 to software otherwise, and RT remains explicit.  An unbound endpoint or the
-transitional direct-host API stays unresolved as `auto` because it has no
-factory capability record.  GED status/diagnostics expose both values.
+directly bound custom host stays unresolved as `auto` because it has no factory
+capability record.  GED status/diagnostics expose both values.
 FAST and QUALITY remain controller policy rather than renderer names.  The
 OSMesa rendering regression drives the same database-intent VList through
 both modes: QUALITY retains the GL wire path, while FAST performs an
@@ -306,6 +306,7 @@ Removal Conditions
 | Area | Retained edge | Removal condition |
 | --- | --- | --- |
 | utilities | Drawing utilities and GED framebuffer image commands are DM-independent; the uncalled `plot3-dm` sample was retired in favor of retained Obol `overlay` import. ART, remrt/rtsrv, and the RT family use imgstream framebuffer state | Runtime-verify ART tile publication in an Appleseed-enabled build |
+| custom hosts | Advanced C++ consumers that subclass `BObolWindowHost` may bind that host directly to an endpoint; because it has no factory descriptor, only `auto`, `none`, `diagnostic`, and explicit RT policy are meaningful. `libBObol_window_host` covers borrowed/owned binding, rejection of unsupported HW/SW policy, detach, and teardown. | Remove after all supported external custom hosts register a `bobol_host_factory`; owner: libBObol host maintainers. |
 
 The public `dm` command is the supported endpoint-native policy surface, not a
 retained graphical backend edge.  MGED scripts and regressions now use the

@@ -48,7 +48,7 @@ ged_erase2_core(struct ged *gedp, int argc, const char *argv[])
 {
     static const char *usage = "[[-r] | [[-o] -A attribute value ...]] [object(s)]";
     const char *cmdName = argv[0];
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     int recursive = 0;
     int flag_A_attr = 0;
     int flag_o_nonunique = 0;

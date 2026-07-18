@@ -318,7 +318,7 @@ extern void sig2(int);
 extern void sig3(int);
 
 /* mged.c */
-extern void mged_view_callback(void *view_ctx, void *clientData);
+extern void mged_view_callback(struct ged_view_context *view_ctx, void *clientData);
 
 /* buttons.c */
 extern void button(struct mged_state *s, int bnum);

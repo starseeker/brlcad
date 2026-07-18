@@ -23,6 +23,13 @@
 #  define BOBOL_INPUT_TYPE_EXPORT
 #endif
 
+/** @addtogroup bobol_query
+ * @{ */
+
+/** @ingroup bobol_query
+ * Normalized event kind.  Values are toolkit-independent and may be passed
+ * between a host adapter and its owner-thread endpoint dispatcher.
+ */
 typedef enum BObolInputEventType {
     BOBOL_INPUT_NONE = 0,
     BOBOL_INPUT_KEY_PRESS = 1,
@@ -37,6 +44,9 @@ typedef enum BObolInputEventType {
     BOBOL_INPUT_EXPOSE = 10
 } BObolInputEventType;
 
+/** @ingroup bobol_query
+ * Bit mask of normalized keyboard modifiers.
+ */
 typedef enum BObolInputModifier {
     BOBOL_INPUT_MOD_NONE = 0u,
     BOBOL_INPUT_MOD_SHIFT = 1u << 0,
@@ -80,6 +90,10 @@ typedef enum BObolInputKey {
  */
 typedef uint32_t BObolInputAction;
 
+/** @ingroup bobol_query
+ * Standard BRL-CAD view actions understood by the default profile.
+ * Application action layers may use other nonzero identifiers.
+ */
 enum BObolStandardInputAction {
     BOBOL_ACTION_NONE = 0,
     BOBOL_ACTION_VIEW_ROTATE = 1,
@@ -124,26 +138,37 @@ enum {
     BOBOL_INPUT_RESULT_CANCELLED = 3
 };
 
+/** @ingroup bobol_query
+ * One borrowed, immutable event delivered synchronously on the endpoint owner
+ * thread.  Pixel coordinates use the bound viewport with its native origin;
+ * deltas and resize dimensions are pixels, and timestamp units are supplied by
+ * the host adapter.
+ */
 typedef struct BOBOL_INPUT_TYPE_EXPORT BObolInputEvent {
 #ifdef __cplusplus
     BObolInputEvent(void);
 #endif
 
-    BObolInputEventType type;
-    uint64_t timestamp;
-    int x;
-    int y;
-    int dx;
-    int dy;
-    int wheelDelta;
-    int button;
-    unsigned int buttons;
-    int key;
-    unsigned int modifiers;
-    unsigned int width;
-    unsigned int height;
+    BObolInputEventType type; /**< Event kind. */
+    uint64_t timestamp; /**< Host-supplied monotonic timestamp. */
+    int x; /**< Current viewport x coordinate in pixels. */
+    int y; /**< Current viewport y coordinate in pixels. */
+    int dx; /**< Horizontal motion delta in pixels. */
+    int dy; /**< Vertical motion delta in pixels. */
+    int wheelDelta; /**< Signed wheel step or high-resolution delta. */
+    int button; /**< Changed button number, or zero when not applicable. */
+    unsigned int buttons; /**< Host-defined mask of currently pressed buttons. */
+    int key; /**< Unicode scalar or BObolInputKey value. */
+    unsigned int modifiers; /**< BObolInputModifier bit mask. */
+    unsigned int width; /**< Resize width in physical pixels. */
+    unsigned int height; /**< Resize height in physical pixels. */
 } BObolInputEvent;
 
+/** @ingroup bobol_query
+ * Immutable event-to-action rule copied into a BObolInputContext.  A field set
+ * to BOBOL_INPUT_ANY is a wildcard; higher priority wins before specificity
+ * and installation order are considered.
+ */
 typedef struct BOBOL_INPUT_TYPE_EXPORT BObolInputBinding {
 #ifdef __cplusplus
     BObolInputBinding(void);
@@ -153,21 +178,30 @@ typedef struct BOBOL_INPUT_TYPE_EXPORT BObolInputBinding {
 	BObolInputAction action);
 #endif
 
-    BObolInputEventType eventType;
-    int key;
-    int button;
-    unsigned int requiredModifiers;
-    unsigned int forbiddenModifiers;
-    int priority;
-    BObolInputAction action;
+    BObolInputEventType eventType; /**< Event kind to match. */
+    int key; /**< Key value to match, or BOBOL_INPUT_ANY. */
+    int button; /**< Button to match, or BOBOL_INPUT_ANY. */
+    unsigned int requiredModifiers; /**< Modifier bits that must be present. */
+    unsigned int forbiddenModifiers; /**< Modifier bits that must be absent. */
+    int priority; /**< Tie-breaking priority; larger values win. */
+    BObolInputAction action; /**< Opaque action delivered to the owning handler. */
 } BObolInputBinding;
 
+/** @ingroup bobol_query
+ * Borrowed immutable binding profile.  Setters copy its bindings; the name
+ * and arrays need only remain valid for the duration of the setter call.
+ */
 typedef struct BOBOL_INPUT_TYPE_EXPORT BObolInputProfile {
-    const char *name;
-    const BObolInputBinding *bindings;
-    size_t bindingCount;
+    const char *name; /**< Diagnostic profile name. */
+    const BObolInputBinding *bindings; /**< Binding array, or NULL when empty. */
+    size_t bindingCount; /**< Number of entries in bindings. */
 } BObolInputProfile;
 
+/** @ingroup bobol_query
+ * Synchronous owner-thread action callback.  @p event is borrowed for the
+ * call.  Return a BOBOL_INPUT_RESULT_* value; callbacks may queue work but
+ * must not destroy or recursively dispatch through their endpoint.
+ */
 typedef int (*BObolInputActionHandler)(void *userData,
 	BObolInputAction action, const BObolInputEvent *event);
 
@@ -179,13 +213,17 @@ typedef int (*BObolInputActionHandler)(void *userData,
  * libBObol.
  */
 typedef struct BOBOL_INPUT_TYPE_EXPORT BObolInputActionLayer {
-    const char *name;
-    const BObolInputBinding *bindings;
-    size_t bindingCount;
-    BObolInputActionHandler handler;
+    const char *name; /**< Diagnostic layer name, borrowed during installation. */
+    const BObolInputBinding *bindings; /**< Rules copied during installation. */
+    size_t bindingCount; /**< Number of rules in bindings. */
+    BObolInputActionHandler handler; /**< Required handler for this vocabulary. */
 } BObolInputActionLayer;
 
-/** Deliver a fully normalized toolkit event to an endpoint-owned context. */
+/** @ingroup bobol_query
+ * Deliver a fully normalized toolkit event to an endpoint-owned context.
+ * Both pointers are borrowed for the synchronous owner-thread call; return a
+ * BOBOL_INPUT_RESULT_* value.
+ */
 typedef int (*BObolInputEventHandler)(void *userData,
 	const BObolInputEvent *event);
 
@@ -261,5 +299,7 @@ private:
 #endif
 
 #undef BOBOL_INPUT_TYPE_EXPORT
+
+/** @} */
 
 #endif /* BOBOL_BINPUT_H */

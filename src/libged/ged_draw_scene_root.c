@@ -41,7 +41,7 @@
 #include "./ged_draw_private.h"
 #include "./ged_private.h"
 
-void *
+struct ged_view_context *
 ged_draw_active_view_ctx(struct ged *gedp)
 {
     return ged_view_active_ctx(gedp);
@@ -49,7 +49,7 @@ ged_draw_active_view_ctx(struct ged *gedp)
 
 
 void
-ged_draw_active_view_ctx_set(struct ged *gedp, void *view_ctx)
+ged_draw_active_view_ctx_set(struct ged *gedp, struct ged_view_context *view_ctx)
 {
     ged_view_active_ctx_set(gedp, view_ctx);
 }
@@ -72,22 +72,8 @@ _sg_root(struct ged *gedp)
 
 
 
-void *
-ged_draw_view_context_scene_root(void *view_ctx)
-{
-    return ged_draw_scene_handle_context(ged_view_context_scene_root_ref(view_ctx));
-}
-
-
-int
-ged_draw_view_context_scene_attached(void *view_ctx)
-{
-    return ged_view_context_scene_attached(view_ctx);
-}
-
-
 uint64_t
-ged_draw_view_context_frame_revision(void *view_ctx)
+ged_scene_frame_revision(struct ged_view_context *view_ctx)
 {
     return bv_frame_revision_get(
 	       bv_context_view_const((const struct bv_context *)view_ctx));
@@ -95,7 +81,7 @@ ged_draw_view_context_frame_revision(void *view_ctx)
 
 
 uint64_t
-ged_draw_view_context_bump_frame_revision(void *view_ctx)
+ged_scene_bump_frame_revision(struct ged_view_context *view_ctx)
 {
     return bv_frame_revision_bump(bv_context_view((struct bv_context *)view_ctx));
 }

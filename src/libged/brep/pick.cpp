@@ -59,7 +59,7 @@ _brep_pick_ray_from_view(struct _ged_brep_ipick *gib, point_t origin, vect_t dir
 	double diag_len)
 {
     struct ged *gedp = gib->gb->gedp;
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (!view_ctx) {
 	bu_vls_printf(gib->vls, "no viewport available and no ray specified\n");
 	return BRLCAD_ERROR;

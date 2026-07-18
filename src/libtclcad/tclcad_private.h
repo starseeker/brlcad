@@ -183,22 +183,22 @@ extern int tclcad_eval(Tcl_Interp *interp, const char *command, size_t num_args,
 extern int tclcad_eval_noresult(Tcl_Interp *interp, const char *command, size_t num_args, const char * const *args);
 
 extern void tclcad_view_data_init(struct tclcad_view_data *tvd, struct ged *gedp);
-extern struct tclcad_view_data *tclcad_view_data_from_view_ctx(void *view_ctx);
-extern struct bu_vls *tclcad_view_pathname_vls(const void *view_ctx);
-extern tclcad_view_state *tclcad_view_tcl_data_from_view_ctx(void *view_ctx);
-extern tclcad_polygon_state *tclcad_view_polygon_state_from_view_ctx(void *view_ctx, int staged);
-extern int tclcad_view_polygon_mode_from_view_ctx(void *view_ctx);
-extern int tclcad_view_polygon_mode_set(void *view_ctx, int mode);
-extern fastf_t tclcad_view_data_vZ_from_view_ctx(void *view_ctx);
-extern int tclcad_view_data_vZ_set(void *view_ctx, fastf_t vZ);
-extern int tclcad_view_hide_from_view_ctx(void *view_ctx);
-extern int tclcad_view_polygon_cflag_from_view_ctx(void *view_ctx, int staged);
-extern int tclcad_view_polygon_cflag_clear(void *view_ctx, int staged);
-extern tclcad_label_state *tclcad_view_label_state_from_view_ctx(void *view_ctx, int staged);
-extern int tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, void *view_ctx);
-extern int tclcad_view_prim_labels_state_set(void *view_ctx, const struct bv_other_state *state);
-extern int tclcad_view_data_bind_view_ctx(void *view_ctx, struct tclcad_view_data *tvd);
-extern void tclcad_view_data_unbind_view_ctx(void *view_ctx);
+extern struct tclcad_view_data *tclcad_view_data_from_view_ctx(const struct ged_view_context *view_ctx);
+extern struct bu_vls *tclcad_view_pathname_vls(const struct ged_view_context *view_ctx);
+extern tclcad_view_state *tclcad_view_tcl_data_from_view_ctx(struct ged_view_context *view_ctx);
+extern tclcad_polygon_state *tclcad_view_polygon_state_from_view_ctx(struct ged_view_context *view_ctx, int staged);
+extern int tclcad_view_polygon_mode_from_view_ctx(struct ged_view_context *view_ctx);
+extern int tclcad_view_polygon_mode_set(struct ged_view_context *view_ctx, int mode);
+extern fastf_t tclcad_view_data_vZ_from_view_ctx(struct ged_view_context *view_ctx);
+extern int tclcad_view_data_vZ_set(struct ged_view_context *view_ctx, fastf_t vZ);
+extern int tclcad_view_hide_from_view_ctx(struct ged_view_context *view_ctx);
+extern int tclcad_view_polygon_cflag_from_view_ctx(struct ged_view_context *view_ctx, int staged);
+extern int tclcad_view_polygon_cflag_clear(struct ged_view_context *view_ctx, int staged);
+extern tclcad_label_state *tclcad_view_label_state_from_view_ctx(struct ged_view_context *view_ctx, int staged);
+extern int tclcad_view_prim_labels_state_from_view_ctx(struct bv_other_state *state, struct ged_view_context *view_ctx);
+extern int tclcad_view_prim_labels_state_set(struct ged_view_context *view_ctx, const struct bv_other_state *state);
+extern int tclcad_view_data_bind_view_ctx(struct ged_view_context *view_ctx, struct tclcad_view_data *tvd);
+extern void tclcad_view_data_unbind_view_ctx(struct ged_view_context *view_ctx);
 
 
 /* Tcl initialization routines */
@@ -208,9 +208,9 @@ TCLCAD_EXPORT extern int tclcad_tkobol_init(Tcl_Interp *interp);
 TCLCAD_EXPORT extern int Ged_Init(Tcl_Interp *interp);
 
 /* Fb functions */
-extern int to_close_fbs(void *view_ctx);
+extern int to_close_fbs(struct ged_view_context *view_ctx);
 extern void to_fbs_callback(void *);
-extern int to_open_fbs(void *view_ctx, Tcl_Interp *interp);
+extern int to_open_fbs(struct ged_view_context *view_ctx, Tcl_Interp *interp);
 extern int to_set_fb_mode(struct ged *gedp,
 			  int argc,
 			  const char *argv[],
@@ -359,7 +359,7 @@ extern int to_mouse_poly_circ(struct ged *gedp,
                              int maxargs);
 extern int to_mouse_poly_circ_func(Tcl_Interp *interp,
                                   struct ged *gedp,
-                                  void *view_ctx,
+                                  struct ged_view_context *view_ctx,
                                   int argc,
                                   const char *argv[],
                                   const char *usage);
@@ -371,7 +371,7 @@ extern int to_mouse_poly_cont(struct ged *gedp,
                              int maxargs);
 extern int to_mouse_poly_cont_func(Tcl_Interp *interp,
                                   struct ged *gedp,
-                                  void *view_ctx,
+                                  struct ged_view_context *view_ctx,
                                   int argc,
                                   const char *argv[],
                                   const char *usage);
@@ -383,7 +383,7 @@ extern int to_mouse_poly_ell(struct ged *gedp,
                             int maxargs);
 extern int to_mouse_poly_ell_func(Tcl_Interp *interp,
                                  struct ged *gedp,
-                                 void *view_ctx,
+                                 struct ged_view_context *view_ctx,
                                  int argc,
                                  const char *argv[],
                                  const char *usage);
@@ -395,7 +395,7 @@ extern int to_mouse_poly_rect(struct ged *gedp,
                              int maxargs);
 extern int to_mouse_poly_rect_func(Tcl_Interp *interp,
                                   struct ged *gedp,
-                                  void *view_ctx,
+                                  struct ged_view_context *view_ctx,
                                   int argc,
                                   const char *argv[],
                                   const char *usage);
@@ -469,7 +469,7 @@ extern int to_mouse_trans(struct ged *gedp,
 /* Tclcad polygon routines */
 extern int to_data_polygons_func(Tcl_Interp *interp,
                                  struct ged *gedp,
-                                 void *view_ctx,
+                                 struct ged_view_context *view_ctx,
                                  int argc,
                                  const char *argv[]);
 extern int to_data_polygons(struct ged *gedp,
@@ -487,7 +487,7 @@ extern int to_poly_circ_mode(struct ged *gedp,
 			     int maxargs);
 extern int to_poly_circ_mode_func(Tcl_Interp *interp,
 				  struct ged *gedp,
-				  void *view_ctx,
+				  struct ged_view_context *view_ctx,
 				  int argc,
 				  const char *argv[],
 				  const char *usage);
@@ -503,7 +503,7 @@ extern int to_poly_cont_build_end(struct ged *gedp,
 				  ged_func_ptr func,
 				  const char *usage,
 				  int maxargs);
-extern int to_poly_cont_build_end_func(void *view_ctx,
+extern int to_poly_cont_build_end_func(struct ged_view_context *view_ctx,
 				       int argc,
 				       const char *argv[]);
 extern int to_poly_ell_mode(struct ged *gedp,
@@ -514,7 +514,7 @@ extern int to_poly_ell_mode(struct ged *gedp,
 			    int maxargs);
 extern int to_poly_ell_mode_func(Tcl_Interp *interp,
 				 struct ged *gedp,
-				 void *view_ctx,
+				 struct ged_view_context *view_ctx,
 				 int argc,
 				 const char *argv[],
 				 const char *usage);
@@ -526,7 +526,7 @@ extern int to_poly_rect_mode(struct ged *gedp,
 			     int maxargs);
 extern int to_poly_rect_mode_func(Tcl_Interp *interp,
 				  struct ged *gedp,
-				  void *view_ctx,
+				  struct ged_view_context *view_ctx,
 				  int argc,
 				  const char *argv[],
 				  const char *usage);

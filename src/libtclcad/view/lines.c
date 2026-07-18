@@ -37,7 +37,7 @@
 int
 go_data_lines(Tcl_Interp *UNUSED(interp),
 	      struct ged *gedp,
-	      void *draw_view_ctx,
+	      struct ged_view_context *draw_view_ctx,
 	      int argc,
 	      const char *argv[],
 	      const char *usage)
@@ -60,7 +60,7 @@ go_data_lines(Tcl_Interp *UNUSED(interp),
     to_refresh_suppress_all_begin(current_top);
 
 
-    void *active_view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *active_view_ctx = ged_view_active_ctx(gedp);
     ged_view_active_ctx_set(gedp, draw_view_ctx);
 
     ret = ged_exec(gedp, argc, argv);
@@ -84,7 +84,7 @@ to_data_lines(struct ged *gedp,
 	      const char *usage,
 	      int UNUSED(maxargs))
 {
-    void *view_ctx;
+    struct ged_view_context *view_ctx;
     int ret;
 
     /* initialize result */
@@ -111,7 +111,7 @@ to_data_lines(struct ged *gedp,
     argv[1] = argv[0];
     argv[0] = "view";
 
-    void *active_view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *active_view_ctx = ged_view_active_ctx(gedp);
     ged_view_active_ctx_set(gedp, view_ctx);
 
     ret = ged_exec_view(gedp, argc, argv);

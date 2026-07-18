@@ -112,7 +112,7 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* Handle tolerance */
@@ -187,8 +187,8 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	point_t sample = VINIT_ZERO;
 	point_t snapped = VINIT_ZERO;
 	VMOVE(sample, view_pt);
-	if (ged_draw_view_context_snap_first_candidate(view_ctx, sample,
-		GED_DRAW_VIEW_SNAP_GRID, snapped)) {
+	if (ged_view_selection_snap(view_ctx, sample,
+		GED_SELECTION_SNAP_GRID, snapped)) {
 	    point_t vp = VINIT_ZERO;
 	    VMOVE(view_pt, snapped);
 	    MAT4X3PNT(vp, model2view, view_pt);
@@ -202,8 +202,8 @@ ged_view_snap(struct ged *gedp, int argc, const char *argv[])
 	point_t vp = VINIT_ZERO;
 	int line_snap_ok = 0;
 	VMOVE(sample, view_pt);
-	if (ged_draw_view_context_snap_first_candidate(view_ctx, sample,
-		GED_DRAW_VIEW_SNAP_ENDPOINT, snapped)) {
+	if (ged_view_selection_snap(view_ctx, sample,
+		GED_SELECTION_SNAP_ENDPOINT, snapped)) {
 	    line_snap_ok = 1;
 	    VMOVE(view_pt, snapped);
 	    MAT4X3PNT(vp, model2view, view_pt);

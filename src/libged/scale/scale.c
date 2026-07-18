@@ -53,7 +53,7 @@ ged_scale_core(struct ged *gedp, int argc, const char *argv[])
     if (sf1 <= SMALL_FASTF || INFINITY < sf1)
 	return BRLCAD_OK;
 
-    void *view_ctx = ged_view_active_ctx(gedp);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     struct bv *view = bv_context_view((struct bv_context *)view_ctx);
 
     /* scale the view */

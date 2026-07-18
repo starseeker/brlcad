@@ -46,16 +46,18 @@ main(int argc, char **argv)
 	CADViewSettings settings;
 	struct bobol_endpoint_property_value value =
 	    BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	struct ged_view_context *view_ctx = NULL;
 	view.resize(160, 120);
 	CHECK(view.viewContext() && view.displayEndpoint(),
 	    "settings test creates an endpoint-backed QgView");
+	view_ctx = ged_view_context_from_bv(view.viewContext());
 
 	gedp = ged_open("inmem", "0x0", 0);
 	CHECK(gedp, "settings test creates an in-memory GED context");
-	ged_view_active_ctx_set(gedp, view.viewContext());
-	CHECK(ged_view_context_host_attach(gedp, view.viewContext()),
+	ged_view_active_ctx_set(gedp, view_ctx);
+	CHECK(ged_view_context_host_attach(gedp, view_ctx),
 	    "settings test attaches the QgView context to GED");
-	CHECK(ged_view_context_display_endpoint_set(view.viewContext(),
+	CHECK(ged_view_context_display_endpoint_set(view_ctx,
 	    view.displayEndpoint(), 0),
 	    "settings test binds the QgView endpoint to its GED context");
 
@@ -68,7 +70,7 @@ main(int argc, char **argv)
 
 	settings.fb_mode_combo->setCurrentIndex(2);
 	value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	CHECK(ged_view_context_display_property_get(view.viewContext(),
+	CHECK(ged_view_context_display_property_get(view_ctx,
 	    "composition.framebuffer.mode", &value) ==
 	    BOBOL_ENDPOINT_PROPERTY_OK && value.string_value &&
 	    bu_strcmp(value.string_value, "underlay") == 0,
@@ -77,7 +79,7 @@ main(int argc, char **argv)
 	value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	value.type = BOBOL_ENDPOINT_PROPERTY_ENUM;
 	value.string_value = "overlay";
-	CHECK(ged_view_context_display_property_set(view.viewContext(),
+	CHECK(ged_view_context_display_property_set(view_ctx,
 	    "composition.framebuffer.mode", &value) ==
 	    BOBOL_ENDPOINT_PROPERTY_OK,
 	    "endpoint accepts an external framebuffer composition update");
@@ -88,7 +90,7 @@ main(int argc, char **argv)
 
 	settings.fb_mode_combo->setCurrentIndex(3);
 	value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	CHECK(ged_view_context_display_property_get(view.viewContext(),
+	CHECK(ged_view_context_display_property_get(view_ctx,
 	    "composition.framebuffer.mode", &value) ==
 	    BOBOL_ENDPOINT_PROPERTY_OK && value.string_value &&
 	    bu_strcmp(value.string_value, "interlay") == 0,
@@ -96,7 +98,7 @@ main(int argc, char **argv)
 
 	settings.grid_ckbx->setCheckState(Qt::Checked);
 	value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
-	CHECK(ged_view_context_display_property_get(view.viewContext(),
+	CHECK(ged_view_context_display_property_get(view_ctx,
 	    "view.faceplate.grid.visible", &value) ==
 	    BOBOL_ENDPOINT_PROPERTY_OK && value.bool_value,
 	    "settings writes faceplate visibility through the endpoint");
@@ -104,7 +106,7 @@ main(int argc, char **argv)
 	value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
 	value.type = BOBOL_ENDPOINT_PROPERTY_BOOL;
 	value.bool_value = 1;
-	CHECK(ged_view_context_display_property_set(view.viewContext(),
+	CHECK(ged_view_context_display_property_set(view_ctx,
 	    "view.faceplate.params.fps", &value) ==
 	    BOBOL_ENDPOINT_PROPERTY_OK,
 	    "endpoint accepts an external faceplate update");
@@ -113,7 +115,7 @@ main(int argc, char **argv)
 	    settings.params_fps_ckbx->checkState() == Qt::Checked,
 	    "settings reflects endpoint-owned faceplate visibility");
 
-	CHECK(ged_view_context_display_endpoint_set(view.viewContext(), NULL, 0),
+	CHECK(ged_view_context_display_endpoint_set(view_ctx, NULL, 0),
 	    "settings test detaches the endpoint property owner");
 	settings.checkbox_refresh(0);
 	CHECK(settings.fb_mode_combo->isEnabled() &&

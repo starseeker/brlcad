@@ -99,7 +99,7 @@ open_gedp_null(const char *gfile)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
     return gedp;
@@ -113,11 +113,12 @@ open_gedp_null(const char *gfile)
  * to carry a camera matrix for computing the eye model.  Its display-manager
  * context remains NULL just as libtclcad does for "nu".
  */
-static void *
+static struct ged_view_context *
 make_null_view(struct ged *gedp, const char *vname)
 {
-    void *view_set_ctx = ged_view_set_ctx(gedp);
-    void *v = ged_view_context_create_with_set(view_set_ctx);
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(gedp);
+    struct ged_view_context *v =
+	ged_view_context_create_with_set(view_set_ctx);
     bv_name_set(DRAW_TEST_BV(v), vname);
     bv_unit_conversion_set(DRAW_TEST_BV(v), gedp->dbip->dbi_local2base, gedp->dbip->dbi_base2local);
 
@@ -151,7 +152,7 @@ test_null_view_context(const char *datadir)
     }
 
     /* Create a secondary null-DM view, simulating "db new_view v1 nu" */
-    void *v1 = make_null_view(gedp, "v1");
+    struct ged_view_context *v1 = make_null_view(gedp, "v1");
 
     int fail = 0;
     if (!v1 || !bv_context_is_valid((struct bv_context *)(v1))) {
@@ -176,7 +177,7 @@ test_null_view_context(const char *datadir)
 	bu_log("PASS: default GED active view is a valid libbv context\n");
     }
 
-    void *active = ged_view_active_ctx(gedp);
+    struct ged_view_context *active = ged_view_active_ctx(gedp);
     int tclcad_sentinel = 0;
     if (ged_view_context_user_data_get(active) != gedp ||
 	    !ged_view_context_tclcad_data_set(active, &tclcad_sentinel) ||
@@ -218,14 +219,14 @@ test_eyemodel_finite(const char *datadir)
     }
 
     /* Create secondary null-DM view (rtwizard "new_view v1 nu") */
-    void *v1 = make_null_view(gedp, "v1");
+    struct ged_view_context *v1 = make_null_view(gedp, "v1");
 
     /* Draw objects (rtwizard "db draw $item" for each object in color_objlist) */
     const char *s_av[4] = {"draw", "all.g", NULL};
     ged_exec_draw(gedp, 2, s_av);
 
     /* Autoview on v1 (rtwizard "db autoview v1") */
-    void *prev = ged_view_active_ctx(gedp);
+    struct ged_view_context *prev = ged_view_active_ctx(gedp);
     ged_view_active_ctx_set(gedp, v1);
     s_av[0] = "autoview"; s_av[1] = NULL;
     ged_exec_autoview(gedp, 1, s_av);
@@ -333,7 +334,7 @@ test_multiple_null_views(const char *datadir)
     ged_exec_draw(gedp, 2, s_av);
 
     /* Create four secondary views and verify neutral context identity. */
-    void *views[4];
+    struct ged_view_context *views[4];
     char vname[4][8];
     int fail = 0;
     for (int i = 0; i < 4; i++) {
@@ -366,7 +367,7 @@ open_gedp_obol(const char *gfile, int width, int height)
 
     db_add_changed_clbk(gedp->dbip, &ged_changed_callback, (void *)gedp);
 
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     bv_dimensions_set(DRAW_TEST_BV(v), width, height);
     const char *s_av[7] = {
 	"dm", "open", "--host", "headless", "--renderer", "sw", NULL
@@ -384,7 +385,7 @@ open_gedp_obol(const char *gfile, int width, int height)
 static void
 do_obol_refresh(struct ged *gedp)
 {
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
@@ -546,7 +547,7 @@ test_gui_eyemodel_consistency(const char *datadir)
     ged_exec_ae(gedp, 4, s_av);
 
     /* Save the view matrix for comparison */
-    void *v = ged_view_active_ctx(gedp);
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     mat_t saved_m2v;
     bv_model2view_get(saved_m2v, DRAW_TEST_BV_CONST(v));
 

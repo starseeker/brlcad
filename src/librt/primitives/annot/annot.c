@@ -49,6 +49,25 @@
 #include "../../librt_private.h"
 
 
+static uint32_t
+annot_ntoh_u32(const void *buf)
+{
+    uint32_t network_value;
+
+    memcpy(&network_value, buf, sizeof(network_value));
+    return ntohl(network_value);
+}
+
+
+static void
+annot_hton_u32(void *buf, uint32_t value)
+{
+    uint32_t network_value = htonl(value);
+
+    memcpy(buf, &network_value, sizeof(network_value));
+}
+
+
 int
 rt_txt_pos_flag(int *pos_flag, int p_hor, int p_ver)
 {
@@ -910,9 +929,9 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
     VMOVE(annot_ip->V, v);
 
     ptr += SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_VECT;
-    annot_ip->vert_count = ntohl(*(uint32_t *)ptr);
+    annot_ip->vert_count = annot_ntoh_u32(ptr);
     ptr += SIZEOF_NETWORK_LONG;
-    annot_ip->ant.count = ntohl(*(uint32_t *)ptr);
+    annot_ip->ant.count = annot_ntoh_u32(ptr);
     ptr += SIZEOF_NETWORK_LONG;
 
     if (annot_ip->vert_count) {
@@ -947,24 +966,24 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	double scan;
 	double *scanp;
 
-	magic = ntohl(*(uint32_t *)ptr);
+	magic = annot_ntoh_u32(ptr);
 	ptr += SIZEOF_NETWORK_LONG;
 	switch (magic) {
 	    case CURVE_LSEG_MAGIC:
 		BU_ALLOC(lsg, struct line_seg);
 		lsg->magic = magic;
-		lsg->start = ntohl(*(uint32_t *)ptr);
+		lsg->start = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		lsg->end = ntohl(*(uint32_t *)ptr);
+		lsg->end = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		annot_ip->ant.segments[seg_no] = (void *)lsg;
 		break;
 	    case ANN_TSEG_MAGIC:
 		BU_ALLOC(tsg, struct txt_seg);
 		tsg->magic = magic;
-		tsg->ref_pt = ntohl(*(uint32_t *)ptr);
+		tsg->ref_pt = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		tsg->rel_pos = ntohl(*(uint32_t *)ptr);
+		tsg->rel_pos = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		bu_vls_init(&tsg->label);
 		bu_vls_strcpy(&tsg->label, (const char*)ptr);
@@ -980,13 +999,13 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	    case CURVE_CARC_MAGIC:
 		BU_ALLOC(csg, struct carc_seg);
 		csg->magic = magic;
-		csg->start = ntohl(*(uint32_t *)ptr);
+		csg->start = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		csg->end = ntohl(*(uint32_t *)ptr);
+		csg->end = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		csg->orientation = ntohl(*(uint32_t *)ptr);
+		csg->orientation = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		csg->center_is_left = ntohl(*(uint32_t *)ptr);
+		csg->center_is_left = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		bu_cv_ntohd((unsigned char *)&scan, ptr, 1);
 		csg->radius = scan; /* double to fastf_t */
@@ -996,11 +1015,11 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	    case CURVE_NURB_MAGIC:
 		BU_ALLOC(nsg, struct nurb_seg);
 		nsg->magic = magic;
-		nsg->order = ntohl(*(uint32_t *)ptr);
+		nsg->order = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		nsg->pt_type = ntohl(*(uint32_t *)ptr);
+		nsg->pt_type = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
-		nsg->k.k_size = ntohl(*(uint32_t *)ptr);
+		nsg->k.k_size = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 
 		nsg->k.knots = (fastf_t *)bu_malloc(nsg->k.k_size * sizeof(fastf_t), "nsg->k.knots");
@@ -1014,11 +1033,11 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 		bu_free(scanp, "scanp");
 
 		ptr += SIZEOF_NETWORK_DOUBLE * nsg->k.k_size;
-		nsg->c_size = ntohl(*(uint32_t *)ptr);
+		nsg->c_size = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		nsg->ctl_points = (int *)bu_malloc(nsg->c_size * sizeof(int), "nsg->ctl_points");
 		for (i=0; i<(size_t)nsg->c_size; i++) {
-		    nsg->ctl_points[i] = ntohl(*(uint32_t *)ptr);
+		    nsg->ctl_points[i] = annot_ntoh_u32(ptr);
 		    ptr += SIZEOF_NETWORK_LONG;
 		}
 		if (RT_NURB_IS_PT_RATIONAL(nsg->pt_type)) {
@@ -1040,11 +1059,11 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
 	    case CURVE_BEZIER_MAGIC:
 		BU_ALLOC(bsg, struct bezier_seg);
 		bsg->magic = magic;
-		bsg->degree = ntohl(*(uint32_t *)ptr);
+		bsg->degree = annot_ntoh_u32(ptr);
 		ptr += SIZEOF_NETWORK_LONG;
 		bsg->ctl_points = (int *)bu_calloc(bsg->degree+1, sizeof(int), "bsg->ctl_points");
 		for (i=0; i<=(size_t)bsg->degree; i++) {
-		    bsg->ctl_points[i] = ntohl(*(uint32_t *)ptr);
+		    bsg->ctl_points[i] = annot_ntoh_u32(ptr);
 		    ptr += SIZEOF_NETWORK_LONG;
 		}
 		annot_ip->ant.segments[seg_no] = (void *)bsg;
@@ -1062,7 +1081,7 @@ rt_annot_import5(struct rt_db_internal *ip, const struct bu_external *ep, const 
     }
 
     for (i=0; i<ant->count; i++) {
-	ant->reverse[i] = ntohl(*(uint32_t *)ptr);
+	ant->reverse[i] = annot_ntoh_u32(ptr);
 	ptr += SIZEOF_NETWORK_LONG;
     }
 
@@ -1156,9 +1175,9 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
     cp += ELEMENTS_PER_VECT * SIZEOF_NETWORK_DOUBLE;
 
 
-    *(uint32_t *)cp = htonl(annot_ip->vert_count);
+    annot_hton_u32(cp, annot_ip->vert_count);
     cp += SIZEOF_NETWORK_LONG;
-    *(uint32_t *)cp = htonl(annot_ip->ant.count);
+    annot_hton_u32(cp, annot_ip->ant.count);
     cp += SIZEOF_NETWORK_LONG;
 
     /* convert 2D points to mm */
@@ -1188,20 +1207,20 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 	switch (*lng) {
 	    case CURVE_LSEG_MAGIC:
 		lseg = (struct line_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_LSEG_MAGIC);
+		annot_hton_u32(cp, CURVE_LSEG_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(lseg->start);
+		annot_hton_u32(cp, lseg->start);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(lseg->end);
+		annot_hton_u32(cp, lseg->end);
 		cp += SIZEOF_NETWORK_LONG;
 		break;
 	    case ANN_TSEG_MAGIC:
 		tseg = (struct txt_seg *)lng;
-		*(uint32_t *)cp = htonl(ANN_TSEG_MAGIC);
+		annot_hton_u32(cp, ANN_TSEG_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(tseg->ref_pt);
+		annot_hton_u32(cp, tseg->ref_pt);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(tseg->rel_pos);
+		annot_hton_u32(cp, tseg->rel_pos);
 		cp += SIZEOF_NETWORK_LONG;
 
 		bu_strlcpy((char *)cp, bu_vls_addr(&tseg->label), bu_vls_strlen(&tseg->label) + 1);
@@ -1216,15 +1235,15 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		break;
 	    case CURVE_CARC_MAGIC:
 		cseg = (struct carc_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_CARC_MAGIC);
+		annot_hton_u32(cp, CURVE_CARC_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->start);
+		annot_hton_u32(cp, cseg->start);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->end);
+		annot_hton_u32(cp, cseg->end);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->orientation);
+		annot_hton_u32(cp, cseg->orientation);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(cseg->center_is_left);
+		annot_hton_u32(cp, cseg->center_is_left);
 		cp += SIZEOF_NETWORK_LONG;
 		scan = cseg->radius * local2mm;
 		bu_cv_htond(cp, (unsigned char *)&scan, 1);
@@ -1232,13 +1251,13 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		break;
 	    case CURVE_NURB_MAGIC:
 		nseg = (struct nurb_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_NURB_MAGIC);
+		annot_hton_u32(cp, CURVE_NURB_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(nseg->order);
+		annot_hton_u32(cp, nseg->order);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(nseg->pt_type);
+		annot_hton_u32(cp, nseg->pt_type);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(nseg->k.k_size);
+		annot_hton_u32(cp, nseg->k.k_size);
 		cp += SIZEOF_NETWORK_LONG;
 		scanp = (double *)bu_malloc(nseg->k.k_size * sizeof(double), "scanp");
 		/* convert fastf_t to double */
@@ -1248,10 +1267,10 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		bu_cv_htond(cp, (const unsigned char *)nseg->k.knots, nseg->k.k_size);
 		bu_free(scanp, "scanp");
 		cp += nseg->k.k_size * SIZEOF_NETWORK_DOUBLE;
-		*(uint32_t *)cp = htonl(nseg->c_size);
+		annot_hton_u32(cp, nseg->c_size);
 		cp += SIZEOF_NETWORK_LONG;
 		for (i=0; i<(size_t)nseg->c_size; i++) {
-		    *(uint32_t *)cp = htonl(nseg->ctl_points[i]);
+		    annot_hton_u32(cp, nseg->ctl_points[i]);
 		    cp += SIZEOF_NETWORK_LONG;
 		}
 		if (RT_NURB_IS_PT_RATIONAL(nseg->pt_type)) {
@@ -1267,12 +1286,12 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
 		break;
 	    case CURVE_BEZIER_MAGIC:
 		bseg = (struct bezier_seg *)lng;
-		*(uint32_t *)cp = htonl(CURVE_BEZIER_MAGIC);
+		annot_hton_u32(cp, CURVE_BEZIER_MAGIC);
 		cp += SIZEOF_NETWORK_LONG;
-		*(uint32_t *)cp = htonl(bseg->degree);
+		annot_hton_u32(cp, bseg->degree);
 		cp += SIZEOF_NETWORK_LONG;
 		for (i=0; i<=(size_t)bseg->degree; i++) {
-		    *(uint32_t *)cp = htonl(bseg->ctl_points[i]);
+		    annot_hton_u32(cp, bseg->ctl_points[i]);
 		    cp += SIZEOF_NETWORK_LONG;
 		}
 		break;
@@ -1284,7 +1303,7 @@ rt_annot_export5(struct bu_external *ep, const struct rt_db_internal *ip, double
     }
 
     for (seg_no=0; seg_no < annot_ip->ant.count; seg_no++) {
-	*(uint32_t *)cp = htonl(annot_ip->ant.reverse[seg_no]);
+	annot_hton_u32(cp, annot_ip->ant.reverse[seg_no]);
 	cp += SIZEOF_NETWORK_LONG;
     }
 
