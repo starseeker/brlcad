@@ -209,8 +209,21 @@ if [ "$HAVE_XDOTOOL" -eq 1 ]; then
     xdotool mousemove --window "$WIN" 18 11 2>/dev/null || true
     xdotool click 1 2>/dev/null || true
     sleep 0.2
-    xdotool mousemove --window "$WIN" 40 153 2>/dev/null || true
-    xdotool click 1 2>/dev/null || true
+    # The File menu's height varies with the Qt theme and display DPI.  Find
+    # its transient window and select the center of its last item (Exit)
+    # instead of relying on a fixed main-window coordinate.
+    MENU_WIN=""
+    for w in $(xdotool search --onlyvisible --pid "$QGED_PID" 2>/dev/null); do
+	[ "$w" = "$WIN" ] && continue
+	MENU_WIN="$w"
+	break
+    done
+    if [ -n "$MENU_WIN" ]; then
+	eval "$(xdotool getwindowgeometry --shell "$MENU_WIN" 2>/dev/null)"
+	xdotool mousemove --window "$MENU_WIN" "$((WIDTH / 2))" \
+	    "$((HEIGHT - HEIGHT / 10))" 2>/dev/null || true
+	xdotool click 1 2>/dev/null || true
+    fi
     qged_exited=0
     for i in $(seq 1 100); do
         if [ ! -d "/proc/$QGED_PID" ]; then
