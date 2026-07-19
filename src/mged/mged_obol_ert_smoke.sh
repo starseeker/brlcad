@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+# A non-login Git for Windows sh does not add its own core utilities to PATH.
+PATH="/usr/bin:/bin:${PATH}"
+export PATH
+
 if [ "$#" -ne 3 ]; then
     echo "Usage: mged_obol_ert_smoke.sh <mged> <db> <workdir>" 1>&2
     exit 1
@@ -20,14 +24,15 @@ if [ -z "$PYTHON" ]; then
     done
 fi
 
-if [ -z "$PYTHON" ]; then
-    echo "No usable Python interpreter found for PNG validation" 1>&2
-    exit 1
-fi
-
 RT_OUT="${WORKDIR}/mged_obol_rt_smoke.png"
 ERT_OUT="${WORKDIR}/mged_obol_ert_smoke.png"
 LOG="${WORKDIR}/mged_obol_ert_smoke.log"
+MGED_DIR=${MGED%/*}
+if [ "$MGED_DIR" = "$MGED" ]; then
+    MGED_DIR=.
+fi
+PNG_PIX="${MGED_DIR}/png-pix"
+PIXSTAT="${MGED_DIR}/pixstat"
 
 rm -f "$RT_OUT" "$ERT_OUT" "$LOG"
 
@@ -78,7 +83,8 @@ if [ ! -s "$RT_OUT" ] || [ ! -s "$ERT_OUT" ]; then
     exit 1
 fi
 
-"$PYTHON" - "$RT_OUT" "$ERT_OUT" <<'PY'
+if [ -n "$PYTHON" ]; then
+    "$PYTHON" - "$RT_OUT" "$ERT_OUT" <<'PY'
 import struct
 import sys
 import zlib
@@ -152,5 +158,20 @@ for path in sys.argv[1:]:
     if len(unique) <= 1 or nonblack <= 0:
         raise SystemExit("%s has no visible framebuffer content" % path)
 PY
+else
+    for png in "$RT_OUT" "$ERT_OUT"; do
+	pix="${png}.pix"
+	if ! "$PNG_PIX" "$png" > "$pix"; then
+	    echo "$png could not be decoded by png-pix" 1>&2
+	    exit 1
+	fi
+	stats=$("$PIXSTAT" "$pix")
+	if printf '%s\n' "$stats" | grep -Eq '^Max[[:space:]]+0[[:space:]]+0[[:space:]]+0$'; then
+	    echo "$png has no visible framebuffer content" 1>&2
+	    exit 1
+	fi
+	rm -f "$pix"
+    done
+fi
 
 exit 0

@@ -37,6 +37,7 @@
 #include "bv.h"
 #include "ged/draw.h"
 #include "../ged_bobol_private.hpp"
+#include "../ged_draw_private.h"
 #include "../ged_private.h"
 
 /* Return 1 (and set *v) if the entire string parses as a number. */
@@ -59,59 +60,11 @@ _autoview_arg_is_num(const char *s, double *v)
 }
 
 static int
-_autoview_bobol_database_bounds(struct ged *gedp, vect_t min, vect_t max)
+_autoview_bobol_database_bounds(struct ged *gedp, vect_t *min, vect_t *max)
 {
-    BObolSceneController *scene = ged_bobol_scene(gedp);
-    if (!scene)
-	return 0;
-
-    VSETALL(min, INFINITY);
-    VSETALL(max, -INFINITY);
-    int have_bounds = 0;
-    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
-	BObolDatabaseSourceSummary source;
-	if (!scene->getDatabaseSourceSummary(i, source) || !source.valid ||
-	    !source.visible || !source.sourceBoundsValid ||
-	    source.sourceBounds.isEmpty())
-	    continue;
-
-	const SbVec3f source_min = source.sourceBounds.getMin();
-	const SbVec3f source_max = source.sourceBounds.getMax();
-	point_t center;
-	VSET(center,
-	    (source_min[X] + source_max[X]) * 0.5,
-	    (source_min[Y] + source_max[Y]) * 0.5,
-	    (source_min[Z] + source_max[Z]) * 0.5);
-	fastf_t extent = source_max[X] - source_min[X];
-	extent = std::max(extent,
-	    static_cast<fastf_t>(source_max[Y] - source_min[Y]));
-	extent = std::max(extent,
-	    static_cast<fastf_t>(source_max[Z] - source_min[Z]));
-	if (extent < SQRT_SMALL_FASTF)
-	    extent = SQRT_SMALL_FASTF;
-
-	point_t source_bounds_min;
-	point_t source_bounds_max;
-	VSET(source_bounds_min, center[X] - extent, center[Y] - extent,
-	    center[Z] - extent);
-	VSET(source_bounds_max, center[X] + extent, center[Y] + extent,
-	    center[Z] + extent);
-	VMIN(min, source_bounds_min);
-	VMAX(max, source_bounds_max);
-	have_bounds = 1;
-    }
-
-    if (have_bounds)
-	return 1;
-
-    SbBox3f bounds;
-    if (!scene->getDatabaseSourceBounds(bounds, TRUE) || bounds.isEmpty())
-	return 0;
-    const SbVec3f source_min = bounds.getMin();
-    const SbVec3f source_max = bounds.getMax();
-    VSET(min, source_min[X], source_min[Y], source_min[Z]);
-    VSET(max, source_max[X], source_max[Y], source_max[Z]);
-    return 1;
+    int empty = 1;
+    return ged_draw_obol_scene_database_autoview_bounds(gedp, min, max,
+	&empty) && !empty;
 }
 
 static int
@@ -125,7 +78,7 @@ _autoview_obol_database_scene(
 	return 0;
 
     vect_t min, max;
-    if (!_autoview_bobol_database_bounds(gedp, min, max))
+    if (!_autoview_bobol_database_bounds(gedp, &min, &max))
 	return 0;
 
     bv_autoview_bounds(bv_context_view((struct bv_context *)view_ctx),

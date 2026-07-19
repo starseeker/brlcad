@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+# A non-login Git for Windows sh does not add its own core utilities to PATH.
+PATH="/usr/bin:/bin:${PATH}"
+export PATH
+
 if [ "$#" -ne 3 ]; then
     echo "Usage: mged_obol_progressive_lod.sh <mged> <db> <workdir>" 1>&2
     exit 1
@@ -20,11 +24,6 @@ if [ -z "$PYTHON" ]; then
     done
 fi
 
-if [ -z "$PYTHON" ]; then
-    echo "No usable Python interpreter found for PNG validation" 1>&2
-    exit 1
-fi
-
 TMPDB="${WORKDIR}/mged_obol_progressive_lod.g"
 CACHE="${WORKDIR}/mged_obol_progressive_lod_cache"
 LOG="${WORKDIR}/mged_obol_progressive_lod.log"
@@ -32,10 +31,16 @@ FRAME0="${WORKDIR}/mged_obol_progressive_lod_0.png"
 FRAME1="${WORKDIR}/mged_obol_progressive_lod_1.png"
 FRAME2="${WORKDIR}/mged_obol_progressive_lod_2.png"
 FRAME3="${WORKDIR}/mged_obol_progressive_lod_3.png"
+MGED_DIR=${MGED%/*}
+if [ "$MGED_DIR" = "$MGED" ]; then
+    MGED_DIR=.
+fi
+PNG_PIX="${MGED_DIR}/png-pix"
+PIXSTAT="${MGED_DIR}/pixstat"
 
 rm -f "$TMPDB" "$LOG" "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3"
-rm -rf "$CACHE"
-mkdir -p "$CACHE"
+cmake -E rm -rf "$CACHE"
+cmake -E make_directory "$CACHE"
 cp "$DB" "$TMPDB"
 
 printf 'dm open --host headless --renderer sw
@@ -123,7 +128,8 @@ if ! grep -Eq 'active_lod_mesh_payloads: [1-9][0-9]*' "$LOG"; then
     exit 1
 fi
 
-"$PYTHON" - "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3" <<'PY'
+if [ -n "$PYTHON" ]; then
+    "$PYTHON" - "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3" <<'PY'
 import struct
 import sys
 import zlib
@@ -204,5 +210,38 @@ if diff01 <= 0 and diff12 <= 0 and diff23 <= 0:
 print("progressive_lod_diff diff01=%d diff12=%d diff23=%d diff03=%d lit=%d,%d,%d,%d" %
       (diff01, diff12, diff23, diff03, imgs[0][4], imgs[1][4], imgs[2][4], imgs[3][4]))
 PY
+else
+    first_size=
+    previous_pix=
+    changed=0
+    for png in "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3"; do
+	pix="${png}.pix"
+	if ! "$PNG_PIX" "$png" > "$pix"; then
+	    echo "$png could not be decoded by png-pix" 1>&2
+	    exit 1
+	fi
+	stats=$("$PIXSTAT" "$pix")
+	if printf '%s\n' "$stats" | grep -Eq '^Max[[:space:]]+0[[:space:]]+0[[:space:]]+0$'; then
+	    echo "$png is too dark for progressive LoD validation" 1>&2
+	    exit 1
+	fi
+	pix_size=$(wc -c < "$pix")
+	if [ -z "$first_size" ]; then
+	    first_size=$pix_size
+	elif [ "$pix_size" -ne "$first_size" ]; then
+	    echo "progressive LoD frames have inconsistent dimensions" 1>&2
+	    exit 1
+	fi
+	if [ -n "$previous_pix" ] && ! cmp -s "$previous_pix" "$pix"; then
+	    changed=1
+	fi
+	previous_pix=$pix
+    done
+    if [ "$changed" -eq 0 ]; then
+	echo "progressive LoD frames did not change" 1>&2
+	exit 1
+    fi
+    rm -f "${FRAME0}.pix" "${FRAME1}.pix" "${FRAME2}.pix" "${FRAME3}.pix"
+fi
 
 exit 0

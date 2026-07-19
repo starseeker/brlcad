@@ -201,6 +201,38 @@ screen_vls(
 }
 
 
+#define MGED_STATUS_MIN_FONT_SIZE 8.0
+#define MGED_STATUS_GLYPH_WIDTH_EM 0.62
+
+/*
+ * SoHUDLabel uses a proportional font, but an average glyph width of 0.62 em
+ * is a conservative fit estimate for MGED's numeric status strings.  Keep the
+ * preferred faceplate font when it fits and reduce it only as much as needed.
+ */
+static fastf_t
+mged_status_font_fit(const char *text, int view_width, fastf_t preferred)
+{
+    if (!text || !text[0] || view_width <= 0 || preferred <= 0.0)
+	return preferred;
+
+    const size_t glyph_count = strlen(text);
+    const fastf_t usable_width = view_width > 8 ?
+	(fastf_t)(view_width - 8) : (fastf_t)view_width;
+    const fastf_t fit = usable_width /
+	((fastf_t)glyph_count * MGED_STATUS_GLYPH_WIDTH_EM);
+    return fit < preferred ? fit : preferred;
+}
+
+
+static fastf_t
+mged_status_font_clamped(const char *text, int view_width, fastf_t preferred)
+{
+    fastf_t fit = mged_status_font_fit(text, view_width, preferred);
+    return fit < MGED_STATUS_MIN_FONT_SIZE ?
+	MGED_STATUS_MIN_FONT_SIZE : fit;
+}
+
+
 /*
  * Produce titles, etc., on the screen.
  * NOTE that this routine depends on being called after the retained scene
@@ -255,6 +287,9 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     const int view_height = bv_height_get(view);
     const fastf_t view_aspect = (view_width > 0 && view_height > 0) ?
 	(fastf_t)view_width / (fastf_t)view_height : 1.0;
+    const fastf_t preferred_status_font = params.font_size > 0 ?
+	params.font_size : 20.0;
+    fastf_t status_font_size = preferred_status_font;
     bv_center_mat_get(view_center, view);
     bv_aet_get(view_aet, view);
     view_perspective = bv_perspective_get(view);
@@ -357,7 +392,11 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
 
     /* Label the vertices of the edited solid */
-    if (MEDIT(s) && (MEDIT(s)->edit_flag >= 0 || (s->global_editing_state == ST_O_EDIT && !highlighted_legacy_eval))) {
+    if (MEDIT(s) &&
+	(s->global_editing_state == ST_S_EDIT ||
+	 s->global_editing_state == ST_O_EDIT) &&
+	(MEDIT(s)->edit_flag >= 0 ||
+	 (s->global_editing_state == ST_O_EDIT && !highlighted_legacy_eval))) {
 	mat_t xform;
 	struct rt_point_labels pl[8+1];
 	point_t lines[2*4];	/* up to 4 lines to draw */
@@ -506,10 +545,36 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 		      size, bu_units_string(s->dbip->dbi_local2base));
 	bu_vls_printf(&vls, "az=%3.2f el=%3.2f tw=%3.2f ang=(%s, %s, %s)", V3ARGS(view_aet),
 		      ang_x, ang_y, ang_z);
+	status_font_size = mged_status_font_fit(bu_vls_cstr(&vls),
+		view_width, preferred_status_font);
+	if (status_font_size < MGED_STATUS_MIN_FONT_SIZE) {
+	    /* Rotation deltas are the least important telemetry at narrow widths. */
+	    bu_vls_sprintf(&vls,
+		    " cent=(%s, %s, %s), %s %s, az=%3.2f el=%3.2f tw=%3.2f",
+		    cent_x, cent_y, cent_z, size,
+		    bu_units_string(s->dbip->dbi_local2base), V3ARGS(view_aet));
+	    status_font_size = mged_status_font_fit(bu_vls_cstr(&vls),
+		    view_width, preferred_status_font);
+	}
+	if (status_font_size < MGED_STATUS_MIN_FONT_SIZE) {
+	    /* Preserve scale and orientation when the center no longer fits. */
+	    bu_vls_sprintf(&vls, " %s %s, az=%3.2f el=%3.2f tw=%3.2f",
+		    size, bu_units_string(s->dbip->dbi_local2base),
+		    V3ARGS(view_aet));
+	    status_font_size = mged_status_font_fit(bu_vls_cstr(&vls),
+		    view_width, preferred_status_font);
+	}
+	if (status_font_size < MGED_STATUS_MIN_FONT_SIZE) {
+	    /* A readable view size is still useful in an extremely narrow view. */
+	    bu_vls_sprintf(&vls, " %s %s", size,
+		    bu_units_string(s->dbip->dbi_local2base));
+	}
+	status_font_size = mged_status_font_clamped(bu_vls_cstr(&vls),
+		view_width, preferred_status_font);
 	mged_hud_color_set(&hud, color_scheme->cs_status_text1);
 	(void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
 		GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE),
-		0.0, 0);
+		status_font_size, 0);
     } /* if faceplate !0 */
 
     /*
@@ -542,7 +607,8 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	    mged_hud_color_set(&hud, color_scheme->cs_status_text2);
 	    (void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
 		    GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
-		    0.0, 0);
+		    mged_status_font_clamped(bu_vls_cstr(&vls), view_width,
+			status_font_size), 0);
 	}
 	Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_adc_name),
 		   bu_vls_addr(&vls), TCL_GLOBAL_ONLY);
@@ -565,7 +631,8 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	    mged_hud_color_set(&hud, color_scheme->cs_status_text2);
 	    (void)mged_hud_label_add(&hud, bu_vls_addr(&kp_vls),
 		    GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
-		    0.0, 0);
+		    mged_status_font_clamped(bu_vls_cstr(&kp_vls), view_width,
+			status_font_size), 0);
 	    ss_line_not_drawn = 0;
 	}
 
@@ -596,7 +663,8 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	    mged_hud_color_set(&hud, color_scheme->cs_status_text2);
 	    (void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
 		    GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
-		    0.0, 0);
+		    mged_status_font_clamped(bu_vls_cstr(&vls), view_width,
+			status_font_size), 0);
 
 	    ss_line_not_drawn = 0;
 	}
@@ -608,7 +676,8 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	mged_hud_color_set(&hud, color_scheme->cs_status_text2);
 	(void)mged_hud_label_add(&hud, bu_vls_addr(&vls),
 		GED2PM1(TITLE_XBASE), GED2PM1(TITLE_YBASE + TEXT1_DY),
-		0.0, 0);
+		mged_status_font_clamped(bu_vls_cstr(&vls), view_width,
+		    status_font_size), 0);
     }
     Tcl_SetVar(s->interp, bu_vls_addr(&s->mged_curr_display->display_fps_name),
 	       bu_vls_addr(&vls), TCL_GLOBAL_ONLY);

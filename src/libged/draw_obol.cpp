@@ -47,6 +47,7 @@
 #include "ged/draw_obol.h"
 #include "ged/view.h"
 #include "icv.h"
+#include "rt/db5.h"
 #include "rt/db_fullpath.h"
 #include "rt/search.h"
 #include "rt/view.h"
@@ -9393,6 +9394,125 @@ ged_draw_obol_scene_database_bounds(
     return 1;
 }
 
+static int
+ged_obol_database_record_all_halfspaces(
+    struct ged *gedp,
+    const struct ged_db_index_record &record,
+    std::unordered_set<ged_db_index_id> &visiting)
+{
+    if (!gedp || !record.valid || !record.dp)
+	return 0;
+    if (record.dp->d_flags & RT_DIR_SOLID)
+	return record.dp->d_minor_type == DB5_MINORTYPE_BRLCAD_HALF;
+    if (!(record.dp->d_flags & RT_DIR_COMB))
+	return 0;
+
+    const ged_db_index_id object_id = record.object_id ?
+	record.object_id : record.id;
+    if (!object_id || !visiting.insert(object_id).second)
+	return 0;
+
+    const size_t child_count = ged_db_index_child_count(gedp, object_id);
+    int all_halfspaces = child_count ? 1 : 0;
+    for (size_t i = 0; all_halfspaces && i < child_count; i++) {
+	struct ged_db_index_child child;
+	memset(&child, 0, sizeof(child));
+	if (!ged_db_index_child_at(gedp, object_id, i, &child) ||
+	    !ged_obol_database_record_all_halfspaces(gedp, child.record,
+		visiting))
+	    all_halfspaces = 0;
+    }
+    visiting.erase(object_id);
+    return all_halfspaces;
+}
+
+static int
+ged_obol_database_source_member_autoview_bounds(
+    struct ged *gedp,
+    const char *path,
+    vect_t *min,
+    vect_t *max)
+{
+    if (!gedp || !gedp->dbip || !path || !path[0] || !min || !max)
+	return 0;
+
+    const char *normalized = ged_obol_skip_leading_slash(path);
+    const size_t path_length =
+	ged_db_index_path_resolve(gedp, normalized, NULL, 0);
+    if (!path_length)
+	return 0;
+
+    std::vector<ged_db_index_id> ids(path_length);
+    if (ged_db_index_path_resolve(gedp, normalized, ids.data(), ids.size()) !=
+	path_length)
+	return 0;
+
+    const size_t child_count = ged_db_index_child_count(gedp, ids.back());
+    if (!child_count)
+	return 0;
+
+    VSETALL(*min, INFINITY);
+    VSETALL(*max, -INFINITY);
+    int have_bounds = 0;
+    std::unordered_set<ged_db_index_id> halfspace_visiting;
+    for (size_t i = 0; i < child_count; i++) {
+	struct ged_db_index_child child;
+	memset(&child, 0, sizeof(child));
+	if (!ged_db_index_child_at(gedp, ids.back(), i, &child) ||
+	    !child.record.valid || child.bool_op == DB_OP_SUBTRACT)
+	    continue;
+	if (ged_obol_database_record_all_halfspaces(gedp, child.record,
+		halfspace_visiting))
+	    continue;
+
+	const char *child_name = child.record.name;
+	if ((!child_name || !child_name[0]) && child.record.dp)
+	    child_name = child.record.dp->d_namep;
+	if (!child_name || !child_name[0])
+	    continue;
+
+	struct bu_vls child_path = BU_VLS_INIT_ZERO;
+	bu_vls_printf(&child_path, "%s/%s", normalized, child_name);
+	const char *bounds_path = bu_vls_cstr(&child_path);
+	point_t child_min;
+	point_t child_max;
+	struct bu_vls msgs = BU_VLS_INIT_ZERO;
+	const int bounds_ret = rt_obj_bounds(&msgs, gedp->dbip, 1,
+	    &bounds_path, 0, child_min, child_max);
+	bu_vls_free(&msgs);
+	bu_vls_free(&child_path);
+	if (bounds_ret != BRLCAD_OK ||
+	    !isfinite(child_min[X]) || !isfinite(child_min[Y]) ||
+	    !isfinite(child_min[Z]) || !isfinite(child_max[X]) ||
+	    !isfinite(child_max[Y]) || !isfinite(child_max[Z]))
+	    continue;
+
+	point_t center;
+	VADD2SCALE(center, child_min, child_max, 0.5);
+	fastf_t extent = child_max[X] - child_min[X];
+	V_MAX(extent, child_max[Y] - child_min[Y]);
+	V_MAX(extent, child_max[Z] - child_min[Z]);
+	if (extent < SQRT_SMALL_FASTF)
+	    extent = SQRT_SMALL_FASTF;
+
+	/* Frame each finite, positive member around its own center before
+	 * combining the results.  This keeps an infinite halfspace or tiny
+	 * helper object from shifting the center of a much larger visible model,
+	 * while retaining enough margin for rotation. */
+	point_t padded_min;
+	point_t padded_max;
+	VSET(padded_min, center[X] - extent, center[Y] - extent,
+	    center[Z] - extent);
+	VSET(padded_max, center[X] + extent, center[Y] + extent,
+	    center[Z] + extent);
+	VMIN(*min, padded_min);
+	VMAX(*max, padded_max);
+	have_bounds = 1;
+    }
+
+    return have_bounds;
+}
+
 extern "C" int
 ged_draw_obol_scene_database_autoview_bounds(
     struct ged *gedp,
@@ -9411,18 +9531,30 @@ ged_draw_obol_scene_database_autoview_bounds(
     VSETALL(*max, -INFINITY);
     *empty_out = 1;
 
-    /* The legacy display path framed each displayed object's center plus
-     * and minus its maximum extent.  Preserve that safety margin for the
-     * ordinary all-displayed-object autoview, so a subsequent rotation does
-     * not immediately clip the scene.  Named-object autoviews intentionally
-     * use their direct database bounds instead. */
+    /* Use database members when a displayed source is a combination.  The
+     * retained renderer may flatten that combination into one aggregate
+     * shape, whose raw AABB can be dominated by non-finite or tiny helper
+     * geometry rather than the model the user expects to frame. */
     const int source_count = scene->getDatabaseSourceCount();
     int have_source_bounds = 0;
     for (int i = 0; i < source_count; i++) {
 	BObolDatabaseSourceSummary source;
 	if (!scene->getDatabaseSourceSummary(i, source) || !source.valid ||
-	    !source.visible || !source.sourceBoundsValid ||
-	    source.sourceBounds.isEmpty())
+	    !source.visible)
+	    continue;
+
+	vect_t member_min;
+	vect_t member_max;
+	if (source.path.getLength() > 0 &&
+	    ged_obol_database_source_member_autoview_bounds(gedp,
+		source.path.getString(), &member_min, &member_max)) {
+	    VMIN(*min, member_min);
+	    VMAX(*max, member_max);
+	    have_source_bounds = 1;
+	    continue;
+	}
+
+	if (!source.sourceBoundsValid || source.sourceBounds.isEmpty())
 	    continue;
 
 	const SbVec3f source_min = source.sourceBounds.getMin();

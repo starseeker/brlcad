@@ -31,6 +31,7 @@
 #include "ged.h"
 
 #include "../ged_bobol_private.hpp"
+#include "../ged_draw_private.h"
 #include "../ged_private.h"
 
 /*
@@ -91,9 +92,12 @@ ged_get_autoview_core(struct ged *gedp, int argc, const char *argv[])
 	    bounds = measure.getBounds();
 	}
     } else {
-	BObolSceneController *scene = ged_bobol_scene(gedp);
-	if (scene)
-	    (void)scene->getDatabaseSourceBounds(bounds, TRUE);
+	int obol_empty = 1;
+	if (ged_draw_obol_scene_database_autoview_bounds(gedp, &min, &max,
+		&obol_empty) && !obol_empty) {
+	    bounds.setBounds(SbVec3f(min[X], min[Y], min[Z]),
+		SbVec3f(max[X], max[Y], max[Z]));
+	}
     }
 
     is_empty = bounds.isEmpty() ? 1 : 0;

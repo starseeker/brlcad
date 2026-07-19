@@ -832,9 +832,19 @@ private:
 	    modifiers |= BOBOL_INPUT_MOD_SHIFT;
 	if (state & ControlMask)
 	    modifiers |= BOBOL_INPUT_MOD_CONTROL;
-	if (state & Mod1Mask)
+	/* On Windows Tk assigns Mod1Mask to Num Lock and reports logical Alt
+	 * and Meta using its extended masks.  Treating Mod1Mask as Alt makes
+	 * every pointer event look Alt-modified whenever Num Lock is enabled. */
+#ifdef _WIN32
+	const unsigned int alt_mask = AnyModifier << 2;
+	const unsigned int meta_mask = AnyModifier << 1;
+#else
+	const unsigned int alt_mask = Mod1Mask;
+	const unsigned int meta_mask = Mod4Mask;
+#endif
+	if (state & alt_mask)
 	    modifiers |= BOBOL_INPUT_MOD_ALT;
-	if (state & Mod4Mask)
+	if (state & meta_mask)
 	    modifiers |= BOBOL_INPUT_MOD_META;
 	return modifiers;
     }

@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+# A non-login Git for Windows sh does not add its own core utilities to PATH.
+# Absolute /usr/bin and /bin are mapped by MSYS and are harmless on Unix.
+PATH="/usr/bin:/bin:${PATH}"
+export PATH
+
 if [ "$#" -ne 3 ]; then
     echo "Usage: mged_obol_smoke.sh <mged> <db> <workdir>" 1>&2
     exit 1
@@ -18,7 +23,11 @@ RT_MOVED_PIX="${WORKDIR}/mged_obol_smoke_rt_moved.pix"
 PS_OUT="${WORKDIR}/mged_obol_smoke.ps"
 PLOT_OUT="${WORKDIR}/mged_obol_smoke.plot3"
 LOG="${WORKDIR}/mged_obol_smoke.log"
-PNG_PIX="`dirname "$MGED"`/png-pix"
+MGED_DIR=${MGED%/*}
+if [ "$MGED_DIR" = "$MGED" ]; then
+    MGED_DIR=.
+fi
+PNG_PIX="${MGED_DIR}/png-pix"
 
 rm -f "$OUT" "$PIX_OUT" "$RT_OUT" "$RT_PIX" "$RT_MOVED_OUT" \
     "$RT_MOVED_PIX" "$PS_OUT" "$PLOT_OUT" "$LOG"
