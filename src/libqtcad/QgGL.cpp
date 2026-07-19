@@ -65,7 +65,7 @@ QgGL::QgGL(QWidget *parent, BObolViewController *controller,
 QgGL::~QgGL()
 {
 	d->input.setEndpoint(NULL);
-    qgcanvas_destroy_obol(*d);
+    qgcanvas_destroy_obol(*d, this);
     qgcanvas_view_context_destroy(d->v);
     d->v = nullptr;
     delete d;

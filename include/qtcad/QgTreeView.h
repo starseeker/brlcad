@@ -45,8 +45,6 @@ public:
 	QgTreeView(QWidget *pparent, QgModel *treemodel);
 	~QgTreeView() {};
 
-	QModelIndex selected();
-
 	void drawBranches(QPainter* painter, const QRect& rrect, const QModelIndex& index) const override;
 	/* Return the QgModel backing this tree view. */
 	QgModel *cadModel() const { return m; }
@@ -65,14 +63,12 @@ public slots:
 	//void expand_link(const QUrl &link);
 	void redo_expansions(void *);
 	void redo_highlights();
-	void selectionChanged(const QItemSelection &selected, const QItemSelection &deselected) override;
 	void do_draw_toggle(const QModelIndex &index);
 	void qgitem_select_sync(QgItem *);
 	void do_view_update(QgViewUpdateFlags);
 
 private:
 	void header_state();
-	QModelIndex cached_selection_idx = QModelIndex();
 	QgModel *m = nullptr;
 };
 

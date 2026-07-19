@@ -44,6 +44,14 @@ EditEllTool::paletteElement()
     if (m_ell && el && !m_extra_wired) {
 	QObject::connect(m_ell, &QEll::view_updated,
 			 el, &QgToolPaletteElement::element_view_changed);
+	if (m_ctx && m_ctx->notifier) {
+	    QObject::connect(m_ctx->notifier, &QgPluginNotifier::viewUpdated,
+		this, [this](QgViewUpdateFlags flags) {
+		    if (m_ell && (flags & QG_VIEW_SELECT))
+			QMetaObject::invokeMethod(m_ell, "sync_selection",
+			    Qt::DirectConnection);
+		});
+	}
 	m_extra_wired = true;
     }
     return el;
@@ -82,7 +90,13 @@ EditEllTool::refresh()
 void
 EditEllTool::onDbChanged()
 {
-    refresh();
+    if (!m_ell)
+	return;
+    /* The database-change notification is already driving a host refresh;
+     * suppress the widget's nested view_updated signal. */
+    m_ell->blockSignals(true);
+    QMetaObject::invokeMethod(m_ell, "reset_for_database", Qt::DirectConnection);
+    m_ell->blockSignals(false);
 }
 
 void

@@ -125,7 +125,7 @@ QgPolyCreateFilter::eventFilter(QObject *, QEvent *e)
 			polygon = ged_polygon_create(
 				ged_view_context_from_bv(
 				    static_cast<struct bv_context *>(v)),
-				"_tmp_view_polygon", 0,
+				"_tmp_view_polygon", 1,
 				ptype, current_point);
 			ged_polygon_set_visual(polygon, &edge_color, &fill_color, fill_slope_x, fill_slope_y, fill_density, vZ, fill_poly ? 1 : 0);
 

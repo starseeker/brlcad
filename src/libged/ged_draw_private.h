@@ -406,6 +406,8 @@ extern int ged_draw_obol_view_context_snap_first_candidate(
 	point_t candidate);
 extern int ged_draw_obol_view_feature_ref_is_null(
 	ged_view_feature_ref ref);
+extern int ged_draw_obol_view_feature_remove_ref(
+	ged_view_feature_ref ref);
 extern int ged_draw_obol_view_context_edit_preview_publish_event(
 	struct ged_view_context *view_ctx,
 	ged_view_feature_ref feature,

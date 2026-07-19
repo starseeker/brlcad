@@ -116,7 +116,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	return fail("new view axes defaults are incorrect");
     if (!bv_params_state_get(&params, v) ||
 	    !params.draw_size || !params.draw_center || !params.draw_az ||
-	    !params.draw_el || !params.draw_tw || params.font_size != 20)
+	    !params.draw_el || !params.draw_tw || !params.draw_fps ||
+	    params.font_size != 20)
 	return fail("new view params defaults are incorrect");
     if (!bv_snap_state_get(&snap, v) || snap.lines ||
 	    snap.source_flags || !near_fastf(snap.tolerance_factor, 10.0) ||

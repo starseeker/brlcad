@@ -293,6 +293,7 @@ BObolHeadlessWindowHost::renderPending(void)
     this->hp->frameComponents = components;
 
     controller->consumeRenderRequest(NULL);
+    controller->noteFramePresented();
     this->hp->lastRenderReason = requestedReason;
     if (controller->hasProgressiveWorkPending())
 	controller->requestRender("progressive-pending");

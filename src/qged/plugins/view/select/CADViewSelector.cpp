@@ -473,7 +473,12 @@ CADViewSelector::applyInputAction(BObolInputAction action,
 	rf->dbip = gedp->dbip;
 	cf = rf;
     }
-    cf->first_only = select_all_depth_ckbx->isChecked() ? false : true;
+    /* A rectangle is a set-selection gesture: with its depth option disabled,
+     * it must collect all paths in the box rather than silently degrade to
+     * the single nearest hit.  Point/ray selection retains the explicit
+     * all-intersections choice. */
+    cf->first_only = use_rect_select_button->isChecked() ? false :
+	(select_all_depth_ckbx->isChecked() ? false : true);
     cf->set_view_widget(m_input_view);
     if (!cf->semanticInput(action, event))
 	return BOBOL_INPUT_RESULT_UNHANDLED;

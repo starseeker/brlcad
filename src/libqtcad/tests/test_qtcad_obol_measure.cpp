@@ -292,6 +292,30 @@ main(int argc, char **argv)
 	    find_measure_overlay(controller, "tool:measurement"))
 	FAIL("qtcad 3D measure filter should clear the Obol overlay on right click");
 
+    BObolInputEvent semanticEvent;
+    semanticEvent.type = BOBOL_INPUT_POINTER_PRESS;
+    semanticEvent.x = 90;
+    semanticEvent.y = 70;
+    semanticEvent.button = 0;
+    semanticEvent.modifiers = BOBOL_INPUT_MOD_NONE;
+    if (!filter.semanticInput(QG_MEASURE_INPUT_BEGIN, &semanticEvent) ||
+	    filter.mode != 1)
+	FAIL("qtcad 3D measure filter should accept endpoint-routed press input");
+    semanticEvent.type = BOBOL_INPUT_POINTER_MOTION;
+    semanticEvent.x = 115;
+    if (!filter.semanticInput(QG_MEASURE_INPUT_UPDATE, &semanticEvent))
+	FAIL("qtcad 3D measure filter should accept endpoint-routed motion input");
+    semanticEvent.type = BOBOL_INPUT_POINTER_RELEASE;
+    if (!filter.semanticInput(QG_MEASURE_INPUT_COMMIT, &semanticEvent) ||
+	    filter.mode != 2 || filter.length1() <= 0.0)
+	FAIL("qtcad 3D measure filter should finalize endpoint-routed measurement input");
+    overlay = find_measure_overlay(controller, "tool:measurement");
+    if (!overlay || overlay->getPointCount() != 2)
+	FAIL("qtcad endpoint-routed measurement should publish an Obol overlay");
+    if (!filter.semanticInput(QG_MEASURE_INPUT_CANCEL, &semanticEvent) ||
+	    find_measure_overlay(controller, "tool:measurement"))
+	FAIL("qtcad endpoint-routed measurement cancel should clear its overlay");
+
     SoSeparator *lodRoot = new SoSeparator;
     lodRoot->ref();
     SoBRLDatabaseSource *lodDatabase = new SoBRLDatabaseSource;

@@ -3292,21 +3292,36 @@ store_polygon_node(const BObolPolygonStoreRecord &rec)
 	const struct bg_poly_contour &contour = rec.polygon.contour[i];
 	if (!contour.num_points || !contour.point)
 	    continue;
-	for (size_t j = 0; j < contour.num_points; j++) {
-	    points.push_back(store_vec3(contour.point[j]));
-	    precisePoints.push_back(contour.point[j][X]);
-	    precisePoints.push_back(contour.point[j][Y]);
-	    precisePoints.push_back(contour.point[j][Z]);
-	    commands.push_back(j == 0 ?
-			       static_cast<int32_t>(BObolLineCommand::Move) :
-			       static_cast<int32_t>(BObolLineCommand::Draw));
-	}
-	if (!contour.open && contour.num_points > 1) {
+	if (contour.num_points == 1) {
 	    points.push_back(store_vec3(contour.point[0]));
 	    precisePoints.push_back(contour.point[0][X]);
 	    precisePoints.push_back(contour.point[0][Y]);
 	    precisePoints.push_back(contour.point[0][Z]);
-	    commands.push_back(static_cast<int32_t>(BObolLineCommand::Draw));
+	    commands.push_back(static_cast<int32_t>(BObolLineCommand::Move));
+	    continue;
+	}
+
+	/* Realize polygon outlines as independent edge pairs.  A repeated first
+	 * vertex at the end of a chained line strip is not reliably preserved by
+	 * all hosted rendering paths, and losing it drops the closure edge after
+	 * interactive updates.  Explicit pairs are also a better match for
+	 * per-edge picking and styling. */
+	const bool closed = !contour.open ||
+	    rec.type != BObolPolygonType::General;
+	const size_t edgeCount = closed ? contour.num_points :
+	    contour.num_points - 1;
+	for (size_t j = 0; j < edgeCount; j++) {
+	    const size_t next = (j + 1) % contour.num_points;
+	    for (int endpoint = 0; endpoint < 2; endpoint++) {
+		const size_t pointIndex = endpoint ? next : j;
+		points.push_back(store_vec3(contour.point[pointIndex]));
+		precisePoints.push_back(contour.point[pointIndex][X]);
+		precisePoints.push_back(contour.point[pointIndex][Y]);
+		precisePoints.push_back(contour.point[pointIndex][Z]);
+		commands.push_back(endpoint ?
+		    static_cast<int32_t>(BObolLineCommand::Draw) :
+		    static_cast<int32_t>(BObolLineCommand::Move));
+	    }
 	}
     }
 
@@ -3752,6 +3767,8 @@ BObolPolygonStore::remove(BObolPolygonHandle handle)
     bg_polygon_free(&rec->polygon);
     this->impl->records.erase(rec->id);
     delete rec;
+    if (this->impl->controller)
+	this->impl->controller->requestRender("view-polygon-remove");
     return TRUE;
 }
 

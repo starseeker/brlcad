@@ -69,15 +69,20 @@ class QEll : public QWidget
 	void write_to_db();
 	void update_obj_wireframe();
 	void update_viewobj_name(const QString &);
+	void sync_selection();
+	void reset_for_database();
 
     protected:
 	bool eventFilter(QObject *, QEvent *);
 
     private:
+	void clear_labels();
 	struct directory *dp = NULL;
 	struct rt_ell_internal ell;
 	qged_edit_feature_ref p = QGED_EDIT_FEATURE_REF_NULL;
+	qged_edit_feature_ref labels_p = QGED_EDIT_FEATURE_REF_NULL;
 	struct bu_vls oname = BU_VLS_INIT_ZERO;
+	QString selection_path;
 	QgPluginContext *m_ctx = nullptr;
 
 	struct ged *getGed() const;

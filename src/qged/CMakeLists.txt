@@ -79,6 +79,13 @@ if(BRLCAD_ENABLE_QT)
   target_compile_definitions(qged PRIVATE BRLCADBUILD HAVE_CONFIG_H)
   install(TARGETS qged RUNTIME DESTINATION ${BIN_DIR} LIBRARY DESTINATION ${LIB_DIR} ARCHIVE DESTINATION ${LIB_DIR})
 
+  brlcad_add_test(NAME qged_event_script_replay
+    COMMAND qged --swrast --test-script
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_qged_event_script.json")
+  set_property(TEST qged_event_script_replay APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
+  set_property(TEST qged_event_script_replay APPEND PROPERTY LABELS drawing_baseline)
+
   # qged's view and embedded framebuffer paths are Obol/libBObol based.
   # GED plugins are still loaded at runtime; legacy display-manager plugins are
   # not a qged build prerequisite.  qged's own Qt plugins are added below and
@@ -150,6 +157,7 @@ set(
   fonts/Inconsolata.otf
   main.cpp
   test_qged_obol_fbserv.cpp
+  test_qged_event_script.json
   qged_signals.eps
   qged_signals.dia
   view_update_cycle.odg

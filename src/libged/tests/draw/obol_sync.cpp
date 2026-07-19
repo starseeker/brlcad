@@ -3142,9 +3142,15 @@ main(int argc, char **argv)
 	    !ged_label_record.overlay.isOverlay ||
 	    ged_label_record.overlay.ownerToken != &ged_label_owner)
 	FAIL("GED feature label API should publish typed Obol label records");
-    if (!ged_view_feature_remove(feature_view_ctx, "cap2::ged-label") ||
+    if (!ged_view_feature_remove_ref(ged_label_ref) ||
 	    feature_view_controller->features().exists("cap2::ged-label"))
-	FAIL("GED feature remove should delete Obol-backed feature records");
+	FAIL("GED feature reference removal should delete the exact Obol-backed feature record");
+    ged_label_ref = ged_view_feature_label_ensure(feature_view_ctx,
+	    "cap2::ged-label", &ged_label_owner);
+    if (ged_view_feature_ref_is_null(ged_label_ref) ||
+	    !ged_view_feature_remove(feature_view_ctx, "cap2::ged-label") ||
+	    feature_view_controller->features().exists("cap2::ged-label"))
+	FAIL("GED feature name removal should delete Obol-backed feature records");
 
     if (ged_view_feature_remove_prefix(feature_view_ctx,
 	    "cap2::") < 11 ||

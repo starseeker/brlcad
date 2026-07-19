@@ -10,6 +10,7 @@
 #include "BObol/BLodRealization.h"
 #include "BObol/BPickDetail.h"
 #include "BObol/BVListShape.h"
+#include "bu/str.h"
 
 #include <Obol/cad/SoCADViewState.h>
 
@@ -633,7 +634,9 @@ static SbBool
 vlist_needs_independent_segment_rendering(const SoBRLVListShape *shape)
 {
     return shape &&
-	   (shape->selectedPrimitive.getNum() > 0 ||
+	   (BU_STR_EQUAL(shape->sourceType.getValue().getString(),
+		"view-polygon-edge") ||
+	    shape->selectedPrimitive.getNum() > 0 ||
 	    shape->highlightedPrimitive.getNum() > 0);
 }
 

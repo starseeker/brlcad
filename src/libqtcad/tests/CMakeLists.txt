@@ -4,6 +4,7 @@ set(QGMODEL_SRCS qgmodel.cpp)
 set(QGVIEW_SRCS qgview.cpp)
 set(QSKETCH_SRCS qsketch.cpp)
 set(TEST_QTCAD_PLUGIN_REUSE_SRCS test_qtcad_plugin_reuse.cpp)
+set(TEST_QTCAD_EVENT_PLAYER_SRCS test_qtcad_event_player.cpp)
 set(TEST_QTCAD_OBOL_CONTROLLER_SRCS test_qtcad_obol_controller.cpp)
 set(TEST_QTCAD_OBOL_DRAW_SYNC_SRCS test_qtcad_obol_draw_sync.cpp)
 set(TEST_QTCAD_OBOL_EDIT_PREVIEW_SRCS test_qtcad_obol_edit_preview.cpp)
@@ -101,6 +102,14 @@ if(TARGET test_qgmodel_scale)
 endif(TARGET test_qgmodel_scale)
 
 if(TARGET Qt6::Widgets)
+  add_executable(test_qtcad_event_player ${TEST_QTCAD_EVENT_PLAYER_SRCS})
+  target_link_libraries(test_qtcad_event_player libqtcad Qt6::Widgets)
+  target_compile_definitions(test_qtcad_event_player PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(NAME test_qtcad_event_player COMMAND test_qtcad_event_player)
+  set_property(TEST test_qtcad_event_player APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_event_player APPEND PROPERTY LABELS drawing_baseline)
+
   add_executable(qgview ${QGVIEW_SRCS})
   target_link_libraries(
     qgview
@@ -806,6 +815,14 @@ if(TARGET Qt6::Widgets)
 endif(TARGET Qt6::Widgets)
 
 if(TARGET Qt5::Widgets AND NOT TARGET Qt6::Widgets)
+  add_executable(test_qtcad_event_player ${TEST_QTCAD_EVENT_PLAYER_SRCS})
+  target_link_libraries(test_qtcad_event_player libqtcad Qt5::Widgets)
+  target_compile_definitions(test_qtcad_event_player PRIVATE BRLCADBUILD HAVE_CONFIG_H)
+  brlcad_add_test(NAME test_qtcad_event_player COMMAND test_qtcad_event_player)
+  set_property(TEST test_qtcad_event_player APPEND PROPERTY ENVIRONMENT
+    BRLCAD_ROOT=${CMAKE_BINARY_DIR} QT_QPA_PLATFORM=offscreen)
+  set_property(TEST test_qtcad_event_player APPEND PROPERTY LABELS drawing_baseline)
+
   add_executable(qsketch ${QSKETCH_SRCS})
   set_target_properties(qsketch PROPERTIES AUTOMOC ON)
   target_link_libraries(
@@ -827,6 +844,7 @@ cmakefiles(
   ${QGVIEW_SRCS}
   ${QSKETCH_SRCS}
   ${TEST_QTCAD_OBOL_CONTROLLER_SRCS}
+  ${TEST_QTCAD_EVENT_PLAYER_SRCS}
   ${TEST_QTCAD_OBOL_DRAW_SYNC_SRCS}
   ${TEST_QTCAD_OBOL_EDIT_PREVIEW_SRCS}
   ${TEST_QTCAD_OBOL_FACEPLATE_SYNC_SRCS}

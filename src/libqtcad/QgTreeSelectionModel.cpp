@@ -48,6 +48,13 @@ QgTreeSelectionModel::select(const QItemSelection &selection, QItemSelectionMode
 {
 	QTCAD_SLOT("QgTreeSelectionModel::select QItemSelection", 1);
 	QgModel *m = treeview->cadModel();
+	/* QItemSelectionModel adjusts its private ranges while the source model is
+	 * being reset or rows are changing.  Those maintenance calls are not CAD
+	 * selection requests and must not clear or redraw the GED scene. */
+	if (m->structureChangeInProgress()) {
+		QItemSelectionModel::select(selection, flags);
+		return;
+	}
 	struct ged *gedp = m->ged();
 
 	QModelIndexList dl = selection.indexes();
@@ -100,6 +107,11 @@ QgTreeSelectionModel::select(const QModelIndex &index, QItemSelectionModel::Sele
 {
 	QTCAD_SLOT("QgTreeSelectionModel::select QModelIndex", 1);
 	QgModel *m = treeview->cadModel();
+	/* See the QItemSelection overload above. */
+	if (m->structureChangeInProgress()) {
+		QItemSelectionModel::select(index, flags);
+		return;
+	}
 	struct ged *gedp = m->ged();
 
 	if (flags & QItemSelectionModel::Clear)

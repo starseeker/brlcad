@@ -75,6 +75,7 @@ set(
   QgToolPalette.cpp
   QgTreeSelectionModel.cpp
   QgTreeView.cpp
+  QgTestEvent.cpp
   QgUtil.cpp
   QgView.cpp
   QgViewFilter.cpp

@@ -116,6 +116,10 @@ int
 qged_edit_feature_remove(const QgPluginContext *ctx, const char *name);
 
 
+int
+qged_edit_feature_remove_ref(struct qged_edit_feature_ref ref);
+
+
 void
 qged_edit_feature_set_view(struct qged_edit_feature_ref ref, const QgPluginContext *ctx);
 

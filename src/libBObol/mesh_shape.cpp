@@ -962,28 +962,42 @@ static SbBool
 mesh_shape_gl_color(SoBRLMeshShape *shape, int primitiveIndex,
 		    SbColor &color, float &alpha)
 {
+    SbBool overridden = TRUE;
     if (shape->isPrimitiveHighlighted(primitiveIndex)) {
 	color = shape->highlightedColor.getValue();
 	alpha = 1.0f;
-	return TRUE;
     } else if (shape->isPrimitiveSelected(primitiveIndex)) {
 	color = shape->selectedColor.getValue();
 	alpha = 1.0f;
-	return TRUE;
     } else if (shape->ghosted.getValue()) {
 	color = shape->ghostedColor.getValue();
 	alpha = 0.35f;
-	return TRUE;
     } else if (shape->colorOverride.getValue()) {
 	color = shape->color.getValue();
 	alpha = 1.0f;
-	return TRUE;
+    } else {
+	color = shape->materialColorValid.getValue() ?
+	    shape->materialColor.getValue() : shape->color.getValue();
+	alpha = 1.0f;
+	overridden = FALSE;
     }
 
-    color = shape->materialColorValid.getValue() ?
-	    shape->materialColor.getValue() : shape->color.getValue();
-    alpha = 1.0f;
-    return FALSE;
+    const float transparency = std::max(0.0f,
+	std::min(1.0f, shape->transparency.getValue()));
+    alpha *= 1.0f - transparency;
+    return overridden;
+}
+
+static void
+mesh_shape_enable_transparency(SoBRLMeshShape *shape)
+{
+    const float transparency = std::max(0.0f,
+	std::min(1.0f, shape->transparency.getValue()));
+    if (transparency <= 0.0f && !shape->ghosted.getValue())
+	return;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 static void
@@ -1110,6 +1124,7 @@ mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
     glDisable(GL_LIGHTING);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
+    mesh_shape_enable_transparency(shape);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDepthFunc(GL_LESS);
@@ -1134,9 +1149,10 @@ mesh_shape_render_wire(SoBRLMeshShape *shape,
 		       const BObolViewLodState::MeshPayload *viewPayload)
 {
     glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
-		 GL_LINE_BIT | GL_DEPTH_BUFFER_BIT);
+		 GL_LINE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
     glDisable(GL_LIGHTING);
     glEnable(GL_DEPTH_TEST);
+    mesh_shape_enable_transparency(shape);
     if (shape->lineWidth.getValue() > 0)
 	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
     set_mesh_gl_material(shape, -1);
@@ -1236,8 +1252,9 @@ mesh_shape_render_proxy(SoBRLMeshShape *shape,
     };
 
     glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
-		 GL_LINE_BIT);
+		 GL_LINE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_LIGHTING);
+    mesh_shape_enable_transparency(shape);
     if (shape->lineWidth.getValue() > 0)
 	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
     set_mesh_gl_material(shape, -1);
@@ -1278,10 +1295,12 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
 	return;
     }
 
-    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT);
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
+		 GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_LIGHTING);
     glDisable(GL_COLOR_MATERIAL);
     glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE);
+    mesh_shape_enable_transparency(this);
     set_mesh_gl_material(this, -1);
     const SbBool perPrimitiveColor =
 	mesh_shape_needs_per_primitive_color(this);

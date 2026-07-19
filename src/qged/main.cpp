@@ -29,6 +29,7 @@
 
 #include <QApplication>
 #include <QSurfaceFormat>
+#include <QTimer>
 
 #include "bu/app.h"
 #include "bu/log.h"
@@ -37,6 +38,7 @@
 
 #include "QgEdApp.h"
 #include "fbserv.h"
+#include "qtcad/QgTestEvent.h"
 
 static void
 qged_usage(const char *cmd, struct bu_opt_desc *d) {
@@ -72,6 +74,7 @@ main(int argc, char **argv)
     int print_help = 0;
     struct bu_vls msg = BU_VLS_INIT_ZERO;
     const char *startup_commands = NULL;
+    const char *test_script = NULL;
     const char *exec_name = argv[0];
 
     // All BRL-CAD programs need to set this in order for relative path lookups
@@ -82,7 +85,7 @@ main(int argc, char **argv)
     argc-=(argc>0); argv+=(argc>0);
 
     /* Handle top level application options */
-    struct bu_opt_desc d[7];
+    struct bu_opt_desc d[8];
     BU_OPT(d[0],  "h", "help",   "", NULL, &print_help,    "Print help and exit");
     BU_OPT(d[1],  "?", "",       "", NULL, &print_help,    "");
     BU_OPT(d[2],  "c", "no-gui", "", NULL, &console_mode,  "Run without GUI");
@@ -90,7 +93,9 @@ main(int argc, char **argv)
     BU_OPT(d[4],  "4", "quad",   "", NULL, &quad_mode,     "Launch using quad view");
     BU_OPT(d[5],  "e", "exec",   "commands", &bu_opt_str, &startup_commands,
 	    "Run semicolon-separated GED commands after GUI initialization");
-    BU_OPT_NULL(d[6]);
+    BU_OPT(d[6],  "", "test-script", "events.json", &bu_opt_str, &test_script,
+	    "Replay a qtcad GUI event stream and exit with test status");
+    BU_OPT_NULL(d[7]);
 
     // High level options are only defined prior to the file argument (if there
     // is one).  See if we need to limit our processing
@@ -99,7 +104,8 @@ main(int argc, char **argv)
 	if (argv[i][0] == '-') {
 	    acmax++;
 	    if ((BU_STR_EQUAL(argv[i], "-e") ||
-		    BU_STR_EQUAL(argv[i], "--exec")) && i + 1 < argc) {
+		    BU_STR_EQUAL(argv[i], "--exec") ||
+		    BU_STR_EQUAL(argv[i], "--test-script")) && i + 1 < argc) {
 		acmax++;
 		i++;
 	    }
@@ -174,6 +180,22 @@ main(int argc, char **argv)
 		    trimmed.toLocal8Bit().constData());
 	    app.run_qcmd(trimmed);
 	}
+    }
+    if (test_script) {
+	const QString script = QString::fromLocal8Bit(test_script);
+	QTimer::singleShot(0, &app, [&app, script]() {
+	    QVector<QgTestEvent> events;
+	    QString error;
+	    QgEventPlayer player(app.w);
+	    if (!QgEventRecorder::load(script, events, &error) ||
+		!player.play(events, &error)) {
+		bu_log("qged: GUI test replay failed: %s\n",
+		    error.toLocal8Bit().constData());
+		app.exit(BRLCAD_ERROR);
+		return;
+	    }
+	    app.exit(BRLCAD_OK);
+	});
     }
     bu_vls_free(&msg);
 

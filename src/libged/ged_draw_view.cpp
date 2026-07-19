@@ -625,6 +625,13 @@ ged_view_feature_remove(struct ged_view_context *view_ctx, const char *name)
 
 
 int
+ged_view_feature_remove_ref(ged_view_feature_ref ref)
+{
+    return ged_draw_obol_view_feature_remove_ref(ref);
+}
+
+
+int
 ged_view_feature_get_summary(
 	struct ged_view_context *view_ctx,
 	const char *name,

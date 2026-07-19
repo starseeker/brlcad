@@ -48,6 +48,7 @@
 #include "ged.h"
 #include "ged/event_txn.h"
 #include "qtcad/QgModel.h"
+#include "qtcad/QgTreeView.h"
 #include "wdb.h"
 
 static int g_fail = 0;
@@ -2100,10 +2101,28 @@ main(int argc, char *argv[])
 	    TCHECK(true, "first top-level item has no fetchable children");
 	}
 
+	/* A Qt model reset must not be interpreted as a user clearing the CAD
+	 * selection.  In qged that erroneous coupling also erased the GED display
+	 * list whenever the hierarchy presentation was toggled. */
+	QgTreeView tree(nullptr, &model);
+	TCHECK(model.draw("all.g") == BRLCAD_OK,
+		"hierarchy-toggle selection test draws all.g");
+	tree.setCurrentIndex(first);
+	tree.selectionModel()->select(first,
+		QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+	TCHECK(model.drawnPathState("all.g") == 1,
+		"tree selection keeps all.g in the display list before hierarchy toggle");
+
 	model.toggle_hierarchy();
 	QCoreApplication::processEvents();
 	QTest::qWait(1);
 	TCHECK(reset_spy.count() > 0, "toggle_hierarchy emits modelReset");
+	TCHECK(model.drawnPathState("all.g") == 1,
+		"hierarchy toggle preserves the GED display list while restoring Qt selection state");
+	QModelIndex rebuilt_first = amodel->index(0, 0, QModelIndex());
+	TCHECK(rebuilt_first.isValid() &&
+		rebuilt_first.data(QgDataRoles::SelectDisplayRole).toInt() == 1,
+		"hierarchy toggle preserves path-based tree highlighting without restoring stale model indexes");
     }
 
     if (g_fail) {

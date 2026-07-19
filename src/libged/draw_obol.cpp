@@ -5244,13 +5244,13 @@ ged_obol_faceplate_sync_adc(BObolViewController *controller,
 	ged_obol_faceplate_overlay_info(view_ctx));
 }
 
-static void
-ged_obol_faceplate_params_string(struct ged_view_context *view_ctx,
-				 const struct bv_params_state *params,
-				 struct bu_vls *vls)
+static std::vector<std::string>
+ged_obol_faceplate_params_parts(struct ged_view_context *view_ctx,
+				const struct bv_params_state *params)
 {
-    if (!view_ctx || !params || !vls)
-	return;
+    std::vector<std::string> parts;
+    if (!view_ctx || !params)
+	return parts;
 
     point_t center = VINIT_ZERO;
     mat_t center_mat;
@@ -5265,41 +5265,39 @@ ged_obol_faceplate_params_string(struct ged_view_context *view_ctx,
     vect_t aet = VINIT_ZERO;
     (void)bv_aet_get(aet, ged_obol_bv_const(view_ctx));
 
+    struct bu_vls text = BU_VLS_INIT_ZERO;
     if (params->draw_size) {
-	if (bu_vls_strlen(vls) > 0)
-	    bu_vls_putc(vls, ' ');
-	bu_vls_printf(vls, "size[%s]: %.2f", ustr,
+	bu_vls_sprintf(&text, "size[%s]: %.2f", ustr,
 		      bv_size_get(ged_obol_bv_const(view_ctx)) *
 		      bv_base2local_get(ged_obol_bv_const(view_ctx)));
+	parts.push_back(bu_vls_cstr(&text));
     }
     if (params->draw_center) {
-	if (bu_vls_strlen(vls) > 0)
-	    bu_vls_putc(vls, ' ');
-	bu_vls_printf(vls, "center[%s]: (%.2f, %.2f, %.2f)",
+	bu_vls_sprintf(&text, "center[%s]: (%.2f, %.2f, %.2f)",
 		      ustr, V3ARGS(center));
+	parts.push_back(bu_vls_cstr(&text));
     }
     if (params->draw_az) {
-	if (bu_vls_strlen(vls) > 0)
-	    bu_vls_putc(vls, ' ');
-	bu_vls_printf(vls, "az:%.2f", aet[0]);
+	bu_vls_sprintf(&text, "az:%.2f", aet[0]);
+	parts.push_back(bu_vls_cstr(&text));
     }
     if (params->draw_el) {
-	if (bu_vls_strlen(vls) > 0)
-	    bu_vls_putc(vls, ' ');
-	bu_vls_printf(vls, "el:%.2f", aet[1]);
+	bu_vls_sprintf(&text, "el:%.2f", aet[1]);
+	parts.push_back(bu_vls_cstr(&text));
     }
     if (params->draw_tw) {
-	if (bu_vls_strlen(vls) > 0)
-	    bu_vls_putc(vls, ' ');
-	bu_vls_printf(vls, "tw:%.2f", aet[2]);
+	bu_vls_sprintf(&text, "tw:%.2f", aet[2]);
+	parts.push_back(bu_vls_cstr(&text));
     }
 
     const uint64_t frametime = bv_frametime_get(ged_obol_bv_const(view_ctx));
     if (params->draw_fps && frametime > 0) {
-	if (bu_vls_strlen(vls) > 0)
-	    bu_vls_putc(vls, ' ');
-	bu_vls_printf(vls, "FPS:%.2f", 1000000000.0 / (fastf_t)frametime);
+	bu_vls_sprintf(&text, "FPS:%.2f",
+		1000000000.0 / (fastf_t)frametime);
+	parts.push_back(bu_vls_cstr(&text));
     }
+    bu_vls_free(&text);
+    return parts;
 }
 
 static void
@@ -5323,13 +5321,51 @@ ged_obol_faceplate_sync_params(BObolViewController *controller,
 	params.draw_tw = 1;
     }
 
-    struct bu_vls text = BU_VLS_INIT_ZERO;
-    ged_obol_faceplate_params_string(view_ctx, &params, &text);
+    const int font_size = params.font_size > 0 ? params.font_size : 20;
+    const int width = bv_width_get(ged_obol_bv_const(view_ctx));
+    const int height = bv_height_get(ged_obol_bv_const(view_ctx));
+    const int available_width = width > 16 ? width - 16 : width;
+    const size_t max_chars = available_width > 0 ?
+	std::max((size_t)1, (size_t)((fastf_t)available_width /
+		(0.58 * (fastf_t)font_size))) : (size_t)80;
+
+    const std::vector<std::string> parts =
+	ged_obol_faceplate_params_parts(view_ctx, &params);
+    std::vector<std::string> lines;
+    std::string line;
+    for (size_t i = 0; i < parts.size(); i++) {
+	const size_t joined_len = line.size() + (line.empty() ? 0 : 1) +
+	    parts[i].size();
+	if (!line.empty() && joined_len > max_chars) {
+	    lines.push_back(line);
+	    line.clear();
+	}
+	if (!line.empty())
+	    line.append(" ");
+	line.append(parts[i]);
+    }
+    if (!line.empty())
+	lines.push_back(line);
+
     std::vector<BObolLabel> labels;
-    labels.push_back(ged_obol_faceplate_label(view_ctx, bu_vls_cstr(&text),
-		     -0.98, -0.90, params.color, 255, 255, 0,
-		     params.font_size > 0 ? params.font_size : 20));
-    bu_vls_free(&text);
+    const fastf_t line_step = height > 0 ?
+	(2.0 * (fastf_t)(font_size + 4) / (fastf_t)height) : 0.10;
+    for (size_t i = 0; i < lines.size(); i++) {
+	int line_font_size = font_size;
+	if (available_width > 0 && !lines[i].empty()) {
+	    const int fit_size = (int)((fastf_t)available_width /
+		(0.58 * (fastf_t)lines[i].size()));
+	    line_font_size = std::max(6, std::min(font_size, fit_size));
+	}
+	labels.push_back(ged_obol_faceplate_label(view_ctx, lines[i].c_str(),
+		-0.98, -0.90 + (fastf_t)i * line_step,
+		params.color, 255, 255, 0, line_font_size));
+    }
+
+    if (labels.empty()) {
+	ged_obol_faceplate_remove(controller, view_ctx, name);
+	return;
+    }
 
     BObolFeatureStyle style = ged_obol_faceplate_style(
 				    params.color, 255, 255, 0, 1);
@@ -6003,10 +6039,13 @@ ged_obol_view_context_faceplate_sync(struct ged *gedp, struct ged_view_context *
 	ged_obol_faceplate_sync_interactive_rect(controller, view_ctx);
     ged_obol_faceplate_sync_grid(controller, view_ctx);
     ged_obol_faceplate_sync_adc(controller, view_ctx);
-    const uint64_t render_time =
-	controller->getSmoothedRenderTimeNanoseconds();
-    if (render_time)
-	(void)bv_frametime_set(ged_obol_bv(view_ctx), render_time);
+    /* Controller render timing is useful performance telemetry, but it is not
+     * an observed frame rate.  Hosts publish their completed-presentation
+     * cadence separately, including offscreen/headless hosts. */
+    const uint64_t presentation_interval =
+	controller->getSmoothedPresentationIntervalNanoseconds();
+    if (presentation_interval)
+	(void)bv_frametime_set(ged_obol_bv(view_ctx), presentation_interval);
     ged_obol_faceplate_sync_params(controller, view_ctx);
     ged_obol_faceplate_sync_scale(controller, view_ctx);
     ged_obol_faceplate_sync_axes(controller, view_ctx);
@@ -6514,6 +6553,16 @@ extern "C" int
 ged_draw_obol_view_feature_ref_is_null(ged_view_feature_ref ref)
 {
     return (!ref.owner || !ref.id || !ref.generation) ? 1 : 0;
+}
+
+extern "C" int
+ged_draw_obol_view_feature_remove_ref(ged_view_feature_ref ref)
+{
+    BObolViewController *controller =
+	ged_obol_feature_controller_from_ged_ref(ref);
+    return controller ?
+	   (controller->features().remove(
+		ged_obol_feature_handle_from_ged_ref(ref)) ? 1 : 0) : 0;
 }
 
 extern "C" int

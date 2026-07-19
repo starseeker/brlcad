@@ -222,6 +222,8 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
     CHECK(host.poll(NULL) == 1, "headless poll drains pending render");
     CHECK(bu_strcmp(host.getLastRenderReason().getString(), "poll-render") == 0,
 	  "headless poll records render reason");
+    CHECK(host.getController()->getSmoothedPresentationIntervalNanoseconds() > 0,
+	  "headless host records completed-presentation cadence separately from render cost");
     host.getController()->unregisterProgressiveProvider(progressiveToken);
     return 0;
 }

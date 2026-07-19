@@ -22,6 +22,8 @@
 #include "wdb.h"
 
 #include <Inventor/SoType.h>
+#include <Inventor/SoPath.h>
+#include <Inventor/actions/SoSearchAction.h>
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoFont.h>
 #include <Inventor/nodes/SoNode.h>
@@ -633,6 +635,45 @@ test_polygon_nodes_and_sketch(BObolViewController &view)
 	FAIL("legacy polygon setFill should not imply mesh fill");
     if (count_nodes_of_type(node, SoBRLVListShape::getClassTypeId()) != 2)
 	FAIL("legacy polygon setFill should realize hatch and outline children");
+
+    SoSearchAction outlineSearch;
+    outlineSearch.setType(SoBRLVListShape::getClassTypeId());
+    outlineSearch.setInterest(SoSearchAction::LAST);
+    outlineSearch.apply(node);
+    SoPath *outlinePath = outlineSearch.getPath();
+    SoBRLVListShape *outline = outlinePath ?
+	static_cast<SoBRLVListShape *>(outlinePath->getTail()) : NULL;
+    if (!outline || outline->getSegmentCount() != 4)
+	FAIL("closed square polygon outline should realize all four edges");
+
+    if (!view.polygons().move(handle, SbVec3f(2.0f, 3.0f, 0.0f),
+		SbVec3f(0.0f, 0.0f, 0.0f)))
+	FAIL("square polygon move should succeed");
+    node = view.polygons().node(handle);
+    SoSearchAction movedOutlineSearch;
+    movedOutlineSearch.setType(SoBRLVListShape::getClassTypeId());
+    movedOutlineSearch.setInterest(SoSearchAction::LAST);
+    movedOutlineSearch.apply(node);
+    SoPath *movedOutlinePath = movedOutlineSearch.getPath();
+    SoBRLVListShape *movedOutline = movedOutlinePath ?
+	static_cast<SoBRLVListShape *>(movedOutlinePath->getTail()) : NULL;
+    if (!movedOutline || movedOutline->getSegmentCount() != 4)
+	FAIL("moving a constrained polygon should preserve all four edges");
+
+    if (!view.polygons().setAllContoursOpen(handle, TRUE))
+	FAIL("square polygon compatibility open update should succeed");
+    node = view.polygons().node(handle);
+    SoSearchAction constrainedOutlineSearch;
+    constrainedOutlineSearch.setType(SoBRLVListShape::getClassTypeId());
+    constrainedOutlineSearch.setInterest(SoSearchAction::LAST);
+    constrainedOutlineSearch.apply(node);
+    SoPath *constrainedOutlinePath = constrainedOutlineSearch.getPath();
+    SoBRLVListShape *constrainedOutline = constrainedOutlinePath ?
+	static_cast<SoBRLVListShape *>(constrainedOutlinePath->getTail()) : NULL;
+    if (!constrainedOutline || constrainedOutline->getSegmentCount() != 4)
+	FAIL("constrained square outline should remain closed while editing");
+    if (!view.polygons().setAllContoursOpen(handle, FALSE))
+	FAIL("square polygon close restore should succeed");
     if (!view.polygons().setFillFlags(handle,
 				      BOBOL_POLYGON_FILL_HATCH | BOBOL_POLYGON_FILL_MESH))
 	FAIL("polygon setFillFlags should succeed");

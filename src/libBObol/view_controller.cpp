@@ -1010,6 +1010,9 @@ struct BObolViewController::Impl {
     void *presentationSyncUserData = NULL;
     uint64_t lastRenderTimeNanoseconds = 0;
     uint64_t smoothedRenderTimeNanoseconds = 0;
+    mutable std::mutex presentationTimingMutex;
+    uint64_t lastPresentationTimestampNanoseconds = 0;
+    uint64_t smoothedPresentationIntervalNanoseconds = 0;
     std::vector<BObolProgressiveProviderRecord> progressiveProviders;
     uint64_t progressiveProviderNextToken = 1;
     std::atomic<int> progressiveWorkPending {0};
@@ -2194,6 +2197,32 @@ uint64_t
 BObolViewController::getSmoothedRenderTimeNanoseconds(void) const
 {
     return this->d->smoothedRenderTimeNanoseconds;
+}
+
+void
+BObolViewController::noteFramePresented(void)
+{
+    const uint64_t now = this->beginRenderTiming();
+    std::lock_guard<std::mutex> lock(this->d->presentationTimingMutex);
+    if (this->d->lastPresentationTimestampNanoseconds &&
+	now > this->d->lastPresentationTimestampNanoseconds) {
+	const uint64_t interval =
+	    now - this->d->lastPresentationTimestampNanoseconds;
+	if (interval > 1000 && interval < 30000000000ULL) {
+	    this->d->smoothedPresentationIntervalNanoseconds =
+		this->d->smoothedPresentationIntervalNanoseconds ?
+		(this->d->smoothedPresentationIntervalNanoseconds * 4u +
+		 interval) / 5u : interval;
+	}
+    }
+    this->d->lastPresentationTimestampNanoseconds = now;
+}
+
+uint64_t
+BObolViewController::getSmoothedPresentationIntervalNanoseconds(void) const
+{
+    std::lock_guard<std::mutex> lock(this->d->presentationTimingMutex);
+    return this->d->smoothedPresentationIntervalNanoseconds;
 }
 
 int

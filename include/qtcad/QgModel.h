@@ -424,6 +424,13 @@ public:
 	{
 		return flatten_hierarchy != 0;
 	}
+	/* Return true while Qt model rows or indexes are being rebuilt.  Item
+	 * selection models use this to distinguish Qt's internal bookkeeping
+	 * from a user-requested CAD selection change. */
+	bool structureChangeInProgress() const
+	{
+		return model_reset_in_progress || model_structure_change_in_progress;
+	}
 
 signals:
 	// Emitted if the commands think they may have changed the database

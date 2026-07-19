@@ -49,6 +49,27 @@ qged_measure_view(const QgPluginContext *ctx)
     return ctx ? ctx->activeViewContext() : nullptr;
 }
 
+const BObolInputActionLayer *
+CADViewMeasure::inputActionLayer()
+{
+    static const unsigned int modifier_mask = BOBOL_INPUT_MOD_SHIFT |
+	BOBOL_INPUT_MOD_CONTROL | BOBOL_INPUT_MOD_ALT |
+	BOBOL_INPUT_MOD_META;
+    static const BObolInputBinding bindings[] = {
+	{BOBOL_INPUT_POINTER_PRESS, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
+	 10, QG_MEASURE_INPUT_BEGIN},
+	{BOBOL_INPUT_POINTER_MOTION, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0,
+	 modifier_mask, 10, QG_MEASURE_INPUT_UPDATE},
+	{BOBOL_INPUT_POINTER_RELEASE, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
+	 10, QG_MEASURE_INPUT_COMMIT}
+    };
+    static const BObolInputActionLayer layer = {
+	"qged-measure", bindings, sizeof(bindings) / sizeof(bindings[0]),
+	CADViewMeasure::inputActionDispatch
+    };
+    return &layer;
+}
+
 static QgView *
 qged_measure_view_from_event_object(QObject *object)
 {
@@ -112,6 +133,47 @@ CADViewMeasure::CADViewMeasure(QWidget *)
 
 CADViewMeasure::~CADViewMeasure()
 {
+    detachFromView(nullptr);
+    delete f2d;
+    delete f3d;
+}
+
+void
+CADViewMeasure::attachToView(QgView *view)
+{
+    if (!view)
+	return;
+    if (m_input_view && m_input_view != view)
+	detachFromView(m_input_view);
+
+    m_input_view = view;
+    m_input_endpoint = view->displayEndpoint();
+    if (m_input_endpoint && bobol_display_endpoint_input_action_layer_set(
+	m_input_endpoint, CADViewMeasure::inputActionLayer(), this, this))
+	return;
+
+    m_input_endpoint = nullptr;
+    view->installEventFilter(this);
+    m_qt_filter_installed = true;
+}
+
+void
+CADViewMeasure::detachFromView(QgView *view)
+{
+    if (!m_input_view || (view && view != m_input_view))
+	return;
+    if (m_input_endpoint)
+	(void)bobol_display_endpoint_input_action_layer_clear_if(
+	    m_input_endpoint, this);
+    if (m_qt_filter_installed)
+	m_input_view->removeEventFilter(this);
+    if (f2d)
+	f2d->set_view_widget(nullptr);
+    if (f3d)
+	f3d->set_view_widget(nullptr);
+    m_input_view = nullptr;
+    m_input_endpoint = nullptr;
+    m_qt_filter_installed = false;
 }
 
 void
@@ -144,10 +206,10 @@ CADViewMeasure::adjust_text()
 
     double angle;
     if (report_radians->isChecked()) {
-	ma_label = new QLabel("Measured Angle (rad):");
+	ma_label->setText("Measured Angle (rad):");
 	angle = mf->angle(true);
     } else {
-	ma_label = new QLabel("Measured Angle (deg):");
+	ma_label->setText("Measured Angle (deg):");
 	angle = mf->angle(false);
     }
 
@@ -199,6 +261,42 @@ CADViewMeasure::eventFilter(QObject *o, QEvent *e)
     QObject::disconnect(mf, &QgMeasureFilter::view_updated, this, &CADViewMeasure::do_filter_view_update);
 
     return ret;
+}
+
+int
+CADViewMeasure::inputActionDispatch(void *user_data,
+	BObolInputAction action, const BObolInputEvent *event)
+{
+    CADViewMeasure *measure = static_cast<CADViewMeasure *>(user_data);
+    return measure ? measure->applyInputAction(action, event) :
+	BOBOL_INPUT_RESULT_ERROR;
+}
+
+int
+CADViewMeasure::applyInputAction(BObolInputAction action,
+	const BObolInputEvent *event)
+{
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!event || !gedp || !m_input_view ||
+	(action != QG_MEASURE_INPUT_BEGIN &&
+	 action != QG_MEASURE_INPUT_UPDATE &&
+	 action != QG_MEASURE_INPUT_COMMIT &&
+	 action != QG_MEASURE_INPUT_CANCEL))
+	return BOBOL_INPUT_RESULT_UNHANDLED;
+
+    mf = measure_3d->isChecked() ?
+	(QgMeasureFilter *)f3d : (QgMeasureFilter *)f2d;
+    mf->set_view_widget(m_input_view);
+    update_color();
+
+    QObject::connect(mf, &QgMeasureFilter::view_updated, this,
+	&CADViewMeasure::do_filter_view_update);
+    bool handled = mf->semanticInput(action, event);
+    QObject::disconnect(mf, &QgMeasureFilter::view_updated, this,
+	&CADViewMeasure::do_filter_view_update);
+
+    return handled ? BOBOL_INPUT_RESULT_HANDLED :
+	BOBOL_INPUT_RESULT_UNHANDLED;
 }
 
 // Local Variables:

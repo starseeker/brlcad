@@ -447,6 +447,85 @@ count_yellow_pixels(const unsigned char *buffer, int width, int height)
     return count;
 }
 
+static int
+count_red_pixels_in_box(const unsigned char *buffer, int width, int height,
+	int xmin, int ymin, int xmax, int ymax)
+{
+    int count = 0;
+    xmin = (std::max)(0, xmin);
+    ymin = (std::max)(0, ymin);
+    xmax = (std::min)(width - 1, xmax);
+    ymax = (std::min)(height - 1, ymax);
+    for (int y = ymin; y <= ymax; y++) {
+	for (int x = xmin; x <= xmax; x++) {
+	    const unsigned char *p = buffer + (y * width + x) * 3;
+	    if (p[0] > 96 && p[1] < 80 && p[2] < 80)
+		count++;
+	}
+    }
+    return count;
+}
+
+static int
+test_independent_line_segments(SoDB::ContextManager *contextManager)
+{
+    const int width = 160;
+    const int height = 120;
+    SoSeparator *root = new SoSeparator;
+    root->ref();
+
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->position = SbVec3f(0.0f, 0.0f, 10.0f);
+    camera->height = 6.0f;
+    camera->nearDistance = 1.0f;
+    camera->farDistance = 20.0f;
+    root->addChild(camera);
+
+    const SbVec3f points[] = {
+	SbVec3f(-2.0f, -2.0f, 0.0f), SbVec3f(-2.0f,  2.0f, 0.0f),
+	SbVec3f(-2.0f,  2.0f, 0.0f), SbVec3f( 2.0f,  2.0f, 0.0f),
+	SbVec3f( 2.0f,  2.0f, 0.0f), SbVec3f( 2.0f, -2.0f, 0.0f),
+	SbVec3f( 2.0f, -2.0f, 0.0f), SbVec3f(-2.0f, -2.0f, 0.0f)
+    };
+    const int32_t commands[] = {
+	SoBRLVListShape::MOVE, SoBRLVListShape::DRAW,
+	SoBRLVListShape::MOVE, SoBRLVListShape::DRAW,
+	SoBRLVListShape::MOVE, SoBRLVListShape::DRAW,
+	SoBRLVListShape::MOVE, SoBRLVListShape::DRAW
+    };
+    SoBRLVListShape *shape = new SoBRLVListShape;
+    shape->setLineSet(points, commands, 8);
+    shape->sourceType = "view-polygon-edge";
+    shape->colorOverride = TRUE;
+    shape->color = SbColor(1.0f, 0.0f, 0.0f);
+    shape->lineWidth = 1;
+    root->addChild(shape);
+
+    SbViewportRegion viewport(width, height);
+    SoOffscreenRenderer renderer(contextManager, viewport);
+    renderer.setComponents(SoOffscreenRenderer::RGB);
+    renderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
+    if (!renderer.render(root) || !renderer.getBuffer()) {
+	root->unref();
+	FAIL("independent polygon edge pairs should render through OSMesa");
+    }
+
+    const unsigned char *buffer = renderer.getBuffer();
+    /* With height 6 and a 4:3 viewport, x +/-2 maps to 40/120 and
+	* y +/-2 maps to 20/100.  Test the middle of every edge separately
+	* so a three-sided outline cannot satisfy a total-pixel assertion. */
+    if (count_red_pixels_in_box(buffer, width, height, 37, 30, 43, 90) < 20 ||
+	count_red_pixels_in_box(buffer, width, height, 50, 97, 110, 103) < 20 ||
+	count_red_pixels_in_box(buffer, width, height, 117, 30, 123, 90) < 20 ||
+	count_red_pixels_in_box(buffer, width, height, 50, 17, 110, 23) < 20) {
+	root->unref();
+	FAIL("independent polygon rendering should preserve every outline edge");
+    }
+
+    root->unref();
+    return 0;
+}
+
 int
 main(int UNUSED(argc), const char **UNUSED(argv))
 {
@@ -458,6 +537,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     bobol_init(&contextManager);
     if (SoDB::getContextManager() != &contextManager)
 	FAIL("bobol_init should install the application-provided context manager");
+    {
+	/* Keep this renderer's context lifecycle independent of the policy
+	 * counters exercised below. */
+	BOBOLRenderContextManager segmentContextManager;
+	if (test_independent_line_segments(&segmentContextManager) != 0)
+	    return 1;
+    }
 
     SoSeparator *root = new SoSeparator;
     root->ref();

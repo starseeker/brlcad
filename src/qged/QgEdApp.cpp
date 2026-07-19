@@ -26,6 +26,7 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <QDir>
 #include <QFileInfo>
 #include <QFile>
 #include <QPlainTextEdit>
@@ -119,6 +120,12 @@ qged_post_opendb_clbk(int UNUSED(ac), const char **UNUSED(av), void *UNUSED(gedp
     // alone.  Return OK so ged_exec retains the command's return code.
     if (ged_results_ret(a->mdl->ged()->ged_results) != BRLCAD_OK)
 	return BRLCAD_OK;
+
+    /* Selection paths belong to the database in which they were made.  The
+     * GED instance survives an opendb, so explicitly discard that retained
+     * state before widgets are notified about the replacement database. */
+    if (ged_selection_state_available(a->mdl->ged()))
+	(void)ged_selection_clear(a->mdl->ged(), nullptr);
 
     emit a->dbi_update(a->mdl->ged()->dbip);
     if (!a->w)
@@ -352,7 +359,16 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     // about some of them to have drawing commands connect properly to the 3D
     // displays.
     if (argc) {
-	char *fname = bu_strdup(bu_dir(NULL, 0, BU_DIR_CURR, argv[0], NULL));
+	/* bu_dir(BU_DIR_CURR, ...) treats a Windows drive path as a relative
+	 * component and produces an invalid /C:\\... filename.  Preserve an
+	 * absolute command-line path exactly as such; only prefix the current
+	 * directory for genuinely relative arguments. */
+	const QFileInfo argInfo(QString::fromLocal8Bit(argv[0]));
+	const QByteArray absoluteName =
+	    QDir::toNativeSeparators(argInfo.absoluteFilePath()).toLocal8Bit();
+	char *fname = argInfo.isAbsolute() ?
+	    bu_strdup(absoluteName.constData()) :
+	    bu_strdup(bu_dir(NULL, 0, BU_DIR_CURR, argv[0], NULL));
 	if (!bu_file_exists(fname, NULL)) {
 	    // Current dir prefix didn't work - were we given a full path rather
 	    // than a relative path?

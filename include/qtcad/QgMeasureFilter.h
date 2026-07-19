@@ -41,6 +41,14 @@ extern "C" {
 #include "qtcad/defines.h"
 #include "qtcad/QgViewFilter.h"
 
+/* Application-local action IDs used by the endpoint-routed measure tool. */
+enum QgMeasureInputAction {
+    QG_MEASURE_INPUT_BEGIN = 1,
+    QG_MEASURE_INPUT_UPDATE,
+    QG_MEASURE_INPUT_COMMIT,
+    QG_MEASURE_INPUT_CANCEL
+};
+
 // Filters designed for specific editing modes
 class QTCAD_EXPORT QgMeasureFilter : public QgViewFilter {
 	Q_OBJECT
@@ -53,6 +61,8 @@ class QTCAD_EXPORT QgMeasureFilter : public QgViewFilter {
 	// filtering is the same, so this is not a virtual function.  See
 	// get_point for the 2D/3D specific logic.
 	bool eventFilter(QObject *, QEvent *) override;
+	bool semanticInput(BObolInputAction action,
+		const BObolInputEvent *event);
 
 	double length1();
 	double length2();
@@ -94,6 +104,7 @@ private:
 	void clear_measure_overlay();
 	void update_measure_overlay(int point_count);
 	void update_current_mouse(QMouseEvent *m_e);
+	bool processMouseInput(QEvent::Type type, Qt::MouseButton button);
 
 	point_t p1 = VINIT_ZERO;
 	point_t p2 = VINIT_ZERO;

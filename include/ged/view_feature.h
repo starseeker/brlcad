@@ -57,6 +57,10 @@ GED_EXPORT extern int
 ged_view_feature_remove(struct ged_view_context *view_ctx,
 				     const char *name);
 
+/** Remove exactly the feature identified by a retained feature reference. */
+GED_EXPORT extern int
+ged_view_feature_remove_ref(ged_view_feature_ref ref);
+
 GED_EXPORT extern int
 ged_view_feature_remove_prefix(struct ged_view_context *view_ctx,
 	const char *prefix);

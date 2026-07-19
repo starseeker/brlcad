@@ -143,7 +143,7 @@ struct mged_state *MGED_STATE = NULL;
 
 jmp_buf jmp_env;	/* For non-local gotos */
 // FIXME: Global
-double frametime;	/* time needed to draw last frame */
+double frametime;	/* smoothed interval between completed frames */
 
 // FIXME: Global
 struct rt_wdb rtg_headwdb;  /* head of database object list */
@@ -2226,7 +2226,9 @@ refresh(struct mged_state *s)
     struct bu_vls overlay_vls = BU_VLS_INIT_ZERO;
     struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
     int do_overlay = 1;
-    int64_t elapsed_time, start_time = bu_gettime();
+    static int64_t last_frame_complete = 0;
+    static int cadence_samples = 0;
+    int64_t frame_complete = 0;
     int do_time = 0;
 
     if (mged_shutting_down(s))
@@ -2263,6 +2265,11 @@ refresh(struct mged_state *s)
 	mged_display_repaint_consume(p);
 	if (!view || !endpoint)
 	    continue;
+	if (frametime > 0.0) {
+	    const double ns = frametime * 1000000000.0;
+	    if (ns > 0.0 && ns < (double)UINT64_MAX)
+		(void)bv_frametime_set(view, (uint64_t)ns);
+	}
 
 	(void)bv_refresh_consume(view);
 	do_time = 1;
@@ -2296,12 +2303,20 @@ refresh(struct mged_state *s)
 
     /* a frame was drawn */
     if (do_time) {
-	elapsed_time = bu_gettime() - start_time;
-	/* Only use reasonable measurements */
-	if (elapsed_time > 10LL && elapsed_time < 30000000LL) {
-	    /* Smoothly transition to new speed */
-	    frametime = 0.9 * frametime + 0.1 * elapsed_time / 1000000LL;
+	frame_complete = bu_gettime();
+	if (last_frame_complete > 0) {
+	    const int64_t cadence = frame_complete - last_frame_complete;
+	    /* Report the measured interval between completed refreshes.  The old
+	     * value was only the work duration inside refresh(), which could claim
+	     * hundreds of FPS even when the window was updating slowly. */
+	    if (cadence > 10LL && cadence < 30000000LL) {
+		const double sample = cadence / 1000000.0;
+		frametime = cadence_samples ?
+		    0.8 * frametime + 0.2 * sample : sample;
+		cadence_samples++;
+	    }
 	}
+	last_frame_complete = frame_complete;
     }
 
     mged_current_display_set(s, save_display);

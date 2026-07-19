@@ -227,6 +227,10 @@ public:
     void completeRenderTiming(uint64_t startedNanoseconds);
     uint64_t getLastRenderTimeNanoseconds(void) const;
     uint64_t getSmoothedRenderTimeNanoseconds(void) const;
+    /** Record one completed host/offscreen presentation.  This cadence is
+     * intentionally separate from render work duration. */
+    void noteFramePresented(void);
+    uint64_t getSmoothedPresentationIntervalNanoseconds(void) const;
     /** Capture with the controller-bound provider, or with a transient
      * explicit override whose lifetime needs to extend only through this call. */
     int renderToImage(unsigned char **image,

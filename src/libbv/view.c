@@ -799,6 +799,7 @@ bv_faceplate_defaults(struct bv *v)
     params.draw_az = 1;
     params.draw_el = 1;
     params.draw_tw = 1;
+    params.draw_fps = 1;
     VSET(params.color, 255, 255, 0);
     params.font_size = 20;
 

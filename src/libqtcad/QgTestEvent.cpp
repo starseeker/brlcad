@@ -1,0 +1,715 @@
+/*                    Q G T E S T E V E N T . C P P
+ * BRL-CAD
+ *
+ * Copyright (c) 2026 United States Government as represented by
+ * the U.S. Army Research Laboratory.
+ */
+
+#include "common.h"
+
+#include "qtcad/QgTestEvent.h"
+#include "qtcad/QgCanvasBase.h"
+
+#include <QAbstractButton>
+#include <QAbstractItemView>
+#include <QAction>
+#include <QChildEvent>
+#include <QComboBox>
+#include <QCoreApplication>
+#include <QDoubleSpinBox>
+#include <QEventLoop>
+#include <QFile>
+#include <QItemSelectionModel>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QMouseEvent>
+#include <QSaveFile>
+#include <QSlider>
+#include <QSpinBox>
+#include <QTabWidget>
+#include <QTimer>
+#include <QUrl>
+#include <QWheelEvent>
+#include <QWidget>
+
+namespace {
+
+static QString
+qg_event_encode(const QString &text)
+{
+    return QString::fromLatin1(QUrl::toPercentEncoding(text));
+}
+
+static QString
+qg_event_decode(const QString &text)
+{
+    return QUrl::fromPercentEncoding(text.toLatin1());
+}
+
+static QJsonArray
+qg_event_index_rows(const QModelIndex &index)
+{
+    QVector<int> reverseRows;
+    for (QModelIndex current = index; current.isValid();
+	 current = current.parent())
+	reverseRows.push_back(current.row());
+    QJsonArray rows;
+    for (auto i = reverseRows.crbegin(); i != reverseRows.crend(); ++i)
+	rows.append(*i);
+    return rows;
+}
+
+static QJsonObject
+qg_event_index_arguments(const QModelIndex &index)
+{
+    QJsonObject arguments;
+    arguments.insert(QStringLiteral("rows"), qg_event_index_rows(index));
+    arguments.insert(QStringLiteral("column"), index.column());
+    arguments.insert(QStringLiteral("text"),
+	index.data(Qt::DisplayRole).toString());
+    return arguments;
+}
+
+static QModelIndex
+qg_event_resolve_index(QAbstractItemView *view, const QJsonObject &arguments)
+{
+    if (!view || !view->model())
+	return QModelIndex();
+    const QJsonArray rows = arguments.value(QStringLiteral("rows")).toArray();
+    QModelIndex parent;
+    for (const QJsonValue &row : rows) {
+	parent = view->model()->index(row.toInt(-1), 0, parent);
+	if (!parent.isValid())
+	    return QModelIndex();
+    }
+    const int column = arguments.value(QStringLiteral("column")).toInt(0);
+    return column == 0 || !parent.isValid() ? parent :
+	view->model()->index(parent.row(), column, parent.parent());
+}
+
+static void
+qg_event_error(QString *error, const QString &message)
+{
+    if (error)
+	*error = message;
+}
+
+static QPointF
+qg_event_normalized_position(const QWidget *widget, const QPointF &position)
+{
+    if (!widget || widget->width() <= 0 || widget->height() <= 0)
+	return QPointF();
+    return QPointF(position.x() / widget->width(),
+	position.y() / widget->height());
+}
+
+static QPointF
+qg_event_local_position(const QWidget *widget, const QJsonObject &arguments)
+{
+    if (!widget)
+	return QPointF();
+    return QPointF(arguments.value(QStringLiteral("x")).toDouble() *
+	widget->width(), arguments.value(QStringLiteral("y")).toDouble() *
+	widget->height());
+}
+
+static bool
+qg_event_is_canvas(QObject *object)
+{
+    return object && dynamic_cast<QgCanvasBase *>(object) != nullptr;
+}
+
+}
+
+QJsonObject
+QgTestEvent::toJson() const
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("target"), target);
+    object.insert(QStringLiteral("action"), action);
+    if (!arguments.isEmpty())
+	object.insert(QStringLiteral("arguments"), arguments);
+    return object;
+}
+
+bool
+QgTestEvent::fromJson(const QJsonObject &object, QgTestEvent &event,
+    QString *error)
+{
+    const QJsonValue target = object.value(QStringLiteral("target"));
+    const QJsonValue action = object.value(QStringLiteral("action"));
+    if (!target.isString() || !action.isString() || action.toString().isEmpty()) {
+	qg_event_error(error, QStringLiteral("event requires string target and action"));
+	return false;
+    }
+    event.target = target.toString();
+    event.action = action.toString();
+    event.arguments = object.value(QStringLiteral("arguments")).toObject();
+    return true;
+}
+
+bool
+QgEventTranslator::translate(QObject *target, QEvent *event,
+    QgTestEvent &translated)
+{
+    QWidget *widget = qobject_cast<QWidget *>(target);
+    if (!widget || !event)
+	return false;
+
+    if (event->type() == QEvent::MouseButtonPress ||
+	event->type() == QEvent::MouseButtonRelease ||
+	event->type() == QEvent::MouseMove) {
+	QMouseEvent *mouse = static_cast<QMouseEvent *>(event);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	const QPointF position = mouse->position();
+#else
+	const QPointF position = mouse->localPos();
+#endif
+	const QPointF normalized = qg_event_normalized_position(widget, position);
+	translated.action = event->type() == QEvent::MouseButtonPress ?
+	    QStringLiteral("mouse_press") :
+	    (event->type() == QEvent::MouseButtonRelease ?
+	     QStringLiteral("mouse_release") : QStringLiteral("mouse_move"));
+	translated.arguments.insert(QStringLiteral("x"), normalized.x());
+	translated.arguments.insert(QStringLiteral("y"), normalized.y());
+	translated.arguments.insert(QStringLiteral("button"),
+	    static_cast<int>(mouse->button()));
+	translated.arguments.insert(QStringLiteral("buttons"),
+	    static_cast<int>(mouse->buttons()));
+	translated.arguments.insert(QStringLiteral("modifiers"),
+	    static_cast<int>(mouse->modifiers()));
+	return true;
+    }
+
+    if (event->type() == QEvent::Wheel) {
+	QWheelEvent *wheel = static_cast<QWheelEvent *>(event);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	const QPointF position = wheel->position();
+#else
+	const QPointF position = wheel->posF();
+#endif
+	const QPointF normalized = qg_event_normalized_position(widget, position);
+	translated.action = QStringLiteral("wheel");
+	translated.arguments.insert(QStringLiteral("x"), normalized.x());
+	translated.arguments.insert(QStringLiteral("y"), normalized.y());
+	translated.arguments.insert(QStringLiteral("pixel_x"), wheel->pixelDelta().x());
+	translated.arguments.insert(QStringLiteral("pixel_y"), wheel->pixelDelta().y());
+	translated.arguments.insert(QStringLiteral("angle_x"), wheel->angleDelta().x());
+	translated.arguments.insert(QStringLiteral("angle_y"), wheel->angleDelta().y());
+	translated.arguments.insert(QStringLiteral("modifiers"),
+	    static_cast<int>(wheel->modifiers()));
+	return true;
+    }
+
+    if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
+	QKeyEvent *key = static_cast<QKeyEvent *>(event);
+	translated.action = event->type() == QEvent::KeyPress ?
+	    QStringLiteral("key_press") : QStringLiteral("key_release");
+	translated.arguments.insert(QStringLiteral("key"), key->key());
+	translated.arguments.insert(QStringLiteral("modifiers"),
+	    static_cast<int>(key->modifiers()));
+	translated.arguments.insert(QStringLiteral("text"), key->text());
+	translated.arguments.insert(QStringLiteral("autorepeat"), key->isAutoRepeat());
+	translated.arguments.insert(QStringLiteral("count"), key->count());
+	return true;
+    }
+    return false;
+}
+
+QgEventRecorder::QgEventRecorder(QObject *root, QObject *parent) :
+    QObject(parent), m_root(root)
+{
+}
+
+QgEventRecorder::~QgEventRecorder()
+{
+    stop();
+}
+
+void
+QgEventRecorder::start()
+{
+    if (m_recording || !m_root)
+	return;
+    m_recording = true;
+    registerObject(m_root);
+}
+
+void
+QgEventRecorder::stop()
+{
+    m_recording = false;
+}
+
+bool
+QgEventRecorder::isRecording() const
+{
+    return m_recording;
+}
+
+void
+QgEventRecorder::clear()
+{
+    m_events.clear();
+}
+
+const QVector<QgTestEvent> &
+QgEventRecorder::events() const
+{
+    return m_events;
+}
+
+void
+QgEventRecorder::addEvent(const QgTestEvent &event)
+{
+    m_events.push_back(event);
+}
+
+void
+QgEventRecorder::checkpoint(QWidget *widget, const QString &name)
+{
+    QJsonObject arguments;
+    arguments.insert(QStringLiteral("name"), name);
+    append(widget, QStringLiteral("checkpoint"), arguments);
+}
+
+QString
+QgEventRecorder::objectPath(QObject *root, QObject *target)
+{
+    if (!root || !target)
+	return QString();
+    if (root == target)
+	return QStringLiteral(".");
+
+    QStringList segments;
+    for (QObject *current = target; current && current != root;
+	 current = current->parent()) {
+	QObject *parent = current->parent();
+	if (!parent)
+	    return QString();
+	const QObjectList siblings = parent->children();
+	const QString testId = current->property("qgTestId").toString();
+	if (!testId.isEmpty()) {
+	    segments.prepend(QStringLiteral("i:") + qg_event_encode(testId));
+	    continue;
+	}
+	QString base = current->objectName();
+	int ordinal = 0;
+	int matches = 0;
+	if (!base.isEmpty()) {
+	    for (QObject *sibling : siblings) {
+		if (sibling->objectName() == base) {
+		    if (sibling == current)
+			ordinal = matches;
+		    matches++;
+		}
+	    }
+	    QString segment = QStringLiteral("n:") + qg_event_encode(base);
+	    if (matches > 1)
+		segment += QStringLiteral(":") + QString::number(ordinal);
+	    segments.prepend(segment);
+	} else {
+	    const QString className = QString::fromLatin1(current->metaObject()->className());
+	    for (QObject *sibling : siblings) {
+		if (QString::fromLatin1(sibling->metaObject()->className()) == className) {
+		    if (sibling == current)
+			ordinal = matches;
+		    matches++;
+		}
+	    }
+	    segments.prepend(QStringLiteral("c:") + qg_event_encode(className) +
+		QStringLiteral(":") + QString::number(ordinal));
+	}
+    }
+    return QStringLiteral("./") + segments.join(QLatin1Char('/'));
+}
+
+QObject *
+QgEventRecorder::resolveObject(QObject *root, const QString &path)
+{
+    if (!root || path.isEmpty())
+	return nullptr;
+    if (path == QLatin1String("."))
+	return root;
+    if (!path.startsWith(QLatin1String("./")))
+	return nullptr;
+
+    QObject *current = root;
+    const QStringList segments = path.mid(2).split(QLatin1Char('/'),
+	Qt::SkipEmptyParts);
+    for (const QString &segment : segments) {
+	const QStringList fields = segment.split(QLatin1Char(':'));
+	if (fields.size() < 2)
+	    return nullptr;
+	const QObjectList children = current->children();
+	QObject *next = nullptr;
+	int ordinal = fields.size() > 2 ? fields.last().toInt() : 0;
+	int match = 0;
+	if (fields[0] == QLatin1String("i")) {
+	    const QString testId = qg_event_decode(fields[1]);
+	    for (QObject *child : children) {
+		if (child->property("qgTestId").toString() == testId) {
+		    next = child;
+		    break;
+		}
+	    }
+	} else if (fields[0] == QLatin1String("n")) {
+	    const QString name = qg_event_decode(fields[1]);
+	    for (QObject *child : children) {
+		if (child->objectName() == name && match++ == ordinal) {
+		    next = child;
+		    break;
+		}
+	    }
+	} else if (fields[0] == QLatin1String("c")) {
+	    const QString className = qg_event_decode(fields[1]);
+	    for (QObject *child : children) {
+		if (QString::fromLatin1(child->metaObject()->className()) == className &&
+		    match++ == ordinal) {
+		    next = child;
+		    break;
+		}
+	    }
+	}
+	if (!next)
+	    return nullptr;
+	current = next;
+    }
+    return current;
+}
+
+void
+QgEventRecorder::append(QObject *target, const QString &action,
+    const QJsonObject &arguments)
+{
+    if (!m_recording || !target)
+	return;
+    const QString path = objectPath(m_root, target);
+    if (path.isEmpty())
+	return;
+    QgTestEvent event;
+    event.target = path;
+    event.action = action;
+    event.arguments = arguments;
+    m_events.push_back(event);
+}
+
+void
+QgEventRecorder::registerObject(QObject *object)
+{
+    if (!object || m_registered.contains(object))
+	return;
+    m_registered.insert(object);
+    object->installEventFilter(this);
+    connect(object, &QObject::destroyed, this, [this, object]() {
+	m_registered.remove(object);
+    });
+
+    if (QAction *action = qobject_cast<QAction *>(object)) {
+	connect(action, &QAction::triggered, this, [this, action](bool checked) {
+	    QJsonObject args;
+	    args.insert(QStringLiteral("checked"), checked);
+	    append(action, QStringLiteral("activate"), args);
+	});
+    } else if (QAbstractButton *button = qobject_cast<QAbstractButton *>(object)) {
+	connect(button, &QAbstractButton::clicked, this, [this, button](bool checked) {
+	    QJsonObject args;
+	    args.insert(QStringLiteral("checked"), checked);
+	    append(button, QStringLiteral("activate"), args);
+	});
+    } else if (QLineEdit *edit = qobject_cast<QLineEdit *>(object)) {
+	connect(edit, &QLineEdit::editingFinished, this, [this, edit]() {
+	    QJsonObject args;
+	    args.insert(QStringLiteral("text"), edit->text());
+	    append(edit, QStringLiteral("set_text"), args);
+	});
+    } else if (QComboBox *combo = qobject_cast<QComboBox *>(object)) {
+	connect(combo, static_cast<void (QComboBox::*)(int)>(
+	    &QComboBox::currentIndexChanged), this, [this, combo](int index) {
+	    QJsonObject args;
+	    args.insert(QStringLiteral("index"), index);
+	    args.insert(QStringLiteral("text"), combo->currentText());
+	    append(combo, QStringLiteral("set_index"), args);
+	});
+    } else if (QSpinBox *spin = qobject_cast<QSpinBox *>(object)) {
+	connect(spin, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged),
+	    this, [this, spin](int value) {
+		QJsonObject args;
+		args.insert(QStringLiteral("value"), value);
+		append(spin, QStringLiteral("set_value"), args);
+	    });
+    } else if (QDoubleSpinBox *spin = qobject_cast<QDoubleSpinBox *>(object)) {
+	connect(spin, static_cast<void (QDoubleSpinBox::*)(double)>(
+	    &QDoubleSpinBox::valueChanged), this, [this, spin](double value) {
+		QJsonObject args;
+		args.insert(QStringLiteral("value"), value);
+		append(spin, QStringLiteral("set_value"), args);
+	    });
+    } else if (QSlider *slider = qobject_cast<QSlider *>(object)) {
+	connect(slider, &QSlider::valueChanged, this, [this, slider](int value) {
+	    QJsonObject args;
+	    args.insert(QStringLiteral("value"), value);
+	    append(slider, QStringLiteral("set_value"), args);
+	});
+    } else if (QTabWidget *tabs = qobject_cast<QTabWidget *>(object)) {
+	connect(tabs, &QTabWidget::currentChanged, this, [this, tabs](int index) {
+	    QJsonObject args;
+	    args.insert(QStringLiteral("index"), index);
+	    append(tabs, QStringLiteral("set_index"), args);
+	});
+    }
+
+    if (QAbstractItemView *view = qobject_cast<QAbstractItemView *>(object)) {
+	if (view->selectionModel()) {
+	    connect(view->selectionModel(), &QItemSelectionModel::currentChanged,
+		this, [this, view](const QModelIndex &current, const QModelIndex &) {
+		    if (current.isValid())
+			append(view, QStringLiteral("set_current"),
+			    qg_event_index_arguments(current));
+		});
+	}
+    }
+
+    const QObjectList children = object->children();
+    for (QObject *child : children)
+	registerObject(child);
+}
+
+bool
+QgEventRecorder::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event && event->type() == QEvent::ChildAdded) {
+	QChildEvent *child = static_cast<QChildEvent *>(event);
+	if (child->child())
+	    registerObject(child->child());
+    }
+    if (m_recording && qg_event_is_canvas(watched)) {
+	QgTestEvent translated;
+	if (QgEventTranslator::translate(watched, event, translated))
+	    append(watched, translated.action, translated.arguments);
+    }
+    return QObject::eventFilter(watched, event);
+}
+
+bool
+QgEventRecorder::save(const QString &fileName, QString *error) const
+{
+    QJsonArray records;
+    for (const QgTestEvent &event : m_events)
+	records.append(event.toJson());
+    QJsonObject root;
+    root.insert(QStringLiteral("schema"), QStringLiteral("brlcad.qtcad.events"));
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("events"), records);
+
+    QSaveFile file(fileName);
+    if (!file.open(QIODevice::WriteOnly)) {
+	qg_event_error(error, file.errorString());
+	return false;
+    }
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    if (file.write(json) != json.size() || !file.commit()) {
+	qg_event_error(error, file.errorString());
+	return false;
+    }
+    return true;
+}
+
+bool
+QgEventRecorder::load(const QString &fileName, QVector<QgTestEvent> &events,
+    QString *error)
+{
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly)) {
+	qg_event_error(error, file.errorString());
+	return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(),
+	&parseError);
+    if (document.isNull() || !document.isObject()) {
+	qg_event_error(error, parseError.errorString());
+	return false;
+    }
+    const QJsonObject root = document.object();
+    if (root.value(QStringLiteral("schema")).toString() !=
+	QStringLiteral("brlcad.qtcad.events") ||
+	root.value(QStringLiteral("version")).toInt() != 1) {
+	qg_event_error(error, QStringLiteral("unsupported qtcad event stream"));
+	return false;
+    }
+    QVector<QgTestEvent> loaded;
+    const QJsonArray records = root.value(QStringLiteral("events")).toArray();
+    for (int i = 0; i < records.size(); ++i) {
+	QgTestEvent event;
+	if (!records[i].isObject() ||
+	    !QgTestEvent::fromJson(records[i].toObject(), event, error)) {
+	    if (error && error->isEmpty())
+		*error = QStringLiteral("invalid event %1").arg(i);
+	    return false;
+	}
+	loaded.push_back(event);
+    }
+    events = loaded;
+    return true;
+}
+
+QgEventPlayer::QgEventPlayer(QObject *root) : m_root(root)
+{
+}
+
+void
+QgEventPlayer::setCheckpointHandler(const CheckpointHandler &handler)
+{
+    m_checkpoint = handler;
+}
+
+bool
+QgEventPlayer::play(const QgTestEvent &event, QString *error) const
+{
+    QObject *target = QgEventRecorder::resolveObject(m_root, event.target);
+    if (!target) {
+	qg_event_error(error, QStringLiteral("event target not found: %1").arg(event.target));
+	return false;
+    }
+
+    if (event.action == QLatin1String("activate")) {
+	if (QAction *action = qobject_cast<QAction *>(target)) {
+	    if (action->isCheckable() && event.arguments.contains(QStringLiteral("checked")))
+		action->setChecked(event.arguments.value(QStringLiteral("checked")).toBool());
+	    action->trigger();
+	    return true;
+	}
+	if (QAbstractButton *button = qobject_cast<QAbstractButton *>(target)) {
+	    if (button->isCheckable() && event.arguments.contains(QStringLiteral("checked")))
+		button->setChecked(event.arguments.value(QStringLiteral("checked")).toBool());
+	    button->click();
+	    return true;
+	}
+    } else if (event.action == QLatin1String("set_text")) {
+	if (QLineEdit *edit = qobject_cast<QLineEdit *>(target)) {
+	    edit->setText(event.arguments.value(QStringLiteral("text")).toString());
+	    QMetaObject::invokeMethod(edit, "editingFinished", Qt::DirectConnection);
+	    return true;
+	}
+    } else if (event.action == QLatin1String("set_index")) {
+	const int index = event.arguments.value(QStringLiteral("index")).toInt(-1);
+	if (QComboBox *combo = qobject_cast<QComboBox *>(target)) {
+	    combo->setCurrentIndex(index);
+	    return index >= -1 && index < combo->count();
+	}
+	if (QTabWidget *tabs = qobject_cast<QTabWidget *>(target)) {
+	    tabs->setCurrentIndex(index);
+	    return index >= 0 && index < tabs->count();
+	}
+    } else if (event.action == QLatin1String("set_value")) {
+	const double value = event.arguments.value(QStringLiteral("value")).toDouble();
+	if (QSpinBox *spin = qobject_cast<QSpinBox *>(target)) {
+	    spin->setValue(static_cast<int>(value));
+	    return true;
+	}
+	if (QDoubleSpinBox *spin = qobject_cast<QDoubleSpinBox *>(target)) {
+	    spin->setValue(value);
+	    return true;
+	}
+	if (QSlider *slider = qobject_cast<QSlider *>(target)) {
+	    slider->setValue(static_cast<int>(value));
+	    return true;
+	}
+    } else if (event.action == QLatin1String("set_current")) {
+	QAbstractItemView *view = qobject_cast<QAbstractItemView *>(target);
+	const QModelIndex index = qg_event_resolve_index(view, event.arguments);
+	if (view && index.isValid()) {
+	    view->setCurrentIndex(index);
+	    if (view->selectionModel()) {
+		QItemSelectionModel::SelectionFlags flags =
+		    QItemSelectionModel::ClearAndSelect;
+		if (view->selectionBehavior() == QAbstractItemView::SelectRows)
+		    flags |= QItemSelectionModel::Rows;
+		view->selectionModel()->select(index, flags);
+	    }
+	    view->scrollTo(index);
+	    return true;
+	}
+    } else if (event.action == QLatin1String("checkpoint")) {
+	QWidget *widget = qobject_cast<QWidget *>(target);
+	if (widget && m_checkpoint)
+	    return m_checkpoint(widget,
+		event.arguments.value(QStringLiteral("name")).toString(), error);
+	qg_event_error(error, QStringLiteral("checkpoint has no widget or handler"));
+	return false;
+    } else if (event.action == QLatin1String("wait")) {
+	QEventLoop loop;
+	QTimer::singleShot(qMax(0, event.arguments.value(QStringLiteral("ms")).toInt()),
+	    &loop, &QEventLoop::quit);
+	loop.exec();
+	return true;
+    } else if (event.action.startsWith(QLatin1String("mouse_"))) {
+	QWidget *widget = qobject_cast<QWidget *>(target);
+	if (widget) {
+	    QEvent::Type type = event.action == QLatin1String("mouse_press") ?
+		QEvent::MouseButtonPress :
+		(event.action == QLatin1String("mouse_release") ?
+		 QEvent::MouseButtonRelease : QEvent::MouseMove);
+	    const QPointF local = qg_event_local_position(widget, event.arguments);
+	    QMouseEvent mouse(type, local,
+		static_cast<Qt::MouseButton>(event.arguments.value(QStringLiteral("button")).toInt()),
+		static_cast<Qt::MouseButtons>(event.arguments.value(QStringLiteral("buttons")).toInt()),
+		static_cast<Qt::KeyboardModifiers>(event.arguments.value(QStringLiteral("modifiers")).toInt()));
+	    return QCoreApplication::sendEvent(widget, &mouse);
+	}
+    } else if (event.action == QLatin1String("wheel")) {
+	QWidget *widget = qobject_cast<QWidget *>(target);
+	if (widget) {
+	    const QPointF local = qg_event_local_position(widget, event.arguments);
+	    const QPointF global = widget->mapToGlobal(local.toPoint());
+	    QWheelEvent wheel(local, global,
+		QPoint(event.arguments.value(QStringLiteral("pixel_x")).toInt(),
+		    event.arguments.value(QStringLiteral("pixel_y")).toInt()),
+		QPoint(event.arguments.value(QStringLiteral("angle_x")).toInt(),
+		    event.arguments.value(QStringLiteral("angle_y")).toInt()),
+		Qt::NoButton,
+		static_cast<Qt::KeyboardModifiers>(event.arguments.value(QStringLiteral("modifiers")).toInt()),
+		Qt::NoScrollPhase, false);
+	    return QCoreApplication::sendEvent(widget, &wheel);
+	}
+    } else if (event.action == QLatin1String("key_press") ||
+	event.action == QLatin1String("key_release")) {
+	QEvent::Type type = event.action == QLatin1String("key_press") ?
+	    QEvent::KeyPress : QEvent::KeyRelease;
+	QKeyEvent key(type,
+	    event.arguments.value(QStringLiteral("key")).toInt(),
+	    static_cast<Qt::KeyboardModifiers>(event.arguments.value(QStringLiteral("modifiers")).toInt()),
+	    event.arguments.value(QStringLiteral("text")).toString(),
+	    event.arguments.value(QStringLiteral("autorepeat")).toBool(),
+	    static_cast<ushort>(event.arguments.value(QStringLiteral("count")).toInt(1)));
+	return QCoreApplication::sendEvent(target, &key);
+    }
+
+    qg_event_error(error, QStringLiteral("unsupported action '%1' for %2")
+	.arg(event.action, QString::fromLatin1(target->metaObject()->className())));
+    return false;
+}
+
+bool
+QgEventPlayer::play(const QVector<QgTestEvent> &events, QString *error) const
+{
+    for (int i = 0; i < events.size(); ++i) {
+	QString eventError;
+	if (!play(events[i], &eventError)) {
+	    qg_event_error(error, QStringLiteral("event %1: %2").arg(i).arg(eventError));
+	    return false;
+	}
+	QCoreApplication::processEvents(QEventLoop::AllEvents);
+    }
+    return true;
+}
+
+bool
+QgEventPlayer::playFile(const QString &fileName, QString *error) const
+{
+    QVector<QgTestEvent> events;
+    return QgEventRecorder::load(fileName, events, error) && play(events, error);
+}

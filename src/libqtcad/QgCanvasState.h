@@ -190,6 +190,32 @@ qgcanvas_request_obol_render_if_idle(QgCanvasState &s, const char *reason)
 	s.obol->requestRender(reason);
 }
 
+/* LoD completion may be reported by a worker thread after Qt's last paint.
+ * Marshal the controller's frame request back to the canvas event loop so a
+ * completed payload cannot remain hidden behind its startup proxy until the
+ * next unrelated mouse or console event. */
+static inline void
+qgcanvas_obol_frame_requested(void *user_data, const char *UNUSED(reason))
+{
+    QWidget *w = static_cast<QWidget *>(user_data);
+    if (w)
+	QMetaObject::invokeMethod(w, "update", Qt::QueuedConnection);
+}
+
+static inline void
+qgcanvas_bind_obol_frame_requests(QgCanvasState &s, QWidget *w)
+{
+    if (s.obol && w)
+	s.obol->setFrameRequestCallback(qgcanvas_obol_frame_requested, w);
+}
+
+static inline void
+qgcanvas_unbind_obol_frame_requests(QgCanvasState &s, QWidget *w)
+{
+    if (s.obol && w)
+	s.obol->clearFrameRequestCallback(w);
+}
+
 static inline void
 qgcanvas_advance_obol_progressive(QgCanvasState &s)
 {
@@ -311,7 +337,7 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 
 /** Create the Obol view state every qtcad canvas exposes. */
 static inline void
-qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
+qgcanvas_init_obol(QgCanvasState &s, QWidget *w,
 	bool software_backend, BObolViewController *controller = nullptr,
 	bool create_controller = true)
 {
@@ -331,6 +357,7 @@ qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
     if (!s.obol)
 	return;
     qgcanvas_bind_obol_render_context(s);
+	qgcanvas_bind_obol_frame_requests(s, w);
 
     SoSeparator *root = new SoSeparator;
     SoOrthographicCamera *camera = new SoOrthographicCamera;
@@ -343,13 +370,14 @@ qgcanvas_init_obol(QgCanvasState &s, const QWidget *w,
 
 /** Destroy the Obol view state every qtcad canvas exposes. */
 static inline void
-qgcanvas_destroy_obol(QgCanvasState &s)
+qgcanvas_destroy_obol(QgCanvasState &s, QWidget *w)
 {
     delete s.offscreen_renderer;
     s.offscreen_renderer = nullptr;
     if (s.obol && s.obol->getRenderContextManager() ==
 	    qgcanvas_obol_context_manager(s.software_backend))
 	s.obol->setRenderContextManager(NULL);
+	qgcanvas_unbind_obol_frame_requests(s, w);
     if (s.owns_obol)
 	delete s.obol;
     s.obol = nullptr;
@@ -358,16 +386,19 @@ qgcanvas_destroy_obol(QgCanvasState &s)
 
 /** Replace the canvas-owned controller with a borrowed endpoint controller. */
 static inline void
-qgcanvas_bind_obol_controller(QgCanvasState &s, const QWidget *w,
+qgcanvas_bind_obol_controller(QgCanvasState &s, QWidget *w,
 	BObolViewController *controller)
 {
     if (s.obol == controller) {
 	qgcanvas_bind_obol_render_context(s);
+	qgcanvas_bind_obol_frame_requests(s, w);
 	return;
     }
 
-    if (s.obol)
+    if (s.obol) {
+	qgcanvas_unbind_obol_frame_requests(s, w);
 	s.obol->setRenderContextManager(NULL);
+    }
     delete s.offscreen_renderer;
     s.offscreen_renderer = nullptr;
     if (s.owns_obol)
@@ -379,6 +410,7 @@ qgcanvas_bind_obol_controller(QgCanvasState &s, const QWidget *w,
     if (!s.obol)
 	return;
     qgcanvas_bind_obol_render_context(s);
+	qgcanvas_bind_obol_frame_requests(s, w);
     if (!s.obol->getSceneRoot())
 	s.obol->setSceneRoot(new SoSeparator);
     if (!s.obol->getCamera())
@@ -605,7 +637,7 @@ qgcanvas_sync_obol_faceplate(QgCanvasState &s)
     qgcanvas_sync_obol_adc(s, group, adc);
 }
 
-/** Refresh an enabled FPS label from controller telemetry at a modest cadence. */
+/** Record actual Qt presentation cadence and refresh the label sparingly. */
 static inline void
 qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
 {
@@ -613,13 +645,19 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
 	return;
 
     struct bv *view = bv_context_view(s.v);
+    s.obol->noteFramePresented();
+    const uint64_t presentation_interval =
+	s.obol->getSmoothedPresentationIntervalNanoseconds();
+    if (presentation_interval)
+	(void)bv_frametime_set(view, presentation_interval);
+
     struct bv_params_state params = BV_PARAMS_STATE_INIT;
     if (!bv_params_state_get(&params, view) || !params.draw ||
 	!params.draw_fps)
 	return;
 
     const auto now = std::chrono::steady_clock::now();
-    if (!s.obol->getSmoothedRenderTimeNanoseconds())
+    if (!presentation_interval)
 	return;
 
     const bool first =

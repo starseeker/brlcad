@@ -30,6 +30,7 @@
 #include <QGroupBox>
 #include "ged.h"
 #include "ged/draw.h"
+#include "ged/selection_state.h"
 #include "rt/db_io.h"
 #include "rt/directory.h"
 #include "qtcad/QgGedEventBatch.h"
@@ -103,12 +104,41 @@ QEll::~QEll()
 	qged_edit_preview_publish_event(m_ctx, p, "_ell_edit",
 	    QGED_EDIT_PREVIEW_CANCEL, bu_vls_cstr(&oname));
     qged_edit_feature_clear_geometry(p);
+
+    // Empty the realized label node before retiring its record.  Controller
+    // replacement can make a retained reference stale, while a still-painted
+    // frame may continue to show the old node until the next view operation.
+    if (!qged_edit_feature_ref_is_null(labels_p)) {
+	qged_edit_feature_labels_replace(labels_p, NULL, 0, NULL);
+	qged_edit_feature_set_visible(labels_p, 0);
+	qged_edit_feature_remove_ref(labels_p);
+    }
     if (m_ctx) {
 	qged_edit_feature_remove(m_ctx, "_ell_edit");
 	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
     }
     p = QGED_EDIT_FEATURE_REF_NULL;
+    labels_p = QGED_EDIT_FEATURE_REF_NULL;
     bu_vls_free(&oname);
+}
+
+void
+QEll::clear_labels()
+{
+    if (!m_ctx) {
+	labels_p = QGED_EDIT_FEATURE_REF_NULL;
+	return;
+    }
+
+    // Resolve against the current active-view controller.  The edit widget
+    // can outlive an endpoint/controller replacement, in which case its old
+    // value reference correctly becomes stale but the current label feature
+    // still needs to be cleared.
+    labels_p = qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels", this);
+    if (qged_edit_feature_ref_is_null(labels_p))
+	return;
+    qged_edit_feature_labels_replace(labels_p, NULL, 0, NULL);
+    qged_edit_feature_set_visible(labels_p, 0);
 }
 
 struct ged *
@@ -222,19 +252,37 @@ QEll::update_obj_wireframe()
     if (!gedp->dbip || !bu_vls_strlen(&oname)) {
 	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
-	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
+	clear_labels();
 	return;
     }
 
-    // Refresh the directory pointer from the current object name.  This avoids
-    // stale pointers if scene/database content changed.
-    dp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
+    // Resolve the complete instance path and accumulate its member matrices.
+    // db_lookup() also accepts paths, but returns only the leaf; using it here
+    // loses the instance transform and plots labels/edit geometry at the raw
+    // primitive coordinates instead of on the selected scene occurrence.
+    struct db_full_path full_path;
+    db_full_path_init(&full_path);
+    mat_t path_mat;
+    MAT_IDN(path_mat);
+    const int path_ok = db_string_to_path(&full_path, gedp->dbip,
+	bu_vls_cstr(&oname)) == 0 &&
+	db_path_to_mat(gedp->dbip, &full_path, path_mat,
+	    (int)full_path.fp_len - 1);
+    dp = path_ok ? DB_FULL_PATH_CUR_DIR(&full_path) : RT_DIR_NULL;
     if (!dp || dp->d_minor_type != DB5_MINORTYPE_BRLCAD_ELL) {
+	db_free_full_path(&full_path);
 	qged_edit_feature_clear_geometry(p);
 	qged_edit_feature_set_visible(p, 0);
-	qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
+	clear_labels();
 	return;
     }
+
+    struct rt_ell_internal display_ell = ell;
+    MAT4X3PNT(display_ell.v, path_mat, ell.v);
+    MAT4X3VEC(display_ell.a, path_mat, ell.a);
+    MAT4X3VEC(display_ell.b, path_mat, ell.b);
+    MAT4X3VEC(display_ell.c, path_mat, ell.c);
+    db_free_full_path(&full_path);
 
     qged_edit_feature_clear_geometry(p);
     qged_edit_feature_set_view(p, m_ctx);
@@ -244,7 +292,7 @@ QEll::update_obj_wireframe()
     struct rt_db_internal intern = RT_DB_INTERNAL_INIT_ZERO;
     intern.idb_major_type = DB5_MAJORTYPE_BRLCAD;
     intern.idb_type = ID_ELL;
-    intern.idb_ptr = &ell;
+    intern.idb_ptr = &display_ell;
     intern.idb_meth = &OBJ[intern.idb_type];
     struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
     if (!wdbp)
@@ -273,12 +321,11 @@ QEll::update_obj_wireframe()
     if (intern.idb_meth->ft_labels)
 	lcnt = intern.idb_meth->ft_labels(pl, 8, idn_mat, &intern, tol);
 
-    struct qged_edit_feature_ref labels_ref =
-	qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels", this);
-    if (!qged_edit_feature_ref_is_null(labels_ref)) {
+    labels_p = qged_edit_feature_label_ensure(m_ctx, "_ell_edit_labels", this);
+    if (!qged_edit_feature_ref_is_null(labels_p)) {
 	const unsigned char label_color[3] = {255, 255, 0};
-	qged_edit_feature_labels_replace(labels_ref, pl, lcnt, label_color);
-	qged_edit_feature_set_visible(labels_ref, lcnt > 0 ? 1 : 0);
+	qged_edit_feature_labels_replace(labels_p, pl, lcnt, label_color);
+	qged_edit_feature_set_visible(labels_p, lcnt > 0 ? 1 : 0);
     }
 
     qged_edit_feature_set_visible(p, 1);
@@ -308,26 +355,107 @@ QEll::update_viewobj_name(const QString &)
 	bu_vls_sprintf(&oname, "%s", ell_name->placeholderText().toLocal8Bit().data());
     if (ell_name->text().length())
 	bu_vls_sprintf(&oname, "%s", ell_name->text().toLocal8Bit().data());
-    if (!bu_vls_strlen(&oname))
+    if (!bu_vls_strlen(&oname)) {
+	dp = RT_DIR_NULL;
+	ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+	qged_edit_feature_clear_geometry(p);
+	qged_edit_feature_set_visible(p, 0);
+	clear_labels();
+	emit view_updated(QG_VIEW_REFRESH);
+	return;
+    }
+
+    struct db_full_path full_path;
+    db_full_path_init(&full_path);
+    const int valid_path = db_string_to_path(&full_path, gedp->dbip,
+	bu_vls_cstr(&oname)) == 0;
+    struct directory *ndp = valid_path ?
+	DB_FULL_PATH_CUR_DIR(&full_path) : RT_DIR_NULL;
+    db_free_full_path(&full_path);
+
+    const bool object_changed = ndp != dp;
+    dp = ndp;
+    if (dp && dp->d_minor_type == DB5_MINORTYPE_BRLCAD_ELL) {
+	ged_draw_highlight_shape_ref_by_name(gedp, bu_vls_cstr(&oname));
+	if (object_changed)
+	    read_from_db();
+	else
+	    update_obj_wireframe();
+	return;
+    }
+
+    ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+    qged_edit_feature_clear_geometry(p);
+    qged_edit_feature_set_visible(p, 0);
+    clear_labels();
+    emit view_updated(QG_VIEW_REFRESH);
+}
+
+void
+QEll::sync_selection()
+{
+    struct ged *gedp = getGed();
+    if (!gedp || !gedp->dbip)
 	return;
 
-    // Update the directory pointer to reflect the name.  If there is a change,
-    // and that change points us to a new object, we need to read the info from
-    // that object
-    struct directory *ndp = db_lookup(gedp->dbip, bu_vls_cstr(&oname), LOOKUP_QUIET);
-    if (ndp != dp) {
-	dp = ndp;
-	if (dp) {
-	    ged_draw_highlight_shape_ref_by_name(gedp, bu_vls_cstr(&oname));
-	    read_from_db();
-	} else {
-	    ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
-	    qged_edit_feature_clear_geometry(p);
-	    qged_edit_feature_set_visible(p, 0);
-	    qged_edit_feature_remove(m_ctx, "_ell_edit_labels");
-	    emit view_updated(QG_VIEW_REFRESH);
-	}
+    QString selected_path;
+    if (ged_selection_count(gedp, NULL) == 1) {
+	struct bu_vls paths = BU_VLS_INIT_ZERO;
+	ged_selection_list_paths(gedp, NULL, &paths);
+	selected_path = QString::fromUtf8(bu_vls_cstr(&paths)).trimmed();
+	bu_vls_free(&paths);
+
+	struct db_full_path full_path;
+	db_full_path_init(&full_path);
+	const bool ell_path = !selected_path.isEmpty() &&
+	    db_string_to_path(&full_path, gedp->dbip,
+		selected_path.toUtf8().constData()) == 0 &&
+	    DB_FULL_PATH_CUR_DIR(&full_path) &&
+	    DB_FULL_PATH_CUR_DIR(&full_path)->d_minor_type ==
+		DB5_MINORTYPE_BRLCAD_ELL;
+	db_free_full_path(&full_path);
+	if (!ell_path)
+	    selected_path.clear();
     }
+
+    if (selected_path.isEmpty()) {
+	// Clear only a value that this synchronization installed.  A manual
+	// editor target is allowed to outlive an unrelated selection change.
+	if (!selection_path.isEmpty() && ell_name->text() == selection_path) {
+	    ell_name->clear();
+	    update_viewobj_name(QString());
+	}
+	selection_path.clear();
+	return;
+    }
+
+    if (ell_name->text() != selected_path) {
+	ell_name->setText(selected_path);
+	update_viewobj_name(selected_path);
+    }
+    selection_path = selected_path;
+}
+
+void
+QEll::reset_for_database()
+{
+    /* A path and its directory pointer are meaningful only in the database
+     * that resolved them.  Do not leave the old target visible while a new
+     * database is active, even if it happens to contain the same leaf name. */
+    selection_path.clear();
+    ell_name->clear();
+    bu_vls_trunc(&oname, 0);
+    dp = NULL;
+
+    struct ged *gedp = getGed();
+    if (gedp)
+	ged_draw_set_highlighted_shape_ref(gedp, GED_DRAW_SHAPE_REF_NULL);
+    if (!qged_edit_feature_ref_is_null(p)) {
+	qged_edit_feature_clear_geometry(p);
+	qged_edit_feature_set_visible(p, 0);
+    }
+    clear_labels();
+    emit view_updated(QG_VIEW_REFRESH);
 }
 
 bool

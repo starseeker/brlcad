@@ -338,7 +338,7 @@ QPolyCreate::do_import_sketch()
 
     // Names are valid, dp is ready - try the sketch import
     p = ged_polygon_import_sketch(bu_vls_cstr(&vname),
-	    gedp->dbip, dp, qpolycreate_ged_view(v), 0);
+	    gedp->dbip, dp, qpolycreate_ged_view(v), 1);
     bu_vls_free(&vname);
     if (ged_polygon_ref_is_null(p))
 	return;

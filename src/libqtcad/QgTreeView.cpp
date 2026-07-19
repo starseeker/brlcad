@@ -175,10 +175,10 @@ QgTreeView::QgTreeView(QWidget *pparent, QgModel *treemodel) : QTreeView(pparent
 void
 QgTreeView::drawBranches(QPainter* painter, const QRect& rrect, const QModelIndex& index) const
 {
-	QModelIndex selected_idx = ((QgTreeView *)this)->selected();
-	if (!(index == selected_idx)) {
+	const bool qt_selected = selectionModel() && selectionModel()->isSelected(index);
+	if (!qt_selected) {
 		int aflag = index.data(QgDataRoles::HighlightDisplayRole).toInt();
-		if (!(QgTreeView *)this->isExpanded(index) && aflag == 1) {
+		if (!isExpanded(index) && aflag == 1) {
 			painter->fillRect(rrect, QBrush(QColor(220, 200, 30)));
 		}
 		if (aflag == 2) {
@@ -276,28 +276,6 @@ void QgTreeView::context_menu(const QPoint &point)
 	delete menu;
 }
 
-void QgTreeView::selectionChanged(const QItemSelection &selected, const QItemSelection &deselected)
-{
-	QTCAD_SLOT("QgTreeView::selectionChanged", 1);
-	if (selected.indexes().size()) {
-		// Stash a valid selection for potential post-model rebuild restoration.
-		QModelIndex nindex = selected.indexes().first();
-		if (nindex.isValid())
-			cached_selection_idx = nindex;
-	}
-	QTreeView::selectionChanged(selected, deselected);
-}
-
-QModelIndex QgTreeView::selected()
-{
-	if (selectedIndexes().count() == 1) {
-		return selectedIndexes().first();
-	}
-	else {
-		return QModelIndex();
-	}
-}
-
 void
 QgTreeView::do_draw_toggle(const QModelIndex &index)
 {
@@ -333,26 +311,13 @@ QgTreeView::redo_expansions(void *)
 }
 
 
-// TODO - probably no longer needed?
 void
 QgTreeView::redo_highlights()
 {
 	QTCAD_SLOT("QgTreeView::redo_highlights", 1);
-	// Restore the previous selection, if we have no replacement and its still valid
-	QModelIndex selected_idx = selected();
-	if (!selected_idx.isValid()) {
-		QgItem *cnode = static_cast<QgItem *>(cached_selection_idx.internalPointer());
-		if (m->hasItem(cnode)) {
-			selected_idx = cached_selection_idx;
-			selectionModel()->select(selected_idx, QItemSelectionModel::Select | QItemSelectionModel::Rows);
-		}
-		else {
-			cached_selection_idx = QModelIndex();
-		}
-	}
-
-	//QgTreeSelectionModel *selm = (QgTreeSelectionModel *)selectionModel();
-	//selm->update_selected_node_relationships(selected_idx);
+	// GED's path selection is the durable state.  QModelIndex values belong to
+	// one model generation and must not be cached or restored across resets.
+	viewport()->update();
 }
 
 #if 0

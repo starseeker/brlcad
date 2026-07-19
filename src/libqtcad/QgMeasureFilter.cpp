@@ -145,13 +145,48 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 	if (!m_e)
 		return false;
 	update_current_mouse(m_e);
+	return processMouseInput(e->type(), m_e->button());
+}
+
+bool
+QgMeasureFilter::semanticInput(BObolInputAction action,
+	const BObolInputEvent *event)
+{
+	if (!event || !view_sync(event))
+		return false;
+
+	current_mouse_x = event->x;
+	current_mouse_y = event->y;
+	current_mouse_valid = true;
+
+	switch (action) {
+	case QG_MEASURE_INPUT_BEGIN:
+		if (event->button != 0)
+			return false;
+		return processMouseInput(QEvent::MouseButtonPress, Qt::LeftButton);
+	case QG_MEASURE_INPUT_UPDATE:
+		return processMouseInput(QEvent::MouseMove, Qt::NoButton);
+	case QG_MEASURE_INPUT_COMMIT:
+		if (event->button != 0)
+			return false;
+		return processMouseInput(QEvent::MouseButtonRelease, Qt::LeftButton);
+	case QG_MEASURE_INPUT_CANCEL:
+		return processMouseInput(QEvent::MouseButtonPress, Qt::RightButton);
+	default:
+		return false;
+	}
+}
+
+bool
+QgMeasureFilter::processMouseInput(QEvent::Type type, Qt::MouseButton button)
+{
 
 	struct ged_view_context *view_ctx = qg_measure_filter_view(this);
 	if (!view_ctx)
 		return false;
 
-	if (e->type() == QEvent::MouseButtonPress) {
-		if (m_e->button() == Qt::RightButton) {
+	if (type == QEvent::MouseButtonPress) {
+		if (button == Qt::RightButton) {
 			clear_measure_overlay();
 			mode = 0;
 			VSETALL(p1, 0.0);
@@ -199,7 +234,7 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 		return true;
 	}
 
-	if (e->type() == QEvent::MouseMove) {
+	if (type == QEvent::MouseMove) {
 		if (!mode)
 			return false;
 		if (mode == 1) {
@@ -221,8 +256,8 @@ QgMeasureFilter::eventFilter(QObject *, QEvent *e)
 		return true;
 	}
 
-	if (e->type() == QEvent::MouseButtonRelease) {
-		if (m_e->button() == Qt::RightButton) {
+	if (type == QEvent::MouseButtonRelease) {
+		if (button == Qt::RightButton) {
 			mode = 0;
 			clear_measure_overlay();
 			emit view_updated(QG_VIEW_REFRESH);

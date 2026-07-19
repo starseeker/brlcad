@@ -85,14 +85,14 @@ void
 ViewMeasureTool::attachToView(QgView *view)
 {
     if (m_measure && view)
-	view->installEventFilter(m_measure);
+	m_measure->attachToView(view);
 }
 
 void
 ViewMeasureTool::detachFromView(QgView *view)
 {
     if (m_measure && view)
-	view->removeEventFilter(m_measure);
+	m_measure->detachFromView(view);
 }
 
 /* ------------------------------------------------------------------ */
