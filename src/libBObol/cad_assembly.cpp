@@ -148,6 +148,7 @@ SoBRLCadRenderBatch::SoBRLCadRenderBatch(void) :
     sourceRoot(NULL),
     cachedSourceSignature(0),
     cachedStructureSignature(0),
+    cachedStyleSignature(0),
     cachedSemanticSignature(0),
     cachedHiddenSignature(0),
     cachedSelectedSignature(0),
@@ -184,6 +185,7 @@ SoBRLCadRenderBatch::setBatchSourceRoot(SoNode *root)
     this->sourceRoot = root;
     this->cachedSourceSignature = 0;
     this->cachedStructureSignature = 0;
+    this->cachedStyleSignature = 0;
     this->cachedSemanticSignature = 0;
     this->cachedHiddenSignature = 0;
     this->cachedSelectedSignature = 0;
@@ -217,6 +219,7 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     if (sources.size() < 32) {
 	this->cachedSourceSignature = 0;
 	this->cachedStructureSignature = 0;
+	this->cachedStyleSignature = 0;
 	this->cachedSemanticSignature = 0;
 	this->cachedHiddenSignature = 0;
 	this->cachedSelectedSignature = 0;
@@ -227,6 +230,7 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     }
     uint64_t signature = 1469598103934665603ULL;
     uint64_t structureSignature = signature;
+    uint64_t styleSignature = signature;
     uint64_t semanticSignature = signature;
     for (SoBRLDatabaseSource *source : sources) {
 	signature ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(source));
@@ -236,6 +240,9 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
 	structureSignature ^=
 	    source ? source->cadBatchStructureSignature() : 0;
 	structureSignature *= 1099511628211ULL;
+	styleSignature ^=
+	    source ? source->cadBatchStyleSignature() : 0;
+	styleSignature *= 1099511628211ULL;
 	semanticSignature ^=
 	    source ? source->cadBatchSemanticSignature() : 0;
 	semanticSignature *= 1099511628211ULL;
@@ -245,17 +252,22 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
 	signature *= 1099511628211ULL;
 	structureSignature ^= payload ? 1ULL : 0ULL;
 	structureSignature *= 1099511628211ULL;
+	styleSignature ^= payload ? 1ULL : 0ULL;
+	styleSignature *= 1099511628211ULL;
 	semanticSignature ^= payload ? 1ULL : 0ULL;
 	semanticSignature *= 1099511628211ULL;
     }
     signature ^= static_cast<uint64_t>(sources.size());
     structureSignature ^= static_cast<uint64_t>(sources.size());
+    styleSignature ^= static_cast<uint64_t>(sources.size());
     semanticSignature ^= static_cast<uint64_t>(sources.size());
     if (signature == this->cachedSourceSignature)
 	return this->batchValid;
 
     const SbBool structureChanged = !this->batchValid ||
 	structureSignature != this->cachedStructureSignature;
+    const SbBool styleChanged = !this->batchValid ||
+	styleSignature != this->cachedStyleSignature;
     const SbBool semanticChanged = !this->batchValid ||
 	semanticSignature != this->cachedSemanticSignature;
     const SbBool includeSemantics = structureChanged || semanticChanged;
@@ -281,7 +293,7 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     if (structureChanged) {
 	this->assembly->upsertSharedParts(state.parts);
 	this->assembly->upsertInstances(state.instances);
-    } else {
+    } else if (styleChanged) {
 	std::vector<Obol::InstanceStyleUpdate> styles;
 	styles.reserve(state.instances.size());
 	for (const Obol::InstanceUpdate &instance : state.instances) {
@@ -305,17 +317,19 @@ SoBRLCadRenderBatch::syncBatch(const BObolViewLodState *viewState)
     if (structureChanged ||
 	unpickableSignature != this->cachedUnpickableSignature)
 	this->assembly->setUnpickableInstances(state.unpickableInstances);
+    int drawMode = SoCADAssembly::WIREFRAME;
     if (state.shadedCount > 0 && state.wireCount > 0)
-	this->assembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
+	drawMode = SoCADAssembly::SHADED_WITH_EDGES;
     else if (state.shadedCount > 0)
-	this->assembly->drawMode = SoCADAssembly::SHADED;
-    else
-	this->assembly->drawMode = SoCADAssembly::WIREFRAME;
+	drawMode = SoCADAssembly::SHADED;
+    if (this->assembly->drawMode.getValue() != drawMode)
+	this->assembly->drawMode = drawMode;
     if (structureChanged)
 	this->assembly->endUpdate();
 
     this->cachedSourceSignature = signature;
     this->cachedStructureSignature = structureSignature;
+    this->cachedStyleSignature = styleSignature;
     this->cachedSemanticSignature = semanticSignature;
     this->cachedHiddenSignature = hiddenSignature;
     this->cachedSelectedSignature = selectedSignature;

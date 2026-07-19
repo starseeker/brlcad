@@ -528,6 +528,8 @@ if(TARGET test_qtcad_obol_real_models)
       havoc_wire
       m35_wire_interactions
       m35_wire_pick_all_stress
+      m35_deferred_wire_color
+      m35_deferred_shaded_color
       m35_color_table_mutation)
     brlcad_add_test(
       NAME test_qtcad_obol_real_models_${_qtcad_real_model_case}
@@ -709,6 +711,8 @@ foreach(_qtcad_obol_offscreen_test
     test_qtcad_obol_real_models_havoc_wire
     test_qtcad_obol_real_models_m35_wire_interactions
     test_qtcad_obol_real_models_m35_wire_pick_all_stress
+    test_qtcad_obol_real_models_m35_deferred_wire_color
+    test_qtcad_obol_real_models_m35_deferred_shaded_color
     test_qtcad_obol_real_models_m35_color_table_mutation)
   if(TEST ${_qtcad_obol_offscreen_test})
     set_property(TEST ${_qtcad_obol_offscreen_test}

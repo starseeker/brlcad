@@ -45,6 +45,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <thread>
+#include <chrono>
 #include <vector>
 
 #define FAIL(_msg) \
@@ -65,6 +67,9 @@ struct model_case {
     int minMeshTriangles;
     int exerciseInteractions;
     int pickAllStress;
+    int expectM35TableColor;
+    int deferLeafExpansion;
+    int strictFallback;
 };
 
 struct geometry_counts {
@@ -84,6 +89,26 @@ lit_pixel_count(const QImage &image)
 	for (int x = 0; x < rgba.width(); x++) {
 	    const unsigned char *p = line + x * 4;
 	    if (p[0] > 32 || p[1] > 32 || p[2] > 32)
+		count++;
+	}
+    }
+    return count;
+}
+
+static int
+m35_table_color_pixel_count(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int count = 0;
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    /* M35's active global region-id color table is 210/146/1.
+	     * Allow antialiasing and lighting variation while excluding the
+	     * default red wire color, white, and the blue view background. */
+	    if (p[0] >= 120 && p[1] >= 70 && p[1] < p[0] && p[2] <= 80 &&
+		p[0] >= p[2] + 80 && p[1] >= p[2] + 50)
 		count++;
 	}
     }
@@ -396,14 +421,21 @@ all_source_materials_match_db_colors(struct ged *gedp,
 		    !summary.materialColorValid ||
 		    fabsf(summary.materialColor[0] - expected[0]) >= 1.0e-5f ||
 		    fabsf(summary.materialColor[1] - expected[1]) >= 1.0e-5f ||
-		    fabsf(summary.materialColor[2] - expected[2]) >= 1.0e-5f) {
+		    fabsf(summary.materialColor[2] - expected[2]) >= 1.0e-5f ||
+		    !instance.appearanceColorValid ||
+		    fabsf(instance.appearanceColor[0] - expected[0]) >= 1.0e-5f ||
+		    fabsf(instance.appearanceColor[1] - expected[1]) >= 1.0e-5f ||
+		    fabsf(instance.appearanceColor[2] - expected[2]) >= 1.0e-5f) {
 		    fprintf(stderr,
 			"material sweep/reference mismatch: source=%d path=%s "
-			"valid=%d actual=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
+			"valid=%d actual=(%.9g %.9g %.9g) appearance_valid=%d "
+			"appearance=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
 			i, summary.path.getString(),
 			(int)summary.materialColorValid,
 			summary.materialColor[0], summary.materialColor[1],
-			summary.materialColor[2], expected[0], expected[1], expected[2]);
+			summary.materialColor[2], (int)instance.appearanceColorValid,
+			instance.appearanceColor[0], instance.appearanceColor[1],
+			instance.appearanceColor[2], expected[0], expected[1], expected[2]);
 		    return 0;
 		}
 		materialCount++;
@@ -750,6 +782,8 @@ sync_draw_case(const struct model_case &testCase)
     struct ged_draw_appearance_settings appearance =
 	GED_DRAW_APPEARANCE_SETTINGS_INIT;
     appearance.draw_mode = testCase.gedDrawMode;
+    appearance.defer_leaf_expansion = testCase.deferLeafExpansion;
+    appearance.strict_fallback = testCase.strictFallback;
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, testCase.root);
@@ -801,7 +835,11 @@ sync_draw_case(const struct model_case &testCase)
 	return 0;
     }
 
-    if (testCase.obolDrawMode == SoBRLDatabaseSource::SHADED) {
+    if (testCase.deferLeafExpansion) {
+	/* The bounded startup proxy is intentionally line geometry regardless
+	 * of the requested final representation.  Its final detail is checked
+	 * after progressive work settles below. */
+    } else if (testCase.obolDrawMode == SoBRLDatabaseSource::SHADED) {
 	if (counts.meshCount < testCase.minMeshShapes ||
 		counts.triangleCount < testCase.minMeshTriangles) {
 	    fprintf(stderr,
@@ -845,6 +883,114 @@ sync_draw_case(const struct model_case &testCase)
 		visibleByteDiff, visibleSsim);
 	ged_close(gedp);
 	return 0;
+    }
+    if (testCase.expectM35TableColor) {
+	const int tableColorPixels = m35_table_color_pixel_count(visibleImage);
+	if (tableColorPixels < 20) {
+	    fprintf(stderr,
+		    "%s:%s did not render the active M35 region-id color table: table_color_pixels=%d\n",
+		    testCase.file, testCase.root, tableColorPixels);
+	    ged_close(gedp);
+	    return 0;
+	}
+    }
+    /* A deferred draw first publishes a bounded proxy.  Drain its background
+     * realization and verify that the requested final representation replaces
+     * the proxy without losing the database material color. */
+    if (testCase.deferLeafExpansion) {
+	BObolProgressiveStatus progressiveStatus;
+	int settled = 0;
+	for (int attempt = 0; attempt < 2000; attempt++) {
+	    QCoreApplication::processEvents();
+	    const int advanced = controller->advanceProgressiveWork(NULL,
+		&progressiveStatus);
+	    if (!progressiveStatus.hasMore &&
+		(progressiveStatus.changed || advanced == 0 || attempt > 0)) {
+		settled = 1;
+		break;
+	    }
+	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	if (!settled) {
+	    fprintf(stderr, "%s:%s deferred realization did not settle\n",
+		testCase.file, testCase.root);
+	    ged_close(gedp);
+	    return 0;
+	}
+	controller->requestRender("real-model-deferred-settled");
+	QCoreApplication::processEvents();
+	QImage settledImage;
+	view.get_viewport_image(settledImage);
+	const int settledTableColorPixels =
+	    m35_table_color_pixel_count(settledImage);
+	BObolSceneController settledScene(controller->getRenderSceneRoot());
+	struct geometry_counts settledCounts = realized_geometry_counts(
+	    &settledScene, controller, testCase.obolDrawMode, NULL, NULL);
+	/* A no-op retained-assembly synchronization must not touch its source.
+	 * Repeated touches here cause every interactive redraw to rebuild the
+	 * render plan, which is especially costly for M35. */
+	const int settledSourceCount = settledScene.getDatabaseSourceCount();
+	for (int i = 0; i < settledSourceCount; i++) {
+	    SoBRLDatabaseSource *source = settledScene.getDatabaseSource(i);
+	    if (!source || !source->prepareCompiledAssembly())
+		continue;
+	    const SbUniqueId stableNodeId = source->getNodeId();
+	    for (int repeat = 0; repeat < 4; repeat++) {
+		if (!source->prepareCompiledAssembly() ||
+		    source->getNodeId() != stableNodeId) {
+		    fprintf(stderr,
+			"%s:%s no-op compact assembly synchronization changed "
+			"source node id\n", testCase.file, testCase.root);
+		    ged_close(gedp);
+		    return 0;
+		}
+	    }
+	}
+	/* Exercise the interactive camera-update path as well.  M35 has enough
+	 * retained sources to use the cross-source render batch, whose visual
+	 * state must also remain stable across view-only revisions. */
+	if (testCase.obolDrawMode == SoBRLDatabaseSource::SHADED) {
+	    /* This regression targets retained batch synchronization, not the
+	     * asynchronous LoD provider.  Keep the database lifetime local to
+	     * this test by preventing a camera update from launching worker
+	     * requests just before ged_close. */
+	    controller->setLodAutoSubmit(FALSE);
+	    view.aet(35.0, 25.0, 0.0);
+	    view.need_update(QG_VIEW_REFRESH);
+	    for (int frame = 0; frame < 6; frame++) {
+		QCoreApplication::processEvents();
+		QImage rotatedImage;
+		view.get_viewport_image(rotatedImage);
+		if (rotatedImage.isNull() ||
+		    m35_table_color_pixel_count(rotatedImage) < 20) {
+		    fprintf(stderr,
+			"%s:%s interactive camera update lost shaded M35 "
+			"geometry or table colors\n", testCase.file,
+			testCase.root);
+		    ged_close(gedp);
+		    return 0;
+		}
+	    }
+	}
+	const int settledGeometryTooSmall =
+	    testCase.obolDrawMode == SoBRLDatabaseSource::SHADED ?
+	    (settledCounts.meshCount < testCase.minMeshShapes ||
+	     settledCounts.triangleCount < testCase.minMeshTriangles) :
+	    (settledCounts.shapeCount < testCase.minWireShapes ||
+	     settledCounts.segmentCount < testCase.minWireSegments);
+	if (settledTableColorPixels < 20 || settledGeometryTooSmall) {
+	    fprintf(stderr,
+		"%s:%s settled deferred draw lost M35 table colors or detail: "
+		"table_color_pixels=%d shapes=%d segments=%d meshes=%d triangles=%d\n",
+		testCase.file, testCase.root, settledTableColorPixels,
+		settledCounts.shapeCount, settledCounts.segmentCount,
+		settledCounts.meshCount, settledCounts.triangleCount);
+	    ged_close(gedp);
+	    return 0;
+	}
+	print_timing(testCase, "total", totalStart);
+	ged_close(gedp);
+	return 1;
     }
     if (controller->isRenderRequested()) {
 	fprintf(stderr, "%s:%s qtcad Obol real-model capture did not consume the render request\n",
@@ -1222,7 +1368,7 @@ exercise_m35_color_table_mutation(void)
 
     print_timing({"m35_color_table_mutation", "m35.g", "all.g",
 	    GED_DRAW_MODE_WIRE, SoBRLDatabaseSource::WIREFRAME,
-	    0, 0, 0, 0, 0, 0}, "total", totalStart);
+	    0, 0, 0, 0, 0, 0, 0, 0, 0}, "total", totalStart);
 
     ged_close(gedp);
     bu_file_delete(tmp_db);
@@ -1239,15 +1385,19 @@ main(int argc, char **argv)
 
     const struct model_case cases[] = {
 	{"pinewood_wire", "pinewood.g", "pinewood", GED_DRAW_MODE_WIRE,
-	    SoBRLDatabaseSource::WIREFRAME, 2, 41, 0, 0, 0, 0},
+	    SoBRLDatabaseSource::WIREFRAME, 2, 41, 0, 0, 0, 0, 0, 0, 0},
 	{"pinewood_shaded", "pinewood.g", "pinewood", GED_DRAW_MODE_SHADED,
-	    SoBRLDatabaseSource::SHADED, 0, 0, 21, 501, 0, 0},
+	    SoBRLDatabaseSource::SHADED, 0, 0, 21, 501, 0, 0, 0, 0, 0},
 	{"havoc_wire", "havoc.g", "havoc", GED_DRAW_MODE_WIRE,
-	    SoBRLDatabaseSource::WIREFRAME, 10, 100, 0, 0, 0, 0},
+	    SoBRLDatabaseSource::WIREFRAME, 10, 100, 0, 0, 0, 0, 0, 0, 0},
 	{"m35_wire_interactions", "m35.g", "all.g", GED_DRAW_MODE_WIRE,
-	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 0},
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 0, 1, 0, 0},
 	{"m35_wire_pick_all_stress", "m35.g", "all.g", GED_DRAW_MODE_WIRE,
-	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 1}
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 1, 1, 1, 0, 0},
+	{"m35_deferred_wire_color", "m35.g", "all.g", GED_DRAW_MODE_WIRE,
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0, 1, 1, 0},
+	{"m35_deferred_shaded_color", "m35.g", "all.g", GED_DRAW_MODE_SHADED,
+	    SoBRLDatabaseSource::SHADED, 0, 0, 100, 1000, 0, 0, 1, 1, 1}
     };
 
     int ran = 0;
@@ -1268,7 +1418,7 @@ main(int argc, char **argv)
     if (BU_STR_EQUAL(getenv("BOBOL_QTCAD_GENERIC_TWIN"), "1")) {
 	const struct model_case genericTwinCase = {
 	    "generic_twin_wire", "faa/Generic_Twin.g", "all", GED_DRAW_MODE_WIRE,
-	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0
+	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0, 0, 0, 0
 	};
 	if (should_run_case(argc, argv, genericTwinCase.name)) {
 	    ran = 1;

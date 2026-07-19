@@ -257,6 +257,9 @@ struct ged_obol_deferred_realization_job {
 		    if (!realized && mesh && item->allowWireFallback)
 			realized = source->realizeDatabaseWireframe();
 		    if (!realized) {
+			bu_log("Obol deferred realization failed for '%s': %s\n",
+			    item->instanceKey.c_str(),
+			    source->realizationDiagnostic.getValue().getString());
 			success = false;
 			break;
 		    }
@@ -3656,6 +3659,28 @@ ged_obol_lod_default_worker_count(size_t worker_count)
     return cpus > 0 ? cpus : 1;
 }
 
+static BObolLodService *
+ged_obol_lod_service_ensure_passive(BObolViewController *controller)
+{
+    if (!controller)
+	return NULL;
+
+    BObolLodService *service = controller->getLodService();
+    if (service && service->isRunning())
+	return service;
+
+    service = controller->ensureManagedLodService(
+	ged_obol_lod_default_worker_count(0));
+    if (!service)
+	return NULL;
+
+    /* Lazy cache and proxy prewarming needs workers, but it must not opt the
+     * whole view into automatic AABB/OBB/mesh LoD submission.  That policy is
+     * reserved for an explicit service start. */
+    controller->setLodAutoSubmit(FALSE);
+    return service;
+}
+
 static void
 ged_obol_lod_status_fill(BObolViewController *controller,
 			 ged_draw_obol_lod_service_status_t *status)
@@ -3845,9 +3870,7 @@ ged_draw_obol_lod_service_prewarm(struct ged *gedp,
 
     BObolLodService *service = controller->getLodService();
     if (!service || !service->isRunning()) {
-	if (!ged_draw_obol_lod_service_start(gedp, view_ctx, 0))
-	    return 0;
-	service = controller->getLodService();
+	service = ged_obol_lod_service_ensure_passive(controller);
 	if (!service || !service->isRunning())
 	    return 0;
     }
@@ -15876,6 +15899,82 @@ ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max)
     return geometry;
 }
 
+/* A bounded structural proxy may represent an assembly rather than a region.
+ * In that case db_full_path_color quite correctly reports the assembly's own
+ * (usually white) state, while the visible geometry below it is colored by a
+ * region-id table.  Pick a representative descendant region so the temporary
+ * proxy reflects the database appearance it stands in for. */
+static int
+ged_obol_structural_proxy_descendant_material_color(
+    const ged_obol_structural_proxy_context &ctx,
+    ged_db_index_id parentId,
+    const std::string &parentPath,
+    SbColor &color,
+    size_t &visited)
+{
+    if (!ctx.gedp || !ctx.gedp->dbip || parentPath.empty() ||
+	visited >= ged_obol_structural_proxy_max_nodes)
+	return 0;
+
+    const size_t childCount = ged_db_index_child_count(ctx.gedp, parentId);
+    for (size_t row = 0; row < childCount; row++) {
+	if (visited++ >= ged_obol_structural_proxy_max_nodes)
+	    return 0;
+	struct ged_db_index_child child;
+	memset(&child, 0, sizeof(child));
+	if (!ged_db_index_child_at(ctx.gedp, parentId, row, &child) ||
+	    !child.record.valid)
+	    continue;
+	const char *childName = ged_obol_child_object_name(&child);
+	if (!childName || !childName[0])
+	    continue;
+
+	std::string childPath(parentPath);
+	childPath += "/";
+	childPath += childName;
+	if (child.record.dp &&
+	    (child.record.dp->d_flags & RT_DIR_REGION) &&
+	    bobol_database_source_path_material_color(ctx.gedp->dbip,
+		childPath.c_str(), color))
+	    return 1;
+
+	if (child.record.is_comb) {
+	    const ged_db_index_id childId = child.record.object_id ?
+		child.record.object_id : child.record.id;
+	    if (ged_obol_structural_proxy_descendant_material_color(ctx,
+		    childId, childPath, color, visited))
+		return 1;
+	}
+    }
+    return 0;
+}
+
+static int
+ged_obol_structural_proxy_material_color(
+    const ged_obol_structural_proxy_context &ctx,
+    const ged_obol_structural_proxy_node &node,
+    SbColor &color)
+{
+    if (!ctx.gedp || !ctx.gedp->dbip || node.path.empty())
+	return 0;
+
+    const size_t pathLength = ged_db_index_path_resolve(ctx.gedp,
+	node.path.c_str(), NULL, 0);
+    if (pathLength) {
+	std::vector<ged_db_index_id> ids(pathLength);
+	if (ged_db_index_path_resolve(ctx.gedp, node.path.c_str(), ids.data(),
+		ids.size()) == pathLength) {
+	    size_t visited = 0;
+	    if (ged_obol_structural_proxy_descendant_material_color(ctx,
+		    ids.back(), node.path, color, visited))
+		return 1;
+	}
+    }
+
+    return bobol_database_source_path_material_color(ctx.gedp->dbip,
+	node.path.c_str(), color) ? 1 : 0;
+}
+
 static BObolCompactOccurrence
 ged_obol_structural_proxy_occurrence(
     const ged_obol_structural_proxy_context &ctx,
@@ -15934,6 +16033,15 @@ ged_obol_structural_proxy_occurrence(
 	}
 	if (node.metadata.hasShader)
 	    summary.materialShader = node.metadata.shader;
+    }
+    /* Cached path metadata describes authored object attributes, but it does
+     * not by itself resolve an active region-id color table.  Structural
+     * proxies are visible draw geometry and must use the same effective
+     * full-path database color as their eventual detailed occurrences. */
+    SbColor databaseColor;
+    if (ged_obol_structural_proxy_material_color(ctx, node, databaseColor)) {
+	summary.materialColorValid = TRUE;
+	summary.materialColor = databaseColor;
     }
     return occurrence;
 }
@@ -16248,9 +16356,7 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 
     BObolLodService *service = controller->getLodService();
     if (!service || !service->isRunning()) {
-	if (!ged_draw_obol_lod_service_start(gedp, view_ctx, 0))
-	    return 0;
-	service = controller->getLodService();
+	service = ged_obol_lod_service_ensure_passive(controller);
 	if (!service || !service->isRunning())
 	    return 0;
     }

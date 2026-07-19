@@ -834,6 +834,7 @@ realized_mesh_count(BObolViewController *controller)
  * integration test consumes the supported `view lod` key/value contract and
  * keeps only the fields needed for its diagnostics. */
 struct qtcad_obol_lod_service_status {
+    int auto_submit;
     size_t in_flight;
     size_t pending_tasks;
     size_t queued_cache_writes;
@@ -906,6 +907,8 @@ qtcad_obol_lod_service_status_get(
 	return 0;
     const char *result = bu_vls_addr(gedp->ged_result_str);
     memset(status, 0, sizeof(*status));
+    status->auto_submit = (int)
+	qtcad_obol_result_value(result, "auto_submit");
     status->in_flight = qtcad_obol_result_value(result, "in_flight");
     status->pending_tasks = qtcad_obol_result_value(result, "pending_tasks");
     status->queued_cache_writes =
@@ -1656,6 +1659,15 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    }
 	    (void)qtcad_obol_lod_service_status_get(gedp,
 		ged_view_context_from_bv(view.viewContext()), &service_status);
+	    if (service_status.auto_submit ||
+		service_status.last_submitted_task_count != 0) {
+		fprintf(stderr,
+			"qtcad Obol progressive LoD passive startup prewarm enabled automatic mesh LoD submission: case=%s auto_submit=%d last_submitted=%u\n",
+			testCase.name, service_status.auto_submit,
+			service_status.last_submitted_task_count);
+		cleanup();
+		return 0;
+	    }
 	    if (source_count_after <= source_count_before ||
 		max_depth_after <= max_depth_before ||
 		realized_after < geometry_before ||

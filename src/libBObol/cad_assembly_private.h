@@ -120,6 +120,7 @@ private:
     SoNode *sourceRoot;
     uint64_t cachedSourceSignature;
     uint64_t cachedStructureSignature;
+    uint64_t cachedStyleSignature;
     uint64_t cachedSemanticSignature;
     uint64_t cachedHiddenSignature;
     uint64_t cachedSelectedSignature;

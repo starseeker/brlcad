@@ -185,8 +185,10 @@ struct SoBRLDatabaseSource::Impl {
     SbBool compiledAssemblyActive = FALSE;
     SbUniqueId compiledAssemblyNodeId = 0;
     uint64_t compiledCompactStructureSignature = 0;
+    uint64_t compiledCompactStyleSignature = 0;
     uint64_t compiledCompactSemanticSignature = 0;
     uint64_t compiledCompactHiddenSignature = 0;
+    uint64_t compiledCompactSelectedSignature = 0;
     uint64_t compiledCompactUnpickableSignature = 0;
     SbBool compactIndexActive = FALSE;
     SbBool compactOccurrenceRegistry = FALSE;
@@ -2676,6 +2678,18 @@ primitive_is_annotation(int internalType, const char *typeLabel)
 	return true;
     return typeLabel && (BU_STR_EQUAL(typeLabel, "annot") ||
 			 BU_STR_EQUAL(typeLabel, "annotation"));
+}
+
+/* Some database primitives do not have a finite shaded surface of their own.
+ * They remain valid members of a shaded display, but must use their plotting
+ * representation instead of making the entire aggregate mesh realization
+ * fail.  A half-space is the important case: its infinite surface cannot be
+ * tessellated as an isolated leaf. */
+static bool
+primitive_uses_wire_in_mesh_mode(int internalType)
+{
+    return internalType == ID_HALF || internalType == ID_SKETCH ||
+	   internalType == ID_ANNOT;
 }
 
 static uint32_t
@@ -5514,8 +5528,8 @@ compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
 	  !job->intern.idb_meth->ft_indexed_face_set) &&
 	 internalType != ID_BOT);
     const bool special = internalType == ID_MATERIAL ||
-	internalType == ID_PNTS || internalType == ID_SKETCH ||
-	internalType == ID_ANNOT;
+	internalType == ID_PNTS ||
+	primitive_uses_wire_in_mesh_mode(internalType);
     const bool lodCandidate = collect->source->lodBotThreshold.getValue() > 0;
     if (wireInstead || special || lodCandidate)
 	return make_nop_tree();
@@ -6148,7 +6162,7 @@ realize_direct_leaf_mesh(SoBRLDatabaseSource *source,
 	    if (sharedVListShape)
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "point");
-	} else if (internalType == ID_SKETCH || internalType == ID_ANNOT) {
+	} else if (primitive_uses_wire_in_mesh_mode(internalType)) {
 	    sharedVListShape = vlist_from_lod_realization_internal(
 		&validInternal.local, source, localBounds);
 	    if (!sharedVListShape)
@@ -6318,8 +6332,7 @@ realize_direct_leaf_mesh_compact(
 	}
 
 	const int drawMode = source_record_draw_mode(source);
-	const bool wireGeometry = internalType == ID_SKETCH ||
-	    internalType == ID_ANNOT ||
+	const bool wireGeometry = primitive_uses_wire_in_mesh_mode(internalType) ||
 	    ((drawMode == BOBOL_LOD_DRAW_WIRE ||
 	      (drawMode == BOBOL_LOD_DRAW_SHADED_BOTS &&
 	       (!validInternal.local.idb_meth ||
@@ -6440,7 +6453,7 @@ realize_direct_leaf_mesh_compact(
 	    if (sharedVListShape)
 		assign_shared_geometry_identity(sharedVListShape,
 		    dp->d_namep, typeLabel, revision, "point");
-	} else if (internalType == ID_SKETCH || internalType == ID_ANNOT) {
+	} else if (primitive_uses_wire_in_mesh_mode(internalType)) {
 	    sharedVListShape = vlist_from_lod_realization_internal(
 		&validInternal.local, source, localBounds);
 	    if (!sharedVListShape)
@@ -6633,8 +6646,8 @@ static union tree *
 
 	    const int internalType = localIntern->idb_type;
 	    const int drawMode = source_record_draw_mode(data->source);
-	    const bool wireGeometry = internalType == ID_SKETCH ||
-		internalType == ID_ANNOT ||
+	    const bool wireGeometry =
+		primitive_uses_wire_in_mesh_mode(internalType) ||
 		((drawMode == BOBOL_LOD_DRAW_WIRE ||
 		  (drawMode == BOBOL_LOD_DRAW_SHADED_BOTS &&
 		   (!localIntern->idb_meth ||
@@ -6814,7 +6827,7 @@ static union tree *
 	    if (sharedVListShape)
 		assign_shared_geometry_identity(sharedVListShape,
 						dp->d_namep, typeLabel, data->revision, "point");
-	} else if (internalType == ID_SKETCH || internalType == ID_ANNOT) {
+	} else if (primitive_uses_wire_in_mesh_mode(internalType)) {
 	    sharedVListShape = vlist_from_lod_realization_internal(localIntern,
 		data->source, localBounds);
 	    if (!sharedVListShape)
@@ -9288,6 +9301,28 @@ compact_state_signature(const std::vector<Obol::InstanceId> &instances)
     return signature ? signature : 1;
 }
 
+/* The retained assembly owns a copy of every instance style.  Track the
+ * compact revisions which can change that copy so an unrelated source-node
+ * notification (for example, a camera redraw) does not republish every style
+ * and touch the retained assembly again. */
+static uint64_t
+compact_style_signature(const BObolCompactInstanceIndex *index)
+{
+    if (!index)
+	return 0;
+
+    uint64_t signature = 1469598103934665603ULL;
+    compact_signature_mix(signature, index->entries.size());
+    for (const BObolCompactInstanceEntry &entry : index->entries) {
+	compact_signature_mix(signature, entry.instance.w0);
+	compact_signature_mix(signature, entry.instance.w1);
+	compact_signature_mix(signature, entry.appearanceRevision);
+	compact_signature_mix(signature, entry.visibilityRevision);
+	compact_signature_mix(signature, entry.selectionRevision);
+    }
+    return signature ? signature : 1;
+}
+
 static void
 compact_assembly_draw_mode(SoBRLCadAssembly *assembly,
     const SoBRLDatabaseSource *source,
@@ -9295,14 +9330,15 @@ compact_assembly_draw_mode(SoBRLCadAssembly *assembly,
 {
     if (!assembly || !source || !index)
 	return;
+    int drawMode = SoCADAssembly::WIREFRAME;
     if (source_record_draw_mode(source) == BOBOL_LOD_DRAW_HIDDEN_LINE)
-	assembly->drawMode = SoCADAssembly::HIDDEN_LINE;
+	drawMode = SoCADAssembly::HIDDEN_LINE;
     else if (index->shadedCount > 0 && index->wireCount > 0)
-	assembly->drawMode = SoCADAssembly::SHADED_WITH_EDGES;
+	drawMode = SoCADAssembly::SHADED_WITH_EDGES;
     else if (index->shadedCount > 0)
-	assembly->drawMode = SoCADAssembly::SHADED;
-    else
-	assembly->drawMode = SoCADAssembly::WIREFRAME;
+	drawMode = SoCADAssembly::SHADED;
+    if (assembly->drawMode.getValue() != drawMode)
+	assembly->drawMode = drawMode;
 }
 
 uint64_t
@@ -9314,6 +9350,14 @@ SoBRLDatabaseSource::cadBatchStructureSignature(void) const
     signature *= 1099511628211ULL;
     signature ^= static_cast<uint64_t>(this->visible.getValue());
     return signature ? signature : 1;
+}
+
+uint64_t
+SoBRLDatabaseSource::cadBatchStyleSignature(void) const
+{
+    return this->d->compactIndexActive && this->d->compactIndex ?
+	compact_style_signature(this->d->compactIndex) :
+	this->d->cadBatchRevision;
 }
 
 uint64_t
@@ -9341,8 +9385,10 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	  this->needsRealization())) ||
 	source_has_auxiliary_children(this)) {
 	this->d->compiledCompactStructureSignature = 0;
+	this->d->compiledCompactStyleSignature = 0;
 	this->d->compiledCompactSemanticSignature = 0;
 	this->d->compiledCompactHiddenSignature = 0;
+	this->d->compiledCompactSelectedSignature = 0;
 	this->d->compiledCompactUnpickableSignature = 0;
 	this->d->compiledAssemblyNodeId = sourceNodeId;
 	this->d->compiledAssemblyDirty = FALSE;
@@ -9358,21 +9404,26 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	compact_structure_signature(this->d->compactIndex) : 0;
     const uint64_t semanticSignature = hasCompactPayload ?
 	compact_semantic_signature(this->d->compactIndex) : 0;
+    const uint64_t styleSignature = hasCompactPayload ?
+	compact_style_signature(this->d->compactIndex) : 0;
     if (hasCompactPayload && this->d->compiledCompactStructureSignature != 0 &&
 	this->d->compiledCompactStructureSignature == structureSignature &&
 	this->d->compiledAssembly->instanceCount() ==
 	    this->d->compactIndex->instances.size() &&
 	this->d->compiledAssembly->partCount() == this->d->compactIndex->parts.size()) {
-	std::vector<Obol::InstanceStyleUpdate> styles;
-	styles.reserve(this->d->compactIndex->instances.size());
-	for (const Obol::InstanceUpdate &instance :
-	     this->d->compactIndex->instances) {
-	    Obol::InstanceStyleUpdate style;
-	    style.instance = instance.instance;
-	    style.style = instance.record.style;
-	    styles.push_back(style);
+	if (this->d->compiledCompactStyleSignature != styleSignature) {
+	    std::vector<Obol::InstanceStyleUpdate> styles;
+	    styles.reserve(this->d->compactIndex->instances.size());
+	    for (const Obol::InstanceUpdate &instance :
+		 this->d->compactIndex->instances) {
+		Obol::InstanceStyleUpdate style;
+		style.instance = instance.instance;
+		style.style = instance.record.style;
+		styles.push_back(style);
+	    }
+	    this->d->compiledAssembly->updateInstanceStyles(styles);
+	    this->d->compiledCompactStyleSignature = styleSignature;
 	}
-	this->d->compiledAssembly->updateInstanceStyles(styles);
 	const uint64_t hiddenSignature = compact_state_signature(
 	    this->d->compactIndex->hiddenInstances);
 	if (this->d->compiledCompactHiddenSignature != hiddenSignature) {
@@ -9380,8 +9431,13 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 		this->d->compactIndex->hiddenInstances);
 	    this->d->compiledCompactHiddenSignature = hiddenSignature;
 	}
-	this->d->compiledAssembly->setSelectedInstances(
+	const uint64_t selectedSignature = compact_state_signature(
 	    this->d->compactIndex->selectedInstances);
+	if (this->d->compiledCompactSelectedSignature != selectedSignature) {
+	    this->d->compiledAssembly->setSelectedInstances(
+		this->d->compactIndex->selectedInstances);
+	    this->d->compiledCompactSelectedSignature = selectedSignature;
+	}
 	const uint64_t unpickableSignature = compact_state_signature(
 	    this->d->compactIndex->unpickableInstances);
 	if (this->d->compiledCompactUnpickableSignature != unpickableSignature) {
@@ -9402,7 +9458,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	    this->d->compactIndex);
 	this->d->compiledAssemblyActive = TRUE;
 	this->ensureCompiledAssemblyChild();
-	this->d->compiledAssemblyNodeId = sourceNodeId;
+	this->d->compiledAssemblyNodeId = this->getNodeId();
 	this->d->compiledAssemblyDirty = FALSE;
 	return 1;
     }
@@ -9434,6 +9490,8 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	    this->d->compactIndex->unpickableInstances);
 	this->d->compiledCompactHiddenSignature = compact_state_signature(
 	    this->d->compactIndex->hiddenInstances);
+	this->d->compiledCompactSelectedSignature = compact_state_signature(
+	    this->d->compactIndex->selectedInstances);
 	this->d->compiledCompactUnpickableSignature = compact_state_signature(
 	    this->d->compactIndex->unpickableInstances);
 	for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
@@ -9447,18 +9505,21 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
 	    this->d->compactIndex);
 	this->d->compiledAssemblyActive = TRUE;
 	this->d->compiledCompactStructureSignature = structureSignature;
+	this->d->compiledCompactStyleSignature = styleSignature;
 	this->d->compiledCompactSemanticSignature = semanticSignature;
 	this->d->compiledAssembly->endUpdate();
 	this->ensureCompiledAssemblyChild();
-	this->d->compiledAssemblyNodeId = sourceNodeId;
+	this->d->compiledAssemblyNodeId = this->getNodeId();
 	this->d->compiledAssemblyDirty = FALSE;
 	return 1;
     }
 
     /* The retained compact signature has no meaning for a child-graph build. */
     this->d->compiledCompactStructureSignature = 0;
+    this->d->compiledCompactStyleSignature = 0;
     this->d->compiledCompactSemanticSignature = 0;
     this->d->compiledCompactHiddenSignature = 0;
+    this->d->compiledCompactSelectedSignature = 0;
     this->d->compiledCompactUnpickableSignature = 0;
     cad_build_data data;
     data.source = this;
@@ -9492,7 +9553,7 @@ SoBRLDatabaseSource::syncCompiledAssembly(void)
     }
 
     this->d->compiledAssembly->endUpdate();
-    this->d->compiledAssemblyNodeId = sourceNodeId;
+    this->d->compiledAssemblyNodeId = this->getNodeId();
     this->d->compiledAssemblyDirty = FALSE;
     return this->d->compiledAssemblyActive ? 1 : 0;
 }
@@ -9836,8 +9897,10 @@ SoBRLDatabaseSource::clearCompiledAssembly(void)
     this->d->compiledAssemblyActive = FALSE;
     this->d->compiledAssemblyNodeId = 0;
     this->d->compiledCompactStructureSignature = 0;
+    this->d->compiledCompactStyleSignature = 0;
     this->d->compiledCompactSemanticSignature = 0;
     this->d->compiledCompactHiddenSignature = 0;
+    this->d->compiledCompactSelectedSignature = 0;
     this->d->compiledCompactUnpickableSignature = 0;
     this->markCadBatchDirty();
 }
@@ -10347,6 +10410,12 @@ SoBRLDatabaseSource::refreshMaterialColorFromDatabase(
 	    return 0;
 	}
 	this->materialRevision = nextMaterialRevision;
+	/* The sweep above updates occurrence semantics.  Rebuild each retained
+	 * instance's effective style from those new colors before publishing the
+	 * compact batch; otherwise the summaries report the new table while the
+	 * renderer continues using the previous compiled color. */
+	for (BObolCompactInstanceEntry &entry : this->d->compactIndex->entries)
+	    compact_sync_entry_from_source(entry, this);
 	this->rebuildCompactInstanceDisplayState(FALSE);
 	this->markCompiledAssemblyDirty();
 	this->markCadBatchDirty();
@@ -11063,6 +11132,15 @@ database_snapshot_create(struct db_i *source, const SbString &sourcePath,
 
     if (wdbType == RT_WDB_TYPE_DB_DISK)
 	db_sync(snapshot);
+    /* Copying _GLOBAL writes the persistent attribute, but an in-memory
+     * snapshot is not rescanned afterward.  Populate its runtime material
+     * table explicitly so detached progressive realization uses the same
+     * active region-id colors as the live database. */
+    struct bu_vls colorTable = BU_VLS_INIT_ZERO;
+    db_mater_to_vls(&colorTable, source);
+    if (bu_vls_strlen(&colorTable) > 0)
+	db5_import_color_table(snapshot, bu_vls_addr(&colorTable));
+    bu_vls_free(&colorTable);
     database_snapshot_copy_lookup_context(snapshot, source);
     snapshot->dbi_read_only = 1;
     if (snapshotPathOut)

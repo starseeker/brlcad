@@ -955,6 +955,7 @@ private:
 	SbBool occurrenceRegistry);
     int syncCompiledAssembly(void);
     uint64_t cadBatchStructureSignature(void) const;
+    uint64_t cadBatchStyleSignature(void) const;
     uint64_t cadBatchSemanticSignature(void) const;
     int appendCadRenderBatch(struct BObolCadBatchBuildState *state,
 	SbBool includeGeometry, SbBool includeSemantics);
