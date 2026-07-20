@@ -48,16 +48,11 @@ set(
   window_host.cpp
 )
 
-if(NOT TARGET Obol::Obol)
-  find_package(Obol CONFIG QUIET)
-endif()
-if(NOT TARGET Obol::Obol AND EXISTS "${CMAKE_BINARY_DIR}/lib/cmake/Obol-1.0.0/obol-config.cmake")
-  set(Obol_DIR "${CMAKE_BINARY_DIR}/lib/cmake/Obol-1.0.0" CACHE PATH "Obol package directory" FORCE)
-  find_package(Obol CONFIG REQUIRED)
-endif()
-if(NOT TARGET Obol::Obol)
-  message(FATAL_ERROR "libBObol requires the Obol::Obol CMake package target")
-endif()
+find_package(Obol CONFIG REQUIRED
+  PATHS
+  ${PROJECT_BINARY_DIR}/lib/cmake/Obol-1.0.0
+  ${PROJECT_BINARY_DIR}/lib64/cmake/Obol-1.0.0
+)
 set(BOBOL_OPENGL_INCLUDE_DIRS)
 if(OPENGL_INCLUDE_DIR_GL)
   list(APPEND BOBOL_OPENGL_INCLUDE_DIRS ${OPENGL_INCLUDE_DIR_GL})
