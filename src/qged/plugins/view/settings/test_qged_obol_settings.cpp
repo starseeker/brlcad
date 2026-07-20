@@ -67,6 +67,11 @@ main(int argc, char **argv)
 	CHECK(settings.fb_mode_combo->isEnabled() &&
 	    settings.fb_mode_combo->currentIndex() == 0,
 	    "settings reads the endpoint-owned initial framebuffer mode");
+	CHECK(settings.params_ckbx->isEnabled() &&
+	    settings.params_ckbx->checkState() == Qt::Checked &&
+	    settings.params_fps_ckbx->isEnabled() &&
+	    settings.params_fps_ckbx->checkState() == Qt::Checked,
+	    "parameter telemetry and FPS are effectively visible by default");
 
 	settings.fb_mode_combo->setCurrentIndex(2);
 	value = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;

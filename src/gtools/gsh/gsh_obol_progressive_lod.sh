@@ -1,39 +1,48 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 3 ]; then
-    echo "Usage: gsh_obol_progressive_lod.sh <gsh> <db> <workdir>" 1>&2
+# A non-login Git for Windows sh does not add its own core utilities to PATH.
+PATH="/usr/bin:/bin:${PATH}"
+export PATH
+
+if [ "$#" -ne 6 ]; then
+    echo "Usage: gsh_obol_progressive_lod.sh <gsh> <db> <workdir> <png-pix> <pixcount> <pixdiff>" 1>&2
     exit 1
 fi
 
 GSH="$1"
 DB="$2"
 WORKDIR="$3"
-PYTHON="${PYTHON:-}"
+PNG_PIX="$4"
+PIXCOUNT="$5"
+PIXDIFF="$6"
 
-if [ -z "$PYTHON" ]; then
-    for cand in python3.11 python3.14 python3 python; do
-	if command -v "$cand" >/dev/null 2>&1; then
-	    PYTHON="$cand"
-	    break
-	fi
-    done
-fi
-
-if [ -z "$PYTHON" ]; then
-    echo "No usable Python interpreter found for PNG validation" 1>&2
+if [ ! -d "$WORKDIR" ]; then
+    echo "gsh Obol progressive LoD work directory does not exist: $WORKDIR" 1>&2
     exit 1
 fi
+cd "$WORKDIR"
 
-TMPDB="${WORKDIR}/gsh_obol_progressive_lod.g"
-CACHE="${WORKDIR}/gsh_obol_progressive_lod_cache"
-LOG="${WORKDIR}/gsh_obol_progressive_lod.log"
-FRAME0="${WORKDIR}/gsh_obol_progressive_lod_0.png"
-FRAME1="${WORKDIR}/gsh_obol_progressive_lod_1.png"
-FRAME2="${WORKDIR}/gsh_obol_progressive_lod_2.png"
-FRAME3="${WORKDIR}/gsh_obol_progressive_lod_3.png"
+# Keep generated paths relative after entering the work directory.  Git for
+# Windows core utilities do not consistently handle drive-letter paths with
+# recursive operations such as mkdir -p.
+TMPDB="gsh_obol_progressive_lod.g"
+CACHE="gsh_obol_progressive_lod_cache"
+LOG="gsh_obol_progressive_lod.log"
+FRAME0="gsh_obol_progressive_lod_0.png"
+FRAME1="gsh_obol_progressive_lod_1.png"
+FRAME2="gsh_obol_progressive_lod_2.png"
+FRAME3="gsh_obol_progressive_lod_3.png"
+PIX0="gsh_obol_progressive_lod_0.pix"
+PIX1="gsh_obol_progressive_lod_1.pix"
+PIX2="gsh_obol_progressive_lod_2.pix"
+PIX3="gsh_obol_progressive_lod_3.pix"
+DIFF01="gsh_obol_progressive_lod_01.diff.pix"
+DIFF12="gsh_obol_progressive_lod_12.diff.pix"
+DIFF23="gsh_obol_progressive_lod_23.diff.pix"
 
 rm -f "$TMPDB" "$LOG" "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3"
+rm -f "$PIX0" "$PIX1" "$PIX2" "$PIX3" "$DIFF01" "$DIFF12" "$DIFF23"
 rm -rf "$CACHE"
 mkdir -p "$CACHE"
 cp "$DB" "$TMPDB"
@@ -109,90 +118,60 @@ if ! grep -Eq 'active_lod_mesh_payloads: [1-9][0-9]*' "$LOG"; then
     exit 1
 fi
 
-"$PYTHON" - "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3" <<'PY'
-import struct
-import sys
-import zlib
+if ! "$PNG_PIX" "$FRAME0" > "$PIX0" ||
+   ! "$PNG_PIX" "$FRAME1" > "$PIX1" ||
+   ! "$PNG_PIX" "$FRAME2" > "$PIX2" ||
+   ! "$PNG_PIX" "$FRAME3" > "$PIX3"; then
+    echo "gsh Obol progressive LoD could not decode its PNG output" 1>&2
+    exit 1
+fi
 
+bytes0=$(wc -c < "$PIX0")
+for pix in "$PIX1" "$PIX2" "$PIX3"; do
+    bytes=$(wc -c < "$pix")
+    if [ "$bytes" -ne "$bytes0" ]; then
+	echo "progressive LoD frames have inconsistent RGB dimensions" 1>&2
+	exit 1
+    fi
+done
+if [ $((bytes0 % 3)) -ne 0 ]; then
+    echo "progressive LoD decoder returned incomplete RGB pixels" 1>&2
+    exit 1
+fi
+pixel_count=$((bytes0 / 3))
 
-def decode_png(path):
-    data = open(path, "rb").read()
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise RuntimeError("%s is not a PNG" % path)
-    off = 8
-    width = height = color_type = None
-    raw = b""
-    while off < len(data):
-        n = struct.unpack(">I", data[off:off + 4])[0]
-        typ = data[off + 4:off + 8]
-        chunk = data[off + 8:off + 8 + n]
-        off += 12 + n
-        if typ == b"IHDR":
-            width, height, bit_depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", chunk)
-            if bit_depth != 8 or interlace != 0:
-                raise RuntimeError("%s uses unsupported PNG encoding" % path)
-        elif typ == b"IDAT":
-            raw += chunk
-    bpp = 3 if color_type == 2 else 4 if color_type == 6 else None
-    if bpp is None:
-        raise RuntimeError("%s uses unsupported PNG color type %s" % (path, color_type))
-    pixels = zlib.decompress(raw)
-    rows = []
-    prev = bytearray(width * bpp)
-    p = 0
-    lit = 0
-    for y in range(height):
-        filt = pixels[p]
-        p += 1
-        row = bytearray(pixels[p:p + width * bpp])
-        p += width * bpp
-        for i in range(len(row)):
-            left = row[i - bpp] if i >= bpp else 0
-            up = prev[i]
-            up_left = prev[i - bpp] if i >= bpp else 0
-            if filt == 1:
-                row[i] = (row[i] + left) & 255
-            elif filt == 2:
-                row[i] = (row[i] + up) & 255
-            elif filt == 3:
-                row[i] = (row[i] + ((left + up) // 2)) & 255
-            elif filt == 4:
-                pred = left + up - up_left
-                pa = abs(pred - left)
-                pb = abs(pred - up)
-                pc = abs(pred - up_left)
-                pr = left if pa <= pb and pa <= pc else up if pb <= pc else up_left
-                row[i] = (row[i] + pr) & 255
-            elif filt != 0:
-                raise RuntimeError("%s uses unsupported PNG filter %s" % (path, filt))
-        for x in range(width):
-            r, g, b = row[x * bpp:x * bpp + 3]
-            if r > 32 or g > 32 or b > 32:
-                lit += 1
-        rows.append(bytes(row))
-        prev = row
-    return width, height, bpp, rows, lit
+lit_pixels()
+{
+    "$PIXCOUNT" "$1" |
+	awk '$1 > 32 || $2 > 32 || $3 > 32 { lit += $4 } END { print lit + 0 }'
+}
 
+lit0=$(lit_pixels "$PIX0")
+lit1=$(lit_pixels "$PIX1")
+lit2=$(lit_pixels "$PIX2")
+lit3=$(lit_pixels "$PIX3")
+for lit in "$lit1" "$lit2" "$lit3"; do
+    if [ "$lit" -lt 20 ]; then
+	echo "post-poll progressive LoD frame is too dark: lit=${lit}" 1>&2
+	exit 1
+    fi
+done
 
-imgs = [decode_png(p) for p in sys.argv[1:]]
-# Frame zero is captured before delayed workers publish any payload and may be
-# empty.  Every post-poll stage must have acquired bounds and visible content.
-for path, img in zip(sys.argv[2:], imgs[1:]):
-    if img[4] < 20:
-        raise RuntimeError("%s is too dark for progressive LoD validation: lit=%d" % (path, img[4]))
-if any(imgs[0][0:3] != img[0:3] for img in imgs[1:]):
-    raise RuntimeError("progressive LoD frames have inconsistent dimensions")
-diff01 = sum(a != b for ra, rb in zip(imgs[0][3], imgs[1][3]) for a, b in zip(ra, rb))
-diff12 = sum(a != b for ra, rb in zip(imgs[1][3], imgs[2][3]) for a, b in zip(ra, rb))
-diff23 = sum(a != b for ra, rb in zip(imgs[2][3], imgs[3][3]) for a, b in zip(ra, rb))
-diff03 = sum(a != b for ra, rb in zip(imgs[0][3], imgs[3][3]) for a, b in zip(ra, rb))
-# A settled mesh may reproduce the initial full-detail raster exactly.  The
-# progressive invariant is that at least one adjacent payload stage changed.
-if diff01 <= 0 and diff12 <= 0 and diff23 <= 0:
-    raise RuntimeError("progressive LoD frames did not change: diff01=%d diff12=%d diff23=%d diff03=%d" %
-                       (diff01, diff12, diff23, diff03))
-print("progressive_lod_diff diff01=%d diff12=%d diff23=%d diff03=%d lit=%d,%d,%d,%d" %
-      (diff01, diff12, diff23, diff03, imgs[0][4], imgs[1][4], imgs[2][4], imgs[3][4]))
-PY
+changed_pixels()
+{
+    "$PIXDIFF" "$1" "$2" > "$3"
+    black=$("$PIXCOUNT" "$3" |
+	awk '$1 == 0 && $2 == 0 && $3 == 0 { print $4; found = 1 } END { if (!found) print 0 }')
+    echo $((pixel_count - black))
+}
+
+diff01=$(changed_pixels "$PIX0" "$PIX1" "$DIFF01")
+diff12=$(changed_pixels "$PIX1" "$PIX2" "$DIFF12")
+diff23=$(changed_pixels "$PIX2" "$PIX3" "$DIFF23")
+if [ "$diff01" -le 0 ] && [ "$diff12" -le 0 ] && [ "$diff23" -le 0 ]; then
+    echo "progressive LoD frames did not change: diff01=${diff01} diff12=${diff12} diff23=${diff23}" 1>&2
+    exit 1
+fi
+echo "progressive_lod_diff diff01=${diff01} diff12=${diff12} diff23=${diff23} lit=${lit0},${lit1},${lit2},${lit3}"
 
 exit 0

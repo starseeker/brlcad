@@ -14953,6 +14953,94 @@ ged_obol_indexed_faces_to_triangles(const int *indices,
     return 1;
 }
 
+static int
+ged_obol_indexed_face_triangle_normals(const vect_t *normals,
+	size_t normal_count, const int *indices, size_t index_count,
+	size_t point_count, size_t face_count, size_t vertex_index_count,
+	const std::vector<int32_t> &triangles,
+	std::vector<SbVec3f> &triangle_normals)
+{
+    triangle_normals.clear();
+    if (!normal_count)
+	return 1;
+    if (!normals || !indices || !index_count)
+	return 0;
+
+    enum normal_binding {
+	NORMAL_PER_CORNER,
+	NORMAL_PER_RAW_INDEX,
+	NORMAL_PER_POINT,
+	NORMAL_PER_FACE
+    };
+    normal_binding binding;
+    if (normal_count == vertex_index_count)
+	binding = NORMAL_PER_CORNER;
+    else if (normal_count == index_count)
+	binding = NORMAL_PER_RAW_INDEX;
+    else if (normal_count == point_count)
+	binding = NORMAL_PER_POINT;
+    else if (normal_count == face_count)
+	binding = NORMAL_PER_FACE;
+    else
+	return 0;
+
+    std::vector<int> face_indices;
+    std::vector<SbVec3f> face_normals;
+    size_t corner_index = 0;
+    size_t face_index = 0;
+    auto append_face = [&]() -> int {
+	if (face_indices.size() < 3 || face_normals.size() != face_indices.size())
+	    return 0;
+	for (size_t i = 1; i + 1 < face_indices.size(); i++) {
+	    triangle_normals.push_back(face_normals[0]);
+	    triangle_normals.push_back(face_normals[i]);
+	    triangle_normals.push_back(face_normals[i + 1]);
+	}
+	face_indices.clear();
+	face_normals.clear();
+	face_index++;
+	return 1;
+    };
+
+    for (size_t i = 0; i < index_count; i++) {
+	const int point_index = indices[i];
+	if (point_index < 0) {
+	    if (point_index != -1 || !append_face())
+		return 0;
+	    continue;
+	}
+	if (static_cast<size_t>(point_index) >= point_count)
+	    return 0;
+	size_t normal_index = 0;
+	switch (binding) {
+	    case NORMAL_PER_CORNER:
+		normal_index = corner_index;
+		break;
+	    case NORMAL_PER_RAW_INDEX:
+		normal_index = i;
+		break;
+	    case NORMAL_PER_POINT:
+		normal_index = static_cast<size_t>(point_index);
+		break;
+	    case NORMAL_PER_FACE:
+		normal_index = face_index;
+		break;
+	}
+	if (normal_index >= normal_count)
+	    return 0;
+	face_indices.push_back(point_index);
+	face_normals.push_back(SbVec3f(
+	    static_cast<float>(normals[normal_index][X]),
+	    static_cast<float>(normals[normal_index][Y]),
+	    static_cast<float>(normals[normal_index][Z])));
+	corner_index++;
+    }
+    if (!face_indices.empty() && !append_face())
+	return 0;
+    return face_index == face_count &&
+	triangle_normals.size() == triangles.size();
+}
+
 extern "C" int
 ged_draw_obol_local_shape_publish_indexed_face_set_for_path(
     struct ged *gedp,
@@ -14986,6 +15074,7 @@ ged_draw_obol_local_shape_publish_indexed_face_set_for_path(
 	    point_count, triangles, &face_count, &vertex_index_count))
 	return 0;
     if (normal_count && normal_count != vertex_index_count &&
+	normal_count != index_count &&
 	normal_count != point_count && normal_count != face_count)
 	return 0;
     if (triangles.size() > static_cast<size_t>(INT_MAX))
@@ -15005,12 +15094,20 @@ ged_draw_obol_local_shape_publish_indexed_face_set_for_path(
 				  static_cast<float>(points[i][2])));
     }
 
+    std::vector<SbVec3f> triangle_normals;
+    if (!ged_obol_indexed_face_triangle_normals(normals, normal_count,
+	indices, index_count, point_count, face_count, vertex_index_count,
+	triangles, triangle_normals))
+	return 0;
+
     ged_obol_local_shape_apply_common_state(shape, shape_path, display_name,
 					    "local-indexed-face-set", "surface", display_state);
     shape->setIndexedTriangles(obol_points.data(),
 			       static_cast<int>(obol_points.size()),
 			       triangles.data(),
-			       static_cast<int>(triangles.size()));
+			       static_cast<int>(triangles.size()),
+			       triangle_normals.empty() ? NULL : triangle_normals.data(),
+			       static_cast<int>(triangle_normals.size()));
     return 1;
 }
 
@@ -15069,6 +15166,7 @@ ged_obol_database_source_publish_indexed_face_set_for_path(
 	    point_count, triangles, &face_count, &vertex_index_count))
 	return 0;
     if (normal_count && normal_count != vertex_index_count &&
+	normal_count != index_count &&
 	normal_count != point_count && normal_count != face_count)
 	return 0;
     if (triangles.size() > static_cast<size_t>(INT_MAX))
@@ -15088,6 +15186,14 @@ ged_obol_database_source_publish_indexed_face_set_for_path(
     triangle_mesh.pointCount = static_cast<int>(obol_points.size());
     triangle_mesh.indices = triangles.empty() ? NULL : triangles.data();
     triangle_mesh.indexCount = static_cast<int>(triangles.size());
+    std::vector<SbVec3f> triangle_normals;
+    if (!ged_obol_indexed_face_triangle_normals(normals, normal_count,
+	indices, index_count, point_count, face_count, vertex_index_count,
+	triangles, triangle_normals))
+	return 0;
+    triangle_mesh.normals = triangle_normals.empty() ? NULL :
+	triangle_normals.data();
+    triangle_mesh.normalCount = static_cast<int>(triangle_normals.size());
     triangle_mesh.lodBacked = lod_backed ? TRUE : FALSE;
     const int published =
 	scene->publishDatabaseSourceInstanceExternalTriangleMesh(
@@ -15779,9 +15885,6 @@ ged_obol_cheap_local_bounds_object(ged_obol_cheap_bounds_context &ctx,
 	if (rt_bound_instance(&local.bmin, &local.bmax, record.dp,
 	    ctx.gedp->dbip, &ctx.ttol, &ctx.tol, &identity) < 0)
 	    return 0;
-	if (objectName && objectName[0])
-	    (void)bobol_draw_proxy_cache_store(ctx.gedp->dbip, objectName,
-		BOBOL_DRAW_CACHE_PROXY_AABB, &local.bmin, 2, NULL);
 	ctx.objectBounds.emplace(canonicalId, local);
 	VMOVE(boundsMin, local.bmin);
 	VMOVE(boundsMax, local.bmax);
@@ -15827,9 +15930,6 @@ ged_obol_cheap_local_bounds_object(ged_obol_cheap_bounds_context &ctx,
 	VMOVE(local.bmin, boundsMin);
 	VMOVE(local.bmax, boundsMax);
 	ctx.objectBounds.emplace(canonicalId, local);
-	if (objectName && objectName[0])
-	    (void)bobol_draw_proxy_cache_store(ctx.gedp->dbip, objectName,
-		BOBOL_DRAW_CACHE_PROXY_AABB, &local.bmin, 2, NULL);
     }
     return haveBounds;
 }
@@ -15870,8 +15970,24 @@ ged_obol_cheap_proxy_bounds(struct ged *gedp, const char *path,
     BN_TOL_INIT(&ctx.tol);
     mat_t identity;
     MAT_IDN(identity);
-    return ged_obol_cheap_bounds_object(ctx, ids.back(), identity,
-	boundsMin, boundsMax);
+    if (!ged_obol_cheap_bounds_object(ctx, ids.back(), identity,
+	    boundsMin, boundsMax))
+	return 0;
+
+    /* This fallback publishes one root proxy.  Persist that root, but do not
+     * turn its recursive bounds walk into thousands of synchronous cache
+     * transactions. */
+    struct ged_db_index_record record;
+    memset(&record, 0, sizeof(record));
+    if (ged_db_index_record_get(gedp, ids.back(), &record) && record.valid &&
+	record.dp && record.dp->d_namep && record.dp->d_namep[0]) {
+	point_t cacheBounds[2];
+	VMOVE(cacheBounds[0], boundsMin);
+	VMOVE(cacheBounds[1], boundsMax);
+	(void)bobol_draw_proxy_cache_store(gedp->dbip, record.dp->d_namep,
+	    BOBOL_DRAW_CACHE_PROXY_AABB, cacheBounds, 2, NULL);
+    }
+    return 1;
 }
 
 /* Initial proxy publication must remain bounded: it is the synchronous part
@@ -15907,6 +16023,7 @@ struct ged_obol_structural_proxy_context {
     uint32_t sourceRevision;
     ged_obol_cheap_bounds_context boundsContext;
     std::vector<ged_obol_structural_proxy_node> nodes;
+    std::unordered_set<ged_db_index_id> persistedBounds;
     size_t proxyCount;
     size_t metadataCount;
 };
@@ -15975,11 +16092,6 @@ ged_obol_collect_structural_proxy_children(
 
 	const ged_db_index_id childId = child.record.object_id ?
 	    child.record.object_id : child.record.id;
-	point_t boundsMin;
-	point_t boundsMax;
-	if (!ged_obol_cheap_local_bounds_object(ctx.boundsContext, childId,
-		boundsMin, boundsMax))
-	    continue;
 
 	ged_obol_structural_proxy_node node;
 	node.path = childPath;
@@ -15992,8 +16104,8 @@ ged_obol_collect_structural_proxy_children(
 	node.localMatrix = child.matrix_valid ?
 	    ged_obol_sbmatrix_from_mat(child.matrix) : SbMatrix::identity();
 	node.localMatrix.multRight(parentLocalMatrix);
-	VMOVE(node.boundsMin, boundsMin);
-	VMOVE(node.boundsMax, boundsMax);
+	VSETALL(node.boundsMin, 0.0);
+	VSETALL(node.boundsMax, 0.0);
 	node.publishBounds = 0;
 	node.metadataValid = ged_obol_structural_proxy_metadata(ctx,
 	    childPath.c_str(), &node.metadata);
@@ -16009,6 +16121,24 @@ ged_obol_collect_structural_proxy_children(
 	if (semanticBoundary) {
 	    if (ctx.proxyCount >= ged_obol_structural_proxy_max_proxies) {
 		break;
+	    }
+	    point_t boundsMin;
+	    point_t boundsMax;
+	    if (!ged_obol_cheap_local_bounds_object(ctx.boundsContext, childId,
+		    boundsMin, boundsMax))
+		continue;
+	    VMOVE(node.boundsMin, boundsMin);
+	    VMOVE(node.boundsMax, boundsMax);
+	    /* The recursive walk is memoized in memory.  Only the bounded set of
+	     * proxy roots published by this snapshot needs persistent warm-start
+	     * storage; persisting every descendant made first draw dominated by
+	     * thousands of individual LMDB writes. */
+	    if (ctx.persistedBounds.insert(childId).second) {
+		point_t cacheBounds[2];
+		VMOVE(cacheBounds[0], boundsMin);
+		VMOVE(cacheBounds[1], boundsMax);
+		(void)bobol_draw_proxy_cache_store(ctx.gedp->dbip, childName,
+		    BOBOL_DRAW_CACHE_PROXY_AABB, cacheBounds, 2, NULL);
 	    }
 	    node.publishBounds = 1;
 	    ctx.proxyCount++;
@@ -17419,7 +17549,8 @@ ged_obol_progressive_advance_provider(
 	 * while that job runs; the compact adoption above removes those temporary
 	 * descendants atomically from the live scene. */
 	if (!(flags & BOBOL_PROGRESSIVE_VISIBLE_FRONTIER) ||
-	    !has_pending_job || active_deferred_roots.empty()) {
+	    !has_pending_job ||
+	    active_deferred_roots.empty()) {
 	    if (local_status.changed && data->pending_autoview &&
 		ged_obol_progressive_autoview_apply(data))
 		controller->syncCameraFromViewContext(view_ctx, TRUE);

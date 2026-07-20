@@ -4221,6 +4221,9 @@ main(int argc, char **argv)
 	    if (!box_mesh ||
 		    box_mesh->point.getNum() != 4 ||
 		    box_mesh->coordIndex.getNum() != 6 ||
+		    box_mesh->normal.getNum() != 6 ||
+		    fabs(box_mesh->normal[0][2] - 1.0f) > 0.001f ||
+		    fabs(box_mesh->normal[5][2] - 1.0f) > 0.001f ||
 		    fabs(box_mesh->point[3][0] - 32.0f) > 0.001f ||
 		    box_mesh->coordIndex[4] != 3)
 		FAIL("GED shape indexed-face publish should mutate owned Obol mesh fields");

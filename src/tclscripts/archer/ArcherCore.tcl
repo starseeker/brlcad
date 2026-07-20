@@ -5909,11 +5909,26 @@ namespace eval ArcherCore {
 ::itcl::body ArcherCore::launchRtApp {app size} {
     global tcl_platform
 
-    if {![string is digit $size]} {
-	set size [winfo width $itk_component(ged)]
+    if {[string is digit $size]} {
+	# Fixed-size menu entries traditionally open a separate framebuffer
+	# window.  An explicit -F also tells libged not to auto-route this render
+	# into Archer's embedded Obol endpoint.
+	if {$tcl_platform(platform) eq "windows"} {
+	    set devtype "/dev/wgl"
+	} elseif {[llength [info commands dm_list]]} {
+	    set dm_types [split [dm_list] ',']
+	    set devtype "/dev/[lindex $dm_types 0]"
+	} else {
+	    set devtype "/dev/ogl"
+	}
+	$itk_component(ged) $app -s $size -F $devtype
+    } else {
+	# The Window Size entry is the embedded-rendering path.  Preserve both
+	# pane dimensions rather than forcing the result square.
+	set pane_size [$itk_component(ged) win_size]
+	$itk_component(ged) $app -w [lindex $pane_size 0] \
+	    -n [lindex $pane_size 1]
     }
-
-    $itk_component(ged) $app -s $size -F /dev/tkobol
 }
 
 ::itcl::body ArcherCore::updateDisplaySettings {} {

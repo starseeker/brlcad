@@ -3087,7 +3087,8 @@ main(int argc, char *argv[])
 
     am_mode = AMM_IDLE;
     s->mged_curr_display->display_owner = 1;
-    frametime = 1;
+    /* No presentation cadence exists until two refreshes have completed. */
+    frametime = 0;
 
     MAT_IDN(MEDIT(s)->model_changes);
     MAT_IDN(MEDIT(s)->acc_rot_sol);

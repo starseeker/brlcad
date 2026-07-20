@@ -116,6 +116,56 @@ m35_table_color_pixel_count(const QImage &image)
 }
 
 static int
+nist_pmi3_blue_pixel_count(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int count = 0;
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    /* Brep_1 is the actual region below the Document wrapper and has
+	     * RGB 121/156/242.  Require some pixels above the shader's 25-percent
+	     * ambient floor as well as the expected blue channel ordering.  This
+	     * excludes both the blue viewport background and an unlit blue-gray
+	     * model caused by one-sided GPU lighting. */
+	    if (p[0] >= 40 && p[1] >= 55 && p[2] >= 90 &&
+		p[1] >= p[0] + 8 && p[2] >= p[1] + 20)
+		count++;
+	}
+    }
+    return count;
+}
+
+static int
+nist_pmi7_10_color_mask(const QImage &image)
+{
+    QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    int counts[3] = {0, 0, 0};
+    for (int y = 0; y < rgba.height(); y++) {
+	const unsigned char *line = rgba.constScanLine(y);
+	for (int x = 0; x < rgba.width(); x++) {
+	    const unsigned char *p = line + x * 4;
+	    /* Lit pixels from the cyan, orange, and yellow regions.  The fourth
+	     * region is intentionally neutral gray and is verified from exported
+	     * material metadata below. */
+	    if (p[0] >= 50 && p[1] >= 75 && p[2] >= 85 &&
+		p[1] >= p[0] + 15 && p[2] >= p[0] + 20)
+		counts[0]++;
+	    if (p[0] >= 85 && p[1] >= 65 && p[2] >= 45 &&
+		p[0] >= p[1] + 10 && p[1] >= p[2] + 15)
+		counts[1]++;
+	    if (p[0] >= 75 && p[1] >= 80 && p[2] >= 50 &&
+		p[1] >= p[2] + 20 && p[0] >= p[2] + 15)
+		counts[2]++;
+	}
+    }
+    return (counts[0] >= 20 ? 1 : 0) |
+	(counts[1] >= 20 ? 2 : 0) |
+	(counts[2] >= 20 ? 4 : 0);
+}
+
+static int
 image_byte_diff(const QImage &a, const QImage &b)
 {
     if (a.size() != b.size())
@@ -602,6 +652,81 @@ realized_geometry_counts(BObolSceneController *scene,
     return counts;
 }
 
+static int
+nist_blue_material_is_correct(BObolViewController *controller,
+	const char *model_name)
+{
+    if (!controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return 0;
+
+    const SbColor expected(121.0f / 255.0f, 156.0f / 255.0f,
+	242.0f / 255.0f);
+    SoBRLExportAction exportAction;
+    exportAction.apply(controller->getViewport()->getRoot());
+    if (exportAction.getTriangleCount() <= 0)
+	return 0;
+
+    for (int i = 0; i < exportAction.getTriangleCount(); i++) {
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    exportAction.getTriangle(i);
+	if (!triangle.materialColorValid ||
+	    fabsf(triangle.materialColor[0] - expected[0]) >= 1.0e-5f ||
+	    fabsf(triangle.materialColor[1] - expected[1]) >= 1.0e-5f ||
+	    fabsf(triangle.materialColor[2] - expected[2]) >= 1.0e-5f) {
+	    fprintf(stderr,
+		"%s triangle material mismatch: path=%s valid=%d "
+		"actual=(%.9g %.9g %.9g) expected=(%.9g %.9g %.9g)\n",
+		model_name, triangle.path.getString(), triangle.materialColorValid,
+		triangle.materialColor[0], triangle.materialColor[1],
+		triangle.materialColor[2], expected[0], expected[1], expected[2]);
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+static int
+nist_pmi7_10_materials_are_correct(BObolViewController *controller)
+{
+    if (!controller || !controller->getViewport() ||
+	!controller->getViewport()->getRoot())
+	return 0;
+
+    const unsigned char expected[4][3] = {
+	{153, 231, 254}, {255, 206, 142},
+	{237, 255, 168}, {178, 178, 178}
+    };
+    int seen = 0;
+    SoBRLExportAction exportAction;
+    exportAction.apply(controller->getViewport()->getRoot());
+    for (int i = 0; i < exportAction.getTriangleCount(); i++) {
+	const SoBRLExportAction::TriangleRecord &triangle =
+	    exportAction.getTriangle(i);
+	if (!triangle.materialColorValid)
+	    return 0;
+	int match = -1;
+	for (int color = 0; color < 4; color++) {
+	    if (fabsf(triangle.materialColor[0] - expected[color][0] / 255.0f) < 1.0e-5f &&
+		fabsf(triangle.materialColor[1] - expected[color][1] / 255.0f) < 1.0e-5f &&
+		fabsf(triangle.materialColor[2] - expected[color][2] / 255.0f) < 1.0e-5f) {
+		match = color;
+		break;
+	    }
+	}
+	if (match < 0) {
+	    fprintf(stderr,
+		"NIST_MBE_PMI_7-10 unexpected triangle material: path=%s "
+		"actual=(%.9g %.9g %.9g)\n", triangle.path.getString(),
+		triangle.materialColor[0], triangle.materialColor[1],
+		triangle.materialColor[2]);
+	    return 0;
+	}
+	seen |= 1 << match;
+    }
+    return seen == 0xf;
+}
+
 static float
 distance_between(const SbVec3f &a, const SbVec3f &b)
 {
@@ -884,12 +1009,51 @@ sync_draw_case(const struct model_case &testCase)
 	ged_close(gedp);
 	return 0;
     }
+    const int nistBlueCase = BU_STR_EQUAL(testCase.root, "Document") &&
+	strstr(testCase.file, "nist/NIST_MBE_PMI_");
+    if (nistBlueCase &&
+	!nist_blue_material_is_correct(controller, testCase.file)) {
+	fprintf(stderr,
+	    "%s:%s did not preserve the Brep_1 region's 121/156/242 material\n",
+	    testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
+    if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded") &&
+	!nist_pmi7_10_materials_are_correct(controller)) {
+	fprintf(stderr,
+	    "%s:%s did not preserve all four region materials\n",
+	    testCase.file, testCase.root);
+	ged_close(gedp);
+	return 0;
+    }
     if (testCase.expectM35TableColor) {
 	const int tableColorPixels = m35_table_color_pixel_count(visibleImage);
 	if (tableColorPixels < 20) {
 	    fprintf(stderr,
 		    "%s:%s did not render the active M35 region-id color table: table_color_pixels=%d\n",
 		    testCase.file, testCase.root, tableColorPixels);
+	    ged_close(gedp);
+	    return 0;
+	}
+    }
+    if (nistBlueCase) {
+	const int bluePixels = nist_pmi3_blue_pixel_count(visibleImage);
+	if (bluePixels < 20) {
+	    fprintf(stderr,
+		"%s:%s did not render a lit 121/156/242 Brep_1 region: "
+		"lit_blue_pixels=%d\n", testCase.file, testCase.root, bluePixels);
+	    ged_close(gedp);
+	    return 0;
+	}
+    }
+    if (BU_STR_EQUAL(testCase.name, "nist_pmi7_10_shaded")) {
+	const int colorMask = nist_pmi7_10_color_mask(visibleImage);
+	if (colorMask != 7) {
+	    fprintf(stderr,
+		"%s:%s did not visibly render the cyan, orange, and yellow "
+		"regions: color_mask=0x%x\n", testCase.file, testCase.root,
+		colorMask);
 	    ged_close(gedp);
 	    return 0;
 	}
@@ -1397,7 +1561,31 @@ main(int argc, char **argv)
 	{"m35_deferred_wire_color", "m35.g", "all.g", GED_DRAW_MODE_WIRE,
 	    SoBRLDatabaseSource::WIREFRAME, 100, 1000, 0, 0, 0, 0, 1, 1, 0},
 	{"m35_deferred_shaded_color", "m35.g", "all.g", GED_DRAW_MODE_SHADED,
-	    SoBRLDatabaseSource::SHADED, 0, 0, 100, 1000, 0, 0, 1, 1, 1}
+	    SoBRLDatabaseSource::SHADED, 0, 0, 100, 1000, 0, 0, 1, 1, 1},
+	{"nist_pmi1_shaded", "nist/NIST_MBE_PMI_1.g", "Document",
+	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	{"nist_pmi2_shaded", "nist/NIST_MBE_PMI_2.g", "Document",
+	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	{"nist_pmi3_shaded", "nist/NIST_MBE_PMI_3.g", "Document",
+	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	{"nist_pmi4_shaded", "nist/NIST_MBE_PMI_4.g", "Document",
+	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	{"nist_pmi5_shaded", "nist/NIST_MBE_PMI_5.g", "Document",
+	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	{"nist_pmi6_shaded", "nist/NIST_MBE_PMI_6.g", "Document",
+	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	{"nist_pmi11_shaded", "nist/NIST_MBE_PMI_11.g", "Document",
+	    GED_DRAW_MODE_SHADED, SoBRLDatabaseSource::SHADED,
+	    0, 0, 1, 100, 0, 0, 0, 0, 0},
+	{"nist_pmi7_10_shaded", "nist/NIST_MBE_PMI_7-10.g",
+	    "NIST_MBE_PMI_7-10.3dm", GED_DRAW_MODE_SHADED,
+	    SoBRLDatabaseSource::SHADED, 0, 0, 4, 100, 0, 0, 0, 0, 0}
     };
 
     int ran = 0;

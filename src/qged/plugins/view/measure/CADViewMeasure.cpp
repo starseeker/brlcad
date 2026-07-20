@@ -153,7 +153,7 @@ CADViewMeasure::attachToView(QgView *view)
 	return;
 
     m_input_endpoint = nullptr;
-    view->installEventFilter(this);
+    view->add_event_filter(this);
     m_qt_filter_installed = true;
 }
 
@@ -166,7 +166,7 @@ CADViewMeasure::detachFromView(QgView *view)
 	(void)bobol_display_endpoint_input_action_layer_clear_if(
 	    m_input_endpoint, this);
     if (m_qt_filter_installed)
-	m_input_view->removeEventFilter(this);
+	m_input_view->clear_event_filter(this);
     if (f2d)
 	f2d->set_view_widget(nullptr);
     if (f3d)

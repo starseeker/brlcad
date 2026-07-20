@@ -193,6 +193,14 @@ main(int argc, char **argv)
 
     QgView view(NULL, QgViewType::SW);
     view.resize(180, 140);
+    /* The selection fixture needs a geometry-only scene.  Interactive views
+     * intentionally show parameter/FPS telemetry by default. */
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    struct bv *view_bv = bv_context_view(view.viewContext());
+    if (bv_params_state_get(&params, view_bv)) {
+	params.draw = 0;
+	(void)bv_params_state_set(view_bv, &params);
+    }
     struct ged_view_context *view_ctx =
 	ged_view_context_from_bv(view.viewContext());
     ged_view_active_ctx_set(gedp, view_ctx);

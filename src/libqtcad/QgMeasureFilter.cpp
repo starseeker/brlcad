@@ -123,8 +123,8 @@ QgMeasureFilter::angle(bool radians)
 	VUNITIZE(v2);
 	double a = acos(VDOT(v1, v2));
 	if (radians)
-		return a*180/M_PI;
-	return a;
+		return a;
+	return a*180/M_PI;
 }
 
 void

@@ -154,6 +154,15 @@ draw_test_obol_view_init(struct ged *gedp, struct ged_view_context *view_ctx, in
 	return BRLCAD_ERROR;
 
     bv_dimensions_set(DRAW_TEST_BV(view_ctx), width, height);
+    /* Image baselines and selection fixtures request a clean scene.  Keep
+     * that test contract explicit now that interactive views show parameter
+     * telemetry (including FPS) by default.  Faceplate tests enable the
+     * individual elements they exercise. */
+    struct bv_params_state params = BV_PARAMS_STATE_INIT;
+    if (bv_params_state_get(&params, DRAW_TEST_BV(view_ctx))) {
+	params.draw = 0;
+	(void)bv_params_state_set(DRAW_TEST_BV(view_ctx), &params);
+    }
     if (gedp->dbip) {
 	bv_unit_conversion_set(DRAW_TEST_BV(view_ctx), gedp->dbip->dbi_local2base,
 		gedp->dbip->dbi_base2local);

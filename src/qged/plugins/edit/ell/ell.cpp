@@ -109,14 +109,14 @@ void
 EditEllTool::attachToView(QgView *view)
 {
     if (m_ell && view)
-	view->installEventFilter(m_ell);
+	view->add_event_filter(m_ell);
 }
 
 void
 EditEllTool::detachFromView(QgView *view)
 {
     if (m_ell && view)
-	view->removeEventFilter(m_ell);
+	view->clear_event_filter(m_ell);
 }
 
 QgPluginDescriptor

@@ -539,6 +539,14 @@ if(TARGET test_qtcad_obol_real_models)
       m35_wire_pick_all_stress
       m35_deferred_wire_color
       m35_deferred_shaded_color
+	  nist_pmi1_shaded
+	  nist_pmi2_shaded
+	  nist_pmi3_shaded
+	  nist_pmi4_shaded
+	  nist_pmi5_shaded
+	  nist_pmi6_shaded
+	  nist_pmi11_shaded
+	  nist_pmi7_10_shaded
       m35_color_table_mutation)
     brlcad_add_test(
       NAME test_qtcad_obol_real_models_${_qtcad_real_model_case}

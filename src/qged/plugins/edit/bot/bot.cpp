@@ -91,14 +91,14 @@ void
 EditBotTool::attachToView(QgView *view)
 {
     if (m_bot && view)
-	view->installEventFilter(m_bot);
+	view->add_event_filter(m_bot);
 }
 
 void
 EditBotTool::detachFromView(QgView *view)
 {
     if (m_bot && view)
-	view->removeEventFilter(m_bot);
+	view->clear_event_filter(m_bot);
 }
 
 QgPluginDescriptor

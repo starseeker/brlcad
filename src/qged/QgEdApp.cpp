@@ -218,7 +218,7 @@ struct qged_qcmd_cleanup {
 };
 
 
-QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QApplication(argc, argv)
+QgEdApp::QgEdApp(int &argc, char *argv[], const char *db_file, int swrast_mode, int quad_mode) :QApplication(argc, argv)
 {
     setOrganizationName("BRL-CAD");
     setOrganizationDomain("brlcad.org");
@@ -358,23 +358,14 @@ QgEdApp::QgEdApp(int &argc, char *argv[], int swrast_mode, int quad_mode) :QAppl
     // initialization/show() available - the GED structure will need to know
     // about some of them to have drawing commands connect properly to the 3D
     // displays.
-    if (argc) {
-	/* bu_dir(BU_DIR_CURR, ...) treats a Windows drive path as a relative
-	 * component and produces an invalid /C:\\... filename.  Preserve an
-	 * absolute command-line path exactly as such; only prefix the current
-	 * directory for genuinely relative arguments. */
-	const QFileInfo argInfo(QString::fromLocal8Bit(argv[0]));
+    if (db_file) {
+	/* QFileInfo handles both Windows drive paths and relative paths.  Do not
+	 * pass either form through bu_dir(BU_DIR_CURR, ...): on Windows that may
+	 * turn C:\\... into /C:\\... and relative paths into /relative/path. */
+	const QFileInfo argInfo(QString::fromLocal8Bit(db_file));
 	const QByteArray absoluteName =
 	    QDir::toNativeSeparators(argInfo.absoluteFilePath()).toLocal8Bit();
-	char *fname = argInfo.isAbsolute() ?
-	    bu_strdup(absoluteName.constData()) :
-	    bu_strdup(bu_dir(NULL, 0, BU_DIR_CURR, argv[0], NULL));
-	if (!bu_file_exists(fname, NULL)) {
-	    // Current dir prefix didn't work - were we given a full path rather
-	    // than a relative path?
-	    bu_free(fname, "path");
-	    fname = bu_strdup(bu_path_normalize(argv[0]));
-	}
+	char *fname = bu_strdup(absoluteName.constData());
 	int ret = load_g_file(fname, false);
 	if (ret != BRLCAD_OK) {
 	    bu_exit(EXIT_FAILURE, "Error opening file %s\n", fname);
@@ -411,7 +402,13 @@ QgEdApp::~QgEdApp() {
 	}
 	qged_fbserv_release_ged_handlers(mdl->ged());
     }
+    // The main window owns the views and their Obol draw controllers.  Tear
+    // those down while the model (and hence its GED instance) is still live:
+    // view destruction unregisters progressive draw providers from GED.
+    delete w;
+    w = nullptr;
     delete mdl;
+    mdl = nullptr;
     // TODO - free rt_vlfree?
 }
 

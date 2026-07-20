@@ -1,35 +1,35 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 3 ]; then
-    echo "Usage: gsh_obol_ert_smoke.sh <gsh> <db> <workdir>" 1>&2
+# A non-login Git for Windows sh does not add its own core utilities to PATH.
+PATH="/usr/bin:/bin:${PATH}"
+export PATH
+
+if [ "$#" -ne 6 ]; then
+    echo "Usage: gsh_obol_ert_smoke.sh <gsh> <db> <workdir> <png-pix> <pixcount> <pixdiff>" 1>&2
     exit 1
 fi
 
 GSH="$1"
 DB="$2"
 WORKDIR="$3"
-PYTHON="${PYTHON:-}"
+PNG_PIX="$4"
+PIXCOUNT="$5"
+PIXDIFF="$6"
 
-if [ -z "$PYTHON" ]; then
-    for cand in python3.11 python3.14 python3 python; do
-	if command -v "$cand" >/dev/null 2>&1; then
-	    PYTHON="$cand"
-	    break
-	fi
-    done
-fi
-
-if [ -z "$PYTHON" ]; then
-    echo "No usable Python interpreter found for PNG validation" 1>&2
-    exit 1
-fi
-
-PARTIAL="${WORKDIR}/gsh_obol_ert_partial.png"
+PARTIAL0="${WORKDIR}/gsh_obol_ert_partial_0.png"
+PARTIAL1="${WORKDIR}/gsh_obol_ert_partial_1.png"
+PARTIAL2="${WORKDIR}/gsh_obol_ert_partial_2.png"
 FINAL="${WORKDIR}/gsh_obol_ert_final.png"
 LOG="${WORKDIR}/gsh_obol_ert_smoke.log"
+PARTIAL0_PIX="${WORKDIR}/gsh_obol_ert_partial_0.pix"
+PARTIAL1_PIX="${WORKDIR}/gsh_obol_ert_partial_1.pix"
+PARTIAL2_PIX="${WORKDIR}/gsh_obol_ert_partial_2.pix"
+FINAL_PIX="${WORKDIR}/gsh_obol_ert_final.pix"
+DIFF_PIX="${WORKDIR}/gsh_obol_ert_diff.pix"
 
-rm -f "$PARTIAL" "$FINAL" "$LOG"
+rm -f "$PARTIAL0" "$PARTIAL1" "$PARTIAL2" "$FINAL" "$LOG"
+rm -f "$PARTIAL0_PIX" "$PARTIAL1_PIX" "$PARTIAL2_PIX" "$FINAL_PIX" "$DIFF_PIX"
 
 # One processor plus deterministic hypersampling keeps this render in flight
 # long enough to capture a bounded early frame.  zap removes the wire overlay,
@@ -40,12 +40,16 @@ ert -P 1 -H 8
 zap
 delay 1 0
 screengrab %s
+delay 1 0
+screengrab %s
+delay 1 0
+screengrab %s
 delay 5 0
 screengrab %s
 ert -P 1 -H 16
 delay 0 100000
 quit
-' "$PARTIAL" "$FINAL" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
+' "$PARTIAL0" "$PARTIAL1" "$PARTIAL2" "$FINAL" | "$GSH" --new-cmds "$DB" > "$LOG" 2>&1
 
 if ! grep -q "rt: launching endpoint framebuffer renderer (ipc=1" "$LOG"; then
     echo "gsh Obol ert smoke did not use the Obol IPC framebuffer path" 1>&2
@@ -65,7 +69,7 @@ if ! grep -q "SHOT:" "$LOG" || ! grep -q "Frame  *0:" "$LOG"; then
     exit 1
 fi
 
-for image in "$PARTIAL" "$FINAL"; do
+for image in "$PARTIAL0" "$PARTIAL1" "$PARTIAL2" "$FINAL"; do
     if [ ! -s "$image" ]; then
 	echo "gsh Obol ert smoke did not create a PNG: $image" 1>&2
 	cat "$LOG" 1>&2
@@ -73,83 +77,59 @@ for image in "$PARTIAL" "$FINAL"; do
     fi
 done
 
-"$PYTHON" - "$PARTIAL" "$FINAL" <<'PY'
-import struct
-import sys
-import zlib
+if ! "$PNG_PIX" "$PARTIAL0" > "$PARTIAL0_PIX" ||
+   ! "$PNG_PIX" "$PARTIAL1" > "$PARTIAL1_PIX" ||
+   ! "$PNG_PIX" "$PARTIAL2" > "$PARTIAL2_PIX" ||
+   ! "$PNG_PIX" "$FINAL" > "$FINAL_PIX"; then
+    echo "gsh Obol ert smoke could not decode its PNG output" 1>&2
+    exit 1
+fi
 
+final_bytes=$(wc -c < "$FINAL_PIX")
+if [ $((final_bytes % 3)) -ne 0 ]; then
+    echo "ERT frame decoder returned incomplete RGB pixels" 1>&2
+    exit 1
+fi
+pixel_count=$((final_bytes / 3))
+final_black=$("$PIXCOUNT" "$FINAL_PIX" |
+    awk '$1 == 0 && $2 == 0 && $3 == 0 { print $4; found = 1 } END { if (!found) print 0 }')
+final_lit=$((pixel_count - final_black))
 
-def paeth(a, b, c):
-    p = a + b - c
-    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
-    return a if pa <= pb and pa <= pc else b if pb <= pc else c
+partial_pix=""
+partial_lit=0
+for candidate in "$PARTIAL0_PIX" "$PARTIAL1_PIX" "$PARTIAL2_PIX"; do
+    candidate_bytes=$(wc -c < "$candidate")
+    if [ "$candidate_bytes" -ne "$final_bytes" ]; then
+	echo "partial and final ERT frames have inconsistent RGB dimensions" 1>&2
+	exit 1
+    fi
+    candidate_black=$("$PIXCOUNT" "$candidate" |
+	awk '$1 == 0 && $2 == 0 && $3 == 0 { print $4; found = 1 } END { if (!found) print 0 }')
+    candidate_lit=$((pixel_count - candidate_black))
+    if [ "$candidate_lit" -gt $((pixel_count / 20)) ] &&
+       [ "$candidate_lit" -lt $((pixel_count * 19 / 20)) ]; then
+	partial_pix="$candidate"
+	partial_lit="$candidate_lit"
+	break
+    fi
+done
+if [ -z "$partial_pix" ]; then
+    echo "no bounded early ERT frame was meaningfully partial" 1>&2
+    exit 1
+fi
+if [ "$final_lit" -le "$partial_lit" ]; then
+    echo "final ERT frame did not advance beyond partial frame" 1>&2
+    exit 1
+fi
 
-
-def decode(path):
-    data = open(path, "rb").read()
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise RuntimeError("%s is not a PNG" % path)
-    off, raw = 8, b""
-    width = height = color_type = None
-    while off < len(data):
-        n = struct.unpack(">I", data[off:off + 4])[0]
-        typ = data[off + 4:off + 8]
-        chunk = data[off + 8:off + 8 + n]
-        off += 12 + n
-        if typ == b"IHDR":
-            width, height, depth, color_type, _, _, interlace = struct.unpack(">IIBBBBB", chunk)
-            if depth != 8 or interlace != 0:
-                raise RuntimeError("%s uses unsupported PNG encoding" % path)
-        elif typ == b"IDAT":
-            raw += chunk
-    bpp = 3 if color_type == 2 else 4 if color_type == 6 else None
-    if bpp is None:
-        raise RuntimeError("%s uses unsupported PNG color type" % path)
-    encoded = zlib.decompress(raw)
-    prev = bytearray(width * bpp)
-    pos, rgb, nonblack = 0, bytearray(), 0
-    for _ in range(height):
-        filt = encoded[pos]
-        pos += 1
-        row = bytearray(encoded[pos:pos + width * bpp])
-        pos += width * bpp
-        for i in range(len(row)):
-            left = row[i - bpp] if i >= bpp else 0
-            up = prev[i]
-            upper_left = prev[i - bpp] if i >= bpp else 0
-            if filt == 1:
-                row[i] = (row[i] + left) & 255
-            elif filt == 2:
-                row[i] = (row[i] + up) & 255
-            elif filt == 3:
-                row[i] = (row[i] + ((left + up) // 2)) & 255
-            elif filt == 4:
-                row[i] = (row[i] + paeth(left, up, upper_left)) & 255
-            elif filt != 0:
-                raise RuntimeError("%s uses unsupported PNG filter" % path)
-        for i in range(0, len(row), bpp):
-            pixel = row[i:i + 3]
-            rgb.extend(pixel)
-            if pixel != b"\0\0\0":
-                nonblack += 1
-        prev = row
-    return width, height, bytes(rgb), nonblack
-
-
-partial = decode(sys.argv[1])
-final = decode(sys.argv[2])
-if partial[:2] != final[:2]:
-    raise RuntimeError("partial and final ERT frames have different dimensions")
-pixel_count = partial[0] * partial[1]
-if not pixel_count // 20 < partial[3] < pixel_count * 19 // 20:
-    raise RuntimeError("early ERT frame is not meaningfully partial: %d/%d" % (partial[3], pixel_count))
-if final[3] <= partial[3]:
-    raise RuntimeError("final ERT frame did not advance beyond partial frame")
-changed = sum(a != b for a, b in zip(partial[2], final[2]))
-if changed < pixel_count // 10:
-    raise RuntimeError("partial and final ERT frames changed too little: %d" % changed)
-print("ert_progress partial_lit=%d final_lit=%d changed_channels=%d" %
-      (partial[3], final[3], changed))
-PY
+"$PIXDIFF" "$partial_pix" "$FINAL_PIX" > "$DIFF_PIX"
+diff_black=$("$PIXCOUNT" "$DIFF_PIX" |
+    awk '$1 == 0 && $2 == 0 && $3 == 0 { print $4; found = 1 } END { if (!found) print 0 }')
+changed_pixels=$((pixel_count - diff_black))
+if [ "$changed_pixels" -lt $((pixel_count / 10)) ]; then
+    echo "partial and final ERT frames changed too little: ${changed_pixels}" 1>&2
+    exit 1
+fi
+echo "ert_progress partial_lit=${partial_lit} final_lit=${final_lit} changed_pixels=${changed_pixels}"
 
 exit 0

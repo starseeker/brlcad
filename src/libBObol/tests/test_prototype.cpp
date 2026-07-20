@@ -5052,8 +5052,8 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed joint shaded diagnostic coverage should pass");
     if (!exercise_generated_primitive(dbip, "half.s", 1, 0, viewport))
 	FAIL("database-backed halfspace wire primitive coverage should pass");
-    if (!exercise_generated_primitive_mesh_diagnostic(dbip, "half.s", "half", viewport))
-	FAIL("database-backed halfspace shaded diagnostic coverage should pass");
+    if (!exercise_generated_primitive_shaded_vlist(dbip, "half.s", 1, viewport))
+	FAIL("database-backed halfspace shaded vlist coverage should pass");
     if (!exercise_generated_primitive(dbip, "submodel.s", 1, 0, viewport))
 	FAIL("database-backed submodel wire primitive coverage should pass");
     if (!exercise_generated_primitive_mesh_diagnostic(dbip, "submodel.s", "submodel", viewport))

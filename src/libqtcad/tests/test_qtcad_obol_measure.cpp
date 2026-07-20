@@ -208,6 +208,7 @@ main(int argc, char **argv)
     view.resize(180, 140);
     struct ged_view_context *view_ctx =
 	ged_view_context_from_bv(view.viewContext());
+    (void)bv_context_dimensions_set(view.viewContext(), 180, 140);
     ged_view_active_ctx_set(gedp, view_ctx);
     (void)ged_view_context_host_attach(gedp, view_ctx);
 
@@ -229,6 +230,43 @@ main(int argc, char **argv)
 	FAIL("GED shaded draw should sync box source into Obol");
 
     controller->getViewport()->viewAll();
+
+    /* The public angle(bool radians) contract drives QGED's unit label and
+     * telemetry.  Exercise a right angle through the same semantic pointer
+     * path used by the endpoint-routed GUI tool after the view has valid
+     * screen-to-model state. */
+    QMeasure2DFilter angle_filter;
+    angle_filter.set_view_widget(&view);
+    BObolInputEvent angle_event;
+    angle_event.type = BOBOL_INPUT_POINTER_PRESS;
+    angle_event.x = 40;
+    angle_event.y = 70;
+    angle_event.button = 0;
+    angle_event.modifiers = BOBOL_INPUT_MOD_NONE;
+    if (!angle_filter.semanticInput(QG_MEASURE_INPUT_BEGIN, &angle_event))
+	FAIL("qtcad 2D angle filter should accept the first endpoint");
+    angle_event.type = BOBOL_INPUT_POINTER_MOTION;
+    angle_event.x = 90;
+    if (!angle_filter.semanticInput(QG_MEASURE_INPUT_UPDATE, &angle_event))
+	FAIL("qtcad 2D angle filter should update the first segment");
+    angle_event.type = BOBOL_INPUT_POINTER_RELEASE;
+    if (!angle_filter.semanticInput(QG_MEASURE_INPUT_COMMIT, &angle_event) ||
+	    angle_filter.mode != 2)
+	FAIL("qtcad 2D angle filter should commit the first segment");
+    angle_event.type = BOBOL_INPUT_POINTER_PRESS;
+    if (!angle_filter.semanticInput(QG_MEASURE_INPUT_BEGIN, &angle_event))
+	FAIL("qtcad 2D angle filter should start the second segment");
+    angle_event.type = BOBOL_INPUT_POINTER_MOTION;
+    angle_event.y = 20;
+    if (!angle_filter.semanticInput(QG_MEASURE_INPUT_UPDATE, &angle_event))
+	FAIL("qtcad 2D angle filter should update the second segment");
+    angle_event.type = BOBOL_INPUT_POINTER_RELEASE;
+    if (!angle_filter.semanticInput(QG_MEASURE_INPUT_COMMIT, &angle_event) ||
+	    angle_filter.mode != 4)
+	FAIL("qtcad 2D angle filter should commit the angle");
+    if (fabs(angle_filter.angle(false) - 90.0) > 0.001 ||
+	    fabs(angle_filter.angle(true) - M_PI / 2.0) > 0.001)
+	FAIL("qtcad measure angle units should match the radians argument");
 
     SbVec3f pickedPoint;
     std::string pickedPath;

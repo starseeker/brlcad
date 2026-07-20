@@ -48,6 +48,25 @@ ged_rt_is_image_renderer(const char *command)
 }
 
 
+static int
+ged_rt_has_explicit_framebuffer(int argc, const char *argv[])
+{
+    int i;
+
+    for (i = 1; i < argc; i++) {
+	if (BU_STR_EQUAL(argv[i], "--"))
+	    break;
+	if (BU_STR_EQUAL(argv[i], "-F") ||
+	    BU_STR_EQUAL(argv[i], "--framebuffer") ||
+	    (argv[i][0] == '-' && argv[i][1] == 'F' && argv[i][2]) ||
+	    bu_strncmp(argv[i], "--framebuffer=", 14) == 0)
+	    return 1;
+    }
+
+    return 0;
+}
+
+
 int
 ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 {
@@ -79,6 +98,7 @@ ged_rt_core(struct ged *gedp, int argc, const char *argv[])
 
     struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
     if (ged_rt_is_image_renderer(argv[0]) &&
+	!ged_rt_has_explicit_framebuffer(argc, argv) &&
 	ged_view_context_display_endpoint_get(view_ctx))
 	return _ged_external_rt_to_endpoint(gedp, argc, argv, argv[0], NULL);
 

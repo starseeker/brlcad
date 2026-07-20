@@ -702,7 +702,7 @@ rtwizard_set_state_ptbl(Tcl_Interp *interp, const char *key, struct bu_ptbl *ptb
 
 
 void
-Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s)
+Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s, char type)
 {
     struct bu_vls tcl_cmd = BU_VLS_INIT_ZERO;
 
@@ -716,6 +716,11 @@ Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s)
     if (s->no_gui) {
 	bu_vls_sprintf(&tcl_cmd, "set ::disable_gui 1");
 	(void)Tcl_Eval(interp, bu_vls_addr(&tcl_cmd));
+    }
+
+    if (type != '\0') {
+	char type_str[2] = {type, '\0'};
+	rtwizard_set_state(interp, "picture_type", type_str);
     }
 
     if (s->verbose) {
@@ -1225,7 +1230,7 @@ main(int argc, char **argv)
 	rtwizard_disable_std_handle_inheritance();
 #endif
 
-	Init_RtWizard_Vars(interp, s);
+	Init_RtWizard_Vars(interp, s, type);
 	if (s->port < 0) {
 	    (void)rtwizard_setup_ipc(interp);
 	}

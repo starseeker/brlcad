@@ -60,6 +60,28 @@ framebuffer_matches(bobol_display_endpoint_t *endpoint,
 	    &components) && pixels && size == expected_size &&
 	width == expected_width && height == expected_height &&
 	components == 3 && memcmp(pixels, expected, expected_size) == 0;
+    if (!matched)
+	bu_log("framebuffer comparison: captured=%ux%u components=%u bytes=%zu, expected=%ux%u components=3 bytes=%zu, pixels=%p\n",
+	    width, height, components, size, expected_width, expected_height,
+	    expected_size, (void *)pixels);
+    if (!matched && pixels && size == expected_size &&
+	width == expected_width && height == expected_height && components == 3) {
+	size_t mismatched = 0;
+	size_t flipped_mismatched = 0;
+	const size_t row_size = (size_t)width * 3;
+	for (unsigned int y = 0; y < height; y++) {
+	    const unsigned char *actual_row = pixels + (size_t)y * row_size;
+	    const unsigned char *expected_row = expected + (size_t)y * row_size;
+	    const unsigned char *flipped_row =
+		expected + (size_t)(height - 1 - y) * row_size;
+	    for (size_t x = 0; x < row_size; x++) {
+		mismatched += actual_row[x] != expected_row[x];
+		flipped_mismatched += actual_row[x] != flipped_row[x];
+	    }
+	}
+	bu_log("framebuffer comparison: mismatched=%zu, vertically-flipped mismatched=%zu, bytes=%zu\n",
+	    mismatched, flipped_mismatched, expected_size);
+    }
     if (pixels)
 	bu_free(pixels, "faceplate framebuffer comparison");
     return matched;

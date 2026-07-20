@@ -849,6 +849,8 @@ BObolExternalTriangleMesh::BObolExternalTriangleMesh(void) :
     pointCount(0),
     indices(NULL),
     indexCount(0),
+    normals(NULL),
+    normalCount(0),
     sourceType("indexed-face-set"),
     geometryKind("surface"),
     lodBacked(FALSE)
@@ -12506,8 +12508,12 @@ SoBRLDatabaseSource::publishExternalTriangleMesh(
     const BObolExternalTriangleMesh &triangleMesh)
 {
     if (triangleMesh.pointCount < 0 || triangleMesh.indexCount < 0 ||
+	triangleMesh.normalCount < 0 ||
 	(triangleMesh.pointCount > 0 && !triangleMesh.points) ||
 	(triangleMesh.indexCount > 0 && !triangleMesh.indices) ||
+	(triangleMesh.normalCount > 0 && !triangleMesh.normals) ||
+	(triangleMesh.normalCount > 0 &&
+	 triangleMesh.normalCount != triangleMesh.indexCount) ||
 	(triangleMesh.indexCount % 3) != 0)
 	return 0;
 
@@ -12531,8 +12537,19 @@ SoBRLDatabaseSource::publishExternalTriangleMesh(
 				     external_string_or_default(triangleMesh.sourceType,
 					     "indexed-face-set"),
 				     external_string_or_default(triangleMesh.geometryKind, "surface"));
-    shape->setIndexedTriangles(triangleMesh.points, triangleMesh.pointCount,
-			       triangleMesh.indices, triangleMesh.indexCount);
+    std::vector<SbVec3f> points(triangleMesh.points,
+	triangleMesh.points + triangleMesh.pointCount);
+    std::vector<int32_t> indices(triangleMesh.indices,
+	triangleMesh.indices + triangleMesh.indexCount);
+    std::vector<SbVec3f> normals;
+    if (triangleMesh.normalCount > 0)
+	normals.assign(triangleMesh.normals,
+	    triangleMesh.normals + triangleMesh.normalCount);
+    sanitize_triangle_normals(normals, points, indices);
+    shape->setIndexedTriangles(points.data(), static_cast<int>(points.size()),
+	indices.data(), static_cast<int>(indices.size()),
+	normals.empty() ? NULL : normals.data(),
+	static_cast<int>(normals.size()));
     set_external_bounds_from_points(this, triangleMesh.points,
 				    triangleMesh.pointCount);
     mark_external_primary_published_current(this);

@@ -166,8 +166,9 @@ namespace eval RtWizard {
 	    variable width
 	    variable height
 
-	    variable widthIndex
-	    variable heightIndex
+	variable widthIndex
+	variable heightIndex
+	variable lastPort 0
 
 	}
     }
@@ -258,7 +259,12 @@ namespace eval RtWizard {
 	}
 
 	$itk_component(width) clear
-	$itk_component(width) insert 0 -1
+	set initialWidth -1
+	if {[info exists ::RtWizard::wizard_state(width)] &&
+	    $::RtWizard::wizard_state(width) > 0} {
+	    set initialWidth $::RtWizard::wizard_state(width)
+	}
+	$itk_component(width) insert 0 $initialWidth
 
 	itk_component add height {
 	    iwidgets::spinint $szCs.height \
@@ -272,7 +278,12 @@ namespace eval RtWizard {
 	}
 
 	$itk_component(height) clear
-	$itk_component(height) insert 0 -1
+	set initialHeight -1
+	if {[info exists ::RtWizard::wizard_state(scanlines)] &&
+	    $::RtWizard::wizard_state(scanlines) > 0} {
+	    set initialHeight $::RtWizard::wizard_state(scanlines)
+	}
+	$itk_component(height) insert 0 $initialHeight
 
 	#
 	# Build the contents of the right-hand-size
@@ -462,6 +473,7 @@ namespace eval RtWizard {
     # getFrameBuffer - opens a framebuffer endpoint and returns its address.
     #
     ::itcl::body FbPage::getFrameBuffer { width height {screenOnly false} } {
+	global tcl_platform
 	#
 	# If the user specified a framebuffer file and it is
 	# not null, return the name. Otherwise, open an on-screen
@@ -506,19 +518,45 @@ namespace eval RtWizard {
 	    set ::RtWizard::wizard_state(pid) $pid
 	    return "$port $pid"
 	}
-	# GUI previews are part of the active ArcherCore view, not a second
-	# platform framebuffer window.  The session-owned Obol bridge receives
-	# the raytracer stream through a local IPC endpoint and composes it over
-	# the CAD view.
+	# On-screen output is a distinct framebuffer surface.  Its requested
+	# dimensions may intentionally differ from the embedded modeling view, so
+	# compositing it into that view would stretch square renders in a
+	# rectangular pane.  Standalone fbserv maps these legacy display names to
+	# the corresponding Obol display provider.
 	set ::env(FBSERV_TOKEN) [rtwiz_gen_token]
-	if {[catch {$::mgedObj gedCmd set_fb_mode 3} message]} {
-	    error "rtwizard: unable to enable the Obol framebuffer overlay: $message"
+	set binpath [bu_dir bin]
+	set port [incr lastPort]
+	if {$::tcl_platform(platform) == "windows"} {
+	    set fbType "/dev/wgl"
+	} else {
+	    set fbType "/dev/ogl"
 	}
-	if {[catch {$::mgedObj gedCmd listen ipc} address] || $address eq ""} {
-	    error "rtwizard: unable to open the Obol framebuffer stream: $address"
+	while { [rtwiz_port_occupied $port] } {
+	    incr port
 	}
-
-	return "ipc:$address"
+	set fbserv_owned 0
+	while { !$fbserv_owned } {
+	    while { [rtwiz_port_occupied $port] } {
+		incr port
+	    }
+	    if {[catch {exec "$binpath/fbserv" -A -w $width -n $height -F $fbType -p $port &} catchResult] != 0} {
+		if {$::RtWizard::wizard_state(verbose)} {
+		    puts "fbserv launch on port $port failed: $catchResult"
+		}
+	    }
+	    after 1000
+	    if { [catch {exec "$binpath/fbclear" -F $port 0 0 0}] == 0 } {
+		set fbserv_owned 1
+	    } else {
+		if {$::RtWizard::wizard_state(verbose)} {
+		    puts "fbserv port $port: collision detected, retrying."
+		}
+		incr port
+	    }
+	}
+	set lastPort $port
+	set ::RtWizard::wizard_state(fbserv_port) $port
+	return "$port"
     }
 
     #--------------------#

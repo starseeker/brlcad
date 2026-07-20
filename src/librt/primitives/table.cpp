@@ -2127,7 +2127,10 @@ const struct rt_functab OBJ[] = {
 	RTFUNCTAB_FUNC_FIND_SELECTIONS_CAST(rt_brep_find_selections),
 	NULL, /* evaluate_selection */
 	RTFUNCTAB_FUNC_PROCESS_SELECTION_CAST(rt_brep_process_selection),
-        RTFUNCTAB_FUNC_PREP_SERIALIZE_CAST(rt_brep_prep_serialize),
+	/* Cached BREP BVHs currently retain face/trim indices that are not
+	 * reliably valid after deserialization.  A bad entry makes prep bomb;
+	 * use ordinary BREP prep until that format can validate its references. */
+	NULL, /* prep_serialize */
 	NULL, /* label */
 	NULL, /* keypoint */
 	RTFUNCTAB_FUNC_MAT_CAST(rt_brep_mat),

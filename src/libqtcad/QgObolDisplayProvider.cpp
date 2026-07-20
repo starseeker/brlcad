@@ -12,6 +12,7 @@
 #include "BObol/BDisplayEndpoint.h"
 #include "BObol/BDisplaySession.h"
 #include "bu/app.h"
+#include "qtcad/QgCanvasBase.h"
 #include "qtcad/QgObolWindowHost.h"
 
 #include <QApplication>
@@ -19,12 +20,14 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QThread>
+#include <QWidget>
 
 #include <new>
 #include <limits.h>
 
 struct QgObolDisplayProvider {
     QApplication *application = NULL;
+    bobol_display_endpoint_t *endpoint = NULL;
     bool owns_application = false;
     QByteArray program_name;
     int argc = 1;
@@ -107,6 +110,7 @@ qg_obol_display_provider_open(bobol_display_endpoint_t *endpoint,
 	return 0;
     }
 
+    provider->endpoint = endpoint;
     *instance = provider;
     return 1;
 }
@@ -133,6 +137,17 @@ qg_obol_display_provider_poll(void *instance, void *UNUSED(user_data))
     if (!application || QThread::currentThread() != application->thread())
 	return -1;
     QCoreApplication::processEvents(QEventLoop::AllEvents, 0);
+
+    /* A standalone display session has no surrounding Qt application to
+     * translate a top-level close into server shutdown.  Once Qt has handled
+     * the close event, report the hidden canvas to the session poller so
+     * fbserv can leave its service loop and release its database and port. */
+    QgObolWindowHost *host = static_cast<QgObolWindowHost *>(
+	bobol_display_endpoint_host(provider->endpoint));
+    QWidget *widget = host && host->canvas() ?
+	host->canvas()->canvasWidget() : NULL;
+    if (widget && !widget->isVisible())
+	return 1;
     return 0;
 }
 

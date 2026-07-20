@@ -794,6 +794,9 @@ bv_faceplate_defaults(struct bv *v)
     VSET(scale_overlay.gos_line_color, 255, 255, 0);
     VSET(scale_overlay.gos_text_color, 255, 255, 0);
 
+    /* FPS is part of the default faceplate, so the parameter group itself
+     * must be visible as well as its individual FPS flag. */
+    params.draw = 1;
     params.draw_size = 1;
     params.draw_center = 1;
     params.draw_az = 1;

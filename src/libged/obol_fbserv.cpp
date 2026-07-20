@@ -151,6 +151,8 @@ public:
 	 * the live stream.  This makes a rejected replacement transactional across
 	 * both retained image nodes and capture ownership. */
 	const bool view_changed = view_ctx != new_view_ctx;
+	bobol_display_endpoint_t *endpoint =
+	    ged_view_context_display_endpoint_get(new_view_ctx);
 	const struct bv *view = bv_context_view_const(
 	    (const struct bv_context *)new_view_ctx);
 	int composition = view ? bv_framebuffer_mode_get(view) : 0;
@@ -172,6 +174,30 @@ public:
 
 	int width = requested_width;
 	int height = requested_height;
+	/* Embedded toolkit hosts may be resized by their geometry manager without
+	 * an explicit bv_context resize.  Querying endpoint dimensions refreshes
+	 * them from the live host factory, so a newly bound framebuffer does not
+	 * retain the small construction-time size (or another pane's size). */
+	/* Only a live toolkit host can authoritatively override the bv
+	 * dimensions.  Headless/direct endpoints commonly report their 1x1
+	 * construction size even after the caller has configured the view. */
+	if (endpoint && window_host && (width <= 0 || height <= 0)) {
+	    struct bobol_endpoint_property_value property =
+		BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    if (width <= 0 &&
+		bobol_display_endpoint_property_get(endpoint, "endpoint.width",
+		    &property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+		property.type == BOBOL_ENDPOINT_PROPERTY_UINT &&
+		property.uint_value > 0 && property.uint_value <= INT_MAX)
+		width = (int)property.uint_value;
+	    property = BOBOL_ENDPOINT_PROPERTY_VALUE_INIT;
+	    if (height <= 0 &&
+		bobol_display_endpoint_property_get(endpoint, "endpoint.height",
+		    &property) == BOBOL_ENDPOINT_PROPERTY_OK &&
+		property.type == BOBOL_ENDPOINT_PROPERTY_UINT &&
+		property.uint_value > 0 && property.uint_value <= INT_MAX)
+		height = (int)property.uint_value;
+	}
 	if (view) {
 	    if (width <= 0)
 		width = bv_width_get(view);
@@ -182,6 +208,8 @@ public:
 	    width = 512;
 	if (height <= 0)
 	    height = 512;
+	(void)bv_context_dimensions_set((struct bv_context *)new_view_ctx,
+	    width, height);
 
 	if (framebuffer.configure(width, height) != 0)
 	    return BRLCAD_ERROR;

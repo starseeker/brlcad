@@ -170,8 +170,14 @@ main(int argc, char **argv)
     const QString startup = startup_commands ?
 	QString::fromLocal8Bit(startup_commands) : QString();
 
-    // We derive our own app type from QApplication
-    QgEdApp app(argc, argv, swrast_mode, quad_mode);
+    // QApplication requires argv[0] to be the executable name.  The qged
+    // option parser above has removed that entry and left only the optional
+    // database argument, so give Qt a valid argument vector and pass the
+    // database path separately.
+    const char *db_file = argc ? argv[0] : NULL;
+    int qt_argc = 1;
+    char *qt_argv[] = {const_cast<char *>(exec_name), NULL};
+    QgEdApp app(qt_argc, qt_argv, db_file, swrast_mode, quad_mode);
     if (!startup.isEmpty()) {
 	const QStringList commands = startup.split(';', Qt::SkipEmptyParts);
 	for (const QString &command : commands) {

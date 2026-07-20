@@ -91,14 +91,14 @@ void
 EditRevolveTool::attachToView(QgView *view)
 {
     if (m_rev && view)
-	view->installEventFilter(m_rev);
+	view->add_event_filter(m_rev);
 }
 
 void
 EditRevolveTool::detachFromView(QgView *view)
 {
     if (m_rev && view)
-	view->removeEventFilter(m_rev);
+	view->clear_event_filter(m_rev);
 }
 
 QgPluginDescriptor

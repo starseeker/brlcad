@@ -14,6 +14,7 @@
 
 #include "common.h"
 
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -28,6 +29,75 @@
 #include "pkg.h"
 
 #include "./ged_private.h"
+
+
+static bool
+positive_dimension(const char *value, int *dimension)
+{
+    if (!value || !value[0] || !dimension)
+	return false;
+
+    char *end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (!end || end == value || end[0] || parsed <= 0 || parsed > INT_MAX)
+	return false;
+
+    *dimension = (int)parsed;
+    return true;
+}
+
+
+static void
+requested_dimensions(int argc, const char *argv[], int *width, int *height)
+{
+    for (int i = 1; i < argc; i++) {
+	if (BU_STR_EQUAL(argv[i], "--"))
+	    break;
+
+	const char *value = NULL;
+	char dimension = '\0';
+	if (BU_STR_EQUAL(argv[i], "-s") || BU_STR_EQUAL(argv[i], "--size")) {
+	    dimension = 's';
+	    if (++i < argc)
+		value = argv[i];
+	} else if (BU_STR_EQUAL(argv[i], "-w") ||
+		BU_STR_EQUAL(argv[i], "--width")) {
+	    dimension = 'w';
+	    if (++i < argc)
+		value = argv[i];
+	} else if (BU_STR_EQUAL(argv[i], "-n") ||
+		BU_STR_EQUAL(argv[i], "--height")) {
+	    dimension = 'n';
+	    if (++i < argc)
+		value = argv[i];
+	} else if (argv[i][0] == '-' && argv[i][1] && argv[i][2] &&
+		(argv[i][1] == 's' || argv[i][1] == 'w' || argv[i][1] == 'n')) {
+	    dimension = argv[i][1];
+	    value = argv[i] + 2;
+	} else if (bu_strncmp(argv[i], "--size=", 7) == 0) {
+	    dimension = 's';
+	    value = argv[i] + 7;
+	} else if (bu_strncmp(argv[i], "--width=", 8) == 0) {
+	    dimension = 'w';
+	    value = argv[i] + 8;
+	} else if (bu_strncmp(argv[i], "--height=", 9) == 0) {
+	    dimension = 'n';
+	    value = argv[i] + 9;
+	}
+
+	int parsed = 0;
+	if (!positive_dimension(value, &parsed))
+	    continue;
+	if (dimension == 's') {
+	    *width = parsed;
+	    *height = parsed;
+	} else if (dimension == 'w') {
+	    *width = parsed;
+	} else if (dimension == 'n') {
+	    *height = parsed;
+	}
+    }
+}
 
 
 extern "C" GED_EXPORT int
@@ -67,12 +137,14 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	return BRLCAD_ERROR;
     }
 
+    /* The GED owns one framebuffer bridge, while a GUI may own several
+     * independently sized views.  Rebind unconditionally so this render uses
+     * the active endpoint and its current toolkit-reported dimensions rather
+     * than a construction-time size or the previously active pane. */
     struct fbserv_fb_info fbinfo;
-    int have_backend = fbs_framebuffer_info(fbs, &fbinfo) == 0;
-    if (!have_backend &&
+    int have_backend =
 	ged_draw_obol_framebuffer_backend_ensure_for_view(gedp, view_ctx) ==
-	BRLCAD_OK)
-	have_backend = fbs_framebuffer_info(fbs, &fbinfo) == 0;
+	    BRLCAD_OK && fbs_framebuffer_info(fbs, &fbinfo) == 0;
     if (!have_backend) {
 	bu_vls_printf(gedp->ged_result_str,
 		"view has no endpoint-backed framebuffer stream\n");
@@ -113,13 +185,14 @@ _ged_external_rt_to_endpoint(struct ged *gedp, int argc, const char *argv[],
 	return BRLCAD_ERROR;
     }
 
-    const int width = fbinfo.width;
-    const int height = fbinfo.height;
+    int width = fbinfo.width;
+    int height = fbinfo.height;
     if (width <= 0 || height <= 0) {
 	bu_vls_printf(gedp->ged_result_str,
 		"invalid embedded framebuffer dimensions\n");
 	return BRLCAD_ERROR;
     }
+    requested_dimensions(argc, argv, &width, &height);
 
     char executable[MAXPATHLEN] = {0};
     bu_dir(executable, MAXPATHLEN, BU_DIR_BIN, program, BU_DIR_EXT, NULL);

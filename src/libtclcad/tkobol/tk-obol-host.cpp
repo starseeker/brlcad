@@ -772,7 +772,8 @@ private:
 	glDrawBuffer(double_buffered ? GL_BACK : GL_FRONT);
 	this->controller->synchronizePresentation();
 	(void)this->controller->realizePending();
-	(void)this->controller->advanceProgressiveWork();
+	BObolProgressiveStatus progressive;
+	(void)this->controller->advanceProgressiveWork(NULL, &progressive);
 	this->controller->synchronizePresentation();
 	this->controller->renderBackground();
 	const uint64_t started = this->controller->beginRenderTiming();
@@ -782,6 +783,13 @@ private:
 	this->controller->clearRenderRequest();
 	if (present && double_buffered && !this->widget_command("swapbuffers"))
 	    return false;
+	/* Unlike the software path, Togl does not continuously call the display
+	 * callback.  Queue another frame while a progressive provider still has
+	 * work so completed LoD results are adopted without requiring unrelated
+	 * user input to wake the Tk event loop. */
+	if (progressive.hasMore ||
+	    this->controller->hasProgressiveWorkPending())
+	    (void)this->request("Tk endpoint progressive");
 	return true;
     }
 

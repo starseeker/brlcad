@@ -92,14 +92,14 @@ void
 EditExtrudeTool::attachToView(QgView *view)
 {
     if (m_extr && view)
-	view->installEventFilter(m_extr);
+	view->add_event_filter(m_extr);
 }
 
 void
 EditExtrudeTool::detachFromView(QgView *view)
 {
     if (m_extr && view)
-	view->removeEventFilter(m_extr);
+	view->clear_event_filter(m_extr);
 }
 
 QgPluginDescriptor

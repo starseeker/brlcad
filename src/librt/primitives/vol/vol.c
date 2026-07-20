@@ -35,7 +35,10 @@
 #include <string.h>
 #include "bio.h"
 
+#include "bu/file.h"
 #include "bu/parallel.h"
+#include "bu/path.h"
+#include "bu/vls.h"
 #include "vmath.h"
 #include "rt/db4.h"
 #include "nmg.h"
@@ -627,17 +630,32 @@ vol_from_file(const char *file, size_t xdim, size_t ydim, size_t zdim, unsigned 
  * !0 fail
  */
 static int
-vol_file_data(struct rt_vol_internal *vip)
+vol_file_data(struct rt_vol_internal *vip, const struct db_i *dbip)
 {
-   size_t nbytes;
+    size_t nbytes;
+    const char *file = vip->name;
+    struct bu_vls candidate = BU_VLS_INIT_ZERO;
 
-   size_t bytes = vip->xdim * vip->ydim * vip->zdim;
-	nbytes = vol_from_file(vip->name, vip->xdim, vip->ydim, vip->zdim, &vip->map);
-	if (nbytes != bytes) {
-	    bu_log("WARNING: unexpected VOL bytes (read %zu, expected %zu) in %s\n", nbytes, bytes, vip->name);
-	}
+    /* External primitive data is traditionally stored beside the database.
+     * Preserve explicitly resolvable paths, but if a relative name is not
+     * found from the process working directory, try the database directory.
+     * GUI applications do not normally run with share/db as their cwd. */
+    if (!bu_file_exists(file, NULL) && dbip && dbip->dbi_filename &&
+	bu_path_component(&candidate, dbip->dbi_filename, BU_PATH_DIRNAME)) {
+	bu_vls_printf(&candidate, "/%s", vip->name);
+	if (bu_file_exists(bu_vls_cstr(&candidate), NULL))
+	    file = bu_vls_cstr(&candidate);
+    }
 
-   return 0;
+    size_t bytes = vip->xdim * vip->ydim * vip->zdim;
+    nbytes = vol_from_file(file, vip->xdim, vip->ydim, vip->zdim, &vip->map);
+    if (nbytes != bytes) {
+	bu_log("WARNING: unexpected VOL bytes (read %zu, expected %zu) in %s\n",
+		nbytes, bytes, file);
+    }
+    bu_vls_free(&candidate);
+
+    return 0;
 }
 
 
@@ -739,7 +757,7 @@ get_vol_data(struct rt_vol_internal *vip, const struct db_i *dbip)
 	    if (RT_G_DEBUG & RT_DEBUG_HF)
 		bu_log("getting data from file \"%s\"\n", vip->name);
 
-	    if(vol_file_data(vip) != 0) {
+	    if (vol_file_data(vip, dbip) != 0) {
 		return 1;
 	    }
 	    else {

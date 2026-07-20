@@ -114,7 +114,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !near_fastf(axes.axes_size, 0.2) ||
 	    !axes.pos_only || !axes.label_flag || !axes.triple_color)
 	return fail("new view axes defaults are incorrect");
-    if (!bv_params_state_get(&params, v) ||
+    if (!bv_params_state_get(&params, v) || !params.draw ||
 	    !params.draw_size || !params.draw_center || !params.draw_az ||
 	    !params.draw_el || !params.draw_tw || !params.draw_fps ||
 	    params.font_size != 20)

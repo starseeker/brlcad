@@ -244,6 +244,10 @@ struct BOBOL_EXPORT BObolExternalTriangleMesh {
     int pointCount;
     const int32_t *indices;
     int indexCount;
+    /* Optional triangle-corner normals.  When present normalCount must match
+     * indexCount (three normals per triangle). */
+    const SbVec3f *normals;
+    int normalCount;
     const char *sourceType;
     const char *geometryKind;
     SbBool lodBacked;

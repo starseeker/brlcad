@@ -671,7 +671,10 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
     }
 
     bu_vls_trunc(&vls, 0);
-    bu_vls_printf(&vls, "%.2f fps", 1/frametime);
+    if (frametime > 0.0)
+	bu_vls_printf(&vls, "%.2f fps", 1/frametime);
+    else
+	bu_vls_strcat(&vls, "-- fps");
     if (mged_variables->mv_faceplate && ss_line_not_drawn) {
 	mged_hud_color_set(&hud, color_scheme->cs_status_text2);
 	(void)mged_hud_label_add(&hud, bu_vls_addr(&vls),

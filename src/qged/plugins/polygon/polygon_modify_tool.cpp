@@ -78,14 +78,14 @@ void
 PolygonModifyTool::attachToView(QgView *view)
 {
     if (m_modify && view)
-	view->installEventFilter(m_modify);
+	view->add_event_filter(m_modify);
 }
 
 void
 PolygonModifyTool::detachFromView(QgView *view)
 {
     if (m_modify && view)
-	view->removeEventFilter(m_modify);
+	view->clear_event_filter(m_modify);
 }
 
 QgPluginDescriptor

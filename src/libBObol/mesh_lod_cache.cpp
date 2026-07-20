@@ -314,17 +314,18 @@ mesh_lod_context_destroy(struct BObolMeshLodContext *context)
     if (!context)
 	return;
 
-    {
-	std::lock_guard<std::mutex> guard(mesh_lod_context_registry_mutex());
-	if (context->refs > 1) {
-	    context->refs--;
-	    return;
-	}
-	if (context->i && context->i->registryKey)
-	    mesh_lod_context_registry().erase(context->i->registryKey);
-	context->refs = 0;
+    std::lock_guard<std::mutex> guard(mesh_lod_context_registry_mutex());
+    if (context->refs > 1) {
+	context->refs--;
+	return;
     }
-
+    if (context->i && context->i->registryKey)
+	mesh_lod_context_registry().erase(context->i->registryKey);
+    context->refs = 0;
+    /* Keep creation serialized until the final LMDB handles are fully
+     * closed.  Releasing the registry lock first lets another worker open
+     * the same cache while the previous context is still closing, which is
+     * an intermittent failure on Windows. */
     mesh_lod_context_close(context);
 }
 

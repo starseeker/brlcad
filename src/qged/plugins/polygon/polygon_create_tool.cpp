@@ -72,14 +72,14 @@ void
 PolygonCreateTool::attachToView(QgView *view)
 {
     if (m_create && view)
-	view->installEventFilter(m_create);
+	view->add_event_filter(m_create);
 }
 
 void
 PolygonCreateTool::detachFromView(QgView *view)
 {
     if (m_create && view)
-	view->removeEventFilter(m_create);
+	view->clear_event_filter(m_create);
 }
 
 QgPluginDescriptor
