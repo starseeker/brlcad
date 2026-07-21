@@ -156,6 +156,9 @@ struct bv_view_info {
 #define BV_MEASURE_RESULT_INIT { 0.0, 0.0, 0.0, 0 }
 #define BV_ADC_STATE_INIT { 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, 0.0, 0.0, 0.0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, {0, 0, 0}, {0, 0, 0}, 0 }
 #define BV_GRID_STATE_INIT { 0, 0, 0, 0, VINIT_ZERO, 0.0, 0.0, 0, 0, {0, 0, 0} }
+/* headlight on, scene lights off, headlight tracks camera, over-the-shoulder
+ * offset (~40deg off the view axis, matching the Obol controller default) */
+#define BV_LIGHTING_STATE_INIT { 0, 1, 0, 1, {-0.55, -0.45, -0.70} }
 #define BV_AXES_STATE_INIT { 0, VINIT_ZERO, 0.0, 0, {0, 0, 0}, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0.0, 0, 0, {0, 0, 0}, {0, 0, 0} }
 #define BV_OTHER_STATE_INIT { 0, {0, 0, 0}, {0, 0, 0}, 0 }
 #define BV_PARAMS_STATE_INIT { 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0 }
@@ -280,6 +283,14 @@ struct bv_grid_state {
     int       res_major_h;
     int       res_major_v;
     int       color[3];
+};
+
+struct bv_lighting_state {
+    int       rc;
+    int       headlight_enabled;      /**< camera-driven headlight on/off */
+    int       scene_lights_enabled;   /**< in-scene (database) lights on/off */
+    int       headlight_tracks_camera;/**< headlight follows camera vs scene-fixed */
+    fastf_t   headlight_offset[3];    /**< eye-space headlight direction offset */
 };
 
 struct bv_axes_state {
@@ -408,6 +419,7 @@ struct bv {
     struct bv_interactive_rect_state interactive_rect;
     struct bv_adc_state adc;
     struct bv_grid_state grid;
+    struct bv_lighting_state lighting;
     struct bv_axes_state model_axes;
     struct bv_axes_state view_axes;
     struct bv_other_state center_dot;
@@ -505,6 +517,8 @@ BV_EXPORT extern void bv_adc_view_to_grid(struct bv_adc_state *adcs, mat_t model
 BV_EXPORT extern void bv_adc_reset(struct bv_adc_state *adcs, mat_t view2model, mat_t model2view);
 BV_EXPORT extern int bv_grid_state_get(struct bv_grid_state *record, const struct bv *v);
 BV_EXPORT extern int bv_grid_state_set(struct bv *v, const struct bv_grid_state *record);
+BV_EXPORT extern int bv_lighting_state_get(struct bv_lighting_state *record, const struct bv *v);
+BV_EXPORT extern int bv_lighting_state_set(struct bv *v, const struct bv_lighting_state *record);
 BV_EXPORT extern int bv_model_axes_state_get(struct bv_axes_state *record, const struct bv *v);
 BV_EXPORT extern int bv_model_axes_state_set(struct bv *v, const struct bv_axes_state *record);
 BV_EXPORT extern int bv_view_axes_state_get(struct bv_axes_state *record, const struct bv *v);

@@ -416,6 +416,14 @@ public:
 	event->host = this;
 	if (Tcl_GetCurrentThread() == this->owner_thread) {
 	    Tcl_QueueEvent(&event->header, TCL_QUEUE_TAIL);
+	    /* Wake the notifier even on the owner thread.  A plain Tcl_QueueEvent
+	     * does not post an OS message, so a frame requested while the host
+	     * app is blocked in Tcl_DoOneEvent (e.g. after a `view lighting`
+	     * command that changes render state but not the view) would not be
+	     * serviced until an unrelated event (such as mouse motion) woke the
+	     * event loop.  Tcl_ThreadAlert posts the wake so the queued frame is
+	     * dispatched -- and repainted -- immediately. */
+	    Tcl_ThreadAlert(this->owner_thread);
 	    return 1;
 	}
 #  ifdef TCL_THREADS
@@ -437,10 +445,13 @@ public:
 	this->event_queued.store(false);
 	if (!this->opened || this->closing)
 	    return;
-	if (!this->software)
-	    (void)this->widget_command("postredisplay");
-	else
-	    (void)this->render();
+	/* Render on demand for both engines.  Previously the hardware path used
+	 * Togl "postredisplay", which only defers to a Tk idle/expose redraw --
+	 * that fires during active interaction but NOT when the window is
+	 * otherwise idle, so a frame requested by a state change with no view
+	 * motion (e.g. a `view lighting` toggle) never reached the screen.
+	 * Rendering directly here presents the requested frame immediately. */
+	(void)this->render();
 	}
 
     bool setup_request_notifier(void)

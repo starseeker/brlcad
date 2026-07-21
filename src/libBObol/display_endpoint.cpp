@@ -811,6 +811,18 @@ static const bobol_endpoint_property_desc endpoint_properties[] = {
 	BOBOL_ENDPOINT_PROPERTY_BOOL,
 	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(bobol_endpoint_property_desc), "renderer.headlight",
+	BOBOL_ENDPOINT_PROPERTY_BOOL,
+	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(bobol_endpoint_property_desc), "renderer.headlight.tracking",
+	BOBOL_ENDPOINT_PROPERTY_BOOL,
+	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
+    {sizeof(bobol_endpoint_property_desc), "renderer.scene_lights",
+	BOBOL_ENDPOINT_PROPERTY_BOOL,
+	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, 0.0, 1.0, NULL},
     {sizeof(bobol_endpoint_property_desc), "renderer.headlight.color",
 	BOBOL_ENDPOINT_PROPERTY_COLOR3,
 	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -819,6 +831,10 @@ static const bobol_endpoint_property_desc endpoint_properties[] = {
 	BOBOL_ENDPOINT_PROPERTY_DOUBLE,
 	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
 	0, 0.0, 1.0, NULL},
+    {sizeof(bobol_endpoint_property_desc), "renderer.headlight.direction",
+	BOBOL_ENDPOINT_PROPERTY_COLOR3,
+	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
+	0, -1.0, 1.0, NULL},
     {sizeof(bobol_endpoint_property_desc), "renderer.transparency",
 	BOBOL_ENDPOINT_PROPERTY_BOOL,
 	BOBOL_ENDPOINT_PROPERTY_READ | BOBOL_ENDPOINT_PROPERTY_WRITE,
@@ -2045,6 +2061,13 @@ bobol_display_endpoint_property_get(
 	out->bool_value = endpoint->controller->isDepthTestEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	out->bool_value = endpoint->controller->isLightingEnabled() ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.headlight") == 0) {
+	out->bool_value = endpoint->controller->isHeadlightEnabled() ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.headlight.tracking") == 0) {
+	out->bool_value =
+	    endpoint->controller->isHeadlightCameraTracked() ? 1 : 0;
+    } else if (bu_strcmp(name, "renderer.scene_lights") == 0) {
+	out->bool_value = endpoint->controller->isSceneLightsEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.headlight.color") == 0) {
 	const SbColor color = endpoint->controller->getHeadlightColor();
 	out->color3[0] = color[0];
@@ -2052,6 +2075,11 @@ bobol_display_endpoint_property_get(
 	out->color3[2] = color[2];
     } else if (bu_strcmp(name, "renderer.headlight.intensity") == 0) {
 	out->double_value = endpoint->controller->getHeadlightIntensity();
+    } else if (bu_strcmp(name, "renderer.headlight.direction") == 0) {
+	const SbVec3f dir = endpoint->controller->getHeadlightOffset();
+	out->color3[0] = dir[0];
+	out->color3[1] = dir[1];
+	out->color3[2] = dir[2];
     } else if (bu_strcmp(name, "renderer.transparency") == 0) {
 	out->bool_value = endpoint->controller->isTransparencyEnabled() ? 1 : 0;
     } else if (bu_strcmp(name, "renderer.antialiasing") == 0) {
@@ -2228,6 +2256,15 @@ bobol_display_endpoint_property_set(
     } else if (bu_strcmp(name, "renderer.lighting") == 0) {
 	endpoint->controller->setLightingEnabled(
 	    value->bool_value ? TRUE : FALSE);
+    } else if (bu_strcmp(name, "renderer.headlight") == 0) {
+	endpoint->controller->setHeadlightEnabled(
+	    value->bool_value ? TRUE : FALSE);
+    } else if (bu_strcmp(name, "renderer.headlight.tracking") == 0) {
+	endpoint->controller->setHeadlightCameraTracked(
+	    value->bool_value ? TRUE : FALSE);
+    } else if (bu_strcmp(name, "renderer.scene_lights") == 0) {
+	endpoint->controller->setSceneLightsEnabled(
+	    value->bool_value ? TRUE : FALSE);
     } else if (bu_strcmp(name, "renderer.headlight.color") == 0) {
 	endpoint->controller->setHeadlightColor(SbColor(
 	    static_cast<float>(value->color3[0]),
@@ -2236,6 +2273,11 @@ bobol_display_endpoint_property_set(
     } else if (bu_strcmp(name, "renderer.headlight.intensity") == 0) {
 	endpoint->controller->setHeadlightIntensity(
 	    static_cast<float>(value->double_value));
+    } else if (bu_strcmp(name, "renderer.headlight.direction") == 0) {
+	endpoint->controller->setHeadlightOffset(SbVec3f(
+	    static_cast<float>(value->color3[0]),
+	    static_cast<float>(value->color3[1]),
+	    static_cast<float>(value->color3[2])));
     } else if (bu_strcmp(name, "renderer.transparency") == 0) {
 	endpoint->controller->setTransparencyEnabled(
 	    value->bool_value ? TRUE : FALSE);

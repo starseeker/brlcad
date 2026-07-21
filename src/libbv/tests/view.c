@@ -83,6 +83,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     point_t model;
     point_t keypoint = VINIT_ZERO;
     struct bv_grid_state grid;
+    struct bv_lighting_state lighting;
     struct bv_axes_state axes;
     struct bv_other_state overlay = BV_OTHER_STATE_INIT;
     struct bv_params_state params;
@@ -109,6 +110,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    grid.res_major_h != 5 || grid.res_major_v != 5 ||
 	    grid.color[0] != 255 || grid.color[1] != 255 || grid.color[2] != 255)
 	return fail("new view grid defaults are incorrect");
+    if (!bv_lighting_state_get(&lighting, v) ||
+	    lighting.headlight_enabled != 1 ||
+	    lighting.scene_lights_enabled != 0 ||
+	    lighting.headlight_tracks_camera != 1)
+	return fail("new view lighting defaults are incorrect");
     if (!bv_view_axes_state_get(&axes, v) ||
 	    !near_point(axes.axes_pos, 0.80, -0.80, 0.0) ||
 	    !near_fastf(axes.axes_size, 0.2) ||
@@ -281,6 +287,15 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    !grid.snap || !near_fastf(grid.res_h, 2.0) ||
 	    grid.res_major_h != 7)
 	return fail("grid state set/get failed");
+    lighting.headlight_enabled = 0;
+    lighting.scene_lights_enabled = 1;
+    lighting.headlight_tracks_camera = 0;
+    if (!bv_lighting_state_set(v, &lighting) ||
+	    !bv_lighting_state_get(&lighting, v) ||
+	    lighting.headlight_enabled != 0 ||
+	    lighting.scene_lights_enabled != 1 ||
+	    lighting.headlight_tracks_camera != 0)
+	return fail("lighting state set/get failed");
     overlay.gos_draw = 1;
     overlay.gos_line_color[0] = 12;
     overlay.gos_text_color[1] = 34;

@@ -367,12 +367,16 @@ SoBRLCadRenderBatch::renderBatch(SoGLRenderAction *action)
     SoGroup *viewportRoot = dynamic_cast<SoGroup *>(this->getChild(0));
     if (viewportRoot) {
 	const SbName environmentName("BObolRenderEnvironment");
+	const SbName sceneLightsName("BObolSceneLights");
 	for (int i = 0; i < viewportRoot->getNumChildren(); i++) {
 	    SoNode *child = viewportRoot->getChild(i);
 	    /* The compact renderer bypasses the source subtree, but still needs
-	     * the controller's camera, depth, light, and clip state first. */
+	     * the controller's camera, depth, light, clip, and in-scene light
+	     * state first.  Index order keeps BObolSceneLights after the camera
+	     * so its world-space light positions render correctly. */
 	    if (!dynamic_cast<SoCamera *>(child) &&
-		child->getName() != environmentName)
+		child->getName() != environmentName &&
+		child->getName() != sceneLightsName)
 		continue;
 	    action->pushCurPath(i, child);
 	    action->traverse(child);

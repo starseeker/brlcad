@@ -386,6 +386,19 @@ _view_cmd_faceplate(void *bs, int argc, const char **argv)
     return _view_call_on_gd_view(gd, ged_faceplate_core, argc, argv);
 }
 
+int
+_view_cmd_lighting(void *bs, int argc, const char **argv)
+{
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    const char *usage_string = "view [options] lighting [vals]";
+    const char *purpose_string = "control headlight and in-scene lighting";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string)) {
+	return BRLCAD_OK;
+    }
+
+    return _view_call_on_gd_view(gd, ged_lighting_core, argc, argv);
+}
+
 /* When a view is "independent", it displays only those objects when have been
  * added to its individual scene storage - the shared objects common to all
  * views will not be drawn.  When shifting a view from shared to independent
@@ -842,6 +855,7 @@ const struct bu_cmdtab _view_cmds[] = {
     { "height",     _view_cmd_height},
     { "independent",_view_cmd_independent},
     { "knob",       _view_cmd_knob},
+    { "lighting",   _view_cmd_lighting},
     { "list",       _view_cmd_list},
     { "lod",        _view_cmd_lod},
     { "lookat",     _view_cmd_lookat},

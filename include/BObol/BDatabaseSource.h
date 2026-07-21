@@ -68,6 +68,29 @@ BOBOL_EXPORT SbBool bobol_database_source_path_material_color(
 	const char *path,
 	SbColor &color);
 
+/** Kinds of in-scene light realized from a database "light"-shader region. */
+enum BObolSceneLightKind {
+    BOBOL_SCENE_LIGHT_POINT = 0,
+    BOBOL_SCENE_LIGHT_SPOT = 1,
+    BOBOL_SCENE_LIGHT_DIRECTIONAL = 2
+};
+
+/** A light source derived from a database region whose optical shader is
+ * "light".  Positions/directions are world-space (the realize walk's
+ * accumulated transform is already applied), so consumers need no further
+ * transform.  Mirrors the parameters of liboptical's sh_light.c. */
+struct BOBOL_EXPORT BObolSceneLightRealization {
+    BObolSceneLightRealization(void);
+
+    int kind;             /**< BObolSceneLightKind */
+    SbVec3f position;     /**< world position (point/spot) */
+    SbVec3f direction;    /**< world aim direction (spot/directional) */
+    SbColor color;
+    float intensity;      /**< normalized [0,1] */
+    float coneAngleDeg;   /**< full beam angle in degrees (spot) */
+    SbString name;        /**< region name (for idempotent rebuilds) */
+};
+
 struct BOBOL_EXPORT BObolDatabaseSourceSummary {
     BObolDatabaseSourceSummary(void);
 

@@ -747,6 +747,7 @@ bv_faceplate_defaults(struct bv *v)
     struct bv_interactive_rect_state rect = BV_INTERACTIVE_RECT_STATE_INIT;
     struct bv_adc_state adc = BV_ADC_STATE_INIT;
     struct bv_grid_state grid = BV_GRID_STATE_INIT;
+    struct bv_lighting_state lighting = BV_LIGHTING_STATE_INIT;
     struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
     struct bv_axes_state view_axes = BV_AXES_STATE_INIT;
     struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
@@ -809,6 +810,7 @@ bv_faceplate_defaults(struct bv *v)
     v->interactive_rect = rect;
     v->adc = adc;
     v->grid = grid;
+    v->lighting = lighting;
     v->model_axes = model_axes;
     v->view_axes = view_axes;
     v->center_dot = center_dot;
@@ -922,6 +924,8 @@ bv_adc_reset(struct bv_adc_state *adcs, mat_t view2model, mat_t model2view)
 
 BV_STATE_GET(bv_grid_state, BV_GRID_STATE_INIT, grid)
 BV_STATE_SET(bv_grid_state, grid)
+BV_STATE_GET(bv_lighting_state, BV_LIGHTING_STATE_INIT, lighting)
+BV_STATE_SET(bv_lighting_state, lighting)
 BV_STATE_GET(bv_params_state, BV_PARAMS_STATE_INIT, params)
 BV_STATE_SET(bv_params_state, params)
 BV_STATE_GET(bv_background_state, BV_BACKGROUND_STATE_INIT, background)

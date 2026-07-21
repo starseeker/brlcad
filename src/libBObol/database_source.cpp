@@ -12394,6 +12394,16 @@ clear_external_primary_mesh(SoBRLDatabaseSource *source,
     shape->setIndexedTriangles(NULL, 0, NULL, 0);
 }
 
+BObolSceneLightRealization::BObolSceneLightRealization(void) :
+    kind(BOBOL_SCENE_LIGHT_POINT),
+    position(0.0f, 0.0f, 0.0f),
+    direction(0.0f, 0.0f, -1.0f),
+    color(1.0f, 1.0f, 1.0f),
+    intensity(1.0f),
+    coneAngleDeg(180.0f)
+{
+}
+
 int
 SoBRLDatabaseSource::clearRealizedGeometry(SbBool preserveAuxiliary)
 {

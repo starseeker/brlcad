@@ -180,6 +180,34 @@ public:
     SbBool isDepthTestEnabled(void) const;
     void setLightingEnabled(SbBool enabled);
     SbBool isLightingEnabled(void) const;
+    /** Enable/disable the camera-driven headlight (layered under the master
+     * setLightingEnabled()). */
+    void setHeadlightEnabled(SbBool enabled);
+    SbBool isHeadlightEnabled(void) const;
+    /** When TRUE the headlight direction tracks the camera each frame (old
+     * main-branch style); when FALSE the direction stays scene-fixed. */
+    void setHeadlightCameraTracked(SbBool tracked);
+    SbBool isHeadlightCameraTracked(void) const;
+    /** Eye-space headlight offset direction (normalized).  Not straight-on, to
+     * avoid washed-out shading. */
+    void setHeadlightOffset(const SbVec3f &eyeDir);
+    SbVec3f getHeadlightOffset(void) const;
+    /** Current world-space headlight travel direction (as last aimed). */
+    SbVec3f getHeadlightDirection(void) const;
+    /** Enable/disable in-scene (database-derived) light sources. */
+    void setSceneLightsEnabled(SbBool enabled);
+    SbBool isSceneLightsEnabled(void) const;
+    /** Supply the in-scene lights (world-space) for this view.  The GED layer
+     * derives these from the database's "light"-shader regions and pushes them
+     * here (independent of the geometry realize/LoD cache). */
+    void setSceneLights(const std::vector<BObolSceneLightRealization> &lights);
+    /** Root group holding realized in-scene lights (NULL if none), so other
+     * render paths (e.g. the software raytrace preview) can honor them. */
+    SoNode *getSceneLightsRoot(void) const;
+    /** Rebuild the in-scene light group from every database source's realized
+     * light snapshots.  Safe to call after any realization path (the endpoint
+     * realize, the render-time realize action, etc.). */
+    void rebuildSceneLights(void);
     void setHeadlightColor(const SbColor &color);
     SbColor getHeadlightColor(void) const;
     void setHeadlightIntensity(float intensity);
@@ -568,6 +596,9 @@ private:
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);
+    /* Rewrite the headlight direction from the last camera orientation so it
+     * tracks the viewer (no-op unless the headlight is enabled and tracked). */
+    void applyTrackedHeadlight(void);
 
     struct Impl;
     std::unique_ptr<Impl> d;

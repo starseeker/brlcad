@@ -6071,6 +6071,182 @@ ged_draw_obol_faceplate_sync(struct ged *gedp, struct ged_view_context *view_ctx
 	ged_obol_view_controller_for_context(view_ctx));
 }
 
+/* First shader token == "light"? */
+static bool
+ged_obol_shader_is_light(const char *shader)
+{
+    if (!shader)
+	return false;
+    while (*shader == ' ' || *shader == '\t')
+	shader++;
+    if (bu_strncmp(shader, "light", 5) != 0)
+	return false;
+    const char c = shader[5];
+    return (c == '\0' || c == ' ' || c == '\t' || c == ';');
+}
+
+/* Collect in-scene lights from the database's "light"-shader regions.  Done in
+ * the GED layer (not the Obol geometry realize walk) so it is independent of the
+ * LoD/geometry cache, which otherwise skips the walk on a warm cache.  Positions
+ * are model/world-space (region bbox centers); parameters mirror sh_light.c. */
+static void
+ged_obol_collect_scene_lights(struct ged *gedp,
+	std::vector<BObolSceneLightRealization> &out)
+{
+    out.clear();
+    if (!gedp || !gedp->dbip)
+	return;
+    struct db_i *dbip = gedp->dbip;
+
+    struct directory *dp = RT_DIR_NULL;
+    FOR_ALL_DIRECTORY_START(dp, dbip) {
+	    if ((dp->d_flags & RT_DIR_HIDDEN) || !(dp->d_flags & RT_DIR_COMB))
+		continue;
+
+	    struct rt_db_internal intern;
+	    if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
+		continue;
+	    struct rt_comb_internal *comb =
+		(struct rt_comb_internal *)intern.idb_ptr;
+	    if (!comb || comb->magic != RT_COMB_MAGIC ||
+		!ged_obol_shader_is_light(bu_vls_cstr(&comb->shader))) {
+		rt_db_free_internal(&intern);
+		continue;
+	    }
+
+	    /* World-space light position: region geometry bbox center. */
+	    struct bu_vls msgs = BU_VLS_INIT_ZERO;
+	    point_t rpp_min = VINIT_ZERO;
+	    point_t rpp_max = VINIT_ZERO;
+	    const char *av[2] = {dp->d_namep, NULL};
+	    if (rt_obj_bounds(&msgs, dbip, 1, av, 0, rpp_min, rpp_max) < 0) {
+		bu_vls_free(&msgs);
+		rt_db_free_internal(&intern);
+		continue;
+	    }
+	    bu_vls_free(&msgs);
+	    point_t center;
+	    VADD2SCALE(center, rpp_min, rpp_max, 0.5);
+
+	    /* Parameters (defaults mirror sh_light.c): intensity 1, angle 180
+	     * (omni), not infinite. */
+	    double intensity = 1.0;
+	    double angle = 180.0;
+	    double fraction = 1.0;
+	    double target[3] = {0.0, 0.0, 0.0};
+	    int infinite = 0;
+	    int exaim = 0;
+	    const char *shader = bu_vls_cstr(&comb->shader);
+	    struct bu_vls argcopy = BU_VLS_INIT_ZERO;
+	    bu_vls_strcpy(&argcopy, shader + 5); /* skip "light" */
+	    for (char *s = bu_vls_addr(&argcopy); *s; s++) {
+		if (*s == '=' || *s == ';' || *s == ',')
+		    *s = ' ';
+	    }
+	    char *lav[64];
+	    size_t lac = bu_argv_from_string(lav, 63, bu_vls_addr(&argcopy));
+	    for (size_t k = 0; k < lac; k++) {
+		const char *key = lav[k];
+		if ((BU_STR_EQUAL(key, "bright") || BU_STR_EQUAL(key, "b") ||
+			BU_STR_EQUAL(key, "inten")) && k + 1 < lac)
+		    intensity = atof(lav[++k]);
+		else if ((BU_STR_EQUAL(key, "angle") || BU_STR_EQUAL(key, "a")) &&
+			k + 1 < lac)
+		    angle = atof(lav[++k]);
+		else if ((BU_STR_EQUAL(key, "fract") || BU_STR_EQUAL(key, "f")) &&
+			k + 1 < lac)
+		    fraction = atof(lav[++k]);
+		else if ((BU_STR_EQUAL(key, "infinite") || BU_STR_EQUAL(key, "i")) &&
+			k + 1 < lac)
+		    infinite = atoi(lav[++k]);
+		else if ((BU_STR_EQUAL(key, "target") || BU_STR_EQUAL(key, "t") ||
+			BU_STR_EQUAL(key, "aim") || BU_STR_EQUAL(key, "d") ||
+			BU_STR_EQUAL(key, "dir")) && k + 3 < lac) {
+		    target[0] = atof(lav[++k]);
+		    target[1] = atof(lav[++k]);
+		    target[2] = atof(lav[++k]);
+		    exaim = 1;
+		}
+	    }
+	    bu_vls_free(&argcopy);
+
+	    vect_t aim = {0.0, 0.0, -1.0};
+	    if (exaim)
+		VSUB2(aim, target, center);
+	    VUNITIZE(aim);
+
+	    BObolSceneLightRealization L;
+	    L.name = dp->d_namep ? dp->d_namep : "";
+	    if (comb->rgb_valid) {
+		L.color = SbColor(comb->rgb[0] / 255.0f, comb->rgb[1] / 255.0f,
+		    comb->rgb[2] / 255.0f);
+	    } else {
+		L.color = SbColor(1.0f, 1.0f, 1.0f);
+	    }
+	    double norm = intensity * (fraction >= 0.0 ? fraction : 1.0);
+	    if (norm < 0.0)
+		norm = 0.0;
+	    if (norm > 1.0)
+		norm = 1.0;
+	    L.intensity = (float)norm;
+	    L.direction = SbVec3f((float)aim[0], (float)aim[1], (float)aim[2]);
+	    if (infinite) {
+		L.kind = BOBOL_SCENE_LIGHT_DIRECTIONAL;
+	    } else if (angle < 180.0) {
+		L.kind = BOBOL_SCENE_LIGHT_SPOT;
+		L.position = SbVec3f((float)center[0], (float)center[1],
+		    (float)center[2]);
+		L.coneAngleDeg = (float)angle;
+	    } else {
+		L.kind = BOBOL_SCENE_LIGHT_POINT;
+		L.position = SbVec3f((float)center[0], (float)center[1],
+		    (float)center[2]);
+	    }
+	    out.push_back(L);
+	    rt_db_free_internal(&intern);
+    } FOR_ALL_DIRECTORY_END;
+}
+
+extern "C" int
+ged_draw_obol_lighting_sync(struct ged *gedp,
+	struct ged_view_context *view_ctx)
+{
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+    const struct bv *view = ged_obol_bv_const(view_ctx);
+    if (!view)
+	return BRLCAD_ERROR;
+    struct bv_lighting_state lighting;
+    if (!bv_lighting_state_get(&lighting, view))
+	return BRLCAD_ERROR;
+
+    /* bv_lighting_state is the persistent source of truth; push it to the live
+     * Obol controller when one is attached (headless views just keep the bv
+     * state).  Direction tracking must be applied before the enable so a
+     * freshly-enabled headlight picks up the correct direction. */
+    BObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller)
+	return BRLCAD_OK;
+
+    controller->setHeadlightOffset(SbVec3f(
+	(float)lighting.headlight_offset[0],
+	(float)lighting.headlight_offset[1],
+	(float)lighting.headlight_offset[2]));
+    controller->setHeadlightCameraTracked(
+	lighting.headlight_tracks_camera ? TRUE : FALSE);
+    controller->setHeadlightEnabled(
+	lighting.headlight_enabled ? TRUE : FALSE);
+    /* Supply the in-scene lights from the database (cache-immune) and apply the
+     * enable state. */
+    std::vector<BObolSceneLightRealization> scene_lights;
+    ged_obol_collect_scene_lights(gedp, scene_lights);
+    controller->setSceneLights(scene_lights);
+    controller->setSceneLightsEnabled(
+	lighting.scene_lights_enabled ? TRUE : FALSE);
+    return BRLCAD_OK;
+}
+
 extern "C" int
 ged_draw_obol_view_context_feature_store_active(struct ged_view_context *view_ctx)
 {

@@ -141,6 +141,16 @@ GED_EXPORT int
 ged_draw_obol_faceplate_sync(struct ged *gedp,
 					  struct ged_view_context *view_ctx);
 
+/**
+ * Synchronize per-view lighting state (bv_lighting_state: headlight enable,
+ * camera-tracking, in-scene lights) into that view's live Obol controller.
+ * Missing Obol-backed controllers are a no-op (headless views keep the bv
+ * state), so callers may invoke this unconditionally.
+ */
+GED_EXPORT int
+ged_draw_obol_lighting_sync(struct ged *gedp,
+					  struct ged_view_context *view_ctx);
+
 __END_DECLS
 
 #endif /* GED_DRAW_OBOL_H */

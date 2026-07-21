@@ -135,60 +135,71 @@ controllerAuthoredLights(BObolViewController *controller,
 {
     static const size_t maximumAuthoredLights = 8u;
     std::vector<RtLightSnapshot> lights;
-    SoNode *root = controller ? controller->getRenderSceneRoot() : NULL;
-    if (!root)
+    if (!controller)
 	return lights;
 
-    SoSearchAction search;
-    search.setType(SoLight::getClassTypeId(), TRUE);
-    search.setInterest(SoSearchAction::ALL);
-    search.apply(root);
-    SoPathList &paths = search.getPaths();
-    lights.reserve(std::min(maximumAuthoredLights,
-	static_cast<size_t>(std::max(0, paths.getLength()))));
-    for (int i = 0; i < paths.getLength() &&
-	lights.size() < maximumAuthoredLights; ++i) {
-	SoPath *path = paths[i];
-	SoNode *tail = path ? path->getTail() : NULL;
-	if (!tail || !tail->isOfType(SoLight::getClassTypeId()))
+    /* Search both the geometry scene root and the sibling in-scene light group
+     * (which holds database-derived lights, and is not part of the geometry
+     * subtree).  Its light positions/directions are already world-space, so the
+     * SoGetMatrixAction over that subtree yields identity and leaves them
+     * unchanged. */
+    SoNode *roots[2] = {
+	controller->getRenderSceneRoot(),
+	controller->getSceneLightsRoot()
+    };
+    for (int r = 0; r < 2 && lights.size() < maximumAuthoredLights; ++r) {
+	SoNode *root = roots[r];
+	if (!root)
 	    continue;
-	SoLight *light = static_cast<SoLight *>(tail);
-	if (!light->on.getValue() || light->intensity.getValue() <= 0.0f)
-	    continue;
+	SoSearchAction search;
+	search.setType(SoLight::getClassTypeId(), TRUE);
+	search.setInterest(SoSearchAction::ALL);
+	search.apply(root);
+	SoPathList &paths = search.getPaths();
+	for (int i = 0; i < paths.getLength() &&
+	    lights.size() < maximumAuthoredLights; ++i) {
+	    SoPath *path = paths[i];
+	    SoNode *tail = path ? path->getTail() : NULL;
+	    if (!tail || !tail->isOfType(SoLight::getClassTypeId()))
+		continue;
+	    SoLight *light = static_cast<SoLight *>(tail);
+	    if (!light->on.getValue() || light->intensity.getValue() <= 0.0f)
+		continue;
 
-	SoGetMatrixAction matrixAction(viewportRegion);
-	matrixAction.apply(path);
-	const SbMatrix &matrix = matrixAction.getMatrix();
-	RtLightSnapshot snapshot;
-	snapshot.color = light->color.getValue();
-	snapshot.intensity = std::max(0.0f,
-	    std::min(1.0f, light->intensity.getValue()));
-	if (tail->isOfType(SoSpotLight::getClassTypeId())) {
-	    SoSpotLight *spot = static_cast<SoSpotLight *>(tail);
-	    snapshot.kind = RtLightSnapshot::SPOT;
-	    matrix.multVecMatrix(spot->location.getValue(), snapshot.position);
-	    matrix.multDirMatrix(spot->direction.getValue(), snapshot.direction);
-	    snapshot.dropOffRate = std::max(0.0f,
-		std::min(1.0f, spot->dropOffRate.getValue()));
-	    snapshot.cutOffAngle = std::max(0.0f,
-		std::min(static_cast<float>(M_PI) * 0.5f,
-		    spot->cutOffAngle.getValue()));
-	} else if (tail->isOfType(SoPointLight::getClassTypeId())) {
-	    SoPointLight *point = static_cast<SoPointLight *>(tail);
-	    snapshot.kind = RtLightSnapshot::POINT;
-	    matrix.multVecMatrix(point->location.getValue(), snapshot.position);
-	} else if (tail->isOfType(SoDirectionalLight::getClassTypeId())) {
-	    SoDirectionalLight *directional =
-		static_cast<SoDirectionalLight *>(tail);
-	    snapshot.kind = RtLightSnapshot::DIRECTIONAL;
-	    matrix.multDirMatrix(directional->direction.getValue(),
-		snapshot.direction);
-	} else {
-	    continue;
+	    SoGetMatrixAction matrixAction(viewportRegion);
+	    matrixAction.apply(path);
+	    const SbMatrix &matrix = matrixAction.getMatrix();
+	    RtLightSnapshot snapshot;
+	    snapshot.color = light->color.getValue();
+	    snapshot.intensity = std::max(0.0f,
+		std::min(1.0f, light->intensity.getValue()));
+	    if (tail->isOfType(SoSpotLight::getClassTypeId())) {
+		SoSpotLight *spot = static_cast<SoSpotLight *>(tail);
+		snapshot.kind = RtLightSnapshot::SPOT;
+		matrix.multVecMatrix(spot->location.getValue(), snapshot.position);
+		matrix.multDirMatrix(spot->direction.getValue(), snapshot.direction);
+		snapshot.dropOffRate = std::max(0.0f,
+		    std::min(1.0f, spot->dropOffRate.getValue()));
+		snapshot.cutOffAngle = std::max(0.0f,
+		    std::min(static_cast<float>(M_PI) * 0.5f,
+			spot->cutOffAngle.getValue()));
+	    } else if (tail->isOfType(SoPointLight::getClassTypeId())) {
+		SoPointLight *point = static_cast<SoPointLight *>(tail);
+		snapshot.kind = RtLightSnapshot::POINT;
+		matrix.multVecMatrix(point->location.getValue(), snapshot.position);
+	    } else if (tail->isOfType(SoDirectionalLight::getClassTypeId())) {
+		SoDirectionalLight *directional =
+		    static_cast<SoDirectionalLight *>(tail);
+		snapshot.kind = RtLightSnapshot::DIRECTIONAL;
+		matrix.multDirMatrix(directional->direction.getValue(),
+		    snapshot.direction);
+	    } else {
+		continue;
+	    }
+	    if (snapshot.direction.length() > 0.0f)
+		snapshot.direction.normalize();
+	    lights.push_back(snapshot);
 	}
-	if (snapshot.direction.length() > 0.0f)
-	    snapshot.direction.normalize();
-	lights.push_back(snapshot);
     }
     return lights;
 }
@@ -451,8 +462,13 @@ struct BObolRtRenderer::Private {
     SbMatrix viewAffine = SbMatrix::identity();
     SbMatrix viewProjection = SbMatrix::identity();
     SbBool lightingEnabled = TRUE;
+    SbBool headlightEnabled = TRUE;
     SbColor headlightColor = SbColor(1.0f, 1.0f, 1.0f);
     float headlightIntensity = 1.0f;
+    /* World-space headlight travel direction, kept in sync with the GL path's
+     * camera-tracked / offset headlight (rather than a hardcoded straight-on
+     * light) so the RT preview matches the interactive view. */
+    SbVec3f headlightDirection = SbVec3f(0.0f, 0.0f, -1.0f);
     SbBool transparencyEnabled = TRUE;
     SbBool cameraReady = FALSE;
     SbBool presentationStateReady = FALSE;
@@ -560,8 +576,10 @@ BObolRtRenderer::synchronize(BObolViewController *controller)
     const size_t nextClipPlaneCount =
 	controller->getActiveClipPlanes(nextClipPlanes);
     const SbBool nextLightingEnabled = controller->isLightingEnabled();
+    const SbBool nextHeadlightEnabled = controller->isHeadlightEnabled();
     const SbColor nextHeadlightColor = controller->getHeadlightColor();
     const float nextHeadlightIntensity = controller->getHeadlightIntensity();
+    const SbVec3f nextHeadlightDirection = controller->getHeadlightDirection();
     const SbBool nextTransparencyEnabled =
 	controller->isTransparencyEnabled();
     const std::vector<RtLightSnapshot> nextAuthoredLights =
@@ -574,8 +592,10 @@ BObolRtRenderer::synchronize(BObolViewController *controller)
 	!sameClipPlanes(p->clipPlanes, p->clipPlaneCount, nextClipPlanes,
 	    nextClipPlaneCount) ||
 	p->lightingEnabled != nextLightingEnabled ||
+	p->headlightEnabled != nextHeadlightEnabled ||
 	p->headlightColor != nextHeadlightColor ||
 	std::fabs(p->headlightIntensity - nextHeadlightIntensity) > 1.0e-6f ||
+	!p->headlightDirection.equals(nextHeadlightDirection, 1.0e-6f) ||
 	p->transparencyEnabled != nextTransparencyEnabled ||
 	!sameLights(p->authoredLights, nextAuthoredLights);
     std::vector<RtSourceSnapshot> snapshots;
@@ -694,8 +714,10 @@ BObolRtRenderer::synchronize(BObolViewController *controller)
 	++planeIndex)
 	p->clipPlanes[planeIndex] = nextClipPlanes[planeIndex];
     p->lightingEnabled = nextLightingEnabled;
+    p->headlightEnabled = nextHeadlightEnabled;
     p->headlightColor = nextHeadlightColor;
     p->headlightIntensity = nextHeadlightIntensity;
+    p->headlightDirection = nextHeadlightDirection;
     p->transparencyEnabled = nextTransparencyEnabled;
     p->authoredLights = nextAuthoredLights;
     p->cameraReady = TRUE;
@@ -930,7 +952,17 @@ BObolRtRenderer::renderRowsInternal(
 	    shaded += litBase * diffuseIllumination + lightColor * specular;
 	};
 
-	addLight(toEye, p->headlightColor, p->headlightIntensity);
+	/* Match the GL path's headlight: a directional light travelling along
+	 * p->headlightDirection (camera-tracked / offset), not a hardcoded
+	 * straight-on toEye light.  toLight is the direction back toward the
+	 * source, i.e. the negated travel direction.  Honour the headlight
+	 * enable flag so `view lighting headlight 0` also darkens the RT view. */
+	if (p->headlightEnabled) {
+	    SbVec3f headlightToLight = -p->headlightDirection;
+	    if (headlightToLight.length() <= 0.0f)
+		headlightToLight = toEye;
+	    addLight(headlightToLight, p->headlightColor, p->headlightIntensity);
+	}
 	for (const RtLightSnapshot &light : p->authoredLights) {
 	    SbVec3f toLight;
 	    float intensity = light.intensity;

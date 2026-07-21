@@ -16,6 +16,7 @@ set(
   feature_resolver.cpp
   knob.c
   labels.cpp
+  lighting.cpp
   lines.cpp
   lod.cpp
   lookat.c

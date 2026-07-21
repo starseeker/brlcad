@@ -61,8 +61,11 @@
 #include <Inventor/nodes/SoDirectionalLight.h>
 #include <Inventor/nodes/SoEnvironment.h>
 #include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoLight.h>
 #include <Inventor/nodes/SoLightModel.h>
 #include <Inventor/nodes/SoOrthographicCamera.h>
+#include <Inventor/nodes/SoPointLight.h>
+#include <Inventor/nodes/SoSpotLight.h>
 #include <Inventor/nodes/SoPerspectiveCamera.h>
 #include <Inventor/nodes/SoSeparator.h>
 
@@ -261,6 +264,23 @@ bobol_camera_orientation_from_brl_rotation(const mat_t rotation)
     cameraAxes[2][1] = static_cast<float>(rotation[9]);
     cameraAxes[2][2] = static_cast<float>(rotation[10]);
     return SbRotation(cameraAxes);
+}
+
+/* Default headlight offset expressed in eye space (camera looks down -Z, +X
+ * right, +Y up).  Deliberately NOT straight-on (0,0,-1): a head-on light washes
+ * out curved surfaces.  This over-the-shoulder direction (from upper-right-behind
+ * the viewer, angled forward into the scene) preserves form shading while still
+ * tracking the camera. */
+static SbVec3f
+bobol_headlight_default_offset(void)
+{
+    /* ~40deg off the view axis, from the upper-left-behind the viewer.  Enough
+     * lateral offset that form shading is clearly visible and the camera-driven
+     * tracking is obvious as the view rotates, without the flat, washed-out look
+     * of a head-on (0,0,-1) light. */
+    SbVec3f dir(-0.55f, -0.45f, -0.70f);
+    dir.normalize();
+    return dir;
 }
 
 static double
@@ -478,6 +498,60 @@ controller_headlight(SoViewport *viewport)
 	    return static_cast<SoDirectionalLight *>(child);
     }
     return NULL;
+}
+
+static const char *
+controller_scene_lights_group_name(void)
+{
+    return "BObolSceneLights";
+}
+
+/* Locate (creating if needed) the in-scene lights group, always positioned
+ * immediately AFTER the camera in the viewport root so its lights inherit the
+ * camera's view transform and their world-space positions render correctly.
+ * The headlight, by contrast, lives before the camera (see the render
+ * environment) so its direction stays a world vector we rewrite each frame. */
+static SoGroup *
+controller_scene_lights_group(SoViewport *viewport)
+{
+    if (!viewport || !viewport->getRoot())
+	return NULL;
+    SoSeparator *root = viewport->getRoot();
+
+    SoGroup *group = NULL;
+    for (int i = 0; i < root->getNumChildren(); i++) {
+	SoNode *child = root->getChild(i);
+	if (child && child->isOfType(SoGroup::getClassTypeId()) &&
+	    bu_strcmp(child->getName().getString(),
+		controller_scene_lights_group_name()) == 0) {
+	    group = static_cast<SoGroup *>(child);
+	    break;
+	}
+    }
+
+    const SbBool existed = (group != NULL);
+    if (!group) {
+	group = new SoGroup;
+	group->setName(SbName(controller_scene_lights_group_name()));
+    } else {
+	group->ref();
+	root->removeChild(group);
+    }
+
+    int cameraIndex = -1;
+    for (int i = 0; i < root->getNumChildren(); i++) {
+	if (root->getChild(i) &&
+	    root->getChild(i)->isOfType(SoCamera::getClassTypeId())) {
+	    cameraIndex = i;
+	    break;
+	}
+    }
+    const int insertAt = (cameraIndex >= 0) ? cameraIndex + 1 :
+	root->getNumChildren();
+    root->insertChild(group, insertAt);
+    if (existed)
+	group->unref();
+    return group;
 }
 
 static void
@@ -996,6 +1070,19 @@ struct BObolViewController::Impl {
     std::atomic<int> endpointGraphicalRenderingEnabled {1};
     SbBool transparencyEnabled = TRUE;
     SbBool antialiasingEnabled = FALSE;
+    /* Camera-driven headlight state.  When headlightCameraTracked is TRUE the
+     * headlight direction is rewritten from the camera orientation each sync so
+     * the light follows the viewer (old main-branch behavior); when FALSE the
+     * direction is left constant (scene-fixed).  headlightEnabled is the finer
+     * per-view toggle layered under the master setLightingEnabled(). */
+    SbBool headlightEnabled = TRUE;
+    SbBool headlightCameraTracked = TRUE;
+    SbBool sceneLightsEnabled = FALSE;
+    SbVec3f headlightOffsetEye = bobol_headlight_default_offset();
+    SbRotation lastCameraOrientation = SbRotation::identity();
+    /* In-scene lights, supplied by the GED layer (cache-immune) rather than the
+     * geometry realize walk (which is skipped on a warm LoD cache). */
+    std::vector<BObolSceneLightRealization> sceneLights;
     double clipMinimum = BV_VIEW_MIN;
     double clipMaximum = BV_VIEW_MAX;
     mutable std::mutex renderRequestMutex;
@@ -1344,6 +1431,9 @@ BObolViewController::setCamera(SoCamera *camera)
     this->d->activeCamera = camera;
     this->d->viewport->setCamera(camera);
     controller_configure_render_environment(this->d->viewport);
+    /* Keep the in-scene light group positioned immediately after the (possibly
+     * new) camera so its world-space light positions stay correct. */
+    (void)controller_scene_lights_group(this->d->viewport);
     this->syncRenderManager();
     this->syncLodViewSignature(TRUE);
     this->requestRender("camera");
@@ -1526,6 +1616,23 @@ BObolViewController::getActiveClipPlanes(SbPlane planes[2]) const
     return count;
 }
 
+/* Rewrite the headlight's world-space direction from the stored camera
+ * orientation so the light tracks the viewer.  No-op unless the headlight is
+ * enabled and in camera-tracked mode. */
+void
+BObolViewController::applyTrackedHeadlight(void)
+{
+    if (!this->d->headlightEnabled || !this->d->headlightCameraTracked)
+	return;
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
+    if (!light)
+	return;
+    SbVec3f worldDir;
+    this->d->lastCameraOrientation.multVec(this->d->headlightOffsetEye, worldDir);
+    if (worldDir.normalize() > 0.0f && light->direction.getValue() != worldDir)
+	light->direction = worldDir;
+}
+
 void
 BObolViewController::setLightingEnabled(SbBool enabled)
 {
@@ -1535,11 +1642,16 @@ BObolViewController::setLightingEnabled(SbBool enabled)
 	return;
     const int requested = enabled ? SoLightModel::PHONG :
 	SoLightModel::BASE_COLOR;
+    /* Master lighting picks PHONG vs flat shading.  The headlight only actually
+     * contributes when both master lighting and the per-view headlight toggle
+     * are on, so restore the headlight to its finer-grained state rather than
+     * unconditionally forcing it on. */
+    const SbBool lightOn = enabled && this->d->headlightEnabled;
     if (model->model.getValue() == requested &&
-	light->on.getValue() == enabled)
+	light->on.getValue() == lightOn)
 	return;
     model->model = requested;
-    light->on = enabled;
+    light->on = lightOn;
     this->requestRender("lighting");
 }
 
@@ -1548,6 +1660,167 @@ BObolViewController::isLightingEnabled(void) const
 {
     SoLightModel *model = controller_light_model(this->d->viewport);
     return model && model->model.getValue() == SoLightModel::PHONG;
+}
+
+void
+BObolViewController::setHeadlightEnabled(SbBool enabled)
+{
+    if (this->d->headlightEnabled == enabled)
+	return;
+    this->d->headlightEnabled = enabled;
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
+    if (light) {
+	/* Only illuminate when master lighting (PHONG) is also on. */
+	const SbBool lightOn = enabled && this->isLightingEnabled();
+	if (light->on.getValue() != lightOn)
+	    light->on = lightOn;
+	if (lightOn)
+	    this->applyTrackedHeadlight();
+    }
+    this->requestRender("lighting");
+}
+
+SbBool
+BObolViewController::isHeadlightEnabled(void) const
+{
+    return this->d->headlightEnabled;
+}
+
+void
+BObolViewController::setHeadlightCameraTracked(SbBool tracked)
+{
+    if (this->d->headlightCameraTracked == tracked)
+	return;
+    this->d->headlightCameraTracked = tracked;
+    /* Re-enabling: recompute direction now from the last camera orientation so
+     * the change is visible without waiting for the next camera motion.
+     * Disabling: leave the current direction in place (scene-fixed). */
+    if (tracked)
+	this->applyTrackedHeadlight();
+    this->requestRender("lighting");
+}
+
+SbBool
+BObolViewController::isHeadlightCameraTracked(void) const
+{
+    return this->d->headlightCameraTracked;
+}
+
+void
+BObolViewController::setHeadlightOffset(const SbVec3f &eyeDir)
+{
+    SbVec3f dir = eyeDir;
+    if (dir.normalize() <= 0.0f)
+	return; /* ignore a degenerate direction */
+    if (this->d->headlightOffsetEye == dir)
+	return;
+    this->d->headlightOffsetEye = dir;
+    this->applyTrackedHeadlight();
+    this->requestRender("lighting");
+}
+
+SbVec3f
+BObolViewController::getHeadlightOffset(void) const
+{
+    return this->d->headlightOffsetEye;
+}
+
+SbVec3f
+BObolViewController::getHeadlightDirection(void) const
+{
+    /* Current world-space travel direction of the headlight node (updated each
+     * view sync by applyTrackedHeadlight when camera-tracked). */
+    SoDirectionalLight *light = controller_headlight(this->d->viewport);
+    return light ? light->direction.getValue() : SbVec3f(0.0f, 0.0f, -1.0f);
+}
+
+void
+BObolViewController::setSceneLightsEnabled(SbBool enabled)
+{
+    this->d->sceneLightsEnabled = enabled;
+    /* Apply to the realized in-scene light group (may be empty until the next
+     * realize populates it; rebuildSceneLights() reapplies this flag then). */
+    SoGroup *group = controller_scene_lights_group(this->d->viewport);
+    if (group) {
+	for (int i = 0; i < group->getNumChildren(); i++) {
+	    SoNode *child = group->getChild(i);
+	    if (child && child->isOfType(SoLight::getClassTypeId()))
+		static_cast<SoLight *>(child)->on = enabled;
+	}
+    }
+    this->requestRender("lighting");
+}
+
+SbBool
+BObolViewController::isSceneLightsEnabled(void) const
+{
+    return this->d->sceneLightsEnabled;
+}
+
+SoNode *
+BObolViewController::getSceneLightsRoot(void) const
+{
+    if (!this->d->viewport || !this->d->viewport->getRoot())
+	return NULL;
+    SoSeparator *root = this->d->viewport->getRoot();
+    for (int i = 0; i < root->getNumChildren(); i++) {
+	SoNode *child = root->getChild(i);
+	if (child && child->isOfType(SoGroup::getClassTypeId()) &&
+	    bu_strcmp(child->getName().getString(),
+		controller_scene_lights_group_name()) == 0)
+	    return child;
+    }
+    return NULL;
+}
+
+/* Rebuild the in-scene light group from every database source's realized light
+ * snapshots.  Called after realization; positions/directions are already
+ * world-space so nodes are added directly. */
+void
+BObolViewController::setSceneLights(
+	const std::vector<BObolSceneLightRealization> &lights)
+{
+    this->d->sceneLights = lights;
+    this->rebuildSceneLights();
+}
+
+void
+BObolViewController::rebuildSceneLights(void)
+{
+    SoGroup *group = controller_scene_lights_group(this->d->viewport);
+    if (!group)
+	return;
+    group->removeAllChildren();
+
+    for (size_t li = 0; li < this->d->sceneLights.size(); li++) {
+	const BObolSceneLightRealization &L = this->d->sceneLights[li];
+	SoLight *node = NULL;
+	if (L.kind == BOBOL_SCENE_LIGHT_DIRECTIONAL) {
+	    SoDirectionalLight *dl = new SoDirectionalLight;
+	    dl->direction = L.direction;
+	    node = dl;
+	} else if (L.kind == BOBOL_SCENE_LIGHT_SPOT) {
+	    SoSpotLight *sl = new SoSpotLight;
+	    sl->location = L.position;
+	    sl->direction = L.direction;
+	    /* DB angle is full beam dispersion; Coin cutOffAngle is the
+	     * half-angle from the axis.  Clamp to <= 90 degrees. */
+	    float cutoff = static_cast<float>(L.coneAngleDeg * 0.5 * DEG2RAD);
+	    const float maxCutoff = static_cast<float>(M_PI_2);
+	    if (cutoff > maxCutoff)
+		cutoff = maxCutoff;
+	    sl->cutOffAngle = cutoff;
+	    node = sl;
+	} else {
+	    SoPointLight *pl = new SoPointLight;
+	    pl->location = L.position;
+	    node = pl;
+	}
+	node->color = L.color;
+	node->intensity = L.intensity;
+	node->on = this->d->sceneLightsEnabled;
+	group->addChild(node);
+    }
 }
 
 void
@@ -1783,6 +2056,14 @@ BObolViewController::syncCameraFromViewContext(const void *viewCtx,
     const double viewZ[3] = {
 	viewRotation[8], viewRotation[9], viewRotation[10]
     };
+
+    /* Track the camera-driven headlight: rewrite its world-space direction from
+     * the current camera orientation so it follows the viewer.  If the camera
+     * orientation changed, the camera->orientation assignment below sets
+     * `changed` and drives the render; when idle the direction is unchanged so
+     * this does not churn. */
+    this->d->lastCameraOrientation = orientation;
+    this->applyTrackedHeadlight();
 
     SoClipPlane *clipMinimumNode =
 	controller_clip_plane(this->d->viewport, TRUE);

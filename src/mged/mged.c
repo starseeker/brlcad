@@ -2295,9 +2295,13 @@ refresh(struct mged_state *s)
 	    }
 	}
 
-	if (bobol_display_endpoint_view_sync(endpoint, view_ctx))
-	    (void)bobol_display_endpoint_request_frame(endpoint,
-		"MGED refresh");
+	/* Sync the camera (updates it and the tracked headlight), then present a
+	 * frame.  We only reach here when the display is repaint-pending (the view
+	 * was marked dirty), so present unconditionally rather than only when the
+	 * camera moved -- otherwise render-state changes that don't move the camera
+	 * (lighting toggles, faceplate, etc.) would never reach the screen. */
+	(void)bobol_display_endpoint_view_sync(endpoint, view_ctx);
+	(void)bobol_display_endpoint_request_frame(endpoint, "MGED refresh");
 	bv_refresh_complete(view);
     }
 
