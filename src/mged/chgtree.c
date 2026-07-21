@@ -146,7 +146,9 @@ f_copy_inv(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 struct _fswp_data {
     struct db_full_path *pathp;
     ged_draw_shape_ref ret;
+    ged_draw_shape_ref leaf_ret;
     int count;
+    int leaf_count;
 };
 
 static int
@@ -154,9 +156,20 @@ _find_shape_with_path_cb(const struct ged_draw_shape_record *rec, void *ud)
 {
     struct _fswp_data *d = (struct _fswp_data *)ud;
     if (!rec || !rec->fullpath) return 1;
-    if (!db_identical_full_paths(d->pathp, rec->fullpath)) return 1;
-    d->ret = rec->ref;
-    d->count++;
+    if (db_identical_full_paths(d->pathp, rec->fullpath)) {
+	d->ret = rec->ref;
+	d->count++;
+	return 1;
+    }
+
+    /* Obol source records may retain only the leaf path for a shape drawn
+     * through a combination.  It is still a valid oed target when the leaf
+     * is unique; prefer an exact path whenever one is available. */
+    if (rec->fullpath->fp_len > 0 && d->pathp->fp_len > 0 &&
+	DB_FULL_PATH_CUR_DIR(rec->fullpath) == DB_FULL_PATH_CUR_DIR(d->pathp)) {
+	d->leaf_ret = rec->ref;
+	d->leaf_count++;
+    }
     return 1; /* keep scanning for duplicates */
 }
 
@@ -168,7 +181,9 @@ find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp)
     struct _fswp_data d;
     d.pathp = pathp;
     d.ret = GED_DRAW_SHAPE_REF_NULL;
+    d.leaf_ret = GED_DRAW_SHAPE_REF_NULL;
     d.count = 0;
+    d.leaf_count = 0;
     ged_draw_foreach_shape_record(s->gedp, _find_shape_with_path_cb, &d);
 
     if (d.count > 1) {
@@ -178,7 +193,9 @@ find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp)
 	bu_vls_free(&tmp_vls);
     }
 
-    return d.ret;
+    if (!ged_draw_shape_ref_is_null(d.ret))
+	return d.ret;
+    return d.leaf_count == 1 ? d.leaf_ret : GED_DRAW_SHAPE_REF_NULL;
 }
 
 

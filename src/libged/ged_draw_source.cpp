@@ -3575,7 +3575,29 @@ struct ged_draw_source_root_shape_ref_ctx {
     struct ged *gedp;
     ged_draw_shape_ref_index_cb cb;
     void *userdata;
+    ged_draw_shape_ref last_ref;
+    int have_last_ref;
 };
+
+
+static int
+_ged_draw_source_root_emit_shape_ref(
+	struct ged_draw_source_root_shape_ref_ctx *ctx, ged_draw_shape_ref ref)
+{
+    if (!ctx || !ctx->cb || ged_draw_shape_ref_is_null(ref))
+	return 1;
+
+    /* Database-source enumeration may report a compact source and its sole
+     * occurrence consecutively.  They resolve to the same stable shape ref,
+     * so report it once to callers that expect displayed shape instances. */
+    if (ctx->have_last_ref && ctx->last_ref.token == ref.token &&
+	ctx->last_ref.scene_revision == ref.scene_revision)
+	return 1;
+
+    ctx->last_ref = ref;
+    ctx->have_last_ref = 1;
+    return ctx->cb(ref, ctx->userdata);
+}
 
 
 static int
@@ -3596,7 +3618,7 @@ _ged_draw_source_root_shape_ref_cb(ged_draw_scene_handle scene_ref,
     if (fullpath && fullpath->fp_len > 0)
 	(void)ged_draw_registry_shape_ref_set_indexed_fullpath(ctx->gedp,
 		ref, fullpath);
-    return ctx->cb(ref, ctx->userdata);
+    return _ged_draw_source_root_emit_shape_ref(ctx, ref);
 }
 
 
@@ -3691,7 +3713,7 @@ _ged_draw_source_root_obol_shape_path_cb(struct ged *gedp,
     if (ged_draw_shape_ref_is_null(ref))
 	return 1;
 
-    return ctx->cb(ref, ctx->userdata);
+    return _ged_draw_source_root_emit_shape_ref(ctx, ref);
 }
 
 
@@ -3704,14 +3726,11 @@ _ged_draw_source_root_obol_shape_record_cb(
     struct ged_draw_source_root_shape_ref_ctx *ctx =
 	(struct ged_draw_source_root_shape_ref_ctx *)userdata;
     if (!gedp || !record || !record->database_path ||
-	    !record->database_path[0] || !ctx || !ctx->cb)
+	!record->database_path[0] || !ctx || !ctx->cb)
 	return 1;
     ged_draw_shape_ref ref =
 	ged_draw_obol_shape_ref_for_database_source_record(gedp, record);
-    if (ged_draw_shape_ref_is_null(ref))
-	return 1;
-
-    return ctx->cb(ref, ctx->userdata);
+    return _ged_draw_source_root_emit_shape_ref(ctx, ref);
 }
 
 
@@ -3758,19 +3777,19 @@ ged_draw_source_root_foreach_shape_ref(struct ged *gedp,
     obol_ctx.gedp = gedp;
     obol_ctx.cb = cb;
     obol_ctx.userdata = userdata;
+    obol_ctx.last_ref = GED_DRAW_SHAPE_REF_NULL;
+    obol_ctx.have_last_ref = 0;
     if (ged_draw_obol_scene_controller_full_synced(gedp)) {
 	int obol_status = ged_draw_obol_database_source_records_foreach(gedp,
 		skip_overlay_groups, _ged_draw_source_root_obol_shape_record_cb,
 		&obol_ctx);
-	if (obol_status == 0)
-	    return 0;
+	if (obol_status >= 0)
+	    return obol_status;
 	int shape_status = ged_draw_obol_shape_paths_foreach(gedp,
 		skip_overlay_groups, _ged_draw_source_root_obol_shape_path_cb,
 		&obol_ctx);
 	if (shape_status >= 0)
 	    return shape_status;
-	if (obol_status >= 0)
-	    return obol_status;
     }
 
     ged_draw_scene_handle root_ref = _ged_draw_source_root_scene_handle(gedp);
@@ -3781,6 +3800,8 @@ ged_draw_source_root_foreach_shape_ref(struct ged *gedp,
     ctx.shape_ctx.gedp = gedp;
     ctx.shape_ctx.cb = cb;
     ctx.shape_ctx.userdata = userdata;
+    ctx.shape_ctx.last_ref = GED_DRAW_SHAPE_REF_NULL;
+    ctx.shape_ctx.have_last_ref = 0;
     ctx.skip_overlay_groups = skip_overlay_groups;
     return ged_draw_scene_handle_foreach_child(root_ref,
 	    _ged_draw_source_root_shape_child_cb, &ctx);
