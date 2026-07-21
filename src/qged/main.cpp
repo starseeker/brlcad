@@ -163,6 +163,16 @@ main(int argc, char **argv)
 	fmt.setRenderableType(QSurfaceFormat::OpenGL);
 	fmt.setDepthBufferSize(24);
 	fmt.setStencilBufferSize(8);
+	/* Disable app-level vsync.  Qt's default swap interval is 1, which makes
+	 * the QOpenGLWidget's compositing swap block on the display's vblank --
+	 * and under the Windows DWM compositor that block is ~2-3 vblanks, so it
+	 * caps the view at ~30fps and adds ~30ms of input-to-photon latency even
+	 * though an Obol frame renders in well under 1ms.  The DWM already vsyncs
+	 * at composition time (so no tearing is visible in a composited window);
+	 * the extra app-level sync only costs latency.  Turning it off drops
+	 * per-frame latency to sub-millisecond and lets interactive manipulation
+	 * repaint as fast as input arrives. */
+	fmt.setSwapInterval(0);
 	QSurfaceFormat::setDefaultFormat(fmt);
     }
 #endif

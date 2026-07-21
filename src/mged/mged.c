@@ -3305,12 +3305,31 @@ main(int argc, char *argv[])
 		/* we're going to close out stdout/stderr as we
 		 * proceed in GUI mode, so create some pipes.
 		 */
+#ifdef HAVE_WINDOWS_H
+		/* The generic pipe() macro in config_win.h.in creates a pipe
+		 * with only a 256-byte kernel buffer.  These pipes capture all
+		 * C-level stdout/stderr for the GUI and are drained only by the
+		 * main thread's Tcl event loop; a tiny buffer makes it trivial
+		 * for a burst of C output emitted from inside a Tcl/Tk callback
+		 * (e.g. a render or command handler) to fill the pipe and block
+		 * the writer -- which is the same thread that would drain it,
+		 * i.e. a self-deadlock.  Use a large buffer instead.  (The write
+		 * ends are additionally set non-blocking below as a hard
+		 * backstop.) */
+		result = _pipe(pipe_out, 1048576, _O_TEXT);
+		if (result == -1)
+		    perror("pipe");
+		result = _pipe(pipe_err, 1048576, _O_TEXT);
+		if (result == -1)
+		    perror("pipe");
+#else
 		result = pipe(pipe_out);
 		if (result == -1)
 		    perror("pipe");
 		result = pipe(pipe_err);
 		if (result == -1)
 		    perror("pipe");
+#endif
 #endif  /* HAVE_PIPE */
 
 		/* since we're in GUI mode, display any bu_bomb()
@@ -3474,6 +3493,26 @@ main(int argc, char *argv[])
 	    (void)close(pipe_err[1]); /* only a write pipe */
 
 #ifdef HAVE_WINDOWS_H
+	    /* Backstop against a self-deadlock on the capture pipes: put the
+	     * write ends (now fd 1/2) into non-blocking mode.  If the pipe ever
+	     * fills faster than the main-thread event loop can drain it -- which
+	     * happens when C code emits a large burst of output from inside a
+	     * Tcl/Tk callback that is itself running under the event loop -- a
+	     * blocking WriteFile would wait forever for the very thread that is
+	     * blocked writing.  In PIPE_NOWAIT mode WriteFile returns
+	     * immediately instead (dropping the overflow), so the process stays
+	     * responsive rather than freezing.  The large buffer above keeps
+	     * such dropping from happening under any realistic output volume. */
+	    {
+		DWORD nowait = PIPE_NOWAIT;
+		HANDLE hout = (HANDLE)_get_osfhandle(fileno(stdout));
+		HANDLE herr = (HANDLE)_get_osfhandle(fileno(stderr));
+		if (hout != INVALID_HANDLE_VALUE)
+		    (void)SetNamedPipeHandleState(hout, &nowait, NULL, NULL);
+		if (herr != INVALID_HANDLE_VALUE)
+		    (void)SetNamedPipeHandleState(herr, &nowait, NULL, NULL);
+	    }
+
 	    /* On Windows, Tcl's stdout/stderr channels are backed by the native
 	     * Windows HANDLEs that Tcl captured at startup.  In a GUI-only
 	     * process those are typically INVALID_HANDLE_VALUE (no console), so

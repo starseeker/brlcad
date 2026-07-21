@@ -128,6 +128,17 @@ public:
 	    PROC proc = wglGetProcAddress(name);
 	    if (proc)
 		return reinterpret_cast<void *>(proc);
+	    /* We may need to get OpenGL 1.0/1.1 core entry points (glEnable,
+	     * glDisable, glMatrixMode, glColor4ub, ...) from opengl32.dll -
+	     * if so they must be resolved with GetProcAddress().  (Observed
+	     * symptom of not doing this - fallback Coin's GL glue reports the
+	     * current context as "severely broken or uninitialized" and floods
+	     * a warning for every legacy call on every frame.  That flood in
+	     * turn can lock MGED's GUI mode, deadlocking the process against
+	     * its own captured-stderr pipe. */
+	    static HMODULE opengl32 = GetModuleHandleA("opengl32.dll");
+	    if (opengl32)
+		return reinterpret_cast<void *>(GetProcAddress(opengl32, name));
 	}
 #endif
 	return NULL;
@@ -257,8 +268,15 @@ public:
 
 	const std::string swidth = std::to_string(this->width);
 	const std::string sheight = std::to_string(this->height);
-	const char *swap_interval = desc->vsync == BOBOL_HOST_VSYNC_OFF ?
-	    "0" : "1";
+	/* Default (AUTO) to vsync OFF.  This is an on-screen, DWM-composited
+	 * window: with -swapinterval 1 (Togl's upstream default) SwapBuffers
+	 * blocks against the compositor for ~2-3 vblanks per frame (~30-45ms),
+	 * capping interactive rotation at ~10-30fps even for trivial scenes.
+	 * DWM already vsyncs at composition time, so the extra app-level sync
+	 * only adds latency without preventing tearing.  Callers that really
+	 * want app-level vsync can request BOBOL_HOST_VSYNC_ON explicitly. */
+	const char *swap_interval =
+	    desc->vsync == BOBOL_HOST_VSYNC_ON ? "1" : "0";
 	if (this->software) {
 	    if (!this->eval({"image", "create", "photo", this->photo_name.c_str(),
 		"-width", swidth.c_str(), "-height", sheight.c_str()}) ||
