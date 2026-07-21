@@ -377,7 +377,7 @@ qgcanvas_destroy_obol(QgCanvasState &s, QWidget *w)
     if (s.obol && s.obol->getRenderContextManager() ==
 	    qgcanvas_obol_context_manager(s.software_backend))
 	s.obol->setRenderContextManager(NULL);
-	qgcanvas_unbind_obol_frame_requests(s, w);
+    qgcanvas_unbind_obol_frame_requests(s, w);
     if (s.owns_obol)
 	delete s.obol;
     s.obol = nullptr;

@@ -440,12 +440,12 @@ QgEventRecorder::registerObject(QObject *object)
 		args.insert(QStringLiteral("value"), value);
 		append(spin, QStringLiteral("set_value"), args);
 	    });
-    } else if (QDoubleSpinBox *spin = qobject_cast<QDoubleSpinBox *>(object)) {
-	connect(spin, static_cast<void (QDoubleSpinBox::*)(double)>(
-	    &QDoubleSpinBox::valueChanged), this, [this, spin](double value) {
+    } else if (QDoubleSpinBox *double_spin = qobject_cast<QDoubleSpinBox *>(object)) {
+	connect(double_spin, static_cast<void (QDoubleSpinBox::*)(double)>(
+	    &QDoubleSpinBox::valueChanged), this, [this, double_spin](double value) {
 		QJsonObject args;
 		args.insert(QStringLiteral("value"), value);
-		append(spin, QStringLiteral("set_value"), args);
+		append(double_spin, QStringLiteral("set_value"), args);
 	    });
     } else if (QSlider *slider = qobject_cast<QSlider *>(object)) {
 	connect(slider, &QSlider::valueChanged, this, [this, slider](int value) {
@@ -654,7 +654,7 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 		(event.action == QLatin1String("mouse_release") ?
 		 QEvent::MouseButtonRelease : QEvent::MouseMove);
 	    const QPointF local = qg_event_local_position(widget, event.arguments);
-	    QMouseEvent mouse(type, local,
+	    QMouseEvent mouse(type, local, widget->mapToGlobal(local.toPoint()),
 		static_cast<Qt::MouseButton>(event.arguments.value(QStringLiteral("button")).toInt()),
 		static_cast<Qt::MouseButtons>(event.arguments.value(QStringLiteral("buttons")).toInt()),
 		static_cast<Qt::KeyboardModifiers>(event.arguments.value(QStringLiteral("modifiers")).toInt()));

@@ -121,7 +121,9 @@ main(int argc, char **argv)
     CHECK(combo.currentIndex() == 2, "player did not restore combo index");
     CHECK(tree.currentIndex() == wheel, "player did not restore tree current item");
 
-    QMouseEvent sourcePress(QEvent::MouseButtonPress, QPointF(50.0, 25.0),
+    const QPointF sourcePos(50.0, 25.0);
+    QMouseEvent sourcePress(QEvent::MouseButtonPress, sourcePos,
+	canvas.mapToGlobal(sourcePos.toPoint()),
 	Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QgTestEvent translated;
     CHECK(QgEventTranslator::translate(&canvas, &sourcePress, translated),
