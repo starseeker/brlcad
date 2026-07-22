@@ -5006,6 +5006,25 @@ ged_obol_view_to_model_point(SbVec3f &out,
     return 1;
 }
 
+/* Map a faceplate overlay coordinate (GED2PM1 space, -1..1 in both axes) to the
+ * pixel coordinates an SoHUDKit expects (origin bottom-left, 0..width/height),
+ * matching how HUD text labels are placed.  This keeps the yellow faceplate
+ * lines screen-locked -- like legacy main's fixed glOrtho(-1,1,-1,1) overlay --
+ * instead of routing them through the view->model transform (which made them
+ * move and skew with the camera/aspect). */
+static void
+ged_obol_faceplate_to_pixel(SbVec3f &out,
+			    struct ged_view_context *view_ctx,
+			    fastf_t x,
+			    fastf_t y)
+{
+    const int width = bv_width_get(ged_obol_bv_const(view_ctx));
+    const int height = bv_height_get(ged_obol_bv_const(view_ctx));
+    out = SbVec3f(static_cast<float>((x + 1.0) * 0.5 * width),
+		  static_cast<float>((y + 1.0) * 0.5 * height),
+		  0.0f);
+}
+
 static void
 ged_obol_faceplate_append_line(std::vector<SbVec3f> &points,
 			       std::vector<int32_t> &commands,
@@ -5902,13 +5921,14 @@ ged_draw_obol_view_context_hud_lines_replace(
     screen_points.reserve(point_count);
     for (size_t i = 0; i < point_count; i++) {
 	SbVec3f point;
-	if (!ged_obol_view_to_model_point(point, view_ctx,
-		points[i][X], points[i][Y], points[i][Z]))
-	    return 0;
+	ged_obol_faceplate_to_pixel(point, view_ctx, points[i][X], points[i][Y]);
 	screen_points.push_back(point);
     }
     BObolFeatureStyle obol_style =
 	ged_obol_feature_style_from_ged(style);
+    /* Screen-lock: pixel-space geometry rendered through an SoHUDKit, matching
+     * the HUD text labels (store_hud_wrap_if_needed). */
+    obol_style.hud = TRUE;
     BObolFeatureHandle handle = ged_obol_faceplate_publish_lines(controller,
 	view_ctx, name, screen_points,
 	ged_obol_commands_from_ged(cmds, point_count), obol_style);
@@ -5993,10 +6013,8 @@ ged_draw_obol_view_context_hud_line_layers_replace(
 	layer.commands.reserve(layers[i].point_count);
 	for (size_t j = 0; j < layers[i].point_count; j++) {
 	    SbVec3f point;
-	    if (!ged_obol_view_to_model_point(point, view_ctx,
-		    layers[i].points[j][X], layers[i].points[j][Y],
-		    layers[i].points[j][Z]))
-		return 0;
+	    ged_obol_faceplate_to_pixel(point, view_ctx,
+		    layers[i].points[j][X], layers[i].points[j][Y]);
 	    layer.points.push_back(point);
 	    layer.commands.push_back(ged_obol_line_command_from_ged(
 		layers[i].commands ? layers[i].commands[j] : -1, j));
@@ -6010,6 +6028,9 @@ ged_draw_obol_view_context_hud_line_layers_replace(
 
     BObolFeatureStyle obol_style =
 	ged_obol_feature_style_from_ged(style);
+    /* Screen-lock the faceplate lines: pixel-space geometry rendered through an
+     * SoHUDKit, matching the HUD text labels (store_hud_wrap_if_needed). */
+    obol_style.hud = TRUE;
     BObolFeatureOwner owner = ged_obol_feature_owner(view_ctx, 1);
     BObolFeatureHandle handle = controller->features().publishLineLayers(
 	name, BObolFeatureScope::Local, obol_layers, &obol_style, &owner);

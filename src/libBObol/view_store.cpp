@@ -34,6 +34,7 @@
 #include <Inventor/nodes/SoSeparator.h>
 #include <Inventor/nodes/SoText2.h>
 #include <Inventor/nodes/SoTranslation.h>
+#include <Inventor/annex/HUD/nodekits/SoHUDKit.h>
 
 #include <algorithm>
 #include <atomic>
@@ -381,6 +382,9 @@ store_merge_feature_style(const BObolFeatureStyle &base,
 	out.arrowTipLength = overrideStyle.arrowTipLength;
 	out.arrowTipWidth = overrideStyle.arrowTipWidth;
     }
+    /* HUD is a whole-feature trait; a per-layer override can only turn it on. */
+    if (overrideStyle.hud)
+	out.hud = TRUE;
     return out;
 }
 
@@ -537,7 +541,8 @@ BObolFeatureStyle::BObolFeatureStyle(void) :
     arrow(FALSE),
     hasArrowTip(FALSE),
     arrowTipLength(0.0f),
-    arrowTipWidth(0.0f)
+    arrowTipWidth(0.0f),
+    hud(FALSE)
 {
 }
 
@@ -1063,7 +1068,10 @@ store_vlist_node(const BObolFeatureStoreRecord &rec)
     shape->cacheIdentity = shape->sourcePath.getValue();
     shape->databaseIntent = FALSE;
     shape->overlayIntent = TRUE;
-    shape->hudIntent = FALSE;
+    /* HUD features are screen-locked: their pixel-space geometry is projected
+     * by an SoHUDKit (see store_hud_wrap_if_needed).  Non-HUD line features keep
+     * the normal model/view pipeline. */
+    shape->hudIntent = rec.style.hud ? TRUE : FALSE;
     shape->localSource = rec.scope == BObolFeatureScope::Local ? TRUE : FALSE;
     shape->sharedSource = rec.scope == BObolFeatureScope::Shared ? TRUE : FALSE;
     shape->nonDatabaseSource = TRUE;
@@ -1081,6 +1089,20 @@ store_vlist_node(const BObolFeatureStoreRecord &rec)
 	shape->setLineSet(&rec.points[0], &shapeCommands[0],
 			  static_cast<int>(rec.points.size()));
     return shape;
+}
+
+/* Wrap a HUD (screen-locked) line shape in an SoHUDKit so its pixel-space
+ * geometry is projected to the screen, matching the HUD text labels and the
+ * grid overlay (see grid.cpp).  A non-HUD shape is returned unchanged so the
+ * normal model/view pipeline still applies. */
+static SoNode *
+store_hud_wrap_if_needed(SoBRLVListShape *shape)
+{
+    if (!shape || !shape->hudIntent.getValue())
+	return shape;
+    SoHUDKit *hud = new SoHUDKit;
+    hud->addWidget(shape);
+    return hud;
 }
 
 static SoBRLEditPreview *
@@ -1252,9 +1274,9 @@ store_line_layers_node(const BObolFeatureStoreRecord &rec)
 					     rec.highlightedPrimitives, primitiveOffset, primitiveCount);
 	primitiveOffset += primitiveCount;
 	layerRec.kind = BObolFeatureKind::Lines;
-	SoBRLVListShape *shape = store_vlist_node(layerRec);
-	if (shape)
-	    sep->addChild(shape);
+	SoNode *layerNode = store_hud_wrap_if_needed(store_vlist_node(layerRec));
+	if (layerNode)
+	    sep->addChild(layerNode);
     }
     return sep;
 }
@@ -1385,7 +1407,7 @@ store_node_for_feature(const BObolFeatureStoreRecord &rec)
 	case BObolFeatureKind::CustomNode:
 	    return rec.node;
 	default:
-	    return store_vlist_node(rec);
+	    return store_hud_wrap_if_needed(store_vlist_node(rec));
     }
 }
 

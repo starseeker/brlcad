@@ -161,6 +161,13 @@ struct BOBOL_EXPORT BObolFeatureStyle {
     float arrowTipLength;
     float arrowTipWidth;
 
+    /* When TRUE the feature is a screen-locked HUD overlay: its line geometry
+     * is expressed in pixel coordinates (origin bottom-left, 0..width/0..height)
+     * and is rendered through an SoHUDKit rather than the model/view pipeline.
+     * Used by the faceplate GUI so its lines stay fixed on screen like the
+     * HUD text labels (see ged_annotation_hud_line*_replace). */
+    SbBool hud;
+
     BObolFeatureStyle(void);
 };
 

@@ -426,17 +426,23 @@ public:
 	    Tcl_ThreadAlert(this->owner_thread);
 	    return 1;
 	}
-#  ifdef TCL_THREADS
+	/* Cross-thread delivery to the GUI (owner) thread.  This path is ALWAYS
+	 * used and must NOT be gated on the TCL_THREADS macro.  Tcl 8.6 is always
+	 * threaded and Tcl_ThreadQueueEvent/Tcl_ThreadAlert are declared
+	 * unconditionally in tclDecls.h -- but BRL-CAD never defines TCL_THREADS
+	 * in this translation unit, so the old "#ifdef TCL_THREADS ... #else
+	 * free-and-drop" guard silently DISCARDED the event.  mged runs ged_exec
+	 * on a std::thread worker (run_ged_async in src/mged/cmd.cpp), so a frame
+	 * requested by a command's refresh (e.g. `view lighting`) is cross-thread;
+	 * dropping it meant the view never repainted until an unrelated OS event
+	 * (mouse motion) woke the loop.  Tcl_ThreadQueueEvent is itself
+	 * thread-safe; Tcl_ThreadAlert wakes the owner thread's notifier (and the
+	 * run_ged_async pump loop also services it within its poll interval). */
 	Tcl_MutexLock(&tk_endpoint_event_mutex);
 	Tcl_ThreadQueueEvent(this->owner_thread, &event->header, TCL_QUEUE_TAIL);
 	Tcl_ThreadAlert(this->owner_thread);
 	Tcl_MutexUnlock(&tk_endpoint_event_mutex);
 	return 1;
-#  else
-	Tcl_Free(reinterpret_cast<char *>(event));
-	this->event_queued.store(false);
-	return 0;
-#  endif
 #endif
 	}
 
