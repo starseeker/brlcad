@@ -1760,10 +1760,8 @@ extern int ged_draw_obol_group_rename_for_path(
 	struct ged *gedp,
 	const char *path,
 	const char *new_path);
-extern int ged_draw_obol_group_erase_subpath_for_path(
-	struct ged *gedp,
-	const char *parent_path,
-	const char *subpath);
+/* ged_draw_obol_group_erase_subpath_for_path is declared in the public
+ * ged/draw_obol.h (with GED_EXPORT); do not redeclare it here. */
 extern int ged_draw_obol_group_update_display_for_path(
 	struct ged *gedp,
 	const char *path,

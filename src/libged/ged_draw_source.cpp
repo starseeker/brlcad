@@ -4772,7 +4772,13 @@ ged_bobol_database_source_record_summary_for_path_mode(
 	BObolRealizedShapeSummary realized;
 	if (!source->getRealizedShapeSummary(i, realized) || !realized.valid)
 	    continue;
-	out->evaluated_region = realized.regionId ? 1 : 0;
+	/* A positive region id means the shape belongs to a region; only an
+	 * E-command *evaluated* region (no child solids) should block solid
+	 * editing.  Region membership alone (and the -1 "no region" sentinel)
+	 * must not -- treating any non-zero regionId as evaluated wrongly blocked
+	 * re-editing a normally drawn solid after one edit cycle re-realized it
+	 * with its containing region id / the -1 sentinel. */
+	out->evaluated_region = realized.regionId > 0 ? 1 : 0;
 	break;
     }
 

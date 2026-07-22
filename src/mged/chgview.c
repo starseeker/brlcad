@@ -1213,6 +1213,17 @@ f_sed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
+    /* If the target solid is a sub-object of a drawn combination (or is not
+     * drawn at all), instantiate it as its own drawn object so f_ill can
+     * illuminate it.  Undone on the edit's return to view (stateChange). */
+    if (argc >= 2) {
+	struct db_full_path sed_path;
+	if (db_string_to_path(&sed_path, s->dbip, argv[argc - 1]) == 0) {
+	    (void)mged_edit_isolate_target(s, &sed_path);
+	    db_free_full_path(&sed_path);
+	}
+    }
+
     /* Common part of illumination */
     if (!ged_draw_has_shapes(s->gedp)) {
 	Tcl_AppendResult(interp, "no solids being displayed\n", (char *)NULL);

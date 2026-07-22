@@ -67,6 +67,7 @@
 
 #include "bu/parallel.h"
 #include "bu/list.h"
+#include "bu/ptbl.h"
 #include "bu/str.h"
 #include "bu/vls.h"
 #include "ged.h"
@@ -80,11 +81,9 @@
 #  define HAVE_X11_TYPES 1
 #endif
 
-// We have to use different I/O mechanisms based on which
-// platform we're on.  Make a define to key off of.
-#if defined(_WIN32) && !defined(__CYGWIN__)
-#  define USE_TCL_CHAN
-#endif
+/* USE_TCL_CHAN (the platform test for which Tcl event I/O mechanism to use) is
+ * defined canonically in <tclcad/defines.h> and consumed by libtclcad; mged
+ * itself does not key off it, so it is not redefined here (avoids C4005). */
 
 #define MGED_DB_NAME "db"
 #define MGED_INMEM_NAME ".inmem"
@@ -195,6 +194,24 @@ extern int ecmd_bot_pickt_multihit_clbk(int ac, const char **av, void *d, void *
 extern int ecmd_nmg_edebug_clbk(int ac, const char **av, void *d, void *d2);
 extern int ecmd_extrude_skt_name_clbk(int ac, const char **av, void *d, void *d2);
 
+/* One drawn instance temporarily isolated for interactive edit (oed/sed).
+ * A sub-object of a drawn combination is not its own Obol scene record, so on
+ * edit entry we instantiate it as its own drawn object (isolate_path) and
+ * suppress the duplicate subpath inside the drawn ancestor group
+ * (suppressed_subpath within ancestor_path).  Both are undone on edit exit. */
+struct mged_edit_isolation_instance {
+    struct bu_vls isolate_path;        /* full path instantiated as its own object */
+    struct bu_vls ancestor_path;       /* drawn ancestor whose group was modified */
+    struct bu_vls suppressed_subpath;  /* subpath erased from the ancestor group */
+    int draw_mode;                     /* ancestor's draw mode (-m); -1 = default */
+};
+
+/* Isolation state for the current oed/sed edit session (shared by both). */
+struct mged_edit_isolation {
+    int active;
+    struct bu_ptbl instances;   /* of struct mged_edit_isolation_instance * */
+};
+
 /* global application state */
 struct mged_state_impl;
 struct mged_state {
@@ -225,6 +242,9 @@ struct mged_state {
     /* Editing related */
     struct mged_edit_state *s_edit;
     int global_editing_state; // main global editing state (ugh)
+
+    /* Sub-object edit isolation (oed/sed on a sub-path of a drawn comb). */
+    struct mged_edit_isolation edit_isolation;
 
     /* Non-zero when an edit or view callback has requested redraw. */
     int update_views;
@@ -310,6 +330,20 @@ extern int mged_refresh_pending(struct mged_state *s);
 extern void slewview(struct mged_state *s, vect_t view_pos);
 extern void moveHinstance(struct mged_state *s, struct directory *cdp, struct directory *dp, matp_t xlate);
 extern void moveHobj(struct mged_state *s, struct directory *dp, matp_t xlate);
+
+/* Sub-object edit isolation (oed/sed): ensure the edit target sub-path is its
+ * own drawn scene object so the existing find/preview machinery can operate,
+ * suppressing the duplicate inside the drawn ancestor.  isolate returns 1 if it
+ * set up (or the target is now findable), 0 if not possible; release undoes it
+ * and is idempotent.  See src/mged/edsol.c. */
+extern int mged_edit_isolate_target(struct mged_state *s, const struct db_full_path *both);
+extern void mged_edit_release_isolation(struct mged_state *s);
+/* Object-edit live preview: plot the edited reference solid at its edited pose
+ * (model_changes applied) so oed shows interactive feedback in the Obol scene
+ * until MGED is cut over to the libged edit logic.  See src/mged/edsol.c. */
+extern void mged_oedit_live_preview(struct mged_state *s);
+/* Locate the drawn shape record matching a full path (chgtree.c). */
+extern ged_draw_shape_ref find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp);
 extern void quit(struct mged_state *s);
 extern void refresh(struct mged_state *s);
 extern void mged_obol_display_detach(struct mged_state *s, struct mged_display *mdmp);

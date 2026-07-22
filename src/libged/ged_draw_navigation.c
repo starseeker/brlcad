@@ -43,6 +43,12 @@ ged_draw_has_shapes(struct ged *gedp)
 {
     if (!gedp)
 	return 0;
+    /* Ensure the Obol scene is synced with the current draw state before
+     * querying.  Otherwise a command issued right after `draw` (e.g. sed/oed)
+     * can race the async render-loop sync and see no shapes -- the drawn source
+     * exists (who lists it) but the scene-controller enumeration is empty until
+     * a full sync.  ensure_owned() is a cheap no-op once synced. */
+    (void)ged_draw_obol_scene_controller_ensure_owned(gedp, 1);
     int found = 0;
     ged_draw_source_root_foreach_shape_ref(gedp, 0, _any_shape_cb, &found);
     return found;

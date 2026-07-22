@@ -955,6 +955,14 @@ not_state(struct mged_state *s, int desired, char *str)
 static void
 stateChange(struct mged_state *s, int UNUSED(oldstate), int newstate)
 {
+    /* Returning to view ends any oed/sed edit: undo sub-object isolation
+     * (instantiated target + suppressed ancestor subpath).  This fires on
+     * accept/reject and abnormal exits, but NOT on oed_reset/sed_reset (those
+     * stay in the edit state), so a mid-edit reset preserves the isolation.
+     * Idempotent: no-op when no isolation is active. */
+    if (newstate == ST_VIEW && s->edit_isolation.active)
+	mged_edit_release_isolation(s);
+
     switch (newstate) {
 	case ST_VIEW:
 	    /* constant tracking OFF */

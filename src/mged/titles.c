@@ -398,7 +398,12 @@ dotitles(struct mged_state *s, struct bu_vls *overlay_vls)
 	(MEDIT(s)->edit_flag >= 0 ||
 	 (s->global_editing_state == ST_O_EDIT && !highlighted_legacy_eval))) {
 	mat_t xform;
-	struct rt_point_labels pl[8+1];
+	/* Zero-initialize: primitive ft_labels functions fill only their own
+	 * entries and do NOT write a terminating sentinel, so the render loop
+	 * below (which stops at the first empty str) relies on the unused tail
+	 * being empty.  Without this, uninitialized stack garbage produces bogus
+	 * labels at random positions that change every frame. */
+	struct rt_point_labels pl[8+1] = {RT_POINT_LABELS_INIT};
 	point_t lines[2*4];	/* up to 4 lines to draw */
 	int num_lines=0;
 

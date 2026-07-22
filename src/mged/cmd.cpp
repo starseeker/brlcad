@@ -58,6 +58,13 @@
 #include "rt/geom.h"
 #include "ged.h"
 
+/* Headless (offscreen software) display endpoint, so `screengrab` can capture
+ * the scene when mged runs without a GUI (e.g. mged -c for automated testing).
+ * Mirrors gsh's headless endpoint setup. */
+#include "BObol/BDisplayEndpoint.h"
+#include "BObol/BHostFactory.h"
+#include "BObol/BHeadlessWindowHost.h"
+
 #include "tcl.h"
 #ifdef HAVE_TK
 #  include "tk.h"
@@ -1407,6 +1414,71 @@ cmd_ged_display_wrapper(ClientData clientData, Tcl_Interp *interpreter, int argc
  * the Tcl event loop never fires and refresh() would otherwise not
  * be called before getDisplayImage().
  */
+/* Ensure the view has a display endpoint capable of rendering + readback.  If
+ * none exists (headless mged, e.g. `mged -c`), attach an offscreen software
+ * "headless" endpoint so screengrab can capture the scene.  Returns 1 if the
+ * view has (or now has) a usable endpoint.  No-op when a real (Tk) endpoint is
+ * already attached. */
+static int
+mged_headless_endpoint_ensure(struct mged_state *s, struct ged_view_context *view_ctx)
+{
+    if (!s || !view_ctx)
+	return 0;
+
+    bobol_display_endpoint_t *endpoint =
+	ged_view_context_display_endpoint_get(view_ctx);
+
+    const struct bv *view =
+	bv_context_view_const((const struct bv_context *)view_ctx);
+    unsigned int width = (view && bv_width_get(view) > 0) ?
+	(unsigned int)bv_width_get(view) : 512u;
+    unsigned int height = (view && bv_height_get(view) > 0) ?
+	(unsigned int)bv_height_get(view) : 512u;
+
+    if (endpoint) {
+	const char *factory = bobol_display_endpoint_host_factory_name(endpoint);
+	if (factory) {
+	    /* A real (Tk) endpoint is already present -- leave it alone. */
+	    if (!BU_STR_EQUAL(factory, "headless"))
+		return 1;
+	    return bobol_display_endpoint_resize(endpoint, width, height, 1.0);
+	}
+    } else {
+	endpoint = bobol_display_endpoint_create(NULL, 0);
+	if (!endpoint)
+	    return 0;
+	if (!ged_view_context_display_endpoint_set(view_ctx, endpoint, 1)) {
+	    bobol_display_endpoint_destroy(endpoint);
+	    return 0;
+	}
+    }
+
+    (void)bobol_headless_host_factory_register();
+
+    struct bobol_host_desc desc = {0};
+    desc.struct_size = sizeof(desc);
+    desc.mode = BOBOL_HOST_MODE_HEADLESS;
+    desc.width = width;
+    desc.height = height;
+    desc.device_pixel_ratio = 1.0;
+    desc.required_capabilities = BOBOL_HOST_CAP_PIXEL_PRESENT |
+	BOBOL_HOST_CAP_PROGRESSIVE_PRESENT | BOBOL_HOST_CAP_READBACK |
+	BOBOL_HOST_CAP_FRAMEBUFFER_PRESENT;
+    desc.visible = 0;
+    desc.title = "MGED headless";
+    desc.vsync = BOBOL_HOST_VSYNC_AUTO;
+
+    if (!bobol_display_endpoint_render_engine_set(endpoint,
+	    BOBOL_RENDER_ENGINE_AUTO) ||
+	!bobol_display_endpoint_host_open(endpoint, "headless", &desc) ||
+	!bobol_display_endpoint_render_engine_set(endpoint,
+	    BOBOL_RENDER_ENGINE_SW)) {
+	bobol_display_endpoint_host_detach(endpoint);
+	return 0;
+    }
+    return 1;
+}
+
 int
 cmd_screengrab(ClientData clientData, Tcl_Interp *interpreter, int argc, const char *argv[])
 {
@@ -1417,6 +1489,11 @@ cmd_screengrab(ClientData clientData, Tcl_Interp *interpreter, int argc, const c
 
     if (s->gedp == GED_NULL)
 	return TCL_OK;
+
+    /* Attach an offscreen software endpoint if running headless, so the grab
+     * has something to render + read back. */
+    if (view_state && view_state->vs_gvp)
+	(void)mged_headless_endpoint_ensure(s, view_state->vs_gvp);
 
     if (setjmp(jmp_env) == 0)
 	(void)signal(SIGINT, sig3);  /* allow interrupts */

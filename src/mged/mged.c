@@ -530,6 +530,10 @@ new_edit_mats(struct mged_state *s)
     }
 
     mged_current_display_set(s, save_display);
+
+    /* Object edit has no dozoom-style scene transform in the Obol branch;
+     * re-plot the edited object at its live pose so the move is visible. */
+    mged_oedit_live_preview(s);
 }
 
 

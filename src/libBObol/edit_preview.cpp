@@ -180,6 +180,14 @@ SoBRLEditPreview::appendLineSet(const SbString &identity,
     shape->recordRole = "edit-preview";
     shape->geometryKind = "line";
     shape->editEmphasis = TRUE;
+    /* Edit previews must render in the edit-emphasis color, not the source
+     * solid's material.  Without an explicit override the shape inherits the
+     * edited solid's material (e.g. LIGHT's red) via cad_shape_color().  Apply
+     * the conventional edit color (yellow, matching MGED's cs_edit_info
+     * default); a caller-supplied style color (store_apply_vlist_style) still
+     * overrides this if the edit transaction ever plumbs a scheme color. */
+    shape->colorOverride = TRUE;
+    shape->color = SbColor(1.0f, 1.0f, 0.0f);
     const SbString &intentId = this->editIntentId.getValue();
     const SbString &intentRole = this->editIntentRole.getValue();
     shape->editIntentId = intentId.getLength() ? intentId : this->previewId.getValue();

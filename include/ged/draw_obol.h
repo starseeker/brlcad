@@ -151,6 +151,19 @@ GED_EXPORT int
 ged_draw_obol_lighting_sync(struct ged *gedp,
 					  struct ged_view_context *view_ctx);
 
+/**
+ * Erase a sub-path from within an already-drawn ancestor group's realization
+ * (physically removes the child node via the scene controller's
+ * eraseGroupSubpath).  parent_path is the drawn ancestor (e.g. "all.g"), and
+ * subpath is the path relative to it (e.g. "light.r/LIGHT").  Returns 1 if a
+ * node was removed.  Used by mged's sub-object edit isolation to suppress the
+ * duplicate of an object being edited.
+ */
+GED_EXPORT int
+ged_draw_obol_group_erase_subpath_for_path(struct ged *gedp,
+					   const char *parent_path,
+					   const char *subpath);
+
 __END_DECLS
 
 #endif /* GED_DRAW_OBOL_H */
