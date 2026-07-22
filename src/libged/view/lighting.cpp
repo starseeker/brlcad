@@ -37,8 +37,8 @@
 #include "bv.h"
 #include "ged/draw_obol.h"
 
-#include "../../ged_private.h"
-#include "../ged_view.h"
+#include "../ged_private.h"
+#include "./ged_view.h"
 
 #define HELPFLAG "--print-help"
 #define PURPOSEFLAG "--print-purpose"
