@@ -30,11 +30,15 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <map>
+#include <string>
 #include <vector>
 
 class SoPickedPoint;
 class SoGLRenderAction;
 class SoRayPickAction;
+class SoGLDisplayList;
+class SoNotList;
 struct BObolLodRequest;
 struct BObolLodResult;
 
@@ -208,6 +212,19 @@ public:
 
     void GLRender(SoGLRenderAction *action) override;
     void computeBBox(SoAction *action, SbBox3f &box, SbVec3f &center) override;
+    void notify(SoNotList *list) override;
+
+    /* Per-GL-context retained geometry (display lists) so a resident mesh is
+     * uploaded once and re-called each frame instead of re-submitted in
+     * immediate mode.  renderListSignature identifies which payload/level is
+     * currently baked; when it changes (LoD refinement, mode switch) the lists
+     * are discarded and rebuilt.  Kept to OpenGL 2.0-safe display lists so the
+     * software (osmesa) fallback works.  Public so the file-local render
+     * helpers can share one implementation across the shaded/wire/hidden-line
+     * paths. */
+    void clearRenderLists(void);
+    std::map<int, SoGLDisplayList *> renderLists;
+    std::string renderListSignature;
 
 protected:
     virtual ~SoBRLMeshShape(void);

@@ -1466,14 +1466,26 @@ lod_task_dependencies_ready(const BObolLodServicePrivate *p,
 static std::deque<BObolLodWorkItem>::iterator
 lod_find_ready_task(BObolLodServicePrivate *p)
 {
-    std::deque<BObolLodWorkItem>::iterator it;
+    /* Prefer the coarsest ready task (lowest quality tier) so the cheap proxy /
+     * bounding-box stages for the whole scene drain ahead of the expensive mesh
+     * stages.  Plain FIFO selection picks an object's mesh task (which became
+     * ready as soon as its own proxies finished) before a later object's proxy,
+     * so bounding boxes trickle in interleaved with long mesh stalls.  Selecting
+     * by tier instead yields a fast "all bounding boxes first, then refine to
+     * meshes" frontier.  Ties keep FIFO (submission) order, preserving each
+     * object's AABB -> OBB -> mesh dependency progression. */
+    std::deque<BObolLodWorkItem>::iterator best = p->pending.end();
 
-    for (it = p->pending.begin(); it != p->pending.end(); ++it) {
-	if (lod_task_dependencies_ready(p, it->task))
-	    return it;
+    for (std::deque<BObolLodWorkItem>::iterator it = p->pending.begin();
+	 it != p->pending.end(); ++it) {
+	if (!lod_task_dependencies_ready(p, it->task))
+	    continue;
+	if (best == p->pending.end() ||
+	    it->task.request.qualityTier < best->task.request.qualityTier)
+	    best = it;
     }
 
-    return p->pending.end();
+    return best;
 }
 
 static BObolLodResult

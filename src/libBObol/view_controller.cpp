@@ -184,7 +184,12 @@ struct ControllerGLFunctions {
 };
 
 BObolProgressiveOptions::BObolProgressiveOptions(void) :
-    maxLodResults(8),
+    /* maxLodResults caps results applied per frame pump.  It is now applied in
+     * batched single-scene traversals (see processPendingLodResults) and still
+     * bounded by maxLodApplyMicroseconds, so a larger cap lets a big assembly
+     * stream in far faster without risking frame-time spikes (the microsecond
+     * budget short-circuits the batch loop). */
+    maxLodResults(256),
     maxLodApplyMicroseconds(4000),
     maxProviders(0),
     maxSources(4),
@@ -3659,6 +3664,13 @@ BObolViewController::processPendingLodResults(size_t maxResults,
 	return this->d->lastLodResultCount;
     }
 
+    /* Apply drained results in batches rather than one-at-a-time.  Each
+     * applyLodResults() call performs a single SoBRLLodUpdateAction traversal
+     * of the whole scene, so draining one result per traversal makes the total
+     * cost O(results * scene) and stalls the UI while a large assembly streams
+     * in.  Batching collapses many results into one traversal; the microsecond
+     * budget is still honored by checking the clock between batches. */
+    static const size_t apply_batch = 64;
     const int64_t start = bu_gettime();
     size_t processed = 0;
     unsigned int matched = 0;
@@ -3667,7 +3679,13 @@ BObolViewController::processPendingLodResults(size_t maxResults,
     unsigned int unmatched = 0;
     SbString diagnostics;
     while (maxResults == 0 || processed < maxResults) {
-	(void)this->applyLodResults(this->d->lodService, 1);
+	size_t batch = apply_batch;
+	if (maxResults != 0) {
+	    const size_t remaining = maxResults - processed;
+	    if (remaining < batch)
+		batch = remaining;
+	}
+	(void)this->applyLodResults(this->d->lodService, batch);
 	if (this->d->lastLodResultCount == 0)
 	    break;
 	processed += this->d->lastLodResultCount;

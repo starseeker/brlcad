@@ -39,6 +39,8 @@
 #include "BObol/BMeshLodCache.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
+#include "ged/scene.h"
+#include "ged/selection.h"
 #include "rt/db_fullpath.h"
 #include "rt/view.h"
 
@@ -1860,15 +1862,8 @@ extern int ged_draw_group_ref_appearance_settings(struct ged *gedp,
 extern int ged_draw_group_ref_set_visible(struct ged *gedp,
 						     ged_draw_group_ref ref,
 						     int visible);
-extern int ged_draw_shape_ref_set_visible(struct ged *gedp,
-						     ged_draw_shape_ref ref,
-						     int visible);
-extern int ged_draw_shape_ref_get_color(struct ged *gedp,
-					   ged_draw_shape_ref ref,
-					   unsigned char rgb[3]);
-extern int ged_draw_shape_ref_set_color(struct ged *gedp,
-					   ged_draw_shape_ref ref,
-					   const unsigned char rgb[3]);
+/* ged_draw_shape_ref_set_visible, _get_color, _set_color are declared in the
+ * public ged/scene.h (with GED_EXPORT); do not redeclare them here. */
 extern int ged_draw_shape_ref_set_highlighted(struct ged *gedp,
 							 ged_draw_shape_ref ref,
 							 int highlighted);
@@ -1887,14 +1882,9 @@ extern int ged_draw_shape_ref_lod_ensure(struct ged *gedp,
 						    struct ged_view_context *first_view_ctx,
 						    struct ged_view_context **view_ctxs,
 						    size_t view_ctx_count);
-extern struct ged_view_context *ged_draw_shape_ref_view_context(
-	struct ged *gedp, ged_draw_shape_ref ref);
-extern int ged_view_selection_add_shape(
-	struct ged *gedp,
-	struct ged_view_context *view_ctx,
-	ged_draw_shape_ref ref,
-	struct ged_view_context **selection_view_ctx,
-    struct bu_vls *path);
+/* ged_draw_shape_ref_view_context is declared in the public ged/scene.h and
+ * ged_view_selection_add_shape in ged/selection.h (both with GED_EXPORT); do
+ * not redeclare them here. */
 
 __END_DECLS
 

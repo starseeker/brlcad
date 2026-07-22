@@ -19,11 +19,15 @@
 #include <Inventor/actions/SoRayPickAction.h>
 #include <Inventor/details/SoFaceDetail.h>
 #include <Inventor/details/SoPointDetail.h>
+#include <Inventor/elements/SoGLCacheContextElement.h>
+#include <Inventor/elements/SoGLDisplayList.h>
 #include <Inventor/gl.h>
 
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdint.h>
+#include <string>
 
 SO_NODE_SOURCE(SoBRLMeshShape);
 
@@ -160,12 +164,37 @@ SoBRLMeshShape::SoBRLMeshShape(void)
 
 SoBRLMeshShape::~SoBRLMeshShape(void)
 {
+    this->clearRenderLists();
 }
 
 void
 SoBRLMeshShape::initClass(void)
 {
     SO_NODE_INIT_CLASS(SoBRLMeshShape, SoShape, "Shape");
+}
+
+void
+SoBRLMeshShape::clearRenderLists(void)
+{
+    for (std::map<int, SoGLDisplayList *>::iterator it =
+	 this->renderLists.begin(); it != this->renderLists.end(); ++it) {
+	if (it->second)
+	    it->second->unref();
+    }
+    this->renderLists.clear();
+    this->renderListSignature.clear();
+}
+
+void
+SoBRLMeshShape::notify(SoNotList *list)
+{
+    /* Any field change (new points/indices/normals, mode, selection) may
+     * invalidate baked geometry.  Discard the cached display lists; they are
+     * rebuilt lazily on the next render.  The view-local LoD payload path does
+     * not touch node fields, so it is guarded separately by the render-list
+     * signature in mesh_shape_call_cached_geometry(). */
+    this->clearRenderLists();
+    inherited::notify(list);
 }
 
 void
@@ -1115,51 +1144,11 @@ mesh_shape_emit_triangles(SoBRLMeshShape *shape,
 }
 
 static void
-mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
-			      const BObolViewLodState::MeshPayload *viewPayload)
+mesh_shape_emit_wire_lines(SoBRLMeshShape *shape,
+			   const BObolViewLodState::MeshPayload *viewPayload,
+			   SbBool perPrimitiveColor)
 {
-    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
-		 GL_POLYGON_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT |
-		 GL_LINE_BIT);
-    glDisable(GL_LIGHTING);
-    glEnable(GL_DEPTH_TEST);
-    glDepthMask(GL_TRUE);
-    mesh_shape_enable_transparency(shape);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glDepthFunc(GL_LESS);
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(1.0f, 1.0f);
-    mesh_shape_emit_triangles(shape, viewPayload, FALSE);
-
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDisable(GL_POLYGON_OFFSET_FILL);
-    glDepthFunc(GL_LEQUAL);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    if (shape->lineWidth.getValue() > 0)
-	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
-    set_mesh_gl_material(shape, -1);
-    mesh_shape_emit_triangles(shape, viewPayload,
-			      mesh_shape_needs_per_primitive_color(shape));
-    glPopAttrib();
-}
-
-static void
-mesh_shape_render_wire(SoBRLMeshShape *shape,
-		       const BObolViewLodState::MeshPayload *viewPayload)
-{
-    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
-		 GL_LINE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-    glDisable(GL_LIGHTING);
-    glEnable(GL_DEPTH_TEST);
-    mesh_shape_enable_transparency(shape);
-    if (shape->lineWidth.getValue() > 0)
-	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
-    set_mesh_gl_material(shape, -1);
-
     glBegin(GL_LINES);
-    const SbBool perPrimitiveColor =
-	mesh_shape_needs_per_primitive_color(shape);
     const int triangleCount = viewPayload ? viewPayload->getTriangleCount() :
 			      shape->getTriangleCount();
     for (int i = 0; i < triangleCount; i++) {
@@ -1183,6 +1172,133 @@ mesh_shape_render_wire(SoBRLMeshShape *shape,
 	glVertex3f(a[0], a[1], a[2]);
     }
     glEnd();
+}
+
+/* Identify which geometry is currently baked into the cached display lists.
+ * 'kind' distinguishes the triangle stream (shaded / hidden-line) from the
+ * wire stream.  For a view-local LoD payload the cache key + active level +
+ * triangle count uniquely name the resident level (the node fields do not
+ * change, so notify() cannot see refinement).  For node-owned geometry the
+ * triangle/normal counts suffice because notify() already discards the cache
+ * whenever a field changes. */
+static std::string
+mesh_shape_geometry_signature(SoBRLMeshShape *shape, char kind,
+			      const BObolViewLodState::MeshPayload *viewPayload)
+{
+    std::ostringstream out;
+    out << kind << '|';
+    if (viewPayload) {
+	out << 'V' << '|'
+	    << viewPayload->cacheKey.getString() << '|'
+	    << viewPayload->activeLevel << '|'
+	    << viewPayload->getTriangleCount() << '|'
+	    << static_cast<uint64_t>(viewPayload->mesh.normals.size());
+    } else {
+	const SoBRLMeshShape *geom = shape->getGeometrySource();
+	out << 'N' << '|'
+	    << shape->getTriangleCount() << '|'
+	    << geom->normal.getNum();
+    }
+    return out.str();
+}
+
+/* Render the mesh geometry from a per-GL-context display list, building it on
+ * first use (or after the baked signature changes) and re-calling it on every
+ * subsequent frame.  This replaces per-frame immediate-mode submission of every
+ * vertex, which dominated frame time for resident LoD meshes.  Only the raw
+ * geometry (glBegin/glVertex/glNormal) is captured; material, lighting, line
+ * width, polygon mode and transparency remain caller-set GL state applied when
+ * the list is called, so the same triangle list serves both the shaded and
+ * hidden-line passes. */
+static void
+mesh_shape_call_cached_geometry(SoBRLMeshShape *shape,
+				SoGLRenderAction *action, char kind,
+				const BObolViewLodState::MeshPayload *viewPayload)
+{
+    SoState *state = action->getState();
+    const std::string signature =
+	mesh_shape_geometry_signature(shape, kind, viewPayload);
+    if (shape->renderListSignature != signature)
+	shape->clearRenderLists();
+
+    const int context = SoGLCacheContextElement::get(state);
+    std::map<int, SoGLDisplayList *>::iterator found =
+	shape->renderLists.find(context);
+    if (found != shape->renderLists.end()) {
+	found->second->call(state);
+	return;
+    }
+
+    SoGLDisplayList *list =
+	new SoGLDisplayList(state, SoGLDisplayList::DISPLAY_LIST);
+    list->ref();
+    shape->renderLists[context] = list;
+    shape->renderListSignature = signature;
+    list->open(state);
+    if (kind == 'W')
+	mesh_shape_emit_wire_lines(shape, viewPayload, FALSE);
+    else
+	mesh_shape_emit_triangles(shape, viewPayload, FALSE);
+    list->close(state);
+    list->call(state);
+}
+
+static void
+mesh_shape_render_hidden_line(SoBRLMeshShape *shape,
+			      SoGLRenderAction *action,
+			      const BObolViewLodState::MeshPayload *viewPayload)
+{
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
+		 GL_POLYGON_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT |
+		 GL_LINE_BIT);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    mesh_shape_enable_transparency(shape);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glDepthFunc(GL_LESS);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.0f, 1.0f);
+    const SbBool perPrimitiveColor =
+	mesh_shape_needs_per_primitive_color(shape);
+    if (perPrimitiveColor)
+	mesh_shape_emit_triangles(shape, viewPayload, FALSE);
+    else
+	mesh_shape_call_cached_geometry(shape, action, 'T', viewPayload);
+
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthFunc(GL_LEQUAL);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    if (shape->lineWidth.getValue() > 0)
+	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
+    set_mesh_gl_material(shape, -1);
+    if (perPrimitiveColor)
+	mesh_shape_emit_triangles(shape, viewPayload, TRUE);
+    else
+	mesh_shape_call_cached_geometry(shape, action, 'T', viewPayload);
+    glPopAttrib();
+}
+
+static void
+mesh_shape_render_wire(SoBRLMeshShape *shape,
+		       SoGLRenderAction *action,
+		       const BObolViewLodState::MeshPayload *viewPayload)
+{
+    glPushAttrib(GL_CURRENT_BIT | GL_ENABLE_BIT | GL_LIGHTING_BIT |
+		 GL_LINE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_DEPTH_TEST);
+    mesh_shape_enable_transparency(shape);
+    if (shape->lineWidth.getValue() > 0)
+	glLineWidth(static_cast<GLfloat>(shape->lineWidth.getValue()));
+    set_mesh_gl_material(shape, -1);
+
+    if (mesh_shape_needs_per_primitive_color(shape))
+	mesh_shape_emit_wire_lines(shape, viewPayload, TRUE);
+    else
+	mesh_shape_call_cached_geometry(shape, action, 'W', viewPayload);
     glPopAttrib();
 }
 
@@ -1286,12 +1402,12 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
 
     if (this->hiddenLine.getValue() ||
 	this->drawMode.getValue() == BOBOL_LOD_DRAW_HIDDEN_LINE) {
-	mesh_shape_render_hidden_line(this, viewPayload);
+	mesh_shape_render_hidden_line(this, action, viewPayload);
 	return;
     }
 
     if (this->drawMode.getValue() == BOBOL_LOD_DRAW_WIRE) {
-	mesh_shape_render_wire(this, viewPayload);
+	mesh_shape_render_wire(this, action, viewPayload);
 	return;
     }
 
@@ -1307,10 +1423,11 @@ SoBRLMeshShape::GLRender(SoGLRenderAction *action)
     if (perPrimitiveColor) {
 	glEnable(GL_COLOR_MATERIAL);
 	glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+	mesh_shape_emit_triangles(this, viewPayload, TRUE);
     } else {
 	glDisable(GL_COLOR_MATERIAL);
+	mesh_shape_call_cached_geometry(this, action, 'T', viewPayload);
     }
-    mesh_shape_emit_triangles(this, viewPayload, perPrimitiveColor);
     glPopAttrib();
 }
 
