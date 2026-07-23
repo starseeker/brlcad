@@ -94,7 +94,7 @@ ged_get_autoview_core(struct ged *gedp, int argc, const char *argv[])
     } else {
 	int obol_empty = 1;
 	if (ged_draw_obol_scene_database_autoview_bounds(gedp, &min, &max,
-		&obol_empty) && !obol_empty) {
+		&obol_empty, 1) && !obol_empty) {
 	    bounds.setBounds(SbVec3f(min[X], min[Y], min[Z]),
 		SbVec3f(max[X], max[Y], max[Z]));
 	}

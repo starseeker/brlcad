@@ -39,6 +39,7 @@
 #include "bu/parallel.h"
 #include "bu/path.h"
 #include "bu/str.h"
+#include "bu/time.h"
 #include "bu/units.h"
 #include "bu/vls.h"
 #include "ged.h"
@@ -115,6 +116,11 @@ static int ged_obol_bind_view_render_root(
     BObolSceneController *shared_scene,
     BObolViewController *view_controller);
 static int ged_obol_node_contains(SoNode *root, SoNode *target);
+static size_t ged_obol_submit_region_bounds_async(
+    struct ged *gedp,
+    struct ged_view_context *view_ctx,
+    const std::unordered_set<std::string> &names,
+    int draw_mode);
 static int ged_obol_progressive_advance_provider(
     BObolViewController *controller,
     void *user_data,
@@ -130,6 +136,39 @@ static int ged_obol_apply_draw_paths_to_scene(
     BObolSceneController *scene,
     uint32_t source_revision,
     int preserve_display_state);
+
+/* Stage timing instrumentation.  Set BOBOL_DRAW_TIMING=1 to log where time is
+ * spent across the progressive/coarse-first pipeline (draw command, structural
+ * snapshot + region bounds, deferred realization job, per-pump deepening,
+ * provider pump).  Off by default (single getenv, cached). */
+static int
+ged_obol_timing_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+	enabled = getenv("BOBOL_DRAW_TIMING") ? 1 : 0;
+    return enabled;
+}
+
+static void
+ged_obol_timing_log(const char *label, int64_t start_us, long count)
+{
+    if (!ged_obol_timing_enabled())
+	return;
+    const double ms = (double)(bu_gettime() - start_us) / 1000.0;
+    if (count >= 0)
+	bu_log("[obol-timing] %-34s %8.1f ms  (n=%ld)\n", label, ms, count);
+    else
+	bu_log("[obol-timing] %-34s %8.1f ms\n", label, ms);
+}
+
+struct ged_obol_scoped_timer {
+    const char *label;
+    int64_t start;
+    explicit ged_obol_scoped_timer(const char *l) :
+	label(l), start(bu_gettime()) {}
+    ~ged_obol_scoped_timer() { ged_obol_timing_log(label, start, -1); }
+};
 
 static struct bv *
 ged_obol_bv(struct ged_view_context *view_ctx)
@@ -176,6 +215,22 @@ struct ged_obol_progressive_provider_data {
 	pending_jobs;
     std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>
 	retired_jobs;
+    /* Progressive coarse-outline deepening state, keyed by root instance key.
+     * structuralBudget is the current region-proxy cap being collected; a key in
+     * structuralComplete has had its whole region set populated onto the root's
+     * compact occurrence node (no further deepening needed).  structuralLastCount
+     * and structuralStall track published-occurrence growth so deepening keeps
+     * pumping while async region bounds stream in and finishes once the outline
+     * stops growing. */
+    std::map<std::string, size_t> structuralBudget;
+    std::map<std::string, size_t> structuralLastCount;
+    std::map<std::string, int> structuralStall;
+    std::set<std::string> structuralComplete;
+    /* Roots that are receiving streamed per-leaf geometry from a running
+     * realization job.  While a root streams, coarse deepening must not rebuild
+     * its box registry (that would discard the streamed geometry), and a
+     * cancelled/retired job's partial stream is discarded by clearing the key. */
+    std::set<std::string> streamingRoots;
 };
 
 struct ged_obol_deferred_realization_item {
@@ -200,6 +255,10 @@ struct ged_obol_deferred_realization_item {
     std::string instanceKey;
     SbBool primaryScene;
     SbBool allowWireFallback;
+    /* Worker->pump stream of completed per-leaf occurrences.  Shared with the
+     * worker lambda so it outlives every push (the job join blocks on the
+     * worker before items are destroyed). */
+    std::shared_ptr<BObolCompactOccurrenceStream> stream;
 };
 
 struct ged_obol_deferred_realization_job {
@@ -226,6 +285,11 @@ struct ged_obol_deferred_realization_job {
     void cancel(void)
     {
 	cancelRequested.store(true, std::memory_order_release);
+	for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	     items) {
+	    if (item && item->stream)
+		item->stream->requestCancel();
+	}
     }
 
     bool start(void)
@@ -253,10 +317,17 @@ struct ged_obol_deferred_realization_job {
 			representation == SoBRLDatabaseSource::REPRESENTATION_SHADED ||
 			representation == SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS ||
 			representation == SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE;
-		    SbBool realized = mesh ? source->realizeDatabaseMesh() :
-			source->realizeDatabaseWireframe();
+		    const int64_t realize_start = bu_gettime();
+		    BObolCompactOccurrenceStream *stream =
+			item->stream ? item->stream.get() : NULL;
+		    SbBool realized = mesh ? source->realizeDatabaseMesh(stream) :
+			source->realizeDatabaseWireframe(stream);
 		    if (!realized && mesh && item->allowWireFallback)
-			realized = source->realizeDatabaseWireframe();
+			realized = source->realizeDatabaseWireframe(stream);
+		    ged_obol_timing_log(mesh ?
+			"job: realizeDatabaseMesh (worker)" :
+			"job: realizeDatabaseWireframe (worker)",
+			realize_start, -1);
 		    if (!realized) {
 			bu_log("Obol deferred realization failed for '%s': %s\n",
 			    item->instanceKey.c_str(),
@@ -9764,7 +9835,8 @@ ged_draw_obol_scene_database_autoview_bounds(
     struct ged *gedp,
     vect_t *min,
     vect_t *max,
-    int *empty_out)
+    int *empty_out,
+    int allow_member_bounds)
 {
     if (!gedp || !min || !max || !empty_out)
 	return 0;
@@ -9789,19 +9861,42 @@ ged_draw_obol_scene_database_autoview_bounds(
 	    !source.visible)
 	    continue;
 
-	vect_t member_min;
-	vect_t member_max;
-	if (source.path.getLength() > 0 &&
-	    ged_obol_database_source_member_autoview_bounds(gedp,
-		source.path.getString(), &member_min, &member_max)) {
-	    VMIN(*min, member_min);
-	    VMAX(*max, member_max);
-	    have_source_bounds = 1;
+	/* Prefer the source's own already-computed AABB (from the coarse proxy
+	 * occurrence union or realized geometry): it is essentially free.  Only
+	 * fall back to the expensive per-child rt_obj_bounds member walk when the
+	 * cheap bounds are unavailable or non-finite (e.g. a halfspace-dominated
+	 * aggregate the member walk deliberately skips).  Framing the view must
+	 * never prep the whole assembly synchronously -- that was ~11s of the
+	 * first-draw stall on large models. */
+	const SbBool cheap_bounds_usable = source.sourceBoundsValid &&
+	    !source.sourceBounds.isEmpty() &&
+	    isfinite(source.sourceBounds.getMin()[0]) &&
+	    isfinite(source.sourceBounds.getMin()[1]) &&
+	    isfinite(source.sourceBounds.getMin()[2]) &&
+	    isfinite(source.sourceBounds.getMax()[0]) &&
+	    isfinite(source.sourceBounds.getMax()[1]) &&
+	    isfinite(source.sourceBounds.getMax()[2]);
+
+	if (!cheap_bounds_usable) {
+	    /* The only remaining bound is the expensive per-child rt_obj_bounds
+	     * walk.  Skip it on the coarse-first / progressive path (caller passes
+	     * allow_member_bounds=0): framing there is refined progressively as
+	     * cheap proxy bounds stream in, and prepping the whole assembly just to
+	     * frame the first frame was ~11s of stall.  Explicit autoview commands
+	     * pass 1 for precise framing. */
+	    if (!allow_member_bounds)
+		continue;
+	    vect_t member_min;
+	    vect_t member_max;
+	    if (source.path.getLength() > 0 &&
+		ged_obol_database_source_member_autoview_bounds(gedp,
+		    source.path.getString(), &member_min, &member_max)) {
+		VMIN(*min, member_min);
+		VMAX(*max, member_max);
+		have_source_bounds = 1;
+	    }
 	    continue;
 	}
-
-	if (!source.sourceBoundsValid || source.sourceBounds.isEmpty())
-	    continue;
 
 	const SbVec3f source_min = source.sourceBounds.getMin();
 	const SbVec3f source_max = source.sourceBounds.getMax();
@@ -16016,6 +16111,13 @@ struct ged_obol_cheap_bounds_context {
     std::unordered_map<ged_db_index_id, ged_obol_cheap_local_bounds>
 	objectBounds;
     std::unordered_set<ged_db_index_id> activeObjects;
+    /* When cacheOnly is set, never compute a fresh AABB with rt_bound_instance
+     * on the calling (UI) thread.  Treat an object with no cached proxy AABB as
+     * "not yet available", record its name in missingNames, and return failure
+     * so the caller can compute it on the LoD worker pool instead.  Keeps the
+     * coarse outline's bounds work off the UI thread on a cold first draw. */
+    int cacheOnly;
+    std::unordered_set<std::string> missingNames;
 };
 
 static int
@@ -16074,6 +16176,15 @@ ged_obol_cheap_local_bounds_object(ged_obol_cheap_bounds_context &ctx,
 	VMOVE(boundsMin, local.bmin);
 	VMOVE(boundsMax, local.bmax);
 	return 1;
+    }
+
+    /* Cache-only: do not compute a fresh AABB on this (UI) thread.  Record the
+     * name so the caller can schedule the computation on the LoD worker pool,
+     * and report the object as not-yet-available. */
+    if (ctx.cacheOnly) {
+	if (objectName && objectName[0])
+	    ctx.missingNames.insert(objectName);
+	return 0;
     }
 
     if (!record.is_comb) {
@@ -16223,14 +16334,31 @@ struct ged_obol_structural_proxy_context {
     std::unordered_set<ged_db_index_id> persistedBounds;
     size_t proxyCount;
     size_t metadataCount;
+    /* Traversal caps.  Defaulted to the bounded synchronous limits; the
+     * progressive provider raises them over successive frames to deepen the
+     * compact-occurrence coarse outline without exploding scene-graph nodes. */
+    size_t maxNodes;
+    size_t maxProxies;
+    size_t maxDepth;
+    size_t maxMetadata;
 };
+
+static void
+ged_obol_structural_proxy_context_init_caps(
+	struct ged_obol_structural_proxy_context &ctx)
+{
+    ctx.maxNodes = ged_obol_structural_proxy_max_nodes;
+    ctx.maxProxies = ged_obol_structural_proxy_max_proxies;
+    ctx.maxDepth = ged_obol_structural_proxy_max_depth;
+    ctx.maxMetadata = ged_obol_structural_proxy_max_metadata;
+}
 
 static int
 ged_obol_structural_proxy_metadata(struct ged_obol_structural_proxy_context &ctx,
 	const char *path, struct BObolDrawMetadataRecord *metadata)
 {
     if (!metadata || !ctx.gedp || !ctx.gedp->dbip || !path || !path[0] ||
-	ctx.metadataCount >= ged_obol_structural_proxy_max_metadata)
+	ctx.metadataCount >= ctx.maxMetadata)
 	return 0;
 
     ctx.metadataCount++;
@@ -16265,7 +16393,7 @@ ged_obol_collect_structural_proxy_children(
     const size_t childCount = ged_db_index_child_count(ctx.gedp, parentId);
     int collected = 0;
     for (size_t row = 0; row < childCount; row++) {
-	if (ctx.nodes.size() >= ged_obol_structural_proxy_max_nodes) {
+	if (ctx.nodes.size() >= ctx.maxNodes) {
 	    break;
 	}
 
@@ -16307,16 +16435,16 @@ ged_obol_collect_structural_proxy_children(
 	node.metadataValid = ged_obol_structural_proxy_metadata(ctx,
 	    childPath.c_str(), &node.metadata);
 
-	/* Material boundaries are a better first visual than arbitrary comb
-	 * levels.  Regions and primitive leaves are semantic boundaries even
-	 * without an explicit material override. */
+	/* Box each primitive leaf: the coarse outline is per-leaf so a leaf's
+	 * box is replaced in place by its own realized geometry as it streams
+	 * in (mergeCompactOccurrences matches by leaf path).  Combs are recursed
+	 * through -- regions and material boundaries no longer stop the walk --
+	 * except at the depth cap, where a comb is boxed as one node until a
+	 * deeper deepening pass reaches its leaves. */
 	const int semanticBoundary = !child.record.is_comb ||
-	    (child.record.dp && (child.record.dp->d_flags & RT_DIR_REGION)) ||
-	    (node.metadataValid && (node.metadata.isRegion ||
-			      node.metadata.hasColor)) ||
-	    depth >= ged_obol_structural_proxy_max_depth;
+	    depth >= ctx.maxDepth;
 	if (semanticBoundary) {
-	    if (ctx.proxyCount >= ged_obol_structural_proxy_max_proxies) {
+	    if (ctx.proxyCount >= ctx.maxProxies) {
 		break;
 	    }
 	    point_t boundsMin;
@@ -16640,7 +16768,10 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 	struct ged_view_context *view_ctx,
 	const char *path,
 	const char *root_instance_key,
-	int draw_mode)
+	int draw_mode,
+	size_t capProxies = 0,
+	size_t capDepth = 0,
+	size_t capNodes = 0)
 {
     if (!gedp || !gedp->dbip || !path || !path[0] ||
 	!root_instance_key || !root_instance_key[0])
@@ -16659,8 +16790,24 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
     ctx.boundsContext.gedp = gedp;
     ctx.boundsContext.ttol = defaultTtol;
     BN_TOL_INIT(&ctx.boundsContext.tol);
+    ctx.boundsContext.cacheOnly = 1;
     ctx.proxyCount = 0;
     ctx.metadataCount = 0;
+    /* Default to the bounded synchronous caps; the progressive provider passes
+     * larger caps to deepen the flat region-level coarse outline over frames.
+     * All occurrences live on the one root compact node, so raising these grows
+     * the outline without adding scene-graph nodes. */
+    ged_obol_structural_proxy_context_init_caps(ctx);
+    if (capProxies)
+	ctx.maxProxies = capProxies;
+    if (capDepth)
+	ctx.maxDepth = capDepth;
+    if (capNodes)
+	ctx.maxNodes = capNodes;
+    else if (capProxies && capNodes == 0)
+	ctx.maxNodes = capProxies > ctx.maxNodes ? capProxies * 4 : ctx.maxNodes;
+    if (capProxies && ctx.maxMetadata < capProxies)
+	ctx.maxMetadata = capProxies;
 
     const std::string rootPath = ged_obol_skip_leading_slash(path);
     SoBRLDatabaseSource *root = scene->findDatabaseSourceInstance(
@@ -16703,9 +16850,24 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 	pathLength)
 	return 0;
 
-    if (!ged_obol_collect_structural_proxy_children(ctx, ids.back(), rootPath,
-	root_instance_key, SbMatrix::identity(), 1) || !ctx.proxyCount)
-	return 0;
+    const int64_t collect_start = bu_gettime();
+    const int collected_ok = ged_obol_collect_structural_proxy_children(ctx,
+	ids.back(), rootPath, root_instance_key, SbMatrix::identity(), 1);
+    ged_obol_timing_log("structural collect+bounds (cap)",
+	collect_start, (long)ctx.proxyCount);
+    /* Cache-only collection above skipped regions whose AABB was not cached;
+     * compute those on the LoD worker pool.  A later provider pump re-runs this
+     * snapshot and publishes them as the cache warms -- keeping rt_bound_instance
+     * off the UI thread on a cold first draw. */
+    const size_t scheduled_bounds = ged_obol_submit_region_bounds_async(
+	gedp, view_ctx, ctx.boundsContext.missingNames, draw_mode);
+    ged_obol_timing_log("structural: async bounds scheduled",
+	collect_start, (long)ctx.boundsContext.missingNames.size());
+    if (!collected_ok || !ctx.proxyCount) {
+	/* Nothing publishable yet, but async work may now be in flight; tell the
+	 * caller so it does not fall back to a synchronous whole-model bounds. */
+	return scheduled_bounds > 0 ? -1 : 0;
+    }
 
     std::vector<BObolCompactOccurrence> occurrences;
     occurrences.reserve(ctx.proxyCount);
@@ -16719,13 +16881,26 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
     }
 
     if (occurrences.empty())
-	return 0;
+	return scheduled_bounds > 0 ? -1 : 0;
     ged_obol_scene_mutation_batch_scope batch(scene, 1, occurrences.size());
     if (root->setCompactOccurrenceRegistry(occurrences) <= 0) {
-	return 0;
+	return scheduled_bounds > 0 ? -1 : 0;
 	}
+    /* Persist the manifest for instant warm-start only when the walk captured
+     * the whole region set.  A truncated (capped) pass -- e.g. the small
+     * synchronous first snapshot before the provider deepens it -- or a pass
+     * with region bounds still being computed asynchronously must not freeze a
+     * partial outline into the cache. */
+    const int truncated =
+	(ctx.proxyCount >= ctx.maxProxies) ||
+	(ctx.nodes.size() >= ctx.maxNodes) ||
+	!ctx.boundsContext.missingNames.empty();
+    if (!truncated)
 	(void)ged_obol_store_structural_proxy_manifest(gedp, rootPath, ctx);
-    return ged_obol_database_source_mark_published_current(scene, root);
+    (void)ged_obol_database_source_mark_published_current(scene, root);
+    /* Report async-pending so the caller keeps refining and does not fall back
+     * to a synchronous whole-model bounds computation. */
+    return scheduled_bounds > 0 ? -1 : 1;
 }
 
 static int
@@ -16843,6 +17018,43 @@ ged_obol_lod_service_incremental_generation(BObolLodService *service)
     if (generation != 0 && !service->isGenerationCancelled(generation))
 	return generation;
     return service->beginGeneration();
+}
+
+/* Schedule region-level AABB computation on the LoD worker pool for objects that
+ * had no cached proxy bound during a cache-only structural pass.  Each task
+ * computes rt_obj_bounds for one object and writes it to the draw proxy cache
+ * (publishResult=FALSE), so a later cache-only pass on the UI thread can publish
+ * that region's coarse box without ever calling rt_bound_instance itself. */
+static size_t
+ged_obol_submit_region_bounds_async(
+    struct ged *gedp,
+    struct ged_view_context *view_ctx,
+    const std::unordered_set<std::string> &names,
+    int draw_mode)
+{
+    if (!gedp || !gedp->dbip || names.empty())
+	return 0;
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    if (!controller)
+	return 0;
+    BObolLodService *service = ged_obol_lod_service_ensure_passive(controller);
+    if (!service || !service->isRunning())
+	return 0;
+    const char *database_id = gedp->dbip->dbi_filename ?
+	gedp->dbip->dbi_filename : "";
+    const uint64_t generation =
+	ged_obol_lod_service_incremental_generation(service);
+    const uint32_t source_revision =
+	ged_obol_fold_revision(ged_draw_scene_revision(gedp));
+    size_t submitted = 0;
+    for (const std::string &name : names) {
+	if (name.empty())
+	    continue;
+	submitted += ged_obol_submit_child_aabb_prewarm(service, gedp->dbip,
+	    database_id, generation, name.c_str(), name.c_str(),
+	    draw_mode, source_revision);
+    }
+    return submitted;
 }
 
 extern "C" size_t
@@ -17351,7 +17563,7 @@ ged_obol_progressive_autoview_apply(
     vect_t bmax;
     int empty = 1;
     if (!ged_draw_obol_scene_database_autoview_bounds(data->gedp, &bmin,
-	&bmax, &empty) || empty)
+	&bmax, &empty, 0) || empty)
 	return 0;
 
     if (!bv_autoview_bounds(view, data->autoview_factor, bmin, bmax))
@@ -17519,8 +17731,10 @@ ged_obol_start_deferred_realization(
 	}
 	std::unique_ptr<ged_obol_deferred_realization_item> item(
 	    new ged_obol_deferred_realization_item);
+	const int64_t snapshot_start = bu_gettime();
 	item->source = live->createDetachedRealizationSource(&item->database,
 	    &item->snapshotPath);
+	ged_obol_timing_log("deferred: DB snapshot (detach)", snapshot_start, -1);
 	if (!item->source || !item->database) {
 	    bu_log("Obol deferred realization could not snapshot source '%s'\n",
 		key.c_str());
@@ -17530,6 +17744,7 @@ ged_obol_start_deferred_realization(
 	item->primaryScene = usePrimaryScene;
 	item->allowWireFallback =
 	    data->deferred_appearance.strict_fallback ? FALSE : TRUE;
+	item->stream = std::make_shared<BObolCompactOccurrenceStream>();
 	job->items.push_back(std::move(item));
     }
     if (!job->start()) {
@@ -17660,6 +17875,204 @@ ged_obol_deferred_job_append_instance_keys(
     }
 }
 
+/* Occurrences merged onto the live root per pump tick per item.  0 drains the
+ * whole pending queue each tick: a per-frame GUI pump keeps the queue small, and
+ * an infrequent pump (e.g. a headless capture loop) then still shows every
+ * occurrence produced so far rather than a fixed slice, giving a smooth
+ * worker-paced progressive fill.  The merge is O(queue + index) either way. */
+static const size_t GED_OBOL_STREAM_BATCH_CAP = 0;
+
+/* Drain completed per-leaf occurrences from every running realization job and
+ * merge them onto the live compact root as they arrive, so geometry streams in
+ * incrementally instead of appearing all at once when the whole walk finishes.
+ * Returns 1 if any geometry was merged; sets *has_more when a stream still has
+ * queued occurrences beyond this tick's cap. */
+static int
+ged_obol_drain_streamed_realizations(
+    ged_obol_progressive_provider_data *data,
+    BObolViewController *controller,
+    int *has_more)
+{
+    if (!data || !controller)
+	return 0;
+    BObolSceneController *scene = controller->getSceneController();
+    BObolSceneController *primaryScene = ged_draw_obol_scene_controller(
+	data->gedp);
+    if (!scene && !primaryScene)
+	return 0;
+    if (!scene)
+	scene = primaryScene;
+
+    std::vector<std::shared_ptr<ged_obol_deferred_realization_job>> jobs;
+    if (data->deferred_job)
+	jobs.push_back(data->deferred_job);
+    for (const std::shared_ptr<ged_obol_deferred_realization_job> &job :
+	 data->pending_jobs)
+	jobs.push_back(job);
+
+    int merged = 0;
+    for (const std::shared_ptr<ged_obol_deferred_realization_job> &job : jobs) {
+	if (!job)
+	    continue;
+	for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	     job->items) {
+	    if (!item || !item->stream)
+		continue;
+	    BObolSceneController *itemScene = item->primaryScene ?
+		primaryScene : scene;
+	    SoBRLDatabaseSource *live = itemScene ?
+		itemScene->findDatabaseSourceInstance(item->instanceKey.c_str()) :
+		NULL;
+	    SoBRLDatabaseSource *detached = item->source;
+	    if (!live || !detached)
+		continue;
+	    /* A source/draw-mode change after this job launched makes its stream
+	     * stale; the job will be retired by the pump's revision drain.  Do not
+	     * merge stale geometry onto the current live source. */
+	    if (live->sourceRevision.getValue() !=
+		    detached->sourceRevision.getValue() ||
+		live->inputsRevision.getValue() !=
+		    detached->inputsRevision.getValue() ||
+		live->drawMode.getValue() != detached->drawMode.getValue() ||
+		live->representationMode.getValue() !=
+		    detached->representationMode.getValue())
+		continue;
+
+	    std::vector<BObolCompactOccurrence> batch;
+	    (void)item->stream->drain(batch, GED_OBOL_STREAM_BATCH_CAP);
+	    if (batch.empty())
+		continue;
+	    ged_obol_scene_mutation_batch_scope mutation(itemScene, 1,
+		batch.size());
+	    const int mergedCount = live->mergeCompactOccurrences(batch);
+	    if (mergedCount > 0) {
+		merged = 1;
+		data->streamingRoots.insert(item->instanceKey);
+		ged_obol_timing_log("stream: merged occurrences",
+		    bu_gettime(), (long)mergedCount);
+	    }
+	    /* More may have been queued while we drained; ask for another tick. */
+	    if (has_more && item->stream->size() > 0)
+		*has_more = 1;
+	}
+    }
+    return merged;
+}
+
+/* A completed/retired job's streamed preview has been superseded (adopted or
+ * discarded); drop its roots from the streaming set so coarse deepening may
+ * resume for them. */
+static void
+ged_obol_clear_streaming_roots_for_job(
+    ged_obol_progressive_provider_data *data,
+    const std::shared_ptr<ged_obol_deferred_realization_job> &job)
+{
+    if (!data || !job)
+	return;
+    for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	 job->items) {
+	if (item && !item->instanceKey.empty())
+	    data->streamingRoots.erase(item->instanceKey);
+    }
+}
+
+/* Progressively grow the flat region-level coarse outline on each drawn root's
+ * standing compact-occurrence node while its base geometry is still being
+ * realized.  Every region occurrence lives on the one root node, so this fills
+ * the view with boxes far ahead of geometry without exploding scene-graph nodes.
+ * active_roots holds the instance keys whose realization job is still in flight;
+ * once geometry is adopted (or the whole region set is populated) the root is
+ * marked complete and left alone.  Returns 1 if more deepening remains. */
+static int
+ged_obol_progressive_deepen_structural(
+    ged_obol_progressive_provider_data *data,
+    const std::unordered_set<std::string> &active_roots)
+{
+    if (!data || !data->gedp)
+	return 0;
+    struct ged *gedp = data->gedp;
+    struct ged_view_context *view_ctx = data->view_ctx;
+    BObolSceneController *scene = ged_draw_obol_scene_controller(gedp);
+    if (!scene)
+	return 0;
+
+    /* Grow the outline in bounded steps.  The snapshot runs cache-only: cached
+     * region AABBs are published immediately; uncached ones are scheduled on the
+     * LoD worker pool and picked up on a later pump.  So the UI thread never
+     * calls rt_bound_instance -- keep the increment generous. */
+    static const size_t structural_increment = 1024;
+    static const size_t structural_deep_depth = 64;
+
+    std::vector<ged_obol_drawn_source_path_mode> roots =
+	ged_obol_drawn_source_path_modes(gedp, view_ctx, -1, NULL);
+    int more = 0;
+    for (const ged_obol_drawn_source_path_mode &root : roots) {
+	const std::string key =
+	    ged_obol_database_source_instance_key_for_mode(view_ctx,
+		root.path.c_str(), root.mode);
+	if (key.empty())
+	    continue;
+	if (data->structuralComplete.find(key) != data->structuralComplete.end())
+	    continue;
+	if (data->streamingRoots.find(key) != data->streamingRoots.end())
+	    continue; /* per-leaf geometry is streaming in; a box-registry rebuild
+		       * here would discard it (setCompactOccurrenceRegistry
+		       * whole-replaces the index) */
+	if (active_roots.find(key) == active_roots.end())
+	    continue; /* geometry adopted or not realizing -> do not overwrite */
+
+	SoBRLDatabaseSource *rootSrc =
+	    scene->findDatabaseSourceInstance(key.c_str());
+	if (!rootSrc)
+	    continue;
+	/* Never overwrite adopted real geometry with proxy boxes. */
+	BObolDatabaseSourceSummary summary;
+	if (rootSrc->getSummary(summary) && summary.valid &&
+	    (summary.realizedShapeCount > 0 || summary.realizedMeshCount > 0)) {
+	    data->structuralComplete.insert(key);
+	    continue;
+	}
+
+	size_t &budget = data->structuralBudget[key];
+	if (budget < ged_obol_structural_proxy_max_proxies)
+	    budget = ged_obol_structural_proxy_max_proxies;
+	budget += structural_increment;
+
+	const int snap = ged_obol_publish_deferred_structural_proxy_snapshot(
+	    gedp, view_ctx, root.path.c_str(), key.c_str(), root.mode,
+	    budget, structural_deep_depth, budget * 4);
+	if (snap == 0) {
+	    /* No db index / nothing to do for this root. */
+	    data->structuralComplete.insert(key);
+	    continue;
+	}
+	if (snap < 0) {
+	    /* Region AABBs are still being computed on the worker pool; keep
+	     * pumping (do not stall-complete) and hold the budget until they
+	     * land so the outline can fill in. */
+	    budget -= structural_increment;
+	    data->structuralStall[key] = 0;
+	    more = 1;
+	    continue;
+	}
+
+	/* Fully cached for this budget.  Keep pumping while the published outline
+	 * grows; finish once it stops growing for a couple of pumps. */
+	const size_t count = (size_t)rootSrc->getCompactInstanceCount();
+	size_t &lastCount = data->structuralLastCount[key];
+	if (count > lastCount) {
+	    lastCount = count;
+	    data->structuralStall[key] = 0;
+	    more = 1;
+	} else if (++data->structuralStall[key] >= 3) {
+	    data->structuralComplete.insert(key);
+	} else {
+	    more = 1;
+	}
+    }
+    return more;
+}
+
 static int
 ged_obol_progressive_advance_provider(
     BObolViewController *controller,
@@ -17667,6 +18080,7 @@ ged_obol_progressive_advance_provider(
     const BObolProgressiveOptions *options,
     BObolProgressiveStatus *status)
 {
+    ged_obol_scoped_timer _pump_timer("provider: pump (total)");
     BObolProgressiveStatus local_status;
     if (status)
 	local_status.providerCount = status->providerCount;
@@ -17718,6 +18132,7 @@ ged_obol_progressive_advance_provider(
 	    if (job_state == ged_obol_deferred_realization_job::COMPLETE)
 		refined += ged_obol_publish_deferred_realization(data,
 			controller, job);
+	    ged_obol_clear_streaming_roots_for_job(data, job);
 	    it = data->pending_jobs.erase(it);
 	}
 	if (data->deferred_refine_stage == 1) {
@@ -17733,33 +18148,53 @@ ged_obol_progressive_advance_provider(
 		if (jobState == ged_obol_deferred_realization_job::COMPLETE)
 		    refined += ged_obol_publish_deferred_realization(data,
 			controller, data->deferred_job);
+		ged_obol_clear_streaming_roots_for_job(data, data->deferred_job);
 		data->deferred_refine_stage = 3;
 		data->deferred_paths.clear();
 		data->deferred_job.reset();
 	    }
 	}
+
+	/* Stream completed per-leaf geometry from still-running jobs onto their
+	 * live roots so objects appear incrementally, well ahead of the
+	 * whole-job adopt.  Runs before deepen so a streaming root is flagged
+	 * and its coarse box registry is not rebuilt this tick. */
+	int stream_more = 0;
+	if (ged_obol_drain_streamed_realizations(data, controller, &stream_more))
+	    refined++;
+	if (stream_more)
+	    has_pending_job = 1;
+
 	local_status.changed = refined > 0 ? 1 : 0;
 	local_status.hasMore = has_pending_job;
 
-	/* FULL_DETAIL-only retains the historical detached-root behavior.  When
-	 * VISIBLE_FRONTIER is also set, keep publishing bounded cached proxies
-	 * while that job runs; the compact adoption above removes those temporary
-	 * descendants atomically from the live scene. */
-	if (!(flags & BOBOL_PROGRESSIVE_VISIBLE_FRONTIER) ||
-	    !has_pending_job ||
-	    active_deferred_roots.empty()) {
-	    if (local_status.changed && data->pending_autoview &&
-		ged_obol_progressive_autoview_apply(data))
-		controller->syncCameraFromViewContext(view_ctx, TRUE);
-	    if (!local_status.hasMore)
-		data->pending_autoview = 0;
-	    if (local_status.changed || local_status.hasMore)
-		controller->requestRender(local_status.changed ?
-		    "ged-deferred-full-detail" : "ged-deferred-root-building");
-	    if (status)
-		*status = local_status;
-	    return (local_status.changed || local_status.hasMore) ? 1 : 0;
+	/* While base geometry is still being realized, keep growing the flat
+	 * region-level coarse outline on the standing compact node so the view
+	 * fills with boxes well ahead of the geometry pop-in. */
+	if (has_pending_job &&
+	    ged_obol_progressive_deepen_structural(data, active_deferred_roots)) {
+	    local_status.changed = 1;
+	    local_status.hasMore = 1;
 	}
+
+	/* The coarse frontier is now supplied by the compact-occurrence
+	 * deepening above (all region boxes on the one root node).  Do NOT fall
+	 * through to the legacy node-creating frontier expansion below: it stood
+	 * up a separate SoBRLDatabaseSource per child (scene-graph node
+	 * explosion) and dominated the progressive pump (~18s) on large models.
+	 * The deferred realization job handles geometry; deepening handles the
+	 * boxes; so the full_detail path always finishes the pump here. */
+	if (local_status.changed && data->pending_autoview &&
+	    ged_obol_progressive_autoview_apply(data))
+	    controller->syncCameraFromViewContext(view_ctx, TRUE);
+	if (!local_status.hasMore)
+	    data->pending_autoview = 0;
+	if (local_status.changed || local_status.hasMore)
+	    controller->requestRender(local_status.changed ?
+		"ged-deferred-full-detail" : "ged-deferred-root-building");
+	if (status)
+	    *status = local_status;
+	return (local_status.changed || local_status.hasMore) ? 1 : 0;
     }
 
     std::vector<ged_obol_drawn_source_path_mode> roots =
@@ -18814,6 +19249,7 @@ ged_obol_apply_draw_paths_to_scene(
 	!settings || !scene || !ged_obol_draw_mode_uses_database_source(
 	    settings->draw_mode))
 	return -1;
+    ged_obol_scoped_timer _draw_timer("draw: apply_draw_paths (total)");
 
     std::vector<std::string> draw_paths;
     draw_paths.reserve(static_cast<size_t>(path_count));
@@ -18862,19 +19298,24 @@ ged_obol_apply_draw_paths_to_scene(
 
     if (settings->defer_leaf_expansion) {
 	for (const std::string &path : draw_paths) {
+	    const int64_t root_start = bu_gettime();
 	    if (ged_obol_direct_draw_root_source(gedp, view_ctx, scene,
 		    path.c_str(), settings, source_revision)) {
 		changed = 1;
 		realized_roots++;
 		realized_sources++;
 	    }
+	    ged_obol_timing_log("draw: direct_draw_root_source", root_start, -1);
 	    const std::string instance_key =
 		ged_obol_database_source_instance_key_for_mode(view_ctx,
 		    path.c_str(), settings->draw_mode);
+	    const int64_t proxy_start = bu_gettime();
 	    if (!instance_key.empty() &&
 		ged_obol_publish_deferred_root_proxy(gedp, view_ctx,
 		    path.c_str(), instance_key.c_str(), settings->draw_mode))
 		changed = 1;
+	    ged_obol_timing_log("draw: publish_root_proxy (coarse)",
+		proxy_start, -1);
 	    if (ged_obol_apply_cached_path_metadata_to_scene(gedp, scene,
 		    view_ctx, path.c_str(), settings->draw_mode))
 		changed = 1;
@@ -20022,6 +20463,11 @@ ged_obol_progressive_autoview_transaction(
 		data->pending_autoview = 0;
 		data->deferred_refine_stage = 0;
 		data->deferred_paths.clear();
+		/* All jobs retired: any partially-streamed geometry is now
+		 * orphaned.  Drop the streaming flags so a later draw's coarse
+		 * deepening rebuilds a clean box registry (whole-replacing the
+		 * index and discarding the orphaned occurrences). */
+		data->streamingRoots.clear();
 	    }
 	    return 1;
 	}
@@ -20040,6 +20486,19 @@ ged_obol_progressive_autoview_transaction(
 	data->deferred_appearance.defer_leaf_expansion = 0;
 	data->deferred_refine_stage =
 	    data->deferred_paths.empty() ? 0 : 1;
+
+	/* A fresh draw of these roots republishes their coarse boxes; clear any
+	 * stale streaming/complete flags so this round streams and deepens from
+	 * a clean slate, without disturbing other roots still streaming. */
+	for (const std::string &path : data->deferred_paths) {
+	    const std::string key =
+		ged_obol_database_source_instance_key_for_mode(data->view_ctx,
+		    path.c_str(), data->deferred_appearance.draw_mode);
+	    if (key.empty())
+		continue;
+	    data->streamingRoots.erase(key);
+	    data->structuralComplete.erase(key);
+	}
 
 	if (data->deferred_refine_stage == 1 &&
 	    !ged_obol_start_deferred_realization(data, controller,
@@ -20137,6 +20596,18 @@ ged_draw_obol_progressive_available(struct ged *gedp, struct ged_view_context *v
     BObolViewController *controller = ged_bobol_view_controller(view_ctx);
     return (controller && controller->findProgressiveProviderData(
 	ged_obol_progressive_advance_provider)) ? 1 : 0;
+}
+
+/* Progressive (coarse-first / deferred-leaf) drawing is driven by the view's
+ * LoD policy: when neither mesh nor CSG LoD is enabled the view wants the
+ * classic force-realize draw, so leaf expansion should not defer.  This keeps a
+ * single `view lod` control governing both drawing and presentation. */
+extern "C" int
+ged_draw_obol_view_lod_enabled(struct ged *gedp, struct ged_view_context *view_ctx)
+{
+    (void)gedp;
+    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
+    return (controller && !controller->isForceRealizeDisplay()) ? 1 : 0;
 }
 
 static int

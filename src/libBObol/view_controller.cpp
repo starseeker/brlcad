@@ -2233,6 +2233,19 @@ BObolViewController::realizePending(void)
     return ret;
 }
 
+SbBool
+BObolViewController::isForceRealizeDisplay(void) const
+{
+    /* No attachment / policy yet -> keep the classic force-realize behavior so
+     * nothing renders half-formed before a policy is established. */
+    if (!this->d->viewAttachment)
+	return TRUE;
+    struct bv_lod_policy policy;
+    bv_lod_policy_init(&policy);
+    this->d->viewAttachment->getLodPolicy(&policy);
+    return (policy.mesh_enabled || policy.csg_enabled) ? FALSE : TRUE;
+}
+
 unsigned int
 BObolViewController::getLastVisitedSourceCount(void) const
 {
@@ -2423,6 +2436,11 @@ BObolViewController::renderPending(SbBool clearWindow,
 				     SbBool clearZBuffer,
 				     SbString *reason)
 {
+    /* LoD off -> classic behavior: realize the whole scene before presenting.
+     * LoD on -> stay on the progressive coarse-first path (no whole-tree
+     * realize here; geometry streams in via advanceProgressiveWork). */
+    if (this->isForceRealizeDisplay())
+	(void)this->realizePending();
     (void)this->advanceProgressiveWork(NULL, NULL);
 	this->synchronizePresentation();
 
@@ -2530,7 +2548,11 @@ BObolViewController::renderToImage(unsigned char **image,
     }
 
     this->synchronizePresentation();
-    (void)this->realizePending();
+    /* LoD off -> force-realize the whole scene; LoD on -> coarse-first, letting
+     * advanceProgressiveWork stream geometry in (matches the hardware and
+     * headless render paths).  Default (no attachment / LoD off) is unchanged. */
+    if (this->isForceRealizeDisplay())
+	(void)this->realizePending();
     BObolProgressiveStatus localProgressiveStatus;
     (void)this->advanceProgressiveWork(NULL, &localProgressiveStatus);
     this->synchronizePresentation();

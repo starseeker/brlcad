@@ -254,6 +254,9 @@ struct ged_draw_overlay_geometry {
 extern int ged_draw_obol_progressive_available(
 	struct ged *gedp,
 	struct ged_view_context *view_ctx);
+extern int ged_draw_obol_view_lod_enabled(
+	struct ged *gedp,
+	struct ged_view_context *view_ctx);
 extern void ged_draw_obol_framebuffer_endpoint_detach(
 	struct ged *gedp,
 	struct bobol_display_endpoint *endpoint);
@@ -1196,7 +1199,8 @@ extern int ged_draw_obol_scene_database_autoview_bounds(
 	struct ged *gedp,
 	vect_t *min,
 	vect_t *max,
-	int *empty_out);
+	int *empty_out,
+	int allow_member_bounds);
 extern int ged_draw_obol_progressive_autoview_follow(
 	struct ged *gedp,
 	struct ged_view_context *view_ctx,

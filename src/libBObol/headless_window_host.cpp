@@ -235,9 +235,13 @@ BObolHeadlessWindowHost::renderPending(void)
 
     const SbString requestedReason = controller->getRenderReason();
 
-    /* Keep factory-owned headless presentation on the same progressive path
-     * as the controller's direct image capture. */
-    (void)controller->realizePending();
+    /* Mirror the interactive (qged) renderPending policy so a headless capture
+     * shows exactly what the viewer would: LoD off -> force-realize the whole
+     * scene first (classic complete image); LoD on -> progressive coarse-first
+     * (geometry streams in via advanceProgressiveWork).  Driven by the view's
+     * `view lod` setting through isForceRealizeDisplay(); no separate toggle. */
+    if (controller->isForceRealizeDisplay())
+	(void)controller->realizePending();
     (void)controller->advanceProgressiveWork(NULL, NULL);
 
     SoNode *root = controller->getRenderRoot();

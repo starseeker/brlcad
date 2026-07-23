@@ -790,9 +790,14 @@ g_cmdline(
 	    ac = (int)tmp_av.size();
 	}
 
+	const int gsh_cmd_timing = getenv("BOBOL_DRAW_TIMING") ? 1 : 0;
+	const int64_t gsh_cmd_start = gsh_cmd_timing ? bu_gettime() : 0;
 	int gret = BU_STR_EQUAL(av[0], "delay") ?
 	    gsh_delay_pump(gs.get(), ac, (const char **)av) :
 	    gs.get()->eval(ac, (const char **)av);
+	if (gsh_cmd_timing)
+	    bu_log("[obol-timing] gsh cmd '%s': %.1f ms\n", av[0],
+		(double)(bu_gettime() - gsh_cmd_start) / 1000.0);
 
 	/* If the eval tells us it's time to quite, clean up and break the loop */
 	if (gret == GED_EXIT) {

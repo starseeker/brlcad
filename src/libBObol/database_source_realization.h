@@ -23,6 +23,7 @@
 class SoBRLDatabaseSource;
 class SoBRLVListShape;
 class SoBRLMeshShape;
+struct BObolCompactOccurrenceStream;
 
 struct BObolCachedPartGeometry {
     BObolCachedPartGeometry(void) :
@@ -108,10 +109,12 @@ SbBool bobol_database_source_realize_mesh_with_cache(
 	BObolDatabaseSourceRealizationCache *cache);
 int bobol_database_source_realize_wireframe_compact_with_cache(
 	SoBRLDatabaseSource *source,
-	BObolDatabaseSourceRealizationCache *cache);
+	BObolDatabaseSourceRealizationCache *cache,
+	BObolCompactOccurrenceStream *stream = NULL);
 int bobol_database_source_realize_mesh_compact_with_cache(
 	SoBRLDatabaseSource *source,
-	BObolDatabaseSourceRealizationCache *cache);
+	BObolDatabaseSourceRealizationCache *cache,
+	BObolCompactOccurrenceStream *stream = NULL);
 void bobol_database_source_seed_realization_cache(
 	SoBRLDatabaseSource *source,
 	BObolDatabaseSourceRealizationCache *cache);

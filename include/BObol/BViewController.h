@@ -233,6 +233,14 @@ public:
 
     SbBool realizePending(void);
 
+    /* Derived display mode: when the view's LoD policy has neither mesh nor CSG
+     * LoD enabled, drawing behaves like the classic force-realize (whole tree
+     * before first frame) path; when LoD is enabled the render paths stay on the
+     * progressive coarse-first pipeline.  Consulted by renderPending() and the
+     * headless host so the single `view lod` setting controls both without a
+     * separate progressive-display toggle. */
+    SbBool isForceRealizeDisplay(void) const;
+
     unsigned int getLastVisitedSourceCount(void) const;
     unsigned int getLastRealizedSourceCount(void) const;
     unsigned int getLastFailedSourceCount(void) const;

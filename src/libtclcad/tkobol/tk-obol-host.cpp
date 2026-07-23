@@ -806,7 +806,13 @@ private:
 	    double_buffered ? TRUE : FALSE);
 	glDrawBuffer(double_buffered ? GL_BACK : GL_FRONT);
 	this->controller->synchronizePresentation();
-	(void)this->controller->realizePending();
+	/* Mirror the headless/qged policy: LoD off -> force-realize the whole
+	 * scene first (classic complete image); LoD on -> coarse-first, letting
+	 * advanceProgressiveWork stream geometry in.  Unconditionally realizing
+	 * here defeated progressive streaming in mged (everything popped in at
+	 * once). */
+	if (this->controller->isForceRealizeDisplay())
+	    (void)this->controller->realizePending();
 	BObolProgressiveStatus progressive;
 	(void)this->controller->advanceProgressiveWork(NULL, &progressive);
 	this->controller->synchronizePresentation();

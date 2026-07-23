@@ -32,7 +32,9 @@
 #include "bu/color.h"
 #include "bu/file.h"
 #include "bu/list.h"
+#include "bu/parallel.h"
 #include "bu/str.h"
+#include "bu/time.h"
 #include "bu/vls.h"
 #include "nmg.h"
 #include "raytrace.h"
@@ -73,6 +75,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -2466,7 +2469,8 @@ struct realize_walk_data {
 	compact_index(NULL),
 	compact_ordinal(0),
 	compact_unsupported(0),
-	compact_bounds_valid(FALSE)
+	compact_bounds_valid(FALSE),
+	stream_sink(NULL)
     {
 	compact_bounds.makeEmpty();
     }
@@ -2478,10 +2482,14 @@ struct realize_walk_data {
     int failed_shapes;
     SbString diagnostic;
     BObolCompactInstanceIndex *compact_index;
+    /* Optional worker->pump hand-off: when set, each completed compact
+     * occurrence is pushed here as it is realized so the progressive pump can
+     * stream geometry onto the standing compact root incrementally. */
     int compact_ordinal;
     int compact_unsupported;
     SbBox3f compact_bounds;
     SbBool compact_bounds_valid;
+    BObolCompactOccurrenceStream *stream_sink;
     std::unordered_set<std::string> compact_seen_instances;
     std::unordered_map<std::string, uint32_t> compact_occurrence_counts;
 };
@@ -2507,6 +2515,17 @@ static void compact_add_occurrence(SoBRLDatabaseSource *source,
 	int &unsupported);
 static SbBool source_bounds_for_realized_node(const SoNode *node,
 	const SbMatrix &matrix, SbBox3f &bounds);
+
+/* Hand one just-realized occurrence to the progressive pump for incremental
+ * streaming, if a sink is attached and the job has not been cancelled. */
+static inline void
+realize_walk_stream_push(struct realize_walk_data *data,
+	const BObolCompactOccurrence &occurrence)
+{
+    if (data && data->stream_sink && occurrence.geometry &&
+	!data->stream_sink->isCancelled())
+	data->stream_sink->push(occurrence);
+}
 
 static std::string
 realize_walk_instance_identity(const struct db_tree_state *tsp,
@@ -3652,6 +3671,11 @@ static union tree *
 	!dp)
 	return TREE_NULL;
 
+    /* A streaming realization that has been cancelled stops tessellating the
+     * remaining leaves promptly; the partial result is discarded by the pump. */
+    if (data->stream_sink && data->stream_sink->isCancelled())
+	return make_nop_tree();
+
     std::string walkOccurrenceIdentity;
     uint32_t duplicateOrdinal = 0;
     if (data->compact_index) {
@@ -3770,6 +3794,8 @@ static union tree *
 	    data->compact_ordinal, data->compact_unsupported);
 	compact_apply_walk_identity(data->source, *data->compact_index,
 	    entryCount, tsp, pathp, walkOccurrenceIdentity, duplicateOrdinal);
+	if (data->compact_index->entries.size() > entryCount)
+	    realize_walk_stream_push(data, input.occurrence);
 	SbBox3f bounds = database_source_transform_bounds(
 	    compact_part_geometry_bounds(cadGeometry),
 	    input.occurrence.localTransform);
@@ -3912,6 +3938,8 @@ static union tree *
 	    compact_apply_walk_identity(data->source, *data->compact_index,
 		entryCount, tsp, pathp, walkOccurrenceIdentity,
 		duplicateOrdinal);
+	    if (data->compact_index->entries.size() > entryCount)
+		realize_walk_stream_push(data, input.occurrence);
 	    SbBox3f bounds = database_source_transform_bounds(
 		compact_part_geometry_bounds(cadGeometry),
 		input.occurrence.localTransform);
@@ -5483,7 +5511,18 @@ struct compact_mesh_prefill_collect {
     std::unordered_set<std::string> seen;
     SbString diagnostic;
     int failed = 0;
+    /* Optional cancel handle: when set and cancelled, the walk stops gathering
+     * new leaves so a cancelled deferred realization job aborts promptly. */
+    const BObolCompactOccurrenceStream *cancel = NULL;
 };
+
+/* True when a streaming realization has been cancelled -- used to bail out of the
+ * prefill's parallel phases promptly instead of finishing the whole batch. */
+static inline bool
+compact_mesh_prefill_cancelled(const BObolCompactOccurrenceStream *cancel)
+{
+    return cancel && cancel->isCancelled();
+}
 
 static union tree *
 compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
@@ -5496,6 +5535,9 @@ compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
 	!tsp->ts_dbip || !pathp || !dp)
 	return TREE_NULL;
 
+    if (compact_mesh_prefill_cancelled(collect->cancel))
+	return make_nop_tree();
+
     SbBox3f cacheBounds;
     std::string cacheKey = realize_geometry_cache_key(dp);
     source_lod_cache_key_append(cacheKey, collect->source, cacheBounds);
@@ -5505,6 +5547,10 @@ compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
 	collect->cache->findMeshCadGeometry(cacheKey))
 	return make_nop_tree();
 
+    /* Only record the unique leaf here; the expensive rt_db_get_internal import
+     * (and the type-dependent wire/special filter that needs it) is deferred to
+     * a parallel pass in compact_mesh_prefill_cache, since concurrent reads of
+     * the in-memory realization snapshot are lock-free. */
     std::unique_ptr<compact_mesh_prefill_job> job(
 	new compact_mesh_prefill_job);
     job->dp = dp;
@@ -5514,31 +5560,6 @@ compact_mesh_prefill_collect_leaf(struct db_tree_state *tsp,
 	job->path = path;
 	bu_free(path, "compact mesh prefill path");
     }
-    if (rt_db_get_internal(&job->intern, dp, tsp->ts_dbip, NULL) < 0 ||
-	!internal_payload_magic_valid(&job->intern)) {
-	collect->failed = 1;
-	if (collect->diagnostic.getLength() == 0) {
-	    collect->diagnostic.sprintf("%s: compact mesh internal fetch failed",
-		job->path.empty() ? dp->d_namep : job->path.c_str());
-	}
-	return make_nop_tree();
-    }
-    job->ownsInternal = true;
-    job->sourceType = primitive_type_label(&job->intern);
-
-    const int internalType = job->intern.idb_type;
-    const int drawMode = source_record_draw_mode(collect->source);
-    const bool wireInstead = drawMode == BOBOL_LOD_DRAW_WIRE ||
-	(drawMode == BOBOL_LOD_DRAW_SHADED_BOTS &&
-	 (!job->intern.idb_meth ||
-	  !job->intern.idb_meth->ft_indexed_face_set) &&
-	 internalType != ID_BOT);
-    const bool special = internalType == ID_MATERIAL ||
-	internalType == ID_PNTS ||
-	primitive_uses_wire_in_mesh_mode(internalType);
-    if (wireInstead || special)
-	return make_nop_tree();
-
     collect->jobs.push_back(std::move(job));
     return make_nop_tree();
 }
@@ -5569,10 +5590,6 @@ compact_mesh_prefill_bot_semantics_match(const struct rt_bot_internal *first,
 	first->mode == second->mode && first->orientation == second->orientation;
 }
 
-struct compact_mesh_prefill_bot_candidate {
-    compact_mesh_prefill_job *job;
-    struct bg_trimesh_pca_signature signature;
-};
 
 static bool
 compact_mesh_prefill_pca_bucket(std::array<int64_t, 3> &bucket,
@@ -5606,38 +5623,96 @@ compact_mesh_prefill_pca_bucket_key(const struct rt_bot_internal *bot,
     return key;
 }
 
+/* Per-job PCA data, precomputed in parallel (phase 1) so the serial match pass
+ * (phase 2) never recomputes a signature. */
+struct compact_mesh_prefill_pca {
+    struct bg_trimesh_pca_signature signature;
+    std::array<int64_t, 3> bucket;
+    bool eligible;
+};
+
 static void
 compact_mesh_prefill_find_transformed_reuse(
-	std::vector<std::unique_ptr<compact_mesh_prefill_job>> &jobs)
+	std::vector<std::unique_ptr<compact_mesh_prefill_job>> &jobs,
+	const BObolCompactOccurrenceStream *cancel)
 {
-    std::unordered_map<unsigned long long, std::vector<size_t>> candidates;
-	std::unordered_map<std::string, std::vector<size_t>> broadCandidates;
-    std::vector<compact_mesh_prefill_bot_candidate> representatives;
-    representatives.reserve(jobs.size());
+    const size_t jobCount = jobs.size();
+    if (!jobCount)
+	return;
 
-    for (const std::unique_ptr<compact_mesh_prefill_job> &jobPtr : jobs) {
-	compact_mesh_prefill_job *job = jobPtr.get();
-	const struct rt_bot_internal *bot = job ? compact_mesh_prefill_bot(*job) :
-	    NULL;
+    /* Phase 1 (parallel): PCA signature + bucket per job.  Each entry is written
+     * by exactly one thread and bg_trimesh_pca_get_signature only reads its
+     * input mesh, so this parallelizes safely across distinct jobs. */
+    std::vector<compact_mesh_prefill_pca> pca(jobCount);
+    const auto computeSignature = [&](size_t i) {
+	compact_mesh_prefill_pca &entry = pca[i];
+	entry.eligible = false;
+	const compact_mesh_prefill_job *job = jobs[i].get();
+	const struct rt_bot_internal *bot = job ?
+	    compact_mesh_prefill_bot(*job) : NULL;
 	if (!compact_mesh_prefill_bot_cacheable(bot))
-	    continue;
-
-	struct bg_trimesh_pca_signature signature;
-	if (bg_trimesh_pca_get_signature(&signature, bot->faces,
+	    return;
+	if (bg_trimesh_pca_get_signature(&entry.signature, bot->faces,
 		bot->num_faces, reinterpret_cast<const point_t *>(bot->vertices),
 		bot->num_vertices, VUNITIZE_TOL, 1.0e-6) != BRLCAD_OK)
-	    continue;
+	    return;
+	if (!compact_mesh_prefill_pca_bucket(entry.bucket, entry.signature.frame))
+	    return;
+	entry.eligible = true;
+    };
 
-	std::array<int64_t, 3> bucket;
-	if (!compact_mesh_prefill_pca_bucket(bucket, signature.frame))
+    size_t threadCount = bu_avail_cpus();
+    if (threadCount < 1)
+	threadCount = 1;
+    if (threadCount > jobCount)
+	threadCount = jobCount;
+    if (threadCount > 1) {
+	std::atomic<size_t> cursor(0);
+	auto poolWorker = [&]() {
+	    for (size_t i = cursor.fetch_add(1); i < jobCount;
+		 i = cursor.fetch_add(1)) {
+		if (compact_mesh_prefill_cancelled(cancel))
+		    return;
+		computeSignature(i);
+	    }
+	};
+	std::vector<std::thread> pool;
+	pool.reserve(threadCount - 1);
+	for (size_t t = 0; t + 1 < threadCount; t++)
+	    pool.emplace_back(poolWorker);
+	poolWorker();
+	for (std::thread &thread : pool)
+	    thread.join();
+    } else {
+	for (size_t i = 0; i < jobCount &&
+	     !compact_mesh_prefill_cancelled(cancel); i++)
+	    computeSignature(i);
+    }
+    if (compact_mesh_prefill_cancelled(cancel))
+	return;
+
+    /* Phase 2 (serial): match each eligible job against earlier representatives
+     * using the precomputed signatures; identity of a representative is its job
+     * index.  Processing in job order keeps the result deterministic and
+     * identical to the former single-pass form. */
+    std::unordered_map<unsigned long long, std::vector<size_t>> candidates;
+    std::unordered_map<std::string, std::vector<size_t>> broadCandidates;
+    for (size_t i = 0; i < jobCount; i++) {
+	if (!pca[i].eligible)
 	    continue;
-	const auto matchesCandidate = [&](size_t candidateIndex) {
-	    const compact_mesh_prefill_bot_candidate &candidate =
-		representatives[candidateIndex];
+	compact_mesh_prefill_job *job = jobs[i].get();
+	const struct rt_bot_internal *bot = compact_mesh_prefill_bot(*job);
+	const struct bg_trimesh_pca_signature &signature = pca[i].signature;
+	const std::array<int64_t, 3> &bucket = pca[i].bucket;
+
+	const auto matchesCandidate = [&](size_t candidateJob) {
+	    compact_mesh_prefill_job *representative = jobs[candidateJob].get();
 	    const struct rt_bot_internal *representativeBot =
-		compact_mesh_prefill_bot(*candidate.job);
+		compact_mesh_prefill_bot(*representative);
+	    const struct bg_trimesh_pca_signature &representativeSignature =
+		pca[candidateJob].signature;
 	    if (!compact_mesh_prefill_bot_semantics_match(representativeBot, bot) ||
-		bg_trimesh_pca_equal(&candidate.signature,
+		bg_trimesh_pca_equal(&representativeSignature,
 		    representativeBot->faces, representativeBot->num_faces,
 		    reinterpret_cast<const point_t *>(representativeBot->vertices),
 		    representativeBot->num_vertices, &signature, bot->faces,
@@ -5647,9 +5722,9 @@ compact_mesh_prefill_find_transformed_reuse(
 
 	    mat_t representativeToCandidate;
 	    if (bg_pca_frame_relative_matrix(representativeToCandidate,
-		&candidate.signature.frame, &signature.frame) != BRLCAD_OK)
+		&representativeSignature.frame, &signature.frame) != BRLCAD_OK)
 		return false;
-	    job->representative = candidate.job;
+	    job->representative = representative;
 	    job->geometryTransform = mat_to_sbmatrix(representativeToCandidate);
 	    return true;
 	};
@@ -5657,8 +5732,8 @@ compact_mesh_prefill_find_transformed_reuse(
 	bool reused = false;
 	const auto found = candidates.find(signature.hash);
 	if (found != candidates.end()) {
-	    for (size_t candidateIndex : found->second) {
-		if (matchesCandidate(candidateIndex)) {
+	    for (size_t candidateJob : found->second) {
+		if (matchesCandidate(candidateJob)) {
 		    reused = true;
 		    break;
 		}
@@ -5689,8 +5764,8 @@ compact_mesh_prefill_find_transformed_reuse(
 			    compact_mesh_prefill_pca_bucket_key(bot, nearby));
 			if (broadFound == broadCandidates.end())
 			    continue;
-			for (size_t candidateIndex : broadFound->second) {
-			    if (matchesCandidate(candidateIndex)) {
+			for (size_t candidateJob : broadFound->second) {
+			    if (matchesCandidate(candidateJob)) {
 				reused = true;
 				break;
 			    }
@@ -5702,11 +5777,9 @@ compact_mesh_prefill_find_transformed_reuse(
 	if (reused)
 	    continue;
 
-	const size_t candidateIndex = representatives.size();
-	representatives.push_back({job, signature});
-	candidates[signature.hash].push_back(candidateIndex);
+	candidates[signature.hash].push_back(i);
 	broadCandidates[compact_mesh_prefill_pca_bucket_key(bot, bucket)].push_back(
-	    candidateIndex);
+	    i);
     }
 }
 
@@ -5714,6 +5787,7 @@ struct compact_mesh_prefill_workers {
     std::vector<std::unique_ptr<compact_mesh_prefill_job>> *jobs = NULL;
     struct bg_tess_tol ttol = BG_TESS_TOL_INIT_ZERO;
     struct bn_tol tol = BN_TOL_INIT_TOL;
+    const BObolCompactOccurrenceStream *cancel = NULL;
 };
 
 static int
@@ -5819,47 +5893,196 @@ cad_mesh_part_geometry_from_internal(struct rt_db_internal *intern,
 	&tol, geometry);
 }
 
+/* Convert one collected prefill job's in-memory internal to compact geometry.
+ * Only reads job.intern and writes job.geometry/job.success -- no shared state,
+ * so BOT jobs run safely in parallel.  NMG tessellation (rt_obj_tess, used for
+ * non-BOT non-indexed primitives) is NOT thread-safe (BU_SETJUMP/NMG globals),
+ * so those jobs must stay on one thread (see compact_mesh_prefill_realize). */
+static void
+compact_mesh_prefill_realize_job(compact_mesh_prefill_job &job,
+	const compact_mesh_prefill_workers *workers)
+{
+    if (job.representative) {
+	job.success = true;
+	return;
+    }
+    if (job.intern.idb_type == ID_BOT) {
+	job.success = cad_mesh_part_geometry_from_bot(
+	    static_cast<const struct rt_bot_internal *>(job.intern.idb_ptr),
+	    job.geometry) != 0;
+	return;
+    }
+    if (job.intern.idb_meth && job.intern.idb_meth->ft_indexed_face_set)
+	job.success = cad_mesh_part_geometry_from_primitive_face_set(
+	    &job.intern, &workers->ttol, &workers->tol, job.geometry) != 0;
+    if (!job.success)
+	job.success = cad_mesh_part_geometry_from_tessellated_internal(
+	    &job.intern, &workers->ttol, &workers->tol, job.geometry) != 0;
+}
+
 static void
 compact_mesh_prefill_realize(compact_mesh_prefill_workers *workers)
 {
     if (!workers || !workers->jobs)
 	return;
+    std::vector<std::unique_ptr<compact_mesh_prefill_job>> &jobs =
+	*workers->jobs;
 
-    for (std::unique_ptr<compact_mesh_prefill_job> &jobPtr : *workers->jobs) {
-	compact_mesh_prefill_job &job = *jobPtr;
-	if (job.representative) {
-	    job.success = true;
-	    continue;
-	}
-	if (job.intern.idb_type == ID_BOT) {
-	    job.success = cad_mesh_part_geometry_from_bot(
-		static_cast<const struct rt_bot_internal *>(job.intern.idb_ptr),
-		job.geometry) != 0;
-	} else {
-	    if (job.intern.idb_meth &&
-		job.intern.idb_meth->ft_indexed_face_set)
-		job.success = cad_mesh_part_geometry_from_primitive_face_set(
-		    &job.intern, &workers->ttol, &workers->tol,
-		    job.geometry) != 0;
-	    if (!job.success)
-		job.success = cad_mesh_part_geometry_from_tessellated_internal(
-		    &job.intern, &workers->ttol, &workers->tol,
-		    job.geometry) != 0;
+    /* BOT-copy jobs are pure in-memory transforms and parallelize safely;
+     * everything else (NMG tessellation, indexed-face-set) stays serial for
+     * thread-safety.  Representatives carry no work. */
+    std::vector<size_t> parallelJobs;
+    std::vector<size_t> serialJobs;
+    parallelJobs.reserve(jobs.size());
+    for (size_t i = 0; i < jobs.size(); i++) {
+	compact_mesh_prefill_job &job = *jobs[i];
+	if (!job.representative && job.intern.idb_type == ID_BOT)
+	    parallelJobs.push_back(i);
+	else
+	    serialJobs.push_back(i);
+    }
+
+    size_t threadCount = bu_avail_cpus();
+    if (threadCount < 1)
+	threadCount = 1;
+    if (threadCount > parallelJobs.size())
+	threadCount = parallelJobs.size();
+
+    if (threadCount > 1) {
+	std::atomic<size_t> cursor(0);
+	auto poolWorker = [&]() {
+	    for (size_t k = cursor.fetch_add(1); k < parallelJobs.size();
+		 k = cursor.fetch_add(1)) {
+		if (compact_mesh_prefill_cancelled(workers->cancel))
+		    return;
+		compact_mesh_prefill_realize_job(*jobs[parallelJobs[k]],
+		    workers);
+	    }
+	};
+	std::vector<std::thread> pool;
+	pool.reserve(threadCount - 1);
+	for (size_t t = 0; t + 1 < threadCount; t++)
+	    pool.emplace_back(poolWorker);
+	poolWorker();
+	for (std::thread &thread : pool)
+	    thread.join();
+    } else {
+	for (size_t idx : parallelJobs) {
+	    if (compact_mesh_prefill_cancelled(workers->cancel))
+		return;
+	    compact_mesh_prefill_realize_job(*jobs[idx], workers);
 	}
     }
+
+    for (size_t idx : serialJobs) {
+	if (compact_mesh_prefill_cancelled(workers->cancel))
+	    return;
+	compact_mesh_prefill_realize_job(*jobs[idx], workers);
+    }
+}
+
+/* Import each gathered unique leaf's internal in parallel (concurrent reads of
+ * the in-memory realization snapshot are lock-free), then serially drop the
+ * jobs the main walk handles instead (wire/special primitives) and flag any
+ * import failure.  Imports are the bulk of the former serial collect. */
+static void
+compact_mesh_prefill_import_and_filter(compact_mesh_prefill_collect &collect,
+	struct db_i *dbip)
+{
+    std::vector<std::unique_ptr<compact_mesh_prefill_job>> &jobs = collect.jobs;
+    const size_t jobCount = jobs.size();
+    if (!jobCount || !dbip)
+	return;
+
+    const auto importJob = [&](size_t i) {
+	compact_mesh_prefill_job &job = *jobs[i];
+	if (rt_db_get_internal(&job.intern, job.dp, dbip, NULL) >= 0 &&
+	    internal_payload_magic_valid(&job.intern)) {
+	    job.ownsInternal = true;
+	    job.sourceType = primitive_type_label(&job.intern);
+	}
+    };
+
+    size_t threadCount = bu_avail_cpus();
+    if (threadCount < 1)
+	threadCount = 1;
+    if (threadCount > jobCount)
+	threadCount = jobCount;
+    if (threadCount > 1) {
+	std::atomic<size_t> cursor(0);
+	auto poolWorker = [&]() {
+	    for (size_t i = cursor.fetch_add(1); i < jobCount;
+		 i = cursor.fetch_add(1)) {
+		if (compact_mesh_prefill_cancelled(collect.cancel))
+		    return;
+		importJob(i);
+	    }
+	};
+	std::vector<std::thread> pool;
+	pool.reserve(threadCount - 1);
+	for (size_t t = 0; t + 1 < threadCount; t++)
+	    pool.emplace_back(poolWorker);
+	poolWorker();
+	for (std::thread &thread : pool)
+	    thread.join();
+    } else {
+	for (size_t i = 0; i < jobCount; i++) {
+	    if (compact_mesh_prefill_cancelled(collect.cancel))
+		return;
+	    importJob(i);
+	}
+    }
+    if (compact_mesh_prefill_cancelled(collect.cancel))
+	return;
+
+    /* A failed import is a hard failure (matches the former inline behavior).
+     * Otherwise drop wire/special leaves -- the main walk realizes those as
+     * wireframe/points so the prefill must not cache them as meshes. */
+    const int drawMode = source_record_draw_mode(collect.source);
+    std::vector<std::unique_ptr<compact_mesh_prefill_job>> kept;
+    kept.reserve(jobCount);
+    for (std::unique_ptr<compact_mesh_prefill_job> &jobPtr : jobs) {
+	compact_mesh_prefill_job &job = *jobPtr;
+	if (!job.ownsInternal) {
+	    collect.failed = 1;
+	    if (collect.diagnostic.getLength() == 0)
+		collect.diagnostic.sprintf(
+		    "%s: compact mesh internal fetch failed",
+		    job.path.empty() ? (job.dp ? job.dp->d_namep : "?") :
+		    job.path.c_str());
+	    continue;
+	}
+	const int internalType = job.intern.idb_type;
+	const bool wireInstead = drawMode == BOBOL_LOD_DRAW_WIRE ||
+	    (drawMode == BOBOL_LOD_DRAW_SHADED_BOTS &&
+	     (!job.intern.idb_meth ||
+	      !job.intern.idb_meth->ft_indexed_face_set) &&
+	     internalType != ID_BOT);
+	const bool special = internalType == ID_MATERIAL ||
+	    internalType == ID_PNTS ||
+	    primitive_uses_wire_in_mesh_mode(internalType);
+	if (wireInstead || special)
+	    continue;
+	kept.push_back(std::move(jobPtr));
+    }
+    jobs.swap(kept);
 }
 
 static int
 compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
-	BObolDatabaseSourceRealizationCache *cache, const char *treeName)
+	BObolDatabaseSourceRealizationCache *cache, const char *treeName,
+	const BObolCompactOccurrenceStream *cancel)
 {
     struct db_i *dbip = source ? source->getDatabase() : NULL;
     if (!source || !cache || !dbip || !treeName || !treeName[0])
 	return 0;
 
+    const int prefillTiming = getenv("BOBOL_DRAW_TIMING") ? 1 : 0;
+    const int64_t collectStart = prefillTiming ? bu_gettime() : 0;
     compact_mesh_prefill_collect collect;
     collect.source = source;
     collect.cache = cache;
+    collect.cancel = cancel;
     struct db_tree_state initState;
     db_init_db_tree_state(&initState, dbip);
     initState.ts_stop_at_regions = 0;
@@ -5867,25 +6090,60 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
     const int walkRet = db_walk_tree_leaf_instances(dbip, 1, av, 1,
 	&initState, NULL, NULL, compact_mesh_prefill_collect_leaf, &collect);
     db_free_db_tree_state(&initState);
-    if (walkRet < 0 || collect.failed) {
-	if (collect.diagnostic.getLength() > 0)
-	    source->realizationDiagnostic = collect.diagnostic;
-	else {
-	    SbString diagnostic;
-	    diagnostic.sprintf("%s: compact mesh occurrence discovery failed",
-		treeName);
-	    source->realizationDiagnostic = diagnostic;
-	}
+    if (walkRet < 0) {
+	SbString diagnostic;
+	diagnostic.sprintf("%s: compact mesh occurrence discovery failed",
+	    treeName);
+	source->realizationDiagnostic = diagnostic;
+	return -1;
+    }
+    if (compact_mesh_prefill_cancelled(cancel))
+	return -1;
+    if (collect.jobs.empty())
+	return 0;
+
+    /* Parallel import of the gathered unique leaves (formerly serial in the
+     * walk), then drop the wire/special leaves the main walk handles. */
+    const int64_t importStart = prefillTiming ? bu_gettime() : 0;
+    compact_mesh_prefill_import_and_filter(collect, dbip);
+    if (compact_mesh_prefill_cancelled(cancel))
+	return -1;
+    if (collect.failed) {
+	source->realizationDiagnostic = collect.diagnostic.getLength() > 0 ?
+	    collect.diagnostic : SbString("compact mesh internal fetch failed");
 	return -1;
     }
     if (collect.jobs.empty())
 	return 0;
 
-    compact_mesh_prefill_find_transformed_reuse(collect.jobs);
+    const int64_t reuseStart = prefillTiming ? bu_gettime() : 0;
+    compact_mesh_prefill_find_transformed_reuse(collect.jobs, cancel);
+    if (compact_mesh_prefill_cancelled(cancel))
+	return -1;
+    if (prefillTiming) {
+	size_t reused = 0;
+	for (const std::unique_ptr<compact_mesh_prefill_job> &jobPtr :
+	     collect.jobs)
+	    if (jobPtr && jobPtr->representative)
+		reused++;
+	bu_log("[obol-timing] prefill: walk %.1f ms, import %.1f ms, "
+	    "find_reuse %.1f ms; %zu unique jobs, %zu reused via PCA\n",
+	    (double)(importStart - collectStart) / 1000.0,
+	    (double)(reuseStart - importStart) / 1000.0,
+	    (double)(bu_gettime() - reuseStart) / 1000.0,
+	    collect.jobs.size(), reused);
+    }
     compact_mesh_prefill_workers workers;
     workers.jobs = &collect.jobs;
     workers.ttol = source_tess_tol(source);
+    workers.cancel = cancel;
+    const int64_t realizeStart = prefillTiming ? bu_gettime() : 0;
     compact_mesh_prefill_realize(&workers);
+    if (compact_mesh_prefill_cancelled(cancel))
+	return -1;
+    if (prefillTiming)
+	bu_log("[obol-timing] prefill: realize %.1f ms\n",
+	    (double)(bu_gettime() - realizeStart) / 1000.0);
 
     for (std::unique_ptr<compact_mesh_prefill_job> &job : collect.jobs) {
 	if (!job->success) {
@@ -6635,6 +6893,11 @@ static union tree *
 	!dp)
 	return TREE_NULL;
 
+    /* A streaming realization that has been cancelled stops tessellating the
+     * remaining leaves promptly; the partial result is discarded by the pump. */
+    if (data->stream_sink && data->stream_sink->isCancelled())
+	return make_nop_tree();
+
     std::string walkOccurrenceIdentity;
     uint32_t duplicateOrdinal = 0;
     if (data->compact_index) {
@@ -6769,6 +7032,8 @@ static union tree *
 		data->compact_ordinal, data->compact_unsupported);
 	    compact_apply_walk_identity(data->source, *data->compact_index,
 		entryCount, tsp, pathp, walkOccurrenceIdentity, duplicateOrdinal);
+	    if (data->compact_index->entries.size() > entryCount)
+		realize_walk_stream_push(data, input.occurrence);
 	    SbBox3f bounds = database_source_transform_bounds(
 		compact_part_geometry_bounds(cachedWire->geometry),
 		input.occurrence.localTransform);
@@ -6888,6 +7153,9 @@ static union tree *
 		assign_shared_geometry_identity(sharedVListShape,
 						dp->d_namep, typeLabel, data->revision, "line");
 	} else {
+	    /* Non-BOT mesh primitives realized on a cache miss.  BOTs are
+	     * converted directly to compact geometry by the (parallel) prefill
+	     * and hit the cache above, so they do not reach this build path. */
 	    sharedMeshShape = mesh_from_internal(localIntern, data->source);
 	    if (sharedMeshShape)
 		assign_shared_geometry_identity(sharedMeshShape,
@@ -7028,6 +7296,8 @@ static union tree *
 	    compact_apply_walk_identity(data->source, *data->compact_index,
 		entryCount, tsp, pathp, walkOccurrenceIdentity,
 		duplicateOrdinal);
+	    if (data->compact_index->entries.size() > entryCount)
+		realize_walk_stream_push(data, input.occurrence);
 	}
 	BObolCompactInstanceEntry *entry =
 	    data->compact_index->entries.size() > entryCount ?
@@ -9222,6 +9492,233 @@ SoBRLDatabaseSource::setCompactOccurrenceRegistry(
     return this->d->compactIndex->entries.size() >
 	static_cast<size_t>(INT_MAX) ? INT_MAX :
 	static_cast<int>(this->d->compactIndex->entries.size());
+}
+
+void
+BObolCompactOccurrenceStream::push(const BObolCompactOccurrence &occurrence)
+{
+    std::lock_guard<std::mutex> guard(this->mutex);
+    this->pending.push_back(occurrence);
+}
+
+size_t
+BObolCompactOccurrenceStream::drain(std::vector<BObolCompactOccurrence> &out,
+    size_t cap)
+{
+    std::lock_guard<std::mutex> guard(this->mutex);
+    const size_t count = (cap == 0 || cap >= this->pending.size()) ?
+	this->pending.size() : cap;
+    if (!count)
+	return 0;
+    out.reserve(out.size() + count);
+    for (size_t i = 0; i < count; i++)
+	out.push_back(std::move(this->pending[i]));
+    this->pending.erase(this->pending.begin(), this->pending.begin() + count);
+    return count;
+}
+
+size_t
+BObolCompactOccurrenceStream::size(void)
+{
+    std::lock_guard<std::mutex> guard(this->mutex);
+    return this->pending.size();
+}
+
+/* Populate the derived lookup maps and aggregate bounds for the appended tail
+ * [firstNew, entries.size()).  compact_add_occurrence intentionally leaves these
+ * to a rebuild at install time; mergeCompactOccurrences must fill them for the
+ * new entries only (mirrors compact_rebuild_entry_index's per-entry work) so the
+ * live registry stays consistent without an O(N) full rebuild each batch.  The
+ * global pathEntryOrder sort is skipped here: rendering does not depend on it and
+ * the final adopt produces a fully sorted authoritative index. */
+static void
+compact_index_append_derived(BObolCompactInstanceIndex &index, size_t firstNew)
+{
+    for (size_t i = firstNew; i < index.entries.size(); i++) {
+	index.entryIndex[index.entries[i].instance] = i;
+	index.pathEntryOrder.push_back(i);
+	const std::string leaf = database_source_leaf_component(
+	    index.entries[i].semantic.path);
+	if (!leaf.empty())
+	    index.entryIndicesByLeaf[leaf].push_back(i);
+	const char *sourceName =
+	    index.entries[i].semantic.sourceName.getString();
+	if (sourceName && sourceName[0])
+	    index.entryIndicesBySourceName[sourceName].push_back(i);
+	index.partReferenceCounts[index.entries[i].part]++;
+	compact_index_bounds_add(index, index.entries[i]);
+    }
+}
+
+/* Drawing-data tier of a compact occurrence: a coarse proxy box is superseded by
+ * a tighter proxy which is superseded by realized geometry.  Progressive
+ * streaming upgrades a leaf's occurrence in place when a higher tier arrives. */
+static int
+compact_geometry_tier(const char *geometryKind)
+{
+    if (!geometryKind || !geometryKind[0])
+	return 2;
+    if (BU_STR_EQUAL(geometryKind, "aabb"))
+	return 0;
+    if (BU_STR_EQUAL(geometryKind, "obb"))
+	return 1;
+    return 2;
+}
+
+/* Replace one leaf occurrence's drawing data in place: swap its part geometry,
+ * transform, flags, and summary for the incoming higher-tier occurrence while
+ * preserving the entry's instance identity, semantic key, and runtime
+ * (visible/selected/pickable) state.  instances[i] runs parallel to entries[i]
+ * (both are appended together by compact_add_occurrence and never reordered), so
+ * the instance record is updated at the same index. */
+static bool
+compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
+	BObolCompactInstanceIndex &index, size_t entryIdx,
+	const BObolCompactOccurrence &occurrence)
+{
+    const std::shared_ptr<const Obol::PartGeometry> &geometry =
+	occurrence.geometry;
+    if (!source || !geometry || entryIdx >= index.entries.size() ||
+	entryIdx >= index.instances.size())
+	return false;
+
+    const bool meshOccurrence = occurrence.summary.shapeKind ==
+	BObolRealizedShapeSummary::SHAPE_MESH;
+    const char *partKind = meshOccurrence ? "mesh" :
+	(geometry->points && !geometry->wire ? "point" : "wire");
+    Obol::PartId newPartId;
+    if (!compact_add_geometry_part_if_needed(index, partKind, geometry,
+	    newPartId))
+	return false;
+
+    BObolCompactInstanceEntry &entry = index.entries[entryIdx];
+    Obol::InstanceUpdate &update = index.instances[entryIdx];
+
+    /* Drop the outgoing entry's bounds/part-ref/kind-count contribution before
+     * mutating it, then re-add for the replacement. */
+    compact_index_bounds_remove(index, entry);
+    std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>::iterator
+	oldRef = index.partReferenceCounts.find(entry.part);
+    if (oldRef != index.partReferenceCounts.end() && oldRef->second > 0)
+	oldRef->second--;
+    if (entry.shapeSummary.shapeKind == BObolRealizedShapeSummary::SHAPE_MESH) {
+	if (index.shadedCount > 0)
+	    index.shadedCount--;
+    } else if (index.wireCount > 0) {
+	index.wireCount--;
+    }
+
+    SbMatrix geometryToSource = occurrence.geometryTransform;
+    geometryToSource.multRight(occurrence.localTransform);
+    const SbMatrix matrix = cad_instance_matrix(source, geometryToSource);
+
+    entry.part = newPartId;
+    entry.geometry = geometry;
+    entry.wireGeometry = geometry->wire ? TRUE : FALSE;
+    entry.pointGeometry = geometry->points ? TRUE : FALSE;
+    entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
+    entry.lodBacked = occurrence.lodBacked;
+    entry.sourceMeshRequestValid = occurrence.sourceMeshRequestValid;
+    if (entry.sourceMeshRequestValid)
+	entry.sourceMeshRequest = occurrence.sourceMeshRequest;
+    entry.localToSource = matrix;
+    entry.geometryTransform = occurrence.geometryTransform;
+    entry.localTransform = geometryToSource;
+    /* Keep the entry's path/sourceName/instanceKey (leaf identity) untouched;
+     * only the drawing-data descriptors change. */
+    entry.shapeSummary.shapeKind = occurrence.summary.shapeKind;
+    entry.shapeSummary.geometryKind = occurrence.summary.geometryKind;
+    entry.shapeSummary.recordRole = occurrence.summary.recordRole;
+    entry.shapeSummary.sourceType = occurrence.summary.sourceType;
+    entry.style = compact_effective_style(entry);
+    compact_sync_shape_summary(entry);
+
+    update.record.part = newPartId;
+    update.record.localToRoot = matrix;
+    update.record.style = entry.style;
+
+    index.partReferenceCounts[newPartId]++;
+    compact_index_bounds_add(index, entry);
+    if (meshOccurrence)
+	index.shadedCount++;
+    else
+	index.wireCount++;
+    return true;
+}
+
+int
+SoBRLDatabaseSource::mergeCompactOccurrences(
+    const std::vector<BObolCompactOccurrence> &occurrences)
+{
+    if (occurrences.empty())
+	return 0;
+
+    if (!this->d->compactIndex) {
+	this->d->compactIndex = new BObolCompactInstanceIndex;
+	this->d->compactIndexActive = TRUE;
+	this->d->compactOccurrenceRegistry = TRUE;
+    }
+    BObolCompactInstanceIndex &index = *this->d->compactIndex;
+
+    /* Match an incoming occurrence to the leaf's existing occurrence by
+     * normalized full path (the box and its realized geometry share it). */
+    std::unordered_map<std::string, size_t> entryByPath;
+    entryByPath.reserve(index.entries.size());
+    for (size_t i = 0; i < index.entries.size(); i++) {
+	const char *p = database_source_skip_leading_slash(
+	    index.entries[i].semantic.path.getString());
+	if (p && p[0])
+	    entryByPath[p] = i;
+    }
+
+    const size_t firstNew = index.entries.size();
+    int ordinal = static_cast<int>(index.entries.size());
+    int changed = 0;
+    for (const BObolCompactOccurrence &occurrence : occurrences) {
+	if (!occurrence.geometry)
+	    continue;
+	const int newTier = compact_geometry_tier(
+	    occurrence.summary.geometryKind.getString());
+	const char *p = database_source_skip_leading_slash(
+	    occurrence.summary.path.getString());
+	std::unordered_map<std::string, size_t>::iterator found =
+	    (p && p[0]) ? entryByPath.find(p) : entryByPath.end();
+	if (found != entryByPath.end()) {
+	    const int oldTier = compact_geometry_tier(
+		index.entries[found->second].shapeSummary.geometryKind.getString());
+	    if (newTier <= oldTier)
+		continue;
+	    if (compact_index_replace_entry_geometry(this, index,
+		    found->second, occurrence))
+		changed++;
+	    continue;
+	}
+	compact_occurrence_build input;
+	input.occurrence = occurrence;
+	input.semantic = compact_semantic_from_summary(occurrence.summary);
+	int unsupported = 0;
+	const size_t before = index.entries.size();
+	compact_add_occurrence(this, index, input, ordinal, unsupported);
+	if (unsupported || index.entries.size() == before)
+	    continue;
+	if (p && p[0])
+	    entryByPath[p] = index.entries.size() - 1;
+	changed++;
+    }
+    if (!changed)
+	return 0;
+
+    if (index.entries.size() > firstNew)
+	compact_index_append_derived(index, firstNew);
+    this->d->compactOccurrenceRegistry = TRUE;
+    this->markCompiledAssemblyDirty();
+    this->markCadBatchDirty();
+
+    SbBox3f bounds;
+    if (compact_index_source_bounds(index, bounds) && !bounds.isEmpty())
+	(void)this->setSourceBoundsState(TRUE, bounds.getMin(),
+	    bounds.getMax());
+    return changed;
 }
 
 static uint64_t
@@ -11584,11 +12081,18 @@ SoBRLDatabaseSource::rayPick(SoRayPickAction *action)
 SbBool
 SoBRLDatabaseSource::realizeDatabaseWireframe(void)
 {
+    return this->realizeDatabaseWireframe(NULL);
+}
+
+SbBool
+SoBRLDatabaseSource::realizeDatabaseWireframe(
+    BObolCompactOccurrenceStream *stream)
+{
     BObolDatabaseSourceRealizationCache cache;
     if (source_uses_evaluated_wire_realization(this))
 	return bobol_database_source_realize_wireframe_with_cache(this, &cache);
     return bobol_database_source_realize_wireframe_compact_with_cache(
-	this, &cache) > 0 ? TRUE : FALSE;
+	this, &cache, stream) > 0 ? TRUE : FALSE;
 }
 
 static void
@@ -11611,7 +12115,8 @@ mark_source_realized_current(SoBRLDatabaseSource *source)
 int
 bobol_database_source_realize_wireframe_compact_with_cache(
     SoBRLDatabaseSource *source,
-    BObolDatabaseSourceRealizationCache *cache)
+    BObolDatabaseSourceRealizationCache *cache,
+    BObolCompactOccurrenceStream *stream)
 {
     BObolPerformanceTimer timer(BOBOL_PERF_WIRE_REALIZE_US);
     if (timer.active())
@@ -11688,6 +12193,7 @@ bobol_database_source_realize_wireframe_compact_with_cache(
     data.cache = cache;
     data.revision = revision;
     data.compact_index = new BObolCompactInstanceIndex;
+    data.stream_sink = stream;
 
     const char *av[1] = {treeName};
     const int ret = db_walk_tree_leaf_instances(source->d->dbip, 1, av, 1,
@@ -11866,17 +12372,24 @@ bobol_database_source_realize_wireframe_with_cache(
 SbBool
 SoBRLDatabaseSource::realizeDatabaseMesh(void)
 {
+    return this->realizeDatabaseMesh(NULL);
+}
+
+SbBool
+SoBRLDatabaseSource::realizeDatabaseMesh(BObolCompactOccurrenceStream *stream)
+{
     BObolDatabaseSourceRealizationCache cache;
     if (source_uses_evaluated_points_realization(this))
 	return bobol_database_source_realize_mesh_with_cache(this, &cache);
     return bobol_database_source_realize_mesh_compact_with_cache(
-	this, &cache) > 0 ? TRUE : FALSE;
+	this, &cache, stream) > 0 ? TRUE : FALSE;
 }
 
 int
 bobol_database_source_realize_mesh_compact_with_cache(
     SoBRLDatabaseSource *source,
-    BObolDatabaseSourceRealizationCache *cache)
+    BObolDatabaseSourceRealizationCache *cache,
+    BObolCompactOccurrenceStream *stream)
 {
     BObolPerformanceTimer timer(BOBOL_PERF_MESH_REALIZE_US);
     if (timer.active())
@@ -11944,7 +12457,18 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	return -1;
     }
 
-    if (compact_mesh_prefill_cache(source, cache, treeName) < 0) {
+    /* The prefill tessellates every leaf up front as one batch that emits no
+     * occurrences, so a streaming consumer would see nothing until the whole
+     * walk finished.  When streaming, skip it: realize_mesh_leaf then tessellates
+     * each uncached leaf inline and publishes its occurrence as it completes
+     * (per-object streaming).  Instance reuse still holds via the per-directory
+     * geometry cache consulted in the walk. */
+    /* Run the prefill in every mode: its per-BOT copy is now parallelized
+     * (compact_mesh_prefill_realize) so it fills the geometry cache quickly, and
+     * the following walk still streams occurrences off that cache as it builds
+     * them.  It also keeps the prefill's transformed-reuse dedup and the direct
+     * BOT->PartGeometry conversion (no Coin SoBRLMeshShape intermediate). */
+    if (compact_mesh_prefill_cache(source, cache, treeName, stream) < 0) {
 	if (!cache->preserveCompactSourceOnFailure) {
 	    remove_non_auxiliary_children(source);
 	    source->discardCompactInstanceHistory();
@@ -11962,6 +12486,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
     data.cache = cache;
     data.revision = revision;
     data.compact_index = new BObolCompactInstanceIndex;
+    data.stream_sink = stream;
 
     const char *av[1] = {treeName};
     const int ret = db_walk_tree_leaf_instances(source->d->dbip, 1, av, 1,

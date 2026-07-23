@@ -30,7 +30,9 @@
 #include <Inventor/fields/SoSFVec3f.h>
 #include <Inventor/nodes/SoSeparator.h>
 
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 class SoBRLVListShape;
@@ -439,6 +441,30 @@ struct BOBOL_EXPORT BObolCompactOccurrence {
     int booleanOperation;
 };
 
+/** Thread-safe hand-off of completed compact occurrences from a realization
+ * worker thread to the progressive pump thread.  The worker pushes copies of
+ * finished per-leaf occurrences as they are tessellated/plotted; the pump drains
+ * batches and appends them to the live compact root so geometry streams in
+ * incrementally instead of appearing all at once when the walk completes.
+ *
+ * BObolCompactOccurrence::geometry is a shared_ptr<const PartGeometry> (immutable
+ * pointee), so pushing a copy across threads is a race-free refcount bump; all
+ * other fields are value types. */
+struct BOBOL_EXPORT BObolCompactOccurrenceStream {
+    void push(const BObolCompactOccurrence &occurrence);
+    size_t drain(std::vector<BObolCompactOccurrence> &out, size_t cap);
+    size_t size(void);
+    void requestCancel(void) { cancelled.store(true, std::memory_order_release); }
+    bool isCancelled(void) const
+    {
+	return cancelled.load(std::memory_order_acquire);
+    }
+
+    std::mutex mutex;
+    std::vector<BObolCompactOccurrence> pending;
+    std::atomic<bool> cancelled{false};
+};
+
 struct BOBOL_EXPORT BObolRealizedMaterialSummary {
     BObolRealizedMaterialSummary(void);
 
@@ -810,6 +836,11 @@ public:
     SbBool realizePrototypeWireframe(void);
     SbBool realizeDatabaseWireframe(void);
     SbBool realizeDatabaseMesh(void);
+    /* Streaming variants: publish each completed per-leaf occurrence to the
+     * given stream as the walk produces it, so a consumer can adopt geometry
+     * incrementally.  Passing NULL is identical to the zero-argument form. */
+    SbBool realizeDatabaseWireframe(BObolCompactOccurrenceStream *stream);
+    SbBool realizeDatabaseMesh(BObolCompactOccurrenceStream *stream);
     int clearRealizedGeometry(SbBool preserveAuxiliary = TRUE);
     int clearExternalPrimaryGeometry(void);
     /* Publish source-local primary geometry for externally supplied source
@@ -853,6 +884,15 @@ public:
     int getRealizedMaterialObjectCount(void) const;
     int setCompactOccurrence(const BObolCompactOccurrence &occurrence);
     int setCompactOccurrenceRegistry(
+	const std::vector<BObolCompactOccurrence> &occurrences);
+    /* Incrementally merge occurrences into the live compact registry without
+     * replacing the whole index.  Each incoming occurrence upgrades the leaf's
+     * existing occurrence in place when it carries higher-tier drawing data
+     * (AABB < OBB < realized geometry, ranked by geometryKind) and is appended
+     * only when that leaf has no occurrence yet.  Used to stream per-leaf
+     * geometry onto a standing coarse (box) root during progressive
+     * realization so boxes are replaced, not left lingering. */
+    int mergeCompactOccurrences(
 	const std::vector<BObolCompactOccurrence> &occurrences);
     SbBool hasCompactInstanceIndex(void) const;
     SbBool isCompactOccurrenceRegistry(void) const;
@@ -953,10 +993,12 @@ private:
 	    BObolDatabaseSourceRealizationCache *cache);
     friend int bobol_database_source_realize_wireframe_compact_with_cache(
 	    SoBRLDatabaseSource *source,
-	    BObolDatabaseSourceRealizationCache *cache);
+	    BObolDatabaseSourceRealizationCache *cache,
+	    BObolCompactOccurrenceStream *stream);
     friend int bobol_database_source_realize_mesh_compact_with_cache(
 	    SoBRLDatabaseSource *source,
-	    BObolDatabaseSourceRealizationCache *cache);
+	    BObolDatabaseSourceRealizationCache *cache,
+	    BObolCompactOccurrenceStream *stream);
     friend void bobol_database_source_seed_realization_cache(
 	    SoBRLDatabaseSource *source,
 	    BObolDatabaseSourceRealizationCache *cache);

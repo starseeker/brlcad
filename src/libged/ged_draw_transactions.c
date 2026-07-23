@@ -31,6 +31,7 @@
 
 #include "bu/ptbl.h"
 #include "bu/str.h"
+#include "bu/time.h"
 #include "bu/color.h"
 #include "bu/hash.h"
 #include "bu/malloc.h"
@@ -1087,9 +1088,12 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 
     vect_t obol_min, obol_max;
     int obol_empty = 1;
+    /* Coarse-first: use only cheap proxy/source bounds here.  The progressive
+     * autoview refines framing as bounds stream in; do not prep the whole
+     * assembly synchronously (that was ~11s of first-draw stall). */
     int have_obol_bounds =
 	ged_draw_obol_scene_database_autoview_bounds(gedp, &obol_min,
-	    &obol_max, &obol_empty) && !obol_empty;
+	    &obol_max, &obol_empty, 0) && !obol_empty;
 
     int adjusted = 0;
     for (size_t i = 0; i < view_ctx_count; i++) {
@@ -1170,10 +1174,20 @@ _ged_draw_apply_draw(struct ged *gedp,
 	return -1;
     }
 
+    const int _obol_timing = getenv("BOBOL_DRAW_TIMING") ? 1 : 0;
+    int64_t _t = _obol_timing ? bu_gettime() : 0;
     if (txn->autoview)
 	(void)ged_draw_autoview_for_transaction(gedp, view_ctx, draw_paths,
 						draw_count, 0);
+    if (_obol_timing) {
+	bu_log("[obol-timing] txn: autoview                  %8.1f ms\n",
+	       (double)(bu_gettime() - _t) / 1000.0);
+	_t = bu_gettime();
+    }
     (void)ged_selection_draw_sync(gedp, NULL);
+    if (_obol_timing)
+	bu_log("[obol-timing] txn: selection_draw_sync       %8.1f ms\n",
+	       (double)(bu_gettime() - _t) / 1000.0);
 
     if (result) {
 	if (result->affected_groups <= 0)
