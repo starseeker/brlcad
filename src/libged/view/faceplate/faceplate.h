@@ -33,6 +33,8 @@ extern int _fp_cmd_model_axes(void *bs, int argc, const char **argv);
 extern int _fp_cmd_view_axes(void *bs, int argc, const char **argv);
 extern int _fp_cmd_grid(void *bs, int argc, const char **argv);
 extern int _fp_cmd_irect(void *bs, int argc, const char **argv);
+extern int _fp_bool_property_set(struct ged *gedp, struct ged_view_context *view_ctx,
+	const char *property_name, int enabled);
 __END_DECLS
 
 #endif /* GED_FACEPLATE_H */

@@ -32,7 +32,7 @@ include/icv/io.h
 	impacting renames: callers migrating to the new APIs must review
 	and handle the new NULL or -1 failure returns.
 
-	icv_create -> icv_image_create
+	icv_image_create -> icv_create
 	icv_render_info_free -> icv_render_info_destroy
 	icv_image_set_render_info -> icv_image_take_render_info
 	[deprecated 7.44]

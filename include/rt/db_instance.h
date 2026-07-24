@@ -206,6 +206,17 @@ RT_EXPORT extern struct db_i * db_create_inmem(void);
  */
 RT_EXPORT extern void db_close(struct db_i *dbip);
 
+/**
+ * Query or change combination-instance identifier tracking for tree walks.
+ *
+ * The setter returns the previous state, allowing a caller to restore a
+ * temporary override.  Both functions return -1 for a null database.  The
+ * setting belongs to the database instance; callers must serialize changes
+ * with tree walks using the same database.
+ */
+RT_EXPORT extern int db_comb_instance_ids_get(const struct db_i *dbip);
+RT_EXPORT extern int db_comb_instance_ids_set(struct db_i *dbip, int enabled);
+
 
 /**
  * Return the i-th directory hash list head for the given database instance.

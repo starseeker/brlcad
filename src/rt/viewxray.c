@@ -42,7 +42,6 @@
 #include "vmath.h"
 #include "icv.h"
 #include "raytrace.h"
-#include "dm.h"
 
 #include "./rtuif.h"
 #include "./ext.h"
@@ -171,17 +170,17 @@ view_eol(struct application *ap)
 		bu_semaphore_release( BU_SEM_SYSCALL );
 	    }
 	}
-	if ( fbp != FB_NULL ) {
+	if (fbp != NULL && rt_fb_output_enabled) {
 	    if (rtg_parallel) {
 		bu_semaphore_acquire( BU_SEM_SYSCALL );
 	    }
-	    fb_write( fbp, 0, ap->a_y, scanbuf, width );
+	    imgstream_fb_write(fbp, 0, ap->a_y, scanbuf, (size_t)width);
 	    if (rtg_parallel) {
 		bu_semaphore_release( BU_SEM_SYSCALL );
 	    }
 	}
 
-	if (bif == NULL && fbp == FB_NULL && outfp == NULL)
+	if (bif == NULL && (!fbp || !rt_fb_output_enabled) && outfp == NULL)
 	    bu_log("rtxray: strange, no end of line actions taken.\n");
     }
 }

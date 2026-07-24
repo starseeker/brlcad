@@ -48,13 +48,12 @@ though an input framebuffer is normally required.
 ====
 [source,bash]
 ----
-fb-fb /dev/X /dev/mem
-fb-pix /dev/mem > snapshot.pix
+fb-fb source.pix snapshot.pix
+fb-pix snapshot.pix > snapshot-copy.pix
 ----
-Copy whatever is currently displayed on the X11 framebuffer into the
-in-memory framebuffer, then save it to a *pix*(5) file with *fb-pix*(1).
-This captures a render produced by *rt*(1) without re-running the
-raytrace.
+Copy a file-backed framebuffer into a second file-backed framebuffer, then
+save it to a *pix*(5) file with *fb-pix*(1).  A visible application framebuffer
+is endpoint-owned; capture it with that application's screen-capture command.
 ====
 
 [[see_also]]

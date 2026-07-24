@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "bv.h"
+
 #include "../ged_private.h"
 extern "C" {
 #include "./ged_draw.h"
@@ -45,10 +47,11 @@ _ged_cm_vsize(struct ged *gedp, vect_t *UNUSED(v), mat_t *UNUSED(m), const int a
 {
     if (argc < 2)
 	return -1;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return -1;
     /* for some reason, scale is supposed to be half of size... */
-    gedp->ged_gvp->gv_size = atof(argv[1]);
-    gedp->ged_gvp->gv_scale = gedp->ged_gvp->gv_size * 0.5;
-    gedp->ged_gvp->gv_isize = 1.0 / gedp->ged_gvp->gv_size;
+    bv_size_set(bv_context_view((struct bv_context *)view_ctx), atof(argv[1]));
     return 0;
 }
 
@@ -163,13 +166,17 @@ _ged_cm_end(struct ged *gedp, vect_t *v, mat_t *m, const int argc, const char **
 
     if (argc < 0 || argv == NULL)
 	return 1;
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return -1;
 
     /* now we have to finish view calculations that are deferred until
      * the end command runs.
      */
-    MAT_COPY(gedp->ged_gvp->gv_rotation, (*m));
-    MAT_DELTAS_VEC_NEG(gedp->ged_gvp->gv_center, (*v));
-    bv_update(gedp->ged_gvp);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, (*m));
+    bv_center_set(view, (*v));
+    ged_view_context_update(view_ctx);
 
     struct bu_vls eye = BU_VLS_INIT_ZERO;
     bu_vls_printf(&eye, "%lf %lf %lf", V3ARGS((*v)));
@@ -309,6 +316,9 @@ ged_loadview_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+    if (!view_ctx)
+	return BRLCAD_ERROR;
 
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
@@ -335,7 +345,7 @@ ged_loadview_core(struct ged *gedp, int argc, const char *argv[])
     /* turn perspective mode off, by default.  A "-p" option in the
      * view script will turn it back on.
      */
-    gedp->ged_gvp->gv_perspective = 0;
+    bv_perspective_set(bv_context_view((struct bv_context *)view_ctx), 0.0);
 
     /* iterate over the contents of the raytrace script */
     /* TODO: change to bu_fgets or bu_vls_fgets */

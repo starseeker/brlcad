@@ -33,6 +33,7 @@
 #include "bg/trimesh.h"
 #include "wdb.h"
 #include "analyze.h"
+#include "ged/event_txn.h"
 
 #include "../ged_private.h"
 
@@ -52,6 +53,8 @@ region_flag_set(struct ged *gedp, struct directory *dp) {
 	bu_avs_free(&avs);
 	return BRLCAD_ERROR;
     }
+    bu_avs_free(&avs);
+    (void)ged_event_notify_attribute_changed(gedp, dp->d_namep, 1, NULL);
     return BRLCAD_OK;
 }
 
@@ -71,6 +74,8 @@ region_flag_clear(struct ged *gedp, struct directory *dp) {
 	bu_avs_free(&avs);
 	return BRLCAD_ERROR;
     }
+    bu_avs_free(&avs);
+    (void)ged_event_notify_attribute_changed(gedp, dp->d_namep, 1, NULL);
     return BRLCAD_OK;
 }
 
@@ -92,6 +97,8 @@ color_shader_clear(struct ged *gedp, struct directory *dp) {
 	bu_avs_free(&avs);
 	return BRLCAD_ERROR;
     }
+    bu_avs_free(&avs);
+    (void)ged_event_notify_object_material_changed(gedp, dp->d_namep, NULL);
     return BRLCAD_OK;
 }
 
@@ -115,6 +122,7 @@ comb_tree_clear(struct ged *gedp, struct directory *dp)
 	return BRLCAD_ERROR;
     }
     rt_db_free_internal(&intern);
+    (void)ged_event_notify_comb_tree_changed(gedp, dp->d_namep, 1, NULL);
     return BRLCAD_OK;
 }
 
@@ -536,8 +544,15 @@ comb_decimate(struct ged *gedp, struct directory *dp)
 		bu_log("Unable to create a valid version of %s via decimation\n", bot_dp->d_namep);
 	    } else {
 		struct rt_wdb *wdbp = wdb_dbopen(gedp->dbip, RT_WDB_TYPE_DB_DEFAULT);
+		int event_batch_opened = (ged_event_batch_begin(gedp) > 0);
 		if (wdb_put_internal(wdbp, bot_dp->d_namep, &intern, 1.0) < 0) {
+		    if (event_batch_opened)
+			ged_event_batch_end(gedp, NULL);
 		    bu_log("Failed to write decimated version of %s back to database\n", bot_dp->d_namep);
+		} else {
+		    (void)ged_event_notify_object_modified(gedp, bot_dp->d_namep, 1, NULL);
+		    if (event_batch_opened)
+			ged_event_batch_end(gedp, NULL);
 		}
 	    }
 	}
@@ -633,11 +648,6 @@ comb_remove_members(struct ged *gedp, struct directory *dp, int argc, const char
 	    bu_vls_printf(gedp->ged_result_str, "ERROR: Failure deleting %s/%s\n", dp->d_namep, argv[i]);
 	    ret = BRLCAD_ERROR;
 	} else {
-	    struct bu_vls path = BU_VLS_INIT_ZERO;
-
-	    bu_vls_printf(&path, "%s/%s", dp->d_namep, argv[i]);
-	    _dl_eraseAllPathsFromDisplay(gedp, bu_vls_addr(&path), 0);
-	    bu_vls_free(&path);
 	    bu_vls_printf(gedp->ged_result_str, "deleted %s/%s\n", dp->d_namep, argv[i]);
 	}
     }

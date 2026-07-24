@@ -77,11 +77,12 @@
 #include "bu/color.h"
 #include "bu/getopt.h"
 #include "bu/interrupt.h"
+#include "bu/log.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
 #include "bu/exit.h"
 #include "vmath.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 #define USAGE "Usage: gif-fb [-F fb_file] [-c] [-i image#] [-o] [-v] [-z] [gif_file]\n       (stdin used with '<' construct if gif_file not supplied)"
@@ -97,7 +98,7 @@ static int image = 0;		/* # of image to display (0 => all) */
 static char *gif_file = NULL;	/* GIF file name */
 static FILE *gfp = NULL;		/* GIF input stream handle */
 static char *fb_file = NULL;	/* frame buffer name */
-static struct fb *fbp = FB_NULL;	/* frame buffer handle */
+static imgstream_fb_t *fbp = NULL;	/* frame buffer handle */
 static int ht;			/* virtual frame buffer height */
 static int width, height;		/* overall "screen" size */
 static int write_width;		/* used width of screen, <= width */
@@ -110,9 +111,8 @@ static int g_pixel;		/* global # bits/pixel in image */
 static int pixel;			/* local # bits/pixel in image */
 static int background;		/* color index of screen background */
 static size_t entries;		/* # of global color map entries */
-static RGBpixel *g_cmap;		/* bu_malloc()ed global color map */
-static RGBpixel *cmap;			/* bu_malloc()ed local color map */
-/* NOTE:  Relies on R, G, B order and also on RGBpixel being 3 unsigned chars. */
+static unsigned char (*g_cmap)[3];	/* bu_malloc()ed global color map */
+static unsigned char (*cmap)[3];	/* bu_malloc()ed local color map */
 
 #define GIF_EXTENSION '!'
 #define GIF_IMAGE ','
@@ -120,7 +120,7 @@ static RGBpixel *cmap;			/* bu_malloc()ed local color map */
 
 /* in ioutil.c */
 void Message(const char *format, ...);
-void Fatal(struct fb *fbiop, const char *format, ...);
+void Fatal(imgstream_fb_t *fbiop, const char *format, ...);
 
 
 static void
@@ -172,7 +172,7 @@ PutPixel(int value)
     if (pass == stop)
 	Fatal(fbp, "Too much raster data for image size");
 
-    if (value > (int)entries)
+    if (value < 0 || value >= (int)entries)
 	Fatal(fbp, "Decoded color index %d exceeds color map size", value);
 
     pixbuf[col*3+RED] = cmap[value][RED];	/* stuff pixel */
@@ -186,7 +186,8 @@ PutPixel(int value)
 	  the bottom of the available frame buffer.
 	*/
 
-	if (fb_write(fbp, 0, ht - row, pixbuf, write_width) < 0)
+	if (imgstream_fb_write(fbp, 0, ht - row, pixbuf,
+			       (size_t)write_width) < 0)
 	    Message("Error writing scan line to frame buffer");
 
 	col = left;
@@ -371,9 +372,8 @@ LZW(void)
 	} else {
 	    if (c > next_code) {
 		bu_log("LZW code impossibly large (%d > %d, diff: %d)\n", c, next_code, c-next_code);
-		if (fbp != FB_NULL && fb_close(fbp) == -1) {
-		    bu_log("Error closing frame buffer\n");
-		}
+		if (fbp != NULL)
+		    imgstream_fb_close(fbp);
 		bu_exit(EXIT_FAILURE, NULL);
 	    }
 
@@ -625,8 +625,8 @@ main(int argc, char **argv)
 
     /* Process global color map. */
 
-    g_cmap = (RGBpixel *)bu_malloc(256 * sizeof(RGBpixel), "g_cmap");
-    cmap = (RGBpixel *)bu_malloc(256 * sizeof(RGBpixel), "cmap");
+    g_cmap = (unsigned char (*)[3])bu_malloc(256 * sizeof(*g_cmap), "g_cmap");
+    cmap = (unsigned char (*)[3])bu_malloc(256 * sizeof(*cmap), "cmap");
 
     entries = (size_t)(1 << g_pixel);
 
@@ -677,17 +677,18 @@ main(int argc, char **argv)
 
     /* Open frame buffer for unbuffered output. */
 
-    pixbuf = (unsigned char *)bu_malloc(width * sizeof(RGBpixel), "pixbuf");
+    pixbuf = (unsigned char *)bu_malloc((size_t)width * 3, "pixbuf");
 
-    if ((fbp = fb_open(fb_file, width, height)) == FB_NULL) {
+    if ((fbp = imgstream_fb_open(fb_file, (size_t)width,
+				 (size_t)height)) == NULL) {
 	Fatal(fbp, "Couldn't open frame buffer");
     }
 
     {
-	int wt = fb_getwidth(fbp);
+	int wt = (int)imgstream_fb_width(fbp);
 	int zoom;
 
-	ht = fb_getheight(fbp);
+	ht = (int)imgstream_fb_height(fbp);
 
 	if (wt < width || ht < height)
 	    Message("Frame buffer too small (%dx%d); %dx%d needed", wt, ht, width, height);
@@ -698,16 +699,16 @@ main(int argc, char **argv)
 	write_width = width;
 	V_MIN(write_width, wt);
 
-	zoom = fb_getwidth(fbp)/width;
-	V_MIN(zoom, fb_getheight(fbp)/height);
+	zoom = (int)imgstream_fb_width(fbp)/width;
+	V_MIN(zoom, (int)imgstream_fb_height(fbp)/height);
 
 	if (do_zoom && zoom > 1) {
-	    (void)fb_view(fbp, width/2, height/2,
-			  zoom, zoom);
+	    (void)imgstream_fb_view(fbp, width/2, height/2, zoom, zoom);
 	} else {
 	    /* Unzoomed, full screen */
-	    (void)fb_view(fbp,
-			  fb_getwidth(fbp)/2, fb_getheight(fbp)/2,
+	    (void)imgstream_fb_view(fbp,
+			  (int)imgstream_fb_width(fbp)/2,
+			  (int)imgstream_fb_height(fbp)/2,
 			  1, 1);
 	}
 
@@ -716,7 +717,7 @@ main(int argc, char **argv)
 
     /* Fill frame buffer with background color. */
 
-    if (clear && fb_clear(fbp, g_cmap[background]) == -1) {
+    if (clear && imgstream_fb_clear(fbp, g_cmap[background]) < 0) {
 	Fatal(fbp, "Error clearing frame buffer to background");
     }
 
@@ -724,7 +725,7 @@ main(int argc, char **argv)
     {
 	int i;
 	for (i=0; i < width; i++) {
-	    COPYRGB(&pixbuf[i*3], g_cmap[background]);
+	    memcpy(&pixbuf[i*3], g_cmap[background], 3);
 	}
     }
 
@@ -746,12 +747,8 @@ main(int argc, char **argv)
 		/* GIF spec suggests pause and wait for go-ahead here,
 		   also "screen clear", but they're impractical. */
 
-		if (fb_close(fbp) == -1) {
-		    fbp = FB_NULL;	/* avoid second try */
-		    Fatal(fbp, "Error closing frame buffer");
-		}
-
-		fbp = FB_NULL;
+		imgstream_fb_close(fbp);
+		fbp = NULL;
 
 		if (image > 0)
 		    Fatal(fbp, "Specified image not found");

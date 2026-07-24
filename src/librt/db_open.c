@@ -52,6 +52,24 @@
 
 #include "./librt_private.h"
 
+int
+db_comb_instance_ids_get(const struct db_i *dbip)
+{
+    if (!dbip || !dbip->i)
+	return -1;
+    return dbip->i->dbi_use_comb_instance_ids ? 1 : 0;
+}
+
+int
+db_comb_instance_ids_set(struct db_i *dbip, int enabled)
+{
+    if (!dbip || !dbip->i)
+	return -1;
+    const int previous = dbip->i->dbi_use_comb_instance_ids ? 1 : 0;
+    dbip->i->dbi_use_comb_instance_ids = enabled ? 1 : 0;
+    return previous;
+}
+
 #ifndef SEEK_SET
 #  define SEEK_SET 0
 #endif
@@ -647,9 +665,6 @@ db_i_internal_destroy(struct db_i_internal *i)
 {
     if (!i)
 	return;
-
-    if (i->mesh_c)
-	bv_mesh_lod_context_destroy(i->mesh_c);
 
     /* Free any directory blocks */
     for (size_t ii = 0; ii < BU_PTBL_LEN(&i->dbi_directory_blocks); ii++)

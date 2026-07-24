@@ -34,9 +34,9 @@
 #include "vmath.h"
 #include "bu/app.h"
 #include "bn.h"
-#include "bv/util.h"
 #include "tclcad.h"
 #include "ged.h"
+#include "ged/view.h"
 
 /* local headers */
 #include "./mged.h"
@@ -53,7 +53,6 @@ extern int mged_pre_opendb_clbk(int ac, const char **av, void *gedp, void *ctx);
 extern int mged_post_opendb_clbk(int ac, const char **av, void *gedp, void *ctx);
 extern int mged_pre_closedb_clbk(int ac, const char **av, void *gedp, void *ctx);
 extern int mged_post_closedb_clbk(int ac, const char **av, void *gedp, void *ctx);
-extern int mged_db_during_clbk(int ac, const char **av, void *gedp, void *ctx);
 
 /* Defined in cmd.cpp */
 extern int mged_search_pre_clbk(int ac, const char **av, void *gedp, void *s);
@@ -143,13 +142,11 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "cpi", f_copy_inv, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "d", cmd_ged_erase_wrapper, ged_exec_d, NULL},
     {MGED_CMD_MAGIC, "data_lines", cmd_ged_view_wrapper, ged_exec_data_lines, NULL},
-    {MGED_CMD_MAGIC, "db", cmd_ged_plain_wrapper, ged_exec_db, NULL},
+    {MGED_CMD_MAGIC, "db", cmd_stub, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "db_glob", cmd_ged_plain_wrapper, ged_exec_db_glob, NULL},
     {MGED_CMD_MAGIC, "dbconcat", cmd_ged_plain_wrapper, ged_exec_dbconcat, NULL},
-    {MGED_CMD_MAGIC, "dbfind", cmd_ged_info_wrapper, ged_exec_dbfind, NULL},
     {MGED_CMD_MAGIC, "dbip", cmd_ged_plain_wrapper, ged_exec_dbip, NULL},  // TODO - this needs to go away
     {MGED_CMD_MAGIC, "dbot_dump", cmd_ged_plain_wrapper, ged_exec_dbot_dump, NULL},
-    {MGED_CMD_MAGIC, "dbversion", cmd_ged_plain_wrapper, ged_exec_dbversion, NULL},
     {MGED_CMD_MAGIC, "debug", cmd_ged_plain_wrapper, ged_exec_debug, NULL},
     {MGED_CMD_MAGIC, "debugbu", cmd_ged_plain_wrapper, ged_exec_debugbu, NULL},
     {MGED_CMD_MAGIC, "debugdir", cmd_ged_plain_wrapper, ged_exec_debugdir, NULL},
@@ -178,7 +175,7 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "edmater", f_edmater, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "env", cmd_ged_plain_wrapper, ged_exec_env, NULL},
     {MGED_CMD_MAGIC, "erase", cmd_ged_erase_wrapper, ged_exec_erase, NULL},
-    {MGED_CMD_MAGIC, "ert", cmd_ged_dm_wrapper, ged_exec_ert, NULL},
+    {MGED_CMD_MAGIC, "ert", cmd_ged_display_wrapper, ged_exec_ert, NULL},
     {MGED_CMD_MAGIC, "ev", cmd_ev, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "eqn", f_eqn, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "exit", f_quit, GED_FUNC_PTR_NULL, NULL},
@@ -191,8 +188,8 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "facedef", f_facedef, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "facetize", cmd_ged_plain_wrapper, ged_exec_facetize, NULL},
     {MGED_CMD_MAGIC, "facetize_old", cmd_ged_plain_wrapper, ged_exec_facetize_old, NULL},
-    {MGED_CMD_MAGIC, "fb2pix", cmd_ged_dm_wrapper, ged_exec_fb2pix, NULL},
-    {MGED_CMD_MAGIC, "fbclear", cmd_ged_dm_wrapper, ged_exec_fbclear, NULL},
+    {MGED_CMD_MAGIC, "fb2pix", cmd_ged_display_wrapper, ged_exec_fb2pix, NULL},
+    {MGED_CMD_MAGIC, "fbclear", cmd_ged_display_wrapper, ged_exec_fbclear, NULL},
     {MGED_CMD_MAGIC, "find_arb_edge", cmd_ged_plain_wrapper, ged_exec_find_arb_edge, NULL},
     {MGED_CMD_MAGIC, "find_bot_edge", cmd_ged_plain_wrapper, ged_exec_find_bot_edge, NULL},
     {MGED_CMD_MAGIC, "find_bot_pnt", cmd_ged_plain_wrapper, ged_exec_find_bot_pnt, NULL},
@@ -208,7 +205,7 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "get_autoview", cmd_ged_plain_wrapper, ged_exec_get_autoview, NULL},
     {MGED_CMD_MAGIC, "get_comb", cmd_ged_plain_wrapper, ged_exec_get_comb, NULL},
     {MGED_CMD_MAGIC, "get_dbip", cmd_ged_plain_wrapper, ged_exec_get_dbip, NULL}, // TODO - this needs to go away
-    {MGED_CMD_MAGIC, "get_dm_list", f_get_dm_list, GED_FUNC_PTR_NULL, NULL},
+    {MGED_CMD_MAGIC, "get_display_list", f_get_display_list, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "get_more_default", cmd_get_more_default, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "get_sed", f_get_sedit, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "get_sed_menus", f_get_sedit_menus, GED_FUNC_PTR_NULL, NULL},
@@ -333,17 +330,17 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "pipe_delete_pnt", cmd_ged_plain_wrapper, ged_exec_pipe_delete_pnt, NULL},
     {MGED_CMD_MAGIC, "pipe_move_pnt", cmd_ged_plain_wrapper, ged_exec_pipe_move_pnt, NULL},
     {MGED_CMD_MAGIC, "pipe_prepend_pnt", cmd_ged_plain_wrapper, ged_exec_pipe_prepend_pnt, NULL},
-    {MGED_CMD_MAGIC, "pix2fb", cmd_ged_dm_wrapper, ged_exec_pix2fb, NULL},
+    {MGED_CMD_MAGIC, "pix2fb", cmd_ged_display_wrapper, ged_exec_pix2fb, NULL},
     {MGED_CMD_MAGIC, "plot", cmd_ged_plain_wrapper, ged_exec_plot, NULL},
     {MGED_CMD_MAGIC, "pmat", cmd_ged_view_wrapper, ged_exec_pmat, NULL},
     {MGED_CMD_MAGIC, "pmodel2view", cmd_ged_plain_wrapper, ged_exec_pmodel2view, NULL},
     {MGED_CMD_MAGIC, "png", cmd_ged_plain_wrapper, ged_exec_png, NULL},
-    {MGED_CMD_MAGIC, "png2fb", cmd_ged_dm_wrapper, ged_exec_png2fb, NULL},
+    {MGED_CMD_MAGIC, "png2fb", cmd_ged_display_wrapper, ged_exec_png2fb, NULL},
     {MGED_CMD_MAGIC, "pnts", cmd_ged_plain_wrapper, ged_exec_pnts, NULL},
     {MGED_CMD_MAGIC, "prcolor", cmd_ged_plain_wrapper, ged_exec_prcolor, NULL},
     {MGED_CMD_MAGIC, "prefix", cmd_ged_plain_wrapper, ged_exec_prefix, NULL},
     {MGED_CMD_MAGIC, "press", f_press, GED_FUNC_PTR_NULL, NULL},
-    {MGED_CMD_MAGIC, "preview", cmd_ged_dm_wrapper, ged_exec_preview, NULL},
+    {MGED_CMD_MAGIC, "preview", cmd_ged_display_wrapper, ged_exec_preview, NULL},
     {MGED_CMD_MAGIC, "print", cmd_ged_plain_wrapper, ged_exec_print, NULL},
     {MGED_CMD_MAGIC, "process", cmd_ged_plain_wrapper, ged_exec_process, NULL},
     {MGED_CMD_MAGIC, "protate", cmd_ged_plain_wrapper, ged_exec_protate, NULL},
@@ -373,7 +370,6 @@ static struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "red", f_red, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "redraw", cmd_ged_plain_wrapper, ged_exec_redraw, NULL},
     {MGED_CMD_MAGIC, "refresh", f_refresh, GED_FUNC_PTR_NULL, NULL},
-    {MGED_CMD_MAGIC, "regdebug", f_regdebug, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, "regdef", cmd_ged_plain_wrapper, ged_exec_regdef, NULL},
     {MGED_CMD_MAGIC, "region", cmd_ged_plain_wrapper, ged_exec_region, NULL},
     {MGED_CMD_MAGIC, "regions", cmd_ged_plain_wrapper, ged_exec_regions, NULL},
@@ -551,7 +547,7 @@ mged_refresh_handler(void *clientdata)
     struct mged_state *s = (struct mged_state *)clientdata;
     MGED_CK_STATE(s);
 
-    view_state->vs_flag = 1;
+    mged_refresh_request_view(s, view_state, GED_VIEW_REFRESH_VIEW);
     refresh(s);
 }
 
@@ -614,10 +610,6 @@ mged_setup(struct mged_state *s)
     s->gedp->ged_output_handler = mged_output_handler;
     s->gedp->ged_refresh_clientdata = (void *)s;
     s->gedp->ged_refresh_handler = mged_refresh_handler;
-    s->gedp->vlist_ctx = (void *)s;
-    s->gedp->ged_create_vlist_scene_obj_callback = createDListSolid;
-    s->gedp->ged_create_vlist_display_list_callback = createDListAll;
-    s->gedp->ged_destroy_vlist_callback = freeDListsAll;
     s->gedp->ged_create_io_handler = &tclcad_create_io_handler;
     s->gedp->ged_delete_io_handler = &tclcad_delete_io_handler;
 
@@ -625,7 +617,6 @@ mged_setup(struct mged_state *s)
     ged_clbk_set(s->gedp, "opendb", BU_CLBK_POST, &mged_post_opendb_clbk, (void *)&mged_global_db_ctx);
     ged_clbk_set(s->gedp, "closedb", BU_CLBK_PRE, &mged_pre_closedb_clbk, (void *)&mged_global_db_ctx);
     ged_clbk_set(s->gedp, "closedb", BU_CLBK_POST, &mged_post_closedb_clbk, (void *)&mged_global_db_ctx);
-    ged_clbk_set(s->gedp, "db", BU_CLBK_DURING, &mged_db_during_clbk, (void *)s);
 
     // Register during-execution callback function for search command
     ged_clbk_set(s->gedp, "search", BU_CLBK_PRE,    &mged_search_pre_clbk,      (void *)s);
@@ -650,20 +641,19 @@ mged_setup(struct mged_state *s)
     mged_global_db_ctx.old_dbip = NULL;
     mged_global_db_ctx.post_open_cnt = 0;
 
-    BU_ALLOC(view_state->vs_gvp, struct bview);
-    bv_init(view_state->vs_gvp, NULL);
-    BU_GET(view_state->vs_gvp->callbacks, struct bu_ptbl);
-    bu_ptbl_init(view_state->vs_gvp->callbacks, 8, "bv callbacks");
+    struct ged_view_set *view_set_ctx = ged_view_set_ctx(s->gedp);
+    struct ged_view_context *view_ctx = ged_view_context_create_with_set(view_set_ctx);
+    view_state->vs_gvp = view_ctx;
 
-    view_state->vs_gvp->gv_callback = mged_view_callback;
-    view_state->vs_gvp->gv_clientData = (void *)view_state;
-    MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_state->vs_gvp->gv_center);
+    mat_t view_center;
+    bv_center_mat_get(view_center, mged_view_context_view(view_ctx));
+    MAT_DELTAS_GET_NEG(view_state->vs_orig_pos, view_center);
 
-    view_state->vs_gvp->vset = &s->gedp->ged_views;
-
-    bv_set_add_view(&s->gedp->ged_views, view_state->vs_gvp);
-    bu_ptbl_ins(&s->gedp->ged_free_views, (long *)view_state->vs_gvp);
-    s->gedp->ged_gvp = view_state->vs_gvp;
+    ged_view_set_context_add(view_set_ctx, view_ctx);
+    ged_view_context_owned_add(s->gedp, view_state->vs_gvp);
+    ged_view_context_update_callback_set(view_ctx,
+	    mged_view_callback, (void *)view_state);
+    ged_view_active_ctx_set(s->gedp, view_state->vs_gvp);
 
     /* register commands */
     cmd_setup(s);

@@ -24,7 +24,7 @@ if(BRLCAD_ENABLE_TCL)
     brlcad_addexec(archer "${archer_srcs}" "${archer_libs}" GUI)
     target_compile_definitions(archer PRIVATE HAVE_TK)
     add_dependencies(archer rtwizard)
-    add_target_deps(archer Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
+    add_target_deps(archer Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld)
 
     # Archer needs a lot of files to be copied into place to work - just have it
     # depend on ALL the managed files, rather than trying to list specifics

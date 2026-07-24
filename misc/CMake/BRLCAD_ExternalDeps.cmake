@@ -300,6 +300,44 @@ function(is_cmake_file tf CVAR)
   set(${CVAR} 0 PARENT_SCOPE)
 endfunction(is_cmake_file)
 
+# CMake export files load every matching configuration fragment in their
+# package directory.  The normal staged-file manifest handles tracked removals,
+# but cannot see an orphan left by an interrupted or manually altered prior
+# staging pass.  Prune only .cmake files in directories that the current
+# external install owns before find_package can consume a stale export.
+function(prune_stale_cmake_package_metadata root file_list)
+  set(_package_dirs)
+  foreach(_file IN LISTS ${file_list})
+    if("${_file}" MATCHES "/cmake/.+\\.cmake$")
+      get_filename_component(_package_dir "${_file}" DIRECTORY)
+      list(APPEND _package_dirs "${_package_dir}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES _package_dirs)
+
+  set(_stale_files)
+  foreach(_package_dir IN LISTS _package_dirs)
+    file(GLOB _staged_metadata RELATIVE "${root}"
+      "${root}/${_package_dir}/*.cmake")
+    foreach(_metadata IN LISTS _staged_metadata)
+      list(FIND ${file_list} "${_metadata}" _metadata_current)
+      if(_metadata_current EQUAL -1)
+        list(APPEND _stale_files "${_metadata}")
+      endif()
+    endforeach()
+  endforeach()
+  list(REMOVE_DUPLICATES _stale_files)
+
+  if(_stale_files)
+    message("Removing stale third party CMake package metadata in build directory...")
+    foreach(_metadata IN LISTS _stale_files)
+      file(REMOVE "${root}/${_metadata}")
+      message("  ${root}/${_metadata}")
+    endforeach()
+    message("Removing stale third party CMake package metadata in build directory... done.")
+  endif()
+endfunction(prune_stale_cmake_package_metadata)
+
 # Since the checking process can be long, we want some sort of
 # feedback indicating we're progressing.
 function(bfile_type_msg ALL_CNT ALL_PROCESSED BINARY_LIST)
@@ -1126,6 +1164,7 @@ endfunction()
   foreach(ep ${EXCLUDED_PATTERNS})
     list(FILTER TP_FILES EXCLUDE REGEX ${ep})
   endforeach(ep ${EXCLUDED_PATTERNS})
+  prune_stale_cmake_package_metadata("${CMAKE_BINARY_DIR}" TP_FILES)
 
   # For the very first pass we bulk copy the contents of the
   # BRLCAD_EXT_INSTALL_DIR tree into our own directory.  For some of the

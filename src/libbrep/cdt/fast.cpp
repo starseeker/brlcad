@@ -62,6 +62,7 @@
 #include "bu/opt.h"
 #include "bu/time.h"
 #include "bn/dvec.h"
+#include "bg/line_layer.h"
 #include "brep.h"
 #include "./cdt.h"
 
@@ -291,6 +292,27 @@ getEdgePoints(ON_BrepTrim &trim,
     }
 
     return param_points;
+}
+
+
+static void
+clear_trim_point_samples(ON_BrepTrim *trim)
+{
+    if (!trim || !trim->m_trim_user.p)
+	return;
+
+    std::map<double, BrepTrimPoint *> *points =
+	static_cast<std::map<double, BrepTrimPoint *> *>(trim->m_trim_user.p);
+    for (const auto &entry : *points) {
+	BrepTrimPoint *point = entry.second;
+	if (!point)
+	    continue;
+	delete point->p3d;
+	delete point->n3d;
+	delete point;
+    }
+    delete points;
+    trim->m_trim_user.p = NULL;
 }
 
 static void
@@ -1633,17 +1655,21 @@ PerformClosedSurfaceChecks(
 }
 
 void
-detria_CDT(struct bu_list *vhead,
+detria_CDT(struct bg_line_layer *layer,
 	     const ON_BrepFace &face,
 	     const struct bg_tess_tol *ttol,
 	     const struct bn_tol *tol,
-	     struct bu_list *vlfree,
 	     int plottype,
 	     int UNUSED(num_points))
 {
+    if (!layer)
+	return;
+
     ON_RTree rt_trims;
     ON_2dPointArray on_surf_points;
     const ON_Surface *s = face.SurfaceOf();
+    if (!s)
+	return;
     double surface_width, surface_height;
     int fi = face.m_face_index;
 
@@ -1797,9 +1823,7 @@ detria_CDT(struct bu_list *vhead,
     if (plottype < 3) {
 	if (plottype == 0) { // shaded tris 3d
             ON_3dPoint pnt[3] = {ON_3dPoint(), ON_3dPoint(), ON_3dPoint()};
-            ON_3dVector norm[3] = {ON_3dVector(), ON_3dVector(), ON_3dVector()};
             point_t pt[3] = {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO};
-            vect_t nv[3] = {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO};
             tri.forEachTriangle([&](const detria::Triangle<int> triangle)
             {
                 int tris[3];
@@ -1807,31 +1831,22 @@ detria_CDT(struct bu_list *vhead,
                 tris[1] = triangle.y;
                 tris[2] = triangle.z;
                 for (size_t j = 0; j < 3; j++) {
-                    if (surface_EvNormal(s, tpnts[tris[j]].x, tpnts[tris[j]].y, pnt[j], norm[j])) {
+		    ON_3dVector norm;
+                    if (surface_EvNormal(s, tpnts[tris[j]].x, tpnts[tris[j]].y, pnt[j], norm)) {
                     	std::map<size_t, ON_3dPoint *>::const_iterator ii = pointmap->find(tris[j]);
                 	if (ii != pointmap->end()) {
                 	    pnt[j] = *((*ii).second);
                 	}
-                	if (face.m_bRev) {
-                	    norm[j] = norm[j] * -1.0;
-                	}
                 	VMOVE(pt[j], pnt[j]);
-                	VMOVE(nv[j], norm[j]);
                     }
                 }
-                //tri one
-                BV_ADD_VLIST(vlfree, vhead, nv[0], BV_VLIST_TRI_START);
-                BV_ADD_VLIST(vlfree, vhead, nv[0], BV_VLIST_TRI_VERTNORM);
-                BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_TRI_MOVE);
-                BV_ADD_VLIST(vlfree, vhead, nv[1], BV_VLIST_TRI_VERTNORM);
-                BV_ADD_VLIST(vlfree, vhead, pt[1], BV_VLIST_TRI_DRAW);
-                BV_ADD_VLIST(vlfree, vhead, nv[2], BV_VLIST_TRI_VERTNORM);
-                BV_ADD_VLIST(vlfree, vhead, pt[2], BV_VLIST_TRI_DRAW);
-                BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_TRI_END);
+                (void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_MOVE);
+                (void)bg_line_layer_add(layer, pt[1], BG_GEOMETRY_LINE_DRAW);
+                (void)bg_line_layer_add(layer, pt[2], BG_GEOMETRY_LINE_DRAW);
+                (void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_DRAW);
             }, true);
 	} else if (plottype == 1) { // tris 3d wire
 	    ON_3dPoint pnt[3] = {ON_3dPoint(), ON_3dPoint(), ON_3dPoint()};;
-	    ON_3dVector norm[3] = {ON_3dVector(), ON_3dVector(), ON_3dVector()};;
 	    point_t pt[3] = {VINIT_ZERO, VINIT_ZERO, VINIT_ZERO};
             tri.forEachTriangle([&](const detria::Triangle<int> triangle)
             {
@@ -1840,22 +1855,19 @@ detria_CDT(struct bu_list *vhead,
                 tris[1] = triangle.y;
                 tris[2] = triangle.z;
                 for (size_t j = 0; j < 3; j++) {
-                    if (surface_EvNormal(s, tpnts[tris[j]].x, tpnts[tris[j]].y, pnt[j], norm[j])) {
+		    ON_3dVector norm;
+                    if (surface_EvNormal(s, tpnts[tris[j]].x, tpnts[tris[j]].y, pnt[j], norm)) {
                     	std::map<size_t, ON_3dPoint *>::const_iterator ii = pointmap->find(tris[j]);
                 	if (ii != pointmap->end()) {
                 	    pnt[j] = *((*ii).second);
                 	}
-                	if (face.m_bRev) {
-                	    norm[j] = norm[j] * -1.0;
-                	}
                 	VMOVE(pt[j], pnt[j]);
                     }
                 }
-		//tri one
-		BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_LINE_MOVE);
-		BV_ADD_VLIST(vlfree, vhead, pt[1], BV_VLIST_LINE_DRAW);
-		BV_ADD_VLIST(vlfree, vhead, pt[2], BV_VLIST_LINE_DRAW);
-		BV_ADD_VLIST(vlfree, vhead, pt[0], BV_VLIST_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_MOVE);
+		(void)bg_line_layer_add(layer, pt[1], BG_GEOMETRY_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[2], BG_GEOMETRY_LINE_DRAW);
+		(void)bg_line_layer_add(layer, pt[0], BG_GEOMETRY_LINE_DRAW);
 	    }, true);
 	} else if (plottype == 2) { // tris 2d
 	    point_t pt1 = VINIT_ZERO;
@@ -1879,8 +1891,8 @@ detria_CDT(struct bu_list *vhead,
 		    pt2[0] = tpnts[tris[j]].x;
 		    pt2[1] = tpnts[tris[j]].y;
 		    pt2[2] = 0.0;
-		    BV_ADD_VLIST(vlfree, vhead, pt1, BV_VLIST_LINE_MOVE);
-		    BV_ADD_VLIST(vlfree, vhead, pt2, BV_VLIST_LINE_DRAW);
+		    (void)bg_line_layer_add(layer, pt1, BG_GEOMETRY_LINE_MOVE);
+		    (void)bg_line_layer_add(layer, pt2, BG_GEOMETRY_LINE_DRAW);
 		}
    	    }, true);
 	}
@@ -1906,8 +1918,8 @@ detria_CDT(struct bu_list *vhead,
 	        pt2[0] = tpnts[tris[j]].x;
 	        pt2[1] = tpnts[tris[j]].y;
 	        pt2[2] = 0.0;
-	        BV_ADD_VLIST(vlfree, vhead, pt1, BV_VLIST_LINE_MOVE);
-	        BV_ADD_VLIST(vlfree, vhead, pt2, BV_VLIST_LINE_DRAW);
+	        (void)bg_line_layer_add(layer, pt1, BG_GEOMETRY_LINE_MOVE);
+	        (void)bg_line_layer_add(layer, pt2, BG_GEOMETRY_LINE_DRAW);
 	    }
    	}, true);
     } else if (plottype == 4) {
@@ -1916,7 +1928,7 @@ detria_CDT(struct bu_list *vhead,
 	    pt[0] = tpnts[i].x;
 	    pt[1] = tpnts[i].y;
 	    pt[2] = 0.0;
-	    BV_ADD_VLIST(vlfree, vhead, pt, BV_VLIST_POINT_DRAW);
+	    (void)bg_line_layer_add(layer, pt, BG_GEOMETRY_POINT_DRAW);
 	}
     }
 
@@ -1941,19 +1953,7 @@ detria_CDT(struct bu_list *vhead,
 
 	for (int lti = 0; lti < loop->TrimCount(); lti++) {
 	    ON_BrepTrim *trim = loop->Trim(lti);
-
-	    if (trim->m_trim_user.p) {
-		std::map<double, ON_3dPoint *> *points = (std::map < double,
-			ON_3dPoint * > *) trim->m_trim_user.p;
-		std::map<double, ON_3dPoint *>::const_iterator i;
-		for (i = points->begin(); i != points->end(); i++) {
-		    const ON_3dPoint *p = (*i).second;
-		    delete p;
-		}
-		points->clear();
-		delete points;
-		trim->m_trim_user.p = NULL;
-	    }
+	    clear_trim_point_samples(trim);
 	}
     }
     return;
@@ -1962,17 +1962,15 @@ detria_CDT(struct bu_list *vhead,
 int
 brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
                       const struct bg_tess_tol *ttol, const struct bn_tol *tol,
-                      const ON_Brep *brep, struct bu_list *p_vhead,
-                      struct bv_vlblock *vbp, struct bu_list *vlfree,
-		      int index, int plottype, int num_points)
+                      const ON_Brep *brep, struct bg_line_layer *layer,
+                      int index, int plottype,
+		      int num_points)
 {
     if (plottype == INT_MAX || num_points == INT_MAX)
 	return -1;
 
-    struct bu_list *vhead = p_vhead;
-    if (!vhead) {
-	vhead = bv_vlblock_find(vbp, YELLOW);
-    }
+    if (!layer)
+	return -1;
     ON_wString wstr;
     ON_TextLog tl(wstr);
 
@@ -2002,7 +2000,11 @@ brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
 
     for (int face_index = 0; face_index < brep->m_F.Count(); face_index++) {
         ON_BrepFace *face = brep->Face(face_index);
+        if (!face)
+            continue;
         const ON_Surface *s = face->SurfaceOf();
+        if (!s)
+            continue;
         double surface_width, surface_height;
         if (s->GetSurfaceSize(&surface_width, &surface_height)) {
             // reparameterization of the face's surface and transforms the "u"
@@ -2016,14 +2018,14 @@ brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
     if (index == -1) {
         for (index = 0; index < brep->m_F.Count(); index++) {
             const ON_BrepFace& face = brep->m_F[index];
-            detria_CDT(vhead, face, ttol, tol, vlfree, plottype, num_points);
+            detria_CDT(layer, face, ttol, tol, plottype, num_points);
         }
     } else if (index < brep->m_F.Count()) {
         const ON_BrepFaceArray& faces = brep->m_F;
         if (index < faces.Count()) {
             const ON_BrepFace& face = faces[index];
             face.Dump(tl);
-            detria_CDT(vhead, face, ttol, tol, vlfree, plottype, num_points);
+            detria_CDT(layer, face, ttol, tol, plottype, num_points);
         }
     }
 
@@ -2033,17 +2035,7 @@ brep_facecdt_plot(struct bu_vls *vls, const char *solid_name,
 
     for (int iindex = 0; iindex < brep->m_T.Count(); iindex++) {
 	ON_BrepTrim *trim = brep->Trim(iindex);
-	if (trim->m_trim_user.p != NULL) {
-	    std::map<double, ON_3dPoint *> *points = (std::map<double, ON_3dPoint *> *)trim->m_trim_user.p;
-	    std::map<double, ON_3dPoint *>::const_iterator i;
-	    for (i = points->begin(); i != points->end(); i++) {
-		const ON_3dPoint *p = (*i).second;
-		delete p;
-	    }
-	    points->clear();
-	    delete points;
-	    trim->m_trim_user.p = NULL;
-	}
+	clear_trim_point_samples(trim);
     }
 
     return 0;
@@ -2058,6 +2050,8 @@ bg_CDT(std::vector<int> &faces, std::vector<fastf_t> &pnt_norms, std::vector<fas
     ON_RTree rt_trims;
     ON_2dPointArray on_surf_points;
     const ON_Surface *s = face.SurfaceOf();
+    if (!s)
+	return;
     double surface_width, surface_height;
     int fi = face.m_face_index;
 
@@ -2280,18 +2274,7 @@ bg_CDT(std::vector<int> &faces, std::vector<fastf_t> &pnt_norms, std::vector<fas
 
 	for (int lti = 0; lti < loop->TrimCount(); lti++) {
 	    ON_BrepTrim *trim = loop->Trim(lti);
-
-	    if (trim->m_trim_user.p) {
-		std::map<double, ON_3dPoint *> *points = (std::map < double, ON_3dPoint * > *) trim->m_trim_user.p;
-		std::map<double, ON_3dPoint *>::const_iterator i;
-		for (i = points->begin(); i != points->end(); i++) {
-		    const ON_3dPoint *p = (*i).second;
-		    delete p;
-		}
-		points->clear();
-		delete points;
-		trim->m_trim_user.p = NULL;
-	    }
+	    clear_trim_point_samples(trim);
 	}
     }
 
@@ -2310,7 +2293,11 @@ brep_cdt_fast(int **faces, int *face_cnt, vect_t **pnt_norms, point_t **pnts, in
 
     for (int face_index = 0; face_index < brep->m_F.Count(); face_index++) {
         ON_BrepFace *face = brep->Face(face_index);
+        if (!face)
+            continue;
         const ON_Surface *s = face->SurfaceOf();
+        if (!s)
+            continue;
         double surface_width, surface_height;
         if (s->GetSurfaceSize(&surface_width, &surface_height)) {
             // reparameterization of the face's surface and transforms the "u"
@@ -2340,17 +2327,7 @@ brep_cdt_fast(int **faces, int *face_cnt, vect_t **pnt_norms, point_t **pnts, in
 
     for (int iindex = 0; iindex < brep->m_T.Count(); iindex++) {
 	ON_BrepTrim *trim = brep->Trim(iindex);
-	if (trim->m_trim_user.p != NULL) {
-	    std::map<double, ON_3dPoint *> *points = (std::map<double, ON_3dPoint *> *)trim->m_trim_user.p;
-	    std::map<double, ON_3dPoint *>::const_iterator i;
-	    for (i = points->begin(); i != points->end(); i++) {
-		const ON_3dPoint *p = (*i).second;
-		delete p;
-	    }
-	    points->clear();
-	    delete points;
-	    trim->m_trim_user.p = NULL;
-	}
+	clear_trim_point_samples(trim);
     }
 
     /* If we got nothing, we're done here */
@@ -2387,4 +2364,3 @@ brep_cdt_fast(int **faces, int *face_cnt, vect_t **pnt_norms, point_t **pnts, in
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

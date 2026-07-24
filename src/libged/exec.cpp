@@ -28,6 +28,7 @@
 #include "bu/vls.h"
 #include "ged.h"
 #include "./ged_private.h"
+#include "ged/event_txn.h"
 #include "./include/plugin.h"
 
 extern "C" void libged_init(void);
@@ -96,6 +97,8 @@ ged_exec(struct ged *gedp, int argc, const char *argv[])
 	return gedp->ged_results->ret;
     }
 
+    int event_batch_started = (ged_event_batch_begin(gedp) > 0);
+
     // Check for a pre-exec callback.
     bu_clbk_t f = NULL;
     void *d = NULL;
@@ -129,6 +132,9 @@ ged_exec(struct ged *gedp, int argc, const char *argv[])
 	    gedp->ged_results->ret = cret;
 	}
     }
+
+    if (event_batch_started)
+	ged_event_batch_end(gedp, NULL);
 
     if (tstr)
 	bu_log("%s time: %g\n", cmdname.c_str(), (bu_gettime() - start)/1e6);

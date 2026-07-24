@@ -103,12 +103,20 @@ mged_state_destroy(struct mged_state *s)
     bu_vls_free(&s->input_str_prefix);
     bu_vls_free(&s->scratchline);
     bu_vls_free(&s->mged_prompt);
-    rt_edit_destroy(MEDIT(s));
-    MEDIT(s) = NULL;
 
-    delete s->i->i;
-    BU_PUT(s->s_edit, struct mged_edit_state);
-    BU_PUT(s->i, struct mged_state_impl);
+    if (s->s_edit) {
+	rt_edit_destroy(s->s_edit->e);
+	s->s_edit->e = NULL;
+	BU_PUT(s->s_edit, struct mged_edit_state);
+	s->s_edit = NULL;
+    }
+
+    if (s->i) {
+	delete s->i->i;
+	BU_PUT(s->i, struct mged_state_impl);
+	s->i = NULL;
+    }
+
     BU_PUT(s, struct mged_state);
 }
 

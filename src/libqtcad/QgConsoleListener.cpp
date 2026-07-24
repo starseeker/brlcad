@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Originally from https://github.com/juangburgos/QConsoleListener
+ * Originally from https://github.com/juangburgos/QgConsoleListener
  */
 
 #include "common.h"
@@ -31,19 +31,22 @@
 
 #define RT_MAXLINE 10240
 
-void noMessageOutput(QtMsgType, const QMessageLogContext&, const QString&) {}
-
-QConsoleListener::QConsoleListener(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d)
+QgConsoleListener::QgConsoleListener(int fd, struct ged_subprocess *p, bu_process_io_t t, ged_io_func_t c, void *d, QObject *parent)
+    : QObject(parent)
 {
-    this->process = p;
-    this->callback = c;
-    this->data = d;
-    this->type = t;
-    QObject::connect(
-	    this, &QConsoleListener::finishedGetLine,
-	    this, &QConsoleListener::on_finishedGetLine,
-	    Qt::QueuedConnection
-	    );
+	this->process = p;
+	this->callback = c;
+	this->data = d;
+	this->type = t;
+
+	// Keep result delivery asynchronous so widget updates happen after the
+	// notifier callback returns.
+	QObject::connect(
+	        this, &QgConsoleListener::finishedGetLine,
+	        this, &QgConsoleListener::on_finishedGetLine,
+	        Qt::QueuedConnection
+	);
+
 #ifdef Q_OS_WIN
     HANDLE h = (fd < 0) ? GetStdHandle(STD_INPUT_HANDLE) : (HANDLE)_get_osfhandle(fd);
     m_notifier = new QWinEventNotifier(h, this);
@@ -55,39 +58,49 @@ QConsoleListener::QConsoleListener(int fd, struct ged_subprocess *p, bu_process_
      * thread.  Keep the notifier and its GED callback in this object's
      * thread so all Qt and GED state is accessed by its owning GUI thread. */
 #ifdef Q_OS_WIN
-    QObject::connect(m_notifier, &QWinEventNotifier::activated, m_notifier,
+	QObject::connect(m_notifier, &QWinEventNotifier::activated, m_notifier,
 #else
-    QObject::connect(m_notifier, &QSocketNotifier::activated, m_notifier,
+	QObject::connect(m_notifier, &QSocketNotifier::activated, m_notifier,
 #endif
 	[this]() {
-	if (callback) {
-	  size_t s1 = bu_vls_strlen(process->gedp->ged_result_str);
-	  (*callback)(data, (int)type);
-	  size_t s2 = bu_vls_strlen(process->gedp->ged_result_str);
-	  if (s1 != s2) {
-	    struct bu_vls nstr = BU_VLS_INIT_ZERO;
-	    bu_vls_substr(&nstr, process->gedp->ged_result_str, s1, s2 - s1);
-	    QString strLine = QString::fromStdString(std::string(bu_vls_cstr(&nstr)));
-	    bu_vls_free(&nstr);
-	    Q_EMIT this->finishedGetLine(strLine);
-	  }
-	}
+		// Invoke the libged I/O callback and relay new output after this
+		// notifier callback returns.
+		if (callback) {
+			size_t s1 = bu_vls_strlen(process->gedp->ged_result_str);
+			(*callback)(data, (int)type);
+			size_t s2 = bu_vls_strlen(process->gedp->ged_result_str);
+			if (s1 != s2) {
+				struct bu_vls nstr = BU_VLS_INIT_ZERO;
+				bu_vls_substr(&nstr, process->gedp->ged_result_str, s1, s2 - s1);
+				QString strLine = QString::fromStdString(std::string(bu_vls_cstr(&nstr)));
+				bu_vls_free(&nstr);
+				Q_EMIT this->finishedGetLine(strLine);
+			}
+		}
 	});
 }
 
-QConsoleListener::~QConsoleListener()
+QgConsoleListener::~QgConsoleListener()
 {
-    m_notifier->disconnect();
+	disconnectNotifier();
 }
 
-void QConsoleListener::on_finishedGetLine(const QString &strNewLine)
+void QgConsoleListener::disconnectNotifier()
 {
-    Q_EMIT this->newLine(strNewLine);
+	// Sever all signal/slot connections from the platform notifier so that
+	// no further activated() lambdas fire.
+	if (m_notifier)
+		m_notifier->disconnect();
 }
 
-void QConsoleListener::on_finished()
+void QgConsoleListener::on_finishedGetLine(const QString &strNewLine)
 {
-    Q_EMIT this->is_finished(this->process, (int)this->type);
+	Q_EMIT this->newLine(strNewLine);
+}
+
+void QgConsoleListener::on_finished()
+{
+	Q_EMIT this->is_finished(this->process, (int)this->type);
 }
 
 // Local Variables:

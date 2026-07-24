@@ -6,6 +6,10 @@ toc::[]
 The interfaces listed here have completed their deprecation or minimally impacting transition and are now obsolete.
 
 == 7.44.0
+command-line tools
+	plot3-dm : obsolete standalone libdm viewer; use the Obol-backed
+	`overlay` command in MGED, qged, or GSH
+
 include/rt/geom.h
         removed 'tie' void pointer from rt_bot_internal as TIE
         obsoleted as of 7.42) [deprecated N/A]

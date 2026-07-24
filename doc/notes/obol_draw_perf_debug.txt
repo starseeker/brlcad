@@ -1,0 +1,173 @@
+BRL-CAD Obol Debug Draw Performance Notes
+=========================================
+
+Scope
+-----
+
+The historical table below characterizes the initial debug build using
+`build/bin/ged_draw_perf`, the source target in `src/gtools/ged_draw_perf.cpp`.
+The probe owns a headless GED/Obol endpoint and has no libdm dependency.  All
+listed runs used `--profile --autoview --render`, a 512x512 render target, and
+a fresh temporary cache directory with `--clear-cache`.
+
+Use `misc/tools/obol_draw_perf.sh <build-dir> <output-dir> 3 quick` for the
+routine corpus.  The `full` tier also runs evaluated, shaded, and hidden-line
+draws on the large models and may take a long time.  Each case has an isolated
+cache, per-run log, stage counters, and rendered RGB hash.  A release build in
+`.build_perf` is required for performance conclusions; debug results are for
+instrumentation and correctness work only.
+
+Current Samples
+---------------
+
+| Model/root | Mode | draw_ms | render_ms | Main counters | Status |
+| --- | --- | ---: | ---: | --- | --- |
+| `Generic_Twin.g all` | normal wire | 1960 | 549 | 2248 sources, wire 627 ms, plot 3.6 ms, vlist 23.9 ms, source replace 159 ms | OK |
+| `havoc.g havoc` | normal wire | 2144 | 816 | 3461 sources, wire 713 ms, plot 4.7 ms, vlist 29.8 ms, source replace 258 ms | OK |
+| `Generic_Twin.g all` | LoD wire, `--lod-mesh 1 --lod-bot-threshold 50` | 1899 | 448 | vlist points drop from 576178 to 122202; draw remains source-management dominated | OK |
+| `Generic_Twin.g all` | shaded BoTs, `-m1` | 1937 | 589 | mesh 588 ms; non-BoT leaves remain wire fallback | OK |
+| `havoc.g havoc` | shaded BoTs, `-m1` | 2168 | 821 | mesh 731 ms; non-BoT leaves remain wire fallback | OK |
+| `Generic_Twin.g all` | full shaded, `-m2` | 7504 | 1941 | mesh/tessellation 5135 ms; verbose NMG/ARB diagnostics | OK, tessellation dominated |
+| `Generic_Twin.g all` | evaluated wire, `-m3` | 14326 | 222 | 592861 candidates, 585531 segments, wire 14284 ms | OK, candidate pipeline dominated |
+| `Generic_Twin.g all` | evaluated points, `-m5` | 1320 | 146 | one external mesh source; CLINE normal abort fixed | OK |
+| `havoc.g havoc` | evaluated points, `-m5` | 1040 | 127 | one external mesh source | OK |
+
+Interpretation
+--------------
+
+Normal wire is not dominated by primitive plotting: plot/vlist conversion is
+small compared to source realization, replacement, and render traversal.  The
+previous CAD aggregation experiments were not retained because measured
+complexity outweighed the benefit in this build.
+
+LoD wire improves rendered point count and render time for Generic_Twin, but
+source publication remains the draw-time bottleneck.
+
+Full shaded and hidden-line style paths are tessellation dominated on
+implicit-heavy models.  That is a shaded-mode optimization task, not a grid or
+faceplate regression.
+
+Evaluated wire is dominated by the librt candidate pipeline.  With
+`RT_EVAL_WIREFRAME_PROFILE=1`, `Generic_Twin.g all -m3` reported:
+
+* total evaluated-wire profile time: 10.77 s;
+* candidate stages: edge candidates 1.13 s, intersection candidates 3.78 s,
+  intersection face indexing 1.92 s, pair evaluation 1.44 s;
+* boolweave candidate evaluation: 1.18 s.
+
+The shorter `evaluated-wire boolweave eval summary` reports only the
+candidate-eval portion, not total candidate setup/export time.  Thin-shell
+havoc evaluated-wire remains a separate long-term algorithm task.
+
+Fixes From This Pass
+--------------------
+
+Evaluated-points mode previously aborted on some Generic_Twin CLINE samples
+because `rt_cline_norm` called `bu_bomb` on degenerate grazing normals.  CLINE
+normal calculation now falls back to a radial normal and otherwise lets the
+sampler discard an empty normal.  `Generic_Twin.g all -m5` and
+`havoc.g havoc -m5` now complete.
+
+Next Optimization Targets
+-------------------------
+
+The neutral-endpoint Release measurements supersede the earlier DM-backed
+debug timing for optimization decisions:
+
+* Generic Twin evaluated wire emits 1,171,060 ordered line records.  Repeated
+  exact vector reservation made result merge take about 5.2 seconds.  A single
+  checked reservation and ordered move insertion reduces that stage to about
+  0.02 seconds and preserves image hash `b3852519b131c346` across repeated
+  open/draw/render/close cycles.
+* Generic Twin Release draw time changed from 9.32 seconds cold and about 6.3
+  seconds warm to 4.67 seconds cold and 4.7-5.1 seconds warm.  Candidate and
+  boolweave stages alone are not large enough to justify parallelism there.
+* Havoc evaluated wire emits 4,495,576 ordered records and remains dominated by
+  4.27 million candidates from 17.3 million face pairs.  Pair evaluation takes
+  about 12-13 seconds of a 21-23 second evaluator run.  This is the appropriate
+  parallelism experiment only after all per-job mutable state is isolated.
+
+Continue to reduce normal-wire source publication/render traversal overhead
+without adding CAD aggregation unless fresh Release measurements prove it
+pays.  Treat full shaded/hidden-line tessellation as a separate workstream.
+
+July 2026 Retained-Source Results
+---------------------------------
+
+Normal wire publication and GUI redraw were profiled again with Havoc and
+Generic Twin after establishing indexed, persistent Obol database sources.
+
+* Obol node field metadata is now registered once per class rather than once
+  per instance.  Generic Twin normal-wire realization fell by about 30 percent
+  and warm whole-draw time fell by about 12 percent in the Release probe.
+* The scene controller maintains normalized path-to-instance indexes.  Exact
+  source operations no longer scan every database source, and removal of one
+  duplicate occurrence leaves another occurrence indexed for that path.
+* `GED_DRAW_TXN_REDRAW` no longer replays draw publication or enumerates shape
+  summaries.  It checks retained sources for stale realization, realizes once
+  only when necessary, and requests a render.  Debug Havoc redraw changed from
+  more than 20 seconds to 0.7 ms in `ged_draw_perf`; Generic Twin measured
+  0.6 ms.  Source counts and deterministic geometry hashes were unchanged.
+* The qged profile `qged_gui.perf` identified a separate presentation problem:
+  44.8 percent of sampled cycles were under `QTreeView::drawRow` because each
+  paint recomputed `ged_draw_path_state`, copied and stable-sorted all source
+  summaries, and walked database leaves.  `QgItem` now caches draw presentation
+  state and invalidates it from existing draw-observer notifications.
+* An interaction-only post-fix Havoc profile (five software-rendered viewport
+  drags) sampled about 735 million cycles.  `ged_draw_path_state` and GED redraw
+  work were no longer measurable.  Remaining active cost was real rendering:
+  about 47 percent below Obol scene traversal, 44 percent in
+  `SoBRLVListShape::GLRender`, with most of that in Mesa rasterization.
+
+Deferred-root startup is an explicit draw option rather than a changed default.
+The first stage publishes a root bounds proxy and the second stage promotes the
+same request to exact full detail.  Debug first-proxy times were about 89 ms for
+Havoc and 134 ms for Generic Twin.  Final normal-wire and shaded image hashes
+match direct full-detail draws.
+
+The next normal-wire rendering optimization, if larger models demonstrate a
+need, should target render batching or retained GPU buffers for VList sources.
+Do not reintroduce source aggregation into GED: the current profile shows that
+publication and redraw overhead have been removed and the remaining hot path is
+inside Obol/backend rendering.
+
+2026-07-15 Release Workflow Gate
+--------------------------------
+
+The Release probe was rerun after the final controller/presentation changes.
+Each case used a fresh cache, `--profile --autoview --render --redraw`, at
+least five rendered frames, enough progressive polling to settle, four
+aggregate appearance mutations, and `/usr/bin/time -v`.  `twin8.g fleet` is a
+generated eight-import Generic Twin assembly with 17,984 shapes and 7,709,088
+retained points; it supplies the production-scale case without relying on the
+broken external-resource examples in `primitives.g`.  Logs, peak-RSS records,
+and the generated database are under `.build_perf/obol_perf_20260715/`.
+
+| Model/policy | cold draw | first useful frame | steady frame | redraw | appearance update/render | peak RSS | final hash |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Havoc QUALITY | 581 ms | 31.4 ms | 2.77 ms | 0.016 ms | 7.18 / 27.9 ms | 99.9 MB | `bef2396b76a1d6ce` |
+| Havoc FAST | 600 ms | 14.5 ms | 2.30 ms | 0.020 ms | 5.32 / 13.9 ms | 80.7 MB | `1f3bd77d90056624` |
+| Generic Twin QUALITY | 1.012 s | 177.9 ms | 4.33 ms | 0.048 ms | 2.37 / 57.2 ms | 126.2 MB | `dc4c5cf73a52b116` |
+| Generic Twin FAST | 1.099 s | 185.0 ms | 3.12 ms | 0.031 ms | 1.99 / 23.6 ms | 89.0 MB | `f1ee22ea31ef3b5b` |
+| 8x Generic Twin QUALITY | 7.523 s | 59.6 ms | 2.60 ms | 0.020 ms | 17.4 / 443 ms | 620.1 MB | `b589a2a8fc71570e` |
+| 8x Generic Twin FAST | 7.429 s | 22.6 ms | 2.28 ms | 0.021 ms | 17.7 / 167 ms | 351.0 MB | `f1ee22ea31ef3b5b` |
+
+The progressive `render_ms` field is deliberately not a single interaction
+latency: the probe polls until detached realization settles.  First-frame and
+steady-frame values are the useful-pixel and settled interaction measures;
+draw, source counters, and the existing stage profile identify realization
+and submission cost.  Style churn exercises retained source deltas and the
+same rendering path used by selection, line style/color, and lighting policy.
+All six cases settled with no remaining work, bounded RSS, one retained source,
+and stable hashes across repeated captures.  Eightfold geometry raises memory
+approximately linearly but leaves redraw at 0.02 ms, confirming that retained
+redraw does not replay publication.
+
+System-GL comparison remains a hosted measurement, not a hidden mode in the
+OSMesa probe.  Native QGED/MGED X runs exercised the same HW endpoint and
+produced nonblank wire, shaded RT, camera-motion, capture, and faceplate
+frames.  The existing native QGED sampling profile places the remaining hot
+cost in Obol traversal/VList submission and Mesa rasterization; it finds no GED
+redraw or path-state work.  FAST/QUALITY therefore remain explicit OSMesa wire
+policies, while native GL is selected and measured through its real toolkit
+host rather than simulated by the neutral probe.

@@ -18,16 +18,17 @@ set(
   cmd.cpp
   color_scheme.c
   columns.c
-  dm-generic.c
+  display-command.c
   dodraw.c
   doevent.c
-  dozoom.c
+  scene_refresh.c
   edsol.c
   f_db.c
   facedef.c
   fbserv.c
   grid.c
   history.c
+  hud.c
   mater.c
   menu.c
   mged.c
@@ -35,7 +36,6 @@ set(
   mover.c
   overlay.c
   plot.c
-  predictor.c
   rect.c
   rtif.c
   scroll.c
@@ -53,6 +53,8 @@ set(
   wdb_obj.c
 )
 
+cmakefiles(hud.h)
+
 if(HAVE_WINDOWS_H)
   # To associate an icon with the application for Windows (needed
   # for the WiX installer) we must use an rc file.
@@ -65,7 +67,7 @@ set(
   libtclcad
   libged
   libwdb
-  libdm
+  libimgstream
   libnmg
   Threads::Threads
   ${WS2_32_LIBRARY}
@@ -86,14 +88,72 @@ if(BRLCAD_ENABLE_TCL)
     target_compile_definitions(mged PRIVATE HAVE_TK=1)
   endif(TK_LIBRARY)
   target_include_directories(mged BEFORE PRIVATE ${MGED_INCLUDE_DIRS})
-  add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
+  add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld)
+  # MGED commands may dispatch libged plugins and ged_exec subprocesses.
+  # Build those runtime helpers with the executable so command-driven LoD
+  # workflows cannot start with a partially populated BRLCAD_ROOT.
+  if(TARGET ged_plugins)
+    add_dependencies(mged ged_plugins)
+  endif(TARGET ged_plugins)
+  if(TARGET ged_subprocesses)
+    add_dependencies(mged ged_subprocesses)
+  endif(TARGET ged_subprocesses)
+  if(TARGET ged_exec)
+    add_dependencies(mged ged_exec)
+  endif(TARGET ged_exec)
+  if(TARGET rt)
+    add_dependencies(mged rt)
+  endif(TARGET rt)
 
   # MGED needs the tclIndex and pkgIndex files set up correctly
-  add_dependencies(mged TclIndexBld)
+	  add_dependencies(mged TclIndexBld)
 
-  # MGED is one of the programs that gets a start menu entry
-  set_property(
-    INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>"
+	  if(SH_EXEC)
+	    if(TCL_TCLSH)
+	      brlcad_add_test(NAME mged_obol_host_config
+		COMMAND ${TCL_TCLSH}
+		"${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_host_config.tcl"
+		"${CMAKE_SOURCE_DIR}/src/tclscripts/mged/openw.tcl")
+	    endif(TCL_TCLSH)
+
+	    brlcad_add_test(NAME mged_obol_smoke
+	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_smoke.sh"
+	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+	      "${CMAKE_CURRENT_BINARY_DIR}")
+	    set_property(TEST mged_obol_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+
+	    if(UNIX)
+	      find_program(MGED_XVFB_RUN_EXECUTABLE xvfb-run)
+	      if(MGED_XVFB_RUN_EXECUTABLE)
+		brlcad_add_test(NAME mged_tkobol_attach_smoke
+		  COMMAND ${SH_EXEC} ${BRLCAD_SOURCE_DIR}/misc/CMake/scripts/xvfb_test.sh
+		  ${MGED_XVFB_RUN_EXECUTABLE} ${SH_EXEC}
+		  "${CMAKE_CURRENT_SOURCE_DIR}/mged_tkobol_attach_smoke.sh"
+		  "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+		  "${CMAKE_CURRENT_BINARY_DIR}")
+		set_property(TEST mged_tkobol_attach_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+		set_property(TEST mged_tkobol_attach_smoke PROPERTY SKIP_RETURN_CODE 125)
+	      endif(MGED_XVFB_RUN_EXECUTABLE)
+	    endif(UNIX)
+
+	    brlcad_add_test(NAME mged_obol_ert_smoke
+	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_ert_smoke.sh"
+	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+	      "${CMAKE_CURRENT_BINARY_DIR}")
+	    set_tests_properties(mged_obol_ert_smoke PROPERTIES TIMEOUT 90)
+	    set_property(TEST mged_obol_ert_smoke APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+
+	    brlcad_add_test(NAME mged_obol_progressive_lod
+	      COMMAND ${SH_EXEC} "${CMAKE_CURRENT_SOURCE_DIR}/mged_obol_progressive_lod.sh"
+	      "$<TARGET_FILE:mged>" "${CMAKE_SOURCE_DIR}/src/libged/tests/draw/moss.g"
+	      "${CMAKE_CURRENT_BINARY_DIR}")
+	    set_tests_properties(mged_obol_progressive_lod PROPERTIES TIMEOUT 120)
+	    set_property(TEST mged_obol_progressive_lod APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
+	  endif(SH_EXEC)
+
+	  # MGED is one of the programs that gets a start menu entry
+	  set_property(
+	    INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>"
     PROPERTY CPACK_START_MENU_SHORTCUTS "MGED ${BRLCAD_VERSION}"
   )
   set_property(INSTALL "${BIN_DIR}/$<TARGET_FILE_NAME:mged>" PROPERTY CPACK_DESKTOP_SHORTCUTS "MGED ${BRLCAD_VERSION}")
@@ -112,10 +172,16 @@ set(
   cmd.h
   f_cmd.h
   menu.h
+  mged_obol_ert_smoke.sh
+  mged_obol_host_config.tcl
+  mged_obol_progressive_lod.sh
+  mged_obol_smoke.sh
+  mged_tkobol_attach_smoke.sh
+  mged_tkobol_attach_smoke.tcl
   mged.h
   mged.ico
   mged.rc
-  mged_dm.h
+  mged_display.h
   mged_impl.h
   mged_wdb.h
   sedit.h

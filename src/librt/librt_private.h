@@ -34,7 +34,6 @@
 #include "common.h"
 
 #include "vmath.h"
-#include "bv.h"
 #include "rt/db4.h"
 #include "raytrace.h"
 
@@ -67,11 +66,6 @@ __BEGIN_DECLS
 
 struct db_i_internal {
     uint32_t dbi_magic;
-
-    /* BoT level of detail cached data for drawing */
-    struct bv_mesh_lod_context *mesh_c;
-    int mesh_c_completed;
-    int mesh_c_target;
 
     // TODO - really need to get the rt prep cache container
     // in here and add a pointer slot to it for rt_db_internal
@@ -166,13 +160,20 @@ void rt_i_internal_destroy(struct rt_i_internal *i);
 
 /* Used by sketch extrude revolve */
 extern int curve_to_vlist(struct bu_list              *vlfree,
-                         struct bu_list              *vhead,
-                         const struct bg_tess_tol    *ttol,
-                         point_t                     V,
-                         vect_t                      u_vec,
-                         vect_t                      v_vec,
-                         struct rt_sketch_internal *sketch_ip,
-                         struct rt_curve             *crv);
+			  struct bu_list              *vhead,
+			  const struct bg_tess_tol    *ttol,
+			  point_t                     V,
+			  vect_t                      u_vec,
+			  vect_t                      v_vec,
+			  struct rt_sketch_internal *sketch_ip,
+			  struct rt_curve             *crv);
+extern int curve_to_line_set(struct rt_primitive_lod_realization *realization,
+			     const struct bg_tess_tol    *ttol,
+			     point_t                     V,
+			     vect_t                      u_vec,
+			     vect_t                      v_vec,
+			     struct rt_sketch_internal *sketch_ip,
+			     struct rt_curve             *crv);
 
 /* db_flip.c */
 
@@ -320,65 +321,77 @@ extern fastf_t prim_min_norm_tol(void);
  * the deprecated _old wrappers pass SMALL_FASTF to preserve original
  * behavior. */
 extern int _rt_mk_parabola(struct rt_pnt_node *pts, fastf_t r, fastf_t b,
-	fastf_t dtol, fastf_t ntol, fastf_t min_abs);
+			   fastf_t dtol, fastf_t ntol, fastf_t min_abs);
 extern int _rt_mk_hyperbola(struct rt_pnt_node *pts, fastf_t r, fastf_t b,
-	fastf_t c, fastf_t dtol, fastf_t ntol, fastf_t min_abs);
+			    fastf_t c, fastf_t dtol, fastf_t ntol, fastf_t min_abs);
 
 extern fastf_t primitive_get_absolute_tolerance(
-	const struct bg_tess_tol *ttol,
-	fastf_t rel_to_abs);
+    const struct bg_tess_tol *ttol,
+    fastf_t rel_to_abs);
 
 extern void primitive_clamp_tess_tol(
-	fastf_t *dtol,
-	fastf_t *ntol,
-	fastf_t bbox_diag);
+    fastf_t *dtol,
+    fastf_t *ntol,
+    fastf_t bbox_diag);
 
 extern fastf_t primitive_diagonal_samples(
-	struct rt_db_internal *ip,
-	const struct bview *v,
-	const struct bn_tol *tol,
-	fastf_t s_size);
+    struct rt_db_internal *ip,
+    const struct bv_view_info *v,
+    const struct bn_tol *tol,
+    fastf_t s_size);
 
 extern int approximate_parabolic_curve(
-	struct rt_pnt_node *pts,
-	fastf_t p,
-	int num_new_points);
+    struct rt_pnt_node *pts,
+    fastf_t p,
+    int num_new_points);
 
 extern fastf_t primitive_curve_count(
-	struct rt_db_internal *ip,
-	const struct bn_tol *tol,
-	fastf_t curve_scale,
-	fastf_t s_size);
+    struct rt_db_internal *ip,
+    const struct bn_tol *tol,
+    fastf_t curve_scale,
+    fastf_t s_size);
+
+extern int primitive_lod_line_set_begin(
+    struct rt_primitive_lod_realization *realization);
+extern int primitive_lod_line_set_append(
+    struct rt_primitive_lod_realization *realization,
+    const point_t point,
+    int command);
+extern int primitive_lod_line_set_finish(
+    struct rt_primitive_lod_realization *realization);
+extern void primitive_lod_line_set_free(
+    struct rt_primitive_lod_realization *realization);
 
 extern int approximate_hyperbolic_curve(
-	struct rt_pnt_node *pts,
-	fastf_t a,
-	fastf_t b,
-	int num_new_points);
+    struct rt_pnt_node *pts,
+    fastf_t a,
+    fastf_t b,
+    int num_new_points);
 
 extern void
 ellipse_point_at_radian(
-	point_t result,
-	const vect_t center,
-	const vect_t axis_a,
-	const vect_t axis_b,
-	fastf_t radian);
+    point_t result,
+    const vect_t center,
+    const vect_t axis_a,
+    const vect_t axis_b,
+    fastf_t radian);
 
 extern void plot_ellipse(
-	struct bu_list *vlfree,
-	struct bu_list *vhead,
-	const vect_t t,
-	const vect_t a,
-	const vect_t b,
-	int num_points);
+    struct bu_list *vlfree,
+    struct bu_list *vhead,
+    const vect_t t,
+    const vect_t a,
+    const vect_t b,
+    int num_points);
+extern int primitive_lod_append_ellipse(
+    struct rt_primitive_lod_realization *realization,
+    const vect_t t,
+    const vect_t a,
+    const vect_t b,
+    int num_points);
 
 extern int _rt_tcl_list_to_int_array(const char *list, int **array, int *array_len);
 extern int _rt_tcl_list_to_fastf_array(const char *list, fastf_t **array, int *array_len);
-
-/* view.c */
-extern fastf_t solid_point_spacing(const struct bview *gvp, fastf_t solid_width);
-extern fastf_t view_avg_sample_spacing(const struct bview *gvp);
-
 
 #ifdef USE_OPENCL
 extern cl_device_id clt_get_cl_device(void);
@@ -423,14 +436,14 @@ RT_EXPORT extern void _bool_growstack(struct resource *res);
  * rt_shootray()'s use of 'solid pieces'.
  */
 RT_EXPORT extern void _res_pieces_clean(struct resource *resp,
-					  struct rt_i *rtip);
+					struct rt_i *rtip);
 
 /**
  * Allocate the per-processor state variables needed to support
  * rt_shootray()'s use of 'solid pieces'.
  */
 RT_EXPORT extern void _res_pieces_init(struct resource *resp,
-					 struct rt_i *rtip);
+				       struct rt_i *rtip);
 
 
 __END_DECLS

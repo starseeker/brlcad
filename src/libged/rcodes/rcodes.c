@@ -29,6 +29,8 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "ged/event_txn.h"
+
 #include "../ged_private.h"
 
 
@@ -45,6 +47,8 @@ ged_rcodes_core(struct ged *gedp, int argc, const char *argv[])
     struct directory *dp;
     struct rt_db_internal intern;
     struct rt_comb_internal *comb;
+    int event_depth = 0;
+    int queued_events = 0;
 
     GED_CHECK_DATABASE_OPEN(gedp, BRLCAD_ERROR);
     GED_CHECK_READ_ONLY(gedp, BRLCAD_ERROR);
@@ -70,8 +74,11 @@ ged_rcodes_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
+    event_depth = ged_event_batch_begin(gedp);
+
     while (bu_fgets(line, RT_MAXLINE, fp) != NULL) {
 	int changed;
+	int material_changed;
 
 	/* character and/or whitespace delimited numbers */
 	if (sscanf(line, "%d%*c%d%*c%d%*c%d%s", &item, &air, &mat, &los, name) != 5)
@@ -108,9 +115,11 @@ ged_rcodes_core(struct ged *gedp, int argc, const char *argv[])
 
 	/* make the changes */
 	changed = 0;
+	material_changed = 0;
 	if (comb->region_id != item) {
 	    comb->region_id = item;
 	    changed = 1;
+	    material_changed = 1;
 	}
 	if (comb->aircode != air) {
 	    comb->aircode = air;
@@ -119,6 +128,7 @@ ged_rcodes_core(struct ged *gedp, int argc, const char *argv[])
 	if (comb->GIFTmater != mat) {
 	    comb->GIFTmater = mat;
 	    changed = 1;
+	    material_changed = 1;
 	}
 	if (comb->los != los) {
 	    comb->los = los;
@@ -134,13 +144,33 @@ ged_rcodes_core(struct ged *gedp, int argc, const char *argv[])
 
 		rt_db_free_internal(&intern);
 		fclose(fp);
+		if (event_depth > 0)
+		    ged_event_batch_end(gedp, NULL);
 		return BRLCAD_ERROR;
 	    }
+	    (void)ged_event_notify_attribute_changed(gedp, dp->d_namep, 1,
+		    NULL);
+	    if (material_changed)
+		(void)ged_event_notify_object_material_changed(gedp,
+			dp->d_namep, NULL);
+	    queued_events = 1;
+	} else {
+	    rt_db_free_internal(&intern);
 	}
 	g_changed += (size_t)changed;
 
     }
     fclose(fp);
+
+    if (event_depth > 0) {
+	struct ged_event_txn_result result;
+	ged_event_txn_result_init(&result);
+	if (ged_event_batch_end(gedp, &result) < 0 && queued_events) {
+	    ged_event_txn_result_free(&result);
+	    return BRLCAD_ERROR;
+	}
+	ged_event_txn_result_free(&result);
+    }
 
     if (!found_a_match) {
 	bu_vls_printf(gedp->ged_result_str, "WARNING: rcodes file \"%s\" contained no matching lines.  Geometry unchanged.\n", argv[1]);

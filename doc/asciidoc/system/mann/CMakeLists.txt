@@ -298,7 +298,6 @@ set(
   red.adoc
   redraw.adoc
   refresh.adoc
-  regdebug.adoc
   regdef.adoc
   region.adoc
   regions.adoc

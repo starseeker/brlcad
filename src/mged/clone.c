@@ -835,7 +835,9 @@ copy_object(struct db_i *_dbip, struct clone_state *state)
     init_list(&obj_list, state->n_copies);
 
     /* do the actual copying */
+    int event_batch_started = mged_event_batch_begin(state->s);
     copy = copy_tree(_dbip, state->src, state);
+    mged_event_batch_end(state->s, event_batch_started);
 
     /* make sure it made what we hope/think it made */
     if (!copy || !is_in_list(obj_list, state->src->d_namep))
@@ -1157,7 +1159,7 @@ f_tracker(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[
 		/* global dbip */
 		dps[j] = copy_object(s->dbip, &state);
 
-		if (!no_draw || s->mged_curr_dm != mged_dm_init_state) {
+		if (!no_draw || s->mged_curr_display != mged_initial_display) {
 		    redraw_visible_objects(s);
 		    size_reset(s);
 		    new_mats(s);

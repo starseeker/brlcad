@@ -38,8 +38,7 @@
 #include "bu/getopt.h"
 #include "bu/exit.h"
 #include "vmath.h"
-#include "dm.h"
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 
 struct coords {
@@ -62,13 +61,13 @@ struct stroke {
 }; /* rasterization descriptor */
 
 static char *framebuffer = NULL;
-struct fb *fbp;			/* Current framebuffer */
+imgstream_fb_t *fbp;			/* Current framebuffer */
 
 static int screen_width = 512;	/* default input width */
 static int screen_height = 512;	/* default input height */
 static int clear = 0;
 
-RGBpixel pixcolor = { 255, 255, 255 };
+unsigned char pixcolor[3] = { 255, 255, 255 };
 
 static int fbx1, fby1, fbx2, fby2;
 
@@ -176,7 +175,7 @@ Raster(struct stroke *vp)
     for (dy = vp->pixel.y; dy < screen_height;) {
 
 	/* set the appropriate pixel in the buffer */
-	fb_write(fbp, vp->pixel.x, dy, pixcolor, 1);
+	imgstream_fb_write(fbp, vp->pixel.x, dy, pixcolor, 1);
 
 	if (vp->major-- == 0)
 	    return;		/* Done */
@@ -312,14 +311,15 @@ main(int argc, char **argv)
 	bu_exit(1, NULL);
     }
 
-    if ((fbp = fb_open(framebuffer, screen_width, screen_height)) == NULL)
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)screen_width,
+	    (size_t)screen_height)) == NULL)
 	bu_exit(12, NULL);
 
     if (clear) {
-	fb_clear(fbp, PIXEL_NULL);
+	imgstream_fb_clear(fbp, NULL);
     }
-    screen_width = fb_getwidth(fbp);
-    screen_height = fb_getheight(fbp);
+    screen_width = (int)imgstream_fb_width(fbp);
+    screen_height = (int)imgstream_fb_height(fbp);
 
     start.x = fbx1;
     start.y = fby1;
@@ -329,7 +329,7 @@ main(int argc, char **argv)
     edgelimit(&end);
     BuildStr(&start, &end);	/* pixels */
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

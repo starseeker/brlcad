@@ -1,3 +1,8 @@
+if(POLICY CMP0053)
+  # Keep literal @...@ template markers intact until string(REPLACE) handles them.
+  cmake_policy(SET CMP0053 NEW)
+endif()
+
 if(NOT DEFINED CHANGES_RULES_FILE)
   message(FATAL_ERROR "CHANGES_RULES_FILE is not defined")
 endif()

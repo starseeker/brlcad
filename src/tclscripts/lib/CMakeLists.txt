@@ -7,16 +7,12 @@ set(
   Command.tcl
   Database.tcl
   Db.tcl
-  Display.tcl
-  Dm.tcl
   Drawable.tcl
   Ged.tcl
   GeometryIO.tcl
   Help.tcl
   Legend.tcl
-  Mged.tcl
   ModelAxesControl.tcl
-  QuadDisplay.tcl
   RtControl.tcl
   RtImage.tcl
   Splash.tcl

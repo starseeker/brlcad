@@ -49,7 +49,7 @@
 #include "bu/exit.h"
 #include "bu/log.h"
 #include "vmath.h"
-#include "dm.h"
+#include "imgstream/fb_compat.h"
 
 
 int skipbytes(int fd, b_off_t num);
@@ -57,7 +57,7 @@ int skipbytes(int fd, b_off_t num);
 #define MAX_LINE (16*1024)	/* Largest output scan line length */
 
 static char ibuf[MAX_LINE];
-static RGBpixel obuf[MAX_LINE];
+static unsigned char obuf[MAX_LINE][3];
 
 static int fileinput = 0;		/* file of pipe on input? */
 static int autosize = 0;		/* !0 to autosize input */
@@ -78,7 +78,7 @@ static int blueflag  = 0;
 static char *framebuffer = NULL;
 static const char *file_name;
 static int infd;
-static struct fb *fbp;
+static imgstream_fb_t *fbp;
 
 static char usage[] = "\
 Usage: bw-fb [-a -i -c -z -R -G -B] [-F framebuffer]\n\
@@ -262,7 +262,7 @@ main(int argc, char **argv)
     /* autosize input? */
     if (fileinput && autosize) {
 	size_t w, h;
-	if (fb_common_file_size(&w, &h, file_name, 1)) {
+	if (imgstream_image_file_size(&w, &h, file_name, 1)) {
 	    file_width = w;
 	    file_height = h;
 	} else {
@@ -281,14 +281,15 @@ main(int argc, char **argv)
 	scr_height = file_height;
 
     /* Open Display Device */
-    if ((fbp = fb_open(framebuffer, scr_width, scr_height)) == NULL) {
-	fprintf(stderr, "fb_open failed\n");
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)scr_width,
+	    (size_t)scr_height)) == NULL) {
+	fprintf(stderr, "imgstream framebuffer open failed\n");
 	bu_exit(3, NULL);
     }
 
     /* Get the screen size we were given */
-    scr_width = fb_getwidth(fbp);
-    scr_height = fb_getheight(fbp);
+    scr_width = (int)imgstream_fb_width(fbp);
+    scr_height = (int)imgstream_fb_height(fbp);
 
     /* compute pixels output to screen */
     if (scr_xoff < 0) {
@@ -314,19 +315,21 @@ main(int argc, char **argv)
     }
 
     if (clear) {
-	fb_clear(fbp, PIXEL_NULL);
+	imgstream_fb_clear(fbp, NULL);
     }
     if (zoom && xout && yout) {
 	/* Zoom in, and center the file */
-	fb_zoom(fbp, scr_width/xout, scr_height/yout);
+	imgstream_fb_zoom(fbp, scr_width/xout, scr_height/yout);
 	if (inverse)
-	    fb_window(fbp, scr_xoff+xout/2, scr_height-1-(scr_yoff+yout/2));
+	    imgstream_fb_window(fbp, scr_xoff+xout/2,
+		scr_height-1-(scr_yoff+yout/2));
 	else
-	    fb_window(fbp, scr_xoff+xout/2, scr_yoff+yout/2);
+	    imgstream_fb_window(fbp, scr_xoff+xout/2, scr_yoff+yout/2);
     }
 
     /* Test for simplest case */
-    if (inverse == 0 && file_xoff == 0 && file_yoff == 0 && scr_xoff+file_width <= (unsigned)fb_getwidth(fbp)) {
+    if (inverse == 0 && file_xoff == 0 && file_yoff == 0 &&
+	scr_xoff+file_width <= imgstream_fb_width(fbp)) {
 	unsigned char *buf;
 	int npix = file_width * yout;
 
@@ -342,12 +345,13 @@ main(int argc, char **argv)
 	    npix = n;	/* show what we got */
 	}
 	n = (npix+file_width-1)/file_width;	/* num lines got */
-	n = fb_bwwriterect(fbp, scr_xoff, scr_yoff, file_width, n, buf);
+	n = imgstream_fb_bwwriterect(fbp, scr_xoff, scr_yoff,
+	    (int)file_width, n, buf);
 	if (npix != n) {
 	    fprintf(stderr, "bw-fb: fb_bwwriterect() got %d, s/b %d\n", n, npix);
 	    bu_exit(8, NULL);
 	}
-	fb_close(fbp);
+	imgstream_fb_close(fbp);
 	return 0;
     }
 
@@ -370,10 +374,10 @@ general:
 	 */
 	if (redflag == 0 || greenflag == 0 || blueflag == 0) {
 	    if (inverse)
-		n = fb_read(fbp, scr_xoff, scr_height-1-y,
+		n = imgstream_fb_read(fbp, scr_xoff, scr_height-1-y,
 			    (unsigned char *)obuf, xout);
 	    else
-		n = fb_read(fbp, scr_xoff, y,
+		n = imgstream_fb_read(fbp, scr_xoff, y,
 			    (unsigned char *)obuf, xout);
 	    if (n < 0) break;
 	}
@@ -386,16 +390,18 @@ general:
 		obuf[x][BLU] = ibuf[x];
 	}
 	if (inverse)
-	    fb_write(fbp, xstart, scr_height-1-y, (unsigned char *)obuf, xout);
+	    imgstream_fb_write(fbp, xstart, scr_height-1-y,
+		(unsigned char *)obuf, (size_t)xout);
 	else
-	    fb_write(fbp, xstart, y, (unsigned char *)obuf, xout);
+	    imgstream_fb_write(fbp, xstart, y, (unsigned char *)obuf,
+		(size_t)xout);
 
 	/* slop at the end of the line? */
 	if ((unsigned)(file_xoff+xskip+xout) < file_width)
 	    skipbytes(infd, file_width-file_xoff-xskip-xout);
     }
 
-    fb_close(fbp);
+    imgstream_fb_close(fbp);
     return 0;
 }
 

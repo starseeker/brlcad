@@ -36,10 +36,11 @@
 #include "bn.h"
 #include "wdb.h"
 #include "rt/geom.h"
+#include "ged/view.h"
 
 #include "./sedit.h"
 #include "./mged.h"
-#include "./mged_dm.h"
+#include "./mged_display.h"
 #include "./cmd.h"
 
 
@@ -101,17 +102,21 @@ f_copy_inv(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
     /* no interrupts */
     (void)signal(SIGINT, SIG_IGN);
 
+    int event_batch_started = mged_event_batch_begin(s);
     if ((dp = db_diradd(s->dbip, argv[2], -1L, 0, proto->d_flags, &proto->d_minor_type)) == RT_DIR_NULL) {
+	mged_event_batch_end(s, event_batch_started);
 	Tcl_AppendResult(s->interp, "An error has occurred while adding a new object to the database.\n", (char *)NULL);
 	Tcl_AppendResult(s->interp, ERROR_RECOVERY_SUGGESTION, (char *)NULL);
 	return TCL_ERROR;
     }
 
     if (rt_db_put_internal(dp, s->dbip, &internal) < 0) {
+	mged_event_batch_end(s, event_batch_started);
 	Tcl_AppendResult(s->interp, "Database write error, aborting.\n", (char *)NULL);
 	Tcl_AppendResult(s->interp, ERROR_RECOVERY_SUGGESTION, (char *)NULL);
 	return TCL_ERROR;
     }
+    mged_event_batch_end(s, event_batch_started);
 
     {
 	const char *av[3];
@@ -138,46 +143,59 @@ f_copy_inv(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv
 }
 
 
-struct bv_scene_obj *
-find_solid_with_path(struct mged_state *s, struct db_full_path *pathp)
+struct _fswp_data {
+    struct db_full_path *pathp;
+    ged_draw_shape_ref ret;
+    ged_draw_shape_ref leaf_ret;
+    int count;
+    int leaf_count;
+};
+
+static int
+_find_shape_with_path_cb(const struct ged_draw_shape_record *rec, void *ud)
 {
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
-    struct bv_scene_obj *sp;
-    int count = 0;
-    struct bv_scene_obj *ret = (struct bv_scene_obj *)NULL;
-
-    RT_CK_FULL_PATH(pathp);
-
-    gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-    while (BU_LIST_NOT_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp))) {
-	next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	for (BU_LIST_FOR(sp, bv_scene_obj, &gdlp->dl_head_scene_obj)) {
-	    if (!sp->s_u_data)
-		continue;
-	    struct ged_bv_data *bdata = (struct ged_bv_data *)sp->s_u_data;
-
-	    if (!db_identical_full_paths(pathp, &bdata->s_fullpath)) continue;
-
-	    /* Paths are the same */
-	    illum_gdlp = gdlp;
-	    ret = sp;
-	    count++;
-	}
-
-	gdlp = next_gdlp;
+    struct _fswp_data *d = (struct _fswp_data *)ud;
+    if (!rec || !rec->fullpath) return 1;
+    if (db_identical_full_paths(d->pathp, rec->fullpath)) {
+	d->ret = rec->ref;
+	d->count++;
+	return 1;
     }
 
-    if (count > 1) {
-	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
+    /* Obol source records may retain only the leaf path for a shape drawn
+     * through a combination.  It is still a valid oed target when the leaf
+     * is unique; prefer an exact path whenever one is available. */
+    if (rec->fullpath->fp_len > 0 && d->pathp->fp_len > 0 &&
+	DB_FULL_PATH_CUR_DIR(rec->fullpath) == DB_FULL_PATH_CUR_DIR(d->pathp)) {
+	d->leaf_ret = rec->ref;
+	d->leaf_count++;
+    }
+    return 1; /* keep scanning for duplicates */
+}
 
-	bu_vls_printf(&tmp_vls, "find_solid_with_path() found %d matches\n", count);
+ged_draw_shape_ref
+find_solid_ref_with_path(struct mged_state *s, struct db_full_path *pathp)
+{
+    RT_CK_FULL_PATH(pathp);
+
+    struct _fswp_data d;
+    d.pathp = pathp;
+    d.ret = GED_DRAW_SHAPE_REF_NULL;
+    d.leaf_ret = GED_DRAW_SHAPE_REF_NULL;
+    d.count = 0;
+    d.leaf_count = 0;
+    ged_draw_foreach_shape_record(s->gedp, _find_shape_with_path_cb, &d);
+
+    if (d.count > 1) {
+	struct bu_vls tmp_vls = BU_VLS_INIT_ZERO;
+	bu_vls_printf(&tmp_vls, "find_solid_ref_with_path() found %d matches\n", d.count);
 	Tcl_AppendResult(s->interp, bu_vls_addr(&tmp_vls), (char *)NULL);
 	bu_vls_free(&tmp_vls);
     }
 
-    return ret;
+    if (!ged_draw_shape_ref_is_null(d.ret))
+	return d.ret;
+    return d.leaf_count == 1 ? d.leaf_ret : GED_DRAW_SHAPE_REF_NULL;
 }
 
 
@@ -197,12 +215,9 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     struct cmdtab *ctp = (struct cmdtab *)clientData;
     MGED_CK_CMD(ctp);
     struct mged_state *s = ctp->s;
-    struct display_list *gdlp;
-    struct display_list *next_gdlp;
     struct db_full_path lhs;
     struct db_full_path rhs;
     struct db_full_path both;
-    int is_empty = 1;
 
     CHECK_DBI_NULL;
 
@@ -220,19 +235,7 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     }
 
     /* Common part of illumination */
-    gdlp = BU_LIST_NEXT(display_list, (struct bu_list *)ged_dl(s->gedp));
-    while (BU_LIST_NOT_HEAD(gdlp, (struct bu_list *)ged_dl(s->gedp))) {
-	next_gdlp = BU_LIST_PNEXT(display_list, gdlp);
-
-	if (BU_LIST_NON_EMPTY(&gdlp->dl_head_scene_obj)) {
-	    is_empty = 0;
-	    break;
-	}
-
-	gdlp = next_gdlp;
-    }
-
-    if (is_empty) {
+    if (!ged_draw_has_shapes(s->gedp)) {
 	Tcl_AppendResult(interp, "no solids in view", (char *)NULL);
 	return TCL_ERROR;
     }
@@ -257,20 +260,8 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     db_dup_full_path(&both, &lhs);
     db_append_full_path(&both, &rhs);
 
-    illum_gdlp = gdlp;
-    illump = BU_LIST_NEXT(bv_scene_obj, &gdlp->dl_head_scene_obj);/* any valid solid would do */
-
-    /* Set up solid edit state */
-    struct ged_bv_data *bdata = (struct ged_bv_data *)illump->s_u_data;
-    MEDIT(s) = rt_edit_create(&bdata->s_fullpath, s->dbip, &s->tol.tol, view_state->vs_gvp);
-    if (MEDIT(s)) {
-	Tcl_LinkVar(s->interp, "edit_solid_flag", (char *)&MEDIT(s)->edit_flag, TCL_LINK_INT);
-	MEDIT(s)->mv_context = mged_variables->mv_context;
-	MEDIT(s)->vlfree = &rt_vlfree;
-	mged_edit_clbk_sync(MEDIT(s), s);
-    }
-
     /* Patterned after ill_common() ... */
+    mged_highlight_set_shape_ref(s, ged_draw_first_shape_ref(s->gedp));
     edobj = 0;		/* sanity */
     movedir = 0;		/* No edit modes set */
     MAT_IDN(MEDIT(s)->model_changes);	/* No changes yet */
@@ -279,20 +270,44 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     MEDIT(s)->acc_sc[0] = MEDIT(s)->acc_sc[1] = MEDIT(s)->acc_sc[2] = 1.0;
     new_mats(s);
 
-    /* Find the one solid, set s_iflag UP, point illump at it */
-    illump = find_solid_with_path(s, &both);
-    if (!illump || !illump->s_u_data) {
+    /* Find the matching displayed shape and make its draw ref the highlighted edit target. */
+    ged_draw_shape_ref highlighted_shape = find_solid_ref_with_path(s, &both);
+    if (ged_draw_shape_ref_is_null(highlighted_shape) &&
+	mged_edit_isolate_target(s, &both)) {
+	/* Target is a sub-object of a drawn comb: it was instantiated as its
+	 * own object -- find it now.  Isolation is undone on the edit's return
+	 * to view state (stateChange, buttons.c). */
+	highlighted_shape = find_solid_ref_with_path(s, &both);
+    }
+    mged_highlight_set_shape_ref(s, highlighted_shape);
+    if (ged_draw_shape_ref_is_null(highlighted_shape)) {
 	db_free_full_path(&lhs);
 	db_free_full_path(&rhs);
 	db_free_full_path(&both);
 	Tcl_AppendResult(interp, "Unable to find solid matching path", (char *)NULL);
-	illum_gdlp = GED_DISPLAY_LIST_NULL;
-	illump = 0;
+	mged_highlight_clear(s);
 	(void)chg_state(s, ST_O_PICK, ST_VIEW, "error recovery");
 	return TCL_ERROR;
     }
-    (void)chg_state(s, ST_O_PICK, ST_O_PATH, "internal change of state");
 
+    Tcl_UnlinkVar(s->interp, "edit_solid_flag");
+    struct rt_edit_view ev;
+    rt_edit_view_from_context(&ev, view_state->vs_gvp);
+    if (rt_edit_reinit(MEDIT(s), &both, s->dbip, &s->tol.tol, &ev) != BRLCAD_OK) {
+	db_free_full_path(&lhs);
+	db_free_full_path(&rhs);
+	db_free_full_path(&both);
+	Tcl_AppendResult(interp, "Unable to initialize object edit state", (char *)NULL);
+	mged_highlight_clear(s);
+	(void)chg_state(s, ST_O_PICK, ST_VIEW, "error recovery");
+	return TCL_ERROR;
+    }
+    Tcl_LinkVar(s->interp, "edit_solid_flag", (char *)&MEDIT(s)->edit_flag, TCL_LINK_INT);
+    MEDIT(s)->mv_context = mged_variables->mv_context;
+    MEDIT(s)->vlfree = &rt_vlfree;
+    mged_edit_clbk_sync(MEDIT(s), s);
+
+    (void)chg_state(s, ST_O_PICK, ST_O_PATH, "internal change of state");
 
     /* Select the matrix */
     struct bu_vls tcl_cmd = BU_VLS_INIT_ZERO;

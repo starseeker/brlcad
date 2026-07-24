@@ -1,0 +1,156 @@
+BRL-CAD Obol Overlay and Command-Result Coverage
+================================================
+
+Scope
+-----
+
+This note tracks Obol-side overlay and command-result representation.  The
+neutral low-level diagnostic container is still `bg_line_layer`; libBObol
+converts it to Obol/Coin scene objects only at publication boundaries.
+
+Current Obol Representations
+----------------------------
+
+| Source | Obol representation | Status |
+| --- | --- | --- |
+| color-keyed diagnostic lines/points | `SoBRLLineLayerOverlay` with one `SoBRLVListShape` child per color layer | Covered by conversion/export/pick/snap/measure tests |
+| simple command line sets | typed command-scene line-set feature | Used by gdiff, lint, joint, bot helpers, and preview eye paths |
+| command point output | typed command-scene point-set feature | Used by compatible `vdraw send` point payloads |
+| command indexed-face output | typed command-scene indexed-face-set feature | Used by compatible `vdraw send` face payloads |
+| diagnostic and HUD labels | `SoBRLHUDLabelOverlay` / direct HUD nodes | Used by GQA and check summaries |
+| user-authored line annotations | persistent model overlay line-set feature | Managed by annotation-level GED draw facades |
+| user-authored label annotations | persistent label feature | Managed by annotation-level GED draw facades |
+| user-authored axes annotations | `SoBRLAxes` model overlay feature | Managed by annotation-level GED draw facades |
+| legacy TclCAD data lines | `_tcl_data_lines` / `_tcl_sdata_lines` line-set feature | Managed by typed GED data-line facades, including movement and pick/readback |
+| legacy TclCAD data arrows | `_tcl_data_arrows` / `_tcl_sdata_arrows` arrow line feature | Managed by typed GED data-arrow facades, including movement, scaling, and pick/readback |
+| legacy TclCAD data axes | `_tcl_data_axes` / `_tcl_sdata_axes` axes feature | Managed by typed GED data-axes facades, including movement and pick/readback |
+| legacy TclCAD data labels | `_tcl_data_labels` / `_tcl_sdata_labels` label feature | Managed by typed GED data-label facades, including movement, scaling, and pick/readback |
+| legacy TclCAD data polygons | `_tcl_data_polygons` / `_tcl_sdata_polygons` polygon outline feature | Managed by typed GED data-polygon facades |
+| model axes | `SoBRLAxes` | Covered by libBObol overlay tests |
+| work grid | `SoBRLGrid` adaptive HUD overlay with semantic grid snap state | Covered by libBObol overlay tests, GED faceplate image tests, and snap semantics tests |
+| ADC | `SoBRLADC` | Covered by libBObol overlay tests |
+| edit previews | `SoBRLEditPreview` | Covered by edit-preview tests |
+| complex command/plugin objects | command-scene `CustomNode` feature | Initial owner-scoped provider hook exists |
+
+Routed Producers
+----------------
+
+These producers currently publish through the command-scene path when an Obol
+view exists:
+
+* rtcheck uplot overlap lines as shared `rtcheck::` line layers.
+* NIRT/qray plot lines as shared `query_ray` line layers.
+* `check overlaps -o` lines and summary HUD labels as `check::overlaps`.
+* GQA overlap, gap, adjacent-air, exposed-air, overlap-summary HUD, and
+  opt-in dense volume-sample plot lines.
+* GED `overlay` command uplot imports as shared `overlay::` line layers.
+* `vdraw send` line, point, and indexed-face-compatible `_VDRW*` results.
+* `gdiff`, `lint`, `joint`, `bot plot`, `bot_fuse`, `bot check`, and preview
+  eye-path line visualizations.
+* BREP debug line plots and NMG edge-use debug overlays.
+* BREP debug indexed-face output, published as command-result indexed-face-set
+  features.
+
+The old private direct-uplot feature publishing wrappers are retired.  Uplot
+producers should parse/build streams and publish through command-scene helpers;
+without an active Obol feature store, overlay insertion returns no output and
+does not recreate retained BSG overlay state.
+
+The work grid is not modeled as transformed database-line geometry.  It is a
+view aid owned by `SoBRLGrid`: visual lines are HUD overlay layers and grid
+snap is semantic model/view state.  See `doc/notes/obol_grid_snap.txt`.
+
+QGED's former private line-layer/HUD callback adapter was removed after the
+supported producers moved to command-scene ownership.  There is no retained
+external diagnostic callback surface alongside command-result scenes.
+
+Command-Result Contract
+-----------------------
+
+Command outputs such as NIRT rays, rtcheck overlap results, check overlaps, and
+GQA diagnostics are scene objects, not passive decorations.  Their Obol
+representation must be pickable, selectable, highlightable at primitive
+granularity, and usable by snap/measure/export when the command declares those
+semantics.
+
+Commands should publish result sets with:
+
+* owner id, owner role, and optional generation/run id
+* shared scene scope by default, with explicit view-local opt-in
+* replace/remove-prefix/commit lifecycle
+* visible/selectable style
+* stable feature id plus per-primitive indices
+* feature metadata and per-primitive metadata for detail panels
+* primitive selected/highlighted state
+* pick identity that resolves child Coin hits to parent result primitives
+* synchronous transaction callbacks for active producers
+* explicit custom-provider teardown rules for long-lived Coin callbacks
+
+Owner generation is a freshness fence, not part of feature identity.  A
+nonzero generation must prevent stale asynchronous output from replacing newer
+results for the same owner.  Generation zero remains the unfenced compatibility
+mode for synchronous callers.
+
+Current Interaction State
+-------------------------
+
+The feature store can preserve command-result metadata, per-primitive metadata,
+selected/highlighted primitive lists, and line-layer child-to-parent primitive
+resolution.  Neutral GED APIs expose that data without requiring callers to
+include libBObol-private record types.
+
+qtcad consumes only the neutral GED bridge for command-result details.  It
+keeps raw child `SoBRLPickDetail` identity, resolves parent feature/primitive
+identity through GED, copies feature and primitive metadata through the neutral
+readback APIs, and applies selected/highlighted primitive state through those
+same APIs instead of querying the libBObol feature store.  TclCAD's
+`mouse_pick_detail` returns the identical resolved feature name, primitive
+index, feature metadata, and primitive metadata as Tcl lists.
+
+Diagnostic Schemas
+------------------
+
+All current schemas use model-space millimeters and publish stable flattened
+line-layer primitive indices:
+
+| Producer | `result.schema` | Severity and primitive detail |
+| --- | --- | --- |
+| rtcheck | `brlcad.rtcheck.overlap.v1` | error; overlap segment plus entry/exit hits |
+| NIRT/qray | `brlcad.nirt.query-ray.v1` | mixed feature; partition/info, gap/warning, overlap/error segments, entry/exit hits, and partition parity when known |
+| check overlaps | `brlcad.check.overlap.v1` | error; region pair, depth, and entry/exit hits |
+| GQA overlap/gap/air/volume | `brlcad.gqa.<kind>.v1` | error, warning, or info on both feature and every plotted primitive, with segment endpoints |
+
+The schema names and common keys are documented beside the neutral APIs in
+`include/ged/draw.h`.  Focused GED tests exercise the schemas, lifecycle,
+generation fencing, primitive identity, selection/highlighting, and readback;
+the qtcad pick regression verifies that a child layer hit reaches the same
+neutral feature and primitive metadata.
+
+Custom Coin Provider Policy
+---------------------------
+
+Typed records are preferred for common line/HUD/point/face visualizations.
+Custom Coin nodes are for complex command or plugin-authored interactions that
+need direct Coin scene graph features.  They must remain inside an
+owner-scoped Obol boundary that defines:
+
+* replacement, removal, and teardown
+* pick identity and primitive-state integration
+* callback/sensor/manipulator lifetime
+* selection/highlight synchronization
+* database-edit invalidation
+* structured metadata and transaction callback behavior
+
+The first provider hook exists: GED command-scene producers can publish an
+opaque provider-returned `SoNode` as a `CustomNode` feature, interpreted only by
+the C++ Obol adapter.  The remaining design work is richer persistent
+interaction behavior, not basic node ownership.
+
+Extension Rules
+---------------
+
+* Add generation tokens to any newly asynchronous producer.
+* Publish new interactive drawing producers as command-scene features before
+  expanding the custom Coin behavior surface.
+* Extend a versioned schema, or introduce a new version, rather than exposing
+  application-private records to a detail panel.

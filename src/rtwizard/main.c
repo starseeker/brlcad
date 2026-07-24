@@ -702,7 +702,7 @@ rtwizard_set_state_ptbl(Tcl_Interp *interp, const char *key, struct bu_ptbl *ptb
 
 
 void
-Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s)
+Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s, char type)
 {
     struct bu_vls tcl_cmd = BU_VLS_INIT_ZERO;
 
@@ -716,6 +716,11 @@ Init_RtWizard_Vars(Tcl_Interp *interp, struct rtwizard_settings *s)
     if (s->no_gui) {
 	bu_vls_sprintf(&tcl_cmd, "set ::disable_gui 1");
 	(void)Tcl_Eval(interp, bu_vls_addr(&tcl_cmd));
+    }
+
+    if (type != '\0') {
+	char type_str[2] = {type, '\0'};
+	rtwizard_set_state(interp, "picture_type", type_str);
     }
 
     if (s->verbose) {
@@ -1049,7 +1054,7 @@ main(int argc, char **argv)
     /* RUNTIME BEHAVIOR (dev and non-dev) */
     BU_OPT(d[25],  "",  "gui",           "",             NULL,            &s->use_gui,    "Force use of GUI.");
     BU_OPT(d[26],  "",  "no-gui",        "",             NULL,            &s->no_gui,     "Do not use GUI, even if available information is insufficient to generate image.");
-    BU_OPT(d[27], "d", "fbserv-device", "<device>",     &bu_opt_vls,     s->fb_dev,      "Device for framebuffer viewing (e.g., -d /dev/wgl)");
+    BU_OPT(d[27], "d", "fbserv-device", "<device>",     &bu_opt_vls,     s->fb_dev,      "Framebuffer device for headless output (e.g., -d /dev/mem)");
     BU_OPT(d[28], "p", "fbserv-port",   "#",            &bu_opt_int,     &s->port,       "Port # for framebuffer");
     BU_OPT(d[29], "",  "benchmark",     "",             NULL,            &s->benchmark,  "Benchmark mode (no randomness)");
     BU_OPT(d[30], "",  "cpu-count",     "#",            &bu_opt_int,     &s->cpus,       "Specify the number of CPUs to use");
@@ -1194,7 +1199,11 @@ main(int argc, char **argv)
 	bu_vls_free(&tlog);
 
 	/* Normalize .g and output image file paths, since they're to be used
-	 * in Tcl scripts */
+	 * in Tcl scripts.  Tcl 8.6's Windows normalizer may replace a valid
+	 * long-name directory component with an empty string when resolving its
+	 * 8.3 alias.  Native absolute paths
+	 * already work in Tcl on Windows, so preserve them verbatim there. */
+#if !defined(_WIN32) || defined(__CYGWIN__)
 	if (bu_vls_strlen(s->input_file) > 0) {
 	    Tcl_Obj *initPath, *normalPath;
 	    initPath = Tcl_NewStringObj(bu_vls_addr(s->input_file), (int)bu_vls_strlen(s->input_file));
@@ -1211,6 +1220,7 @@ main(int argc, char **argv)
 	    bu_vls_sprintf(s->output_file, "%s", Tcl_GetString(normalPath));
 	    Tcl_DecrRefCount(initPath);
 	}
+#endif
 
 	/* Set a single argv so the Tcl scripts will run the main proc.  Not passing more args
 	 * because they can apparently cause problems with Tcl script execution. */
@@ -1220,7 +1230,7 @@ main(int argc, char **argv)
 	rtwizard_disable_std_handle_inheritance();
 #endif
 
-	Init_RtWizard_Vars(interp, s);
+	Init_RtWizard_Vars(interp, s, type);
 	if (s->port < 0) {
 	    (void)rtwizard_setup_ipc(interp);
 	}

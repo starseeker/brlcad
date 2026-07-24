@@ -25,16 +25,52 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <set>
+#include <string>
+#include <vector>
 
-#include "bu/malloc.h"
-#include "bu/str.h"
+#include "BObol/BDatabaseSource.h"
+#include "BObol/BSceneController.h"
 #include "ged.h"
 
-#include "../dbi.h"
+#include "../ged_bobol_private.hpp"
 #include "../ged_private.h"
 
 extern "C" int ged_who_solids_core(struct ged *gedp, int argc, const char *argv[]);
+
+static void
+who_bobol_paths(struct ged *gedp, struct ged_view_context *view_ctx,
+	int mode, int expand, struct bu_vls *result)
+{
+    BObolSceneController *scene = ged_bobol_scene(gedp);
+    if (!scene || !result)
+	return;
+
+    std::set<std::string> paths;
+    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
+	BObolDatabaseSourceSummary summary;
+	if (!scene->getDatabaseSourceSummary(i, summary) ||
+	    !ged_bobol_source_in_view(view_ctx, summary) || !summary.visible)
+	    continue;
+	const int representation_mode = summary.representationMode >= 0 ?
+	    summary.representationMode : GED_DRAW_MODE_WIRE;
+	if (mode >= 0 && representation_mode != mode)
+	    continue;
+
+	const char *path = summary.path.getString();
+	if (!expand && summary.parentGroupPath.getLength() &&
+	    !BU_STR_EQUAL(summary.parentGroupPath.getString(), "/"))
+	    path = summary.parentGroupPath.getString();
+	while (path && *path == '/')
+	    path++;
+	if (path && path[0])
+	    paths.insert(path);
+    }
+
+    for (const std::string &path : paths)
+	bu_vls_printf(result, "%s\n", path.c_str());
+}
 
 /*
  * List the db objects currently drawn
@@ -58,12 +94,19 @@ ged_who2_core(struct ged *gedp, int argc, const char *argv[])
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
+    /* skip command name argv[0] */
+    if (argc > 0) {
+	argc--;
+	argv++;
+    }
+
     int expand = 0;
     int print_help = 0;
     struct bu_vls cvls = BU_VLS_INIT_ZERO;
     static const char *usage =
 	"Usage:\n"
 	"  who [options]\n"
+	"  who [real|phony|both]\n"
 	"  who solids [-V view] [-m #] [level]\n";
     struct bu_opt_desc vd[6];
     int mode = -1;
@@ -86,9 +129,16 @@ ged_who2_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_OK;
     }
 
-    struct bview *v = gedp->ged_gvp;
+    argc = opt_ret;
+    if (argc) {
+	_ged_cmd_help(gedp, usage, vd);
+	bu_vls_free(&cvls);
+	return BRLCAD_ERROR;
+    }
+
+    struct ged_view_context *v = ged_view_active_ctx(gedp);
     if (bu_vls_strlen(&cvls)) {
-	v = bv_set_find_view(&gedp->ged_views, bu_vls_cstr(&cvls));
+	v = ged_view_find_ctx(gedp, bu_vls_cstr(&cvls));
 	if (!v) {
 	    bu_vls_printf(gedp->ged_result_str, "Specified view %s not found\n", bu_vls_cstr(&cvls));
 	    bu_vls_free(&cvls);
@@ -103,12 +153,7 @@ ged_who2_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    DbiState *dbis = (DbiState *)gedp->dbi_state;
-    BViewState *bvs = dbis->get_view_state(v);
-    std::vector<std::string> paths = bvs->list_drawn_paths(mode, (bool)!expand);
-    for (size_t i = 0; i < paths.size(); i++) {
-	bu_vls_printf(gedp->ged_result_str, "%s\n", paths[i].c_str());
-    }
+    who_bobol_paths(gedp, v, mode, expand, gedp->ged_result_str);
 
     return BRLCAD_OK;
 }

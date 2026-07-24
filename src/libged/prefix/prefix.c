@@ -29,15 +29,18 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "ged/event_txn.h"
+
 #include "../ged_private.h"
 
 
 static void
-prefix_do(struct db_i *dbip, struct rt_comb_internal *UNUSED(comb), union tree *comb_leaf, void *prefix_ptr, void *obj_ptr, void *UNUSED(user_ptr3), void *UNUSED(user_ptr4))
+prefix_do(struct db_i *dbip, struct rt_comb_internal *UNUSED(comb), union tree *comb_leaf, void *prefix_ptr, void *obj_ptr, void *user_ptr3, void *UNUSED(user_ptr4))
 {
     char *prefix, *obj;
     char tempstring_v4[NAMESIZE+1];
     size_t len = NAMESIZE+1;
+    int *changed = (int *)user_ptr3;
 
     RT_CK_DBI(dbip);
     RT_CK_TREE(comb_leaf);
@@ -60,6 +63,25 @@ prefix_do(struct db_i *dbip, struct rt_comb_internal *UNUSED(comb), union tree *
 	bu_strlcpy(comb_leaf->tr_l.tl_name , prefix, len);
 	bu_strlcat(comb_leaf->tr_l.tl_name , obj, len);
     }
+    if (changed)
+	*changed = 1;
+}
+
+
+static void
+prefix_notify_renames(struct ged *gedp, int argc, const char *argv[])
+{
+    struct bu_vls new_name = BU_VLS_INIT_ZERO;
+    for (int k = 2; k < argc; k++) {
+	if (!argv[k] || !argv[k][0])
+	    continue;
+	bu_vls_trunc(&new_name, 0);
+	bu_vls_strcpy(&new_name, argv[1]);
+	bu_vls_strcat(&new_name, argv[k]);
+	ged_event_notify_object_renamed(gedp, argv[k],
+		bu_vls_cstr(&new_name), NULL);
+    }
+    bu_vls_free(&new_name);
 }
 
 
@@ -67,6 +89,7 @@ int
 ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
 {
     int i, k;
+    int comb_changed;
     struct directory *dp;
     struct rt_db_internal intern;
     struct rt_comb_internal *comb;
@@ -94,7 +117,7 @@ ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
 	return BRLCAD_ERROR;
     }
 
-    bu_log("!!! ged_prefix_core: step 1\n");
+    ged_event_batch_begin(gedp);
 
     /* First, check validity, and change node names */
     for (i = 2; i < argc; i++) {
@@ -130,25 +153,30 @@ ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
 
 	/* Change object name in the directory. */
 	if (db_rename(gedp->dbip, dp, tempstring) < 0) {
-	    bu_vls_free(&tempstring_v5);
 	    bu_vls_printf(gedp->ged_result_str, "error in rename to %s, aborting\n", tempstring);
+	    bu_vls_free(&tempstring_v5);
+	    ged_event_batch_end(gedp, NULL);
 	    return BRLCAD_ERROR;
 	}
 
 	if (rt_db_get_internal(&intern, dp, gedp->dbip, (fastf_t *)NULL) < 0) {
+	    bu_vls_free(&tempstring_v5);
+	    ged_event_batch_end(gedp, NULL);
 	    bu_vls_printf(gedp->ged_result_str, "Database read error, aborting");
 	    return BRLCAD_ERROR;
 	}
 
 	/* Change object name on disk. */
 	if (rt_db_put_internal(dp, gedp->dbip, &intern)) {
+	    bu_vls_free(&tempstring_v5);
+	    ged_event_batch_end(gedp, NULL);
 	    bu_vls_printf(gedp->ged_result_str, "Database write error, aborting");
 	    return BRLCAD_ERROR;
 	}
-	bu_log("XXXged_prefix_core: changed name from %s to %s\n", argv[i], tempstring);
     }
 
     bu_vls_free(&tempstring_v5);
+    prefix_notify_renames(gedp, argc, argv);
 
     /* Examine all COMB nodes */
     FOR_ALL_DIRECTORY_START(dp, gedp->dbip) {
@@ -156,22 +184,32 @@ ged_prefix_core(struct ged *gedp, int argc, const char *argv[])
 	    continue;
 
 	if (rt_db_get_internal(&intern, dp, gedp->dbip, (fastf_t *)NULL) < 0) {
+	    ged_event_batch_end(gedp, NULL);
 	    bu_vls_printf(gedp->ged_result_str, "Database read error, aborting");
 	    return BRLCAD_ERROR;
 	}
 	comb = (struct rt_comb_internal *)intern.idb_ptr;
 
+	comb_changed = 0;
 	for (k = 2; k < argc; k++)
 	    db_tree_funcleaf(gedp->dbip, comb, comb->tree, prefix_do,
-			     (void *)argv[1], (void *)argv[k], (void *)NULL, (void *)NULL);
+			     (void *)argv[1], (void *)argv[k], (void *)&comb_changed, (void *)NULL);
+	if (!comb_changed) {
+	    rt_db_free_internal(&intern);
+	    continue;
+	}
 	if (rt_db_put_internal(dp, gedp->dbip, &intern)) {
+	    ged_event_batch_end(gedp, NULL);
 	    bu_vls_printf(gedp->ged_result_str, "Database write error, aborting");
 	    return BRLCAD_ERROR;
 	}
-    } FOR_ALL_DIRECTORY_END;
+	(void)ged_event_notify_comb_tree_changed(gedp, dp->d_namep, 1, NULL);
+	} FOR_ALL_DIRECTORY_END;
 
-    return BRLCAD_OK;
-}
+	ged_event_batch_end(gedp, NULL);
+
+	return BRLCAD_OK;
+    }
 
 
 #include "../include/plugin.h"

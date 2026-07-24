@@ -27,11 +27,9 @@
 
 #include <iostream>
 
-#include <QTimer>
-#include <QCommandLineOption>
-#include <QCommandLineParser>
 #include <QApplication>
-#include <QTextStream>
+#include <QSurfaceFormat>
+#include <QTimer>
 
 #include "bu/app.h"
 #include "bu/log.h"
@@ -40,6 +38,7 @@
 
 #include "QgEdApp.h"
 #include "fbserv.h"
+#include "qtcad/QgTestEvent.h"
 
 static void
 qged_usage(const char *cmd, struct bu_opt_desc *d) {
@@ -74,6 +73,8 @@ main(int argc, char **argv)
     int quad_mode = 0;
     int print_help = 0;
     struct bu_vls msg = BU_VLS_INIT_ZERO;
+    const char *startup_commands = NULL;
+    const char *test_script = NULL;
     const char *exec_name = argv[0];
 
     // All BRL-CAD programs need to set this in order for relative path lookups
@@ -84,13 +85,17 @@ main(int argc, char **argv)
     argc-=(argc>0); argv+=(argc>0);
 
     /* Handle top level application options */
-    struct bu_opt_desc d[6];
+    struct bu_opt_desc d[8];
     BU_OPT(d[0],  "h", "help",   "", NULL, &print_help,    "Print help and exit");
     BU_OPT(d[1],  "?", "",       "", NULL, &print_help,    "");
     BU_OPT(d[2],  "c", "no-gui", "", NULL, &console_mode,  "Run without GUI");
-    BU_OPT(d[3],  "s", "swrast", "", NULL, &swrast_mode,   "Use software rendering for 3D view");
+    BU_OPT(d[3],  "s", "swrast", "", NULL, &swrast_mode,   "Use offscreen rendering for 3D view");
     BU_OPT(d[4],  "4", "quad",   "", NULL, &quad_mode,     "Launch using quad view");
-    BU_OPT_NULL(d[5]);
+    BU_OPT(d[5],  "e", "exec",   "commands", &bu_opt_str, &startup_commands,
+	    "Run semicolon-separated GED commands after GUI initialization");
+    BU_OPT(d[6],  "", "test-script", "events.json", &bu_opt_str, &test_script,
+	    "Replay a qtcad GUI event stream and exit with test status");
+    BU_OPT_NULL(d[7]);
 
     // High level options are only defined prior to the file argument (if there
     // is one).  See if we need to limit our processing
@@ -98,6 +103,12 @@ main(int argc, char **argv)
     for (int i = 0; i < argc; i++) {
 	if (argv[i][0] == '-') {
 	    acmax++;
+	    if ((BU_STR_EQUAL(argv[i], "-e") ||
+		    BU_STR_EQUAL(argv[i], "--exec") ||
+		    BU_STR_EQUAL(argv[i], "--test-script")) && i + 1 < argc) {
+		acmax++;
+		i++;
+	    }
 	} else {
 	    break;
 	}
@@ -129,8 +140,6 @@ main(int argc, char **argv)
 	return BRLCAD_OK;
     }
 
-    // TODO - if we have commands beyond a .g file, we're supposed to process
-    // and exit...
     if (argc > 1 && !console_mode) {
 	bu_log("For qged GUI mode need either zero or one .g files specified\n");
 	return BRLCAD_ERROR;
@@ -141,8 +150,70 @@ main(int argc, char **argv)
 	return BRLCAD_ERROR;
     }
 
-    // We derive our own app type from QApplication
-    QgEdApp app(argc, argv, swrast_mode, quad_mode);
+    if (startup_commands)
+	bu_log("qged: queued startup commands: %s\n", startup_commands);
+
+    // Qt6 requires QSurfaceFormat::setDefaultFormat() to be called BEFORE
+    // QApplication is constructed.  Without specifying QSurfaceFormat::OpenGL
+    // here, Qt's RHI layer may fall back to OpenGL ES (QRhiGles2) even on a
+    // desktop system, causing context-creation failures at runtime.
+#ifdef BRLCAD_OPENGL
+    if (!swrast_mode) {
+	QSurfaceFormat fmt;
+	fmt.setRenderableType(QSurfaceFormat::OpenGL);
+	fmt.setDepthBufferSize(24);
+	fmt.setStencilBufferSize(8);
+	/* Disable app-level vsync.  Qt's default swap interval is 1, which makes
+	 * the QOpenGLWidget's compositing swap block on the display's vblank --
+	 * and under the Windows DWM compositor that block is ~2-3 vblanks, so it
+	 * caps the view at ~30fps and adds ~30ms of input-to-photon latency even
+	 * though an Obol frame renders in well under 1ms.  The DWM already vsyncs
+	 * at composition time (so no tearing is visible in a composited window);
+	 * the extra app-level sync only costs latency.  Turning it off drops
+	 * per-frame latency to sub-millisecond and lets interactive manipulation
+	 * repaint as fast as input arrives. */
+	fmt.setSwapInterval(0);
+	QSurfaceFormat::setDefaultFormat(fmt);
+    }
+#endif
+
+    const QString startup = startup_commands ?
+	QString::fromLocal8Bit(startup_commands) : QString();
+
+    // QApplication requires argv[0] to be the executable name.  The qged
+    // option parser above has removed that entry and left only the optional
+    // database argument, so give Qt a valid argument vector and pass the
+    // database path separately.
+    const char *db_file = argc ? argv[0] : NULL;
+    int qt_argc = 1;
+    char *qt_argv[] = {const_cast<char *>(exec_name), NULL};
+    QgEdApp app(qt_argc, qt_argv, db_file, swrast_mode, quad_mode);
+    if (!startup.isEmpty()) {
+	const QStringList commands = startup.split(';', Qt::SkipEmptyParts);
+	for (const QString &command : commands) {
+	    const QString trimmed = command.trimmed();
+	    bu_log("qged: executing startup command: %s\n",
+		    trimmed.toLocal8Bit().constData());
+	    app.run_qcmd(trimmed);
+	}
+    }
+    if (test_script) {
+	const QString script = QString::fromLocal8Bit(test_script);
+	QTimer::singleShot(0, &app, [&app, script]() {
+	    QVector<QgTestEvent> events;
+	    QString error;
+	    QgEventPlayer player(app.w);
+	    if (!QgEventRecorder::load(script, events, &error) ||
+		!player.play(events, &error)) {
+		bu_log("qged: GUI test replay failed: %s\n",
+		    error.toLocal8Bit().constData());
+		app.exit(BRLCAD_ERROR);
+		return;
+	    }
+	    app.exit(BRLCAD_OK);
+	});
+    }
+    bu_vls_free(&msg);
 
     // Setup complete - time to enter the interactive event loop
     return app.exec();

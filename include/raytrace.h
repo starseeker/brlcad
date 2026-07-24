@@ -122,6 +122,8 @@ __BEGIN_DECLS
 
 #include "./rt/func.h"
 
+#include "./rt/eval_wireframe.h"
+
 #include "./rt/functab.h"
 
 #include "./rt/private.h"
@@ -171,8 +173,6 @@ __BEGIN_DECLS
 #include "./rt/misc.h"
 
 #include "./rt/prep.h"
-
-#include "./rt/vlist.h"
 
 #include "./rt/htbl.h"
 

@@ -43,7 +43,7 @@ After the change MGED exposes **405** command names; **19 candidates remain** (d
 These had no MGED equivalent under any name. Each was added as a single
 `mged_cmdtab[]` line with the wrapper appropriate to the gedp state it touches
 (`cmd_ged_plain_wrapper` for database / named-object commands, `cmd_ged_view_wrapper`
-for view-mutating commands, `cmd_ged_dm_wrapper` for framebuffer/display-manager commands).
+for view-mutating commands, `cmd_ged_display_wrapper` for framebuffer/display-endpoint commands).
 
 ### plain (database / named-object) — `cmd_ged_plain_wrapper`
 
@@ -53,12 +53,12 @@ for view-mutating commands, `cmd_ged_dm_wrapper` for framebuffer/display-manager
 
 `data_lines`, `eye_pos`, `perspective`, `pmat`, `quat`, `rect`, `rmat`, `rot_about`, `ypr`
 
-### framebuffer / display-manager — `cmd_ged_dm_wrapper` (needs an attached DM at runtime)
+### framebuffer / display endpoint — `cmd_ged_display_wrapper` (needs an attached endpoint at runtime)
 
 `ert`, `fb2pix`, `fbclear`, `pix2fb`, `png2fb`
 
-> Note: the framebuffer/DM commands (`fb2pix`, `pix2fb`, `fbclear`, `png2fb`, `ert`) and
-> `rtwizard`/`rselect` are exposed but only function when a display manager / framebuffer
+> Note: the framebuffer/display commands (`fb2pix`, `pix2fb`, `fbclear`, `png2fb`, `ert`) and
+> `rtwizard`/`rselect` are exposed but only function when a display endpoint / framebuffer
 > is attached (or, for `rtwizard`, the external `rtwizard` program is installed).
 
 ## 2. Added to MGED — documented aliases of existing commands

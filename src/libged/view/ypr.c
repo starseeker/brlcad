@@ -28,6 +28,9 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+
+#include "bv.h"
+
 #include "../ged_private.h"
 #include "./ged_view.h"
 
@@ -43,14 +46,19 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
 
+    struct ged_view_context *view_ctx = ged_view_active_ctx(gedp);
+
     /* initialize result */
     bu_vls_trunc(gedp->ged_result_str, 0);
 
     /* return Viewrot as yaw, pitch and roll */
     if (argc == 1) {
 	point_t pt = VINIT_ZERO;
+	mat_t view_rotation;
+	const struct bv *view = bv_context_view_const((const struct bv_context *)view_ctx);
 
-	bn_mat_trn(mat, gedp->ged_gvp->gv_rotation);
+	bv_rotation_get(view_rotation, view);
+	bn_mat_trn(mat, view_rotation);
 	anim_v_unpermute(mat);
 
 	if (anim_mat2ypr(mat, pt) == 2) {
@@ -84,8 +92,11 @@ ged_ypr_core(struct ged *gedp, int argc, const char *argv[])
 
     anim_dy_p_r2mat(mat, V3ARGS(ypr));
     anim_v_permute(mat);
-    bn_mat_trn(gedp->ged_gvp->gv_rotation, mat);
-    bv_update(gedp->ged_gvp);
+    mat_t rotation;
+    bn_mat_trn(rotation, mat);
+    struct bv *view = bv_context_view((struct bv_context *)view_ctx);
+    bv_rotation_set(view, rotation);
+    ged_view_context_update(view_ctx);
 
     return BRLCAD_OK;
 }

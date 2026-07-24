@@ -324,7 +324,7 @@ proc qray_reset { id } {
 	return
     }
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
 
     if {$mouse_behavior == "q"} {
 	set qray_control($id,active) 1
@@ -574,7 +574,7 @@ proc qray_apply_fmt { id } {
     global mged_gui
     global qray_control
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     qray fmt r $qray_control($id,fmt_ray)
     qray fmt h $qray_control($id,fmt_head)
     qray fmt p $qray_control($id,fmt_partition)
@@ -589,7 +589,7 @@ proc qray_reset_fmt { id } {
     global mged_gui
     global qray_control
 
-    winset $mged_gui($id,active_dm)
+    winset $mged_gui($id,active_pane)
     set qray_control($id,fmt_ray) [_mged_qray fmt r]
     set qray_control($id,fmt_head) [_mged_qray fmt h]
     set qray_control($id,fmt_partition) [_mged_qray fmt p]
@@ -602,7 +602,7 @@ proc qray_reset_fmt { id } {
 
 ## - qray_nirt
 #
-# Delete phony solids from the display list before calling nirt.
+# Delete phony solids from the drawn scene before calling nirt.
 #
 proc qray_nirt { args } {
     # delete phony solids

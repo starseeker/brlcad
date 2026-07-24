@@ -27,15 +27,61 @@
 #include <QMouseEvent>
 #include <QVBoxLayout>
 #include <QtGlobal>
-#include "../../../QgEdApp.h"
+#include "qtcad/QgPluginContext.h"
+#include "qtcad/QgColorRGB.h"
+#include "qtcad/QgMeasureFilter.h"
+#include "qtcad/QgSignalFlags.h"
+#include "qtcad/QgView.h"
 
 #include "bu/opt.h"
 #include "bu/malloc.h"
 #include "bu/str.h"
+#include "bu/units.h"
 #include "bg/aabb_ray.h"
 #include "bg/plane.h"
+#include "ged.h"
 
 #include "./CADViewMeasure.h"
+
+static void *
+qged_measure_view(const QgPluginContext *ctx)
+{
+    return ctx ? ctx->activeViewContext() : nullptr;
+}
+
+const BObolInputActionLayer *
+CADViewMeasure::inputActionLayer()
+{
+    static const unsigned int modifier_mask = BOBOL_INPUT_MOD_SHIFT |
+	BOBOL_INPUT_MOD_CONTROL | BOBOL_INPUT_MOD_ALT |
+	BOBOL_INPUT_MOD_META;
+    static const BObolInputBinding bindings[] = {
+	{BOBOL_INPUT_POINTER_PRESS, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
+	 10, QG_MEASURE_INPUT_BEGIN},
+	{BOBOL_INPUT_POINTER_MOTION, BOBOL_INPUT_ANY, BOBOL_INPUT_ANY, 0,
+	 modifier_mask, 10, QG_MEASURE_INPUT_UPDATE},
+	{BOBOL_INPUT_POINTER_RELEASE, BOBOL_INPUT_ANY, 0, 0, modifier_mask,
+	 10, QG_MEASURE_INPUT_COMMIT}
+    };
+    static const BObolInputActionLayer layer = {
+	"qged-measure", bindings, sizeof(bindings) / sizeof(bindings[0]),
+	CADViewMeasure::inputActionDispatch
+    };
+    return &layer;
+}
+
+static QgView *
+qged_measure_view_from_event_object(QObject *object)
+{
+    QWidget *widget = qobject_cast<QWidget *>(object);
+    while (widget) {
+	QgView *view = qobject_cast<QgView *>(widget);
+	if (view)
+	    return view;
+	widget = widget->parentWidget();
+    }
+    return nullptr;
+}
 
 CADViewMeasure::CADViewMeasure(QWidget *)
 {
@@ -87,8 +133,47 @@ CADViewMeasure::CADViewMeasure(QWidget *)
 
 CADViewMeasure::~CADViewMeasure()
 {
-    if (s)
-	bv_obj_put(s);
+    detachFromView(nullptr);
+    delete f2d;
+    delete f3d;
+}
+
+void
+CADViewMeasure::attachToView(QgView *view)
+{
+    if (!view)
+	return;
+    if (m_input_view && m_input_view != view)
+	detachFromView(m_input_view);
+
+    m_input_view = view;
+    m_input_endpoint = view->displayEndpoint();
+    if (m_input_endpoint && bobol_display_endpoint_input_action_layer_set(
+	m_input_endpoint, CADViewMeasure::inputActionLayer(), this, this))
+	return;
+
+    m_input_endpoint = nullptr;
+    view->add_event_filter(this);
+    m_qt_filter_installed = true;
+}
+
+void
+CADViewMeasure::detachFromView(QgView *view)
+{
+    if (!m_input_view || (view && view != m_input_view))
+	return;
+    if (m_input_endpoint)
+	(void)bobol_display_endpoint_input_action_layer_clear_if(
+	    m_input_endpoint, this);
+    if (m_qt_filter_installed)
+	m_input_view->clear_event_filter(this);
+    if (f2d)
+	f2d->set_view_widget(nullptr);
+    if (f3d)
+	f3d->set_view_widget(nullptr);
+    m_input_view = nullptr;
+    m_input_endpoint = nullptr;
+    m_qt_filter_installed = false;
 }
 
 void
@@ -114,20 +199,17 @@ CADViewMeasure::adjust_text_db(void *)
 void
 CADViewMeasure::adjust_text()
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
-	return;
-    struct ged *gedp = m->gedp;
-    if (!gedp || !gedp->ged_gvp)
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!gedp || !gedp->dbip || !mf)
 	return;
 
 
     double angle;
     if (report_radians->isChecked()) {
-	ma_label = new QLabel("Measured Angle (rad):");
+	ma_label->setText("Measured Angle (rad):");
 	angle = mf->angle(true);
     } else {
-	ma_label = new QLabel("Measured Angle (deg):");
+	ma_label->setText("Measured Angle (deg):");
 	angle = mf->angle(false);
     }
 
@@ -153,22 +235,21 @@ CADViewMeasure::do_filter_view_update()
 
 
 bool
-CADViewMeasure::eventFilter(QObject *, QEvent *e)
+CADViewMeasure::eventFilter(QObject *o, QEvent *e)
 {
-    QgModel *m = ((QgEdApp *)qApp)->mdl;
-    if (!m)
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!gedp)
 	return false;
-    struct ged *gedp = m->gedp;
-    if (!gedp || !gedp->ged_gvp)
+    QgView *display = qged_measure_view_from_event_object(o);
+    if (!display && m_ctx)
+	display = m_ctx->getViewWidget();
+    void *v = display ? display->viewContext() : qged_measure_view(m_ctx);
+    if (!v)
 	return false;
-    struct bview *v = gedp->ged_gvp;
-
-    f3d->dbip = gedp->dbip;
 
     mf = (measure_3d->isChecked()) ? (QgMeasureFilter *)f3d : (QgMeasureFilter *)f2d;
 
-    mf->s = s;
-    mf->v = v;
+    mf->set_view_widget(display);
     update_color();
 
     // Connect whatever the current filter is to pass on updating signals from
@@ -177,12 +258,45 @@ CADViewMeasure::eventFilter(QObject *, QEvent *e)
 
     bool ret = mf->eventFilter(NULL, e);
 
-    // Retrieve the scene object from the libqtcad data container
-    s = mf->s;
-
     QObject::disconnect(mf, &QgMeasureFilter::view_updated, this, &CADViewMeasure::do_filter_view_update);
 
     return ret;
+}
+
+int
+CADViewMeasure::inputActionDispatch(void *user_data,
+	BObolInputAction action, const BObolInputEvent *event)
+{
+    CADViewMeasure *measure = static_cast<CADViewMeasure *>(user_data);
+    return measure ? measure->applyInputAction(action, event) :
+	BOBOL_INPUT_RESULT_ERROR;
+}
+
+int
+CADViewMeasure::applyInputAction(BObolInputAction action,
+	const BObolInputEvent *event)
+{
+    struct ged *gedp = m_ctx ? m_ctx->getGed() : nullptr;
+    if (!event || !gedp || !m_input_view ||
+	(action != QG_MEASURE_INPUT_BEGIN &&
+	 action != QG_MEASURE_INPUT_UPDATE &&
+	 action != QG_MEASURE_INPUT_COMMIT &&
+	 action != QG_MEASURE_INPUT_CANCEL))
+	return BOBOL_INPUT_RESULT_UNHANDLED;
+
+    mf = measure_3d->isChecked() ?
+	(QgMeasureFilter *)f3d : (QgMeasureFilter *)f2d;
+    mf->set_view_widget(m_input_view);
+    update_color();
+
+    QObject::connect(mf, &QgMeasureFilter::view_updated, this,
+	&CADViewMeasure::do_filter_view_update);
+    bool handled = mf->semanticInput(action, event);
+    QObject::disconnect(mf, &QgMeasureFilter::view_updated, this,
+	&CADViewMeasure::do_filter_view_update);
+
+    return handled ? BOBOL_INPUT_RESULT_HANDLED :
+	BOBOL_INPUT_RESULT_UNHANDLED;
 }
 
 // Local Variables:
@@ -193,4 +307,3 @@ CADViewMeasure::eventFilter(QObject *, QEvent *e)
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

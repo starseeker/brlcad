@@ -35,8 +35,7 @@
 #include "bu/malloc.h"
 #include "bu/getopt.h"
 #include "bu/exit.h"
-#include "dm.h"
-#include "pkg.h"
+#include "imgstream/fb_compat.h"
 
 const char *options = "iHoF:h?";
 
@@ -78,7 +77,7 @@ parse_gamma(const char *arg, double *g, const char *label)
 
 
 static void
-mk_ramp(struct fb *fb_i, int r, int g, int b, int n)
+mk_ramp(imgstream_fb_t *fb_i, int r, int g, int b, int n)
 {
 
     /* grey ramp */
@@ -91,7 +90,7 @@ mk_ramp(struct fb *fb_i, int r, int g, int b, int n)
 	else line[x*3+2] = 0;
     }
     for (y=patch_height*n; y < patch_height*(n+1) && y < scr_height; ++y) {
-	fb_write(fb_i, 0, y, line, scr_width);
+	imgstream_fb_write(fb_i, 0, y, line, (size_t)scr_width);
     }
 
     for (x=0; x < scr_width; ++x) {
@@ -103,18 +102,18 @@ mk_ramp(struct fb *fb_i, int r, int g, int b, int n)
 	else line[x*3+2] = 0;
     }
     for (y=patch_height*(n+1); y < patch_height*(n+2) && y < scr_height; y += 2) {
-	fb_write(fb_i, 0, y, altline, scr_width);
-	fb_write(fb_i, 0, y+1, line, scr_width);
+	imgstream_fb_write(fb_i, 0, y, altline, (size_t)scr_width);
+	imgstream_fb_write(fb_i, 0, y+1, line, (size_t)scr_width);
     }
 }
 
 
 static void
-disp_image(struct fb *fb_i)
+disp_image(imgstream_fb_t *fb_i)
 {
 
-    scr_width = fb_getwidth(fb_i);
-    scr_height = fb_getheight(fb_i);
+    scr_width = (int)imgstream_fb_width(fb_i);
+    scr_height = (int)imgstream_fb_height(fb_i);
 
     patch_width = scr_width / 8;
     patch_height = scr_height / 14;
@@ -145,8 +144,8 @@ main(int argc, char **argv)
     int remaining = 0;
     double gamr = 0, gamg = 0, gamb = 0;	/* gamma's */
     double f;
-    ColorMap cm;
-    struct fb *fbp;
+    struct imgstream_fb_colormap cm;
+    imgstream_fb_t *fbp;
 
     bu_setprogname(argv[0]);
 
@@ -186,7 +185,8 @@ main(int argc, char **argv)
 	bu_exit(1, "%s", usage);
     }
 
-    if ((fbp = fb_open(framebuffer, fbsize, fbsize)) == FB_NULL) {
+    if ((fbp = imgstream_fb_open(framebuffer, (size_t)fbsize,
+	    (size_t)fbsize)) == NULL) {
 	bu_exit(2, "Unable to open framebuffer\n");
     }
 
@@ -195,38 +195,37 @@ main(int argc, char **argv)
 
     /* get the starting map */
     if (overlay) {
-	fb_rmap(fbp, &cm);
+	imgstream_fb_rmap(fbp, &cm);
     } else {
 	/* start with a linear map */
 	for (i = 0; i < 256; i++) {
-	    cm.cm_red[i] = cm.cm_green[i]
-		= cm.cm_blue[i] = i << 8;
+	    cm.red[i] = cm.green[i] = cm.blue[i] = (uint16_t)(i << 8);
 	}
     }
 
     /* apply the gamma(s) */
     for (i = 0; i < 256; i++) {
 	if (gamr < 0)
-	    cm.cm_red[i] = 65535 * pow((double)cm.cm_red[i] / 65535.0, -1.0/gamr);
+	    cm.red[i] = (uint16_t)(65535 * pow((double)cm.red[i] / 65535.0, -1.0/gamr));
 	else
-	    cm.cm_red[i] = 65535 * pow((double)cm.cm_red[i] / 65535.0, gamr);
+	    cm.red[i] = (uint16_t)(65535 * pow((double)cm.red[i] / 65535.0, gamr));
 	if (onegamma && (overlay == 0)) {
-	    cm.cm_green[i] = cm.cm_red[i];
-	    cm.cm_blue[i]  = cm.cm_red[i];
+	    cm.green[i] = cm.red[i];
+	    cm.blue[i]  = cm.red[i];
 	} else {
 	    if (gamg < 0)
-		cm.cm_green[i] = 65535 * pow((double)cm.cm_green[i] / 65535.0, -1.0/gamg);
+		cm.green[i] = (uint16_t)(65535 * pow((double)cm.green[i] / 65535.0, -1.0/gamg));
 	    else
-		cm.cm_green[i] = 65535 * pow((double)cm.cm_green[i] / 65535.0, gamg);
+		cm.green[i] = (uint16_t)(65535 * pow((double)cm.green[i] / 65535.0, gamg));
 	    if (gamb < 0)
-		cm.cm_blue[i]  = 65535 * pow((double)cm.cm_blue[i] / 65535.0, -1.0/gamb);
+		cm.blue[i] = (uint16_t)(65535 * pow((double)cm.blue[i] / 65535.0, -1.0/gamb));
 	    else
-		cm.cm_blue[i]  = 65535 * pow((double)cm.cm_blue[i] / 65535.0, gamb);
+		cm.blue[i] = (uint16_t)(65535 * pow((double)cm.blue[i] / 65535.0, gamb));
 	}
     }
 
-    fb_wmap(fbp, &cm);
-    fb_close(fbp);
+    imgstream_fb_wmap(fbp, &cm);
+    imgstream_fb_close(fbp);
     return 0;
 }
 
