@@ -32,6 +32,7 @@
  *   - ECMD_BREP_SRF_CV_SET places the CV at the given absolute position
  *   - ECMD_BREP_SRF_CV_WEIGHT changes an interior CV weight
  *   - CV edits whose support reaches an outer trim are rejected
+ *   - an eligible natural seam edit is coupled through the adjacent face
  *   - rt_edit_brep_get_params returns sensible values
  *   - Invalid inputs are rejected gracefully (wrong e_inpara, bad face index)
  */
@@ -90,6 +91,141 @@ make_brep_surface(struct rt_wdb *wdbp)
     if (dp == RT_DIR_NULL)
 	bu_exit(1, "ERROR: unable to create brep sphere object\n");
 
+    return dp;
+}
+
+static double
+surface_greville(const ON_NurbsSurface &surface, int dir, int cv)
+{
+    const int degree = surface.Degree(dir);
+    const int knot_count = surface.KnotCount(dir);
+    double value = 0.0;
+    for (int k = 1; k <= degree; ++k) {
+	const int full_knot = cv + k;
+	const double knot = full_knot <= 0
+	    ? surface.Knot(dir, 0)
+	    : (full_knot >= knot_count + 1
+		? surface.Knot(dir, knot_count - 1)
+		: surface.Knot(dir, full_knot - 1));
+	value += knot;
+    }
+    return value / degree;
+}
+
+static ON_NurbsSurface *
+planar_edit_surface(int cv_count, double x_offset)
+{
+    ON_NurbsSurface *surface =
+	ON_NurbsSurface::New(3, false, 4, 4, cv_count, cv_count);
+    surface->MakeClampedUniformKnotVector(0, 1.0);
+    surface->MakeClampedUniformKnotVector(1, 1.0);
+    for (int i = 0; i < cv_count; ++i) {
+	for (int j = 0; j < cv_count; ++j) {
+	    surface->SetCV(i, j, ON_3dPoint(
+		    x_offset + surface_greville(*surface, 0, i),
+		    surface_greville(*surface, 1, j), 0.0));
+	}
+    }
+    return surface;
+}
+
+static int
+append_line_edge(ON_Brep &brep, int from, int to)
+{
+    ON_LineCurve *curve = new ON_LineCurve(
+	    brep.m_V[from].point, brep.m_V[to].point);
+    curve->SetDomain(0.0, 1.0);
+    const int curve_id = brep.AddEdgeCurve(curve);
+    return brep.NewEdge(brep.m_V[from], brep.m_V[to],
+	    curve_id, NULL, 1.0e-8).m_edge_index;
+}
+
+static void
+append_rect_face(ON_Brep &brep, int surface_id, const ON_Interval &u,
+	const ON_Interval &v, const int edges[4],
+	const bool reversed[4], int mated_side)
+{
+    ON_BrepFace &face = brep.NewFace(surface_id);
+    ON_BrepLoop &loop = brep.NewLoop(ON_BrepLoop::outer, face);
+    const ON_2dPoint starts[4] = {
+	ON_2dPoint(u.Min(), v.Min()),
+	ON_2dPoint(u.Max(), v.Min()),
+	ON_2dPoint(u.Max(), v.Max()),
+	ON_2dPoint(u.Min(), v.Max())
+    };
+    const ON_2dPoint ends[4] = {
+	ON_2dPoint(u.Max(), v.Min()),
+	ON_2dPoint(u.Max(), v.Max()),
+	ON_2dPoint(u.Min(), v.Max()),
+	ON_2dPoint(u.Min(), v.Min())
+    };
+    const ON_Surface *surface = brep.m_S[surface_id];
+    for (int side = 0; side < 4; ++side) {
+	ON_LineCurve *curve = new ON_LineCurve(starts[side], ends[side]);
+	curve->SetDomain(0.0, 1.0);
+	const int curve_id = brep.AddTrimCurve(curve);
+	ON_BrepTrim &trim = brep.NewTrim(
+		brep.m_E[edges[side]], reversed[side], loop, curve_id);
+	trim.m_iso = surface->IsIsoparametric(*curve);
+	trim.m_type = side == mated_side
+	    ? ON_BrepTrim::mated : ON_BrepTrim::boundary;
+	trim.m_tolerance[0] = 0.0;
+	trim.m_tolerance[1] = 0.0;
+    }
+}
+
+static struct directory *
+make_coupled_brep_surface(struct rt_wdb *wdbp)
+{
+    const char *objname = "brep_coupled_surface";
+    struct rt_brep_internal *bi;
+    BU_ALLOC(bi, struct rt_brep_internal);
+    bi->magic = RT_BREP_INTERNAL_MAGIC;
+    bi->brep = new ON_Brep;
+    ON_Brep &brep = *bi->brep;
+
+    ON_NurbsSurface *surface0 = planar_edit_surface(7, 0.0);
+    ON_NurbsSurface *surface1 = planar_edit_surface(
+	    7, surface0->Domain(0).Length());
+    const int surface0_id = brep.AddSurface(surface0);
+    const int surface1_id = brep.AddSurface(surface1);
+    const ON_Interval u = surface0->Domain(0);
+    const ON_Interval v = surface0->Domain(1);
+    const ON_3dPoint points[6] = {
+	surface0->PointAt(u.Min(), v.Min()),
+	surface0->PointAt(u.Max(), v.Min()),
+	surface0->PointAt(u.Max(), v.Max()),
+	surface0->PointAt(u.Min(), v.Max()),
+	surface1->PointAt(u.Max(), v.Min()),
+	surface1->PointAt(u.Max(), v.Max())
+    };
+    int vertices[6];
+    for (int i = 0; i < 6; ++i)
+	vertices[i] = brep.NewVertex(points[i], 1.0e-8).m_vertex_index;
+    const int edges[7] = {
+	append_line_edge(brep, vertices[0], vertices[1]),
+	append_line_edge(brep, vertices[1], vertices[2]),
+	append_line_edge(brep, vertices[2], vertices[3]),
+	append_line_edge(brep, vertices[3], vertices[0]),
+	append_line_edge(brep, vertices[1], vertices[4]),
+	append_line_edge(brep, vertices[4], vertices[5]),
+	append_line_edge(brep, vertices[5], vertices[2])
+    };
+    const int face0_edges[4] = {edges[0], edges[1], edges[2], edges[3]};
+    const bool face0_reversed[4] = {false, false, false, false};
+    const int face1_edges[4] = {edges[4], edges[5], edges[6], edges[1]};
+    const bool face1_reversed[4] = {false, false, false, true};
+    append_rect_face(brep, surface0_id, u, v, face0_edges,
+	    face0_reversed, 1);
+    append_rect_face(brep, surface1_id, u, v, face1_edges,
+	    face1_reversed, 3);
+    if (!brep.IsValid(NULL))
+	bu_exit(1, "ERROR: unable to create valid coupled B-rep fixture\n");
+
+    wdb_export(wdbp, objname, (void *)bi, ID_BREP, 1.0);
+    struct directory *dp = db_lookup(wdbp->dbip, objname, LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL)
+	bu_exit(1, "ERROR: unable to create coupled B-rep object\n");
     return dp;
 }
 
@@ -409,7 +545,67 @@ test_brep_cv_weight(struct rt_edit *s)
     bu_log("ECMD_BREP_SRF_CV_WEIGHT PASS\n");
 }
 
-/* 10. Descriptor is well-formed */
+/* 10. A compatible natural seam is translated with exact C0 coupling. */
+static void
+test_brep_coupled_boundary_move(struct rt_wdb *wdbp, struct db_i *dbip)
+{
+    struct directory *dp = make_coupled_brep_surface(wdbp);
+    struct rt_edit *s = open_edit(dp, dbip);
+    struct rt_brep_internal *bip =
+	(struct rt_brep_internal *)s->es_int.idb_ptr;
+    const int vertex_count = bip->brep->m_V.Count();
+    const int edge_count = bip->brep->m_E.Count();
+    const int trim_count = bip->brep->m_T.Count();
+    const int face_count = bip->brep->m_F.Count();
+
+    double x0, y0, z0;
+    get_cv_pos(s, 0, 6, 3, &x0, &y0, &z0);
+    EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_SELECT);
+    s->e_inpara = 3;
+    s->e_para[0] = 0.0;
+    s->e_para[1] = 6.0;
+    s->e_para[2] = 3.0;
+    rt_edit_process(s);
+    EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_CV_MOVE);
+    s->e_inpara = 3;
+    s->e_para[0] = 0.0;
+    s->e_para[1] = 0.0;
+    s->e_para[2] = 0.5;
+    rt_edit_process(s);
+
+    double x1, y1, z1;
+    get_cv_pos(s, 0, 6, 3, &x1, &y1, &z1);
+    if (fabs(x1 - x0) > 1.0e-10 || fabs(y1 - y0) > 1.0e-10
+	    || fabs(z1 - z0 - 0.5) > 1.0e-10)
+	bu_exit(1, "ERROR: coupled seam CV did not receive requested move\n");
+    if (!bip->brep->IsValid(NULL)
+	    || bip->brep->m_V.Count() != vertex_count
+	    || bip->brep->m_E.Count() != edge_count
+	    || bip->brep->m_T.Count() != trim_count
+	    || bip->brep->m_F.Count() != face_count)
+	bu_exit(1, "ERROR: coupled seam edit changed topology or validity\n");
+
+    const ON_BrepEdge &edge = bip->brep->m_E[1];
+    const ON_BrepTrim &trim0 = bip->brep->m_T[edge.m_ti[0]];
+    const ON_BrepTrim &trim1 = bip->brep->m_T[edge.m_ti[1]];
+    for (int sample = 0; sample <= 20; ++sample) {
+	const double f = (double)sample / 20.0;
+	const ON_3dPoint uv0 =
+	    trim0.PointAt(trim0.Domain().ParameterAt(f));
+	const ON_3dPoint uv1 =
+	    trim1.PointAt(trim1.Domain().ParameterAt(1.0 - f));
+	const ON_3dPoint p0 =
+	    bip->brep->m_F[0].PointAt(uv0.x, uv0.y);
+	const ON_3dPoint p1 =
+	    bip->brep->m_F[1].PointAt(uv1.x, uv1.y);
+	if (p0.DistanceTo(p1) > 1.0e-7)
+	    bu_exit(1, "ERROR: coupled faces separated at edited seam\n");
+    }
+    rt_edit_destroy(s);
+    bu_log("ECMD_BREP_SRF_CV_MOVE coupled natural seam PASS\n");
+}
+
+/* 11. Descriptor is well-formed */
 static void
 test_brep_edit_desc(struct directory *dp)
 {
@@ -463,6 +659,7 @@ main(int argc, char *argv[])
     test_brep_cv_weight(s);
 
     rt_edit_destroy(s);
+    test_brep_coupled_boundary_move(wdbp, dbip);
     db_close(dbip);
 
     bu_log("ALL brep edit tests PASSED\n");

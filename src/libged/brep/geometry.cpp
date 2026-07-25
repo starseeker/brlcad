@@ -1280,12 +1280,18 @@ _brep_cmd_geo_face_edit(void *bs, int argc, const char **argv)
     if (BU_STR_EQUAL(cmd, "f_cv_safe")) {
 	usage_string = "brep [options] <objname> geo f_cv_safe <face_id> <cv_u> <cv_v>";
 	purpose_string = "report whether a face CV can be changed without moving a trim";
+    } else if (BU_STR_EQUAL(cmd, "f_cv_editable")) {
+	usage_string = "brep [options] <objname> geo f_cv_editable <face_id> <cv_u> <cv_v>";
+	purpose_string = "report whether a face CV can be translated with current C0 coupling support";
+    } else if (BU_STR_EQUAL(cmd, "f_cv_constraint")) {
+	usage_string = "brep [options] <objname> geo f_cv_constraint <face_id> <cv_u> <cv_v>";
+	purpose_string = "report trim influence and constrained-edit eligibility for a face CV";
     } else if (BU_STR_EQUAL(cmd, "f_set_cv")) {
 	usage_string = "brep [options] <objname> geo f_set_cv <face_id> <cv_u> <cv_v> <x> <y> <z> [<w>]";
-	purpose_string = "set a topology-safe face CV, isolating a shared surface";
+	purpose_string = "set a face CV using supported topology-preserving constraints";
     } else if (BU_STR_EQUAL(cmd, "f_move_cv")) {
 	usage_string = "brep [options] <objname> geo f_move_cv <face_id> <cv_u> <cv_v> <dx> <dy> <dz>";
-	purpose_string = "translate a topology-safe face CV, isolating a shared surface";
+	purpose_string = "translate a face CV using supported topology-preserving constraints";
     } else if (BU_STR_EQUAL(cmd, "f_set_weight")) {
 	usage_string = "brep [options] <objname> geo f_set_weight <face_id> <cv_u> <cv_v> <weight>";
 	purpose_string = "set a topology-safe face CV weight, isolating a shared surface";
@@ -1308,14 +1314,48 @@ _brep_cmd_geo_face_edit(void *bs, int argc, const char **argv)
 		atoi(argv[1]), atoi(argv[2]), atoi(argv[3]));
 	bu_vls_printf(gib->vls, "%d", safe ? 1 : 0);
 	return BRLCAD_OK;
+    } else if (BU_STR_EQUAL(cmd, "f_cv_editable") && argc == 4) {
+	const bool editable = brep_face_cv_can_translate(b_ip->brep,
+		atoi(argv[1]), atoi(argv[2]), atoi(argv[3]));
+	bu_vls_printf(gib->vls, "%d", editable ? 1 : 0);
+	return BRLCAD_OK;
+    } else if (BU_STR_EQUAL(cmd, "f_cv_constraint") && argc == 4) {
+	struct brep_face_cv_constraint status;
+	if (!brep_face_cv_constraint_status(b_ip->brep,
+		atoi(argv[1]), atoi(argv[2]), atoi(argv[3]), &status)) {
+	    bu_vls_printf(gib->vls, "invalid face or CV");
+	    return BRLCAD_ERROR;
+	}
+	bu_vls_printf(gib->vls,
+		"class %s trims %d edges %d adjacent_faces %d natural %d "
+		"isoparametric %d general %d topology_safe %d can_translate %d",
+		brep_cv_constraint_type_name(status.classification),
+		status.trim_count, status.edge_count, status.other_face_count,
+		status.natural_trim_count, status.isoparametric_trim_count,
+		status.general_trim_count, status.topology_safe ? 1 : 0,
+		status.can_translate ? 1 : 0);
+	return BRLCAD_OK;
     } else if (BU_STR_EQUAL(cmd, "f_set_cv") && (argc == 7 || argc == 8)) {
-	ON_4dPoint cv(atof(argv[4]), atof(argv[5]), atof(argv[6]),
-		argc == 8 ? atof(argv[7]) : 1.0);
-	changed = brep_face_set_cv(b_ip->brep, atoi(argv[1]),
-		atoi(argv[2]), atoi(argv[3]), cv);
+	const int face_id = atoi(argv[1]);
+	const int cv_u = atoi(argv[2]);
+	const int cv_v = atoi(argv[3]);
+	double weight = argc == 8 ? atof(argv[7]) : 1.0;
+	if (argc == 7 && face_id >= 0
+		&& face_id < b_ip->brep->m_F.Count()) {
+	    const ON_NurbsSurface *surface =
+		dynamic_cast<const ON_NurbsSurface *>(
+		    b_ip->brep->m_F[face_id].SurfaceOf());
+	    ON_4dPoint current;
+	    if (surface && surface->GetCV(cv_u, cv_v,
+			ON::euclidean_rational, &current.x))
+		weight = current.w;
+	}
+	ON_4dPoint cv(atof(argv[4]), atof(argv[5]), atof(argv[6]), weight);
+	changed = brep_face_set_cv_constrained(b_ip->brep, face_id,
+		cv_u, cv_v, cv);
     } else if (BU_STR_EQUAL(cmd, "f_move_cv") && argc == 7) {
 	ON_3dVector delta(atof(argv[4]), atof(argv[5]), atof(argv[6]));
-	changed = brep_face_translate_cv(b_ip->brep, atoi(argv[1]),
+	changed = brep_face_translate_cv_constrained(b_ip->brep, atoi(argv[1]),
 		atoi(argv[2]), atoi(argv[3]), delta);
     } else if (BU_STR_EQUAL(cmd, "f_set_weight") && argc == 5) {
 	changed = brep_face_set_weight(b_ip->brep, atoi(argv[1]),
@@ -1337,6 +1377,46 @@ _brep_cmd_geo_face_edit(void *bs, int argc, const char **argv)
     }
     if (brep_write_modified(gib->gb, b_ip->brep) != BRLCAD_OK)
 	return BRLCAD_ERROR;
+    return BRLCAD_OK;
+}
+
+static int
+_brep_cmd_geo_boundary_summary(void *bs, int argc, const char **argv)
+{
+    const char *usage_string =
+	"brep [options] <objname> geo boundary_summary";
+    const char *purpose_string =
+	"classify B-rep edges for constrained C0 boundary editing";
+    if (_brep_geo_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    struct _ged_brep_igeo *gib = (struct _ged_brep_igeo *)bs;
+    if (argc != 1) {
+	bu_vls_printf(gib->vls, "invalid arguments\n%s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+    struct rt_brep_internal *b_ip =
+	(struct rt_brep_internal *)gib->gb->intern.idb_ptr;
+    int counts[BREP_EDGE_CONSTRAINT_SPECIAL + 1] = {0};
+    int invalid = 0;
+    for (int edge = 0; edge < b_ip->brep->m_E.Count(); ++edge) {
+	const int classification =
+	    brep_edge_constraint_type(b_ip->brep, edge);
+	if (classification < 0 || classification > BREP_EDGE_CONSTRAINT_SPECIAL)
+	    ++invalid;
+	else
+	    ++counts[classification];
+    }
+    bu_vls_printf(gib->vls,
+	    "edges %d open %d natural %d isoparametric %d "
+	    "one_isoparametric %d general %d special %d invalid %d",
+	    b_ip->brep->m_E.Count(),
+	    counts[BREP_EDGE_CONSTRAINT_OPEN],
+	    counts[BREP_EDGE_CONSTRAINT_NATURAL],
+	    counts[BREP_EDGE_CONSTRAINT_ISOPARAMETRIC],
+	    counts[BREP_EDGE_CONSTRAINT_ONE_ISOPARAMETRIC],
+	    counts[BREP_EDGE_CONSTRAINT_GENERAL],
+	    counts[BREP_EDGE_CONSTRAINT_SPECIAL], invalid);
     return BRLCAD_OK;
 }
 
@@ -1426,11 +1506,14 @@ const struct bu_cmdtab _brep_geo_cmds[] = {
     { "s_ext_v",                _brep_cmd_geo_surface_extract_vertex},
     { "s_ext_c3",               _brep_cmd_geo_surface_extract_curve},
     { "f_cv_safe",              _brep_cmd_geo_face_edit},
+    { "f_cv_editable",          _brep_cmd_geo_face_edit},
+    { "f_cv_constraint",        _brep_cmd_geo_face_edit},
     { "f_set_cv",               _brep_cmd_geo_face_edit},
     { "f_move_cv",              _brep_cmd_geo_face_edit},
     { "f_set_weight",           _brep_cmd_geo_face_edit},
     { "f_reverse_param",        _brep_cmd_geo_face_edit},
     { "f_transpose",            _brep_cmd_geo_face_edit},
+    { "boundary_summary",       _brep_cmd_geo_boundary_summary},
     { "validate",               _brep_cmd_geo_validate},
     { (char *)NULL,             NULL}
 };

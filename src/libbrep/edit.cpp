@@ -26,8 +26,13 @@
 #include "brep/edit.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
+#include <Eigen/Core>
+#include <Eigen/QR>
+#include <algorithm>
 #include <cmath>
 #include <functional>
+#include <set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -230,6 +235,538 @@ nurbs_surface_cv_support(const ON_NurbsSurface *surface, int dir, int cv_id,
 
     support->Set(left, right);
     return support->IsIncreasing();
+}
+
+static bool
+support_intersects_interval(double interval_min, double interval_max,
+	const ON_Interval &support, const ON_Interval &domain,
+	bool clamped_start_cv, bool clamped_end_cv)
+{
+    /*
+     * A basis function is zero at the open ends of its support.  The
+     * first/last basis of a clamped vector is the exception at the
+     * corresponding surface-domain end.
+     */
+    if (interval_max > support.Min() + ON_ZERO_TOLERANCE
+	    && interval_min < support.Max() - ON_ZERO_TOLERANCE)
+	return true;
+    if (clamped_start_cv
+	    && interval_min <= domain.Min() + ON_ZERO_TOLERANCE
+	    && interval_max >= domain.Min() - ON_ZERO_TOLERANCE)
+	return true;
+    if (clamped_end_cv
+	    && interval_min <= domain.Max() + ON_ZERO_TOLERANCE
+	    && interval_max >= domain.Max() - ON_ZERO_TOLERANCE)
+	return true;
+    return false;
+}
+
+static bool
+face_cv_influenced_trims(const ON_Brep *brep, int face_id, int cv_id_u,
+	int cv_id_v, std::vector<int> *trim_ids)
+{
+    if (!brep || !trim_ids || face_id < 0 || face_id >= brep->m_F.Count())
+	return false;
+    trim_ids->clear();
+
+    const ON_BrepFace &face = brep->m_F[face_id];
+    if (face.ProxySurfaceIsTransposed())
+	return false;
+    const ON_NurbsSurface *surface =
+	dynamic_cast<const ON_NurbsSurface *>(face.SurfaceOf());
+    if (!surface)
+	return false;
+
+    ON_Interval u_support;
+    ON_Interval v_support;
+    if (!nurbs_surface_cv_support(surface, 0, cv_id_u, &u_support)
+	    || !nurbs_surface_cv_support(surface, 1, cv_id_v, &v_support))
+	return false;
+
+    const ON_Interval u_domain = surface->Domain(0);
+    const ON_Interval v_domain = surface->Domain(1);
+    const bool u_clamped_start_cv =
+	cv_id_u == 0 && surface->IsClamped(0, 0);
+    const bool u_clamped_end_cv =
+	cv_id_u == surface->CVCount(0) - 1 && surface->IsClamped(0, 1);
+    const bool v_clamped_start_cv =
+	cv_id_v == 0 && surface->IsClamped(1, 0);
+    const bool v_clamped_end_cv =
+	cv_id_v == surface->CVCount(1) - 1 && surface->IsClamped(1, 1);
+
+    for (int fli = 0; fli < face.m_li.Count(); ++fli) {
+	const int loop_id = face.m_li[fli];
+	if (loop_id < 0 || loop_id >= brep->m_L.Count())
+	    return false;
+	const ON_BrepLoop &loop = brep->m_L[loop_id];
+	for (int lti = 0; lti < loop.m_ti.Count(); ++lti) {
+	    const int trim_id = loop.m_ti[lti];
+	    if (trim_id < 0 || trim_id >= brep->m_T.Count())
+		return false;
+	    const ON_BrepTrim &trim = brep->m_T[trim_id];
+	    if (trim.m_c2i < 0 || trim.m_c2i >= brep->m_C2.Count()
+		    || !brep->m_C2[trim.m_c2i])
+		return false;
+
+	    ON_BoundingBox trim_bbox;
+	    if (!brep->m_C2[trim.m_c2i]->GetBoundingBox(trim_bbox, false)
+		    || !trim_bbox.IsValid())
+		return false;
+
+	    const bool intersects_u = support_intersects_interval(
+		    trim_bbox.m_min.x, trim_bbox.m_max.x, u_support, u_domain,
+		    u_clamped_start_cv, u_clamped_end_cv);
+	    const bool intersects_v = support_intersects_interval(
+		    trim_bbox.m_min.y, trim_bbox.m_max.y, v_support, v_domain,
+		    v_clamped_start_cv, v_clamped_end_cv);
+	    if (intersects_u && intersects_v)
+		trim_ids->push_back(trim_id);
+	}
+    }
+
+    return true;
+}
+
+static bool
+iso_flag(ON_Surface::ISO iso)
+{
+    return iso == ON_Surface::x_iso || iso == ON_Surface::y_iso
+	|| iso == ON_Surface::W_iso || iso == ON_Surface::S_iso
+	|| iso == ON_Surface::E_iso || iso == ON_Surface::N_iso;
+}
+
+static bool
+natural_iso_flag(ON_Surface::ISO iso)
+{
+    return iso == ON_Surface::W_iso || iso == ON_Surface::S_iso
+	|| iso == ON_Surface::E_iso || iso == ON_Surface::N_iso;
+}
+
+static int
+trim_face_index(const ON_Brep *brep, int trim_id)
+{
+    if (!brep || trim_id < 0 || trim_id >= brep->m_T.Count())
+	return -1;
+    const int loop_id = brep->m_T[trim_id].m_li;
+    if (loop_id < 0 || loop_id >= brep->m_L.Count())
+	return -1;
+    return brep->m_L[loop_id].m_fi;
+}
+
+struct iso_trim_trace {
+    int trim_id = -1;
+    int face_id = -1;
+    int edge_id = -1;
+    int varying_dir = -1;
+    double constant_parameter = ON_UNSET_VALUE;
+    double varying_min = ON_UNSET_VALUE;
+    double varying_max = ON_UNSET_VALUE;
+    bool reverse_to_edge = false;
+};
+
+static bool
+get_iso_trim_trace(const ON_Brep *brep, int trim_id,
+	struct iso_trim_trace *trace)
+{
+    if (!brep || !trace || trim_id < 0 || trim_id >= brep->m_T.Count())
+	return false;
+
+    const ON_BrepTrim &trim = brep->m_T[trim_id];
+    if (!iso_flag(trim.m_iso) || trim.m_ei < 0
+	    || trim.m_ei >= brep->m_E.Count())
+	return false;
+    const int face_id = trim_face_index(brep, trim_id);
+    if (face_id < 0 || face_id >= brep->m_F.Count())
+	return false;
+    const ON_BrepFace &face = brep->m_F[face_id];
+    if (face.ProxySurfaceIsTransposed())
+	return false;
+    const ON_NurbsSurface *surface =
+	dynamic_cast<const ON_NurbsSurface *>(face.SurfaceOf());
+    if (!surface)
+	return false;
+
+    const ON_3dPoint start = trim.PointAtStart();
+    const ON_3dPoint end = trim.PointAtEnd();
+    const bool constant_u = trim.m_iso == ON_Surface::x_iso
+	|| trim.m_iso == ON_Surface::W_iso
+	|| trim.m_iso == ON_Surface::E_iso;
+    const double constant_start = constant_u ? start.x : start.y;
+    const double constant_end = constant_u ? end.x : end.y;
+    const double varying_start = constant_u ? start.y : start.x;
+    const double varying_end = constant_u ? end.y : end.x;
+    const ON_Interval constant_domain = surface->Domain(constant_u ? 0 : 1);
+    const ON_Interval varying_domain = surface->Domain(constant_u ? 1 : 0);
+    const double parameter_tol = 1.0e-10
+	* std::max(1.0, std::max(constant_domain.Length(),
+		varying_domain.Length()));
+    if (std::fabs(constant_start - constant_end) > parameter_tol
+	    || constant_start < constant_domain.Min() - parameter_tol
+	    || constant_start > constant_domain.Max() + parameter_tol
+	    || varying_start < varying_domain.Min() - parameter_tol
+	    || varying_start > varying_domain.Max() + parameter_tol
+	    || varying_end < varying_domain.Min() - parameter_tol
+	    || varying_end > varying_domain.Max() + parameter_tol
+	    || std::fabs(varying_end - varying_start) <= parameter_tol)
+	return false;
+
+    /*
+     * Isoparametric flags describe the locus, but an unusual pcurve can
+     * still backtrack along that locus.  The exact trace backend requires a
+     * monotone parameter correspondence.
+     */
+    const int sample_count = 16;
+    const double sign = varying_end > varying_start ? 1.0 : -1.0;
+    double previous = varying_start;
+    for (int sample = 1; sample <= sample_count; ++sample) {
+	const ON_3dPoint p = trim.PointAt(
+		trim.Domain().ParameterAt((double)sample / sample_count));
+	const double constant = constant_u ? p.x : p.y;
+	const double varying = constant_u ? p.y : p.x;
+	if (std::fabs(constant - constant_start) > parameter_tol
+		|| sign * (varying - previous) < -parameter_tol)
+	    return false;
+	previous = varying;
+    }
+
+    trace->trim_id = trim_id;
+    trace->face_id = face_id;
+    trace->edge_id = trim.m_ei;
+    trace->varying_dir = constant_u ? 1 : 0;
+    trace->constant_parameter = 0.5 * (constant_start + constant_end);
+    trace->varying_min = std::min(varying_start, varying_end);
+    trace->varying_max = std::max(varying_start, varying_end);
+    trace->reverse_to_edge = (varying_end < varying_start) != trim.m_bRev3d;
+    return true;
+}
+
+static ON_NurbsCurve *
+extract_iso_trace(const ON_NurbsSurface *surface,
+	const struct iso_trim_trace &trace, const ON_Interval &edge_domain)
+{
+    if (!surface || !edge_domain.IsIncreasing())
+	return NULL;
+
+    ON_Curve *curve = surface->IsoCurve(trace.varying_dir,
+	    trace.constant_parameter);
+    if (!curve)
+	return NULL;
+    ON_NurbsCurve *nurbs = dynamic_cast<ON_NurbsCurve *>(curve);
+    if (!nurbs) {
+	ON_NurbsCurve *converted = ON_NurbsCurve::New();
+	if (curve->GetNurbForm(*converted, 0.0) <= 0) {
+	    delete converted;
+	    delete curve;
+	    return NULL;
+	}
+	delete curve;
+	nurbs = converted;
+    }
+
+    const ON_Interval keep(trace.varying_min, trace.varying_max);
+    const ON_Interval curve_domain = nurbs->Domain();
+    const double domain_tol = 1.0e-12
+	* std::max(1.0, curve_domain.Length());
+    if (keep.Min() > curve_domain.Min() + domain_tol
+	    || keep.Max() < curve_domain.Max() - domain_tol) {
+	if (!nurbs->Trim(keep)) {
+	    delete nurbs;
+	    return NULL;
+	}
+    }
+    if (trace.reverse_to_edge && !nurbs->Reverse()) {
+	delete nurbs;
+	return NULL;
+    }
+    if (!nurbs->SetDomain(edge_domain.Min(), edge_domain.Max())) {
+	delete nurbs;
+	return NULL;
+    }
+    return nurbs;
+}
+
+static bool
+same_curve_space(const ON_NurbsCurve *a, const ON_NurbsCurve *b,
+	double tolerance = 1.0e-10)
+{
+    if (!a || !b || a->Dimension() != b->Dimension()
+	    || a->IsRational() != b->IsRational()
+	    || a->Order() != b->Order() || a->CVCount() != b->CVCount()
+	    || a->KnotCount() != b->KnotCount())
+	return false;
+
+    const double scale = std::max(1.0,
+	    std::max(a->Domain().Length(), b->Domain().Length()));
+    for (int knot = 0; knot < a->KnotCount(); ++knot) {
+	if (std::fabs(a->Knot(knot) - b->Knot(knot))
+		> tolerance * scale)
+	    return false;
+    }
+    for (int cv = 0; cv < a->CVCount(); ++cv) {
+	if (std::fabs(a->Weight(cv) - b->Weight(cv)) > tolerance
+		* std::max(1.0, std::max(std::fabs(a->Weight(cv)),
+			std::fabs(b->Weight(cv)))))
+	    return false;
+    }
+    return true;
+}
+
+static bool
+translate_surface_cv(ON_NurbsSurface *surface, int cv_u, int cv_v,
+	const ON_3dVector &delta)
+{
+    if (!surface)
+	return false;
+    ON_4dPoint cv;
+    if (!surface->GetCV(cv_u, cv_v, ON::euclidean_rational, &cv.x))
+	return false;
+    cv.x += delta.x;
+    cv.y += delta.y;
+    cv.z += delta.z;
+    return surface->SetCV(cv_u, cv_v, ON::euclidean_rational, &cv.x);
+}
+
+static bool
+trace_cv_influence(const ON_NurbsSurface *surface, int cv_u, int cv_v,
+	const struct iso_trim_trace &trace, const ON_Interval &edge_domain,
+	const ON_NurbsCurve *baseline, std::vector<double> *influence,
+	bool *moves_endpoint)
+{
+    if (!surface || !baseline || !influence || !moves_endpoint)
+	return false;
+
+    ON_Surface *surface_copy = surface->DuplicateSurface();
+    ON_NurbsSurface *nurbs_copy =
+	dynamic_cast<ON_NurbsSurface *>(surface_copy);
+    if (!nurbs_copy
+	    || !translate_surface_cv(nurbs_copy, cv_u, cv_v,
+		ON_3dVector(1.0, 0.0, 0.0))) {
+	delete surface_copy;
+	return false;
+    }
+    ON_NurbsCurve *changed =
+	extract_iso_trace(nurbs_copy, trace, edge_domain);
+    delete surface_copy;
+    if (!changed || !same_curve_space(baseline, changed)) {
+	delete changed;
+	return false;
+    }
+
+    influence->assign((size_t)baseline->CVCount(), 0.0);
+    for (int cv = 0; cv < baseline->CVCount(); ++cv) {
+	ON_4dPoint before;
+	ON_4dPoint after;
+	if (!baseline->GetCV(cv, ON::euclidean_rational, &before.x)
+		|| !changed->GetCV(cv, ON::euclidean_rational, &after.x)) {
+	    delete changed;
+	    return false;
+	}
+	(*influence)[(size_t)cv] = after.x - before.x;
+	if (std::fabs(after.y - before.y) > 1.0e-10
+		|| std::fabs(after.z - before.z) > 1.0e-10) {
+	    delete changed;
+	    return false;
+	}
+    }
+
+    const ON_3dPoint before_start = baseline->PointAtStart();
+    const ON_3dPoint before_end = baseline->PointAtEnd();
+    const ON_3dPoint after_start = changed->PointAtStart();
+    const ON_3dPoint after_end = changed->PointAtEnd();
+    *moves_endpoint = before_start.DistanceTo(after_start) > 1.0e-9
+	|| before_end.DistanceTo(after_end) > 1.0e-9;
+    delete changed;
+    return true;
+}
+
+struct coupled_iso_plan {
+    int source_face = -1;
+    int source_trim = -1;
+    int mate_face = -1;
+    int mate_trim = -1;
+    int edge_id = -1;
+    int source_cv_u = -1;
+    int source_cv_v = -1;
+    struct iso_trim_trace source_trace;
+    struct iso_trim_trace mate_trace;
+    std::vector<std::pair<int, int>> mate_cvs;
+    std::vector<double> coefficients;
+};
+
+static bool
+prepare_coupled_iso_plan(const ON_Brep *brep, int face_id, int cv_u,
+	int cv_v, struct coupled_iso_plan *plan)
+{
+    if (!brep || !plan || !brep->IsValid(NULL)
+	    || face_id < 0 || face_id >= brep->m_F.Count())
+	return false;
+
+    std::vector<int> influenced;
+    if (!face_cv_influenced_trims(brep, face_id, cv_u, cv_v, &influenced)
+	    || influenced.size() != 1)
+	return false;
+    const int source_trim_id = influenced[0];
+    const ON_BrepTrim &source_trim = brep->m_T[source_trim_id];
+    if (source_trim.m_type != ON_BrepTrim::mated
+	    || source_trim.m_ei < 0
+	    || source_trim.m_ei >= brep->m_E.Count())
+	return false;
+    const ON_BrepEdge &edge = brep->m_E[source_trim.m_ei];
+    if (edge.m_ti.Count() != 2 || edge.m_c3i < 0
+	    || edge.m_c3i >= brep->m_C3.Count())
+	return false;
+
+    const int mate_trim_id = edge.m_ti[0] == source_trim_id
+	? edge.m_ti[1] : edge.m_ti[0];
+    if (mate_trim_id < 0 || mate_trim_id >= brep->m_T.Count())
+	return false;
+    const ON_BrepTrim &mate_trim = brep->m_T[mate_trim_id];
+    if (mate_trim.m_type != ON_BrepTrim::mated)
+	return false;
+    const int mate_face_id = trim_face_index(brep, mate_trim_id);
+    if (mate_face_id < 0 || mate_face_id == face_id)
+	return false;
+
+    struct iso_trim_trace source_trace;
+    struct iso_trim_trace mate_trace;
+    if (!get_iso_trim_trace(brep, source_trim_id, &source_trace)
+	    || !get_iso_trim_trace(brep, mate_trim_id, &mate_trace))
+	return false;
+
+    const ON_BrepFace &source_face = brep->m_F[face_id];
+    const ON_BrepFace &mate_face = brep->m_F[mate_face_id];
+    if (source_face.m_si < 0 || source_face.m_si >= brep->m_S.Count()
+	    || mate_face.m_si < 0 || mate_face.m_si >= brep->m_S.Count()
+	    || source_face.m_si == mate_face.m_si
+	    || brep->SurfaceUseCount(source_face.m_si, 2) > 1
+	    || brep->SurfaceUseCount(mate_face.m_si, 2) > 1)
+	return false;
+    const ON_NurbsSurface *source_surface =
+	dynamic_cast<const ON_NurbsSurface *>(source_face.SurfaceOf());
+    const ON_NurbsSurface *mate_surface =
+	dynamic_cast<const ON_NurbsSurface *>(mate_face.SurfaceOf());
+    if (!source_surface || !mate_surface)
+	return false;
+
+    ON_NurbsCurve *source_curve =
+	extract_iso_trace(source_surface, source_trace, edge.Domain());
+    ON_NurbsCurve *mate_curve =
+	extract_iso_trace(mate_surface, mate_trace, edge.Domain());
+    if (!source_curve || !mate_curve
+	    || !same_curve_space(source_curve, mate_curve)) {
+	delete source_curve;
+	delete mate_curve;
+	return false;
+    }
+
+    std::vector<double> source_influence;
+    bool source_moves_endpoint = false;
+    if (!trace_cv_influence(source_surface, cv_u, cv_v, source_trace,
+	    edge.Domain(), source_curve, &source_influence,
+	    &source_moves_endpoint)
+	    || source_moves_endpoint) {
+	delete source_curve;
+	delete mate_curve;
+	return false;
+    }
+
+    std::vector<std::pair<int, int>> candidates;
+    std::vector<std::vector<double>> columns;
+    for (int i = 0; i < mate_surface->CVCount(0); ++i) {
+	for (int j = 0; j < mate_surface->CVCount(1); ++j) {
+	    std::vector<int> candidate_trims;
+	    if (!face_cv_influenced_trims(brep, mate_face_id, i, j,
+		    &candidate_trims)
+		    || candidate_trims.size() != 1
+		    || candidate_trims[0] != mate_trim_id)
+		continue;
+	    std::vector<double> influence;
+	    bool moves_endpoint = false;
+	    if (!trace_cv_influence(mate_surface, i, j, mate_trace,
+		    edge.Domain(), mate_curve, &influence, &moves_endpoint))
+		continue;
+	    double norm = 0.0;
+	    for (double value : influence)
+		norm += value * value;
+	    if (norm <= 1.0e-24)
+		continue;
+	    candidates.push_back(std::make_pair(i, j));
+	    columns.push_back(influence);
+	}
+    }
+    if (candidates.empty()) {
+	delete source_curve;
+	delete mate_curve;
+	return false;
+    }
+
+    Eigen::MatrixXd matrix(source_curve->CVCount(), (int)candidates.size());
+    Eigen::VectorXd rhs(source_curve->CVCount());
+    for (int row = 0; row < source_curve->CVCount(); ++row) {
+	rhs(row) = source_influence[(size_t)row];
+	for (int col = 0; col < (int)candidates.size(); ++col)
+	    matrix(row, col) = columns[(size_t)col][(size_t)row];
+    }
+    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> decomposition(matrix);
+    const Eigen::VectorXd solution = decomposition.solve(rhs);
+    const double residual = (matrix * solution - rhs).norm();
+    const double residual_limit = 1.0e-10 * std::max(1.0, rhs.norm());
+    if (!solution.allFinite() || residual > residual_limit) {
+	delete source_curve;
+	delete mate_curve;
+	return false;
+    }
+    for (int i = 0; i < solution.size(); ++i) {
+	if (std::fabs(solution(i)) > 1.0e6) {
+	    delete source_curve;
+	    delete mate_curve;
+	    return false;
+	}
+    }
+
+    plan->source_face = face_id;
+    plan->source_trim = source_trim_id;
+    plan->mate_face = mate_face_id;
+    plan->mate_trim = mate_trim_id;
+    plan->edge_id = source_trim.m_ei;
+    plan->source_cv_u = cv_u;
+    plan->source_cv_v = cv_v;
+    plan->source_trace = source_trace;
+    plan->mate_trace = mate_trace;
+    plan->mate_cvs = candidates;
+    plan->coefficients.resize(candidates.size());
+    for (int i = 0; i < solution.size(); ++i)
+	plan->coefficients[(size_t)i] = solution(i);
+
+    delete source_curve;
+    delete mate_curve;
+    return true;
+}
+
+static bool
+replace_edge_curve(ON_Brep *brep, int edge_id, ON_NurbsCurve *curve)
+{
+    if (!brep || !curve || edge_id < 0 || edge_id >= brep->m_E.Count())
+	return false;
+    ON_BrepEdge &edge = brep->m_E[edge_id];
+    const int old_curve_id = edge.m_c3i;
+    if (old_curve_id < 0 || old_curve_id >= brep->m_C3.Count())
+	return false;
+
+    if (brep->EdgeCurveUseCount(old_curve_id, 2) == 1) {
+	ON_Curve *old_curve = brep->m_C3[old_curve_id];
+	brep->m_C3[old_curve_id] = curve;
+	if (!edge.ChangeEdgeCurve(old_curve_id)) {
+	    brep->m_C3[old_curve_id] = old_curve;
+	    delete curve;
+	    return false;
+	}
+	delete old_curve;
+	return true;
+    }
+
+    const int new_curve_id = brep->AddEdgeCurve(curve);
+    return new_curve_id >= 0 && edge.ChangeEdgeCurve(new_curve_id);
 }
 
 }
@@ -982,85 +1519,171 @@ bool brep_face_reverse(ON_Brep *brep, int face)
 
 bool brep_face_cv_is_topology_safe(const ON_Brep *brep, int face, int cv_id_u, int cv_id_v)
 {
-    if (!brep || face < 0 || face >= brep->m_F.Count())
+    std::vector<int> trim_ids;
+    return face_cv_influenced_trims(brep, face, cv_id_u, cv_id_v, &trim_ids)
+	&& trim_ids.empty();
+}
+
+int brep_edge_constraint_type(const ON_Brep *brep, int edge_id)
+{
+    if (!brep || edge_id < 0 || edge_id >= brep->m_E.Count())
+	return BREP_EDGE_CONSTRAINT_INVALID;
+    const ON_BrepEdge &edge = brep->m_E[edge_id];
+    if (edge.m_ti.Count() == 1) {
+	const int trim_id = edge.m_ti[0];
+	if (trim_id < 0 || trim_id >= brep->m_T.Count())
+	    return BREP_EDGE_CONSTRAINT_INVALID;
+	const ON_BrepTrim &trim = brep->m_T[trim_id];
+	return trim.m_type == ON_BrepTrim::seam
+	    || trim.m_type == ON_BrepTrim::singular
+	    ? BREP_EDGE_CONSTRAINT_SPECIAL : BREP_EDGE_CONSTRAINT_OPEN;
+    }
+    if (edge.m_ti.Count() != 2)
+	return BREP_EDGE_CONSTRAINT_SPECIAL;
+
+    const int trim0_id = edge.m_ti[0];
+    const int trim1_id = edge.m_ti[1];
+    if (trim0_id < 0 || trim0_id >= brep->m_T.Count()
+	    || trim1_id < 0 || trim1_id >= brep->m_T.Count())
+	return BREP_EDGE_CONSTRAINT_INVALID;
+    const ON_BrepTrim &trim0 = brep->m_T[trim0_id];
+    const ON_BrepTrim &trim1 = brep->m_T[trim1_id];
+    if (trim0.m_type != ON_BrepTrim::mated
+	    || trim1.m_type != ON_BrepTrim::mated
+	    || trim_face_index(brep, trim0_id) == trim_face_index(brep, trim1_id))
+	return BREP_EDGE_CONSTRAINT_SPECIAL;
+
+    const bool iso0 = iso_flag(trim0.m_iso);
+    const bool iso1 = iso_flag(trim1.m_iso);
+    if (natural_iso_flag(trim0.m_iso) && natural_iso_flag(trim1.m_iso))
+	return BREP_EDGE_CONSTRAINT_NATURAL;
+    if (iso0 && iso1)
+	return BREP_EDGE_CONSTRAINT_ISOPARAMETRIC;
+    if (iso0 || iso1)
+	return BREP_EDGE_CONSTRAINT_ONE_ISOPARAMETRIC;
+    return BREP_EDGE_CONSTRAINT_GENERAL;
+}
+
+const char *
+brep_edge_constraint_type_name(int classification)
+{
+    switch (classification) {
+	case BREP_EDGE_CONSTRAINT_OPEN:
+	    return "open";
+	case BREP_EDGE_CONSTRAINT_NATURAL:
+	    return "natural";
+	case BREP_EDGE_CONSTRAINT_ISOPARAMETRIC:
+	    return "isoparametric";
+	case BREP_EDGE_CONSTRAINT_ONE_ISOPARAMETRIC:
+	    return "one-isoparametric";
+	case BREP_EDGE_CONSTRAINT_GENERAL:
+	    return "general";
+	case BREP_EDGE_CONSTRAINT_SPECIAL:
+	    return "special";
+	default:
+	    return "invalid";
+    }
+}
+
+const char *
+brep_cv_constraint_type_name(int classification)
+{
+    switch (classification) {
+	case BREP_CV_CONSTRAINT_INTERIOR:
+	    return "interior";
+	case BREP_CV_CONSTRAINT_NATURAL:
+	    return "natural";
+	case BREP_CV_CONSTRAINT_ISOPARAMETRIC:
+	    return "isoparametric";
+	case BREP_CV_CONSTRAINT_GENERAL:
+	    return "general";
+	case BREP_CV_CONSTRAINT_SPECIAL:
+	    return "special";
+	default:
+	    return "invalid";
+    }
+}
+
+bool
+brep_face_cv_constraint_status(const ON_Brep *brep, int face_id,
+	int cv_id_u, int cv_id_v, struct brep_face_cv_constraint *status)
+{
+    if (!status)
 	return false;
+    status->classification = BREP_CV_CONSTRAINT_INVALID;
+    status->trim_count = 0;
+    status->edge_count = 0;
+    status->other_face_count = 0;
+    status->natural_trim_count = 0;
+    status->isoparametric_trim_count = 0;
+    status->general_trim_count = 0;
+    status->topology_safe = false;
+    status->can_translate = false;
 
-    const ON_BrepFace &brep_face = brep->m_F[face];
-    const ON_NurbsSurface *surface =
-	dynamic_cast<const ON_NurbsSurface *>(brep_face.SurfaceOf());
-    if (!surface)
+    std::vector<int> trim_ids;
+    if (!face_cv_influenced_trims(brep, face_id, cv_id_u, cv_id_v,
+	    &trim_ids))
 	return false;
-
-    ON_Interval u_support;
-    ON_Interval v_support;
-    if (!nurbs_surface_cv_support(surface, 0, cv_id_u, &u_support)
-	    || !nurbs_surface_cv_support(surface, 1, cv_id_v, &v_support))
-	return false;
-
-    const ON_Interval u_domain = surface->Domain(0);
-    const ON_Interval v_domain = surface->Domain(1);
-    const auto support_intersects =
-	[](double bbox_min, double bbox_max, const ON_Interval &support,
-		const ON_Interval &domain, bool clamped_start_cv,
-		bool clamped_end_cv) {
-	    /*
-	     * A basis function is zero at the open ends of its support.
-	     * The first/last basis of a clamped vector is the exception at
-	     * the corresponding surface-domain end.
-	     */
-	    if (bbox_max > support.Min() + ON_ZERO_TOLERANCE
-		    && bbox_min < support.Max() - ON_ZERO_TOLERANCE)
-		return true;
-	    if (clamped_start_cv
-		    && bbox_min <= domain.Min() + ON_ZERO_TOLERANCE
-		    && bbox_max >= domain.Min() - ON_ZERO_TOLERANCE)
-		return true;
-	    if (clamped_end_cv
-		    && bbox_min <= domain.Max() + ON_ZERO_TOLERANCE
-		    && bbox_max >= domain.Max() - ON_ZERO_TOLERANCE)
-		return true;
-	    return false;
-	};
-    const bool u_clamped_start_cv =
-	cv_id_u == 0 && surface->IsClamped(0, 0);
-    const bool u_clamped_end_cv =
-	cv_id_u == surface->CVCount(0) - 1 && surface->IsClamped(0, 1);
-    const bool v_clamped_start_cv =
-	cv_id_v == 0 && surface->IsClamped(1, 0);
-    const bool v_clamped_end_cv =
-	cv_id_v == surface->CVCount(1) - 1 && surface->IsClamped(1, 1);
-
-    for (int fli = 0; fli < brep_face.m_li.Count(); ++fli) {
-	const int loop_id = brep_face.m_li[fli];
-	if (loop_id < 0 || loop_id >= brep->m_L.Count())
-	    return false;
-	const ON_BrepLoop &loop = brep->m_L[loop_id];
-	for (int lti = 0; lti < loop.m_ti.Count(); ++lti) {
-	    const int trim_id = loop.m_ti[lti];
-	    if (trim_id < 0 || trim_id >= brep->m_T.Count())
-		return false;
-	    const ON_BrepTrim &trim = brep->m_T[trim_id];
-	    if (trim.m_c2i < 0 || trim.m_c2i >= brep->m_C2.Count()
-		    || !brep->m_C2[trim.m_c2i])
-		return false;
-
-	    ON_BoundingBox trim_bbox;
-	    if (!brep->m_C2[trim.m_c2i]->GetBoundingBox(trim_bbox, false)
-		    || !trim_bbox.IsValid())
-		return false;
-
-	    const bool intersects_u = support_intersects(
-		    trim_bbox.m_min.x, trim_bbox.m_max.x, u_support, u_domain,
-		    u_clamped_start_cv, u_clamped_end_cv);
-	    const bool intersects_v = support_intersects(
-		    trim_bbox.m_min.y, trim_bbox.m_max.y, v_support, v_domain,
-		    v_clamped_start_cv, v_clamped_end_cv);
-	    if (intersects_u && intersects_v)
-		return false;
-	}
+    status->trim_count = (int)trim_ids.size();
+    status->topology_safe = trim_ids.empty();
+    if (trim_ids.empty()) {
+	status->classification = BREP_CV_CONSTRAINT_INTERIOR;
+	status->can_translate = true;
+	return true;
     }
 
+    std::set<int> edge_ids;
+    std::set<int> other_face_ids;
+    bool special = false;
+    for (int trim_id : trim_ids) {
+	const ON_BrepTrim &trim = brep->m_T[trim_id];
+	if (natural_iso_flag(trim.m_iso))
+	    ++status->natural_trim_count;
+	if (iso_flag(trim.m_iso))
+	    ++status->isoparametric_trim_count;
+	else
+	    ++status->general_trim_count;
+	if (trim.m_ei >= 0 && trim.m_ei < brep->m_E.Count()) {
+	    edge_ids.insert(trim.m_ei);
+	    const ON_BrepEdge &edge = brep->m_E[trim.m_ei];
+	    for (int eti = 0; eti < edge.m_ti.Count(); ++eti) {
+		const int other_trim = edge.m_ti[eti];
+		const int other_face = trim_face_index(brep, other_trim);
+		if (other_face >= 0 && other_face != face_id)
+		    other_face_ids.insert(other_face);
+	    }
+	    const int edge_class = brep_edge_constraint_type(brep, trim.m_ei);
+	    if (edge_class == BREP_EDGE_CONSTRAINT_SPECIAL
+		    || edge_class == BREP_EDGE_CONSTRAINT_INVALID)
+		special = true;
+	} else {
+	    special = true;
+	}
+    }
+    status->edge_count = (int)edge_ids.size();
+    status->other_face_count = (int)other_face_ids.size();
+    if (special)
+	status->classification = BREP_CV_CONSTRAINT_SPECIAL;
+    else if (status->general_trim_count)
+	status->classification = BREP_CV_CONSTRAINT_GENERAL;
+    else if (status->natural_trim_count == status->trim_count)
+	status->classification = BREP_CV_CONSTRAINT_NATURAL;
+    else
+	status->classification = BREP_CV_CONSTRAINT_ISOPARAMETRIC;
+
+    struct coupled_iso_plan plan;
+    status->can_translate =
+	prepare_coupled_iso_plan(brep, face_id, cv_id_u, cv_id_v, &plan);
     return true;
+}
+
+bool
+brep_face_cv_can_translate(const ON_Brep *brep, int face_id,
+	int cv_id_u, int cv_id_v)
+{
+    struct brep_face_cv_constraint status;
+    return brep_face_cv_constraint_status(brep, face_id, cv_id_u, cv_id_v,
+	    &status) && status.can_translate;
 }
 
 bool brep_face_set_cv(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, const ON_4dPoint &point)
@@ -1094,6 +1717,162 @@ bool brep_face_translate_cv(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, c
 		cv.z += delta.z;
 		return surface->SetCV(cv_id_u, cv_id_v, ON::euclidean_rational, &cv.x);
 	    });
+}
+
+bool
+brep_face_translate_cv_constrained(ON_Brep *brep, int face_id,
+	int cv_id_u, int cv_id_v, const ON_3dVector &delta)
+{
+    if (!brep || !delta.IsValid())
+	return false;
+    if (brep_face_cv_is_topology_safe(brep, face_id, cv_id_u, cv_id_v))
+	return brep_face_translate_cv(brep, face_id, cv_id_u, cv_id_v, delta);
+
+    struct coupled_iso_plan plan;
+    if (!prepare_coupled_iso_plan(brep, face_id, cv_id_u, cv_id_v, &plan)) {
+	bu_log("face %d CV (%d,%d) does not satisfy the exact C0 "
+		"isoparametric coupling requirements\n",
+		face_id, cv_id_u, cv_id_v);
+	return false;
+    }
+
+    ON_Brep trial(*brep);
+    ON_BrepFace &source_face = trial.m_F[plan.source_face];
+    ON_BrepFace &mate_face = trial.m_F[plan.mate_face];
+    ON_NurbsSurface *source_surface =
+	dynamic_cast<ON_NurbsSurface *>(trial.m_S[source_face.m_si]);
+    ON_NurbsSurface *mate_surface =
+	dynamic_cast<ON_NurbsSurface *>(trial.m_S[mate_face.m_si]);
+    if (!source_surface || !mate_surface
+	    || !translate_surface_cv(source_surface, plan.source_cv_u,
+		plan.source_cv_v, delta))
+	return false;
+
+    for (size_t candidate = 0; candidate < plan.mate_cvs.size(); ++candidate) {
+	const ON_3dVector mate_delta =
+	    plan.coefficients[candidate] * delta;
+	if (!translate_surface_cv(mate_surface,
+		plan.mate_cvs[candidate].first,
+		plan.mate_cvs[candidate].second, mate_delta))
+	    return false;
+    }
+    source_surface->DestroyRuntimeCache(true);
+    mate_surface->DestroyRuntimeCache(true);
+    source_face.DestroyRuntimeCache(true);
+    mate_face.DestroyRuntimeCache(true);
+
+    const ON_BrepEdge &old_edge = brep->m_E[plan.edge_id];
+    ON_NurbsCurve *old_source_curve = extract_iso_trace(
+	    dynamic_cast<const ON_NurbsSurface *>(
+		brep->m_F[plan.source_face].SurfaceOf()),
+	    plan.source_trace, old_edge.Domain());
+    ON_NurbsCurve *old_mate_curve = extract_iso_trace(
+	    dynamic_cast<const ON_NurbsSurface *>(
+		brep->m_F[plan.mate_face].SurfaceOf()),
+	    plan.mate_trace, old_edge.Domain());
+    ON_NurbsCurve *new_source_curve = extract_iso_trace(source_surface,
+	    plan.source_trace, old_edge.Domain());
+    ON_NurbsCurve *new_mate_curve = extract_iso_trace(mate_surface,
+	    plan.mate_trace, old_edge.Domain());
+    if (!old_source_curve || !old_mate_curve || !new_source_curve
+	    || !new_mate_curve
+	    || !same_curve_space(old_source_curve, old_mate_curve)
+	    || !same_curve_space(old_source_curve, new_source_curve)
+	    || !same_curve_space(old_mate_curve, new_mate_curve)) {
+	delete old_source_curve;
+	delete old_mate_curve;
+	delete new_source_curve;
+	delete new_mate_curve;
+	return false;
+    }
+
+    double max_delta_error = 0.0;
+    for (int cv = 0; cv < new_source_curve->CVCount(); ++cv) {
+	ON_4dPoint old_source_cv;
+	ON_4dPoint old_mate_cv;
+	ON_4dPoint new_source_cv;
+	ON_4dPoint new_mate_cv;
+	if (!old_source_curve->GetCV(cv, ON::euclidean_rational,
+		&old_source_cv.x)
+		|| !old_mate_curve->GetCV(cv, ON::euclidean_rational,
+		    &old_mate_cv.x)
+		|| !new_source_curve->GetCV(cv, ON::euclidean_rational,
+		    &new_source_cv.x)
+		|| !new_mate_curve->GetCV(cv, ON::euclidean_rational,
+		    &new_mate_cv.x)) {
+	    delete old_source_curve;
+	    delete old_mate_curve;
+	    delete new_source_curve;
+	    delete new_mate_curve;
+	    return false;
+	}
+	const ON_3dVector source_change(
+		new_source_cv.x - old_source_cv.x,
+		new_source_cv.y - old_source_cv.y,
+		new_source_cv.z - old_source_cv.z);
+	const ON_3dVector mate_change(
+		new_mate_cv.x - old_mate_cv.x,
+		new_mate_cv.y - old_mate_cv.y,
+		new_mate_cv.z - old_mate_cv.z);
+	max_delta_error = std::max(max_delta_error,
+		(source_change - mate_change).Length());
+    }
+    const double edit_scale = std::max(1.0, delta.Length());
+    if (max_delta_error > 1.0e-8 * edit_scale) {
+	delete old_source_curve;
+	delete old_mate_curve;
+	delete new_source_curve;
+	delete new_mate_curve;
+	return false;
+    }
+
+    const ON_3dPoint old_start = old_source_curve->PointAtStart();
+    const ON_3dPoint old_end = old_source_curve->PointAtEnd();
+    const ON_3dPoint new_start = new_source_curve->PointAtStart();
+    const ON_3dPoint new_end = new_source_curve->PointAtEnd();
+    delete old_source_curve;
+    delete old_mate_curve;
+    delete new_mate_curve;
+    if (old_start.DistanceTo(new_start) > 1.0e-8 * edit_scale
+	    || old_end.DistanceTo(new_end) > 1.0e-8 * edit_scale) {
+	delete new_source_curve;
+	return false;
+    }
+
+    if (!replace_edge_curve(&trial, plan.edge_id, new_source_curve))
+	return false;
+    trial.DestroyRuntimeCache(true);
+    if (!trial.IsValid(NULL))
+	return false;
+
+    *brep = trial;
+    return true;
+}
+
+bool
+brep_face_set_cv_constrained(ON_Brep *brep, int face_id, int cv_id_u,
+	int cv_id_v, const ON_4dPoint &point)
+{
+    if (!brep || face_id < 0 || face_id >= brep->m_F.Count()
+	    || !point.IsValid())
+	return false;
+    const ON_NurbsSurface *surface =
+	dynamic_cast<const ON_NurbsSurface *>(brep->m_F[face_id].SurfaceOf());
+    if (!surface)
+	return false;
+    ON_4dPoint current;
+    if (!surface->GetCV(cv_id_u, cv_id_v, ON::euclidean_rational,
+	    &current.x))
+	return false;
+    if (brep_face_cv_is_topology_safe(brep, face_id, cv_id_u, cv_id_v))
+	return brep_face_set_cv(brep, face_id, cv_id_u, cv_id_v, point);
+    const double weight_scale =
+	std::max(1.0, std::max(std::fabs(current.w), std::fabs(point.w)));
+    if (std::fabs(current.w - point.w) > 1.0e-12 * weight_scale)
+	return false;
+    return brep_face_translate_cv_constrained(brep, face_id, cv_id_u,
+	    cv_id_v, ON_3dVector(point.x - current.x,
+		point.y - current.y, point.z - current.z));
 }
 
 bool brep_face_set_weight(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, double weight)

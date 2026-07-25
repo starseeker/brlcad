@@ -45,6 +45,7 @@ find_package_gte(REQUIRED)
 # locally used but not needed by users of the library
 set(BREP_LOCAL_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${EIGEN3_INCLUDE_DIR}
   ${REGEX_INCLUDE_DIRS}
   ${BRLCAD_SOURCE_DIR}/src/libbg/GTE
   ${GTE_INCLUDE_DIR})

@@ -99,6 +99,21 @@ QgBrepFilter::selected_cv_is_topology_safe() const
 }
 
 bool
+QgBrepFilter::selected_cv_can_translate() const
+{
+    int face = -1;
+    int cv_u = -1;
+    int cv_v = -1;
+    if (!selected_cv(&face, &cv_u, &cv_v))
+	return false;
+
+    const struct rt_brep_internal *bip =
+	(const struct rt_brep_internal *)es->es_int.idb_ptr;
+    return bip && bip->brep
+	&& brep_face_cv_can_translate(bip->brep, face, cv_u, cv_v);
+}
+
+bool
 QgBrepFilter::pick_cv(int sx, int sy, fastf_t max_px)
 {
     const struct bv *view = qg_brep_view(this);
@@ -172,9 +187,13 @@ QgBrepFilter::pick_cv(int sx, int sy, fastf_t max_px)
     es->e_para[2] = (fastf_t)best_v;
     rt_edit_process(es);
 
-    const bool safe = brep_face_cv_is_topology_safe(
-	    bip->brep, best_face, best_u, best_v);
-    emit brep_selection_changed(best_face, best_u, best_v, safe);
+    struct brep_face_cv_constraint status = {};
+    const bool have_status = brep_face_cv_constraint_status(
+	    bip->brep, best_face, best_u, best_v, &status);
+    const bool safe = have_status && status.topology_safe;
+    const bool can_translate = have_status && status.can_translate;
+    emit brep_selection_changed(best_face, best_u, best_v, safe,
+	    can_translate);
     emit view_updated(QG_VIEW_REFRESH);
     return true;
 }
@@ -253,10 +272,10 @@ QgBrepMoveCVFilter::eventFilter(QObject *, QEvent *event)
 	    (void)pick_cv(sx, sy, pick_radius_px);
 	if (!selected_cv(&face, &cv_u, &cv_v))
 	    return true;
-	if (!selected_cv_is_topology_safe()) {
+	if (!selected_cv_can_translate()) {
 	    emit edit_rejected(
-		    QStringLiteral("This control vertex influences a B-rep trim "
-			"and is locked until coupled boundary editing is available."));
+		    QStringLiteral("This control vertex does not have a supported "
+			"topology-preserving boundary constraint."));
 	    return true;
 	}
 	m_prev_x = sx;

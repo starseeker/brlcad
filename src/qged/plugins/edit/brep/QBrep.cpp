@@ -74,8 +74,9 @@ QBrep::QBrep()
     layout->addWidget(selection_box);
 
     QLabel *policy = new QLabel(
-	    "Left-drag a control point in the view plane.  Points whose "
-	    "basis support reaches a trim are selectable but locked.");
+	    "Left-drag a control point in the view plane.  Interior points and "
+	    "eligible C0-coupled isoparametric seam points are movable.  Other "
+	    "trim constraints remain selectable but locked.");
     policy->setWordWrap(true);
     layout->addWidget(policy);
 
@@ -301,11 +302,17 @@ QBrep::apply_to_db()
 }
 
 void
-QBrep::selection_changed(int face, int cv_u, int cv_v, bool topology_safe)
+QBrep::selection_changed(int face, int cv_u, int cv_v, bool topology_safe,
+	bool can_translate)
 {
+    const char *editability = topology_safe
+	? "editable (interior)"
+	: (can_translate
+	    ? "editable (coupled C0 isoparametric seam)"
+	    : "locked (unsupported trim constraint)");
     m_selection->setText(QString("Face %1, CV (%2, %3): %4")
 	    .arg(face).arg(cv_u).arg(cv_v)
-	    .arg(topology_safe ? "editable" : "locked (influences a trim)"));
+	    .arg(editability));
     m_set_weight->setEnabled(topology_safe);
 
     if (!m_es)
@@ -321,9 +328,15 @@ QBrep::selection_changed(int face, int cv_u, int cv_v, bool topology_safe)
 	QSignalBlocker blocker(m_weight);
 	m_weight->setValue(cv.w);
     }
-    set_status(topology_safe
-	    ? "Drag in the view plane or enter a rational weight."
-	    : "This CV is locked because moving it can change a trim locus.");
+    if (topology_safe) {
+	set_status("Drag in the view plane or enter a rational weight.");
+    } else if (can_translate) {
+	set_status("Drag to move this seam with exact C0 coupling.  Boundary "
+		"weight editing is not yet supported.");
+    } else {
+	set_status("This CV is locked because its topology-preserving boundary "
+		"constraint is not yet supported.");
+    }
 }
 
 void

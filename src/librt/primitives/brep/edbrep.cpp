@@ -28,9 +28,9 @@
  *   ECMD_BREP_SRF_CV_SET   — place the selected CV at an absolute (x, y, z).
  *   ECMD_BREP_SRF_CV_WEIGHT — set the selected rational CV weight.
  *
- * CV edits are rejected when the selected CV's basis support intersects
- * a face trim.  Boundary editing must use a coupled topology-preserving
- * operation once one is available.
+ * Interior CV edits are applied directly.  Eligible single-edge
+ * isoparametric boundary edits use libbrep's transactional exact C0 coupling
+ * path.  Other trim-influencing edits remain locked.
  */
 
 #include "common.h"
@@ -195,19 +195,25 @@ ecmd_brep_srf_select(struct rt_edit *s)
     b->srf_cv_i   = cv_i;
     b->srf_cv_j   = cv_j;
 
-    /* Report the selected CV position and whether it may be edited safely. */
+    /* Report the selected CV position and current constrained editability. */
     ON_4dPoint cv;
     if (!ns->GetCV(cv_i, cv_j, ON::euclidean_rational, &cv.x))
 	return;
-    const bool topology_safe =
-	brep_face_cv_is_topology_safe(brep, face_index, cv_i, cv_j);
+    struct brep_face_cv_constraint status;
+    const bool have_status = brep_face_cv_constraint_status(
+	    brep, face_index, cv_i, cv_j, &status);
+    const char *edit_status = "";
+    if (!have_status || !status.can_translate)
+	edit_status = " (locked: unsupported trim constraint)";
+    else if (!status.topology_safe)
+	edit_status = " (editable: coupled C0 isoparametric edge)";
     bu_vls_printf(s->log_str,
 	    "Selected brep face %d CV (%d,%d) at (%.9f, %.9f, %.9f)%s\n",
 	    face_index, cv_i, cv_j,
 	    cv.x * s->base2local,
 	    cv.y * s->base2local,
 	    cv.z * s->base2local,
-	    topology_safe ? "" : " (locked: influences a trim)");
+	    edit_status);
     rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
     if (f) (*f)(0, NULL, d, NULL);
 }
@@ -248,11 +254,11 @@ ecmd_brep_srf_cv_move(struct rt_edit *s)
     fastf_t dz = s->e_para[2] * s->local2base;
 
     ON_Brep *brep = bip->brep;
-    if (!brep_face_translate_cv(brep, b->face_index,
+    if (!brep_face_translate_cv_constrained(brep, b->face_index,
 		b->srf_cv_i, b->srf_cv_j, ON_3dVector(dx, dy, dz))) {
 	bu_vls_printf(s->log_str,
-		"ECMD_BREP_SRF_CV_MOVE: edit rejected because the CV "
-		"influences a face trim\n");
+		"ECMD_BREP_SRF_CV_MOVE: edit rejected because its trim "
+		"constraints are not supported or validation failed\n");
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f) (*f)(0, NULL, d, NULL);
     }
@@ -315,11 +321,11 @@ ecmd_brep_srf_cv_set(struct rt_edit *s)
     cv.y = new_y;
     cv.z = new_z;
 
-    if (!brep_face_set_cv(brep, b->face_index,
+    if (!brep_face_set_cv_constrained(brep, b->face_index,
 		b->srf_cv_i, b->srf_cv_j, cv)) {
 	bu_vls_printf(s->log_str,
-		"ECMD_BREP_SRF_CV_SET: edit rejected because the CV "
-		"influences a face trim\n");
+		"ECMD_BREP_SRF_CV_SET: edit rejected because its trim "
+		"constraints are not supported or validation failed\n");
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f) (*f)(0, NULL, d, NULL);
     }

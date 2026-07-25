@@ -41,8 +41,8 @@ extern "C" {
  * Common B-rep editing filter support.
  *
  * The caller owns es and must keep it valid while a filter is installed.
- * Picking can select both editable and locked CVs so the UI can explain why
- * a trim-influencing CV cannot yet be dragged.
+ * Picking can select both editable and locked CVs so the UI can report the
+ * applicable B-rep constraint policy.
  */
 class QTCAD_EXPORT QgBrepFilter : public QgViewFilter {
 	Q_OBJECT
@@ -60,6 +60,9 @@ public:
 	/** Return whether the current selection can move without changing a trim. */
 	bool selected_cv_is_topology_safe() const;
 
+	/** Return whether the current selection has a supported translation path. */
+	bool selected_cv_can_translate() const;
+
 	/** Convert a screen-space motion into primitive-local model units. */
 	bool screen_delta_to_local(int from_x, int from_y, int to_x, int to_y,
 		vect_t delta) const;
@@ -68,7 +71,7 @@ public:
 
 signals:
 	void brep_selection_changed(int face, int cv_u, int cv_v,
-		bool topology_safe);
+		bool topology_safe, bool can_translate);
 	void brep_changed();
 	void edit_rejected(const QString &reason);
 };
@@ -88,8 +91,9 @@ public:
 /**
  * Left-drag the selected CV in the current view plane.
  *
- * If no CV is selected, the press first picks the nearest one.  A CV whose
- * basis support intersects a trim is selectable but remains locked.
+ * If no CV is selected, the press first picks the nearest one.  Interior CVs
+ * and eligible C0-coupled isoparametric boundary CVs may be dragged; other
+ * trim-influencing CVs remain selectable but locked.
  */
 class QTCAD_EXPORT QgBrepMoveCVFilter : public QgBrepFilter {
 	Q_OBJECT

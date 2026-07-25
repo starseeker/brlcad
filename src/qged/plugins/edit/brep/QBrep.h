@@ -61,7 +61,8 @@ private slots:
     void apply_to_db();
     void reset_from_db();
     void set_selected_weight();
-    void selection_changed(int face, int cv_u, int cv_v, bool topology_safe);
+    void selection_changed(int face, int cv_u, int cv_v, bool topology_safe,
+	    bool can_translate);
     void edit_changed();
     void edit_rejected(const QString &reason);
 

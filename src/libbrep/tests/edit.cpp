@@ -49,6 +49,149 @@ surface_cv(const ON_Brep &brep, int face_id, int i, int j)
     return cv;
 }
 
+static double
+surface_greville(const ON_NurbsSurface &surface, int dir, int cv)
+{
+    const int degree = surface.Degree(dir);
+    const int knot_count = surface.KnotCount(dir);
+    double value = 0.0;
+    for (int k = 1; k <= degree; ++k) {
+	const int full_knot = cv + k;
+	const double knot = full_knot <= 0
+	    ? surface.Knot(dir, 0)
+	    : (full_knot >= knot_count + 1
+		? surface.Knot(dir, knot_count - 1)
+		: surface.Knot(dir, full_knot - 1));
+	value += knot;
+    }
+    return value / degree;
+}
+
+static ON_NurbsSurface *
+planar_edit_surface(int cv_count, double x_offset, bool rational)
+{
+    ON_NurbsSurface *surface =
+	ON_NurbsSurface::New(3, rational, 4, 4, cv_count, cv_count);
+    surface->MakeClampedUniformKnotVector(0, 1.0);
+    surface->MakeClampedUniformKnotVector(1, 1.0);
+    for (int i = 0; i < cv_count; ++i) {
+	for (int j = 0; j < cv_count; ++j) {
+	    ON_4dPoint cv(
+		    x_offset + surface_greville(*surface, 0, i),
+		    surface_greville(*surface, 1, j), 0.0,
+		    rational ? 1.0 + 0.1 * (j % 3) : 1.0);
+	    surface->SetCV(i, j, ON::euclidean_rational, &cv.x);
+	}
+    }
+    return surface;
+}
+
+static int
+append_line_edge(ON_Brep &brep, int from, int to)
+{
+    ON_LineCurve *curve = new ON_LineCurve(
+	    brep.m_V[from].point, brep.m_V[to].point);
+    curve->SetDomain(0.0, 1.0);
+    const int curve_id = brep.AddEdgeCurve(curve);
+    ON_BrepEdge &edge = brep.NewEdge(
+	    brep.m_V[from], brep.m_V[to], curve_id, NULL, 1.0e-8);
+    return edge.m_edge_index;
+}
+
+static int
+append_rect_face(ON_Brep &brep, int surface_id,
+	const ON_Interval &u, const ON_Interval &v,
+	const int edges[4], const bool reversed[4], int mated_side)
+{
+    ON_BrepFace &face = brep.NewFace(surface_id);
+    ON_BrepLoop &loop = brep.NewLoop(ON_BrepLoop::outer, face);
+    const ON_2dPoint starts[4] = {
+	ON_2dPoint(u.Min(), v.Min()),
+	ON_2dPoint(u.Max(), v.Min()),
+	ON_2dPoint(u.Max(), v.Max()),
+	ON_2dPoint(u.Min(), v.Max())
+    };
+    const ON_2dPoint ends[4] = {
+	ON_2dPoint(u.Max(), v.Min()),
+	ON_2dPoint(u.Max(), v.Max()),
+	ON_2dPoint(u.Min(), v.Max()),
+	ON_2dPoint(u.Min(), v.Min())
+    };
+    const ON_Surface *surface = brep.m_S[surface_id];
+
+    for (int side = 0; side < 4; ++side) {
+	ON_LineCurve *curve = new ON_LineCurve(starts[side], ends[side]);
+	curve->SetDomain(0.0, 1.0);
+	const int curve_id = brep.AddTrimCurve(curve);
+	ON_BrepTrim &trim = brep.NewTrim(
+		brep.m_E[edges[side]], reversed[side], loop, curve_id);
+	trim.m_iso = surface->IsIsoparametric(*curve);
+	trim.m_type = side == mated_side
+	    ? ON_BrepTrim::mated : ON_BrepTrim::boundary;
+	trim.m_tolerance[0] = 0.0;
+	trim.m_tolerance[1] = 0.0;
+    }
+    return face.m_face_index;
+}
+
+static ON_Brep
+two_face_iso_fixture(bool interior_iso, bool rational = false)
+{
+    ON_Brep brep;
+    const int cv_count = interior_iso ? 9 : 7;
+    ON_NurbsSurface *surface0 =
+	planar_edit_surface(cv_count, 0.0, rational);
+    ON_NurbsSurface *surface1 = interior_iso
+	? new ON_NurbsSurface(*surface0)
+	: planar_edit_surface(cv_count,
+	    surface0->Domain(0).Length(), rational);
+    const int surface0_id = brep.AddSurface(surface0);
+    const int surface1_id = brep.AddSurface(surface1);
+
+    const ON_Interval full_u = surface0->Domain(0);
+    const ON_Interval full_v = surface0->Domain(1);
+    const double split = interior_iso
+	? full_u.Mid() : full_u.Max();
+    const ON_Interval face0_u(full_u.Min(), split);
+    const ON_Interval face1_u(interior_iso
+	? split : surface1->Domain(0).Min(),
+	interior_iso ? full_u.Max() : surface1->Domain(0).Max());
+
+    const ON_3dPoint p0 = surface0->PointAt(face0_u.Min(), full_v.Min());
+    const ON_3dPoint p1 = surface0->PointAt(face0_u.Max(), full_v.Min());
+    const ON_3dPoint p2 = surface0->PointAt(face0_u.Max(), full_v.Max());
+    const ON_3dPoint p3 = surface0->PointAt(face0_u.Min(), full_v.Max());
+    const ON_3dPoint p4 = surface1->PointAt(face1_u.Max(), full_v.Min());
+    const ON_3dPoint p5 = surface1->PointAt(face1_u.Max(), full_v.Max());
+    const int vertices[6] = {
+	brep.NewVertex(p0, 1.0e-8).m_vertex_index,
+	brep.NewVertex(p1, 1.0e-8).m_vertex_index,
+	brep.NewVertex(p2, 1.0e-8).m_vertex_index,
+	brep.NewVertex(p3, 1.0e-8).m_vertex_index,
+	brep.NewVertex(p4, 1.0e-8).m_vertex_index,
+	brep.NewVertex(p5, 1.0e-8).m_vertex_index
+    };
+
+    const int edges[7] = {
+	append_line_edge(brep, vertices[0], vertices[1]),
+	append_line_edge(brep, vertices[1], vertices[2]),
+	append_line_edge(brep, vertices[2], vertices[3]),
+	append_line_edge(brep, vertices[3], vertices[0]),
+	append_line_edge(brep, vertices[1], vertices[4]),
+	append_line_edge(brep, vertices[4], vertices[5]),
+	append_line_edge(brep, vertices[5], vertices[2])
+    };
+    const int face0_edges[4] = {edges[0], edges[1], edges[2], edges[3]};
+    const bool face0_reversed[4] = {false, false, false, false};
+    const int face1_edges[4] = {edges[4], edges[5], edges[6], edges[1]};
+    const bool face1_reversed[4] = {false, false, false, true};
+    append_rect_face(brep, surface0_id, face0_u, full_v,
+	    face0_edges, face0_reversed, 1);
+    append_rect_face(brep, surface1_id, face1_u, full_v,
+	    face1_edges, face1_reversed, 3);
+    return brep;
+}
+
 static void
 test_vertex_reference_safety()
 {
@@ -260,6 +403,108 @@ test_trim_support_lock()
 }
 
 static void
+test_coupled_isoparametric_edit(bool interior_iso, bool rational = false)
+{
+    ON_Brep brep = two_face_iso_fixture(interior_iso, rational);
+    if (!brep.IsValid(NULL))
+	bu_exit(1, "failed to create a valid two-face isoparametric fixture\n");
+
+    const int shared_edge = 1;
+    const int expected_edge_class = interior_iso
+	? BREP_EDGE_CONSTRAINT_ISOPARAMETRIC
+	: BREP_EDGE_CONSTRAINT_NATURAL;
+    if (brep_edge_constraint_type(&brep, shared_edge)
+	    != expected_edge_class)
+	bu_exit(1, "shared edge received the wrong constraint class\n");
+
+    const ON_NurbsSurface *source =
+	dynamic_cast<const ON_NurbsSurface *>(brep.m_F[0].SurfaceOf());
+    const int cv_u = interior_iso ? 4 : source->CVCount(0) - 1;
+    const int cv_v = source->CVCount(1) / 2;
+    struct brep_face_cv_constraint status;
+    if (!brep_face_cv_constraint_status(&brep, 0, cv_u, cv_v, &status)
+	    || status.topology_safe || !status.can_translate
+	    || status.trim_count != 1)
+	bu_exit(1, "eligible isoparametric CV was not classified editable\n");
+
+    const int vertex_count = brep.m_V.Count();
+    const int edge_count = brep.m_E.Count();
+    const int trim_count = brep.m_T.Count();
+    const int face_count = brep.m_F.Count();
+    const ON_3dPoint edge_start = brep.m_E[shared_edge].PointAtStart();
+    const ON_3dPoint edge_end = brep.m_E[shared_edge].PointAtEnd();
+    if (!brep_face_translate_cv_constrained(&brep, 0, cv_u, cv_v,
+	    ON_3dVector(0.0, 0.0, 0.5)))
+	bu_exit(1, "eligible isoparametric C0 edit was rejected\n");
+    if (!brep.IsValid(NULL))
+	bu_exit(1, "coupled isoparametric edit invalidated the B-rep\n");
+    if (brep.m_V.Count() != vertex_count || brep.m_E.Count() != edge_count
+	    || brep.m_T.Count() != trim_count || brep.m_F.Count() != face_count)
+	bu_exit(1, "coupled edit changed B-rep topology\n");
+    if (!near_point(edge_start, brep.m_E[shared_edge].PointAtStart(), 1.0e-8)
+	    || !near_point(edge_end, brep.m_E[shared_edge].PointAtEnd(), 1.0e-8))
+	bu_exit(1, "non-corner coupled edit moved an edge endpoint\n");
+
+    const ON_BrepTrim &source_trim = brep.m_T[
+	    brep.m_E[shared_edge].m_ti[0]];
+    const ON_BrepTrim &mate_trim = brep.m_T[
+	    brep.m_E[shared_edge].m_ti[1]];
+    for (int sample = 0; sample <= 20; ++sample) {
+	const double f = (double)sample / 20.0;
+	const ON_3dPoint source_uv = source_trim.PointAt(
+		source_trim.Domain().ParameterAt(f));
+	const ON_3dPoint mate_uv = mate_trim.PointAt(
+		mate_trim.Domain().ParameterAt(1.0 - f));
+	const ON_3dPoint source_point =
+	    brep.m_F[0].PointAt(source_uv.x, source_uv.y);
+	const ON_3dPoint mate_point =
+	    brep.m_F[1].PointAt(mate_uv.x, mate_uv.y);
+	if (!near_point(source_point, mate_point, 1.0e-7))
+	    bu_exit(1, "coupled faces do not share the edited trace\n");
+    }
+
+    ON_Brep rejected(brep);
+    const ON_NurbsSurface *rejected_surface =
+	dynamic_cast<const ON_NurbsSurface *>(rejected.m_F[0].SurfaceOf());
+    const int corner_u = interior_iso ? cv_u : rejected_surface->CVCount(0) - 1;
+    if (brep_face_translate_cv_constrained(&rejected, 0, corner_u, 0,
+	    ON_3dVector(0.0, 0.0, 0.25)))
+	bu_exit(1, "multi-trim/endpoint coupled edit was accepted\n");
+    if (!near_point(rejected.m_E[shared_edge].PointAtStart(),
+	    brep.m_E[shared_edge].PointAtStart(), 1.0e-12))
+	bu_exit(1, "rejected coupled edit changed the B-rep\n");
+}
+
+static void
+test_edge_constraint_classification()
+{
+    ON_Brep brep = two_face_iso_fixture(false);
+    const int shared_edge = 1;
+    if (brep_edge_constraint_type(&brep, 0)
+	    != BREP_EDGE_CONSTRAINT_OPEN
+	    || brep_edge_constraint_type(&brep, shared_edge)
+	    != BREP_EDGE_CONSTRAINT_NATURAL)
+	bu_exit(1, "open or natural edge classification failed\n");
+
+    ON_BrepEdge &edge = brep.m_E[shared_edge];
+    brep.m_T[edge.m_ti[0]].m_iso = ON_Surface::x_iso;
+    brep.m_T[edge.m_ti[1]].m_iso = ON_Surface::not_iso;
+    if (brep_edge_constraint_type(&brep, shared_edge)
+	    != BREP_EDGE_CONSTRAINT_ONE_ISOPARAMETRIC)
+	bu_exit(1, "one-isoparametric edge classification failed\n");
+
+    brep.m_T[edge.m_ti[0]].m_iso = ON_Surface::not_iso;
+    if (brep_edge_constraint_type(&brep, shared_edge)
+	    != BREP_EDGE_CONSTRAINT_GENERAL)
+	bu_exit(1, "general edge classification failed\n");
+
+    brep.m_T[edge.m_ti[0]].m_type = ON_BrepTrim::boundary;
+    if (brep_edge_constraint_type(&brep, shared_edge)
+	    != BREP_EDGE_CONSTRAINT_SPECIAL)
+	bu_exit(1, "special edge classification failed\n");
+}
+
+static void
 test_revolution_preserves_source_curve()
 {
     ON_Brep brep;
@@ -328,6 +573,10 @@ main(int argc, char **argv)
     test_surface_reference_safety();
     test_shared_surface_isolation();
     test_trim_support_lock();
+    test_coupled_isoparametric_edit(false);
+    test_coupled_isoparametric_edit(true);
+    test_coupled_isoparametric_edit(false, true);
+    test_edge_constraint_classification();
     test_revolution_preserves_source_curve();
     test_face_parameter_edits_preserve_validity();
     bu_log("libbrep edit tests passed\n");

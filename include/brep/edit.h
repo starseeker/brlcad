@@ -49,6 +49,53 @@ extern "C++"
 #include <vector>
 
     /**
+     * Broad geometric class of a B-rep edge for C0 constrained editing.
+     *
+     * NATURAL and ISOPARAMETRIC are exact trace candidates.  ONE_ISOPARAMETRIC
+     * and GENERAL require the more general trim-constrained approximation
+     * backend.  SPECIAL covers seams, singular trims, non-manifold incidence,
+     * and other cases requiring dedicated handling.
+     */
+    enum brep_edge_constraint_class {
+	BREP_EDGE_CONSTRAINT_INVALID = -1,
+	BREP_EDGE_CONSTRAINT_OPEN = 0,
+	BREP_EDGE_CONSTRAINT_NATURAL = 1,
+	BREP_EDGE_CONSTRAINT_ISOPARAMETRIC = 2,
+	BREP_EDGE_CONSTRAINT_ONE_ISOPARAMETRIC = 3,
+	BREP_EDGE_CONSTRAINT_GENERAL = 4,
+	BREP_EDGE_CONSTRAINT_SPECIAL = 5
+    };
+
+    enum brep_cv_constraint_class {
+	BREP_CV_CONSTRAINT_INVALID = -1,
+	BREP_CV_CONSTRAINT_INTERIOR = 0,
+	BREP_CV_CONSTRAINT_NATURAL = 1,
+	BREP_CV_CONSTRAINT_ISOPARAMETRIC = 2,
+	BREP_CV_CONSTRAINT_GENERAL = 3,
+	BREP_CV_CONSTRAINT_SPECIAL = 4
+    };
+
+    /**
+     * Classification and strict first-backend eligibility for one face CV.
+     *
+     * trim_count is the number of face trims intersected by the tensor-product
+     * basis support of the CV.  can_translate is true only for an interior CV
+     * or for a single, two-face isoparametric edge that the current exact C0
+     * backend can update without disturbing another trim or an edge endpoint.
+     */
+    struct brep_face_cv_constraint {
+	int classification;
+	int trim_count;
+	int edge_count;
+	int other_face_count;
+	int natural_trim_count;
+	int isoparametric_trim_count;
+	int general_trim_count;
+	bool topology_safe;
+	bool can_translate;
+    };
+
+    /**
      * Run openNURBS structural and geometric validity checks.
      */
     BREP_EXPORT extern bool
@@ -341,6 +388,40 @@ extern "C++"
     brep_face_cv_is_topology_safe(const ON_Brep *brep, int face, int cv_id_u, int cv_id_v);
 
     /**
+     * Classify an edge for constrained boundary editing.
+     */
+    BREP_EXPORT extern int
+    brep_edge_constraint_type(const ON_Brep *brep, int edge);
+
+    /**
+     * Return a stable text label for a brep_edge_constraint_class value.
+     */
+    BREP_EXPORT extern const char *
+    brep_edge_constraint_type_name(int classification);
+
+    /**
+     * Return a stable text label for a brep_cv_constraint_class value.
+     */
+    BREP_EXPORT extern const char *
+    brep_cv_constraint_type_name(int classification);
+
+    /**
+     * Report the trim class and current coupled-translation eligibility of a
+     * face CV.
+     */
+    BREP_EXPORT extern bool
+    brep_face_cv_constraint_status(const ON_Brep *brep, int face,
+	    int cv_id_u, int cv_id_v, struct brep_face_cv_constraint *status);
+
+    /**
+     * Return true if the CV is either topology-safe or accepted by the current
+     * exact C0 isoparametric coupling backend.
+     */
+    BREP_EXPORT extern bool
+    brep_face_cv_can_translate(const ON_Brep *brep, int face,
+	    int cv_id_u, int cv_id_v);
+
+    /**
      * Set a face surface CV, isolating the surface first when it is shared
      * by more than one face.  The edit is rejected if the CV basis support
      * intersects a face trim; use a coupled boundary editing operation for
@@ -355,6 +436,26 @@ extern "C++"
      */
     BREP_EXPORT extern bool
     brep_face_translate_cv(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, const ON_3dVector &delta);
+
+    /**
+     * Translate a face CV transactionally.  Interior edits use the ordinary
+     * face-aware path.  A trim-influencing edit is accepted only when the
+     * current exact C0 backend can couple the two isoparametric face traces,
+     * update the shared 3-D edge, retain fixed weights and 2-D trims, and
+     * validate the complete trial B-rep.
+     */
+    BREP_EXPORT extern bool
+    brep_face_translate_cv_constrained(ON_Brep *brep, int face,
+	    int cv_id_u, int cv_id_v, const ON_3dVector &delta);
+
+    /**
+     * Absolute-position form of brep_face_translate_cv_constrained().  The
+     * supplied weight must equal the current weight; boundary weight solving
+     * is not part of the fixed-weight C0 backend.
+     */
+    BREP_EXPORT extern bool
+    brep_face_set_cv_constrained(ON_Brep *brep, int face,
+	    int cv_id_u, int cv_id_v, const ON_4dPoint &point);
 
     /**
      * Set a face surface CV weight, isolating a shared surface first.

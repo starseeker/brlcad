@@ -1,7 +1,7 @@
 AYAM NURBS EDITING MIGRATION FOR BRL-CAD
 ========================================
 
-Status: first implementation tranche complete
+Status: exact C0 isoparametric boundary-edit tranche complete
 Last updated: 2026-07-25
 
 
@@ -150,15 +150,32 @@ Updating only that CV leaves no guarantee that the 3-D edge lies on either
 surface or that the two faces remain joined.  Pulling back a replacement trim
 does not repair an adjacent surface that no longer contains the new edge.
 
-The current policy is deliberately conservative:
+The current policy has two deliberately conservative paths:
 
   * determine the tensor-product basis support of the selected face CV;
-  * if that support intersects any trim on the face, show and select the CV
-    but mark it locked;
-  * allow an interior edit only when its support does not reach a trim;
+  * allow an interior edit directly when that support does not reach a trim;
+  * when the support reaches exactly one mated isoparametric trim, attempt an
+    exact coupled edit of both incident surfaces and the shared 3-D edge;
+  * otherwise show and select the CV but mark it locked;
   * isolate the face's surface first if it is shared by another face;
   * apply the operation to a trial B-rep; and
   * reject failure without changing the original.
+
+The exact coupled path does not assume that the two surfaces have matching
+boundary rows.  It extracts the exact isoparametric trace from each surface,
+computes how candidate surface CVs influence the trace's NURBS CVs, and uses
+Eigen CompleteOrthogonalDecomposition to solve for the adjacent-face CV
+translations that reproduce the requested trace displacement.  It then
+replaces the shared 3-D edge curve and validates the complete trial B-rep.
+
+The present acceptance rules are intentionally strict: one affected shared
+edge, two monotone isoparametric trims, compatible extracted trace spaces and
+weights, distinct unshared non-transposed surfaces, fixed trim pcurves and
+weights, no endpoint motion, no candidate CV that influences another trim,
+and a valid final B-rep.  Natural clamped boundaries and compatible interior
+isoparametric trims both use this path.  Periodic seams, one-sided
+isoparametric edges, rational-weight boundary edits, junctions, multiple
+affected trims, and arbitrary trim curves remain locked.
 
 This protects topology more strongly than Ayam.  Ayam can maintain a patch's
 local closure convention and regenerate dependent construction objects, but
@@ -169,21 +186,27 @@ Planned topology capability levels are:
 
   1. Interior CV and weight edits that cannot influence a trim.  Implemented.
 
-  2. Compatible natural-boundary and periodic-seam edits.  Couple matching
-     boundary CVs and weights, update the shared 3-D edge, update all relevant
-     representations, and validate the complete trial B-rep.
+  2. Exact compatible isoparametric C0 edits, including natural boundaries.
+     Implemented for the strict acceptance class above.  Curve-space
+     compatibility refinement, weights, junctions, and periodic seams remain.
 
-  3. Optional G1/G2 coupling for compatible natural boundaries by constraining
-     the adjacent control rows.
+  3. General C0 arbitrary trimmed-boundary propagation.  Build a constraint
+     graph across all affected faces, trims, edges, and vertices; use exact
+     trace constraints where available and adaptive geometric constraints
+     elsewhere.
 
-  4. Arbitrary trimmed-boundary propagation.  Treat this as a separate
-     constrained deformation and surface-intersection project.  Never silently
-     degrade to a topology-invalidating surface edit.
+  4. Optional G1/G2 coupling by adding derivative constraints and sufficient
+     adjacent control rows.
 
-Level 2 appears achievable on top of the present foundation when adjacent
-surfaces have compatible natural clamped boundaries.  Level 4 is substantially
-more difficult and should not be represented as ordinary control-point
-dragging until it is robust.
+The natural-boundary case is useful, but it is not the overall architecture.
+A census of shared edges in the repository's NIST STEP models 1, 2, and 4
+found only 557 of 2,941 (18.9%) natural on both faces.  In contrast, 1,627
+(55.3%) were isoparametric on both sides and 2,731 (92.9%) were
+isoparametric on at least one side.  These are classification figures, not
+claims that all such edges meet the current exact solver's stricter
+requirements.  They show that a natural-only tool would cover too little,
+while exact isoparametric traces are a worthwhile backend inside a general
+constraint framework.
 
 
 6. TARGET CAPABILITIES
@@ -227,7 +250,7 @@ Poor early candidates because of topology and robustness requirements:
 
 7.1 libbrep
 
-The first tranche adds or hardens:
+The implementation to date adds or hardens:
 
   * complete B-rep validity checking;
   * reference-safe vertex, curve, and surface removal/index remapping;
@@ -237,7 +260,14 @@ The first tranche adds or hardens:
   * surface knot insertion, clamping, degree elevation, reversal, and
     transposition;
   * face-aware topology-safety classification for a CV;
+  * edge and CV constraint classification for natural, isoparametric,
+    one-sided isoparametric, general, and special cases;
   * face-aware CV position, translation, and weight editing;
+  * exact transactional C0 coupling for eligible natural and interior
+    isoparametric shared boundaries;
+  * exact trace-influence construction and rank-aware adjacent-face solving
+    with Eigen CompleteOrthogonalDecomposition;
+  * shared 3-D edge regeneration after a coupled boundary move;
   * isolation of a surface shared by multiple faces before a local face edit;
   * face parameter reversal and transposition using B-rep-aware openNURBS
     operations; and
@@ -264,8 +294,9 @@ The B-rep primitive edit descriptor currently exposes:
     ECMD_BREP_SRF_CV_WEIGHT
 
 Selection reports the Euclidean position of rational CVs and whether the CV
-is topology-safe.  Move, absolute placement, and weight changes use the
-face-aware libbrep operations and reject locked boundary-influencing CVs.
+is interior-editable, exact-C0-boundary-editable, or locked.  Move and
+absolute placement use the constrained libbrep path.  Weight changes remain
+limited to trim-independent CVs.
 
 The implementation is in:
 
@@ -275,9 +306,10 @@ The implementation is in:
 
 The "brep ... geo" command family now includes curve weight, clamp, and degree
 elevation operations; surface weight, reversal, transposition, knot insertion,
-clamp, and elevation operations; face CV safety, position, move, weight,
-parameter reversal, and transposition operations; and complete B-rep
-validation.
+clamp, and elevation operations; face CV safety, current editability and
+constraint reporting, position, constrained move, weight, parameter reversal,
+and transposition operations; whole-object edge-constraint summaries; and
+complete B-rep validation.
 
 The command implementation is in:
 
@@ -286,7 +318,7 @@ The command implementation is in:
 7.4 libqtcad and qged
 
 QgBrepFilter, QgBrepPickCVFilter, and QgBrepMoveCVFilter provide reusable
-projected CV picking, selection state, topology-safe/locked reporting, and
+projected CV picking, selection state, interior/coupled/locked reporting, and
 view-plane dragging through librt editing.
 
 The public interface and implementation are:
@@ -300,7 +332,7 @@ The qged B-rep object editor provides:
   * face CV picking and dragging;
   * selected CV coordinates and rational weight controls;
   * visible control-net and primitive-wireframe preview;
-  * visible locked boundary points;
+  * visible interior, exact-C0-coupled, and locked edit states;
   * in-memory editing during interaction; and
   * explicit Apply and Reset actions.
 
@@ -325,8 +357,12 @@ Focused regression coverage currently verifies:
   * shared-surface isolation;
   * rational Euclidean CV behavior;
   * rejection of trim-influencing CV edits without modifying the input;
+  * exact C0 edits of natural and interior isoparametric two-face seams;
+  * unchanged endpoints and topology-array counts after coupled edits;
+  * rollback of unsupported endpoint/multiple-trim edits;
   * valid face reversal/transposition and locus mapping;
-  * librt selection, position, translation, weight, and boundary-lock paths;
+  * librt selection, position, translation, weight, boundary-lock, and
+    end-to-end coupled natural-seam paths;
   * discovery and null-context safety of the qged B-rep plugin; and
   * corrected surface-of-revolution ownership.
 
@@ -389,7 +425,7 @@ The implementation policy is:
   4. Copy or closely translate Ayam code only after file-level provenance
      review and with all required notices.
 
-The first tranche follows this policy and does not depend on the ambiguous
+The implementation follows this policy and does not depend on the ambiguous
 Ayam solver code.
 
 
@@ -401,6 +437,9 @@ Immediate engineering follow-up:
   * exercise the qged editor manually on representative trimmed, rational,
     periodic, multi-face, and transformed database objects;
   * improve selection and preview performance for large control nets;
+  * expose an opaque reusable constraint plan/session so qged can factor an
+    eligible seam once at drag start instead of repeating classification,
+    full validity checking, and decomposition for every mouse event;
   * add undo/redo integration and dirty-edit/close handling as required by
     qged's editing conventions;
   * test nested instance transforms and ensure picking, dragging, and preview
@@ -413,21 +452,29 @@ Immediate engineering follow-up:
 
 Next topology milestone:
 
-  * specify the exact class of compatible natural boundaries initially
-    supported;
-  * identify both incident faces, orientations, trims, edge, and vertices;
-  * make degrees and knot vectors compatible without changing either locus;
-  * define C0 boundary control-point and rational-weight coupling;
-  * update the 3-D edge and required trim/proxy data;
-  * perform all changes on a complete B-rep trial copy;
-  * validate edge-on-surface tolerances, loop validity, and manifold
-    consistency before commit; and
-  * add two-face, reversed-orientation, rational, seam, and failure rollback
-    tests.
+  * formalize an affected-topology constraint graph whose nodes are face
+    surfaces, 2-D trims, shared 3-D edges, and vertices;
+  * expand the exact backend by making extracted trace degrees and knot
+    vectors compatible without changing either locus;
+  * support coupled rational boundary-weight edits while treating homogeneous
+    position and weight constraints explicitly;
+  * support reversed proxy states, transposed faces, surfaces shared by
+    multiple faces, periodic seams, and multiple affected edges;
+  * add a one-sided-isoparametric backend, using the exact trace as the target
+    and constrained deformation of the general-trim neighbor;
+  * design the arbitrary-trim backend around adaptive boundary samples and
+    Jacobian constraints, with conditioning and residual reporting;
+  * decide when local deformation is sufficient and when adjacent faces must
+    be re-intersected and their trims rebuilt;
+  * validate edge-on-surface tolerances, loop validity, vertices, and manifold
+    consistency before every commit; and
+  * add reversed-orientation, rational, periodic, junction, multiple-loop,
+    singular, and rollback tests based on representative imported models.
 
-After compatible C0 boundaries:
+After general C0 boundary support:
 
-  * investigate G1/G2 coupled row constraints;
+  * investigate G1/G2 derivative constraints and coupled control-row
+    deformation;
   * add knot removal and degree reduction with explicit geometric error
     bounds;
   * add curve/surface compatibility, splitting, and extraction workflows;
