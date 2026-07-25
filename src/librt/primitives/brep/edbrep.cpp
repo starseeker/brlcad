@@ -26,9 +26,11 @@
  *                            (face_index, cv_i, cv_j).
  *   ECMD_BREP_SRF_CV_MOVE  — translate the selected CV by (dx, dy, dz).
  *   ECMD_BREP_SRF_CV_SET   — place the selected CV at an absolute (x, y, z).
+ *   ECMD_BREP_SRF_CV_WEIGHT — set the selected rational CV weight.
  *
- * NOTE: CV edits do not currently check for influence on trimming curves;
- * users should validate the brep after edits (e.g. using "brep <obj> info").
+ * CV edits are rejected when the selected CV's basis support intersects
+ * a face trim.  Boundary editing must use a coupled topology-preserving
+ * operation once one is available.
  */
 
 #include "common.h"
@@ -38,7 +40,7 @@
 #include "vmath.h"
 #include "raytrace.h"
 #include "rt/geom.h"
-#include "brep/util.h"
+#include "brep/edit.h"
 
 #include "../edit_private.h"
 
@@ -49,6 +51,7 @@
 #define ECMD_BREP_SRF_SELECT    37010   /* select a surface CV by (face, i, j) */
 #define ECMD_BREP_SRF_CV_MOVE   37011   /* translate selected CV by (dx,dy,dz) */
 #define ECMD_BREP_SRF_CV_SET    37012   /* place selected CV at absolute (x,y,z) */
+#define ECMD_BREP_SRF_CV_WEIGHT 37013   /* set selected CV rational weight */
 
 /* Selection state for a single NURBS surface control vertex. */
 struct rt_brep_edit {
@@ -105,6 +108,9 @@ rt_edit_brep_set_edit_mode(struct rt_edit *s, int mode)
 	case ECMD_BREP_SRF_CV_MOVE:
 	case ECMD_BREP_SRF_CV_SET:
 	    s->edit_mode = RT_PARAMS_EDIT_TRANS;
+	    break;
+	case ECMD_BREP_SRF_CV_WEIGHT:
+	    s->edit_mode = RT_PARAMS_EDIT_SCALE;
 	    break;
 	default:
 	    break;
@@ -189,14 +195,19 @@ ecmd_brep_srf_select(struct rt_edit *s)
     b->srf_cv_i   = cv_i;
     b->srf_cv_j   = cv_j;
 
-    /* Report the selected CV position. */
-    double *cv = ns->CV(cv_i, cv_j);
+    /* Report the selected CV position and whether it may be edited safely. */
+    ON_4dPoint cv;
+    if (!ns->GetCV(cv_i, cv_j, ON::euclidean_rational, &cv.x))
+	return;
+    const bool topology_safe =
+	brep_face_cv_is_topology_safe(brep, face_index, cv_i, cv_j);
     bu_vls_printf(s->log_str,
-	    "Selected brep face %d CV (%d,%d) at (%.9f, %.9f, %.9f)\n",
+	    "Selected brep face %d CV (%d,%d) at (%.9f, %.9f, %.9f)%s\n",
 	    face_index, cv_i, cv_j,
-	    cv[0] * s->base2local,
-	    cv[1] * s->base2local,
-	    cv[2] * s->base2local);
+	    cv.x * s->base2local,
+	    cv.y * s->base2local,
+	    cv.z * s->base2local,
+	    topology_safe ? "" : " (locked: influences a trim)");
     rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
     if (f) (*f)(0, NULL, d, NULL);
 }
@@ -237,12 +248,11 @@ ecmd_brep_srf_cv_move(struct rt_edit *s)
     fastf_t dz = s->e_para[2] * s->local2base;
 
     ON_Brep *brep = bip->brep;
-    int surface_index = brep->m_F[b->face_index].m_si;
-    int ret = brep_translate_scv(brep, surface_index, b->srf_cv_i, b->srf_cv_j,
-	    dx, dy, dz);
-    if (ret < 0) {
+    if (!brep_face_translate_cv(brep, b->face_index,
+		b->srf_cv_i, b->srf_cv_j, ON_3dVector(dx, dy, dz))) {
 	bu_vls_printf(s->log_str,
-		"ECMD_BREP_SRF_CV_MOVE: brep_translate_scv failed\n");
+		"ECMD_BREP_SRF_CV_MOVE: edit rejected because the CV "
+		"influences a face trim\n");
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f) (*f)(0, NULL, d, NULL);
     }
@@ -280,9 +290,7 @@ ecmd_brep_srf_cv_set(struct rt_edit *s)
     }
 
     ON_Brep *brep = bip->brep;
-    int surface_index = brep->m_F[b->face_index].m_si;
-
-    /* Retrieve current position and compute the required delta. */
+    /* Retrieve the current weight for the Euclidean-rational new CV. */
     ON_BrepFace *face = brep->Face(b->face_index);
     const ON_Surface *surf = face->SurfaceOf();
     const ON_NurbsSurface *ns = dynamic_cast<const ON_NurbsSurface *>(surf);
@@ -295,21 +303,64 @@ ecmd_brep_srf_cv_set(struct rt_edit *s)
 	return;
     }
 
-    double *cv = ns->CV(b->srf_cv_i, b->srf_cv_j);
-
     fastf_t new_x = s->e_para[0] * s->local2base;
     fastf_t new_y = s->e_para[1] * s->local2base;
     fastf_t new_z = s->e_para[2] * s->local2base;
 
-    fastf_t dx = new_x - cv[0];
-    fastf_t dy = new_y - cv[1];
-    fastf_t dz = new_z - cv[2];
+    ON_4dPoint cv;
+    if (!ns->GetCV(b->srf_cv_i, b->srf_cv_j,
+		ON::euclidean_rational, &cv.x))
+	return;
+    cv.x = new_x;
+    cv.y = new_y;
+    cv.z = new_z;
 
-    int ret = brep_translate_scv(brep, surface_index, b->srf_cv_i, b->srf_cv_j,
-	    dx, dy, dz);
-    if (ret < 0) {
+    if (!brep_face_set_cv(brep, b->face_index,
+		b->srf_cv_i, b->srf_cv_j, cv)) {
 	bu_vls_printf(s->log_str,
-		"ECMD_BREP_SRF_CV_SET: brep_translate_scv failed\n");
+		"ECMD_BREP_SRF_CV_SET: edit rejected because the CV "
+		"influences a face trim\n");
+	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
+	if (f) (*f)(0, NULL, d, NULL);
+    }
+}
+
+/*
+ * Set the selected CV rational weight.
+ * e_para[0] = positive weight
+ * e_inpara  = 1
+ */
+static void
+ecmd_brep_srf_cv_weight(struct rt_edit *s)
+{
+    struct rt_brep_internal *bip = (struct rt_brep_internal *)s->es_int.idb_ptr;
+    RT_BREP_CK_MAGIC(bip);
+    struct rt_brep_edit *b = (struct rt_brep_edit *)s->ipe_ptr;
+    bu_clbk_t f = NULL;
+    void *d = NULL;
+
+    if (b->face_index < 0) {
+	bu_vls_printf(s->log_str,
+		"ECMD_BREP_SRF_CV_WEIGHT: no CV selected "
+		"(use select_surface_cv first)\n");
+	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
+	if (f) (*f)(0, NULL, d, NULL);
+	return;
+    }
+    if (s->e_inpara != 1 || !ON_IsValid(s->e_para[0])
+	    || s->e_para[0] <= 0.0) {
+	bu_vls_printf(s->log_str,
+		"ECMD_BREP_SRF_CV_WEIGHT: one positive weight is required\n");
+	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
+	if (f) (*f)(0, NULL, d, NULL);
+	return;
+    }
+
+    if (!brep_face_set_weight(bip->brep, b->face_index,
+		b->srf_cv_i, b->srf_cv_j, s->e_para[0])) {
+	bu_vls_printf(s->log_str,
+		"ECMD_BREP_SRF_CV_WEIGHT: edit rejected because the CV "
+		"influences a face trim\n");
 	rt_edit_map_clbk_get(&f, &d, s->m, ECMD_PRINT_RESULTS, BU_CLBK_DURING);
 	if (f) (*f)(0, NULL, d, NULL);
     }
@@ -344,6 +395,9 @@ rt_edit_brep_edit(struct rt_edit *s)
 	case ECMD_BREP_SRF_CV_SET:
 	    ecmd_brep_srf_cv_set(s);
 	    break;
+	case ECMD_BREP_SRF_CV_WEIGHT:
+	    ecmd_brep_srf_cv_weight(s);
+	    break;
 	default:
 	    return edit_generic(s);
     }
@@ -367,6 +421,9 @@ rt_edit_brep_edit_xy(struct rt_edit *s, const vect_t mousevec)
 	case ECMD_BREP_SRF_CV_SET:
 	    edit_stra_xy(&pos_view, s, mousevec);
 	    break;
+	case ECMD_BREP_SRF_CV_WEIGHT:
+	    edit_sscale_xy(s, mousevec);
+	    return 0;
 	default:
 	    return edit_generic_xy(s, mousevec);
     }
@@ -447,6 +504,21 @@ static const struct rt_edit_param_desc brep_point_param[] = {
     }
 };
 
+/* WEIGHT: rational control-vertex weight. */
+static const struct rt_edit_param_desc brep_weight_param[] = {
+    {
+	"weight",                   /* name         */
+	"Weight",                   /* label        */
+	RT_EDIT_PARAM_SCALAR,       /* type         */
+	0,                          /* index        */
+	ON_ZERO_TOLERANCE,          /* range_min    */
+	RT_EDIT_PARAM_NO_LIMIT,     /* range_max    */
+	"unitless",                 /* units        */
+	0, NULL, NULL,              /* enum (unused) */
+	NULL                        /* prim_field   */
+    }
+};
+
 static const struct rt_edit_cmd_desc brep_cmds[] = {
     {
 	ECMD_BREP_SRF_SELECT,           /* cmd_id        */
@@ -477,13 +549,23 @@ static const struct rt_edit_cmd_desc brep_cmds[] = {
 	1,
 	30,
 	NULL
+    },
+    {
+	ECMD_BREP_SRF_CV_WEIGHT,
+	"Set Surface CV Weight",
+	"surface",
+	1,
+	brep_weight_param,
+	0,
+	40,
+	NULL
     }
 };
 
 static const struct rt_edit_prim_desc brep_prim_desc = {
     "brep",         /* prim_type  */
     "BREP",         /* prim_label */
-    3,              /* ncmd       */
+    4,              /* ncmd       */
     brep_cmds       /* cmds       */,
     0,                    /* nopt         */
     NULL                  /* opts         */
@@ -535,11 +617,34 @@ rt_edit_brep_get_params(struct rt_edit *s, int cmd_id, fastf_t *vals)
 		    dynamic_cast<const ON_NurbsSurface *>(surf);
 		if (!ns)
 		    return 0;
-		double *cv = ns->CV(b->srf_cv_i, b->srf_cv_j);
-		vals[0] = cv[0] * s->base2local;
-		vals[1] = cv[1] * s->base2local;
-		vals[2] = cv[2] * s->base2local;
+		ON_4dPoint cv;
+		if (!ns->GetCV(b->srf_cv_i, b->srf_cv_j,
+			    ON::euclidean_rational, &cv.x))
+		    return 0;
+		vals[0] = cv.x * s->base2local;
+		vals[1] = cv.y * s->base2local;
+		vals[2] = cv.z * s->base2local;
 		return 3;
+	    }
+
+	case ECMD_BREP_SRF_CV_WEIGHT:
+	    if (b->face_index < 0 || !bip || !bip->brep)
+		return 0;
+	    {
+		ON_Brep *brep = bip->brep;
+		if (b->face_index >= brep->m_F.Count())
+		    return 0;
+		const ON_NurbsSurface *ns =
+		    dynamic_cast<const ON_NurbsSurface *>(
+			brep->m_F[b->face_index].SurfaceOf());
+		if (!ns)
+		    return 0;
+		ON_4dPoint cv;
+		if (!ns->GetCV(b->srf_cv_i, b->srf_cv_j,
+			    ON::euclidean_rational, &cv.x))
+		    return 0;
+		vals[0] = cv.w;
+		return 1;
 	    }
 
 	default:

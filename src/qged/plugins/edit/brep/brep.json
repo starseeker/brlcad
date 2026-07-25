@@ -1,0 +1,13 @@
+{
+    "id": "org.brlcad.qged.edit.brep",
+    "displayName": "B-rep NURBS Edit",
+    "category": "qged.object",
+    "iconName": ":/images/primitives/brep.png",
+    "sortKey": 1400,
+    "requiresOpenDb": true,
+    "requiresView": true,
+    "description": "Topology-aware control-point editing for B-rep NURBS surfaces.",
+    "vendor": "BRL-CAD",
+    "version": "0.1",
+    "apiVersion": 1
+}

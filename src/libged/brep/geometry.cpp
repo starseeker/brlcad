@@ -1181,6 +1181,185 @@ _brep_cmd_geo_surface_extract_curve(void *bs, int argc, const char **argv)
     return BRLCAD_OK;
 }
 
+static int
+_brep_cmd_geo_nurbs_refine(void *bs, int argc, const char **argv)
+{
+    struct _ged_brep_igeo *gib = (struct _ged_brep_igeo *)bs;
+    struct rt_brep_internal *b_ip =
+	(struct rt_brep_internal *)gib->gb->intern.idb_ptr;
+    const char *cmd = argc > 0 ? argv[0] : "";
+    const char *usage_string = NULL;
+    const char *purpose_string = NULL;
+    bool changed = false;
+
+    if (BU_STR_EQUAL(cmd, "c3_set_weight")) {
+	usage_string = "brep [options] <objname> geo c3_set_weight <curve_id> <cv_id> <weight>";
+	purpose_string = "set a NURBS curve control vertex weight";
+    } else if (BU_STR_EQUAL(cmd, "c3_clamp")) {
+	usage_string = "brep [options] <objname> geo c3_clamp <curve_id> <end:0|1|2>";
+	purpose_string = "clamp a NURBS curve start, end, or both without changing its locus";
+    } else if (BU_STR_EQUAL(cmd, "c3_elevate")) {
+	usage_string = "brep [options] <objname> geo c3_elevate <curve_id> <desired_degree>";
+	purpose_string = "elevate a NURBS curve degree without changing its locus";
+    } else if (BU_STR_EQUAL(cmd, "s_set_weight")) {
+	usage_string = "brep [options] <objname> geo s_set_weight <surface_id> <cv_u> <cv_v> <weight>";
+	purpose_string = "set an unreferenced NURBS surface control vertex weight";
+    } else if (BU_STR_EQUAL(cmd, "s_reverse")) {
+	usage_string = "brep [options] <objname> geo s_reverse <surface_id> <dir:0|1>";
+	purpose_string = "reverse an unreferenced NURBS surface parameter direction";
+    } else if (BU_STR_EQUAL(cmd, "s_transpose")) {
+	usage_string = "brep [options] <objname> geo s_transpose <surface_id>";
+	purpose_string = "transpose an unreferenced NURBS surface";
+    } else if (BU_STR_EQUAL(cmd, "s_insert_knot")) {
+	usage_string = "brep [options] <objname> geo s_insert_knot <surface_id> <dir:0|1> <knot> <multiplicity>";
+	purpose_string = "insert a NURBS surface knot without changing its locus";
+    } else if (BU_STR_EQUAL(cmd, "s_clamp")) {
+	usage_string = "brep [options] <objname> geo s_clamp <surface_id> <dir:0|1> <end:0|1|2>";
+	purpose_string = "clamp a NURBS surface direction without changing its locus";
+    } else if (BU_STR_EQUAL(cmd, "s_elevate")) {
+	usage_string = "brep [options] <objname> geo s_elevate <surface_id> <dir:0|1> <desired_degree>";
+	purpose_string = "elevate a NURBS surface degree without changing its locus";
+    } else {
+	bu_vls_printf(gib->vls, "unknown NURBS refinement command\n");
+	return BRLCAD_ERROR;
+    }
+
+    if (_brep_geo_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    if (BU_STR_EQUAL(cmd, "c3_set_weight") && argc == 4) {
+	changed = brep_curve_set_weight(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atof(argv[3]));
+    } else if (BU_STR_EQUAL(cmd, "c3_clamp") && argc == 3) {
+	changed = brep_curve_clamp(b_ip->brep, atoi(argv[1]), atoi(argv[2]));
+    } else if (BU_STR_EQUAL(cmd, "c3_elevate") && argc == 3) {
+	changed = brep_curve_elevate_degree(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]));
+    } else if (BU_STR_EQUAL(cmd, "s_set_weight") && argc == 5) {
+	changed = brep_surface_set_weight(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atoi(argv[3]), atof(argv[4]));
+    } else if (BU_STR_EQUAL(cmd, "s_reverse") && argc == 3) {
+	changed = brep_surface_reverse(b_ip->brep, atoi(argv[1]), atoi(argv[2]));
+    } else if (BU_STR_EQUAL(cmd, "s_transpose") && argc == 2) {
+	changed = brep_surface_transpose(b_ip->brep, atoi(argv[1]));
+    } else if (BU_STR_EQUAL(cmd, "s_insert_knot") && argc == 5) {
+	changed = brep_surface_insert_knot(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atof(argv[3]), atoi(argv[4]));
+    } else if (BU_STR_EQUAL(cmd, "s_clamp") && argc == 4) {
+	changed = brep_surface_clamp(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atoi(argv[3]));
+    } else if (BU_STR_EQUAL(cmd, "s_elevate") && argc == 4) {
+	changed = brep_surface_elevate_degree(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atoi(argv[3]));
+    } else {
+	bu_vls_printf(gib->vls, "invalid arguments\n%s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+
+    if (!changed) {
+	bu_vls_printf(gib->vls,
+		"%s failed or was rejected to preserve B-rep references\n", cmd);
+	return BRLCAD_ERROR;
+    }
+    if (brep_write_modified(gib->gb, b_ip->brep) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    return BRLCAD_OK;
+}
+
+static int
+_brep_cmd_geo_face_edit(void *bs, int argc, const char **argv)
+{
+    struct _ged_brep_igeo *gib = (struct _ged_brep_igeo *)bs;
+    struct rt_brep_internal *b_ip =
+	(struct rt_brep_internal *)gib->gb->intern.idb_ptr;
+    const char *cmd = argc > 0 ? argv[0] : "";
+    const char *usage_string = NULL;
+    const char *purpose_string = NULL;
+    bool changed = false;
+
+    if (BU_STR_EQUAL(cmd, "f_cv_safe")) {
+	usage_string = "brep [options] <objname> geo f_cv_safe <face_id> <cv_u> <cv_v>";
+	purpose_string = "report whether a face CV can be changed without moving a trim";
+    } else if (BU_STR_EQUAL(cmd, "f_set_cv")) {
+	usage_string = "brep [options] <objname> geo f_set_cv <face_id> <cv_u> <cv_v> <x> <y> <z> [<w>]";
+	purpose_string = "set a topology-safe face CV, isolating a shared surface";
+    } else if (BU_STR_EQUAL(cmd, "f_move_cv")) {
+	usage_string = "brep [options] <objname> geo f_move_cv <face_id> <cv_u> <cv_v> <dx> <dy> <dz>";
+	purpose_string = "translate a topology-safe face CV, isolating a shared surface";
+    } else if (BU_STR_EQUAL(cmd, "f_set_weight")) {
+	usage_string = "brep [options] <objname> geo f_set_weight <face_id> <cv_u> <cv_v> <weight>";
+	purpose_string = "set a topology-safe face CV weight, isolating a shared surface";
+    } else if (BU_STR_EQUAL(cmd, "f_reverse_param")) {
+	usage_string = "brep [options] <objname> geo f_reverse_param <face_id> <dir:0|1>";
+	purpose_string = "reverse a face parameter direction and update its trims";
+    } else if (BU_STR_EQUAL(cmd, "f_transpose")) {
+	usage_string = "brep [options] <objname> geo f_transpose <face_id>";
+	purpose_string = "transpose a face surface and its parameter-space trims";
+    } else {
+	bu_vls_printf(gib->vls, "unknown face editing command\n");
+	return BRLCAD_ERROR;
+    }
+
+    if (_brep_geo_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    if (BU_STR_EQUAL(cmd, "f_cv_safe") && argc == 4) {
+	const bool safe = brep_face_cv_is_topology_safe(b_ip->brep,
+		atoi(argv[1]), atoi(argv[2]), atoi(argv[3]));
+	bu_vls_printf(gib->vls, "%d", safe ? 1 : 0);
+	return BRLCAD_OK;
+    } else if (BU_STR_EQUAL(cmd, "f_set_cv") && (argc == 7 || argc == 8)) {
+	ON_4dPoint cv(atof(argv[4]), atof(argv[5]), atof(argv[6]),
+		argc == 8 ? atof(argv[7]) : 1.0);
+	changed = brep_face_set_cv(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atoi(argv[3]), cv);
+    } else if (BU_STR_EQUAL(cmd, "f_move_cv") && argc == 7) {
+	ON_3dVector delta(atof(argv[4]), atof(argv[5]), atof(argv[6]));
+	changed = brep_face_translate_cv(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atoi(argv[3]), delta);
+    } else if (BU_STR_EQUAL(cmd, "f_set_weight") && argc == 5) {
+	changed = brep_face_set_weight(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]), atoi(argv[3]), atof(argv[4]));
+    } else if (BU_STR_EQUAL(cmd, "f_reverse_param") && argc == 3) {
+	changed = brep_face_reverse_parameter(b_ip->brep, atoi(argv[1]),
+		atoi(argv[2]));
+    } else if (BU_STR_EQUAL(cmd, "f_transpose") && argc == 2) {
+	changed = brep_face_transpose(b_ip->brep, atoi(argv[1]));
+    } else {
+	bu_vls_printf(gib->vls, "invalid arguments\n%s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+
+    if (!changed) {
+	bu_vls_printf(gib->vls,
+		"%s failed or was rejected to preserve B-rep topology\n", cmd);
+	return BRLCAD_ERROR;
+    }
+    if (brep_write_modified(gib->gb, b_ip->brep) != BRLCAD_OK)
+	return BRLCAD_ERROR;
+    return BRLCAD_OK;
+}
+
+static int
+_brep_cmd_geo_validate(void *bs, int argc, const char **argv)
+{
+    const char *usage_string = "brep [options] <objname> geo validate";
+    const char *purpose_string = "run the openNURBS B-rep validity checks";
+    if (_brep_geo_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    struct _ged_brep_igeo *gib = (struct _ged_brep_igeo *)bs;
+    if (argc != 1) {
+	bu_vls_printf(gib->vls, "invalid arguments\n%s\n", usage_string);
+	return BRLCAD_ERROR;
+    }
+    struct rt_brep_internal *b_ip =
+	(struct rt_brep_internal *)gib->gb->intern.idb_ptr;
+    const bool valid = brep_is_valid(b_ip->brep);
+    bu_vls_printf(gib->vls, "%s", valid ? "valid" : "invalid");
+    return valid ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
 static void
 _brep_geo_help(struct _ged_brep_igeo *bs, int argc, const char **argv)
 {
@@ -1219,8 +1398,11 @@ const struct bu_cmdtab _brep_geo_cmds[] = {
     { "c3_remove",              _brep_cmd_geo_curve3d_remove},
     { "c3_move",                _brep_cmd_geo_curve3d_move},
     { "c3_set_cv",              _brep_cmd_geo_curve3d_set_cv},
+    { "c3_set_weight",          _brep_cmd_geo_nurbs_refine},
     { "c3_flip",                _brep_cmd_geo_curve3d_flip},
     { "c3_insert_knot",         _brep_cmd_geo_curve3d_insert_knot},
+    { "c3_clamp",               _brep_cmd_geo_nurbs_refine},
+    { "c3_elevate",             _brep_cmd_geo_nurbs_refine},
     { "c3_trim",                _brep_cmd_geo_curve3d_trim},
     { "c3_split",               _brep_cmd_geo_curve3d_split},
     { "c3_join",                _brep_cmd_geo_curve3d_join},
@@ -1231,12 +1413,25 @@ const struct bu_cmdtab _brep_geo_cmds[] = {
     { "s_remove",               _brep_cmd_geo_surface_remove},
     { "s_move",                 _brep_cmd_geo_surface_move},
     { "s_set_cv",               _brep_cmd_geo_surface_set_cv},
+    { "s_set_weight",           _brep_cmd_geo_nurbs_refine},
+    { "s_reverse",              _brep_cmd_geo_nurbs_refine},
+    { "s_transpose",            _brep_cmd_geo_nurbs_refine},
+    { "s_insert_knot",          _brep_cmd_geo_nurbs_refine},
+    { "s_clamp",                _brep_cmd_geo_nurbs_refine},
+    { "s_elevate",              _brep_cmd_geo_nurbs_refine},
     { "s_trim",                 _brep_cmd_geo_surface_trim},
     { "s_split",                _brep_cmd_geo_surface_split},
     { "s_tensor",               _brep_cmd_geo_surface_tensor_product},
     { "s_revolution",           _brep_cmd_geo_surface_revolution},
     { "s_ext_v",                _brep_cmd_geo_surface_extract_vertex},
     { "s_ext_c3",               _brep_cmd_geo_surface_extract_curve},
+    { "f_cv_safe",              _brep_cmd_geo_face_edit},
+    { "f_set_cv",               _brep_cmd_geo_face_edit},
+    { "f_move_cv",              _brep_cmd_geo_face_edit},
+    { "f_set_weight",           _brep_cmd_geo_face_edit},
+    { "f_reverse_param",        _brep_cmd_geo_face_edit},
+    { "f_transpose",            _brep_cmd_geo_face_edit},
+    { "validate",               _brep_cmd_geo_validate},
     { (char *)NULL,             NULL}
 };
 

@@ -21,14 +21,17 @@
  *
  * Unit tests for BREP primitive editing via edbrep.cpp.
  *
- * Reference BREP: an ON_BrepSphere centred at (0,0,0) radius 10.
- * The sphere NURBS representation has 6 faces; each face's underlying
- * surface is an ON_NurbsSurface with at least 2×2 control vertices.
+ * Reference BREP: a 7x7 clamped planar NURBS surface with its standard
+ * outer B-rep loop.  The larger control net has CVs whose basis support
+ * does not intersect the four boundary trims, permitting topology-safe
+ * interactive edit tests.
  *
  * Tests verify:
  *   - ECMD_BREP_SRF_SELECT stores face/i/j correctly
  *   - ECMD_BREP_SRF_CV_MOVE translates the CV by the given delta
  *   - ECMD_BREP_SRF_CV_SET places the CV at the given absolute position
+ *   - ECMD_BREP_SRF_CV_WEIGHT changes an interior CV weight
+ *   - CV edits whose support reaches an outer trim are rejected
  *   - rt_edit_brep_get_params returns sensible values
  *   - Invalid inputs are rejected gracefully (wrong e_inpara, bad face index)
  */
@@ -62,37 +65,24 @@ struct rt_brep_edit_local {
  * ------------------------------------------------------------------ */
 
 static struct directory *
-make_brep_sphere(struct rt_wdb *wdbp)
+make_brep_surface(struct rt_wdb *wdbp)
 {
-    const char *objname = "brep_sph";
-
-    ON_3dPoint centre(0, 0, 0);
-    ON_Sphere sph(centre, 10.0);
+    const char *objname = "brep_surface";
 
     struct rt_brep_internal *bi;
     BU_ALLOC(bi, struct rt_brep_internal);
     bi->magic = RT_BREP_INTERNAL_MAGIC;
-    bi->brep  = ON_BrepSphere(sph);
-    if (!bi->brep)
-	bu_exit(1, "ERROR: unable to create brep sphere\n");
+    bi->brep = new ON_Brep;
 
-    /* ON_BrepSphere creates analytic (ON_RevSurface) surfaces.
-     * Convert every non-NURBS surface in m_S[] to its NURBS form so
-     * that CV editing commands (which require ON_NurbsSurface) work. */
-    for (int i = 0; i < bi->brep->m_S.Count(); i++) {
-	ON_Surface *old_srf = bi->brep->m_S[i];
-	if (!old_srf)
-	    bu_exit(1, "ERROR: brep sphere has null surface\n");
-	if (!dynamic_cast<ON_NurbsSurface *>(old_srf)) {
-	    ON_NurbsSurface *ns = new ON_NurbsSurface;
-	    if (old_srf->GetNurbForm(*ns, 0.0) > 0) {
-		bi->brep->m_S[i] = ns;
-		delete old_srf;
-	    } else {
-		delete ns;
-	    }
-	}
+    ON_NurbsSurface surface(3, false, 4, 4, 7, 7);
+    for (int i = 0; i < 7; ++i) {
+	for (int j = 0; j < 7; ++j)
+	    surface.SetCV(i, j, ON_3dPoint((double)i, (double)j, 0.0));
     }
+    surface.MakeClampedUniformKnotVector(0, 1.0);
+    surface.MakeClampedUniformKnotVector(1, 1.0);
+    if (!bi->brep->NewFace(surface))
+	bu_exit(1, "ERROR: unable to create trimmed NURBS face\n");
 
     wdb_export(wdbp, objname, (void *)bi, ID_BREP, 1.0);
 
@@ -141,6 +131,24 @@ get_cv_pos(struct rt_edit *s, int face_index, int cv_i, int cv_j,
     *x = cv[0];
     *y = cv[1];
     *z = cv[2];
+}
+
+static double
+get_cv_weight(struct rt_edit *s, int face_index, int cv_i, int cv_j)
+{
+    struct rt_brep_internal *bip =
+	(struct rt_brep_internal *)s->es_int.idb_ptr;
+    RT_BREP_CK_MAGIC(bip);
+    const ON_NurbsSurface *ns =
+	dynamic_cast<const ON_NurbsSurface *>(
+	    bip->brep->m_F[face_index].SurfaceOf());
+    if (!ns)
+	bu_exit(1, "ERROR: face %d has no NURBS surface\n", face_index);
+    ON_4dPoint cv;
+    if (!ns->GetCV(cv_i, cv_j, ON::euclidean_rational, &cv.x))
+	bu_exit(1, "ERROR: unable to read face %d CV (%d,%d)\n",
+		face_index, cv_i, cv_j);
+    return cv.w;
 }
 
 
@@ -222,19 +230,19 @@ test_brep_cv_move(struct rt_edit *s)
 {
     struct rt_brep_edit_local *b = (struct rt_brep_edit_local *)s->ipe_ptr;
 
-    /* First select face 0 CV (1, 1) */
+    /* First select face 0 CV (3, 3), whose support misses all trims. */
     EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_SELECT);
     s->e_inpara = 3;
     s->e_para[0] = 0.0; /* face 0 */
-    s->e_para[1] = 1.0; /* cv_i = 1 */
-    s->e_para[2] = 1.0; /* cv_j = 1 */
+    s->e_para[1] = 3.0; /* cv_i = 3 */
+    s->e_para[2] = 3.0; /* cv_j = 3 */
     rt_edit_process(s);
 
-    if (b->face_index != 0 || b->srf_cv_i != 1 || b->srf_cv_j != 1)
-	bu_exit(1, "ERROR: ECMD_BREP_SRF_SELECT (0,1,1) failed\n");
+    if (b->face_index != 0 || b->srf_cv_i != 3 || b->srf_cv_j != 3)
+	bu_exit(1, "ERROR: ECMD_BREP_SRF_SELECT (0,3,3) failed\n");
 
     double x0, y0, z0;
-    get_cv_pos(s, 0, 1, 1, &x0, &y0, &z0);
+    get_cv_pos(s, 0, 3, 3, &x0, &y0, &z0);
 
     /* Translate by (1, 2, 3) */
     EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_CV_MOVE);
@@ -245,7 +253,7 @@ test_brep_cv_move(struct rt_edit *s)
     rt_edit_process(s);
 
     double x1, y1, z1;
-    get_cv_pos(s, 0, 1, 1, &x1, &y1, &z1);
+    get_cv_pos(s, 0, 3, 3, &x1, &y1, &z1);
 
     /* local2base == 1.0 so delta in model units */
     double ex = x0 + 1.0;
@@ -267,16 +275,16 @@ test_brep_cv_set(struct rt_edit *s)
 {
     struct rt_brep_edit_local *b = (struct rt_brep_edit_local *)s->ipe_ptr;
 
-    /* Select face 0 CV (0, 1) */
+    /* Select face 0 CV (3, 3), whose support misses all trims. */
     EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_SELECT);
     s->e_inpara = 3;
     s->e_para[0] = 0.0;
-    s->e_para[1] = 0.0;
-    s->e_para[2] = 1.0; /* cv_j = 1 */
+    s->e_para[1] = 3.0;
+    s->e_para[2] = 3.0;
     rt_edit_process(s);
 
-    if (b->face_index != 0 || b->srf_cv_j != 1)
-	bu_exit(1, "ERROR: ECMD_BREP_SRF_SELECT (0,0,1) failed\n");
+    if (b->face_index != 0 || b->srf_cv_i != 3 || b->srf_cv_j != 3)
+	bu_exit(1, "ERROR: ECMD_BREP_SRF_SELECT (0,3,3) failed\n");
 
     /* Place at (5, 5, 5) */
     EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_CV_SET);
@@ -287,7 +295,7 @@ test_brep_cv_set(struct rt_edit *s)
     rt_edit_process(s);
 
     double xc, yc, zc;
-    get_cv_pos(s, 0, 0, 1, &xc, &yc, &zc);
+    get_cv_pos(s, 0, 3, 3, &xc, &yc, &zc);
 
     if (fabs(xc - 5.0) > 1e-6 || fabs(yc - 5.0) > 1e-6 || fabs(zc - 5.0) > 1e-6)
 	bu_exit(1,
@@ -327,26 +335,81 @@ test_brep_cv_move_no_selection(struct rt_edit *s)
 static void
 test_brep_get_params_select(struct rt_edit *s)
 {
-    /* Select face 0 CV (1, 2) */
+    /* Select face 0 CV (3, 3) */
     EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_SELECT);
     s->e_inpara = 3;
     s->e_para[0] = 0.0;
-    s->e_para[1] = 1.0;
-    s->e_para[2] = 2.0;
+    s->e_para[1] = 3.0;
+    s->e_para[2] = 3.0;
     rt_edit_process(s);
 
     fastf_t vals[3] = {0, 0, 0};
     int n = EDOBJ[ID_BREP].ft_edit_get_params(s, ECMD_BREP_SRF_SELECT, vals);
 
-    if (n != 3 || (int)vals[0] != 0 || (int)vals[1] != 1 || (int)vals[2] != 2)
+    if (n != 3 || (int)vals[0] != 0 || (int)vals[1] != 3 || (int)vals[2] != 3)
 	bu_exit(1,
 		"ERROR: get_params(SELECT) returned n=%d vals=(%.0f,%.0f,%.0f)\n",
 		n, vals[0], vals[1], vals[2]);
 
-    bu_log("get_params(ECMD_BREP_SRF_SELECT) PASS: (0,1,2)\n");
+    bu_log("get_params(ECMD_BREP_SRF_SELECT) PASS: (0,3,3)\n");
 }
 
-/* 8. Descriptor is well-formed */
+/* 8. A trim-influencing CV is selectable but cannot be moved. */
+static void
+test_brep_boundary_cv_locked(struct rt_edit *s)
+{
+    EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_SELECT);
+    s->e_inpara = 3;
+    s->e_para[0] = 0.0;
+    s->e_para[1] = 0.0;
+    s->e_para[2] = 0.0;
+    rt_edit_process(s);
+
+    double x0, y0, z0;
+    get_cv_pos(s, 0, 0, 0, &x0, &y0, &z0);
+    EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_CV_MOVE);
+    s->e_inpara = 3;
+    s->e_para[0] = 1.0;
+    s->e_para[1] = 2.0;
+    s->e_para[2] = 3.0;
+    rt_edit_process(s);
+
+    double x1, y1, z1;
+    get_cv_pos(s, 0, 0, 0, &x1, &y1, &z1);
+    if (fabs(x1 - x0) > 1e-12 || fabs(y1 - y0) > 1e-12
+	    || fabs(z1 - z0) > 1e-12)
+	bu_exit(1, "ERROR: trim-influencing boundary CV was moved\n");
+    bu_log("ECMD_BREP_SRF_CV_MOVE boundary lock PASS\n");
+}
+
+/* 9. An interior CV weight can be changed without moving another CV. */
+static void
+test_brep_cv_weight(struct rt_edit *s)
+{
+    EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_SELECT);
+    s->e_inpara = 3;
+    s->e_para[0] = 0.0;
+    s->e_para[1] = 3.0;
+    s->e_para[2] = 3.0;
+    rt_edit_process(s);
+
+    EDOBJ[ID_BREP].ft_set_edit_mode(s, ECMD_BREP_SRF_CV_WEIGHT);
+    s->e_inpara = 1;
+    s->e_para[0] = 2.5;
+    rt_edit_process(s);
+    if (fabs(get_cv_weight(s, 0, 3, 3) - 2.5) > 1e-12)
+	bu_exit(1, "ERROR: ECMD_BREP_SRF_CV_WEIGHT did not set weight\n");
+
+    fastf_t val = 0.0;
+    int n = EDOBJ[ID_BREP].ft_edit_get_params(
+	    s, ECMD_BREP_SRF_CV_WEIGHT, &val);
+    if (n != 1 || fabs(val - 2.5) > 1e-12)
+	bu_exit(1, "ERROR: get_params(WEIGHT) returned n=%d val=%.17g\n",
+		n, val);
+    bu_log("ECMD_BREP_SRF_CV_WEIGHT PASS\n");
+}
+
+/* 10. Descriptor is well-formed */
 static void
 test_brep_edit_desc(struct directory *dp)
 {
@@ -360,8 +423,8 @@ test_brep_edit_desc(struct directory *dp)
 	bu_exit(1, "ERROR: prim_type is '%s', expected 'brep'\n",
 		desc->prim_type ? desc->prim_type : "(null)");
 
-    if (desc->ncmd != 3)
-	bu_exit(1, "ERROR: ncmd=%d, expected 3\n", desc->ncmd);
+    if (desc->ncmd != 4)
+	bu_exit(1, "ERROR: ncmd=%d, expected 4\n", desc->ncmd);
 
     bu_log("rt_edit_brep_edit_desc PASS: prim_type='%s' ncmd=%d\n",
 	   desc->prim_type, desc->ncmd);
@@ -384,7 +447,7 @@ main(int argc, char *argv[])
 	bu_exit(1, "ERROR: db_open_inmem failed\n");
 
     struct rt_wdb *wdbp = wdb_dbopen(dbip, RT_WDB_TYPE_DB_INMEM);
-    struct directory *dp = make_brep_sphere(wdbp);
+    struct directory *dp = make_brep_surface(wdbp);
 
     struct rt_edit *s = open_edit(dp, dbip);
 
@@ -396,6 +459,8 @@ main(int argc, char *argv[])
     test_brep_cv_set(s);
     test_brep_cv_move_no_selection(s);
     test_brep_get_params_select(s);
+    test_brep_boundary_cv_locked(s);
+    test_brep_cv_weight(s);
 
     rt_edit_destroy(s);
     db_close(dbip);

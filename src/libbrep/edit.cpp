@@ -26,7 +26,213 @@
 #include "brep/edit.h"
 #include "bu/log.h"
 #include "bu/malloc.h"
+#include <cmath>
+#include <functional>
 #include <vector>
+
+namespace {
+
+static bool
+valid_brep(const ON_Brep *brep)
+{
+    if (!brep) {
+	bu_log("brep is NULL\n");
+	return false;
+    }
+    return true;
+}
+
+static bool
+curve3d_referenced(const ON_Brep *brep, int curve_id)
+{
+    return brep && brep->EdgeCurveUseCount(curve_id, 1) > 0;
+}
+
+static bool
+surface_referenced(const ON_Brep *brep, int surface_id)
+{
+    return brep && brep->SurfaceUseCount(surface_id, 1) > 0;
+}
+
+static bool
+replace_curve3d(ON_Brep *brep, int curve_id, ON_Curve *replacement)
+{
+    if (!brep || !replacement || curve_id < 0 || curve_id >= brep->m_C3.Count())
+	return false;
+
+    ON_Curve *old_curve = brep->m_C3[curve_id];
+    brep->m_C3[curve_id] = replacement;
+    for (int ei = 0; ei < brep->m_E.Count(); ++ei) {
+	ON_BrepEdge &edge = brep->m_E[ei];
+	if (edge.m_c3i == curve_id) {
+	    ON_Interval proxy_domain = edge.ProxyCurveDomain();
+	    ON_Interval edge_domain = edge.Domain();
+	    const bool proxy_reversed = edge.ProxyCurveIsReversed();
+	    edge.SetProxyCurve(replacement, proxy_domain);
+	    if (proxy_reversed != edge.ProxyCurveIsReversed())
+		edge.ON_CurveProxy::Reverse();
+	    edge.SetDomain(edge_domain);
+	}
+    }
+    delete old_curve;
+    brep->DestroyRuntimeCache(true);
+    return true;
+}
+
+static bool
+replace_surface(ON_Brep *brep, int surface_id, ON_Surface *replacement)
+{
+    if (!brep || !replacement || surface_id < 0 || surface_id >= brep->m_S.Count())
+	return false;
+
+    ON_Surface *old_surface = brep->m_S[surface_id];
+    brep->m_S[surface_id] = replacement;
+    for (int fi = 0; fi < brep->m_F.Count(); ++fi) {
+	ON_BrepFace &face = brep->m_F[fi];
+	if (face.m_si == surface_id) {
+	    const bool proxy_transposed = face.ProxySurfaceIsTransposed();
+	    face.DestroyRuntimeCache(true);
+	    face.SetProxySurface(replacement);
+	    if (proxy_transposed != face.ProxySurfaceIsTransposed())
+		face.ON_SurfaceProxy::Transpose();
+	}
+    }
+    delete old_surface;
+    brep->DestroyRuntimeCache(true);
+    return true;
+}
+
+static bool
+edit_nurbs_curve(ON_Brep *brep, int curve_id, bool allow_referenced,
+	const std::function<bool(ON_NurbsCurve *)> &operation)
+{
+    if (!valid_brep(brep) || curve_id < 0 || curve_id >= brep->m_C3.Count()) {
+	bu_log("curve_id is out of range\n");
+	return false;
+    }
+    if (!allow_referenced && curve3d_referenced(brep, curve_id)) {
+	bu_log("curve %d is referenced by a brep edge\n", curve_id);
+	return false;
+    }
+
+    const ON_NurbsCurve *curve = dynamic_cast<const ON_NurbsCurve *>(brep->m_C3[curve_id]);
+    if (!curve) {
+	bu_log("curve %d is not a NURBS curve\n", curve_id);
+	return false;
+    }
+
+    ON_Curve *curve_copy = curve->DuplicateCurve();
+    ON_NurbsCurve *nurbs_copy = dynamic_cast<ON_NurbsCurve *>(curve_copy);
+    if (!nurbs_copy || !operation(nurbs_copy)) {
+	delete curve_copy;
+	return false;
+    }
+    return replace_curve3d(brep, curve_id, curve_copy);
+}
+
+static bool
+edit_nurbs_surface(ON_Brep *brep, int surface_id, bool allow_referenced,
+	const std::function<bool(ON_NurbsSurface *)> &operation)
+{
+    if (!valid_brep(brep) || surface_id < 0 || surface_id >= brep->m_S.Count()) {
+	bu_log("surface_id is out of range\n");
+	return false;
+    }
+    if (!allow_referenced && surface_referenced(brep, surface_id)) {
+	bu_log("surface %d is referenced by a brep face\n", surface_id);
+	return false;
+    }
+
+    const ON_NurbsSurface *surface = dynamic_cast<const ON_NurbsSurface *>(brep->m_S[surface_id]);
+    if (!surface) {
+	bu_log("surface %d is not a NURBS surface\n", surface_id);
+	return false;
+    }
+
+    ON_Surface *surface_copy = surface->DuplicateSurface();
+    ON_NurbsSurface *nurbs_copy = dynamic_cast<ON_NurbsSurface *>(surface_copy);
+    if (!nurbs_copy || !operation(nurbs_copy)) {
+	delete surface_copy;
+	return false;
+    }
+    return replace_surface(brep, surface_id, surface_copy);
+}
+
+static bool
+edit_face_nurbs_surface(ON_Brep *brep, int face_id,
+	const std::function<bool(ON_NurbsSurface *)> &operation)
+{
+    if (!valid_brep(brep) || face_id < 0 || face_id >= brep->m_F.Count()) {
+	bu_log("face is out of range\n");
+	return false;
+    }
+
+    ON_BrepFace &face = brep->m_F[face_id];
+    const int surface_id = face.m_si;
+    if (surface_id < 0 || surface_id >= brep->m_S.Count())
+	return false;
+
+    const ON_NurbsSurface *surface = dynamic_cast<const ON_NurbsSurface *>(brep->m_S[surface_id]);
+    if (!surface) {
+	bu_log("face %d does not reference a NURBS surface\n", face_id);
+	return false;
+    }
+
+    ON_Surface *surface_copy = surface->DuplicateSurface();
+    ON_NurbsSurface *nurbs_copy = dynamic_cast<ON_NurbsSurface *>(surface_copy);
+    if (!nurbs_copy || !operation(nurbs_copy)) {
+	delete surface_copy;
+	return false;
+    }
+
+    if (brep->SurfaceUseCount(surface_id, 2) > 1) {
+	const int new_surface_id = brep->AddSurface(surface_copy);
+	if (new_surface_id < 0) {
+	    delete surface_copy;
+	    return false;
+	}
+	face.m_si = new_surface_id;
+	face.DestroyRuntimeCache(true);
+	face.SetProxySurface(surface_copy);
+	brep->DestroyRuntimeCache(true);
+	return true;
+    }
+
+    return replace_surface(brep, surface_id, surface_copy);
+}
+
+static bool
+nurbs_surface_cv_support(const ON_NurbsSurface *surface, int dir, int cv_id,
+	ON_Interval *support)
+{
+    if (!surface || !support || dir < 0 || dir > 1
+	    || cv_id < 0 || cv_id >= surface->CVCount(dir))
+	return false;
+
+    const int order = surface->Order(dir);
+    const int knot_count = surface->KnotCount(dir);
+    if (order < 2 || knot_count < 2)
+	return false;
+
+    /*
+     * openNURBS stores the standard knot vector without its first and last
+     * repeated entries.  Convert the full-vector support indices
+     * [cv_id, cv_id + order] to openNURBS knot indices.
+     */
+    const int full_left = cv_id;
+    const int full_right = cv_id + order;
+    const double left = (full_left <= 0)
+	? surface->Knot(dir, 0)
+	: surface->Knot(dir, full_left - 1);
+    const double right = (full_right >= knot_count + 1)
+	? surface->Knot(dir, knot_count - 1)
+	: surface->Knot(dir, full_right - 1);
+
+    support->Set(left, right);
+    return support->IsIncreasing();
+}
+
+}
 
 void *brep_create()
 {
@@ -34,8 +240,15 @@ void *brep_create()
     return (void *)brep;
 }
 
+bool brep_is_valid(const ON_Brep *brep)
+{
+    return brep && brep->IsValid(NULL);
+}
+
 int brep_vertex_create(ON_Brep *brep, ON_3dPoint point)
 {
+    if (!valid_brep(brep))
+	return -1;
     ON_BrepVertex& v = brep->NewVertex(point);
     v.m_tolerance = 0.0;
     return brep->m_V.Count() - 1;
@@ -43,16 +256,47 @@ int brep_vertex_create(ON_Brep *brep, ON_3dPoint point)
 
 bool brep_vertex_remove(ON_Brep *brep, int v_id)
 {
-    if (v_id < 0 || v_id >= brep->m_V.Count()) {
+    if (!valid_brep(brep) || v_id < 0 || v_id >= brep->m_V.Count()) {
 	bu_log("v_id is out of range\n");
 	return false;
     }
+
+    for (int ei = 0; ei < brep->m_E.Count(); ++ei) {
+	const ON_BrepEdge &edge = brep->m_E[ei];
+	if (edge.m_vi[0] == v_id || edge.m_vi[1] == v_id) {
+	    bu_log("vertex %d is referenced by brep edge %d\n", v_id, ei);
+	    return false;
+	}
+    }
+    for (int ti = 0; ti < brep->m_T.Count(); ++ti) {
+	const ON_BrepTrim &trim = brep->m_T[ti];
+	if (trim.m_vi[0] == v_id || trim.m_vi[1] == v_id) {
+	    bu_log("vertex %d is referenced by brep trim %d\n", v_id, ti);
+	    return false;
+	}
+    }
+
     brep->m_V.Remove(v_id);
+    for (int vi = v_id; vi < brep->m_V.Count(); ++vi)
+	brep->m_V[vi].m_vertex_index = vi;
+    for (int ei = 0; ei < brep->m_E.Count(); ++ei) {
+	ON_BrepEdge &edge = brep->m_E[ei];
+	if (edge.m_vi[0] > v_id) --edge.m_vi[0];
+	if (edge.m_vi[1] > v_id) --edge.m_vi[1];
+    }
+    for (int ti = 0; ti < brep->m_T.Count(); ++ti) {
+	ON_BrepTrim &trim = brep->m_T[ti];
+	if (trim.m_vi[0] > v_id) --trim.m_vi[0];
+	if (trim.m_vi[1] > v_id) --trim.m_vi[1];
+    }
+    brep->DestroyRuntimeCache(true);
     return true;
 }
 
 int brep_curve2d_make_line(ON_Brep *brep, const ON_2dPoint &from, const ON_2dPoint &to)
 {
+    if (!valid_brep(brep))
+	return -1;
     ON_Curve* c2 = new ON_LineCurve(from, to);
     c2->SetDomain(0.0, 1.0);
     brep->m_C2.Append(c2);
@@ -61,16 +305,30 @@ int brep_curve2d_make_line(ON_Brep *brep, const ON_2dPoint &from, const ON_2dPoi
 
 bool brep_curve2d_remove(ON_Brep *brep, int curve_id)
 {
-    if (curve_id < 0 || curve_id >= brep->m_C2.Count()) {
+    if (!valid_brep(brep) || curve_id < 0 || curve_id >= brep->m_C2.Count()) {
 	bu_log("curve_id is out of range\n");
 	return false;
     }
+
+    if (brep->TrimCurveUseCount(curve_id, 1) > 0) {
+	bu_log("curve2d %d is referenced by a brep trim\n", curve_id);
+	return false;
+    }
+
+    delete brep->m_C2[curve_id];
     brep->m_C2.Remove(curve_id);
+    for (int ti = 0; ti < brep->m_T.Count(); ++ti) {
+	if (brep->m_T[ti].m_c2i > curve_id)
+	    --brep->m_T[ti].m_c2i;
+    }
+    brep->DestroyRuntimeCache(true);
     return true;
 }
 
 int brep_curve_make(ON_Brep *brep, const ON_3dPoint &position)
 {
+    if (!valid_brep(brep))
+	return -1;
     ON_NurbsCurve *curve = ON_NurbsCurve::New(3, true, 3, 4);
     curve->SetCV(0, ON_3dPoint(-0.1, -1.5, 0));
     curve->SetCV(1, ON_3dPoint(0.1, -0.5, 0));
@@ -102,7 +360,7 @@ int brep_curve_in(ON_Brep *brep, bool is_rational, int order, int cv_count, std:
 
 ON_NurbsCurve *brep_get_nurbs_curve(ON_Brep *brep, int curve_id)
 {
-    if (curve_id < 0 || curve_id >= brep->m_C3.Count()) {
+    if (!valid_brep(brep) || curve_id < 0 || curve_id >= brep->m_C3.Count()) {
 	bu_log("curve_id is out of range\n");
 	return NULL;
     }
@@ -117,7 +375,7 @@ ON_NurbsCurve *brep_get_nurbs_curve(ON_Brep *brep, int curve_id)
 
 ON_NurbsSurface *brep_get_nurbs_surface(ON_Brep *brep, int surface_id)
 {
-    if (surface_id < 0 || surface_id >= brep->m_S.Count()) {
+    if (!valid_brep(brep) || surface_id < 0 || surface_id >= brep->m_S.Count()) {
 	bu_log("surface_id is out of range\n");
 	return NULL;
     }
@@ -173,76 +431,119 @@ int brep_curve_copy(ON_Brep *brep, int curve_id)
 
 bool brep_curve_remove(ON_Brep *brep, int curve_id)
 {
-    if (curve_id < 0 || curve_id >= brep->m_C3.Count()) {
+    if (!valid_brep(brep) || curve_id < 0 || curve_id >= brep->m_C3.Count()) {
 	bu_log("curve_id is out of range\n");
 	return false;
     }
+
+    if (curve3d_referenced(brep, curve_id)) {
+	bu_log("curve %d is referenced by a brep edge\n", curve_id);
+	return false;
+    }
+
+    delete brep->m_C3[curve_id];
     brep->m_C3.Remove(curve_id);
+    for (int ei = 0; ei < brep->m_E.Count(); ++ei) {
+	if (brep->m_E[ei].m_c3i > curve_id)
+	    --brep->m_E[ei].m_c3i;
+    }
+    brep->DestroyRuntimeCache(true);
     return true;
 }
 
 bool brep_curve_move(ON_Brep *brep, int curve_id, const ON_3dVector &point)
 {
-    /// the curve could be a NURBS curve or not
-    if (curve_id < 0 || curve_id >= brep->m_C3.Count()) {
+    if (!valid_brep(brep) || curve_id < 0 || curve_id >= brep->m_C3.Count()) {
 	bu_log("curve_id is out of range\n");
+	return false;
+    }
+    if (curve3d_referenced(brep, curve_id)) {
+	bu_log("curve %d is referenced by a brep edge\n", curve_id);
 	return false;
     }
     ON_Curve *curve = brep->m_C3[curve_id];
     if (!curve) {
 	return false;
     }
-    return curve->Translate(point);
+    ON_Curve *curve_copy = curve->DuplicateCurve();
+    if (!curve_copy || !curve_copy->Translate(point)) {
+	delete curve_copy;
+	return false;
+    }
+    return replace_curve3d(brep, curve_id, curve_copy);
 }
 
 bool brep_curve_set_cv(ON_Brep *brep, int curve_id, int cv_id, const ON_4dPoint &point)
 {
-    ON_NurbsCurve *curve = brep_get_nurbs_curve(brep, curve_id);
-    if (!curve) {
-	return false;
-    }
-    return curve->SetCV(cv_id, point);
+    return edit_nurbs_curve(brep, curve_id, false,
+	    [cv_id, &point](ON_NurbsCurve *curve) {
+		return curve->SetCV(cv_id, point);
+	    });
+}
+
+bool brep_curve_set_weight(ON_Brep *brep, int curve_id, int cv_id, double weight)
+{
+    return edit_nurbs_curve(brep, curve_id, false,
+	    [cv_id, weight](ON_NurbsCurve *curve) {
+		return ON_IsValid(weight) && weight > 0.0 && curve->SetWeight(cv_id, weight);
+	    });
 }
 
 bool brep_curve_reverse(ON_Brep *brep, int curve_id)
 {
-    ON_NurbsCurve *curve = brep_get_nurbs_curve(brep, curve_id);
-    if (!curve) {
-	return false;
-    }
-    return curve->Reverse();
+    return edit_nurbs_curve(brep, curve_id, false,
+	    [](ON_NurbsCurve *curve) {
+		return curve->Reverse();
+	    });
 }
 
 bool brep_curve_insert_knot(ON_Brep *brep, int curve_id, double knot, int multiplicity)
 {
-    ON_NurbsCurve *curve = brep_get_nurbs_curve(brep, curve_id);
-    if (!curve) {
+    return edit_nurbs_curve(brep, curve_id, true,
+	    [knot, multiplicity](ON_NurbsCurve *curve) {
+		return curve->InsertKnot(knot, multiplicity);
+	    });
+}
+
+bool brep_curve_clamp(ON_Brep *brep, int curve_id, int end)
+{
+    if (end < 0 || end > 2)
 	return false;
-    }
-    return curve->InsertKnot(knot, multiplicity);
+    return edit_nurbs_curve(brep, curve_id, true,
+	    [end](ON_NurbsCurve *curve) {
+		return curve->ClampEnd(end);
+	    });
+}
+
+bool brep_curve_elevate_degree(ON_Brep *brep, int curve_id, int desired_degree)
+{
+    return edit_nurbs_curve(brep, curve_id, true,
+	    [desired_degree](ON_NurbsCurve *curve) {
+		return desired_degree >= curve->Degree()
+		    && curve->IncreaseDegree(desired_degree);
+	    });
 }
 
 bool brep_curve_trim(ON_Brep *brep, int curve_id, double t0, double t1)
 {
-    ON_NurbsCurve *curve = brep_get_nurbs_curve(brep, curve_id);
-    if (!curve) {
-	return false;
-    }
-    ON_Interval interval(t0, t1);
-    return curve->Trim(interval);
+    return edit_nurbs_curve(brep, curve_id, false,
+	    [t0, t1](ON_NurbsCurve *curve) {
+		ON_Interval interval(t0, t1);
+		return interval.IsIncreasing() && curve->Trim(interval);
+	    });
 }
 
 bool brep_curve_split(ON_Brep *brep, int curve_id, double t)
 {
     ON_NurbsCurve *curve = brep_get_nurbs_curve(brep, curve_id);
-    if (!curve) {
+    if (!curve || curve3d_referenced(brep, curve_id)) {
 	return false;
     }
     ON_Curve *curve1 = NULL;
     ON_Curve *curve2 = NULL;
     bool flag = curve->Split(t, curve1, curve2);
     if (flag) {
-	brep->m_C3.Remove(curve_id);
+	brep_curve_remove(brep, curve_id);
 	brep->AddEdgeCurve(curve1);
 	brep->AddEdgeCurve(curve2);
 	bu_log("old curve removed, id: %d, new curve id: %d, %d\n", curve_id, brep->m_C3.Count() - 2, brep->m_C3.Count() - 1);
@@ -254,19 +555,24 @@ int brep_curve_join(ON_Brep *brep, int curve_id_1, int curve_id_2)
 {
     ON_NurbsCurve *curve1 = brep_get_nurbs_curve(brep, curve_id_1);
     ON_NurbsCurve *curve2 = brep_get_nurbs_curve(brep, curve_id_2);
-    if (!curve1 || !curve2) {
+    if (!curve1 || !curve2 || curve_id_1 == curve_id_2
+	    || curve3d_referenced(brep, curve_id_1)
+	    || curve3d_referenced(brep, curve_id_2)) {
 	return -1;
     }
 
+    ON_NurbsCurve curve1_copy(*curve1);
+    ON_NurbsCurve curve2_copy(*curve2);
+
     /// force move ends of the two curves to the same location
-    if (!ON_ForceMatchCurveEnds(*curve1, 1, *curve2, 0)) {
+    if (!ON_ForceMatchCurveEnds(curve1_copy, 1, curve2_copy, 0)) {
 	bu_log("ON_ForceMatchCurveEnds failed\n");
 	return -1;
     }
 
     ON_SimpleArray<const ON_Curve *> in_curves;
-    in_curves.Append(curve1);
-    in_curves.Append(curve2);
+    in_curves.Append(&curve1_copy);
+    in_curves.Append(&curve2_copy);
 
     ON_SimpleArray<ON_Curve *> out_curves;
     /// join the two curves
@@ -278,10 +584,15 @@ int brep_curve_join(ON_Brep *brep, int curve_id_1, int curve_id_2)
 
     /// remove the two curves.
     /// Remark: the index of m_C3 is massed up after removing the curves!
-    brep->m_C3.Remove(curve_id_1);
-    brep->m_C3.Remove(curve_id_2 - (curve_id_1 < curve_id_2 ? 1 : 0));
+    int high_id = curve_id_1 > curve_id_2 ? curve_id_1 : curve_id_2;
+    int low_id = curve_id_1 < curve_id_2 ? curve_id_1 : curve_id_2;
+    if (!brep_curve_remove(brep, high_id) || !brep_curve_remove(brep, low_id)) {
+	for (int i = 0; i < out_curves.Count(); ++i)
+	    delete out_curves[i];
+	return -1;
+    }
 
-    return brep->AddEdgeCurve(*out_curves.At(0));
+    return brep->AddEdgeCurve(out_curves[0]);
 }
 
 int brep_surface_make(ON_Brep *brep, const ON_3dPoint &position)
@@ -433,47 +744,113 @@ int brep_surface_interpCrv(ON_Brep *brep, int cv_count_x, int cv_count_y, std::v
 
 bool brep_surface_move(ON_Brep *brep, int surface_id, const ON_3dVector &point)
 {
-    /// the surface could be a NURBS surface or not
-    if (surface_id < 0 || surface_id >= brep->m_S.Count()) {
+    if (!valid_brep(brep) || surface_id < 0 || surface_id >= brep->m_S.Count()) {
 	bu_log("surface_id is out of range\n");
+	return false;
+    }
+    if (surface_referenced(brep, surface_id)) {
+	bu_log("surface %d is referenced by a brep face\n", surface_id);
 	return false;
     }
     ON_Surface *surface = brep->m_S[surface_id];
     if (!surface) {
 	return false;
     }
-    return surface->Translate(point);
+    ON_Surface *surface_copy = surface->DuplicateSurface();
+    if (!surface_copy || !surface_copy->Translate(point)) {
+	delete surface_copy;
+	return false;
+    }
+    return replace_surface(brep, surface_id, surface_copy);
 }
 
 bool brep_surface_set_cv(ON_Brep *brep, int surface_id, int cv_id_u, int cv_id_v, const ON_4dPoint &point)
 {
-    ON_NurbsSurface *surface = brep_get_nurbs_surface(brep, surface_id);
-    if (!surface) {
+    return edit_nurbs_surface(brep, surface_id, false,
+	    [cv_id_u, cv_id_v, &point](ON_NurbsSurface *surface) {
+		return surface->SetCV(cv_id_u, cv_id_v, point);
+	    });
+}
+
+bool brep_surface_set_weight(ON_Brep *brep, int surface_id, int cv_id_u, int cv_id_v, double weight)
+{
+    return edit_nurbs_surface(brep, surface_id, false,
+	    [cv_id_u, cv_id_v, weight](ON_NurbsSurface *surface) {
+		return ON_IsValid(weight) && weight > 0.0
+		    && surface->SetWeight(cv_id_u, cv_id_v, weight);
+	    });
+}
+
+bool brep_surface_reverse(ON_Brep *brep, int surface_id, int dir)
+{
+    if (dir < 0 || dir > 1)
 	return false;
-    }
-    return surface->SetCV(cv_id_u, cv_id_v, point);
+    return edit_nurbs_surface(brep, surface_id, false,
+	    [dir](ON_NurbsSurface *surface) {
+		return surface->Reverse(dir);
+	    });
+}
+
+bool brep_surface_transpose(ON_Brep *brep, int surface_id)
+{
+    return edit_nurbs_surface(brep, surface_id, false,
+	    [](ON_NurbsSurface *surface) {
+		return surface->Transpose();
+	    });
+}
+
+bool brep_surface_insert_knot(ON_Brep *brep, int surface_id, int dir, double knot, int multiplicity)
+{
+    if (dir < 0 || dir > 1)
+	return false;
+    return edit_nurbs_surface(brep, surface_id, true,
+	    [dir, knot, multiplicity](ON_NurbsSurface *surface) {
+		return surface->InsertKnot(dir, knot, multiplicity);
+	    });
+}
+
+bool brep_surface_clamp(ON_Brep *brep, int surface_id, int dir, int end)
+{
+    if (dir < 0 || dir > 1 || end < 0 || end > 2)
+	return false;
+    return edit_nurbs_surface(brep, surface_id, true,
+	    [dir, end](ON_NurbsSurface *surface) {
+		return surface->ClampEnd(dir, end);
+	    });
+}
+
+bool brep_surface_elevate_degree(ON_Brep *brep, int surface_id, int dir, int desired_degree)
+{
+    if (dir < 0 || dir > 1)
+	return false;
+    return edit_nurbs_surface(brep, surface_id, true,
+	    [dir, desired_degree](ON_NurbsSurface *surface) {
+		return desired_degree >= surface->Degree(dir)
+		    && surface->IncreaseDegree(dir, desired_degree);
+	    });
 }
 
 bool brep_surface_trim(ON_Brep *brep, int surface_id, int dir, double t0, double t1)
 {
-    ON_NurbsSurface *surface = brep_get_nurbs_surface(brep, surface_id);
-    if (!surface) {
+    if (dir < 0 || dir > 1)
 	return false;
-    }
-    ON_Interval interval(t0, t1);
-    return surface->Trim(dir, interval);
+    return edit_nurbs_surface(brep, surface_id, false,
+	    [dir, t0, t1](ON_NurbsSurface *surface) {
+		ON_Interval interval(t0, t1);
+		return interval.IsIncreasing() && surface->Trim(dir, interval);
+	    });
 }
 
 bool brep_surface_split(ON_Brep *brep, int surface_id, int dir, double t)
 {
     ON_NurbsSurface *surface = brep_get_nurbs_surface(brep, surface_id);
-    if (!surface) {
+    if (!surface || dir < 0 || dir > 1 || surface_referenced(brep, surface_id)) {
 	return false;
     }
     ON_Surface *surf1=NULL, *surf2=NULL;
     bool flag = surface->Split(dir, t, surf1, surf2);
     if (flag) {
-	brep->m_S.Remove(surface_id);
+	brep_surface_remove(brep, surface_id);
 	brep->AddSurface(surf1);
 	brep->AddSurface(surf2);
     bu_log("brep_surface_split: split surface %d into %d and %d\n", surface_id, brep->m_S.Count()-2, brep->m_S.Count()-1);
@@ -518,38 +895,58 @@ int brep_surface_tensor_product(ON_Brep *brep, int curve_id0, int curve_id1)
 
 int brep_surface_revolution(ON_Brep *brep, int curve_id0, ON_3dPoint line_start, ON_3dPoint line_end, double angle)
 {
-
     ON_NurbsCurve *curve0 = brep_get_nurbs_curve(brep, curve_id0);
-    if(!curve0) {
+    ON_Line line(line_start, line_end);
+    if (!curve0 || !line.IsValid() || !ON_IsValid(angle)
+	    || std::fabs(angle) <= ON_ZERO_TOLERANCE) {
 	return -1;
     }
-    ON_RevSurface* rev_surf = ON_RevSurface::New();
-    ON_Line line = ON_Line(line_start, line_end);
-    if(angle < ON_ZERO_TOLERANCE) {
+
+    if (angle < 0.0) {
 	angle = -angle;
-    line.Reverse();
+	line.Reverse();
     }
-    if (angle > 2 * ON_PI) {
+    if (angle > 2 * ON_PI)
 	angle = 2 * ON_PI;
+
+    ON_RevSurface *rev_surf = ON_RevSurface::New();
+    rev_surf->m_curve = curve0->DuplicateCurve();
+    if (!rev_surf->m_curve) {
+	delete rev_surf;
+	return -1;
     }
-    rev_surf->m_curve = curve0;
     rev_surf->m_axis = line;
     rev_surf->m_angle = ON_Interval(0, angle);
 
-    // Get the NURBS form of the surface
     ON_NurbsSurface *nurbs_surface = ON_NurbsSurface::New();
-    rev_surf->GetNurbForm(*nurbs_surface, 0.0);
+    const int nurbs_status = rev_surf->GetNurbForm(*nurbs_surface, 0.0);
     delete rev_surf;
+    if (nurbs_status <= 0 || !nurbs_surface->IsValid(NULL)) {
+	delete nurbs_surface;
+	return -1;
+    }
     return brep->AddSurface(nurbs_surface);
 }
 
 bool brep_surface_remove(ON_Brep *brep, int surface_id)
 {
-    if (surface_id < 0 || surface_id >= brep->m_S.Count()) {
+    if (!valid_brep(brep) || surface_id < 0 || surface_id >= brep->m_S.Count()) {
 	bu_log("surface_id is out of range\n");
 	return false;
     }
+
+    if (surface_referenced(brep, surface_id)) {
+	bu_log("surface %d is referenced by a brep face\n", surface_id);
+	return false;
+    }
+
+    delete brep->m_S[surface_id];
     brep->m_S.Remove(surface_id);
+    for (int fi = 0; fi < brep->m_F.Count(); ++fi) {
+	if (brep->m_F[fi].m_si > surface_id)
+	    --brep->m_F[fi].m_si;
+    }
+    brep->DestroyRuntimeCache(true);
     return true;
 }
 
@@ -580,6 +977,165 @@ bool brep_face_reverse(ON_Brep *brep, int face)
     }
     ON_BrepFace& f = brep->m_F[face];
     f.m_bRev = !f.m_bRev;
+    return true;
+}
+
+bool brep_face_cv_is_topology_safe(const ON_Brep *brep, int face, int cv_id_u, int cv_id_v)
+{
+    if (!brep || face < 0 || face >= brep->m_F.Count())
+	return false;
+
+    const ON_BrepFace &brep_face = brep->m_F[face];
+    const ON_NurbsSurface *surface =
+	dynamic_cast<const ON_NurbsSurface *>(brep_face.SurfaceOf());
+    if (!surface)
+	return false;
+
+    ON_Interval u_support;
+    ON_Interval v_support;
+    if (!nurbs_surface_cv_support(surface, 0, cv_id_u, &u_support)
+	    || !nurbs_surface_cv_support(surface, 1, cv_id_v, &v_support))
+	return false;
+
+    const ON_Interval u_domain = surface->Domain(0);
+    const ON_Interval v_domain = surface->Domain(1);
+    const auto support_intersects =
+	[](double bbox_min, double bbox_max, const ON_Interval &support,
+		const ON_Interval &domain, bool clamped_start_cv,
+		bool clamped_end_cv) {
+	    /*
+	     * A basis function is zero at the open ends of its support.
+	     * The first/last basis of a clamped vector is the exception at
+	     * the corresponding surface-domain end.
+	     */
+	    if (bbox_max > support.Min() + ON_ZERO_TOLERANCE
+		    && bbox_min < support.Max() - ON_ZERO_TOLERANCE)
+		return true;
+	    if (clamped_start_cv
+		    && bbox_min <= domain.Min() + ON_ZERO_TOLERANCE
+		    && bbox_max >= domain.Min() - ON_ZERO_TOLERANCE)
+		return true;
+	    if (clamped_end_cv
+		    && bbox_min <= domain.Max() + ON_ZERO_TOLERANCE
+		    && bbox_max >= domain.Max() - ON_ZERO_TOLERANCE)
+		return true;
+	    return false;
+	};
+    const bool u_clamped_start_cv =
+	cv_id_u == 0 && surface->IsClamped(0, 0);
+    const bool u_clamped_end_cv =
+	cv_id_u == surface->CVCount(0) - 1 && surface->IsClamped(0, 1);
+    const bool v_clamped_start_cv =
+	cv_id_v == 0 && surface->IsClamped(1, 0);
+    const bool v_clamped_end_cv =
+	cv_id_v == surface->CVCount(1) - 1 && surface->IsClamped(1, 1);
+
+    for (int fli = 0; fli < brep_face.m_li.Count(); ++fli) {
+	const int loop_id = brep_face.m_li[fli];
+	if (loop_id < 0 || loop_id >= brep->m_L.Count())
+	    return false;
+	const ON_BrepLoop &loop = brep->m_L[loop_id];
+	for (int lti = 0; lti < loop.m_ti.Count(); ++lti) {
+	    const int trim_id = loop.m_ti[lti];
+	    if (trim_id < 0 || trim_id >= brep->m_T.Count())
+		return false;
+	    const ON_BrepTrim &trim = brep->m_T[trim_id];
+	    if (trim.m_c2i < 0 || trim.m_c2i >= brep->m_C2.Count()
+		    || !brep->m_C2[trim.m_c2i])
+		return false;
+
+	    ON_BoundingBox trim_bbox;
+	    if (!brep->m_C2[trim.m_c2i]->GetBoundingBox(trim_bbox, false)
+		    || !trim_bbox.IsValid())
+		return false;
+
+	    const bool intersects_u = support_intersects(
+		    trim_bbox.m_min.x, trim_bbox.m_max.x, u_support, u_domain,
+		    u_clamped_start_cv, u_clamped_end_cv);
+	    const bool intersects_v = support_intersects(
+		    trim_bbox.m_min.y, trim_bbox.m_max.y, v_support, v_domain,
+		    v_clamped_start_cv, v_clamped_end_cv);
+	    if (intersects_u && intersects_v)
+		return false;
+	}
+    }
+
+    return true;
+}
+
+bool brep_face_set_cv(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, const ON_4dPoint &point)
+{
+    if (!brep_face_cv_is_topology_safe(brep, face, cv_id_u, cv_id_v)) {
+	bu_log("face %d CV (%d,%d) influences a trimming edge\n",
+		face, cv_id_u, cv_id_v);
+	return false;
+    }
+    return edit_face_nurbs_surface(brep, face,
+	    [cv_id_u, cv_id_v, &point](ON_NurbsSurface *surface) {
+		return surface->SetCV(cv_id_u, cv_id_v,
+			ON::euclidean_rational, &point.x);
+	    });
+}
+
+bool brep_face_translate_cv(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, const ON_3dVector &delta)
+{
+    if (!brep_face_cv_is_topology_safe(brep, face, cv_id_u, cv_id_v)) {
+	bu_log("face %d CV (%d,%d) influences a trimming edge\n",
+		face, cv_id_u, cv_id_v);
+	return false;
+    }
+    return edit_face_nurbs_surface(brep, face,
+	    [cv_id_u, cv_id_v, &delta](ON_NurbsSurface *surface) {
+		ON_4dPoint cv;
+		if (!surface->GetCV(cv_id_u, cv_id_v, ON::euclidean_rational, &cv.x))
+		    return false;
+		cv.x += delta.x;
+		cv.y += delta.y;
+		cv.z += delta.z;
+		return surface->SetCV(cv_id_u, cv_id_v, ON::euclidean_rational, &cv.x);
+	    });
+}
+
+bool brep_face_set_weight(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, double weight)
+{
+    if (!brep_face_cv_is_topology_safe(brep, face, cv_id_u, cv_id_v)) {
+	bu_log("face %d CV (%d,%d) influences a trimming edge\n",
+		face, cv_id_u, cv_id_v);
+	return false;
+    }
+    return edit_face_nurbs_surface(brep, face,
+	    [cv_id_u, cv_id_v, weight](ON_NurbsSurface *surface) {
+		return ON_IsValid(weight) && weight > 0.0
+		    && surface->SetWeight(cv_id_u, cv_id_v, weight);
+	    });
+}
+
+bool brep_face_reverse_parameter(ON_Brep *brep, int face, int dir)
+{
+    if (!valid_brep(brep) || face < 0 || face >= brep->m_F.Count()
+	    || dir < 0 || dir > 1)
+	return false;
+
+    ON_Brep trial(*brep);
+    if (!trial.m_F[face].Reverse(dir))
+	return false;
+    if (brep->IsValid(NULL) && !trial.IsValid(NULL))
+	return false;
+    *brep = trial;
+    return true;
+}
+
+bool brep_face_transpose(ON_Brep *brep, int face)
+{
+    if (!valid_brep(brep) || face < 0 || face >= brep->m_F.Count())
+	return false;
+
+    ON_Brep trial(*brep);
+    if (!trial.m_F[face].Transpose())
+	return false;
+    if (brep->IsValid(NULL) && !trial.IsValid(NULL))
+	return false;
+    *brep = trial;
     return true;
 }
 

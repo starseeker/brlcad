@@ -22,6 +22,7 @@ set(
   notes/TODO.shaded_displays
   notes/apitrace.txt
   notes/brep.txt
+  notes/ayam_nurbs_editing.md
   notes/bu_opt_design_notes.txt
   notes/cvs.txt
   notes/debugging_example.txt

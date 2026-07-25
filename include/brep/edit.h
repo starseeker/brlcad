@@ -49,6 +49,12 @@ extern "C++"
 #include <vector>
 
     /**
+     * Run openNURBS structural and geometric validity checks.
+     */
+    BREP_EXPORT extern bool
+    brep_is_valid(const ON_Brep *brep);
+
+    /**
      * create a brep vertex
      */
     BREP_EXPORT extern int
@@ -124,6 +130,13 @@ extern "C++"
     brep_curve_set_cv(ON_Brep *brep, int curve_id, int cv_id, const ON_4dPoint &point);
 
     /**
+     * Set a curve control vertex weight.  Referenced edge curves are
+     * rejected because changing a weight can move the edge locus.
+     */
+    BREP_EXPORT extern bool
+    brep_curve_set_weight(ON_Brep *brep, int curve_id, int cv_id, double weight);
+
+    /**
      * reverse parameterizatrion by negating all knots
      * and reversing the order of the control vertices.
      */
@@ -135,6 +148,19 @@ extern "C++"
      */
     BREP_EXPORT extern bool
     brep_curve_insert_knot(ON_Brep *brep, int curve_id, double knot, int multiplicity);
+
+    /**
+     * Clamp a curve end without changing its locus.
+     * end = 0: start, 1: end, 2: both.
+     */
+    BREP_EXPORT extern bool
+    brep_curve_clamp(ON_Brep *brep, int curve_id, int end);
+
+    /**
+     * Elevate a curve to desired_degree without changing its locus.
+     */
+    BREP_EXPORT extern bool
+    brep_curve_elevate_degree(ON_Brep *brep, int curve_id, int desired_degree);
 
     /**
      * trim a curve using a parameter range
@@ -205,6 +231,45 @@ extern "C++"
     brep_surface_set_cv(ON_Brep *brep, int surface_id, int cv_id_u, int cv_id_v, const ON_4dPoint &point);
 
     /**
+     * Set a surface control vertex weight.  Referenced face surfaces are
+     * rejected; use brep_face_set_weight() for face-aware editing.
+     */
+    BREP_EXPORT extern bool
+    brep_surface_set_weight(ON_Brep *brep, int surface_id, int cv_id_u, int cv_id_v, double weight);
+
+    /**
+     * Reverse an unreferenced surface parameter direction.
+     */
+    BREP_EXPORT extern bool
+    brep_surface_reverse(ON_Brep *brep, int surface_id, int dir);
+
+    /**
+     * Transpose the parameter directions of an unreferenced surface.
+     */
+    BREP_EXPORT extern bool
+    brep_surface_transpose(ON_Brep *brep, int surface_id);
+
+    /**
+     * Insert a surface knot without changing its locus.
+     */
+    BREP_EXPORT extern bool
+    brep_surface_insert_knot(ON_Brep *brep, int surface_id, int dir, double knot, int multiplicity);
+
+    /**
+     * Clamp a surface end without changing its locus.
+     * end = 0: start, 1: end, 2: both.
+     */
+    BREP_EXPORT extern bool
+    brep_surface_clamp(ON_Brep *brep, int surface_id, int dir, int end);
+
+    /**
+     * Elevate a surface direction to desired_degree without changing its
+     * locus.
+     */
+    BREP_EXPORT extern bool
+    brep_surface_elevate_degree(ON_Brep *brep, int surface_id, int dir, int desired_degree);
+
+    /**
      * trim a surface using a parameter range
      * dir = 0: u direction
      * dir = 1: v direction
@@ -265,6 +330,50 @@ extern "C++"
      */
     BREP_EXPORT extern bool
     brep_face_reverse(ON_Brep *brep, int face);
+
+    /**
+     * Return true when changing the specified face CV cannot alter any of
+     * the face's trimming-edge loci.  The test is conservative: a CV is
+     * considered unsafe when its tensor-product basis support intersects
+     * the parameter-space bounding box of any face trim.
+     */
+    BREP_EXPORT extern bool
+    brep_face_cv_is_topology_safe(const ON_Brep *brep, int face, int cv_id_u, int cv_id_v);
+
+    /**
+     * Set a face surface CV, isolating the surface first when it is shared
+     * by more than one face.  The edit is rejected if the CV basis support
+     * intersects a face trim; use a coupled boundary editing operation for
+     * such changes.
+     */
+    BREP_EXPORT extern bool
+    brep_face_set_cv(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, const ON_4dPoint &point);
+
+    /**
+     * Translate a face surface CV in Euclidean space while preserving its
+     * rational weight.
+     */
+    BREP_EXPORT extern bool
+    brep_face_translate_cv(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, const ON_3dVector &delta);
+
+    /**
+     * Set a face surface CV weight, isolating a shared surface first.
+     */
+    BREP_EXPORT extern bool
+    brep_face_set_weight(ON_Brep *brep, int face, int cv_id_u, int cv_id_v, double weight);
+
+    /**
+     * Reverse a face parameter direction and update its parameter-space
+     * trims.  Shared surfaces are isolated by openNURBS.
+     */
+    BREP_EXPORT extern bool
+    brep_face_reverse_parameter(ON_Brep *brep, int face, int dir);
+
+    /**
+     * Transpose a face surface and its parameter-space trims.
+     */
+    BREP_EXPORT extern bool
+    brep_face_transpose(ON_Brep *brep, int face);
 
     /**
      * create a brep face loop

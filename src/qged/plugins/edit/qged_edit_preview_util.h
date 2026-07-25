@@ -225,6 +225,20 @@ qged_edit_preview_lines_replace(struct qged_edit_feature_ref ref,
 int
 qged_edit_feature_clear_geometry(struct qged_edit_feature_ref ref);
 
+/**
+ * Replace an edit-preview feature with the standard wireframe plot of an
+ * in-memory primitive.  This keeps preview generation independent of the
+ * database copy being edited.
+ */
+int
+qged_edit_feature_replace_primitive_wireframe(
+	struct qged_edit_feature_ref ref,
+	struct db_i *dbip,
+	struct rt_db_internal *ip,
+	const mat_t mat,
+	const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol);
+
 
 static inline int
 qged_edit_feature_replace_bot_face_lines(struct qged_edit_feature_ref ref,

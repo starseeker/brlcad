@@ -281,6 +281,34 @@ main(int argc, char *argv[])
         }
     }
 
+    /*
+     * The B-rep editor has a reusable libqtcad event filter and an rt_edit
+     * transaction, but must remain safe before either a database or view is
+     * attached.
+     */
+    IQgToolFactory *brep_tool_factory = nullptr;
+    for (IQgToolFactory *fac : tools) {
+	if (fac && fac->descriptor().id ==
+		QStringLiteral("org.brlcad.qged.edit.brep")) {
+	    brep_tool_factory = fac;
+	    break;
+	}
+    }
+    TCHECK(brep_tool_factory != nullptr, "B-rep edit IQgToolFactory found by id");
+    if (brep_tool_factory) {
+	QgToolBase *tool = brep_tool_factory->create(&ctx, nullptr);
+	TCHECK(tool != nullptr, "B-rep edit factory creates a tool");
+	if (tool) {
+	    QgToolPaletteElement *el = tool->paletteElement();
+	    TCHECK(el != nullptr, "B-rep edit tool creates a palette element");
+	    tool->refresh();
+	    tool->onDbChanged();
+	    tool->onViewChanged();
+	    TCHECK(true, "B-rep edit tool is safe without ged/view");
+	    delete tool;
+	}
+    }
+
     /* ================================================================
      * 11. Enable/disable round-trip.
      * ================================================================ */

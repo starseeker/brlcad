@@ -1,0 +1,464 @@
+AYAM NURBS EDITING MIGRATION FOR BRL-CAD
+========================================
+
+Status: first implementation tranche complete
+Last updated: 2026-07-25
+
+
+1. PURPOSE
+----------
+
+This document records the broad goals, design, current implementation state,
+and remaining work for bringing useful Ayam-style NURBS editing capabilities
+to BRL-CAD.  It is intended as a project handoff and roadmap.  The detailed
+source survey and licensing notes are in:
+
+    doc/notes/ayam_nurbs_editing.md
+
+The project is not a literal port of Ayam.  Its goal is to reproduce useful
+editing behavior using BRL-CAD's openNURBS/libbrep geometry, librt primitive
+editing, libged command and database transaction, and libqtcad/qged user
+interface layers.
+
+
+2. BROAD GOALS
+--------------
+
+The desired end state is a practical NURBS B-rep editing system that:
+
+  * supports direct control-point and rational-weight editing;
+  * supplies the common shape-preserving NURBS representation operations;
+  * adds curve and surface construction, fitting, and fairing operations in
+    manageable stages;
+  * exposes the same core operations to library clients, command-line users,
+    and qged;
+  * previews edits interactively but commits them as explicit database
+    transactions;
+  * preserves valid B-rep topology under normal operation;
+  * refuses edits it cannot perform without invalidating geometric topology;
+  * uses openNURBS and independently implemented algorithms rather than
+    importing code with uncertain provenance; and
+  * keeps persistent parametric construction history optional and separate
+    from one-shot geometry editing.
+
+Ayam is a useful behavioral and user-interface reference, but BRL-CAD must
+apply stronger B-rep validity rules.  Ayam is principally a NURBS curve and
+surface modeler.  It does not generally solve the coupled manifold-boundary
+problem presented by an ON_Brep.
+
+
+3. WHAT DEPENDS ON AYAM OBJECT STRUCTURES
+----------------------------------------
+
+Ayam's NPatch and NCurve objects contain the data expected for editable
+tensor-product NURBS: control vertices, weights, orders, knot vectors,
+dimensions, closure flags, display state, and, for patches, child trimming
+objects.  Algorithms in Ayam often accept these structures directly, but the
+mathematics does not require them.
+
+ConcatNP, Skin, Sweep, Swing, Birail, Gordon, Revolve, Extrude, Cap, Bevel,
+and similar Ayam objects additionally represent construction parameters and
+references to input objects.  Ayam's notification system regenerates their
+cached NPatch output when an input changes.
+
+Those roles map to BRL-CAD as follows:
+
+  Ayam NURBS math
+      -> libbrep operations on ON_NurbsCurve, ON_NurbsSurface, and ON_Brep
+
+  Safe primitive mutation
+      -> trial-copy operations and complete B-rep validation in libbrep
+
+  Generic primitive editing
+      -> librt edit descriptors
+
+  Commands and database transactions
+      -> libged
+
+  Picking, control nets, preview, and property controls
+      -> reusable libqtcad components and qged object editor plugins
+
+  Live procedural construction history
+      -> a possible future BRL-CAD dependency/history representation
+
+Consequently, Ayam's object structures do not prevent reimplementation in
+BRL-CAD.  One-shot concatenate, skin, sweep, Gordon, fitting, or refinement
+commands need geometry algorithms, not an Ayam scene graph.  Only a request
+that such an operation remain live and automatically regenerate after its
+inputs change requires construction-history infrastructure.
+
+Ayam object structures and notification code should not be transplanted.
+Their ownership, caching, and dependency assumptions do not match BRL-CAD's
+database and edit-transaction model.
+
+
+4. DESIGN PRINCIPLES
+--------------------
+
+4.1 One implementation of each operation
+
+Core geometry and topology changes belong in libbrep.  librt and libged
+should adapt those operations to their editing and command interfaces rather
+than reimplementing the math.  libqtcad and qged should invoke the same edit
+path used without a GUI.
+
+4.2 Transactional mutation
+
+Potentially failing operations should be applied to a trial copy.  The
+original object is replaced only after the operation and required validity
+checks succeed.  Failed edits must leave the source B-rep unchanged.
+
+4.3 Preserve openNURBS references and proxies
+
+Replacing curves and surfaces must preserve or correctly update B-rep array
+indices, edge and face references, proxy domains, reversal flags, and
+transposition state.  Removal must either reject referenced geometry or
+repair every affected index.
+
+4.4 Distinguish locus-preserving and locus-changing operations
+
+Knot insertion, compatible knot refinement, clamping, and degree elevation
+can preserve the geometric locus.  They are relatively safe even when the
+geometry is referenced, provided proxy state is retained and the complete
+B-rep remains valid.
+
+Moving a control point or changing a rational weight normally changes the
+locus.  A raw surface operation is not sufficient when that surface belongs
+to a trimmed face.  Such edits must use a face-aware operation with an
+explicit topology policy.
+
+4.5 Keep editing and construction history separate
+
+Immediate geometry operations are the priority.  A future procedural object
+system should call the same libbrep algorithms, but it should not be a
+prerequisite for useful B-rep editing.
+
+
+5. TOPOLOGY-PRESERVATION CONTRACT
+---------------------------------
+
+For a trimmed ON_Brep face, a boundary commonly has these coupled geometric
+representations:
+
+  * the first face's surface and 2-D trim curve;
+  * the shared 3-D edge curve and its endpoint vertices;
+  * the second face's 2-D trim curve; and
+  * the second face's surface.
+
+A boundary-influencing surface CV can move the surface locus under a trim.
+Updating only that CV leaves no guarantee that the 3-D edge lies on either
+surface or that the two faces remain joined.  Pulling back a replacement trim
+does not repair an adjacent surface that no longer contains the new edge.
+
+The current policy is deliberately conservative:
+
+  * determine the tensor-product basis support of the selected face CV;
+  * if that support intersects any trim on the face, show and select the CV
+    but mark it locked;
+  * allow an interior edit only when its support does not reach a trim;
+  * isolate the face's surface first if it is shared by another face;
+  * apply the operation to a trial B-rep; and
+  * reject failure without changing the original.
+
+This protects topology more strongly than Ayam.  Ayam can maintain a patch's
+local closure convention and regenerate dependent construction objects, but
+it does not generally reconcile both B-rep faces, their trims, a shared edge,
+and vertices after an arbitrary boundary change.
+
+Planned topology capability levels are:
+
+  1. Interior CV and weight edits that cannot influence a trim.  Implemented.
+
+  2. Compatible natural-boundary and periodic-seam edits.  Couple matching
+     boundary CVs and weights, update the shared 3-D edge, update all relevant
+     representations, and validate the complete trial B-rep.
+
+  3. Optional G1/G2 coupling for compatible natural boundaries by constraining
+     the adjacent control rows.
+
+  4. Arbitrary trimmed-boundary propagation.  Treat this as a separate
+     constrained deformation and surface-intersection project.  Never silently
+     degrade to a topology-invalidating surface edit.
+
+Level 2 appears achievable on top of the present foundation when adjacent
+surfaces have compatible natural clamped boundaries.  Level 4 is substantially
+more difficult and should not be represented as ordinary control-point
+dragging until it is robust.
+
+
+6. TARGET CAPABILITIES
+----------------------
+
+Good early and medium-term candidates:
+
+  * control-point and rational-weight inspection/editing;
+  * curve and surface reversal and surface U/V transposition;
+  * knot insertion/refinement;
+  * clamping;
+  * degree elevation;
+  * knot-domain rescaling;
+  * curve/surface compatibility;
+  * split and extraction;
+  * ruled surfaces and build-from-curves;
+  * revolve, extrude, skin, and basic sweep operations;
+  * interpolation and approximation with documented tolerances;
+  * control-net, weight, curvature, boundary, and lock-state visualization.
+
+Candidates requiring explicit tolerances and conditioning policy:
+
+  * knot removal and removal of superfluous knots;
+  * degree reduction;
+  * fairing and constrained fitting;
+  * curve and surface reparameterization;
+  * Gordon, birail, and more general sweep construction.
+
+Poor early candidates because of topology and robustness requirements:
+
+  * arbitrary trimmed-surface concatenation;
+  * arbitrary trim propagation after boundary deformation;
+  * general offset surfaces;
+  * automatic bevels and caps;
+  * projection-to-trim workflows involving singularities, multiple loops, or
+    self-intersections.
+
+
+7. CURRENT IMPLEMENTATION STATE
+-------------------------------
+
+7.1 libbrep
+
+The first tranche adds or hardens:
+
+  * complete B-rep validity checking;
+  * reference-safe vertex, curve, and surface removal/index remapping;
+  * replacement of curves and surfaces while preserving edge/face proxies;
+  * rational curve and surface weight editing;
+  * curve knot insertion, clamping, and degree elevation;
+  * surface knot insertion, clamping, degree elevation, reversal, and
+    transposition;
+  * face-aware topology-safety classification for a CV;
+  * face-aware CV position, translation, and weight editing;
+  * isolation of a surface shared by multiple faces before a local face edit;
+  * face parameter reversal and transposition using B-rep-aware openNURBS
+    operations; and
+  * copy-before-commit behavior for the new operations.
+
+The public declarations are in:
+
+    include/brep/edit.h
+
+The implementation is in:
+
+    src/libbrep/edit.cpp
+
+The work also corrects ownership in the surface-of-revolution path so an input
+curve is not accidentally destroyed by an ON_RevSurface temporary.
+
+7.2 librt
+
+The B-rep primitive edit descriptor currently exposes:
+
+    ECMD_BREP_SRF_SELECT
+    ECMD_BREP_SRF_CV_MOVE
+    ECMD_BREP_SRF_CV_SET
+    ECMD_BREP_SRF_CV_WEIGHT
+
+Selection reports the Euclidean position of rational CVs and whether the CV
+is topology-safe.  Move, absolute placement, and weight changes use the
+face-aware libbrep operations and reject locked boundary-influencing CVs.
+
+The implementation is in:
+
+    src/librt/primitives/brep/edbrep.cpp
+
+7.3 libged
+
+The "brep ... geo" command family now includes curve weight, clamp, and degree
+elevation operations; surface weight, reversal, transposition, knot insertion,
+clamp, and elevation operations; face CV safety, position, move, weight,
+parameter reversal, and transposition operations; and complete B-rep
+validation.
+
+The command implementation is in:
+
+    src/libged/brep/geometry.cpp
+
+7.4 libqtcad and qged
+
+QgBrepFilter, QgBrepPickCVFilter, and QgBrepMoveCVFilter provide reusable
+projected CV picking, selection state, topology-safe/locked reporting, and
+view-plane dragging through librt editing.
+
+The public interface and implementation are:
+
+    include/qtcad/QgBrepFilter.h
+    src/libqtcad/QgBrepFilter.cpp
+
+The qged B-rep object editor provides:
+
+  * object loading;
+  * face CV picking and dragging;
+  * selected CV coordinates and rational weight controls;
+  * visible control-net and primitive-wireframe preview;
+  * visible locked boundary points;
+  * in-memory editing during interaction; and
+  * explicit Apply and Reset actions.
+
+It refuses to apply an invalid result when the original B-rep was valid.  The
+plugin is in:
+
+    src/qged/plugins/edit/brep/
+
+The reusable edit-preview helper was extended to replace the displayed
+primitive wireframe from an in-memory primitive:
+
+    src/qged/plugins/edit/qged_edit_preview_util.h
+    src/qged/plugins/edit/qged_edit_preview_util.cpp
+
+7.5 Tests and build state
+
+Focused regression coverage currently verifies:
+
+  * reference-safe removal and array-index updates;
+  * preservation of edge and face proxy state;
+  * locus preservation after knot insertion and degree elevation;
+  * shared-surface isolation;
+  * rational Euclidean CV behavior;
+  * rejection of trim-influencing CV edits without modifying the input;
+  * valid face reversal/transposition and locus mapping;
+  * librt selection, position, translation, weight, and boundary-lock paths;
+  * discovery and null-context safety of the qged B-rep plugin; and
+  * corrected surface-of-revolution ownership.
+
+The focused libbrep, librt, and Qt plugin tests pass.  The Qt-enabled build was
+configured with the existing external dependency build:
+
+    cmake -S . -B /tmp/brlcad_ayam_build -G Ninja \
+          -DBRLCAD_EXT_DIR=/home/cyapp/bext/build \
+          -DBRLCAD_ENABLE_QT=ON
+
+Do not rebuild bext from scratch for this work.  Continue to use
+/home/cyapp/bext/build unless that location is deliberately changed.
+
+
+8. SOLVERS
+----------
+
+No additional solver dependency is currently needed.  Eigen provides the
+necessary building blocks:
+
+  * HouseholderQR or ColPivHouseholderQR for ordinary dense systems;
+  * CompleteOrthogonalDecomposition for rank-deficient systems;
+  * JacobiSVD for small ill-conditioned systems and diagnostics; and
+  * SparseQR, SimplicialLDLT, or iterative sparse solvers for larger fairness
+    and constraint grids.
+
+Least-squares implementations should solve the original system directly
+rather than forming normal equations, which square the condition number.
+
+A new third-party nonlinear or sparse direct solver should be considered only
+after a specific operation and benchmark show that Eigen is inadequate.  Any
+candidate must then receive an exact package, version, backend, and transitive
+license review.
+
+
+9. LICENSING AND PROVENANCE
+---------------------------
+
+Ayam's top-level license is permissive and broadly BSD-like, but it requires
+retaining its copyright notices and including its notice verbatim with copied
+or closely derived code.  The presence of that license does not resolve every
+file's provenance.
+
+Known cautions include:
+
+  * ayam/src/nurbs/act.c describes a Golub-Reinsch SVD translation as merely
+    "believed to be in the public domain";
+  * ayam/src/nurbs/nb.c records adaptation from The NURBS Book, NURBS++, and
+    a Kalman-library LU implementation;
+  * ayam/src/nurbs/rtess.c cites academic tessellation example code; and
+  * ayam/src/nurbs/stess.c identifies an intersection routine taken from the
+    c.g.algorithms FAQ.
+
+The implementation policy is:
+
+  1. Prefer openNURBS and existing BRL-CAD facilities.
+  2. Reimplement published algorithms from mathematical descriptions using
+     BRL-CAD data structures, naming, failure policy, and original tests.
+  3. Use Eigen rather than importing Ayam's solver code.
+  4. Copy or closely translate Ayam code only after file-level provenance
+     review and with all required notices.
+
+The first tranche follows this policy and does not depend on the ambiguous
+Ayam solver code.
+
+
+10. REMAINING WORK
+------------------
+
+Immediate engineering follow-up:
+
+  * exercise the qged editor manually on representative trimmed, rational,
+    periodic, multi-face, and transformed database objects;
+  * improve selection and preview performance for large control nets;
+  * add undo/redo integration and dirty-edit/close handling as required by
+    qged's editing conventions;
+  * test nested instance transforms and ensure picking, dragging, and preview
+    consistently use the complete model/view transform;
+  * expand malformed-input, singular-weight, tolerance, periodic-surface, and
+    proxy-domain regression cases;
+  * review command help, generated edit-command identifiers, API comments,
+    and public naming before final integration; and
+  * run the broader BRL-CAD regression suite.
+
+Next topology milestone:
+
+  * specify the exact class of compatible natural boundaries initially
+    supported;
+  * identify both incident faces, orientations, trims, edge, and vertices;
+  * make degrees and knot vectors compatible without changing either locus;
+  * define C0 boundary control-point and rational-weight coupling;
+  * update the 3-D edge and required trim/proxy data;
+  * perform all changes on a complete B-rep trial copy;
+  * validate edge-on-surface tolerances, loop validity, and manifold
+    consistency before commit; and
+  * add two-face, reversed-orientation, rational, seam, and failure rollback
+    tests.
+
+After compatible C0 boundaries:
+
+  * investigate G1/G2 coupled row constraints;
+  * add knot removal and degree reduction with explicit geometric error
+    bounds;
+  * add curve/surface compatibility, splitting, and extraction workflows;
+  * implement interpolation, approximation, and fairing with Eigen;
+  * add one-shot skin, sweep, Gordon, birail, concatenate, cap, and bevel
+    operations in an order driven by user value and achievable robustness;
+  * extend qged from direct CV manipulation to operation-specific panels and
+    previews; and
+  * decide whether BRL-CAD needs persistent procedural construction history.
+
+Long-term research/robustness work:
+
+  * constrained deformation of arbitrary trimmed faces;
+  * robust curve pullback and trim reconstruction;
+  * adjacent-surface deformation or face re-intersection;
+  * singularity, self-intersection, multiple-loop, and degeneracy handling;
+  * systematic tolerance policy across surfaces, trims, edges, and vertices;
+  * robust offset, automatic cap, and bevel generation; and
+  * topology-aware multi-CV, region, symmetry, and continuity-constrained
+    interactive editing.
+
+
+11. DEFINITION OF SUCCESS
+-------------------------
+
+The migration is successful when BRL-CAD users can perform the useful Ayam
+NURBS editing and construction operations through both commands and qged,
+with consistent library behavior, clear tolerances and failure reports, and
+no routine path that silently leaves a previously valid manifold B-rep
+geometrically inconsistent.
+
+Feature count alone is not the success criterion.  Safe transaction behavior,
+topology preservation, predictable numerical behavior, file-level licensing
+clarity, and reusable architecture are equally required.

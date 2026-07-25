@@ -42,6 +42,7 @@ set(
   QgAccordion.cpp
   QgAppExecDialog.cpp
   QgAttributesModel.cpp
+  QgBrepFilter.cpp
   QgColorRGB.cpp
   QgConsole.cpp
   QgConsoleListener.cpp

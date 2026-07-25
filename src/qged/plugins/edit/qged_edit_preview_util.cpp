@@ -245,6 +245,19 @@ qged_edit_feature_clear_geometry(struct qged_edit_feature_ref ref)
 	    qged_edit_feature_ref_to_ged(ref));
 }
 
+int
+qged_edit_feature_replace_primitive_wireframe(
+	struct qged_edit_feature_ref ref,
+	struct db_i *dbip,
+	struct rt_db_internal *ip,
+	const mat_t mat,
+	const struct bg_tess_tol *ttol,
+	const struct bn_tol *tol)
+{
+    return ged_view_feature_primitive_wireframe_replace(
+	    qged_edit_feature_ref_to_ged(ref), dbip, ip, mat, ttol, tol);
+}
+
 
 /*
  * Local Variables:

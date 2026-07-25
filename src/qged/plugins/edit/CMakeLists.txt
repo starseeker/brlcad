@@ -6,6 +6,7 @@ add_subdirectory(ell)
 add_subdirectory(extrude)
 add_subdirectory(revolve)
 add_subdirectory(bot)
+add_subdirectory(brep)
 
 # Things to check include:
 #
