@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "BObol/BDatabaseSource.h"
+#include "BObol/BDrawCache.h"
 #include "BObol/BEvaluatedPoints.h"
 #include "BObol/BExportAction.h"
 #include "BObol/BLodMeshShape.h"
@@ -71,6 +72,7 @@
 #include <limits>
 #include <map>
 #include <math.h>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <stdint.h>
@@ -828,6 +830,7 @@ BObolCompactInstanceSummary::BObolCompactInstanceSummary(void) :
     selected(FALSE),
     highlighted(FALSE)
 {
+    meshAssetBounds.makeEmpty();
 }
 
 BObolExternalLineSet::BObolExternalLineSet(void) :
@@ -1628,6 +1631,7 @@ cad_source_mesh_request_from_bot(BObolSourceMeshRequest &request,
     request.faceCount = static_cast<uint64_t>(bot->num_faces);
     request.pointCount = static_cast<uint64_t>(bot->num_vertices);
     request.bounds = bounds;
+    request.meshAssetBounds = bounds;
     return 1;
 }
 
@@ -2518,6 +2522,20 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
     }
 }
 
+struct compact_stream_lod_reuse_entry {
+    struct bg_trimesh_pca_signature signature;
+    std::array<int64_t, 3> bucket = {};
+    fastf_t comparisonTolerance = VUNITIZE_TOL;
+    bool signatureValid = false;
+    struct directory *dp = NULL;
+    std::string cacheKey;
+    BObolSourceMeshRequest sourceMeshRequest;
+    size_t vertexCount = 0;
+    size_t faceCount = 0;
+    unsigned char mode = 0;
+    unsigned char orientation = 0;
+};
+
 struct realize_walk_data {
     realize_walk_data(void) :
 	source(NULL),
@@ -2557,6 +2575,15 @@ struct realize_walk_data {
     void *material_sweep;
     std::unordered_set<std::string> compact_seen_instances;
     std::unordered_map<std::string, uint32_t> compact_occurrence_counts;
+    /* Online transformed-copy representatives for progressive streaming.
+     * Keeping signatures and directory identities (not mesh arrays) preserves
+     * first-leaf latency while bounding matching memory to one candidate plus
+     * one temporarily re-imported representative. */
+    std::vector<compact_stream_lod_reuse_entry> stream_lod_reuse;
+    size_t stream_lod_asset_hits = 0;
+    size_t stream_lod_pca_deferred = 0;
+    size_t stream_lod_pca_evaluated = 0;
+    size_t stream_lod_pca_reused = 0;
 };
 
 static int cad_vlist_part_geometry(const SoBRLVListShape *shape,
@@ -2580,6 +2607,51 @@ static void compact_add_occurrence(SoBRLDatabaseSource *source,
 	int &unsupported);
 static SbBool source_bounds_for_realized_node(const SoNode *node,
 	const SbMatrix &matrix, SbBox3f &bounds);
+static bool compact_stream_lod_transformed_reuse(
+	realize_walk_data *data, struct db_i *dbip, struct directory *dp,
+	const char *path, const std::string &cacheKey,
+	const struct rt_bot_internal *bot,
+	const BObolSourceMeshRequest &sourceMeshRequest);
+
+/* Multiple view controllers may detach and realize the same database root at
+ * the same time.  The persistent LoD asset map makes the second realization
+ * cheap only after the first has published it; without single-flight
+ * coordination both workers can import and PCA-match every large BoT in
+ * parallel.  Serialize first-use progressive realization per database/root,
+ * while unrelated roots and databases remain independent.  Weak entries keep
+ * the registry bounded after a flight finishes. */
+static std::shared_ptr<std::mutex>
+compact_stream_lod_realization_mutex(const struct db_i *dbip,
+	const char *treeName)
+{
+    static std::mutex registryMutex;
+    static std::unordered_map<std::string, std::weak_ptr<std::mutex>> registry;
+    static size_t acquisitions = 0;
+
+    std::string key = dbip && dbip->dbi_filename ?
+	dbip->dbi_filename : "<memory>";
+    key += '\n';
+    key += treeName ? treeName : "";
+
+    std::lock_guard<std::mutex> guard(registryMutex);
+    if ((++acquisitions & 0xffu) == 0) {
+	for (auto it = registry.begin(); it != registry.end();) {
+	    if (it->second.expired())
+		it = registry.erase(it);
+	    else
+		++it;
+	}
+    }
+    const auto found = registry.find(key);
+    if (found != registry.end()) {
+	std::shared_ptr<std::mutex> mutex = found->second.lock();
+	if (mutex)
+	    return mutex;
+    }
+    std::shared_ptr<std::mutex> mutex = std::make_shared<std::mutex>();
+    registry[key] = mutex;
+    return mutex;
+}
 
 /* Hand one just-realized occurrence to the progressive pump for incremental
  * streaming, if a sink is attached and the job has not been cancelled. */
@@ -5725,6 +5797,7 @@ compact_mesh_prefill_pca_bucket_key(const struct rt_bot_internal *bot,
 struct compact_mesh_prefill_pca {
     struct bg_trimesh_pca_signature signature;
     std::array<int64_t, 3> bucket;
+    fastf_t comparisonTolerance;
     bool eligible;
 };
 
@@ -5744,9 +5817,8 @@ compact_mesh_prefill_find_transformed_reuse(
     const auto computeSignature = [&](size_t i) {
 	compact_mesh_prefill_pca &entry = pca[i];
 	entry.eligible = false;
+	entry.comparisonTolerance = VUNITIZE_TOL;
 	const compact_mesh_prefill_job *job = jobs[i].get();
-	if (job && job->lodBacked)
-	    return;
 	const struct rt_bot_internal *bot = job ?
 	    compact_mesh_prefill_bot(*job) : NULL;
 	if (!compact_mesh_prefill_bot_cacheable(bot))
@@ -5757,6 +5829,17 @@ compact_mesh_prefill_find_transformed_reuse(
 	    return;
 	if (!compact_mesh_prefill_pca_bucket(entry.bucket, entry.signature.frame))
 	    return;
+	/* PCA accumulation and a baked xpush transform both incur floating-point
+	 * error proportional to object scale.  VUNITIZE_TOL alone is far too
+	 * strict for million-unit meshes.  Validate every vertex and identical
+	 * topology, but allow one part per billion of characteristic extent. */
+	const double characteristicExtent =
+	    static_cast<double>(entry.signature.frame.singular_values[0]) /
+	    sqrt(static_cast<double>(bot->num_vertices));
+	if (std::isfinite(characteristicExtent) && characteristicExtent > 0.0)
+	    entry.comparisonTolerance = static_cast<fastf_t>(std::max(
+		static_cast<double>(VUNITIZE_TOL),
+		characteristicExtent * 1.0e-9));
 	entry.eligible = true;
     };
 
@@ -5810,13 +5893,15 @@ compact_mesh_prefill_find_transformed_reuse(
 		compact_mesh_prefill_bot(*representative);
 	    const struct bg_trimesh_pca_signature &representativeSignature =
 		pca[candidateJob].signature;
-	    if (!compact_mesh_prefill_bot_semantics_match(representativeBot, bot) ||
+	    if (representative->lodBacked != job->lodBacked ||
+		!compact_mesh_prefill_bot_semantics_match(representativeBot, bot) ||
 		bg_trimesh_pca_equal(&representativeSignature,
 		    representativeBot->faces, representativeBot->num_faces,
 		    reinterpret_cast<const point_t *>(representativeBot->vertices),
 		    representativeBot->num_vertices, &signature, bot->faces,
 		    bot->num_faces, reinterpret_cast<const point_t *>(bot->vertices),
-		    bot->num_vertices, VUNITIZE_TOL) != 0)
+		    bot->num_vertices, std::max(pca[candidateJob].
+			comparisonTolerance, pca[i].comparisonTolerance)) != 0)
 		return false;
 
 	    mat_t representativeToCandidate;
@@ -5880,6 +5965,221 @@ compact_mesh_prefill_find_transformed_reuse(
 	broadCandidates[compact_mesh_prefill_pca_bucket_key(bot, bucket)].push_back(
 	    i);
     }
+}
+
+static void
+compact_mesh_prefill_release_internal(compact_mesh_prefill_job &job)
+{
+    if (!job.ownsInternal)
+	return;
+    rt_db_free_internal(&job.intern);
+    RT_DB_INTERNAL_INIT(&job.intern);
+    job.ownsInternal = false;
+}
+
+/* Importing every xpush-expanded copy before matching defeats reuse on the
+ * models where it matters most: the temporary internals alone may exceed
+ * memory.  This bounded path imports one candidate at a time, retains only
+ * unmatched static representatives, and releases every LoD-backed internal
+ * once its canonical source identity and rigid placement are known. */
+static void
+compact_mesh_prefill_import_filter_reuse_bounded(
+	compact_mesh_prefill_collect &collect, struct db_i *dbip)
+{
+    std::vector<std::unique_ptr<compact_mesh_prefill_job>> &jobs =
+	collect.jobs;
+    if (jobs.empty() || !dbip)
+	return;
+
+    const int drawMode = source_record_draw_mode(collect.source);
+    std::vector<std::unique_ptr<compact_mesh_prefill_job>> kept;
+    kept.reserve(jobs.size());
+    std::vector<compact_mesh_prefill_pca> pca;
+    pca.reserve(jobs.size());
+    std::unordered_map<unsigned long long, std::vector<size_t>> candidates;
+    std::unordered_map<std::string, std::vector<size_t>> broadCandidates;
+
+    for (std::unique_ptr<compact_mesh_prefill_job> &jobPtr : jobs) {
+	if (compact_mesh_prefill_cancelled(collect.cancel))
+	    break;
+	compact_mesh_prefill_job &imported = *jobPtr;
+	if (rt_db_get_internal(&imported.intern, imported.dp, dbip, NULL) < 0 ||
+	    !internal_payload_magic_valid(&imported.intern)) {
+	    collect.failed = 1;
+	    if (collect.diagnostic.getLength() == 0)
+		collect.diagnostic.sprintf(
+		    "%s: compact mesh internal fetch failed",
+		    imported.path.empty() ?
+			(imported.dp ? imported.dp->d_namep : "?") :
+			imported.path.c_str());
+	    continue;
+	}
+	imported.ownsInternal = true;
+	imported.sourceType = primitive_type_label(&imported.intern);
+
+	const int internalType = imported.intern.idb_type;
+	const bool wireInstead =
+	    (drawMode == BOBOL_LOD_DRAW_WIRE ||
+	     (drawMode == BOBOL_LOD_DRAW_SHADED_BOTS &&
+	      (!imported.intern.idb_meth ||
+	       !imported.intern.idb_meth->ft_indexed_face_set))) &&
+	    internalType != ID_BOT;
+	const bool special = internalType == ID_MATERIAL ||
+	    internalType == ID_PNTS ||
+	    primitive_uses_wire_in_mesh_mode(internalType);
+	if (wireInstead || special) {
+	    compact_mesh_prefill_release_internal(imported);
+	    continue;
+	}
+	if (internalType == ID_BOT &&
+	    collect.source->lodBotThreshold.getValue() > 0) {
+	    const struct rt_bot_internal *bot =
+		static_cast<const struct rt_bot_internal *>(
+		    imported.intern.idb_ptr);
+	    if (bot && bot->num_faces >=
+		collect.source->lodBotThreshold.getValue() &&
+		cad_source_mesh_request_from_bot(imported.sourceMeshRequest, bot) &&
+		cad_wire_part_geometry_from_aabb(
+		    imported.sourceMeshRequest.bounds, imported.geometry)) {
+		imported.sourceMeshRequest.meshAssetPath =
+		    imported.path.c_str();
+		imported.sourceMeshRequest.meshAssetName =
+		    imported.dp && imported.dp->d_namep ?
+			imported.dp->d_namep : "";
+		imported.lodBacked = true;
+		imported.success = true;
+	    }
+	}
+
+	kept.push_back(std::move(jobPtr));
+	const size_t i = kept.size() - 1;
+	compact_mesh_prefill_job *job = kept[i].get();
+	pca.emplace_back();
+	compact_mesh_prefill_pca &entry = pca.back();
+	entry.eligible = false;
+	entry.comparisonTolerance = VUNITIZE_TOL;
+	const struct rt_bot_internal *bot = compact_mesh_prefill_bot(*job);
+	if (!compact_mesh_prefill_bot_cacheable(bot) ||
+	    bg_trimesh_pca_get_signature(&entry.signature, bot->faces,
+		bot->num_faces,
+		reinterpret_cast<const point_t *>(bot->vertices),
+		bot->num_vertices, VUNITIZE_TOL, 1.0e-6) != BRLCAD_OK ||
+	    !compact_mesh_prefill_pca_bucket(entry.bucket,
+		entry.signature.frame)) {
+	    if (job->lodBacked)
+		compact_mesh_prefill_release_internal(*job);
+	    continue;
+	}
+	const double characteristicExtent =
+	    static_cast<double>(entry.signature.frame.singular_values[0]) /
+	    sqrt(static_cast<double>(bot->num_vertices));
+	if (std::isfinite(characteristicExtent) && characteristicExtent > 0.0)
+	    entry.comparisonTolerance = static_cast<fastf_t>(std::max(
+		static_cast<double>(VUNITIZE_TOL),
+		characteristicExtent * 1.0e-9));
+	entry.eligible = true;
+
+	const auto matchesCandidate = [&](size_t candidateJob) {
+	    compact_mesh_prefill_job *representative =
+		kept[candidateJob].get();
+	    bool releaseRepresentative = false;
+	    if (representative && !representative->ownsInternal) {
+		if (rt_db_get_internal(&representative->intern,
+			representative->dp, dbip, NULL) < 0 ||
+		    !internal_payload_magic_valid(&representative->intern))
+		    return false;
+		representative->ownsInternal = true;
+		releaseRepresentative = true;
+	    }
+	    const struct rt_bot_internal *representativeBot =
+		compact_mesh_prefill_bot(*representative);
+	    bool matched = representativeBot &&
+		representative->lodBacked == job->lodBacked &&
+		compact_mesh_prefill_bot_semantics_match(representativeBot,
+		    bot) &&
+		bg_trimesh_pca_equal(&pca[candidateJob].signature,
+		    representativeBot->faces, representativeBot->num_faces,
+		    reinterpret_cast<const point_t *>(
+			representativeBot->vertices),
+		    representativeBot->num_vertices, &entry.signature,
+		    bot->faces, bot->num_faces,
+		    reinterpret_cast<const point_t *>(bot->vertices),
+		    bot->num_vertices, std::max(
+			pca[candidateJob].comparisonTolerance,
+			entry.comparisonTolerance)) == 0;
+	    if (!matched) {
+		if (releaseRepresentative)
+		    compact_mesh_prefill_release_internal(*representative);
+		return false;
+	    }
+	    mat_t representativeToCandidate;
+	    matched = bg_pca_frame_relative_matrix(representativeToCandidate,
+		&pca[candidateJob].signature.frame,
+		&entry.signature.frame) == BRLCAD_OK;
+	    if (releaseRepresentative)
+		compact_mesh_prefill_release_internal(*representative);
+	    if (!matched)
+		return false;
+	    job->representative = representative;
+	    job->geometryTransform =
+		mat_to_sbmatrix(representativeToCandidate);
+	    return true;
+	};
+
+	bool reused = false;
+	const auto found = candidates.find(entry.signature.hash);
+	if (found != candidates.end()) {
+	    for (size_t candidateJob : found->second) {
+		if (matchesCandidate(candidateJob)) {
+		    reused = true;
+		    break;
+		}
+	    }
+	}
+	if (!reused) {
+	    for (int xoffset = -1; xoffset <= 1 && !reused; xoffset++) {
+		for (int yoffset = -1; yoffset <= 1 && !reused; yoffset++) {
+		    for (int zoffset = -1; zoffset <= 1 && !reused;
+			 zoffset++) {
+			std::array<int64_t, 3> nearby = entry.bucket;
+			const int offsets[3] = {xoffset, yoffset, zoffset};
+			for (size_t axis = 0; axis < nearby.size(); axis++)
+			    if (nearby[axis] !=
+				std::numeric_limits<int64_t>::min())
+				nearby[axis] += offsets[axis];
+			const auto broadFound = broadCandidates.find(
+			    compact_mesh_prefill_pca_bucket_key(bot, nearby));
+			if (broadFound == broadCandidates.end())
+			    continue;
+			for (size_t candidateJob : broadFound->second) {
+			    if (matchesCandidate(candidateJob)) {
+				reused = true;
+				break;
+			    }
+			}
+		    }
+		}
+	    }
+	}
+	if (reused) {
+	    job->success = true;
+	    compact_mesh_prefill_release_internal(*job);
+	    continue;
+	}
+	candidates[entry.signature.hash].push_back(i);
+	broadCandidates[compact_mesh_prefill_pca_bucket_key(
+	    bot, entry.bucket)].push_back(i);
+	if (job->lodBacked)
+	    compact_mesh_prefill_release_internal(*job);
+    }
+
+    jobs.swap(kept);
+    /* Progressive jobs have already produced their box and canonical source
+     * request.  The managed provider will import only the one representative
+     * whose PoP cache is actually requested. */
+    for (std::unique_ptr<compact_mesh_prefill_job> &job : jobs)
+	if (job && job->lodBacked)
+	    compact_mesh_prefill_release_internal(*job);
 }
 
 struct compact_mesh_prefill_workers {
@@ -6174,6 +6474,9 @@ compact_mesh_prefill_import_and_filter(compact_mesh_prefill_collect &collect,
 		cad_source_mesh_request_from_bot(job.sourceMeshRequest, bot) &&
 		cad_wire_part_geometry_from_aabb(job.sourceMeshRequest.bounds,
 		    job.geometry)) {
+		job.sourceMeshRequest.meshAssetPath = job.path.c_str();
+		job.sourceMeshRequest.meshAssetName =
+		    job.dp && job.dp->d_namep ? job.dp->d_namep : "";
 		/* The compact realization keeps only a box until the managed
 		 * service loads the view-selected PoP level. */
 		job.lodBacked = true;
@@ -6222,7 +6525,20 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
     /* Parallel import of the gathered unique leaves (formerly serial in the
      * walk), then drop the wire/special leaves the main walk handles. */
     const int64_t importStart = prefillTiming ? bu_gettime() : 0;
-    compact_mesh_prefill_import_and_filter(collect, dbip);
+    uint64_t encodedLeafBytes = 0;
+    for (const std::unique_ptr<compact_mesh_prefill_job> &job : collect.jobs) {
+	const uint64_t leafBytes = job && job->dp && job->dp->d_len > 0 ?
+	    static_cast<uint64_t>(job->dp->d_len) : 0;
+	encodedLeafBytes = UINT64_MAX - encodedLeafBytes < leafBytes ?
+	    UINT64_MAX : encodedLeafBytes + leafBytes;
+    }
+    const bool boundedReuse =
+	collect.jobs.size() > 1 &&
+	encodedLeafBytes > 512ULL * 1024ULL * 1024ULL;
+    if (boundedReuse)
+	compact_mesh_prefill_import_filter_reuse_bounded(collect, dbip);
+    else
+	compact_mesh_prefill_import_and_filter(collect, dbip);
     if (compact_mesh_prefill_cancelled(cancel))
 	return -1;
     if (collect.failed) {
@@ -6234,7 +6550,8 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
 	return 0;
 
     const int64_t reuseStart = prefillTiming ? bu_gettime() : 0;
-    compact_mesh_prefill_find_transformed_reuse(collect.jobs, cancel);
+    if (!boundedReuse)
+	compact_mesh_prefill_find_transformed_reuse(collect.jobs, cancel);
     if (compact_mesh_prefill_cancelled(cancel))
 	return -1;
     if (prefillTiming) {
@@ -6244,11 +6561,12 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
 	    if (jobPtr && jobPtr->representative)
 		reused++;
 	bu_log("[obol-timing] prefill: walk %.1f ms, import %.1f ms, "
-	    "find_reuse %.1f ms; %zu unique jobs, %zu reused via PCA\n",
+	    "find_reuse %.1f ms; %zu unique jobs, %zu reused via PCA%s\n",
 	    (double)(importStart - collectStart) / 1000.0,
 	    (double)(reuseStart - importStart) / 1000.0,
 	    (double)(bu_gettime() - reuseStart) / 1000.0,
-	    collect.jobs.size(), reused);
+	    collect.jobs.size(), reused,
+	    boundedReuse ? " (bounded import)" : "");
     }
     compact_mesh_prefill_workers workers;
     workers.jobs = &collect.jobs;
@@ -6282,9 +6600,12 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
 	    }
 	    const SbBox3f bounds = database_source_transform_bounds(
 		representative->bounds, job->geometryTransform);
+	    const bool lodBacked = job->lodBacked &&
+		representative->sourceMeshRequestValid;
 	    cache->storeMeshCadGeometryReference(job->cacheKey,
 		representative->geometry, job->geometryTransform,
-		job->sourceType.c_str(), "surface", &bounds, false, NULL);
+		job->sourceType.c_str(), "surface", &bounds, lodBacked,
+		lodBacked ? &representative->sourceMeshRequest : NULL);
 	    continue;
 	}
 	BObolSourceMeshRequest sourceMeshRequest = job->sourceMeshRequest;
@@ -6977,6 +7298,317 @@ realize_direct_leaf_mesh_compact(
     return source->setCompactOccurrence(occurrence) > 0 ? 1 : 0;
 }
 
+static bool
+compact_stream_pca_bucket(std::array<int64_t, 3> &bucket,
+	const struct bg_pca_frame &frame)
+{
+    for (size_t axis = 0; axis < bucket.size(); axis++) {
+	const double value = static_cast<double>(frame.singular_values[axis]);
+	if (value <= SMALL_FASTF) {
+	    bucket[axis] = std::numeric_limits<int64_t>::min();
+	    continue;
+	}
+	const double scaled = log2(value) * 4096.0;
+	if (!std::isfinite(scaled) ||
+	    scaled > static_cast<double>(std::numeric_limits<int64_t>::max()) ||
+	    scaled < static_cast<double>(std::numeric_limits<int64_t>::min()))
+	    return false;
+	bucket[axis] = static_cast<int64_t>(llround(scaled));
+    }
+    return true;
+}
+
+static bool
+compact_stream_lod_pca_signature(
+	compact_stream_lod_reuse_entry &entry,
+	const struct rt_bot_internal *bot)
+{
+    if (entry.signatureValid)
+	return true;
+    if (!bot || !bot->vertices || !bot->faces ||
+	!bot->num_vertices || !bot->num_faces ||
+	bg_trimesh_pca_get_signature(&entry.signature, bot->faces,
+	    bot->num_faces, reinterpret_cast<const point_t *>(bot->vertices),
+	    bot->num_vertices, VUNITIZE_TOL, 1.0e-6) != BRLCAD_OK ||
+	!compact_stream_pca_bucket(entry.bucket, entry.signature.frame))
+	return false;
+
+    const double characteristicExtent =
+	static_cast<double>(entry.signature.frame.singular_values[0]) /
+	sqrt(static_cast<double>(bot->num_vertices));
+    if (std::isfinite(characteristicExtent) && characteristicExtent > 0.0)
+	entry.comparisonTolerance = static_cast<fastf_t>(std::max(
+	    static_cast<double>(VUNITIZE_TOL),
+	    characteristicExtent * 1.0e-9));
+    entry.signatureValid = true;
+    return true;
+}
+
+static void
+compact_stream_lod_asset_record_store(struct db_i *dbip,
+	struct directory *objectDp,
+	const BObolSourceMeshRequest &objectRequest,
+	const BObolSourceMeshRequest &assetRequest,
+	const SbMatrix &assetToObject)
+{
+    if (!dbip || !objectDp || !objectDp->d_namep ||
+	assetRequest.meshAssetName.getLength() == 0 ||
+	objectRequest.bounds.isEmpty() || assetRequest.meshAssetBounds.isEmpty())
+	return;
+
+    BObolDrawLodAssetRecord record;
+    bobol_draw_lod_asset_record_init(&record);
+    bu_strlcpy(record.assetName,
+	assetRequest.meshAssetName.getString(), sizeof(record.assetName));
+    record.faceCount = assetRequest.faceCount;
+    record.pointCount = assetRequest.pointCount;
+    const SbVec3f objectMin = objectRequest.bounds.getMin();
+    const SbVec3f objectMax = objectRequest.bounds.getMax();
+    const SbVec3f assetMin = assetRequest.meshAssetBounds.getMin();
+    const SbVec3f assetMax = assetRequest.meshAssetBounds.getMax();
+    VSET(record.boundsMin, objectMin[0], objectMin[1], objectMin[2]);
+    VSET(record.boundsMax, objectMax[0], objectMax[1], objectMax[2]);
+    VSET(record.assetBoundsMin, assetMin[0], assetMin[1], assetMin[2]);
+    VSET(record.assetBoundsMax, assetMax[0], assetMax[1], assetMax[2]);
+    for (size_t row = 0; row < 4; row++)
+	for (size_t column = 0; column < 4; column++)
+	    record.assetToObject[column * 4 + row] =
+		static_cast<fastf_t>(assetToObject[row][column]);
+    (void)bobol_draw_lod_asset_cache_store(dbip, objectDp->d_namep,
+	&record);
+}
+
+static const BObolCachedPartGeometry *
+compact_stream_lod_cached_asset(realize_walk_data *data,
+	struct db_i *dbip, struct directory *dp,
+	const std::string &objectCacheKey)
+{
+    if (!data || !data->cache || !data->source || !dbip || !dp ||
+	!dp->d_namep || data->source->lodBotThreshold.getValue() == 0)
+	return NULL;
+
+    BObolDrawLodAssetRecord record;
+    if (bobol_draw_lod_asset_cache_get(dbip, dp->d_namep, &record) !=
+	BRLCAD_OK ||
+	record.faceCount < data->source->lodBotThreshold.getValue())
+	return NULL;
+
+    struct directory *assetDp =
+	db_lookup(dbip, record.assetName, LOOKUP_QUIET);
+    if (assetDp == RT_DIR_NULL)
+	return NULL;
+    BObolSourceMeshRequest assetRequest;
+    assetRequest.faceCount = record.faceCount;
+    assetRequest.pointCount = record.pointCount;
+    assetRequest.bounds = SbBox3f(
+	SbVec3f(record.assetBoundsMin[X], record.assetBoundsMin[Y],
+	    record.assetBoundsMin[Z]),
+	SbVec3f(record.assetBoundsMax[X], record.assetBoundsMax[Y],
+	    record.assetBoundsMax[Z]));
+    assetRequest.meshAssetBounds = assetRequest.bounds;
+    assetRequest.meshAssetName = record.assetName;
+    assetRequest.meshAssetPath = record.assetName;
+
+    std::string assetCacheKey = realize_geometry_cache_key(assetDp);
+    SbBox3f unusedBounds;
+    source_lod_cache_key_append(assetCacheKey, data->source, unusedBounds);
+    const BObolCachedPartGeometry *assetGeometry =
+	data->cache->findMeshCadGeometry(assetCacheKey);
+    if (!assetGeometry) {
+	Obol::PartGeometry generated;
+	if (!cad_wire_part_geometry_from_aabb(assetRequest.bounds, generated))
+	    return NULL;
+	data->cache->storeMeshCadGeometry(assetCacheKey, std::move(generated),
+	    "bot", "surface", &assetRequest.bounds, true, &assetRequest);
+	assetGeometry = data->cache->findMeshCadGeometry(assetCacheKey);
+    }
+    if (!assetGeometry || !assetGeometry->geometry ||
+	!assetGeometry->sourceMeshRequestValid)
+	return NULL;
+
+    const SbMatrix assetToObject = mat_to_sbmatrix(record.assetToObject);
+    if (objectCacheKey != assetCacheKey) {
+	const SbBox3f objectBounds(
+	    SbVec3f(record.boundsMin[X], record.boundsMin[Y],
+		record.boundsMin[Z]),
+	    SbVec3f(record.boundsMax[X], record.boundsMax[Y],
+		record.boundsMax[Z]));
+	data->cache->storeMeshCadGeometryReference(objectCacheKey,
+	    assetGeometry->geometry, assetToObject, "bot", "surface",
+	    &objectBounds, true, &assetGeometry->sourceMeshRequest);
+    }
+    data->stream_lod_asset_hits++;
+    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	bu_log("[obol-timing] stream LoD asset cache: %s -> %s\n",
+	    dp->d_namep, record.assetName);
+    return data->cache->findMeshCadGeometry(objectCacheKey);
+}
+
+static bool
+compact_stream_lod_transformed_reuse(
+	realize_walk_data *data, struct db_i *dbip, struct directory *dp,
+	const char *path, const std::string &cacheKey,
+	const struct rt_bot_internal *bot,
+	const BObolSourceMeshRequest &sourceMeshRequest)
+{
+    if (!data || !data->cache || !dbip || !dp || !bot || !bot->vertices ||
+	!bot->faces || !bot->num_vertices || !bot->num_faces ||
+	(bot->bot_flags & RT_BOT_HAS_SURFACE_NORMALS))
+	return false;
+
+    compact_stream_lod_reuse_entry candidate;
+    candidate.dp = dp;
+    candidate.cacheKey = cacheKey;
+    candidate.sourceMeshRequest = sourceMeshRequest;
+    candidate.sourceMeshRequest.meshAssetPath = path ? path : "";
+    candidate.sourceMeshRequest.meshAssetName =
+	dp->d_namep ? dp->d_namep : "";
+    candidate.vertexCount = bot->num_vertices;
+    candidate.faceCount = bot->num_faces;
+    candidate.mode = bot->mode;
+    candidate.orientation = bot->orientation;
+
+    /* Face/vertex counts, BoT mode, and orientation are exact, essentially
+     * free broad-phase invariants.  Most large assemblies contain unrelated
+     * meshes, so do not make the first occurrence of every shape pay for a
+     * full PCA traversal.  Keep it as an unevaluated representative and only
+     * calculate both signatures when a later occurrence could actually be a
+     * transformed copy. */
+    bool haveBroadCandidate = false;
+    for (const compact_stream_lod_reuse_entry &representative :
+	data->stream_lod_reuse) {
+	if (representative.vertexCount == candidate.vertexCount &&
+	    representative.faceCount == candidate.faceCount &&
+	    representative.mode == candidate.mode &&
+	    representative.orientation == candidate.orientation) {
+	    haveBroadCandidate = true;
+	    break;
+	}
+    }
+    if (!haveBroadCandidate) {
+	compact_stream_lod_asset_record_store(dbip, dp, sourceMeshRequest,
+	    candidate.sourceMeshRequest, SbMatrix::identity());
+	data->stream_lod_pca_deferred++;
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] stream PCA: %s registered deferred "
+		   "(no broad candidate)\n",
+		   dp->d_namep ? dp->d_namep : "?");
+	data->stream_lod_reuse.push_back(std::move(candidate));
+	return false;
+    }
+
+    if (!compact_stream_lod_pca_signature(candidate, bot)) {
+	compact_stream_lod_asset_record_store(dbip, dp, sourceMeshRequest,
+	    candidate.sourceMeshRequest, SbMatrix::identity());
+	data->stream_lod_reuse.push_back(std::move(candidate));
+	return false;
+    }
+    data->stream_lod_pca_evaluated++;
+
+    size_t plausibleCandidates = 0;
+    for (compact_stream_lod_reuse_entry &representative :
+	data->stream_lod_reuse) {
+	if (representative.vertexCount != candidate.vertexCount ||
+	    representative.faceCount != candidate.faceCount ||
+	    representative.mode != candidate.mode ||
+	    representative.orientation != candidate.orientation)
+	    continue;
+
+	struct rt_db_internal representativeInternal =
+	    RT_DB_INTERNAL_INIT_ZERO;
+	if (rt_db_get_internal(&representativeInternal, representative.dp,
+		dbip, NULL) < 0 ||
+	    representativeInternal.idb_type != ID_BOT ||
+	    !representativeInternal.idb_ptr) {
+	    if (representativeInternal.idb_ptr)
+		rt_db_free_internal(&representativeInternal);
+	    continue;
+	}
+	const struct rt_bot_internal *representativeBot =
+	    static_cast<const struct rt_bot_internal *>(
+		representativeInternal.idb_ptr);
+	if (!compact_stream_lod_pca_signature(representative,
+		representativeBot)) {
+	    rt_db_free_internal(&representativeInternal);
+	    continue;
+	}
+	bool nearby = true;
+	for (size_t axis = 0; axis < candidate.bucket.size(); axis++) {
+	    if (representative.bucket[axis] ==
+		    std::numeric_limits<int64_t>::min() ||
+		candidate.bucket[axis] ==
+		    std::numeric_limits<int64_t>::min()) {
+		if (representative.bucket[axis] != candidate.bucket[axis])
+		    nearby = false;
+		continue;
+	    }
+	    if (llabs(representative.bucket[axis] -
+		    candidate.bucket[axis]) > 1)
+		nearby = false;
+	}
+	if (!nearby) {
+	    rt_db_free_internal(&representativeInternal);
+	    continue;
+	}
+	plausibleCandidates++;
+	const fastf_t tolerance = std::max(
+	    representative.comparisonTolerance,
+	    candidate.comparisonTolerance);
+	const bool equal = bg_trimesh_pca_equal(&representative.signature,
+	    representativeBot->faces, representativeBot->num_faces,
+	    reinterpret_cast<const point_t *>(representativeBot->vertices),
+	    representativeBot->num_vertices, &candidate.signature, bot->faces,
+	    bot->num_faces, reinterpret_cast<const point_t *>(bot->vertices),
+	    bot->num_vertices, tolerance) == 0;
+	rt_db_free_internal(&representativeInternal);
+	if (!equal)
+	    continue;
+
+	mat_t representativeToCandidate;
+	if (bg_pca_frame_relative_matrix(representativeToCandidate,
+		&representative.signature.frame,
+		&candidate.signature.frame) != BRLCAD_OK)
+	    continue;
+	const BObolCachedPartGeometry *geometry =
+	    data->cache->findMeshCadGeometry(representative.cacheKey);
+	if (!geometry || !geometry->geometry ||
+	    !geometry->sourceMeshRequestValid)
+	    continue;
+	const SbMatrix transform =
+	    mat_to_sbmatrix(representativeToCandidate);
+	compact_stream_lod_asset_record_store(dbip, dp, sourceMeshRequest,
+	    geometry->sourceMeshRequest, transform);
+	const SbBox3f bounds = database_source_transform_bounds(
+	    geometry->bounds, transform);
+	data->cache->storeMeshCadGeometryReference(cacheKey,
+	    geometry->geometry, transform,
+	    geometry->sourceType.empty() ? "bot" :
+		geometry->sourceType.c_str(),
+	    geometry->geometryKind.empty() ? "surface" :
+		geometry->geometryKind.c_str(),
+	    &bounds, true, &geometry->sourceMeshRequest);
+	data->stream_lod_pca_reused++;
+	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	    bu_log("[obol-timing] stream PCA: %s reuses %s "
+		   "(tol %.6g, %zu candidates)\n",
+		   dp->d_namep ? dp->d_namep : "?",
+		   representative.dp && representative.dp->d_namep ?
+		       representative.dp->d_namep : "?",
+		   tolerance, plausibleCandidates);
+	return true;
+    }
+
+    compact_stream_lod_asset_record_store(dbip, dp, sourceMeshRequest,
+	candidate.sourceMeshRequest, SbMatrix::identity());
+    if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
+	bu_log("[obol-timing] stream PCA: %s registered "
+	       "(tol %.6g, %zu candidates)\n",
+	       dp->d_namep ? dp->d_namep : "?",
+	       candidate.comparisonTolerance, plausibleCandidates);
+    data->stream_lod_reuse.push_back(std::move(candidate));
+    return false;
+}
+
 static union tree *
     realize_mesh_leaf(struct db_tree_state *tsp,
 		      const struct db_full_path *pathp,
@@ -7022,6 +7654,11 @@ static union tree *
 	const BObolCachedPartGeometry *cachedMesh =
 	    data->cache->findMeshCadGeometry(cacheKey);
 	const bool hadCachedWire = cachedWire != NULL;
+	if (!cachedWire && !cachedMesh) {
+	    if (dp->d_minor_type == DB5_MINORTYPE_BRLCAD_BOT)
+		cachedMesh = compact_stream_lod_cached_asset(data,
+		    tsp->ts_dbip, dp, cacheKey);
+	}
 	if (!cachedWire && !cachedMesh) {
 	    owned_leaf_internal validInternal;
 	    struct rt_db_internal *localIntern =
@@ -7072,6 +7709,7 @@ static union tree *
 		Obol::PartGeometry generated;
 		BObolSourceMeshRequest sourceMeshRequest;
 		bool lodBacked = false;
+		bool transformedReuse = false;
 		const struct rt_bot_internal *bot = internalType == ID_BOT ?
 		    static_cast<const struct rt_bot_internal *>(
 			localIntern->idb_ptr) : NULL;
@@ -7083,6 +7721,17 @@ static union tree *
 			generated)) {
 		    generatedGeometry = 1;
 		    lodBacked = true;
+		    char *assetPath = db_path_to_string(pathp);
+		    sourceMeshRequest.meshAssetPath =
+			assetPath ? assetPath : dp->d_namep;
+		    sourceMeshRequest.meshAssetName = dp->d_namep;
+		    transformedReuse =
+			compact_stream_lod_transformed_reuse(data,
+			    tsp->ts_dbip, dp,
+			    sourceMeshRequest.meshAssetPath.getString(),
+			    cacheKey, bot, sourceMeshRequest);
+		    if (assetPath)
+			bu_free(assetPath, "stream LoD asset path");
 		} else {
 		    generatedGeometry = cad_mesh_part_geometry_from_internal(
 			localIntern, data->source, generated);
@@ -7092,10 +7741,11 @@ static union tree *
 		    (void)cad_mesh_append_hidden_line_edges(generated);
 		if (generatedGeometry) {
 		    const char *typeLabel = primitive_type_label(localIntern);
-		    data->cache->storeMeshCadGeometry(cacheKey,
-			std::move(generated), typeLabel, "surface", NULL,
-			lodBacked,
-			lodBacked ? &sourceMeshRequest : NULL);
+		    if (!transformedReuse)
+			data->cache->storeMeshCadGeometry(cacheKey,
+			    std::move(generated), typeLabel, "surface", NULL,
+			    lodBacked,
+			    lodBacked ? &sourceMeshRequest : NULL);
 		    cachedMesh = data->cache->findMeshCadGeometry(cacheKey);
 		}
 	    }
@@ -7405,7 +8055,8 @@ static union tree *
 	    &data->compact_index->entries.back() : NULL;
 	SbBox3f bounds = entry ?
 	    database_source_transform_bounds(
-		compact_part_geometry_bounds(entry->geometry), localMatrix) :
+		compact_part_geometry_bounds(entry->geometry),
+		entry->localTransform) :
 	    SbBox3f();
 	if (!bounds.isEmpty()) {
 	    data->compact_bounds.extendBy(bounds);
@@ -7638,7 +8289,12 @@ compact_sync_shape_summary_state(BObolCompactInstanceEntry &entry)
 {
     BObolRealizedShapeSummary &summary = entry.shapeSummary;
     summary.valid = TRUE;
-    summary.shapeKind = entry.meshGeometry ?
+    /* shapeKind describes the source primitive's semantic role, while the
+     * geometry flags describe the channels that can be drawn right now.  A
+     * progressive mesh initially owns only a wire proxy, but it must remain a
+     * mesh for LoD submission, picking identity, and exact export. */
+    summary.shapeKind = (entry.meshGeometry ||
+	(entry.lodBacked && entry.sourceMeshRequestValid)) ?
 	BObolRealizedShapeSummary::SHAPE_MESH :
 	BObolRealizedShapeSummary::SHAPE_VLIST;
     summary.path = entry.semantic.path;
@@ -8453,9 +9109,18 @@ cad_mesh_payload_part_geometry(const BObolLodMeshPayload &payload,
 	} else if (payload.normals.size() == payload.coordIndex.size()) {
 	    cornerNormals = payload.normals;
 	}
-	sanitize_triangle_normals(cornerNormals, mesh.positions, cornerIndices);
-	if (!canonicalize_corner_normal_mesh(mesh, cornerNormals))
-	    return 0;
+	/* An indexed scan mesh without authored normals must stay indexed.
+	 * Expanding flat corner normals here can turn N shared vertices into
+	 * three vertices per face (tens of millions for Lucy), defeating PoP
+	 * residency and creating multi-gigabyte transient maps.  Obol derives a
+	 * flat face normal in the fragment shader, or per triangle in its
+	 * immediate fallback, when this array remains empty. */
+	if (!cornerNormals.empty()) {
+	    sanitize_triangle_normals(cornerNormals, mesh.positions,
+		cornerIndices);
+	    if (!canonicalize_corner_normal_mesh(mesh, cornerNormals))
+		return 0;
+	}
 	geometry.shaded = mesh;
 	geometry.shadedCullBackfaces = shadedCullBackfaces != 0;
     }
@@ -9374,9 +10039,7 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
 	return;
     }
 
-    const bool meshOccurrence = input.occurrence.summary.shapeKind ==
-	BObolRealizedShapeSummary::SHAPE_MESH;
-    const char *partKind = meshOccurrence ? "mesh" :
+    const char *partKind = geometry->shaded ? "mesh" :
 	(geometry->points && !geometry->wire ? "point" : "wire");
     Obol::PartId partId;
     if (!compact_add_geometry_part_if_needed(index,
@@ -9401,11 +10064,10 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     entry.geometry = geometry;
     entry.wireGeometry = geometry->wire ? TRUE : FALSE;
     entry.pointGeometry = geometry->points ? TRUE : FALSE;
-    /* Representation and semantic role are deliberately distinct for
-     * progressive meshes: their first presentation may be a wire AABB, but
-     * the occurrence is still a source-backed mesh for LoD submission,
-     * exact export, picking, and later in-place replacement. */
-    entry.meshGeometry = meshOccurrence ? TRUE : FALSE;
+    /* These flags describe resident draw channels, not source semantics.  In
+     * particular, a source-backed progressive mesh begins with a wire AABB
+     * and must select a wire draw path until a shaded payload is available. */
+    entry.meshGeometry = geometry->shaded ? TRUE : FALSE;
     entry.lodBacked = input.occurrence.lodBacked;
     entry.sourceMeshRequestValid = input.occurrence.sourceMeshRequestValid;
     if (entry.sourceMeshRequestValid) {
@@ -9463,9 +10125,9 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     if (!entry.selectable)
 	index.unpickableInstances.push_back(instanceId);
     index.entries.push_back(entry);
-    if (meshOccurrence)
+    if (entry.meshGeometry)
 	index.shadedCount++;
-    else
+    if (entry.wireGeometry || entry.pointGeometry)
 	index.wireCount++;
 }
 
@@ -9871,9 +10533,7 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	entryIdx >= index.instances.size())
 	return false;
 
-    const bool meshOccurrence = occurrence.summary.shapeKind ==
-	BObolRealizedShapeSummary::SHAPE_MESH;
-    const char *partKind = meshOccurrence ? "mesh" :
+    const char *partKind = geometry->shaded ? "mesh" :
 	(geometry->points && !geometry->wire ? "point" : "wire");
     Obol::PartId newPartId;
     if (!compact_add_geometry_part_if_needed(index, partKind, geometry,
@@ -9890,10 +10550,12 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	oldRef = index.partReferenceCounts.find(entry.part);
     if (oldRef != index.partReferenceCounts.end() && oldRef->second > 0)
 	oldRef->second--;
-    if (entry.shapeSummary.shapeKind == BObolRealizedShapeSummary::SHAPE_MESH) {
+    if (entry.meshGeometry) {
 	if (index.shadedCount > 0)
 	    index.shadedCount--;
-    } else if (index.wireCount > 0) {
+    }
+    if ((entry.wireGeometry || entry.pointGeometry) &&
+	index.wireCount > 0) {
 	index.wireCount--;
     }
 
@@ -9937,9 +10599,9 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 
     index.partReferenceCounts[newPartId]++;
     compact_index_bounds_add(index, entry);
-    if (meshOccurrence)
+    if (entry.meshGeometry)
 	index.shadedCount++;
-    else
+    if (entry.wireGeometry || entry.pointGeometry)
 	index.wireCount++;
     return true;
 }
@@ -12734,6 +13396,21 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	return -1;
     }
 
+    std::shared_ptr<std::mutex> lodRealizationMutex;
+    std::unique_lock<std::mutex> lodRealizationLock;
+    if (source->lodBotThreshold.getValue() > 0) {
+	lodRealizationMutex = compact_stream_lod_realization_mutex(
+	    source->d->dbip, treeName);
+	const int64_t waitStart = bu_gettime();
+	lodRealizationLock = std::unique_lock<std::mutex>(
+	    *lodRealizationMutex);
+	const int64_t waitMicroseconds = bu_gettime() - waitStart;
+	if (getenv("BOBOL_DRAW_TIMING") && waitMicroseconds >= 1000)
+	    bu_log("[obol-timing] stream LoD single-flight: root=%s "
+		   "stream=%d waited %.1f ms\n", treeName, stream ? 1 : 0,
+		   static_cast<double>(waitMicroseconds) / 1000.0);
+    }
+
     (void)treeName;
     const uint32_t revision = source->sourceRevision.getValue();
     int directRealized = 0;
@@ -12770,14 +13447,12 @@ bobol_database_source_realize_mesh_compact_with_cache(
 	return -1;
     }
 
-    /* Prefill is a batch optimization for synchronous realization: it walks
-     * and prepares the entire model before the occurrence walk starts.  That
-     * is exactly the wrong latency tradeoff for a progressive consumer because
-     * it prevents the first leaf from reaching the screen.  The streaming walk
-     * realizes uncached leaves inline and still reuses geometry through its
-     * per-directory cache; reserve the PCA/batch prefill for non-streaming
-     * callers. */
-    if (!stream &&
+    /* Prefill is a batch optimization for synchronous static realization.
+     * It is the wrong latency and memory tradeoff for progressive BoTs: the
+     * occurrence walk already performs bounded online PCA while structural
+     * boxes remain visible.  Running both paths can import two candidate/
+     * representative pairs concurrently. */
+    if (!stream && source->lodBotThreshold.getValue() == 0 &&
 	compact_mesh_prefill_cache(source, cache, treeName, NULL) < 0) {
 	if (!cache->preserveCompactSourceOnFailure) {
 	    remove_non_auxiliary_children(source);
@@ -12804,6 +13479,13 @@ bobol_database_source_realize_mesh_compact_with_cache(
     const int ret = db_walk_tree_leaf_instances(source->d->dbip, 1, av, 1,
 	&init_state, NULL, NULL, realize_mesh_leaf, &data);
     db_free_db_tree_state(&init_state);
+    if (getenv("BOBOL_DRAW_TIMING") &&
+	source->lodBotThreshold.getValue() > 0)
+	bu_log("[obol-timing] stream LoD reuse: cache=%zu deferred=%zu "
+	       "pca=%zu reused=%zu representatives=%zu\n",
+	       data.stream_lod_asset_hits, data.stream_lod_pca_deferred,
+	       data.stream_lod_pca_evaluated, data.stream_lod_pca_reused,
+	       data.stream_lod_reuse.size());
 
     if (ret < 0 || data.realized_shapes <= 0 || data.failed_shapes > 0 ||
 	data.compact_unsupported || data.compact_index->entries.empty()) {
@@ -14661,6 +15343,11 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
     summary.path = entry->semantic.path;
     summary.sourceName = entry->semantic.sourceName;
     summary.sourceInstanceKey = compact_instance_identity(*entry);
+    if (entry->sourceMeshRequestValid) {
+	summary.meshAssetPath = entry->sourceMeshRequest.meshAssetPath;
+	summary.meshAssetName = entry->sourceMeshRequest.meshAssetName;
+	summary.meshAssetBounds = entry->sourceMeshRequest.meshAssetBounds;
+    }
     summary.localToSource = entry->localToSource;
     summary.geometryIdentity = entry->part.w0 ^
 	(entry->part.w1 + 0x9e3779b97f4a7c15ULL +
@@ -15320,6 +16007,12 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	    this->d->compactIndex->entries[index];
 	oldParts.insert(entry.part);
 	compact_index_bounds_remove(*this->d->compactIndex, entry);
+	if (entry.meshGeometry &&
+	    this->d->compactIndex->shadedCount > 0)
+	    this->d->compactIndex->shadedCount--;
+	if ((entry.wireGeometry || entry.pointGeometry) &&
+	    this->d->compactIndex->wireCount > 0)
+	    this->d->compactIndex->wireCount--;
 	std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>::iterator
 	    oldPartCount = this->d->compactIndex->partReferenceCounts.find(entry.part);
 	if (oldPartCount != this->d->compactIndex->partReferenceCounts.end() &&
@@ -15362,6 +16055,10 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 		entry.sourceMeshRequest);
 	}
 	compact_index_bounds_add(*this->d->compactIndex, entry);
+	if (entry.meshGeometry)
+	    this->d->compactIndex->shadedCount++;
+	if (entry.wireGeometry || entry.pointGeometry)
+	    this->d->compactIndex->wireCount++;
 	if (index < this->d->compactIndex->instances.size()) {
 	    this->d->compactIndex->instances[index].record.part = partId;
 	    this->d->compactIndex->instances[index].record.localToRoot =
@@ -15818,7 +16515,7 @@ SoBRLDatabaseSource::exportCompactInstances(SoBRLExportAction *action,
 	const SbMatrix localToWorld =
 	    compact_entry_local_to_world(entry, parentToWorld);
 	const BObolRealizedShapeSummary &summary = entry.shapeSummary;
-	if (entry.meshGeometry && entry.lodBacked &&
+	if (entry.lodBacked &&
 	    action->getGeometryPolicy() == SoBRLExportAction::FULL_DETAIL &&
 	    entry.sourceMeshRequestValid) {
 	    BObolSourceMeshRequest request = entry.sourceMeshRequest;

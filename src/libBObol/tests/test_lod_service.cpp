@@ -2353,6 +2353,32 @@ test_rt_source_full_detail_provider_task(void)
 	ret = 1;
     }
 
+    /* Occurrence metadata must remain independent from canonical geometry
+     * residency.  A transformed-copy occurrence reports its own path/name,
+     * while both progressive and exact providers fetch the representative
+     * asset in its own local coordinate system. */
+    BObolSourceMeshRequest sharedAssetRequest = sourceRequest;
+    sharedAssetRequest.path = "/assembly/copy.bot";
+    sharedAssetRequest.sourceName = "copy.bot";
+    sharedAssetRequest.meshAssetPath = "/assembly/original.bot";
+    sharedAssetRequest.meshAssetName = "original.bot";
+    sharedAssetRequest.meshAssetBounds = SbBox3f(
+	SbVec3f(-2.0f, -3.0f, -4.0f), SbVec3f(2.0f, 3.0f, 4.0f));
+    BObolLodRequest sharedAssetConverted;
+    if (!bobol_lod_rt_source_full_detail_request_from_source_mesh_request(
+	    sharedAssetConverted, sharedAssetRequest, &request) ||
+	bu_strcmp(sharedAssetConverted.objectPath.getString(),
+	    "/assembly/original.bot") != 0 ||
+	bu_strcmp(sharedAssetConverted.objectName.getString(),
+	    "original.bot") != 0 ||
+	sharedAssetConverted.bounds != sharedAssetRequest.meshAssetBounds ||
+	bu_strcmp(sharedAssetRequest.path.getString(),
+	    "/assembly/copy.bot") != 0 ||
+	bu_strcmp(sharedAssetRequest.sourceName.getString(), "copy.bot") != 0) {
+	printf("FAIL: LoD source helper did not separate occurrence and canonical asset identity\n");
+	ret = 1;
+    }
+
     BObolSourceMeshRequest templatedScopedSourceRequest = sourceRequest;
     templatedScopedSourceRequest.queryBoundsValid = 1;
     templatedScopedSourceRequest.queryBounds = SbBox3f(
@@ -2585,7 +2611,6 @@ test_rt_mesh_provider_task(void)
 
     std::vector<BObolLodResult> results;
     service.drainResults(results);
-    service.stop();
 
     int ret = 0;
     if (results.size() != 1 ||
@@ -2627,6 +2652,78 @@ test_rt_mesh_provider_task(void)
 	ret = 1;
     }
 
+    /* The retained provider must publish a bounded first prefix and then make
+     * monotonic progress toward the unchanged view target.  Tiny budgets make
+     * the behavior observable with this small fixture. */
+    BObolMeshLodProvider stagedProvider;
+    stagedProvider.service = &service;
+    stagedProvider.dbip = dbip;
+    stagedProvider.refreshMissing = FALSE;
+    stagedProvider.initialRefinementFaceBudget = 2;
+    stagedProvider.initialRefinementPointBudget = 4;
+    stagedProvider.refinementGrowthFactor = 2.0;
+    BObolLodRequest stagedRequest = task.request;
+    stagedRequest.requestedLevel = 4;
+    BObolLodResult firstStage =
+	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
+    BObolLodResult secondStage =
+	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
+    stagedProvider.progressiveDelivery = FALSE;
+    BObolLodResult terminalStage =
+	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
+    /* Keep the terminal prefix resident but tell the provider that the view
+     * is currently presenting the first stage.  Refinement must grow from
+     * that visible prefix, not jump directly to the resident capacity. */
+    stagedProvider.progressiveDelivery = TRUE;
+    stagedProvider.useCurrentDrawLevel = TRUE;
+    stagedProvider.currentDrawLevel = firstStage.geometry.activeLevel;
+    BObolLodResult residentAheadStage =
+	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
+    if (firstStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	firstStage.geometry.activeLevel < 0 ||
+	firstStage.geometry.activeLevel >= stagedRequest.requestedLevel ||
+	firstStage.terminal ||
+	secondStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	secondStage.geometry.activeLevel <= firstStage.geometry.activeLevel ||
+	secondStage.geometry.activeLevel != firstStage.geometry.activeLevel + 1 ||
+	secondStage.geometry.activeLevel >= stagedRequest.requestedLevel ||
+	secondStage.terminal ||
+	terminalStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	terminalStage.geometry.activeLevel != stagedRequest.requestedLevel ||
+	!terminalStage.terminal ||
+	residentAheadStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	residentAheadStage.geometry.activeLevel <=
+	    firstStage.geometry.activeLevel ||
+	residentAheadStage.geometry.activeLevel !=
+	    firstStage.geometry.activeLevel + 1 ||
+	residentAheadStage.geometry.activeLevel >=
+	    stagedRequest.requestedLevel ||
+	residentAheadStage.terminal ||
+	!firstStage.progressiveMesh ||
+	firstStage.progressiveMesh != secondStage.progressiveMesh ||
+	firstStage.progressiveMesh != terminalStage.progressiveMesh ||
+	firstStage.progressiveMesh != residentAheadStage.progressiveMesh ||
+	firstStage.counts.faceCount > secondStage.counts.faceCount ||
+	secondStage.counts.faceCount > terminalStage.counts.faceCount) {
+	printf("FAIL: retained LoD provider did not stage population growth "
+	    "(levels=%d/%d/%d resident-ahead=%d "
+	    "terminal=%d/%d/%d/%d faces=%llu/%llu/%llu/%llu)\n",
+	    firstStage.geometry.activeLevel, secondStage.geometry.activeLevel,
+	    terminalStage.geometry.activeLevel,
+	    residentAheadStage.geometry.activeLevel,
+	    firstStage.terminal ? 1 : 0,
+	    secondStage.terminal ? 1 : 0, terminalStage.terminal ? 1 : 0,
+	    residentAheadStage.terminal ? 1 : 0,
+	    static_cast<unsigned long long>(firstStage.counts.faceCount),
+	    static_cast<unsigned long long>(secondStage.counts.faceCount),
+	    static_cast<unsigned long long>(terminalStage.counts.faceCount),
+	    static_cast<unsigned long long>(
+		residentAheadStage.counts.faceCount));
+	ret = 1;
+    }
+
+    service.stop();
+
     BObolMeshLodProvider cachedNormalProvider;
     cachedNormalProvider.dbip = dbip;
     cachedNormalProvider.useForcedLevel = TRUE;
@@ -2652,7 +2749,15 @@ test_rt_mesh_provider_task(void)
 	!sawSeededNormal ||
 	!bobol_lod_result_matches_request(cachedNormalResult,
 					    task.request)) {
-	printf("FAIL: LoD Obol mesh provider did not return cached mesh normals\n");
+	printf("FAIL: LoD Obol mesh provider did not return cached mesh normals "
+	    "(level=%d normals=%llu has=%d payload=%zu indices=%zu seeded=%d)\n",
+	    cachedNormalResult.geometry.activeLevel,
+	    static_cast<unsigned long long>(
+		cachedNormalResult.counts.normalCount),
+	    cachedNormalResult.hasNormals ? 1 : 0,
+	    cachedNormalResult.mesh.normals.size(),
+	    cachedNormalResult.mesh.coordIndex.size(),
+	    sawSeededNormal ? 1 : 0);
 	ret = 1;
     }
 
@@ -2674,7 +2779,11 @@ test_rt_mesh_provider_task(void)
 	forcedResult.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	forcedResult.geometry.activeLevel != forcedProvider.forcedLevel ||
 	!forcedResult.mesh.isValid()) {
-	printf("FAIL: LoD Obol mesh provider forced-level task did not return requested level mesh result\n");
+	printf("FAIL: LoD Obol mesh provider forced-level task did not return "
+	    "requested level mesh result (requested=%d active=%d status=%d "
+	    "valid=%d)\n", forcedProvider.forcedLevel,
+	    forcedResult.geometry.activeLevel, forcedResult.providerStatus,
+	    forcedResult.mesh.isValid() ? 1 : 0);
 	ret = 1;
     }
 

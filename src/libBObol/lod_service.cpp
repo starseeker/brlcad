@@ -9,6 +9,7 @@
 
 #include "bu/log.h"
 #include "bu/str.h"
+#include "bu/time.h"
 
 #include "BObol/BDrawCache.h"
 #include "BObol/BLodService.h"
@@ -49,6 +50,12 @@ BObolMeshLodProvider::clear(void)
     useForcedLevel = FALSE;
     shrinkAfterCopy = TRUE;
     compactResident = FALSE;
+    progressiveDelivery = TRUE;
+    initialRefinementFaceBudget = 250000;
+    initialRefinementPointBudget = 500000;
+    refinementGrowthFactor = 4.0;
+    useCurrentDrawLevel = FALSE;
+    currentDrawLevel = -1;
     forcedLevel = 0;
     reset = 0;
 }
@@ -895,7 +902,9 @@ bobol_lod_rt_source_full_detail_request_from_source_mesh_request(
     const BObolSourceMeshRequest &sourceRequest,
     const BObolLodRequest *templateRequest)
 {
-    if (sourceRequest.path.getLength() == 0 &&
+    if (sourceRequest.meshAssetPath.getLength() == 0 &&
+	sourceRequest.meshAssetName.getLength() == 0 &&
+	sourceRequest.path.getLength() == 0 &&
 	sourceRequest.sourceName.getLength() == 0)
 	return FALSE;
 
@@ -905,9 +914,12 @@ bobol_lod_rt_source_full_detail_request_from_source_mesh_request(
 	request.clear();
     lod_remove_source_query_provider_params(request);
 
-    request.objectPath = sourceRequest.path.getLength() > 0 ?
-			 sourceRequest.path : sourceRequest.sourceName;
-    request.objectName = sourceRequest.sourceName;
+    request.objectPath = sourceRequest.meshAssetPath.getLength() > 0 ?
+	sourceRequest.meshAssetPath :
+	(sourceRequest.path.getLength() > 0 ?
+	 sourceRequest.path : sourceRequest.sourceName);
+    request.objectName = sourceRequest.meshAssetName.getLength() > 0 ?
+	sourceRequest.meshAssetName : sourceRequest.sourceName;
     if (request.objectName.getLength() == 0) {
 	const char *name = lod_request_object_name(request);
 	request.objectName = name ? name : "";
@@ -918,7 +930,8 @@ bobol_lod_rt_source_full_detail_request_from_source_mesh_request(
     request.qualityTier = BOBOL_LOD_QUALITY_FULL_DETAIL;
     if (request.drawMode == BOBOL_LOD_DRAW_UNKNOWN)
 	request.drawMode = BOBOL_LOD_DRAW_SHADED;
-    request.bounds = sourceRequest.bounds;
+    request.bounds = !sourceRequest.meshAssetBounds.isEmpty() ?
+	sourceRequest.meshAssetBounds : sourceRequest.bounds;
     request.sourceCounts.clear();
     request.sourceCounts.faceCount = sourceRequest.faceCount;
     request.sourceCounts.pointCount = sourceRequest.pointCount;
@@ -2011,6 +2024,81 @@ BObolLodService::isRunning(void) const
     return this->p->running;
 }
 
+static size_t
+lod_refinement_growth_budget(size_t current, uint64_t initial,
+			     double growth)
+{
+    const size_t initialBudget = initial >
+	static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ?
+	std::numeric_limits<size_t>::max() : static_cast<size_t>(initial);
+    if (!current)
+	return initialBudget;
+    if (!std::isfinite(growth) || growth <= 1.0)
+	growth = 1.0;
+    const long double grown =
+	static_cast<long double>(current) * static_cast<long double>(growth);
+    const size_t growthBudget =
+	grown >= static_cast<long double>(
+	    std::numeric_limits<size_t>::max()) ?
+	std::numeric_limits<size_t>::max() :
+	static_cast<size_t>(std::ceil(grown));
+    return std::max(initialBudget, growthBudget);
+}
+
+/* Select one bounded presentation step toward the screen-error target.  The
+ * target itself remains request.requestedLevel; this helper only prevents a
+ * first box->mesh replacement from allocating and uploading an arbitrarily
+ * large cumulative prefix. */
+static int
+lod_progressive_delivery_level(
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    int requestedLevel, int currentLevel,
+    const BObolMeshLodProvider &provider)
+{
+    int target = std::max(hierarchy.min_level,
+	std::min(hierarchy.max_level, requestedLevel));
+    if (!provider.progressiveDelivery || provider.useForcedLevel ||
+	provider.reset || currentLevel >= target)
+	return target;
+
+    const size_t currentFaces =
+	currentLevel >= hierarchy.min_level ?
+	hierarchy.face_count[currentLevel] : 0;
+    const size_t currentPoints =
+	currentLevel >= hierarchy.min_level ?
+	hierarchy.point_count[currentLevel] : 0;
+    const size_t faceBudget = lod_refinement_growth_budget(currentFaces,
+	provider.initialRefinementFaceBudget,
+	provider.refinementGrowthFactor);
+    const size_t pointBudget = lod_refinement_growth_budget(currentPoints,
+	provider.initialRefinementPointBudget,
+	provider.refinementGrowthFactor);
+
+    int selected = hierarchy.min_level;
+    for (int level = hierarchy.min_level; level <= target; ++level) {
+	if (hierarchy.face_count[level] > faceBudget ||
+	    hierarchy.point_count[level] > pointBudget)
+	    break;
+	selected = level;
+    }
+
+    /* Sparse hierarchies may jump by more than the nominal growth factor.
+     * Always make forward progress by one level; otherwise the controller
+     * would keep requesting the same incomplete stage forever. */
+    if (currentLevel >= hierarchy.min_level) {
+	if (selected <= currentLevel)
+	    selected = std::min(target, currentLevel + 1);
+	/* Population budgets prevent an oversized initial replacement, but a
+	 * later high-resolution target can otherwise skip several already
+	 * defined PoP cuts in one presentation (Lucy level 9 -> 12 is an
+	 * eighteen-million-face jump).  Publish at most one hierarchy step per
+	 * rendered frame.  The retained prefix still appends in place and the
+	 * controller immediately schedules the next step. */
+	selected = std::min(selected, currentLevel + 1);
+    }
+    return std::min(selected, target);
+}
+
 BObolLodResult
 BObolLodService::realizeResidentMeshLod(
     const BObolLodRequest &request,
@@ -2057,11 +2145,15 @@ BObolLodService::realizeResidentMeshLod(
 	if ((!resident->status.has_cache_key ||
 	     !resident->status.has_cached_payload ||
 	     resident->status.stale_cache_entry) && provider.refreshMissing) {
+	    const int64_t refreshStarted = bu_gettime();
 	    if (bobol_mesh_lod_cache_refresh(provider.dbip, name,
 		    &resident->status) != BRLCAD_OK)
 		return lod_provider_status_result(request,
 		    BOBOL_LOD_PROVIDER_CACHE_MISS,
 		    "resident mesh provider could not refresh cache entry");
+	    if (getenv("BOBOL_DRAW_TIMING"))
+		bu_log("[obol-timing] pop cache: refresh %-24s %8.1f ms\n",
+		       name, (bu_gettime() - refreshStarted) / 1000.0);
 	}
 	resident->lod = bobol_mesh_lod_get(provider.dbip, name);
 	if (!resident->lod)
@@ -2081,14 +2173,28 @@ BObolLodService::realizeResidentMeshLod(
 	 * retained exact asset below. */
     }
 
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    if (!bobol_mesh_lod_hierarchy_info_get(resident->lod, &hierarchy))
+	return lod_provider_status_result(request,
+	    BOBOL_LOD_PROVIDER_CACHE_MISS,
+	    "resident mesh provider loaded no hierarchy metadata");
+
     int currentLevel = bobol_mesh_lod_current_level(resident->lod);
-    int loadTarget = requestedLevel;
+    const int deliveryLevel = provider.useCurrentDrawLevel ?
+	provider.currentDrawLevel : currentLevel;
+    int drawTarget = requestedLevel;
+    if (requestedLevel >= 0)
+	drawTarget = lod_progressive_delivery_level(hierarchy, requestedLevel,
+	    deliveryLevel, provider);
+    int loadTarget = drawTarget;
     if (provider.compactResident && currentLevel >= 0 &&
-	requestedLevel >= 0 && requestedLevel < currentLevel) {
-	/* One level of headroom prevents small post-idle camera corrections from
-	 * immediately re-reading the tail that was just reclaimed. */
-	loadTarget = std::min(currentLevel, requestedLevel + 1);
-    } else if (currentLevel >= 0 && requestedLevel <= currentLevel &&
+	drawTarget >= 0 && drawTarget < currentLevel) {
+	/* A level is not a bounded unit of memory: one Lucy hierarchy step can
+	 * add millions of faces.  Stable reclamation therefore retains exactly
+	 * the pixel-demanded prefix. */
+	loadTarget = drawTarget;
+    } else if (currentLevel >= 0 && drawTarget <= currentLevel &&
 	!provider.reset) {
 	loadTarget = currentLevel;
     }
@@ -2113,11 +2219,8 @@ BObolLodService::realizeResidentMeshLod(
     }
 
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
-    struct BObolMeshLodHierarchyInfo hierarchy =
-	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
     struct BObolMeshLodData data;
     if (!bobol_mesh_lod_info_get(resident->lod, &info) ||
-	!bobol_mesh_lod_hierarchy_info_get(resident->lod, &hierarchy) ||
 	!bobol_mesh_lod_data_get(resident->lod, &data))
 	return lod_provider_status_result(request,
 	    BOBOL_LOD_PROVIDER_CACHE_MISS,
@@ -2133,7 +2236,7 @@ BObolLodService::realizeResidentMeshLod(
 		"resident mesh provider could not publish the retained asset");
     }
 
-    int drawLevel = requestedLevel;
+    int drawLevel = drawTarget;
     if (drawLevel < hierarchy.min_level)
 	drawLevel = hierarchy.min_level;
     if (drawLevel > residentLevel)
@@ -2154,6 +2257,8 @@ BObolLodService::realizeResidentMeshLod(
     result.hasSnappedPoints = FALSE;
     result.hasNormals = info.has_normals ? TRUE : FALSE;
     result.shadedCullBackfaces = resident->mesh->cullBackfaces();
+    result.terminal = drawLevel >= std::max(hierarchy.min_level,
+	std::min(hierarchy.max_level, requestedLevel)) ? TRUE : FALSE;
 
     /* Compact CAD occurrences retain the shared asset directly.  Legacy
      * shape consumers still receive a level-local by-value payload until
@@ -2171,11 +2276,21 @@ BObolLodService::realizeResidentMeshLod(
 	  strstr(request.objectPath.getString(), traceFilter)))) {
 	bu_log("BObol resident LoD trace object=%s request_level=%d "
 	       "draw_level=%d resident_level=%d faces=%zu points=%zu "
-	       "asset_revision=%llu load=%d compact=%d\n",
+	       "asset_revision=%llu load=%d compact=%d terminal=%d\n",
 	       name, request.requestedLevel, drawLevel, residentLevel,
 	       result.counts.faceCount, result.counts.pointCount,
 	       static_cast<unsigned long long>(resident->mesh->revision()),
-	       loadNeeded ? 1 : 0, provider.compactResident ? 1 : 0);
+	       loadNeeded ? 1 : 0, provider.compactResident ? 1 : 0,
+	       result.terminal ? 1 : 0);
+	if (getenv("BOBOL_LOD_TRACE_HIERARCHY")) {
+	    for (int level = hierarchy.min_level;
+		 level <= hierarchy.max_level; ++level)
+		bu_log("BObol resident hierarchy object=%s level=%d "
+		       "faces=%zu points=%zu%s\n",
+		       name, level, hierarchy.face_count[level],
+		       hierarchy.point_count[level],
+		       level == hierarchy.max_level ? " terminal" : "");
+	}
     }
     return result;
 }
@@ -2184,12 +2299,10 @@ size_t
 BObolLodService::compactResidentMeshes(
     uint64_t consumerId,
     uint64_t demandRevision,
-    const std::vector<BObolLodResidentDemand> &demands,
-    int headroomLevels)
+    const std::vector<BObolLodResidentDemand> &demands)
 {
     if (!consumerId)
 	return 0;
-    headroomLevels = std::max(0, headroomLevels);
 
     BObolResidentMeshConsumerDemand snapshot;
     snapshot.revision = demandRevision;
@@ -2244,7 +2357,7 @@ BObolLodService::compactResidentMeshes(
 	const int targetLevel = std::min(currentLevel,
 	    std::max(hierarchy.min_level,
 		std::min(hierarchy.max_level,
-		    item.second + headroomLevels)));
+		    item.second)));
 	if (currentLevel < 0 || targetLevel >= currentLevel)
 	    continue;
 	const int residentLevel = bobol_mesh_lod_load_resident_level(

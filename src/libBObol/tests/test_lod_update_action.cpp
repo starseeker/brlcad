@@ -5609,6 +5609,58 @@ test_view_controller_lod_submit_and_apply(void)
 
 	const BObolViewLodState::MeshPayload *activePayload =
 	    controller.getViewLodState()->findMesh(mesh);
+	if (activePayload && activePayload->progressiveMesh) {
+	    const int savedActiveLevel = activePayload->activeLevel;
+	    const int savedRequestedLevel = activePayload->requestedLevel;
+	    const int residentLevel =
+		activePayload->progressiveMesh->residentLevel();
+	    const int pendingRequestedLevel = std::min(
+		activePayload->progressiveMesh->maximumLevel(),
+		residentLevel + 1);
+	    if (pendingRequestedLevel > residentLevel) {
+		std::vector<BObolLodResidentDemand> demands;
+		if (!controller.getViewLodState()->retargetMeshPayload(
+			activePayload, savedActiveLevel, pendingRequestedLevel,
+			controller.getLodViewRevision(),
+			controller.getLodPolicyRevision())) {
+		    printf("FAIL: resident PoP cut could not retain a richer pending demand\n");
+		    service.stop();
+		    root->unref();
+		    bobol_mesh_lod_cache_clear_database(dbip);
+		    db_close(dbip);
+		    bu_file_delete(dbpath);
+		    bu_dirclear(cache_dir);
+		    return 1;
+		}
+		controller.getViewLodState()->residentMeshDemands(demands);
+		if (activePayload->activeLevel != savedActiveLevel ||
+		    activePayload->requestedLevel != pendingRequestedLevel ||
+		    demands.size() != 1 ||
+		    demands[0].level != pendingRequestedLevel) {
+		    printf("FAIL: resident demand collapsed to the temporary active PoP cut\n");
+		    service.stop();
+		    root->unref();
+		    bobol_mesh_lod_cache_clear_database(dbip);
+		    db_close(dbip);
+		    bu_file_delete(dbpath);
+		    bu_dirclear(cache_dir);
+		    return 1;
+		}
+		if (!controller.getViewLodState()->retargetMeshPayload(
+			activePayload, savedActiveLevel, savedRequestedLevel,
+			controller.getLodViewRevision(),
+			controller.getLodPolicyRevision())) {
+		    printf("FAIL: resident PoP demand fixture could not restore its view target\n");
+		    service.stop();
+		    root->unref();
+		    bobol_mesh_lod_cache_clear_database(dbip);
+		    db_close(dbip);
+		    bu_file_delete(dbpath);
+		    bu_dirclear(cache_dir);
+		    return 1;
+		}
+	    }
+	}
 	const int residentCameraLevel =
 	    activePayload ? activePayload->activeLevel : -1;
 	previousViewRevision = controller.getLodViewRevision();
@@ -6642,7 +6694,18 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 	std::vector<SbVec3f> authoredNormals =
 	    authoredGeometry && authoredGeometry->shaded ?
 	    authoredGeometry->shaded->normals : std::vector<SbVec3f>();
-	if (!authoredAssembly || !before || authoredNormals.empty()) {
+	const bool authoredStayedIndexed =
+	    authoredGeometry && authoredGeometry->shaded &&
+	    authoredGeometry->shaded->positions.size() ==
+		results[0].counts.pointCount &&
+	    authoredGeometry->shaded->indices.size() ==
+		results[0].counts.faceCount * 3;
+	/* No authored normals is a valid renderer contract.  The default
+	 * presentation must preserve the shared PoP index topology and let Obol
+	 * derive face normals, rather than expanding to three vertices per
+	 * triangle. */
+	if (!authoredAssembly || !before || !authoredNormals.empty() ||
+	    !authoredStayedIndexed) {
 	    printf("FAIL: normal-policy test requires a resident presentation\n");
 	    ret = 1;
 	} else {

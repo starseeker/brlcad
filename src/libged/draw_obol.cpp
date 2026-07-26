@@ -165,9 +165,18 @@ ged_obol_timing_log(const char *label, int64_t start_us, long count)
 struct ged_obol_scoped_timer {
     const char *label;
     int64_t start;
-    explicit ged_obol_scoped_timer(const char *l) :
-	label(l), start(bu_gettime()) {}
-    ~ged_obol_scoped_timer() { ged_obol_timing_log(label, start, -1); }
+    double minimumMilliseconds;
+    explicit ged_obol_scoped_timer(const char *l,
+	double minimumMs = 0.0) :
+	label(l), start(bu_gettime()), minimumMilliseconds(minimumMs) {}
+    ~ged_obol_scoped_timer()
+    {
+	if (minimumMilliseconds > 0.0 &&
+	    (double)(bu_gettime() - start) / 1000.0 <
+		minimumMilliseconds)
+	    return;
+	ged_obol_timing_log(label, start, -1);
+    }
 };
 
 static struct bv *
@@ -18142,7 +18151,10 @@ ged_obol_progressive_advance_provider(
     const BObolProgressiveOptions *options,
     BObolProgressiveStatus *status)
 {
-    ged_obol_scoped_timer _pump_timer("provider: pump (total)");
+    /* Idle pumps are expected at frame cadence.  Logging thousands of 0.0 ms
+     * samples obscures the stalls timing mode exists to expose and can itself
+     * perturb interactive traces. */
+    ged_obol_scoped_timer _pump_timer("provider: pump (total)", 1.0);
     BObolProgressiveStatus local_status;
     if (status)
 	local_status.providerCount = status->providerCount;

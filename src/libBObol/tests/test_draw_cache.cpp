@@ -38,6 +38,8 @@ static const char *path_table_region_name = "path_table_region.r";
 static const char *path_table_top_name = "path_table_top.c";
 static const char *path_table_full_name =
     "path_table_top.c/path_table_region.r/path_table_leaf.s";
+static const char *lod_asset_name = "lod_asset.bot";
+static const char *lod_copy_name = "lod_copy.bot";
 
 static int
 fastf_equal(fastf_t a, fastf_t b)
@@ -333,6 +335,8 @@ main(int argc, char *argv[])
     int ret = 0;
     BObolDrawCacheStatus status;
     BObolDrawProxyRecord proxy;
+    BObolDrawLodAssetRecord lodAsset;
+    BObolDrawLodAssetRecord loadedLodAsset;
     BObolDrawMetadataRecord metadata;
     BObolDrawManifest manifest;
     BObolDrawManifest loadedManifest;
@@ -385,7 +389,29 @@ main(int argc, char *argv[])
 
     {
 	rt_wdb *wdbp = wdb_dbopen(dbip, RT_WDB_TYPE_DB_DISK);
+	fastf_t assetVertices[12] = {
+	    0.0, 0.0, 0.0,
+	    4.0, 0.0, 0.0,
+	    0.0, 2.0, 0.0,
+	    0.0, 0.0, 1.0
+	};
+	fastf_t copyVertices[12] = {
+	    10.0, -3.0, 2.0,
+	    14.0, -3.0, 2.0,
+	    10.0, -1.0, 2.0,
+	    10.0, -3.0, 3.0
+	};
+	int botFaces[12] = {
+	    0, 1, 2,
+	    0, 3, 1,
+	    1, 3, 2,
+	    2, 3, 0
+	};
 	if (!wdbp || mk_sph(wdbp, objname, center, 4.0) < 0 ||
+	    mk_bot(wdbp, lod_asset_name, RT_BOT_SOLID, RT_BOT_CCW, 0,
+		4, 4, assetVertices, botFaces, NULL, NULL) < 0 ||
+	    mk_bot(wdbp, lod_copy_name, RT_BOT_SOLID, RT_BOT_CCW, 0,
+		4, 4, copyVertices, botFaces, NULL, NULL) < 0 ||
 	    make_path_metadata_tree(wdbp)) {
 	    printf("FAIL: draw cache mk_sph\n");
 	    ret = 1;
@@ -395,6 +421,36 @@ main(int argc, char *argv[])
 
     if (set_test_attributes(dbip, objname)) {
 	printf("FAIL: draw cache attributes\n");
+	ret = 1;
+	goto cleanup;
+    }
+
+    bobol_draw_lod_asset_record_init(&lodAsset);
+    bu_strlcpy(lodAsset.assetName, lod_asset_name,
+	sizeof(lodAsset.assetName));
+    lodAsset.faceCount = 4;
+    lodAsset.pointCount = 4;
+    VSET(lodAsset.boundsMin, 10.0, -3.0, 2.0);
+    VSET(lodAsset.boundsMax, 14.0, -1.0, 3.0);
+    VSET(lodAsset.assetBoundsMin, 0.0, 0.0, 0.0);
+    VSET(lodAsset.assetBoundsMax, 4.0, 2.0, 1.0);
+    MAT_DELTAS(lodAsset.assetToObject, 10.0, -3.0, 2.0);
+    if (bobol_draw_lod_asset_cache_store(dbip, lod_copy_name,
+	    &lodAsset) != BRLCAD_OK ||
+	bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
+	    &loadedLodAsset) != BRLCAD_OK ||
+	bu_strcmp(loadedLodAsset.assetName, lod_asset_name) != 0 ||
+	loadedLodAsset.faceCount != 4 || loadedLodAsset.pointCount != 4 ||
+	!point_equal(loadedLodAsset.boundsMin, lodAsset.boundsMin) ||
+	!point_equal(loadedLodAsset.boundsMax, lodAsset.boundsMax) ||
+	!point_equal(loadedLodAsset.assetBoundsMin,
+	    lodAsset.assetBoundsMin) ||
+	!point_equal(loadedLodAsset.assetBoundsMax,
+	    lodAsset.assetBoundsMax) ||
+	!fastf_equal(loadedLodAsset.assetToObject[MDX], 10.0) ||
+	!fastf_equal(loadedLodAsset.assetToObject[MDY], -3.0) ||
+	!fastf_equal(loadedLodAsset.assetToObject[MDZ], 2.0)) {
+	printf("FAIL: transformed LoD asset cache store/get\n");
 	ret = 1;
 	goto cleanup;
     }
@@ -558,6 +614,14 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
     bobol_draw_manifest_free(&loadedManifest);
+    if (bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
+	    &loadedLodAsset) != BRLCAD_OK ||
+	bu_strcmp(loadedLodAsset.assetName, lod_asset_name) != 0 ||
+	!fastf_equal(loadedLodAsset.assetToObject[MDX], 10.0)) {
+	printf("FAIL: transformed LoD asset cache persistent reopen data\n");
+	ret = 1;
+	goto cleanup;
+    }
 
     if (bobol_draw_path_metadata_cache_invalidate(dbip, path_full_name,
 	    &status) != BRLCAD_OK ||
@@ -641,6 +705,8 @@ main(int argc, char *argv[])
     if (bobol_draw_manifest_cache_invalidate_database(dbip) != BRLCAD_OK ||
 	bobol_draw_manifest_cache_get(dbip, path_top_name,
 		&loadedManifest) != BRLCAD_ERROR ||
+	bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
+		&loadedLodAsset) != BRLCAD_ERROR ||
 	!make_manifest(&manifest) ||
 	bobol_draw_manifest_cache_store(dbip, path_top_name,
 		&manifest) != BRLCAD_OK) {
@@ -690,12 +756,28 @@ main(int argc, char *argv[])
     status.generatedCacheEntry = 1;
     bobol_draw_cache_status_init(&status);
     bobol_draw_proxy_record_init(&proxy);
+    bobol_draw_lod_asset_record_init(&loadedLodAsset);
+    loadedLodAsset.faceCount = 1;
+    bobol_draw_lod_asset_record_init(&loadedLodAsset);
     proxy.kind = 9;
     bobol_draw_proxy_record_init(&proxy);
     bobol_draw_metadata_record_init(&metadata);
     metadata.directoryFound = 1;
     bobol_draw_metadata_record_init(&metadata);
-    if (status.generatedCacheEntry || proxy.kind || metadata.directoryFound ||
+    if (status.generatedCacheEntry || proxy.kind ||
+	loadedLodAsset.faceCount || metadata.directoryFound ||
+	bobol_draw_lod_asset_cache_get(NULL, lod_copy_name,
+	    &loadedLodAsset) != BRLCAD_ERROR ||
+	bobol_draw_lod_asset_cache_get(dbip, NULL,
+	    &loadedLodAsset) != BRLCAD_ERROR ||
+	bobol_draw_lod_asset_cache_get(dbip, lod_copy_name,
+	    NULL) != BRLCAD_ERROR ||
+	bobol_draw_lod_asset_cache_store(NULL, lod_copy_name,
+	    &lodAsset) != BRLCAD_ERROR ||
+	bobol_draw_lod_asset_cache_store(dbip, NULL,
+	    &lodAsset) != BRLCAD_ERROR ||
+	bobol_draw_lod_asset_cache_store(dbip, lod_copy_name,
+	    NULL) != BRLCAD_ERROR ||
 	bobol_draw_proxy_cache_status(NULL, objname,
 					BOBOL_LOD_PROXY_AABB, &status) != BRLCAD_ERROR ||
 	bobol_draw_proxy_cache_status(dbip, NULL,

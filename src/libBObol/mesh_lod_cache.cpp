@@ -31,15 +31,14 @@
 #include <cfloat>
 #include <climits>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <limits>
-#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #define POP_MAXLEVEL 16
@@ -496,6 +495,7 @@ private:
     void cache(void);
     bool cacheTri(void);
     bool cacheWrite(const char *component, std::stringstream &stream);
+    bool cacheWriteData(const char *component, const void *data, size_t size);
     size_t cacheGet(void **data, const char *component);
     void cacheDone(void);
     bool triPopLoad(int startLevel, int level, bool materializeSnapped);
@@ -514,10 +514,16 @@ private:
     size_t levelVertexCount[POP_MAXLEVEL + 1] = {0};
     size_t levelTriangleCount[POP_MAXLEVEL + 1] = {0};
 
-    std::vector<size_t> triIndexMap;
-    std::vector<size_t> vertexTriMinLevel;
-    std::map<size_t, std::unordered_set<size_t>> levelTriVerts;
-    std::vector<std::vector<size_t>> levelTris;
+    /* Every source vertex and face belongs to exactly one activation level.
+     * Dense level vectors are substantially cheaper than the old
+     * map<level, unordered_set<vertex>> representation on scan meshes: Lucy's
+     * 14 million vertices otherwise spent more memory on hash nodes than on
+     * the source coordinates themselves.  BoT indices are int-sized by
+     * contract, so 32-bit remap entries are sufficient. */
+    std::vector<uint32_t> triIndexMap;
+    std::vector<uint8_t> vertexTriMinLevel;
+    std::vector<std::vector<uint32_t>> levelTriVerts;
+    std::vector<std::vector<uint32_t>> levelTris;
 
     size_t vertexCount = 0;
     const point_t *vertexArray = NULL;
@@ -534,13 +540,10 @@ private:
 void
 BObolPopState::triProcess(void)
 {
-    vertexTriMinLevel.reserve(vertexCount);
-    for (size_t vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++)
-	vertexTriMinLevel.push_back(POP_MAXLEVEL - 1);
-
-    levelTris.reserve(POP_MAXLEVEL);
-    for (size_t levelIndex = 0; levelIndex < POP_MAXLEVEL; levelIndex++)
-	levelTris.push_back(std::vector<size_t>(0));
+    vertexTriMinLevel.assign(vertexCount,
+	static_cast<uint8_t>(POP_MAXLEVEL - 1));
+    levelTriVerts.resize(POP_MAXLEVEL);
+    levelTris.resize(POP_MAXLEVEL);
 
     for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
 	BObolPopRec triangle[3];
@@ -575,38 +578,53 @@ BObolPopState::triProcess(void)
 	if (badFace)
 	    continue;
 
-	size_t level = POP_MAXLEVEL - 1;
-	for (int levelIndex = 0; levelIndex < POP_MAXLEVEL; levelIndex++) {
-	    if (!triDegenerate(triangle[0], triangle[1], triangle[2],
-			       levelIndex)) {
-		level = static_cast<size_t>(levelIndex);
-		break;
-	    }
-	}
-	levelTris[level].push_back(faceIndex);
+	/* A pair first separates at the level exposing its most-significant
+	 * differing quantized bit.  A triangle activates once all three vertex
+	 * pairs have separated.  Computing that level directly is equivalent to
+	 * testing all 16 masks, but avoids up to 48 quotient comparisons for
+	 * every face in very large meshes. */
+	const auto pairLevel = [](const BObolPopRec &a,
+		const BObolPopRec &b) -> int {
+	    const unsigned int differing =
+		static_cast<unsigned int>(a.x ^ b.x) |
+		static_cast<unsigned int>(a.y ^ b.y) |
+		static_cast<unsigned int>(a.z ^ b.z);
+	    if (!differing)
+		return POP_MAXLEVEL - 1;
+#if defined(__GNUC__) || defined(__clang__)
+	    const int mostSignificantBit =
+		31 - __builtin_clz(differing);
+#else
+	    int mostSignificantBit = 0;
+	    for (unsigned int bits = differing; bits >>= 1;)
+		++mostSignificantBit;
+#endif
+	    return (POP_MAXLEVEL - 1) - mostSignificantBit;
+	};
+	const int level = std::max(pairLevel(triangle[0], triangle[1]),
+	    std::max(pairLevel(triangle[1], triangle[2]),
+		     pairLevel(triangle[0], triangle[2])));
+	levelTris[level].push_back(static_cast<uint32_t>(faceIndex));
 
 	for (size_t cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
 	    int faceVertex = faceArray[3 * faceIndex + cornerIndex];
 	    if (vertexTriMinLevel[faceVertex] > level)
-		vertexTriMinLevel[faceVertex] = level;
+		vertexTriMinLevel[faceVertex] = static_cast<uint8_t>(level);
 	}
     }
 
     for (size_t vertexIndex = 0; vertexIndex < vertexTriMinLevel.size();
 	 vertexIndex++)
-	levelTriVerts[vertexTriMinLevel[vertexIndex]].insert(vertexIndex);
+	levelTriVerts[vertexTriMinLevel[vertexIndex]].push_back(
+	    static_cast<uint32_t>(vertexIndex));
 
-    triIndexMap.reserve(vertexCount);
-    for (size_t vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++)
-	triIndexMap.push_back(vertexIndex);
+    triIndexMap.resize(vertexCount);
 
-    size_t outputVertexIndex = 0;
-    for (auto levelIt = levelTriVerts.begin(); levelIt != levelTriVerts.end();
-	 ++levelIt) {
-	for (auto setIt = levelIt->second.begin();
-	     setIt != levelIt->second.end(); ++setIt) {
-	    triIndexMap[*setIt] = outputVertexIndex;
-	    outputVertexIndex++;
+    uint32_t outputVertexIndex = 0;
+    for (const std::vector<uint32_t> &levelVertices : levelTriVerts) {
+	for (uint32_t sourceVertexIndex : levelVertices) {
+	    triIndexMap[sourceVertexIndex] = outputVertexIndex;
+	    ++outputVertexIndex;
 	}
     }
 
@@ -683,6 +701,7 @@ BObolPopState::BObolPopState(
     faceCount = inputFaceCount;
     faceArray = faces;
 
+    const int64_t buildStarted = bu_gettime();
     bg_trimesh_aabb(&bbmin, &bbmax, const_cast<int *>(faceArray), faceCount,
 		    vertexArray, vertexCount);
 
@@ -696,10 +715,23 @@ BObolPopState::BObolPopState(
 	maxz = (vertices[vertexIndex][Z] > maxz) ? vertices[vertexIndex][Z] : maxz;
     }
 
+    const int64_t classifyStarted = bu_gettime();
     triProcess();
+    const int64_t cacheStarted = bu_gettime();
 
     isValid = true;
     cache();
+    if (getenv("BOBOL_DRAW_TIMING")) {
+	const int64_t finished = bu_gettime();
+	bu_log("[obol-timing] pop cache: bounds scan %8.1f ms "
+	       "classify %8.1f ms write %8.1f ms total %8.1f ms "
+	       "(faces=%zu points=%zu)\n",
+	       (classifyStarted - buildStarted) / 1000.0,
+	       (cacheStarted - classifyStarted) / 1000.0,
+	       (finished - cacheStarted) / 1000.0,
+	       (finished - buildStarted) / 1000.0,
+	       faceCount, vertexCount);
+    }
 }
 
 BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
@@ -1095,12 +1127,18 @@ bool
 BObolPopState::cacheWrite(const char *component, std::stringstream &stream)
 {
     std::string buffer = stream.str();
-    if (!buffer.length())
-	return false;
+    return cacheWriteData(component, buffer.data(), buffer.size());
+}
 
+bool
+BObolPopState::cacheWriteData(const char *component, const void *data,
+			      size_t size)
+{
+    if (!component || !data || !size)
+	return false;
     std::string keystr = std::to_string(hash) + std::string(":") +
 			 std::string(component);
-    size_t wsize = bu_cache_write((void *)buffer.data(), buffer.length(),
+    size_t wsize = bu_cache_write(const_cast<void *>(data), size,
 				  keystr.c_str(), context->i->lodCache,
 				  &writeTxn);
     return (wsize > 0);
@@ -1156,13 +1194,13 @@ BObolPopState::cacheTri(void)
 	std::stringstream stream;
 	for (size_t levelIndex = 0; levelIndex <= POP_MAXLEVEL; levelIndex++) {
 	    size_t count = 0;
-	    if (levelTriVerts.find(levelIndex) == levelTriVerts.end()) {
+	    if (levelIndex >= levelTriVerts.size()) {
 		stream.write(reinterpret_cast<const char *>(&count),
 			     sizeof(count));
 		continue;
 	    }
 	    if (static_cast<int>(levelIndex) > maxPopLevel ||
-		!levelTriVerts[levelIndex].size()) {
+		levelTriVerts[levelIndex].empty()) {
 		stream.write(reinterpret_cast<const char *>(&count),
 			     sizeof(count));
 		continue;
@@ -1195,19 +1233,20 @@ BObolPopState::cacheTri(void)
 
     for (int levelIndex = 0; levelIndex <= maxPopLevel;
 	 levelIndex++) {
-	std::stringstream stream;
-	if (levelTriVerts.find(levelIndex) == levelTriVerts.end())
+	if (levelIndex >= static_cast<int>(levelTriVerts.size()) ||
+	    levelTriVerts[levelIndex].empty())
 	    continue;
-	if (!levelTriVerts[levelIndex].size())
-	    continue;
-	for (auto setIt = levelTriVerts[levelIndex].begin();
-	     setIt != levelTriVerts[levelIndex].end(); ++setIt) {
-	    point_t point;
-	    VMOVE(point, vertexArray[*setIt]);
-	    stream.write(reinterpret_cast<const char *>(&point[0]), sizeof(point_t));
+	std::vector<fastf_t> points;
+	points.resize(levelTriVerts[levelIndex].size() * 3);
+	size_t outputIndex = 0;
+	for (uint32_t sourceVertexIndex : levelTriVerts[levelIndex]) {
+	    points[outputIndex++] = vertexArray[sourceVertexIndex][X];
+	    points[outputIndex++] = vertexArray[sourceVertexIndex][Y];
+	    points[outputIndex++] = vertexArray[sourceVertexIndex][Z];
 	}
 	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERT_LEVEL, levelIndex);
-	if (!cacheWrite(bu_vls_cstr(&keyBuffer), stream)) {
+	if (!cacheWriteData(bu_vls_cstr(&keyBuffer), points.data(),
+		points.size() * sizeof(fastf_t))) {
 	    bu_vls_free(&keyBuffer);
 	    return false;
 	}
@@ -1215,20 +1254,22 @@ BObolPopState::cacheTri(void)
 
     for (int levelIndex = 0; levelIndex <= maxPopLevel;
 	 levelIndex++) {
-	std::stringstream stream;
-	if (!levelTris[levelIndex].size())
+	if (levelTris[levelIndex].empty())
 	    continue;
-	for (auto triIt = levelTris[levelIndex].begin();
-	     triIt != levelTris[levelIndex].end(); ++triIt) {
-	    int vertices[3];
-	    vertices[0] = static_cast<int>(triIndexMap[faceArray[3 * (*triIt) + 0]]);
-	    vertices[1] = static_cast<int>(triIndexMap[faceArray[3 * (*triIt) + 1]]);
-	    vertices[2] = static_cast<int>(triIndexMap[faceArray[3 * (*triIt) + 2]]);
-	    stream.write(reinterpret_cast<const char *>(&vertices[0]),
-			 sizeof(vertices));
+	std::vector<int> triangles;
+	triangles.resize(levelTris[levelIndex].size() * 3);
+	size_t outputIndex = 0;
+	for (uint32_t sourceFaceIndex : levelTris[levelIndex]) {
+	    triangles[outputIndex++] = static_cast<int>(
+		triIndexMap[faceArray[3 * sourceFaceIndex + 0]]);
+	    triangles[outputIndex++] = static_cast<int>(
+		triIndexMap[faceArray[3 * sourceFaceIndex + 1]]);
+	    triangles[outputIndex++] = static_cast<int>(
+		triIndexMap[faceArray[3 * sourceFaceIndex + 2]]);
 	}
 	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_TRI_LEVEL, levelIndex);
-	if (!cacheWrite(bu_vls_cstr(&keyBuffer), stream)) {
+	if (!cacheWriteData(bu_vls_cstr(&keyBuffer), triangles.data(),
+		triangles.size() * sizeof(int))) {
 	    bu_vls_free(&keyBuffer);
 	    return false;
 	}
@@ -1237,22 +1278,24 @@ BObolPopState::cacheTri(void)
     if (normalArray) {
 	for (int levelIndex = 0; levelIndex <= maxPopLevel;
 	     levelIndex++) {
-	    std::stringstream stream;
-	    if (!levelTris[levelIndex].size())
+	    if (levelTris[levelIndex].empty())
 		continue;
-	    for (auto triIt = levelTris[levelIndex].begin();
-		 triIt != levelTris[levelIndex].end(); ++triIt) {
+	    std::vector<fastf_t> normals;
+	    normals.resize(levelTris[levelIndex].size() * 9);
+	    size_t outputIndex = 0;
+	    for (uint32_t sourceFaceIndex : levelTris[levelIndex]) {
 		for (int cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
-		    vect_t normal;
-		    const int normalIndex = 3 * (*triIt) + cornerIndex;
-		    VMOVE(normal, normalArray[normalIndex]);
-		    stream.write(reinterpret_cast<const char *>(&normal[0]),
-				 sizeof(vect_t));
+		    const size_t normalIndex =
+			3 * static_cast<size_t>(sourceFaceIndex) + cornerIndex;
+		    normals[outputIndex++] = normalArray[normalIndex][X];
+		    normals[outputIndex++] = normalArray[normalIndex][Y];
+		    normals[outputIndex++] = normalArray[normalIndex][Z];
 		}
 	    }
 	    bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERTNORM_LEVEL,
 			   levelIndex);
-	    if (!cacheWrite(bu_vls_cstr(&keyBuffer), stream)) {
+	    if (!cacheWriteData(bu_vls_cstr(&keyBuffer), normals.data(),
+		    normals.size() * sizeof(fastf_t))) {
 		bu_vls_free(&keyBuffer);
 		return false;
 	    }

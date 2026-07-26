@@ -41,6 +41,7 @@
 #define BOBOL_DRAW_CACHE_CURRENT_FORMAT 4
 #define BOBOL_DRAW_CACHE_AABB "bb"
 #define BOBOL_DRAW_CACHE_OBB "obb"
+#define BOBOL_DRAW_CACHE_LOD_ASSET "lod_asset"
 #define BOBOL_DRAW_CACHE_METADATA "meta"
 #define BOBOL_DRAW_CACHE_PATH_METADATA "meta_path"
 #define BOBOL_DRAW_CACHE_PATH_METADATA_INDEX "meta_path_index"
@@ -48,12 +49,16 @@
 #define BOBOL_DRAW_METADATA_DISK_MAGIC 0x4f424d45u /* OBME */
 #define BOBOL_DRAW_PROXY_DISK_MAGIC 0x4f425058u /* OBPX */
 #define BOBOL_DRAW_PROXY_DISK_VERSION 1u
+#define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
+#define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 1u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
 #define BOBOL_DRAW_MANIFEST_DISK_VERSION 1u
 
 struct BObolDrawCacheContext {
     bu_cache *cache;
     char *registryKey;
+    db_i *validationDb;
+    uint64_t validationFingerprint;
 };
 
 struct BObolDrawCacheHandle {
@@ -107,6 +112,32 @@ struct BObolDrawProxyDiskHeader {
     uint64_t databaseFingerprint;
     uint64_t directoryAddress;
     uint64_t directoryLength;
+};
+
+struct BObolDrawLodAssetDiskHeader {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t nameLength;
+    uint32_t assetNameLength;
+    uint32_t directoryFlags;
+    uint32_t directoryMajorType;
+    uint32_t directoryMinorType;
+    uint32_t assetDirectoryFlags;
+    uint32_t assetDirectoryMajorType;
+    uint32_t assetDirectoryMinorType;
+    uint32_t reserved;
+    uint64_t databaseFingerprint;
+    uint64_t directoryAddress;
+    uint64_t directoryLength;
+    uint64_t assetDirectoryAddress;
+    uint64_t assetDirectoryLength;
+    uint64_t faceCount;
+    uint64_t pointCount;
+    point_t boundsMin;
+    point_t boundsMax;
+    point_t assetBoundsMin;
+    point_t assetBoundsMax;
+    mat_t assetToObject;
 };
 
 struct BObolDrawManifestDiskHeader {
@@ -175,6 +206,8 @@ bobol_draw_cache_context_close(BObolDrawCacheContext *context)
 {
     if (!context)
 	return;
+    if (context->validationDb)
+	db_close(context->validationDb);
     if (context->cache)
 	bu_cache_close(context->cache);
     if (context->registryKey)
@@ -300,6 +333,9 @@ bobol_draw_cache_database_fingerprint(const db_i *dbip)
     return fingerprint;
 }
 
+static int bobol_draw_proxy_bbox_valid(const point_t bmin,
+	const point_t bmax);
+
 static size_t
 bobol_draw_proxy_disk_size(size_t name_length, size_t point_count)
 {
@@ -378,6 +414,157 @@ bobol_draw_proxy_disk_unpack(const void *data, size_t data_size,
 	return 0;
     memcpy(points, bytes + sizeof(header) + name_length,
 	point_count * sizeof(point_t));
+    return 1;
+}
+
+static size_t
+bobol_draw_lod_asset_disk_size(size_t nameLength, size_t assetNameLength)
+{
+    if (nameLength > SIZE_MAX - sizeof(BObolDrawLodAssetDiskHeader) ||
+	assetNameLength > SIZE_MAX - sizeof(BObolDrawLodAssetDiskHeader) -
+	    nameLength)
+	return 0;
+    return sizeof(BObolDrawLodAssetDiskHeader) + nameLength +
+	assetNameLength;
+}
+
+static int
+bobol_draw_lod_asset_disk_pack(std::vector<unsigned char> &buffer,
+	const db_i *dbip, db_i *validationDb, const char *name,
+	const BObolDrawLodAssetRecord *record)
+{
+    if (!dbip || !validationDb || !name || !record || !record->faceCount ||
+	!record->pointCount ||
+	!bobol_draw_proxy_bbox_valid(record->boundsMin, record->boundsMax) ||
+	!bobol_draw_proxy_bbox_valid(record->assetBoundsMin,
+	    record->assetBoundsMax))
+	return 0;
+
+    const size_t nameLength = strlen(name);
+    const size_t assetNameLength = strnlen(record->assetName,
+	BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX);
+    if (!nameLength || !assetNameLength ||
+	assetNameLength >= BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX)
+	return 0;
+    directory *dp = db_lookup(validationDb, name, LOOKUP_QUIET);
+    directory *assetDp = db_lookup(validationDb,
+	record->assetName, LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL || assetDp == RT_DIR_NULL ||
+	dp->d_addr == RT_DIR_PHONY_ADDR ||
+	assetDp->d_addr == RT_DIR_PHONY_ADDR ||
+	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT ||
+	assetDp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+	return 0;
+    for (size_t i = 0; i < 16; i++)
+	if (!std::isfinite(record->assetToObject[i]))
+	    return 0;
+
+    const size_t diskSize =
+	bobol_draw_lod_asset_disk_size(nameLength, assetNameLength);
+    if (!diskSize || nameLength > UINT32_MAX ||
+	assetNameLength > UINT32_MAX)
+	return 0;
+
+    buffer.assign(diskSize, 0);
+    BObolDrawLodAssetDiskHeader header;
+    memset(&header, 0, sizeof(header));
+    header.magic = BOBOL_DRAW_LOD_ASSET_DISK_MAGIC;
+    header.version = BOBOL_DRAW_LOD_ASSET_DISK_VERSION;
+    header.nameLength = static_cast<uint32_t>(nameLength);
+    header.assetNameLength = static_cast<uint32_t>(assetNameLength);
+    header.directoryFlags = static_cast<uint32_t>(dp->d_flags);
+    header.directoryMajorType = static_cast<uint32_t>(dp->d_major_type);
+    header.directoryMinorType = static_cast<uint32_t>(dp->d_minor_type);
+    header.assetDirectoryFlags = static_cast<uint32_t>(assetDp->d_flags);
+    header.assetDirectoryMajorType =
+	static_cast<uint32_t>(assetDp->d_major_type);
+    header.assetDirectoryMinorType =
+	static_cast<uint32_t>(assetDp->d_minor_type);
+    header.databaseFingerprint = bobol_draw_cache_database_fingerprint(dbip);
+    header.directoryAddress = static_cast<uint64_t>(dp->d_addr);
+    header.directoryLength = static_cast<uint64_t>(dp->d_len);
+    header.assetDirectoryAddress = static_cast<uint64_t>(assetDp->d_addr);
+    header.assetDirectoryLength = static_cast<uint64_t>(assetDp->d_len);
+    header.faceCount = record->faceCount;
+    header.pointCount = record->pointCount;
+    VMOVE(header.boundsMin, record->boundsMin);
+    VMOVE(header.boundsMax, record->boundsMax);
+    VMOVE(header.assetBoundsMin, record->assetBoundsMin);
+    VMOVE(header.assetBoundsMax, record->assetBoundsMax);
+    MAT_COPY(header.assetToObject, record->assetToObject);
+    memcpy(buffer.data(), &header, sizeof(header));
+    memcpy(buffer.data() + sizeof(header), name, nameLength);
+    memcpy(buffer.data() + sizeof(header) + nameLength, record->assetName,
+	assetNameLength);
+    return 1;
+}
+
+static int
+bobol_draw_lod_asset_disk_unpack(const void *data, size_t dataSize,
+	const db_i *dbip, db_i *validationDb, const char *name,
+	BObolDrawLodAssetRecord *record)
+{
+    if (!data || !dbip || !validationDb || !name || !record ||
+	dataSize < sizeof(BObolDrawLodAssetDiskHeader))
+	return 0;
+    directory *dp = db_lookup(validationDb, name, LOOKUP_QUIET);
+    if (dp == RT_DIR_NULL)
+	return 0;
+
+    BObolDrawLodAssetDiskHeader header;
+    memcpy(&header, data, sizeof(header));
+    const size_t nameLength = strlen(name);
+    const size_t expectedSize = bobol_draw_lod_asset_disk_size(
+	header.nameLength, header.assetNameLength);
+    if (!expectedSize || dataSize != expectedSize ||
+	header.magic != BOBOL_DRAW_LOD_ASSET_DISK_MAGIC ||
+	header.version != BOBOL_DRAW_LOD_ASSET_DISK_VERSION ||
+	header.nameLength != nameLength || !header.assetNameLength ||
+	header.assetNameLength >= BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX ||
+	header.directoryFlags != static_cast<uint32_t>(dp->d_flags) ||
+	header.directoryMajorType != static_cast<uint32_t>(dp->d_major_type) ||
+	header.directoryMinorType != static_cast<uint32_t>(dp->d_minor_type) ||
+	header.databaseFingerprint != bobol_draw_cache_database_fingerprint(dbip) ||
+	header.directoryAddress != static_cast<uint64_t>(dp->d_addr) ||
+	header.directoryLength != static_cast<uint64_t>(dp->d_len) ||
+	!header.faceCount || !header.pointCount ||
+	!bobol_draw_proxy_bbox_valid(header.boundsMin, header.boundsMax) ||
+	!bobol_draw_proxy_bbox_valid(header.assetBoundsMin,
+	    header.assetBoundsMax))
+	return 0;
+    for (size_t i = 0; i < 16; i++)
+	if (!std::isfinite(header.assetToObject[i]))
+	    return 0;
+
+    const unsigned char *bytes = static_cast<const unsigned char *>(data);
+    if (memcmp(bytes + sizeof(header), name, nameLength) != 0)
+	return 0;
+    char assetName[BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX] = {0};
+    memcpy(assetName, bytes + sizeof(header) + nameLength,
+	header.assetNameLength);
+    directory *assetDp = db_lookup(validationDb, assetName,
+	LOOKUP_QUIET);
+    if (assetDp == RT_DIR_NULL ||
+	header.assetDirectoryFlags !=
+	    static_cast<uint32_t>(assetDp->d_flags) ||
+	header.assetDirectoryMajorType !=
+	    static_cast<uint32_t>(assetDp->d_major_type) ||
+	header.assetDirectoryMinorType !=
+	    static_cast<uint32_t>(assetDp->d_minor_type) ||
+	header.assetDirectoryAddress !=
+	    static_cast<uint64_t>(assetDp->d_addr) ||
+	header.assetDirectoryLength != static_cast<uint64_t>(assetDp->d_len))
+	return 0;
+
+    bobol_draw_lod_asset_record_init(record);
+    bu_strlcpy(record->assetName, assetName, sizeof(record->assetName));
+    record->faceCount = header.faceCount;
+    record->pointCount = header.pointCount;
+    VMOVE(record->boundsMin, header.boundsMin);
+    VMOVE(record->boundsMax, header.boundsMax);
+    VMOVE(record->assetBoundsMin, header.assetBoundsMin);
+    VMOVE(record->assetBoundsMax, header.assetBoundsMax);
+    MAT_COPY(record->assetToObject, header.assetToObject);
     return 1;
 }
 
@@ -559,6 +746,34 @@ bobol_draw_cache_db_name(bu_vls *fname, db_i *dbip)
     return 1;
 }
 
+static void
+bobol_draw_cache_validation_refresh(BObolDrawCacheContext *context,
+	db_i *dbip)
+{
+    if (!context || !dbip)
+	return;
+    const uint64_t fingerprint = bobol_draw_cache_database_fingerprint(dbip);
+    if (context->validationDb &&
+	context->validationFingerprint == fingerprint)
+	return;
+    if (context->validationDb) {
+	db_close(context->validationDb);
+	context->validationDb = NULL;
+    }
+    context->validationFingerprint = fingerprint;
+    const char *filename = dbip->dbi_filename;
+    if (!filename || !filename[0] || !bu_file_exists(filename, NULL))
+	return;
+    db_i *validationDb = db_open(filename, DB_OPEN_READONLY);
+    if (!validationDb)
+	return;
+    if (db_dirbuild(validationDb) < 0) {
+	db_close(validationDb);
+	return;
+    }
+    context->validationDb = validationDb;
+}
+
 static int
 bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 {
@@ -590,6 +805,7 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	if (it != bobol_draw_cache_registry().end()) {
 	    handle->context = it->second;
 	    handle->cache = it->second->cache;
+	    bobol_draw_cache_validation_refresh(handle->context, dbip);
 	    bu_vls_free(&cpath);
 	    bu_vls_free(&fname);
 	    return handle->cache ? 1 : 0;
@@ -599,12 +815,15 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	BU_GET(context, BObolDrawCacheContext);
 	context->cache = bu_cache_open(bu_vls_cstr(&cpath), 1, 0);
 	context->registryKey = bu_strdup(registryKey.c_str());
+	context->validationDb = NULL;
+	context->validationFingerprint = 0;
 	if (!context->cache) {
 	    bobol_draw_cache_context_close(context);
 	    bu_vls_free(&cpath);
 	    bu_vls_free(&fname);
 	    return 0;
 	}
+	bobol_draw_cache_validation_refresh(context, dbip);
 
 	bobol_draw_cache_registry()[registryKey] = context;
 	handle->context = context;
@@ -639,6 +858,15 @@ bobol_draw_proxy_record_init(BObolDrawProxyRecord *record)
     if (!record)
 	return;
     memset(record, 0, sizeof(*record));
+}
+
+extern "C" void
+bobol_draw_lod_asset_record_init(BObolDrawLodAssetRecord *record)
+{
+    if (!record)
+	return;
+    memset(record, 0, sizeof(*record));
+    MAT_IDN(record->assetToObject);
 }
 
 extern "C" void
@@ -705,7 +933,9 @@ bobol_draw_manifest_cache_invalidate_database(db_i *dbip)
 	nkeys = bu_cache_keys(&keys, handle.cache);
 	for (int i = 0; i < nkeys; i++) {
 	    if (bobol_draw_cache_key_component_is(keys[i],
-		    BOBOL_DRAW_CACHE_MANIFEST))
+		    BOBOL_DRAW_CACHE_MANIFEST) ||
+		bobol_draw_cache_key_component_is(keys[i],
+		    BOBOL_DRAW_CACHE_LOD_ASSET))
 		bu_cache_clear(keys[i], handle.cache, NULL);
 	}
     }
@@ -900,6 +1130,73 @@ bobol_draw_proxy_cache_get(db_i *dbip,
     record->pointCount = expectedCount;
     bu_free(data, "bobol draw proxy get data");
     return BRLCAD_OK;
+}
+
+extern "C" int
+bobol_draw_lod_asset_cache_store(db_i *dbip, const char *name,
+	const BObolDrawLodAssetRecord *record)
+{
+    if (!dbip || !name || !record)
+	return BRLCAD_ERROR;
+
+    char key[BU_CACHE_KEY_MAXLEN] = {0};
+    bobol_draw_cache_key(key, name, BOBOL_DRAW_CACHE_LOD_ASSET);
+    if (!key[0])
+	return BRLCAD_ERROR;
+
+    std::vector<unsigned char> disk;
+    int sem = bobol_draw_cache_semaphore();
+    bu_semaphore_acquire(sem);
+    BObolDrawCacheHandle handle;
+    size_t written = 0;
+    if (bobol_draw_cache_open(&handle, dbip)) {
+	db_i *validationDb = handle.context &&
+	    handle.context->validationDb ?
+	    handle.context->validationDb : dbip;
+	if (bobol_draw_lod_asset_disk_pack(disk, dbip, validationDb, name,
+		record))
+	    written = bu_cache_write(disk.data(), disk.size(), key,
+		handle.cache, NULL);
+	bobol_draw_cache_close(&handle);
+    }
+    bu_semaphore_release(sem);
+    return !disk.empty() && written == disk.size() ?
+	BRLCAD_OK : BRLCAD_ERROR;
+}
+
+extern "C" int
+bobol_draw_lod_asset_cache_get(db_i *dbip, const char *name,
+	BObolDrawLodAssetRecord *record)
+{
+    if (!dbip || !name || !record)
+	return BRLCAD_ERROR;
+    bobol_draw_lod_asset_record_init(record);
+
+    char key[BU_CACHE_KEY_MAXLEN] = {0};
+    bobol_draw_cache_key(key, name, BOBOL_DRAW_CACHE_LOD_ASSET);
+    if (!key[0])
+	return BRLCAD_ERROR;
+
+    int sem = bobol_draw_cache_semaphore();
+    bu_semaphore_acquire(sem);
+    BObolDrawCacheHandle handle;
+    void *data = NULL;
+    size_t dataSize = 0;
+    int valid = 0;
+    if (bobol_draw_cache_open(&handle, dbip)) {
+	dataSize = bu_cache_get(&data, key, handle.cache, NULL);
+	db_i *validationDb = handle.context &&
+	    handle.context->validationDb ?
+	    handle.context->validationDb : dbip;
+	valid = bobol_draw_lod_asset_disk_unpack(data, dataSize,
+	    dbip, validationDb, name, record);
+	bobol_draw_cache_close(&handle);
+    }
+    bu_semaphore_release(sem);
+
+    if (data)
+	bu_free(data, "bobol draw LoD asset data");
+    return valid ? BRLCAD_OK : BRLCAD_ERROR;
 }
 
 extern "C" int

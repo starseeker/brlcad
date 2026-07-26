@@ -177,9 +177,9 @@ public:
      * the call succeeds only when the retained progressive asset already
      * contains the requested prefix. */
     SbBool retargetMeshPayload(const MeshPayload *payload, int activeLevel,
-	uint64_t viewRevision, uint64_t policyRevision);
+	int requestedLevel, uint64_t viewRevision, uint64_t policyRevision);
     SbBool retargetCadPayload(const CadPayload *payload, int activeLevel,
-	uint64_t viewRevision, uint64_t policyRevision);
+	int requestedLevel, uint64_t viewRevision, uint64_t policyRevision);
     size_t bindingCount(void) const;
     size_t payloadCount(void) const;
     size_t meshPayloadCount(void) const;

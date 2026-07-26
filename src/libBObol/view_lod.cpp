@@ -943,11 +943,13 @@ SbBool
 BObolViewLodState::retargetMeshPayload(
     const BObolViewLodState::MeshPayload *target,
     int activeLevel,
+    int requestedLevel,
     uint64_t viewRevision,
     uint64_t policyRevision)
 {
     if (!target || !target->progressiveMesh ||
-	!target->progressiveMesh->canDrawLevel(activeLevel))
+	!target->progressiveMesh->canDrawLevel(activeLevel) ||
+	requestedLevel < 0)
 	return FALSE;
 
     MeshPayloadPtr payload;
@@ -961,7 +963,7 @@ BObolViewLodState::retargetMeshPayload(
 	return FALSE;
 
     payload->activeLevel = activeLevel;
-    payload->requestedLevel = activeLevel;
+    payload->requestedLevel = requestedLevel;
     payload->residentLevel = payload->progressiveMesh->residentLevel();
     payload->viewRevision = viewRevision;
     payload->policyRevision = policyRevision;
@@ -979,11 +981,13 @@ SbBool
 BObolViewLodState::retargetCadPayload(
     const BObolViewLodState::CadPayload *target,
     int activeLevel,
+    int requestedLevel,
     uint64_t viewRevision,
     uint64_t policyRevision)
 {
     if (!target || !target->progressiveMesh ||
-	!target->progressiveMesh->canDrawLevel(activeLevel))
+	!target->progressiveMesh->canDrawLevel(activeLevel) ||
+	requestedLevel < 0)
 	return FALSE;
 
     CadPayloadPtr payload;
@@ -997,7 +1001,7 @@ BObolViewLodState::retargetCadPayload(
 	return FALSE;
 
     payload->activeLevel = activeLevel;
-    payload->requestedLevel = activeLevel;
+    payload->requestedLevel = requestedLevel;
     payload->residentLevel = payload->progressiveMesh->residentLevel();
     payload->viewRevision = viewRevision;
     payload->policyRevision = policyRevision;
@@ -1180,10 +1184,11 @@ BObolViewLodState::residentMeshDemands(
     for (const MeshPayloadPtr &payload : meshPayloads) {
 	if (!payload || !payload->progressiveMesh ||
 	    !payload->progressiveMesh->isValid() ||
-	    payload->cacheKey.getLength() == 0 || payload->activeLevel < 0)
+	    payload->cacheKey.getLength() == 0 ||
+	    payload->requestedLevel < 0)
 	    continue;
 	int &level = maximumLevels[payload->cacheKey.getString()];
-	level = std::max(level, payload->activeLevel);
+	level = std::max(level, payload->requestedLevel);
     }
 
     std::vector<CadPayloadPtr> cadPayloads;
@@ -1191,13 +1196,14 @@ BObolViewLodState::residentMeshDemands(
 	const CadPayloadPtr &payload = binding.second;
 	if (!payload || !payload->progressiveMesh ||
 	    !payload->progressiveMesh->isValid() ||
-	    payload->cacheKey.getLength() == 0 || payload->activeLevel < 0 ||
+	    payload->cacheKey.getLength() == 0 ||
+	    payload->requestedLevel < 0 ||
 	    std::find(cadPayloads.begin(), cadPayloads.end(), payload) !=
 		cadPayloads.end())
 	    continue;
 	cadPayloads.push_back(payload);
 	int &level = maximumLevels[payload->cacheKey.getString()];
-	level = std::max(level, payload->activeLevel);
+	level = std::max(level, payload->requestedLevel);
     }
 
     demands.reserve(maximumLevels.size());

@@ -1108,6 +1108,7 @@ struct BObolViewController::Impl {
     void *presentationSyncUserData = NULL;
     uint64_t lastRenderTimeNanoseconds = 0;
     uint64_t smoothedRenderTimeNanoseconds = 0;
+    uint64_t renderCompletionSerial = 0;
     mutable std::mutex presentationTimingMutex;
     uint64_t lastPresentationTimestampNanoseconds = 0;
     uint64_t smoothedPresentationIntervalNanoseconds = 0;
@@ -1136,6 +1137,8 @@ struct BObolViewController::Impl {
     int64_t lodLastViewChangeMicroseconds = 0;
     SbBool lodInteractive = FALSE;
     SbBool lodResidentCompactionPending = FALSE;
+    SbBool lodRefinementAwaitingFrame = FALSE;
+    uint64_t lodRefinementResumeAfterRenderSerial = 0;
     float lodTargetPixelError = 1.0f;
     SbBool lodUseForcedLevel = FALSE;
     int lodForcedLevel = 0;
@@ -2541,6 +2544,23 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
     this->d->smoothedRenderTimeNanoseconds =
 	this->d->smoothedRenderTimeNanoseconds ?
 	(this->d->smoothedRenderTimeNanoseconds * 9 + elapsed) / 10 : elapsed;
+    this->d->renderCompletionSerial++;
+    if (this->d->renderCompletionSerial == 0)
+	this->d->renderCompletionSerial++;
+
+    /* A partial PoP result must be presented before the next, potentially
+     * much larger prefix is requested.  This makes population staging an
+     * actual user-visible progression and gives the frame-timing feedback a
+     * chance to observe every step. */
+    if (this->d->lodRefinementAwaitingFrame &&
+	this->d->renderCompletionSerial >=
+	    this->d->lodRefinementResumeAfterRenderSerial) {
+	this->d->lodRefinementAwaitingFrame = FALSE;
+	this->d->lodLastSubmittedViewRevision = 0;
+	this->d->lodLastSubmittedPolicyRevision = 0;
+	this->markProgressiveWorkPending();
+	this->requestRender("lod-refinement-frame");
+    }
 }
 
 uint64_t
@@ -2982,7 +3002,7 @@ BObolViewController::advanceProgressiveWork(
 		this->d->lodService->compactResidentMeshes(
 		    static_cast<uint64_t>(
 			reinterpret_cast<uintptr_t>(this)),
-		    this->d->lodViewRevision, demands, 1);
+		    this->d->lodViewRevision, demands);
 	    this->d->lodResidentCompactionPending = FALSE;
 	    if (compacted) {
 		if (viewState)
@@ -3164,6 +3184,8 @@ BObolViewController::setLodService(BObolLodService *service)
     this->d->lodLastSubmittedPolicyRevision = 0;
     this->d->lodLastSubmittedSourceSignature = "";
     this->d->lodResidentCompactionPending = service ? TRUE : FALSE;
+    this->d->lodRefinementAwaitingFrame = FALSE;
+    this->d->lodRefinementResumeAfterRenderSerial = 0;
 
     if (this->d->lodService)
 	this->d->lodResultSubscriberId =
@@ -3184,6 +3206,8 @@ BObolViewController::cancelActiveLodGeneration(void)
     this->d->lodLastSubmittedViewRevision = 0;
     this->d->lodLastSubmittedPolicyRevision = 0;
     this->d->lodLastSubmittedSourceSignature = "";
+    this->d->lodRefinementAwaitingFrame = FALSE;
+    this->d->lodRefinementResumeAfterRenderSerial = 0;
 }
 
 void
@@ -4017,7 +4041,10 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
 	action.setViewLodState(this->d->viewAttachment->getViewLodState());
-	action.setAllowLevelDowngrade(this->d->lodInteractive ? FALSE : TRUE);
+	/* Coarsening a retained prefix only changes the draw count/snap level;
+	 * it does not rebuild or reread the mesh.  Permit it during motion so a
+	 * previously settled, expensive cut cannot pin interactive FPS. */
+	action.setAllowLevelDowngrade(TRUE);
 	action.setCompactEntryRange(this->d->lodSubmissionEntryOffset,
 	    capacity);
 	if (this->d->lodUseForcedLevel)
@@ -4091,6 +4118,7 @@ BObolViewController::applyLodResults(BObolLodService *service,
 
     SoBRLLodUpdateAction update;
     update.setViewLodState(this->d->viewAttachment->getViewLodState());
+    SbBool partialRefinementCandidate = FALSE;
     for (size_t i = 0; i < drained.size(); i++) {
 	const SbBool traceResult = controller_lod_trace_result(drained[i]);
 	if (traceResult) {
@@ -4164,6 +4192,13 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		continue;
 	    }
 	}
+	if (drained[i].providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	    drained[i].resultKind == BOBOL_LOD_RESULT_MESH &&
+	    drained[i].geometry.activeLevel >= 0 &&
+	    drained[i].request.requestedLevel >
+		drained[i].geometry.activeLevel &&
+	    !drained[i].terminal)
+	    partialRefinementCandidate = TRUE;
 	update.addResult(std::move(drained[i]));
     }
 
@@ -4183,6 +4218,13 @@ BObolViewController::applyLodResults(BObolLodService *service,
     if (this->d->lastLodAppliedResultCount > 0) {
 	this->requestRender("lod-result");
 	(void)this->enforceMeshResidencyBudget();
+	if (partialRefinementCandidate) {
+	    this->d->lodRefinementAwaitingFrame = TRUE;
+	    this->d->lodRefinementResumeAfterRenderSerial =
+		this->d->renderCompletionSerial + 1;
+	    if (this->d->lodRefinementResumeAfterRenderSerial == 0)
+		this->d->lodRefinementResumeAfterRenderSerial = 1;
+	}
     }
 
     return size_to_int_saturated(
@@ -5264,6 +5306,25 @@ BObolViewController::advanceLodPolicyRevision(void)
 	this->d->lodPolicyRevision++;
 }
 
+static float
+controller_interactive_pixel_error(uint64_t renderNanoseconds,
+				   uint64_t presentationNanoseconds)
+{
+    /* Four pixels is the normal motion cut.  If recent frames miss a 60 Hz
+     * budget, increase error with the square root of the overrun: PoP level
+     * population commonly grows near quadratically, so this is a conservative
+     * first-order feedback response without violent level oscillation. */
+    const double targetNanoseconds = 1000000000.0 / 60.0;
+    const uint64_t observed = std::max(renderNanoseconds,
+	presentationNanoseconds);
+    if (!observed ||
+	static_cast<double>(observed) <= targetNanoseconds * 1.20)
+	return 4.0f;
+    const double scale = std::sqrt(
+	static_cast<double>(observed) / targetNanoseconds);
+    return static_cast<float>(std::max(4.0, std::min(16.0, 4.0 * scale)));
+}
+
 void
 BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 {
@@ -5287,7 +5348,18 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	    this->d->lodLastViewChangeMicroseconds = bu_gettime();
 	    this->d->lodInteractive = TRUE;
 	    this->d->lodResidentCompactionPending = TRUE;
-	    this->d->lodTargetPixelError = 4.0f;
+	    this->d->lodRefinementAwaitingFrame = FALSE;
+	    uint64_t presentationNanoseconds = 0;
+	    {
+		std::lock_guard<std::mutex> lock(
+		    this->d->presentationTimingMutex);
+		presentationNanoseconds =
+		    this->d->smoothedPresentationIntervalNanoseconds;
+	    }
+	    this->d->lodTargetPixelError =
+		controller_interactive_pixel_error(
+		    this->d->smoothedRenderTimeNanoseconds,
+		    presentationNanoseconds);
 	    this->markProgressiveWorkPending();
 	}
     }

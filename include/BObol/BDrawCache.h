@@ -28,6 +28,7 @@ __BEGIN_DECLS
 #define BOBOL_DRAW_CACHE_DIR ".DbDrawCache"
 #define BOBOL_DRAW_CACHE_METADATA_NAME_MAX 128
 #define BOBOL_DRAW_CACHE_METADATA_SHADER_MAX 256
+#define BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX 1024
 #define BOBOL_DRAW_CACHE_PROXY_AABB 1
 #define BOBOL_DRAW_CACHE_PROXY_OBB 2
 
@@ -46,6 +47,20 @@ struct BObolDrawProxyRecord {
     int kind;
     size_t pointCount;
     point_t points[8];
+};
+
+/* A validated mapping from one baked database mesh to the canonical mesh
+ * whose progressive payload it reuses.  assetToObject maps canonical asset
+ * coordinates into this object's native coordinates. */
+struct BObolDrawLodAssetRecord {
+    char assetName[BOBOL_DRAW_CACHE_LOD_ASSET_NAME_MAX];
+    uint64_t faceCount;
+    uint64_t pointCount;
+    point_t boundsMin;
+    point_t boundsMax;
+    point_t assetBoundsMin;
+    point_t assetBoundsMax;
+    mat_t assetToObject;
 };
 
 struct BObolDrawMetadataRecord {
@@ -102,6 +117,19 @@ BOBOL_EXPORT void
 bobol_draw_proxy_record_init(struct BObolDrawProxyRecord *record);
 
 BOBOL_EXPORT void
+bobol_draw_lod_asset_record_init(struct BObolDrawLodAssetRecord *record);
+
+BOBOL_EXPORT int
+bobol_draw_lod_asset_cache_store(struct db_i *dbip,
+	const char *name,
+	const struct BObolDrawLodAssetRecord *record);
+
+BOBOL_EXPORT int
+bobol_draw_lod_asset_cache_get(struct db_i *dbip,
+	const char *name,
+	struct BObolDrawLodAssetRecord *record);
+
+BOBOL_EXPORT void
 bobol_draw_metadata_record_init(struct BObolDrawMetadataRecord *record);
 
 BOBOL_EXPORT void
@@ -120,8 +148,8 @@ BOBOL_EXPORT int
 bobol_draw_manifest_cache_get(struct db_i *dbip, const char *rootPath,
 	struct BObolDrawManifest *manifest);
 
-/* A manifest describes an entire draw-root hierarchy, so an edit to any
- * object conservatively invalidates all manifests for that database. */
+/* Manifests and transformed-LoD asset mappings describe relationships among
+ * database objects, so an edit conservatively invalidates both record types. */
 BOBOL_EXPORT int
 bobol_draw_manifest_cache_invalidate_database(struct db_i *dbip);
 

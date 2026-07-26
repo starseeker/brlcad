@@ -5142,11 +5142,28 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!source->getCompactInstanceSummary(botHandle, botInstance) ||
 	!source->getCompactOccurrence(0, botOccurrence) ||
 	!botInstance.lodBacked || !botInstance.sourceMeshRequestValid ||
-	!botInstance.wireGeometry || !botInstance.meshGeometry ||
+	!botInstance.wireGeometry || botInstance.meshGeometry ||
 	!botOccurrence.sourceMeshRequestValid ||
 	botOccurrence.sourceMeshRequest.faceCount != 4 ||
 	botOccurrence.sourceMeshRequest.pointCount != 4)
 	FAIL("database-backed BoT at or above LoD threshold should retain its structural proxy and exact source request");
+    if (!source->hasRealizedWireGeometry() ||
+	source->hasRealizedMeshGeometry())
+	FAIL("database-backed LoD BoT proxy should expose only its currently drawable wire channel");
+    if (!source->prepareCompiledAssembly())
+	FAIL("database-backed LoD BoT proxy should compile its interim presentation");
+    SoCADAssembly *botProxyAssembly = NULL;
+    for (int childIndex = 0; childIndex < source->getNumChildren();
+	 childIndex++) {
+	SoNode *child = source->getChild(childIndex);
+	if (child && child->isOfType(SoCADAssembly::getClassTypeId())) {
+	    botProxyAssembly = static_cast<SoCADAssembly *>(child);
+	    break;
+	}
+    }
+    if (!botProxyAssembly ||
+	botProxyAssembly->drawMode.getValue() != SoCADAssembly::WIREFRAME)
+	FAIL("database-backed LoD BoT proxy should use a drawable wire presentation until mesh data arrives");
     const SbBox3f botRequestBounds = botOccurrence.sourceMeshRequest.bounds;
     if (botRequestBounds.isEmpty() ||
 	!nearly_equal(botRequestBounds.getMin()[0], 0.0f) ||
@@ -5888,6 +5905,71 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!nearly_equal(bbox.getMin()[2], 0.0f) ||
 	!nearly_equal(bbox.getMax()[2], 4.0f))
 	FAIL("refreshing a transformed duplicate should preserve placement");
+    root->unref();
+
+    root = new SoSeparator;
+    root->ref();
+    source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "pca_pair.c";
+    source->sourceRevision = 16;
+    source->drawMode = SoBRLDatabaseSource::SHADED;
+    source->lodBotThreshold = 1;
+    root->addChild(source);
+
+    SoBRLRealizeAction pcaLodPairRealize;
+    pcaLodPairRealize.apply(root);
+    BObolCompactInstanceHandle pcaLodHandles[2];
+    BObolCompactInstanceSummary pcaLodSummaries[2];
+    if (pcaLodPairRealize.getRealizedSourceCount() != 1 ||
+	source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
+	source->getCompactInstanceCount() != 2 ||
+	source->getCompactPartCount() != 1 ||
+	!source->getCompactInstanceHandle(0, pcaLodHandles[0]) ||
+	!source->getCompactInstanceHandle(1, pcaLodHandles[1]) ||
+	!source->getCompactInstanceSummary(pcaLodHandles[0],
+	    pcaLodSummaries[0]) ||
+	!source->getCompactInstanceSummary(pcaLodHandles[1],
+	    pcaLodSummaries[1]) ||
+	!pcaLodSummaries[0].lodBacked || !pcaLodSummaries[1].lodBacked ||
+	pcaLodSummaries[0].meshAssetName.getLength() == 0 ||
+	pcaLodSummaries[0].meshAssetName != pcaLodSummaries[1].meshAssetName ||
+	pcaLodSummaries[0].meshAssetBounds.isEmpty() ||
+	pcaLodSummaries[0].meshAssetBounds != pcaLodSummaries[1].meshAssetBounds)
+	FAIL("transformed LoD BoTs should share one canonical progressive asset");
+    SbBox3f pcaLodSourceBounds;
+    if (!source->getSourceBounds(pcaLodSourceBounds) ||
+	pcaLodSourceBounds.isEmpty() ||
+	!nearly_equal(pcaLodSourceBounds.getMin()[0], 0.0f) ||
+	!nearly_equal(pcaLodSourceBounds.getMax()[0], 50.0f) ||
+	!nearly_equal(pcaLodSourceBounds.getMin()[1], -10.0f) ||
+	!nearly_equal(pcaLodSourceBounds.getMax()[1], 2.0f) ||
+	!nearly_equal(pcaLodSourceBounds.getMin()[2], 0.0f) ||
+	!nearly_equal(pcaLodSourceBounds.getMax()[2], 4.0f))
+	FAIL("transformed LoD BoTs should publish their composed source bounds");
+    SoGetBoundingBoxAction pcaLodPairBBoxAction(viewport);
+    pcaLodPairBBoxAction.apply(root);
+    bbox = pcaLodPairBBoxAction.getBoundingBox();
+    if (bbox.isEmpty() || !nearly_equal(bbox.getMin()[0], 0.0f) ||
+	!nearly_equal(bbox.getMax()[0], 50.0f) ||
+	!nearly_equal(bbox.getMin()[1], -10.0f) ||
+	!nearly_equal(bbox.getMax()[1], 2.0f) ||
+	!nearly_equal(bbox.getMin()[2], 0.0f) ||
+	!nearly_equal(bbox.getMax()[2], 4.0f))
+	FAIL("transformed LoD BoTs should render at their baked placements");
+
+    SoBRLExportAction pcaLodExactExport;
+    pcaLodExactExport.setGeometryPolicy(SoBRLExportAction::FULL_DETAIL);
+    pcaLodExactExport.apply(root);
+    BObolLodRequest pcaLodExactRequests[2];
+    if (pcaLodExactExport.getSourceBackedFullDetailRequestCount() != 2 ||
+	!pcaLodExactExport.makeSourceBackedFullDetailLodRequest(
+	    0, pcaLodExactRequests[0]) ||
+	!pcaLodExactExport.makeSourceBackedFullDetailLodRequest(
+	    1, pcaLodExactRequests[1]) ||
+	pcaLodExactRequests[0].objectName != pcaLodExactRequests[1].objectName ||
+	pcaLodExactRequests[0].objectPath != pcaLodExactRequests[1].objectPath)
+	FAIL("transformed LoD exact requests should fetch their shared canonical asset");
     root->unref();
 
     /* The aggregate registry is the normal presentation for repeated

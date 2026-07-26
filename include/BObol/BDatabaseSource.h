@@ -186,6 +186,11 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbString path;
     SbString sourceName;
     SbString sourceInstanceKey;
+    /* Canonical source asset for progressive mesh residency.  Empty values
+     * mean the occurrence's sourceName/path are already canonical. */
+    SbString meshAssetPath;
+    SbString meshAssetName;
+    SbBox3f meshAssetBounds;
     SbMatrix localToSource;
     SbBox3f localBounds;
     uint64_t geometryIdentity;

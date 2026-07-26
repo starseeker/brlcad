@@ -28,6 +28,14 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
     SbString geometryName;
     SbString cacheIdentity;
     SbString sourceIdentity;
+    /* The occurrence identity above is what picking/export reports.  These
+     * fields identify the canonical database mesh whose arrays back the
+     * request.  They differ after rigid transformed-copy reuse (for example,
+     * an xpush result): all occurrences retain their own semantic identity
+     * while loading one shared progressive asset. */
+    SbString meshAssetPath;
+    SbString meshAssetName;
+    SbBox3f meshAssetBounds;
     SbString ownerSourceInstanceKey;
     int databaseIntent;
     int overlayIntent;
@@ -93,6 +101,9 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
 	geometryName = "";
 	cacheIdentity = "";
 	sourceIdentity = "";
+	meshAssetPath = "";
+	meshAssetName = "";
+	meshAssetBounds.makeEmpty();
 	ownerSourceInstanceKey = "";
 	databaseIntent = 0;
 	overlayIntent = 0;

@@ -39,6 +39,16 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
     SbBool useForcedLevel;
     SbBool shrinkAfterCopy;
     SbBool compactResident;
+    /* Pace a cold/warm retained asset toward the view-selected target instead
+     * of making the first visible replacement an unbounded prefix.  These are
+     * delivery budgets, not terminal-quality caps: subsequent rendered frames
+     * continue until requestedLevel is resident. */
+    SbBool progressiveDelivery;
+    uint64_t initialRefinementFaceBudget;
+    uint64_t initialRefinementPointBudget;
+    double refinementGrowthFactor;
+    SbBool useCurrentDrawLevel;
+    int currentDrawLevel;
     int forcedLevel;
     int reset;
 
@@ -179,14 +189,14 @@ public:
 	const BObolLodRequest &request,
 	const BObolMeshLodProvider &provider);
     /* Replace one view consumer's complete stable demand snapshot, aggregate
-     * it with every other consumer, and trim only assets whose resident prefix
-     * exceeds the aggregate maximum plus headroom.  Returns the number of
-     * assets compacted. */
+     * it with every other consumer, and trim assets whose resident prefix
+     * exceeds the aggregate pixel-demanded maximum.  LoD level populations
+     * can differ by millions of faces, so a nominal one-level headroom is not
+     * a bounded memory policy.  Returns the number of assets compacted. */
     size_t compactResidentMeshes(
 	uint64_t consumerId,
 	uint64_t demandRevision,
-	const std::vector<BObolLodResidentDemand> &demands,
-	int headroomLevels = 1);
+	const std::vector<BObolLodResidentDemand> &demands);
     void releaseResidentMeshConsumer(uint64_t consumerId);
 
 private:

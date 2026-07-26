@@ -585,6 +585,48 @@ mesh_lod_mesh_payload_has_same_source(
     return mesh_lod_mesh_payload_is_resident(payload, payloadRequest);
 }
 
+static int
+mesh_lod_available_cad_retarget_level(
+	const BObolViewLodState::CadPayload *payload,
+	const BObolLodRequest &request)
+{
+    if (!payload || !payload->progressiveMesh ||
+	!payload->progressiveMesh->isValid() ||
+	request.requestedLevel < 0)
+	return request.requestedLevel;
+    if (request.requestedLevel <= payload->activeLevel)
+	return request.requestedLevel;
+    /* residentLevel is the loaded cache prefix, but a finer PoP cut can also
+     * be exactly drawable when adjacent levels add only quantization bits and
+     * no vertices/faces.  Reuse the richest cut the retained asset can
+     * actually draw before scheduling more I/O. */
+    for (int level = request.requestedLevel;
+	 level > payload->activeLevel; --level) {
+	if (payload->progressiveMesh->canDrawLevel(level))
+	    return level;
+    }
+    return payload->activeLevel;
+}
+
+static int
+mesh_lod_available_mesh_retarget_level(
+	const BObolViewLodState::MeshPayload *payload,
+	const BObolLodRequest &request)
+{
+    if (!payload || !payload->progressiveMesh ||
+	!payload->progressiveMesh->isValid() ||
+	request.requestedLevel < 0)
+	return request.requestedLevel;
+    if (request.requestedLevel <= payload->activeLevel)
+	return request.requestedLevel;
+    for (int level = request.requestedLevel;
+	 level > payload->activeLevel; --level) {
+	if (payload->progressiveMesh->canDrawLevel(level))
+	    return level;
+    }
+    return payload->activeLevel;
+}
+
 static uint32_t
 mesh_lod_debug_delay_milliseconds(const char *env_name)
 {
@@ -696,8 +738,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * geometry key use database/source revisions and object identity,
 	     * which survive box -> PoP presentation replacement. */
 	    request.sourceContentHash = 0;
-	    request.objectPath = target;
-	    request.objectName = summary.sourceName;
+	    request.objectPath = summary.meshAssetPath.getLength() > 0 ?
+		summary.meshAssetPath : target;
+	    request.objectName = summary.meshAssetName.getLength() > 0 ?
+		summary.meshAssetName : summary.sourceName;
 	    request.occurrenceKey = summary.sourceInstanceKey;
 	    if (request.objectName.getLength() == 0)
 		request.objectName = mesh_lod_source_leaf_name(source);
@@ -707,7 +751,8 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    request.providerId = submitAction->providerId;
 	    request.providerVersion = submitAction->providerVersion;
 	    request.qualityTier = submitAction->qualityTier;
-	    request.bounds = summary.localBounds;
+	    request.bounds = !summary.meshAssetBounds.isEmpty() ?
+		summary.meshAssetBounds : summary.localBounds;
 	    /* Compact summaries already report the complete geometry-to-root
 	     * transform, including the source draw matrix.  Applying the source
 	     * matrix again corrupts screen bounds (and can make a visible leaf
@@ -733,9 +778,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		localToRoot, activePayload ? activePayload->activeLevel : -1);
 
 	    /* A camera epoch is not a geometry invalidation.  Keep the current
-	     * cut when it already satisfies this demand, and never coarsen it
-	     * during motion.  Settled zoom-out may explicitly request a smaller
-	     * cut to reclaim display memory. */
+	     * cut when it already satisfies this demand.  The controller may
+	     * explicitly allow a cheaper retained draw cut during motion; that
+	     * changes only prefix selection and never rereads/rebuilds geometry. */
 	    if (!submitAction->useForcedLevel &&
 		mesh_lod_cad_payload_is_resident(activePayload, request)) {
 		submitAction->skippedMeshCount++;
@@ -752,11 +797,14 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    "finer resident LoD retained during interaction");
 		continue;
 	    }
+	    const int retargetLevel =
+		mesh_lod_available_cad_retarget_level(activePayload, request);
 	    if (submitAction->reset == 0 && activePayload &&
 		mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
-		activePayload->activeLevel != request.requestedLevel &&
+		retargetLevel >= 0 &&
+		activePayload->activeLevel != retargetLevel &&
 		submitAction->viewState->retargetCadPayload(activePayload,
-		    request.requestedLevel, request.viewRevision,
+		    retargetLevel, request.requestedLevel, request.viewRevision,
 		    request.policyRevision)) {
 		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
 		if (filter && filter[0] &&
@@ -765,11 +813,16 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    bu_log("BObol LoD submit trace object=%s level=%d "
 			   "retargeted_resident=%d\n",
 			   request.objectName.getString(),
-			   request.requestedLevel,
+			   retargetLevel,
 			   activePayload->progressiveMesh ?
 			       activePayload->progressiveMesh->residentLevel() : -1);
 		submitAction->updatedCutCount++;
-		continue;
+		/* If the full view target is already drawable, this is a pure cut
+		 * change and no provider work is needed.  Otherwise keep the richer
+		 * resident cut visible and continue below to request only the
+		 * still-missing suffix. */
+		if (retargetLevel == request.requestedLevel)
+		    continue;
 	    }
 
 	const SbBool suppressActiveDuplicate =
@@ -797,6 +850,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    provider->refreshMissing = submitAction->refreshMissing;
 	    provider->useForcedLevel = submitAction->useForcedLevel;
 	    provider->forcedLevel = submitAction->forcedLevel;
+	    provider->useCurrentDrawLevel = TRUE;
+	    provider->currentDrawLevel =
+		activePayload ? activePayload->activeLevel : -1;
 	    provider->shrinkAfterCopy = FALSE;
 		    /* A shared source asset may serve many occurrences at
 		     * different levels.  Trimming is therefore a post-generation
@@ -929,15 +985,20 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	source->doAction(action);
 	return;
     }
+    const int retargetLevel =
+	mesh_lod_available_cad_retarget_level(activePayload, request);
     if (submitAction->reset == 0 && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
-	activePayload->activeLevel != request.requestedLevel &&
+	retargetLevel >= 0 &&
+	activePayload->activeLevel != retargetLevel &&
 	submitAction->viewState->retargetCadPayload(activePayload,
-	    request.requestedLevel, request.viewRevision,
+	    retargetLevel, request.requestedLevel, request.viewRevision,
 	    request.policyRevision)) {
 	submitAction->updatedCutCount++;
-	source->doAction(action);
-	return;
+	if (retargetLevel == request.requestedLevel) {
+	    source->doAction(action);
+	    return;
+	}
     }
 
     const SbBool suppressActiveDuplicate =
@@ -960,6 +1021,9 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     provider->refreshMissing = submitAction->refreshMissing;
     provider->useForcedLevel = submitAction->useForcedLevel;
     provider->forcedLevel = submitAction->forcedLevel;
+    provider->useCurrentDrawLevel = TRUE;
+    provider->currentDrawLevel =
+	activePayload ? activePayload->activeLevel : -1;
     provider->shrinkAfterCopy = FALSE;
 	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;
@@ -1059,15 +1123,18 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 				       "finer resident LoD retained during interaction");
 	return;
     }
+    const int retargetLevel =
+	mesh_lod_available_mesh_retarget_level(viewPayload, request);
     if (submitAction->reset == 0 && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
-	viewPayload->activeLevel != request.requestedLevel &&
-	request.requestedLevel >= 0 &&
+	viewPayload->activeLevel != retargetLevel &&
+	retargetLevel >= 0 &&
 	submitAction->viewState->retargetMeshPayload(viewPayload,
-	    request.requestedLevel, request.viewRevision,
+	    retargetLevel, request.requestedLevel, request.viewRevision,
 	    request.policyRevision)) {
 	submitAction->updatedCutCount++;
-	return;
+	if (retargetLevel == request.requestedLevel)
+	    return;
     }
     if (!submitAction->useForcedLevel && submitAction->reset == 0 &&
 	request.requestedLevel < 0 && viewPayload &&
@@ -1097,6 +1164,9 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     provider->refreshMissing = submitAction->refreshMissing;
     provider->useForcedLevel = submitAction->useForcedLevel;
     provider->forcedLevel = submitAction->forcedLevel;
+    provider->useCurrentDrawLevel = TRUE;
+    provider->currentDrawLevel =
+	viewPayload ? viewPayload->activeLevel : -1;
     provider->shrinkAfterCopy = FALSE;
 	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;
