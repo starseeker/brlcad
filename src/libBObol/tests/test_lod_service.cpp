@@ -2525,7 +2525,7 @@ test_rt_mesh_provider_task(void)
 					  (const point_t *)cachedVertices.data(),
 					  cachedVertices.size() / 3,
 					  (const vect_t *)cachedNormals.data(), cachedFaces.data(),
-					  cachedFaces.size() / 3, 0x12345678, 0.66,
+					  cachedFaces.size() / 3, 0x12345678, 0,
 					  &storeStatus) != BRLCAD_OK ||
 	!storeStatus.has_cache_key ||
 	!storeStatus.has_cached_payload) {
@@ -2595,13 +2595,35 @@ test_rt_mesh_provider_task(void)
 	results[0].geometry.kind != BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE ||
 	results[0].geometry.providerToken == 0 ||
 	!results[0].geometry.isValid() ||
-	results[0].counts.faceCount != 4 ||
-	results[0].counts.pointCount != 4 ||
+	results[0].counts.faceCount <= 4 ||
+	results[0].counts.faceCount > cachedFaces.size() / 3 ||
+	results[0].counts.pointCount <= 4 ||
+	results[0].counts.pointCount > cachedVertices.size() / 3 ||
 	!results[0].mesh.isValid() ||
-	results[0].mesh.points.size() != 4 ||
-	results[0].mesh.coordIndex.size() != 12 ||
+	results[0].mesh.points.size() != results[0].counts.pointCount ||
+	results[0].mesh.coordIndex.size() !=
+	    results[0].counts.faceCount * 3 ||
 	!bobol_lod_result_matches_request(results[0], task.request)) {
-	printf("FAIL: LoD Obol mesh provider task did not return cached mesh result\n");
+	printf("FAIL: LoD Obol mesh provider task did not return cached mesh result (results=%zu kind=%d quality=%d status=%d geometry=%d token=%llu valid=%d faces=%llu points=%llu mesh_valid=%d mesh_points=%zu indices=%zu match=%d level=%d requested=%d)\n",
+	    results.size(),
+	    results.empty() ? -1 : results[0].resultKind,
+	    results.empty() ? -1 : results[0].qualityTier,
+	    results.empty() ? -1 : results[0].providerStatus,
+	    results.empty() ? -1 : results[0].geometry.kind,
+	    static_cast<unsigned long long>(results.empty() ? 0 :
+		results[0].geometry.providerToken),
+	    results.empty() ? 0 : results[0].geometry.isValid(),
+	    static_cast<unsigned long long>(results.empty() ? 0 :
+		results[0].counts.faceCount),
+	    static_cast<unsigned long long>(results.empty() ? 0 :
+		results[0].counts.pointCount),
+	    results.empty() ? 0 : results[0].mesh.isValid(),
+	    results.empty() ? 0 : results[0].mesh.points.size(),
+	    results.empty() ? 0 : results[0].mesh.coordIndex.size(),
+	    results.empty() ? 0 :
+		bobol_lod_result_matches_request(results[0], task.request),
+	    results.empty() ? -1 : results[0].geometry.activeLevel,
+	    task.request.requestedLevel);
 	ret = 1;
     }
 

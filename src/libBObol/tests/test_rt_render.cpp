@@ -1169,7 +1169,10 @@ main(int argc, char **argv)
 
 		/* Controller policy changes can arrive outside endpoint_property_set.
 		 * The owning render pass must restart RT before capture observes them. */
-		controller.setLightingEnabled(TRUE);
+		/* The fixture restored lighting before creating the endpoint.  Toggle
+		 * it off here so this is an actual state transition rather than a
+		 * no-op whose image comparison depends on incidental earlier state. */
+		controller.setLightingEnabled(FALSE);
 		unsigned char *lightingOwnerImage = NULL;
 		if (!ret && controller.renderToImage(&lightingOwnerImage, 0, 0, NULL,
 		    NULL, NULL) != BRLCAD_OK) {

@@ -405,10 +405,20 @@ QgEdApp::~QgEdApp() {
     // The main window owns the views and their Obol draw controllers.  Tear
     // those down while the model (and hence its GED instance) is still live:
     // view destruction unregisters progressive draw providers from GED.
-    delete w;
+    // Make plugin accessors quiescent before QObject child destruction begins.
+    // Otherwise an edit widget destroyed after its QgView sibling can follow
+    // CurrentDisplay() to a canvas that has already been deleted.
+    QgEdMainWindow *window = w;
     w = nullptr;
+    m_plugin_context.viewWidgetAccessor = {};
+    if (mdl && mdl->session())
+	mdl->session()->setActiveViewContext(NULL);
+    m_plugin_context.model = nullptr;
+    delete window;
     delete mdl;
     mdl = nullptr;
+    m_plugin_context.gedAccessor = {};
+    m_plugin_context.log = {};
     // TODO - free rt_vlfree?
 }
 

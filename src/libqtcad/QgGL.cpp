@@ -52,9 +52,12 @@ QgGL::QgGL(QWidget *parent, BObolViewController *controller,
     qgcanvas_sync_obol_camera(*d);
     qgcanvas_initialize_obol_background(*d);
 
-    /* Obol clears and redraws every pixel in paintGL, so preserving the
-     * previous QOpenGLWidget framebuffer only adds presentation work. */
-    setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
+    /* A Qt update may reach paintGL before asynchronous Obol work has
+     * published a replacement frame.  Preserve the last complete image in
+     * that case.  NoPartialUpdate invalidates the QOpenGLWidget FBO before
+     * every paint; a renderPending() no-op would then hand Qt undefined color
+     * storage, observed on NVIDIA as black/RGB-dotted zoom frames. */
+    setUpdateBehavior(QOpenGLWidget::PartialUpdate);
 
     // This is an important Qt setting for interactivity - it allowing key
     // bindings to propagate to this widget and trigger actions such as
@@ -121,7 +124,9 @@ return;
     initializeOpenGLFunctions();
     qgcanvas_request_obol_render_if_idle(*d, "qtgl-paint");
 
-    if (qgcanvas_render_obol_pending(*d, TRUE, TRUE) && d->v) {
+    const SbBool rendered =
+	qgcanvas_render_obol_pending(*d, TRUE, TRUE);
+    if (rendered && d->v) {
 	(void)bv_refresh_consume(bv_context_view(d->v));
 	bv_refresh_complete(bv_context_view(d->v));
     }

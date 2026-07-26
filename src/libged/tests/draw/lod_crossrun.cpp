@@ -54,6 +54,7 @@
 #include <thread>
 
 #include "BObol/BDisplayEndpoint.h"
+#include "BObol/BDatabaseSource.h"
 #include "BObol/BLodService.h"
 #include "BObol/BViewController.h"
 #include <bu.h>
@@ -68,6 +69,75 @@
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 
+static void
+log_lod_state(struct ged *gedp, const char *label)
+{
+    struct ged_view_context *view_ctx = gedp ?
+	ged_view_active_ctx(gedp) : NULL;
+    bobol_display_endpoint_t *endpoint = view_ctx ?
+	ged_view_context_display_endpoint_get(view_ctx) : NULL;
+    BObolViewController *controller = endpoint ?
+	static_cast<BObolViewController *>(
+	    bobol_display_endpoint_controller(endpoint)) : NULL;
+    if (!controller)
+	return;
+
+    BObolLodService *service = controller->getLodService();
+    const std::vector<SoBRLDatabaseSource *> sources =
+	controller->getRenderDatabaseSources();
+    point_t center = VINIT_ZERO;
+    const struct bv *view = view_ctx ?
+	bv_context_view_const((const struct bv_context *)view_ctx) : NULL;
+    if (view)
+	(void)bv_center_get(center, view);
+    bu_log("%s: sources=%zu active-mesh=%zu view center=(%.9g %.9g %.9g) scale=%.9g demand auto=%d service=%d visited=%u submitted=%u skipped=%u service pending=%zu in-flight=%zu results=%zu writes=%zu delayed=%zu\n",
+	label ? label : "LoD",
+	sources.size(),
+	controller->getActiveLodMeshPayloadCount(),
+	center[0], center[1], center[2], view ? bv_scale_get(view) : 0.0,
+	controller->isLodAutoSubmitEnabled() ? 1 : 0,
+	service && service->isRunning() ? 1 : 0,
+	controller->getLastLodVisitedMeshCount(),
+	controller->getLastLodSubmittedTaskCount(),
+	controller->getLastLodSkippedMeshCount(),
+	service ? service->pendingTaskCountForDiagnostics() : 0,
+	service ? service->inFlightCount() : 0,
+	service ? service->queuedResultCountForDiagnostics() : 0,
+	service ? service->queuedCacheWriteCountForDiagnostics() : 0,
+	service ? service->delayedTaskCountForDiagnostics() : 0);
+    for (size_t i = 0; i < sources.size(); i++) {
+	BObolDatabaseSourceSummary summary;
+	SoBRLDatabaseSource *source = sources[i];
+	if (!source || !source->getSummary(summary))
+	    continue;
+	bu_log("  source[%zu] path=%s key=%s bounds=%d compact=%d shapes=%d meshes=%d status=%d\n",
+	    i, summary.path.getString(), summary.instanceKey.getString(),
+	    summary.sourceBoundsValid ? 1 : 0,
+	    source ? source->getCompactInstanceCount() : 0,
+	    summary.realizedShapeCount, summary.realizedMeshCount,
+	    summary.realizationStatus);
+	for (int j = 0; source && j < source->getCompactInstanceCount(); j++) {
+	    BObolCompactOccurrence occurrence;
+	    if (!source->getCompactOccurrence(j, occurrence))
+		continue;
+	    bu_log("    occurrence[%d] geometry=%d kind=%d/%s lod=%d request=%d/faces=%llu visible=%d transparency=%.3g color=(%.3g %.3g %.3g) points=%d triangles=%d bounds=%d\n",
+		j, occurrence.geometry ? 1 : 0,
+		occurrence.summary.shapeKind,
+		occurrence.summary.geometryKind.getString(),
+		occurrence.lodBacked ? 1 : 0,
+		occurrence.sourceMeshRequestValid ? 1 : 0,
+		(unsigned long long)occurrence.sourceMeshRequest.faceCount,
+		occurrence.summary.visible ? 1 : 0,
+		occurrence.summary.transparency,
+		occurrence.summary.color[0], occurrence.summary.color[1],
+		occurrence.summary.color[2],
+		occurrence.summary.pointCount,
+		occurrence.summary.triangleCount,
+		occurrence.summary.boundsValid ? 1 : 0);
+	}
+    }
+}
+
 static int
 wait_for_lod_service(struct ged *gedp, int timeout_ms)
 {
@@ -81,16 +151,19 @@ wait_for_lod_service(struct ged *gedp, int timeout_ms)
 	return 1;
 
     for (int elapsed = 0; elapsed <= timeout_ms; elapsed += 25) {
-	if (controller->hasPendingLodResults())
-	    (void)controller->processPendingLodResults(64);
-	if (controller->isLodAutoSubmitEnabled())
-	    (void)controller->submitLodRequestsIfNeeded();
+	BObolProgressiveStatus progressive;
+	(void)controller->advanceProgressiveWork(NULL, &progressive);
 	BObolLodService *service = controller->getLodService();
-	if (!service || (service->inFlightCount() == 0 &&
+	const int service_idle = !service ||
+	    (service->inFlightCount() == 0 &&
 		service->pendingTaskCountForDiagnostics() == 0 &&
 		service->queuedCacheWriteCountForDiagnostics() == 0 &&
-		service->delayedTaskCountForDiagnostics() == 0))
+		service->delayedTaskCountForDiagnostics() == 0);
+	if (!progressive.hasMore && service_idle &&
+	    !controller->hasPendingLodResults()) {
+	    log_lod_state(gedp, "LoD settled");
 	    return 1;
+	}
 	std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
@@ -240,10 +313,14 @@ main(int ac, char *av[])
     (void)render_to_file(gedp, "lod_cr_empty.png");
 
     s_av[0] = "draw"; s_av[1] = "-m1"; s_av[2] = "all.bot"; s_av[3] = NULL;
-    ged_exec_draw(gedp, 3, s_av);
-    s_av[0] = "autoview"; s_av[1] = NULL;
-    ged_exec_autoview(gedp, 1, s_av);
+    const int r1_draw = ged_exec_draw(gedp, 3, s_av);
+    bu_log("Run 1 draw returned %d: %s\n", r1_draw,
+	    bu_vls_cstr(gedp->ged_result_str));
 
+    /* The draw transaction arms progressive autoview while the cold-start
+     * scene is still empty.  An immediate explicit autoview would frame that
+     * empty scene, change the view revision, and correctly cancel the armed
+     * autoview before the first boxes arrive. */
     int r1_wait = wait_for_lod_service(gedp, 5000);
     if (!r1_wait)
 	bu_log("Run 1: LoD service wait timed out\n");
@@ -274,9 +351,9 @@ main(int ac, char *av[])
     ged_exec_view(gedp, 4, s_av);
 
     s_av[0] = "draw"; s_av[1] = "-m1"; s_av[2] = "all.bot"; s_av[3] = NULL;
-    ged_exec_draw(gedp, 3, s_av);
-    s_av[0] = "autoview"; s_av[1] = NULL;
-    ged_exec_autoview(gedp, 1, s_av);
+    const int r2_draw = ged_exec_draw(gedp, 3, s_av);
+    bu_log("Run 2 draw returned %d: %s\n", r2_draw,
+	    bu_vls_cstr(gedp->ged_result_str));
 
     int r2_wait = wait_for_lod_service(gedp, 5000);
     if (!r2_wait)

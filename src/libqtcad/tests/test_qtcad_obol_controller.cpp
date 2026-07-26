@@ -237,9 +237,23 @@ main(int argc, char **argv)
 	    SbColor(64.0f / 255.0f, 80.0f / 255.0f, 96.0f / 255.0f))
 	FAIL("qtcad refresh should not overwrite endpoint background policy");
 
+    /* Renderer policy commands explicitly dirty the view without changing
+     * its camera hash.  qged relies on diff_hashes() after each command to
+     * schedule the actual Qt paint. */
+    struct bv *localView = bv_context_view(
+	static_cast<struct bv_context *>(view.viewContext()));
+    (void)bv_refresh_complete(localView);
+    view.stash_hashes();
+    (void)bv_refresh_request(localView, BV_REFRESH_VIEW);
+    if (!view.diff_hashes())
+	FAIL("qtcad view diffs should honor explicit non-camera refresh requests");
+
     controller->clearRenderRequest();
-    if (controller->isRenderRequested())
-	FAIL("Obol view controller should clear render requests");
+    /* isRenderRequested() intentionally also reports independently queued
+     * progressive work.  Test the explicit render-request latch directly so
+     * an asynchronous LoD completion cannot make this assertion flaky. */
+    if (controller->consumeRenderRequest(NULL))
+	FAIL("Obol view controller should clear the explicit render request");
     controller->requestRender("qtcad-test");
     if (!controller->isRenderRequested() ||
 	    bu_strcmp(controller->getRenderReason().getString(), "qtcad-test") != 0)
@@ -258,8 +272,7 @@ main(int argc, char **argv)
 	FAIL("Obol camera synchronization should request a render");
     SbString renderReason;
     if (!controller->consumeRenderRequest(&renderReason) ||
-	    bu_strcmp(renderReason.getString(), "rt-view-camera") != 0 ||
-	    controller->isRenderRequested())
+	    bu_strcmp(renderReason.getString(), "rt-view-camera") != 0)
 	FAIL("Obol render requests should be consumable by render managers");
     if (controller->consumeRenderRequest(NULL))
 	FAIL("Consumed Obol render requests should stay clear");
@@ -441,8 +454,8 @@ main(int argc, char **argv)
 	QgGL *glPresentationCanvas = glView.canvasBase() ?
 	    dynamic_cast<QgGL *>(glView.canvasBase()) : NULL;
 	if (!glPresentationCanvas || glPresentationCanvas->updateBehavior() !=
-		QOpenGLWidget::NoPartialUpdate)
-	    FAIL("QgGL should use full Obol redraws without preserving old frames");
+		QOpenGLWidget::PartialUpdate)
+	    FAIL("QgGL should preserve the last completed Obol frame while asynchronous replacement work is pending");
 	BObolViewController *glController = glView.obolViewController();
 	if (!glController ||
 		!glController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))

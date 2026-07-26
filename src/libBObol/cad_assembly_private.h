@@ -19,6 +19,8 @@
 
 #include <cstdint>
 #include <map>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -93,7 +95,33 @@ protected:
 	const Obol::CadPickDetailRecord &hit) const override;
 
 private:
+    friend class SoBRLDatabaseSource;
+
+    struct CompactInstancePresentation {
+	std::string payloadKey;
+	Obol::PartId activePart = Obol::CadIdBuilder::Root();
+	uint8_t channels = 0;
+	int activeLevel = -1;
+	uint64_t geometryRevision = 0;
+	uint64_t appearanceRevision = 0;
+	uint64_t placementRevision = 0;
+	uint64_t visibilityRevision = 0;
+	uint64_t selectionRevision = 0;
+    };
+
     std::map<Obol::InstanceId, InstanceSemantic> semantics;
+    SbBool compactPresentationInitialized = FALSE;
+    const void *compactPresentationIndex = NULL;
+    uint32_t compactPresentationSourceRevision = 0;
+    uint32_t compactPresentationInputsRevision = 0;
+    uint64_t compactPresentationPayloadRevision = 0;
+    int compactPresentationDrawMode = -1;
+    std::unordered_map<Obol::InstanceId, CompactInstancePresentation,
+	std::hash<Obol::InstanceId>> compactInstancePresentations;
+    std::unordered_map<Obol::PartId, uint8_t, std::hash<Obol::PartId>>
+	compactPartChannels;
+    std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>
+	compactLodParts;
 };
 
 class SoBRLCadRenderBatch : public SoSeparator {

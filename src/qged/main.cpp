@@ -25,9 +25,13 @@
 
 #include "common.h"
 
+#include <cstdlib>
 #include <iostream>
 
 #include <QApplication>
+#include <QImage>
+#include <QOpenGLWidget>
+#include <QPixmap>
 #include <QSurfaceFormat>
 #include <QTimer>
 
@@ -163,16 +167,29 @@ main(int argc, char **argv)
 	fmt.setRenderableType(QSurfaceFormat::OpenGL);
 	fmt.setDepthBufferSize(24);
 	fmt.setStencilBufferSize(8);
-	/* Disable app-level vsync.  Qt's default swap interval is 1, which makes
-	 * the QOpenGLWidget's compositing swap block on the display's vblank --
-	 * and under the Windows DWM compositor that block is ~2-3 vblanks, so it
-	 * caps the view at ~30fps and adds ~30ms of input-to-photon latency even
-	 * though an Obol frame renders in well under 1ms.  The DWM already vsyncs
-	 * at composition time (so no tearing is visible in a composited window);
-	 * the extra app-level sync only costs latency.  Turning it off drops
-	 * per-frame latency to sub-millisecond and lets interactive manipulation
-	 * repaint as fast as input arrives. */
-	fmt.setSwapInterval(0);
+	/* QOpenGLWidget is composited, but the platform presentation contracts are
+	 * not equivalent.  DWM already paces the composed desktop and historically
+	 * incurs an extra multi-vblank wait here, while unpaced GLX presentation
+	 * can expose partially updated/compositor-transition frames during zoom.
+	 * Keep Windows latency-oriented and Linux/Unix presentation-safe by
+	 * default.  The narrow override makes 0/1/adaptive experiments repeatable
+	 * without baking a driver-specific result into global policy. */
+#ifdef HAVE_WINDOWS_H
+	int swapInterval = 0;
+#else
+	int swapInterval = 1;
+#endif
+	const char *swapOverride = std::getenv("QGED_SWAP_INTERVAL");
+	if (swapOverride && swapOverride[0]) {
+	    char *end = NULL;
+	    const long value = std::strtol(swapOverride, &end, 10);
+	    if (end && end[0] == '\0' && value >= -1 && value <= 1)
+		swapInterval = static_cast<int>(value);
+	    else
+		bu_log("qged: ignoring invalid QGED_SWAP_INTERVAL=%s "
+		       "(expected -1, 0, or 1)\n", swapOverride);
+	}
+	fmt.setSwapInterval(swapInterval);
 	QSurfaceFormat::setDefaultFormat(fmt);
     }
 #endif
@@ -203,6 +220,32 @@ main(int argc, char **argv)
 	    QVector<QgTestEvent> events;
 	    QString error;
 	    QgEventPlayer player(app.w);
+	    player.setCheckpointHandler([](QWidget *widget,
+		    const QString &name, QString *checkpointError) {
+		if (!widget || name.isEmpty()) {
+		    if (checkpointError)
+			*checkpointError =
+			    QStringLiteral("checkpoint needs a widget and output path");
+		    return false;
+		}
+		bool saved = false;
+		if (QOpenGLWidget *glWidget =
+			qobject_cast<QOpenGLWidget *>(widget)) {
+		    const QImage frame = glWidget->grabFramebuffer();
+		    saved = !frame.isNull() && frame.save(name);
+		} else {
+		    const QPixmap frame = widget->grab();
+		    saved = !frame.isNull() && frame.save(name);
+		}
+		if (!saved) {
+		    if (checkpointError)
+			*checkpointError =
+			    QStringLiteral("unable to save checkpoint image: %1")
+			    .arg(name);
+		    return false;
+		}
+		return true;
+	    });
 	    if (!QgEventRecorder::load(script, events, &error) ||
 		!player.play(events, &error)) {
 		bu_log("qged: GUI test replay failed: %s\n",

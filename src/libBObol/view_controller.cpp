@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "bu/log.h"
 #include "bu/str.h"
 #include "bu/time.h"
 
@@ -37,6 +38,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -76,6 +78,19 @@ static std::vector<SoBRLDatabaseSource *> controller_render_database_source_root
     const BObolViewController *controller);
 static std::vector<SoBRLMeshShape *> controller_render_mesh_shapes(
     const BObolViewController *controller);
+
+static SbBool
+controller_lod_trace_result(const BObolLodResult &result)
+{
+    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+    if (!filter || !filter[0])
+	return FALSE;
+    return (result.request.objectName.getLength() > 0 &&
+	    strstr(result.request.objectName.getString(), filter)) ||
+	   (result.request.objectPath.getLength() > 0 &&
+	    strstr(result.request.objectPath.getString(), filter)) ?
+	   TRUE : FALSE;
+}
 
 /* Kept out of the public controller layout so callback teardown is ABI-safe. */
 struct ControllerFrameRequestState {
@@ -191,12 +206,7 @@ BObolProgressiveOptions::BObolProgressiveOptions(void) :
      * budget short-circuits the batch loop). */
     maxLodResults(256),
     maxLodApplyMicroseconds(4000),
-    maxProviders(0),
-    maxSources(4),
-    maxChildrenPerSource(64),
-    maxSubmissions(128),
-    flags(BOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
-	  BOBOL_PROGRESSIVE_FULL_DETAIL)
+    maxProviders(0)
 {
 }
 
@@ -271,21 +281,17 @@ bobol_camera_orientation_from_brl_rotation(const mat_t rotation)
     return SbRotation(cameraAxes);
 }
 
-/* Default headlight offset expressed in eye space (camera looks down -Z, +X
- * right, +Y up).  Deliberately NOT straight-on (0,0,-1): a head-on light washes
- * out curved surfaces.  This over-the-shoulder direction (from upper-right-behind
- * the viewer, angled forward into the scene) preserves form shading while still
- * tracking the camera. */
+/* Default headlight direction expressed in eye space (camera looks down -Z,
+ * +X right, +Y up).  Match BRL-CAD's established shaded-display convention:
+ * the light travels from the viewer into the scene.  An oblique direction can
+ * make form easier to read, but on unoriented plate-mode BoTs it also
+ * exaggerates triangle-to-triangle normal changes enough to look like missing
+ * geometry.  Keep the compatibility direction as the default and let the
+ * per-view lighting policy select an oblique direction when desired. */
 static SbVec3f
 bobol_headlight_default_offset(void)
 {
-    /* ~40deg off the view axis, from the upper-left-behind the viewer.  Enough
-     * lateral offset that form shading is clearly visible and the camera-driven
-     * tracking is obvious as the view rotates, without the flat, washed-out look
-     * of a head-on (0,0,-1) light. */
-    SbVec3f dir(-0.55f, -0.45f, -0.70f);
-    dir.normalize();
-    return dir;
+    return SbVec3f(0.0f, 0.0f, -1.0f);
 }
 
 static double
@@ -1127,6 +1133,10 @@ struct BObolViewController::Impl {
     SbString lodViewSignature = SbString("");
     uint64_t lodViewRevision = 1;
     uint64_t lodPolicyRevision = 1;
+    int64_t lodLastViewChangeMicroseconds = 0;
+    SbBool lodInteractive = FALSE;
+    SbBool lodResidentCompactionPending = FALSE;
+    float lodTargetPixelError = 1.0f;
     SbBool lodUseForcedLevel = FALSE;
     int lodForcedLevel = 0;
     uint64_t maxExactFullDetailFaceCount = 0;
@@ -1147,6 +1157,7 @@ struct BObolViewController::Impl {
     unsigned int lastMeshBudgetEvictedDisplayMeshCount = 0;
     unsigned int lastLodVisitedMeshCount = 0;
     unsigned int lastLodSubmittedTaskCount = 0;
+    unsigned int lastLodUpdatedCutCount = 0;
     unsigned int lastLodSkippedMeshCount = 0;
     size_t lastLodResultCount = 0;
     unsigned int lastLodMatchedResultCount = 0;
@@ -1668,6 +1679,37 @@ BObolViewController::isLightingEnabled(void) const
 }
 
 void
+BObolViewController::setNormalStyle(BObolViewLodState::NormalStyle style,
+	float creaseAngleDegrees)
+{
+    BObolViewLodState *viewState = this->getViewLodState();
+    if (!viewState)
+	return;
+    const BObolViewLodState::NormalStyle beforeStyle =
+	viewState->getNormalStyle();
+    const float beforeAngle = viewState->getNormalCreaseAngle();
+    viewState->setNormalStyle(style, creaseAngleDegrees);
+    if (viewState->getNormalStyle() != beforeStyle ||
+	std::fabs(viewState->getNormalCreaseAngle() - beforeAngle) > 1.0e-6f)
+	this->requestRender("normal-style");
+}
+
+BObolViewLodState::NormalStyle
+BObolViewController::getNormalStyle(void) const
+{
+    const BObolViewLodState *viewState = this->getViewLodState();
+    return viewState ? viewState->getNormalStyle() :
+	BObolViewLodState::NORMAL_AUTHORED;
+}
+
+float
+BObolViewController::getNormalCreaseAngle(void) const
+{
+    const BObolViewLodState *viewState = this->getViewLodState();
+    return viewState ? viewState->getNormalCreaseAngle() : 60.0f;
+}
+
+void
 BObolViewController::setHeadlightEnabled(SbBool enabled)
 {
     if (this->d->headlightEnabled == enabled)
@@ -2183,6 +2225,15 @@ BObolViewController::getViewInfo(struct bv_view_info *info) const
 	return FALSE;
 
     bv_view_info_init(info);
+    if (this->d->viewAttachment) {
+	struct bv_lod_policy policy;
+	bv_lod_policy_init(&policy);
+	this->d->viewAttachment->getLodPolicy(&policy);
+	info->lod.scale = policy.scale;
+	info->lod.curve_scale = policy.curve_scale;
+	info->lod.point_scale = policy.point_scale;
+	info->lod.bot_threshold = policy.bot_threshold;
+    }
 
     SbVec2s window = this->d->viewportRegion.getWindowSize();
     info->width = window[0] > 0 ? window[0] : 1;
@@ -2243,7 +2294,8 @@ BObolViewController::isForceRealizeDisplay(void) const
     struct bv_lod_policy policy;
     bv_lod_policy_init(&policy);
     this->d->viewAttachment->getLodPolicy(&policy);
-    return (policy.mesh_enabled || policy.csg_enabled) ? FALSE : TRUE;
+    return (policy.policy == BV_LOD_OFF ||
+	    (!policy.mesh_enabled && !policy.csg_enabled)) ? TRUE : FALSE;
 }
 
 unsigned int
@@ -2512,7 +2564,11 @@ BObolViewController::noteFramePresented(void)
 	now > this->d->lastPresentationTimestampNanoseconds) {
 	const uint64_t interval =
 	    now - this->d->lastPresentationTimestampNanoseconds;
-	if (interval > 1000 && interval < 30000000000ULL) {
+	/* A retained view is event driven.  The first frame after an idle
+	 * second is not a one-FPS rendering sample; it is a discontinuity
+	 * between two bursts.  Excluding that gap keeps the faceplate useful
+	 * while zooming/rotating without reintroducing an idle repaint timer. */
+	if (interval > 1000 && interval <= 250000000ULL) {
 	    this->d->smoothedPresentationIntervalNanoseconds =
 		this->d->smoothedPresentationIntervalNanoseconds ?
 		(this->d->smoothedPresentationIntervalNanoseconds * 4u +
@@ -2814,6 +2870,23 @@ BObolViewController::advanceProgressiveWork(
 
     BObolProgressiveStatus localStatus;
 
+    /* During camera motion favor responsiveness (4 px projected error).  Once
+     * the view has been quiet for 150 ms, issue a new 1 px demand and let the
+     * same per-view cache state refine in place. */
+    if (this->d->lodAutoSubmit && this->d->lodInteractive) {
+	const int64_t now = bu_gettime();
+	const int64_t elapsed = now - this->d->lodLastViewChangeMicroseconds;
+	if (this->d->lodLastViewChangeMicroseconds > 0 &&
+	    elapsed >= 150000) {
+	    this->d->lodInteractive = FALSE;
+	    this->d->lodTargetPixelError = 1.0f;
+	    this->advanceLodPolicyRevision();
+	} else {
+	    /* Keep the host frame pump alive through the idle debounce. */
+	    localStatus.hasMore = 1;
+	}
+    }
+
     if (this->hasPendingLodResults() ||
 	(this->d->lodService &&
 	 this->d->lodService->queuedResultCountForDiagnostics() > 0)) {
@@ -2824,9 +2897,6 @@ BObolViewController::advanceProgressiveWork(
 	if (this->d->lastLodAppliedResultCount > 0)
 	    localStatus.changed = 1;
     }
-
-    if (this->d->lodAutoSubmit)
-	(void)this->submitLodRequestsIfNeeded();
 
     size_t providerLimit = options->maxProviders;
     size_t providerIndex = 0;
@@ -2853,12 +2923,74 @@ BObolViewController::advanceProgressiveWork(
 	providerIndex++;
     }
 
+    /* Providers publish the latest compact occurrences and their source-mesh
+     * requests during this pump.  Submit view demand afterward so a provider
+     * that completes in one pass cannot leave a newly published model at its
+     * boxes forever simply because there is no reason to schedule a second
+     * pass. */
+    struct bv_lod_policy lodPolicy;
+    bv_lod_policy_init(&lodPolicy);
+    this->d->viewAttachment->getLodPolicy(&lodPolicy);
+    if (this->d->lodAutoSubmit && lodPolicy.policy != BV_LOD_OFF &&
+	lodPolicy.mesh_enabled)
+	(void)this->submitLodRequestsIfNeeded();
+
+    /* Provider status describes database streaming.  Mesh refinement runs on
+     * the controller-owned service and is independent of any one provider, so
+     * sample it here.  Previously these fields remained zero and the common
+     * host pump could declare a frame stable while a PoP task was still
+     * queued or running. */
+    if (this->d->lodService) {
+	localStatus.pendingTasks +=
+	    this->d->lodService->pendingTaskCountForDiagnostics();
+	localStatus.pendingTasks +=
+	    this->d->lodService->delayedTaskCountForDiagnostics();
+	localStatus.inFlight += this->d->lodService->inFlightCount();
+	localStatus.queuedResults +=
+	    this->d->lodService->queuedResultCountForDiagnostics();
+	localStatus.queuedCacheWrites +=
+	    this->d->lodService->queuedCacheWriteCountForDiagnostics();
+    }
+
     const int pending_service_work =
 	(localStatus.pendingTasks > 0 || localStatus.inFlight > 0 ||
 	 localStatus.queuedResults > 0 || localStatus.queuedCacheWrites > 0) ?
 	1 : 0;
     if (pending_service_work)
 	localStatus.hasMore = 1;
+
+    /* Refinement and reclamation are separate phases.  A quiet view first
+     * reaches its 1 px display target; only after a longer quiet interval and
+     * an idle service do we replace this consumer's complete demand snapshot
+     * and trim shared CPU prefixes to the aggregate maximum. */
+    if (this->d->lodAutoSubmit &&
+	this->d->lodResidentCompactionPending &&
+	!this->d->lodInteractive &&
+	this->d->lodLastViewChangeMicroseconds > 0) {
+	const int64_t elapsed =
+	    bu_gettime() - this->d->lodLastViewChangeMicroseconds;
+	if (elapsed < 750000 || pending_service_work ||
+	    this->d->lodSubmissionPending) {
+	    localStatus.hasMore = 1;
+	} else if (this->d->lodService) {
+	    std::vector<BObolLodResidentDemand> demands;
+	    BObolViewLodState *viewState =
+		this->d->viewAttachment->getViewLodState();
+	    if (viewState)
+		viewState->residentMeshDemands(demands);
+	    const size_t compacted =
+		this->d->lodService->compactResidentMeshes(
+		    static_cast<uint64_t>(
+			reinterpret_cast<uintptr_t>(this)),
+		    this->d->lodViewRevision, demands, 1);
+	    this->d->lodResidentCompactionPending = FALSE;
+	    if (compacted) {
+		if (viewState)
+		    viewState->noteResidentMeshesChanged();
+		localStatus.changed = 1;
+	    }
+	}
+    }
 
     if (localStatus.hasMore)
 	this->markProgressiveWorkPending();
@@ -2929,7 +3061,9 @@ append_signature_string(std::ostringstream &out, const char *value)
 
 static SbString
 controller_lod_view_signature(const struct bv_view_info &view,
-			      SbBool haveCamera)
+			      SbBool haveCamera,
+			      SoCamera *camera,
+			      const SbViewportRegion &region)
 {
     std::ostringstream out;
 
@@ -2942,6 +3076,16 @@ controller_lod_view_signature(const struct bv_view_info &view,
 	<< view.lod.curve_scale << ';'
 	<< view.lod.point_scale << ';'
 	<< view.lod.bot_threshold << ';';
+    if (haveCamera && camera) {
+	double aspect = controller_aspect_from_region(region);
+	if (aspect <= SMALL_FASTF)
+	    aspect = 1.0;
+	const SbMatrix matrix = camera->getViewVolume(
+	    static_cast<float>(aspect)).getMatrix();
+	const float *values = matrix[0];
+	for (size_t i = 0; i < 16; i++)
+	    out << std::setprecision(9) << values[i] << ';';
+    }
 
     return SbString(out.str().c_str());
 }
@@ -2962,7 +3106,8 @@ controller_lod_source_signature(const BObolViewController *controller)
 	    continue;
 	if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
 	    source->needsRealization() ||
-	    !source->hasRealizedMeshGeometry())
+	    (!source->hasRealizedMeshGeometry() &&
+	     !source->hasDisplayMeshLodRequests()))
 	    continue;
 
 	out << "source;";
@@ -2974,7 +3119,8 @@ controller_lod_source_signature(const BObolViewController *controller)
 	    << source->inputsRevision.getValue() << ';'
 	    << source->realizedSourceRevision.getValue() << ';'
 	    << source->realizedInputsRevision.getValue() << ';'
-	    << source->realizedViewRevision.getValue() << ';';
+	    << source->realizedViewRevision.getValue() << ';'
+	    << source->getDisplayMeshLodRevision() << ';';
     }
 
     return SbString(out.str().c_str());
@@ -2999,8 +3145,13 @@ BObolViewController::setLodService(BObolLodService *service)
 	return;
 
     this->cancelActiveLodGeneration();
-    if (this->d->lodService && this->d->lodResultSubscriberId != 0)
-	this->d->lodService->unsubscribeResultReady(this->d->lodResultSubscriberId);
+    if (this->d->lodService) {
+	this->d->lodService->releaseResidentMeshConsumer(
+	    static_cast<uint64_t>(reinterpret_cast<uintptr_t>(this)));
+	if (this->d->lodResultSubscriberId != 0)
+	    this->d->lodService->unsubscribeResultReady(
+		this->d->lodResultSubscriberId);
+    }
 
     this->d->lodService = service;
     this->d->lodResultSubscriberId = 0;
@@ -3012,6 +3163,7 @@ BObolViewController::setLodService(BObolLodService *service)
     this->d->lodLastSubmittedViewRevision = 0;
     this->d->lodLastSubmittedPolicyRevision = 0;
     this->d->lodLastSubmittedSourceSignature = "";
+    this->d->lodResidentCompactionPending = service ? TRUE : FALSE;
 
     if (this->d->lodService)
 	this->d->lodResultSubscriberId =
@@ -3762,10 +3914,13 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	return 0;
     }
 
-    if (this->d->lodActiveGeneration != 0)
-	this->cancelActiveLodGeneration();
-
-    uint64_t generation = this->d->lodService->beginGeneration();
+    /* A view or LoD-policy epoch does not invalidate source geometry.  Keep
+     * useful cold-cache work alive and submit only newly demanded geometry
+     * into the same cancellation domain.  Source replacement paths call
+     * cancelActiveLodGeneration explicitly. */
+    uint64_t generation = this->d->lodActiveGeneration;
+    if (generation == 0)
+	generation = this->d->lodService->beginGeneration();
     this->d->lodSubmissionSourceIndex = 0;
     this->d->lodSubmissionEntryOffset = 0;
     this->d->lodSubmissionPending = TRUE;
@@ -3779,7 +3934,6 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->d->lodLastSubmittedPolicyRevision = this->d->lodPolicyRevision;
 	this->d->lodLastSubmittedSourceSignature = signature;
     }
-
     return submitted;
 }
 
@@ -3794,6 +3948,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 
     this->d->lastLodVisitedMeshCount = 0;
     this->d->lastLodSubmittedTaskCount = 0;
+    this->d->lastLodUpdatedCutCount = 0;
     this->d->lastLodSkippedMeshCount = 0;
     this->d->lastLodDiagnostics = "";
 
@@ -3826,10 +3981,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
     for (size_t i = this->d->lodSubmissionSourceIndex;
 	 i < sources.size();) {
 	const size_t capacity = service->availableResultTaskCapacity();
-	if (capacity < 3) {
-	    append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
-		sources[i] ? sources[i]->path.getValue() : SbString("<source>"),
-		"compact LoD submission requires three result slots for atomic AABB, OBB, and mesh stages");
+	if (!capacity) {
 	    break;
 	}
 	SoBRLDatabaseSource *source = sources[i];
@@ -3854,20 +4006,27 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	action.setDatabase(dbip, controller_database_id(dbip),
 			   source->sourceRevision.getValue());
 	action.setViewInfo(&view);
+	double aspect = controller_aspect_from_region(this->d->viewportRegion);
+	if (aspect <= SMALL_FASTF)
+	    aspect = 1.0;
+	const SbViewVolume volume = this->d->activeCamera->getViewVolume(
+	    static_cast<float>(aspect));
+	action.setViewVolume(&volume, this->d->lodTargetPixelError);
 	action.setGeneration(generation);
 	action.setRevisions(this->d->lodViewRevision, this->d->lodPolicyRevision);
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
 	action.setViewLodState(this->d->viewAttachment->getViewLodState());
-	action.setProxyStages(TRUE, TRUE);
+	action.setAllowLevelDowngrade(this->d->lodInteractive ? FALSE : TRUE);
 	action.setCompactEntryRange(this->d->lodSubmissionEntryOffset,
-	    std::max(static_cast<size_t>(1), capacity / 3));
+	    capacity);
 	if (this->d->lodUseForcedLevel)
 	    action.setForcedLevel(this->d->lodForcedLevel);
 	action.apply(source);
 
 	this->d->lastLodVisitedMeshCount += action.getVisitedMeshCount();
 	this->d->lastLodSubmittedTaskCount += action.getSubmittedTaskCount();
+	this->d->lastLodUpdatedCutCount += action.getUpdatedCutCount();
 	this->d->lastLodSkippedMeshCount += action.getSkippedMeshCount();
 	if (action.getDiagnostics().getLength() > 0)
 	    append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
@@ -3889,6 +4048,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 
     if (this->d->lastLodSubmittedTaskCount > 0)
 	this->requestRender("lod-submit");
+    else if (this->d->lastLodUpdatedCutCount > 0)
+	this->requestRender("lod-cut");
 
     return size_to_int_saturated(
 	       static_cast<size_t>(this->d->lastLodSubmittedTaskCount));
@@ -3931,13 +4092,77 @@ BObolViewController::applyLodResults(BObolLodService *service,
     SoBRLLodUpdateAction update;
     update.setViewLodState(this->d->viewAttachment->getViewLodState());
     for (size_t i = 0; i < drained.size(); i++) {
+	const SbBool traceResult = controller_lod_trace_result(drained[i]);
+	if (traceResult) {
+	    const BObolViewLodState::CadPayload *resident =
+		this->d->viewAttachment->getViewLodState()->
+		    findCadForResult(drained[i]);
+	    bu_log("BObol LoD apply trace object=%s request_level=%d "
+		   "loaded_level=%d incoming_view=%llu incoming_policy=%llu "
+		   "current_view=%llu current_policy=%llu resident_level=%d "
+		   "resident_view=%llu resident_policy=%llu\n",
+		   drained[i].request.objectName.getString(),
+		   drained[i].request.requestedLevel,
+		   drained[i].geometry.activeLevel,
+		   static_cast<unsigned long long>(
+		       drained[i].request.viewRevision),
+		   static_cast<unsigned long long>(
+		       drained[i].request.policyRevision),
+		   static_cast<unsigned long long>(this->d->lodViewRevision),
+		   static_cast<unsigned long long>(this->d->lodPolicyRevision),
+		   resident ? resident->activeLevel : -1,
+		   static_cast<unsigned long long>(
+		       resident ? resident->viewRevision : 0),
+		   static_cast<unsigned long long>(
+		       resident ? resident->policyRevision : 0));
+	}
 	if (drained[i].request.viewRevision != this->d->lodViewRevision ||
 	    drained[i].request.policyRevision != this->d->lodPolicyRevision) {
-	    this->d->lastLodRejectedResultCount++;
-	    append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
-					     drained[i].request.objectPath,
-					     "stale LoD result revision rejected");
-	    continue;
+	    /* A completed mesh from the prior camera remains a valid progressive
+	     * bootstrap when this occurrence still has only its box or an older
+	     * mesh epoch.  Reject it once equal/newer view data is resident so an
+	     * out-of-order completion cannot replay a coarse cut. */
+	    const BObolViewLodState::CadPayload *cadPayload =
+		this->d->viewAttachment->getViewLodState()->
+		    findCadForResult(drained[i]);
+	    const BObolViewLodState::MeshPayload *meshPayload =
+		this->d->viewAttachment->getViewLodState()->
+		    findMeshForResult(drained[i]);
+	    const bool cadMesh =
+		cadPayload &&
+		(cadPayload->resultKind == BOBOL_LOD_RESULT_MESH ||
+		 cadPayload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL);
+	    const bool shapeMesh =
+		meshPayload &&
+		meshPayload->resultKind == BOBOL_LOD_RESULT_MESH;
+	    const bool residentSupersedes =
+		(cadMesh &&
+		 (cadPayload->policyRevision >
+		      drained[i].request.policyRevision ||
+		  (cadPayload->policyRevision ==
+		       drained[i].request.policyRevision &&
+		   cadPayload->viewRevision >=
+		       drained[i].request.viewRevision))) ||
+		(shapeMesh &&
+		 (meshPayload->policyRevision >
+		      drained[i].request.policyRevision ||
+		  (meshPayload->policyRevision ==
+		       drained[i].request.policyRevision &&
+		   meshPayload->viewRevision >=
+		       drained[i].request.viewRevision)));
+	    const bool incomingMesh =
+		drained[i].resultKind == BOBOL_LOD_RESULT_MESH ||
+		drained[i].resultKind == BOBOL_LOD_RESULT_FULL_DETAIL;
+	    if (!incomingMesh || residentSupersedes) {
+		if (traceResult)
+		    bu_log("BObol LoD apply trace rejected_by_epoch object=%s\n",
+			   drained[i].request.objectName.getString());
+		this->d->lastLodRejectedResultCount++;
+		append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
+						 drained[i].request.objectPath,
+						 "superseded LoD result epoch rejected");
+		continue;
+	    }
 	}
 	update.addResult(std::move(drained[i]));
     }
@@ -3996,6 +4221,12 @@ unsigned int
 BObolViewController::getLastLodSubmittedTaskCount(void) const
 {
     return this->d->lastLodSubmittedTaskCount;
+}
+
+unsigned int
+BObolViewController::getLastLodUpdatedCutCount(void) const
+{
+    return this->d->lastLodUpdatedCutCount;
 }
 
 unsigned int
@@ -5038,14 +5269,26 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 {
     struct bv_view_info view = BV_VIEW_INFO_INIT;
     SbBool haveCamera = this->getViewInfo(&view);
-    SbString signature = controller_lod_view_signature(view, haveCamera);
+    SbString signature = controller_lod_view_signature(view, haveCamera,
+	this->d->activeCamera, this->d->viewportRegion);
 
     if (bu_strcmp(this->d->lodViewSignature.getString(), signature.getString()) == 0)
 	return;
 
     this->d->lodViewSignature = signature;
     if (advanceOnChange) {
-	this->cancelActiveLodGeneration();
 	this->advanceLodViewRevision();
+	/* Camera bookkeeping is unconditional, but the 150 ms refinement pump
+	 * belongs only to an active automatic LoD consumer.  Marking generic
+	 * controllers progressive here leaves ordinary retained views
+	 * permanently render-pending and suppresses later edge-triggered host
+	 * wakeups. */
+	if (this->d->lodAutoSubmit) {
+	    this->d->lodLastViewChangeMicroseconds = bu_gettime();
+	    this->d->lodInteractive = TRUE;
+	    this->d->lodResidentCompactionPending = TRUE;
+	    this->d->lodTargetPixelError = 4.0f;
+	    this->markProgressiveWorkPending();
+	}
     }
 }

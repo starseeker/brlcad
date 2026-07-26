@@ -121,6 +121,7 @@ struct ged_draw_obol_lod_service_status_s {
     size_t delayed_tasks;
     unsigned int last_visited_mesh_count;
     unsigned int last_submitted_task_count;
+    unsigned int last_updated_cut_count;
     unsigned int last_skipped_mesh_count;
     size_t last_result_count;
     unsigned int last_matched_result_count;
@@ -256,7 +257,8 @@ extern int ged_draw_obol_progressive_available(
 	struct ged_view_context *view_ctx);
 extern int ged_draw_obol_view_lod_enabled(
 	struct ged *gedp,
-	struct ged_view_context *view_ctx);
+	struct ged_view_context *view_ctx,
+	int draw_mode);
 extern void ged_draw_obol_framebuffer_endpoint_detach(
 	struct ged *gedp,
 	struct bobol_display_endpoint *endpoint);

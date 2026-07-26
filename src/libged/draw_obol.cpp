@@ -312,7 +312,10 @@ struct ged_obol_deferred_realization_job {
 			break;
 		    }
 		    const int representation = source->representationMode.getValue();
-		    const bool mesh = source->drawMode.getValue() ==
+		    const bool mesh =
+			(source->realizationRoleFlags.getValue() &
+			 SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
+			source->drawMode.getValue() ==
 			SoBRLDatabaseSource::SHADED ||
 			representation == SoBRLDatabaseSource::REPRESENTATION_SHADED ||
 			representation == SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS ||
@@ -328,10 +331,15 @@ struct ged_obol_deferred_realization_job {
 			"job: realizeDatabaseMesh (worker)" :
 			"job: realizeDatabaseWireframe (worker)",
 			realize_start, -1);
-		    if (!realized) {
+		    if (!realized &&
+			!cancelRequested.load(std::memory_order_acquire)) {
 			bu_log("Obol deferred realization failed for '%s': %s\n",
 			    item->instanceKey.c_str(),
 			    source->realizationDiagnostic.getValue().getString());
+			success = false;
+			break;
+		    }
+		    if (!realized) {
 			success = false;
 			break;
 		    }
@@ -2492,7 +2500,17 @@ ged_obol_replace_path(struct ged *gedp,
     if (!preserve_external_current) {
 	publish_state.roleFlagsValid = TRUE;
 	publish_state.roleFlags = SoBRLDatabaseSource::REALIZATION_ROLE_NONE;
-	if (draw_mode == GED_DRAW_MODE_EVAL_POINTS)
+	/*
+	 * A wire presentation is still a mesh realization when mesh LoD is
+	 * active.  The compact mesh path preserves plotted wire geometry for
+	 * non-BoTs, while BoTs use the same producer-authored PoP prefix as
+	 * shaded drawing.  Leaving this as a legacy wire realization bypasses
+	 * PoP submission entirely.
+	 */
+	if (draw_mode == GED_DRAW_MODE_EVAL_POINTS ||
+	    (draw_mode == GED_DRAW_MODE_WIRE &&
+	     policy_state.valid && policy_state.viewDependent &&
+	     policy_state.meshLodEnabled))
 	    publish_state.roleFlags |=
 		SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
     }
@@ -3728,28 +3746,36 @@ ged_obol_lod_default_worker_count(size_t worker_count)
 	return worker_count;
 
     size_t cpus = bu_avail_cpus();
-    return cpus > 0 ? cpus : 1;
+    /* A display service shares the machine with the UI, database snapshot
+     * worker, renderer, and exact operations.  Consuming every logical CPU on
+     * a large workstation made first-frame latency worse through contention. */
+    return std::max(static_cast<size_t>(1),
+	std::min(static_cast<size_t>(8), cpus));
 }
 
 static BObolLodService *
-ged_obol_lod_service_ensure_passive(BObolViewController *controller)
+ged_obol_lod_service_ensure(BObolViewController *controller)
 {
     if (!controller)
 	return NULL;
 
     BObolLodService *service = controller->getLodService();
-    if (service && service->isRunning())
+    if (service && service->isRunning()) {
+	controller->setLodAutoSubmit(TRUE);
 	return service;
+    }
 
     service = controller->ensureManagedLodService(
 	ged_obol_lod_default_worker_count(0));
     if (!service)
 	return NULL;
 
-    /* Lazy cache and proxy prewarming needs workers, but it must not opt the
-     * whole view into automatic AABB/OBB/mesh LoD submission.  That policy is
-     * reserved for an explicit service start. */
-    controller->setLodAutoSubmit(FALSE);
+    /* The view policy, not the call site that first needed a worker, owns
+     * automatic display LoD.  Keeping this service "passive" made qged depend
+     * on a host-specific startup command and left MGED/gsh on a different
+     * path.  AUTO is the default; an OFF policy force-realizes and therefore
+     * produces no display-LoD requests even though the worker pool exists. */
+    controller->setLodAutoSubmit(TRUE);
     return service;
 }
 
@@ -3772,6 +3798,8 @@ ged_obol_lod_status_fill(BObolViewController *controller,
 	controller->getLastLodVisitedMeshCount();
     status->last_submitted_task_count =
 	controller->getLastLodSubmittedTaskCount();
+    status->last_updated_cut_count =
+	controller->getLastLodUpdatedCutCount();
     status->last_skipped_mesh_count =
 	controller->getLastLodSkippedMeshCount();
     status->last_result_count =
@@ -3902,10 +3930,11 @@ ged_obol_lod_prewarm_submit_name(BObolLodService *service,
 	return 0;
 
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
+    provider->service = service;
     provider->dbip = dbip;
     provider->useView = FALSE;
     provider->refreshMissing = TRUE;
-    provider->shrinkAfterCopy = TRUE;
+    provider->shrinkAfterCopy = FALSE;
 
     BObolLodTask task;
     task.generation = generation;
@@ -3942,7 +3971,7 @@ ged_draw_obol_lod_service_prewarm(struct ged *gedp,
 
     BObolLodService *service = controller->getLodService();
     if (!service || !service->isRunning()) {
-	service = ged_obol_lod_service_ensure_passive(controller);
+	service = ged_obol_lod_service_ensure(controller);
 	if (!service || !service->isRunning())
 	    return 0;
     }
@@ -6336,6 +6365,36 @@ ged_draw_obol_lighting_sync(struct ged *gedp,
     controller->setSceneLights(scene_lights);
     controller->setSceneLightsEnabled(
 	lighting.scene_lights_enabled ? TRUE : FALSE);
+    return BRLCAD_OK;
+}
+
+extern "C" int
+ged_draw_obol_shading_sync(struct ged *gedp,
+	struct ged_view_context *view_ctx)
+{
+    (void)gedp;
+    if (!view_ctx)
+	return BRLCAD_ERROR;
+    const struct bv *view = ged_obol_bv_const(view_ctx);
+    if (!view)
+	return BRLCAD_ERROR;
+    struct bv_shading_state shading;
+    if (!bv_shading_state_get(&shading, view))
+	return BRLCAD_ERROR;
+
+    BObolViewController *controller =
+	ged_obol_view_controller_for_context(view_ctx);
+    if (!controller)
+	return BRLCAD_OK;
+
+    BObolViewLodState::NormalStyle style =
+	BObolViewLodState::NORMAL_AUTHORED;
+    if (shading.normal_style == BV_NORMAL_FLAT)
+	style = BObolViewLodState::NORMAL_FLAT;
+    else if (shading.normal_style == BV_NORMAL_SMOOTH)
+	style = BObolViewLodState::NORMAL_SMOOTH;
+    controller->setNormalStyle(style,
+	static_cast<float>(shading.normal_crease_angle));
     return BRLCAD_OK;
 }
 
@@ -16276,6 +16335,7 @@ ged_obol_cheap_proxy_bounds(struct ged *gedp, const char *path,
     const struct bg_tess_tol defaultTtol = BG_TESS_TOL_INIT_TOL;
     ctx.ttol = defaultTtol;
     BN_TOL_INIT(&ctx.tol);
+    ctx.cacheOnly = 0;
     mat_t identity;
     MAT_IDN(identity);
     if (!ged_obol_cheap_bounds_object(ctx, ids.back(), identity,
@@ -16914,10 +16974,17 @@ ged_obol_publish_deferred_root_proxy(struct ged *gedp,
 	!source_instance_key || !source_instance_key[0])
 	return 0;
 
-    if (ged_obol_publish_deferred_structural_proxy_snapshot(gedp, view_ctx,
-	path, source_instance_key, draw_mode))
+    const int structural_snapshot =
+	ged_obol_publish_deferred_structural_proxy_snapshot(gedp, view_ctx,
+	    path, source_instance_key, draw_mode);
+    if (structural_snapshot != 0)
 	return 1;
 
+    /* A zero result means neither cached structure nor asynchronous bounds work
+     * was available.  Only then use the synchronous root fallback.  On a cold
+     * large model a negative result intentionally leaves the UI thread free:
+     * the first completed region bound or streamed leaf supplies the initial
+     * visual and arms deferred autoview. */
     const char *cache_name = strrchr(path, '/');
     cache_name = cache_name ? cache_name + 1 : path;
     struct ged_draw_obol_source_expansion_status proxy_status;
@@ -17037,7 +17104,7 @@ ged_obol_submit_region_bounds_async(
     BObolViewController *controller = ged_bobol_view_controller(view_ctx);
     if (!controller)
 	return 0;
-    BObolLodService *service = ged_obol_lod_service_ensure_passive(controller);
+    BObolLodService *service = ged_obol_lod_service_ensure(controller);
     if (!service || !service->isRunning())
 	return 0;
     const char *database_id = gedp->dbip->dbi_filename ?
@@ -17047,12 +17114,15 @@ ged_obol_submit_region_bounds_async(
     const uint32_t source_revision =
 	ged_obol_fold_revision(ged_draw_scene_revision(gedp));
     size_t submitted = 0;
+    static const size_t max_bounds_submissions_per_pass = 128;
     for (const std::string &name : names) {
 	if (name.empty())
 	    continue;
 	submitted += ged_obol_submit_child_aabb_prewarm(service, gedp->dbip,
 	    database_id, generation, name.c_str(), name.c_str(),
 	    draw_mode, source_revision);
+	if (submitted >= max_bounds_submissions_per_pass)
+	    break;
     }
     return submitted;
 }
@@ -17076,7 +17146,7 @@ ged_draw_obol_database_source_prewarm_child_aabb_proxies(
 
     BObolLodService *service = controller->getLodService();
     if (!service || !service->isRunning()) {
-	service = ged_obol_lod_service_ensure_passive(controller);
+	service = ged_obol_lod_service_ensure(controller);
 	if (!service || !service->isRunning())
 	    return 0;
     }
@@ -17531,14 +17601,6 @@ ged_draw_obol_database_source_expand_visible_children(
     return ged_obol_database_source_expand_visible_children_impl(gedp,
 	    view_ctx, root_path, draw_mode, max_sources,
 	    max_children_per_source, 0, 1, status);
-}
-
-static size_t
-ged_obol_remaining_budget(size_t budget, size_t used)
-{
-    if (!budget)
-	return 0;
-    return used >= budget ? 0 : budget - used;
 }
 
 static int
@@ -18090,10 +18152,8 @@ ged_obol_progressive_advance_provider(
     if (!controller || !data || !data->gedp)
 	return -1;
 
-    struct ged *gedp = data->gedp;
     struct ged_view_context *view_ctx = data->view_ctx;
-    if (!options)
-	options = &controller->getDefaultProgressiveOptions();
+    (void)options;
 
     if (data->pending_autoview) {
 	const struct bv *view = ged_obol_bv_const(view_ctx);
@@ -18102,21 +18162,23 @@ ged_obol_progressive_advance_provider(
 	    data->pending_autoview = 0;
     }
 
-    const uint32_t flags = options->flags;
-    const int refresh_missing_proxy =
-	(flags & BOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES) ? 1 : 0;
-    const int require_cached_leaf_proxy =
-	(!refresh_missing_proxy &&
-	 (flags & BOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES)) ? 1 : 0;
-    const int full_detail =
-	(flags & BOBOL_PROGRESSIVE_FULL_DETAIL) ? 1 : 0;
+    /* There is one production progression: compact per-leaf boxes followed by
+     * streamed view-appropriate geometry. */
     int has_pending_job = 0;
     std::unordered_set<std::string> active_deferred_roots;
-    if (full_detail) {
-	ged_obol_cleanup_retired_jobs(data);
-	int refined = 0;
-	for (std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>::iterator
-		it = data->pending_jobs.begin(); it != data->pending_jobs.end();) {
+    ged_obol_cleanup_retired_jobs(data);
+
+    /* Drain before retiring completed jobs.  A worker can finish between GUI
+     * pumps with its final (or entire) occurrence set still queued.  Erasing
+     * that job first discarded the stream whenever detached adoption was
+     * rejected (for example after a harmless view-revision change), leaving
+     * the live source permanently at its boxes. */
+    int stream_more = 0;
+    int refined =
+	ged_obol_drain_streamed_realizations(data, controller, &stream_more) ?
+	1 : 0;
+    for (std::vector<std::shared_ptr<ged_obol_deferred_realization_job>>::iterator
+	    it = data->pending_jobs.begin(); it != data->pending_jobs.end();) {
 	    const std::shared_ptr<ged_obol_deferred_realization_job> job = *it;
 	    const int job_state = job ?
 		job->state.load(std::memory_order_acquire) :
@@ -18155,13 +18217,8 @@ ged_obol_progressive_advance_provider(
 	    }
 	}
 
-	/* Stream completed per-leaf geometry from still-running jobs onto their
-	 * live roots so objects appear incrementally, well ahead of the
-	 * whole-job adopt.  Runs before deepen so a streaming root is flagged
-	 * and its coarse box registry is not rebuilt this tick. */
-	int stream_more = 0;
-	if (ged_obol_drain_streamed_realizations(data, controller, &stream_more))
-	    refined++;
+	/* A concurrent worker may have queued more after the pre-retirement
+	 * drain.  Keep the provider alive for another pump in that case. */
 	if (stream_more)
 	    has_pending_job = 1;
 
@@ -18177,13 +18234,8 @@ ged_obol_progressive_advance_provider(
 	    local_status.hasMore = 1;
 	}
 
-	/* The coarse frontier is now supplied by the compact-occurrence
-	 * deepening above (all region boxes on the one root node).  Do NOT fall
-	 * through to the legacy node-creating frontier expansion below: it stood
-	 * up a separate SoBRLDatabaseSource per child (scene-graph node
-	 * explosion) and dominated the progressive pump (~18s) on large models.
-	 * The deferred realization job handles geometry; deepening handles the
-	 * boxes; so the full_detail path always finishes the pump here. */
+	/* The deferred realization job supplies geometry and compact deepening
+	 * supplies boxes; both update the same root occurrence registry. */
 	if (local_status.changed && data->pending_autoview &&
 	    ged_obol_progressive_autoview_apply(data))
 	    controller->syncCameraFromViewContext(view_ctx, TRUE);
@@ -18195,153 +18247,6 @@ ged_obol_progressive_advance_provider(
 	if (status)
 	    *status = local_status;
 	return (local_status.changed || local_status.hasMore) ? 1 : 0;
-    }
-
-    std::vector<ged_obol_drawn_source_path_mode> roots =
-	ged_obol_drawn_source_path_modes(gedp, view_ctx, -1, NULL);
-    if (roots.empty()) {
-	if (status)
-	    *status = local_status;
-	return local_status.hasMore ? 1 : 0;
-    }
-
-    size_t used_sources = 0;
-    size_t used_submissions = 0;
-    int changed = 0;
-    for (const ged_obol_drawn_source_path_mode &root : roots) {
-	if (full_detail) {
-	    const std::string root_instance_key =
-		ged_obol_database_source_instance_key_for_mode(view_ctx,
-		    root.path.c_str(), root.mode);
-	    if (active_deferred_roots.find(root_instance_key) ==
-		active_deferred_roots.end())
-		continue;
-	}
-	if (options->maxSources && used_sources >= options->maxSources) {
-	    local_status.hasMore = 1;
-	    break;
-	}
-	if (options->maxSubmissions &&
-	    used_submissions >= options->maxSubmissions) {
-	    local_status.hasMore = 1;
-	    break;
-	}
-
-	size_t max_sources = ged_obol_remaining_budget(options->maxSources,
-			     used_sources);
-	size_t max_children = options->maxChildrenPerSource;
-	if (options->maxSubmissions) {
-	    size_t remaining_submissions =
-		ged_obol_remaining_budget(options->maxSubmissions,
-					  used_submissions);
-	    if (max_children == 0 || max_children > remaining_submissions)
-		max_children = remaining_submissions;
-	}
-
-	struct ged_draw_obol_source_prewarm_status prewarm_status;
-	ged_obol_source_prewarm_status_clear(&prewarm_status);
-	size_t submitted = 0;
-	if (flags & BOBOL_PROGRESSIVE_VISIBLE_FRONTIER) {
-	    submitted =
-		ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies(
-		    gedp, view_ctx, root.path.c_str(), root.mode, max_sources,
-		    max_children, &prewarm_status);
-	} else {
-	    submitted =
-		ged_draw_obol_database_source_prewarm_child_aabb_proxies(
-		    gedp, view_ctx, root.path.c_str(), root.mode, max_children,
-		    &prewarm_status);
-	}
-	used_submissions += submitted;
-	local_status.submitted += prewarm_status.submitted;
-	local_status.alreadyCached += prewarm_status.already_cached;
-	local_status.remaining += prewarm_status.remaining;
-	if (submitted > 0)
-	    local_status.hasMore = 1;
-
-	ged_draw_obol_lod_service_status_t prewarm_service_status;
-	memset(&prewarm_service_status, 0, sizeof(prewarm_service_status));
-	const int prewarm_busy =
-	    ged_draw_obol_lod_service_status(gedp, view_ctx,
-		&prewarm_service_status) &&
-	    (prewarm_service_status.pending_tasks ||
-	     prewarm_service_status.in_flight ||
-	     prewarm_service_status.queued_results ||
-	     prewarm_service_status.queued_cache_writes);
-	if (submitted > 0 || prewarm_busy) {
-	    local_status.pendingTasks = prewarm_service_status.pending_tasks;
-	    local_status.inFlight = prewarm_service_status.in_flight;
-	    local_status.queuedResults =
-		prewarm_service_status.queued_results;
-	    local_status.queuedCacheWrites =
-		prewarm_service_status.queued_cache_writes;
-	    local_status.hasMore = 1;
-	    used_sources += max_sources ? max_sources : 1;
-	    continue;
-	}
-
-	struct ged_draw_obol_source_expansion_status expansion_status;
-	ged_obol_source_expansion_status_clear(&expansion_status);
-	int root_changed = 0;
-	if (flags & BOBOL_PROGRESSIVE_VISIBLE_FRONTIER) {
-	    root_changed =
-		ged_obol_database_source_expand_visible_children_impl(gedp,
-		    view_ctx, root.path.c_str(), root.mode, max_sources,
-		    max_children, refresh_missing_proxy,
-		    require_cached_leaf_proxy,
-		    &expansion_status);
-	} else {
-	    root_changed =
-		ged_obol_database_source_expand_children_impl(gedp, view_ctx,
-		    root.path.c_str(), root.mode, max_children,
-		    refresh_missing_proxy, require_cached_leaf_proxy,
-		    NULL, &expansion_status);
-	}
-	if (root_changed) {
-	    changed = 1;
-	    local_status.changed = 1;
-	}
-
-	local_status.expanded += expansion_status.expanded;
-	local_status.existing += expansion_status.existing;
-	local_status.remaining += expansion_status.remaining;
-	local_status.proxyPublished += expansion_status.proxy_published;
-	local_status.metadataApplied += expansion_status.metadata_applied;
-	used_sources += max_sources ? max_sources : 1;
-
-	if (expansion_status.expanded > 0)
-	    local_status.hasMore = 1;
-	if (expansion_status.remaining > 0)
-	    local_status.hasMore = 1;
-    }
-
-    ged_draw_obol_lod_service_status_t service_status;
-    memset(&service_status, 0, sizeof(service_status));
-    if (ged_draw_obol_lod_service_status(gedp, view_ctx, &service_status)) {
-	local_status.pendingTasks = service_status.pending_tasks;
-	local_status.inFlight = service_status.in_flight;
-	local_status.queuedResults = service_status.queued_results;
-	local_status.queuedCacheWrites = service_status.queued_cache_writes;
-	if (service_status.pending_tasks || service_status.in_flight ||
-	    service_status.queued_results ||
-	    service_status.queued_cache_writes)
-	    local_status.hasMore = 1;
-    }
-
-    if (local_status.hasMore && view_ctx)
-	bv_refresh_request(ged_obol_bv(view_ctx), GED_VIEW_REFRESH_DRAW);
-    if (local_status.changed && data->pending_autoview &&
-	ged_obol_progressive_autoview_apply(data))
-	controller->syncCameraFromViewContext(view_ctx, TRUE);
-    if (!local_status.hasMore)
-	data->pending_autoview = 0;
-    if (local_status.changed || local_status.hasMore)
-	controller->requestRender(local_status.changed ?
-				  "ged-progressive-update" : "ged-progressive-pending");
-
-    if (status)
-	*status = local_status;
-    return (changed || local_status.hasMore) ? 1 : 0;
 }
 
 extern "C" int
@@ -20598,16 +20503,37 @@ ged_draw_obol_progressive_available(struct ged *gedp, struct ged_view_context *v
 	ged_obol_progressive_advance_provider)) ? 1 : 0;
 }
 
-/* Progressive (coarse-first / deferred-leaf) drawing is driven by the view's
- * LoD policy: when neither mesh nor CSG LoD is enabled the view wants the
- * classic force-realize draw, so leaf expansion should not defer.  This keeps a
- * single `view lod` control governing both drawing and presentation. */
+/* Progressive (coarse-first / deferred-leaf) drawing is driven by the part of
+ * the view policy used by the requested representation.  Shaded and
+ * hidden-line modes consume mesh LoD.  Wire may consume CSG LoD for primitive
+ * plotting and mesh LoD for PoP-backed BoTs, so either policy can make its
+ * production path progressive. */
 extern "C" int
-ged_draw_obol_view_lod_enabled(struct ged *gedp, struct ged_view_context *view_ctx)
+ged_draw_obol_view_lod_enabled(struct ged *gedp,
+			      struct ged_view_context *view_ctx,
+			      int draw_mode)
 {
     (void)gedp;
-    BObolViewController *controller = ged_bobol_view_controller(view_ctx);
-    return (controller && !controller->isForceRealizeDisplay()) ? 1 : 0;
+    if (!ged_bobol_view_controller(view_ctx))
+	return 0;
+
+    ged_draw_source_lod_policy policy;
+    if (!ged_draw_source_lod_policy_get(&policy, view_ctx) ||
+	policy.policy == BV_LOD_OFF)
+	return 0;
+
+    switch (draw_mode) {
+	case GED_DRAW_MODE_SHADED_BOTS:
+	case GED_DRAW_MODE_SHADED:
+	case GED_DRAW_MODE_HIDDEN_LINE:
+	    return policy.mesh_enabled ? 1 : 0;
+	case GED_DRAW_MODE_WIRE:
+	    return (policy.csg_enabled || policy.mesh_enabled) ? 1 : 0;
+	case GED_DRAW_MODE_EVAL_WIRE:
+	case GED_DRAW_MODE_EVAL_POINTS:
+	default:
+	    return 0;
+    }
 }
 
 static int
@@ -20733,6 +20659,14 @@ ged_draw_obol_attach_view_common(struct ged *gedp,
 	    view_controller->getViewAttachment());
 	return 0;
     }
+
+    /* Every graphical endpoint uses the same automatic display-LoD service.
+     * Starting it only when cold structural bounds happened to be missing made
+     * cold cache misses work while warm caches (and small models with directly
+     * available bounds) never traversed their valid source-mesh requests.
+     * Failure is non-fatal: the standing compact boxes remain a useful
+     * fallback and an explicit service start may be retried later. */
+    (void)ged_obol_lod_service_ensure(view_controller);
 
     return 1;
 }

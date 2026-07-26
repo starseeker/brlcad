@@ -15,6 +15,7 @@
 #include <Inventor/SbBox.h>
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec3f.h>
+#include <memory>
 #include <stdint.h>
 #include <vector>
 
@@ -120,6 +121,13 @@ struct BOBOL_EXPORT BObolLodCacheKey {
     SbBool isValid(void) const;
 };
 
+struct BOBOL_EXPORT BObolLodResidentDemand {
+    SbString assetKey;
+    int level;
+
+    BObolLodResidentDemand(void);
+};
+
 struct BOBOL_EXPORT BObolLodGeometryHandle {
     int kind;
     SbString providerId;
@@ -145,6 +153,51 @@ struct BOBOL_EXPORT BObolLodMeshPayload {
     void clear(void);
     SbBool isValid(void) const;
 };
+
+struct BObolLodProgressiveMeshPrivate;
+
+/* One thread-safe retained PoP asset shared by every occurrence and view that
+ * resolves to the same source geometry.  The resident arrays are exact,
+ * activation-ordered cumulative prefixes.  active/draw level deliberately
+ * does not live here: each occurrence may draw a different prefix. */
+class BOBOL_EXPORT BObolLodProgressiveMesh {
+public:
+    BObolLodProgressiveMesh(void);
+    ~BObolLodProgressiveMesh(void);
+
+    SbBool update(const struct BObolMeshLodData &data,
+	const struct BObolMeshLodHierarchyInfo &hierarchy,
+	int residentLevel, SbBool shadedCullBackfaces);
+    SbBool trim(int residentLevel);
+    SbBool copyLevel(BObolLodMeshPayload &payload, int level) const;
+    SbBool isValid(void) const;
+    /* True when the retained prefix already contains every point and face
+     * needed by level.  This may be true above residentLevel() when adjacent
+     * PoP levels differ only in coordinate quantization: exact coordinates
+     * are retained once and the renderer can select the finer snap without
+     * loading or rebuilding geometry. */
+    SbBool canDrawLevel(int level) const;
+    int minimumLevel(void) const;
+    int maximumLevel(void) const;
+    int residentLevel(void) const;
+    uint64_t revision(void) const;
+    size_t pointCount(int level) const;
+    size_t faceCount(int level) const;
+    size_t estimateBytes(void) const;
+    SbBox3f bounds(void) const;
+    SbVec3f quantizationMinimum(void) const;
+    SbVec3f quantizationMaximum(void) const;
+    SbBool cullBackfaces(void) const;
+
+private:
+    BObolLodProgressiveMesh(const BObolLodProgressiveMesh &);
+    BObolLodProgressiveMesh &operator=(
+	const BObolLodProgressiveMesh &);
+    BObolLodProgressiveMeshPrivate *p;
+};
+
+typedef std::shared_ptr<BObolLodProgressiveMesh>
+    BObolLodProgressiveMeshPtr;
 
 struct BOBOL_EXPORT BObolLodProxy {
     int kind;
@@ -179,6 +232,13 @@ struct BOBOL_EXPORT BObolLodRequest {
     SbString providerId;
     SbString providerVersion;
     int qualityTier;
+    /* View-derived display demand.  requestedLevel is a PoP quantization
+     * level, never an exact/full-detail request.  A negative value means the
+     * producer did not have a projectable view and the provider should use its
+     * conservative legacy view estimate. */
+    float projectedPixelDiameter;
+    float targetPixelError;
+    int requestedLevel;
     SbBox3f bounds;
     BObolLodCounts sourceCounts;
     std::vector<BObolLodProviderParam> providerParams;
@@ -194,6 +254,8 @@ struct BOBOL_EXPORT BObolLodResult {
     BObolLodCacheKey cacheKey;
     BObolLodGeometryHandle geometry;
     BObolLodMeshPayload mesh;
+    BObolLodProgressiveMeshPtr progressiveMesh;
+    int residentLevel;
     int resultKind;
     int qualityTier;
     int providerStatus;
@@ -208,6 +270,7 @@ struct BOBOL_EXPORT BObolLodResult {
     SbBool stale;
     SbBool hasSnappedPoints;
     SbBool hasNormals;
+    SbBool shadedCullBackfaces;
     SbString diagnostic;
 
     BObolLodResult(void);
@@ -220,6 +283,17 @@ struct BOBOL_EXPORT BObolLodResult {
 
 BOBOL_EXPORT BObolLodCacheKey
 bobol_lod_cache_key(const BObolLodRequest &request);
+
+/* Stable identity of provider geometry.  Unlike bobol_lod_cache_key this does
+ * not contain occurrence or camera epochs, so an unchanged level remains the
+ * same display asset across view changes. */
+BOBOL_EXPORT BObolLodCacheKey
+bobol_lod_geometry_cache_key(const BObolLodRequest &request);
+
+/* Stable source-asset identity.  It excludes occurrence, camera, requested
+ * level, and draw mode, so all consumers share one residency high-water mark. */
+BOBOL_EXPORT BObolLodCacheKey
+bobol_lod_asset_cache_key(const BObolLodRequest &request);
 
 BOBOL_EXPORT SbBool
 bobol_lod_mesh_payload_from_mesh_lod_data(BObolLodMeshPayload &payload,

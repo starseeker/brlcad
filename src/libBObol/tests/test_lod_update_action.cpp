@@ -21,6 +21,7 @@
 #include "BObol/BMeshShape.h"
 #include "BObol/BVListShape.h"
 #include "BObol/BViewLod.h"
+#include "BObol/BViewAttachment.h"
 #include "bv.h"
 #include "bu/app.h"
 #include "bu/env.h"
@@ -3118,7 +3119,7 @@ test_mesh_lod_request_and_view_info(void)
 			 56,
 			 BOBOL_LOD_DRAW_SHADED,
 			 "bobol_mesh_lod",
-			 "bobol-cache-v1",
+			 BOBOL_MESH_LOD_PROVIDER_VERSION,
 			 BOBOL_LOD_QUALITY_FAST_DISPLAY);
 
     if (bu_strcmp(request.databaseId.getString(), "db://request-test") != 0 ||
@@ -3149,7 +3150,7 @@ test_mesh_lod_request_and_view_info(void)
 			 56,
 			 BOBOL_LOD_DRAW_SHADED,
 			 "bobol_mesh_lod",
-			 "bobol-cache-v1",
+			 BOBOL_MESH_LOD_PROVIDER_VERSION,
 			 BOBOL_LOD_QUALITY_FAST_DISPLAY);
     if (bu_strcmp(firstKey.value.getString(),
 	       bobol_lod_cache_key(sameRequest).value.getString()) != 0) {
@@ -3164,12 +3165,17 @@ test_mesh_lod_request_and_view_info(void)
     camera->height = 15.0f;
     BObolViewController controller(root, camera);
     controller.setViewportSize(320, 240);
+    struct bv_lod_policy controllerPolicy;
+    bv_lod_policy_init(&controllerPolicy);
+    controllerPolicy.scale = 3.5;
+    controller.getViewAttachment()->setLodPolicy(&controllerPolicy);
 
     struct bv_view_info info = BV_VIEW_INFO_INIT;
     if (!controller.getViewInfo(&info) ||
 	info.width != 320 ||
 	info.height != 240 ||
-	fabs(info.size - 20.0) > 1.0e-6) {
+	fabs(info.size - 20.0) > 1.0e-6 ||
+	fabs(info.lod.scale - 3.5) > 1.0e-6) {
 	printf("FAIL: view controller did not produce RT view info\n");
 	root->unref();
 	mesh->unref();
@@ -3926,7 +3932,7 @@ test_mesh_lod_submit_action(void)
 			 66,
 			 BOBOL_LOD_DRAW_SHADED,
 			 "bobol_mesh_lod",
-			 "bobol-cache-v1",
+			 BOBOL_MESH_LOD_PROVIDER_VERSION,
 			 BOBOL_LOD_QUALITY_FAST_DISPLAY);
     BObolLodTask activeTask;
     activeTask.generation = service.beginGeneration();
@@ -4060,6 +4066,94 @@ test_mesh_lod_submit_action(void)
 	return 1;
     }
 
+    /* Projected demand, not whole-view model size, selects interactive PoP
+     * levels.  Settled demand must refine beyond motion demand, and an
+     * off-frustum mesh must submit no payload at all. */
+    SoOrthographicCamera *projectedCamera = new SoOrthographicCamera;
+    projectedCamera->ref();
+    projectedCamera->position = SbVec3f(0.5f, 0.5f, 5.0f);
+    projectedCamera->height = 10.0f;
+    const SbViewVolume projectedVolume =
+	projectedCamera->getViewVolume(640.0f / 480.0f);
+    int motionLevel = -1;
+    int settledLevel = -1;
+    for (int pass = 0; pass < 2; pass++) {
+	SoBRLMeshLodSubmitAction projectedSubmit;
+	projectedSubmit.setService(&service);
+	projectedSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
+	projectedSubmit.setViewInfo(&view);
+	projectedSubmit.setViewVolume(&projectedVolume, pass ? 1.0f : 4.0f);
+	projectedSubmit.setGeneration(service.beginGeneration());
+	projectedSubmit.setRevisions(70 + pass, 80 + pass);
+	projectedSubmit.apply(root);
+	if (projectedSubmit.getSubmittedTaskCount() != 1 ||
+	    wait_for_service(service)) {
+	    printf("FAIL: projected LoD demand did not submit visible mesh\n");
+	    service.stop();
+	    root->unref();
+	    bobol_mesh_lod_cache_clear_database(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    projectedCamera->unref();
+	    return 1;
+	}
+	std::vector<BObolLodResult> projectedResults;
+	if (service.drainResults(projectedResults) != 1 ||
+	    projectedResults.size() != 1 ||
+	    projectedResults[0].request.requestedLevel < 0) {
+	    printf("FAIL: projected LoD demand result was not view-quantized\n");
+	    service.stop();
+	    root->unref();
+	    bobol_mesh_lod_cache_clear_database(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    projectedCamera->unref();
+	    return 1;
+	}
+	if (pass)
+	    settledLevel = projectedResults[0].request.requestedLevel;
+	else
+	    motionLevel = projectedResults[0].request.requestedLevel;
+    }
+    if (settledLevel <= motionLevel) {
+	printf("FAIL: settled projected LoD demand did not refine motion level\n");
+	service.stop();
+	root->unref();
+	bobol_mesh_lod_cache_clear_database(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	projectedCamera->unref();
+	return 1;
+    }
+
+    projectedCamera->position = SbVec3f(1000.0f, 0.0f, 5.0f);
+    const SbViewVolume offscreenVolume =
+	projectedCamera->getViewVolume(640.0f / 480.0f);
+    SoBRLMeshLodSubmitAction offscreenSubmit;
+    offscreenSubmit.setService(&service);
+    offscreenSubmit.setDatabase(dbip, "db://lod-submit-test", 2026);
+    offscreenSubmit.setViewInfo(&view);
+    offscreenSubmit.setViewVolume(&offscreenVolume, 1.0f);
+    offscreenSubmit.setGeneration(service.beginGeneration());
+    offscreenSubmit.setRevisions(90, 91);
+    offscreenSubmit.apply(root);
+    if (offscreenSubmit.getSubmittedTaskCount() != 0 ||
+	offscreenSubmit.getSkippedMeshCount() != 2) {
+	printf("FAIL: off-frustum LoD demand submitted display geometry\n");
+	service.stop();
+	root->unref();
+	bobol_mesh_lod_cache_clear_database(dbip);
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	bu_dirclear(cache_dir);
+	projectedCamera->unref();
+	return 1;
+    }
+    projectedCamera->unref();
+
     BObolViewLodState viewState;
     SoBRLViewLodGroup *renderRoot = new SoBRLViewLodGroup;
     renderRoot->ref();
@@ -4110,7 +4204,7 @@ test_mesh_lod_submit_action(void)
 			     66,
 			     BOBOL_LOD_DRAW_SHADED,
 			     "bobol_mesh_lod",
-			     "bobol-cache-v1",
+			     BOBOL_MESH_LOD_PROVIDER_VERSION,
 			     BOBOL_LOD_QUALITY_FAST_DISPLAY);
 	if (activeRequest.sourceCounts.faceCount != 1 ||
 	    activeRequest.sourceCounts.pointCount != 3 ||
@@ -5322,9 +5416,9 @@ test_view_controller_lod_submit_and_apply(void)
 	    return 1;
 	}
 
-	if (controller.submitLodRequests(NULL, service.beginGeneration()) != 3 ||
+	if (controller.submitLodRequests(NULL, service.beginGeneration()) != 1 ||
 	    controller.getLastLodVisitedMeshCount() != 1 ||
-	    controller.getLastLodSubmittedTaskCount() != 3 ||
+	    controller.getLastLodSubmittedTaskCount() != 1 ||
 	    controller.getLastLodSkippedMeshCount() != 0 ||
 	    controller.getLastLodDiagnostics().getLength() != 0 ||
 	    !controller.isRenderRequested() ||
@@ -5363,15 +5457,14 @@ test_view_controller_lod_submit_and_apply(void)
 
 	controller.clearRenderRequest();
 	if (!controller.hasPendingLodResults() ||
-	    controller.processPendingLodResults() != 3 ||
-	    controller.getLastLodResultCount() != 3 ||
-	    controller.getLastLodMatchedResultCount() != 3 ||
-	    controller.getLastLodAppliedResultCount() != 3 ||
+	    controller.processPendingLodResults() != 1 ||
+	    controller.getLastLodResultCount() != 1 ||
+	    controller.getLastLodMatchedResultCount() != 1 ||
+	    controller.getLastLodAppliedResultCount() != 1 ||
 	    controller.getLastLodRejectedResultCount() != 0 ||
 	    controller.getLastLodUnmatchedResultCount() != 0 ||
 	    controller.getLastLodDiagnostics().getLength() != 0 ||
 	    !controller.getViewLodState()->findMesh(mesh) ||
-	    !controller.getViewLodState()->findProxy(mesh) ||
 	    !controller.isRenderRequested() ||
 	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-result") != 0 ||
@@ -5470,15 +5563,30 @@ test_view_controller_lod_submit_and_apply(void)
 	}
 
 	uint64_t previousViewRevision = controller.getLodViewRevision();
-	camera->height = 90.0f;
+	/* Cross a projected-level boundary.  A small camera change that remains
+	 * within the resident level must not restart PoP loading. */
+	/* Interactive demand deliberately targets 4 px error.  Zoom far enough
+	 * to cross a cut under that responsiveness policy. */
+	camera->height = 2.0f;
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 3 ||
-	    controller.getLastLodSubmittedTaskCount() != 3 ||
+	if (controller.submitLodRequestsIfNeeded() != 0 ||
+	    controller.getLastLodSubmittedTaskCount() != 0 ||
+	    controller.getLastLodUpdatedCutCount() != 1 ||
 	    controller.getLodViewRevision() == previousViewRevision ||
 	    !controller.isRenderRequested() ||
 	    bu_strcmp(controller.getRenderReason().getString(),
-		   "lod-submit") != 0) {
-	    printf("FAIL: LoD view controller did not auto-submit camera field change\n");
+		   "lod-cut") != 0) {
+	    printf("FAIL: LoD view controller did not retarget the resident "
+		   "camera cut (tasks=%d cuts=%d skipped=%d view=%llu/%llu render=%d "
+		   "reason=%s diagnostic=%s)\n",
+		   controller.getLastLodSubmittedTaskCount(),
+		   controller.getLastLodUpdatedCutCount(),
+		   controller.getLastLodSkippedMeshCount(),
+		   (unsigned long long)controller.getLodViewRevision(),
+		   (unsigned long long)previousViewRevision,
+		   controller.isRenderRequested() ? 1 : 0,
+		   controller.getRenderReason().getString(),
+		   controller.getLastLodDiagnostics().getString());
 	    service.stop();
 	    root->unref();
 	    bobol_mesh_lod_cache_clear_database(dbip);
@@ -5487,21 +5595,9 @@ test_view_controller_lod_submit_and_apply(void)
 	    bu_dirclear(cache_dir);
 	    return 1;
 	}
-	if (wait_for_service(service)) {
-	    service.stop();
-	    root->unref();
-	    bobol_mesh_lod_cache_clear_database(dbip);
-	    db_close(dbip);
-	    bu_file_delete(dbpath);
-	    bu_dirclear(cache_dir);
-	    return 1;
-	}
-	controller.clearRenderRequest();
-	if (controller.processPendingLodResults() != 3 ||
-	    controller.getLastLodAppliedResultCount() != 3 ||
-	    bu_strcmp(controller.getRenderReason().getString(),
-		   "lod-result") != 0) {
-	    printf("FAIL: LoD view controller did not apply camera field result\n");
+	if (service.pendingTaskCountForDiagnostics() != 0 ||
+	    service.queuedResultCountForDiagnostics() != 0) {
+	    printf("FAIL: resident camera cut incorrectly scheduled provider work\n");
 	    service.stop();
 	    root->unref();
 	    bobol_mesh_lod_cache_clear_database(dbip);
@@ -5513,6 +5609,47 @@ test_view_controller_lod_submit_and_apply(void)
 
 	const BObolViewLodState::MeshPayload *activePayload =
 	    controller.getViewLodState()->findMesh(mesh);
+	const int residentCameraLevel =
+	    activePayload ? activePayload->activeLevel : -1;
+	previousViewRevision = controller.getLodViewRevision();
+	camera->height = 2.002f;
+	controller.clearRenderRequest();
+	/* The changed camera still needs a frame.  What must remain idle is the
+	 * PoP provider: no new task, result, or payload replacement. */
+	const int jitterSubmitted = controller.submitLodRequestsIfNeeded();
+	if (jitterSubmitted != 0 ||
+	    controller.getLastLodSubmittedTaskCount() != 0 ||
+	    controller.getLastLodSkippedMeshCount() != 1 ||
+	    controller.getLodViewRevision() == previousViewRevision ||
+	    controller.getViewLodState()->findMesh(mesh) != activePayload ||
+	    !activePayload ||
+	    activePayload->activeLevel != residentCameraLevel ||
+	    service.queuedResultCountForDiagnostics() != 0 ||
+	    !controller.isRenderRequested()) {
+	    printf("FAIL: sub-level camera jitter restarted resident PoP loading "
+		   "(return=%d tasks=%d skipped=%d revision=%llu/%llu "
+		   "payload=%p/%p level=%d/%d queued=%zu render=%d diagnostic=%s)\n",
+		   jitterSubmitted,
+		   controller.getLastLodSubmittedTaskCount(),
+		   controller.getLastLodSkippedMeshCount(),
+		   (unsigned long long)controller.getLodViewRevision(),
+		   (unsigned long long)previousViewRevision,
+		   (const void *)controller.getViewLodState()->findMesh(mesh),
+		   (const void *)activePayload,
+		   activePayload ? activePayload->activeLevel : -1,
+		   residentCameraLevel,
+		   service.queuedResultCountForDiagnostics(),
+		   controller.isRenderRequested() ? 1 : 0,
+		   controller.getLastLodDiagnostics().getString());
+	    service.stop();
+	    root->unref();
+	    bobol_mesh_lod_cache_clear_database(dbip);
+	    db_close(dbip);
+	    bu_file_delete(dbpath);
+	    bu_dirclear(cache_dir);
+	    return 1;
+	}
+
 	int forcedLevel = activePayload ? activePayload->activeLevel : 0;
 	uint64_t previousPolicyRevision = controller.getLodPolicyRevision();
 	controller.clearRenderRequest();
@@ -5533,8 +5670,8 @@ test_view_controller_lod_submit_and_apply(void)
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 3 ||
-	    controller.getLastLodSubmittedTaskCount() != 3 ||
+	if (controller.submitLodRequestsIfNeeded() != 1 ||
+	    controller.getLastLodSubmittedTaskCount() != 1 ||
 	    !controller.isRenderRequested() ||
 	    bu_strcmp(controller.getRenderReason().getString(),
 		   "lod-submit") != 0) {
@@ -5557,8 +5694,8 @@ test_view_controller_lod_submit_and_apply(void)
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.processPendingLodResults() != 3 ||
-	    controller.getLastLodAppliedResultCount() != 3 ||
+	if (controller.processPendingLodResults() != 1 ||
+	    controller.getLastLodAppliedResultCount() != 1 ||
 	    !controller.getViewLodState()->findMesh(mesh) ||
 	    controller.getViewLodState()->findMesh(mesh)->activeLevel !=
 	    forcedLevel ||
@@ -5605,9 +5742,12 @@ test_view_controller_lod_submit_and_apply(void)
 	    return 1;
 	}
 	controller.clearRenderRequest();
-	if (controller.submitLodRequestsIfNeeded() != 3 ||
-	    controller.getLastLodSubmittedTaskCount() != 3) {
-	    printf("FAIL: LoD view controller did not auto-submit view change\n");
+	if (controller.submitLodRequestsIfNeeded() != 0 ||
+	    controller.getLastLodSubmittedTaskCount() != 0 ||
+	    service.pendingTaskCountForDiagnostics() != 0 ||
+	    service.inFlightCount() != 0) {
+	    printf("FAIL: LoD view controller reloaded a resident cut for a "
+		   "sub-level viewport change\n");
 	    service.stop();
 	    root->unref();
 	    bobol_mesh_lod_cache_clear_database(dbip);
@@ -5675,8 +5815,6 @@ test_view_controller_lod_source_churn(void)
     }
     service.setQueueLimits(4, 4, 4);
 
-    bu_setenv("BOBOL_LOD_AABB_TASK_DELAY_MS", "40", 1);
-    bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS", "40", 1);
     bu_setenv("BOBOL_LOD_TASK_DELAY_MS", "40", 1);
 
     int ret = 0;
@@ -5738,8 +5876,8 @@ test_view_controller_lod_source_churn(void)
 	    }
 
 	    controller.clearRenderRequest();
-	    if (controller.submitLodRequestsIfNeeded(TRUE, 1) != 3 ||
-		controller.getLastLodSubmittedTaskCount() != 3 ||
+	    if (controller.submitLodRequestsIfNeeded(TRUE, 1) != 1 ||
+		controller.getLastLodSubmittedTaskCount() != 1 ||
 		wait_for_service_delayed(service)) {
 		printf("FAIL: LoD source churn did not start cycle %d work\n", i);
 		ret = 1;
@@ -5824,8 +5962,6 @@ test_view_controller_lod_source_churn(void)
 	    }
 	}
 
-	bu_setenv("BOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);
-	bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS", "0", 1);
 	bu_setenv("BOBOL_LOD_TASK_DELAY_MS", "0", 1);
 
 	if (!ret) {
@@ -5852,18 +5988,18 @@ test_view_controller_lod_source_churn(void)
 	    finalMesh->lodPolicy = 6;
 	    finalSource->addChild(finalMesh);
 
-	    if (controller.submitLodRequestsIfNeeded(TRUE, 1) != 3 ||
+	    if (controller.submitLodRequestsIfNeeded(TRUE, 1) != 1 ||
 		wait_for_service(service) ||
-		controller.processPendingLodResults() != 3 ||
-		controller.getLastLodMatchedResultCount() != 3 ||
-		controller.getLastLodAppliedResultCount() != 3 ||
+		controller.processPendingLodResults() != 1 ||
+		controller.getLastLodMatchedResultCount() != 1 ||
+		controller.getLastLodAppliedResultCount() != 1 ||
 		controller.getLastLodRejectedResultCount() != 0 ||
 		controller.getLastLodUnmatchedResultCount() != 0 ||
 		controller.getActiveLodMeshPayloadCount() != 1 ||
 		controller.getActiveLodProxyPayloadCount(
 		    BOBOL_LOD_PROXY_AABB) != 0 ||
 		controller.getActiveLodProxyPayloadCount(
-		    BOBOL_LOD_PROXY_OBB) != 1 ||
+		    BOBOL_LOD_PROXY_OBB) != 0 ||
 		controller.getActiveLodCadPayloadCount() != 0 ||
 		!controller.getViewLodState()->findMesh(finalMesh) ||
 		controller.getDatabaseSourceCount() != 1 ||
@@ -5878,8 +6014,6 @@ test_view_controller_lod_source_churn(void)
 	    ret = 1;
     }
 
-    bu_setenv("BOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);
-    bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS", "0", 1);
     bu_setenv("BOBOL_LOD_TASK_DELAY_MS", "0", 1);
     service.stop();
     root->unref();
@@ -6241,6 +6375,417 @@ compact_duplicate_proxy_geometry(void)
     return geometry;
 }
 
+static std::shared_ptr<const Obol::PartGeometry>
+compact_projected_proxy_geometry(void)
+{
+    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    Obol::WireRep wire;
+    wire.segmentPoints.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    wire.segmentPoints.push_back(SbVec3f(1.0f, 1.0f, 1.0f));
+    wire.segmentIds.push_back(1);
+    wire.bounds = SbBox3f(SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 1.0f, 1.0f));
+    geometry->wire = std::move(wire);
+    geometry->subpixelProxyEligible = true;
+    return geometry;
+}
+
+static std::shared_ptr<const Obol::PartGeometry>
+compact_native_triangle_geometry(void)
+{
+    std::shared_ptr<Obol::PartGeometry> geometry(new Obol::PartGeometry);
+    Obol::TriMesh mesh;
+    mesh.positions.push_back(SbVec3f(0.0f, 0.0f, 0.0f));
+    mesh.positions.push_back(SbVec3f(1.0f, 0.0f, 0.0f));
+    mesh.positions.push_back(SbVec3f(0.0f, 1.0f, 0.0f));
+    mesh.indices.push_back(0);
+    mesh.indices.push_back(1);
+    mesh.indices.push_back(2);
+    mesh.bounds = SbBox3f(SbVec3f(0.0f, 0.0f, 0.0f),
+	SbVec3f(1.0f, 1.0f, 0.0f));
+    geometry->shaded = std::move(mesh);
+    return geometry;
+}
+
+static int
+test_compact_native_mesh_not_pop_submitted(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    SoBRLViewLodGroup *root = new SoBRLViewLodGroup;
+    root->ref();
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "native-analytic.tgc";
+    source->instanceKey = "native-analytic-instance";
+    source->lodBotThreshold = 1;
+    source->representationMode = SoBRLDatabaseSource::REPRESENTATION_SHADED;
+    root->addChild(source);
+
+    BObolCompactOccurrence occurrence;
+    occurrence.geometry = compact_native_triangle_geometry();
+    occurrence.summary.valid = TRUE;
+    occurrence.summary.shapeKind =
+	BObolRealizedShapeSummary::SHAPE_MESH;
+    occurrence.summary.path = "root.c/native-analytic.tgc";
+    occurrence.summary.sourceName = "native-analytic.tgc";
+    occurrence.summary.sourceType = "tgc";
+    occurrence.summary.sourceId = 711;
+    occurrence.summary.visible = TRUE;
+    occurrence.summary.selectable = TRUE;
+    occurrence.lodBacked = FALSE;
+    occurrence.sourceMeshRequestValid = FALSE;
+    std::vector<BObolCompactOccurrence> occurrences(1, occurrence);
+
+    int ret = 0;
+    if (source->setCompactOccurrenceRegistry(occurrences) != 1) {
+	printf("FAIL: compact native mesh setup\n");
+	ret = 1;
+    }
+
+    BObolLodService service;
+    if (!ret && !service.start(1, TRUE)) {
+	printf("FAIL: compact native mesh service did not start\n");
+	ret = 1;
+    }
+
+    if (!ret) {
+	SoBRLMeshLodSubmitAction submit;
+	submit.setService(&service);
+	submit.setDatabase(dbip, "db://compact-native-test", 2026);
+	submit.setGeneration(service.beginGeneration());
+	submit.setRevisions(71, 72);
+	submit.apply(root);
+	if (submit.getVisitedMeshCount() != 1 ||
+	    submit.getSubmittedTaskCount() != 0 ||
+	    submit.getSkippedMeshCount() != 1 ||
+	    service.pendingTaskCountForDiagnostics() != 0 ||
+	    service.queuedResultCountForDiagnostics() != 0) {
+	    printf("FAIL: native analytic mesh was submitted to the BoT PoP provider\n");
+	    ret = 1;
+	}
+    }
+
+    service.stop();
+    root->unref();
+    bobol_mesh_lod_cache_clear_database(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    return ret;
+}
+
+static int
+test_compact_mesh_lod_projection_and_mode_parity(void)
+{
+    char cacheDir[MAXPATHLEN] = {0};
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    int ret = 0;
+
+    bu_dir(cacheDir, MAXPATHLEN, BU_DIR_CURR,
+	   "bobol_compact_lod_projection_cache", NULL);
+    bu_dirclear(cacheDir);
+    bu_mkdir(cacheDir);
+    bu_setenv("BU_DIR_CACHE", cacheDir, 1);
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip)) {
+	bu_dirclear(cacheDir);
+	return 1;
+    }
+
+    BObolViewLodState viewState;
+    SoBRLViewLodGroup *root = new SoBRLViewLodGroup;
+    root->ref();
+    root->setViewLodState(&viewState);
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->setDatabase(dbip);
+    source->path = "lod-submit.bot";
+    source->instanceKey = "compact-projected-source";
+    source->sourceRevision = 515;
+    source->lodBotThreshold = 1;
+    source->representationMode = SoBRLDatabaseSource::REPRESENTATION_SHADED;
+    source->drawMatrixValid = TRUE;
+    SbMatrix placement;
+    placement.setTranslate(SbVec3f(100.0f, 0.0f, 0.0f));
+    source->drawMatrix = placement;
+    root->addChild(source);
+
+    BObolCompactOccurrence occurrence;
+    occurrence.geometry = compact_projected_proxy_geometry();
+    occurrence.summary.valid = TRUE;
+    occurrence.summary.shapeKind =
+	BObolRealizedShapeSummary::SHAPE_VLIST;
+    occurrence.summary.path = "root.c/lod-submit.bot";
+    occurrence.summary.sourceName = "lod-submit.bot";
+    occurrence.summary.sourceType = "bot";
+    occurrence.summary.sourceId = 515;
+    occurrence.summary.visible = TRUE;
+    occurrence.summary.selectable = TRUE;
+    occurrence.lodBacked = TRUE;
+    occurrence.sourceMeshRequestValid = TRUE;
+    occurrence.sourceMeshRequest.path = occurrence.summary.path;
+    occurrence.sourceMeshRequest.sourceName = "lod-submit.bot";
+    occurrence.sourceMeshRequest.faceCount = 4;
+    occurrence.sourceMeshRequest.pointCount = 4;
+    occurrence.sourceMeshRequest.bounds = SbBox3f(
+	SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 1.0f, 1.0f));
+    std::vector<BObolCompactOccurrence> occurrences(1, occurrence);
+    if (source->setCompactOccurrenceRegistry(occurrences) != 1) {
+	printf("FAIL: compact projected LoD occurrence setup\n");
+	ret = 1;
+    }
+
+    BObolLodService service;
+    if (!ret && !service.start(1, TRUE)) {
+	printf("FAIL: compact projected LoD service did not start\n");
+	ret = 1;
+    }
+
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->ref();
+    camera->position = SbVec3f(100.5f, 0.5f, 5.0f);
+    camera->height = 10.0f;
+    const SbViewVolume volume = camera->getViewVolume(640.0f / 480.0f);
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    view.width = 640;
+    view.height = 480;
+    view.size = 10.0;
+
+    std::vector<BObolLodResult> results;
+    if (!ret) {
+	SoBRLMeshLodSubmitAction submit;
+	submit.setService(&service);
+	submit.setDatabase(dbip, "db://compact-projected-test", 2026);
+	submit.setViewInfo(&view);
+	submit.setViewVolume(&volume, 1.0f);
+	submit.setGeneration(service.beginGeneration());
+	submit.setRevisions(61, 62);
+	submit.apply(root);
+	if (submit.getVisitedMeshCount() != 1 ||
+	    submit.getSubmittedTaskCount() != 1 ||
+	    wait_for_service(service) ||
+	    service.drainResults(results) != 1 || results.size() != 1 ||
+	    results[0].request.projectedPixelDiameter < 47.0f ||
+	    results[0].request.projectedPixelDiameter > 49.0f ||
+	    results[0].request.requestedLevel != 6) {
+	    printf("FAIL: compact projected LoD did not apply source placement exactly once\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLLodUpdateAction update;
+	update.setViewLodState(&viewState);
+	update.setResults(results);
+	update.apply(root);
+	const BObolViewLodState::CadPayload *payload =
+	    viewState.findCadForResult(results[0]);
+	if (update.getAppliedResultCount() != 1 || !payload ||
+	    payload->activeLevel < 0 ||
+	    payload->counts.faceCount != results[0].counts.faceCount) {
+	    printf("FAIL: compact projected LoD payload was not installed\n");
+	    ret = 1;
+	}
+    }
+
+    /* Shaded and wireframe are two presentations of the same resident PoP
+     * cut.  Switching modes must neither load another cut nor fall back to
+     * the original box. */
+    if (!ret) {
+	std::vector<const BObolViewLodState::CadPayload *> payloads;
+	viewState.findCadPayloads(source, payloads);
+	(void)source->compactViewLodAssembly(payloads, &viewState);
+	SoCADAssembly *assembly = viewState.findCadPresentation(source);
+	std::vector<Obol::InstanceId> ids =
+	    assembly ? assembly->instanceIds() :
+	    std::vector<Obol::InstanceId>();
+	std::optional<Obol::InstanceRecord> record =
+	    ids.size() == 1 ? assembly->getInstanceRecord(ids[0]) :
+	    std::optional<Obol::InstanceRecord>();
+	const Obol::PartGeometry *geometry =
+	    record ? assembly->partGeometry(record->part) : NULL;
+	if (!assembly || ids.size() != 1 || !geometry ||
+	    !geometry->shaded || geometry->wire ||
+	    !geometry->shaded->isProgressive() || !record ||
+	    record->lodLevel != results[0].geometry.activeLevel ||
+	    geometry->shaded->indexCountAtLevel(record->lodLevel) !=
+		results[0].counts.faceCount * 3) {
+	    printf("FAIL: shaded compact presentation did not use the resident PoP cut\n");
+	    ret = 1;
+	}
+    }
+
+    /* Normal selection is presentation policy, not LoD residency policy.
+     * Switching it must invalidate only the renderer assembly while retaining
+     * the exact installed PoP payload and its resident cut. */
+    if (!ret) {
+	std::vector<const BObolViewLodState::CadPayload *> payloads;
+	viewState.findCadPayloads(source, payloads);
+	const BObolViewLodState::CadPayload *before =
+	    viewState.findCadForResult(results[0]);
+	const size_t payloadCount = viewState.cadPayloadCount();
+	const uint64_t cadRevision = viewState.cadRevision();
+	SoCADAssembly *authoredAssembly =
+	    viewState.findCadPresentation(source);
+	std::vector<Obol::InstanceId> authoredIds =
+	    authoredAssembly ? authoredAssembly->instanceIds() :
+	    std::vector<Obol::InstanceId>();
+	std::optional<Obol::InstanceRecord> authoredRecord =
+	    authoredIds.size() == 1 ?
+	    authoredAssembly->getInstanceRecord(authoredIds[0]) :
+	    std::optional<Obol::InstanceRecord>();
+	const Obol::PartGeometry *authoredGeometry = authoredRecord ?
+	    authoredAssembly->partGeometry(authoredRecord->part) : NULL;
+	std::vector<SbVec3f> authoredNormals =
+	    authoredGeometry && authoredGeometry->shaded ?
+	    authoredGeometry->shaded->normals : std::vector<SbVec3f>();
+	if (!authoredAssembly || !before || authoredNormals.empty()) {
+	    printf("FAIL: normal-policy test requires a resident presentation\n");
+	    ret = 1;
+	} else {
+	    viewState.setNormalStyle(BObolViewLodState::NORMAL_SMOOTH, 180.0f);
+	    const BObolViewLodState::CadPayload *after =
+		viewState.findCadForResult(results[0]);
+	    if (viewState.findCadPresentation(source) ||
+		after != before ||
+		viewState.cadPayloadCount() != payloadCount ||
+		viewState.cadRevision() != cadRevision ||
+		viewState.getNormalStyle() !=
+		    BObolViewLodState::NORMAL_SMOOTH ||
+		fabsf(viewState.getNormalCreaseAngle() - 180.0f) > 0.0001f) {
+		printf("FAIL: normal policy discarded or mutated resident PoP data\n");
+		ret = 1;
+	    }
+	}
+	if (!ret) {
+	    (void)source->compactViewLodAssembly(payloads, &viewState);
+	    SoCADAssembly *smoothAssembly =
+		viewState.findCadPresentation(source);
+	    std::vector<Obol::InstanceId> smoothIds =
+		smoothAssembly ? smoothAssembly->instanceIds() :
+		std::vector<Obol::InstanceId>();
+	    std::optional<Obol::InstanceRecord> smoothRecord =
+		smoothIds.size() == 1 ?
+		smoothAssembly->getInstanceRecord(smoothIds[0]) :
+		std::optional<Obol::InstanceRecord>();
+	    const Obol::PartGeometry *smoothGeometry = smoothRecord ?
+		smoothAssembly->partGeometry(smoothRecord->part) : NULL;
+	    const std::vector<SbVec3f> smoothNormals =
+		smoothGeometry && smoothGeometry->shaded ?
+		smoothGeometry->shaded->normals : std::vector<SbVec3f>();
+	    bool normalsChanged =
+		smoothNormals.size() != authoredNormals.size();
+	    for (size_t i = 0;
+		!normalsChanged && i < smoothNormals.size(); ++i) {
+		if ((smoothNormals[i] - authoredNormals[i]).sqrLength() >
+		    1.0e-8f)
+		    normalsChanged = true;
+	    }
+	    if (!smoothAssembly || smoothNormals.empty() ||
+		!normalsChanged) {
+		printf("FAIL: normal policy did not rebuild the renderer presentation\n");
+		ret = 1;
+	    }
+	}
+    }
+
+    if (!ret) {
+	source->representationMode =
+	    SoBRLDatabaseSource::REPRESENTATION_WIRE;
+	std::vector<const BObolViewLodState::CadPayload *> payloads;
+	viewState.findCadPayloads(source, payloads);
+	const BObolViewLodState::CadPayload *before =
+	    viewState.findCadForResult(results[0]);
+	(void)source->compactViewLodAssembly(payloads, &viewState);
+	SoCADAssembly *assembly = viewState.findCadPresentation(source);
+	std::vector<Obol::InstanceId> ids =
+	    assembly ? assembly->instanceIds() :
+	    std::vector<Obol::InstanceId>();
+	std::optional<Obol::InstanceRecord> record =
+	    ids.size() == 1 ? assembly->getInstanceRecord(ids[0]) :
+	    std::optional<Obol::InstanceRecord>();
+	const Obol::PartGeometry *geometry =
+	    record ? assembly->partGeometry(record->part) : NULL;
+	const BObolViewLodState::CadPayload *after =
+	    viewState.findCadForResult(results[0]);
+	if (!assembly || ids.size() != 1 || !geometry ||
+	    geometry->shaded || !geometry->wire ||
+	    !geometry->wire->isProgressive() || !record ||
+	    record->lodLevel != results[0].geometry.activeLevel ||
+	    geometry->wire->segmentCountAtLevel(record->lodLevel) !=
+		results[0].counts.faceCount * 3 ||
+	    before != after || !after ||
+	    after->activeLevel != results[0].geometry.activeLevel ||
+	    after->counts.faceCount != results[0].counts.faceCount) {
+	    printf("FAIL: wire compact presentation did not preserve the shaded PoP cut\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeshLodSubmitAction wireSubmit;
+	wireSubmit.setService(&service);
+	wireSubmit.setViewLodState(&viewState);
+	wireSubmit.setDatabase(dbip, "db://compact-projected-test", 2026);
+	wireSubmit.setViewInfo(&view);
+	wireSubmit.setViewVolume(&volume, 1.0f);
+	wireSubmit.setGeneration(service.beginGeneration());
+	wireSubmit.setRevisions(63, 62);
+	wireSubmit.apply(root);
+	if (wireSubmit.getVisitedMeshCount() != 1 ||
+	    wireSubmit.getSubmittedTaskCount() != 0 ||
+	    wireSubmit.getSkippedMeshCount() != 1 ||
+	    service.queuedResultCountForDiagnostics() != 0) {
+	    printf("FAIL: wire mode restarted an already-resident PoP request\n");
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	/* A visible piece of an object larger than the window still needs error
+	 * control based on the object's full projected scale. */
+	SbMatrix largePlacement;
+	largePlacement.setScale(SbVec3f(100.0f, 100.0f, 1.0f));
+	(void)source->setPlacementState(TRUE, largePlacement, FALSE,
+	    SbVec3f(0.0f, 0.0f, 0.0f), FALSE, 0.0f);
+	camera->position = SbVec3f(0.0f, 0.0f, 5.0f);
+	const SbViewVolume partialVolume =
+	    camera->getViewVolume(640.0f / 480.0f);
+	SoBRLMeshLodSubmitAction partialSubmit;
+	partialSubmit.setService(&service);
+	partialSubmit.setDatabase(dbip, "db://compact-projected-test", 2026);
+	partialSubmit.setViewInfo(&view);
+	partialSubmit.setViewVolume(&partialVolume, 1.0f);
+	partialSubmit.setGeneration(service.beginGeneration());
+	partialSubmit.setRevisions(64, 62);
+	partialSubmit.apply(root);
+	std::vector<BObolLodResult> partialResults;
+	if (partialSubmit.getSubmittedTaskCount() != 1 ||
+	    wait_for_service(service) ||
+	    service.drainResults(partialResults) != 1 ||
+	    partialResults.size() != 1 ||
+	    partialResults[0].request.projectedPixelDiameter < 4790.0f ||
+	    partialResults[0].request.projectedPixelDiameter > 4810.0f ||
+	    partialResults[0].request.requestedLevel != 13) {
+	    printf("FAIL: partially visible mesh demand was clipped to viewport size\n");
+	    ret = 1;
+	}
+    }
+
+    camera->unref();
+    service.stop();
+    root->setViewLodState(NULL);
+    root->unref();
+    bobol_mesh_lod_cache_clear_database(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    bu_dirclear(cacheDir);
+    return ret;
+}
+
 static int
 test_view_lod_mesh_eviction_preserves_proxy(void)
 {
@@ -6464,6 +7009,10 @@ main(int argc, char **argv)
     if (test_view_lod_mesh_eviction_preserves_proxy())
 	return 1;
     if (test_mesh_lod_submit_action())
+	return 1;
+    if (test_compact_native_mesh_not_pop_submitted())
+	return 1;
+    if (test_compact_mesh_lod_projection_and_mode_parity())
 	return 1;
     if (test_view_controller_source_backed_multi_source_exact_submit())
 	return 1;

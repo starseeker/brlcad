@@ -28,6 +28,12 @@ __BEGIN_DECLS
 struct db_i;
 struct BObolMeshLod;
 
+#define BOBOL_MESH_LOD_LEVEL_COUNT 16
+
+/* Display-provider contract version.  Bump this whenever the meaning or
+ * completeness of a selected PoP cut changes. */
+#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cache-v5"
+
 /* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
 struct BObolMeshLodData {
     const int *faces;
@@ -73,8 +79,26 @@ struct BObolMeshLodInfo {
     int has_original_points;
     int has_snapped_points;
     int has_normals;
+    int shaded_cull_backfaces;
     point_t bmin;
     point_t bmax;
+};
+
+/* Immutable hierarchy metadata plus the currently resident cumulative cut.
+ * Counts are cumulative: face_count[n] and point_count[n] describe the prefix
+ * that may be drawn at display level n. */
+struct BObolMeshLodHierarchyInfo {
+    int min_level;
+    int max_level;
+    int resident_level;
+    /* The exact, tight quantization domain used when classifying and snapping
+     * PoP vertices.  A retained renderer must use these values rather than
+     * reconstructing them from separately rounded display bounds.  A
+     * zero-extent axis is left unsnapped. */
+    point_t quantization_min;
+    point_t quantization_max;
+    size_t face_count[BOBOL_MESH_LOD_LEVEL_COUNT];
+    size_t point_count[BOBOL_MESH_LOD_LEVEL_COUNT];
 };
 
 /* Stable status for a database object's mesh LoD cache entry. */
@@ -90,7 +114,8 @@ struct BObolMeshLodCacheStatus {
     unsigned long long cleared_cache_key;
 };
 
-#define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
+#define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
+#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, VINIT_ZERO, VINIT_ZERO, {0}, {0} }
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 BOBOL_EXPORT void
@@ -134,7 +159,7 @@ bobol_mesh_lod_cache_store_mesh(
 	const int *faces,
 	size_t face_count,
 	unsigned long long user_key,
-	fastf_t fidelity_ratio,
+	int shaded_cull_backfaces,
 	struct BObolMeshLodCacheStatus *status);
 
 BOBOL_EXPORT struct BObolMeshLod *
@@ -144,6 +169,22 @@ BOBOL_EXPORT int
 bobol_mesh_lod_load_level(struct BObolMeshLod *lod,
 			    int level,
 			    int reset);
+
+/* Load a cumulative PoP display cut.  This is the API for interactive drawing;
+ * bobol_mesh_lod_load_level is reserved for explicit/exact requests which may
+ * intentionally materialize the separate source mesh. */
+BOBOL_EXPORT int
+bobol_mesh_lod_load_display_level(struct BObolMeshLod *lod,
+				    int level,
+				    int reset);
+
+/* Append/trim a resident cumulative prefix without materializing the
+ * level-snapped CPU point array.  Retained renderers consume points_orig and
+ * select a draw prefix independently for each occurrence. */
+BOBOL_EXPORT int
+bobol_mesh_lod_load_resident_level(struct BObolMeshLod *lod,
+				     int level,
+				     int reset);
 
 BOBOL_EXPORT int
 bobol_mesh_lod_load_view(struct BObolMeshLod *lod,
@@ -166,6 +207,15 @@ bobol_mesh_lod_info_init(struct BObolMeshLodInfo *info);
 BOBOL_EXPORT int
 bobol_mesh_lod_info_get(const struct BObolMeshLod *lod,
 			  struct BObolMeshLodInfo *info);
+
+BOBOL_EXPORT void
+bobol_mesh_lod_hierarchy_info_init(
+	struct BObolMeshLodHierarchyInfo *info);
+
+BOBOL_EXPORT int
+bobol_mesh_lod_hierarchy_info_get(
+	const struct BObolMeshLod *lod,
+	struct BObolMeshLodHierarchyInfo *info);
 
 BOBOL_EXPORT void
 bobol_mesh_lod_detail_init(struct BObolMeshLodDetail *detail);

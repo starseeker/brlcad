@@ -748,6 +748,7 @@ bv_faceplate_defaults(struct bv *v)
     struct bv_adc_state adc = BV_ADC_STATE_INIT;
     struct bv_grid_state grid = BV_GRID_STATE_INIT;
     struct bv_lighting_state lighting = BV_LIGHTING_STATE_INIT;
+    struct bv_shading_state shading = BV_SHADING_STATE_INIT;
     struct bv_axes_state model_axes = BV_AXES_STATE_INIT;
     struct bv_axes_state view_axes = BV_AXES_STATE_INIT;
     struct bv_other_state center_dot = BV_OTHER_STATE_INIT;
@@ -811,6 +812,7 @@ bv_faceplate_defaults(struct bv *v)
     v->adc = adc;
     v->grid = grid;
     v->lighting = lighting;
+    v->shading = shading;
     v->model_axes = model_axes;
     v->view_axes = view_axes;
     v->center_dot = center_dot;
@@ -926,6 +928,8 @@ BV_STATE_GET(bv_grid_state, BV_GRID_STATE_INIT, grid)
 BV_STATE_SET(bv_grid_state, grid)
 BV_STATE_GET(bv_lighting_state, BV_LIGHTING_STATE_INIT, lighting)
 BV_STATE_SET(bv_lighting_state, lighting)
+BV_STATE_GET(bv_shading_state, BV_SHADING_STATE_INIT, shading)
+BV_STATE_SET(bv_shading_state, shading)
 BV_STATE_GET(bv_params_state, BV_PARAMS_STATE_INIT, params)
 BV_STATE_SET(bv_params_state, params)
 BV_STATE_GET(bv_background_state, BV_BACKGROUND_STATE_INIT, background)

@@ -14,6 +14,7 @@
 #include "bv/view.h"
 
 #include <Inventor/SbString.h>
+#include <Inventor/SbViewVolume.h>
 #include <Inventor/actions/SoAction.h>
 #include <Inventor/actions/SoSubAction.h>
 
@@ -40,6 +41,8 @@ public:
 	    uint64_t databaseRevision = 0);
     void setViewInfo(const struct bv_view_info *info);
     const struct bv_view_info &getViewInfo(void) const;
+    void setViewVolume(const SbViewVolume *volume,
+	float targetPixelError = 1.0f);
     void setGeneration(uint64_t generation);
     uint64_t getGeneration(void) const;
     void setRevisions(uint64_t viewRevision, uint64_t policyRevision);
@@ -53,10 +56,9 @@ public:
     int getForcedLevel(void) const;
     void setRequireLodBacked(SbBool requireLodBacked);
     SbBool getRequireLodBacked(void) const;
-    void setProxyStages(SbBool submitAabb, SbBool submitObb);
-    SbBool getSubmitAabbProxyStage(void) const;
-    SbBool getSubmitObbProxyStage(void) const;
-    void setViewLodState(const BObolViewLodState *viewState);
+    void setAllowLevelDowngrade(SbBool allow);
+    SbBool getAllowLevelDowngrade(void) const;
+    void setViewLodState(BObolViewLodState *viewState);
     const BObolViewLodState *getViewLodState(void) const;
     void setCompactEntryRange(size_t first, size_t count);
     size_t getCompactEntryNext(void) const;
@@ -65,6 +67,7 @@ public:
 
     unsigned int getVisitedMeshCount(void) const;
     unsigned int getSubmittedTaskCount(void) const;
+    unsigned int getUpdatedCutCount(void) const;
     unsigned int getSkippedMeshCount(void) const;
     const SbString &getDiagnostics(void) const;
 
@@ -82,6 +85,9 @@ private:
     SbString databaseId;
     uint64_t databaseRevision;
     struct bv_view_info view;
+    SbViewVolume viewVolume;
+    SbBool useViewVolume;
+    float targetPixelError;
     uint64_t generation;
     uint64_t viewRevision;
     uint64_t policyRevision;
@@ -93,9 +99,8 @@ private:
     SbBool useForcedLevel;
     int forcedLevel;
     SbBool requireLodBacked;
-    SbBool submitAabbProxyStage;
-    SbBool submitObbProxyStage;
-    const BObolViewLodState *viewState;
+    SbBool allowLevelDowngrade;
+    BObolViewLodState *viewState;
     size_t compactEntryFirst;
     size_t compactEntryLimit;
     size_t compactEntryNext;
@@ -103,6 +108,7 @@ private:
     SbBool deferredCompactEntries;
     unsigned int visitedMeshCount;
     unsigned int submittedTaskCount;
+    unsigned int updatedCutCount;
     unsigned int skippedMeshCount;
     SbString diagnostics;
 };

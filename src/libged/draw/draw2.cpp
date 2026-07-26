@@ -455,7 +455,7 @@ ged_draw2_core(struct ged *gedp, int argc, const char *argv[])
     if (!eager_leaf_expansion && !vs.defer_leaf_expansion &&
 	!root_evaluated_mode &&
 	ged_draw_obol_progressive_available(gedp, cv) &&
-	ged_draw_obol_view_lod_enabled(gedp, cv))
+	ged_draw_obol_view_lod_enabled(gedp, cv, vs.draw_mode))
 	vs.defer_leaf_expansion = 1;
     /* Deferred compact realization expands database leaves.  Evaluated modes
      * instead produce one CSG result for the requested root, so retaining an

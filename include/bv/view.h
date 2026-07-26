@@ -149,16 +149,24 @@ struct bv_view_info {
 };
 
 #define BV_LOD_SETTINGS_INIT { 1.0, 1.0, 1.0, 0 }
-#define BV_LOD_POLICY_INIT { BV_LOD_AUTO, 0, 0, 0, 0, 0, 1.0, 1.0, 1.0 }
+#define BV_LOD_POLICY_INIT { BV_LOD_AUTO, 0, 1, 1, 1, 0, 1.0, 1.0, 1.0 }
 #define BV_VIEW_INFO_INIT { 1, 1, 1.0, BV_LOD_SETTINGS_INIT }
+
+enum bv_normal_style {
+    BV_NORMAL_AUTHORED = 0, /**< authored normals, geometric-flat fallback */
+    BV_NORMAL_FLAT = 1,     /**< force one geometric normal per triangle */
+    BV_NORMAL_SMOOTH = 2    /**< synthesize crease-aware presentation normals */
+};
 
 #define BV_INTERACTIVE_RECT_STATE_INIT { 0, 0, 0, 0, {0, 0}, {0, 0}, 0.0, 0.0, 0.0, 0.0, {0, 0, 0}, {0, 0, 0}, {0, 0}, 0.0 }
 #define BV_MEASURE_RESULT_INIT { 0.0, 0.0, 0.0, 0 }
 #define BV_ADC_STATE_INIT { 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, 0.0, 0.0, 0.0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO, VINIT_ZERO, {0, 0, 0}, {0, 0, 0}, 0 }
 #define BV_GRID_STATE_INIT { 0, 0, 0, 0, VINIT_ZERO, 0.0, 0.0, 0, 0, {0, 0, 0} }
-/* headlight on, scene lights off, headlight tracks camera, over-the-shoulder
- * offset (~40deg off the view axis, matching the Obol controller default) */
-#define BV_LIGHTING_STATE_INIT { 0, 1, 0, 1, {-0.55, -0.45, -0.70} }
+/* Headlight on, scene lights off, headlight tracks camera, and light travels
+ * straight from the viewer into the scene (the established BRL-CAD shaded
+ * display convention). */
+#define BV_LIGHTING_STATE_INIT { 0, 1, 0, 1, {0.0, 0.0, -1.0} }
+#define BV_SHADING_STATE_INIT { 0, BV_NORMAL_AUTHORED, 60.0 }
 #define BV_AXES_STATE_INIT { 0, VINIT_ZERO, 0.0, 0, {0, 0, 0}, 0, 0, {0, 0, 0}, 0, 0, 0, 0, 0.0, 0, 0, {0, 0, 0}, {0, 0, 0} }
 #define BV_OTHER_STATE_INIT { 0, {0, 0, 0}, {0, 0, 0}, 0 }
 #define BV_PARAMS_STATE_INIT { 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0 }
@@ -293,6 +301,12 @@ struct bv_lighting_state {
     fastf_t   headlight_offset[3];    /**< eye-space headlight direction offset */
 };
 
+struct bv_shading_state {
+    int       rc;
+    int       normal_style;
+    fastf_t   normal_crease_angle;
+};
+
 struct bv_axes_state {
     int       draw;
     point_t   axes_pos;
@@ -420,6 +434,7 @@ struct bv {
     struct bv_adc_state adc;
     struct bv_grid_state grid;
     struct bv_lighting_state lighting;
+    struct bv_shading_state shading;
     struct bv_axes_state model_axes;
     struct bv_axes_state view_axes;
     struct bv_other_state center_dot;
@@ -519,6 +534,8 @@ BV_EXPORT extern int bv_grid_state_get(struct bv_grid_state *record, const struc
 BV_EXPORT extern int bv_grid_state_set(struct bv *v, const struct bv_grid_state *record);
 BV_EXPORT extern int bv_lighting_state_get(struct bv_lighting_state *record, const struct bv *v);
 BV_EXPORT extern int bv_lighting_state_set(struct bv *v, const struct bv_lighting_state *record);
+BV_EXPORT extern int bv_shading_state_get(struct bv_shading_state *record, const struct bv *v);
+BV_EXPORT extern int bv_shading_state_set(struct bv *v, const struct bv_shading_state *record);
 BV_EXPORT extern int bv_model_axes_state_get(struct bv_axes_state *record, const struct bv *v);
 BV_EXPORT extern int bv_model_axes_state_set(struct bv *v, const struct bv_axes_state *record);
 BV_EXPORT extern int bv_view_axes_state_get(struct bv_axes_state *record, const struct bv *v);

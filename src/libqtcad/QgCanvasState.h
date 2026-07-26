@@ -105,7 +105,6 @@ struct QgCanvasState {
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
     bool   progressive_update_queued = false;
-    bool   fps_update_queued = false;
     bool   software_backend = false;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
     std::chrono::steady_clock::time_point fps_last_publish;
@@ -670,13 +669,6 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
 	qgcanvas_sync_obol_faceplate(s);
     }
 
-    if (!s.fps_update_queued) {
-	s.fps_update_queued = true;
-	QTimer::singleShot(250, w, [&s, w]() {
-	    s.fps_update_queued = false;
-	    w->update();
-	});
-    }
 }
 
 /** Render queued Obol work from a caller-owned current GL context. */
@@ -725,9 +717,14 @@ static inline bool
 qgcanvas_diff_hashes_check(QgCanvasState &s)
 {
     bool ret = false;
-    unsigned long long c_vhash = bv_hash(bv_context_view_const(s.v));
+    const struct bv *view = bv_context_view_const(s.v);
+    unsigned long long c_vhash = bv_hash(view);
 
-    if (s.prev_vhash != c_vhash) {
+    /* Commands may change renderer policy without changing the camera hash
+     * (lighting, normal presentation, overlays, and similar state).  Honor
+     * libbv's explicit refresh request as well as transform differences so
+     * qged's post-command DisplayDiff path actually schedules a canvas paint. */
+    if (s.prev_vhash != c_vhash || bv_refresh_dirty_get(view)) {
 	qgcanvas_request_update(s, BV_REFRESH_VIEW | BV_REFRESH_DRAW);
 	ret = true;
     }

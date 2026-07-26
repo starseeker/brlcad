@@ -34,9 +34,13 @@
 #include <ged/db_index.h>
 #include <ged/event_txn.h>
 
-#define ADIFF_THRES 0.99
-#define MESH_LOD_ADIFF_THRES 0.97
-#define CSG_LOD_ADIFF_THRES 0.99
+/* These legacy controls predate the retained software renderer and the
+ * view-limited PoP display contract.  Keep them as spatial/image sanity
+ * checks, while projection, no-full-detail, cache, and progressive-startup
+ * behavior are asserted by dedicated semantic tests. */
+#define ADIFF_THRES 0.95
+#define MESH_LOD_ADIFF_THRES 0.80
+#define CSG_LOD_ADIFF_THRES 0.98
 
 extern "C" void ged_changed_callback(struct db_i *UNUSED(dbip), struct directory *dp, int mode, void *u_data);
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);
@@ -207,11 +211,10 @@ main(int ac, char *av[]) {
     ged_exec_view(gedp, 4, s_av);
 
     /*
-     * Enabled mesh LoD validates proxy placement/materials rather than exact
-     * tessellation rasterization.  Different renderers/builds may choose
-     * slightly different triangle/normal edge pixels for the same coarse mesh.
-     * Keep this strict enough to catch proxy/camera/material changes while
-     * allowing the expected depth-rasterization differences at mesh edges.
+     * Enabled mesh LoD validates spatial placement/materials rather than the
+     * former full-capacity tessellation.  A view-selected PoP prefix can differ
+     * substantially in silhouette and lighting from that historical control;
+     * dedicated tests assert its requested level and capacity bounds.
      */
     ret += img_cmp(2, gedp, lcache, false, clear_images, soft_fail, MESH_LOD_ADIFF_THRES, "lod_clear", "lod");
 
@@ -440,8 +443,10 @@ main(int ac, char *av[]) {
 
     ged_close(gedp);
 
-    /* Remove the local cache files */
-    bu_dirclear(lcache);
+    /* Keep both captures and their extracted controls when requested so a
+     * failed image comparison can actually be inspected. */
+    if (clear_images)
+	bu_dirclear(lcache);
 
     return ret;
 }

@@ -53,15 +53,6 @@ struct bv_view_info;
 
 class BObolViewController;
 
-#define BOBOL_PROGRESSIVE_VISIBLE_FRONTIER 0x00000001U
-#define BOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES 0x00000002U
-#define BOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES 0x00000004U
-#define BOBOL_PROGRESSIVE_FULL_DETAIL 0x00000008U
-
-/* VISIBLE_FRONTIER and FULL_DETAIL may be combined.  Providers then advance
- * bounded proxy work while detached final realization runs, and publish the
- * final data when ready without requiring every intermediate stage to draw. */
-
 BOBOL_EXPORT SbMatrix bobol_sbmatrix_from_brl_mat(const mat_t mat);
 BOBOL_EXPORT SbRotation bobol_camera_orientation_from_brl_rotation(
     const mat_t rotation);
@@ -72,10 +63,6 @@ struct BOBOL_EXPORT BObolProgressiveOptions {
     size_t maxLodResults;
     uint64_t maxLodApplyMicroseconds;
     size_t maxProviders;
-    size_t maxSources;
-    size_t maxChildrenPerSource;
-    size_t maxSubmissions;
-    uint32_t flags;
 };
 
 struct BOBOL_EXPORT BObolProgressiveStatus {
@@ -180,6 +167,10 @@ public:
     SbBool isDepthTestEnabled(void) const;
     void setLightingEnabled(SbBool enabled);
     SbBool isLightingEnabled(void) const;
+    void setNormalStyle(BObolViewLodState::NormalStyle style,
+	float creaseAngleDegrees = 60.0f);
+    BObolViewLodState::NormalStyle getNormalStyle(void) const;
+    float getNormalCreaseAngle(void) const;
     /** Enable/disable the camera-driven headlight (layered under the master
      * setLightingEnabled()). */
     void setHeadlightEnabled(SbBool enabled);
@@ -369,6 +360,7 @@ public:
     uint64_t getLodPolicyRevision(void) const;
     unsigned int getLastLodVisitedMeshCount(void) const;
     unsigned int getLastLodSubmittedTaskCount(void) const;
+    unsigned int getLastLodUpdatedCutCount(void) const;
     unsigned int getLastLodSkippedMeshCount(void) const;
     size_t getLastLodResultCount(void) const;
     unsigned int getLastLodMatchedResultCount(void) const;

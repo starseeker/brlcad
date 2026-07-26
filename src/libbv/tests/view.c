@@ -84,6 +84,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     point_t keypoint = VINIT_ZERO;
     struct bv_grid_state grid;
     struct bv_lighting_state lighting;
+    struct bv_shading_state shading;
     struct bv_axes_state axes;
     struct bv_other_state overlay = BV_OTHER_STATE_INIT;
     struct bv_params_state params;
@@ -113,8 +114,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!bv_lighting_state_get(&lighting, v) ||
 	    lighting.headlight_enabled != 1 ||
 	    lighting.scene_lights_enabled != 0 ||
-	    lighting.headlight_tracks_camera != 1)
+	    lighting.headlight_tracks_camera != 1 ||
+	    !near_point(lighting.headlight_offset, 0.0, 0.0, -1.0))
 	return fail("new view lighting defaults are incorrect");
+    if (!bv_shading_state_get(&shading, v) ||
+	    shading.normal_style != BV_NORMAL_AUTHORED ||
+	    !near_fastf(shading.normal_crease_angle, 60.0))
+	return fail("new view shading defaults are incorrect");
     if (!bv_view_axes_state_get(&axes, v) ||
 	    !near_point(axes.axes_pos, 0.80, -0.80, 0.0) ||
 	    !near_fastf(axes.axes_size, 0.2) ||
@@ -296,6 +302,13 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	    lighting.scene_lights_enabled != 1 ||
 	    lighting.headlight_tracks_camera != 0)
 	return fail("lighting state set/get failed");
+    shading.normal_style = BV_NORMAL_SMOOTH;
+    shading.normal_crease_angle = 35.0;
+    if (!bv_shading_state_set(v, &shading) ||
+	    !bv_shading_state_get(&shading, v) ||
+	    shading.normal_style != BV_NORMAL_SMOOTH ||
+	    !near_fastf(shading.normal_crease_angle, 35.0))
+	return fail("shading state set/get failed");
     overlay.gos_draw = 1;
     overlay.gos_line_color[0] = 12;
     overlay.gos_text_color[1] = 34;

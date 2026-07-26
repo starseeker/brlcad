@@ -249,6 +249,15 @@ QgView *
 QgQuadView::createView(unsigned int index)
 {
 	QgView *view = new QgView(this, graphicsType);
+	static const char *test_ids[] = {
+	    "view-upper-right",
+	    "view-upper-left",
+	    "view-lower-left",
+	    "view-lower-right"
+	};
+	if (index < sizeof(test_ids) / sizeof(test_ids[0]))
+	    view->setProperty("qgTestId",
+		QString::fromLatin1(test_ids[index]));
 	bv_context_name_set(qg_quad_view_context(view), VIEW_NAMES[index]);
 	view->set_current(0);
 	view->installEventFilter(this);

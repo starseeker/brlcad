@@ -137,6 +137,13 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     VSET(background.top, 78, 90, 123);
     ASSERT(bv_background_state_set(DRAW_TEST_BV(view), &background));
 
+    /* A policy selected while the view is headless must initialize a later
+     * endpoint rather than being replaced by the controller default. */
+    struct bv_shading_state shading = BV_SHADING_STATE_INIT;
+    shading.normal_style = BV_NORMAL_SMOOTH;
+    shading.normal_crease_angle = 37.5;
+    ASSERT(bv_shading_state_set(DRAW_TEST_BV(view), &shading));
+
     bobol_display_endpoint_t *owned =
 	bobol_display_endpoint_create(NULL, 0);
     ASSERT(owned != NULL);
@@ -146,6 +153,12 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
     ASSERT(ged_view_context_display_endpoint_get(view) == owned);
     ASSERT(bobol_display_endpoint_controller(
 	ged_view_context_display_endpoint_get(view)) == owned_controller);
+    BObolViewController *view_controller =
+	static_cast<BObolViewController *>(owned_controller);
+    ASSERT(view_controller->getNormalStyle() ==
+	BObolViewLodState::NORMAL_SMOOTH);
+    ASSERT(std::fabs(view_controller->getNormalCreaseAngle() - 37.5f) <
+	0.0001f);
     assert_endpoint_background_color(owned, "controller.background.bottom",
 	12.0 / 255.0, 34.0 / 255.0, 56.0 / 255.0);
     assert_endpoint_background_color(owned, "controller.background.top",
@@ -592,6 +605,11 @@ test_display_endpoint_slot(struct ged *gedp, struct ged_view_context *view)
 	bobol_display_endpoint_controller(borrowed));
     ASSERT(ged_view_context_display_endpoint_set(view, NULL, 0));
     bobol_display_endpoint_destroy(borrowed);
+
+    /* Restore this view's production default for the following command
+     * coverage. */
+    shading = BV_SHADING_STATE_INIT;
+    ASSERT(bv_shading_state_set(DRAW_TEST_BV(view), &shading));
 }
 
 static void
@@ -647,6 +665,70 @@ test_command_report_record_consistency(struct ged *gedp,
     ged_pick_result_free(pick);
 }
 
+static void
+test_shading_policy_command(struct ged *gedp,
+    struct ged_view_context *primary, struct ged_view_context *secondary)
+{
+    struct bv_shading_state shading = BV_SHADING_STATE_INIT;
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(primary)));
+    ASSERT(shading.normal_style == BV_NORMAL_AUTHORED);
+    ASSERT(std::fabs(shading.normal_crease_angle - 60.0) < 0.0001);
+
+    const char *status[] = {"view", "shading", NULL};
+    ASSERT(run_view(gedp, 2, status) == BRLCAD_OK);
+    ASSERT(result_str(gedp).find("normals authored") != std::string::npos);
+    ASSERT(result_str(gedp).find("crease 60") != std::string::npos);
+
+    const char *smooth[] = {"view", "shading", "normals", "smooth", NULL};
+    ASSERT(run_view(gedp, 4, smooth) == BRLCAD_OK);
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(primary)));
+    ASSERT(shading.normal_style == BV_NORMAL_SMOOTH);
+
+    const char *crease[] = {"view", "shading", "crease", "37.5", NULL};
+    ASSERT(run_view(gedp, 4, crease) == BRLCAD_OK);
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(primary)));
+    ASSERT(std::fabs(shading.normal_crease_angle - 37.5) < 0.0001);
+
+    const char *flat[] = {"view", "shading", "normals", "flat", NULL};
+    ASSERT(run_view(gedp, 4, flat) == BRLCAD_OK);
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(primary)));
+    ASSERT(shading.normal_style == BV_NORMAL_FLAT);
+
+    /* Shading is view-local.  Selecting V1 must not alter V0. */
+    const char *secondary_smooth[] = {
+	"view", "-V", "V1", "shading", "normals", "smooth", NULL
+    };
+    ASSERT(run_view(gedp, 6, secondary_smooth) == BRLCAD_OK);
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(secondary)));
+    ASSERT(shading.normal_style == BV_NORMAL_SMOOTH);
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(primary)));
+    ASSERT(shading.normal_style == BV_NORMAL_FLAT);
+
+    const char *bad_style[] = {
+	"view", "shading", "normals", "rounded", NULL
+    };
+    ASSERT(run_view(gedp, 4, bad_style) == BRLCAD_ERROR);
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(primary)));
+    ASSERT(shading.normal_style == BV_NORMAL_FLAT);
+
+    const char *bad_crease[] = {
+	"view", "shading", "crease", "181", NULL
+    };
+    ASSERT(run_view(gedp, 4, bad_crease) == BRLCAD_ERROR);
+    ASSERT(bv_shading_state_get(&shading, DRAW_TEST_BV(primary)));
+    ASSERT(std::fabs(shading.normal_crease_angle - 37.5) < 0.0001);
+
+    /* Leave the test view at the production default. */
+    const char *authored[] = {
+	"view", "shading", "normals", "authored", NULL
+    };
+    const char *default_crease[] = {
+	"view", "shading", "crease", "60", NULL
+    };
+    ASSERT(run_view(gedp, 4, authored) == BRLCAD_OK);
+    ASSERT(run_view(gedp, 4, default_crease) == BRLCAD_OK);
+}
+
 int
 main(int argc, const char **argv)
 {
@@ -679,6 +761,7 @@ main(int argc, const char **argv)
     }
 
     test_display_endpoint_slot(gedp, views[0]);
+    test_shading_policy_command(gedp, views[0], views[1]);
     test_command_report_record_consistency(gedp, views[0]);
 
     const char *c0[] = {"view", "annotation", "line", "create", "u_line", "0", "0", "0", "1", "0", "0", NULL};

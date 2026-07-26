@@ -139,6 +139,7 @@ QgView::QgView(QWidget *parent, QgViewType type)
 return;
 
     QWidget *w = canvas->canvasWidget();
+    w->setProperty("qgTestId", QStringLiteral("cad-canvas"));
     w->setMinimumSize(50, 50);
     w->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     l->addWidget(w);

@@ -14,8 +14,10 @@
 #include <Inventor/SbVec3f.h>
 
 #include <algorithm>
+#include <array>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string.h>
@@ -119,6 +121,11 @@ BObolLodCacheKey::isValid(void) const
     return value.getLength() > 0 ? TRUE : FALSE;
 }
 
+BObolLodResidentDemand::BObolLodResidentDemand(void) :
+    level(-1)
+{
+}
+
 BObolLodGeometryHandle::BObolLodGeometryHandle(void)
 {
     clear();
@@ -171,6 +178,332 @@ BObolLodMeshPayload::isValid(void) const
 	   TRUE : FALSE;
 }
 
+struct BObolLodProgressiveMeshPrivate {
+    mutable std::mutex mutex;
+    BObolLodMeshPayload mesh;
+    std::array<size_t, BOBOL_MESH_LOD_LEVEL_COUNT> pointCount = {};
+    std::array<size_t, BOBOL_MESH_LOD_LEVEL_COUNT> faceCount = {};
+    SbBox3f bounds;
+    SbVec3f quantizationMinimum;
+    SbVec3f quantizationMaximum;
+    int minimumLevel = -1;
+    int maximumLevel = -1;
+    int residentLevel = -1;
+    uint64_t revision = 0;
+    SbBool shadedCullBackfaces = FALSE;
+};
+
+static int
+progressive_level_clamp(const BObolLodProgressiveMeshPrivate *p, int level)
+{
+    if (!p || p->residentLevel < 0)
+	return -1;
+    if (level < p->minimumLevel)
+	level = p->minimumLevel;
+    if (level > p->residentLevel)
+	level = p->residentLevel;
+    return level;
+}
+
+BObolLodProgressiveMesh::BObolLodProgressiveMesh(void) :
+    p(new BObolLodProgressiveMeshPrivate)
+{
+}
+
+BObolLodProgressiveMesh::~BObolLodProgressiveMesh(void)
+{
+    delete this->p;
+    this->p = NULL;
+}
+
+SbBool
+BObolLodProgressiveMesh::update(
+    const struct BObolMeshLodData &data,
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    int residentLevel,
+    SbBool shadedCullBackfaces)
+{
+    if (!this->p || !data.faces || !data.points_orig ||
+	data.face_count == 0 || data.point_orig_count == 0 ||
+	residentLevel < hierarchy.min_level ||
+	residentLevel > hierarchy.max_level ||
+	residentLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
+	return FALSE;
+
+    const size_t indexCount = data.face_count * 3;
+    if (data.point_orig_count >
+	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+	data.face_count >
+	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 3 ||
+	(data.normals && data.normal_count != indexCount))
+	return FALSE;
+    for (size_t i = 0; i < indexCount; ++i) {
+	if (data.faces[i] < 0 ||
+	    static_cast<size_t>(data.faces[i]) >= data.point_orig_count)
+	    return FALSE;
+    }
+
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const size_t oldPointCount = this->p->mesh.points.size();
+    const size_t oldIndexCount = this->p->mesh.coordIndex.size();
+    if (data.point_orig_count < oldPointCount || indexCount < oldIndexCount) {
+	/* This is an explicit stable-view trim. */
+	this->p->mesh.points.resize(data.point_orig_count);
+	this->p->mesh.coordIndex.resize(indexCount);
+	if (!this->p->mesh.normals.empty())
+	    this->p->mesh.normals.resize(indexCount);
+    } else {
+	this->p->mesh.points.reserve(data.point_orig_count);
+	for (size_t i = oldPointCount; i < data.point_orig_count; ++i) {
+	    this->p->mesh.points.push_back(SbVec3f(
+		static_cast<float>(data.points_orig[i][X]),
+		static_cast<float>(data.points_orig[i][Y]),
+		static_cast<float>(data.points_orig[i][Z])));
+	}
+	this->p->mesh.coordIndex.reserve(indexCount);
+	for (size_t i = oldIndexCount; i < indexCount; ++i) {
+	    this->p->mesh.coordIndex.push_back(
+		static_cast<int32_t>(data.faces[i]));
+	}
+	if (data.normals) {
+	    if (this->p->mesh.normals.empty() && oldIndexCount != 0) {
+		this->p->mesh.normals.reserve(indexCount);
+		for (size_t i = 0; i < oldIndexCount; ++i)
+		    this->p->mesh.normals.push_back(SbVec3f(
+			static_cast<float>(data.normals[i][X]),
+			static_cast<float>(data.normals[i][Y]),
+			static_cast<float>(data.normals[i][Z])));
+	    }
+	    this->p->mesh.normals.reserve(indexCount);
+	    for (size_t i = this->p->mesh.normals.size();
+		 i < indexCount; ++i)
+		this->p->mesh.normals.push_back(SbVec3f(
+		    static_cast<float>(data.normals[i][X]),
+		    static_cast<float>(data.normals[i][Y]),
+		    static_cast<float>(data.normals[i][Z])));
+	} else {
+	    this->p->mesh.normals.clear();
+	}
+    }
+
+    if (!this->p->mesh.isValid())
+	return FALSE;
+
+    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	this->p->pointCount[level] = hierarchy.point_count[level];
+	this->p->faceCount[level] = hierarchy.face_count[level];
+    }
+    this->p->minimumLevel = hierarchy.min_level;
+    this->p->maximumLevel = hierarchy.max_level;
+    this->p->residentLevel = residentLevel;
+    this->p->bounds = SbBox3f(
+	SbVec3f(static_cast<float>(data.bmin[X]),
+		static_cast<float>(data.bmin[Y]),
+		static_cast<float>(data.bmin[Z])),
+	SbVec3f(static_cast<float>(data.bmax[X]),
+		static_cast<float>(data.bmax[Y]),
+		static_cast<float>(data.bmax[Z])));
+    this->p->quantizationMinimum.setValue(
+	static_cast<float>(hierarchy.quantization_min[X]),
+	static_cast<float>(hierarchy.quantization_min[Y]),
+	static_cast<float>(hierarchy.quantization_min[Z]));
+    this->p->quantizationMaximum.setValue(
+	static_cast<float>(hierarchy.quantization_max[X]),
+	static_cast<float>(hierarchy.quantization_max[Y]),
+	static_cast<float>(hierarchy.quantization_max[Z]));
+    this->p->shadedCullBackfaces = shadedCullBackfaces;
+    this->p->revision++;
+    if (this->p->revision == 0)
+	this->p->revision++;
+    return TRUE;
+}
+
+SbBool
+BObolLodProgressiveMesh::trim(int residentLevel)
+{
+    if (!this->p)
+	return FALSE;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const int level = progressive_level_clamp(this->p, residentLevel);
+    if (level < 0)
+	return FALSE;
+    const size_t points = this->p->pointCount[level];
+    const size_t indices = this->p->faceCount[level] * 3;
+    if (points > this->p->mesh.points.size() ||
+	indices > this->p->mesh.coordIndex.size())
+	return FALSE;
+    if (level == this->p->residentLevel)
+	return TRUE;
+    this->p->mesh.points.resize(points);
+    this->p->mesh.points.shrink_to_fit();
+    this->p->mesh.coordIndex.resize(indices);
+    this->p->mesh.coordIndex.shrink_to_fit();
+    if (!this->p->mesh.normals.empty()) {
+	this->p->mesh.normals.resize(indices);
+	this->p->mesh.normals.shrink_to_fit();
+    }
+    this->p->residentLevel = level;
+    this->p->revision++;
+    if (this->p->revision == 0)
+	this->p->revision++;
+    return TRUE;
+}
+
+SbBool
+BObolLodProgressiveMesh::copyLevel(
+    BObolLodMeshPayload &payload, int requestedLevel) const
+{
+    payload.clear();
+    if (!this->p)
+	return FALSE;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const int level = progressive_level_clamp(this->p, requestedLevel);
+    if (level < 0)
+	return FALSE;
+    const size_t points = this->p->pointCount[level];
+    const size_t indices = this->p->faceCount[level] * 3;
+    if (points > this->p->mesh.points.size() ||
+	indices > this->p->mesh.coordIndex.size())
+	return FALSE;
+    payload.points.assign(this->p->mesh.points.begin(),
+	this->p->mesh.points.begin() + points);
+    payload.coordIndex.assign(this->p->mesh.coordIndex.begin(),
+	this->p->mesh.coordIndex.begin() + indices);
+    if (!this->p->mesh.normals.empty())
+	payload.normals.assign(this->p->mesh.normals.begin(),
+	    this->p->mesh.normals.begin() + indices);
+    return payload.isValid();
+}
+
+SbBool
+BObolLodProgressiveMesh::isValid(void) const
+{
+    if (!this->p)
+	return FALSE;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->residentLevel >= 0 &&
+	this->p->mesh.isValid() ? TRUE : FALSE;
+}
+
+SbBool
+BObolLodProgressiveMesh::canDrawLevel(int requestedLevel) const
+{
+    if (!this->p)
+	return FALSE;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    if (requestedLevel < this->p->minimumLevel ||
+	requestedLevel > this->p->maximumLevel ||
+	requestedLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
+	return FALSE;
+    return this->p->pointCount[requestedLevel] <=
+	    this->p->mesh.points.size() &&
+	this->p->faceCount[requestedLevel] * 3 <=
+	    this->p->mesh.coordIndex.size() ? TRUE : FALSE;
+}
+
+int
+BObolLodProgressiveMesh::minimumLevel(void) const
+{
+    if (!this->p)
+	return -1;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->minimumLevel;
+}
+
+int
+BObolLodProgressiveMesh::maximumLevel(void) const
+{
+    if (!this->p)
+	return -1;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->maximumLevel;
+}
+
+int
+BObolLodProgressiveMesh::residentLevel(void) const
+{
+    if (!this->p)
+	return -1;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->residentLevel;
+}
+
+uint64_t
+BObolLodProgressiveMesh::revision(void) const
+{
+    if (!this->p)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->revision;
+}
+
+size_t
+BObolLodProgressiveMesh::pointCount(int requestedLevel) const
+{
+    if (!this->p)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const int level = progressive_level_clamp(this->p, requestedLevel);
+    return level >= 0 ? this->p->pointCount[level] : 0;
+}
+
+size_t
+BObolLodProgressiveMesh::faceCount(int requestedLevel) const
+{
+    if (!this->p)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const int level = progressive_level_clamp(this->p, requestedLevel);
+    return level >= 0 ? this->p->faceCount[level] : 0;
+}
+
+size_t
+BObolLodProgressiveMesh::estimateBytes(void) const
+{
+    if (!this->p)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->mesh.points.capacity() * sizeof(SbVec3f) +
+	this->p->mesh.normals.capacity() * sizeof(SbVec3f) +
+	this->p->mesh.coordIndex.capacity() * sizeof(int32_t);
+}
+
+SbBox3f
+BObolLodProgressiveMesh::bounds(void) const
+{
+    if (!this->p)
+	return SbBox3f();
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->bounds;
+}
+
+SbVec3f
+BObolLodProgressiveMesh::quantizationMinimum(void) const
+{
+    if (!this->p)
+	return SbVec3f(0.0f, 0.0f, 0.0f);
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->quantizationMinimum;
+}
+
+SbVec3f
+BObolLodProgressiveMesh::quantizationMaximum(void) const
+{
+    if (!this->p)
+	return SbVec3f(0.0f, 0.0f, 0.0f);
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->quantizationMaximum;
+}
+
+SbBool
+BObolLodProgressiveMesh::cullBackfaces(void) const
+{
+    if (!this->p)
+	return FALSE;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->shadedCullBackfaces;
+}
+
 BObolLodRequest::BObolLodRequest(void)
 {
     clear();
@@ -193,6 +526,9 @@ BObolLodRequest::clear(void)
     providerId = "";
     providerVersion = "";
     qualityTier = BOBOL_LOD_QUALITY_METADATA;
+    projectedPixelDiameter = 0.0f;
+    targetPixelError = 1.0f;
+    requestedLevel = -1;
     bounds.makeEmpty();
     sourceCounts.clear();
     providerParams.clear();
@@ -221,6 +557,8 @@ BObolLodResult::clear(void)
     cacheKey.clear();
     geometry.clear();
     mesh.clear();
+    progressiveMesh.reset();
+    residentLevel = -1;
     resultKind = BOBOL_LOD_RESULT_NONE;
     qualityTier = BOBOL_LOD_QUALITY_METADATA;
     providerStatus = BOBOL_LOD_PROVIDER_UNKNOWN;
@@ -235,6 +573,7 @@ BObolLodResult::clear(void)
     stale = FALSE;
     hasSnappedPoints = FALSE;
     hasNormals = FALSE;
+    shadedCullBackfaces = FALSE;
     diagnostic = "";
 }
 
@@ -333,6 +672,10 @@ bobol_lod_cache_key(const BObolLodRequest &request)
     append_string_field(out, "provider_id", request.providerId);
     append_string_field(out, "provider_version", request.providerVersion);
     append_int_field(out, "quality_tier", request.qualityTier);
+    /* The selected discrete level determines the provider output.  Raw screen
+     * measurements do not: including them would turn sub-pixel camera jitter
+     * into distinct active/cache keys for the same payload. */
+    append_int_field(out, "requested_level", request.requestedLevel);
     append_bounds_field(out, "bounds", request.bounds);
     append_uint_field(out, "face_count", request.sourceCounts.faceCount);
     append_uint_field(out, "point_count", request.sourceCounts.pointCount);
@@ -353,6 +696,50 @@ bobol_lod_cache_key(const BObolLodRequest &request)
 
     key.value = out.str().c_str();
     return key;
+}
+
+BObolLodCacheKey
+bobol_lod_asset_cache_key(const BObolLodRequest &request)
+{
+    BObolLodCacheKey key;
+    std::ostringstream out;
+
+    out << "bobol-progressive-asset-v1;";
+    append_string_field(out, "database_id", request.databaseId);
+    append_string_field(out, "object_name", request.objectName);
+    if (request.sourceContentHash != 0)
+	append_uint_field(out, "source_content_hash",
+	    request.sourceContentHash);
+    else {
+	append_uint_field(out, "database_revision",
+	    request.databaseRevision);
+	append_uint_field(out, "source_revision", request.sourceRevision);
+	/* Database object names are unique.  The occurrence path is a consumer
+	 * identity and would duplicate one source asset for every comb leaf. */
+	if (request.objectName.getLength() == 0)
+	    append_string_field(out, "object_path", request.objectPath);
+    }
+    append_string_field(out, "provider_id", request.providerId);
+    append_string_field(out, "provider_version", request.providerVersion);
+    append_int_field(out, "quality_tier", request.qualityTier);
+
+    std::vector<BObolLodProviderParam> params = request.providerParams;
+    std::sort(params.begin(), params.end(), param_less);
+    append_uint_field(out, "provider_param_count",
+		      static_cast<uint64_t>(params.size()));
+    for (const BObolLodProviderParam &param : params) {
+	append_string_field(out, "provider_param_name", param.name);
+	append_string_field(out, "provider_param_value", param.value);
+    }
+
+    key.value = out.str().c_str();
+    return key;
+}
+
+BObolLodCacheKey
+bobol_lod_geometry_cache_key(const BObolLodRequest &request)
+{
+    return bobol_lod_asset_cache_key(request);
 }
 
 SbBool
@@ -445,12 +832,15 @@ bobol_lod_result_from_mesh_lod_info(
     result.counts.normalCount = info.normal_count;
     result.hasSnappedPoints = info.has_snapped_points ? TRUE : FALSE;
     result.hasNormals = info.has_normals ? TRUE : FALSE;
+    result.shadedCullBackfaces =
+	info.shaded_cull_backfaces ? TRUE : FALSE;
 
     result.geometry.kind = BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
     result.geometry.providerId = request.providerId;
     result.geometry.providerVersion = request.providerVersion;
-    result.geometry.cacheKey = result.cacheKey;
+    result.geometry.cacheKey = bobol_lod_geometry_cache_key(request);
     result.geometry.activeLevel = info.active_level;
+    result.residentLevel = info.active_level;
     result.geometry.borrowed = FALSE;
 
     if (status) {

@@ -120,6 +120,7 @@ ged_draw_obol_framebuffer_release
 ged_draw_obol_faceplate_sync
 ged_draw_obol_group_erase_subpath_for_path
 ged_draw_obol_lighting_sync
+ged_draw_obol_shading_sync
 ged_draw_obol_view_display_image
 ged_draw_observer_add
 ged_draw_observer_remove

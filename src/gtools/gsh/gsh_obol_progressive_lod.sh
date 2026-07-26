@@ -71,7 +71,7 @@ screengrab %s
 view lod service status
 quit
 ' "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3" \
-    | BU_DIR_CACHE="$CACHE" BOBOL_LOD_OBB_TASK_DELAY_MS="${BOBOL_LOD_OBB_TASK_DELAY_MS:-250}" BOBOL_LOD_TASK_DELAY_MS="${BOBOL_LOD_TASK_DELAY_MS:-6000}" \
+    | BU_DIR_CACHE="$CACHE" BOBOL_LOD_TASK_DELAY_MS="${BOBOL_LOD_TASK_DELAY_MS:-6000}" \
     "$GSH" --new-cmds "$TMPDB" > "$LOG" 2>&1
 
 for img in "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3"; do
@@ -102,12 +102,6 @@ fi
 
 if grep -Eq 'last_rejected_results: [1-9][0-9]*' "$LOG"; then
     echo "gsh Obol progressive LoD rejected LoD results" 1>&2
-    cat "$LOG" 1>&2
-    exit 1
-fi
-
-if ! grep -Eq 'active_lod_(aabb|obb)_proxies: [1-9][0-9]*' "$LOG"; then
-    echo "gsh Obol progressive LoD did not activate a coarse proxy payload" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

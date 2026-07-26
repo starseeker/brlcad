@@ -48,23 +48,34 @@ class SoCADAssembly;
 class BOBOL_EXPORT BObolViewLodState
 {
 public:
+    enum NormalStyle {
+	NORMAL_AUTHORED = 0,
+	NORMAL_FLAT = 1,
+	NORMAL_SMOOTH = 2
+    };
+
     struct BOBOL_EXPORT MeshPayload {
 	BObolLodMeshPayload mesh;
+	BObolLodProgressiveMeshPtr progressiveMesh;
 	SbString sourcePath;
 	SbString sourceName;
 	SbString sourceIdentity;
 	SbString cacheIdentity;
 	SbString cacheKey;
+	uint64_t sourceContentHash;
 	int resultKind;
 	int qualityTier;
 	int providerStatus;
 	int activeLevel;
+	int residentLevel;
+	int requestedLevel;
 	uint64_t viewRevision;
 	uint64_t policyRevision;
 	BObolLodCounts counts;
 	SbBox3f bounds;
 	SbBool hasSnappedPoints;
 	SbBool hasNormals;
+	SbBool shadedCullBackfaces;
 	SbString diagnostic;
 
 	MeshPayload(void);
@@ -106,6 +117,7 @@ public:
 
     struct BOBOL_EXPORT CadPayload {
 	BObolLodMeshPayload mesh;
+	BObolLodProgressiveMeshPtr progressiveMesh;
 	BObolLodProxy proxy;
 	SbString sourcePath;
 	SbString sourceName;
@@ -114,25 +126,26 @@ public:
 	SbString sourceBindingKey;
 	SbString cacheIdentity;
 	SbString cacheKey;
+	uint64_t sourceContentHash;
 	int resultKind;
 	int qualityTier;
 	int providerStatus;
 	int drawMode;
+	int activeLevel;
+	int residentLevel;
+	int requestedLevel;
 	uint64_t viewRevision;
 	uint64_t policyRevision;
 	BObolLodCounts counts;
 	SbBox3f bounds;
 	SbBool hasSnappedPoints;
 	SbBool hasNormals;
+	SbBool shadedCullBackfaces;
 	SbString diagnostic;
-	mutable SoCADAssembly *assembly;
-	mutable SbString assemblyKey;
 
 	CadPayload(void);
-	~CadPayload(void);
 	SbBool isValid(void) const;
 	size_t estimateBytes(void) const;
-	void clearAssembly(void) const;
     };
     typedef std::shared_ptr<CadPayload> CadPayloadPtr;
 
@@ -160,6 +173,13 @@ public:
     void findCadPayloads(const SoBRLDatabaseSource *source,
 	std::vector<const CadPayload *> &payloads) const;
     const CadPayload *findCadForResult(const BObolLodResult &result) const;
+    /* Change only a view-local PoP cut.  No source/cache work is performed;
+     * the call succeeds only when the retained progressive asset already
+     * contains the requested prefix. */
+    SbBool retargetMeshPayload(const MeshPayload *payload, int activeLevel,
+	uint64_t viewRevision, uint64_t policyRevision);
+    SbBool retargetCadPayload(const CadPayload *payload, int activeLevel,
+	uint64_t viewRevision, uint64_t policyRevision);
     size_t bindingCount(void) const;
     size_t payloadCount(void) const;
     size_t meshPayloadCount(void) const;
@@ -168,12 +188,34 @@ public:
     size_t cadMeshPayloadCount(void) const;
     size_t cadProxyPayloadCount(int proxyKind = BOBOL_LOD_PROXY_NONE) const;
     size_t estimateDisplayMeshBytes(void) const;
+    void residentMeshDemands(
+	std::vector<BObolLodResidentDemand> &demands) const;
+    uint64_t cadRevision(void) const;
+    void noteResidentMeshesChanged(void);
+    void setNormalStyle(NormalStyle style, float creaseAngleDegrees = 60.0f);
+    NormalStyle getNormalStyle(void) const;
+    float getNormalCreaseAngle(void) const;
     /* Drop only mesh/full-detail display data.  Coarse proxy bindings remain
      * resident so memory pressure degrades detail without emptying a scene. */
     size_t evictDisplayMeshPayloads(unsigned int *evictedMeshCount = NULL);
     size_t evictDisplayMeshes(unsigned int *evictedMeshCount = NULL);
 
+    /* Presentation nodes are view-owned, not payload-owned.  A stable node
+     * lets an active frame remain drawable while individual LoD occurrences
+     * are replaced in place. */
+    SoCADAssembly *findCadPresentation(const SoBRLDatabaseSource *source,
+	SbString *contentKey = NULL) const;
+    void setCadPresentation(const SoBRLDatabaseSource *source,
+	SoCADAssembly *assembly, const SbString &contentKey = SbString("")) const;
+
 private:
+    struct CadPresentation {
+	CadPresentation(void) : assembly(NULL), contentKey("") {}
+	SoCADAssembly *assembly;
+	SbString contentKey;
+    };
+
+    void clearCadPresentations(void) const;
     SbBool applyMeshResultInternal(const SoBRLMeshShape *shape,
 	BObolLodResult &result, SbBool consume);
     SbBool applyProxyResultInternal(const SoBRLMeshShape *shape,
@@ -183,6 +225,10 @@ private:
     std::unordered_map<std::string, MeshPayloadPtr> meshBindings;
     std::unordered_map<std::string, ProxyPayloadPtr> proxyBindings;
     std::unordered_map<std::string, CadPayloadPtr> cadBindings;
+    uint64_t cadBindingsRevision;
+    NormalStyle normalStyle;
+    float normalCreaseAngle;
+    mutable std::unordered_map<std::string, CadPresentation> cadPresentations;
 };
 
 class BOBOL_EXPORT SoBRLViewLodElement : public SoElement

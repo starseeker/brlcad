@@ -106,8 +106,8 @@ Direct compact realization is not the whole progressive-cache design.  It is a
 fast path for synchronous, stable source realization.  Progressive display LoD
 does not mutate that shared compact assembly.  When LoD is active, a source may
 publish cheap source-local fallback content such as a BoT AABB proxy, while
-the owning view binds ready AABB, OBB, mesh, or full-detail results as
-view-local compact CAD payloads.  Coin traversal resolves the payload from
+the owning view binds the best ready display mesh as a view-local compact CAD
+payload.  Coin traversal resolves the payload from
 `BObolViewLodState` and renders/bounds/picks it in place of the shared source
 for that view only.  This keeps shared draw/erase/selection/database identity
 stable and lets another view render a different LoD for the same source.
@@ -185,6 +185,77 @@ picking; mesh/full-detail payloads build shaded CAD geometry or wire edges
 according to the source draw mode.  The shared compact source remains the
 semantic owner for path/material/selection/edit identity.
 
+Progressive Asset Contract and Library Boundary
+-----------------------------------------------
+
+The progressive path has one deliberate ownership boundary.
+
+libBObol owns all BRL-CAD and view-policy decisions:
+
+* database/source/occurrence identity and invalidation;
+* persistent PoP cache format and cache refresh;
+* activation-ordered cumulative point/face prefixes;
+* one thread-safe retained exact-coordinate asset shared by occurrences and
+  views;
+* projected screen-error demand, hysteresis, interactive versus settled
+  policy, and per-occurrence active levels;
+* background loading, generation cancellation, result publication, aggregate
+  consumer demand, and stable-view memory trimming;
+* deciding whether a BoT is closed and consistently oriented, and therefore
+  whether backface culling is safe.
+
+`SoCADAssembly` and the Obol CAD renderer own retained presentation:
+
+* stable part and instance records;
+* GPU buffers and append-only uploads as a resident prefix grows;
+* a per-instance active PoP level;
+* drawing the corresponding prefix in shaded and wire modes;
+* resnapping retained exact coordinates to the active 16-bit PoP
+  quantization level in the vertex shader (or the software fallback);
+* using the identical active prefix and snapped coordinates for picking;
+* honoring, but never inferring, the producer's closed/oriented culling
+  guarantee;
+* restoring raw GL bindings/raster state and invalidating Coin lazy state
+  after direct rendering.
+
+Obol must not infer BRL-CAD LoD from a camera, reload cache records, build a
+second PoP hierarchy, or silently choose a different cut for shaded, wire, and
+pick paths.  libBObol must not manage GL buffers or replace presentation nodes
+on ordinary camera changes.
+
+The former `SoCADViewState` distance/`lodScale` controls and
+`SoCADAssembly::getLodFilteredIndices` hierarchy cache have been removed.
+Keeping those controls disabled from libBObol was not a sufficient boundary:
+another caller or traversal state could reactivate the second authority.
+`SoCADViewState` now carries only non-geometric presentation policy, while the
+only CAD LoD input is the producer-authored retained prefix plus explicit
+`InstanceRecord::lodLevel`.
+
+The resident prefix and active cut are separate state.  A camera change first
+retargets the view-local active level.  If the retained arrays already contain
+the requested point and face counts, this is a metadata-only update: there is
+no worker task, cache read, CPU mesh rebuild, or GPU upload.  This also allows
+a finer quantization level when adjacent hierarchy levels have identical
+prefix counts, because exact retained coordinates can be resnapped without new
+geometry.  Only demand beyond the resident prefix schedules background growth.
+Growth appends array tails and GPU buffer tails; a full replacement is reserved
+for source invalidation or an explicit stable-view trim.
+
+During interaction the target is deliberately coarse enough to preserve frame
+rate and resident finer cuts are not discarded.  After 150 ms of view
+stability, the controller requests the settled one-pixel-error cut.  After a
+longer stable interval, aggregate demand from every occurrence and view may
+trim CPU and GPU prefix tails with one level of headroom.  A later zoom can
+append the missing tail without rebuilding the prefix that remains resident.
+
+An AABB is the mandatory immediate fallback because it is cheap, deterministic,
+and available from ordinary source bounds.  An OBB is an optional proxy, not a
+required progression rung: use it only when an already cached or cheaply
+computed OBB is materially tighter and the detailed mesh is not expected
+immediately.  Computing OBBs synchronously, delaying PoP work for them, or
+requiring every leaf to pass through AABB -> OBB -> mesh adds latency without a
+reliable user-visible benefit.
+
 Invalidation
 ------------
 
@@ -201,8 +272,9 @@ clears attached view LoD state for:
 
 Pure visibility, highlight, material refresh, and redraw transactions do not
 clear LoD payloads unless they force a full scene rebuild.  Camera and LoD
-policy changes advance view/policy revisions and submit new LoD requests; stale
-results are rejected by revision checks.
+policy changes advance view/policy revisions and first retarget cuts already
+supported by resident assets; only missing prefixes submit new LoD requests.
+Stale results are rejected by revision checks.
 
 For Obol-attached views, `view lod` policy changes are applied through the
 GED/Obol bridge without forcing a second redraw path.  The bridge clears the
@@ -210,6 +282,37 @@ attached controller's `BObolViewLodState`, advances its LoD policy revision,
 refreshes realization view policy on source instances in the affected view
 scope, and requests an Obol render.  A view without an endpoint updates only
 its passive LoD policy; realization begins when an endpoint is attached.
+
+Normal Presentation Policy
+--------------------------
+
+Mesh-normal presentation is an independent per-view policy:
+
+* `view shading normals authored` honors BoT normals only when both
+  `RT_BOT_HAS_SURFACE_NORMALS` and `RT_BOT_USE_NORMALS` say they are active;
+  meshes without authored normals use geometric face normals.  This is the
+  production default and matches the established BRL-CAD shaded-BoT result.
+* `view shading normals flat` forces one geometric normal per triangle,
+  including for meshes that carry authored normals.
+* `view shading normals smooth` synthesizes crease-aware corner normals for
+  display.  `view shading crease degrees` selects the crease angle in
+  `[0, 180]`; the default is 60 degrees.
+
+`view shading` reports both the stored view policy and, when an endpoint is
+attached, the live renderer policy.  The stored policy is view-local and may
+be selected while headless; a later qged, MGED, or gsh endpoint attachment
+inherits it.  A mode or crease change invalidates only the view-owned CAD
+presentation.  It retains the PoP asset, resident buffer prefix, selected cut,
+and cache entry, then repaints immediately through the normal host refresh
+path.  Lighting remains a separate `view lighting` policy.
+
+The default camera-tracked headlight travels straight from the viewer into the
+scene (`view lighting offset 0 0 -1`), matching the established BRL-CAD shaded
+display.  This matters for unoriented plate-mode BoTs: an oblique light makes
+their legitimate face-normal changes look like missing triangular geometry.
+Users may deliberately select a form-revealing oblique light, for example
+`view lighting offset -0.55 -0.45 -0.70`, without changing geometry, PoP
+residency, or normal policy.
 
 Memory Policy
 -------------
@@ -220,12 +323,11 @@ source counts, source bounds, and draw/material/selection metadata.  It does
 not need the full triangle arrays to render display LoD or request exact
 geometry from librt/cache.
 
-LoD-on wire draws for high-face BoT leaves use this policy directly: the
-shared source can realize an AABB proxy from BoT vertex bounds, submit
-source-level AABB/OBB/mesh LoD work, and avoid storing the full mesh or full
-wire arrays for the first visual.  Turning LoD off advances the view policy and
-re-realizes the source without the BoT proxy threshold, restoring normal
-full-detail wire behavior.
+High-face BoT leaves use this policy directly: the shared source extracts only
+counts and bounds, realizes an AABB proxy, and submits the requested display
+mesh without first retaining a second full-capacity display copy.  Turning LoD
+off advances the view policy and re-realizes the source without the BoT proxy
+threshold, restoring normal exact/full-detail display behavior.
 
 Controller memory budgeting accounts for both:
 
@@ -324,45 +426,28 @@ fields and cached shader state therefore survive the "draw now, expand later"
 phase; display-state material overrides still take precedence over cached
 database color, matching normal tree-state realization.
 
-Post-proxy expansion is also cache-backed.  The GED/Obol bridge may expand a
-bounded set of union children for an already drawn database source, but it must
-not turn that operation into synchronous full-leaf realization for a large
-root.  The expansion path creates child database-source instances, applies the
-BRL-CAD path placement matrix to each source instance, and publishes child
-AABB proxy line sets only for leaf solids when the relevant libBObol cache
-record is already available.  Comb children remain explicit source/metadata
-nodes until leaf descendants provide bottom-up bounds; forcing subtree AABB
-refreshes inside the expansion call would recreate the large-root blocking
-behavior this path is intended to avoid.  Each child source has an instance
-key derived from its parent key, occurrence row, and Boolean operation, so
-duplicate direct children remain distinct.  Subtract and intersect children
-retain their hierarchy operation in the compact assembly and use distinct
-fallback wire style where applicable.  These proxy sources preserve CSG
-identity and picking attribution, but do not claim to be an exact partial
-Boolean evaluation; the detached final root remains the exact result.
+Progressive drawing has one production data path.  A drawn database root owns
+one flat compact-occurrence registry.  Cold cache-only bounds work populates
+that registry with transformed per-leaf AABBs as worker results become ready;
+warm cached boxes are published immediately.  Detached realization streams
+each richer leaf occurrence back into the same registry and replaces the
+matching path/occurrence entry in place.  It does not create a
+`SoBRLDatabaseSource` node for every child and does not run a competing
+visible-frontier expansion algorithm.
 
-The first cache population hook for this path is
-`ged_draw_obol_database_source_prewarm_child_aabb_proxies`.  It submits bounded
-direct-child AABB proxy tasks to the attached `BObolLodService`; those worker
-tasks refresh libBObol draw-cache records but do not publish view-LoD
-payloads.  `ged_draw_obol_database_source_prewarm_visible_child_aabb_proxies`
-and `ged_draw_obol_database_source_expand_visible_children` wrap the
-single-source operations over the currently visible database-source frontier
-under a requested root.  Visible expansion only publishes already-cached leaf
-proxies; it does not synchronously regenerate missing leaf bounds.  Repeating
-bounded visible-frontier calls advances recursive refinement in controlled
-passes.  The automatic production path is now
-a narrow libBObol provider callback registered by the GED/Obol bridge when a
-view controller attaches to a GED view.  `BObolViewController` owns the
-bounded progressive tick, drains a limited number of LoD results, then calls
-registered providers on the application/render thread; the GED provider
-prewarms and expands only the visible source frontier.  Worker threads only
-populate `.DbDrawCache` and mark pending work; they never mutate Coin scene
-state.  Policy is explicit in `BObolProgressiveOptions`: tests use
-`BOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES` for deterministic visible
-cache-ready expansion, while callers that want current-style immediate
-publication may enable `BOBOL_PROGRESSIVE_REFRESH_MISSING_PROXIES` and still
-retain per-tick source/child/result budgets.
+The bounded first structural pass never computes missing recursive bounds on
+the UI thread.  Missing region/object AABBs are submitted to
+`BObolLodService`, and progressive pumps republish a deeper compact snapshot as
+the cache warms.  If no asynchronous service can accept the work, a single
+root AABB is the last-resort fallback.  Worker threads populate cache or
+immutable occurrence streams only; registry mutation, autoview settlement, and
+render invalidation remain on the application/render thread.
+
+OBB is not a required rung between AABB and display mesh.  Computing PCA/OBB
+data on a cold path consumes exactly the worker and result capacity needed by
+the first useful mesh and often buys little screen-space improvement.  An OBB
+may be used opportunistically if it is already resident/cached and materially
+tighter than the AABB, but mesh submission never waits for it.
 
 Mesh POP LoD payloads also live under `.DbDrawCache`, versioned by
 `mesh_lod.format`.  The caller-facing cache/loading API is now
@@ -386,6 +471,27 @@ under `.` if `BU_DIR_CACHE` resolves empty.  Progressive workers must never
 turn `.DbDrawCache` setup into attempts to create `""` or `/.DbDrawCache`.
 The old librt `db_mesh_lod_*`/`rt_mesh_lod_*` facade and per-`db_i`
 mesh-cache state were removed.
+
+Interactive PoP selection is based on transformed occurrence bounds projected
+through the actual camera view volume.  Entirely off-frustum occurrences
+submit no display payload.  Visible occurrences quantize projected diameter
+against a 4-pixel error target while the camera is changing, then refine
+against a 1-pixel target after 150 ms of view stability.  A 25-percent level
+hysteresis band prevents boundary oscillation.  Display loads are clamped to
+the cache's maximum PoP level and can never invoke the full-capacity/detail
+callback.  The terminal PoP cut is nevertheless the exact display mesh: it
+draws every source face at the original, unsnapped coordinates.  A second
+"graduate to full mesh" display payload would therefore duplicate memory
+without adding fidelity.  Exact export, measurement, snapping, picking, and
+explicit forced-detail requests use the separate exact-level API because they
+need source-query semantics, not because terminal PoP is geometrically
+incomplete.
+
+Warm-cache realization does not synchronously choose a mesh from source-level
+view estimates.  It publishes the same standing box as a cold draw; the actual
+camera controller then issues the display-level request, which a warm cache can
+satisfy immediately.  Cold and warm paths therefore share one selection rule
+and differ only in request latency.
 
 The legacy BSG mesh LoD implementation and its `.BsgMeshLodCache` storage were
 removed with libbsg.  `.DbDrawCache` is the sole retained drawing LoD cache.
@@ -441,9 +547,10 @@ requirements.
 libged exposes the low-level service controls as
 `view lod service status|start|stop|poll`.  The Obol DM backend also submits
 requests and drains available results from its render path when view LoD
-auto-submit is enabled.  Headless gsh and MGED tests use that path; qtcad uses
-the same service/controller primitives with explicit submit/drain calls so the
-test can capture deterministic intermediate frames.
+auto-submit is enabled.  qged, MGED, and gsh all attach the same GED progressive
+provider and `BObolViewController` pipeline; host code supplies only the frame
+pump/render endpoint.  Tests may still call submit/drain explicitly to capture
+deterministic intermediate frames.
 
 Selection and Interaction
 -------------------------
@@ -497,49 +604,30 @@ progressive view LoD:
   an explicit view-realization policy enabling mesh LoD;
 * command polygon lookup for names containing `::`.
 
-Full-stack progressive image tests now cover delayed service population,
-controller notification, result draining, active staged payload state, and
+Full-stack progressive image tests cover delayed service population,
+controller notification, result draining, active view-local payload state, and
 visible image refinement:
 
 * `gsh_obol_progressive_lod` attaches the Obol DM, facetizes a private
-  `moss.g` copy, starts the view LoD service, slows OBB and mesh-LoD tasks with
-  `BOBOL_LOD_OBB_TASK_DELAY_MS` and `BOBOL_LOD_TASK_DELAY_MS`, captures
-  successive screengrabs, and verifies active AABB, OBB, and mesh payload
-  counters plus decoded PNG progression;
+  `moss.g` copy, slows mesh-LoD work with `BOBOL_LOD_TASK_DELAY_MS`, captures
+  successive screengrabs, and verifies that the shared host advances compact
+  fallback geometry directly to active mesh payloads without rejected results;
 * `mged_obol_progressive_lod` runs the same scenario through classic MGED
   `-c -a obol`, proving the batch MGED attach/refresh/screengrab path uses the
-  Obol service instead of legacy display streams and exposes the same staged
-  active-payload counters through `view lod service status`;
-* `test_qtcad_obol_progressive_lod` drives the qtcad/QGED path in-process with
-  an offscreen Obol view, captures a pre-submit frame, drains to an AABB proxy,
-  drains to an OBB proxy, then drains to mesh settlement and verifies both
-  scene-state payload progression and final presentable output.  Diagnostic
-  staged runs additionally require image-visible progression; normal runs may
-  coalesce to ready final data before the first captured frame.  It now also
-  accepts parameterized root/draw/facetize/repeat settings, records phase-level
-  startup timings, time-to-first-visual, and staged-result timings, requires
-  the controller to visit multiple LoD candidates, and verifies multiple
-  active view-local payloads at the AABB, OBB, and mesh stages rather than
-  proving only the first realized mesh path;
-* `test_qtcad_obol_progressive_lod_startup_refine` covers the qtcad startup
-  transition explicitly.  It draws with deferred leaf expansion, verifies the
-  first rendered frame contains cache-backed leaf proxy geometry for a
-  proxy-eligible target, promotes the same target to the normal mesh-backed
-  qtcad path, and then verifies staged AABB, OBB, and mesh LoD refinement on
-  the promoted scene;
-* `test_qtcad_obol_progressive_lod_generic_twin_startup_expand` covers
-  repeated post-proxy large-root expansion.  It draws `Generic_Twin.g all` with
-  deferred leaf expansion, verifies the startup comb root is metadata-only,
-  runs bounded visible-frontier AABB prewarm/expand passes through the attached
-  `BObolLodService`, expands child sources without invoking full leaf
-  realization, refreshes autoview from Obol source bounds after proxy
-  publication, and asserts that source count, source depth, leaf proxy
-  publication, and the rendered image all change;
-* `slow-test_qtcad_obol_progressive_lod_repeated_moss` is an opt-in CTest
-  case using `BRLCAD_RUN_SLOW_TESTS=1`.  It facetizes `moss.g`, constructs a
-  four-copy repeated draw target in a private database, and requires 24 visited
-  LoD candidates while preserving the same staged AABB -> OBB -> mesh image and
-  scene-state checks.  Normal CTest runs skip it with return code 123.
+  same service/controller contract and exposes the same direct mesh-result
+  counters through `view lod service status`;
+* `test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand` drives the
+  qtcad/QGED path in-process from a cold cache.  It draws `Generic_Twin.g all`
+  with a metadata-only root, requires the compact occurrence count and rendered
+  pixels to grow without source-tree expansion, and waits until the automatic
+  service/controller path reaches a stable state;
+* `ged_test_lod_crossrun` repeats a cold and warm draw in separate processes,
+  requiring useful rendered pixels, multiple mesh requests, active mesh
+  payloads, and no result rejection in both cache states;
+* the projection/update-action tests prove that a moving view requests a
+  coarser screen-error level, a settled view requests a finer one, and
+  off-frustum occurrences submit no mesh work.  Mesh-cache tests separately
+  prove that display requests cannot invoke the full-capacity detail callback.
 
 `libBObol_draw_cache` covers the persistent AABB/OBB/metadata cache API below
 the progressive tests, including context reuse across database reopen,
@@ -558,42 +646,29 @@ section.
 Production Exit Status
 ----------------------
 
-Current application-level progressive coverage exercises staged AABB -> OBB ->
-mesh startup using delayed cache generation, checks scene-state payload
-presence across multiple active LoD candidates, checks rendered image
-progression, has a bounded opt-in repeated-scene stress gate, includes a
-bounded Generic_Twin full-root startup-only gate, includes a bounded
-Generic_Twin startup-expand gate that proves the manual service-prewarmed
-visible-frontier path, and includes
-`test_qtcad_obol_progressive_lod_generic_twin_startup_auto_expand`, which
-starts from the same metadata-only root and relies on automatic controller
-progressive ticks during qtcad readback.  Generic_Twin now proves that large
-direct comb roots can start as metadata-only source structure, consume
-worker-populated leaf proxy records through bounded visible-frontier passes,
-and render without full leaf realization; the manual startup-expand case still
-refreshes autoview from Obol source bounds after proxy publication.
-The older direct startup-refine harness can still time out if it explicitly
-requests synchronous promotion of an entire root after proxy-visible
-expansion.  That path is not the production scheduler: production uses the
-provider-based detached final realization and bounded controller ticks
-described below.  The qtcad harness timing line separates copy/open/view setup, cache clear,
-tolerance setup, facetize, repeated-target construction, LoD policy setup, GED
-draw transaction, Obol sync, autoview, first framebuffer readback, service
-startup, submit, and AABB/OBB/mesh settlement.  Use those fields to distinguish
-first-visual startup regressions from post-proxy refinement cost.
+Current application-level coverage exercises the single production
+box-to-view-mesh path in qtcad/QGED, GSH, and MGED.  The Generic_Twin gate
+starts from a metadata-only direct-comb root and relies only on automatic
+controller ticks: worker-populated leaf bounds grow one compact occurrence
+registry, pending autoview follows those published bounds, and useful pixels
+appear without creating a database-source tree or synchronously realizing all
+leaves.  Unit and cross-process gates cover camera motion/settlement, frustum
+rejection, cold and warm caches, display-level cache loading, cancellation, and
+stable drain.  Obsolete staged-proxy and manual visible-frontier fixtures are
+not registered as production tests because they assert architectures the
+runtime intentionally no longer implements.
 
 The production scheduler is deliberately provider based.  Duplicate
 occurrences, subtract/intersect hierarchy identity, and pending autoview are
 now handled by the GED provider while qtcad, gsh, and MGED simply advance one
 bounded controller tick before rendering.  Pending autoview follows published
 Obol source bounds until refinement settles, and a later user view revision
-cancels it.  A combined `VISIBLE_FRONTIER | FULL_DETAIL` policy advances
-cache-backed proxies while detached final realization runs; if final data is
-already ready before the first draw, it is adopted directly.  Otherwise,
-adoption retires only the temporary descendants owned by that root, preventing
-proxy and compact geometry from being displayed together.  The GED lifecycle
-test exercises duplicate and CSG identities, autoview cancellation, and this
-proxy-to-compact handoff.
+cancels it.  One detached leaf stream publishes richer occurrences into the
+same compact registry.  If data is already cache-resident it is adopted on the
+first applicable tick; otherwise the standing leaf box remains usable until a
+view-selected mesh payload replaces it.  The GED lifecycle test exercises
+duplicate and CSG identities, autoview cancellation, and this in-place
+box-to-mesh handoff.
 
 The remaining CSG work is limited to optional exact partial-Boolean proxy
 visualization.  Current proxy geometry is intentionally conservative and
@@ -604,23 +679,25 @@ Also keep adding scene-state coverage for no-owned-scene/no-feature-store
 no-op behavior so the view-local LoD invalidation contract is proven without a
 display endpoint and without recreating fallback scene state.
 
-Startup proxy publication now consumes cached full-path metadata and
-`test_qtcad_obol_progressive_lod_startup_refine` asserts that seeded cached
-region/material/shader fields are present on the deferred proxy scene shape.
+Startup box publication consumes cached full-path metadata, so
+region/material/shader fields remain available while geometry refines.
 Removal/rename path cleanup is covered by cache-side object-name invalidation;
-remaining coverage should focus on future non-startup callers that begin
-consuming path metadata as long-lived truth.
+future long-lived metadata consumers should extend that coverage without
+reintroducing a second scene representation.
 
-On 2026-07-15 the production exit matrix passed nine of nine focused cases:
-the LoD update action, qtcad progressive controller, startup-refine,
-Generic-Twin startup, manual expansion, automatic expansion, wire and shaded
-LoD, and the opt-in repeated-Moss stress case.  The service and realization
-tests plus GSH and MGED progressive-LoD smokes also passed.  These runs prove
-metadata-only large-root startup, useful proxy pixels before full detail,
-bounded visible-frontier work, worker-only population, automatic pending
-autoview, identity-preserving proxy-to-compact handoff, stale/cancelled result
-rejection, camera-only frames without source publication, and teardown after
-repeated transitions.  Native QGED and MGED host runs separately exercised
-live canvas replacement/resize and retained camera changes.  The remaining
-items in this section are optional representation enhancements or future-
-caller coverage, not blockers for the production LoD workflow.
+The librt `rt_vlfree` allocator used by primitive plot callbacks is explicitly
+non-parallel.  libBObol serializes only the plot/convert/free critical section;
+detached realization, tessellation, cache work, PoP loading, and rendering
+remain parallel.  This prevents foreground QGED realization and background
+streaming from corrupting VLIST storage.
+
+On 2026-07-25 the focused production matrix passed ten of ten cases: LoD
+realization/service/projection/cache units, rendered LoD comparison, cold/warm
+cross-process drawing, the broad GED lifecycle, automatic Generic-Twin qtcad
+startup, GSH, and MGED.  The broad lifecycle test disables automatic LoD for
+its hundreds of unrelated transaction assertions and explicitly requests
+deferred behavior only in its progressive fixtures; it now completes in about
+one second rather than waiting for obsolete transient stages.  Five repeated
+runs also pass.  Native cold- and warm-cache QGED launches of
+`Generic_Twin.g all` completed draw, autoview, service drain, and framebuffer
+capture without failure; their stable final images were byte-identical.

@@ -1737,9 +1737,15 @@ ged_view_context_display_endpoint_set(
 
     if (record->display_endpoint == endpoint) {
 	record->owns_display_endpoint = take_ownership ? 1 : 0;
-	if (endpoint)
+	if (endpoint) {
 	    (void)bobol_display_endpoint_property_provider_set(endpoint,
 		ged_endpoint_property_get, ged_endpoint_property_set, view_ctx);
+	    /* bv state remains authoritative even while a view is headless.
+	     * Reassert presentation policy when an endpoint is registered so a
+	     * controller replacement or delayed GUI attachment cannot silently
+	     * restore its own defaults. */
+	    (void)ged_draw_obol_shading_sync(record->gedp, view_ctx);
+	}
 	return 1;
     }
 
@@ -1780,6 +1786,10 @@ ged_view_context_display_endpoint_set(
 	(void)bobol_display_endpoint_property_provider_set(endpoint,
 	    ged_endpoint_property_get, ged_endpoint_property_set, view_ctx);
 	ged_endpoint_background_initialize(view_ctx, endpoint);
+	/* A headless client may configure normal presentation before its
+	 * graphical endpoint exists.  Push that retained, per-view policy only
+	 * after the new endpoint has become the live controller. */
+	(void)ged_draw_obol_shading_sync(record->gedp, view_ctx);
     }
 
     if (old_endpoint && owned_old_endpoint)

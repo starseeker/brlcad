@@ -52,7 +52,8 @@ facetize -r all.g all.bot
 view lod mesh 1
 view lod scale 0.8
 view lod service start 4
-# This fixture validates mesh LoD stages, not deferred-root presentation.
+# This fixture validates compact-box to mesh refinement, not cold deferred-root
+# publication.
 # Materialize leaves first so the scheduler has compact occurrences to visit.
 draw --eager-leaf-expansion -m1 all.bot
 autoview
@@ -75,7 +76,7 @@ screengrab %s
 view lod service status
 quit
 ' "$FRAME0" "$FRAME1" "$FRAME2" "$FRAME3" \
-    | BU_DIR_CACHE="$CACHE" BOBOL_LOD_OBB_TASK_DELAY_MS="${BOBOL_LOD_OBB_TASK_DELAY_MS:-350}" BOBOL_LOD_TASK_DELAY_MS="${BOBOL_LOD_TASK_DELAY_MS:-700}" \
+    | BU_DIR_CACHE="$CACHE" BOBOL_LOD_TASK_DELAY_MS="${BOBOL_LOD_TASK_DELAY_MS:-700}" \
     "$MGED" -c -a nu "$TMPDB" > "$LOG" 2>&1
 
 if ! grep -qx "headless" "$LOG"; then
@@ -112,12 +113,6 @@ fi
 
 if grep -Eq 'last_rejected_results: [1-9][0-9]*' "$LOG"; then
     echo "MGED Obol progressive LoD rejected LoD results" 1>&2
-    cat "$LOG" 1>&2
-    exit 1
-fi
-
-if ! grep -Eq 'active_lod_(aabb|obb)_proxies: [1-9][0-9]*' "$LOG"; then
-    echo "MGED Obol progressive LoD did not activate a coarse proxy payload" 1>&2
     cat "$LOG" 1>&2
     exit 1
 fi

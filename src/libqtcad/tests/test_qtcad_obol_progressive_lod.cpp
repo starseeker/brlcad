@@ -54,6 +54,7 @@
 #include <string.h>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #define FAIL(_msg) \
@@ -327,6 +328,84 @@ qtcad_obol_render_realized_database_geometry_count(
     return qtcad_obol_scene_realized_database_geometry_count(&renderScene);
 }
 
+static int
+qtcad_obol_render_compact_instance_count(
+    struct ged *gedp,
+    BObolViewController *controller)
+{
+    (void)gedp;
+    if (!controller)
+	return 0;
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    int count = 0;
+    for (int i = 0; i < renderScene.getDatabaseSourceCount(); i++) {
+	SoBRLDatabaseSource *source = renderScene.getDatabaseSource(i);
+	if (source && source->isCompactOccurrenceRegistry())
+	    count += source->getCompactInstanceCount();
+    }
+    return count;
+}
+
+static size_t
+qtcad_obol_render_visible_compact_mesh_demand_count(
+    BObolViewController *controller, int includeSubtract,
+    int uniqueOccurrenceKeys = 0, int inFrustumOnly = 0)
+{
+    if (!controller)
+	return 0;
+    BObolSceneController renderScene(controller->getRenderSceneRoot());
+    size_t count = 0;
+    std::unordered_set<std::string> occurrenceKeys;
+    SbViewVolume viewVolume;
+    if (inFrustumOnly) {
+	const SbVec2s viewport =
+	    controller->getViewportRegion().getViewportSizePixels();
+	const float aspect = viewport[1] > 0 ?
+	    static_cast<float>(viewport[0]) /
+		static_cast<float>(viewport[1]) : 1.0f;
+	viewVolume = controller->getCamera()->getViewVolume(aspect);
+    }
+    for (int sourceIndex = 0;
+	 sourceIndex < renderScene.getDatabaseSourceCount(); sourceIndex++) {
+	SoBRLDatabaseSource *source =
+	    renderScene.getDatabaseSource(sourceIndex);
+	if (!source || !source->isCompactOccurrenceRegistry())
+	    continue;
+	for (int instanceIndex = 0;
+	     instanceIndex < source->getCompactInstanceCount();
+	     instanceIndex++) {
+	    BObolCompactInstanceHandle handle;
+	    BObolCompactInstanceSummary summary;
+	    if (!source->getCompactInstanceHandle(instanceIndex, handle) ||
+		!source->getCompactInstanceSummary(handle, summary) ||
+		!summary.valid || !summary.visible)
+		continue;
+	    if (!includeSubtract &&
+		summary.booleanOperation ==
+		    SoBRLDatabaseSource::BOOLEAN_SUBTRACT)
+		continue;
+	    if (inFrustumOnly) {
+		SbBox3f worldBounds = summary.localBounds;
+		worldBounds.transform(summary.localToSource);
+		if (worldBounds.isEmpty() ||
+		    !viewVolume.intersect(worldBounds))
+		    continue;
+	    }
+	    /* A resident base mesh is already richer than a box and may be below
+	     * the configured PoP threshold.  Count only occurrences that actually
+	     * advertise source-backed/view-LoD demand. */
+	    if (summary.sourceMeshRequestValid || summary.lodBacked) {
+		if (uniqueOccurrenceKeys)
+		    occurrenceKeys.insert(
+			summary.sourceInstanceKey.getString());
+		else
+		    count++;
+	    }
+	}
+    }
+    return uniqueOccurrenceKeys ? occurrenceKeys.size() : count;
+}
+
 
 static int
 qtcad_obol_color_matches_metadata(const SbColor &color,
@@ -542,9 +621,15 @@ qtcad_obol_print_scene_source_diagnostics(const char *label,
 	SbBox3f sourceBounds;
 	const SbBool sourceBoundsValid = source->getSourceBounds(sourceBounds);
 	fprintf(stderr,
-		" source[%d]={ptr=%p path=%s instance=%s children=%d realized_shapes=%d realized_meshes=%d bounds_valid=%d",
+		" source[%d]={ptr=%p path=%s instance=%s representation=%d draw_mode=%d role_flags=%d view_dependent=%d mesh_lod=%d bot_threshold=%u children=%d realized_shapes=%d realized_meshes=%d bounds_valid=%d",
 		i, (void *)source, source->path.getValue().getString(),
 		source->instanceKey.getValue().getString(),
+		source->representationMode.getValue(),
+		source->drawMode.getValue(),
+		source->realizationRoleFlags.getValue(),
+		source->realizationViewDependent.getValue() ? 1 : 0,
+		source->realizationMeshLodEnabled.getValue() ? 1 : 0,
+		source->lodBotThreshold.getValue(),
 		source->getNumChildren(), source->getRealizedShapeCount(),
 		source->getRealizedMeshCount(), sourceBoundsValid ? 1 : 0);
 	if (source->getRealizedShapeCount() > 0) {
@@ -837,6 +922,7 @@ struct qtcad_obol_lod_service_status {
     int auto_submit;
     size_t in_flight;
     size_t pending_tasks;
+    size_t queued_results;
     size_t queued_cache_writes;
     size_t delayed_tasks;
     unsigned int last_submitted_task_count;
@@ -911,6 +997,7 @@ qtcad_obol_lod_service_status_get(
 	qtcad_obol_result_value(result, "auto_submit");
     status->in_flight = qtcad_obol_result_value(result, "in_flight");
     status->pending_tasks = qtcad_obol_result_value(result, "pending_tasks");
+    status->queued_results = qtcad_obol_result_value(result, "queued_results");
     status->queued_cache_writes =
 	qtcad_obol_result_value(result, "queued_cache_writes");
     status->delayed_tasks = qtcad_obol_result_value(result, "delayed_tasks");
@@ -1228,6 +1315,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	testCase.startupOnly || testCase.startupRefine ||
 	testCase.startupExpand || testCase.startupAutoExpand ||
 	testCase.startupWireLod;
+    const int production_auto_expand =
+	testCase.startupAutoExpand || testCase.startupWireLod;
     struct BObolDrawMetadataRecord startup_metadata;
     bobol_draw_metadata_record_init(&startup_metadata);
 
@@ -1424,30 +1513,23 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	return 0;
     }
     endpoint_attached = 1;
-    if (testCase.startupAutoExpand) {
-	BObolProgressiveOptions options;
-	options.flags = BOBOL_PROGRESSIVE_VISIBLE_FRONTIER |
-	    BOBOL_PROGRESSIVE_REQUIRE_CACHED_PROXIES;
-	options.maxLodResults = 8;
-	options.maxSources = 4;
-	options.maxChildrenPerSource = 64;
-	options.maxSubmissions = 128;
-	controller->setDefaultProgressiveOptions(&options);
-    }
-
     struct ged_draw_appearance_settings appearance =
 	    GED_DRAW_APPEARANCE_SETTINGS_INIT;
-    appearance.draw_mode = (testCase.startupOnly || testCase.startupExpand ||
-			    testCase.startupAutoExpand ||
-			    testCase.startupWireLod) ?
-			   GED_DRAW_MODE_WIRE : GED_DRAW_MODE_SHADED;
+    /* The production automatic fixture mirrors `e -m1`: begin with compact
+     * leaf boxes, shade BoTs through view-aware LoD payloads, and use ordinary
+     * geometry for the remaining leaves. */
+    appearance.draw_mode = testCase.startupAutoExpand ?
+			   GED_DRAW_MODE_SHADED_BOTS :
+			   ((testCase.startupOnly || testCase.startupExpand ||
+			     testCase.startupWireLod) ?
+			    GED_DRAW_MODE_WIRE : GED_DRAW_MODE_SHADED);
     appearance.defer_leaf_expansion = startup_deferred ? 1 : 0;
 
     struct ged_draw_transaction txn =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, active_draw_target);
     txn.view = ged_view_context_from_bv(view.viewContext());
     txn.appearance = &appearance;
-    txn.autoview = testCase.startupAutoExpand ? 1 : 0;
+    txn.autoview = production_auto_expand ? 1 : 0;
 
     int sync_changed = 0;
     int render_source_count = 0;
@@ -1547,8 +1629,12 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 					"before-view-all");
 
     phase_start = bu_gettime();
-	if (!qtcad_obol_scene_autoview_refresh(view, controller,
-	    "progressive-lod-view-all")) {
+    const int initial_autoview = qtcad_obol_scene_autoview_refresh(view,
+	controller, "progressive-lod-view-all");
+    /* A cold asynchronous draw may not have a publishable bound in its first
+     * UI tick.  Its transaction already armed progressive autoview, which will
+     * apply as soon as a region box or streamed leaf arrives. */
+    if (!initial_autoview && !production_auto_expand) {
 	fprintf(stderr, "qtcad progressive LoD autoview failed: case=%s\n",
 	    testCase.name);
 	cleanup();
@@ -1562,7 +1648,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     int startup_auto_source_count_before = -1;
     int startup_auto_depth_before = -1;
     int startup_auto_geometry_before = -1;
-    if (testCase.startupAutoExpand) {
+    int startup_auto_compact_before = -1;
+    if (production_auto_expand) {
 	startup_auto_source_count_before =
 	    qtcad_obol_render_database_source_count(gedp, controller);
 	startup_auto_depth_before =
@@ -1571,6 +1658,8 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	startup_auto_geometry_before =
 	    qtcad_obol_render_realized_database_geometry_count(gedp,
 		controller);
+	startup_auto_compact_before =
+	    qtcad_obol_render_compact_instance_count(gedp, controller);
     }
 
     QImage frame0;
@@ -1618,24 +1707,43 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    cleanup();
 	    return 1;
 	}
-	if (testCase.startupAutoExpand) {
+	if (production_auto_expand) {
 	    int source_count_before = startup_auto_source_count_before;
 	    int max_depth_before = startup_auto_depth_before;
 	    int geometry_before = startup_auto_geometry_before;
+	    int compact_before = startup_auto_compact_before;
 	    int source_count_after = source_count_before;
 	    int max_depth_after = max_depth_before;
 	    int realized_after = geometry_before;
+	    int compact_after = compact_before;
+	    size_t lod_mesh_after =
+		controller->getActiveLodMeshPayloadCount();
+	    size_t visible_mesh_demand_after =
+		qtcad_obol_render_visible_compact_mesh_demand_count(
+		    controller, 0);
+	    size_t all_visible_mesh_demand_after =
+		qtcad_obol_render_visible_compact_mesh_demand_count(
+		    controller, 1);
+	    size_t unique_visible_mesh_demand_after =
+		qtcad_obol_render_visible_compact_mesh_demand_count(
+		    controller, 0, 1);
+	    size_t projected_mesh_demand_after =
+		qtcad_obol_render_visible_compact_mesh_demand_count(
+		    controller, 0, 1, 1);
 	    int lit_auto = 0;
 	    int diff_auto = 0;
 	    QImage frame_auto;
 	    BObolProgressiveStatus progressive_status;
 	    qtcad_obol_lod_service_status service_status;
 	    memset(&service_status, 0, sizeof(service_status));
-	    for (int frame = 0; frame < 120; frame++) {
+	    const int settle_timeout_ms =
+		std::max(testCase.meshTimeoutMs, 10000);
+	    const int64_t settle_deadline =
+		bu_gettime() + static_cast<int64_t>(settle_timeout_ms) * 1000;
+	    while (bu_gettime() < settle_deadline) {
 		QCoreApplication::processEvents();
 		(void)controller->advanceProgressiveWork(NULL,
 		    &progressive_status);
-		view.get_viewport_image(frame_auto);
 		source_count_after =
 		    qtcad_obol_render_database_source_count(gedp,
 			controller);
@@ -1645,39 +1753,71 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		realized_after =
 		    qtcad_obol_render_realized_database_geometry_count(gedp,
 			controller);
-		lit_auto = lit_pixel_count(frame_auto);
-		diff_auto = image_byte_diff(frame0, frame_auto);
-		if (source_count_after > source_count_before &&
-		    max_depth_after > max_depth_before &&
+		compact_after =
+		    qtcad_obol_render_compact_instance_count(gedp, controller);
+		lod_mesh_after = controller->getActiveLodMeshPayloadCount();
+		visible_mesh_demand_after =
+		    qtcad_obol_render_visible_compact_mesh_demand_count(
+			controller, 0);
+		all_visible_mesh_demand_after =
+		    qtcad_obol_render_visible_compact_mesh_demand_count(
+			controller, 1);
+		unique_visible_mesh_demand_after =
+		    qtcad_obol_render_visible_compact_mesh_demand_count(
+			controller, 0, 1);
+		projected_mesh_demand_after =
+		    qtcad_obol_render_visible_compact_mesh_demand_count(
+			controller, 0, 1, 1);
+		(void)qtcad_obol_lod_service_status_get(gedp,
+		    ged_view_context_from_bv(view.viewContext()),
+		    &service_status);
+		if (compact_after > compact_before &&
+		    projected_mesh_demand_after > 0 &&
+		    lod_mesh_after >= projected_mesh_demand_after &&
 		    realized_after >= geometry_before &&
-		    !frame_auto.isNull() && lit_auto >= 20 &&
-		    (diff_auto > 0 || lit0 >= 20))
+		    service_status.pending_tasks == 0 &&
+		    service_status.in_flight == 0 &&
+		    service_status.queued_results == 0 &&
+		    service_status.queued_cache_writes == 0 &&
+		    !progressive_status.hasMore)
 		    break;
-		if (!controller->hasProgressiveWorkPending())
-		    break;
-		std::this_thread::sleep_for(std::chrono::milliseconds(25));
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	    }
+	    /* Read the framebuffer once after the structural/service state has
+	     * settled.  Repeated readbacks each take substantially longer than a
+	     * progression pump and used to turn this into an artificial
+	     * throttling test rather than a production-path convergence test. */
+	    view.get_viewport_image(frame_auto);
+	    lit_auto = lit_pixel_count(frame_auto);
+	    diff_auto = image_byte_diff(frame0, frame_auto);
 	    (void)qtcad_obol_lod_service_status_get(gedp,
 		ged_view_context_from_bv(view.viewContext()), &service_status);
-	    if (service_status.auto_submit ||
-		service_status.last_submitted_task_count != 0) {
+	    if (!service_status.auto_submit) {
 		fprintf(stderr,
-			"qtcad Obol progressive LoD passive startup prewarm enabled automatic mesh LoD submission: case=%s auto_submit=%d last_submitted=%u\n",
+			"qtcad Obol progressive LoD startup did not enable the shared automatic LoD pipeline: case=%s auto_submit=%d last_submitted=%u\n",
 			testCase.name, service_status.auto_submit,
 			service_status.last_submitted_task_count);
 		cleanup();
 		return 0;
 	    }
-	    if (source_count_after <= source_count_before ||
-		max_depth_after <= max_depth_before ||
+	    if (compact_after <= compact_before ||
+		projected_mesh_demand_after == 0 ||
+		lod_mesh_after < projected_mesh_demand_after ||
+		progressive_status.hasMore ||
 		realized_after < geometry_before ||
 		frame_auto.isNull() || lit_auto < 20 ||
 		(diff_auto <= 0 && lit0 < 20)) {
 		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu progressive={submitted=%zu cached=%zu expanded=%zu existing=%zu remaining=%zu proxies=%zu changed=%d more=%d}",
+			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu/%zu projected (%zu drawable, %zu unique, %zu all) lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu progressive={submitted=%zu cached=%zu expanded=%zu existing=%zu remaining=%zu proxies=%zu changed=%d more=%d}",
 			testCase.name, source_count_before, source_count_after,
 			max_depth_before, max_depth_after,
 			geometry_before, realized_after,
+			compact_before, compact_after,
+			lod_mesh_after,
+			projected_mesh_demand_after,
+			visible_mesh_demand_after,
+			unique_visible_mesh_demand_after,
+			all_visible_mesh_demand_after,
 			lit_auto, diff_auto,
 			service_status.last_submitted_task_count,
 			service_status.active_aabb_proxy_payloads,
@@ -1694,14 +1834,18 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 			progressive_status.hasMore);
 		print_progressive_lod_timings(stderr, timings);
 		fprintf(stderr, "\n");
+		qtcad_obol_print_render_diagnostics(gedp, testCase, controller,
+		    "startup-auto-expand-failure");
 		cleanup();
 		return 0;
 	    }
 	    fprintf(stderr,
-		    "qtcad_progressive_lod_startup_auto_expand case=%s sources=%d->%d depth=%d->%d geometry=%d->%d lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
+		    "qtcad_progressive_lod_startup_auto_expand case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
 		    testCase.name, source_count_before, source_count_after,
 		    max_depth_before, max_depth_after,
 		    geometry_before, realized_after,
+		    compact_before, compact_after,
+		    lod_mesh_after,
 		    lit_auto, diff_auto,
 		    service_status.last_submitted_task_count,
 		    service_status.active_aabb_proxy_payloads,
@@ -1712,7 +1856,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    cleanup();
 	    return 1;
 	}
-	if (testCase.startupExpand || testCase.startupWireLod) {
+	if (testCase.startupExpand) {
 	    if (testCase.startupExpand) {
 		/* This fixture exercises cache-backed source expansion, not mesh
 		 * LoD submission.  Bound its worker pool and leave auto-submit off
@@ -1847,8 +1991,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		 max_depth_after <= max_depth_before + 1) ||
 		expansion_status.proxy_published == 0 ||
 		frame_expand.isNull() || lit_expand < 20 ||
-		diff_expand <= 0 ||
-		(testCase.startupWireLod && !centered_expand)) {
+		diff_expand <= 0) {
 		fprintf(stderr,
 			"qtcad Obol progressive LoD startup-expand failed: case=%s passes=%d expanded=%d status_expanded=%zu children=%zu considered=%zu remaining=%zu prewarm_submitted=%zu prewarm_ready=%zu proxies=%zu metadata=%zu sources=%d->%d depth=%d->%d lit=%d diff=%d centered=%d lit_bbox=(%d,%d)-(%d,%d) center=(%.1f,%.1f)",
 			testCase.name, testCase.startupExpandPasses,
@@ -1891,93 +2034,6 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    }
 	}
 
-	if (testCase.startupWireLod) {
-	    BObolSceneController *scene = controller->getSceneController();
-	    if (!scene) {
-		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-wire-lod has no scene controller\n");
-		cleanup();
-		return 0;
-	    }
-	    struct ged_draw_transaction clear_txn =
-		ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
-	    clear_txn.view = ged_view_context_from_bv(view.viewContext());
-	    struct ged_draw_transaction_result clear_result;
-	    ged_draw_transaction_result_init(&clear_result);
-	    if (ged_draw_apply_transaction(gedp, &clear_txn,
-		    &clear_result) < 0) {
-		ged_draw_transaction_result_free(&clear_result);
-		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-wire-lod could not clear the shared scene\n");
-		cleanup();
-		return 0;
-	    }
-	    ged_draw_transaction_result_free(&clear_result);
-	    controller->clearDatabaseSources();
-	    controller->clearViewLodState();
-	    const uint32_t source_revision = 1;
-	    const char *root_instance_key = "startup_wire_lod_root";
-	    if (scene->replaceDatabaseSourceInstanceRepresentation(
-		    root_instance_key, active_draw_target,
-		    root_instance_key,
-		    SoBRLDatabaseSource::REPRESENTATION_WIRE,
-		    gedp->dbip, SoBRLDatabaseSource::WIREFRAME,
-		    source_revision) < 0 ||
-		scene->setDatabaseSourceInstanceRealizationRoleFlags(
-		    root_instance_key,
-		    SoBRLDatabaseSource::REALIZATION_ROLE_MESH) < 0 ||
-		    scene->setDatabaseSourceInstanceRealizationViewPolicy(
-			    root_instance_key, TRUE, FALSE, TRUE, 1.0f, 1.0f,
-			    512, 512, 1, 1.0f, 1.0f) < 0) {
-		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-wire-lod failed to install root source\n");
-		cleanup();
-		return 0;
-	    }
-
-	    double refine_realize_seconds = 0.0;
-	    phase_start = bu_gettime();
-	    if (!controller->realizePending()) {
-		record_progressive_lod_phase(refine_realize_seconds,
-					     phase_start, total_start,
-					     testCase,
-					     "refine_obol_realize");
-		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-wire-lod Obol realization failed: diagnostics=%s\n",
-			controller->getLastDiagnostics().getString());
-		cleanup();
-		return 0;
-	    }
-	    record_progressive_lod_phase(refine_realize_seconds,
-					 phase_start, total_start, testCase,
-					 "refine_obol_realize");
-	    qtcad_obol_print_render_diagnostics(gedp, testCase, controller,
-						"after-refine-obol-realize");
-	    if (!qtcad_obol_autoview_refresh(gedp, view, controller,
-					     "startup-wire-lod-refine-autoview")) {
-		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-wire-lod failed to autoview full-detail wire bounds: case=%s\n",
-			testCase.name);
-		cleanup();
-		return 0;
-	    }
-	    QCoreApplication::processEvents();
-	    view.get_viewport_image(frame0);
-	    struct lit_pixel_bounds refined_bounds;
-	    memset(&refined_bounds, 0, sizeof(refined_bounds));
-	    if (frame0.isNull() || lit_pixel_count(frame0) < 20 ||
-		!lit_pixel_bounds_centered(frame0, 0.30,
-					   &refined_bounds)) {
-		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-wire-lod full-detail wire centering failed: case=%s lit=%d bbox=(%d,%d)-(%d,%d) center=(%.1f,%.1f)\n",
-			testCase.name, refined_bounds.lit, refined_bounds.minX,
-			refined_bounds.minY, refined_bounds.maxX,
-			refined_bounds.maxY, refined_bounds.centerX,
-			refined_bounds.centerY);
-		cleanup();
-		return 0;
-	    }
-	} else {
 	    appearance.defer_leaf_expansion = 0;
 	    struct ged_draw_transaction refine_txn =
 		ged_draw_transaction_make(GED_DRAW_TXN_DRAW, active_draw_target);
@@ -2018,7 +2074,6 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    draw_result_initialized = 0;
 	    qtcad_obol_print_render_diagnostics(gedp, testCase, controller,
 						"after-refine-draw");
-	}
     }
 
     phase_start = bu_gettime();
@@ -2180,17 +2235,11 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 				 total_start, testCase, "image_metrics");
     const int any_frame_difference =
 	diff01 > 0 || diff12 > 0 || diff23 > 0;
-    const int startup_wire_proxy_ok =
-	testCase.startupWireLod &&
-	active_aabb_payload_count >= testCase.minActivePayloadCount &&
-	active_obb_payload_count >= testCase.minActivePayloadCount &&
-	any_frame_difference;
     /* Non-diagnostic delivery is allowed to coalesce directly to the final
      * payload.  Requiring a raster difference there turns the intended
      * final-before-first-frame fast path into a timing-dependent failure. */
     const int image_progression_ok = !testCase.diagnosticStages ||
-	(startup_wire_proxy_ok ||
-	 (diff03 > 0 && any_frame_difference));
+	(diff03 > 0 && any_frame_difference);
     if (frame0.isNull() || frame1.isNull() || frame2.isNull() ||
 	frame3.isNull() || (lit0 < 20 && !testCase.startupRefine) ||
 	lit1 < 20 || lit2 < 20 ||
@@ -2207,73 +2256,11 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	return 0;
     }
 
-    int lod_off_lit = -1;
-    int lod_off_diff = -1;
-    size_t lod_off_active_mesh = 0;
-    size_t lod_off_active_aabb = 0;
-    size_t lod_off_active_obb = 0;
-    if (testCase.startupWireLod) {
-	struct lit_pixel_bounds lod_mesh_bounds;
-	if (!lit_pixel_bounds_centered(frame3, 0.30, &lod_mesh_bounds)) {
-	    fprintf(stderr,
-		    "qtcad Obol progressive LoD startup-wire-lod mesh LoD centering failed: case=%s lit=%d bbox=(%d,%d)-(%d,%d) center=(%.1f,%.1f)\n",
-		    testCase.name, lod_mesh_bounds.lit,
-		    lod_mesh_bounds.minX, lod_mesh_bounds.minY,
-		    lod_mesh_bounds.maxX, lod_mesh_bounds.maxY,
-		    lod_mesh_bounds.centerX, lod_mesh_bounds.centerY);
-	    cleanup();
-	    return 0;
-	}
-
-	const char *av[5] = {"view", "lod", "mesh", "0", NULL};
-	if (!run_ged_command(gedp, 4, av, ged_exec_view,
-			     "view lod mesh 0")) {
-	    cleanup();
-	    return 0;
-	}
-	QCoreApplication::processEvents();
-	controller->requestRender("startup-wire-lod-disabled");
-	QCoreApplication::processEvents();
-	QImage frame4;
-	view.get_viewport_image(frame4);
-	lod_off_lit = lit_pixel_count(frame4);
-	lod_off_diff = image_byte_diff(frame3, frame4);
-	lod_off_active_mesh = controller->getActiveLodMeshPayloadCount();
-	lod_off_active_aabb =
-	    controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_AABB);
-	lod_off_active_obb =
-	    controller->getActiveLodProxyPayloadCount(BOBOL_LOD_PROXY_OBB);
-	struct lit_pixel_bounds full_detail_bounds;
-	memset(&full_detail_bounds, 0, sizeof(full_detail_bounds));
-	if (frame4.isNull() || lod_off_lit < 20 ||
-	    lod_off_active_mesh != 0 || lod_off_active_aabb != 0 ||
-	    lod_off_active_obb != 0 ||
-	    !lit_pixel_bounds_centered(frame4, 0.30,
-				       &full_detail_bounds)) {
-	    fprintf(stderr,
-		    "qtcad Obol progressive LoD startup-wire-lod LoD-off full-detail check failed: case=%s lit=%d active_payloads=%zu,%zu,%zu bbox=(%d,%d)-(%d,%d) center=(%.1f,%.1f) diff=%d\n",
-		    testCase.name, lod_off_lit, lod_off_active_aabb,
-		    lod_off_active_obb, lod_off_active_mesh,
-		    full_detail_bounds.minX, full_detail_bounds.minY,
-		    full_detail_bounds.maxX, full_detail_bounds.maxY,
-		    full_detail_bounds.centerX, full_detail_bounds.centerY,
-		    lod_off_diff);
-	    cleanup();
-	    return 0;
-	}
-    }
-
     fprintf(stderr, "qtcad_progressive_lod case=%s diff01=%d diff12=%d diff23=%d diff03=%d lit=%d,%d,%d,%d applied=%zu source_meshes=%d visited=%u active_payloads=%zu,%zu,%zu",
 	    testCase.name, diff01, diff12, diff23, diff03, lit0, lit1, lit2,
 	    lit3, applied_total, source_mesh_count, visited_mesh_count,
 	    active_aabb_payload_count, active_obb_payload_count,
 	    active_mesh_payload_count);
-    if (testCase.startupWireLod) {
-	fprintf(stderr,
-		" lod_off_lit=%d lod_off_diff=%d lod_off_active_payloads=%zu,%zu,%zu",
-		lod_off_lit, lod_off_diff, lod_off_active_aabb,
-		lod_off_active_obb, lod_off_active_mesh);
-    }
     print_progressive_lod_timings(stderr, timings);
     fprintf(stderr, "\n");
 

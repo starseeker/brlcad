@@ -1,5 +1,11 @@
 brlcad_addexec(test_bobol_prototype test_prototype.cpp "libBObol;libwdb;libbg;libbu;Obol::Obol" TEST ALL_CXX)
 brlcad_add_test(NAME libBObol_prototype COMMAND test_bobol_prototype)
+if(TARGET pinewood.g)
+  add_dependencies(test_bobol_prototype pinewood.g)
+endif(TARGET pinewood.g)
+if(TARGET havoc.g)
+  add_dependencies(test_bobol_prototype havoc.g)
+endif(TARGET havoc.g)
 set_property(TEST libBObol_prototype APPEND PROPERTY ENVIRONMENT BRLCAD_ROOT=${CMAKE_BINARY_DIR})
 
 brlcad_find_package(OSMESA REQUIRED)

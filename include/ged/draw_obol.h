@@ -152,6 +152,15 @@ ged_draw_obol_lighting_sync(struct ged *gedp,
 					  struct ged_view_context *view_ctx);
 
 /**
+ * Synchronize per-view normal presentation policy into the live Obol
+ * controller.  This invalidates renderer presentation data only; retained
+ * PoP hierarchy and resident mesh prefixes are unchanged.
+ */
+GED_EXPORT int
+ged_draw_obol_shading_sync(struct ged *gedp,
+					 struct ged_view_context *view_ctx);
+
+/**
  * Erase a sub-path from within an already-drawn ancestor group's realization
  * (physically removes the child node via the scene controller's
  * eraseGroupSubpath).  parent_path is the drawn ancestor (e.g. "all.g"), and

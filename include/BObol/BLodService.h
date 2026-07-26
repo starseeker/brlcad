@@ -31,12 +31,14 @@ typedef void (*BObolLodResultReadyCB)(
 	BObolLodService *service, void *userData);
 
 struct BOBOL_EXPORT BObolMeshLodProvider {
+    BObolLodService *service;
     struct db_i *dbip;
     struct bv_view_info view;
     SbBool useView;
     SbBool refreshMissing;
     SbBool useForcedLevel;
     SbBool shrinkAfterCopy;
+    SbBool compactResident;
     int forcedLevel;
     int reset;
 
@@ -168,6 +170,24 @@ public:
     size_t activeRequestCountForDiagnostics(void) const;
     size_t completedTaskCountForDiagnostics(void) const;
     size_t cancelledGenerationCountForDiagnostics(void) const;
+    size_t residentMeshAssetCountForDiagnostics(void) const;
+    uint64_t residentMeshCacheLoadCountForDiagnostics(void) const;
+    uint64_t residentMeshHitCountForDiagnostics(void) const;
+    uint64_t residentMeshCompactionCountForDiagnostics(void) const;
+
+    BObolLodResult realizeResidentMeshLod(
+	const BObolLodRequest &request,
+	const BObolMeshLodProvider &provider);
+    /* Replace one view consumer's complete stable demand snapshot, aggregate
+     * it with every other consumer, and trim only assets whose resident prefix
+     * exceeds the aggregate maximum plus headroom.  Returns the number of
+     * assets compacted. */
+    size_t compactResidentMeshes(
+	uint64_t consumerId,
+	uint64_t demandRevision,
+	const std::vector<BObolLodResidentDemand> &demands,
+	int headroomLevels = 1);
+    void releaseResidentMeshConsumer(uint64_t consumerId);
 
 private:
     BObolLodService(const BObolLodService &);

@@ -214,6 +214,7 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbBool pointGeometry;
     SbBool meshGeometry;
     SbBool lodBacked;
+    SbBool sourceMeshRequestValid;
     SbBool visible;
     SbBool selectable;
     SbBool selected;
@@ -879,6 +880,12 @@ public:
     SoBRLMeshShape *getRealizedMesh(int index) const;
     int getRealizedMeshCount(void) const;
     SbBool hasRealizedMeshGeometry(void) const;
+    /** True when compact occurrences can refine their current display
+     * geometry from a source-backed mesh request. */
+    SbBool hasDisplayMeshLodRequests(void) const;
+    /** Monotonic source-local display revision used to invalidate view demand
+     * when compact occurrences are added or replaced. */
+    uint64_t getDisplayMeshLodRevision(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
     int getRealizedMaterialObjectCount(void) const;
@@ -920,6 +927,8 @@ public:
 	BObolCompactInstanceSummary &summary) const;
     SbBool isCompactInstanceHandleValid(
 	const BObolCompactInstanceHandle &handle) const;
+    /* Constant-time occurrence lookup used by per-view LoD result routing. */
+    SbBool hasCompactInstanceKey(const char *occurrenceKey) const;
     int getCompactInstanceCountForPath(const char *path,
 	SbBool includeDescendants = TRUE) const;
     SbBool getCompactInstanceBoundsForPath(const char *path,
@@ -945,8 +954,11 @@ public:
 	uint32_t sourceRevision = 0);
     int prepareCompiledAssembly(void);
     SoBRLCadAssembly *compactViewLodAssembly(
-	const std::vector<const BObolViewLodState::CadPayload *> &payloads)
+	const std::vector<const BObolViewLodState::CadPayload *> &payloads,
+	const BObolViewLodState *viewState)
 	const;
+    SoBRLCadAssembly *currentCompactViewLodAssembly(
+	const BObolViewLodState *viewState) const;
     SbBool hasCompiledAssembly(void) const;
     int getCompiledAssemblyPartCount(void) const;
     int getCompiledAssemblyInstanceCount(void) const;

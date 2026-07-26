@@ -7,10 +7,12 @@
 
 #include "common.h"
 
+#include "bu/log.h"
 #include "bu/str.h"
 
 #include "BObol/BDatabaseSource.h"
 #include "BObol/BLodService.h"
+#include "BObol/BMeshLodCache.h"
 #include "BObol/BMeshLodSubmitAction.h"
 #include "BObol/BMeshShape.h"
 #include "BObol/BViewLod.h"
@@ -22,9 +24,12 @@
 #include <Inventor/nodes/SoNode.h>
 
 #include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unordered_map>
 
 SO_ACTION_SOURCE(SoBRLMeshLodSubmitAction);
 
@@ -33,19 +38,21 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     dbip(NULL),
     databaseId(""),
     databaseRevision(0),
+    viewVolume(),
+    useViewVolume(FALSE),
+    targetPixelError(1.0f),
     generation(0),
     viewRevision(0),
     policyRevision(0),
     providerId("bobol_mesh_lod"),
-    providerVersion("bobol-cache-v1"),
+    providerVersion(BOBOL_MESH_LOD_PROVIDER_VERSION),
     qualityTier(BOBOL_LOD_QUALITY_FAST_DISPLAY),
     refreshMissing(TRUE),
     reset(0),
     useForcedLevel(FALSE),
     forcedLevel(0),
     requireLodBacked(TRUE),
-    submitAabbProxyStage(FALSE),
-    submitObbProxyStage(FALSE),
+    allowLevelDowngrade(FALSE),
     viewState(NULL),
     compactEntryFirst(0),
     compactEntryLimit(SIZE_MAX),
@@ -54,6 +61,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     deferredCompactEntries(FALSE),
     visitedMeshCount(0),
     submittedTaskCount(0),
+    updatedCutCount(0),
     skippedMeshCount(0),
     diagnostics("")
 {
@@ -111,6 +119,21 @@ SoBRLMeshLodSubmitAction::setViewInfo(const struct bv_view_info *info)
 const struct bv_view_info &
 SoBRLMeshLodSubmitAction::getViewInfo(void) const {
     return this->view;
+}
+
+void
+SoBRLMeshLodSubmitAction::setViewVolume(const SbViewVolume *volume,
+	float newTargetPixelError)
+{
+    if (volume) {
+	this->viewVolume = *volume;
+	this->useViewVolume = TRUE;
+    } else {
+	this->useViewVolume = FALSE;
+    }
+    this->targetPixelError =
+	(std::isfinite(newTargetPixelError) && newTargetPixelError > 0.0f) ?
+	newTargetPixelError : 1.0f;
 }
 
 void
@@ -198,28 +221,20 @@ SoBRLMeshLodSubmitAction::getRequireLodBacked(void) const
 }
 
 void
-SoBRLMeshLodSubmitAction::setProxyStages(SbBool submitAabb,
-	SbBool submitObb)
+SoBRLMeshLodSubmitAction::setAllowLevelDowngrade(SbBool allow)
 {
-    this->submitAabbProxyStage = submitAabb ? TRUE : FALSE;
-    this->submitObbProxyStage = submitObb ? TRUE : FALSE;
+    this->allowLevelDowngrade = allow ? TRUE : FALSE;
 }
 
 SbBool
-SoBRLMeshLodSubmitAction::getSubmitAabbProxyStage(void) const
+SoBRLMeshLodSubmitAction::getAllowLevelDowngrade(void) const
 {
-    return this->submitAabbProxyStage;
-}
-
-SbBool
-SoBRLMeshLodSubmitAction::getSubmitObbProxyStage(void) const
-{
-    return this->submitObbProxyStage;
+    return this->allowLevelDowngrade;
 }
 
 void
 SoBRLMeshLodSubmitAction::setViewLodState(
-    const BObolViewLodState *newViewState)
+    BObolViewLodState *newViewState)
 {
     this->viewState = newViewState;
 }
@@ -268,6 +283,12 @@ SoBRLMeshLodSubmitAction::getSubmittedTaskCount(void) const
 }
 
 unsigned int
+SoBRLMeshLodSubmitAction::getUpdatedCutCount(void) const
+{
+    return this->updatedCutCount;
+}
+
+unsigned int
 SoBRLMeshLodSubmitAction::getSkippedMeshCount(void) const
 {
     return this->skippedMeshCount;
@@ -284,6 +305,7 @@ SoBRLMeshLodSubmitAction::beginTraversal(SoNode *node)
 {
     this->visitedMeshCount = 0;
     this->submittedTaskCount = 0;
+    this->updatedCutCount = 0;
     this->skippedMeshCount = 0;
     this->diagnostics = "";
     this->compactEntryNext = this->compactEntryFirst;
@@ -378,6 +400,191 @@ mesh_lod_make_source_request(const SoBRLDatabaseSource *source,
     }
 }
 
+/* Convert an occurrence-local bound to a quantized screen-space PoP demand.
+ * Returning false means the box is wholly outside the current frustum and no
+ * display payload should be loaded for this view. */
+static SbBool
+mesh_lod_apply_projected_demand(BObolLodRequest &request,
+	const SbBox3f &localBounds, const SbMatrix &localToRoot,
+	const SbViewVolume &viewVolume, const struct bv_view_info &view,
+	float targetPixelError)
+{
+    if (localBounds.isEmpty())
+	return TRUE;
+
+    SbBox3f worldBounds;
+    worldBounds.makeEmpty();
+    SbVec3f projectedMin(FLT_MAX, FLT_MAX, FLT_MAX);
+    SbVec3f projectedMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    SbBool haveProjected = FALSE;
+    const SbVec3f bmin = localBounds.getMin();
+    const SbVec3f bmax = localBounds.getMax();
+    SbVec3f worldCorners[8];
+    for (int corner = 0; corner < 8; corner++) {
+	const SbVec3f local(
+	    (corner & 1) ? bmax[0] : bmin[0],
+	    (corner & 2) ? bmax[1] : bmin[1],
+	    (corner & 4) ? bmax[2] : bmin[2]);
+	localToRoot.multVecMatrix(local, worldCorners[corner]);
+	worldBounds.extendBy(worldCorners[corner]);
+    }
+    if (worldBounds.isEmpty() || !viewVolume.intersect(worldBounds))
+	return FALSE;
+
+    for (const SbVec3f &world : worldCorners) {
+	SbVec3f projected;
+	viewVolume.projectToScreen(world, projected);
+	if (!std::isfinite(projected[0]) || !std::isfinite(projected[1]))
+	    continue;
+	haveProjected = TRUE;
+	projectedMin[0] = std::min(projectedMin[0], projected[0]);
+	projectedMin[1] = std::min(projectedMin[1], projected[1]);
+	projectedMax[0] = std::max(projectedMax[0], projected[0]);
+	projectedMax[1] = std::max(projectedMax[1], projected[1]);
+    }
+    if (!haveProjected)
+	return TRUE;
+
+    /* Visibility is clipped by the frustum test above, but geometric error
+     * must use the full projected extent.  Clipping the extent to the
+     * viewport made a very large part that was only partly visible look no
+     * larger than the window, selecting a cut several levels too coarse for
+     * the visible sliver. */
+    const float widthPixels =
+	std::max(0.0f, projectedMax[0] - projectedMin[0]) *
+	static_cast<float>(std::max(1, view.width));
+    const float heightPixels =
+	std::max(0.0f, projectedMax[1] - projectedMin[1]) *
+	static_cast<float>(std::max(1, view.height));
+    const float diameter = std::max(widthPixels, heightPixels);
+    const float policyScale =
+	(std::isfinite(view.lod.scale) && view.lod.scale > 0.0) ?
+	static_cast<float>(view.lod.scale) : 1.0f;
+    const float pixelError =
+	(std::isfinite(targetPixelError) && targetPixelError > 0.0f) ?
+	targetPixelError / policyScale : 1.0f / policyScale;
+    int level = 0;
+    if (diameter > pixelError)
+	level = static_cast<int>(std::ceil(std::log2(diameter / pixelError)));
+    /* PoP coordinates are 16-bit, hence levels 0..15.  The cache clamps this
+     * to the populated terminal level of the complete hierarchy. */
+    level = std::max(0, std::min(15, level));
+    request.projectedPixelDiameter = diameter;
+    request.targetPixelError = pixelError;
+    request.requestedLevel = level;
+    return TRUE;
+}
+
+static void
+mesh_lod_apply_level_hysteresis(BObolLodRequest &request, int activeLevel)
+{
+    if (activeLevel < 0 || request.requestedLevel < 0 ||
+	request.requestedLevel == activeLevel || request.targetPixelError <= 0.0f)
+	return;
+
+    const double ratio = static_cast<double>(request.projectedPixelDiameter) /
+	static_cast<double>(request.targetPixelError);
+    const double upper = std::ldexp(1.0, activeLevel) * 1.25;
+    const double lower = activeLevel > 0 ?
+	std::ldexp(1.0, activeLevel - 1) * 0.75 : 0.0;
+    if ((request.requestedLevel > activeLevel && ratio <= upper) ||
+	(request.requestedLevel < activeLevel && ratio >= lower))
+	request.requestedLevel = activeLevel;
+}
+
+static void
+mesh_lod_trace_projected_request(const BObolLodRequest &request,
+	const SbBox3f &localBounds, const SbMatrix &localToRoot,
+	int activeLevel)
+{
+    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+    if (!filter || !filter[0])
+	return;
+    const char *name = request.objectName.getString();
+    const char *path = request.objectPath.getString();
+    if ((!name || !strstr(name, filter)) &&
+	(!path || !strstr(path, filter)))
+	return;
+
+    const SbVec3f bmin = localBounds.isEmpty() ?
+	SbVec3f(0.0f, 0.0f, 0.0f) : localBounds.getMin();
+    const SbVec3f bmax = localBounds.isEmpty() ?
+	SbVec3f(0.0f, 0.0f, 0.0f) : localBounds.getMax();
+    const float *m = localToRoot[0];
+    bu_log("BObol LoD trace object=%s path=%s occurrence=%s "
+	   "pixels=%.9g error=%.9g request_level=%d active_level=%d "
+	   "bounds=[%.9g %.9g %.9g]-[%.9g %.9g %.9g] "
+	   "matrix=[%.9g %.9g %.9g %.9g; %.9g %.9g %.9g %.9g; "
+	   "%.9g %.9g %.9g %.9g; %.9g %.9g %.9g %.9g]\n",
+	   name ? name : "", path ? path : "",
+	   request.occurrenceKey.getString(),
+	   request.projectedPixelDiameter, request.targetPixelError,
+	   request.requestedLevel, activeLevel,
+	   bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2],
+	   m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+	   m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+}
+
+static SbBool
+mesh_lod_geometry_key_matches(const SbString &payloadKey,
+	const BObolLodRequest &request)
+{
+    if (payloadKey.getLength() == 0)
+	return FALSE;
+    const BObolLodCacheKey key = bobol_lod_geometry_cache_key(request);
+    return key.isValid() &&
+	bu_strcmp(payloadKey.getString(), key.value.getString()) == 0;
+}
+
+static SbBool
+mesh_lod_cad_payload_is_resident(
+	const BObolViewLodState::CadPayload *payload,
+	const BObolLodRequest &request)
+{
+    return payload && payload->isValid() &&
+	(payload->resultKind == BOBOL_LOD_RESULT_MESH ||
+	 payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) &&
+	payload->providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	mesh_lod_geometry_key_matches(payload->cacheKey, request) &&
+	payload->activeLevel == request.requestedLevel;
+}
+
+static SbBool
+mesh_lod_cad_payload_has_same_source(
+	const BObolViewLodState::CadPayload *payload,
+	const BObolLodRequest &request)
+{
+    if (!payload || payload->requestedLevel < 0)
+	return FALSE;
+    BObolLodRequest payloadRequest = request;
+    payloadRequest.requestedLevel = payload->requestedLevel;
+    return mesh_lod_cad_payload_is_resident(payload, payloadRequest);
+}
+
+static SbBool
+mesh_lod_mesh_payload_is_resident(
+	const BObolViewLodState::MeshPayload *payload,
+	const BObolLodRequest &request)
+{
+    return payload && payload->isValid() &&
+	payload->resultKind == BOBOL_LOD_RESULT_MESH &&
+	payload->providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	mesh_lod_geometry_key_matches(payload->cacheKey, request) &&
+	payload->activeLevel == request.requestedLevel;
+}
+
+static SbBool
+mesh_lod_mesh_payload_has_same_source(
+	const BObolViewLodState::MeshPayload *payload,
+	const BObolLodRequest &request)
+{
+    if (!payload || payload->requestedLevel < 0)
+	return FALSE;
+    BObolLodRequest payloadRequest = request;
+    payloadRequest.requestedLevel = payload->requestedLevel;
+    return mesh_lod_mesh_payload_is_resident(payload, payloadRequest);
+}
+
 static uint32_t
 mesh_lod_debug_delay_milliseconds(const char *env_name)
 {
@@ -392,53 +599,6 @@ mesh_lod_debug_delay_milliseconds(const char *env_name)
 	return 0;
 
     return (uint32_t)value;
-}
-
-static int
-mesh_lod_submit_proxy_task(BObolLodService *service,
-			   struct db_i *dbip,
-			   uint64_t generation,
-			   const BObolLodRequest &request,
-			   int proxyKind,
-			   uint64_t dependencyTaskId,
-			   const char *delayEnv,
-			   unsigned int *submittedTaskCount,
-			   uint64_t *taskIdOut)
-{
-    if (taskIdOut)
-	*taskIdOut = 0;
-    if (!service || !service->isRunning())
-	return 0;
-    if (service->hasActiveRequest(request))
-	return 0;
-
-    BObolRtProxyProvider *provider = new BObolRtProxyProvider;
-    provider->dbip = dbip;
-    provider->proxyKind = proxyKind;
-    provider->useRequestBounds = TRUE;
-
-    BObolLodTask task;
-    task.generation = generation;
-    task.request = request;
-    if (dependencyTaskId != 0)
-	task.addDependency(dependencyTaskId);
-    task.realize = bobol_rt_proxy_provider_task;
-    task.realizeData = provider;
-    task.realizeDataFree = bobol_rt_proxy_provider_free;
-    task.debugDelayMilliseconds =
-	mesh_lod_debug_delay_milliseconds(delayEnv);
-
-    uint64_t taskId = service->submitIfNotActive(task);
-    if (taskId == 0) {
-	bobol_rt_proxy_provider_free(provider);
-	return 0;
-    }
-
-    if (taskIdOut)
-	*taskIdOut = taskId;
-    if (submittedTaskCount)
-	(*submittedTaskCount)++;
-    return 1;
 }
 
 void
@@ -460,6 +620,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    BOBOL_LOD_DRAW_HIDDEN_LINE :
 	    (source->drawMode.getValue() == SoBRLDatabaseSource::SHADED ?
 	    BOBOL_LOD_DRAW_SHADED : BOBOL_LOD_DRAW_WIRE);
+	std::unordered_map<std::string,
+	    const BObolViewLodState::CadPayload *> activePayloads;
+	if (submitAction->viewState) {
+	    std::vector<const BObolViewLodState::CadPayload *> payloads;
+	    submitAction->viewState->findCadPayloads(source, payloads);
+	    activePayloads.reserve(payloads.size());
+	    for (const BObolViewLodState::CadPayload *payload : payloads) {
+		if (payload && payload->sourceInstanceKey.getLength() > 0)
+		    activePayloads[payload->sourceInstanceKey.getString()] =
+			payload;
+	    }
+	}
 	const int count = source->getCompactInstanceCount();
 	const size_t sourceFirst = submitAction->compactEntryTotal;
 	submitAction->compactEntryTotal += static_cast<size_t>(count);
@@ -496,12 +668,34 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    "LoD submit action has no database");
 		continue;
 	    }
+	    /* Native shaded geometry is already the stable presentation for
+	     * analytic primitives such as TGCs.  A source-wide nonzero BoT
+	     * threshold does not make those meshes PoP-backed.  Only occurrences
+	     * carrying the explicit source-mesh request contract may enter the
+	     * cache provider; otherwise a guaranteed cache miss can displace the
+	     * useful native presentation with its structural box fallback. */
+	    const bool lodEligible =
+		summary.lodBacked && summary.sourceMeshRequestValid;
+	    const bool meshEligible = lodEligible ||
+		(!submitAction->requireLodBacked &&
+		 (summary.meshGeometry ||
+		  (source->realizationRoleFlags.getValue() &
+		   SoBRLDatabaseSource::REALIZATION_ROLE_MESH)));
+	    if (!meshEligible) {
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
 
 	    BObolLodRequest request;
 	    request.databaseId = submitAction->databaseId;
 	    request.databaseRevision = submitAction->databaseRevision;
 	    request.sourceRevision = source->sourceRevision.getValue();
-	    request.sourceContentHash = summary.geometryIdentity;
+	    /* The compact part may currently be only an AABB and will be
+	     * replaced by richer presentation data.  Its part identity is not
+	     * source-content identity.  Leaving this unset makes the stable
+	     * geometry key use database/source revisions and object identity,
+	     * which survive box -> PoP presentation replacement. */
+	    request.sourceContentHash = 0;
 	    request.objectPath = target;
 	    request.objectName = summary.sourceName;
 	    request.occurrenceKey = summary.sourceInstanceKey;
@@ -514,63 +708,100 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    request.providerVersion = submitAction->providerVersion;
 	    request.qualityTier = submitAction->qualityTier;
 	    request.bounds = summary.localBounds;
-
-	    uint64_t dependencyTaskId = 0;
-	    if (!summary.localBounds.isEmpty() &&
-		(submitAction->submitAabbProxyStage ||
-		 submitAction->submitObbProxyStage)) {
-		BObolLodRequest proxyRequest = request;
-		proxyRequest.providerId = "rt_proxy_aabb";
-		proxyRequest.providerVersion = "rt-proxy-v1";
-		proxyRequest.qualityTier = BOBOL_LOD_QUALITY_PROXY;
-		if (submitAction->submitAabbProxyStage)
-		    (void)mesh_lod_submit_proxy_task(submitAction->service,
-			submitAction->dbip, submitAction->generation,
-			proxyRequest, BOBOL_LOD_PROXY_AABB, 0,
-			"BOBOL_LOD_AABB_TASK_DELAY_MS",
-			&submitAction->submittedTaskCount,
-			&dependencyTaskId);
-		if (submitAction->submitObbProxyStage) {
-		    proxyRequest.providerId = "rt_proxy_obb";
-		    uint64_t obbTaskId = 0;
-		    (void)mesh_lod_submit_proxy_task(submitAction->service,
-			submitAction->dbip, submitAction->generation,
-			proxyRequest, BOBOL_LOD_PROXY_OBB,
-			dependencyTaskId,
-			"BOBOL_LOD_OBB_TASK_DELAY_MS",
-			&submitAction->submittedTaskCount, &obbTaskId);
-		    if (obbTaskId)
-			dependencyTaskId = obbTaskId;
-		}
-	    }
-
-	    const bool meshEligible = summary.meshGeometry ||
-		(source->realizationRoleFlags.getValue() &
-		 SoBRLDatabaseSource::REALIZATION_ROLE_MESH);
-	    if (!meshEligible ||
-		(submitAction->requireLodBacked && !summary.lodBacked &&
-		 source->lodBotThreshold.getValue() == 0)) {
+	    /* Compact summaries already report the complete geometry-to-root
+	     * transform, including the source draw matrix.  Applying the source
+	     * matrix again corrupts screen bounds (and can make a visible leaf
+	     * look tiny or off-screen to the LoD selector). */
+	    SbMatrix localToRoot = summary.localToSource;
+	    if (submitAction->useViewVolume &&
+		!mesh_lod_apply_projected_demand(request, summary.localBounds,
+		    localToRoot, submitAction->viewVolume,
+		    submitAction->view, submitAction->targetPixelError)) {
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
+	    const auto activeIt =
+		activePayloads.find(request.occurrenceKey.getString());
+	    const BObolViewLodState::CadPayload *activePayload =
+		activeIt != activePayloads.end() ? activeIt->second : NULL;
+	    if (submitAction->useForcedLevel)
+		request.requestedLevel = submitAction->forcedLevel;
+	    else if (activePayload)
+		mesh_lod_apply_level_hysteresis(request,
+		    activePayload->activeLevel);
+	    mesh_lod_trace_projected_request(request, summary.localBounds,
+		localToRoot, activePayload ? activePayload->activeLevel : -1);
 
-	    const SbBool suppressActiveDuplicate =
+	    /* A camera epoch is not a geometry invalidation.  Keep the current
+	     * cut when it already satisfies this demand, and never coarsen it
+	     * during motion.  Settled zoom-out may explicitly request a smaller
+	     * cut to reclaim display memory. */
+	    if (!submitAction->useForcedLevel &&
+		mesh_lod_cad_payload_is_resident(activePayload, request)) {
+		submitAction->skippedMeshCount++;
+		submitAction->appendDiagnostic(target,
+		    "current LoD request is already resident");
+		continue;
+	    }
+	    if (!submitAction->useForcedLevel &&
+		!submitAction->allowLevelDowngrade && activePayload &&
+		activePayload->activeLevel > request.requestedLevel &&
+		mesh_lod_cad_payload_has_same_source(activePayload, request)) {
+		submitAction->skippedMeshCount++;
+		submitAction->appendDiagnostic(target,
+		    "finer resident LoD retained during interaction");
+		continue;
+	    }
+	    if (submitAction->reset == 0 && activePayload &&
+		mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
+		activePayload->activeLevel != request.requestedLevel &&
+		submitAction->viewState->retargetCadPayload(activePayload,
+		    request.requestedLevel, request.viewRevision,
+		    request.policyRevision)) {
+		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		if (filter && filter[0] &&
+		    (strstr(request.objectName.getString(), filter) ||
+		     strstr(request.objectPath.getString(), filter)))
+		    bu_log("BObol LoD submit trace object=%s level=%d "
+			   "retargeted_resident=%d\n",
+			   request.objectName.getString(),
+			   request.requestedLevel,
+			   activePayload->progressiveMesh ?
+			       activePayload->progressiveMesh->residentLevel() : -1);
+		submitAction->updatedCutCount++;
+		continue;
+	    }
+
+	const SbBool suppressActiveDuplicate =
 		(!submitAction->useForcedLevel && submitAction->reset == 0) ?
 		TRUE : FALSE;
 	    if (suppressActiveDuplicate &&
 		submitAction->service->hasActiveRequest(request)) {
+		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		if (filter && filter[0] &&
+		    (strstr(request.objectName.getString(), filter) ||
+		     strstr(request.objectPath.getString(), filter)))
+		    bu_log("BObol LoD submit trace object=%s level=%d "
+			   "suppressed=active\n",
+			   request.objectName.getString(),
+			   request.requestedLevel);
 		submitAction->skippedMeshCount++;
 		continue;
 	    }
 
 	    BObolMeshLodProvider *provider = new BObolMeshLodProvider;
+	    provider->service = submitAction->service;
 	    provider->dbip = submitAction->dbip;
 	    provider->view = submitAction->view;
 	    provider->useView = TRUE;
 	    provider->refreshMissing = submitAction->refreshMissing;
 	    provider->useForcedLevel = submitAction->useForcedLevel;
 	    provider->forcedLevel = submitAction->forcedLevel;
-	    provider->shrinkAfterCopy = TRUE;
+	    provider->shrinkAfterCopy = FALSE;
+		    /* A shared source asset may serve many occurrences at
+		     * different levels.  Trimming is therefore a post-generation
+		     * aggregate operation, never a leaf-request side effect. */
+		    provider->compactResident = FALSE;
 	    provider->reset = submitAction->reset;
 
 	    BObolLodTask task;
@@ -579,17 +810,32 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    task.realize = bobol_mesh_lod_provider_task;
 	    task.realizeData = provider;
 	    task.realizeDataFree = bobol_mesh_lod_provider_free;
-	    if (dependencyTaskId)
-		task.addDependency(dependencyTaskId);
 	    task.debugDelayMilliseconds = mesh_lod_debug_delay_milliseconds(
 		"BOBOL_LOD_TASK_DELAY_MS");
 	    const uint64_t taskId = suppressActiveDuplicate ?
 		submitAction->service->submitIfNotActive(task) :
 		submitAction->service->submit(task);
 	    if (!taskId) {
+		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		if (filter && filter[0] &&
+		    (strstr(request.objectName.getString(), filter) ||
+		     strstr(request.objectPath.getString(), filter)))
+		    bu_log("BObol LoD submit trace object=%s level=%d "
+			   "rejected=service\n",
+			   request.objectName.getString(),
+			   request.requestedLevel);
 		bobol_mesh_lod_provider_free(provider);
 		submitAction->skippedMeshCount++;
 	    } else {
+		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		if (filter && filter[0] &&
+		    (strstr(request.objectName.getString(), filter) ||
+		     strstr(request.objectPath.getString(), filter)))
+		    bu_log("BObol LoD submit trace object=%s level=%d "
+			   "task=%llu\n",
+			   request.objectName.getString(),
+			   request.requestedLevel,
+			   static_cast<unsigned long long>(taskId));
 		submitAction->submittedTaskCount++;
 	    }
 	}
@@ -622,71 +868,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	source->drawMode.getValue() == SoBRLDatabaseSource::SHADED ?
 	BOBOL_LOD_DRAW_SHADED : BOBOL_LOD_DRAW_WIRE;
     const int roleFlags = source->realizationRoleFlags.getValue();
-    const int meshEligible =
-	(roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
-	source->drawMode.getValue() == SoBRLDatabaseSource::SHADED ||
-	source->representationMode.getValue() ==
-	SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS ||
-	source->representationMode.getValue() ==
-	SoBRLDatabaseSource::REPRESENTATION_SHADED ||
-	mesh_lod_source_is_threshold_bot(source);
-    SbBox3f sourceBounds;
-    const SbBool hasSourceBounds = source->getSourceBounds(sourceBounds);
-
-    uint64_t dependencyTaskId = 0;
-    if (hasSourceBounds &&
-	(submitAction->submitAabbProxyStage ||
-	 submitAction->submitObbProxyStage)) {
-	BObolLodRequest aabbRequest;
-	mesh_lod_make_source_request(source, aabbRequest,
-	    submitAction->databaseId.getString(),
-	    submitAction->databaseRevision,
-	    submitAction->viewRevision,
-	    submitAction->policyRevision,
-	    sourceDrawMode, "rt_proxy_aabb", "rt-proxy-v1",
-	    BOBOL_LOD_QUALITY_PROXY);
-
-	if (submitAction->submitAabbProxyStage)
-	    (void)mesh_lod_submit_proxy_task(submitAction->service,
-		submitAction->dbip, submitAction->generation, aabbRequest,
-		BOBOL_LOD_PROXY_AABB, 0,
-		"BOBOL_LOD_AABB_TASK_DELAY_MS",
-		&submitAction->submittedTaskCount, &dependencyTaskId);
-
-	if (submitAction->submitObbProxyStage) {
-	    BObolLodRequest obbRequest;
-	    mesh_lod_make_source_request(source, obbRequest,
-		submitAction->databaseId.getString(),
-		submitAction->databaseRevision,
-		submitAction->viewRevision,
-		submitAction->policyRevision,
-		sourceDrawMode, "rt_proxy_obb", "rt-proxy-v1",
-		BOBOL_LOD_QUALITY_PROXY);
-	    uint64_t obbTaskId = 0;
-	    (void)mesh_lod_submit_proxy_task(submitAction->service,
-		submitAction->dbip, submitAction->generation, obbRequest,
-		BOBOL_LOD_PROXY_OBB, dependencyTaskId,
-		"BOBOL_LOD_OBB_TASK_DELAY_MS",
-		&submitAction->submittedTaskCount, &obbTaskId);
-	    if (obbTaskId != 0)
-		dependencyTaskId = obbTaskId;
-	}
-    } else if (submitAction->submitAabbProxyStage ||
-	       submitAction->submitObbProxyStage) {
-	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target,
-				       "compact source has no leaf-derived bounds for proxy LoD");
-    }
+    const int lodEligible = mesh_lod_source_is_threshold_bot(source);
+    const int meshEligible = lodEligible ||
+	(!submitAction->requireLodBacked &&
+	 ((roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
+	  source->drawMode.getValue() == SoBRLDatabaseSource::SHADED ||
+	  source->representationMode.getValue() ==
+	      SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS ||
+	  source->representationMode.getValue() ==
+	      SoBRLDatabaseSource::REPRESENTATION_SHADED));
 
     if (!meshEligible) {
-	source->doAction(action);
-	return;
-    }
-    if (submitAction->requireLodBacked &&
-	source->lodBotThreshold.getValue() == 0) {
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target,
-				       "compact source is not LoD-backed");
 	source->doAction(action);
 	return;
     }
@@ -701,6 +894,51 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	submitAction->providerId.getString(),
 	submitAction->providerVersion.getString(),
 	submitAction->qualityTier);
+    if (submitAction->useViewVolume) {
+	SbMatrix localToRoot = source->drawMatrixValid.getValue() ?
+	    source->drawMatrix.getValue() : SbMatrix::identity();
+	if (!mesh_lod_apply_projected_demand(request, request.bounds,
+		localToRoot, submitAction->viewVolume, submitAction->view,
+		submitAction->targetPixelError)) {
+	    submitAction->skippedMeshCount++;
+	    source->doAction(action);
+	    return;
+	}
+    }
+    const BObolViewLodState::CadPayload *activePayload =
+	submitAction->viewState ? submitAction->viewState->findCad(source) : NULL;
+    if (submitAction->useForcedLevel)
+	request.requestedLevel = submitAction->forcedLevel;
+    else if (activePayload)
+	mesh_lod_apply_level_hysteresis(request, activePayload->activeLevel);
+    if (!submitAction->useForcedLevel &&
+	mesh_lod_cad_payload_is_resident(activePayload, request)) {
+	submitAction->skippedMeshCount++;
+	submitAction->appendDiagnostic(target,
+				       "current LoD request is already resident");
+	source->doAction(action);
+	return;
+    }
+    if (!submitAction->useForcedLevel &&
+	!submitAction->allowLevelDowngrade && activePayload &&
+	activePayload->activeLevel > request.requestedLevel &&
+	mesh_lod_cad_payload_has_same_source(activePayload, request)) {
+	submitAction->skippedMeshCount++;
+	submitAction->appendDiagnostic(target,
+				       "finer resident LoD retained during interaction");
+	source->doAction(action);
+	return;
+    }
+    if (submitAction->reset == 0 && activePayload &&
+	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
+	activePayload->activeLevel != request.requestedLevel &&
+	submitAction->viewState->retargetCadPayload(activePayload,
+	    request.requestedLevel, request.viewRevision,
+	    request.policyRevision)) {
+	submitAction->updatedCutCount++;
+	source->doAction(action);
+	return;
+    }
 
     const SbBool suppressActiveDuplicate =
 	(!submitAction->useForcedLevel && submitAction->reset == 0) ?
@@ -715,13 +953,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     }
 
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
+    provider->service = submitAction->service;
     provider->dbip = submitAction->dbip;
     provider->view = submitAction->view;
     provider->useView = TRUE;
     provider->refreshMissing = submitAction->refreshMissing;
     provider->useForcedLevel = submitAction->useForcedLevel;
     provider->forcedLevel = submitAction->forcedLevel;
-    provider->shrinkAfterCopy = TRUE;
+    provider->shrinkAfterCopy = FALSE;
+	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;
 
     BObolLodTask task;
@@ -730,8 +970,6 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     task.realize = bobol_mesh_lod_provider_task;
     task.realizeData = provider;
     task.realizeDataFree = bobol_mesh_lod_provider_free;
-    if (dependencyTaskId != 0)
-	task.addDependency(dependencyTaskId);
     task.debugDelayMilliseconds =
 	mesh_lod_debug_delay_milliseconds("BOBOL_LOD_TASK_DELAY_MS");
 
@@ -790,32 +1028,53 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 			  submitAction->providerId.getString(),
 			  submitAction->providerVersion.getString(),
 			  submitAction->qualityTier);
+    if (submitAction->useViewVolume &&
+	!mesh_lod_apply_projected_demand(request, request.bounds,
+	    SbMatrix::identity(), submitAction->viewVolume, submitAction->view,
+	    submitAction->targetPixelError)) {
+	submitAction->skippedMeshCount++;
+	return;
+    }
 
-    BObolLodCacheKey requestKey = bobol_lod_cache_key(request);
     const BObolViewLodState::MeshPayload *viewPayload =
 	submitAction->viewState ?
 	submitAction->viewState->findMesh(shape) : NULL;
-    const SbBool viewPayloadResident =
-	(viewPayload &&
-	 viewPayload->resultKind == BOBOL_LOD_RESULT_MESH &&
-	 viewPayload->providerStatus == BOBOL_LOD_PROVIDER_READY &&
-	 requestKey.isValid() &&
-	 viewPayload->cacheKey.getLength() > 0 &&
-	 bu_strcmp(viewPayload->cacheKey.getString(),
-		requestKey.value.getString()) == 0) ? TRUE : FALSE;
-    const SbBool shapePayloadResident =
-	(shape->lodAvailable.getValue() &&
-	 shape->lodResultKind.getValue() == BOBOL_LOD_RESULT_MESH &&
-	 shape->lodProviderStatus.getValue() == BOBOL_LOD_PROVIDER_READY &&
-	 requestKey.isValid() &&
-	 shape->lodCacheKey.getValue().getLength() > 0 &&
-	 bu_strcmp(shape->lodCacheKey.getValue().getString(),
-		requestKey.value.getString()) == 0) ? TRUE : FALSE;
+    if (submitAction->useForcedLevel)
+	request.requestedLevel = submitAction->forcedLevel;
+    else if (viewPayload)
+	mesh_lod_apply_level_hysteresis(request, viewPayload->activeLevel);
     if (!submitAction->useForcedLevel &&
-	submitAction->reset == 0 &&
-	(viewPayloadResident || shapePayloadResident)) {
+	mesh_lod_mesh_payload_is_resident(viewPayload, request)) {
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target, "current LoD request is already resident");
+	submitAction->appendDiagnostic(target,
+				       "current LoD request is already resident");
+	return;
+    }
+    if (!submitAction->useForcedLevel &&
+	!submitAction->allowLevelDowngrade && viewPayload &&
+	viewPayload->activeLevel > request.requestedLevel &&
+	mesh_lod_mesh_payload_has_same_source(viewPayload, request)) {
+	submitAction->skippedMeshCount++;
+	submitAction->appendDiagnostic(target,
+				       "finer resident LoD retained during interaction");
+	return;
+    }
+    if (submitAction->reset == 0 && viewPayload &&
+	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
+	viewPayload->activeLevel != request.requestedLevel &&
+	request.requestedLevel >= 0 &&
+	submitAction->viewState->retargetMeshPayload(viewPayload,
+	    request.requestedLevel, request.viewRevision,
+	    request.policyRevision)) {
+	submitAction->updatedCutCount++;
+	return;
+    }
+    if (!submitAction->useForcedLevel && submitAction->reset == 0 &&
+	request.requestedLevel < 0 && viewPayload &&
+	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request)) {
+	submitAction->skippedMeshCount++;
+	submitAction->appendDiagnostic(target,
+				       "current LoD request is already resident");
 	return;
     }
 
@@ -830,93 +1089,16 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	return;
     }
 
-    uint64_t dependencyTaskId = 0;
-    if (submitAction->submitAabbProxyStage ||
-	submitAction->submitObbProxyStage) {
-	BObolLodRequest aabbRequest;
-	shape->makeLodRequest(aabbRequest,
-			      submitAction->databaseId.getString(),
-			      submitAction->databaseRevision,
-			      submitAction->viewRevision,
-			      submitAction->policyRevision,
-			      BOBOL_LOD_DRAW_SHADED,
-			      "rt_proxy_aabb",
-			      "rt-proxy-v1",
-			      BOBOL_LOD_QUALITY_PROXY);
-
-	if (submitAction->submitAabbProxyStage &&
-	    !submitAction->service->hasActiveRequest(aabbRequest)) {
-	    BObolRtProxyProvider *provider = new BObolRtProxyProvider;
-	    provider->dbip = submitAction->dbip;
-	    provider->proxyKind = BOBOL_LOD_PROXY_AABB;
-	    provider->useRequestBounds = TRUE;
-
-	    BObolLodTask task;
-	    task.generation = submitAction->generation;
-	    task.request = aabbRequest;
-	    task.realize = bobol_rt_proxy_provider_task;
-	    task.realizeData = provider;
-	    task.realizeDataFree = bobol_rt_proxy_provider_free;
-	    task.debugDelayMilliseconds =
-		mesh_lod_debug_delay_milliseconds(
-		    "BOBOL_LOD_AABB_TASK_DELAY_MS");
-	    uint64_t taskId = submitAction->service->submitIfNotActive(task);
-	    if (taskId != 0) {
-		dependencyTaskId = taskId;
-		submitAction->submittedTaskCount++;
-	    } else {
-		bobol_rt_proxy_provider_free(provider);
-	    }
-	}
-
-	if (submitAction->submitObbProxyStage) {
-	    BObolLodRequest obbRequest;
-	    shape->makeLodRequest(obbRequest,
-				  submitAction->databaseId.getString(),
-				  submitAction->databaseRevision,
-				  submitAction->viewRevision,
-				  submitAction->policyRevision,
-				  BOBOL_LOD_DRAW_SHADED,
-				  "rt_proxy_obb",
-				  "rt-proxy-v1",
-				  BOBOL_LOD_QUALITY_PROXY);
-
-	    if (!submitAction->service->hasActiveRequest(obbRequest)) {
-		BObolRtProxyProvider *provider = new BObolRtProxyProvider;
-		provider->dbip = submitAction->dbip;
-		provider->proxyKind = BOBOL_LOD_PROXY_OBB;
-		provider->useRequestBounds = TRUE;
-
-		BObolLodTask task;
-		task.generation = submitAction->generation;
-		task.request = obbRequest;
-		if (dependencyTaskId != 0)
-		    task.addDependency(dependencyTaskId);
-		task.realize = bobol_rt_proxy_provider_task;
-		task.realizeData = provider;
-		task.realizeDataFree = bobol_rt_proxy_provider_free;
-		task.debugDelayMilliseconds =
-		    mesh_lod_debug_delay_milliseconds(
-			"BOBOL_LOD_OBB_TASK_DELAY_MS");
-		uint64_t taskId = submitAction->service->submitIfNotActive(task);
-		if (taskId != 0) {
-		    dependencyTaskId = taskId;
-		    submitAction->submittedTaskCount++;
-		} else {
-		    bobol_rt_proxy_provider_free(provider);
-		}
-	    }
-	}
-    }
-
     BObolMeshLodProvider *provider = new BObolMeshLodProvider;
+    provider->service = submitAction->service;
     provider->dbip = submitAction->dbip;
     provider->view = submitAction->view;
     provider->useView = TRUE;
     provider->refreshMissing = submitAction->refreshMissing;
     provider->useForcedLevel = submitAction->useForcedLevel;
     provider->forcedLevel = submitAction->forcedLevel;
-    provider->shrinkAfterCopy = TRUE;
+    provider->shrinkAfterCopy = FALSE;
+	    provider->compactResident = FALSE;
     provider->reset = submitAction->reset;
 
     BObolLodTask task;
@@ -925,8 +1107,6 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     task.realize = bobol_mesh_lod_provider_task;
     task.realizeData = provider;
     task.realizeDataFree = bobol_mesh_lod_provider_free;
-    if (dependencyTaskId != 0)
-	task.addDependency(dependencyTaskId);
     task.debugDelayMilliseconds =
 	mesh_lod_debug_delay_milliseconds("BOBOL_LOD_TASK_DELAY_MS");
 

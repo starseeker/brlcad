@@ -54,15 +54,18 @@
 static int
 lod_service_has_work(BObolViewController *controller)
 {
-    BObolLodService *service = controller ? controller->getLodService() : NULL;
-    if (!service)
+    if (!controller)
 	return 0;
 
-    return service->inFlightCount() > 0 ||
+    BObolLodService *service = controller->getLodService();
+    return controller->hasPendingLodSubmissions() ||
+	controller->hasPendingLodResults() ||
+	controller->hasProgressiveWorkPending() ||
+	(service && (service->inFlightCount() > 0 ||
 	service->pendingTaskCountForDiagnostics() > 0 ||
 	service->queuedResultCountForDiagnostics() > 0 ||
 	service->queuedCacheWriteCountForDiagnostics() > 0 ||
-	service->delayedTaskCountForDiagnostics() > 0;
+	service->delayedTaskCountForDiagnostics() > 0));
 }
 
 static int
@@ -70,10 +73,10 @@ lod_service_poll(BObolViewController *controller, size_t max_results)
 {
     if (!controller)
 	return 0;
-    if (controller->hasPendingLodResults())
-	(void)controller->processPendingLodResults(max_results);
-    if (controller->isLodAutoSubmitEnabled())
-	(void)controller->submitLodRequestsIfNeeded();
+    BObolProgressiveOptions options =
+	controller->getDefaultProgressiveOptions();
+    options.maxLodResults = max_results;
+    (void)controller->advanceProgressiveWork(&options, NULL);
     return 1;
 }
 
@@ -171,7 +174,9 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
     }
 
     if (BU_STR_EQUIV(argv[0], "1")) {
-	if (!lod_policy.mesh_enabled || !lod_policy.csg_enabled) {
+	if (lod_policy.policy != BV_LOD_AUTO ||
+	    !lod_policy.mesh_enabled || !lod_policy.csg_enabled) {
+	    lod_policy.policy = BV_LOD_AUTO;
 	    lod_policy.mesh_enabled = 1;
 	    lod_policy.csg_enabled = 1;
 	    lod_policy.zoom_refresh = 1;
@@ -180,7 +185,9 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	return BRLCAD_OK;
     }
     if (BU_STR_EQUIV(argv[0], "0")) {
-	if (lod_policy.mesh_enabled || lod_policy.csg_enabled) {
+	if (lod_policy.policy != BV_LOD_OFF ||
+	    lod_policy.mesh_enabled || lod_policy.csg_enabled) {
+	    lod_policy.policy = BV_LOD_OFF;
 	    lod_policy.mesh_enabled = 0;
 	    lod_policy.csg_enabled = 0;
 	    lod_policy.zoom_refresh = 0;
@@ -196,6 +203,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	}
 	if (BU_STR_EQUAL(argv[1], "1")) {
 	    if (!lod_policy.csg_enabled) {
+		lod_policy.policy = BV_LOD_AUTO;
 		lod_policy.csg_enabled = 1;
 		lod_policy.zoom_refresh = 1;
 		commit_lod_policy();
@@ -207,6 +215,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		lod_policy.csg_enabled = 0;
 		if (!lod_policy.mesh_enabled)
 		    lod_policy.zoom_refresh = 0;
+		if (!lod_policy.mesh_enabled)
+		    lod_policy.policy = BV_LOD_OFF;
 		commit_lod_policy();
 	    }
 	    return BRLCAD_OK;
@@ -222,6 +232,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	}
 	if (BU_STR_EQUAL(argv[1], "1")) {
 	    if (!lod_policy.mesh_enabled) {
+		lod_policy.policy = BV_LOD_AUTO;
 		lod_policy.mesh_enabled = 1;
 		lod_policy.zoom_refresh = 1;
 		commit_lod_policy();
@@ -233,6 +244,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		lod_policy.mesh_enabled = 0;
 		if (!lod_policy.csg_enabled)
 		    lod_policy.zoom_refresh = 0;
+		if (!lod_policy.csg_enabled)
+		    lod_policy.policy = BV_LOD_OFF;
 		commit_lod_policy();
 	    }
 	    return BRLCAD_OK;
@@ -327,13 +340,13 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		    continue;
 		}
 
-		// Because BRep LoD uses generated mesh data rather than a database
-		// full-detail mesh payload, store it with a fidelity ratio of 1.
+		// BRep LoD uses generated mesh data rather than a database
+		// full-detail mesh payload.
 		struct BObolMeshLodCacheStatus status =
 			BOBOL_MESH_LOD_CACHE_STATUS_INIT;
 		(void)bobol_mesh_lod_cache_store_mesh(gedp->dbip, dp->d_namep,
 							(const point_t *)pnts, (size_t)pnt_cnt, normals,
-							faces, (size_t)face_cnt, key, 1.0, &status);
+							faces, (size_t)face_cnt, key, 0, &status);
 
 		rt_db_free_internal(&dbintern);
 		bu_free(faces, "faces");
@@ -403,6 +416,12 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		service && service->isRunning() ? 1 : 0);
 	    bu_vls_printf(gedp->ged_result_str, "auto_submit: %d\n",
 		view_controller->isLodAutoSubmitEnabled() ? 1 : 0);
+	    bu_vls_printf(gedp->ged_result_str, "pending_submissions: %d\n",
+		view_controller->hasPendingLodSubmissions() ? 1 : 0);
+	    bu_vls_printf(gedp->ged_result_str, "pending_results: %d\n",
+		view_controller->hasPendingLodResults() ? 1 : 0);
+	    bu_vls_printf(gedp->ged_result_str, "progressive_pending: %d\n",
+		view_controller->hasProgressiveWorkPending() ? 1 : 0);
 	    bu_vls_printf(gedp->ged_result_str, "workers: %zu\n",
 		view_controller->getManagedLodWorkerCount());
 	    bu_vls_printf(gedp->ged_result_str, "in_flight: %zu\n",
@@ -419,6 +438,8 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		view_controller->getLastLodVisitedMeshCount());
 	    bu_vls_printf(gedp->ged_result_str, "last_submitted_tasks: %u\n",
 		view_controller->getLastLodSubmittedTaskCount());
+	    bu_vls_printf(gedp->ged_result_str, "last_updated_cuts: %u\n",
+		view_controller->getLastLodUpdatedCutCount());
 	    bu_vls_printf(gedp->ged_result_str, "last_skipped_meshes: %u\n",
 		view_controller->getLastLodSkippedMeshCount());
 	    bu_vls_printf(gedp->ged_result_str, "last_results: %zu\n",
@@ -567,10 +588,16 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		view_controller->getLastLodDiagnostics() : SbString();
 	    redraw_view();
 	    bu_vls_printf(gedp->ged_result_str,
-			  "wait_timed_out=%d submitted=%u applied=%u queued=%zu in_flight=%zu pending=%zu delayed=%zu\n",
+			  "wait_timed_out=%d submitted=%u applied=%u "
+			  "pending_submissions=%d pending_results=%d "
+			  "progressive_pending=%d queued=%zu in_flight=%zu "
+			  "pending=%zu delayed=%zu\n",
 			  timed_out,
 			  view_controller ? view_controller->getLastLodSubmittedTaskCount() : 0,
 			  view_controller ? view_controller->getLastLodAppliedResultCount() : 0,
+			  view_controller && view_controller->hasPendingLodSubmissions() ? 1 : 0,
+			  view_controller && view_controller->hasPendingLodResults() ? 1 : 0,
+			  view_controller && view_controller->hasProgressiveWorkPending() ? 1 : 0,
 			  service ? service->queuedResultCountForDiagnostics() : 0,
 			  service ? service->inFlightCount() : 0,
 			  service ? service->pendingTaskCountForDiagnostics() : 0,

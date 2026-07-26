@@ -399,6 +399,18 @@ _view_cmd_lighting(void *bs, int argc, const char **argv)
     return _view_call_on_gd_view(gd, ged_lighting_core, argc, argv);
 }
 
+int
+_view_cmd_shading(void *bs, int argc, const char **argv)
+{
+    struct _ged_view_info *gd = (struct _ged_view_info *)bs;
+    const char *usage_string = "view [options] shading [vals]";
+    const char *purpose_string = "control mesh normal presentation";
+    if (_view_cmd_msgs(bs, argc, argv, usage_string, purpose_string))
+	return BRLCAD_OK;
+
+    return _view_call_on_gd_view(gd, ged_shading_core, argc, argv);
+}
+
 /* When a view is "independent", it displays only those objects when have been
  * added to its individual scene storage - the shared objects common to all
  * views will not be drawn.  When shifting a view from shared to independent
@@ -867,6 +879,7 @@ const struct bu_cmdtab _view_cmds[] = {
     { "quat",       _view_cmd_quat},
     { "save",       _view_cmd_save},
     { "saveview",   _view_cmd_save},
+    { "shading",    _view_cmd_shading},
     { "selections", _view_cmd_selections},
     { "size",       _view_cmd_size},
     { "snap",       _view_cmd_snap},

@@ -111,6 +111,7 @@ QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
     // Define a widget to hold the main view and its associated
     // view control toolbar
     cw = new QWidget(this);
+    cw->setProperty("qgTestId", QStringLiteral("cad-central"));
 
     // The core of the interface is the CAD view widget, which is capable
     // of either a single display or showing 4 views in a grid arrangement
@@ -123,6 +124,7 @@ QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
 	msgbox->exec();
 	bu_exit(EXIT_FAILURE, "Unable to create QgQuadView widget\n");
     }
+    c4->setProperty("qgTestId", QStringLiteral("cad-quad"));
     c4->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
 
     // Define a graphical toolbar with control widgets
@@ -555,12 +557,6 @@ QgEdMainWindow::do_endpoint_init()
     av[2] = "110/110/110";
     av[3] = "0/0/50";
     ged_exec_dm(gedp, 4, (const char **)av);
-
-    av[0] = "view";
-    av[1] = "lod";
-    av[2] = "mesh";
-    av[3] = "1";
-    ged_exec_view(gedp, 4, (const char **)av);
 
     emit ap->view_update(QG_VIEW_REFRESH);
     ///////////////////////////////////////////////////////////////////////////

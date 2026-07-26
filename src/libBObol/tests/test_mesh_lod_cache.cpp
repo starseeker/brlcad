@@ -210,6 +210,15 @@ test_detail_callbacks(struct db_i *dbip,
 	goto cleanup;
     }
 
+    if (bobol_mesh_lod_load_display_level(lod, 100, 0) < 0 ||
+	!bobol_mesh_lod_has_active_data(lod) ||
+	!bobol_mesh_lod_data_get(lod, &detailData) ||
+	replacement.setup_count != 0) {
+	printf("FAIL: mesh lod display request materialized full-detail payload\n");
+	ret = 1;
+	goto cleanup;
+    }
+
     if (bobol_mesh_lod_load_level(lod, 100, 0) < 0 ||
 	!bobol_mesh_lod_data_get(lod, &detailData) ||
 	!bobol_mesh_lod_info_get(lod, &detailInfo) ||
@@ -259,7 +268,9 @@ int
 main(int argc, char *argv[])
 {
     const char *objname = "bobol_lod_bot";
+    const char *solidCwObjname = "bobol_lod_solid_cw_bot";
     const char *meshObjname = "bobol_lod_mesh_payload";
+    const char *translatedMeshObjname = "bobol_lod_translated_mesh_payload";
     const char *invalidBotObjname = "bobol_invalid_lod_bot";
     const int grid = 12;
     const int vertexCount = (grid + 1) * (grid + 1);
@@ -267,6 +278,7 @@ main(int argc, char *argv[])
     char dbpath[MAXPATHLEN] = {0};
     char cacheDir[MAXPATHLEN] = {0};
     fastf_t *vertices = NULL;
+    fastf_t *translatedVertices = NULL;
     fastf_t *detailNormals = NULL;
     int *faces = NULL;
     struct db_i *dbip = NULL;
@@ -285,12 +297,16 @@ main(int argc, char *argv[])
 
     bu_dir(cacheDir, MAXPATHLEN, BU_DIR_CURR,
 	   "bobol_mesh_lod_cache_test", NULL);
+    bu_dirclear(cacheDir);
     bu_mkdir(cacheDir);
     bu_setenv("BU_DIR_CACHE", cacheDir, 1);
 
     vertices = static_cast<fastf_t *>(bu_calloc(
 					  static_cast<size_t>(vertexCount) * 3, sizeof(fastf_t),
 					  "mesh lod vertices"));
+    translatedVertices = static_cast<fastf_t *>(bu_calloc(
+	static_cast<size_t>(vertexCount) * 3, sizeof(fastf_t),
+	"translated mesh lod vertices"));
     faces = static_cast<int *>(bu_calloc(
 				   static_cast<size_t>(faceCount) * 3, sizeof(int),
 				   "mesh lod faces"));
@@ -305,6 +321,12 @@ main(int argc, char *argv[])
 	    vertices[idx * 3 + Y] = static_cast<fastf_t>(y);
 	    vertices[idx * 3 + Z] =
 		static_cast<fastf_t>((x + y) % 3) * 0.05;
+	    translatedVertices[idx * 3 + X] =
+		vertices[idx * 3 + X] - 29640.022;
+	    translatedVertices[idx * 3 + Y] =
+		vertices[idx * 3 + Y] + 5283.2;
+	    translatedVertices[idx * 3 + Z] =
+		vertices[idx * 3 + Z] + 1300.0;
 	}
     }
 
@@ -362,6 +384,28 @@ main(int argc, char *argv[])
 	}
 
 	{
+	    fastf_t solidVertices[12] = {
+		0.0, 0.0, 0.0,
+		1.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		0.0, 0.0, 1.0
+	    };
+	    /* Clockwise as viewed from the exterior. */
+	    int solidFaces[12] = {
+		0, 1, 2,
+		0, 3, 1,
+		0, 2, 3,
+		1, 3, 2
+	    };
+	    if (mk_bot(wdbp, solidCwObjname, RT_BOT_SOLID, RT_BOT_CW, 0,
+		       4, 4, solidVertices, solidFaces, NULL, NULL) < 0) {
+		printf("FAIL: mesh lod solid CW mk_bot\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	}
+
+	{
 	    int invalidFaces[3] = {0, 1, vertexCount};
 	    if (mk_bot(wdbp, invalidBotObjname, RT_BOT_SURFACE, RT_BOT_CCW,
 		       0, vertexCount, 1, vertices, invalidFaces, NULL, NULL) < 0) {
@@ -375,6 +419,11 @@ main(int argc, char *argv[])
 	    point_t center = VINIT_ZERO;
 	    if (mk_sph(wdbp, meshObjname, center, 1.0) < 0) {
 		printf("FAIL: mesh lod mk_sph\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	    if (mk_sph(wdbp, translatedMeshObjname, center, 1.0) < 0) {
+		printf("FAIL: translated mesh lod mk_sph\n");
 		ret = 1;
 		goto cleanup;
 	    }
@@ -419,6 +468,125 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    {
+	struct BObolMeshLodData data;
+	const int minimumLevel =
+	    bobol_mesh_lod_load_display_level(lod, 0, 0);
+	if (minimumLevel < 0 || !bobol_mesh_lod_data_get(lod, &data) ||
+	    data.face_count == 0) {
+	    printf("FAIL: mesh lod minimum display level was empty\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+
+	const int terminalLevel =
+	    bobol_mesh_lod_load_display_level(lod, 100, 0);
+	if (terminalLevel != 15 ||
+	    !bobol_mesh_lod_data_get(lod, &data) ||
+	    data.face_count != static_cast<size_t>(faceCount) ||
+	    data.point_count != data.point_orig_count ||
+	    memcmp(data.points, data.points_orig,
+		data.point_count * sizeof(point_t)) != 0) {
+	    printf("FAIL: mesh lod terminal PoP cut was not exact and complete "
+		   "(level=%d faces=%zu/%d points=%zu/%zu)\n",
+		   terminalLevel, data.face_count, faceCount,
+		   data.point_count, data.point_orig_count);
+	    ret = 1;
+	    goto cleanup;
+	}
+	struct BObolMeshLodInfo surfaceInfo = BOBOL_MESH_LOD_INFO_INIT;
+	if (!bobol_mesh_lod_info_get(lod, &surfaceInfo) ||
+	    surfaceInfo.shaded_cull_backfaces) {
+	    printf("FAIL: open surface was marked safe for backface culling\n");
+	    ret = 1;
+	    goto cleanup;
+	}
+    }
+
+    {
+	struct BObolMeshLod *translatedLod = NULL;
+	struct BObolMeshLodHierarchyInfo baseHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	struct BObolMeshLodHierarchyInfo translatedHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	struct BObolMeshLodData translatedData;
+	if (!bobol_mesh_lod_hierarchy_info_get(lod, &baseHierarchy) ||
+	    bobol_mesh_lod_cache_store_mesh(dbip, translatedMeshObjname,
+		reinterpret_cast<const point_t *>(translatedVertices),
+		static_cast<size_t>(vertexCount), NULL, faces,
+		static_cast<size_t>(faceCount), 515151ULL, 0,
+		&cacheStatus) != BRLCAD_OK ||
+	    !(translatedLod = bobol_mesh_lod_get(
+		dbip, translatedMeshObjname)) ||
+	    !bobol_mesh_lod_hierarchy_info_get(
+		translatedLod, &translatedHierarchy)) {
+	    printf("FAIL: translated mesh PoP hierarchy setup\n");
+	    if (translatedLod)
+		bobol_mesh_lod_destroy(translatedLod);
+	    ret = 1;
+	    goto cleanup;
+	}
+	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; level++) {
+	    if (baseHierarchy.face_count[level] !=
+		    translatedHierarchy.face_count[level] ||
+		baseHierarchy.point_count[level] !=
+		    translatedHierarchy.point_count[level]) {
+		printf("FAIL: PoP hierarchy depends on absolute model coordinates "
+		       "at level %d\n", level);
+		ret = 1;
+		break;
+	    }
+	}
+	for (int axis = 0; !ret && axis < 3; axis++) {
+	    const fastf_t baseExtent =
+		baseHierarchy.quantization_max[axis] -
+		baseHierarchy.quantization_min[axis];
+	    const fastf_t translatedExtent =
+		translatedHierarchy.quantization_max[axis] -
+		translatedHierarchy.quantization_min[axis];
+	    if (!NEAR_EQUAL(baseExtent, translatedExtent, 0.01)) {
+		printf("FAIL: translated PoP quantization extent changed on axis %d "
+		       "(%.17g != %.17g)\n", axis,
+		       baseExtent, translatedExtent);
+		ret = 1;
+	    }
+	}
+	if (!ret &&
+	    (bobol_mesh_lod_load_display_level(translatedLod, 100, 0) != 15 ||
+	     !bobol_mesh_lod_data_get(translatedLod, &translatedData) ||
+	     translatedData.face_count != static_cast<size_t>(faceCount) ||
+	     translatedData.point_count !=
+		static_cast<size_t>(vertexCount) ||
+	     translatedData.point_orig_count != translatedData.point_count ||
+	     memcmp(translatedData.points, translatedData.points_orig,
+		static_cast<size_t>(vertexCount) * sizeof(point_t)) != 0)) {
+	    printf("FAIL: translated terminal PoP cut was not exact\n");
+	    ret = 1;
+	}
+	bobol_mesh_lod_destroy(translatedLod);
+	if (ret)
+	    goto cleanup;
+    }
+
+    {
+	struct BObolMeshLod *solidLod = NULL;
+	struct BObolMeshLodInfo solidInfo = BOBOL_MESH_LOD_INFO_INIT;
+	if (bobol_mesh_lod_cache_refresh(dbip, solidCwObjname,
+		&cacheStatus) != BRLCAD_OK ||
+	    !(solidLod = bobol_mesh_lod_get(dbip, solidCwObjname)) ||
+	    bobol_mesh_lod_load_display_level(solidLod, 100, 0) < 0 ||
+	    !bobol_mesh_lod_info_get(solidLod, &solidInfo) ||
+	    !solidInfo.shaded_cull_backfaces ||
+	    solidInfo.face_count != 4) {
+	    printf("FAIL: closed oriented CW BoT culling metadata\n");
+	    if (solidLod)
+		bobol_mesh_lod_destroy(solidLod);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(solidLod);
+    }
+
     memshrinkLevel = first_available_level(lod);
     if (memshrinkLevel < 0) {
 	printf("FAIL: mesh lod level data\n");
@@ -445,8 +613,8 @@ main(int argc, char *argv[])
 					      reinterpret_cast<const point_t *>(vertices),
 					      static_cast<size_t>(vertexCount),
 					      reinterpret_cast<const vect_t *>(detailNormals),
-					      faces, static_cast<size_t>(faceCount), 424242ULL, 0.66,
-					      &cacheStatus) != BRLCAD_OK ||
+					      faces, static_cast<size_t>(faceCount), 424242ULL,
+					      0, &cacheStatus) != BRLCAD_OK ||
 	    !cacheStatus.directory_found || cacheStatus.is_bot ||
 	    !cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
 	    cacheStatus.stale_cache_entry ||
@@ -471,7 +639,7 @@ main(int argc, char *argv[])
 	if (bobol_mesh_lod_cache_store_mesh(dbip, meshObjname,
 					      reinterpret_cast<const point_t *>(vertices),
 					      static_cast<size_t>(vertexCount), NULL, invalidStoreFaces, 1,
-					      777777ULL, 0.66, &cacheStatus) != BRLCAD_ERROR ||
+					      777777ULL, 0, &cacheStatus) != BRLCAD_ERROR ||
 	    !cacheStatus.has_cache_key ||
 	    !cacheStatus.has_cached_payload ||
 	    cacheStatus.cache_key != 424242ULL) {
@@ -625,6 +793,8 @@ cleanup:
     bu_dirclear(cacheDir);
     if (vertices)
 	bu_free(vertices, "mesh lod vertices");
+    if (translatedVertices)
+	bu_free(translatedVertices, "translated mesh lod vertices");
     if (detailNormals)
 	bu_free(detailNormals, "mesh lod detail normals");
     if (faces)

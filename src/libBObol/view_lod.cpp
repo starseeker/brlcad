@@ -30,6 +30,7 @@
 #include <Inventor/nodes/SoNode.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string.h>
 #include <utility>
 
@@ -203,31 +204,37 @@ view_lod_source_keys(std::vector<std::string> &keys,
 }
 
 BObolViewLodState::MeshPayload::MeshPayload(void) :
+    sourceContentHash(0),
     resultKind(BOBOL_LOD_RESULT_NONE),
     qualityTier(BOBOL_LOD_QUALITY_METADATA),
     providerStatus(BOBOL_LOD_PROVIDER_UNKNOWN),
     activeLevel(-1),
+    residentLevel(-1),
+    requestedLevel(-1),
     viewRevision(0),
     policyRevision(0),
     hasSnappedPoints(FALSE),
-    hasNormals(FALSE)
+    hasNormals(FALSE),
+    shadedCullBackfaces(FALSE)
 {
 }
 
 SbBool
 BObolViewLodState::MeshPayload::isValid(void) const
 {
-    return this->mesh.isValid();
+    return this->mesh.isValid() ||
+	(this->progressiveMesh && this->progressiveMesh->isValid());
 }
 
 size_t
 BObolViewLodState::MeshPayload::estimateBytes(void) const
 {
-    return this->mesh.points.size() * sizeof(SbVec3f) +
+    return sizeof(*this) + (this->progressiveMesh ? 0 :
+	    this->mesh.points.size() * sizeof(SbVec3f) +
 	   this->mesh.normals.size() * sizeof(SbVec3f) +
 	   this->mesh.coordIndex.size() * sizeof(int32_t) +
 	   this->mesh.faceIndex.size() * sizeof(int32_t) +
-	   this->mesh.vertexIndex.size() * sizeof(int32_t);
+	   this->mesh.vertexIndex.size() * sizeof(int32_t));
 }
 
 int
@@ -309,31 +316,20 @@ BObolViewLodState::ProxyPayload::estimateBytes(void) const
 }
 
 BObolViewLodState::CadPayload::CadPayload(void) :
+    sourceContentHash(0),
     resultKind(BOBOL_LOD_RESULT_NONE),
     qualityTier(BOBOL_LOD_QUALITY_METADATA),
     providerStatus(BOBOL_LOD_PROVIDER_UNKNOWN),
     drawMode(BOBOL_LOD_DRAW_UNKNOWN),
+    activeLevel(-1),
+    residentLevel(-1),
+    requestedLevel(-1),
     viewRevision(0),
     policyRevision(0),
     hasSnappedPoints(FALSE),
     hasNormals(FALSE),
-    assembly(NULL),
-    assemblyKey("")
+    shadedCullBackfaces(FALSE)
 {
-}
-
-BObolViewLodState::CadPayload::~CadPayload(void)
-{
-    this->clearAssembly();
-}
-
-void
-BObolViewLodState::CadPayload::clearAssembly(void) const
-{
-    if (this->assembly)
-	this->assembly->unref();
-    this->assembly = NULL;
-    this->assemblyKey = "";
 }
 
 SbBool
@@ -343,7 +339,8 @@ BObolViewLodState::CadPayload::isValid(void) const
 	return FALSE;
     if (this->resultKind == BOBOL_LOD_RESULT_MESH ||
 	this->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL)
-	return this->mesh.isValid();
+	return this->mesh.isValid() ||
+	    (this->progressiveMesh && this->progressiveMesh->isValid());
     if (this->resultKind == BOBOL_LOD_RESULT_AABB ||
 	this->resultKind == BOBOL_LOD_RESULT_PROXY)
 	return this->proxy.isValid();
@@ -353,11 +350,12 @@ BObolViewLodState::CadPayload::isValid(void) const
 size_t
 BObolViewLodState::CadPayload::estimateBytes(void) const
 {
-    return this->mesh.points.size() * sizeof(SbVec3f) +
+    return (this->progressiveMesh ? 0 :
+	    this->mesh.points.size() * sizeof(SbVec3f) +
 	   this->mesh.normals.size() * sizeof(SbVec3f) +
 	   this->mesh.coordIndex.size() * sizeof(int32_t) +
 	   this->mesh.faceIndex.size() * sizeof(int32_t) +
-	   this->mesh.vertexIndex.size() * sizeof(int32_t) +
+	   this->mesh.vertexIndex.size() * sizeof(int32_t)) +
 	   sizeof(*this);
 }
 
@@ -433,20 +431,106 @@ view_lod_remove_superseded_cad_payloads(
     }
 }
 
-BObolViewLodState::BObolViewLodState(void)
+BObolViewLodState::BObolViewLodState(void) :
+    cadBindingsRevision(1),
+    normalStyle(NORMAL_AUTHORED),
+    normalCreaseAngle(60.0f)
 {
 }
 
 BObolViewLodState::~BObolViewLodState(void)
 {
+    this->clearCadPresentations();
 }
 
 void
 BObolViewLodState::clear(void)
 {
+    this->clearCadPresentations();
     this->meshBindings.clear();
     this->proxyBindings.clear();
     this->cadBindings.clear();
+    this->noteResidentMeshesChanged();
+}
+
+SoCADAssembly *
+BObolViewLodState::findCadPresentation(
+    const SoBRLDatabaseSource *source,
+    SbString *contentKey) const
+{
+    if (!source)
+	return NULL;
+    const std::string key = view_lod_source_primary_key(source);
+    const auto found = this->cadPresentations.find(key);
+    if (found == this->cadPresentations.end())
+	return NULL;
+    if (contentKey)
+	*contentKey = found->second.contentKey;
+    return found->second.assembly;
+}
+
+void
+BObolViewLodState::setCadPresentation(
+    const SoBRLDatabaseSource *source,
+    SoCADAssembly *assembly,
+    const SbString &contentKey) const
+{
+    if (!source)
+	return;
+    const std::string key = view_lod_source_primary_key(source);
+    CadPresentation &presentation = this->cadPresentations[key];
+    if (presentation.assembly != assembly) {
+	if (assembly)
+	    assembly->ref();
+	if (presentation.assembly)
+	    presentation.assembly->unref();
+	presentation.assembly = assembly;
+    }
+    presentation.contentKey = contentKey;
+    if (!presentation.assembly)
+	this->cadPresentations.erase(key);
+}
+
+void
+BObolViewLodState::clearCadPresentations(void) const
+{
+    for (auto &binding : this->cadPresentations) {
+	if (binding.second.assembly)
+	    binding.second.assembly->unref();
+	binding.second.assembly = NULL;
+    }
+    this->cadPresentations.clear();
+}
+
+void
+BObolViewLodState::setNormalStyle(NormalStyle style, float creaseAngleDegrees)
+{
+    if (style < NORMAL_AUTHORED || style > NORMAL_SMOOTH)
+	style = NORMAL_AUTHORED;
+    if (!std::isfinite(creaseAngleDegrees))
+	creaseAngleDegrees = 60.0f;
+    creaseAngleDegrees = std::max(0.0f,
+	std::min(180.0f, creaseAngleDegrees));
+    if (this->normalStyle == style &&
+	std::fabs(this->normalCreaseAngle - creaseAngleDegrees) <= 1.0e-6f)
+	return;
+    this->normalStyle = style;
+    this->normalCreaseAngle = creaseAngleDegrees;
+    /* This is a presentation policy change.  Retain all view-local PoP
+     * payloads and invalidate only their renderer assemblies. */
+    this->clearCadPresentations();
+}
+
+BObolViewLodState::NormalStyle
+BObolViewLodState::getNormalStyle(void) const
+{
+    return this->normalStyle;
+}
+
+float
+BObolViewLodState::getNormalCreaseAngle(void) const
+{
+    return this->normalCreaseAngle;
 }
 
 SbBool
@@ -464,10 +548,12 @@ BObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
     if (!shape ||
 	result.resultKind != BOBOL_LOD_RESULT_MESH ||
 	result.providerStatus != BOBOL_LOD_PROVIDER_READY ||
-	!result.mesh.isValid())
+	(!result.mesh.isValid() &&
+	 (!result.progressiveMesh || !result.progressiveMesh->isValid())))
 	return FALSE;
 
     MeshPayloadPtr payload(new MeshPayload);
+    payload->progressiveMesh = result.progressiveMesh;
     if (consume)
 	payload->mesh = std::move(result.mesh);
     else
@@ -475,18 +561,23 @@ BObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
     payload->sourcePath = shape->sourcePath.getValue();
     payload->sourceName = shape->sourceName.getValue();
     payload->sourceIdentity = shape->sourceIdentity.getValue();
-    payload->cacheIdentity = shape->cacheIdentity.getValue();
-    payload->cacheKey = result.cacheKey.value;
+    payload->cacheIdentity = result.cacheKey.value;
+    payload->cacheKey = result.geometry.cacheKey.isValid() ?
+	result.geometry.cacheKey.value : result.cacheKey.value;
+    payload->sourceContentHash = result.request.sourceContentHash;
     payload->resultKind = result.resultKind;
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
     payload->activeLevel = result.geometry.activeLevel;
+    payload->residentLevel = result.residentLevel;
+    payload->requestedLevel = result.request.requestedLevel;
     payload->viewRevision = result.request.viewRevision;
     payload->policyRevision = result.request.policyRevision;
     payload->counts = result.counts;
     payload->bounds = result.bounds;
     payload->hasSnappedPoints = result.hasSnappedPoints;
     payload->hasNormals = result.hasNormals;
+    payload->shadedCullBackfaces = result.shadedCullBackfaces;
     payload->diagnostic = result.diagnostic;
 
     std::vector<std::string> keys;
@@ -594,7 +685,8 @@ BObolViewLodState::applySourceResultInternal(
 
     if ((result.resultKind == BOBOL_LOD_RESULT_MESH ||
 	 result.resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) &&
-	!result.mesh.isValid())
+	!result.mesh.isValid() &&
+	(!result.progressiveMesh || !result.progressiveMesh->isValid()))
 	return FALSE;
     if ((result.resultKind == BOBOL_LOD_RESULT_AABB ||
 	 result.resultKind == BOBOL_LOD_RESULT_PROXY) &&
@@ -607,6 +699,7 @@ BObolViewLodState::applySourceResultInternal(
 	return FALSE;
 
     CadPayloadPtr payload(new CadPayload);
+    payload->progressiveMesh = result.progressiveMesh;
     if (consume) {
 	payload->mesh = std::move(result.mesh);
 	payload->proxy = std::move(result.proxy);
@@ -629,17 +722,23 @@ BObolViewLodState::applySourceResultInternal(
     const std::string sourceBindingKey = view_lod_source_primary_key(source);
     payload->sourceBindingKey = sourceBindingKey.c_str();
     payload->cacheIdentity = result.cacheKey.value;
-    payload->cacheKey = result.cacheKey.value;
+    payload->cacheKey = result.geometry.cacheKey.isValid() ?
+	result.geometry.cacheKey.value : result.cacheKey.value;
+    payload->sourceContentHash = result.request.sourceContentHash;
     payload->resultKind = result.resultKind;
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
     payload->drawMode = result.request.drawMode;
+    payload->activeLevel = result.geometry.activeLevel;
+    payload->residentLevel = result.residentLevel;
+    payload->requestedLevel = result.request.requestedLevel;
     payload->viewRevision = result.request.viewRevision;
     payload->policyRevision = result.request.policyRevision;
     payload->counts = result.counts;
     payload->bounds = result.bounds;
     payload->hasSnappedPoints = result.hasSnappedPoints;
     payload->hasNormals = result.hasNormals;
+    payload->shadedCullBackfaces = result.shadedCullBackfaces;
     payload->diagnostic = result.diagnostic;
 
     if (!view_lod_cad_payload_can_replace(this->cadBindings,
@@ -672,6 +771,7 @@ BObolViewLodState::applySourceResultInternal(
 	    this->cadBindings[key] = payload;
     }
 
+    this->noteResidentMeshesChanged();
     return TRUE;
 }
 
@@ -839,6 +939,79 @@ BObolViewLodState::findCadForResult(
     return NULL;
 }
 
+SbBool
+BObolViewLodState::retargetMeshPayload(
+    const BObolViewLodState::MeshPayload *target,
+    int activeLevel,
+    uint64_t viewRevision,
+    uint64_t policyRevision)
+{
+    if (!target || !target->progressiveMesh ||
+	!target->progressiveMesh->canDrawLevel(activeLevel))
+	return FALSE;
+
+    MeshPayloadPtr payload;
+    for (const auto &binding : this->meshBindings) {
+	if (binding.second && binding.second.get() == target) {
+	    payload = binding.second;
+	    break;
+	}
+    }
+    if (!payload)
+	return FALSE;
+
+    payload->activeLevel = activeLevel;
+    payload->requestedLevel = activeLevel;
+    payload->residentLevel = payload->progressiveMesh->residentLevel();
+    payload->viewRevision = viewRevision;
+    payload->policyRevision = policyRevision;
+    payload->counts.faceCount =
+	payload->progressiveMesh->faceCount(activeLevel);
+    payload->counts.pointCount =
+	payload->progressiveMesh->pointCount(activeLevel);
+    payload->counts.originalPointCount = payload->counts.pointCount;
+    payload->counts.normalCount = payload->hasNormals ?
+	payload->counts.faceCount * 3 : 0;
+    return TRUE;
+}
+
+SbBool
+BObolViewLodState::retargetCadPayload(
+    const BObolViewLodState::CadPayload *target,
+    int activeLevel,
+    uint64_t viewRevision,
+    uint64_t policyRevision)
+{
+    if (!target || !target->progressiveMesh ||
+	!target->progressiveMesh->canDrawLevel(activeLevel))
+	return FALSE;
+
+    CadPayloadPtr payload;
+    for (const auto &binding : this->cadBindings) {
+	if (binding.second && binding.second.get() == target) {
+	    payload = binding.second;
+	    break;
+	}
+    }
+    if (!payload)
+	return FALSE;
+
+    payload->activeLevel = activeLevel;
+    payload->requestedLevel = activeLevel;
+    payload->residentLevel = payload->progressiveMesh->residentLevel();
+    payload->viewRevision = viewRevision;
+    payload->policyRevision = policyRevision;
+    payload->counts.faceCount =
+	payload->progressiveMesh->faceCount(activeLevel);
+    payload->counts.pointCount =
+	payload->progressiveMesh->pointCount(activeLevel);
+    payload->counts.originalPointCount = payload->counts.pointCount;
+    payload->counts.normalCount = payload->hasNormals ?
+	payload->counts.faceCount * 3 : 0;
+    this->noteResidentMeshesChanged();
+    return TRUE;
+}
+
 size_t
 BObolViewLodState::bindingCount(void) const
 {
@@ -995,6 +1168,67 @@ BObolViewLodState::estimateDisplayMeshBytes(void) const
     return bytes;
 }
 
+void
+BObolViewLodState::residentMeshDemands(
+    std::vector<BObolLodResidentDemand> &demands) const
+{
+    demands.clear();
+    std::unordered_map<std::string, int> maximumLevels;
+
+    std::vector<MeshPayloadPtr> meshPayloads =
+	view_lod_unique_payloads(this->meshBindings);
+    for (const MeshPayloadPtr &payload : meshPayloads) {
+	if (!payload || !payload->progressiveMesh ||
+	    !payload->progressiveMesh->isValid() ||
+	    payload->cacheKey.getLength() == 0 || payload->activeLevel < 0)
+	    continue;
+	int &level = maximumLevels[payload->cacheKey.getString()];
+	level = std::max(level, payload->activeLevel);
+    }
+
+    std::vector<CadPayloadPtr> cadPayloads;
+    for (const auto &binding : this->cadBindings) {
+	const CadPayloadPtr &payload = binding.second;
+	if (!payload || !payload->progressiveMesh ||
+	    !payload->progressiveMesh->isValid() ||
+	    payload->cacheKey.getLength() == 0 || payload->activeLevel < 0 ||
+	    std::find(cadPayloads.begin(), cadPayloads.end(), payload) !=
+		cadPayloads.end())
+	    continue;
+	cadPayloads.push_back(payload);
+	int &level = maximumLevels[payload->cacheKey.getString()];
+	level = std::max(level, payload->activeLevel);
+    }
+
+    demands.reserve(maximumLevels.size());
+    for (const auto &entry : maximumLevels) {
+	BObolLodResidentDemand demand;
+	demand.assetKey = entry.first.c_str();
+	demand.level = entry.second;
+	demands.push_back(demand);
+    }
+    std::sort(demands.begin(), demands.end(),
+	[](const BObolLodResidentDemand &a,
+	   const BObolLodResidentDemand &b) {
+	    return bu_strcmp(a.assetKey.getString(),
+		b.assetKey.getString()) < 0;
+	});
+}
+
+uint64_t
+BObolViewLodState::cadRevision(void) const
+{
+    return this->cadBindingsRevision;
+}
+
+void
+BObolViewLodState::noteResidentMeshesChanged(void)
+{
+    this->cadBindingsRevision++;
+    if (!this->cadBindingsRevision)
+	this->cadBindingsRevision++;
+}
+
 size_t
 BObolViewLodState::evictDisplayMeshes(unsigned int *evictedMeshCount)
 {
@@ -1026,6 +1260,7 @@ BObolViewLodState::evictDisplayMeshes(unsigned int *evictedMeshCount)
     this->meshBindings.clear();
     this->proxyBindings.clear();
     this->cadBindings.clear();
+    this->noteResidentMeshesChanged();
     return bytes;
 }
 
@@ -1068,6 +1303,8 @@ BObolViewLodState::evictDisplayMeshPayloads(
 	}
 	++binding;
     }
+    if (!cadMeshPayloads.empty())
+	this->noteResidentMeshesChanged();
 
     return bytes;
 }

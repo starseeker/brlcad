@@ -187,7 +187,7 @@ ged_draw_brep_mesh_lod_cache_prepare(struct BObolMeshLod **lod,
 	    *bounds_valid = 1;
 
 	ret = bobol_mesh_lod_cache_store_mesh(dbip, dp->d_namep, (const point_t *)pnts,
-		(size_t)pnt_cnt, normals, faces, (size_t)face_cnt, key, 1.0,
+		(size_t)pnt_cnt, normals, faces, (size_t)face_cnt, key, 0,
 		&status);
 
 	rt_db_free_internal(&dbintern);

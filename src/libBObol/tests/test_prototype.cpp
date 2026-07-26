@@ -5125,31 +5125,37 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	FAIL("database-backed BoT mesh realization should realize one source");
     if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED)
 	FAIL("database-backed BoT mesh realization status should be REALIZED");
-    BObolRealizedShapeSummary botSummary;
+    BObolRealizedShapeSummary botProxySummary;
     if (source->getRealizedMeshCount() != 0 ||
-	!mesh_summary_with_path(source, "/tet.bot", botSummary))
-	FAIL("database-backed BoT should produce one carrier-free mesh occurrence");
-    if (botSummary.triangleCount != 4)
-	FAIL("database-backed BoT mesh should preserve source triangle count");
+	source->getRealizedShapeSummaryCount() != 1 ||
+	!source->getRealizedShapeSummary(0, botProxySummary) ||
+	botProxySummary.shapeKind != BObolRealizedShapeSummary::SHAPE_MESH ||
+	!BU_STR_EQUAL(botProxySummary.path.getString(), "/tet.bot") ||
+	botProxySummary.triangleCount != 0 ||
+	botProxySummary.segmentCount != 12 ||
+	!source->hasDisplayMeshLodRequests())
+	FAIL("database-backed LoD BoT should publish one carrier-free structural proxy and mesh request");
     BObolCompactInstanceHandle botHandle;
     BObolCompactInstanceSummary botInstance;
+    BObolCompactOccurrence botOccurrence;
     if (!source->getCompactInstanceHandle(0, botHandle) ||
 	!source->getCompactInstanceSummary(botHandle, botInstance) ||
-	!botInstance.lodBacked)
-	FAIL("database-backed BoT at or above LoD threshold should use the LoD-backed mesh shape");
-    if (botSummary.lodActiveLevel < 0 ||
-	botSummary.lodFaceCount == 0 || botSummary.lodFaceCount > 4 ||
-	botSummary.lodPointCount == 0 || botSummary.lodPointCount > 4 ||
-	botSummary.lodOriginalPointCount == 0 ||
-	botSummary.lodOriginalPointCount > 4)
-	FAIL("database-backed BoT mesh should publish cached Obol LoD metadata");
-    if (!nearly_equal(botSummary.lodBoundsMin[0], 0.0f) ||
-	!nearly_equal(botSummary.lodBoundsMin[1], 0.0f) ||
-	!nearly_equal(botSummary.lodBoundsMin[2], 0.0f) ||
-	!nearly_equal(botSummary.lodBoundsMax[0], 2.0f) ||
-	!nearly_equal(botSummary.lodBoundsMax[1], 2.0f) ||
-	!nearly_equal(botSummary.lodBoundsMax[2], 2.0f))
-	FAIL("database-backed BoT mesh should publish cached Obol LoD bounds");
+	!source->getCompactOccurrence(0, botOccurrence) ||
+	!botInstance.lodBacked || !botInstance.sourceMeshRequestValid ||
+	!botInstance.wireGeometry || !botInstance.meshGeometry ||
+	!botOccurrence.sourceMeshRequestValid ||
+	botOccurrence.sourceMeshRequest.faceCount != 4 ||
+	botOccurrence.sourceMeshRequest.pointCount != 4)
+	FAIL("database-backed BoT at or above LoD threshold should retain its structural proxy and exact source request");
+    const SbBox3f botRequestBounds = botOccurrence.sourceMeshRequest.bounds;
+    if (botRequestBounds.isEmpty() ||
+	!nearly_equal(botRequestBounds.getMin()[0], 0.0f) ||
+	!nearly_equal(botRequestBounds.getMin()[1], 0.0f) ||
+	!nearly_equal(botRequestBounds.getMin()[2], 0.0f) ||
+	!nearly_equal(botRequestBounds.getMax()[0], 2.0f) ||
+	!nearly_equal(botRequestBounds.getMax()[1], 2.0f) ||
+	!nearly_equal(botRequestBounds.getMax()[2], 2.0f))
+	FAIL("database-backed BoT source request should preserve exact source bounds");
 
     SoBRLExportAction botMeshExactExport;
     botMeshExactExport.apply(root);
@@ -5167,28 +5173,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLExportAction botMeshExport;
     botMeshExport.setGeometryPolicy(SoBRLExportAction::DISPLAY_LEVEL);
     botMeshExport.apply(root);
-    if (botMeshExport.getTriangleCount() != 4 ||
-	export_triangle_path_count(botMeshExport, "/tet.bot") != 4)
-	FAIL("database-backed BoT export should collect current mesh triangles");
-    const SoBRLExportAction::TriangleRecord *botTriangle =
-	export_triangle_with_path(botMeshExport, "/tet.bot");
-    if (!botTriangle ||
-	!botTriangle->lodAvailable ||
-	botTriangle->lodActiveLevel != botSummary.lodActiveLevel ||
-	botTriangle->lodFaceCount != botSummary.lodFaceCount ||
-	botTriangle->lodPointCount != botSummary.lodPointCount ||
-	botTriangle->lodOriginalPointCount != botSummary.lodOriginalPointCount ||
-	botTriangle->lodNormalCount != botSummary.lodNormalCount ||
-	botTriangle->lodHasSnappedPoints != botSummary.lodHasSnappedPoints ||
-	botTriangle->lodHasNormals != botSummary.lodHasNormals)
-	FAIL("database-backed BoT export should carry cached Obol LoD metadata");
-    if (!nearly_equal(botTriangle->lodBoundsMin[0], botSummary.lodBoundsMin[0]) ||
-	!nearly_equal(botTriangle->lodBoundsMin[1], botSummary.lodBoundsMin[1]) ||
-	!nearly_equal(botTriangle->lodBoundsMin[2], botSummary.lodBoundsMin[2]) ||
-	!nearly_equal(botTriangle->lodBoundsMax[0], botSummary.lodBoundsMax[0]) ||
-	!nearly_equal(botTriangle->lodBoundsMax[1], botSummary.lodBoundsMax[1]) ||
-	!nearly_equal(botTriangle->lodBoundsMax[2], botSummary.lodBoundsMax[2]))
-	FAIL("database-backed BoT export should carry cached Obol LoD bounds");
+    if (botMeshExport.getTriangleCount() != 0 ||
+	botMeshExport.getLineCount() != 12 ||
+	!export_line_with_path(botMeshExport, "/tet.bot"))
+	FAIL("database-backed BoT display export should expose the current structural proxy");
     bbox = botMeshExport.getBounds();
     if (bbox.isEmpty() ||
 	!nearly_equal(bbox.getMin()[0], 0.0f) ||
@@ -5651,7 +5639,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 
     source = new SoBRLDatabaseSource;
     source->setDatabase(dbip);
-    source->path = "box.s";
+    source->path = "tet.bot";
     source->sourceRevision = 17;
     source->drawMode = SoBRLDatabaseSource::SHADED;
     source->realizationRoleFlags = SoBRLDatabaseSource::REALIZATION_ROLE_MESH;
@@ -5677,12 +5665,12 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     compactMeshLodExactExport.apply(lodRoot);
     if (compactMeshLodExactExport.getSourceBackedFullDetailRequestCount() != 1 ||
 	!BU_STR_EQUAL(compactMeshLodExactExport.getSourceBackedFullDetailRequest(0).
-		path.getString(), "/box.s"))
+		path.getString(), "/tet.bot"))
 	FAIL("thresholded indexed-face compact source should retain full-detail export request");
 
     BObolLodRequest meshRequest;
-    meshRequest.objectPath = "box.s";
-    meshRequest.objectName = "box.s";
+    meshRequest.objectPath = "tet.bot";
+    meshRequest.objectName = "tet.bot";
     meshRequest.viewRevision = 2;
     meshRequest.policyRevision = 2;
     meshRequest.drawMode = BOBOL_LOD_DRAW_SHADED;
@@ -5738,7 +5726,7 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     if (!rawDetail || !rawDetail->isOfType(SoBRLPickDetail::getClassTypeId()))
 	FAIL("compact view-local CAD mesh pick should return a BRL-CAD detail");
     pickDetail = static_cast<const SoBRLPickDetail *>(rawDetail);
-    if (bu_strcmp(pickDetail->getPath().getString(), "box.s") != 0 ||
+    if (bu_strcmp(pickDetail->getPath().getString(), "tet.bot") != 0 ||
 	pickDetail->getPrimitiveKind() != SoBRLPickDetail::FACE)
 	FAIL("compact view-local CAD mesh pick should preserve source face identity");
 
@@ -5799,12 +5787,10 @@ main(int UNUSED(argc), const char **UNUSED(argv))
     SoBRLExportAction assemblyMeshExactExport;
     assemblyMeshExactExport.setGeometryPolicy(SoBRLExportAction::FULL_DETAIL);
     assemblyMeshExactExport.apply(root);
-    if (assemblyMeshExactExport.getSourceBackedFullDetailRequestCount() != 2 ||
-	!BU_STR_EQUAL(assemblyMeshExactExport.getSourceBackedFullDetailRequest(0).
-		path.getString(), "/assembly.c/left.c/box.s") ||
-	!BU_STR_EQUAL(assemblyMeshExactExport.getSourceBackedFullDetailRequest(1).
-		path.getString(), "/assembly.c/right.c/box.s"))
-	FAIL("thresholded shaded assembly exact export should retain per-occurrence source requests");
+    if (assemblyMeshExactExport.getSourceBackedFullDetailRequestCount() != 0 ||
+	assemblyMeshExactExport.getTriangleCount() !=
+	    small_source_triangle_count(source))
+	FAIL("a BoT threshold must not replace native analytic assembly meshes with source-backed PoP requests");
 
     BObolCompactInstanceHandle refreshHandle0;
     BObolCompactInstanceHandle refreshHandle1;

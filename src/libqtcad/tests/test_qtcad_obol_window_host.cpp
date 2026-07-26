@@ -565,6 +565,8 @@ test_qtcad_system_gl_factory_endpoint(void)
     QOpenGLWidget *canvas = qobject_cast<QOpenGLWidget *>(
 	host->canvas()->asQObject());
     CHECK(canvas, "Qt system-GL endpoint owns a QOpenGLWidget");
+    CHECK(canvas->updateBehavior() == QOpenGLWidget::PartialUpdate,
+	"Qt system-GL endpoint preserves the last complete frame while an asynchronous replacement is pending");
 
     QElapsedTimer timer;
     timer.start();

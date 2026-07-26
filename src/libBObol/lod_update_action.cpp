@@ -185,18 +185,8 @@ lod_update_matches_source(const SoBRLDatabaseSource *source,
     if (result.request.occurrenceKey.getLength() > 0) {
 	if (!source->hasCompactInstanceIndex())
 	    return FALSE;
-	const int count = source->getCompactInstanceCount();
-	for (int i = 0; i < count; i++) {
-	    BObolCompactInstanceHandle handle;
-	    BObolCompactInstanceSummary summary;
-	    if (source->getCompactInstanceHandle(i, handle) &&
-		source->getCompactInstanceSummary(handle, summary) &&
-		summary.valid &&
-		lod_update_string_matches(summary.sourceInstanceKey,
-		    result.request.occurrenceKey))
-		return TRUE;
-	}
-	return FALSE;
+	return source->hasCompactInstanceKey(
+	    result.request.occurrenceKey.getString());
     }
 
     if (lod_update_path_matches(source->path.getValue(),

@@ -25,6 +25,7 @@ set(
   quat.c
   qvrot.c
   saveview.cpp
+  shading.cpp
   size.c
   snap.c
   view.cpp
