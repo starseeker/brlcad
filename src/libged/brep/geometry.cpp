@@ -1328,12 +1328,18 @@ _brep_cmd_geo_face_edit(void *bs, int argc, const char **argv)
 	}
 	bu_vls_printf(gib->vls,
 		"class %s trims %d edges %d adjacent_faces %d natural %d "
-		"isoparametric %d general %d topology_safe %d can_translate %d",
+		"isoparametric %d general %d topology_safe %d can_translate %d "
+		"backend %s constraint_edges %d constraint_faces %d "
+		"variables %d samples %d residual %.17g",
 		brep_cv_constraint_type_name(status.classification),
 		status.trim_count, status.edge_count, status.other_face_count,
 		status.natural_trim_count, status.isoparametric_trim_count,
 		status.general_trim_count, status.topology_safe ? 1 : 0,
-		status.can_translate ? 1 : 0);
+		status.can_translate ? 1 : 0,
+		brep_cv_edit_backend_name(status.edit_backend),
+		status.constraint_edge_count, status.constraint_face_count,
+		status.constraint_variable_count,
+		status.constraint_sample_count, status.constraint_residual);
 	return BRLCAD_OK;
     } else if (BU_STR_EQUAL(cmd, "f_set_cv") && (argc == 7 || argc == 8)) {
 	const int face_id = atoi(argv[1]);

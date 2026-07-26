@@ -23,9 +23,9 @@ boundaries that must govern any implementation.
   both faces, their 2-D trims, and their 3-D edge curve after a boundary edit.
 - Direct CV editing must consequently be conservative in BRL-CAD.  An edit is
   safe without topology repair when the edited basis function has zero
-  support on every trim of the face.  A new exact backend also admits a
-  strict class of two-face isoparametric C0 edits; other trim-influencing CVs
-  remain visible and selectable but locked.
+  support on every trim of the face.  Transactional exact and sampled
+  backends also admit strict exact single-edge and sampled multi-edge C0
+  edits; other trim-influencing CVs remain visible and selectable but locked.
 - Eigen is sufficient for the linear systems in interpolation,
   approximation, compatibility, and first-generation fairness tools.  No
   additional solver dependency is currently justified.  Robust B-rep
@@ -163,7 +163,7 @@ beyond C0 adds derivative constraints.
 
 The implemented policy classifies both edges and selected CVs.  Interior CVs
 use the direct face-aware edit path.  When a CV influences exactly one mated
-edge, the constrained path may:
+edge, the exact-isoparametric path may:
 
 1. verify that both trims are monotone isoparametric curves on distinct,
    unshared, non-transposed NURBS surfaces;
@@ -182,10 +182,36 @@ edge, the constrained path may:
 
 This does not assume corresponding surface rows.  It supports compatible
 natural clamped boundaries and compatible interior isoparametric trims
-through one backend.  It currently keeps pcurves and rational weights fixed,
-and rejects periodic seams, vertices/junctions, multiple affected trims,
-one-sided isoparametric edges, arbitrary trims, shared underlying surfaces,
-and incompatible trace spaces.
+through one backend.
+
+When that exact path is unavailable, a sampled C0 backend now:
+
+1. seeds an affected-topology graph with every mated trim influenced by the
+   selected CV;
+2. traverses candidate CV support on adjacent faces, adding every further
+   mated trim, edge, face, and fixed endpoint vertex that could move;
+3. recovers edge-to-trim correspondence with adaptive subdivision driven by
+   control-net complexity plus parameter, UV, and geometric error;
+4. measures fixed-weight CV influence throughout the graph and solves all
+   non-source translations in one minimum-norm
+   `CompleteOrthogonalDecomposition` system;
+5. adds midpoint collocation rows and resolves until unsampled constraint
+   residuals pass;
+6. applies all surface deformations on a complete trial copy;
+7. adaptively samples each deformed trace and fits a clamped cubic NURBS edge
+   by direct least squares with increasing control count;
+8. recursively checks every seam and edge-on-surface error, using at least 64
+   validation intervals and accepting at most the larger of the original
+   edge tolerance and `2e-7` times local scale; and
+9. commits only after full openNURBS B-rep validation.
+
+This supports a fixed-pcurve subset of genuinely arbitrary and
+one-sided-isoparametric multi-edge/multi-face graphs.  It still keeps pcurves,
+rational weights, and vertices fixed and rejects periodic seams, open
+boundaries reached by candidate deformation, shared or transposed underlying
+surfaces, failed edge/trim correspondence, and cases needing trim
+reconstruction or face re-intersection.  Thus it is meaningful general
+manifold-boundary support, but not yet the complete arbitrary edit solution.
 
 A local census of shared edges in `db/nist/NIST_MBE_PMI_{1,2,4}.stp`
 illustrates why this exact case should be a backend rather than the whole
@@ -211,14 +237,16 @@ Recommended capability stages are:
 2. Add exact C0 coupling for compatible isoparametric traces, including
    natural boundaries.  A strict transactional subset is implemented.
 3. Generalize C0 propagation with an affected-topology graph, exact
-   constraints where available, adaptive geometric constraints for arbitrary
-   trims, and face re-intersection/trim reconstruction when deformation is
-   insufficient.
+   constraints where available, geometric constraints for arbitrary trims,
+   and face re-intersection/trim reconstruction when deformation is
+   insufficient.  Adaptive fixed-pcurve multi-edge/multi-face traversal and
+   global solving are implemented; movable junctions and reconstruction
+   remain.
 4. Add optional G1/G2 derivative constraints and coupled adjacent rows.
 
 This policy is intentionally stricter than Ayam.  It supports ordinary
-interior and eligible exact-seam editing without implying that arbitrary
-manifold boundary editing has been solved.
+interior, eligible exact-seam, and eligible sampled-seam editing without
+implying that arbitrary manifold boundary editing has been completely solved.
 
 ## Solver assessment
 
@@ -247,11 +275,12 @@ large sparse direct dependency should be considered only after a concrete
 operation and benchmark demonstrate that Eigen is inadequate, followed by a
 license review of the exact package and all optional backends.
 
-The implemented exact C0 trace coupling uses
-`CompleteOrthogonalDecomposition`, including residual and coefficient
-checks.  Its successful natural and interior-isoparametric fixtures confirm
-that Eigen is adequate for this stage; geometry coverage, not solver
-capability, is the present limitation.
+Both implemented C0 backends use `CompleteOrthogonalDecomposition`, including
+residual and coefficient checks.  The successful exact, arbitrary-trim, and
+one-sided-isoparametric fixtures confirm that Eigen is adequate for this
+stage; proxy/periodic/junction topology, trim reconstruction, and
+representative-model coverage—not solver capability—remain the limiting
+work.
 
 ## Licensing cautions
 
@@ -301,12 +330,18 @@ The initial implementation establishes:
 - exact transactional C0 coupling for eligible natural and interior
   isoparametric two-face seams, including adjacent-face solve and shared-edge
   regeneration;
+- affected-topology graph traversal and a global sampled fixed-pcurve C0
+  backend for eligible arbitrary and one-sided-isoparametric multi-edge
+  graphs;
+- adaptive edge-to-trim correspondence recovery and collocation refinement,
+  global sampled influence solving, least-squares replacement NURBS-edge
+  fitting, and adaptive edge-on-surface residual validation;
 - face-aware reverse/transpose operations;
 - libged `brep ... geo` commands plus whole-B-rep validation;
 - librt edit descriptors for CV selection, move, absolute position, and
   rational weight;
-- reusable libqtcad CV pick/drag filters with interior, exact-C0-coupled, and
-  locked status;
+- reusable libqtcad CV pick/drag filters with interior, exact-C0, sampled-C0,
+  and locked status;
 - a qged edit panel with an in-memory control-net/wireframe preview and
   explicit Apply/Reset transaction.
 
@@ -314,12 +349,16 @@ Regression tests exercise reference remapping, shape invariance after knot
 insertion/degree elevation, rational Euclidean CV behavior, shared-surface
 isolation, rejection and rollback of unsupported trim-affecting edits, exact
 natural and interior-isoparametric seam coupling, preserved endpoints and
-topology-array counts, complete B-rep validity, and the coupled librt path.
+topology-array counts, arbitrary diagonal-trim coupling, a genuinely
+one-sided-isoparametric reparameterized-surface case, sampled endpoint
+rollback, nonlinear trim-parameter adaptive refinement, three-face/two-edge
+constraint propagation, complete B-rep validity, and the coupled librt path.
 
-The tranche deliberately does not claim arbitrary boundary propagation,
-trace compatibility refinement, rational boundary-weight or junction edits,
-G1/G2 coupled editing, construction history, knot removal, degree reduction,
-fairing, fitting, or robust offset/bevel/cap generation.
+The tranche deliberately does not claim movable junctions, trim
+reconstruction or face re-intersection, periodic seams, trace compatibility
+refinement, rational boundary-weight edits, G1/G2 coupled editing,
+construction history, knot removal, degree reduction, general fairing and
+fitting tools, or robust offset/bevel/cap generation.
 
 ## Ayam source map
 

@@ -71,7 +71,8 @@ public:
 
 signals:
 	void brep_selection_changed(int face, int cv_u, int cv_v,
-		bool topology_safe, bool can_translate);
+		bool topology_safe, bool can_translate, int edit_backend,
+		int constraint_edges, int constraint_faces);
 	void brep_changed();
 	void edit_rejected(const QString &reason);
 };
@@ -92,8 +93,8 @@ public:
  * Left-drag the selected CV in the current view plane.
  *
  * If no CV is selected, the press first picks the nearest one.  Interior CVs
- * and eligible C0-coupled isoparametric boundary CVs may be dragged; other
- * trim-influencing CVs remain selectable but locked.
+ * and eligible exact-isoparametric or sampled-C0 boundary CVs may be dragged;
+ * other trim-influencing CVs remain selectable but locked.
  */
 class QTCAD_EXPORT QgBrepMoveCVFilter : public QgBrepFilter {
 	Q_OBJECT

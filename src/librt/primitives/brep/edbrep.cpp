@@ -28,9 +28,9 @@
  *   ECMD_BREP_SRF_CV_SET   — place the selected CV at an absolute (x, y, z).
  *   ECMD_BREP_SRF_CV_WEIGHT — set the selected rational CV weight.
  *
- * Interior CV edits are applied directly.  Eligible single-edge
- * isoparametric boundary edits use libbrep's transactional exact C0 coupling
- * path.  Other trim-influencing edits remain locked.
+ * Interior CV edits are applied directly.  Eligible boundary edits use
+ * libbrep's transactional exact-isoparametric or sampled fixed-pcurve C0
+ * constraint-graph paths.  Other trim-influencing edits remain locked.
  */
 
 #include "common.h"
@@ -205,8 +205,10 @@ ecmd_brep_srf_select(struct rt_edit *s)
     const char *edit_status = "";
     if (!have_status || !status.can_translate)
 	edit_status = " (locked: unsupported trim constraint)";
-    else if (!status.topology_safe)
-	edit_status = " (editable: coupled C0 isoparametric edge)";
+    else if (status.edit_backend == BREP_CV_EDIT_BACKEND_EXACT_ISOPARAMETRIC)
+	edit_status = " (editable: exact C0 isoparametric edge)";
+    else if (status.edit_backend == BREP_CV_EDIT_BACKEND_SAMPLED_C0)
+	edit_status = " (editable: sampled C0 constraint graph)";
     bu_vls_printf(s->log_str,
 	    "Selected brep face %d CV (%d,%d) at (%.9f, %.9f, %.9f)%s\n",
 	    face_index, cv_i, cv_j,

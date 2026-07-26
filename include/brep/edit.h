@@ -76,12 +76,26 @@ extern "C++"
     };
 
     /**
-     * Classification and strict first-backend eligibility for one face CV.
+     * Geometry backend selected for a face CV translation.
+     */
+    enum brep_cv_edit_backend {
+	BREP_CV_EDIT_BACKEND_NONE = -1,
+	BREP_CV_EDIT_BACKEND_INTERIOR = 0,
+	BREP_CV_EDIT_BACKEND_EXACT_ISOPARAMETRIC = 1,
+	BREP_CV_EDIT_BACKEND_SAMPLED_C0 = 2
+    };
+
+    /**
+     * Classification and current backend eligibility for one face CV.
      *
      * trim_count is the number of face trims intersected by the tensor-product
      * basis support of the CV.  can_translate is true only for an interior CV
-     * or for a single, two-face isoparametric edge that the current exact C0
-     * backend can update without disturbing another trim or an edge endpoint.
+     * or when an exact-isoparametric edge or sampled fixed-pcurve constraint
+     * graph can be updated without disturbing an edge endpoint.
+     * constraint_edge_count, constraint_face_count, and
+     * constraint_variable_count describe the prepared backend plan, not just
+     * the trims directly influenced by the selected CV.
+     * constraint_residual is negative when no solver plan was prepared.
      */
     struct brep_face_cv_constraint {
 	int classification;
@@ -91,6 +105,12 @@ extern "C++"
 	int natural_trim_count;
 	int isoparametric_trim_count;
 	int general_trim_count;
+	int edit_backend;
+	int constraint_edge_count;
+	int constraint_face_count;
+	int constraint_variable_count;
+	int constraint_sample_count;
+	double constraint_residual;
 	bool topology_safe;
 	bool can_translate;
     };
@@ -406,6 +426,12 @@ extern "C++"
     brep_cv_constraint_type_name(int classification);
 
     /**
+     * Return a stable text label for a brep_cv_edit_backend value.
+     */
+    BREP_EXPORT extern const char *
+    brep_cv_edit_backend_name(int backend);
+
+    /**
      * Report the trim class and current coupled-translation eligibility of a
      * face CV.
      */
@@ -414,8 +440,8 @@ extern "C++"
 	    int cv_id_u, int cv_id_v, struct brep_face_cv_constraint *status);
 
     /**
-     * Return true if the CV is either topology-safe or accepted by the current
-     * exact C0 isoparametric coupling backend.
+     * Return true if the CV is topology-safe or accepted by a current C0
+     * boundary coupling backend.
      */
     BREP_EXPORT extern bool
     brep_face_cv_can_translate(const ON_Brep *brep, int face,
@@ -439,10 +465,11 @@ extern "C++"
 
     /**
      * Translate a face CV transactionally.  Interior edits use the ordinary
-     * face-aware path.  A trim-influencing edit is accepted only when the
-     * current exact C0 backend can couple the two isoparametric face traces,
-     * update the shared 3-D edge, retain fixed weights and 2-D trims, and
-     * validate the complete trial B-rep.
+     * face-aware path.  A trim-influencing edit is accepted only when an exact
+     * isoparametric or sampled C0 backend can couple every trace in its
+     * affected graph, update the shared 3-D edges, retain fixed weights and
+     * 2-D trims, adaptively validate edge-on-surface residuals, and validate
+     * the complete trial B-rep.
      */
     BREP_EXPORT extern bool
     brep_face_translate_cv_constrained(ON_Brep *brep, int face,

@@ -29,9 +29,12 @@
 #include <Eigen/Core>
 #include <Eigen/QR>
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <set>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -353,6 +356,100 @@ trim_face_index(const ON_Brep *brep, int trim_id)
     return brep->m_L[loop_id].m_fi;
 }
 
+struct affected_topology_edge {
+    int face_id[2] = {-1, -1};
+    int trim_id[2] = {-1, -1};
+    int edge_id = -1;
+    int vertex_id[2] = {-1, -1};
+};
+
+struct affected_topology_graph {
+    int source_face = -1;
+    std::vector<affected_topology_edge> edges;
+    std::vector<int> face_ids;
+    std::vector<int> vertex_ids;
+};
+
+static bool
+append_unique(std::vector<int> *values, int value)
+{
+    if (!values || value < 0)
+	return false;
+    if (std::find(values->begin(), values->end(), value) == values->end())
+	values->push_back(value);
+    return true;
+}
+
+static bool
+append_affected_edge(const ON_Brep *brep, int trim_id,
+	struct affected_topology_graph *graph)
+{
+    if (!brep || !graph || trim_id < 0 || trim_id >= brep->m_T.Count())
+	return false;
+    const ON_BrepTrim &trim = brep->m_T[trim_id];
+    const int face_id = trim_face_index(brep, trim_id);
+    if (trim.m_type != ON_BrepTrim::mated || face_id < 0
+	    || trim.m_ei < 0 || trim.m_ei >= brep->m_E.Count())
+	return false;
+    for (const struct affected_topology_edge &existing : graph->edges) {
+	if (existing.edge_id == trim.m_ei)
+	    return existing.trim_id[0] == trim_id
+		|| existing.trim_id[1] == trim_id;
+    }
+
+    const ON_BrepEdge &edge = brep->m_E[trim.m_ei];
+    if (edge.m_ti.Count() != 2 || edge.m_c3i < 0
+	    || edge.m_c3i >= brep->m_C3.Count()
+	    || edge.m_vi[0] < 0 || edge.m_vi[0] >= brep->m_V.Count()
+	    || edge.m_vi[1] < 0 || edge.m_vi[1] >= brep->m_V.Count())
+	return false;
+    const int mate_trim_id = edge.m_ti[0] == trim_id
+	? edge.m_ti[1] : edge.m_ti[0];
+    if (mate_trim_id < 0 || mate_trim_id >= brep->m_T.Count())
+	return false;
+    const ON_BrepTrim &mate_trim = brep->m_T[mate_trim_id];
+    const int mate_face_id = trim_face_index(brep, mate_trim_id);
+    if (mate_trim.m_type != ON_BrepTrim::mated
+	    || mate_trim.m_ei != trim.m_ei
+	    || mate_face_id < 0 || mate_face_id == face_id)
+	return false;
+
+    struct affected_topology_edge affected;
+    affected.face_id[0] = face_id;
+    affected.face_id[1] = mate_face_id;
+    affected.trim_id[0] = trim_id;
+    affected.trim_id[1] = mate_trim_id;
+    affected.edge_id = trim.m_ei;
+    affected.vertex_id[0] = edge.m_vi[0];
+    affected.vertex_id[1] = edge.m_vi[1];
+    graph->edges.push_back(affected);
+    return append_unique(&graph->face_ids, face_id)
+	&& append_unique(&graph->face_ids, mate_face_id)
+	&& append_unique(&graph->vertex_ids, edge.m_vi[0])
+	&& append_unique(&graph->vertex_ids, edge.m_vi[1]);
+}
+
+static bool
+build_affected_topology_graph(const ON_Brep *brep, int face_id, int cv_u,
+	int cv_v, struct affected_topology_graph *graph)
+{
+    if (!brep || !graph || face_id < 0 || face_id >= brep->m_F.Count())
+	return false;
+
+    std::vector<int> influenced;
+    if (!face_cv_influenced_trims(brep, face_id, cv_u, cv_v, &influenced)
+	    || influenced.empty())
+	return false;
+    *graph = affected_topology_graph();
+    graph->source_face = face_id;
+    append_unique(&graph->face_ids, face_id);
+    for (int trim_id : influenced) {
+	if (!append_affected_edge(brep, trim_id, graph))
+	    return false;
+    }
+    return true;
+}
+
 struct iso_trim_trace {
     int trim_id = -1;
     int face_id = -1;
@@ -601,31 +698,18 @@ prepare_coupled_iso_plan(const ON_Brep *brep, int face_id, int cv_u,
 	    || face_id < 0 || face_id >= brep->m_F.Count())
 	return false;
 
-    std::vector<int> influenced;
-    if (!face_cv_influenced_trims(brep, face_id, cv_u, cv_v, &influenced)
-	    || influenced.size() != 1)
+    struct affected_topology_graph graph;
+    if (!build_affected_topology_graph(brep, face_id, cv_u, cv_v, &graph)
+	    || graph.edges.size() != 1)
 	return false;
-    const int source_trim_id = influenced[0];
+    const struct affected_topology_edge &affected = graph.edges[0];
+    const int source_side = affected.face_id[0] == face_id ? 0 : 1;
+    const int mate_side = 1 - source_side;
+    const int source_trim_id = affected.trim_id[source_side];
     const ON_BrepTrim &source_trim = brep->m_T[source_trim_id];
-    if (source_trim.m_type != ON_BrepTrim::mated
-	    || source_trim.m_ei < 0
-	    || source_trim.m_ei >= brep->m_E.Count())
-	return false;
-    const ON_BrepEdge &edge = brep->m_E[source_trim.m_ei];
-    if (edge.m_ti.Count() != 2 || edge.m_c3i < 0
-	    || edge.m_c3i >= brep->m_C3.Count())
-	return false;
-
-    const int mate_trim_id = edge.m_ti[0] == source_trim_id
-	? edge.m_ti[1] : edge.m_ti[0];
-    if (mate_trim_id < 0 || mate_trim_id >= brep->m_T.Count())
-	return false;
-    const ON_BrepTrim &mate_trim = brep->m_T[mate_trim_id];
-    if (mate_trim.m_type != ON_BrepTrim::mated)
-	return false;
-    const int mate_face_id = trim_face_index(brep, mate_trim_id);
-    if (mate_face_id < 0 || mate_face_id == face_id)
-	return false;
+    const ON_BrepEdge &edge = brep->m_E[affected.edge_id];
+    const int mate_trim_id = affected.trim_id[mate_side];
+    const int mate_face_id = affected.face_id[mate_side];
 
     struct iso_trim_trace source_trace;
     struct iso_trim_trace mate_trace;
@@ -645,7 +729,9 @@ prepare_coupled_iso_plan(const ON_Brep *brep, int face_id, int cv_u,
 	dynamic_cast<const ON_NurbsSurface *>(source_face.SurfaceOf());
     const ON_NurbsSurface *mate_surface =
 	dynamic_cast<const ON_NurbsSurface *>(mate_face.SurfaceOf());
-    if (!source_surface || !mate_surface)
+    if (!source_surface || !mate_surface
+	    || source_surface->IsPeriodic(0) || source_surface->IsPeriodic(1)
+	    || mate_surface->IsPeriodic(0) || mate_surface->IsPeriodic(1))
 	return false;
 
     ON_NurbsCurve *source_curve =
@@ -743,6 +829,789 @@ prepare_coupled_iso_plan(const ON_Brep *brep, int face_id, int cv_u,
     return true;
 }
 
+struct boundary_constraint_sample {
+    double fraction = 0.0;
+    double trim_parameter[2] = {ON_UNSET_VALUE, ON_UNSET_VALUE};
+    ON_2dPoint uv[2] = {ON_2dPoint::UnsetPoint, ON_2dPoint::UnsetPoint};
+    ON_3dPoint point[2] = {ON_3dPoint::UnsetPoint, ON_3dPoint::UnsetPoint};
+};
+
+struct sampled_edge_plan {
+    struct affected_topology_edge topology;
+    std::vector<boundary_constraint_sample> samples;
+    double geometry_scale = 1.0;
+    double geometry_tolerance = ON_UNSET_VALUE;
+};
+
+struct sampled_cv_variable {
+    int face_id = -1;
+    int cv_u = -1;
+    int cv_v = -1;
+};
+
+struct sampled_c0_plan {
+    struct affected_topology_graph graph;
+    int source_cv_u = -1;
+    int source_cv_v = -1;
+    std::vector<sampled_edge_plan> edges;
+    std::vector<sampled_cv_variable> variables;
+    std::vector<double> coefficients;
+    double solve_residual = ON_UNSET_VALUE;
+    int constraint_sample_count = 0;
+};
+
+static bool
+trim_surface_evaluate(const ON_Brep *brep, int trim_id, double parameter,
+	ON_2dPoint *uv, ON_3dPoint *point, ON_3dVector *tangent)
+{
+    if (!brep || trim_id < 0 || trim_id >= brep->m_T.Count())
+	return false;
+    const int face_id = trim_face_index(brep, trim_id);
+    if (face_id < 0 || face_id >= brep->m_F.Count())
+	return false;
+    const ON_BrepTrim &trim = brep->m_T[trim_id];
+    const ON_BrepFace &face = brep->m_F[face_id];
+    ON_3dPoint uv3;
+    ON_3dVector uv_derivative;
+    if (!trim.Ev1Der(parameter, uv3, uv_derivative))
+	return false;
+    ON_3dPoint surface_point;
+    ON_3dVector surface_u;
+    ON_3dVector surface_v;
+    if (!face.Ev1Der(uv3.x, uv3.y, surface_point, surface_u, surface_v))
+	return false;
+    if (uv)
+	*uv = ON_2dPoint(uv3.x, uv3.y);
+    if (point)
+	*point = surface_point;
+    if (tangent)
+	*tangent = uv_derivative.x * surface_u + uv_derivative.y * surface_v;
+    return true;
+}
+
+static bool
+closest_trim_parameter(const ON_Brep *brep, int trim_id,
+	const ON_3dPoint &target, double fraction, double *parameter,
+	double *distance)
+{
+    if (!brep || !parameter || !distance
+	    || trim_id < 0 || trim_id >= brep->m_T.Count())
+	return false;
+    const ON_BrepTrim &trim = brep->m_T[trim_id];
+    const ON_Interval domain = trim.Domain();
+    if (!domain.IsIncreasing())
+	return false;
+
+    const double oriented_fraction =
+	trim.m_bRev3d ? 1.0 - fraction : fraction;
+    double current = domain.ParameterAt(oriented_fraction);
+    ON_3dPoint current_point;
+    ON_3dVector tangent;
+    if (!trim_surface_evaluate(brep, trim_id, current, NULL,
+	    &current_point, &tangent))
+	return false;
+    double current_distance = current_point.DistanceTo(target);
+
+    for (int iteration = 0; iteration < 16; ++iteration) {
+	const double tangent_squared = tangent * tangent;
+	if (!ON_IsValid(tangent_squared)
+		|| tangent_squared <= ON_ZERO_TOLERANCE * ON_ZERO_TOLERANCE)
+	    break;
+	const ON_3dVector error = current_point - target;
+	double step = (error * tangent) / tangent_squared;
+	const double max_step = 0.125 * domain.Length();
+	step = std::max(-max_step, std::min(max_step, step));
+	double candidate = std::max(domain.Min(),
+		std::min(domain.Max(), current - step));
+	if (std::fabs(candidate - current)
+		<= ON_ZERO_TOLERANCE * std::max(1.0, domain.Length()))
+	    break;
+
+	ON_3dPoint candidate_point;
+	ON_3dVector candidate_tangent;
+	double candidate_distance = ON_DBL_MAX;
+	bool accepted = false;
+	for (int line_search = 0; line_search < 10; ++line_search) {
+	    if (!trim_surface_evaluate(brep, trim_id, candidate, NULL,
+		    &candidate_point, &candidate_tangent))
+		return false;
+	    candidate_distance = candidate_point.DistanceTo(target);
+	    if (candidate_distance <= current_distance) {
+		accepted = true;
+		break;
+	    }
+	    candidate = 0.5 * (candidate + current);
+	}
+	if (!accepted)
+	    break;
+	current = candidate;
+	current_point = candidate_point;
+	tangent = candidate_tangent;
+	if (std::fabs(current_distance - candidate_distance)
+		<= 1.0e-13 * std::max(1.0, current_distance)) {
+	    current_distance = candidate_distance;
+	    break;
+	}
+	current_distance = candidate_distance;
+    }
+
+    *parameter = current;
+    *distance = current_distance;
+    return ON_IsValid(current) && ON_IsValid(current_distance);
+}
+
+static bool
+edge_geometry_limits(const ON_Brep *brep,
+	const struct affected_topology_edge &topology, double *geometry_scale,
+	double *geometry_tolerance, double *correspondence_tolerance)
+{
+    if (!brep || !geometry_scale || !geometry_tolerance
+	    || !correspondence_tolerance || topology.edge_id < 0
+	    || topology.edge_id >= brep->m_E.Count())
+	return false;
+    const ON_BrepEdge &edge = brep->m_E[topology.edge_id];
+    ON_BoundingBox bbox;
+    double scale = 1.0;
+    if (edge.GetBoundingBox(bbox, false) && bbox.IsValid())
+	scale = std::max(scale, bbox.Diagonal().Length());
+    const double old_tolerance =
+	ON_IsValid(edge.m_tolerance) && edge.m_tolerance >= 0.0
+	? edge.m_tolerance : 0.0;
+    *geometry_scale = scale;
+    *geometry_tolerance = std::max(2.0e-7 * scale, old_tolerance);
+    *correspondence_tolerance =
+	std::max(1.0e-6 * scale, 10.0 * old_tolerance);
+    return true;
+}
+
+static bool
+evaluate_constraint_sample(const ON_Brep *brep,
+	const struct affected_topology_edge &topology, double fraction,
+	double correspondence_tolerance,
+	struct boundary_constraint_sample *sample)
+{
+    if (!brep || !sample || fraction < 0.0 || fraction > 1.0
+	    || topology.edge_id < 0 || topology.edge_id >= brep->m_E.Count())
+	return false;
+    const ON_BrepEdge &edge = brep->m_E[topology.edge_id];
+    const ON_Interval edge_domain = edge.Domain();
+    if (!edge_domain.IsIncreasing())
+	return false;
+
+    *sample = boundary_constraint_sample();
+    sample->fraction = fraction;
+    const ON_3dPoint edge_point =
+	edge.PointAt(edge_domain.ParameterAt(fraction));
+    for (int side = 0; side < 2; ++side) {
+	double distance = ON_UNSET_VALUE;
+	if (!closest_trim_parameter(brep, topology.trim_id[side], edge_point,
+		fraction, &sample->trim_parameter[side], &distance)
+		|| !trim_surface_evaluate(brep, topology.trim_id[side],
+		    sample->trim_parameter[side], &sample->uv[side],
+		    &sample->point[side], NULL)
+		|| distance > correspondence_tolerance)
+	    return false;
+    }
+    return sample->point[0].DistanceTo(sample->point[1])
+	<= 2.0 * correspondence_tolerance;
+}
+
+static bool
+constraint_interval_needs_split(const ON_Brep *brep,
+	const struct affected_topology_edge &topology,
+	const struct boundary_constraint_sample &left,
+	const struct boundary_constraint_sample &middle,
+	const struct boundary_constraint_sample &right, double geometry_scale)
+{
+    const double geometry_limit = 1.0e-5 * geometry_scale;
+    for (int side = 0; side < 2; ++side) {
+	const ON_BrepTrim &trim = brep->m_T[topology.trim_id[side]];
+	const double parameter_scale = std::max(1.0, trim.Domain().Length());
+	if (std::fabs(middle.trim_parameter[side]
+		- 0.5 * (left.trim_parameter[side]
+		    + right.trim_parameter[side]))
+		> 1.0e-5 * parameter_scale)
+	    return true;
+	const ON_BrepFace &face = brep->m_F[topology.face_id[side]];
+	const ON_Surface *surface = face.SurfaceOf();
+	if (!surface)
+	    return true;
+	const double uv_scale = std::max(1.0,
+		std::max(surface->Domain(0).Length(),
+		    surface->Domain(1).Length()));
+	const ON_2dPoint uv_midpoint(
+		0.5 * (left.uv[side].x + right.uv[side].x),
+		0.5 * (left.uv[side].y + right.uv[side].y));
+	if (middle.uv[side].DistanceTo(uv_midpoint) > 1.0e-5 * uv_scale)
+	    return true;
+	const ON_3dPoint chord_midpoint =
+	    0.5 * (left.point[side] + right.point[side]);
+	if (middle.point[side].DistanceTo(chord_midpoint) > geometry_limit)
+	    return true;
+    }
+    return false;
+}
+
+static bool
+append_adaptive_constraint_interval(const ON_Brep *brep,
+	const struct affected_topology_edge &topology,
+	const struct boundary_constraint_sample &left,
+	const struct boundary_constraint_sample &right, int depth,
+	int minimum_depth,
+	double geometry_scale, double correspondence_tolerance,
+	std::vector<boundary_constraint_sample> *samples)
+{
+    const int maximum_depth = 11;
+    struct boundary_constraint_sample middle;
+    if (!evaluate_constraint_sample(brep, topology,
+	    0.5 * (left.fraction + right.fraction),
+	    correspondence_tolerance, &middle))
+	return false;
+    const bool split = depth < minimum_depth
+	|| constraint_interval_needs_split(brep, topology, left, middle,
+	    right, geometry_scale);
+    if (split) {
+	if (depth >= maximum_depth)
+	    return false;
+	if (!append_adaptive_constraint_interval(brep, topology, left, middle,
+		depth + 1, minimum_depth, geometry_scale,
+		correspondence_tolerance, samples)
+		|| !append_adaptive_constraint_interval(brep, topology, middle,
+		    right, depth + 1, minimum_depth, geometry_scale,
+		    correspondence_tolerance, samples))
+	    return false;
+    } else {
+	samples->push_back(right);
+    }
+    return samples->size() <= 4097;
+}
+
+static bool
+build_constraint_samples(const ON_Brep *brep,
+	const struct affected_topology_edge &topology,
+	struct sampled_edge_plan *edge_plan)
+{
+    if (!brep || !edge_plan)
+	return false;
+    double correspondence_tolerance = ON_UNSET_VALUE;
+    edge_plan->topology = topology;
+    if (!edge_geometry_limits(brep, topology, &edge_plan->geometry_scale,
+	    &edge_plan->geometry_tolerance, &correspondence_tolerance))
+	return false;
+
+    struct boundary_constraint_sample start;
+    struct boundary_constraint_sample end;
+    if (!evaluate_constraint_sample(brep, topology, 0.0,
+	    correspondence_tolerance, &start)
+	    || !evaluate_constraint_sample(brep, topology, 1.0,
+		correspondence_tolerance, &end))
+	return false;
+    int maximum_cv_count = 4;
+    for (int side = 0; side < 2; ++side) {
+	const ON_NurbsSurface *surface =
+	    dynamic_cast<const ON_NurbsSurface *>(
+		brep->m_F[topology.face_id[side]].SurfaceOf());
+	if (!surface)
+	    return false;
+	maximum_cv_count = std::max(maximum_cv_count,
+		std::max(surface->CVCount(0), surface->CVCount(1)));
+    }
+    const int target_interval_count = 4 * maximum_cv_count;
+    int minimum_depth = 4;
+    while (minimum_depth < 11
+	    && (1 << minimum_depth) < target_interval_count)
+	++minimum_depth;
+    edge_plan->samples.clear();
+    edge_plan->samples.push_back(start);
+    if (!append_adaptive_constraint_interval(brep, topology, start, end, 0,
+	    minimum_depth, edge_plan->geometry_scale, correspondence_tolerance,
+	    &edge_plan->samples))
+	return false;
+
+    for (int side = 0; side < 2; ++side) {
+	const ON_BrepTrim &trim = brep->m_T[topology.trim_id[side]];
+	const double direction = trim.m_bRev3d ? -1.0 : 1.0;
+	const double parameter_tolerance =
+	    1.0e-10 * std::max(1.0, trim.Domain().Length());
+	for (size_t i = 1; i < edge_plan->samples.size(); ++i) {
+	    if (direction * (edge_plan->samples[i].trim_parameter[side]
+		    - edge_plan->samples[i - 1].trim_parameter[side])
+		    < -parameter_tolerance)
+		return false;
+	}
+    }
+    return true;
+}
+
+static bool
+surface_sample_influence(const ON_NurbsSurface *surface, int cv_u, int cv_v,
+	const std::vector<ON_2dPoint> &uvs, std::vector<double> *influence)
+{
+    if (!surface || !influence || uvs.empty())
+	return false;
+    ON_Surface *surface_copy = surface->DuplicateSurface();
+    ON_NurbsSurface *changed =
+	dynamic_cast<ON_NurbsSurface *>(surface_copy);
+    if (!changed || !translate_surface_cv(changed, cv_u, cv_v,
+	    ON_3dVector(1.0, 0.0, 0.0))) {
+	delete surface_copy;
+	return false;
+    }
+
+    influence->resize(uvs.size());
+    for (size_t sample = 0; sample < uvs.size(); ++sample) {
+	const ON_3dPoint before =
+	    surface->PointAt(uvs[sample].x, uvs[sample].y);
+	const ON_3dPoint after =
+	    changed->PointAt(uvs[sample].x, uvs[sample].y);
+	const ON_3dVector displacement = after - before;
+	if (std::fabs(displacement.y) > 1.0e-10
+		|| std::fabs(displacement.z) > 1.0e-10) {
+	    delete surface_copy;
+	    return false;
+	}
+	(*influence)[sample] = displacement.x;
+    }
+    delete surface_copy;
+    return true;
+}
+
+static bool
+graph_has_edge(const struct affected_topology_graph &graph, int edge_id)
+{
+    for (const struct affected_topology_edge &edge : graph.edges) {
+	if (edge.edge_id == edge_id)
+	    return true;
+    }
+    return false;
+}
+
+static bool
+candidate_cv_scope(const ON_Brep *brep,
+	const struct affected_topology_graph &graph, int face_id, int cv_u,
+	int cv_v, std::vector<int> *active_trims, bool *touches_graph)
+{
+    if (!brep || !active_trims || !touches_graph)
+	return false;
+    active_trims->clear();
+    *touches_graph = false;
+    std::vector<int> trim_ids;
+    if (!face_cv_influenced_trims(brep, face_id, cv_u, cv_v, &trim_ids)
+	    || trim_ids.empty())
+	return false;
+    const ON_NurbsSurface *surface =
+	dynamic_cast<const ON_NurbsSurface *>(
+	    brep->m_F[face_id].SurfaceOf());
+    if (!surface)
+	return false;
+
+    const int samples_per_trim = 2;
+    std::vector<ON_2dPoint> uvs;
+    uvs.reserve(trim_ids.size() * samples_per_trim);
+    for (int trim_id : trim_ids) {
+	if (trim_id < 0 || trim_id >= brep->m_T.Count())
+	    return false;
+	const ON_BrepTrim &trim = brep->m_T[trim_id];
+	for (int sample = 0; sample < samples_per_trim; ++sample) {
+	    const ON_3dPoint uv = trim.PointAt(trim.Domain().ParameterAt(
+		    (double)sample / (double)(samples_per_trim - 1)));
+	    uvs.push_back(ON_2dPoint(uv.x, uv.y));
+	}
+    }
+    std::vector<double> influence;
+    if (!surface_sample_influence(surface, cv_u, cv_v, uvs, &influence))
+	return false;
+
+    for (size_t trim_index = 0; trim_index < trim_ids.size(); ++trim_index) {
+	const size_t offset = trim_index * samples_per_trim;
+	if (std::fabs(influence[offset]) > 1.0e-9
+		|| std::fabs(influence[offset + samples_per_trim - 1])
+		    > 1.0e-9)
+	    return false;
+	const ON_BrepTrim &trim = brep->m_T[trim_ids[trim_index]];
+	if (trim.m_type != ON_BrepTrim::mated || trim.m_ei < 0
+		|| trim.m_ei >= brep->m_E.Count()
+		|| brep->m_E[trim.m_ei].m_ti.Count() != 2)
+	    return false;
+	active_trims->push_back(trim_ids[trim_index]);
+	if (graph_has_edge(graph, trim.m_ei))
+	    *touches_graph = true;
+    }
+    return !active_trims->empty();
+}
+
+static bool
+graph_faces_supported(const ON_Brep *brep,
+	const struct affected_topology_graph &graph)
+{
+    std::set<int> surface_ids;
+    for (int face_id : graph.face_ids) {
+	if (face_id < 0 || face_id >= brep->m_F.Count())
+	    return false;
+	const ON_BrepFace &face = brep->m_F[face_id];
+	const ON_NurbsSurface *surface =
+	    dynamic_cast<const ON_NurbsSurface *>(face.SurfaceOf());
+	if (face.ProxySurfaceIsTransposed() || face.m_si < 0
+		|| face.m_si >= brep->m_S.Count()
+		|| brep->SurfaceUseCount(face.m_si, 2) > 1
+		|| !surface || surface->IsPeriodic(0) || surface->IsPeriodic(1)
+		|| !surface_ids.insert(face.m_si).second)
+	    return false;
+    }
+    return true;
+}
+
+static bool
+expand_affected_topology_graph(const ON_Brep *brep,
+	struct affected_topology_graph *graph,
+	std::vector<sampled_cv_variable> *variables)
+{
+    if (!brep || !graph || !variables)
+	return false;
+    variables->clear();
+    std::set<std::tuple<int, int, int>> variable_keys;
+
+    for (int iteration = 0; iteration < 128; ++iteration) {
+	bool graph_changed = false;
+	const std::vector<int> faces = graph->face_ids;
+	for (int face_id : faces) {
+	    if (face_id == graph->source_face)
+		continue;
+	    const ON_NurbsSurface *surface =
+		dynamic_cast<const ON_NurbsSurface *>(
+		    brep->m_F[face_id].SurfaceOf());
+	    if (!surface)
+		return false;
+	    for (int cv_u = 0; cv_u < surface->CVCount(0); ++cv_u) {
+		for (int cv_v = 0; cv_v < surface->CVCount(1); ++cv_v) {
+		    std::vector<int> active_trims;
+		    bool touches_graph = false;
+		    if (!candidate_cv_scope(brep, *graph, face_id, cv_u, cv_v,
+			    &active_trims, &touches_graph)
+			    || !touches_graph)
+			continue;
+		    for (int trim_id : active_trims) {
+			const size_t old_edge_count = graph->edges.size();
+			if (!append_affected_edge(brep, trim_id, graph))
+			    return false;
+			if (graph->edges.size() != old_edge_count)
+			    graph_changed = true;
+		    }
+		    const std::tuple<int, int, int> key(face_id, cv_u, cv_v);
+		    if (variable_keys.insert(key).second) {
+			struct sampled_cv_variable variable;
+			variable.face_id = face_id;
+			variable.cv_u = cv_u;
+			variable.cv_v = cv_v;
+			variables->push_back(variable);
+		    }
+		}
+	    }
+	}
+	if (graph->edges.size() > 64 || graph->face_ids.size() > 64
+		|| variables->size() > 1024)
+	    return false;
+	if (!graph_changed)
+	    return graph_faces_supported(brep, *graph) && !variables->empty();
+    }
+    return false;
+}
+
+static int
+constraint_row_count(const std::vector<sampled_edge_plan> &edges)
+{
+    size_t count = 0;
+    for (const struct sampled_edge_plan &edge : edges)
+	count += edge.samples.size();
+    return count <= (size_t)INT_MAX ? (int)count : -1;
+}
+
+static bool
+global_cv_influence(const ON_Brep *brep,
+	const std::vector<sampled_edge_plan> &edges, int face_id, int cv_u,
+	int cv_v, Eigen::VectorXd *signed_influence)
+{
+    if (!brep || !signed_influence || face_id < 0
+	    || face_id >= brep->m_F.Count())
+	return false;
+    const int row_count = constraint_row_count(edges);
+    if (row_count <= 0)
+	return false;
+    signed_influence->setZero(row_count);
+    std::vector<ON_2dPoint> uvs;
+    std::vector<std::pair<int, double>> assignments;
+    int row = 0;
+    for (const struct sampled_edge_plan &edge : edges) {
+	for (const struct boundary_constraint_sample &sample : edge.samples) {
+	    for (int side = 0; side < 2; ++side) {
+		if (edge.topology.face_id[side] == face_id) {
+		    uvs.push_back(sample.uv[side]);
+		    assignments.push_back(std::make_pair(row,
+			    side == 0 ? 1.0 : -1.0));
+		}
+	    }
+	    ++row;
+	}
+    }
+    if (uvs.empty())
+	return true;
+    const ON_NurbsSurface *surface =
+	dynamic_cast<const ON_NurbsSurface *>(
+	    brep->m_F[face_id].SurfaceOf());
+    std::vector<double> influence;
+    if (!surface_sample_influence(surface, cv_u, cv_v, uvs, &influence))
+	return false;
+    for (size_t i = 0; i < assignments.size(); ++i)
+	(*signed_influence)(assignments[i].first) +=
+	    assignments[i].second * influence[i];
+    return true;
+}
+
+static bool
+solve_sampled_constraints(const ON_Brep *brep,
+	struct sampled_c0_plan *plan)
+{
+    if (!brep || !plan || plan->variables.empty())
+	return false;
+    const int row_count = constraint_row_count(plan->edges);
+    if (row_count <= 0 || row_count > 8192
+	    || plan->variables.size() > 1024)
+	return false;
+    Eigen::VectorXd source_influence;
+    if (!global_cv_influence(brep, plan->edges, plan->graph.source_face,
+	    plan->source_cv_u, plan->source_cv_v, &source_influence))
+	return false;
+
+    int row_offset = 0;
+    for (const struct sampled_edge_plan &edge : plan->edges) {
+	for (int side = 0; side < 2; ++side) {
+	    if (edge.topology.face_id[side] == plan->graph.source_face
+		    && (std::fabs(source_influence(row_offset)) > 1.0e-9
+			|| std::fabs(source_influence(row_offset
+			    + (int)edge.samples.size() - 1)) > 1.0e-9))
+		return false;
+	}
+	row_offset += (int)edge.samples.size();
+    }
+
+    Eigen::MatrixXd matrix(row_count, (int)plan->variables.size());
+    for (int column = 0; column < (int)plan->variables.size(); ++column) {
+	const struct sampled_cv_variable &variable =
+	    plan->variables[(size_t)column];
+	Eigen::VectorXd influence;
+	if (!global_cv_influence(brep, plan->edges, variable.face_id,
+		variable.cv_u, variable.cv_v, &influence))
+	    return false;
+	matrix.col(column) = influence;
+    }
+    const Eigen::VectorXd rhs = -source_influence;
+    Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> decomposition(matrix);
+    const Eigen::VectorXd solution = decomposition.solve(rhs);
+    const Eigen::VectorXd residual_vector = matrix * solution - rhs;
+    const double residual = residual_vector.lpNorm<Eigen::Infinity>();
+    const double residual_limit = 1.0e-9
+	* std::max(1.0, rhs.lpNorm<Eigen::Infinity>());
+    if (!solution.allFinite() || !ON_IsValid(residual)
+	    || residual > residual_limit)
+	return false;
+    for (int i = 0; i < solution.size(); ++i) {
+	if (std::fabs(solution(i)) > 1.0e6)
+	    return false;
+    }
+    plan->coefficients.resize(plan->variables.size());
+    for (int i = 0; i < solution.size(); ++i)
+	plan->coefficients[(size_t)i] = solution(i);
+    plan->solve_residual = residual;
+    return true;
+}
+
+static bool
+refine_sampled_constraints(const ON_Brep *brep,
+	struct sampled_c0_plan *plan)
+{
+    if (!brep || !plan)
+	return false;
+    for (int refinement = 0; refinement < 8; ++refinement) {
+	if (!solve_sampled_constraints(brep, plan))
+	    return false;
+
+	std::vector<sampled_edge_plan> probes(plan->edges.size());
+	for (size_t edge_index = 0; edge_index < plan->edges.size();
+		++edge_index) {
+	    const struct sampled_edge_plan &edge = plan->edges[edge_index];
+	    probes[edge_index].topology = edge.topology;
+	    probes[edge_index].geometry_scale = edge.geometry_scale;
+	    probes[edge_index].geometry_tolerance = edge.geometry_tolerance;
+	    double correspondence_tolerance = ON_UNSET_VALUE;
+	    double unused_scale = 1.0;
+	    double unused_geometry_tolerance = ON_UNSET_VALUE;
+	    if (!edge_geometry_limits(brep, edge.topology, &unused_scale,
+		    &unused_geometry_tolerance, &correspondence_tolerance))
+		return false;
+	    for (size_t interval = 1; interval < edge.samples.size();
+		    ++interval) {
+		struct boundary_constraint_sample probe;
+		if (!evaluate_constraint_sample(brep, edge.topology,
+			0.5 * (edge.samples[interval - 1].fraction
+			    + edge.samples[interval].fraction),
+			correspondence_tolerance, &probe))
+		    return false;
+		probes[edge_index].samples.push_back(probe);
+	    }
+	}
+
+	const int probe_count = constraint_row_count(probes);
+	if (probe_count <= 0)
+	    return false;
+	Eigen::VectorXd source_influence;
+	if (!global_cv_influence(brep, probes, plan->graph.source_face,
+		plan->source_cv_u, plan->source_cv_v, &source_influence))
+	    return false;
+	Eigen::VectorXd residual = source_influence;
+	for (size_t variable_index = 0;
+		variable_index < plan->variables.size(); ++variable_index) {
+	    const struct sampled_cv_variable &variable =
+		plan->variables[variable_index];
+	    Eigen::VectorXd influence;
+	    if (!global_cv_influence(brep, probes, variable.face_id,
+		    variable.cv_u, variable.cv_v, &influence))
+		return false;
+	    residual += plan->coefficients[variable_index] * influence;
+	}
+
+	const double refine_limit = 2.5e-10;
+	bool added = false;
+	int probe_row = 0;
+	for (size_t edge_index = 0; edge_index < plan->edges.size();
+		++edge_index) {
+	    std::vector<boundary_constraint_sample> refined;
+	    refined.reserve(2 * plan->edges[edge_index].samples.size());
+	    refined.push_back(plan->edges[edge_index].samples.front());
+	    for (size_t interval = 1;
+		    interval < plan->edges[edge_index].samples.size();
+		    ++interval, ++probe_row) {
+		if (std::fabs(residual(probe_row)) > refine_limit) {
+		    refined.push_back(probes[edge_index].samples[interval - 1]);
+		    added = true;
+		}
+		refined.push_back(plan->edges[edge_index].samples[interval]);
+	    }
+	    plan->edges[edge_index].samples.swap(refined);
+	}
+	if (!added) {
+	    plan->solve_residual = std::max(plan->solve_residual,
+		    residual.lpNorm<Eigen::Infinity>());
+	    plan->constraint_sample_count =
+		constraint_row_count(plan->edges);
+	    return true;
+	}
+	if (constraint_row_count(plan->edges) > 8192)
+	    return false;
+    }
+    return false;
+}
+
+static bool
+prepare_sampled_c0_plan(const ON_Brep *brep, int face_id, int cv_u,
+	int cv_v, struct sampled_c0_plan *plan)
+{
+    if (!brep || !plan || !brep->IsValid(NULL))
+	return false;
+    *plan = sampled_c0_plan();
+    if (!build_affected_topology_graph(brep, face_id, cv_u, cv_v,
+	    &plan->graph))
+	return false;
+    if (!expand_affected_topology_graph(brep, &plan->graph,
+	    &plan->variables))
+	return false;
+    plan->source_cv_u = cv_u;
+    plan->source_cv_v = cv_v;
+    plan->edges.reserve(plan->graph.edges.size());
+    for (const struct affected_topology_edge &topology : plan->graph.edges) {
+	struct sampled_edge_plan edge;
+	if (!build_constraint_samples(brep, topology, &edge))
+	    return false;
+	plan->edges.push_back(edge);
+    }
+    return refine_sampled_constraints(brep, plan);
+}
+
+static ON_NurbsCurve *
+approximate_boundary_curve(const std::vector<double> &fractions,
+	const std::vector<ON_3dPoint> &points, const ON_Interval &domain,
+	int requested_cv_count, double *fit_residual)
+{
+    const int cv_count = std::min(requested_cv_count, (int)points.size());
+    const int degree = std::min(3, cv_count - 1);
+    const int order = degree + 1;
+    if (!fit_residual || cv_count < 2
+	    || fractions.size() != points.size() || !domain.IsIncreasing()
+	    || std::fabs(fractions.front()) > 1.0e-12
+	    || std::fabs(fractions.back() - 1.0) > 1.0e-12)
+	return NULL;
+
+    std::vector<double> parameters(fractions.size());
+    for (size_t i = 0; i < fractions.size(); ++i) {
+	if (fractions[i] < 0.0 || fractions[i] > 1.0
+		|| (i > 0 && fractions[i] <= fractions[i - 1]))
+	    return NULL;
+	parameters[i] = domain.ParameterAt(fractions[i]);
+    }
+
+    ON_NurbsCurve *curve =
+	ON_NurbsCurve::New(3, false, order, cv_count);
+    if (!curve || !curve->MakeClampedUniformKnotVector(1.0)
+	    || !curve->SetDomain(domain.Min(), domain.Max())) {
+	delete curve;
+	return NULL;
+    }
+    for (int cv = 0; cv < cv_count; ++cv)
+	curve->SetCV(cv, ON_3dPoint::Origin);
+
+    Eigen::MatrixXd basis((int)points.size(), cv_count);
+    for (int col = 0; col < cv_count; ++col) {
+	curve->SetCV(col, ON_3dPoint(1.0, 0.0, 0.0));
+	for (int row = 0; row < (int)points.size(); ++row)
+	    basis(row, col) = curve->PointAt(parameters[(size_t)row]).x;
+	curve->SetCV(col, ON_3dPoint::Origin);
+    }
+    curve->SetCV(0, points.front());
+    curve->SetCV(cv_count - 1, points.back());
+    const int interior_count = cv_count - 2;
+    if (interior_count > 0) {
+	Eigen::MatrixXd matrix =
+	    basis.block(0, 1, (int)points.size(), interior_count);
+	Eigen::MatrixXd rhs((int)points.size(), 3);
+	for (int row = 0; row < (int)points.size(); ++row) {
+	    const ON_3dPoint fixed =
+		basis(row, 0) * points.front()
+		+ basis(row, cv_count - 1) * points.back();
+	    rhs(row, 0) = points[(size_t)row].x - fixed.x;
+	    rhs(row, 1) = points[(size_t)row].y - fixed.y;
+	    rhs(row, 2) = points[(size_t)row].z - fixed.z;
+	}
+	Eigen::CompleteOrthogonalDecomposition<Eigen::MatrixXd> decomposition(
+		matrix);
+	const Eigen::MatrixXd solution = decomposition.solve(rhs);
+	if (!solution.allFinite()) {
+	    delete curve;
+	    return NULL;
+	}
+	for (int cv = 0; cv < interior_count; ++cv)
+	    curve->SetCV(cv + 1, ON_3dPoint(solution(cv, 0),
+		    solution(cv, 1), solution(cv, 2)));
+    }
+    if (!curve->IsValid(NULL)) {
+	delete curve;
+	return NULL;
+    }
+    *fit_residual = 0.0;
+    for (size_t row = 0; row < points.size(); ++row)
+	*fit_residual = std::max(*fit_residual,
+		curve->PointAt(parameters[row]).DistanceTo(points[row]));
+    return curve;
+}
+
 static bool
 replace_edge_curve(ON_Brep *brep, int edge_id, ON_NurbsCurve *curve)
 {
@@ -767,6 +1636,366 @@ replace_edge_curve(ON_Brep *brep, int edge_id, ON_NurbsCurve *curve)
 
     const int new_curve_id = brep->AddEdgeCurve(curve);
     return new_curve_id >= 0 && edge.ChangeEdgeCurve(new_curve_id);
+}
+
+static double
+mapped_trim_parameter(const std::vector<boundary_constraint_sample> &samples,
+	double fraction, int side)
+{
+    if (samples.empty() || side < 0 || side > 1)
+	return ON_UNSET_VALUE;
+    if (fraction <= 0.0)
+	return samples.front().trim_parameter[side];
+    if (fraction >= 1.0)
+	return samples.back().trim_parameter[side];
+    const auto right_iterator = std::lower_bound(samples.begin(),
+	    samples.end(), fraction,
+	    [](const struct boundary_constraint_sample &sample, double value) {
+		return sample.fraction < value;
+	    });
+    if (right_iterator == samples.end())
+	return samples.back().trim_parameter[side];
+    if (right_iterator == samples.begin())
+	return right_iterator->trim_parameter[side];
+    const size_t right = (size_t)(right_iterator - samples.begin());
+    if (std::fabs(samples[right].fraction - fraction) <= 1.0e-15)
+	return samples[right].trim_parameter[side];
+    const size_t left = right - 1;
+    if (samples.size() >= 4) {
+	size_t first = left > 0 ? left - 1 : 0;
+	if (first + 4 > samples.size())
+	    first = samples.size() - 4;
+	double parameter = 0.0;
+	for (size_t i = first; i < first + 4; ++i) {
+	    double basis = 1.0;
+	    for (size_t j = first; j < first + 4; ++j) {
+		if (i == j)
+		    continue;
+		const double denominator =
+		    samples[i].fraction - samples[j].fraction;
+		if (std::fabs(denominator) <= ON_ZERO_TOLERANCE)
+		    return ON_UNSET_VALUE;
+		basis *= (fraction - samples[j].fraction) / denominator;
+	    }
+	    parameter += basis * samples[i].trim_parameter[side];
+	}
+	const double endpoint_min = std::min(
+		samples.front().trim_parameter[side],
+		samples.back().trim_parameter[side]);
+	const double endpoint_max = std::max(
+		samples.front().trim_parameter[side],
+		samples.back().trim_parameter[side]);
+	return std::max(endpoint_min, std::min(endpoint_max, parameter));
+    }
+    const double interval =
+	samples[right].fraction - samples[left].fraction;
+    if (interval <= 0.0)
+	return ON_UNSET_VALUE;
+    const double local = (fraction - samples[left].fraction) / interval;
+    const double left_parameter = samples[left].trim_parameter[side];
+    const double right_parameter = samples[right].trim_parameter[side];
+    return (1.0 - local) * left_parameter + local * right_parameter;
+}
+
+struct deformed_edge_sample {
+    double fraction = 0.0;
+    ON_3dPoint face_point[2] = {
+	ON_3dPoint::UnsetPoint, ON_3dPoint::UnsetPoint
+    };
+    ON_3dPoint average = ON_3dPoint::UnsetPoint;
+    ON_3dPoint edge_point = ON_3dPoint::UnsetPoint;
+    ON_3dVector seam_difference = ON_3dVector::UnsetVector;
+    ON_3dVector edge_difference[2] = {
+	ON_3dVector::UnsetVector, ON_3dVector::UnsetVector
+    };
+};
+
+static bool
+evaluate_deformed_edge_sample(const ON_Brep *brep,
+	const struct sampled_edge_plan &edge_plan, double fraction,
+	bool evaluate_edge, struct deformed_edge_sample *sample)
+{
+    if (!brep || !sample || fraction < 0.0 || fraction > 1.0)
+	return false;
+    *sample = deformed_edge_sample();
+    sample->fraction = fraction;
+    for (int side = 0; side < 2; ++side) {
+	const int trim_id = edge_plan.topology.trim_id[side];
+	const int face_id = edge_plan.topology.face_id[side];
+	if (trim_id < 0 || trim_id >= brep->m_T.Count()
+		|| face_id < 0 || face_id >= brep->m_F.Count())
+	    return false;
+	const double parameter =
+	    mapped_trim_parameter(edge_plan.samples, fraction, side);
+	const ON_3dPoint uv = brep->m_T[trim_id].PointAt(parameter);
+	sample->face_point[side] =
+	    brep->m_F[face_id].PointAt(uv.x, uv.y);
+	if (!sample->face_point[side].IsValid())
+	    return false;
+    }
+    sample->average =
+	0.5 * (sample->face_point[0] + sample->face_point[1]);
+    sample->seam_difference =
+	sample->face_point[0] - sample->face_point[1];
+    if (evaluate_edge) {
+	if (edge_plan.topology.edge_id < 0
+		|| edge_plan.topology.edge_id >= brep->m_E.Count())
+	    return false;
+	const ON_BrepEdge &edge = brep->m_E[edge_plan.topology.edge_id];
+	sample->edge_point =
+	    edge.PointAt(edge.Domain().ParameterAt(fraction));
+	for (int side = 0; side < 2; ++side)
+	    sample->edge_difference[side] =
+		sample->face_point[side] - sample->edge_point;
+    }
+    return true;
+}
+
+static bool
+append_adaptive_edge_fit_interval(const ON_Brep *brep,
+	const struct sampled_edge_plan &edge_plan,
+	const struct deformed_edge_sample &left,
+	const struct deformed_edge_sample &right, int depth,
+	double seam_tolerance, double fit_tolerance,
+	std::vector<double> *fractions, std::vector<ON_3dPoint> *points,
+	double *max_seam_residual)
+{
+    const int minimum_depth = 3;
+    const int maximum_depth = 12;
+    struct deformed_edge_sample middle;
+    if (!evaluate_deformed_edge_sample(brep, edge_plan,
+	    0.5 * (left.fraction + right.fraction), false, &middle))
+	return false;
+    const double seam_residual = middle.seam_difference.Length();
+    *max_seam_residual = std::max(*max_seam_residual, seam_residual);
+    if (!ON_IsValid(seam_residual) || seam_residual > seam_tolerance)
+	return false;
+    const ON_3dPoint chord_midpoint = 0.5 * (left.average + right.average);
+    const bool split = depth < minimum_depth
+	|| middle.average.DistanceTo(chord_midpoint) > fit_tolerance;
+    if (split) {
+	if (depth >= maximum_depth || fractions->size() > 2048)
+	    return false;
+	if (!append_adaptive_edge_fit_interval(brep, edge_plan, left, middle,
+		depth + 1, seam_tolerance, fit_tolerance, fractions, points,
+		max_seam_residual)
+		|| !append_adaptive_edge_fit_interval(brep, edge_plan, middle,
+		    right, depth + 1, seam_tolerance, fit_tolerance,
+		    fractions, points, max_seam_residual))
+	    return false;
+    } else {
+	fractions->push_back(right.fraction);
+	points->push_back(right.average);
+    }
+    return true;
+}
+
+static bool
+adaptive_validate_edge_interval(const ON_Brep *brep,
+	const struct sampled_edge_plan &edge_plan,
+	const struct deformed_edge_sample &left,
+	const struct deformed_edge_sample &right, int depth,
+	double allowed_residual, double *max_residual)
+{
+    const int minimum_depth = 6;
+    const int maximum_depth = 13;
+    struct deformed_edge_sample middle;
+    if (!evaluate_deformed_edge_sample(brep, edge_plan,
+	    0.5 * (left.fraction + right.fraction), true, &middle))
+	return false;
+    double residual = middle.seam_difference.Length();
+    for (int side = 0; side < 2; ++side)
+	residual = std::max(residual, middle.edge_difference[side].Length());
+    *max_residual = std::max(*max_residual, residual);
+    if (!ON_IsValid(residual) || residual > allowed_residual)
+	return false;
+
+    const ON_3dVector seam_midpoint =
+	0.5 * (left.seam_difference + right.seam_difference);
+    double variation =
+	(middle.seam_difference - seam_midpoint).Length();
+    for (int side = 0; side < 2; ++side) {
+	const ON_3dVector edge_midpoint =
+	    0.5 * (left.edge_difference[side]
+		+ right.edge_difference[side]);
+	variation = std::max(variation,
+		(middle.edge_difference[side] - edge_midpoint).Length());
+    }
+    const bool split = depth < minimum_depth
+	|| variation > 0.25 * allowed_residual
+	|| residual > 0.5 * allowed_residual;
+    if (split) {
+	if (depth >= maximum_depth)
+	    return false;
+	if (!adaptive_validate_edge_interval(brep, edge_plan, left, middle,
+		depth + 1, allowed_residual, max_residual)
+		|| !adaptive_validate_edge_interval(brep, edge_plan, middle,
+		    right, depth + 1, allowed_residual, max_residual))
+	    return false;
+    }
+    return true;
+}
+
+static bool
+apply_sampled_c0_plan(ON_Brep *brep,
+	const struct sampled_c0_plan &plan, const ON_3dVector &delta)
+{
+    if (!brep || !delta.IsValid())
+	return false;
+    ON_Brep trial(*brep);
+    ON_BrepFace &source_face = trial.m_F[plan.graph.source_face];
+    ON_NurbsSurface *source_surface =
+	dynamic_cast<ON_NurbsSurface *>(trial.m_S[source_face.m_si]);
+    if (!source_surface
+	    || !translate_surface_cv(source_surface, plan.source_cv_u,
+		plan.source_cv_v, delta))
+	return false;
+    for (size_t variable_index = 0;
+	    variable_index < plan.variables.size(); ++variable_index) {
+	const struct sampled_cv_variable &variable =
+	    plan.variables[variable_index];
+	ON_BrepFace &face = trial.m_F[variable.face_id];
+	ON_NurbsSurface *surface =
+	    dynamic_cast<ON_NurbsSurface *>(trial.m_S[face.m_si]);
+	if (!surface || !translate_surface_cv(surface, variable.cv_u,
+		variable.cv_v,
+		plan.coefficients[variable_index] * delta))
+	    return false;
+    }
+    for (int face_id : plan.graph.face_ids) {
+	ON_BrepFace &face = trial.m_F[face_id];
+	ON_NurbsSurface *surface =
+	    dynamic_cast<ON_NurbsSurface *>(trial.m_S[face.m_si]);
+	if (!surface)
+	    return false;
+	surface->DestroyRuntimeCache(true);
+	face.DestroyRuntimeCache(true);
+    }
+
+    for (const struct sampled_edge_plan &edge_plan : plan.edges) {
+	const double edit_scale = std::max(edge_plan.geometry_scale,
+		std::max(1.0, delta.Length()));
+	const double allowed_geometry_residual = std::max(
+		edge_plan.geometry_tolerance, 2.0e-7 * edit_scale);
+	const double seam_tolerance = allowed_geometry_residual;
+	const double fit_tolerance =
+	    std::max(1.0e-10 * edit_scale,
+		    0.5 * allowed_geometry_residual);
+	struct deformed_edge_sample start;
+	struct deformed_edge_sample end;
+	if (!evaluate_deformed_edge_sample(&trial, edge_plan, 0.0, false,
+		&start)
+		|| !evaluate_deformed_edge_sample(&trial, edge_plan, 1.0,
+		    false, &end)
+		|| start.seam_difference.Length() > seam_tolerance
+		|| end.seam_difference.Length() > seam_tolerance
+		|| start.average.DistanceTo(
+		    edge_plan.samples.front().point[0]) > seam_tolerance
+		|| end.average.DistanceTo(
+		    edge_plan.samples.back().point[0]) > seam_tolerance) {
+	    bu_log("sampled C0 edit rejected: edge %d endpoint or seam "
+		    "constraint failed\n", edge_plan.topology.edge_id);
+	    return false;
+	}
+	std::vector<double> fractions(1, 0.0);
+	std::vector<ON_3dPoint> boundary_points(1, start.average);
+	double max_seam_residual = std::max(
+		start.seam_difference.Length(), end.seam_difference.Length());
+	if (!append_adaptive_edge_fit_interval(&trial, edge_plan, start, end,
+		0, seam_tolerance, fit_tolerance, &fractions,
+		&boundary_points, &max_seam_residual)) {
+	    bu_log("sampled C0 edit rejected: adaptive edge %d fitting "
+		    "failed\n", edge_plan.topology.edge_id);
+	    return false;
+	}
+	const ON_Interval edge_domain =
+	    trial.m_E[edge_plan.topology.edge_id].Domain();
+	bool edge_valid = false;
+	double max_geometry_residual = ON_DBL_MAX;
+	int fit_cv_count = 0;
+	for (int requested_cv_count = 16; requested_cv_count <= 512;
+		requested_cv_count *= 2) {
+	    const int actual_cv_count = requested_cv_count;
+	    const int fit_sample_count = 2 * actual_cv_count + 1;
+	    std::vector<double> fit_fractions;
+	    std::vector<ON_3dPoint> fit_points;
+	    fit_fractions.reserve((size_t)fit_sample_count);
+	    fit_points.reserve((size_t)fit_sample_count);
+	    for (int fit_sample = 0; fit_sample < fit_sample_count;
+		    ++fit_sample) {
+		const double fraction =
+		    (double)fit_sample / (double)(fit_sample_count - 1);
+		struct deformed_edge_sample trace_sample;
+		if (!evaluate_deformed_edge_sample(&trial, edge_plan,
+			fraction, false, &trace_sample)
+			|| trace_sample.seam_difference.Length()
+			    > seam_tolerance)
+		    return false;
+		fit_fractions.push_back(fraction);
+		fit_points.push_back(trace_sample.average);
+	    }
+	    double fit_residual = ON_DBL_MAX;
+	    ON_NurbsCurve *edge_curve = approximate_boundary_curve(
+		    fit_fractions, fit_points, edge_domain,
+		    actual_cv_count, &fit_residual);
+	    if (!edge_curve)
+		return false;
+	    if (!ON_IsValid(fit_residual)
+		    || fit_residual > 0.5 * allowed_geometry_residual) {
+		delete edge_curve;
+		continue;
+	    }
+	    if (!replace_edge_curve(&trial, edge_plan.topology.edge_id,
+		    edge_curve)) {
+		bu_log("sampled C0 edit rejected: edge %d replacement failed\n",
+			edge_plan.topology.edge_id);
+		return false;
+	    }
+
+	    struct deformed_edge_sample validation_start;
+	    struct deformed_edge_sample validation_end;
+	    if (!evaluate_deformed_edge_sample(&trial, edge_plan, 0.0, true,
+		    &validation_start)
+		    || !evaluate_deformed_edge_sample(&trial, edge_plan, 1.0,
+			true, &validation_end))
+		return false;
+	    max_geometry_residual = 0.0;
+	    for (const struct deformed_edge_sample *endpoint :
+		    {&validation_start, &validation_end}) {
+		max_geometry_residual = std::max(max_geometry_residual,
+			endpoint->seam_difference.Length());
+		for (int side = 0; side < 2; ++side)
+		    max_geometry_residual = std::max(max_geometry_residual,
+			    endpoint->edge_difference[side].Length());
+	    }
+	    fit_cv_count = actual_cv_count;
+	    if (max_geometry_residual <= allowed_geometry_residual
+		    && adaptive_validate_edge_interval(&trial, edge_plan,
+			validation_start, validation_end, 0,
+			allowed_geometry_residual, &max_geometry_residual)) {
+		edge_valid = true;
+		break;
+	    }
+	}
+	if (!edge_valid) {
+	    bu_log("sampled C0 edit rejected: adaptive edge %d residual "
+		    "%.17g exceeds %.17g (%zu trace points, %d edge CVs)\n",
+		    edge_plan.topology.edge_id, max_geometry_residual,
+		    allowed_geometry_residual, fractions.size(), fit_cv_count);
+	    return false;
+	}
+	ON_BrepEdge &updated_edge = trial.m_E[edge_plan.topology.edge_id];
+	if (max_geometry_residual > updated_edge.m_tolerance)
+	    updated_edge.m_tolerance = 1.001 * max_geometry_residual;
+    }
+
+    trial.DestroyRuntimeCache(true);
+    if (!trial.IsValid(NULL)) {
+	bu_log("sampled C0 edit rejected: final B-rep validation failed\n");
+	return false;
+    }
+    *brep = trial;
+    return true;
 }
 
 }
@@ -1604,6 +2833,21 @@ brep_cv_constraint_type_name(int classification)
     }
 }
 
+const char *
+brep_cv_edit_backend_name(int backend)
+{
+    switch (backend) {
+	case BREP_CV_EDIT_BACKEND_INTERIOR:
+	    return "interior";
+	case BREP_CV_EDIT_BACKEND_EXACT_ISOPARAMETRIC:
+	    return "exact-isoparametric";
+	case BREP_CV_EDIT_BACKEND_SAMPLED_C0:
+	    return "sampled-c0";
+	default:
+	    return "none";
+    }
+}
+
 bool
 brep_face_cv_constraint_status(const ON_Brep *brep, int face_id,
 	int cv_id_u, int cv_id_v, struct brep_face_cv_constraint *status)
@@ -1617,6 +2861,12 @@ brep_face_cv_constraint_status(const ON_Brep *brep, int face_id,
     status->natural_trim_count = 0;
     status->isoparametric_trim_count = 0;
     status->general_trim_count = 0;
+    status->edit_backend = BREP_CV_EDIT_BACKEND_NONE;
+    status->constraint_edge_count = 0;
+    status->constraint_face_count = 0;
+    status->constraint_variable_count = 0;
+    status->constraint_sample_count = 0;
+    status->constraint_residual = -1.0;
     status->topology_safe = false;
     status->can_translate = false;
 
@@ -1628,6 +2878,9 @@ brep_face_cv_constraint_status(const ON_Brep *brep, int face_id,
     status->topology_safe = trim_ids.empty();
     if (trim_ids.empty()) {
 	status->classification = BREP_CV_CONSTRAINT_INTERIOR;
+	status->edit_backend = BREP_CV_EDIT_BACKEND_INTERIOR;
+	status->constraint_face_count = 1;
+	status->constraint_residual = 0.0;
 	status->can_translate = true;
 	return true;
     }
@@ -1671,9 +2924,30 @@ brep_face_cv_constraint_status(const ON_Brep *brep, int face_id,
     else
 	status->classification = BREP_CV_CONSTRAINT_ISOPARAMETRIC;
 
-    struct coupled_iso_plan plan;
-    status->can_translate =
-	prepare_coupled_iso_plan(brep, face_id, cv_id_u, cv_id_v, &plan);
+    struct coupled_iso_plan exact_plan;
+    if (prepare_coupled_iso_plan(brep, face_id, cv_id_u, cv_id_v,
+	    &exact_plan)) {
+	status->edit_backend = BREP_CV_EDIT_BACKEND_EXACT_ISOPARAMETRIC;
+	status->constraint_edge_count = 1;
+	status->constraint_face_count = 2;
+	status->constraint_variable_count = (int)exact_plan.mate_cvs.size();
+	status->constraint_residual = 0.0;
+	status->can_translate = true;
+	return true;
+    }
+    struct sampled_c0_plan sampled_plan;
+    if (prepare_sampled_c0_plan(brep, face_id, cv_id_u, cv_id_v,
+	    &sampled_plan)) {
+	status->edit_backend = BREP_CV_EDIT_BACKEND_SAMPLED_C0;
+	status->constraint_edge_count = (int)sampled_plan.graph.edges.size();
+	status->constraint_face_count = (int)sampled_plan.graph.face_ids.size();
+	status->constraint_variable_count =
+	    (int)sampled_plan.variables.size();
+	status->constraint_sample_count =
+	    sampled_plan.constraint_sample_count;
+	status->constraint_residual = sampled_plan.solve_residual;
+	status->can_translate = true;
+    }
     return true;
 }
 
@@ -1725,14 +2999,19 @@ brep_face_translate_cv_constrained(ON_Brep *brep, int face_id,
 {
     if (!brep || !delta.IsValid())
 	return false;
+    if (delta.Length() <= ON_ZERO_TOLERANCE)
+	return brep_face_cv_can_translate(brep, face_id, cv_id_u, cv_id_v);
     if (brep_face_cv_is_topology_safe(brep, face_id, cv_id_u, cv_id_v))
 	return brep_face_translate_cv(brep, face_id, cv_id_u, cv_id_v, delta);
 
     struct coupled_iso_plan plan;
     if (!prepare_coupled_iso_plan(brep, face_id, cv_id_u, cv_id_v, &plan)) {
-	bu_log("face %d CV (%d,%d) does not satisfy the exact C0 "
-		"isoparametric coupling requirements\n",
-		face_id, cv_id_u, cv_id_v);
+	struct sampled_c0_plan sampled_plan;
+	if (prepare_sampled_c0_plan(brep, face_id, cv_id_u, cv_id_v,
+		&sampled_plan))
+	    return apply_sampled_c0_plan(brep, sampled_plan, delta);
+	bu_log("face %d CV (%d,%d) does not satisfy a supported C0 "
+		"boundary constraint\n", face_id, cv_id_u, cv_id_v);
 	return false;
     }
 

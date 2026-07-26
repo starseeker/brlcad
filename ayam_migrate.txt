@@ -1,7 +1,7 @@
 AYAM NURBS EDITING MIGRATION FOR BRL-CAD
 ========================================
 
-Status: exact C0 isoparametric boundary-edit tranche complete
+Status: exact single-edge and adaptive sampled multi-edge C0 tranches complete
 Last updated: 2026-07-25
 
 
@@ -150,12 +150,14 @@ Updating only that CV leaves no guarantee that the 3-D edge lies on either
 surface or that the two faces remain joined.  Pulling back a replacement trim
 does not repair an adjacent surface that no longer contains the new edge.
 
-The current policy has two deliberately conservative paths:
+The current policy has three deliberately conservative paths:
 
   * determine the tensor-product basis support of the selected face CV;
   * allow an interior edit directly when that support does not reach a trim;
   * when the support reaches exactly one mated isoparametric trim, attempt an
     exact coupled edit of both incident surfaces and the shared 3-D edge;
+  * when exact trace coupling is unavailable, traverse the fixed-pcurve
+    affected-topology graph and attempt one global sampled C0 solve;
   * otherwise show and select the CV but mark it locked;
   * isolate the face's surface first if it is shared by another face;
   * apply the operation to a trial B-rep; and
@@ -173,9 +175,45 @@ edge, two monotone isoparametric trims, compatible extracted trace spaces and
 weights, distinct unshared non-transposed surfaces, fixed trim pcurves and
 weights, no endpoint motion, no candidate CV that influences another trim,
 and a valid final B-rep.  Natural clamped boundaries and compatible interior
-isoparametric trims both use this path.  Periodic seams, one-sided
-isoparametric edges, rational-weight boundary edits, junctions, multiple
-affected trims, and arbitrary trim curves remain locked.
+isoparametric trims both use this path.  One-sided-isoparametric edges and
+arbitrary trim curves fall through to the sampled backend; periodic seams
+remain unsupported.
+
+The sampled backend builds an explicit affected-topology graph.  It starts
+with every mated trim influenced by the selected CV, then traverses candidate
+CV support on adjacent faces.  Every additional mated edge, trim, face, and
+fixed endpoint vertex that a candidate could influence is added to the graph.
+Candidate CVs that would move an endpoint or an open/unpaired trim are not
+used.  The process continues to closure, with finite graph-size guards.
+
+For every graph edge, the backend aligns both pcurve/surface traces to the
+pre-edit 3-D edge.  The initial correspondence density scales with the
+largest incident surface control-net direction, with at least 16 intervals
+and four intervals per directional CV, then subdivides in response to
+trim-parameter nonlinearity, UV mapping error, and geometric curvature.  One
+global Eigen CompleteOrthogonalDecomposition system then solves all
+non-source face-CV translations simultaneously.  Midpoint collocation checks
+add constraint rows and refactor until the unsampled influence residual meets
+its bound.
+
+After applying the deformation to a trial B-rep, each replacement edge is
+generated from an adaptively subdivided trace.  A clamped cubic NURBS curve is
+fit by direct least squares with increasing control count rather than by
+forming normal equations.  Seam and edge-on-both-surfaces error are checked
+recursively, with a minimum of 64 validation intervals and further
+subdivision driven by residual variation.  The maximum accepted residual is
+the larger of the pre-existing edge tolerance and 2e-7 times the local
+geometric/edit scale.
+
+This sampled path supports a strict but useful fixed-pcurve subset of
+multi-edge and multi-face one-sided-isoparametric and arbitrary trimmed
+graphs.  Pcurves and weights remain fixed, all edge endpoints remain fixed,
+surfaces must be distinct, unshared, non-transposed, non-periodic NURBS
+surfaces, the solved coefficients and adaptive residuals must pass their
+bounds, and the complete trial B-rep must remain valid.  Junction movement,
+boundary weight edits, shared or transposed underlying surfaces, periodic
+seams, correspondence failures, and cases that need trim reconstruction or
+face re-intersection remain locked.
 
 This protects topology more strongly than Ayam.  Ayam can maintain a patch's
 local closure convention and regenerate dependent construction objects, but
@@ -193,7 +231,9 @@ Planned topology capability levels are:
   3. General C0 arbitrary trimmed-boundary propagation.  Build a constraint
      graph across all affected faces, trims, edges, and vertices; use exact
      trace constraints where available and adaptive geometric constraints
-     elsewhere.
+     elsewhere.  Adaptive fixed-pcurve multi-edge/multi-face graph traversal
+     and global solving are implemented.  Movable junctions, trim
+     reconstruction, and face re-intersection remain.
 
   4. Optional G1/G2 coupling by adding derivative constraints and sufficient
      adjacent control rows.
@@ -267,7 +307,15 @@ The implementation to date adds or hardens:
     isoparametric shared boundaries;
   * exact trace-influence construction and rank-aware adjacent-face solving
     with Eigen CompleteOrthogonalDecomposition;
-  * shared 3-D edge regeneration after a coupled boundary move;
+  * affected-topology graph traversal across every mated trim, edge, face,
+    and fixed endpoint vertex reachable through candidate CV support;
+  * one global sampled fixed-pcurve C0 solve for eligible multi-edge,
+    multi-face one-sided-isoparametric and arbitrary trimmed graphs;
+  * adaptive pre-edit edge-to-trim correspondence recovery and collocation
+    refinement;
+  * rank-aware global influence solving, stable least-squares replacement
+    NURBS-edge fitting, and adaptive edge-on-both-surfaces validation;
+  * regeneration of every affected shared 3-D edge after a coupled move;
   * isolation of a surface shared by multiple faces before a local face edit;
   * face parameter reversal and transposition using B-rep-aware openNURBS
     operations; and
@@ -294,9 +342,9 @@ The B-rep primitive edit descriptor currently exposes:
     ECMD_BREP_SRF_CV_WEIGHT
 
 Selection reports the Euclidean position of rational CVs and whether the CV
-is interior-editable, exact-C0-boundary-editable, or locked.  Move and
-absolute placement use the constrained libbrep path.  Weight changes remain
-limited to trim-independent CVs.
+is interior-editable, exact-C0-boundary-editable, sampled-C0-graph-editable,
+or locked.  Move and absolute placement use the constrained libbrep path.
+Weight changes remain limited to trim-independent CVs.
 
 The implementation is in:
 
@@ -318,8 +366,11 @@ The command implementation is in:
 7.4 libqtcad and qged
 
 QgBrepFilter, QgBrepPickCVFilter, and QgBrepMoveCVFilter provide reusable
-projected CV picking, selection state, interior/coupled/locked reporting, and
-view-plane dragging through librt editing.
+projected CV picking, selection state, interior/exact/sampled/locked
+reporting, sampled graph edge/face counts, and view-plane dragging through
+librt editing.  A failed per-motion constraint or validation check is
+reported to the panel rather than incorrectly marking an unchanged object
+dirty.
 
 The public interface and implementation are:
 
@@ -332,7 +383,7 @@ The qged B-rep object editor provides:
   * face CV picking and dragging;
   * selected CV coordinates and rational weight controls;
   * visible control-net and primitive-wireframe preview;
-  * visible interior, exact-C0-coupled, and locked edit states;
+  * visible interior, exact-C0, sampled-C0, and locked edit states;
   * in-memory editing during interaction; and
   * explicit Apply and Reset actions.
 
@@ -358,8 +409,17 @@ Focused regression coverage currently verifies:
   * rational Euclidean CV behavior;
   * rejection of trim-influencing CV edits without modifying the input;
   * exact C0 edits of natural and interior isoparametric two-face seams;
+  * sampled C0 edits of arbitrary diagonal trims;
+  * sampled C0 edits where only one incident trim is isoparametric and the
+    other surface uses a diagonal parameterization;
+  * adaptive correspondence refinement for a nonlinear trim
+    parameterization;
+  * three-face graph traversal and propagation through a second affected
+    edge not directly influenced by the selected source CV;
+  * global sampled solver classification, adaptive residual checking, and
+    stable least-squares replacement edge generation;
   * unchanged endpoints and topology-array counts after coupled edits;
-  * rollback of unsupported endpoint/multiple-trim edits;
+  * rollback of unsupported endpoint and open-boundary graph edits;
   * valid face reversal/transposition and locus mapping;
   * librt selection, position, translation, weight, boundary-lock, and
     end-to-end coupled natural-seam paths;
@@ -450,28 +510,26 @@ Immediate engineering follow-up:
     and public naming before final integration; and
   * run the broader BRL-CAD regression suite.
 
-Next topology milestone:
+Next topology milestone: trim reconstruction and broader graph cases
 
-  * formalize an affected-topology constraint graph whose nodes are face
-    surfaces, 2-D trims, shared 3-D edges, and vertices;
   * expand the exact backend by making extracted trace degrees and knot
     vectors compatible without changing either locus;
   * support coupled rational boundary-weight edits while treating homogeneous
     position and weight constraints explicitly;
   * support reversed proxy states, transposed faces, surfaces shared by
-    multiple faces, periodic seams, and multiple affected edges;
-  * add a one-sided-isoparametric backend, using the exact trace as the target
-    and constrained deformation of the general-trim neighbor;
-  * design the arbitrary-trim backend around adaptive boundary samples and
-    Jacobian constraints, with conditioning and residual reporting;
+    multiple faces, periodic seams, and movable vertices/junctions;
+  * tune adaptive subdivision limits using representative imported models
+    and report which error bound or graph restriction rejects each edit;
+  * add configurable displacement/fairness weighting beyond the current
+    minimum-norm global solution for underdetermined multi-face systems;
   * decide when local deformation is sufficient and when adjacent faces must
     be re-intersected and their trims rebuilt;
-  * validate edge-on-surface tolerances, loop validity, vertices, and manifold
-    consistency before every commit; and
+  * implement robust pullback and loop repair when pcurves cannot remain
+    fixed; and
   * add reversed-orientation, rational, periodic, junction, multiple-loop,
     singular, and rollback tests based on representative imported models.
 
-After general C0 boundary support:
+After robust fixed- and rebuilt-pcurve general C0 support:
 
   * investigate G1/G2 derivative constraints and coupled control-row
     deformation;
@@ -487,7 +545,8 @@ After general C0 boundary support:
 
 Long-term research/robustness work:
 
-  * constrained deformation of arbitrary trimmed faces;
+  * constrained deformation of arbitrary trimmed faces requiring topology or
+    parameter-space trim changes;
   * robust curve pullback and trim reconstruction;
   * adjacent-surface deformation or face re-intersection;
   * singularity, self-intersection, multiple-loop, and degeneracy handling;

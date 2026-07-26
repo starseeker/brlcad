@@ -23,6 +23,7 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <cfloat>
 
 #include "bn/mat.h"
@@ -58,6 +59,22 @@ qg_brep_view(const QgBrepFilter *filter)
 	? bv_context_view_const(
 	    static_cast<const struct bv_context *>(display->viewContext()))
 	: nullptr;
+}
+
+static bool
+qg_brep_selected_point(const struct rt_edit *es, int face, int cv_u,
+	int cv_v, ON_3dPoint *point)
+{
+    if (!es || !point)
+	return false;
+    const struct rt_brep_internal *bip =
+	(const struct rt_brep_internal *)es->es_int.idb_ptr;
+    if (!bip || !bip->brep || face < 0 || face >= bip->brep->m_F.Count())
+	return false;
+    const ON_NurbsSurface *surface =
+	dynamic_cast<const ON_NurbsSurface *>(
+	    bip->brep->m_F[face].SurfaceOf());
+    return surface && surface->GetCV(cv_u, cv_v, *point);
 }
 
 QgBrepFilter::QgBrepFilter(QObject *parent)
@@ -193,7 +210,10 @@ QgBrepFilter::pick_cv(int sx, int sy, fastf_t max_px)
     const bool safe = have_status && status.topology_safe;
     const bool can_translate = have_status && status.can_translate;
     emit brep_selection_changed(best_face, best_u, best_v, safe,
-	    can_translate);
+	    can_translate, have_status ? status.edit_backend
+				      : BREP_CV_EDIT_BACKEND_NONE,
+	    have_status ? status.constraint_edge_count : 0,
+	    have_status ? status.constraint_face_count : 0);
     emit view_updated(QG_VIEW_REFRESH);
     return true;
 }
@@ -289,6 +309,12 @@ QgBrepMoveCVFilter::eventFilter(QObject *, QEvent *event)
 	vect_t delta = VINIT_ZERO;
 	if (!screen_delta_to_local(m_prev_x, m_prev_y, sx, sy, delta))
 	    return true;
+	int face = -1;
+	int cv_u = -1;
+	int cv_v = -1;
+	ON_3dPoint before;
+	const bool have_before = selected_cv(&face, &cv_u, &cv_v)
+	    && qg_brep_selected_point(es, face, cv_u, cv_v, &before);
 
 	EDOBJ[es->es_int.idb_type].ft_set_edit_mode(
 		es, ECMD_BREP_SRF_CV_MOVE);
@@ -299,6 +325,18 @@ QgBrepMoveCVFilter::eventFilter(QObject *, QEvent *event)
 	rt_edit_process(es);
 	m_prev_x = sx;
 	m_prev_y = sy;
+	ON_3dPoint after;
+	const double requested_length = MAGNITUDE(delta);
+	if (have_before && requested_length > SMALL_FASTF
+		&& qg_brep_selected_point(es, face, cv_u, cv_v, &after)
+		&& before.DistanceTo(after) <= 1.0e-12
+		    * std::max(1.0, requested_length)) {
+	    emit edit_rejected(QStringLiteral(
+		    "The requested drag failed its C0 constraint or B-rep "
+		    "validation checks."));
+	    emit view_updated(QG_VIEW_REFRESH);
+	    return true;
+	}
 	emit brep_changed();
 	emit view_updated(QG_VIEW_REFRESH);
 	return true;

@@ -134,6 +134,54 @@ append_rect_face(ON_Brep &brep, int surface_id,
     return face.m_face_index;
 }
 
+static int
+append_tri_face(ON_Brep &brep, int surface_id,
+	const ON_2dPoint uv[3], const int edges[3],
+	const bool reversed[3], int mated_side)
+{
+    ON_BrepFace &face = brep.NewFace(surface_id);
+    ON_BrepLoop &loop = brep.NewLoop(ON_BrepLoop::outer, face);
+    const ON_Surface *surface = brep.m_S[surface_id];
+    for (int side = 0; side < 3; ++side) {
+	ON_LineCurve *curve =
+	    new ON_LineCurve(uv[side], uv[(side + 1) % 3]);
+	curve->SetDomain(0.0, 1.0);
+	const int curve_id = brep.AddTrimCurve(curve);
+	ON_BrepTrim &trim = brep.NewTrim(
+		brep.m_E[edges[side]], reversed[side], loop, curve_id);
+	trim.m_iso = surface->IsIsoparametric(*curve);
+	trim.m_type = side == mated_side
+	    ? ON_BrepTrim::mated : ON_BrepTrim::boundary;
+	trim.m_tolerance[0] = 0.0;
+	trim.m_tolerance[1] = 0.0;
+    }
+    return face.m_face_index;
+}
+
+static int
+append_quad_face(ON_Brep &brep, int surface_id,
+	const ON_2dPoint uv[4], const int edges[4],
+	const bool reversed[4], int first_mated_side, int second_mated_side)
+{
+    ON_BrepFace &face = brep.NewFace(surface_id);
+    ON_BrepLoop &loop = brep.NewLoop(ON_BrepLoop::outer, face);
+    const ON_Surface *surface = brep.m_S[surface_id];
+    for (int side = 0; side < 4; ++side) {
+	ON_LineCurve *curve =
+	    new ON_LineCurve(uv[side], uv[(side + 1) % 4]);
+	curve->SetDomain(0.0, 1.0);
+	const int curve_id = brep.AddTrimCurve(curve);
+	ON_BrepTrim &trim = brep.NewTrim(
+		brep.m_E[edges[side]], reversed[side], loop, curve_id);
+	trim.m_iso = surface->IsIsoparametric(*curve);
+	trim.m_type = side == first_mated_side || side == second_mated_side
+	    ? ON_BrepTrim::mated : ON_BrepTrim::boundary;
+	trim.m_tolerance[0] = 0.0;
+	trim.m_tolerance[1] = 0.0;
+    }
+    return face.m_face_index;
+}
+
 static ON_Brep
 two_face_iso_fixture(bool interior_iso, bool rational = false)
 {
@@ -189,6 +237,221 @@ two_face_iso_fixture(bool interior_iso, bool rational = false)
 	    face0_edges, face0_reversed, 1);
     append_rect_face(brep, surface1_id, face1_u, full_v,
 	    face1_edges, face1_reversed, 3);
+    return brep;
+}
+
+static ON_Brep
+two_face_general_fixture()
+{
+    ON_Brep brep;
+    ON_NurbsSurface *surface0 = planar_edit_surface(7, 0.0, false);
+    ON_NurbsSurface *surface1 = new ON_NurbsSurface(*surface0);
+    const int surface0_id = brep.AddSurface(surface0);
+    const int surface1_id = brep.AddSurface(surface1);
+    const ON_Interval u = surface0->Domain(0);
+    const ON_Interval v = surface0->Domain(1);
+    const ON_2dPoint uv[4] = {
+	ON_2dPoint(u.Min(), v.Min()),
+	ON_2dPoint(u.Max(), v.Min()),
+	ON_2dPoint(u.Max(), v.Max()),
+	ON_2dPoint(u.Min(), v.Max())
+    };
+    const ON_3dPoint points[4] = {
+	surface0->PointAt(uv[0].x, uv[0].y),
+	surface0->PointAt(uv[1].x, uv[1].y),
+	surface0->PointAt(uv[2].x, uv[2].y),
+	surface0->PointAt(uv[3].x, uv[3].y)
+    };
+    int vertices[4];
+    for (int i = 0; i < 4; ++i)
+	vertices[i] = brep.NewVertex(points[i], 1.0e-8).m_vertex_index;
+    const int edges[5] = {
+	append_line_edge(brep, vertices[0], vertices[1]),
+	append_line_edge(brep, vertices[1], vertices[2]),
+	append_line_edge(brep, vertices[0], vertices[2]),
+	append_line_edge(brep, vertices[2], vertices[3]),
+	append_line_edge(brep, vertices[3], vertices[0])
+    };
+    const ON_2dPoint face0_uv[3] = {uv[0], uv[1], uv[2]};
+    const int face0_edges[3] = {edges[0], edges[1], edges[2]};
+    const bool face0_reversed[3] = {false, false, true};
+    const ON_2dPoint face1_uv[3] = {uv[0], uv[2], uv[3]};
+    const int face1_edges[3] = {edges[2], edges[3], edges[4]};
+    const bool face1_reversed[3] = {false, false, false};
+    append_tri_face(brep, surface0_id, face0_uv, face0_edges,
+	    face0_reversed, 2);
+    append_tri_face(brep, surface1_id, face1_uv, face1_edges,
+	    face1_reversed, 0);
+    return brep;
+}
+
+static ON_Brep
+two_face_nonlinear_parameter_fixture()
+{
+    ON_Brep brep = two_face_general_fixture();
+    ON_BrepEdge &edge = brep.m_E[2];
+    const int trim_id = edge.m_ti[0];
+    ON_BrepTrim &trim = brep.m_T[trim_id];
+    const int curve_id = trim.m_c2i;
+    const ON_3dPoint start = trim.PointAtStart();
+    const ON_3dPoint end = trim.PointAtEnd();
+    const double fractions[4] = {0.0, 0.2, 0.7, 1.0};
+    ON_NurbsCurve *curve = ON_NurbsCurve::New(2, false, 4, 4);
+    if (!curve || !curve->MakeClampedUniformKnotVector(1.0)
+	    || !curve->SetDomain(trim.Domain().Min(), trim.Domain().Max()))
+	bu_exit(1, "failed to create nonlinear trim parameterization\n");
+    for (int cv = 0; cv < 4; ++cv)
+	curve->SetCV(cv, (1.0 - fractions[cv]) * start
+		+ fractions[cv] * end);
+    ON_Curve *old_curve = brep.m_C2[curve_id];
+    brep.m_C2[curve_id] = curve;
+    if (!trim.ChangeTrimCurve(curve_id))
+	bu_exit(1, "failed to install nonlinear trim parameterization\n");
+    delete old_curve;
+    trim.m_iso = trim.Face()->SurfaceOf()->IsIsoparametric(*curve);
+    brep.DestroyRuntimeCache(true);
+    return brep;
+}
+
+static ON_Brep
+two_face_one_isoparametric_fixture()
+{
+    ON_Brep brep;
+    ON_NurbsSurface *surface0 = planar_edit_surface(9, 0.0, false);
+    ON_NurbsSurface *surface1 =
+	ON_NurbsSurface::New(3, false, 4, 4, 9, 9);
+    surface1->MakeClampedUniformKnotVector(0, 1.0);
+    surface1->MakeClampedUniformKnotVector(1, 1.0);
+    const ON_Interval u = surface0->Domain(0);
+    const ON_Interval v = surface0->Domain(1);
+    for (int i = 0; i < 9; ++i) {
+	for (int j = 0; j < 9; ++j) {
+	    const double gu = surface_greville(*surface1, 0, i);
+	    const double gv = surface_greville(*surface1, 1, j);
+	    surface1->SetCV(i, j,
+		    ON_3dPoint(u.Max() - gu + gv, gv, 0.0));
+	}
+    }
+    const int surface0_id = brep.AddSurface(surface0);
+    const int surface1_id = brep.AddSurface(surface1);
+
+    const ON_2dPoint source_uv[4] = {
+	ON_2dPoint(u.Min(), v.Min()),
+	ON_2dPoint(u.Max(), v.Min()),
+	ON_2dPoint(u.Max(), v.Max()),
+	ON_2dPoint(u.Min(), v.Max())
+    };
+    const ON_2dPoint mate_uv[3] = {
+	ON_2dPoint(u.Max(), v.Max()),
+	ON_2dPoint(u.Min(), v.Min()),
+	ON_2dPoint(u.Min(), v.Max())
+    };
+    const ON_3dPoint points[5] = {
+	surface0->PointAt(source_uv[0].x, source_uv[0].y),
+	surface0->PointAt(source_uv[1].x, source_uv[1].y),
+	surface0->PointAt(source_uv[2].x, source_uv[2].y),
+	surface0->PointAt(source_uv[3].x, source_uv[3].y),
+	surface1->PointAt(mate_uv[2].x, mate_uv[2].y)
+    };
+    int vertices[5];
+    for (int i = 0; i < 5; ++i)
+	vertices[i] = brep.NewVertex(points[i], 1.0e-8).m_vertex_index;
+    const int edges[6] = {
+	append_line_edge(brep, vertices[0], vertices[1]),
+	append_line_edge(brep, vertices[1], vertices[2]),
+	append_line_edge(brep, vertices[2], vertices[3]),
+	append_line_edge(brep, vertices[3], vertices[0]),
+	append_line_edge(brep, vertices[1], vertices[4]),
+	append_line_edge(brep, vertices[4], vertices[2])
+    };
+    const int source_edges[4] = {edges[0], edges[1], edges[2], edges[3]};
+    const bool source_reversed[4] = {false, false, false, false};
+    append_rect_face(brep, surface0_id, u, v, source_edges,
+	    source_reversed, 1);
+    const int mate_edges[3] = {edges[1], edges[4], edges[5]};
+    const bool mate_reversed[3] = {true, false, false};
+    append_tri_face(brep, surface1_id, mate_uv, mate_edges,
+	    mate_reversed, 0);
+    return brep;
+}
+
+static ON_Brep
+three_face_propagation_fixture()
+{
+    ON_Brep brep;
+    ON_NurbsSurface *source_surface =
+	planar_edit_surface(9, 0.0, false);
+    ON_NurbsSurface *middle_surface =
+	new ON_NurbsSurface(*source_surface);
+    for (int i = 0; i < middle_surface->CVCount(0); ++i) {
+	for (int j = 0; j < middle_surface->CVCount(1); ++j) {
+	    const double u = surface_greville(*middle_surface, 0, i);
+	    const double v = surface_greville(*middle_surface, 1, j);
+	    middle_surface->SetCV(i, j,
+		    ON_3dPoint(u + 0.1 * v, v, 0.0));
+	}
+    }
+    ON_NurbsSurface *right_surface =
+	new ON_NurbsSurface(*source_surface);
+    const int source_surface_id = brep.AddSurface(source_surface);
+    const int middle_surface_id = brep.AddSurface(middle_surface);
+    const int right_surface_id = brep.AddSurface(right_surface);
+    const ON_Interval v = source_surface->Domain(1);
+    const ON_Interval source_u(0.0, 2.5);
+    const ON_Interval middle_u(2.5, 3.5);
+    const ON_Interval right_u(3.5, 6.0);
+    const double columns[4] = {
+	source_u.Min(), source_u.Max(), middle_u.Max(), right_u.Max()
+    };
+
+    int vertices[8];
+    for (int column = 0; column < 4; ++column) {
+	vertices[2 * column] = brep.NewVertex(
+		source_surface->PointAt(columns[column], v.Min()),
+		1.0e-8).m_vertex_index;
+	vertices[2 * column + 1] = brep.NewVertex(
+		source_surface->PointAt(columns[column], v.Max()),
+		1.0e-8).m_vertex_index;
+    }
+    const int edges[10] = {
+	append_line_edge(brep, vertices[0], vertices[2]),
+	append_line_edge(brep, vertices[2], vertices[3]),
+	append_line_edge(brep, vertices[3], vertices[1]),
+	append_line_edge(brep, vertices[1], vertices[0]),
+	append_line_edge(brep, vertices[2], vertices[4]),
+	append_line_edge(brep, vertices[4], vertices[5]),
+	append_line_edge(brep, vertices[5], vertices[3]),
+	append_line_edge(brep, vertices[4], vertices[6]),
+	append_line_edge(brep, vertices[6], vertices[7]),
+	append_line_edge(brep, vertices[7], vertices[5])
+    };
+
+    const int source_edges[4] = {
+	edges[0], edges[1], edges[2], edges[3]
+    };
+    const bool source_reversed[4] = {false, false, false, false};
+    append_rect_face(brep, source_surface_id, source_u, v,
+	    source_edges, source_reversed, 1);
+
+    const int middle_edges[4] = {
+	edges[4], edges[5], edges[6], edges[1]
+    };
+    const bool middle_reversed[4] = {false, false, false, true};
+    const ON_2dPoint middle_uv[4] = {
+	ON_2dPoint(middle_u.Min(), v.Min()),
+	ON_2dPoint(middle_u.Max(), v.Min()),
+	ON_2dPoint(middle_u.Max() - 0.1 * v.Max(), v.Max()),
+	ON_2dPoint(middle_u.Min() - 0.1 * v.Max(), v.Max())
+    };
+    append_quad_face(brep, middle_surface_id, middle_uv, middle_edges,
+	    middle_reversed, 1, 3);
+
+    const int right_edges[4] = {
+	edges[7], edges[8], edges[9], edges[5]
+    };
+    const bool right_reversed[4] = {false, false, false, true};
+    append_rect_face(brep, right_surface_id, right_u, v,
+	    right_edges, right_reversed, 3);
     return brep;
 }
 
@@ -505,6 +768,210 @@ test_edge_constraint_classification()
 }
 
 static void
+test_sampled_general_c0_edit()
+{
+    ON_Brep brep = two_face_general_fixture();
+    if (!brep.IsValid(NULL))
+	bu_exit(1, "failed to create valid general-trim fixture\n");
+    const int shared_edge = 2;
+    if (brep_edge_constraint_type(&brep, shared_edge)
+	    != BREP_EDGE_CONSTRAINT_GENERAL)
+	bu_exit(1, "diagonal shared edge was not classified general\n");
+
+    const int cv_u = 3;
+    const int cv_v = 3;
+    struct brep_face_cv_constraint status;
+    if (!brep_face_cv_constraint_status(&brep, 0, cv_u, cv_v, &status)
+	    || status.classification != BREP_CV_CONSTRAINT_GENERAL
+	    || status.edit_backend != BREP_CV_EDIT_BACKEND_SAMPLED_C0
+	    || status.constraint_sample_count < 33
+	    || status.topology_safe || !status.can_translate)
+	bu_exit(1, "general-trim CV was not accepted by sampled C0 backend\n");
+
+    const int vertex_count = brep.m_V.Count();
+    const int edge_count = brep.m_E.Count();
+    const int trim_count = brep.m_T.Count();
+    const int face_count = brep.m_F.Count();
+    const ON_3dPoint start = brep.m_E[shared_edge].PointAtStart();
+    const ON_3dPoint end = brep.m_E[shared_edge].PointAtEnd();
+    if (!brep_face_translate_cv_constrained(&brep, 0, cv_u, cv_v,
+	    ON_3dVector(0.0, 0.0, 0.25)))
+	bu_exit(1, "sampled general C0 edit was rejected\n");
+    if (!brep.IsValid(NULL)
+	    || brep.m_V.Count() != vertex_count
+	    || brep.m_E.Count() != edge_count
+	    || brep.m_T.Count() != trim_count
+	    || brep.m_F.Count() != face_count)
+	bu_exit(1, "sampled general edit changed topology or validity\n");
+    if (!near_point(start, brep.m_E[shared_edge].PointAtStart(), 1.0e-8)
+	    || !near_point(end, brep.m_E[shared_edge].PointAtEnd(), 1.0e-8))
+	bu_exit(1, "sampled general edit moved an edge endpoint\n");
+
+    const ON_BrepEdge &edge = brep.m_E[shared_edge];
+    const ON_BrepTrim &trim0 = brep.m_T[edge.m_ti[0]];
+    const ON_BrepTrim &trim1 = brep.m_T[edge.m_ti[1]];
+    for (int sample = 0; sample <= 128; ++sample) {
+	const double f = (double)sample / 128.0;
+	const ON_3dPoint uv0 = trim0.PointAt(
+		trim0.Domain().ParameterAt(trim0.m_bRev3d ? 1.0 - f : f));
+	const ON_3dPoint uv1 = trim1.PointAt(
+		trim1.Domain().ParameterAt(trim1.m_bRev3d ? 1.0 - f : f));
+	const ON_3dPoint p0 =
+	    brep.m_F[trim0.Face()->m_face_index].PointAt(uv0.x, uv0.y);
+	const ON_3dPoint p1 =
+	    brep.m_F[trim1.Face()->m_face_index].PointAt(uv1.x, uv1.y);
+	const ON_3dPoint pe =
+	    edge.PointAt(edge.Domain().ParameterAt(f));
+	const double seam_error = p0.DistanceTo(p1);
+	const double edge_error = p0.DistanceTo(pe);
+	if (seam_error > 1.0e-7 || edge_error > 1.0e-6)
+	    bu_exit(1, "sampled general edit failed dense C0 validation "
+		    "at %d: seam %.17g edge %.17g\n",
+		    sample, seam_error, edge_error);
+    }
+
+    ON_Brep rejected = two_face_general_fixture();
+    const ON_3dPoint rejected_start =
+	rejected.m_E[shared_edge].PointAtStart();
+    if (brep_face_translate_cv_constrained(&rejected, 0, 0, 0,
+	    ON_3dVector(0.0, 0.0, 0.1))
+	    || !near_point(rejected_start,
+		rejected.m_E[shared_edge].PointAtStart(), 1.0e-12))
+	bu_exit(1, "sampled general endpoint/junction edit did not roll back\n");
+}
+
+static void
+test_sampled_one_isoparametric_edit()
+{
+    ON_Brep brep = two_face_one_isoparametric_fixture();
+    if (!brep.IsValid(NULL)
+	    || brep_edge_constraint_type(&brep, 1)
+		!= BREP_EDGE_CONSTRAINT_ONE_ISOPARAMETRIC)
+	bu_exit(1, "failed to create one-isoparametric dispatch fixture\n");
+
+    struct brep_face_cv_constraint status;
+    if (!brep_face_cv_constraint_status(&brep, 0, 8, 4, &status)
+	    || !status.can_translate
+	    || status.edit_backend != BREP_CV_EDIT_BACKEND_SAMPLED_C0)
+	bu_exit(1, "one-isoparametric edge did not select sampled backend\n");
+    if (!brep_face_translate_cv_constrained(&brep, 0, 8, 4,
+	    ON_3dVector(0.0, 0.0, 0.2))
+	    || !brep.IsValid(NULL))
+	bu_exit(1, "one-isoparametric sampled edit failed\n");
+}
+
+static void
+test_adaptive_constraint_sampling()
+{
+    ON_Brep brep = two_face_nonlinear_parameter_fixture();
+    if (!brep.IsValid(NULL))
+	bu_exit(1, "failed to create nonlinear-parameter trim fixture\n");
+    struct brep_face_cv_constraint status;
+    if (!brep_face_cv_constraint_status(&brep, 0, 3, 3, &status)
+	    || !status.can_translate
+	    || status.edit_backend != BREP_CV_EDIT_BACKEND_SAMPLED_C0
+	    || status.constraint_edge_count != 1
+	    || status.constraint_sample_count <= 33)
+	bu_exit(1, "nonlinear trim mapping did not trigger adaptive sampling "
+		"(backend %d, edges %d, samples %d)\n", status.edit_backend,
+		status.constraint_edge_count, status.constraint_sample_count);
+    if (!brep_face_translate_cv_constrained(&brep, 0, 3, 3,
+	    ON_3dVector(0.0, 0.0, 0.2))
+	    || !brep.IsValid(NULL))
+	bu_exit(1, "adaptive nonlinear-parameter C0 edit failed\n");
+}
+
+static void
+test_sampled_multi_edge_propagation()
+{
+    ON_Brep brep = three_face_propagation_fixture();
+    if (!brep.IsValid(NULL))
+	bu_exit(1, "failed to create valid three-face propagation fixture\n");
+
+    struct brep_face_cv_constraint status;
+    if (!brep_face_cv_constraint_status(&brep, 0, 3, 4, &status)
+	    || !status.can_translate
+	    || status.edit_backend != BREP_CV_EDIT_BACKEND_SAMPLED_C0
+	    || status.edge_count != 1
+	    || status.constraint_edge_count != 2
+	    || status.constraint_face_count != 3
+	    || status.constraint_variable_count <= 0
+	    || status.constraint_sample_count < 130)
+	bu_exit(1, "three-face edit did not construct a propagated "
+		"constraint graph\n");
+
+    const int shared_edges[2] = {1, 5};
+    ON_3dPoint endpoint[2][2];
+    for (int edge = 0; edge < 2; ++edge) {
+	endpoint[edge][0] = brep.m_E[shared_edges[edge]].PointAtStart();
+	endpoint[edge][1] = brep.m_E[shared_edges[edge]].PointAtEnd();
+    }
+    const int vertex_count = brep.m_V.Count();
+    const int edge_count = brep.m_E.Count();
+    const int trim_count = brep.m_T.Count();
+    const int face_count = brep.m_F.Count();
+    if (!brep_face_translate_cv_constrained(&brep, 0, 3, 4,
+	    ON_3dVector(0.0, 0.0, 0.2)))
+	bu_exit(1, "three-face propagated C0 edit was rejected\n");
+    if (!brep.IsValid(NULL)
+	    || brep.m_V.Count() != vertex_count
+	    || brep.m_E.Count() != edge_count
+	    || brep.m_T.Count() != trim_count
+	    || brep.m_F.Count() != face_count)
+	bu_exit(1, "three-face edit changed topology or validity\n");
+
+    for (int edge_index : shared_edges) {
+	const ON_BrepEdge &edge = brep.m_E[edge_index];
+	if (!near_point(endpoint[edge_index == shared_edges[0] ? 0 : 1][0],
+		edge.PointAtStart(), 1.0e-8)
+		|| !near_point(
+		    endpoint[edge_index == shared_edges[0] ? 0 : 1][1],
+		    edge.PointAtEnd(), 1.0e-8))
+	    bu_exit(1, "propagated edit moved an edge endpoint\n");
+	const ON_BrepTrim &trim0 = brep.m_T[edge.m_ti[0]];
+	const ON_BrepTrim &trim1 = brep.m_T[edge.m_ti[1]];
+	for (int sample = 0; sample <= 256; ++sample) {
+	    const double fraction = (double)sample / 256.0;
+	    const ON_3dPoint uv0 = trim0.PointAt(
+		    trim0.Domain().ParameterAt(
+			trim0.m_bRev3d ? 1.0 - fraction : fraction));
+	    const ON_3dPoint uv1 = trim1.PointAt(
+		    trim1.Domain().ParameterAt(
+			trim1.m_bRev3d ? 1.0 - fraction : fraction));
+	    const ON_3dPoint point0 =
+		trim0.Face()->PointAt(uv0.x, uv0.y);
+	    const ON_3dPoint point1 =
+		trim1.Face()->PointAt(uv1.x, uv1.y);
+	    const ON_3dPoint edge_point =
+		edge.PointAt(edge.Domain().ParameterAt(fraction));
+	    if (point0.DistanceTo(point1) > 1.0e-7
+		    || point0.DistanceTo(edge_point) > 2.0e-6
+		    || point1.DistanceTo(edge_point) > 2.0e-6)
+		bu_exit(1, "propagated edge %d failed C0 validation at %d\n",
+			edge_index, sample);
+	}
+    }
+
+    ON_Brep rejected = three_face_propagation_fixture();
+    const ON_4dPoint rejected_cv = surface_cv(rejected, 0, 3, 0);
+    const ON_3dPoint rejected_edge =
+	rejected.m_E[shared_edges[0]].PointAt(
+	    rejected.m_E[shared_edges[0]].Domain().Mid());
+    const bool rejected_edit = brep_face_translate_cv_constrained(
+	    &rejected, 0, 3, 0, ON_3dVector(0.0, 0.0, 0.1));
+    const ON_4dPoint after_rejection = surface_cv(rejected, 0, 3, 0);
+    if (rejected_edit
+	    || !near_point(ON_3dPoint(rejected_cv.x, rejected_cv.y,
+		    rejected_cv.z),
+		ON_3dPoint(after_rejection.x, after_rejection.y,
+		    after_rejection.z), 1.0e-12)
+	    || !near_point(rejected_edge,
+		rejected.m_E[shared_edges[0]].PointAt(
+		    rejected.m_E[shared_edges[0]].Domain().Mid()), 1.0e-12))
+	bu_exit(1, "unsupported propagated endpoint edit did not roll back\n");
+}
+
+static void
 test_revolution_preserves_source_curve()
 {
     ON_Brep brep;
@@ -577,6 +1044,10 @@ main(int argc, char **argv)
     test_coupled_isoparametric_edit(true);
     test_coupled_isoparametric_edit(false, true);
     test_edge_constraint_classification();
+    test_sampled_general_c0_edit();
+    test_sampled_one_isoparametric_edit();
+    test_adaptive_constraint_sampling();
+    test_sampled_multi_edge_propagation();
     test_revolution_preserves_source_curve();
     test_face_parameter_edits_preserve_validity();
     bu_log("libbrep edit tests passed\n");

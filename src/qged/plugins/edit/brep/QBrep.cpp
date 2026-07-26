@@ -75,8 +75,8 @@ QBrep::QBrep()
 
     QLabel *policy = new QLabel(
 	    "Left-drag a control point in the view plane.  Interior points and "
-	    "eligible C0-coupled isoparametric seam points are movable.  Other "
-	    "trim constraints remain selectable but locked.");
+	    "eligible exact-isoparametric or sampled-C0 constraint graphs are "
+	    "movable.  Other trim constraints remain selectable but locked.");
     policy->setWordWrap(true);
     layout->addWidget(policy);
 
@@ -303,13 +303,17 @@ QBrep::apply_to_db()
 
 void
 QBrep::selection_changed(int face, int cv_u, int cv_v, bool topology_safe,
-	bool can_translate)
+	bool can_translate, int edit_backend, int constraint_edges,
+	int constraint_faces)
 {
-    const char *editability = topology_safe
-	? "editable (interior)"
-	: (can_translate
-	    ? "editable (coupled C0 isoparametric seam)"
-	    : "locked (unsupported trim constraint)");
+    QString editability = topology_safe
+	? QStringLiteral("editable (interior)")
+	: (!can_translate
+	    ? QStringLiteral("locked (unsupported trim constraint)")
+	    : (edit_backend == BREP_CV_EDIT_BACKEND_EXACT_ISOPARAMETRIC
+		? QStringLiteral("editable (exact C0 isoparametric seam)")
+		: QString("editable (sampled C0 graph: %1 edges, %2 faces)")
+		    .arg(constraint_edges).arg(constraint_faces)));
     m_selection->setText(QString("Face %1, CV (%2, %3): %4")
 	    .arg(face).arg(cv_u).arg(cv_v)
 	    .arg(editability));
@@ -331,8 +335,12 @@ QBrep::selection_changed(int face, int cv_u, int cv_v, bool topology_safe,
     if (topology_safe) {
 	set_status("Drag in the view plane or enter a rational weight.");
     } else if (can_translate) {
-	set_status("Drag to move this seam with exact C0 coupling.  Boundary "
-		"weight editing is not yet supported.");
+	set_status(edit_backend == BREP_CV_EDIT_BACKEND_EXACT_ISOPARAMETRIC
+		? "Drag to move this seam with exact C0 coupling.  Boundary "
+		  "weight editing is not yet supported."
+		: "Drag to move this seam with sampled C0 coupling and dense "
+		  "residual validation.  Boundary weight editing is not yet "
+		  "supported.");
     } else {
 	set_status("This CV is locked because its topology-preserving boundary "
 		"constraint is not yet supported.");
