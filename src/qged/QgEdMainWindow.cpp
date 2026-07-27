@@ -223,7 +223,6 @@ QgEdMainWindow::LocateWidgets()
 
     // Dock the widgets and constrain their allowed placements
     addDockWidget(Qt::BottomDockWidgetArea, console_dock);
-    console_dock->setAllowedAreas(Qt::BottomDockWidgetArea);
     vm_panels->addAction(console_dock->toggleViewAction());
 
     addDockWidget(Qt::RightDockWidgetArea, vcd);
