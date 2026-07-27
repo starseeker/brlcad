@@ -24,7 +24,8 @@
  * Originally from https://github.com/juangburgos/QgConsoleListener
  */
 
-#pragma once
+#ifndef QG_CONSOLE_LISTENER_H
+#define QG_CONSOLE_LISTENER_H
 
 #include "common.h"
 
@@ -106,6 +107,8 @@ private:
 };
 
 using QConsoleListener = QgConsoleListener;
+
+#endif //QG_CONSOLE_LISTENER_H
 
 // Local Variables:
 // tab-width: 8
