@@ -63,11 +63,13 @@ static int
 _autoview_bobol_database_bounds(struct ged *gedp, vect_t *min, vect_t *max)
 {
     int empty = 1;
-    /* Explicit autoview command: allow the precise per-child member-bounds
-     * fallback when no cheap source bounds exist yet.  (Once geometry is
-     * realized the cheap source bounds are used regardless.) */
+    /* Never ray-prepare database members on the caller/UI thread merely to
+     * frame a progressive scene.  Cold large BoTs can spend tens of seconds
+     * in rt_obj_bounds/rt_gettree here.  The draw provider publishes cheap
+     * per-leaf bounds and the progressive autoview follower reframes when
+     * those arrive. */
     return ged_draw_obol_scene_database_autoview_bounds(gedp, min, max,
-	&empty, 1) && !empty;
+	&empty, 0) && !empty;
 }
 
 static int

@@ -32,7 +32,7 @@ struct BObolMeshLod;
 
 /* Display-provider contract version.  Bump this whenever the meaning or
  * completeness of a selected PoP cut changes. */
-#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cache-v5"
+#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cache-v6"
 
 /* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
 struct BObolMeshLodData {

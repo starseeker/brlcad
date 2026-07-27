@@ -40,6 +40,42 @@
 
 #include "raytrace.h"
 
+static bool
+qg_tree_row_background(const QgTreeView *tree,
+		       const QStyleOptionViewItem &option,
+		       const QModelIndex &index,
+		       QBrush *background)
+{
+	if (!tree || !background)
+		return false;
+
+	const int selected =
+		index.data(QgDataRoles::SelectDisplayRole).toInt();
+	const int highlighted =
+		index.data(QgDataRoles::HighlightDisplayRole).toInt();
+	if (selected) {
+		/* CAD selection remains important while the canvas has focus.  Use
+		 * the active highlight group rather than allowing an inactive
+		 * palette to make a selected row nearly indistinguishable. */
+		*background = option.palette.brush(QPalette::Active,
+			QPalette::Highlight);
+		return true;
+	}
+	if (highlighted == 1 && !tree->isExpanded(index)) {
+		*background = QBrush(QColor(220, 200, 30));
+		return true;
+	}
+	if (highlighted == 2) {
+		*background = QBrush(QColor(10, 10, 50));
+		return true;
+	}
+	if (highlighted == 3) {
+		*background = QBrush(QColor(10, 10, 150));
+		return true;
+	}
+	return false;
+}
+
 void gObjDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
 	int aflag = 0;
@@ -47,27 +83,10 @@ void gObjDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option, 
 		return;
 
 	int sflag = index.data(QgDataRoles::SelectDisplayRole).toInt();
-	if (sflag == 1) {
-		painter->fillRect(option.rect, option.palette.highlight());
-		goto text_string;
-	}
-
 	aflag = index.data(QgDataRoles::HighlightDisplayRole).toInt();
-	if (aflag == 1) {
-		painter->fillRect(option.rect, QBrush(QColor(220, 200, 30)));
-		goto text_string;
-	}
-	if (aflag == 2) {
-		painter->fillRect(option.rect, QBrush(QColor(10, 10, 50)));
-		goto text_string;
-	}
-	if (aflag == 3) {
-		painter->fillRect(option.rect, QBrush(QColor(10, 10, 150)));
-		goto text_string;
-	}
-
-
-text_string:
+	QBrush background;
+	if (qg_tree_row_background(cadtreeview, option, index, &background))
+		painter->fillRect(option.rect, background);
 	QString text = index.data().toString();
 	int bool_op = index.data(QgDataRoles::BoolInternalRole).toInt();
 	switch (bool_op) {
@@ -102,15 +121,16 @@ text_string:
 #endif
 	QPen tpen = painter->pen();
 	int drawn_state = index.data(QgDataRoles::DrawnDisplayRole).toInt();
-	if (drawn_state == 1) {
-		if (sflag) {
-			painter->setPen(QColor(0, 70, 0));
-		}
-		else {
-			painter->setPen(QColor(0, 200, 0));
-		}
-	}
-	if (drawn_state == 2)
+	if (sflag)
+		painter->setPen(option.palette.color(QPalette::Active,
+			QPalette::HighlightedText));
+	else if (aflag == 1)
+		painter->setPen(QColor(20, 20, 20));
+	else if (aflag == 2 || aflag == 3)
+		painter->setPen(QColor(245, 245, 245));
+	else if (drawn_state == 1)
+		painter->setPen(QColor(0, 200, 0));
+	else if (drawn_state == 2)
 		painter->setPen(QColor(150, 70, 200));
 	text_rect.moveTo(image_rect.topRight());
 	painter->drawText(text_rect, text, QTextOption(Qt::AlignLeft));
@@ -163,7 +183,12 @@ QgTreeView::QgTreeView(QWidget *pparent, QgModel *treemodel) : QTreeView(pparent
 
 	setItemDelegate(new gObjDelegate(this));
 
-	header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+	/* The hierarchy may contain millions of loaded rows.  ResizeToContents
+	 * asks Qt to measure every row again after dataChanged notifications;
+	 * selection and draw-state changes then become dominated by repeated
+	 * text shaping even though item labels did not change.  The single
+	 * hierarchy column should simply occupy the available viewport. */
+	header()->setSectionResizeMode(0, QHeaderView::Stretch);
 	header()->setStretchLastSection(true);
 	QObject::connect(this, &QgTreeView::expanded, this, &QgTreeView::tree_column_size);
 	QObject::connect(this, &QgTreeView::collapsed, this, &QgTreeView::tree_column_size);
@@ -173,22 +198,16 @@ QgTreeView::QgTreeView(QWidget *pparent, QgModel *treemodel) : QTreeView(pparent
 }
 
 void
-QgTreeView::drawBranches(QPainter* painter, const QRect& rrect, const QModelIndex& index) const
+QgTreeView::drawBranches(QPainter *painter, const QRect &rect,
+			 const QModelIndex &index) const
 {
-	const bool qt_selected = selectionModel() && selectionModel()->isSelected(index);
-	if (!qt_selected) {
-		int aflag = index.data(QgDataRoles::HighlightDisplayRole).toInt();
-		if (!isExpanded(index) && aflag == 1) {
-			painter->fillRect(rrect, QBrush(QColor(220, 200, 30)));
-		}
-		if (aflag == 2) {
-			painter->fillRect(rrect, QBrush(QColor(10, 10, 50)));
-		}
-		if (aflag == 3) {
-			painter->fillRect(rrect, QBrush(QColor(10, 10, 150)));
-		}
-	}
-	QTreeView::drawBranches(painter, rrect, index);
+	QStyleOptionViewItem option;
+	option.initFrom(this);
+	option.rect = rect;
+	QBrush background;
+	if (qg_tree_row_background(this, option, index, &background))
+		painter->fillRect(rect, background);
+	QTreeView::drawBranches(painter, rect, index);
 }
 
 void QgTreeView::header_state()
@@ -203,7 +222,7 @@ void QgTreeView::header_state()
 	// update somewhere - the scrollbar doesn't appear until the tree
 	// is selected...
 
-	header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+	header()->setSectionResizeMode(0, QHeaderView::Stretch);
 	header()->setStretchLastSection(false);
 	if (header()->count() == 1) {
 		header()->setStretchLastSection(false);
@@ -315,9 +334,10 @@ void
 QgTreeView::redo_highlights()
 {
 	QTCAD_SLOT("QgTreeView::redo_highlights", 1);
-	// GED's path selection is the durable state.  QModelIndex values belong to
-	// one model generation and must not be cached or restored across resets.
-	viewport()->update();
+	// GED's path selection is durable; invalidate only model rows whose
+	// selection/highlight roles may have changed.
+	if (m)
+		m->notifySelectionItemsChanged();
 }
 
 #if 0
@@ -366,7 +386,6 @@ void QgTreeView::expand_link(const QUrl &link)
 void QgTreeView::qgitem_select_sync(QgItem *)
 {
 	QTCAD_SLOT("QgTreeView::qgitem_select_sync", 1);
-	redo_highlights();
 	if (m)
 		m->notifySelectionItemsChanged();
 }

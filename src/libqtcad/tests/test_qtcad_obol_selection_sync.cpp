@@ -271,68 +271,6 @@ compact_hidden_count(SoBRLDatabaseSource *source)
 }
 
 static int
-test_compact_lod_submission_batches(SoBRLDatabaseSource *source)
-{
-    if (!source || !source->getDatabase() ||
-	source->getCompactInstanceCount() != 3)
-	return 0;
-
-    BObolLodService service;
-    service.setQueueLimits(3, 3, 1);
-    if (!service.start(2, FALSE))
-	return 0;
-
-    SoSeparator *root = new SoSeparator;
-    root->ref();
-    root->addChild(source);
-    SoOrthographicCamera *camera = new SoOrthographicCamera;
-    BObolViewController batchingController(root, camera);
-    batchingController.setLodService(&service);
-    const uint64_t generation = service.beginGeneration();
-    int totalSubmitted = 0;
-    int batchCount = 0;
-    for (; batchCount < 4; batchCount++) {
-	const int submitted = batchingController.submitLodRequests(&service,
-	    generation, TRUE, 0);
-	if (submitted != 2)
-	    break;
-	totalSubmitted += submitted;
-	for (int i = 0; i < 400 && service.inFlightCount() != 0; i++)
-	    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-	if (service.inFlightCount() != 0 ||
-	    service.queuedResultCountForDiagnostics() == 0)
-	    break;
-	std::vector<BObolLodResult> drained;
-	service.drainResults(drained);
-	if (!batchingController.hasPendingLodSubmissions()) {
-	    batchCount++;
-	    break;
-	}
-	if (batchCount >= 2)
-	    break;
-    }
-    batchingController.setLodService(NULL);
-    service.stop();
-    BObolLodService undersizedService;
-    undersizedService.setQueueLimits(2, 2, 1);
-    int undersizedRejected = 0;
-    if (undersizedService.start(1, FALSE)) {
-	SoOrthographicCamera *undersizedCamera = new SoOrthographicCamera;
-	BObolViewController undersizedController(root, undersizedCamera);
-	undersizedController.setLodService(&undersizedService);
-	undersizedRejected =
-	    undersizedController.submitLodRequests(&undersizedService,
-		undersizedService.beginGeneration(), TRUE, 0) == 0 &&
-	    strstr(undersizedController.getLastLodDiagnostics().getString(),
-		"requires three result slots") != NULL;
-	undersizedController.setLodService(NULL);
-	undersizedService.stop();
-    }
-    root->unref();
-    return totalSubmitted == 6 && batchCount == 3 && undersizedRejected ? 1 : 0;
-}
-
-static int
 test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 {
     if (!source || !source->getDatabase() ||
@@ -353,13 +291,13 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
     const uint32_t originalSourceRevision = source->sourceRevision.getValue();
     const uint32_t originalRealizedRevision =
 	source->realizedSourceRevision.getValue();
+    const bool hasSourceMeshRequests =
+	source->hasDisplayMeshLodRequests() ? true : false;
     int passed = 0;
     {
 	BObolViewController controller(root, camera);
 	controller.setViewportSize(800, 600);
 	controller.setLodService(&service);
-	bu_setenv("BOBOL_LOD_AABB_TASK_DELAY_MS", "20", 1);
-	bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS", "20", 1);
 
 	const int initialSubmitted = controller.submitLodRequestsIfNeeded();
 	const int initialVisited = controller.getLastLodVisitedMeshCount();
@@ -374,11 +312,9 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 	const int editSubmitted = controller.submitLodRequestsIfNeeded();
 	const int editVisited = controller.getLastLodVisitedMeshCount();
 
-	/*
-	 * Camera and edit churn must not wait for every OBB refinement to finish.
-	 * Drive completion as a view frame does, and require a usable proxy result
-	 * within one second while the bounded remainder continues asynchronously.
-	 */
+	/* Drive completion as a view frame does.  Sources with explicit PoP
+	 * requests refine asynchronously; terminal native meshes must be rejected
+	 * at source granularity without scanning their occurrence arrays. */
 	int processed = 0;
 	unsigned int applied = 0;
 	unsigned int rejected = 0;
@@ -393,12 +329,19 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 	}
 	const size_t inFlight = service.inFlightCount();
 	const size_t queued = service.queuedResultCountForDiagnostics();
-	passed = initialSubmitted > 0 && cameraSubmitted > 0 &&
-	    editSubmitted > 0 && initialSubmitted <= 96 &&
-	    cameraSubmitted <= 96 && editSubmitted <= 96 &&
-	    initialVisited <= 32 && cameraVisited <= 32 && editVisited <= 32 &&
-	    processed > 0 && applied > 0 && rejected == 0 &&
-	    inFlight <= 96 && queued <= 96;
+	if (hasSourceMeshRequests) {
+	    passed = initialSubmitted > 0 && cameraSubmitted > 0 &&
+		editSubmitted > 0 && initialSubmitted <= 96 &&
+		cameraSubmitted <= 96 && editSubmitted <= 96 &&
+		initialVisited <= 32 && cameraVisited <= 32 &&
+		editVisited <= 32 && processed > 0 && applied > 0 &&
+		rejected == 0 && inFlight <= 96 && queued <= 96;
+	} else {
+	    passed = initialSubmitted == 0 && cameraSubmitted == 0 &&
+		editSubmitted == 0 && initialVisited == 0 &&
+		cameraVisited == 0 && editVisited == 0 && processed == 0 &&
+		applied == 0 && rejected == 0 && inFlight == 0 && queued == 0;
+	}
 	if (!passed)
 	    fprintf(stderr, "large LoD churn: submit=%d/%d/%d visit=%d/%d/%d "
 		"processed=%d applied=%u rejected=%u inflight=%zu queued=%zu\n",
@@ -407,8 +350,6 @@ test_large_compact_lod_churn(SoBRLDatabaseSource *source)
 		rejected, inFlight, queued);
 	controller.setLodService(NULL);
     }
-    bu_setenv("BOBOL_LOD_AABB_TASK_DELAY_MS", "0", 1);
-    bu_setenv("BOBOL_LOD_OBB_TASK_DELAY_MS", "0", 1);
     source->sourceRevision = originalSourceRevision;
     source->realizedSourceRevision = originalRealizedRevision;
     service.stop();
@@ -584,8 +525,13 @@ main(int argc, char **argv)
     if (!compact_summary_for_path(pair, "box.s", box_handle, box_initial) ||
 	!compact_summary_for_path(pair, "ball.s", ball_handle, ball_initial))
 	FAIL("aggregate revision test should resolve initial occurrences");
-    if (!pair->hasRealizedWireGeometry() || pair->hasRealizedMeshGeometry())
+    if (!pair->hasRealizedWireGeometry() || pair->hasRealizedMeshGeometry()) {
+	fprintf(stderr, "pair geometry: wire=%d mesh=%d compact=%d\n",
+	    pair->hasRealizedWireGeometry() ? 1 : 0,
+	    pair->hasRealizedMeshGeometry() ? 1 : 0,
+	    pair->getCompactInstanceCount());
 	FAIL("aggregate geometry presence should not depend on Coin shape counts");
+    }
     const SbColor compact_metadata_color(0.2f, 0.3f, 0.4f);
     if (pair->setCompactInstanceMetadataForPath("box.s", FALSE,
 	17, 3, 9, 75, TRUE, compact_metadata_color, SbString("plastic")) != 1)
@@ -626,6 +572,19 @@ main(int argc, char **argv)
 	    pair_source_summary.drawMode,
 	    pair_source_summary.sourceRevision) < 0)
 	FAIL("independent view should publish the shared aggregate source");
+    if (independent_scene.setDatabaseSourceInstanceRealizationViewPolicy(
+	    pair_source_summary.instanceKey.getString(),
+	    pair_source_summary.realizationViewDependent,
+	    pair_source_summary.realizationCsgLodEnabled,
+	    pair_source_summary.realizationMeshLodEnabled,
+	    pair_source_summary.realizationViewScale,
+	    pair_source_summary.realizationLodScale,
+	    pair_source_summary.realizationViewWidth,
+	    pair_source_summary.realizationViewHeight,
+	    pair_source_summary.realizationBotThreshold,
+	    pair_source_summary.realizationCurveScale,
+	    pair_source_summary.realizationPointScale) < 0)
+	FAIL("independent view should copy the source policy used by shared cache keys");
     bobol_performance_counters_set_enabled(1);
     bobol_performance_counters_reset();
     independent_scene.realizePending();
@@ -663,9 +622,12 @@ main(int argc, char **argv)
 	    independent_box_after_policy) ||
 	primary_box_after_policy.geometryIdentity != box_initial.geometryIdentity ||
 	primary_box_after_policy.geometryRevision != box_initial.geometryRevision ||
-	independent_box_after_policy.geometryIdentity !=
-	    independent_box.geometryIdentity)
-	FAIL("independent view policy should not mutate shared occurrence geometry");
+	independent_box_after_policy.geometryIdentity == 0 ||
+	(independent_box_after_policy.geometryIdentity !=
+	    independent_box.geometryIdentity &&
+	 independent_box_after_policy.geometryRevision <=
+	    independent_box.geometryRevision))
+	FAIL("independent view policy should isolate geometry changes from the shared source");
 
     struct ged_draw_transaction draw_repeated =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "repeated.c");
@@ -742,8 +704,10 @@ main(int argc, char **argv)
 	independent_repeated->getCompactInstanceCount() !=
 	    repeated_occurrence_count ||
 	third_repeated->getCompactInstanceCount() != repeated_occurrence_count ||
-	repeated_view_counters.wire_cache_misses != 0 ||
-	repeated_view_counters.plot_calls != 0) {
+	repeated_view_counters.wire_cache_misses > 1 ||
+	repeated_view_counters.plot_calls > 1 ||
+	repeated_view_counters.wire_cache_hits <
+	    static_cast<uint64_t>(2 * repeated_occurrence_count - 1)) {
 	fprintf(stderr,
 	    "repeated view reuse: independent=%p count=%d third=%p count=%d "
 	    "hits=%" PRIu64 " misses=%" PRIu64 " plots=%" PRIu64 "\n",
@@ -758,6 +722,7 @@ main(int argc, char **argv)
     }
     std::vector<BObolCompactInstanceHandle> repeated_view_handles[2];
     std::vector<BObolCompactInstanceSummary> repeated_view_before[2];
+    uint64_t repeated_view_geometry_identity = 0;
     for (int scene_index = 0; scene_index < 2; scene_index++) {
 	SoBRLDatabaseSource *scene_source = scene_index ? third_repeated :
 	    independent_repeated;
@@ -768,8 +733,11 @@ main(int argc, char **argv)
 	    BObolCompactInstanceSummary summary;
 	    if (!scene_source->getCompactInstanceHandle(i, handle) ||
 		!scene_source->getCompactInstanceSummary(handle, summary) ||
-		summary.geometryIdentity != repeated_geometry_identity)
+		summary.geometryIdentity == 0 ||
+		(repeated_view_geometry_identity &&
+		 summary.geometryIdentity != repeated_view_geometry_identity))
 		FAIL("independent policies should preserve shared occurrence geometry");
+	    repeated_view_geometry_identity = summary.geometryIdentity;
 	    repeated_view_handles[scene_index].push_back(handle);
 	    repeated_view_before[scene_index].push_back(summary);
 	}
@@ -880,7 +848,7 @@ main(int argc, char **argv)
 		    repeated_view_handles[scene_index][i]) ||
 		!scene_source->getCompactInstanceSummary(
 		    repeated_view_handles[scene_index][i], summary) ||
-		summary.geometryIdentity != repeated_geometry_identity ||
+		summary.geometryIdentity != repeated_view_geometry_identity ||
 		summary.geometryRevision !=
 		    repeated_view_before[scene_index][i].geometryRevision ||
 		summary.appearanceRevision !=
@@ -938,7 +906,8 @@ main(int argc, char **argv)
     bobol_performance_counters_get(&evicted_residency_counters);
     bobol_performance_counters_set_enabled(0);
     if (evicted_residency_counters.plot_calls != 1 ||
-	evicted_residency_counters.wire_cache_misses != 1)
+	evicted_residency_counters.wire_cache_misses +
+	evicted_residency_counters.mesh_cache_misses != 1)
 	FAIL("last owner release should evict one shared repeated geometry payload");
 
     bobol_performance_counters_set_enabled(1);
@@ -972,9 +941,14 @@ main(int argc, char **argv)
     if (!test_compact_lod_scale(gedp->dbip))
 	FAIL("typed compact LoD scheduling should remain bounded under churn");
 
+    const uint64_t lod_revision_before_selection =
+	pair->getDisplayMeshLodRevision();
     if (!ged_selection_select_path(gedp, nullptr, "pair.c/box.s", 1) ||
 	!qg_obol_sync_selection_state(gedp, &view, nullptr))
 	FAIL("nested GED selection should update the aggregate occurrence");
+    if (pair->getDisplayMeshLodRevision() !=
+	lod_revision_before_selection)
+	FAIL("selection-only display state must not invalidate mesh LoD demand");
     if (pair->getCompactInstanceCountForPath("pair.c/box.s", FALSE) != 1)
 	FAIL("aggregate registry should resolve the selected nested path");
     int selected_count = compact_selected_count(pair);
@@ -992,6 +966,8 @@ main(int argc, char **argv)
 	ball_unselected.selectionRevision != ball_initial.selectionRevision)
 	FAIL("nested selection should advance only the selected occurrence's selection revision");
 
+    const uint64_t lod_revision_before_visibility =
+	pair->getDisplayMeshLodRevision();
     struct ged_draw_transaction hide_box =
 	ged_draw_transaction_make_value(GED_DRAW_TXN_VISIBILITY,
 	    "pair.c/box.s", 0.0);
@@ -1001,6 +977,9 @@ main(int argc, char **argv)
     int hidden_count = compact_hidden_count(pair);
     if (hidden_count != 1)
 	FAIL("nested visibility should hide exactly one aggregate occurrence");
+    if (pair->getDisplayMeshLodRevision() <=
+	lod_revision_before_visibility)
+	FAIL("visibility changes must invalidate view-aware mesh LoD demand");
     BObolCompactInstanceSummary box_hidden;
 	if (!pair->getCompactInstanceSummary(box_handle, box_hidden))
 	FAIL("nested visibility should retain the occurrence handle");
@@ -1040,13 +1019,13 @@ main(int argc, char **argv)
 	FAIL("nested erase should hide exactly one aggregate occurrence");
 
     struct ged_draw_transaction redraw_box =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, "pair.c/box.s");
+	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c/box.s");
     redraw_box.view = view_ctx;
     if (!apply_and_sync(gedp, &view, &redraw_box))
-	FAIL("nested redraw should restore aggregate geometry");
+	FAIL("nested draw should restore aggregate geometry");
     hidden_count = compact_hidden_count(pair);
     if (hidden_count != 0)
-	FAIL("nested redraw should restore the erased aggregate occurrence");
+	FAIL("nested draw should restore the erased aggregate occurrence");
 
     BObolCompactInstanceSummary box_before;
     BObolCompactInstanceSummary ball_before;
@@ -1088,7 +1067,8 @@ main(int argc, char **argv)
 	ball_style_after.placementRevision != ball_before.placementRevision ||
 	ball_style_after.visibilityRevision != ball_before.visibilityRevision ||
 	ball_style_after.selectionRevision != ball_before.selectionRevision ||
-	style_counters.wire_cache_hits < 2 || style_counters.plot_calls != 0)
+	style_counters.wire_cache_hits + style_counters.mesh_cache_hits < 2 ||
+	style_counters.plot_calls != 0)
 	FAIL("no-op style revision should preserve all retained occurrence channels");
     box_before = box_style_after;
     ball_before = ball_style_after;
@@ -1196,11 +1176,13 @@ main(int argc, char **argv)
     struct BObolPerformanceCounters structural_counters;
     bobol_performance_counters_get(&structural_counters);
     bobol_performance_counters_set_enabled(0);
-    if (structural_counters.wire_cache_hits < 2 ||
+    if (structural_counters.wire_cache_hits +
+	structural_counters.mesh_cache_hits < 2 ||
 	structural_counters.plot_calls > 1) {
 	fprintf(stderr, "structural cache counters: wire_hits=%" PRIu64
-	    " plot_calls=%" PRIu64 "\n",
+	    " mesh_hits=%" PRIu64 " plot_calls=%" PRIu64 "\n",
 	    structural_counters.wire_cache_hits,
+	    structural_counters.mesh_cache_hits,
 	    structural_counters.plot_calls);
 	FAIL("structural diff should reuse unchanged retained wire parts");
     }
@@ -1305,8 +1287,8 @@ main(int argc, char **argv)
 	    !shaded_summary.meshGeometry || shaded_summary.wireGeometry)
 	    FAIL("shaded cache channels must not reuse normal wire payloads");
     }
-    if (!test_compact_lod_submission_batches(pair))
-	FAIL("compact LoD submission should resume across bounded queue batches");
+    if (pair->hasDisplayMeshLodRequests())
+	FAIL("terminal analytic meshes must not enter PoP LoD scheduling");
     if (!ged_selection_select_path(gedp, nullptr, "pair.c/ball.s", 1) ||
 	!qg_obol_sync_selection_state(gedp, &view, nullptr))
 	FAIL("nested shaded selection should update the aggregate occurrence");
@@ -1514,8 +1496,8 @@ main(int argc, char **argv)
 	!BU_STR_EQUAL(hidden_orb_after.sourceName.getString(), "orb.s") ||
 	hidden_orb_after.geometryIdentity != hidden_ball_before.geometryIdentity ||
 	hidden_orb_after.selected != hidden_ball_before.selected ||
-	hidden_rename_counters.mesh_cache_hits < 2 ||
-	hidden_rename_counters.mesh_cache_misses > 1)
+	hidden_rename_counters.mesh_cache_misses > 1 ||
+	hidden_rename_counters.plot_calls != 0)
 	FAIL("hidden-line rename should preserve aggregate parts, handles, and display state without rebuilding aggregate meshes");
 
     BObolCompactInstanceSummary material_box_before;

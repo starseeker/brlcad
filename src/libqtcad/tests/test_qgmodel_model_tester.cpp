@@ -27,6 +27,7 @@
 
 #include "common.h"
 
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <memory>
@@ -35,6 +36,8 @@
 
 #include <QAbstractItemModelTester>
 #include <QApplication>
+#include <QImage>
+#include <QPainter>
 #include <QPersistentModelIndex>
 #include <QSignalSpy>
 #include <QtTest/QtTest>
@@ -225,6 +228,30 @@ main(int argc, char *argv[])
 	QPersistentModelIndex box_persistent(box_idx);
 	TCHECK(all_persistent.isValid() && box_persistent.isValid(),
 		"QgModel persistent indexes are valid before draw-state-only updates");
+	(void)ged_selection_clear(gedp, nullptr);
+	model.notifySelectionItemsChanged();
+	model.resetNotificationStats();
+	TCHECK(ged_selection_select_path(gedp, nullptr, "all.g/box.r", 1) != 0,
+		"QgModel targeted selection test records a nested GED path");
+	model.notifySelectionItemsChanged();
+	QgModel::NotificationStats selection_stats = model.notificationStats();
+	TCHECK(box_idx.data(QgDataRoles::SelectDisplayRole).toInt() == 1,
+		"QgModel targeted selection notification updates the selected row");
+	TCHECK(selection_stats.path_queries == 2 &&
+		selection_stats.path_fallback_scans == 0 &&
+		selection_stats.items_notified > 0 &&
+		selection_stats.items_notified < model.allItems().size(),
+		"QgModel nested selection notification is bounded by path depth and indexed candidates");
+	model.resetNotificationStats();
+	TCHECK(ged_selection_deselect_path(gedp, nullptr,
+		    "all.g/box.r", 1) != 0,
+		"QgModel targeted selection test clears the nested GED path");
+	model.notifySelectionItemsChanged();
+	selection_stats = model.notificationStats();
+	TCHECK(box_idx.data(QgDataRoles::SelectDisplayRole).toInt() == 0 &&
+		selection_stats.path_queries == 2 &&
+		selection_stats.path_fallback_scans == 0,
+		"QgModel deselection invalidates the same bounded row set");
 	int before_child_draw_signals = drawn_spy.count();
 	model.resetNotificationStats();
 	TCHECK(model.draw("all.g/box.r") == BRLCAD_OK,
@@ -1975,12 +2002,12 @@ main(int argc, char *argv[])
 		    "event bridge draw all.g succeeds before direct remove");
 	    TCHECK(event_model.drawnPathState("all.g/platform.r") == 1,
 		    "event bridge canonical draw state includes platform.r before remove");
-	    const char *remove_av[4] = {"remove", "all.g", "platform.r", NULL};
+	    const char *remove_av[3] = {"rm", "all.g/platform.r", NULL};
 	    int before_remove_db_signals = db_spy.count();
 	    int before_remove_reset_signals = reset_spy.count();
 	    int before_remove_insert_signals = rows_inserted_spy.count();
 	    int before_remove_remove_signals = rows_removed_spy.count();
-	    TCHECK(event_gedp && ged_exec(event_gedp, 3, remove_av) == BRLCAD_OK,
+	    TCHECK(event_gedp && ged_exec(event_gedp, 2, remove_av) == BRLCAD_OK,
 		    "direct GED remove succeeds for event bridge subtree test");
 	    QCoreApplication::processEvents();
 	    QTest::qWait(1);
@@ -2123,6 +2150,42 @@ main(int argc, char *argv[])
 	TCHECK(rebuilt_first.isValid() &&
 		rebuilt_first.data(QgDataRoles::SelectDisplayRole).toInt() == 1,
 		"hierarchy toggle preserves path-based tree highlighting without restoring stale model indexes");
+
+	/* The CAD selection is intentionally independent of Qt's transient
+	 * QModelIndex selection.  Verify the custom tree paints that semantic
+	 * selection across the complete visible row, including the branch gutter
+	 * and the otherwise empty space after the label. */
+	tree.resize(420, 180);
+	tree.show();
+	QCoreApplication::processEvents();
+	QTest::qWait(20);
+	QRect selected_rect = tree.visualRect(rebuilt_first);
+	QImage tree_image(tree.viewport()->size(),
+		QImage::Format_ARGB32_Premultiplied);
+	tree_image.fill(Qt::transparent);
+	QPainter tree_painter(&tree_image);
+	tree.viewport()->render(&tree_painter);
+	tree_painter.end();
+	QColor selected_color = tree.palette().color(QPalette::Active,
+		QPalette::Highlight);
+	int selected_pixels = 0;
+	int sampled_pixels = 0;
+	if (selected_rect.isValid() && selected_rect.height() > 0) {
+	    const int y = selected_rect.center().y();
+	    for (int x = 1; x + 1 < tree_image.width(); x++) {
+		QColor pixel = tree_image.pixelColor(x, y);
+		const int distance =
+		    std::abs(pixel.red() - selected_color.red()) +
+		    std::abs(pixel.green() - selected_color.green()) +
+		    std::abs(pixel.blue() - selected_color.blue());
+		if (distance <= 6)
+		    selected_pixels++;
+		sampled_pixels++;
+	    }
+	}
+	TCHECK(sampled_pixels > 0 &&
+		selected_pixels * 4 >= sampled_pixels * 3,
+		"QgTreeView paints semantic CAD selection across the whole visible row");
     }
 
     if (g_fail) {

@@ -161,7 +161,7 @@ class Ged_Internal {
     public:
 	~Ged_Internal();
 
-	struct ged *gedp;
+	struct ged *gedp = nullptr;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_prerun_clbk;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_during_clbk;
 	std::map<ged_func_ptr, std::pair<bu_clbk_t, void *>> cmd_postrun_clbk;
@@ -184,8 +184,15 @@ class Ged_Internal {
 	struct ged_edit_buf_entry {
 	    struct db_full_path dfp;
 	    struct rt_edit *s;
+	    ged_draw_promotion_ref draw_promotion =
+		GED_DRAW_PROMOTION_REF_NULL;
 	};
 	std::unordered_map<std::string, ged_edit_buf_entry> edit_buf;
+
+	// Backend-neutral draw-frontier promotions.  The concrete C++ state is
+	// private to ged_draw_frontier.cpp so renderer and application headers do
+	// not inherit its implementation.
+	void *draw_frontier_state = nullptr;
 };
 
 #else
@@ -648,6 +655,39 @@ GED_EXPORT extern void            ged_edit_buf_set(struct ged *gedp, const struc
 GED_EXPORT extern int             ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp);
 GED_EXPORT extern void            ged_edit_buf_flush(struct ged *gedp);
+
+/* Draw-frontier internals (ged_draw_frontier.cpp). */
+GED_EXPORT extern void ged_draw_frontier_state_destroy(struct ged *gedp);
+GED_EXPORT extern int ged_draw_frontier_erase_path(
+	struct ged *gedp, const char *path, struct ged_view_context *view_ctx,
+	int mode, int prefix, struct ged_draw_transaction_result *result);
+GED_EXPORT extern int ged_draw_frontier_list_paths(
+	struct ged *gedp, struct ged_view_context *view_ctx, int mode,
+	struct bu_vls *result, size_t result_start);
+/* Returns -1 when no retained frontier owns path, otherwise the public
+ * ged_draw_path_state value: 0 hidden, 1 fully visible, 2 partially visible. */
+GED_EXPORT extern int ged_draw_frontier_path_state(
+	struct ged *gedp, struct ged_view_context *view_ctx,
+	const char *path, int mode);
+GED_EXPORT extern int ged_draw_frontier_absorb_draw(
+	struct ged *gedp, const struct ged_draw_transaction *txn,
+	const char *resolved_path, struct ged_draw_transaction_result *result);
+GED_EXPORT extern void ged_draw_frontier_note_transaction(
+	struct ged *gedp, const struct ged_draw_transaction *txn,
+	const char *resolved_path);
+
+/* Obol presentation mask for one retained database-source draw root. */
+GED_EXPORT extern int ged_draw_obol_source_visibility_frontier_set(
+	struct ged *gedp, const char *root_path,
+	struct ged_view_context *view_ctx, int mode,
+	const char *const *paths, size_t path_count);
+GED_EXPORT extern int ged_draw_obol_source_visibility_overrides_set(
+	struct ged *gedp, const char *root_path,
+	struct ged_view_context *view_ctx, int mode,
+	const char *const *paths, const int *visible, size_t rule_count);
+GED_EXPORT extern int ged_draw_obol_source_visibility_frontier_clear(
+	struct ged *gedp, const char *root_path,
+	struct ged_view_context *view_ctx, int mode);
 
 __END_DECLS
 

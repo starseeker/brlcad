@@ -36,6 +36,37 @@ ged_draw_apply_transaction(struct ged *gedp,
 			   const struct ged_draw_transaction *txn,
 			   struct ged_draw_transaction_result *result);
 
+GED_EXPORT extern void
+ged_draw_promotion_result_init(struct ged_draw_promotion_result *result);
+
+GED_EXPORT extern void
+ged_draw_promotion_result_free(struct ged_draw_promotion_result *result);
+
+/**
+ * Temporarily split the drawn intent(s) containing the requested occurrence
+ * so the occurrence is independently addressable for editing.  The database
+ * is not modified.  The returned promotion must be released exactly once.
+ */
+GED_EXPORT extern int
+ged_draw_promote_path(struct ged *gedp,
+		      const struct ged_draw_promotion_request *request,
+		      struct ged_draw_promotion_result *result);
+
+/**
+ * End a temporary promotion.  When the promoted frontier is unchanged it is
+ * collapsed back to the original draw intent.  If draw/erase changed the same
+ * root meanwhile, the current frontier is preserved, the promotion is retired,
+ * and the result reports a conflict.
+ */
+GED_EXPORT extern int
+ged_draw_release_promotion(struct ged *gedp,
+			   ged_draw_promotion_ref promotion,
+			   int outcome,
+			   struct ged_draw_promotion_result *result);
+
+GED_EXPORT extern int
+ged_draw_promotion_ref_is_null(ged_draw_promotion_ref promotion);
+
 /**
  * Subscribe to post-transaction draw-state events.
  *

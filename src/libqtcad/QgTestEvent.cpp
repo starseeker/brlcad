@@ -30,6 +30,7 @@
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTimer>
+#include <QTreeView>
 #include <QUrl>
 #include <QWheelEvent>
 #include <QWidget>
@@ -77,16 +78,44 @@ qg_event_resolve_index(QAbstractItemView *view, const QJsonObject &arguments)
 {
     if (!view || !view->model())
 	return QModelIndex();
+    QAbstractItemModel *model = view->model();
+    const QJsonArray labels =
+	arguments.value(QStringLiteral("labels")).toArray();
+    if (!labels.isEmpty()) {
+	QModelIndex parent;
+	for (const QJsonValue &labelValue : labels) {
+	    if (model->canFetchMore(parent))
+		model->fetchMore(parent);
+	    const QString label = labelValue.toString();
+	    QModelIndex match;
+	    const int count = model->rowCount(parent);
+	    for (int row = 0; row < count; ++row) {
+		const QModelIndex candidate = model->index(row, 0, parent);
+		if (candidate.data(Qt::DisplayRole).toString() == label) {
+		    match = candidate;
+		    break;
+		}
+	    }
+	    if (!match.isValid())
+		return QModelIndex();
+	    parent = match;
+	}
+	const int column = arguments.value(QStringLiteral("column")).toInt(0);
+	return column == 0 || !parent.isValid() ? parent :
+	    model->index(parent.row(), column, parent.parent());
+    }
     const QJsonArray rows = arguments.value(QStringLiteral("rows")).toArray();
     QModelIndex parent;
     for (const QJsonValue &row : rows) {
-	parent = view->model()->index(row.toInt(-1), 0, parent);
+	if (model->canFetchMore(parent))
+	    model->fetchMore(parent);
+	parent = model->index(row.toInt(-1), 0, parent);
 	if (!parent.isValid())
 	    return QModelIndex();
     }
     const int column = arguments.value(QStringLiteral("column")).toInt(0);
     return column == 0 || !parent.isValid() ? parent :
-	view->model()->index(parent.row(), column, parent.parent());
+	model->index(parent.row(), column, parent.parent());
 }
 
 static void
@@ -470,6 +499,20 @@ QgEventRecorder::registerObject(QObject *object)
 			    qg_event_index_arguments(current));
 		});
 	}
+	if (QTreeView *tree = qobject_cast<QTreeView *>(view)) {
+	    connect(tree, &QTreeView::expanded, this,
+		[this, tree](const QModelIndex &index) {
+		    QJsonObject args = qg_event_index_arguments(index);
+		    args.insert(QStringLiteral("expanded"), true);
+		    append(tree, QStringLiteral("set_expanded"), args);
+		});
+	    connect(tree, &QTreeView::collapsed, this,
+		[this, tree](const QModelIndex &index) {
+		    QJsonObject args = qg_event_index_arguments(index);
+		    args.insert(QStringLiteral("expanded"), false);
+		    append(tree, QStringLiteral("set_expanded"), args);
+		});
+	}
     }
 
     const QObjectList children = object->children();
@@ -633,6 +676,26 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 	    view->scrollTo(index);
 	    return true;
 	}
+    } else if (event.action == QLatin1String("clear_selection")) {
+	QAbstractItemView *view = qobject_cast<QAbstractItemView *>(target);
+	if (view && view->selectionModel()) {
+	    view->selectionModel()->select(QModelIndex(),
+		QItemSelectionModel::Clear);
+	    view->selectionModel()->clearCurrentIndex();
+	    return true;
+	}
+    } else if (event.action == QLatin1String("set_expanded")) {
+	QTreeView *tree = qobject_cast<QTreeView *>(target);
+	const QModelIndex index = qg_event_resolve_index(tree, event.arguments);
+	if (tree && index.isValid()) {
+	    const bool expanded =
+		event.arguments.value(QStringLiteral("expanded")).toBool(true);
+	    tree->setExpanded(index, expanded);
+	    if (expanded && tree->model()->canFetchMore(index))
+		tree->model()->fetchMore(index);
+	    tree->scrollTo(index);
+	    return tree->isExpanded(index) == expanded;
+	}
     } else if (event.action == QLatin1String("checkpoint")) {
 	QWidget *widget = qobject_cast<QWidget *>(target);
 	if (widget && m_checkpoint)
@@ -640,6 +703,16 @@ QgEventPlayer::play(const QgTestEvent &event, QString *error) const
 		event.arguments.value(QStringLiteral("name")).toString(), error);
 	qg_event_error(error, QStringLiteral("checkpoint has no widget or handler"));
 	return false;
+    } else if (event.action == QLatin1String("resize")) {
+	QWidget *widget = qobject_cast<QWidget *>(target);
+	const int width =
+	    event.arguments.value(QStringLiteral("width")).toInt();
+	const int height =
+	    event.arguments.value(QStringLiteral("height")).toInt();
+	if (widget && width > 0 && height > 0) {
+	    widget->resize(width, height);
+	    return widget->size() == QSize(width, height);
+	}
     } else if (event.action == QLatin1String("wait")) {
 	QEventLoop loop;
 	QTimer::singleShot(qMax(0, event.arguments.value(QStringLiteral("ms")).toInt()),

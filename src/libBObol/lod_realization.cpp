@@ -458,6 +458,34 @@ BObolLodProgressiveMesh::faceCount(int requestedLevel) const
 }
 
 size_t
+BObolLodProgressiveMesh::hierarchyPointCount(int requestedLevel) const
+{
+    if (!this->p)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    if (requestedLevel < this->p->minimumLevel)
+	requestedLevel = this->p->minimumLevel;
+    if (requestedLevel > this->p->maximumLevel)
+	requestedLevel = this->p->maximumLevel;
+    return requestedLevel >= 0 ?
+	this->p->pointCount[requestedLevel] : 0;
+}
+
+size_t
+BObolLodProgressiveMesh::hierarchyFaceCount(int requestedLevel) const
+{
+    if (!this->p)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    if (requestedLevel < this->p->minimumLevel)
+	requestedLevel = this->p->minimumLevel;
+    if (requestedLevel > this->p->maximumLevel)
+	requestedLevel = this->p->maximumLevel;
+    return requestedLevel >= 0 ?
+	this->p->faceCount[requestedLevel] : 0;
+}
+
+size_t
 BObolLodProgressiveMesh::estimateBytes(void) const
 {
     if (!this->p)

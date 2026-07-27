@@ -1740,6 +1740,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		std::max(testCase.meshTimeoutMs, 10000);
 	    const int64_t settle_deadline =
 		bu_gettime() + static_cast<int64_t>(settle_timeout_ms) * 1000;
+	    bool settle_frame_presented = false;
 	    while (bu_gettime() < settle_deadline) {
 		QCoreApplication::processEvents();
 		(void)controller->advanceProgressiveWork(NULL,
@@ -1771,15 +1772,29 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		(void)qtcad_obol_lod_service_status_get(gedp,
 		    ged_view_context_from_bv(view.viewContext()),
 		    &service_status);
-		if (compact_after > compact_before &&
+		const bool otherwise_settled =
+		    compact_after > compact_before &&
 		    projected_mesh_demand_after > 0 &&
 		    lod_mesh_after >= projected_mesh_demand_after &&
 		    realized_after >= geometry_before &&
 		    service_status.pending_tasks == 0 &&
 		    service_status.in_flight == 0 &&
 		    service_status.queued_results == 0 &&
-		    service_status.queued_cache_writes == 0 &&
-		    !progressive_status.hasMore)
+		    service_status.queued_cache_writes == 0;
+		/* A hidden software canvas has no automatic paint delivery.
+		 * Present one frame only after the structural/service work is
+		 * otherwise complete, allowing the same frame-gated refinement
+		 * and post-render quiet debounce used by the visible GUI without
+		 * turning every polling iteration into a costly readback. */
+		if (otherwise_settled && progressive_status.hasMore &&
+		    !settle_frame_presented) {
+		    QImage settle_frame;
+		    qtcad_obol_request_view_frame(view, controller,
+			"progressive-lod-settle-frame");
+		    view.get_viewport_image(settle_frame);
+		    settle_frame_presented = true;
+		}
+		if (otherwise_settled && !progressive_status.hasMore)
 		    break;
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	    }

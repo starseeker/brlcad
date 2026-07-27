@@ -1213,13 +1213,14 @@ f_sed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
 	return TCL_ERROR;
     }
 
-    /* If the target solid is a sub-object of a drawn combination (or is not
-     * drawn at all), instantiate it as its own drawn object so f_ill can
-     * illuminate it.  Undone on the edit's return to view (stateChange). */
+    /* Expose every currently drawn occurrence of this primitive.  Solid-edit
+     * preview deliberately follows shared primitive identity; undrawn
+     * occurrences elsewhere in the database remain undrawn. */
     if (argc >= 2) {
 	struct db_full_path sed_path;
 	if (db_string_to_path(&sed_path, s->dbip, argv[argc - 1]) == 0) {
-	    (void)mged_edit_isolate_target(s, &sed_path);
+	    (void)mged_edit_promote_target(s, &sed_path,
+		GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES);
 	    db_free_full_path(&sed_path);
 	}
     }

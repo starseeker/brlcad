@@ -43,7 +43,7 @@
 
 #define POP_MAXLEVEL 16
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 9
+#define CACHE_CURRENT_FORMAT 10
 
 #define CACHE_POP_MAX_LEVEL "max"
 #define CACHE_POP_MIN_LEVEL "min"
@@ -175,19 +175,36 @@ mesh_lod_arrays_validate(const int *faces,
 
 static bool
 mesh_lod_bot_authored_normals(std::vector<fastf_t> &normalStorage,
-			      const struct rt_bot_internal *bot)
+			      const struct rt_bot_internal *bot,
+			      const int *displayFaces,
+			      bool flippedWinding)
 {
     normalStorage.clear();
     if (!bot || !(bot->bot_flags & RT_BOT_HAS_SURFACE_NORMALS) ||
 	!(bot->bot_flags & RT_BOT_USE_NORMALS) || !bot->normals ||
-	!bot->face_normals || bot->num_face_normals < bot->num_faces)
+	!bot->face_normals || bot->num_face_normals < bot->num_faces ||
+	!displayFaces)
 	return false;
 
     normalStorage.reserve(bot->num_faces * 9);
     for (size_t faceIndex = 0; faceIndex < bot->num_faces; ++faceIndex) {
+	vect_t edgeA;
+	vect_t edgeB;
+	vect_t faceNormal;
+	const int *face = &displayFaces[faceIndex * 3];
+	VSUB2(edgeA, &bot->vertices[face[1] * 3],
+	    &bot->vertices[face[0] * 3]);
+	VSUB2(edgeB, &bot->vertices[face[2] * 3],
+	    &bot->vertices[face[0] * 3]);
+	VCROSS(faceNormal, edgeA, edgeB);
+	if (MAGNITUDE(faceNormal) <= SMALL_FASTF) {
+	    normalStorage.clear();
+	    return false;
+	}
+	VUNITIZE(faceNormal);
 	for (size_t corner = 0; corner < 3; ++corner) {
 	    const size_t sourceCorner =
-		(bot->orientation == RT_BOT_CW && corner > 0) ?
+		(flippedWinding && corner > 0) ?
 		3 - corner : corner;
 	    const int normalIndex =
 		bot->face_normals[faceIndex * 3 + sourceCorner];
@@ -203,12 +220,118 @@ mesh_lod_bot_authored_normals(std::vector<fastf_t> &normalStorage,
 		return false;
 	    }
 	    VUNITIZE(normal);
+	    /* Normalize authored normals to the exterior-CCW display winding.
+	     * A declared-CW BoT commonly stores normals in its source winding,
+	     * while imported unoriented solids are less predictable. */
+	    if (VDOT(normal, faceNormal) < 0.0)
+		VREVERSE(normal, normal);
 	    normalStorage.push_back(normal[X]);
 	    normalStorage.push_back(normal[Y]);
 	    normalStorage.push_back(normal[Z]);
 	}
     }
     return true;
+}
+
+/* A consistently wound closed mesh may still contain independently oriented
+ * shells.  For an explicitly unoriented BoT there is no material-side
+ * contract telling us how those shells relate, so automatic exterior
+ * normalization is safe only for one connected component.  This union/find
+ * is linear and substantially smaller than the half-edge topology check that
+ * precedes it. */
+static bool
+mesh_lod_faces_one_component(const int *faces, size_t faceCount,
+			     size_t vertexCount)
+{
+    if (!faces || !faceCount || !vertexCount ||
+	vertexCount > static_cast<size_t>(INT_MAX))
+	return false;
+
+    const int inactive = std::numeric_limits<int>::min();
+    std::vector<int> parent(vertexCount, inactive);
+    size_t components = 0;
+    const auto activate = [&parent, &components, inactive](int vertex) {
+	if (parent[static_cast<size_t>(vertex)] == inactive) {
+	    parent[static_cast<size_t>(vertex)] = -1;
+	    components++;
+	}
+    };
+    const auto findRoot = [&parent](int vertex) {
+	int root = vertex;
+	while (parent[static_cast<size_t>(root)] >= 0)
+	    root = parent[static_cast<size_t>(root)];
+	while (vertex != root) {
+	    const int next = parent[static_cast<size_t>(vertex)];
+	    parent[static_cast<size_t>(vertex)] = root;
+	    vertex = next;
+	}
+	return root;
+    };
+    const auto unite = [&parent, &components, &findRoot](int a, int b) {
+	int rootA = findRoot(a);
+	int rootB = findRoot(b);
+	if (rootA == rootB)
+	    return;
+	/* Negative roots store component size. */
+	if (parent[static_cast<size_t>(rootA)] >
+	    parent[static_cast<size_t>(rootB)])
+	    std::swap(rootA, rootB);
+	parent[static_cast<size_t>(rootA)] +=
+	    parent[static_cast<size_t>(rootB)];
+	parent[static_cast<size_t>(rootB)] = rootA;
+	components--;
+    };
+
+    for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
+	const int *face = &faces[faceIndex * 3];
+	activate(face[0]);
+	activate(face[1]);
+	activate(face[2]);
+	unite(face[0], face[1]);
+	unite(face[0], face[2]);
+    }
+    return components == 1;
+}
+
+/* Return +1 for exterior CCW, -1 for inward winding, and zero when numerical
+ * cancellation makes the orientation indeterminate.  Translating about one
+ * mesh vertex keeps the determinant stable for models far from the origin. */
+static int
+mesh_lod_closed_winding_sign(const point_t *vertices, size_t vertexCount,
+			     const int *faces, size_t faceCount)
+{
+    if (!vertices || !vertexCount || !faces || !faceCount)
+	return 0;
+
+    const point_t &origin = vertices[static_cast<size_t>(faces[0])];
+    long double signedSixVolume = 0.0L;
+    long double absoluteTerms = 0.0L;
+    for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
+	const int *face = &faces[faceIndex * 3];
+	long double a[3];
+	long double b[3];
+	long double c[3];
+	for (int axis = 0; axis < 3; ++axis) {
+	    a[axis] = static_cast<long double>(
+		vertices[static_cast<size_t>(face[0])][axis] - origin[axis]);
+	    b[axis] = static_cast<long double>(
+		vertices[static_cast<size_t>(face[1])][axis] - origin[axis]);
+	    c[axis] = static_cast<long double>(
+		vertices[static_cast<size_t>(face[2])][axis] - origin[axis]);
+	}
+	const long double term =
+	    a[0] * (b[1] * c[2] - b[2] * c[1]) -
+	    a[1] * (b[0] * c[2] - b[2] * c[0]) +
+	    a[2] * (b[0] * c[1] - b[1] * c[0]);
+	signedSixVolume += term;
+	absoluteTerms += std::fabs(term);
+    }
+    const long double tolerance =
+	std::numeric_limits<long double>::epsilon() *
+	std::max(1.0L, absoluteTerms) * 64.0L;
+    if (std::fabs(signedSixVolume) <= tolerance)
+	return 0;
+    return signedSixVolume > 0.0L ? 1 : -1;
 }
 
 static void
@@ -664,7 +787,7 @@ BObolPopState::BObolPopState(
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-PoP3D-format-9";
+	static const char semantics[] = "BObol-PoP3D-format-10";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertices, inputVertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faces, 3 * inputFaceCount * sizeof(int));
@@ -1927,21 +2050,20 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 	return BRLCAD_ERROR;
     }
 
-    const bool cullBackfaces =
-	bot->mode == RT_BOT_SOLID &&
-	bot->orientation != RT_BOT_UNORIENTED &&
-	bot->num_vertices <= static_cast<size_t>(INT_MAX) &&
-	bot->num_faces <= static_cast<size_t>(INT_MAX) &&
-	bg_trimesh_solid2(static_cast<int>(bot->num_vertices),
-	    static_cast<int>(bot->num_faces), bot->vertices, bot->faces,
-	    NULL) == 0;
-
-    /* Obol's cull-safe contract is always exterior CCW.  Normalize declared
-     * clockwise BoTs before generating PoP levels so every cumulative cut
-     * preserves the same raster semantics. */
+    /* Obol's cull-safe contract is always exterior CCW.  Begin with the
+     * declared winding, then validate actual topology.  Imported meshes such
+     * as Stanford Lucy are often marked unoriented despite having one closed,
+     * consistently wound shell; normalize those from their signed volume
+     * instead of permanently forcing two-sided shaded rasterization. */
     std::vector<int> normalizedFaces;
     const int *cacheFaces = bot->faces;
-    if (bot->orientation == RT_BOT_CW) {
+    bool flippedWinding = bot->orientation == RT_BOT_CW;
+    const auto applyWinding = [&]() {
+	if (!flippedWinding) {
+	    normalizedFaces.clear();
+	    cacheFaces = bot->faces;
+	    return;
+	}
 	normalizedFaces.resize(bot->num_faces * 3);
 	for (size_t faceIndex = 0; faceIndex < bot->num_faces; faceIndex++) {
 	    normalizedFaces[3 * faceIndex] = bot->faces[3 * faceIndex];
@@ -1951,13 +2073,43 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 		bot->faces[3 * faceIndex + 1];
 	}
 	cacheFaces = normalizedFaces.data();
+    };
+    applyWinding();
+
+    bool cullBackfaces = false;
+    if (bot->mode == RT_BOT_SOLID &&
+	bot->num_vertices <= static_cast<size_t>(INT_MAX) &&
+	bot->num_faces <= static_cast<size_t>(INT_MAX) &&
+	bg_trimesh_solid2(static_cast<int>(bot->num_vertices),
+	    static_cast<int>(bot->num_faces), bot->vertices,
+	    const_cast<int *>(cacheFaces), NULL) == 0) {
+	const bool oneComponent = mesh_lod_faces_one_component(
+	    cacheFaces, bot->num_faces, bot->num_vertices);
+	if (oneComponent) {
+	    const int windingSign = mesh_lod_closed_winding_sign(
+		reinterpret_cast<const point_t *>(bot->vertices),
+		bot->num_vertices, cacheFaces, bot->num_faces);
+	    if (windingSign != 0) {
+		if (windingSign < 0) {
+		    flippedWinding = !flippedWinding;
+		    applyWinding();
+		}
+		cullBackfaces = true;
+	    }
+	} else if (bot->orientation != RT_BOT_UNORIENTED) {
+	    /* Multiple shells can encode cavities, so their signed volumes
+	     * cannot be normalized independently.  An explicit orientation is
+	     * the only available material-side contract in that case. */
+	    cullBackfaces = true;
+	}
     }
 
     std::vector<fastf_t> authoredNormals;
     const point_t *botVertices =
 	reinterpret_cast<const point_t *>(bot->vertices);
     const vect_t *botNormals =
-	mesh_lod_bot_authored_normals(authoredNormals, bot) ?
+	mesh_lod_bot_authored_normals(
+	    authoredNormals, bot, cacheFaces, flippedWinding) ?
 	reinterpret_cast<const vect_t *>(authoredNormals.data()) : NULL;
 
     unsigned long long key = mesh_lod_cache_generate(

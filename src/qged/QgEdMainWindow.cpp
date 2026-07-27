@@ -174,6 +174,7 @@ QgEdMainWindow::CreateWidgets(QgViewType canvas_type)
 
     /* Geometry Tree */
     treeview = new QgTreeView(tree_dock, ap->mdl);
+    treeview->setProperty("qgTestId", QStringLiteral("hierarchy-tree"));
     tree_dock = new QgDockWidget("Hierarchy", this);
     tree_dock->setObjectName("Hierarchy");
     tree_dock->setWidget(treeview);
@@ -331,7 +332,6 @@ QgEdMainWindow::ConnectWidgets()
     connect(tree_dock, &QgDockWidget::banner_click, m, &QgModel::toggle_hierarchy);
     connect(vm_treeview_mode_toggle, &QAction::triggered, m, &QgModel::toggle_hierarchy);
     connect(m, &QgModel::opened_item, treeview, &QgTreeView::qgitem_select_sync);
-    connect(m, &QgModel::view_changed, ap, &QgEdApp::do_view_changed);
     QObject::connect(treeview, &QgTreeView::view_changed, ap, &QgEdApp::do_view_changed);
     QObject::connect(ap, &QgEdApp::view_update, treeview, &QgTreeView::do_view_update);
     // We need to record the expanded/contracted state of the tree items,

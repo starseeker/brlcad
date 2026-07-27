@@ -353,6 +353,7 @@ set(
   ged_draw_navigation.c
   ged_draw_scene_root.c
   ged_draw_transactions.c
+  ged_draw_frontier.cpp
   ged_draw_tree.c
   ged_draw_util.c
   ged_draw_view.cpp

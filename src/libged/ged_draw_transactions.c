@@ -1114,11 +1114,11 @@ ged_draw_autoview_for_transaction(struct ged *gedp,
 }
 
 
-static int
-_ged_draw_apply_draw(struct ged *gedp,
-		     const struct ged_draw_transaction *txn,
-		     const char *path,
-		     struct ged_draw_transaction_result *result)
+int
+ged_draw_apply_draw_inner(struct ged *gedp,
+			  const struct ged_draw_transaction *txn,
+			  const char *path,
+			  struct ged_draw_transaction_result *result)
 {
     if (!gedp || !txn)
 	return -1;
@@ -1395,7 +1395,7 @@ _ged_draw_reexpand_source_groups(struct ged *gedp, const char *path,
 	txn.appearance = &settings;
 	txn.mode = settings.draw_mode;
 	txn.autoview = 0;
-	if (_ged_draw_apply_draw(gedp, &txn, entry->path, NULL) < 0)
+	if (ged_draw_apply_draw_inner(gedp, &txn, entry->path, NULL) < 0)
 	    failed = 1;
 	else
 	    reexpanded++;
@@ -1479,6 +1479,7 @@ _ged_draw_txn_result_prepare(struct ged_draw_transaction_result *result,
     result->stale_count = 0;
     result->redrawn_count = 0;
     result->error_count = 0;
+    result->presentation_only = 0;
     result->scene_revision_before = ged_draw_scene_revision(gedp);
     result->scene_revision_after = result->scene_revision_before;
 }
@@ -1579,6 +1580,10 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	case GED_DRAW_TXN_ERASE:
 	    if (!path)
 		return 0;
+	    ret = ged_draw_frontier_erase_path(gedp, path, txn->view,
+		    txn->mode, 0, result);
+	    if (ret)
+		break;
 	    if (txn->view || txn->mode >= 0)
 		ret = ged_draw_erase_path_string_scoped(gedp, path,
 							txn->view, txn->mode);
@@ -1592,6 +1597,10 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	case GED_DRAW_TXN_ERASE_PREFIX:
 	    if (!path)
 		return 0;
+	    ret = ged_draw_frontier_erase_path(gedp, path, txn->view,
+		    txn->mode, 1, result);
+	    if (ret)
+		break;
 	    if (txn->view || txn->mode >= 0)
 		ret = ged_draw_erase_path_prefix_string_scoped(gedp, path,
 		      txn->view, txn->mode);
@@ -1693,7 +1702,9 @@ _ged_draw_apply_transaction_inner(struct ged *gedp,
 	    }
 	    break;
 	case GED_DRAW_TXN_DRAW:
-	    ret = _ged_draw_apply_draw(gedp, txn, path, result);
+	    ret = ged_draw_frontier_absorb_draw(gedp, txn, path, result);
+	    if (ret == 0)
+		ret = ged_draw_apply_draw_inner(gedp, txn, path, result);
 	    break;
 	case GED_DRAW_TXN_NONE:
 	default:
@@ -1747,6 +1758,7 @@ ged_draw_apply_transaction(struct ged *gedp,
     if (result)
 	_ged_draw_txn_result_prepare(result, gedp);
 
+    ged_draw_frontier_note_transaction(gedp, txn, path);
     int ret = _ged_draw_apply_transaction_inner(gedp, txn, result, path);
     if (result) {
 	result->status = ret;

@@ -34,9 +34,11 @@
 #include "ged/commands.h"
 #include "ged/draw.h"
 #include "ged/draw_obol.h"
+#include "ged/selection_state.h"
 #include "ged/view.h"
 #include "opennurbs_sphere.h"
 #include "rt/db_internal.h"
+#include "rt/edit.h"
 #include "rt/view.h"
 #include "view_test_util.h"
 #include "wdb.h"
@@ -59,6 +61,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <chrono>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1702,6 +1705,16 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	}
 	if (!status.hasMore)
 	    break;
+	/* Production hosts present every published PoP cut before admitting the
+	 * next one.  This headless contract test has no paint loop, so explicitly
+	 * acknowledge one requested frame rather than spinning forever behind
+	 * the controller's completed-frame gate. */
+	SbString render_reason;
+	if (controller->consumeRenderRequest(&render_reason)) {
+	    const uint64_t frame_started = controller->beginRenderTiming();
+	    std::this_thread::sleep_for(std::chrono::microseconds(1));
+	    controller->completeRenderTiming(frame_started);
+	}
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     SbBox3f settled_bounds;
@@ -1748,6 +1761,13 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     for (int attempt = 0; attempt < 64 && stable_autoview_ticks < 2;
 	attempt++) {
 	(void)controller->advanceProgressiveWork(&options, &status);
+	SbString render_reason;
+	if (status.hasMore &&
+	    controller->consumeRenderRequest(&render_reason)) {
+	    const uint64_t frame_started = controller->beginRenderTiming();
+	    std::this_thread::sleep_for(std::chrono::microseconds(1));
+	    controller->completeRenderTiming(frame_started);
+	}
 	const uint64_t current_revision = bv_frame_revision_get(view);
 	if (current_revision == stable_autoview_revision) {
 	    stable_autoview_ticks++;
@@ -2077,6 +2097,348 @@ group_index_state_cb(ged_draw_group_ref ref, void *userdata)
     return 1;
 }
 
+
+static std::set<std::string>
+frontier_paths(struct ged *gedp)
+{
+    std::set<std::string> paths;
+    struct bu_vls listing = BU_VLS_INIT_ZERO;
+    (void)ged_draw_list_paths(gedp, ged_view_active_ctx(gedp), -1, 0,
+	&listing);
+    const char *start = bu_vls_cstr(&listing);
+    for (const char *p = start; ; p++) {
+	if (*p != '\n' && *p != '\r' && *p != '\0')
+	    continue;
+	if (p > start)
+	    paths.insert(std::string(start, static_cast<size_t>(p - start)));
+	if (*p == '\0')
+	    break;
+	start = p + 1;
+    }
+    bu_vls_free(&listing);
+    return paths;
+}
+
+
+static int
+frontier_draw_one(struct ged *gedp, const char *path)
+{
+    const char *args[2] = {"draw", path};
+    return ged_exec_draw(gedp, 2, args);
+}
+
+
+static void
+frontier_clear(struct ged *gedp)
+{
+    struct ged_draw_transaction clear =
+	ged_draw_transaction_make(GED_DRAW_TXN_CLEAR, NULL);
+    (void)ged_draw_apply_transaction(gedp, &clear, NULL);
+}
+
+
+static int
+frontier_visible_occurrences(SoBRLDatabaseSource *source)
+{
+    if (!source)
+	return -1;
+    int visible = 0;
+    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
+	if (source->getCompactInstanceHandle(i, handle) &&
+	    source->getCompactInstanceSummary(handle, summary) &&
+	    summary.valid && summary.visible)
+	    visible++;
+    }
+    return visible;
+}
+
+
+static int
+frontier_selected_occurrences_for_path(SoBRLDatabaseSource *source,
+	const char *path)
+{
+    if (!source || !path)
+	return -1;
+    int selected = 0;
+    const auto semantic_path = [](const char *input) {
+	std::string value;
+	if (!input)
+	    return value;
+	while (*input == '/')
+	    input++;
+	for (const char *cursor = input; *cursor; cursor++) {
+	    if (*cursor == '@' && cursor[1] >= '0' && cursor[1] <= '9') {
+		while (cursor[1] && cursor[1] != '/')
+		    cursor++;
+		continue;
+	    }
+	    value.push_back(*cursor);
+	}
+	return value;
+    };
+    const std::string target_path = semantic_path(path);
+    for (int i = 0; i < source->getCompactInstanceCount(); i++) {
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
+	if (!source->getCompactInstanceHandle(i, handle) ||
+	    !source->getCompactInstanceSummary(handle, summary) ||
+	    !summary.valid || !summary.selected)
+	    continue;
+	const std::string candidate = semantic_path(summary.path.getString());
+	if (candidate == target_path ||
+	    (candidate.size() > target_path.size() &&
+	     candidate.compare(0, target_path.size(), target_path) == 0 &&
+	     candidate[target_path.size()] == '/'))
+	    selected++;
+    }
+    return selected;
+}
+
+
+static int
+exercise_draw_frontier(struct ged *gedp, BObolSceneController *scene)
+{
+    const char *nested_root = "nested_parent.c";
+    const char *nested_target =
+	"nested_parent.c/nested_child.c/nested_leaf.s";
+    const char *nested_sibling =
+	"nested_parent.c/nested_sibling.s";
+
+    frontier_clear(gedp);
+    if (frontier_draw_one(gedp, nested_root) != BRLCAD_OK)
+	FAIL("frontier test should draw its nested root");
+    if (!ged_selection_select_path(gedp, NULL, nested_target, 1))
+	FAIL("frontier test should select the nested target");
+
+    struct ged_draw_promotion_request request =
+	GED_DRAW_PROMOTION_REQUEST_INIT;
+    request.path = nested_target;
+    request.view = ged_view_active_ctx(gedp);
+    request.scope = GED_DRAW_PROMOTE_EXACT_OCCURRENCE;
+    request.role = "frontier-regression";
+    struct ged_draw_promotion_result promotion;
+    ged_draw_promotion_result_init(&promotion);
+    if (ged_draw_promote_path(gedp, &request, &promotion) <= 0 ||
+	    promotion.occurrence_count != 1 ||
+	    promotion.replaced_root_count != 1)
+	FAIL("exact promotion should split one drawn root");
+    if (!scene || scene->getDatabaseSourceCount() != 1 ||
+	    !source_for_path(scene, nested_root))
+	FAIL("promotion must retain one LoD/data-owning database source");
+
+    const std::set<std::string> exact_expected = {nested_root};
+    const std::set<std::string> exact_actual = frontier_paths(gedp);
+    if (exact_actual != exact_expected) {
+	for (const std::string &path : exact_actual)
+	    fprintf(stderr, "exact promotion path: %s\n", path.c_str());
+	FAIL("exact promotion should retain the compact owning draw root");
+    }
+    if (ged_selection_count(gedp, NULL) != 1)
+	FAIL("promotion must not change semantic selection membership");
+
+    struct ged_draw_promotion_result released;
+    ged_draw_promotion_result_init(&released);
+    if (ged_draw_release_promotion(gedp, promotion.promotion,
+	    GED_DRAW_PROMOTION_CANCEL, &released) <= 0 ||
+	    released.conflict_count != 0 ||
+	    frontier_paths(gedp) != std::set<std::string>{nested_root})
+	FAIL("unchanged promotion should collapse to its original draw intent");
+    if (ged_selection_count(gedp, NULL) != 1)
+	FAIL("promotion collapse must preserve semantic selection membership");
+    ged_draw_promotion_result_free(&released);
+    ged_draw_promotion_result_free(&promotion);
+
+    /* The common librt edit buffer owns the same presentation lifecycle:
+     * staging a primitive edit promotes every already-drawn occurrence, while
+     * abandoning it collapses the retained owner without creating sources. */
+    frontier_clear(gedp);
+    if (frontier_draw_one(gedp, nested_root) != BRLCAD_OK)
+	FAIL("edit-buffer promotion should draw its nested root");
+    struct db_full_path edit_path;
+    db_full_path_init(&edit_path);
+    if (db_string_to_path(&edit_path, gedp->dbip, "nested_leaf.s") < 0)
+	FAIL("edit-buffer promotion should resolve its primitive");
+    struct bn_tol edit_tol = BN_TOL_INIT_TOL;
+    struct rt_edit *edit_state =
+	rt_edit_create(&edit_path, gedp->dbip, &edit_tol, NULL);
+    if (!edit_state)
+	FAIL("edit-buffer promotion should create an librt edit state");
+    ged_edit_buf_set(gedp, &edit_path, edit_state);
+    const std::set<std::string> edit_expected = {nested_root};
+    if (ged_edit_buf_get(gedp, &edit_path) != edit_state ||
+	frontier_paths(gedp) != edit_expected ||
+	!scene || scene->getDatabaseSourceCount() != 1)
+	FAIL("staged librt edit should promote all drawn occurrences on one retained source");
+    ged_edit_buf_abandon(gedp, &edit_path);
+    if (ged_edit_buf_get(gedp, &edit_path) ||
+	frontier_paths(gedp) != std::set<std::string>{nested_root} ||
+	scene->getDatabaseSourceCount() != 1)
+	FAIL("abandoned librt edit should collapse its retained source frontier");
+    db_free_full_path(&edit_path);
+
+    /* A later broad draw owns the intent, but adopts already-resident narrow
+     * payloads before retiring the narrow source.  Re-drawing a covered narrow
+     * path must then be an idempotent semantic operation. */
+    frontier_clear(gedp);
+    if (frontier_draw_one(gedp, nested_target) != BRLCAD_OK)
+	FAIL("subsumption test should draw its narrow path");
+    SoBRLDatabaseSource *narrow_source =
+	source_for_path(scene, nested_target);
+    if (!narrow_source || scene->getDatabaseSourceCount() != 1 ||
+	narrow_source->getCompactInstanceCount() <= 0)
+	FAIL("a direct narrow draw should create only a narrow lazy source");
+    if (!ged_selection_select_path(gedp, NULL, nested_target, 1))
+	FAIL("subsumption test should establish compact selection");
+    (void)ged_selection_draw_sync(gedp, NULL);
+    if (frontier_selected_occurrences_for_path(narrow_source,
+	    nested_target) <= 0)
+	FAIL("narrow source should expose the established compact selection");
+
+    if (frontier_draw_one(gedp, nested_root) != BRLCAD_OK)
+	FAIL("subsumption test should draw the broader root");
+    SoBRLDatabaseSource *broad_source = source_for_path(scene, nested_root);
+    if (!broad_source || scene->getDatabaseSourceCount() != 1 ||
+	broad_source->getCompactInstanceCountForPath(nested_target, TRUE) <= 0)
+	FAIL("broad draw should adopt resident narrow data and retire its owner");
+    if (frontier_selected_occurrences_for_path(broad_source,
+	    nested_target) <= 0) {
+	for (int i = 0; i < broad_source->getCompactInstanceCount(); i++) {
+	    BObolCompactInstanceHandle handle;
+	    BObolCompactInstanceSummary summary;
+	    BObolCompactOccurrence direct;
+	    const bool have_direct =
+		broad_source->getCompactOccurrence(i, direct) ? true : false;
+	    if (broad_source->getCompactInstanceHandle(i, handle) &&
+		broad_source->getCompactInstanceSummary(handle, summary))
+		fprintf(stderr, "broad occurrence: handle=%016llx:%016llx path=%s direct=%s selected=%d visible=%d\n",
+		    (unsigned long long)handle.instanceWord0,
+		    (unsigned long long)handle.instanceWord1,
+		    summary.path.getString(), have_direct ?
+		    direct.summary.path.getString() : "<none>",
+		    summary.selected ? 1 : 0,
+		    summary.visible ? 1 : 0);
+	}
+	FAIL("broad source adoption should preserve semantic selection visuals");
+    }
+
+    if (frontier_draw_one(gedp, nested_target) != BRLCAD_OK ||
+	scene->getDatabaseSourceCount() != 1 ||
+	!source_for_path(scene, nested_root))
+	FAIL("drawing a path already covered by a broad intent must be idempotent");
+    if (frontier_paths(gedp) != std::set<std::string>{nested_root})
+	FAIL("a covered narrow draw must remain subsumed by the broad intent");
+
+    struct ged_draw_transaction erase =
+	ged_draw_transaction_make(GED_DRAW_TXN_ERASE, nested_target);
+    erase.view = ged_view_active_ctx(gedp);
+    struct ged_draw_transaction_result erase_result;
+    ged_draw_transaction_result_init(&erase_result);
+    if (ged_draw_apply_transaction(gedp, &erase, &erase_result) <= 0 ||
+	    !erase_result.presentation_only ||
+	    frontier_paths(gedp) != std::set<std::string>{nested_root} ||
+	    ged_draw_path_state(gedp, ged_draw_active_view_ctx(gedp),
+		nested_root, -1) != 2 ||
+	    ged_draw_path_state(gedp, ged_draw_active_view_ctx(gedp),
+		nested_target, -1) != 0 ||
+	    ged_draw_path_state(gedp, ged_draw_active_view_ctx(gedp),
+		nested_sibling, -1) != 1)
+	FAIL("nested erase should retain one compact owner with partial/hidden/full path states");
+    ged_draw_transaction_result_free(&erase_result);
+    SoBRLDatabaseSource *nested_source =
+	source_for_path(scene, nested_root);
+    if (!nested_source || nested_source->getCompactInstanceCount() != 3 ||
+	    frontier_visible_occurrences(nested_source) != 2 ||
+	    scene->getDatabaseSourceCount() != 1)
+	FAIL("nested erase should mask one occurrence without duplicating or rebuilding its source");
+    const int redraw_target_ret = frontier_draw_one(gedp, nested_target);
+    const std::set<std::string> collapsed_paths = frontier_paths(gedp);
+    if (redraw_target_ret != BRLCAD_OK ||
+	collapsed_paths != std::set<std::string>{nested_root} ||
+	scene->getDatabaseSourceCount() != 1 ||
+	frontier_visible_occurrences(nested_source) != 3) {
+	fprintf(stderr, "frontier collapse: ret=%d sources=%d visible=%d paths=",
+	    redraw_target_ret, scene->getDatabaseSourceCount(),
+	    frontier_visible_occurrences(nested_source));
+	for (const std::string &collapsed_path : collapsed_paths)
+	    fprintf(stderr, " %s", collapsed_path.c_str());
+	fprintf(stderr, " frontier_active=%d\n",
+	    nested_source->hasCompactInstanceVisibilityFrontier() ? 1 : 0);
+	for (int i = 0; i < nested_source->getCompactInstanceCount(); i++) {
+	    BObolCompactOccurrence occurrence;
+	    if (nested_source->getCompactOccurrence(i, occurrence))
+		fprintf(stderr, "  direct %s visible=%d\n",
+		    occurrence.summary.path.getString(),
+		    occurrence.summary.visible ? 1 : 0);
+	}
+	FAIL("re-drawing an erased subtree should collapse the retained source frontier");
+    }
+    if (ged_selection_count(gedp, NULL) != 1 ||
+	frontier_selected_occurrences_for_path(nested_source,
+	    nested_target) <= 0)
+	FAIL("frontier collapse should preserve semantic and visual selection");
+
+    frontier_clear(gedp);
+    if (frontier_draw_one(gedp, "reuse_root.c") != BRLCAD_OK)
+	FAIL("all-occurrence promotion should draw the reuse root");
+    request.path =
+	"reuse_root.c/reuse_inst_a.c/reuse_shared.c/reuse_leaf.s";
+    request.scope = GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES;
+    ged_draw_promotion_result_init(&promotion);
+    if (ged_draw_promote_path(gedp, &request, &promotion) <= 0 ||
+	    promotion.occurrence_count != 2 ||
+	    promotion.replaced_root_count != 1 ||
+	    frontier_paths(gedp) != std::set<std::string>{"reuse_root.c"})
+	FAIL("all-occurrence promotion should retain one compact owner per root");
+    ged_draw_promotion_result_init(&released);
+    if (ged_draw_release_promotion(gedp, promotion.promotion,
+	    GED_DRAW_PROMOTION_COMMIT, &released) <= 0 ||
+	    frontier_paths(gedp) != std::set<std::string>{"reuse_root.c"})
+	FAIL("all-occurrence promotion should collapse without duplicate roots");
+    ged_draw_promotion_result_free(&released);
+    ged_draw_promotion_result_free(&promotion);
+
+    frontier_clear(gedp);
+    if (frontier_draw_one(gedp, "dup_twice.c") != BRLCAD_OK)
+	FAIL("duplicate-occurrence promotion should draw its root");
+    request.path = "dup_twice.c/dup_leaf.s@1";
+    request.scope = GED_DRAW_PROMOTE_EXACT_OCCURRENCE;
+    ged_draw_promotion_result_init(&promotion);
+    if (ged_draw_promote_path(gedp, &request, &promotion) <= 0 ||
+	    frontier_paths(gedp) != std::set<std::string>{"dup_twice.c"})
+	FAIL("exact promotion should preserve duplicate child occurrences");
+
+    erase = ged_draw_transaction_make(GED_DRAW_TXN_ERASE, request.path);
+    erase.view = ged_view_active_ctx(gedp);
+    if (ged_draw_apply_transaction(gedp, &erase, NULL) <= 0)
+	FAIL("draw change inside a promotion should succeed");
+    ged_draw_promotion_result_init(&released);
+    const int duplicate_release = ged_draw_release_promotion(
+	gedp, promotion.promotion, GED_DRAW_PROMOTION_CANCEL, &released);
+    const std::set<std::string> duplicate_frontier = frontier_paths(gedp);
+    const int duplicate_state = ged_draw_path_state(
+	gedp, ged_draw_active_view_ctx(gedp), request.path, -1);
+    if (duplicate_release != 0 || released.conflict_count != 1 ||
+	    duplicate_frontier != std::set<std::string>{"dup_twice.c"} ||
+	    duplicate_state != 0) {
+	fprintf(stderr,
+	    "duplicate conflict: release=%d conflicts=%zu state=%d paths=",
+	    duplicate_release, released.conflict_count, duplicate_state);
+	for (const std::string &path : duplicate_frontier)
+	    fprintf(stderr, " %s", path.c_str());
+	fprintf(stderr, "\n");
+	FAIL("same-root conflict should preserve the user's current frontier");
+    }
+    ged_draw_promotion_result_free(&released);
+    ged_draw_promotion_result_free(&promotion);
+
+    (void)ged_selection_clear(gedp, NULL);
+    frontier_clear(gedp);
+    return 0;
+}
+
+
 int
 main(int argc, char **argv)
 {
@@ -2141,6 +2503,9 @@ main(int argc, char **argv)
      * the per-view progressive provider. */
     if (!ged_view_context_display_endpoint_set(initial_view_ctx, NULL, 0))
 	FAIL("GED should detach an ensured endpoint without releasing its scene");
+
+    if (exercise_draw_frontier(gedp, owned_scene))
+	return 1;
 
     const char *draw_box[2] = {"draw", "box.s"};
     if (ged_exec_draw(gedp, 2, draw_box) != BRLCAD_OK)

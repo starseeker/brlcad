@@ -237,6 +237,8 @@ emit changed();
 
 void QgGL::mouseReleaseEvent(QMouseEvent *e)
 {
+    if (d->obol && e->button() == Qt::LeftButton)
+	d->obol->endLodInteraction();
 
     if (!d->v) {
 QOpenGLWidget::mouseReleaseEvent(e);
@@ -271,6 +273,8 @@ return;
     QSize rsize = qgcanvas_render_size(this);
     bv_context_dimensions_set(d->v, rsize.width(), rsize.height());
 
+    if (d->obol && e->buttons().testFlag(Qt::LeftButton))
+	d->obol->beginLodInteraction();
     int mret = d->input.mouseMoveEvent(d->v,
 	    d->x_prev, d->y_prev, e, d->lmouse_mode);
     if (mret > 0) {

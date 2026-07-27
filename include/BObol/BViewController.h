@@ -63,6 +63,14 @@ struct BOBOL_EXPORT BObolProgressiveOptions {
     size_t maxLodResults;
     uint64_t maxLodApplyMicroseconds;
     size_t maxProviders;
+    /** Maximum streamed database occurrences merged by one provider pump.
+     * Zero removes the item limit, but maxProviderMicroseconds still applies
+     * between merge batches. */
+    size_t maxProviderItems;
+    /** Cooperative host-thread provider budget.  A single merge batch is
+     * atomic, so this is checked between bounded batches.  Zero disables the
+     * time limit. */
+    uint64_t maxProviderMicroseconds;
 };
 
 struct BOBOL_EXPORT BObolProgressiveStatus {
@@ -254,6 +262,15 @@ public:
     void completeRenderTiming(uint64_t startedNanoseconds);
     uint64_t getLastRenderTimeNanoseconds(void) const;
     uint64_t getSmoothedRenderTimeNanoseconds(void) const;
+    /** Host-thread time spent preparing the most recent progressive frame.
+     * These diagnostics deliberately exclude the GL traversal reported by
+     * getLastRenderTimeNanoseconds(), making event-loop stalls attributable
+     * without a sampling profiler. */
+    uint64_t getLastProgressiveAdvanceTimeNanoseconds(void) const;
+    uint64_t getLastLodResultProcessingTimeNanoseconds(void) const;
+    uint64_t getLastProgressiveProviderTimeNanoseconds(void) const;
+    uint64_t getLastLodSubmissionTimeNanoseconds(void) const;
+    uint64_t getLastPresentationSyncTimeNanoseconds(void) const;
     /** Record one completed host/offscreen presentation.  This cadence is
      * intentionally separate from render work duration. */
     void noteFramePresented(void);
@@ -266,6 +283,10 @@ public:
 		      const SbColor *background = NULL,
 		      SoDB::ContextManager *contextManager = NULL,
 		      BObolProgressiveStatus *progressiveStatus = NULL);
+    /** True only when presentation state has explicitly requested a frame.
+     * Progressive work is reported independently by
+     * hasProgressiveWorkPending() and must not make this query true: a host
+     * may need to service a provider without repainting an unchanged scene. */
     SbBool isRenderRequested(void) const;
     SbString getRenderReason(void) const;
     uint64_t registerProgressiveProvider(
@@ -345,6 +366,9 @@ public:
     unsigned int getLastMeshBudgetEvictedDisplayMeshCount(void) const;
     SbBool hasPendingLodResults(void) const;
     SbBool hasPendingLodSubmissions(void) const;
+    /** True while a newly selected retained PoP cut must be presented before
+     * another refinement step may be submitted. */
+    SbBool hasPendingLodRefinementFrame(void) const;
     size_t processPendingLodResults(size_t maxResults = 0,
 	uint64_t maxMicroseconds = 0);
     int submitLodRequestsIfNeeded(SbBool refreshMissing = TRUE,
@@ -358,6 +382,11 @@ public:
     uint64_t getLodViewRevision(void) const;
     void setLodPolicyRevision(uint64_t revision);
     uint64_t getLodPolicyRevision(void) const;
+    void beginLodInteraction(void);
+    void endLodInteraction(void);
+    SbBool isLodInteractionActive(void) const;
+    SbBool isLodGestureActive(void) const;
+    float getLodTargetPixelError(void) const;
     unsigned int getLastLodVisitedMeshCount(void) const;
     unsigned int getLastLodSubmittedTaskCount(void) const;
     unsigned int getLastLodUpdatedCutCount(void) const;
@@ -594,6 +623,7 @@ private:
     void advanceLodViewRevision(void);
     void advanceLodPolicyRevision(void);
     void syncLodViewSignature(SbBool advanceOnChange = TRUE);
+    void scheduleLodRefinementFrame(const char *reason);
     size_t enforceMeshResidencyBudget(void);
     static void lodResultReadyCB(BObolLodService *service, void *userData);
     /* Rewrite the headlight direction from the last camera orientation so it

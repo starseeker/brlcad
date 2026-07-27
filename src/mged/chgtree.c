@@ -273,10 +273,9 @@ cmd_oed(ClientData clientData, Tcl_Interp *interp, int argc, const char *argv[])
     /* Find the matching displayed shape and make its draw ref the highlighted edit target. */
     ged_draw_shape_ref highlighted_shape = find_solid_ref_with_path(s, &both);
     if (ged_draw_shape_ref_is_null(highlighted_shape) &&
-	mged_edit_isolate_target(s, &both)) {
-	/* Target is a sub-object of a drawn comb: it was instantiated as its
-	 * own object -- find it now.  Isolation is undone on the edit's return
-	 * to view state (stateChange, buttons.c). */
+	mged_edit_promote_target(s, &both, GED_DRAW_PROMOTE_EXACT_OCCURRENCE)) {
+	/* Target is a sub-object of a drawn comb: libged promoted its exact
+	 * occurrence to the draw frontier. */
 	highlighted_shape = find_solid_ref_with_path(s, &both);
     }
     mged_highlight_set_shape_ref(s, highlighted_shape);

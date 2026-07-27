@@ -58,6 +58,15 @@ public:
     SbBool getRequireLodBacked(void) const;
     void setAllowLevelDowngrade(SbBool allow);
     SbBool getAllowLevelDowngrade(void) const;
+    void setAllowRetainedRefinement(SbBool allow);
+    SbBool getAllowRetainedRefinement(void) const;
+    /* Bound aggregate upward PoP growth selected by this traversal.  The
+     * budget applies equally to an already-resident cut change and to a
+     * provider request for the next missing level. */
+    void setRefinementFaceBudget(size_t additionalFaces);
+    size_t getRefinementFaceBudget(void) const;
+    size_t getRefinementFaceBudgetUsed(void) const;
+    unsigned int getRefinementBudgetBlockedCount(void) const;
     void setViewLodState(BObolViewLodState *viewState);
     const BObolViewLodState *getViewLodState(void) const;
     void setCompactEntryRange(size_t first, size_t count);
@@ -68,6 +77,7 @@ public:
     unsigned int getVisitedMeshCount(void) const;
     unsigned int getSubmittedTaskCount(void) const;
     unsigned int getUpdatedCutCount(void) const;
+    unsigned int getPendingRetainedRefinementCount(void) const;
     unsigned int getSkippedMeshCount(void) const;
     const SbString &getDiagnostics(void) const;
 
@@ -79,6 +89,9 @@ private:
     static void databaseSourceAction(SoAction *action, SoNode *node);
     static void meshShapeAction(SoAction *action, SoNode *node);
     void appendDiagnostic(const SbString &target, const char *message);
+    SbBool reserveRefinementFaces(
+	const BObolLodProgressiveMeshPtr &progressiveMesh,
+	int activeLevel, int nextLevel);
 
     BObolLodService *service;
     struct db_i *dbip;
@@ -100,6 +113,10 @@ private:
     int forcedLevel;
     SbBool requireLodBacked;
     SbBool allowLevelDowngrade;
+    SbBool allowRetainedRefinement;
+    size_t refinementFaceBudget;
+    size_t refinementFaceBudgetUsed;
+    unsigned int refinementBudgetBlockedCount;
     BObolViewLodState *viewState;
     size_t compactEntryFirst;
     size_t compactEntryLimit;
@@ -109,6 +126,7 @@ private:
     unsigned int visitedMeshCount;
     unsigned int submittedTaskCount;
     unsigned int updatedCutCount;
+    unsigned int pendingRetainedRefinementCount;
     unsigned int skippedMeshCount;
     SbString diagnostics;
 };

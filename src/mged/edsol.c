@@ -131,237 +131,64 @@ _replot_lastsol_cb(const struct ged_draw_shape_record *rec, void *ud)
 }
 
 /* ------------------------------------------------------------------------
- * Sub-object edit isolation (oed/sed)
- *
- * A sub-object of a drawn combination is not its own Obol scene record (the
- * Obol scene keeps one record per drawn argument), so `oed`/`sed` can't find
- * it.  To bridge that, when the edit target lies within a drawn ancestor we
- * instantiate it as its own drawn object (so the existing find/preview code
- * operates on it) and suppress the duplicate subpath inside the ancestor group.
- * Everything is undone on edit exit (see stateChange() in buttons.c).
- *
- * These run in a command context (main thread), like cmd_oed's existing
- * Tcl_Eval("matpick ..."), so driving the mged `draw`/`erase` commands via
- * Tcl_Eval is safe and gives full mged scene-sync behavior.
+ * Shared libged draw-frontier promotion for oed/sed.
  * ------------------------------------------------------------------------ */
 
-struct _isolate_ancestor_data {
-    const struct db_full_path *both;
-    size_t best_len;   /* length of the longest drawn ancestor prefix (0 = none) */
-    int draw_mode;     /* that ancestor's draw mode, to restore on release */
-};
-
-static int
-_isolate_find_ancestor_cb(const struct ged_draw_shape_record *rec, void *ud)
-{
-    struct _isolate_ancestor_data *d = (struct _isolate_ancestor_data *)ud;
-    if (!rec || !rec->fullpath)
-	return 1;
-    size_t rlen = rec->fullpath->fp_len;
-    /* must be a strict, proper prefix of the target path */
-    if (rlen == 0 || rlen >= d->both->fp_len)
-	return 1;
-    for (size_t i = 0; i < rlen; i++) {
-	if (DB_FULL_PATH_GET(rec->fullpath, i) != DB_FULL_PATH_GET(d->both, i))
-	    return 1;
-    }
-    if (rlen > d->best_len) {
-	d->best_len = rlen;
-	d->draw_mode = rec->draw_mode;
-    }
-    return 1;
-}
-
-/* Build a "/"-free path string from components [start, end) of a full path. */
-static void
-_isolate_range_string(struct bu_vls *out, const struct db_full_path *fp,
-		      size_t start, size_t end)
-{
-    bu_vls_trunc(out, 0);
-    if (end > fp->fp_len)
-	end = fp->fp_len;
-    for (size_t i = start; i < end; i++) {
-	struct directory *dp = DB_FULL_PATH_GET(fp, i);
-	if (!dp || !dp->d_namep || !dp->d_namep[0])
-	    continue;
-	if (bu_vls_strlen(out))
-	    bu_vls_putc(out, '/');
-	bu_vls_strcat(out, dp->d_namep);
-    }
-}
-
-/*
- * Explode step: replace the drawn ancestor comb with its constituent objects.
- * Recursively expand the comb both[level-1] (accumulated path in pathacc):
- * draw every immediate child as its own object EXCEPT the child continuing the
- * target path -- recurse into that -- and draw the target leaf itself.  The net
- * effect reproduces the entire ancestor MINUS the shared target node, as
- * independent drawn objects, so the target becomes directly editable with no
- * shared/duplicated scene node to suppress.  Collapsed back on edit exit.
- */
-static void
-_isolate_explode_draw(struct mged_state *s, const struct db_full_path *both,
-		      size_t level, struct bu_vls *pathacc, const char *mflag)
-{
-    struct directory *comb_dp = DB_FULL_PATH_GET(both, level - 1);
-    if (!comb_dp || !(comb_dp->d_flags & RT_DIR_COMB))
-	return;
-    struct rt_db_internal intern;
-    if (rt_db_get_internal(&intern, comb_dp, s->dbip, NULL) < 0)
-	return;
-    struct rt_comb_internal *comb = (struct rt_comb_internal *)intern.idb_ptr;
-
-    struct directory **children = NULL;
-    int *ops = NULL;
-    matp_t *mats = NULL;
-    (void)db_comb_children(s->dbip, comb, &children, &ops, &mats);
-
-    struct directory *target_child = (level < both->fp_len) ?
-	DB_FULL_PATH_GET(both, level) : RT_DIR_NULL;
-
-    struct bu_vls cmd = BU_VLS_INIT_ZERO;
-    for (int i = 0; children && children[i] != RT_DIR_NULL; i++) {
-	struct directory *c = children[i];
-	if (!c->d_namep || !c->d_namep[0])
-	    continue;
-	size_t base = bu_vls_strlen(pathacc);
-	bu_vls_printf(pathacc, "/%s", c->d_namep);
-	if (c == target_child && level + 1 < both->fp_len) {
-	    /* continue down the target branch */
-	    _isolate_explode_draw(s, both, level + 1, pathacc, mflag);
-	} else {
-	    /* target leaf, or a sibling subtree -- draw as its own object */
-	    bu_vls_sprintf(&cmd, "draw %s{%s}", mflag, bu_vls_cstr(pathacc));
-	    (void)Tcl_Eval(s->interp, bu_vls_cstr(&cmd));
-	}
-	bu_vls_trunc(pathacc, base);
-    }
-    bu_vls_free(&cmd);
-
-    /* free per the db_comb_children contract (matrices + arrays) */
-    if (mats) {
-	for (int i = 0; mats[i]; i++)
-	    bu_free(mats[i], "explode mat");
-	bu_free(mats, "explode mats");
-    }
-    if (ops)
-	bu_free(ops, "explode ops");
-    if (children)
-	bu_free(children, "explode children");
-    rt_db_free_internal(&intern);
-}
-
 int
-mged_edit_isolate_target(struct mged_state *s, const struct db_full_path *both)
+mged_edit_promote_target(struct mged_state *s,
+			 const struct db_full_path *both,
+			 int scope)
 {
     if (!s || !s->gedp || !both || both->fp_len == 0)
 	return 0;
 
-    /* Already its own drawn record?  Nothing to isolate. */
-    if (!ged_draw_shape_ref_is_null(
-	    find_solid_ref_with_path(s, (struct db_full_path *)both)))
-	return 0;
+    if (s->edit_promotion.active)
+	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
 
-    /* Longest drawn ancestor prefix (empty => auto-draw an undrawn target). */
-    struct _isolate_ancestor_data ad;
-    ad.both = both;
-    ad.best_len = 0;
-    ad.draw_mode = -1;
-    ged_draw_foreach_shape_record(s->gedp, _isolate_find_ancestor_cb, &ad);
+    struct ged_draw_promotion_request request =
+	GED_DRAW_PROMOTION_REQUEST_INIT;
+    request.dfp = both;
+    request.view = ged_view_active_ctx(s->gedp);
+    request.scope = scope;
+    request.auto_draw = 1;
+    request.role = (scope == GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES) ?
+	"mged-sed" : "mged-oed";
 
-    struct bu_vls isolate = BU_VLS_INIT_ZERO;
-    _isolate_range_string(&isolate, both, 0, both->fp_len);
-
-    struct mged_edit_isolation_instance *inst;
-    BU_GET(inst, struct mged_edit_isolation_instance);
-    bu_vls_init(&inst->isolate_path);
-    bu_vls_init(&inst->ancestor_path);
-    bu_vls_init(&inst->suppressed_subpath);
-    bu_vls_strcpy(&inst->isolate_path, bu_vls_cstr(&isolate));
-    inst->draw_mode = ad.draw_mode;
-
-    /* Preserve the ancestor's draw mode so shaded (-m1/-m2) scenes stay shaded
-     * instead of reverting to wireframe. */
-    struct bu_vls mflag = BU_VLS_INIT_ZERO;
-    if (ad.draw_mode >= 0)
-	bu_vls_sprintf(&mflag, "-m%d ", ad.draw_mode);
-
-    struct bu_vls cmd = BU_VLS_INIT_ZERO;
-    if (ad.best_len > 0) {
-	/* EXPLODE the drawn ancestor into its constituent objects (target as
-	 * its own object + siblings).  This avoids trying to suppress a shared
-	 * node inside the ancestor's realization (which the instance-keyed group
-	 * indexing makes unreliable).  Collapsed back on release. */
-	_isolate_range_string(&inst->ancestor_path, both, 0, ad.best_len);
-	bu_vls_sprintf(&cmd, "erase {%s}", bu_vls_cstr(&inst->ancestor_path));
-	(void)Tcl_Eval(s->interp, bu_vls_cstr(&cmd));
-
-	struct bu_vls pathacc = BU_VLS_INIT_ZERO;
-	_isolate_range_string(&pathacc, both, 0, ad.best_len);
-	_isolate_explode_draw(s, both, ad.best_len, &pathacc, bu_vls_cstr(&mflag));
-	bu_vls_free(&pathacc);
-    } else {
-	/* AUTO-DRAW: target isn't drawn at all -- just instantiate it. */
-	bu_vls_sprintf(&cmd, "draw %s{%s}", bu_vls_cstr(&mflag), bu_vls_cstr(&isolate));
-	(void)Tcl_Eval(s->interp, bu_vls_cstr(&cmd));
+    struct ged_draw_promotion_result result;
+    ged_draw_promotion_result_init(&result);
+    int ret = ged_draw_promote_path(s->gedp, &request, &result);
+    if (ret > 0) {
+	s->edit_promotion.ref = result.promotion;
+	s->edit_promotion.active = 1;
+	mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
+    } else if (ret < 0 && bu_vls_strlen(&result.errors)) {
+	Tcl_AppendResult(s->interp, bu_vls_cstr(&result.errors), "\n",
+	    (char *)NULL);
     }
-    bu_vls_free(&cmd);
-    bu_vls_free(&mflag);
-    bu_vls_free(&isolate);
-
-    if (!s->edit_isolation.active) {
-	bu_ptbl_init(&s->edit_isolation.instances, 8, "mged edit isolation");
-	s->edit_isolation.active = 1;
-    }
-    bu_ptbl_ins(&s->edit_isolation.instances, (long *)inst);
-
-    /* Success iff the target is now a findable drawn record. */
-    return ged_draw_shape_ref_is_null(
-	    find_solid_ref_with_path(s, (struct db_full_path *)both)) ? 0 : 1;
+    ged_draw_promotion_result_free(&result);
+    return ret > 0;
 }
 
+
 void
-mged_edit_release_isolation(struct mged_state *s)
+mged_edit_release_promotion(struct mged_state *s, int outcome)
 {
-    if (!s || !s->edit_isolation.active)
+    if (!s || !s->gedp || !s->edit_promotion.active)
 	return;
 
-    /* Clear active first so any nested command dispatch can't re-enter. */
-    s->edit_isolation.active = 0;
+    ged_draw_promotion_ref ref = s->edit_promotion.ref;
+    s->edit_promotion.active = 0;
+    s->edit_promotion.ref = GED_DRAW_PROMOTION_REF_NULL;
 
-    struct bu_vls cmd = BU_VLS_INIT_ZERO;
-    for (size_t i = 0; i < BU_PTBL_LEN(&s->edit_isolation.instances); i++) {
-	struct mged_edit_isolation_instance *inst =
-	    (struct mged_edit_isolation_instance *)
-	    BU_PTBL_GET(&s->edit_isolation.instances, i);
-	if (!inst)
-	    continue;
-	if (bu_vls_strlen(&inst->ancestor_path)) {
-	    /* COLLAPSE: erasing the ancestor path clears every exploded piece
-	     * drawn under it (prefix match); redraw the ancestor as one object
-	     * (reflecting the accepted edit, or the original on reject) in its
-	     * original draw mode. */
-	    bu_vls_sprintf(&cmd, "erase {%s}", bu_vls_cstr(&inst->ancestor_path));
-	    (void)Tcl_Eval(s->interp, bu_vls_cstr(&cmd));
-	    if (inst->draw_mode >= 0)
-		bu_vls_sprintf(&cmd, "draw -m%d {%s}", inst->draw_mode,
-		    bu_vls_cstr(&inst->ancestor_path));
-	    else
-		bu_vls_sprintf(&cmd, "draw {%s}", bu_vls_cstr(&inst->ancestor_path));
-	    (void)Tcl_Eval(s->interp, bu_vls_cstr(&cmd));
-	} else {
-	    /* AUTO-DRAW case: just remove the instantiated target. */
-	    bu_vls_sprintf(&cmd, "erase {%s}", bu_vls_cstr(&inst->isolate_path));
-	    (void)Tcl_Eval(s->interp, bu_vls_cstr(&cmd));
-	}
-	bu_vls_free(&inst->isolate_path);
-	bu_vls_free(&inst->ancestor_path);
-	bu_vls_free(&inst->suppressed_subpath);
-	BU_PUT(inst, struct mged_edit_isolation_instance);
-    }
-    bu_vls_free(&cmd);
-    bu_ptbl_free(&s->edit_isolation.instances);
-
+    struct ged_draw_promotion_result result;
+    ged_draw_promotion_result_init(&result);
+    int ret = ged_draw_release_promotion(s->gedp, ref, outcome, &result);
+    if (ret < 0 && bu_vls_strlen(&result.errors))
+	Tcl_AppendResult(s->interp, bu_vls_cstr(&result.errors), "\n",
+	    (char *)NULL);
+    else if (result.conflict_count && bu_vls_strlen(&result.errors))
+	bu_log("MGED edit promotion: %s\n", bu_vls_cstr(&result.errors));
+    ged_draw_promotion_result_free(&result);
     mged_refresh_request_all(s, GED_VIEW_REFRESH_ALL);
 }
 

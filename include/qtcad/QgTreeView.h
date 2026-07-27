@@ -45,11 +45,12 @@ public:
 	QgTreeView(QWidget *pparent, QgModel *treemodel);
 	~QgTreeView() {};
 
-	void drawBranches(QPainter* painter, const QRect& rrect, const QModelIndex& index) const override;
 	/* Return the QgModel backing this tree view. */
 	QgModel *cadModel() const { return m; }
 
 protected:
+	void drawBranches(QPainter *painter, const QRect &rect,
+			  const QModelIndex &index) const override;
 	void resizeEvent(QResizeEvent *pevent) override;
 	void mousePressEvent(QMouseEvent *e) override;
 
@@ -99,4 +100,3 @@ public:
 // c-file-style: "stroustrup"
 // End:
 // ex: shiftwidth=4 tabstop=8
-

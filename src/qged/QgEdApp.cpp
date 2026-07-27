@@ -78,18 +78,6 @@ qged_obol_draw_observer(struct ged *gedp,
     (void)qg_obol_sync_ged_draw_transaction(gedp, txn, result, display);
 }
 
-static int
-qged_apply_redraw_transaction(struct ged *gedp)
-{
-    struct ged_draw_transaction txn =
-	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
-    struct ged_draw_transaction_result result;
-    ged_draw_transaction_result_init(&result);
-    int ret = ged_draw_apply_transaction(gedp, &txn, &result);
-    ged_draw_transaction_result_free(&result);
-    return ret;
-}
-
 static struct bv_context *
 qged_current_view_context(QgEdMainWindow *w)
 {
@@ -442,10 +430,6 @@ QgEdApp::do_view_changed(QgViewUpdateFlags flags)
 {
     QTCAD_SLOT("QgEdApp::do_view_changed", 1);
 
-    if (flags & QG_VIEW_DRAWN) {
-	qged_apply_redraw_transaction(mdl->ged());
-    }
-
     if ((flags & QG_VIEW_SELECT) || (flags & QG_VIEW_DRAWN)) {
 	QgView *display = w ? w->CurrentDisplay() : NULL;
 	int selection_changed = (flags & QG_VIEW_SELECT) ?
@@ -457,6 +441,12 @@ QgEdApp::do_view_changed(QgViewUpdateFlags flags)
 	    flags |= QG_VIEW_REFRESH;
     }
 
+    /* QG_VIEW_DRAWN is an invalidation/repaint signal, not a request to
+     * mutate the retained scene.  GED draw transactions have already been
+     * synchronized to Obol by qged_obol_draw_observer.  Reissuing a global
+     * REDRAW here rebuilt every retained source, restarted progressive LoD,
+     * and caused whole-tree draw-state invalidation after even a one-path
+     * erase. */
     emit view_update(flags);
 }
 

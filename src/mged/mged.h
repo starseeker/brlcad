@@ -194,22 +194,10 @@ extern int ecmd_bot_pickt_multihit_clbk(int ac, const char **av, void *d, void *
 extern int ecmd_nmg_edebug_clbk(int ac, const char **av, void *d, void *d2);
 extern int ecmd_extrude_skt_name_clbk(int ac, const char **av, void *d, void *d2);
 
-/* One drawn instance temporarily isolated for interactive edit (oed/sed).
- * A sub-object of a drawn combination is not its own Obol scene record, so on
- * edit entry we instantiate it as its own drawn object (isolate_path) and
- * suppress the duplicate subpath inside the drawn ancestor group
- * (suppressed_subpath within ancestor_path).  Both are undone on edit exit. */
-struct mged_edit_isolation_instance {
-    struct bu_vls isolate_path;        /* full path instantiated as its own object */
-    struct bu_vls ancestor_path;       /* drawn ancestor whose group was modified */
-    struct bu_vls suppressed_subpath;  /* subpath erased from the ancestor group */
-    int draw_mode;                     /* ancestor's draw mode (-m); -1 = default */
-};
-
-/* Isolation state for the current oed/sed edit session (shared by both). */
-struct mged_edit_isolation {
+/* Backend-neutral draw-frontier promotion for the current edit session. */
+struct mged_edit_promotion {
     int active;
-    struct bu_ptbl instances;   /* of struct mged_edit_isolation_instance * */
+    ged_draw_promotion_ref ref;
 };
 
 /* global application state */
@@ -243,8 +231,8 @@ struct mged_state {
     struct mged_edit_state *s_edit;
     int global_editing_state; // main global editing state (ugh)
 
-    /* Sub-object edit isolation (oed/sed on a sub-path of a drawn comb). */
-    struct mged_edit_isolation edit_isolation;
+    /* Sub-object promotion (oed/sed on a sub-path of a drawn comb). */
+    struct mged_edit_promotion edit_promotion;
 
     /* Non-zero when an edit or view callback has requested redraw. */
     int update_views;
@@ -331,13 +319,10 @@ extern void slewview(struct mged_state *s, vect_t view_pos);
 extern void moveHinstance(struct mged_state *s, struct directory *cdp, struct directory *dp, matp_t xlate);
 extern void moveHobj(struct mged_state *s, struct directory *dp, matp_t xlate);
 
-/* Sub-object edit isolation (oed/sed): ensure the edit target sub-path is its
- * own drawn scene object so the existing find/preview machinery can operate,
- * suppressing the duplicate inside the drawn ancestor.  isolate returns 1 if it
- * set up (or the target is now findable), 0 if not possible; release undoes it
- * and is idempotent.  See src/mged/edsol.c. */
-extern int mged_edit_isolate_target(struct mged_state *s, const struct db_full_path *both);
-extern void mged_edit_release_isolation(struct mged_state *s);
+/* Promote an edit target to the active draw frontier and release it on edit
+ * completion.  Both functions are idempotent at the MGED session boundary. */
+extern int mged_edit_promote_target(struct mged_state *s, const struct db_full_path *both, int scope);
+extern void mged_edit_release_promotion(struct mged_state *s, int outcome);
 /* Object-edit live preview: plot the edited reference solid at its edited pose
  * (model_changes applied) so oed shows interactive feedback in the Obol scene
  * until MGED is cut over to the libged edit logic.  See src/mged/edsol.c. */

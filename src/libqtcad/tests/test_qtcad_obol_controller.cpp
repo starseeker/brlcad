@@ -54,6 +54,8 @@ class TestQgGL : public QgGL {
 public:
     explicit TestQgGL(QWidget *parent = NULL) : QgGL(parent) {}
     void runKeyPressForTest(QKeyEvent *event) { this->keyPressEvent(event); }
+    void runMousePressForTest(QMouseEvent *event) { this->mousePressEvent(event); }
+    void runMouseReleaseForTest(QMouseEvent *event) { this->mouseReleaseEvent(event); }
     void runMouseMoveForTest(QMouseEvent *event) { this->mouseMoveEvent(event); }
     void runPaintGLForTest(void) { this->paintGL(); }
     void runWheelForTest(QWheelEvent *event) { this->wheelEvent(event); }
@@ -64,6 +66,8 @@ class TestQgSW : public QgSW {
 public:
     explicit TestQgSW(QWidget *parent = NULL) : QgSW(parent) {}
     void runKeyPressForTest(QKeyEvent *event) { this->keyPressEvent(event); }
+    void runMousePressForTest(QMouseEvent *event) { this->mousePressEvent(event); }
+    void runMouseReleaseForTest(QMouseEvent *event) { this->mouseReleaseEvent(event); }
     void runMouseMoveForTest(QMouseEvent *event) { this->mouseMoveEvent(event); }
     void runWheelForTest(QWheelEvent *event) { this->wheelEvent(event); }
 };
@@ -85,14 +89,28 @@ lit_pixel_count(const QImage &image)
 }
 
 static QMouseEvent
-mouse_move_event(int x, int y, Qt::MouseButtons buttons)
+mouse_move_event(int x, int y, Qt::MouseButtons buttons,
+	Qt::KeyboardModifiers modifiers = Qt::NoModifier)
 {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     return QMouseEvent(QEvent::MouseMove, QPoint(x, y), Qt::NoButton,
-	    buttons, Qt::NoModifier);
+	    buttons, modifiers);
 #else
     return QMouseEvent(QEvent::MouseMove, QPointF(x, y), QPointF(x, y),
-	    Qt::NoButton, buttons, Qt::NoModifier);
+	    Qt::NoButton, buttons, modifiers);
+#endif
+}
+
+static QMouseEvent
+mouse_button_event(QEvent::Type type, int x, int y, Qt::MouseButton button,
+	Qt::MouseButtons buttons,
+	Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+{
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    return QMouseEvent(type, QPoint(x, y), button, buttons, modifiers);
+#else
+    return QMouseEvent(type, QPointF(x, y), QPointF(x, y), button, buttons,
+	modifiers);
 #endif
 }
 
@@ -249,11 +267,9 @@ main(int argc, char **argv)
 	FAIL("qtcad view diffs should honor explicit non-camera refresh requests");
 
     controller->clearRenderRequest();
-    /* isRenderRequested() intentionally also reports independently queued
-     * progressive work.  Test the explicit render-request latch directly so
-     * an asynchronous LoD completion cannot make this assertion flaky. */
-    if (controller->consumeRenderRequest(NULL))
-	FAIL("Obol view controller should clear the explicit render request");
+    if (controller->isRenderRequested() ||
+	controller->consumeRenderRequest(NULL))
+	FAIL("Obol view controller should clear the render request");
     controller->requestRender("qtcad-test");
     if (!controller->isRenderRequested() ||
 	    bu_strcmp(controller->getRenderReason().getString(), "qtcad-test") != 0)
@@ -368,6 +384,7 @@ main(int argc, char **argv)
     if (!swController ||
 	    !swController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 	FAIL("QgSW input test should expose an Obol scene before first paint");
+    swController->setLodAutoSubmit(TRUE);
     SoSeparator *swRoot = static_cast<SoSeparator *>(swController->getSceneRoot());
     swRoot->addChild(new SoDirectionalLight);
     SoMaterial *swMaterial = new SoMaterial;
@@ -436,14 +453,53 @@ main(int argc, char **argv)
     SbVec3f beforeDrag = swCamera->position.getValue();
     float beforeDragFocal = swCamera->focalDistance.getValue();
     swController->clearRenderRequest();
+    QMouseEvent swPress = mouse_button_event(QEvent::MouseButtonPress, 80, 60,
+	Qt::LeftButton, Qt::LeftButton);
     QMouseEvent swMoveStart = mouse_move_event(80, 60, Qt::LeftButton);
     QMouseEvent swMoveDrag = mouse_move_event(115, 90, Qt::LeftButton);
+    swCanvas.runMousePressForTest(&swPress);
+    if (swController->isLodGestureActive())
+	FAIL("QgSW click without motion should not disturb the active LoD cut");
     swCanvas.runMouseMoveForTest(&swMoveStart);
+    if (!swController->isLodGestureActive() ||
+	!swController->isLodInteractionActive() ||
+	swController->getLodTargetPixelError() <= 1.0f)
+	FAIL("QgSW first motion should establish the coarse LoD gesture");
     swCanvas.runMouseMoveForTest(&swMoveDrag);
     if (!camera_state_changed(swCamera, beforeDrag, beforeDragFocal))
 	FAIL("QgSW drag navigation should update the Obol camera");
     if (!swController->isRenderRequested())
 	FAIL("QgSW drag navigation should request an Obol render");
+    QMouseEvent swRelease = mouse_button_event(QEvent::MouseButtonRelease,
+	115, 90, Qt::LeftButton, Qt::NoButton);
+    swCanvas.runMouseReleaseForTest(&swRelease);
+    if (swController->isLodGestureActive() ||
+	!swController->isLodInteractionActive())
+	FAIL("QgSW release should end the gesture but retain the quiet debounce");
+
+    /* Qt already coalesces paint requests.  Every delivered motion event must
+     * still update the view: a wall-clock input throttle used to discard a
+     * burst of Shift-pan events between slow OSMesa frames, including the
+     * final cursor displacement. */
+    point_t beforeRapidPan = VINIT_ZERO;
+    point_t afterRapidPan = VINIT_ZERO;
+    if (!bv_center_get(beforeRapidPan, swView))
+	FAIL("QgSW rapid pan test should read the starting view center");
+    QMouseEvent swPan0 = mouse_move_event(115, 90, Qt::LeftButton,
+	Qt::ShiftModifier);
+    QMouseEvent swPan1 = mouse_move_event(125, 90, Qt::LeftButton,
+	Qt::ShiftModifier);
+    QMouseEvent swPan2 = mouse_move_event(135, 90, Qt::LeftButton,
+	Qt::ShiftModifier);
+    QMouseEvent swPan3 = mouse_move_event(145, 90, Qt::LeftButton,
+	Qt::ShiftModifier);
+    swCanvas.runMouseMoveForTest(&swPan0);
+    swCanvas.runMouseMoveForTest(&swPan1);
+    swCanvas.runMouseMoveForTest(&swPan2);
+    swCanvas.runMouseMoveForTest(&swPan3);
+    if (!bv_center_get(afterRapidPan, swView) ||
+	DIST_PNT_PNT(beforeRapidPan, afterRapidPan) <= SMALL_FASTF)
+	FAIL("QgSW rapid Shift-pan events should not be discarded");
 
     swCanvas.setObolInputEndpoint(NULL);
     bobol_display_endpoint_destroy(swEndpoint);
@@ -500,6 +556,7 @@ main(int argc, char **argv)
 	    if (!paintController ||
 		    !paintController->getSceneRoot()->isOfType(SoSeparator::getClassTypeId()))
 		FAIL("QgGL paint test should expose an Obol scene");
+	    paintController->setLodAutoSubmit(TRUE);
 	    SoGLRenderAction *paintAction =
 		paintController->getRenderManager()->getGLRenderAction();
 	    if (!paintAction || !paintAction->getContextManager() ||
@@ -540,21 +597,41 @@ main(int argc, char **argv)
 	    SbVec3f beforeGLDrag = paintCamera->position.getValue();
 	    float beforeGLDragFocal = paintCamera->focalDistance.getValue();
 	    paintController->clearRenderRequest();
+	    QMouseEvent glPress = mouse_button_event(QEvent::MouseButtonPress,
+		64, 48, Qt::LeftButton, Qt::LeftButton);
 	    QMouseEvent glMoveStart = mouse_move_event(64, 48, Qt::LeftButton);
 	    QMouseEvent glMoveDrag = mouse_move_event(100, 80, Qt::LeftButton);
+	    glCanvas.runMousePressForTest(&glPress);
+	    if (paintController->isLodGestureActive())
+		FAIL("QgGL click without motion should not disturb the active LoD cut");
 	    glCanvas.runMouseMoveForTest(&glMoveStart);
+	    if (!paintController->isLodGestureActive() ||
+		!paintController->isLodInteractionActive() ||
+		paintController->getLodTargetPixelError() <= 1.0f)
+		FAIL("QgGL first motion should establish the coarse LoD gesture");
 	    glCanvas.runMouseMoveForTest(&glMoveDrag);
 	    if (!camera_state_changed(paintCamera, beforeGLDrag, beforeGLDragFocal))
 		FAIL("QgGL drag navigation should update the Obol camera");
 	    if (!paintController->isRenderRequested())
 		FAIL("QgGL drag navigation should request an Obol render");
+	    QMouseEvent glRelease = mouse_button_event(QEvent::MouseButtonRelease,
+		100, 80, Qt::LeftButton, Qt::NoButton);
+	    glCanvas.runMouseReleaseForTest(&glRelease);
+	    if (paintController->isLodGestureActive() ||
+		!paintController->isLodInteractionActive())
+		FAIL("QgGL release should end the gesture but retain the quiet debounce");
 	    paintController->requestRender("gl-visible-paint");
 
 	    glCanvas.makeCurrent();
 	    glCanvas.runPaintGLForTest();
 	    glCanvas.doneCurrent();
-	    if (paintController->isRenderRequested())
-		FAIL("QgGL visible paint should consume Obol render requests");
+	    if (paintController->isRenderRequested() &&
+		BU_STR_EQUAL(paintController->getRenderReason().getString(),
+		    "gl-visible-paint"))
+		FAIL("QgGL visible paint should consume the request it rendered");
+	    if (paintController->isRenderRequested() &&
+		!paintController->hasProgressiveWorkPending())
+		FAIL("QgGL visible paint should only retain a newly scheduled progressive request");
 	}
 #endif
     }

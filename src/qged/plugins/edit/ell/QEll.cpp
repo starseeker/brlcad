@@ -461,9 +461,7 @@ QEll::reset_for_database()
 bool
 QEll::eventFilter(QObject *, QEvent *e)
 {
-    if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease ||   e->type() == QEvent::MouseButtonDblClick || e->type() == QEvent::MouseMove) {
-	bu_log("ell mouse event\n");
-    }
+    (void)e;
     return false;
 }
 

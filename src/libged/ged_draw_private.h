@@ -1158,6 +1158,9 @@ extern int ged_draw_erase_component_string_scoped(struct ged *gedp,
 							     const char *name,
 							     struct ged_view_context *view_ctx,
 							     int mode);
+extern int ged_draw_apply_draw_inner(
+	struct ged *gedp, const struct ged_draw_transaction *txn,
+	const char *path, struct ged_draw_transaction_result *result);
 
 extern void ged_draw_highlighted_shape_ref_invalidate(struct ged *gedp);
 

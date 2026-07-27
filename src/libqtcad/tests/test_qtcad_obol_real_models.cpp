@@ -36,6 +36,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QImage>
+#include <QString>
 
 #include <float.h>
 #include <fstream>
@@ -855,6 +856,8 @@ static int
 sync_draw_case(const struct model_case &testCase)
 {
     int64_t totalStart = bu_gettime();
+    const int viewportWidth = testCase.expectM35TableColor ? 320 : 220;
+    const int viewportHeight = testCase.expectM35TableColor ? 240 : 170;
     char dbpath[MAXPATHLEN] = {0};
     if (!model_path(testCase.file, dbpath, sizeof(dbpath))) {
 	fprintf(stderr, "missing qtcad Obol workflow model: %s\n", dbpath);
@@ -869,14 +872,27 @@ sync_draw_case(const struct model_case &testCase)
     }
 
     QgView view(NULL, system_gl_enabled() ? QgViewType::GL : QgViewType::SW);
-    view.resize(220, 170);
-    if (system_gl_enabled()) {
-	view.show();
-	QCoreApplication::processEvents();
-    }
+    view.resize(viewportWidth, viewportHeight);
+    /* QgView is a composite widget.  Even with Qt's offscreen platform it
+     * must be shown once so layout assigns the requested size to the child
+     * canvas; otherwise the test silently captures the 100x50 size hint and
+     * turns visual checks into fragile thumbnail-pixel thresholds. */
+    view.show();
+    QCoreApplication::processEvents();
     struct ged_view_context *view_ctx =
 	ged_view_context_from_bv(view.viewContext());
     ged_view_active_ctx_set(gedp, view_ctx);
+    /* FPS text is intentionally time-varying and is covered by the focused
+     * canvas-controller test.  It must not contaminate this test's retained
+     * geometry redraw comparison. */
+    struct bv_params_state deterministicParams = BV_PARAMS_STATE_INIT;
+    struct bv *deterministicView =
+	bv_context_view(static_cast<struct bv_context *>(view.viewContext()));
+    if (deterministicView &&
+	bv_params_state_get(&deterministicParams, deterministicView)) {
+	deterministicParams.draw_fps = 0;
+	(void)bv_params_state_set(deterministicView, &deterministicParams);
+    }
     (void)ged_view_context_host_attach(gedp, view_ctx);
     if (!ged_view_context_display_endpoint_set(
 	    view_ctx, view.displayEndpoint(), 0)) {
@@ -893,11 +909,11 @@ sync_draw_case(const struct model_case &testCase)
 	software_wire_mode();
     controller->setSoftwareWireMode(wireMode);
     if (timing_enabled()) {
-	fprintf(stderr, "CONFIG %s renderer=%s software_wire=%s size=220x170\n",
+	fprintf(stderr, "CONFIG %s renderer=%s software_wire=%s size=%dx%d\n",
 	    testCase.name, system_gl_enabled() ? "system-gl" : "osmesa",
-	    software_wire_mode_name(wireMode));
+	    software_wire_mode_name(wireMode), viewportWidth, viewportHeight);
     }
-    controller->setViewportSize(220, 170);
+    controller->setViewportSize(viewportWidth, viewportHeight);
     controller->clearDatabaseSources();
     controller->requestRender("real-model-empty-baseline");
     QCoreApplication::processEvents();
@@ -993,6 +1009,9 @@ sync_draw_case(const struct model_case &testCase)
     phaseStart = bu_gettime();
     QImage visibleImage;
     view.get_viewport_image(visibleImage);
+    const char *capturePath = getenv("BOBOL_QTCAD_REAL_MODEL_CAPTURE");
+    if (capturePath && capturePath[0] != '\0')
+	(void)visibleImage.save(QString::fromUtf8(capturePath));
     int litPixels = lit_pixel_count(visibleImage);
     QImage comparisonEmpty = emptyImage.size() == visibleImage.size() ?
 	emptyImage : emptyImage.scaled(visibleImage.size(), Qt::IgnoreAspectRatio,
@@ -1179,6 +1198,9 @@ sync_draw_case(const struct model_case &testCase)
     QCoreApplication::processEvents();
     QImage redrawnImage;
     view.get_viewport_image(redrawnImage);
+    if (capturePath && capturePath[0] != '\0')
+	(void)redrawnImage.save(
+	    QString::fromUtf8(capturePath) + QStringLiteral(".redraw1.png"));
 
     struct ged_draw_transaction_result secondRedrawResult;
     ged_draw_transaction_result_init(&secondRedrawResult);
@@ -1192,6 +1214,9 @@ sync_draw_case(const struct model_case &testCase)
     QCoreApplication::processEvents();
     QImage secondRedrawnImage;
     view.get_viewport_image(secondRedrawnImage);
+    if (capturePath && capturePath[0] != '\0')
+	(void)secondRedrawnImage.save(
+	    QString::fromUtf8(capturePath) + QStringLiteral(".redraw2.png"));
 
     fastf_t redrawSsim = image_ssim(redrawnImage, secondRedrawnImage);
     int redrawByteDiff = image_byte_diff(redrawnImage, secondRedrawnImage);

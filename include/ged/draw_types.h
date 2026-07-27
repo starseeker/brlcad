@@ -157,6 +157,7 @@ struct ged_draw_transaction_result {
     int stale_count;
     int redrawn_count;
     int error_count;
+    int presentation_only;            /**< retained source data changed only by instance visibility/style */
     uint64_t scene_revision_before;
     uint64_t scene_revision_after;
     struct bu_vls names;              /**< affected user-facing target names */
@@ -169,6 +170,66 @@ typedef void (*ged_draw_transaction_observer_func_t)(
     const struct ged_draw_transaction *txn,
     const struct ged_draw_transaction_result *result,
     void *client_data);
+
+/**
+ * Opaque reference to a temporary draw-frontier promotion.
+ *
+ * Promotions are owned by one ged instance.  They do not retain that owner,
+ * its database, a view, or any renderer object.  Structural draw changes may
+ * make an automatic collapse conflict, but do not make the value unsafe to
+ * pass to ged_draw_release_promotion().
+ */
+typedef struct ged_draw_promotion_ref {
+    uint64_t owner;
+    uint64_t id;
+    uint64_t generation;
+} ged_draw_promotion_ref;
+
+#define GED_DRAW_PROMOTION_REF_NULL_INIT {0, 0, 0}
+#ifdef __cplusplus
+#  define GED_DRAW_PROMOTION_REF_NULL ged_draw_promotion_ref{0, 0, 0}
+#else
+#  define GED_DRAW_PROMOTION_REF_NULL ((ged_draw_promotion_ref){0, 0, 0})
+#endif
+
+enum ged_draw_promotion_scope {
+    /** Promote only the path occurrence named by the request. */
+    GED_DRAW_PROMOTE_EXACT_OCCURRENCE = 0,
+    /** Promote every drawn occurrence of the target path's leaf object. */
+    GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES = 1
+};
+
+enum ged_draw_promotion_outcome {
+    GED_DRAW_PROMOTION_CANCEL = 0,
+    GED_DRAW_PROMOTION_COMMIT = 1
+};
+
+struct ged_draw_promotion_request {
+    const char *path;                 /**< borrowed command-facing path */
+    const struct db_full_path *dfp;   /**< optional structured path */
+    struct ged_view_context *view;    /**< optional view scope */
+    int mode;                         /**< draw mode filter; <0 means all */
+    int scope;                        /**< enum ged_draw_promotion_scope */
+    int auto_draw;                    /**< draw an otherwise-undrawn target */
+    const char *role;                 /**< optional borrowed diagnostic role */
+};
+
+#define GED_DRAW_PROMOTION_REQUEST_INIT { \
+    NULL, NULL, NULL, -1, GED_DRAW_PROMOTE_EXACT_OCCURRENCE, 1, NULL \
+}
+
+struct ged_draw_promotion_result {
+    int status;
+    ged_draw_promotion_ref promotion;
+    size_t occurrence_count;
+    size_t replaced_root_count;
+    size_t replacement_path_count;
+    size_t conflict_count;
+    uint64_t scene_revision_before;
+    uint64_t scene_revision_after;
+    struct bu_vls paths;              /**< promoted occurrence paths */
+    struct bu_vls errors;
+};
 
 __BEGIN_DECLS
 

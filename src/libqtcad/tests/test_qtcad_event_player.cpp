@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QJsonArray>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPushButton>
@@ -120,6 +121,40 @@ main(int argc, char **argv)
 	"player did not restore line-edit text");
     CHECK(combo.currentIndex() == 2, "player did not restore combo index");
     CHECK(tree.currentIndex() == wheel, "player did not restore tree current item");
+
+    const QString treePath = QgEventRecorder::objectPath(&root, &tree);
+    QgTestEvent collapse;
+    collapse.target = treePath;
+    collapse.action = QStringLiteral("set_expanded");
+    collapse.arguments.insert(QStringLiteral("rows"), QJsonArray{0});
+    collapse.arguments.insert(QStringLiteral("expanded"), false);
+    CHECK(player.play(collapse, &error) && !tree.isExpanded(model.index(0, 0)),
+	"player did not collapse a tree item");
+
+    QgTestEvent expand = collapse;
+    expand.arguments.remove(QStringLiteral("rows"));
+    expand.arguments.insert(QStringLiteral("labels"),
+	QJsonArray{QStringLiteral("assembly")});
+    expand.arguments.insert(QStringLiteral("expanded"), true);
+    CHECK(player.play(expand, &error) && tree.isExpanded(model.index(0, 0)),
+	"player did not expand a tree item resolved by label");
+
+    QgTestEvent clearSelection;
+    clearSelection.target = treePath;
+    clearSelection.action = QStringLiteral("clear_selection");
+    CHECK(player.play(clearSelection, &error),
+	error.toLocal8Bit().constData());
+    CHECK(tree.selectionModel()->selectedIndexes().isEmpty() &&
+	!tree.currentIndex().isValid(),
+	"player did not clear tree selection and current item");
+
+    QgTestEvent resize;
+    resize.target = QStringLiteral(".");
+    resize.action = QStringLiteral("resize");
+    resize.arguments.insert(QStringLiteral("width"), 640);
+    resize.arguments.insert(QStringLiteral("height"), 480);
+    CHECK(player.play(resize, &error) && root.size() == QSize(640, 480),
+	"player did not deterministically resize its root widget");
 
     const QPointF sourcePos(50.0, 25.0);
     QMouseEvent sourcePress(QEvent::MouseButtonPress, sourcePos,

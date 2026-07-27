@@ -13,9 +13,7 @@
 
 #include <QtGlobal>
 
-#include <chrono>
 #include <cmath>
-#include <unordered_map>
 
 extern "C" {
 #include "bn/str.h"
@@ -27,7 +25,6 @@ extern "C" {
 #include "bv.h"
 
 struct QgCanvasInput::Impl {
-    std::unordered_map<struct bv_context *, long long> drag_update_ts;
     BObolInputContext context;
     bobol_display_endpoint_t *endpoint = NULL;
     struct bv_context *dispatch_view = NULL;
@@ -296,8 +293,6 @@ QgCanvasInput::mouseReleaseEvent(struct bv_context *view_ctx, double x_press,
     QTCAD_EVENT("mouseRelease", 1);
 	if (!view_ctx || !event)
 	return 0;
-	m->drag_update_ts.erase(view_ctx);
-
     BObolInputEvent input;
     input.type = BOBOL_INPUT_POINTER_RELEASE;
     qgcanvasinput_position(event, input.x, input.y);
@@ -326,17 +321,6 @@ QgCanvasInput::mouseMoveEvent(struct bv_context *view_ctx, int x_prev, int y_pre
      * navigation can still use a zero delta until the canvas has established
      * a baseline. */
     const bool first_motion = x_prev == -INT_MAX || y_prev == -INT_MAX;
-    if (!first_motion) {
-	const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-	    std::chrono::steady_clock::now().time_since_epoch()).count();
-	const auto previous = m->drag_update_ts.find(view_ctx);
-	if (previous != m->drag_update_ts.end() && now - previous->second <
-	    s_drag_update_interval_ms) {
-	    return -1;
-	}
-	m->drag_update_ts[view_ctx] = now;
-    }
-
     BObolInputEvent input;
     input.type = BOBOL_INPUT_POINTER_MOTION;
     qgcanvasinput_position(event, input.x, input.y);

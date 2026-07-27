@@ -5143,10 +5143,11 @@ main(int UNUSED(argc), const char **UNUSED(argv))
 	!source->getCompactOccurrence(0, botOccurrence) ||
 	!botInstance.lodBacked || !botInstance.sourceMeshRequestValid ||
 	!botInstance.wireGeometry || botInstance.meshGeometry ||
+	!BU_STR_EQUAL(botOccurrence.summary.geometryKind.getString(), "aabb") ||
 	!botOccurrence.sourceMeshRequestValid ||
 	botOccurrence.sourceMeshRequest.faceCount != 4 ||
 	botOccurrence.sourceMeshRequest.pointCount != 4)
-	FAIL("database-backed BoT at or above LoD threshold should retain its structural proxy and exact source request");
+	FAIL("database-backed BoT at or above LoD threshold should retain its explicitly tiered AABB and exact source request");
     if (!source->hasRealizedWireGeometry() ||
 	source->hasRealizedMeshGeometry())
 	FAIL("database-backed LoD BoT proxy should expose only its currently drawable wire channel");

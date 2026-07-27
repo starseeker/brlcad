@@ -1961,6 +1961,12 @@ QgModel::notifyItemsChanged(const QVector<int> &roles)
 	if (!items)
 		return;
 
+	/* A dataChanged signal may cover a contiguous range as long as its
+	 * endpoints have the same parent.  Emitting one signal per item is
+	 * particularly damaging with QTreeView: column geometry and delegate
+	 * size hints may be recomputed after every signal, turning a whole-model
+	 * invalidation into quadratic work. */
+	std::unordered_set<QgItem *> changed_parents;
 	for (QgItem *item : *items) {
 		if (!item)
 			continue;
@@ -1968,10 +1974,21 @@ QgModel::notifyItemsChanged(const QVector<int> &roles)
 			item->draw_state_valid = false;
 		QModelIndex idx = NodeIndex(item);
 		if (idx.isValid()) {
-			emit dataChanged(idx, idx, roles);
 			notification_stats.items_notified++;
 			notification_stats.full_items_notified++;
+			changed_parents.insert(item->parent());
 		}
+	}
+
+	for (QgItem *parent_item : changed_parents) {
+		if (!parent_item || parent_item->childItems().empty())
+			continue;
+		const std::vector<QgItem *> &children =
+			parent_item->childItems();
+		QModelIndex first = NodeIndex(children.front());
+		QModelIndex last = NodeIndex(children.back());
+		if (first.isValid() && last.isValid())
+			emit dataChanged(first, last, roles);
 	}
 }
 
@@ -2125,7 +2142,103 @@ QgModel::notifySelectionItemsChanged()
 {
 	QVector<int> roles;
 	roles << SelectDisplayRole << HighlightDisplayRole;
-	notifyItemsChanged(roles);
+
+	std::set<std::string> current_paths;
+	struct ged *gedp = m_session ? m_session->ged() : nullptr;
+	if (gedp) {
+		struct bu_vls paths = BU_VLS_INIT_ZERO;
+		(void)ged_selection_list_paths(gedp, nullptr, &paths);
+		const char *start = bu_vls_cstr(&paths);
+		for (const char *cursor = start; ; cursor++) {
+			if (*cursor != '\n' && *cursor != '\r' && *cursor != '\0')
+				continue;
+			if (cursor > start)
+				current_paths.insert(std::string(start,
+					static_cast<size_t>(cursor - start)));
+			if (*cursor == '\0')
+				break;
+			start = cursor + 1;
+		}
+		bu_vls_free(&paths);
+	}
+
+	std::set<std::string> affected_paths;
+	std::set_symmetric_difference(selection_display_paths.begin(),
+		selection_display_paths.end(), current_paths.begin(),
+		current_paths.end(), std::inserter(affected_paths,
+			affected_paths.end()));
+	if (selection_display_mode != interaction_mode) {
+		affected_paths.insert(selection_display_paths.begin(),
+			selection_display_paths.end());
+		affected_paths.insert(current_paths.begin(), current_paths.end());
+	}
+
+	std::unordered_set<QgItem *> notified;
+	const auto notify_item = [this, &roles, &notified](QgItem *item) {
+		if (!item || !notified.insert(item).second)
+			return;
+		QModelIndex idx = NodeIndex(item);
+		if (!idx.isValid())
+			return;
+		emit dataChanged(idx, idx, roles);
+		notification_stats.items_notified++;
+	};
+
+	for (const std::string &path : affected_paths) {
+		const size_t depth = gedp ?
+			ged_db_index_path_resolve(gedp, path.c_str(), nullptr, 0) : 0;
+		if (!depth)
+			continue;
+		std::vector<unsigned long long> ids(depth);
+		if (ged_db_index_path_resolve(gedp, path.c_str(), ids.data(),
+				ids.size()) != depth)
+			continue;
+
+		for (size_t prefix_len = 1; prefix_len <= ids.size(); prefix_len++) {
+			const unsigned long long path_hash =
+				ged_db_index_path_hash(gedp, ids.data(), ids.size(),
+					prefix_len);
+			notification_stats.path_queries++;
+			auto path_it = items_by_path_hash.find(path_hash);
+			if (path_it != items_by_path_hash.end()) {
+				notification_stats.path_candidates += path_it->second.size();
+				for (QgItem *item : path_it->second) {
+					if (!item)
+						continue;
+					const std::vector<unsigned long long> candidate =
+						item->path_items();
+					if (candidate.size() != prefix_len ||
+						!std::equal(candidate.begin(),
+							candidate.end(), ids.begin()))
+						continue;
+					notify_item(item);
+				}
+			}
+
+			/* Parent-impact modes are object based: every loaded occurrence
+			 * of an affected ancestor object may change color. */
+			auto object_it = items_by_instance_hash.find(ids[prefix_len - 1]);
+			if (object_it != items_by_instance_hash.end()) {
+				notification_stats.path_candidates +=
+					object_it->second.size();
+				for (QgItem *item : object_it->second)
+					notify_item(item);
+			}
+		}
+	}
+
+	selection_display_paths.swap(current_paths);
+	selection_display_mode = interaction_mode;
+}
+
+
+void
+QgModel::setInteractionMode(int mode)
+{
+	if (interaction_mode == mode)
+		return;
+	interaction_mode = mode;
+	notifySelectionItemsChanged();
 }
 
 

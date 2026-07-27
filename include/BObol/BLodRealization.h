@@ -183,6 +183,11 @@ public:
     uint64_t revision(void) const;
     size_t pointCount(int level) const;
     size_t faceCount(int level) const;
+    /* Immutable hierarchy population, including levels above the currently
+     * resident prefix.  pointCount()/faceCount() retain their drawable-cut
+     * semantics and clamp to residentLevel(). */
+    size_t hierarchyPointCount(int level) const;
+    size_t hierarchyFaceCount(int level) const;
     size_t estimateBytes(void) const;
     SbBox3f bounds(void) const;
     SbVec3f quantizationMinimum(void) const;

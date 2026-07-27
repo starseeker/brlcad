@@ -40,6 +40,7 @@
 
 #include "ged/db_index.h"
 #include "ged/event_txn.h"
+#include "ged/scene.h"
 #include "./ged_private.h"
 
 
@@ -49,6 +50,7 @@
 
 Ged_Internal::~Ged_Internal()
 {
+    ged_draw_frontier_state_destroy(gedp);
     for (auto &kv : edit_buf) {
 	rt_edit_destroy(kv.second.s);
 	db_free_full_path(&kv.second.dfp);
@@ -69,6 +71,21 @@ _edit_buf_key(const struct db_full_path *dfp)
     std::string key(pstr);
     bu_free(pstr, "edit_buf path key");
     return key;
+}
+
+
+static void
+_edit_buf_release_draw_promotion(struct ged *gedp,
+				 ged_draw_promotion_ref promotion,
+				 int outcome)
+{
+    if (!gedp || ged_draw_promotion_ref_is_null(promotion))
+	return;
+
+    struct ged_draw_promotion_result result;
+    ged_draw_promotion_result_init(&result);
+    (void)ged_draw_release_promotion(gedp, promotion, outcome, &result);
+    ged_draw_promotion_result_free(&result);
 }
 
 
@@ -103,6 +120,8 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
     /* If an entry already exists, free it first */
     auto it = gi->edit_buf.find(key);
     if (it != gi->edit_buf.end()) {
+	_edit_buf_release_draw_promotion(gedp,
+	    it->second.draw_promotion, GED_DRAW_PROMOTION_CANCEL);
 	rt_edit_destroy(it->second.s);
 	db_free_full_path(&it->second.dfp);
 	gi->edit_buf.erase(it);
@@ -112,6 +131,22 @@ ged_edit_buf_set(struct ged *gedp, const struct db_full_path *dfp, struct rt_edi
     db_full_path_init(&entry.dfp);
     db_dup_full_path(&entry.dfp, dfp);
     entry.s = s;
+    /* Primitive edits affect every displayed occurrence of the database
+     * object, but must not draw occurrences the user did not already request.
+     * The promotion only changes the logical presentation frontier; retained
+     * Obol sources continue to own geometry, cache, and PoP residency. */
+    struct ged_draw_promotion_request request =
+	GED_DRAW_PROMOTION_REQUEST_INIT;
+    request.dfp = dfp;
+    request.view = ged_draw_active_view_ctx(gedp);
+    request.scope = GED_DRAW_PROMOTE_ALL_OBJECT_OCCURRENCES;
+    request.auto_draw = 0;
+    request.role = "libged-edit-buffer";
+    struct ged_draw_promotion_result promotion;
+    ged_draw_promotion_result_init(&promotion);
+    if (ged_draw_promote_path(gedp, &request, &promotion) > 0)
+	entry.draw_promotion = promotion.promotion;
+    ged_draw_promotion_result_free(&promotion);
     gi->edit_buf[key] = entry;
 }
 
@@ -130,6 +165,8 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
 
     struct rt_edit *s = it->second.s;
     struct directory *dp = DB_FULL_PATH_CUR_DIR(&it->second.dfp);
+    const ged_draw_promotion_ref draw_promotion =
+	it->second.draw_promotion;
 
     int ret = BRLCAD_ERROR;
     if (dp && gedp->dbip) {
@@ -147,6 +184,9 @@ ged_edit_buf_promote(struct ged *gedp, const struct db_full_path *dfp)
 	ged_db_index_refresh(gedp);
 	ged_event_notify_object_modified(gedp, dp->d_namep, 1, NULL);
     }
+    _edit_buf_release_draw_promotion(gedp, draw_promotion,
+	ret == BRLCAD_OK ? GED_DRAW_PROMOTION_COMMIT :
+	GED_DRAW_PROMOTION_CANCEL);
 
     return ret;
 }
@@ -164,9 +204,13 @@ ged_edit_buf_abandon(struct ged *gedp, const struct db_full_path *dfp)
     if (it == gi->edit_buf.end())
 	return;
 
+    const ged_draw_promotion_ref draw_promotion =
+	it->second.draw_promotion;
     rt_edit_destroy(it->second.s);
     db_free_full_path(&it->second.dfp);
     gi->edit_buf.erase(it);
+    _edit_buf_release_draw_promotion(gedp, draw_promotion,
+	GED_DRAW_PROMOTION_CANCEL);
 }
 
 
@@ -196,10 +240,14 @@ ged_edit_buf_flush(struct ged *gedp)
 
 	struct rt_edit *s = it->second.s;
 	struct directory *dp = DB_FULL_PATH_CUR_DIR(&it->second.dfp);
+	const ged_draw_promotion_ref draw_promotion =
+	    it->second.draw_promotion;
+	int committed = 0;
 
 	if (dp && gedp->dbip) {
 	    if (rt_db_put_internal(dp, gedp->dbip, &s->es_int) >= 0) {
 		any_written = true;
+		committed = 1;
 		(void)ged_event_notify_object_modified(gedp, dp->d_namep, 1, NULL);
 	    }
 	}
@@ -207,6 +255,9 @@ ged_edit_buf_flush(struct ged *gedp)
 	rt_edit_destroy(s);
 	db_free_full_path(&it->second.dfp);
 	gi->edit_buf.erase(it);
+	_edit_buf_release_draw_promotion(gedp, draw_promotion,
+	    committed ? GED_DRAW_PROMOTION_COMMIT :
+	    GED_DRAW_PROMOTION_CANCEL);
     }
 
     if (any_written)

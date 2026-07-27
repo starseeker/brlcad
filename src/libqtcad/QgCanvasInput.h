@@ -70,7 +70,6 @@ private:
 		const BObolInputEvent *event);
 
 	Impl *m = nullptr;
-	static const long long s_drag_update_interval_ms = 16;
 };
 
 #endif /* QGCANVASINPUT_H */

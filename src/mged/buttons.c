@@ -738,6 +738,7 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	edsol = 0;
 
 	sedit_accept(s);		/* zeros "edsol" var */
+	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_COMMIT);
 
 	mmenu_set_all(s, MENU_L1, NULL);
 	mmenu_set_all(s, MENU_L2, NULL);
@@ -753,6 +754,7 @@ be_accept(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	movedir = 0;	/* No edit modes set */
 
 	oedit_accept(s);
+	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_COMMIT);
 
 	mmenu_set_all(s, MENU_L2, NULL);
 
@@ -806,12 +808,14 @@ be_reject(ClientData clientData, Tcl_Interp *UNUSED(interp), int UNUSED(argc), c
 	    mmenu_set_all(s, MENU_L2, NULL);
 
 	    sedit_reject(s);
+	    mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
 	    break;
 
 	case ST_O_EDIT:
 	    mmenu_set_all(s, MENU_L2, NULL);
 
 	    oedit_reject(s);
+	    mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
 	    break;
 	case ST_O_PICK:
 	    break;
@@ -955,13 +959,10 @@ not_state(struct mged_state *s, int desired, char *str)
 static void
 stateChange(struct mged_state *s, int UNUSED(oldstate), int newstate)
 {
-    /* Returning to view ends any oed/sed edit: undo sub-object isolation
-     * (instantiated target + suppressed ancestor subpath).  This fires on
-     * accept/reject and abnormal exits, but NOT on oed_reset/sed_reset (those
-     * stay in the edit state), so a mid-edit reset preserves the isolation.
-     * Idempotent: no-op when no isolation is active. */
-    if (newstate == ST_VIEW && s->edit_isolation.active)
-	mged_edit_release_isolation(s);
+    /* Abnormal exits still retire a promotion.  Normal accept/reject release
+     * it earlier with the explicit outcome; this call is idempotent. */
+    if (newstate == ST_VIEW && s->edit_promotion.active)
+	mged_edit_release_promotion(s, GED_DRAW_PROMOTION_CANCEL);
 
     switch (newstate) {
 	case ST_VIEW:

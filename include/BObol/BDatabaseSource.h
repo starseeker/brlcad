@@ -186,6 +186,10 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbString path;
     SbString sourceName;
     SbString sourceInstanceKey;
+    /* Current resident presentation tier ("aabb", "obb", "surface",
+     * "line", ...).  This describes the compact source fallback, not a
+     * view-local LoD payload that may temporarily supersede it. */
+    SbString geometryKind;
     /* Canonical source asset for progressive mesh residency.  Empty values
      * mean the occurrence's sourceName/path are already canonical. */
     SbString meshAssetPath;
@@ -906,6 +910,24 @@ public:
      * realization so boxes are replaced, not left lingering. */
     int mergeCompactOccurrences(
 	const std::vector<BObolCompactOccurrence> &occurrences);
+    /**
+     * Share the resident immutable compact payloads of @p source with this
+     * source, translating occurrence placement into this source's coordinate
+     * frame.  Existing equal-or-richer occurrences remain authoritative.
+     *
+     * This is used when a broader draw intent subsumes a narrower one: the
+     * broader source can display every useful resident result immediately
+     * while its own progressive realization requests only missing data.
+     */
+    int adoptCompactOccurrencesFrom(const SoBRLDatabaseSource *source);
+    /**
+     * Apply an explicit database rename to retained compact occurrence
+     * semantics before realization.  Geometry and occurrence handles remain
+     * unchanged; the next authoritative index can therefore transfer runtime
+     * state by exact path rather than ambiguous leaf-name/order heuristics.
+     */
+    int retargetCompactOccurrencePaths(const char *oldPath,
+	const char *newPath);
     SbBool hasCompactInstanceIndex(void) const;
     SbBool isCompactOccurrenceRegistry(void) const;
     int getCompactInstanceCount(void) const;
@@ -943,6 +965,34 @@ public:
 	int visibleValid, SbBool visible,
 	int selectedValid, SbBool selected,
 	int highlightedValid, SbBool highlighted);
+    /**
+     * Restrict this source's visible compact occurrences to the union of the
+     * supplied semantic path subtrees.  Geometry, instances, PoP residency,
+     * and LoD request ownership remain on this source; only its presentation
+     * mask changes.  The rule is retained and applied to occurrences streamed
+     * in later.  An empty frontier hides every compact occurrence.
+     */
+    int setCompactInstanceVisibilityFrontier(
+	const std::vector<SbString> &paths);
+    /**
+     * Apply a compact, retained set of subtree visibility overrides.
+     * Occurrences are authored-visible by default; each path changes the
+     * state of its complete subtree, and a deeper path takes precedence over
+     * an ancestor.  This represents "draw root except these paths" without
+     * expanding one erased path into every visible sibling.  The rule set is
+     * also applied to compact occurrences streamed in later.
+     */
+    int setCompactInstanceVisibilityOverrides(
+	const std::vector<SbString> &paths,
+	const std::vector<SbBool> &states);
+    int clearCompactInstanceVisibilityFrontier(void);
+    SbBool hasCompactInstanceVisibilityFrontier(void) const;
+    /**
+     * Replace the semantic selection mask for compact occurrences.  The mask
+     * is retained and applied to occurrences streamed in later.  Paths select
+     * their complete semantic subtree; an empty list clears compact selection.
+     */
+    int syncCompactInstanceSelectedPaths(const std::vector<SbString> &paths);
     int setCompactInstanceSelectableForPath(const char *path,
 	SbBool includeDescendants, SbBool selectable);
     int setCompactInstanceRegionIdForPath(const char *path,
@@ -964,6 +1014,11 @@ public:
 	const;
     SoBRLCadAssembly *currentCompactViewLodAssembly(
 	const BObolViewLodState *viewState) const;
+    /* Diagnostic invariant: an occurrence with an active view-local LoD
+     * payload must not still present its structural AABB/OBB base part. */
+    int getCompactViewLodSupersededFallbackCount(
+	const BObolViewLodState *viewState,
+	std::vector<SbString> *paths = NULL) const;
     SbBool hasCompiledAssembly(void) const;
     int getCompiledAssemblyPartCount(void) const;
     int getCompiledAssemblyInstanceCount(void) const;
@@ -1026,6 +1081,8 @@ private:
     void syncRealizedShapeOwnerState(void);
     void syncCompactInstanceDisplayState(void);
     void rebuildCompactInstanceDisplayState(SbBool syncSourceState);
+    int reapplyCompactInstanceVisibilityFrontier(void);
+    int reapplyCompactInstanceSelectedPaths(void);
     void syncCompactInstancePlacementState(void);
     void seedCompactRealizationCache(
 	BObolDatabaseSourceRealizationCache *cache) const;
@@ -1033,6 +1090,7 @@ private:
     void ensureCompiledAssemblyChild(void);
     void markCompiledAssemblyDirty(void);
     void markCadBatchDirty(void);
+    void markDisplayMeshLodDirty(void);
     uint64_t cadBatchRevisionGet(void) const;
     void clearCompactInstanceIndex(void);
     void discardCompactInstanceHistory(void);

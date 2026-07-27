@@ -586,6 +586,13 @@ ged_draw_path_state(struct ged *gedp,
     if (!gedp || !path)
 	return 0;
 
+    /* Retained visibility rules are occurrence-aware; consult them before
+     * legacy normalization strips @N combination-instance suffixes. */
+    int frontier_state = ged_draw_frontier_path_state(
+	gedp, view_ctx, path, mode);
+    if (frontier_state >= 0)
+	return frontier_state;
+
     struct bu_vls norm = BU_VLS_INIT_ZERO;
     _draw_path_normalize(&norm, path);
     if (bu_vls_strlen(&norm) == 0) {
@@ -964,6 +971,7 @@ ged_draw_list_paths(struct ged *gedp,
 {
     if (!gedp || !result)
 	return 0;
+    const size_t result_start = bu_vls_strlen(result);
 
     struct _draw_path_list_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -1001,6 +1009,12 @@ ged_draw_list_paths(struct ged *gedp,
 
     size_t count = ctx.count;
     _draw_path_list_free(&ctx);
+    if (!expanded) {
+	int override_count = ged_draw_frontier_list_paths(gedp, view_ctx,
+	    mode, result, result_start);
+	if (override_count >= 0)
+	    count = (size_t)override_count;
+    }
     return count;
 }
 

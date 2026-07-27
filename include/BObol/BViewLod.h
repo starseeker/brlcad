@@ -187,6 +187,10 @@ public:
     size_t cadPayloadCount(void) const;
     size_t cadMeshPayloadCount(void) const;
     size_t cadProxyPayloadCount(int proxyKind = BOBOL_LOD_PROXY_NONE) const;
+    /* Estimated triangles submitted by the active view-local cuts.  Shared
+     * arrays are counted once per displayed occurrence because render cost
+     * follows instances, not storage aliases. */
+    size_t activeFaceCount(void) const;
     size_t estimateDisplayMeshBytes(void) const;
     void residentMeshDemands(
 	std::vector<BObolLodResidentDemand> &demands) const;

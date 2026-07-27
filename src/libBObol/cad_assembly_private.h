@@ -114,6 +114,7 @@ private:
     const void *compactPresentationIndex = NULL;
     uint32_t compactPresentationSourceRevision = 0;
     uint32_t compactPresentationInputsRevision = 0;
+    uint64_t compactPresentationCadBatchRevision = 0;
     uint64_t compactPresentationPayloadRevision = 0;
     int compactPresentationDrawMode = -1;
     std::unordered_map<Obol::InstanceId, CompactInstancePresentation,

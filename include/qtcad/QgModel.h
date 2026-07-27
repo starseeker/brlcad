@@ -68,6 +68,7 @@
 #define QGMODEL_H
 
 #include <cstdint>
+#include <set>
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -288,10 +289,7 @@ public:
 		return interaction_mode;
 	}
 	/* Update the current tree/highlight interaction mode. */
-	void setInteractionMode(int mode)
-	{
-		interaction_mode = mode;
-	}
+	void setInteractionMode(int mode);
 
 	// Qt Model interface
 
@@ -520,6 +518,8 @@ private:
 	std::unordered_set<QgItem *> *items = nullptr;
 	std::unordered_map<unsigned long long, std::unordered_set<QgItem *>> items_by_instance_hash;
 	std::unordered_map<unsigned long long, std::unordered_set<QgItem *>> items_by_path_hash;
+	std::set<std::string> selection_display_paths;
+	int selection_display_mode = -1;
 	NotificationStats notification_stats;
 	FetchMoreStats fetch_more_stats;
 	HierarchyDeltaStats hierarchy_delta_stats;

@@ -232,8 +232,18 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
     s.progressive_update_queued = true;
     QTimer::singleShot(16, w, [&s, w]() {
 	s.progressive_update_queued = false;
-	if (s.obol && s.obol->hasProgressiveWorkPending())
+	if (!s.obol || !s.obol->hasProgressiveWorkPending())
+	    return;
+
+	/* Poll background providers and LoD service state without forcing an
+	 * expensive duplicate paint.  advanceProgressiveWork() requests a
+	 * render only when presentation data or a retained PoP cut actually
+	 * changes; otherwise keep this lightweight timer pump alive. */
+	(void)s.obol->advanceProgressiveWork(NULL, NULL);
+	if (s.obol->isRenderRequested())
 	    w->update();
+	else
+	    qgcanvas_queue_obol_progressive_update(s, w);
     });
 }
 

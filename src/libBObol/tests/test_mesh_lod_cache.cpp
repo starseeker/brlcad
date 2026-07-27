@@ -29,6 +29,7 @@
 #include "wdb.h"
 #include "rt/wdb.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -37,6 +38,39 @@ static int
 fastf_equal(fastf_t a, fastf_t b)
 {
     return std::fabs(a - b) <= SMALL_FASTF;
+}
+
+static long double
+mesh_signed_six_volume(const struct BObolMeshLodData &data)
+{
+    if (!data.points_orig || !data.faces || data.point_orig_count == 0 ||
+	data.face_count == 0)
+	return 0.0L;
+    const point_t &origin =
+	data.points_orig[static_cast<size_t>(data.faces[0])];
+    long double volume = 0.0L;
+    for (size_t faceIndex = 0; faceIndex < data.face_count; ++faceIndex) {
+	const int *face = &data.faces[faceIndex * 3];
+	long double a[3];
+	long double b[3];
+	long double c[3];
+	for (int axis = 0; axis < 3; ++axis) {
+	    a[axis] =
+		data.points_orig[static_cast<size_t>(face[0])][axis] -
+		origin[axis];
+	    b[axis] =
+		data.points_orig[static_cast<size_t>(face[1])][axis] -
+		origin[axis];
+	    c[axis] =
+		data.points_orig[static_cast<size_t>(face[2])][axis] -
+		origin[axis];
+	}
+	volume +=
+	    a[0] * (b[1] * c[2] - b[2] * c[1]) -
+	    a[1] * (b[0] * c[2] - b[2] * c[0]) +
+	    a[2] * (b[0] * c[1] - b[1] * c[0]);
+    }
+    return volume;
 }
 
 static int
@@ -269,6 +303,10 @@ main(int argc, char *argv[])
 {
     const char *objname = "bobol_lod_bot";
     const char *solidCwObjname = "bobol_lod_solid_cw_bot";
+    const char *solidUnorientedObjname =
+	"bobol_lod_solid_unoriented_bot";
+    const char *brokenUnorientedObjname =
+	"bobol_lod_broken_unoriented_bot";
     const char *meshObjname = "bobol_lod_mesh_payload";
     const char *translatedMeshObjname = "bobol_lod_translated_mesh_payload";
     const char *invalidBotObjname = "bobol_invalid_lod_bot";
@@ -400,6 +438,23 @@ main(int argc, char *argv[])
 	    if (mk_bot(wdbp, solidCwObjname, RT_BOT_SOLID, RT_BOT_CW, 0,
 		       4, 4, solidVertices, solidFaces, NULL, NULL) < 0) {
 		printf("FAIL: mesh lod solid CW mk_bot\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	    if (mk_bot(wdbp, solidUnorientedObjname, RT_BOT_SOLID,
+		       RT_BOT_UNORIENTED, 0, 4, 4, solidVertices, solidFaces,
+		       NULL, NULL) < 0) {
+		printf("FAIL: mesh lod solid unoriented mk_bot\n");
+		ret = 1;
+		goto cleanup;
+	    }
+	    int brokenFaces[12];
+	    std::memcpy(brokenFaces, solidFaces, sizeof(brokenFaces));
+	    std::swap(brokenFaces[1], brokenFaces[2]);
+	    if (mk_bot(wdbp, brokenUnorientedObjname, RT_BOT_SOLID,
+		       RT_BOT_UNORIENTED, 0, 4, 4, solidVertices,
+		       brokenFaces, NULL, NULL) < 0) {
+		printf("FAIL: mesh lod broken unoriented mk_bot\n");
 		ret = 1;
 		goto cleanup;
 	    }
@@ -585,6 +640,54 @@ main(int argc, char *argv[])
 	    goto cleanup;
 	}
 	bobol_mesh_lod_destroy(solidLod);
+    }
+
+    {
+	struct BObolMeshLod *solidLod = NULL;
+	struct BObolMeshLodInfo solidInfo = BOBOL_MESH_LOD_INFO_INIT;
+	struct BObolMeshLodData solidData;
+	if (bobol_mesh_lod_cache_refresh(dbip, solidUnorientedObjname,
+		&cacheStatus) != BRLCAD_OK ||
+	    !(solidLod = bobol_mesh_lod_get(
+		dbip, solidUnorientedObjname)) ||
+	    bobol_mesh_lod_load_display_level(solidLod, 100, 0) < 0 ||
+	    !bobol_mesh_lod_info_get(solidLod, &solidInfo) ||
+	    !bobol_mesh_lod_data_get(solidLod, &solidData) ||
+	    !solidInfo.shaded_cull_backfaces ||
+	    solidInfo.face_count != 4 ||
+	    mesh_signed_six_volume(solidData) <= 0.0L) {
+	    printf("FAIL: closed consistently wound unoriented BoT was not "
+		   "normalized to exterior CCW culling metadata "
+		   "(cull=%d info_faces=%zu data_faces=%zu volume=%.17Lg)\n",
+		   solidInfo.shaded_cull_backfaces,
+		   solidInfo.face_count, solidData.face_count,
+		   mesh_signed_six_volume(solidData));
+	    if (solidLod)
+		bobol_mesh_lod_destroy(solidLod);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(solidLod);
+    }
+
+    {
+	struct BObolMeshLod *brokenLod = NULL;
+	struct BObolMeshLodInfo brokenInfo = BOBOL_MESH_LOD_INFO_INIT;
+	if (bobol_mesh_lod_cache_refresh(dbip, brokenUnorientedObjname,
+		&cacheStatus) != BRLCAD_OK ||
+	    !(brokenLod = bobol_mesh_lod_get(
+		dbip, brokenUnorientedObjname)) ||
+	    bobol_mesh_lod_load_display_level(brokenLod, 100, 0) < 0 ||
+	    !bobol_mesh_lod_info_get(brokenLod, &brokenInfo) ||
+	    brokenInfo.shaded_cull_backfaces) {
+	    printf("FAIL: inconsistently wound unoriented BoT was marked "
+		   "safe for backface culling\n");
+	    if (brokenLod)
+		bobol_mesh_lod_destroy(brokenLod);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(brokenLod);
     }
 
     memshrinkLevel = first_available_level(lod);

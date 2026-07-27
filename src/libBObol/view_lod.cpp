@@ -1144,6 +1144,40 @@ BObolViewLodState::cadProxyPayloadCount(int proxyKind) const
     return payloads.size();
 }
 
+static size_t
+view_lod_saturating_add(size_t lhs, size_t rhs)
+{
+    return rhs > SIZE_MAX - lhs ? SIZE_MAX : lhs + rhs;
+}
+
+size_t
+BObolViewLodState::activeFaceCount(void) const
+{
+    size_t faces = 0;
+    const std::vector<MeshPayloadPtr> meshPayloads =
+	view_lod_unique_payloads(this->meshBindings);
+    for (const MeshPayloadPtr &payload : meshPayloads) {
+	if (!payload || !payload->isValid() ||
+	    payload->resultKind != BOBOL_LOD_RESULT_MESH)
+	    continue;
+	faces = view_lod_saturating_add(faces, payload->counts.faceCount);
+    }
+
+    std::vector<CadPayloadPtr> cadPayloads;
+    for (const auto &binding : this->cadBindings) {
+	const CadPayloadPtr &payload = binding.second;
+	if (!payload || !payload->isValid() ||
+	    (payload->resultKind != BOBOL_LOD_RESULT_MESH &&
+	     payload->resultKind != BOBOL_LOD_RESULT_FULL_DETAIL) ||
+	    std::find(cadPayloads.begin(), cadPayloads.end(), payload) !=
+		cadPayloads.end())
+	    continue;
+	cadPayloads.push_back(payload);
+	faces = view_lod_saturating_add(faces, payload->counts.faceCount);
+    }
+    return faces;
+}
+
 size_t
 BObolViewLodState::estimateDisplayMeshBytes(void) const
 {

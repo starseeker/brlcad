@@ -204,6 +204,7 @@ ged_init(struct ged *gedp)
     BU_GET(gedp->i, struct ged_impl);
     gedp->i->magic = GED_MAGIC;
     gedp->i->i = new Ged_Internal;
+    gedp->i->i->gedp = gedp;
     gedp->i->ged_view_state_ctx = NULL;
     gedp->i->ged_db_indexp = ged_db_index_create(gedp);
     gedp->i->ged_event_txnp = ged_event_txn_state_create(gedp);
