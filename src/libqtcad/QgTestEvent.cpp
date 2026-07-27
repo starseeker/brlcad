@@ -185,7 +185,7 @@ QgEventTranslator::translate(QObject *target, QEvent *event,
 
     if (event->type() == QEvent::Wheel) {
 	QWheelEvent *wheel = static_cast<QWheelEvent *>(event);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
 	const QPointF position = wheel->position();
 #else
 	const QPointF position = wheel->posF();

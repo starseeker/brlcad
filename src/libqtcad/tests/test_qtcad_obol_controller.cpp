@@ -99,7 +99,7 @@ mouse_move_event(int x, int y, Qt::MouseButtons buttons)
 static QWheelEvent
 wheel_event(int x, int y, int angleDeltaY)
 {
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
     return QWheelEvent(QPointF(x, y), QPointF(x, y), QPoint(),
 	    QPoint(0, angleDeltaY), angleDeltaY, Qt::Vertical, Qt::NoButton,
 	    Qt::NoModifier);
