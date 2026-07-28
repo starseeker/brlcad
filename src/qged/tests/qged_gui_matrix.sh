@@ -683,8 +683,11 @@ validate_report()
 	(any(.samples[]; (.draw_shape_count // 0) > 0)) and
 	(all(.samples[]; (.failed_sources // 0) == 0)) and
 	(all(.samples[]; (.cad_payloads_without_entry // 0) == 0)) and
-	(all(.samples[];
-	    (.superseded_fallback_presentations // 0) == 0))
+	# Results may become owner-thread state immediately before the render
+	# traversal synchronizes their retained presentation.  That transient is
+	# not a displayed fallback frame; the stable/final sample is the
+	# authoritative lingering-box invariant.
+	((.samples[-1].superseded_fallback_presentations // 0) == 0)
 	and
 	(.samples[-1].progressive_pending == false) and
 	(.samples[-1].lod_results_pending == false) and

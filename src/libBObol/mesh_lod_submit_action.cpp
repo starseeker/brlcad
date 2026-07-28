@@ -341,11 +341,21 @@ SoBRLMeshLodSubmitAction::reserveInitialFaces(
 	std::min(knownFaces, provisionalFirstCutFaces) :
 	provisionalFirstCutFaces;
 
+    /*
+     * The scene face allowance controls optional refinement, not coverage.
+     * Once a visible occurrence's minimum PoP mesh is available, falling
+     * back to its structural box is both visually disruptive and more
+     * expensive semantically than drawing the coherent minimum prefix.  The
+     * service's task/result and working-set limits bound cold preparation;
+     * consume any remaining refinement allowance here, but never reject the
+     * first mesh solely because the learned draw budget is exhausted.
+     */
     if (this->refinementFaceBudgetUsed > this->refinementFaceBudget ||
 	reserveFaces >
 	    this->refinementFaceBudget - this->refinementFaceBudgetUsed) {
-	this->refinementBudgetBlockedCount++;
-	return FALSE;
+	this->refinementFaceBudgetUsed = this->refinementFaceBudget;
+	providerFaceAllowance = provisionalFirstCutFaces;
+	return TRUE;
     }
 
     this->refinementFaceBudgetUsed += reserveFaces;
@@ -366,8 +376,10 @@ SoBRLMeshLodSubmitAction::reserveInitialFaceCost(size_t faceCount)
 	(this->refinementFaceBudgetUsed > this->refinementFaceBudget ||
 	 faceCount >
 	    this->refinementFaceBudget - this->refinementFaceBudgetUsed)) {
-	this->refinementBudgetBlockedCount++;
-	return FALSE;
+	/* Shared resident assets obey the same coverage floor as provider
+	 * results: budget optional enrichment, never box reintroduction. */
+	this->refinementFaceBudgetUsed = this->refinementFaceBudget;
+	return TRUE;
     }
     this->refinementFaceBudgetUsed =
 	faceCount > SIZE_MAX - this->refinementFaceBudgetUsed ?
@@ -950,10 +962,10 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	 *
 	 * Recover the displayed population independently.  This scans only
 	 * active view bindings, projects them by constant-time occurrence
-	 * lookup, and re-admits coherent minimum PoP cuts in screen-priority
-	 * order.  Rejected bindings expose their already-compiled structural
-	 * boxes; shared resident assets remain available for cheap readmission
-	 * after interaction. */
+	 * lookup, and retargets coherent minimum PoP cuts in screen-priority
+	 * order.  Minimum mesh coverage is a floor, not an optional budget
+	 * allocation: overload may lower every retained draw prefix, but must
+	 * never expose a structural box after a mesh has become available. */
 	if (submitAction->compactEntryFirst == 0 &&
 	    submitAction->retainedSceneFaceBudget != SIZE_MAX &&
 	    submitAction->viewState) {
@@ -1035,16 +1047,19 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			    submitAction->retainedSceneFaceBudget ?
 			0 : submitAction->retainedSceneFaceBudget -
 			    submitAction->retainedSceneFaceBudgetUsed;
-		if (candidate.minimumFaces > remaining) {
-		    if (submitAction->viewState->removeCadPayload(
-			    candidate.payload))
-			submitAction->updatedCutCount++;
+		const bool exceedsBudget =
+		    candidate.minimumFaces > remaining;
+		if (exceedsBudget) {
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->refinementBudgetBlockedCount++;
-		    continue;
 		}
-		submitAction->retainedSceneFaceBudgetUsed +=
-		    candidate.minimumFaces;
+		submitAction->retainedSceneFaceBudgetUsed =
+		    candidate.minimumFaces >
+			    SIZE_MAX -
+				submitAction->retainedSceneFaceBudgetUsed ?
+			SIZE_MAX :
+			submitAction->retainedSceneFaceBudgetUsed +
+			    candidate.minimumFaces;
 		submitAction->retainedRecoveredOccurrences.insert(
 		    candidate.occurrenceKey.getString());
 		if (candidate.payload->activeLevel !=
@@ -1322,30 +1337,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		mesh_lod_apply_level_hysteresis(request,
 		    activePayload->activeLevel);
 
-	    /* No active occurrence and no remaining growth allowance means no
-	     * cache task, resident-asset binding, or first PoP cut can be
-	     * admitted.  Reject before constructing geometry/cache keys or
-	     * probing the service.  At a calibrated many-leaf cut this removes
-	     * tens of thousands of allocation-heavy owner-thread lookups from
-	     * every no-progress pass. */
-	    if (!activePayload && !submitAction->useForcedLevel &&
-		submitAction->retainedSceneFaceBudget == SIZE_MAX &&
-		submitAction->refinementFaceBudget != SIZE_MAX &&
-		submitAction->refinementFaceBudgetUsed >=
-		    submitAction->refinementFaceBudget) {
-		submitAction->pendingRetainedRefinementCount++;
-		submitAction->refinementBudgetBlockedCount++;
-		submitAction->skippedMeshCount++;
-		continue;
-	    }
-
 	    /* A finite refinement allowance prevents new growth, but by itself
 	     * cannot recover when thousands of already-resident minimum cuts
 	     * collectively exceed the newly calibrated scene capacity.  During
-	     * that recovery pass, re-admit retained occurrences in the pinned
-	     * screen-priority order.  Prefer the richest affordable drawable
-	     * prefix; if even the minimum cannot fit, expose the structural box
-	     * for this lower-value occurrence. */
+	     * that recovery pass, retarget retained occurrences in the pinned
+	     * screen-priority order.  The coherent minimum prefix is an
+	     * unconditional coverage floor even when their aggregate population
+	     * exceeds the learned budget. */
 	    if (activePayload &&
 		submitAction->retainedRecoveredOccurrences.find(
 		    request.occurrenceKey.getString()) ==
@@ -1375,16 +1373,16 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			0 : submitAction->retainedSceneFaceBudget -
 			    submitAction->retainedSceneFaceBudgetUsed;
 		if (admittedFaces > remaining) {
-		    if (submitAction->viewState->removeCadPayload(
-			    activePayload))
-			submitAction->updatedCutCount++;
-		    activePayload = NULL;
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->refinementBudgetBlockedCount++;
-		    submitAction->skippedMeshCount++;
-		    continue;
 		}
-		submitAction->retainedSceneFaceBudgetUsed += admittedFaces;
+		submitAction->retainedSceneFaceBudgetUsed =
+		    admittedFaces >
+			    SIZE_MAX -
+				submitAction->retainedSceneFaceBudgetUsed ?
+			SIZE_MAX :
+			submitAction->retainedSceneFaceBudgetUsed +
+			    admittedFaces;
 		request.requestedLevel = admittedLevel;
 		if (admittedLevel < targetLevel)
 		    submitAction->pendingRetainedRefinementCount++;
@@ -1447,15 +1445,19 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 					submitAction->retainedSceneFaceBudget ?
 				    0 :
 				    submitAction->retainedSceneFaceBudget -
-					submitAction->
+				    submitAction->
 					    retainedSceneFaceBudgetUsed;
 			    if (reusedFaces > remaining) {
 				submitAction->refinementBudgetBlockedCount++;
-				admitted = FALSE;
-			    } else {
-				submitAction->retainedSceneFaceBudgetUsed +=
-				    reusedFaces;
 			    }
+			    submitAction->retainedSceneFaceBudgetUsed =
+				reusedFaces >
+					SIZE_MAX -
+					    submitAction->
+						retainedSceneFaceBudgetUsed ?
+				    SIZE_MAX :
+				    submitAction->retainedSceneFaceBudgetUsed +
+					reusedFaces;
 			} else {
 			    admitted = submitAction->reserveInitialFaceCost(
 				reusedFaces);

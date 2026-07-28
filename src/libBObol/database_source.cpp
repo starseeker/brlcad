@@ -13359,12 +13359,18 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
 	    detached->sourceRevision.getValue() ||
 	this->inputsRevision.getValue() !=
 	    detached->inputsRevision.getValue() ||
-	this->viewRevision.getValue() != detached->viewRevision.getValue() ||
 	this->drawMode.getValue() != detached->drawMode.getValue() ||
 	this->representationMode.getValue() !=
 	    detached->representationMode.getValue())
 	return 0;
 
+    /*
+     * Camera revision is not source-content identity.  A user commonly moves
+     * the view while this worker replaces a structural frontier with retained
+     * native/PoP-backed occurrences.  Rejecting that valid result strands
+     * depth-capped combination boxes; the active PoP prefix is selected from
+     * the current view independently after adoption.
+     */
     BObolCompactInstanceIndex *next = detached->d->compactIndex;
     detached->d->compactIndex = NULL;
     if (getenv("BOBOL_DRAW_TIMING")) {

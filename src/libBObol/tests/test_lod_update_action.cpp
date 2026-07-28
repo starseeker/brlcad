@@ -6738,9 +6738,9 @@ test_compact_many_leaf_scene_admission(void)
 	firstWindow.apply(source);
 	firstWindow.getCompactEntryPlan(pinnedPlan);
 	if (firstWindow.getVisitedMeshCount() != 16 ||
-	    firstWindow.getSubmittedTaskCount() != 2 ||
+	    firstWindow.getSubmittedTaskCount() != 16 ||
 	    firstWindow.getRefinementFaceBudgetUsed() != 8192 ||
-	    firstWindow.getRefinementBudgetBlockedCount() != 14 ||
+	    firstWindow.getRefinementBudgetBlockedCount() != 0 ||
 	    !firstWindow.hasDeferredCompactEntries() ||
 	    firstWindow.getCompactEntryNext() != 16 ||
 	    pinnedPlan.size() != leafCount ||
@@ -6894,17 +6894,22 @@ test_compact_many_leaf_scene_admission(void)
 	std::vector<size_t> continuedPlan;
 	secondWindow.getCompactEntryPlan(continuedPlan);
 	if (secondWindow.getVisitedMeshCount() != 16 ||
-	    secondWindow.getSubmittedTaskCount() != 0 ||
-	    secondWindow.getRefinementBudgetBlockedCount() != 16 ||
+	    secondWindow.getSubmittedTaskCount() != 16 ||
+	    secondWindow.getUpdatedCutCount() != 0 ||
+	    secondWindow.getRefinementBudgetBlockedCount() != 0 ||
 	    secondWindow.getCompactEntryNext() != 32 ||
-	    continuedPlan != pinnedPlan) {
+	    continuedPlan != pinnedPlan ||
+	    sharedViewState.cadMeshPayloadCount() != 2) {
 	    printf("FAIL: many-leaf pinned plan continuation "
-		   "(visited=%u tasks=%u blocked=%u next=%zu plan=%zu)\n",
+		   "(visited=%u tasks=%u cuts=%u blocked=%u next=%zu "
+		   "plan=%zu payloads=%zu)\n",
 		   secondWindow.getVisitedMeshCount(),
 		   secondWindow.getSubmittedTaskCount(),
+		   secondWindow.getUpdatedCutCount(),
 		   secondWindow.getRefinementBudgetBlockedCount(),
 		   secondWindow.getCompactEntryNext(),
-		   continuedPlan.size());
+		   continuedPlan.size(),
+		   sharedViewState.cadMeshPayloadCount());
 	    ret = 1;
 	}
     }
@@ -6927,12 +6932,12 @@ test_compact_many_leaf_scene_admission(void)
 	 * restricted to the first interactive window. */
 	retainedAdmission.setCompactEntryRange(0, 1);
 	retainedAdmission.apply(source);
-	if (retainedAdmission.getRetainedSceneFaceBudgetUsed() != 4 ||
-	    retainedAdmission.getUpdatedCutCount() != 1 ||
-	    sharedViewState.activeFaceCount() != 4 ||
-	    sharedViewState.cadMeshPayloadCount() != 1) {
-	    printf("FAIL: over-budget retained occurrences were not "
-		   "priority-culled to structural proxies "
+	if (retainedAdmission.getRetainedSceneFaceBudgetUsed() != 8 ||
+	    retainedAdmission.getUpdatedCutCount() != 0 ||
+	    sharedViewState.activeFaceCount() != 8 ||
+	    sharedViewState.cadMeshPayloadCount() != 2) {
+	    printf("FAIL: over-budget retained occurrences lost minimum "
+		   "mesh coverage "
 		   "(used=%zu cuts=%u faces=%zu payloads=%zu)\n",
 		   retainedAdmission.getRetainedSceneFaceBudgetUsed(),
 		   retainedAdmission.getUpdatedCutCount(),
@@ -6962,10 +6967,10 @@ test_compact_many_leaf_scene_admission(void)
 	coverageReadmission.setSubmissionTaskLimit(0);
 	coverageReadmission.setCompactEntryPlan(pinnedPlan);
 	coverageReadmission.apply(source);
-	if (coverageReadmission.getRetainedSceneFaceBudgetUsed() != 8 ||
-	    coverageReadmission.getUpdatedCutCount() != 1 ||
-	    sharedViewState.activeFaceCount() != 8 ||
-	    sharedViewState.cadMeshPayloadCount() != 2) {
+	if (coverageReadmission.getRetainedSceneFaceBudgetUsed() != 512 ||
+	    coverageReadmission.getUpdatedCutCount() != 126 ||
+	    sharedViewState.activeFaceCount() != 512 ||
+	    sharedViewState.cadMeshPayloadCount() != leafCount) {
 	    printf("FAIL: resident shared asset readmission did not preserve "
 		   "coverage before refinement "
 		   "(used=%zu cuts=%u faces=%zu payloads=%zu)\n",
@@ -7150,6 +7155,38 @@ test_compact_aabb_stream_upgrade(void)
 	printf("FAIL: late compact AABB displaced an installed mesh tier\n");
 	ret = 1;
     }
+
+    /*
+     * Moving the camera while a detached realization finishes must not make
+     * its source-valid native/PoP registry stale.  The view selects active
+     * PoP prefixes after adoption; it is not part of geometry identity.
+     */
+    SoBRLDatabaseSource *detached = new SoBRLDatabaseSource;
+    detached->ref();
+    detached->path = source->path.getValue();
+    detached->instanceKey = source->instanceKey.getValue();
+    detached->sourceRevision = source->sourceRevision.getValue();
+    detached->inputsRevision = source->inputsRevision.getValue();
+    detached->drawMode = source->drawMode.getValue();
+    detached->representationMode = source->representationMode.getValue();
+    detached->viewRevision = 17;
+    source->viewRevision = 18;
+    if (!ret &&
+	(detached->setCompactOccurrenceRegistry(
+	     std::vector<BObolCompactOccurrence>(1, mesh)) != 1 ||
+	 source->adoptDetachedCompactRealization(detached) != 1)) {
+	printf("FAIL: camera change rejected source-valid detached compact geometry\n");
+	ret = 1;
+    }
+    if (!ret &&
+	(!source->getCompactInstanceHandle(0, upgradedHandle) ||
+	 !source->getCompactInstanceSummary(upgradedHandle, upgradedSummary) ||
+	 !upgradedSummary.meshGeometry ||
+	 !BU_STR_EQUAL(upgradedSummary.geometryKind.getString(), "surface"))) {
+	printf("FAIL: detached compact camera-epoch adoption lost mesh geometry\n");
+	ret = 1;
+    }
+    detached->unref();
 
     source->unref();
     return ret;

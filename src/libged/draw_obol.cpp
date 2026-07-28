@@ -17142,6 +17142,7 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 	const int64_t manifest_publish_start = bu_gettime();
 	std::vector<BObolCompactOccurrence> occurrences;
 	occurrences.reserve(manifest.occurrenceCount);
+	bool allOccurrencesMeshBacked = manifest.occurrenceCount > 0;
 	for (size_t i = 0; i < manifest.occurrenceCount; i++) {
 	    BObolCompactOccurrence occurrence =
 		ged_obol_structural_proxy_manifest_occurrence(ctx,
@@ -17150,6 +17151,8 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 		occurrences.clear();
 		break;
 	    }
+	    if (!occurrence.sourceMeshRequestValid)
+		allOccurrencesMeshBacked = false;
 	    occurrences.push_back(std::move(occurrence));
 	}
 	bobol_draw_manifest_free(&manifest);
@@ -17160,8 +17163,17 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 		ged_obol_timing_log("structural: publish leaf manifest",
 		    manifest_publish_start,
 		    static_cast<long>(occurrences.size()));
-		return ged_obol_database_source_mark_published_current(scene,
-		    root) ? 2 : 0;
+		if (!ged_obol_database_source_mark_published_current(scene, root))
+		    return 0;
+		/*
+		 * A complete leaf-bound manifest is only terminal for this
+		 * realization stage when every occurrence carries an independent
+		 * mesh-source request.  Otherwise its non-mesh AABBs still need
+		 * the detached native-geometry pass.  Treating structural
+		 * completeness as drawing-data completeness made mixed models
+		 * (notably Generic_Twin) work cold but remain boxes forever warm.
+		 */
+		return allOccurrencesMeshBacked ? 2 : 1;
 	    }
 	}
 	ged_obol_timing_log("structural: reject leaf manifest",
@@ -18178,13 +18190,13 @@ ged_obol_publish_deferred_realization(
 		detached->sourceRevision.getValue() ||
 	    live->inputsRevision.getValue() !=
 		detached->inputsRevision.getValue() ||
-	    live->viewRevision.getValue() != detached->viewRevision.getValue() ||
 	    live->drawMode.getValue() != detached->drawMode.getValue() ||
 	    live->representationMode.getValue() !=
 		detached->representationMode.getValue()) {
 	    if (ged_obol_timing_enabled()) {
 		bu_log("[obol-timing] deferred adoption rejected for %s: "
-		    "source=%u/%u inputs=%u/%u view=%u/%u mode=%d/%d "
+		    "source=%u/%u inputs=%u/%u view(non-binding)=%u/%u "
+		    "mode=%d/%d "
 		    "representation=%d/%d\n",
 		    item->instanceKey.c_str(),
 		    live->sourceRevision.getValue(),
