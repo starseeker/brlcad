@@ -30,9 +30,12 @@
 #include "rt/wdb.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <thread>
+#include <vector>
 
 static int
 fastf_equal(fastf_t a, fastf_t b)
@@ -521,6 +524,72 @@ main(int argc, char *argv[])
 	printf("FAIL: mesh lod get\n");
 	ret = 1;
 	goto cleanup;
+    }
+
+    {
+	/* The production LoD service opens and reads distinct resident handles
+	 * concurrently.  LMDB read transactions support that directly; guard
+	 * against reintroducing unsafe cache/context state while preserving
+	 * parallel warm-cache materialization. */
+	const size_t readerCount = 16;
+	const size_t iterations = 24;
+	std::atomic<size_t> getFailures(0);
+	std::atomic<size_t> loadFailures(0);
+	std::atomic<size_t> dataFailures(0);
+	std::atomic<size_t> countFailures(0);
+	std::vector<std::thread> readers;
+	readers.reserve(readerCount);
+	for (size_t readerIndex = 0; readerIndex < readerCount;
+	     ++readerIndex) {
+	    readers.emplace_back([&]() {
+		for (size_t iteration = 0; iteration < iterations;
+		     ++iteration) {
+		    struct BObolMeshLod *reader =
+			bobol_mesh_lod_get(dbip, objname);
+		    struct BObolMeshLodData readerData;
+		    if (!reader) {
+			getFailures.fetch_add(1, std::memory_order_relaxed);
+		    } else {
+			if (bobol_mesh_lod_load_display_level(
+				reader, 100, 0) != 15) {
+			    loadFailures.fetch_add(1,
+				std::memory_order_relaxed);
+			} else if (!bobol_mesh_lod_data_get(
+				reader, &readerData)) {
+			    dataFailures.fetch_add(1,
+				std::memory_order_relaxed);
+			} else if (readerData.face_count !=
+				static_cast<size_t>(faceCount) ||
+			    readerData.point_count !=
+				static_cast<size_t>(vertexCount)) {
+			    countFailures.fetch_add(1,
+				std::memory_order_relaxed);
+			}
+		    }
+		    if (reader)
+			bobol_mesh_lod_destroy(reader);
+		}
+	    });
+	}
+	for (std::thread &reader : readers)
+	    reader.join();
+	const size_t getFailureCount =
+	    getFailures.load(std::memory_order_relaxed);
+	const size_t loadFailureCount =
+	    loadFailures.load(std::memory_order_relaxed);
+	const size_t dataFailureCount =
+	    dataFailures.load(std::memory_order_relaxed);
+	const size_t countFailureCount =
+	    countFailures.load(std::memory_order_relaxed);
+	if (getFailureCount || loadFailureCount || dataFailureCount ||
+	    countFailureCount) {
+	    printf("FAIL: concurrent mesh lod cache reads "
+		"(get=%zu load=%zu data=%zu count=%zu)\n",
+		getFailureCount, loadFailureCount, dataFailureCount,
+		countFailureCount);
+	    ret = 1;
+	    goto cleanup;
+	}
     }
 
     {

@@ -52,6 +52,44 @@ when the database exists; it may also be selected explicitly as `--cases
 unique_mesh_stress`.  Increase the count or maximum grid dimension for
 release-candidate hardware characterization.
 
+For an asset-count characterization an order of magnitude larger, generate a
+separate 50,000-leaf database while capping each source mesh at a 24-cell grid:
+
+```sh
+./.build/src/qged/qged_unique_mesh_stress_generator \
+  .build/unique_mesh_50k_stress.g 50000 24
+src/qged/tests/qged_gui_matrix.sh --profile stress \
+  --cases unique_mesh_50k_stress --backends system --modes shaded \
+  --no-baseline --perf unique_mesh_50k_stress --timeout 900
+```
+
+This keeps the source-face population near 50 million so the comparison
+isolates distinct-asset, hierarchy, scheduling, cache-file, and draw-submission
+scaling rather than simply making the mesh construction workload ten times
+larger.  It is explicit rather than part of the default stress profile because
+its cold and warm caches are release-characterization artifacts.
+
+The 50k replay deliberately rotates the cold scene at the 1.5-second
+first-useful checkpoint, before waiting for background work to settle.
+First-useful pixels and cold input/render latency are therefore startup
+requirements; eventual idle is a separate terminal characterization.  Camera
+zoom/rotation then share one recovery wait instead of forcing complete cache
+population after every synthetic input.  This distinction prevents a long
+cache-preparation time from masquerading as unusable startup, while still
+requiring the background state machine to terminate.
+
+Cold mesh realization is admitted by both worker count and an estimated
+transient working set based on source face/point counts.  Tasks which have not
+decoded those counts yet, including cold AABB and PoP-cache preparation, make a
+conservative reservation from the serialized database-object size; a cheap
+proxy result must not imply a zero-cost import.  The automatic byte allowance
+is the lesser of 1 GiB, one-eighth of installed RAM, and one-quarter of
+currently available RAM.  A task larger than the allowance runs alone;
+`BObolLodService::setWorkingSetLimit` provides an explicit host/application
+override.  Reports record the configured allowance, current and peak
+reservations, current and peak executing-task counts, and retained mesh bytes
+so parallel speedups cannot hide memory oversubscription.
+
 The runner inventories each input database before use and verifies its size
 afterward.  A suspiciously small `./.build/Generic_Twin.g` is rejected in favor
 of the installed `share/db/faa/Generic_Twin.g`, preventing a blank database

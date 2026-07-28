@@ -7,7 +7,9 @@
 
 #include "common.h"
 
+#include "bu/env.h"
 #include "bu/log.h"
+#include "bu/parallel.h"
 #include "bu/str.h"
 #include "bu/time.h"
 
@@ -104,6 +106,7 @@ BObolLodTask::clear(void)
     cacheWrite = NULL;
     cacheWriteData = NULL;
     debugDelayMilliseconds = 0;
+    estimatedWorkingSetBytes = 0;
     publishResult = TRUE;
     writeCache = FALSE;
 }
@@ -1233,6 +1236,144 @@ struct BObolLodSubscriber {
     size_t inFlight;
 };
 
+static size_t
+lod_default_working_set_limit(void)
+{
+    const size_t mebibyte = 1024ULL * 1024ULL;
+    const size_t gibibyte = 1024ULL * mebibyte;
+    size_t totalBytes = 0;
+    size_t availableBytes = 0;
+    const bool haveTotal = bu_mem(BU_MEM_ALL, &totalBytes) >= 0 &&
+	totalBytes > 0;
+    const bool haveAvailable = bu_mem(BU_MEM_AVAIL, &availableBytes) >= 0 &&
+	availableBytes > 0;
+    size_t allowance = gibibyte;
+    if (haveTotal)
+	allowance = std::min(allowance,
+	    std::max(mebibyte, totalBytes / 8));
+    if (haveAvailable)
+	allowance = std::min(allowance,
+	    std::max(mebibyte, availableBytes / 4));
+    return std::max(mebibyte, allowance);
+}
+
+struct BObolGlobalWorkingSetGovernor {
+    BObolGlobalWorkingSetGovernor(void) :
+	limit(lod_default_working_set_limit()),
+	activeBytes(0),
+	activeTasks(0),
+	peakBytes(0),
+	peakTasks(0)
+    {
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t limit;
+    size_t activeBytes;
+    size_t activeTasks;
+    size_t peakBytes;
+    size_t peakTasks;
+};
+
+static BObolGlobalWorkingSetGovernor &
+lod_global_working_set_governor(void)
+{
+    static BObolGlobalWorkingSetGovernor governor;
+    return governor;
+}
+
+void
+bobol_lod_working_set_acquire(size_t estimatedBytes)
+{
+    if (!estimatedBytes)
+	return;
+    BObolGlobalWorkingSetGovernor &governor =
+	lod_global_working_set_governor();
+    std::unique_lock<std::mutex> lock(governor.mutex);
+    governor.cv.wait(lock, [&]() {
+	if (governor.limit == SIZE_MAX)
+	    return true;
+	/* An exceptional single mesh still has to make progress. */
+	if (governor.activeBytes == 0)
+	    return true;
+	const size_t occupied = std::min(governor.activeBytes,
+	    governor.limit);
+	return estimatedBytes <= governor.limit - occupied;
+    });
+    governor.activeBytes =
+	estimatedBytes > SIZE_MAX - governor.activeBytes ?
+	SIZE_MAX : governor.activeBytes + estimatedBytes;
+    governor.activeTasks++;
+    governor.peakBytes = std::max(governor.peakBytes,
+	governor.activeBytes);
+    governor.peakTasks = std::max(governor.peakTasks,
+	governor.activeTasks);
+}
+
+void
+bobol_lod_working_set_release(size_t estimatedBytes)
+{
+    if (!estimatedBytes)
+	return;
+    BObolGlobalWorkingSetGovernor &governor =
+	lod_global_working_set_governor();
+    {
+	std::lock_guard<std::mutex> lock(governor.mutex);
+	governor.activeBytes =
+	    estimatedBytes >= governor.activeBytes ?
+	    0 : governor.activeBytes - estimatedBytes;
+	if (governor.activeTasks > 0)
+	    governor.activeTasks--;
+    }
+    governor.cv.notify_all();
+}
+
+size_t
+bobol_lod_working_set_global_limit(void)
+{
+    BObolGlobalWorkingSetGovernor &governor =
+	lod_global_working_set_governor();
+    std::lock_guard<std::mutex> lock(governor.mutex);
+    return governor.limit;
+}
+
+size_t
+bobol_lod_working_set_global_active_bytes(void)
+{
+    BObolGlobalWorkingSetGovernor &governor =
+	lod_global_working_set_governor();
+    std::lock_guard<std::mutex> lock(governor.mutex);
+    return governor.activeBytes;
+}
+
+size_t
+bobol_lod_working_set_global_peak_bytes(void)
+{
+    BObolGlobalWorkingSetGovernor &governor =
+	lod_global_working_set_governor();
+    std::lock_guard<std::mutex> lock(governor.mutex);
+    return governor.peakBytes;
+}
+
+size_t
+bobol_lod_working_set_global_active_tasks(void)
+{
+    BObolGlobalWorkingSetGovernor &governor =
+	lod_global_working_set_governor();
+    std::lock_guard<std::mutex> lock(governor.mutex);
+    return governor.activeTasks;
+}
+
+size_t
+bobol_lod_working_set_global_peak_tasks(void)
+{
+    BObolGlobalWorkingSetGovernor &governor =
+	lod_global_working_set_governor();
+    std::lock_guard<std::mutex> lock(governor.mutex);
+    return governor.peakTasks;
+}
+
 struct BObolResidentMeshAsset {
     ~BObolResidentMeshAsset()
     {
@@ -1269,6 +1410,11 @@ struct BObolLodServicePrivate {
 	maxActiveTasks(1024),
 	maxQueuedResults(256),
 	maxQueuedCacheWrites(256),
+	maxActiveWorkingSetBytes(0),
+	activeWorkingSetBytes(0),
+	executingTasks(0),
+	peakWorkingSetBytes(0),
+	peakExecutingTasks(0),
 	resultReservations(0),
 	cacheWriteReservations(0),
 	rejectedTasks(0),
@@ -1282,6 +1428,13 @@ struct BObolLodServicePrivate {
 	cacheWriteInFlight(0),
 	delayedTasks(0)
     {
+	/* This is a concurrent transient-work allowance, not a promise that an
+	 * individual mesh can be realized in bounded memory.  The latter needs
+	 * streaming/external construction in the provider.  Size the aggregate
+	 * allowance from both installed and currently available RAM so adding
+	 * CPU workers on a small or already-busy host cannot multiply several
+	 * very large topology builds into an avoidable OOM. */
+	maxActiveWorkingSetBytes = lod_default_working_set_limit();
     }
 
     BObolLodService *owner;
@@ -1302,6 +1455,11 @@ struct BObolLodServicePrivate {
     size_t maxActiveTasks;
     size_t maxQueuedResults;
     size_t maxQueuedCacheWrites;
+    size_t maxActiveWorkingSetBytes;
+    size_t activeWorkingSetBytes;
+    size_t executingTasks;
+    size_t peakWorkingSetBytes;
+    size_t peakExecutingTasks;
     size_t resultReservations;
     size_t cacheWriteReservations;
     uint64_t rejectedTasks;
@@ -1544,6 +1702,50 @@ lod_task_dependencies_ready(const BObolLodServicePrivate *p,
     return TRUE;
 }
 
+static size_t
+lod_task_estimated_working_set_bytes(const BObolLodTask &task)
+{
+    if (task.estimatedWorkingSetBytes)
+	return task.estimatedWorkingSetBytes;
+    const BObolLodCounts &counts = task.request.sourceCounts;
+    size_t estimate = static_cast<size_t>(std::min<uint64_t>(
+	counts.byteCount, static_cast<uint64_t>(SIZE_MAX)));
+    const auto addScaled = [&estimate](uint64_t count, size_t scale) {
+	if (!count || estimate == SIZE_MAX)
+	    return;
+	if (count > static_cast<uint64_t>(SIZE_MAX / scale) ||
+	    static_cast<size_t>(count) * scale > SIZE_MAX - estimate)
+	    estimate = SIZE_MAX;
+	else
+	    estimate += static_cast<size_t>(count) * scale;
+    };
+    /* PoP construction temporarily owns source arrays, sorted topology
+     * records, cumulative prefixes, and publication buffers.  These
+     * deliberately conservative coefficients are scheduling reservations,
+     * not resident-size accounting. */
+    addScaled(counts.faceCount, 192);
+    addScaled(counts.pointCount, 128);
+    return estimate;
+}
+
+static SbBool
+lod_task_working_set_available(const BObolLodServicePrivate *p,
+	const BObolLodTask &task)
+{
+    if (!p || p->maxActiveWorkingSetBytes == SIZE_MAX)
+	return TRUE;
+    const size_t estimate = lod_task_estimated_working_set_bytes(task);
+    if (!estimate)
+	return TRUE;
+    /* An exceptional task larger than the cap must still make progress, but
+     * it runs alone. */
+    if (p->activeWorkingSetBytes == 0)
+	return TRUE;
+    const size_t occupied = std::min(
+	p->activeWorkingSetBytes, p->maxActiveWorkingSetBytes);
+    return estimate <= p->maxActiveWorkingSetBytes - occupied ? TRUE : FALSE;
+}
+
 static std::deque<BObolLodWorkItem>::iterator
 lod_find_ready_task(BObolLodServicePrivate *p)
 {
@@ -1562,6 +1764,8 @@ lod_find_ready_task(BObolLodServicePrivate *p)
     for (std::deque<BObolLodWorkItem>::iterator it = p->pending.begin();
 	 it != p->pending.end(); ++it) {
 	if (!lod_task_dependencies_ready(p, it->task))
+	    continue;
+	if (!lod_task_working_set_available(p, it->task))
 	    continue;
 	if (best == p->pending.end() ||
 	    it->task.request.qualityTier < best->task.request.qualityTier)
@@ -1776,6 +1980,13 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	    p->taskGenerations.erase(item.id);
 	if (p->inFlight > 0)
 	    p->inFlight--;
+	if (p->executingTasks > 0)
+	    p->executingTasks--;
+	const size_t workingBytes =
+	    lod_task_estimated_working_set_bytes(item.task);
+	p->activeWorkingSetBytes =
+	    workingBytes >= p->activeWorkingSetBytes ?
+	    0 : p->activeWorkingSetBytes - workingBytes;
 	lod_active_request_key_remove_unlocked(p,
 					       lod_request_active_key(item.task.request));
 
@@ -1833,6 +2044,8 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	lod_generation_task_finished_unlocked(p, item.task.generation);
     }
 
+    bobol_lod_working_set_release(
+	lod_task_estimated_working_set_bytes(item.task));
     p->workerCv.notify_all();
     p->cacheWriterCv.notify_one();
     if (notifyResultReady)
@@ -1842,6 +2055,13 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 static void
 lod_worker_loop(BObolLodServicePrivate *p)
 {
+    /* Display LoD is background work even when it is CPU intensive.  In
+     * particular, a cold topology audit may sort hundreds of millions of
+     * half-edges before a richer PoP cut is available.  Keep the host/UI
+     * thread eligible to present the already-published coarse proxy.  On
+     * platforms without per-thread nice support this is a harmless no-op. */
+    bu_nice_set(5);
+
     for (;;) {
 	BObolLodWorkItem item;
 
@@ -1860,8 +2080,20 @@ lod_worker_loop(BObolLodServicePrivate *p)
 		continue;
 	    item = *ready;
 	    p->pending.erase(ready);
+	    const size_t workingBytes =
+		lod_task_estimated_working_set_bytes(item.task);
+	    p->activeWorkingSetBytes =
+		workingBytes > SIZE_MAX - p->activeWorkingSetBytes ?
+		SIZE_MAX : p->activeWorkingSetBytes + workingBytes;
+	    p->executingTasks++;
+	    p->peakWorkingSetBytes = std::max(
+		p->peakWorkingSetBytes, p->activeWorkingSetBytes);
+	    p->peakExecutingTasks = std::max(
+		p->peakExecutingTasks, p->executingTasks);
 	}
 
+	bobol_lod_working_set_acquire(
+	    lod_task_estimated_working_set_bytes(item.task));
 	BObolLodResult result = lod_execute_task(p, item.task);
 	lod_finish_task(p, item, std::move(result));
 	lod_task_free_realize_data(item.task);
@@ -1871,6 +2103,10 @@ lod_worker_loop(BObolLodServicePrivate *p)
 static void
 lod_cache_writer_loop(BObolLodServicePrivate *p)
 {
+    /* Compression and cache persistence must not delay user input or frame
+     * presentation either. */
+    bu_nice_set(5);
+
     for (;;) {
 	BObolLodCacheWriteItem item;
 
@@ -1934,6 +2170,8 @@ BObolLodService::start(size_t workerCount, SbBool startCacheWriter)
 	this->p->stopping = FALSE;
 	this->p->cacheWriterStopping = FALSE;
 	this->p->cacheWriterEnabled = startCacheWriter ? TRUE : FALSE;
+	this->p->peakWorkingSetBytes = 0;
+	this->p->peakExecutingTasks = 0;
 	this->p->running = TRUE;
     }
 
@@ -1980,6 +2218,8 @@ BObolLodService::stop(void)
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	pending.swap(this->p->pending);
 	this->p->inFlight = 0;
+	this->p->activeWorkingSetBytes = 0;
+	this->p->executingTasks = 0;
 	this->p->resultReservations = 0;
 	this->p->cacheWriteReservations = 0;
 	this->p->activeRequestKeyCounts.clear();
@@ -2138,24 +2378,42 @@ BObolLodService::realizeResidentMeshLod(
 	    "resident mesh asset identity collision");
 
     if (!resident->lod) {
-	if (bobol_mesh_lod_cache_status(provider.dbip, name,
-		&resident->status) != BRLCAD_OK)
-	    return lod_provider_status_result(request, BOBOL_LOD_PROVIDER_ERROR,
-		"resident mesh provider could not query cache status");
-	if ((!resident->status.has_cache_key ||
-	     !resident->status.has_cached_payload ||
-	     resident->status.stale_cache_entry) && provider.refreshMissing) {
-	    const int64_t refreshStarted = bu_gettime();
-	    if (bobol_mesh_lod_cache_refresh(provider.dbip, name,
+	/* The normal warm path needs no separate status probe:
+	 * bobol_mesh_lod_get already resolves the name key and validates the
+	 * immutable hierarchy header.  Query/refresh only after that direct
+	 * open misses.  At 50k distinct assets this removes two redundant LMDB
+	 * transactions and one context lifecycle from every successful task. */
+	resident->lod = bobol_mesh_lod_get(provider.dbip, name);
+	if (resident->lod) {
+	    resident->status.directory_found = 1;
+	    resident->status.is_bot = 1;
+	    resident->status.has_cache_key = 1;
+	    resident->status.has_cached_payload = 1;
+	    resident->status.stale_cache_entry = 0;
+	    resident->status.cache_key =
+		bobol_mesh_lod_cache_key_get(resident->lod);
+	} else {
+	    if (bobol_mesh_lod_cache_status(provider.dbip, name,
 		    &resident->status) != BRLCAD_OK)
 		return lod_provider_status_result(request,
-		    BOBOL_LOD_PROVIDER_CACHE_MISS,
-		    "resident mesh provider could not refresh cache entry");
-	    if (getenv("BOBOL_DRAW_TIMING"))
-		bu_log("[obol-timing] pop cache: refresh %-24s %8.1f ms\n",
-		       name, (bu_gettime() - refreshStarted) / 1000.0);
+		    BOBOL_LOD_PROVIDER_ERROR,
+		    "resident mesh provider could not query cache status");
+	    if ((!resident->status.has_cache_key ||
+		 !resident->status.has_cached_payload ||
+		 resident->status.stale_cache_entry) &&
+		provider.refreshMissing) {
+		const int64_t refreshStarted = bu_gettime();
+		if (bobol_mesh_lod_cache_refresh(provider.dbip, name,
+			&resident->status) != BRLCAD_OK)
+		    return lod_provider_status_result(request,
+			BOBOL_LOD_PROVIDER_CACHE_MISS,
+			"resident mesh provider could not refresh cache entry");
+		if (getenv("BOBOL_DRAW_TIMING"))
+		    bu_log("[obol-timing] pop cache: refresh %-24s %8.1f ms\n",
+			   name, (bu_gettime() - refreshStarted) / 1000.0);
+	    }
+	    resident->lod = bobol_mesh_lod_get(provider.dbip, name);
 	}
-	resident->lod = bobol_mesh_lod_get(provider.dbip, name);
 	if (!resident->lod)
 	    return lod_provider_status_result(request,
 		resident->status.stale_cache_entry ?
@@ -2503,6 +2761,54 @@ BObolLodService::getQueueLimits(size_t &maxActiveTasks,
     maxQueuedCacheWrites = this->p->maxQueuedCacheWrites;
 }
 
+void
+BObolLodService::setWorkingSetLimit(size_t maxActiveBytes)
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    if (maxActiveBytes > 0) {
+	this->p->maxActiveWorkingSetBytes = maxActiveBytes;
+    } else {
+	this->p->maxActiveWorkingSetBytes =
+	    lod_default_working_set_limit();
+    }
+    this->p->workerCv.notify_all();
+}
+
+size_t
+BObolLodService::getWorkingSetLimit(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->maxActiveWorkingSetBytes;
+}
+
+size_t
+BObolLodService::activeWorkingSetBytesForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->activeWorkingSetBytes;
+}
+
+size_t
+BObolLodService::executingTaskCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->executingTasks;
+}
+
+size_t
+BObolLodService::peakWorkingSetBytesForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->peakWorkingSetBytes;
+}
+
+size_t
+BObolLodService::peakExecutingTaskCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->peakExecutingTasks;
+}
+
 size_t
 BObolLodService::availableResultTaskCapacity(void) const
 {
@@ -2796,6 +3102,39 @@ BObolLodService::residentMeshAssetCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->residentMeshes.size();
+}
+
+size_t
+BObolLodService::residentMeshBytesForDiagnostics(void) const
+{
+    std::vector<std::shared_ptr<BObolResidentMeshAsset>> assets;
+    {
+	std::lock_guard<std::mutex> lock(this->p->mutex);
+	assets.reserve(this->p->residentMeshes.size());
+	for (const auto &entry : this->p->residentMeshes)
+	    assets.push_back(entry.second);
+    }
+
+    size_t bytes = 0;
+    for (const std::shared_ptr<BObolResidentMeshAsset> &asset : assets) {
+	if (!asset)
+	    continue;
+	/* Diagnostics run on the presentation/UI thread.  A cold cache refresh
+	 * owns this mutex while it classifies and persists a very large mesh;
+	 * waiting here turned a harmless telemetry sample into a multi-second
+	 * input stall.  Stable samples see every idle asset exactly.  An in-flight
+	 * sample is intentionally a non-blocking lower bound. */
+	std::unique_lock<std::mutex> lock(asset->mutex, std::try_to_lock);
+	if (!lock.owns_lock())
+	    continue;
+	if (!asset->mesh)
+	    continue;
+	const size_t assetBytes = asset->mesh->estimateBytes();
+	if (assetBytes > std::numeric_limits<size_t>::max() - bytes)
+	    return std::numeric_limits<size_t>::max();
+	bytes += assetBytes;
+    }
+    return bytes;
 }
 
 uint64_t

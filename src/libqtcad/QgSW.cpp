@@ -145,7 +145,7 @@ return;
     qgcanvas_request_obol_render_if_idle(*d, "qtsw-paint");
 
     QImage image;
-    qgcanvas_get_obol_viewport_image(*d, this, image, true, true);
+    qgcanvas_get_obol_viewport_image(*d, this, image, true, true, true);
     if (image.isNull()) {
 	/* Preserve the opaque-widget contract if an offscreen render fails. */
 	QPainter painter(this);
@@ -356,7 +356,7 @@ void QgSW::get_viewport_image(QImage &img)
     img = QImage();  /* null sentinel */
     if (!d->v) return;
 
-    qgcanvas_get_obol_viewport_image(*d, this, img, true);
+    qgcanvas_get_obol_viewport_image(*d, this, img);
 }
 
 void QgSW::get_obol_viewport_image(QImage &img)

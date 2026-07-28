@@ -698,18 +698,32 @@ ged_draw_frontier_path_state(struct ged *gedp,
 			     const char *path,
 			     int mode)
 {
-    frontier_state *state = state_get(gedp, false);
-    if (!state || !path || !path[0])
+    if (!gedp || !path || !path[0])
 	return -1;
 
     path_ids target;
     if (!resolve_path(gedp, canonical_path(path), target))
 	return -1;
 
+    /* The retained database source is itself the semantic visibility
+     * frontier even before it acquires an erase/edit override.  Consulting
+     * only state->roots here missed that overwhelmingly common case because
+     * state->roots intentionally stores only roots with active rules.  The
+     * caller then fell back to enumerating every compact leaf occurrence for
+     * every visible Qt tree row.
+     *
+     * current_roots combines the small, view-scoped group-record set with the
+     * retained rule set.  Query cost is therefore proportional to drawn roots
+     * and path depth, not to leaf count. */
+    std::vector<frontier_root> roots =
+	current_roots(gedp, view_ctx, mode);
+    if (roots.empty())
+	return -1;
+
     bool matched = false;
     bool fully_visible = false;
     bool partially_visible = false;
-    for (const frontier_root &root : state->roots) {
+    for (const frontier_root &root : roots) {
 	if (!root_in_scope(root, view_ctx, mode) ||
 	    !ids_prefix(root.ids, target))
 	    continue;

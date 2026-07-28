@@ -352,8 +352,8 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	controller->isLodGestureActive() ? true : false);
     sample.insert(QStringLiteral("lod_target_pixel_error"),
 	static_cast<double>(controller->getLodTargetPixelError()));
-    sample.insert(QStringLiteral("lod_emergency_progressive_ceiling"),
-	controller->getLodEmergencyProgressiveCeiling());
+    sample.insert(QStringLiteral("lod_interactive_progressive_ceiling"),
+	controller->getLodInteractiveProgressiveCeiling());
     sample.insert(QStringLiteral("lod_visited_meshes"),
 	static_cast<int>(controller->getLastLodVisitedMeshCount()));
     sample.insert(QStringLiteral("lod_submitted_tasks"),
@@ -556,6 +556,23 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	sample.insert(QStringLiteral("lod_service_resident_assets"),
 	    static_cast<qint64>(
 		service->residentMeshAssetCountForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_resident_bytes"),
+	    static_cast<qint64>(
+		service->residentMeshBytesForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_working_set_limit_bytes"),
+	    static_cast<qint64>(service->getWorkingSetLimit()));
+	sample.insert(QStringLiteral("lod_service_active_working_set_bytes"),
+	    static_cast<qint64>(
+		service->activeWorkingSetBytesForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_executing_tasks"),
+	    static_cast<qint64>(
+		service->executingTaskCountForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_peak_working_set_bytes"),
+	    static_cast<qint64>(
+		service->peakWorkingSetBytesForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_peak_executing_tasks"),
+	    static_cast<qint64>(
+		service->peakExecutingTaskCountForDiagnostics()));
 	sample.insert(QStringLiteral("lod_service_cache_loads"),
 	    static_cast<qint64>(
 		service->residentMeshCacheLoadCountForDiagnostics()));
@@ -566,6 +583,16 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	    static_cast<qint64>(
 		service->residentMeshCompactionCountForDiagnostics()));
     }
+    sample.insert(QStringLiteral("lod_global_working_set_limit_bytes"),
+	static_cast<qint64>(bobol_lod_working_set_global_limit()));
+    sample.insert(QStringLiteral("lod_global_active_working_set_bytes"),
+	static_cast<qint64>(bobol_lod_working_set_global_active_bytes()));
+    sample.insert(QStringLiteral("lod_global_active_working_set_tasks"),
+	static_cast<qint64>(bobol_lod_working_set_global_active_tasks()));
+    sample.insert(QStringLiteral("lod_global_peak_working_set_bytes"),
+	static_cast<qint64>(bobol_lod_working_set_global_peak_bytes()));
+    sample.insert(QStringLiteral("lod_global_peak_working_set_tasks"),
+	static_cast<qint64>(bobol_lod_working_set_global_peak_tasks()));
     sample.insert(QStringLiteral("visited_sources"),
 	static_cast<int>(controller->getLastVisitedSourceCount()));
     sample.insert(QStringLiteral("realized_sources"),
@@ -954,8 +981,14 @@ main(int argc, char **argv)
 		const bool deepLodDiagnostics =
 		    i + 1 == events.size() ||
 		    std::getenv("QGED_TEST_DEEP_LOD_REPORT") != NULL;
-		samples.append(qged_test_controller_sample(app, i, events[i],
-		    elapsed.elapsed(), eventMicroseconds, deepLodDiagnostics));
+		QElapsedTimer sampleElapsed;
+		sampleElapsed.start();
+		QJsonObject sample = qged_test_controller_sample(app, i,
+		    events[i], elapsed.elapsed(), eventMicroseconds,
+		    deepLodDiagnostics);
+		sample.insert(QStringLiteral("sample_duration_us"),
+		    sampleElapsed.nsecsElapsed() / 1000);
+		samples.append(sample);
 	    }
 	    report.insert(QStringLiteral("success"), success);
 	    report.insert(QStringLiteral("elapsed_ms"), elapsed.elapsed());

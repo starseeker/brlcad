@@ -87,6 +87,35 @@ static const char ged_obol_database_source_mode_key_marker[] =
     ":ged-draw-mode:";
 static std::atomic<bool> ged_obol_test_force_face_set_failure(false);
 
+/* A serialized database object is only the floor for cold preparation
+ * memory: import owns decoded arrays, and PoP/PCA construction may also own
+ * topology and publication buffers.  Give every database-reading task an
+ * explicit conservative reservation so an unknown (zero) source count never
+ * bypasses the service's byte governor.  Version-4 directory lengths count
+ * 128-byte records rather than bytes. */
+static size_t
+ged_obol_cold_object_working_set_bytes(const struct db_i *dbip,
+	const struct directory *dp, size_t expansion, size_t fixedBytes)
+{
+    if (!dp)
+	return fixedBytes ? fixedBytes : 1;
+
+    size_t encoded = dp->d_len;
+    if (dbip && db_version(dbip) < 5) {
+	if (encoded > SIZE_MAX / sizeof(union record))
+	    encoded = SIZE_MAX;
+	else
+	    encoded *= sizeof(union record);
+    }
+    if (encoded == SIZE_MAX || (expansion && encoded > SIZE_MAX / expansion))
+	return SIZE_MAX;
+    size_t estimate = expansion ? encoded * expansion : encoded;
+    if (estimate > SIZE_MAX - fixedBytes)
+	return SIZE_MAX;
+    estimate += fixedBytes;
+    return estimate ? estimate : 1;
+}
+
 extern "C" void
 ged_draw_test_force_primitive_face_set_failure(int enable)
 {
@@ -3940,6 +3969,12 @@ ged_obol_lod_prewarm_submit_name(BObolLodService *service,
     task.realize = bobol_mesh_lod_cache_provider_task;
     task.realizeData = provider;
     task.realizeDataFree = bobol_mesh_lod_provider_free;
+    /* Cache construction owns source arrays plus PoP topology/prefix buffers.
+     * This task does not yet have decoded face/point counts, so reserve from
+     * its serialized size instead of letting a zero estimate mean unlimited. */
+    task.estimatedWorkingSetBytes =
+	ged_obol_cold_object_working_set_bytes(dbip, dp, 16,
+	    8 * 1024 * 1024);
     task.publishResult = FALSE;
 
     uint64_t taskId = service->submitIfNotActive(task);
@@ -16985,7 +17020,12 @@ ged_obol_store_leaf_proxy_manifest(
 	const SbVec3f bmax = occurrence.summary.bounds.getMax();
 	VSET(cached.boundsMin, bmin[0], bmin[1], bmin[2]);
 	VSET(cached.boundsMax, bmax[0], bmax[1], bmax[2]);
-	cached.booleanOperation = occurrence.booleanOperation;
+	cached.booleanOperation =
+	    occurrence.booleanOperation ==
+		SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? DB_OP_SUBTRACT :
+	    (occurrence.booleanOperation ==
+		SoBRLDatabaseSource::BOOLEAN_INTERSECT ? DB_OP_INTERSECT :
+		DB_OP_UNION);
 	cached.occurrenceIndex = occurrence.occurrenceIndex;
 	if (occurrence.sourceMeshRequestValid) {
 	    const BObolSourceMeshRequest &request =
@@ -17090,8 +17130,16 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 
     struct BObolDrawManifest manifest;
     bobol_draw_manifest_init(&manifest);
-    if (bobol_draw_manifest_cache_get(gedp->dbip, rootPath.c_str(),
-	&manifest) == BRLCAD_OK) {
+    const int64_t manifest_load_start = bu_gettime();
+    const int manifest_status = bobol_draw_manifest_cache_get(gedp->dbip,
+	rootPath.c_str(), &manifest);
+    ged_obol_timing_log(manifest_status == BRLCAD_OK ?
+	"structural: leaf manifest hit" : "structural: leaf manifest miss",
+	manifest_load_start,
+	manifest_status == BRLCAD_OK ?
+	    static_cast<long>(manifest.occurrenceCount) : 0);
+    if (manifest_status == BRLCAD_OK) {
+	const int64_t manifest_publish_start = bu_gettime();
 	std::vector<BObolCompactOccurrence> occurrences;
 	occurrences.reserve(manifest.occurrenceCount);
 	for (size_t i = 0; i < manifest.occurrenceCount; i++) {
@@ -17108,9 +17156,16 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 	if (!occurrences.empty()) {
 	    ged_obol_scene_mutation_batch_scope batch(scene, 1,
 		occurrences.size());
-	    if (root->setCompactOccurrenceRegistry(occurrences) > 0)
-		return ged_obol_database_source_mark_published_current(scene, root);
+	    if (root->setCompactOccurrenceRegistry(occurrences) > 0) {
+		ged_obol_timing_log("structural: publish leaf manifest",
+		    manifest_publish_start,
+		    static_cast<long>(occurrences.size()));
+		return ged_obol_database_source_mark_published_current(scene,
+		    root) ? 2 : 0;
+	    }
 	}
+	ged_obol_timing_log("structural: reject leaf manifest",
+	    manifest_publish_start, static_cast<long>(occurrences.size()));
     }
 
     /* The draw-command path may read one already-batched leaf manifest, but it
@@ -17198,7 +17253,7 @@ ged_obol_publish_deferred_root_proxy(struct ged *gedp,
 	ged_obol_publish_deferred_structural_proxy_snapshot(gedp, view_ctx,
 	    path, source_instance_key, draw_mode, 0, 0, 0, 1);
     if (structural_snapshot != 0)
-	return 1;
+	return structural_snapshot;
 
     /* A cached root AABB is a useful last-resort cold-start presentation.  A
      * cache miss is intentionally not refreshed here: recursive bounds work
@@ -17266,6 +17321,20 @@ ged_obol_submit_child_aabb_prewarm(
     task.realize = bobol_rt_proxy_provider_task;
     task.realizeData = provider;
     task.realizeDataFree = bobol_rt_proxy_provider_free;
+    struct directory *dp = db_lookup(dbip, child_name, LOOKUP_QUIET);
+    if (dp && (dp->d_flags & RT_DIR_COMB)) {
+	/* A recursive combination bound has no useful reservation in the tiny
+	 * combination record itself.  Serialize it against other expensive work;
+	 * rt_obj_bounds releases descendant internals as it walks them. */
+	const size_t limit = service->getWorkingSetLimit();
+	task.estimatedWorkingSetBytes =
+	    limit && limit != SIZE_MAX ? limit : 1024ULL * 1024ULL * 1024ULL;
+    } else {
+	/* Bounding a BoT still deserializes its complete vertex/face arrays. */
+	task.estimatedWorkingSetBytes =
+	    ged_obol_cold_object_working_set_bytes(dbip, dp, 4,
+		2 * 1024 * 1024);
+    }
     task.publishResult = FALSE;
 
     uint64_t task_id = service->submitIfNotActive(task);
@@ -19370,6 +19439,7 @@ ged_obol_apply_draw_paths_to_scene(
     };
 
     if (settings->defer_leaf_expansion) {
+	size_t complete_progressive_roots = 0;
 	for (const std::string &path : draw_paths) {
 	    const int64_t root_start = bu_gettime();
 	    if (ged_obol_direct_draw_root_source(gedp, view_ctx, scene,
@@ -19383,10 +19453,16 @@ ged_obol_apply_draw_paths_to_scene(
 		ged_obol_database_source_instance_key_for_mode(view_ctx,
 		    path.c_str(), settings->draw_mode);
 	    const int64_t proxy_start = bu_gettime();
-	    if (!instance_key.empty() &&
-		ged_obol_publish_deferred_root_proxy(gedp, view_ctx,
-		    path.c_str(), instance_key.c_str(), settings->draw_mode))
-		changed = 1;
+	    if (!instance_key.empty()) {
+		const int proxy_status =
+		    ged_obol_publish_deferred_root_proxy(gedp, view_ctx,
+			path.c_str(), instance_key.c_str(),
+			settings->draw_mode);
+		if (proxy_status != 0)
+		    changed = 1;
+		if (proxy_status == 2)
+		    complete_progressive_roots++;
+	    }
 	    ged_obol_timing_log("draw: publish_root_proxy (coarse)",
 		proxy_start, -1);
 	    if (ged_obol_apply_cached_path_metadata_to_scene(gedp, scene,
@@ -19406,6 +19482,8 @@ ged_obol_apply_draw_paths_to_scene(
 	if (result) {
 	    result->affected_groups = realized_roots;
 	    result->affected_shapes = realized_sources;
+	    result->progressive_data_complete =
+		complete_progressive_roots == draw_paths.size() ? 1 : 0;
 	}
 	return 1;
     }
@@ -20529,6 +20607,7 @@ ged_obol_progressive_autoview_transaction(
     const int successful = !result || result->status >= 0;
     const int deferred = successful &&
 	!(result && result->presentation_only) &&
+	!(result && result->progressive_data_complete) &&
 	txn->kind == GED_DRAW_TXN_DRAW &&
 	ged_obol_transaction_defer_leaf_expansion(txn);
     const int arm_autoview = deferred && txn->autoview;

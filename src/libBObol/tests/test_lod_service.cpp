@@ -3021,6 +3021,127 @@ test_rt_obb_proxy_provider_request_bounds(void)
     return 0;
 }
 
+struct WorkingSetTaskState {
+    std::atomic<int> active{0};
+    std::atomic<int> maximum{0};
+};
+
+static BObolLodResult
+working_set_task(const BObolLodRequest &request, void *userData)
+{
+    WorkingSetTaskState *state =
+	static_cast<WorkingSetTaskState *>(userData);
+    const int active = state->active.fetch_add(1) + 1;
+    int observed = state->maximum.load();
+    while (active > observed &&
+	!state->maximum.compare_exchange_weak(observed, active)) {
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    state->active.fetch_sub(1);
+
+    BObolLodResult result;
+    result.request = request;
+    result.cacheKey = bobol_lod_cache_key(request);
+    result.resultKind = BOBOL_LOD_RESULT_AABB;
+    result.qualityTier = request.qualityTier;
+    result.providerStatus = BOBOL_LOD_PROVIDER_READY;
+    result.terminal = TRUE;
+    result.bounds = request.bounds;
+    return result;
+}
+
+static int
+test_working_set_admission(void)
+{
+    BObolLodService service;
+    WorkingSetTaskState state;
+    service.setWorkingSetLimit(0);
+    if (service.getWorkingSetLimit() == 0) {
+	printf("FAIL: automatic LoD working-set admission limit\n");
+	return 1;
+    }
+    service.setWorkingSetLimit(100);
+    if (service.getWorkingSetLimit() != 100 || !service.start(4, FALSE)) {
+	printf("FAIL: LoD working-set admission setup\n");
+	return 1;
+    }
+
+    for (int i = 0; i < 3; ++i) {
+	BObolLodTask task;
+	SbString name;
+	name.sprintf("/working-set-%d.bot", i);
+	task.request = make_request(name.getString());
+	task.realize = working_set_task;
+	task.realizeData = &state;
+	task.estimatedWorkingSetBytes = 60;
+	if (!service.submit(task)) {
+	    printf("FAIL: LoD working-set task submission\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+    const int waitResult = wait_for_settled(service, 3);
+    const int maximum = state.maximum.load();
+    const size_t activeBytes =
+	service.activeWorkingSetBytesForDiagnostics();
+    const size_t peakBytes =
+	service.peakWorkingSetBytesForDiagnostics();
+    const size_t peakTasks =
+	service.peakExecutingTaskCountForDiagnostics();
+    service.stop();
+    if (waitResult || maximum != 1 || activeBytes != 0 ||
+	peakBytes != 60 || peakTasks != 1) {
+	printf("FAIL: byte-weighted LoD admission exceeded its working-set "
+	       "limit (maximum=%d active_bytes=%zu peak_bytes=%zu "
+	       "peak_tasks=%zu)\n",
+	       maximum, activeBytes, peakBytes, peakTasks);
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_process_working_set_admission(void)
+{
+    const size_t limit = bobol_lod_working_set_global_limit();
+    if (limit < 4 || limit == SIZE_MAX ||
+	bobol_lod_working_set_global_active_bytes() != 0 ||
+	bobol_lod_working_set_global_active_tasks() != 0) {
+	printf("FAIL: process LoD working-set governor setup\n");
+	return 1;
+    }
+
+    const size_t reservation = limit - limit / 4;
+    WorkingSetTaskState state;
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 3; i++) {
+	workers.push_back(std::thread([&]() {
+	    bobol_lod_working_set_acquire(reservation);
+	    const int active = state.active.fetch_add(1) + 1;
+	    int observed = state.maximum.load();
+	    while (active > observed &&
+		!state.maximum.compare_exchange_weak(observed, active)) {
+	    }
+	    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	    state.active.fetch_sub(1);
+	    bobol_lod_working_set_release(reservation);
+	}));
+    }
+    for (std::thread &worker : workers)
+	worker.join();
+
+    if (state.maximum.load() != 1 ||
+	bobol_lod_working_set_global_active_bytes() != 0 ||
+	bobol_lod_working_set_global_active_tasks() != 0 ||
+	bobol_lod_working_set_global_peak_bytes() < reservation ||
+	bobol_lod_working_set_global_peak_tasks() < 1) {
+	printf("FAIL: process LoD working-set governor admitted overlapping "
+	       "large preparations\n");
+	return 1;
+    }
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3072,6 +3193,10 @@ main(int argc, char **argv)
     if (test_detached_database_snapshot())
 	return 1;
     if (test_rt_obb_proxy_provider_request_bounds())
+	return 1;
+    if (test_working_set_admission())
+	return 1;
+    if (test_process_working_set_admission())
 	return 1;
 
     return 0;

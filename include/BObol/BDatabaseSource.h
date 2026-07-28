@@ -258,6 +258,24 @@ struct BOBOL_EXPORT BObolCompactLodInstanceSummary {
     SbBool highlighted;
 };
 
+/* Allocation-light subset used while ranking every leaf in a view.  Full
+ * object/path/cache request strings are materialized only for the bounded
+ * entries that the submit action will actually process. */
+struct BOBOL_EXPORT BObolCompactLodPlanningSummary {
+    BObolCompactLodPlanningSummary(void);
+
+    SbBool valid;
+    SbString sourceInstanceKey;
+    SbMatrix localToSource;
+    SbBox3f localBounds;
+    SbBool meshGeometry;
+    SbBool lodBacked;
+    SbBool sourceMeshRequestValid;
+    SbBool visible;
+    SbBool selected;
+    SbBool highlighted;
+};
+
 struct BOBOL_EXPORT BObolAuxiliaryLineSetDisplayState {
     BObolAuxiliaryLineSetDisplayState(void);
 
@@ -500,6 +518,7 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
 
     std::mutex mutex;
     std::vector<BObolCompactOccurrence> pending;
+    size_t pendingOffset = 0;
     std::atomic<bool> cancelled{false};
 };
 
@@ -985,6 +1004,13 @@ public:
      * epoch and avoids a second instance-id hash lookup. */
     SbBool getCompactLodInstanceSummary(int index,
 	BObolCompactLodInstanceSummary &summary) const;
+    SbBool getCompactLodPlanningSummary(int index,
+	BObolCompactLodPlanningSummary &summary) const;
+    /* Constant-time occurrence lookup for scene-wide retained-LoD
+     * admission.  This avoids rescanning every structural leaf when only
+     * the already-displayed mesh bindings need to be coarsened. */
+    SbBool getCompactLodPlanningSummaryForKey(const char *occurrenceKey,
+	BObolCompactLodPlanningSummary &summary) const;
     SbBool isCompactInstanceHandleValid(
 	const BObolCompactInstanceHandle &handle) const;
     /* Constant-time occurrence lookup used by per-view LoD result routing. */

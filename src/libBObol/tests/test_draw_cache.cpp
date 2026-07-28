@@ -753,6 +753,20 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    if (!make_manifest(&manifest)) {
+	printf("FAIL: draw manifest invalid-operation setup\n");
+	ret = 1;
+	goto cleanup;
+    }
+    manifest.occurrences[0].booleanOperation = 0;
+    if (bobol_draw_manifest_cache_store(dbip, path_top_name, &manifest) !=
+	BRLCAD_ERROR) {
+	printf("FAIL: draw manifest accepted non-database boolean operation\n");
+	ret = 1;
+	goto cleanup;
+    }
+    bobol_draw_manifest_free(&manifest);
+
     if (bobol_draw_proxy_cache_store(dbip, objname, BOBOL_LOD_PROXY_OBB,
 				       obbPoints, 8, &status) != BRLCAD_OK ||
 	bobol_draw_proxy_cache_get(dbip, objname, BOBOL_LOD_PROXY_OBB,

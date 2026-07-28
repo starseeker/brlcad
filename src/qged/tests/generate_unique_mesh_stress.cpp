@@ -130,7 +130,7 @@ main(int argc, char **argv)
 
     size_t meshCount = 5000;
     size_t maxGridCells = 224;
-    if ((argc > 2 && !parse_positive(argv[2], 10000, meshCount)) ||
+    if ((argc > 2 && !parse_positive(argv[2], 250000, meshCount)) ||
 	(argc > 3 && !parse_positive(argv[3], 256, maxGridCells))) {
 	std::fprintf(stderr, "mesh count or grid cell count is out of range\n");
 	return 2;

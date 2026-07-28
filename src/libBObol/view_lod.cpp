@@ -1411,10 +1411,10 @@ BObolViewLodState::residentMeshDemands(
 	if (!payload || !payload->progressiveMesh ||
 	    !payload->progressiveMesh->isValid() ||
 	    payload->cacheKey.getLength() == 0 ||
-	    payload->requestedLevel < 0)
+	    payload->activeLevel < 0)
 	    continue;
 	int &level = maximumLevels[payload->cacheKey.getString()];
-	level = std::max(level, payload->requestedLevel);
+	level = std::max(level, payload->activeLevel);
     }
 
     for (const auto &source : this->cadSourceBindings)
@@ -1423,10 +1423,10 @@ BObolViewLodState::residentMeshDemands(
 	    if (!payload || !payload->progressiveMesh ||
 		!payload->progressiveMesh->isValid() ||
 		payload->cacheKey.getLength() == 0 ||
-		payload->requestedLevel < 0)
+		payload->activeLevel < 0)
 		continue;
 	    int &level = maximumLevels[payload->cacheKey.getString()];
-	    level = std::max(level, payload->requestedLevel);
+	    level = std::max(level, payload->activeLevel);
 	}
 
     demands.reserve(maximumLevels.size());

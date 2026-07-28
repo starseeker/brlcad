@@ -356,7 +356,7 @@ void QgGL::get_viewport_image(QImage &img)
     if (!d->v)
 	return;
 
-    qgcanvas_get_obol_viewport_image(*d, this, img, true);
+    qgcanvas_get_obol_viewport_image(*d, this, img);
 }
 
 void QgGL::get_obol_viewport_image(QImage &img)

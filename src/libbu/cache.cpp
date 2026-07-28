@@ -24,6 +24,7 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <mutex>
@@ -137,8 +138,13 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
     if (!mreaders)
 	mreaders = 1;
     int ncpus = bu_avail_cpus();
-    if (ncpus > 0 && (size_t)ncpus > mreaders)
-	mreaders = (size_t)ncpus + 2;
+    if (ncpus > 0)
+	mreaders = std::max(mreaders, static_cast<size_t>(ncpus));
+    /* A process can have multiple worker pools and ordinary callers holding
+     * read transactions in addition to its nominal CPU-sized pool.  Reader
+     * slots are inexpensive LMDB bookkeeping; sizing them exactly to CPU
+     * count made legitimate concurrent cache reads intermittently fail. */
+    mreaders = std::max(static_cast<size_t>(64), mreaders + 8);
 
     // Set up LMDB environments
     if (mdb_env_create(&c->i->env))
@@ -300,6 +306,9 @@ bu_cache_get(void **data, const char *key, struct bu_cache *c, struct bu_cache_t
     mdb_key.mv_data = (void *)key;
     int rc = mdb_get(txn, c->i->dbi, &mdb_key, &mdb_data[0]);
     if (rc) {
+	if (rc != MDB_NOTFOUND)
+	    bu_log("Error - cache read failed for key '%s': %d (%s)\n",
+		key, rc, mdb_strerror(rc));
 	if (data)
 	    (*data) = NULL;
 	if (!t)

@@ -354,8 +354,8 @@ main(int argc, char **argv)
     view.get_viewport_image(visibleImage);
     if (visibleImage.isNull() || lit_pixel_count(visibleImage) < 10)
 	FAIL("QgView visible SW capture should use populated Obol scenes");
-    if (controller->isRenderRequested())
-	FAIL("QgView visible SW capture should consume Obol render requests");
+    if (!controller->isRenderRequested())
+	FAIL("QgView visible SW capture should be observational");
 
     struct bv *fpsView = bv_context_view(static_cast<struct bv_context *>(view.viewContext()));
     struct bv_params_state fpsParams = BV_PARAMS_STATE_INIT;
@@ -543,8 +543,9 @@ main(int argc, char **argv)
 	glView.get_viewport_image(glVisibleImage);
 	if (glVisibleImage.isNull() || lit_pixel_count(glVisibleImage) < 10)
 	    FAIL("QgGL visible capture should use Obol readback before first paint");
-	if (glController->isRenderRequested())
-	    FAIL("QgGL visible capture should consume Obol render requests");
+	if (!glController->isRenderRequested())
+	    FAIL("QgGL visible capture should be observational");
+	glController->clearRenderRequest();
 
 #ifdef BRLCAD_OPENGL
 	TestQgGL glCanvas(NULL);

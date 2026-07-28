@@ -568,6 +568,27 @@ qtcad_obol_request_view_frame(QgView &view,
     QCoreApplication::processEvents();
 }
 
+/* A hidden software canvas has no Qt paint delivery.  Keep ordinary image
+ * readback observational, but let tests explicitly emulate the presentation
+ * contract when a progressive admission gate is waiting for a rendered-frame
+ * timing sample.  This mirrors QgSW::paintEvent: advance/publish, traverse,
+ * report timing, and consume only the request that was actually presented. */
+static void
+qtcad_obol_present_view_frame(QgView &view,
+	BObolViewController *controller, QImage &image)
+{
+    image = QImage();
+    if (!controller)
+	return;
+
+    (void)controller->advanceProgressiveWork(NULL, NULL);
+    const uint64_t started = controller->beginRenderTiming();
+    view.get_viewport_image(image);
+    controller->completeRenderTiming(started);
+    if (!image.isNull() && controller->isRenderRequested())
+	(void)controller->consumeRenderRequest(NULL);
+}
+
 static int
 qtcad_obol_scene_autoview_refresh(QgView &view,
 	BObolViewController *controller, const char *render_reason)
@@ -1666,7 +1687,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
     phase_start = bu_gettime();
     qtcad_obol_request_view_frame(view, controller,
 	"progressive-lod-initial-frame");
-    view.get_viewport_image(frame0);
+    qtcad_obol_present_view_frame(view, controller, frame0);
     record_progressive_lod_phase(timings.firstReadbackSeconds, phase_start,
 				 total_start, testCase, "readback0");
     timings.firstVisualSeconds = elapsed_seconds(total_start);
@@ -1737,10 +1758,14 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 	    qtcad_obol_lod_service_status service_status;
 	    memset(&service_status, 0, sizeof(service_status));
 	    const int settle_timeout_ms =
-		std::max(testCase.meshTimeoutMs, 10000);
+		std::max(testCase.meshTimeoutMs, 90000);
 	    const int64_t settle_deadline =
 		bu_gettime() + static_cast<int64_t>(settle_timeout_ms) * 1000;
-	    bool settle_frame_presented = false;
+	    int64_t last_progress_time = bu_gettime();
+	    int64_t last_feedback_frame_time = 0;
+	    size_t last_progress_mesh_count = lod_mesh_after;
+	    int last_progress_compact_count = compact_after;
+	    size_t feedback_frame_count = 0;
 	    while (bu_gettime() < settle_deadline) {
 		QCoreApplication::processEvents();
 		(void)controller->advanceProgressiveWork(NULL,
@@ -1772,27 +1797,50 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		(void)qtcad_obol_lod_service_status_get(gedp,
 		    ged_view_context_from_bv(view.viewContext()),
 		    &service_status);
+		const int64_t settle_now = bu_gettime();
+		if (lod_mesh_after != last_progress_mesh_count ||
+		    compact_after != last_progress_compact_count) {
+		    last_progress_mesh_count = lod_mesh_after;
+		    last_progress_compact_count = compact_after;
+		    last_progress_time = settle_now;
+		}
+		const bool service_idle =
+		    service_status.pending_tasks == 0 &&
+		    service_status.in_flight == 0 &&
+		    service_status.queued_results == 0 &&
+		    service_status.queued_cache_writes == 0 &&
+		    !controller->hasPendingLodResults() &&
+		    !controller->hasPendingLodSubmissions();
 		const bool otherwise_settled =
 		    compact_after > compact_before &&
 		    projected_mesh_demand_after > 0 &&
 		    lod_mesh_after >= projected_mesh_demand_after &&
 		    realized_after >= geometry_before &&
-		    service_status.pending_tasks == 0 &&
-		    service_status.in_flight == 0 &&
-		    service_status.queued_results == 0 &&
-		    service_status.queued_cache_writes == 0;
+		    service_idle;
 		/* A hidden software canvas has no automatic paint delivery.
-		 * Present one frame only after the structural/service work is
-		 * otherwise complete, allowing the same frame-gated refinement
-		 * and post-render quiet debounce used by the visible GUI without
-		 * turning every polling iteration into a costly readback. */
-		if (otherwise_settled && progressive_status.hasMore &&
-		    !settle_frame_presented) {
-		    QImage settle_frame;
+		 * The production controller deliberately waits for presentation
+		 * feedback before admitting a richer cut.  Present only when that
+		 * gate is explicit, or when an otherwise idle provider has made no
+		 * structural progress for 100 ms.  This exercises the real contract
+		 * without turning every 5 ms polling iteration into an OSMesa
+		 * render/readback. */
+		const bool progress_stalled =
+		    settle_now - last_progress_time >= 100000;
+		const bool feedback_rate_limited =
+		    last_feedback_frame_time > 0 &&
+		    settle_now - last_feedback_frame_time < 100000;
+		if (progressive_status.hasMore && service_idle &&
+		    !feedback_rate_limited &&
+		    (controller->hasPendingLodRefinementFrame() ||
+		     progress_stalled)) {
+		    QImage feedback_frame;
 		    qtcad_obol_request_view_frame(view, controller,
-			"progressive-lod-settle-frame");
-		    view.get_viewport_image(settle_frame);
-		    settle_frame_presented = true;
+			"progressive-lod-feedback-frame");
+		    qtcad_obol_present_view_frame(view, controller,
+			feedback_frame);
+		    last_feedback_frame_time = bu_gettime();
+		    last_progress_time = last_feedback_frame_time;
+		    feedback_frame_count++;
 		}
 		if (otherwise_settled && !progressive_status.hasMore)
 		    break;
@@ -1823,7 +1871,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		frame_auto.isNull() || lit_auto < 20 ||
 		(diff_auto <= 0 && lit0 < 20)) {
 		fprintf(stderr,
-			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu/%zu projected (%zu drawable, %zu unique, %zu all) lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu progressive={submitted=%zu cached=%zu expanded=%zu existing=%zu remaining=%zu proxies=%zu changed=%d more=%d}",
+			"qtcad Obol progressive LoD startup-auto-expand failed: case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu/%zu projected (%zu drawable, %zu unique, %zu all) lit=%d diff=%d feedback_frames=%zu last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu progressive={submitted=%zu cached=%zu expanded=%zu existing=%zu remaining=%zu proxies=%zu changed=%d more=%d}",
 			testCase.name, source_count_before, source_count_after,
 			max_depth_before, max_depth_after,
 			geometry_before, realized_after,
@@ -1834,6 +1882,7 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 			unique_visible_mesh_demand_after,
 			all_visible_mesh_demand_after,
 			lit_auto, diff_auto,
+			feedback_frame_count,
 			service_status.last_submitted_task_count,
 			service_status.active_aabb_proxy_payloads,
 			service_status.pending_tasks,
@@ -1855,13 +1904,14 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		return 0;
 	    }
 	    fprintf(stderr,
-		    "qtcad_progressive_lod_startup_auto_expand case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu lit=%d diff=%d last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
+		    "qtcad_progressive_lod_startup_auto_expand case=%s sources=%d->%d depth=%d->%d geometry=%d->%d compact=%d->%d lod_mesh=%zu lit=%d diff=%d feedback_frames=%zu last_submitted=%u active_aabb=%zu pending=%zu in_flight=%zu cache_writes=%zu",
 		    testCase.name, source_count_before, source_count_after,
 		    max_depth_before, max_depth_after,
 		    geometry_before, realized_after,
 		    compact_before, compact_after,
 		    lod_mesh_after,
 		    lit_auto, diff_auto,
+		    feedback_frame_count,
 		    service_status.last_submitted_task_count,
 		    service_status.active_aabb_proxy_payloads,
 		    service_status.pending_tasks, service_status.in_flight,

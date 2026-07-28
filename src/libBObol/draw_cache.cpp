@@ -25,6 +25,7 @@
 #include "bu/vls.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -52,7 +53,7 @@
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
 #define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 1u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
-#define BOBOL_DRAW_MANIFEST_DISK_VERSION 2u
+#define BOBOL_DRAW_MANIFEST_DISK_VERSION 3u
 
 struct BObolDrawCacheContext {
     bu_cache *cache;
@@ -2123,6 +2124,13 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	if (pathLength > UINT32_MAX || sourceNameLength > UINT32_MAX ||
 	    meshAssetPathLength > UINT32_MAX ||
 	    meshAssetNameLength > UINT32_MAX ||
+	    (occurrence.metadataValid != 0 && occurrence.metadataValid != 1) ||
+	    (occurrence.sourceMeshRequestValid != 0 &&
+	     occurrence.sourceMeshRequestValid != 1) ||
+	    !bobol_draw_manifest_boolean_valid(occurrence.booleanOperation) ||
+	    !bobol_draw_manifest_matrix_valid(occurrence.localMatrix) ||
+	    !bobol_draw_proxy_bbox_valid(occurrence.boundsMin,
+		occurrence.boundsMax) ||
 	    (occurrence.sourceMeshRequestValid &&
 	     (!meshAssetPathLength || !meshAssetNameLength ||
 	      !bobol_draw_proxy_bbox_valid(occurrence.meshAssetBoundsMin,
@@ -2246,6 +2254,9 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
     }
     bu_semaphore_release(sem);
     if (!data || dataSize < sizeof(BObolDrawManifestDiskHeader)) {
+	if (getenv("BOBOL_DRAW_TIMING"))
+	    bu_log("[obol-timing] manifest cache record unavailable for %s "
+		"(bytes=%zu)\n", rootPath, dataSize);
 	if (data)
 	    bu_free(data, "bobol draw manifest data");
 	return BRLCAD_ERROR;
@@ -2254,12 +2265,23 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
     BObolDrawManifestDiskHeader header;
     memcpy(&header, data, sizeof(header));
     const size_t rootLength = strlen(rootPath);
+    const uint64_t currentFingerprint =
+	bobol_draw_cache_database_fingerprint(dbip);
     if (rootLength > UINT32_MAX ||
 	header.magic != BOBOL_DRAW_MANIFEST_DISK_MAGIC ||
 	header.version != BOBOL_DRAW_MANIFEST_DISK_VERSION ||
-	header.databaseFingerprint != bobol_draw_cache_database_fingerprint(dbip) ||
+	header.databaseFingerprint != currentFingerprint ||
 	header.rootPathLength != rootLength || !header.occurrenceCount ||
 	header.occurrenceCount > SIZE_MAX / sizeof(BObolDrawManifestOccurrence)) {
+	if (getenv("BOBOL_DRAW_TIMING"))
+	    bu_log("[obol-timing] manifest cache header rejected for %s "
+		"(magic=%08x version=%u fingerprint=%llu/%llu "
+		"root_length=%u/%zu occurrences=%llu bytes=%zu)\n",
+		rootPath, header.magic, header.version,
+		(unsigned long long)header.databaseFingerprint,
+		(unsigned long long)currentFingerprint,
+		header.rootPathLength, rootLength,
+		(unsigned long long)header.occurrenceCount, dataSize);
 	bu_free(data, "bobol draw manifest data");
 	return BRLCAD_ERROR;
     }
@@ -2268,6 +2290,9 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
     size_t offset = sizeof(header);
     if (rootLength > dataSize - offset ||
 	memcmp(bytes + offset, rootPath, rootLength) != 0) {
+	if (getenv("BOBOL_DRAW_TIMING"))
+	    bu_log("[obol-timing] manifest cache root rejected for %s\n",
+		rootPath);
 	bu_free(data, "bobol draw manifest data");
 	return BRLCAD_ERROR;
     }
@@ -2330,6 +2355,10 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	    (occurrenceHeader.metadataValid &&
 	     !bobol_draw_metadata_disk_valid(&occurrenceHeader.metadata,
 		 sizeof(occurrenceHeader.metadata)))) {
+	    if (getenv("BOBOL_DRAW_TIMING"))
+		bu_log("[obol-timing] manifest cache occurrence rejected for "
+		    "%s at %zu/%zu (offset=%zu bytes=%zu)\n", rootPath, i,
+		    loaded.occurrenceCount, offset, dataSize);
 	    valid = 0;
 	    break;
 	}
@@ -2377,6 +2406,9 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	    &occurrenceHeader.metadata);
     }
     if (!valid || offset != dataSize) {
+	if (getenv("BOBOL_DRAW_TIMING"))
+	    bu_log("[obol-timing] manifest cache body rejected for %s "
+		"(offset=%zu bytes=%zu)\n", rootPath, offset, dataSize);
 	bobol_draw_manifest_free(&loaded);
 	bu_free(data, "bobol draw manifest data");
 	return BRLCAD_ERROR;

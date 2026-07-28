@@ -5790,8 +5790,8 @@ test_view_controller_lod_submit_and_apply(void)
 		if (activePayload->activeLevel != savedActiveLevel ||
 		    activePayload->requestedLevel != pendingRequestedLevel ||
 		    demands.size() != 1 ||
-		    demands[0].level != pendingRequestedLevel) {
-		    printf("FAIL: resident demand collapsed to the temporary active PoP cut\n");
+		    demands[0].level != savedActiveLevel) {
+		    printf("FAIL: resident demand did not follow the stable active PoP cut\n");
 		    service.stop();
 		    root->unref();
 		    bobol_mesh_lod_cache_clear_database(dbip);
@@ -6923,6 +6923,9 @@ test_compact_many_leaf_scene_admission(void)
 	retainedAdmission.setRetainedSceneFaceBudget(4);
 	retainedAdmission.setSubmissionTaskLimit(0);
 	retainedAdmission.setCompactEntryPlan(pinnedPlan);
+	/* Retained recovery is scene-wide even when provider/cache submission is
+	 * restricted to the first interactive window. */
+	retainedAdmission.setCompactEntryRange(0, 1);
 	retainedAdmission.apply(source);
 	if (retainedAdmission.getRetainedSceneFaceBudgetUsed() != 4 ||
 	    retainedAdmission.getUpdatedCutCount() != 1 ||

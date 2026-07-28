@@ -37,8 +37,10 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #define POP_MAXLEVEL 16
@@ -60,7 +62,8 @@ struct BObolMeshLodContextInternal {
     struct bu_cache *nameCache;
     struct bu_vls *fname;
     char *registryKey;
-    std::mutex *accessMutex;
+    std::shared_mutex *accessMutex;
+    std::unordered_map<std::string, unsigned long long> *nameKeys;
 };
 
 struct BObolMeshLodContext {
@@ -366,6 +369,7 @@ mesh_lod_context_close(struct BObolMeshLodContext *context)
 	}
 	if (context->i->registryKey)
 	    bu_free(context->i->registryKey, "mesh lod context registry key");
+	delete context->i->nameKeys;
 	delete context->i->accessMutex;
 	BU_PUT(context->i, struct BObolMeshLodContextInternal);
     }
@@ -403,17 +407,23 @@ mesh_lod_context_create(const char *name)
     if (!name)
 	return NULL;
 
+    /* bu_path_normalize returns one process-global scratch buffer.  Context
+     * creation is already registry-serialized; normalize and copy inside that
+     * critical section so concurrent LoD workers cannot corrupt one another's
+     * cache identity before the registry lookup. */
+    std::lock_guard<std::mutex> guard(mesh_lod_context_registry_mutex());
+    const std::string normalizedPath(bu_path_normalize(name));
     struct bu_vls fname = BU_VLS_INIT_ZERO;
-    bu_vls_sprintf(&fname, "%s", bu_path_normalize(name));
+    bu_vls_sprintf(&fname, "%s", normalizedPath.c_str());
     if (bu_vls_strlen(&fname) < 10)
 	bu_vls_printf(&fname, "GGGGGGGGGGGGG");
     unsigned long long hash = bu_data_hash(bu_vls_cstr(&fname),
 					   bu_vls_strlen(&fname) * sizeof(char));
-    bu_path_component(&fname, bu_path_normalize(name), BU_PATH_BASENAME_EXTLESS);
+    bu_path_component(&fname, normalizedPath.c_str(),
+	BU_PATH_BASENAME_EXTLESS);
     bu_vls_printf(&fname, "_%llu", hash);
 
     std::string registryKey(bu_vls_cstr(&fname));
-    std::lock_guard<std::mutex> guard(mesh_lod_context_registry_mutex());
     {
 	auto it = mesh_lod_context_registry().find(registryKey);
 	if (it != mesh_lod_context_registry().end()) {
@@ -434,8 +444,17 @@ mesh_lod_context_create(const char *name)
     internal->registryKey = bu_strdup(registryKey.c_str());
     internal->lodCache = NULL;
     internal->nameCache = NULL;
-    internal->accessMutex = new (std::nothrow) std::mutex;
+    internal->nameKeys = NULL;
+    internal->accessMutex = new (std::nothrow) std::shared_mutex;
     if (!internal->accessMutex) {
+	mesh_lod_context_close(context);
+	bu_vls_free(&fname);
+	return NULL;
+    }
+    internal->nameKeys =
+	new (std::nothrow) std::unordered_map<std::string,
+	    unsigned long long>;
+    if (!internal->nameKeys) {
 	mesh_lod_context_close(context);
 	bu_vls_free(&fname);
 	return NULL;
@@ -519,6 +538,14 @@ mesh_lod_key_get(struct BObolMeshLodContext *context, const char *name)
     if (!context || !name)
 	return 0;
 
+    {
+	std::shared_lock<std::shared_mutex> lock(
+	    *context->i->accessMutex);
+	const auto found = context->i->nameKeys->find(name);
+	if (found != context->i->nameKeys->end())
+	    return found->second;
+    }
+
     struct bu_vls keystr = BU_VLS_INIT_ZERO;
     bu_vls_sprintf(&keystr, "%s", name);
     if (bu_vls_strlen(&keystr) < 10)
@@ -528,7 +555,7 @@ mesh_lod_key_get(struct BObolMeshLodContext *context, const char *name)
     bu_vls_sprintf(&keystr, "%llu:namekey", hash);
 
     void *data = NULL;
-    std::unique_lock<std::mutex> lock(*context->i->accessMutex);
+    std::shared_lock<std::shared_mutex> lock(*context->i->accessMutex);
     size_t dsize = bu_cache_get(&data, bu_vls_cstr(&keystr),
 				context->i->nameCache, NULL);
     lock.unlock();
@@ -538,6 +565,11 @@ mesh_lod_key_get(struct BObolMeshLodContext *context, const char *name)
 
     unsigned long long meshKey = *(unsigned long long *)data;
     bu_free(data, "lod key data");
+    {
+	std::unique_lock<std::shared_mutex> memoryLock(
+	    *context->i->accessMutex);
+	(*context->i->nameKeys)[name] = meshKey;
+    }
     return meshKey;
 }
 
@@ -557,10 +589,12 @@ mesh_lod_key_put(struct BObolMeshLodContext *context,
 					   bu_vls_strlen(&keystr) * sizeof(char));
     bu_vls_sprintf(&keystr, "%llu:namekey", hash);
 
-    std::unique_lock<std::mutex> lock(*context->i->accessMutex);
+    std::unique_lock<std::shared_mutex> lock(*context->i->accessMutex);
     size_t wsize = bu_cache_write((void *)&key, sizeof(key),
 				  bu_vls_cstr(&keystr),
 				  context->i->nameCache, NULL);
+    if (wsize > 0)
+	(*context->i->nameKeys)[name] = key;
     lock.unlock();
     bu_vls_free(&keystr);
     return (wsize > 0) ? 0 : -1;
@@ -657,7 +691,7 @@ private:
     struct BObolMeshLodContext *context = NULL;
     struct bu_cache_txn *readTxn = NULL;
     struct bu_cache_txn *writeTxn = NULL;
-    std::unique_lock<std::mutex> readLock;
+    std::shared_lock<std::shared_mutex> readLock;
 };
 
 void
@@ -870,60 +904,31 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 				       pow(2, (POP_MAXLEVEL - levelIndex - 1))));
     hash = key;
 
-    {
-	const char *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, CACHE_POP_MAX_LEVEL);
-	if (!bufferSize || bufferSize != sizeof(maxPopLevel)) {
-	    cacheDone();
-	    return;
-	}
-	memcpy(&maxPopLevel, buffer, sizeof(maxPopLevel));
+    /* These records form one immutable hierarchy header.  Read them through
+     * one LMDB snapshot: besides cutting transaction churn, this prevents a
+     * handle from accepting a mixture of records if an invalidation races
+     * with construction. */
+    const auto readMetadata = [this](const char *component, void *output,
+	    size_t expected) -> bool {
+	void *buffer = NULL;
+	const size_t size = cacheGet(&buffer, component);
+	if (size != expected || !buffer)
+	    return false;
+	memcpy(output, buffer, expected);
+	return true;
+    };
+    if (!readMetadata(CACHE_POP_MAX_LEVEL, &maxPopLevel,
+	    sizeof(maxPopLevel)) ||
+	!readMetadata(CACHE_POP_MIN_LEVEL, &minPopLevel,
+	    sizeof(minPopLevel)) ||
+	!readMetadata(CACHE_SHADED_CULL_BACKFACES,
+	    &shadedCullBackfaces, sizeof(shadedCullBackfaces)) ||
+	!readMetadata(CACHE_VERTEX_COUNT, levelVertexCount,
+	    sizeof(levelVertexCount)) ||
+	!readMetadata(CACHE_TRI_COUNT, levelTriangleCount,
+	    sizeof(levelTriangleCount))) {
 	cacheDone();
-    }
-
-    {
-	const char *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, CACHE_POP_MIN_LEVEL);
-	if (!bufferSize || bufferSize != sizeof(minPopLevel)) {
-	    cacheDone();
-	    return;
-	}
-	memcpy(&minPopLevel, buffer, sizeof(minPopLevel));
-	cacheDone();
-    }
-
-    {
-	const char *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer,
-				     CACHE_SHADED_CULL_BACKFACES);
-	if (!bufferSize || bufferSize != sizeof(shadedCullBackfaces)) {
-	    cacheDone();
-	    return;
-	}
-	memcpy(&shadedCullBackfaces, buffer, sizeof(shadedCullBackfaces));
-	cacheDone();
-    }
-
-    {
-	const char *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, CACHE_VERTEX_COUNT);
-	if (bufferSize != sizeof(levelVertexCount)) {
-	    cacheDone();
-	    return;
-	}
-	memcpy(&levelVertexCount, buffer, sizeof(levelVertexCount));
-	cacheDone();
-    }
-
-    {
-	const char *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, CACHE_TRI_COUNT);
-	if (bufferSize != sizeof(levelTriangleCount)) {
-	    cacheDone();
-	    return;
-	}
-	memcpy(&levelTriangleCount, buffer, sizeof(levelTriangleCount));
-	cacheDone();
+	return;
     }
 
     {
@@ -945,8 +950,8 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	maxx = minmax[3];
 	maxy = minmax[4];
 	maxz = minmax[5];
-	cacheDone();
     }
+    cacheDone();
 
     /* Metadata validation must not also read geometry.  The caller supplies
      * the view-selected target immediately after opening the handle, so
@@ -992,6 +997,12 @@ BObolPopState::triPopLoad(int startLevel, int level,
 {
     struct bu_vls keyBuffer = BU_VLS_INIT_ZERO;
 
+    /* A requested PoP prefix is one immutable cache snapshot.  Keep the LMDB
+     * read transaction open while copying every vertex, triangle, and normal
+     * chunk in the prefix.  Finishing a transaction after every component
+     * made a 50k-asset warm scene perform hundreds of thousands of tiny read
+     * transactions and reduced an otherwise memory-resident cache to roughly
+     * a hundred meshes per second. */
     for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
 	if (!levelVertexCount[levelIndex])
 	    continue;
@@ -1005,7 +1016,6 @@ BObolPopState::triPopLoad(int startLevel, int level,
 	}
 	lodTriPoints.insert(lodTriPoints.end(), &buffer[0],
 			    &buffer[levelVertexCount[levelIndex] * 3]);
-	cacheDone();
     }
 
     if (materializeSnapped)
@@ -1026,7 +1036,6 @@ BObolPopState::triPopLoad(int startLevel, int level,
 	}
 	lodTris.insert(lodTris.end(), &buffer[0],
 		       &buffer[levelTriangleCount[levelIndex] * 3]);
-	cacheDone();
     }
 
     for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
@@ -1045,9 +1054,9 @@ BObolPopState::triPopLoad(int startLevel, int level,
 	    lodTriNormals.insert(lodTriNormals.end(), &buffer[0],
 				 &buffer[levelTriangleCount[levelIndex] * 3 * 3]);
 	}
-	cacheDone();
     }
 
+    cacheDone();
     bu_vls_free(&keyBuffer);
     return true;
 }
@@ -1272,10 +1281,12 @@ BObolPopState::cacheGet(void **data, const char *component)
 {
     if (context && context->i && context->i->accessMutex &&
 	!readLock.owns_lock())
-	readLock = std::unique_lock<std::mutex>(*context->i->accessMutex);
+	readLock =
+	    std::shared_lock<std::shared_mutex>(*context->i->accessMutex);
     std::string keystr = std::to_string(hash) + std::string(":") +
 			 std::string(component);
-    return bu_cache_get(data, keystr.c_str(), context->i->lodCache, &readTxn);
+    return bu_cache_get(data, keystr.c_str(), context->i->lodCache,
+	&readTxn);
 }
 
 void
@@ -1439,7 +1450,8 @@ BObolPopState::cache(void)
 
     int writeSem = mesh_lod_cache_write_semaphore();
     bu_semaphore_acquire(writeSem);
-    std::unique_lock<std::mutex> cacheLock(*context->i->accessMutex);
+    std::unique_lock<std::shared_mutex> cacheLock(
+	*context->i->accessMutex);
 
     {
 	std::stringstream stream;
@@ -1686,10 +1698,11 @@ mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
 			     unsigned long long key)
 {
     char dir[MAXPATHLEN];
-    std::unique_lock<std::mutex> lock;
+    std::unique_lock<std::shared_mutex> lock;
 
     if (context && context->i && context->i->accessMutex)
-	lock = std::unique_lock<std::mutex>(*context->i->accessMutex);
+	lock =
+	    std::unique_lock<std::shared_mutex>(*context->i->accessMutex);
 
     if (context && key) {
 	mesh_lod_cache_del(context, key, CACHE_POP_MAX_LEVEL);
@@ -1725,10 +1738,18 @@ mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
 	}
 	if (nkeys)
 	    bu_argv_free(static_cast<size_t>(nkeys), keysv);
+	for (auto it = context->i->nameKeys->begin();
+	     it != context->i->nameKeys->end();) {
+	    if (it->second == key)
+		it = context->i->nameKeys->erase(it);
+	    else
+		++it;
+	}
 	return;
     }
 
     if (context && !key) {
+	context->i->nameKeys->clear();
 	char **keysv = NULL;
 	int nkeys = bu_cache_keys(&keysv, context->i->lodCache);
 	for (int keyIndex = 0; keyIndex < nkeys; keyIndex++)
@@ -2261,6 +2282,12 @@ bobol_mesh_lod_get(struct db_i *dbip, const char *name)
     }
 
     return lod;
+}
+
+unsigned long long
+bobol_mesh_lod_cache_key_get(const struct BObolMeshLod *lod)
+{
+    return lod && lod->state ? lod->state->hash : 0;
 }
 
 int

@@ -249,9 +249,13 @@ BObolLodProgressiveMesh::update(
     if (data.point_orig_count < oldPointCount || indexCount < oldIndexCount) {
 	/* This is an explicit stable-view trim. */
 	this->p->mesh.points.resize(data.point_orig_count);
+	this->p->mesh.points.shrink_to_fit();
 	this->p->mesh.coordIndex.resize(indexCount);
-	if (!this->p->mesh.normals.empty())
+	this->p->mesh.coordIndex.shrink_to_fit();
+	if (!this->p->mesh.normals.empty()) {
 	    this->p->mesh.normals.resize(indexCount);
+	    this->p->mesh.normals.shrink_to_fit();
+	}
     } else {
 	this->p->mesh.points.reserve(data.point_orig_count);
 	for (size_t i = oldPointCount; i < data.point_orig_count; ++i) {

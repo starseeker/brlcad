@@ -158,6 +158,7 @@ struct ged_draw_transaction_result {
     int redrawn_count;
     int error_count;
     int presentation_only;            /**< retained source data changed only by instance visibility/style */
+    int progressive_data_complete;     /**< retained root already has complete leaf/source request registry */
     uint64_t scene_revision_before;
     uint64_t scene_revision_after;
     struct bu_vls names;              /**< affected user-facing target names */

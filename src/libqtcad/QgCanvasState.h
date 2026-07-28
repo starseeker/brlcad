@@ -285,14 +285,20 @@ qgcanvas_initialize_obol_background(QgCanvasState &s)
 static inline void
 qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img,
 				 bool consumeRenderRequest = false,
-				 bool borrowRendererBuffer = false)
+				 bool borrowRendererBuffer = false,
+				 bool recordPresentationTiming = false)
 {
     img = QImage();
     if (!s.obol || !s.obol->getViewport())
 	return;
 
     qgcanvas_sync_obol_viewport(s, w);
-    qgcanvas_advance_obol_progressive(s);
+    /* Only the endpoint's actual paint may drive the progressive state
+     * machine.  A diagnostic/export traversal must be observational: making
+     * a checkpoint advance admission can reopen a budget probe after the
+     * scripted idle barrier and leave the supposedly final report pending. */
+    if (recordPresentationTiming)
+	qgcanvas_advance_obol_progressive(s);
     /* Endpoint-owned image producers, including the retained librt engine,
      * publish completed worker frames through this host-thread hook.  The Qt
      * canvases render directly instead of using
@@ -325,7 +331,13 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
 	    s.obol->getBackgroundTopColor());
     const uint64_t started = s.obol->beginRenderTiming();
     const SbBool rendered = renderer.render(s.obol->getRenderRoot());
-    s.obol->completeRenderTiming(started);
+    /* Image export/checkpoint readback is a second traversal, not a frame the
+     * viewport needed to present.  Feeding it into the scene LoD capacity
+     * estimator makes screenshot frequency and PNG test checkpoints alter
+     * the terminal PoP cut.  QgSW's paint path opts in below; diagnostic
+     * image producers deliberately do not. */
+    if (recordPresentationTiming)
+	s.obol->completeRenderTiming(started);
     if (!rendered)
 	return;
 
@@ -345,7 +357,8 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     }
     if (w)
 	img.setDevicePixelRatio(w->devicePixelRatioF());
-    if (consumeRenderRequest && s.obol->isRenderRequested())
+    if (recordPresentationTiming && consumeRenderRequest &&
+	s.obol->isRenderRequested())
 	(void)s.obol->consumeRenderRequest(NULL);
 }
 

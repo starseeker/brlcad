@@ -13,6 +13,7 @@
 #include "BObol/BExportAction.h"
 #include "BObol/BLodMeshShape.h"
 #include "BObol/BLodRealization.h"
+#include "BObol/BLodService.h"
 #include "BObol/BMaterialObject.h"
 #include "BObol/BMeasureAction.h"
 #include "BObol/BMeshLodCache.h"
@@ -41,6 +42,7 @@
 #include "raytrace.h"
 #include "rt/func.h"
 #include "rt/global.h"
+#include "rt/db4.h"
 #include "rt/nongeom.h"
 #include "rt/db_fullpath.h"
 #include "rt/eval_wireframe.h"
@@ -173,6 +175,7 @@ struct BObolCompactInstanceIndex {
     std::unordered_map<Obol::InstanceId, size_t,
 	std::hash<Obol::InstanceId>> entryIndex;
     std::unordered_map<std::string, size_t> entryIndexByKey;
+    std::unordered_map<std::string, size_t> entryIndexByPath;
     /* Semantic operations address occurrences by full path or leaf name. */
     std::vector<size_t> pathEntryOrder;
     std::unordered_map<std::string, std::vector<size_t>> entryIndicesByLeaf;
@@ -857,6 +860,19 @@ BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
     highlighted(FALSE)
 {
     meshAssetBounds.makeEmpty();
+    localBounds.makeEmpty();
+}
+
+BObolCompactLodPlanningSummary::BObolCompactLodPlanningSummary(void) :
+    valid(FALSE),
+    localToSource(SbMatrix::identity()),
+    meshGeometry(FALSE),
+    lodBacked(FALSE),
+    sourceMeshRequestValid(FALSE),
+    visible(TRUE),
+    selected(FALSE),
+    highlighted(FALSE)
+{
     localBounds.makeEmpty();
 }
 
@@ -2570,6 +2586,8 @@ struct compact_stream_lod_reuse_entry {
     std::array<int64_t, 3> bucket = {};
     fastf_t comparisonTolerance = VUNITIZE_TOL;
     bool signatureValid = false;
+    uint64_t sampleFingerprint = 0;
+    bool sampleFingerprintValid = false;
     struct directory *dp = NULL;
     std::string cacheKey;
     BObolSourceMeshRequest sourceMeshRequest;
@@ -7463,6 +7481,68 @@ compact_stream_lod_pca_signature(
     return true;
 }
 
+/* Exact count matching alone is a poor PCA broad phase for generated vehicle
+ * meshes: thousands of unrelated BoTs commonly share one topology size.  Hash
+ * a bounded, deterministic sample of edge lengths before scanning the full
+ * mesh.  Squared edge lengths are invariant under the rigid transforms PCA
+ * reuse accepts, and quantized logarithms tolerate the roundoff introduced by
+ * xpush.  A match is only permission to run the existing exact PCA/equality
+ * check, so collisions cannot cause incorrect geometry reuse.  Vertex/face
+ * reordering may produce a safe false negative and simply forgo optimization. */
+static bool
+compact_stream_lod_sample_fingerprint(uint64_t &fingerprint,
+	const struct rt_bot_internal *bot)
+{
+    fingerprint = 0;
+    if (!bot || !bot->vertices || !bot->faces ||
+	!bot->num_vertices || !bot->num_faces)
+	return false;
+
+    const size_t sampleCount = std::min<size_t>(32, bot->num_faces);
+    uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](uint64_t word) {
+	hash ^= word;
+	hash *= 1099511628211ULL;
+    };
+    mix(static_cast<uint64_t>(bot->num_vertices));
+    mix(static_cast<uint64_t>(bot->num_faces));
+    for (size_t sample = 0; sample < sampleCount; sample++) {
+	const size_t face = sampleCount > 1 ?
+	    sample * (bot->num_faces - 1) / (sampleCount - 1) : 0;
+	const int *indices = &bot->faces[face * 3];
+	for (size_t edge = 0; edge < 3; edge++) {
+	    const int first = indices[edge];
+	    const int second = indices[(edge + 1) % 3];
+	    if (first < 0 || second < 0 ||
+		static_cast<size_t>(first) >= bot->num_vertices ||
+		static_cast<size_t>(second) >= bot->num_vertices)
+		return false;
+	    const fastf_t *a = &bot->vertices[static_cast<size_t>(first) * 3];
+	    const fastf_t *b = &bot->vertices[static_cast<size_t>(second) * 3];
+	    const double dx = static_cast<double>(a[X] - b[X]);
+	    const double dy = static_cast<double>(a[Y] - b[Y]);
+	    const double dz = static_cast<double>(a[Z] - b[Z]);
+	    const double lengthSquared = dx * dx + dy * dy + dz * dz;
+	    if (!std::isfinite(lengthSquared) || lengthSquared < 0.0)
+		return false;
+	    int64_t quantized = std::numeric_limits<int64_t>::min();
+	    if (lengthSquared > SMALL_FASTF) {
+		const double scaled = log2(lengthSquared) * 262144.0;
+		if (!std::isfinite(scaled) ||
+		    scaled > static_cast<double>(
+			std::numeric_limits<int64_t>::max()) ||
+		    scaled < static_cast<double>(
+			std::numeric_limits<int64_t>::min()))
+		    return false;
+		quantized = static_cast<int64_t>(llround(scaled));
+	    }
+	    mix(static_cast<uint64_t>(quantized));
+	}
+    }
+    fingerprint = hash;
+    return true;
+}
+
 static void
 compact_stream_lod_asset_record_store(struct db_i *dbip,
 	struct directory *objectDp,
@@ -7586,20 +7666,25 @@ compact_stream_lod_transformed_reuse(
     candidate.faceCount = bot->num_faces;
     candidate.mode = bot->mode;
     candidate.orientation = bot->orientation;
+    candidate.sampleFingerprintValid =
+	compact_stream_lod_sample_fingerprint(candidate.sampleFingerprint, bot);
 
     /* Face/vertex counts, BoT mode, and orientation are exact, essentially
-     * free broad-phase invariants.  Most large assemblies contain unrelated
-     * meshes, so do not make the first occurrence of every shape pay for a
-     * full PCA traversal.  Keep it as an unevaluated representative and only
-     * calculate both signatures when a later occurrence could actually be a
-     * transformed copy. */
+     * free broad-phase invariants.  The bounded edge fingerprint then
+     * distinguishes the common case where thousands of unrelated meshes share
+     * those counts.  Do not make those shapes pay for a full PCA traversal:
+     * keep the first as an unevaluated representative and calculate signatures
+     * only when a later occurrence could actually be a transformed copy. */
     bool haveBroadCandidate = false;
     for (const compact_stream_lod_reuse_entry &representative :
 	data->stream_lod_reuse) {
 	if (representative.vertexCount == candidate.vertexCount &&
 	    representative.faceCount == candidate.faceCount &&
 	    representative.mode == candidate.mode &&
-	    representative.orientation == candidate.orientation) {
+	    representative.orientation == candidate.orientation &&
+	    (!candidate.sampleFingerprintValid ||
+	     !representative.sampleFingerprintValid ||
+	     representative.sampleFingerprint == candidate.sampleFingerprint)) {
 	    haveBroadCandidate = true;
 	    break;
 	}
@@ -7630,7 +7715,10 @@ compact_stream_lod_transformed_reuse(
 	if (representative.vertexCount != candidate.vertexCount ||
 	    representative.faceCount != candidate.faceCount ||
 	    representative.mode != candidate.mode ||
-	    representative.orientation != candidate.orientation)
+	    representative.orientation != candidate.orientation ||
+	    (candidate.sampleFingerprintValid &&
+	     representative.sampleFingerprintValid &&
+	     representative.sampleFingerprint != candidate.sampleFingerprint))
 	    continue;
 
 	if (!data->stream_lod_cached_representative_valid ||
@@ -10160,11 +10248,14 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	assembly->upsertParts(lodParts);
 	assembly->upsertInstances(instances);
 	assembly->updateInstanceStyles(instanceStyles);
+	std::vector<Obol::PartId> removedParts;
+	removedParts.reserve(partsToRemove.size());
 	for (const Obol::PartId &part : partsToRemove) {
-	    assembly->removePart(part);
+	    removedParts.push_back(part);
 	    assembly->compactPartChannels.erase(part);
 	    assembly->compactLodParts.erase(part);
 	}
+	assembly->removeParts(removedParts);
 	if (instanceSetsChanged) {
 	    assembly->setHiddenInstances(
 		this->d->compactIndex->hiddenInstances);
@@ -10610,6 +10701,8 @@ compact_rebuild_entry_index(BObolCompactInstanceIndex &index)
     index.entryIndex.reserve(index.entries.size());
     index.entryIndexByKey.clear();
     index.entryIndexByKey.reserve(index.entries.size());
+    index.entryIndexByPath.clear();
+    index.entryIndexByPath.reserve(index.entries.size());
 
     index.pathEntryOrder.clear();
     index.pathEntryOrder.reserve(index.entries.size());
@@ -10629,6 +10722,10 @@ compact_rebuild_entry_index(BObolCompactInstanceIndex &index)
 	    compact_instance_identity(index.entries[i]);
 	if (occurrenceKey.getLength() > 0)
 	    index.entryIndexByKey[occurrenceKey.getString()] = i;
+	const char *path = database_source_skip_leading_slash(
+	    index.entries[i].semantic.path.getString());
+	if (path && path[0])
+	    index.entryIndexByPath[path] = i;
 	index.pathEntryOrder.push_back(i);
 	const std::string leaf = database_source_leaf_component(
 	    index.entries[i].semantic.path);
@@ -10854,14 +10951,28 @@ BObolCompactOccurrenceStream::drain(std::vector<BObolCompactOccurrence> &out,
     size_t cap)
 {
     std::lock_guard<std::mutex> guard(this->mutex);
-    const size_t count = (cap == 0 || cap >= this->pending.size()) ?
-	this->pending.size() : cap;
+    const size_t available = this->pending.size() - this->pendingOffset;
+    const size_t count = (cap == 0 || cap >= available) ? available : cap;
     if (!count)
 	return 0;
     out.reserve(out.size() + count);
     for (size_t i = 0; i < count; i++)
-	out.push_back(std::move(this->pending[i]));
-    this->pending.erase(this->pending.begin(), this->pending.begin() + count);
+	out.push_back(std::move(this->pending[this->pendingOffset + i]));
+    this->pendingOffset += count;
+
+    /* Erasing the front of a vector on every 64-occurrence GUI pump moved
+     * nearly the entire remaining 50k stream every frame.  Retain a read
+     * cursor and compact only occasionally, making producer/consumer handoff
+     * amortized linear while preserving the contiguous producer buffer. */
+    if (this->pendingOffset == this->pending.size()) {
+	this->pending.clear();
+	this->pendingOffset = 0;
+    } else if (this->pendingOffset >= 4096 &&
+	this->pendingOffset >= this->pending.size() / 2) {
+	this->pending.erase(this->pending.begin(),
+	    this->pending.begin() + this->pendingOffset);
+	this->pendingOffset = 0;
+    }
     return count;
 }
 
@@ -10869,7 +10980,7 @@ size_t
 BObolCompactOccurrenceStream::size(void)
 {
     std::lock_guard<std::mutex> guard(this->mutex);
-    return this->pending.size();
+    return this->pending.size() - this->pendingOffset;
 }
 
 /* Populate the derived lookup maps and aggregate bounds for the appended tail
@@ -10888,6 +10999,10 @@ compact_index_append_derived(BObolCompactInstanceIndex &index, size_t firstNew)
 	    compact_instance_identity(index.entries[i]);
 	if (occurrenceKey.getLength() > 0)
 	    index.entryIndexByKey[occurrenceKey.getString()] = i;
+	const char *path = database_source_skip_leading_slash(
+	    index.entries[i].semantic.path.getString());
+	if (path && path[0])
+	    index.entryIndexByPath[path] = i;
 	index.pathEntryOrder.push_back(i);
 	const std::string leaf = database_source_leaf_component(
 	    index.entries[i].semantic.path);
@@ -11021,17 +11136,6 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
     }
     BObolCompactInstanceIndex &index = *this->d->compactIndex;
 
-    /* Match an incoming occurrence to the leaf's existing occurrence by
-     * normalized full path (the box and its realized geometry share it). */
-    std::unordered_map<std::string, size_t> entryByPath;
-    entryByPath.reserve(index.entries.size());
-    for (size_t i = 0; i < index.entries.size(); i++) {
-	const char *p = database_source_skip_leading_slash(
-	    index.entries[i].semantic.path.getString());
-	if (p && p[0])
-	    entryByPath[p] = i;
-    }
-
     const size_t firstNew = index.entries.size();
     int ordinal = static_cast<int>(index.entries.size());
     int changed = 0;
@@ -11043,8 +11147,9 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	const char *p = database_source_skip_leading_slash(
 	    occurrence.summary.path.getString());
 	std::unordered_map<std::string, size_t>::iterator found =
-	    (p && p[0]) ? entryByPath.find(p) : entryByPath.end();
-	if (found != entryByPath.end()) {
+	    (p && p[0]) ? index.entryIndexByPath.find(p) :
+	    index.entryIndexByPath.end();
+	if (found != index.entryIndexByPath.end()) {
 	    const BObolCompactInstanceEntry &existing =
 		index.entries[found->second];
 	    const int oldTier = compact_geometry_tier(
@@ -11071,7 +11176,7 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	if (unsupported || index.entries.size() == before)
 	    continue;
 	if (p && p[0])
-	    entryByPath[p] = index.entries.size() - 1;
+	    index.entryIndexByPath[p] = index.entries.size() - 1;
 	changed++;
     }
     if (!changed)
@@ -13951,6 +14056,343 @@ SoBRLDatabaseSource::realizeDatabaseMesh(BObolCompactOccurrenceStream *stream)
 	this, &cache, stream) > 0 ? TRUE : FALSE;
 }
 
+namespace {
+
+struct compact_coverage_occurrence {
+    size_t assetIndex = 0;
+    SbMatrix localTransform = SbMatrix::identity();
+    BObolRealizedShapeSummary summary;
+    std::string assetPath;
+    uint32_t occurrenceIndex = 0;
+    int booleanOperation = SoBRLDatabaseSource::BOOLEAN_UNION;
+};
+
+struct compact_coverage_asset {
+    struct directory *dp = NULL;
+    std::string cacheKey;
+    std::string assetPath;
+    std::vector<size_t> occurrences;
+    size_t estimatedWorkingSetBytes = 1;
+    std::shared_ptr<const Obol::PartGeometry> geometry;
+    BObolSourceMeshRequest sourceMeshRequest;
+    uint64_t sampleFingerprint = 0;
+    bool sampleFingerprintValid = false;
+    size_t vertexCount = 0;
+    size_t faceCount = 0;
+    unsigned char mode = 0;
+    unsigned char orientation = 0;
+    bool ready = false;
+};
+
+struct compact_coverage_collect {
+    SoBRLDatabaseSource *source = NULL;
+    BObolDatabaseSourceRealizationCache *cache = NULL;
+    BObolCompactOccurrenceStream *stream = NULL;
+    BObolMaterialColorSweep *materialSweep = NULL;
+    uint32_t revision = 0;
+    std::vector<compact_coverage_occurrence> occurrences;
+    std::vector<std::unique_ptr<compact_coverage_asset>> assets;
+    std::unordered_map<std::string, size_t> assetIndices;
+    std::unordered_set<std::string> seenInstances;
+    std::unordered_map<std::string, uint32_t> occurrenceCounts;
+};
+
+static size_t
+compact_coverage_working_set_estimate(const struct db_i *dbip,
+	const struct directory *dp)
+{
+    const size_t fixedBytes = 8ULL * 1024ULL * 1024ULL;
+    if (!dp)
+	return fixedBytes;
+    size_t encodedBytes = dp->d_len;
+    if (dbip && db_version(dbip) < 5) {
+	if (encodedBytes > SIZE_MAX / sizeof(union record))
+	    return SIZE_MAX;
+	encodedBytes *= sizeof(union record);
+    }
+    if (encodedBytes > (SIZE_MAX - fixedBytes) / 16)
+	return SIZE_MAX;
+    return encodedBytes * 16 + fixedBytes;
+}
+
+static union tree *
+compact_coverage_collect_leaf(struct db_tree_state *tsp,
+	const struct db_full_path *pathp, struct directory *dp,
+	void *clientData)
+{
+    compact_coverage_collect *collect =
+	static_cast<compact_coverage_collect *>(clientData);
+    if (!collect || !collect->source || !collect->cache ||
+	!collect->stream || !tsp || !tsp->ts_dbip || !pathp || !dp)
+	return TREE_NULL;
+    if (collect->stream->isCancelled())
+	return make_nop_tree();
+    if (dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+	return make_nop_tree();
+
+    const std::string instanceIdentity =
+	realize_walk_instance_identity(tsp, pathp);
+    if (instanceIdentity.empty() ||
+	!collect->seenInstances.insert(instanceIdentity).second)
+	return make_nop_tree();
+    const std::string occurrenceIdentity =
+	realize_walk_occurrence_identity(pathp);
+    const uint32_t duplicateOrdinal =
+	collect->occurrenceCounts[occurrenceIdentity]++;
+
+    char *rawPath = db_path_to_string(pathp);
+    if (!rawPath || !rawPath[0]) {
+	if (rawPath)
+	    bu_free(rawPath, "compact coverage path");
+	return make_nop_tree();
+    }
+
+    SbBox3f unusedBounds;
+    std::string cacheKey = realize_geometry_cache_key(dp);
+    source_lod_cache_key_append(cacheKey, collect->source, unusedBounds);
+    size_t assetIndex = 0;
+    auto foundAsset = collect->assetIndices.find(cacheKey);
+    if (foundAsset == collect->assetIndices.end()) {
+	assetIndex = collect->assets.size();
+	std::unique_ptr<compact_coverage_asset> asset(
+	    new compact_coverage_asset);
+	asset->dp = dp;
+	asset->cacheKey = cacheKey;
+	asset->assetPath = rawPath;
+	asset->estimatedWorkingSetBytes =
+	    compact_coverage_working_set_estimate(tsp->ts_dbip, dp);
+	collect->assets.push_back(std::move(asset));
+	collect->assetIndices[cacheKey] = assetIndex;
+    } else {
+	assetIndex = foundAsset->second;
+    }
+
+    compact_coverage_occurrence occurrence;
+    occurrence.assetIndex = assetIndex;
+    occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
+    occurrence.assetPath = rawPath;
+    std::string semanticPath = rawPath;
+    if (duplicateOrdinal > 0) {
+	char suffix[32] = {0};
+	snprintf(suffix, sizeof(suffix), "@%u", duplicateOrdinal);
+	semanticPath += suffix;
+    }
+    occurrence.summary = compact_occurrence_tree_summary(
+	collect->source, tsp, semanticPath.c_str(), dp->d_namep, "bot",
+	"aabb", collect->revision,
+	BObolRealizedShapeSummary::SHAPE_MESH, collect->materialSweep);
+    occurrence.occurrenceIndex = pathp->fp_cinst && pathp->fp_len ?
+	static_cast<uint32_t>(DB_FULL_PATH_GET_COMB_INST(pathp,
+		pathp->fp_len - 1)) : 0;
+    occurrence.booleanOperation = (tsp->ts_sofar & TS_SOFAR_MINUS) ?
+	SoBRLDatabaseSource::BOOLEAN_SUBTRACT :
+	((tsp->ts_sofar & TS_SOFAR_INTER) ?
+	 SoBRLDatabaseSource::BOOLEAN_INTERSECT :
+	 SoBRLDatabaseSource::BOOLEAN_UNION);
+    const size_t occurrenceIndex = collect->occurrences.size();
+    collect->occurrences.push_back(std::move(occurrence));
+    collect->assets[assetIndex]->occurrences.push_back(occurrenceIndex);
+    bu_free(rawPath, "compact coverage path");
+    return make_nop_tree();
+}
+
+static uint64_t
+compact_coverage_order_key(const compact_coverage_asset &asset)
+{
+    return static_cast<uint64_t>(bu_data_hash(asset.cacheKey.data(),
+	asset.cacheKey.size()));
+}
+
+static std::string
+compact_coverage_broad_key(const compact_coverage_asset &asset)
+{
+    if (!asset.ready || !asset.sampleFingerprintValid)
+	return std::string();
+    char key[192] = {0};
+    snprintf(key, sizeof(key), "%zu:%zu:%u:%u:%016llx",
+	asset.vertexCount, asset.faceCount,
+	static_cast<unsigned int>(asset.mode),
+	static_cast<unsigned int>(asset.orientation),
+	static_cast<unsigned long long>(asset.sampleFingerprint));
+    return std::string(key);
+}
+
+static int
+compact_stream_publish_parallel_coverage(
+	SoBRLDatabaseSource *source,
+	BObolDatabaseSourceRealizationCache *cache,
+	const char *treeName,
+	BObolCompactOccurrenceStream *stream,
+	uint32_t revision)
+{
+    if (!source || !cache || !treeName || !treeName[0] || !stream ||
+	!source->getDatabase() || source->lodBotThreshold.getValue() == 0)
+	return 0;
+
+    const int64_t collectStart = bu_gettime();
+    BObolMaterialColorSweep materialSweep(source->getDatabase());
+    compact_coverage_collect collect;
+    collect.source = source;
+    collect.cache = cache;
+    collect.stream = stream;
+    collect.materialSweep = &materialSweep;
+    collect.revision = revision;
+    struct db_tree_state initialState;
+    db_init_db_tree_state(&initialState, source->getDatabase());
+    initialState.ts_stop_at_regions = 0;
+    const char *treeNames[1] = {treeName};
+    const int walkResult = db_walk_tree_leaf_instances(
+	source->getDatabase(), 1, treeNames, 1, &initialState, NULL, NULL,
+	compact_coverage_collect_leaf, &collect);
+    db_free_db_tree_state(&initialState);
+    if (walkResult < 0 || stream->isCancelled())
+	return -1;
+    if (collect.assets.empty())
+	return 0;
+
+    std::vector<size_t> order(collect.assets.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+	[&collect](size_t lhs, size_t rhs) {
+	    const compact_coverage_asset &left = *collect.assets[lhs];
+	    const compact_coverage_asset &right = *collect.assets[rhs];
+	    const uint64_t leftKey = compact_coverage_order_key(left);
+	    const uint64_t rightKey = compact_coverage_order_key(right);
+	    return leftKey != rightKey ? leftKey < rightKey :
+		left.cacheKey < right.cacheKey;
+	});
+
+    std::atomic<size_t> cursor(0);
+    std::atomic<size_t> published(0);
+    size_t workerCount = bu_avail_cpus();
+    workerCount = std::max<size_t>(1, std::min<size_t>(
+	workerCount, std::min<size_t>(order.size(), 32)));
+    const auto worker = [&]() {
+	bu_nice_set(5);
+	for (;;) {
+	    const size_t orderIndex = cursor.fetch_add(1);
+	    if (orderIndex >= order.size())
+		break;
+	    compact_coverage_asset &asset =
+		*collect.assets[order[orderIndex]];
+	    bobol_lod_working_set_acquire(
+		asset.estimatedWorkingSetBytes);
+	    struct rt_db_internal intern;
+	    RT_DB_INTERNAL_INIT(&intern);
+	    bool ownsInternal = false;
+	    if (!stream->isCancelled() &&
+		rt_db_get_internal(&intern, asset.dp, source->getDatabase(),
+		    NULL) >= 0) {
+		ownsInternal = true;
+		const struct rt_bot_internal *bot =
+		    intern.idb_type == ID_BOT && intern.idb_ptr ?
+		    static_cast<const struct rt_bot_internal *>(
+			intern.idb_ptr) : NULL;
+		Obol::PartGeometry geometry;
+		if (bot &&
+		    bot->num_faces >= source->lodBotThreshold.getValue() &&
+		    cad_source_mesh_request_from_bot(
+			asset.sourceMeshRequest, bot) &&
+		    cad_wire_part_geometry_from_aabb(
+			asset.sourceMeshRequest.bounds, geometry)) {
+		    asset.sourceMeshRequest.meshAssetPath =
+			asset.assetPath.c_str();
+		    asset.sourceMeshRequest.meshAssetName =
+			asset.dp->d_namep ? asset.dp->d_namep : "";
+		    asset.vertexCount = bot->num_vertices;
+		    asset.faceCount = bot->num_faces;
+		    asset.mode = bot->mode;
+		    asset.orientation = bot->orientation;
+		    asset.sampleFingerprintValid =
+			compact_stream_lod_sample_fingerprint(
+			    asset.sampleFingerprint, bot);
+		    asset.geometry =
+			std::make_shared<Obol::PartGeometry>(
+			    std::move(geometry));
+		    asset.ready = asset.geometry ? true : false;
+		}
+	    }
+	    if (ownsInternal)
+		rt_db_free_internal(&intern);
+	    bobol_lod_working_set_release(
+		asset.estimatedWorkingSetBytes);
+
+	    if (!asset.ready || stream->isCancelled())
+		continue;
+	    for (size_t occurrenceIndex : asset.occurrences) {
+		if (stream->isCancelled())
+		    break;
+		const compact_coverage_occurrence &sourceOccurrence =
+		    collect.occurrences[occurrenceIndex];
+		BObolCompactOccurrence occurrence;
+		occurrence.geometry = asset.geometry;
+		occurrence.localTransform =
+		    sourceOccurrence.localTransform;
+		occurrence.lodBacked = TRUE;
+		occurrence.occurrenceIndex =
+		    sourceOccurrence.occurrenceIndex;
+		occurrence.booleanOperation =
+		    sourceOccurrence.booleanOperation;
+		occurrence.summary = sourceOccurrence.summary;
+		stream->push(occurrence);
+		published.fetch_add(1);
+	    }
+	}
+    };
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for (size_t i = 0; i < workerCount; i++)
+	workers.push_back(std::thread(worker));
+    for (std::thread &thread : workers)
+	thread.join();
+    if (stream->isCancelled())
+	return -1;
+
+    /* A unique broad signature cannot be a rigid transformed copy of another
+     * asset in this root.  Seed those self-assets into the realization cache,
+     * allowing the authoritative serial identity walk below to avoid a second
+     * import.  Ambiguous groups retain only their already-published boxes and
+     * proceed through exact PCA verification before sharing geometry. */
+    std::unordered_map<std::string, size_t> broadCounts;
+    for (const std::unique_ptr<compact_coverage_asset> &asset :
+	 collect.assets) {
+	const std::string key = compact_coverage_broad_key(*asset);
+	if (!key.empty())
+	    broadCounts[key]++;
+    }
+    size_t seeded = 0;
+    for (const std::unique_ptr<compact_coverage_asset> &assetPtr :
+	 collect.assets) {
+	compact_coverage_asset &asset = *assetPtr;
+	const std::string broadKey = compact_coverage_broad_key(asset);
+	if (broadKey.empty() || broadCounts[broadKey] != 1 ||
+	    !asset.geometry)
+	    continue;
+	const SbMatrix identity = SbMatrix::identity();
+	/* A self asset needs no transformed-reuse mapping record.  The completed
+	 * leaf manifest persists its canonical source request directly; writing
+	 * one LMDB record for every ordinary unique mesh made cold completion
+	 * transaction-bound and inflated the draw cache by tens of megabytes. */
+	cache->storeMeshCadGeometryReference(asset.cacheKey, asset.geometry,
+	    identity, "bot", "aabb", &asset.sourceMeshRequest.bounds, true,
+	    &asset.sourceMeshRequest);
+	seeded++;
+    }
+    if (getenv("BOBOL_DRAW_TIMING"))
+	bu_log("[obol-timing] coverage prepass: %.1f ms; %zu occurrences, "
+	       "%zu assets, %zu workers, %zu boxes, %zu unique assets seeded, "
+	       "global peak=%zu bytes/%zu tasks\n",
+	       static_cast<double>(bu_gettime() - collectStart) / 1000.0,
+	       collect.occurrences.size(), collect.assets.size(), workerCount,
+	       published.load(), seeded,
+	       bobol_lod_working_set_global_peak_bytes(),
+	       bobol_lod_working_set_global_peak_tasks());
+    return published.load() > static_cast<size_t>(INT_MAX) ? INT_MAX :
+	static_cast<int>(published.load());
+}
+
+} /* anonymous namespace */
+
 int
 bobol_database_source_realize_mesh_compact_with_cache(
     SoBRLDatabaseSource *source,
@@ -14045,6 +14487,17 @@ bobol_database_source_realize_mesh_compact_with_cache(
      * representative pairs concurrently. */
     if (!stream && source->lodBotThreshold.getValue() == 0 &&
 	compact_mesh_prefill_cache(source, cache, treeName, NULL) < 0) {
+	if (!cache->preserveCompactSourceOnFailure) {
+	    remove_non_auxiliary_children(source);
+	    source->discardCompactInstanceHistory();
+	    source->realizationIdentity = "";
+	}
+	return -1;
+    }
+
+    if (stream && source->lodBotThreshold.getValue() > 0 &&
+	compact_stream_publish_parallel_coverage(source, cache, treeName,
+	    stream, revision) < 0) {
 	if (!cache->preserveCompactSourceOnFailure) {
 	    remove_non_auxiliary_children(source);
 	    source->discardCompactInstanceHistory();
@@ -16016,6 +16469,46 @@ SoBRLDatabaseSource::getCompactLodInstanceSummary(
     summary.selected = entry.selected;
     summary.highlighted = entry.highlighted;
     return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactLodPlanningSummary(
+    int index, BObolCompactLodPlanningSummary &summary) const
+{
+    summary = BObolCompactLodPlanningSummary();
+    if (!this->d->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
+	return FALSE;
+
+    const BObolCompactInstanceEntry &entry =
+	this->d->compactIndex->entries[static_cast<size_t>(index)];
+    summary.valid = TRUE;
+    summary.sourceInstanceKey = compact_instance_identity(entry);
+    summary.localToSource = entry.localToSource;
+    summary.localBounds = compact_part_geometry_bounds(entry.geometry);
+    summary.meshGeometry = entry.meshGeometry;
+    summary.lodBacked = entry.lodBacked;
+    summary.sourceMeshRequestValid = entry.sourceMeshRequestValid;
+    summary.visible = entry.visible;
+    summary.selected = entry.selected;
+    summary.highlighted = entry.highlighted;
+    return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactLodPlanningSummaryForKey(
+    const char *occurrenceKey, BObolCompactLodPlanningSummary &summary) const
+{
+    summary = BObolCompactLodPlanningSummary();
+    if (!this->d->compactIndex || !occurrenceKey || !occurrenceKey[0])
+	return FALSE;
+    const auto found =
+	this->d->compactIndex->entryIndexByKey.find(occurrenceKey);
+    if (found == this->d->compactIndex->entryIndexByKey.end() ||
+	found->second >= this->d->compactIndex->entries.size())
+	return FALSE;
+    return this->getCompactLodPlanningSummary(
+	static_cast<int>(found->second), summary);
 }
 
 SbBool

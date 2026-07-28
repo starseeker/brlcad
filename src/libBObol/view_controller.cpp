@@ -207,7 +207,12 @@ BObolProgressiveOptions::BObolProgressiveOptions(void) :
     maxLodResults(256),
     maxLodApplyMicroseconds(4000),
     maxProviders(0),
-    maxProviderItems(64),
+    /* The microsecond limit is the responsiveness contract.  A 64-item
+     * ceiling forced one 16 ms timer turn per batch even when merging a batch
+     * took only microseconds, producing a visible many-thousand-leaf replay.
+     * Keep a generous safety ceiling and let the measured 4 ms budget govern
+     * ordinary pumping. */
+    maxProviderItems(4096),
     maxProviderMicroseconds(4000),
     forceTerminalLodRefinement(FALSE)
 {
@@ -1185,6 +1190,10 @@ struct BObolViewController::Impl {
     size_t managedLodWorkerCount = 0;
     uint64_t lodResultSubscriberId = 0;
     std::atomic<int> lodResultsPending {0};
+    /* Timestamp the empty->non-empty worker-result edge.  Bulk warm-cache
+     * streams use it to coalesce tiny timer-tick dribbles into bounded-latency
+     * scene updates. */
+    std::atomic<int64_t> lodResultsFirstReadyMicroseconds {0};
     SbBool lodAutoSubmit = FALSE;
     uint64_t lodActiveGeneration = 0;
     size_t lodSubmissionSourceIndex = 0;
@@ -1228,8 +1237,17 @@ struct BObolViewController::Impl {
     SbBool lodReleaseCutFloorActive = FALSE;
     uint64_t lodSettleAfterRenderSerial = 0;
     SbBool lodResidentCompactionPending = FALSE;
+    /* A resident prefix can grow without a camera change (notably when an
+     * erased path is redrawn).  Reclamation therefore needs an independent
+     * quiet-period deadline rather than borrowing the view-change timer. */
+    int64_t lodResidentCompactionAfterMicroseconds = 0;
     SbBool lodRefinementAwaitingFrame = FALSE;
     uint64_t lodRefinementResumeAfterRenderSerial = 0;
+    /* A result-publication frame may include one-time CPU/GPU buffer
+     * construction.  It controls refinement pacing, but must not teach the
+     * steady-state face-capacity estimator that every later frame costs the
+     * same amount. */
+    SbBool lodResultPublicationAwaitingFrame = FALSE;
     int64_t lodRefinementNotBeforeMicroseconds = 0;
     float lodTargetPixelError = 1.0f;
     float lodInteractiveTargetFps = 60.0f;
@@ -1240,7 +1258,7 @@ struct BObolViewController::Impl {
     long double lodStableCalibratedFacesPerSecond = 0.0L;
     size_t lodStableCalibrationProbeActiveFaces = 0;
     unsigned int lodStableCalibrationProbeCount = 0;
-    int lodEmergencyProgressiveCeiling = -1;
+    int lodInteractiveProgressiveCeiling = -1;
     SbBool lodUseForcedLevel = FALSE;
     int lodForcedLevel = 0;
     uint64_t maxExactFullDetailFaceCount = 0;
@@ -2092,6 +2110,16 @@ BObolViewController::renderBackground(void) const
     gl->getIntegerv(GL_MATRIX_MODE, &matrixMode);
     gl->pushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
 	GL_CURRENT_BIT);
+    /* A gradient quad is not a substitute for clearing the render target.
+     * Rasterization coverage at the viewport boundary is implementation
+     * dependent enough that the top scanline can retain geometry from the
+     * previous QOpenGLWidget frame.  Clear the whole draw buffer first, and
+     * do not inherit a scissor left by either Coin traversal or the Qt
+     * compositor.  The pushed enable state restores the caller's scissor
+     * policy after the background pass. */
+    gl->disable(GL_SCISSOR_TEST);
+    gl->clearColor(bottom[0], bottom[1], bottom[2], 1.0f);
+    gl->clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     gl->disable(GL_LIGHTING);
     gl->disable(GL_DEPTH_TEST);
     gl->depthMask(GL_FALSE);
@@ -2115,7 +2143,6 @@ BObolViewController::renderBackground(void) const
     gl->popMatrix();
     gl->matrixMode(matrixMode);
     gl->popAttrib();
-    gl->clear(GL_DEPTH_BUFFER_BIT);
 }
 
 SbBool
@@ -2683,7 +2710,17 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
 	    presentationInterval <= 250000000ULL)
 	    calibrationElapsed = presentationInterval;
     }
-    if (calibrationFaces > 0 && calibrationElapsed > 0) {
+    /* Result publication may allocate/upload newly decoded geometry during
+     * this traversal.  That one-time cost is relevant to the cooldown below,
+     * but not to the sustainable FPS of the retained cut.  Quiet,
+     * unchanged calibration probes measure the latter.  Interactive samples
+     * keep the full cost because upload latency is part of the user's motion
+     * experience. */
+    const SbBool transientStablePublication =
+	this->d->lodResultPublicationAwaitingFrame &&
+	!this->d->lodInteractive && !this->d->lodGestureActive;
+    if (calibrationFaces > 0 && calibrationElapsed > 0 &&
+	!transientStablePublication) {
 	const long double sample =
 	    static_cast<long double>(calibrationFaces) * 1000000000.0L /
 	    static_cast<long double>(calibrationElapsed);
@@ -2777,21 +2814,24 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
 	/* Refinement is background quality work, not an invitation to monopolize
 	 * the GUI thread.  A cheap hardware frame may proceed immediately.  Once
 	 * a software or high-load frame exceeds two 60 Hz budgets, leave the
-	 * useful cut visible for roughly four render times (bounded at two
-	 * seconds) before exposing the next, potentially much larger prefix.
-	 * This is feedback from an actually presented frame, so it adapts to
-	 * OSMesa, System GL, viewport size, and current scene complexity without
+	 * useful cut visible for one measured render interval before exposing the
+	 * next prefix (bounded at two seconds).
+	 *
+	 * The former four-render interval reduced a many-leaf warm stream from
+	 * roughly 450 to 60-120 assets/second after publication frames reached
+	 * 200 ms.  Interaction already switches to its coarse aggregate budget;
+	 * imposing an additional 80% idle duty cycle on unchanged-view
+	 * refinement only prolonged boxes.  One-render rest preserves a maximum
+	 * 50% background presentation duty cycle and still adapts to OSMesa,
+	 * System GL, viewport size, and current scene complexity without
 	 * backend-specific policy. */
 	const uint64_t responsiveFrame = 33333334ULL;
 	int64_t cooldownMicroseconds = 0;
 	if (elapsed > responsiveFrame) {
 	    const uint64_t elapsedMicroseconds = elapsed / 1000ULL;
-	    const uint64_t scaled =
-		elapsedMicroseconds > 500000ULL ?
-		2000000ULL : elapsedMicroseconds * 4ULL;
 	    cooldownMicroseconds = static_cast<int64_t>(
 		std::max<uint64_t>(50000ULL,
-		    std::min<uint64_t>(2000000ULL, scaled)));
+		    std::min<uint64_t>(2000000ULL, elapsedMicroseconds)));
 	}
 	const int64_t nowMicroseconds = bu_gettime();
 	this->d->lodRefinementNotBeforeMicroseconds =
@@ -2803,6 +2843,7 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
 	this->d->lodLastSubmittedPolicyRevision = 0;
 	this->markProgressiveWorkPending();
     }
+    this->d->lodResultPublicationAwaitingFrame = FALSE;
 }
 
 void
@@ -3298,7 +3339,7 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodStableCalibrationProbeActiveFaces = 0;
 	    this->d->lodStableCalibrationProbeCount = 0;
 	    this->d->lodTargetPixelError = 1.0f;
-	    this->d->lodEmergencyProgressiveCeiling = -1;
+	    this->d->lodInteractiveProgressiveCeiling = -1;
 	    BObolViewLodState *viewState =
 		this->d->viewAttachment->getViewLodState();
 	    if (viewState) {
@@ -3321,9 +3362,52 @@ BObolViewController::advanceProgressiveWork(
 	}
     }
 
-    if (this->hasPendingLodResults() ||
-	(this->d->lodService &&
-	 this->d->lodService->queuedResultCountForDiagnostics() > 0)) {
+    const size_t queuedLodResults = this->d->lodService ?
+	this->d->lodService->queuedResultCountForDiagnostics() : 0;
+    const SbBool havePendingLodResults =
+	this->hasPendingLodResults() || queuedLodResults > 0;
+    SbBool coalesceLodResults = FALSE;
+    if (havePendingLodResults && this->d->lodService) {
+	/* The first mesh is the time-to-useful-visual boundary and is never
+	 * delayed.  Once a scene already has mesh data, coalesce a continuing
+	 * many-asset stream until a full apply wave is ready or its latency
+	 * bound expires.  A final/isolated result (no outstanding worker work)
+	 * publishes immediately, preserving single-huge-mesh and sparse-scene
+	 * behavior.
+	 *
+	 * Stable bulk population uses a 250 ms ceiling: four visibly progressive
+	 * updates per second without paying hundreds of increasingly expensive
+	 * whole-scene update/render traversals.  Motion uses 100 ms so newly
+	 * visible occurrences catch up promptly while the interactive face
+	 * budget protects FPS. */
+	const size_t applyWave = options->maxLodResults ?
+	    options->maxLodResults : 256;
+	const SbBool continuingWorkerStream =
+	    this->d->lodService->inFlightCount() > 0 ||
+	    this->d->lodService->pendingTaskCountForDiagnostics() > 0;
+	const SbBool sceneHasMesh =
+	    this->getActiveLodMeshPayloadCount() > 0;
+	int64_t firstReady =
+	    this->d->lodResultsFirstReadyMicroseconds.load();
+	const int64_t now = bu_gettime();
+	if (firstReady <= 0) {
+	    int64_t expected = 0;
+	    (void)this->d->lodResultsFirstReadyMicroseconds.
+		compare_exchange_strong(expected, now);
+	    firstReady =
+		this->d->lodResultsFirstReadyMicroseconds.load();
+	}
+	const int64_t latencyLimit =
+	    this->d->lodInteractive ? 100000 : 250000;
+	const int64_t resultAge =
+	    now >= firstReady ? now - firstReady : latencyLimit;
+	coalesceLodResults =
+	    sceneHasMesh && continuingWorkerStream &&
+	    queuedLodResults < applyWave && resultAge < latencyLimit;
+    }
+    if (coalesceLodResults) {
+	localStatus.hasMore = 1;
+    } else if (havePendingLodResults) {
 	const uint64_t resultStarted = this->beginRenderTiming();
 	(void)this->processPendingLodResults(options->maxLodResults,
 	    options->maxLodApplyMicroseconds);
@@ -3334,6 +3418,20 @@ BObolViewController::advanceProgressiveWork(
 	localStatus.lodResultsApplied = this->d->lastLodAppliedResultCount;
 	if (this->d->lastLodAppliedResultCount > 0)
 	    localStatus.changed = 1;
+	if (!this->d->lodService ||
+	    this->d->lodService->queuedResultCountForDiagnostics() == 0) {
+	    this->d->lodResultsFirstReadyMicroseconds.store(0);
+	    /* A result can race the empty observation without producing another
+	     * empty->non-empty callback.  Recheck after clearing and install a
+	     * fresh age origin if necessary. */
+	    if (this->d->lodService &&
+		this->d->lodService->queuedResultCountForDiagnostics() > 0) {
+		this->d->lodResultsPending.store(1);
+		int64_t expected = 0;
+		(void)this->d->lodResultsFirstReadyMicroseconds.
+		    compare_exchange_strong(expected, bu_gettime());
+	    }
+	}
     }
 
     size_t providerLimit = options->maxProviders;
@@ -3445,10 +3543,10 @@ BObolViewController::advanceProgressiveWork(
     if (this->d->lodAutoSubmit &&
 	this->d->lodResidentCompactionPending &&
 	!this->d->lodInteractive &&
-	this->d->lodLastViewChangeMicroseconds > 0) {
-	const int64_t elapsed =
-	    bu_gettime() - this->d->lodLastViewChangeMicroseconds;
-	if (elapsed < 750000 || pending_service_work ||
+	this->d->lodResidentCompactionAfterMicroseconds > 0) {
+	if (bu_gettime() <
+		this->d->lodResidentCompactionAfterMicroseconds ||
+	    pending_service_work ||
 	    this->d->lodSubmissionPending) {
 	    localStatus.hasMore = 1;
 	} else if (this->d->lodService) {
@@ -3463,6 +3561,7 @@ BObolViewController::advanceProgressiveWork(
 			reinterpret_cast<uintptr_t>(this)),
 		    this->d->lodViewRevision, demands);
 	    this->d->lodResidentCompactionPending = FALSE;
+	    this->d->lodResidentCompactionAfterMicroseconds = 0;
 	    if (compacted) {
 		if (viewState)
 		    viewState->noteResidentMeshesChanged();
@@ -3621,6 +3720,9 @@ BObolViewController::lodResultReadyCB(
 	static_cast<BObolViewController *>(userData);
     if (controller) {
 	controller->d->lodResultsPending.store(1);
+	int64_t expected = 0;
+	(void)controller->d->lodResultsFirstReadyMicroseconds.
+	    compare_exchange_strong(expected, bu_gettime());
 	controller->markProgressiveWorkPending();
     }
 }
@@ -3643,6 +3745,7 @@ BObolViewController::setLodService(BObolLodService *service)
     this->d->lodService = service;
     this->d->lodResultSubscriberId = 0;
     this->d->lodResultsPending.store(0);
+    this->d->lodResultsFirstReadyMicroseconds.store(0);
     this->d->lodActiveGeneration = 0;
     this->d->lodSubmissionSourceIndex = 0;
     this->d->lodSubmissionEntryOffset = 0;
@@ -3664,6 +3767,8 @@ BObolViewController::setLodService(BObolLodService *service)
     this->d->lodLastSubmittedPolicyRevision = 0;
     this->d->lodLastSubmittedSourceSignature = "";
     this->d->lodResidentCompactionPending = service ? TRUE : FALSE;
+    this->d->lodResidentCompactionAfterMicroseconds =
+	service ? bu_gettime() + 750000 : 0;
     this->d->lodRefinementAwaitingFrame = FALSE;
     this->d->lodRefinementResumeAfterRenderSerial = 0;
     this->d->lodRefinementNotBeforeMicroseconds = 0;
@@ -3697,13 +3802,15 @@ BObolViewController::cancelActiveLodGeneration(void)
     this->d->lodRefinementBudgetRetryMicroseconds = 0;
     this->d->lodSettleAfterRenderSerial = 0;
     this->d->lodResultsPending.store(0);
+    this->d->lodResultsFirstReadyMicroseconds.store(0);
     this->d->lodLastSubmittedViewRevision = 0;
     this->d->lodLastSubmittedPolicyRevision = 0;
     this->d->lodLastSubmittedSourceSignature = "";
     this->d->lodRefinementAwaitingFrame = FALSE;
     this->d->lodRefinementResumeAfterRenderSerial = 0;
+    this->d->lodResultPublicationAwaitingFrame = FALSE;
     this->d->lodRefinementNotBeforeMicroseconds = 0;
-    this->d->lodEmergencyProgressiveCeiling = -1;
+    this->d->lodInteractiveProgressiveCeiling = -1;
     if (this->d->viewAttachment &&
 	this->d->viewAttachment->getViewLodState())
 	this->d->viewAttachment->getViewLodState()->
@@ -3766,7 +3873,7 @@ BObolViewController::setLodAutoSubmit(SbBool enabled)
     if (this->d->lodAutoSubmit) {
 	this->requestRender("lod-auto-submit");
     } else {
-	this->d->lodEmergencyProgressiveCeiling = -1;
+	this->d->lodInteractiveProgressiveCeiling = -1;
 	if (this->d->viewAttachment->getViewLodState())
 	    this->d->viewAttachment->getViewLodState()->
 		setCadPresentationProgressiveLodCeiling(-1);
@@ -4335,7 +4442,12 @@ BObolViewController::hasPendingLodSubmissions(void) const
 SbBool
 BObolViewController::hasPendingLodRefinementFrame(void) const
 {
-    return this->d->lodRefinementAwaitingFrame;
+    /* A budget calibration probe is just as much a refinement barrier as a
+     * newly selected PoP cut.  Reporting idle in the interval between
+     * requesting that frame and completeRenderTiming() made warm scenes stop
+     * at cache-temperature-dependent coarse cuts. */
+    return this->d->lodRefinementAwaitingFrame ||
+	this->d->lodBudgetRescanAfterFrame;
 }
 
 size_t
@@ -4574,6 +4686,31 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->d->lodInteractive ?
 	    this->d->lodInteractiveCalibratedFacesPerSecond :
 	    this->d->lodStableCalibratedFacesPerSecond;
+	const long double targetNanoseconds =
+	    targetFps > 0.0f ?
+	    1000000000.0L / static_cast<long double>(targetFps) : 0.0L;
+	const long double calibratedFaceBudget =
+	    targetFps > 0.0f && calibratedFacesPerSecond > 0.0L ?
+	    calibratedFacesPerSecond /
+		static_cast<long double>(targetFps) : 0.0L;
+	/* Quiet refinement is normally monotonic, but a discrete PoP jump can
+	 * overshoot a nonlinear renderer ceiling.  Require three unchanged
+	 * calibration probes, a material frame miss, and a calibrated budget
+	 * materially below the current cut before permitting recovery.  The
+	 * recovery changes only the retained draw prefix; it does not restore a
+	 * box or rebuild/reload the asset. */
+	const SbBool stableOverloadRecovery =
+	    !this->d->lodInteractive &&
+	    !this->d->forceTerminalLodRefinement &&
+	    activeFaces > 0 &&
+	    this->d->lodStableCalibrationProbeCount >= 3 &&
+	    targetNanoseconds > 0.0L &&
+	    static_cast<long double>(
+		this->d->lastRenderTimeNanoseconds) >
+		targetNanoseconds * 1.20L &&
+	    calibratedFaceBudget > 0.0L &&
+	    calibratedFaceBudget <
+		static_cast<long double>(activeFaces) * 0.95L;
 	size_t faceBudget = this->d->lodSeedFaceBudget;
 	if (this->d->forceTerminalLodRefinement) {
 	    faceBudget = SIZE_MAX;
@@ -4607,22 +4744,26 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		size_t growthMultipleNumerator = 4;
 		size_t growthMultipleDenominator = 1;
 		if (!this->d->lodInteractive) {
-		    const long double targetNanoseconds =
+		    const long double growthTargetNanoseconds =
 			targetFps > 0.0f ?
 			1000000000.0L /
 			    static_cast<long double>(targetFps) : 0.0L;
+		    /* The faces/second calibration is already smoothed.  Growth
+		     * tiering must describe the population currently on screen:
+		     * an EMA spanning the earlier blank and minimum-cut frames
+		     * can keep a now-cheap cut at 1.25x growth indefinitely. */
 		    const uint64_t observedNanoseconds =
-			this->d->smoothedRenderTimeNanoseconds ?
-			this->d->smoothedRenderTimeNanoseconds :
-			this->d->lastRenderTimeNanoseconds;
-		    if (targetNanoseconds > 0.0L &&
+			this->d->lastRenderTimeNanoseconds ?
+			this->d->lastRenderTimeNanoseconds :
+			this->d->smoothedRenderTimeNanoseconds;
+		    if (growthTargetNanoseconds > 0.0L &&
 			static_cast<long double>(observedNanoseconds) >=
-			    targetNanoseconds * 0.50L) {
+			    growthTargetNanoseconds * 0.50L) {
 			growthMultipleNumerator = 5;
 			growthMultipleDenominator = 4;
-		    } else if (targetNanoseconds > 0.0L &&
+		    } else if (growthTargetNanoseconds > 0.0L &&
 			static_cast<long double>(observedNanoseconds) >=
-			    targetNanoseconds * 0.25L) {
+			    growthTargetNanoseconds * 0.25L) {
 			growthMultipleNumerator = 2;
 		    }
 		}
@@ -4654,7 +4795,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	     * can contradict the capacity probe's measured headroom and create
 	     * an endless no-progress repaint loop.  Camera interaction remains
 	     * free to select a coarser responsive cut. */
-	    if (!this->d->lodInteractive &&
+	    if (!this->d->lodInteractive && !stableOverloadRecovery &&
 		this->d->lodCurrentFaceBudget != SIZE_MAX)
 		faceBudget = std::max(faceBudget,
 		    this->d->lodCurrentFaceBudget);
@@ -4671,7 +4812,11 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    faceBudget == SIZE_MAX ? SIZE_MAX :
 	    (faceBudget > activeFaces ? faceBudget - activeFaces : 0);
 	this->d->lodRefinementFaceBudgetRemaining = additionalFaces;
+	/* Quiet cameras remain visually monotonic except for the confirmed
+	 * overload case above.  Recovery reuses already resident PoP arrays and
+	 * only lowers their draw counts, avoiding box flashes and reload churn. */
 	this->d->lodRetainedAdmissionActive =
+	    (this->d->lodInteractive || stableOverloadRecovery) &&
 	    faceBudget != SIZE_MAX && activeFaces > faceBudget ?
 	    TRUE : FALSE;
 	this->d->lodRetainedAdmissionBudgetRemaining =
@@ -4782,7 +4927,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * compact-index order and consume it in bounded waves.  Every occurrence
 	 * is still projected against the newest camera and charged to the same
 	 * aggregate face budget; only global ordering is deferred until the
-	 * stable pass.  This keeps warm-cache activation and emergency
+	 * stable pass.  This keeps warm-cache activation and interactive
 	 * coarsening progressive without a 50-200 ms monolithic UI stall. */
 	static const size_t interactiveCompactWave = 2048;
 	const int compactCount = source->getCompactInstanceCount();
@@ -4932,8 +5077,9 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * cut.  Bound probes at an unchanged visible population so floating
 	 * calibration convergence, a discrete next-level jump, or contradictory
 	 * thresholds cannot keep an otherwise stable retained view repainting
-	 * forever.  Eight 1.25x probes can span almost a 6x discrete jump; faster
-	 * frames use the existing 2x/4x growth tiers. */
+	 * forever.  Twelve 1.25x probes can span more than a 14x discrete jump
+	 * while costing at most about 0.6 seconds at the default 20 FPS stable
+	 * target; faster frames use the existing 2x/4x growth tiers. */
 	if (this->d->lodPassAdmittedWork) {
 	    this->d->lodStableCalibrationProbeActiveFaces = 0;
 	    this->d->lodStableCalibrationProbeCount = 0;
@@ -4942,15 +5088,31 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->d->lodStableCalibrationProbeActiveFaces = sceneActiveFaces;
 	    this->d->lodStableCalibrationProbeCount = 0;
 	}
-	static constexpr unsigned int maxStableCalibrationProbes = 8;
+	static constexpr unsigned int minimumStableCalibrationProbes = 3;
+	static constexpr unsigned int maxStableCalibrationProbes = 12;
+	const SbBool stableCalibrationEligible =
+	    !this->d->lodInteractive &&
+	    !this->d->lodPassAdmittedWork &&
+	    sceneActiveFaces > 0 &&
+	    this->d->lodCurrentFaceBudget != SIZE_MAX &&
+	    stableTargetNanoseconds > 0;
+	/* Never classify a newly reached quiet cut from a single frame.  OSMesa
+	 * in particular can pay shader/cache/setup work in the first traversal,
+	 * while a compositor stall can perturb System GL.  Three samples remain
+	 * a small bounded cost at the stable target and let subsequent ordinary
+	 * traversal cost govern the retained budget. */
 	const SbBool calibrationProbe =
-	    calibrationProbeCandidate &&
+	    stableCalibrationEligible &&
+	    (this->d->lodStableCalibrationProbeCount <
+		minimumStableCalibrationProbes ||
+	     calibrationProbeCandidate) &&
 	    this->d->lodStableCalibrationProbeCount <
 		maxStableCalibrationProbes;
-	if (calibrationProbe)
+	if (calibrationProbe) {
 	    this->d->lodStableCalibrationProbeCount++;
-	else if (!calibrationProbeCandidate)
+	} else if (!calibrationProbeCandidate) {
 	    this->d->lodStableCalibrationProbeCount = 0;
+	}
 	this->d->lodSubmissionSourceIndex = 0;
 	this->d->lodSubmissionEntryOffset = 0;
 	this->d->clearLodSubmissionPlan();
@@ -4958,8 +5120,18 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->lodSubmissionPending = FALSE;
 	this->d->lodBudgetRescanAfterFrame =
 	    this->d->lodPassAdmittedWork || calibrationProbe;
-	if (calibrationProbe)
-	    this->requestRender("lod-budget-calibration");
+	if (this->d->lodBudgetRescanAfterFrame) {
+	    const char *frameReason = calibrationProbe ?
+		"lod-budget-calibration" : "lod-budget-admission";
+	    /* A large compact scan can outlive the render request installed by
+	     * its first admitted result.  At pass completion there may then be
+	     * no worker, result, or fresh progressive-work edge left to wake the
+	     * host, even though completeRenderTiming() must consume this frame
+	     * before admission may continue.  Install both halves of the frame
+	     * contract explicitly. */
+	    this->requestRender(frameReason);
+	    this->notifyFrameRequest(frameReason);
+	}
 	append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
 	    SbString(""),
 	    this->d->lodBudgetRescanAfterFrame ?
@@ -5014,8 +5186,12 @@ BObolViewController::submitLodRequests(BObolLodService *service,
     if (this->d->lodSubmissionPending)
 	this->markProgressiveWorkPending();
 
-    if (this->d->lastLodUpdatedCutCount > 0)
+    if (this->d->lastLodUpdatedCutCount > 0) {
+	this->d->lodResidentCompactionPending = TRUE;
+	this->d->lodResidentCompactionAfterMicroseconds =
+	    bu_gettime() + 750000;
 	this->requestRender("lod-cut");
+    }
 
     return size_to_int_saturated(
 	       static_cast<size_t>(this->d->lastLodSubmittedTaskCount));
@@ -5156,6 +5332,10 @@ BObolViewController::applyLodResults(BObolLodService *service,
 
     if (this->d->lastLodAppliedResultCount > 0) {
 	this->requestRender("lod-result");
+	this->d->lodResultPublicationAwaitingFrame = TRUE;
+	this->d->lodResidentCompactionPending = TRUE;
+	this->d->lodResidentCompactionAfterMicroseconds =
+	    bu_gettime() + 750000;
 	(void)this->enforceMeshResidencyBudget();
 	if (partialRefinementCandidate)
 	    this->scheduleLodRefinementFrame("lod-result");
@@ -6316,12 +6496,12 @@ BObolViewController::beginLodInteraction(void)
 	    presentationNanoseconds);
     BObolViewLodState *viewState =
 	this->d->viewAttachment->getViewLodState();
-    this->d->lodEmergencyProgressiveCeiling =
+    this->d->lodInteractiveProgressiveCeiling =
 	controller_interactive_progressive_ceiling(
 	    viewState, this->d->lodTargetPixelError);
     if (viewState)
 	viewState->setCadPresentationProgressiveLodCeiling(
-	    this->d->lodEmergencyProgressiveCeiling);
+	    this->d->lodInteractiveProgressiveCeiling);
     /* The first pointer motion can precede the first camera signature change.
      * Treat the transition to the motion cut as a policy change so the
      * already resident mesh is coarsened before an expensive drag frame. */
@@ -6391,9 +6571,9 @@ BObolViewController::getLodTargetPixelError(void) const
 }
 
 int
-BObolViewController::getLodEmergencyProgressiveCeiling(void) const
+BObolViewController::getLodInteractiveProgressiveCeiling(void) const
 {
-    return this->d->lodEmergencyProgressiveCeiling;
+    return this->d->lodInteractiveProgressiveCeiling;
 }
 
 void
@@ -6501,7 +6681,8 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	 * permanently render-pending and suppresses later edge-triggered host
 	 * wakeups. */
 	if (this->d->lodAutoSubmit) {
-	    this->d->lodLastViewChangeMicroseconds = bu_gettime();
+	    const int64_t now = bu_gettime();
+	    this->d->lodLastViewChangeMicroseconds = now;
 	    this->d->lodInteractive = TRUE;
 	    this->d->lodReleaseCutFloorActive = FALSE;
 	    this->d->lodStableCalibrationProbeActiveFaces = 0;
@@ -6517,6 +6698,7 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	    if (this->d->lodSettleAfterRenderSerial == 0)
 		this->d->lodSettleAfterRenderSerial = 1;
 	    this->d->lodResidentCompactionPending = TRUE;
+	    this->d->lodResidentCompactionAfterMicroseconds = now + 750000;
 	    /* Preserve a pending cut's frame gate across a newer camera
 	     * signature.  The action may still coarsen immediately, but it must
 	     * not expose another finer prefix before any intervening frame. */
@@ -6540,13 +6722,13 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 		    presentationNanoseconds);
 	    BObolViewLodState *viewState =
 		this->d->viewAttachment->getViewLodState();
-	    if (this->d->lodEmergencyProgressiveCeiling < 0)
-		this->d->lodEmergencyProgressiveCeiling =
+	    if (this->d->lodInteractiveProgressiveCeiling < 0)
+		this->d->lodInteractiveProgressiveCeiling =
 		    controller_interactive_progressive_ceiling(
 			viewState, this->d->lodTargetPixelError);
 	    if (viewState)
 		viewState->setCadPresentationProgressiveLodCeiling(
-		    this->d->lodEmergencyProgressiveCeiling);
+		    this->d->lodInteractiveProgressiveCeiling);
 	    this->markProgressiveWorkPending();
 	}
     }

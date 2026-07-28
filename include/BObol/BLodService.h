@@ -85,6 +85,9 @@ struct BOBOL_EXPORT BObolLodTask {
     BObolLodCacheWriteProc cacheWrite;
     void *cacheWriteData;
     uint32_t debugDelayMilliseconds;
+    /* Conservative peak bytes needed while realize() is executing.  Zero
+     * asks the service to estimate from request.sourceCounts. */
+    size_t estimatedWorkingSetBytes;
     SbBool publishResult;
     SbBool writeCache;
 
@@ -134,6 +137,32 @@ bobol_lod_submit_rt_source_full_detail_request(
 	uint64_t maxFullDetailFaceCount,
 	uint64_t maxFullDetailPointCount);
 
+/* Process-wide admission for transient LoD preparation memory.  Individual
+ * services retain their own (possibly smaller) limits, while this shared
+ * governor prevents several views or independent cold-preparation stages from
+ * each consuming the full host-derived allowance at the same time.  A request
+ * larger than the limit is admitted only when it can run alone. */
+BOBOL_EXPORT void
+bobol_lod_working_set_acquire(size_t estimatedBytes);
+
+BOBOL_EXPORT void
+bobol_lod_working_set_release(size_t estimatedBytes);
+
+BOBOL_EXPORT size_t
+bobol_lod_working_set_global_limit(void);
+
+BOBOL_EXPORT size_t
+bobol_lod_working_set_global_active_bytes(void);
+
+BOBOL_EXPORT size_t
+bobol_lod_working_set_global_peak_bytes(void);
+
+BOBOL_EXPORT size_t
+bobol_lod_working_set_global_active_tasks(void);
+
+BOBOL_EXPORT size_t
+bobol_lod_working_set_global_peak_tasks(void);
+
 struct BObolLodServicePrivate;
 
 class BOBOL_EXPORT BObolLodService {
@@ -154,6 +183,17 @@ public:
 	size_t maxQueuedResults, size_t maxQueuedCacheWrites);
     void getQueueLimits(size_t &maxActiveTasks,
 	size_t &maxQueuedResults, size_t &maxQueuedCacheWrites) const;
+    /* Bound concurrent realization scratch independently of worker count.
+     * Passing zero restores the host-derived default; SIZE_MAX disables the
+     * byte governor.  One task larger than the limit may run only when no
+     * other realization is active, preventing deadlock while serializing
+     * exceptional meshes. */
+    void setWorkingSetLimit(size_t maxActiveBytes);
+    size_t getWorkingSetLimit(void) const;
+    size_t activeWorkingSetBytesForDiagnostics(void) const;
+    size_t executingTaskCountForDiagnostics(void) const;
+    size_t peakWorkingSetBytesForDiagnostics(void) const;
+    size_t peakExecutingTaskCountForDiagnostics(void) const;
     size_t availableResultTaskCapacity(void) const;
 
     uint64_t submit(const BObolLodTask &task);
@@ -181,6 +221,7 @@ public:
     size_t completedTaskCountForDiagnostics(void) const;
     size_t cancelledGenerationCountForDiagnostics(void) const;
     size_t residentMeshAssetCountForDiagnostics(void) const;
+    size_t residentMeshBytesForDiagnostics(void) const;
     uint64_t residentMeshCacheLoadCountForDiagnostics(void) const;
     uint64_t residentMeshHitCountForDiagnostics(void) const;
     uint64_t residentMeshCompactionCountForDiagnostics(void) const;

@@ -20,6 +20,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 class BObolLodService;
@@ -150,6 +152,9 @@ private:
     size_t submissionTaskLimit;
     size_t retainedSceneFaceBudget;
     size_t retainedSceneFaceBudgetUsed;
+    /* Occurrences charged by the scene-wide retained recovery pass.  The
+     * bounded provider window must not charge them a second time. */
+    std::unordered_set<std::string> retainedRecoveredOccurrences;
     SbBool deferredCompactEntries;
     unsigned int visitedMeshCount;
     unsigned int submittedTaskCount;

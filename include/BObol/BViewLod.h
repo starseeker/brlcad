@@ -219,6 +219,11 @@ public:
      * occurrence allocator catches up with an interactive view. */
     void setCadPresentationProgressiveLodCeiling(int level) const;
     size_t estimateDisplayMeshBytes(void) const;
+    /* Report the richest prefix currently drawn by any view-local occurrence
+     * of each retained asset.  This is deliberately activeLevel rather than
+     * the unconstrained requestedLevel: the service consumes this snapshot
+     * only after submission and worker activity are idle, and uses it to
+     * reclaim prefixes above the stable scene-budget cut. */
     void residentMeshDemands(
 	std::vector<BObolLodResidentDemand> &demands) const;
     uint64_t cadRevision(void) const;

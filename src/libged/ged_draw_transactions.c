@@ -1480,6 +1480,7 @@ _ged_draw_txn_result_prepare(struct ged_draw_transaction_result *result,
     result->redrawn_count = 0;
     result->error_count = 0;
     result->presentation_only = 0;
+    result->progressive_data_complete = 0;
     result->scene_revision_before = ged_draw_scene_revision(gedp);
     result->scene_revision_after = result->scene_revision_before;
 }

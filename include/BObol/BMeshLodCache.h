@@ -165,6 +165,12 @@ bobol_mesh_lod_cache_store_mesh(
 BOBOL_EXPORT struct BObolMeshLod *
 bobol_mesh_lod_get(struct db_i *dbip, const char *name);
 
+/* Return the immutable cache identity backing an opened PoP handle.  This
+ * lets warm-cache consumers avoid a second status/name-key transaction after
+ * bobol_mesh_lod_get has already validated the same payload. */
+BOBOL_EXPORT unsigned long long
+bobol_mesh_lod_cache_key_get(const struct BObolMeshLod *lod);
+
 BOBOL_EXPORT int
 bobol_mesh_lod_load_level(struct BObolMeshLod *lod,
 			    int level,

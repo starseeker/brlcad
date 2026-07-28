@@ -379,8 +379,8 @@ public:
     unsigned int getLastMeshBudgetEvictedDisplayMeshCount(void) const;
     SbBool hasPendingLodResults(void) const;
     SbBool hasPendingLodSubmissions(void) const;
-    /** True while a newly selected retained PoP cut must be presented before
-     * another refinement step may be submitted. */
+    /** True while a retained PoP cut or unchanged calibration probe must be
+     * presented before another refinement step may be submitted. */
     SbBool hasPendingLodRefinementFrame(void) const;
     size_t processPendingLodResults(size_t maxResults = 0,
 	uint64_t maxMicroseconds = 0);
@@ -400,7 +400,7 @@ public:
     SbBool isLodInteractionActive(void) const;
     SbBool isLodGestureActive(void) const;
     float getLodTargetPixelError(void) const;
-    int getLodEmergencyProgressiveCeiling(void) const;
+    int getLodInteractiveProgressiveCeiling(void) const;
     /** Configure aggregate scene frame-rate goals.  Projected per-object
      * error remains the quality demand; these targets calibrate a total
      * displayed face/segment budget from measured frames so thousands of
