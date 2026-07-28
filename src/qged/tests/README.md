@@ -30,6 +30,28 @@ The model profiles are:
 - `full`: smoke plus havoc and Hubble.
 - `stress`: full plus shared Lucy, xpushed Lucy, and combined Stanford scenes.
 
+Repeated-instance Lucy and distinct-asset scale are deliberately separate.
+Generate the latter with:
+
+```sh
+ninja -C .build qged_unique_mesh_stress_generator
+./.build/src/qged/qged_unique_mesh_stress_generator \
+  .build/unique_mesh_stress.g
+```
+
+The default fixture has 5,000 independently stored, independently perturbed
+BoTs spanning approximately 500 to 100,000 faces, with an aggregate near 42
+million source faces.  Physical extent varies independently of triangle
+count.  The leaves occupy a three-dimensional elongated envelope with varied
+orientations.  Sixteen-leaf groups mix colored regions and ordinary
+combinations, and balanced eight-way parent levels provide a deep hierarchy.
+It therefore stresses source import, PoP construction, cache fan-out, result
+publication, upload, hierarchy expansion, region/color handling, and memory
+pressure rather than shared-asset instancing.  `--profile stress` includes it
+when the database exists; it may also be selected explicitly as `--cases
+unique_mesh_stress`.  Increase the count or maximum grid dimension for
+release-candidate hardware characterization.
+
 The runner inventories each input database before use and verifies its size
 afterward.  A suspiciously small `./.build/Generic_Twin.g` is rejected in favor
 of the installed `share/db/faa/Generic_Twin.g`, preventing a blank database

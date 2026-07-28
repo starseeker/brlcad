@@ -271,6 +271,10 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	controller->getSmoothedRenderTimeNanoseconds();
     const uint64_t smoothPresentation =
 	controller->getSmoothedPresentationIntervalNanoseconds();
+    const uint64_t smoothInteractivePresentation =
+	controller->getSmoothedInteractivePresentationIntervalNanoseconds();
+    const uint64_t displayedPresentation =
+	controller->getDisplayedPresentationIntervalNanoseconds();
     sample.insert(QStringLiteral("last_render_ms"),
 	static_cast<double>(lastRender) / 1000000.0);
     sample.insert(QStringLiteral("smoothed_render_ms"),
@@ -280,6 +284,32 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
     sample.insert(QStringLiteral("smoothed_present_fps"),
 	smoothPresentation ?
 	1000000000.0 / static_cast<double>(smoothPresentation) : 0.0);
+    sample.insert(QStringLiteral("smoothed_interactive_present_ms"),
+	static_cast<double>(smoothInteractivePresentation) / 1000000.0);
+    sample.insert(QStringLiteral("smoothed_interactive_present_fps"),
+	smoothInteractivePresentation ?
+	1000000000.0 /
+	    static_cast<double>(smoothInteractivePresentation) : 0.0);
+    sample.insert(QStringLiteral("displayed_present_ms"),
+	static_cast<double>(displayedPresentation) / 1000000.0);
+    sample.insert(QStringLiteral("displayed_present_fps"),
+	displayedPresentation ?
+	1000000000.0 / static_cast<double>(displayedPresentation) : 0.0);
+    sample.insert(QStringLiteral("lod_interactive_target_fps"),
+	static_cast<double>(controller->getLodInteractiveTargetFps()));
+    sample.insert(QStringLiteral("lod_stable_target_fps"),
+	static_cast<double>(controller->getLodStableTargetFps()));
+    sample.insert(QStringLiteral("active_lod_scene_faces"),
+	static_cast<qint64>(controller->getActiveLodFaceCount()));
+    sample.insert(QStringLiteral("lod_scene_face_budget"),
+	static_cast<qint64>(controller->getCurrentLodFaceBudget()));
+    sample.insert(QStringLiteral("lod_calibrated_faces_per_second"),
+	controller->getCalibratedLodFacesPerSecond());
+    sample.insert(QStringLiteral(
+	"lod_interactive_calibrated_faces_per_second"),
+	controller->getInteractiveCalibratedLodFacesPerSecond());
+    sample.insert(QStringLiteral("lod_stable_calibrated_faces_per_second"),
+	controller->getStableCalibratedLodFacesPerSecond());
     sample.insert(QStringLiteral("last_progressive_advance_ms"),
 	static_cast<double>(
 	    controller->getLastProgressiveAdvanceTimeNanoseconds()) /
@@ -322,6 +352,8 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	controller->isLodGestureActive() ? true : false);
     sample.insert(QStringLiteral("lod_target_pixel_error"),
 	static_cast<double>(controller->getLodTargetPixelError()));
+    sample.insert(QStringLiteral("lod_emergency_progressive_ceiling"),
+	controller->getLodEmergencyProgressiveCeiling());
     sample.insert(QStringLiteral("lod_visited_meshes"),
 	static_cast<int>(controller->getLastLodVisitedMeshCount()));
     sample.insert(QStringLiteral("lod_submitted_tasks"),
@@ -373,6 +405,7 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
     int activeProgressiveCadLevelMax = -1;
     int requestedProgressiveCadLevelMin = -1;
     int requestedProgressiveCadLevelMax = -1;
+    std::vector<std::string> activeProgressiveCadOccurrenceKeys;
     QJsonArray supersededFallbackPaths;
     std::vector<SoBRLDatabaseSource *> renderSources;
     qged_test_collect_database_source_roots(
@@ -385,11 +418,13 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	    continue;
 	std::vector<const BObolViewLodState::CadPayload *> payloads;
 	if (viewLodState)
-	    viewLodState->findCadPayloads(source, payloads);
+	    viewLodState->findCadPayloadsUnordered(source, payloads);
 	for (const BObolViewLodState::CadPayload *payload : payloads) {
 	    if (!payload || !payload->progressiveMesh)
 		continue;
 	    activeProgressiveCadPayloads++;
+	    activeProgressiveCadOccurrenceKeys.push_back(
+		payload->sourceInstanceKey.getString());
 	    if (payload->shadedCullBackfaces) {
 		activeProgressiveCadCullPayloads++;
 		activeProgressiveCadCullFaces +=
@@ -456,6 +491,18 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 			QString::fromLocal8Bit(path.getString()));
 	}
     }
+    std::sort(activeProgressiveCadOccurrenceKeys.begin(),
+	activeProgressiveCadOccurrenceKeys.end());
+    uint64_t activeProgressiveCadOccurrenceHash =
+	UINT64_C(1469598103934665603);
+    for (const std::string &key : activeProgressiveCadOccurrenceKeys) {
+	for (unsigned char c : key) {
+	    activeProgressiveCadOccurrenceHash ^= c;
+	    activeProgressiveCadOccurrenceHash *= UINT64_C(1099511628211);
+	}
+	activeProgressiveCadOccurrenceHash ^= 0xff;
+	activeProgressiveCadOccurrenceHash *= UINT64_C(1099511628211);
+    }
     sample.insert(QStringLiteral("deep_lod_diagnostics"),
 	collectDeepLodDiagnostics);
     sample.insert(QStringLiteral("compact_entries"), compactEntries);
@@ -474,6 +521,9 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	supersededFallbackPaths);
     sample.insert(QStringLiteral("active_progressive_cad_payloads"),
 	activeProgressiveCadPayloads);
+    sample.insert(QStringLiteral("active_progressive_cad_occurrence_hash"),
+	QString::number(
+	    static_cast<qulonglong>(activeProgressiveCadOccurrenceHash), 16));
     sample.insert(QStringLiteral("active_progressive_cad_cull_payloads"),
 	activeProgressiveCadCullPayloads);
     sample.insert(QStringLiteral("active_progressive_cad_faces"),

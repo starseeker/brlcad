@@ -656,7 +656,7 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
     struct bv *view = bv_context_view(s.v);
     s.obol->noteFramePresented();
     const uint64_t presentation_interval =
-	s.obol->getSmoothedPresentationIntervalNanoseconds();
+	s.obol->getDisplayedPresentationIntervalNanoseconds();
     if (presentation_interval)
 	(void)bv_frametime_set(view, presentation_interval);
 

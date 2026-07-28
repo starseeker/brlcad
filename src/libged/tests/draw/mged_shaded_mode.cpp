@@ -84,6 +84,11 @@ static long
 capture_obol_pixels(struct ged *gedp, const char *filename,
 	const char *label, int require_nonempty)
 {
+    if (!draw_test_obol_progressive_drain(gedp,
+	    ged_view_active_ctx(gedp), 2000, 1)) {
+	bu_log("FAIL: progressive realization did not settle for %s\n", label);
+	return -1;
+    }
     do_refresh(gedp);
     const char *sg_av[3] = {"screengrab", filename, NULL};
     if (ged_exec_screengrab(gedp, 2, sg_av) & BRLCAD_ERROR) {

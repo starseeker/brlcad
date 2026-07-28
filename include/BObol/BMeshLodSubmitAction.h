@@ -20,6 +20,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <vector>
 
 class BObolLodService;
 class BObolViewLodState;
@@ -70,6 +71,21 @@ public:
     void setViewLodState(BObolViewLodState *viewState);
     const BObolViewLodState *getViewLodState(void) const;
     void setCompactEntryRange(size_t first, size_t count);
+    /* Pin one deterministic compact-entry order across bounded service
+     * windows.  Without this plan a many-leaf source is projected and sorted
+     * again for every result-queue window, and a camera change can reorder a
+     * partially consumed cursor so entries are skipped. */
+    void setCompactEntryPlan(const std::vector<size_t> &entryIndices);
+    void getCompactEntryPlan(std::vector<size_t> &entryIndices) const;
+    /* Provider queue capacity limits tasks, not cheap scene decisions.
+     * Retargeting resident cuts and binding shared assets may scan the whole
+     * pinned plan without consuming a result slot. */
+    void setSubmissionTaskLimit(size_t taskCount);
+    /* When an already-resident scene exceeds its calibrated total budget,
+     * re-admit retained occurrences in pinned priority order.  Occurrences
+     * whose minimum cut cannot fit fall back to their structural proxy. */
+    void setRetainedSceneFaceBudget(size_t totalFaces);
+    size_t getRetainedSceneFaceBudgetUsed(void) const;
     size_t getCompactEntryNext(void) const;
     size_t getCompactEntryTotal(void) const;
     SbBool hasDeferredCompactEntries(void) const;
@@ -92,6 +108,13 @@ private:
     SbBool reserveRefinementFaces(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
 	int activeLevel, int nextLevel);
+    /* Reserve a conservative first-cut population before its hierarchy has
+     * been opened by a worker.  This closes the all-box zero-face blind spot:
+     * thousands of independent warm-cache requests must not each interpret
+     * an aggregate scene budget as their own private allowance. */
+    SbBool reserveInitialFaces(uint64_t sourceFaces,
+	size_t &providerFaceAllowance);
+    SbBool reserveInitialFaceCost(size_t faceCount);
 
     BObolLodService *service;
     struct db_i *dbip;
@@ -122,12 +145,19 @@ private:
     size_t compactEntryLimit;
     size_t compactEntryNext;
     size_t compactEntryTotal;
+    std::vector<size_t> compactEntryPlan;
+    SbBool compactEntryPlanSupplied;
+    size_t submissionTaskLimit;
+    size_t retainedSceneFaceBudget;
+    size_t retainedSceneFaceBudgetUsed;
     SbBool deferredCompactEntries;
     unsigned int visitedMeshCount;
     unsigned int submittedTaskCount;
     unsigned int updatedCutCount;
     unsigned int pendingRetainedRefinementCount;
     unsigned int skippedMeshCount;
+    unsigned int diagnosticCount;
+    unsigned int suppressedDiagnosticCount;
     SbString diagnostics;
 };
 

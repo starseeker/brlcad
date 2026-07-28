@@ -150,9 +150,37 @@ wait_for_lod_service(struct ged *gedp, int timeout_ms)
     if (!controller)
 	return 1;
 
+    BObolProgressiveOptions options;
+    options.forceTerminalLodRefinement = TRUE;
     for (int elapsed = 0; elapsed <= timeout_ms; elapsed += 25) {
 	BObolProgressiveStatus progressive;
-	(void)controller->advanceProgressiveWork(NULL, &progressive);
+	(void)controller->advanceProgressiveWork(&options, &progressive);
+
+	/* A resident PoP prefix advances one visible cut per presented frame.
+	 * Polling workers alone therefore cannot settle: it leaves the
+	 * controller intentionally gated behind the first unpublished cut.
+	 * Exercise the same advance -> render -> present contract as a real host
+	 * while retaining this test's bounded wait. */
+	const int host_frame_pending =
+	    controller->isRenderRequested() &&
+	    progressive.inFlight == 0 && progressive.pendingTasks == 0 &&
+	    progressive.queuedResults == 0;
+	if (progressive.changed ||
+	    controller->hasPendingLodRefinementFrame() ||
+	    host_frame_pending) {
+	    unsigned char *image = NULL;
+	    BObolProgressiveStatus render_status;
+	    if (controller->renderToImage(&image, 0, 0, NULL, NULL,
+		    &render_status) != BRLCAD_OK) {
+		if (image)
+		    bu_free(image, "LoD cross-run progressive frame");
+		return 0;
+	    }
+	    if (image)
+		bu_free(image, "LoD cross-run progressive frame");
+	    controller->noteFramePresented();
+	    progressive = render_status;
+	}
 	BObolLodService *service = controller->getLodService();
 	const int service_idle = !service ||
 	    (service->inFlightCount() == 0 &&

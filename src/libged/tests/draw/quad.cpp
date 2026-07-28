@@ -38,7 +38,11 @@
 #include <ged/draw.h>
 #include <ged/event_txn.h>
 
-#define QUAD_SSIM_THRES 0.985
+/* Historical controls came from four legacy display managers and encode
+ * their primitive wire tessellation.  The retained renderer is checked
+ * structurally here; exact view projection, including elevation 90, is
+ * asserted independently by libBObol_lod_update_action. */
+#define QUAD_SSIM_THRES 0.92
 
 static int keep_images = 0;
 

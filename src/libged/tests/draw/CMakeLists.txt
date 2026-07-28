@@ -167,7 +167,7 @@ distclean(${CMAKE_CURRENT_BINARY_DIR}/moss_lod_cr_tmp.g)
 distclean(${CMAKE_CURRENT_BINARY_DIR}/lod_crossrun_cache)
 
 # MGED view-state regression tests not covered by image baselines.
-brlcad_addexec(ged_test_mged_view_state "mged_view_state.cpp;util.cpp" "libged;libBObol" TEST)
+brlcad_addexec(ged_test_mged_view_state "mged_view_state.cpp;util.cpp" "libged;libBObol;libicv" TEST)
 if(TARGET ged_test_mged_view_state)
   foreach(tdp ${test_deps})
     if (TARGET ${tdp})

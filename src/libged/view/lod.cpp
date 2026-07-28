@@ -100,6 +100,7 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 			       "view lod scale [factor]\n"
 			       "view lod point_scale [factor]\n"
 			       "view lod curve_scale [factor]\n"
+			       "view lod fps [interactive [stable]]\n"
 			       "view lod bot_threshold [face_cnt]\n";
 
     GED_CHECK_ARGC_GT_0(gedp, argc, BRLCAD_ERROR);
@@ -170,6 +171,16 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	bu_vls_printf(gedp->ged_result_str, "point_scale: %g\n", lod_policy.point_scale);
 	bu_vls_printf(gedp->ged_result_str, "curve_scale: %g\n", lod_policy.curve_scale);
 	bu_vls_printf(gedp->ged_result_str, "bot_threshold: %zu\n", lod_policy.bot_threshold);
+	if (view_controller) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"fps(interactive/stable): %g/%g\n",
+		view_controller->getLodInteractiveTargetFps(),
+		view_controller->getLodStableTargetFps());
+	    bu_vls_printf(gedp->ged_result_str,
+		"scene_faces(active/budget): %zu/%zu\n",
+		view_controller->getActiveLodFaceCount(),
+		view_controller->getCurrentLodFaceBudget());
+	}
 	return BRLCAD_OK;
     }
 
@@ -252,6 +263,47 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 	}
 	bu_vls_printf(gedp->ged_result_str, "Error - invalid arg: \"%s\".  Valid args are 0 or 1", argv[1]);
 	return BRLCAD_ERROR;
+    }
+
+    if (BU_STR_EQUAL(argv[0], "fps")) {
+	if (!view_controller) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"no Obol LoD controller is attached to the current view\n");
+	    return BRLCAD_ERROR;
+	}
+	if (argc == 1) {
+	    bu_vls_printf(gedp->ged_result_str, "%g %g\n",
+		view_controller->getLodInteractiveTargetFps(),
+		view_controller->getLodStableTargetFps());
+	    return BRLCAD_OK;
+	}
+	if (argc > 3) {
+	    bu_vls_printf(gedp->ged_result_str, "Usage:\n%s", usage);
+	    return BRLCAD_ERROR;
+	}
+	fastf_t interactive = 0.0;
+	fastf_t stable = 0.0;
+	if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[1],
+		(void *)&interactive) != 1 ||
+	    interactive <= 0.0) {
+	    bu_vls_printf(gedp->ged_result_str,
+		"invalid interactive FPS target: %s\n", argv[1]);
+	    return BRLCAD_ERROR;
+	}
+	if (argc == 3) {
+	    if (bu_opt_fastf_t(NULL, 1, (const char **)&argv[2],
+		    (void *)&stable) != 1 || stable <= 0.0) {
+		bu_vls_printf(gedp->ged_result_str,
+		    "invalid stable FPS target: %s\n", argv[2]);
+		return BRLCAD_ERROR;
+	    }
+	} else {
+	    stable = interactive;
+	}
+	view_controller->setLodFrameRateTargets(
+	    static_cast<float>(interactive), static_cast<float>(stable));
+	redraw_view();
+	return BRLCAD_OK;
     }
 
     if (BU_STR_EQUAL(argv[0], "cache")) {
@@ -424,6 +476,21 @@ _view_cmd_lod(void *bs, int argc, const char **argv)
 		view_controller->hasProgressiveWorkPending() ? 1 : 0);
 	    bu_vls_printf(gedp->ged_result_str, "workers: %zu\n",
 		view_controller->getManagedLodWorkerCount());
+	    bu_vls_printf(gedp->ged_result_str,
+		"target_fps_interactive: %g\n",
+		view_controller->getLodInteractiveTargetFps());
+	    bu_vls_printf(gedp->ged_result_str,
+		"target_fps_stable: %g\n",
+		view_controller->getLodStableTargetFps());
+	    bu_vls_printf(gedp->ged_result_str,
+		"active_scene_faces: %zu\n",
+		view_controller->getActiveLodFaceCount());
+	    bu_vls_printf(gedp->ged_result_str,
+		"scene_face_budget: %zu\n",
+		view_controller->getCurrentLodFaceBudget());
+	    bu_vls_printf(gedp->ged_result_str,
+		"calibrated_faces_per_second: %.0f\n",
+		view_controller->getCalibratedLodFacesPerSecond());
 	    bu_vls_printf(gedp->ged_result_str, "in_flight: %zu\n",
 		service ? service->inFlightCount() : 0);
 	    bu_vls_printf(gedp->ged_result_str, "pending_tasks: %zu\n",

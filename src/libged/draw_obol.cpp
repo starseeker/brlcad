@@ -5404,7 +5404,7 @@ ged_obol_faceplate_params_parts(struct ged_view_context *view_ctx,
 
     const uint64_t frametime = bv_frametime_get(ged_obol_bv_const(view_ctx));
     if (params->draw_fps && frametime > 0) {
-	bu_vls_sprintf(&text, "FPS:%.2f",
+	bu_vls_sprintf(&text, "FPS:%.1f",
 		1000000000.0 / (fastf_t)frametime);
 	parts.push_back(bu_vls_cstr(&text));
     }
@@ -6157,7 +6157,7 @@ ged_obol_view_context_faceplate_sync(struct ged *gedp, struct ged_view_context *
      * an observed frame rate.  Hosts publish their completed-presentation
      * cadence separately, including offscreen/headless hosts. */
     const uint64_t presentation_interval =
-	controller->getSmoothedPresentationIntervalNanoseconds();
+	controller->getDisplayedPresentationIntervalNanoseconds();
     if (presentation_interval)
 	(void)bv_frametime_set(ged_obol_bv(view_ctx), presentation_interval);
     ged_obol_faceplate_sync_params(controller, view_ctx);
@@ -16833,7 +16833,40 @@ ged_obol_structural_proxy_manifest_occurrence(
     node.metadataValid = cached.metadataValid;
     if (node.metadataValid)
 	node.metadata = cached.metadata;
-    return ged_obol_structural_proxy_occurrence(ctx, node);
+    BObolCompactOccurrence occurrence =
+	ged_obol_structural_proxy_occurrence(ctx, node);
+    if (cached.sourceMeshRequestValid && cached.meshAssetPath &&
+	cached.meshAssetPath[0] && cached.meshAssetName &&
+	cached.meshAssetName[0]) {
+	occurrence.sourceMeshRequestValid = TRUE;
+	BObolSourceMeshRequest &request = occurrence.sourceMeshRequest;
+	request.path = node.path.c_str();
+	request.sourceName = node.objectName.c_str();
+	request.sourceType = "bot";
+	request.meshAssetPath = cached.meshAssetPath;
+	request.meshAssetName = cached.meshAssetName;
+	request.meshAssetBounds = SbBox3f(
+	    SbVec3f(static_cast<float>(cached.meshAssetBoundsMin[X]),
+		static_cast<float>(cached.meshAssetBoundsMin[Y]),
+		static_cast<float>(cached.meshAssetBoundsMin[Z])),
+	    SbVec3f(static_cast<float>(cached.meshAssetBoundsMax[X]),
+		static_cast<float>(cached.meshAssetBoundsMax[Y]),
+		static_cast<float>(cached.meshAssetBoundsMax[Z])));
+	request.faceCount = cached.sourceFaceCount;
+	request.pointCount = cached.sourcePointCount;
+	request.bounds = occurrence.summary.bounds;
+	request.databaseIntent = 1;
+	request.localSource = 1;
+	request.drawMode = occurrence.summary.drawMode;
+	request.recordRole = "lod-source";
+	request.geometryKind = "surface";
+	request.lodAvailable = 1;
+	const SbVec3f bmin = request.bounds.getMin();
+	const SbVec3f bmax = request.bounds.getMax();
+	request.lodBoundsMin = bmin;
+	request.lodBoundsMax = bmax;
+    }
+    return occurrence;
 }
 
 static int
@@ -16954,6 +16987,40 @@ ged_obol_store_leaf_proxy_manifest(
 	VSET(cached.boundsMax, bmax[0], bmax[1], bmax[2]);
 	cached.booleanOperation = occurrence.booleanOperation;
 	cached.occurrenceIndex = occurrence.occurrenceIndex;
+	if (occurrence.sourceMeshRequestValid) {
+	    const BObolSourceMeshRequest &request =
+		occurrence.sourceMeshRequest;
+	    const char *assetPath = request.meshAssetPath.getLength() > 0 ?
+		request.meshAssetPath.getString() :
+		occurrence.summary.path.getString();
+	    const char *assetName = request.meshAssetName.getLength() > 0 ?
+		request.meshAssetName.getString() :
+		occurrence.summary.sourceName.getString();
+	    const SbBox3f assetBounds = !request.meshAssetBounds.isEmpty() ?
+		request.meshAssetBounds :
+		(!request.bounds.isEmpty() ? request.bounds :
+		    occurrence.summary.bounds);
+	    if (!assetPath || !assetPath[0] || !assetName ||
+		!assetName[0] || assetBounds.isEmpty()) {
+		valid = 0;
+		break;
+	    }
+	    cached.sourceMeshRequestValid = 1;
+	    cached.meshAssetPath = bu_strdup(assetPath);
+	    cached.meshAssetName = bu_strdup(assetName);
+	    if (!cached.meshAssetPath || !cached.meshAssetName) {
+		valid = 0;
+		break;
+	    }
+	    const SbVec3f assetMin = assetBounds.getMin();
+	    const SbVec3f assetMax = assetBounds.getMax();
+	    VSET(cached.meshAssetBoundsMin,
+		assetMin[0], assetMin[1], assetMin[2]);
+	    VSET(cached.meshAssetBoundsMax,
+		assetMax[0], assetMax[1], assetMax[2]);
+	    cached.sourceFaceCount = request.faceCount;
+	    cached.sourcePointCount = request.pointCount;
+	}
 	/* Geometry realization already owns the full material semantics.  The
 	 * leaf-box manifest is intentionally presentation-only; fabricating a
 	 * partial directory record here could override correct inherited state. */
@@ -18287,6 +18354,15 @@ ged_obol_progressive_advance_provider(
 
     local_status.changed = refined > 0 ? 1 : 0;
     local_status.hasMore = has_pending_job;
+    local_status.inFlight = has_pending_job ? 1 : 0;
+    if (has_pending_job && ged_obol_timing_enabled()) {
+	const int deferred_state = data->deferred_job ?
+	    data->deferred_job->state.load(std::memory_order_acquire) : -1;
+	bu_log("[obol-timing] provider pending: stage=%d deferred=%d "
+	       "pending_jobs=%zu stream_more=%d\n",
+	       data->deferred_refine_stage, deferred_state,
+	       data->pending_jobs.size(), stream_more);
+    }
 
     /* The deferred realization job streams leaf-local boxes/geometry onto the
      * root occurrence registry and atomically adopts the completed index. */

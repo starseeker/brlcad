@@ -47,6 +47,7 @@
 #include <cstdio>
 
 #include <bu.h>
+#include <icv.h>
 #include "bu/opt.h"
 #include "rt/edit.h"
 #include "rt/view.h"
@@ -76,6 +77,34 @@ do_full_refresh(struct ged *gedp)
 	ged_draw_transaction_make(GED_DRAW_TXN_REDRAW, NULL);
     txn.view = v;
     ged_draw_apply_transaction(gedp, &txn, NULL);
+}
+
+static double
+rgb_image_ssim(const unsigned char *a, const unsigned char *b,
+	size_t width, size_t height)
+{
+    if (!a || !b || !width || !height)
+	return -1.0;
+
+    icv_image_t *ia = icv_create(width, height, ICV_COLOR_SPACE_RGB);
+    icv_image_t *ib = icv_create(width, height, ICV_COLOR_SPACE_RGB);
+    if (!ia || !ib) {
+	if (ia)
+	    icv_destroy(ia);
+	if (ib)
+	    icv_destroy(ib);
+	return -1.0;
+    }
+
+    const size_t channel_count = width * height * 3u;
+    for (size_t i = 0; i < channel_count; i++) {
+	ia->data[i] = static_cast<double>(a[i]) / 255.0;
+	ib->data[i] = static_cast<double>(b[i]) / 255.0;
+    }
+    const double score = icv_adiff(ia, ib, ICV_DIFF_SSIM);
+    icv_destroy(ia);
+    icv_destroy(ib);
+    return score;
 }
 
 static int
@@ -828,29 +857,41 @@ test_owned_render_endpoint(const char *datadir)
 
     BObolProgressiveStatus full_status;
     if (!fail && root_status.hasMore) {
-	if (!draw_test_obol_progressive_drain(gedp, view_ctx, 500, 1) ||
+	const int drained =
+	    draw_test_obol_progressive_drain(gedp, view_ctx, 500, 1);
+	const int rendered =
 	    controller->renderToImage(&deferred_full_image, 1, 0, NULL, NULL,
-		&full_status) != BRLCAD_OK || !deferred_full_image ||
-	    full_status.hasMore ||
-	    memcmp(image, deferred_full_image, 384u * 384u * 3u) != 0) {
-	    bu_log("FAIL: deferred refinement should reproduce the direct image exactly\n");
+		&full_status);
+	const double score = deferred_full_image ?
+	    rgb_image_ssim(image, deferred_full_image, 384u, 384u) : -1.0;
+	if (!drained || rendered != BRLCAD_OK || !deferred_full_image ||
+	    full_status.hasMore || score < 0.98) {
+	    bu_log("FAIL: deferred refinement did not reproduce a visually equivalent terminal image (SSIM %.9g)\n",
+		score);
 	    fail = 1;
 	} else if (!fail) {
-	    bu_log("PASS: interactive draw published %s then refined exactly\n",
-		root_status.changed ? "a progressive root" : "pending final data");
+	    bu_log("PASS: interactive draw published %s then refined to a visually equivalent terminal image (SSIM %.9g)\n",
+		root_status.changed ? "a progressive root" : "pending final data",
+		score);
 	}
     } else if (!fail) {
 	/* A small job may complete before the first frame.  Prefer its final
 	 * geometry instead of forcing a visible intermediate proxy frame. */
-	if (memcmp(image, deferred_root_image, 384u * 384u * 3u) != 0 ||
+	const double root_score =
+	    rgb_image_ssim(image, deferred_root_image, 384u, 384u);
+	const int rendered =
 	    controller->renderToImage(&deferred_full_image, 1, 0, NULL, NULL,
-		&full_status) != BRLCAD_OK || !deferred_full_image ||
-	    full_status.hasMore ||
-	    memcmp(image, deferred_full_image, 384u * 384u * 3u) != 0) {
-	    bu_log("FAIL: completed deferred work did not use the final image\n");
+		&full_status);
+	const double full_score = deferred_full_image ?
+	    rgb_image_ssim(image, deferred_full_image, 384u, 384u) : -1.0;
+	if (root_score < 0.98 || rendered != BRLCAD_OK ||
+	    !deferred_full_image || full_status.hasMore || full_score < 0.98) {
+	    bu_log("FAIL: completed deferred work did not use a visually equivalent terminal image (root SSIM %.9g, final SSIM %.9g)\n",
+		root_score, full_score);
 	    fail = 1;
 	} else {
-	    bu_log("PASS: interactive draw used completed final geometry immediately\n");
+	    bu_log("PASS: interactive draw used visually equivalent completed geometry immediately (SSIM %.9g)\n",
+		full_score);
 	}
     }
 

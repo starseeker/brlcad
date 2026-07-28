@@ -71,6 +71,11 @@ struct BOBOL_EXPORT BObolProgressiveOptions {
      * atomic, so this is checked between bounded batches.  Zero disables the
      * time limit. */
     uint64_t maxProviderMicroseconds;
+    /** Admit the requested pixel-exact PoP cut without the interactive
+     * frame-time/quiet-time ceilings.  Offline captures and deterministic
+     * tests still present every selected cut before advancing, but need not
+     * spend eight seconds emulating a human pause. */
+    SbBool forceTerminalLodRefinement;
 };
 
 struct BOBOL_EXPORT BObolProgressiveStatus {
@@ -274,7 +279,15 @@ public:
     /** Record one completed host/offscreen presentation.  This cadence is
      * intentionally separate from render work duration. */
     void noteFramePresented(void);
+    /** Short-horizon presentation cadence used by adaptive rendering policy
+     * and diagnostic telemetry.  This intentionally reacts faster than the
+     * user-facing FPS indication. */
     uint64_t getSmoothedPresentationIntervalNanoseconds(void) const;
+    uint64_t getSmoothedInteractivePresentationIntervalNanoseconds(void) const;
+    /** Human-facing presentation cadence.  This uses an elapsed-time EMA so
+     * its response is independent of frame rate and short scheduling bursts
+     * do not make the FPS faceplate flicker. */
+    uint64_t getDisplayedPresentationIntervalNanoseconds(void) const;
     /** Capture with the controller-bound provider, or with a transient
      * explicit override whose lifetime needs to extend only through this call. */
     int renderToImage(unsigned char **image,
@@ -387,6 +400,21 @@ public:
     SbBool isLodInteractionActive(void) const;
     SbBool isLodGestureActive(void) const;
     float getLodTargetPixelError(void) const;
+    int getLodEmergencyProgressiveCeiling(void) const;
+    /** Configure aggregate scene frame-rate goals.  Projected per-object
+     * error remains the quality demand; these targets calibrate a total
+     * displayed face/segment budget from measured frames so thousands of
+     * individually reasonable cuts cannot collectively collapse FPS. */
+    void setLodFrameRateTargets(float interactiveFps, float stableFps);
+    float getLodInteractiveTargetFps(void) const;
+    float getLodStableTargetFps(void) const;
+    size_t getCurrentLodFaceBudget(void) const;
+    size_t getActiveLodFaceCount(void) const;
+    /** Return the calibration selected for the controller's current
+     * interaction state. */
+    double getCalibratedLodFacesPerSecond(void) const;
+    double getInteractiveCalibratedLodFacesPerSecond(void) const;
+    double getStableCalibratedLodFacesPerSecond(void) const;
     unsigned int getLastLodVisitedMeshCount(void) const;
     unsigned int getLastLodSubmittedTaskCount(void) const;
     unsigned int getLastLodUpdatedCutCount(void) const;

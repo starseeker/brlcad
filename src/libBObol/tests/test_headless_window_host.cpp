@@ -224,6 +224,8 @@ test_headless_render_pending(HeadlessTestContextManager *manager)
 	  "headless poll records render reason");
     CHECK(host.getController()->getSmoothedPresentationIntervalNanoseconds() > 0,
 	  "headless host records completed-presentation cadence separately from render cost");
+    CHECK(host.getController()->getDisplayedPresentationIntervalNanoseconds() > 0,
+	  "headless host records a separately smoothed human-facing presentation cadence");
     host.getController()->unregisterProgressiveProvider(progressiveToken);
     return 0;
 }

@@ -19,6 +19,7 @@ backend_list="system,osmesa"
 mode_list="shaded,wire"
 swap_list="default"
 run_baseline=1
+baseline_only=0
 perf_case=""
 apitrace_case=""
 run_timeout=180
@@ -37,12 +38,13 @@ Usage: qged_gui_matrix.sh [options]
   --modes LIST             shaded,wire (default: both)
   --swap-intervals LIST    default,0,1,-1 (default: default)
   --no-baseline            Do not capture the production qged baseline
+  --baseline-only          Capture production baselines without current runs
   --perf CASE              Record one cold System GL case with perf
   --apitrace CASE          Trace one cold System GL case with apitrace
   --timeout SECONDS        Per-process timeout (default: 180)
 
 Cases: generic_twin, lucy, multi_lucy, multi_lucy_xpush, stanford, havoc,
-       hubble
+       hubble, many_lucy_stress, unique_mesh_stress
 
 The smoke profile uses generic_twin and lucy.  Full adds havoc and Hubble.
 Stress adds the shared/expanded Lucy scenes and the combined Stanford scene.
@@ -60,6 +62,7 @@ while [[ $# -gt 0 ]]; do
 	--modes) mode_list="$2"; shift 2 ;;
 	--swap-intervals) swap_list="$2"; shift 2 ;;
 	--no-baseline) run_baseline=0; shift ;;
+	--baseline-only) run_baseline=1; baseline_only=1; shift ;;
 	--perf) perf_case="$2"; shift 2 ;;
 	--apitrace) apitrace_case="$2"; shift 2 ;;
 	--timeout) run_timeout="$2"; shift 2 ;;
@@ -73,6 +76,9 @@ case "$profile" in
     full) default_cases="generic_twin,lucy,havoc,hubble" ;;
     stress)
 	default_cases="generic_twin,lucy,multi_lucy,multi_lucy_xpush,stanford,havoc,hubble"
+	if [[ -f "$build_dir/unique_mesh_stress.g" ]]; then
+	    default_cases+=",unique_mesh_stress"
+	fi
 	;;
     *) echo "ERROR: unknown profile '$profile'" >&2; exit 2 ;;
 esac
@@ -105,6 +111,24 @@ if [[ -e "$artifact_dir" ]]; then
 fi
 mkdir -p "$artifact_dir"/{cases,caches,events,inventory,baseline}
 
+screensaver_inhibit_pid=""
+cleanup_screensaver_inhibit()
+{
+    if [[ -n "$screensaver_inhibit_pid" ]]; then
+	kill "$screensaver_inhibit_pid" 2>/dev/null || true
+	wait "$screensaver_inhibit_pid" 2>/dev/null || true
+    fi
+}
+trap cleanup_screensaver_inhibit EXIT
+if [[ "$run_baseline" -eq 1 ]] &&
+	command -v xfce4-screensaver-command >/dev/null 2>&1; then
+    xfce4-screensaver-command --deactivate >/dev/null 2>&1 || true
+    xfce4-screensaver-command --inhibit \
+	--application-name qged-gui-matrix \
+	--reason "BRL-CAD GUI validation" >/dev/null 2>&1 &
+    screensaver_inhibit_pid=$!
+fi
+
 case_spec()
 {
     local case_name="$1"
@@ -126,6 +150,18 @@ case_spec()
 	    ;;
 	multi_lucy_xpush)
 	    printf '%s|%s|||\n' "$build_dir/stanford.g" "multi_lucy_xpush"
+	    ;;
+	many_lucy_stress)
+	    printf '%s|%s|||\n' \
+		"${BOBOL_MANY_LUCY_STRESS_DB:-$build_dir/many_lucy_stress.g}" \
+		"many_lucy_stress"
+	    ;;
+	unique_mesh_stress)
+	    printf '%s|%s|%s|%s|%s\n' \
+		"${BOBOL_UNIQUE_MESH_STRESS_DB:-$build_dir/unique_mesh_stress.g}" \
+		"unique_mesh_stress" "unique_mesh_stress" \
+		"unique_level_02_000000.c" \
+		"unique_mesh_stress/unique_level_02_000000.c/unique_level_01_000000.c/unique_level_00_000000.c/unique_region_000000.r"
 	    ;;
 	stanford)
 	    printf '%s|%s|%s|%s|%s\n' "$build_dir/stanford.g" "all" \
@@ -189,16 +225,121 @@ write_event_script()
     local draw_mode=1
     [[ "$mode" == "wire" ]] && draw_mode=0
     local hierarchy_events=""
+    local hierarchy_expand_events=""
+    local hierarchy_selection_labels=""
+    local working_set_events=""
+    # Qt::ControlModifier forces BRL-CAD's rotate binding independently of
+    # the operator's currently selected left-mouse toolbar mode.
+    local rotate_modifier=67108864
+    if [[ "$object" == "multi_lucy" ]]; then
+	# Focus the view on the first transformed Lucy, then orbit far enough
+	# around that focus for other occurrences to enter and leave the
+	# frustum.  This is deliberately distinct from the overview rotation
+	# below: it verifies working-set turnover while a small visible subset
+	# has a much richer pixel-exact cut.
+	working_set_events=$(cat <<EOF
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 90 0"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "center -509244 -1121531 192627"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "size 1000000"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-focus-stable.png"}},
+    {"target": "${canvas_target}", "action": "mouse_press",
+     "arguments": {"x": 0.32, "y": 0.48, "button": 1, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.46, "y": 0.43, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.60, "y": 0.52, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "mouse_move",
+     "arguments": {"x": 0.72, "y": 0.61, "button": 0, "buttons": 1,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 8}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-held.png"}},
+    {"target": "${canvas_target}", "action": "mouse_release",
+     "arguments": {"x": 0.72, "y": 0.61, "button": 1, "buttons": 0,
+                   "modifiers": ${rotate_modifier}}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-stable.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "size 1000000"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 0 0"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-0-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-0-stable.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "size 1000000"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "ae 90 0"}},
+    {"target": ".", "action": "wait", "arguments": {"ms": 50}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-90-motion.png"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-direction-90-stable.png"}},
+    {"target": ".", "action": "qged_command",
+     "arguments": {"command": "autoview"}},
+    {"target": ".", "action": "wait_progressive_idle",
+     "arguments": {"timeout_ms": ${settle_ms}, "quiet_ms": 100}},
+    {"target": "${canvas_target}", "action": "checkpoint",
+     "arguments": {"name": "${image_dir}/close-turnover-return.png"}},
+EOF
+)
+    fi
     if [[ -n "$hierarchy_root" && -n "$hierarchy_child" &&
 	    -n "$hierarchy_path" ]]; then
-	hierarchy_events=$(cat <<EOF
-,
+	if [[ "$object" == "unique_mesh_stress" ]]; then
+	    hierarchy_selection_labels="\"unique_mesh_stress\", \"unique_level_02_000000.c\", \"unique_level_01_000000.c\", \"unique_level_00_000000.c\", \"unique_region_000000.r\""
+	    hierarchy_expand_events=$(cat <<EOF
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_expanded",
+     "arguments": {"labels": ["unique_mesh_stress"], "expanded": true}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_expanded",
+     "arguments": {"labels": ["unique_mesh_stress", "unique_level_02_000000.c"],
+                   "expanded": true}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_expanded",
+     "arguments": {"labels": ["unique_mesh_stress", "unique_level_02_000000.c",
+                              "unique_level_01_000000.c"], "expanded": true}},
+    {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_expanded",
+     "arguments": {"labels": ["unique_mesh_stress", "unique_level_02_000000.c",
+                              "unique_level_01_000000.c",
+                              "unique_level_00_000000.c"], "expanded": true}},
+EOF
+)
+	else
+	    hierarchy_selection_labels="\"${hierarchy_root}\", \"${hierarchy_child}\""
+	    hierarchy_expand_events=$(cat <<EOF
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_expanded",
      "arguments": {"labels": ["${hierarchy_root}"], "expanded": true}},
+EOF
+)
+	fi
+	hierarchy_events=$(cat <<EOF
+,
+${hierarchy_expand_events}
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/tree-expanded.png"}},
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "set_current",
-     "arguments": {"labels": ["${hierarchy_root}", "${hierarchy_child}"]}},
+     "arguments": {"labels": [${hierarchy_selection_labels}]}},
     {"target": ".", "action": "wait", "arguments": {"ms": 50}},
     {"target": "./n:Hierarchy/i:hierarchy-tree", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/tree-selected.png"}},
@@ -292,30 +433,31 @@ EOF
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/zoom-return-stable.png"}},
 
+${working_set_events}
     {"target": "${canvas_target}", "action": "mouse_press",
      "arguments": {"x": 0.34, "y": 0.45, "button": 1, "buttons": 1,
-                   "modifiers": 0}},
+                   "modifiers": ${rotate_modifier}}},
     {"target": "${canvas_target}", "action": "mouse_move",
      "arguments": {"x": 0.40, "y": 0.47, "button": 0, "buttons": 1,
-                   "modifiers": 0}},
+                   "modifiers": ${rotate_modifier}}},
     {"target": ".", "action": "wait", "arguments": {"ms": 8}},
     {"target": "${canvas_target}", "action": "mouse_move",
      "arguments": {"x": 0.46, "y": 0.51, "button": 0, "buttons": 1,
-                   "modifiers": 0}},
+                   "modifiers": ${rotate_modifier}}},
     {"target": ".", "action": "wait", "arguments": {"ms": 8}},
     {"target": "${canvas_target}", "action": "mouse_move",
      "arguments": {"x": 0.52, "y": 0.55, "button": 0, "buttons": 1,
-                   "modifiers": 0}},
+                   "modifiers": ${rotate_modifier}}},
     {"target": ".", "action": "wait", "arguments": {"ms": 8}},
     {"target": "${canvas_target}", "action": "mouse_move",
      "arguments": {"x": 0.58, "y": 0.51, "button": 0, "buttons": 1,
-                   "modifiers": 0}},
+                   "modifiers": ${rotate_modifier}}},
     {"target": ".", "action": "wait", "arguments": {"ms": 8}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/rotate-held-end.png"}},
     {"target": "${canvas_target}", "action": "mouse_release",
      "arguments": {"x": 0.58, "y": 0.51, "button": 1, "buttons": 0,
-                   "modifiers": 0}},
+                   "modifiers": ${rotate_modifier}}},
     {"target": ".", "action": "wait", "arguments": {"ms": 50}},
     {"target": "${canvas_target}", "action": "checkpoint",
      "arguments": {"name": "${image_dir}/rotate-motion.png"}},
@@ -336,6 +478,7 @@ validate_report()
     local object="$3"
     local hierarchy_path="$4"
     local validation="$5"
+    local cache_state="${6:-cold}"
 
     if ! jq -e '
 	.success == true and
@@ -357,8 +500,13 @@ validate_report()
 	((.samples[-1].active_lod_aabb_payloads // 0) == 0) and
 	((.samples[-1].active_lod_obb_payloads // 0) == 0) and
 	((.samples[-1].active_lod_sphere_payloads // 0) == 0) and
-	((.samples[-1].compact_lod_entries // 0) ==
-	 (.samples[-1].compact_lod_entries_with_payload // 0))
+	# Compact entries outside the current view intentionally need no payload:
+	# requiring one for every leaf defeats view-aware LoD memory management.
+	# Existing payloads must instead form a one-to-one, entry-backed subset.
+	((.samples[-1].compact_lod_entries_with_payload // 0) <=
+	 (.samples[-1].compact_lod_entries // 0)) and
+	((.samples[-1].compact_lod_entries_with_payload // 0) ==
+	 (.samples[-1].active_lod_cad_payloads // 0))
 	' "$report" >"$validation" 2>&1; then
 	return 1
     fi
@@ -377,6 +525,14 @@ validate_report()
 	    (.elapsed_ms // 9223372036854775807))
 	' "$report" 2>/dev/null)
     local dimensions width height crop_height background changed_pixels
+    local minimum_changed_pixels=1000
+    # Thousands of widely spaced instances are intentionally subpixel in the
+    # initial all-model view.  Requiring 1,000 distinct pixels there rewards a
+    # larger proxy, not a faster useful answer; a visible 100-pixel footprint
+    # plus the later payload/count assertions is the meaningful threshold.
+    if [[ "$object" == "many_lucy_stress" ]]; then
+	minimum_changed_pixels=100
+    fi
     dimensions=$(identify -format '%wx%h' "$first_useful" 2>/dev/null || true)
     width="${dimensions%x*}"
     height="${dimensions#*x}"
@@ -398,7 +554,7 @@ validate_report()
     if [[ ! "$first_useful_elapsed" =~ ^[0-9]+$ ||
 	    "$first_useful_elapsed" -gt 5000 ||
 	    ! "$changed_pixels" =~ ^[0-9]+$ ||
-	    "$changed_pixels" -lt 1000 ]]; then
+	    "$changed_pixels" -lt "$minimum_changed_pixels" ]]; then
 	printf 'no useful model pixels by first-frame checkpoint: elapsed=%s changed_pixels=%s\n' \
 	    "$first_useful_elapsed" "$changed_pixels" >>"$validation"
 	return 1
@@ -505,6 +661,171 @@ validate_report()
 	return 1
     fi
 
+    # Shared-array instancing is useful only if view-local occurrences remain
+    # a real working set.  The close multi-Lucy sequence starts with a subset,
+    # coarsens it under a held drag, then selects two deterministic directions
+    # which exchange and retire occurrences.  Require actual occurrence-key
+    # turnover, not merely a changed camera or lower global face count.
+    if [[ "$object" == "multi_lucy" ]]; then
+	if ! jq -e '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/zoom-return-stable.png")))) as $overview |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-focus-stable.png")))) as $focus |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-turnover-held.png")))) as $held |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-turnover-stable.png")))) as $dragStable |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-direction-0-stable.png")))) as $direction0 |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-direction-90-stable.png")))) as $direction90 |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/close-turnover-return.png")))) as $returned |
+	    (($overview.active_lod_cad_payloads // 0) >= 5) and
+	    (($focus.active_lod_cad_payloads // 0) > 0) and
+	    (($focus.active_lod_cad_payloads // 0) <
+		($overview.active_lod_cad_payloads // 0)) and
+	    (($direction0.active_lod_cad_payloads // 0) > 0) and
+	    (($direction0.active_lod_cad_payloads // 0) <
+		($overview.active_lod_cad_payloads // 0)) and
+	    (($direction90.active_lod_cad_payloads // 0) > 0) and
+	    (($focus.active_progressive_cad_occurrence_hash // "") !=
+		($direction0.active_progressive_cad_occurrence_hash // "")) and
+	    (($direction0.active_progressive_cad_occurrence_hash // "") !=
+		($direction90.active_progressive_cad_occurrence_hash // "")) and
+	    (($direction90.active_progressive_cad_occurrence_hash // "") ==
+		($focus.active_progressive_cad_occurrence_hash // "")) and
+	    (($returned.active_progressive_cad_occurrence_hash // "") ==
+		($overview.active_progressive_cad_occurrence_hash // "")) and
+	    (($held.lod_emergency_progressive_ceiling // -1) >= 0) and
+	    (($held.active_progressive_cad_faces // 0) <
+		($focus.active_progressive_cad_faces // 0)) and
+	    (($held.last_render_ms // 9223372036854775807) <= 250) and
+	    (($dragStable.lod_emergency_progressive_ceiling // -2) == -1) and
+	    (($direction0.lod_emergency_progressive_ceiling // -2) == -1) and
+	    (($direction90.lod_emergency_progressive_ceiling // -2) == -1) and
+	    (all([$focus, $dragStable, $direction0, $direction90, $returned][];
+		((.active_lod_aabb_payloads // 0) == 0) and
+		((.active_lod_cad_payloads // 0) > 0)))
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'close-view occurrence working set did not turn over coherently\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # The occurrence-scale stress scene must be governed as one workload.
+    # Regressions here used to present as a slow left-to-right replay of
+    # thousands of independent PoP prefixes, followed by an unbounded motion
+    # frame.  Require a useful warm/cold mesh result, independent stable and
+    # interaction calibration, and convergence toward the finite aggregate
+    # motion budget.  The factor of two permits a bounded compact-entry wave
+    # to still be in flight at the held-button checkpoint.
+    if [[ "$object" == "many_lucy_stress" ]]; then
+	if ! jq -e --arg cache_state "$cache_state" '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/ae90-stable.png")))) as $initial |
+	    (first(.samples[] | select(.action == "mouse_press"))) as $press |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-held-end.png")))) as $held |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-motion.png")))) as $motion |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-stable.png")))) as $stable |
+	    (($cache_state != "warm") or
+		(($initial.elapsed_ms // 9223372036854775807) <= 6000)) and
+	    (($initial.active_lod_cad_payloads // 0) > 0) and
+	    (($motion.lod_scene_face_budget // 0) > 0) and
+	    (($motion.lod_scene_face_budget // 0) <
+		9223372036854775807) and
+	    (($motion.lod_interactive_calibrated_faces_per_second // 0) > 0) and
+	    (($motion.lod_stable_calibrated_faces_per_second // 0) > 0) and
+	    (($motion.active_lod_scene_faces // 0) <=
+		(($motion.lod_scene_face_budget // 0) * 2)) and
+	    (($motion.active_lod_scene_faces // 0) <=
+		($press.active_lod_scene_faces // 0)) and
+	    (($held.active_lod_scene_faces // 0) <=
+		($press.active_lod_scene_faces // 0)) and
+	    (($held.last_render_ms // 9223372036854775807) <= 250) and
+	    (($held.lod_emergency_progressive_ceiling // -1) >= 0) and
+	    (($stable.lod_emergency_progressive_ceiling // -2) == -1)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'occurrence-scale scene did not converge to its calibrated aggregate motion budget\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
+    # Distinct-asset scale must not be mistaken for repeated-instance scale.
+    # The default fixture has 5,000 independently stored BoTs.  System GL must
+    # graduate every resident asset from its box; a throughput-constrained
+    # software renderer may retain leaf boxes for occurrences whose coherent
+    # minimum PoP cut does not fit.  Both backends must load the full asset
+    # population, bound the motion cut, and recover without pending work.
+    if [[ "$object" == "unique_mesh_stress" ]]; then
+	if ! jq -e '
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/ae90-stable.png")))) as $initial |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-held-end.png")))) as $held |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-motion.png")))) as $motion |
+	    (first(.samples[] |
+		select((.checkpoint? // "") |
+		    endswith("/rotate-stable.png")))) as $stable |
+	    (($initial.elapsed_ms // 9223372036854775807) <= 30000) and
+	    (($initial.lod_service_resident_assets // 0) >= 1000) and
+	    (if .backend == "system_gl" then
+		(($initial.active_lod_cad_payloads // 0) ==
+		    ($initial.lod_service_resident_assets // -1))
+	     else
+		(($initial.active_lod_cad_payloads // 0) > 0)
+	     end) and
+	    (($initial.active_lod_aabb_payloads // 0) == 0) and
+	    (($held.active_lod_cad_payloads // 0) > 0) and
+	    (($held.active_lod_aabb_payloads // 0) == 0) and
+	    (($held.active_progressive_cad_faces // 0) <
+		($initial.active_progressive_cad_faces // 0)) and
+	    (($held.last_render_ms // 9223372036854775807) <= 250) and
+	    (($held.lod_emergency_progressive_ceiling // -1) >= 0) and
+	    (($motion.last_render_ms // 9223372036854775807) <= 250) and
+	    (if .backend == "system_gl" then
+		(($motion.active_lod_cad_payloads // 0) ==
+		    ($held.active_lod_cad_payloads // -1))
+	     else true end) and
+	    (if .backend == "system_gl" then
+		(($stable.active_lod_cad_payloads // 0) ==
+		    ($stable.lod_service_resident_assets // -1))
+	     else
+		(($stable.active_lod_cad_payloads // 0) >=
+		    ($initial.active_lod_cad_payloads // 0))
+	     end) and
+	    (($stable.active_lod_aabb_payloads // 0) == 0) and
+	    (($stable.lod_emergency_progressive_ceiling // -2) == -1) and
+	    ($stable.lod_submissions_pending == false) and
+	    ($stable.progressive_pending == false)
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'distinct-mesh scene did not preserve coverage and recover around bounded motion\n' \
+		>>"$validation"
+	    return 1
+	fi
+    fi
+
     if find "$image_dir" -type f -size 0 -print -quit | grep -q .; then
 	printf 'zero-length checkpoint image\n' >>"$validation"
 	return 1
@@ -559,7 +880,7 @@ run_current()
     if timeout --signal=TERM "$run_timeout" "${command[@]}" \
 	    >"$out/stdout.log" 2>"$out/stderr.log"; then
 	if validate_report "$out/report.json" "$out/images" "$object" \
-		"$hierarchy_path" "$out/validation.log"; then
+		"$hierarchy_path" "$out/validation.log" "$cache_state"; then
 	    printf 'PASS,%s,%s,\n' "$run_name" "$((SECONDS - started))" \
 		>> "$artifact_dir/results.csv"
 	    return 0
@@ -589,6 +910,16 @@ capture_baseline()
 	echo "SKIP: baseline qged not found at $baseline_qged" > "$out/status.txt"
 	return 0
     fi
+    # This expanded-copy scene is generated specifically to stress the new
+    # occurrence/PCA path.  Production main accepts all commands for it but
+    # returns no drawable geometry in either mode, so it cannot serve as a
+    # visual ground truth.  The shared multi_lucy and all other cases remain
+    # mandatory production baselines.
+    if [[ "$case_name" == "multi_lucy_xpush" ]]; then
+	echo "SKIP: production qged has no drawable multi_lucy_xpush result" \
+	    > "$out/status.txt"
+	return 0
+    fi
     if [[ -z "${DISPLAY:-}" ]] || ! command -v xdotool >/dev/null ||
 	    ! command -v import >/dev/null ||
 	    ! command -v convert >/dev/null ||
@@ -596,6 +927,13 @@ capture_baseline()
 	echo "SKIP: baseline capture needs DISPLAY, xdotool, import, convert, and compare" \
 	    > "$out/status.txt"
 	return 0
+    fi
+
+    # A screensaver overlay can leave the qged framebuffer capturable while
+    # silently intercepting every XTEST click/key.  Deactivate it before each
+    # baseline launch so an idle desktop cannot manufacture empty evidence.
+    if command -v xfce4-screensaver-command >/dev/null 2>&1; then
+	xfce4-screensaver-command --deactivate >/dev/null 2>&1 || true
     fi
 
     "$baseline_qged" "$db" >"$out/stdout.log" 2>"$out/stderr.log" &
@@ -617,29 +955,59 @@ capture_baseline()
     eval "$(xdotool getwindowgeometry --shell "$window")"
     xdotool windowraise "$window"
     xdotool windowactivate --sync "$window"
+    # Let the database-backed completer and tree finish their initial setup.
+    # Sending commands while that work is still pumping events can lose the
+    # tail of a synthetic key sequence on large production models.
+    sleep 2
     import -window "$window" "$out/initial.png"
-    # The console is a bottom dock.  Its prompt is on the first text line,
-    # not in the otherwise blank middle of the editor.  The historical main
-    # qged layout restores a roughly 350-pixel console, placing that line
-    # about 320 pixels above the bottom of the client.
-    local console_y=$((HEIGHT - 320))
-    if [[ "$console_y" -lt $((HEIGHT / 2)) ]]; then
-	console_y=$((HEIGHT - 100))
-    fi
+    # Click well inside the bottom console instead of estimating the prompt
+    # line in physical pixels.  XTEST coordinates follow the X window's
+    # logical size, while ImageMagick captures Qt's device-pixel framebuffer;
+    # the old fixed 320-pixel offset therefore clicked the canvas at 2x DPI.
+    local console_y=$((HEIGHT - 100))
     xdotool mousemove --window "$window" "$((WIDTH / 2))" "$console_y" click 1
-    xdotool key End
-    xdotool type --delay 1 "draw -m${draw_mode} ${object}"
+    xdotool key ctrl+End
+    # The historical console recomputes geometry completion after each key.
+    # A 1 ms stream outruns that work on Lucy/Stanford and leaves a truncated
+    # command in the prompt.  Pace entry and let the final completion settle
+    # before Return.
+    xdotool type --delay 20 "draw -m${draw_mode} ${object}"
+    sleep 1
+    # Dismiss the exact-object completion popup so Return executes the
+    # command instead of merely accepting the already-complete token.
+    xdotool key Escape
     xdotool key Return
-    sleep 3
-    xdotool type --delay 1 "ae 90 0"
+    # A second Return is harmless once a fresh prompt exists, but guarantees
+    # execution if a late completer popup consumed the first one.
+    sleep 1
     xdotool key Return
-    xdotool type --delay 1 "autoview"
+    case "$profile" in
+	smoke) sleep 5 ;;
+	full) sleep 10 ;;
+	stress) sleep 20 ;;
+    esac
+    xdotool type --delay 20 "ae 90 0"
+    sleep 1
+    xdotool key Escape
+    xdotool key Return
+    xdotool type --delay 20 "autoview"
+    sleep 1
+    xdotool key Escape
     xdotool key Return
     sleep 5
     import -window "$window" "$out/ae90-stable.png"
-    xdotool mousemove --window "$window" "$((WIDTH / 2))" "$((HEIGHT / 2))"
-    xdotool click 4 click 4 click 4
-    sleep 2
+    # Use qged's command path for the production visual baseline.  Large
+    # meshes can keep the historical canvas busy long enough for synthetic
+    # wheel events to be discarded even though console commands remain
+    # ordered and reliable.  Actual wheel/drag behavior is exercised by the
+    # current-stack Qt event script above.
+    xdotool mousemove --window "$window" "$((WIDTH / 2))" "$console_y" click 1
+    xdotool key ctrl+End
+    xdotool type --delay 20 "zoom 2"
+    sleep 1
+    xdotool key Escape
+    xdotool key Return
+    sleep 5
     import -window "$window" "$out/zoom-in-stable.png"
 
     # Window capture succeeding does not prove the commands reached qged.
@@ -678,6 +1046,48 @@ capture_baseline()
 }
 
 printf 'status,run,seconds,detail\n' > "$artifact_dir/results.csv"
+ldd "$qged" > "$artifact_dir/qged-ldd.txt" 2>&1 || true
+
+runtime_library_path()
+{
+    local soname="$1"
+    awk -v soname="$soname" \
+	'index($1, soname) == 1 && $2 == "=>" { print $3; exit }' \
+	"$artifact_dir/qged-ldd.txt"
+}
+
+record_runtime_library()
+{
+    local key="$1"
+    local soname="$2"
+    local path
+    path="$(runtime_library_path "$soname")"
+    if [[ -z "$path" || ! -r "$path" ]]; then
+	printf '%s_path=unresolved\n' "$key"
+	return
+    fi
+    printf '%s_path=%s\n' "$key" "$(realpath "$path")"
+    printf '%s_sha256=' "$key"
+    sha256sum "$path" | cut -d' ' -f1
+}
+
+expected_runtime_dir="$(realpath "$build_dir/lib")"
+runtime_provenance="PASS"
+runtime_provenance_detail=""
+for soname in libBObol.so libObol.so libosmesa.so; do
+    library_path="$(runtime_library_path "$soname")"
+    if [[ -z "$library_path" || ! -r "$library_path" ]]; then
+	runtime_provenance="FAIL"
+	runtime_provenance_detail+="${soname}=unresolved "
+	continue
+    fi
+    library_path="$(realpath "$library_path")"
+    if [[ "$library_path" != "$expected_runtime_dir/"* ]]; then
+	runtime_provenance="FAIL"
+	runtime_provenance_detail+="${soname}=${library_path} "
+    fi
+done
+
 {
     printf 'source_root=%s\nbuild_dir=%s\nmain_build_dir=%s\n' \
 	"$source_root" "$build_dir" "$main_build_dir"
@@ -690,7 +1100,31 @@ printf 'status,run,seconds,detail\n' > "$artifact_dir/results.csv"
 	printf 'baseline_qged_sha256='
 	sha256sum "$baseline_qged" | cut -d' ' -f1
     fi
+    record_runtime_library libbobol libBObol.so
+    record_runtime_library libobol libObol.so
+    record_runtime_library libosmesa libosmesa.so
+    printf 'runtime_provenance=%s\n' "$runtime_provenance"
+    if [[ -n "$runtime_provenance_detail" ]]; then
+	printf 'runtime_provenance_detail=%s\n' "$runtime_provenance_detail"
+    fi
+    if [[ -L "$source_root/obol" ]]; then
+	printf 'obol_source_root=%s\n' \
+	    "$(realpath "$source_root/obol")"
+    fi
+    if [[ -e "$source_root/obol/external/osmesa" ]]; then
+	printf 'osmesa_source_root=%s\n' \
+	    "$(realpath "$source_root/obol/external/osmesa")"
+    fi
 } > "$artifact_dir/run-info.txt"
+
+if [[ "$runtime_provenance" != "PASS" ]]; then
+    echo "ERROR: qged resolved a required drawing library outside $expected_runtime_dir" >&2
+    echo "       $runtime_provenance_detail" >&2
+    printf 'FAIL,runtime-provenance,0,%s\n' \
+	"required drawing library is unresolved or outside build/lib" \
+	>> "$artifact_dir/results.csv"
+    exit 2
+fi
 
 failures=0
 IFS=',' read -r -a cases <<< "$case_list"
@@ -719,6 +1153,9 @@ for case_name in "${cases[@]}"; do
 	    capture_baseline "$case_name" "$db" "$object" "$mode" ||
 		failures=$((failures + 1))
 	done
+    fi
+    if [[ "$baseline_only" -eq 1 ]]; then
+	continue
     fi
 
     case "$profile" in

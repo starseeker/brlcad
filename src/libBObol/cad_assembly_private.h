@@ -117,6 +117,8 @@ private:
     uint64_t compactPresentationCadBatchRevision = 0;
     uint64_t compactPresentationPayloadRevision = 0;
     int compactPresentationDrawMode = -1;
+    size_t compactWirePresentationCount = 0;
+    size_t compactShadedPresentationCount = 0;
     std::unordered_map<Obol::InstanceId, CompactInstancePresentation,
 	std::hash<Obol::InstanceId>> compactInstancePresentations;
     std::unordered_map<Obol::PartId, uint8_t, std::hash<Obol::PartId>>

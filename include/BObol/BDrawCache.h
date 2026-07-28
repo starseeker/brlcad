@@ -96,6 +96,19 @@ struct BObolDrawMetadataRecord {
 struct BObolDrawManifestOccurrence {
     char *path;
     char *sourceName;
+    /* A completed leaf manifest carries enough immutable source-asset
+     * identity to start view-LoD immediately.  Without this contract a warm
+     * draw can publish every cached leaf box, but still has to repeat the
+     * database hierarchy/import walk before any box is eligible for PoP
+     * replacement.  Structural-only manifests leave sourceMeshRequestValid
+     * false. */
+    int sourceMeshRequestValid;
+    char *meshAssetPath;
+    char *meshAssetName;
+    point_t meshAssetBoundsMin;
+    point_t meshAssetBoundsMax;
+    uint64_t sourceFaceCount;
+    uint64_t sourcePointCount;
     mat_t localMatrix;
     point_t boundsMin;
     point_t boundsMax;

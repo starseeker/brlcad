@@ -146,6 +146,14 @@ if(BRLCAD_ENABLE_QT AND TARGET qged AND TARGET qged_plugins)
   add_dependencies(qged qged_plugins)
 endif()
 
+brlcad_addexec(
+  qged_unique_mesh_stress_generator
+  tests/generate_unique_mesh_stress.cpp
+  "libwdb;librt;libbu"
+  NO_INSTALL
+  ALL_CXX
+)
+
 # Theme subdirectory handles file bookkeeping for CMake
 add_subdirectory(theme)
 
@@ -162,6 +170,10 @@ set(
   main.cpp
   test_qged_obol_fbserv.cpp
   test_qged_event_script.json
+  tests/README.md
+  tests/generate_many_lucy_stress.tcl
+  tests/generate_unique_mesh_stress.cpp
+  tests/qged_gui_matrix.sh
   qged_signals.eps
   qged_signals.dia
   view_update_cycle.odg

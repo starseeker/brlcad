@@ -39,6 +39,9 @@
 #include <ged/draw_obol.h>
 
 #define ADIFF_THRES 0.99
+/* The retained wire renderer preserves projected topology but does not emit
+ * the legacy display manager's identical primitive tessellation. */
+#define WIREFRAME_ADIFF_THRES 0.98
 
 extern "C" int img_cmp(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, fastf_t approximate_check, const char *clear_root, const char *img_root);
 extern "C" int img_not_empty(int id, struct ged *gedp, const char *cdir, bool clear_scene, bool clear_image, int soft_fail, const char *clear_root, const char *img_root);
@@ -178,7 +181,8 @@ main(int ac, char *av[]) {
     s_av[2] = "25";
     s_av[3] = NULL;
     ged_exec_ae(gedp, 3, s_av);
-    ret += img_cmp(1, gedp, lcache, true, clear_images, soft_fail, 0, "faceplate_clear", "fp");
+    ret += img_cmp(1, gedp, lcache, true, clear_images, soft_fail,
+	WIREFRAME_ADIFF_THRES, "faceplate_clear", "fp");
 
     // Check that everything is in fact cleared
     ret += img_cmp(0, gedp, lcache, false, clear_images, soft_fail, 0, "faceplate_clear", "fp");

@@ -52,7 +52,7 @@
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
 #define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 1u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
-#define BOBOL_DRAW_MANIFEST_DISK_VERSION 1u
+#define BOBOL_DRAW_MANIFEST_DISK_VERSION 2u
 
 struct BObolDrawCacheContext {
     bu_cache *cache;
@@ -152,13 +152,19 @@ struct BObolDrawManifestDiskHeader {
 struct BObolDrawManifestOccurrenceDiskHeader {
     uint32_t pathLength;
     uint32_t sourceNameLength;
+    uint32_t meshAssetPathLength;
+    uint32_t meshAssetNameLength;
     int32_t booleanOperation;
     uint32_t occurrenceIndex;
     uint32_t metadataValid;
-    uint32_t reserved;
+    uint32_t sourceMeshRequestValid;
+    uint64_t sourceFaceCount;
+    uint64_t sourcePointCount;
     fastf_t localMatrix[16];
     point_t boundsMin;
     point_t boundsMax;
+    point_t meshAssetBoundsMin;
+    point_t meshAssetBoundsMax;
     BObolDrawMetadataDiskRecord metadata;
 };
 
@@ -2077,6 +2083,12 @@ bobol_draw_manifest_free(BObolDrawManifest *manifest)
 	if (manifest->occurrences[i].sourceName)
 	    bu_free(manifest->occurrences[i].sourceName,
 		"bobol draw manifest source name");
+	if (manifest->occurrences[i].meshAssetPath)
+	    bu_free(manifest->occurrences[i].meshAssetPath,
+		"bobol draw manifest mesh asset path");
+	if (manifest->occurrences[i].meshAssetName)
+	    bu_free(manifest->occurrences[i].meshAssetName,
+		"bobol draw manifest mesh asset name");
     }
     if (manifest->occurrences)
 	bu_free(manifest->occurrences, "bobol draw manifest occurrences");
@@ -2104,11 +2116,23 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	    return BRLCAD_ERROR;
 	const size_t pathLength = strlen(occurrence.path);
 	const size_t sourceNameLength = strlen(occurrence.sourceName);
+	const size_t meshAssetPathLength = occurrence.meshAssetPath ?
+	    strlen(occurrence.meshAssetPath) : 0;
+	const size_t meshAssetNameLength = occurrence.meshAssetName ?
+	    strlen(occurrence.meshAssetName) : 0;
 	if (pathLength > UINT32_MAX || sourceNameLength > UINT32_MAX ||
+	    meshAssetPathLength > UINT32_MAX ||
+	    meshAssetNameLength > UINT32_MAX ||
+	    (occurrence.sourceMeshRequestValid &&
+	     (!meshAssetPathLength || !meshAssetNameLength ||
+	      !bobol_draw_proxy_bbox_valid(occurrence.meshAssetBoundsMin,
+		  occurrence.meshAssetBoundsMax))) ||
 	    !bobol_draw_manifest_add_size(&size,
 		sizeof(BObolDrawManifestOccurrenceDiskHeader)) ||
 	    !bobol_draw_manifest_add_size(&size, pathLength) ||
-	    !bobol_draw_manifest_add_size(&size, sourceNameLength))
+	    !bobol_draw_manifest_add_size(&size, sourceNameLength) ||
+	    !bobol_draw_manifest_add_size(&size, meshAssetPathLength) ||
+	    !bobol_draw_manifest_add_size(&size, meshAssetNameLength))
 	    return BRLCAD_ERROR;
     }
 
@@ -2129,18 +2153,36 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	    manifest->occurrences[i];
 	const size_t pathLength = strlen(occurrence.path);
 	const size_t sourceNameLength = strlen(occurrence.sourceName);
+	const size_t meshAssetPathLength = occurrence.meshAssetPath ?
+	    strlen(occurrence.meshAssetPath) : 0;
+	const size_t meshAssetNameLength = occurrence.meshAssetName ?
+	    strlen(occurrence.meshAssetName) : 0;
 	BObolDrawManifestOccurrenceDiskHeader occurrenceHeader;
 	memset(&occurrenceHeader, 0, sizeof(occurrenceHeader));
 	occurrenceHeader.pathLength = static_cast<uint32_t>(pathLength);
 	occurrenceHeader.sourceNameLength =
 	    static_cast<uint32_t>(sourceNameLength);
+	occurrenceHeader.meshAssetPathLength =
+	    static_cast<uint32_t>(meshAssetPathLength);
+	occurrenceHeader.meshAssetNameLength =
+	    static_cast<uint32_t>(meshAssetNameLength);
 	occurrenceHeader.booleanOperation = occurrence.booleanOperation;
 	occurrenceHeader.occurrenceIndex = occurrence.occurrenceIndex;
 	occurrenceHeader.metadataValid = occurrence.metadataValid ? 1u : 0u;
+	occurrenceHeader.sourceMeshRequestValid =
+	    occurrence.sourceMeshRequestValid ? 1u : 0u;
+	occurrenceHeader.sourceFaceCount = occurrence.sourceFaceCount;
+	occurrenceHeader.sourcePointCount = occurrence.sourcePointCount;
 	memcpy(occurrenceHeader.localMatrix, occurrence.localMatrix,
 	    sizeof(occurrenceHeader.localMatrix));
 	VMOVE(occurrenceHeader.boundsMin, occurrence.boundsMin);
 	VMOVE(occurrenceHeader.boundsMax, occurrence.boundsMax);
+	if (occurrence.sourceMeshRequestValid) {
+	    VMOVE(occurrenceHeader.meshAssetBoundsMin,
+		occurrence.meshAssetBoundsMin);
+	    VMOVE(occurrenceHeader.meshAssetBoundsMax,
+		occurrence.meshAssetBoundsMax);
+	}
 	if (occurrence.metadataValid)
 	    bobol_draw_metadata_to_disk(&occurrenceHeader.metadata,
 		&occurrence.metadata);
@@ -2151,6 +2193,16 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	offset += pathLength;
 	memcpy(disk.data() + offset, occurrence.sourceName, sourceNameLength);
 	offset += sourceNameLength;
+	if (meshAssetPathLength) {
+	    memcpy(disk.data() + offset, occurrence.meshAssetPath,
+		meshAssetPathLength);
+	    offset += meshAssetPathLength;
+	}
+	if (meshAssetNameLength) {
+	    memcpy(disk.data() + offset, occurrence.meshAssetName,
+		meshAssetNameLength);
+	    offset += meshAssetNameLength;
+	}
     }
 
     char key[BU_CACHE_KEY_MAXLEN] = {0};
@@ -2244,9 +2296,24 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	offset += sizeof(occurrenceHeader);
 	const size_t pathLength = occurrenceHeader.pathLength;
 	const size_t sourceNameLength = occurrenceHeader.sourceNameLength;
+	const size_t meshAssetPathLength =
+	    occurrenceHeader.meshAssetPathLength;
+	const size_t meshAssetNameLength =
+	    occurrenceHeader.meshAssetNameLength;
 	if (!pathLength || pathLength > dataSize - offset ||
 	    sourceNameLength > dataSize - offset - pathLength ||
+	    meshAssetPathLength >
+		dataSize - offset - pathLength - sourceNameLength ||
+	    meshAssetNameLength >
+		dataSize - offset - pathLength - sourceNameLength -
+		    meshAssetPathLength ||
 	    occurrenceHeader.metadataValid > 1 ||
+	    occurrenceHeader.sourceMeshRequestValid > 1 ||
+	    (occurrenceHeader.sourceMeshRequestValid &&
+	     (!meshAssetPathLength || !meshAssetNameLength ||
+	      !bobol_draw_proxy_bbox_valid(
+		  occurrenceHeader.meshAssetBoundsMin,
+		  occurrenceHeader.meshAssetBoundsMax))) ||
 	    !bobol_draw_manifest_boolean_valid(
 		occurrenceHeader.booleanOperation) ||
 	    !bobol_draw_manifest_matrix_valid(occurrenceHeader.localMatrix) ||
@@ -2254,6 +2321,12 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 		occurrenceHeader.boundsMax) ||
 	    memchr(bytes + offset, '\0', pathLength) ||
 	    memchr(bytes + offset + pathLength, '\0', sourceNameLength) ||
+	    (meshAssetPathLength &&
+	     memchr(bytes + offset + pathLength + sourceNameLength, '\0',
+		 meshAssetPathLength)) ||
+	    (meshAssetNameLength &&
+	     memchr(bytes + offset + pathLength + sourceNameLength +
+		 meshAssetPathLength, '\0', meshAssetNameLength)) ||
 	    (occurrenceHeader.metadataValid &&
 	     !bobol_draw_metadata_disk_valid(&occurrenceHeader.metadata,
 		 sizeof(occurrenceHeader.metadata)))) {
@@ -2267,17 +2340,39 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	occurrence.sourceName = bobol_draw_manifest_copy_string(bytes + offset,
 	    sourceNameLength);
 	offset += sourceNameLength;
-	if (!occurrence.path || !occurrence.sourceName) {
+	if (meshAssetPathLength) {
+	    occurrence.meshAssetPath = bobol_draw_manifest_copy_string(
+		bytes + offset, meshAssetPathLength);
+	    offset += meshAssetPathLength;
+	}
+	if (meshAssetNameLength) {
+	    occurrence.meshAssetName = bobol_draw_manifest_copy_string(
+		bytes + offset, meshAssetNameLength);
+	    offset += meshAssetNameLength;
+	}
+	if (!occurrence.path || !occurrence.sourceName ||
+	    (occurrenceHeader.sourceMeshRequestValid &&
+	     (!occurrence.meshAssetPath || !occurrence.meshAssetName))) {
 	    valid = 0;
 	    break;
 	}
 	occurrence.booleanOperation = occurrenceHeader.booleanOperation;
 	occurrence.occurrenceIndex = occurrenceHeader.occurrenceIndex;
 	occurrence.metadataValid = occurrenceHeader.metadataValid ? 1 : 0;
+	occurrence.sourceMeshRequestValid =
+	    occurrenceHeader.sourceMeshRequestValid ? 1 : 0;
+	occurrence.sourceFaceCount = occurrenceHeader.sourceFaceCount;
+	occurrence.sourcePointCount = occurrenceHeader.sourcePointCount;
 	memcpy(occurrence.localMatrix, occurrenceHeader.localMatrix,
 	    sizeof(occurrence.localMatrix));
 	VMOVE(occurrence.boundsMin, occurrenceHeader.boundsMin);
 	VMOVE(occurrence.boundsMax, occurrenceHeader.boundsMax);
+	if (occurrence.sourceMeshRequestValid) {
+	    VMOVE(occurrence.meshAssetBoundsMin,
+		occurrenceHeader.meshAssetBoundsMin);
+	    VMOVE(occurrence.meshAssetBoundsMax,
+		occurrenceHeader.meshAssetBoundsMax);
+	}
 	bobol_draw_metadata_from_disk(&occurrence.metadata,
 	    &occurrenceHeader.metadata);
     }

@@ -195,6 +195,8 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbString meshAssetPath;
     SbString meshAssetName;
     SbBox3f meshAssetBounds;
+    uint64_t sourceFaceCount;
+    uint64_t sourcePointCount;
     SbMatrix localToSource;
     SbBox3f localBounds;
     uint64_t geometryIdentity;
@@ -226,6 +228,32 @@ struct BOBOL_EXPORT BObolCompactInstanceSummary {
     SbBool sourceMeshRequestValid;
     SbBool visible;
     SbBool selectable;
+    SbBool selected;
+    SbBool highlighted;
+};
+
+/* Minimal immutable occurrence snapshot consumed by the view LoD planner.
+ * Keep selection/material/edit metadata out of this hot path: a many-leaf
+ * camera epoch should copy only what is needed to cull, prioritize, and
+ * construct a progressive asset request. */
+struct BOBOL_EXPORT BObolCompactLodInstanceSummary {
+    BObolCompactLodInstanceSummary(void);
+
+    SbBool valid;
+    SbString path;
+    SbString sourceName;
+    SbString sourceInstanceKey;
+    SbString meshAssetPath;
+    SbString meshAssetName;
+    SbBox3f meshAssetBounds;
+    uint64_t sourceFaceCount;
+    uint64_t sourcePointCount;
+    SbMatrix localToSource;
+    SbBox3f localBounds;
+    SbBool meshGeometry;
+    SbBool lodBacked;
+    SbBool sourceMeshRequestValid;
+    SbBool visible;
     SbBool selected;
     SbBool highlighted;
 };
@@ -952,6 +980,11 @@ public:
     SbBool getCompactInstanceSummary(
 	const BObolCompactInstanceHandle &handle,
 	BObolCompactInstanceSummary &summary) const;
+    /* Direct, allocation-light view-planning lookup.  Unlike the general
+     * handle API this is intentionally scoped to one immutable compact-index
+     * epoch and avoids a second instance-id hash lookup. */
+    SbBool getCompactLodInstanceSummary(int index,
+	BObolCompactLodInstanceSummary &summary) const;
     SbBool isCompactInstanceHandleValid(
 	const BObolCompactInstanceHandle &handle) const;
     /* Constant-time occurrence lookup used by per-view LoD result routing. */

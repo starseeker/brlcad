@@ -28,6 +28,7 @@
 
 #include "common.h"
 
+#include <cmath>
 #include <stdlib.h>
 #include <string.h>
 
@@ -2971,18 +2972,77 @@ _ged_rt_set_eye_model(struct ged *gedp,
 	BObolSceneController *scene = ged_bobol_scene(gedp);
 	SbBox3f bounds;
 	bounds.makeEmpty();
+	int have_finite_bounds = 0;
 	if (scene && scene->getDatabaseSourceBounds(bounds, TRUE) &&
-	    !bounds.isEmpty()) {
+	    !bounds.isEmpty() &&
+	    std::isfinite(bounds.getMin()[0]) &&
+	    std::isfinite(bounds.getMin()[1]) &&
+	    std::isfinite(bounds.getMin()[2]) &&
+	    std::isfinite(bounds.getMax()[0]) &&
+	    std::isfinite(bounds.getMax()[1]) &&
+	    std::isfinite(bounds.getMax()[2])) {
 	    const SbVec3f bmin = bounds.getMin();
 	    const SbVec3f bmax = bounds.getMax();
 	    VSET(extremum[0], bmin[0], bmin[1], bmin[2]);
 	    VSET(extremum[1], bmax[0], bmax[1], bmax[2]);
+	    have_finite_bounds = 1;
+	}
+
+	/* A coarse-first draw may launch rt before its first leaf bounds have
+	 * reached the retained scene.  An explicit raytrace is already a
+	 * heavyweight operation, so it is both safe and necessary to resolve
+	 * the displayed database paths synchronously here.  Without this
+	 * fallback the infinite sentinels below produce a NaN eye point and a
+	 * valid model raytraces as an empty frame. */
+	if (!have_finite_bounds && gedp->dbip) {
+	    const size_t requested_count = ged_who_argc(gedp);
+	    std::vector<char *> displayed(requested_count + 1, NULL);
+	    const int displayed_count = requested_count ?
+		ged_who_argv(gedp, displayed.data(),
+		    (const char **)(displayed.data() + displayed.size())) : 0;
+	    struct bu_vls messages = BU_VLS_INIT_ZERO;
+	    point_t db_min;
+	    point_t db_max;
+	    if (displayed_count > 0 &&
+		rt_obj_bounds(&messages, gedp->dbip, displayed_count,
+		    (const char **)displayed.data(), 0, db_min, db_max) ==
+		    BRLCAD_OK &&
+		std::isfinite(db_min[0]) && std::isfinite(db_min[1]) &&
+		std::isfinite(db_min[2]) && std::isfinite(db_max[0]) &&
+		std::isfinite(db_max[1]) && std::isfinite(db_max[2])) {
+		VMOVE(extremum[0], db_min);
+		VMOVE(extremum[1], db_max);
+		have_finite_bounds = 1;
+	    }
+	    bu_vls_free(&messages);
+	    for (char *path : displayed)
+		if (path)
+		    bu_free(path, "ged who argv path");
+	}
+
+	/* Malformed/infinite geometry must not be allowed to poison the rt
+	 * control stream.  Retain the user's center and use the finite view size
+	 * as a conservative last resort. */
+	if (!have_finite_bounds) {
+	    fastf_t extent = bv_size_get(view);
+	    if (!std::isfinite(extent) || extent <= SMALL_FASTF)
+		extent = 1.0;
+	    extent *= 0.5;
+	    VSET(extremum[0], eye_model[X] - extent,
+		eye_model[Y] - extent, eye_model[Z] - extent);
+	    VSET(extremum[1], eye_model[X] + extent,
+		eye_model[Y] + extent, eye_model[Z] + extent);
 	}
 
 	VMOVEN(direction, view_rotation + 8, 3);
 	for (i = 0; i < 3; ++i)
 	    if (NEAR_ZERO(direction[i], 1e-10))
 		direction[i] = 0.0;
+	if (!std::isfinite(direction[0]) ||
+	    !std::isfinite(direction[1]) ||
+	    !std::isfinite(direction[2]) ||
+	    VNEAR_ZERO(direction, SMALL_FASTF))
+	    VSET(direction, 0.0, 0.0, 1.0);
 
 	VSUB2(diag1, extremum[1], extremum[0]);
 	VADD2(ecenter, extremum[1], extremum[0]);

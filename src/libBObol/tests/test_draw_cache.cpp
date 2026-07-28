@@ -80,6 +80,20 @@ check_manifest(const BObolDrawManifest *manifest)
 	bu_strcmp(manifest->occurrences[0].sourceName, path_leaf_name) != 0 ||
 	bu_strcmp(manifest->occurrences[1].path, path_region_full_name) != 0 ||
 	bu_strcmp(manifest->occurrences[1].sourceName, path_region_name) != 0 ||
+	!manifest->occurrences[0].sourceMeshRequestValid ||
+	!manifest->occurrences[0].meshAssetPath ||
+	!manifest->occurrences[0].meshAssetName ||
+	bu_strcmp(manifest->occurrences[0].meshAssetPath,
+	    path_full_name) != 0 ||
+	bu_strcmp(manifest->occurrences[0].meshAssetName,
+	    path_leaf_name) != 0 ||
+	manifest->occurrences[0].sourceFaceCount != 123456 ||
+	manifest->occurrences[0].sourcePointCount != 65432 ||
+	!fastf_equal(
+	    manifest->occurrences[0].meshAssetBoundsMin[X], -10.0) ||
+	!fastf_equal(
+	    manifest->occurrences[0].meshAssetBoundsMax[Z], 60.0) ||
+	manifest->occurrences[1].sourceMeshRequestValid ||
 	manifest->occurrences[0].booleanOperation != DB_OP_UNION ||
 	manifest->occurrences[1].booleanOperation != DB_OP_SUBTRACT ||
 	manifest->occurrences[0].occurrenceIndex != 3 ||
@@ -115,6 +129,13 @@ make_manifest(BObolDrawManifest *manifest)
     BObolDrawManifestOccurrence &leaf = manifest->occurrences[0];
     leaf.path = bu_strdup(path_full_name);
     leaf.sourceName = bu_strdup(path_leaf_name);
+    leaf.sourceMeshRequestValid = 1;
+    leaf.meshAssetPath = bu_strdup(path_full_name);
+    leaf.meshAssetName = bu_strdup(path_leaf_name);
+    VSET(leaf.meshAssetBoundsMin, -10.0, -20.0, -30.0);
+    VSET(leaf.meshAssetBoundsMax, 40.0, 50.0, 60.0);
+    leaf.sourceFaceCount = 123456;
+    leaf.sourcePointCount = 65432;
     MAT_IDN(leaf.localMatrix);
     MAT_DELTAS(leaf.localMatrix, 11.0, 12.0, 13.0);
     VSET(leaf.boundsMin, -1.0, -2.0, -3.0);
@@ -139,7 +160,8 @@ make_manifest(BObolDrawManifest *manifest)
     region.booleanOperation = DB_OP_SUBTRACT;
     region.occurrenceIndex = 7;
 
-    if (!leaf.path || !leaf.sourceName || !region.path || !region.sourceName) {
+    if (!leaf.path || !leaf.sourceName || !leaf.meshAssetPath ||
+	!leaf.meshAssetName || !region.path || !region.sourceName) {
 	bobol_draw_manifest_free(manifest);
 	return 0;
     }

@@ -74,6 +74,7 @@
 #include <math.h>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <set>
 #include <stdint.h>
 #include <stdio.h>
@@ -807,6 +808,8 @@ BObolCompactInstanceHandle::isValid(void) const
 
 BObolCompactInstanceSummary::BObolCompactInstanceSummary(void) :
     valid(FALSE),
+    sourceFaceCount(0),
+    sourcePointCount(0),
     localToSource(SbMatrix::identity()),
     geometryIdentity(0),
     geometryRevision(0),
@@ -839,6 +842,22 @@ BObolCompactInstanceSummary::BObolCompactInstanceSummary(void) :
     highlighted(FALSE)
 {
     meshAssetBounds.makeEmpty();
+}
+
+BObolCompactLodInstanceSummary::BObolCompactLodInstanceSummary(void) :
+    valid(FALSE),
+    sourceFaceCount(0),
+    sourcePointCount(0),
+    localToSource(SbMatrix::identity()),
+    meshGeometry(FALSE),
+    lodBacked(FALSE),
+    sourceMeshRequestValid(FALSE),
+    visible(TRUE),
+    selected(FALSE),
+    highlighted(FALSE)
+{
+    meshAssetBounds.makeEmpty();
+    localBounds.makeEmpty();
 }
 
 BObolExternalLineSet::BObolExternalLineSet(void) :
@@ -9714,7 +9733,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     const BObolViewLodState *viewState)
     const
 {
-    if (!this->d->compactIndex || payloads.empty() || !viewState)
+    if (!this->d->compactIndex || !viewState)
 	return NULL;
 
     SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
@@ -9750,7 +9769,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	assembly->compactPresentationDrawMode != sourceDrawMode ||
 	assembly->compactInstancePresentations.size() !=
 	    this->d->compactIndex->entries.size();
-    if (!reset) {
+    if (!reset &&
+	assembly->compactPresentationCadBatchRevision !=
+	    this->cadBatchRevisionGet()) {
 	for (const BObolCompactInstanceEntry &entry :
 	     this->d->compactIndex->entries) {
 	    const auto found =
@@ -9763,6 +9784,36 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
     }
 
+    /* A camera epoch usually changes only the active PoP level on a bounded
+     * wave of occurrences.  Preserve the compiled assembly and route those
+     * changes directly by occurrence key.  Source structure/style revisions
+     * still take the authoritative full-scan path. */
+    const bool payloadOnlyUpdate = !reset &&
+	assembly->compactPresentationCadBatchRevision ==
+	    this->cadBatchRevisionGet();
+    std::vector<SbString> changedOccurrenceKeys;
+    SbBool fullPayloadResync = TRUE;
+    if (payloadOnlyUpdate)
+	viewState->cadOccurrenceChangesSince(
+	    this, assembly->compactPresentationPayloadRevision,
+	    changedOccurrenceKeys, fullPayloadResync);
+    const bool sparsePayloadUpdate =
+	payloadOnlyUpdate && !fullPayloadResync;
+    if (sparsePayloadUpdate && changedOccurrenceKeys.empty()) {
+	assembly->compactPresentationPayloadRevision = payloadRevision;
+	viewState->acknowledgeCadOccurrenceChanges(this, payloadRevision);
+	return assembly;
+    }
+
+    std::vector<const BObolViewLodState::CadPayload *>
+	authoritativePayloads;
+    const std::vector<const BObolViewLodState::CadPayload *> *
+	payloadInput = &payloads;
+    if (!sparsePayloadUpdate && payloads.empty()) {
+	viewState->findCadPayloadsUnordered(this, authoritativePayloads);
+	payloadInput = &authoritativePayloads;
+    }
+
     /* Both collections may contain thousands of records.  Route modern
      * occurrence-specific payloads by key instead of scanning every payload
      * for every compact leaf.  Retain the small path scan only for legacy
@@ -9770,14 +9821,33 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     std::unordered_map<std::string,
 	const BObolViewLodState::CadPayload *> payloadByInstance;
     std::vector<const BObolViewLodState::CadPayload *> sourceWidePayloads;
-    payloadByInstance.reserve(payloads.size());
-    for (const BObolViewLodState::CadPayload *payload : payloads) {
+    payloadByInstance.reserve(payloadInput->size());
+    for (const BObolViewLodState::CadPayload *payload : *payloadInput) {
 	if (!payload || !payload->isValid())
 	    continue;
 	if (payload->sourceInstanceKey.getLength() > 0)
 	    payloadByInstance[payload->sourceInstanceKey.getString()] = payload;
 	else
 	    sourceWidePayloads.push_back(payload);
+    }
+
+    std::vector<size_t> entryIndices;
+    if (sparsePayloadUpdate) {
+	entryIndices.reserve(changedOccurrenceKeys.size());
+	for (const SbString &occurrenceKey : changedOccurrenceKeys) {
+	    const auto found =
+		this->d->compactIndex->entryIndexByKey.find(
+		    occurrenceKey.getString());
+	    if (found != this->d->compactIndex->entryIndexByKey.end())
+		entryIndices.push_back(found->second);
+	}
+	std::sort(entryIndices.begin(), entryIndices.end());
+	entryIndices.erase(
+	    std::unique(entryIndices.begin(), entryIndices.end()),
+	    entryIndices.end());
+    } else {
+	entryIndices.resize(this->d->compactIndex->entries.size());
+	std::iota(entryIndices.begin(), entryIndices.end(), 0);
     }
 
     std::vector<Obol::SharedPartUpdate> baseParts;
@@ -9811,20 +9881,29 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	assembly->compactLodParts.clear();
     }
 
-    int wireCount = 0;
-    int shadedCount = 0;
-    for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
+    size_t wireCount = sparsePayloadUpdate ?
+	assembly->compactWirePresentationCount : 0;
+    size_t shadedCount = sparsePayloadUpdate ?
+	assembly->compactShadedPresentationCount : 0;
+    for (const size_t i : entryIndices) {
 	const BObolCompactInstanceEntry &entry =
 	    this->d->compactIndex->entries[i];
 	const SbString occurrenceKey = compact_instance_identity(entry);
-	const auto payloadIt =
-	    payloadByInstance.find(occurrenceKey.getString());
-	const BObolViewLodState::CadPayload *payload =
-	    payloadIt != payloadByInstance.end() ? payloadIt->second :
-	    cad_compact_payload_for_entry(sourceWidePayloads, entry);
+	const BObolViewLodState::CadPayload *payload = NULL;
+	if (sparsePayloadUpdate) {
+	    payload = viewState->findCadForOccurrence(
+		this, occurrenceKey);
+	} else {
+	    const auto payloadIt =
+		payloadByInstance.find(occurrenceKey.getString());
+	    payload =
+		payloadIt != payloadByInstance.end() ? payloadIt->second :
+		cad_compact_payload_for_entry(sourceWidePayloads, entry);
+	}
 
 	SoBRLCadAssembly::CompactInstancePresentation &presentation =
 	    assembly->compactInstancePresentations[entry.instance];
+	const uint8_t previousChannels = presentation.channels;
 	if (reset) {
 	    presentation.activePart = entry.part;
 	    presentation.channels = assembly->compactPartChannels[entry.part];
@@ -9995,10 +10074,23 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
 	presentation.activeLevel = desiredActiveLevel;
 
-	if (presentation.channels & (1u | 4u))
+	if (sparsePayloadUpdate) {
+	    const bool previousWire = previousChannels & (1u | 4u);
+	    const bool currentWire = presentation.channels & (1u | 4u);
+	    const bool previousShaded = previousChannels & 2u;
+	    const bool currentShaded = presentation.channels & 2u;
+	    if (previousWire != currentWire)
+		wireCount = currentWire ? wireCount + 1 :
+		    (wireCount > 0 ? wireCount - 1 : 0);
+	    if (previousShaded != currentShaded)
+		shadedCount = currentShaded ? shadedCount + 1 :
+		    (shadedCount > 0 ? shadedCount - 1 : 0);
+	} else {
+	    if (presentation.channels & (1u | 4u))
 		wireCount++;
-	if (presentation.channels & 2u)
+	    if (presentation.channels & 2u)
 		shadedCount++;
+	}
 
 	if (!reset &&
 	    (presentation.visibilityRevision != entry.visibilityRevision ||
@@ -10079,6 +10171,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	this->cadBatchRevisionGet();
     assembly->compactPresentationPayloadRevision = payloadRevision;
     assembly->compactPresentationDrawMode = sourceDrawMode;
+    assembly->compactWirePresentationCount = wireCount;
+    assembly->compactShadedPresentationCount = shadedCount;
+    viewState->acknowledgeCadOccurrenceChanges(this, payloadRevision);
     return assembly;
 }
 
@@ -10095,9 +10190,7 @@ cad_view_lod_assembly_for_action(SoAction *action,
 	    if (current)
 		return current;
 	    std::vector<const BObolViewLodState::CadPayload *> payloads;
-	    viewState->findCadPayloads(source, payloads);
-	    if (!payloads.empty())
-		return source->compactViewLodAssembly(payloads, viewState);
+	    return source->compactViewLodAssembly(payloads, viewState);
 	}
 	/* Aggregate sources require an exact source binding.  The legacy
 	 * path/name lookup may otherwise attach a sibling source's payload. */
@@ -15828,6 +15921,8 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
 	summary.meshAssetPath = entry->sourceMeshRequest.meshAssetPath;
 	summary.meshAssetName = entry->sourceMeshRequest.meshAssetName;
 	summary.meshAssetBounds = entry->sourceMeshRequest.meshAssetBounds;
+	summary.sourceFaceCount = entry->sourceMeshRequest.faceCount;
+	summary.sourcePointCount = entry->sourceMeshRequest.pointCount;
     }
     summary.localToSource = entry->localToSource;
     summary.geometryIdentity = entry->part.w0 ^
@@ -15868,6 +15963,39 @@ SoBRLDatabaseSource::getCompactInstanceSummary(
     summary.selectable = entry->selectable;
     summary.selected = entry->selected;
     summary.highlighted = entry->highlighted;
+    return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactLodInstanceSummary(
+    int index, BObolCompactLodInstanceSummary &summary) const
+{
+    summary = BObolCompactLodInstanceSummary();
+    if (!this->d->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
+	return FALSE;
+
+    const BObolCompactInstanceEntry &entry =
+	this->d->compactIndex->entries[static_cast<size_t>(index)];
+    summary.valid = TRUE;
+    summary.path = entry.semantic.path;
+    summary.sourceName = entry.semantic.sourceName;
+    summary.sourceInstanceKey = compact_instance_identity(entry);
+    if (entry.sourceMeshRequestValid) {
+	summary.meshAssetPath = entry.sourceMeshRequest.meshAssetPath;
+	summary.meshAssetName = entry.sourceMeshRequest.meshAssetName;
+	summary.meshAssetBounds = entry.sourceMeshRequest.meshAssetBounds;
+	summary.sourceFaceCount = entry.sourceMeshRequest.faceCount;
+	summary.sourcePointCount = entry.sourceMeshRequest.pointCount;
+    }
+    summary.localToSource = entry.localToSource;
+    summary.localBounds = compact_part_geometry_bounds(entry.geometry);
+    summary.meshGeometry = entry.meshGeometry;
+    summary.lodBacked = entry.lodBacked;
+    summary.sourceMeshRequestValid = entry.sourceMeshRequestValid;
+    summary.visible = entry.visible;
+    summary.selected = entry.selected;
+    summary.highlighted = entry.highlighted;
     return TRUE;
 }
 

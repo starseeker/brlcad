@@ -34,17 +34,20 @@ rm -f "$PARTIAL0_PIX" "$PARTIAL1_PIX" "$PARTIAL2_PIX" "$FINAL_PIX" "$DIFF_PIX"
 # One processor plus deterministic hypersampling keeps this render in flight
 # long enough to capture a bounded early frame.  zap removes the wire overlay,
 # so the intermediate image measures framebuffer progress rather than geometry.
-printf 'draw all.g
+# ERT is the behavior under test here, not deferred CAD realization.  Prepare
+# this small fixture eagerly so its autoview is deterministic and the bounded
+# captures measure raytrace progress rather than a race with the draw worker.
+printf 'draw --eager-leaf-expansion all.g
 autoview
 ert -P 1 -H 8
 zap
-delay 1 0
+delay 0 50000
 screengrab %s
-delay 1 0
+delay 0 100000
 screengrab %s
-delay 1 0
+delay 0 150000
 screengrab %s
-delay 5 0
+delay 2 0
 screengrab %s
 ert -P 1 -H 16
 delay 0 100000
@@ -91,9 +94,22 @@ if [ $((final_bytes % 3)) -ne 0 ]; then
     exit 1
 fi
 pixel_count=$((final_bytes / 3))
-final_black=$("$PIXCOUNT" "$FINAL_PIX" |
-    awk '$1 == 0 && $2 == 0 && $3 == 0 { print $4; found = 1 } END { if (!found) print 0 }')
-final_lit=$((pixel_count - final_black))
+# The retained renderer's nominally black background is not required to be
+# bytewise 0/0/0 (the OSMesa path currently presents 0/0/1).  Use a corner
+# pixel from the completed frame as the actual background and count raytrace
+# progress relative to it.
+set -- $(od -An -tu1 -N3 "$FINAL_PIX")
+background_r=$1
+background_g=$2
+background_b=$3
+final_background=$("$PIXCOUNT" "$FINAL_PIX" |
+    awk -v r="$background_r" -v g="$background_g" -v b="$background_b" \
+	'$1 == r && $2 == g && $3 == b { print $4; found = 1 } END { if (!found) print 0 }')
+final_lit=$((pixel_count - final_background))
+if [ "$final_lit" -le 0 ]; then
+    echo "completed ERT frame contains no foreground pixels" 1>&2
+    exit 1
+fi
 
 partial_pix=""
 partial_lit=0
@@ -103,11 +119,17 @@ for candidate in "$PARTIAL0_PIX" "$PARTIAL1_PIX" "$PARTIAL2_PIX"; do
 	echo "partial and final ERT frames have inconsistent RGB dimensions" 1>&2
 	exit 1
     fi
-    candidate_black=$("$PIXCOUNT" "$candidate" |
-	awk '$1 == 0 && $2 == 0 && $3 == 0 { print $4; found = 1 } END { if (!found) print 0 }')
-    candidate_lit=$((pixel_count - candidate_black))
-    if [ "$candidate_lit" -gt $((pixel_count / 20)) ] &&
-       [ "$candidate_lit" -lt $((pixel_count * 19 / 20)) ]; then
+    candidate_background=$("$PIXCOUNT" "$candidate" |
+	awk -v r="$background_r" -v g="$background_g" -v b="$background_b" \
+	    '$1 == r && $2 == g && $3 == b { print $4; found = 1 } END { if (!found) print 0 }')
+    candidate_lit=$((pixel_count - candidate_background))
+    # Streaming scanlines replace the previously presented CAD/blank pixels;
+    # foreground coverage is therefore not monotonic and may temporarily
+    # exceed the completed raytrace's coverage.  A useful early frame needs
+    # some non-background information and must still differ from the final
+    # image.
+    if [ "$candidate_lit" -gt $((final_lit / 20)) ] &&
+       ! cmp -s "$candidate" "$FINAL_PIX"; then
 	partial_pix="$candidate"
 	partial_lit="$candidate_lit"
 	break
@@ -117,16 +139,11 @@ if [ -z "$partial_pix" ]; then
     echo "no bounded early ERT frame was meaningfully partial" 1>&2
     exit 1
 fi
-if [ "$final_lit" -le "$partial_lit" ]; then
-    echo "final ERT frame did not advance beyond partial frame" 1>&2
-    exit 1
-fi
-
 "$PIXDIFF" "$partial_pix" "$FINAL_PIX" > "$DIFF_PIX"
 diff_black=$("$PIXCOUNT" "$DIFF_PIX" |
     awk '$1 == 0 && $2 == 0 && $3 == 0 { print $4; found = 1 } END { if (!found) print 0 }')
 changed_pixels=$((pixel_count - diff_black))
-if [ "$changed_pixels" -lt $((pixel_count / 10)) ]; then
+if [ "$changed_pixels" -lt $((final_lit / 10)) ]; then
     echo "partial and final ERT frames changed too little: ${changed_pixels}" 1>&2
     exit 1
 fi

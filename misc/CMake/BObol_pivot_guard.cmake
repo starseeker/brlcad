@@ -1060,13 +1060,18 @@ function(_bobol_guard_check_rtwizard_host_boundary)
   _bobol_guard_forbid_regexes("src/tclscripts/rtwizard/lib/FbPage.itk"
     "${_rtwizard_fb_page}"
     [[/dev/(oglsp|wglsp)]])
-  string(REGEX MATCH [[gedCmd[ \t]+set_fb_mode[ \t]+3]]
-    _rtwizard_overlay "${_rtwizard_fb_page}")
-  string(REGEX MATCH [[gedCmd[ \t]+listen[ \t]+ipc]]
-    _rtwizard_ipc "${_rtwizard_fb_page}")
-  if(NOT _rtwizard_overlay OR NOT _rtwizard_ipc)
+  string(REGEX MATCH [[exec.*fbserv.*-A.*-F[ \t]+\$fbType]]
+    _rtwizard_obol_fbserv "${_rtwizard_fb_page}")
+  string(REGEX MATCH [[set[ \t]+fbType[ \t]+"/dev/ogl"]]
+    _rtwizard_system_gl "${_rtwizard_fb_page}")
+  string(REGEX MATCH [[set[ \t]+fbType[ \t]+"/dev/wgl"]]
+    _rtwizard_windows_gl "${_rtwizard_fb_page}")
+  string(FIND "${_rtwizard_fb_page}" [[FBSERV_TOKEN]]
+    _rtwizard_token_idx)
+  if(NOT _rtwizard_obol_fbserv OR NOT _rtwizard_system_gl OR
+     NOT _rtwizard_windows_gl OR _rtwizard_token_idx EQUAL -1)
     _bobol_guard_fail(
-      "rtwizard GUI preview must use its ArcherCore Obol framebuffer IPC endpoint")
+      "rtwizard fixed-size preview must use a token-isolated Obol fbserv surface")
   endif()
 endfunction()
 

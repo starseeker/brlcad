@@ -21,14 +21,20 @@
 #include "common.h"
 #include "string.h" /* for memcpy */
 
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <climits>
 #include <set>
 #include <map>
+#include <thread>
+#include <vector>
 
 #include "bu/bitv.h"
 #include "bu/log.h"
 #include "bu/list.h"
 #include "bu/malloc.h"
-#include "bu/sort.h"
+#include "bu/parallel.h"
 #include "bg/trimesh.h"
 #include "bg/plane.h"
 
@@ -48,14 +54,151 @@ _trimesh_set_edge(struct bg_trimesh_halfedge *edge, int va, int vb)
     }
 }
 
-static int
-_bg_trimesh_halfedge_compare(const void *pleft, const void *pright, void *UNUSED(context))
+static bool
+_trimesh_halfedge_less(const struct bg_trimesh_halfedge &left,
+		       const struct bg_trimesh_halfedge &right)
 {
-    const struct bg_trimesh_halfedge * const left = (struct bg_trimesh_halfedge *)pleft;
-    const struct bg_trimesh_halfedge * const right = (struct bg_trimesh_halfedge *)pright;
+    return left.va < right.va ||
+	(left.va == right.va && left.vb < right.vb);
+}
 
-    const int a = left->va - right->va;
-    return a ? a : left->vb - right->vb;
+/* LoD may ask several service workers to classify distinct mesh assets at
+ * once.  Reserve enough host threads for those outer jobs and lend only the
+ * otherwise idle CPU slots to one large edge sort.  This avoids the common
+ * nested-parallelism failure where eight LoD workers each launch a complete
+ * machine-sized sorting pool. */
+static std::atomic<size_t> &
+_trimesh_sort_extra_tokens(void)
+{
+    static std::atomic<size_t> tokens([]() {
+	size_t cpus = bu_avail_cpus();
+	const size_t outerWorkers = std::min(static_cast<size_t>(8), cpus);
+	return cpus > outerWorkers ?
+	    std::min(static_cast<size_t>(7), cpus - outerWorkers) : 0;
+    }());
+    return tokens;
+}
+
+class TrimeshSortTokens
+{
+public:
+    explicit TrimeshSortTokens(size_t maximum)
+    {
+	std::atomic<size_t> &tokens = _trimesh_sort_extra_tokens();
+	while (count < maximum) {
+	    size_t available = tokens.load(std::memory_order_relaxed);
+	    if (!available)
+		break;
+	    if (tokens.compare_exchange_weak(available, available - 1,
+		    std::memory_order_acquire, std::memory_order_relaxed))
+		count++;
+	}
+    }
+
+    ~TrimeshSortTokens()
+    {
+	if (count)
+	    _trimesh_sort_extra_tokens().fetch_add(
+		count, std::memory_order_release);
+    }
+
+    size_t count = 0;
+};
+
+static void
+_trimesh_sort_edge_list(struct bg_trimesh_halfedge *edge_list,
+			size_t num_edges, int maximum_vertex,
+			bool nonnegative)
+{
+    const size_t parallelThreshold = 1024 * 1024;
+    if (!edge_list || num_edges < 2)
+	return;
+
+    if (!nonnegative || maximum_vertex <= 0 ||
+	num_edges < parallelThreshold) {
+	std::sort(edge_list, edge_list + num_edges, _trimesh_halfedge_less);
+	return;
+    }
+
+    /* An in-place American-flag pass on the most significant active byte of
+     * va divides the 12-byte records into at most 256 globally ordered
+     * ranges.  Each range can then be sorted independently.  Unlike a full
+     * parallel merge/radix sort, this needs only a few KiB of metadata; Lucy's
+     * 84 million half-edges already occupy about one GiB, so another
+     * edge-sized work buffer would be an unacceptable cold-start penalty. */
+    unsigned int significantBits = 0;
+    for (unsigned int value = static_cast<unsigned int>(maximum_vertex);
+	 value; value >>= 1)
+	significantBits++;
+    const unsigned int shift =
+	significantBits > 8 ? significantBits - 8 : 0;
+    const auto bucketOf = [shift](
+	const struct bg_trimesh_halfedge &edge) -> unsigned int {
+	return static_cast<unsigned int>(edge.va) >> shift;
+    };
+
+    std::array<size_t, 256> counts = {};
+    for (size_t i = 0; i < num_edges; ++i)
+	counts[bucketOf(edge_list[i])]++;
+
+    std::array<size_t, 256> begin = {};
+    std::array<size_t, 256> end = {};
+    std::array<size_t, 256> next = {};
+    size_t offset = 0;
+    for (size_t bucket = 0; bucket < counts.size(); ++bucket) {
+	begin[bucket] = offset;
+	next[bucket] = offset;
+	offset += counts[bucket];
+	end[bucket] = offset;
+    }
+
+    for (size_t bucket = 0; bucket < counts.size(); ++bucket) {
+	while (next[bucket] < end[bucket]) {
+	    const unsigned int target =
+		bucketOf(edge_list[next[bucket]]);
+	    if (target == bucket) {
+		next[bucket]++;
+		continue;
+	    }
+	    std::swap(edge_list[next[bucket]], edge_list[next[target]]);
+	    next[target]++;
+	}
+    }
+
+    struct SortRange {
+	size_t begin;
+	size_t end;
+    };
+    std::vector<SortRange> ranges;
+    ranges.reserve(counts.size());
+    for (size_t bucket = 0; bucket < counts.size(); ++bucket) {
+	if (counts[bucket] > 1)
+	    ranges.push_back({begin[bucket], end[bucket]});
+    }
+    std::sort(ranges.begin(), ranges.end(),
+	[](const SortRange &left, const SortRange &right) {
+	    return left.end - left.begin > right.end - right.begin;
+	});
+
+    TrimeshSortTokens tokens(7);
+    const size_t threadCount = 1 + tokens.count;
+    std::atomic<size_t> cursor(0);
+    const auto worker = [&]() {
+	for (size_t job = cursor.fetch_add(1, std::memory_order_relaxed);
+	     job < ranges.size();
+	     job = cursor.fetch_add(1, std::memory_order_relaxed)) {
+	    const SortRange &range = ranges[job];
+	    std::sort(edge_list + range.begin, edge_list + range.end,
+		_trimesh_halfedge_less);
+	}
+    };
+    std::vector<std::thread> workers;
+    workers.reserve(threadCount - 1);
+    for (size_t thread = 1; thread < threadCount; ++thread)
+	workers.emplace_back(worker);
+    worker();
+    for (std::thread &thread : workers)
+	thread.join();
 }
 
 struct bg_trimesh_halfedge *
@@ -64,8 +207,10 @@ bg_trimesh_generate_edge_list(int fcnt, int *f)
     int num_edges;
     struct bg_trimesh_halfedge *edge_list;
     int face_index;
+    int maximum_vertex = -1;
+    bool nonnegative = true;
 
-    if (fcnt < 1 || !f) return NULL;
+    if (fcnt < 1 || fcnt > INT_MAX / 3 || !f) return NULL;
 
     num_edges = 3 * fcnt;
     edge_list = (struct bg_trimesh_halfedge *)bu_calloc(num_edges, sizeof(struct bg_trimesh_halfedge), "edge_list");
@@ -76,9 +221,16 @@ bg_trimesh_generate_edge_list(int fcnt, int *f)
 	_trimesh_set_edge(&edge_list[face_index * 3 + 0], face[0], face[1]);
 	_trimesh_set_edge(&edge_list[face_index * 3 + 1], face[1], face[2]);
 	_trimesh_set_edge(&edge_list[face_index * 3 + 2], face[2], face[0]);
+	for (int corner = 0; corner < 3; ++corner) {
+	    if (face[corner] < 0)
+		nonnegative = false;
+	    else if (face[corner] > maximum_vertex)
+		maximum_vertex = face[corner];
+	}
     }
 
-    bu_sort(edge_list, num_edges, sizeof(struct bg_trimesh_halfedge), _bg_trimesh_halfedge_compare, NULL);
+    _trimesh_sort_edge_list(edge_list, static_cast<size_t>(num_edges),
+	maximum_vertex, nonnegative);
 
     return edge_list;
 }
@@ -252,7 +404,7 @@ bg_trimesh_excess_edges(int num_edges, struct bg_trimesh_halfedge *edge_list, bg
 int
 bg_trimesh_solid2(int vcnt, int fcnt, fastf_t *v, int *f, struct bg_trimesh_solid_errors *errors)
 {
-    int num_edges = 3 * fcnt;
+    int num_edges;
     struct bg_trimesh_halfedge *edge_list;
     int not_solid = 0;
     int degenerate_faces = 0;
@@ -261,7 +413,9 @@ bg_trimesh_solid2(int vcnt, int fcnt, fastf_t *v, int *f, struct bg_trimesh_soli
     int misoriented_edges = 0;
     bg_edge_error_funct_t bad_edge_func;
 
-    if (vcnt < 4 || fcnt < 4 || !v || !f) return 1;
+    if (vcnt < 4 || fcnt < 4 || fcnt > INT_MAX / 3 || !v || !f)
+	return 1;
+    num_edges = 3 * fcnt;
 
     if (!errors && num_edges % 2) return 1;
 
@@ -388,11 +542,13 @@ bg_trimesh_solid(int vcnt, int fcnt, fastf_t *v, int *f, int **bedges)
 int
 bg_trimesh_manifold_closed(int vcnt, int fcnt, fastf_t *v, int *f)
 {
-    int num_edges = 3 * fcnt;
+    int num_edges;
     struct bg_trimesh_halfedge *edge_list;
     int i;
 
-    if (vcnt < 4 || fcnt < 4 || !v || !f) return 0;
+    if (vcnt < 4 || fcnt < 4 || fcnt > INT_MAX / 3 || !v || !f)
+	return 0;
+    num_edges = 3 * fcnt;
 
     if (num_edges % 2 || !(edge_list = bg_trimesh_generate_edge_list(fcnt, f))) return 0;
 
@@ -411,11 +567,13 @@ bg_trimesh_manifold_closed(int vcnt, int fcnt, fastf_t *v, int *f)
 int
 bg_trimesh_oriented(int vcnt, int fcnt, fastf_t *v, int *f)
 {
-    int num_edges = 3 * fcnt;
+    int num_edges;
     struct bg_trimesh_halfedge *edge_list;
     int i, copies;
 
-    if (vcnt < 4 || fcnt < 4 || !v || !f) return 0;
+    if (vcnt < 4 || fcnt < 4 || fcnt > INT_MAX / 3 || !v || !f)
+	return 0;
+    num_edges = 3 * fcnt;
 
     if (!(edge_list = bg_trimesh_generate_edge_list(fcnt, f))) return 0;
 

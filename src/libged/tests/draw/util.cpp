@@ -45,7 +45,6 @@
 #include <Inventor/SbColor.h>
 #include <Inventor/SbViewportRegion.h>
 #include <Inventor/SoDB.h>
-#include <Inventor/SoOffscreenRenderer.h>
 #include <Inventor/SoViewport.h>
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
@@ -191,16 +190,61 @@ draw_test_obol_progressive_drain(struct ged *gedp, struct ged_view_context *view
     if (!controller)
 	return 0;
 
+    BObolProgressiveOptions options;
+    options.forceTerminalLodRefinement = TRUE;
+    BObolProgressiveStatus status;
     for (unsigned int attempt = 0; attempt < max_attempts; attempt++) {
-	BObolProgressiveStatus status;
-	(void)controller->advanceProgressiveWork(NULL, &status);
+	status.clear();
+	(void)controller->advanceProgressiveWork(&options, &status);
 	if (!status.hasMore)
 	    return 1;
+
+	/* Retained PoP refinement intentionally will not select another cut
+	 * until the current one has actually been presented.  These image tests
+	 * used to poll only the provider, which could never release that frame
+	 * gate and consequently timed out after two seconds regardless of mesh
+	 * size.  Emulate the real host contract whenever an advance publishes
+	 * scene state or selects a cut.  Do not repaint while a worker is merely
+	 * busy: that would turn a bounded settle helper into a hot render loop
+	 * and obscure cold-cache latency. */
+	const bool hostFramePending =
+	    controller->isRenderRequested() &&
+	    status.inFlight == 0 && status.pendingTasks == 0 &&
+	    status.queuedResults == 0;
+	if (status.changed || controller->hasPendingLodRefinementFrame() ||
+	    hostFramePending) {
+	    unsigned char *image = NULL;
+	    BObolProgressiveStatus renderStatus;
+	    if (controller->renderToImage(&image, 0, 0, NULL,
+		    draw_test_obol_context_manager(), &renderStatus) !=
+		    BRLCAD_OK) {
+		if (image)
+		    bu_free(image, "draw test progressive frame");
+		return 0;
+	    }
+	    if (image)
+		bu_free(image, "draw test progressive frame");
+	    controller->noteFramePresented();
+	}
 	if (sleep_milliseconds) {
 	    std::this_thread::sleep_for(std::chrono::milliseconds(
 		sleep_milliseconds));
 	}
     }
+    bu_log("Obol progressive drain timed out: changed=%d has_more=%d "
+	   "providers=%zu/%zu results=%zu/%zu submitted=%zu remaining=%zu "
+	   "tasks=%zu in_flight=%zu queued_results=%zu cache_writes=%zu "
+	   "lod_submission=%d lod_results=%d refinement_frame=%d "
+	   "diagnostics=\"%s\"\n",
+	   status.changed, status.hasMore, status.providerAdvanced,
+	   status.providerCount, status.lodResultsApplied,
+	   status.lodResultsProcessed, status.submitted, status.remaining,
+	   status.pendingTasks, status.inFlight, status.queuedResults,
+	   status.queuedCacheWrites,
+	   controller->hasPendingLodSubmissions() ? 1 : 0,
+	   controller->hasPendingLodResults() ? 1 : 0,
+	   controller->hasPendingLodRefinementFrame() ? 1 : 0,
+	   controller->getLastLodDiagnostics().getString());
     return 0;
 }
 
@@ -531,20 +575,25 @@ draw_test_obol_screengrab_impl(struct ged *gedp, struct ged_view_context *view_c
     if (size[0] <= 0 || size[1] <= 0 || !controller->getViewport())
 	return -1;
 
-    SoOffscreenRenderer renderer(manager, region);
-    renderer.setComponents(SoOffscreenRenderer::RGB);
-    renderer.setBackgroundColor(SbColor(0.0f, 0.0f, 0.0f));
-    /* Capture the composed presentation graph, including framebuffer layers.
-     * Rendering only the viewport scene drops retained underlay/overlay nodes. */
-    if (!renderer.render(controller->getRenderRoot()))
+    /* Use the production controller path so capture completes the same frame
+     * gate and render timing as qged/mged.  The former standalone renderer
+     * left the controller's camera-frame request latched, making the next
+     * test drain render an identical OSMesa frame before capturing again. */
+    unsigned char *buffer = NULL;
+    const SbColor black(0.0f, 0.0f, 0.0f);
+    BObolProgressiveStatus renderStatus;
+    if (controller->renderToImage(&buffer, 0, 0, &black, manager,
+	    &renderStatus) != BRLCAD_OK || !buffer) {
+	if (buffer)
+	    bu_free(buffer, "draw test capture");
 	return -1;
+    }
+    controller->noteFramePresented();
 
-    const unsigned char *buffer = renderer.getBuffer();
-    if (!buffer)
-	return -1;
-
-    return draw_test_write_rgb_png(filename, buffer, size[0], size[1]) == BRLCAD_OK ?
-	   1 : -1;
+    const int ret = draw_test_write_rgb_png(filename, buffer, size[0],
+	size[1]) == BRLCAD_OK ? 1 : -1;
+    bu_free(buffer, "draw test capture");
+    return ret;
 }
 
 extern "C" int

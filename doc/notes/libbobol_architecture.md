@@ -33,3 +33,8 @@ items in `libbobol_active_debt.md`.
 The older `brl_obol_*` and `obol_*_coverage` notes are archived milestone and
 behavior evidence.  When they describe a retired renderer or migration step,
 the contracts above take precedence.
+
+The progressive drawing safety, liveness, budget, and complexity properties
+are specified in `libbobol_lod_state_contract.md`.  That state contract is the
+review boundary for LoD scheduler changes; renderer and GUI tests map back to
+its explicit proof obligations.

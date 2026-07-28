@@ -172,7 +172,24 @@ public:
     const CadPayload *findCad(const SoBRLDatabaseSource *source) const;
     void findCadPayloads(const SoBRLDatabaseSource *source,
 	std::vector<const CadPayload *> &payloads) const;
+    /* Hot-path variant for scene planning and telemetry.  Compact
+     * occurrence identity, rather than container iteration order, provides
+     * determinism to those consumers, so avoid sorting thousands of payload
+     * strings on every camera epoch. */
+    void findCadPayloadsUnordered(const SoBRLDatabaseSource *source,
+	std::vector<const CadPayload *> &payloads) const;
+    const CadPayload *findCadForOccurrence(
+	const SoBRLDatabaseSource *source,
+	const SbString &occurrenceKey) const;
+    /* Return a retained progressive asset representative for direct
+     * occurrence binding.  Asset residency outlives an individual display
+     * occurrence, so off-frustum admission does not force a cache reload. */
+    const CadPayload *findCadForAsset(
+	const SoBRLDatabaseSource *source,
+	const SbString &assetPath) const;
     const CadPayload *findCadForResult(const BObolLodResult &result) const;
+    const CadPayload *findCadForResult(const SoBRLDatabaseSource *source,
+	const BObolLodResult &result) const;
     /* Change only a view-local PoP cut.  No source/cache work is performed;
      * the call succeeds only when the retained progressive asset already
      * contains the requested prefix. */
@@ -180,6 +197,12 @@ public:
 	int requestedLevel, uint64_t viewRevision, uint64_t policyRevision);
     SbBool retargetCadPayload(const CadPayload *payload, int activeLevel,
 	int requestedLevel, uint64_t viewRevision, uint64_t policyRevision);
+    /* Remove one view-local display binding while retaining its shared asset.
+     * The source occurrence's structural fallback becomes visible again.
+     * Used by scene-budget/frustum admission when an insignificant occurrence
+     * should cost zero triangles rather than its minimum populated PoP cut. */
+    SbBool removeCadPayload(const CadPayload *payload);
+    SbBool removeMeshPayload(const MeshPayload *payload);
     size_t bindingCount(void) const;
     size_t payloadCount(void) const;
     size_t meshPayloadCount(void) const;
@@ -191,10 +214,22 @@ public:
      * arrays are counted once per displayed occurrence because render cost
      * follows instances, not storage aliases. */
     size_t activeFaceCount(void) const;
+    int maximumActiveProgressiveLevel(void) const;
+    /* Apply an O(1)-per-assembly render-only ceiling while the precise
+     * occurrence allocator catches up with an interactive view. */
+    void setCadPresentationProgressiveLodCeiling(int level) const;
     size_t estimateDisplayMeshBytes(void) const;
     void residentMeshDemands(
 	std::vector<BObolLodResidentDemand> &demands) const;
     uint64_t cadRevision(void) const;
+    /* Compact presentations consume occurrence-local changes without
+     * rebuilding every leaf.  fullResync is TRUE when the authoritative
+     * source state, rather than the returned keys, must be scanned. */
+    void cadOccurrenceChangesSince(const SoBRLDatabaseSource *source,
+	uint64_t revision, std::vector<SbString> &occurrenceKeys,
+	SbBool &fullResync) const;
+    void acknowledgeCadOccurrenceChanges(
+	const SoBRLDatabaseSource *source, uint64_t revision) const;
     void noteResidentMeshesChanged(void);
     void setNormalStyle(NormalStyle style, float creaseAngleDegrees = 60.0f);
     NormalStyle getNormalStyle(void) const;
@@ -228,11 +263,29 @@ private:
 	BObolLodResult &result, SbBool consume);
     std::unordered_map<std::string, MeshPayloadPtr> meshBindings;
     std::unordered_map<std::string, ProxyPayloadPtr> proxyBindings;
+    /* One authoritative payload per source/occurrence.  cadBindings retains
+     * compatibility aliases for source/path/name lookups, but compact LoD
+     * planning and replacement must never scan or deduplicate that alias
+     * table. */
+    std::unordered_map<std::string,
+	std::unordered_map<std::string, CadPayloadPtr> > cadSourceBindings;
+    std::unordered_map<std::string,
+	std::unordered_map<std::string, CadPayloadPtr> > cadAssetBindings;
     std::unordered_map<std::string, CadPayloadPtr> cadBindings;
+    struct CadOccurrenceChange {
+	uint64_t revision;
+	SbString occurrenceKey;
+    };
+    mutable std::unordered_map<std::string,
+	std::vector<CadOccurrenceChange> > cadOccurrenceChanges;
+    uint64_t cadFullResyncRevision;
     uint64_t cadBindingsRevision;
     NormalStyle normalStyle;
     float normalCreaseAngle;
+    mutable int cadPresentationProgressiveLodCeiling;
     mutable std::unordered_map<std::string, CadPresentation> cadPresentations;
+    void noteCadOccurrenceChanged(const std::string &sourceBindingKey,
+	const SbString &occurrenceKey);
 };
 
 class BOBOL_EXPORT SoBRLViewLodElement : public SoElement

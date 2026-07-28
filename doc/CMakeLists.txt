@@ -38,6 +38,7 @@ set(
   notes/libbobol_active_debt.md
   notes/libbobol_api_contract.md
   notes/libbobol_architecture.md
+  notes/libbobol_lod_state_contract.md
   notes/libbobol_platform_threading_matrix.md
   notes/obol_endpoint_lifecycle.md
   notes/obol_framebuffer_protocol.txt

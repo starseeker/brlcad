@@ -390,6 +390,12 @@ brlcad_addexec(bg_trimesh_repair trimesh_repair.cpp "${BG_TEST_LIBS}" TEST)
 
 brlcad_add_test(NAME bg_trimesh_repair  COMMAND bg_trimesh_repair)
 
+#  ************ trimesh topology tests ***********
+
+brlcad_addexec(bg_trimesh_topology trimesh_topology.cpp "${BG_TEST_LIBS}" TEST)
+
+brlcad_add_test(NAME bg_trimesh_topology  COMMAND bg_trimesh_topology)
+
 #  ************ trimesh_remesh tests ***********
 
 brlcad_addexec(bg_trimesh_remesh trimesh_remesh.cpp "${BG_TEST_LIBS}" TEST)
@@ -403,6 +409,7 @@ cmakefiles(
   plane_pt.c
   pca.cpp
   trimesh_diff.cpp
+  trimesh_topology.cpp
   vlist.c
   CMakeLists.txt
 )

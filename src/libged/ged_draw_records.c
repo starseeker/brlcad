@@ -295,6 +295,7 @@ struct _draw_path_state_ctx {
     int descendant_shape;
     int ancestor_group;
     int matching_leaf;
+    int containing_source;
 };
 
 
@@ -455,6 +456,8 @@ _draw_path_state_obol_source_record_cb(struct ged *gedp,
 	ctx->exact_shape = 1;
     if (_draw_path_is_prefix(ctx->path, key))
 	ctx->descendant_shape = 1;
+    if (_draw_path_is_prefix(key, ctx->path))
+	ctx->containing_source = 1;
     if (key && key[0]) {
 	(void)bu_hash_set(ctx->drawn_leaf_paths,
 		(const uint8_t *)key, strlen(key), (void *)1);
@@ -523,6 +526,16 @@ _draw_path_state_eval(struct ged *gedp,
 	return 0;
 
     if (ctx->exact_shape)
+	return 1;
+    /* A fully synchronized retained database source represents its complete
+     * subtree unless the semantic visibility frontier (queried before this
+     * fallback) says otherwise.  A valid descendant is therefore fully drawn
+     * without enumerating and importing every BoT leaf below it.  This keeps
+     * Qt row painting proportional to visible rows and path depth; the old
+     * expected-leaf walk could deserialize a multi-gigabyte subtree for each
+     * newly exposed tree row. */
+    if (ctx->containing_source &&
+	    _draw_path_database_path_exists(gedp, path))
 	return 1;
     if (ctx->ancestor_group && ctx->matching_leaf &&
 	    _draw_path_database_path_exists(gedp, path))

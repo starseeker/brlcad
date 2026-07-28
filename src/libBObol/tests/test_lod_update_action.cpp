@@ -3377,6 +3377,46 @@ test_mesh_lod_request_and_view_info(void)
 	    return 1;
 	}
     }
+
+    /* A trace of -1 is the numerically difficult matrix-to-quaternion case.
+     * It is also an ordinary CAD view (ae 0 90), so verify the complete
+     * projection rather than just accepting a finite quaternion. */
+    VSET(aet, 0.0, 90.0, 0.0);
+    if (!bv_aet_set(view, aet) ||
+	!bv_context_update(viewCtx, BV_CONTEXT_CHANGED_VIEW) ||
+	!controller.syncCameraFromViewContext(viewCtx) ||
+	!bv_model2view_get(model2view, view)) {
+	printf("FAIL: could not prepare gimbal-position Obol camera sync\n");
+	bv_context_destroy(viewCtx);
+	root->unref();
+	mesh->unref();
+	return 1;
+    }
+    const SbViewVolume topViewVolume = syncedCamera->getViewVolume(0.0f);
+    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); i++) {
+	point_t brlView;
+	MAT4X3PNT(brlView, model2view, samples[i]);
+	SbVec3f obolScreen;
+	topViewVolume.projectToScreen(SbVec3f(
+					  static_cast<float>(samples[i][X]),
+					  static_cast<float>(samples[i][Y]),
+					  static_cast<float>(samples[i][Z])),
+				      obolScreen);
+	const double expectedX = 0.5 * (brlView[X] + 1.0);
+	const double expectedY = 0.5 * (brlView[Y] * 2.0 + 1.0);
+	if (fabs(obolScreen[0] - expectedX) > 1.0e-5 ||
+	    fabs(obolScreen[1] - expectedY) > 1.0e-5) {
+	    printf("FAIL: gimbal-position Obol projection mismatch for sample "
+		   "%zu: BRL=(%.9f, %.9f) Obol=(%.9f, %.9f)\n",
+		   i, expectedX, expectedY,
+		   static_cast<double>(obolScreen[0]),
+		   static_cast<double>(obolScreen[1]));
+	    bv_context_destroy(viewCtx);
+	    root->unref();
+	    mesh->unref();
+	    return 1;
+	}
+    }
     bv_context_destroy(viewCtx);
 
     controller.setCamera(NULL);
@@ -5608,7 +5648,14 @@ test_view_controller_lod_submit_and_apply(void)
 	    strstr(controller.getLastLodDiagnostics().getString(),
 		   "current LoD request is already resident") == NULL ||
 	    controller.isRenderRequested()) {
-	    printf("FAIL: LoD view controller did not skip resident changed-scene LoD request\n");
+	    printf("FAIL: LoD view controller did not skip resident "
+		   "changed-scene LoD request (ret/submitted/skipped/render="
+		   "%u/%u/%u/%d diagnostic=%s)\n",
+		   controller.getLastLodVisitedMeshCount(),
+		   controller.getLastLodSubmittedTaskCount(),
+		   controller.getLastLodSkippedMeshCount(),
+		   controller.isRenderRequested() ? 1 : 0,
+		   controller.getLastLodDiagnostics().getString());
 	    service.stop();
 	    root->unref();
 	    bobol_mesh_lod_cache_clear_database(dbip);
@@ -6587,6 +6634,356 @@ compact_native_triangle_geometry(void)
 }
 
 static int
+test_compact_many_leaf_scene_admission(void)
+{
+    char dbpath[MAXPATHLEN] = {0};
+    struct db_i *dbip = NULL;
+    if (make_submit_test_db(dbpath, sizeof(dbpath), &dbip))
+	return 1;
+
+    SoBRLDatabaseSource *source = new SoBRLDatabaseSource;
+    source->ref();
+    source->setDatabase(dbip);
+    source->path = "many-leaf-root.c";
+    source->instanceKey = "many-leaf-source";
+    source->sourceRevision = 901;
+    source->lodBotThreshold = 1;
+    source->representationMode =
+	SoBRLDatabaseSource::REPRESENTATION_SHADED;
+
+    static const size_t leafCount = 128;
+    std::vector<BObolCompactOccurrence> occurrences;
+    occurrences.reserve(leafCount);
+    for (size_t i = 0; i < leafCount; ++i) {
+	BObolCompactOccurrence occurrence;
+	occurrence.geometry = compact_projected_proxy_geometry();
+	occurrence.summary.valid = TRUE;
+	occurrence.summary.shapeKind =
+	    BObolRealizedShapeSummary::SHAPE_VLIST;
+	SbString path;
+	path.sprintf("many-leaf-root.c/leaf-%zu.bot", i);
+	occurrence.summary.path = path;
+	occurrence.summary.sourceName = "lod-submit.bot";
+	occurrence.summary.sourceType = "bot";
+	occurrence.summary.sourceId = static_cast<uint32_t>(1000 + i);
+	occurrence.summary.visible = TRUE;
+	occurrence.summary.selectable = TRUE;
+	occurrence.summary.selected =
+	    i == leafCount - 1 ? TRUE : FALSE;
+	occurrence.lodBacked = TRUE;
+	occurrence.sourceMeshRequestValid = TRUE;
+	occurrence.sourceMeshRequest.path = path;
+	occurrence.sourceMeshRequest.sourceName = "lod-submit.bot";
+	/* Every occurrence aliases one source asset, while its source count is
+	 * deliberately large enough to exercise the provisional first-cut
+	 * reservation rather than the tiny tetrahedron fixture. */
+	occurrence.sourceMeshRequest.meshAssetPath = "lod-submit.bot";
+	occurrence.sourceMeshRequest.meshAssetName = "lod-submit.bot";
+	occurrence.sourceMeshRequest.faceCount = 10000;
+	occurrence.sourceMeshRequest.pointCount = 5000;
+	occurrence.sourceMeshRequest.bounds = SbBox3f(
+	    SbVec3f(0.0f, 0.0f, 0.0f),
+	    SbVec3f(1.0f, 1.0f, 1.0f));
+	SbMatrix placement;
+	placement.setTranslate(SbVec3f(
+	    static_cast<float>(i % 16) * 1.5f,
+	    static_cast<float>(i / 16) * 1.5f, 0.0f));
+	occurrence.localTransform = placement;
+	occurrences.push_back(occurrence);
+    }
+
+    int ret = 0;
+    if (source->setCompactOccurrenceRegistry(occurrences) !=
+	    static_cast<int>(leafCount)) {
+	printf("FAIL: many-leaf compact registry setup\n");
+	ret = 1;
+    }
+    if (!ret) {
+	std::vector<SbString> selectedPaths(1,
+	    occurrences.back().summary.path);
+	if (source->syncCompactInstanceSelectedPaths(selectedPaths) <= 0) {
+	    printf("FAIL: many-leaf compact priority selection setup\n");
+	    ret = 1;
+	}
+    }
+    BObolLodService service;
+    if (!ret && !service.start(1, TRUE)) {
+	printf("FAIL: many-leaf LoD service setup\n");
+	ret = 1;
+    }
+
+    struct bv_view_info view = BV_VIEW_INFO_INIT;
+    view.width = 640;
+    view.height = 480;
+    view.size = 64.0;
+    SoOrthographicCamera *camera = new SoOrthographicCamera;
+    camera->ref();
+    camera->position = SbVec3f(12.0f, 6.0f, 5.0f);
+    camera->height = 32.0f;
+    const SbViewVolume volume =
+	camera->getViewVolume(640.0f / 480.0f);
+
+    std::vector<size_t> pinnedPlan;
+    BObolViewLodState sharedViewState;
+    if (!ret) {
+	SoBRLMeshLodSubmitAction firstWindow;
+	firstWindow.setService(&service);
+	firstWindow.setDatabase(dbip, "db://many-leaf-test", 2026);
+	firstWindow.setViewInfo(&view);
+	firstWindow.setViewVolume(&volume, 1.0f);
+	firstWindow.setGeneration(service.beginGeneration());
+	firstWindow.setRevisions(1, 1);
+	firstWindow.setRefinementFaceBudget(8192);
+	firstWindow.setCompactEntryRange(0, 16);
+	firstWindow.apply(source);
+	firstWindow.getCompactEntryPlan(pinnedPlan);
+	if (firstWindow.getVisitedMeshCount() != 16 ||
+	    firstWindow.getSubmittedTaskCount() != 2 ||
+	    firstWindow.getRefinementFaceBudgetUsed() != 8192 ||
+	    firstWindow.getRefinementBudgetBlockedCount() != 14 ||
+	    !firstWindow.hasDeferredCompactEntries() ||
+	    firstWindow.getCompactEntryNext() != 16 ||
+	    pinnedPlan.size() != leafCount ||
+	    pinnedPlan.front() != leafCount - 1) {
+	    printf("FAIL: many-leaf aggregate admission or priority plan "
+		   "(visited=%u tasks=%u used=%zu blocked=%u deferred=%d "
+		   "next=%zu plan=%zu first=%zu)\n",
+		   firstWindow.getVisitedMeshCount(),
+		   firstWindow.getSubmittedTaskCount(),
+		   firstWindow.getRefinementFaceBudgetUsed(),
+		   firstWindow.getRefinementBudgetBlockedCount(),
+		   firstWindow.hasDeferredCompactEntries() ? 1 : 0,
+		   firstWindow.getCompactEntryNext(), pinnedPlan.size(),
+		   pinnedPlan.empty() ? SIZE_MAX : pinnedPlan.front());
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	point_t points[4];
+	VSET(points[0], 0.0, 0.0, 0.0);
+	VSET(points[1], 1.0, 0.0, 0.0);
+	VSET(points[2], 0.0, 1.0, 0.0);
+	VSET(points[3], 0.0, 0.0, 1.0);
+	int faces[12] = {
+	    0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0
+	};
+	struct BObolMeshLodData data = {};
+	data.faces = faces;
+	data.face_count = 4;
+	data.points = points;
+	data.point_count = 4;
+	data.points_orig = points;
+	data.point_orig_count = 4;
+	VSET(data.bmin, 0.0, 0.0, 0.0);
+	VSET(data.bmax, 1.0, 1.0, 1.0);
+	struct BObolMeshLodHierarchyInfo hierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	hierarchy.min_level = 0;
+	hierarchy.max_level = 4;
+	hierarchy.resident_level = 4;
+	for (int level = 0; level <= 4; ++level) {
+	    hierarchy.face_count[level] = 4;
+	    hierarchy.point_count[level] = 4;
+	}
+	VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
+	VSET(hierarchy.quantization_max, 1.0, 1.0, 1.0);
+	BObolLodProgressiveMeshPtr progressive(
+	    new BObolLodProgressiveMesh);
+	BObolCompactInstanceHandle handle;
+	BObolCompactInstanceSummary summary;
+	if (!progressive->update(data, hierarchy, 4, FALSE) ||
+	    !source->getCompactInstanceHandle(
+		static_cast<int>(pinnedPlan[0]), handle) ||
+	    !source->getCompactInstanceSummary(handle, summary)) {
+	    printf("FAIL: many-leaf shared asset fixture setup\n");
+	    ret = 1;
+	} else {
+	    BObolLodRequest residentRequest;
+	    residentRequest.databaseId = "db://many-leaf-test";
+	    residentRequest.databaseRevision = 2026;
+	    residentRequest.sourceRevision = source->sourceRevision.getValue();
+	    residentRequest.objectPath = summary.meshAssetPath;
+	    residentRequest.objectName = summary.meshAssetName;
+	    residentRequest.occurrenceKey = summary.sourceInstanceKey;
+	    residentRequest.viewRevision = 1;
+	    residentRequest.policyRevision = 1;
+	    residentRequest.drawMode = BOBOL_LOD_DRAW_SHADED;
+	    residentRequest.providerId = "bobol_mesh_lod";
+	    residentRequest.providerVersion =
+		BOBOL_MESH_LOD_PROVIDER_VERSION;
+	    residentRequest.qualityTier =
+		BOBOL_LOD_QUALITY_FAST_DISPLAY;
+	    residentRequest.requestedLevel = 4;
+	    residentRequest.bounds = SbBox3f(
+		SbVec3f(0.0f, 0.0f, 0.0f),
+		SbVec3f(1.0f, 1.0f, 1.0f));
+	    BObolLodResult residentResult;
+	    residentResult.request = residentRequest;
+	    residentResult.cacheKey =
+		bobol_lod_cache_key(residentRequest);
+	    residentResult.geometry.kind =
+		BOBOL_LOD_GEOMETRY_MESH_LOD_CACHE;
+	    residentResult.geometry.providerId =
+		residentRequest.providerId;
+	    residentResult.geometry.providerVersion =
+		residentRequest.providerVersion;
+	    residentResult.geometry.cacheKey =
+		bobol_lod_asset_cache_key(residentRequest);
+	    residentResult.geometry.activeLevel = 4;
+	    residentResult.progressiveMesh = progressive;
+	    residentResult.residentLevel = 4;
+	    residentResult.resultKind = BOBOL_LOD_RESULT_MESH;
+	    residentResult.qualityTier =
+		BOBOL_LOD_QUALITY_FAST_DISPLAY;
+	    residentResult.providerStatus = BOBOL_LOD_PROVIDER_READY;
+	    residentResult.bounds = progressive->bounds();
+	    residentResult.counts.faceCount = 4;
+	    residentResult.counts.pointCount = 4;
+	    residentResult.counts.originalPointCount = 4;
+	    residentResult.terminal = TRUE;
+	    if (!sharedViewState.applySourceResult(
+		    source, residentResult)) {
+		printf("FAIL: many-leaf shared asset binding setup\n");
+		ret = 1;
+	    }
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeshLodSubmitAction sharedReuse;
+	sharedReuse.setService(&service);
+	sharedReuse.setDatabase(dbip, "db://many-leaf-test", 2026);
+	sharedReuse.setViewInfo(&view);
+	sharedReuse.setViewVolume(&volume, 1.0f);
+	sharedReuse.setGeneration(service.beginGeneration());
+	sharedReuse.setRevisions(1, 1);
+	sharedReuse.setViewLodState(&sharedViewState);
+	sharedReuse.setRefinementFaceBudget(4);
+	sharedReuse.setCompactEntryPlan(pinnedPlan);
+	sharedReuse.setCompactEntryRange(2, 1);
+	sharedReuse.apply(source);
+	if (sharedReuse.getVisitedMeshCount() != 1 ||
+	    sharedReuse.getSubmittedTaskCount() != 0 ||
+	    sharedReuse.getUpdatedCutCount() != 1 ||
+	    sharedReuse.getRefinementFaceBudgetUsed() != 4 ||
+	    sharedViewState.cadMeshPayloadCount() != 2) {
+	    printf("FAIL: many-leaf shared PoP asset was not bound directly "
+		   "(visited=%u tasks=%u cuts=%u used=%zu payloads=%zu)\n",
+		   sharedReuse.getVisitedMeshCount(),
+		   sharedReuse.getSubmittedTaskCount(),
+		   sharedReuse.getUpdatedCutCount(),
+		   sharedReuse.getRefinementFaceBudgetUsed(),
+		   sharedViewState.cadMeshPayloadCount());
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeshLodSubmitAction secondWindow;
+	secondWindow.setService(&service);
+	secondWindow.setDatabase(dbip, "db://many-leaf-test", 2026);
+	secondWindow.setViewInfo(&view);
+	secondWindow.setViewVolume(&volume, 1.0f);
+	secondWindow.setGeneration(service.beginGeneration());
+	secondWindow.setRevisions(1, 1);
+	secondWindow.setRefinementFaceBudget(0);
+	secondWindow.setCompactEntryPlan(pinnedPlan);
+	secondWindow.setCompactEntryRange(16, 16);
+	secondWindow.apply(source);
+	std::vector<size_t> continuedPlan;
+	secondWindow.getCompactEntryPlan(continuedPlan);
+	if (secondWindow.getVisitedMeshCount() != 16 ||
+	    secondWindow.getSubmittedTaskCount() != 0 ||
+	    secondWindow.getRefinementBudgetBlockedCount() != 16 ||
+	    secondWindow.getCompactEntryNext() != 32 ||
+	    continuedPlan != pinnedPlan) {
+	    printf("FAIL: many-leaf pinned plan continuation "
+		   "(visited=%u tasks=%u blocked=%u next=%zu plan=%zu)\n",
+		   secondWindow.getVisitedMeshCount(),
+		   secondWindow.getSubmittedTaskCount(),
+		   secondWindow.getRefinementBudgetBlockedCount(),
+		   secondWindow.getCompactEntryNext(),
+		   continuedPlan.size());
+	    ret = 1;
+	}
+    }
+
+    if (!ret) {
+	SoBRLMeshLodSubmitAction retainedAdmission;
+	retainedAdmission.setService(&service);
+	retainedAdmission.setDatabase(
+	    dbip, "db://many-leaf-test", 2026);
+	retainedAdmission.setViewInfo(&view);
+	retainedAdmission.setViewVolume(&volume, 1.0f);
+	retainedAdmission.setGeneration(service.beginGeneration());
+	retainedAdmission.setRevisions(2, 2);
+	retainedAdmission.setViewLodState(&sharedViewState);
+	retainedAdmission.setRefinementFaceBudget(0);
+	retainedAdmission.setRetainedSceneFaceBudget(4);
+	retainedAdmission.setSubmissionTaskLimit(0);
+	retainedAdmission.setCompactEntryPlan(pinnedPlan);
+	retainedAdmission.apply(source);
+	if (retainedAdmission.getRetainedSceneFaceBudgetUsed() != 4 ||
+	    retainedAdmission.getUpdatedCutCount() != 1 ||
+	    sharedViewState.activeFaceCount() != 4 ||
+	    sharedViewState.cadMeshPayloadCount() != 1) {
+	    printf("FAIL: over-budget retained occurrences were not "
+		   "priority-culled to structural proxies "
+		   "(used=%zu cuts=%u faces=%zu payloads=%zu)\n",
+		   retainedAdmission.getRetainedSceneFaceBudgetUsed(),
+		   retainedAdmission.getUpdatedCutCount(),
+		   sharedViewState.activeFaceCount(),
+		   sharedViewState.cadMeshPayloadCount());
+	    ret = 1;
+	}
+    }
+
+    /* Re-entering a view with a resident shared asset must admit minimum
+     * meshes for every affordable visible occurrence before spending the
+     * scene budget on a rich prefix for one.  The refinement allowance is
+     * deliberately zero: retained coverage is charged to the total scene
+     * admission budget, then refined by a later epoch. */
+    if (!ret) {
+	SoBRLMeshLodSubmitAction coverageReadmission;
+	coverageReadmission.setService(&service);
+	coverageReadmission.setDatabase(
+	    dbip, "db://many-leaf-test", 2026);
+	coverageReadmission.setViewInfo(&view);
+	coverageReadmission.setViewVolume(&volume, 1.0f);
+	coverageReadmission.setGeneration(service.beginGeneration());
+	coverageReadmission.setRevisions(3, 3);
+	coverageReadmission.setViewLodState(&sharedViewState);
+	coverageReadmission.setRefinementFaceBudget(0);
+	coverageReadmission.setRetainedSceneFaceBudget(8);
+	coverageReadmission.setSubmissionTaskLimit(0);
+	coverageReadmission.setCompactEntryPlan(pinnedPlan);
+	coverageReadmission.apply(source);
+	if (coverageReadmission.getRetainedSceneFaceBudgetUsed() != 8 ||
+	    coverageReadmission.getUpdatedCutCount() != 1 ||
+	    sharedViewState.activeFaceCount() != 8 ||
+	    sharedViewState.cadMeshPayloadCount() != 2) {
+	    printf("FAIL: resident shared asset readmission did not preserve "
+		   "coverage before refinement "
+		   "(used=%zu cuts=%u faces=%zu payloads=%zu)\n",
+		   coverageReadmission.getRetainedSceneFaceBudgetUsed(),
+		   coverageReadmission.getUpdatedCutCount(),
+		   sharedViewState.activeFaceCount(),
+		   sharedViewState.cadMeshPayloadCount());
+	    ret = 1;
+	}
+    }
+
+    camera->unref();
+    service.stop();
+    source->unref();
+    bobol_mesh_lod_cache_clear_database(dbip);
+    db_close(dbip);
+    bu_file_delete(dbpath);
+    return ret;
+}
+
+static int
 test_compact_native_mesh_not_pop_submitted(void)
 {
     char dbpath[MAXPATHLEN] = {0};
@@ -7047,6 +7444,85 @@ test_compact_mesh_lod_projection_and_mode_parity(void)
 			   admittedState.activeFaceCount(),
 			   admitted.getDiagnostics().getString());
 		    ret = 1;
+		}
+	    }
+	    if (!ret) {
+		/* A shared asset may retain several levels above this
+		 * occurrence's active cut while the view requests a still-richer
+		 * nonresident level.  Advance to the next affordable retained
+		 * level instead of repeatedly trying (and failing) to charge the
+		 * whole active-to-resident jump. */
+		struct BObolMeshLodHierarchyInfo multiHierarchy = hierarchy;
+		multiHierarchy.max_level = 3;
+		multiHierarchy.resident_level = 2;
+		multiHierarchy.face_count[0] = 1;
+		multiHierarchy.face_count[1] = 2;
+		multiHierarchy.face_count[2] = 4;
+		multiHierarchy.face_count[3] = 8;
+		multiHierarchy.point_count[0] = 3;
+		multiHierarchy.point_count[1] = 4;
+		multiHierarchy.point_count[2] = 6;
+		multiHierarchy.point_count[3] = 8;
+		BObolLodProgressiveMeshPtr multiProgressive(
+		    new BObolLodProgressiveMesh);
+		BObolLodResult multiResult = budgetResult;
+		if (!multiProgressive->update(
+			data, multiHierarchy, 2, FALSE)) {
+		    printf("FAIL: multi-level retained refinement fixture setup\n");
+		    ret = 1;
+		} else {
+		    multiResult.progressiveMesh = multiProgressive;
+		    multiResult.geometry.activeLevel = 0;
+		    multiResult.residentLevel = 2;
+		    multiResult.request.requestedLevel = 3;
+		    multiResult.counts.faceCount = 1;
+		    multiResult.counts.pointCount = 3;
+		    multiResult.counts.originalPointCount = 3;
+		    multiResult.terminal = FALSE;
+		    BObolViewLodState multiState;
+		    if (!multiState.applySourceResult(source, multiResult)) {
+			printf("FAIL: multi-level retained refinement apply\n");
+			ret = 1;
+		    } else {
+			SoBRLMeshLodSubmitAction incremental;
+			incremental.setService(&service);
+			incremental.setDatabase(dbip,
+			    "db://compact-projected-test", 2026);
+			incremental.setViewInfo(&view);
+			incremental.setViewVolume(
+			    &budgetVolume, 0.25f);
+			incremental.setGeneration(
+			    service.beginGeneration());
+			incremental.setRevisions(67, 68);
+			incremental.setViewLodState(&multiState);
+			incremental.setRefinementFaceBudget(1);
+			incremental.apply(root);
+			payload = multiState.findCadForResult(multiResult);
+			if (!payload ||
+			    incremental.getSubmittedTaskCount() != 0 ||
+			    incremental.getUpdatedCutCount() != 1 ||
+			    incremental.getPendingRetainedRefinementCount() != 1 ||
+			    incremental.getRefinementBudgetBlockedCount() != 1 ||
+			    incremental.getRefinementFaceBudgetUsed() != 1 ||
+			    payload->activeLevel != 1 ||
+			    multiState.activeFaceCount() != 2) {
+			    printf("FAIL: retained refinement did not take an "
+				   "affordable intermediate cut (tasks=%u cuts=%u "
+				   "pending=%u blocked=%u used=%zu active=%d "
+				   "faces=%zu diagnostics=%s)\n",
+				   incremental.getSubmittedTaskCount(),
+				   incremental.getUpdatedCutCount(),
+				   incremental.
+				       getPendingRetainedRefinementCount(),
+				   incremental.
+				       getRefinementBudgetBlockedCount(),
+				   incremental.getRefinementFaceBudgetUsed(),
+				   payload ? payload->activeLevel : -1,
+				   multiState.activeFaceCount(),
+				   incremental.getDiagnostics().getString());
+			    ret = 1;
+			}
+		    }
 		}
 	    }
 	    budgetCamera->unref();
@@ -7640,6 +8116,8 @@ main(int argc, char **argv)
     if (test_view_lod_mesh_eviction_preserves_proxy())
 	return 1;
     if (test_mesh_lod_submit_action())
+	return 1;
+    if (test_compact_many_leaf_scene_admission())
 	return 1;
     if (test_compact_native_mesh_not_pop_submitted())
 	return 1;
