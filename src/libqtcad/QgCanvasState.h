@@ -242,8 +242,13 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	(void)s.obol->advanceProgressiveWork(NULL, NULL);
 	if (s.obol->isRenderRequested())
 	    w->update();
-	else
-	    qgcanvas_queue_obol_progressive_update(s, w);
+	/* Do not depend on Qt delivering that paint to keep the provider pump
+	 * alive.  update() may be coalesced, deferred while the widget is not
+	 * exposed, or consumed by a nested event loop.  The next timer remains
+	 * lightweight while a presentation is pending because the controller's
+	 * refinement-frame gate prevents it from advancing past an unpresented
+	 * cut. */
+	qgcanvas_queue_obol_progressive_update(s, w);
     });
 }
 

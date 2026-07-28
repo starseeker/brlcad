@@ -216,6 +216,20 @@ readback or a motion presentation interval cannot contaminate the other
 capacity.  Budget reductions affect a future view/motion epoch; they do not
 make an unchanged quiet frame visibly regress.
 
+Stable refinement is monotonic within one camera epoch.  A calibration pass
+which changes no visible prefix is a probe, not progress; at most eight such
+probes may occur at one unchanged active population.  This bound lets the
+budget span a large discrete next-prefix jump while guaranteeing that
+floating-point calibration convergence or inconsistent thresholds cannot
+keep an otherwise stable retained view repainting forever.
+
+Presentation timing has two consumers with deliberately different contracts.
+The LoD controller receives the short-horizon cadence signal so it can react
+within a few frames.  The faceplate receives a separate 750 ms elapsed-time
+EMA, rebased at the start of a continuous navigation gesture and displayed to
+one decimal place.  Smoothing the faceplate must not delay the controller, and
+event-driven idle gaps must not be interpreted as renderer throughput.
+
 Refinement priority is lexicographic:
 
 1. selected occurrence;

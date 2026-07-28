@@ -9413,6 +9413,25 @@ cad_progressive_mesh_part_geometry(
 		std::min(count,
 		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
 	}
+	/* Record the vertex extent of each cumulative index prefix once while
+	 * constructing the geometry.  Recomputing it from every visible part on
+	 * every render is quadratic bookkeeping for large distinct-mesh scenes.
+	 * Derive it from the finalized Obol indices rather than the source point
+	 * counts because normal canonicalization may split shared vertices. */
+	size_t scannedIndexCount = 0;
+	uint32_t maximumIndex = 0;
+	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	    const size_t indexCount = std::min<size_t>(
+		mesh.progressiveIndexCount[level], mesh.indices.size());
+	    for (; scannedIndexCount < indexCount; ++scannedIndexCount)
+		maximumIndex = std::max(maximumIndex,
+		    mesh.indices[scannedIndexCount]);
+	    const size_t positionCount = indexCount ?
+		static_cast<size_t>(maximumIndex) + 1 : 0;
+	    mesh.progressivePositionCount[level] = static_cast<uint32_t>(
+		std::min(positionCount,
+		    static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+	}
     }
     if (geometry.wire.has_value()) {
 	Obol::WireRep &wireRep = *geometry.wire;

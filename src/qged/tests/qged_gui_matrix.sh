@@ -877,6 +877,7 @@ run_current()
 
     printf 'RUN %s\n' "$run_name"
     local started=$SECONDS
+    local status
     if timeout --signal=TERM "$run_timeout" "${command[@]}" \
 	    >"$out/stdout.log" 2>"$out/stderr.log"; then
 	if validate_report "$out/report.json" "$out/images" "$object" \
@@ -888,8 +889,9 @@ run_current()
 	printf 'FAIL,%s,%s,report-validation\n' "$run_name" \
 	    "$((SECONDS - started))" >> "$artifact_dir/results.csv"
 	return 1
+    else
+	status=$?
     fi
-    local status=$?
     printf 'FAIL,%s,%s,status=%s\n' "$run_name" "$((SECONDS - started))" \
 	"$status" >> "$artifact_dir/results.csv"
     return 1
