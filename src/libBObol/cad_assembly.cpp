@@ -89,9 +89,23 @@ SoBRLCadAssembly::clearSemanticMap(void)
 
 void
 SoBRLCadAssembly::setInstanceSemantic(Obol::InstanceId id,
-	const InstanceSemantic &semantic)
+    const InstanceSemantic &semantic)
 {
     this->semantics[id] = semantic;
+}
+
+void
+SoBRLCadAssembly::reserveCompactPresentationCapacity(
+    size_t expectedOccurrences)
+{
+    if (!expectedOccurrences)
+	return;
+    this->reserveStreamingCapacity(expectedOccurrences);
+    this->semantics.reserve(expectedOccurrences);
+    this->compactInstancePresentations.reserve(expectedOccurrences);
+    this->compactActivePartReferences.reserve(expectedOccurrences);
+    this->compactPartChannels.reserve(expectedOccurrences);
+    this->compactLodParts.reserve(expectedOccurrences);
 }
 
 void
@@ -116,8 +130,7 @@ SoDetail *
 SoBRLCadAssembly::createPickDetail(
     const Obol::CadPickDetailRecord &hit) const
 {
-    std::map<Obol::InstanceId, InstanceSemantic>::const_iterator found =
-	this->semantics.find(hit.instance);
+    const auto found = this->semantics.find(hit.instance);
     if (found == this->semantics.end())
 	return inherited::createPickDetail(hit);
 

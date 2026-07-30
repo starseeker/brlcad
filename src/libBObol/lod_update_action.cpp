@@ -7,6 +7,7 @@
 
 #include "common.h"
 
+#include "bu/log.h"
 #include "bu/str.h"
 
 #include "BObol/BDatabaseSource.h"
@@ -18,6 +19,7 @@
 #include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoNode.h>
 
+#include <stdlib.h>
 #include <string.h>
 #include <utility>
 
@@ -267,6 +269,27 @@ SoBRLLodUpdateAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    updateAction->appliedResultCount++;
 	else {
 	    updateAction->rejectedResultCount++;
+	    if (getenv("BOBOL_LOD_TRACE_REJECTIONS")) {
+		static unsigned int sourceRejectTraceCount = 0;
+		if (sourceRejectTraceCount++ < 64)
+		    bu_log("BObol LoD rejection reason=traversal-source "
+			   "object=%s occurrence=%s level=%d requested=%d "
+			   "status=%d kind=%d progressive=%d valid=%d "
+			   "route=%llu source=%p diagnostic=%s\n",
+			   result.request.objectName.getString(),
+			   result.request.occurrenceKey.getString(),
+			   result.geometry.activeLevel,
+			   result.request.requestedLevel,
+			   result.providerStatus, result.resultKind,
+			   result.progressiveMesh ? 1 : 0,
+			   result.progressiveMesh &&
+				   result.progressiveMesh->isValid() ?
+			       1 : 0,
+			   static_cast<unsigned long long>(
+			       result.request.sourceRoutingId),
+			   static_cast<void *>(source),
+			   result.diagnostic.getString());
+	    }
 	    updateAction->appendDiagnostic(result,
 					   "view-local compact CAD LoD result rejected by source");
 	}

@@ -85,6 +85,8 @@ check_mesh_lod_payload(const char *label,
 {
     struct BObolMeshLodData data;
     struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
 
     if (!bobol_mesh_lod_data_get(lod, &data) ||
 	data.face_count == 0 || data.face_count > maxFaceCount ||
@@ -105,6 +107,7 @@ check_mesh_lod_payload(const char *label,
     }
 
     if (!bobol_mesh_lod_info_get(lod, &info) ||
+	!bobol_mesh_lod_hierarchy_info_get(lod, &hierarchy) ||
 	info.active_level < 0 ||
 	info.face_count != data.face_count ||
 	info.point_count != data.point_count ||
@@ -112,7 +115,10 @@ check_mesh_lod_payload(const char *label,
 	info.normal_count != data.normal_count ||
 	!info.has_faces || !info.has_points ||
 	!info.has_original_points ||
-	info.has_normals != (data.normals ? 1 : 0)) {
+	info.has_normals != (data.normals ? 1 : 0) ||
+	hierarchy.has_normals != info.has_normals ||
+	hierarchy.shaded_cull_backfaces !=
+	    info.shaded_cull_backfaces) {
 	printf("FAIL: %s mesh lod info\n", label);
 	return 1;
     }
@@ -508,6 +514,55 @@ main(int argc, char *argv[])
 	goto cleanup;
     }
 
+    {
+	/* Cold database coverage has already paid to import a potentially huge
+	 * BoT in order to publish its leaf bounds.  Cache generation must be able
+	 * to consume that caller-owned internal directly without taking
+	 * ownership or rereading the database object. */
+	struct directory *dp = db_lookup(dbip, objname, LOOKUP_QUIET);
+	struct rt_db_internal intern;
+	struct BObolMeshLod *opened = NULL;
+	struct BObolMeshLodHierarchyInfo openedHierarchy =
+	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+	struct BObolMeshLodData openedData;
+	RT_DB_INTERNAL_INIT(&intern);
+	if (!dp || rt_db_get_internal(&intern, dp, dbip, NULL) < 0 ||
+	    intern.idb_type != ID_BOT || !intern.idb_ptr ||
+	    !(opened = bobol_mesh_lod_cache_refresh_from_bot_open(
+		dbip, objname,
+		static_cast<const struct rt_bot_internal *>(intern.idb_ptr),
+		&cacheStatus)) ||
+	    !cacheStatus.directory_found || !cacheStatus.is_bot ||
+	    !cacheStatus.has_cache_key || !cacheStatus.has_cached_payload ||
+	    cacheStatus.stale_cache_entry ||
+	    !cacheStatus.generated_cache_entry || !cacheStatus.cache_key ||
+	    !bobol_mesh_lod_hierarchy_info_get(
+		opened, &openedHierarchy) ||
+	    bobol_mesh_lod_current_level(opened) !=
+		openedHierarchy.min_level ||
+	    !bobol_mesh_lod_data_get(opened, &openedData) ||
+	    !openedData.face_count || !openedData.point_count) {
+	    printf("FAIL: mesh lod staged BoT open refresh status\n");
+	    if (opened)
+		bobol_mesh_lod_destroy(opened);
+	    if (intern.idb_ptr)
+		rt_db_free_internal(&intern);
+	    ret = 1;
+	    goto cleanup;
+	}
+	rt_db_free_internal(&intern);
+	if (bobol_mesh_lod_load_resident_level(opened, 15, 0) != 15 ||
+	    !bobol_mesh_lod_data_get(opened, &openedData) ||
+	    openedData.face_count != static_cast<size_t>(faceCount) ||
+	    openedData.point_count != static_cast<size_t>(vertexCount)) {
+	    printf("FAIL: generated open prefix did not append cached suffix\n");
+	    bobol_mesh_lod_destroy(opened);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(opened);
+    }
+
     if (bobol_mesh_lod_cache_refresh(dbip, objname, &cacheStatus) !=
 	BRLCAD_OK ||
 	!cacheStatus.directory_found || !cacheStatus.is_bot ||
@@ -517,6 +572,24 @@ main(int argc, char *argv[])
 	printf("FAIL: mesh lod refresh status\n");
 	ret = 1;
 	goto cleanup;
+    }
+
+    {
+	struct BObolMeshLod *cachedPrefix =
+	    bobol_mesh_lod_get_cached_prefix(dbip, cacheStatus.cache_key);
+	struct BObolMeshLodData cachedData;
+	if (!cachedPrefix ||
+	    bobol_mesh_lod_load_resident_level(cachedPrefix, 15, 0) != 15 ||
+	    !bobol_mesh_lod_data_get(cachedPrefix, &cachedData) ||
+	    cachedData.face_count != static_cast<size_t>(faceCount) ||
+	    cachedData.point_count != static_cast<size_t>(vertexCount)) {
+	    printf("FAIL: mesh lod direct cached-prefix open\n");
+	    if (cachedPrefix)
+		bobol_mesh_lod_destroy(cachedPrefix);
+	    ret = 1;
+	    goto cleanup;
+	}
+	bobol_mesh_lod_destroy(cachedPrefix);
     }
 
     lod = bobol_mesh_lod_get(dbip, objname);
@@ -722,11 +795,11 @@ main(int argc, char *argv[])
 	    bobol_mesh_lod_load_display_level(solidLod, 100, 0) < 0 ||
 	    !bobol_mesh_lod_info_get(solidLod, &solidInfo) ||
 	    !bobol_mesh_lod_data_get(solidLod, &solidData) ||
-	    !solidInfo.shaded_cull_backfaces ||
+	    solidInfo.shaded_cull_backfaces ||
 	    solidInfo.face_count != 4 ||
-	    mesh_signed_six_volume(solidData) <= 0.0L) {
-	    printf("FAIL: closed consistently wound unoriented BoT was not "
-		   "normalized to exterior CCW culling metadata "
+	    mesh_signed_six_volume(solidData) >= 0.0L) {
+	    printf("FAIL: unoriented BoT did not preserve two-sided authored "
+		   "winding metadata "
 		   "(cull=%d info_faces=%zu data_faces=%zu volume=%.17Lg)\n",
 		   solidInfo.shaded_cull_backfaces,
 		   solidInfo.face_count, solidData.face_count,
@@ -840,12 +913,19 @@ main(int argc, char *argv[])
 	    ret = 1;
 	    goto cleanup;
 	}
+	const size_t residentBytesBefore =
+	    bobol_mesh_lod_resident_bytes(lod);
+	const size_t prefixBytesBefore =
+	    bobol_mesh_lod_resident_prefix_bytes(lod);
 	bobol_mesh_lod_memshrink(lod);
 	if (bobol_mesh_lod_current_level(lod) != activeLevel ||
 	    bobol_mesh_lod_has_active_data(lod) ||
 	    bobol_mesh_lod_data_get(lod, &shrinkData) ||
 	    bobol_mesh_lod_info_get(lod, &shrinkInfo) ||
-	    shrinkInfo.active_level != activeLevel) {
+	    shrinkInfo.active_level != activeLevel ||
+	    !prefixBytesBefore ||
+	    bobol_mesh_lod_resident_prefix_bytes(lod) != 0 ||
+	    bobol_mesh_lod_resident_bytes(lod) >= residentBytesBefore) {
 	    printf("FAIL: mesh lod memshrink status\n");
 	    ret = 1;
 	    goto cleanup;
@@ -853,7 +933,8 @@ main(int argc, char *argv[])
 	if (bobol_mesh_lod_load_level(lod, activeLevel, 0) != activeLevel ||
 	    check_mesh_lod_payload("mesh lod reload after memshrink", lod,
 				   static_cast<size_t>(faceCount),
-				   static_cast<size_t>(vertexCount), 0)) {
+				   static_cast<size_t>(vertexCount), 0) ||
+	    bobol_mesh_lod_resident_prefix_bytes(lod) == 0) {
 	    printf("FAIL: mesh lod reload after memshrink\n");
 	    ret = 1;
 	    goto cleanup;

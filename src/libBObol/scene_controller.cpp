@@ -1219,6 +1219,7 @@ struct BObolSceneController::Impl {
     mutable std::unordered_map<std::string, std::vector<SoBRLDatabaseSource *> > databaseSourcePathInstancesIndex;
     mutable std::unordered_map<std::string, SoBRLDatabaseSource *> databaseSourceInstanceIndex;
     mutable std::unordered_map<std::string, SoGroup *> databaseSourceInstanceParentIndex;
+    mutable std::unordered_map<uint64_t, SoBRLDatabaseSource *> databaseSourceRoutingIndex;
     mutable std::vector<SoBRLDatabaseSource *> databaseSourceOrder;
     mutable std::unordered_map<SoBRLDatabaseSource *, size_t> databaseSourceOrderIndex;
     unsigned int lastVisitedSourceCount;
@@ -1369,6 +1370,7 @@ BObolSceneController::clearDatabaseSourceIndex(void) const
     this->d->databaseSourcePathInstancesIndex.clear();
     this->d->databaseSourceInstanceIndex.clear();
     this->d->databaseSourceInstanceParentIndex.clear();
+    this->d->databaseSourceRoutingIndex.clear();
     this->d->databaseSourceOrder.clear();
     this->d->databaseSourceOrderIndex.clear();
     this->d->databaseSourceIndexValid = FALSE;
@@ -1397,6 +1399,8 @@ BObolSceneController::indexDatabaseSource(SoBRLDatabaseSource *source,
 	      source);
     parent_index_put(this->d->databaseSourceInstanceParentIndex,
 		     instanceKey.getString(), parent);
+    this->d->databaseSourceRoutingIndex[source->
+	getCompactSourceRoutingId()] = source;
     source_order_put(this->d->databaseSourceOrder,
 		     this->d->databaseSourceOrderIndex, source);
 }
@@ -1429,6 +1433,11 @@ BObolSceneController::unindexDatabaseSource(SoBRLDatabaseSource *source) const
     index_erase(this->d->databaseSourceInstanceIndex, instanceKey.getString());
     parent_index_erase(this->d->databaseSourceInstanceParentIndex,
 		       instanceKey.getString());
+    const uint64_t routingId = source->getCompactSourceRoutingId();
+    const auto route = this->d->databaseSourceRoutingIndex.find(routingId);
+    if (route != this->d->databaseSourceRoutingIndex.end() &&
+	route->second == source)
+	this->d->databaseSourceRoutingIndex.erase(route);
     source_order_erase(this->d->databaseSourceOrder,
 		       this->d->databaseSourceOrderIndex, source);
 }
@@ -1446,6 +1455,7 @@ BObolSceneController::rebuildDatabaseSourceIndex(void) const
     this->d->databaseSourcePathInstancesIndex.clear();
     this->d->databaseSourceInstanceIndex.clear();
     this->d->databaseSourceInstanceParentIndex.clear();
+    this->d->databaseSourceRoutingIndex.clear();
     this->d->databaseSourceOrder.clear();
     this->d->databaseSourceOrderIndex.clear();
     if (this->d->root && this->d->root->isOfType(SoGroup::getClassTypeId())) {
@@ -1457,6 +1467,11 @@ BObolSceneController::rebuildDatabaseSourceIndex(void) const
 					 this->d->databaseSourceInstanceParentIndex,
 					 this->d->databaseSourceOrder,
 					 this->d->databaseSourceOrderIndex);
+	for (SoBRLDatabaseSource *source : this->d->databaseSourceOrder) {
+	    if (source)
+		this->d->databaseSourceRoutingIndex[
+		    source->getCompactSourceRoutingId()] = source;
+	}
     }
     this->d->databaseSourceIndexValid = TRUE;
 }
@@ -2569,6 +2584,20 @@ BObolSceneController::getDatabaseSourceCount(void) const
     if (!this->d->databaseSourceIndexValid)
 	this->rebuildDatabaseSourceIndex();
     return static_cast<int>(this->d->databaseSourceOrder.size());
+}
+
+SoBRLDatabaseSource *
+BObolSceneController::findDatabaseSourceRoutingId(uint64_t routingId) const
+{
+    if (!routingId || !this->d->root ||
+	!this->d->root->isOfType(SoGroup::getClassTypeId()))
+	return NULL;
+
+    if (!this->d->databaseSourceIndexValid)
+	this->rebuildDatabaseSourceIndex();
+    const auto route = this->d->databaseSourceRoutingIndex.find(routingId);
+    return route != this->d->databaseSourceRoutingIndex.end() ?
+	route->second : NULL;
 }
 
 SoBRLDatabaseSource *

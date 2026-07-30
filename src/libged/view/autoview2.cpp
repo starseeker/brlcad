@@ -209,14 +209,17 @@ ged_autoview2_core(struct ged *gedp, int argc, const char *argv[])
     } else {
 	if (all_view_objs)
 	    (void)_autoview_bobol_view_scene(view_ctx, factor);
-	else
+	else if (!ged_draw_obol_progressive_autoview_follow(gedp, view_ctx,
+		factor))
 	    (void)_autoview_obol_database_scene(gedp, view_ctx, factor, 0);
-	/* A deferred Obol root starts with a proxy and gains its full bounds as
-	 * realization completes.  Continue fitting this command's view until
-	 * that work settles, unless a later view change supersedes it. */
-	if (!all_view_objs)
-	    (void)ged_draw_obol_progressive_autoview_follow(gedp, view_ctx,
-		    factor);
+	/*
+	 * A deferred Obol root publishes monotonic partial coverage before its
+	 * exact whole-target bound.  Applying the current partial union here and
+	 * then fitting the exact union later produces two camera jumps from one
+	 * autoview command.  If a progressive source can accept the request,
+	 * defer the fit entirely; its exact-bound publication fulfills it once.
+	 * A settled/non-progressive scene follows the ordinary immediate path.
+	 */
     }
 
     return BRLCAD_OK;

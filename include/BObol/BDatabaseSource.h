@@ -31,6 +31,7 @@
 #include <Inventor/nodes/SoSeparator.h>
 
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -507,9 +508,67 @@ struct BOBOL_EXPORT BObolCompactOccurrence {
  * pointee), so pushing a copy across threads is a race-free refcount bump; all
  * other fields are value types. */
 struct BOBOL_EXPORT BObolCompactOccurrenceStream {
+    ~BObolCompactOccurrenceStream(void);
     void push(const BObolCompactOccurrence &occurrence);
+    void push(BObolCompactOccurrence &&occurrence);
+    /* Priority occurrences describe the whole draw target rather than one
+     * leaf.  Drain them before an already queued leaf backlog so a completed
+     * aggregate extent can frame a very large cold draw immediately. */
+    void pushPriority(const BObolCompactOccurrence &occurrence);
+    /* Retain a bounded LRU window of full cold imports long enough for the
+     * first view-selected LoD task to reuse them.  Occurrences hold weak
+     * references, so compact scene state cannot prolong these leases. */
+    SbBool retainStagedSource(
+	const std::shared_ptr<const BObolStagedSourceMesh> &source);
+    size_t stagedSourceByteCount(void);
     size_t drain(std::vector<BObolCompactOccurrence> &out, size_t cap);
     size_t size(void);
+    void setExpectedCount(size_t count)
+    {
+	/*
+	 * Warm manifests know their complete population before publishing the
+	 * first leaf.  Reserve the producer buffer once so streaming 100k+
+	 * immutable records does not repeatedly copy every previously queued
+	 * value while the GUI drains concurrently.
+	 */
+	{
+	    std::lock_guard<std::mutex> guard(mutex);
+	    const size_t alreadyConsumed =
+		pendingOffset <= pending.size() ? pendingOffset : 0;
+	    const size_t desired =
+		count > SIZE_MAX - alreadyConsumed ?
+		    SIZE_MAX : count + alreadyConsumed;
+	    if (desired > pending.capacity())
+		pending.reserve(desired);
+	}
+	expectedCount.store(count, std::memory_order_release);
+    }
+    size_t getExpectedCount(void) const
+    {
+	return expectedCount.load(std::memory_order_acquire);
+    }
+    void setWarmCoverageComplete(bool complete)
+    {
+	warmCoverageComplete.store(complete, std::memory_order_release);
+    }
+    bool hasWarmCoverageComplete(void) const
+    {
+	return warmCoverageComplete.load(std::memory_order_acquire);
+    }
+    /*
+     * True once an exact whole-target bound has been queued in the priority
+     * lane.  Progressive autoview must not chase the append-only union of
+     * partial leaf coverage: doing so recenters the camera on every streamed
+     * batch and makes an otherwise monotonic cold draw appear to flicker.
+     */
+    void setCoverageBoundsComplete(bool complete)
+    {
+	coverageBoundsComplete.store(complete, std::memory_order_release);
+    }
+    bool hasCoverageBoundsComplete(void) const
+    {
+	return coverageBoundsComplete.load(std::memory_order_acquire);
+    }
     void requestCancel(void) { cancelled.store(true, std::memory_order_release); }
     bool isCancelled(void) const
     {
@@ -517,9 +576,19 @@ struct BOBOL_EXPORT BObolCompactOccurrenceStream {
     }
 
     std::mutex mutex;
+    std::vector<BObolCompactOccurrence> priority;
+    size_t priorityOffset = 0;
     std::vector<BObolCompactOccurrence> pending;
     size_t pendingOffset = 0;
+    std::deque<std::shared_ptr<const BObolStagedSourceMesh>> stagedSources;
+    size_t stagedSourceBytes = 0;
+    /* A persisted leaf manifest already supplied every leaf AABB and immutable
+     * source-mesh request.  The authoritative semantics walk may therefore
+     * skip its otherwise redundant full-BoT coverage import pass. */
+    std::atomic<bool> warmCoverageComplete{false};
+    std::atomic<bool> coverageBoundsComplete{false};
     std::atomic<bool> cancelled{false};
+    std::atomic<size_t> expectedCount{0};
 };
 
 struct BOBOL_EXPORT BObolRealizedMaterialSummary {
@@ -807,15 +876,30 @@ public:
 	struct db_i *database,
 	int mode,
 	uint32_t revision);
-    /* Create an unattached, ref-counted source with copied field state and an
-     * immutable database snapshot containing the draw root and its recursive
-     * dependencies.  The caller must unref the returned source, db_close the
-     * returned database, and delete snapshotPathOut when it is nonempty. */
+    /* Capture the small, immutable field configuration needed by detached
+     * realization without copying database geometry.  This is safe to call on
+     * the scene owner thread and returns a ref-counted unattached source. */
+    SoBRLDatabaseSource *createDetachedRealizationTemplate(void) const;
+    /* Populate a detached template on a realization worker.  File-backed
+     * inputs use an independent read handle and therefore require the caller
+     * to reject the complete stream when its captured source revision is no
+     * longer current; non-reopenable inputs use an immutable closure
+     * snapshot.  The caller owns the returned database and any nonempty
+     * temporary snapshot path. */
+    SbBool initializeDetachedRealizationDatabase(
+	struct db_i *sourceDatabase,
+	struct db_i **databaseOut,
+	SbString *snapshotPathOut = NULL);
+    /* Synchronous immutable-snapshot form for consumers without a
+     * revision-gated stream.  The caller must unref the returned source,
+     * db_close the returned database, and delete snapshotPathOut when it is
+     * nonempty. */
     SoBRLDatabaseSource *createDetachedRealizationSource(
 	struct db_i **databaseOut, SbString *snapshotPathOut = NULL) const;
     /* Transfer a completed detached compact registry into this live source.
      * Call only on the live source's owner thread. */
-    int adoptDetachedCompactRealization(SoBRLDatabaseSource *detached);
+    int adoptDetachedCompactRealization(SoBRLDatabaseSource *detached,
+	SbBool authoritativeStreamDrained = FALSE);
     int retargetDatabaseSource(const char *sourcePath,
 	uint32_t revision);
     int retargetDatabaseSourceInstance(const char *sourceInstanceKey,
@@ -830,6 +914,11 @@ public:
     void markStale(void);
     void markStale(uint32_t reason);
     int setDrawModeState(int drawMode);
+    /* Resolve the authoritative representation and legacy draw-mode fields
+     * to the BOBOL_LOD_DRAW_* value used by realization, worker preparation,
+     * and presentation.  All three stages must use this same contract or the
+     * scene owner is forced to derive a replacement geometry after handoff. */
+    int getEffectiveLodDrawMode(void) const;
     int setDisplayNameState(const char *name);
     int setMaterialPolicyState(int materialPolicy);
     int setRealizationState(int realizationStatus,
@@ -937,11 +1026,23 @@ public:
     int getRealizedMeshCount(void) const;
     SbBool hasRealizedMeshGeometry(void) const;
     /** True when compact occurrences can refine their current display
-     * geometry from a source-backed mesh request. */
+     * geometry from source-backed mesh requests validated for the source's
+     * current source/inputs epoch.  Streamed contracts may be usable before
+     * the source-wide detached realization reaches REALIZED. */
     SbBool hasDisplayMeshLodRequests(void) const;
+    /** Number of compact occurrences carrying a current source-mesh LoD
+     * request contract.  Returns zero when that contract is stale. */
+    size_t getDisplayMeshLodRequestCount(void) const;
     /** Monotonic source-local display revision used to invalidate view demand
      * when compact occurrences are added or replaced. */
     uint64_t getDisplayMeshLodRevision(void) const;
+    /** Return the compact entries whose view-LoD demand changed after
+     * @p revision.  FALSE means the bounded delta history cannot prove a
+     * complete answer and the caller must rescan the source.  The journal is
+     * source-owned and non-consuming, so independent views may advance at
+     * different rates. */
+    SbBool getDisplayMeshLodChangedEntries(uint64_t revision,
+	std::vector<size_t> &entryIndices) const;
     SoBRLMaterialObject *getRealizedMaterialObject(void) const;
     SoBRLMaterialObject *getRealizedMaterialObject(int index) const;
     int getRealizedMaterialObjectCount(void) const;
@@ -957,6 +1058,18 @@ public:
      * realization so boxes are replaced, not left lingering. */
     int mergeCompactOccurrences(
 	const std::vector<BObolCompactOccurrence> &occurrences);
+    /* Capacity-only hint for a known streaming epoch. */
+    void reserveCompactOccurrenceCapacity(size_t expectedCount);
+    /** Expected leaf occurrence population for the active streaming epoch.
+     * This is a progress denominator, not a residency requirement: a
+     * view-dependent terminal state may intentionally retain mesh payloads
+     * for only a visible subset. */
+    size_t getCompactExpectedInstanceCount(void) const;
+    /** Resolve a stable compact occurrence identity to its source-local entry
+     * index in expected O(1) time.  Used by retained view work frontiers; it
+     * does not expose or pin the underlying registry storage. */
+    SbBool getCompactInstanceIndex(
+	const char *occurrenceKey, size_t &entryIndex) const;
     /**
      * Share the resident immutable compact payloads of @p source with this
      * source, translating occurrence placement into this source's coordinate
@@ -978,6 +1091,9 @@ public:
     SbBool hasCompactInstanceIndex(void) const;
     SbBool isCompactOccurrenceRegistry(void) const;
     int getCompactInstanceCount(void) const;
+    /* Number of occurrences this source will submit in its selected
+     * presentation set.  This is distinct from semantic GED membership. */
+    int getCompactSelectedInstanceCount(void) const;
     /* Unique immutable payloads shared by compact occurrences. */
     int getCompactPartCount(void) const;
     SbBool getCompactInstanceHandle(int index,
@@ -1004,6 +1120,8 @@ public:
      * epoch and avoids a second instance-id hash lookup. */
     SbBool getCompactLodInstanceSummary(int index,
 	BObolCompactLodInstanceSummary &summary) const;
+    SbBool getCompactSourceMeshRequest(int index,
+	BObolSourceMeshRequest &request) const;
     SbBool getCompactLodPlanningSummary(int index,
 	BObolCompactLodPlanningSummary &summary) const;
     /* Constant-time occurrence lookup for scene-wide retained-LoD
@@ -1015,6 +1133,8 @@ public:
 	const BObolCompactInstanceHandle &handle) const;
     /* Constant-time occurrence lookup used by per-view LoD result routing. */
     SbBool hasCompactInstanceKey(const char *occurrenceKey) const;
+    /* Stable in-process owner token copied into compact LoD requests. */
+    uint64_t getCompactSourceRoutingId(void) const;
     int getCompactInstanceCountForPath(const char *path,
 	SbBool includeDescendants = TRUE) const;
     SbBool getCompactInstanceBoundsForPath(const char *path,
@@ -1076,6 +1196,13 @@ public:
     /* Diagnostic invariant: an occurrence with an active view-local LoD
      * payload must not still present its structural AABB/OBB base part. */
     int getCompactViewLodSupersededFallbackCount(
+	const BObolViewLodState *viewState,
+	std::vector<SbString> *paths = NULL) const;
+    /* Number of structural AABB/OBB leaf parts that are still the active
+     * presentation, whether or not a richer payload has already arrived.
+     * Unlike the superseded-only invariant above, this reports legitimate
+     * cold coverage as well as terminal budget starvation. */
+    int getCompactViewLodActiveFallbackCount(
 	const BObolViewLodState *viewState,
 	std::vector<SbString> *paths = NULL) const;
     SbBool hasCompiledAssembly(void) const;
@@ -1140,8 +1267,8 @@ private:
     void syncRealizedShapeOwnerState(void);
     void syncCompactInstanceDisplayState(void);
     void rebuildCompactInstanceDisplayState(SbBool syncSourceState);
-    int reapplyCompactInstanceVisibilityFrontier(void);
-    int reapplyCompactInstanceSelectedPaths(void);
+    int reapplyCompactInstanceVisibilityFrontier(size_t firstEntry = 0);
+    int reapplyCompactInstanceSelectedPaths(size_t firstEntry = 0);
     void syncCompactInstancePlacementState(void);
     void seedCompactRealizationCache(
 	BObolDatabaseSourceRealizationCache *cache) const;
@@ -1149,7 +1276,12 @@ private:
     void ensureCompiledAssemblyChild(void);
     void markCompiledAssemblyDirty(void);
     void markCadBatchDirty(void);
+    void markCadBatchDirty(const std::vector<size_t> &entryIndices);
+    SbBool getCadBatchChangedEntries(uint64_t revision,
+	std::vector<size_t> &entryIndices) const;
     void markDisplayMeshLodDirty(void);
+    void markDisplayMeshLodDirty(
+	const std::vector<size_t> &entryIndices);
     uint64_t cadBatchRevisionGet(void) const;
     void clearCompactInstanceIndex(void);
     void discardCompactInstanceHistory(void);

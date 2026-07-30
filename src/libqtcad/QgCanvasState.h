@@ -105,9 +105,11 @@ struct QgCanvasState {
     bool   obol_paint_initialized = false;
     bool   fb_update_queued = false;
     bool   progressive_update_queued = false;
+    bool   lod_progress_last_pending = false;
     bool   software_backend = false;
     SoOffscreenRenderer *offscreen_renderer = nullptr;
     std::chrono::steady_clock::time_point fps_last_publish;
+    std::chrono::steady_clock::time_point lod_progress_last_publish;
 
     /* ---- per-canvas input handler ---- */
     QgCanvasInput input;
@@ -242,6 +244,9 @@ qgcanvas_queue_obol_progressive_update(QgCanvasState &s, QWidget *w)
 	(void)s.obol->advanceProgressiveWork(NULL, NULL);
 	if (s.obol->isRenderRequested())
 	    w->update();
+	if (s.lod_progress_last_pending &&
+	    !s.obol->hasProgressiveWorkPending())
+	    w->update();
 	/* Do not depend on Qt delivering that paint to keep the provider pump
 	 * alive.  update() may be coalesced, deferred while the widget is not
 	 * exposed, or consumed by a nested event loop.  The next timer remains
@@ -305,6 +310,16 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
      * BObolViewController::renderToImage(), so they must perform the same
      * presentation synchronization explicitly before traversing the scene. */
     s.obol->synchronizePresentation();
+    /*
+     * The software canvas traverses directly rather than calling
+     * BObolViewController::renderPending(), so retire only the request whose
+     * state is about to be rendered.  completeRenderTiming() may publish a
+     * follow-up calibration/refinement frame; consuming the boolean after
+     * that call erased the newer request and stranded its frame barrier.
+     */
+    const uint64_t renderedRequestSerial =
+	(recordPresentationTiming && consumeRenderRequest) ?
+	    s.obol->renderRequestSerialGet() : 0;
 
     const SbViewportRegion &region = s.obol->getViewportRegion();
     SbVec2s size = region.getViewportSizePixels();
@@ -357,9 +372,8 @@ qgcanvas_get_obol_viewport_image(QgCanvasState &s, const QWidget *w, QImage &img
     }
     if (w)
 	img.setDevicePixelRatio(w->devicePixelRatioF());
-    if (recordPresentationTiming && consumeRenderRequest &&
-	s.obol->isRenderRequested())
-	(void)s.obol->consumeRenderRequest(NULL);
+    if (recordPresentationTiming && consumeRenderRequest)
+	s.obol->clearRenderRequestIfUnchanged(renderedRequestSerial);
 }
 
 /** Create the Obol view state every qtcad canvas exposes. */
@@ -678,12 +692,40 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
     if (presentation_interval)
 	(void)bv_frametime_set(view, presentation_interval);
 
+    const auto now = std::chrono::steady_clock::now();
+    const bool lod_pending =
+	s.obol->hasProgressiveWorkPending() ||
+	s.obol->isLodInteractionActive();
+    const bool lod_state_changed =
+	lod_pending != s.lod_progress_last_pending;
+    const bool lod_first =
+	s.lod_progress_last_publish.time_since_epoch().count() == 0;
+    const bool lod_publish = lod_state_changed ||
+	(lod_pending && (lod_first ||
+	    std::chrono::duration_cast<std::chrono::milliseconds>(
+		now - s.lod_progress_last_publish).count() >= 100));
+    if (lod_publish) {
+	s.lod_progress_last_pending = lod_pending;
+	s.lod_progress_last_publish = now;
+	qgcanvas_sync_obol_faceplate(s);
+    }
+
+    /*
+     * completeRenderTiming() may install an unchanged calibration replay
+     * after the progressive pump has already transitioned to idle.  Queue it
+     * before the optional FPS/HUD reporting exits below; frame scheduling is
+     * a renderer contract and must not depend on whether the user enabled an
+     * FPS label.
+     */
+    if (s.obol->isRenderRequested() &&
+	(lod_publish || s.obol->hasPendingLodRefinementFrame()))
+	w->update();
+
     struct bv_params_state params = BV_PARAMS_STATE_INIT;
     if (!bv_params_state_get(&params, view) || !params.draw ||
 	!params.draw_fps)
 	return;
 
-    const auto now = std::chrono::steady_clock::now();
     if (!presentation_interval)
 	return;
 
@@ -696,6 +738,10 @@ qgcanvas_frame_complete(QgCanvasState &s, QWidget *w)
 	s.fps_last_publish = now;
 	qgcanvas_sync_obol_faceplate(s);
     }
+
+    /* FPS faceplate publication may itself install one final render. */
+    if (s.obol->isRenderRequested())
+	w->update();
 
 }
 

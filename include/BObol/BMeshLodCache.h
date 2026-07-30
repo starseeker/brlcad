@@ -27,12 +27,13 @@ __BEGIN_DECLS
 
 struct db_i;
 struct BObolMeshLod;
+struct rt_bot_internal;
 
 #define BOBOL_MESH_LOD_LEVEL_COUNT 16
 
 /* Display-provider contract version.  Bump this whenever the meaning or
  * completeness of a selected PoP cut changes. */
-#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cache-v6"
+#define BOBOL_MESH_LOD_PROVIDER_VERSION "bobol-pop-cache-v9"
 
 /* Borrowed active LoD arrays; valid until the LoD is reloaded or destroyed. */
 struct BObolMeshLodData {
@@ -91,6 +92,11 @@ struct BObolMeshLodHierarchyInfo {
     int min_level;
     int max_level;
     int resident_level;
+    /* Immutable representation facts needed before any prefix is loaded.
+     * Resident-memory admission must not infer these from whichever arrays
+     * happened to be active on an opened cache handle. */
+    int has_normals;
+    int shaded_cull_backfaces;
     /* The exact, tight quantization domain used when classifying and snapping
      * PoP vertices.  A retained renderer must use these values rather than
      * reconstructing them from separately rounded display bounds.  A
@@ -115,7 +121,7 @@ struct BObolMeshLodCacheStatus {
 };
 
 #define BOBOL_MESH_LOD_INFO_INIT { -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, VINIT_ZERO, VINIT_ZERO }
-#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, VINIT_ZERO, VINIT_ZERO, {0}, {0} }
+#define BOBOL_MESH_LOD_HIERARCHY_INFO_INIT { -1, -1, -1, 0, 0, VINIT_ZERO, VINIT_ZERO, {0}, {0} }
 #define BOBOL_MESH_LOD_CACHE_STATUS_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 BOBOL_EXPORT void
@@ -141,8 +147,30 @@ bobol_mesh_lod_cache_status(struct db_i *dbip,
 
 BOBOL_EXPORT int
 bobol_mesh_lod_cache_refresh(struct db_i *dbip,
-			       const char *name,
-			       struct BObolMeshLodCacheStatus *status);
+	const char *name,
+	struct BObolMeshLodCacheStatus *status);
+
+/* Populate a missing cache from an already imported immutable BoT.  The
+ * caller retains ownership for the duration of this call.  This is the
+ * cold-stream handoff path; persistent cache identity still belongs to dbip
+ * and name. */
+BOBOL_EXPORT int
+bobol_mesh_lod_cache_refresh_from_bot(struct db_i *dbip,
+	const char *name,
+	const struct rt_bot_internal *bot,
+	struct BObolMeshLodCacheStatus *status);
+
+/* Cold-display variant: generate and persist missing PoP data from the
+ * caller-owned BoT, but return an opened handle whose minimum exact prefix
+ * was materialized directly from that generation.  The caller owns the
+ * returned handle.  This avoids destroying the freshly classified hierarchy
+ * only to reopen and reread it before first useful presentation. */
+BOBOL_EXPORT struct BObolMeshLod *
+bobol_mesh_lod_cache_refresh_from_bot_open(
+	struct db_i *dbip,
+	const char *name,
+	const struct rt_bot_internal *bot,
+	struct BObolMeshLodCacheStatus *status);
 
 BOBOL_EXPORT int
 bobol_mesh_lod_cache_invalidate(struct db_i *dbip,
@@ -164,6 +192,24 @@ bobol_mesh_lod_cache_store_mesh(
 
 BOBOL_EXPORT struct BObolMeshLod *
 bobol_mesh_lod_get(struct db_i *dbip, const char *name);
+
+/* Open the immutable PoP prefix currently associated with a name without
+ * resolving or importing the database directory object.  This is the
+ * retained-display path: the submitting source has already validated the
+ * database object and its revision, and a stale/missing name mapping simply
+ * returns NULL.  Unlike bobol_mesh_lod_get(), the returned handle deliberately
+ * has no source-detail callbacks. */
+BOBOL_EXPORT struct BObolMeshLod *
+bobol_mesh_lod_get_named_cached_prefix(struct db_i *dbip,
+	const char *name);
+
+/* Open an already validated cache payload directly by immutable content key.
+ * The hierarchy header and the immediately following resident-prefix load
+ * share one read snapshot.  This is the high-throughput retained drawing path
+ * after a source request has captured BObolMeshLodCacheStatus::cache_key. */
+BOBOL_EXPORT struct BObolMeshLod *
+bobol_mesh_lod_get_cached_prefix(struct db_i *dbip,
+	unsigned long long cache_key);
 
 /* Return the immutable cache identity backing an opened PoP handle.  This
  * lets warm-cache consumers avoid a second status/name-key transaction after
@@ -239,6 +285,15 @@ bobol_mesh_lod_detail_callbacks_clear(struct BObolMeshLod *lod);
 
 BOBOL_EXPORT void
 bobol_mesh_lod_memshrink(struct BObolMeshLod *lod);
+
+/* Bytes owned by the opened PoP handle.  The total includes fixed hierarchy
+ * state and all retained prefix arrays; prefix_bytes reports only the
+ * reloadable active arrays released by bobol_mesh_lod_memshrink(). */
+BOBOL_EXPORT size_t
+bobol_mesh_lod_resident_bytes(const struct BObolMeshLod *lod);
+
+BOBOL_EXPORT size_t
+bobol_mesh_lod_resident_prefix_bytes(const struct BObolMeshLod *lod);
 
 BOBOL_EXPORT void
 bobol_mesh_lod_destroy(struct BObolMeshLod *lod);

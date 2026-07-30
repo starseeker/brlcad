@@ -32,6 +32,7 @@
 #include "bg/vlist.h"
 #include "bu/app.h"
 #include "bu/color.h"
+#include "bu/cv.h"
 #include "bu/file.h"
 #include "bu/list.h"
 #include "bu/parallel.h"
@@ -69,6 +70,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <inttypes.h>
 #include <limits.h>
 #include <limits>
@@ -82,6 +85,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -94,6 +98,7 @@ struct BObolCompactInstanceEntry {
 	part(Obol::CadIdBuilder::Root()),
 	localToSource(SbMatrix::identity()),
 	geometryTransform(SbMatrix::identity()),
+	placementTransform(SbMatrix::identity()),
 	localTransform(SbMatrix::identity()),
 	authoredVisible(TRUE),
 	visible(TRUE),
@@ -113,15 +118,27 @@ struct BObolCompactInstanceEntry {
 	occurrenceIndex(0),
 	booleanOperation(SoBRLDatabaseSource::BOOLEAN_UNION)
     {
+	sourceBounds.makeEmpty();
     }
 
     Obol::InstanceId instance;
     Obol::PartId part;
     SbMatrix localToSource;
     SbMatrix geometryTransform;
+    /* Tree/object placement without geometry normalization or PCA reuse. */
+    SbMatrix placementTransform;
+    /* Cached geometryTransform * placementTransform composite. */
     SbMatrix localTransform;
+    /* Source-local bounds of the retained part after localTransform. */
+    SbBox3f sourceBounds;
     SoBRLCadAssembly::InstanceSemantic semantic;
-    SbString instanceKey;
+    /*
+     * The compact occurrence key is immutable after the entry is indexed.
+     * Keep it lazily materialized for the few legacy constructors that only
+     * supplied an InstanceId.  Presentation hot paths can then retain a
+     * reference instead of allocating one SbString copy per occurrence.
+     */
+    mutable SbString instanceKey;
     SbBool authoredVisible;
     SbBool visible;
     SbBool selectable;
@@ -161,6 +178,7 @@ struct BObolCompactInstanceIndex {
 	shadedCount(0),
 	sourceMeshRequestCount(0)
     {
+	sourceBounds.makeEmpty();
     }
 
     std::map<std::string, Obol::PartId> partIdByKey;
@@ -176,28 +194,70 @@ struct BObolCompactInstanceIndex {
 	std::hash<Obol::InstanceId>> entryIndex;
     std::unordered_map<std::string, size_t> entryIndexByKey;
     std::unordered_map<std::string, size_t> entryIndexByPath;
-    /* Semantic operations address occurrences by full path or leaf name. */
-    std::vector<size_t> pathEntryOrder;
+    /*
+     * Semantic subtree operations need ordered prefix lookup while compact
+     * occurrences are still arriving in arbitrary batches.  Keep the O(1)
+     * exact-path table above for merge/upsert and this ordered companion for
+     * selection, visibility, highlighting, and edit-frontier ranges.
+     */
+    std::map<std::string, size_t> entryIndexByOrderedPath;
     std::unordered_map<std::string, std::vector<size_t>> entryIndicesByLeaf;
     std::unordered_map<std::string, std::vector<size_t>> entryIndicesBySourceName;
     std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>
 	partReferenceCounts;
-    std::array<std::multiset<float>, 3> sourceBoundsMinimum;
-    std::array<std::multiset<float>, 3> sourceBoundsMaximum;
+    /*
+     * Progressive realization is overwhelmingly append-only.  A running
+     * box therefore handles the common case in O(1) without the six
+     * red-black-tree nodes previously allocated for every occurrence.
+     * Replacing a current extremum marks it dirty; the next query rebuilds
+     * once from each entry's cached bounds.
+     */
+    SbBox3f sourceBounds;
+    bool sourceBoundsDirty = false;
     int wireCount;
     int shadedCount;
     size_t sourceMeshRequestCount;
 };
 
 struct SoBRLDatabaseSource::Impl {
+    struct CadBatchDelta {
+	uint64_t revision = 0;
+	std::vector<size_t> entryIndices;
+    };
+
+    struct DisplayMeshLodDelta {
+	uint64_t revision = 0;
+	std::vector<size_t> entryIndices;
+    };
+
     struct db_i *dbip = NULL;
     struct BObolMeshLod *meshLod = NULL;
     SoBRLCadAssembly *compiledAssembly = NULL;
     struct BObolCompactInstanceIndex *compactIndex = NULL;
     struct BObolCompactInstanceIndex *previousCompactIndex = NULL;
+    /* Immutable object-lifetime identity used only for owner-thread result
+     * routing.  Unlike compactHandleSourceId it must not change when a source
+     * is re-realized or adopts a detached compact registry. */
+    const uint64_t routingId = database_source_handle_id();
     uint64_t compactHandleSourceId = database_source_handle_id();
+    size_t compactExpectedInstanceCount = 0;
     uint64_t cadBatchRevision = 1;
+    uint64_t cadBatchDeltaFloorRevision = 1;
+    size_t cadBatchDeltaEntryCount = 0;
+    std::deque<CadBatchDelta> cadBatchDeltas;
     uint64_t displayMeshLodRevision = 1;
+    uint64_t displayMeshLodDeltaFloorRevision = 1;
+    size_t displayMeshLodDeltaEntryCount = 0;
+    std::deque<DisplayMeshLodDelta> displayMeshLodDeltas;
+    /*
+     * A streamed compact contract is usable before the owning source's full
+     * detached realization is complete.  Record the source epoch at the
+     * contract handoff so LoD planning can distinguish that legitimate
+     * provisional state from retained requests made stale by a later edit.
+     */
+    SbBool displayMeshLodContractRevisionValid = FALSE;
+    uint32_t displayMeshLodContractSourceRevision = 0;
+    uint32_t displayMeshLodContractInputsRevision = 0;
     SbBool compiledAssemblyDirty = TRUE;
     SbBool compiledAssemblyActive = FALSE;
     SbUniqueId compiledAssemblyNodeId = 0;
@@ -238,15 +298,13 @@ static void realized_mesh_shape_summary(const SoBRLMeshShape *shape,
 static int cad_source_mesh_request_from_bot(
 	BObolSourceMeshRequest &request, const struct rt_bot_internal *bot);
 
-static SbString
+static const SbString &
 compact_instance_identity(const BObolCompactInstanceEntry &entry)
 {
-    if (entry.instanceKey.getLength() > 0)
-	return entry.instanceKey;
-    SbString key;
-    key.sprintf("obol-instance:%016" PRIx64 "%016" PRIx64,
-	entry.instance.w1, entry.instance.w0);
-    return key;
+    if (entry.instanceKey.getLength() == 0)
+	entry.instanceKey.sprintf("obol-instance:%016" PRIx64 "%016" PRIx64,
+	    entry.instance.w1, entry.instance.w0);
+    return entry.instanceKey;
 }
 
 static SbBox3f
@@ -1227,28 +1285,8 @@ record_identity_with_revision(const char *identity, uint32_t revision)
 static int
 source_record_draw_mode(const SoBRLDatabaseSource *source)
 {
-    if (!source)
-	return BOBOL_LOD_DRAW_WIRE;
-
-    switch (source->representationMode.getValue()) {
-	case SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS:
-	    return BOBOL_LOD_DRAW_SHADED_BOTS;
-	case SoBRLDatabaseSource::REPRESENTATION_SHADED:
-	    return BOBOL_LOD_DRAW_SHADED;
-	case SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE:
-	    return BOBOL_LOD_DRAW_HIDDEN_LINE;
-	case SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS:
-	    return BOBOL_LOD_DRAW_POINTS;
-	case SoBRLDatabaseSource::REPRESENTATION_EVAL_WIRE:
-	case SoBRLDatabaseSource::REPRESENTATION_WIRE:
-	    return BOBOL_LOD_DRAW_WIRE;
-	default:
-	    break;
-    }
-
-    if (source->drawMode.getValue() == SoBRLDatabaseSource::SHADED)
-	return BOBOL_LOD_DRAW_SHADED;
-    return BOBOL_LOD_DRAW_WIRE;
+    return source ? source->getEffectiveLodDrawMode() :
+	BOBOL_LOD_DRAW_WIRE;
 }
 
 static int
@@ -1646,6 +1684,7 @@ cad_wire_part_geometry_from_aabb(const SbBox3f &bounds,
 	return 0;
     /* This helper is used only for the mesh LoD AABB threshold path. */
     geometry.subpixelProxyEligible = true;
+    geometry.structuralProxy = true;
     return 1;
 }
 
@@ -6736,11 +6775,14 @@ compact_mesh_prefill_cache(SoBRLDatabaseSource *source,
 		representative->bounds, job->geometryTransform);
 	    const bool lodBacked = job->lodBacked &&
 		representative->sourceMeshRequestValid;
+	    BObolSourceMeshRequest sourceMeshRequest =
+		representative->sourceMeshRequest;
+	    sourceMeshRequest.meshAssetTransform = job->geometryTransform;
 	    cache->storeMeshCadGeometryReference(job->cacheKey,
 		representative->geometry, job->geometryTransform,
 		job->sourceType.c_str(), lodBacked ? "aabb" : "surface",
 		&bounds, lodBacked,
-		lodBacked ? &representative->sourceMeshRequest : NULL);
+		lodBacked ? &sourceMeshRequest : NULL);
 	    continue;
 	}
 	BObolSourceMeshRequest sourceMeshRequest = job->sourceMeshRequest;
@@ -7632,9 +7674,12 @@ compact_stream_lod_cached_asset(realize_walk_data *data,
 		record.boundsMin[Z]),
 	    SbVec3f(record.boundsMax[X], record.boundsMax[Y],
 		record.boundsMax[Z]));
+	BObolSourceMeshRequest objectRequest =
+	    assetGeometry->sourceMeshRequest;
+	objectRequest.meshAssetTransform = assetToObject;
 	data->cache->storeMeshCadGeometryReference(objectCacheKey,
 	    assetGeometry->geometry, assetToObject, "bot", "aabb",
-	    &objectBounds, true, &assetGeometry->sourceMeshRequest);
+	    &objectBounds, true, &objectRequest);
     }
     data->stream_lod_asset_hits++;
     if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
@@ -7803,13 +7848,15 @@ compact_stream_lod_transformed_reuse(
 	    geometry->sourceMeshRequest, transform);
 	const SbBox3f bounds = database_source_transform_bounds(
 	    geometry->bounds, transform);
+	BObolSourceMeshRequest reusedRequest = geometry->sourceMeshRequest;
+	reusedRequest.meshAssetTransform = transform;
 	data->cache->storeMeshCadGeometryReference(cacheKey,
 	    geometry->geometry, transform,
 	    geometry->sourceType.empty() ? "bot" :
 		geometry->sourceType.c_str(),
 	    geometry->geometryKind.empty() ? "surface" :
 		geometry->geometryKind.c_str(),
-	    &bounds, true, &geometry->sourceMeshRequest);
+	    &bounds, true, &reusedRequest);
 	data->stream_lod_pca_reused++;
 	if (getenv("BOBOL_DRAW_TIMING_VERBOSE"))
 	    bu_log("[obol-timing] stream PCA: %s reuses %s "
@@ -8611,7 +8658,8 @@ compact_sync_shape_summary(BObolCompactInstanceEntry &entry)
 {
     compact_sync_shape_summary_state(entry);
     BObolRealizedShapeSummary &summary = entry.shapeSummary;
-    summary.bounds = compact_part_geometry_bounds(entry.geometry);
+    summary.bounds = database_source_transform_bounds(
+	compact_part_geometry_bounds(entry.geometry), entry.geometryTransform);
     summary.boundsValid = !summary.bounds.isEmpty();
     summary.pointCount = 0;
     summary.commandCount = 0;
@@ -8999,6 +9047,7 @@ cad_vlist_part_geometry(const SoBRLVListShape *shape,
 	 * SoCADAssembly alone decides whether its projected extent can be
 	 * represented by one depth-tested pixel in this view. */
 	geometry.subpixelProxyEligible = true;
+	geometry.structuralProxy = true;
     }
     return 1;
 }
@@ -9077,6 +9126,15 @@ cad_instance_matrix(const SoBRLDatabaseSource *source,
     if (source && source->drawMatrixValid.getValue())
 	matrix.multRight(source->drawMatrix.getValue());
     return matrix;
+}
+
+static SbMatrix
+compact_mesh_asset_matrix(const SoBRLDatabaseSource *source,
+	const BObolCompactInstanceEntry &entry)
+{
+    SbMatrix matrix = entry.sourceMeshRequest.meshAssetTransform;
+    matrix.multRight(entry.placementTransform);
+    return cad_instance_matrix(source, matrix);
 }
 
 struct cad_build_data {
@@ -9349,6 +9407,7 @@ cad_proxy_part_geometry(const BObolLodProxy &proxy,
     /* This is a view-LoD AABB/OBB, not authored wire geometry.  Obol may
      * collapse it into a view-local point when the entire proxy is subpixel. */
     geometry.subpixelProxyEligible = true;
+    geometry.structuralProxy = true;
     return 1;
 }
 
@@ -9446,6 +9505,14 @@ cad_mesh_payload_part_geometry(const BObolLodMeshPayload &payload,
 	geometry.wire = wireRep;
     }
 
+    /*
+     * This is view-LoD presentation data with conservative full-mesh bounds.
+     * When that entire extent is below one pixel, Obol may keep the retained
+     * mesh and picking identity while drawing it through the aggregate point
+     * channel.  Promotion is then a camera-local mask change, not a reload or
+     * scene traversal.
+     */
+    geometry.subpixelProxyEligible = true;
     return 1;
 }
 
@@ -9485,16 +9552,30 @@ cad_progressive_mesh_part_geometry(
 	return 0;
 
     const int minimumLevel = progressive->minimumLevel();
+    const SbVec3f quantizationMinimum =
+	progressive->quantizationMinimum();
+    const SbVec3f quantizationMaximum =
+	progressive->quantizationMaximum();
+    const SbBox3f conservativeBounds(
+	quantizationMinimum, quantizationMaximum);
     if (geometry.shaded.has_value()) {
 	Obol::TriMesh &mesh = *geometry.shaded;
+	/*
+	 * A resident PoP prefix does not necessarily touch the asset's full
+	 * extent.  Its quantization domain does, and is therefore the stable
+	 * conservative bound required by view culling and the aggregate
+	 * subpixel proxy.  Prefix-derived bounds caused objects to cross the
+	 * proxy threshold as data arrived, repeatedly rebuilding large retained
+	 * submissions at an unchanged camera.
+	 */
+	if (!conservativeBounds.isEmpty())
+	    mesh.bounds = conservativeBounds;
 	mesh.progressiveMinimumLevel =
 	    static_cast<uint8_t>(std::max(0, minimumLevel));
 	mesh.progressiveResidentLevel =
 	    static_cast<uint8_t>(std::max(0, drawableLevel));
-	mesh.progressiveQuantizationMinimum =
-	    progressive->quantizationMinimum();
-	mesh.progressiveQuantizationMaximum =
-	    progressive->quantizationMaximum();
+	mesh.progressiveQuantizationMinimum = quantizationMinimum;
+	mesh.progressiveQuantizationMaximum = quantizationMaximum;
 	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
 	    const size_t count = progressive->faceCount(level) * 3;
 	    mesh.progressiveIndexCount[level] = static_cast<uint32_t>(
@@ -9523,14 +9604,14 @@ cad_progressive_mesh_part_geometry(
     }
     if (geometry.wire.has_value()) {
 	Obol::WireRep &wireRep = *geometry.wire;
+	if (!conservativeBounds.isEmpty())
+	    wireRep.bounds = conservativeBounds;
 	wireRep.progressiveMinimumLevel =
 	    static_cast<uint8_t>(std::max(0, minimumLevel));
 	wireRep.progressiveResidentLevel =
 	    static_cast<uint8_t>(std::max(0, drawableLevel));
-	wireRep.progressiveQuantizationMinimum =
-	    progressive->quantizationMinimum();
-	wireRep.progressiveQuantizationMaximum =
-	    progressive->quantizationMaximum();
+	wireRep.progressiveQuantizationMinimum = quantizationMinimum;
+	wireRep.progressiveQuantizationMaximum = quantizationMaximum;
 	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
 	    const size_t count = progressive->faceCount(level) * 3;
 	    wireRep.progressiveSegmentCount[level] = static_cast<uint32_t>(
@@ -9640,6 +9721,7 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
 	return assembly;
 
     Obol::PartGeometry geometry;
+    std::shared_ptr<const Obol::PartGeometry> preparedGeometry;
     int shadedCount = 0;
     int wireCount = 0;
     SoBRLPickDetail::PrimitiveKind primitiveKind =
@@ -9651,18 +9733,32 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
 	    return NULL;
 	wireCount = 1;
     } else {
+	const bool hiddenLine =
+	    sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
 	const int wire =
 	    (sourceDrawMode == BOBOL_LOD_DRAW_WIRE ||
-	     sourceDrawMode == BOBOL_LOD_DRAW_HIDDEN_LINE ||
+	     hiddenLine ||
 	     payload->drawMode == BOBOL_LOD_DRAW_WIRE) ? 1 : 0;
-	const int shaded = wire ? 0 : 1;
-	if (!cad_mesh_payload_part_geometry(payload->mesh, wire, shaded,
+	const int shaded = hiddenLine || !wire ? 1 : 0;
+	if (payload->progressiveMesh &&
+	    normalStyle == BObolViewLodState::NORMAL_AUTHORED &&
+	    payload->preparedCadGeometry &&
+	    payload->preparedCadGeometryRevision ==
+		payload->progressiveMesh->revision() &&
+	    cad_progressive_geometry_can_draw(
+		payload->preparedCadGeometry.get(), wire, shaded,
+		payload->activeLevel))
+	    preparedGeometry = payload->preparedCadGeometry;
+	if (!preparedGeometry &&
+	    !cad_mesh_payload_part_geometry(payload->mesh, wire, shaded,
 		payload->shadedCullBackfaces,
 		geometry, normalStyle, normalCreaseAngle))
 	    return NULL;
-	if (wire) {
+	const Obol::PartGeometry *publishedGeometry =
+	    preparedGeometry ? preparedGeometry.get() : &geometry;
+	if (publishedGeometry->wire.has_value())
 	    wireCount = 1;
-	} else {
+	if (publishedGeometry->shaded.has_value()) {
 	    shadedCount = 1;
 	    primitiveKind = SoBRLPickDetail::FACE;
 	}
@@ -9685,10 +9781,12 @@ cad_view_lod_assembly(const SoBRLDatabaseSource *source,
 	       (payload->resultKind == BOBOL_LOD_RESULT_PROXY ? "proxy" :
 		(wireCount ? "wire-mesh" : "mesh"));
     Obol::PartId partId = Obol::CadIdBuilder::hash128(partKey);
-    Obol::PartUpdate part;
+    Obol::SharedPartUpdate part;
     part.part = partId;
-    part.geometry = geometry;
-    assembly->upsertParts(std::vector<Obol::PartUpdate>(1, part));
+    part.geometry = preparedGeometry ? preparedGeometry :
+	std::make_shared<const Obol::PartGeometry>(std::move(geometry));
+    assembly->upsertSharedParts(
+	std::vector<Obol::SharedPartUpdate>(1, std::move(part)));
 
     std::string instanceKey =
 	cad_instance_key(source, source->path.getValue().getString(), 0);
@@ -9748,7 +9846,7 @@ cad_compact_payload_for_entry(
     const std::vector<const BObolViewLodState::CadPayload *> &payloads,
     const BObolCompactInstanceEntry &entry)
 {
-    const SbString occurrenceKey = compact_instance_identity(entry);
+    const SbString &occurrenceKey = compact_instance_identity(entry);
     for (const BObolViewLodState::CadPayload *payload : payloads) {
 	if (payload && payload->sourceInstanceKey.getLength() > 0 &&
 	    bu_strcmp(payload->sourceInstanceKey.getString(),
@@ -9806,12 +9904,14 @@ SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
 
     std::vector<const BObolViewLodState::CadPayload *> payloads;
     viewState->findCadPayloads(this, payloads);
-    std::unordered_set<std::string> payloadKeys;
+    std::unordered_set<std::string_view> payloadKeys;
     payloadKeys.reserve(payloads.size());
     for (const BObolViewLodState::CadPayload *payload : payloads)
 	if (payload && payload->isValid() &&
 	    payload->sourceInstanceKey.getLength() > 0)
-	    payloadKeys.insert(payload->sourceInstanceKey.getString());
+	    payloadKeys.emplace(payload->sourceInstanceKey.getString(),
+		static_cast<size_t>(
+		    payload->sourceInstanceKey.getLength()));
 
     int count = 0;
     for (const BObolCompactInstanceEntry &entry :
@@ -9819,8 +9919,44 @@ SoBRLDatabaseSource::getCompactViewLodSupersededFallbackCount(
 	const char *kind = entry.shapeSummary.geometryKind.getString();
 	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
 	    continue;
-	const SbString occurrenceKey = compact_instance_identity(entry);
-	if (payloadKeys.find(occurrenceKey.getString()) == payloadKeys.end())
+	const SbString &occurrenceKey = compact_instance_identity(entry);
+	const std::string_view occurrenceView(
+	    occurrenceKey.getString(),
+	    static_cast<size_t>(occurrenceKey.getLength()));
+	if (payloadKeys.find(occurrenceView) == payloadKeys.end())
+	    continue;
+	const auto presentation =
+	    assembly->compactInstancePresentations.find(entry.instance);
+	if (presentation == assembly->compactInstancePresentations.end() ||
+	    presentation->second.activePart != entry.part)
+	    continue;
+	count++;
+	if (paths)
+	    paths->push_back(entry.semantic.path);
+    }
+    return count;
+}
+
+int
+SoBRLDatabaseSource::getCompactViewLodActiveFallbackCount(
+    const BObolViewLodState *viewState, std::vector<SbString> *paths) const
+{
+    if (paths)
+	paths->clear();
+    if (!this->d->compactIndex || !viewState)
+	return 0;
+
+    SoBRLCadAssembly *assembly = dynamic_cast<SoBRLCadAssembly *>(
+	viewState->findCadPresentation(this));
+    if (!assembly || !assembly->compactPresentationInitialized ||
+	assembly->compactPresentationIndex != this->d->compactIndex)
+	return 0;
+
+    int count = 0;
+    for (const BObolCompactInstanceEntry &entry :
+	 this->d->compactIndex->entries) {
+	const char *kind = entry.shapeSummary.geometryKind.getString();
+	if (!BU_STR_EQUAL(kind, "aabb") && !BU_STR_EQUAL(kind, "obb"))
 	    continue;
 	const auto presentation =
 	    assembly->compactInstancePresentations.find(entry.instance);
@@ -9840,6 +9976,10 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     const BObolViewLodState *viewState)
     const
 {
+    const bool presentationTiming =
+	getenv("BOBOL_COMPACT_PRESENTATION_TIMING") != NULL;
+    const int64_t presentationStarted =
+	presentationTiming ? bu_gettime() : 0;
     if (!this->d->compactIndex || !viewState)
 	return NULL;
 
@@ -9849,6 +9989,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	assembly = new SoBRLCadAssembly;
 	viewState->setCadPresentation(this, assembly);
     }
+    assembly->reserveCompactPresentationCapacity(std::max(
+	this->d->compactExpectedInstanceCount,
+	this->d->compactIndex->entries.size()));
 
     const int sourceDrawMode = source_record_draw_mode(this);
     const uint64_t payloadRevision = viewState->cadRevision();
@@ -9873,21 +10016,88 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    this->sourceRevision.getValue() ||
 	assembly->compactPresentationInputsRevision !=
 	    this->inputsRevision.getValue() ||
-	assembly->compactPresentationDrawMode != sourceDrawMode ||
-	assembly->compactInstancePresentations.size() !=
-	    this->d->compactIndex->entries.size();
-    if (!reset &&
+	assembly->compactPresentationDrawMode != sourceDrawMode;
+
+    /*
+     * Streaming a large root appends/replaces a bounded occurrence batch in
+     * the same compact index.  Clearing and reinserting the whole compiled
+     * assembly on every batch made population O(n^2), invalidated every part
+     * generation, and forced the renderer to re-snap every prior PoP cut.
+     * Preserve the assembly when every old occurrence still exists and route
+     * only new or geometry-changed records through the normal upsert path.
+     * A removal or index replacement remains an authoritative full reset.
+     */
+    std::vector<size_t> structuralEntryIndices;
+    const bool cadBatchChanged = !reset &&
 	assembly->compactPresentationCadBatchRevision !=
-	    this->cadBatchRevisionGet()) {
-	for (const BObolCompactInstanceEntry &entry :
-	     this->d->compactIndex->entries) {
+	    this->cadBatchRevisionGet();
+    SbBool sparseCadBatchUpdate = FALSE;
+    if (cadBatchChanged)
+	sparseCadBatchUpdate = this->getCadBatchChangedEntries(
+	    assembly->compactPresentationCadBatchRevision,
+	    structuralEntryIndices);
+    if (cadBatchChanged && !sparseCadBatchUpdate) {
+	structuralEntryIndices.reserve(
+	    this->d->compactIndex->entries.size() >
+		assembly->compactInstancePresentations.size() ?
+	    this->d->compactIndex->entries.size() -
+		assembly->compactInstancePresentations.size() : 0);
+	size_t retainedPresentations = 0;
+	for (size_t i = 0; i < this->d->compactIndex->entries.size(); i++) {
+	    const BObolCompactInstanceEntry &entry =
+		this->d->compactIndex->entries[i];
 	    const auto found =
 		assembly->compactInstancePresentations.find(entry.instance);
-	    if (found == assembly->compactInstancePresentations.end() ||
-		found->second.geometryRevision != entry.geometryRevision) {
+	    if (found == assembly->compactInstancePresentations.end()) {
+		structuralEntryIndices.push_back(i);
+	    } else {
+		retainedPresentations++;
+		const SoBRLCadAssembly::CompactInstancePresentation &prior =
+		    found->second;
+		if (prior.geometryRevision != entry.geometryRevision ||
+		    prior.appearanceRevision != entry.appearanceRevision ||
+		    prior.placementRevision != entry.placementRevision ||
+		    prior.visibilityRevision != entry.visibilityRevision ||
+		    prior.selectionRevision != entry.selectionRevision)
+		    structuralEntryIndices.push_back(i);
+	    }
+	}
+	if (retainedPresentations !=
+		assembly->compactInstancePresentations.size()) {
+	    reset = true;
+	    structuralEntryIndices.clear();
+	}
+    } else if (sparseCadBatchUpdate) {
+	/*
+	 * The source mutation supplied an exact, non-consuming occurrence
+	 * journal.  Validate only those records; other occurrences are known to
+	 * match the presentation acknowledged at the prior CAD-batch revision.
+	 */
+	for (auto it = structuralEntryIndices.begin();
+	     it != structuralEntryIndices.end();) {
+	    if (*it >= this->d->compactIndex->entries.size()) {
 		reset = true;
+		structuralEntryIndices.clear();
 		break;
 	    }
+	    const BObolCompactInstanceEntry &entry =
+		this->d->compactIndex->entries[*it];
+	    const auto prior =
+		assembly->compactInstancePresentations.find(entry.instance);
+	    if (prior == assembly->compactInstancePresentations.end()) {
+		++it;
+		continue;
+	    }
+	    const SoBRLCadAssembly::CompactInstancePresentation &presented =
+		prior->second;
+	    if (presented.geometryRevision == entry.geometryRevision &&
+		presented.appearanceRevision == entry.appearanceRevision &&
+		presented.placementRevision == entry.placementRevision &&
+		presented.visibilityRevision == entry.visibilityRevision &&
+		presented.selectionRevision == entry.selectionRevision)
+		it = structuralEntryIndices.erase(it);
+	    else
+		++it;
 	}
     }
 
@@ -9898,18 +10108,26 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     const bool payloadOnlyUpdate = !reset &&
 	assembly->compactPresentationCadBatchRevision ==
 	    this->cadBatchRevisionGet();
+    const bool incrementalStructureUpdate =
+	!reset && !payloadOnlyUpdate;
     std::vector<SbString> changedOccurrenceKeys;
     SbBool fullPayloadResync = TRUE;
-    if (payloadOnlyUpdate)
+    if (!reset)
 	viewState->cadOccurrenceChangesSince(
 	    this, assembly->compactPresentationPayloadRevision,
 	    changedOccurrenceKeys, fullPayloadResync);
-    const bool sparsePayloadUpdate =
-	payloadOnlyUpdate && !fullPayloadResync;
+    const bool sparsePayloadUpdate = !reset && !fullPayloadResync;
     if (sparsePayloadUpdate && changedOccurrenceKeys.empty()) {
-	assembly->compactPresentationPayloadRevision = payloadRevision;
-	viewState->acknowledgeCadOccurrenceChanges(this, payloadRevision);
-	return assembly;
+	if (incrementalStructureUpdate && !structuralEntryIndices.empty()) {
+	    /* Continue below with just the compact-index delta. */
+	} else {
+	    if (incrementalStructureUpdate)
+		assembly->compactPresentationCadBatchRevision =
+		    this->cadBatchRevisionGet();
+	    assembly->compactPresentationPayloadRevision = payloadRevision;
+	    viewState->acknowledgeCadOccurrenceChanges(this, payloadRevision);
+	    return assembly;
+	}
     }
 
     std::vector<const BObolViewLodState::CadPayload *>
@@ -9925,22 +10143,32 @@ SoBRLDatabaseSource::compactViewLodAssembly(
      * occurrence-specific payloads by key instead of scanning every payload
      * for every compact leaf.  Retain the small path scan only for legacy
      * source-wide payloads with no occurrence identity. */
-    std::unordered_map<std::string,
+    std::unordered_map<std::string_view,
 	const BObolViewLodState::CadPayload *> payloadByInstance;
     std::vector<const BObolViewLodState::CadPayload *> sourceWidePayloads;
     payloadByInstance.reserve(payloadInput->size());
     for (const BObolViewLodState::CadPayload *payload : *payloadInput) {
-	if (!payload || !payload->isValid())
+	/*
+	 * Payload input comes from the validated view-state occurrence table or
+	 * from the caller's result lookup.  It cannot become invalid in place:
+	 * replacement and eviction publish/erase whole shared payload objects.
+	 */
+	if (!payload)
 	    continue;
 	if (payload->sourceInstanceKey.getLength() > 0)
-	    payloadByInstance[payload->sourceInstanceKey.getString()] = payload;
+	    payloadByInstance[std::string_view(
+		payload->sourceInstanceKey.getString(),
+		static_cast<size_t>(
+		    payload->sourceInstanceKey.getLength()))] = payload;
 	else
 	    sourceWidePayloads.push_back(payload);
     }
 
     std::vector<size_t> entryIndices;
-    if (sparsePayloadUpdate) {
-	entryIndices.reserve(changedOccurrenceKeys.size());
+    if (sparsePayloadUpdate || incrementalStructureUpdate) {
+	entryIndices = structuralEntryIndices;
+	entryIndices.reserve(entryIndices.size() +
+	    changedOccurrenceKeys.size());
 	for (const SbString &occurrenceKey : changedOccurrenceKeys) {
 	    const auto found =
 		this->d->compactIndex->entryIndexByKey.find(
@@ -9951,14 +10179,16 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	std::sort(entryIndices.begin(), entryIndices.end());
 	entryIndices.erase(
 	    std::unique(entryIndices.begin(), entryIndices.end()),
-	    entryIndices.end());
+	entryIndices.end());
     } else {
 	entryIndices.resize(this->d->compactIndex->entries.size());
 	std::iota(entryIndices.begin(), entryIndices.end(), 0);
     }
+    const int64_t presentationIndexed =
+	presentationTiming ? bu_gettime() : 0;
 
     std::vector<Obol::SharedPartUpdate> baseParts;
-    std::vector<Obol::PartUpdate> lodParts;
+    std::vector<Obol::SharedPartUpdate> lodSharedParts;
     std::vector<Obol::InstanceUpdate> instances;
     std::vector<Obol::InstanceStyleUpdate> instanceStyles;
     std::vector<Obol::InstanceLodUpdate> lodLevelUpdates;
@@ -9985,32 +10215,67 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
 	instances = this->d->compactIndex->instances;
 	assembly->compactInstancePresentations.clear();
+	assembly->compactActivePartReferences.clear();
 	assembly->compactLodParts.clear();
+    } else if (!structuralEntryIndices.empty()) {
+	std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>
+	    addedBaseParts;
+	addedBaseParts.reserve(structuralEntryIndices.size());
+	for (const size_t i : structuralEntryIndices) {
+	    if (i >= this->d->compactIndex->entries.size())
+		continue;
+	    const BObolCompactInstanceEntry &entry =
+		this->d->compactIndex->entries[i];
+	    const auto prior =
+		assembly->compactInstancePresentations.find(entry.instance);
+	    if (prior != assembly->compactInstancePresentations.end() &&
+		prior->second.geometryRevision == entry.geometryRevision)
+		continue;
+	    if (!entry.geometry || !addedBaseParts.insert(entry.part).second)
+		continue;
+	    Obol::SharedPartUpdate part;
+	    part.part = entry.part;
+	    part.geometry = entry.geometry;
+	    baseParts.push_back(std::move(part));
+	    assembly->compactPartChannels[entry.part] =
+		(entry.geometry->wire.has_value() ? 1u : 0u) |
+		(entry.geometry->shaded.has_value() ? 2u : 0u) |
+		(entry.geometry->points.has_value() ? 4u : 0u);
+	}
     }
 
-    size_t wireCount = sparsePayloadUpdate ?
+    const bool incrementalUpdate = !reset;
+    size_t wireCount = incrementalUpdate ?
 	assembly->compactWirePresentationCount : 0;
-    size_t shadedCount = sparsePayloadUpdate ?
+    size_t shadedCount = incrementalUpdate ?
 	assembly->compactShadedPresentationCount : 0;
     for (const size_t i : entryIndices) {
 	const BObolCompactInstanceEntry &entry =
 	    this->d->compactIndex->entries[i];
-	const SbString occurrenceKey = compact_instance_identity(entry);
+	const SbString &occurrenceKey = compact_instance_identity(entry);
 	const BObolViewLodState::CadPayload *payload = NULL;
 	if (sparsePayloadUpdate) {
 	    payload = viewState->findCadForOccurrence(
 		this, occurrenceKey);
 	} else {
-	    const auto payloadIt =
-		payloadByInstance.find(occurrenceKey.getString());
+	    const auto payloadIt = payloadByInstance.find(
+		std::string_view(occurrenceKey.getString(),
+		    static_cast<size_t>(occurrenceKey.getLength())));
 	    payload =
 		payloadIt != payloadByInstance.end() ? payloadIt->second :
 		cad_compact_payload_for_entry(sourceWidePayloads, entry);
 	}
 
+	const auto existingPresentation =
+	    assembly->compactInstancePresentations.find(entry.instance);
+	const bool presentationWasPresent =
+	    existingPresentation !=
+		assembly->compactInstancePresentations.end();
 	SoBRLCadAssembly::CompactInstancePresentation &presentation =
+	    presentationWasPresent ? existingPresentation->second :
 	    assembly->compactInstancePresentations[entry.instance];
 	const uint8_t previousChannels = presentation.channels;
+	const Obol::PartId previousPart = presentation.activePart;
 	if (reset) {
 	    presentation.activePart = entry.part;
 	    presentation.channels = assembly->compactPartChannels[entry.part];
@@ -10022,8 +10287,11 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	uint8_t desiredChannels = assembly->compactPartChannels[entry.part];
 	bool desiredGeometryValid = false;
 	int desiredActiveLevel = -1;
-	if (payload && payload->isValid()) {
-	    payloadKey = payload->cacheKey.getString();
+	if (payload) {
+	    payloadKey.reserve(
+		static_cast<size_t>(payload->cacheKey.getLength()) + 128u);
+	    payloadKey.assign(payload->cacheKey.getString(),
+		static_cast<size_t>(payload->cacheKey.getLength()));
 	    payloadKey += ':';
 	    payloadKey += std::to_string(payload->resultKind);
 	    payloadKey += ':';
@@ -10057,6 +10325,9 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		bool reusedProgressivePart = false;
 		if (progressive) {
 		    std::string partKey("compact-progressive-asset:");
+		    partKey.reserve(partKey.size() +
+			static_cast<size_t>(payload->cacheKey.getLength()) +
+			24u);
 		    partKey += payload->cacheKey.getString();
 		    partKey += ':';
 		    partKey += std::to_string(sourceDrawMode);
@@ -10070,6 +10341,17 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		    sourceDrawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
 		    sourceDrawMode == BOBOL_LOD_DRAW_SHADED ||
 		    hiddenLine;
+		std::shared_ptr<const Obol::PartGeometry> preparedGeometry;
+		if (progressive &&
+		    normalStyle == BObolViewLodState::NORMAL_AUTHORED &&
+		    payload->preparedCadGeometry &&
+		    payload->preparedCadGeometryRevision ==
+			payload->progressiveMesh->revision() &&
+		    cad_progressive_geometry_can_draw(
+			payload->preparedCadGeometry.get(), wire, shaded,
+			desiredActiveLevel)) {
+		    preparedGeometry = payload->preparedCadGeometry;
+		}
 
 		/*
 		 * A newly resident tail must not force a full CPU/GPU realization
@@ -10098,6 +10380,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		    payload->resultKind == BOBOL_LOD_RESULT_PROXY) {
 		    desiredGeometryValid =
 			cad_proxy_part_geometry(payload->proxy, geometry) != 0;
+		} else if (preparedGeometry) {
+		    desiredGeometryValid = true;
 		} else {
 		    desiredGeometryValid = progressive ?
 			cad_progressive_mesh_part_geometry(
@@ -10111,21 +10395,50 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		if (desiredGeometryValid && !reusedProgressivePart) {
 		    if (!progressive) {
 			std::string partKey("compact-lod:");
-			partKey += compact_instance_identity(entry).getString();
+			partKey.reserve(partKey.size() +
+			    static_cast<size_t>(occurrenceKey.getLength()) +
+			    payloadKey.size() + 2u);
+			partKey += occurrenceKey.getString();
 			partKey += ':';
 			partKey += payloadKey;
 			desiredPart = Obol::CadIdBuilder::hash128(partKey);
 		    }
+		    const Obol::PartGeometry *channelGeometry =
+			preparedGeometry ? preparedGeometry.get() : &geometry;
 		    desiredChannels =
-			(geometry.wire.has_value() ? 1u : 0u) |
-			(geometry.shaded.has_value() ? 2u : 0u) |
-			(geometry.points.has_value() ? 4u : 0u);
+			(channelGeometry->wire.has_value() ? 1u : 0u) |
+			(channelGeometry->shaded.has_value() ? 2u : 0u) |
+			(channelGeometry->points.has_value() ? 4u : 0u);
 		    if (!progressive ||
 			progressivePartsUpdated.insert(desiredPart).second) {
-			Obol::PartUpdate part;
-			part.part = desiredPart;
-			part.geometry = std::move(geometry);
-			lodParts.push_back(std::move(part));
+			if (preparedGeometry) {
+			    Obol::SharedPartUpdate part;
+			    part.part = desiredPart;
+			    part.geometry = std::move(preparedGeometry);
+			    /*
+			     * Every immutable PoP generation carries the same
+			     * full quantization-domain bounds.  Let Obol validate
+			     * and retain occurrence bounds/BVH state while merely
+			     * swapping the renderer geometry handle.
+			     */
+			    part.preservesBounds = true;
+			    lodSharedParts.push_back(std::move(part));
+			} else {
+			    /*
+			     * Publish every compact geometry generation through
+			     * the immutable shared route.  The legacy PartUpdate
+			     * API copies PartGeometry again when it installs the
+			     * record; wrapping this completed private value by
+			     * move keeps even proxy and non-progressive fallback
+			     * publication zero-copy at the assembly boundary.
+			     */
+			    Obol::SharedPartUpdate part;
+			    part.part = desiredPart;
+			    part.geometry =
+				std::make_shared<const Obol::PartGeometry>(
+				    std::move(geometry));
+			    lodSharedParts.push_back(std::move(part));
+			}
 		    }
 		    assembly->compactPartChannels[desiredPart] =
 			desiredChannels;
@@ -10134,7 +10447,28 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    }
 	}
 	if (!desiredGeometryValid)
+	{
+	    /* A rejected or stale LoD payload must fall back to the authored
+	     * structural part as one coherent record.  Keeping the hashed LoD
+	     * part id after geometry conversion failed leaves the instance
+	     * referencing a part that was never inserted and makes it vanish. */
 	    payloadKey.clear();
+	    desiredPart = entry.part;
+	    desiredChannels = assembly->compactPartChannels[entry.part];
+	    desiredActiveLevel = -1;
+	}
+
+	/* Structural proxies and source meshes generally do not share a local
+	 * coordinate system.  Cold coverage may use one normalized unit box
+	 * transformed by geometryTransform, while the cached PoP arrays remain
+	 * in the BoT asset's original coordinates.  Swapping only the part id
+	 * therefore draws a valid mesh with the proxy transform—often far
+	 * outside the view or collapsed to an apparently empty wireframe.
+	 * Choose the transform with the chosen representation and update it in
+	 * the same instance mutation as the part. */
+	const SbMatrix desiredLocalToRoot =
+	    desiredActiveLevel >= 0 && entry.sourceMeshRequestValid ?
+		compact_mesh_asset_matrix(this, entry) : entry.localToSource;
 
 	const bool partChanged = presentation.activePart != desiredPart ||
 	    presentation.payloadKey != payloadKey;
@@ -10146,6 +10480,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    presentation.selectionRevision != entry.selectionRevision;
 	const bool recordChanged = !reset &&
 	    (partChanged ||
+	     presentation.geometryRevision != entry.geometryRevision ||
 	     presentation.placementRevision != entry.placementRevision);
 	if (partChanged) {
 	    if (presentation.activePart != entry.part &&
@@ -10155,8 +10490,24 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    presentation.activePart = desiredPart;
 	    presentation.channels = desiredChannels;
 	}
+	if (!presentationWasPresent || partChanged) {
+	    if (presentationWasPresent) {
+		const auto previousReference =
+		    assembly->compactActivePartReferences.find(previousPart);
+		if (previousReference !=
+			assembly->compactActivePartReferences.end()) {
+		    if (previousReference->second > 1)
+			previousReference->second--;
+		    else
+			assembly->compactActivePartReferences.erase(
+			    previousReference);
+		}
+	    }
+	    assembly->compactActivePartReferences[desiredPart]++;
+	}
 	if (reset && i < instances.size()) {
 	    instances[i].record.part = desiredPart;
+	    instances[i].record.localToRoot = desiredLocalToRoot;
 	    instances[i].record.lodLevel = desiredActiveLevel >= 0 ?
 		static_cast<uint8_t>(std::min(15, desiredActiveLevel)) : 255;
 	} else if (recordChanged &&
@@ -10164,6 +10515,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    Obol::InstanceUpdate update =
 		this->d->compactIndex->instances[i];
 	    update.record.part = desiredPart;
+	    update.record.localToRoot = desiredLocalToRoot;
 	    update.record.lodLevel = desiredActiveLevel >= 0 ?
 		static_cast<uint8_t>(std::min(15, desiredActiveLevel)) : 255;
 	    instances.push_back(std::move(update));
@@ -10181,7 +10533,7 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	}
 	presentation.activeLevel = desiredActiveLevel;
 
-	if (sparsePayloadUpdate) {
+	if (incrementalUpdate) {
 	    const bool previousWire = previousChannels & (1u | 4u);
 	    const bool currentWire = presentation.channels & (1u | 4u);
 	    const bool previousShaded = previousChannels & 2u;
@@ -10210,13 +10562,24 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	presentation.visibilityRevision = entry.visibilityRevision;
 	presentation.selectionRevision = entry.selectionRevision;
     }
+    const int64_t presentationPlanned =
+	presentationTiming ? bu_gettime() : 0;
 
     /* Progressive assets are shared by every occurrence of the same source
      * geometry.  One occurrence changing back to its base part must not
      * remove a retained part that another occurrence still references. */
     if (!partsToRemove.empty()) {
-	for (const auto &item : assembly->compactInstancePresentations)
-	    partsToRemove.erase(item.second.activePart);
+	for (auto part = partsToRemove.begin();
+	     part != partsToRemove.end();) {
+	    const auto references =
+		assembly->compactActivePartReferences.find(*part);
+	    if (references !=
+		    assembly->compactActivePartReferences.end() &&
+		references->second > 0)
+		part = partsToRemove.erase(part);
+	    else
+		++part;
+	}
     }
 
     int presentationDrawMode = SoCADAssembly::WIREFRAME;
@@ -10229,15 +10592,15 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     const bool drawModeChanged =
 	assembly->drawMode.getValue() != presentationDrawMode;
 
-    const bool structuralChanged = reset || !lodParts.empty() ||
-	!instances.empty() || !instanceStyles.empty() || !partsToRemove.empty() ||
+    const bool structuralChanged = reset || !lodSharedParts.empty() ||
+	!baseParts.empty() || !instances.empty() || !instanceStyles.empty() ||
+	!partsToRemove.empty() ||
 	instanceSetsChanged || drawModeChanged;
     if (structuralChanged) {
 	assembly->beginUpdate();
 	if (reset) {
 	    assembly->clear();
 	    assembly->clearSemanticMap();
-	    assembly->upsertSharedParts(baseParts);
 	    for (const BObolCompactInstanceEntry &entry :
 		 this->d->compactIndex->entries) {
 		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
@@ -10245,7 +10608,8 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 		assembly->setInstanceSemantic(entry.instance, semantic);
 	    }
 	}
-	assembly->upsertParts(lodParts);
+	assembly->upsertSharedParts(baseParts);
+	assembly->upsertSharedParts(lodSharedParts);
 	assembly->upsertInstances(instances);
 	assembly->updateInstanceStyles(instanceStyles);
 	std::vector<Obol::PartId> removedParts;
@@ -10254,6 +10618,17 @@ SoBRLDatabaseSource::compactViewLodAssembly(
 	    removedParts.push_back(part);
 	    assembly->compactPartChannels.erase(part);
 	    assembly->compactLodParts.erase(part);
+	}
+	if (!reset) {
+	    for (const size_t i : structuralEntryIndices) {
+		if (i >= this->d->compactIndex->entries.size())
+		    continue;
+		const BObolCompactInstanceEntry &entry =
+		    this->d->compactIndex->entries[i];
+		SoBRLCadAssembly::InstanceSemantic semantic = entry.semantic;
+		semantic.sourceInstanceKey = compact_instance_identity(entry);
+		assembly->setInstanceSemantic(entry.instance, semantic);
+	    }
 	}
 	assembly->removeParts(removedParts);
 	if (instanceSetsChanged) {
@@ -10271,6 +10646,85 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     if (!lodLevelUpdates.empty())
 	assembly->updateInstanceLodLevels(lodLevelUpdates);
 
+    /*
+     * Compact presentation is intentionally sparse, so an intended active
+     * part and the retained Obol instance must never drift silently.  Keep
+     * this full invariant audit behind an opt-in diagnostic: it is useful for
+     * validating streaming box-to-mesh waves, but an O(N) scan does not
+     * belong in the normal publication path for very large scenes.
+     */
+    const char *presentationDebug =
+	getenv("BOBOL_COMPACT_PRESENTATION_DEBUG");
+    if (presentationDebug && presentationDebug[0] &&
+	!BU_STR_EQUAL(presentationDebug, "0")) {
+	size_t missingInstances = 0;
+	size_t mismatchedParts = 0;
+	size_t retainedStructural = 0;
+	size_t structuralLodBacked = 0;
+	size_t structuralSourceRequests = 0;
+	size_t structuralEntryGeometry = 0;
+	size_t structuralGeometryPointerMismatch = 0;
+	std::map<std::string, size_t> structuralKinds;
+	std::map<std::string, size_t> structuralTypes;
+	for (const auto &item : assembly->compactInstancePresentations) {
+	    const std::optional<Obol::InstanceRecord> record =
+		assembly->getInstanceRecord(item.first);
+	    if (!record) {
+		missingInstances++;
+		continue;
+	    }
+	    if (!(record->part == item.second.activePart))
+		mismatchedParts++;
+	    const Obol::PartGeometry *geometry =
+		assembly->partGeometry(record->part);
+	    if (geometry && geometry->structuralProxy) {
+		retainedStructural++;
+		const auto entryIndex =
+		    this->d->compactIndex->entryIndex.find(item.first);
+		if (entryIndex !=
+			this->d->compactIndex->entryIndex.end() &&
+		    entryIndex->second <
+			this->d->compactIndex->entries.size()) {
+		    const BObolCompactInstanceEntry &entry =
+			this->d->compactIndex->entries[entryIndex->second];
+		    if (entry.geometry && entry.geometry->structuralProxy)
+			structuralEntryGeometry++;
+		    if (!entry.geometry ||
+			entry.geometry.get() != geometry)
+			structuralGeometryPointerMismatch++;
+		    if (entry.lodBacked)
+			structuralLodBacked++;
+		    if (entry.sourceMeshRequestValid)
+			structuralSourceRequests++;
+		    structuralKinds[
+			entry.shapeSummary.geometryKind.getString()]++;
+		    structuralTypes[
+			entry.shapeSummary.sourceType.getString()]++;
+		}
+	    }
+	}
+	bu_log("BObol compact presentation invariant presentations=%zu "
+	       "retained_instances=%zu retained_structural=%zu "
+	       "structural_lod=%zu structural_requests=%zu "
+	       "structural_entry_geometry=%zu structural_pointer_mismatch=%zu "
+	       "missing_instances=%zu mismatched_parts=%zu "
+	       "updates=%zu lod_updates=%zu reset=%d\n",
+	       assembly->compactInstancePresentations.size(),
+	       assembly->instanceCount(), retainedStructural,
+	       structuralLodBacked, structuralSourceRequests,
+	       structuralEntryGeometry, structuralGeometryPointerMismatch,
+	       missingInstances, mismatchedParts, instances.size(),
+	       lodLevelUpdates.size(), reset ? 1 : 0);
+	if (retainedStructural) {
+	    for (const auto &kind : structuralKinds)
+		bu_log("  structural kind=%s count=%zu\n",
+		    kind.first.c_str(), kind.second);
+	    for (const auto &type : structuralTypes)
+		bu_log("  structural type=%s count=%zu\n",
+		    type.first.c_str(), type.second);
+	}
+    }
+
     assembly->compactPresentationInitialized = TRUE;
     assembly->compactPresentationIndex = this->d->compactIndex;
     assembly->compactPresentationSourceRevision =
@@ -10284,6 +10738,32 @@ SoBRLDatabaseSource::compactViewLodAssembly(
     assembly->compactWirePresentationCount = wireCount;
     assembly->compactShadedPresentationCount = shadedCount;
     viewState->acknowledgeCadOccurrenceChanges(this, payloadRevision);
+    if (presentationTiming) {
+	const int64_t presentationCompleted = bu_gettime();
+	const int64_t total =
+	    presentationCompleted - presentationStarted;
+	if (total >= 10000) {
+	    bu_log("BObol compact presentation total=%" PRId64 "us "
+		   "index=%" PRId64 "us plan=%" PRId64 "us "
+		   "publish=%" PRId64 "us reset=%d full_resync=%d "
+		   "sparse_payload=%d cad_batch_changed=%d "
+		   "changed_keys=%zu structural_entries=%zu entries=%zu "
+		   "payload_input=%zu shared_parts=%zu "
+		   "instance_updates=%zu lod_updates=%zu\n",
+		   total,
+		   presentationIndexed - presentationStarted,
+		   presentationPlanned - presentationIndexed,
+		   presentationCompleted - presentationPlanned,
+		   reset ? 1 : 0, fullPayloadResync ? 1 : 0,
+		   sparsePayloadUpdate ? 1 : 0,
+		   cadBatchChanged ? 1 : 0,
+		   changedOccurrenceKeys.size(),
+		   structuralEntryIndices.size(), entryIndices.size(),
+		   payloadInput->size(), lodSharedParts.size(),
+		   instances.size(),
+		   lodLevelUpdates.size());
+	}
+    }
     return assembly;
 }
 
@@ -10578,6 +11058,7 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
     }
     entry.localToSource = matrix;
     entry.geometryTransform = input.occurrence.geometryTransform;
+    entry.placementTransform = input.occurrence.localTransform;
     entry.localTransform = geometryToSource;
     entry.semantic = input.semantic;
     if (entry.semantic.path.getLength() == 0)
@@ -10636,61 +11117,54 @@ compact_add_occurrence(SoBRLDatabaseSource *source,
 
 static void
 compact_index_bounds_add(BObolCompactInstanceIndex &index,
-	const BObolCompactInstanceEntry &entry)
+	BObolCompactInstanceEntry &entry)
 {
-    const SbBox3f bounds = database_source_transform_bounds(
+    entry.sourceBounds = database_source_transform_bounds(
 	compact_part_geometry_bounds(entry.geometry), entry.localTransform);
-    if (bounds.isEmpty())
+    if (entry.sourceBounds.isEmpty())
 	return;
 
-    const SbVec3f minimum = bounds.getMin();
-    const SbVec3f maximum = bounds.getMax();
-    for (int axis = 0; axis < 3; axis++) {
-	index.sourceBoundsMinimum[axis].insert(minimum[axis]);
-	index.sourceBoundsMaximum[axis].insert(maximum[axis]);
-    }
+    index.sourceBounds.extendBy(entry.sourceBounds);
 }
 
 static void
 compact_index_bounds_remove(BObolCompactInstanceIndex &index,
-	const BObolCompactInstanceEntry &entry)
+	BObolCompactInstanceEntry &entry)
 {
-    const SbBox3f bounds = database_source_transform_bounds(
-	compact_part_geometry_bounds(entry.geometry), entry.localTransform);
-    if (bounds.isEmpty())
+    if (entry.sourceBounds.isEmpty())
 	return;
 
-    const SbVec3f minimum = bounds.getMin();
-    const SbVec3f maximum = bounds.getMax();
-    for (int axis = 0; axis < 3; axis++) {
-	std::multiset<float>::iterator minimumIt =
-	    index.sourceBoundsMinimum[axis].find(minimum[axis]);
-	if (minimumIt != index.sourceBoundsMinimum[axis].end())
-	    index.sourceBoundsMinimum[axis].erase(minimumIt);
-	std::multiset<float>::iterator maximumIt =
-	    index.sourceBoundsMaximum[axis].find(maximum[axis]);
-	if (maximumIt != index.sourceBoundsMaximum[axis].end())
-	    index.sourceBoundsMaximum[axis].erase(maximumIt);
+    if (!index.sourceBoundsDirty && !index.sourceBounds.isEmpty()) {
+	const SbVec3f entryMinimum = entry.sourceBounds.getMin();
+	const SbVec3f entryMaximum = entry.sourceBounds.getMax();
+	const SbVec3f aggregateMinimum = index.sourceBounds.getMin();
+	const SbVec3f aggregateMaximum = index.sourceBounds.getMax();
+	for (int axis = 0; axis < 3; axis++) {
+	    if (entryMinimum[axis] <= aggregateMinimum[axis] ||
+		entryMaximum[axis] >= aggregateMaximum[axis]) {
+		index.sourceBoundsDirty = true;
+		break;
+	    }
+	}
     }
+    entry.sourceBounds.makeEmpty();
 }
 
 static SbBool
-compact_index_source_bounds(const BObolCompactInstanceIndex &index,
+compact_index_source_bounds(BObolCompactInstanceIndex &index,
 	SbBox3f &bounds)
 {
-    bounds.makeEmpty();
-    for (int axis = 0; axis < 3; axis++) {
-	if (index.sourceBoundsMinimum[axis].empty() ||
-	    index.sourceBoundsMaximum[axis].empty())
-	    return FALSE;
+    if (index.sourceBoundsDirty) {
+	index.sourceBounds.makeEmpty();
+	for (const BObolCompactInstanceEntry &entry : index.entries)
+	    if (!entry.sourceBounds.isEmpty())
+		index.sourceBounds.extendBy(entry.sourceBounds);
+	index.sourceBoundsDirty = false;
     }
 
-    bounds = SbBox3f(SbVec3f(*index.sourceBoundsMinimum[0].begin(),
-	*index.sourceBoundsMinimum[1].begin(),
-	*index.sourceBoundsMinimum[2].begin()),
-	SbVec3f(*index.sourceBoundsMaximum[0].rbegin(),
-	*index.sourceBoundsMaximum[1].rbegin(),
-	*index.sourceBoundsMaximum[2].rbegin()));
+    bounds = index.sourceBounds;
+    if (bounds.isEmpty())
+	return FALSE;
     return TRUE;
 }
 
@@ -10703,19 +11177,16 @@ compact_rebuild_entry_index(BObolCompactInstanceIndex &index)
     index.entryIndexByKey.reserve(index.entries.size());
     index.entryIndexByPath.clear();
     index.entryIndexByPath.reserve(index.entries.size());
+    index.entryIndexByOrderedPath.clear();
 
-    index.pathEntryOrder.clear();
-    index.pathEntryOrder.reserve(index.entries.size());
     index.entryIndicesByLeaf.clear();
     index.entryIndicesByLeaf.reserve(index.entries.size());
     index.entryIndicesBySourceName.clear();
     index.entryIndicesBySourceName.reserve(index.entries.size());
     index.partReferenceCounts.clear();
     index.partReferenceCounts.reserve(index.parts.size());
-    for (int axis = 0; axis < 3; axis++) {
-	index.sourceBoundsMinimum[axis].clear();
-	index.sourceBoundsMaximum[axis].clear();
-    }
+    index.sourceBounds.makeEmpty();
+    index.sourceBoundsDirty = false;
     for (size_t i = 0; i < index.entries.size(); i++) {
 	index.entryIndex[index.entries[i].instance] = i;
 	const SbString occurrenceKey =
@@ -10724,9 +11195,10 @@ compact_rebuild_entry_index(BObolCompactInstanceIndex &index)
 	    index.entryIndexByKey[occurrenceKey.getString()] = i;
 	const char *path = database_source_skip_leading_slash(
 	    index.entries[i].semantic.path.getString());
-	if (path && path[0])
+	if (path && path[0]) {
 	    index.entryIndexByPath[path] = i;
-	index.pathEntryOrder.push_back(i);
+	    index.entryIndexByOrderedPath[path] = i;
+	}
 	const std::string leaf = database_source_leaf_component(
 	    index.entries[i].semantic.path);
 	if (!leaf.empty())
@@ -10737,13 +11209,6 @@ compact_rebuild_entry_index(BObolCompactInstanceIndex &index)
 	index.partReferenceCounts[index.entries[i].part]++;
 	compact_index_bounds_add(index, index.entries[i]);
 	}
-    std::stable_sort(index.pathEntryOrder.begin(), index.pathEntryOrder.end(),
-	[&index](size_t left, size_t right) {
-	    return bu_strcmp(database_source_skip_leading_slash(
-		index.entries[left].semantic.path.getString()),
-		database_source_skip_leading_slash(
-		index.entries[right].semantic.path.getString())) < 0;
-	});
 }
 
 static void
@@ -10872,7 +11337,10 @@ SoBRLDatabaseSource::setCompactOccurrence(
     remove_non_auxiliary_children(this);
     this->markCompiledAssemblyDirty();
 
-    const SbBox3f bounds = compact_part_geometry_bounds(occurrence.geometry);
+    SbMatrix geometryToSource = occurrence.geometryTransform;
+    geometryToSource.multRight(occurrence.localTransform);
+    const SbBox3f bounds = database_source_transform_bounds(
+	compact_part_geometry_bounds(occurrence.geometry), geometryToSource);
     if (!bounds.isEmpty())
 	(void)this->setSourceBoundsState(TRUE, bounds.getMin(), bounds.getMax());
     else
@@ -10911,9 +11379,11 @@ SoBRLDatabaseSource::setCompactOccurrenceRegistry(
 	compact_add_occurrence(this, *next, input, ordinal, unsupported);
 	if (unsupported)
 	    break;
+	SbMatrix geometryToSource = occurrence.geometryTransform;
+	geometryToSource.multRight(occurrence.localTransform);
 	const SbBox3f bounds = database_source_transform_bounds(
 	    compact_part_geometry_bounds(occurrence.geometry),
-	    occurrence.localTransform);
+	    geometryToSource);
 	if (!bounds.isEmpty())
 	    aggregateBounds.extendBy(bounds);
     }
@@ -10946,24 +11416,163 @@ BObolCompactOccurrenceStream::push(const BObolCompactOccurrence &occurrence)
     this->pending.push_back(occurrence);
 }
 
+void
+BObolCompactOccurrenceStream::push(BObolCompactOccurrence &&occurrence)
+{
+    std::lock_guard<std::mutex> guard(this->mutex);
+    this->pending.push_back(std::move(occurrence));
+}
+
+void
+BObolCompactOccurrenceStream::pushPriority(
+    const BObolCompactOccurrence &occurrence)
+{
+    std::lock_guard<std::mutex> guard(this->mutex);
+    this->priority.push_back(occurrence);
+}
+
+static size_t
+compact_stream_staged_source_limit(void)
+{
+    static const size_t limit = []() {
+	const size_t mebibyte = 1024ULL * 1024ULL;
+	const char *configured = getenv("BOBOL_LOD_STAGED_SOURCE_MB");
+	if (configured && configured[0]) {
+	    char *end = NULL;
+	    const unsigned long long value = strtoull(configured, &end, 10);
+	    if (end && end != configured && *end == '\0') {
+		if (value == 0)
+		    return static_cast<size_t>(0);
+		if (value > SIZE_MAX / mebibyte)
+		    return SIZE_MAX;
+		return static_cast<size_t>(value) * mebibyte;
+	    }
+	}
+	return static_cast<size_t>(512ULL * mebibyte);
+    }();
+    return limit;
+}
+
+static std::mutex compact_stream_staged_source_budget_mutex;
+static size_t compact_stream_staged_source_budget_bytes = 0;
+
+static bool
+compact_stream_staged_source_reserve(size_t bytes)
+{
+    const size_t limit = compact_stream_staged_source_limit();
+    if (!bytes || !limit)
+	return false;
+    std::lock_guard<std::mutex> guard(
+	compact_stream_staged_source_budget_mutex);
+    if (bytes > limit) {
+	if (compact_stream_staged_source_budget_bytes != 0)
+	    return false;
+	compact_stream_staged_source_budget_bytes = bytes;
+	return true;
+    }
+    if (compact_stream_staged_source_budget_bytes > limit - bytes)
+	return false;
+    compact_stream_staged_source_budget_bytes += bytes;
+    return true;
+}
+
+static void
+compact_stream_staged_source_release(size_t bytes)
+{
+    std::lock_guard<std::mutex> guard(
+	compact_stream_staged_source_budget_mutex);
+    compact_stream_staged_source_budget_bytes =
+	bytes >= compact_stream_staged_source_budget_bytes ?
+	0 : compact_stream_staged_source_budget_bytes - bytes;
+}
+
+BObolCompactOccurrenceStream::~BObolCompactOccurrenceStream(void)
+{
+    std::lock_guard<std::mutex> guard(this->mutex);
+    compact_stream_staged_source_release(this->stagedSourceBytes);
+    this->stagedSourceBytes = 0;
+    this->stagedSources.clear();
+}
+
+SbBool
+BObolCompactOccurrenceStream::retainStagedSource(
+    const std::shared_ptr<const BObolStagedSourceMesh> &source)
+{
+    if (!source || !source->isValid() || !source->byteCount)
+	return FALSE;
+    const size_t limit = compact_stream_staged_source_limit();
+    if (!limit)
+	return FALSE;
+
+    std::lock_guard<std::mutex> guard(this->mutex);
+    /* Keep an exceptional source larger than the ordinary window only while
+     * it is the sole lease.  This enables a Lucy/one-huge-part handoff without
+     * letting a many-leaf coverage pass retain several exceptional imports. */
+    while (!this->stagedSources.empty() &&
+	(source->byteCount > limit ||
+	 this->stagedSourceBytes > limit - source->byteCount)) {
+	const std::shared_ptr<const BObolStagedSourceMesh> &oldest =
+	    this->stagedSources.front();
+	const size_t bytes = oldest ? oldest->byteCount : 0;
+	this->stagedSourceBytes = bytes >= this->stagedSourceBytes ?
+	    0 : this->stagedSourceBytes - bytes;
+	this->stagedSources.pop_front();
+	compact_stream_staged_source_release(bytes);
+    }
+    if (!compact_stream_staged_source_reserve(source->byteCount))
+	return FALSE;
+    if (source->byteCount <= SIZE_MAX - this->stagedSourceBytes)
+	this->stagedSourceBytes += source->byteCount;
+    else
+	this->stagedSourceBytes = SIZE_MAX;
+    this->stagedSources.push_back(source);
+    return TRUE;
+}
+
+size_t
+BObolCompactOccurrenceStream::stagedSourceByteCount(void)
+{
+    std::lock_guard<std::mutex> guard(this->mutex);
+    return this->stagedSourceBytes;
+}
+
 size_t
 BObolCompactOccurrenceStream::drain(std::vector<BObolCompactOccurrence> &out,
     size_t cap)
 {
     std::lock_guard<std::mutex> guard(this->mutex);
-    const size_t available = this->pending.size() - this->pendingOffset;
+    const size_t priorityAvailable =
+	this->priority.size() - this->priorityOffset;
+    const size_t pendingAvailable =
+	this->pending.size() - this->pendingOffset;
+    const size_t available = priorityAvailable + pendingAvailable;
     const size_t count = (cap == 0 || cap >= available) ? available : cap;
     if (!count)
 	return 0;
     out.reserve(out.size() + count);
-    for (size_t i = 0; i < count; i++)
+    const size_t priorityCount = std::min(count, priorityAvailable);
+    for (size_t i = 0; i < priorityCount; i++)
+	out.push_back(std::move(
+	    this->priority[this->priorityOffset + i]));
+    this->priorityOffset += priorityCount;
+    const size_t pendingCount = count - priorityCount;
+    for (size_t i = 0; i < pendingCount; i++)
 	out.push_back(std::move(this->pending[this->pendingOffset + i]));
-    this->pendingOffset += count;
+    this->pendingOffset += pendingCount;
 
     /* Erasing the front of a vector on every 64-occurrence GUI pump moved
      * nearly the entire remaining 50k stream every frame.  Retain a read
      * cursor and compact only occasionally, making producer/consumer handoff
      * amortized linear while preserving the contiguous producer buffer. */
+    if (this->priorityOffset == this->priority.size()) {
+	this->priority.clear();
+	this->priorityOffset = 0;
+    } else if (this->priorityOffset >= 64 &&
+	this->priorityOffset >= this->priority.size() / 2) {
+	this->priority.erase(this->priority.begin(),
+	    this->priority.begin() + this->priorityOffset);
+	this->priorityOffset = 0;
+    }
     if (this->pendingOffset == this->pending.size()) {
 	this->pending.clear();
 	this->pendingOffset = 0;
@@ -10980,16 +11589,15 @@ size_t
 BObolCompactOccurrenceStream::size(void)
 {
     std::lock_guard<std::mutex> guard(this->mutex);
-    return this->pending.size() - this->pendingOffset;
+    return (this->priority.size() - this->priorityOffset) +
+	(this->pending.size() - this->pendingOffset);
 }
 
 /* Populate the derived lookup maps and aggregate bounds for the appended tail
  * [firstNew, entries.size()).  compact_add_occurrence intentionally leaves these
  * to a rebuild at install time; mergeCompactOccurrences must fill them for the
  * new entries only (mirrors compact_rebuild_entry_index's per-entry work) so the
- * live registry stays consistent without an O(N) full rebuild each batch.  The
- * global pathEntryOrder sort is skipped here: rendering does not depend on it and
- * the final adopt produces a fully sorted authoritative index. */
+ * live registry stays consistent without an O(N) full rebuild each batch. */
 static void
 compact_index_append_derived(BObolCompactInstanceIndex &index, size_t firstNew)
 {
@@ -11001,9 +11609,10 @@ compact_index_append_derived(BObolCompactInstanceIndex &index, size_t firstNew)
 	    index.entryIndexByKey[occurrenceKey.getString()] = i;
 	const char *path = database_source_skip_leading_slash(
 	    index.entries[i].semantic.path.getString());
-	if (path && path[0])
+	if (path && path[0]) {
 	    index.entryIndexByPath[path] = i;
-	index.pathEntryOrder.push_back(i);
+	    index.entryIndexByOrderedPath[path] = i;
+	}
 	const std::string leaf = database_source_leaf_component(
 	    index.entries[i].semantic.path);
 	if (!leaf.empty())
@@ -11025,7 +11634,8 @@ compact_geometry_tier(const char *geometryKind)
 {
     if (!geometryKind || !geometryKind[0])
 	return 2;
-    if (BU_STR_EQUAL(geometryKind, "aabb"))
+    if (BU_STR_EQUAL(geometryKind, "aabb") ||
+	BU_STR_EQUAL(geometryKind, "overview-aabb"))
 	return 0;
     if (BU_STR_EQUAL(geometryKind, "obb"))
 	return 1;
@@ -11099,6 +11709,7 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
     }
     entry.localToSource = matrix;
     entry.geometryTransform = occurrence.geometryTransform;
+    entry.placementTransform = occurrence.localTransform;
     entry.localTransform = geometryToSource;
     /* Keep the entry's path/sourceName/instanceKey (leaf identity) untouched;
      * only the drawing-data descriptors change. */
@@ -11108,6 +11719,16 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
     entry.shapeSummary.sourceType = occurrence.summary.sourceType;
     entry.style = compact_effective_style(entry);
     compact_sync_shape_summary(entry);
+    /*
+     * This revision is the sparse publication contract between the compact
+     * occurrence registry and its retained SoCADAssembly presentation.
+     * Without advancing it, the changed-entry journal is correctly delivered
+     * but compactViewLodAssembly filters the entry as already presented:
+     * metadata then reports the richer part while the renderer continues to
+     * own the old structural box indefinitely.
+     */
+    entry.geometryRevision =
+	compact_next_revision(entry.geometryRevision);
 
     update.record.part = newPartId;
     update.record.localToRoot = matrix;
@@ -11119,6 +11740,57 @@ compact_index_replace_entry_geometry(SoBRLDatabaseSource *source,
 	index.shadedCount++;
     if (entry.wireGeometry || entry.pointGeometry)
 	index.wireCount++;
+    return true;
+}
+
+/* Enrich an already-published proxy with its source-backed PoP contract
+ * without replacing the drawable proxy.  Cold coverage intentionally
+ * publishes one shared unit box plus a per-occurrence normalization matrix.
+ * The later authoritative tree walk may carry an independently allocated
+ * exact AABB.  Replacing the shared box merely because the source request has
+ * arrived defeats instancing, and (before proxy and asset transforms were
+ * separated) also risked applying box normalization to the mesh asset.
+ *
+ * Geometry tier changes still go through
+ * compact_index_replace_entry_geometry. */
+static bool
+compact_index_merge_source_contract(BObolCompactInstanceIndex &index,
+	size_t entryIdx, const BObolCompactOccurrence &occurrence)
+{
+    if (entryIdx >= index.entries.size())
+	return false;
+
+    BObolCompactInstanceEntry &entry = index.entries[entryIdx];
+    bool changed = false;
+    if (occurrence.lodBacked && !entry.lodBacked) {
+	entry.lodBacked = TRUE;
+	changed = true;
+    }
+    if (occurrence.sourceMeshRequestValid) {
+	if (!entry.sourceMeshRequestValid) {
+	    entry.sourceMeshRequestValid = TRUE;
+	    index.sourceMeshRequestCount++;
+	}
+	entry.sourceMeshRequest = occurrence.sourceMeshRequest;
+	changed = true;
+    }
+    if (!changed)
+	return false;
+
+    /* Source semantics become authoritative with the request, but the
+     * currently drawn geometry, proxy transform, placement, part, and runtime
+     * visibility/selection state remain untouched.
+     *
+     * This is a data-management contract change, not a drawable-geometry
+     * change.  Do not advance geometryRevision: doing so queues a redundant
+     * full InstanceRecord update for every enriched leaf even though the
+     * retained part, transform, bounds, style, and selection state are
+     * byte-for-byte unchanged.  markDisplayMeshLodDirty below independently
+     * makes the submit planner observe the new source request. */
+    entry.shapeSummary.shapeKind = occurrence.summary.shapeKind;
+    entry.shapeSummary.sourceType = occurrence.summary.sourceType;
+    entry.shapeSummary.sourceId = occurrence.summary.sourceId;
+    compact_sync_shape_summary(entry);
     return true;
 }
 
@@ -11139,6 +11811,9 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
     const size_t firstNew = index.entries.size();
     int ordinal = static_cast<int>(index.entries.size());
     int changed = 0;
+    bool mergedSourceContract = false;
+    std::vector<size_t> changedEntries;
+    changedEntries.reserve(occurrences.size());
     for (const BObolCompactOccurrence &occurrence : occurrences) {
 	if (!occurrence.geometry)
 	    continue;
@@ -11154,17 +11829,31 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 		index.entries[found->second];
 	    const int oldTier = compact_geometry_tier(
 		existing.shapeSummary.geometryKind.getString());
+	    const bool evolvingOverview =
+		BU_STR_EQUAL(occurrence.summary.recordRole.getString(),
+		    "lod-overview") &&
+		BU_STR_EQUAL(existing.shapeSummary.recordRole.getString(),
+		    "lod-overview");
 	    const bool richerDataContract =
 		newTier == oldTier &&
 		((occurrence.sourceMeshRequestValid &&
 		  !existing.sourceMeshRequestValid) ||
-		 (occurrence.lodBacked && !existing.lodBacked));
+		 (occurrence.lodBacked && !existing.lodBacked) ||
+		 evolvingOverview);
 	    if (newTier < oldTier ||
 		(newTier == oldTier && !richerDataContract))
 		continue;
-	    if (compact_index_replace_entry_geometry(this, index,
-		    found->second, occurrence))
+	    const bool merged = newTier == oldTier && !evolvingOverview ?
+		compact_index_merge_source_contract(index, found->second,
+		    occurrence) :
+		compact_index_replace_entry_geometry(this, index,
+		    found->second, occurrence);
+	    if (merged) {
 		changed++;
+		changedEntries.push_back(found->second);
+		if (occurrence.sourceMeshRequestValid)
+		    mergedSourceContract = true;
+	    }
 	    continue;
 	}
 	compact_occurrence_build input;
@@ -11178,24 +11867,90 @@ SoBRLDatabaseSource::mergeCompactOccurrences(
 	if (p && p[0])
 	    index.entryIndexByPath[p] = index.entries.size() - 1;
 	changed++;
+	changedEntries.push_back(index.entries.size() - 1);
+	if (occurrence.sourceMeshRequestValid)
+	    mergedSourceContract = true;
     }
     if (!changed)
 	return 0;
 
     if (index.entries.size() > firstNew)
 	compact_index_append_derived(index, firstNew);
-    (void)this->reapplyCompactInstanceVisibilityFrontier();
-    (void)this->reapplyCompactInstanceSelectedPaths();
+    if (!this->d->compactExpectedInstanceCount)
+	this->d->compactExpectedInstanceCount = index.entries.size();
+    /*
+     * Newly appended occurrences inherit authored visibility and start
+     * unselected.  Rebuilding N-entry masks after every streamed batch when
+     * neither a visibility frontier nor selected paths exist revisits the
+     * complete accumulated scene and turns otherwise append-only realization
+     * into O(N^2) GUI-thread work.
+     *
+     * Active frontiers still need to classify newly arriving paths.  Their
+     * existing reapply routines remain authoritative until they acquire a
+     * sparse changed-entry form.
+     */
+    if (this->d->compactVisibilityFrontierActive)
+	(void)this->reapplyCompactInstanceVisibilityFrontier(firstNew);
+    if (!this->d->compactSelectedPaths.empty())
+	(void)this->reapplyCompactInstanceSelectedPaths(firstNew);
     this->d->compactOccurrenceRegistry = TRUE;
     this->markCompiledAssemblyDirty();
-    this->markCadBatchDirty();
-    this->markDisplayMeshLodDirty();
+    /*
+     * Streaming is append/upgrade-only.  Preserve that exact sparse
+     * mutation contract for both the retained assembly and view-LoD
+     * consumers instead of invalidating their complete source cursors.
+     * The former source-wide dirty marks made a one-leaf append force every
+     * view to revisit all previously published leaves, which is quadratic
+     * during cold population and can starve the unvisited tail.
+     */
+    std::sort(changedEntries.begin(), changedEntries.end());
+    changedEntries.erase(std::unique(changedEntries.begin(),
+	changedEntries.end()), changedEntries.end());
+    this->markCadBatchDirty(changedEntries);
+    this->markDisplayMeshLodDirty(changedEntries);
+    if (mergedSourceContract) {
+	this->d->displayMeshLodContractRevisionValid = TRUE;
+	this->d->displayMeshLodContractSourceRevision =
+	    this->sourceRevision.getValue();
+	this->d->displayMeshLodContractInputsRevision =
+	    this->inputsRevision.getValue();
+    }
 
     SbBox3f bounds;
     if (compact_index_source_bounds(index, bounds) && !bounds.isEmpty())
 	(void)this->setSourceBoundsState(TRUE, bounds.getMin(),
 	    bounds.getMax());
     return changed;
+}
+
+void
+SoBRLDatabaseSource::reserveCompactOccurrenceCapacity(size_t expectedCount)
+{
+    if (!expectedCount)
+	return;
+    this->d->compactExpectedInstanceCount = std::max(
+	this->d->compactExpectedInstanceCount, expectedCount);
+    if (!this->d->compactIndex) {
+	this->d->compactIndex = new BObolCompactInstanceIndex;
+	this->d->compactIndexActive = TRUE;
+	this->d->compactOccurrenceRegistry = TRUE;
+    }
+    BObolCompactInstanceIndex &index = *this->d->compactIndex;
+    const size_t capacity = expectedCount < SIZE_MAX ?
+	expectedCount + 1 : expectedCount;
+    if (capacity <= index.entries.capacity())
+	return;
+
+    index.entries.reserve(capacity);
+    index.instances.reserve(capacity);
+    index.parts.reserve(capacity);
+    /*
+     * Do not eagerly allocate every hash table to the full manifest count.
+     * Ten 50k bucket arrays produced a 70+ ms UI-thread pause before the first
+     * batch.  Reserving the relocation-sensitive contiguous records prevents
+     * the observed late-stream copy spike; the associative indices then grow
+     * with the bounded publication batches.
+     */
 }
 
 
@@ -11226,8 +11981,11 @@ SoBRLDatabaseSource::adoptCompactOccurrencesFrom(
 	occurrence.summary.visible = entry.authoredVisible;
 	occurrence.summary.selected = entry.selected;
 	occurrence.summary.highlighted = entry.highlighted;
-	occurrence.geometryTransform = SbMatrix::identity();
-	occurrence.localTransform = entry.localToSource;
+	occurrence.geometryTransform = entry.geometryTransform;
+	occurrence.localTransform = entry.placementTransform;
+	if (source->drawMatrixValid.getValue())
+	    occurrence.localTransform.multRight(
+		source->drawMatrix.getValue());
 	occurrence.localTransform.multRight(placementInverse);
 	occurrence.lodBacked = entry.lodBacked;
 	occurrence.sourceMeshRequestValid = entry.sourceMeshRequestValid;
@@ -12073,6 +12831,70 @@ SoBRLDatabaseSource::markCadBatchDirty(void)
 {
     if (++this->d->cadBatchRevision == 0)
 	this->d->cadBatchRevision = 1;
+    this->d->cadBatchDeltas.clear();
+    this->d->cadBatchDeltaEntryCount = 0;
+    this->d->cadBatchDeltaFloorRevision =
+	this->d->cadBatchRevision;
+}
+
+void
+SoBRLDatabaseSource::markCadBatchDirty(
+    const std::vector<size_t> &entryIndices)
+{
+    if (entryIndices.empty())
+	return;
+    if (++this->d->cadBatchRevision == 0)
+	this->d->cadBatchRevision = 1;
+
+    Impl::CadBatchDelta delta;
+    delta.revision = this->d->cadBatchRevision;
+    delta.entryIndices = entryIndices;
+    std::sort(delta.entryIndices.begin(), delta.entryIndices.end());
+    delta.entryIndices.erase(std::unique(delta.entryIndices.begin(),
+	delta.entryIndices.end()), delta.entryIndices.end());
+    this->d->cadBatchDeltaEntryCount += delta.entryIndices.size();
+    this->d->cadBatchDeltas.push_back(std::move(delta));
+
+    /* Multiple views may acknowledge the same source independently.  Keep
+     * the journal non-consuming and bounded; a view that falls behind the
+     * retained floor performs one authoritative scan. */
+    static const size_t maxDeltaBatches = 256;
+    static const size_t maxDeltaEntries = 65536;
+    while (this->d->cadBatchDeltas.size() > maxDeltaBatches ||
+	this->d->cadBatchDeltaEntryCount > maxDeltaEntries) {
+	const Impl::CadBatchDelta &front =
+	    this->d->cadBatchDeltas.front();
+	this->d->cadBatchDeltaEntryCount -= front.entryIndices.size();
+	this->d->cadBatchDeltaFloorRevision =
+	    std::max(this->d->cadBatchDeltaFloorRevision,
+		front.revision);
+	this->d->cadBatchDeltas.pop_front();
+    }
+}
+
+SbBool
+SoBRLDatabaseSource::getCadBatchChangedEntries(
+    uint64_t revision, std::vector<size_t> &entryIndices) const
+{
+    entryIndices.clear();
+    if (revision == this->d->cadBatchRevision)
+	return TRUE;
+    if (!revision || revision > this->d->cadBatchRevision ||
+	revision < this->d->cadBatchDeltaFloorRevision)
+	return FALSE;
+
+    for (const Impl::CadBatchDelta &delta : this->d->cadBatchDeltas) {
+	if (delta.revision <= revision)
+	    continue;
+	entryIndices.insert(entryIndices.end(), delta.entryIndices.begin(),
+	    delta.entryIndices.end());
+    }
+    if (entryIndices.empty())
+	return FALSE;
+    std::sort(entryIndices.begin(), entryIndices.end());
+    entryIndices.erase(std::unique(entryIndices.begin(),
+	entryIndices.end()), entryIndices.end());
+    return TRUE;
 }
 
 void
@@ -12080,6 +12902,46 @@ SoBRLDatabaseSource::markDisplayMeshLodDirty(void)
 {
     if (++this->d->displayMeshLodRevision == 0)
 	this->d->displayMeshLodRevision = 1;
+    this->d->displayMeshLodDeltas.clear();
+    this->d->displayMeshLodDeltaEntryCount = 0;
+    this->d->displayMeshLodDeltaFloorRevision =
+	this->d->displayMeshLodRevision;
+}
+
+void
+SoBRLDatabaseSource::markDisplayMeshLodDirty(
+    const std::vector<size_t> &entryIndices)
+{
+    if (entryIndices.empty())
+	return;
+    if (++this->d->displayMeshLodRevision == 0)
+	this->d->displayMeshLodRevision = 1;
+
+    Impl::DisplayMeshLodDelta delta;
+    delta.revision = this->d->displayMeshLodRevision;
+    delta.entryIndices = entryIndices;
+    std::sort(delta.entryIndices.begin(), delta.entryIndices.end());
+    delta.entryIndices.erase(std::unique(delta.entryIndices.begin(),
+	delta.entryIndices.end()), delta.entryIndices.end());
+    this->d->displayMeshLodDeltaEntryCount += delta.entryIndices.size();
+    this->d->displayMeshLodDeltas.push_back(std::move(delta));
+
+    /* A visibility/edit burst normally records a handful of entries.  Bound
+     * pathological history without penalizing independent views: a lagging
+     * view receives FALSE below and performs one authoritative rescan. */
+    static const size_t maxDeltaBatches = 256;
+    static const size_t maxDeltaEntries = 65536;
+    while (this->d->displayMeshLodDeltas.size() > maxDeltaBatches ||
+	this->d->displayMeshLodDeltaEntryCount > maxDeltaEntries) {
+	const Impl::DisplayMeshLodDelta &front =
+	    this->d->displayMeshLodDeltas.front();
+	this->d->displayMeshLodDeltaEntryCount -=
+	    front.entryIndices.size();
+	this->d->displayMeshLodDeltaFloorRevision =
+	    std::max(this->d->displayMeshLodDeltaFloorRevision,
+		front.revision);
+	this->d->displayMeshLodDeltas.pop_front();
+    }
 }
 
 uint64_t
@@ -12096,8 +12958,10 @@ SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 	this->d->previousCompactIndex = this->d->compactIndex;
     }
     this->d->compactIndex = NULL;
+    this->d->compactExpectedInstanceCount = 0;
     this->d->compactIndexActive = FALSE;
     this->d->compactOccurrenceRegistry = FALSE;
+    this->d->displayMeshLodContractRevisionValid = FALSE;
     this->markCompiledAssemblyDirty();
     this->markCadBatchDirty();
     this->markDisplayMeshLodDirty();
@@ -12108,10 +12972,12 @@ SoBRLDatabaseSource::discardCompactInstanceHistory(void)
 {
     delete this->d->compactIndex;
     this->d->compactIndex = NULL;
+    this->d->compactExpectedInstanceCount = 0;
     delete this->d->previousCompactIndex;
     this->d->previousCompactIndex = NULL;
     this->d->compactIndexActive = FALSE;
     this->d->compactOccurrenceRegistry = FALSE;
+    this->d->displayMeshLodContractRevisionValid = FALSE;
     this->markCompiledAssemblyDirty();
     this->markCadBatchDirty();
     this->markDisplayMeshLodDirty();
@@ -12130,6 +12996,13 @@ SoBRLDatabaseSource::installCompactInstanceIndex(
     this->d->compactIndex = index;
     this->d->compactIndexActive = TRUE;
     this->d->compactOccurrenceRegistry = occurrenceRegistry;
+    this->d->compactExpectedInstanceCount = index->entries.size();
+    this->d->displayMeshLodContractRevisionValid =
+	index->sourceMeshRequestCount > 0 ? TRUE : FALSE;
+    this->d->displayMeshLodContractSourceRevision =
+	this->sourceRevision.getValue();
+    this->d->displayMeshLodContractInputsRevision =
+	this->inputsRevision.getValue();
     (void)this->reapplyCompactInstanceVisibilityFrontier();
     (void)this->reapplyCompactInstanceSelectedPaths();
 
@@ -12150,6 +13023,7 @@ SoBRLDatabaseSource::markStale(uint32_t reason)
 	return;
     this->stale = TRUE;
     this->staleReason = this->staleReason.getValue() | reason;
+    this->d->displayMeshLodContractRevisionValid = FALSE;
     this->realizationStatus = UNREALIZED;
     this->realizationDiagnostic = "";
     /* Retain immutable compact geometry until its replacement is ready.  A
@@ -12183,6 +13057,29 @@ SoBRLDatabaseSource::setDrawModeState(int nextDrawMode)
 	this->markStale(STALE_DRAW);
     this->syncRealizedShapeOwnerState();
     return 1;
+}
+
+int
+SoBRLDatabaseSource::getEffectiveLodDrawMode(void) const
+{
+    switch (this->representationMode.getValue()) {
+	case REPRESENTATION_SHADED_BOTS:
+	    return BOBOL_LOD_DRAW_SHADED_BOTS;
+	case REPRESENTATION_SHADED:
+	    return BOBOL_LOD_DRAW_SHADED;
+	case REPRESENTATION_HIDDEN_LINE:
+	    return BOBOL_LOD_DRAW_HIDDEN_LINE;
+	case REPRESENTATION_EVAL_POINTS:
+	    return BOBOL_LOD_DRAW_POINTS;
+	case REPRESENTATION_EVAL_WIRE:
+	case REPRESENTATION_WIRE:
+	    return BOBOL_LOD_DRAW_WIRE;
+	default:
+	    break;
+    }
+
+    return this->drawMode.getValue() == SHADED ?
+	BOBOL_LOD_DRAW_SHADED : BOBOL_LOD_DRAW_WIRE;
 }
 
 int
@@ -13316,6 +14213,70 @@ database_snapshot_create(struct db_i *source, const SbString &sourcePath,
 }
 
 SoBRLDatabaseSource *
+SoBRLDatabaseSource::createDetachedRealizationTemplate(void) const
+{
+    SoBRLDatabaseSource *detached = new SoBRLDatabaseSource;
+    detached->ref();
+    detached->detachFieldSensors();
+    detached->copyFieldValues(this, FALSE);
+    detached->d->dbip = NULL;
+    detached->stale = TRUE;
+    detached->staleReason = STALE_SOURCE;
+    detached->realizationStatus = UNREALIZED;
+    detached->realizationDiagnostic = "";
+    detached->attachFieldSensors();
+    return detached;
+}
+
+SbBool
+SoBRLDatabaseSource::initializeDetachedRealizationDatabase(
+	struct db_i *sourceDatabase, struct db_i **databaseOut,
+	SbString *snapshotPathOut)
+{
+    if (databaseOut)
+	*databaseOut = NULL;
+    if (snapshotPathOut)
+	*snapshotPathOut = "";
+    if (!databaseOut || !sourceDatabase || this->d->dbip)
+	return FALSE;
+
+    /*
+     * A file-backed database is already the serialized input needed by
+     * realization.  Give the worker its own read-only directory/file handle
+     * instead of copying a multi-gigabyte draw closure into an in-memory DB
+     * before it may publish one box.  Scene/source revisions still gate every
+     * streamed merge and final adoption, so an edit that races this reader
+     * invalidates its result.  Independent FILE state also avoids sharing the
+     * live handle's seek cursor.
+     *
+     * In-memory databases and unusual file-open failures retain the closure
+     * snapshot fallback: there is no separately reopenable serialized source
+     * in those cases.
+     */
+    struct db_i *database = NULL;
+    if (sourceDatabase->dbi_filename &&
+	sourceDatabase->dbi_filename[0]) {
+	database = db_open(sourceDatabase->dbi_filename, DB_OPEN_READONLY);
+	if (database && db_dirbuild(database) < 0) {
+	    db_close(database);
+	    database = NULL;
+	}
+	if (database) {
+	    (void)db_comb_instance_ids_set(database, 1);
+	    database->dbi_read_only = 1;
+	}
+    }
+    if (!database)
+	database = database_snapshot_create(sourceDatabase,
+	    this->path.getValue(), snapshotPathOut);
+    if (!database)
+	return FALSE;
+    this->d->dbip = database;
+    *databaseOut = database;
+    return TRUE;
+}
+
+SoBRLDatabaseSource *
 SoBRLDatabaseSource::createDetachedRealizationSource(
 	struct db_i **databaseOut, SbString *snapshotPathOut) const
 {
@@ -13326,31 +14287,27 @@ SoBRLDatabaseSource::createDetachedRealizationSource(
     if (!databaseOut || !this->d->dbip)
 	return NULL;
 
+    SoBRLDatabaseSource *detached =
+	this->createDetachedRealizationTemplate();
+    if (!detached)
+	return NULL;
     struct db_i *database = database_snapshot_create(this->d->dbip,
 	this->path.getValue(), snapshotPathOut);
-    if (!database)
+    if (!database) {
+	detached->unref();
 	return NULL;
-
-    SoBRLDatabaseSource *detached = new SoBRLDatabaseSource;
-    detached->ref();
-    detached->detachFieldSensors();
-    detached->copyFieldValues(this, FALSE);
+    }
     detached->d->dbip = database;
-    detached->stale = TRUE;
-    detached->staleReason = STALE_SOURCE;
-    detached->realizationStatus = UNREALIZED;
-    detached->realizationDiagnostic = "";
-    detached->attachFieldSensors();
     *databaseOut = database;
     return detached;
 }
 
 int
 SoBRLDatabaseSource::adoptDetachedCompactRealization(
-    SoBRLDatabaseSource *detached)
+    SoBRLDatabaseSource *detached,
+    SbBool authoritativeStreamDrained)
 {
-    if (!detached || !detached->d->compactIndex ||
-	detached->d->compactIndex->entries.empty() ||
+    if (!detached ||
 	bu_strcmp(this->instanceKey.getValue().getString(),
 	    detached->instanceKey.getValue().getString()) != 0 ||
 	bu_strcmp(this->path.getValue().getString(),
@@ -13362,6 +14319,126 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
 	this->drawMode.getValue() != detached->drawMode.getValue() ||
 	this->representationMode.getValue() !=
 	    detached->representationMode.getValue())
+	return 0;
+
+    /*
+     * A progressive worker publishes every authoritative occurrence through
+     * the hand-off stream before it reaches COMPLETE.  When that stream has
+     * been drained, the live index already is the detached realization; its
+     * only possible extra is the temporary whole-target overview.  Preserve
+     * the live index and compiled assembly in that common case.  Replacing
+     * the index here used to invalidate every retained part generation and
+     * turn the final hand-off of a 5k/50k draw into one unbounded rebuild.
+     */
+    BObolCompactInstanceIndex *current = this->d->compactIndex;
+    BObolCompactInstanceIndex *authoritative = detached->d->compactIndex;
+    if (!current || current->entries.empty() ||
+	(!authoritative && !authoritativeStreamDrained))
+	return 0;
+    size_t overviewCount = 0;
+    for (BObolCompactInstanceEntry &entry : current->entries) {
+	if (BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
+		"lod-overview"))
+	    overviewCount++;
+    }
+    const size_t streamedAuthoritativeCount =
+	current->entries.size() - overviewCount;
+    const size_t authoritativeCount = authoritative ?
+	authoritative->entries.size() : streamedAuthoritativeCount;
+    bool streamedComplete = authoritative ?
+	(streamedAuthoritativeCount == authoritativeCount) :
+	(authoritativeStreamDrained && streamedAuthoritativeCount > 0);
+    if (streamedComplete && !authoritativeStreamDrained) {
+	for (const BObolCompactInstanceEntry &entry :
+	     authoritative->entries) {
+	    const char *entryPath = database_source_skip_leading_slash(
+		entry.semantic.path.getString());
+	    const auto found = entryPath && entryPath[0] ?
+		current->entryIndexByPath.find(entryPath) :
+		current->entryIndexByPath.end();
+	    if (found == current->entryIndexByPath.end() ||
+		found->second >= current->entries.size()) {
+		streamedComplete = false;
+		break;
+	    }
+	    const BObolCompactInstanceEntry &live =
+		current->entries[found->second];
+	    if (live.sourceMeshRequestValid !=
+		    entry.sourceMeshRequestValid ||
+		bu_strcmp(live.shapeSummary.geometryKind.getString(),
+		    entry.shapeSummary.geometryKind.getString()) != 0 ||
+		!live.localToSource.equals(entry.localToSource, 0.000001f)) {
+		streamedComplete = false;
+		break;
+	    }
+	}
+    }
+    if (streamedComplete) {
+	std::vector<size_t> retiredOverviewEntries;
+	for (size_t i = 0; i < current->entries.size(); ++i) {
+	    BObolCompactInstanceEntry &entry = current->entries[i];
+	    if (!BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
+		    "lod-overview"))
+		continue;
+	    /*
+	     * This is a publication barrier, not merely an index-state edit.
+	     * Visibility-frontier maintenance may already have marked the
+	     * synthetic overview invisible in the compact index while an
+	     * earlier retained presentation is still displaying it.  Skipping
+	     * an already-invisible entry therefore strands the box forever.
+	     *
+	     * Advance the revision unconditionally and journal this one record.
+	     * Each view will then patch its hidden set even when the index value
+	     * itself was already false.  Keeping the terminal delta sparse also
+	     * avoids turning retirement of one tiny startup aid into a 50k
+	     * occurrence presentation scan/rebuild.
+	     */
+	    entry.authoredVisible = FALSE;
+	    entry.visible = FALSE;
+	    entry.visibilityRevision =
+		compact_next_revision(entry.visibilityRevision);
+	    compact_sync_shape_summary_state(entry);
+	    current->hiddenInstances.push_back(entry.instance);
+	    retiredOverviewEntries.push_back(i);
+	}
+	if (!retiredOverviewEntries.empty()) {
+	    std::sort(current->hiddenInstances.begin(),
+		current->hiddenInstances.end());
+	    current->hiddenInstances.erase(std::unique(
+		current->hiddenInstances.begin(),
+		current->hiddenInstances.end()),
+		current->hiddenInstances.end());
+	    this->markCompiledAssemblyDirty();
+	    this->markCadBatchDirty(retiredOverviewEntries);
+	}
+	remove_non_auxiliary_children(this);
+
+	SbBox3f bounds;
+	if ((detached->getSourceBounds(bounds) ||
+		this->getSourceBounds(bounds)) && !bounds.isEmpty())
+	    (void)this->setSourceBoundsState(TRUE, bounds.getMin(),
+		bounds.getMax());
+	else
+	    this->clearSourceBounds();
+
+	this->realizedRevision = this->sourceRevision.getValue();
+	this->realizedSourceRevision = this->sourceRevision.getValue();
+	this->realizedInputsRevision = this->inputsRevision.getValue();
+	this->realizedViewRevision = this->viewRevision.getValue();
+	this->realizationStatus = REALIZED;
+	this->realizationDiagnostic = "";
+	this->realizationIdentity = source_realization_identity(this);
+	this->stale = FALSE;
+	this->staleReason = STALE_NONE;
+	if (getenv("BOBOL_DRAW_TIMING"))
+	    bu_log("[obol-timing] deferred adoption preserved streamed "
+		   "index: n=%zu overview=%zu\n",
+		   authoritativeCount, overviewCount);
+	return authoritativeCount > static_cast<size_t>(INT_MAX) ? INT_MAX :
+	    static_cast<int>(authoritativeCount);
+    }
+
+    if (!authoritative)
 	return 0;
 
     /*
@@ -14065,7 +15142,6 @@ SoBRLDatabaseSource::realizeDatabaseMesh(BObolCompactOccurrenceStream *stream)
 namespace {
 
 struct compact_coverage_occurrence {
-    size_t assetIndex = 0;
     SbMatrix localTransform = SbMatrix::identity();
     BObolRealizedShapeSummary summary;
     std::string assetPath;
@@ -14077,9 +15153,11 @@ struct compact_coverage_asset {
     struct directory *dp = NULL;
     std::string cacheKey;
     std::string assetPath;
-    std::vector<size_t> occurrences;
     size_t estimatedWorkingSetBytes = 1;
+    SbBox3f coverageBounds;
+    std::shared_ptr<const Obol::PartGeometry> coverageGeometry;
     std::shared_ptr<const Obol::PartGeometry> geometry;
+    SbMatrix proxyGeometryTransform = SbMatrix::identity();
     BObolSourceMeshRequest sourceMeshRequest;
     uint64_t sampleFingerprint = 0;
     bool sampleFingerprintValid = false;
@@ -14087,7 +15165,15 @@ struct compact_coverage_asset {
     size_t faceCount = 0;
     unsigned char mode = 0;
     unsigned char orientation = 0;
+    bool coverageReady = false;
     bool ready = false;
+    std::once_flag coverageOnce;
+    std::once_flag realizeOnce;
+};
+
+struct compact_coverage_work_item {
+    compact_coverage_asset *asset = NULL;
+    compact_coverage_occurrence occurrence;
 };
 
 struct compact_coverage_collect {
@@ -14096,11 +15182,19 @@ struct compact_coverage_collect {
     BObolCompactOccurrenceStream *stream = NULL;
     BObolMaterialColorSweep *materialSweep = NULL;
     uint32_t revision = 0;
-    std::vector<compact_coverage_occurrence> occurrences;
     std::vector<std::unique_ptr<compact_coverage_asset>> assets;
     std::unordered_map<std::string, size_t> assetIndices;
     std::unordered_set<std::string> seenInstances;
     std::unordered_map<std::string, uint32_t> occurrenceCounts;
+    size_t occurrenceCount = 0;
+    std::mutex workMutex;
+    std::condition_variable workReady;
+    std::deque<compact_coverage_work_item> work;
+    /* Coverage is the latency-critical phase.  Retain its completed work
+     * records here, then import full BoTs only after every leaf box and the
+     * exact target extent have been published. */
+    std::deque<compact_coverage_work_item> detailWork;
+    bool producerDone = false;
 };
 
 static size_t
@@ -14116,9 +15210,167 @@ compact_coverage_working_set_estimate(const struct db_i *dbip,
 	    return SIZE_MAX;
 	encodedBytes *= sizeof(union record);
     }
-    if (encodedBytes > (SIZE_MAX - fixedBytes) / 16)
+    /*
+     * A BoT coverage worker transiently owns the database read buffer, the
+     * decoded rt_bot_internal arrays, and modest import bookkeeping.  The
+     * previous 16x multiplier charged Lucy as 10.8 GiB for roughly 675 MiB of
+     * source arrays.  Since the global governor permits an oversized task
+     * only when it runs alone, that estimate also serialized ordinary
+     * tens-of-megabytes vehicle parts despite ample RAM and CPUs.
+     *
+     * Three serialized copies plus fixed overhead conservatively covers the
+     * encoded record, decoded arrays, and decode scratch for current v5 BoTs.
+     * The retained source arrays then move into the separately bounded staged
+     * lease window; downstream PoP construction takes its own face/point
+     * reservation before it can overlap another import.
+     */
+    if (encodedBytes > (SIZE_MAX - fixedBytes) / 3)
 	return SIZE_MAX;
-    return encodedBytes * 16 + fixedBytes;
+    return encodedBytes * 3 + fixedBytes;
+}
+
+/*
+ * Decode only the fixed BoT header and vertex array needed for an AABB.
+ *
+ * rt_db_get_internal necessarily allocates and converts faces, thickness,
+ * normals, UVs, and their index arrays as well.  That is appropriate for the
+ * later PoP source contract, but it made first visual coverage of a many-part
+ * database wait behind essentially the whole mesh import.  V5 keeps vertices
+ * first in the BoT body, so this bounded decoder can publish every leaf box
+ * and the exact draw-target extent before the detail phase pays those costs.
+ *
+ * db_get_external still owns one encoded-object copy.  The independent
+ * read-only realization database is memory mapped, making these calls
+ * parallel and free of the live editor handle's shared stdio cursor.  V4
+ * retains the complete-import fallback because its record layout does not
+ * offer the same compact body contract.
+ */
+static bool
+compact_coverage_bot_bounds(struct db_i *dbip, struct directory *dp,
+	SbBox3f &bounds, size_t &vertexCount, size_t &faceCount,
+	unsigned char &mode, unsigned char &orientation)
+{
+    bounds.makeEmpty();
+    vertexCount = 0;
+    faceCount = 0;
+    mode = 0;
+    orientation = 0;
+    if (!dbip || !dp ||
+	dp->d_minor_type != DB5_MINORTYPE_BRLCAD_BOT)
+	return false;
+
+    if (db_version(dbip) != 5) {
+	struct rt_db_internal intern;
+	RT_DB_INTERNAL_INIT(&intern);
+	if (rt_db_get_internal(&intern, dp, dbip, NULL) < 0)
+	    return false;
+	const struct rt_bot_internal *bot =
+	    intern.idb_type == ID_BOT && intern.idb_ptr ?
+	    static_cast<const struct rt_bot_internal *>(intern.idb_ptr) :
+	    NULL;
+	if (bot) {
+	    BObolSourceMeshRequest request;
+	    if (cad_source_mesh_request_from_bot(request, bot)) {
+		bounds = request.bounds;
+		vertexCount = bot->num_vertices;
+		faceCount = bot->num_faces;
+		mode = bot->mode;
+		orientation = bot->orientation;
+	    }
+	}
+	rt_db_free_internal(&intern);
+	return !bounds.isEmpty();
+    }
+
+    struct bu_external external;
+    BU_EXTERNAL_INIT(&external);
+    if (db_get_external(&external, dp, dbip) < 0)
+	return false;
+
+    struct db5_raw_internal raw;
+    const bool rawValid =
+	db5_get_raw_internal_ptr(&raw, external.ext_buf) != NULL &&
+	raw.major_type == DB5_MAJORTYPE_BRLCAD &&
+	raw.minor_type == DB5_MINORTYPE_BRLCAD_BOT &&
+	raw.body.ext_buf && raw.body.ext_nbytes >=
+	    2 * SIZEOF_NETWORK_LONG + 3;
+    if (!rawValid) {
+	bu_free_external(&external);
+	return false;
+    }
+
+    const unsigned char *body = raw.body.ext_buf;
+    const size_t vertices = static_cast<size_t>(BU_GLONG(body));
+    const size_t faces = static_cast<size_t>(
+	BU_GLONG(body + SIZEOF_NETWORK_LONG));
+    const size_t fixedBytes = 2 * SIZEOF_NETWORK_LONG + 3;
+    const size_t vertexStride =
+	SIZEOF_NETWORK_DOUBLE * ELEMENTS_PER_POINT;
+    if (!vertices || vertices > (SIZE_MAX - fixedBytes) / vertexStride ||
+	fixedBytes + vertices * vertexStride > raw.body.ext_nbytes) {
+	bu_free_external(&external);
+	return false;
+    }
+
+    orientation = body[2 * SIZEOF_NETWORK_LONG];
+    mode = body[2 * SIZEOF_NETWORK_LONG + 1];
+    const unsigned char *point = body + fixedBytes;
+    point_t minimum = {INFINITY, INFINITY, INFINITY};
+    point_t maximum = {-INFINITY, -INFINITY, -INFINITY};
+    size_t finiteVertices = 0;
+    for (size_t i = 0; i < vertices; ++i) {
+	double value[ELEMENTS_PER_POINT] = {0.0, 0.0, 0.0};
+	bu_cv_ntohd(reinterpret_cast<unsigned char *>(value), point,
+	    ELEMENTS_PER_POINT);
+	point += vertexStride;
+	if (!std::isfinite(value[X]) || !std::isfinite(value[Y]) ||
+	    !std::isfinite(value[Z]))
+	    continue;
+	for (size_t axis = 0; axis < 3; ++axis) {
+	    minimum[axis] = std::min(minimum[axis], value[axis]);
+	    maximum[axis] = std::max(maximum[axis], value[axis]);
+	}
+	finiteVertices++;
+    }
+    bu_free_external(&external);
+    if (!finiteVertices)
+	return false;
+
+    bounds = SbBox3f(
+	SbVec3f(static_cast<float>(minimum[X]),
+	    static_cast<float>(minimum[Y]),
+	    static_cast<float>(minimum[Z])),
+	SbVec3f(static_cast<float>(maximum[X]),
+	    static_cast<float>(maximum[Y]),
+	    static_cast<float>(maximum[Z])));
+    vertexCount = vertices;
+    faceCount = faces;
+    return !bounds.isEmpty();
+}
+
+static size_t
+compact_coverage_bot_source_bytes(const struct rt_bot_internal *bot)
+{
+    if (!bot)
+	return 0;
+    size_t bytes = sizeof(*bot);
+    const auto add = [&bytes](size_t count, size_t elementSize) {
+	if (bytes == SIZE_MAX || !count || !elementSize)
+	    return;
+	if (count > (SIZE_MAX - bytes) / elementSize)
+	    bytes = SIZE_MAX;
+	else
+	    bytes += count * elementSize;
+    };
+    add(bot->num_vertices, 3 * sizeof(fastf_t));
+    add(bot->num_faces, 3 * sizeof(int));
+    if (bot->thickness)
+	add(bot->num_faces, sizeof(fastf_t));
+    add(bot->num_normals, 3 * sizeof(fastf_t));
+    add(bot->num_face_normals, 3 * sizeof(int));
+    add(bot->num_uvs, 3 * sizeof(fastf_t));
+    add(bot->num_face_uvs, 3 * sizeof(int));
+    return bytes;
 }
 
 static union tree *
@@ -14174,7 +15426,6 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
     }
 
     compact_coverage_occurrence occurrence;
-    occurrence.assetIndex = assetIndex;
     occurrence.localTransform = mat_to_sbmatrix(tsp->ts_mat);
     occurrence.assetPath = rawPath;
     std::string semanticPath = rawPath;
@@ -14195,18 +15446,17 @@ compact_coverage_collect_leaf(struct db_tree_state *tsp,
 	((tsp->ts_sofar & TS_SOFAR_INTER) ?
 	 SoBRLDatabaseSource::BOOLEAN_INTERSECT :
 	 SoBRLDatabaseSource::BOOLEAN_UNION);
-    const size_t occurrenceIndex = collect->occurrences.size();
-    collect->occurrences.push_back(std::move(occurrence));
-    collect->assets[assetIndex]->occurrences.push_back(occurrenceIndex);
+    compact_coverage_work_item work;
+    work.asset = collect->assets[assetIndex].get();
+    work.occurrence = std::move(occurrence);
+    {
+	std::lock_guard<std::mutex> guard(collect->workMutex);
+	collect->work.push_back(std::move(work));
+	collect->occurrenceCount++;
+    }
+    collect->workReady.notify_one();
     bu_free(rawPath, "compact coverage path");
     return make_nop_tree();
-}
-
-static uint64_t
-compact_coverage_order_key(const compact_coverage_asset &asset)
-{
-    return static_cast<uint64_t>(bu_data_hash(asset.cacheKey.data(),
-	asset.cacheKey.size()));
 }
 
 static std::string
@@ -14221,6 +15471,73 @@ compact_coverage_broad_key(const compact_coverage_asset &asset)
 	static_cast<unsigned int>(asset.orientation),
 	static_cast<unsigned long long>(asset.sampleFingerprint));
     return std::string(key);
+}
+
+static std::shared_ptr<const Obol::PartGeometry>
+compact_coverage_aabb_geometry(const SbBox3f &bounds,
+	SbMatrix &geometryTransform)
+{
+    geometryTransform = SbMatrix::identity();
+    if (bounds.isEmpty())
+	return std::shared_ptr<const Obol::PartGeometry>();
+    const SbVec3f minimum = bounds.getMin();
+    const SbVec3f maximum = bounds.getMax();
+    const SbVec3f extent = maximum - minimum;
+    if (extent[0] > SMALL_FASTF && extent[1] > SMALL_FASTF &&
+	extent[2] > SMALL_FASTF) {
+	static const std::shared_ptr<const Obol::PartGeometry> unitAabb = []() {
+	    Obol::PartGeometry geometry;
+	    const SbBox3f unitBounds(SbVec3f(0.0f, 0.0f, 0.0f),
+		SbVec3f(1.0f, 1.0f, 1.0f));
+	    if (!cad_wire_part_geometry_from_aabb(unitBounds, geometry))
+		return std::shared_ptr<const Obol::PartGeometry>();
+	    geometry.subpixelProxyEligible = true;
+	    geometry.structuralProxy = true;
+	    return std::make_shared<const Obol::PartGeometry>(
+		std::move(geometry));
+	}();
+	geometryTransform.setScale(extent);
+	SbMatrix translation;
+	translation.setTranslate(minimum);
+	geometryTransform.multRight(translation);
+	return unitAabb;
+    }
+    Obol::PartGeometry geometry;
+    if (!cad_wire_part_geometry_from_aabb(bounds, geometry))
+	return std::shared_ptr<const Obol::PartGeometry>();
+    return std::make_shared<const Obol::PartGeometry>(
+	std::move(geometry));
+}
+
+static BObolCompactOccurrence
+compact_coverage_overview_occurrence(SoBRLDatabaseSource *source,
+	const char *treeName, const SbBox3f &bounds, uint32_t revision)
+{
+    BObolCompactOccurrence overview;
+    if (!source || !treeName || !treeName[0] || bounds.isEmpty())
+	return overview;
+
+    overview.geometry = compact_coverage_aabb_geometry(bounds,
+	overview.geometryTransform);
+    if (!overview.geometry)
+	return overview;
+    std::string overviewPath(treeName);
+    overviewPath += "/@draw-extent";
+    overview.summary = compact_occurrence_summary(source,
+	overviewPath.c_str(), treeName, "proxy", "overview-aabb", revision,
+	BObolRealizedShapeSummary::SHAPE_VLIST);
+    overview.summary.recordRole = "lod-overview";
+    overview.summary.selectable = FALSE;
+    overview.summary.lodAvailable = TRUE;
+    overview.summary.lodActiveLevel = BOBOL_LOD_QUALITY_PROXY;
+    overview.summary.lodBoundsMin = bounds.getMin();
+    overview.summary.lodBoundsMax = bounds.getMax();
+    overview.summary.pointCount = 24;
+    overview.summary.commandCount = 24;
+    overview.summary.segmentCount = 12;
+    overview.summary.boundsValid = TRUE;
+    overview.summary.bounds = bounds;
+    return overview;
 }
 
 static int
@@ -14243,6 +15560,270 @@ compact_stream_publish_parallel_coverage(
     collect.stream = stream;
     collect.materialSweep = &materialSweep;
     collect.revision = revision;
+    std::atomic<size_t> publishedBoxes(0);
+    std::atomic<size_t> publishedContracts(0);
+    std::mutex aggregateMutex;
+    SbBox3f aggregateBounds;
+    aggregateBounds.makeEmpty();
+    int64_t lastOverviewPublication = 0;
+    size_t workerCount = bu_avail_cpus();
+    workerCount = std::max<size_t>(1, std::min<size_t>(workerCount, 32));
+    const auto coverageWorker = [&]() {
+	bu_nice_set(5);
+	for (;;) {
+	    compact_coverage_work_item item;
+	    {
+		std::unique_lock<std::mutex> lock(collect.workMutex);
+		collect.workReady.wait(lock, [&]() {
+		    return collect.producerDone || !collect.work.empty() ||
+			stream->isCancelled();
+		});
+		if (stream->isCancelled())
+		    break;
+		if (collect.work.empty()) {
+		    if (collect.producerDone)
+			break;
+		    continue;
+		}
+		item = std::move(collect.work.front());
+		collect.work.pop_front();
+	    }
+	    if (!item.asset)
+		continue;
+	    compact_coverage_asset &asset = *item.asset;
+	    std::call_once(asset.coverageOnce, [&]() {
+		size_t coverageWorkingSet = asset.estimatedWorkingSetBytes;
+		if (db_version(source->getDatabase()) == 5 && asset.dp) {
+		    const size_t fixedBytes = 1024ULL * 1024ULL;
+		    const size_t encodedBytes = asset.dp->d_len;
+		    coverageWorkingSet =
+			encodedBytes > SIZE_MAX - fixedBytes ?
+			SIZE_MAX : encodedBytes + fixedBytes;
+		}
+		bobol_lod_working_set_acquire(coverageWorkingSet);
+		asset.coverageReady = !stream->isCancelled() &&
+		    compact_coverage_bot_bounds(source->getDatabase(),
+			asset.dp, asset.coverageBounds, asset.vertexCount,
+			asset.faceCount, asset.mode, asset.orientation) &&
+		    asset.faceCount >= source->lodBotThreshold.getValue();
+		if (asset.coverageReady) {
+		    asset.coverageGeometry = compact_coverage_aabb_geometry(
+			asset.coverageBounds, asset.proxyGeometryTransform);
+		    asset.coverageReady =
+			asset.coverageGeometry ? true : false;
+		}
+		bobol_lod_working_set_release(coverageWorkingSet);
+	    });
+
+	    if (asset.coverageReady && !stream->isCancelled()) {
+		/*
+		 * Publish a synthetic, unselectable draw-target extent before
+		 * this asset's leaf box.  Autoview intentionally waits for the
+		 * final exact snapshot below, so these monotonic intermediate
+		 * extents improve cold visual feedback without moving the camera.
+		 */
+		SbBox3f overviewSnapshot;
+		overviewSnapshot.makeEmpty();
+		{
+		    std::lock_guard<std::mutex> guard(aggregateMutex);
+		    const SbBox3f occurrenceBounds =
+			database_source_transform_bounds(
+			    asset.coverageBounds,
+			    item.occurrence.localTransform);
+		    if (!occurrenceBounds.isEmpty())
+			aggregateBounds.extendBy(occurrenceBounds);
+		    const int64_t now = bu_gettime();
+		    if (!aggregateBounds.isEmpty() &&
+			(lastOverviewPublication == 0 ||
+			 now - lastOverviewPublication >= 100000)) {
+			overviewSnapshot = aggregateBounds;
+			lastOverviewPublication = now;
+		    }
+		}
+		if (!overviewSnapshot.isEmpty()) {
+		    BObolCompactOccurrence overview =
+			compact_coverage_overview_occurrence(source, treeName,
+			    overviewSnapshot, revision);
+		    if (overview.geometry)
+			stream->pushPriority(overview);
+		}
+
+		BObolCompactOccurrence occurrence;
+		occurrence.geometry = asset.coverageGeometry;
+		occurrence.geometryTransform =
+		    asset.proxyGeometryTransform;
+		occurrence.localTransform = item.occurrence.localTransform;
+		occurrence.lodBacked = TRUE;
+		occurrence.sourceMeshRequestValid = FALSE;
+		occurrence.occurrenceIndex =
+		    item.occurrence.occurrenceIndex;
+		occurrence.booleanOperation =
+		    item.occurrence.booleanOperation;
+		occurrence.summary = item.occurrence.summary;
+		occurrence.summary.lodAvailable = TRUE;
+		occurrence.summary.lodActiveLevel =
+		    BOBOL_LOD_QUALITY_PROXY;
+		occurrence.summary.lodFaceCount = asset.faceCount;
+		occurrence.summary.lodPointCount = asset.vertexCount;
+		occurrence.summary.lodOriginalPointCount =
+		    asset.vertexCount;
+		occurrence.summary.lodBoundsMin =
+		    asset.coverageBounds.getMin();
+		occurrence.summary.lodBoundsMax =
+		    asset.coverageBounds.getMax();
+		occurrence.summary.boundsValid = TRUE;
+		occurrence.summary.bounds = asset.coverageBounds;
+		stream->push(std::move(occurrence));
+		publishedBoxes.fetch_add(1);
+	    }
+
+	    /* Full source import is deliberately a second phase. */
+	    {
+		std::lock_guard<std::mutex> guard(collect.workMutex);
+		collect.detailWork.push_back(std::move(item));
+	    }
+	}
+    };
+    const auto detailWorker = [&]() {
+	bu_nice_set(5);
+	for (;;) {
+	    compact_coverage_work_item item;
+	    {
+		std::lock_guard<std::mutex> guard(collect.workMutex);
+		if (collect.detailWork.empty())
+		    break;
+		item = std::move(collect.detailWork.front());
+		collect.detailWork.pop_front();
+	    }
+	    if (!item.asset || stream->isCancelled())
+		continue;
+	    compact_coverage_asset &asset = *item.asset;
+	    std::call_once(asset.realizeOnce, [&]() {
+		bobol_lod_working_set_acquire(
+		    asset.estimatedWorkingSetBytes);
+		struct rt_db_internal intern;
+		RT_DB_INTERNAL_INIT(&intern);
+		bool ownsInternal = false;
+		if (!stream->isCancelled() &&
+		    rt_db_get_internal(&intern, asset.dp,
+			source->getDatabase(), NULL) >= 0) {
+		    ownsInternal = true;
+		    const struct rt_bot_internal *bot =
+			intern.idb_type == ID_BOT && intern.idb_ptr ?
+			static_cast<const struct rt_bot_internal *>(
+			    intern.idb_ptr) : NULL;
+		    if (bot &&
+			bot->num_faces >= source->lodBotThreshold.getValue() &&
+			cad_source_mesh_request_from_bot(
+			    asset.sourceMeshRequest, bot)) {
+			asset.sourceMeshRequest.meshAssetPath =
+			    asset.assetPath.c_str();
+			asset.sourceMeshRequest.meshAssetName =
+			    asset.dp->d_namep ? asset.dp->d_namep : "";
+			asset.vertexCount = bot->num_vertices;
+			asset.faceCount = bot->num_faces;
+			asset.mode = bot->mode;
+			asset.orientation = bot->orientation;
+			asset.sampleFingerprintValid =
+			    compact_stream_lod_sample_fingerprint(
+				asset.sampleFingerprint, bot);
+			if (asset.coverageReady && asset.coverageGeometry) {
+			    asset.geometry = asset.coverageGeometry;
+			} else {
+			    asset.geometry = compact_coverage_aabb_geometry(
+				asset.sourceMeshRequest.bounds,
+				asset.proxyGeometryTransform);
+			}
+			asset.ready = asset.geometry ? true : false;
+			/* Transfer this already-paid cold import into a bounded,
+			 * weakly referenced stream lease.  The first visible LoD
+			 * task can build its PoP cache from these arrays instead of
+			 * rereading and decoding the same multi-hundred-megabyte
+			 * BoT.  If the stream window is disabled or immediately
+			 * evicts it, the owner below frees it normally. */
+			if (asset.ready && !stream->isCancelled()) {
+			    struct rt_db_internal *owned =
+				new (std::nothrow) struct rt_db_internal;
+			    if (owned) {
+				*owned = intern;
+				RT_DB_INTERNAL_INIT(&intern);
+				ownsInternal = false;
+				std::shared_ptr<void> owner(owned,
+				    [](void *pointer) {
+					struct rt_db_internal *internal =
+					    static_cast<struct rt_db_internal *>(
+						pointer);
+					if (internal) {
+					    rt_db_free_internal(internal);
+					    delete internal;
+					}
+				    });
+				std::shared_ptr<BObolStagedSourceMesh> staged =
+				    std::make_shared<BObolStagedSourceMesh>();
+				staged->owner = owner;
+				staged->bot =
+				    static_cast<const struct rt_bot_internal *>(
+					owned->idb_ptr);
+				staged->assetName =
+				    asset.dp->d_namep ? asset.dp->d_namep : "";
+				staged->sourceRevision = revision;
+				staged->byteCount =
+				    compact_coverage_bot_source_bytes(staged->bot);
+				if (stream->retainStagedSource(staged))
+				    asset.sourceMeshRequest.stagedSource = staged;
+			    }
+			}
+		    }
+		}
+		if (ownsInternal)
+		    rt_db_free_internal(&intern);
+		bobol_lod_working_set_release(
+		    asset.estimatedWorkingSetBytes);
+	    });
+
+	    if (!asset.ready || stream->isCancelled())
+		continue;
+
+	    BObolCompactOccurrence occurrence;
+	    occurrence.geometry = asset.geometry;
+	    occurrence.geometryTransform =
+		asset.proxyGeometryTransform;
+	    occurrence.localTransform = item.occurrence.localTransform;
+	    occurrence.lodBacked = TRUE;
+	    /*
+	     * The coverage occurrence is not merely a visual AABB: it is the
+	     * retained leaf that the view-LoD action will refine in place.  Keep
+	     * the source contract discovered by this worker with that occurrence.
+	     * Omitting it leaves a leaf marked lodBacked but with no request,
+	     * which the submit action must skip.  The completed worker stream is
+	     * normally adopted as authoritative, so a later serial realization
+	     * cannot be relied upon to repair this metadata.
+	     */
+	    occurrence.sourceMeshRequestValid = TRUE;
+	    occurrence.sourceMeshRequest = asset.sourceMeshRequest;
+	    occurrence.occurrenceIndex = item.occurrence.occurrenceIndex;
+	    occurrence.booleanOperation = item.occurrence.booleanOperation;
+	    occurrence.summary = item.occurrence.summary;
+	    compact_source_mesh_request_sync(occurrence.sourceMeshRequest,
+		occurrence.summary);
+	    compact_summary_lod_from_source_mesh_request(occurrence.summary,
+		occurrence.sourceMeshRequest);
+	    stream->push(std::move(occurrence));
+	    publishedContracts.fetch_add(1);
+	}
+    };
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for (size_t i = 0; i < workerCount; i++)
+	workers.push_back(std::thread(coverageWorker));
+
+    /*
+     * Enumeration is the producer, not a prerequisite.  The old two-phase
+     * walk held every occurrence until the complete hierarchy was known,
+     * creating seconds of blank UI on 50k+ cold scenes while all CPUs sat
+     * idle.  Workers now import bounds and publish the expanding overview/
+     * leaf boxes while db_walk_tree continues discovering later branches.
+     */
     struct db_tree_state initialState;
     db_init_db_tree_state(&initialState, source->getDatabase());
     initialState.ts_stop_at_regions = 0;
@@ -14251,108 +15832,69 @@ compact_stream_publish_parallel_coverage(
 	source->getDatabase(), 1, treeNames, 1, &initialState, NULL, NULL,
 	compact_coverage_collect_leaf, &collect);
     db_free_db_tree_state(&initialState);
+    /* Publish the final occurrence cardinality as soon as enumeration ends,
+     * while bound workers are still draining.  The GUI can then reserve its
+     * relocation-sensitive compact vectors once instead of repeatedly
+     * growing them during the long tail of a 50k stream. */
+    if (walkResult >= 0)
+	stream->setExpectedCount(collect.occurrenceCount);
+    {
+	std::lock_guard<std::mutex> guard(collect.workMutex);
+	collect.producerDone = true;
+    }
+    collect.workReady.notify_all();
+    for (std::thread &thread : workers)
+	thread.join();
     if (walkResult < 0 || stream->isCancelled())
 	return -1;
     if (collect.assets.empty())
 	return 0;
 
-    std::vector<size_t> order(collect.assets.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(),
-	[&collect](size_t lhs, size_t rhs) {
-	    const compact_coverage_asset &left = *collect.assets[lhs];
-	    const compact_coverage_asset &right = *collect.assets[rhs];
-	    const uint64_t leftKey = compact_coverage_order_key(left);
-	    const uint64_t rightKey = compact_coverage_order_key(right);
-	    return leftKey != rightKey ? leftKey < rightKey :
-		left.cacheKey < right.cacheKey;
-	});
-
-    std::atomic<size_t> cursor(0);
-    std::atomic<size_t> published(0);
-    size_t workerCount = bu_avail_cpus();
-    workerCount = std::max<size_t>(1, std::min<size_t>(
-	workerCount, std::min<size_t>(order.size(), 32)));
-    const auto worker = [&]() {
-	bu_nice_set(5);
-	for (;;) {
-	    const size_t orderIndex = cursor.fetch_add(1);
-	    if (orderIndex >= order.size())
-		break;
-	    compact_coverage_asset &asset =
-		*collect.assets[order[orderIndex]];
-	    bobol_lod_working_set_acquire(
-		asset.estimatedWorkingSetBytes);
-	    struct rt_db_internal intern;
-	    RT_DB_INTERNAL_INIT(&intern);
-	    bool ownsInternal = false;
-	    if (!stream->isCancelled() &&
-		rt_db_get_internal(&intern, asset.dp, source->getDatabase(),
-		    NULL) >= 0) {
-		ownsInternal = true;
-		const struct rt_bot_internal *bot =
-		    intern.idb_type == ID_BOT && intern.idb_ptr ?
-		    static_cast<const struct rt_bot_internal *>(
-			intern.idb_ptr) : NULL;
-		Obol::PartGeometry geometry;
-		if (bot &&
-		    bot->num_faces >= source->lodBotThreshold.getValue() &&
-		    cad_source_mesh_request_from_bot(
-			asset.sourceMeshRequest, bot) &&
-		    cad_wire_part_geometry_from_aabb(
-			asset.sourceMeshRequest.bounds, geometry)) {
-		    asset.sourceMeshRequest.meshAssetPath =
-			asset.assetPath.c_str();
-		    asset.sourceMeshRequest.meshAssetName =
-			asset.dp->d_namep ? asset.dp->d_namep : "";
-		    asset.vertexCount = bot->num_vertices;
-		    asset.faceCount = bot->num_faces;
-		    asset.mode = bot->mode;
-		    asset.orientation = bot->orientation;
-		    asset.sampleFingerprintValid =
-			compact_stream_lod_sample_fingerprint(
-			    asset.sampleFingerprint, bot);
-		    asset.geometry =
-			std::make_shared<Obol::PartGeometry>(
-			    std::move(geometry));
-		    asset.ready = asset.geometry ? true : false;
-		}
-	    }
-	    if (ownsInternal)
-		rt_db_free_internal(&intern);
-	    bobol_lod_working_set_release(
-		asset.estimatedWorkingSetBytes);
-
-	    if (!asset.ready || stream->isCancelled())
-		continue;
-	    for (size_t occurrenceIndex : asset.occurrences) {
-		if (stream->isCancelled())
-		    break;
-		const compact_coverage_occurrence &sourceOccurrence =
-		    collect.occurrences[occurrenceIndex];
-		BObolCompactOccurrence occurrence;
-		occurrence.geometry = asset.geometry;
-		occurrence.localTransform =
-		    sourceOccurrence.localTransform;
-		occurrence.lodBacked = TRUE;
-		occurrence.occurrenceIndex =
-		    sourceOccurrence.occurrenceIndex;
-		occurrence.booleanOperation =
-		    sourceOccurrence.booleanOperation;
-		occurrence.summary = sourceOccurrence.summary;
-		stream->push(occurrence);
-		published.fetch_add(1);
-	    }
+    /*
+     * Leaf AABBs may already fill the producer queue faster than the GUI can
+     * adopt them.  Once the parallel bound pass knows every occurrence,
+     * publish one unselectable whole-target extent through the priority lane.
+     * It is intentionally absent from the final authoritative compact index;
+     * adoption therefore removes it atomically after all leaf boxes/meshes
+     * are present.
+     */
+    if (!aggregateBounds.isEmpty()) {
+	BObolCompactOccurrence overview =
+	    compact_coverage_overview_occurrence(source, treeName,
+		aggregateBounds, revision);
+	if (overview.geometry) {
+	    stream->pushPriority(overview);
+	    /*
+	     * The priority lane is drained before ordinary leaves.  Publishing
+	     * this release flag after enqueue therefore guarantees that the next
+	     * provider tick which observes it has already merged the exact
+	     * extent and may perform one stable deferred autoview.
+	     */
+	    stream->setCoverageBoundsComplete(true);
 	}
-    };
-    std::vector<std::thread> workers;
-    workers.reserve(workerCount);
+    }
+    const int64_t coverageCompleted = bu_gettime();
+    if (getenv("BOBOL_DRAW_TIMING"))
+	bu_log("[obol-timing] coverage bounds: %.1f ms; %zu occurrences, "
+	       "%zu assets, %zu workers, %zu boxes\n",
+	       static_cast<double>(coverageCompleted - collectStart) / 1000.0,
+	       collect.occurrenceCount, collect.assets.size(), workerCount,
+	       publishedBoxes.load());
+
+    /*
+     * Bounds-first is a scheduling barrier, not a loss of parallelism.  Once
+     * complete visual coverage and an exact target extent are available,
+     * reuse the same bounded worker count to import the source arrays needed
+     * by PoP and enrich each standing leaf in place.
+     */
+    workers.clear();
     for (size_t i = 0; i < workerCount; i++)
-	workers.push_back(std::thread(worker));
+	workers.push_back(std::thread(detailWorker));
     for (std::thread &thread : workers)
 	thread.join();
     if (stream->isCancelled())
 	return -1;
+    const int64_t detailCompleted = bu_gettime();
 
     /* A unique broad signature cannot be a rigid transformed copy of another
      * asset in this root.  Seed those self-assets into the realization cache,
@@ -14374,27 +15916,38 @@ compact_stream_publish_parallel_coverage(
 	if (broadKey.empty() || broadCounts[broadKey] != 1 ||
 	    !asset.geometry)
 	    continue;
-	const SbMatrix identity = SbMatrix::identity();
 	/* A self asset needs no transformed-reuse mapping record.  The completed
 	 * leaf manifest persists its canonical source request directly; writing
 	 * one LMDB record for every ordinary unique mesh made cold completion
-	 * transaction-bound and inflated the draw cache by tens of megabytes. */
+	 * transaction-bound and inflated the draw cache by tens of megabytes.
+	 *
+	 * The cached geometry is the shared unit AABB used by cold coverage, not
+	 * an object-coordinate box.  Preserve its geometry-to-asset transform.
+	 * Storing identity here made the following authoritative walk install a
+	 * 0..1 proxy while retaining the real mesh request bounds.  Autoview then
+	 * framed the unit cube and view culling correctly rejected the actual
+	 * (often million-unit) mesh forever.
+	 */
 	cache->storeMeshCadGeometryReference(asset.cacheKey, asset.geometry,
-	    identity, "bot", "aabb", &asset.sourceMeshRequest.bounds, true,
-	    &asset.sourceMeshRequest);
+	    asset.proxyGeometryTransform, "bot", "aabb",
+	    &asset.sourceMeshRequest.bounds, true, &asset.sourceMeshRequest);
 	seeded++;
     }
     if (getenv("BOBOL_DRAW_TIMING"))
-	bu_log("[obol-timing] coverage prepass: %.1f ms; %zu occurrences, "
-	       "%zu assets, %zu workers, %zu boxes, %zu unique assets seeded, "
+	bu_log("[obol-timing] coverage prepass: %.1f ms "
+	       "(bounds %.1f, detail %.1f); %zu occurrences, "
+	       "%zu assets, %zu workers, %zu boxes, %zu contracts, "
+	       "%zu unique assets seeded, "
 	       "global peak=%zu bytes/%zu tasks\n",
 	       static_cast<double>(bu_gettime() - collectStart) / 1000.0,
-	       collect.occurrences.size(), collect.assets.size(), workerCount,
-	       published.load(), seeded,
+	       static_cast<double>(coverageCompleted - collectStart) / 1000.0,
+	       static_cast<double>(detailCompleted - coverageCompleted) / 1000.0,
+	       collect.occurrenceCount, collect.assets.size(), workerCount,
+	       publishedBoxes.load(), publishedContracts.load(), seeded,
 	       bobol_lod_working_set_global_peak_bytes(),
 	       bobol_lod_working_set_global_peak_tasks());
-    return published.load() > static_cast<size_t>(INT_MAX) ? INT_MAX :
-	static_cast<int>(published.load());
+    return publishedBoxes.load() > static_cast<size_t>(INT_MAX) ? INT_MAX :
+	static_cast<int>(publishedBoxes.load());
 }
 
 } /* anonymous namespace */
@@ -14502,6 +16055,7 @@ bobol_database_source_realize_mesh_compact_with_cache(
     }
 
     if (stream && source->lodBotThreshold.getValue() > 0 &&
+	!stream->hasWarmCoverageComplete() &&
 	compact_stream_publish_parallel_coverage(source, cache, treeName,
 	    stream, revision) < 0) {
 	if (!cache->preserveCompactSourceOnFailure) {
@@ -15713,6 +17267,9 @@ SoBRLDatabaseSource::syncCompactInstancePlacementState(void)
 
     for (BObolCompactInstanceEntry &entry :
 	 this->d->compactIndex->entries) {
+	SbMatrix localTransform = entry.geometryTransform;
+	localTransform.multRight(entry.placementTransform);
+	entry.localTransform = localTransform;
 	const SbMatrix nextMatrix = cad_instance_matrix(this,
 	    entry.localTransform);
 	if (!entry.localToSource.equals(nextMatrix, 0.000001f)) {
@@ -16165,13 +17722,14 @@ SoBRLDatabaseSource::getRealizedShapeCount(void) const
 SbBool
 SoBRLDatabaseSource::hasRealizedWireGeometry(void) const
 {
-    if (this->d->compactIndexActive && this->d->compactIndex) {
-	for (const BObolCompactInstanceEntry &entry :
-	     this->d->compactIndex->entries) {
-	    if (entry.wireGeometry || entry.pointGeometry)
-		return TRUE;
-	}
-    }
+    /*
+     * Compact indexes maintain these channel counts transactionally on every
+     * append and in-place geometry replacement.  Scanning all occurrences
+     * here made each LoD submission timer O(scene size); at 50k leaves this
+     * single predicate dominated the otherwise idle owner thread.
+     */
+    if (this->d->compactIndexActive && this->d->compactIndex)
+	return this->d->compactIndex->wireCount > 0 ? TRUE : FALSE;
     return this->getRealizedShapeCount() > 0 ? TRUE : FALSE;
 }
 
@@ -16206,13 +17764,8 @@ SoBRLDatabaseSource::getRealizedMeshCount(void) const
 SbBool
 SoBRLDatabaseSource::hasRealizedMeshGeometry(void) const
 {
-    if (this->d->compactIndexActive && this->d->compactIndex) {
-	for (const BObolCompactInstanceEntry &entry :
-	     this->d->compactIndex->entries) {
-	    if (entry.meshGeometry)
-		return TRUE;
-	}
-    }
+    if (this->d->compactIndexActive && this->d->compactIndex)
+	return this->d->compactIndex->shadedCount > 0 ? TRUE : FALSE;
     return this->getRealizedMeshCount() > 0 ? TRUE : FALSE;
 }
 
@@ -16220,13 +17773,51 @@ SbBool
 SoBRLDatabaseSource::hasDisplayMeshLodRequests(void) const
 {
     return (this->d->compactIndexActive && this->d->compactIndex &&
-	    this->d->compactIndex->sourceMeshRequestCount > 0) ? TRUE : FALSE;
+	    this->d->compactIndex->sourceMeshRequestCount > 0 &&
+	    this->d->displayMeshLodContractRevisionValid &&
+	    this->d->displayMeshLodContractSourceRevision ==
+		this->sourceRevision.getValue() &&
+	    this->d->displayMeshLodContractInputsRevision ==
+	this->inputsRevision.getValue()) ? TRUE : FALSE;
+}
+
+size_t
+SoBRLDatabaseSource::getDisplayMeshLodRequestCount(void) const
+{
+    return this->hasDisplayMeshLodRequests() ?
+	this->d->compactIndex->sourceMeshRequestCount : 0;
 }
 
 uint64_t
 SoBRLDatabaseSource::getDisplayMeshLodRevision(void) const
 {
     return this->d->displayMeshLodRevision;
+}
+
+SbBool
+SoBRLDatabaseSource::getDisplayMeshLodChangedEntries(
+    uint64_t revision, std::vector<size_t> &entryIndices) const
+{
+    entryIndices.clear();
+    if (revision == this->d->displayMeshLodRevision)
+	return TRUE;
+    if (!revision || revision > this->d->displayMeshLodRevision ||
+	revision < this->d->displayMeshLodDeltaFloorRevision)
+	return FALSE;
+
+    for (const Impl::DisplayMeshLodDelta &delta :
+	this->d->displayMeshLodDeltas) {
+	if (delta.revision <= revision)
+	    continue;
+	entryIndices.insert(entryIndices.end(), delta.entryIndices.begin(),
+	    delta.entryIndices.end());
+    }
+    if (entryIndices.empty())
+	return FALSE;
+    std::sort(entryIndices.begin(), entryIndices.end());
+    entryIndices.erase(std::unique(entryIndices.begin(),
+	entryIndices.end()), entryIndices.end());
+    return TRUE;
 }
 
 SbBool
@@ -16248,6 +17839,23 @@ SoBRLDatabaseSource::getCompactInstanceCount(void) const
     if (!this->hasCompactInstanceIndex())
 	return 0;
     return static_cast<int>(this->d->compactIndex->entries.size());
+}
+
+int
+SoBRLDatabaseSource::getCompactSelectedInstanceCount(void) const
+{
+    if (!this->hasCompactInstanceIndex())
+	return 0;
+    return static_cast<int>(
+	this->d->compactIndex->selectedInstances.size());
+}
+
+size_t
+SoBRLDatabaseSource::getCompactExpectedInstanceCount(void) const
+{
+    const size_t current = this->d->compactIndex ?
+	this->d->compactIndex->entries.size() : 0;
+    return std::max(current, this->d->compactExpectedInstanceCount);
 }
 
 int
@@ -16288,7 +17896,8 @@ SoBRLDatabaseSource::getCompactOccurrence(
 	this->d->compactIndex->entries[static_cast<size_t>(index)];
     occurrence.geometry = entry.geometry;
     occurrence.summary = entry.shapeSummary;
-    occurrence.localTransform = entry.localTransform;
+    occurrence.geometryTransform = entry.geometryTransform;
+    occurrence.localTransform = entry.placementTransform;
     occurrence.lodBacked = entry.lodBacked;
     occurrence.sourceMeshRequestValid = entry.sourceMeshRequestValid;
     occurrence.sourceMeshRequest = entry.sourceMeshRequest;
@@ -16379,6 +17988,28 @@ SoBRLDatabaseSource::hasCompactInstanceKey(const char *occurrenceKey) const
 }
 
 SbBool
+SoBRLDatabaseSource::getCompactInstanceIndex(
+    const char *occurrenceKey, size_t &entryIndex) const
+{
+    entryIndex = 0;
+    if (!this->d->compactIndex || !occurrenceKey || !occurrenceKey[0])
+	return FALSE;
+    const auto found =
+	this->d->compactIndex->entryIndexByKey.find(occurrenceKey);
+    if (found == this->d->compactIndex->entryIndexByKey.end() ||
+	found->second >= this->d->compactIndex->entries.size())
+	return FALSE;
+    entryIndex = found->second;
+    return TRUE;
+}
+
+uint64_t
+SoBRLDatabaseSource::getCompactSourceRoutingId(void) const
+{
+    return this->d->routingId;
+}
+
+SbBool
 SoBRLDatabaseSource::getCompactInstanceSummary(
     const BObolCompactInstanceHandle &handle,
     BObolCompactInstanceSummary &summary) const
@@ -16466,14 +18097,34 @@ SoBRLDatabaseSource::getCompactLodInstanceSummary(
 	summary.sourceFaceCount = entry.sourceMeshRequest.faceCount;
 	summary.sourcePointCount = entry.sourceMeshRequest.pointCount;
     }
-    summary.localToSource = entry.localToSource;
-    summary.localBounds = compact_part_geometry_bounds(entry.geometry);
+    summary.localToSource = entry.sourceMeshRequestValid ?
+	compact_mesh_asset_matrix(this, entry) : entry.localToSource;
+    summary.localBounds = entry.sourceMeshRequestValid &&
+	!entry.sourceMeshRequest.meshAssetBounds.isEmpty() ?
+	entry.sourceMeshRequest.meshAssetBounds :
+	compact_part_geometry_bounds(entry.geometry);
     summary.meshGeometry = entry.meshGeometry;
     summary.lodBacked = entry.lodBacked;
     summary.sourceMeshRequestValid = entry.sourceMeshRequestValid;
     summary.visible = entry.visible;
     summary.selected = entry.selected;
     summary.highlighted = entry.highlighted;
+    return TRUE;
+}
+
+SbBool
+SoBRLDatabaseSource::getCompactSourceMeshRequest(
+    int index, BObolSourceMeshRequest &request) const
+{
+    request.clear();
+    if (!this->d->compactIndex || index < 0 ||
+	static_cast<size_t>(index) >= this->d->compactIndex->entries.size())
+	return FALSE;
+    const BObolCompactInstanceEntry &entry =
+	this->d->compactIndex->entries[static_cast<size_t>(index)];
+    if (!entry.sourceMeshRequestValid)
+	return FALSE;
+    request = entry.sourceMeshRequest;
     return TRUE;
 }
 
@@ -16490,8 +18141,12 @@ SoBRLDatabaseSource::getCompactLodPlanningSummary(
 	this->d->compactIndex->entries[static_cast<size_t>(index)];
     summary.valid = TRUE;
     summary.sourceInstanceKey = compact_instance_identity(entry);
-    summary.localToSource = entry.localToSource;
-    summary.localBounds = compact_part_geometry_bounds(entry.geometry);
+    summary.localToSource = entry.sourceMeshRequestValid ?
+	compact_mesh_asset_matrix(this, entry) : entry.localToSource;
+    summary.localBounds = entry.sourceMeshRequestValid &&
+	!entry.sourceMeshRequest.meshAssetBounds.isEmpty() ?
+	entry.sourceMeshRequest.meshAssetBounds :
+	compact_part_geometry_bounds(entry.geometry);
     summary.meshGeometry = entry.meshGeometry;
     summary.lodBacked = entry.lodBacked;
     summary.sourceMeshRequestValid = entry.sourceMeshRequestValid;
@@ -16597,7 +18252,8 @@ compact_visit_entries_for_path(const BObolCompactInstanceIndex *index,
     const char *query = database_source_skip_leading_slash(
 	queryPath ? queryPath : "");
     if (!query[0]) {
-	for (size_t entryIndex : index->pathEntryOrder)
+	for (size_t entryIndex = 0; entryIndex < index->entries.size();
+		entryIndex++)
 	    visitor(entryIndex);
 	return;
     }
@@ -16615,18 +18271,9 @@ compact_visit_entries_for_path(const BObolCompactInstanceIndex *index,
 
     const std::string pathKey(query);
     const size_t prefixLength = pathKey.size();
-    std::vector<size_t>::const_iterator entryIt = std::lower_bound(
-	index->pathEntryOrder.begin(), index->pathEntryOrder.end(), pathKey,
-	[index](size_t entryIndex, const std::string &key) {
-	    return bu_strcmp(database_source_skip_leading_slash(
-		index->entries[entryIndex].semantic.path.getString()),
-		key.c_str()) < 0;
-	});
-    for (; entryIt != index->pathEntryOrder.end(); ++entryIt) {
-	const BObolCompactInstanceEntry &entry =
-	    index->entries[*entryIt];
-	const char *candidate = database_source_skip_leading_slash(
-	    entry.semantic.path.getString());
+    auto entryIt = index->entryIndexByOrderedPath.lower_bound(pathKey);
+    for (; entryIt != index->entryIndexByOrderedPath.end(); ++entryIt) {
+	const char *candidate = entryIt->first.c_str();
 	if (bu_strncmp(candidate, pathKey.c_str(), prefixLength) != 0)
 	    break;
 	const char suffix = candidate[prefixLength];
@@ -16634,11 +18281,14 @@ compact_visit_entries_for_path(const BObolCompactInstanceIndex *index,
 	    break;
 	if (includeDescendants && suffix != '\0' && suffix != '/' &&
 	    suffix != '@')
-	    break;
-	if (leafQuery && database_source_leaf_component(entry.semantic.path) ==
-	    pathKey)
 	    continue;
-	visitor(*entryIt);
+	const size_t entryIndex = entryIt->second;
+	if (entryIndex >= index->entries.size())
+	    continue;
+	if (leafQuery && database_source_leaf_component(
+		index->entries[entryIndex].semantic.path) == pathKey)
+	    continue;
+	visitor(entryIndex);
 	if (!includeDescendants)
 	    continue;
     }
@@ -16691,11 +18341,12 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 	return 0;
     int changed = 0;
     bool anyVisibilityChanged = false;
+    std::vector<size_t> visibilityChangedEntries;
 
     compact_visit_entries_for_path(this->d->compactIndex, queryPath,
 	includeDescendants, [this, visibleValid, nextVisible, selectedValid,
 	nextSelected, highlightedValid, nextHighlighted, &changed,
-	&anyVisibilityChanged](size_t entryIndex) {
+	&anyVisibilityChanged, &visibilityChangedEntries](size_t entryIndex) {
 	BObolCompactInstanceEntry &entry =
 	    this->d->compactIndex->entries[entryIndex];
 	bool visibilityChanged = false;
@@ -16705,6 +18356,7 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 	    entry.visible = nextVisible;
 	    visibilityChanged = true;
 	    anyVisibilityChanged = true;
+	    visibilityChangedEntries.push_back(entryIndex);
 	    changed++;
 	}
 	if (selectedValid && entry.selected != nextSelected) {
@@ -16735,7 +18387,7 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 	this->markCadBatchDirty();
 	if (anyVisibilityChanged &&
 	    !this->d->compactVisibilityFrontierActive)
-	    this->markDisplayMeshLodDirty();
+	    this->markDisplayMeshLodDirty(visibilityChangedEntries);
 	this->touch();
     }
     return changed;
@@ -16743,13 +18395,16 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 
 
 int
-SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(void)
+SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(
+    size_t firstEntry)
 {
     if (!this->d->compactIndex)
 	return 0;
 
     BObolCompactInstanceIndex &index = *this->d->compactIndex;
-    std::vector<SbBool> allowed(index.entries.size(),
+    firstEntry = std::min(firstEntry, index.entries.size());
+    const size_t candidateCount = index.entries.size() - firstEntry;
+    std::vector<SbBool> allowed(candidateCount,
 	this->d->compactVisibilityFrontierActive ?
 	    this->d->compactVisibilityFrontierDefault : TRUE);
     if (this->d->compactVisibilityFrontierActive) {
@@ -16763,23 +18418,27 @@ SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(void)
 		this->d->compactVisibilityFrontierStates[ruleIndex] : TRUE;
 	    compact_visit_entries_for_path(&index,
 		frontierPath.getString(), TRUE,
-		[&allowed, ruleVisible](size_t entryIndex) {
-		    if (entryIndex < allowed.size())
-			allowed[entryIndex] = ruleVisible;
+		[&allowed, ruleVisible, firstEntry](size_t entryIndex) {
+		    if (entryIndex >= firstEntry &&
+			entryIndex - firstEntry < allowed.size())
+			allowed[entryIndex - firstEntry] = ruleVisible;
 		});
 	}
     }
 
     int changed = 0;
-    for (size_t i = 0; i < index.entries.size(); i++) {
+    std::vector<size_t> changedEntries;
+    for (size_t i = firstEntry; i < index.entries.size(); i++) {
 	BObolCompactInstanceEntry &entry = index.entries[i];
-	const SbBool nextVisible = entry.authoredVisible && allowed[i];
+	const SbBool nextVisible =
+	    entry.authoredVisible && allowed[i - firstEntry];
 	if (entry.visible == nextVisible)
 	    continue;
 	entry.visible = nextVisible;
 	entry.visibilityRevision = compact_next_revision(
 	    entry.visibilityRevision);
 	compact_sync_shape_summary_state(entry);
+	changedEntries.push_back(i);
 	changed++;
     }
     if (changed) {
@@ -16787,14 +18446,26 @@ SoBRLDatabaseSource::reapplyCompactInstanceVisibilityFrontier(void)
 	 * Rebuilding all display state here needlessly revisits every style and
 	 * instance record and can make a one-occurrence erase look like a scene
 	 * rebuild to the renderer. */
-	index.hiddenInstances.clear();
-	for (const BObolCompactInstanceEntry &entry : index.entries) {
-	    if (!entry.visible)
-		index.hiddenInstances.push_back(entry.instance);
+	if (firstEntry == 0) {
+	    index.hiddenInstances.clear();
+	    for (const BObolCompactInstanceEntry &entry : index.entries) {
+		if (!entry.visible)
+		    index.hiddenInstances.push_back(entry.instance);
+	    }
+	} else {
+	    /* Streamed candidates are newly appended and therefore cannot
+	     * already occur in hiddenInstances.  Publish only the hidden
+	     * additions rather than rescanning every earlier occurrence. */
+	    for (const size_t entryIndex : changedEntries) {
+		const BObolCompactInstanceEntry &entry =
+		    index.entries[entryIndex];
+		if (!entry.visible)
+		    index.hiddenInstances.push_back(entry.instance);
+	    }
 	}
 	this->markCompiledAssemblyDirty();
 	this->markCadBatchDirty();
-	this->markDisplayMeshLodDirty();
+	this->markDisplayMeshLodDirty(changedEntries);
 	this->touch();
     }
     return changed;
@@ -16876,36 +18547,43 @@ SoBRLDatabaseSource::hasCompactInstanceVisibilityFrontier(void) const
 
 
 int
-SoBRLDatabaseSource::reapplyCompactInstanceSelectedPaths(void)
+SoBRLDatabaseSource::reapplyCompactInstanceSelectedPaths(
+    size_t firstEntry)
 {
     if (!this->d->compactIndex)
 	return 0;
 
     BObolCompactInstanceIndex &index = *this->d->compactIndex;
-    std::vector<unsigned char> touched(index.entries.size(), 0);
-    std::vector<unsigned char> selectedMask(index.entries.size(), 0);
+    firstEntry = std::min(firstEntry, index.entries.size());
+    const size_t candidateCount = index.entries.size() - firstEntry;
+    std::vector<unsigned char> touched(candidateCount, 0);
+    std::vector<unsigned char> selectedMask(candidateCount, 0);
 
     /* Existing selected entries are the only candidates that can become
      * deselected.  New selection paths contribute candidates through the
      * sorted path index, so selecting one row does not scan every occurrence
      * in a large assembly. */
-    for (const Obol::InstanceId &instance : index.selectedInstances) {
-	auto found = index.entryIndex.find(instance);
-	if (found != index.entryIndex.end() &&
-	    found->second < touched.size())
-	    touched[found->second] = 1;
+    if (firstEntry == 0) {
+	for (const Obol::InstanceId &instance : index.selectedInstances) {
+	    auto found = index.entryIndex.find(instance);
+	    if (found != index.entryIndex.end() &&
+		found->second < touched.size())
+		touched[found->second] = 1;
+	}
     }
 
-    const auto selectPath = [&index, &touched, &selectedMask](
+    const auto selectPath =
+	[&index, &touched, &selectedMask, firstEntry](
 	const char *queryPath) {
 	if (!queryPath || !queryPath[0])
 	    return;
 	compact_visit_entries_for_path(&index, queryPath, TRUE,
-	    [&touched, &selectedMask](size_t entryIndex) {
-		if (entryIndex >= touched.size())
+	    [&touched, &selectedMask, firstEntry](size_t entryIndex) {
+		if (entryIndex < firstEntry ||
+		    entryIndex - firstEntry >= touched.size())
 		    return;
-		touched[entryIndex] = 1;
-		selectedMask[entryIndex] = 1;
+		touched[entryIndex - firstEntry] = 1;
+		selectedMask[entryIndex - firstEntry] = 1;
 	    });
     };
     for (const SbString &selectedPath : this->d->compactSelectedPaths) {
@@ -16920,14 +18598,31 @@ SoBRLDatabaseSource::reapplyCompactInstanceSelectedPaths(void)
 	if (!semantic.empty() && semantic != selectedPathString)
 	    selectPath(semantic.c_str());
     }
+    if (getenv("BOBOL_SELECTION_DEBUG")) {
+	size_t touchedCount = 0;
+	size_t selectedCount = 0;
+	for (size_t i = 0; i < touched.size(); i++) {
+	    touchedCount += touched[i] ? 1u : 0u;
+	    selectedCount += selectedMask[i] ? 1u : 0u;
+	}
+	bu_log("[obol-selection] source=%s entries=%zu paths=%zu "
+	    "touched=%zu selected=%zu\n",
+	    this->path.getValue().getString(), index.entries.size(),
+	    this->d->compactSelectedPaths.size(), touchedCount,
+	    selectedCount);
+	for (const SbString &selectedPath : this->d->compactSelectedPaths)
+	    bu_log("[obol-selection]   path=%s\n",
+		selectedPath.getString());
+    }
 
     int changed = 0;
     std::vector<size_t> changedEntries;
-    for (size_t i = 0; i < index.entries.size(); i++) {
-	if (!touched[i])
+    for (size_t i = firstEntry; i < index.entries.size(); i++) {
+	if (!touched[i - firstEntry])
 	    continue;
 	BObolCompactInstanceEntry &entry = index.entries[i];
-	const SbBool nextSelected = selectedMask[i] ? TRUE : FALSE;
+	const SbBool nextSelected =
+	    selectedMask[i - firstEntry] ? TRUE : FALSE;
 	if (entry.selected == nextSelected)
 	    continue;
 	entry.selected = nextSelected;
@@ -16971,7 +18666,7 @@ SoBRLDatabaseSource::reapplyCompactInstanceSelectedPaths(void)
 	}
 	index.selectedInstances.swap(nextSelected);
 	this->markCompiledAssemblyDirty();
-	this->markCadBatchDirty();
+	this->markCadBatchDirty(changedEntries);
 	this->touch();
     }
     return changed;
@@ -17409,13 +19104,12 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	if (oldPartCount != this->d->compactIndex->partReferenceCounts.end() &&
 	    oldPartCount->second > 0)
 	    oldPartCount->second--;
-	/* The replacement is native object-local geometry.  Preserve the tree
-	 * placement while discarding any representative-to-object transform that
-	 * belonged to the shared PCA match. */
-	SbMatrix objectToSource = entry.geometryTransform.inverse();
-	objectToSource.multRight(entry.localTransform);
+	/* The replacement is native object-local geometry.  Preserve the
+	 * explicitly retained tree placement while discarding the old proxy/PCA
+	 * geometry transform.  Inferring this with an inverse is invalid for
+	 * degenerate boxes and needlessly couples replacement to payload shape. */
 	entry.geometryTransform = SbMatrix::identity();
-	entry.localTransform = objectToSource;
+	entry.localTransform = entry.placementTransform;
 	entry.localToSource = cad_instance_matrix(this, entry.localTransform);
 	entry.part = partId;
 	entry.geometry = geometry;

@@ -13,6 +13,8 @@
 
 #include "BObol/BLodRealization.h"
 
+#include <Obol/cad/SoCADAssembly.h>
+
 #include <Inventor/SbBox.h>
 #include <Inventor/SbVec3f.h>
 
@@ -217,6 +219,158 @@ test_rt_mesh_payload_copy(void)
 }
 
 static int
+test_worker_prepared_authored_normals(void)
+{
+    point_t points[4];
+    vect_t normals[6];
+    int faces[6] = {0, 1, 2, 0, 2, 3};
+    VSET(points[0], 0.0, 0.0, 0.0);
+    VSET(points[1], 1.0, 0.0, 0.0);
+    VSET(points[2], 1.0, 1.0, 0.0);
+    VSET(points[3], 0.0, 1.0, 0.0);
+    for (size_t i = 0; i < 3; ++i)
+	VSET(normals[i], 0.0, 0.0, 1.0);
+    for (size_t i = 3; i < 6; ++i)
+	VSET(normals[i], 0.0, 1.0, 1.0);
+
+    struct BObolMeshLodData data = {};
+    data.faces = faces;
+    data.face_count = 2;
+    data.points = points;
+    data.point_count = 4;
+    data.points_orig = points;
+    data.point_orig_count = 4;
+    data.normals = normals;
+    data.normal_count = 6;
+    VSET(data.bmin, 0.0, 0.0, 0.0);
+    VSET(data.bmax, 1.0, 1.0, 0.0);
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    hierarchy.min_level = 0;
+    hierarchy.max_level = 1;
+    hierarchy.resident_level = 1;
+    hierarchy.face_count[0] = 1;
+    hierarchy.face_count[1] = 2;
+    hierarchy.point_count[0] = 3;
+    hierarchy.point_count[1] = 4;
+    VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
+    VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+
+    BObolLodProgressiveMesh progressive;
+    if (!progressive.update(data, hierarchy, 1, FALSE)) {
+	printf("FAIL: worker prepared authored-normal fixture update\n");
+	return 1;
+    }
+    uint64_t revision = 0;
+    const std::shared_ptr<const Obol::PartGeometry> prepared =
+	progressive.prepareCadGeometry(
+	    BOBOL_LOD_DRAW_SHADED, &revision);
+    uint64_t cachedRevision = 0;
+    const std::shared_ptr<const Obol::PartGeometry> cached =
+	progressive.prepareCadGeometry(
+	    BOBOL_LOD_DRAW_SHADED, &cachedRevision);
+    const Obol::TriMesh *mesh =
+	prepared && prepared->shaded ? &*prepared->shaded : NULL;
+    if (!mesh || revision != progressive.revision() ||
+	cachedRevision != revision || cached != prepared ||
+	mesh->indices.size() != 6 ||
+	mesh->normals.size() != mesh->positions.size() ||
+	mesh->positions.size() <= 4 ||
+	!mesh->isProgressive() ||
+	mesh->indexCountAtLevel(0) != 3 ||
+	mesh->indexCountAtLevel(1) != 6 ||
+	mesh->positionCountAtLevel(0) != 3 ||
+	mesh->positionCountAtLevel(1) != mesh->positions.size()) {
+	printf("FAIL: authored normals were not canonicalized into a cached "
+	       "worker-owned renderer generation\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
+test_worker_prepared_generation_lifetime(void)
+{
+    point_t points[4];
+    vect_t normals[6];
+    int faces[6] = {0, 1, 2, 0, 2, 3};
+    VSET(points[0], 0.0, 0.0, 0.0);
+    VSET(points[1], 1.0, 0.0, 0.0);
+    VSET(points[2], 1.0, 1.0, 0.0);
+    VSET(points[3], 0.0, 1.0, 0.0);
+    for (size_t i = 0; i < 6; ++i)
+	VSET(normals[i], 0.0, 0.0, 1.0);
+
+    struct BObolMeshLodData data = {};
+    data.faces = faces;
+    data.face_count = 1;
+    data.points = points;
+    data.point_count = 3;
+    data.points_orig = points;
+    data.point_orig_count = 3;
+    data.normals = normals;
+    data.normal_count = 3;
+    VSET(data.bmin, 0.0, 0.0, 0.0);
+    VSET(data.bmax, 1.0, 1.0, 0.0);
+
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    hierarchy.min_level = 0;
+    hierarchy.max_level = 1;
+    hierarchy.resident_level = 0;
+    hierarchy.face_count[0] = 1;
+    hierarchy.face_count[1] = 2;
+    hierarchy.point_count[0] = 3;
+    hierarchy.point_count[1] = 4;
+    VSET(hierarchy.quantization_min, 0.0, 0.0, 0.0);
+    VSET(hierarchy.quantization_max, 1.0, 1.0, 0.0);
+
+    BObolLodProgressiveMesh progressive;
+    if (!progressive.update(data, hierarchy, 0, FALSE))
+	return 1;
+    uint64_t coarseRevision = 0;
+    const std::shared_ptr<const Obol::PartGeometry> coarse =
+	progressive.prepareCadGeometry(
+	    BOBOL_LOD_DRAW_SHADED, &coarseRevision);
+
+    data.face_count = 2;
+    data.point_count = 4;
+    data.point_orig_count = 4;
+    data.normal_count = 6;
+    hierarchy.resident_level = 1;
+    if (!progressive.update(data, hierarchy, 1, FALSE))
+	return 1;
+    uint64_t richRevision = 0;
+    const std::shared_ptr<const Obol::PartGeometry> rich =
+	progressive.prepareCadGeometry(
+	    BOBOL_LOD_DRAW_SHADED, &richRevision);
+
+    if (!coarse || !coarse->shaded || !rich || !rich->shaded ||
+	coarseRevision == 0 || richRevision <= coarseRevision ||
+	coarse->shaded->indices.size() != 3 ||
+	rich->shaded->indices.size() != 6 ||
+	!progressive.trim(0)) {
+	printf("FAIL: immutable progressive generation expansion\n");
+	return 1;
+    }
+
+    uint64_t trimmedRevision = 0;
+    const std::shared_ptr<const Obol::PartGeometry> trimmed =
+	progressive.prepareCadGeometry(
+	    BOBOL_LOD_DRAW_SHADED, &trimmedRevision);
+    if (!trimmed || !trimmed->shaded ||
+	trimmedRevision <= richRevision ||
+	trimmed->shaded->indices.size() != 3 ||
+	coarse->shaded->indices.size() != 3 ||
+	rich->shaded->indices.size() != 6) {
+	printf("FAIL: published progressive generation lifetime across trim\n");
+	return 1;
+    }
+    return 0;
+}
+
+static int
 test_stage_results(void)
 {
     BObolLodRequest request = make_request();
@@ -332,6 +486,10 @@ main(int argc, char **argv)
     if (test_rt_mesh_result())
 	return 1;
     if (test_rt_mesh_payload_copy())
+	return 1;
+    if (test_worker_prepared_authored_normals())
+	return 1;
+    if (test_worker_prepared_generation_lifetime())
 	return 1;
     if (test_stage_results())
 	return 1;

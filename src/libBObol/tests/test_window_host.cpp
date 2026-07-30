@@ -2242,6 +2242,12 @@ test_imgstream_display_host_bridge(void)
 	  BOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY) == 0 &&
 	  overlay->findChild(viewport) >= 0 && viewport->visible.getValue() == TRUE,
 	  "display host restores framebuffer image above the CAD render batch");
+    (void)host.getController()->consumeRenderRequest(NULL);
+    CHECK(host.setFramebufferComposition(fb,
+	  BOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY) == 0 &&
+	  !host.getController()->isRenderRequested() &&
+	  overlay->findChild(viewport) >= 0,
+	  "repeating a framebuffer composition mode is an idle no-op");
 
     unsigned char red[3] = {255, 0, 0};
     CHECK(imgstream_fb_writerect(fb, 2, 1, 1, 1, red) == 1,

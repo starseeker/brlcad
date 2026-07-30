@@ -127,6 +127,12 @@ void QgSW::need_update()
     request_update(BV_REFRESH_FRAMEBUFFER | BV_REFRESH_FORCE);
 }
 
+void QgSW::present_frame()
+{
+    QTCAD_SLOT("QgSW::present_frame", 1);
+    request_update(BV_REFRESH_FRAMEBUFFER | BV_REFRESH_FORCE);
+}
+
 void QgSW::queued_update()
 {
     d->fb_update_queued = false;

@@ -26,8 +26,10 @@
 #include "common.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <unordered_set>
 #include <vector>
 
@@ -47,6 +49,9 @@
 
 #include <Inventor/nodes/SoCamera.h>
 #include <Inventor/nodes/SoGroup.h>
+#include <Inventor/nodes/SoOrthographicCamera.h>
+
+#include <Obol/cad/SoCADAssembly.h>
 
 #include "BObol/BLodService.h"
 #include "BObol/BDatabaseSource.h"
@@ -82,6 +87,44 @@ qged_test_collect_database_source_roots(
     SoGroup *group = static_cast<SoGroup *>(node);
     for (int i = 0; i < group->getNumChildren(); i++)
 	qged_test_collect_database_source_roots(group->getChild(i), sources);
+}
+
+static BObolViewController *
+qged_test_event_controller(QgEdApp &app, const QgTestEvent &event)
+{
+    QObject *target = app.w ?
+	QgEventRecorder::resolveObject(app.w, event.target) : nullptr;
+    for (QObject *object = target; object; object = object->parent()) {
+	if (QgView *view = qobject_cast<QgView *>(object))
+	    return view->obolViewController();
+    }
+    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
+    return view ? view->obolViewController() : nullptr;
+}
+
+static std::vector<BObolViewController *>
+qged_test_all_controllers(QgEdApp &app)
+{
+    std::vector<BObolViewController *> controllers;
+    if (app.w) {
+	const QList<QgView *> views = app.w->findChildren<QgView *>();
+	for (QgView *view : views) {
+	    BObolViewController *controller =
+		view ? view->obolViewController() : nullptr;
+	    if (controller &&
+		std::find(controllers.begin(), controllers.end(), controller) ==
+		    controllers.end())
+		controllers.push_back(controller);
+	}
+	QgView *current = app.w->CurrentDisplay();
+	BObolViewController *controller =
+	    current ? current->obolViewController() : nullptr;
+	if (controller &&
+	    std::find(controllers.begin(), controllers.end(), controller) ==
+		controllers.end())
+	    controllers.push_back(controller);
+    }
+    return controllers;
 }
 
 static QJsonObject
@@ -246,9 +289,8 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	}
     }
 
-    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
     BObolViewController *controller =
-	view ? view->obolViewController() : nullptr;
+	qged_test_event_controller(app, event);
     if (!controller) {
 	sample.insert(QStringLiteral("controller_available"), false);
 	return sample;
@@ -257,6 +299,10 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
     sample.insert(QStringLiteral("controller_available"), true);
     if (SoCamera *camera = controller->getCamera()) {
 	const SbVec3f position = camera->position.getValue();
+	const SbRotation orientation = camera->orientation.getValue();
+	SbVec3f orientationAxis;
+	float orientationAngle = 0.0f;
+	orientation.getValue(orientationAxis, orientationAngle);
 	sample.insert(QStringLiteral("camera_position_x"),
 	    static_cast<double>(position[0]));
 	sample.insert(QStringLiteral("camera_position_y"),
@@ -265,6 +311,39 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	    static_cast<double>(position[2]));
 	sample.insert(QStringLiteral("camera_focal_distance"),
 	    static_cast<double>(camera->focalDistance.getValue()));
+	sample.insert(QStringLiteral("camera_near_distance"),
+	    static_cast<double>(camera->nearDistance.getValue()));
+	sample.insert(QStringLiteral("camera_far_distance"),
+	    static_cast<double>(camera->farDistance.getValue()));
+	sample.insert(QStringLiteral("camera_orientation_axis_x"),
+	    static_cast<double>(orientationAxis[0]));
+	sample.insert(QStringLiteral("camera_orientation_axis_y"),
+	    static_cast<double>(orientationAxis[1]));
+	sample.insert(QStringLiteral("camera_orientation_axis_z"),
+	    static_cast<double>(orientationAxis[2]));
+	sample.insert(QStringLiteral("camera_orientation_angle"),
+	    static_cast<double>(orientationAngle));
+	const SbVec2s viewportSize =
+	    controller->getViewportRegion().getViewportSizePixels();
+	sample.insert(QStringLiteral("viewport_width"), viewportSize[0]);
+	sample.insert(QStringLiteral("viewport_height"), viewportSize[1]);
+	float aspect = viewportSize[1] > 0 ?
+	    static_cast<float>(viewportSize[0]) /
+		static_cast<float>(viewportSize[1]) : 1.0f;
+	if (camera->isOfType(SoOrthographicCamera::getClassTypeId()))
+	    sample.insert(QStringLiteral("camera_orthographic_height"),
+		static_cast<double>(
+		    static_cast<SoOrthographicCamera *>(camera)->
+			height.getValue()));
+	if (collectDeepLodDiagnostics) {
+	    const SbMatrix viewProjection =
+		camera->getViewVolume(aspect).getMatrix();
+	    QJsonArray matrix;
+	    const float *values = viewProjection[0];
+	    for (size_t valueIndex = 0; valueIndex < 16; ++valueIndex)
+		matrix.append(static_cast<double>(values[valueIndex]));
+	    sample.insert(QStringLiteral("camera_view_projection"), matrix);
+	}
     }
     const uint64_t lastRender = controller->getLastRenderTimeNanoseconds();
     const uint64_t smoothRender =
@@ -279,6 +358,14 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	static_cast<double>(lastRender) / 1000000.0);
     sample.insert(QStringLiteral("smoothed_render_ms"),
 	static_cast<double>(smoothRender) / 1000000.0);
+    sample.insert(QStringLiteral("last_background_render_ms"),
+	static_cast<double>(
+	    controller->getLastBackgroundRenderTimeNanoseconds()) /
+	    1000000.0);
+    sample.insert(QStringLiteral("last_scene_render_ms"),
+	static_cast<double>(
+	    controller->getLastSceneRenderTimeNanoseconds()) /
+	    1000000.0);
     sample.insert(QStringLiteral("smoothed_present_ms"),
 	static_cast<double>(smoothPresentation) / 1000000.0);
     sample.insert(QStringLiteral("smoothed_present_fps"),
@@ -350,6 +437,8 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	controller->isLodInteractionActive() ? true : false);
     sample.insert(QStringLiteral("lod_gesture_active"),
 	controller->isLodGestureActive() ? true : false);
+    sample.insert(QStringLiteral("lod_scale_changing_interaction"),
+	controller->isLodScaleChangingInteraction() ? true : false);
     sample.insert(QStringLiteral("lod_target_pixel_error"),
 	static_cast<double>(controller->getLodTargetPixelError()));
     sample.insert(QStringLiteral("lod_interactive_progressive_ceiling"),
@@ -388,34 +477,218 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	    BOBOL_LOD_PROXY_SPHERE)));
     sample.insert(QStringLiteral("active_lod_cad_payloads"),
 	static_cast<qint64>(controller->getActiveLodCadPayloadCount()));
+    BObolLodConvergenceStatus convergence;
+    controller->getLodConvergenceStatus(convergence);
+    sample.insert(QStringLiteral("lod_convergence_phase"),
+	convergence.phase);
+    sample.insert(QStringLiteral("lod_convergence_fraction"),
+	static_cast<double>(convergence.fraction));
+    sample.insert(QStringLiteral("lod_convergence_view_ready"),
+	convergence.viewReady ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_background_pending"),
+	convergence.backgroundPending ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_performance_limited"),
+	convergence.performanceLimited ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_expected_leaves"),
+	static_cast<qint64>(convergence.expectedLeafCount));
+    sample.insert(QStringLiteral("lod_convergence_available_leaves"),
+	static_cast<qint64>(convergence.availableLeafCount));
+    sample.insert(QStringLiteral("lod_convergence_visible_targets"),
+	static_cast<qint64>(convergence.visibleTargetCount));
+    sample.insert(QStringLiteral("lod_convergence_active_payloads"),
+	static_cast<qint64>(convergence.activePayloadCount));
+    sample.insert(QStringLiteral("lod_convergence_satisfied_payloads"),
+	static_cast<qint64>(convergence.satisfiedPayloadCount));
+    sample.insert(QStringLiteral("lod_convergence_resident_mesh_bytes"),
+	static_cast<qint64>(convergence.residentMeshBytes));
+    sample.insert(QStringLiteral("lod_convergence_stable_resident_mesh_bytes"),
+	static_cast<qint64>(convergence.stableResidentMeshBytes));
+    sample.insert(QStringLiteral("lod_convergence_reserved_mesh_growth_bytes"),
+	static_cast<qint64>(convergence.reservedResidentMeshGrowthBytes));
+    sample.insert(QStringLiteral("lod_convergence_resident_mesh_limit_bytes"),
+	static_cast<qint64>(convergence.residentMeshLimitBytes));
+    sample.insert(QStringLiteral("lod_convergence_memory_limited_payloads"),
+	static_cast<qint64>(convergence.memoryLimitedPayloadCount));
+    sample.insert(QStringLiteral("lod_convergence_memory_limited"),
+	convergence.memoryLimited ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_refinement_frame_pending"),
+	convergence.refinementFramePending ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_budget_calibration_pending"),
+	convergence.budgetCalibrationPending ? true : false);
+    sample.insert(QStringLiteral(
+	"lod_convergence_stable_handoff_pending"),
+	convergence.stablePresentationHandoffPending ? true : false);
+    sample.insert(QStringLiteral(
+	"lod_convergence_point_proxy_calibration_pending"),
+	convergence.pointProxyCalibrationPending ? true : false);
+    sample.insert(QStringLiteral("lod_convergence_active_working_set_bytes"),
+	static_cast<qint64>(convergence.activeWorkingSetBytes));
+    sample.insert(QStringLiteral("lod_convergence_peak_working_set_bytes"),
+	static_cast<qint64>(convergence.peakWorkingSetBytes));
+    sample.insert(QStringLiteral("lod_convergence_compactions"),
+	static_cast<qint64>(convergence.residentCompactionCount));
     BObolViewLodState *viewLodState = controller->getViewLodState();
     qint64 compactEntries = 0;
+    qint64 compactSelectedEntries = 0;
+    qint64 cadSelectedInstances = 0;
     qint64 compactLodEntries = 0;
     qint64 compactFallbackEntries = 0;
     qint64 compactLodEntriesWithPayload = 0;
     qint64 compactFallbackEntriesWithPayload = 0;
     qint64 cadPayloadsWithoutEntry = 0;
     qint64 supersededFallbackPresentations = 0;
+    qint64 activeStructuralFallbackPresentations = 0;
     qint64 activeProgressiveCadPayloads = 0;
     qint64 activeProgressiveCadCullPayloads = 0;
     double activeProgressiveCadFaces = 0.0;
     double activeProgressiveCadCullFaces = 0.0;
     double activeProgressiveCadPoints = 0.0;
+    qint64 activeCadSubpixelProxyPoints = 0;
+    qint64 visibleStructuralFallbackBoxes = 0;
+    qint64 presentedCadFaces = 0;
+    qint64 measuredCadGpuFaces = 0;
+    uint64_t measuredCadGpuNanoseconds = 0;
+    uint64_t measuredCadGpuSampleSerial = 0;
+    qint64 cadFramePlanBuildCountMax = 0;
+    qint64 cadFramePlanInstanceRecordCountMax = 0;
+    bool cadPreparedReplayAll = true;
+    qint64 cadPresentationCount = 0;
+    double cadPointProxyPixelThresholdMax = 1.0;
+    int cadRenderTierMin = INT_MAX;
+    int cadRenderTierMax = -1;
+    int cadIndirectStatusMin = INT_MAX;
+    int cadIndirectStatusMax = -1;
+    std::unordered_set<const SoCADAssembly *> sampledCadPresentations;
     int activeProgressiveCadLevelMin = -1;
     int activeProgressiveCadLevelMax = -1;
     int requestedProgressiveCadLevelMin = -1;
     int requestedProgressiveCadLevelMax = -1;
-    std::vector<std::string> activeProgressiveCadOccurrenceKeys;
+    uint64_t activeProgressiveCadOccurrenceHash = 0;
     QJsonArray supersededFallbackPaths;
-    std::vector<SoBRLDatabaseSource *> renderSources;
-    qged_test_collect_database_source_roots(
-	controller->getRenderSceneRoot(), renderSources);
-    if (renderSources.empty())
-	qged_test_collect_database_source_roots(controller->getSceneRoot(),
-	    renderSources);
-    for (SoBRLDatabaseSource *source : renderSources) {
+    QJsonArray databaseSourceBounds;
+    QJsonArray compactPlanningBounds;
+    QJsonArray compactMissingPayloadBounds;
+    /*
+     * Payload aggregation is intentionally checkpoint-only.  At distinct
+     * asset scale findCadPayloadsUnordered plus the occurrence digest walks
+     * every resident payload; doing that after each synthetic mouse move
+     * added roughly 35 ms of GUI-thread work and made the observer manufacture
+     * the low presentation rate it was meant to measure.  Controller timing
+     * and aggregate scene-budget counters above remain available on every
+     * event.  The terminal event also requests deep diagnostics.
+     */
+    const bool collectPresentationDiagnostics =
+	collectDeepLodDiagnostics ||
+	event.action == QLatin1String("checkpoint");
+    if (collectPresentationDiagnostics) {
+	std::vector<SoBRLDatabaseSource *> renderSources;
+	qged_test_collect_database_source_roots(
+	    controller->getRenderSceneRoot(), renderSources);
+	if (renderSources.empty())
+	    qged_test_collect_database_source_roots(controller->getSceneRoot(),
+		renderSources);
+	for (SoBRLDatabaseSource *source : renderSources) {
 	if (!source || !source->hasCompactInstanceIndex())
 	    continue;
+	compactSelectedEntries +=
+	    source->getCompactSelectedInstanceCount();
+	if (viewLodState) {
+	    SoCADAssembly *presentation =
+		viewLodState->findCadPresentation(source);
+	    if (presentation &&
+		sampledCadPresentations.insert(presentation).second) {
+		cadPresentationCount++;
+		cadPreparedReplayAll =
+		    cadPreparedReplayAll &&
+		    presentation->lastRenderUsedPreparedReplay();
+		cadFramePlanBuildCountMax = std::max(
+		    cadFramePlanBuildCountMax,
+		    static_cast<qint64>(std::min<uint64_t>(
+			presentation->framePlanBuildCount(),
+			static_cast<uint64_t>(
+			    std::numeric_limits<qint64>::max()))));
+		cadFramePlanInstanceRecordCountMax = std::max(
+		    cadFramePlanInstanceRecordCountMax,
+		    static_cast<qint64>(std::min<size_t>(
+			presentation->framePlanInstanceRecordCount(),
+			static_cast<size_t>(
+			    std::numeric_limits<qint64>::max()))));
+		cadSelectedInstances += static_cast<qint64>(
+		    presentation->selectedInstanceCount());
+		activeCadSubpixelProxyPoints += static_cast<qint64>(
+		    presentation->lastSubpixelProxyCount());
+		cadPointProxyPixelThresholdMax = std::max(
+		    cadPointProxyPixelThresholdMax,
+		    static_cast<double>(
+			presentation->pointProxyPixelThreshold.getValue()));
+		visibleStructuralFallbackBoxes += static_cast<qint64>(
+		    presentation->lastUncollapsedStructuralProxyCount());
+		const uint64_t renderedTriangles =
+		    presentation->lastRenderedTriangleCount();
+		presentedCadFaces = renderedTriangles >
+			static_cast<uint64_t>(
+			    std::numeric_limits<qint64>::max() -
+				presentedCadFaces) ?
+		    std::numeric_limits<qint64>::max() :
+		    presentedCadFaces +
+			static_cast<qint64>(renderedTriangles);
+		const uint64_t gpuSampleSerial =
+		    presentation->gpuTimerSampleSerial();
+		const uint64_t gpuNanoseconds =
+		    presentation->lastGpuRenderNanoseconds();
+		const uint64_t gpuTriangles =
+		    presentation->lastGpuRenderedTriangleCount();
+		if (gpuSampleSerial && gpuNanoseconds) {
+		    measuredCadGpuSampleSerial =
+			std::max(measuredCadGpuSampleSerial, gpuSampleSerial);
+		    measuredCadGpuNanoseconds =
+			gpuNanoseconds >
+			    UINT64_MAX - measuredCadGpuNanoseconds ?
+			UINT64_MAX :
+			measuredCadGpuNanoseconds + gpuNanoseconds;
+		    measuredCadGpuFaces =
+			gpuTriangles > static_cast<uint64_t>(
+			    std::numeric_limits<qint64>::max() -
+				measuredCadGpuFaces) ?
+			std::numeric_limits<qint64>::max() :
+			measuredCadGpuFaces +
+			    static_cast<qint64>(gpuTriangles);
+		}
+		const int tier = presentation->lastRenderTier();
+		if (tier >= 0) {
+		    cadRenderTierMin = std::min(cadRenderTierMin, tier);
+		    cadRenderTierMax = std::max(cadRenderTierMax, tier);
+		}
+		const int indirectStatus =
+		    presentation->lastIndirectStatus();
+		if (indirectStatus >= 0) {
+		    cadIndirectStatusMin = std::min(
+			cadIndirectStatusMin, indirectStatus);
+		    cadIndirectStatusMax = std::max(
+			cadIndirectStatusMax, indirectStatus);
+		}
+	    }
+	}
+	if (collectDeepLodDiagnostics && databaseSourceBounds.size() < 16) {
+	    QJsonObject boundsSample;
+	    boundsSample.insert(QStringLiteral("path"),
+		QString::fromLocal8Bit(source->path.getValue().getString()));
+	    SbBox3f bounds;
+	    const bool valid = source->getSourceBounds(bounds) &&
+		!bounds.isEmpty();
+	    boundsSample.insert(QStringLiteral("valid"), valid);
+	    if (valid) {
+		const SbVec3f minimum = bounds.getMin();
+		const SbVec3f maximum = bounds.getMax();
+		boundsSample.insert(QStringLiteral("min_x"), minimum[0]);
+		boundsSample.insert(QStringLiteral("min_y"), minimum[1]);
+		boundsSample.insert(QStringLiteral("min_z"), minimum[2]);
+		boundsSample.insert(QStringLiteral("max_x"), maximum[0]);
+		boundsSample.insert(QStringLiteral("max_y"), maximum[1]);
+		boundsSample.insert(QStringLiteral("max_z"), maximum[2]);
+	    }
+	    databaseSourceBounds.append(boundsSample);
+	}
 	std::vector<const BObolViewLodState::CadPayload *> payloads;
 	if (viewLodState)
 	    viewLodState->findCadPayloadsUnordered(source, payloads);
@@ -423,8 +696,27 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	    if (!payload || !payload->progressiveMesh)
 		continue;
 	    activeProgressiveCadPayloads++;
-	    activeProgressiveCadOccurrenceKeys.push_back(
-		payload->sourceInstanceKey.getString());
+	    /*
+	     * Keep this order-independent so the unordered payload store does
+	     * not perturb reports.  Hash each key independently and combine the
+	     * digests commutatively.  The former copy/sort/hash implementation
+	     * allocated and sorted 50,000 strings after every motion event,
+	     * making the test observer a material GUI-thread perf sample.
+	     */
+	    uint64_t occurrenceDigest = UINT64_C(1469598103934665603);
+	    for (const unsigned char *c =
+		    reinterpret_cast<const unsigned char *>(
+			payload->sourceInstanceKey.getString());
+		 *c; ++c) {
+		occurrenceDigest ^= *c;
+		occurrenceDigest *= UINT64_C(1099511628211);
+	    }
+	    occurrenceDigest ^= occurrenceDigest >> 33;
+	    occurrenceDigest *= UINT64_C(0xff51afd7ed558ccd);
+	    occurrenceDigest ^= occurrenceDigest >> 33;
+	    occurrenceDigest *= UINT64_C(0xc4ceb9fe1a85ec53);
+	    occurrenceDigest ^= occurrenceDigest >> 33;
+	    activeProgressiveCadOccurrenceHash ^= occurrenceDigest;
 	    if (payload->shadedCullBackfaces) {
 		activeProgressiveCadCullPayloads++;
 		activeProgressiveCadCullFaces +=
@@ -455,6 +747,44 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	    const int entryCount = source->getCompactInstanceCount();
 	    entryKeys.reserve(static_cast<size_t>(entryCount));
 	    for (int entryIndex = 0; entryIndex < entryCount; entryIndex++) {
+		if (compactPlanningBounds.size() < 16) {
+		    BObolCompactLodPlanningSummary planning;
+		    if (source->getCompactLodPlanningSummary(entryIndex,
+			    planning) && planning.valid) {
+			QJsonObject planningSample;
+			planningSample.insert(QStringLiteral("entry"),
+			    entryIndex);
+			planningSample.insert(QStringLiteral("lod_backed"),
+			    planning.lodBacked ? true : false);
+			planningSample.insert(
+			    QStringLiteral("source_request_valid"),
+			    planning.sourceMeshRequestValid ? true : false);
+			const SbVec3f minimum = planning.localBounds.getMin();
+			const SbVec3f maximum = planning.localBounds.getMax();
+			planningSample.insert(QStringLiteral("min_x"),
+			    minimum[0]);
+			planningSample.insert(QStringLiteral("min_y"),
+			    minimum[1]);
+			planningSample.insert(QStringLiteral("min_z"),
+			    minimum[2]);
+			planningSample.insert(QStringLiteral("max_x"),
+			    maximum[0]);
+			planningSample.insert(QStringLiteral("max_y"),
+			    maximum[1]);
+			planningSample.insert(QStringLiteral("max_z"),
+			    maximum[2]);
+			SbVec3f origin;
+			planning.localToSource.multVecMatrix(
+			    SbVec3f(0.0f, 0.0f, 0.0f), origin);
+			planningSample.insert(QStringLiteral("origin_x"),
+			    origin[0]);
+			planningSample.insert(QStringLiteral("origin_y"),
+			    origin[1]);
+			planningSample.insert(QStringLiteral("origin_z"),
+			    origin[2]);
+			compactPlanningBounds.append(planningSample);
+		    }
+		}
 		BObolCompactInstanceHandle handle;
 		BObolCompactInstanceSummary summary;
 		if (!source->getCompactInstanceHandle(entryIndex, handle) ||
@@ -466,6 +796,52 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 		    entryKeys.insert(key);
 		const bool hasPayload = !key.empty() &&
 		    payloadKeys.find(key) != payloadKeys.end();
+		if (!hasPayload && compactMissingPayloadBounds.size() < 16) {
+		    BObolCompactLodPlanningSummary planning;
+		    if (source->getCompactLodPlanningSummary(entryIndex,
+			    planning) && planning.valid) {
+			SbBox3f worldBounds;
+			worldBounds.makeEmpty();
+			const SbVec3f minimum = planning.localBounds.getMin();
+			const SbVec3f maximum = planning.localBounds.getMax();
+			for (int corner = 0; corner < 8; ++corner) {
+			    const SbVec3f local(
+				(corner & 1) ? maximum[0] : minimum[0],
+				(corner & 2) ? maximum[1] : minimum[1],
+				(corner & 4) ? maximum[2] : minimum[2]);
+			    SbVec3f world;
+			    planning.localToSource.multVecMatrix(local, world);
+			    worldBounds.extendBy(world);
+			}
+			QJsonObject missingSample;
+			missingSample.insert(QStringLiteral("entry"),
+			    entryIndex);
+			missingSample.insert(QStringLiteral("key"),
+			    QString::fromStdString(key));
+			missingSample.insert(QStringLiteral("eligible"),
+			    planning.lodBacked &&
+				planning.sourceMeshRequestValid);
+			if (!worldBounds.isEmpty()) {
+			    const SbVec3f worldMinimum =
+				worldBounds.getMin();
+			    const SbVec3f worldMaximum =
+				worldBounds.getMax();
+			    missingSample.insert(QStringLiteral("min_x"),
+				worldMinimum[0]);
+			    missingSample.insert(QStringLiteral("min_y"),
+				worldMinimum[1]);
+			    missingSample.insert(QStringLiteral("min_z"),
+				worldMinimum[2]);
+			    missingSample.insert(QStringLiteral("max_x"),
+				worldMaximum[0]);
+			    missingSample.insert(QStringLiteral("max_y"),
+				worldMaximum[1]);
+			    missingSample.insert(QStringLiteral("max_z"),
+				worldMaximum[2]);
+			}
+			compactMissingPayloadBounds.append(missingSample);
+		    }
+		}
 		if (summary.lodBacked && summary.sourceMeshRequestValid) {
 		    compactLodEntries++;
 		    if (hasPayload)
@@ -485,27 +861,22 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	    supersededFallbackPresentations +=
 		source->getCompactViewLodSupersededFallbackCount(viewLodState,
 		&supersededPaths);
+	    activeStructuralFallbackPresentations +=
+		source->getCompactViewLodActiveFallbackCount(viewLodState);
 	    for (const SbString &path : supersededPaths)
 		if (supersededFallbackPaths.size() < 16)
 		    supersededFallbackPaths.append(
 			QString::fromLocal8Bit(path.getString()));
 	}
     }
-    std::sort(activeProgressiveCadOccurrenceKeys.begin(),
-	activeProgressiveCadOccurrenceKeys.end());
-    uint64_t activeProgressiveCadOccurrenceHash =
-	UINT64_C(1469598103934665603);
-    for (const std::string &key : activeProgressiveCadOccurrenceKeys) {
-	for (unsigned char c : key) {
-	    activeProgressiveCadOccurrenceHash ^= c;
-	    activeProgressiveCadOccurrenceHash *= UINT64_C(1099511628211);
-	}
-	activeProgressiveCadOccurrenceHash ^= 0xff;
-	activeProgressiveCadOccurrenceHash *= UINT64_C(1099511628211);
     }
     sample.insert(QStringLiteral("deep_lod_diagnostics"),
 	collectDeepLodDiagnostics);
     sample.insert(QStringLiteral("compact_entries"), compactEntries);
+    sample.insert(QStringLiteral("compact_selected_entries"),
+	compactSelectedEntries);
+    sample.insert(QStringLiteral("cad_selected_instances"),
+	cadSelectedInstances);
     sample.insert(QStringLiteral("compact_lod_entries"), compactLodEntries);
     sample.insert(QStringLiteral("compact_fallback_entries"),
 	compactFallbackEntries);
@@ -517,8 +888,18 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	cadPayloadsWithoutEntry);
     sample.insert(QStringLiteral("superseded_fallback_presentations"),
 	supersededFallbackPresentations);
+    sample.insert(QStringLiteral("active_structural_fallback_presentations"),
+	activeStructuralFallbackPresentations);
     sample.insert(QStringLiteral("superseded_fallback_paths"),
 	supersededFallbackPaths);
+    if (collectDeepLodDiagnostics) {
+	sample.insert(QStringLiteral("database_source_bounds"),
+	    databaseSourceBounds);
+	sample.insert(QStringLiteral("compact_planning_bounds"),
+	    compactPlanningBounds);
+	sample.insert(QStringLiteral("compact_missing_payload_bounds"),
+	    compactMissingPayloadBounds);
+    }
     sample.insert(QStringLiteral("active_progressive_cad_payloads"),
 	activeProgressiveCadPayloads);
     sample.insert(QStringLiteral("active_progressive_cad_occurrence_hash"),
@@ -532,6 +913,33 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	activeProgressiveCadCullFaces);
     sample.insert(QStringLiteral("active_progressive_cad_points"),
 	activeProgressiveCadPoints);
+    sample.insert(QStringLiteral("active_cad_subpixel_proxy_points"),
+	activeCadSubpixelProxyPoints);
+    sample.insert(QStringLiteral("cad_point_proxy_pixel_threshold_max"),
+	cadPointProxyPixelThresholdMax);
+    sample.insert(QStringLiteral("visible_structural_fallback_boxes"),
+	visibleStructuralFallbackBoxes);
+    sample.insert(QStringLiteral("presented_cad_faces"),
+	presentedCadFaces);
+    sample.insert(QStringLiteral("measured_cad_gpu_faces"),
+	measuredCadGpuFaces);
+    sample.insert(QStringLiteral("measured_cad_gpu_ms"),
+	static_cast<double>(measuredCadGpuNanoseconds) / 1000000.0);
+    sample.insert(QStringLiteral("measured_cad_gpu_sample_serial"),
+	QString::number(measuredCadGpuSampleSerial));
+    sample.insert(QStringLiteral("cad_frame_plan_build_count_max"),
+	cadFramePlanBuildCountMax);
+    sample.insert(QStringLiteral("cad_frame_plan_instance_record_count_max"),
+	cadFramePlanInstanceRecordCountMax);
+    sample.insert(QStringLiteral("cad_prepared_replay_all"),
+	cadPresentationCount > 0 && cadPreparedReplayAll);
+    sample.insert(QStringLiteral("cad_render_tier_min"),
+	cadRenderTierMin == INT_MAX ? -1 : cadRenderTierMin);
+    sample.insert(QStringLiteral("cad_render_tier_max"), cadRenderTierMax);
+    sample.insert(QStringLiteral("cad_indirect_status_min"),
+	cadIndirectStatusMin == INT_MAX ? -1 : cadIndirectStatusMin);
+    sample.insert(QStringLiteral("cad_indirect_status_max"),
+	cadIndirectStatusMax);
     sample.insert(QStringLiteral("active_progressive_cad_level_min"),
 	activeProgressiveCadLevelMin);
     sample.insert(QStringLiteral("active_progressive_cad_level_max"),
@@ -559,6 +967,17 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	sample.insert(QStringLiteral("lod_service_resident_bytes"),
 	    static_cast<qint64>(
 		service->residentMeshBytesForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_stable_resident_bytes"),
+	    static_cast<qint64>(
+		service->stableResidentMeshBytesForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_reserved_growth_bytes"),
+	    static_cast<qint64>(
+		service->reservedResidentMeshGrowthBytesForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_resident_admission_revision"),
+	    static_cast<qint64>(
+		service->residentMeshAdmissionRevision()));
+	sample.insert(QStringLiteral("lod_service_resident_limit_bytes"),
+	    static_cast<qint64>(service->getResidentMeshLimit()));
 	sample.insert(QStringLiteral("lod_service_working_set_limit_bytes"),
 	    static_cast<qint64>(service->getWorkingSetLimit()));
 	sample.insert(QStringLiteral("lod_service_active_working_set_bytes"),
@@ -582,6 +1001,9 @@ qged_test_controller_sample(QgEdApp &app, int eventIndex,
 	sample.insert(QStringLiteral("lod_service_compactions"),
 	    static_cast<qint64>(
 		service->residentMeshCompactionCountForDiagnostics()));
+	sample.insert(QStringLiteral("lod_service_evictions"),
+	    static_cast<qint64>(
+		service->residentMeshEvictionCountForDiagnostics()));
     }
     sample.insert(QStringLiteral("lod_global_working_set_limit_bytes"),
 	static_cast<qint64>(bobol_lod_working_set_global_limit()));
@@ -635,10 +1057,9 @@ static bool
 qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     int quietMilliseconds, QString *error)
 {
-    QgView *view = app.w ? app.w->CurrentDisplay() : nullptr;
-    BObolViewController *controller =
-	view ? view->obolViewController() : nullptr;
-    if (!controller) {
+    const std::vector<BObolViewController *> controllers =
+	qged_test_all_controllers(app);
+    if (controllers.empty()) {
 	if (error)
 	    *error = QStringLiteral(
 		"wait_progressive_idle requires an Obol view controller");
@@ -652,21 +1073,27 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     elapsed.start();
 
     while (elapsed.elapsed() <= timeoutMilliseconds) {
-	BObolLodService *service = controller->getLodService();
-	const bool serviceIdle =
-	    !service ||
-	    (service->pendingTaskCountForDiagnostics() == 0 &&
-	     service->delayedTaskCountForDiagnostics() == 0 &&
-	     service->inFlightCount() == 0 &&
-	     service->activeRequestCountForDiagnostics() == 0 &&
-	     service->queuedResultCountForDiagnostics() == 0 &&
-	     service->queuedCacheWriteCountForDiagnostics() == 0);
-	const bool idle =
-	    !controller->hasProgressiveWorkPending() &&
-	    !controller->hasPendingLodResults() &&
-	    !controller->hasPendingLodSubmissions() &&
-	    !controller->hasPendingLodRefinementFrame() &&
-	    serviceIdle;
+	bool idle = true;
+	for (BObolViewController *controller : controllers) {
+	    BObolLodService *service = controller->getLodService();
+	    const bool serviceIdle =
+		!service ||
+		(service->pendingTaskCountForDiagnostics() == 0 &&
+		 service->delayedTaskCountForDiagnostics() == 0 &&
+		 service->inFlightCount() == 0 &&
+		 service->activeRequestCountForDiagnostics() == 0 &&
+		 service->queuedResultCountForDiagnostics() == 0 &&
+		 service->queuedCacheWriteCountForDiagnostics() == 0);
+	    if (controller->hasProgressiveWorkPending() ||
+		controller->hasPendingLodResults() ||
+		controller->hasPendingLodSubmissions() ||
+		controller->hasPendingLodRefinementFrame() ||
+		controller->isRenderRequested() ||
+		!serviceIdle) {
+		idle = false;
+		break;
+	    }
+	}
 
 	if (idle) {
 	    if (!quiet.isValid())
@@ -688,17 +1115,39 @@ qged_test_wait_progressive_idle(QgEdApp &app, int timeoutMilliseconds,
     }
 
     if (error) {
+	BObolViewController *controller = controllers.front();
+	for (BObolViewController *candidate : controllers) {
+	    BObolLodService *candidateService = candidate->getLodService();
+	    if (candidate->hasProgressiveWorkPending() ||
+		candidate->hasPendingLodResults() ||
+		candidate->hasPendingLodSubmissions() ||
+		candidate->hasPendingLodRefinementFrame() ||
+		candidate->isRenderRequested() ||
+		(candidateService &&
+		 (candidateService->pendingTaskCountForDiagnostics() != 0 ||
+		  candidateService->delayedTaskCountForDiagnostics() != 0 ||
+		  candidateService->inFlightCount() != 0 ||
+		  candidateService->activeRequestCountForDiagnostics() != 0 ||
+		  candidateService->queuedResultCountForDiagnostics() != 0 ||
+		  candidateService->queuedCacheWriteCountForDiagnostics() != 0))) {
+		controller = candidate;
+		break;
+	    }
+	}
 	BObolLodService *service = controller->getLodService();
 	*error = QStringLiteral(
 	    "progressive pipeline did not become idle within %1 ms "
-	    "(progressive=%2 results=%3 submissions=%4 refinement_frame=%5 "
-	    "pending=%6 delayed=%7 in_flight=%8 active=%9 queued=%10 "
-	    "cache_writes=%11)")
+	    "across %2 controller(s) "
+	    "(progressive=%3 results=%4 submissions=%5 refinement_frame=%6 "
+	    "render=%7 pending=%8 delayed=%9 in_flight=%10 active=%11 "
+	    "queued=%12 cache_writes=%13)")
 	    .arg(timeoutMilliseconds)
+	    .arg(controllers.size())
 	    .arg(controller->hasProgressiveWorkPending() ? 1 : 0)
 	    .arg(controller->hasPendingLodResults() ? 1 : 0)
 	    .arg(controller->hasPendingLodSubmissions() ? 1 : 0)
 	    .arg(controller->hasPendingLodRefinementFrame() ? 1 : 0)
+	    .arg(controller->isRenderRequested() ? 1 : 0)
 	    .arg(service ?
 		static_cast<qulonglong>(
 		    service->pendingTaskCountForDiagnostics()) : 0)
@@ -978,9 +1427,19 @@ main(int argc, char **argv)
 		 * explicit wait events provide the real event-loop intervals. */
 		const qint64 eventMicroseconds =
 		    eventElapsed.nsecsElapsed() / 1000;
+		const char *deepReportMode =
+		    std::getenv("QGED_TEST_DEEP_LOD_REPORT");
+		const bool deepReportExplicitlyDisabled =
+		    deepReportMode &&
+		    (BU_STR_EQUAL(deepReportMode, "0") ||
+		     BU_STR_EQUAL(deepReportMode, "false") ||
+		     BU_STR_EQUAL(deepReportMode, "off"));
+		const bool deepReportEverySample =
+		    deepReportMode && !deepReportExplicitlyDisabled;
 		const bool deepLodDiagnostics =
-		    i + 1 == events.size() ||
-		    std::getenv("QGED_TEST_DEEP_LOD_REPORT") != NULL;
+		    deepReportEverySample ||
+		    (!deepReportExplicitlyDisabled &&
+		     i + 1 == events.size());
 		QElapsedTimer sampleElapsed;
 		sampleElapsed.start();
 		QJsonObject sample = qged_test_controller_sample(app, i,

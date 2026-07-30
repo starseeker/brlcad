@@ -93,6 +93,10 @@ check_manifest(const BObolDrawManifest *manifest)
 	    manifest->occurrences[0].meshAssetBoundsMin[X], -10.0) ||
 	!fastf_equal(
 	    manifest->occurrences[0].meshAssetBoundsMax[Z], 60.0) ||
+	!fastf_equal(
+	    manifest->occurrences[0].meshAssetMatrix[MDX], 2.0) ||
+	!fastf_equal(
+	    manifest->occurrences[0].meshAssetMatrix[MDZ], 8.0) ||
 	manifest->occurrences[1].sourceMeshRequestValid ||
 	manifest->occurrences[0].booleanOperation != DB_OP_UNION ||
 	manifest->occurrences[1].booleanOperation != DB_OP_SUBTRACT ||
@@ -134,6 +138,8 @@ make_manifest(BObolDrawManifest *manifest)
     leaf.meshAssetName = bu_strdup(path_leaf_name);
     VSET(leaf.meshAssetBoundsMin, -10.0, -20.0, -30.0);
     VSET(leaf.meshAssetBoundsMax, 40.0, 50.0, 60.0);
+    MAT_IDN(leaf.meshAssetMatrix);
+    MAT_DELTAS(leaf.meshAssetMatrix, 2.0, 4.0, 8.0);
     leaf.sourceFaceCount = 123456;
     leaf.sourcePointCount = 65432;
     MAT_IDN(leaf.localMatrix);

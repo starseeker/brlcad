@@ -63,6 +63,13 @@ public:
     SbBool getAllowLevelDowngrade(void) const;
     void setAllowRetainedRefinement(SbBool allow);
     SbBool getAllowRetainedRefinement(void) const;
+    /* A coverage pass may exceed the learned triangle budget by the minimum
+     * drawable prefix of each visible mesh.  This is a presentation floor,
+     * not refinement: renderer-side point aggregation is responsible for
+     * keeping that floor interactive without reverting available meshes to
+     * boxes. */
+    void setPreserveMeshCoverage(SbBool preserve);
+    SbBool getPreserveMeshCoverage(void) const;
     /* Bound aggregate upward PoP growth selected by this traversal.  The
      * budget applies equally to an already-resident cut change and to a
      * provider request for the next missing level. */
@@ -78,14 +85,23 @@ public:
      * again for every result-queue window, and a camera change can reorder a
      * partially consumed cursor so entries are skipped. */
     void setCompactEntryPlan(const std::vector<size_t> &entryIndices);
+    /* Borrow a controller-owned plan for this synchronous action traversal.
+     * The caller must retain the vector through apply().  This avoids
+     * allocating and copying tens of thousands of indices for every bounded
+     * UI-thread window. */
+    void setCompactEntryPlanView(
+	const std::vector<size_t> *entryIndices);
     void getCompactEntryPlan(std::vector<size_t> &entryIndices) const;
     /* Provider queue capacity limits tasks, not cheap scene decisions.
      * Retargeting resident cuts and binding shared assets may scan the whole
      * pinned plan without consuming a result slot. */
     void setSubmissionTaskLimit(size_t taskCount);
+    /* Bound compact occurrence planning on an interactive caller thread.
+     * The current entry is atomic; zero disables the deadline. */
+    void setSubmissionTimeLimit(uint64_t microseconds);
     /* When an already-resident scene exceeds its calibrated total budget,
-     * re-admit retained occurrences in pinned priority order.  Occurrences
-     * whose minimum cut cannot fit fall back to their structural proxy. */
+     * retarget retained occurrences to minimum prefixes in pinned priority
+     * order.  The budget limits refinement above the mesh-coverage floor. */
     void setRetainedSceneFaceBudget(size_t totalFaces);
     size_t getRetainedSceneFaceBudgetUsed(void) const;
     size_t getCompactEntryNext(void) const;
@@ -97,6 +113,12 @@ public:
     unsigned int getUpdatedCutCount(void) const;
     unsigned int getPendingRetainedRefinementCount(void) const;
     unsigned int getSkippedMeshCount(void) const;
+    /* Projected compact occurrences visited by this bounded window, and the
+     * subset which already had a drawable payload when visited.  Controllers
+     * use these counters to finish a coverage-only pass before spending the
+     * scene budget on richer prefixes. */
+    size_t getVisibleMeshCount(void) const;
+    size_t getCoveredVisibleMeshCount(void) const;
     const SbString &getDiagnostics(void) const;
 
 protected:
@@ -110,6 +132,9 @@ private:
     SbBool reserveRefinementFaces(
 	const BObolLodProgressiveMeshPtr &progressiveMesh,
 	int activeLevel, int nextLevel);
+    int reserveRefinementLevel(
+	const BObolLodProgressiveMeshPtr &progressiveMesh,
+	int activeLevel, int preferredLevel);
     /* Reserve a conservative first-cut population before its hierarchy has
      * been opened by a worker.  This closes the all-box zero-face blind spot:
      * thousands of independent warm-cache requests must not each interpret
@@ -139,6 +164,7 @@ private:
     SbBool requireLodBacked;
     SbBool allowLevelDowngrade;
     SbBool allowRetainedRefinement;
+    SbBool preserveMeshCoverage;
     size_t refinementFaceBudget;
     size_t refinementFaceBudgetUsed;
     unsigned int refinementBudgetBlockedCount;
@@ -148,8 +174,10 @@ private:
     size_t compactEntryNext;
     size_t compactEntryTotal;
     std::vector<size_t> compactEntryPlan;
+    const std::vector<size_t> *compactEntryPlanView;
     SbBool compactEntryPlanSupplied;
     size_t submissionTaskLimit;
+    uint64_t submissionTimeLimitMicroseconds;
     size_t retainedSceneFaceBudget;
     size_t retainedSceneFaceBudgetUsed;
     /* Occurrences charged by the scene-wide retained recovery pass.  The
@@ -161,6 +189,8 @@ private:
     unsigned int updatedCutCount;
     unsigned int pendingRetainedRefinementCount;
     unsigned int skippedMeshCount;
+    size_t visibleMeshCount;
+    size_t coveredVisibleMeshCount;
     unsigned int diagnosticCount;
     unsigned int suppressedDiagnosticCount;
     SbString diagnostics;

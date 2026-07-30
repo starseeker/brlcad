@@ -277,6 +277,10 @@ public:
 
     SoBRLDatabaseSource *getDatabaseSource(int index) const;
     int getDatabaseSourceCount(void) const;
+    /* Constant-time owner lookup for asynchronous compact-LoD results.
+     * The routing id is an in-process lifetime token, not scene or cache
+     * identity.  Rebuilds occur only after structural scene mutations. */
+    SoBRLDatabaseSource *findDatabaseSourceRoutingId(uint64_t routingId) const;
     SoBRLDatabaseSource *findDatabaseSource(const char *sourcePath) const;
     SoBRLDatabaseSource *findDatabaseSourceInstance(
 	const char *sourceInstanceKey) const;

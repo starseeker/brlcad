@@ -50,6 +50,7 @@
 #endif
 #include <QThread>
 #include <QWidget>
+#include <QWindow>
 
 #include <cmath>
 #include <string.h>
@@ -66,15 +67,15 @@ class ThreadAffinityCanvas : public QgSW {
 public:
     explicit ThreadAffinityCanvas(QWidget *parent = nullptr) : QgSW(parent) {}
 
-    void need_update() override
+    void present_frame() override
     {
-	need_update_calls++;
+	frame_update_calls++;
 	update_on_application_thread &=
 	    QThread::currentThread() == QCoreApplication::instance()->thread();
-	QgSW::need_update();
+	QgSW::present_frame();
     }
 
-    int need_update_calls = 0;
+    int frame_update_calls = 0;
     bool update_on_application_thread = true;
 };
 
@@ -504,7 +505,7 @@ test_qtcad_factory_frame_thread_affinity(void)
 	"Qt affinity test opens embedded software factory");
 
     QApplication::processEvents();
-    const int calls_before = canvas.need_update_calls;
+    const int calls_before = canvas.frame_update_calls;
     canvas.update_on_application_thread = true;
     int request_ok = 0;
     std::thread worker([&]() {
@@ -515,9 +516,9 @@ test_qtcad_factory_frame_thread_affinity(void)
 
     QElapsedTimer timer;
     timer.start();
-    while (canvas.need_update_calls == calls_before && timer.elapsed() < 2000)
+    while (canvas.frame_update_calls == calls_before && timer.elapsed() < 2000)
 	QApplication::processEvents();
-    CHECK(request_ok && canvas.need_update_calls > calls_before &&
+    CHECK(request_ok && canvas.frame_update_calls > calls_before &&
 	canvas.update_on_application_thread,
 	"Qt factory queues worker frame requests on the application thread");
 
@@ -570,17 +571,32 @@ test_qtcad_system_gl_factory_endpoint(void)
 
     QElapsedTimer timer;
     timer.start();
-	while ((!canvas->isVisible() || !canvas->isValid()) && timer.elapsed() < 2000) {
+	while ((!canvas->isVisible() || !canvas->isValid() ||
+		!canvas->windowHandle() ||
+		!canvas->windowHandle()->isExposed()) &&
+	    timer.elapsed() < 2000) {
 	QApplication::processEvents();
 	QThread::msleep(1);
     }
     CHECK(canvas->isVisible() && canvas->isValid() && canvas->context(),
 	"Qt system-GL endpoint creates a visible widget with a valid context");
+    /* Some headless X11 test seats create a valid QOpenGLWidget context but
+     * never expose a standalone toplevel surface.  Qt intentionally suppresses
+     * update()/frameSwapped() in that state, so graphical presentation cannot
+     * be asserted there.  Embedded qged graphical tests cover the exposed
+     * System-GL path. */
+    if (!canvas->windowHandle() || !canvas->windowHandle()->isExposed()) {
+	bobol_display_endpoint_destroy(endpoint);
+	return 0;
+    }
 
     canvas->makeCurrent();
     CHECK(QOpenGLContext::currentContext() == canvas->context(),
 	"Qt system-GL endpoint makes its widget context current");
     canvas->doneCurrent();
+    int presented_frames = 0;
+    QObject::connect(canvas, &QOpenGLWidget::frameSwapped,
+	[&presented_frames]() { presented_frames++; });
 
     BObolViewController *controller = static_cast<BObolViewController *>(
 	bobol_display_endpoint_controller(endpoint));
@@ -606,6 +622,17 @@ test_qtcad_system_gl_factory_endpoint(void)
 	QApplication::processEvents();
 	QThread::msleep(1);
     }
+    if (controller->isRenderRequested())
+	bu_log("Qt system-GL pending frame: reason=%s progressive=%d "
+	       "results=%d submissions=%d refinement=%d frames=%d "
+	       "visible=%d valid=%d\n",
+	       controller->getRenderReason().getString(),
+	       controller->hasProgressiveWorkPending() ? 1 : 0,
+	       controller->hasPendingLodResults() ? 1 : 0,
+	       controller->hasPendingLodSubmissions() ? 1 : 0,
+	       controller->hasPendingLodRefinementFrame() ? 1 : 0,
+	       presented_frames, canvas->isVisible() ? 1 : 0,
+	       canvas->isValid() ? 1 : 0);
     CHECK(!controller->isRenderRequested(),
 	"Qt system-GL widget consumes the queued Obol frame");
 

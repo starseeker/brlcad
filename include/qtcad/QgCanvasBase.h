@@ -140,6 +140,14 @@ public:
 
     /* -- virtual slots (dispatched directly by QgView) -- */
     virtual void need_update() = 0;
+    /**
+     * Wake the backend to present already-synchronized renderer state.
+     *
+     * Unlike need_update(), this must not claim that the semantic camera or
+     * scene changed.  Window-host frame callbacks use it when asynchronous
+     * renderer work becomes ready.
+     */
+    virtual void present_frame() = 0;
     virtual void queued_update() = 0;
     virtual void set_lmouse_move_default(int mode) = 0;
 };

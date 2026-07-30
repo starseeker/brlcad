@@ -92,6 +92,7 @@ void init_done();
 
 public slots:
 void need_update()                override;
+void present_frame()              override;
 void queued_update()              override;
 void set_lmouse_move_default(int) override;
 

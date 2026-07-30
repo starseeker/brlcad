@@ -109,7 +109,10 @@ private:
 	uint64_t selectionRevision = 0;
     };
 
-    std::map<Obol::InstanceId, InstanceSemantic> semantics;
+    void reserveCompactPresentationCapacity(size_t expectedOccurrences);
+
+    std::unordered_map<Obol::InstanceId, InstanceSemantic,
+	std::hash<Obol::InstanceId>> semantics;
     SbBool compactPresentationInitialized = FALSE;
     const void *compactPresentationIndex = NULL;
     uint32_t compactPresentationSourceRevision = 0;
@@ -121,6 +124,10 @@ private:
     size_t compactShadedPresentationCount = 0;
     std::unordered_map<Obol::InstanceId, CompactInstancePresentation,
 	std::hash<Obol::InstanceId>> compactInstancePresentations;
+    /* Exact active presentation references make sparse box->mesh swaps
+     * independent of total scene size. */
+    std::unordered_map<Obol::PartId, size_t, std::hash<Obol::PartId>>
+	compactActivePartReferences;
     std::unordered_map<Obol::PartId, uint8_t, std::hash<Obol::PartId>>
 	compactPartChannels;
     std::unordered_set<Obol::PartId, std::hash<Obol::PartId>>

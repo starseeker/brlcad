@@ -491,7 +491,17 @@ qg_factory_request_frame(void *instance, const char *UNUSED(reason),
     QgObolWindowHost *host = static_cast<QgObolWindowHost *>(instance);
     if (!host || !host->canvas() || !host->canvas()->asQObject())
 	return 0;
-    return QMetaObject::invokeMethod(host->canvas()->asQObject(), "need_update",
+    /*
+     * A controller frame request means “present the already synchronized
+     * scene,” not “mutate the RT view.”  need_update() performs a semantic
+     * BV_REFRESH_VIEW and can install a second rt-view-camera request before
+     * the queued paint consumes the first one.  present_frame() requests only
+     * framebuffer presentation and enters the canvas' coalescing update path;
+     * paintGL()/paintEvent() performs the normal idempotent camera sync
+     * immediately before rendering.
+     */
+    return QMetaObject::invokeMethod(host->canvas()->asQObject(),
+	"present_frame",
 	Qt::QueuedConnection) ? 1 : 0;
 }
 

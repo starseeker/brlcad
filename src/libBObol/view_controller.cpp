@@ -201,10 +201,10 @@ struct ControllerGLFunctions {
 BObolProgressiveOptions::BObolProgressiveOptions(void) :
     /* maxLodResults caps results applied per frame pump.  It is now applied in
      * batched single-scene traversals (see processPendingLodResults) and still
-     * bounded by maxLodApplyMicroseconds, so a larger cap lets a big assembly
-     * stream in far faster without risking frame-time spikes (the microsecond
-     * budget short-circuits the batch loop). */
-    maxLodResults(256),
+     * bounded by maxLodApplyMicroseconds.  The inner atomic quantum is kept
+     * small enough for that time budget to be meaningful; this outer ceiling
+     * permits several cheap quanta in one pump. */
+    maxLodResults(2048),
     maxLodApplyMicroseconds(4000),
     maxProviders(0),
     /* The microsecond limit is the responsiveness contract.  A 64-item
@@ -243,6 +243,47 @@ BObolProgressiveStatus::clear(void)
     this->queuedCacheWrites = 0;
     this->changed = 0;
     this->hasMore = 0;
+}
+
+BObolLodConvergenceStatus::BObolLodConvergenceStatus(void)
+{
+    this->clear();
+}
+
+void
+BObolLodConvergenceStatus::clear(void)
+{
+    this->phase = BOBOL_LOD_CONVERGENCE_IDLE;
+    this->viewRevision = 0;
+    this->expectedLeafCount = 0;
+    this->availableLeafCount = 0;
+    this->visibleTargetCount = 0;
+    this->activePayloadCount = 0;
+    this->satisfiedPayloadCount = 0;
+    this->pendingTasks = 0;
+    this->inFlight = 0;
+    this->queuedResults = 0;
+    this->queuedCacheWrites = 0;
+    this->activeFaces = 0;
+    this->faceBudget = 0;
+    this->residentMeshBytes = 0;
+    this->stableResidentMeshBytes = 0;
+    this->reservedResidentMeshGrowthBytes = 0;
+    this->residentMeshLimitBytes = 0;
+    this->memoryLimitedPayloadCount = 0;
+    this->activeWorkingSetBytes = 0;
+    this->peakWorkingSetBytes = 0;
+    this->residentCompactionCount = 0;
+    this->fraction = 0.0f;
+    this->viewReady = FALSE;
+    this->backgroundPending = FALSE;
+    this->performanceLimited = FALSE;
+    this->memoryLimited = FALSE;
+    this->refinementFramePending = FALSE;
+    this->budgetCalibrationPending = FALSE;
+    this->stablePresentationHandoffPending = FALSE;
+    this->pointProxyCalibrationPending = FALSE;
+    this->failedSourceCount = 0;
 }
 
 BObolProgressiveProviderRecord::BObolProgressiveProviderRecord(void) :
@@ -1169,6 +1210,14 @@ struct BObolViewController::Impl {
     void *presentationSyncUserData = NULL;
     uint64_t lastRenderTimeNanoseconds = 0;
     uint64_t smoothedRenderTimeNanoseconds = 0;
+    uint64_t lastBackgroundRenderTimeNanoseconds = 0;
+    uint64_t lastSceneRenderTimeNanoseconds = 0;
+    /* Full CAD plan/atlas construction is a real latency problem, but not a
+     * measurement of steady triangle throughput.  Only an unchanged prepared
+     * replay may drive quiet-view capacity cuts. */
+    SbBool lodLastRenderWasPreparedCadReplay = TRUE;
+    uint64_t lodLastCadGpuSampleSerial = 0;
+    uint64_t lodLastCadGpuTimeNanoseconds = 0;
     uint64_t lastProgressiveAdvanceTimeNanoseconds = 0;
     uint64_t lastLodResultProcessingTimeNanoseconds = 0;
     uint64_t lastProgressiveProviderTimeNanoseconds = 0;
@@ -1201,11 +1250,90 @@ struct BObolViewController::Impl {
     SoBRLDatabaseSource *lodSubmissionPlanSource = NULL;
     std::vector<size_t> lodSubmissionPlanEntries;
     SbBool lodSubmissionPlanValid = FALSE;
+    SoBRLDatabaseSource *lodSubmissionVisibleCountSource = NULL;
+    size_t lodSubmissionVisibleCount = 0;
+    /* Large compact scenes are consumed in bounded GUI-thread windows.  A
+     * coverage pass suppresses upward refinement until one complete current-
+     * view scan has offered every projected leaf its minimum drawable mesh.
+     * This prevents early entries from exhausting the scene budget while
+     * later entries remain boxes. */
+    SbBool lodCoveragePassActive = TRUE;
+    SbBool lodCoveragePassSawBoundedSource = FALSE;
+    size_t lodCoveragePassVisibleCount = 0;
+    size_t lodCoveragePassCoveredCount = 0;
+    /*
+     * The newest completed camera pass proved that every projected mesh
+     * occurrence already has a retained mesh presentation.  While input is
+     * active, richer worker results may then remain queued without exposing
+     * boxes or missing newly visible geometry.
+     */
+    SbBool lodVisibleCoverageComplete = FALSE;
+    std::vector<std::pair<SoBRLDatabaseSource *, size_t>>
+	lodConvergenceCandidateCounts;
+    /*
+     * Authoritative visible-mesh denominator from the newest completed
+     * all-source coverage pass.  Per-source candidate counts are useful while
+     * a bounded pass is still being assembled, but its final window used to
+     * clear the accumulated coverage counters before convergence retained
+     * their total.  A quality-only policy revision preserves this view proof;
+     * camera and source-inventory revisions invalidate it.
+     */
+    size_t lodConvergenceCompleteVisibleCount = 0;
+    SbBool lodConvergenceCompleteVisibleCountValid = FALSE;
+    SbBool lodStableBudgetLimited = FALSE;
+    mutable uint64_t lodConvergenceFractionViewRevision = 0;
+    mutable uint64_t lodConvergenceFractionPolicyRevision = 0;
+    mutable float lodConvergenceFractionFloor = 0.0f;
     void clearLodSubmissionPlan(void)
     {
 	lodSubmissionPlanSource = NULL;
 	lodSubmissionPlanEntries.clear();
 	lodSubmissionPlanValid = FALSE;
+	lodSubmissionVisibleCountSource = NULL;
+	lodSubmissionVisibleCount = 0;
+    }
+    void clearLodConvergenceCandidates(void)
+    {
+	lodConvergenceCandidateCounts.clear();
+	lodConvergenceCompleteVisibleCount = 0;
+	lodConvergenceCompleteVisibleCountValid = FALSE;
+    }
+    void setLodConvergenceCompleteVisibleCount(size_t count)
+    {
+	lodConvergenceCompleteVisibleCount = count;
+	lodConvergenceCompleteVisibleCountValid = TRUE;
+    }
+    void resetLodConvergenceFraction(void)
+    {
+	lodConvergenceFractionViewRevision = 0;
+	lodConvergenceFractionPolicyRevision = 0;
+	lodConvergenceFractionFloor = 0.0f;
+    }
+    void setLodConvergenceCandidateCount(
+	SoBRLDatabaseSource *source, size_t count)
+    {
+	if (!source)
+	    return;
+	for (std::pair<SoBRLDatabaseSource *, size_t> &entry :
+	    lodConvergenceCandidateCounts) {
+	    if (entry.first != source)
+		continue;
+	    entry.second = count;
+	    return;
+	}
+	lodConvergenceCandidateCounts.push_back(
+	    std::make_pair(source, count));
+    }
+    size_t lodConvergenceCandidateCount(void) const
+    {
+	if (lodConvergenceCompleteVisibleCountValid)
+	    return lodConvergenceCompleteVisibleCount;
+	size_t total = 0;
+	for (const std::pair<SoBRLDatabaseSource *, size_t> &entry :
+	    lodConvergenceCandidateCounts)
+	    total = entry.second > SIZE_MAX - total ?
+		SIZE_MAX : total + entry.second;
+	return total;
     }
     SbBool lodSubmissionPending = FALSE;
     SbBool lodSubmissionRescanPending = FALSE;
@@ -1213,6 +1341,7 @@ struct BObolViewController::Impl {
     SbBool lodRetainedRefinementCutAdvanced = FALSE;
     SbBool lodRetainedRefinementBudgetBlocked = FALSE;
     SbBool lodBudgetRescanAfterFrame = FALSE;
+    unsigned int lodStableCalibrationFramesRemaining = 0;
     SbBool lodPassAdmittedWork = FALSE;
     SbBool forceTerminalLodRefinement = FALSE;
     SbBool lodRefinementFaceBudgetInitialized = FALSE;
@@ -1225,18 +1354,42 @@ struct BObolViewController::Impl {
     uint64_t lodLastSubmittedViewRevision = 0;
     uint64_t lodLastSubmittedPolicyRevision = 0;
     SbString lodLastSubmittedSourceSignature = SbString("");
+    SbString lodLastSubmittedInventorySignature = SbString("");
+    std::vector<uint64_t> lodLastSubmittedSourceRoutingIds;
+    std::vector<uint64_t> lodLastSubmittedSourceInventoryRevisions;
+    std::vector<SbString> lodLastSubmittedSourceIdentities;
+    SbBool lodSubmissionDeltaActive = FALSE;
+    std::vector<SoBRLDatabaseSource *> lodSubmissionDeltaSources;
+    std::vector<std::pair<SoBRLDatabaseSource *, std::vector<size_t>>>
+	lodSubmissionDeltaPlans;
     SbString lodViewSignature = SbString("");
+    SbString lodViewScaleSignature = SbString("");
     uint64_t lodViewRevision = 1;
     uint64_t lodPolicyRevision = 1;
     int64_t lodLastViewChangeMicroseconds = 0;
     SbBool lodInteractive = FALSE;
     SbBool lodGestureActive = FALSE;
+    SbBool lodViewScaleChanging = FALSE;
     /* Keep the complete held-button presentation through button-release
-     * debounce even when per-occurrence minimum prefixes slightly exceed the
-     * nominal motion budget. */
+     * debounce.  This preserves the measured aggregate presentation, not the
+     * richer retained per-occurrence cuts which may be hidden by the
+     * renderer-wide motion ceiling. */
     SbBool lodReleaseCutFloorActive = FALSE;
+    /*
+     * Motion may leave rich immutable occurrence cuts resident while a
+     * renderer-only PoP ceiling and small-part aggregation cut provide the
+     * responsive presentation.  On the quiet transition, keep those
+     * presentation limits until a bounded retained-admission pass has
+     * reconciled the occurrence cuts with measured stable capacity.  Clearing
+     * them first can turn one release event into a multi-million-triangle
+     * flattened rebuild on the GUI thread.
+     */
+    SbBool lodStablePresentationHandoffActive = FALSE;
     uint64_t lodSettleAfterRenderSerial = 0;
     SbBool lodResidentCompactionPending = FALSE;
+    SbBool lodResidentCompactionPlanning = FALSE;
+    uint64_t lodResidentCompactionDemandRevision = 0;
+    uint64_t lodResidentAdmissionRevision = 0;
     /* A resident prefix can grow without a camera change (notably when an
      * erased path is redrawn).  Reclamation therefore needs an independent
      * quiet-period deadline rather than borrowing the view-change timer. */
@@ -1248,6 +1401,46 @@ struct BObolViewController::Impl {
      * steady-state face-capacity estimator that every later frame costs the
      * same amount. */
     SbBool lodResultPublicationAwaitingFrame = FALSE;
+    /*
+     * Applied worker results are immutable CPU bindings and need not force
+     * one expensive scene render per owner-thread drain quantum.  Retain a
+     * bounded-latency publication batch while the worker stream is busy.
+     * Any ordinary camera/input frame publishes the complete accumulated
+     * batch and clears these counters.
+     */
+    size_t lodUnpresentedResultCount = 0;
+    int64_t lodUnpresentedResultFirstMicroseconds = 0;
+    int64_t lodResultPresentationIntervalMicroseconds(void) const
+    {
+	const uint64_t observedNanoseconds =
+	    std::max(lastSceneRenderTimeNanoseconds,
+		lastRenderTimeNanoseconds);
+	const int64_t minimum = lodInteractive ? 33333 : 50000;
+	const int64_t maximum = lodInteractive ? 100000 : 250000;
+	if (!observedNanoseconds)
+	    return minimum;
+	const uint64_t observedMicroseconds =
+	    observedNanoseconds / 1000ULL;
+	const uint64_t scaled = observedMicroseconds >
+		static_cast<uint64_t>(
+		    std::numeric_limits<int64_t>::max() / 2) ?
+	    static_cast<uint64_t>(maximum) : observedMicroseconds * 2ULL;
+	return static_cast<int64_t>(std::max<uint64_t>(
+	    static_cast<uint64_t>(minimum),
+	    std::min<uint64_t>(static_cast<uint64_t>(maximum), scaled)));
+    }
+    SbBool lodUnpresentedResultsDue(int64_t now) const
+    {
+	if (!lodUnpresentedResultCount ||
+	    lodUnpresentedResultFirstMicroseconds <= 0)
+	    return FALSE;
+	const int64_t elapsed =
+	    now >= lodUnpresentedResultFirstMicroseconds ?
+	    now - lodUnpresentedResultFirstMicroseconds :
+	    lodResultPresentationIntervalMicroseconds();
+	return elapsed >= lodResultPresentationIntervalMicroseconds() ?
+	    TRUE : FALSE;
+    }
     int64_t lodRefinementNotBeforeMicroseconds = 0;
     float lodTargetPixelError = 1.0f;
     float lodInteractiveTargetFps = 60.0f;
@@ -1258,7 +1451,33 @@ struct BObolViewController::Impl {
     long double lodStableCalibratedFacesPerSecond = 0.0L;
     size_t lodStableCalibrationProbeActiveFaces = 0;
     unsigned int lodStableCalibrationProbeCount = 0;
+    /* One direct measured backoff per camera epoch bounds convergence when
+     * draw-call/instance overhead, rather than triangle count, dominates.
+     * The resulting coherent cut is reported performance-limited; the next
+     * view epoch starts from its retained timing and may back off again. */
+    SbBool lodStableOverloadRecoveryPerformed = FALSE;
+    size_t lodStableOverloadRecoveryActiveFaces = 0;
     int lodInteractiveProgressiveCeiling = -1;
+    /*
+     * Current renderer-side small-occurrence aggregation cut.  Interaction
+     * raises it immediately when measured frames miss their target.  A quiet
+     * performance-limited view may also raise it when every retained mesh is
+     * already at its minimum prefix and that irreducible population still
+     * exceeds the calibrated scene budget.
+     */
+    float lodPresentationPointProxyPixelThreshold = 1.0f;
+    /*
+     * A changed quiet aggregation threshold needs one measured presentation
+     * before convergence is authoritative.  Keep this distinct from PoP
+     * admission: no provider scan or retained-array mutation is required.
+     */
+    SbBool lodStablePointProxyCalibrationPending = FALSE;
+    /* True only while a motion-to-stable handoff is cautiously lowering the
+     * interaction aggregation threshold toward one pixel.  A slow probe ends
+     * relaxation after restoring a safe threshold, avoiding oscillation
+     * across a discrete many-occurrence boundary. */
+    SbBool lodStablePointProxyRelaxationActive = FALSE;
+    uint64_t lodInteractiveCeilingFeedbackRenderSerial = 0;
     SbBool lodUseForcedLevel = FALSE;
     int lodForcedLevel = 0;
     uint64_t maxExactFullDetailFaceCount = 0;
@@ -2470,10 +2689,23 @@ BObolViewController::setEndpointGraphicalRenderingEnabled(SbBool enabled)
 void
 BObolViewController::requestRender(const char *reason)
 {
-    std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
-    this->d->renderRequested = TRUE;
-    this->d->renderReason = reason ? reason : "";
-    this->d->renderRequestSerial++;
+    SbBool wakeEndpoint = FALSE;
+    {
+	std::lock_guard<std::mutex> lock(this->d->renderRequestMutex);
+	wakeEndpoint = this->d->renderRequested ? FALSE : TRUE;
+	this->d->renderRequested = TRUE;
+	this->d->renderReason = reason ? reason : "";
+	this->d->renderRequestSerial++;
+    }
+    /*
+     * A render request is itself the complete host contract.  Requiring every
+     * caller to remember a separate notifyFrameRequest() made camera sync and
+     * final calibration replays easy to strand after the progressive timer
+     * became idle.  Wake only on the empty-to-pending edge; repeated reasons
+     * still update diagnostics without flooding the Qt event queue.
+     */
+    if (wakeEndpoint)
+	this->notifyFrameRequest(reason);
 }
 
 void
@@ -2648,7 +2880,15 @@ BObolViewController::renderPending(SbBool clearWindow,
 	this->renderBackground();
     else if (clearZBuffer)
 	glClear(GL_DEPTH_BUFFER_BIT);
+    const uint64_t backgroundCompleted = this->beginRenderTiming();
     this->d->renderManager->render(static_cast<SbBool>(FALSE), static_cast<SbBool>(FALSE));
+    const uint64_t sceneCompleted = this->beginRenderTiming();
+    this->d->lastBackgroundRenderTimeNanoseconds =
+	backgroundCompleted >= started ?
+	    backgroundCompleted - started : 0;
+    this->d->lastSceneRenderTimeNanoseconds =
+	sceneCompleted >= backgroundCompleted ?
+	    sceneCompleted - backgroundCompleted : 0;
     this->completeRenderTiming(started);
     return TRUE;
 }
@@ -2660,6 +2900,10 @@ BObolViewController::beginRenderTiming(void) const
 	std::chrono::duration_cast<std::chrono::nanoseconds>(
 	    std::chrono::steady_clock::now().time_since_epoch()).count());
 }
+
+static float controller_point_proxy_threshold(
+    float currentThreshold, uint64_t renderNanoseconds,
+    uint64_t presentationNanoseconds, float targetFps);
 
 void
 BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
@@ -2690,10 +2934,33 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
      * policy a budget it could not sustain. */
     const BObolViewLodState *calibrationState = this->d->viewAttachment ?
 	this->d->viewAttachment->getViewLodState() : NULL;
-    const size_t calibrationFaces = calibrationState ?
+    size_t calibrationFaces = calibrationState ?
 	calibrationState->activeFaceCount() : 0;
-    uint64_t calibrationElapsed = elapsed;
-    if (this->d->lodGestureActive) {
+    size_t presentedCadFaces = 0;
+    const SbBool measuredCadPresentation = calibrationState &&
+	calibrationState->lastCadPresentedTriangleCount(presentedCadFaces);
+    if (measuredCadPresentation)
+	calibrationFaces = presentedCadFaces;
+    size_t gpuCadFaces = 0;
+    uint64_t gpuCadNanoseconds = 0;
+    uint64_t gpuCadSampleSerial = 0;
+    const SbBool measuredGpuCadPresentation = calibrationState &&
+	calibrationState->lastCadGpuMeasurement(
+	    gpuCadFaces, gpuCadNanoseconds, gpuCadSampleSerial);
+    const SbBool newGpuCadMeasurement =
+	measuredGpuCadPresentation &&
+	gpuCadSampleSerial != this->d->lodLastCadGpuSampleSerial;
+    if (newGpuCadMeasurement) {
+	this->d->lodLastCadGpuSampleSerial = gpuCadSampleSerial;
+	this->d->lodLastCadGpuTimeNanoseconds = gpuCadNanoseconds;
+	calibrationFaces = gpuCadFaces;
+    }
+    this->d->lodLastRenderWasPreparedCadReplay =
+	!measuredCadPresentation ||
+	calibrationState->lastCadPresentationUsedPreparedReplay();
+    uint64_t calibrationElapsed =
+	newGpuCadMeasurement ? gpuCadNanoseconds : elapsed;
+    if (this->d->lodGestureActive && !newGpuCadMeasurement) {
 	uint64_t presentationInterval = 0;
 	{
 	    std::lock_guard<std::mutex> lock(
@@ -2719,8 +2986,12 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
     const SbBool transientStablePublication =
 	this->d->lodResultPublicationAwaitingFrame &&
 	!this->d->lodInteractive && !this->d->lodGestureActive;
+    const SbBool transientStablePreparation =
+	!this->d->lodLastRenderWasPreparedCadReplay &&
+	!this->d->lodInteractive && !this->d->lodGestureActive;
     if (calibrationFaces > 0 && calibrationElapsed > 0 &&
-	!transientStablePublication) {
+	(newGpuCadMeasurement ||
+	 (!transientStablePublication && !transientStablePreparation))) {
 	const long double sample =
 	    static_cast<long double>(calibrationFaces) * 1000000000.0L /
 	    static_cast<long double>(calibrationElapsed);
@@ -2737,6 +3008,14 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
 		 * user.  Adopt the observed lower ceiling now; budget growth is
 		 * intentionally much slower and therefore cannot oscillate back
 		 * to a one-frame optimistic spike. */
+		calibration = sample;
+	    } else if (!interactiveSample && newGpuCadMeasurement &&
+		sample < calibration) {
+		/* A completed timer query measures the driver's actual queued CAD
+		 * work rather than CPU command submission or an unrelated window
+		 * composition delay.  A lower GPU ceiling is therefore actionable
+		 * immediately; damping it recreates several known-bad long frames
+		 * while the estimate slowly catches up. */
 		calibration = sample;
 	    } else if (!interactiveSample && sample < calibration) {
 		/* A quiet event-driven view includes occasional screenshots,
@@ -2762,24 +3041,214 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
 	}
     }
 
+    /*
+     * Consume a quiet small-part aggregation probe without invoking another
+     * O(N) provider/admission scan.  If the measured reusable presentation
+     * still misses the stable target, ratchet the camera-local threshold and
+     * request exactly one successor frame.  The immutable per-part geometry
+     * and desired PoP cuts are untouched throughout.
+    */
+    if (this->d->lodStablePointProxyCalibrationPending) {
+	const SbBool relaxationProbe =
+	    this->d->lodStablePointProxyRelaxationActive;
+	this->d->lodStablePointProxyCalibrationPending = FALSE;
+	this->d->lodStablePointProxyRelaxationActive = FALSE;
+	const long double stableTargetNanoseconds =
+	    this->d->lodStableTargetFps > 0.0f ?
+		1000000000.0L /
+		    static_cast<long double>(
+			this->d->lodStableTargetFps) : 0.0L;
+	const SbBool reusableStableSample =
+	    !this->d->lodInteractive &&
+	    !this->d->lodGestureActive &&
+	    measuredCadPresentation &&
+	    this->d->lodLastRenderWasPreparedCadReplay &&
+	    !transientStablePublication &&
+	    !transientStablePreparation &&
+	    stableTargetNanoseconds > 0.0L &&
+	    calibrationElapsed > 0;
+	float nextThreshold =
+	    this->d->lodPresentationPointProxyPixelThreshold;
+	SbBool continueRelaxation = FALSE;
+	if (reusableStableSample &&
+	    static_cast<long double>(calibrationElapsed) >
+		stableTargetNanoseconds * 1.10L) {
+	    nextThreshold = controller_point_proxy_threshold(
+		this->d->lodPresentationPointProxyPixelThreshold,
+		calibrationElapsed, 0, this->d->lodStableTargetFps);
+	    /* A discrete relaxation step was too aggressive.  Restore the
+	     * measured safe side, then stop probing downward for this camera
+	     * epoch once that correction has been presented. */
+	    continueRelaxation = FALSE;
+	} else if (reusableStableSample && relaxationProbe &&
+	    this->d->lodPresentationPointProxyPixelThreshold > 1.01f &&
+	    static_cast<long double>(calibrationElapsed) <
+		stableTargetNanoseconds * 0.80L) {
+	    /*
+	     * Small projected occurrences grow approximately with screen area.
+	     * Move no more than 25 percent toward a finer threshold per measured
+	     * frame, and use observed headroom for a still smaller step near the
+	     * target.  This cannot expose the complete aggregated population in
+	     * one frame.
+	     */
+	    const long double ratio = std::sqrt(
+		static_cast<long double>(calibrationElapsed) /
+		(stableTargetNanoseconds * 0.80L));
+	    const long double factor =
+		std::max<long double>(0.75L,
+		    std::min<long double>(1.0L, ratio));
+	    nextThreshold = static_cast<float>(std::max<long double>(
+		1.0L,
+		static_cast<long double>(
+		    this->d->lodPresentationPointProxyPixelThreshold) *
+		    factor));
+	    continueRelaxation = nextThreshold > 1.01f ? TRUE : FALSE;
+	}
+	const SbBool thresholdChanged =
+	    fabsf(nextThreshold -
+		this->d->lodPresentationPointProxyPixelThreshold) > 0.01f ?
+		TRUE : FALSE;
+	if (thresholdChanged) {
+	    this->d->lodPresentationPointProxyPixelThreshold =
+		nextThreshold;
+	    BObolViewLodState *presentationState =
+		this->d->viewAttachment->getViewLodState();
+	    if (presentationState)
+		presentationState->
+		    setCadPresentationPointProxyPixelThreshold(
+			nextThreshold);
+	    this->d->lodStablePointProxyCalibrationPending = TRUE;
+	    this->d->lodStablePointProxyRelaxationActive =
+		continueRelaxation;
+	    this->requestRender("lod-stable-point-calibration");
+	    this->notifyFrameRequest(
+		"lod-stable-point-calibration");
+	} else if (!reusableStableSample &&
+	    !this->d->lodInteractive &&
+	    !this->d->lodGestureActive &&
+	    measuredCadPresentation &&
+	    stableTargetNanoseconds > 0.0L &&
+	    (transientStablePublication ||
+	     transientStablePreparation)) {
+	    /*
+	     * Applying a different point threshold changes the retained
+	     * occurrence classification.  Its first frame may rebuild/patch the
+	     * prepared plan and is intentionally excluded from throughput
+	     * calibration above, but that is a one-frame handoff—not evidence
+	     * that calibration has converged.  Preserve the probe and request
+	     * one unchanged replay which can measure the cut it actually drew.
+	     *
+	     * Result streaming may extend this handoff across several frames.
+	     * Those frames already represent real pending work; retaining this
+	     * latch neither busy-spins nor exposes a richer cut prematurely.
+	     */
+	    this->d->lodStablePointProxyCalibrationPending = TRUE;
+	    this->d->lodStablePointProxyRelaxationActive =
+		relaxationProbe;
+	    this->requestRender("lod-stable-point-replay");
+	    this->notifyFrameRequest("lod-stable-point-replay");
+	}
+    }
+
+    /*
+     * A cold or newly exposed many-leaf stream can spend seconds completing
+     * its coverage pass.  Waiting until that pass ends before applying the
+     * renderer's measured small-part cut leaves every intervening software
+     * frame at 100+ ms and makes console/input handling feel stalled.
+     *
+     * Result publication time is deliberately excluded from sustainable
+     * throughput calibration above, but it is still real user-visible frame
+     * latency.  Under severe pressure, raise the presentation-only
+     * aggregation cut for the next frame while coverage continues.  The
+     * final quiet probe later calibrates it precisely and no retained mesh or
+     * cache state is discarded.
+     */
+    const long double ongoingStableTargetNanoseconds =
+	this->d->lodStableTargetFps > 0.0f ?
+	    1000000000.0L /
+		static_cast<long double>(
+		    this->d->lodStableTargetFps) : 0.0L;
+    const SbBool ongoingStableWork =
+	this->d->lodSubmissionPending ||
+	this->hasPendingLodResults() ||
+	(this->d->lodService &&
+	 (this->d->lodService->pendingTaskCountForDiagnostics() > 0 ||
+	  this->d->lodService->inFlightCount() > 0 ||
+	  this->d->lodService->queuedResultCountForDiagnostics() > 0));
+    if (!this->d->lodStablePointProxyCalibrationPending &&
+	!this->d->lodInteractive &&
+	!this->d->lodGestureActive &&
+	this->d->lodAutoSubmit &&
+	ongoingStableWork &&
+	measuredCadPresentation &&
+	ongoingStableTargetNanoseconds > 0.0L &&
+	static_cast<long double>(elapsed) >
+	    ongoingStableTargetNanoseconds * 1.50L) {
+	const float nextThreshold =
+	    controller_point_proxy_threshold(
+		this->d->lodPresentationPointProxyPixelThreshold,
+		elapsed, 0, this->d->lodStableTargetFps);
+	if (nextThreshold >
+	    this->d->lodPresentationPointProxyPixelThreshold + 0.01f) {
+	    this->d->lodPresentationPointProxyPixelThreshold =
+		nextThreshold;
+	    BObolViewLodState *presentationState =
+		this->d->viewAttachment->getViewLodState();
+	    if (presentationState)
+		presentationState->
+		    setCadPresentationPointProxyPixelThreshold(
+			nextThreshold);
+	    this->d->lodStablePointProxyCalibrationPending = TRUE;
+	    /*
+	     * This pressure step is deliberately conservative because its frame
+	     * includes streaming/publication latency.  Mark the successor as a
+	     * relaxation probe: once an unchanged prepared frame demonstrates
+	     * headroom, walk back toward the finest sustainable presentation
+	     * instead of permanently retaining the transient high-load cut.
+	     */
+	    this->d->lodStablePointProxyRelaxationActive = TRUE;
+	    this->requestRender("lod-stream-point-pressure");
+	    this->notifyFrameRequest("lod-stream-point-pressure");
+	}
+    }
+
     /* A budget-limited pass may have admitted a bounded first wave and then
      * scanned the remaining boxes without admitting them.  Re-plan from the
      * highest screen-value occurrence after that wave has actually rendered
      * and supplied a throughput sample.  Replanning before the frame would
      * repeatedly spend the same stale allowance. */
     if (this->d->lodBudgetRescanAfterFrame) {
-	this->d->lodBudgetRescanAfterFrame = FALSE;
-	this->d->lodSubmissionSourceIndex = 0;
-	this->d->lodSubmissionEntryOffset = 0;
-	this->d->clearLodSubmissionPlan();
-	this->d->lodSubmissionPending = TRUE;
-	this->d->lodSubmissionRescanPending = FALSE;
-	this->d->lodRefinementFaceBudgetInitialized = FALSE;
-	this->d->lodRefinementFaceBudgetRemaining = SIZE_MAX;
-	this->d->lodRetainedAdmissionActive = FALSE;
-	this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
-	this->d->lodRefinementBudgetRetryMicroseconds = 0;
-	this->markProgressiveWorkPending();
+	/*
+	 * Calibration probes measure an unchanged retained cut.  They do not
+	 * need an intervening O(N) occurrence-planning pass: that pass cannot
+	 * admit anything until the samples have changed the aggregate budget.
+	 * Present the bounded probe series back-to-back, then scan the sparse
+	 * unsatisfied frontier once using the resulting calibration.
+	 */
+	if (this->d->lodStableCalibrationFramesRemaining > 0) {
+	    this->d->lodStableCalibrationFramesRemaining--;
+	    this->d->lodStableCalibrationProbeCount++;
+	    this->requestRender("lod-budget-calibration");
+	    this->notifyFrameRequest("lod-budget-calibration");
+	} else {
+	    this->d->lodBudgetRescanAfterFrame = FALSE;
+	    this->d->lodSubmissionSourceIndex = 0;
+	    this->d->lodSubmissionEntryOffset = 0;
+	    this->d->clearLodSubmissionPlan();
+	    this->d->lodSubmissionPending = TRUE;
+	    this->d->lodSubmissionRescanPending = FALSE;
+	    this->d->lodRefinementFaceBudgetInitialized = FALSE;
+	    this->d->lodRefinementFaceBudgetRemaining = SIZE_MAX;
+	    this->d->lodRetainedAdmissionActive = FALSE;
+	    this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
+	    this->d->lodRefinementBudgetRetryMicroseconds = 0;
+	    if (this->d->lodCoveragePassActive) {
+		this->d->lodCoveragePassSawBoundedSource = FALSE;
+		this->d->lodCoveragePassVisibleCount = 0;
+		this->d->lodCoveragePassCoveredCount = 0;
+	    }
+	    this->markProgressiveWorkPending();
+	}
     }
     this->d->renderCompletionSerial++;
     if (this->d->renderCompletionSerial == 0)
@@ -2844,6 +3313,11 @@ BObolViewController::completeRenderTiming(uint64_t startedNanoseconds)
 	this->markProgressiveWorkPending();
     }
     this->d->lodResultPublicationAwaitingFrame = FALSE;
+    /* synchronizePresentation() ran before this completed frame, so it
+     * contains every immutable result accumulated by the owner thread—not
+     * merely the drain quantum which originally requested the frame. */
+    this->d->lodUnpresentedResultCount = 0;
+    this->d->lodUnpresentedResultFirstMicroseconds = 0;
 }
 
 void
@@ -2885,6 +3359,18 @@ uint64_t
 BObolViewController::getSmoothedRenderTimeNanoseconds(void) const
 {
     return this->d->smoothedRenderTimeNanoseconds;
+}
+
+uint64_t
+BObolViewController::getLastBackgroundRenderTimeNanoseconds(void) const
+{
+    return this->d->lastBackgroundRenderTimeNanoseconds;
+}
+
+uint64_t
+BObolViewController::getLastSceneRenderTimeNanoseconds(void) const
+{
+    return this->d->lastSceneRenderTimeNanoseconds;
 }
 
 uint64_t
@@ -3335,25 +3821,31 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodLastViewChangeMicroseconds > 0 &&
 	    elapsed >= 150000) {
 	    this->d->lodInteractive = FALSE;
+	    this->d->lodViewScaleChanging = FALSE;
 	    this->d->lodReleaseCutFloorActive = FALSE;
+	    this->d->lodStablePresentationHandoffActive =
+		(this->d->lodInteractiveProgressiveCeiling >= 0 ||
+		 this->d->lodPresentationPointProxyPixelThreshold > 1.01f) ?
+		    TRUE : FALSE;
 	    this->d->lodStableCalibrationProbeActiveFaces = 0;
 	    this->d->lodStableCalibrationProbeCount = 0;
+	    this->d->lodStableCalibrationFramesRemaining = 0;
+	    this->d->lodStableOverloadRecoveryPerformed = FALSE;
+	    this->d->lodStableOverloadRecoveryActiveFaces = 0;
 	    this->d->lodTargetPixelError = 1.0f;
-	    this->d->lodInteractiveProgressiveCeiling = -1;
+	    this->d->lodStablePointProxyCalibrationPending = FALSE;
+	    this->d->lodStablePointProxyRelaxationActive = FALSE;
 	    BObolViewLodState *viewState =
 		this->d->viewAttachment->getViewLodState();
 	    if (viewState) {
-		viewState->setCadPresentationProgressiveLodCeiling(-1);
-		/* The motion cut is already a measured, coherent presentation.
-		 * Do not begin the quiet epoch with a smaller stale face budget:
-		 * retained admission would replace a tail of minimum meshes with
-		 * boxes on button release, only to restore them moments later.
-		 * Stable refinement starts from the complete cut the user just
-		 * saw and is monotonic from there. */
-		if (this->d->lodCurrentFaceBudget != SIZE_MAX)
-		    this->d->lodCurrentFaceBudget = std::max(
-			this->d->lodCurrentFaceBudget,
-			viewState->activeFaceCount());
+		viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+		/*
+		 * activeFaceCount() is the retained occurrence population, not
+		 * necessarily the cut just presented under the motion ceiling.
+		 * Promoting the stable budget to that value authorized the hidden
+		 * rich population before the first quiet capacity check.  Keep the
+		 * measured presentation and reconcile the retained cuts first.
+		 */
 	    }
 	    this->advanceLodPolicyRevision();
 	} else {
@@ -3362,11 +3854,53 @@ BObolViewController::advanceProgressiveWork(
 	}
     }
 
+    const uint64_t residentConsumerId =
+	static_cast<uint64_t>(reinterpret_cast<uintptr_t>(this));
+    const size_t queuedCompactionResults = this->d->lodService ?
+	this->d->lodService->
+	    queuedResidentMeshCompactionResultCountForDiagnostics(
+		residentConsumerId) : 0;
+    if (queuedCompactionResults) {
+	if (this->d->lodInteractive) {
+	    /* Keep the last complete rich generation drawable while the user is
+	     * moving.  The bounded completion queue back-pressures compaction
+	     * workers until the quiet-view publication phase resumes. */
+	    localStatus.hasMore = 1;
+	} else {
+	    const size_t applyLimit = options->maxLodResults ?
+		std::min<size_t>(options->maxLodResults, 1024) : 1024;
+	    std::vector<BObolLodResidentCompaction> compacted;
+	    this->d->lodService->drainResidentMeshCompactions(
+		residentConsumerId, compacted, applyLimit);
+	    BObolViewLodState *viewState =
+		this->d->viewAttachment->getViewLodState();
+	    size_t published = 0;
+	    if (viewState) {
+		for (const BObolLodResidentCompaction &result : compacted)
+		    published +=
+			viewState->applyResidentMeshCompaction(result);
+	    }
+	    localStatus.lodResultsProcessed += compacted.size();
+	    localStatus.lodResultsApplied += published;
+	    if (published)
+		localStatus.changed = 1;
+	    if (this->d->lodService->
+		    queuedResidentMeshCompactionResultCountForDiagnostics(
+			residentConsumerId) > 0)
+		localStatus.hasMore = 1;
+	}
+    }
+
+    SbBool nonLodPresentationChanged = localStatus.changed ? TRUE : FALSE;
     const size_t queuedLodResults = this->d->lodService ?
 	this->d->lodService->queuedResultCountForDiagnostics() : 0;
     const SbBool havePendingLodResults =
 	this->hasPendingLodResults() || queuedLodResults > 0;
     SbBool coalesceLodResults = FALSE;
+    const SbBool holdRicherResultsDuringInteraction =
+	havePendingLodResults && this->d->lodInteractive &&
+	this->d->lodVisibleCoverageComplete &&
+	this->getActiveLodMeshPayloadCount() > 0;
     if (havePendingLodResults && this->d->lodService) {
 	/* The first mesh is the time-to-useful-visual boundary and is never
 	 * delayed.  Once a scene already has mesh data, coalesce a continuing
@@ -3405,7 +3939,17 @@ BObolViewController::advanceProgressiveWork(
 	    sceneHasMesh && continuingWorkerStream &&
 	    queuedLodResults < applyWave && resultAge < latencyLimit;
     }
-    if (coalesceLodResults) {
+    if (holdRicherResultsDuringInteraction) {
+	/*
+	 * Worker-produced arrays are immutable and the result queue is bounded
+	 * and coalescing (currently 2048 slots).  Keeping richer generations
+	 * there preserves the renderer's last prepared generation during camera
+	 * input.  Once the quiet debounce ends they publish normally.  Coverage
+	 * is reset on every view revision, so a newly exposed box-only leaf is
+	 * never held behind this optimization.
+	 */
+	localStatus.hasMore = 1;
+    } else if (coalesceLodResults) {
 	localStatus.hasMore = 1;
     } else if (havePendingLodResults) {
 	const uint64_t resultStarted = this->beginRenderTiming();
@@ -3414,8 +3958,8 @@ BObolViewController::advanceProgressiveWork(
 	const uint64_t resultCompleted = this->beginRenderTiming();
 	this->d->lastLodResultProcessingTimeNanoseconds =
 	    resultCompleted > resultStarted ? resultCompleted - resultStarted : 0;
-	localStatus.lodResultsProcessed = this->d->lastLodResultCount;
-	localStatus.lodResultsApplied = this->d->lastLodAppliedResultCount;
+	localStatus.lodResultsProcessed += this->d->lastLodResultCount;
+	localStatus.lodResultsApplied += this->d->lastLodAppliedResultCount;
 	if (this->d->lastLodAppliedResultCount > 0)
 	    localStatus.changed = 1;
 	if (!this->d->lodService ||
@@ -3457,6 +4001,8 @@ BObolViewController::advanceProgressiveWork(
 	}
 	controller_accumulate_progressive_status(localStatus,
 		providerStatus);
+	if (providerStatus.changed)
+	    nonLodPresentationChanged = TRUE;
 	providerIndex++;
     }
     const uint64_t providerCompleted = this->beginRenderTiming();
@@ -3472,6 +4018,29 @@ BObolViewController::advanceProgressiveWork(
     struct bv_lod_policy lodPolicy;
     bv_lod_policy_init(&lodPolicy);
     this->d->viewAttachment->getLodPolicy(&lodPolicy);
+    if (this->d->lodService) {
+	const uint64_t admissionRevision =
+	    this->d->lodService->residentMeshAdmissionRevision();
+	if (this->d->lodResidentAdmissionRevision != 0 &&
+	    admissionRevision !=
+		this->d->lodResidentAdmissionRevision) {
+	    BObolViewLodState *viewState =
+		this->d->viewAttachment->getViewLodState();
+	    if (viewState &&
+		viewState->memoryLimitedPayloadCount() > 0) {
+		/* Reclamation made stable bytes available.  Resume only the
+		 * sparse unsatisfied frontier; the fixed camera and every
+		 * existing mesh presentation remain untouched meanwhile. */
+		this->d->lodSubmissionSourceIndex = 0;
+		this->d->lodSubmissionEntryOffset = 0;
+		this->d->clearLodSubmissionPlan();
+		this->d->lodSubmissionPending = TRUE;
+		this->markProgressiveWorkPending();
+	    }
+	}
+	this->d->lodResidentAdmissionRevision =
+	    admissionRevision;
+    }
     const int64_t refinementNow = bu_gettime();
     const bool refinementCooling =
 	!options->forceTerminalLodRefinement &&
@@ -3527,6 +4096,13 @@ BObolViewController::advanceProgressiveWork(
 	    this->d->lodService->queuedResultCountForDiagnostics();
 	localStatus.queuedCacheWrites +=
 	    this->d->lodService->queuedCacheWriteCountForDiagnostics();
+	localStatus.pendingTasks +=
+	    this->d->lodService->
+		pendingResidentMeshCompactionCountForDiagnostics();
+	localStatus.queuedResults +=
+	    this->d->lodService->
+		queuedResidentMeshCompactionResultCountForDiagnostics(
+		    residentConsumerId);
     }
 
     const int pending_service_work =
@@ -3535,6 +4111,13 @@ BObolViewController::advanceProgressiveWork(
 	1 : 0;
     if (pending_service_work)
 	localStatus.hasMore = 1;
+    const int pending_lod_realization_work =
+	this->d->lodService &&
+	(this->d->lodService->pendingTaskCountForDiagnostics() > 0 ||
+	 this->d->lodService->inFlightCount() > 0 ||
+	 this->d->lodService->queuedResultCountForDiagnostics() > 0 ||
+	 this->d->lodService->queuedCacheWriteCountForDiagnostics() > 0) ?
+	1 : 0;
 
     /* Refinement and reclamation are separate phases.  A quiet view first
      * reaches its 1 px display target; only after a longer quiet interval and
@@ -3546,28 +4129,65 @@ BObolViewController::advanceProgressiveWork(
 	this->d->lodResidentCompactionAfterMicroseconds > 0) {
 	if (bu_gettime() <
 		this->d->lodResidentCompactionAfterMicroseconds ||
-	    pending_service_work ||
+	    pending_lod_realization_work ||
 	    this->d->lodSubmissionPending) {
 	    localStatus.hasMore = 1;
 	} else if (this->d->lodService) {
 	    std::vector<BObolLodResidentDemand> demands;
 	    BObolViewLodState *viewState =
 		this->d->viewAttachment->getViewLodState();
-	    if (viewState)
+	    const uint64_t demandRevision = viewState ?
+		viewState->residentMeshDemandRevision() :
+		this->d->lodViewRevision;
+	    const SbBool continuePlanning =
+		this->d->lodResidentCompactionPlanning &&
+		this->d->lodResidentCompactionDemandRevision ==
+		    demandRevision;
+	    if (viewState && !continuePlanning)
 		viewState->residentMeshDemands(demands);
-	    const size_t compacted =
-		this->d->lodService->compactResidentMeshes(
-		    static_cast<uint64_t>(
-			reinterpret_cast<uintptr_t>(this)),
-		    this->d->lodViewRevision, demands);
-	    this->d->lodResidentCompactionPending = FALSE;
-	    this->d->lodResidentCompactionAfterMicroseconds = 0;
-	    if (compacted) {
-		if (viewState)
-		    viewState->noteResidentMeshesChanged();
-		localStatus.changed = 1;
-	    }
+	    SbBool planningComplete = FALSE;
+	    const size_t queued =
+		this->d->lodService->scheduleResidentMeshCompaction(
+		    residentConsumerId,
+		    demandRevision, demands,
+		    &planningComplete);
+	    this->d->lodResidentCompactionPending =
+		planningComplete ? FALSE : TRUE;
+	    this->d->lodResidentCompactionPlanning =
+		planningComplete ? FALSE : TRUE;
+	    this->d->lodResidentCompactionDemandRevision =
+		planningComplete ? 0 : demandRevision;
+	    this->d->lodResidentCompactionAfterMicroseconds =
+		planningComplete ? 0 : bu_gettime();
+	    if (queued || !planningComplete)
+		localStatus.hasMore = 1;
 	}
+    }
+
+    if (this->d->lodUnpresentedResultCount > 0) {
+	localStatus.hasMore = 1;
+	const int64_t now = bu_gettime();
+	if (!this->d->lodResultPublicationAwaitingFrame &&
+	    this->d->lodUnpresentedResultsDue(now)) {
+	    this->requestRender("lod-result-batch");
+	    this->d->lodResultPublicationAwaitingFrame = TRUE;
+	    if (this->d->lodRefinementAwaitingFrame)
+		this->scheduleLodRefinementFrame("lod-result-batch");
+	}
+    }
+
+    /*
+     * A refinement/calibration barrier is, by definition, waiting for a
+     * completed presentation.  Result publication and Qt paint coalescing
+     * can consume the request which originally installed the barrier before
+     * the barrier's target render serial is reached.  Never allow that state
+     * to advertise an idle pump with no frame request: reasserting the edge
+     * is idempotent, and requestRender() wakes the host only on false->true.
+     */
+    if (this->hasPendingLodRefinementFrame()) {
+	localStatus.hasMore = 1;
+	if (!this->isRenderRequested())
+	    this->requestRender("lod-refinement-pending");
     }
 
     if (localStatus.hasMore)
@@ -3580,7 +4200,9 @@ BObolViewController::advanceProgressiveWork(
      * OSMesa, where merely repainting a multi-million-triangle stable cut can
      * consume seconds.  The Qt host pumps pending work independently and
      * actual result/cut changes install their own render requests. */
-    if (localStatus.changed)
+    if (localStatus.changed &&
+	(nonLodPresentationChanged ||
+	 this->d->lodResultPublicationAwaitingFrame))
 	this->requestRender("progressive-update");
 
     if (status)
@@ -3676,12 +4298,71 @@ controller_lod_view_signature(const struct bv_view_info &view,
 }
 
 static SbString
-controller_lod_source_signature(const BObolViewController *controller)
+controller_lod_view_scale_signature(const struct bv_view_info &view,
+				    SbBool haveCamera,
+				    SoCamera *camera,
+				    const SbViewportRegion &region)
 {
     std::ostringstream out;
 
+    out << (haveCamera ? 1 : 0) << ';'
+	<< view.width << ';'
+	<< view.height << ';'
+	<< std::setprecision(17)
+	<< view.size << ';'
+	<< view.lod.scale << ';'
+	<< view.lod.curve_scale << ';'
+	<< view.lod.point_scale << ';'
+	<< view.lod.bot_threshold << ';';
+    const SbVec2s viewport = region.getViewportSizePixels();
+    out << viewport[0] << ';' << viewport[1] << ';';
+    if (haveCamera && camera) {
+	out << camera->getTypeId().getKey() << ';'
+	    << std::setprecision(9)
+	    << camera->aspectRatio.getValue() << ';'
+	    << camera->focalDistance.getValue() << ';';
+	if (camera->isOfType(SoOrthographicCamera::getClassTypeId()))
+	    out << static_cast<SoOrthographicCamera *>(camera)->
+		height.getValue() << ';';
+	else if (camera->isOfType(SoPerspectiveCamera::getClassTypeId()))
+	    out << static_cast<SoPerspectiveCamera *>(camera)->
+		heightAngle.getValue() << ';';
+    }
+
+    return SbString(out.str().c_str());
+}
+
+struct controller_lod_source_signatures {
+    SbString identity;
+    SbString inventory;
+    std::vector<SoBRLDatabaseSource *> sources;
+    std::vector<uint64_t> routingIds;
+    std::vector<uint64_t> inventoryRevisions;
+    std::vector<SbString> sourceIdentities;
+};
+
+/*
+ * Keep source identity separate from the source's growing display-LoD
+ * inventory.  Compact leaf coverage is append-only while a cold/warm
+ * realization stream is active: each merge advances displayMeshLodRevision,
+ * but it does not replace the source or invalidate the already-consumed
+ * prefix of a pinned submission plan.
+ *
+ * Conflating the two made every arriving box/request batch look like source
+ * replacement.  The controller consequently restarted at compact entry zero
+ * on every GUI pump and could not begin mesh work until discovery was nearly
+ * complete.  Inventory changes instead request/extend a bounded rescan; only
+ * an identity/policy change resets the scan.
+ */
+static controller_lod_source_signatures
+controller_lod_source_signature(const BObolViewController *controller)
+{
+    controller_lod_source_signatures signatures;
+    std::ostringstream identity;
+    std::ostringstream inventory;
+
     if (!controller)
-	return SbString("");
+	return signatures;
 
     std::vector<SoBRLDatabaseSource *> sources =
 	controller_render_database_sources(controller);
@@ -3689,27 +4370,74 @@ controller_lod_source_signature(const BObolViewController *controller)
 	SoBRLDatabaseSource *source = sources[i];
 	if (!source || !source->getDatabase())
 	    continue;
-	if (source->realizationStatus.getValue() != SoBRLDatabaseSource::REALIZED ||
-	    source->needsRealization() ||
-	    (!source->hasRealizedMeshGeometry() &&
-	     !source->hasDisplayMeshLodRequests()))
+	const SbBool hasCurrentCompactRequests =
+	    source->hasDisplayMeshLodRequests();
+	const SbBool hasCurrentRealizedMesh =
+	    source->realizationStatus.getValue() ==
+		SoBRLDatabaseSource::REALIZED &&
+	    !source->needsRealization() &&
+	    source->hasRealizedMeshGeometry();
+	if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT")) {
+	    static std::atomic<unsigned int> traceCount(0);
+	    const unsigned int traceIndex = traceCount.fetch_add(1);
+	    if (traceIndex < 64)
+		bu_log("BObol LoD source contract path=%s compact=%d "
+		       "entries=%d requests_current=%d realized_mesh_current=%d "
+		       "status=%d needs_realization=%d source_revision=%u "
+		       "inputs_revision=%u lod_revision=%llu\n",
+		       source->path.getValue().getString(),
+		       source->hasCompactInstanceIndex() ? 1 : 0,
+		       source->getCompactInstanceCount(),
+		       hasCurrentCompactRequests ? 1 : 0,
+		       hasCurrentRealizedMesh ? 1 : 0,
+		       source->realizationStatus.getValue(),
+		       source->needsRealization() ? 1 : 0,
+		       source->sourceRevision.getValue(),
+		       source->inputsRevision.getValue(),
+		       static_cast<unsigned long long>(
+			   source->getDisplayMeshLodRevision()));
+	}
+	/*
+	 * A compact request is published only after the stream merge validates
+	 * the detached/live source epoch, and hasDisplayMeshLodRequests()
+	 * rechecks that epoch.  It is therefore ready for view planning even
+	 * while the source-wide authoritative walk is still running.  Requiring
+	 * REALIZED here serialized cold mesh work behind complete leaf
+	 * discovery and defeated progressive drawing.
+	 */
+	if (!hasCurrentCompactRequests && !hasCurrentRealizedMesh)
 	    continue;
 
-	out << "source;";
-	append_signature_string(out, controller_database_id(source->getDatabase()));
-	append_signature_string(out, source->path.getValue().getString());
-	out << source->drawMode.getValue() << ';'
+	const uint64_t routingId = source->getCompactSourceRoutingId();
+	std::ostringstream sourceIdentity;
+	sourceIdentity << "source;" << routingId << ';';
+	append_signature_string(sourceIdentity,
+	    controller_database_id(source->getDatabase()));
+	append_signature_string(sourceIdentity,
+	    source->path.getValue().getString());
+	sourceIdentity << source->drawMode.getValue() << ';'
+	    << source->representationMode.getValue() << ';'
 	    << source->visible.getValue() << ';'
 	    << source->lodBotThreshold.getValue() << ';'
 	    << source->sourceRevision.getValue() << ';'
-	    << source->inputsRevision.getValue() << ';'
-	    << source->realizedSourceRevision.getValue() << ';'
-	    << source->realizedInputsRevision.getValue() << ';'
-	    << source->realizedViewRevision.getValue() << ';'
-	    << source->getDisplayMeshLodRevision() << ';';
+	    << source->inputsRevision.getValue() << ';';
+	const std::string sourceIdentityString = sourceIdentity.str();
+	identity << sourceIdentityString;
+
+	inventory << "inventory;" << routingId << ';'
+	    << source->getDisplayMeshLodRevision() << ';'
+	    << source->getCompactInstanceCount() << ';';
+	signatures.sources.push_back(source);
+	signatures.routingIds.push_back(routingId);
+	signatures.inventoryRevisions.push_back(
+	    source->getDisplayMeshLodRevision());
+	signatures.sourceIdentities.push_back(
+	    SbString(sourceIdentityString.c_str()));
     }
 
-    return SbString(out.str().c_str());
+    signatures.identity = identity.str().c_str();
+    signatures.inventory = inventory.str().c_str();
+    return signatures;
 }
 
 void
@@ -3752,10 +4480,12 @@ BObolViewController::setLodService(BObolLodService *service)
     this->d->clearLodSubmissionPlan();
     this->d->lodSubmissionPending = FALSE;
     this->d->lodSubmissionRescanPending = FALSE;
+    this->d->lodVisibleCoverageComplete = FALSE;
     this->d->lodRetainedRefinementPending = FALSE;
     this->d->lodRetainedRefinementCutAdvanced = FALSE;
     this->d->lodRetainedRefinementBudgetBlocked = FALSE;
     this->d->lodBudgetRescanAfterFrame = FALSE;
+    this->d->lodStableCalibrationFramesRemaining = 0;
     this->d->lodPassAdmittedWork = FALSE;
     this->d->lodRefinementFaceBudgetInitialized = FALSE;
     this->d->lodRefinementFaceBudgetRemaining = SIZE_MAX;
@@ -3766,12 +4496,26 @@ BObolViewController::setLodService(BObolLodService *service)
     this->d->lodLastSubmittedViewRevision = 0;
     this->d->lodLastSubmittedPolicyRevision = 0;
     this->d->lodLastSubmittedSourceSignature = "";
+    this->d->lodLastSubmittedInventorySignature = "";
+    this->d->lodLastSubmittedSourceRoutingIds.clear();
+    this->d->lodLastSubmittedSourceInventoryRevisions.clear();
+    this->d->lodLastSubmittedSourceIdentities.clear();
+    this->d->lodSubmissionDeltaActive = FALSE;
+    this->d->lodSubmissionDeltaSources.clear();
+    this->d->lodSubmissionDeltaPlans.clear();
     this->d->lodResidentCompactionPending = service ? TRUE : FALSE;
+    this->d->lodResidentCompactionPlanning = FALSE;
+    this->d->lodResidentCompactionDemandRevision = 0;
+    this->d->lodResidentAdmissionRevision =
+	service ? service->residentMeshAdmissionRevision() : 0;
     this->d->lodResidentCompactionAfterMicroseconds =
 	service ? bu_gettime() + 750000 : 0;
     this->d->lodRefinementAwaitingFrame = FALSE;
     this->d->lodRefinementResumeAfterRenderSerial = 0;
     this->d->lodRefinementNotBeforeMicroseconds = 0;
+    this->d->lodResultPublicationAwaitingFrame = FALSE;
+    this->d->lodUnpresentedResultCount = 0;
+    this->d->lodUnpresentedResultFirstMicroseconds = 0;
 
     if (this->d->lodService)
 	this->d->lodResultSubscriberId =
@@ -3794,6 +4538,7 @@ BObolViewController::cancelActiveLodGeneration(void)
     this->d->lodRetainedRefinementCutAdvanced = FALSE;
     this->d->lodRetainedRefinementBudgetBlocked = FALSE;
     this->d->lodBudgetRescanAfterFrame = FALSE;
+    this->d->lodStableCalibrationFramesRemaining = 0;
     this->d->lodPassAdmittedWork = FALSE;
     this->d->lodRefinementFaceBudgetInitialized = FALSE;
     this->d->lodRefinementFaceBudgetRemaining = SIZE_MAX;
@@ -3806,15 +4551,33 @@ BObolViewController::cancelActiveLodGeneration(void)
     this->d->lodLastSubmittedViewRevision = 0;
     this->d->lodLastSubmittedPolicyRevision = 0;
     this->d->lodLastSubmittedSourceSignature = "";
+    this->d->lodLastSubmittedInventorySignature = "";
+    this->d->lodLastSubmittedSourceRoutingIds.clear();
+    this->d->lodLastSubmittedSourceInventoryRevisions.clear();
+    this->d->lodLastSubmittedSourceIdentities.clear();
+    this->d->lodSubmissionDeltaActive = FALSE;
+    this->d->lodSubmissionDeltaSources.clear();
+    this->d->lodSubmissionDeltaPlans.clear();
     this->d->lodRefinementAwaitingFrame = FALSE;
     this->d->lodRefinementResumeAfterRenderSerial = 0;
     this->d->lodResultPublicationAwaitingFrame = FALSE;
+    this->d->lodUnpresentedResultCount = 0;
+    this->d->lodUnpresentedResultFirstMicroseconds = 0;
     this->d->lodRefinementNotBeforeMicroseconds = 0;
     this->d->lodInteractiveProgressiveCeiling = -1;
+    this->d->lodPresentationPointProxyPixelThreshold = 1.0f;
+    this->d->lodStablePointProxyCalibrationPending = FALSE;
+    this->d->lodStablePointProxyRelaxationActive = FALSE;
+    this->d->lodStablePresentationHandoffActive = FALSE;
     if (this->d->viewAttachment &&
 	this->d->viewAttachment->getViewLodState())
-	this->d->viewAttachment->getViewLodState()->
-	    setCadPresentationProgressiveLodCeiling(-1);
+	{
+	    BObolViewLodState *viewState =
+		this->d->viewAttachment->getViewLodState();
+	    viewState->setCadPresentationProgressiveLodCeiling(-1);
+	    viewState->setCadPresentationPointProxyPixelThreshold(1.0f);
+	    viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+	}
 }
 
 void
@@ -3874,9 +4637,17 @@ BObolViewController::setLodAutoSubmit(SbBool enabled)
 	this->requestRender("lod-auto-submit");
     } else {
 	this->d->lodInteractiveProgressiveCeiling = -1;
-	if (this->d->viewAttachment->getViewLodState())
-	    this->d->viewAttachment->getViewLodState()->
-		setCadPresentationProgressiveLodCeiling(-1);
+	this->d->lodPresentationPointProxyPixelThreshold = 1.0f;
+	this->d->lodStablePointProxyCalibrationPending = FALSE;
+	this->d->lodStablePointProxyRelaxationActive = FALSE;
+	this->d->lodStablePresentationHandoffActive = FALSE;
+	if (this->d->viewAttachment->getViewLodState()) {
+	    BObolViewLodState *viewState =
+		this->d->viewAttachment->getViewLodState();
+	    viewState->setCadPresentationProgressiveLodCeiling(-1);
+	    viewState->setCadPresentationPointProxyPixelThreshold(1.0f);
+	    viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+	}
     }
 }
 
@@ -4447,7 +5218,9 @@ BObolViewController::hasPendingLodRefinementFrame(void) const
      * requesting that frame and completeRenderTiming() made warm scenes stop
      * at cache-temperature-dependent coarse cuts. */
     return this->d->lodRefinementAwaitingFrame ||
-	this->d->lodBudgetRescanAfterFrame;
+	this->d->lodBudgetRescanAfterFrame ||
+	this->d->lodStablePresentationHandoffActive ||
+	this->d->lodStablePointProxyCalibrationPending;
 }
 
 size_t
@@ -4458,15 +5231,20 @@ BObolViewController::processPendingLodResults(size_t maxResults,
 	return 0;
 
     const auto clear_lod_wakeup_if_idle = [this]() {
-	if (!this->d->progressiveProviders.empty() ||
-	    this->d->lodSubmissionPending ||
+	if (this->d->lodSubmissionPending ||
 	    this->d->lodResultsPending.load() != 0 ||
 	    (this->d->lodService &&
 	     this->d->lodService->queuedResultCountForDiagnostics() > 0))
 	    return;
 
-	/* A result-ready callback may race this drain.  Clear first, then
-	 * recheck so a concurrent callback cannot lose its frame wakeup. */
+	/* Merely having a registered provider does not mean that provider has
+	 * work.  Keeping the latch set for the lifetime of every GED provider
+	 * made a late result-ready callback leave an otherwise idle warm scene
+	 * polling forever.  Provider callbacks report their own hasMore state
+	 * from advanceProgressiveWork().
+	 *
+	 * A result-ready callback may race this drain.  Clear first, then recheck
+	 * so a concurrent callback cannot lose its frame wakeup. */
 	this->clearProgressiveWorkPending();
 	if (this->d->lodSubmissionPending || this->d->lodResultsPending.load() != 0 ||
 	    (this->d->lodService &&
@@ -4486,24 +5264,33 @@ BObolViewController::processPendingLodResults(size_t maxResults,
 	return this->d->lastLodResultCount;
     }
 
-    /* Apply drained results in batches rather than one-at-a-time.  Each
-     * applyLodResults() call performs a single SoBRLLodUpdateAction traversal
-     * of the whole scene, so draining one result per traversal makes the total
-     * cost O(results * scene) and stalls the UI while a large assembly streams
-     * in.  Batching collapses many results into one traversal; the microsecond
-     * budget is still honored by checking the clock between batches. */
-    /* The default result queue is 256.  One update action routes all of those
-     * results by compact occurrence key in a single scene traversal.  The old
-     * 64-result quantum traversed a many-thousand-leaf scene four times per
-     * warm-cache wave and made cached box replacement visibly crawl. */
+    /*
+     * Apply drained results in batches to amortize queue synchronization and
+     * payload-journal publication.  The time check happens only between these
+     * atomic calls, so a 2048-result quiet quantum made the nominal 4 ms
+     * contract ineffective (50k GUI traces measured individual applications
+     * above 35 ms).  Keep a 256-result atomic quantum, but honor the outer
+     * time contract between quanta.  Immutable sparse part publication and
+     * adaptive frame batching now bound the deferred renderer update; forcing
+     * one timer turn per quantum left a full 2048-result queue idle while the
+     * workers were back-pressured.
+     *
+     * A first useful mesh and an existing-mesh refinement barrier still yield
+     * after one quantum so the user sees that state before later generations.
+     * Explicit callers which pass a zero time budget retain the unbounded
+     * drain path above.
+     */
     static const size_t apply_batch = 256;
-    const int64_t start = bu_gettime();
+    static const size_t apply_byte_budget = 8u * 1024u * 1024u;
     size_t processed = 0;
     unsigned int matched = 0;
     unsigned int applied = 0;
     unsigned int rejected = 0;
     unsigned int unmatched = 0;
     SbString diagnostics;
+    const int64_t started = bu_gettime();
+    const bool firstUsefulCoverage =
+	this->getActiveLodMeshPayloadCount() == 0;
     while (maxResults == 0 || processed < maxResults) {
 	size_t batch = apply_batch;
 	if (maxResults != 0) {
@@ -4511,7 +5298,8 @@ BObolViewController::processPendingLodResults(size_t maxResults,
 	    if (remaining < batch)
 		batch = remaining;
 	}
-	(void)this->applyLodResults(this->d->lodService, batch);
+	(void)this->applyLodResults(
+	    this->d->lodService, batch, apply_byte_budget);
 	if (this->d->lastLodResultCount == 0)
 	    break;
 	processed += this->d->lastLodResultCount;
@@ -4524,9 +5312,12 @@ BObolViewController::processPendingLodResults(size_t maxResults,
 		diagnostics += "\n";
 	    diagnostics += this->d->lastLodDiagnostics;
 	}
-	const int64_t elapsed = bu_gettime() - start;
-	if (elapsed >= 0 &&
-	    static_cast<uint64_t>(elapsed) >= maxMicroseconds)
+	if (firstUsefulCoverage ||
+	    this->d->lodRefinementAwaitingFrame)
+	    break;
+	const int64_t now = bu_gettime();
+	if (now < started ||
+	    static_cast<uint64_t>(now - started) >= maxMicroseconds)
 	    break;
     }
     this->d->lastLodResultCount = processed;
@@ -4551,14 +5342,19 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 
     this->syncLodViewSignature(TRUE);
 
-    SbString signature = controller_lod_source_signature(this);
+    const controller_lod_source_signatures signatures =
+	controller_lod_source_signature(this);
+    const SbString &signature = signatures.identity;
+    const SbString &inventorySignature = signatures.inventory;
     if (signature.getLength() == 0)
 	return 0;
 
     if (this->d->lodLastSubmittedViewRevision == this->d->lodViewRevision &&
 	this->d->lodLastSubmittedPolicyRevision == this->d->lodPolicyRevision &&
 	bu_strcmp(this->d->lodLastSubmittedSourceSignature.getString(),
-	       signature.getString()) == 0) {
+	       signature.getString()) == 0 &&
+	bu_strcmp(this->d->lodLastSubmittedInventorySignature.getString(),
+	       inventorySignature.getString()) == 0) {
 	if (this->d->lodSubmissionPending && this->d->lodActiveGeneration != 0)
 	    return this->submitLodRequests(this->d->lodService,
 		this->d->lodActiveGeneration, this->d->lodSubmissionRefreshMissing,
@@ -4582,25 +5378,287 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->d->lodLastSubmittedSourceSignature.getLength() > 0 &&
 	bu_strcmp(this->d->lodLastSubmittedSourceSignature.getString(),
 	    signature.getString()) != 0;
-    if (sourceSetChanged || !this->d->lodSubmissionPending) {
-	this->d->lodSubmissionSourceIndex = 0;
+    const bool inventoryChanged =
+	this->d->lodLastSubmittedInventorySignature.getLength() > 0 &&
+	bu_strcmp(this->d->lodLastSubmittedInventorySignature.getString(),
+	    inventorySignature.getString()) != 0;
+    const bool viewOrPolicyChanged =
+	this->d->lodLastSubmittedViewRevision != this->d->lodViewRevision ||
+	this->d->lodLastSubmittedPolicyRevision !=
+	    this->d->lodPolicyRevision;
+    bool useSourceDelta = false;
+    bool extendedPendingDelta = false;
+    bool pendingDeltaNeedsFullRescan = false;
+    size_t sourceDeltaFirst = signatures.sources.size();
+    /*
+     * A source can append another structural batch while an exact delta plan
+     * is only partly consumed.  Extend that pinned plan in place.  Replacing
+     * it restarts at zero; merely setting rescanPending while leaving delta
+     * mode active repeats the old delta forever and never visits the new
+     * tail.
+     *
+     * Keep appended indices at the tail rather than sorting the whole plan:
+     * lodSubmissionEntryOffset is a cursor into this exact ordering.  A
+     * repeated changed index is harmless and necessary when an entry already
+     * consumed by this pass is upgraded again.
+     */
+    if ((sourceSetChanged || inventoryChanged) &&
+	!viewOrPolicyChanged &&
+	this->d->lodSubmissionPending &&
+	this->d->lodSubmissionDeltaActive &&
+	!this->d->lodLastSubmittedSourceRoutingIds.empty()) {
+	for (size_t currentIndex = 0;
+	     currentIndex < signatures.sources.size(); ++currentIndex) {
+	    const uint64_t routingId = signatures.routingIds[currentIndex];
+	    size_t previousIndex =
+		this->d->lodLastSubmittedSourceRoutingIds.size();
+	    for (size_t candidate = 0;
+		 candidate <
+		    this->d->lodLastSubmittedSourceRoutingIds.size();
+		 ++candidate) {
+		if (this->d->lodLastSubmittedSourceRoutingIds[candidate] ==
+			routingId) {
+		    previousIndex = candidate;
+		    break;
+		}
+	    }
+	    const bool knownSource =
+		previousIndex <
+		    this->d->lodLastSubmittedSourceRoutingIds.size();
+	    const bool sameIdentity = knownSource &&
+		previousIndex <
+		    this->d->lodLastSubmittedSourceIdentities.size() &&
+		bu_strcmp(
+		    this->d->lodLastSubmittedSourceIdentities[
+			previousIndex].getString(),
+		    signatures.sourceIdentities[currentIndex].getString()) == 0;
+	    const uint64_t previousInventory =
+		knownSource && previousIndex <
+			this->d->
+			    lodLastSubmittedSourceInventoryRevisions.size() ?
+		    this->d->lodLastSubmittedSourceInventoryRevisions[
+			previousIndex] : 0;
+	    if (sameIdentity && previousInventory ==
+		    signatures.inventoryRevisions[currentIndex])
+		continue;
+	    if (!sameIdentity || !previousInventory) {
+		pendingDeltaNeedsFullRescan = true;
+		continue;
+	    }
+
+	    SoBRLDatabaseSource *changedSource =
+		signatures.sources[currentIndex];
+	    std::vector<size_t> changedEntries;
+	    if (!changedSource->getDisplayMeshLodChangedEntries(
+		    previousInventory, changedEntries) ||
+		changedEntries.empty()) {
+		pendingDeltaNeedsFullRescan = true;
+		continue;
+	    }
+	    const auto existingPlan = std::find_if(
+		this->d->lodSubmissionDeltaPlans.begin(),
+		this->d->lodSubmissionDeltaPlans.end(),
+		[changedSource](const auto &entry) {
+		    return entry.first == changedSource;
+		});
+	    if (existingPlan ==
+		    this->d->lodSubmissionDeltaPlans.end()) {
+		/* No selective plan means this source is already being scanned
+		 * in full.  Its identity plan is extended from compactCount in
+		 * submitLodRequests below. */
+		const bool alreadyTargeted =
+		    std::find(this->d->lodSubmissionDeltaSources.begin(),
+			this->d->lodSubmissionDeltaSources.end(),
+			changedSource) !=
+		    this->d->lodSubmissionDeltaSources.end();
+		if (!alreadyTargeted)
+		    pendingDeltaNeedsFullRescan = true;
+		else
+		    extendedPendingDelta = true;
+		continue;
+	    }
+	    existingPlan->second.insert(existingPlan->second.end(),
+		changedEntries.begin(), changedEntries.end());
+	    if (this->d->lodSubmissionPlanValid &&
+		this->d->lodSubmissionPlanSource == changedSource)
+		this->d->lodSubmissionPlanEntries.insert(
+		    this->d->lodSubmissionPlanEntries.end(),
+		    changedEntries.begin(), changedEntries.end());
+	    extendedPendingDelta = true;
+	}
+    }
+    if ((sourceSetChanged || inventoryChanged) &&
+	!viewOrPolicyChanged &&
+	!this->d->lodSubmissionPending &&
+	!this->d->lodLastSubmittedSourceRoutingIds.empty()) {
+	if (!this->d->lodSubmissionDeltaActive) {
+	    this->d->lodSubmissionDeltaSources.clear();
+	    this->d->lodSubmissionDeltaPlans.clear();
+	}
+	for (size_t currentIndex = 0;
+	     currentIndex < signatures.sources.size(); currentIndex++) {
+	    const uint64_t routingId = signatures.routingIds[currentIndex];
+	    size_t previousIndex =
+		this->d->lodLastSubmittedSourceRoutingIds.size();
+	    for (size_t candidate = 0;
+		 candidate <
+		    this->d->lodLastSubmittedSourceRoutingIds.size();
+		 candidate++) {
+		if (this->d->lodLastSubmittedSourceRoutingIds[candidate] ==
+			routingId) {
+		    previousIndex = candidate;
+		    break;
+		}
+	    }
+	    const bool knownSource =
+		previousIndex <
+		    this->d->lodLastSubmittedSourceRoutingIds.size();
+	    const bool sameIdentity = knownSource &&
+		previousIndex <
+		    this->d->lodLastSubmittedSourceIdentities.size() &&
+		bu_strcmp(
+		    this->d->lodLastSubmittedSourceIdentities[
+			previousIndex].getString(),
+		    signatures.sourceIdentities[currentIndex].getString()) == 0;
+	    const uint64_t previousInventory =
+		knownSource && previousIndex <
+			this->d->
+			    lodLastSubmittedSourceInventoryRevisions.size() ?
+		    this->d->lodLastSubmittedSourceInventoryRevisions[
+			previousIndex] : 0;
+	    const bool inventoryDiffers =
+		!knownSource ||
+		previousInventory !=
+		    signatures.inventoryRevisions[currentIndex];
+	    if (sameIdentity && !inventoryDiffers)
+		continue;
+
+	    SoBRLDatabaseSource *changedSource =
+		signatures.sources[currentIndex];
+	    const bool alreadyTargeted =
+		std::find(this->d->lodSubmissionDeltaSources.begin(),
+		    this->d->lodSubmissionDeltaSources.end(),
+		    changedSource) !=
+		this->d->lodSubmissionDeltaSources.end();
+	    if (!alreadyTargeted)
+		this->d->lodSubmissionDeltaSources.push_back(changedSource);
+	    sourceDeltaFirst = std::min(sourceDeltaFirst, currentIndex);
+	    if (sameIdentity && previousInventory) {
+		std::vector<size_t> changedEntries;
+		if (changedSource->getDisplayMeshLodChangedEntries(
+			previousInventory, changedEntries) &&
+		    !changedEntries.empty()) {
+		    auto existingPlan = std::find_if(
+			this->d->lodSubmissionDeltaPlans.begin(),
+			this->d->lodSubmissionDeltaPlans.end(),
+			[changedSource](const auto &entry) {
+			    return entry.first == changedSource;
+			});
+		    /* An existing target without a delta plan already requires
+		     * a full source scan; a later selective update must not
+		     * accidentally narrow it. */
+		    if (existingPlan !=
+			    this->d->lodSubmissionDeltaPlans.end()) {
+			existingPlan->second.insert(
+			    existingPlan->second.end(),
+			    changedEntries.begin(), changedEntries.end());
+			std::sort(existingPlan->second.begin(),
+			    existingPlan->second.end());
+			existingPlan->second.erase(std::unique(
+			    existingPlan->second.begin(),
+			    existingPlan->second.end()),
+			    existingPlan->second.end());
+		    } else if (!alreadyTargeted) {
+			this->d->lodSubmissionDeltaPlans.push_back(
+			    std::make_pair(changedSource,
+				std::move(changedEntries)));
+		    }
+		} else {
+		    this->d->lodSubmissionDeltaPlans.erase(
+			std::remove_if(
+			    this->d->lodSubmissionDeltaPlans.begin(),
+			    this->d->lodSubmissionDeltaPlans.end(),
+			    [changedSource](const auto &entry) {
+				return entry.first == changedSource;
+			    }),
+			this->d->lodSubmissionDeltaPlans.end());
+		}
+	    } else {
+		this->d->lodSubmissionDeltaPlans.erase(
+		    std::remove_if(
+			this->d->lodSubmissionDeltaPlans.begin(),
+			this->d->lodSubmissionDeltaPlans.end(),
+			[changedSource](const auto &entry) {
+			    return entry.first == changedSource;
+			}),
+		    this->d->lodSubmissionDeltaPlans.end());
+	    }
+	}
+	useSourceDelta = !this->d->lodSubmissionDeltaSources.empty();
+	this->d->lodSubmissionDeltaActive =
+	    useSourceDelta ? TRUE : FALSE;
+    } else if ((sourceSetChanged || inventoryChanged) &&
+	!this->d->lodSubmissionPending) {
+	this->d->lodSubmissionDeltaActive = FALSE;
+	this->d->lodSubmissionDeltaSources.clear();
+	this->d->lodSubmissionDeltaPlans.clear();
+    }
+    if (sourceSetChanged || inventoryChanged) {
+	this->d->lodCoveragePassActive = TRUE;
+	this->d->lodVisibleCoverageComplete = FALSE;
+	this->d->lodStablePointProxyCalibrationPending = FALSE;
+	this->d->lodStablePointProxyRelaxationActive = FALSE;
+	this->d->clearLodConvergenceCandidates();
+	this->d->resetLodConvergenceFraction();
+    }
+    if (sourceSetChanged || useSourceDelta ||
+	!this->d->lodSubmissionPending) {
+	this->d->lodSubmissionSourceIndex =
+	    useSourceDelta ? sourceDeltaFirst : 0;
 	this->d->lodSubmissionEntryOffset = 0;
 	this->d->clearLodSubmissionPlan();
-	this->d->lodSubmissionRescanPending = FALSE;
+	/*
+	 * A selective inventory delta is a latency optimization, not a proof
+	 * that the complete current view is covered.  In particular, a cold
+	 * compact source may publish several large, overlapping deltas while
+	 * its structural registry is still growing.  Declaring coverage from
+	 * only the last delta made completion timing-dependent: untouched
+	 * ranges remained structural boxes until the next camera change.
+	 *
+	 * Consume the exact delta first so newly arrived leaves become useful
+	 * promptly, then perform one bounded all-source pass.  The completion
+	 * path clears delta mode before that pass, and later inventory changes
+	 * extend the in-flight delta without losing this obligation.
+	 */
+	this->d->lodSubmissionRescanPending =
+	    useSourceDelta ? TRUE : FALSE;
 	this->d->lodRetainedRefinementPending = FALSE;
 	this->d->lodRetainedRefinementCutAdvanced = FALSE;
 	this->d->lodRetainedRefinementBudgetBlocked = FALSE;
 	this->d->lodBudgetRescanAfterFrame = FALSE;
+	this->d->lodStableCalibrationFramesRemaining = 0;
 	this->d->lodPassAdmittedWork = FALSE;
 	this->d->lodRefinementFaceBudgetInitialized = FALSE;
 	this->d->lodRefinementFaceBudgetRemaining = SIZE_MAX;
 	this->d->lodRetainedAdmissionActive = FALSE;
 	this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
 	this->d->lodRefinementBudgetRetryMicroseconds = 0;
-    } else {
+	if (useSourceDelta) {
+	    this->d->lodCoveragePassSawBoundedSource = FALSE;
+	    this->d->lodCoveragePassVisibleCount = 0;
+	    this->d->lodCoveragePassCoveredCount = 0;
+	}
+	if (sourceSetChanged || inventoryChanged)
+	    this->d->lodStableOverloadRecoveryPerformed = FALSE;
+	if (sourceSetChanged || inventoryChanged)
+	    this->d->lodStableOverloadRecoveryActiveFaces = 0;
+    } else if (!extendedPendingDelta) {
 	this->d->lodSubmissionRescanPending = TRUE;
     }
+    if (pendingDeltaNeedsFullRescan)
+	this->d->lodSubmissionRescanPending = TRUE;
     this->d->lodSubmissionPending = TRUE;
+    this->d->lodStableBudgetLimited = FALSE;
     this->d->lodSubmissionRefreshMissing = refreshMissing;
     this->d->lodSubmissionReset = reset;
     int submitted = this->submitLodRequests(this->d->lodService, generation,
@@ -4610,6 +5668,12 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	this->d->lodLastSubmittedViewRevision = this->d->lodViewRevision;
 	this->d->lodLastSubmittedPolicyRevision = this->d->lodPolicyRevision;
 	this->d->lodLastSubmittedSourceSignature = signature;
+	this->d->lodLastSubmittedInventorySignature = inventorySignature;
+	this->d->lodLastSubmittedSourceRoutingIds = signatures.routingIds;
+	this->d->lodLastSubmittedSourceInventoryRevisions =
+	    signatures.inventoryRevisions;
+	this->d->lodLastSubmittedSourceIdentities =
+	    signatures.sourceIdentities;
     }
     return submitted;
 }
@@ -4659,6 +5723,9 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->lodRetainedAdmissionActive = FALSE;
 	this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
 	this->d->lodRefinementBudgetRetryMicroseconds = 0;
+	this->d->lodCoveragePassSawBoundedSource = FALSE;
+	this->d->lodCoveragePassVisibleCount = 0;
+	this->d->lodCoveragePassCoveredCount = 0;
 	this->d->lodSubmissionPending = TRUE;
 	this->d->lodSubmissionRefreshMissing = refreshMissing;
 	this->d->lodSubmissionReset = reset;
@@ -4693,24 +5760,37 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    targetFps > 0.0f && calibratedFacesPerSecond > 0.0L ?
 	    calibratedFacesPerSecond /
 		static_cast<long double>(targetFps) : 0.0L;
+	const long double observedStableNanoseconds = std::max(
+	    this->d->lodLastRenderWasPreparedCadReplay ?
+		static_cast<long double>(
+		    this->d->lastRenderTimeNanoseconds) : 0.0L,
+	    static_cast<long double>(
+		this->d->lodLastCadGpuTimeNanoseconds));
+	const SbBool severeStableOverload =
+	    !this->d->lodInteractive &&
+	    targetNanoseconds > 0.0L &&
+	    observedStableNanoseconds > targetNanoseconds * 2.0L;
 	/* Quiet refinement is normally monotonic, but a discrete PoP jump can
-	 * overshoot a nonlinear renderer ceiling.  Require three unchanged
-	 * calibration probes, a material frame miss, and a calibrated budget
-	 * materially below the current cut before permitting recovery.  The
-	 * recovery changes only the retained draw prefix; it does not restore a
-	 * box or rebuild/reload the asset. */
+	 * overshoot a nonlinear renderer ceiling.  Ordinary misses require
+	 * three unchanged probes.  A frame over twice the target is already a
+	 * severe user-visible stall and backs off immediately; treating that as
+	 * a possible one-frame setup outlier makes renewed input wait behind
+	 * repeated known-bad frames.  Recovery changes only retained draw cuts,
+	 * never the cache or source geometry. */
 	const SbBool stableOverloadRecovery =
 	    !this->d->lodInteractive &&
 	    !this->d->forceTerminalLodRefinement &&
+	    (!this->d->lodStableOverloadRecoveryPerformed ||
+	     this->d->lodStableOverloadRecoveryActiveFaces != activeFaces) &&
 	    activeFaces > 0 &&
-	    this->d->lodStableCalibrationProbeCount >= 3 &&
+	    (this->d->lodStableCalibrationProbeCount >= 3 ||
+	     severeStableOverload) &&
 	    targetNanoseconds > 0.0L &&
-	    static_cast<long double>(
-		this->d->lastRenderTimeNanoseconds) >
-		targetNanoseconds * 1.20L &&
-	    calibratedFaceBudget > 0.0L &&
-	    calibratedFaceBudget <
-		static_cast<long double>(activeFaces) * 0.95L;
+	    observedStableNanoseconds > targetNanoseconds * 1.20L &&
+	    (severeStableOverload ||
+	     (calibratedFaceBudget > 0.0L &&
+	      calibratedFaceBudget <
+		static_cast<long double>(activeFaces) * 0.95L));
 	size_t faceBudget = this->d->lodSeedFaceBudget;
 	if (this->d->forceTerminalLodRefinement) {
 	    faceBudget = SIZE_MAX;
@@ -4753,9 +5833,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		     * an EMA spanning the earlier blank and minimum-cut frames
 		     * can keep a now-cheap cut at 1.25x growth indefinitely. */
 		    const uint64_t observedNanoseconds =
-			this->d->lastRenderTimeNanoseconds ?
-			this->d->lastRenderTimeNanoseconds :
-			this->d->smoothedRenderTimeNanoseconds;
+			static_cast<uint64_t>(observedStableNanoseconds);
 		    if (growthTargetNanoseconds > 0.0L &&
 			static_cast<long double>(observedNanoseconds) >=
 			    growthTargetNanoseconds * 0.50L) {
@@ -4799,6 +5877,84 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		this->d->lodCurrentFaceBudget != SIZE_MAX)
 		faceBudget = std::max(faceBudget,
 		    this->d->lodCurrentFaceBudget);
+	    /* The throughput EMA necessarily remembers cheaper earlier cuts.
+	     * Near the target frame time it can therefore remain slightly above
+	     * the capacity of the population now on screen.  Letting that stale
+	     * optimism raise the allowance by a few faces starts another full
+	     * many-leaf scan, fills the tiny increment, and repeats forever.
+	     *
+	     * Ten percent frame-time headroom is the stable convergence margin:
+	     * below it, preserve the current coherent cut and report the view as
+	     * performance-limited.  Larger headroom still grows normally, and a
+	     * later camera epoch recalibrates from the retained cut. */
+	    if (!this->d->lodInteractive &&
+		this->d->lodCurrentFaceBudget != SIZE_MAX &&
+		faceBudget > this->d->lodCurrentFaceBudget &&
+		targetNanoseconds > 0.0L) {
+		const uint64_t observedNanoseconds =
+		    static_cast<uint64_t>(observedStableNanoseconds);
+		if (observedNanoseconds > 0 &&
+		    static_cast<long double>(observedNanoseconds) >=
+			targetNanoseconds * 0.90L)
+		    faceBudget = this->d->lodCurrentFaceBudget;
+	    }
+	    if (stableOverloadRecovery &&
+		observedStableNanoseconds > 0.0L) {
+		/* Use the measured current population directly for backoff.
+		 * The smoothed throughput intentionally lags normal noise, but
+		 * that same lag retained a 187 ms frame for dozens of 50k-entry
+		 * scans.  Target 80 percent of the frame-time allowance so the
+		 * recovered cut leaves room for interaction and bookkeeping. */
+		const long double recovered =
+		    static_cast<long double>(activeFaces) *
+		    targetNanoseconds * 0.80L /
+		    observedStableNanoseconds;
+		const size_t recoveredBudget =
+		    recovered >= static_cast<long double>(SIZE_MAX) ?
+			SIZE_MAX : static_cast<size_t>(
+			    std::max<long double>(
+				static_cast<long double>(
+				    this->d->lodSeedFaceBudget),
+				recovered));
+		faceBudget = std::min(faceBudget, recoveredBudget);
+	    }
+	}
+	/* The first interaction on an already-settled scene has no independent
+	 * motion calibration yet.  Do not replace a demonstrably responsive cut
+	 * with the nominal 50k seed.  Bootstrap an allowance from the current
+	 * retained frame, with 20 percent timing headroom and bounded 4x growth.
+	 * Pose-only motion will retain the current cut; zoom may spend the extra
+	 * allowance while retargeting from that cut.  A later slow interaction
+	 * frame immediately lowers the dedicated motion calibration. */
+	if (this->d->lodInteractive && activeFaces > 0 &&
+	    targetNanoseconds > 0.0L) {
+	    uint64_t observedNanoseconds = std::max(
+		this->d->lastRenderTimeNanoseconds,
+		this->d->smoothedRenderTimeNanoseconds);
+	    if (this->d->lodGestureActive) {
+		std::lock_guard<std::mutex> lock(
+		    this->d->presentationTimingMutex);
+		observedNanoseconds = std::max(observedNanoseconds,
+		    this->d->
+			smoothedInteractivePresentationIntervalNanoseconds);
+	    }
+	    if (observedNanoseconds > 0 &&
+		static_cast<long double>(observedNanoseconds) <=
+		    targetNanoseconds * 1.05L) {
+		const long double affordable =
+		    static_cast<long double>(activeFaces) *
+		    targetNanoseconds * 0.80L /
+		    static_cast<long double>(observedNanoseconds);
+		const size_t growthLimit =
+		    activeFaces > SIZE_MAX / 4 ? SIZE_MAX : activeFaces * 4;
+		const size_t responsiveBudget =
+		    affordable >= static_cast<long double>(growthLimit) ?
+			growthLimit :
+			static_cast<size_t>(std::max<long double>(
+			    static_cast<long double>(activeFaces),
+			    affordable));
+		faceBudget = std::max(faceBudget, responsiveBudget);
+	    }
 	}
 	/* Button release does not define a new quality epoch.  Preserve the
 	 * complete held-button cut through the debounce even if recomputing the
@@ -4807,6 +5963,15 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->d->lodCurrentFaceBudget != SIZE_MAX)
 	    faceBudget = std::max(faceBudget,
 		this->d->lodCurrentFaceBudget);
+	/*
+	 * Translate retained-byte pressure into a conservative occurrence-face
+	 * allowance.  Bytes are unique per asset while faces are charged per
+	 * occurrence, so this is intentionally an iterative admission bound,
+	 * not a claim of exact byte/triangle proportionality.  The following
+	 * stable demand compaction measures the actual result and may schedule
+	 * another bounded pass.  Targeting 80 percent leaves room for incoming
+	 * worker publications and renderer-side copies.
+	 */
 	this->d->lodCurrentFaceBudget = faceBudget;
 	const size_t additionalFaces =
 	    faceBudget == SIZE_MAX ? SIZE_MAX :
@@ -4816,9 +5981,14 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	 * overload case above.  Recovery reuses already resident PoP arrays and
 	 * only lowers their draw counts, avoiding box flashes and reload churn. */
 	this->d->lodRetainedAdmissionActive =
-	    (this->d->lodInteractive || stableOverloadRecovery) &&
+	    (this->d->lodInteractive || stableOverloadRecovery ||
+	     this->d->lodStablePresentationHandoffActive) &&
 	    faceBudget != SIZE_MAX && activeFaces > faceBudget ?
 	    TRUE : FALSE;
+	if (stableOverloadRecovery) {
+	    this->d->lodStableOverloadRecoveryPerformed = TRUE;
+	    this->d->lodStableOverloadRecoveryActiveFaces = activeFaces;
+	}
 	this->d->lodRetainedAdmissionBudgetRemaining =
 	    this->d->lodRetainedAdmissionActive ? faceBudget : SIZE_MAX;
 	this->d->lodRefinementBudgetRetryMicroseconds = 0;
@@ -4868,6 +6038,15 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->d->clearLodSubmissionPlan();
 	    continue;
 	}
+	if (this->d->lodSubmissionDeltaActive &&
+	    std::find(this->d->lodSubmissionDeltaSources.begin(),
+		this->d->lodSubmissionDeltaSources.end(), source) ==
+		this->d->lodSubmissionDeltaSources.end()) {
+	    this->d->lodSubmissionSourceIndex = ++i;
+	    this->d->lodSubmissionEntryOffset = 0;
+	    this->d->clearLodSubmissionPlan();
+	    continue;
+	}
 	/* A compact source records its source-backed PoP requests explicitly,
 	 * making absence authoritative and cheap to test.  Non-compact sources
 	 * may still contain legacy/direct SoBRLMeshShape children whose request
@@ -4893,6 +6072,35 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    continue;
 	}
 
+	BObolViewLodState *viewLodState =
+	    this->d->viewAttachment->getViewLodState();
+	const size_t sourceMeshRequests =
+	    source->getDisplayMeshLodRequestCount();
+	/*
+	 * Rotation/translation deliberately keeps existing per-occurrence
+	 * prefixes.  When every current source-backed mesh occurrence already
+	 * has a mesh payload, the renderer's bounded prepared-frame refresh
+	 * handles exact frustum visibility and there is no LoD work to discover.
+	 * The quiet policy revision performs the new-view pixel-exact pass;
+	 * inventory deltas and incomplete coverage always use the normal path.
+	 */
+	const SbBool poseOnlyFullyResident =
+	    this->d->lodInteractive &&
+	    !this->d->lodViewScaleChanging &&
+	    !this->d->lodSubmissionDeltaActive &&
+	    sourceMeshRequests > 0 && viewLodState &&
+	    viewLodState->cadMeshPayloadCountForSource(source) >=
+		sourceMeshRequests;
+	if (poseOnlyFullyResident) {
+	    this->d->setLodConvergenceCandidateCount(
+		source,
+		viewLodState->cadMeshPayloadCountForSource(source));
+	    this->d->lodSubmissionSourceIndex = ++i;
+	    this->d->lodSubmissionEntryOffset = 0;
+	    this->d->clearLodSubmissionPlan();
+	    continue;
+	}
+
 	SoBRLMeshLodSubmitAction action;
 	action.setService(service);
 	action.setDatabase(dbip, controller_database_id(dbip),
@@ -4908,34 +6116,129 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	action.setRevisions(this->d->lodViewRevision, this->d->lodPolicyRevision);
 	action.setRefreshMissing(refreshMissing);
 	action.setReset(reset);
-	action.setViewLodState(this->d->viewAttachment->getViewLodState());
+	action.setViewLodState(viewLodState);
 	/* Coarsening a retained prefix only changes the draw count/snap level;
 	 * it does not rebuild or reread the mesh.  Permit it during motion so a
 	 * previously settled, expensive cut cannot pin interactive FPS. */
-	action.setAllowLevelDowngrade(TRUE);
+	const SbBool scaleDemandChanged =
+	    !this->d->lodInteractive || this->d->lodViewScaleChanging;
+	/*
+	 * A pose-only interaction already has the assembly-wide render ceiling
+	 * as its instantaneous FPS control.  Rewriting hundreds of retained
+	 * occurrence cuts underneath that same ceiling cannot reduce submitted
+	 * geometry, but it invalidates the prepared command record and turns
+	 * rotation into repeated 40-50 ms rebuilds.  Preserve the resident
+	 * per-occurrence cuts until zoom, stable view allocation, or later
+	 * memory compaction genuinely requires them to change.
+	 */
+	const SbBool applyRetainedAdmission =
+	    this->d->lodRetainedAdmissionActive &&
+	    (!this->d->lodInteractive || this->d->lodViewScaleChanging);
+	action.setAllowLevelDowngrade(
+	    scaleDemandChanged || applyRetainedAdmission);
 	action.setAllowRetainedRefinement(
-	    this->d->lodRefinementAwaitingFrame ? FALSE : TRUE);
+	    (this->d->forceTerminalLodRefinement || scaleDemandChanged) &&
+	    !this->d->lodRefinementAwaitingFrame ? TRUE : FALSE);
+	/* A calibrated face budget governs richness above the minimum drawable
+	 * mesh floor.  Returning a visible resident PoP payload to its box is
+	 * both a visual regression and a false economy: the renderer can batch
+	 * tiny minimum prefixes into the aggregate point channel without
+	 * discarding the useful retained asset. */
+	action.setPreserveMeshCoverage(TRUE);
 	action.setRefinementFaceBudget(
 	    this->d->lodRefinementFaceBudgetRemaining);
-	if (this->d->lodRetainedAdmissionActive)
-	action.setRetainedSceneFaceBudget(
+	/* Every bounded window owns a disjoint part of the pinned occurrence
+	 * plan and consumes from this carried scene-wide remainder.  The action
+	 * deliberately skips its full priority recovery when a finite window is
+	 * configured, avoiding an O(scene size) input stall. */
+	if (applyRetainedAdmission)
+	    action.setRetainedSceneFaceBudget(
 		this->d->lodRetainedAdmissionBudgetRemaining);
 	action.setSubmissionTaskLimit(capacity);
-	/* A complete projected priority sort is valuable for a quiet view, but
-	 * it is the wrong unit of work for an input turn containing tens of
-	 * thousands of leaves.  During interaction, start with deterministic
-	 * compact-index order and consume it in bounded waves.  Every occurrence
-	 * is still projected against the newest camera and charged to the same
-	 * aggregate face budget; only global ordering is deferred until the
-	 * stable pass.  This keeps warm-cache activation and interactive
-	 * coarsening progressive without a 50-200 ms monolithic UI stall. */
-	static const size_t interactiveCompactWave = 2048;
+	/* Planning and request construction execute on the host thread.  Keep
+	 * their per-pump slice below a frame even when a nominal 2k window has
+	 * become expensive due to large retained maps.  Deterministic/offline
+	 * callers may explicitly remove this interactive deadline. */
+	action.setSubmissionTimeLimit(
+	    this->d->forceTerminalLodRefinement ? 0 : 3000);
+	/* Never make a complete many-leaf projection/sort one GUI operation.
+	 * Initial mesh coverage has no user-visible ordering contract; consume
+	 * compact-index order in bounded waves and project each occurrence
+	 * against the newest camera when its wave is reached.  Already-retained
+	 * payloads are independently re-admitted by screen priority above, so
+	 * coarsening still protects the visibly important population.
+	 *
+	 * This applies to quiet views too.  The former "stable full sort" reached
+	 * 66 ms at only 14k leaves and would exceed 200 ms at 50k, making console
+	 * input and renewed motion wait behind an LoD planning frame. */
+	static const size_t quietCompactWave = 2048;
+	static const size_t interactiveCompactWave = 512;
+	const size_t compactWave = this->d->lodInteractive ?
+	    interactiveCompactWave : quietCompactWave;
 	const int compactCount = source->getCompactInstanceCount();
-	const SbBool boundedInteractiveCompact =
-	    this->d->lodInteractive &&
-	    compactCount > static_cast<int>(interactiveCompactWave) ?
+	const SbBool boundedLargeCompact =
+	    compactCount > static_cast<int>(compactWave) ?
 	    TRUE : FALSE;
-	if (boundedInteractiveCompact &&
+	const bool usingUnsatisfiedFrontier =
+	    boundedLargeCompact &&
+	    !this->d->lodSubmissionDeltaActive &&
+	    !this->d->lodCoveragePassActive &&
+	    this->d->lodVisibleCoverageComplete &&
+	    !this->d->lodRetainedAdmissionActive &&
+	    viewLodState;
+	bool selectiveDeltaPlan = false;
+	if (this->d->lodSubmissionDeltaActive &&
+	    (!this->d->lodSubmissionPlanValid ||
+	     this->d->lodSubmissionPlanSource != source)) {
+	    for (const auto &deltaPlan :
+		this->d->lodSubmissionDeltaPlans) {
+		if (deltaPlan.first != source)
+		    continue;
+		selectiveDeltaPlan = true;
+		this->d->lodSubmissionPlanEntries = deltaPlan.second;
+		this->d->lodSubmissionPlanSource = source;
+		this->d->lodSubmissionPlanValid = TRUE;
+		break;
+	    }
+	} else if (this->d->lodSubmissionDeltaActive) {
+	    selectiveDeltaPlan = std::any_of(
+		this->d->lodSubmissionDeltaPlans.begin(),
+		this->d->lodSubmissionDeltaPlans.end(),
+		[source](const auto &deltaPlan) {
+		    return deltaPlan.first == source;
+		});
+	}
+	if (usingUnsatisfiedFrontier &&
+	    (!this->d->lodSubmissionPlanValid ||
+	     this->d->lodSubmissionPlanSource != source)) {
+	    std::vector<SbString> unsatisfiedKeys;
+	    viewLodState->unsatisfiedCadOccurrenceKeys(
+		source, unsatisfiedKeys);
+	    this->d->lodSubmissionPlanEntries.clear();
+	    this->d->lodSubmissionPlanEntries.reserve(
+		unsatisfiedKeys.size());
+	    for (const SbString &key : unsatisfiedKeys) {
+		size_t entryIndex = 0;
+		if (source->getCompactInstanceIndex(
+			key.getString(), entryIndex))
+		    this->d->lodSubmissionPlanEntries.push_back(
+			entryIndex);
+	    }
+	    this->d->lodSubmissionPlanSource = source;
+	    this->d->lodSubmissionPlanValid = TRUE;
+	}
+	if (boundedLargeCompact && this->d->lodCoveragePassActive) {
+	    /*
+	     * A bounded index-order window cannot know whether a later window
+	     * still contains an uncovered visible leaf.  Do not let already
+	     * covered early entries consume upward-refinement allowance until a
+	     * complete projected pass proves coverage.  Missing entries still
+	     * bind resident/cache data or submit their minimum provider request.
+	     */
+	    action.setAllowRetainedRefinement(FALSE);
+	    this->d->lodCoveragePassSawBoundedSource = TRUE;
+	}
+	if (boundedLargeCompact &&
 	    (!this->d->lodSubmissionPlanValid ||
 	     this->d->lodSubmissionPlanSource != source)) {
 	    this->d->lodSubmissionPlanEntries.resize(
@@ -4946,16 +6249,89 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		this->d->lodSubmissionPlanEntries[planIndex] = planIndex;
 	    this->d->lodSubmissionPlanSource = source;
 	    this->d->lodSubmissionPlanValid = TRUE;
+	} else if (boundedLargeCompact && !usingUnsatisfiedFrontier &&
+	    (!this->d->lodSubmissionDeltaActive || !selectiveDeltaPlan) &&
+	    this->d->lodSubmissionPlanValid &&
+	    this->d->lodSubmissionPlanSource == source &&
+	    this->d->lodSubmissionPlanEntries.size() <
+		static_cast<size_t>(compactCount)) {
+	    /* Structural streaming appends leaves while a pinned scan is in
+	     * flight.  Extend the plan tail without restarting the consumed
+	     * prefix; restarting at zero on every batch starves late leaves. */
+	    const size_t oldCount =
+		this->d->lodSubmissionPlanEntries.size();
+	    this->d->lodSubmissionPlanEntries.resize(
+		static_cast<size_t>(compactCount));
+	    for (size_t planIndex = oldCount;
+		 planIndex < this->d->lodSubmissionPlanEntries.size();
+		 planIndex++)
+		this->d->lodSubmissionPlanEntries[planIndex] = planIndex;
 	}
 	if (this->d->lodSubmissionPlanValid &&
 	    this->d->lodSubmissionPlanSource == source)
-	    action.setCompactEntryPlan(
-		this->d->lodSubmissionPlanEntries);
+	    action.setCompactEntryPlanView(
+		&this->d->lodSubmissionPlanEntries);
 	action.setCompactEntryRange(this->d->lodSubmissionEntryOffset,
-	    boundedInteractiveCompact ? interactiveCompactWave : SIZE_MAX);
+	    boundedLargeCompact ? compactWave : SIZE_MAX);
 	if (this->d->lodUseForcedLevel)
 	    action.setForcedLevel(this->d->lodForcedLevel);
 	action.apply(source);
+	const bool fullViewCandidatePass =
+	    !usingUnsatisfiedFrontier &&
+	    !this->d->lodSubmissionDeltaActive;
+	if (fullViewCandidatePass) {
+	    if (this->d->lodSubmissionVisibleCountSource != source) {
+		this->d->lodSubmissionVisibleCountSource = source;
+		this->d->lodSubmissionVisibleCount = 0;
+	    }
+	    const size_t visible = action.getVisibleMeshCount();
+	    this->d->lodSubmissionVisibleCount =
+		visible > SIZE_MAX -
+			this->d->lodSubmissionVisibleCount ?
+		    SIZE_MAX :
+		    this->d->lodSubmissionVisibleCount + visible;
+	}
+	if (this->d->lodCoveragePassActive) {
+	    const size_t visible = action.getVisibleMeshCount();
+	    const size_t covered = action.getCoveredVisibleMeshCount();
+	    this->d->lodCoveragePassVisibleCount =
+		visible > SIZE_MAX -
+			this->d->lodCoveragePassVisibleCount ?
+		    SIZE_MAX :
+		    this->d->lodCoveragePassVisibleCount + visible;
+	    this->d->lodCoveragePassCoveredCount =
+		covered > SIZE_MAX -
+			this->d->lodCoveragePassCoveredCount ?
+		    SIZE_MAX :
+		    this->d->lodCoveragePassCoveredCount + covered;
+	}
+	if (getenv("BOBOL_LOD_TRACE_SUBMISSION")) {
+	    static std::atomic<unsigned int> submissionTraceCount(0);
+	    const unsigned int traceIndex =
+		submissionTraceCount.fetch_add(1);
+	    if (traceIndex < 128)
+		bu_log("BObol LoD submission at=%lld path=%s entries=%d "
+		       "offset=%zu visited=%u visible=%zu covered=%zu "
+		       "tasks=%u cuts=%u skipped=%u deferred=%d next=%zu "
+		       "coverage_pass=%d diagnostics=%s\n",
+		       static_cast<long long>(bu_gettime()),
+		       source->path.getValue().getString(), compactCount,
+		       this->d->lodSubmissionEntryOffset,
+		       action.getVisitedMeshCount(),
+		       action.getVisibleMeshCount(),
+		       action.getCoveredVisibleMeshCount(),
+		       action.getSubmittedTaskCount(),
+		       action.getUpdatedCutCount(),
+		       action.getSkippedMeshCount(),
+		       action.hasDeferredCompactEntries() ? 1 : 0,
+		       action.getCompactEntryNext(),
+		       this->d->lodCoveragePassActive ? 1 : 0,
+		       action.getDiagnostics().getString());
+	}
+	if (fullViewCandidatePass &&
+	    !action.hasDeferredCompactEntries())
+	    this->d->setLodConvergenceCandidateCount(source,
+		this->d->lodSubmissionVisibleCount);
 	if (!this->d->lodSubmissionPlanValid &&
 	    source->hasCompactInstanceIndex()) {
 	    action.getCompactEntryPlan(
@@ -4970,7 +6346,13 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	if (action.getSubmittedTaskCount() > 0 ||
 	    action.getUpdatedCutCount() > 0)
 	    this->d->lodPassAdmittedWork = TRUE;
-	if (action.getUpdatedCutCount() > 0)
+	/* Retained-admission changes are recovery/coarsening (including
+	 * retiring an occurrence to its structural proxy), not upward PoP
+	 * refinement.  Marking every such bounded slice as a richer cut routed
+	 * it through the slow-frame refinement cooldown; a 50k scene could then
+	 * spend nearly two seconds between each of 25 recovery windows. */
+	if (action.getUpdatedCutCount() > 0 &&
+	    !this->d->lodRetainedAdmissionActive)
 	    this->d->lodRetainedRefinementCutAdvanced = TRUE;
 	if (action.getPendingRetainedRefinementCount() > 0)
 	    this->d->lodRetainedRefinementPending = TRUE;
@@ -4992,7 +6374,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		used >= this->d->lodRefinementFaceBudgetRemaining ?
 		0 : this->d->lodRefinementFaceBudgetRemaining - used;
 	}
-	if (this->d->lodRetainedAdmissionActive) {
+	if (applyRetainedAdmission) {
 	    const size_t used =
 		action.getRetainedSceneFaceBudgetUsed();
 	    this->d->lodRetainedAdmissionBudgetRemaining =
@@ -5016,7 +6398,148 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 
     const bool completedPass =
 	this->d->lodSubmissionSourceIndex >= sources.size();
-    if (completedPass && this->d->lodRetainedRefinementPending &&
+    const bool completedPassChangedCut =
+	completedPass &&
+	this->d->lodRetainedRefinementCutAdvanced;
+    if (completedPass && getenv("BOBOL_LOD_TRACE_PASS")) {
+	static std::atomic<unsigned int> completedPassTraceCount(0);
+	const unsigned int traceIndex =
+	    completedPassTraceCount.fetch_add(1);
+	if (traceIndex < 512)
+	    bu_log("BObol LoD completed pass coverage=%d "
+		   "coverage_seen=%d coverage_complete=%d delta=%d "
+		   "handoff=%d refinement_pending=%d cut_advanced=%d "
+		   "budget_rescan=%d active_faces=%zu face_budget=%zu "
+		   "visited=%u cuts=%u\n",
+		   this->d->lodCoveragePassActive ? 1 : 0,
+		   this->d->lodCoveragePassSawBoundedSource ? 1 : 0,
+		   this->d->lodVisibleCoverageComplete ? 1 : 0,
+		   this->d->lodSubmissionDeltaActive ? 1 : 0,
+		   this->d->lodStablePresentationHandoffActive ? 1 : 0,
+		   this->d->lodRetainedRefinementPending ? 1 : 0,
+		   this->d->lodRetainedRefinementCutAdvanced ? 1 : 0,
+		   this->d->lodBudgetRescanAfterFrame ? 1 : 0,
+		   sceneActiveFaces, this->d->lodCurrentFaceBudget,
+		   this->d->lastLodVisitedMeshCount,
+		   this->d->lastLodUpdatedCutCount);
+    }
+    if (completedPass && this->d->lodCoveragePassActive &&
+	!this->d->lodCoveragePassSawBoundedSource &&
+	!this->d->lodSubmissionRescanPending) {
+	/* A targeted delta may address a small compact source.  Its single
+	 * synchronous action is already a complete coverage pass; do not leave
+	 * the global coverage state armed merely because no 2k window was
+	 * needed. */
+	this->d->lodVisibleCoverageComplete =
+	    this->d->lodCoveragePassCoveredCount >=
+		this->d->lodCoveragePassVisibleCount ? TRUE : FALSE;
+	this->d->setLodConvergenceCompleteVisibleCount(
+	    this->d->lodCoveragePassVisibleCount);
+	if (!this->d->lodVisibleCoverageComplete) {
+	    BObolViewLodState *coverageState =
+		this->d->viewAttachment->getViewLodState();
+	    if (coverageState)
+		coverageState->setCadPresentationCameraMotionFrameReuse(
+		    FALSE);
+	}
+	this->d->lodCoveragePassActive = FALSE;
+	this->d->lodCoveragePassVisibleCount = 0;
+	this->d->lodCoveragePassCoveredCount = 0;
+    }
+    const bool completedCoveragePass =
+	completedPass && this->d->lodCoveragePassActive &&
+	this->d->lodCoveragePassSawBoundedSource &&
+	!this->d->lodSubmissionRescanPending;
+    if (completedCoveragePass) {
+	const bool missingCoverage =
+	    this->d->lodCoveragePassCoveredCount <
+		this->d->lodCoveragePassVisibleCount;
+	if (getenv("BOBOL_LOD_TRACE_PASS"))
+	    bu_log("BObol LoD completed coverage pass visible=%zu "
+		   "covered=%zu missing=%d admitted=%d "
+		   "budget_blocked=%d rescan_pending=%d\n",
+		   this->d->lodCoveragePassVisibleCount,
+		   this->d->lodCoveragePassCoveredCount,
+		   missingCoverage ? 1 : 0,
+		   this->d->lodPassAdmittedWork ? 1 : 0,
+		   this->d->lodRetainedRefinementBudgetBlocked ? 1 : 0,
+		   this->d->lodSubmissionRescanPending ? 1 : 0);
+	this->d->setLodConvergenceCompleteVisibleCount(
+	    this->d->lodCoveragePassVisibleCount);
+	this->d->lodVisibleCoverageComplete =
+	    missingCoverage ? FALSE : TRUE;
+	this->d->lodSubmissionSourceIndex = 0;
+	this->d->lodSubmissionEntryOffset = 0;
+	this->d->clearLodSubmissionPlan();
+	this->d->lodSubmissionRescanPending = FALSE;
+	this->d->lodPassAdmittedWork = FALSE;
+	this->d->lodStableBudgetLimited = FALSE;
+	this->d->lodRetainedRefinementPending = FALSE;
+	this->d->lodRetainedRefinementBudgetBlocked = FALSE;
+	this->d->lodRetainedRefinementCutAdvanced = FALSE;
+	this->d->lodRefinementFaceBudgetInitialized = FALSE;
+	this->d->lodRefinementFaceBudgetRemaining = SIZE_MAX;
+	this->d->lodRetainedAdmissionActive = FALSE;
+	this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
+	this->d->lodRefinementBudgetRetryMicroseconds = 0;
+	this->d->lodCoveragePassSawBoundedSource = FALSE;
+	this->d->lodCoveragePassVisibleCount = 0;
+	this->d->lodCoveragePassCoveredCount = 0;
+	if (missingCoverage) {
+	    BObolViewLodState *coverageState =
+		this->d->viewAttachment->getViewLodState();
+	    if (coverageState)
+		coverageState->setCadPresentationCameraMotionFrameReuse(
+		    FALSE);
+	    /*
+	     * Capacity for the next minimum-prefix wave must be learned from a
+	     * presented frame, just like ordinary scene-budget admission.
+	     * completeRenderTiming() restarts this coverage pass with the new
+	     * allowance.  Until then, pending provider work may continue on the
+	     * worker pool without turning the GUI loop into a busy rescan.
+	     */
+	    this->d->lodSubmissionPending = FALSE;
+	    this->d->lodBudgetRescanAfterFrame = TRUE;
+	    this->requestRender("lod-coverage-admission");
+	    this->notifyFrameRequest("lod-coverage-admission");
+	} else {
+	    /* Every projected leaf was already represented by a mesh.  Begin a
+	     * fresh bounded pass which may now spend the remaining scene budget
+	     * on screen-value-ordered PoP refinement. */
+	    this->d->lodCoveragePassActive = FALSE;
+	    this->d->lodSubmissionPending = TRUE;
+	    this->markProgressiveWorkPending();
+	}
+    } else if (completedPass && this->d->lodSubmissionRescanPending) {
+	/*
+	 * A rescan requested while consuming an exact source delta is a full
+	 * current-view coverage obligation.  Handle it before refinement and
+	 * budget barriers: either of those paths may legitimately wait for a
+	 * frame, but neither may erase an inventory-coverage obligation.  The
+	 * old ordering made cold completion depend on whether the final delta
+	 * also changed a retained cut.
+	 *
+	 * Leaving delta mode armed reconstructs the old selective plan after
+	 * clearLodSubmissionPlan() and can loop over that prefix forever while
+	 * newly appended leaves remain boxes.
+	 */
+	if (this->d->lodSubmissionDeltaActive) {
+	    this->d->lodSubmissionDeltaActive = FALSE;
+	    this->d->lodSubmissionDeltaSources.clear();
+	    this->d->lodSubmissionDeltaPlans.clear();
+	}
+	this->d->lodSubmissionSourceIndex = 0;
+	this->d->lodSubmissionEntryOffset = 0;
+	this->d->clearLodSubmissionPlan();
+	if (this->d->lodCoveragePassActive) {
+	    this->d->lodCoveragePassSawBoundedSource = FALSE;
+	    this->d->lodCoveragePassVisibleCount = 0;
+	    this->d->lodCoveragePassCoveredCount = 0;
+	}
+	this->d->lodSubmissionRescanPending = FALSE;
+	this->d->lodSubmissionPending = sources.empty() ? FALSE : TRUE;
+	this->d->lodStableBudgetLimited = FALSE;
+    } else if (completedPass && this->d->lodRetainedRefinementPending &&
 	this->d->lodRetainedRefinementCutAdvanced) {
 	/* The just-completed pass selected the next resident cut using the
 	 * newest view already.  Present it before any requested rescan; the
@@ -5026,9 +6549,11 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->clearLodSubmissionPlan();
 	this->d->lodSubmissionRescanPending = FALSE;
 	this->d->lodSubmissionPending = FALSE;
+	this->d->lodStableBudgetLimited = FALSE;
 	this->d->lodPassAdmittedWork = FALSE;
 	this->d->lodStableCalibrationProbeActiveFaces = 0;
 	this->d->lodStableCalibrationProbeCount = 0;
+	this->d->lodStableCalibrationFramesRemaining = 0;
     } else if (completedPass &&
 	this->d->lodRetainedRefinementBudgetBlocked) {
 	/* A finite scene budget is a stable policy, not a timer to an eventual
@@ -5046,10 +6571,12 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->d->lodStableTargetFps > 0.0f ?
 	    static_cast<uint64_t>(1000000000.0L /
 		static_cast<long double>(this->d->lodStableTargetFps)) : 0;
-	const uint64_t observedStableNanoseconds =
-	    this->d->lastRenderTimeNanoseconds ?
-	    this->d->lastRenderTimeNanoseconds :
-	    this->d->smoothedRenderTimeNanoseconds;
+	const uint64_t observedStableNanoseconds = std::max(
+	    this->d->lodLastRenderWasPreparedCadReplay ?
+		(this->d->lastRenderTimeNanoseconds ?
+		    this->d->lastRenderTimeNanoseconds :
+		    this->d->smoothedRenderTimeNanoseconds) : 0,
+	    this->d->lodLastCadGpuTimeNanoseconds);
 	long double calibratedStableFaceBudget = 0.0L;
 	if (this->d->lodStableTargetFps > 0.0f &&
 	    this->d->lodStableCalibratedFacesPerSecond > 0.0L)
@@ -5065,6 +6592,7 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 		    static_cast<long double>(stableTargetNanoseconds) * 1.20L);
 	const SbBool calibrationProbeCandidate =
 	    !this->d->lodInteractive &&
+	    !this->d->lodStablePresentationHandoffActive &&
 	    !this->d->lodPassAdmittedWork &&
 	    sceneActiveFaces > 0 &&
 	    this->d->lodCurrentFaceBudget != SIZE_MAX &&
@@ -5083,15 +6611,18 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	if (this->d->lodPassAdmittedWork) {
 	    this->d->lodStableCalibrationProbeActiveFaces = 0;
 	    this->d->lodStableCalibrationProbeCount = 0;
+	    this->d->lodStableCalibrationFramesRemaining = 0;
 	} else if (this->d->lodStableCalibrationProbeActiveFaces !=
 		   sceneActiveFaces) {
 	    this->d->lodStableCalibrationProbeActiveFaces = sceneActiveFaces;
 	    this->d->lodStableCalibrationProbeCount = 0;
+	    this->d->lodStableCalibrationFramesRemaining = 0;
 	}
 	static constexpr unsigned int minimumStableCalibrationProbes = 3;
 	static constexpr unsigned int maxStableCalibrationProbes = 12;
 	const SbBool stableCalibrationEligible =
 	    !this->d->lodInteractive &&
+	    !this->d->lodStablePresentationHandoffActive &&
 	    !this->d->lodPassAdmittedWork &&
 	    sceneActiveFaces > 0 &&
 	    this->d->lodCurrentFaceBudget != SIZE_MAX &&
@@ -5108,10 +6639,41 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	     calibrationProbeCandidate) &&
 	    this->d->lodStableCalibrationProbeCount <
 		maxStableCalibrationProbes;
+	if (getenv("BOBOL_LOD_TRACE_PASS")) {
+	    static std::atomic<unsigned int> passTraceCount(0);
+	    const unsigned int traceIndex = passTraceCount.fetch_add(1);
+	    if (traceIndex < 256)
+		bu_log("BObol LoD completed budget pass "
+		       "active_faces=%zu face_budget=%zu admitted=%d "
+		       "probe_candidate=%d probe_eligible=%d "
+		       "probe_count=%u probe_next=%d "
+		       "observed_ms=%.3f target_ms=%.3f "
+		       "calibrated_mfaces_s=%.3f\n",
+		       sceneActiveFaces, this->d->lodCurrentFaceBudget,
+		       this->d->lodPassAdmittedWork ? 1 : 0,
+		       calibrationProbeCandidate ? 1 : 0,
+		       stableCalibrationEligible ? 1 : 0,
+		       this->d->lodStableCalibrationProbeCount,
+		       calibrationProbe ? 1 : 0,
+		       observedStableNanoseconds / 1000000.0,
+		       stableTargetNanoseconds / 1000000.0,
+		       static_cast<double>(
+			   this->d->lodStableCalibratedFacesPerSecond /
+			       1000000.0L));
+	}
 	if (calibrationProbe) {
 	    this->d->lodStableCalibrationProbeCount++;
+	    const unsigned int targetProbeCount =
+		calibrationProbeCandidate ?
+		    maxStableCalibrationProbes :
+		    minimumStableCalibrationProbes;
+	    this->d->lodStableCalibrationFramesRemaining =
+		targetProbeCount > this->d->lodStableCalibrationProbeCount ?
+		    targetProbeCount -
+			this->d->lodStableCalibrationProbeCount : 0;
 	} else if (!calibrationProbeCandidate) {
 	    this->d->lodStableCalibrationProbeCount = 0;
+	    this->d->lodStableCalibrationFramesRemaining = 0;
 	}
 	this->d->lodSubmissionSourceIndex = 0;
 	this->d->lodSubmissionEntryOffset = 0;
@@ -5120,6 +6682,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->lodSubmissionPending = FALSE;
 	this->d->lodBudgetRescanAfterFrame =
 	    this->d->lodPassAdmittedWork || calibrationProbe;
+	this->d->lodStableBudgetLimited =
+	    this->d->lodBudgetRescanAfterFrame ? FALSE : TRUE;
 	if (this->d->lodBudgetRescanAfterFrame) {
 	    const char *frameReason = calibrationProbe ?
 		"lod-budget-calibration" : "lod-budget-admission";
@@ -5132,8 +6696,58 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    this->requestRender(frameReason);
 	    this->notifyFrameRequest(frameReason);
 	}
+	/*
+	 * The per-occurrence minimum PoP prefix is a real lower bound on the
+	 * triangle allocator.  In a scene with tens of thousands of tiny parts
+	 * that floor can remain several times larger than the measured renderer
+	 * budget even after every admissible cut has been coarsened.  Do not
+	 * declare that 100-300 ms presentation stable merely because another
+	 * provider scan cannot lower it.  Raise the existing camera-local point
+	 * aggregation threshold and measure the resulting one-call batch.
+	 *
+	 * This is presentation-only: immutable meshes and their desired cuts
+	 * remain resident, so a later view or faster renderer restores them
+	 * without cache I/O or geometry rebuilding.
+	 */
+	if (!this->d->lodBudgetRescanAfterFrame &&
+	    this->d->lodStableBudgetLimited &&
+	    !this->d->lodInteractive &&
+	    sceneActiveFaces > this->d->lodCurrentFaceBudget &&
+	    stableTargetNanoseconds > 0 &&
+	    observedStableNanoseconds >
+		static_cast<long double>(stableTargetNanoseconds) * 1.20L) {
+	    const float nextThreshold =
+		controller_point_proxy_threshold(
+		    this->d->lodPresentationPointProxyPixelThreshold,
+		    static_cast<uint64_t>(observedStableNanoseconds), 0,
+		    this->d->lodStableTargetFps);
+	    if (nextThreshold >
+		this->d->lodPresentationPointProxyPixelThreshold + 0.01f) {
+		this->d->lodPresentationPointProxyPixelThreshold =
+		    nextThreshold;
+		BObolViewLodState *presentationState =
+		    this->d->viewAttachment->getViewLodState();
+		if (presentationState)
+		    presentationState->
+			setCadPresentationPointProxyPixelThreshold(
+			    nextThreshold);
+		this->d->lodStablePointProxyCalibrationPending = TRUE;
+		/*
+		 * The multiplicative pressure correction intentionally lands on
+		 * the safe side of the target.  Its next unchanged frame is a
+		 * bounded relaxation probe so terminal quality is the finest cut
+		 * which meets the stable FPS contract, not the first coarse cut
+		 * which happens to do so.
+		 */
+		this->d->lodStablePointProxyRelaxationActive = TRUE;
+		this->requestRender("lod-stable-point-calibration");
+		this->notifyFrameRequest("lod-stable-point-calibration");
+	    }
+	}
 	append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
 	    SbString(""),
+	    this->d->lodStablePointProxyCalibrationPending ?
+		"scene LoD calibrating small-part aggregation" :
 	    this->d->lodBudgetRescanAfterFrame ?
 		(calibrationProbe ?
 		    "scene LoD probing stable calibrated capacity" :
@@ -5148,23 +6762,56 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	this->d->lodRetainedAdmissionActive = FALSE;
 	this->d->lodRetainedAdmissionBudgetRemaining = SIZE_MAX;
 	this->d->lodRefinementBudgetRetryMicroseconds = 0;
-    } else if (completedPass && this->d->lodSubmissionRescanPending) {
-	this->d->lodSubmissionSourceIndex = 0;
-	this->d->lodSubmissionEntryOffset = 0;
-	this->d->clearLodSubmissionPlan();
-	this->d->lodSubmissionRescanPending = FALSE;
-	this->d->lodSubmissionPending = sources.empty() ? FALSE : TRUE;
     } else {
 	this->d->lodSubmissionPending = completedPass ? FALSE : TRUE;
 	if (completedPass)
 	    this->d->lodPassAdmittedWork = FALSE;
+	if (completedPass)
+	    this->d->lodStableBudgetLimited = FALSE;
+    }
+    /*
+     * Finish a motion-to-stable handoff only after a complete retained pass
+     * made no further occurrence-cut changes.  Until this point the
+     * renderer-wide ceiling is the only thing preventing the hidden retained
+     * population from appearing in one unbounded frame.
+     *
+     * Keep the small-part aggregation threshold for the first ceiling-free
+     * frame.  Its measured calibration below will relax or tighten that
+     * threshold without touching the immutable mesh generations.
+     */
+    if (completedPass &&
+	this->d->lodStablePresentationHandoffActive &&
+	!this->d->lodSubmissionPending &&
+	!this->d->lodBudgetRescanAfterFrame &&
+	!completedPassChangedCut) {
+	this->d->lodStablePresentationHandoffActive = FALSE;
+	this->d->lodInteractiveProgressiveCeiling = -1;
+	BObolViewLodState *presentationState =
+	    this->d->viewAttachment->getViewLodState();
+	if (presentationState) {
+	    presentationState->setCadPresentationProgressiveLodCeiling(-1);
+	    presentationState->setCadPresentationCameraMotionFrameReuse(FALSE);
+	}
+	this->d->lodStablePointProxyCalibrationPending = TRUE;
+	this->d->lodStablePointProxyRelaxationActive =
+	    this->d->lodPresentationPointProxyPixelThreshold > 1.01f ?
+		TRUE : FALSE;
+	this->requestRender("lod-stable-handoff");
+	this->notifyFrameRequest("lod-stable-handoff");
     }
     if (!this->d->lodSubmissionPending &&
-	this->d->lodRetainedRefinementPending &&
-	this->d->lodRetainedRefinementCutAdvanced) {
+	this->d->lodRetainedRefinementCutAdvanced &&
+	(this->d->lodRetainedRefinementPending ||
+	 this->d->lodStablePresentationHandoffActive)) {
 	/* A richer prefix is already in memory, but expose it one cut per
-	 * completed frame.  Retargeting is metadata/draw-count only; no
-	 * provider task, cache read, or geometry rebuild is involved. */
+	 * completed frame.  This presentation barrier is also required when
+	 * the just-completed pass reached every requested cut: in that case
+	 * lodRetainedRefinementPending is false, but the motion-to-stable
+	 * handoff still needs one frame with the newly selected cuts before a
+	 * second unchanged pass may remove its renderer-wide ceiling.  Gating
+	 * this on "pending" stranded the handoff forever at large-scene scale.
+	 * Retargeting is metadata/draw-count only; no provider task, cache read,
+	 * or geometry rebuild is involved. */
 	this->d->lodRetainedRefinementPending = FALSE;
 	this->d->lodRetainedRefinementCutAdvanced = FALSE;
 	this->d->lodRetainedRefinementBudgetBlocked = FALSE;
@@ -5192,6 +6839,14 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 	    bu_gettime() + 750000;
 	this->requestRender("lod-cut");
     }
+    if (completedPass && this->d->lodSubmissionDeltaActive &&
+	!this->d->lodSubmissionPending &&
+	!this->d->lodBudgetRescanAfterFrame &&
+	!this->d->lodRefinementAwaitingFrame) {
+	this->d->lodSubmissionDeltaActive = FALSE;
+	this->d->lodSubmissionDeltaSources.clear();
+	this->d->lodSubmissionDeltaPlans.clear();
+    }
 
     return size_to_int_saturated(
 	       static_cast<size_t>(this->d->lastLodSubmittedTaskCount));
@@ -5199,7 +6854,8 @@ BObolViewController::submitLodRequests(BObolLodService *service,
 
 int
 BObolViewController::applyLodResults(BObolLodService *service,
-				       size_t maxResults)
+				       size_t maxResults,
+				       size_t maxEstimatedBytes)
 {
     if (!service)
 	service = this->d->lodService;
@@ -5216,30 +6872,103 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	return -1;
     }
 
-    SoNode *root = this->getRenderSceneRoot();
-    if (!root)
-	root = this->getSceneRoot();
-    if (!root) {
-	this->d->lastLodDiagnostics = "LoD result application requires a scene root";
-	return -1;
-    }
-
     std::vector<BObolLodResult> drained;
-    this->d->lastLodResultCount = service->drainResults(drained, maxResults);
+    this->d->lastLodResultCount = service->drainResults(
+	drained, maxResults, maxEstimatedBytes);
     this->d->lodResultsPending.store(
 	service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
     if (this->d->lastLodResultCount == 0)
 	return 0;
 
+    BObolViewLodState *viewState =
+	this->d->viewAttachment->getViewLodState();
     SoBRLLodUpdateAction update;
-    update.setViewLodState(this->d->viewAttachment->getViewLodState());
+    update.setViewLodState(viewState);
+    /*
+     * Compact results already carry both the retained source token and their
+     * exact occurrence key.  Resolve the token through the scene controller's
+     * structural index and mutate the view payload map directly.  The index
+     * is rebuilt only after a genuine structural scene mutation; the steady
+     * box->mesh and PoP-cut path is O(1) per result.
+     *
+     * Keep the action only for non-compact SoBRLMeshShape results.  There is
+     * no compatibility cost on the new CAD path and no duplicated source
+     * geometry or presentation state.
+     */
+    unsigned int directMatched = 0;
+    unsigned int directApplied = 0;
+    unsigned int directRejected = 0;
     SbBool partialRefinementCandidate = FALSE;
+    /*
+     * GED views render the shared CAD scene plus a view-local scene.  The
+     * view controller's sceneController indexes only the latter, so asking it
+     * to resolve a shared sourceRoutingId misses and sends every result
+     * through a full action traversal.  Build the tiny top-level source route
+     * table once for this drained batch.  Source nodes terminate collection,
+     * so this does not walk their compact occurrence populations.
+     */
+    std::unordered_map<uint64_t, SoBRLDatabaseSource *> renderSourceRoutes;
+    {
+	const std::vector<SoBRLDatabaseSource *> renderSources =
+	    controller_render_database_source_roots(this);
+	renderSourceRoutes.reserve(renderSources.size());
+	for (SoBRLDatabaseSource *source : renderSources) {
+	    if (!source)
+		continue;
+	    const uint64_t routingId = source->getCompactSourceRoutingId();
+	    if (routingId)
+		renderSourceRoutes[routingId] = source;
+	}
+    }
     for (size_t i = 0; i < drained.size(); i++) {
+	/*
+	 * Resolve a compact result's retained source token once.  In particular,
+	 * stale-epoch arbitration must not use the source-agnostic compatibility
+	 * lookup: that lookup scans every resident occurrence and made a burst of
+	 * 2,048 warm results quadratic on a 50,000-leaf scene.
+	 */
+	SoBRLDatabaseSource *route = NULL;
+	if (drained[i].request.sourceRoutingId &&
+	    drained[i].request.occurrenceKey.getLength() > 0) {
+	    const auto renderRoute = renderSourceRoutes.find(
+		drained[i].request.sourceRoutingId);
+	    if (renderRoute != renderSourceRoutes.end())
+		route = renderRoute->second;
+	    else
+		route = this->d->sceneController.findDatabaseSourceRoutingId(
+		    drained[i].request.sourceRoutingId);
+	}
+	if (getenv("BOBOL_LOD_TRACE_REJECTIONS") &&
+	    drained[i].request.sourceRoutingId &&
+	    drained[i].request.occurrenceKey.getLength() > 0 &&
+	    !route) {
+	    static std::atomic<unsigned int> routeMissTraceCount(0);
+	    const unsigned int traceIndex =
+		routeMissTraceCount.fetch_add(1);
+	    if (traceIndex < 64)
+		bu_log("BObol LoD rejection route-miss object=%s "
+		       "occurrence=%s routing=%llu\n",
+		       drained[i].request.objectName.getString(),
+		       drained[i].request.occurrenceKey.getString(),
+		       static_cast<unsigned long long>(
+			   drained[i].request.sourceRoutingId));
+	}
+	const auto findResidentCad = [&]() {
+	    if (!viewState)
+		return static_cast<const BObolViewLodState::CadPayload *>(NULL);
+	    if (drained[i].request.sourceRoutingId)
+		return route ? viewState->findCadForResult(route, drained[i]) :
+		    static_cast<const BObolViewLodState::CadPayload *>(NULL);
+	    return viewState->findCadForResult(drained[i]);
+	};
+	const BObolViewLodState::CadPayload *residentCadBefore =
+	    findResidentCad();
+	const BObolViewLodState::MeshPayload *residentMeshBefore = viewState ?
+	    viewState->findMeshForResult(drained[i]) : NULL;
 	const SbBool traceResult = controller_lod_trace_result(drained[i]);
 	if (traceResult) {
 	    const BObolViewLodState::CadPayload *resident =
-		this->d->viewAttachment->getViewLodState()->
-		    findCadForResult(drained[i]);
+		findResidentCad();
 	    bu_log("BObol LoD apply trace object=%s request_level=%d "
 		   "loaded_level=%d incoming_view=%llu incoming_policy=%llu "
 		   "current_view=%llu current_policy=%llu resident_level=%d "
@@ -5266,11 +6995,9 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	     * mesh epoch.  Reject it once equal/newer view data is resident so an
 	     * out-of-order completion cannot replay a coarse cut. */
 	    const BObolViewLodState::CadPayload *cadPayload =
-		this->d->viewAttachment->getViewLodState()->
-		    findCadForResult(drained[i]);
-	    const BObolViewLodState::MeshPayload *meshPayload =
-		this->d->viewAttachment->getViewLodState()->
-		    findMeshForResult(drained[i]);
+		findResidentCad();
+	    const BObolViewLodState::MeshPayload *meshPayload = viewState ?
+		viewState->findMeshForResult(drained[i]) : NULL;
 	    const bool cadMesh =
 		cadPayload &&
 		(cadPayload->resultKind == BOBOL_LOD_RESULT_MESH ||
@@ -5300,6 +7027,42 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		if (traceResult)
 		    bu_log("BObol LoD apply trace rejected_by_epoch object=%s\n",
 			   drained[i].request.objectName.getString());
+		if (getenv("BOBOL_LOD_TRACE_REJECTIONS")) {
+		    static std::atomic<unsigned int> rejectionTraceCount(0);
+		    const unsigned int traceIndex =
+			rejectionTraceCount.fetch_add(1);
+		    if (traceIndex < 64)
+			bu_log("BObol LoD rejection reason=epoch object=%s "
+			       "occurrence=%s incoming_level=%d requested=%d "
+			       "incoming_view=%llu incoming_policy=%llu "
+			       "current_view=%llu current_policy=%llu "
+			       "resident_level=%d resident_view=%llu "
+			       "resident_policy=%llu supersedes=%d\n",
+			       drained[i].request.objectName.getString(),
+			       drained[i].request.occurrenceKey.getString(),
+			       drained[i].geometry.activeLevel,
+			       drained[i].request.requestedLevel,
+			       static_cast<unsigned long long>(
+				   drained[i].request.viewRevision),
+			       static_cast<unsigned long long>(
+				   drained[i].request.policyRevision),
+			       static_cast<unsigned long long>(
+				   this->d->lodViewRevision),
+			       static_cast<unsigned long long>(
+				   this->d->lodPolicyRevision),
+			       cadPayload ? cadPayload->activeLevel :
+				   (meshPayload ?
+				       meshPayload->activeLevel : -1),
+			       static_cast<unsigned long long>(
+				   cadPayload ? cadPayload->viewRevision :
+				       (meshPayload ?
+					   meshPayload->viewRevision : 0)),
+			       static_cast<unsigned long long>(
+				   cadPayload ? cadPayload->policyRevision :
+				       (meshPayload ?
+					   meshPayload->policyRevision : 0)),
+			       residentSupersedes ? 1 : 0);
+		}
 		this->d->lastLodRejectedResultCount++;
 		append_controller_lod_diagnostic(this->d->lastLodDiagnostics,
 						 drained[i].request.objectPath,
@@ -5307,22 +7070,107 @@ BObolViewController::applyLodResults(BObolLodService *service,
 		continue;
 	    }
 	}
-	if (drained[i].providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	const SbBool partialRefinementResult =
+	    drained[i].providerStatus == BOBOL_LOD_PROVIDER_READY &&
 	    drained[i].resultKind == BOBOL_LOD_RESULT_MESH &&
 	    drained[i].geometry.activeLevel >= 0 &&
 	    drained[i].request.requestedLevel >
 		drained[i].geometry.activeLevel &&
-	    !drained[i].terminal)
+	    !drained[i].terminal &&
+	    (!drained[i].request.sourceRoutingId ||
+	     !residentCadBefore ||
+	     residentCadBefore->activeLevel <
+		 drained[i].geometry.activeLevel ||
+	     (residentMeshBefore &&
+	      residentMeshBefore->activeLevel <
+		  drained[i].geometry.activeLevel)) ?
+	    TRUE : FALSE;
+	if (drained[i].request.sourceRoutingId &&
+	    drained[i].request.occurrenceKey.getLength() > 0) {
+	    if (route && route->hasCompactInstanceKey(
+		    drained[i].request.occurrenceKey.getString())) {
+		directMatched++;
+		if (viewState &&
+		    viewState->consumeSourceResult(
+			route, drained[i])) {
+		    directApplied++;
+		    /*
+		     * The first useful compact result is normally the minimum
+		     * PoP prefix.  Absence of an older payload does not make that
+		     * result terminal: publishing it must install the same
+		     * render/refinement barrier as every later prefix.  Otherwise
+		     * a cold single-mesh scene can go idle at its coarsest cut and
+		     * refine only after an unrelated camera or paint event.
+		     */
+		    if (partialRefinementResult)
+			partialRefinementCandidate = TRUE;
+		} else {
+		    directRejected++;
+		    if (getenv("BOBOL_LOD_TRACE_REJECTIONS")) {
+			static std::atomic<unsigned int>
+			    sourceRejectionTraceCount(0);
+			const unsigned int traceIndex =
+			    sourceRejectionTraceCount.fetch_add(1);
+			if (traceIndex < 64)
+			    bu_log("BObol LoD rejection reason=source "
+				   "object=%s occurrence=%s level=%d "
+				   "requested=%d progressive=%d valid=%d "
+				   "route=%p diagnostic=%s\n",
+				   drained[i].request.objectName.getString(),
+				   drained[i].request.occurrenceKey.getString(),
+				   drained[i].geometry.activeLevel,
+				   drained[i].request.requestedLevel,
+				   drained[i].progressiveMesh ? 1 : 0,
+				   drained[i].progressiveMesh &&
+					   drained[i].progressiveMesh->isValid() ?
+				       1 : 0,
+				   static_cast<void *>(route),
+				   drained[i].diagnostic.getString());
+		    }
+		    append_controller_lod_diagnostic(
+			this->d->lastLodDiagnostics,
+			drained[i].request.objectPath,
+			viewState ?
+			    "view-local compact CAD LoD result rejected by source" :
+			    "view-local compact CAD LoD update requires a view state");
+		}
+		continue;
+	    }
+	    /* A source replacement may legitimately invalidate the token while a
+	     * cancellation races a completed result.  Let the generic action
+	     * diagnose or match that exceptional stale result by key. */
+	}
+	if (partialRefinementResult)
 	    partialRefinementCandidate = TRUE;
 	update.addResult(std::move(drained[i]));
     }
 
-    update.apply(root);
-    this->d->lastLodMatchedResultCount = update.getMatchedResultCount();
-    this->d->lastLodAppliedResultCount = update.getAppliedResultCount();
-    this->d->lastLodRejectedResultCount += update.getRejectedResultCount();
-    this->d->lastLodUnmatchedResultCount = update.getUnmatchedResultCount();
-    if (update.getDiagnostics().getLength() > 0) {
+    unsigned int rootlessFallbackCount = 0;
+    if (update.getResultCount() > 0) {
+	SoNode *root = this->getRenderSceneRoot();
+	if (!root)
+	    root = this->getSceneRoot();
+	if (root) {
+	    update.apply(root);
+	} else {
+	    rootlessFallbackCount = static_cast<unsigned int>(
+		std::min<size_t>(update.getResultCount(),
+		    std::numeric_limits<unsigned int>::max()));
+	    append_controller_lod_diagnostic(
+		this->d->lastLodDiagnostics, SbString(""),
+		"legacy LoD result application requires a scene root");
+	}
+    }
+    this->d->lastLodMatchedResultCount =
+	directMatched + update.getMatchedResultCount();
+    this->d->lastLodAppliedResultCount =
+	directApplied + update.getAppliedResultCount();
+    this->d->lastLodRejectedResultCount +=
+	directRejected + update.getRejectedResultCount();
+    this->d->lastLodUnmatchedResultCount =
+	rootlessFallbackCount + update.getUnmatchedResultCount();
+    if (update.getResultCount() > 0 &&
+	update.getDiagnostics().getLength() > 0) {
 	if (this->d->lastLodDiagnostics.getLength() > 0)
 	    this->d->lastLodDiagnostics += "\n";
 	this->d->lastLodDiagnostics += update.getDiagnostics();
@@ -5331,13 +7179,47 @@ BObolViewController::applyLodResults(BObolLodService *service,
 	service->queuedResultCountForDiagnostics() > 0 ? 1 : 0);
 
     if (this->d->lastLodAppliedResultCount > 0) {
-	this->requestRender("lod-result");
-	this->d->lodResultPublicationAwaitingFrame = TRUE;
+	const size_t applied =
+	    static_cast<size_t>(this->d->lastLodAppliedResultCount);
+	if (applied > SIZE_MAX - this->d->lodUnpresentedResultCount)
+	    this->d->lodUnpresentedResultCount = SIZE_MAX;
+	else
+	    this->d->lodUnpresentedResultCount += applied;
+	const int64_t now = bu_gettime();
+	if (this->d->lodUnpresentedResultFirstMicroseconds <= 0)
+	    this->d->lodUnpresentedResultFirstMicroseconds = now;
+	const bool firstUsefulMesh =
+	    this->getActiveLodMeshPayloadCount() <= applied;
+	const bool streamIdle =
+	    service->queuedResultCountForDiagnostics() == 0 &&
+	    service->pendingTaskCountForDiagnostics() == 0 &&
+	    service->inFlightCount() == 0;
+	const bool publishNow =
+	    firstUsefulMesh || streamIdle ||
+	    this->d->lodUnpresentedResultsDue(now);
+	if (partialRefinementCandidate &&
+	    !this->d->lodRefinementAwaitingFrame) {
+	    /*
+	     * Hold the next prefix immediately, but allow independent coverage
+	     * results to accumulate until the adaptive publication deadline.
+	     * scheduleLodRefinementFrame() below supplies the host wakeup once
+	     * that deadline is reached.
+	     */
+	    this->d->lodRefinementAwaitingFrame = TRUE;
+	    this->d->lodRefinementResumeAfterRenderSerial =
+		this->d->renderCompletionSerial + 1;
+	    if (this->d->lodRefinementResumeAfterRenderSerial == 0)
+		this->d->lodRefinementResumeAfterRenderSerial = 1;
+	}
+	if (publishNow) {
+	    this->requestRender("lod-result");
+	    this->d->lodResultPublicationAwaitingFrame = TRUE;
+	}
 	this->d->lodResidentCompactionPending = TRUE;
 	this->d->lodResidentCompactionAfterMicroseconds =
 	    bu_gettime() + 750000;
 	(void)this->enforceMeshResidencyBudget();
-	if (partialRefinementCandidate)
+	if (partialRefinementCandidate && publishNow)
 	    this->scheduleLodRefinementFrame("lod-result");
     }
 
@@ -5358,6 +7240,18 @@ BObolViewController::setLodPolicyRevision(uint64_t revision)
     if (this->d->lodPolicyRevision == newRevision)
 	return;
     this->d->lodPolicyRevision = newRevision;
+    /*
+     * A quality-policy revision changes the requested PoP cut, not camera
+     * visibility.  Retain the last complete current-view denominator until a
+     * camera or source-inventory revision invalidates it.  Clearing it here
+     * let the quiet transition report a 50k scene converged with a zero
+     * visible target while its unsatisfied-frontier fast path deliberately
+     * skipped another full visibility scan.
+     */
+    this->d->resetLodConvergenceFraction();
+    this->d->lodStableBudgetLimited = FALSE;
+    this->d->lodStablePointProxyCalibrationPending = FALSE;
+    this->d->lodStablePointProxyRelaxationActive = FALSE;
     this->requestRender("lod-policy");
 }
 
@@ -6410,6 +8304,14 @@ BObolViewController::advanceLodViewRevision(void)
     this->d->lodViewRevision++;
     if (this->d->lodViewRevision == 0)
 	this->d->lodViewRevision++;
+    this->d->clearLodConvergenceCandidates();
+    this->d->resetLodConvergenceFraction();
+    this->d->lodStableBudgetLimited = FALSE;
+    this->d->lodStablePointProxyCalibrationPending = FALSE;
+    this->d->lodStablePointProxyRelaxationActive = FALSE;
+    this->d->lodStablePresentationHandoffActive = FALSE;
+    this->d->lodCoveragePassActive = TRUE;
+    this->d->lodVisibleCoverageComplete = FALSE;
 }
 
 void
@@ -6418,32 +8320,79 @@ BObolViewController::advanceLodPolicyRevision(void)
     this->d->lodPolicyRevision++;
     if (this->d->lodPolicyRevision == 0)
 	this->d->lodPolicyRevision++;
+    /* Quality changes preserve the current view's proven visibility
+     * denominator.  Source and camera revisions clear it explicitly. */
+    this->d->resetLodConvergenceFraction();
+    this->d->lodStableBudgetLimited = FALSE;
+    this->d->lodStablePointProxyCalibrationPending = FALSE;
+    this->d->lodStablePointProxyRelaxationActive = FALSE;
+    this->d->lodCoveragePassActive = TRUE;
+    this->d->lodVisibleCoverageComplete = FALSE;
 }
 
 static float
 controller_interactive_pixel_error(uint64_t renderNanoseconds,
-				   uint64_t presentationNanoseconds)
+				   uint64_t presentationNanoseconds,
+				   float targetFps)
 {
-    /* Four pixels is the normal motion cut.  If recent frames miss a 60 Hz
-     * budget, increase error with the square root of the overrun: PoP level
-     * population commonly grows near quadratically.  A 16-pixel ceiling was
-     * still a 100-200 ms motion frame for large meshes in OSMesa.  Permit up
-     * to 64 pixels during interaction; the quiet-view path remains exactly
-     * one pixel and progressively restores terminal visual accuracy. */
-    const double targetNanoseconds = 1000000000.0 / 60.0;
+    /* Preserve the already-displayed cut when it meets the configured motion
+     * target.  Camera motion is not itself a reason to discard detail.  Once
+     * measured render/presentation cost misses the target, increase error
+     * with the square root of the overrun: PoP population commonly grows near
+     * quadratically.  The two-pixel first pressure tier removes one PoP bit;
+     * severe overload may climb to 64 pixels. */
+    const double targetNanoseconds =
+	std::isfinite(targetFps) && targetFps > 0.0f ?
+	1000000000.0 / static_cast<double>(targetFps) :
+	1000000000.0 / 60.0;
     const uint64_t observed = std::max(renderNanoseconds,
 	presentationNanoseconds);
-    if (!observed ||
-	static_cast<double>(observed) <= targetNanoseconds * 1.20)
+    if (!observed)
 	return 4.0f;
+    if (static_cast<double>(observed) <= targetNanoseconds * 1.05)
+	return 1.0f;
     const double scale = std::sqrt(
 	static_cast<double>(observed) / targetNanoseconds);
-    return static_cast<float>(std::max(4.0, std::min(64.0, 4.0 * scale)));
+    return static_cast<float>(std::max(2.0, std::min(64.0, 2.0 * scale)));
+}
+
+static float
+controller_point_proxy_threshold(
+    float currentThreshold, uint64_t renderNanoseconds,
+    uint64_t presentationNanoseconds, float targetFps)
+{
+    const double targetNanoseconds =
+	std::isfinite(targetFps) && targetFps > 0.0f ?
+	1000000000.0 / static_cast<double>(targetFps) :
+	1000000000.0 / 60.0;
+    const uint64_t observed = std::max(
+	renderNanoseconds, presentationNanoseconds);
+    const double current = std::max(1.0,
+	std::min(64.0, static_cast<double>(currentThreshold)));
+    if (!observed ||
+	static_cast<double>(observed) <= targetNanoseconds * 1.05)
+	return static_cast<float>(current);
+
+    /*
+     * The screen threshold describes the cut which produced the measured
+     * frame.  Recomputing an absolute threshold from that frame reaches a
+     * false fixed point when per-object command work dominates: a 4 px cut
+     * can remain at 40-60 ms forever.  Apply the measured correction to the
+     * current cut, just as the discrete PoP ceiling ratchets downward.
+     * Quiet recovery is the only path which lowers this threshold.
+     */
+    const double correction = std::sqrt(
+	static_cast<double>(observed) / targetNanoseconds);
+    const double absoluteSeed =
+	controller_interactive_pixel_error(
+	    renderNanoseconds, presentationNanoseconds, targetFps);
+    return static_cast<float>(std::min(64.0,
+	std::max(absoluteSeed, current * correction)));
 }
 
 static int
 controller_interactive_progressive_ceiling(
-    BObolViewLodState *viewState, float pixelError)
+    BObolViewLodState *viewState, float pixelError, int currentCeiling = -1)
 {
     if (!viewState)
 	return -1;
@@ -6453,9 +8402,28 @@ controller_interactive_progressive_ceiling(
 	return -1;
     const double error = std::max(1.0,
 	static_cast<double>(pixelError));
+    if (error <= 1.0 + std::numeric_limits<double>::epsilon())
+	return -1;
+    /*
+     * PoP levels are discrete.  Rounding the required reduction down kept a
+     * cut which was already known to miss the motion target whenever the
+     * estimate fell just below the next power of two (3.99 pixels was the
+     * common 50k-scene case).  Round toward the conservative coarser cut;
+     * quiet recovery removes this render-only ceiling after the debounce and
+     * refines from the retained arrays without a reload.
+     */
     const int reduction = std::max(1,
-	static_cast<int>(std::floor(std::log2(error))));
-    return std::max(0, activeMaximum - reduction);
+	static_cast<int>(std::ceil(std::log2(error))));
+    /*
+     * A later camera event observes the cost of the cut already constrained
+     * by currentCeiling, not the original level-15/active-maximum cut.  Apply
+     * each measured correction relative to the cut which produced it.
+     * Reapplying every correction to activeMaximum made level 5 a fixed point
+     * in the 50k scene even though that retained cut still took 130-160 ms.
+     */
+    const int measuredMaximum = currentCeiling >= 0 ?
+	std::min(activeMaximum, currentCeiling) : activeMaximum;
+    return std::max(0, measuredMaximum - reduction);
 }
 
 void
@@ -6466,9 +8434,16 @@ BObolViewController::beginLodInteraction(void)
 
     const float previousPixelError = this->d->lodTargetPixelError;
     this->d->lodGestureActive = TRUE;
+    this->d->lodViewScaleChanging = FALSE;
     this->d->lodReleaseCutFloorActive = FALSE;
+    this->d->lodStablePresentationHandoffActive = FALSE;
     this->d->lodStableCalibrationProbeActiveFaces = 0;
     this->d->lodStableCalibrationProbeCount = 0;
+    this->d->lodStableCalibrationFramesRemaining = 0;
+    this->d->lodStableOverloadRecoveryPerformed = FALSE;
+    this->d->lodStableOverloadRecoveryActiveFaces = 0;
+    this->d->lodStablePointProxyCalibrationPending = FALSE;
+    this->d->lodStablePointProxyRelaxationActive = FALSE;
     this->d->lodInteractive = TRUE;
     this->d->lodSettleAfterRenderSerial = 0;
     this->d->lodRefinementNotBeforeMicroseconds = 0;
@@ -6485,23 +8460,53 @@ BObolViewController::beginLodInteraction(void)
 	/* Rebase the human-facing number on this continuous-demand burst.
 	 * Otherwise a long progressive/event-driven interval immediately before
 	 * button-down can make a genuinely fluid drag report single-digit FPS
-	 * for most of the gesture. */
+	 * for most of the gesture.  The prior gesture's smoothed interval is
+	 * equally stale feedback for the new cut: renderer capacity is retained
+	 * separately, while this burst must establish its own delivery cadence. */
 	this->d->displayedPresentationIntervalNanoseconds = 0;
-	presentationNanoseconds =
-	    this->d->smoothedInteractivePresentationIntervalNanoseconds;
+	this->d->smoothedInteractivePresentationIntervalNanoseconds = 0;
+	presentationNanoseconds = 0;
     }
     this->d->lodTargetPixelError =
 	controller_interactive_pixel_error(
 	    this->d->smoothedRenderTimeNanoseconds,
-	    presentationNanoseconds);
+	    presentationNanoseconds,
+	    this->d->lodInteractiveTargetFps);
+    this->d->lodPresentationPointProxyPixelThreshold =
+	controller_point_proxy_threshold(
+	    this->d->lodPresentationPointProxyPixelThreshold,
+	    this->d->lastRenderTimeNanoseconds,
+	    presentationNanoseconds,
+	    this->d->lodInteractiveTargetFps);
     BObolViewLodState *viewState =
 	this->d->viewAttachment->getViewLodState();
-    this->d->lodInteractiveProgressiveCeiling =
+    if (viewState)
+	viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+    /*
+     * Wheel and trackpad input is normally an unbracketed camera epoch.  It
+     * may already have ratcheted the retained presentation to a measured
+     * responsive ceiling before the user presses a mouse button.  Beginning
+     * the drag is a continuation of that active interaction, not permission
+     * to probe again from the scene maximum.  Preserve the current ceiling
+     * as the basis for this correction; the quiet transition below is the
+     * only path which may remove it and begin stable refinement.
+     */
+    const int responsiveCeiling =
 	controller_interactive_progressive_ceiling(
-	    viewState, this->d->lodTargetPixelError);
+	    viewState, this->d->lodTargetPixelError,
+	    this->d->lodInteractiveProgressiveCeiling);
+    if (responsiveCeiling >= 0 &&
+	(this->d->lodInteractiveProgressiveCeiling < 0 ||
+	 responsiveCeiling < this->d->lodInteractiveProgressiveCeiling))
+	this->d->lodInteractiveProgressiveCeiling = responsiveCeiling;
+    this->d->lodInteractiveCeilingFeedbackRenderSerial =
+	this->d->renderCompletionSerial;
     if (viewState)
 	viewState->setCadPresentationProgressiveLodCeiling(
 	    this->d->lodInteractiveProgressiveCeiling);
+    if (viewState)
+	viewState->setCadPresentationPointProxyPixelThreshold(
+	    this->d->lodPresentationPointProxyPixelThreshold);
     /* The first pointer motion can precede the first camera signature change.
      * Treat the transition to the motion cut as a policy change so the
      * already resident mesh is coarsened before an expensive drag frame. */
@@ -6525,15 +8530,15 @@ BObolViewController::endLodInteraction(void)
     }
     BObolViewLodState *viewState =
 	this->d->viewAttachment->getViewLodState();
-    if (viewState && this->d->lodCurrentFaceBudget != SIZE_MAX) {
-	/* The per-presentation minimum prefix can make a coherent held cut
-	 * slightly exceed the nominal aggregate budget.  Button release is
-	 * still part of the motion epoch: retained admission must not cull that
-	 * excess to boxes during the 150 ms quiet debounce.  Preserve the cut
-	 * already shown to the user and let stable refinement grow from it. */
-	this->d->lodCurrentFaceBudget = std::max(
-	    this->d->lodCurrentFaceBudget, viewState->activeFaceCount());
-    }
+    if (viewState)
+	viewState->setCadPresentationCameraMotionFrameReuse(FALSE);
+    /*
+     * Do not promote the face budget to activeFaceCount() here.  The active
+     * retained population may be orders of magnitude richer than the
+     * responsive cut actually shown through the renderer-wide PoP ceiling.
+     * The ceiling remains installed during the debounce, and the quiet
+     * handoff reconciles retained cuts before releasing it.
+     */
     this->d->lodReleaseCutFloorActive = TRUE;
     /* A gesture pass may have exhausted the old, smaller allowance.  Force
      * the release pass to derive its admission state from the coherent floor
@@ -6562,6 +8567,13 @@ SbBool
 BObolViewController::isLodGestureActive(void) const
 {
     return this->d->lodGestureActive;
+}
+
+SbBool
+BObolViewController::isLodScaleChangingInteraction(void) const
+{
+    return this->d->lodInteractive && this->d->lodViewScaleChanging ?
+	TRUE : FALSE;
 }
 
 float
@@ -6625,6 +8637,209 @@ BObolViewController::getActiveLodFaceCount(void) const
     return state ? state->activeFaceCount() : 0;
 }
 
+void
+BObolViewController::getLodConvergenceStatus(
+	BObolLodConvergenceStatus &status) const
+{
+    status.clear();
+    status.viewRevision = this->d->lodViewRevision;
+    status.failedSourceCount = this->getLastFailedSourceCount();
+    status.visibleTargetCount =
+	this->d->lodConvergenceCandidateCount();
+    status.activeFaces = this->getActiveLodFaceCount();
+    status.faceBudget = this->getCurrentLodFaceBudget();
+
+    const std::vector<SoBRLDatabaseSource *> sources =
+	controller_render_database_source_roots(
+	    const_cast<BObolViewController *>(this));
+    for (const SoBRLDatabaseSource *source : sources) {
+	if (!source)
+	    continue;
+	const size_t available = static_cast<size_t>(
+	    std::max(0, source->getCompactInstanceCount()));
+	const size_t expected =
+	    source->getCompactExpectedInstanceCount();
+	const size_t denominator = std::max(available, expected);
+	status.availableLeafCount =
+	    available > SIZE_MAX - status.availableLeafCount ?
+	    SIZE_MAX : status.availableLeafCount + available;
+	status.expectedLeafCount =
+	    denominator > SIZE_MAX - status.expectedLeafCount ?
+	    SIZE_MAX : status.expectedLeafCount + denominator;
+    }
+
+    const BObolViewLodState *viewState =
+	this->d->viewAttachment->getViewLodState();
+    if (viewState)
+	viewState->convergencePayloadCounts(status.activePayloadCount,
+	    status.satisfiedPayloadCount,
+	    status.memoryLimitedPayloadCount);
+
+    if (this->d->lodService) {
+	status.pendingTasks =
+	    this->d->lodService->pendingTaskCountForDiagnostics();
+	const size_t delayed =
+	    this->d->lodService->delayedTaskCountForDiagnostics();
+	status.pendingTasks = delayed > SIZE_MAX - status.pendingTasks ?
+	    SIZE_MAX : status.pendingTasks + delayed;
+	status.inFlight = this->d->lodService->inFlightCount();
+	status.queuedResults =
+	    this->d->lodService->queuedResultCountForDiagnostics();
+	status.queuedCacheWrites =
+	    this->d->lodService->queuedCacheWriteCountForDiagnostics();
+	status.residentMeshBytes =
+	    this->d->lodService->residentMeshBytesForDiagnostics();
+	status.stableResidentMeshBytes =
+	    this->d->lodService->
+		stableResidentMeshBytesForDiagnostics();
+	status.reservedResidentMeshGrowthBytes =
+	    this->d->lodService->
+		reservedResidentMeshGrowthBytesForDiagnostics();
+	status.residentMeshLimitBytes =
+	    this->d->lodService->getResidentMeshLimit();
+	status.activeWorkingSetBytes =
+	    this->d->lodService->activeWorkingSetBytesForDiagnostics();
+	status.peakWorkingSetBytes =
+	    this->d->lodService->peakWorkingSetBytesForDiagnostics();
+	status.residentCompactionCount =
+	    this->d->lodService->
+		residentMeshCompactionCountForDiagnostics();
+    }
+
+    const SbBool structuralPending =
+	status.expectedLeafCount > status.availableLeafCount;
+    const SbBool structuralDiscovery =
+	!structuralPending &&
+	status.visibleTargetCount == 0 &&
+	status.activePayloadCount == 0 &&
+	!this->d->progressiveProviders.empty() &&
+	this->hasProgressiveWorkPending();
+    const SbBool resultPending =
+	this->hasPendingLodResults() || status.queuedResults > 0;
+    const SbBool calibrationPending =
+	this->hasPendingLodRefinementFrame();
+    status.refinementFramePending =
+	this->d->lodRefinementAwaitingFrame;
+    status.budgetCalibrationPending =
+	this->d->lodBudgetRescanAfterFrame;
+    status.stablePresentationHandoffPending =
+	this->d->lodStablePresentationHandoffActive;
+    status.pointProxyCalibrationPending =
+	this->d->lodStablePointProxyCalibrationPending;
+    const SbBool visualPending =
+	structuralPending || this->d->lodSubmissionPending ||
+	resultPending || status.pendingTasks > 0 || status.inFlight > 0 ||
+	calibrationPending;
+
+    status.viewReady =
+	!visualPending && !this->d->lodInteractive ? TRUE : FALSE;
+    status.backgroundPending =
+	status.queuedCacheWrites > 0 ||
+	this->d->lodResidentCompactionPending ||
+	(status.viewReady && this->hasProgressiveWorkPending()) ?
+	TRUE : FALSE;
+    status.memoryLimited =
+	status.memoryLimitedPayloadCount > 0 ||
+	(status.residentMeshLimitBytes != SIZE_MAX &&
+	 status.stableResidentMeshBytes >
+	    status.residentMeshLimitBytes) ?
+	TRUE : FALSE;
+    status.performanceLimited =
+	status.viewReady &&
+	(this->d->lodStableBudgetLimited ||
+	 status.memoryLimited ||
+	 (status.visibleTargetCount > 0 &&
+	  (status.activePayloadCount < status.visibleTargetCount ||
+	   status.satisfiedPayloadCount < status.visibleTargetCount))) ?
+	TRUE : FALSE;
+
+    const bool hasLodState =
+	status.expectedLeafCount > 0 || status.availableLeafCount > 0 ||
+	status.visibleTargetCount > 0 || status.activePayloadCount > 0 ||
+	visualPending || status.backgroundPending;
+    if (!hasLodState) {
+	status.phase = BOBOL_LOD_CONVERGENCE_IDLE;
+	status.fraction = 1.0f;
+	return;
+    }
+
+    if (structuralPending || structuralDiscovery) {
+	status.phase = BOBOL_LOD_CONVERGENCE_DISCOVERING;
+	const long double coverage =
+	    structuralPending && status.expectedLeafCount > 0 ?
+	    static_cast<long double>(status.availableLeafCount) /
+		static_cast<long double>(status.expectedLeafCount) : 0.0L;
+	status.fraction = static_cast<float>(
+	    std::min<long double>(0.40L, 0.40L * coverage));
+    } else if (this->d->lodInteractive) {
+	status.phase = BOBOL_LOD_CONVERGENCE_INTERACTIVE;
+	if (status.visibleTargetCount == 0) {
+	    /* A new camera revision clears the projected target plan before
+	     * the first bounded scan.  Do not score stale payloads against
+	     * themselves and briefly claim 85% before the real denominator
+	     * arrives. */
+	    status.fraction = 0.40f;
+	} else {
+	    const size_t target = status.visibleTargetCount;
+	    const long double quality =
+		static_cast<long double>(
+		    std::min(status.satisfiedPayloadCount, target)) /
+		    static_cast<long double>(target);
+	    status.fraction = static_cast<float>(
+		0.40L + std::min<long double>(0.45L, 0.45L * quality));
+	}
+    } else if (calibrationPending) {
+	status.phase = BOBOL_LOD_CONVERGENCE_CALIBRATING;
+	status.fraction = 0.95f;
+    } else if (visualPending) {
+	status.phase = BOBOL_LOD_CONVERGENCE_REFINING;
+	size_t target = std::max(
+	    status.visibleTargetCount, status.activePayloadCount);
+	if (!target) {
+	    target = status.pendingTasks > SIZE_MAX - status.inFlight ?
+		SIZE_MAX : status.pendingTasks + status.inFlight;
+	    target = std::max<size_t>(1, target);
+	}
+	const long double quality =
+	    static_cast<long double>(
+		std::min(status.satisfiedPayloadCount, target)) /
+	    static_cast<long double>(target);
+	status.fraction = static_cast<float>(
+	    0.40L + std::min<long double>(0.55L, 0.55L * quality));
+    } else if (status.backgroundPending) {
+	status.phase = BOBOL_LOD_CONVERGENCE_BACKGROUND;
+	status.fraction = 1.0f;
+    } else {
+	status.phase = BOBOL_LOD_CONVERGENCE_IDLE;
+	status.fraction = 1.0f;
+    }
+
+    if (status.failedSourceCount > 0)
+	status.phase = BOBOL_LOD_CONVERGENCE_ERROR;
+    status.fraction = std::max(0.0f, std::min(1.0f, status.fraction));
+
+    /* Planning discovers the denominator in bounded waves and may raise a
+     * payload's requested cut after first coverage.  Both can make a raw
+     * completed/target ratio fall even though a fixed camera view has only
+     * improved.  Keep the user-facing fraction monotonic within one
+     * view/policy revision; a camera or policy change explicitly resets it. */
+    if (this->d->lodConvergenceFractionViewRevision !=
+	    this->d->lodViewRevision ||
+	this->d->lodConvergenceFractionPolicyRevision !=
+	    this->d->lodPolicyRevision) {
+	this->d->lodConvergenceFractionViewRevision =
+	    this->d->lodViewRevision;
+	this->d->lodConvergenceFractionPolicyRevision =
+	    this->d->lodPolicyRevision;
+	this->d->lodConvergenceFractionFloor = 0.0f;
+    }
+    if (status.phase != BOBOL_LOD_CONVERGENCE_ERROR) {
+	status.fraction = std::max(status.fraction,
+	    this->d->lodConvergenceFractionFloor);
+	this->d->lodConvergenceFractionFloor = status.fraction;
+    }
+}
+
 double
 BObolViewController::getCalibratedLodFacesPerSecond(void) const
 {
@@ -6662,12 +8877,20 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
     SbBool haveCamera = this->getViewInfo(&view);
     SbString signature = controller_lod_view_signature(view, haveCamera,
 	this->d->activeCamera, this->d->viewportRegion);
+    SbString scaleSignature = controller_lod_view_scale_signature(
+	view, haveCamera, this->d->activeCamera, this->d->viewportRegion);
 
     if (bu_strcmp(this->d->lodViewSignature.getString(), signature.getString()) == 0)
 	return;
 
+    const SbBool scaleChanged =
+	this->d->lodViewScaleSignature.getLength() > 0 &&
+	bu_strcmp(this->d->lodViewScaleSignature.getString(),
+	    scaleSignature.getString()) != 0 ? TRUE : FALSE;
     this->d->lodViewSignature = signature;
+    this->d->lodViewScaleSignature = scaleSignature;
     if (advanceOnChange) {
+	this->d->lodViewScaleChanging = scaleChanged;
 	this->advanceLodViewRevision();
 	/* A camera may be edited through its public Coin fields rather than
 	 * through syncCameraFromViewContext().  LoD submission is then the first
@@ -6681,12 +8904,24 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	 * permanently render-pending and suppresses later edge-triggered host
 	 * wakeups. */
 	if (this->d->lodAutoSubmit) {
+	    /*
+	     * A bracketed mouse gesture has already entered interaction in
+	     * beginLodInteraction(); an unbracketed wheel/trackpad epoch enters
+	     * here.  Remember which case this camera change represents before
+	     * setting lodInteractive below.
+	     */
+	    const SbBool continuingInteractive =
+		this->d->lodInteractive;
 	    const int64_t now = bu_gettime();
 	    this->d->lodLastViewChangeMicroseconds = now;
 	    this->d->lodInteractive = TRUE;
 	    this->d->lodReleaseCutFloorActive = FALSE;
+	    this->d->lodStablePresentationHandoffActive = FALSE;
 	    this->d->lodStableCalibrationProbeActiveFaces = 0;
 	    this->d->lodStableCalibrationProbeCount = 0;
+	    this->d->lodStableCalibrationFramesRemaining = 0;
+	    this->d->lodStableOverloadRecoveryPerformed = FALSE;
+	    this->d->lodStableOverloadRecoveryActiveFaces = 0;
 	    this->d->lodRefinementNotBeforeMicroseconds = 0;
 	    this->d->lodRefinementFaceBudgetInitialized = FALSE;
 	    this->d->lodRefinementFaceBudgetRemaining = SIZE_MAX;
@@ -6719,16 +8954,67 @@ BObolViewController::syncLodViewSignature(SbBool advanceOnChange)
 	    this->d->lodTargetPixelError =
 		controller_interactive_pixel_error(
 		    this->d->smoothedRenderTimeNanoseconds,
-		    presentationNanoseconds);
+		    presentationNanoseconds,
+		    this->d->lodInteractiveTargetFps);
 	    BObolViewLodState *viewState =
 		this->d->viewAttachment->getViewLodState();
-	    if (this->d->lodInteractiveProgressiveCeiling < 0)
-		this->d->lodInteractiveProgressiveCeiling =
+	    if (viewState)
+		viewState->setCadPresentationCameraMotionFrameReuse(
+		    TRUE);
+	    int responsiveCeiling =
+		this->d->lodInteractiveProgressiveCeiling;
+	    const bool hasNewRenderFeedback =
+		this->d->renderCompletionSerial !=
+		    this->d->lodInteractiveCeilingFeedbackRenderSerial;
+	    /*
+	     * cameraMotionFrameReuse deliberately replays the already prepared
+	     * occurrence classification.  Its frame therefore cannot validate
+	     * a newly computed point-proxy threshold.  Repeatedly feeding those
+	     * timings back into controller_point_proxy_threshold() used to grow
+	     * an unapplied 1 px cut to 40-64 px during one drag, then expose that
+	     * fictitious correction all at once when quiet rendering resumed.
+	     *
+	     * Seed an unbracketed interaction once from the last actually
+	     * presented stable cut.  beginLodInteraction() performs the same
+	     * one-time seed for bracketed gestures.  During subsequent motion,
+	     * only the progressive draw-count ceiling is safe to ratchet under
+	     * prepared replay; quiet, ceiling-free frames calibrate point
+	     * aggregation from cuts they really presented.
+	     */
+	    if (hasNewRenderFeedback && !continuingInteractive)
+		this->d->lodPresentationPointProxyPixelThreshold =
+		    controller_point_proxy_threshold(
+			this->d->lodPresentationPointProxyPixelThreshold,
+			this->d->lastRenderTimeNanoseconds,
+			presentationNanoseconds,
+			this->d->lodInteractiveTargetFps);
+	    if (hasNewRenderFeedback) {
+		responsiveCeiling =
 		    controller_interactive_progressive_ceiling(
-			viewState, this->d->lodTargetPixelError);
+			viewState, this->d->lodTargetPixelError,
+			this->d->lodInteractiveProgressiveCeiling);
+		this->d->lodInteractiveCeilingFeedbackRenderSerial =
+		    this->d->renderCompletionSerial;
+	    }
+	    /*
+	     * A gesture's first frame is only the initial capacity probe.  If
+	     * subsequent measured frames remain slow, ratchet the global
+	     * render-only ceiling downward immediately.  Never raise it during
+	     * continuous input: that would reintroduce oscillation and a slow
+	     * frame.  The normal 150 ms quiet transition clears the ceiling.
+	     */
+	    if (hasNewRenderFeedback && responsiveCeiling >= 0 &&
+		(this->d->lodInteractiveProgressiveCeiling < 0 ||
+		 responsiveCeiling <
+		    this->d->lodInteractiveProgressiveCeiling))
+		this->d->lodInteractiveProgressiveCeiling =
+		    responsiveCeiling;
 	    if (viewState)
 		viewState->setCadPresentationProgressiveLodCeiling(
 		    this->d->lodInteractiveProgressiveCeiling);
+	    if (viewState)
+		viewState->setCadPresentationPointProxyPixelThreshold(
+		    this->d->lodPresentationPointProxyPixelThreshold);
 	    this->markProgressiveWorkPending();
 	}
     }

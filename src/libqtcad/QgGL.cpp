@@ -174,6 +174,12 @@ void QgGL::need_update()
     request_update(BV_REFRESH_VIEW);
 }
 
+void QgGL::present_frame()
+{
+    QTCAD_SLOT("QgGL::present_frame", 1);
+    request_update(BV_REFRESH_FRAMEBUFFER | BV_REFRESH_FORCE);
+}
+
 void QgGL::queued_update()
 {
     d->fb_update_queued = false;

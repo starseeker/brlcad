@@ -95,6 +95,23 @@ struct bu_cache_item {
  */
 BU_EXPORT extern struct bu_cache *bu_cache_open(const char *cache_db, int create, size_t max_cache_size);
 
+/* Cache-open policy flags.  Large immutable stores accessed by unrelated
+ * content keys should disable operating-system readahead so speculative
+ * file-backed pages do not displace the caller's bounded working set. */
+#define BU_CACHE_OPEN_NORDAHEAD 0x1u
+/*
+ * Make committed writes visible immediately, but defer the explicit durable
+ * environment flush until bu_cache_close().  This is appropriate for
+ * disposable/reconstructible caches: a process crash may lose recent cache
+ * entries, but it cannot lose authoritative application data.  Ordinary
+ * caches retain the per-commit durability behavior.
+ */
+#define BU_CACHE_OPEN_DEFER_SYNC 0x2u
+
+BU_EXPORT extern struct bu_cache *bu_cache_open_with_options(
+	const char *cache_db, int create, size_t max_cache_size,
+	unsigned int options);
+
 /**
  * Closes the bu_cache and frees all associated memory.  Will NOT close
  * if bu_cache_write still has an active txn - in that case, calling

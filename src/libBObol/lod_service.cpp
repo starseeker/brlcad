@@ -21,12 +21,15 @@
 #include "rt/view.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <iomanip>
+#include <list>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <new>
 #include <set>
@@ -34,6 +37,7 @@
 #include <string.h>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 BObolMeshLodProvider::BObolMeshLodProvider(void)
@@ -46,6 +50,7 @@ BObolMeshLodProvider::clear(void)
 {
     service = NULL;
     dbip = NULL;
+    stagedSource.reset();
     bv_view_info_init(&view);
     useView = FALSE;
     refreshMissing = TRUE;
@@ -58,6 +63,8 @@ BObolMeshLodProvider::clear(void)
     refinementGrowthFactor = 4.0;
     useCurrentDrawLevel = FALSE;
     currentDrawLevel = -1;
+    useDeliveryLevelLimit = FALSE;
+    deliveryLevelLimit = -1;
     forcedLevel = 0;
     reset = 0;
 }
@@ -1219,6 +1226,70 @@ struct BObolLodCacheWriteItem {
     void *writeData;
 };
 
+struct BObolLodResultSlotMapKey {
+    std::string databaseId;
+    std::string occurrence;
+    std::string providerId;
+    uint64_t generation = 0;
+    uint64_t sourceRoutingId = 0;
+    int drawMode = 0;
+    int resultKind = 0;
+    int proxyKind = 0;
+
+    bool operator==(const BObolLodResultSlotMapKey &other) const
+    {
+	return generation == other.generation &&
+	    sourceRoutingId == other.sourceRoutingId &&
+	    drawMode == other.drawMode &&
+	    resultKind == other.resultKind &&
+	    proxyKind == other.proxyKind &&
+	    databaseId == other.databaseId &&
+	    occurrence == other.occurrence &&
+	    providerId == other.providerId;
+    }
+};
+
+struct BObolLodResultSlotMapKeyHash {
+    size_t operator()(const BObolLodResultSlotMapKey &key) const
+    {
+	size_t hash = std::hash<std::string>()(key.databaseId);
+	const auto combine = [&hash](size_t value) {
+	    hash ^= value + static_cast<size_t>(0x9e3779b9U) +
+		(hash << 6) + (hash >> 2);
+	};
+	combine(std::hash<std::string>()(key.occurrence));
+	combine(std::hash<std::string>()(key.providerId));
+	combine(std::hash<uint64_t>()(key.generation));
+	combine(std::hash<uint64_t>()(key.sourceRoutingId));
+	combine(std::hash<int>()(key.drawMode));
+	combine(std::hash<int>()(key.resultKind));
+	combine(std::hash<int>()(key.proxyKind));
+	return hash;
+    }
+};
+
+static BObolLodResultSlotMapKey
+lod_result_slot_map_key(const BObolLodResult &result)
+{
+    const BObolLodRequest &request = result.request;
+    BObolLodResultSlotMapKey key;
+    key.databaseId = request.databaseId.getString();
+    if (request.occurrenceKey.getLength() > 0)
+	key.occurrence = request.occurrenceKey.getString();
+    else if (request.objectPath.getLength() > 0)
+	key.occurrence = request.objectPath.getString();
+    else
+	key.occurrence = request.objectName.getString();
+    key.providerId = request.providerId.getString();
+    key.generation = result.generation;
+    key.sourceRoutingId = request.sourceRoutingId;
+    key.drawMode = request.drawMode;
+    key.resultKind = result.resultKind;
+    key.proxyKind = result.resultKind == BOBOL_LOD_RESULT_PROXY ?
+	result.proxy.kind : 0;
+    return key;
+}
+
 struct BObolLodSubscriber {
     BObolLodSubscriber(void) :
 	id(0),
@@ -1255,6 +1326,45 @@ lod_default_working_set_limit(void)
 	allowance = std::min(allowance,
 	    std::max(mebibyte, availableBytes / 4));
     return std::max(mebibyte, allowance);
+}
+
+static size_t
+lod_default_resident_mesh_limit(void)
+{
+    const size_t mebibyte = 1024ULL * 1024ULL;
+    const size_t gibibyte = 1024ULL * mebibyte;
+    const size_t floor = 256ULL * mebibyte;
+    const char *configured = getenv("BOBOL_LOD_RESIDENT_LIMIT_BYTES");
+    if (configured && configured[0]) {
+	char *end = NULL;
+	const unsigned long long value = strtoull(configured, &end, 10);
+	if (end && end != configured && *end == '\0') {
+	    if (value > static_cast<unsigned long long>(SIZE_MAX))
+		return SIZE_MAX;
+	    return static_cast<size_t>(value);
+	}
+    }
+    size_t totalBytes = 0;
+    size_t availableBytes = 0;
+    const bool haveTotal = bu_mem(BU_MEM_ALL, &totalBytes) >= 0 &&
+	totalBytes > 0;
+    const bool haveAvailable = bu_mem(BU_MEM_AVAIL, &availableBytes) >= 0 &&
+	availableBytes > 0;
+
+    /*
+     * Retained CPU geometry coexists with the database, persistent-cache
+     * mappings, transient topology work, GUI state, and a GPU-side copy.
+     * Reserve most host memory for those consumers while still allowing a
+     * realistic multi-gigabyte vehicle working set on a capable machine.
+     */
+    size_t allowance = 4 * gibibyte;
+    if (haveTotal)
+	allowance = std::min(allowance,
+	    std::max(floor, totalBytes / 4));
+    if (haveAvailable)
+	allowance = std::min(allowance,
+	    std::max(floor, availableBytes / 2));
+    return std::max(floor, allowance);
 }
 
 struct BObolGlobalWorkingSetGovernor {
@@ -1375,6 +1485,16 @@ bobol_lod_working_set_global_peak_tasks(void)
 }
 
 struct BObolResidentMeshAsset {
+    BObolResidentMeshAsset(void) :
+	publishedMinimumLevel(-1),
+	publishedResidentLevel(-1),
+	publishedBytes(0),
+	publishedBackingPrefixBytes(0),
+	useRevision(0),
+	orderIndex(SIZE_MAX)
+    {
+    }
+
     ~BObolResidentMeshAsset()
     {
 	if (lod)
@@ -1389,11 +1509,55 @@ struct BObolResidentMeshAsset {
     BObolLodProgressiveMeshPtr mesh;
     struct BObolMeshLodCacheStatus status =
 	BOBOL_MESH_LOD_CACHE_STATUS_INIT;
+    /* Planner-side summaries avoid retaining every immutable source
+     * generation merely to decide whether a stable trim is necessary. */
+    std::atomic<int> publishedMinimumLevel;
+    std::atomic<int> publishedResidentLevel;
+    /* Total service-owned CPU bytes for this asset: the renderer-neutral
+     * immutable prefix plus the opened cache handle and any reloadable cache
+     * prefix arrays. */
+    std::atomic<size_t> publishedBytes;
+    /* Reloadable arrays duplicated temporarily by the cache reader.  Stable
+     * maintenance releases these after the immutable generation is
+     * published; fixed hierarchy/header state remains in publishedBytes. */
+    std::atomic<size_t> publishedBackingPrefixBytes;
+    /* An eviction plan is valid only while no later realization has acquired
+     * this asset.  This prevents a quiet-view reclamation queued just before
+     * renewed input from retiring the asset underneath that new request. */
+    std::atomic<uint64_t> useRevision;
+    size_t orderIndex;
+};
+
+struct BObolResidentMeshDemandValue {
+    int level = -1;
+    unsigned int channelMask = 0;
 };
 
 struct BObolResidentMeshConsumerDemand {
     uint64_t revision = 0;
-    std::unordered_map<std::string, int> levels;
+    // Resident-asset mutation epoch for which this snapshot was fully
+    // compacted.  Zero means the snapshot was recorded while workers were
+    // active and must be retried.
+    uint64_t residentRevision = 0;
+    std::unordered_map<std::string, BObolResidentMeshDemandValue> assets;
+    size_t planningCursor = 0;
+    size_t planningProjectedResidentBytes = 0;
+    uint64_t planningResidentRevision = 0;
+    SbBool planning = FALSE;
+};
+
+struct BObolResidentMeshCompactionTarget {
+    int level = -1;
+    unsigned int channelMask = 0;
+    SbBool evict = FALSE;
+    uint64_t useRevision = 0;
+};
+
+struct BObolResidentMeshCompactionWork {
+    std::string assetKey;
+    std::shared_ptr<BObolResidentMeshAsset> resident;
+    std::vector<uint64_t> consumers;
+    size_t estimatedWorkingSetBytes = 0;
 };
 
 struct BObolLodServicePrivate {
@@ -1407,10 +1571,19 @@ struct BObolLodServicePrivate {
 	nextSubscriberId(1),
 	nextGeneration(0),
 	activeGeneration(0),
-	maxActiveTasks(1024),
-	maxQueuedResults(256),
-	maxQueuedCacheWrites(256),
+	/*
+	 * Large compact sources are planned in 2048-occurrence quiet-view
+	 * windows.  Keeping only 256 result reservations forced every such
+	 * window through eight producer/publication barriers and, more
+	 * importantly, eight whole-scene update traversals.  Pending tasks and
+	 * result handles are lightweight; actual concurrent mesh construction
+	 * remains independently bounded by worker count and the byte governor.
+	 */
+	maxActiveTasks(4096),
+	maxQueuedResults(2048),
+	maxQueuedCacheWrites(2048),
 	maxActiveWorkingSetBytes(0),
+	maxResidentMeshBytes(0),
 	activeWorkingSetBytes(0),
 	executingTasks(0),
 	peakWorkingSetBytes(0),
@@ -1424,6 +1597,15 @@ struct BObolLodServicePrivate {
 	residentMeshCacheLoads(0),
 	residentMeshHits(0),
 	residentMeshCompactions(0),
+	residentMeshEvictions(0),
+	residentMeshBytes(0),
+	residentMeshBackingBytes(0),
+	residentMeshGrowthReservationBytes(0),
+	residentMeshRevision(1),
+	residentMeshAdmissionRevision(1),
+	residentMeshCompactionsInFlight(0),
+	residentMeshCompactionResultCount(0),
+	residentMeshCompactionResultReservations(0),
 	inFlight(0),
 	cacheWriteInFlight(0),
 	delayedTasks(0)
@@ -1435,6 +1617,7 @@ struct BObolLodServicePrivate {
 	 * CPU workers on a small or already-busy host cannot multiply several
 	 * very large topology builds into an avoidable OOM. */
 	maxActiveWorkingSetBytes = lod_default_working_set_limit();
+	maxResidentMeshBytes = lod_default_resident_mesh_limit();
     }
 
     BObolLodService *owner;
@@ -1456,6 +1639,7 @@ struct BObolLodServicePrivate {
     size_t maxQueuedResults;
     size_t maxQueuedCacheWrites;
     size_t maxActiveWorkingSetBytes;
+    size_t maxResidentMeshBytes;
     size_t activeWorkingSetBytes;
     size_t executingTasks;
     size_t peakWorkingSetBytes;
@@ -1469,15 +1653,54 @@ struct BObolLodServicePrivate {
     uint64_t residentMeshCacheLoads;
     uint64_t residentMeshHits;
     uint64_t residentMeshCompactions;
+    uint64_t residentMeshEvictions;
+    /* Updated only when a retained progressive buffer is published or
+     * compacted.  Diagnostics/HUD reads must not walk and try-lock every
+     * resident asset on the presentation thread. */
+    std::atomic<size_t> residentMeshBytes;
+    /* Reloadable cache-reader prefix bytes are part of live diagnostics but
+     * not the quiet-state residency target.  The transient working-set
+     * governor already bounds their concurrent construction. */
+    std::atomic<size_t> residentMeshBackingBytes;
+    /* Protected by mutex.  Workers reserve optional stable-prefix growth
+     * before loading so independent assets cannot all observe the same free
+     * capacity.  Minimum useful prefixes are permitted to exceed the soft
+     * target, but are still reserved and therefore constrain richer peers. */
+    size_t residentMeshGrowthReservationBytes;
+    std::atomic<uint64_t> residentMeshRevision;
+    std::atomic<uint64_t> residentMeshAdmissionRevision;
     std::deque<BObolLodWorkItem> pending;
-    std::deque<BObolLodResult> results;
-    std::deque<BObolLodCacheWriteItem> cacheWrites;
+    std::map<int, size_t> pendingQualityCounts;
+    std::list<BObolLodResult> results;
+    std::list<BObolLodCacheWriteItem> cacheWrites;
+    std::unordered_map<BObolLodResultSlotMapKey,
+	std::list<BObolLodResult>::iterator,
+	BObolLodResultSlotMapKeyHash> resultSlots;
+    std::unordered_map<BObolLodResultSlotMapKey,
+	std::list<BObolLodCacheWriteItem>::iterator,
+	BObolLodResultSlotMapKeyHash> cacheWriteSlots;
     std::vector<BObolLodSubscriber> subscribers;
     std::unordered_map<std::string, size_t> activeRequestKeyCounts;
     std::unordered_map<std::string, std::shared_ptr<BObolResidentMeshAsset>>
 	residentMeshes;
+    /* Append-only while the service is running.  Stable planning advances a
+     * bounded cursor through this vector; unordered_map rehashing therefore
+     * cannot invalidate a GUI-frame-spanning plan. */
+    std::vector<std::pair<std::string,
+	std::shared_ptr<BObolResidentMeshAsset>>> residentMeshOrder;
     std::unordered_map<uint64_t, BObolResidentMeshConsumerDemand>
 	residentMeshConsumerDemands;
+    std::deque<BObolResidentMeshCompactionWork>
+	residentMeshCompactionWork;
+    std::unordered_set<std::string> residentMeshCompactionQueuedAssets;
+    std::unordered_map<std::string, BObolResidentMeshCompactionTarget>
+	residentMeshCompactionTargets;
+    std::unordered_map<uint64_t,
+	std::deque<BObolLodResidentCompaction>>
+	residentMeshCompactionResults;
+    size_t residentMeshCompactionsInFlight;
+    size_t residentMeshCompactionResultCount;
+    size_t residentMeshCompactionResultReservations;
     std::set<uint64_t> completed;
     std::unordered_map<uint64_t, uint64_t> taskGenerations;
     std::set<uint64_t> cancelledGenerations;
@@ -1487,6 +1710,199 @@ struct BObolLodServicePrivate {
     size_t cacheWriteInFlight;
     size_t delayedTasks;
 };
+
+static void
+lod_resident_mesh_bytes_replace(std::atomic<size_t> &total,
+    size_t priorBytes, size_t currentBytes)
+{
+    size_t observed = total.load(std::memory_order_relaxed);
+    while (true) {
+	size_t next = observed;
+	if (priorBytes > next)
+	    next = 0;
+	else
+	    next -= priorBytes;
+	if (currentBytes > std::numeric_limits<size_t>::max() - next)
+	    next = std::numeric_limits<size_t>::max();
+	else
+	    next += currentBytes;
+	if (total.compare_exchange_weak(observed, next,
+		std::memory_order_relaxed, std::memory_order_relaxed))
+	    return;
+    }
+}
+
+static void
+lod_resident_mesh_revision_advance(std::atomic<uint64_t> &revision)
+{
+    uint64_t next = revision.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!next)
+	revision.store(1, std::memory_order_relaxed);
+}
+
+static size_t
+lod_resident_stable_bytes(const BObolLodServicePrivate *p)
+{
+    if (!p)
+	return 0;
+    const size_t total =
+	p->residentMeshBytes.load(std::memory_order_relaxed);
+    const size_t backing =
+	p->residentMeshBackingBytes.load(std::memory_order_relaxed);
+    return backing >= total ? 0 : total - backing;
+}
+
+static size_t
+lod_resident_level_stable_bytes(
+    const BObolResidentMeshAsset &resident,
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    int level)
+{
+    if (!resident.lod || level < hierarchy.min_level ||
+	level > hierarchy.max_level ||
+	level >= BOBOL_MESH_LOD_LEVEL_COUNT)
+	return SIZE_MAX;
+
+    const size_t cacheBytes =
+	bobol_mesh_lod_resident_bytes(resident.lod);
+    const size_t prefixBytes =
+	bobol_mesh_lod_resident_prefix_bytes(resident.lod);
+    size_t bytes = prefixBytes >= cacheBytes ?
+	0 : cacheBytes - prefixBytes;
+    const size_t points = hierarchy.point_count[level];
+    const size_t faces = hierarchy.face_count[level];
+    const auto addScaled = [&bytes](size_t count, size_t stride) {
+	if (bytes == SIZE_MAX || (count && stride > SIZE_MAX / count)) {
+	    bytes = SIZE_MAX;
+	    return;
+	}
+	const size_t amount = count * stride;
+	bytes = amount > SIZE_MAX - bytes ? SIZE_MAX : bytes + amount;
+    };
+
+    if (hierarchy.has_normals) {
+	/* Authored corner normals may split every triangle corner into a
+	 * distinct renderer vertex.  Count the larger of the source prefix
+	 * and that worst-case split, then one 32-bit index per corner. */
+	const size_t corners =
+	    faces > SIZE_MAX / 3 ? SIZE_MAX : faces * 3;
+	const size_t rendererVertices = std::max(points, corners);
+	addScaled(rendererVertices, sizeof(SbVec3f) * 2);
+	addScaled(corners, sizeof(uint32_t));
+    } else {
+	addScaled(points, sizeof(SbVec3f));
+	addScaled(faces, sizeof(uint32_t) * 3);
+    }
+    return bytes;
+}
+
+class BObolResidentMeshGrowthReservation {
+public:
+    explicit BObolResidentMeshGrowthReservation(
+	BObolLodServicePrivate *service) : p(service)
+    {
+    }
+
+    ~BObolResidentMeshGrowthReservation()
+    {
+	release();
+    }
+
+    int admit(const BObolResidentMeshAsset &resident,
+	const struct BObolMeshLodHierarchyInfo &hierarchy,
+	int desiredLevel, int publishedLevel, size_t priorStableBytes,
+	SbBool &limited)
+    {
+	limited = FALSE;
+	if (!p || desiredLevel < hierarchy.min_level)
+	    return desiredLevel;
+	desiredLevel = std::min(desiredLevel, hierarchy.max_level);
+	if (publishedLevel >= desiredLevel)
+	    return desiredLevel;
+
+	const int floorLevel = publishedLevel >= hierarchy.min_level ?
+	    publishedLevel : hierarchy.min_level;
+	int admittedLevel = floorLevel;
+	size_t admittedEstimate =
+	    publishedLevel >= hierarchy.min_level ?
+		priorStableBytes :
+		lod_resident_level_stable_bytes(
+		    resident, hierarchy, floorLevel);
+
+	std::lock_guard<std::mutex> lock(p->mutex);
+	decisionRevision =
+	    p->residentMeshAdmissionRevision.load(
+		std::memory_order_relaxed);
+	const size_t stableBytes = lod_resident_stable_bytes(p);
+	const size_t occupied =
+	    p->residentMeshGrowthReservationBytes >
+		    SIZE_MAX - stableBytes ?
+		SIZE_MAX :
+		stableBytes + p->residentMeshGrowthReservationBytes;
+	const size_t limit = p->maxResidentMeshBytes;
+	for (int level = floorLevel + 1;
+	    level <= desiredLevel; ++level) {
+	    const size_t estimate =
+		lod_resident_level_stable_bytes(
+		    resident, hierarchy, level);
+	    const size_t growth = estimate > priorStableBytes ?
+		estimate - priorStableBytes : 0;
+	    const SbBool fits =
+		limit == SIZE_MAX ||
+		(occupied <= limit && growth <= limit - occupied);
+	    if (!fits)
+		break;
+	    admittedLevel = level;
+	    admittedEstimate = estimate;
+	}
+
+	/* A first useful mesh is a visual correctness floor.  Reserve it even
+	 * when all visible minima collectively exceed the soft target; optional
+	 * suffixes observe that overage and are denied. */
+	const size_t growth = admittedEstimate > priorStableBytes ?
+	    admittedEstimate - priorStableBytes : 0;
+	p->residentMeshGrowthReservationBytes =
+	    growth > SIZE_MAX - p->residentMeshGrowthReservationBytes ?
+		SIZE_MAX :
+		p->residentMeshGrowthReservationBytes + growth;
+	bytes = growth;
+	limited = admittedLevel < desiredLevel ? TRUE : FALSE;
+	return admittedLevel;
+    }
+
+    uint64_t revision(void) const
+    {
+	return decisionRevision;
+    }
+
+    void release(void)
+    {
+	if (!p || !bytes)
+	    return;
+	std::lock_guard<std::mutex> lock(p->mutex);
+	p->residentMeshGrowthReservationBytes =
+	    bytes >= p->residentMeshGrowthReservationBytes ?
+		0 : p->residentMeshGrowthReservationBytes - bytes;
+	bytes = 0;
+	p->workerCv.notify_all();
+    }
+
+private:
+    BObolLodServicePrivate *p = NULL;
+    size_t bytes = 0;
+    uint64_t decisionRevision = 0;
+};
+
+static size_t
+lod_resident_asset_bytes(const BObolResidentMeshAsset &resident)
+{
+    const size_t meshBytes =
+	resident.mesh ? resident.mesh->estimateBytes() : 0;
+    const size_t backingBytes =
+	bobol_mesh_lod_resident_bytes(resident.lod);
+    return backingBytes > SIZE_MAX - meshBytes ?
+	SIZE_MAX : meshBytes + backingBytes;
+}
 
 static SbBool
 lod_generation_cancelled_unlocked(const BObolLodServicePrivate *p,
@@ -1572,6 +1988,15 @@ lod_request_active_key(const BObolLodRequest &request)
     if (request.occurrenceKey.getLength() > 0) {
 	key += "|occurrence=";
 	key += request.occurrenceKey;
+    }
+    /*
+     * Two live database sources may legitimately request the same database
+     * occurrence.  Results are delivered back to a sourceRoutingId, so
+     * treating those requests as one active task would strand one source.
+     */
+    if (request.sourceRoutingId != 0) {
+	key += "|route=";
+	key += SbString(std::to_string(request.sourceRoutingId).c_str());
     }
     return key;
 }
@@ -1746,6 +2171,18 @@ lod_task_working_set_available(const BObolLodServicePrivate *p,
     return estimate <= p->maxActiveWorkingSetBytes - occupied ? TRUE : FALSE;
 }
 
+static void
+lod_pending_quality_remove(BObolLodServicePrivate *p, int qualityTier)
+{
+    const auto found = p->pendingQualityCounts.find(qualityTier);
+    if (found == p->pendingQualityCounts.end())
+	return;
+    if (found->second > 1)
+	--found->second;
+    else
+	p->pendingQualityCounts.erase(found);
+}
+
 static std::deque<BObolLodWorkItem>::iterator
 lod_find_ready_task(BObolLodServicePrivate *p)
 {
@@ -1760,6 +2197,19 @@ lod_find_ready_task(BObolLodServicePrivate *p)
      * frontier is AABB -> view-selected PoP mesh; OBB remains an optional
      * provider capability rather than a mandatory intermediate stage. */
     std::deque<BObolLodWorkItem>::iterator best = p->pending.end();
+
+    /*
+     * Normal compact waves contain one quality tier and no dependencies.
+     * Return their FIFO head in constant time.  The ordered count retains the
+     * original global tier preference; mixed/blocked queues take the complete
+     * correctness path below.
+     */
+    if (!p->pending.empty() && !p->pendingQualityCounts.empty() &&
+	p->pending.front().task.request.qualityTier ==
+	    p->pendingQualityCounts.begin()->first &&
+	lod_task_dependencies_ready(p, p->pending.front().task) &&
+	lod_task_working_set_available(p, p->pending.front().task))
+	return p->pending.begin();
 
     for (std::deque<BObolLodWorkItem>::iterator it = p->pending.begin();
 	 it != p->pending.end(); ++it) {
@@ -1913,26 +2363,6 @@ lod_notify_result_ready(BObolLodServicePrivate *p)
     }
 }
 
-static std::string
-lod_result_slot_key(const BObolLodResult &result)
-{
-    const BObolLodRequest &request = result.request;
-    std::string key = request.databaseId.getString();
-    key.push_back('\x1f');
-    key += request.occurrenceKey.getLength() > 0 ?
-	request.occurrenceKey.getString() :
-	(request.objectPath.getLength() > 0 ?
-	 request.objectPath.getString() : request.objectName.getString());
-    key.push_back('\x1f');
-    key += request.providerId.getString();
-    char state[160] = {0};
-    snprintf(state, sizeof(state),
-	"|%d|%d|%d", request.drawMode, result.resultKind,
-	result.resultKind == BOBOL_LOD_RESULT_PROXY ? result.proxy.kind : 0);
-    key += state;
-    return key;
-}
-
 static bool
 lod_result_supersedes(const BObolLodResult &candidate,
 	const BObolLodResult &current)
@@ -1968,6 +2398,13 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	item.task.writeCache && item.task.cacheWrite;
     if (duplicateForCache)
 	cacheResult = completedResult;
+    /* The cache writer serializes source PoP data, not renderer presentation
+     * snapshots.  Do not let a slow disk queue retain a second strong
+     * reference to large GPU-ready arrays. */
+    if (duplicateForCache) {
+	cacheResult.preparedCadGeometry.reset();
+	cacheResult.preparedCadGeometryRevision = 0;
+    }
 
     {
 	std::lock_guard<std::mutex> lock(p->mutex);
@@ -1996,19 +2433,18 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	    if (discardResult) {
 		p->discardedStaleResults++;
 	    } else {
-		const std::string slot = lod_result_slot_key(completedResult);
-		auto existing = std::find_if(p->results.begin(), p->results.end(),
-		    [&](const BObolLodResult &queued) {
-			return queued.generation == completedResult.generation &&
-			       lod_result_slot_key(queued) == slot;
-		    });
-		if (existing != p->results.end()) {
-		    if (lod_result_supersedes(completedResult, *existing))
-			*existing = std::move(completedResult);
+		const BObolLodResultSlotMapKey slot =
+		    lod_result_slot_map_key(completedResult);
+		const auto existing = p->resultSlots.find(slot);
+		if (existing != p->resultSlots.end()) {
+		    if (lod_result_supersedes(
+			    completedResult, *existing->second))
+			*existing->second = std::move(completedResult);
 		    p->coalescedResults++;
 		} else {
 		    notifyResultReady = p->results.empty() ? TRUE : FALSE;
 		    p->results.push_back(std::move(completedResult));
+		    p->resultSlots.emplace(slot, std::prev(p->results.end()));
 		}
 	    }
 	}
@@ -2023,21 +2459,18 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 		    std::move(completedResult);
 		writeItem.write = item.task.cacheWrite;
 		writeItem.writeData = item.task.cacheWriteData;
-		const std::string slot = lod_result_slot_key(writeItem.result);
-		auto existing = std::find_if(p->cacheWrites.begin(),
-		    p->cacheWrites.end(),
-		    [&](const BObolLodCacheWriteItem &queued) {
-			return queued.result.generation ==
-				writeItem.result.generation &&
-			       lod_result_slot_key(queued.result) == slot;
-		    });
-		if (existing != p->cacheWrites.end()) {
+		const BObolLodResultSlotMapKey slot =
+		    lod_result_slot_map_key(writeItem.result);
+		const auto existing = p->cacheWriteSlots.find(slot);
+		if (existing != p->cacheWriteSlots.end()) {
 		    if (lod_result_supersedes(writeItem.result,
-			    existing->result))
-			*existing = std::move(writeItem);
+			    existing->second->result))
+			*existing->second = std::move(writeItem);
 		    p->coalescedCacheWrites++;
 		} else {
 		    p->cacheWrites.push_back(std::move(writeItem));
+		    p->cacheWriteSlots.emplace(
+			slot, std::prev(p->cacheWrites.end()));
 		}
 	    }
 	}
@@ -2048,6 +2481,318 @@ lod_finish_task(BObolLodServicePrivate *p, const BObolLodWorkItem &item,
 	lod_task_estimated_working_set_bytes(item.task));
     p->workerCv.notify_all();
     p->cacheWriterCv.notify_one();
+    if (notifyResultReady)
+	lod_notify_result_ready(p);
+}
+
+static SbBool
+lod_compaction_working_set_available(
+    const BObolLodServicePrivate *p,
+    size_t estimate)
+{
+    if (!p || p->maxActiveWorkingSetBytes == SIZE_MAX || !estimate)
+	return TRUE;
+    if (!p->activeWorkingSetBytes)
+	return TRUE;
+    if (p->activeWorkingSetBytes >= p->maxActiveWorkingSetBytes)
+	return FALSE;
+    return estimate <=
+	p->maxActiveWorkingSetBytes - p->activeWorkingSetBytes ? TRUE : FALSE;
+}
+
+static SbBool
+lod_take_resident_compaction_unlocked(
+    BObolLodServicePrivate *p,
+    BObolResidentMeshCompactionWork &work)
+{
+    if (!p || p->residentMeshCompactionWork.empty())
+	return FALSE;
+
+    BObolResidentMeshCompactionWork &candidate =
+	p->residentMeshCompactionWork.front();
+    candidate.estimatedWorkingSetBytes =
+	candidate.resident ?
+	    candidate.resident->publishedBytes.load(
+		std::memory_order_relaxed) : 0;
+    if (!lod_compaction_working_set_available(
+	    p, candidate.estimatedWorkingSetBytes))
+	return FALSE;
+
+    candidate.consumers.clear();
+    for (const auto &consumer : p->residentMeshConsumerDemands) {
+	if (consumer.second.assets.find(candidate.assetKey) !=
+	    consumer.second.assets.end())
+	    candidate.consumers.push_back(consumer.first);
+    }
+    const size_t occupied =
+	p->residentMeshCompactionResultCount +
+	p->residentMeshCompactionResultReservations;
+    const size_t reservations = candidate.consumers.size();
+    if (reservations > p->maxQueuedResults - std::min(
+	    p->maxQueuedResults, occupied) &&
+	occupied != 0)
+	return FALSE;
+
+    work = std::move(candidate);
+    p->residentMeshCompactionWork.pop_front();
+    p->residentMeshCompactionResultReservations =
+	reservations > SIZE_MAX -
+	    p->residentMeshCompactionResultReservations ?
+	SIZE_MAX :
+	p->residentMeshCompactionResultReservations + reservations;
+    p->residentMeshCompactionsInFlight++;
+    p->executingTasks++;
+    p->activeWorkingSetBytes =
+	work.estimatedWorkingSetBytes > SIZE_MAX -
+	    p->activeWorkingSetBytes ?
+	SIZE_MAX :
+	p->activeWorkingSetBytes + work.estimatedWorkingSetBytes;
+    p->peakWorkingSetBytes = std::max(
+	p->peakWorkingSetBytes, p->activeWorkingSetBytes);
+    p->peakExecutingTasks = std::max(
+	p->peakExecutingTasks, p->executingTasks);
+    return TRUE;
+}
+
+static BObolLodResidentCompaction
+lod_execute_resident_compaction(
+    BObolLodServicePrivate *p,
+    const BObolResidentMeshCompactionWork &work)
+{
+    BObolLodResidentCompaction result;
+    if (!p || !work.resident)
+	return result;
+
+    const std::shared_ptr<BObolResidentMeshAsset> &resident = work.resident;
+    std::lock_guard<std::mutex> residentLock(resident->mutex);
+    if (!resident->lod || !resident->mesh)
+	return result;
+
+    BObolResidentMeshCompactionTarget target;
+    {
+	std::lock_guard<std::mutex> lock(p->mutex);
+	const auto found =
+	    p->residentMeshCompactionTargets.find(work.assetKey);
+	if (found == p->residentMeshCompactionTargets.end())
+	    return result;
+	target = found->second;
+    }
+
+    if (target.evict) {
+	const size_t priorBytes =
+	    resident->publishedBytes.load(std::memory_order_relaxed);
+	const size_t priorBackingBytes =
+	    resident->publishedBackingPrefixBytes.load(
+		std::memory_order_relaxed);
+	{
+	    std::lock_guard<std::mutex> lock(p->mutex);
+	    if (resident->useRevision.load(std::memory_order_relaxed) !=
+		    target.useRevision)
+		return result;
+	    for (const auto &consumer : p->residentMeshConsumerDemands)
+		if (consumer.second.assets.find(work.assetKey) !=
+			consumer.second.assets.end())
+		    return result;
+	    const auto found = p->residentMeshes.find(work.assetKey);
+	    if (found == p->residentMeshes.end() ||
+		found->second != resident)
+		return result;
+	    p->residentMeshes.erase(found);
+	    if (resident->orderIndex < p->residentMeshOrder.size()) {
+		auto &ordered = p->residentMeshOrder[resident->orderIndex];
+		if (ordered.first == work.assetKey &&
+		    ordered.second == resident)
+		    ordered.second.reset();
+	    }
+	    p->residentMeshEvictions++;
+	}
+
+	result.priorBytes = priorBytes;
+	result.residentBytes = 0;
+	resident->publishedBytes.store(0, std::memory_order_relaxed);
+	resident->publishedBackingPrefixBytes.store(
+	    0, std::memory_order_relaxed);
+	resident->publishedMinimumLevel.store(
+	    -1, std::memory_order_relaxed);
+	resident->publishedResidentLevel.store(
+	    -1, std::memory_order_relaxed);
+	resident->mesh.reset();
+	if (resident->lod)
+	    bobol_mesh_lod_destroy(resident->lod);
+	resident->lod = NULL;
+	lod_resident_mesh_bytes_replace(
+	    p->residentMeshBytes, priorBytes, 0);
+	lod_resident_mesh_bytes_replace(
+	    p->residentMeshBackingBytes, priorBackingBytes, 0);
+	lod_resident_mesh_revision_advance(p->residentMeshRevision);
+	if (priorBytes > priorBackingBytes)
+	    lod_resident_mesh_revision_advance(
+		p->residentMeshAdmissionRevision);
+	return result;
+    }
+
+    const int currentLevel = resident->mesh->residentLevel();
+    const int minimumLevel = resident->mesh->minimumLevel();
+    const int maximumLevel = resident->mesh->maximumLevel();
+    if (currentLevel < 0 || minimumLevel < 0 ||
+	maximumLevel < minimumLevel)
+	return result;
+    const int targetLevel = std::min(currentLevel,
+	std::max(minimumLevel,
+	    std::min(maximumLevel,
+		target.level < 0 ? minimumLevel : target.level)));
+    const size_t priorBytes =
+	resident->publishedBytes.load(std::memory_order_relaxed);
+    const size_t priorBackingBytes =
+	resident->publishedBackingPrefixBytes.load(
+	    std::memory_order_relaxed);
+    if (targetLevel >= currentLevel) {
+	/*
+	 * Stable demand may already match the immutable prefix.  The cache
+	 * reader nevertheless owns a second copy of those arrays so it can
+	 * append quickly during active refinement.  Once the view is quiet,
+	 * release that reloadable copy without disturbing the published
+	 * geometry.  A later zoom reloads from the persistent PoP cache.
+	 */
+	if (!bobol_mesh_lod_resident_prefix_bytes(resident->lod))
+	    return result;
+	result.priorBytes = priorBytes;
+	bobol_mesh_lod_memshrink(resident->lod);
+	const size_t residentBytes = lod_resident_asset_bytes(*resident);
+	result.residentBytes = residentBytes;
+	resident->publishedBytes.store(
+	    residentBytes, std::memory_order_relaxed);
+	resident->publishedBackingPrefixBytes.store(
+	    0, std::memory_order_relaxed);
+	if (residentBytes != priorBytes) {
+	    lod_resident_mesh_bytes_replace(
+		p->residentMeshBytes, priorBytes, residentBytes);
+	    lod_resident_mesh_revision_advance(
+		p->residentMeshRevision);
+	}
+	if (priorBackingBytes)
+	    lod_resident_mesh_bytes_replace(
+		p->residentMeshBackingBytes,
+		priorBackingBytes, 0);
+	/* No geometry generation changed, so there is deliberately no
+	 * presentation result to publish. */
+	return result;
+    }
+
+    const int residentLevel = bobol_mesh_lod_load_resident_level(
+	resident->lod, targetLevel, 0);
+    if (residentLevel != targetLevel)
+	return result;
+    struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
+    struct BObolMeshLodHierarchyInfo hierarchy =
+	BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
+    struct BObolMeshLodData data;
+    result.priorBytes = priorBytes;
+    if (!bobol_mesh_lod_info_get(resident->lod, &info) ||
+	!bobol_mesh_lod_hierarchy_info_get(resident->lod, &hierarchy) ||
+	!bobol_mesh_lod_data_get(resident->lod, &data) ||
+	!resident->mesh->update(data, hierarchy, residentLevel,
+	    info.shaded_cull_backfaces ? TRUE : FALSE))
+	return BObolLodResidentCompaction();
+
+    result.assetKey = work.assetKey.c_str();
+    result.progressiveMesh = resident->mesh;
+    result.residentLevel = residentLevel;
+    result.channelMask = target.channelMask & 3u;
+    if (result.channelMask) {
+	const int drawMode = result.channelMask == 3u ?
+	    BOBOL_LOD_DRAW_HIDDEN_LINE :
+	    (result.channelMask & 1u ?
+		BOBOL_LOD_DRAW_WIRE : BOBOL_LOD_DRAW_SHADED);
+	result.preparedCadGeometry =
+	    resident->mesh->prepareCadGeometry(
+		drawMode, &result.preparedCadGeometryRevision);
+    }
+    /*
+     * The replacement immutable generation is now self-contained.  Keeping
+     * BObolPopState's identical prefix doubles stable CPU residency and is
+     * unnecessary until a later view requests more detail.
+     */
+    bobol_mesh_lod_memshrink(resident->lod);
+    result.residentBytes = lod_resident_asset_bytes(*resident);
+    resident->publishedMinimumLevel.store(
+	hierarchy.min_level, std::memory_order_relaxed);
+    resident->publishedResidentLevel.store(
+	residentLevel, std::memory_order_relaxed);
+    resident->publishedBytes.store(
+	result.residentBytes, std::memory_order_relaxed);
+    resident->publishedBackingPrefixBytes.store(
+	0, std::memory_order_relaxed);
+    lod_resident_mesh_bytes_replace(
+	p->residentMeshBytes, result.priorBytes, result.residentBytes);
+    if (priorBackingBytes)
+	lod_resident_mesh_bytes_replace(
+	    p->residentMeshBackingBytes,
+	    priorBackingBytes, 0);
+    lod_resident_mesh_revision_advance(p->residentMeshRevision);
+    const size_t priorStableBytes =
+	priorBackingBytes >= priorBytes ?
+	    0 : priorBytes - priorBackingBytes;
+    if (result.residentBytes < priorStableBytes)
+	lod_resident_mesh_revision_advance(
+	    p->residentMeshAdmissionRevision);
+    return result;
+}
+
+static void
+lod_finish_resident_compaction(
+    BObolLodServicePrivate *p,
+    const BObolResidentMeshCompactionWork &work,
+    BObolLodResidentCompaction &&result)
+{
+    SbBool notifyResultReady = FALSE;
+    const bool completed = result.assetKey.getLength() > 0 &&
+	result.progressiveMesh && result.residentLevel >= 0;
+    const bool reclaimedStorage =
+	result.priorBytes > result.residentBytes;
+    {
+	std::lock_guard<std::mutex> lock(p->mutex);
+	if (p->residentMeshCompactionsInFlight > 0)
+	    p->residentMeshCompactionsInFlight--;
+	if (p->executingTasks > 0)
+	    p->executingTasks--;
+	p->activeWorkingSetBytes =
+	    work.estimatedWorkingSetBytes >= p->activeWorkingSetBytes ?
+	    0 : p->activeWorkingSetBytes -
+		work.estimatedWorkingSetBytes;
+	p->residentMeshCompactionResultReservations =
+	    work.consumers.size() >=
+		p->residentMeshCompactionResultReservations ?
+	    0 : p->residentMeshCompactionResultReservations -
+		work.consumers.size();
+	p->residentMeshCompactionQueuedAssets.erase(work.assetKey);
+	p->residentMeshCompactionTargets.erase(work.assetKey);
+
+	if ((completed || reclaimedStorage) && !p->stopping)
+	    p->residentMeshCompactions++;
+	if (completed && !p->stopping) {
+	    const size_t resultCountBefore =
+		p->residentMeshCompactionResultCount;
+	    for (uint64_t consumerId : work.consumers) {
+		const auto consumer =
+		    p->residentMeshConsumerDemands.find(consumerId);
+		if (consumer == p->residentMeshConsumerDemands.end())
+		    continue;
+		const auto demand =
+		    consumer->second.assets.find(work.assetKey);
+		if (demand == consumer->second.assets.end() ||
+		    demand->second.level > result.residentLevel)
+		    continue;
+		p->residentMeshCompactionResults[consumerId].push_back(
+		    result);
+		p->residentMeshCompactionResultCount++;
+	    }
+	    notifyResultReady =
+		resultCountBefore == 0 &&
+		p->residentMeshCompactionResultCount > 0 ? TRUE : FALSE;
+	}
+    }
+    p->workerCv.notify_all();
     if (notifyResultReady)
 	lod_notify_result_ready(p);
 }
@@ -2064,22 +2809,34 @@ lod_worker_loop(BObolLodServicePrivate *p)
 
     for (;;) {
 	BObolLodWorkItem item;
+	BObolResidentMeshCompactionWork compaction;
+	SbBool runCompaction = FALSE;
 
 	{
 	    std::unique_lock<std::mutex> lock(p->mutex);
 
-	    while (!p->stopping && lod_find_ready_task(p) == p->pending.end())
+	    std::deque<BObolLodWorkItem>::iterator ready;
+	    for (;;) {
+		if (p->stopping)
+		    return;
+		ready = lod_find_ready_task(p);
+		if (ready != p->pending.end())
+		    break;
+		if (lod_take_resident_compaction_unlocked(
+			p, compaction)) {
+		    runCompaction = TRUE;
+		    break;
+		}
 		p->workerCv.wait(lock);
+	    }
 
-	    if (p->stopping)
-		return;
-
-	    std::deque<BObolLodWorkItem>::iterator ready =
-		lod_find_ready_task(p);
-	    if (ready == p->pending.end())
-		continue;
-	    item = *ready;
+	    if (runCompaction) {
+		/* Counters and reservations were installed by the take helper. */
+	    } else {
+	    const int qualityTier = ready->task.request.qualityTier;
+	    item = std::move(*ready);
 	    p->pending.erase(ready);
+	    lod_pending_quality_remove(p, qualityTier);
 	    const size_t workingBytes =
 		lod_task_estimated_working_set_bytes(item.task);
 	    p->activeWorkingSetBytes =
@@ -2090,6 +2847,19 @@ lod_worker_loop(BObolLodServicePrivate *p)
 		p->peakWorkingSetBytes, p->activeWorkingSetBytes);
 	    p->peakExecutingTasks = std::max(
 		p->peakExecutingTasks, p->executingTasks);
+	    }
+	}
+
+	if (runCompaction) {
+	    bobol_lod_working_set_acquire(
+		compaction.estimatedWorkingSetBytes);
+	    BObolLodResidentCompaction result =
+		lod_execute_resident_compaction(p, compaction);
+	    lod_finish_resident_compaction(
+		p, compaction, std::move(result));
+	    bobol_lod_working_set_release(
+		compaction.estimatedWorkingSetBytes);
+	    continue;
 	}
 
 	bobol_lod_working_set_acquire(
@@ -2122,6 +2892,8 @@ lod_cache_writer_loop(BObolLodServicePrivate *p)
 	    if (p->cacheWrites.empty())
 		continue;
 
+	    p->cacheWriteSlots.erase(
+		lod_result_slot_map_key(p->cacheWrites.front().result));
 	    item = std::move(p->cacheWrites.front());
 	    p->cacheWrites.pop_front();
 	    p->cacheWriteInFlight++;
@@ -2217,6 +2989,7 @@ BObolLodService::stop(void)
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	pending.swap(this->p->pending);
+	this->p->pendingQualityCounts.clear();
 	this->p->inFlight = 0;
 	this->p->activeWorkingSetBytes = 0;
 	this->p->executingTasks = 0;
@@ -2238,13 +3011,29 @@ BObolLodService::stop(void)
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	this->p->cacheWrites.clear();
 	this->p->results.clear();
+	this->p->cacheWriteSlots.clear();
+	this->p->resultSlots.clear();
 	this->p->completed.clear();
 	this->p->taskGenerations.clear();
 	this->p->cancelledGenerations.clear();
 	this->p->cancelledGenerationOrder.clear();
 	this->p->generationTaskCounts.clear();
 	this->p->residentMeshConsumerDemands.clear();
+	this->p->residentMeshOrder.clear();
+	this->p->residentMeshCompactionWork.clear();
+	this->p->residentMeshCompactionQueuedAssets.clear();
+	this->p->residentMeshCompactionTargets.clear();
+	this->p->residentMeshCompactionResults.clear();
+	this->p->residentMeshCompactionsInFlight = 0;
+	this->p->residentMeshCompactionResultCount = 0;
+	this->p->residentMeshCompactionResultReservations = 0;
 	residentMeshes.swap(this->p->residentMeshes);
+	this->p->residentMeshBytes.store(0, std::memory_order_relaxed);
+	this->p->residentMeshBackingBytes.store(
+	    0, std::memory_order_relaxed);
+	this->p->residentMeshGrowthReservationBytes = 0;
+	lod_resident_mesh_revision_advance(
+	    this->p->residentMeshAdmissionRevision);
 	this->p->activeGeneration = 0;
 	this->p->cacheWriteInFlight = 0;
 	this->p->delayedTasks = 0;
@@ -2297,6 +3086,9 @@ lod_progressive_delivery_level(
 {
     int target = std::max(hierarchy.min_level,
 	std::min(hierarchy.max_level, requestedLevel));
+    if (provider.useDeliveryLevelLimit &&
+	provider.deliveryLevelLimit >= hierarchy.min_level)
+	target = std::min(target, provider.deliveryLevelLimit);
     if (!provider.progressiveDelivery || provider.useForcedLevel ||
 	provider.reset || currentLevel >= target)
 	return target;
@@ -2322,20 +3114,14 @@ lod_progressive_delivery_level(
 	selected = level;
     }
 
-    /* Sparse hierarchies may jump by more than the nominal growth factor.
-     * Always make forward progress by one level; otherwise the controller
-     * would keep requesting the same incomplete stage forever. */
-    if (currentLevel >= hierarchy.min_level) {
-	if (selected <= currentLevel)
-	    selected = std::min(target, currentLevel + 1);
-	/* Population budgets prevent an oversized initial replacement, but a
-	 * later high-resolution target can otherwise skip several already
-	 * defined PoP cuts in one presentation (Lucy level 9 -> 12 is an
-	 * eighteen-million-face jump).  Publish at most one hierarchy step per
-	 * rendered frame.  The retained prefix still appends in place and the
-	 * controller immediately schedules the next step. */
-	selected = std::min(selected, currentLevel + 1);
-    }
+    /*
+     * Return the richest population that fits the provider's face/point
+     * growth allowance.  Nominal level adjacency is deliberately irrelevant:
+     * one level may add no arrays while the next adds millions.  The budget
+     * is the bounded work contract, not "+1 level".
+     */
+    if (currentLevel >= hierarchy.min_level && selected <= currentLevel)
+	selected = std::min(target, currentLevel + 1);
     return std::min(selected, target);
 }
 
@@ -2367,9 +3153,13 @@ BObolLodService::realizeResidentMeshLod(
 	    resident->name = name;
 	    resident->mesh = std::make_shared<BObolLodProgressiveMesh>();
 	    this->p->residentMeshes[assetKey.value.getString()] = resident;
+	    resident->orderIndex = this->p->residentMeshOrder.size();
+	    this->p->residentMeshOrder.push_back(std::make_pair(
+		std::string(assetKey.value.getString()), resident));
 	} else {
 	    resident = found->second;
 	}
+	resident->useRevision.fetch_add(1, std::memory_order_relaxed);
     }
 
     std::lock_guard<std::mutex> residentLock(resident->mutex);
@@ -2378,12 +3168,20 @@ BObolLodService::realizeResidentMeshLod(
 	    "resident mesh asset identity collision");
 
     if (!resident->lod) {
-	/* The normal warm path needs no separate status probe:
-	 * bobol_mesh_lod_get already resolves the name key and validates the
-	 * immutable hierarchy header.  Query/refresh only after that direct
-	 * open misses.  At 50k distinct assets this removes two redundant LMDB
-	 * transactions and one context lifecycle from every successful task. */
-	resident->lod = bobol_mesh_lod_get(provider.dbip, name);
+	/*
+	 * Compact requests captured the validated immutable content key while
+	 * their source records were streamed.  Open that payload directly and
+	 * keep its hierarchy-header snapshot through the first prefix read.
+	 * Falling back to the named API preserves the non-compact/legacy path.
+	 * At distinct-asset scale this avoids one database lookup, one name-cache
+	 * lookup, and one LMDB read transaction per successful warm task.
+	 */
+	if (request.sourceContentHash)
+	    resident->lod = bobol_mesh_lod_get_cached_prefix(
+		provider.dbip, request.sourceContentHash);
+	if (!resident->lod)
+	    resident->lod = bobol_mesh_lod_get_named_cached_prefix(
+		provider.dbip, name);
 	if (resident->lod) {
 	    resident->status.directory_found = 1;
 	    resident->status.is_bot = 1;
@@ -2403,16 +3201,45 @@ BObolLodService::realizeResidentMeshLod(
 		 resident->status.stale_cache_entry) &&
 		provider.refreshMissing) {
 		const int64_t refreshStarted = bu_gettime();
-		if (bobol_mesh_lod_cache_refresh(provider.dbip, name,
-			&resident->status) != BRLCAD_OK)
+		const std::shared_ptr<const BObolStagedSourceMesh> &staged =
+		    provider.stagedSource;
+		const bool stagedMatches =
+		    staged && staged->isValid() &&
+		    staged->sourceRevision == request.sourceRevision &&
+		    bu_strcmp(staged->assetName.getString(), name) == 0 &&
+		    (!request.sourceCounts.faceCount ||
+		     request.sourceCounts.faceCount == staged->bot->num_faces) &&
+		    (!request.sourceCounts.pointCount ||
+		     request.sourceCounts.pointCount ==
+			 staged->bot->num_vertices);
+		int refreshResult = BRLCAD_ERROR;
+		if (stagedMatches) {
+		    resident->lod =
+			bobol_mesh_lod_cache_refresh_from_bot_open(
+			    provider.dbip, name, staged->bot,
+			    &resident->status);
+		    refreshResult = resident->lod ?
+			BRLCAD_OK : BRLCAD_ERROR;
+		} else {
+		    refreshResult = bobol_mesh_lod_cache_refresh(
+			provider.dbip, name, &resident->status);
+		}
+		if (refreshResult != BRLCAD_OK)
 		    return lod_provider_status_result(request,
 			BOBOL_LOD_PROVIDER_CACHE_MISS,
 			"resident mesh provider could not refresh cache entry");
 		if (getenv("BOBOL_DRAW_TIMING"))
-		    bu_log("[obol-timing] pop cache: refresh %-24s %8.1f ms\n",
-			   name, (bu_gettime() - refreshStarted) / 1000.0);
+		    bu_log("[obol-timing] pop cache: refresh %-24s %8.1f ms "
+			   "staged=%d\n", name,
+			   (bu_gettime() - refreshStarted) / 1000.0,
+			   stagedMatches ? 1 : 0);
 	    }
-	    resident->lod = bobol_mesh_lod_get(provider.dbip, name);
+	    if (!resident->lod && resident->status.has_cache_key)
+		resident->lod = bobol_mesh_lod_get_cached_prefix(
+		    provider.dbip, resident->status.cache_key);
+	    if (!resident->lod)
+		resident->lod = bobol_mesh_lod_get_named_cached_prefix(
+		    provider.dbip, name);
 	}
 	if (!resident->lod)
 	    return lod_provider_status_result(request,
@@ -2437,29 +3264,76 @@ BObolLodService::realizeResidentMeshLod(
 	return lod_provider_status_result(request,
 	    BOBOL_LOD_PROVIDER_CACHE_MISS,
 	    "resident mesh provider loaded no hierarchy metadata");
+    resident->publishedMinimumLevel.store(
+	hierarchy.min_level, std::memory_order_relaxed);
 
+    const size_t priorResidentBytes =
+	resident->publishedBytes.load(std::memory_order_relaxed);
+    const size_t priorBackingBytes =
+	resident->publishedBackingPrefixBytes.load(
+	    std::memory_order_relaxed);
+    const size_t priorStableBytes =
+	priorBackingBytes >= priorResidentBytes ?
+	    0 : priorResidentBytes - priorBackingBytes;
     int currentLevel = bobol_mesh_lod_current_level(resident->lod);
+    const int publishedLevel =
+	resident->mesh && resident->mesh->isValid() ?
+	    resident->mesh->residentLevel() : -1;
     const int deliveryLevel = provider.useCurrentDrawLevel ?
-	provider.currentDrawLevel : currentLevel;
+	provider.currentDrawLevel :
+	(publishedLevel >= 0 ? publishedLevel : currentLevel);
     int drawTarget = requestedLevel;
     if (requestedLevel >= 0)
 	drawTarget = lod_progressive_delivery_level(hierarchy, requestedLevel,
 	    deliveryLevel, provider);
+    if (drawTarget < hierarchy.min_level)
+	drawTarget = hierarchy.min_level;
+    if (drawTarget > hierarchy.max_level)
+	drawTarget = hierarchy.max_level;
+    /*
+     * Establish the minimum useful mesh as its own publication.  Besides
+     * minimizing time-to-first-content, this prevents early workers from
+     * spending the stable byte allowance on optional suffixes before later
+     * visible assets have revealed their mandatory coverage floor.  The next
+     * bounded view pass may jump directly to the richest face- and
+     * byte-admitted target; this is two-phase coverage, not nominal
+     * level-by-level walking.
+     */
+    if (publishedLevel < hierarchy.min_level)
+	drawTarget = hierarchy.min_level;
     int loadTarget = drawTarget;
-    if (provider.compactResident && currentLevel >= 0 &&
-	drawTarget >= 0 && drawTarget < currentLevel) {
+    if (provider.compactResident && publishedLevel >= 0 &&
+	drawTarget < publishedLevel) {
 	/* A level is not a bounded unit of memory: one Lucy hierarchy step can
 	 * add millions of faces.  Stable reclamation therefore retains exactly
 	 * the pixel-demanded prefix. */
 	loadTarget = drawTarget;
-    } else if (currentLevel >= 0 && drawTarget <= currentLevel &&
+    } else if (publishedLevel >= 0 && drawTarget <= publishedLevel &&
 	!provider.reset) {
-	loadTarget = currentLevel;
+	loadTarget = publishedLevel;
     }
 
-    const bool loadNeeded = currentLevel < 0 || loadTarget != currentLevel ||
-	provider.reset;
-    int residentLevel = currentLevel;
+    BObolResidentMeshGrowthReservation growthReservation(this->p);
+    SbBool memoryLimited = FALSE;
+    loadTarget = growthReservation.admit(*resident, hierarchy,
+	loadTarget, publishedLevel, priorStableBytes, memoryLimited);
+    if (drawTarget > loadTarget)
+	drawTarget = loadTarget;
+
+    /*
+     * The immutable renderer generation is authoritative residency.  Stable
+     * maintenance intentionally drops the cache reader's duplicate prefix;
+     * reloading that prefix merely to return an already drawable cut defeats
+     * compaction and can produce a load/shrink retry cycle.
+     */
+    const bool retainedTargetDrawable =
+	resident->mesh && resident->mesh->isValid() &&
+	resident->mesh->canDrawLevel(loadTarget);
+    const bool loadNeeded =
+	provider.reset || !retainedTargetDrawable ||
+	(publishedLevel >= 0 && loadTarget != publishedLevel);
+    int residentLevel = publishedLevel;
+    struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
     if (loadNeeded) {
 	residentLevel = bobol_mesh_lod_load_resident_level(
 	    resident->lod, loadTarget, provider.reset);
@@ -2467,32 +3341,45 @@ BObolLodService::realizeResidentMeshLod(
 	    return lod_provider_status_result(request,
 		BOBOL_LOD_PROVIDER_CACHE_MISS,
 		"resident mesh provider could not load the requested prefix");
-	if (currentLevel < residentLevel) {
+	if (publishedLevel < residentLevel) {
 	    std::lock_guard<std::mutex> lock(this->p->mutex);
 	    this->p->residentMeshCacheLoads++;
 	}
-    } else {
-	std::lock_guard<std::mutex> lock(this->p->mutex);
-	this->p->residentMeshHits++;
-    }
-
-    struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
-    struct BObolMeshLodData data;
-    if (!bobol_mesh_lod_info_get(resident->lod, &info) ||
-	!bobol_mesh_lod_data_get(resident->lod, &data))
-	return lod_provider_status_result(request,
-	    BOBOL_LOD_PROVIDER_CACHE_MISS,
-	    "resident mesh provider loaded no mesh data");
-
-    const uint64_t priorRevision = resident->mesh->revision();
-    if (priorRevision == 0 ||
-	resident->mesh->residentLevel() != residentLevel) {
+	struct BObolMeshLodData data;
+	if (!bobol_mesh_lod_info_get(resident->lod, &info) ||
+	    !bobol_mesh_lod_data_get(resident->lod, &data))
+	    return lod_provider_status_result(request,
+		BOBOL_LOD_PROVIDER_CACHE_MISS,
+		"resident mesh provider loaded no mesh data");
 	if (!resident->mesh->update(data, hierarchy, residentLevel,
-		info.shaded_cull_backfaces ? TRUE : FALSE))
+		hierarchy.shaded_cull_backfaces ? TRUE : FALSE))
 	    return lod_provider_status_result(request,
 		BOBOL_LOD_PROVIDER_ERROR,
 		"resident mesh provider could not publish the retained asset");
+    } else {
+	std::lock_guard<std::mutex> lock(this->p->mutex);
+	this->p->residentMeshHits++;
+	info.active_level = residentLevel;
+	info.face_count = resident->mesh->faceCount(residentLevel);
+	info.point_count = resident->mesh->pointCount(residentLevel);
+	info.point_orig_count = info.point_count;
+	info.normal_count = hierarchy.has_normals ?
+	    info.face_count * 3 : 0;
+	info.has_faces = info.face_count ? 1 : 0;
+	info.has_points = info.point_count ? 1 : 0;
+	info.has_original_points = info.has_points;
+	info.has_snapped_points = 0;
+	info.has_normals = hierarchy.has_normals;
+	info.shaded_cull_backfaces =
+	    hierarchy.shaded_cull_backfaces;
+	const SbBox3f bounds = resident->mesh->bounds();
+	const SbVec3f minimum = bounds.getMin();
+	const SbVec3f maximum = bounds.getMax();
+	VSET(info.bmin, minimum[0], minimum[1], minimum[2]);
+	VSET(info.bmax, maximum[0], maximum[1], maximum[2]);
     }
+    resident->publishedResidentLevel.store(
+	residentLevel, std::memory_order_relaxed);
 
     int drawLevel = drawTarget;
     if (drawLevel < hierarchy.min_level)
@@ -2506,6 +3393,9 @@ BObolLodService::realizeResidentMeshLod(
     result.geometry.activeLevel = drawLevel;
     result.progressiveMesh = resident->mesh;
     result.residentLevel = residentLevel;
+    result.residentAdmissionRevision =
+	growthReservation.revision();
+    result.memoryLimited = memoryLimited;
     result.counts.faceCount = resident->mesh->faceCount(drawLevel);
     result.counts.pointCount = resident->mesh->pointCount(drawLevel);
     result.counts.originalPointCount = result.counts.pointCount;
@@ -2513,19 +3403,56 @@ BObolLodService::realizeResidentMeshLod(
 	result.counts.faceCount * 3 : 0;
     result.bounds = resident->mesh->bounds();
     result.hasSnappedPoints = FALSE;
-    result.hasNormals = info.has_normals ? TRUE : FALSE;
+    result.hasNormals = hierarchy.has_normals ? TRUE : FALSE;
     result.shadedCullBackfaces = resident->mesh->cullBackfaces();
     result.terminal = drawLevel >= std::max(hierarchy.min_level,
 	std::min(hierarchy.max_level, requestedLevel)) ? TRUE : FALSE;
 
-    /* Compact CAD occurrences retain the shared asset directly.  Legacy
-     * shape consumers still receive a level-local by-value payload until
-     * they are migrated to the same retained assembly path. */
+    /*
+     * Prepare the renderer target on this worker for every CAD consumer, not
+     * only compact occurrences.  Source-wide database nodes can adopt the
+     * same immutable allocation and avoid rebuilding/copying mesh vectors on
+     * the GUI thread.  The legacy shape payload remains populated for the
+     * explicit SoBRLMeshShape route until that renderer is migrated.
+     */
+    result.preparedCadGeometry =
+	resident->mesh->prepareCadGeometry(
+	    request.drawMode, &result.preparedCadGeometryRevision);
+
+    const size_t residentBytes = lod_resident_asset_bytes(*resident);
+    const size_t backingBytes =
+	bobol_mesh_lod_resident_prefix_bytes(resident->lod);
+    resident->publishedBytes.store(
+	residentBytes, std::memory_order_relaxed);
+    resident->publishedBackingPrefixBytes.store(
+	backingBytes,
+	std::memory_order_relaxed);
+    if (residentBytes != priorResidentBytes) {
+	lod_resident_mesh_bytes_replace(this->p->residentMeshBytes,
+	    priorResidentBytes, residentBytes);
+	lod_resident_mesh_revision_advance(
+	    this->p->residentMeshRevision);
+    }
+    if (backingBytes != priorBackingBytes)
+	lod_resident_mesh_bytes_replace(
+	    this->p->residentMeshBackingBytes,
+	    priorBackingBytes, backingBytes);
+    const size_t stableBytes = backingBytes >= residentBytes ?
+	0 : residentBytes - backingBytes;
+    if (stableBytes < priorStableBytes)
+	lod_resident_mesh_revision_advance(
+	    this->p->residentMeshAdmissionRevision);
+    /* Publish exact totals before making this reservation available to a
+     * peer.  Otherwise many workers can briefly admit against the gap
+     * between estimated release and exact accounting. */
+    growthReservation.release();
+
     if (request.occurrenceKey.getLength() == 0 &&
-	!resident->mesh->copyLevel(result.mesh, drawLevel))
+	!resident->mesh->copyLevel(result.mesh, drawLevel)) {
 	return lod_provider_status_result(request,
 	    BOBOL_LOD_PROVIDER_ERROR,
 	    "resident mesh provider could not materialize legacy payload");
+    }
 
     const char *traceFilter = getenv("BOBOL_LOD_TRACE_OBJECT");
     if (traceFilter && traceFilter[0] &&
@@ -2554,89 +3481,200 @@ BObolLodService::realizeResidentMeshLod(
 }
 
 size_t
-BObolLodService::compactResidentMeshes(
+BObolLodService::scheduleResidentMeshCompaction(
     uint64_t consumerId,
     uint64_t demandRevision,
-    const std::vector<BObolLodResidentDemand> &demands)
+    const std::vector<BObolLodResidentDemand> &demands,
+    SbBool *planningComplete)
 {
+    if (planningComplete)
+	*planningComplete = FALSE;
     if (!consumerId)
 	return 0;
 
-    BObolResidentMeshConsumerDemand snapshot;
-    snapshot.revision = demandRevision;
-    for (const BObolLodResidentDemand &demand : demands) {
-	if (demand.assetKey.getLength() == 0 || demand.level < 0)
-	    continue;
-	int &level = snapshot.levels[demand.assetKey.getString()];
-	level = std::max(level, demand.level);
+    const uint64_t residentRevisionAtEntry =
+	this->p->residentMeshRevision.load(std::memory_order_relaxed);
+    SbBool continuingPlan = FALSE;
+    {
+	std::lock_guard<std::mutex> lock(this->p->mutex);
+	const auto current =
+	    this->p->residentMeshConsumerDemands.find(consumerId);
+	if (current != this->p->residentMeshConsumerDemands.end() &&
+	    current->second.revision == demandRevision) {
+	    if (current->second.planning) {
+		continuingPlan = TRUE;
+	    } else if (current->second.residentRevision != 0 &&
+		current->second.residentRevision ==
+		    residentRevisionAtEntry) {
+		if (planningComplete)
+		    *planningComplete = TRUE;
+		return 0;
+	    }
+	}
     }
 
-    std::unordered_map<std::string, int> aggregate;
-    std::vector<std::pair<std::shared_ptr<BObolResidentMeshAsset>, int>>
-	work;
+    BObolResidentMeshConsumerDemand snapshot;
+    if (!continuingPlan) {
+	snapshot.revision = demandRevision;
+	for (const BObolLodResidentDemand &demand : demands) {
+	    if (demand.assetKey.getLength() == 0 || demand.level < 0)
+		continue;
+	    BObolResidentMeshDemandValue &value =
+		snapshot.assets[demand.assetKey.getString()];
+	    value.level = std::max(value.level, demand.level);
+	    value.channelMask |= demand.channelMask & 3u;
+	}
+	snapshot.planning = TRUE;
+	snapshot.planningCursor = 0;
+	snapshot.planningProjectedResidentBytes =
+	    lod_resident_stable_bytes(this->p);
+	snapshot.planningResidentRevision = residentRevisionAtEntry;
+    }
+
+    size_t queued = 0;
     {
 	std::lock_guard<std::mutex> lock(this->p->mutex);
 	BObolResidentMeshConsumerDemand &current =
 	    this->p->residentMeshConsumerDemands[consumerId];
 	if (demandRevision < current.revision)
 	    return 0;
-	current = std::move(snapshot);
+	if (!continuingPlan || current.revision != demandRevision ||
+	    !current.planning) {
+	    current = std::move(snapshot);
+	    current.residentRevision = 0;
+	}
 
-	/* Never reclaim a buffer while a worker may still be appending to it.
-	 * The committed snapshot remains recorded and the stable controller will
-	 * retry its compaction pump once the service is idle. */
+	/* Record the complete demand while refinement is active, but wait to
+	 * queue trims.  A subsequent stable pump observes the changed resident
+	 * revision and constructs the plan. */
 	if (!this->p->pending.empty() || this->p->inFlight != 0)
 	    return 0;
 
-	for (const auto &consumer : this->p->residentMeshConsumerDemands) {
-	    for (const auto &demand : consumer.second.levels) {
-		int &level = aggregate[demand.first];
-		level = std::max(level, demand.second);
+	/* Planning itself is owner-thread bookkeeping, so bound it just like
+	 * result publication.  The append-only resident order makes the cursor
+	 * stable while normal workers add later assets. */
+	static const size_t planningQuantum = 2048;
+	const size_t begin = current.planningCursor;
+	const size_t end = std::min(
+	    this->p->residentMeshOrder.size(),
+	    begin + planningQuantum);
+	for (size_t i = begin; i < end; ++i) {
+	    const auto &residentEntry = this->p->residentMeshOrder[i];
+	    const std::shared_ptr<BObolResidentMeshAsset> &resident =
+		residentEntry.second;
+	    if (!resident)
+		continue;
+	    const int residentLevel =
+		resident->publishedResidentLevel.load(
+		    std::memory_order_relaxed);
+	    const int minimumLevel =
+		resident->publishedMinimumLevel.load(
+		    std::memory_order_relaxed);
+	    const bool hasReloadableBacking =
+		resident->publishedBackingPrefixBytes.load(
+		    std::memory_order_relaxed) > 0;
+	    if (residentLevel < 0 || minimumLevel < 0)
+		continue;
+	    BObolResidentMeshDemandValue aggregate;
+	    SbBool demanded = FALSE;
+	    for (const auto &consumer :
+		    this->p->residentMeshConsumerDemands) {
+		const auto demand =
+		    consumer.second.assets.find(residentEntry.first);
+		if (demand == consumer.second.assets.end())
+		    continue;
+		demanded = TRUE;
+		aggregate.level = std::max(
+		    aggregate.level, demand->second.level);
+		aggregate.channelMask |=
+		    demand->second.channelMask;
 	    }
+	    const SbBool evict =
+		!demanded &&
+		this->p->maxResidentMeshBytes != SIZE_MAX &&
+		current.planningProjectedResidentBytes >
+		    this->p->maxResidentMeshBytes ? TRUE : FALSE;
+	    const int targetLevel = aggregate.level < 0 ?
+		minimumLevel : std::max(minimumLevel, aggregate.level);
+	    if (!evict &&
+		targetLevel >= residentLevel && !hasReloadableBacking) {
+		this->p->residentMeshCompactionTargets.erase(
+		    residentEntry.first);
+		continue;
+	    }
+	    BObolResidentMeshCompactionTarget &target =
+		this->p->residentMeshCompactionTargets[
+		    residentEntry.first];
+	    target.level = targetLevel;
+	    target.channelMask = aggregate.channelMask;
+	    target.evict = evict;
+	    target.useRevision = resident->useRevision.load(
+		std::memory_order_relaxed);
+	    if (!this->p->residentMeshCompactionQueuedAssets.insert(
+		    residentEntry.first).second)
+		continue;
+	    if (evict) {
+		const size_t bytes = resident->publishedBytes.load(
+		    std::memory_order_relaxed);
+		const size_t backing =
+		    resident->publishedBackingPrefixBytes.load(
+			std::memory_order_relaxed);
+		const size_t stableBytes =
+		    backing >= bytes ? 0 : bytes - backing;
+		current.planningProjectedResidentBytes =
+		    stableBytes >=
+			    current.planningProjectedResidentBytes ?
+			0 : current.planningProjectedResidentBytes -
+			    stableBytes;
+	    }
+	    BObolResidentMeshCompactionWork work;
+	    work.assetKey = residentEntry.first;
+	    work.resident = resident;
+	    this->p->residentMeshCompactionWork.push_back(
+		std::move(work));
+	    queued++;
 	}
-	for (const auto &demand : aggregate) {
-	    const auto resident = this->p->residentMeshes.find(demand.first);
-	    if (resident != this->p->residentMeshes.end())
-		work.push_back(std::make_pair(resident->second, demand.second));
+	current.planningCursor = end;
+	if (end >= this->p->residentMeshOrder.size()) {
+	    current.planning = FALSE;
+	    current.residentRevision = current.planningResidentRevision;
+	    if (planningComplete)
+		*planningComplete = TRUE;
 	}
     }
+    if (queued)
+	this->p->workerCv.notify_all();
+    return queued;
+}
 
-    size_t compacted = 0;
-    for (const auto &item : work) {
-	const std::shared_ptr<BObolResidentMeshAsset> &resident = item.first;
-	std::lock_guard<std::mutex> residentLock(resident->mutex);
-	if (!resident->lod || !resident->mesh)
-	    continue;
-	struct BObolMeshLodHierarchyInfo hierarchy =
-	    BOBOL_MESH_LOD_HIERARCHY_INFO_INIT;
-	if (!bobol_mesh_lod_hierarchy_info_get(resident->lod, &hierarchy))
-	    continue;
-	const int currentLevel = bobol_mesh_lod_current_level(resident->lod);
-	const int targetLevel = std::min(currentLevel,
-	    std::max(hierarchy.min_level,
-		std::min(hierarchy.max_level,
-		    item.second)));
-	if (currentLevel < 0 || targetLevel >= currentLevel)
-	    continue;
-	const int residentLevel = bobol_mesh_lod_load_resident_level(
-	    resident->lod, targetLevel, 0);
-	if (residentLevel != targetLevel)
-	    continue;
-	struct BObolMeshLodInfo info = BOBOL_MESH_LOD_INFO_INIT;
-	struct BObolMeshLodData data;
-	if (!bobol_mesh_lod_info_get(resident->lod, &info) ||
-	    !bobol_mesh_lod_hierarchy_info_get(resident->lod, &hierarchy) ||
-	    !bobol_mesh_lod_data_get(resident->lod, &data) ||
-	    !resident->mesh->update(data, hierarchy, residentLevel,
-		info.shaded_cull_backfaces ? TRUE : FALSE))
-	    continue;
-	compacted++;
+size_t
+BObolLodService::drainResidentMeshCompactions(
+    uint64_t consumerId,
+    std::vector<BObolLodResidentCompaction> &results,
+    size_t maxResults)
+{
+    if (!consumerId)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const auto found =
+	this->p->residentMeshCompactionResults.find(consumerId);
+    if (found == this->p->residentMeshCompactionResults.end())
+	return 0;
+    std::deque<BObolLodResidentCompaction> &queued = found->second;
+    const size_t count = maxResults ?
+	std::min(maxResults, queued.size()) : queued.size();
+    results.reserve(results.size() + count);
+    for (size_t i = 0; i < count; ++i) {
+	results.push_back(std::move(queued.front()));
+	queued.pop_front();
     }
-    if (compacted) {
-	std::lock_guard<std::mutex> lock(this->p->mutex);
-	this->p->residentMeshCompactions += compacted;
-    }
-    return compacted;
+    this->p->residentMeshCompactionResultCount =
+	count >= this->p->residentMeshCompactionResultCount ?
+	0 : this->p->residentMeshCompactionResultCount - count;
+    if (queued.empty())
+	this->p->residentMeshCompactionResults.erase(found);
+    this->p->workerCv.notify_all();
+    return count;
 }
 
 void
@@ -2646,6 +3684,16 @@ BObolLodService::releaseResidentMeshConsumer(uint64_t consumerId)
 	return;
     std::lock_guard<std::mutex> lock(this->p->mutex);
     this->p->residentMeshConsumerDemands.erase(consumerId);
+    const auto results =
+	this->p->residentMeshCompactionResults.find(consumerId);
+    if (results != this->p->residentMeshCompactionResults.end()) {
+	const size_t count = results->second.size();
+	this->p->residentMeshCompactionResultCount =
+	    count >= this->p->residentMeshCompactionResultCount ?
+	    0 : this->p->residentMeshCompactionResultCount - count;
+	this->p->residentMeshCompactionResults.erase(results);
+    }
+    this->p->workerCv.notify_all();
 }
 
 uint64_t
@@ -2698,24 +3746,31 @@ BObolLodService::cancelGeneration(uint64_t generation)
 		this->p->cacheWriteReservations--;
 	    lod_active_request_key_remove_unlocked(this->p,
 		lod_request_active_key(it->task.request));
-	    cancelled.push_back(*it);
+	    lod_pending_quality_remove(
+		this->p, it->task.request.qualityTier);
+	    cancelled.push_back(std::move(*it));
 	    it = this->p->pending.erase(it);
 	}
 	lod_prune_cancelled_generations_unlocked(this->p);
 
-	for (std::deque<BObolLodResult>::iterator it =
+	for (std::list<BObolLodResult>::iterator it =
 		 this->p->results.begin(); it != this->p->results.end();) {
-	    if (it->generation == generation)
+	    if (it->generation == generation) {
+		this->p->resultSlots.erase(lod_result_slot_map_key(*it));
 		it = this->p->results.erase(it);
-	    else
+	    } else {
 		++it;
+	    }
 	}
-	for (std::deque<BObolLodCacheWriteItem>::iterator it =
+	for (std::list<BObolLodCacheWriteItem>::iterator it =
 		 this->p->cacheWrites.begin(); it != this->p->cacheWrites.end();) {
-	    if (it->result.generation == generation)
+	    if (it->result.generation == generation) {
+		this->p->cacheWriteSlots.erase(
+		    lod_result_slot_map_key(it->result));
 		it = this->p->cacheWrites.erase(it);
-	    else
+	    } else {
 		++it;
+	    }
 	}
 	for (auto it = this->p->taskGenerations.begin();
 	     it != this->p->taskGenerations.end();) {
@@ -2781,6 +3836,29 @@ BObolLodService::getWorkingSetLimit(void) const
     return this->p->maxActiveWorkingSetBytes;
 }
 
+void
+BObolLodService::setResidentMeshLimit(size_t maxResidentBytes)
+{
+    {
+	std::lock_guard<std::mutex> lock(this->p->mutex);
+	const size_t prior = this->p->maxResidentMeshBytes;
+	const size_t next = maxResidentBytes > 0 ?
+	    maxResidentBytes : lod_default_resident_mesh_limit();
+	this->p->maxResidentMeshBytes = next;
+	if (next > prior)
+	    lod_resident_mesh_revision_advance(
+		this->p->residentMeshAdmissionRevision);
+    }
+    this->p->workerCv.notify_all();
+}
+
+size_t
+BObolLodService::getResidentMeshLimit(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->maxResidentMeshBytes;
+}
+
 size_t
 BObolLodService::activeWorkingSetBytesForDiagnostics(void) const
 {
@@ -2823,17 +3901,14 @@ BObolLodService::availableResultTaskCapacity(void) const
 }
 
 static uint64_t
-lod_service_submit_task(BObolLodServicePrivate *p,
-			const BObolLodTask &task,
-			SbBool skipActiveDuplicate)
+lod_service_submit_task_unlocked(BObolLodServicePrivate *p,
+				 const BObolLodTask &task,
+				 const SbString &activeKey,
+				 SbBool skipActiveDuplicate)
 {
-    uint64_t id = 0;
-
-    {
-	std::lock_guard<std::mutex> lock(p->mutex);
-	if (!p->running || p->stopping)
-	    return 0;
-	if ((task.generation != 0 &&
+    if (!p->running || p->stopping)
+	return 0;
+    if ((task.generation != 0 &&
 	    lod_generation_cancelled_unlocked(p, task.generation)) ||
 	    p->inFlight >= p->maxActiveTasks ||
 	    (task.publishResult &&
@@ -2842,43 +3917,61 @@ lod_service_submit_task(BObolLodServicePrivate *p,
 	    (p->cacheWriterEnabled && task.writeCache && task.cacheWrite &&
 	     p->cacheWrites.size() + p->cacheWriteInFlight +
 		p->cacheWriteReservations >= p->maxQueuedCacheWrites)) {
-	    p->rejectedTasks++;
-	    return 0;
-	}
-
-	BObolLodWorkItem item;
-	item.id = p->nextTaskId++;
-	if (p->nextTaskId == 0)
-	    p->nextTaskId++;
-	item.task = task;
-	if (item.task.generation == 0) {
-	    if (p->activeGeneration == 0) {
-		p->nextGeneration++;
-		p->activeGeneration = p->nextGeneration;
-	    }
-	    item.task.generation = p->activeGeneration;
-	}
-
-	const SbString activeKey =
-	    lod_request_active_key(item.task.request);
-	if (skipActiveDuplicate &&
-	    lod_active_request_key_recorded_unlocked(p, activeKey))
-	    return 0;
-
-	id = item.id;
-	p->pending.push_back(item);
-	p->activeRequestKeyCounts[activeKey.getString()]++;
-	p->generationTaskCounts[item.task.generation]++;
-	p->taskGenerations[item.id] = item.task.generation;
-	if (item.task.publishResult)
-	    p->resultReservations++;
-	if (p->cacheWriterEnabled && item.task.writeCache &&
-	    item.task.cacheWrite)
-	    p->cacheWriteReservations++;
-	p->inFlight++;
+	p->rejectedTasks++;
+	return 0;
     }
 
-    p->workerCv.notify_all();
+    BObolLodWorkItem item;
+    item.id = p->nextTaskId++;
+    if (p->nextTaskId == 0)
+	p->nextTaskId++;
+    item.task = task;
+    if (item.task.generation == 0) {
+	if (p->activeGeneration == 0) {
+	    p->nextGeneration++;
+	    p->activeGeneration = p->nextGeneration;
+	}
+	item.task.generation = p->activeGeneration;
+    }
+
+    if (skipActiveDuplicate &&
+	lod_active_request_key_recorded_unlocked(p, activeKey))
+	return 0;
+
+    const uint64_t id = item.id;
+    const uint64_t generation = item.task.generation;
+    const SbBool publishResult = item.task.publishResult;
+    const SbBool reserveCacheWrite =
+	p->cacheWriterEnabled && item.task.writeCache && item.task.cacheWrite;
+    const int qualityTier = item.task.request.qualityTier;
+    p->pending.push_back(std::move(item));
+    p->pendingQualityCounts[qualityTier]++;
+    p->activeRequestKeyCounts[activeKey.getString()]++;
+    p->generationTaskCounts[generation]++;
+    p->taskGenerations[id] = generation;
+    if (publishResult)
+	p->resultReservations++;
+    if (reserveCacheWrite)
+	p->cacheWriteReservations++;
+    p->inFlight++;
+    return id;
+}
+
+static uint64_t
+lod_service_submit_task(BObolLodServicePrivate *p,
+			const BObolLodTask &task,
+			SbBool skipActiveDuplicate)
+{
+    const SbString activeKey = lod_request_active_key(task.request);
+    uint64_t id = 0;
+    {
+	std::lock_guard<std::mutex> lock(p->mutex);
+	id = lod_service_submit_task_unlocked(
+	    p, task, activeKey, skipActiveDuplicate);
+    }
+
+    if (id)
+	p->workerCv.notify_all();
     return id;
 }
 
@@ -2894,6 +3987,47 @@ BObolLodService::submitIfNotActive(const BObolLodTask &task)
     return lod_service_submit_task(this->p, task, TRUE);
 }
 
+size_t
+BObolLodService::submitBatch(
+    const std::vector<BObolLodTask> &tasks,
+    std::vector<uint64_t> &taskIds,
+    SbBool skipActiveDuplicates)
+{
+    taskIds.assign(tasks.size(), 0);
+    if (tasks.empty())
+	return 0;
+
+    /*
+     * Stable request keys are pure task data.  Build them before taking the
+     * shared queue lock so workers can keep completing prior requests while
+     * the producer prepares this wave.
+     */
+    std::vector<SbString> activeKeys;
+    activeKeys.reserve(tasks.size());
+    for (const BObolLodTask &task : tasks)
+	activeKeys.push_back(lod_request_active_key(task.request));
+
+    size_t accepted = 0;
+    {
+	std::lock_guard<std::mutex> lock(this->p->mutex);
+	this->p->activeRequestKeyCounts.reserve(
+	    this->p->activeRequestKeyCounts.size() + tasks.size());
+	this->p->taskGenerations.reserve(
+	    this->p->taskGenerations.size() + tasks.size());
+	for (size_t i = 0; i < tasks.size(); ++i) {
+	    taskIds[i] = lod_service_submit_task_unlocked(
+		this->p, tasks[i], activeKeys[i],
+		skipActiveDuplicates ? TRUE : FALSE);
+	    if (taskIds[i])
+		++accepted;
+	}
+    }
+
+    if (accepted)
+	this->p->workerCv.notify_all();
+    return accepted;
+}
+
 SbBool
 BObolLodService::hasActiveRequest(
     const BObolLodRequest &request) const
@@ -2906,15 +4040,73 @@ BObolLodService::hasActiveRequest(
 
 size_t
 BObolLodService::drainResults(std::vector<BObolLodResult> &results,
-				size_t maxResults)
+				size_t maxResults,
+				size_t maxEstimatedBytes)
 {
+    const auto estimatedPresentationBytes =
+	[](const BObolLodResult &result) {
+	    if (result.resultKind != BOBOL_LOD_RESULT_MESH &&
+		result.resultKind != BOBOL_LOD_RESULT_FULL_DETAIL)
+		return static_cast<size_t>(0);
+	    const auto saturatingAdd = [](size_t left, size_t right) {
+		return right > SIZE_MAX - left ? SIZE_MAX : left + right;
+	    };
+	    const auto saturatingMultiply = [](size_t left, size_t right) {
+		return left && right > SIZE_MAX / left ?
+		    SIZE_MAX : left * right;
+	    };
+	    size_t bytes = 0;
+	    bytes = saturatingAdd(bytes,
+		saturatingMultiply(result.mesh.points.size(),
+		    sizeof(SbVec3f)));
+	    bytes = saturatingAdd(bytes,
+		saturatingMultiply(result.mesh.normals.size(),
+		    sizeof(SbVec3f)));
+	    bytes = saturatingAdd(bytes,
+		saturatingMultiply(result.mesh.coordIndex.size(),
+		    sizeof(int32_t)));
+	    bytes = saturatingAdd(bytes,
+		saturatingMultiply(result.mesh.faceIndex.size(),
+		    sizeof(int32_t)));
+	    bytes = saturatingAdd(bytes,
+		saturatingMultiply(result.mesh.vertexIndex.size(),
+		    sizeof(int32_t)));
+	    size_t counted = 0;
+	    counted = saturatingAdd(counted,
+		saturatingMultiply(static_cast<size_t>(
+		    std::min<uint64_t>(result.counts.pointCount, SIZE_MAX)),
+		    sizeof(SbVec3f)));
+	    counted = saturatingAdd(counted,
+		saturatingMultiply(static_cast<size_t>(
+		    std::min<uint64_t>(result.counts.faceCount, SIZE_MAX)),
+		    3u * sizeof(int32_t)));
+	    counted = saturatingAdd(counted,
+		saturatingMultiply(static_cast<size_t>(
+		    std::min<uint64_t>(result.counts.normalCount, SIZE_MAX)),
+		    sizeof(SbVec3f)));
+	    counted = std::max(counted, static_cast<size_t>(
+		std::min<uint64_t>(result.counts.byteCount, SIZE_MAX)));
+	    return std::max(bytes, counted);
+	};
+
     size_t count = 0;
+    size_t estimatedBytes = 0;
     std::lock_guard<std::mutex> lock(this->p->mutex);
 
     while (!this->p->results.empty() &&
 	   (maxResults == 0 || count < maxResults)) {
+	const size_t frontBytes =
+	    estimatedPresentationBytes(this->p->results.front());
+	if (count && maxEstimatedBytes &&
+	    (estimatedBytes >= maxEstimatedBytes ||
+	     frontBytes > maxEstimatedBytes - estimatedBytes))
+	    break;
+	this->p->resultSlots.erase(
+	    lod_result_slot_map_key(this->p->results.front()));
 	results.push_back(std::move(this->p->results.front()));
 	this->p->results.pop_front();
+	estimatedBytes = frontBytes > SIZE_MAX - estimatedBytes ?
+	    SIZE_MAX : estimatedBytes + frontBytes;
 	count++;
     }
 
@@ -2933,7 +4125,7 @@ BObolLodService::drainMatchingResults(
     size_t count = 0;
     std::lock_guard<std::mutex> lock(this->p->mutex);
 
-    for (std::deque<BObolLodResult>::iterator it =
+    for (std::list<BObolLodResult>::iterator it =
 	     this->p->results.begin(); it != this->p->results.end();) {
 	if (maxResults != 0 && count >= maxResults)
 	    break;
@@ -2950,6 +4142,7 @@ BObolLodService::drainMatchingResults(
 	    continue;
 	}
 
+	this->p->resultSlots.erase(lod_result_slot_map_key(*it));
 	results.push_back(std::move(*it));
 	it = this->p->results.erase(it);
 	count++;
@@ -3107,34 +4300,27 @@ BObolLodService::residentMeshAssetCountForDiagnostics(void) const
 size_t
 BObolLodService::residentMeshBytesForDiagnostics(void) const
 {
-    std::vector<std::shared_ptr<BObolResidentMeshAsset>> assets;
-    {
-	std::lock_guard<std::mutex> lock(this->p->mutex);
-	assets.reserve(this->p->residentMeshes.size());
-	for (const auto &entry : this->p->residentMeshes)
-	    assets.push_back(entry.second);
-    }
+    return this->p->residentMeshBytes.load(std::memory_order_relaxed);
+}
 
-    size_t bytes = 0;
-    for (const std::shared_ptr<BObolResidentMeshAsset> &asset : assets) {
-	if (!asset)
-	    continue;
-	/* Diagnostics run on the presentation/UI thread.  A cold cache refresh
-	 * owns this mutex while it classifies and persists a very large mesh;
-	 * waiting here turned a harmless telemetry sample into a multi-second
-	 * input stall.  Stable samples see every idle asset exactly.  An in-flight
-	 * sample is intentionally a non-blocking lower bound. */
-	std::unique_lock<std::mutex> lock(asset->mutex, std::try_to_lock);
-	if (!lock.owns_lock())
-	    continue;
-	if (!asset->mesh)
-	    continue;
-	const size_t assetBytes = asset->mesh->estimateBytes();
-	if (assetBytes > std::numeric_limits<size_t>::max() - bytes)
-	    return std::numeric_limits<size_t>::max();
-	bytes += assetBytes;
-    }
-    return bytes;
+size_t
+BObolLodService::stableResidentMeshBytesForDiagnostics(void) const
+{
+    return lod_resident_stable_bytes(this->p);
+}
+
+size_t
+BObolLodService::reservedResidentMeshGrowthBytesForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->residentMeshGrowthReservationBytes;
+}
+
+uint64_t
+BObolLodService::residentMeshAdmissionRevision(void) const
+{
+    return this->p->residentMeshAdmissionRevision.load(
+	std::memory_order_relaxed);
 }
 
 uint64_t
@@ -3156,6 +4342,39 @@ BObolLodService::residentMeshCompactionCountForDiagnostics(void) const
 {
     std::lock_guard<std::mutex> lock(this->p->mutex);
     return this->p->residentMeshCompactions;
+}
+
+uint64_t
+BObolLodService::residentMeshEvictionCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    return this->p->residentMeshEvictions;
+}
+
+size_t
+BObolLodService::pendingResidentMeshCompactionCountForDiagnostics(void) const
+{
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    size_t planning = 0;
+    for (const auto &consumer :
+	    this->p->residentMeshConsumerDemands)
+	if (consumer.second.planning)
+	    planning++;
+    return this->p->residentMeshCompactionWork.size() +
+	this->p->residentMeshCompactionsInFlight + planning;
+}
+
+size_t
+BObolLodService::queuedResidentMeshCompactionResultCountForDiagnostics(
+    uint64_t consumerId) const
+{
+    if (!consumerId)
+	return 0;
+    std::lock_guard<std::mutex> lock(this->p->mutex);
+    const auto found =
+	this->p->residentMeshCompactionResults.find(consumerId);
+    return found == this->p->residentMeshCompactionResults.end() ?
+	0 : found->second.size();
 }
 
 /*

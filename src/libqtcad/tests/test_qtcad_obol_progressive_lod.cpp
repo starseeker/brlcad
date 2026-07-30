@@ -1650,8 +1650,24 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 					"before-view-all");
 
     phase_start = bu_gettime();
-    const int initial_autoview = qtcad_obol_scene_autoview_refresh(view,
-	controller, "progressive-lod-view-all");
+    /*
+     * A production automatic draw has already autoviewed the best bound
+     * available in ged_draw_apply_transaction() and armed the progressive
+     * follow operation.  Re-autoviewing the same partial scene here advances
+     * the bv frame revision and correctly tells that follow operation that a
+     * user changed the view.  On a cold draw this left the test framed around
+     * the first small proxy while authoritative leaf bounds arrived elsewhere
+     * in model space, so frustum-aware LoD submission rejected every leaf.
+     *
+     * Preserve the transaction's view revision in that case and only mirror
+     * its current bv state into the hidden canvas camera.  Other test modes do
+     * not arm progressive follow and still need the explicit scene autoview.
+     */
+    const int initial_autoview = production_auto_expand ?
+	(controller->syncCameraFromViewContext(
+	    ged_view_context_from_bv(view.viewContext())) ? 1 : 0) :
+	qtcad_obol_scene_autoview_refresh(view, controller,
+	    "progressive-lod-view-all");
     /* A cold asynchronous draw may not have a publishable bound in its first
      * UI tick.  Its transaction already armed progressive autoview, which will
      * apply as soon as a region box or streamed leaf arrives. */
@@ -1829,10 +1845,22 @@ run_progressive_lod_case(const struct progressive_lod_case &testCase)
 		const bool feedback_rate_limited =
 		    last_feedback_frame_time > 0 &&
 		    settle_now - last_feedback_frame_time < 100000;
-		if (progressive_status.hasMore && service_idle &&
+		const bool presentation_gate =
+		    controller->hasPendingLodRefinementFrame() ||
+		    controller->isLodInteractionActive();
+		/*
+		 * A production canvas presents while camera input is active.  A
+		 * hidden test canvas must do the same even when the bounded worker
+		 * queue is non-idle: the controller may intentionally retain
+		 * richer immutable results until that presentation completes.
+		 * Requiring service_idle here made the harness wait forever on
+		 * the very result queue whose publication was waiting for a frame.
+		 */
+		if (progressive_status.hasMore &&
 		    !feedback_rate_limited &&
 		    (controller->hasPendingLodRefinementFrame() ||
-		     progress_stalled)) {
+		     (progress_stalled &&
+		      (service_idle || presentation_gate)))) {
 		    QImage feedback_frame;
 		    qtcad_obol_request_view_frame(view, controller,
 			"progressive-lod-feedback-frame");

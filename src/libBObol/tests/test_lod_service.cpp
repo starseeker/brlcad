@@ -117,6 +117,20 @@ wait_for_settled(BObolLodService &service, size_t expectedResults)
     return 1;
 }
 
+static int
+wait_for_resident_compaction(BObolLodService &service)
+{
+    for (int i = 0; i < 2000; i++) {
+	if (service.
+		pendingResidentMeshCompactionCountForDiagnostics() == 0)
+	    return 0;
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    printf("FAIL: resident LoD compaction did not settle: pending=%zu\n",
+	   service.pendingResidentMeshCompactionCountForDiagnostics());
+    return 1;
+}
+
 static size_t
 provider_param_count(const BObolLodRequest &request, const char *name)
 {
@@ -327,6 +341,7 @@ test_occurrence_result_coalescing(void)
     TaskData oldData{&context, 1};
     TaskData newData{&context, 2};
     TaskData meshData{&context, 3};
+    TaskData routedData{&context, 4};
     if (!service.start(2, FALSE)) {
 	printf("FAIL: LoD coalescing service did not start\n");
 	return 1;
@@ -349,8 +364,18 @@ test_occurrence_result_coalescing(void)
     meshTask.realize = ready_mesh_task;
     meshTask.realizeData = &meshData;
 
+    /*
+     * A second live source may consume the same occurrence.  Its result must
+     * neither be rejected as duplicate active work nor coalesced into the
+     * first source's publication slot.
+     */
+    BObolLodTask routedTask = newTask;
+    routedTask.request.sourceRoutingId = 91;
+    routedTask.realizeData = &routedData;
+
     if (service.submit(oldTask) == 0 || service.submit(newTask) == 0 ||
-	service.submit(meshTask) == 0 || wait_for_settled(service, 2)) {
+	service.submit(meshTask) == 0 || service.submit(routedTask) == 0 ||
+	wait_for_settled(service, 2)) {
 	printf("FAIL: LoD service did not execute coalescing tasks\n");
 	service.stop();
 	return 1;
@@ -359,16 +384,22 @@ test_occurrence_result_coalescing(void)
     std::vector<BObolLodResult> results;
     service.drainResults(results);
     const BObolLodResult *aabb = NULL;
+    const BObolLodResult *routedAabb = NULL;
     const BObolLodResult *mesh = NULL;
     for (const BObolLodResult &result : results) {
-	if (result.resultKind == BOBOL_LOD_RESULT_AABB)
+	if (result.resultKind == BOBOL_LOD_RESULT_AABB &&
+	    result.request.sourceRoutingId == 91)
+	    routedAabb = &result;
+	else if (result.resultKind == BOBOL_LOD_RESULT_AABB)
 	    aabb = &result;
 	if (result.resultKind == BOBOL_LOD_RESULT_MESH)
 	    mesh = &result;
     }
-    if (results.size() != 2 || !aabb || !mesh ||
+    if (results.size() != 3 || !aabb || !routedAabb || !mesh ||
 	aabb->request.viewRevision != newTask.request.viewRevision ||
-	aabb->counts.faceCount != 2 || mesh->counts.faceCount != 3 ||
+	aabb->counts.faceCount != 2 ||
+	routedAabb->counts.faceCount != 4 ||
+	mesh->counts.faceCount != 3 ||
 	service.coalescedResultCountForDiagnostics() != 1 ||
 	service.discardedStaleResultCountForDiagnostics() != 0) {
 	printf("FAIL: LoD service did not retain newest per-occurrence stages\n");
@@ -1795,6 +1826,85 @@ test_active_request_duplicate_suppression(void)
 }
 
 static int
+test_batch_submission(void)
+{
+    BObolLodService service;
+    ServiceTestContext context;
+    TaskData firstData{&context, 1};
+    TaskData duplicateData{&context, 2};
+    TaskData routedData{&context, 3};
+
+    if (!service.start(2, TRUE)) {
+	printf("FAIL: LoD service did not start for batch submission test\n");
+	return 1;
+    }
+
+    const uint64_t generation = service.beginGeneration();
+    BObolLodTask first;
+    first.generation = generation;
+    first.request = make_request("/batch.bot");
+    first.request.occurrenceKey = "/batch.bot#0";
+    first.realize = ready_task;
+    first.realizeData = &firstData;
+
+    BObolLodTask duplicate = first;
+    duplicate.request.viewRevision++;
+    duplicate.realizeData = &duplicateData;
+
+    BObolLodTask routed = first;
+    routed.request.sourceRoutingId = 91;
+    routed.realizeData = &routedData;
+
+    std::vector<BObolLodTask> tasks{first, duplicate, routed};
+    std::vector<uint64_t> taskIds;
+    if (service.submitBatch(tasks, taskIds, TRUE) != 2 ||
+	taskIds.size() != tasks.size() ||
+	taskIds[0] == 0 || taskIds[1] != 0 || taskIds[2] == 0) {
+	printf("FAIL: LoD batch did not suppress only the duplicate route\n");
+	service.stop();
+	return 1;
+    }
+
+    if (wait_for_settled(service, 2)) {
+	service.stop();
+	return 1;
+    }
+
+    std::vector<BObolLodResult> results;
+    if (service.drainResults(results) != 2 || results.size() != 2) {
+	printf("FAIL: LoD batch did not publish both distinct routes\n");
+	service.stop();
+	return 1;
+    }
+
+    bool foundFirst = false;
+    bool foundRouted = false;
+    for (const BObolLodResult &result : results) {
+	if (result.request.sourceRoutingId == 0 &&
+	    result.counts.faceCount == 1)
+	    foundFirst = true;
+	if (result.request.sourceRoutingId == 91 &&
+	    result.counts.faceCount == 3)
+	    foundRouted = true;
+    }
+    {
+	std::lock_guard<std::mutex> lock(context.mutex);
+	if (!foundFirst || !foundRouted ||
+	    context.executionOrder.size() != 2 ||
+	    std::find(context.executionOrder.begin(),
+		context.executionOrder.end(), 2) !=
+		context.executionOrder.end()) {
+	    printf("FAIL: LoD batch executed a suppressed duplicate\n");
+	    service.stop();
+	    return 1;
+	}
+    }
+
+    service.stop();
+    return 0;
+}
+
+static int
 test_rt_source_full_detail_provider_task(void)
 {
     char dbpath[MAXPATHLEN] = {0};
@@ -2653,8 +2763,9 @@ test_rt_mesh_provider_task(void)
     }
 
     /* The retained provider must publish a bounded first prefix and then make
-     * monotonic progress toward the unchanged view target.  Tiny budgets make
-     * the behavior observable with this small fixture. */
+     * monotonic, budget-bounded progress toward the unchanged view target.
+     * Cheap adjacent levels may be collapsed into one delivery; requiring a
+     * publication per nominal level creates a severe many-asset tail. */
     BObolMeshLodProvider stagedProvider;
     stagedProvider.service = &service;
     stagedProvider.dbip = dbip;
@@ -2666,6 +2777,11 @@ test_rt_mesh_provider_task(void)
     stagedRequest.requestedLevel = 4;
     BObolLodResult firstStage =
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
+    const SbBool firstStagePrepared =
+	firstStage.preparedCadGeometry &&
+	firstStage.progressiveMesh &&
+	firstStage.preparedCadGeometryRevision ==
+	    firstStage.progressiveMesh->revision() ? TRUE : FALSE;
     BObolLodResult secondStage =
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
     stagedProvider.progressiveDelivery = FALSE;
@@ -2679,6 +2795,14 @@ test_rt_mesh_provider_task(void)
     stagedProvider.currentDrawLevel = firstStage.geometry.activeLevel;
     BObolLodResult residentAheadStage =
 	service.realizeResidentMeshLod(stagedRequest, stagedProvider);
+    BObolMeshLodProvider directProvider;
+    directProvider.service = &service;
+    directProvider.dbip = dbip;
+    directProvider.refreshMissing = FALSE;
+    directProvider.useCurrentDrawLevel = TRUE;
+    directProvider.currentDrawLevel = firstStage.geometry.activeLevel;
+    BObolLodResult directStage =
+	service.realizeResidentMeshLod(stagedRequest, directProvider);
     if (firstStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
 	firstStage.geometry.activeLevel < 0 ||
 	firstStage.geometry.activeLevel >= stagedRequest.requestedLevel ||
@@ -2699,26 +2823,298 @@ test_rt_mesh_provider_task(void)
 	residentAheadStage.geometry.activeLevel >=
 	    stagedRequest.requestedLevel ||
 	residentAheadStage.terminal ||
+	directStage.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	directStage.geometry.activeLevel != stagedRequest.requestedLevel ||
+	!directStage.terminal ||
 	!firstStage.progressiveMesh ||
+	!firstStagePrepared ||
 	firstStage.progressiveMesh != secondStage.progressiveMesh ||
 	firstStage.progressiveMesh != terminalStage.progressiveMesh ||
 	firstStage.progressiveMesh != residentAheadStage.progressiveMesh ||
+	firstStage.progressiveMesh != directStage.progressiveMesh ||
 	firstStage.counts.faceCount > secondStage.counts.faceCount ||
 	secondStage.counts.faceCount > terminalStage.counts.faceCount) {
-	printf("FAIL: retained LoD provider did not stage population growth "
-	    "(levels=%d/%d/%d resident-ahead=%d "
-	    "terminal=%d/%d/%d/%d faces=%llu/%llu/%llu/%llu)\n",
+	printf("FAIL: retained LoD provider did not stage large growth or "
+	    "collapse a cheap target (levels=%d/%d/%d resident-ahead=%d "
+	    "direct=%d terminal=%d/%d/%d/%d/%d prepared=%d "
+	    "faces=%llu/%llu/%llu/%llu/%llu)\n",
 	    firstStage.geometry.activeLevel, secondStage.geometry.activeLevel,
 	    terminalStage.geometry.activeLevel,
 	    residentAheadStage.geometry.activeLevel,
+	    directStage.geometry.activeLevel,
 	    firstStage.terminal ? 1 : 0,
 	    secondStage.terminal ? 1 : 0, terminalStage.terminal ? 1 : 0,
 	    residentAheadStage.terminal ? 1 : 0,
+	    directStage.terminal ? 1 : 0,
+	    firstStagePrepared ? 1 : 0,
 	    static_cast<unsigned long long>(firstStage.counts.faceCount),
 	    static_cast<unsigned long long>(secondStage.counts.faceCount),
 	    static_cast<unsigned long long>(terminalStage.counts.faceCount),
 	    static_cast<unsigned long long>(
-		residentAheadStage.counts.faceCount));
+		residentAheadStage.counts.faceCount),
+	    static_cast<unsigned long long>(directStage.counts.faceCount));
+	ret = 1;
+    }
+
+    /* A stable demand snapshot protects the presented prefix.  Once the
+     * asset disappears from every consumer snapshot, the service must keep
+     * only its minimum useful prefix and later restore richer data from the
+     * same on-disk cache into the same retained mesh identity. */
+    if (terminalStage.progressiveMesh &&
+	terminalStage.geometry.cacheKey.isValid() &&
+	terminalStage.progressiveMesh->residentLevel() >
+	    terminalStage.progressiveMesh->minimumLevel()) {
+	BObolLodResidentDemand demand;
+	demand.assetKey = terminalStage.geometry.cacheKey.value;
+	demand.level = terminalStage.geometry.activeLevel;
+	demand.channelMask = 2;
+	std::vector<BObolLodResidentDemand> demanded(1, demand);
+	const int richLevel = terminalStage.progressiveMesh->residentLevel();
+	const size_t richBytes =
+	    service.residentMeshBytesForDiagnostics();
+	const size_t maintenanceQueued =
+	    service.scheduleResidentMeshCompaction(
+		0x1234, 1, demanded);
+	const int maintenanceWait =
+	    wait_for_resident_compaction(service);
+	std::vector<BObolLodResidentCompaction> maintenanceResults;
+	service.drainResidentMeshCompactions(
+	    0x1234, maintenanceResults);
+	const size_t maintainedBytes =
+	    service.residentMeshBytesForDiagnostics();
+	if (maintenanceQueued != 1 || maintenanceWait ||
+	    !maintenanceResults.empty() ||
+	    terminalStage.progressiveMesh->residentLevel() != richLevel ||
+	    maintainedBytes >= richBytes) {
+	    printf("FAIL: stable resident PoP demand did not release its "
+		   "duplicate cache prefix (queued=%zu level=%d/%d "
+		   "bytes=%zu/%zu results=%zu)\n",
+		   maintenanceQueued,
+		   terminalStage.progressiveMesh->residentLevel(), richLevel,
+		   maintainedBytes, richBytes, maintenanceResults.size());
+	    ret = 1;
+	}
+
+	std::vector<BObolLodResidentDemand> hidden;
+	const size_t queued =
+	    service.scheduleResidentMeshCompaction(0x1234, 2, hidden);
+	const int compactWait = wait_for_resident_compaction(service);
+	const size_t compactBytes =
+	    service.residentMeshBytesForDiagnostics();
+	if (queued != 1 || compactWait ||
+	    terminalStage.progressiveMesh->residentLevel() !=
+		terminalStage.progressiveMesh->minimumLevel() ||
+	    compactBytes >= richBytes) {
+	    printf("FAIL: hidden resident PoP prefix did not compact "
+		   "(count=%zu level=%d min=%d bytes=%zu/%zu)\n",
+		   queued,
+		   terminalStage.progressiveMesh->residentLevel(),
+		   terminalStage.progressiveMesh->minimumLevel(),
+		   compactBytes, richBytes);
+	    ret = 1;
+	}
+
+	const uint64_t loadsBefore =
+	    service.residentMeshCacheLoadCountForDiagnostics();
+	BObolMeshLodProvider reloadProvider = stagedProvider;
+	reloadProvider.progressiveDelivery = FALSE;
+	reloadProvider.useCurrentDrawLevel = FALSE;
+	BObolLodResult reloaded =
+	    service.realizeResidentMeshLod(stagedRequest, reloadProvider);
+	if (reloaded.providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	    !reloaded.terminal ||
+	    reloaded.geometry.activeLevel != stagedRequest.requestedLevel ||
+	    reloaded.progressiveMesh != terminalStage.progressiveMesh ||
+	    reloaded.progressiveMesh->residentLevel() !=
+		stagedRequest.requestedLevel ||
+	    service.residentMeshCacheLoadCountForDiagnostics() <=
+		loadsBefore) {
+	    printf("FAIL: compacted resident PoP prefix did not reload "
+		   "from cache in place (status=%d terminal=%d active=%d "
+		   "resident=%d requested=%d same=%d loads=%llu/%llu)\n",
+		   reloaded.providerStatus, reloaded.terminal ? 1 : 0,
+		   reloaded.geometry.activeLevel,
+		   reloaded.progressiveMesh ?
+		       reloaded.progressiveMesh->residentLevel() : -1,
+		   stagedRequest.requestedLevel,
+		   reloaded.progressiveMesh == terminalStage.progressiveMesh ?
+		       1 : 0,
+		   static_cast<unsigned long long>(
+		       service.residentMeshCacheLoadCountForDiagnostics()),
+		   static_cast<unsigned long long>(loadsBefore));
+	    ret = 1;
+	}
+	if (reloaded.providerStatus == BOBOL_LOD_PROVIDER_READY &&
+	    reloaded.progressiveMesh &&
+	    reloaded.progressiveMesh->residentLevel() >
+		reloaded.progressiveMesh->minimumLevel()) {
+	    BObolLodResidentDemand compactDemand;
+	    compactDemand.assetKey = reloaded.geometry.cacheKey.value;
+	    compactDemand.level =
+		reloaded.progressiveMesh->minimumLevel();
+	    compactDemand.channelMask = 2;
+	    std::vector<BObolLodResidentDemand> compactDemands(
+		1, compactDemand);
+	    const size_t rendererQueued =
+		service.scheduleResidentMeshCompaction(
+		    0x1234, 3, compactDemands);
+	    const int waitResult =
+		wait_for_resident_compaction(service);
+	    std::vector<BObolLodResidentCompaction> completions;
+	    service.drainResidentMeshCompactions(
+		0x1234, completions);
+	    if (rendererQueued != 1 || waitResult ||
+		completions.size() != 1 ||
+		completions[0].progressiveMesh != reloaded.progressiveMesh ||
+		completions[0].residentLevel != compactDemand.level ||
+		completions[0].channelMask != 2 ||
+		!completions[0].preparedCadGeometry ||
+		completions[0].preparedCadGeometryRevision !=
+		    reloaded.progressiveMesh->revision()) {
+		printf("FAIL: resident compaction did not publish one "
+		       "renderer-ready immutable generation\n");
+		ret = 1;
+	    }
+	}
+
+	/*
+	 * A hidden asset normally keeps its minimum prefix warm.  Under an
+	 * explicit retained-memory limit, however, an asset absent from every
+	 * consumer snapshot must be released completely and recreated from the
+	 * persistent PoP cache if a later view needs it again.
+	 */
+	const BObolLodProgressiveMeshPtr priorEvictedMesh =
+	    reloaded.progressiveMesh;
+	const size_t bytesBeforeEviction =
+	    service.residentMeshBytesForDiagnostics();
+	const size_t assetsBeforeEviction =
+	    service.residentMeshAssetCountForDiagnostics();
+	const uint64_t evictionsBefore =
+	    service.residentMeshEvictionCountForDiagnostics();
+	service.setResidentMeshLimit(1);
+	std::vector<BObolLodResidentDemand> noDemands;
+	const size_t evictionQueued =
+	    service.scheduleResidentMeshCompaction(
+		0x1234, 4, noDemands);
+	const int evictionWait =
+	    wait_for_resident_compaction(service);
+	const size_t bytesAfterEviction =
+	    service.residentMeshBytesForDiagnostics();
+	const size_t assetsAfterEviction =
+	    service.residentMeshAssetCountForDiagnostics();
+	BObolLodResult restoredAfterEviction =
+	    service.realizeResidentMeshLod(stagedRequest, reloadProvider);
+	if (!evictionQueued || evictionWait ||
+	    service.getResidentMeshLimit() != 1 ||
+	    bytesAfterEviction >= bytesBeforeEviction ||
+	    assetsAfterEviction >= assetsBeforeEviction ||
+	    service.residentMeshEvictionCountForDiagnostics() <=
+		evictionsBefore ||
+	    restoredAfterEviction.providerStatus !=
+		BOBOL_LOD_PROVIDER_READY ||
+	    !restoredAfterEviction.progressiveMesh ||
+	    restoredAfterEviction.progressiveMesh ==
+		priorEvictedMesh ||
+	    restoredAfterEviction.residentAdmissionRevision == 0 ||
+	    restoredAfterEviction.terminal ||
+	    restoredAfterEviction.geometry.activeLevel !=
+		restoredAfterEviction.progressiveMesh->minimumLevel() ||
+	    service.reservedResidentMeshGrowthBytesForDiagnostics() != 0) {
+	    printf("FAIL: retained-memory pressure did not evict and "
+		   "restore an undemanded PoP asset "
+		   "(queued=%zu wait=%d bytes=%zu/%zu assets=%zu/%zu "
+		   "evictions=%llu/%llu restored=%d fresh=%d "
+		   "limited=%d active=%d min=%d revision=%llu "
+		   "reserved=%zu)\n",
+		   evictionQueued, evictionWait,
+		   bytesAfterEviction, bytesBeforeEviction,
+		   assetsAfterEviction, assetsBeforeEviction,
+		   static_cast<unsigned long long>(
+		       service.residentMeshEvictionCountForDiagnostics()),
+		   static_cast<unsigned long long>(evictionsBefore),
+		   restoredAfterEviction.providerStatus,
+		   restoredAfterEviction.progressiveMesh !=
+		       priorEvictedMesh ? 1 : 0,
+		   restoredAfterEviction.memoryLimited ? 1 : 0,
+		   restoredAfterEviction.geometry.activeLevel,
+		   restoredAfterEviction.progressiveMesh ?
+		       restoredAfterEviction.progressiveMesh->minimumLevel() :
+		       -1,
+		   static_cast<unsigned long long>(
+		       restoredAfterEviction.residentAdmissionRevision),
+		   service.
+		       reservedResidentMeshGrowthBytesForDiagnostics());
+	    ret = 1;
+	}
+
+	/* The first publication is deliberately the minimum coverage mesh.
+	 * Its next request encounters the byte denial; a repeated direct call
+	 * must report that same decision without loading the cache prefix.
+	 * Raising the target advances the capacity epoch and permits the exact
+	 * same view demand to finish.  The submit action suppresses that repeated
+	 * direct call in production. */
+	const uint64_t loadsAfterMinimum =
+	    service.residentMeshCacheLoadCountForDiagnostics();
+	BObolLodResult deniedSuffix =
+	    service.realizeResidentMeshLod(
+		stagedRequest, reloadProvider);
+	const uint64_t deniedRevision =
+	    deniedSuffix.residentAdmissionRevision;
+	const uint64_t loadsAfterDenial =
+	    service.residentMeshCacheLoadCountForDiagnostics();
+	BObolLodResult repeatedDenial =
+	    service.realizeResidentMeshLod(
+		stagedRequest, reloadProvider);
+	const uint64_t loadsAfterRepeat =
+	    service.residentMeshCacheLoadCountForDiagnostics();
+	const uint64_t revisionBeforeRelax =
+	    service.residentMeshAdmissionRevision();
+	service.setResidentMeshLimit(SIZE_MAX);
+	const uint64_t revisionAfterRelax =
+	    service.residentMeshAdmissionRevision();
+	BObolLodResult admittedAfterRelax =
+	    service.realizeResidentMeshLod(
+		stagedRequest, reloadProvider);
+	if (deniedSuffix.providerStatus !=
+		BOBOL_LOD_PROVIDER_READY ||
+	    !deniedSuffix.memoryLimited ||
+	    deniedSuffix.residentAdmissionRevision == 0 ||
+	    deniedSuffix.geometry.activeLevel !=
+		restoredAfterEviction.geometry.activeLevel ||
+	    loadsAfterDenial != loadsAfterMinimum ||
+	    repeatedDenial.providerStatus !=
+		BOBOL_LOD_PROVIDER_READY ||
+	    !repeatedDenial.memoryLimited ||
+	    repeatedDenial.residentAdmissionRevision != deniedRevision ||
+	    repeatedDenial.geometry.activeLevel !=
+		restoredAfterEviction.geometry.activeLevel ||
+	    loadsAfterRepeat != loadsAfterMinimum ||
+	    revisionAfterRelax == revisionBeforeRelax ||
+	    admittedAfterRelax.providerStatus !=
+		BOBOL_LOD_PROVIDER_READY ||
+	    admittedAfterRelax.memoryLimited ||
+	    !admittedAfterRelax.terminal ||
+	    admittedAfterRelax.geometry.activeLevel !=
+		stagedRequest.requestedLevel) {
+	    printf("FAIL: resident byte admission did not suppress/release "
+		   "optional suffix growth (denied=%d/%d repeated=%d/%d "
+		   "levels=%d/%d "
+		   "revision=%llu/%llu/%llu admitted=%d/%d)\n",
+		   deniedSuffix.providerStatus,
+		   deniedSuffix.memoryLimited ? 1 : 0,
+		   repeatedDenial.providerStatus,
+		   repeatedDenial.memoryLimited ? 1 : 0,
+		   repeatedDenial.geometry.activeLevel,
+		   restoredAfterEviction.geometry.activeLevel,
+		   static_cast<unsigned long long>(deniedRevision),
+		   static_cast<unsigned long long>(revisionBeforeRelax),
+		   static_cast<unsigned long long>(revisionAfterRelax),
+		   admittedAfterRelax.memoryLimited ? 1 : 0,
+		   admittedAfterRelax.geometry.activeLevel);
+	    ret = 1;
+	}
+    } else {
+	printf("FAIL: retained LoD compaction fixture has no richer prefix\n");
 	ret = 1;
     }
 
@@ -3185,6 +3581,8 @@ main(int argc, char **argv)
     if (test_cancelled_cache_write_not_persisted())
 	return 1;
     if (test_active_request_duplicate_suppression())
+	return 1;
+    if (test_batch_submission())
 	return 1;
     if (test_rt_source_full_detail_provider_task())
 	return 1;

@@ -212,11 +212,13 @@ BObolViewLodState::MeshPayload::MeshPayload(void) :
     activeLevel(-1),
     residentLevel(-1),
     requestedLevel(-1),
+    residentAdmissionRevision(0),
     viewRevision(0),
     policyRevision(0),
     hasSnappedPoints(FALSE),
     hasNormals(FALSE),
-    shadedCullBackfaces(FALSE)
+    shadedCullBackfaces(FALSE),
+    memoryLimited(FALSE)
 {
 }
 
@@ -317,7 +319,10 @@ BObolViewLodState::ProxyPayload::estimateBytes(void) const
 }
 
 BObolViewLodState::CadPayload::CadPayload(void) :
+    preparedCadGeometryRevision(0),
     sourceContentHash(0),
+    databaseRevision(0),
+    sourceRevision(0),
     resultKind(BOBOL_LOD_RESULT_NONE),
     qualityTier(BOBOL_LOD_QUALITY_METADATA),
     providerStatus(BOBOL_LOD_PROVIDER_UNKNOWN),
@@ -325,11 +330,13 @@ BObolViewLodState::CadPayload::CadPayload(void) :
     activeLevel(-1),
     residentLevel(-1),
     requestedLevel(-1),
+    residentAdmissionRevision(0),
     viewRevision(0),
     policyRevision(0),
     hasSnappedPoints(FALSE),
     hasNormals(FALSE),
-    shadedCullBackfaces(FALSE)
+    shadedCullBackfaces(FALSE),
+    memoryLimited(FALSE)
 {
 }
 
@@ -383,6 +390,35 @@ view_lod_cad_payload_rank(const BObolViewLodState::CadPayload &payload)
     }
 }
 
+static size_t
+view_lod_saturating_add(size_t lhs, size_t rhs)
+{
+    return rhs > SIZE_MAX - lhs ? SIZE_MAX : lhs + rhs;
+}
+
+static size_t
+view_lod_saturating_subtract(size_t lhs, size_t rhs)
+{
+    return rhs > lhs ? 0 : lhs - rhs;
+}
+
+static unsigned int
+view_lod_cad_payload_channel_mask(
+    const BObolViewLodState::CadPayload *payload)
+{
+    if (!payload)
+	return 0;
+    unsigned int mask = 0;
+    if (payload->drawMode == BOBOL_LOD_DRAW_WIRE ||
+	payload->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
+	mask |= 1u;
+    if (payload->drawMode == BOBOL_LOD_DRAW_SHADED ||
+	payload->drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	payload->drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
+	mask |= 2u;
+    return mask;
+}
+
 static SbBool
 view_lod_cad_payload_targets(const BObolViewLodState::CadPayload &payload,
 	const std::string &sourceBindingKey, const SbString &occurrenceKey)
@@ -411,6 +447,14 @@ view_lod_cad_occurrence_key(const SbString &occurrenceKey)
 	std::string(occurrenceKey.getString()) : std::string();
 }
 
+static bool
+view_lod_provider_status_is_terminal_failure(int status)
+{
+    return status == BOBOL_LOD_PROVIDER_CACHE_MISS ||
+	status == BOBOL_LOD_PROVIDER_STALE ||
+	status == BOBOL_LOD_PROVIDER_ERROR;
+}
+
 static void
 view_lod_remove_superseded_cad_payloads(
 	std::unordered_map<std::string, BObolViewLodState::CadPayloadPtr>
@@ -436,13 +480,309 @@ BObolViewLodState::BObolViewLodState(void) :
     cadBindingsRevision(1),
     normalStyle(NORMAL_AUTHORED),
     normalCreaseAngle(60.0f),
-    cadPresentationProgressiveLodCeiling(-1)
+    cadPresentationProgressiveLodCeiling(-1),
+    cadPresentationPointProxyPixelThreshold(1.0f),
+    cadPresentationCameraMotionFrameReuse(FALSE),
+    cadValidPayloadCount(0),
+    cadMeshPayloadCountValue(0),
+    cadProxyPayloadCountValue(0),
+    cadSatisfiedMeshPayloadCount(0),
+    cadMemoryLimitedMeshPayloadCount(0),
+    cadActiveFaceCount(0),
+    cadDisplayMeshBytes(0),
+    cadResidentDemandRevision(1)
 {
+    memset(this->cadProxyKindCounts, 0,
+	sizeof(this->cadProxyKindCounts));
+    memset(this->cadProgressiveLevelCounts, 0,
+	sizeof(this->cadProgressiveLevelCounts));
 }
 
 BObolViewLodState::~BObolViewLodState(void)
 {
     this->clearCadPresentations();
+}
+
+static bool
+view_lod_cad_payload_is_mesh(
+    const BObolViewLodState::CadPayload *payload)
+{
+    return payload &&
+	(payload->resultKind == BOBOL_LOD_RESULT_MESH ||
+	 payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL);
+}
+
+static bool
+view_lod_cad_payload_is_satisfied(
+    const BObolViewLodState::CadPayload *payload)
+{
+    return view_lod_cad_payload_is_mesh(payload) &&
+	(payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
+	 payload->requestedLevel < 0 ||
+	 payload->activeLevel >= payload->requestedLevel);
+}
+
+void
+BObolViewLodState::clearCadPayloadMetrics(void)
+{
+    this->cadResidentDemandRevision++;
+    if (!this->cadResidentDemandRevision)
+	this->cadResidentDemandRevision++;
+    this->cadValidPayloadCount = 0;
+    this->cadMeshPayloadCountValue = 0;
+    this->cadProxyPayloadCountValue = 0;
+    this->cadSatisfiedMeshPayloadCount = 0;
+    this->cadMemoryLimitedMeshPayloadCount = 0;
+    this->cadActiveFaceCount = 0;
+    this->cadDisplayMeshBytes = 0;
+    memset(this->cadProxyKindCounts, 0,
+	sizeof(this->cadProxyKindCounts));
+    memset(this->cadProgressiveLevelCounts, 0,
+	sizeof(this->cadProgressiveLevelCounts));
+    this->cadMeshPayloadCountsBySource.clear();
+    this->cadUnsatisfiedOccurrencesBySource.clear();
+    this->cadPayloadsByAssetKey.clear();
+    this->cadResidentDemandStates.clear();
+    this->cadResidentDemands.clear();
+}
+
+void
+BObolViewLodState::addCadResidentDemand(const CadPayload *payload)
+{
+    if (!payload || !payload->progressiveMesh ||
+	!payload->progressiveMesh->isValid() ||
+	payload->cacheKey.getLength() == 0 ||
+	payload->activeLevel < 0 || payload->activeLevel > 15)
+	return;
+    this->cadResidentDemandRevision++;
+    if (!this->cadResidentDemandRevision)
+	this->cadResidentDemandRevision++;
+
+    const std::string key = payload->cacheKey.getString();
+    const unsigned int channelMask =
+	view_lod_cad_payload_channel_mask(payload) & 3u;
+    auto inserted = this->cadResidentDemandStates.emplace(
+	key, CadResidentDemandState());
+    CadResidentDemandState &state = inserted.first->second;
+    if (inserted.second) {
+	state.demandIndex = this->cadResidentDemands.size();
+	BObolLodResidentDemand demand;
+	demand.assetKey = payload->cacheKey;
+	demand.level = payload->activeLevel;
+	demand.channelMask = channelMask;
+	this->cadResidentDemands.push_back(demand);
+    }
+    state.levelCounts[payload->activeLevel]++;
+    if (payload->activeLevel > state.maximumLevel) {
+	state.maximumLevel = payload->activeLevel;
+	this->cadResidentDemands[state.demandIndex].level =
+	    state.maximumLevel;
+    }
+    state.channelCounts[channelMask]++;
+    state.channelMask |= channelMask;
+    this->cadResidentDemands[state.demandIndex].channelMask =
+	state.channelMask;
+}
+
+void
+BObolViewLodState::removeCadResidentDemand(const CadPayload *payload)
+{
+    if (!payload || payload->cacheKey.getLength() == 0 ||
+	payload->activeLevel < 0 || payload->activeLevel > 15)
+	return;
+    this->cadResidentDemandRevision++;
+    if (!this->cadResidentDemandRevision)
+	this->cadResidentDemandRevision++;
+    const auto found = this->cadResidentDemandStates.find(
+	payload->cacheKey.getString());
+    if (found == this->cadResidentDemandStates.end())
+	return;
+    CadResidentDemandState &state = found->second;
+    const unsigned int channelMask =
+	view_lod_cad_payload_channel_mask(payload) & 3u;
+    if (state.levelCounts[payload->activeLevel])
+	state.levelCounts[payload->activeLevel]--;
+    if (state.channelCounts[channelMask])
+	state.channelCounts[channelMask]--;
+    state.channelMask = 0;
+    for (unsigned int mask = 0; mask < 4; ++mask) {
+	if (state.channelCounts[mask])
+	    state.channelMask |= mask;
+    }
+    if (payload->activeLevel == state.maximumLevel &&
+	!state.levelCounts[payload->activeLevel]) {
+	state.maximumLevel = -1;
+	for (int level = payload->activeLevel - 1; level >= 0; --level) {
+	    if (!state.levelCounts[level])
+		continue;
+	    state.maximumLevel = level;
+	    break;
+	}
+    }
+    if (state.maximumLevel >= 0) {
+	this->cadResidentDemands[state.demandIndex].level =
+	    state.maximumLevel;
+	this->cadResidentDemands[state.demandIndex].channelMask =
+	    state.channelMask;
+	return;
+    }
+
+    const size_t removedIndex = state.demandIndex;
+    const size_t lastIndex = this->cadResidentDemands.size() - 1;
+    if (removedIndex != lastIndex) {
+	this->cadResidentDemands[removedIndex] =
+	    std::move(this->cadResidentDemands[lastIndex]);
+	const auto replacement = this->cadResidentDemandStates.find(
+	    this->cadResidentDemands[removedIndex].assetKey.getString());
+	if (replacement != this->cadResidentDemandStates.end())
+	    replacement->second.demandIndex = removedIndex;
+    }
+    this->cadResidentDemands.pop_back();
+    this->cadResidentDemandStates.erase(found);
+}
+
+void
+BObolViewLodState::addCadPayloadMetrics(const CadPayload *payload)
+{
+    if (!payload || !payload->isValid())
+	return;
+
+    this->addCadResidentDemand(payload);
+    if (payload->progressiveMesh &&
+	payload->cacheKey.getLength() > 0)
+	this->cadPayloadsByAssetKey[payload->cacheKey.getString()].insert(
+	    const_cast<CadPayload *>(payload));
+    this->cadValidPayloadCount =
+	view_lod_saturating_add(this->cadValidPayloadCount, 1);
+    this->cadDisplayMeshBytes = view_lod_saturating_add(
+	this->cadDisplayMeshBytes, payload->estimateBytes());
+
+    if (payload->resultKind == BOBOL_LOD_RESULT_MESH ||
+	payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) {
+	this->cadMeshPayloadCountValue =
+	    view_lod_saturating_add(this->cadMeshPayloadCountValue, 1);
+	if (!view_lod_cad_payload_is_satisfied(payload) &&
+	    payload->sourceInstanceKey.getLength() > 0)
+	    this->cadUnsatisfiedOccurrencesBySource[
+		payload->sourceBindingKey.getString()].insert(
+		    payload->sourceInstanceKey.getString());
+	size_t &sourceMeshCount = this->cadMeshPayloadCountsBySource[
+	    payload->sourceBindingKey.getString()];
+	sourceMeshCount =
+	    view_lod_saturating_add(sourceMeshCount, 1);
+	this->cadActiveFaceCount = view_lod_saturating_add(
+	    this->cadActiveFaceCount, payload->counts.faceCount);
+	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
+	    payload->requestedLevel < 0 ||
+	    payload->activeLevel >= payload->requestedLevel)
+	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_add(
+		this->cadSatisfiedMeshPayloadCount, 1);
+	if (payload->memoryLimited)
+	    this->cadMemoryLimitedMeshPayloadCount =
+		view_lod_saturating_add(
+		    this->cadMemoryLimitedMeshPayloadCount, 1);
+	if (payload->progressiveMesh && payload->activeLevel >= 0 &&
+	    payload->activeLevel <
+		static_cast<int>(sizeof(this->cadProgressiveLevelCounts) /
+		    sizeof(this->cadProgressiveLevelCounts[0])))
+	    this->cadProgressiveLevelCounts[payload->activeLevel] =
+		view_lod_saturating_add(
+		    this->cadProgressiveLevelCounts[payload->activeLevel], 1);
+	return;
+    }
+
+    if (payload->resultKind == BOBOL_LOD_RESULT_AABB ||
+	payload->resultKind == BOBOL_LOD_RESULT_PROXY) {
+	this->cadProxyPayloadCountValue =
+	    view_lod_saturating_add(this->cadProxyPayloadCountValue, 1);
+	const int kind = payload->proxy.kind;
+	if (kind >= 0 &&
+	    kind < static_cast<int>(sizeof(this->cadProxyKindCounts) /
+		sizeof(this->cadProxyKindCounts[0])))
+	    this->cadProxyKindCounts[kind] =
+		view_lod_saturating_add(this->cadProxyKindCounts[kind], 1);
+    }
+}
+
+void
+BObolViewLodState::removeCadPayloadMetrics(const CadPayload *payload)
+{
+    if (!payload || !payload->isValid())
+	return;
+
+    this->removeCadResidentDemand(payload);
+    if (payload->cacheKey.getLength() > 0) {
+	const auto indexed = this->cadPayloadsByAssetKey.find(
+	    payload->cacheKey.getString());
+	if (indexed != this->cadPayloadsByAssetKey.end()) {
+	    indexed->second.erase(const_cast<CadPayload *>(payload));
+	    if (indexed->second.empty())
+		this->cadPayloadsByAssetKey.erase(indexed);
+	}
+    }
+    this->cadValidPayloadCount =
+	view_lod_saturating_subtract(this->cadValidPayloadCount, 1);
+    this->cadDisplayMeshBytes = view_lod_saturating_subtract(
+	this->cadDisplayMeshBytes, payload->estimateBytes());
+
+    if (payload->resultKind == BOBOL_LOD_RESULT_MESH ||
+	payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL) {
+	this->cadMeshPayloadCountValue =
+	    view_lod_saturating_subtract(this->cadMeshPayloadCountValue, 1);
+	if (payload->sourceInstanceKey.getLength() > 0) {
+	    const auto unsatisfied =
+		this->cadUnsatisfiedOccurrencesBySource.find(
+		    payload->sourceBindingKey.getString());
+	    if (unsatisfied !=
+		    this->cadUnsatisfiedOccurrencesBySource.end()) {
+		unsatisfied->second.erase(
+		    payload->sourceInstanceKey.getString());
+		if (unsatisfied->second.empty())
+		    this->cadUnsatisfiedOccurrencesBySource.erase(
+			unsatisfied);
+	    }
+	}
+	const auto sourceMeshCount = this->cadMeshPayloadCountsBySource.find(
+	    payload->sourceBindingKey.getString());
+	if (sourceMeshCount != this->cadMeshPayloadCountsBySource.end()) {
+	    sourceMeshCount->second =
+		view_lod_saturating_subtract(sourceMeshCount->second, 1);
+	    if (!sourceMeshCount->second)
+		this->cadMeshPayloadCountsBySource.erase(sourceMeshCount);
+	}
+	this->cadActiveFaceCount = view_lod_saturating_subtract(
+	    this->cadActiveFaceCount, payload->counts.faceCount);
+	if (payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
+	    payload->requestedLevel < 0 ||
+	    payload->activeLevel >= payload->requestedLevel)
+	    this->cadSatisfiedMeshPayloadCount = view_lod_saturating_subtract(
+		this->cadSatisfiedMeshPayloadCount, 1);
+	if (payload->memoryLimited)
+	    this->cadMemoryLimitedMeshPayloadCount =
+		view_lod_saturating_subtract(
+		    this->cadMemoryLimitedMeshPayloadCount, 1);
+	if (payload->progressiveMesh && payload->activeLevel >= 0 &&
+	    payload->activeLevel <
+		static_cast<int>(sizeof(this->cadProgressiveLevelCounts) /
+		    sizeof(this->cadProgressiveLevelCounts[0])))
+	    this->cadProgressiveLevelCounts[payload->activeLevel] =
+		view_lod_saturating_subtract(
+		    this->cadProgressiveLevelCounts[payload->activeLevel], 1);
+	return;
+    }
+
+    if (payload->resultKind == BOBOL_LOD_RESULT_AABB ||
+	payload->resultKind == BOBOL_LOD_RESULT_PROXY) {
+	this->cadProxyPayloadCountValue =
+	    view_lod_saturating_subtract(
+		this->cadProxyPayloadCountValue, 1);
+	const int kind = payload->proxy.kind;
+	if (kind >= 0 &&
+	    kind < static_cast<int>(sizeof(this->cadProxyKindCounts) /
+		sizeof(this->cadProxyKindCounts[0])))
+	    this->cadProxyKindCounts[kind] = view_lod_saturating_subtract(
+		this->cadProxyKindCounts[kind], 1);
+    }
 }
 
 void
@@ -454,8 +794,10 @@ BObolViewLodState::clear(void)
     this->cadSourceBindings.clear();
     this->cadAssetBindings.clear();
     this->cadBindings.clear();
+    this->cadOccurrenceFailures.clear();
     this->cadOccurrenceChanges.clear();
-    this->noteResidentMeshesChanged();
+    this->clearCadPayloadMetrics();
+    this->noteResidentMeshesChanged("view-state-clear");
 }
 
 SoCADAssembly *
@@ -495,6 +837,12 @@ BObolViewLodState::setCadPresentation(
     if (presentation.assembly)
 	presentation.assembly->progressiveLodCeiling =
 	    this->cadPresentationProgressiveLodCeiling;
+    if (presentation.assembly)
+	presentation.assembly->pointProxyPixelThreshold =
+	    this->cadPresentationPointProxyPixelThreshold;
+    if (presentation.assembly)
+	presentation.assembly->cameraMotionFrameReuse =
+	    this->cadPresentationCameraMotionFrameReuse;
     if (!presentation.assembly)
 	this->cadPresentations.erase(key);
 }
@@ -579,6 +927,8 @@ BObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
     payload->activeLevel = result.geometry.activeLevel;
     payload->residentLevel = result.residentLevel;
     payload->requestedLevel = result.request.requestedLevel;
+    payload->residentAdmissionRevision =
+	result.residentAdmissionRevision;
     payload->viewRevision = result.request.viewRevision;
     payload->policyRevision = result.request.policyRevision;
     payload->counts = result.counts;
@@ -586,6 +936,7 @@ BObolViewLodState::applyMeshResultInternal(const SoBRLMeshShape *shape,
     payload->hasSnappedPoints = result.hasSnappedPoints;
     payload->hasNormals = result.hasNormals;
     payload->shadedCullBackfaces = result.shadedCullBackfaces;
+    payload->memoryLimited = result.memoryLimited;
     payload->diagnostic = result.diagnostic;
 
     std::vector<std::string> keys;
@@ -688,7 +1039,44 @@ BObolViewLodState::applySourceResultInternal(
     BObolLodResult &result,
     SbBool consume)
 {
-    if (!source || result.providerStatus != BOBOL_LOD_PROVIDER_READY)
+    if (!source)
+	return FALSE;
+
+    const std::string sourceBindingKey = view_lod_source_primary_key(source);
+    const std::string occurrenceKey =
+	view_lod_cad_occurrence_key(result.request.occurrenceKey);
+    if (view_lod_provider_status_is_terminal_failure(
+	    result.providerStatus)) {
+	CadOccurrenceFailure &failure =
+	    this->cadOccurrenceFailures[sourceBindingKey][occurrenceKey];
+	failure.databaseRevision = result.request.databaseRevision;
+	failure.sourceRevision = result.request.sourceRevision;
+	failure.sourceContentHash = result.request.sourceContentHash;
+	failure.viewRevision = result.request.viewRevision;
+	failure.policyRevision = result.request.policyRevision;
+	failure.requestedLevel = result.request.requestedLevel;
+	failure.drawMode = result.request.drawMode;
+	failure.qualityTier = result.request.qualityTier;
+	failure.providerStatus = result.providerStatus;
+
+	/* A retained lower cut remains useful, but this exact missing suffix is
+	 * no longer refinement work.  Keep the payload and remove only its
+	 * retry-frontier entry. */
+	if (result.request.occurrenceKey.getLength() > 0) {
+	    const auto unsatisfied =
+		this->cadUnsatisfiedOccurrencesBySource.find(
+		    sourceBindingKey);
+	    if (unsatisfied !=
+		    this->cadUnsatisfiedOccurrencesBySource.end()) {
+		unsatisfied->second.erase(occurrenceKey);
+		if (unsatisfied->second.empty())
+		    this->cadUnsatisfiedOccurrencesBySource.erase(
+			unsatisfied);
+	    }
+	}
+	return TRUE;
+    }
+    if (result.providerStatus != BOBOL_LOD_PROVIDER_READY)
 	return FALSE;
 
     if ((result.resultKind == BOBOL_LOD_RESULT_MESH ||
@@ -706,8 +1094,47 @@ BObolViewLodState::applySourceResultInternal(
 	result.resultKind != BOBOL_LOD_RESULT_PROXY)
 	return FALSE;
 
-    CadPayloadPtr payload(new CadPayload);
+    /* Do not let an out-of-order older bootstrap erase a current demand's
+     * known failure.  A successful result for the exact demand does prove
+     * that the suppression is no longer needed. */
+    const auto sourceFailures =
+	this->cadOccurrenceFailures.find(sourceBindingKey);
+    if (sourceFailures != this->cadOccurrenceFailures.end()) {
+	const auto failed = sourceFailures->second.find(occurrenceKey);
+	if (failed != sourceFailures->second.end()) {
+	    const CadOccurrenceFailure &failure = failed->second;
+	    if (failure.databaseRevision ==
+		    result.request.databaseRevision &&
+		failure.sourceRevision == result.request.sourceRevision &&
+		failure.sourceContentHash ==
+		    result.request.sourceContentHash &&
+		failure.viewRevision == result.request.viewRevision &&
+		failure.policyRevision == result.request.policyRevision &&
+		failure.requestedLevel == result.request.requestedLevel &&
+		failure.drawMode == result.request.drawMode &&
+		failure.qualityTier == result.request.qualityTier) {
+		sourceFailures->second.erase(failed);
+		if (sourceFailures->second.empty())
+		    this->cadOccurrenceFailures.erase(sourceFailures);
+	    }
+	}
+    }
+
+    /*
+     * Build the candidate privately, then publish it.  A compact occurrence
+     * refines the same authoritative slot many times; when its asset path is
+     * unchanged, reuse that slot's CadPayload allocation and move the new
+     * small metadata/shared-geometry handles into it.  All alias and asset
+     * indexes either resolve the source/occurrence map or already hold the
+     * same shared pointer, so pointer identity remains stable while the
+     * immutable geometry generation changes atomically between frames.
+     */
+    CadPayload candidate;
+    CadPayload *payload = &candidate;
     payload->progressiveMesh = result.progressiveMesh;
+    payload->preparedCadGeometry = result.preparedCadGeometry;
+    payload->preparedCadGeometryRevision =
+	result.preparedCadGeometryRevision;
     if (consume) {
 	payload->mesh = std::move(result.mesh);
 	payload->proxy = std::move(result.proxy);
@@ -727,12 +1154,13 @@ BObolViewLodState::applySourceResultInternal(
      * source-node key.  An empty value is a source-wide legacy binding that
      * may fall back to a path; a nonempty value must never alias a sibling. */
     payload->sourceInstanceKey = result.request.occurrenceKey;
-    const std::string sourceBindingKey = view_lod_source_primary_key(source);
     payload->sourceBindingKey = sourceBindingKey.c_str();
     payload->cacheIdentity = result.cacheKey.value;
     payload->cacheKey = result.geometry.cacheKey.isValid() ?
 	result.geometry.cacheKey.value : result.cacheKey.value;
     payload->sourceContentHash = result.request.sourceContentHash;
+    payload->databaseRevision = result.request.databaseRevision;
+    payload->sourceRevision = result.request.sourceRevision;
     payload->resultKind = result.resultKind;
     payload->qualityTier = result.qualityTier;
     payload->providerStatus = result.providerStatus;
@@ -740,6 +1168,8 @@ BObolViewLodState::applySourceResultInternal(
     payload->activeLevel = result.geometry.activeLevel;
     payload->residentLevel = result.residentLevel;
     payload->requestedLevel = result.request.requestedLevel;
+    payload->residentAdmissionRevision =
+	result.residentAdmissionRevision;
     payload->viewRevision = result.request.viewRevision;
     payload->policyRevision = result.request.policyRevision;
     payload->counts = result.counts;
@@ -747,10 +1177,9 @@ BObolViewLodState::applySourceResultInternal(
     payload->hasSnappedPoints = result.hasSnappedPoints;
     payload->hasNormals = result.hasNormals;
     payload->shadedCullBackfaces = result.shadedCullBackfaces;
+    payload->memoryLimited = result.memoryLimited;
     payload->diagnostic = result.diagnostic;
 
-    const std::string occurrenceKey =
-	view_lod_cad_occurrence_key(payload->sourceInstanceKey);
     std::unordered_map<std::string, CadPayloadPtr> &sourcePayloads =
 	this->cadSourceBindings[sourceBindingKey];
     const auto current = sourcePayloads.find(occurrenceKey);
@@ -758,22 +1187,44 @@ BObolViewLodState::applySourceResultInternal(
 	view_lod_cad_payload_rank(*current->second) >
 	    view_lod_cad_payload_rank(*payload))
 	return TRUE;
+    CadPayloadPtr publishedPayload;
+    if (current != sourcePayloads.end() && current->second) {
+	this->removeCadPayloadMetrics(current->second.get());
+	const bool reuseCompactSlot =
+	    result.request.occurrenceKey.getLength() > 0 &&
+	    view_lod_paths_equal(current->second->sourcePath,
+		payload->sourcePath);
+	if (reuseCompactSlot) {
+	    publishedPayload = current->second;
+	    *publishedPayload = std::move(candidate);
+	}
+    }
+    if (!publishedPayload)
+	publishedPayload =
+	    std::make_shared<CadPayload>(std::move(candidate));
+    payload = publishedPayload.get();
 
-    /* A compact occurrence has exactly one alias and one authoritative
-     * source/occurrence slot.  Replacing it by direct key is O(1).  Retain
-     * the broader alias cleanup only for legacy source-wide results. */
-    if (payload->sourceInstanceKey.getLength() == 0)
+    /*
+     * Compact occurrences have one authoritative source/occurrence slot.
+     * They are resolved directly by every CAD planner and result consumer;
+     * adding the same payload to cadBindings used to allocate another long
+     * string/hash record per leaf and retained obsolete result aliases across
+     * refinement generations.  Keep aliases only for source-wide legacy
+     * results which genuinely need path/name lookup.
+     */
+    if (payload->sourceInstanceKey.getLength() == 0) {
 	view_lod_remove_superseded_cad_payloads(this->cadBindings,
 	    sourceBindingKey, payload->sourceInstanceKey, *payload);
-
-    std::vector<std::string> resultKeys;
-    view_lod_result_keys(resultKeys, result);
-    for (const std::string &resultKey : resultKeys) {
-	const std::string key =
-	    view_lod_cad_result_binding_key(sourceBindingKey, resultKey);
-	this->cadBindings[key] = payload;
+	std::vector<std::string> resultKeys;
+	view_lod_result_keys(resultKeys, result);
+	for (const std::string &resultKey : resultKeys) {
+	    const std::string key =
+		view_lod_cad_result_binding_key(sourceBindingKey, resultKey);
+	    this->cadBindings[key] = publishedPayload;
+	}
     }
-    sourcePayloads[occurrenceKey] = payload;
+    sourcePayloads[occurrenceKey] = publishedPayload;
+    this->addCadPayloadMetrics(payload);
     if (payload->progressiveMesh && payload->progressiveMesh->isValid() &&
 	payload->sourcePath.getLength() > 0) {
 	std::unordered_map<std::string, CadPayloadPtr> &sourceAssets =
@@ -784,7 +1235,7 @@ BObolViewLodState::applySourceResultInternal(
 	    bu_strcmp(resident->second->cacheKey.getString(),
 		payload->cacheKey.getString()) != 0 ||
 	    resident->second->residentLevel <= payload->residentLevel)
-	    sourceAssets[assetKey] = payload;
+	    sourceAssets[assetKey] = publishedPayload;
     }
 
     /* Preserve the source-wide lookup for a root result.  Entry results must
@@ -797,14 +1248,14 @@ BObolViewLodState::applySourceResultInternal(
 	std::vector<std::string> sourceKeys;
 	view_lod_source_keys(sourceKeys, source);
 	for (const std::string &key : sourceKeys)
-	    this->cadBindings[key] = payload;
+	    this->cadBindings[key] = publishedPayload;
     }
 
     if (payload->sourceInstanceKey.getLength() > 0)
 	this->noteCadOccurrenceChanged(
 	    sourceBindingKey, payload->sourceInstanceKey);
     else
-	this->noteResidentMeshesChanged();
+	this->noteResidentMeshesChanged("source-wide-result");
     return TRUE;
 }
 
@@ -922,7 +1373,14 @@ BObolViewLodState::findCadPayloadsUnordered(
     payloads.reserve(sourcePayloads->second.size());
     for (const auto &binding : sourcePayloads->second) {
 	const CadPayloadPtr &payload = binding.second;
-	if (payload && payload->isValid())
+	/*
+	 * cadSourceBindings is the authoritative, validated occurrence table.
+	 * Payloads enter it only through applySourceResultInternal after complete
+	 * validation and are erased rather than invalidated.  Revalidating every
+	 * progressive mesh here performs an atomic shared-generation retain for
+	 * every occurrence in a full scene synchronization.
+	 */
+	if (payload)
 	    payloads.push_back(payload.get());
     }
 }
@@ -962,8 +1420,8 @@ BObolViewLodState::findCadForOccurrence(
 	return NULL;
     const auto payload =
 	sourcePayloads->second.find(occurrenceKey.getString());
-    return payload != sourcePayloads->second.end() && payload->second &&
-	payload->second->isValid() ? payload->second.get() : NULL;
+    return payload != sourcePayloads->second.end() && payload->second ?
+	payload->second.get() : NULL;
 }
 
 const BObolViewLodState::CadPayload *
@@ -1014,6 +1472,34 @@ BObolViewLodState::findCadForResult(
 	    result.request.objectName.getString()) == 0))
 	return payload->second.get();
     return NULL;
+}
+
+SbBool
+BObolViewLodState::hasCadOccurrenceTerminalFailure(
+    const SoBRLDatabaseSource *source,
+    const BObolLodRequest &request) const
+{
+    if (!source)
+	return FALSE;
+    const auto sourceFailures = this->cadOccurrenceFailures.find(
+	view_lod_source_primary_key(source));
+    if (sourceFailures == this->cadOccurrenceFailures.end())
+	return FALSE;
+    const auto failed = sourceFailures->second.find(
+	view_lod_cad_occurrence_key(request.occurrenceKey));
+    if (failed == sourceFailures->second.end())
+	return FALSE;
+    const CadOccurrenceFailure &failure = failed->second;
+    return failure.databaseRevision == request.databaseRevision &&
+	failure.sourceRevision == request.sourceRevision &&
+	failure.sourceContentHash == request.sourceContentHash &&
+	failure.viewRevision == request.viewRevision &&
+	failure.policyRevision == request.policyRevision &&
+	failure.requestedLevel == request.requestedLevel &&
+	failure.drawMode == request.drawMode &&
+	failure.qualityTier == request.qualityTier &&
+	view_lod_provider_status_is_terminal_failure(
+	    failure.providerStatus) ? TRUE : FALSE;
 }
 
 const BObolViewLodState::CadPayload *
@@ -1073,6 +1559,8 @@ BObolViewLodState::retargetMeshPayload(
     payload->activeLevel = activeLevel;
     payload->requestedLevel = requestedLevel;
     payload->residentLevel = payload->progressiveMesh->residentLevel();
+    payload->residentAdmissionRevision = 0;
+    payload->memoryLimited = FALSE;
     payload->viewRevision = viewRevision;
     payload->policyRevision = policyRevision;
     payload->counts.faceCount =
@@ -1111,9 +1599,71 @@ BObolViewLodState::retargetCadPayload(
     if (!payload)
 	return FALSE;
 
+    /*
+     * A camera-only demand update often changes requestedLevel/revisions
+     * while deliberately retaining the current drawable prefix.  That is
+     * metadata, not a presentation mutation: keep aggregate face/resident
+     * metrics and the assembly occurrence journal untouched.  Publishing a
+     * false geometry change here made every pose-only motion frame repack
+     * hundreds of otherwise identical occurrences.
+     */
+    if (payload->activeLevel == activeLevel) {
+	const bool wasSatisfied =
+	    payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
+	    payload->requestedLevel < 0 ||
+	    payload->activeLevel >= payload->requestedLevel;
+	const bool isSatisfied =
+	    payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL ||
+	    requestedLevel < 0 || activeLevel >= requestedLevel;
+	if (wasSatisfied != isSatisfied) {
+	    if (isSatisfied)
+		this->cadSatisfiedMeshPayloadCount =
+		    view_lod_saturating_add(
+			this->cadSatisfiedMeshPayloadCount, 1);
+	    else
+		this->cadSatisfiedMeshPayloadCount =
+		    view_lod_saturating_subtract(
+			this->cadSatisfiedMeshPayloadCount, 1);
+	}
+	if (payload->sourceInstanceKey.getLength() > 0) {
+	    const std::string sourceKey =
+		payload->sourceBindingKey.getString();
+	    const std::string occurrenceKey =
+		payload->sourceInstanceKey.getString();
+	    if (isSatisfied) {
+		const auto unsatisfied =
+		    this->cadUnsatisfiedOccurrencesBySource.find(sourceKey);
+		if (unsatisfied !=
+			this->cadUnsatisfiedOccurrencesBySource.end()) {
+		    unsatisfied->second.erase(occurrenceKey);
+		    if (unsatisfied->second.empty())
+			this->cadUnsatisfiedOccurrencesBySource.erase(
+			    unsatisfied);
+		}
+	    } else {
+		this->cadUnsatisfiedOccurrencesBySource[sourceKey].insert(
+		    occurrenceKey);
+	    }
+	}
+	payload->requestedLevel = requestedLevel;
+	payload->residentLevel = payload->progressiveMesh->residentLevel();
+	if (payload->memoryLimited)
+	    this->cadMemoryLimitedMeshPayloadCount =
+		view_lod_saturating_subtract(
+		    this->cadMemoryLimitedMeshPayloadCount, 1);
+	payload->residentAdmissionRevision = 0;
+	payload->memoryLimited = FALSE;
+	payload->viewRevision = viewRevision;
+	payload->policyRevision = policyRevision;
+	return TRUE;
+    }
+
+    this->removeCadPayloadMetrics(payload.get());
     payload->activeLevel = activeLevel;
     payload->requestedLevel = requestedLevel;
     payload->residentLevel = payload->progressiveMesh->residentLevel();
+    payload->residentAdmissionRevision = 0;
+    payload->memoryLimited = FALSE;
     payload->viewRevision = viewRevision;
     payload->policyRevision = policyRevision;
     payload->counts.faceCount =
@@ -1123,6 +1673,7 @@ BObolViewLodState::retargetCadPayload(
     payload->counts.originalPointCount = payload->counts.pointCount;
     payload->counts.normalCount = payload->hasNormals ?
 	payload->counts.faceCount * 3 : 0;
+    this->addCadPayloadMetrics(payload.get());
     this->noteCadOccurrenceChanged(
 	payload->sourceBindingKey.getString(), payload->sourceInstanceKey);
     return TRUE;
@@ -1143,6 +1694,7 @@ BObolViewLodState::removeCadPayload(
 	auto occurrence = source->second.find(occurrenceKey);
 	if (occurrence != source->second.end() &&
 	    occurrence->second.get() == target) {
+	    this->removeCadPayloadMetrics(occurrence->second.get());
 	    source->second.erase(occurrence);
 	    if (source->second.empty())
 		this->cadSourceBindings.erase(source);
@@ -1150,16 +1702,7 @@ BObolViewLodState::removeCadPayload(
 	}
     }
 
-    if (target->sourceInstanceKey.getLength() > 0) {
-	const std::string resultKey = std::string("occurrence:") +
-	    target->sourceInstanceKey.getString();
-	const std::string aliasKey =
-	    view_lod_cad_result_binding_key(sourceKey, resultKey);
-	auto alias = this->cadBindings.find(aliasKey);
-	if (alias != this->cadBindings.end() &&
-	    alias->second.get() == target)
-	    this->cadBindings.erase(alias);
-    } else {
+    if (target->sourceInstanceKey.getLength() == 0) {
 	for (auto binding = this->cadBindings.begin();
 	     binding != this->cadBindings.end();) {
 	    if (binding->second && binding->second.get() == target)
@@ -1173,7 +1716,7 @@ BObolViewLodState::removeCadPayload(
 	    this->noteCadOccurrenceChanged(
 		sourceKey, target->sourceInstanceKey);
 	else {
-	    this->noteResidentMeshesChanged();
+	    this->noteResidentMeshesChanged("source-wide-remove");
 	    this->clearCadPresentations();
 	}
     }
@@ -1280,51 +1823,96 @@ BObolViewLodState::proxyPayloadCount(int proxyKind) const
 size_t
 BObolViewLodState::cadPayloadCount(void) const
 {
-    size_t count = 0;
-    for (const auto &source : this->cadSourceBindings)
-	for (const auto &binding : source.second)
-	    if (binding.second && binding.second->isValid())
-		count++;
-    return count;
+    return this->cadValidPayloadCount;
 }
 
 size_t
 BObolViewLodState::cadMeshPayloadCount(void) const
 {
-    size_t count = 0;
-    for (const auto &source : this->cadSourceBindings)
-	for (const auto &binding : source.second) {
-	    const CadPayloadPtr &payload = binding.second;
-	    if (payload && payload->isValid() &&
-		(payload->resultKind == BOBOL_LOD_RESULT_MESH ||
-		 payload->resultKind == BOBOL_LOD_RESULT_FULL_DETAIL))
-		count++;
-	}
-    return count;
+    return this->cadMeshPayloadCountValue;
+}
+
+size_t
+BObolViewLodState::cadMeshPayloadCountForSource(
+    const SoBRLDatabaseSource *source) const
+{
+    if (!source)
+	return 0;
+    const auto count = this->cadMeshPayloadCountsBySource.find(
+	view_lod_source_primary_key(source));
+    return count == this->cadMeshPayloadCountsBySource.end() ?
+	0 : count->second;
+}
+
+void
+BObolViewLodState::unsatisfiedCadOccurrenceKeys(
+    const SoBRLDatabaseSource *source,
+    std::vector<SbString> &occurrenceKeys) const
+{
+    occurrenceKeys.clear();
+    if (!source)
+	return;
+    const auto found = this->cadUnsatisfiedOccurrencesBySource.find(
+	view_lod_source_primary_key(source));
+    if (found == this->cadUnsatisfiedOccurrencesBySource.end())
+	return;
+    occurrenceKeys.reserve(found->second.size());
+    for (const std::string &key : found->second)
+	occurrenceKeys.push_back(key.c_str());
 }
 
 size_t
 BObolViewLodState::cadProxyPayloadCount(int proxyKind) const
 {
-    size_t count = 0;
-    for (const auto &source : this->cadSourceBindings)
-	for (const auto &binding : source.second) {
-	    const CadPayloadPtr &payload = binding.second;
-	    if (!payload || !payload->isValid() ||
-		(payload->resultKind != BOBOL_LOD_RESULT_AABB &&
-		 payload->resultKind != BOBOL_LOD_RESULT_PROXY) ||
-		(proxyKind != BOBOL_LOD_PROXY_NONE &&
-		 payload->proxy.kind != proxyKind))
-		continue;
-	    count++;
-	}
-    return count;
+    if (proxyKind == BOBOL_LOD_PROXY_NONE)
+	return this->cadProxyPayloadCountValue;
+    if (proxyKind < 0 ||
+	proxyKind >= static_cast<int>(sizeof(this->cadProxyKindCounts) /
+	    sizeof(this->cadProxyKindCounts[0])))
+	return 0;
+    return this->cadProxyKindCounts[proxyKind];
 }
 
-static size_t
-view_lod_saturating_add(size_t lhs, size_t rhs)
+void
+BObolViewLodState::convergencePayloadCounts(size_t &active,
+	size_t &satisfied, size_t &memoryLimited) const
 {
-    return rhs > SIZE_MAX - lhs ? SIZE_MAX : lhs + rhs;
+    active = 0;
+    satisfied = 0;
+    memoryLimited = 0;
+
+    const std::vector<MeshPayloadPtr> meshPayloads =
+	view_lod_unique_payloads(this->meshBindings);
+    for (const MeshPayloadPtr &payload : meshPayloads) {
+	if (!payload || !payload->isValid() ||
+	    payload->resultKind != BOBOL_LOD_RESULT_MESH)
+	    continue;
+	active++;
+	if (payload->requestedLevel < 0 ||
+	    payload->activeLevel >= payload->requestedLevel)
+	    satisfied++;
+	if (payload->memoryLimited)
+	    memoryLimited++;
+    }
+
+    active = view_lod_saturating_add(
+	active, this->cadMeshPayloadCountValue);
+    satisfied = view_lod_saturating_add(
+	satisfied, this->cadSatisfiedMeshPayloadCount);
+    memoryLimited = view_lod_saturating_add(
+	memoryLimited, this->cadMemoryLimitedMeshPayloadCount);
+}
+
+size_t
+BObolViewLodState::memoryLimitedPayloadCount(void) const
+{
+    size_t count = this->cadMemoryLimitedMeshPayloadCount;
+    const std::vector<MeshPayloadPtr> meshPayloads =
+	view_lod_unique_payloads(this->meshBindings);
+    for (const MeshPayloadPtr &payload : meshPayloads)
+	if (payload && payload->isValid() && payload->memoryLimited)
+	    count = view_lod_saturating_add(count, 1);
+    return count;
 }
 
 size_t
@@ -1340,32 +1928,128 @@ BObolViewLodState::activeFaceCount(void) const
 	faces = view_lod_saturating_add(faces, payload->counts.faceCount);
     }
 
-    for (const auto &source : this->cadSourceBindings)
-	for (const auto &binding : source.second) {
-	    const CadPayloadPtr &payload = binding.second;
-	    if (!payload || !payload->isValid() ||
-		(payload->resultKind != BOBOL_LOD_RESULT_MESH &&
-		 payload->resultKind != BOBOL_LOD_RESULT_FULL_DETAIL))
-		continue;
-	    faces = view_lod_saturating_add(faces,
-		payload->counts.faceCount);
+    return view_lod_saturating_add(faces, this->cadActiveFaceCount);
+}
+
+SbBool
+BObolViewLodState::lastCadPresentedTriangleCount(size_t &faces) const
+{
+    faces = 0;
+    SbBool measured = FALSE;
+    std::unordered_set<const SoCADAssembly *> visited;
+    visited.reserve(this->cadPresentations.size());
+    for (const auto &binding : this->cadPresentations) {
+	const SoCADAssembly *assembly = binding.second.assembly;
+	if (!assembly || !visited.insert(assembly).second)
+	    continue;
+	/*
+	 * The retained indirect path (tier 6) and flattened shaded/hidden-line
+	 * paths (tiers 4/3) all publish an exact submitted-triangle count.
+	 * Restricting this diagnostic to tier 6 made OSMesa calibrate from the
+	 * richer producer-retained population instead of what it actually
+	 * rasterized after PoP ceilings and small-part aggregation.
+	 */
+	const int tier = assembly->lastRenderTier();
+	if (tier != 3 && tier != 4 && tier != 6)
+	    return FALSE;
+	const uint64_t triangles = assembly->lastRenderedTriangleCount();
+	if (!triangles)
+	    return FALSE;
+	faces = triangles > static_cast<uint64_t>(SIZE_MAX - faces) ?
+	    SIZE_MAX : faces + static_cast<size_t>(triangles);
+	measured = TRUE;
+    }
+    return measured;
+}
+
+SbBool
+BObolViewLodState::lastCadGpuMeasurement(
+	size_t &faces, uint64_t &nanoseconds, uint64_t &serial) const
+{
+    faces = 0;
+    nanoseconds = 0;
+    serial = 1469598103934665603ULL;
+    SbBool measured = FALSE;
+    std::unordered_set<const SoCADAssembly *> visited;
+    visited.reserve(this->cadPresentations.size());
+    for (const auto &binding : this->cadPresentations) {
+	const SoCADAssembly *assembly = binding.second.assembly;
+	if (!assembly || !visited.insert(assembly).second)
+	    continue;
+	if (assembly->lastRenderTier() != 6)
+	    return FALSE;
+	const uint64_t sampleSerial = assembly->gpuTimerSampleSerial();
+	const uint64_t sampleNanoseconds =
+	    assembly->lastGpuRenderNanoseconds();
+	if (!sampleSerial || !sampleNanoseconds)
+	    return FALSE;
+	const uint64_t triangles =
+	    assembly->lastGpuRenderedTriangleCount();
+	faces = triangles > static_cast<uint64_t>(SIZE_MAX - faces) ?
+	    SIZE_MAX : faces + static_cast<size_t>(triangles);
+	nanoseconds =
+	    sampleNanoseconds > UINT64_MAX - nanoseconds ?
+		UINT64_MAX : nanoseconds + sampleNanoseconds;
+	/* Include assembly identity so two contexts advancing by different
+	 * amounts cannot alias the previous aggregate merely because their
+	 * numeric per-context serials happen to sum to the same value. */
+	const uint64_t identity =
+	    static_cast<uint64_t>(
+		reinterpret_cast<uintptr_t>(assembly));
+	serial ^= identity;
+	serial *= 1099511628211ULL;
+	serial ^= sampleSerial;
+	serial *= 1099511628211ULL;
+	measured = TRUE;
+    }
+    if (!measured) {
+	serial = 0;
+	return FALSE;
+    }
+    if (!serial)
+	serial = 1;
+    return TRUE;
+}
+
+SbBool
+BObolViewLodState::lastCadPresentationUsedPreparedReplay(void) const
+{
+    SbBool measured = FALSE;
+    std::unordered_set<const SoCADAssembly *> visited;
+    visited.reserve(this->cadPresentations.size());
+    for (const auto &binding : this->cadPresentations) {
+	const SoCADAssembly *assembly = binding.second.assembly;
+	if (!assembly || !visited.insert(assembly).second)
+	    continue;
+	const int tier = assembly->lastRenderTier();
+	/*
+	 * Flattened shaded/hidden-line tiers retain their transformed atlas
+	 * ranges between frames.  Their per-frame occurrence selection is part
+	 * of sustainable software-renderer cost, while geometry publication is
+	 * already excluded separately by lodResultPublicationAwaitingFrame.
+	 * Treat them as reusable presentations for quiet throughput sampling.
+	 */
+	if (tier == 3 || tier == 4) {
+	    measured = TRUE;
+	    continue;
 	}
-    return faces;
+	if (tier != 6 || !assembly->lastRenderUsedPreparedReplay())
+	    return FALSE;
+	measured = TRUE;
+    }
+    return measured;
 }
 
 int
 BObolViewLodState::maximumActiveProgressiveLevel(void) const
 {
-    int maximum = -1;
-    for (const auto &source : this->cadSourceBindings)
-	for (const auto &binding : source.second) {
-	    const CadPayloadPtr &payload = binding.second;
-	    if (!payload || !payload->isValid() ||
-		!payload->progressiveMesh || payload->activeLevel < 0)
-		continue;
-	    maximum = std::max(maximum, payload->activeLevel);
-	}
-    return maximum;
+    for (int level =
+	    static_cast<int>(sizeof(this->cadProgressiveLevelCounts) /
+		sizeof(this->cadProgressiveLevelCounts[0])) - 1;
+	level >= 0; --level)
+	if (this->cadProgressiveLevelCounts[level])
+	    return level;
+    return -1;
 }
 
 void
@@ -1376,6 +2060,33 @@ BObolViewLodState::setCadPresentationProgressiveLodCeiling(int level) const
     for (const auto &presentation : this->cadPresentations)
 	if (presentation.second.assembly)
 	    presentation.second.assembly->progressiveLodCeiling = level;
+}
+
+void
+BObolViewLodState::setCadPresentationPointProxyPixelThreshold(
+    float pixels) const
+{
+    pixels = std::isfinite(pixels) ?
+	std::max(1.0f, std::min(64.0f, pixels)) : 1.0f;
+    this->cadPresentationPointProxyPixelThreshold = pixels;
+    for (const auto &presentation : this->cadPresentations)
+	if (presentation.second.assembly)
+	    presentation.second.assembly->pointProxyPixelThreshold = pixels;
+}
+
+void
+BObolViewLodState::setCadPresentationCameraMotionFrameReuse(
+    SbBool enabled) const
+{
+    enabled = enabled ? TRUE : FALSE;
+    if (this->cadPresentationCameraMotionFrameReuse == enabled)
+	return;
+    this->cadPresentationCameraMotionFrameReuse = enabled;
+    for (const auto &presentation : this->cadPresentations)
+	if (presentation.second.assembly &&
+	    presentation.second.assembly->cameraMotionFrameReuse.getValue() !=
+		enabled)
+	    presentation.second.assembly->cameraMotionFrameReuse = enabled;
 }
 
 size_t
@@ -1390,20 +2101,30 @@ BObolViewLodState::estimateDisplayMeshBytes(void) const
 	view_lod_unique_proxy_payloads(this->proxyBindings);
     for (size_t i = 0; i < proxyPayloads.size(); i++)
 	bytes += proxyPayloads[i]->estimateBytes();
-    for (const auto &source : this->cadSourceBindings)
-	for (const auto &binding : source.second)
-	    if (binding.second && binding.second->isValid())
-		bytes += binding.second->estimateBytes();
-
-    return bytes;
+    return view_lod_saturating_add(bytes, this->cadDisplayMeshBytes);
 }
 
 void
 BObolViewLodState::residentMeshDemands(
     std::vector<BObolLodResidentDemand> &demands) const
 {
-    demands.clear();
-    std::unordered_map<std::string, int> maximumLevels;
+    demands = this->cadResidentDemands;
+    if (this->meshBindings.empty())
+	return;
+
+    struct DemandAggregate {
+	int level = -1;
+	unsigned int channelMask = 0;
+    };
+    std::unordered_map<std::string, DemandAggregate> maximumLevels;
+    maximumLevels.reserve(
+	demands.size() + this->meshBindings.size());
+    for (const BObolLodResidentDemand &demand : demands) {
+	DemandAggregate &aggregate =
+	    maximumLevels[demand.assetKey.getString()];
+	aggregate.level = std::max(aggregate.level, demand.level);
+	aggregate.channelMask |= demand.channelMask;
+    }
 
     std::vector<MeshPayloadPtr> meshPayloads =
 	view_lod_unique_payloads(this->meshBindings);
@@ -1413,35 +2134,88 @@ BObolViewLodState::residentMeshDemands(
 	    payload->cacheKey.getLength() == 0 ||
 	    payload->activeLevel < 0)
 	    continue;
-	int &level = maximumLevels[payload->cacheKey.getString()];
-	level = std::max(level, payload->activeLevel);
+	DemandAggregate &aggregate =
+	    maximumLevels[payload->cacheKey.getString()];
+	aggregate.level = std::max(aggregate.level, payload->activeLevel);
     }
 
-    for (const auto &source : this->cadSourceBindings)
-	for (const auto &binding : source.second) {
-	    const CadPayloadPtr &payload = binding.second;
-	    if (!payload || !payload->progressiveMesh ||
-		!payload->progressiveMesh->isValid() ||
-		payload->cacheKey.getLength() == 0 ||
-		payload->activeLevel < 0)
-		continue;
-	    int &level = maximumLevels[payload->cacheKey.getString()];
-	    level = std::max(level, payload->activeLevel);
-	}
-
+    demands.clear();
     demands.reserve(maximumLevels.size());
     for (const auto &entry : maximumLevels) {
 	BObolLodResidentDemand demand;
 	demand.assetKey = entry.first.c_str();
-	demand.level = entry.second;
+	demand.level = entry.second.level;
+	demand.channelMask = entry.second.channelMask;
 	demands.push_back(demand);
     }
-    std::sort(demands.begin(), demands.end(),
-	[](const BObolLodResidentDemand &a,
-	   const BObolLodResidentDemand &b) {
-	    return bu_strcmp(a.assetKey.getString(),
-		b.assetKey.getString()) < 0;
-	});
+}
+
+uint64_t
+BObolViewLodState::residentMeshDemandRevision(void) const
+{
+    return this->cadResidentDemandRevision;
+}
+
+size_t
+BObolViewLodState::applyResidentMeshCompaction(
+    const BObolLodResidentCompaction &result)
+{
+    if (result.assetKey.getLength() == 0 || !result.progressiveMesh ||
+	!result.progressiveMesh->isValid() || result.residentLevel < 0)
+	return 0;
+    /* Another view may have extended the shared asset after this completion
+     * was queued.  Never publish an older prepared generation over that
+     * richer replacement; its next stable snapshot will compact again if
+     * the aggregate demand permits it. */
+    if (result.progressiveMesh->residentLevel() != result.residentLevel ||
+	(result.preparedCadGeometryRevision &&
+	 result.preparedCadGeometryRevision !=
+	    result.progressiveMesh->revision()))
+	return 0;
+    const auto indexed = this->cadPayloadsByAssetKey.find(
+	result.assetKey.getString());
+    if (indexed == this->cadPayloadsByAssetKey.end())
+	return 0;
+
+    /*
+     * Every occurrence retains the same progressive asset, but each source
+     * has its own SoCADAssembly and part namespace.  Update the cheap payload
+     * handles for all occurrences, then journal one representative per source
+     * so each assembly replaces the shared part exactly once.
+     */
+    std::unordered_set<std::string> publishedSources;
+    size_t published = 0;
+    for (CadPayload *payload : indexed->second) {
+	if (!payload || payload->progressiveMesh != result.progressiveMesh)
+	    continue;
+	payload->residentLevel = result.residentLevel;
+	const unsigned int needed =
+	    view_lod_cad_payload_channel_mask(payload);
+	if (result.preparedCadGeometry &&
+	    (result.channelMask & needed) == needed) {
+	    payload->preparedCadGeometry = result.preparedCadGeometry;
+	    payload->preparedCadGeometryRevision =
+		result.preparedCadGeometryRevision;
+	} else {
+	    /* Release the retired generation even when a non-authored normal
+	     * mode must prepare its replacement later. */
+	    payload->preparedCadGeometry.reset();
+	    payload->preparedCadGeometryRevision = 0;
+	}
+
+	const std::string sourceKey = payload->sourceBindingKey.getString();
+	if (!publishedSources.insert(sourceKey).second)
+	    continue;
+	if (payload->sourceInstanceKey.getLength() > 0) {
+	    this->noteCadOccurrenceChanged(
+		sourceKey, payload->sourceInstanceKey);
+	} else {
+	    this->noteResidentMeshesChanged(
+		"legacy-resident-prefix-compaction");
+	}
+	published++;
+    }
+    return published;
 }
 
 uint64_t
@@ -1499,7 +2273,7 @@ BObolViewLodState::noteCadOccurrenceChanged(
     const std::string &sourceBindingKey, const SbString &occurrenceKey)
 {
     if (sourceBindingKey.empty() || occurrenceKey.getLength() == 0) {
-	this->noteResidentMeshesChanged();
+	this->noteResidentMeshesChanged("invalid-occurrence-change");
 	return;
     }
     this->cadBindingsRevision++;
@@ -1517,13 +2291,19 @@ BObolViewLodState::noteCadOccurrenceChanged(
 }
 
 void
-BObolViewLodState::noteResidentMeshesChanged(void)
+BObolViewLodState::noteResidentMeshesChanged(const char *reason)
 {
     this->cadBindingsRevision++;
     if (!this->cadBindingsRevision)
 	this->cadBindingsRevision++;
     this->cadFullResyncRevision = this->cadBindingsRevision;
     this->cadOccurrenceChanges.clear();
+    if (getenv("BOBOL_COMPACT_PRESENTATION_TIMING"))
+	bu_log("BObol compact presentation full-resync reason=%s "
+	       "revision=%llu payloads=%zu meshes=%zu\n",
+	       reason ? reason : "unknown",
+	       static_cast<unsigned long long>(this->cadBindingsRevision),
+	       this->cadValidPayloadCount, this->cadMeshPayloadCountValue);
 }
 
 size_t
@@ -1555,7 +2335,8 @@ BObolViewLodState::evictDisplayMeshes(unsigned int *evictedMeshCount)
     this->cadSourceBindings.clear();
     this->cadAssetBindings.clear();
     this->cadBindings.clear();
-    this->noteResidentMeshesChanged();
+    this->clearCadPayloadMetrics();
+    this->noteResidentMeshesChanged("display-evict-all");
     return bytes;
 }
 
@@ -1580,6 +2361,8 @@ BObolViewLodState::evictDisplayMeshPayloads(
 	bytes += payload->estimateBytes();
     for (const CadPayloadPtr &payload : cadMeshPayloads)
 	bytes += payload->estimateBytes();
+    for (const CadPayloadPtr &payload : cadMeshPayloads)
+	this->removeCadPayloadMetrics(payload.get());
 
     if (evictedMeshCount)
 	*evictedMeshCount = static_cast<unsigned int>(
@@ -1615,7 +2398,7 @@ BObolViewLodState::evictDisplayMeshPayloads(
 	++binding;
     }
     if (!cadMeshPayloads.empty())
-	this->noteResidentMeshesChanged();
+	this->noteResidentMeshesChanged("display-mesh-evict");
 
     return bytes;
 }

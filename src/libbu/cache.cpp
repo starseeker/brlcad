@@ -67,6 +67,7 @@ struct bu_cache_impl {
     MDB_dbi dbi;
     struct bu_vls *fname;
     int write_txn_active; // 0 = no active write txn, 1 = active
+    int defer_sync; // committed data is flushed once at clean close
     std::mutex write_txn_mutex;
 };
 
@@ -76,10 +77,12 @@ struct bu_cache_txn {
 };
 
 struct bu_cache *
-bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
+bu_cache_open_with_options(const char *cache_db, int create,
+			   size_t max_cache_size, unsigned int options)
 {
     size_t page_size;
     size_t msize;
+    unsigned int lmdb_flags = MDB_NOSYNC | MDB_NOTLS;
 
     if (!cache_db)
 	return NULL;
@@ -131,6 +134,7 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
     bu_vls_init(c->i->fname);
     bu_vls_sprintf(c->i->fname, "%s", cdb);
     c->i->write_txn_active = 0;
+    c->i->defer_sync = (options & BU_CACHE_OPEN_DEFER_SYNC) ? 1 : 0;
 
     // Base maximum readers on an estimate of how many threads
     // we might want to fire off
@@ -159,7 +163,9 @@ bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
 	goto bu_context_close_fail;
 
     // Need to call mdb_env_sync() at appropriate points.
-    if (mdb_env_open(c->i->env, cdb, MDB_NOSYNC | MDB_NOTLS, 0664))
+    if (options & BU_CACHE_OPEN_NORDAHEAD)
+	lmdb_flags |= MDB_NORDAHEAD;
+    if (mdb_env_open(c->i->env, cdb, lmdb_flags, 0664))
 	goto bu_context_close_fail;
 
     // Do the initial dbi setup.  Opening with a write transaction
@@ -187,6 +193,12 @@ bu_context_fail:
     delete c->i;
     BU_PUT(c, struct bu_cache);
     return NULL;
+}
+
+struct bu_cache *
+bu_cache_open(const char *cache_db, int create, size_t max_cache_size)
+{
+    return bu_cache_open_with_options(cache_db, create, max_cache_size, 0);
 }
 
 int
@@ -444,7 +456,8 @@ bu_cache_write(void *data, size_t dsize, const char *key, struct bu_cache *c, st
     // Not doing multiple writes - proceed
     rc |= mdb_txn_commit(txn);
     txn = NULL;
-    mdb_env_sync(c->i->env, 0);
+    if (!c->i->defer_sync)
+	mdb_env_sync(c->i->env, 0);
 
     // No longer have an active write txn - let the cache know
     c->i->write_txn_active = 0;
@@ -492,7 +505,8 @@ bu_cache_write_commit(struct bu_cache *c, struct bu_cache_txn **t)
 	// No longer have an active write txn - let the cache know
 	ctxn->cache->i->write_txn_active = 0;
     }
-    mdb_env_sync(c->i->env, 0);
+    if (!c->i->defer_sync)
+	mdb_env_sync(c->i->env, 0);
     ctxn->cache = NULL;
     BU_PUT(ctxn, struct bu_cache_txn);
     *t = NULL;
@@ -554,7 +568,8 @@ bu_cache_clear(const char *key, struct bu_cache *c, struct bu_cache_txn **t)
     }
     if (rc && rc != MDB_NOTFOUND)
 	bu_log("Clear operation for %s failed\n", key);
-    mdb_env_sync(c->i->env, 0);
+    if (!c->i->defer_sync)
+	mdb_env_sync(c->i->env, 0);
 }
 
 int

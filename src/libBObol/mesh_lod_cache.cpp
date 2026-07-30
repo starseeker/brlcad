@@ -29,8 +29,10 @@
 #include "raytrace.h"
 
 #include <cfloat>
+#include <charconv>
 #include <climits>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -40,12 +42,13 @@
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #define POP_MAXLEVEL 16
 #define POP_CACHEDIR BOBOL_DRAW_CACHE_DIR
-#define CACHE_CURRENT_FORMAT 10
+#define CACHE_CURRENT_FORMAT 13
 
 #define CACHE_POP_MAX_LEVEL "max"
 #define CACHE_POP_MIN_LEVEL "min"
@@ -53,6 +56,7 @@
 #define CACHE_TRI_COUNT "tc"
 #define CACHE_OBJ_BOUNDS "bb"
 #define CACHE_SHADED_CULL_BACKFACES "cb"
+#define CACHE_HAS_NORMALS "hn"
 #define CACHE_VERT_LEVEL "v"
 #define CACHE_VERTNORM_LEVEL "vn"
 #define CACHE_TRI_LEVEL "t"
@@ -63,6 +67,7 @@ struct BObolMeshLodContextInternal {
     struct bu_vls *fname;
     char *registryKey;
     std::shared_mutex *accessMutex;
+    std::shared_mutex *nameMutex;
     std::unordered_map<std::string, unsigned long long> *nameKeys;
 };
 
@@ -118,11 +123,62 @@ mesh_lod_context_registry_mutex(void)
     return m;
 }
 
+/*
+ * A PoP cache for one real vehicle database can legitimately exceed libbu's
+ * generic 4 GiB cache default.  LMDB's map size is an address-space ceiling,
+ * not an eager disk allocation, so give mesh payloads a production-scale
+ * ceiling while retaining an explicit deployment override.  Name->asset-key
+ * records remain in the small generic cache below.
+ */
+static size_t
+mesh_lod_cache_max_bytes(void)
+{
+    static const size_t bytes = []() {
+	const size_t gibibyte = 1024ULL * 1024ULL * 1024ULL;
+	const char *configured = getenv("BOBOL_MESH_LOD_CACHE_GB");
+	if (configured && configured[0]) {
+	    char *end = NULL;
+	    const unsigned long long value = strtoull(configured, &end, 10);
+	    if (end && end != configured && *end == '\0' && value > 0) {
+		if (value > SIZE_MAX / gibibyte)
+		    return SIZE_MAX - (SIZE_MAX % 4096u);
+		return static_cast<size_t>(value) * gibibyte;
+	    }
+	}
+	const unsigned long long defaultGibibytes = 64;
+	if (defaultGibibytes > SIZE_MAX / gibibyte)
+	    return SIZE_MAX - (SIZE_MAX % 4096u);
+	return static_cast<size_t>(defaultGibibytes) * gibibyte;
+    }();
+    return bytes;
+}
+
 static std::map<std::string, struct BObolMeshLodContext *> &
 mesh_lod_context_registry(void)
 {
     static std::map<std::string, struct BObolMeshLodContext *> registry;
     return registry;
+}
+
+struct BObolMeshLodDatabaseContextHint {
+    std::string databaseIdentity;
+    std::string registryKey;
+};
+
+/*
+ * These hints do not own contexts; the registry remains authoritative.  They
+ * only avoid normalizing, hashing, and basename-formatting the same database
+ * path for every asset opened by a many-leaf worker stream.  Bound the table
+ * so applications which cycle through many transient databases cannot grow a
+ * process-lifetime optimization cache without limit.
+ */
+static std::unordered_map<const struct db_i *,
+    BObolMeshLodDatabaseContextHint> &
+mesh_lod_database_context_hints(void)
+{
+    static std::unordered_map<const struct db_i *,
+	BObolMeshLodDatabaseContextHint> hints;
+    return hints;
 }
 
 static int
@@ -236,107 +292,6 @@ mesh_lod_bot_authored_normals(std::vector<fastf_t> &normalStorage,
     return true;
 }
 
-/* A consistently wound closed mesh may still contain independently oriented
- * shells.  For an explicitly unoriented BoT there is no material-side
- * contract telling us how those shells relate, so automatic exterior
- * normalization is safe only for one connected component.  This union/find
- * is linear and substantially smaller than the half-edge topology check that
- * precedes it. */
-static bool
-mesh_lod_faces_one_component(const int *faces, size_t faceCount,
-			     size_t vertexCount)
-{
-    if (!faces || !faceCount || !vertexCount ||
-	vertexCount > static_cast<size_t>(INT_MAX))
-	return false;
-
-    const int inactive = std::numeric_limits<int>::min();
-    std::vector<int> parent(vertexCount, inactive);
-    size_t components = 0;
-    const auto activate = [&parent, &components, inactive](int vertex) {
-	if (parent[static_cast<size_t>(vertex)] == inactive) {
-	    parent[static_cast<size_t>(vertex)] = -1;
-	    components++;
-	}
-    };
-    const auto findRoot = [&parent](int vertex) {
-	int root = vertex;
-	while (parent[static_cast<size_t>(root)] >= 0)
-	    root = parent[static_cast<size_t>(root)];
-	while (vertex != root) {
-	    const int next = parent[static_cast<size_t>(vertex)];
-	    parent[static_cast<size_t>(vertex)] = root;
-	    vertex = next;
-	}
-	return root;
-    };
-    const auto unite = [&parent, &components, &findRoot](int a, int b) {
-	int rootA = findRoot(a);
-	int rootB = findRoot(b);
-	if (rootA == rootB)
-	    return;
-	/* Negative roots store component size. */
-	if (parent[static_cast<size_t>(rootA)] >
-	    parent[static_cast<size_t>(rootB)])
-	    std::swap(rootA, rootB);
-	parent[static_cast<size_t>(rootA)] +=
-	    parent[static_cast<size_t>(rootB)];
-	parent[static_cast<size_t>(rootB)] = rootA;
-	components--;
-    };
-
-    for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
-	const int *face = &faces[faceIndex * 3];
-	activate(face[0]);
-	activate(face[1]);
-	activate(face[2]);
-	unite(face[0], face[1]);
-	unite(face[0], face[2]);
-    }
-    return components == 1;
-}
-
-/* Return +1 for exterior CCW, -1 for inward winding, and zero when numerical
- * cancellation makes the orientation indeterminate.  Translating about one
- * mesh vertex keeps the determinant stable for models far from the origin. */
-static int
-mesh_lod_closed_winding_sign(const point_t *vertices, size_t vertexCount,
-			     const int *faces, size_t faceCount)
-{
-    if (!vertices || !vertexCount || !faces || !faceCount)
-	return 0;
-
-    const point_t &origin = vertices[static_cast<size_t>(faces[0])];
-    long double signedSixVolume = 0.0L;
-    long double absoluteTerms = 0.0L;
-    for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
-	const int *face = &faces[faceIndex * 3];
-	long double a[3];
-	long double b[3];
-	long double c[3];
-	for (int axis = 0; axis < 3; ++axis) {
-	    a[axis] = static_cast<long double>(
-		vertices[static_cast<size_t>(face[0])][axis] - origin[axis]);
-	    b[axis] = static_cast<long double>(
-		vertices[static_cast<size_t>(face[1])][axis] - origin[axis]);
-	    c[axis] = static_cast<long double>(
-		vertices[static_cast<size_t>(face[2])][axis] - origin[axis]);
-	}
-	const long double term =
-	    a[0] * (b[1] * c[2] - b[2] * c[1]) -
-	    a[1] * (b[0] * c[2] - b[2] * c[0]) +
-	    a[2] * (b[0] * c[1] - b[1] * c[0]);
-	signedSixVolume += term;
-	absoluteTerms += std::fabs(term);
-    }
-    const long double tolerance =
-	std::numeric_limits<long double>::epsilon() *
-	std::max(1.0L, absoluteTerms) * 64.0L;
-    if (std::fabs(signedSixVolume) <= tolerance)
-	return 0;
-    return signedSixVolume > 0.0L ? 1 : -1;
-}
-
 static void
 mesh_lod_active_data_clear(struct BObolMeshLod *lod)
 {
@@ -370,6 +325,7 @@ mesh_lod_context_close(struct BObolMeshLodContext *context)
 	if (context->i->registryKey)
 	    bu_free(context->i->registryKey, "mesh lod context registry key");
 	delete context->i->nameKeys;
+	delete context->i->nameMutex;
 	delete context->i->accessMutex;
 	BU_PUT(context->i, struct BObolMeshLodContextInternal);
     }
@@ -445,8 +401,15 @@ mesh_lod_context_create(const char *name)
     internal->lodCache = NULL;
     internal->nameCache = NULL;
     internal->nameKeys = NULL;
+    internal->nameMutex = NULL;
     internal->accessMutex = new (std::nothrow) std::shared_mutex;
     if (!internal->accessMutex) {
+	mesh_lod_context_close(context);
+	bu_vls_free(&fname);
+	return NULL;
+    }
+    internal->nameMutex = new (std::nothrow) std::shared_mutex;
+    if (!internal->nameMutex) {
 	mesh_lod_context_close(context);
 	bu_vls_free(&fname);
 	return NULL;
@@ -499,8 +462,21 @@ mesh_lod_context_create(const char *name)
     bu_vls_sprintf(&nameCachePath, "%s/%s_namekey", POP_CACHEDIR,
 		   bu_vls_cstr(&fname));
 
-    internal->lodCache = bu_cache_open(bu_vls_cstr(&lodCachePath), 1, 0);
-    internal->nameCache = bu_cache_open(bu_vls_cstr(&nameCachePath), 1, 0);
+    /*
+     * View scheduling opens unrelated asset prefixes in screen-value order,
+     * not LMDB page order.  Kernel readahead on a multi-gigabyte PoP cache
+     * therefore loads speculative pages and can evict anonymous scene data
+     * while a large database is also being streamed.  Both databases are
+     * reconstructible caches, so make commits visible immediately but defer
+     * physical durability to their clean close.  A cold many-asset build
+     * otherwise forces two filesystem syncs per asset (payload plus name
+     * mapping), serializing an otherwise parallel preparation pipeline.
+     */
+    internal->lodCache = bu_cache_open_with_options(
+	bu_vls_cstr(&lodCachePath), 1, mesh_lod_cache_max_bytes(),
+	BU_CACHE_OPEN_NORDAHEAD | BU_CACHE_OPEN_DEFER_SYNC);
+    internal->nameCache = bu_cache_open_with_options(
+	bu_vls_cstr(&nameCachePath), 1, 0, BU_CACHE_OPEN_DEFER_SYNC);
 
     bu_vls_free(&lodCachePath);
     bu_vls_free(&nameCachePath);
@@ -529,7 +505,64 @@ mesh_lod_context_create_for_db(struct db_i *dbip)
 		 (void *)dbip);
     }
 
-    return mesh_lod_context_create(ctxName);
+    {
+	std::lock_guard<std::mutex> guard(mesh_lod_context_registry_mutex());
+	const auto hint = mesh_lod_database_context_hints().find(dbip);
+	if (hint != mesh_lod_database_context_hints().end() &&
+	    hint->second.databaseIdentity == ctxName) {
+	    const auto context =
+		mesh_lod_context_registry().find(hint->second.registryKey);
+	    if (context != mesh_lod_context_registry().end()) {
+		context->second->refs++;
+		return context->second;
+	    }
+	}
+    }
+
+    struct BObolMeshLodContext *context =
+	mesh_lod_context_create(ctxName);
+    if (!context || !context->i || !context->i->registryKey)
+	return context;
+    {
+	std::lock_guard<std::mutex> guard(mesh_lod_context_registry_mutex());
+	auto &hints = mesh_lod_database_context_hints();
+	if (hints.size() >= 256 && hints.find(dbip) == hints.end())
+	    hints.clear();
+	BObolMeshLodDatabaseContextHint &hint = hints[dbip];
+	hint.databaseIdentity = ctxName;
+	hint.registryKey = context->i->registryKey;
+    }
+    return context;
+}
+
+static bool
+mesh_lod_name_cache_key(char *buffer, size_t bufferSize, const char *name)
+{
+    if (!buffer || !bufferSize || !name)
+	return false;
+
+    const size_t nameLength = strlen(name);
+    unsigned long long hash = 0;
+    if (nameLength >= 10) {
+	hash = bu_data_hash(name, nameLength);
+    } else {
+	char padded[32] = {0};
+	static const char padding[] = "GGGGGGGGGGGGG";
+	memcpy(padded, name, nameLength);
+	memcpy(padded + nameLength, padding, sizeof(padding) - 1);
+	hash = bu_data_hash(
+	    padded, nameLength + sizeof(padding) - 1);
+    }
+
+    const std::to_chars_result converted =
+	std::to_chars(buffer, buffer + bufferSize, hash);
+    static const char suffix[] = ":namekey";
+    if (converted.ec != std::errc() ||
+	static_cast<size_t>(buffer + bufferSize - converted.ptr) <
+	    sizeof(suffix))
+	return false;
+    memcpy(converted.ptr, suffix, sizeof(suffix));
+    return true;
 }
 
 static unsigned long long
@@ -540,36 +573,35 @@ mesh_lod_key_get(struct BObolMeshLodContext *context, const char *name)
 
     {
 	std::shared_lock<std::shared_mutex> lock(
-	    *context->i->accessMutex);
+	    *context->i->nameMutex);
 	const auto found = context->i->nameKeys->find(name);
 	if (found != context->i->nameKeys->end())
 	    return found->second;
     }
 
-    struct bu_vls keystr = BU_VLS_INIT_ZERO;
-    bu_vls_sprintf(&keystr, "%s", name);
-    if (bu_vls_strlen(&keystr) < 10)
-	bu_vls_printf(&keystr, "GGGGGGGGGGGGG");
-    unsigned long long hash = bu_data_hash(bu_vls_cstr(&keystr),
-					   bu_vls_strlen(&keystr) * sizeof(char));
-    bu_vls_sprintf(&keystr, "%llu:namekey", hash);
+    char keystr[32] = {0};
+    if (!mesh_lod_name_cache_key(keystr, sizeof(keystr), name))
+	return 0;
 
     void *data = NULL;
     std::shared_lock<std::shared_mutex> lock(*context->i->accessMutex);
-    size_t dsize = bu_cache_get(&data, bu_vls_cstr(&keystr),
+    size_t dsize = bu_cache_get(&data, keystr,
 				context->i->nameCache, NULL);
     lock.unlock();
-    bu_vls_free(&keystr);
     if (!dsize || !data)
 	return 0;
 
     unsigned long long meshKey = *(unsigned long long *)data;
     bu_free(data, "lod key data");
-    {
-	std::unique_lock<std::shared_mutex> memoryLock(
-	    *context->i->accessMutex);
-	(*context->i->nameKeys)[name] = meshKey;
-    }
+    /*
+     * The on-disk name map is authoritative.  Caching a first lookup in the
+     * process map is optional; never stall seven other cache readers merely
+     * to install one hint while a 100k-asset warm scene is fanning out.
+     */
+    std::unique_lock<std::shared_mutex> memoryLock(
+	*context->i->nameMutex, std::try_to_lock);
+    if (memoryLock.owns_lock())
+	context->i->nameKeys->emplace(name, meshKey);
     return meshKey;
 }
 
@@ -581,22 +613,20 @@ mesh_lod_key_put(struct BObolMeshLodContext *context,
     if (!context || !name || !key)
 	return -1;
 
-    struct bu_vls keystr = BU_VLS_INIT_ZERO;
-    bu_vls_sprintf(&keystr, "%s", name);
-    if (bu_vls_strlen(&keystr) < 10)
-	bu_vls_printf(&keystr, "GGGGGGGGGGGGG");
-    unsigned long long hash = bu_data_hash(bu_vls_cstr(&keystr),
-					   bu_vls_strlen(&keystr) * sizeof(char));
-    bu_vls_sprintf(&keystr, "%llu:namekey", hash);
+    char keystr[32] = {0};
+    if (!mesh_lod_name_cache_key(keystr, sizeof(keystr), name))
+	return -1;
 
     std::unique_lock<std::shared_mutex> lock(*context->i->accessMutex);
     size_t wsize = bu_cache_write((void *)&key, sizeof(key),
-				  bu_vls_cstr(&keystr),
+				  keystr,
 				  context->i->nameCache, NULL);
-    if (wsize > 0)
+    if (wsize > 0) {
+	std::unique_lock<std::shared_mutex> memoryLock(
+	    *context->i->nameMutex);
 	(*context->i->nameKeys)[name] = key;
+    }
     lock.unlock();
-    bu_vls_free(&keystr);
     return (wsize > 0) ? 0 : -1;
 }
 
@@ -613,11 +643,18 @@ public:
 		    bool cullBackfaces);
     BObolPopState(struct BObolMeshLodContext *ctx,
 		    unsigned long long key);
+    BObolPopState(struct BObolMeshLodContext *ctx,
+		    unsigned long long key,
+		    bool retainHeaderSnapshot);
     ~BObolPopState();
 
     int getLevel(fastf_t len);
     bool setLevel(int level, bool materializeSnapped = true);
+    bool materializeGeneratedPrefix(int level);
+    void releaseGenerationScratch(void);
     void shrinkMemory(void);
+    size_t residentBytes(void) const;
+    size_t residentPrefixBytes(void) const;
     void levelPoint(point_t *out, const point_t *point, int level);
     void hierarchyInfo(struct BObolMeshLodHierarchyInfo *info) const;
 
@@ -632,6 +669,7 @@ public:
     int maxPopLevel = 0;
     bool isValid = false;
     bool shadedCullBackfaces = false;
+    bool hasNormals = false;
     unsigned long long hash = 0;
     point_t bbmin = VINIT_ZERO;
     point_t bbmax = VINIT_ZERO;
@@ -660,6 +698,9 @@ private:
     void updateSnappedPoints(int level);
     bool setupFullDetail(void);
     void clearFullDetail(void);
+    void initializeCacheKeyPrefix(void);
+    bool cacheComponentKey(char *buffer, size_t bufferSize,
+	const char *component) const;
 
     fastf_t minx = std::numeric_limits<fastf_t>::max();
     fastf_t miny = std::numeric_limits<fastf_t>::max();
@@ -692,6 +733,8 @@ private:
     struct bu_cache_txn *readTxn = NULL;
     struct bu_cache_txn *writeTxn = NULL;
     std::shared_lock<std::shared_mutex> readLock;
+    char cacheKeyPrefix[32] = {0};
+    size_t cacheKeyPrefixLength = 0;
 };
 
 void
@@ -702,78 +745,138 @@ BObolPopState::triProcess(void)
     levelTriVerts.resize(POP_MAXLEVEL);
     levelTris.resize(POP_MAXLEVEL);
 
-    for (size_t faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+    /* Face activation is independent for every triangle.  The old loop did
+     * nine floating-point divisions and all activation work serially before
+     * any cold PoP cut could become usable.  Classify large meshes in bounded
+     * disjoint ranges, recording only one byte per source face.  The merge
+     * below remains serial and source ordered, preserving byte-for-byte
+     * deterministic cache topology regardless of worker count. */
+    std::vector<uint8_t> faceLevels(faceCount, UINT8_MAX);
+    const fastf_t extent[3] = {
+	maxx - minx, maxy - miny, maxz - minz
+    };
+    const fastf_t minimum[3] = {minx, miny, minz};
+    fastf_t quantizeScale[3] = {0.0, 0.0, 0.0};
+    for (int axis = 0; axis < 3; ++axis) {
+	if (extent[axis] > 0.0)
+	    quantizeScale[axis] =
+		static_cast<fastf_t>(USHRT_MAX) / extent[axis];
+    }
+    const auto quantize = [&minimum, &extent, &quantizeScale](
+	    fastf_t value, int axis) -> unsigned short {
+	if (!(extent[axis] > 0.0))
+	    return 0;
+	if (value <= minimum[axis])
+	    return 0;
+	if (value >= minimum[axis] + extent[axis])
+	    return USHRT_MAX;
+	return static_cast<unsigned short>(
+	    floor((value - minimum[axis]) * quantizeScale[axis]));
+    };
+    const auto pairLevel = [](const BObolPopRec &a,
+	    const BObolPopRec &b) -> int {
+	const unsigned int differing =
+	    static_cast<unsigned int>(a.x ^ b.x) |
+	    static_cast<unsigned int>(a.y ^ b.y) |
+	    static_cast<unsigned int>(a.z ^ b.z);
+	if (!differing)
+	    return POP_MAXLEVEL - 1;
+#if defined(__GNUC__) || defined(__clang__)
+	const int mostSignificantBit = 31 - __builtin_clz(differing);
+#else
+	int mostSignificantBit = 0;
+	for (unsigned int bits = differing; bits >>= 1;)
+	    ++mostSignificantBit;
+#endif
+	return (POP_MAXLEVEL - 1) - mostSignificantBit;
+    };
+    const auto classifyRange = [this, &faceLevels, &quantize, &pairLevel](
+	    size_t begin, size_t end) {
+	for (size_t faceIndex = begin; faceIndex < end; ++faceIndex) {
 	BObolPopRec triangle[3];
 	bool badFace = false;
 	for (size_t cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
 	    int faceVertex = faceArray[3 * faceIndex + cornerIndex];
 	    if (faceVertex < 0 || static_cast<size_t>(faceVertex) >= vertexCount) {
-		bu_log("bad face %zd - skipping\n", faceIndex);
 		badFace = true;
 		break;
 	    }
-	    const auto quantize = [](fastf_t value, fastf_t minimum,
-		    fastf_t maximum) -> unsigned short {
-		const fastf_t extent = maximum - minimum;
-		if (!(extent > 0.0))
-		    return 0;
-		const fastf_t normalized = (value - minimum) / extent;
-		if (normalized <= 0.0)
-		    return 0;
-		if (normalized >= 1.0)
-		    return USHRT_MAX;
-		return static_cast<unsigned short>(
-		    floor(normalized * static_cast<fastf_t>(USHRT_MAX)));
-	    };
-	    triangle[cornerIndex].x = quantize(
-		vertexArray[faceVertex][X], minx, maxx);
-	    triangle[cornerIndex].y = quantize(
-		vertexArray[faceVertex][Y], miny, maxy);
-	    triangle[cornerIndex].z = quantize(
-		vertexArray[faceVertex][Z], minz, maxz);
+	    triangle[cornerIndex].x =
+		quantize(vertexArray[faceVertex][X], X);
+	    triangle[cornerIndex].y =
+		quantize(vertexArray[faceVertex][Y], Y);
+	    triangle[cornerIndex].z =
+		quantize(vertexArray[faceVertex][Z], Z);
 	}
 	if (badFace)
 	    continue;
 
-	/* A pair first separates at the level exposing its most-significant
-	 * differing quantized bit.  A triangle activates once all three vertex
-	 * pairs have separated.  Computing that level directly is equivalent to
-	 * testing all 16 masks, but avoids up to 48 quotient comparisons for
-	 * every face in very large meshes. */
-	const auto pairLevel = [](const BObolPopRec &a,
-		const BObolPopRec &b) -> int {
-	    const unsigned int differing =
-		static_cast<unsigned int>(a.x ^ b.x) |
-		static_cast<unsigned int>(a.y ^ b.y) |
-		static_cast<unsigned int>(a.z ^ b.z);
-	    if (!differing)
-		return POP_MAXLEVEL - 1;
-#if defined(__GNUC__) || defined(__clang__)
-	    const int mostSignificantBit =
-		31 - __builtin_clz(differing);
-#else
-	    int mostSignificantBit = 0;
-	    for (unsigned int bits = differing; bits >>= 1;)
-		++mostSignificantBit;
-#endif
-	    return (POP_MAXLEVEL - 1) - mostSignificantBit;
-	};
 	const int level = std::max(pairLevel(triangle[0], triangle[1]),
 	    std::max(pairLevel(triangle[1], triangle[2]),
 		     pairLevel(triangle[0], triangle[2])));
-	levelTris[level].push_back(static_cast<uint32_t>(faceIndex));
+	faceLevels[faceIndex] = static_cast<uint8_t>(level);
+	}
+    };
 
+    size_t workerCount = 1;
+    if (faceCount >= 1000000) {
+	const size_t usefulWorkers =
+	    std::max<size_t>(1, (faceCount + 999999) / 1000000);
+	workerCount = std::min<size_t>(
+	    std::max<size_t>(1, bu_avail_cpus()), usefulWorkers);
+    }
+    if (workerCount <= 1) {
+	classifyRange(0, faceCount);
+    } else {
+	std::vector<std::thread> workers;
+	workers.reserve(workerCount);
+	const size_t chunk = (faceCount + workerCount - 1) / workerCount;
+	for (size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
+	    const size_t begin = workerIndex * chunk;
+	    const size_t end = std::min(faceCount, begin + chunk);
+	    if (begin >= end)
+		break;
+	    workers.emplace_back(classifyRange, begin, end);
+	}
+	for (std::thread &worker : workers)
+	    worker.join();
+    }
+
+    size_t levelFaceCounts[POP_MAXLEVEL] = {0};
+    size_t badFaceCount = 0;
+    for (uint8_t level : faceLevels) {
+	if (level >= POP_MAXLEVEL)
+	    badFaceCount++;
+	else
+	    levelFaceCounts[level]++;
+    }
+    for (int level = 0; level < POP_MAXLEVEL; ++level)
+	levelTris[level].reserve(levelFaceCounts[level]);
+
+    for (size_t faceIndex = 0; faceIndex < faceCount; ++faceIndex) {
+	const uint8_t level = faceLevels[faceIndex];
+	if (level >= POP_MAXLEVEL)
+	    continue;
+	levelTris[level].push_back(static_cast<uint32_t>(faceIndex));
 	for (size_t cornerIndex = 0; cornerIndex < 3; cornerIndex++) {
 	    int faceVertex = faceArray[3 * faceIndex + cornerIndex];
 	    if (vertexTriMinLevel[faceVertex] > level)
-		vertexTriMinLevel[faceVertex] = static_cast<uint8_t>(level);
+		vertexTriMinLevel[faceVertex] = level;
 	}
     }
+    if (badFaceCount)
+	bu_log("%zu invalid mesh faces skipped during PoP classification\n",
+	       badFaceCount);
 
     for (size_t vertexIndex = 0; vertexIndex < vertexTriMinLevel.size();
 	 vertexIndex++)
 	levelTriVerts[vertexTriMinLevel[vertexIndex]].push_back(
 	    static_cast<uint32_t>(vertexIndex));
+
+    for (int level = 0; level < POP_MAXLEVEL; ++level) {
+	levelVertexCount[level] = levelTriVerts[level].size();
+	levelTriangleCount[level] = levelTris[level].size();
+    }
 
     triIndexMap.resize(vertexCount);
 
@@ -818,10 +921,11 @@ BObolPopState::BObolPopState(
 {
     context = ctx;
     shadedCullBackfaces = cullBackfaces;
+    hasNormals = normals != NULL;
 
     if (!userKey) {
 	struct bu_data_hash_state *state = bu_data_hash_create();
-	static const char semantics[] = "BObol-PoP3D-format-10";
+	static const char semantics[] = "BObol-PoP3D-format-13";
 	bu_data_hash_update(state, semantics, sizeof(semantics));
 	bu_data_hash_update(state, vertices, inputVertexCount * sizeof(point_t));
 	bu_data_hash_update(state, faces, 3 * inputFaceCount * sizeof(int));
@@ -837,6 +941,7 @@ BObolPopState::BObolPopState(
     } else {
 	hash = userKey;
     }
+    initializeCacheKeyPrefix();
 
     void *cacheData = NULL;
     size_t cacheSize = cacheGet(&cacheData, CACHE_POP_MAX_LEVEL);
@@ -892,7 +997,14 @@ BObolPopState::BObolPopState(
 }
 
 BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
-				 unsigned long long key)
+				 unsigned long long key) :
+    BObolPopState(ctx, key, false)
+{
+}
+
+BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
+				 unsigned long long key,
+				 bool retainHeaderSnapshot)
 {
     context = ctx;
     if (!key)
@@ -903,6 +1015,7 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	precomputedMasks.push_back(static_cast<unsigned short>(
 				       pow(2, (POP_MAXLEVEL - levelIndex - 1))));
     hash = key;
+    initializeCacheKeyPrefix();
 
     /* These records form one immutable hierarchy header.  Read them through
      * one LMDB snapshot: besides cutting transaction churn, this prevents a
@@ -923,6 +1036,8 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	    sizeof(minPopLevel)) ||
 	!readMetadata(CACHE_SHADED_CULL_BACKFACES,
 	    &shadedCullBackfaces, sizeof(shadedCullBackfaces)) ||
+	!readMetadata(CACHE_HAS_NORMALS,
+	    &hasNormals, sizeof(hasNormals)) ||
 	!readMetadata(CACHE_VERTEX_COUNT, levelVertexCount,
 	    sizeof(levelVertexCount)) ||
 	!readMetadata(CACHE_TRI_COUNT, levelTriangleCount,
@@ -951,7 +1066,14 @@ BObolPopState::BObolPopState(struct BObolMeshLodContext *ctx,
 	maxy = minmax[4];
 	maxz = minmax[5];
     }
-    cacheDone();
+    /*
+     * Retained drawing loads its first cumulative prefix immediately.  Let
+     * that explicit path reuse this immutable header snapshot; ordinary
+     * handles close it here so an idle API consumer never pins an LMDB reader
+     * indefinitely.
+     */
+    if (!retainHeaderSnapshot)
+	cacheDone();
 
     /* Metadata validation must not also read geometry.  The caller supplies
      * the view-selected target immediately after opening the handle, so
@@ -971,6 +1093,94 @@ BObolPopState::~BObolPopState()
 	fullDetailClear(detailData);
 	detailData = NULL;
     }
+}
+
+bool
+BObolPopState::materializeGeneratedPrefix(int level)
+{
+    if (!isValid || !vertexArray || !faceArray ||
+	levelTriVerts.empty() || levelTris.empty() ||
+	triIndexMap.size() != vertexCount)
+	return false;
+    level = std::max(minPopLevel, std::min(maxPopLevel, level));
+
+    size_t pointCount = 0;
+    size_t triangleCount = 0;
+    for (int levelIndex = 0; levelIndex <= level; ++levelIndex) {
+	pointCount += levelVertexCount[levelIndex];
+	triangleCount += levelTriangleCount[levelIndex];
+    }
+    if (!pointCount || !triangleCount ||
+	pointCount > SIZE_MAX / 3 || triangleCount > SIZE_MAX / 3)
+	return false;
+
+    lodTriPoints.clear();
+    lodTriPoints.reserve(pointCount * 3);
+    for (int levelIndex = 0; levelIndex <= level; ++levelIndex) {
+	for (uint32_t sourceVertex : levelTriVerts[levelIndex]) {
+	    if (sourceVertex >= vertexCount)
+		return false;
+	    lodTriPoints.push_back(vertexArray[sourceVertex][X]);
+	    lodTriPoints.push_back(vertexArray[sourceVertex][Y]);
+	    lodTriPoints.push_back(vertexArray[sourceVertex][Z]);
+	}
+    }
+
+    lodTris.clear();
+    lodTris.reserve(triangleCount * 3);
+    if (normalArray) {
+	if (triangleCount > SIZE_MAX / 9)
+	    return false;
+	lodTriNormals.clear();
+	lodTriNormals.reserve(triangleCount * 9);
+    }
+    for (int levelIndex = 0; levelIndex <= level; ++levelIndex) {
+	for (uint32_t sourceFace : levelTris[levelIndex]) {
+	    if (sourceFace >= faceCount)
+		return false;
+	    for (size_t corner = 0; corner < 3; ++corner) {
+		const int sourceVertex =
+		    faceArray[3 * static_cast<size_t>(sourceFace) + corner];
+		if (sourceVertex < 0 ||
+		    static_cast<size_t>(sourceVertex) >=
+			triIndexMap.size())
+		    return false;
+		const uint32_t targetVertex = triIndexMap[sourceVertex];
+		if (targetVertex >
+		    static_cast<uint32_t>(std::numeric_limits<int>::max()))
+		    return false;
+		lodTris.push_back(static_cast<int>(targetVertex));
+		if (normalArray) {
+		    const size_t normalIndex =
+			3 * static_cast<size_t>(sourceFace) + corner;
+		    lodTriNormals.push_back(normalArray[normalIndex][X]);
+		    lodTriNormals.push_back(normalArray[normalIndex][Y]);
+		    lodTriNormals.push_back(normalArray[normalIndex][Z]);
+		}
+	    }
+	}
+    }
+    lodTriPointsSnapped.clear();
+    currLevel = level;
+    return true;
+}
+
+void
+BObolPopState::releaseGenerationScratch(void)
+{
+    triIndexMap.clear();
+    triIndexMap.shrink_to_fit();
+    vertexTriMinLevel.clear();
+    vertexTriMinLevel.shrink_to_fit();
+    levelTriVerts.clear();
+    levelTriVerts.shrink_to_fit();
+    levelTris.clear();
+    levelTris.shrink_to_fit();
+    vertexCount = 0;
+    vertexArray = NULL;
+    normalArray = NULL;
+    faceCount = 0;
+    faceArray = NULL;
 }
 
 void
@@ -995,7 +1205,22 @@ bool
 BObolPopState::triPopLoad(int startLevel, int level,
 			  bool materializeSnapped)
 {
-    struct bu_vls keyBuffer = BU_VLS_INIT_ZERO;
+    char component[8] = {0};
+    const auto levelComponent = [&component](const char *prefix,
+	    int levelIndex) -> const char * {
+	char *out = component;
+	const size_t prefixLength = strlen(prefix);
+	memcpy(out, prefix, prefixLength);
+	out += prefixLength;
+	const std::to_chars_result converted =
+	    std::to_chars(out, component + sizeof(component) - 1, levelIndex);
+	if (converted.ec != std::errc()) {
+	    component[0] = '\0';
+	    return component;
+	}
+	*converted.ptr = '\0';
+	return component;
+    };
 
     /* A requested PoP prefix is one immutable cache snapshot.  Keep the LMDB
      * read transaction open while copying every vertex, triangle, and normal
@@ -1006,12 +1231,11 @@ BObolPopState::triPopLoad(int startLevel, int level,
     for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
 	if (!levelVertexCount[levelIndex])
 	    continue;
-	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERT_LEVEL, levelIndex);
 	fastf_t *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, bu_vls_cstr(&keyBuffer));
+	size_t bufferSize = cacheGet((void **)&buffer,
+	    levelComponent(CACHE_VERT_LEVEL, levelIndex));
 	if (bufferSize != levelVertexCount[levelIndex] * sizeof(point_t)) {
 	    cacheDone();
-	    bu_vls_free(&keyBuffer);
 	    return false;
 	}
 	lodTriPoints.insert(lodTriPoints.end(), &buffer[0],
@@ -1026,12 +1250,11 @@ BObolPopState::triPopLoad(int startLevel, int level,
     for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
 	if (!levelTriangleCount[levelIndex])
 	    continue;
-	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_TRI_LEVEL, levelIndex);
 	int *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, bu_vls_cstr(&keyBuffer));
+	size_t bufferSize = cacheGet((void **)&buffer,
+	    levelComponent(CACHE_TRI_LEVEL, levelIndex));
 	if (bufferSize != levelTriangleCount[levelIndex] * 3 * sizeof(int)) {
 	    cacheDone();
-	    bu_vls_free(&keyBuffer);
 	    return false;
 	}
 	lodTris.insert(lodTris.end(), &buffer[0],
@@ -1041,13 +1264,12 @@ BObolPopState::triPopLoad(int startLevel, int level,
     for (int levelIndex = startLevel + 1; levelIndex <= level; levelIndex++) {
 	if (!levelTriangleCount[levelIndex])
 	    continue;
-	bu_vls_sprintf(&keyBuffer, "%s%d", CACHE_VERTNORM_LEVEL, levelIndex);
 	fastf_t *buffer = NULL;
-	size_t bufferSize = cacheGet((void **)&buffer, bu_vls_cstr(&keyBuffer));
+	size_t bufferSize = cacheGet((void **)&buffer,
+	    levelComponent(CACHE_VERTNORM_LEVEL, levelIndex));
 	if (bufferSize > 0 &&
 	    bufferSize != levelTriangleCount[levelIndex] * sizeof(vect_t) * 3) {
 	    cacheDone();
-	    bu_vls_free(&keyBuffer);
 	    return false;
 	}
 	if (bufferSize) {
@@ -1057,7 +1279,6 @@ BObolPopState::triPopLoad(int startLevel, int level,
     }
 
     cacheDone();
-    bu_vls_free(&keyBuffer);
     return true;
 }
 
@@ -1072,6 +1293,55 @@ BObolPopState::shrinkMemory(void)
     lodTris.shrink_to_fit();
     lodTriPointsSnapped.clear();
     lodTriPointsSnapped.shrink_to_fit();
+}
+
+static size_t
+mesh_lod_saturating_bytes_add(size_t current, size_t count, size_t stride)
+{
+    if (count && stride > SIZE_MAX / count)
+	return SIZE_MAX;
+    const size_t amount = count * stride;
+    return amount > SIZE_MAX - current ? SIZE_MAX : current + amount;
+}
+
+size_t
+BObolPopState::residentPrefixBytes(void) const
+{
+    size_t bytes = 0;
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, lodTris.capacity(), sizeof(lodTris[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, lodTriPoints.capacity(), sizeof(lodTriPoints[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, lodTriPointsSnapped.capacity(),
+	sizeof(lodTriPointsSnapped[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, lodTriNormals.capacity(), sizeof(lodTriNormals[0]));
+    return bytes;
+}
+
+size_t
+BObolPopState::residentBytes(void) const
+{
+    size_t bytes = sizeof(*this);
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, precomputedMasks.capacity(), sizeof(precomputedMasks[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, triIndexMap.capacity(), sizeof(triIndexMap[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, vertexTriMinLevel.capacity(), sizeof(vertexTriMinLevel[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, levelTriVerts.capacity(), sizeof(levelTriVerts[0]));
+    bytes = mesh_lod_saturating_bytes_add(
+	bytes, levelTris.capacity(), sizeof(levelTris[0]));
+    for (const std::vector<uint32_t> &level : levelTriVerts)
+	bytes = mesh_lod_saturating_bytes_add(
+	    bytes, level.capacity(), sizeof(level[0]));
+    for (const std::vector<uint32_t> &level : levelTris)
+	bytes = mesh_lod_saturating_bytes_add(
+	    bytes, level.capacity(), sizeof(level[0]));
+    const size_t prefix = residentPrefixBytes();
+    return prefix > SIZE_MAX - bytes ? SIZE_MAX : bytes + prefix;
 }
 
 void
@@ -1124,6 +1394,8 @@ BObolPopState::hierarchyInfo(struct BObolMeshLodHierarchyInfo *info) const
     info->min_level = minPopLevel;
     info->max_level = maxPopLevel;
     info->resident_level = currLevel;
+    info->has_normals = hasNormals ? 1 : 0;
+    info->shaded_cull_backfaces = shadedCullBackfaces ? 1 : 0;
     VSET(info->quantization_min, minx, miny, minz);
     VSET(info->quantization_max, maxx, maxy, maxz);
     size_t points = 0;
@@ -1268,12 +1540,43 @@ BObolPopState::cacheWriteData(const char *component, const void *data,
 {
     if (!component || !data || !size)
 	return false;
-    std::string keystr = std::to_string(hash) + std::string(":") +
-			 std::string(component);
+    char keystr[64] = {0};
+    if (!cacheComponentKey(keystr, sizeof(keystr), component))
+	return false;
     size_t wsize = bu_cache_write(const_cast<void *>(data), size,
-				  keystr.c_str(), context->i->lodCache,
+				  keystr, context->i->lodCache,
 				  &writeTxn);
     return (wsize > 0);
+}
+
+void
+BObolPopState::initializeCacheKeyPrefix(void)
+{
+    cacheKeyPrefixLength = 0;
+    const std::to_chars_result converted =
+	std::to_chars(cacheKeyPrefix,
+	    cacheKeyPrefix + sizeof(cacheKeyPrefix) - 2, hash);
+    if (converted.ec != std::errc())
+	return;
+    *converted.ptr = ':';
+    cacheKeyPrefixLength =
+	static_cast<size_t>(converted.ptr - cacheKeyPrefix) + 1;
+    cacheKeyPrefix[cacheKeyPrefixLength] = '\0';
+}
+
+bool
+BObolPopState::cacheComponentKey(char *buffer, size_t bufferSize,
+				 const char *component) const
+{
+    if (!buffer || !component || !cacheKeyPrefixLength)
+	return false;
+    const size_t componentLength = strlen(component);
+    if (cacheKeyPrefixLength >= bufferSize ||
+	componentLength >= bufferSize - cacheKeyPrefixLength)
+	return false;
+    memcpy(buffer, cacheKeyPrefix, cacheKeyPrefixLength);
+    memcpy(buffer + cacheKeyPrefixLength, component, componentLength + 1);
+    return true;
 }
 
 size_t
@@ -1283,9 +1586,10 @@ BObolPopState::cacheGet(void **data, const char *component)
 	!readLock.owns_lock())
 	readLock =
 	    std::shared_lock<std::shared_mutex>(*context->i->accessMutex);
-    std::string keystr = std::to_string(hash) + std::string(":") +
-			 std::string(component);
-    return bu_cache_get(data, keystr.c_str(), context->i->lodCache,
+    char keystr[64] = {0};
+    if (!cacheComponentKey(keystr, sizeof(keystr), component))
+	return 0;
+    return bu_cache_get(data, keystr, context->i->lodCache,
 	&readTxn);
 }
 
@@ -1321,6 +1625,14 @@ BObolPopState::cacheTri(void)
 	stream.write(reinterpret_cast<const char *>(&shadedCullBackfaces),
 		     sizeof(shadedCullBackfaces));
 	if (!cacheWrite(CACHE_SHADED_CULL_BACKFACES, stream))
+	    return false;
+    }
+
+    {
+	std::stringstream stream;
+	stream.write(reinterpret_cast<const char *>(&hasNormals),
+		     sizeof(hasNormals));
+	if (!cacheWrite(CACHE_HAS_NORMALS, stream))
 	    return false;
     }
 
@@ -1590,12 +1902,14 @@ mesh_lod_cache_generate(struct BObolMeshLodContext *context,
 
 static struct BObolMeshLod *
 mesh_lod_create(struct BObolMeshLodContext *context,
-		unsigned long long key)
+		unsigned long long key,
+		bool retainHeaderSnapshot = false)
 {
     if (!context || !key)
 	return NULL;
 
-    BObolPopState *state = new (std::nothrow) BObolPopState(context, key);
+    BObolPopState *state = new (std::nothrow) BObolPopState(
+	context, key, retainHeaderSnapshot);
     if (!state)
 	return NULL;
 
@@ -1604,6 +1918,23 @@ mesh_lod_create(struct BObolMeshLodContext *context,
 	return NULL;
     }
 
+    struct BObolMeshLod *lod;
+    BU_GET(lod, struct BObolMeshLod);
+    lod->context = context;
+    lod->state = state;
+    mesh_lod_active_data_clear(lod);
+    VMOVE(lod->bmin, state->bbmin);
+    VMOVE(lod->bmax, state->bbmax);
+    state->lod = lod;
+    return lod;
+}
+
+static struct BObolMeshLod *
+mesh_lod_adopt_generated_state(struct BObolMeshLodContext *context,
+			       BObolPopState *state)
+{
+    if (!context || !state || !state->isValid)
+	return NULL;
     struct BObolMeshLod *lod;
     BU_GET(lod, struct BObolMeshLod);
     lod->context = context;
@@ -1699,10 +2030,15 @@ mesh_lod_cache_clear_context(struct BObolMeshLodContext *context,
 {
     char dir[MAXPATHLEN];
     std::unique_lock<std::shared_mutex> lock;
+    std::unique_lock<std::shared_mutex> nameLock;
 
-    if (context && context->i && context->i->accessMutex)
+    if (context && context->i && context->i->accessMutex) {
 	lock =
 	    std::unique_lock<std::shared_mutex>(*context->i->accessMutex);
+	if (context->i->nameMutex)
+	    nameLock =
+		std::unique_lock<std::shared_mutex>(*context->i->nameMutex);
+    }
 
     if (context && key) {
 	mesh_lod_cache_del(context, key, CACHE_POP_MAX_LEVEL);
@@ -2004,16 +2340,20 @@ bobol_mesh_lod_cache_invalidate(struct db_i *dbip,
     return BRLCAD_OK;
 }
 
-int
-bobol_mesh_lod_cache_refresh(struct db_i *dbip,
-			       const char *name,
-			       struct BObolMeshLodCacheStatus *status)
+static int
+mesh_lod_cache_refresh_impl(struct db_i *dbip, const char *name,
+			    const struct rt_bot_internal *stagedBot,
+			    bool forceRefresh,
+			    struct BObolMeshLodCacheStatus *status,
+			    struct BObolMeshLod **generatedLod)
 {
     struct BObolMeshLodCacheStatus current =
 	    BOBOL_MESH_LOD_CACHE_STATUS_INIT;
 
     if (status)
 	bobol_mesh_lod_cache_status_init(status);
+    if (generatedLod)
+	*generatedLod = NULL;
     if (!dbip || !name)
 	return BRLCAD_ERROR;
 
@@ -2022,6 +2362,13 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 	return BRLCAD_ERROR;
 
     mesh_lod_status_current(dbip, context, name, &current);
+    if (!forceRefresh && current.has_cache_key &&
+	current.has_cached_payload && !current.stale_cache_entry) {
+	if (status)
+	    *status = current;
+	mesh_lod_context_destroy(context);
+	return BRLCAD_OK;
+    }
     if (current.has_cache_key) {
 	current.cleared_cache_entry = 1;
 	current.cleared_cache_key = current.cache_key;
@@ -2045,18 +2392,21 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 
     struct rt_db_internal dbintern;
     RT_DB_INTERNAL_INIT(&dbintern);
-    if (rt_db_get_internal(&dbintern, dp, dbip, NULL) < 0) {
-	mesh_lod_context_destroy(context);
-	return BRLCAD_ERROR;
+    bool ownsInternal = false;
+    const struct rt_bot_internal *bot = stagedBot;
+    if (!bot) {
+	if (rt_db_get_internal(&dbintern, dp, dbip, NULL) < 0) {
+	    mesh_lod_context_destroy(context);
+	    return BRLCAD_ERROR;
+	}
+	ownsInternal = true;
+	if (dbintern.idb_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
+	    rt_db_free_internal(&dbintern);
+	    mesh_lod_context_destroy(context);
+	    return BRLCAD_ERROR;
+	}
+	bot = static_cast<const struct rt_bot_internal *>(dbintern.idb_ptr);
     }
-    if (dbintern.idb_minor_type != DB5_MINORTYPE_BRLCAD_BOT) {
-	rt_db_free_internal(&dbintern);
-	mesh_lod_context_destroy(context);
-	return BRLCAD_ERROR;
-    }
-
-    struct rt_bot_internal *bot =
-	    static_cast<struct rt_bot_internal *>(dbintern.idb_ptr);
     RT_BOT_CK_MAGIC(bot);
 
     if (!mesh_lod_arrays_validate(bot->faces, bot->num_faces,
@@ -2064,18 +2414,24 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 				  bot->num_vertices,
 				  reinterpret_cast<const point_t *>(bot->vertices),
 				  bot->num_vertices, NULL, NULL, NULL)) {
-	rt_db_free_internal(&dbintern);
+	if (ownsInternal)
+	    rt_db_free_internal(&dbintern);
 	if (status)
 	    *status = current;
 	mesh_lod_context_destroy(context);
 	return BRLCAD_ERROR;
     }
 
-    /* Obol's cull-safe contract is always exterior CCW.  Begin with the
-     * declared winding, then validate actual topology.  Imported meshes such
-     * as Stanford Lucy are often marked unoriented despite having one closed,
-     * consistently wound shell; normalize those from their signed volume
-     * instead of permanently forcing two-sided shaded rasterization. */
+    /* Obol's cull-safe contract is exterior CCW.  The BoT's authored
+     * mode/orientation is the source of that semantic fact; proving it again
+     * with bg_trimesh_solid2 sorts every half edge and used roughly 40% of
+     * Lucy's true-cold CPU before any usable PoP prefix could be published.
+     *
+     * An explicitly oriented solid may therefore opt into culling directly.
+     * An unoriented or non-solid BoT remains two-sided.  Topology validation
+     * belongs in authoring/validation workflows (and may populate these
+     * properties ahead of drawing), not on the interactive display critical
+     * path. */
     std::vector<int> normalizedFaces;
     const int *cacheFaces = bot->faces;
     bool flippedWinding = bot->orientation == RT_BOT_CW;
@@ -2097,33 +2453,9 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
     };
     applyWinding();
 
-    bool cullBackfaces = false;
-    if (bot->mode == RT_BOT_SOLID &&
-	bot->num_vertices <= static_cast<size_t>(INT_MAX) &&
-	bot->num_faces <= static_cast<size_t>(INT_MAX) &&
-	bg_trimesh_solid2(static_cast<int>(bot->num_vertices),
-	    static_cast<int>(bot->num_faces), bot->vertices,
-	    const_cast<int *>(cacheFaces), NULL) == 0) {
-	const bool oneComponent = mesh_lod_faces_one_component(
-	    cacheFaces, bot->num_faces, bot->num_vertices);
-	if (oneComponent) {
-	    const int windingSign = mesh_lod_closed_winding_sign(
-		reinterpret_cast<const point_t *>(bot->vertices),
-		bot->num_vertices, cacheFaces, bot->num_faces);
-	    if (windingSign != 0) {
-		if (windingSign < 0) {
-		    flippedWinding = !flippedWinding;
-		    applyWinding();
-		}
-		cullBackfaces = true;
-	    }
-	} else if (bot->orientation != RT_BOT_UNORIENTED) {
-	    /* Multiple shells can encode cavities, so their signed volumes
-	     * cannot be normalized independently.  An explicit orientation is
-	     * the only available material-side contract in that case. */
-	    cullBackfaces = true;
-	}
-    }
+    const bool cullBackfaces =
+	bot->mode == RT_BOT_SOLID &&
+	bot->orientation != RT_BOT_UNORIENTED;
 
     std::vector<fastf_t> authoredNormals;
     const point_t *botVertices =
@@ -2133,28 +2465,112 @@ bobol_mesh_lod_cache_refresh(struct db_i *dbip,
 	    authoredNormals, bot, cacheFaces, flippedWinding) ?
 	reinterpret_cast<const vect_t *>(authoredNormals.data()) : NULL;
 
-    unsigned long long key = mesh_lod_cache_generate(
-				 context, botVertices, bot->num_vertices,
-				 botNormals, cacheFaces, bot->num_faces, 0,
-				 cullBackfaces);
+    BObolPopState *generatedState = NULL;
+    unsigned long long key = 0;
+    if (generatedLod) {
+	generatedState = new (std::nothrow) BObolPopState(
+	    context, botVertices, bot->num_vertices,
+	    botNormals, cacheFaces, bot->num_faces, 0,
+	    cullBackfaces);
+	key = generatedState && generatedState->isValid ?
+	    generatedState->hash : 0;
+    } else {
+	key = mesh_lod_cache_generate(
+	    context, botVertices, bot->num_vertices,
+	    botNormals, cacheFaces, bot->num_faces, 0,
+	    cullBackfaces);
+    }
     if (!key || mesh_lod_key_put(context, dp->d_namep, key) != 0) {
-	rt_db_free_internal(&dbintern);
+	delete generatedState;
+	if (ownsInternal)
+	    rt_db_free_internal(&dbintern);
 	mesh_lod_context_destroy(context);
 	return BRLCAD_ERROR;
     }
 
-    rt_db_free_internal(&dbintern);
+    if (generatedState) {
+	struct BObolMeshLod *lod =
+	    mesh_lod_adopt_generated_state(context, generatedState);
+	if (!lod ||
+	    !generatedState->materializeGeneratedPrefix(
+		generatedState->minPopLevel)) {
+	    if (lod) {
+		lod->context = NULL;
+		bobol_mesh_lod_destroy(lod);
+	    } else {
+		delete generatedState;
+	    }
+	    if (ownsInternal)
+		rt_db_free_internal(&dbintern);
+	    mesh_lod_context_destroy(context);
+	    return BRLCAD_ERROR;
+	}
+	mesh_lod_active_pop_data_publish(lod, generatedState);
+	generatedState->releaseGenerationScratch();
+	*generatedLod = lod;
+    }
+
+    if (ownsInternal)
+	rt_db_free_internal(&dbintern);
 
     current.cache_key = key;
     current.has_cache_key = 1;
-    current.has_cached_payload = mesh_lod_payload_available(context, key);
+    current.has_cached_payload = generatedLod && *generatedLod ?
+	1 : mesh_lod_payload_available(context, key);
     current.stale_cache_entry = current.has_cached_payload ? 0 : 1;
     current.generated_cache_entry = current.has_cached_payload ? 1 : 0;
     if (status)
 	*status = current;
 
-    mesh_lod_context_destroy(context);
+    if (!generatedLod || !*generatedLod)
+	mesh_lod_context_destroy(context);
     return current.has_cached_payload ? BRLCAD_OK : BRLCAD_ERROR;
+}
+
+int
+bobol_mesh_lod_cache_refresh(struct db_i *dbip,
+			       const char *name,
+			       struct BObolMeshLodCacheStatus *status)
+{
+    return mesh_lod_cache_refresh_impl(
+	dbip, name, NULL, true, status, NULL);
+}
+
+int
+bobol_mesh_lod_cache_refresh_from_bot(
+    struct db_i *dbip,
+    const char *name,
+    const struct rt_bot_internal *bot,
+    struct BObolMeshLodCacheStatus *status)
+{
+    if (!bot)
+	return BRLCAD_ERROR;
+    return mesh_lod_cache_refresh_impl(
+	dbip, name, bot, false, status, NULL);
+}
+
+struct BObolMeshLod *
+bobol_mesh_lod_cache_refresh_from_bot_open(
+    struct db_i *dbip,
+    const char *name,
+    const struct rt_bot_internal *bot,
+    struct BObolMeshLodCacheStatus *status)
+{
+    if (!bot)
+	return NULL;
+    struct BObolMeshLod *lod = NULL;
+    if (mesh_lod_cache_refresh_impl(
+	    dbip, name, bot, false, status, &lod) != BRLCAD_OK) {
+	if (lod)
+	    bobol_mesh_lod_destroy(lod);
+	return NULL;
+    }
+    if (lod)
+	return lod;
+    if (status && status->has_cache_key)
+	return bobol_mesh_lod_get_cached_prefix(
+	    dbip, status->cache_key);
+    return bobol_mesh_lod_get_named_cached_prefix(dbip, name);
 }
 
 int
@@ -2211,13 +2627,10 @@ bobol_mesh_lod_cache_store_mesh(
 	return BRLCAD_OK;
     }
 
-    const bool cullBackfaces = shadedCullBackfaces &&
-	vertexCount <= static_cast<size_t>(INT_MAX) &&
-	faceCount <= static_cast<size_t>(INT_MAX) &&
-	bg_trimesh_solid2(static_cast<int>(vertexCount),
-	    static_cast<int>(faceCount),
-	    const_cast<fastf_t *>(reinterpret_cast<const fastf_t *>(vertices)),
-	    const_cast<int *>(faces), NULL) == 0;
+    /* The caller owns the cull-safety decision.  Re-running a complete
+     * half-edge manifold proof here makes cache population scale as a second
+     * full topology build and defeats progressive time-to-first-content. */
+    const bool cullBackfaces = shadedCullBackfaces != 0;
 
     unsigned long long key = mesh_lod_cache_generate(
 				 context, vertices, vertexCount, normals, faces,
@@ -2281,6 +2694,53 @@ bobol_mesh_lod_get(struct db_i *dbip, const char *name)
 	    mesh_lod_bot_detail_free(callbackData);
     }
 
+    return lod;
+}
+
+struct BObolMeshLod *
+bobol_mesh_lod_get_named_cached_prefix(struct db_i *dbip,
+				       const char *name)
+{
+    if (!dbip || !name || !name[0])
+	return NULL;
+
+    struct BObolMeshLodContext *context =
+	mesh_lod_context_create_for_db(dbip);
+    if (!context)
+	return NULL;
+
+    const unsigned long long key = mesh_lod_key_get(context, name);
+    if (!key) {
+	mesh_lod_context_destroy(context);
+	return NULL;
+    }
+
+    struct BObolMeshLod *lod = mesh_lod_create(context, key, true);
+    if (!lod) {
+	mesh_lod_context_destroy(context);
+	return NULL;
+    }
+    return lod;
+}
+
+struct BObolMeshLod *
+bobol_mesh_lod_get_cached_prefix(struct db_i *dbip,
+				 unsigned long long cacheKey)
+{
+    if (!dbip || !cacheKey)
+	return NULL;
+
+    struct BObolMeshLodContext *context =
+	mesh_lod_context_create_for_db(dbip);
+    if (!context)
+	return NULL;
+
+    struct BObolMeshLod *lod =
+	mesh_lod_create(context, cacheKey, true);
+    if (!lod) {
+	mesh_lod_context_destroy(context);
+	return NULL;
+    }
     return lod;
 }
 
@@ -2541,6 +3001,23 @@ bobol_mesh_lod_memshrink(struct BObolMeshLod *lod)
     lod->state->shrinkMemory();
     lod->state->forceUpdate = true;
     mesh_lod_active_data_clear(lod);
+}
+
+size_t
+bobol_mesh_lod_resident_bytes(const struct BObolMeshLod *lod)
+{
+    if (!lod || !lod->state)
+	return 0;
+    const size_t stateBytes = lod->state->residentBytes();
+    return stateBytes > SIZE_MAX - sizeof(*lod) ?
+	SIZE_MAX : sizeof(*lod) + stateBytes;
+}
+
+size_t
+bobol_mesh_lod_resident_prefix_bytes(const struct BObolMeshLod *lod)
+{
+    return lod && lod->state ?
+	lod->state->residentPrefixBytes() : 0;
 }
 
 void

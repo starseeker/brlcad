@@ -53,7 +53,7 @@
 #define BOBOL_DRAW_LOD_ASSET_DISK_MAGIC 0x4f424c41u /* OBLA */
 #define BOBOL_DRAW_LOD_ASSET_DISK_VERSION 1u
 #define BOBOL_DRAW_MANIFEST_DISK_MAGIC 0x4f424d46u /* OBMF */
-#define BOBOL_DRAW_MANIFEST_DISK_VERSION 3u
+#define BOBOL_DRAW_MANIFEST_DISK_VERSION 6u
 
 struct BObolDrawCacheContext {
     bu_cache *cache;
@@ -162,6 +162,7 @@ struct BObolDrawManifestOccurrenceDiskHeader {
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
     fastf_t localMatrix[16];
+    fastf_t meshAssetMatrix[16];
     point_t boundsMin;
     point_t boundsMax;
     point_t meshAssetBoundsMin;
@@ -812,7 +813,6 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	if (it != bobol_draw_cache_registry().end()) {
 	    handle->context = it->second;
 	    handle->cache = it->second->cache;
-	    bobol_draw_cache_validation_refresh(handle->context, dbip);
 	    bu_vls_free(&cpath);
 	    bu_vls_free(&fname);
 	    return handle->cache ? 1 : 0;
@@ -830,8 +830,6 @@ bobol_draw_cache_open(BObolDrawCacheHandle *handle, db_i *dbip)
 	    bu_vls_free(&fname);
 	    return 0;
 	}
-	bobol_draw_cache_validation_refresh(context, dbip);
-
 	bobol_draw_cache_registry()[registryKey] = context;
 	handle->context = context;
 	handle->cache = context->cache;
@@ -1157,6 +1155,7 @@ bobol_draw_lod_asset_cache_store(db_i *dbip, const char *name,
     BObolDrawCacheHandle handle;
     size_t written = 0;
     if (bobol_draw_cache_open(&handle, dbip)) {
+	bobol_draw_cache_validation_refresh(handle.context, dbip);
 	db_i *validationDb = handle.context &&
 	    handle.context->validationDb ?
 	    handle.context->validationDb : dbip;
@@ -1191,6 +1190,7 @@ bobol_draw_lod_asset_cache_get(db_i *dbip, const char *name,
     size_t dataSize = 0;
     int valid = 0;
     if (bobol_draw_cache_open(&handle, dbip)) {
+	bobol_draw_cache_validation_refresh(handle.context, dbip);
 	dataSize = bu_cache_get(&data, key, handle.cache, NULL);
 	db_i *validationDb = handle.context &&
 	    handle.context->validationDb ?
@@ -2133,6 +2133,8 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 		occurrence.boundsMax) ||
 	    (occurrence.sourceMeshRequestValid &&
 	     (!meshAssetPathLength || !meshAssetNameLength ||
+	      !bobol_draw_manifest_matrix_valid(
+		  occurrence.meshAssetMatrix) ||
 	      !bobol_draw_proxy_bbox_valid(occurrence.meshAssetBoundsMin,
 		  occurrence.meshAssetBoundsMax))) ||
 	    !bobol_draw_manifest_add_size(&size,
@@ -2183,6 +2185,9 @@ bobol_draw_manifest_cache_store(db_i *dbip, const char *rootPath,
 	occurrenceHeader.sourcePointCount = occurrence.sourcePointCount;
 	memcpy(occurrenceHeader.localMatrix, occurrence.localMatrix,
 	    sizeof(occurrenceHeader.localMatrix));
+	memcpy(occurrenceHeader.meshAssetMatrix,
+	    occurrence.meshAssetMatrix,
+	    sizeof(occurrenceHeader.meshAssetMatrix));
 	VMOVE(occurrenceHeader.boundsMin, occurrence.boundsMin);
 	VMOVE(occurrenceHeader.boundsMax, occurrence.boundsMax);
 	if (occurrence.sourceMeshRequestValid) {
@@ -2336,6 +2341,8 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	    occurrenceHeader.sourceMeshRequestValid > 1 ||
 	    (occurrenceHeader.sourceMeshRequestValid &&
 	     (!meshAssetPathLength || !meshAssetNameLength ||
+	      !bobol_draw_manifest_matrix_valid(
+		  occurrenceHeader.meshAssetMatrix) ||
 	      !bobol_draw_proxy_bbox_valid(
 		  occurrenceHeader.meshAssetBoundsMin,
 		  occurrenceHeader.meshAssetBoundsMax))) ||
@@ -2394,6 +2401,9 @@ bobol_draw_manifest_cache_get(db_i *dbip, const char *rootPath,
 	occurrence.sourcePointCount = occurrenceHeader.sourcePointCount;
 	memcpy(occurrence.localMatrix, occurrenceHeader.localMatrix,
 	    sizeof(occurrence.localMatrix));
+	memcpy(occurrence.meshAssetMatrix,
+	    occurrenceHeader.meshAssetMatrix,
+	    sizeof(occurrence.meshAssetMatrix));
 	VMOVE(occurrence.boundsMin, occurrenceHeader.boundsMin);
 	VMOVE(occurrence.boundsMax, occurrenceHeader.boundsMax);
 	if (occurrence.sourceMeshRequestValid) {

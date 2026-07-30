@@ -11,16 +11,19 @@
 
 #include "BObol/BLodRealization.h"
 
+#include <Obol/cad/SoCADAssembly.h>
+
 #include <Inventor/SbVec3f.h>
 
 #include <algorithm>
 #include <array>
-#include <iomanip>
+#include <atomic>
+#include <charconv>
 #include <limits>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <string.h>
+#include <unordered_map>
 
 BObolLodDependency::BObolLodDependency(void)
 {
@@ -122,7 +125,17 @@ BObolLodCacheKey::isValid(void) const
 }
 
 BObolLodResidentDemand::BObolLodResidentDemand(void) :
-    level(-1)
+    level(-1),
+    channelMask(0)
+{
+}
+
+BObolLodResidentCompaction::BObolLodResidentCompaction(void) :
+    preparedCadGeometryRevision(0),
+    residentLevel(-1),
+    channelMask(0),
+    priorBytes(0),
+    residentBytes(0)
 {
 }
 
@@ -178,9 +191,12 @@ BObolLodMeshPayload::isValid(void) const
 	   TRUE : FALSE;
 }
 
-struct BObolLodProgressiveMeshPrivate {
-    mutable std::mutex mutex;
-    BObolLodMeshPayload mesh;
+struct BObolLodProgressiveMeshGeneration {
+    /* The shaded renderer object is the canonical retained population, not a
+     * second conversion layered over an intermediate mesh payload.  Workers
+     * build it directly from a cache prefix and the scene adopts this exact
+     * immutable allocation. */
+    std::shared_ptr<const Obol::PartGeometry> shadedGeometry;
     std::array<size_t, BOBOL_MESH_LOD_LEVEL_COUNT> pointCount = {};
     std::array<size_t, BOBOL_MESH_LOD_LEVEL_COUNT> faceCount = {};
     SbBox3f bounds;
@@ -191,18 +207,238 @@ struct BObolLodProgressiveMeshPrivate {
     int residentLevel = -1;
     uint64_t revision = 0;
     SbBool shadedCullBackfaces = FALSE;
+    /*
+     * Renderer-ready channel combinations are immutable generation products.
+     * The cache is weak because the scene is the owner once a result is
+     * published; dropping a scene must make the large arrays reclaimable.
+     */
+    mutable std::mutex preparedMutex;
+    mutable std::unordered_map<int,
+	std::weak_ptr<const Obol::PartGeometry>>
+	preparedCadGeometry;
 };
 
-static int
-progressive_level_clamp(const BObolLodProgressiveMeshPrivate *p, int level)
+struct BObolLodProgressiveMeshPrivate {
+    /*
+     * Only writers serialize here.  Readers atomically retain one immutable
+     * generation and never wait while a richer PoP prefix is converted.
+     */
+    std::mutex updateMutex;
+    std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation;
+};
+
+static std::shared_ptr<const BObolLodProgressiveMeshGeneration>
+progressive_generation_load(const BObolLodProgressiveMeshPrivate *p)
 {
-    if (!p || p->residentLevel < 0)
+    if (!p)
+	return std::shared_ptr<const BObolLodProgressiveMeshGeneration>();
+    return std::atomic_load_explicit(
+	&p->generation, std::memory_order_acquire);
+}
+
+static void
+progressive_generation_store(
+    BObolLodProgressiveMeshPrivate *p,
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> &generation)
+{
+    if (!p)
+	return;
+    std::atomic_store_explicit(
+	&p->generation, generation, std::memory_order_release);
+}
+
+static int
+progressive_level_clamp(
+    const BObolLodProgressiveMeshGeneration *generation, int level)
+{
+    if (!generation || generation->residentLevel < 0)
 	return -1;
-    if (level < p->minimumLevel)
-	level = p->minimumLevel;
-    if (level > p->residentLevel)
-	level = p->residentLevel;
+    if (level < generation->minimumLevel)
+	level = generation->minimumLevel;
+    if (level > generation->residentLevel)
+	level = generation->residentLevel;
     return level;
+}
+
+static bool
+bobol_prepare_authored_corner_normals(
+    Obol::TriMesh &mesh, const std::vector<SbVec3f> &cornerNormals);
+
+static std::shared_ptr<BObolLodProgressiveMeshGeneration>
+progressive_generation_from_data(
+    const struct BObolMeshLodData &data,
+    const struct BObolMeshLodHierarchyInfo &hierarchy,
+    int residentLevel, SbBool shadedCullBackfaces,
+    uint64_t revision)
+{
+    std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
+	new BObolLodProgressiveMeshGeneration);
+    std::shared_ptr<Obol::PartGeometry> geometry(
+	new Obol::PartGeometry);
+    Obol::TriMesh mesh;
+    mesh.positions.reserve(data.point_orig_count);
+    for (size_t i = 0; i < data.point_orig_count; ++i) {
+	mesh.positions.push_back(SbVec3f(
+	    static_cast<float>(data.points_orig[i][X]),
+	    static_cast<float>(data.points_orig[i][Y]),
+	    static_cast<float>(data.points_orig[i][Z])));
+    }
+
+    if (data.face_count >
+	    std::numeric_limits<size_t>::max() / 3)
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    const size_t indexCount = data.face_count * 3;
+    mesh.indices.reserve(indexCount);
+    for (size_t i = 0; i < indexCount; ++i) {
+	if (data.faces[i] < 0 ||
+	    static_cast<size_t>(data.faces[i]) >= mesh.positions.size())
+	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+	mesh.indices.push_back(static_cast<uint32_t>(data.faces[i]));
+    }
+    if (data.normals) {
+	std::vector<SbVec3f> cornerNormals;
+	cornerNormals.reserve(indexCount);
+	for (size_t i = 0; i < indexCount; ++i) {
+	    cornerNormals.push_back(SbVec3f(
+		static_cast<float>(data.normals[i][X]),
+		static_cast<float>(data.normals[i][Y]),
+		static_cast<float>(data.normals[i][Z])));
+	}
+	if (!bobol_prepare_authored_corner_normals(
+		mesh, cornerNormals))
+	    return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    }
+
+    if (mesh.positions.empty() || mesh.indices.size() < 3 ||
+	mesh.indices.size() % 3 != 0 ||
+	(!mesh.normals.empty() &&
+	 mesh.normals.size() != mesh.positions.size()))
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+
+    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	generation->pointCount[level] = hierarchy.point_count[level];
+	generation->faceCount[level] = hierarchy.face_count[level];
+    }
+    generation->minimumLevel = hierarchy.min_level;
+    generation->maximumLevel = hierarchy.max_level;
+    generation->residentLevel = residentLevel;
+    generation->bounds = SbBox3f(
+	SbVec3f(static_cast<float>(data.bmin[X]),
+		static_cast<float>(data.bmin[Y]),
+		static_cast<float>(data.bmin[Z])),
+	SbVec3f(static_cast<float>(data.bmax[X]),
+		static_cast<float>(data.bmax[Y]),
+		static_cast<float>(data.bmax[Z])));
+    generation->quantizationMinimum.setValue(
+	static_cast<float>(hierarchy.quantization_min[X]),
+	static_cast<float>(hierarchy.quantization_min[Y]),
+	static_cast<float>(hierarchy.quantization_min[Z]));
+    generation->quantizationMaximum.setValue(
+	static_cast<float>(hierarchy.quantization_max[X]),
+	static_cast<float>(hierarchy.quantization_max[Y]),
+	static_cast<float>(hierarchy.quantization_max[Z]));
+    generation->shadedCullBackfaces = shadedCullBackfaces;
+    generation->revision = revision ? revision : 1;
+    mesh.bounds = generation->bounds;
+    mesh.progressiveMinimumLevel =
+	static_cast<uint8_t>(std::max(0, generation->minimumLevel));
+    int drawableLevel = generation->residentLevel;
+    for (int level = generation->residentLevel + 1;
+	 level <= generation->maximumLevel &&
+	 level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	if (generation->faceCount[level] >
+		std::numeric_limits<size_t>::max() / 3 ||
+	    generation->faceCount[level] * 3 > mesh.indices.size() ||
+	    generation->pointCount[level] > data.point_orig_count)
+	    break;
+	drawableLevel = level;
+    }
+    mesh.progressiveResidentLevel =
+	static_cast<uint8_t>(std::max(0, drawableLevel));
+    mesh.progressiveQuantizationMinimum =
+	generation->quantizationMinimum;
+    mesh.progressiveQuantizationMaximum =
+	generation->quantizationMaximum;
+    size_t scannedIndices = 0;
+    uint32_t maximumIndex = 0;
+    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	const size_t levelIndexCount = std::min(
+	    generation->faceCount[level] * 3, mesh.indices.size());
+	mesh.progressiveIndexCount[level] = static_cast<uint32_t>(
+	    std::min(levelIndexCount,
+		static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+	for (; scannedIndices < levelIndexCount; ++scannedIndices)
+	    maximumIndex = std::max(
+		maximumIndex, mesh.indices[scannedIndices]);
+	const size_t positionCount = levelIndexCount ?
+	    static_cast<size_t>(maximumIndex) + 1 : 0;
+	mesh.progressivePositionCount[level] = static_cast<uint32_t>(
+	    std::min(positionCount,
+		static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+    }
+    geometry->shaded = std::move(mesh);
+    geometry->shadedCullBackfaces =
+	shadedCullBackfaces ? true : false;
+    geometry->subpixelProxyEligible = true;
+    generation->shadedGeometry = geometry;
+    return generation;
+}
+
+static std::shared_ptr<BObolLodProgressiveMeshGeneration>
+progressive_generation_prefix(
+    const BObolLodProgressiveMeshGeneration &source, int residentLevel)
+{
+    const int level = progressive_level_clamp(&source, residentLevel);
+    if (level < 0)
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    const size_t indexCount = source.faceCount[level] * 3;
+    const Obol::TriMesh *sourceMesh =
+	source.shadedGeometry && source.shadedGeometry->shaded ?
+	    &*source.shadedGeometry->shaded : NULL;
+    if (!sourceMesh || indexCount > sourceMesh->indices.size())
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+    const size_t positionCount =
+	sourceMesh->positionCountAtLevel(static_cast<uint8_t>(level));
+    if (positionCount > sourceMesh->positions.size() ||
+	(!sourceMesh->normals.empty() &&
+	 positionCount > sourceMesh->normals.size()))
+	return std::shared_ptr<BObolLodProgressiveMeshGeneration>();
+
+    std::shared_ptr<BObolLodProgressiveMeshGeneration> generation(
+	new BObolLodProgressiveMeshGeneration);
+    generation->pointCount = source.pointCount;
+    generation->faceCount = source.faceCount;
+    generation->bounds = source.bounds;
+    generation->quantizationMinimum = source.quantizationMinimum;
+    generation->quantizationMaximum = source.quantizationMaximum;
+    generation->minimumLevel = source.minimumLevel;
+    generation->maximumLevel = source.maximumLevel;
+    generation->residentLevel = level;
+    generation->revision = source.revision + 1;
+    if (!generation->revision)
+	generation->revision = 1;
+    generation->shadedCullBackfaces = source.shadedCullBackfaces;
+    std::shared_ptr<Obol::PartGeometry> geometry(
+	new Obol::PartGeometry);
+    Obol::TriMesh mesh = *sourceMesh;
+    mesh.positions.assign(
+	sourceMesh->positions.begin(),
+	sourceMesh->positions.begin() + positionCount);
+    if (!sourceMesh->normals.empty())
+	mesh.normals.assign(
+	    sourceMesh->normals.begin(),
+	    sourceMesh->normals.begin() + positionCount);
+    mesh.indices.assign(
+	sourceMesh->indices.begin(),
+	sourceMesh->indices.begin() + indexCount);
+    mesh.progressiveResidentLevel =
+	static_cast<uint8_t>(std::max(0, level));
+    geometry->shaded = std::move(mesh);
+    geometry->shadedCullBackfaces =
+	source.shadedCullBackfaces ? true : false;
+    geometry->subpixelProxyEligible = true;
+    generation->shadedGeometry = geometry;
+    return generation;
 }
 
 BObolLodProgressiveMesh::BObolLodProgressiveMesh(void) :
@@ -230,12 +466,13 @@ BObolLodProgressiveMesh::update(
 	residentLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
 	return FALSE;
 
-    const size_t indexCount = data.face_count * 3;
     if (data.point_orig_count >
 	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
 	data.face_count >
-	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 3 ||
-	(data.normals && data.normal_count != indexCount))
+	    static_cast<size_t>(std::numeric_limits<int32_t>::max()) / 3)
+	return FALSE;
+    const size_t indexCount = data.face_count * 3;
+    if (data.normals && data.normal_count != indexCount)
 	return FALSE;
     for (size_t i = 0; i < indexCount; ++i) {
 	if (data.faces[i] < 0 ||
@@ -243,82 +480,18 @@ BObolLodProgressiveMesh::update(
 	    return FALSE;
     }
 
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    const size_t oldPointCount = this->p->mesh.points.size();
-    const size_t oldIndexCount = this->p->mesh.coordIndex.size();
-    if (data.point_orig_count < oldPointCount || indexCount < oldIndexCount) {
-	/* This is an explicit stable-view trim. */
-	this->p->mesh.points.resize(data.point_orig_count);
-	this->p->mesh.points.shrink_to_fit();
-	this->p->mesh.coordIndex.resize(indexCount);
-	this->p->mesh.coordIndex.shrink_to_fit();
-	if (!this->p->mesh.normals.empty()) {
-	    this->p->mesh.normals.resize(indexCount);
-	    this->p->mesh.normals.shrink_to_fit();
-	}
-    } else {
-	this->p->mesh.points.reserve(data.point_orig_count);
-	for (size_t i = oldPointCount; i < data.point_orig_count; ++i) {
-	    this->p->mesh.points.push_back(SbVec3f(
-		static_cast<float>(data.points_orig[i][X]),
-		static_cast<float>(data.points_orig[i][Y]),
-		static_cast<float>(data.points_orig[i][Z])));
-	}
-	this->p->mesh.coordIndex.reserve(indexCount);
-	for (size_t i = oldIndexCount; i < indexCount; ++i) {
-	    this->p->mesh.coordIndex.push_back(
-		static_cast<int32_t>(data.faces[i]));
-	}
-	if (data.normals) {
-	    if (this->p->mesh.normals.empty() && oldIndexCount != 0) {
-		this->p->mesh.normals.reserve(indexCount);
-		for (size_t i = 0; i < oldIndexCount; ++i)
-		    this->p->mesh.normals.push_back(SbVec3f(
-			static_cast<float>(data.normals[i][X]),
-			static_cast<float>(data.normals[i][Y]),
-			static_cast<float>(data.normals[i][Z])));
-	    }
-	    this->p->mesh.normals.reserve(indexCount);
-	    for (size_t i = this->p->mesh.normals.size();
-		 i < indexCount; ++i)
-		this->p->mesh.normals.push_back(SbVec3f(
-		    static_cast<float>(data.normals[i][X]),
-		    static_cast<float>(data.normals[i][Y]),
-		    static_cast<float>(data.normals[i][Z])));
-	} else {
-	    this->p->mesh.normals.clear();
-	}
-    }
-
-    if (!this->p->mesh.isValid())
+    std::lock_guard<std::mutex> updateLock(this->p->updateMutex);
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> prior =
+	progressive_generation_load(this->p);
+    uint64_t revision = prior ? prior->revision + 1 : 1;
+    if (!revision)
+	revision = 1;
+    const std::shared_ptr<BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_from_data(data, hierarchy, residentLevel,
+	    shadedCullBackfaces, revision);
+    if (!generation)
 	return FALSE;
-
-    for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
-	this->p->pointCount[level] = hierarchy.point_count[level];
-	this->p->faceCount[level] = hierarchy.face_count[level];
-    }
-    this->p->minimumLevel = hierarchy.min_level;
-    this->p->maximumLevel = hierarchy.max_level;
-    this->p->residentLevel = residentLevel;
-    this->p->bounds = SbBox3f(
-	SbVec3f(static_cast<float>(data.bmin[X]),
-		static_cast<float>(data.bmin[Y]),
-		static_cast<float>(data.bmin[Z])),
-	SbVec3f(static_cast<float>(data.bmax[X]),
-		static_cast<float>(data.bmax[Y]),
-		static_cast<float>(data.bmax[Z])));
-    this->p->quantizationMinimum.setValue(
-	static_cast<float>(hierarchy.quantization_min[X]),
-	static_cast<float>(hierarchy.quantization_min[Y]),
-	static_cast<float>(hierarchy.quantization_min[Z]));
-    this->p->quantizationMaximum.setValue(
-	static_cast<float>(hierarchy.quantization_max[X]),
-	static_cast<float>(hierarchy.quantization_max[Y]),
-	static_cast<float>(hierarchy.quantization_max[Z]));
-    this->p->shadedCullBackfaces = shadedCullBackfaces;
-    this->p->revision++;
-    if (this->p->revision == 0)
-	this->p->revision++;
+    progressive_generation_store(this->p, generation);
     return TRUE;
 }
 
@@ -327,29 +500,19 @@ BObolLodProgressiveMesh::trim(int residentLevel)
 {
     if (!this->p)
 	return FALSE;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    const int level = progressive_level_clamp(this->p, residentLevel);
+    std::lock_guard<std::mutex> updateLock(this->p->updateMutex);
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> current =
+	progressive_generation_load(this->p);
+    const int level = progressive_level_clamp(current.get(), residentLevel);
     if (level < 0)
 	return FALSE;
-    const size_t points = this->p->pointCount[level];
-    const size_t indices = this->p->faceCount[level] * 3;
-    if (points > this->p->mesh.points.size() ||
-	indices > this->p->mesh.coordIndex.size())
-	return FALSE;
-    if (level == this->p->residentLevel)
+    if (level == current->residentLevel)
 	return TRUE;
-    this->p->mesh.points.resize(points);
-    this->p->mesh.points.shrink_to_fit();
-    this->p->mesh.coordIndex.resize(indices);
-    this->p->mesh.coordIndex.shrink_to_fit();
-    if (!this->p->mesh.normals.empty()) {
-	this->p->mesh.normals.resize(indices);
-	this->p->mesh.normals.shrink_to_fit();
-    }
-    this->p->residentLevel = level;
-    this->p->revision++;
-    if (this->p->revision == 0)
-	this->p->revision++;
+    const std::shared_ptr<BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_prefix(*current, level);
+    if (!generation)
+	return FALSE;
+    progressive_generation_store(this->p, generation);
     return TRUE;
 }
 
@@ -360,22 +523,46 @@ BObolLodProgressiveMesh::copyLevel(
     payload.clear();
     if (!this->p)
 	return FALSE;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    const int level = progressive_level_clamp(this->p, requestedLevel);
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const int level =
+	progressive_level_clamp(generation.get(), requestedLevel);
     if (level < 0)
 	return FALSE;
-    const size_t points = this->p->pointCount[level];
-    const size_t indices = this->p->faceCount[level] * 3;
-    if (points > this->p->mesh.points.size() ||
-	indices > this->p->mesh.coordIndex.size())
+    const Obol::TriMesh *mesh =
+	generation->shadedGeometry && generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    if (!mesh)
 	return FALSE;
-    payload.points.assign(this->p->mesh.points.begin(),
-	this->p->mesh.points.begin() + points);
-    payload.coordIndex.assign(this->p->mesh.coordIndex.begin(),
-	this->p->mesh.coordIndex.begin() + indices);
-    if (!this->p->mesh.normals.empty())
-	payload.normals.assign(this->p->mesh.normals.begin(),
-	    this->p->mesh.normals.begin() + indices);
+    const size_t points =
+	mesh->positionCountAtLevel(static_cast<uint8_t>(level));
+    const size_t indices =
+	mesh->indexCountAtLevel(static_cast<uint8_t>(level));
+    if (!points || points > mesh->positions.size() ||
+	indices < 3 || indices > mesh->indices.size())
+	return FALSE;
+    payload.points.assign(mesh->positions.begin(),
+	mesh->positions.begin() + points);
+    payload.coordIndex.reserve(indices);
+    if (!mesh->normals.empty())
+	payload.normals.reserve(indices);
+    for (size_t i = 0; i < indices; ++i) {
+	const uint32_t index = mesh->indices[i];
+	if (index >= points ||
+	    index > static_cast<uint32_t>(
+		std::numeric_limits<int32_t>::max())) {
+	    payload.clear();
+	    return FALSE;
+	}
+	payload.coordIndex.push_back(static_cast<int32_t>(index));
+	if (!mesh->normals.empty()) {
+	    if (index >= mesh->normals.size()) {
+		payload.clear();
+		return FALSE;
+	    }
+	    payload.normals.push_back(mesh->normals[index]);
+	}
+    }
     return payload.isValid();
 }
 
@@ -384,9 +571,17 @@ BObolLodProgressiveMesh::isValid(void) const
 {
     if (!this->p)
 	return FALSE;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->residentLevel >= 0 &&
-	this->p->mesh.isValid() ? TRUE : FALSE;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const Obol::TriMesh *mesh =
+	generation && generation->shadedGeometry &&
+	generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    return generation && generation->residentLevel >= 0 && mesh &&
+	!mesh->positions.empty() && mesh->indices.size() >= 3 &&
+	mesh->indices.size() % 3 == 0 &&
+	(mesh->normals.empty() ||
+	 mesh->normals.size() == mesh->positions.size()) ? TRUE : FALSE;
 }
 
 SbBool
@@ -394,15 +589,21 @@ BObolLodProgressiveMesh::canDrawLevel(int requestedLevel) const
 {
     if (!this->p)
 	return FALSE;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    if (requestedLevel < this->p->minimumLevel ||
-	requestedLevel > this->p->maximumLevel ||
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation ||
+	requestedLevel < generation->minimumLevel ||
+	requestedLevel > generation->maximumLevel ||
 	requestedLevel >= BOBOL_MESH_LOD_LEVEL_COUNT)
 	return FALSE;
-    return this->p->pointCount[requestedLevel] <=
-	    this->p->mesh.points.size() &&
-	this->p->faceCount[requestedLevel] * 3 <=
-	    this->p->mesh.coordIndex.size() ? TRUE : FALSE;
+    const Obol::TriMesh *mesh =
+	generation->shadedGeometry && generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    if (!mesh)
+	return FALSE;
+    return mesh->isProgressive() &&
+	requestedLevel <= static_cast<int>(
+	    mesh->progressiveResidentLevel) ? TRUE : FALSE;
 }
 
 int
@@ -410,8 +611,9 @@ BObolLodProgressiveMesh::minimumLevel(void) const
 {
     if (!this->p)
 	return -1;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->minimumLevel;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->minimumLevel : -1;
 }
 
 int
@@ -419,8 +621,9 @@ BObolLodProgressiveMesh::maximumLevel(void) const
 {
     if (!this->p)
 	return -1;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->maximumLevel;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->maximumLevel : -1;
 }
 
 int
@@ -428,8 +631,9 @@ BObolLodProgressiveMesh::residentLevel(void) const
 {
     if (!this->p)
 	return -1;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->residentLevel;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->residentLevel : -1;
 }
 
 uint64_t
@@ -437,8 +641,9 @@ BObolLodProgressiveMesh::revision(void) const
 {
     if (!this->p)
 	return 0;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->revision;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->revision : 0;
 }
 
 size_t
@@ -446,9 +651,11 @@ BObolLodProgressiveMesh::pointCount(int requestedLevel) const
 {
     if (!this->p)
 	return 0;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    const int level = progressive_level_clamp(this->p, requestedLevel);
-    return level >= 0 ? this->p->pointCount[level] : 0;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const int level =
+	progressive_level_clamp(generation.get(), requestedLevel);
+    return level >= 0 ? generation->pointCount[level] : 0;
 }
 
 size_t
@@ -456,9 +663,11 @@ BObolLodProgressiveMesh::faceCount(int requestedLevel) const
 {
     if (!this->p)
 	return 0;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    const int level = progressive_level_clamp(this->p, requestedLevel);
-    return level >= 0 ? this->p->faceCount[level] : 0;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const int level =
+	progressive_level_clamp(generation.get(), requestedLevel);
+    return level >= 0 ? generation->faceCount[level] : 0;
 }
 
 size_t
@@ -466,13 +675,16 @@ BObolLodProgressiveMesh::hierarchyPointCount(int requestedLevel) const
 {
     if (!this->p)
 	return 0;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    if (requestedLevel < this->p->minimumLevel)
-	requestedLevel = this->p->minimumLevel;
-    if (requestedLevel > this->p->maximumLevel)
-	requestedLevel = this->p->maximumLevel;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation)
+	return 0;
+    if (requestedLevel < generation->minimumLevel)
+	requestedLevel = generation->minimumLevel;
+    if (requestedLevel > generation->maximumLevel)
+	requestedLevel = generation->maximumLevel;
     return requestedLevel >= 0 ?
-	this->p->pointCount[requestedLevel] : 0;
+	generation->pointCount[requestedLevel] : 0;
 }
 
 size_t
@@ -480,13 +692,16 @@ BObolLodProgressiveMesh::hierarchyFaceCount(int requestedLevel) const
 {
     if (!this->p)
 	return 0;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    if (requestedLevel < this->p->minimumLevel)
-	requestedLevel = this->p->minimumLevel;
-    if (requestedLevel > this->p->maximumLevel)
-	requestedLevel = this->p->maximumLevel;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    if (!generation)
+	return 0;
+    if (requestedLevel < generation->minimumLevel)
+	requestedLevel = generation->minimumLevel;
+    if (requestedLevel > generation->maximumLevel)
+	requestedLevel = generation->maximumLevel;
     return requestedLevel >= 0 ?
-	this->p->faceCount[requestedLevel] : 0;
+	generation->faceCount[requestedLevel] : 0;
 }
 
 size_t
@@ -494,10 +709,17 @@ BObolLodProgressiveMesh::estimateBytes(void) const
 {
     if (!this->p)
 	return 0;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->mesh.points.capacity() * sizeof(SbVec3f) +
-	this->p->mesh.normals.capacity() * sizeof(SbVec3f) +
-	this->p->mesh.coordIndex.capacity() * sizeof(int32_t);
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const Obol::TriMesh *mesh =
+	generation && generation->shadedGeometry &&
+	generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    if (!mesh)
+	return 0;
+    return mesh->positions.capacity() * sizeof(SbVec3f) +
+	mesh->normals.capacity() * sizeof(SbVec3f) +
+	mesh->indices.capacity() * sizeof(uint32_t);
 }
 
 SbBox3f
@@ -505,8 +727,9 @@ BObolLodProgressiveMesh::bounds(void) const
 {
     if (!this->p)
 	return SbBox3f();
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->bounds;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->bounds : SbBox3f();
 }
 
 SbVec3f
@@ -514,8 +737,10 @@ BObolLodProgressiveMesh::quantizationMinimum(void) const
 {
     if (!this->p)
 	return SbVec3f(0.0f, 0.0f, 0.0f);
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->quantizationMinimum;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->quantizationMinimum :
+	SbVec3f(0.0f, 0.0f, 0.0f);
 }
 
 SbVec3f
@@ -523,8 +748,10 @@ BObolLodProgressiveMesh::quantizationMaximum(void) const
 {
     if (!this->p)
 	return SbVec3f(0.0f, 0.0f, 0.0f);
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->quantizationMaximum;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->quantizationMaximum :
+	SbVec3f(0.0f, 0.0f, 0.0f);
 }
 
 SbBool
@@ -532,8 +759,275 @@ BObolLodProgressiveMesh::cullBackfaces(void) const
 {
     if (!this->p)
 	return FALSE;
-    std::lock_guard<std::mutex> lock(this->p->mutex);
-    return this->p->shadedCullBackfaces;
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    return generation ? generation->shadedCullBackfaces : FALSE;
+}
+
+struct BObolPreparedCornerKey {
+    uint32_t position = 0;
+    uint32_t normalX = 0;
+    uint32_t normalY = 0;
+    uint32_t normalZ = 0;
+
+    bool operator==(const BObolPreparedCornerKey &other) const
+    {
+	return position == other.position &&
+	    normalX == other.normalX &&
+	    normalY == other.normalY &&
+	    normalZ == other.normalZ;
+    }
+};
+
+struct BObolPreparedCornerHash {
+    size_t operator()(const BObolPreparedCornerKey &key) const
+    {
+	size_t hash = static_cast<size_t>(key.position);
+	const auto combine = [&hash](uint32_t word) {
+	    hash ^= static_cast<size_t>(word) +
+		static_cast<size_t>(0x9e3779b9u) +
+		(hash << 6) + (hash >> 2);
+	};
+	combine(key.normalX);
+	combine(key.normalY);
+	combine(key.normalZ);
+	return hash;
+    }
+};
+
+static uint32_t
+bobol_prepared_float_bits(float value)
+{
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+/*
+ * BRL-CAD PoP payloads retain authored normals per triangle corner, while
+ * Obol binds one normal to each indexed vertex.  Canonicalize that mismatch
+ * on the LoD worker which owns this immutable generation.  Publishing the
+ * resulting PartGeometry by shared pointer prevents the GUI thread from
+ * copying and splitting a large mesh during scene presentation.
+ */
+static bool
+bobol_prepare_authored_corner_normals(
+    Obol::TriMesh &mesh, const std::vector<SbVec3f> &cornerNormals)
+{
+    if (cornerNormals.empty())
+	return true;
+    if (cornerNormals.size() != mesh.indices.size())
+	return false;
+
+    std::unordered_map<BObolPreparedCornerKey, uint32_t,
+	BObolPreparedCornerHash> vertexByCorner;
+    vertexByCorner.reserve(mesh.indices.size());
+    std::vector<SbVec3f> positions;
+    std::vector<SbVec3f> normals;
+    std::vector<uint32_t> indices;
+    positions.reserve(mesh.indices.size());
+    normals.reserve(mesh.indices.size());
+    indices.reserve(mesh.indices.size());
+    for (size_t triangle = 0;
+	 triangle + 2 < mesh.indices.size(); triangle += 3) {
+	const uint32_t ia = mesh.indices[triangle];
+	const uint32_t ib = mesh.indices[triangle + 1];
+	const uint32_t ic = mesh.indices[triangle + 2];
+	if (ia >= mesh.positions.size() ||
+	    ib >= mesh.positions.size() ||
+	    ic >= mesh.positions.size())
+	    return false;
+	SbVec3f faceNormal =
+	    (mesh.positions[ib] - mesh.positions[ia]).cross(
+		mesh.positions[ic] - mesh.positions[ia]);
+	const bool validFaceNormal = faceNormal.sqrLength() > 0.0f;
+	if (validFaceNormal)
+	    faceNormal.normalize();
+	else
+	    faceNormal.setValue(0.0f, 0.0f, 1.0f);
+
+	std::array<SbVec3f, 3> triangleNormals;
+	float normalDot = 0.0f;
+	for (size_t corner = 0; corner < 3; ++corner) {
+	    triangleNormals[corner] = cornerNormals[triangle + corner];
+	    if (triangleNormals[corner].sqrLength() > 0.0f) {
+		triangleNormals[corner].normalize();
+		if (validFaceNormal)
+		    normalDot += triangleNormals[corner].dot(faceNormal);
+	    } else {
+		triangleNormals[corner] = faceNormal;
+	    }
+	}
+	if (validFaceNormal && normalDot < 0.0f) {
+	    for (SbVec3f &normal : triangleNormals)
+		normal.negate();
+	}
+
+	for (size_t corner = 0; corner < 3; ++corner) {
+	    const size_t sourceCorner = triangle + corner;
+	    const uint32_t sourceIndex = mesh.indices[sourceCorner];
+	    const SbVec3f &normal = triangleNormals[corner];
+	    const BObolPreparedCornerKey key = {
+		sourceIndex,
+		bobol_prepared_float_bits(normal[0]),
+		bobol_prepared_float_bits(normal[1]),
+		bobol_prepared_float_bits(normal[2])
+	    };
+	    auto found = vertexByCorner.find(key);
+	    if (found == vertexByCorner.end()) {
+		if (positions.size() >
+		    static_cast<size_t>(std::numeric_limits<uint32_t>::max()))
+		    return false;
+		const uint32_t targetIndex =
+		    static_cast<uint32_t>(positions.size());
+		positions.push_back(mesh.positions[sourceIndex]);
+		normals.push_back(normal);
+		found = vertexByCorner.emplace(key, targetIndex).first;
+	    }
+	    indices.push_back(found->second);
+	}
+    }
+    mesh.positions = std::move(positions);
+    mesh.normals = std::move(normals);
+    mesh.indices = std::move(indices);
+    return true;
+}
+
+std::shared_ptr<const Obol::PartGeometry>
+BObolLodProgressiveMesh::prepareCadGeometry(
+    int drawMode, uint64_t *preparedRevision) const
+{
+    if (preparedRevision)
+	*preparedRevision = 0;
+    if (!this->p)
+	return std::shared_ptr<const Obol::PartGeometry>();
+
+    const bool wire =
+	drawMode == BOBOL_LOD_DRAW_WIRE ||
+	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    const bool shaded =
+	drawMode == BOBOL_LOD_DRAW_SHADED ||
+	drawMode == BOBOL_LOD_DRAW_SHADED_BOTS ||
+	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE;
+    if (!wire && !shaded)
+	return std::shared_ptr<const Obol::PartGeometry>();
+    const int channelKey = (wire ? 1 : 0) | (shaded ? 2 : 0);
+
+    /*
+     * Retain one immutable source generation while constructing the renderer
+     * object.  A concurrent refinement can publish its replacement without
+     * invalidating these arrays or blocking metadata reads on the GUI thread.
+     */
+    const std::shared_ptr<const BObolLodProgressiveMeshGeneration> generation =
+	progressive_generation_load(this->p);
+    const Obol::TriMesh *sourceMesh =
+	generation && generation->shadedGeometry &&
+	generation->shadedGeometry->shaded ?
+	    &*generation->shadedGeometry->shaded : NULL;
+    if (!generation || generation->residentLevel < 0 || !sourceMesh ||
+	sourceMesh->positions.empty() || sourceMesh->indices.size() < 3 ||
+	sourceMesh->indices.size() % 3 != 0)
+	return std::shared_ptr<const Obol::PartGeometry>();
+
+    /*
+     * Shaded drawing is the common path.  The worker constructed this exact
+     * immutable renderer record while loading the PoP prefix, so publication
+     * is one shared-pointer handoff with no array conversion or copy.
+     */
+    if (shaded && !wire) {
+	if (preparedRevision)
+	    *preparedRevision = generation->revision;
+	return generation->shadedGeometry;
+    }
+
+    {
+	std::lock_guard<std::mutex> lock(generation->preparedMutex);
+	const auto cached =
+	    generation->preparedCadGeometry.find(channelKey);
+	if (cached != generation->preparedCadGeometry.end()) {
+	    std::shared_ptr<const Obol::PartGeometry> geometry =
+		cached->second.lock();
+	    if (geometry) {
+		if (preparedRevision)
+		    *preparedRevision = generation->revision;
+		return geometry;
+	    }
+	}
+    }
+
+    const int drawableLevel = sourceMesh->isProgressive() ?
+	static_cast<int>(sourceMesh->progressiveResidentLevel) :
+	generation->residentLevel;
+
+    std::shared_ptr<Obol::PartGeometry> geometry(
+	new Obol::PartGeometry);
+    const SbBox3f bounds(
+	generation->quantizationMinimum,
+	generation->quantizationMaximum);
+    /* Hidden-line requests need both channels.  Build the expanded wire
+     * channel alongside a copy of the canonical shaded channel.  Plain
+     * shaded drawing never takes this composition path. */
+    if (wire) {
+	Obol::WireRep wireRep;
+	wireRep.bounds = bounds;
+	if (sourceMesh->indices.size() >
+		std::numeric_limits<size_t>::max() / 2)
+	    return std::shared_ptr<const Obol::PartGeometry>();
+	wireRep.segmentPoints.reserve(sourceMesh->indices.size() * 2);
+	wireRep.segmentIds.reserve(sourceMesh->indices.size());
+	uint32_t edgeId = 0;
+	for (size_t i = 0; i + 2 < sourceMesh->indices.size(); i += 3) {
+	    const uint32_t triangle[3] = {
+		sourceMesh->indices[i],
+		sourceMesh->indices[i + 1],
+		sourceMesh->indices[i + 2]
+	    };
+	    for (size_t edge = 0; edge < 3; ++edge) {
+		const uint32_t a = triangle[edge];
+		const uint32_t b = triangle[(edge + 1) % 3];
+		if (a >= sourceMesh->positions.size() ||
+		    b >= sourceMesh->positions.size() ||
+		    edgeId == std::numeric_limits<uint32_t>::max())
+		    return std::shared_ptr<const Obol::PartGeometry>();
+		wireRep.segmentPoints.push_back(sourceMesh->positions[a]);
+		wireRep.segmentPoints.push_back(sourceMesh->positions[b]);
+		wireRep.segmentIds.push_back(edgeId++);
+	    }
+	}
+	wireRep.progressiveMinimumLevel =
+	    static_cast<uint8_t>(std::max(0, generation->minimumLevel));
+	wireRep.progressiveResidentLevel =
+	    static_cast<uint8_t>(std::max(0, drawableLevel));
+	wireRep.progressiveQuantizationMinimum =
+	    generation->quantizationMinimum;
+	wireRep.progressiveQuantizationMaximum =
+	    generation->quantizationMaximum;
+	for (int level = 0; level < BOBOL_MESH_LOD_LEVEL_COUNT; ++level) {
+	    const size_t segments = generation->faceCount[level] * 3;
+	    wireRep.progressiveSegmentCount[level] =
+		static_cast<uint32_t>(std::min(
+		    segments,
+		    static_cast<size_t>(
+			std::numeric_limits<uint32_t>::max())));
+	}
+	geometry->wire = std::move(wireRep);
+    }
+
+    if (shaded) {
+	geometry->shaded = *sourceMesh;
+	geometry->shadedCullBackfaces =
+	    generation->shadedCullBackfaces ? true : false;
+    }
+    geometry->subpixelProxyEligible = true;
+
+    std::shared_ptr<const Obol::PartGeometry> prepared = geometry;
+    {
+	std::lock_guard<std::mutex> lock(generation->preparedMutex);
+	generation->preparedCadGeometry[channelKey] = prepared;
+    }
+    if (preparedRevision)
+	*preparedRevision = generation->revision;
+    return prepared;
 }
 
 BObolLodRequest::BObolLodRequest(void)
@@ -551,6 +1045,7 @@ BObolLodRequest::clear(void)
     objectPath = "";
     objectName = "";
     occurrenceKey = "";
+    sourceRoutingId = 0;
     viewRevision = 0;
     policyRevision = 0;
     drawMode = BOBOL_LOD_DRAW_UNKNOWN;
@@ -590,7 +1085,10 @@ BObolLodResult::clear(void)
     geometry.clear();
     mesh.clear();
     progressiveMesh.reset();
+    preparedCadGeometry.reset();
+    preparedCadGeometryRevision = 0;
     residentLevel = -1;
+    residentAdmissionRevision = 0;
     resultKind = BOBOL_LOD_RESULT_NONE;
     qualityTier = BOBOL_LOD_QUALITY_METADATA;
     providerStatus = BOBOL_LOD_PROVIDER_UNKNOWN;
@@ -606,6 +1104,7 @@ BObolLodResult::clear(void)
     hasSnappedPoints = FALSE;
     hasNormals = FALSE;
     shadedCullBackfaces = FALSE;
+    memoryLimited = FALSE;
     diagnostic = "";
 }
 
@@ -635,42 +1134,89 @@ BObolLodResult::addAttribute(const SbString &name, const SbString &value)
     attributes.push_back(attribute);
 }
 
+/*
+ * Geometry asset keys are constructed in the per-occurrence submission hot
+ * path.  std::ostringstream performs locale setup and repeatedly allocates
+ * while formatting even this integer/string-only key; that cost was visible
+ * above projection in 50k-leaf GUI profiles.  Keep the byte format identical
+ * while appending directly into one reserved string.
+ */
+template <typename Integer>
 static void
-append_string_field(std::ostringstream &out, const char *name,
+append_integer_string(std::string &out, Integer value)
+{
+    char buffer[3 * sizeof(Integer) + 4];
+    const std::to_chars_result converted =
+	std::to_chars(buffer, buffer + sizeof(buffer), value);
+    if (converted.ec == std::errc())
+	out.append(buffer, converted.ptr);
+}
+
+static void
+append_string_field(std::string &out, const char *name,
 		    const SbString &value)
 {
     const char *str = value.getString();
-    size_t len = str ? strlen(str) : 0;
-    out << name << '=' << len << ':' << (str ? str : "") << ';';
+    const size_t len = str ? strlen(str) : 0;
+    out.append(name);
+    out.push_back('=');
+    append_integer_string(out, len);
+    out.push_back(':');
+    if (len)
+	out.append(str, len);
+    out.push_back(';');
 }
 
 static void
-append_uint_field(std::ostringstream &out, const char *name, uint64_t value)
+append_uint_field(std::string &out, const char *name, uint64_t value)
 {
-    out << name << '=' << value << ';';
+    out.append(name);
+    out.push_back('=');
+    append_integer_string(out, value);
+    out.push_back(';');
 }
 
 static void
-append_int_field(std::ostringstream &out, const char *name, int value)
+append_int_field(std::string &out, const char *name, int value)
 {
-    out << name << '=' << value << ';';
+    out.append(name);
+    out.push_back('=');
+    append_integer_string(out, value);
+    out.push_back(';');
 }
 
 static void
-append_bounds_field(std::ostringstream &out, const char *name,
+append_float_string(std::string &out, float value)
+{
+    char buffer[64];
+    const std::to_chars_result converted = std::to_chars(
+	buffer, buffer + sizeof(buffer), value, std::chars_format::general, 9);
+    if (converted.ec == std::errc())
+	out.append(buffer, converted.ptr);
+}
+
+static void
+append_bounds_field(std::string &out, const char *name,
 		    const SbBox3f &bounds)
 {
-    out << name << '=';
+    out.append(name);
+    out.push_back('=');
     if (bounds.isEmpty()) {
-	out << "empty;";
+	out.append("empty;");
 	return;
     }
 
     const SbVec3f &bmin = bounds.getMin();
     const SbVec3f &bmax = bounds.getMax();
-    out << std::setprecision(9)
-	<< bmin[0] << ',' << bmin[1] << ',' << bmin[2] << ','
-	<< bmax[0] << ',' << bmax[1] << ',' << bmax[2] << ';';
+    const float components[6] = {
+	bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]
+    };
+    for (size_t i = 0; i < 6; ++i) {
+	if (i)
+	    out.push_back(',');
+	append_float_string(out, components[i]);
+    }
+    out.push_back(';');
 }
 
 static bool
@@ -687,9 +1233,16 @@ BObolLodCacheKey
 bobol_lod_cache_key(const BObolLodRequest &request)
 {
     BObolLodCacheKey key;
-    std::ostringstream out;
+    std::string out;
+    out.reserve(512u +
+	request.databaseId.getLength() +
+	request.objectPath.getLength() +
+	request.objectName.getLength() +
+	request.occurrenceKey.getLength() +
+	request.providerId.getLength() +
+	request.providerVersion.getLength());
 
-    out << "bobol-lod-v2;";
+    out.append("bobol-lod-v3;");
     append_string_field(out, "database_id", request.databaseId);
     append_uint_field(out, "database_revision", request.databaseRevision);
     append_uint_field(out, "source_revision", request.sourceRevision);
@@ -726,7 +1279,7 @@ bobol_lod_cache_key(const BObolLodRequest &request)
 	append_string_field(out, "provider_param_value", params[i].value);
     }
 
-    key.value = out.str().c_str();
+    key.value = out.c_str();
     return key;
 }
 
@@ -734,9 +1287,15 @@ BObolLodCacheKey
 bobol_lod_asset_cache_key(const BObolLodRequest &request)
 {
     BObolLodCacheKey key;
-    std::ostringstream out;
+    std::string out;
+    out.reserve(256u +
+	request.databaseId.getLength() +
+	request.objectName.getLength() +
+	request.objectPath.getLength() +
+	request.providerId.getLength() +
+	request.providerVersion.getLength());
 
-    out << "bobol-progressive-asset-v1;";
+    out.append("bobol-progressive-asset-v1;");
     append_string_field(out, "database_id", request.databaseId);
     append_string_field(out, "object_name", request.objectName);
     if (request.sourceContentHash != 0)
@@ -764,7 +1323,7 @@ bobol_lod_asset_cache_key(const BObolLodRequest &request)
 	append_string_field(out, "provider_param_value", param.value);
     }
 
-    key.value = out.str().c_str();
+    key.value = out.c_str();
     return key;
 }
 

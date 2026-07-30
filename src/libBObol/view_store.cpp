@@ -934,8 +934,10 @@ struct BObolFeatureStore::Impl {
     {
 	if (!rec)
 	    return;
+	if (rec->node == node)
+	    return;
 	store_set_node(controller, rec->node, node);
-	if (controller && node)
+	if (controller)
 	    controller->requestRender("view-feature-store");
     }
 
@@ -2789,8 +2791,10 @@ struct BObolPolygonStore::Impl {
     {
 	if (!rec)
 	    return;
+	if (rec->node == node)
+	    return;
 	store_set_node(controller, rec->node, node);
-	if (controller && node)
+	if (controller)
 	    controller->requestRender("view-polygon-store");
     }
 

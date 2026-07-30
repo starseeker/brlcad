@@ -504,6 +504,84 @@ main(int argc, char **argv)
     if (source_has_selected_shapes(box) || source_has_selected_shapes(ball))
 	FAIL("Obol selection fields should clear with GED selection");
 
+    /*
+     * A cold progressive source can be present in the scene before its
+     * compact occurrence registry is published.  Selection made during that
+     * interval must be retained as a semantic path frontier and applied when
+     * the registry arrives.
+     */
+    SoNode *lateRootNode = controller->getRenderSceneRoot();
+    if (!lateRootNode ||
+	!lateRootNode->isOfType(SoGroup::getClassTypeId()))
+	FAIL("late-publication test requires a render-scene group");
+    SoGroup *lateRoot = static_cast<SoGroup *>(lateRootNode);
+    SoBRLDatabaseSource *lateSource = new SoBRLDatabaseSource;
+    lateSource->setDatabase(gedp->dbip);
+    lateSource->path = "box.s";
+    lateRoot->addChild(lateSource);
+    if (!ged_selection_select_path(gedp, nullptr, "box.s", 1) ||
+	!qg_obol_sync_selection_state(gedp, &view, nullptr))
+	FAIL("pre-publication selection should be retained by the source");
+    std::shared_ptr<Obol::PartGeometry> lateGeometry =
+	std::make_shared<Obol::PartGeometry>();
+    lateGeometry->shaded.emplace();
+    lateGeometry->shaded->positions = {
+	SbVec3f(-1.0f, -1.0f, 0.0f),
+	SbVec3f(1.0f, -1.0f, 0.0f),
+	SbVec3f(0.0f, 1.0f, 0.0f)
+    };
+    lateGeometry->shaded->indices = {0, 1, 2};
+    lateGeometry->shaded->bounds = SbBox3f(
+	SbVec3f(-1.0f, -1.0f, 0.0f),
+	SbVec3f(1.0f, 1.0f, 0.0f));
+    BObolCompactOccurrence lateOccurrence;
+    lateOccurrence.geometry = lateGeometry;
+    lateOccurrence.summary.valid = TRUE;
+    lateOccurrence.summary.path = "box.s";
+    lateOccurrence.summary.sourceName = "box.s";
+    lateOccurrence.summary.sourceType = "rpp";
+    lateOccurrence.summary.geometryKind = "mesh";
+    lateOccurrence.summary.shapeKind =
+	BObolRealizedShapeSummary::SHAPE_MESH;
+    lateOccurrence.summary.visible = TRUE;
+    lateOccurrence.summary.selectable = TRUE;
+    if (lateSource->setCompactOccurrence(lateOccurrence) != 1 ||
+	compact_selected_count(lateSource) != 1)
+	FAIL("late compact publication should inherit retained selection");
+    if (!ged_selection_clear(gedp, nullptr))
+	FAIL("GED should clear the late-publication selection");
+    ged_selection_recompute(gedp, nullptr);
+    if (!qg_obol_sync_selection_state(gedp, &view, nullptr) ||
+	compact_selected_count(lateSource) != 0)
+	FAIL("late-publication selection should clear normally");
+
+    /*
+     * Streamed occurrence batches are not lexically ordered.  Subtree
+     * selection must use the live ordered path index, not assume append order
+     * is suitable for lower_bound.
+     */
+    const char *streamedPaths[] = {
+	"root/z/leaf.s", "root/a/leaf.s", "root/m/leaf.s"
+    };
+    std::vector<BObolCompactOccurrence> streamedOccurrences;
+    for (const char *streamedPath : streamedPaths) {
+	BObolCompactOccurrence streamedOccurrence = lateOccurrence;
+	streamedOccurrence.summary.path = streamedPath;
+	streamedOccurrence.summary.sourceName = "leaf.s";
+	streamedOccurrences.push_back(streamedOccurrence);
+    }
+    if (lateSource->mergeCompactOccurrences(streamedOccurrences) != 3)
+	FAIL("out-of-order compact occurrences should append");
+    std::vector<SbString> selectedSubtree = {SbString("root")};
+    if (!lateSource->syncCompactInstanceSelectedPaths(selectedSubtree) ||
+	compact_selected_count(lateSource) != 3)
+	FAIL("streamed subtree selection should visit every descendant");
+    selectedSubtree.clear();
+    if (!lateSource->syncCompactInstanceSelectedPaths(selectedSubtree) ||
+	compact_selected_count(lateSource) != 0)
+	FAIL("streamed subtree selection should clear every descendant");
+    lateRoot->removeChild(lateSource);
+
     controller->clearDatabaseSources();
     struct ged_draw_transaction draw_pair =
 	ged_draw_transaction_make(GED_DRAW_TXN_DRAW, "pair.c");

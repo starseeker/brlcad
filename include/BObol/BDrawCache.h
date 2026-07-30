@@ -107,6 +107,7 @@ struct BObolDrawManifestOccurrence {
     char *meshAssetName;
     point_t meshAssetBoundsMin;
     point_t meshAssetBoundsMax;
+    mat_t meshAssetMatrix;
     uint64_t sourceFaceCount;
     uint64_t sourcePointCount;
     mat_t localMatrix;

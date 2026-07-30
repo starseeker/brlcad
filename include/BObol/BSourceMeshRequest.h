@@ -17,7 +17,33 @@
 #include <Inventor/SbString.h>
 #include <Inventor/SbVec3f.h>
 
+#include <memory>
+#include <stddef.h>
 #include <stdint.h>
+
+struct rt_bot_internal;
+
+/* A short-lived, immutable source import retained by the cold occurrence
+ * stream.  Requests carry only a weak reference: the standing scene index
+ * must never pin full source arrays after PoP data is resident.  The opaque
+ * owner releases the rt_db_internal when the bounded stream lease expires. */
+struct BOBOL_EXPORT BObolStagedSourceMesh {
+    std::shared_ptr<void> owner;
+    const struct rt_bot_internal *bot;
+    SbString assetName;
+    uint32_t sourceRevision;
+    size_t byteCount;
+
+    BObolStagedSourceMesh(void) :
+	owner(), bot(NULL), assetName(""), sourceRevision(0), byteCount(0)
+    {
+    }
+
+    bool isValid(void) const
+    {
+	return owner && bot && assetName.getLength() > 0;
+    }
+};
 
 struct BOBOL_EXPORT BObolSourceMeshRequest {
     SbString path;
@@ -36,6 +62,13 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
     SbString meshAssetPath;
     SbString meshAssetName;
     SbBox3f meshAssetBounds;
+    /* Optional cold-path handoff.  This is deliberately transient and is
+     * never part of persistent draw/cache identity. */
+    std::weak_ptr<const BObolStagedSourceMesh> stagedSource;
+    /* Maps canonical mesh-asset coordinates into this occurrence's
+     * object-local coordinates.  This is independent of any temporary
+     * display-proxy transform. */
+    SbMatrix meshAssetTransform;
     SbString ownerSourceInstanceKey;
     int databaseIntent;
     int overlayIntent;
@@ -104,6 +137,8 @@ struct BOBOL_EXPORT BObolSourceMeshRequest {
 	meshAssetPath = "";
 	meshAssetName = "";
 	meshAssetBounds.makeEmpty();
+	stagedSource.reset();
+	meshAssetTransform.makeIdentity();
 	ownerSourceInstanceKey = "";
 	databaseIntent = 0;
 	overlayIntent = 0;

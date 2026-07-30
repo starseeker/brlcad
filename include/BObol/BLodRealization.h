@@ -19,6 +19,10 @@
 #include <stdint.h>
 #include <vector>
 
+namespace Obol {
+struct PartGeometry;
+}
+
 enum BObolLodDrawMode {
     BOBOL_LOD_DRAW_UNKNOWN = 0,
     BOBOL_LOD_DRAW_WIRE = 1,
@@ -124,6 +128,11 @@ struct BOBOL_EXPORT BObolLodCacheKey {
 struct BOBOL_EXPORT BObolLodResidentDemand {
     SbString assetKey;
     int level;
+    /* Renderer channels which retain this asset in the consumer.  Bit 0 is
+     * wire geometry and bit 1 is shaded geometry.  Stable compaction uses the
+     * aggregate mask to prepare one replacement immutable renderer object on
+     * a worker rather than rebuilding it on the presentation thread. */
+    unsigned int channelMask;
 
     BObolLodResidentDemand(void);
 };
@@ -193,6 +202,13 @@ public:
     SbVec3f quantizationMinimum(void) const;
     SbVec3f quantizationMaximum(void) const;
     SbBool cullBackfaces(void) const;
+    /* Build one immutable renderer-ready snapshot on the calling worker.
+     * The returned geometry is revision tagged and may be adopted directly by
+     * SoCADAssembly without copying its large arrays on the GUI thread.
+     * Authored corner normals are split into Obol's indexed vertex/normal
+     * representation by that worker before publication. */
+    std::shared_ptr<const Obol::PartGeometry> prepareCadGeometry(
+	int drawMode, uint64_t *preparedRevision = NULL) const;
 
 private:
     BObolLodProgressiveMesh(const BObolLodProgressiveMesh &);
@@ -203,6 +219,19 @@ private:
 
 typedef std::shared_ptr<BObolLodProgressiveMesh>
     BObolLodProgressiveMeshPtr;
+
+struct BOBOL_EXPORT BObolLodResidentCompaction {
+    SbString assetKey;
+    BObolLodProgressiveMeshPtr progressiveMesh;
+    std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
+    uint64_t preparedCadGeometryRevision;
+    int residentLevel;
+    unsigned int channelMask;
+    size_t priorBytes;
+    size_t residentBytes;
+
+    BObolLodResidentCompaction(void);
+};
 
 struct BOBOL_EXPORT BObolLodProxy {
     int kind;
@@ -230,6 +259,14 @@ struct BOBOL_EXPORT BObolLodRequest {
     /* Stable compact-occurrence identity.  Empty for legacy/source-wide
      * requests; populated whenever a result targets one CAD occurrence. */
     SbString occurrenceKey;
+    /*
+     * Owner-thread routing token for a compact database source.  It is not
+     * geometry/cache identity and deliberately does not participate in cache
+     * keys.  Results use it to reach their retained source directly instead
+     * of traversing the scene graph to rediscover an owner already known at
+     * submission time.
+     */
+    uint64_t sourceRoutingId;
     uint64_t viewRevision;
     uint64_t policyRevision;
     int drawMode;
@@ -260,7 +297,14 @@ struct BOBOL_EXPORT BObolLodResult {
     BObolLodGeometryHandle geometry;
     BObolLodMeshPayload mesh;
     BObolLodProgressiveMeshPtr progressiveMesh;
+    std::shared_ptr<const Obol::PartGeometry> preparedCadGeometry;
+    uint64_t preparedCadGeometryRevision;
     int residentLevel;
+    /* The service could publish a useful retained mesh, but deliberately
+     * withheld a richer suffix to honor its stable resident-byte target.
+     * residentAdmissionRevision identifies the capacity epoch which made
+     * that decision so an unchanged view cannot immediately retry it. */
+    uint64_t residentAdmissionRevision;
     int resultKind;
     int qualityTier;
     int providerStatus;
@@ -276,6 +320,7 @@ struct BOBOL_EXPORT BObolLodResult {
     SbBool hasSnappedPoints;
     SbBool hasNormals;
     SbBool shadedCullBackfaces;
+    SbBool memoryLimited;
     SbString diagnostic;
 
     BObolLodResult(void);

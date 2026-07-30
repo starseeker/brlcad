@@ -369,10 +369,24 @@ ged_db_index_add_child(struct ged_db_index *index,
 
     ged_db_index_id child_id = is_instance ?
 			       ged_db_index_string_hash(instance_name) : object_id;
-    struct directory *child_dp =
-	db_lookup(index->gedp->dbip, child_name.c_str(), LOOKUP_QUIET);
-    if (child_dp == RT_DIR_NULL)
-	child_dp = nullptr;
+    /*
+     * Rebuild's first pass has already indexed every visible directory by
+     * its exact name.  Resolving a child through db_lookup() here needlessly
+     * walks librt's directory hash for every combination leaf (and accounted
+     * for a measurable part of large-scene GUI startup).  Use the exact-name
+     * index to avoid both that repeated lookup and any ambiguity from an ID
+     * hash collision.  A missing or hidden reference remains a valid index
+     * record with no live directory, matching the service's visibility
+     * contract.
+     */
+    struct directory *child_dp = nullptr;
+    auto name_it = index->names.find(child_name);
+    if (name_it != index->names.end()) {
+	auto record_it = index->records.find(name_it->second);
+	if (record_it != index->records.end() &&
+	    record_it->second.name == child_name)
+	    child_dp = record_it->second.dp;
+    }
 
     if (is_instance || index->records.find(child_id) == index->records.end())
 	ged_db_index_record_put(index, child_id, object_id, instance_name,
@@ -631,26 +645,38 @@ ged_db_index_standard_tops(struct ged_db_index *index)
     if (!index || !index->gedp || !index->gedp->dbip)
 	return tops;
 
-    struct directory **all_paths = nullptr;
-    db_update_nref(index->gedp->dbip);
-    int tops_cnt = db_ls(index->gedp->dbip, DB_LS_TOPS, NULL, &all_paths);
-    if (tops_cnt > 0 && all_paths) {
-	std::sort(all_paths, all_paths + tops_cnt,
-	[](const struct directory *a, const struct directory *b) {
-	    const char *aname = (a && a->d_namep) ? a->d_namep : "";
-	    const char *bname = (b && b->d_namep) ? b->d_namep : "";
-	    return bu_strcmp(aname, bname) < 0;
-	});
-	for (int i = 0; i < tops_cnt; i++) {
-	    if (!all_paths[i] || !all_paths[i]->d_namep)
-		continue;
-	    ged_db_index_id id = ged_db_index_name_hash(all_paths[i]->d_namep);
-	    if (index->records.find(id) != index->records.end())
-		tops.push_back(id);
-	}
+    /*
+     * The index already owns the complete visible parent relation.  Calling
+     * db_update_nref() and db_ls(DB_LS_TOPS) here walked every combination
+     * again each time a client performed the customary count-then-fill pair
+     * of queries.  On a large vehicle this duplicated the hierarchy work
+     * done by ged_db_index_rebuild() and blocked qged's GUI thread during
+     * startup.
+     *
+     * Only canonical records backed by a live directory can be top-level.
+     * Instance aliases and remembered removed names are intentionally
+     * excluded.  Cyclic objects have parents and are added separately by the
+     * include_cyclic path below.
+     */
+    std::vector<std::pair<std::string, ged_db_index_id>> named_tops;
+    named_tops.reserve(index->records.size());
+    for (const auto &entry : index->records) {
+	const ged_db_index_record_native &record = entry.second;
+	if (!record.valid || !record.dp || record.is_instance ||
+	    record.id != record.object_id)
+	    continue;
+	auto parent_it = index->parents.find(record.object_id);
+	if (parent_it != index->parents.end() && !parent_it->second.empty())
+	    continue;
+	named_tops.emplace_back(record.name, record.id);
     }
-    if (all_paths)
-	bu_free(all_paths, "free db_ls output");
+    std::sort(named_tops.begin(), named_tops.end(),
+	[](const auto &left, const auto &right) {
+	    return left.first < right.first;
+	});
+    tops.reserve(named_tops.size());
+    for (const auto &entry : named_tops)
+	tops.push_back(entry.second);
 
     return tops;
 }

@@ -17,9 +17,18 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <memory>
 #include <vector>
 
 class BObolLodService;
+
+/* A view-required refinement no larger than these aggregate-admitted deltas
+ * is cheaper to load and publish directly than to manufacture intermediate
+ * per-level tasks.  Larger discontinuities (Lucy is the canonical example)
+ * remain staged.  The submit action charges the complete selected delta to
+ * its scene budget before the provider is allowed to make this jump. */
+static constexpr uint64_t BOBOL_LOD_DIRECT_REFINEMENT_FACE_LIMIT = 16384;
+static constexpr uint64_t BOBOL_LOD_DIRECT_REFINEMENT_POINT_LIMIT = 32768;
 
 typedef BObolLodResult (*BObolLodTaskProc)(
 	const BObolLodRequest &request, void *userData);
@@ -33,6 +42,7 @@ typedef void (*BObolLodResultReadyCB)(
 struct BOBOL_EXPORT BObolMeshLodProvider {
     BObolLodService *service;
     struct db_i *dbip;
+    std::shared_ptr<const BObolStagedSourceMesh> stagedSource;
     struct bv_view_info view;
     SbBool useView;
     SbBool refreshMissing;
@@ -49,6 +59,11 @@ struct BOBOL_EXPORT BObolMeshLodProvider {
     double refinementGrowthFactor;
     SbBool useCurrentDrawLevel;
     int currentDrawLevel;
+    /* Aggregate scene admission may allow less than the provider's local
+     * per-asset growth rule.  Clamp this task's publication to the exact
+     * level whose complete delta was reserved by the submit action. */
+    SbBool useDeliveryLevelLimit;
+    int deliveryLevelLimit;
     int forcedLevel;
     int reset;
 
@@ -190,6 +205,13 @@ public:
      * exceptional meshes. */
     void setWorkingSetLimit(size_t maxActiveBytes);
     size_t getWorkingSetLimit(void) const;
+    /* Bound completed service-owned progressive mesh generations separately
+     * from transient worker scratch.  Passing zero restores the host-derived
+     * default; SIZE_MAX disables pressure eviction.  Stable compaction first
+     * trims demanded assets to their view cuts, then releases wholly
+     * undemanded assets when retained bytes exceed this limit. */
+    void setResidentMeshLimit(size_t maxResidentBytes);
+    size_t getResidentMeshLimit(void) const;
     size_t activeWorkingSetBytesForDiagnostics(void) const;
     size_t executingTaskCountForDiagnostics(void) const;
     size_t peakWorkingSetBytesForDiagnostics(void) const;
@@ -198,9 +220,24 @@ public:
 
     uint64_t submit(const BObolLodTask &task);
     uint64_t submitIfNotActive(const BObolLodTask &task);
+    /*
+     * Submit a producer wave under one service lock and wake workers once.
+     * taskIds is resized to tasks.size(); rejected/duplicate entries are
+     * reported as zero while accepted entries contain their task id.
+     * Returns the number accepted.  The caller retains ownership of
+     * realizeData for every zero-id entry.
+     */
+    size_t submitBatch(const std::vector<BObolLodTask> &tasks,
+	std::vector<uint64_t> &taskIds,
+	SbBool skipActiveDuplicates = FALSE);
     SbBool hasActiveRequest(const BObolLodRequest &request) const;
+    /**
+     * Drain a bounded presentation wave.  maxEstimatedBytes applies to mesh
+     * payloads only and uses active point/index/normal populations; the first
+     * result is always admitted so one exceptional mesh cannot starve.
+     */
     size_t drainResults(std::vector<BObolLodResult> &results,
-	size_t maxResults = 0);
+	size_t maxResults = 0, size_t maxEstimatedBytes = 0);
     size_t drainMatchingResults(std::vector<BObolLodResult> &results,
 	const std::vector<BObolLodRequest> &requests,
 	size_t maxResults = 0);
@@ -222,22 +259,47 @@ public:
     size_t cancelledGenerationCountForDiagnostics(void) const;
     size_t residentMeshAssetCountForDiagnostics(void) const;
     size_t residentMeshBytesForDiagnostics(void) const;
+    /* Stable retained bytes exclude the reloadable cache-reader prefix which
+     * is released after a quiet interval.  Optional suffix admission is
+     * governed by this value; transient preparation has its own byte
+     * governor. */
+    size_t stableResidentMeshBytesForDiagnostics(void) const;
+    size_t reservedResidentMeshGrowthBytesForDiagnostics(void) const;
+    /* Advances only when stable resident capacity becomes newly available
+     * (reclamation or a relaxed limit), not when another asset merely grows.
+     * Memory-limited view bindings use it to suppress retry loops. */
+    uint64_t residentMeshAdmissionRevision(void) const;
     uint64_t residentMeshCacheLoadCountForDiagnostics(void) const;
     uint64_t residentMeshHitCountForDiagnostics(void) const;
     uint64_t residentMeshCompactionCountForDiagnostics(void) const;
+    uint64_t residentMeshEvictionCountForDiagnostics(void) const;
+    size_t pendingResidentMeshCompactionCountForDiagnostics(void) const;
+    size_t queuedResidentMeshCompactionResultCountForDiagnostics(
+	uint64_t consumerId) const;
 
     BObolLodResult realizeResidentMeshLod(
 	const BObolLodRequest &request,
 	const BObolMeshLodProvider &provider);
-    /* Replace one view consumer's complete stable demand snapshot, aggregate
-     * it with every other consumer, and trim assets whose resident prefix
-     * exceeds the aggregate pixel-demanded maximum.  LoD level populations
-     * can differ by millions of faces, so a nominal one-level headroom is not
-     * a bounded memory policy.  Returns the number of assets compacted. */
-    size_t compactResidentMeshes(
+    /* Replace one view consumer's complete stable demand snapshot and queue
+     * memory-bounded background trims against the aggregate demand.  This
+     * call never reads or rewrites mesh arrays on its caller.  Assets absent
+     * from all complete snapshots retain only their minimum useful prefix;
+     * richer levels remain in the on-disk cache.  Returns the number of
+     * newly queued assets.  planningComplete reports whether the bounded
+     * resident-asset scan completed in this call; callers keep pumping quiet
+     * work when it is FALSE. */
+    size_t scheduleResidentMeshCompaction(
 	uint64_t consumerId,
 	uint64_t demandRevision,
-	const std::vector<BObolLodResidentDemand> &demands);
+	const std::vector<BObolLodResidentDemand> &demands,
+	SbBool *planningComplete = NULL);
+    /* Drain immutable, renderer-ready generations completed for one consumer.
+     * The presentation owner adopts these handles directly; no vertex or
+     * index arrays are copied on the GUI thread. */
+    size_t drainResidentMeshCompactions(
+	uint64_t consumerId,
+	std::vector<BObolLodResidentCompaction> &results,
+	size_t maxResults = 0);
     void releaseResidentMeshConsumer(uint64_t consumerId);
 
 private:

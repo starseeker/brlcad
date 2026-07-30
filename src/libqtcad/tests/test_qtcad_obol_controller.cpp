@@ -26,6 +26,7 @@
 #include <Inventor/SoViewport.h>
 #include <Inventor/actions/SoGLRenderAction.h>
 #include <Inventor/nodes/SoCamera.h>
+#include <Inventor/nodes/SoCallback.h>
 #include <Inventor/nodes/SoCube.h>
 #include <Inventor/nodes/SoDirectionalLight.h>
 #include <Inventor/nodes/SoMaterial.h>
@@ -146,6 +147,22 @@ camera_state_changed(SoCamera *camera, const SbVec3f &beforePosition,
     if (camera_moved(camera, beforePosition))
 	return 1;
     return fabsf(camera->focalDistance.getValue() - beforeFocalDistance) >= 0.001f;
+}
+
+struct RenderFollowupRequest {
+    BObolViewController *controller = NULL;
+    bool fired = false;
+};
+
+static void
+request_render_during_traversal(void *data, SoAction *)
+{
+    RenderFollowupRequest *request =
+	static_cast<RenderFollowupRequest *>(data);
+    if (!request || request->fired || !request->controller)
+	return;
+    request->fired = true;
+    request->controller->requestRender("sw-render-followup");
 }
 
 int
@@ -378,6 +395,31 @@ main(int argc, char **argv)
 	controller->getSmoothedRenderTimeNanoseconds() == 0)
 	FAIL("Obol controller should record rendered frame telemetry");
 
+    /*
+     * A software traversal may schedule the next refinement/calibration
+     * frame while completing the current one.  The paint must retire only
+     * the request it rendered, not consume that newly published successor.
+     */
+    RenderFollowupRequest followup;
+    followup.controller = controller;
+    fpsParams.draw_fps = 0;
+    (void)bv_params_state_set(fpsView, &fpsParams);
+    SoCallback *followupNode = new SoCallback;
+    followupNode->setCallback(
+	request_render_during_traversal, &followup);
+    sceneRoot->addChild(followupNode);
+    controller->requestRender("sw-followup-base");
+    paintTarget.fill(0);
+    QPainter followupPainter(&paintTarget);
+    view.render(&followupPainter);
+    followupPainter.end();
+    if (!followup.fired || !controller->isRenderRequested() ||
+	!BU_STR_EQUAL(controller->getRenderReason().getString(),
+	    "sw-render-followup"))
+	FAIL("QgView SW paint should preserve a request published during traversal");
+    controller->clearRenderRequest();
+    sceneRoot->removeChild(followupNode);
+
     TestQgSW swCanvas(NULL);
     swCanvas.resize(160, 120);
     BObolViewController *swController = swCanvas.obolViewController();
@@ -463,8 +505,8 @@ main(int argc, char **argv)
     swCanvas.runMouseMoveForTest(&swMoveStart);
     if (!swController->isLodGestureActive() ||
 	!swController->isLodInteractionActive() ||
-	swController->getLodTargetPixelError() <= 1.0f)
-	FAIL("QgSW first motion should establish the coarse LoD gesture");
+	swController->getLodTargetPixelError() < 1.0f)
+	FAIL("QgSW first motion should establish the measured LoD gesture");
     swCanvas.runMouseMoveForTest(&swMoveDrag);
     if (!camera_state_changed(swCamera, beforeDrag, beforeDragFocal))
 	FAIL("QgSW drag navigation should update the Obol camera");
@@ -608,8 +650,8 @@ main(int argc, char **argv)
 	    glCanvas.runMouseMoveForTest(&glMoveStart);
 	    if (!paintController->isLodGestureActive() ||
 		!paintController->isLodInteractionActive() ||
-		paintController->getLodTargetPixelError() <= 1.0f)
-		FAIL("QgGL first motion should establish the coarse LoD gesture");
+		paintController->getLodTargetPixelError() < 1.0f)
+		FAIL("QgGL first motion should establish the measured LoD gesture");
 	    glCanvas.runMouseMoveForTest(&glMoveDrag);
 	    if (!camera_state_changed(paintCamera, beforeGLDrag, beforeGLDragFocal))
 		FAIL("QgGL drag navigation should update the Obol camera");

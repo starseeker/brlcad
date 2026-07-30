@@ -101,6 +101,62 @@ struct BOBOL_EXPORT BObolProgressiveStatus {
     int hasMore;
 };
 
+enum BObolLodConvergencePhase {
+    BOBOL_LOD_CONVERGENCE_IDLE = 0,
+    BOBOL_LOD_CONVERGENCE_DISCOVERING,
+    BOBOL_LOD_CONVERGENCE_INTERACTIVE,
+    BOBOL_LOD_CONVERGENCE_REFINING,
+    BOBOL_LOD_CONVERGENCE_CALIBRATING,
+    BOBOL_LOD_CONVERGENCE_BACKGROUND,
+    BOBOL_LOD_CONVERGENCE_ERROR
+};
+
+/** User-facing progress for one view epoch.
+ *
+ * The fraction describes progress toward the current view's terminal,
+ * frame-rate-aware presentation.  A value of one never promises that every
+ * source triangle is resident.  Cache writes are reported separately because
+ * they may continue after the visible view is ready. */
+struct BOBOL_EXPORT BObolLodConvergenceStatus {
+    BObolLodConvergenceStatus(void);
+    void clear(void);
+
+    int phase;
+    uint64_t viewRevision;
+    size_t expectedLeafCount;
+    size_t availableLeafCount;
+    size_t visibleTargetCount;
+    size_t activePayloadCount;
+    size_t satisfiedPayloadCount;
+    size_t pendingTasks;
+    size_t inFlight;
+    size_t queuedResults;
+    size_t queuedCacheWrites;
+    size_t activeFaces;
+    size_t faceBudget;
+    size_t residentMeshBytes;
+    size_t stableResidentMeshBytes;
+    size_t reservedResidentMeshGrowthBytes;
+    size_t residentMeshLimitBytes;
+    size_t memoryLimitedPayloadCount;
+    size_t activeWorkingSetBytes;
+    size_t peakWorkingSetBytes;
+    uint64_t residentCompactionCount;
+    float fraction;
+    SbBool viewReady;
+    SbBool backgroundPending;
+    SbBool performanceLimited;
+    SbBool memoryLimited;
+    /* Individual presentation barriers.  These are intentionally exposed in
+     * the aggregate status so hosts and regression reports can distinguish a
+     * pending PoP frame from scene-budget calibration or motion handoff. */
+    SbBool refinementFramePending;
+    SbBool budgetCalibrationPending;
+    SbBool stablePresentationHandoffPending;
+    SbBool pointProxyCalibrationPending;
+    unsigned int failedSourceCount;
+};
+
 typedef int (*BObolProgressiveAdvanceCallback)(
     BObolViewController *controller,
     void *userData,
@@ -260,6 +316,12 @@ public:
     void synchronizePresentation(void);
     void clearRenderRequest(void);
     SbBool consumeRenderRequest(SbString *reason = NULL);
+    /** Snapshot/retire protocol for hosts which traverse the render root
+     * directly instead of using renderPending().  Capture the serial after
+     * all state synchronized into a frame, then clear it after presentation
+     * only if no newer request was published while rendering. */
+    uint64_t renderRequestSerialGet(void) const;
+    void clearRenderRequestIfUnchanged(uint64_t serial);
     SbBool renderPending(SbBool clearWindow = TRUE,
 			 SbBool clearZBuffer = TRUE,
 			 SbString *reason = NULL);
@@ -267,6 +329,9 @@ public:
     void completeRenderTiming(uint64_t startedNanoseconds);
     uint64_t getLastRenderTimeNanoseconds(void) const;
     uint64_t getSmoothedRenderTimeNanoseconds(void) const;
+    /** Host-side phase timings for the most recently completed render. */
+    uint64_t getLastBackgroundRenderTimeNanoseconds(void) const;
+    uint64_t getLastSceneRenderTimeNanoseconds(void) const;
     /** Host-thread time spent preparing the most recent progressive frame.
      * These diagnostics deliberately exclude the GL traversal reported by
      * getLastRenderTimeNanoseconds(), making event-loop stalls attributable
@@ -391,7 +456,8 @@ public:
 			  SbBool refreshMissing = TRUE,
 			  int reset = 0);
     int applyLodResults(BObolLodService *service = NULL,
-			size_t maxResults = 0);
+			size_t maxResults = 0,
+			size_t maxEstimatedBytes = 0);
     uint64_t getLodViewRevision(void) const;
     void setLodPolicyRevision(uint64_t revision);
     uint64_t getLodPolicyRevision(void) const;
@@ -399,6 +465,11 @@ public:
     void endLodInteraction(void);
     SbBool isLodInteractionActive(void) const;
     SbBool isLodGestureActive(void) const;
+    /** True when the newest camera revision changes projected scale (zoom,
+     * viewport, or projection) rather than only camera pose.  Existing PoP
+     * cuts may track scale changes immediately; pose-only interaction keeps
+     * its current cuts unless measured frame pressure requires coarsening. */
+    SbBool isLodScaleChangingInteraction(void) const;
     float getLodTargetPixelError(void) const;
     int getLodInteractiveProgressiveCeiling(void) const;
     /** Configure aggregate scene frame-rate goals.  Projected per-object
@@ -428,6 +499,8 @@ public:
     size_t getActiveLodMeshPayloadCount(void) const;
     size_t getActiveLodProxyPayloadCount(int proxyKind) const;
     size_t getActiveLodCadPayloadCount(void) const;
+    void getLodConvergenceStatus(
+	BObolLodConvergenceStatus &status) const;
 
     BObolSceneController *getSceneController(void);
     const BObolSceneController *getSceneController(void) const;
@@ -642,8 +715,6 @@ private:
      * DIAGNOSTIC as a graphical renderer. */
     void setEndpointGraphicalRenderingEnabled(SbBool enabled);
     void notifyFrameRequest(const char *reason);
-    void clearRenderRequestIfUnchanged(uint64_t serial);
-    uint64_t renderRequestSerialGet(void) const;
     void setViewportSceneGraphWithLod(SoNode *root);
     void cancelActiveLodGeneration(void);
     void invalidateDatabaseSourceLodState(void);

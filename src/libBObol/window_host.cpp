@@ -37,6 +37,7 @@ struct BObolFramebufferAttachment {
     imgstream_fb_t *fb;
     SoBRLImageSource *source;
     SoBRLViewportImage *viewport;
+    BObolFramebufferComposition composition;
 };
 
 struct BObolWindowHostPrivate {
@@ -433,6 +434,7 @@ BObolWindowHost::openFramebuffer(imgstream_fb_t *fb,
     attachment.fb = fb;
     attachment.source = source;
     attachment.viewport = viewport;
+    attachment.composition = BOBOL_FRAMEBUFFER_COMPOSITION_OVERLAY;
     this->p->framebuffers.push_back(attachment);
 	this->p->controller->getFramebufferOverlayRoot()->addChild(viewport);
     this->p->controller->requestRender("fb-open");
@@ -470,6 +472,15 @@ BObolWindowHost::setFramebufferComposition(imgstream_fb_t *fb,
     BObolViewController *controller = this->p->controller;
     if (!attachment || !controller)
 	return -1;
+    /*
+     * The framebuffer bridge may synchronize its policy on every canvas
+     * presentation.  Reapplying an unchanged mode used to remove, rebuild,
+     * and reinsert the viewport and leave another "fb-composition" render
+     * request behind each OSMesa frame.  Besides wasting owner-thread work,
+     * that makes a fully settled progressive view observably never idle.
+     */
+    if (attachment->composition == composition)
+	return 0;
 
     SoBRLViewportImage *viewport = attachment->viewport;
     remove_framebuffer_viewport(controller, viewport);
@@ -477,6 +488,7 @@ BObolWindowHost::setFramebufferComposition(imgstream_fb_t *fb,
 	viewport->visible = FALSE;
 	if (viewport->rebuildGeometry() != 0)
 	    return -1;
+	attachment->composition = composition;
 	controller->requestRender("fb-composition");
 	return 0;
     }
@@ -505,6 +517,7 @@ BObolWindowHost::setFramebufferComposition(imgstream_fb_t *fb,
     if (viewport->rebuildGeometry() != 0)
 	return -1;
     layer->addChild(viewport);
+    attachment->composition = composition;
     controller->requestRender("fb-composition");
     return 0;
 }

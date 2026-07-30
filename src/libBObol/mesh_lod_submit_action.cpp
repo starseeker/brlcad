@@ -27,11 +27,86 @@
 #include <cfloat>
 #include <cmath>
 #include <errno.h>
+#include <limits>
 #include <stdlib.h>
 #include <string.h>
-#include <unordered_map>
 
 SO_ACTION_SOURCE(SoBRLMeshLodSubmitAction);
+
+static size_t
+mesh_lod_saturating_scaled_add(size_t total, uint64_t count, size_t scale)
+{
+    if (total == SIZE_MAX || !count || !scale)
+	return total;
+    if (count > static_cast<uint64_t>(SIZE_MAX / scale))
+	return SIZE_MAX;
+    const size_t bytes = static_cast<size_t>(count) * scale;
+    return bytes > SIZE_MAX - total ? SIZE_MAX : total + bytes;
+}
+
+/*
+ * A retained/warm task does not build PoP topology.  It reads one cumulative
+ * cache prefix, converts it to an immutable float/index generation, and
+ * prepares the requested renderer channels.  Reserve that bounded population
+ * instead of charging the cold full-source topology estimate.
+ *
+ * The coefficients include the cache's double/int prefix, its immutable Obol
+ * conversion, the renderer snapshot, vector growth, and a fixed transaction /
+ * allocator allowance.  Authored corner normals are intentionally expensive:
+ * converting them to Obol's indexed position/normal contract may split every
+ * triangle corner.  Wire geometry expands every triangle to three segments.
+ */
+static size_t
+mesh_lod_resident_working_set_estimate(uint64_t pointCount,
+	uint64_t faceCount, SbBool hasNormals, int drawMode)
+{
+    size_t estimate = 8ULL * 1024ULL * 1024ULL;
+    estimate = mesh_lod_saturating_scaled_add(estimate, pointCount, 64);
+    size_t faceBytes = 48;
+    if (hasNormals)
+	faceBytes += 320;
+    if (drawMode == BOBOL_LOD_DRAW_WIRE ||
+	drawMode == BOBOL_LOD_DRAW_HIDDEN_LINE)
+	faceBytes += 84;
+    return mesh_lod_saturating_scaled_add(estimate, faceCount, faceBytes);
+}
+
+static size_t
+mesh_lod_resident_task_estimate(
+    const BObolLodProgressiveMeshPtr &mesh, int targetLevel,
+    SbBool hasNormals, int drawMode)
+{
+    if (!mesh || targetLevel < mesh->minimumLevel())
+	return 0;
+    targetLevel = std::min(targetLevel, mesh->maximumLevel());
+    return mesh_lod_resident_working_set_estimate(
+	mesh->hierarchyPointCount(targetLevel),
+	mesh->hierarchyFaceCount(targetLevel), hasNormals, drawMode);
+}
+
+static size_t
+mesh_lod_warm_source_task_estimate(
+    const BObolSourceMeshRequest &sourceRequest,
+    const BObolLodRequest &request)
+{
+    if (!sourceRequest.lodAvailable ||
+	sourceRequest.lodActiveLevel < 0 ||
+	!sourceRequest.lodFaceCount || !sourceRequest.lodPointCount)
+	return 0;
+
+    /*
+     * The foreground source loaded this cache cut for the same view.  If the
+     * request asks beyond it and there is not yet a retained hierarchy, the
+     * target population is unknown; fall back to the cold-safe source-count
+     * estimator.  Once the first generation is retained, exact hierarchy
+     * counts drive every subsequent reservation.
+     */
+    if (request.requestedLevel > sourceRequest.lodActiveLevel)
+	return 0;
+    return mesh_lod_resident_working_set_estimate(
+	sourceRequest.lodPointCount, sourceRequest.lodFaceCount,
+	sourceRequest.lodHasNormals ? TRUE : FALSE, request.drawMode);
+}
 
 SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     service(NULL),
@@ -54,6 +129,7 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     requireLodBacked(TRUE),
     allowLevelDowngrade(FALSE),
     allowRetainedRefinement(TRUE),
+    preserveMeshCoverage(FALSE),
     refinementFaceBudget(SIZE_MAX),
     refinementFaceBudgetUsed(0),
     refinementBudgetBlockedCount(0),
@@ -63,8 +139,10 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     compactEntryNext(0),
     compactEntryTotal(0),
     compactEntryPlan(),
+    compactEntryPlanView(NULL),
     compactEntryPlanSupplied(FALSE),
     submissionTaskLimit(SIZE_MAX),
+    submissionTimeLimitMicroseconds(0),
     retainedSceneFaceBudget(SIZE_MAX),
     retainedSceneFaceBudgetUsed(0),
     retainedRecoveredOccurrences(),
@@ -74,6 +152,8 @@ SoBRLMeshLodSubmitAction::SoBRLMeshLodSubmitAction(void) :
     updatedCutCount(0),
     pendingRetainedRefinementCount(0),
     skippedMeshCount(0),
+    visibleMeshCount(0),
+    coveredVisibleMeshCount(0),
     diagnosticCount(0),
     suppressedDiagnosticCount(0),
     diagnostics("")
@@ -258,6 +338,18 @@ SoBRLMeshLodSubmitAction::getAllowRetainedRefinement(void) const
 }
 
 void
+SoBRLMeshLodSubmitAction::setPreserveMeshCoverage(SbBool preserve)
+{
+    this->preserveMeshCoverage = preserve ? TRUE : FALSE;
+}
+
+SbBool
+SoBRLMeshLodSubmitAction::getPreserveMeshCoverage(void) const
+{
+    return this->preserveMeshCoverage;
+}
+
+void
 SoBRLMeshLodSubmitAction::setRefinementFaceBudget(size_t additionalFaces)
 {
     this->refinementFaceBudget = additionalFaces;
@@ -320,6 +412,53 @@ SoBRLMeshLodSubmitAction::reserveRefinementFaces(
     return TRUE;
 }
 
+int
+SoBRLMeshLodSubmitAction::reserveRefinementLevel(
+    const BObolLodProgressiveMeshPtr &progressiveMesh,
+    int activeLevel, int preferredLevel)
+{
+    if (preferredLevel <= activeLevel)
+	return activeLevel;
+
+    /*
+     * A nominal PoP level is not a useful scheduling quantum: adjacent levels
+     * may add no population at all, while another step may add millions of
+     * faces.  Select the richest cumulative prefix whose complete marginal
+     * cost fits the remaining measured scene allowance.  This preserves the
+     * frame budget but avoids manufacturing one provider task, publication,
+     * and whole-scene rediscovery pass per nominal level.
+     */
+    if (!progressiveMesh)
+	return activeLevel;
+    const size_t activeFaces = activeLevel >= 0 ?
+	progressiveMesh->hierarchyFaceCount(activeLevel) : 0;
+    if (this->refinementFaceBudget == SIZE_MAX) {
+	(void)this->reserveRefinementFaces(
+	    progressiveMesh, activeLevel, preferredLevel);
+	return preferredLevel;
+    }
+    const size_t remaining =
+	this->refinementFaceBudgetUsed >= this->refinementFaceBudget ?
+	    0 : this->refinementFaceBudget -
+		this->refinementFaceBudgetUsed;
+    for (int level = preferredLevel; level > activeLevel; --level) {
+	const size_t levelFaces =
+	    progressiveMesh->hierarchyFaceCount(level);
+	const size_t additionalFaces =
+	    levelFaces > activeFaces ? levelFaces - activeFaces : 0;
+	if (additionalFaces > remaining)
+	    continue;
+	this->refinementFaceBudgetUsed =
+	    additionalFaces >
+		    SIZE_MAX - this->refinementFaceBudgetUsed ?
+		SIZE_MAX :
+		this->refinementFaceBudgetUsed + additionalFaces;
+	return level;
+    }
+    this->refinementBudgetBlockedCount++;
+    return activeLevel;
+}
+
 SbBool
 SoBRLMeshLodSubmitAction::reserveInitialFaces(
     uint64_t sourceFaces, size_t &providerFaceAllowance)
@@ -328,12 +467,13 @@ SoBRLMeshLodSubmitAction::reserveInitialFaces(
     if (this->refinementFaceBudget == SIZE_MAX)
 	return TRUE;
 
-    /* Four thousand faces is intentionally a reservation, not a demanded
-     * cut.  It is large enough to avoid admitting hundreds of unknown sparse
-     * hierarchies against a tiny scene budget, while the provider may select
-     * a cheaper populated minimum.  A small source reserves its exact full
-     * population. */
-    static const size_t provisionalFirstCutFaces = 4096;
+    /* The exact minimum populated prefix is not known until the provider has
+     * read the PoP hierarchy.  Reserve a conservative first-cut estimate here
+     * so a warm many-leaf scene can admit a useful wave without either
+     * scheduling every mesh at once or walking only a handful of leaves per
+     * frame.  The result's exact face count becomes the next frame's measured
+     * active population. */
+    static const size_t provisionalFirstCutFaces = 512;
     const size_t knownFaces =
 	sourceFaces > static_cast<uint64_t>(SIZE_MAX) ? SIZE_MAX :
 	static_cast<size_t>(sourceFaces);
@@ -342,23 +482,29 @@ SoBRLMeshLodSubmitAction::reserveInitialFaces(
 	provisionalFirstCutFaces;
 
     /*
-     * The scene face allowance controls optional refinement, not coverage.
-     * Once a visible occurrence's minimum PoP mesh is available, falling
-     * back to its structural box is both visually disruptive and more
-     * expensive semantically than drawing the coherent minimum prefix.  The
-     * service's task/result and working-set limits bound cold preparation;
-     * consume any remaining refinement allowance here, but never reject the
-     * first mesh solely because the learned draw budget is exhausted.
+     * Structural leaf proxies are the coverage guarantee.  A minimum PoP
+     * mesh is richer data and must obey the same aggregate scene budget as
+     * every later prefix.  Exempting first meshes admitted one minimum cut
+     * for every visible leaf: thousands of modest meshes then exceeded the
+     * calibrated population by orders of magnitude and caused a single
+     * multi-hundred-millisecond upload frame.
+     *
+     * Mark the blocked wave so the controller presents and calibrates what it
+     * admitted, then resumes with a larger measured allowance.  A controller
+     * may explicitly preserve the minimum visible mesh floor; bounded entry
+     * windows and service capacity still prevent an all-at-once cliff.
      */
     if (this->refinementFaceBudgetUsed > this->refinementFaceBudget ||
 	reserveFaces >
 	    this->refinementFaceBudget - this->refinementFaceBudgetUsed) {
-	this->refinementFaceBudgetUsed = this->refinementFaceBudget;
-	providerFaceAllowance = provisionalFirstCutFaces;
-	return TRUE;
+	this->refinementBudgetBlockedCount++;
+	if (!this->preserveMeshCoverage)
+	    return FALSE;
     }
 
-    this->refinementFaceBudgetUsed += reserveFaces;
+    this->refinementFaceBudgetUsed =
+	reserveFaces > SIZE_MAX - this->refinementFaceBudgetUsed ?
+	SIZE_MAX : this->refinementFaceBudgetUsed + reserveFaces;
     /* The reservation may use an exact small source count, while a legacy
      * cache's hierarchy metadata can conservatively report a slightly larger
      * populated minimum.  Keep the provider's local first-cut ceiling at the
@@ -376,10 +522,9 @@ SoBRLMeshLodSubmitAction::reserveInitialFaceCost(size_t faceCount)
 	(this->refinementFaceBudgetUsed > this->refinementFaceBudget ||
 	 faceCount >
 	    this->refinementFaceBudget - this->refinementFaceBudgetUsed)) {
-	/* Shared resident assets obey the same coverage floor as provider
-	 * results: budget optional enrichment, never box reintroduction. */
-	this->refinementFaceBudgetUsed = this->refinementFaceBudget;
-	return TRUE;
+	this->refinementBudgetBlockedCount++;
+	if (!this->preserveMeshCoverage)
+	    return FALSE;
     }
     this->refinementFaceBudgetUsed =
 	faceCount > SIZE_MAX - this->refinementFaceBudgetUsed ?
@@ -412,20 +557,36 @@ SoBRLMeshLodSubmitAction::setCompactEntryPlan(
     const std::vector<size_t> &entryIndices)
 {
     this->compactEntryPlan = entryIndices;
+    this->compactEntryPlanView = NULL;
     this->compactEntryPlanSupplied = TRUE;
+}
+
+void
+SoBRLMeshLodSubmitAction::setCompactEntryPlanView(
+    const std::vector<size_t> *entryIndices)
+{
+    this->compactEntryPlanView = entryIndices;
+    this->compactEntryPlanSupplied = entryIndices ? TRUE : FALSE;
 }
 
 void
 SoBRLMeshLodSubmitAction::getCompactEntryPlan(
     std::vector<size_t> &entryIndices) const
 {
-    entryIndices = this->compactEntryPlan;
+    entryIndices = this->compactEntryPlanView ?
+	*this->compactEntryPlanView : this->compactEntryPlan;
 }
 
 void
 SoBRLMeshLodSubmitAction::setSubmissionTaskLimit(size_t taskCount)
 {
     this->submissionTaskLimit = taskCount;
+}
+
+void
+SoBRLMeshLodSubmitAction::setSubmissionTimeLimit(uint64_t microseconds)
+{
+    this->submissionTimeLimitMicroseconds = microseconds;
 }
 
 void
@@ -488,6 +649,18 @@ SoBRLMeshLodSubmitAction::getSkippedMeshCount(void) const
     return this->skippedMeshCount;
 }
 
+size_t
+SoBRLMeshLodSubmitAction::getVisibleMeshCount(void) const
+{
+    return this->visibleMeshCount;
+}
+
+size_t
+SoBRLMeshLodSubmitAction::getCoveredVisibleMeshCount(void) const
+{
+    return this->coveredVisibleMeshCount;
+}
+
 const SbString &
 SoBRLMeshLodSubmitAction::getDiagnostics(void) const
 {
@@ -506,6 +679,8 @@ SoBRLMeshLodSubmitAction::beginTraversal(SoNode *node)
     this->retainedSceneFaceBudgetUsed = 0;
     this->retainedRecoveredOccurrences.clear();
     this->skippedMeshCount = 0;
+    this->visibleMeshCount = 0;
+    this->coveredVisibleMeshCount = 0;
     this->diagnosticCount = 0;
     this->suppressedDiagnosticCount = 0;
     this->diagnostics = "";
@@ -813,6 +988,55 @@ mesh_lod_cad_payload_is_resident(
 	payload->activeLevel == request.requestedLevel;
 }
 
+/*
+ * Fast authoritative identity for a view-local CAD binding.
+ *
+ * The old hot path regenerated the serialized persistent-cache key for every
+ * already-resident occurrence on every bounded scene pass.  On a scene with
+ * thousands of distinct assets that meant repeated string formatting,
+ * sorting, allocation, and hashing even though the occurrence map had
+ * already resolved the exact binding.  Retain the source epoch on the
+ * payload and compare the small request contract directly.  Persistent cache
+ * keys remain the worker/cache boundary; they are not a view-planner data
+ * structure.
+ */
+static SbBool
+mesh_lod_cad_payload_matches_asset_epoch(
+	const BObolViewLodState::CadPayload *payload,
+	const BObolLodRequest &request)
+{
+    if (!payload || !payload->isValid() ||
+	(payload->resultKind != BOBOL_LOD_RESULT_MESH &&
+	 payload->resultKind != BOBOL_LOD_RESULT_FULL_DETAIL) ||
+	payload->providerStatus != BOBOL_LOD_PROVIDER_READY ||
+	payload->databaseRevision != request.databaseRevision ||
+	payload->sourceRevision != request.sourceRevision ||
+	payload->sourceContentHash != request.sourceContentHash ||
+	payload->qualityTier != request.qualityTier)
+	return FALSE;
+
+    /*
+     * A retained PoP generation is representation-neutral: shaded and wire
+     * presentations select different immutable renderer channels over the
+     * same positions/indices and resident prefix.  Do not turn a mode switch
+     * into a cache/provider request merely because the channel recorded on
+     * the payload differs.  Non-progressive payloads remain mode-specific
+     * because they may contain only the requested representation.
+     */
+    if (payload->drawMode != request.drawMode &&
+	!payload->progressiveMesh)
+	return FALSE;
+
+    if (request.objectName.getLength() > 0)
+	return payload->sourceName.getLength() > 0 &&
+	    bu_strcmp(payload->sourceName.getString(),
+		request.objectName.getString()) == 0 ? TRUE : FALSE;
+    return payload->sourcePath.getLength() > 0 &&
+	request.objectPath.getLength() > 0 &&
+	bu_strcmp(payload->sourcePath.getString(),
+	    request.objectPath.getString()) == 0 ? TRUE : FALSE;
+}
+
 static SbBool
 mesh_lod_cad_payload_has_same_source(
 	const BObolViewLodState::CadPayload *payload,
@@ -853,6 +1077,34 @@ mesh_lod_mesh_payload_has_same_source(
     return mesh_lod_mesh_payload_is_resident(payload, payloadRequest);
 }
 
+template <typename Payload>
+static SbBool
+mesh_lod_payload_memory_limited_for_epoch(
+    const Payload *payload,
+    const BObolLodRequest &request,
+    const BObolLodService *service)
+{
+    return payload && service && payload->memoryLimited &&
+	payload->residentAdmissionRevision != 0 &&
+	payload->residentAdmissionRevision ==
+	    service->residentMeshAdmissionRevision() &&
+	payload->viewRevision == request.viewRevision &&
+	payload->policyRevision == request.policyRevision &&
+	request.requestedLevel > payload->activeLevel ? TRUE : FALSE;
+}
+
+/* The scene allocator, rather than an arbitrary PoP-level step, chooses the
+ * exact population cut whose complete added face cost is admitted. */
+static int
+mesh_lod_bounded_delivery_level(
+	const BObolLodProgressiveMeshPtr &mesh,
+	int activeLevel, int requestedLevel)
+{
+    (void)mesh;
+    (void)activeLevel;
+    return requestedLevel;
+}
+
 static int
 mesh_lod_available_cad_retarget_level(
 	const BObolViewLodState::CadPayload *payload,
@@ -873,13 +1125,11 @@ mesh_lod_available_cad_retarget_level(
 	 level > payload->activeLevel; --level) {
 	if (!payload->progressiveMesh->canDrawLevel(level))
 	    continue;
-	if (incrementalRefinement && payload->activeLevel >= 0 &&
-	    level > payload->activeLevel + 1) {
-	    const int nextLevel = payload->activeLevel + 1;
-	    return payload->progressiveMesh->canDrawLevel(nextLevel) ?
-		nextLevel : payload->activeLevel;
-	}
-	return level;
+	const int delivery = incrementalRefinement ?
+	    mesh_lod_bounded_delivery_level(payload->progressiveMesh,
+		payload->activeLevel, level) : level;
+	return payload->progressiveMesh->canDrawLevel(delivery) ?
+	    delivery : payload->activeLevel;
     }
     return payload->activeLevel;
 }
@@ -900,13 +1150,11 @@ mesh_lod_available_mesh_retarget_level(
 	 level > payload->activeLevel; --level) {
 	if (!payload->progressiveMesh->canDrawLevel(level))
 	    continue;
-	if (incrementalRefinement && payload->activeLevel >= 0 &&
-	    level > payload->activeLevel + 1) {
-	    const int nextLevel = payload->activeLevel + 1;
-	    return payload->progressiveMesh->canDrawLevel(nextLevel) ?
-		nextLevel : payload->activeLevel;
-	}
-	return level;
+	const int delivery = incrementalRefinement ?
+	    mesh_lod_bounded_delivery_level(payload->progressiveMesh,
+		payload->activeLevel, level) : level;
+	return payload->progressiveMesh->canDrawLevel(delivery) ?
+	    delivery : payload->activeLevel;
     }
     return payload->activeLevel;
 }
@@ -940,13 +1188,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     }
 
     if (source->isCompactOccurrenceRegistry()) {
-	const int sourceDrawMode =
-	    source->representationMode.getValue() ==
-		SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ?
-	    BOBOL_LOD_DRAW_HIDDEN_LINE :
-	    (source->drawMode.getValue() == SoBRLDatabaseSource::SHADED ?
-	    BOBOL_LOD_DRAW_SHADED : BOBOL_LOD_DRAW_WIRE);
-	std::unordered_map<std::string, SbString> geometryKeysByAsset;
+	const int sourceDrawMode = source->getEffectiveLodDrawMode();
 	const int count = source->getCompactInstanceCount();
 	SbMatrix compactViewProjection;
 	const SbMatrix *compactViewProjectionPtr = NULL;
@@ -963,10 +1205,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	 * Recover the displayed population independently.  This scans only
 	 * active view bindings, projects them by constant-time occurrence
 	 * lookup, and retargets coherent minimum PoP cuts in screen-priority
-	 * order.  Minimum mesh coverage is a floor, not an optional budget
-	 * allocation: overload may lower every retained draw prefix, but must
-	 * never expose a structural box after a mesh has become available. */
+	 * order.  A caller may retain structural proxies as its absolute floor,
+	 * or preserve one minimum PoP prefix per visible occurrence and let the
+	 * renderer's aggregate point channel bound that mesh floor. */
 	if (submitAction->compactEntryFirst == 0 &&
+	    submitAction->compactEntryLimit == SIZE_MAX &&
 	    submitAction->retainedSceneFaceBudget != SIZE_MAX &&
 	    submitAction->viewState) {
 	    struct RetainedCandidate {
@@ -1052,6 +1295,12 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		if (exceedsBudget) {
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->refinementBudgetBlockedCount++;
+		    if (!submitAction->preserveMeshCoverage) {
+			if (submitAction->viewState->removeCadPayload(
+				candidate.payload))
+			    submitAction->updatedCutCount++;
+			continue;
+		    }
 		}
 		submitAction->retainedSceneFaceBudgetUsed =
 		    candidate.minimumFaces >
@@ -1117,6 +1366,22 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			submitAction->viewVolume, submitAction->view,
 			submitAction->targetPixelError,
 			compactViewProjectionPtr)) {
+		    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		    if (filter && filter[0] &&
+			strstr(summary.sourceInstanceKey.getString(), filter)) {
+			const SbVec3f minimum = summary.localBounds.getMin();
+			const SbVec3f maximum = summary.localBounds.getMax();
+			SbVec3f origin;
+			summary.localToSource.multVecMatrix(
+			    SbVec3f(0.0f, 0.0f, 0.0f), origin);
+			bu_log("BObol LoD planning trace occurrence=%s "
+			       "rejected=projection bounds=(%.9g %.9g %.9g)-"
+			       "(%.9g %.9g %.9g) origin=(%.9g %.9g %.9g)\n",
+			       summary.sourceInstanceKey.getString(),
+			       minimum[0], minimum[1], minimum[2],
+			       maximum[0], maximum[1], maximum[2],
+			       origin[0], origin[1], origin[2]);
+		    }
 		    const BObolViewLodState::CadPayload *active =
 			submitAction->viewState ?
 			submitAction->viewState->findCadForOccurrence(
@@ -1213,7 +1478,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->updatedCutCount++;
 	    }
 	}
-	const size_t candidateCount = submitAction->compactEntryPlan.size();
+	const std::vector<size_t> &entryPlan =
+	    submitAction->compactEntryPlanView ?
+		*submitAction->compactEntryPlanView :
+		submitAction->compactEntryPlan;
+	const size_t candidateCount = entryPlan.size();
 	const size_t sourceFirst = submitAction->compactEntryTotal;
 	submitAction->compactEntryTotal += candidateCount;
 	const size_t rangeFirst = submitAction->compactEntryFirst;
@@ -1227,20 +1496,53 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    (rangeLast > sourceFirst ? rangeLast - sourceFirst : 0) :
 	    candidateCount;
 	size_t processedLast = localFirst;
+	const SbBool suppressActiveDuplicate =
+	    (!submitAction->useForcedLevel && submitAction->reset == 0) ?
+	    TRUE : FALSE;
+	std::vector<BObolLodTask> pendingTasks;
+	const size_t taskCapacity =
+	    submitAction->submissionTaskLimit == SIZE_MAX ?
+		localLast - localFirst :
+		std::min(localLast - localFirst,
+		    submitAction->submissionTaskLimit);
+	pendingTasks.reserve(taskCapacity);
+	const int64_t submissionStarted = bu_gettime();
 	for (size_t candidateOffset = localFirst;
 	    candidateOffset < localLast; candidateOffset++) {
+	    if (candidateOffset > localFirst &&
+		submitAction->submissionTimeLimitMicroseconds > 0) {
+		const int64_t elapsed = bu_gettime() - submissionStarted;
+		if (elapsed >= 0 &&
+		    static_cast<uint64_t>(elapsed) >=
+			submitAction->submissionTimeLimitMicroseconds) {
+		    /* Do not consume this entry.  The controller resumes the
+		     * pinned plan at exactly this occurrence next pump. */
+		    processedLast = candidateOffset;
+		    break;
+		}
+	    }
 	    processedLast = candidateOffset + 1;
-	    const size_t i =
-		submitAction->compactEntryPlan[candidateOffset];
+	    const size_t i = entryPlan[candidateOffset];
 	    BObolCompactLodInstanceSummary summary;
 	    if (!source->getCompactLodInstanceSummary(
 		    static_cast<int>(i), summary))
 		continue;
-	    if (!summary.valid || !summary.visible)
+	    if (!summary.valid || !summary.visible) {
+		if (submitAction->retainedSceneFaceBudget != SIZE_MAX &&
+		    submitAction->viewState &&
+		    summary.sourceInstanceKey.getLength() > 0) {
+		    const BObolViewLodState::CadPayload *inactive =
+			submitAction->viewState->findCadForOccurrence(
+			    source, summary.sourceInstanceKey);
+		    if (inactive &&
+			submitAction->viewState->removeCadPayload(inactive))
+			submitAction->updatedCutCount++;
+		}
 		continue;
+	    }
 
 	    submitAction->visitedMeshCount++;
-	    const SbString target = summary.path.getLength() > 0 ?
+	    const SbString &target = summary.path.getLength() > 0 ?
 		summary.path : source->path.getValue();
 	    if (!submitAction->service || !submitAction->service->isRunning()) {
 		submitAction->skippedMeshCount++;
@@ -1287,6 +1589,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    request.objectName = summary.meshAssetName.getLength() > 0 ?
 		summary.meshAssetName : summary.sourceName;
 	    request.occurrenceKey = summary.sourceInstanceKey;
+	    request.sourceRoutingId = source->getCompactSourceRoutingId();
 	    if (request.objectName.getLength() == 0)
 		request.objectName = mesh_lod_source_leaf_name(source);
 	    request.viewRevision = submitAction->viewRevision;
@@ -1311,6 +1614,16 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->viewVolume, submitAction->view,
 		    submitAction->targetPixelError,
 		    compactViewProjectionPtr)) {
+		    if (submitAction->retainedSceneFaceBudget != SIZE_MAX &&
+			submitAction->viewState) {
+			const BObolViewLodState::CadPayload *offscreen =
+			    submitAction->viewState->findCadForOccurrence(
+				source, summary.sourceInstanceKey);
+			if (offscreen &&
+			    submitAction->viewState->
+				removeCadPayload(offscreen))
+			    submitAction->updatedCutCount++;
+		    }
 		    submitAction->skippedMeshCount++;
 		    continue;
 		}
@@ -1331,19 +1644,42 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    submitAction->viewState->findCadForAsset(
 			source, request.objectPath) : NULL;
 	    }
+	    submitAction->visibleMeshCount++;
 	    if (submitAction->useForcedLevel)
 		request.requestedLevel = submitAction->forcedLevel;
 	    else if (activePayload)
 		mesh_lod_apply_level_hysteresis(request,
 		    activePayload->activeLevel);
+	    const SbBool terminalFailure =
+		submitAction->viewState &&
+		submitAction->viewState->
+		    hasCadOccurrenceTerminalFailure(source, request);
+	    if (activePayload || terminalFailure)
+		submitAction->coveredVisibleMeshCount++;
+	    if (terminalFailure) {
+		/* The source's structural occurrence remains the useful fallback.
+		 * A different demand epoch or cut is intentionally not suppressed. */
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
+	    if (!submitAction->useForcedLevel &&
+		mesh_lod_payload_memory_limited_for_epoch(
+		    activePayload, request, submitAction->service)) {
+		/* The retained minimum/richer prior cut remains the stable
+		 * presentation.  Retrying the same suffix in the same capacity
+		 * epoch creates an unbounded worker loop without changing a
+		 * pixel.  A camera/policy change or reclaimed stable bytes
+		 * invalidates this suppression. */
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
 
 	    /* A finite refinement allowance prevents new growth, but by itself
 	     * cannot recover when thousands of already-resident minimum cuts
-	     * collectively exceed the newly calibrated scene capacity.  During
-	     * that recovery pass, retarget retained occurrences in the pinned
-	     * screen-priority order.  The coherent minimum prefix is an
-	     * unconditional coverage floor even when their aggregate population
-	     * exceeds the learned budget. */
+	     * collectively exceed newly calibrated scene capacity.  During that
+	     * recovery pass, retarget retained occurrences in pinned
+	     * screen-priority order.  Entries not admitted retain their
+	     * structural leaf proxies. */
 	    if (activePayload &&
 		submitAction->retainedRecoveredOccurrences.find(
 		    request.occurrenceKey.getString()) ==
@@ -1366,15 +1702,42 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    admittedFaces =
 			activePayload->progressiveMesh->
 			    hierarchyFaceCount(admittedLevel);
+		    /*
+		     * If this caller has explicitly prohibited a cut downgrade,
+		     * or the minimum prefix saves no submitted faces, retained
+		     * admission can account only for what will actually remain
+		     * active.  Controller recovery passes enable downgrades;
+		     * pose-only passes do not enter this block.  Keeping a richer
+		     * snap level at identical draw cost also avoids a quality loss
+		     * with no corresponding FPS benefit.
+		     */
+		    if (!submitAction->allowLevelDowngrade ||
+			admittedFaces >= activePayload->counts.faceCount) {
+			admittedLevel = activePayload->activeLevel;
+			admittedFaces = activePayload->counts.faceCount;
+		    }
 		}
 		const size_t remaining =
 		    submitAction->retainedSceneFaceBudgetUsed >=
 			    submitAction->retainedSceneFaceBudget ?
 			0 : submitAction->retainedSceneFaceBudget -
 			    submitAction->retainedSceneFaceBudgetUsed;
-		if (admittedFaces > remaining) {
+		const SbBool admissionBlocked =
+		    admittedFaces > remaining ? TRUE : FALSE;
+		if (admissionBlocked) {
 		    submitAction->pendingRetainedRefinementCount++;
 		    submitAction->refinementBudgetBlockedCount++;
+		    if (!submitAction->preserveMeshCoverage) {
+			if (submitAction->viewState->
+				removeCadPayload(activePayload)) {
+			    submitAction->updatedCutCount++;
+			    if (submitAction->coveredVisibleMeshCount > 0)
+				submitAction->coveredVisibleMeshCount--;
+			}
+			submitAction->retainedRecoveredOccurrences.insert(
+			    request.occurrenceKey.getString());
+			continue;
+		    }
 		}
 		submitAction->retainedSceneFaceBudgetUsed =
 		    admittedFaces >
@@ -1383,25 +1746,76 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 			SIZE_MAX :
 			submitAction->retainedSceneFaceBudgetUsed +
 			    admittedFaces;
-		request.requestedLevel = admittedLevel;
-		if (admittedLevel < targetLevel)
-		    submitAction->pendingRetainedRefinementCount++;
+		submitAction->retainedRecoveredOccurrences.insert(
+		    request.occurrenceKey.getString());
+		if (activePayload->progressiveMesh) {
+		    /*
+		     * The admitted prefix is a temporary presentation cut, not a
+		     * replacement for the view's desired cut.  Publishing the
+		     * minimum as both activeLevel and requestedLevel made a cold
+		     * coverage pass falsely satisfy the occurrence and erase it
+		     * from the sparse refinement frontier.  Preserve the true
+		     * projected demand so the following pass can refine it.
+		     */
+		    const int retainedRequestedLevel =
+			std::max(admittedLevel, targetLevel);
+		    const int priorLevel = activePayload->activeLevel;
+		    const SbBool retained =
+			submitAction->viewState->retargetCadPayload(
+			    activePayload, admittedLevel,
+			    retainedRequestedLevel,
+			    request.viewRevision,
+			    request.policyRevision);
+		    if (retained && priorLevel != admittedLevel)
+			submitAction->updatedCutCount++;
+		    if (retained && !admissionBlocked &&
+			admittedLevel < retainedRequestedLevel)
+			submitAction->pendingRetainedRefinementCount++;
+		    if (retained) {
+			mesh_lod_trace_projected_request(
+			    request, summary.localBounds, localToRoot,
+			    priorLevel);
+			submitAction->skippedMeshCount++;
+			continue;
+		    }
+		    /*
+		     * A stale/unusable retained binding should not consume this
+		     * occurrence forever.  Fall through with the original view
+		     * target so the ordinary resident/provider route can repair
+		     * it in this same bounded window.
+		     */
+		}
 	    }
 	    mesh_lod_trace_projected_request(request, summary.localBounds,
 		localToRoot, activePayload ? activePayload->activeLevel : -1);
-	    const std::string geometryAsset =
-		request.objectName.getLength() > 0 ?
-		    std::string("name:") + request.objectName.getString() :
-		    std::string("path:") + request.objectPath.getString();
-	    auto cachedGeometry =
-		geometryKeysByAsset.find(geometryAsset);
-	    if (cachedGeometry == geometryKeysByAsset.end()) {
-		const BObolLodCacheKey generated =
-		    bobol_lod_geometry_cache_key(request);
-		cachedGeometry = geometryKeysByAsset.emplace(
-		    geometryAsset, generated.value).first;
+
+	    const SbBool activeAssetMatches =
+		mesh_lod_cad_payload_matches_asset_epoch(
+		    activePayload, request);
+	    if (!submitAction->useForcedLevel && activeAssetMatches &&
+		activePayload->activeLevel == request.requestedLevel) {
+		submitAction->skippedMeshCount++;
+		continue;
 	    }
-	    const SbString &requestGeometryKey = cachedGeometry->second;
+	    if (!submitAction->useForcedLevel &&
+		!submitAction->allowLevelDowngrade && activeAssetMatches &&
+		activePayload->activeLevel > request.requestedLevel) {
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
+	    if (!submitAction->useForcedLevel &&
+		!submitAction->allowRetainedRefinement &&
+		activeAssetMatches &&
+		request.requestedLevel > activePayload->activeLevel) {
+		/*
+		 * Pose-only interaction deliberately retains the existing cut.
+		 * Do not publish a requested-level metadata rewrite for every
+		 * occurrence: the quiet pass recomputes exact demand, while this
+		 * frame needs neither geometry nor convergence mutation.
+		 */
+		submitAction->skippedMeshCount++;
+		continue;
+	    }
 
 	    /* Repeated CAD instances share one retained PoP asset but retain
 	     * independent view cuts.  Once any occurrence has loaded that asset,
@@ -1449,15 +1863,19 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 					    retainedSceneFaceBudgetUsed;
 			    if (reusedFaces > remaining) {
 				submitAction->refinementBudgetBlockedCount++;
+				admitted =
+				    submitAction->preserveMeshCoverage;
 			    }
-			    submitAction->retainedSceneFaceBudgetUsed =
-				reusedFaces >
-					SIZE_MAX -
-					    submitAction->
-						retainedSceneFaceBudgetUsed ?
-				    SIZE_MAX :
-				    submitAction->retainedSceneFaceBudgetUsed +
-					reusedFaces;
+			    if (admitted)
+				submitAction->retainedSceneFaceBudgetUsed =
+				    reusedFaces >
+					    SIZE_MAX -
+						submitAction->
+						    retainedSceneFaceBudgetUsed ?
+					SIZE_MAX :
+					submitAction->
+					    retainedSceneFaceBudgetUsed +
+					    reusedFaces;
 			} else {
 			    admitted = submitAction->reserveInitialFaceCost(
 				reusedFaces);
@@ -1525,61 +1943,33 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	     * cut when it already satisfies this demand.  The controller may
 	     * explicitly allow a cheaper retained draw cut during motion; that
 	     * changes only prefix selection and never rereads/rebuilds geometry. */
-	    if (!submitAction->useForcedLevel &&
-		mesh_lod_cad_payload_is_resident(activePayload, request,
-		    &requestGeometryKey)) {
-		submitAction->skippedMeshCount++;
-		submitAction->appendDiagnostic(target,
-		    "current LoD request is already resident");
-		continue;
-	    }
-	    if (!submitAction->useForcedLevel &&
-		!submitAction->allowLevelDowngrade && activePayload &&
-		activePayload->activeLevel > request.requestedLevel &&
-		mesh_lod_cad_payload_has_same_source(activePayload, request,
-		    &requestGeometryKey)) {
-		submitAction->skippedMeshCount++;
-		submitAction->appendDiagnostic(target,
-		    "finer resident LoD retained during interaction");
-		continue;
-	    }
-	    if (!submitAction->useForcedLevel &&
-		!submitAction->allowRetainedRefinement && activePayload &&
-		request.requestedLevel > activePayload->activeLevel &&
-		mesh_lod_geometry_key_matches(activePayload->cacheKey, request,
-		    &requestGeometryKey)) {
-		(void)submitAction->viewState->retargetCadPayload(activePayload,
-		    activePayload->activeLevel, request.requestedLevel,
-		    request.viewRevision, request.policyRevision);
-		submitAction->skippedMeshCount++;
-		continue;
-	    }
 	    const SbBool retainedTargetDrawable =
 		!submitAction->useForcedLevel && activePayload &&
 		activePayload->progressiveMesh &&
 		request.requestedLevel > activePayload->activeLevel &&
 		activePayload->progressiveMesh->canDrawLevel(
 		    request.requestedLevel);
-	    const int retargetLevel =
+	    int retargetLevel =
 		mesh_lod_available_cad_retarget_level(activePayload, request,
 		    TRUE);
 	    if (submitAction->reset == 0 && activePayload &&
-		mesh_lod_geometry_key_matches(activePayload->cacheKey, request,
-		    &requestGeometryKey) &&
-		retargetLevel > activePayload->activeLevel &&
-		!submitAction->reserveRefinementFaces(
-		    activePayload->progressiveMesh, activePayload->activeLevel,
-		    retargetLevel)) {
-		(void)submitAction->viewState->retargetCadPayload(activePayload,
-		    activePayload->activeLevel, request.requestedLevel,
-		    request.viewRevision, request.policyRevision);
-		submitAction->pendingRetainedRefinementCount++;
-		submitAction->skippedMeshCount++;
-		continue;
+		activeAssetMatches &&
+		retargetLevel > activePayload->activeLevel) {
+		retargetLevel = submitAction->reserveRefinementLevel(
+		    activePayload->progressiveMesh,
+		    activePayload->activeLevel, retargetLevel);
+		if (retargetLevel <= activePayload->activeLevel) {
+		    (void)submitAction->viewState->retargetCadPayload(
+			activePayload, activePayload->activeLevel,
+			request.requestedLevel, request.viewRevision,
+			request.policyRevision);
+		    submitAction->pendingRetainedRefinementCount++;
+		    submitAction->skippedMeshCount++;
+		    continue;
+		}
 	    }
 	    if (submitAction->reset == 0 && activePayload &&
-		mesh_lod_geometry_key_matches(activePayload->cacheKey, request,
-		    &requestGeometryKey) &&
+		activeAssetMatches &&
 		retargetLevel >= 0 &&
 		activePayload->activeLevel != retargetLevel &&
 		submitAction->viewState->retargetCadPayload(activePayload,
@@ -1609,32 +1999,19 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		    continue;
 	    }
 
-	const SbBool suppressActiveDuplicate =
-		(!submitAction->useForcedLevel && submitAction->reset == 0) ?
-		TRUE : FALSE;
-	    if (suppressActiveDuplicate &&
-		submitAction->service->hasActiveRequest(request)) {
-		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
-		if (filter && filter[0] &&
-		    (strstr(request.objectName.getString(), filter) ||
-		     strstr(request.objectPath.getString(), filter)))
-		    bu_log("BObol LoD submit trace object=%s level=%d "
-			   "suppressed=active\n",
-			   request.objectName.getString(),
-			   request.requestedLevel);
-		submitAction->skippedMeshCount++;
-		continue;
-	    }
+	    int providerDeliveryLevel = -1;
 	    if (!submitAction->useForcedLevel && activePayload &&
 		activePayload->progressiveMesh &&
 		request.requestedLevel > activePayload->activeLevel &&
-		mesh_lod_geometry_key_matches(activePayload->cacheKey, request,
-		    &requestGeometryKey)) {
-		const int nextLevel = std::min(request.requestedLevel,
-		    activePayload->activeLevel + 1);
-		if (!submitAction->reserveRefinementFaces(
+		activeAssetMatches) {
+		const int preferredLevel = mesh_lod_bounded_delivery_level(
+		    activePayload->progressiveMesh,
+		    activePayload->activeLevel, request.requestedLevel);
+		providerDeliveryLevel =
+		    submitAction->reserveRefinementLevel(
 			activePayload->progressiveMesh,
-			activePayload->activeLevel, nextLevel)) {
+			activePayload->activeLevel, preferredLevel);
+		if (providerDeliveryLevel <= activePayload->activeLevel) {
 		    (void)submitAction->viewState->retargetCadPayload(
 			activePayload, activePayload->activeLevel,
 			request.requestedLevel, request.viewRevision,
@@ -1651,12 +2028,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		       request.occurrenceKey.getString(),
 		       activePayload ? activePayload->activeLevel : -1,
 		       request.requestedLevel,
-		       activePayload && mesh_lod_geometry_key_matches(
-			   activePayload->cacheKey, request,
-			   &requestGeometryKey) ? 1 : 0,
+		       activeAssetMatches ? 1 : 0,
 		       submitAction->refinementFaceBudget);
 
-	    if (submitAction->submittedTaskCount >=
+	    if (static_cast<size_t>(submitAction->submittedTaskCount) +
+		    pendingTasks.size() >=
 		    submitAction->submissionTaskLimit) {
 		/* Do not consume this cursor entry: it still needs provider
 		 * work.  The controller will resume here after result capacity
@@ -1675,7 +2051,13 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 		continue;
 	    }
 
-	    BObolMeshLodProvider *provider = new BObolMeshLodProvider;
+		    BObolMeshLodProvider *provider = new BObolMeshLodProvider;
+		    BObolSourceMeshRequest sourceMeshRequest;
+		    const SbBool haveSourceMeshRequest =
+			source->getCompactSourceMeshRequest(
+			    static_cast<int>(i), sourceMeshRequest);
+		    if (haveSourceMeshRequest)
+			provider->stagedSource = sourceMeshRequest.stagedSource.lock();
 	    provider->service = submitAction->service;
 	    provider->dbip = submitAction->dbip;
 	    provider->view = submitAction->view;
@@ -1686,6 +2068,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    provider->useCurrentDrawLevel = TRUE;
 	    provider->currentDrawLevel =
 		activePayload ? activePayload->activeLevel : -1;
+	    provider->useDeliveryLevelLimit =
+		providerDeliveryLevel >= 0 ? TRUE : FALSE;
+	    provider->deliveryLevelLimit = providerDeliveryLevel;
+	    /*
+	     * The scene allocator has already charged the complete marginal
+	     * population of this exact cut.  Do not apply a second per-asset
+	     * level walker in the worker and under-deliver the reserved work.
+	     * Cold first coverage, which has no active payload or explicit cut,
+	     * retains the provider's independently bounded first-prefix policy.
+	     */
+	    if (provider->useDeliveryLevelLimit)
+		provider->progressiveDelivery = FALSE;
 	    if (initialFaceAllowance) {
 		provider->initialRefinementFaceBudget =
 		    initialFaceAllowance;
@@ -1704,35 +2098,57 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	    task.generation = submitAction->generation;
 	    task.request = request;
 	    task.realize = bobol_mesh_lod_provider_task;
-	    task.realizeData = provider;
-	    task.realizeDataFree = bobol_mesh_lod_provider_free;
-	    task.debugDelayMilliseconds = mesh_lod_debug_delay_milliseconds(
-		"BOBOL_LOD_TASK_DELAY_MS");
-	    const uint64_t taskId = suppressActiveDuplicate ?
-		submitAction->service->submitIfNotActive(task) :
-		submitAction->service->submit(task);
-	    if (!taskId) {
-		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
-		if (filter && filter[0] &&
-		    (strstr(request.objectName.getString(), filter) ||
-		     strstr(request.objectPath.getString(), filter)))
-		    bu_log("BObol LoD submit trace object=%s level=%d "
-			   "rejected=service\n",
-			   request.objectName.getString(),
-			   request.requestedLevel);
-		bobol_mesh_lod_provider_free(provider);
-		submitAction->skippedMeshCount++;
-	    } else {
-		const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
-		if (filter && filter[0] &&
-		    (strstr(request.objectName.getString(), filter) ||
-		     strstr(request.objectPath.getString(), filter)))
-		    bu_log("BObol LoD submit trace object=%s level=%d "
-			   "task=%llu\n",
-			   request.objectName.getString(),
-			   request.requestedLevel,
-			   static_cast<unsigned long long>(taskId));
-		submitAction->submittedTaskCount++;
+		    task.realizeData = provider;
+		    task.realizeDataFree = bobol_mesh_lod_provider_free;
+		    task.debugDelayMilliseconds = mesh_lod_debug_delay_milliseconds(
+			"BOBOL_LOD_TASK_DELAY_MS");
+		    const int workingSetLevel = providerDeliveryLevel >= 0 ?
+			providerDeliveryLevel : request.requestedLevel;
+		    task.estimatedWorkingSetBytes = activePayload ?
+			mesh_lod_resident_task_estimate(
+			    activePayload->progressiveMesh, workingSetLevel,
+			    activePayload->hasNormals, request.drawMode) :
+			(haveSourceMeshRequest ?
+			    mesh_lod_warm_source_task_estimate(
+				sourceMeshRequest, request) : 0);
+		    pendingTasks.push_back(std::move(task));
+	}
+
+	if (!pendingTasks.empty()) {
+	    std::vector<uint64_t> taskIds;
+	    (void)submitAction->service->submitBatch(
+		pendingTasks, taskIds, suppressActiveDuplicate);
+	    for (size_t taskIndex = 0;
+		    taskIndex < pendingTasks.size(); ++taskIndex) {
+		BObolLodTask &task = pendingTasks[taskIndex];
+		const uint64_t taskId =
+		    taskIndex < taskIds.size() ? taskIds[taskIndex] : 0;
+		const BObolLodRequest &request = task.request;
+		if (!taskId) {
+		    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		    if (filter && filter[0] &&
+			(strstr(request.objectName.getString(), filter) ||
+			 strstr(request.objectPath.getString(), filter)))
+			bu_log("BObol LoD submit trace object=%s level=%d "
+			       "rejected=service\n",
+			       request.objectName.getString(),
+			       request.requestedLevel);
+		    if (task.realizeDataFree && task.realizeData)
+			(*task.realizeDataFree)(task.realizeData);
+		    task.realizeData = NULL;
+		    submitAction->skippedMeshCount++;
+		} else {
+		    const char *filter = getenv("BOBOL_LOD_TRACE_OBJECT");
+		    if (filter && filter[0] &&
+			(strstr(request.objectName.getString(), filter) ||
+			 strstr(request.objectPath.getString(), filter)))
+			bu_log("BObol LoD submit trace object=%s level=%d "
+			       "task=%llu\n",
+			       request.objectName.getString(),
+			       request.requestedLevel,
+			       static_cast<unsigned long long>(taskId));
+		    submitAction->submittedTaskCount++;
+		}
 	    }
 	}
 	submitAction->compactEntryNext = std::max(
@@ -1760,9 +2176,7 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	return;
     }
 
-    const int sourceDrawMode =
-	source->drawMode.getValue() == SoBRLDatabaseSource::SHADED ?
-	BOBOL_LOD_DRAW_SHADED : BOBOL_LOD_DRAW_WIRE;
+    const int sourceDrawMode = source->getEffectiveLodDrawMode();
     const int roleFlags = source->realizationRoleFlags.getValue();
     const int lodEligible = mesh_lod_source_is_threshold_bot(source);
     const int meshEligible = lodEligible ||
@@ -1808,10 +2222,15 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     else if (activePayload)
 	mesh_lod_apply_level_hysteresis(request, activePayload->activeLevel);
     if (!submitAction->useForcedLevel &&
+	mesh_lod_payload_memory_limited_for_epoch(
+	    activePayload, request, submitAction->service)) {
+	submitAction->skippedMeshCount++;
+	source->doAction(action);
+	return;
+    }
+    if (!submitAction->useForcedLevel &&
 	mesh_lod_cad_payload_is_resident(activePayload, request)) {
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target,
-				       "current LoD request is already resident");
 	source->doAction(action);
 	return;
     }
@@ -1820,8 +2239,6 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	activePayload->activeLevel > request.requestedLevel &&
 	mesh_lod_cad_payload_has_same_source(activePayload, request)) {
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target,
-				       "finer resident LoD retained during interaction");
 	source->doAction(action);
 	return;
     }
@@ -1829,9 +2246,6 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	!submitAction->allowRetainedRefinement && activePayload &&
 	request.requestedLevel > activePayload->activeLevel &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request)) {
-	(void)submitAction->viewState->retargetCadPayload(activePayload,
-	    activePayload->activeLevel, request.requestedLevel,
-	    request.viewRevision, request.policyRevision);
 	submitAction->skippedMeshCount++;
 	source->doAction(action);
 	return;
@@ -1841,22 +2255,24 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	activePayload->progressiveMesh &&
 	request.requestedLevel > activePayload->activeLevel &&
 	activePayload->progressiveMesh->canDrawLevel(request.requestedLevel);
-    const int retargetLevel =
+    int retargetLevel =
 	mesh_lod_available_cad_retarget_level(activePayload, request,
 	    retainedTargetDrawable);
     if (submitAction->reset == 0 && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
-	retargetLevel > activePayload->activeLevel &&
-	!submitAction->reserveRefinementFaces(
+	retargetLevel > activePayload->activeLevel) {
+	retargetLevel = submitAction->reserveRefinementLevel(
 	    activePayload->progressiveMesh, activePayload->activeLevel,
-	    retargetLevel)) {
-	(void)submitAction->viewState->retargetCadPayload(activePayload,
-	    activePayload->activeLevel, request.requestedLevel,
-	    request.viewRevision, request.policyRevision);
-	submitAction->pendingRetainedRefinementCount++;
-	submitAction->skippedMeshCount++;
-	source->doAction(action);
-	return;
+	    retargetLevel);
+	if (retargetLevel <= activePayload->activeLevel) {
+	    (void)submitAction->viewState->retargetCadPayload(activePayload,
+		activePayload->activeLevel, request.requestedLevel,
+		request.viewRevision, request.policyRevision);
+	    submitAction->pendingRetainedRefinementCount++;
+	    submitAction->skippedMeshCount++;
+	    source->doAction(action);
+	    return;
+	}
     }
     if (submitAction->reset == 0 && activePayload &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request) &&
@@ -1888,15 +2304,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
 	source->doAction(action);
 	return;
     }
+    int providerDeliveryLevel = -1;
     if (!submitAction->useForcedLevel && activePayload &&
 	activePayload->progressiveMesh &&
 	request.requestedLevel > activePayload->activeLevel &&
 	mesh_lod_geometry_key_matches(activePayload->cacheKey, request)) {
-	const int nextLevel = std::min(request.requestedLevel,
-	    activePayload->activeLevel + 1);
-	if (!submitAction->reserveRefinementFaces(
-		activePayload->progressiveMesh, activePayload->activeLevel,
-		nextLevel)) {
+	const int preferredLevel = mesh_lod_bounded_delivery_level(
+	    activePayload->progressiveMesh,
+	    activePayload->activeLevel, request.requestedLevel);
+	providerDeliveryLevel = submitAction->reserveRefinementLevel(
+	    activePayload->progressiveMesh, activePayload->activeLevel,
+	    preferredLevel);
+	if (providerDeliveryLevel <= activePayload->activeLevel) {
 	    (void)submitAction->viewState->retargetCadPayload(activePayload,
 		activePayload->activeLevel, request.requestedLevel,
 		request.viewRevision, request.policyRevision);
@@ -1928,6 +2347,11 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     provider->useCurrentDrawLevel = TRUE;
     provider->currentDrawLevel =
 	activePayload ? activePayload->activeLevel : -1;
+    provider->useDeliveryLevelLimit =
+	providerDeliveryLevel >= 0 ? TRUE : FALSE;
+    provider->deliveryLevelLimit = providerDeliveryLevel;
+    if (provider->useDeliveryLevelLimit)
+	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {
 	provider->initialRefinementFaceBudget = initialFaceAllowance;
 	provider->initialRefinementPointBudget =
@@ -1942,10 +2366,18 @@ SoBRLMeshLodSubmitAction::databaseSourceAction(SoAction *action, SoNode *node)
     task.generation = submitAction->generation;
     task.request = request;
     task.realize = bobol_mesh_lod_provider_task;
-    task.realizeData = provider;
-    task.realizeDataFree = bobol_mesh_lod_provider_free;
-    task.debugDelayMilliseconds =
-	mesh_lod_debug_delay_milliseconds("BOBOL_LOD_TASK_DELAY_MS");
+	    task.realizeData = provider;
+	    task.realizeDataFree = bobol_mesh_lod_provider_free;
+	    task.debugDelayMilliseconds =
+		mesh_lod_debug_delay_milliseconds("BOBOL_LOD_TASK_DELAY_MS");
+	    if (activePayload) {
+		const int workingSetLevel = providerDeliveryLevel >= 0 ?
+		    providerDeliveryLevel : request.requestedLevel;
+		task.estimatedWorkingSetBytes =
+		    mesh_lod_resident_task_estimate(
+			activePayload->progressiveMesh, workingSetLevel,
+			activePayload->hasNormals, request.drawMode);
+	    }
 
     uint64_t taskId = suppressActiveDuplicate ?
 		      submitAction->service->submitIfNotActive(task) :
@@ -2020,10 +2452,14 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     mesh_lod_trace_projected_request(request, request.bounds,
 	SbMatrix::identity(), viewPayload ? viewPayload->activeLevel : -1);
     if (!submitAction->useForcedLevel &&
+	mesh_lod_payload_memory_limited_for_epoch(
+	    viewPayload, request, submitAction->service)) {
+	submitAction->skippedMeshCount++;
+	return;
+    }
+    if (!submitAction->useForcedLevel &&
 	mesh_lod_mesh_payload_is_resident(viewPayload, request)) {
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target,
-				       "current LoD request is already resident");
 	return;
     }
     if (!submitAction->useForcedLevel &&
@@ -2031,17 +2467,12 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	viewPayload->activeLevel > request.requestedLevel &&
 	mesh_lod_mesh_payload_has_same_source(viewPayload, request)) {
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target,
-				       "finer resident LoD retained during interaction");
 	return;
     }
     if (!submitAction->useForcedLevel &&
 	!submitAction->allowRetainedRefinement && viewPayload &&
 	request.requestedLevel > viewPayload->activeLevel &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request)) {
-	(void)submitAction->viewState->retargetMeshPayload(viewPayload,
-	    viewPayload->activeLevel, request.requestedLevel,
-	    request.viewRevision, request.policyRevision);
 	submitAction->skippedMeshCount++;
 	return;
     }
@@ -2050,21 +2481,23 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	viewPayload->progressiveMesh &&
 	request.requestedLevel > viewPayload->activeLevel &&
 	viewPayload->progressiveMesh->canDrawLevel(request.requestedLevel);
-    const int retargetLevel =
+    int retargetLevel =
 	mesh_lod_available_mesh_retarget_level(viewPayload, request,
 	    retainedTargetDrawable);
     if (submitAction->reset == 0 && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
-	retargetLevel > viewPayload->activeLevel &&
-	!submitAction->reserveRefinementFaces(
+	retargetLevel > viewPayload->activeLevel) {
+	retargetLevel = submitAction->reserveRefinementLevel(
 	    viewPayload->progressiveMesh, viewPayload->activeLevel,
-	    retargetLevel)) {
-	(void)submitAction->viewState->retargetMeshPayload(viewPayload,
-	    viewPayload->activeLevel, request.requestedLevel,
-	    request.viewRevision, request.policyRevision);
-	submitAction->pendingRetainedRefinementCount++;
-	submitAction->skippedMeshCount++;
-	return;
+	    retargetLevel);
+	if (retargetLevel <= viewPayload->activeLevel) {
+	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
+		viewPayload->activeLevel, request.requestedLevel,
+		request.viewRevision, request.policyRevision);
+	    submitAction->pendingRetainedRefinementCount++;
+	    submitAction->skippedMeshCount++;
+	    return;
+	}
     }
     if (submitAction->reset == 0 && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request) &&
@@ -2085,8 +2518,6 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 	request.requestedLevel < 0 && viewPayload &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request)) {
 	submitAction->skippedMeshCount++;
-	submitAction->appendDiagnostic(target,
-				       "current LoD request is already resident");
 	return;
     }
 
@@ -2100,15 +2531,18 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
 				       "current LoD request is already active");
 	return;
     }
+    int providerDeliveryLevel = -1;
     if (!submitAction->useForcedLevel && viewPayload &&
 	viewPayload->progressiveMesh &&
 	request.requestedLevel > viewPayload->activeLevel &&
 	mesh_lod_geometry_key_matches(viewPayload->cacheKey, request)) {
-	const int nextLevel = std::min(request.requestedLevel,
-	    viewPayload->activeLevel + 1);
-	if (!submitAction->reserveRefinementFaces(
-		viewPayload->progressiveMesh, viewPayload->activeLevel,
-		nextLevel)) {
+	const int preferredLevel = mesh_lod_bounded_delivery_level(
+	    viewPayload->progressiveMesh,
+	    viewPayload->activeLevel, request.requestedLevel);
+	providerDeliveryLevel = submitAction->reserveRefinementLevel(
+	    viewPayload->progressiveMesh, viewPayload->activeLevel,
+	    preferredLevel);
+	if (providerDeliveryLevel <= viewPayload->activeLevel) {
 	    (void)submitAction->viewState->retargetMeshPayload(viewPayload,
 		viewPayload->activeLevel, request.requestedLevel,
 		request.viewRevision, request.policyRevision);
@@ -2138,6 +2572,11 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     provider->useCurrentDrawLevel = TRUE;
     provider->currentDrawLevel =
 	viewPayload ? viewPayload->activeLevel : -1;
+    provider->useDeliveryLevelLimit =
+	providerDeliveryLevel >= 0 ? TRUE : FALSE;
+    provider->deliveryLevelLimit = providerDeliveryLevel;
+    if (provider->useDeliveryLevelLimit)
+	provider->progressiveDelivery = FALSE;
     if (initialFaceAllowance) {
 	provider->initialRefinementFaceBudget = initialFaceAllowance;
 	provider->initialRefinementPointBudget =
@@ -2152,10 +2591,27 @@ SoBRLMeshLodSubmitAction::meshShapeAction(SoAction *action, SoNode *node)
     task.generation = submitAction->generation;
     task.request = request;
     task.realize = bobol_mesh_lod_provider_task;
-    task.realizeData = provider;
-    task.realizeDataFree = bobol_mesh_lod_provider_free;
-    task.debugDelayMilliseconds =
-	mesh_lod_debug_delay_milliseconds("BOBOL_LOD_TASK_DELAY_MS");
+	    task.realizeData = provider;
+	    task.realizeDataFree = bobol_mesh_lod_provider_free;
+	    task.debugDelayMilliseconds =
+		mesh_lod_debug_delay_milliseconds("BOBOL_LOD_TASK_DELAY_MS");
+	    const int workingSetLevel = providerDeliveryLevel >= 0 ?
+		providerDeliveryLevel : request.requestedLevel;
+	    if (viewPayload) {
+		task.estimatedWorkingSetBytes =
+		    mesh_lod_resident_task_estimate(
+			viewPayload->progressiveMesh, workingSetLevel,
+			viewPayload->hasNormals, request.drawMode);
+	    } else if (shape->lodAvailable.getValue() &&
+		shape->lodActiveLevel.getValue() >= workingSetLevel &&
+		shape->lodFaceCount.getValue() > 0 &&
+		shape->lodPointCount.getValue() > 0) {
+		task.estimatedWorkingSetBytes =
+		    mesh_lod_resident_working_set_estimate(
+			shape->lodPointCount.getValue(),
+			shape->lodFaceCount.getValue(),
+			shape->lodHasNormals.getValue(), request.drawMode);
+	    }
 
     uint64_t taskId = suppressActiveDuplicate ?
 		      submitAction->service->submitIfNotActive(task) :

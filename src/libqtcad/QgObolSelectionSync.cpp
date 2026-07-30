@@ -180,6 +180,10 @@ qg_obol_sync_selection_state_impl(struct ged *gedp,
 	qg_obol_selection_paths(gedp, setName);
     if (require_active_selection && selectedPaths.empty())
 	return 0;
+    std::vector<SbString> compactSelectedPaths;
+    compactSelectedPaths.reserve(selectedPaths.size());
+    for (const std::string &path : selectedPaths)
+	compactSelectedPaths.push_back(SbString(path.c_str()));
 
     std::unordered_set<SoBRLDatabaseSource *> sources;
     qg_obol_collect_render_sources(obol->getRenderSceneRoot(), sources);
@@ -193,24 +197,18 @@ qg_obol_sync_selection_state_impl(struct ged *gedp,
 
 	const bool wholeSourceSelected =
 	    qg_obol_source_selected(source, selectedPaths);
-	if (source->hasCompactInstanceIndex()) {
-	    for (int j = 0; j < source->getCompactInstanceCount(); j++) {
-		BObolCompactInstanceHandle handle;
-		BObolCompactInstanceSummary summary;
-		if (!source->getCompactInstanceHandle(j, handle) ||
-		    !source->getCompactInstanceSummary(handle, summary))
-		    continue;
-		const bool selected = wholeSourceSelected ||
-		    qg_obol_realized_path_selected(summary.path.getString(),
-			selectedPaths);
-		if (summary.selected == (selected ? TRUE : FALSE))
-		    continue;
-		changed |= source->setCompactInstanceDisplayStateForPath(
-		    summary.path.getString(), FALSE, 0, FALSE, 1,
-		    selected ? TRUE : FALSE, 0, FALSE);
-	    }
+	/*
+	 * Store the semantic path frontier even before a compact index exists.
+	 * A cold progressive source may publish its 50k occurrence registry
+	 * after the user selects a tree row; installCompactInstanceIndex()
+	 * reapplies this retained frontier to the new entries.  The source's
+	 * sorted path index also makes this proportional to the changed
+	 * selection, rather than scanning every occurrence on the GUI thread.
+	 */
+	changed |= source->syncCompactInstanceSelectedPaths(
+	    compactSelectedPaths);
+	if (source->hasCompactInstanceIndex())
 	    continue;
-	}
 
 	for (int j = 0; j < source->getRealizedShapeCount(); j++) {
 	    SoBRLVListShape *shape = source->getRealizedShape(j);

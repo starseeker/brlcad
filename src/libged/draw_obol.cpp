@@ -155,6 +155,15 @@ static int ged_obol_progressive_advance_provider(
     void *user_data,
     const BObolProgressiveOptions *options,
     BObolProgressiveStatus *status);
+static int ged_obol_stream_cached_leaf_manifest(
+    SoBRLDatabaseSource *source,
+    struct db_i *database,
+    int draw_mode,
+    uint32_t source_revision,
+    BObolCompactOccurrenceStream *stream);
+static int ged_obol_store_leaf_proxy_manifest(
+    struct db_i *database,
+    const SoBRLDatabaseSource *source);
 static int ged_obol_apply_draw_paths_to_scene(
     struct ged *gedp,
     struct ged_view_context *view_ctx,
@@ -227,6 +236,7 @@ struct ged_obol_progressive_provider_data {
 	gedp(NULL),
 	view_ctx(NULL),
 	pending_autoview(0),
+	pending_autoview_bounds_complete(0),
 	expected_view_revision(0),
 	autoview_factor(BV_AUTOVIEW_SCALE_DEFAULT),
 	deferred_refine_stage(0)
@@ -240,6 +250,7 @@ struct ged_obol_progressive_provider_data {
     struct ged *gedp;
     struct ged_view_context *view_ctx;
     int pending_autoview;
+    int pending_autoview_bounds_complete;
     uint64_t expected_view_revision;
     fastf_t autoview_factor;
     int deferred_refine_stage;
@@ -257,7 +268,10 @@ struct ged_obol_progressive_provider_data {
 
 struct ged_obol_deferred_realization_item {
     ged_obol_deferred_realization_item(void) :
-	source(NULL), database(NULL), primaryScene(FALSE), allowWireFallback(FALSE)
+	source(NULL), snapshotSourceDatabase(NULL), database(NULL),
+	primaryScene(FALSE), allowWireFallback(FALSE),
+	warmManifest(FALSE), manifestStored(FALSE), streamBatchQuantum(256),
+	streamMergeMicrosecondsPerItem(0.0)
     {
     }
 
@@ -267,16 +281,32 @@ struct ged_obol_deferred_realization_item {
 	    source->unref();
 	if (database)
 	    db_close(database);
+	if (snapshotSourceDatabase)
+	    db_close(snapshotSourceDatabase);
 	if (snapshotPath.getLength() > 0)
 	    (void)bu_file_delete(snapshotPath.getString());
     }
 
     SoBRLDatabaseSource *source;
+    /* Ref-counted live database handle used only to construct the immutable
+     * closure snapshot on the worker. */
+    struct db_i *snapshotSourceDatabase;
     struct db_i *database;
     SbString snapshotPath;
     std::string instanceKey;
+    int drawMode = 0;
     SbBool primaryScene;
     SbBool allowWireFallback;
+    /* Written by the worker before the job's release-store of COMPLETE and
+     * read by the GUI only after its acquire-load. */
+    SbBool warmManifest;
+    SbBool manifestStored;
+    /* GUI-thread adaptive publication quantum. */
+    size_t streamBatchQuantum;
+    /* Conservative observed merge cost.  Batch size alone is not a useful
+     * predictor once retained occurrence maps grow from hundreds to tens of
+     * thousands of records. */
+    double streamMergeMicrosecondsPerItem;
     /* Worker->pump stream of completed per-leaf occurrences.  Shared with the
      * worker lambda so it outlives every push (the job join blocks on the
      * worker before items are destroyed). */
@@ -293,7 +323,7 @@ struct ged_obol_deferred_realization_job {
     };
 
     ged_obol_deferred_realization_job(void) :
-	state(PENDING), cancelRequested(false)
+	state(PENDING), cancelRequested(false), stagingLeaseReleaseAfter(0)
     {
     }
 
@@ -333,6 +363,41 @@ struct ged_obol_deferred_realization_job {
 			success = false;
 			break;
 		    }
+		    /*
+		     * A complete warm manifest is self-contained: it records every
+		     * occurrence transform, leaf bound, material state, and source
+		     * mesh request.  Probe it using the already-cloned live handle
+		     * before reopening and directory-building a multi-gigabyte
+		     * database.  The live source remains the authoritative database
+		     * owner for subsequent view-local PoP requests; the detached
+		     * worker needs a full directory only on a miss/partial manifest.
+		     */
+		    int warmManifest = 0;
+		    if (item->stream && item->snapshotSourceDatabase &&
+			!cancelRequested.load(std::memory_order_acquire))
+			warmManifest = ged_obol_stream_cached_leaf_manifest(
+			    source, item->snapshotSourceDatabase, item->drawMode,
+			    source->sourceRevision.getValue(),
+			    item->stream.get());
+		    item->warmManifest = warmManifest == 2 ? TRUE : FALSE;
+		    if (item->warmManifest && item->snapshotSourceDatabase) {
+			db_close(item->snapshotSourceDatabase);
+			item->snapshotSourceDatabase = NULL;
+		    }
+		    if (!item->warmManifest && !item->database) {
+			const int64_t snapshotStart = bu_gettime();
+			if (!item->snapshotSourceDatabase ||
+			    !source->initializeDetachedRealizationDatabase(
+				item->snapshotSourceDatabase, &item->database,
+				&item->snapshotPath)) {
+			    success = false;
+			    break;
+			}
+			ged_obol_timing_log(
+			    "job: DB snapshot (worker)", snapshotStart, -1);
+			db_close(item->snapshotSourceDatabase);
+			item->snapshotSourceDatabase = NULL;
+		    }
 		    const int representation = source->representationMode.getValue();
 		    const bool mesh =
 			(source->realizationRoleFlags.getValue() &
@@ -345,8 +410,9 @@ struct ged_obol_deferred_realization_job {
 		    const int64_t realize_start = bu_gettime();
 		    BObolCompactOccurrenceStream *stream =
 			item->stream ? item->stream.get() : NULL;
-		    SbBool realized = mesh ? source->realizeDatabaseMesh(stream) :
-			source->realizeDatabaseWireframe(stream);
+		    SbBool realized = warmManifest == 2 ? TRUE :
+			(mesh ? source->realizeDatabaseMesh(stream) :
+			    source->realizeDatabaseWireframe(stream));
 		    if (!realized && mesh && item->allowWireFallback)
 			realized = source->realizeDatabaseWireframe(stream);
 		    ged_obol_timing_log(mesh ?
@@ -365,6 +431,22 @@ struct ged_obol_deferred_realization_job {
 			success = false;
 			break;
 		    }
+		    /*
+		     * Non-BoT and fallback paths may not have an earlier
+		     * bounds-only phase.  Completed detached realization owns
+		     * authoritative source bounds, so adoption is the final safe
+		     * point at which deferred autoview may run once.
+		     */
+		    if (stream && !stream->hasCoverageBoundsComplete())
+			stream->setCoverageBoundsComplete(true);
+		    /* Manifest serialization is proportional to leaf count and
+		     * belongs with the detached realization, not in the final GUI
+		     * adoption tick.  A complete warm manifest is already current
+		     * and needs no rewrite. */
+		    if (!item->warmManifest)
+			item->manifestStored =
+			    ged_obol_store_leaf_proxy_manifest(
+				item->database, source) ? TRUE : FALSE;
 		}
 		if (cancelRequested.load(std::memory_order_acquire))
 		    state.store(CANCELLED, std::memory_order_release);
@@ -387,6 +469,11 @@ struct ged_obol_deferred_realization_job {
 
     std::atomic<int> state;
     std::atomic<bool> cancelRequested;
+    /* Completed streams retain their bounded cold-source leases briefly after
+     * adoption so the following view-LoD traversal can capture them.  Once a
+     * task owns a lease its provider shared_ptr, not this grace period, keeps
+     * the arrays alive. */
+    int64_t stagingLeaseReleaseAfter;
     std::vector<std::unique_ptr<ged_obol_deferred_realization_item>> items;
     std::thread worker;
 };
@@ -5520,6 +5607,168 @@ ged_obol_faceplate_sync_params(BObolViewController *controller,
 	    labels, style);
 }
 
+static std::string
+ged_obol_lod_compact_count(size_t value)
+{
+    struct bu_vls text = BU_VLS_INIT_ZERO;
+    if (value >= 1000000)
+	bu_vls_sprintf(&text, "%.1fM",
+	    static_cast<double>(value) / 1000000.0);
+    else if (value >= 1000)
+	bu_vls_sprintf(&text, "%.1fk",
+	    static_cast<double>(value) / 1000.0);
+    else
+	bu_vls_sprintf(&text, "%zu", value);
+    const std::string result = bu_vls_cstr(&text);
+    bu_vls_free(&text);
+    return result;
+}
+
+static void
+ged_obol_faceplate_sync_lod_progress(BObolViewController *controller,
+				     struct ged_view_context *view_ctx)
+{
+    static const char track_name[] = "_faceplate/lod_progress_track";
+    static const char fill_name[] = "_faceplate/lod_progress_fill";
+    static const char label_name[] = "_faceplate/lod_progress_label";
+    BObolLodConvergenceStatus status;
+    controller->getLodConvergenceStatus(status);
+
+    const bool show =
+	status.phase != BOBOL_LOD_CONVERGENCE_IDLE ||
+	status.backgroundPending || status.performanceLimited ||
+	status.failedSourceCount > 0;
+    if (!show) {
+	ged_obol_faceplate_remove(controller, view_ctx, track_name);
+	ged_obol_faceplate_remove(controller, view_ctx, fill_name);
+	ged_obol_faceplate_remove(controller, view_ctx, label_name);
+	return;
+    }
+
+    int color[3] = {96, 220, 255};
+    struct bu_vls text = BU_VLS_INIT_ZERO;
+    const int percent = static_cast<int>(
+	std::floor(std::max(0.0f, std::min(1.0f, status.fraction)) *
+	    100.0f + 0.5f));
+    const size_t pending = status.pendingTasks > SIZE_MAX - status.inFlight ?
+	SIZE_MAX : status.pendingTasks + status.inFlight;
+	switch (status.phase) {
+	case BOBOL_LOD_CONVERGENCE_DISCOVERING:
+	    if (status.expectedLeafCount > status.availableLeafCount) {
+		bu_vls_sprintf(&text, "Discovering model %d%%", percent);
+		bu_vls_printf(&text, "  %s/%s parts",
+		    ged_obol_lod_compact_count(
+			std::min(status.availableLeafCount,
+			    status.expectedLeafCount)).c_str(),
+		    ged_obol_lod_compact_count(
+			status.expectedLeafCount).c_str());
+	    } else {
+		bu_vls_sprintf(&text, "Discovering model");
+		if (status.availableLeafCount > 0)
+		    bu_vls_printf(&text, "  %s parts found",
+			ged_obol_lod_compact_count(
+			    status.availableLeafCount).c_str());
+	    }
+	    break;
+	case BOBOL_LOD_CONVERGENCE_INTERACTIVE:
+	    color[0] = 255;
+	    color[1] = 205;
+	    color[2] = 72;
+	    bu_vls_sprintf(&text, "Interactive detail  %s triangles",
+		ged_obol_lod_compact_count(status.activeFaces).c_str());
+	    break;
+	case BOBOL_LOD_CONVERGENCE_CALIBRATING:
+	    color[0] = 255;
+	    color[1] = 170;
+	    color[2] = 64;
+	    bu_vls_sprintf(&text,
+		"Balancing detail for %.0f FPS  %s triangles",
+		static_cast<double>(controller->getLodStableTargetFps()),
+		ged_obol_lod_compact_count(status.activeFaces).c_str());
+	    break;
+	case BOBOL_LOD_CONVERGENCE_REFINING:
+	    bu_vls_sprintf(&text, "Refining view %d%%", percent);
+	    if (status.visibleTargetCount > 0)
+		bu_vls_printf(&text, "  %s/%s targets",
+		    ged_obol_lod_compact_count(
+			std::min(status.satisfiedPayloadCount,
+			    status.visibleTargetCount)).c_str(),
+		    ged_obol_lod_compact_count(
+			status.visibleTargetCount).c_str());
+	    if (pending > 0)
+		bu_vls_printf(&text, "  %s loading",
+		    ged_obol_lod_compact_count(pending).c_str());
+	    break;
+	case BOBOL_LOD_CONVERGENCE_BACKGROUND:
+	    color[0] = 112;
+	    color[1] = 235;
+	    color[2] = 135;
+	    bu_vls_sprintf(&text, "View ready  optimizing memory/cache");
+	    if (status.residentMeshBytes > 0)
+		bu_vls_printf(&text, "  %.0f MB resident",
+		    static_cast<double>(status.residentMeshBytes) /
+			(1024.0 * 1024.0));
+	    break;
+	case BOBOL_LOD_CONVERGENCE_ERROR:
+	    color[0] = 255;
+	    color[1] = 90;
+	    color[2] = 80;
+	    bu_vls_sprintf(&text, "View incomplete  %u geometry error%s",
+		status.failedSourceCount,
+		status.failedSourceCount == 1 ? "" : "s");
+	    break;
+	case BOBOL_LOD_CONVERGENCE_IDLE:
+	default:
+	    color[0] = 112;
+	    color[1] = 235;
+	    color[2] = 135;
+	    bu_vls_sprintf(&text,
+		status.performanceLimited ?
+		    "View ready  responsiveness-limited  %s triangles" :
+		    "View ready  %s triangles",
+		ged_obol_lod_compact_count(status.activeFaces).c_str());
+	    break;
+    }
+
+    const int track_color[3] = {72, 78, 86};
+    std::vector<SbVec3f> points;
+    std::vector<int32_t> commands;
+    points.reserve(2);
+    commands.reserve(2);
+    ged_obol_faceplate_append_line(points, commands, view_ctx,
+	0.965, -0.58, 0.965, 0.58);
+    BObolFeatureStyle track_style = ged_obol_faceplate_style(
+	track_color, 72, 78, 86, 9);
+    (void)ged_obol_faceplate_publish_lines(controller, view_ctx,
+	track_name, points, commands, track_style);
+
+    points.clear();
+    commands.clear();
+    const fastf_t fill_top =
+	-0.58 + 1.16 * std::max(0.0f,
+	    std::min(1.0f, status.fraction));
+    if (fill_top > -0.58) {
+	ged_obol_faceplate_append_line(points, commands, view_ctx,
+	    0.965, -0.58, 0.965, fill_top);
+	BObolFeatureStyle fill_style = ged_obol_faceplate_style(
+	    color, 96, 220, 255, 7);
+	(void)ged_obol_faceplate_publish_lines(controller, view_ctx,
+	    fill_name, points, commands, fill_style);
+    } else {
+	ged_obol_faceplate_remove(controller, view_ctx, fill_name);
+    }
+
+    std::vector<BObolLabel> labels;
+    labels.push_back(ged_obol_faceplate_label(view_ctx,
+	bu_vls_cstr(&text), 0.10, -0.70, color,
+	96, 220, 255, 12, 0));
+    BObolFeatureStyle label_style = ged_obol_faceplate_style(
+	color, 96, 220, 255, 1);
+    (void)ged_obol_faceplate_publish_hud_labels(controller, view_ctx,
+	label_name, labels, label_style);
+    bu_vls_free(&text);
+}
+
 static void
 ged_obol_faceplate_sync_scale(BObolViewController *controller,
 			      struct ged_view_context *view_ctx)
@@ -6196,6 +6445,7 @@ ged_obol_view_context_faceplate_sync(struct ged *gedp, struct ged_view_context *
     if (presentation_interval)
 	(void)bv_frametime_set(ged_obol_bv(view_ctx), presentation_interval);
     ged_obol_faceplate_sync_params(controller, view_ctx);
+    ged_obol_faceplate_sync_lod_progress(controller, view_ctx);
     ged_obol_faceplate_sync_scale(controller, view_ctx);
     ged_obol_faceplate_sync_axes(controller, view_ctx);
     ged_obol_faceplate_sync_framebuffer(controller, view_ctx);
@@ -16645,10 +16895,65 @@ ged_obol_collect_structural_proxy_children(
 }
 
 static std::shared_ptr<const Obol::PartGeometry>
-ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max)
+ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max,
+    SbMatrix *geometry_transform)
 {
     if (!bounds_min || !bounds_max)
 	return std::shared_ptr<const Obol::PartGeometry>();
+
+    if (geometry_transform)
+	*geometry_transform = SbMatrix::identity();
+
+    /*
+     * Structural AABBs are instances of one twelve-edge primitive.  Retain
+     * one unit cube and keep its geometry-to-object transform distinct from
+     * the hierarchy placement.  The distinction is required when a box is
+     * upgraded in place to native object-local mesh data.
+     */
+    const double sx = bounds_max[X] - bounds_min[X];
+    const double sy = bounds_max[Y] - bounds_min[Y];
+    const double sz = bounds_max[Z] - bounds_min[Z];
+    if (geometry_transform && isfinite(sx) && isfinite(sy) && isfinite(sz) &&
+	sx > SMALL_FASTF && sy > SMALL_FASTF && sz > SMALL_FASTF) {
+	static const std::shared_ptr<const Obol::PartGeometry> unit_geometry = []() {
+	    std::shared_ptr<Obol::PartGeometry> geometry(
+		new Obol::PartGeometry);
+	    Obol::WireRep wire;
+	    const SbVec3f corners[8] = {
+		SbVec3f(0.0f, 0.0f, 0.0f), SbVec3f(1.0f, 0.0f, 0.0f),
+		SbVec3f(0.0f, 1.0f, 0.0f), SbVec3f(1.0f, 1.0f, 0.0f),
+		SbVec3f(0.0f, 0.0f, 1.0f), SbVec3f(1.0f, 0.0f, 1.0f),
+		SbVec3f(0.0f, 1.0f, 1.0f), SbVec3f(1.0f, 1.0f, 1.0f)
+	    };
+	    static const unsigned int edges[12][2] = {
+		{0, 1}, {1, 3}, {3, 2}, {2, 0},
+		{4, 5}, {5, 7}, {7, 6}, {6, 4},
+		{0, 4}, {1, 5}, {2, 6}, {3, 7}
+	    };
+	    wire.segmentPoints.reserve(24);
+	    wire.segmentIds.reserve(12);
+	    for (unsigned int edge = 0; edge < 12; edge++) {
+		wire.segmentPoints.push_back(corners[edges[edge][0]]);
+		wire.segmentPoints.push_back(corners[edges[edge][1]]);
+		wire.segmentIds.push_back(edge + 1);
+	    }
+	    wire.bounds = SbBox3f(corners[0], corners[7]);
+	    geometry->wire = std::move(wire);
+	    geometry->subpixelProxyEligible = true;
+	    geometry->structuralProxy = true;
+	    return std::shared_ptr<const Obol::PartGeometry>(geometry);
+	}();
+	geometry_transform->setScale(
+	    SbVec3f(static_cast<float>(sx), static_cast<float>(sy),
+		static_cast<float>(sz)));
+	SbMatrix translation;
+	translation.setTranslate(
+	    SbVec3f(static_cast<float>(bounds_min[X]),
+		static_cast<float>(bounds_min[Y]),
+		static_cast<float>(bounds_min[Z])));
+	geometry_transform->multRight(translation);
+	return unit_geometry;
+    }
 
     std::shared_ptr<Obol::PartGeometry> geometry(
 	new Obol::PartGeometry);
@@ -16697,6 +17002,7 @@ ged_obol_aabb_proxy_geometry(const point_t bounds_min, const point_t bounds_max)
      * SoCADAssembly may render a depth-tested point when every AABB corner
      * projects into one pixel, while retaining the box for bounds and picks. */
     geometry->subpixelProxyEligible = true;
+    geometry->structuralProxy = true;
     return geometry;
 }
 
@@ -16783,7 +17089,7 @@ ged_obol_structural_proxy_occurrence(
 {
     BObolCompactOccurrence occurrence;
     occurrence.geometry = ged_obol_aabb_proxy_geometry(node.boundsMin,
-	node.boundsMax);
+	node.boundsMax, &occurrence.geometryTransform);
     occurrence.localTransform = node.localMatrix;
     occurrence.lodBacked = TRUE;
     occurrence.occurrenceIndex = static_cast<uint32_t>(node.row);
@@ -16887,6 +17193,8 @@ ged_obol_structural_proxy_manifest_occurrence(
 	    SbVec3f(static_cast<float>(cached.meshAssetBoundsMax[X]),
 		static_cast<float>(cached.meshAssetBoundsMax[Y]),
 		static_cast<float>(cached.meshAssetBoundsMax[Z])));
+	request.meshAssetTransform =
+	    ged_obol_sbmatrix_from_mat(cached.meshAssetMatrix);
 	request.faceCount = cached.sourceFaceCount;
 	request.pointCount = cached.sourcePointCount;
 	request.bounds = occurrence.summary.bounds;
@@ -16902,6 +17210,162 @@ ged_obol_structural_proxy_manifest_occurrence(
 	request.lodBoundsMax = bmax;
     }
     return occurrence;
+}
+
+/*
+ * Warm leaf coverage is a producer-side concern.  Deserialize and enqueue it
+ * on the detached worker rather than constructing tens of thousands of CAD
+ * records in the command callback.  The live pump retains its bounded merge
+ * deadline, so a ready 50k manifest cannot monopolize input handling.
+ *
+ * This is a presentation seed.  The following database walk still produces
+ * authoritative material and hierarchy semantics, but it can skip the
+ * redundant full-BoT coverage import when every manifest occurrence carries a
+ * source-mesh request.
+ */
+static int
+ged_obol_stream_cached_leaf_manifest(
+    SoBRLDatabaseSource *source,
+    struct db_i *database,
+    int draw_mode,
+    uint32_t source_revision,
+    BObolCompactOccurrenceStream *stream)
+{
+    if (!source || !database || !stream || stream->isCancelled())
+	return 0;
+    const std::string rootPath = ged_obol_skip_leading_slash(
+	source->path.getValue().getString());
+    if (rootPath.empty())
+	return 0;
+
+    const int64_t started = bu_gettime();
+    ged_obol_structural_proxy_context ctx{};
+    ctx.gedp = NULL;
+    ctx.viewCtx = NULL;
+    ctx.drawMode = draw_mode;
+    ctx.sourceRevision = source_revision;
+
+    /*
+     * Preserve the exact cached target extent when the first leaf batch
+     * switches the live source from its external root proxy to a compact
+     * registry.  Without this handoff the overview vanished after only 512 of
+     * 50k leaves were present.  Final authoritative adoption intentionally
+     * omits this synthetic occurrence and retires it once coverage is whole.
+     */
+    const char *cacheName = strrchr(rootPath.c_str(), '/');
+    cacheName = cacheName ? cacheName + 1 : rootPath.c_str();
+    struct BObolDrawProxyRecord rootProxy;
+    bobol_draw_proxy_record_init(&rootProxy);
+    bool exactOverviewQueued = false;
+    if (bobol_draw_proxy_cache_get(database, cacheName,
+	    BOBOL_DRAW_CACHE_PROXY_AABB, &rootProxy) == BRLCAD_OK &&
+	rootProxy.pointCount == 2) {
+	ged_obol_structural_proxy_node node;
+	node.path = rootPath + "/@draw-extent";
+	node.objectName = cacheName;
+	node.instanceKey = node.path;
+	node.boolOp = DB_OP_UNION;
+	node.row = 0;
+	node.localMatrix = SbMatrix::identity();
+	VMOVE(node.boundsMin, rootProxy.points[0]);
+	VMOVE(node.boundsMax, rootProxy.points[1]);
+	node.publishBounds = 1;
+	node.metadataValid = 0;
+	BObolCompactOccurrence overview =
+	    ged_obol_structural_proxy_occurrence(ctx, node);
+	overview.summary.recordRole = "lod-overview";
+	overview.summary.geometryKind = "overview-aabb";
+	overview.summary.selectable = FALSE;
+	if (overview.geometry) {
+	    stream->pushPriority(overview);
+	    exactOverviewQueued = true;
+	}
+    }
+
+    struct BObolDrawManifest manifest;
+    bobol_draw_manifest_init(&manifest);
+    if (bobol_draw_manifest_cache_get(database, rootPath.c_str(),
+	    &manifest) != BRLCAD_OK)
+	return 0;
+    stream->setExpectedCount(manifest.occurrenceCount);
+
+    bool complete = manifest.occurrenceCount > 0;
+    size_t pushed = 0;
+    SbBox3f aggregateBounds;
+    aggregateBounds.makeEmpty();
+    for (size_t i = 0; i < manifest.occurrenceCount; i++) {
+	if (stream->isCancelled()) {
+	    complete = false;
+	    break;
+	}
+	BObolCompactOccurrence occurrence =
+	    ged_obol_structural_proxy_manifest_occurrence(ctx,
+		manifest.occurrences[i]);
+	if (!occurrence.geometry) {
+	    complete = false;
+	    continue;
+	}
+	if (!occurrence.sourceMeshRequestValid)
+	    complete = false;
+	if (!exactOverviewQueued) {
+	    SbBox3f occurrenceBounds(
+		SbVec3f(static_cast<float>(manifest.occurrences[i].
+			boundsMin[X]),
+		    static_cast<float>(manifest.occurrences[i].
+			boundsMin[Y]),
+		    static_cast<float>(manifest.occurrences[i].
+			boundsMin[Z])),
+		SbVec3f(static_cast<float>(manifest.occurrences[i].
+			boundsMax[X]),
+		    static_cast<float>(manifest.occurrences[i].
+			boundsMax[Y]),
+		    static_cast<float>(manifest.occurrences[i].
+			boundsMax[Z])));
+	    occurrenceBounds.transform(
+		ged_obol_sbmatrix_from_mat(
+		    manifest.occurrences[i].localMatrix));
+	    if (!occurrenceBounds.isEmpty())
+		aggregateBounds.extendBy(occurrenceBounds);
+	}
+	stream->push(std::move(occurrence));
+	pushed++;
+    }
+    bobol_draw_manifest_free(&manifest);
+    if (!exactOverviewQueued && !aggregateBounds.isEmpty()) {
+	ged_obol_structural_proxy_node node;
+	node.path = rootPath + "/@draw-extent";
+	node.objectName = cacheName;
+	node.instanceKey = node.path;
+	node.boolOp = DB_OP_UNION;
+	node.row = 0;
+	node.localMatrix = SbMatrix::identity();
+	const SbVec3f aggregateMin = aggregateBounds.getMin();
+	const SbVec3f aggregateMax = aggregateBounds.getMax();
+	VSET(node.boundsMin, aggregateMin[0], aggregateMin[1],
+	    aggregateMin[2]);
+	VSET(node.boundsMax, aggregateMax[0], aggregateMax[1],
+	    aggregateMax[2]);
+	node.publishBounds = 1;
+	node.metadataValid = 0;
+	BObolCompactOccurrence overview =
+	    ged_obol_structural_proxy_occurrence(ctx, node);
+	overview.summary.recordRole = "lod-overview";
+	overview.summary.geometryKind = "overview-aabb";
+	overview.summary.selectable = FALSE;
+	if (overview.geometry) {
+	    stream->pushPriority(overview);
+	    exactOverviewQueued = true;
+	}
+    }
+    if (exactOverviewQueued)
+	stream->setCoverageBoundsComplete(true);
+    if (complete && pushed)
+	stream->setWarmCoverageComplete(true);
+    ged_obol_timing_log(complete ?
+	"job: stream warm leaf manifest" :
+	"job: stream partial leaf manifest",
+	started, static_cast<long>(pushed));
+    return complete ? 2 : (pushed ? 1 : 0);
 }
 
 static int
@@ -16967,10 +17431,10 @@ ged_obol_store_structural_proxy_manifest(
  * transactions that motivated the old region-only shortcut. */
 static int
 ged_obol_store_leaf_proxy_manifest(
-    struct ged *gedp,
+    struct db_i *database,
     const SoBRLDatabaseSource *source)
 {
-    if (!gedp || !gedp->dbip || !source)
+    if (!database || !source)
 	return 0;
     const char *sourcePath = source->path.getValue().getString();
     const std::string rootPath = ged_obol_skip_leading_slash(sourcePath);
@@ -17003,6 +17467,8 @@ ged_obol_store_leaf_proxy_manifest(
 	return 0;
 
     int valid = 1;
+    SbBox3f aggregateBounds;
+    aggregateBounds.makeEmpty();
     for (size_t i = 0; i < occurrences.size(); i++) {
 	const BObolCompactOccurrence &occurrence = occurrences[i];
 	struct BObolDrawManifestOccurrence &cached =
@@ -17020,6 +17486,17 @@ ged_obol_store_leaf_proxy_manifest(
 	const SbVec3f bmax = occurrence.summary.bounds.getMax();
 	VSET(cached.boundsMin, bmin[0], bmin[1], bmin[2]);
 	VSET(cached.boundsMax, bmax[0], bmax[1], bmax[2]);
+	const SbBox3f localBounds(
+	    SbVec3f(static_cast<float>(cached.boundsMin[X]),
+		static_cast<float>(cached.boundsMin[Y]),
+		static_cast<float>(cached.boundsMin[Z])),
+	    SbVec3f(static_cast<float>(cached.boundsMax[X]),
+		static_cast<float>(cached.boundsMax[Y]),
+		static_cast<float>(cached.boundsMax[Z])));
+	SbBox3f transformedBounds = localBounds;
+	transformedBounds.transform(occurrence.localTransform);
+	if (!transformedBounds.isEmpty())
+	    aggregateBounds.extendBy(transformedBounds);
 	cached.booleanOperation =
 	    occurrence.booleanOperation ==
 		SoBRLDatabaseSource::BOOLEAN_SUBTRACT ? DB_OP_SUBTRACT :
@@ -17060,16 +17537,60 @@ ged_obol_store_leaf_proxy_manifest(
 		assetMax[0], assetMax[1], assetMax[2]);
 	    cached.sourceFaceCount = request.faceCount;
 	    cached.sourcePointCount = request.pointCount;
+	    ged_obol_mat_from_sbmatrix(request.meshAssetTransform,
+		cached.meshAssetMatrix);
 	}
-	/* Geometry realization already owns the full material semantics.  The
-	 * leaf-box manifest is intentionally presentation-only; fabricating a
-	 * partial directory record here could override correct inherited state. */
-	cached.metadataValid = 0;
+	/*
+	 * A complete leaf manifest is now also the authoritative warm-start
+	 * registry.  Preserve the effective path material values already resolved
+	 * by the cold database walk so the worker need not repeat a full geometry
+	 * import merely to recover colors and region semantics.
+	 */
+	bobol_draw_metadata_record_init(&cached.metadata);
+	cached.metadataValid = 1;
+	cached.metadata.hasRegionId = 1;
+	cached.metadata.regionId = occurrence.summary.regionId;
+	cached.metadata.hasAircode = 1;
+	cached.metadata.aircode = occurrence.summary.airCode;
+	cached.metadata.hasLos = 1;
+	cached.metadata.los = occurrence.summary.los;
+	cached.metadata.hasMaterialId = 1;
+	cached.metadata.materialId = occurrence.summary.materialId;
+	if (occurrence.summary.materialColorValid) {
+	    const SbColor color = occurrence.summary.materialColor;
+	    cached.metadata.hasColor = 1;
+	    for (size_t channel = 0; channel < 3; channel++) {
+		const float component = std::max(0.0f,
+		    std::min(1.0f, color[static_cast<int>(channel)]));
+		cached.metadata.color[channel] =
+		    static_cast<unsigned char>(component * 255.0f + 0.5f);
+	    }
+	}
+	const char *shader =
+	    occurrence.summary.materialShader.getString();
+	if (shader && shader[0]) {
+	    cached.metadata.hasShader = 1;
+	    bu_strlcpy(cached.metadata.shader, shader,
+		sizeof(cached.metadata.shader));
+	}
     }
 
     const int stored = valid &&
-	bobol_draw_manifest_cache_store(gedp->dbip, rootPath.c_str(),
+	bobol_draw_manifest_cache_store(database, rootPath.c_str(),
 	    &manifest) == BRLCAD_OK;
+    if (stored && !aggregateBounds.isEmpty()) {
+	const char *cacheName = strrchr(rootPath.c_str(), '/');
+	cacheName = cacheName ? cacheName + 1 : rootPath.c_str();
+	point_t cacheBounds[2];
+	const SbVec3f aggregateMin = aggregateBounds.getMin();
+	const SbVec3f aggregateMax = aggregateBounds.getMax();
+	VSET(cacheBounds[0], aggregateMin[0], aggregateMin[1],
+	    aggregateMin[2]);
+	VSET(cacheBounds[1], aggregateMax[0], aggregateMax[1],
+	    aggregateMax[2]);
+	(void)bobol_draw_proxy_cache_store(database, cacheName,
+	    BOBOL_DRAW_CACHE_PROXY_AABB, cacheBounds, 2, NULL);
+    }
     bobol_draw_manifest_free(&manifest);
     return stored ? 1 : 0;
 }
@@ -17128,6 +17649,12 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
     if (!root)
 	return 0;
 
+    /* The draw command never deserializes a whole leaf manifest.  A cached
+     * aggregate is published by ged_obol_publish_deferred_root_proxy; the
+     * detached worker streams this manifest through the bounded provider. */
+    if (cachedManifestOnly)
+	return 0;
+
     struct BObolDrawManifest manifest;
     bobol_draw_manifest_init(&manifest);
     const int64_t manifest_load_start = bu_gettime();
@@ -17179,13 +17706,6 @@ ged_obol_publish_deferred_structural_proxy_snapshot(
 	ged_obol_timing_log("structural: reject leaf manifest",
 	    manifest_publish_start, static_cast<long>(occurrences.size()));
     }
-
-    /* The draw-command path may read one already-batched leaf manifest, but it
-     * must never recurse through the hierarchy or calculate bounds on the UI
-     * thread.  A cold miss proceeds directly to the detached leaf worker,
-     * which streams leaf-local AABBs/geometry as each occurrence is visited. */
-    if (cachedManifestOnly)
-	return 0;
 
     if (!ged_db_index_available(gedp))
 	return 0;
@@ -17261,16 +17781,13 @@ ged_obol_publish_deferred_root_proxy(struct ged *gedp,
 	!source_instance_key || !source_instance_key[0])
 	return 0;
 
-    const int structural_snapshot =
-	ged_obol_publish_deferred_structural_proxy_snapshot(gedp, view_ctx,
-	    path, source_instance_key, draw_mode, 0, 0, 0, 1);
-    if (structural_snapshot != 0)
-	return structural_snapshot;
-
-    /* A cached root AABB is a useful last-resort cold-start presentation.  A
-     * cache miss is intentionally not refreshed here: recursive bounds work
-     * belongs on a worker, and the detached realization will shortly stream
-     * the first leaf presentation. */
+    /*
+     * The aggregate is deliberately a separate small cache record.  Loading
+     * and constructing a 50k-occurrence leaf manifest on the UI thread took
+     * seconds even though its whole-target extent was already known.  Publish
+     * that O(1) overview first; its ordinary progressive job will stream the
+     * leaf manifest/authoritative data without blocking command input.
+     */
     const char *cache_name = strrchr(path, '/');
     cache_name = cache_name ? cache_name + 1 : path;
     struct ged_draw_obol_source_expansion_status proxy_status;
@@ -17279,6 +17796,16 @@ ged_obol_publish_deferred_root_proxy(struct ged *gedp,
 	ged_obol_publish_aabb_proxy_for_path(gedp, view_ctx, path,
 	    source_instance_key, cache_name, draw_mode, 0, &proxy_status))
 	return 1;
+
+    const int structural_snapshot =
+	ged_obol_publish_deferred_structural_proxy_snapshot(gedp, view_ctx,
+	    path, source_instance_key, draw_mode, 0, 0, 0, 1);
+    if (structural_snapshot != 0)
+	return structural_snapshot;
+
+    /* A cache miss is intentionally not refreshed here: recursive bounds work
+     * belongs on a worker, and detached realization shortly publishes an
+     * expanding aggregate followed by per-leaf presentation. */
     return 0;
 }
 
@@ -17886,20 +18413,38 @@ ged_draw_obol_database_source_expand_visible_children(
 }
 
 static int
+ged_obol_deferred_job_coverage_bounds_complete(
+    const std::shared_ptr<ged_obol_deferred_realization_job> &job)
+{
+    if (!job || job->items.empty())
+	return 0;
+    for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	 job->items) {
+	if (!item || !item->stream ||
+	    !item->stream->hasCoverageBoundsComplete())
+	    return 0;
+    }
+    return 1;
+}
+
+static int
 ged_obol_progressive_autoview_apply(
     ged_obol_progressive_provider_data *data)
 {
     if (!data || !data->gedp || !data->view_ctx ||
-	!data->pending_autoview)
+	!data->pending_autoview ||
+	!data->pending_autoview_bounds_complete)
 	return 0;
 
     struct bv *view = ged_obol_bv(data->view_ctx);
     if (!view) {
 	data->pending_autoview = 0;
+	data->pending_autoview_bounds_complete = 0;
 	return 0;
     }
     if (bv_frame_revision_get(view) != data->expected_view_revision) {
 	data->pending_autoview = 0;
+	data->pending_autoview_bounds_complete = 0;
 	return 0;
     }
 
@@ -17914,6 +18459,14 @@ ged_obol_progressive_autoview_apply(
 	return 0;
     data->expected_view_revision = bv_frame_revision_get(view);
     bv_refresh_request(view, GED_VIEW_REFRESH_DRAW);
+    /*
+     * Exact coverage bounds are immutable for this source revision.  One
+     * successful application fulfills the deferred request; leaving it armed
+     * made every later leaf/mesh publication rewrite an identical camera and
+     * visibly flash some GL backends.
+     */
+    data->pending_autoview = 0;
+    data->pending_autoview_bounds_complete = 0;
     return 1;
 }
 
@@ -17931,6 +18484,7 @@ ged_obol_progressive_autoview_arm(
 	return 0;
 
     data->pending_autoview = 1;
+    data->pending_autoview_bounds_complete = 0;
     data->expected_view_revision = bv_frame_revision_get(view);
     data->autoview_factor = factor;
     return 1;
@@ -17991,16 +18545,31 @@ ged_obol_cleanup_retired_jobs(ged_obol_progressive_provider_data *data)
 {
     if (!data)
 	return;
+    const int64_t now = bu_gettime();
     data->retired_jobs.erase(std::remove_if(data->retired_jobs.begin(),
 	data->retired_jobs.end(),
-	[](const std::shared_ptr<ged_obol_deferred_realization_job> &job) {
+	[now](const std::shared_ptr<ged_obol_deferred_realization_job> &job) {
 	    if (!job)
 		return true;
 	    const int state = job->state.load(std::memory_order_acquire);
+	    if (state == ged_obol_deferred_realization_job::COMPLETE &&
+		job->stagingLeaseReleaseAfter > now)
+		return false;
 	    return state == ged_obol_deferred_realization_job::COMPLETE ||
-		state == ged_obol_deferred_realization_job::FAILED ||
-		state == ged_obol_deferred_realization_job::CANCELLED;
+		   state == ged_obol_deferred_realization_job::FAILED ||
+		   state == ged_obol_deferred_realization_job::CANCELLED;
 	}), data->retired_jobs.end());
+}
+
+static void
+ged_obol_hold_completed_job(
+    ged_obol_progressive_provider_data *data,
+    const std::shared_ptr<ged_obol_deferred_realization_job> &job)
+{
+    if (!data || !job)
+	return;
+    job->stagingLeaseReleaseAfter = bu_gettime() + 500000;
+    data->retired_jobs.push_back(job);
 }
 
 static SoBRLDatabaseSource *
@@ -18075,16 +18644,17 @@ ged_obol_start_deferred_realization(
 	}
 	std::unique_ptr<ged_obol_deferred_realization_item> item(
 	    new ged_obol_deferred_realization_item);
-	const int64_t snapshot_start = bu_gettime();
-	item->source = live->createDetachedRealizationSource(&item->database,
-	    &item->snapshotPath);
-	ged_obol_timing_log("deferred: DB snapshot (detach)", snapshot_start, -1);
-	if (!item->source || !item->database) {
-	    bu_log("Obol deferred realization could not snapshot source '%s'\n",
+	struct db_i *liveDatabase = live->getDatabase();
+	item->source = live->createDetachedRealizationTemplate();
+	item->snapshotSourceDatabase = liveDatabase ?
+	    db_clone_dbi(liveDatabase, NULL) : NULL;
+	if (!item->source || !item->snapshotSourceDatabase) {
+	    bu_log("Obol deferred realization could not capture source '%s'\n",
 		key.c_str());
 	    return 0;
 	}
 	item->instanceKey = live->instanceKey.getValue().getString();
+	item->drawMode = drawMode;
 	item->primaryScene = usePrimaryScene;
 	item->allowWireFallback =
 	    data->deferred_appearance.strict_fallback ? FALSE : TRUE;
@@ -18217,18 +18787,18 @@ ged_obol_publish_deferred_realization(
     int adopted = 0;
     for (size_t i = 0; i < liveSources.size(); i++) {
 	const int adopted_count = liveSources[i]->adoptDetachedCompactRealization(
-	    job->items[i]->source);
+	    job->items[i]->source, TRUE);
 	if (ged_obol_timing_enabled())
 	    bu_log("[obol-timing] deferred adoption for %s: n=%d\n",
 		job->items[i]->instanceKey.c_str(), adopted_count);
 	if (adopted_count > 0) {
 	    adopted++;
-	    const int64_t manifest_start = bu_gettime();
-	    const int manifest_stored =
-		ged_obol_store_leaf_proxy_manifest(data->gedp,
-		    liveSources[i]);
-	    ged_obol_timing_log("deferred: store leaf manifest",
-		manifest_start, manifest_stored ? adopted_count : 0);
+	    if (ged_obol_timing_enabled())
+		bu_log("[obol-timing] deferred manifest: %s n=%d\n",
+		    job->items[i]->warmManifest ? "warm-reused" :
+		    (job->items[i]->manifestStored ?
+			"worker-stored" : "worker-store-failed"),
+		    adopted_count);
 	    /* A per-view worker can realize a synchronized scene while the
 	     * structural frontier is owned by the primary scene.  Retire matching
 	     * proxies from both; either side may be the adopted live source. */
@@ -18248,7 +18818,12 @@ ged_obol_publish_deferred_realization(
  * when a caller explicitly removes the total item cap: workers can fill a
  * queue while the GUI is busy, and draining that entire backlog in one paint
  * turns "progressive" work into a multi-second input stall. */
-static const size_t GED_OBOL_STREAM_BATCH_QUANTUM = 64;
+/* One provider is normally one large retained root.  A fixed 64-item quantum
+ * made the 16 ms host timer, rather than actual work, the throughput limit;
+ * a fixed 512-item quantum occasionally exceeded an input frame when later
+ * merges had become more expensive.  Start each stream at 256 and adapt
+ * between 64 and this ceiling from its measured atomic merge time. */
+static const size_t GED_OBOL_STREAM_BATCH_QUANTUM_MAX = 2048;
 
 /* Drain completed per-leaf occurrences from every running realization job and
  * merge them onto the live compact root as they arrive, so geometry streams in
@@ -18309,8 +18884,12 @@ ged_obol_drain_streamed_realizations(
 		live->representationMode.getValue() !=
 		    detached->representationMode.getValue())
 		continue;
+	    const size_t expectedCount = item->stream->getExpectedCount();
+	    if (expectedCount)
+		live->reserveCompactOccurrenceCapacity(expectedCount);
 
-	    size_t batch_cap = GED_OBOL_STREAM_BATCH_QUANTUM;
+	    size_t batch_cap = std::min(item->streamBatchQuantum,
+		GED_OBOL_STREAM_BATCH_QUANTUM_MAX);
 	    if (max_items) {
 		if (drained_count >= max_items) {
 		    if (has_more)
@@ -18319,18 +18898,67 @@ ged_obol_drain_streamed_realizations(
 		}
 		batch_cap = std::min(batch_cap, max_items - drained_count);
 	    }
+	    if (max_microseconds &&
+		item->streamMergeMicrosecondsPerItem > 0.0) {
+		const int64_t elapsed = bu_gettime() - started;
+		const uint64_t consumed = elapsed > 0 ?
+		    static_cast<uint64_t>(elapsed) : 0;
+		const uint64_t remaining =
+		    consumed < max_microseconds ?
+		    max_microseconds - consumed : 0;
+		/* Leave headroom for map growth, notifications, and the
+		 * controller epilogue.  One occurrence is the irreducible
+		 * forward-progress unit if the estimate is sub-quantum. */
+		const double estimatedItems =
+		    0.70 * static_cast<double>(remaining) /
+		    item->streamMergeMicrosecondsPerItem;
+		const size_t timedCap = std::max<size_t>(
+		    1, static_cast<size_t>(estimatedItems));
+		batch_cap = std::min(batch_cap, timedCap);
+	    }
 	    std::vector<BObolCompactOccurrence> batch;
 	    (void)item->stream->drain(batch, batch_cap);
 	    if (batch.empty())
 		continue;
 	    drained_count += batch.size();
+	    const int64_t mergeStarted = bu_gettime();
 	    ged_obol_scene_mutation_batch_scope mutation(itemScene, 1,
 		batch.size());
 	    const int mergedCount = live->mergeCompactOccurrences(batch);
 	    if (mergedCount > 0) {
 		merged = 1;
 		ged_obol_timing_log("stream: merged occurrences",
-		    bu_gettime(), (long)mergedCount);
+		    mergeStarted, (long)mergedCount);
+	    }
+	    const int64_t mergeElapsed = bu_gettime() - mergeStarted;
+	    if (mergeElapsed >= 0 && !batch.empty()) {
+		const double observed =
+		    static_cast<double>(mergeElapsed) /
+		    static_cast<double>(batch.size());
+		if (item->streamMergeMicrosecondsPerItem <= 0.0 ||
+		    observed > item->streamMergeMicrosecondsPerItem) {
+		    /* React to worsening costs in one sample. */
+		    item->streamMergeMicrosecondsPerItem = observed;
+		} else {
+		    /* Permit gradual recovery when later batches are cheaper. */
+		    item->streamMergeMicrosecondsPerItem =
+			0.875 * item->streamMergeMicrosecondsPerItem +
+			0.125 * observed;
+		}
+		const double targetMicroseconds =
+		    max_microseconds ?
+		    0.70 * static_cast<double>(max_microseconds) : 4000.0;
+		size_t targetItems = static_cast<size_t>(
+		    targetMicroseconds /
+		    std::max(0.001,
+			item->streamMergeMicrosecondsPerItem));
+		targetItems = std::max<size_t>(16, std::min(
+		    targetItems, GED_OBOL_STREAM_BATCH_QUANTUM_MAX));
+		/* Cost can fall sharply on warm records, but bounded growth keeps
+		 * one cheap batch from scheduling a nonlinear next-frame jump. */
+		item->streamBatchQuantum = std::min(
+		    targetItems, std::max<size_t>(
+			16, item->streamBatchQuantum * 2));
 	    }
 	    /* More may have been queued while we drained; ask for another tick. */
 	    if (has_more && item->stream->size() > 0)
@@ -18346,6 +18974,20 @@ ged_obol_drain_streamed_realizations(
 	}
     }
     return merged;
+}
+
+static bool
+ged_obol_deferred_streams_pending(
+    const std::shared_ptr<ged_obol_deferred_realization_job> &job)
+{
+    if (!job)
+	return false;
+    for (const std::unique_ptr<ged_obol_deferred_realization_item> &item :
+	 job->items) {
+	if (item && item->stream && item->stream->size() > 0)
+	    return true;
+    }
+    return false;
 }
 
 static int
@@ -18374,9 +19016,15 @@ ged_obol_progressive_advance_provider(
     if (data->pending_autoview) {
 	const struct bv *view = ged_obol_bv_const(view_ctx);
 	if (!view ||
-	    bv_frame_revision_get(view) != data->expected_view_revision)
+	    bv_frame_revision_get(view) != data->expected_view_revision) {
 	    data->pending_autoview = 0;
+	    data->pending_autoview_bounds_complete = 0;
+	}
     }
+    if (data->pending_autoview &&
+	ged_obol_deferred_job_coverage_bounds_complete(
+	    data->deferred_job))
+	data->pending_autoview_bounds_complete = 1;
 
     /* There is one production progression: compact per-leaf boxes followed by
      * streamed view-appropriate geometry. */
@@ -18406,9 +19054,22 @@ ged_obol_progressive_advance_provider(
 		++it;
 		continue;
 	    }
-	    if (job_state == ged_obol_deferred_realization_job::COMPLETE)
+	    /* Completion means the producer is done, not that every completed
+	     * occurrence has reached the live scene.  Keep draining at the
+	     * provider's item/time budget before adopting the detached result.
+	     * Otherwise a warm 50k-leaf manifest can finish between two GUI
+	     * ticks and turn the next tick into one unbounded scene mutation. */
+	    if (job_state == ged_obol_deferred_realization_job::COMPLETE &&
+		ged_obol_deferred_streams_pending(job)) {
+		has_pending_job = 1;
+		++it;
+		continue;
+	    }
+	    if (job_state == ged_obol_deferred_realization_job::COMPLETE) {
 		refined += ged_obol_publish_deferred_realization(data,
 			controller, job);
+		ged_obol_hold_completed_job(data, job);
+	    }
 	    it = data->pending_jobs.erase(it);
 	}
 	if (data->deferred_refine_stage == 1) {
@@ -18418,25 +19079,38 @@ ged_obol_progressive_advance_provider(
 	    if (jobState == ged_obol_deferred_realization_job::PENDING ||
 		jobState == ged_obol_deferred_realization_job::RUNNING) {
 		has_pending_job = 1;
+	    } else if (jobState ==
+		    ged_obol_deferred_realization_job::COMPLETE &&
+		ged_obol_deferred_streams_pending(data->deferred_job)) {
+		has_pending_job = 1;
 	    } else {
-		if (jobState == ged_obol_deferred_realization_job::COMPLETE)
+		if (jobState == ged_obol_deferred_realization_job::COMPLETE) {
 		    refined += ged_obol_publish_deferred_realization(data,
 			controller, data->deferred_job);
+		    ged_obol_hold_completed_job(data, data->deferred_job);
+		}
 		data->deferred_refine_stage = 3;
 		data->deferred_paths.clear();
 		data->deferred_job.reset();
 	    }
 	}
 
-	/* A concurrent worker may have queued more after the pre-retirement
-	 * drain.  Keep the provider alive for another pump in that case. */
-	if (stream_more)
-	    has_pending_job = 1;
+    /* Keep pumping only through the short lease handoff window.  This both
+     * gives the render-triggered LoD traversal a chance to capture the source
+     * and guarantees completed offscreen imports are released without waiting
+     * for unrelated future progressive work. */
+    if (!data->retired_jobs.empty())
+	has_pending_job = 1;
+
+    /* A concurrent worker may have queued more after the pre-retirement
+     * drain.  Keep the provider alive for another pump in that case. */
+    if (stream_more)
+	has_pending_job = 1;
 
     local_status.changed = refined > 0 ? 1 : 0;
     local_status.hasMore = has_pending_job;
     local_status.inFlight = has_pending_job ? 1 : 0;
-    if (has_pending_job && ged_obol_timing_enabled()) {
+    if (has_pending_job && getenv("BOBOL_DRAW_TIMING_VERBOSE")) {
 	const int deferred_state = data->deferred_job ?
 	    data->deferred_job->state.load(std::memory_order_acquire) : -1;
 	bu_log("[obol-timing] provider pending: stage=%d deferred=%d "
@@ -18447,11 +19121,22 @@ ged_obol_progressive_advance_provider(
 
     /* The deferred realization job streams leaf-local boxes/geometry onto the
      * root occurrence registry and atomically adopts the completed index. */
-	if (local_status.changed && data->pending_autoview &&
-	    ged_obol_progressive_autoview_apply(data))
+	if (data->pending_autoview &&
+	    data->pending_autoview_bounds_complete &&
+	    ged_obol_progressive_autoview_apply(data)) {
+	    /*
+	     * Exact bounds may have been merged by the preceding provider tick,
+	     * leaving no new occurrence in this one.  Camera fulfillment is
+	     * itself a presentation change and must not wait for an unrelated
+	     * later mesh publication.
+	     */
+	    local_status.changed = 1;
 	    controller->syncCameraFromViewContext(view_ctx, TRUE);
-	if (!local_status.hasMore)
+	}
+	if (!local_status.hasMore) {
 	    data->pending_autoview = 0;
+	    data->pending_autoview_bounds_complete = 0;
+	}
 	if (local_status.changed || local_status.hasMore)
 	    controller->requestRender(local_status.changed ?
 		"ged-deferred-full-detail" : "ged-deferred-root-building");
@@ -20657,6 +21342,7 @@ ged_obol_progressive_autoview_transaction(
 		ged_obol_retire_all_deferred_jobs(data);
 		ged_obol_cleanup_retired_jobs(data);
 		data->pending_autoview = 0;
+		data->pending_autoview_bounds_complete = 0;
 		data->deferred_refine_stage = 0;
 		data->deferred_paths.clear();
 	    }
