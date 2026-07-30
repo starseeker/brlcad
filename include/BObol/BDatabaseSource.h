@@ -919,6 +919,13 @@ public:
      * and presentation.  All three stages must use this same contract or the
      * scene owner is forced to derive a replacement geometry after handoff. */
     int getEffectiveLodDrawMode(void) const;
+    /* Return whether database realization must preserve triangle-mesh
+     * identity.  REALIZATION_ROLE_* fields are orchestration hints and may
+     * transiently describe an external publication; view-managed wire BoTs
+     * still require the mesh path because their edges come from a PoP
+     * triangle prefix.  Deferred workers and synchronous realization must
+     * consult this one geometry contract. */
+    SbBool usesMeshRealization(void) const;
     int setDisplayNameState(const char *name);
     int setMaterialPolicyState(int materialPolicy);
     int setRealizationState(int realizationStatus,

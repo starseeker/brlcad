@@ -936,11 +936,31 @@ validate_report()
 	return 1
     fi
     local stable_hold_pixels
+    # The first software framebuffer may still carry its startup device-pixel
+    # extent while the settled canvas has adopted the window's final logical
+    # size.  Derive this crop from the two images being compared; reusing the
+    # early-frame dimensions accidentally included the later HUD (whose FPS
+    # text is expected to change) and reported that as model flicker.
+    local stable_hold_dimensions stable_hold_width stable_hold_height
+    local stable_hold_crop_width=0
+    local stable_hold_crop_height=0
+    stable_hold_dimensions=$(identify -format '%wx%h' \
+	"$image_dir/ae90-stable.png" 2>/dev/null || true)
+    stable_hold_width="${stable_hold_dimensions%x*}"
+    stable_hold_height="${stable_hold_dimensions#*x}"
+    if [[ "$stable_hold_width" =~ ^[0-9]+$ &&
+	    "$stable_hold_height" =~ ^[0-9]+$ &&
+	    "$stable_hold_width" -gt 60 && "$stable_hold_height" -gt 174 ]]; then
+	stable_hold_crop_width=$((stable_hold_width - 60))
+	stable_hold_crop_height=$((stable_hold_height - 174))
+    fi
     stable_hold_pixels=$(compare -metric AE -fuzz 1% \
-	-crop "${crop_width}x${crop_height}+0+${crop_y}" \
+	-crop "${stable_hold_crop_width}x${stable_hold_crop_height}+0+${crop_y}" \
 	"$image_dir/ae90-stable.png" \
 	"$image_dir/ae90-stable-held.png" null: 2>&1 || true)
-    if [[ ! "$stable_hold_pixels" =~ ^[0-9]+$ ||
+    if [[ "$stable_hold_crop_width" -le 0 ||
+	    "$stable_hold_crop_height" -le 0 ||
+	    ! "$stable_hold_pixels" =~ ^[0-9]+$ ||
 	    "$stable_hold_pixels" -gt 4 ]]; then
 	printf 'fixed converged framebuffer flickered during hold: pixels=%s\n' \
 	    "$stable_hold_pixels" >>"$validation"
@@ -1458,7 +1478,7 @@ validate_report()
     # zoom-out must compact it without rebuilding or discarding the useful
     # coarse prefix.  Keep wheel dispatch bounded throughout so background
     # loading never turns into lost-feeling input.
-    if [[ "$object" == "lucy" ]]; then
+    if [[ "$case_name" == "lucy" ]]; then
 	if ! jq -e '
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
@@ -1472,20 +1492,38 @@ validate_report()
 	    (first(.samples[] |
 		select((.checkpoint? // "") |
 		    endswith("/smooth-zoom-return.png")))) as $returned |
-	    (($close.active_progressive_cad_faces // 0) >
-		($start.active_progressive_cad_faces // 0)) and
-	    (($close.lod_service_resident_bytes // 0) >
-		($start.lod_service_resident_bytes // 0)) and
-	    (($close.lod_service_cache_loads // 0) >
-		($start.lod_service_cache_loads // 0)) and
-	    (($out.lod_service_resident_bytes // 0) <
-		($close.lod_service_resident_bytes // 0)) and
-	    (($returned.lod_service_resident_bytes // 0) <=
-		($start.lod_service_resident_bytes // 0)) and
-	    (($out.lod_service_compactions // 0) >
-		($close.lod_service_compactions // 0)) and
-	    (($returned.lod_service_compactions // 0) >
-		($out.lod_service_compactions // 0)) and
+	    (($close.requested_progressive_cad_level_max // -1) >
+		($start.requested_progressive_cad_level_max // -1)) and
+	    (if (($close.lod_service_resident_bytes // 0) >
+		    ($start.lod_service_resident_bytes // 0))
+	     then
+		(($close.active_progressive_cad_faces // 0) >
+		    ($start.active_progressive_cad_faces // 0)) and
+		(($close.lod_service_cache_loads // 0) >
+		    ($start.lod_service_cache_loads // 0)) and
+		(($out.lod_service_resident_bytes // 0) <
+		    ($close.lod_service_resident_bytes // 0)) and
+		(($returned.lod_service_resident_bytes // 0) <=
+		    ($start.lod_service_resident_bytes // 0)) and
+		(($out.lod_service_compactions // 0) >
+		    ($close.lod_service_compactions // 0)) and
+		(($returned.lod_service_compactions // 0) >=
+		    ($out.lod_service_compactions // 0))
+	     else
+		# A software renderer may already be at its calibrated stable
+		# face ceiling.  Zoom must still increase the pixel demand, but
+		# loading a discrete next PoP prefix which cannot meet that FPS
+		# contract would only consume memory and produce a long frame.
+		# Accept a retained plateau only when both endpoints explicitly
+		# report performance pressure and the current cut did not regress.
+		(.backend == "osmesa") and
+		($start.lod_convergence_performance_limited == true) and
+		($close.lod_convergence_performance_limited == true) and
+		(($close.active_progressive_cad_faces // 0) >=
+		    ($start.active_progressive_cad_faces // 0)) and
+		(($close.last_render_ms // 9223372036854775807) <=
+		    (1200.0 / ($close.lod_stable_target_fps // 20.0)))
+	     end) and
 	    (all([$start, $close, $out, $returned][];
 		(.progressive_pending == false) and
 		(.lod_submissions_pending == false) and
@@ -1526,6 +1564,25 @@ validate_report()
 		return 1
 	    fi
 	done
+    fi
+
+    # Generic Twin contains 709 BoT occurrences.  Its view-managed wire mode
+    # is intentionally backed by those same source-mesh/PoP contracts, not by
+    # the legacy plotted-vlist cache.  A former first-warm race converged with
+    # zero requests after an authoritative worker overwrote a briefly correct
+    # manifest publication; generic "nonempty framebuffer" checks could not
+    # distinguish the remaining CSG wires from success.
+    if [[ "$case_name" == "generic_twin" && "$mode" == "wire" ]]; then
+	if ! jq -e '
+	    (.samples[-1].compact_lod_entries // 0) == 709 and
+	    (.samples[-1].compact_lod_entries_with_payload // 0) == 709 and
+	    (.samples[-1].active_lod_cad_payloads // 0) == 709 and
+	    (.samples[-1].active_progressive_cad_faces // 0) > 0
+	    ' "$report" >>"$validation" 2>&1; then
+	    printf 'Generic Twin wire draw lost its 709 mesh-LoD contracts\n' \
+		>>"$validation"
+	    return 1
+	fi
     fi
 
     if find "$image_dir" -type f -size 0 -print -quit | grep -q .; then

@@ -1289,22 +1289,37 @@ source_record_draw_mode(const SoBRLDatabaseSource *source)
 	BOBOL_LOD_DRAW_WIRE;
 }
 
-static int
-source_uses_mesh_realization(const SoBRLDatabaseSource *source)
+SbBool
+SoBRLDatabaseSource::usesMeshRealization(void) const
 {
-    if (!source)
-	return 0;
-
-    const int roleFlags = source->realizationRoleFlags.getValue();
+    const int roleFlags = this->realizationRoleFlags.getValue();
     if (roleFlags & SoBRLDatabaseSource::REALIZATION_ROLE_MESH)
-	return 1;
+	return TRUE;
 
-    const int representation = source->representationMode.getValue();
+    /*
+     * The role flag is an orchestration hint, not the geometry contract.
+     * A cached structural publication may temporarily mark the source
+     * EXTERNAL before the deferred worker is cloned.  On a fast warm draw
+     * that used to make the worker choose legacy wire realization even
+     * though the copied view policy explicitly enabled mesh LoD, allowing its
+     * final result to overwrite request-bearing PoP entries.
+     *
+     * Wire BoTs under an active mesh-LoD policy are intrinsically mesh
+     * realization: wire edges are derived from the selected triangle prefix.
+     */
+    if (this->drawMode.getValue() == SoBRLDatabaseSource::WIREFRAME &&
+	this->realizationViewDependent.getValue() &&
+	this->realizationMeshLodEnabled.getValue() &&
+	this->lodBotThreshold.getValue() > 0)
+	return TRUE;
+
+    const int representation = this->representationMode.getValue();
     if (representation == SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE ||
 	representation == SoBRLDatabaseSource::REPRESENTATION_EVAL_POINTS)
-	return 1;
+	return TRUE;
 
-    return source->drawMode.getValue() == SoBRLDatabaseSource::SHADED;
+    return this->drawMode.getValue() == SoBRLDatabaseSource::SHADED ?
+	TRUE : FALSE;
 }
 
 static int
@@ -2570,7 +2585,7 @@ bobol_database_source_seed_realization_cache(
     }
 
     seed_realization_cache_from_node(source, cache,
-				     source_uses_mesh_realization(source));
+				     source->usesMeshRealization());
 }
 
 void
@@ -2580,7 +2595,7 @@ SoBRLDatabaseSource::seedCompactRealizationCache(
     if (!cache || !this->d->compactIndex)
 	return;
 
-    const bool meshRealization = source_uses_mesh_realization(this);
+    const bool meshRealization = this->usesMeshRealization() ? true : false;
 
     for (const BObolCompactInstanceEntry &entry :
 	 this->d->compactIndex->entries) {
@@ -3927,8 +3942,34 @@ source_cached_wire_matches_mesh_presentation(
 	const SoBRLDatabaseSource *source, const char *sourceType,
 	const char *geometryKind)
 {
-    if (!source || source_record_draw_mode(source) == BOBOL_LOD_DRAW_WIRE)
+    if (!source)
 	return true;
+    if (source_record_draw_mode(source) == BOBOL_LOD_DRAW_WIRE) {
+	/*
+	 * A wireframe BoT is still a view-managed triangle mesh: its active
+	 * PoP prefix supplies the edges.  A persistent plotted-vlist cache may
+	 * coexist with the mesh cache after a cold run, but accepting that
+	 * vlist during the authoritative warm walk discards the source-mesh
+	 * request.  The warm manifest initially starts PoP correctly, then final
+	 * adoption replaces it with non-LoD wire geometry and strands the view
+	 * at whichever prefixes happened to arrive first.
+	 *
+	 * Reject BoT wire caches whenever this is the mesh-role wire
+	 * presentation.  The view-LoD enable bits describe whether the current
+	 * controller will vary the prefix; they are not geometry identity and
+	 * are deliberately unset on some detached realization workers.  Using
+	 * them here made cache arbitration differ between cold and warm walks:
+	 * the worker accepted a plotted BoT vlist, discarded the source request,
+	 * and its authoritative handoff replaced the live PoP-backed entry.
+	 *
+	 * A below-threshold BoT still belongs on the mesh path: it simply keeps
+	 * its complete triangle payload and derives wire edges from that payload.
+	 * Other wire primitives retain their authored/evaluated line geometry.
+	 */
+	if (sourceType && BU_STR_EQUAL(sourceType, "bot"))
+	    return false;
+	return true;
+    }
     if ((geometryKind && (strstr(geometryKind, "point") ||
 	    BU_STR_EQUAL(geometryKind, "annotation"))) ||
 	(sourceType && (BU_STR_EQUAL(sourceType, "half") ||
@@ -7170,6 +7211,18 @@ realize_direct_leaf_mesh_compact(
 	cache->findMeshVListCadGeometry(cacheKey);
     const BObolCachedPartGeometry *cachedMesh =
 	cache->findMeshCadGeometry(cacheKey);
+    if (sharedVListShape &&
+	!source_cached_wire_matches_mesh_presentation(source,
+	    sharedVListShape->sourceType.getValue().getString(),
+	    sharedVListShape->geometryKind.getValue().getString()))
+	sharedVListShape = NULL;
+    if (cachedWire && !source_cached_wire_matches_mesh_presentation(source,
+	    cachedWire->sourceType.c_str(), cachedWire->geometryKind.c_str()))
+	cachedWire = NULL;
+    if (!source_cached_mesh_matches_presentation(source, dp)) {
+	sharedMeshShape = NULL;
+	cachedMesh = NULL;
+    }
 
     /*
      * Normal compact leaves do not need a Coin mesh or vlist carrier.  Mesh
@@ -12953,6 +13006,14 @@ SoBRLDatabaseSource::cadBatchRevisionGet(void) const
 void
 SoBRLDatabaseSource::clearCompactInstanceIndex(void)
 {
+    if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT") &&
+	this->d->compactIndex &&
+	this->d->compactIndex->sourceMeshRequestCount > 0)
+	bu_log("BObol LoD source contract clearing compact index path=%s "
+	       "entries=%zu requests=%zu\n",
+	       this->path.getValue().getString(),
+	       this->d->compactIndex->entries.size(),
+	       this->d->compactIndex->sourceMeshRequestCount);
     if (this->d->compactIndex) {
 	delete this->d->previousCompactIndex;
 	this->d->previousCompactIndex = this->d->compactIndex;
@@ -13003,6 +13064,17 @@ SoBRLDatabaseSource::installCompactInstanceIndex(
 	this->sourceRevision.getValue();
     this->d->displayMeshLodContractInputsRevision =
 	this->inputsRevision.getValue();
+    if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT"))
+	bu_log("BObol LoD source contract installed compact index path=%s "
+	       "entries=%zu requests=%zu registry=%d draw=%d threshold=%u "
+	       "view_dependent=%d mesh_lod=%d\n",
+	       this->path.getValue().getString(), index->entries.size(),
+	       index->sourceMeshRequestCount,
+	       occurrenceRegistry ? 1 : 0,
+	       source_record_draw_mode(this),
+	       this->lodBotThreshold.getValue(),
+	       this->realizationViewDependent.getValue() ? 1 : 0,
+	       this->realizationMeshLodEnabled.getValue() ? 1 : 0);
     (void)this->reapplyCompactInstanceVisibilityFrontier();
     (void)this->reapplyCompactInstanceSelectedPaths();
 
@@ -13021,9 +13093,38 @@ SoBRLDatabaseSource::markStale(uint32_t reason)
 {
     if (!reason)
 	return;
+    const SbBool hadCurrentDisplayMeshLodContract =
+	this->hasDisplayMeshLodRequests();
     this->stale = TRUE;
     this->staleReason = this->staleReason.getValue() | reason;
-    this->d->displayMeshLodContractRevisionValid = FALSE;
+    /*
+     * A compact source-mesh request identifies immutable database geometry;
+     * the camera, draw channel, tessellation display policy, and PoP cut are
+     * deliberately supplied later by the view-local LoD planner.  Invalidating
+     * that contract on STALE_VIEW made a camera update race the final streamed
+     * adoption: the source became current again, but wireframe sources (which
+     * have no shaded fallback mesh) disappeared from the planner and left its
+     * submission cursor spinning forever.
+     *
+     * Only an identity/input/database change can make the source request
+     * itself unsafe.  Other stale reasons may replace presentation data in
+     * the background while the existing request and retained PoP generations
+     * remain valid and useful.
+     */
+    const uint32_t sourceContractReasons =
+	STALE_SOURCE | STALE_INPUTS | STALE_DATABASE;
+    if (reason & sourceContractReasons)
+	this->d->displayMeshLodContractRevisionValid = FALSE;
+    if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT") &&
+	hadCurrentDisplayMeshLodContract &&
+	!this->hasDisplayMeshLodRequests())
+	bu_log("BObol LoD source contract invalidated path=%s reason=%u "
+	       "source_revision=%u inputs_revision=%u requests=%zu\n",
+	       this->path.getValue().getString(), reason,
+	       this->sourceRevision.getValue(),
+	       this->inputsRevision.getValue(),
+	       this->d->compactIndex ?
+		   this->d->compactIndex->sourceMeshRequestCount : 0);
     this->realizationStatus = UNREALIZED;
     this->realizationDiagnostic = "";
     /* Retain immutable compact geometry until its replacement is ready.  A
@@ -14420,6 +14521,35 @@ SoBRLDatabaseSource::adoptDetachedCompactRealization(
 		bounds.getMax());
 	else
 	    this->clearSourceBounds();
+
+	/*
+	 * The live compact registry is now the authoritative detached result.
+	 * A source/input/database invalidation which started this realization
+	 * may have revoked its request epoch while validated batches were being
+	 * merged.  Successful adoption must publish a current epoch again;
+	 * otherwise all request-bearing entries remain present but
+	 * hasDisplayMeshLodRequests() reports false forever.  Wireframe then has
+	 * no shaded fallback source and can never refine past the prefixes which
+	 * happened to arrive before this handoff.
+	 */
+	const SbBool hadCurrentLodContract =
+	    this->hasDisplayMeshLodRequests();
+	this->d->displayMeshLodContractRevisionValid =
+	    current->sourceMeshRequestCount > 0 ? TRUE : FALSE;
+	this->d->displayMeshLodContractSourceRevision =
+	    this->sourceRevision.getValue();
+	this->d->displayMeshLodContractInputsRevision =
+	    this->inputsRevision.getValue();
+	if (!hadCurrentLodContract &&
+	    this->d->displayMeshLodContractRevisionValid)
+	    this->markDisplayMeshLodDirty();
+	if (getenv("BOBOL_LOD_TRACE_SOURCE_CONTRACT"))
+	    bu_log("BObol LoD source contract authoritative adoption path=%s "
+		   "entries=%zu requests=%zu restored=%d\n",
+		   this->path.getValue().getString(), current->entries.size(),
+		   current->sourceMeshRequestCount,
+		   (!hadCurrentLodContract &&
+		    this->d->displayMeshLodContractRevisionValid) ? 1 : 0);
 
 	this->realizedRevision = this->sourceRevision.getValue();
 	this->realizedSourceRevision = this->sourceRevision.getValue();
@@ -18351,7 +18481,21 @@ SoBRLDatabaseSource::setCompactInstanceDisplayStateForPath(const char *queryPath
 	    this->d->compactIndex->entries[entryIndex];
 	bool visibilityChanged = false;
 	bool selectionChanged = false;
-	if (visibleValid && entry.authoredVisible != nextVisible) {
+	/*
+	 * Retirement of the synthetic whole-target extent is monotonic within
+	 * one compact source epoch.  A redraw synchronizes the root path as
+	 * visible after the authoritative stream has completed; treating that
+	 * user-facing root visibility as authored visibility for every internal
+	 * record used to resurrect the retired overview and leave one box over
+	 * the finished model.  A genuinely new realization installs a new index
+	 * (and therefore a newly authored overview), so there is no valid reason
+	 * to revive this internal record in place.
+	 */
+	const bool retiredOverview =
+	    BU_STR_EQUAL(entry.shapeSummary.recordRole.getString(),
+		"lod-overview") && !entry.authoredVisible;
+	if (visibleValid && !(nextVisible && retiredOverview) &&
+	    entry.authoredVisible != nextVisible) {
 	    entry.authoredVisible = nextVisible;
 	    entry.visible = nextVisible;
 	    visibilityChanged = true;
@@ -18890,7 +19034,7 @@ SoBRLDatabaseSource::refreshCompactObjectGeometry(
 	this->sourceRevision = revision;
 	this->attachFieldSensors();
 
-	const int realized = source_uses_mesh_realization(this) ?
+	const int realized = this->usesMeshRealization() ?
 	    bobol_database_source_realize_mesh_compact_with_cache(this,
 		&cache) :
 	    bobol_database_source_realize_wireframe_compact_with_cache(this,

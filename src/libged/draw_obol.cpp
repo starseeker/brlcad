@@ -398,15 +398,14 @@ struct ged_obol_deferred_realization_job {
 			db_close(item->snapshotSourceDatabase);
 			item->snapshotSourceDatabase = NULL;
 		    }
-		    const int representation = source->representationMode.getValue();
+		    /*
+		     * This is a source-geometry contract, not a worker-role
+		     * inference.  In particular, view-managed wire BoTs require
+		     * mesh realization even if a warm external publication changed
+		     * the transient role before this worker was cloned.
+		     */
 		    const bool mesh =
-			(source->realizationRoleFlags.getValue() &
-			 SoBRLDatabaseSource::REALIZATION_ROLE_MESH) ||
-			source->drawMode.getValue() ==
-			SoBRLDatabaseSource::SHADED ||
-			representation == SoBRLDatabaseSource::REPRESENTATION_SHADED ||
-			representation == SoBRLDatabaseSource::REPRESENTATION_SHADED_BOTS ||
-			representation == SoBRLDatabaseSource::REPRESENTATION_HIDDEN_LINE;
+			source->usesMeshRealization() ? true : false;
 		    const int64_t realize_start = bu_gettime();
 		    BObolCompactOccurrenceStream *stream =
 			item->stream ? item->stream.get() : NULL;

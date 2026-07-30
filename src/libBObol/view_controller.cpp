@@ -5346,8 +5346,37 @@ BObolViewController::submitLodRequestsIfNeeded(SbBool refreshMissing,
 	controller_lod_source_signature(this);
     const SbString &signature = signatures.identity;
     const SbString &inventorySignature = signatures.inventory;
-    if (signature.getLength() == 0)
+    if (signature.getLength() == 0) {
+	/*
+	 * No current source can consume a submission cursor.  This is a valid
+	 * transient while a source is replaced, and a terminal state when the
+	 * scene has no LoD-backed meshes.  Leaving the old cursor armed creates
+	 * a zero-progress GUI pump: submitLodRequestsIfNeeded() returns here on
+	 * every turn while hasPendingLodSubmissions() prevents convergence.
+	 *
+	 * Forget the old source epoch as well.  If a contract reappears after
+	 * streaming or editing, even with the same identity text, it must start
+	 * one fresh authoritative pass.
+	 */
+	this->d->lodSubmissionSourceIndex = 0;
+	this->d->lodSubmissionEntryOffset = 0;
+	this->d->clearLodSubmissionPlan();
+	this->d->lodSubmissionPending = FALSE;
+	this->d->lodSubmissionRescanPending = FALSE;
+	this->d->lodSubmissionDeltaActive = FALSE;
+	this->d->lodSubmissionDeltaSources.clear();
+	this->d->lodSubmissionDeltaPlans.clear();
+	this->d->lodCoveragePassActive = FALSE;
+	this->d->lodCoveragePassSawBoundedSource = FALSE;
+	this->d->lodCoveragePassVisibleCount = 0;
+	this->d->lodCoveragePassCoveredCount = 0;
+	this->d->lodLastSubmittedSourceSignature = "";
+	this->d->lodLastSubmittedInventorySignature = "";
+	this->d->lodLastSubmittedSourceRoutingIds.clear();
+	this->d->lodLastSubmittedSourceInventoryRevisions.clear();
+	this->d->lodLastSubmittedSourceIdentities.clear();
 	return 0;
+    }
 
     if (this->d->lodLastSubmittedViewRevision == this->d->lodViewRevision &&
 	this->d->lodLastSubmittedPolicyRevision == this->d->lodPolicyRevision &&

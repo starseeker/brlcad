@@ -6811,6 +6811,33 @@ test_compact_many_leaf_scene_admission(void)
     source->representationMode =
 	SoBRLDatabaseSource::REPRESENTATION_SHADED;
 
+    /*
+     * Worker roles describe publication ownership, not the immutable
+     * geometry route.  A warm external publication must not make a wire BoT
+     * fall back to the legacy plotted-vlist walker and overwrite its PoP
+     * request contract.
+     */
+    SoBRLDatabaseSource *wireContract = new SoBRLDatabaseSource;
+    wireContract->ref();
+    wireContract->drawMode = SoBRLDatabaseSource::WIREFRAME;
+    wireContract->representationMode =
+	SoBRLDatabaseSource::REPRESENTATION_WIRE;
+    wireContract->realizationRoleFlags =
+	SoBRLDatabaseSource::REALIZATION_ROLE_EXTERNAL;
+    wireContract->realizationViewDependent = TRUE;
+    wireContract->realizationMeshLodEnabled = TRUE;
+    wireContract->lodBotThreshold = 1;
+    const bool wireUsesMesh = wireContract->usesMeshRealization() ? true : false;
+    wireContract->unref();
+    if (!wireUsesMesh) {
+	printf("FAIL: external view-managed wire source lost its mesh "
+	       "realization contract\n");
+	source->unref();
+	db_close(dbip);
+	bu_file_delete(dbpath);
+	return 1;
+    }
+
     static const size_t leafCount = 128;
     std::vector<BObolCompactOccurrence> occurrences;
     occurrences.reserve(leafCount);
@@ -6864,6 +6891,22 @@ test_compact_many_leaf_scene_admission(void)
 	       "(requests=%zu expected=%zu)\n",
 	       source->getDisplayMeshLodRequestCount(), leafCount);
 	ret = 1;
+    }
+    if (!ret) {
+	/*
+	 * Source-mesh identity is independent of view and presentation policy.
+	 * A camera-policy invalidation may start a new detached realization, but
+	 * it must not make already-published PoP requests disappear meanwhile.
+	 * Wireframe has no shaded source fallback and exposed this as a permanent
+	 * zero-progress submission loop on the first warm draw.
+	 */
+	source->markStale(SoBRLDatabaseSource::STALE_VIEW);
+	if (!source->hasDisplayMeshLodRequests() ||
+	    source->getDisplayMeshLodRequestCount() != leafCount) {
+	    printf("FAIL: view staleness invalidated immutable compact "
+		   "mesh-request contracts\n");
+	    ret = 1;
+	}
     }
     if (!ret) {
 	std::vector<SbString> selectedPaths(1,
@@ -7894,6 +7937,12 @@ test_compact_aabb_stream_upgrade(void)
     detached->representationMode = source->representationMode.getValue();
     detached->viewRevision = 17;
     source->viewRevision = 18;
+    source->markStale(SoBRLDatabaseSource::STALE_SOURCE);
+    if (!ret && source->hasDisplayMeshLodRequests()) {
+	printf("FAIL: source invalidation did not revoke the compact "
+	       "mesh-request epoch\n");
+	ret = 1;
+    }
     if (!ret &&
 	(detached->setCompactOccurrenceRegistry(
 	     std::vector<BObolCompactOccurrence>(1, mesh)) != 1 ||
@@ -7905,8 +7954,11 @@ test_compact_aabb_stream_upgrade(void)
 	(!source->getCompactInstanceHandle(0, upgradedHandle) ||
 	 !source->getCompactInstanceSummary(upgradedHandle, upgradedSummary) ||
 	 !upgradedSummary.meshGeometry ||
+	 !source->hasDisplayMeshLodRequests() ||
+	 source->getDisplayMeshLodRequestCount() != 1 ||
 	 !BU_STR_EQUAL(upgradedSummary.geometryKind.getString(), "surface"))) {
-	printf("FAIL: detached compact camera-epoch adoption lost mesh geometry\n");
+	printf("FAIL: detached compact adoption lost mesh geometry or failed "
+	       "to restore its mesh-request epoch\n");
 	ret = 1;
     }
     detached->unref();
@@ -8008,6 +8060,29 @@ test_compact_aabb_stream_upgrade(void)
 	    retiredPresentation->instanceCount() != 2) {
 	    printf("FAIL: compact overview retirement did not sparsely hide "
 		   "the retained extent\n");
+	    ret = 1;
+	}
+    }
+    /*
+     * A root redraw republishes the user-facing draw path as visible.  That
+     * state must restore real leaves without resurrecting the internal
+     * overview record which authoritative adoption just retired.
+     */
+    if (!ret &&
+	retirementSource->setCompactInstanceDisplayStateForPath(
+	    "retirement-root.c", TRUE, 1, TRUE, 0, FALSE, 0, FALSE) < 0) {
+	printf("FAIL: compact overview retirement redraw setup\n");
+	ret = 1;
+    }
+    if (!ret) {
+	(void)retirementSource->compactViewLodAssembly(
+	    noPayloads, &retirementState);
+	SoCADAssembly *redrawnPresentation =
+	    retirementState.findCadPresentation(retirementSource);
+	if (redrawnPresentation != retirementPresentation ||
+	    !redrawnPresentation->isInstanceHidden(overviewId) ||
+	    redrawnPresentation->isInstanceHidden(meshId)) {
+	    printf("FAIL: root redraw resurrected a retired compact overview\n");
 	    ret = 1;
 	}
     }

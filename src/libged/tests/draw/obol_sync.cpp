@@ -1656,26 +1656,78 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 
     BObolProgressiveOptions options;
     BObolProgressiveStatus status;
+    auto compact_counts = [](SoBRLDatabaseSource *source,
+	    size_t &authoritative, size_t &overviews,
+	    size_t &visible_overviews) {
+	authoritative = 0;
+	overviews = 0;
+	visible_overviews = 0;
+	if (!source)
+	    return;
+	for (int i = 0; i < source->getCompactInstanceCount(); ++i) {
+	    BObolCompactInstanceHandle handle;
+	    BObolCompactInstanceSummary summary;
+	    if (!source->getCompactInstanceHandle(i, handle) ||
+		!source->getCompactInstanceSummary(handle, summary) ||
+		!summary.valid)
+		continue;
+	    if (BU_STR_EQUAL(summary.geometryKind.getString(),
+		    "overview-aabb")) {
+		overviews++;
+		if (summary.visible)
+		    visible_overviews++;
+	    } else {
+		authoritative++;
+	    }
+	}
+    };
     SoBRLDatabaseSource *initial_source = scene ? source_for_path(scene,
 	"progressive_root.c") : NULL;
-    for (int attempt = 0;
-	 (!initial_source || !initial_source->isCompactOccurrenceRegistry() ||
-	  initial_source->getCompactInstanceCount() != 4) &&
-	 attempt < 2000;
-	 attempt++) {
+    SbBox3f proxy_bounds;
+    proxy_bounds.makeEmpty();
+    size_t authoritative_count = 0;
+    size_t overview_count = 0;
+    size_t visible_overview_count = 0;
+    for (int attempt = 0; attempt < 2000; attempt++) {
+	compact_counts(initial_source, authoritative_count, overview_count,
+	    visible_overview_count);
+	const bool proxy_ready =
+	    initial_source &&
+	    initial_source->isCompactOccurrenceRegistry() &&
+	    authoritative_count == 4 &&
+	    initial_source->getEffectiveSourceBounds(proxy_bounds) &&
+	    !proxy_bounds.isEmpty();
+	if (proxy_ready)
+	    break;
 	(void)controller->advanceProgressiveWork(&options, &status);
 	initial_source = scene ? source_for_path(scene,
 	    "progressive_root.c") : NULL;
-	if (!initial_source || initial_source->getCompactInstanceCount() != 4)
-	    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	proxy_bounds.makeEmpty();
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    SbBox3f proxy_bounds;
-    proxy_bounds.makeEmpty();
+    compact_counts(initial_source, authoritative_count, overview_count,
+	visible_overview_count);
     if (!initial_source || !initial_source->isCompactOccurrenceRegistry() ||
-	initial_source->getCompactInstanceCount() != 4 ||
+	authoritative_count != 4 ||
 	!initial_source->getEffectiveSourceBounds(proxy_bounds) ||
-	proxy_bounds.isEmpty())
+	proxy_bounds.isEmpty()) {
+	fprintf(stderr,
+	    "progressive proxy source=%p compact=%d count=%d authoritative=%zu "
+	    "overviews=%zu visible_overviews=%zu bounds=%d "
+	    "empty=%d more=%d changed=%d providers=%zu advanced=%zu "
+	    "remaining=%zu pending=%zu\n",
+	    (void *)initial_source,
+	    initial_source ?
+		initial_source->isCompactOccurrenceRegistry() : -1,
+	    initial_source ? initial_source->getCompactInstanceCount() : -1,
+	    authoritative_count, overview_count, visible_overview_count,
+	    initial_source ?
+		initial_source->getEffectiveSourceBounds(proxy_bounds) : 0,
+	    proxy_bounds.isEmpty() ? 1 : 0,
+	    status.hasMore, status.changed, status.providerCount,
+	    status.providerAdvanced, status.remaining, status.pendingTasks);
 	FAIL("deferred root should publish compact conservative proxy bounds");
+    }
 
     /* Initial AABBs and final detail share the same root source. */
     if (scene->getDatabaseSourceCount() != initial_scene_source_count + 1)
@@ -1698,8 +1750,11 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	initial_progress = controller->advanceProgressiveWork(&options, &status);
 	settled_source = scene ? source_for_path(scene,
 	    "progressive_root.c") : NULL;
+	compact_counts(settled_source, authoritative_count, overview_count,
+	    visible_overview_count);
 	if (settled_source && settled_source->isCompactOccurrenceRegistry() &&
-	    settled_source->getCompactInstanceCount() == 4 && !status.hasMore) {
+	    authoritative_count == 4 && visible_overview_count == 0 &&
+	    !status.hasMore) {
 	    settled = 1;
 	    break;
 	}
@@ -1721,16 +1776,22 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
     settled_bounds.makeEmpty();
     if (settled_source)
 	(void)settled_source->getEffectiveSourceBounds(settled_bounds);
+    compact_counts(settled_source, authoritative_count, overview_count,
+	visible_overview_count);
     /* A fast worker or warm cache may finish before the first explicit pump.
      * The contract is the stable compact result and final autoview, not
      * observability of an artificial intermediate tick. */
     if (!settled || !settled_source ||
 	!settled_source->isCompactOccurrenceRegistry() ||
-	settled_source->getCompactInstanceCount() != 4 ||
+	authoritative_count != 4 || visible_overview_count != 0 ||
 	settled_bounds.isEmpty() ||
 	scene->getDatabaseSourceCount() != initial_scene_source_count + 1 ||
 	bv_frame_revision_get(view) <= initial_revision) {
-	fprintf(stderr, "progressive settle ret=%d changed=%d settled=%d bounds_empty=%d frame=%llu initial=%llu providers=%zu advanced=%zu remaining=%zu pending=%zu scene=%d/%d source=%p compact=%d count=%d\n",
+	fprintf(stderr, "progressive settle ret=%d changed=%d settled=%d "
+	    "bounds_empty=%d frame=%llu initial=%llu providers=%zu "
+	    "advanced=%zu remaining=%zu pending=%zu scene=%d/%d source=%p "
+	    "compact=%d count=%d authoritative=%zu overviews=%zu "
+	    "visible_overviews=%zu\n",
 	    initial_progress, status.changed,
 	    settled, settled_bounds.isEmpty(),
 	    static_cast<unsigned long long>(bv_frame_revision_get(view)),
@@ -1740,7 +1801,8 @@ exercise_progressive_autoview_lifecycle(struct ged *gedp,
 	    scene ? scene->getDatabaseSourceCount() : -1,
 	    initial_scene_source_count, (void *)settled_source,
 	    settled_source ? settled_source->isCompactOccurrenceRegistry() : -1,
-	    settled_source ? settled_source->getCompactInstanceCount() : -1);
+	    settled_source ? settled_source->getCompactInstanceCount() : -1,
+	    authoritative_count, overview_count, visible_overview_count);
 	if (scene) {
 	    for (int i = 0; i < scene->getDatabaseSourceCount(); i++) {
 		BObolDatabaseSourceSummary summary;
